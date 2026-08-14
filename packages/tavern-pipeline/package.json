@@ -1,0 +1,23 @@
+{
+  "name": "@dsh-tavern/pipeline",
+  "version": "0.1.0",
+  "description": "Prompt assembly pipeline with SillyTavern chat-completion semantics: prompt_order traversal, marker expansion, card system_prompt/post_history_instructions overrides, context trimming, squash.",
+  "license": "GPL-3.0",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": ["lib"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "@dsh-tavern/format": "workspace:*"
+  }
+}

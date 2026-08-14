@@ -1,0 +1,4 @@
+# dsh-tavern 官方 bundle：挂载本包 Node half + client half。
+- insert:
+    - id: dsh-tavern
+      name: 'dsh-tavern'

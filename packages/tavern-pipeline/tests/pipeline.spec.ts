@@ -1,0 +1,130 @@
+import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { assemblePrompt, type AssembleInput, type LlmMessage } from '../src/index.js'
+import { decodeCharacterCard, parsePreset, type CharacterCardIR, type PresetIR } from '@dsh-tavern/format'
+
+const fixturesDir = fileURLToPath(new URL('../../tavern-format/tests/fixtures', import.meta.url))
+const preset: PresetIR = parsePreset(JSON.parse(readFileSync(`${fixturesDir}/preset-Default.json`, 'utf8')))
+
+const card: CharacterCardIR = decodeCharacterCard({
+  spec: 'chara_card_v2',
+  spec_version: '2.0',
+  data: {
+    name: 'ExampleCard', description: 'A dryad.', personality: 'gentle', scenario: 'In a forest.',
+    first_mes: 'Hello!', mes_example: '<START>\n{{user}}: hi\n{{char}}: hello',
+    creator_notes: '', system_prompt: '', post_history_instructions: '',
+    alternate_greetings: [], tags: [], creator: '', character_version: '', extensions: {},
+  },
+})
+
+const deps = {
+  expand: (t: string) => t.replaceAll('{{char}}', 'ExampleCard').replaceAll('{{user}}', 'Tester'),
+  countTokens: (t: string) => Math.ceil(t.length / 4),
+}
+
+function baseInput(over: Partial<AssembleInput> = {}): AssembleInput {
+  return {
+    card,
+    preset,
+    messages: [
+      { name: 'ExampleCard', is_user: false, is_system: false, send_date: '', mes: 'Hello!' },
+      { name: 'Tester', is_user: true, is_system: false, send_date: '', mes: 'Who are you?' },
+    ],
+    worldInfoBefore: ['WI-B1', 'WI-B2'],
+    worldInfoAfter: ['WI-A1'],
+    ...over,
+  }
+}
+
+describe('装配顺序（ST Default.json 的 prompt_order）', () => {
+  it('marker 依序展开，聊天前材料在 system，历史映射 user/assistant，jailbreak 在历史后', () => {
+    const result = assemblePrompt(baseInput(), deps)
+    const contents = result.messages.map((m) => m.content)
+    const idx = (needle: string) => contents.findIndex((c) => c.includes(needle))
+    // 顺序断言
+    expect(idx('Write {{char}}')).toBeLessThanOrEqual(idx('WI-B1'))
+    expect(idx('WI-B2')).toBeLessThan(idx('A dryad.'))
+    expect(idx('A dryad.')).toBeLessThan(idx('gentle'))
+    expect(idx('gentle')).toBeLessThan(idx('In a forest.'))
+    expect(idx('In a forest.')).toBeLessThan(idx('WI-A1'))
+    expect(idx('WI-A1')).toBeLessThan(idx('Who are you?'))
+    // 历史角色映射
+    const history = result.messages.filter((m) => m.content === 'Hello!' || m.content === 'Who are you?')
+    expect(history.map((m) => m.role)).toEqual(['assistant', 'user'])
+    // is_system 消息不进 prompt
+    expect(result.messages.some((m) => m.content.includes('system-note'))).toBe(false)
+  })
+
+  it('wi_format 包裹激活条目', () => {
+    const result = assemblePrompt(baseInput(), deps)
+    const wi = result.messages.find((m) => m.content.includes('WI-B1'))
+    expect(wi?.content).toBe('WI-B1\nWI-B2') // Default.json 的 wi_format 为 "{0}"
+  })
+
+  it('示例对话经 new_example_chat_prompt 前缀 + 宏展开', () => {
+    const result = assemblePrompt(baseInput(), deps)
+    const em = result.messages.find((m) => m.content.includes('Tester: hi'))
+    expect(em?.content).toContain('Tester: hi')
+    expect(em?.content).toContain('ExampleCard: hello')
+  })
+})
+
+describe('角色卡覆盖语义', () => {
+  it('卡 system_prompt 覆盖 main，{{original}} 引用预设内容', () => {
+    const withOverride = decodeCharacterCard({
+      ...structuredClone(card.raw),
+      data: { ...structuredClone(card.raw['data']), system_prompt: 'You are {{char}}. {{original}}' },
+    })
+    const result = assemblePrompt(baseInput({ card: withOverride }), deps)
+    const main = result.messages[0]!
+    expect(main.content).toContain('You are ExampleCard.')
+    expect(main.content).toContain("Write ExampleCard's next reply") // {{original}} 内容同样过宏展开
+  })
+
+  it('卡 post_history_instructions 覆盖 jailbreak（历史之后）', () => {
+    const withUjb = decodeCharacterCard({
+      ...structuredClone(card.raw),
+      data: { ...structuredClone(card.raw['data']), post_history_instructions: 'Stay in character.' },
+    })
+    const result = assemblePrompt(baseInput({ card: withUjb }), deps)
+    const last = result.messages[result.messages.length - 1]!
+    expect(last.role).toBe('system')
+    expect(last.content).toBe('Stay in character.')
+  })
+
+  it('空串卡字段回落预设内容', () => {
+    const result = assemblePrompt(baseInput(), deps)
+    expect(result.messages[0]!.content).toContain("Write ExampleCard's next reply")
+  })
+})
+
+describe('裁剪与注入', () => {
+  it('预算不足丢最旧消息并告警', () => {
+    const result = assemblePrompt(baseInput({ maxContextTokens: 60, maxResponseTokens: 20 }), deps)
+    expect(result.stats.historyDropped).toBeGreaterThan(0)
+    expect(result.warnings.join()).toContain('dropped')
+    expect(result.messages.some((m) => m.content === 'Hello!')).toBe(false)
+    expect(result.messages.some((m) => m.content === 'Who are you?')).toBe(true)
+  })
+
+  it('squash_system_messages 合并相邻 system', () => {
+    const squashPreset: PresetIR = { ...preset, sampler: { ...preset.sampler, squash_system_messages: true } }
+    const result = assemblePrompt(baseInput({ preset: squashPreset }), deps)
+    let adjacent = 0
+    for (let i = 1; i < result.messages.length; i++) {
+      if (result.messages[i]!.role === 'system' && result.messages[i - 1]!.role === 'system') adjacent++
+    }
+    expect(adjacent).toBe(0)
+  })
+
+  it('@Depth 注入：depth=1 插在最后一条历史之前', () => {
+    const result = assemblePrompt(baseInput({
+      depthInjections: [{ depth: 1, role: 'system', text: 'authors note' }],
+    }), deps)
+    const idxNote = result.messages.findIndex((m) => m.content === 'authors note')
+    const idxLastHistory = result.messages.findIndex((m) => m.content === 'Who are you?')
+    expect(idxNote).toBeGreaterThan(-1)
+    expect(idxNote).toBe(idxLastHistory - 1)
+  })
+})

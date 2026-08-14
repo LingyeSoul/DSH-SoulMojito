@@ -1,0 +1,20 @@
+{
+  "name": "@dsh-tavern/macros",
+  "version": "0.1.0",
+  "description": "SillyTavern-compatible macro engine: {{char}}, {{user}}, {{random}}, {{pick}}, {{roll}}, time/date, getvar/setvar family, extensible registry.",
+  "license": "GPL-3.0",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": ["lib"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  }
+}

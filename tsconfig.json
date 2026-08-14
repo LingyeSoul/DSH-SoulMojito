@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/tavern-format" },
+    { "path": "packages/tavern-lore" },
+    { "path": "packages/tavern-macros" },
+    { "path": "packages/tavern-store" },
+    { "path": "packages/tavern-pipeline" }
+  ]
+}

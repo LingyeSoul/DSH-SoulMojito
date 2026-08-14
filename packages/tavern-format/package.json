@@ -1,0 +1,23 @@
+{
+  "name": "@dsh-tavern/format",
+  "version": "0.1.0",
+  "description": "SillyTavern interoperability formats: character cards (PNG/CHARX/JSON, V2/V3), world info files, chat completion presets, chat logs. Zero-host, zero-dependency (except fflate for CHARX).",
+  "license": "GPL-3.0",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": ["lib"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "fflate": "^0.8.0"
+  }
+}

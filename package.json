@@ -1,0 +1,24 @@
+{
+  "name": "dsh-tavern",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SillyTavern-compatible roleplay layer for DSH (deepseek-harness): character cards, world info, presets.",
+  "license": "GPL-3.0",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "tsc -b",
+    "build:plugin": "node scripts/build-plugin.mjs",
+    "check": "tsc -b --pretty false && vitest run && node scripts/build-plugin.mjs && node packages/plugin/scripts/gates/run.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

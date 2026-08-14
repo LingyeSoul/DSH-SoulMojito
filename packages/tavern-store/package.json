@@ -1,0 +1,23 @@
+{
+  "name": "@dsh-tavern/store",
+  "version": "0.1.0",
+  "description": "Tavern data store: characters/worlds/presets/chats/personas directory layout with atomic writes, ST-compatible shapes.",
+  "license": "GPL-3.0",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": ["lib"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "@dsh-tavern/format": "workspace:*"
+  }
+}

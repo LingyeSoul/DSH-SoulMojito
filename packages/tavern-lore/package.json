@@ -1,0 +1,20 @@
+{
+  "name": "@dsh-tavern/lore",
+  "version": "0.1.0",
+  "description": "World Info (lorebook) activation engine implementing SillyTavern semantics: scan depth, primary/secondary key logic, recursion, budget, timed effects, min activations, inclusion groups, insertion positions.",
+  "license": "GPL-3.0",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": ["lib"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  }
+}

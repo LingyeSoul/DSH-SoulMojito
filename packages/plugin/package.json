@@ -1,0 +1,26 @@
+{
+  "name": "dsh-tavern",
+  "version": "0.1.0",
+  "description": "DSH plugin: SillyTavern-compatible roleplay workspace with Character Card V2/V3/PNG import, World Info lore engine, presets, swipes, chat editing and streaming LLM generation. Official bundle, install via dsh plugin --profile web add.",
+  "license": "GPL-3.0",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./client/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": ["index.mjs", "client", "cordis.patch.yml", "README.md"],
+  "scripts": {
+    "build": "node ../../scripts/build-plugin.mjs",
+    "gates": "node scripts/gates/run.mjs"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "inject": ["@deepseek-ai/dsh-client-runtime"],
+      "platform": "web"
+    }
+  }
+}
