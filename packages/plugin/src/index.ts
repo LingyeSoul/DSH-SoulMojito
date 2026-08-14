@@ -4,7 +4,7 @@ import { decodeCharxAsset, parsePreset, parseCharacterBook } from '../../tavern-
 import { activateWorldInfo } from '../../tavern-lore/src/index.js'
 import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { assemblePrompt } from '../../tavern-pipeline/src/index.js'
-import { ChatRevisionConflictError, TavernStore } from '../../tavern-store/src/index.js'
+import { ChatRevisionConflictError, TavernStore, type TavernModelSelection } from '../../tavern-store/src/index.js'
 
 export const name = 'dsh-tavern'
 export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands']
@@ -138,6 +138,32 @@ async function handleApi(ctx, req, res) {
     return
   }
 
+  if (method === 'GET' && route === 'models') {
+    return sendJson(res, 200, { ok: true, ...await buildModelCatalog(ctx) })
+  }
+
+  if (method === 'POST' && route === 'model') {
+    const body = await readJson(req)
+    if (typeof body.sessionId !== 'string') throw new Error('expected { sessionId, selection }')
+    let selection: TavernModelSelection | null = null
+    if (body.selection !== null && body.selection !== undefined) {
+      if (typeof body.selection?.provider !== 'string' || typeof body.selection?.model !== 'string') {
+        throw new Error('selection must be { provider, model, reasoningEffort? }')
+      }
+      selection = {
+        provider: body.selection.provider,
+        model: body.selection.model,
+        ...(typeof body.selection.reasoningEffort === 'string' ? { reasoningEffort: body.selection.reasoningEffort } : {}),
+      }
+    }
+    const state = await db.updateState((current) => ({
+      modelSelections: selection === null
+        ? Object.fromEntries(Object.entries(current.modelSelections ?? {}).filter(([id]) => id !== body.sessionId))
+        : { ...(current.modelSelections ?? {}), [body.sessionId]: selection },
+    }))
+    return sendJson(res, 200, { ok: true, state })
+  }
+
   if (method === 'POST' && route === 'state') {
     const body = await readJson(req)
     const state = await db.patchState({
@@ -212,6 +238,9 @@ async function handleApi(ctx, req, res) {
     const state = await db.updateState((current) => ({
       sessionBindings: Object.fromEntries(
         Object.entries(current.sessionBindings).filter(([sessionId]) => live.has(sessionId)),
+      ),
+      modelSelections: Object.fromEntries(
+        Object.entries(current.modelSelections ?? {}).filter(([sessionId]) => live.has(sessionId)),
       ),
     }))
     return sendJson(res, 200, { ok: true, state })
@@ -411,9 +440,20 @@ async function generate(ctx, req, res, db) {
     ],
   }, { expand: (text) => macros.expand(text), countTokens: (text) => Math.ceil(text.length / 3.5) })
 
-  const selection = ctx.agentDefaultModel.currentSelection()
-  const provider = typeof body.provider === 'string' ? body.provider : selection.provider
-  const model = typeof body.model === 'string' ? body.model : selection.model
+  const fallback = ctx.agentDefaultModel.currentSelection()
+  const saved = typeof body.sessionId === 'string' ? state.modelSelections?.[body.sessionId] : undefined
+  const explicit = typeof body.provider === 'string' && typeof body.model === 'string'
+    ? {
+        provider: body.provider,
+        model: body.model,
+        ...(typeof body.reasoningEffort === 'string' ? { reasoningEffort: body.reasoningEffort } : {}),
+      }
+    : undefined
+  const choice = explicit ?? saved ?? fallback
+  const provider = choice.provider
+  const model = choice.model
+  const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort
+    ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : undefined)
   const requestMessages = [...assembled.messages]
   const systemParts = []
   while (requestMessages[0]?.role === 'system') systemParts.push(requestMessages.shift().content)
@@ -436,7 +476,7 @@ async function generate(ctx, req, res, db) {
   for await (const chunk of ctx.llm.stream({
     provider, model, messages: llmMessages,
     ...(systemParts.length > 0 ? { system: systemParts.join('\n\n') } : {}),
-    ...(provider === selection.provider && model === selection.model && selection.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {}),
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     temperature: numberOr(preset.sampler.temperature, undefined),
     maxTokens: numberOr(preset.sampler.openai_max_tokens, undefined),
     signal: ac.signal,
@@ -468,6 +508,38 @@ async function generate(ctx, req, res, db) {
   revision = await db.saveChat(characterName, chatId, chat, revision)
   write({ type: 'saved', chat, revision })
   res.end()
+}
+
+async function buildModelCatalog(ctx) {
+  const catalog = await Promise.all(ctx.llm.listProviders().map(async (provider) => {
+    try {
+      const models = await ctx.llm.listModels(provider.id)
+      const entries = await Promise.all(models.map(async (model) => {
+        const resolved = await ctx.llm.resolveModelInfo(provider.id, model.id)
+        const reasoning = resolved.reasoning === undefined ? undefined : {
+          efforts: resolved.reasoning.efforts.map((effort) => ({
+            id: effort.id,
+            name: effort.name,
+            ...(effort.description === undefined ? {} : { description: effort.description }),
+          })),
+          ...(resolved.reasoning.defaultEffort === undefined ? {} : { defaultEffort: resolved.reasoning.defaultEffort }),
+        }
+        return {
+          id: model.id,
+          name: model.name,
+          ...(model.description === undefined ? {} : { description: model.description }),
+          ...(reasoning === undefined ? {} : { reasoning }),
+        }
+      }))
+      return { kind: 'group', group: { id: provider.id, name: provider.name, models: entries } }
+    } catch (error) {
+      return { kind: 'failure', failure: { id: provider.id, name: provider.name, message: error instanceof Error ? error.message : String(error) } }
+    }
+  }))
+  return {
+    groups: catalog.flatMap((item) => item.kind === 'group' ? [item.group] : []).filter((group) => group.models.length > 0),
+    failures: catalog.flatMap((item) => item.kind === 'failure' ? [item.failure] : []),
+  }
 }
 
 async function refreshActivePrompt() {

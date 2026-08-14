@@ -15,6 +15,7 @@
 - Chat Completion preset：`prompts[]`、`prompt_order[]`、marker 和采样参数。
 - SillyTavern chat JSONL：header、messages、`swipes`、`swipe_id`、`swipe_info`。
 - RP 交互：流式生成、Stop、消息编辑、swipe、regenerate、聊天创建、重命名和确认删除。
+- Composer 模型选择：复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
 - 并发保护：聊天使用内容 revision 做 compare-and-swap；跨标签页冲突返回 `409`，客户端重新加载最新内容，不静默覆盖。
 - 可选的普通 Agent 人格注入，默认关闭。
 
@@ -25,7 +26,7 @@
 | DSH slot | 用途 |
 |---|---|
 | `conversation.view` | Tavern JSONL transcript |
-| `conversation.composer` | Tavern session 的 RP 输入框与 Stop |
+| `conversation.composer` | Tavern session 的 RP 输入框、模型选择与 Stop |
 | `conversation.session.header.actions` | 当前角色与 regenerate |
 | `settings.section` | 角色、世界书、preset、persona、导入和行为开关 |
 | `shell.overlay` | 侧边栏 adapter 生命周期与折叠后的浮动导航 |

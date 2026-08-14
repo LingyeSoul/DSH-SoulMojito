@@ -36,6 +36,13 @@ export interface TavernSessionBinding {
   chatId: string
 }
 
+/** 一个 DSH session 的模型选择；缺省回落 agentDefaultModel。 */
+export interface TavernModelSelection {
+  provider: string
+  model: string
+  reasoningEffort?: string
+}
+
 export interface TavernState {
   activeCharacter?: string
   /** 启用的世界书名列表（含卡内嵌书的角色书按卡名引用） */
@@ -46,6 +53,8 @@ export interface TavernState {
   nativeAgentPersona?: boolean
   /** DSH session 到 Tavern 角色/聊天的持久绑定。 */
   sessionBindings: Record<string, TavernSessionBinding>
+  /** DSH session 到模型选择的持久映射；随 bindings/prune 一同清理。 */
+  modelSelections: Record<string, TavernModelSelection>
   /** 每聊天元数据（最后激活时间、swipe 指针等自由袋） */
   chats: Record<string, Record<string, unknown>>
 }
@@ -79,7 +88,7 @@ export class ChatRevisionConflictError extends Error {
   }
 }
 
-const DEFAULT_STATE: TavernState = { activeWorlds: [], sessionBindings: {}, chats: {} }
+const DEFAULT_STATE: TavernState = { activeWorlds: [], sessionBindings: {}, modelSelections: {}, chats: {} }
 
 export class TavernStore {
   private chatMutationTail: Promise<void> = Promise.resolve()
@@ -359,6 +368,7 @@ export class TavernStore {
       ...parsed,
       activeWorlds: parsed.activeWorlds ?? [],
       sessionBindings: parsed.sessionBindings ?? {},
+      modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
     }
   }

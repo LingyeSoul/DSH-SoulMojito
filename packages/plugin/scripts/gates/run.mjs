@@ -30,6 +30,8 @@ const API_PREFIX = '/api/dsh-tavern'
 const REQUIRED_SERVER_ROUTES = [
   'bootstrap',
   'state',
+  'models',
+  'model',
   'import/character',
   'import/world',
   'import/preset',

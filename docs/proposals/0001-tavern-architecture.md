@@ -76,13 +76,15 @@ Tavern composer
   -> activate lore
   -> expand macros
   -> assemble prompt/messages
-  -> ctx.llm.stream(default provider/model)
+  -> ctx.llm.stream(explicit body > session 保存的模型选择 > agentDefaultModel)
   -> NDJSON start/delta/reasoning/saved
   -> atomic JSONL save
   -> client replaces optimistic/streaming state
 ```
 
 Send 会先持久化用户消息，因此 Stop 或 provider 失败不会丢用户输入。Regenerate 会移除最后一个 assistant message 参与 prompt，然后把新结果追加到原有 `swipes[]`，更新 `swipe_id` 和 `swipe_info`。
+
+Composer 输入行的模型选择器复刻 DSH 原生 model seat 的形态（pill 触发 + provider 分组目录 + Effort 二级菜单）。目录由 Node half 的 `GET models` 从 `ctx.llm` 装配（与 host `session.models` 同构），选择经 `POST model` 按 session 持久化到 `state.json` 的 `modelSelections`，未选择时回落 `agentDefaultModel`；`bindings/prune` 一并清理。
 
 ## 5. 并发与状态一致性
 

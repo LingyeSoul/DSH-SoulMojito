@@ -141,7 +141,7 @@ describe('TavernStore', () => {
     await expect(store.saveChat('Test Char', '../state.json', { header, messages: [] })).rejects.toThrow('invalid chat id')
   }))
   it('状态：默认值 → patch 持久化', withStore(async (store) => {
-    expect(await store.getState()).toEqual({ activeWorlds: [], sessionBindings: {}, chats: {} })
+    expect(await store.getState()).toEqual({ activeWorlds: [], sessionBindings: {}, modelSelections: {}, chats: {} })
     await store.patchState({
       activeCharacter: 'ExampleCard',
       activeWorlds: ['ExampleWorld'],
@@ -151,6 +151,19 @@ describe('TavernStore', () => {
     expect(state.activeCharacter).toBe('ExampleCard')
     expect(state.activeWorlds).toEqual(['ExampleWorld'])
     expect(state.sessionBindings.session_1).toEqual({ character: 'ExampleCard', chatId: 'chat.jsonl' })
+  }))
+
+  it('状态：模型选择按 session 存取并随旧 state 文件补默认', withStore(async (store) => {
+    await store.updateState((state) => ({
+      modelSelections: { ...state.modelSelections, session_1: { provider: 'deepseek', model: 'deepseek-chat' } },
+    }))
+    await store.updateState((state) => ({
+      modelSelections: { ...state.modelSelections, session_2: { provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high' } },
+    }))
+    expect((await store.getState()).modelSelections).toEqual({
+      session_1: { provider: 'deepseek', model: 'deepseek-chat' },
+      session_2: { provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high' },
+    })
   }))
 
   it('persona：存取', withStore(async (store) => {
