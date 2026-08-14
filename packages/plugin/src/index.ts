@@ -9,6 +9,11 @@ import { ChatRevisionConflictError, TavernStore, type TavernModelSelection } fro
 export const name = 'dsh-tavern'
 export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands']
 
+// Injected by scripts/build-plugin.mjs (esbuild define) from packages/plugin
+// package.json + git HEAD, so the settings page can stamp the artifact build.
+declare const __TAVERN_VERSION__: string
+declare const __TAVERN_COMMIT__: string
+
 const API = '/api/dsh-tavern'
 const DEFAULT_USER = 'User'
 let storePromise
@@ -110,6 +115,8 @@ async function handleApi(ctx, req, res) {
       personas: await db.listPersonas(),
       activeCard: active ? publicCard(active.card) : null,
       model: ctx.agentDefaultModel.currentSelection(),
+      version: __TAVERN_VERSION__,
+      commit: __TAVERN_COMMIT__,
     })
   }
 

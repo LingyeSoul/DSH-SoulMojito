@@ -24,6 +24,151 @@ window.__ModuleLoader__.load({
     const h = React.createElement.bind(React)
 
     const API = '/api/dsh-tavern'
+    const LOCALE_NS = 'dsh-tavern'
+    const MESSAGES_EN = {
+      'settings.subtitle': 'Roleplay assets and prompt configuration',
+      'settings.activeSetup': 'Active setup',
+      'settings.character': 'Character',
+      'settings.characterEmpty': 'No active character',
+      'settings.preset': 'Preset',
+      'settings.presetEmpty': 'Built-in RP preset',
+      'settings.persona': 'Persona',
+      'settings.personaEmpty': 'Default user',
+      'settings.nativePersona': 'Use active character in standard DSH Agent chats',
+      'settings.worldInfo': 'World Info',
+      'settings.worldsEmpty': 'No world books imported',
+      'settings.import': 'Import',
+      'settings.importCharacter': 'Character card',
+      'settings.importWorld': 'World book',
+      'settings.importPreset': 'Chat preset',
+      'settings.importing': 'Importing…',
+      'settings.importTitle': 'Import {name}',
+      'settings.version': 'Version',
+      'message.user': 'User',
+      'message.previousSwipe': 'Previous swipe',
+      'message.nextSwipe': 'Next swipe',
+      'message.edit': 'Edit message',
+      'message.save': 'Save',
+      'message.cancel': 'Cancel',
+      'view.unbound': 'No Tavern chat is bound to this session.',
+      'view.loading': 'Loading Tavern chat…',
+      'view.regenerate': 'Regenerate last response',
+      'run.connecting': 'Connecting',
+      'run.saved': 'Saved',
+      'run.stopped': 'Stopped',
+      'run.failed': 'Generation failed',
+      'model.select': 'Select model',
+      'model.default': 'Default',
+      'model.model': 'Model',
+      'model.effort': 'Effort',
+      'model.menuLabel': 'Model and reasoning effort',
+      'model.refreshing': 'Refreshing model list…',
+      'model.retry': 'Retry',
+      'model.loadFailed': '{name} failed to load: {message}',
+      'model.noneAvailable': 'No models available.',
+      'model.noEffort': 'This model provides no reasoning effort levels.',
+      'composer.writeTo': 'Write to {name}',
+      'composer.unavailable': 'Tavern binding unavailable',
+      'composer.stop': 'Stop generation',
+      'composer.send': 'Send',
+      'nav.title': 'Tavern',
+      'nav.chats': 'Tavern roleplay chats',
+      'nav.open': 'Open Tavern roleplay chats',
+      'nav.close': 'Close',
+      'nav.newChat': 'New chat with {name}',
+      'nav.loading': 'Loading…',
+      'nav.noChats': 'No chats',
+      'nav.noCharacters': 'No character cards',
+      'nav.opening': 'Opening {name}',
+      'nav.rename': 'Rename {name}',
+      'nav.delete': 'Delete {name}',
+      'nav.renamePrompt': 'Rename Tavern chat',
+      'nav.deleteConfirm': 'Delete Tavern chat "{name}"? This cannot be undone.',
+      'error.fileRead': 'File read failed',
+      'error.noWorkspace': 'No DSH workspace is available for a Tavern session.',
+      'error.noBinding': 'DSH did not expose the new session binding.',
+      'error.activationFailed': 'Tavern activation failed.',
+      'error.hostCommandUnavailable': 'The Tavern host command is unavailable.',
+    }
+    const MESSAGES_ZH = {
+      'settings.subtitle': '角色卡、世界书与预设管理',
+      'settings.activeSetup': '当前配置',
+      'settings.character': '角色',
+      'settings.characterEmpty': '未选择角色',
+      'settings.preset': '预设',
+      'settings.presetEmpty': '内置角色扮演预设',
+      'settings.persona': '用户人设',
+      'settings.personaEmpty': '默认用户',
+      'settings.nativePersona': '在标准 DSH Agent 会话中使用当前角色',
+      'settings.worldInfo': '世界书',
+      'settings.worldsEmpty': '尚未导入世界书',
+      'settings.import': '导入',
+      'settings.importCharacter': '角色卡',
+      'settings.importWorld': '世界书',
+      'settings.importPreset': '聊天预设',
+      'settings.importing': '导入中…',
+      'settings.importTitle': '导入{name}',
+      'settings.version': '版本',
+      'message.user': '用户',
+      'message.previousSwipe': '上一个候选',
+      'message.nextSwipe': '下一个候选',
+      'message.edit': '编辑消息',
+      'message.save': '保存',
+      'message.cancel': '取消',
+      'view.unbound': '此会话未绑定酒馆聊天。',
+      'view.loading': '正在加载酒馆聊天…',
+      'view.regenerate': '重新生成最新回复',
+      'run.connecting': '连接中',
+      'run.saved': '已保存',
+      'run.stopped': '已停止',
+      'run.failed': '生成失败',
+      'model.select': '选择模型',
+      'model.default': '默认',
+      'model.model': '模型',
+      'model.effort': '思考力度',
+      'model.menuLabel': '模型与思考力度',
+      'model.refreshing': '正在刷新模型列表…',
+      'model.retry': '重试',
+      'model.loadFailed': '{name} 加载失败：{message}',
+      'model.noneAvailable': '没有可用模型。',
+      'model.noEffort': '该模型不提供思考力度选项。',
+      'composer.writeTo': '写给 {name}',
+      'composer.unavailable': '酒馆绑定不可用',
+      'composer.stop': '停止生成',
+      'composer.send': '发送',
+      'nav.title': '酒馆',
+      'nav.chats': '酒馆角色扮演聊天',
+      'nav.open': '打开酒馆角色扮演聊天',
+      'nav.close': '关闭',
+      'nav.newChat': '与 {name} 开新聊天',
+      'nav.loading': '加载中…',
+      'nav.noChats': '暂无聊天',
+      'nav.noCharacters': '暂无角色卡',
+      'nav.opening': '正在打开 {name}',
+      'nav.rename': '重命名 {name}',
+      'nav.delete': '删除 {name}',
+      'nav.renamePrompt': '重命名酒馆聊天',
+      'nav.deleteConfirm': '删除酒馆聊天“{name}”？此操作不可撤销。',
+      'error.fileRead': '文件读取失败',
+      'error.noWorkspace': '没有可用于酒馆会话的 DSH 工作区。',
+      'error.noBinding': 'DSH 未返回新建会话的绑定。',
+      'error.activationFailed': '酒馆激活失败。',
+      'error.hostCommandUnavailable': '宿主的酒馆命令不可用。',
+    }
+    // translate follows the host locale service once apply() binds it; the
+    // identity fallback mirrors LocaleRuntime.translate (missing key -> key,
+    // {param} interpolation) for pre-apply and stubbed environments.
+    let translate = (key, params) => {
+      if (!params) return key
+      return key.replace(/\{(\w+)\}/g, (match, name) => name in params ? String(params[name]) : match)
+    }
+    let subscribeLocale = () => () => {}
+    let getLocaleRevision = () => ({ revision: 0 })
+
+    function useTranslate() {
+      useSyncExternalStore(subscribeLocale, getLocaleRevision, getLocaleRevision)
+      return translate
+    }
     const STYLE_ID = 'dsh-tavern/native-ui'
     const REVISION_CONFLICT = 'CHAT_REVISION_CONFLICT'
     const EMPTY_BOOTSTRAP = {
@@ -229,7 +374,7 @@ window.__ModuleLoader__.load({
       }
       const controller = new AbortController()
       controllers.set(sessionId, controller)
-      setRun(sessionId, { busy: true, streamText: '', status: 'Connecting', error: '' })
+      setRun(sessionId, { busy: true, streamText: '', status: 'run.connecting', error: '' })
       const selection = sessionSelection(sessionId)
       try {
         const response = await fetch(`${API}/generate`, {
@@ -272,7 +417,7 @@ window.__ModuleLoader__.load({
               setRun(sessionId, { streamText: streamed })
             }
             if (event.type === 'error') {
-              const error = new Error(event.message || 'Generation failed')
+              const error = new Error(event.message || translate('run.failed'))
               error.code = event.code
               throw error
             }
@@ -281,7 +426,7 @@ window.__ModuleLoader__.load({
                 chats: { ...snapshot.chats, [key]: event.chat },
                 revisions: { ...snapshot.revisions, [key]: event.revision },
               })
-              setRun(sessionId, { streamText: '', status: 'Saved' })
+              setRun(sessionId, { streamText: '', status: 'run.saved' })
             }
           }
           if (part.done) break
@@ -290,7 +435,7 @@ window.__ModuleLoader__.load({
         const aborted = controller.signal.aborted
         setRun(sessionId, {
           error: aborted ? '' : (cause instanceof Error ? cause.message : String(cause)),
-          status: aborted ? 'Stopped' : '',
+          status: aborted ? 'run.stopped' : '',
           streamText: '',
         })
         await loadChat(binding.character, binding.chatId, true).catch(() => {})
@@ -323,8 +468,11 @@ window.__ModuleLoader__.load({
     }
 
     function clickTavernTab(attempt) {
+      // The conversation.view tab label is translated via the slot's label()
+      // callback, so match every shipped spelling of the Tavern title.
+      const titles = [MESSAGES_EN['nav.title'], MESSAGES_ZH['nav.title']]
       const tab = [...document.querySelectorAll('[role="tab"]')]
-        .find((item) => item.textContent?.trim() === 'Tavern')
+        .find((item) => titles.includes(item.textContent?.trim() || ''))
       if (tab instanceof HTMLElement) {
         tab.click()
         return
@@ -346,15 +494,15 @@ window.__ModuleLoader__.load({
       }
 
       const workspace = currentWorkspace(ctx)
-      if (!workspace) throw new Error('No DSH workspace is available for a Tavern session.')
-      update({ navigationStatus: `Opening ${character}` })
+      if (!workspace) throw new Error(translate('error.noWorkspace'))
+      update({ navigationStatus: translate('nav.opening', { name: character }) })
       const sessionId = await ctx.workspaces.connectWorkspace(workspace.workspaceId)
       const binding = ctx.sessions.binding(sessionId)
-      if (!binding) throw new Error('DSH did not expose the new session binding.')
+      if (!binding) throw new Error(translate('error.noBinding'))
       const payload = base64Url(JSON.stringify({ character, chatId }))
       const result = await binding.session.command(`/tavern ${payload}`)
-      if (!result.ok) throw new Error(result.error?.message || 'Tavern activation failed.')
-      if (!result.value.matched) throw new Error('The Tavern host command is unavailable.')
+      if (!result.ok) throw new Error(result.error?.message || translate('error.activationFailed'))
+      if (!result.value.matched) throw new Error(translate('error.hostCommandUnavailable'))
       const label = sessionLabel(character, chatId)
       await binding.session.rename(label).catch(() => {})
       await refreshBootstrap()
@@ -391,7 +539,7 @@ window.__ModuleLoader__.load({
 
     async function renameTavernChat(ctx, character, chatId) {
       const currentName = chatId.replace(/\.jsonl$/i, '')
-      const name = window.prompt('Rename Tavern chat', currentName)
+      const name = window.prompt(translate('nav.renamePrompt'), currentName)
       if (name === null || name.trim() === '' || name.trim() === currentName) return chatId
       await loadChat(character, chatId)
       const key = chatKey(character, chatId)
@@ -427,7 +575,8 @@ window.__ModuleLoader__.load({
     }
 
     async function deleteTavernChat(ctx, character, chatId) {
-      if (!window.confirm(`Delete Tavern chat "${chatId.replace(/\.jsonl$/i, '')}"? This cannot be undone.`)) return false
+      const label = chatId.replace(/\.jsonl$/i, '')
+      if (!window.confirm(translate('nav.deleteConfirm', { name: label }))) return false
       await loadChat(character, chatId)
       const key = chatKey(character, chatId)
       const sessionIds = boundSessionIds(character, chatId)
@@ -477,7 +626,7 @@ window.__ModuleLoader__.load({
     function readFile(file, binary) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader()
-        reader.onerror = () => reject(reader.error || new Error('File read failed'))
+        reader.onerror = () => reject(reader.error || new Error(translate('error.fileRead')))
         reader.onload = () => resolve(reader.result)
         if (binary) reader.readAsArrayBuffer(file)
         else reader.readAsText(file)
@@ -534,10 +683,11 @@ window.__ModuleLoader__.load({
     }
 
     function UploadButton({ kind, label, accept }) {
+      const t = useTranslate()
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
-      return h('label', { className: 'dt-upload', title: `Import ${label}` },
-        busy ? 'Importing…' : label,
+      return h('label', { className: 'dt-upload', title: t('settings.importTitle', { name: label }) },
+        busy ? t('settings.importing') : label,
         h('input', {
           type: 'file',
           accept,
@@ -556,6 +706,7 @@ window.__ModuleLoader__.load({
 
     function TavernSettings() {
       const state = useTavernStore()
+      const t = useTranslate()
       const bootstrap = state.bootstrap
       const [error, setError] = useState('')
       useEffect(() => { if (state.loading) void refreshBootstrap().catch(() => {}) }, [])
@@ -563,33 +714,37 @@ window.__ModuleLoader__.load({
         setError('')
         void patchState(patch).catch((cause) => setError(cause.message))
       }
+      const stamp = bootstrap.version || bootstrap.commit
+        ? `v${bootstrap.version || '?'}${bootstrap.commit ? ` (${bootstrap.commit})` : ''}`
+        : ''
       return h('div', { className: 'dt-settings', 'data-dsh-tavern-settings': '' },
         h('div', { className: 'dt-settings-heading' },
           h('div', null,
             h('h2', null, 'dsh-tavern'),
-            h('p', null, 'Roleplay assets and prompt configuration'))),
+            h('p', null, t('settings.subtitle')),
+            stamp ? h('p', { className: 'dt-settings-version' }, `${t('settings.version')} ${stamp}`) : null)),
         h('section', { className: 'dt-settings-band' },
-          h('h3', null, 'Active setup'),
+          h('h3', null, t('settings.activeSetup')),
           h('div', { className: 'dt-settings-grid' },
             h(SettingSelect, {
-              label: 'Character',
+              label: t('settings.character'),
               value: bootstrap.state.activeCharacter,
               options: bootstrap.characters,
-              empty: 'No active character',
+              empty: t('settings.characterEmpty'),
               onChange: (value) => applyPatch({ activeCharacter: value }),
             }),
             h(SettingSelect, {
-              label: 'Preset',
+              label: t('settings.preset'),
               value: bootstrap.state.activePreset,
               options: bootstrap.presets,
-              empty: 'Built-in RP preset',
+              empty: t('settings.presetEmpty'),
               onChange: (value) => applyPatch({ activePreset: value }),
             }),
             h(SettingSelect, {
-              label: 'Persona',
+              label: t('settings.persona'),
               value: bootstrap.state.activePersona,
               options: bootstrap.personas,
-              empty: 'Default user',
+              empty: t('settings.personaEmpty'),
               onChange: (value) => applyPatch({ activePersona: value }),
             }),
             h('label', { className: 'dt-toggle' },
@@ -598,11 +753,11 @@ window.__ModuleLoader__.load({
                 checked: bootstrap.state.nativeAgentPersona === true,
                 onChange: (event) => applyPatch({ nativeAgentPersona: event.target.checked }),
               }),
-              h('span', null, 'Use active character in standard DSH Agent chats')))),
+              h('span', null, t('settings.nativePersona'))))),
         h('section', { className: 'dt-settings-band' },
-          h('h3', null, 'World Info'),
+          h('h3', null, t('settings.worldInfo')),
           bootstrap.worlds.length === 0
-            ? h('p', { className: 'dt-muted' }, 'No world books imported')
+            ? h('p', { className: 'dt-muted' }, t('settings.worldsEmpty'))
             : h('div', { className: 'dt-check-grid' }, bootstrap.worlds.map((name) => h('label', { key: name },
                 h('input', {
                   type: 'checkbox',
@@ -616,15 +771,16 @@ window.__ModuleLoader__.load({
                 }),
                 h('span', null, name))))),
         h('section', { className: 'dt-settings-band' },
-          h('h3', null, 'Import'),
+          h('h3', null, t('settings.import')),
           h('div', { className: 'dt-imports' },
-            h(UploadButton, { kind: 'character', label: 'Character card', accept: '.png,.charx,.json,application/json,image/png,application/zip' }),
-            h(UploadButton, { kind: 'world', label: 'World book', accept: '.json,application/json' }),
-            h(UploadButton, { kind: 'preset', label: 'Chat preset', accept: '.json,application/json' }))),
+            h(UploadButton, { kind: 'character', label: t('settings.importCharacter'), accept: '.png,.charx,.json,application/json,image/png,application/zip' }),
+            h(UploadButton, { kind: 'world', label: t('settings.importWorld'), accept: '.json,application/json' }),
+            h(UploadButton, { kind: 'preset', label: t('settings.importPreset'), accept: '.json,application/json' }))),
         error || state.error ? h('p', { className: 'dt-error' }, error || state.error) : null)
     }
 
     function MessageRow({ sessionId, character, chatId, chat, message, index, busy }) {
+      const t = useTranslate()
       const [editing, setEditing] = useState(false)
       const [draft, setDraft] = useState(message.mes || '')
       const [error, setError] = useState('')
@@ -663,24 +819,25 @@ window.__ModuleLoader__.load({
           onError: (event) => { event.currentTarget.style.visibility = 'hidden' },
         }) : null,
         h('div', { className: 'dt-message-body' },
-          h('div', { className: 'dt-message-name' }, message.name || (isUser ? 'User' : character)),
+          h('div', { className: 'dt-message-name' }, message.name || (isUser ? t('message.user') : character)),
           editing
             ? h('textarea', { className: 'dt-message-edit', value: draft, disabled: busy, onChange: (event) => setDraft(event.target.value) })
             : h('div', { className: 'dt-message-copy' }, message.mes || ''),
           h('div', { className: 'dt-message-actions' },
             swipes.length > 1 ? h(React.Fragment, null,
-              h('button', { type: 'button', title: 'Previous swipe', disabled: busy, onClick: () => changeSwipe(-1) }, h(IconChevronLeftOutline14)),
+              h('button', { type: 'button', title: t('message.previousSwipe'), disabled: busy, onClick: () => changeSwipe(-1) }, h(IconChevronLeftOutline14)),
               h('span', null, `${swipeIndex + 1}/${swipes.length}`),
-              h('button', { type: 'button', title: 'Next swipe', disabled: busy, onClick: () => changeSwipe(1) }, h(IconChevronRightOutline14))) : null,
+              h('button', { type: 'button', title: t('message.nextSwipe'), disabled: busy, onClick: () => changeSwipe(1) }, h(IconChevronRightOutline14))) : null,
             editing ? h(React.Fragment, null,
-              h('button', { type: 'button', disabled: busy, onClick: () => void commit() }, 'Save'),
-              h('button', { type: 'button', onClick: () => { setDraft(message.mes || ''); setError(''); setEditing(false) } }, 'Cancel'))
-              : h('button', { type: 'button', title: 'Edit message', disabled: busy, onClick: () => setEditing(true) }, h(IconEditOutline16))),
+              h('button', { type: 'button', disabled: busy, onClick: () => void commit() }, t('message.save')),
+              h('button', { type: 'button', onClick: () => { setDraft(message.mes || ''); setError(''); setEditing(false) } }, t('message.cancel')))
+              : h('button', { type: 'button', title: t('message.edit'), disabled: busy, onClick: () => setEditing(true) }, h(IconEditOutline16))),
           error ? h('span', { className: 'dt-message-error' }, error) : null))
     }
 
     function TavernView({ sessionId }) {
       const state = useTavernStore()
+      const t = useTranslate()
       const binding = state.bootstrap.state.sessionBindings?.[sessionId]
       const chat = binding ? state.chats[chatKey(binding.character, binding.chatId)] : null
       const run = state.runs[sessionId] || {}
@@ -692,9 +849,9 @@ window.__ModuleLoader__.load({
       if (!binding) {
         return h('div', { className: 'dt-view dt-empty', 'data-dsh-tavern-surface': 'view' },
           h(IconUserOutline16, { size: 22 }),
-          h('strong', null, 'No Tavern chat is bound to this session.'))
+          h('strong', null, t('view.unbound')))
       }
-      if (!chat) return h('div', { className: 'dt-view dt-empty', 'data-dsh-tavern-surface': 'view' }, 'Loading Tavern chat…')
+      if (!chat) return h('div', { className: 'dt-view dt-empty', 'data-dsh-tavern-surface': 'view' }, t('view.loading'))
       const messages = [...chat.messages]
       if (run.streamText) messages.push({ name: binding.character, is_user: false, mes: run.streamText, streaming: true })
       return h('div', { className: 'dt-view', 'data-dsh-tavern-surface': 'view' },
@@ -703,7 +860,7 @@ window.__ModuleLoader__.load({
           h('div', null, h('strong', null, binding.character), h('span', null, binding.chatId.replace(/\.jsonl$/i, ''))),
           h('button', {
             type: 'button',
-            title: 'Regenerate last response',
+            title: t('view.regenerate'),
             disabled: run.busy || !chat.messages.some((message) => !message.is_user),
             onClick: () => void generateFor(sessionId, binding, 'regenerate', ''),
           }, h(IconRefreshOutline16))),
@@ -739,6 +896,7 @@ window.__ModuleLoader__.load({
     // keeps the trigger on the "Select model" fallback without a stale row.
     function ModelSelect({ sessionId, locked }) {
       const state = useTavernStore()
+      const t = useTranslate()
       const models = state.models
       const [open, setOpen] = useState(false)
       const [pane, setPane] = useState('root')
@@ -753,7 +911,7 @@ window.__ModuleLoader__.load({
       const reasoning = currentChoice?.model.reasoning
       const effectiveEffort = selection?.reasoningEffort ?? reasoning?.defaultEffort
       const effortLabel = reasoning === undefined ? undefined
-        : effectiveEffort === undefined ? 'Default'
+        : effectiveEffort === undefined ? t('model.default')
           : reasoning.efforts.find((level) => level.id === effectiveEffort)?.name ?? effectiveEffort
       useEffect(() => { if (snapshot.models.status === 'idle') void loadModels().catch(() => {}) }, [])
       useEffect(() => {
@@ -831,7 +989,7 @@ window.__ModuleLoader__.load({
           ...(effort !== undefined ? { reasoningEffort: effort } : {}),
         })
       }
-      const modelLabel = currentChoice?.model.name ?? 'Select model'
+      const modelLabel = currentChoice?.model.name ?? t('model.select')
       const triggerLabel = effortLabel === undefined ? modelLabel : `${modelLabel} · ${effortLabel}`
       itemRefs.current = []
       let itemIndex = 0
@@ -843,7 +1001,7 @@ window.__ModuleLoader__.load({
         type: 'button',
         className: 'dt-model-retry',
         onClick: () => { void loadModels(true).catch(() => {}) },
-      }, 'Retry')
+      }, t('model.retry'))
       const actionErrorRow = actionError
         ? h('div', { className: 'dt-model-error' }, h('span', null, actionError))
         : null
@@ -851,7 +1009,7 @@ window.__ModuleLoader__.load({
         ref: triggerRef,
         type: 'button',
         className: 'dt-model-trigger',
-        'aria-label': 'Select model',
+        'aria-label': t('model.select'),
         'aria-haspopup': 'menu',
         'aria-expanded': open,
         title: triggerLabel,
@@ -873,14 +1031,14 @@ window.__ModuleLoader__.load({
       h(IconChevronRightOutline14, { className: 'dt-model-cell-chevron' }))
       const rootPane = pane === 'root' ? h(React.Fragment, null,
         actionErrorRow,
-        drillCell('Model', modelLabel, 'model'),
-        reasoning !== undefined ? drillCell('Effort', effortLabel, 'effort') : null) : null
+        drillCell(t('model.model'), modelLabel, 'model'),
+        reasoning !== undefined ? drillCell(t('model.effort'), effortLabel, 'effort') : null) : null
       const modelPane = pane === 'model' ? h(React.Fragment, null,
-        models.status === 'loading' ? h('div', { className: 'dt-model-status' }, 'Refreshing model list…') : null,
+        models.status === 'loading' ? h('div', { className: 'dt-model-status' }, t('model.refreshing')) : null,
         models.error ? h('div', { className: 'dt-model-error' }, h('span', null, models.error), retry) : null,
         actionErrorRow,
         models.failures.map((failure) => h('div', { key: failure.id, className: 'dt-model-warning' },
-          h('span', null, `${failure.name} failed to load: ${failure.message}`),
+          h('span', null, t('model.loadFailed', { name: failure.name, message: failure.message })),
           retry)),
         h('div', { className: 'dt-model-groups' },
           models.groups.map((group) => h('section', {
@@ -909,13 +1067,13 @@ window.__ModuleLoader__.load({
             h('span', { className: 'dt-model-check' }, selected ? h(IconCheckOutline16) : null))
           }))),
         models.status === 'ready' && models.groups.every((group) => group.models.length === 0)
-          ? h('div', { className: 'dt-model-empty' }, 'No models available.')
+          ? h('div', { className: 'dt-model-empty' }, t('model.noneAvailable'))
           : null)) : null
       const effortPane = pane === 'effort' ? h(React.Fragment, null,
         models.error ? h('div', { className: 'dt-model-error' }, h('span', null, models.error), retry) : null,
         actionErrorRow,
         reasoning === undefined
-          ? h('div', { className: 'dt-model-empty' }, 'This model provides no reasoning effort levels.')
+          ? h('div', { className: 'dt-model-empty' }, t('model.noEffort'))
           : h(React.Fragment, null,
             reasoning.defaultEffort === undefined ? h('button', {
               ref: itemRef(),
@@ -926,7 +1084,7 @@ window.__ModuleLoader__.load({
               disabled: selecting,
               onClick: () => chooseEffort(undefined),
             },
-            h('span', { className: 'dt-model-option-copy' }, h('span', { className: 'dt-model-name' }, 'Default')),
+            h('span', { className: 'dt-model-option-copy' }, h('span', { className: 'dt-model-name' }, t('model.default'))),
             h('span', { className: 'dt-model-check' }, effectiveEffort === undefined ? h(IconCheckOutline16) : null)) : null,
             reasoning.efforts.map((effort) => {
               const selected = effectiveEffort === effort.id
@@ -951,12 +1109,13 @@ window.__ModuleLoader__.load({
           id: `${id}-menu`,
           className: 'dt-model-menu',
           role: 'menu',
-          'aria-label': 'Model and reasoning effort',
+          'aria-label': t('model.menuLabel'),
         }, rootPane, modelPane, effortPane) : null)
     }
 
     function TavernComposer({ sessionId, useInput, inputActions }) {
       const state = useTavernStore()
+      const t = useTranslate()
       const binding = state.bootstrap.state.sessionBindings?.[sessionId]
       const input = useInput((value) => value)
       const run = state.runs[sessionId] || {}
@@ -971,7 +1130,7 @@ window.__ModuleLoader__.load({
           h('textarea', {
             value: input.draft,
             disabled: !binding || run.busy,
-            placeholder: binding ? `Write to ${binding.character}` : 'Tavern binding unavailable',
+            placeholder: binding ? t('composer.writeTo', { name: binding.character }) : t('composer.unavailable'),
             rows: 2,
             onChange: (event) => inputActions.setDraft(event.target.value),
             onKeyDown: (event) => {
@@ -982,16 +1141,17 @@ window.__ModuleLoader__.load({
             },
           }),
           h('div', { className: 'dt-composer-row' },
-            h('span', { className: run.error ? 'dt-error' : 'dt-muted' }, run.error || run.status || (binding ? binding.character : '')),
+            h('span', { className: run.error ? 'dt-error' : 'dt-muted' }, run.error || (run.status ? t(run.status) : (binding ? binding.character : ''))),
             h('div', { className: 'dt-composer-actions' },
               h(ModelSelect, { sessionId, locked: run.busy || !binding }),
               run.busy
-                ? h('button', { type: 'button', className: 'dt-primary-icon', title: 'Stop generation', onClick: () => stopGeneration(sessionId) }, h(IconStopFill16))
-                : h('button', { type: 'button', className: 'dt-primary-icon', title: 'Send', disabled: !binding || !input.draft.trim(), onClick: send }, h(IconSendOutline16))))))
+                ? h('button', { type: 'button', className: 'dt-primary-icon', title: t('composer.stop'), onClick: () => stopGeneration(sessionId) }, h(IconStopFill16))
+                : h('button', { type: 'button', className: 'dt-primary-icon', title: t('composer.send'), disabled: !binding || !input.draft.trim(), onClick: send }, h(IconSendOutline16))))))
     }
 
     function TavernHeaderAction({ sessionId, useSession }) {
       const state = useTavernStore()
+      const t = useTranslate()
       const active = useSession((session) => isTavernSession(session) !== null)
       const binding = state.bootstrap.state.sessionBindings?.[sessionId]
       const run = state.runs[sessionId] || {}
@@ -1001,7 +1161,7 @@ window.__ModuleLoader__.load({
         h('span', null, binding.character),
         h('button', {
           type: 'button',
-          title: 'Regenerate last response',
+          title: t('view.regenerate'),
           disabled: run.busy,
           onClick: () => void generateFor(sessionId, binding, 'regenerate', ''),
         }, h(IconRefreshOutline16)))
@@ -1060,6 +1220,7 @@ window.__ModuleLoader__.load({
 
     function ChatList({ ctx, character, currentSession }) {
       const state = useTavernStore()
+      const t = useTranslate()
       const chats = state.chatLists[character]
       const [error, setError] = useState('')
       const [busyChat, setBusyChat] = useState('')
@@ -1091,30 +1252,31 @@ window.__ModuleLoader__.load({
         }, h('span', null, chatId.replace(/\.jsonl$/i, ''))),
         h('button', {
           type: 'button',
-          title: `Rename ${chatId.replace(/\.jsonl$/i, '')}`,
+          title: t('nav.rename', { name: chatId.replace(/\.jsonl$/i, '') }),
           disabled: busyChat === chatId,
           onClick: () => runAction(chatId, () => renameTavernChat(ctx, character, chatId)),
         }, h(IconEditOutline16)),
         h('button', {
           type: 'button',
-          title: `Delete ${chatId.replace(/\.jsonl$/i, '')}`,
+          title: t('nav.delete', { name: chatId.replace(/\.jsonl$/i, '') }),
           disabled: busyChat === chatId,
           onClick: () => runAction(chatId, () => deleteTavernChat(ctx, character, chatId)),
         }, h(IconTrashOutline16)))),
-        !chats ? h('span', { className: 'dt-sidebar-status' }, 'Loading…') : null,
-        chats?.length === 0 ? h('span', { className: 'dt-sidebar-status' }, 'No chats') : null,
+        !chats ? h('span', { className: 'dt-sidebar-status' }, t('nav.loading')) : null,
+        chats?.length === 0 ? h('span', { className: 'dt-sidebar-status' }, t('nav.noChats')) : null,
         error ? h('span', { className: 'dt-sidebar-error' }, error) : null)
     }
 
     function TavernSidebar({ ctx, useSessions, floating, onClose }) {
       const state = useTavernStore()
+      const t = useTranslate()
       const currentSession = useSessions((sessions) => sessions.current)
       const [expanded, setExpanded] = useState(state.bootstrap.state.activeCharacter || state.bootstrap.characters[0] || '')
       const [error, setError] = useState('')
-      return h('section', { className: `dt-sidebar ${floating ? 'dt-sidebar-floating' : ''}`, 'aria-label': 'Tavern roleplay chats' },
+      return h('section', { className: `dt-sidebar ${floating ? 'dt-sidebar-floating' : ''}`, 'aria-label': t('nav.chats') },
         h('div', { className: 'dt-sidebar-heading' },
-          h('span', null, h(IconUserOutline16), h('strong', null, 'Tavern')),
-          floating ? h('button', { type: 'button', title: 'Close', onClick: onClose }, '×') : null),
+          h('span', null, h(IconUserOutline16), h('strong', null, t('nav.title'))),
+          floating ? h('button', { type: 'button', title: t('nav.close'), onClick: onClose }, '×') : null),
         state.bootstrap.characters.map((character) => {
           const open = expanded === character
           return h('div', { key: character, className: 'dt-character-group' },
@@ -1125,7 +1287,7 @@ window.__ModuleLoader__.load({
                 h('span', null, character)),
               h('button', {
                 type: 'button',
-                title: `New chat with ${character}`,
+                title: t('nav.newChat', { name: character }),
                 onClick: () => {
                   setError('')
                   void createTavernChat(ctx, character).catch((cause) => {
@@ -1136,7 +1298,7 @@ window.__ModuleLoader__.load({
               }, h(IconPlusOutline16))),
             open ? h(ChatList, { ctx, character, currentSession }) : null)
         }),
-        state.bootstrap.characters.length === 0 ? h('span', { className: 'dt-sidebar-status' }, 'No character cards') : null,
+        state.bootstrap.characters.length === 0 ? h('span', { className: 'dt-sidebar-status' }, t('nav.noCharacters')) : null,
         state.navigationStatus ? h('span', { className: 'dt-sidebar-status' }, state.navigationStatus) : null,
         error ? h('span', { className: 'dt-sidebar-error' }, error) : null)
     }
@@ -1171,14 +1333,15 @@ window.__ModuleLoader__.load({
 
     function SidebarFooterAction({ wide }) {
       const state = useTavernStore()
+      const t = useTranslate()
       if (state.sidebarAttached) return null
       return h('button', {
         type: 'button',
         className: 'dt-footer-action',
-        title: 'Tavern',
-        'aria-label': 'Open Tavern roleplay chats',
+        title: t('nav.title'),
+        'aria-label': t('nav.open'),
         onClick: () => window.dispatchEvent(new CustomEvent('dsh-tavern:toggle-sidebar')),
-      }, h(IconUserOutline16), wide ? h('span', null, 'Tavern') : null)
+      }, h(IconUserOutline16), wide ? h('span', null, t('nav.title')) : null)
     }
 
     function installStyle() {
@@ -1187,7 +1350,7 @@ window.__ModuleLoader__.load({
       tag.dataset.plugin = 'dsh-tavern'
       tag.dataset.pluginCss = STYLE_ID
       tag.textContent = `
-        .dt-settings{color:var(--dsw-alias-label-primary);display:flex;flex-direction:column;gap:0;min-height:100%;font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}.dt-settings-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:20px 24px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-settings h2{font-size:20px;line-height:28px;margin:0;font-weight:600}.dt-settings-heading p{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px;margin:4px 0 0}.dt-settings-band{padding:20px 24px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-settings-band h3{font-size:14px;line-height:20px;margin:0 0 14px;font-weight:600}.dt-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 20px}.dt-field{display:flex;flex-direction:column;gap:6px}.dt-label{color:var(--dsw-alias-label-secondary);font-size:12px}.dt-field select{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 10px}.dt-toggle,.dt-check-grid label{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary);font-size:13px}.dt-toggle{min-height:36px}.dt-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 20px}.dt-imports{display:flex;gap:8px;flex-wrap:wrap}.dt-upload{position:relative;cursor:pointer;height:34px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;font-size:13px}.dt-upload input{position:absolute;inset:0;opacity:0;cursor:pointer}.dt-upload-error{color:var(--dsw-alias-state-error-primary);margin-left:5px}.dt-error,.dt-run-error,.dt-sidebar-error{color:var(--dsw-alias-state-error-primary)}.dt-muted{color:var(--dsw-alias-label-tertiary)}
+        .dt-settings{color:var(--dsw-alias-label-primary);display:flex;flex-direction:column;gap:0;min-height:100%;font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}.dt-settings-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:20px 24px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-settings h2{font-size:20px;line-height:28px;margin:0;font-weight:600}.dt-settings-heading p{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px;margin:4px 0 0}.dt-settings-version{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;margin:2px 0 0;user-select:text}.dt-settings-band{padding:20px 24px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-settings-band h3{font-size:14px;line-height:20px;margin:0 0 14px;font-weight:600}.dt-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 20px}.dt-field{display:flex;flex-direction:column;gap:6px}.dt-label{color:var(--dsw-alias-label-secondary);font-size:12px}.dt-field select{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 10px}.dt-toggle,.dt-check-grid label{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary);font-size:13px}.dt-toggle{min-height:36px}.dt-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 20px}.dt-imports{display:flex;gap:8px;flex-wrap:wrap}.dt-upload{position:relative;cursor:pointer;height:34px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;font-size:13px}.dt-upload input{position:absolute;inset:0;opacity:0;cursor:pointer}.dt-upload-error{color:var(--dsw-alias-state-error-primary);margin-left:5px}.dt-error,.dt-run-error,.dt-sidebar-error{color:var(--dsw-alias-state-error-primary)}.dt-muted{color:var(--dsw-alias-label-tertiary)}
         .dt-view{box-sizing:border-box;width:100%;max-width:780px;margin:0 auto;display:flex;flex-direction:column;min-height:100%;padding:8px 16px 28px;color:var(--dsw-alias-label-primary);letter-spacing:0}.dt-empty{min-height:300px;align-items:center;justify-content:center;gap:10px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:13px}.dt-scene-strip{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:9px;min-height:48px;padding:8px 4px;background:color-mix(in srgb,var(--dsw-alias-bg-base) 94%,transparent);border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-scene-strip>img{width:32px;height:32px;border-radius:6px;object-fit:cover}.dt-scene-strip>div{display:flex;flex-direction:column;min-width:0;flex:1}.dt-scene-strip strong{font-size:13px;line-height:18px}.dt-scene-strip span{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dt-scene-strip button,.dt-message-actions button,.dt-header-character button,.dt-sidebar button,.dt-footer-action{color:inherit;background:transparent;border:0;cursor:pointer}.dt-scene-strip button{width:30px;height:30px;display:grid;place-items:center;border-radius:6px}.dt-scene-strip button:hover,.dt-message-actions button:hover,.dt-header-character button:hover,.dt-sidebar button:hover,.dt-footer-action:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-view button:disabled,.dt-composer button:disabled,.dt-sidebar button:disabled{cursor:not-allowed;opacity:.45}.dt-transcript{display:flex;flex-direction:column;gap:22px;padding:22px 4px}.dt-message{display:flex;gap:10px;max-width:88%;min-width:0}.dt-message-user{align-self:flex-end}.dt-message-character{align-self:flex-start}.dt-message-avatar{width:30px;height:30px;object-fit:cover;border-radius:6px;flex:none}.dt-message-body{display:flex;flex-direction:column;gap:4px;min-width:0}.dt-message-user .dt-message-body{align-items:flex-end}.dt-message-name{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-message-copy{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.65;padding:9px 11px;border-radius:8px;background:var(--dsw-alias-bg-raised,rgba(127,127,127,.08));border:1px solid var(--dsw-alias-border-l2)}.dt-message-user .dt-message-copy{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,var(--dsw-alias-bg-base))}.dt-message-actions{display:flex;align-items:center;gap:4px;min-height:24px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dt-message-actions button{min-width:24px;height:24px;border-radius:5px;display:inline-grid;place-items:center;padding:0 5px}.dt-message-edit{box-sizing:border-box;width:min(620px,70vw);max-width:100%;min-height:100px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:9px;font:inherit;line-height:1.55}.dt-transcript-end{height:1px;flex:none}.dt-message-error{max-width:620px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px}.dt-run-error{padding:7px 12px;font-size:12px}
         .dt-composer-wrap{box-sizing:border-box;width:100%;padding:6px var(--dsh-composer-side-clearance,16px) 14px;pointer-events:auto}.dt-composer{box-sizing:border-box;width:min(var(--dsh-composer-card-max-width,780px),100%);margin:0 auto;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);padding:10px 10px 8px;box-shadow:0 2px 10px rgba(0,0,0,.06)}.dt-composer textarea{box-sizing:border-box;width:100%;min-height:52px;max-height:200px;resize:vertical;border:0;outline:0;color:var(--dsw-alias-label-primary);background:transparent;font:inherit;font-size:14px;line-height:1.5}.dt-composer-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:30px;font-size:11px}.dt-composer-row>span{min-width:0;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dt-composer-actions{display:flex;align-items:center;gap:8px;flex:none}.dt-primary-icon{width:30px;height:30px;border:0;border-radius:7px;display:grid;place-items:center;background:var(--dsw-alias-state-business-primary);color:#fff;cursor:pointer}.dt-header-character{height:28px;display:flex;align-items:center;gap:6px;padding:0 4px 0 5px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;font-size:12px}.dt-header-character>img{width:20px;height:20px;border-radius:4px;object-fit:cover}.dt-header-character>span{max-width:100px;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dt-header-character>button{width:24px;height:24px;border-radius:5px;display:grid;place-items:center}
         .dt-model-select{min-width:0;position:relative}.dt-model-trigger{min-width:0;max-width:220px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:24px;outline:none;align-items:center;gap:4px;padding:0 4px 0 8px;font-size:13px;font-weight:500;line-height:20px;display:flex}.dt-model-trigger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-model-trigger:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}.dt-model-trigger:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}.dt-model-trigger-label{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.dt-model-trigger-effort{color:var(--dsw-alias-label-caption);flex:none}.dt-model-chevron{color:var(--dsw-alias-label-caption);flex:none;transition:transform .12s}.dt-model-chevron-open{transform:rotate(180deg)}.dt-model-menu{z-index:20;border:1px solid var(--dsw-alias-border-inverted);background:var(--dsw-specific-menu);width:min(240px,100vw - 32px);max-height:min(360px,100vh - 96px);box-shadow:var(--dsw-shadow-lv3);color:var(--dsw-alias-label-primary);border-radius:12px;flex-direction:column;padding:4px;display:flex;position:absolute;bottom:calc(100% + 8px);right:0;overflow:hidden}.dt-model-status,.dt-model-empty{color:var(--dsw-alias-label-tertiary);padding:10px;font-size:13px;line-height:20px}.dt-model-error,.dt-model-warning{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);border-radius:8px;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px;padding:7px 8px;font-size:12px;line-height:18px;display:flex}.dt-model-warning{background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-state-warn-label)}.dt-model-retry{color:inherit;font:inherit;cursor:pointer;background:0 0;border:none;flex:none;padding:0;font-weight:600}.dt-model-groups{min-height:0;overflow-y:auto}.dt-model-group+.dt-model-group{margin-top:4px}.dt-model-group-title{z-index:1;background:var(--dsw-specific-menu);color:var(--dsw-alias-label-tertiary);padding:5px 8px 3px;font-size:12px;font-weight:500;line-height:18px;position:sticky;top:0}.dt-model-option{width:100%;min-height:38px;color:inherit;text-align:left;cursor:pointer;background:0 0;border:none;border-radius:10px;outline:none;align-items:center;gap:8px;padding:6px 8px;display:flex}.dt-model-option:hover:not(:disabled),.dt-model-option:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}.dt-model-option:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}.dt-model-option-copy{flex-direction:column;flex:1;min-width:0;display:flex}.dt-model-name{color:inherit;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:500;line-height:20px;overflow:hidden}.dt-model-description{color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:18px;overflow:hidden}.dt-model-check{color:var(--dsw-alias-label-primary);flex:0 0 18px;place-items:center;display:grid}.dt-model-cell{width:100%;height:40px;color:var(--dsw-alias-label-primary);cursor:pointer;text-align:left;background:0 0;border:none;border-radius:10px;align-items:center;gap:8px;padding:0 10px;font-size:14px;line-height:22px;display:flex}.dt-model-cell:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-model-cell-label{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.dt-model-cell-value{text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--dsw-alias-label-tertiary);flex:0 auto;overflow:hidden}.dt-model-cell-chevron{color:var(--dsw-alias-label-tertiary);flex:none}
@@ -1200,6 +1363,10 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       installStyle()
       SidebarAdapter.context = ctx
+      ctx.effect(() => ctx.locale.register(LOCALE_NS, { zh: MESSAGES_ZH, en: MESSAGES_EN }), 'dsh-tavern: locale dictionaries')
+      translate = ctx.locale.bind(LOCALE_NS)
+      subscribeLocale = (listener) => ctx.locale.subscribe(listener)
+      getLocaleRevision = () => ctx.locale.getSnapshot()
       void refreshBootstrap().catch(() => {})
       ctx.slots.inject('settings.section', () => ctx.slots.register({
         name: 'settings.section',
@@ -1212,7 +1379,7 @@ window.__ModuleLoader__.load({
         name: 'conversation.view',
         id: 'tavern',
         order: 20,
-        label: () => 'Tavern',
+        label: () => translate('nav.title'),
         inject: () => ({}),
       }, TavernView))
       ctx.slots.inject('conversation.composer', () => ctx.slots.register({
@@ -1242,7 +1409,7 @@ window.__ModuleLoader__.load({
     }
 
     exports.name = 'dsh-tavern'
-    exports.inject = ['slots', 'sessions', 'workspaces']
+    exports.inject = ['slots', 'sessions', 'workspaces', 'locale']
     exports.apply = apply
     return module.exports
   },

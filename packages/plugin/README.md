@@ -12,11 +12,15 @@ dsh --profile web
 
 安装后：
 
-- 在“设置 -> dsh-tavern”导入角色卡、世界书和 Chat Completion preset，并选择 persona 或行为开关。
+- 在“设置 -> dsh-tavern”导入角色卡、世界书和 Chat Completion preset，并选择 persona 或行为开关；设置页标题下显示插件版本号与构建 commit 号（构建时由 `scripts/build-plugin.mjs` 注入 bootstrap）。
 - 在 DSH 原生侧边栏的 Tavern 分支创建或打开角色聊天。
 - 在原生 `Tavern` tab 使用 transcript、composer、Stop、edit、swipe 和 regenerate。
 
 聊天文件保存在 `$DSH_HOME/tavern/chats/`，并使用 revision compare-and-swap 防止跨标签页静默覆盖。
+
+## 语言
+
+插件 UI 跟随 DSH 的语言设置（`@deepseek-ai/dsh-client-locale`，zh/en）：client half 声明 `inject: [..., 'locale']`，向 locale 服务注册 `dsh-tavern` 命名空间字典并经 `useSyncExternalStore` 订阅快照，在“通用设置 -> 语言”切换后无需刷新即时生效。字典 zh/en 键集与 `{param}` 占位符的对称性由 `client-vm-mount` gate 校验。
 
 ## 验证
 

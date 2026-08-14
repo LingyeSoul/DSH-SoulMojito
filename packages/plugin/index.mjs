@@ -3159,7 +3159,9 @@ async function handleApi(ctx, req, res) {
       presets: await db.listPresets(),
       personas: await db.listPersonas(),
       activeCard: active ? publicCard(active.card) : null,
-      model: ctx.agentDefaultModel.currentSelection()
+      model: ctx.agentDefaultModel.currentSelection(),
+      version: "0.1.0",
+      commit: "f6d2847"
     });
   }
   if (method === "GET" && route.startsWith("avatar/")) {

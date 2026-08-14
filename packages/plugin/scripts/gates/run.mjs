@@ -196,6 +196,12 @@ function checkServerText(text) {
       problems.push(`server bundle is missing API route marker '${route}'`)
     }
   }
+  if (!/\bversion:\s*["']/.test(text)) {
+    problems.push('bootstrap payload must carry a literal version stamp (scripts/build-plugin.mjs define)')
+  }
+  if (!/\bcommit:\s*["']/.test(text)) {
+    problems.push('bootstrap payload must carry a literal commit stamp (scripts/build-plugin.mjs define)')
+  }
   return problems
 }
 
@@ -393,11 +399,16 @@ async function checkClientExecution(code) {
   }
   if (module.name !== PLUGIN_NAME) problems.push(`client runtime name must be '${PLUGIN_NAME}'`)
   if (!Array.isArray(module.inject)) problems.push('client runtime inject must be an array')
-  else if (!module.inject.includes('slots')) problems.push("client runtime inject must include 'slots'")
+  else {
+    if (!module.inject.includes('slots')) problems.push("client runtime inject must include 'slots'")
+    if (!module.inject.includes('locale')) problems.push("client runtime inject must include 'locale' (DSH language following)")
+  }
   if (typeof module.apply !== 'function') return [...problems, 'client runtime apply must be a function']
 
   const registrations = []
   const injections = []
+  const localeRegistrations = []
+  const localeBinds = []
   const slots = {
     inject: (name, callback) => {
       injections.push(name)
@@ -418,8 +429,8 @@ async function checkClientExecution(code) {
   const context = new Proxy({
     effect: (callback) => callback(),
     locale: {
-      bind: () => (key) => key,
-      register: () => {},
+      bind: (ns) => { localeBinds.push(ns); return (key) => key },
+      register: (ns, dicts) => { localeRegistrations.push({ ns, dicts }) },
       getSnapshot: () => ({ revision: 0 }),
       subscribe: () => () => {},
     },
@@ -450,6 +461,32 @@ async function checkClientExecution(code) {
       return options?.name === name && (id === undefined || options?.id === id)
     })
     if (entry === undefined) problems.push(`client apply did not register ${name}${id === undefined ? '' : ` id '${id}'`}`)
+  }
+  const localeRegistration = localeRegistrations.find((entry) => entry?.ns === PLUGIN_NAME)
+  if (localeRegistration === undefined) {
+    problems.push(`client apply must register '${PLUGIN_NAME}' dictionaries via ctx.locale.register`)
+  } else {
+    const zh = localeRegistration.dicts?.zh
+    const en = localeRegistration.dicts?.en
+    const zhKeys = Object.keys(zh ?? {}).sort()
+    const enKeys = Object.keys(en ?? {}).sort()
+    if (zhKeys.length === 0) problems.push('locale dictionaries must not be empty')
+    if (zhKeys.join(' ') !== enKeys.join(' ')) {
+      const missingInEn = zhKeys.filter((key) => !(key in (en ?? {})))
+      const missingInZh = enKeys.filter((key) => !(key in (zh ?? {})))
+      problems.push(`locale zh/en dictionaries diverge (missing in en: ${missingInEn.join(', ') || 'none'}; missing in zh: ${missingInZh.join(', ') || 'none'})`)
+    } else {
+      for (const key of zhKeys) {
+        const zhParams = [...String(zh[key]).matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort().join(',')
+        const enParams = [...String(en[key]).matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort().join(',')
+        if (zhParams !== enParams) {
+          problems.push(`locale key '${key}' must use the same {param} placeholders in zh and en`)
+        }
+      }
+    }
+  }
+  if (!localeBinds.includes(PLUGIN_NAME)) {
+    problems.push(`client apply must bind the '${PLUGIN_NAME}' locale namespace via ctx.locale.bind`)
   }
   const settings = registrations.find((candidate) => (candidate?.options ?? candidate?.opts)?.name === 'settings.section')
   const settingsSource = settings?.component ? String(settings.component) : ''
@@ -637,10 +674,12 @@ const gates = [
     name: 'server-bundle',
     selfTest: () => {
       const routeMarkers = REQUIRED_SERVER_ROUTES.map((route) => `"${route}"`).join('\n')
-      const good = `var name = "dsh-tavern"; var inject = []; function apply() {}\n${routeMarkers}\n"${API_PREFIX}"\nexport { name, inject, apply };`
-      const bad = good.replace('"generate"', '"missing"')
+      const good = `var name = "dsh-tavern"; var inject = []; function apply() {}\n${routeMarkers}\n"${API_PREFIX}"\nvar bootstrap = { ok: true, version: "0.0.0", commit: "stub" };\nexport { name, inject, apply };`
+      const badRoute = good.replace('"generate"', '"missing"')
+      const badStamp = good.replace('version: "0.0.0", ', '')
       return checkServerText(good).length === 0
-        && checkServerText(bad).length > 0
+        && checkServerText(badRoute).length > 0
+        && checkServerText(badStamp).length > 0
         && checkServerFreshness(10, 10).length === 0
         && checkServerFreshness(11, 10).length > 0
         ? []
@@ -648,10 +687,12 @@ const gates = [
     },
     check: () => {
       if (!existsSync(SERVER_PATH)) return ['generated packages/plugin/index.mjs does not exist']
-      const sourceStat = statSync(SOURCE_PATH)
+      // package.json participates in freshness: the version stamp is baked in
+      // at build time, so a bump without a rebuild must fail the gate.
+      const newestSource = Math.max(statSync(SOURCE_PATH).mtimeMs, statSync(PACKAGE_PATH).mtimeMs)
       const serverStat = statSync(SERVER_PATH)
       return [
-        ...checkServerFreshness(sourceStat.mtimeMs, serverStat.mtimeMs),
+        ...checkServerFreshness(newestSource, serverStat.mtimeMs),
         ...checkServerText(readFileSync(SERVER_PATH, 'utf8')),
       ]
     },
@@ -672,11 +713,17 @@ const gates = [
   {
     name: 'client-vm-mount',
     selfTest: async () => {
-      const good = "window.__ModuleLoader__.load({ id: 'dsh-tavern', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); exports.name = 'dsh-tavern'; exports.inject = ['slots']; exports.apply = (ctx) => { const entries = [['settings.section','dsh-tavern'],['conversation.view','tavern'],['conversation.composer',null],['conversation.session.header.actions','dsh-tavern'],['shell.overlay','dsh-tavern-sidebar-adapter'],['sidebar.footer.action','dsh-tavern-fallback']]; for (const [name,id] of entries) ctx.slots.inject(name, () => ctx.slots.register({ name, ...(id ? { id } : {}), ...(name === 'conversation.composer' ? { select: () => null } : {}) }, () => null)); }; return module.exports; } });"
-      const bad = good.replace("['conversation.view','tavern'],", '')
-      return (await checkClientExecution(good)).length === 0 && (await checkClientExecution(bad)).length > 0
+      const localeWiring = "ctx.effect(() => ctx.locale.register('dsh-tavern', { zh: { 'nav.title': '酒馆' }, en: { 'nav.title': 'Tavern' } })); ctx.locale.bind('dsh-tavern');"
+      const good = `window.__ModuleLoader__.load({ id: 'dsh-tavern', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); exports.name = 'dsh-tavern'; exports.inject = ['slots', 'locale']; exports.apply = (ctx) => { ${localeWiring} const entries = [['settings.section','dsh-tavern'],['conversation.view','tavern'],['conversation.composer',null],['conversation.session.header.actions','dsh-tavern'],['shell.overlay','dsh-tavern-sidebar-adapter'],['sidebar.footer.action','dsh-tavern-fallback']]; for (const [name,id] of entries) ctx.slots.inject(name, () => ctx.slots.register({ name, ...(id ? { id } : {}), ...(name === 'conversation.composer' ? { select: () => null } : {}) }, () => null)); }; return module.exports; } });`
+      const badSlot = good.replace("['conversation.view','tavern'],", '')
+      const badLocale = good.replace("exports.inject = ['slots', 'locale']", "exports.inject = ['slots']")
+      const badParity = good.replace("en: { 'nav.title': 'Tavern' }", "en: {}")
+      const goodProblems = await checkClientExecution(good)
+      const failureCounts = (await Promise.all([badSlot, badLocale, badParity].map((sample) => checkClientExecution(sample))))
+        .filter((problems) => problems.length > 0).length
+      return goodProblems.length === 0 && failureCounts === 3
         ? []
-        : ['client VM bad sample was not rejected']
+        : ['client VM bad samples were not rejected']
     },
     check: () => existsSync(CLIENT_PATH)
       ? checkClientExecution(readFileSync(CLIENT_PATH, 'utf8'))
