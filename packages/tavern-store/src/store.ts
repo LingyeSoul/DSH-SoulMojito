@@ -5,10 +5,12 @@
  * tavern/
  * ├── characters/<name>.png|<name>.json   # PNG 原样存（保留图像与双 chunk）
  * ├── worlds/<name>.json                  # ST 世界书文件形态
- * ├── presets/<name>.json                 # ST chat completion preset 形态
- * ├── chats/<character>/<timestamp>.jsonl # ST 聊天文件形态
+ * ├── presets/<name>.json                 # ST preset 形态（chat completion / context / instruct / textgen）
+ * ├── chats/<character>/<timestamp>.jsonl # ST 聊天文件形态（character 为角色名或群名）
  * ├── personas/<name>.json                # persona 定义
- * └── state.json                          # 运行时状态（当前卡/书/预设/persona）
+ * ├── personas/avatars/<name>.png         # persona 头像
+ * ├── groups/<name>.json                  # ST 群组文件形态（members 为角色名）
+ * └── state.json                          # 运行时状态（当前卡/书/预设/persona/regex/TC）
  * ```
  *
  * 写操作原子（tmp + rename）。Node-only（插件 Node half 使用）。
@@ -23,17 +25,23 @@ import {
   encodeCharacterCardJson,
   encodeCharacterCardPng,
   parseChatLog,
+  parseGroupFile,
   parseWorldInfoFile,
   serializeChatLog,
+  serializeGroupFile,
   serializeWorldInfoFile,
   type CharacterCardIR,
   type ChatLogIR,
+  type GroupIR,
+  type RegexScriptIR,
   type WorldBookIR,
 } from '@dsh-tavern/format'
 
 export interface TavernSessionBinding {
   character: string
   chatId: string
+  /** 群聊绑定时为 true；character 字段承载群名。 */
+  group?: boolean
 }
 
 /** 一个 DSH session 的模型选择；缺省回落 agentDefaultModel。 */
@@ -41,6 +49,17 @@ export interface TavernModelSelection {
   provider: string
   model: string
   reasoningEffort?: string
+}
+
+/** Text Completion 管线配置（Kobold 端点与预设选择）。 */
+export interface TextCompletionConfig {
+  endpoint: string
+  apiKey?: string
+  /** 优先 SSE 流式端点，失败回退单发 */
+  streaming: boolean
+  contextPreset?: string
+  instructPreset?: string
+  samplerPreset?: string
 }
 
 export interface TavernState {
@@ -57,11 +76,26 @@ export interface TavernState {
   modelSelections: Record<string, TavernModelSelection>
   /** 每聊天元数据（最后激活时间、swipe 指针等自由袋） */
   chats: Record<string, Record<string, unknown>>
+  /** 全局 regex 脚本（ST regex 扩展形态）。 */
+  regexScripts: RegexScriptIR[]
+  /** STscript 全局变量。 */
+  scriptGlobals: Record<string, string | number | boolean>
+  /** 生成管线选择：chat completion（默认）或 text completion。 */
+  pipelineMode: 'chat' | 'text'
+  /** Text Completion 管线配置。 */
+  textCompletion?: TextCompletionConfig
 }
 
 export interface Persona {
   name: string
   description: string
+  /** 描述注入位置：0=IN_PROMPT（默认），4=AT_DEPTH（配 depth/role） */
+  position?: number
+  depth?: number
+  role?: number
+  title?: string
+  /** 存在 avatars/<name>.png 头像文件时为 true */
+  hasAvatar?: boolean
   [key: string]: unknown
 }
 
@@ -88,7 +122,15 @@ export class ChatRevisionConflictError extends Error {
   }
 }
 
-const DEFAULT_STATE: TavernState = { activeWorlds: [], sessionBindings: {}, modelSelections: {}, chats: {} }
+const DEFAULT_STATE: TavernState = {
+  activeWorlds: [],
+  sessionBindings: {},
+  modelSelections: {},
+  chats: {},
+  regexScripts: [],
+  scriptGlobals: {},
+  pipelineMode: 'chat',
+}
 
 export class TavernStore {
   private chatMutationTail: Promise<void> = Promise.resolve()
@@ -97,7 +139,7 @@ export class TavernStore {
   private constructor(private readonly root: string) {}
 
   static async open(root: string): Promise<TavernStore> {
-    for (const dir of ['characters', 'worlds', 'presets', 'chats', 'personas']) {
+    for (const dir of ['characters', 'worlds', 'presets', 'chats', 'personas', 'groups', 'personas/avatars']) {
       await fs.mkdir(path.join(root, dir), { recursive: true })
     }
     return new TavernStore(root)
@@ -298,6 +340,30 @@ export class TavernStore {
     })
   }
 
+  /* ------------------------------ 群组 ------------------------------ */
+
+  async putGroup(group: GroupIR): Promise<void> {
+    await this.writeAtomic(
+      path.join(this.root, 'groups', `${safeFileName(group.name)}.json`),
+      jsonBytes(serializeGroupFile(group)),
+    )
+  }
+
+  async getGroup(name: string): Promise<GroupIR | undefined> {
+    const bytes = await this.tryRead(path.join(this.root, 'groups', `${safeFileName(name)}.json`))
+    if (bytes === undefined) return undefined
+    return parseGroupFile(JSON.parse(Buffer.from(bytes).toString('utf8')), name)
+  }
+
+  async listGroups(): Promise<string[]> {
+    const files = await this.listDir('groups')
+    return files.filter((f) => f.endsWith('.json')).map((f) => f.replace(/\.json$/, '')).sort()
+  }
+
+  async deleteGroup(name: string): Promise<void> {
+    await fs.rm(path.join(this.root, 'groups', `${safeFileName(name)}.json`), { force: true })
+  }
+
   /* ------------------------------ 预设 ------------------------------ */
 
   /** 预设按原样 JSON 存取（含采样参数与 prompts/prompt_order 全量）。 */
@@ -322,8 +388,33 @@ export class TavernStore {
 
   /* ----------------------------- persona ----------------------------- */
 
-  async putPersona(persona: Persona): Promise<void> {
+  async putPersona(persona: Persona, avatar?: Uint8Array): Promise<void> {
     await this.writeAtomic(path.join(this.root, 'personas', `${safeFileName(persona.name)}.json`), jsonBytes(persona))
+    if (avatar !== undefined) {
+      await this.writeAtomic(path.join(this.root, 'personas', 'avatars', `${safeFileName(persona.name)}.png`), avatar)
+    }
+  }
+
+  /**
+   * 导入 persona PNG：内嵌 `chara`/`ccv3` 的 description 作为人设描述
+   * （ST persona 导入行为），文件名 stem 作为 persona 名；头像原字节保存。
+   */
+  async importPersonaPng(bytes: Uint8Array, fallbackName: string): Promise<Persona> {
+    let description = ''
+    try {
+      const card = decodeCharacterCard(bytes)
+      description = card.data.description
+    } catch {
+      // 无内嵌卡数据：仅头像（ST 对无数据头像的行为）
+    }
+    const name = safeFileName(fallbackName) || 'Persona'
+    const persona: Persona = { name, description, position: 0, hasAvatar: true }
+    await this.putPersona(persona, bytes)
+    return persona
+  }
+
+  async getPersonaAvatar(name: string): Promise<Uint8Array | undefined> {
+    return this.tryRead(path.join(this.root, 'personas', 'avatars', `${safeFileName(name)}.png`))
   }
 
   async getPersona(name: string): Promise<Persona | undefined> {
@@ -335,6 +426,59 @@ export class TavernStore {
   async listPersonas(): Promise<string[]> {
     const files = await this.listDir('personas')
     return files.filter((f) => f.endsWith('.json')).map((f) => f.replace(/\.json$/, '')).sort()
+  }
+
+  async deletePersona(name: string): Promise<boolean> {
+    let deleted = false
+    const json = path.join(this.root, 'personas', `${safeFileName(name)}.json`)
+    const avatar = path.join(this.root, 'personas', 'avatars', `${safeFileName(name)}.png`)
+    try {
+      await fs.unlink(json)
+      deleted = true
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause
+    }
+    await fs.rm(avatar, { force: true })
+    return deleted
+  }
+
+  /* ------------------------------ 分支 ------------------------------ */
+
+  /**
+   * 从 messageId（含）截断复制为新聊天；chat_metadata.bookmark_link 记录回链。
+   * 分支命名 `${stem} - branch N.jsonl`（N 递增至不冲突，字符集安全）。
+   */
+  async branchChat(characterName: string, chatId: string, messageId: number, expectedRevision?: string, name?: string): Promise<{ chatId: string; chat: ChatLogIR }> {
+    return this.mutateChat(async () => {
+      const dir = path.join(this.root, 'chats', safeFileName(characterName))
+      const source = path.join(dir, safeChatFileName(chatId))
+      await this.assertChatRevision(source, expectedRevision)
+      const bytes = await this.tryRead(source)
+      if (bytes === undefined) throw new Error(`chat '${chatId}' not found`)
+      const log = parseChatLog(Buffer.from(bytes).toString('utf8'))
+      if (messageId < 0 || messageId >= log.messages.length) {
+        throw new Error(`branch messageId ${messageId} out of range (0..${log.messages.length - 1})`)
+      }
+      const branchMessages = log.messages.slice(0, messageId + 1).map((m) => ({ ...m }))
+      const header = structuredClone(log.header)
+      header.chat_metadata = {
+        ...(header.chat_metadata ?? {}),
+        bookmark_link: { character: characterName, chatId, messageId },
+      }
+      const stem = (name !== undefined && name.trim() !== ''
+        ? name.trim()
+        : chatId.replace(/\.jsonl$/i, '')).replace(/\.jsonl$/i, '')
+      const safeStem = stem.replace(/[^A-Za-z0-9@ _.-]/g, '_').slice(0, 80) || 'chat'
+      let nextId = `${safeStem} - branch 1.jsonl`
+      let counter = 1
+      while (await this.tryRead(path.join(dir, nextId)) !== undefined) {
+        counter += 1
+        nextId = `${safeStem} - branch ${counter}.jsonl`
+      }
+      const branchLog: ChatLogIR = { header, messages: branchMessages }
+      await this.writeAtomic(path.join(dir, nextId), chatBytes(branchLog))
+      return { chatId: nextId, chat: branchLog }
+    })
   }
 
   /* ------------------------------ 状态 ------------------------------ */
@@ -370,6 +514,9 @@ export class TavernStore {
       sessionBindings: parsed.sessionBindings ?? {},
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
+      regexScripts: parsed.regexScripts ?? [],
+      scriptGlobals: parsed.scriptGlobals ?? {},
+      pipelineMode: parsed.pipelineMode === 'text' ? 'text' : 'chat',
     }
   }
 

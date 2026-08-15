@@ -721,6 +721,148 @@ function decodeCharxAsset(bytes, path2) {
   return asset;
 }
 
+// packages/tavern-format/src/regex-script.ts
+var RegexPlacement = {
+  USER_INPUT: 1,
+  AI_OUTPUT: 2,
+  SLASH_COMMAND: 3,
+  WORLD_INFO: 5,
+  REASONING: 6
+};
+var RegexScriptFormatError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "RegexScriptFormatError";
+  }
+};
+var KNOWN_FIELDS2 = /* @__PURE__ */ new Set([
+  "id",
+  "scriptName",
+  "findRegex",
+  "replaceString",
+  "trimStrings",
+  "placement",
+  "disabled",
+  "markdownOnly",
+  "promptOnly",
+  "runOnEdit",
+  "substituteRegex",
+  "minDepth",
+  "maxDepth"
+]);
+var PLACEMENT_VALUES = /* @__PURE__ */ new Set([1, 2, 3, 5, 6]);
+function parseRegexScripts(input) {
+  let list;
+  if (Array.isArray(input)) list = input;
+  else if (typeof input === "object" && input !== null) {
+    const obj = input;
+    if (Array.isArray(obj["scripts"])) list = obj["scripts"];
+    else if (Array.isArray(obj["regex_scripts"])) list = obj["regex_scripts"];
+    else list = [input];
+  } else {
+    throw new RegexScriptFormatError("regex scripts input must be an array or object");
+  }
+  return list.map((item, index) => parseRegexScript(item, index));
+}
+function parseRegexScript(raw, index = 0) {
+  if (typeof raw !== "object" || raw === null) {
+    throw new RegexScriptFormatError(`regex script ${index} is not an object`);
+  }
+  const obj = raw;
+  const findRegex = str2(obj["findRegex"]);
+  if (findRegex === "") throw new RegexScriptFormatError(`regex script ${index} has empty findRegex`);
+  const extra = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (!KNOWN_FIELDS2.has(k)) extra[k] = v;
+  }
+  const placement = (Array.isArray(obj["placement"]) ? obj["placement"] : [obj["placement"]]).map((value) => typeof value === "number" && Number.isFinite(value) ? value : 0).filter((value) => PLACEMENT_VALUES.has(value));
+  return {
+    id: str2(obj["id"]) || `regex-${index}-${str2(obj["scriptName"]) || "script"}`,
+    scriptName: str2(obj["scriptName"]) || str2(obj["script_name"]) || `Script ${index + 1}`,
+    findRegex,
+    replaceString: str2(obj["replaceString"]),
+    trimStrings: Array.isArray(obj["trimStrings"]) ? obj["trimStrings"].filter((value) => typeof value === "string") : [],
+    placement: placement.length > 0 ? [...new Set(placement)] : [RegexPlacement.AI_OUTPUT],
+    disabled: bool2(obj["disabled"], false),
+    markdownOnly: bool2(obj["markdownOnly"], false),
+    promptOnly: bool2(obj["promptOnly"], false),
+    runOnEdit: bool2(obj["runOnEdit"], false),
+    substituteRegex: bool2(obj["substituteRegex"], false),
+    minDepth: numOrNull(obj["minDepth"]),
+    maxDepth: numOrNull(obj["maxDepth"]),
+    extra: Object.keys(extra).length > 0 ? extra : void 0
+  };
+}
+function str2(value) {
+  return typeof value === "string" ? value : "";
+}
+function bool2(value, fallback) {
+  return typeof value === "boolean" ? value : fallback;
+}
+function numOrNull(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+// packages/tavern-format/src/textcompletion.ts
+var TextCompletionFormatError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "TextCompletionFormatError";
+  }
+};
+function detectPresetKind(obj) {
+  if (Array.isArray(obj["prompts"]) && Array.isArray(obj["prompt_order"])) return "chat-completion";
+  if (typeof obj["story_string"] === "string") return "context";
+  if (typeof obj["input_prefix"] === "string" && typeof obj["output_prefix"] === "string") return "instruct";
+  if (typeof obj["temp"] === "number" || typeof obj["rep_pen"] === "number" || typeof obj["top_k"] === "number") {
+    return "textgen-sampler";
+  }
+  return "unknown";
+}
+function parseContextTemplate(obj) {
+  if (detectPresetKind(obj) !== "context") {
+    throw new TextCompletionFormatError("preset is not a context template (missing story_string)");
+  }
+  const role = str3(obj["story_string_role"]);
+  return {
+    storyString: str3(obj["story_string"]),
+    storyStringPosition: num2(obj["story_string_position"], 0),
+    storyStringDepth: num2(obj["story_string_depth"], 0),
+    storyStringRole: role === "user" || role === "assistant" ? role : "system",
+    exampleSeparator: str3(obj["example_separator"]) || "\n",
+    chatStart: str3(obj["chat_start"]) || "",
+    sampler: obj
+  };
+}
+function parseInstructTemplate(obj) {
+  if (detectPresetKind(obj) !== "instruct") {
+    throw new TextCompletionFormatError("preset is not an instruct template (missing prefixes)");
+  }
+  return {
+    systemPromptPrefix: str3(obj["system_prompt_prefix"]),
+    systemPromptSuffix: str3(obj["system_prompt_suffix"]),
+    inputPrefix: str3(obj["input_prefix"]),
+    inputSuffix: str3(obj["input_suffix"]),
+    outputPrefix: str3(obj["output_prefix"]),
+    outputSuffix: str3(obj["output_suffix"]),
+    systemSequence: str3(obj["system_sequence"]),
+    systemSequenceEnd: str3(obj["system_sequence_end"]),
+    stopSequence: str3(obj["stop_sequence"]),
+    namesBehavior: num2(obj["names_behavior"], 0),
+    wrap: bool3(obj["wrap"], false),
+    sampler: obj
+  };
+}
+function str3(value) {
+  return typeof value === "string" ? value : "";
+}
+function num2(value, fallback) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+function bool3(value, fallback) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 // packages/tavern-lore/src/types.ts
 var WI_POSITION = {
   /** Before Char Defs */
@@ -754,8 +896,8 @@ var MESSAGE_BOUNDARY = "";
 var MAX_SCAN_DEPTH = 1e3;
 
 // packages/tavern-lore/src/regex.ts
-function escapeRegex(str5) {
-  return str5.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function escapeRegex(str8) {
+  return str8.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function parseRegexFromString(input) {
   const match = input.match(/^\/([\w\W]+?)\/([gimsuy]*)$/);
@@ -833,9 +975,9 @@ var ScanBuffer = class {
     }
     return result;
   }
-  transformString(str5, entry) {
+  transformString(str8, entry) {
     const caseSensitive = entry.caseSensitive ?? this.globals.caseSensitive;
-    return caseSensitive ? str5 : str5.toLowerCase();
+    return caseSensitive ? str8 : str8.toLowerCase();
   }
   /**
    * 键匹配（verified vs WorldInfoBuffer.matchKeys）：
@@ -932,13 +1074,13 @@ function bookRef(book, index) {
     scanDepth: typeof book.scanDepth === "number" && book.scanDepth >= 0 ? book.scanDepth : null
   };
 }
-function num2(value, fallback) {
+function num3(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
-function bool2(value, fallback) {
+function bool4(value, fallback) {
   return typeof value === "boolean" ? value : fallback;
 }
-function str2(value, fallback) {
+function str4(value, fallback) {
   return typeof value === "string" ? value : fallback;
 }
 function strArray2(value) {
@@ -946,48 +1088,48 @@ function strArray2(value) {
 }
 function normalizeEntry2(raw) {
   const normalized = { ...raw };
-  normalized["uid"] = num2(raw["uid"], NaN);
+  normalized["uid"] = num3(raw["uid"], NaN);
   normalized["key"] = strArray2(raw["key"]);
   normalized["keysecondary"] = strArray2(raw["keysecondary"]);
-  normalized["comment"] = str2(raw["comment"], "");
-  normalized["content"] = str2(raw["content"], "");
-  normalized["constant"] = bool2(raw["constant"], false);
-  normalized["vectorized"] = bool2(raw["vectorized"], false);
-  normalized["selective"] = bool2(raw["selective"], true);
-  normalized["selectiveLogic"] = num2(raw["selectiveLogic"], 0);
-  normalized["addMemo"] = bool2(raw["addMemo"], false);
-  normalized["order"] = num2(raw["order"], DEFAULT_ORDER);
-  normalized["position"] = num2(raw["position"], 0);
-  normalized["disable"] = bool2(raw["disable"], false);
-  normalized["ignoreBudget"] = bool2(raw["ignoreBudget"], false);
-  normalized["excludeRecursion"] = bool2(raw["excludeRecursion"], false);
-  normalized["preventRecursion"] = bool2(raw["preventRecursion"], false);
-  normalized["delayUntilRecursion"] = raw["delayUntilRecursion"] === true ? 1 : num2(raw["delayUntilRecursion"], 0);
-  normalized["matchPersonaDescription"] = bool2(raw["matchPersonaDescription"], false);
-  normalized["matchCharacterDescription"] = bool2(raw["matchCharacterDescription"], false);
-  normalized["matchCharacterPersonality"] = bool2(raw["matchCharacterPersonality"], false);
-  normalized["matchCharacterDepthPrompt"] = bool2(raw["matchCharacterDepthPrompt"], false);
-  normalized["matchScenario"] = bool2(raw["matchScenario"], false);
-  normalized["matchCreatorNotes"] = bool2(raw["matchCreatorNotes"], false);
-  normalized["probability"] = num2(raw["probability"], DEFAULT_PROBABILITY);
-  normalized["useProbability"] = bool2(raw["useProbability"], true);
-  normalized["depth"] = num2(raw["depth"], DEFAULT_DEPTH);
-  normalized["outletName"] = str2(raw["outletName"], "");
-  normalized["group"] = str2(raw["group"], "");
-  normalized["groupOverride"] = bool2(raw["groupOverride"], false);
-  normalized["groupWeight"] = num2(raw["groupWeight"], DEFAULT_WEIGHT);
+  normalized["comment"] = str4(raw["comment"], "");
+  normalized["content"] = str4(raw["content"], "");
+  normalized["constant"] = bool4(raw["constant"], false);
+  normalized["vectorized"] = bool4(raw["vectorized"], false);
+  normalized["selective"] = bool4(raw["selective"], true);
+  normalized["selectiveLogic"] = num3(raw["selectiveLogic"], 0);
+  normalized["addMemo"] = bool4(raw["addMemo"], false);
+  normalized["order"] = num3(raw["order"], DEFAULT_ORDER);
+  normalized["position"] = num3(raw["position"], 0);
+  normalized["disable"] = bool4(raw["disable"], false);
+  normalized["ignoreBudget"] = bool4(raw["ignoreBudget"], false);
+  normalized["excludeRecursion"] = bool4(raw["excludeRecursion"], false);
+  normalized["preventRecursion"] = bool4(raw["preventRecursion"], false);
+  normalized["delayUntilRecursion"] = raw["delayUntilRecursion"] === true ? 1 : num3(raw["delayUntilRecursion"], 0);
+  normalized["matchPersonaDescription"] = bool4(raw["matchPersonaDescription"], false);
+  normalized["matchCharacterDescription"] = bool4(raw["matchCharacterDescription"], false);
+  normalized["matchCharacterPersonality"] = bool4(raw["matchCharacterPersonality"], false);
+  normalized["matchCharacterDepthPrompt"] = bool4(raw["matchCharacterDepthPrompt"], false);
+  normalized["matchScenario"] = bool4(raw["matchScenario"], false);
+  normalized["matchCreatorNotes"] = bool4(raw["matchCreatorNotes"], false);
+  normalized["probability"] = num3(raw["probability"], DEFAULT_PROBABILITY);
+  normalized["useProbability"] = bool4(raw["useProbability"], true);
+  normalized["depth"] = num3(raw["depth"], DEFAULT_DEPTH);
+  normalized["outletName"] = str4(raw["outletName"], "");
+  normalized["group"] = str4(raw["group"], "");
+  normalized["groupOverride"] = bool4(raw["groupOverride"], false);
+  normalized["groupWeight"] = num3(raw["groupWeight"], DEFAULT_WEIGHT);
   normalized["scanDepth"] = typeof raw["scanDepth"] === "number" && Number.isFinite(raw["scanDepth"]) ? raw["scanDepth"] : null;
   normalized["caseSensitive"] = typeof raw["caseSensitive"] === "boolean" ? raw["caseSensitive"] : null;
   normalized["matchWholeWords"] = typeof raw["matchWholeWords"] === "boolean" ? raw["matchWholeWords"] : null;
   normalized["useGroupScoring"] = typeof raw["useGroupScoring"] === "boolean" ? raw["useGroupScoring"] : null;
-  normalized["automationId"] = str2(raw["automationId"], "");
-  normalized["role"] = num2(raw["role"], 0);
+  normalized["automationId"] = str4(raw["automationId"], "");
+  normalized["role"] = num3(raw["role"], 0);
   normalized["sticky"] = typeof raw["sticky"] === "number" && Number.isFinite(raw["sticky"]) ? raw["sticky"] : null;
   normalized["cooldown"] = typeof raw["cooldown"] === "number" && Number.isFinite(raw["cooldown"]) ? raw["cooldown"] : null;
   normalized["delay"] = typeof raw["delay"] === "number" && Number.isFinite(raw["delay"]) ? raw["delay"] : null;
   normalized["characterFilterNames"] = strArray2(raw["characterFilterNames"]);
   normalized["characterFilterTags"] = strArray2(raw["characterFilterTags"]);
-  normalized["characterFilterExclude"] = bool2(raw["characterFilterExclude"], false);
+  normalized["characterFilterExclude"] = bool4(raw["characterFilterExclude"], false);
   const triggers = strArray2(raw["triggers"]);
   normalized["triggers"] = triggers;
   return normalized;
@@ -2017,7 +2159,11 @@ function createMacroEngine(init) {
     },
     hasGlobalVar: (name2) => globalVars.has(name2),
     deleteGlobalVar: (name2) => globalVars.delete(name2),
-    registerMacro
+    registerMacro,
+    snapshotVars: () => ({
+      local: Object.fromEntries(localVars),
+      global: Object.fromEntries(globalVars)
+    })
   };
   return api;
 }
@@ -2175,10 +2321,175 @@ function numOr2(v, fallback) {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
 
-// packages/tavern-store/src/store.ts
-import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
-import * as path from "node:path";
+// packages/tavern-pipeline/src/textcompletion.ts
+function assembleTextCompletion(input, deps) {
+  const warnings = [];
+  const { expand, countTokens } = deps;
+  const maxContext = input.maxContextTokens ?? 4096;
+  const maxResponse = input.maxResponseTokens ?? 400;
+  const instruct = input.instruct;
+  const namesMode = instruct?.namesBehavior ?? 0;
+  const joinBlocks = (blocks) => blocks.filter((block) => block.trim() !== "").join("\n");
+  const values = {
+    char: input.speakerName,
+    user: input.userName,
+    system: expand(input.systemPrompt ?? input.speakerFields.systemPrompt ?? ""),
+    description: "",
+    personality: "",
+    scenario: "",
+    persona: input.personaDescription ?? "",
+    wiBefore: joinBlocks(input.worldInfoBefore),
+    wiAfter: joinBlocks(input.worldInfoAfter)
+  };
+  for (const field of ["description", "personality", "scenario"]) {
+    const raw = input.speakerFields[field];
+    if (typeof raw === "string" && raw.trim() !== "") values[field] = expand(raw);
+  }
+  const story = renderStoryString(input.context.storyString, values, expand).trim();
+  const storyTokens = countTokens(story);
+  const budget = maxContext - maxResponse - storyTokens;
+  const usable = input.messages.filter((m) => !m.is_system && typeof m.mes === "string" && m.mes.length > 0);
+  const formatted = [];
+  for (const message of usable) {
+    formatted.push({ text: formatMessage(message, input, namesMode), tokens: 0 });
+  }
+  for (const item of formatted) item.tokens = countTokens(item.text);
+  let used = 0;
+  let dropped = 0;
+  const kept = [];
+  for (let i = formatted.length - 1; i >= 0; i--) {
+    const item = formatted[i];
+    if (used + item.tokens > budget && kept.length > 0) {
+      dropped = i + 1;
+      break;
+    }
+    used += item.tokens;
+    kept.unshift(item.text);
+  }
+  if (dropped > 0) warnings.push(`context budget exceeded: dropped ${dropped} oldest message(s)`);
+  const history = [...kept];
+  for (const injection of [...input.depthInjections ?? []].sort((a, b) => b.depth - a.depth)) {
+    const segment = instruct ? `${instruct.systemSequence}${expand(injection.text)}${instruct.systemSequenceEnd}` : expand(injection.text);
+    history.splice(Math.max(0, history.length - injection.depth), 0, segment);
+  }
+  const historyText = instruct ? history.join("") : joinBlocks(history);
+  const prompt = joinBlocks([story, historyText]);
+  return {
+    prompt: prompt.endsWith("\n") ? prompt : `${prompt}
+`,
+    stats: {
+      promptTokens: storyTokens + used,
+      historyKept: kept.length,
+      historyDropped: dropped
+    },
+    warnings
+  };
+}
+function formatMessage(message, input, namesMode) {
+  const instruct = input.instruct;
+  if (instruct === void 0) {
+    return message.mes;
+  }
+  const isUser = message.is_user;
+  const prefix = isUser ? instruct.inputPrefix : instruct.outputPrefix;
+  const suffix = isUser ? instruct.inputSuffix : instruct.outputSuffix;
+  const name2 = message.name || (isUser ? input.userName : input.speakerName);
+  const includeName = namesMode === 1 || namesMode === 0 && isUser;
+  return `${prefix}${includeName ? `${name2}: ` : ""}${message.mes}${suffix}`;
+}
+function renderStoryString(template, values, expand) {
+  let text = template;
+  const ifPattern = /\{\{#if\s+(\w+)\s*\}\}([\s\S]*?)(?:\{\{else\}\}([\s\S]*?))?\{\{\/if\}\}/;
+  let previous;
+  do {
+    previous = text;
+    text = text.replace(ifPattern, (_match, field, thenBranch, elseBranch) => {
+      const value = values[field];
+      return value !== void 0 && value.trim() !== "" ? thenBranch : elseBranch ?? "";
+    });
+  } while (text !== previous);
+  return text.replace(/\{\{(\w+)\}\}/g, (match, field) => {
+    if (field in values) return values[field] ?? "";
+    const expanded = expand(match);
+    return expanded;
+  });
+}
+
+// packages/tavern-pipeline/src/group.ts
+function buildGroupTurn(input) {
+  const messages = [];
+  for (const message of input.messages) {
+    if (message.is_system) continue;
+    if (message.is_user) {
+      messages.push(message);
+      continue;
+    }
+    const name2 = message.name || input.speaker;
+    if (name2 === input.speaker) {
+      messages.push(message);
+    } else {
+      messages.push({
+        ...message,
+        is_user: true,
+        mes: `${name2}: ${message.mes}`
+      });
+    }
+  }
+  const nudgeText = input.groupNudgePrompt !== void 0 && input.groupNudgePrompt !== "" ? input.groupNudgePrompt : void 0;
+  return {
+    messages,
+    ...nudgeText !== void 0 ? { nudge: { role: "user", content: nudgeText.replace(/\{\{char\}\}/gi, input.speaker) } } : {}
+  };
+}
+function pickGroupMember(options) {
+  const enabled = options.members.filter((member) => !options.disabled.includes(member));
+  if (enabled.length === 0) return void 0;
+  if (options.explicit !== void 0) {
+    return enabled.includes(options.explicit) ? options.explicit : void 0;
+  }
+  if (options.strategy === 2) {
+    if (enabled.length === 1) return enabled[0];
+    const last = options.lastSpeaker !== void 0 ? enabled.indexOf(options.lastSpeaker) : -1;
+    return enabled[(last + 1) % enabled.length];
+  }
+  const rng = options.rng ?? Math.random;
+  const pool = options.allowSelfResponses || options.lastSpeaker === void 0 ? enabled : enabled.filter((member) => member !== options.lastSpeaker);
+  const candidates = pool.length > 0 ? pool : enabled;
+  if (candidates.length === 1) return candidates[0];
+  const weights = candidates.map((member) => {
+    const value = options.talkativeness(member);
+    return Number.isFinite(value) && value > 0 ? value : 0.5;
+  });
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  let roll = rng() * total;
+  for (let i = 0; i < candidates.length; i++) {
+    roll -= weights[i];
+    if (roll <= 0) return candidates[i];
+  }
+  return candidates[candidates.length - 1];
+}
+
+// packages/tavern-lore/lib/types.js
+var MESSAGE_BOUNDARY2 = "";
+
+// packages/tavern-lore/lib/regex.js
+function parseRegexFromString2(input) {
+  const match = input.match(/^\/([\w\W]+?)\/([gimsuy]*)$/);
+  if (!match)
+    return null;
+  const pattern = match[1] ?? "";
+  const flags = match[2] ?? "";
+  if (/(^|[^\\])\//.test(pattern))
+    return null;
+  try {
+    return new RegExp(pattern.replace(/\\\//g, "/"), flags);
+  } catch {
+    return null;
+  }
+}
+
+// packages/tavern-lore/lib/buffer.js
+var JOINER2 = "\n" + MESSAGE_BOUNDARY2;
 
 // packages/tavern-format/lib/png.js
 var PNG_SIGNATURE2 = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -2415,7 +2726,7 @@ function fromCardObject(root) {
     raw: structuredClone(root)
   };
 }
-function str3(value, fallback = "") {
+function str5(value, fallback = "") {
   return typeof value === "string" ? value : fallback;
 }
 function strArray3(value) {
@@ -2424,19 +2735,19 @@ function strArray3(value) {
 function toCardDataIR(data) {
   const book = data["character_book"];
   const ir = {
-    name: str3(data["name"]),
-    description: str3(data["description"]),
-    personality: str3(data["personality"]),
-    scenario: str3(data["scenario"]),
-    firstMes: str3(data["first_mes"]),
-    mesExample: str3(data["mes_example"]),
-    creatorNotes: str3(data["creator_notes"]),
-    systemPrompt: str3(data["system_prompt"]),
-    postHistoryInstructions: str3(data["post_history_instructions"]),
+    name: str5(data["name"]),
+    description: str5(data["description"]),
+    personality: str5(data["personality"]),
+    scenario: str5(data["scenario"]),
+    firstMes: str5(data["first_mes"]),
+    mesExample: str5(data["mes_example"]),
+    creatorNotes: str5(data["creator_notes"]),
+    systemPrompt: str5(data["system_prompt"]),
+    postHistoryInstructions: str5(data["post_history_instructions"]),
     alternateGreetings: strArray3(data["alternate_greetings"]),
     tags: strArray3(data["tags"]),
-    creator: str3(data["creator"]),
-    characterVersion: str3(data["character_version"]),
+    creator: str5(data["creator"]),
+    characterVersion: str5(data["character_version"]),
     extensions: typeof data["extensions"] === "object" && data["extensions"] !== null ? data["extensions"] : {}
   };
   if (isCharacterBook(book))
@@ -2555,7 +2866,7 @@ function parseWorldInfoFile(name2, obj) {
   for (const value of Object.values(rawEntries)) {
     if (typeof value !== "object" || value === null)
       continue;
-    entries.push(normalizeEntry3(value));
+    entries.push(normalizeEntry4(value));
   }
   entries.sort((a, b) => a.uid - b.uid);
   const { ["entries"]: _dropped, ...extra } = obj;
@@ -2568,7 +2879,7 @@ function serializeWorldInfoFile(ir) {
   }
   return { ...ir.extra ?? {}, entries };
 }
-var KNOWN_FIELDS2 = /* @__PURE__ */ new Set([
+var KNOWN_FIELDS3 = /* @__PURE__ */ new Set([
   "uid",
   "key",
   "keysecondary",
@@ -2611,53 +2922,53 @@ var KNOWN_FIELDS2 = /* @__PURE__ */ new Set([
   "matchCreatorNotes",
   "extra"
 ]);
-function normalizeEntry3(raw) {
+function normalizeEntry4(raw) {
   const extra = {};
   for (const [k, v] of Object.entries(raw)) {
-    if (!KNOWN_FIELDS2.has(k))
+    if (!KNOWN_FIELDS3.has(k))
       extra[k] = v;
   }
   return {
-    uid: num3(raw["uid"], 0),
+    uid: num4(raw["uid"], 0),
     key: strArray4(raw["key"]),
     keysecondary: strArray4(raw["keysecondary"]),
-    comment: str4(raw["comment"]),
-    content: str4(raw["content"]),
-    constant: bool3(raw["constant"], false),
-    vectorized: bool3(raw["vectorized"], false),
-    selective: bool3(raw["selective"], true),
-    selectiveLogic: num3(raw["selectiveLogic"], 0),
-    addMemo: bool3(raw["addMemo"], false),
-    order: num3(raw["order"], 100),
-    position: num3(raw["position"], 0),
-    disable: bool3(raw["disable"], false),
-    ignoreBudget: bool3(raw["ignoreBudget"], false),
-    excludeRecursion: bool3(raw["excludeRecursion"], false),
-    preventRecursion: bool3(raw["preventRecursion"], false),
-    delayUntilRecursion: num3(raw["delayUntilRecursion"], 0),
-    probability: num3(raw["probability"], 100),
-    useProbability: bool3(raw["useProbability"], true),
-    depth: num3(raw["depth"], 4),
-    outletName: str4(raw["outletName"]),
-    group: str4(raw["group"]),
-    groupOverride: bool3(raw["groupOverride"], false),
-    groupWeight: num3(raw["groupWeight"], 100),
+    comment: str6(raw["comment"]),
+    content: str6(raw["content"]),
+    constant: bool5(raw["constant"], false),
+    vectorized: bool5(raw["vectorized"], false),
+    selective: bool5(raw["selective"], true),
+    selectiveLogic: num4(raw["selectiveLogic"], 0),
+    addMemo: bool5(raw["addMemo"], false),
+    order: num4(raw["order"], 100),
+    position: num4(raw["position"], 0),
+    disable: bool5(raw["disable"], false),
+    ignoreBudget: bool5(raw["ignoreBudget"], false),
+    excludeRecursion: bool5(raw["excludeRecursion"], false),
+    preventRecursion: bool5(raw["preventRecursion"], false),
+    delayUntilRecursion: num4(raw["delayUntilRecursion"], 0),
+    probability: num4(raw["probability"], 100),
+    useProbability: bool5(raw["useProbability"], true),
+    depth: num4(raw["depth"], 4),
+    outletName: str6(raw["outletName"]),
+    group: str6(raw["group"]),
+    groupOverride: bool5(raw["groupOverride"], false),
+    groupWeight: num4(raw["groupWeight"], 100),
     scanDepth: nullableNum2(raw["scanDepth"]),
     caseSensitive: nullableBool2(raw["caseSensitive"]),
     matchWholeWords: nullableBool2(raw["matchWholeWords"]),
     useGroupScoring: nullableBool2(raw["useGroupScoring"]),
-    automationId: str4(raw["automationId"]),
-    role: num3(raw["role"], 0),
+    automationId: str6(raw["automationId"]),
+    role: num4(raw["role"], 0),
     sticky: nullableNum2(raw["sticky"]),
     cooldown: nullableNum2(raw["cooldown"]),
     delay: nullableNum2(raw["delay"]),
     triggers: strArray4(raw["triggers"]),
-    matchPersonaDescription: bool3(raw["matchPersonaDescription"], false),
-    matchCharacterDescription: bool3(raw["matchCharacterDescription"], false),
-    matchCharacterPersonality: bool3(raw["matchCharacterPersonality"], false),
-    matchCharacterDepthPrompt: bool3(raw["matchCharacterDepthPrompt"], false),
-    matchScenario: bool3(raw["matchScenario"], false),
-    matchCreatorNotes: bool3(raw["matchCreatorNotes"], false),
+    matchPersonaDescription: bool5(raw["matchPersonaDescription"], false),
+    matchCharacterDescription: bool5(raw["matchCharacterDescription"], false),
+    matchCharacterPersonality: bool5(raw["matchCharacterPersonality"], false),
+    matchCharacterDepthPrompt: bool5(raw["matchCharacterDepthPrompt"], false),
+    matchScenario: bool5(raw["matchScenario"], false),
+    matchCreatorNotes: bool5(raw["matchCreatorNotes"], false),
     extra: Object.keys(extra).length > 0 ? extra : void 0
   };
 }
@@ -2665,16 +2976,16 @@ function entryToFileObject(entry) {
   const { extra, ...fields } = entry;
   return { ...fields, ...extra ?? {} };
 }
-function str4(v) {
+function str6(v) {
   return typeof v === "string" ? v : "";
 }
-function num3(v, fallback) {
+function num4(v, fallback) {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
 function nullableNum2(v) {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
-function bool3(v, fallback) {
+function bool5(v, fallback) {
   return typeof v === "boolean" ? v : fallback;
 }
 function nullableBool2(v) {
@@ -2743,7 +3054,413 @@ function decodeCharx(bytes) {
   return { card, assetPaths };
 }
 
+// packages/tavern-format/lib/group.js
+var GroupFormatError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "GroupFormatError";
+  }
+};
+function parseGroupFile(obj, name2) {
+  const groupName = str7(obj["name"]) || (name2 ?? "");
+  if (groupName === "")
+    throw new GroupFormatError("group has no name");
+  const membersRaw = Array.isArray(obj["members"]) ? obj["members"] : [];
+  const members = [];
+  let droppedMembers = 0;
+  for (const member of membersRaw) {
+    if (typeof member === "string") {
+      const trimmed = member.trim();
+      if (trimmed !== "")
+        members.push(trimmed);
+    } else {
+      droppedMembers += 1;
+    }
+  }
+  const KNOWN_GROUP_FIELDS = [
+    "members",
+    "id",
+    "name",
+    "allow_self_responses",
+    "activation_strategy",
+    "disabled_members",
+    "chat_id",
+    "chats",
+    "auto_mode_delay"
+  ];
+  const extra = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (!KNOWN_GROUP_FIELDS.includes(key))
+      extra[key] = value;
+  }
+  const strategy = num5(obj["activation_strategy"], 1);
+  const chats = Array.isArray(obj["chats"]) ? obj["chats"].filter((value) => typeof value === "string") : [];
+  return {
+    id: str7(obj["id"]) || `group-${groupName}`,
+    name: groupName,
+    members,
+    allowSelfResponses: bool6(obj["allow_self_responses"], false),
+    activationStrategy: strategy === 2 ? 2 : 1,
+    disabledMembers: Array.isArray(obj["disabled_members"]) ? obj["disabled_members"].filter((value) => typeof value === "string") : [],
+    chatId: str7(obj["chat_id"]),
+    chats,
+    autoModeDelay: num5(obj["auto_mode_delay"], 3),
+    extra: Object.keys(extra).length > 0 ? extra : void 0,
+    ...droppedMembers > 0 ? { droppedMembers } : {}
+  };
+}
+function serializeGroupFile(ir) {
+  return {
+    ...ir.extra ?? {},
+    id: ir.id,
+    name: ir.name,
+    members: [...ir.members],
+    allow_self_responses: ir.allowSelfResponses,
+    activation_strategy: ir.activationStrategy,
+    disabled_members: [...ir.disabledMembers],
+    chat_id: ir.chatId,
+    chats: [...ir.chats],
+    auto_mode_delay: ir.autoModeDelay
+  };
+}
+function str7(value) {
+  return typeof value === "string" ? value : "";
+}
+function num5(value, fallback) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+function bool6(value, fallback) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+// packages/tavern-format/lib/regex-script.js
+function hasPlacement(script, placement) {
+  return script.placement.includes(placement);
+}
+
+// packages/tavern-script/src/regex.ts
+function compileScriptRegex(script, deps = {}) {
+  const raw = script.substituteRegex && deps.expand ? deps.expand(script.findRegex) : script.findRegex;
+  try {
+    const literal = parseRegexFromString2(raw);
+    if (literal !== null) return new RegExp(literal.source, literal.flags.includes("g") ? literal.flags : `${literal.flags}g`);
+    return new RegExp(raw, "g");
+  } catch {
+    return null;
+  }
+}
+function applyRegexScript(text, script, placement, deps = {}, depth = {}) {
+  if (script.disabled || !hasPlacement(script, placement)) return null;
+  if (depth.depth !== void 0 && depth.depth !== null) {
+    if (script.minDepth !== null && depth.depth < script.minDepth) return null;
+    if (script.maxDepth !== null && depth.depth > script.maxDepth) return null;
+  }
+  const regex = compileScriptRegex(script, deps);
+  if (regex === null) return null;
+  const replacement = script.substituteRegex && deps.expand ? deps.expand(script.replaceString) : script.replaceString;
+  let result = text.replace(regex, replacement);
+  for (const trim of script.trimStrings) {
+    if (trim !== "") result = result.split(trim).join("");
+  }
+  return result;
+}
+function applyRegexScripts(text, scripts, placement, deps = {}, depth = {}) {
+  let current = text;
+  for (const script of scripts) {
+    const next = applyRegexScript(current, script, placement, deps, depth);
+    if (next !== null) current = next;
+  }
+  return current;
+}
+
+// packages/tavern-script/src/stscript.ts
+var ScriptError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ScriptError";
+  }
+};
+function splitPipeline(line) {
+  const parts = [];
+  let current = "";
+  let quote = null;
+  for (const char of line) {
+    if (quote !== null) {
+      current += char;
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === "|") {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts.filter((part) => part.trim() !== "");
+}
+function splitArgs(raw) {
+  const args = [];
+  let current = "";
+  let quote = null;
+  let hasQuote = false;
+  const push = () => {
+    if (current !== "" || hasQuote) args.push(current);
+    current = "";
+    hasQuote = false;
+  };
+  for (const char of raw) {
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      else current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      hasQuote = true;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      push();
+      continue;
+    }
+    current += char;
+  }
+  push();
+  return args;
+}
+function parseCommand(part, expand) {
+  const expanded = expand(part);
+  const match = /^\/([a-zA-Z0-9_]+)\s*([\s\S]*)$/.exec(expanded.trim());
+  if (match === null) throw new ScriptError(`expected a slash command, got: ${part.trim().slice(0, 40)}`);
+  const name2 = (match[1] ?? "").toLowerCase();
+  const raw = (match[2] ?? "").trim();
+  const args = [];
+  const named = {};
+  for (const arg of splitArgs(raw)) {
+    const pair = /^([a-zA-Z0-9_]+)=([\s\S]*)$/.exec(arg);
+    if (pair !== null) named[pair[1] ?? ""] = pair[2] ?? "";
+    else args.push(arg);
+  }
+  return { name: name2, raw, args, named };
+}
+var NUMERIC_OPS = {
+  "=": (a, b) => a === b,
+  "==": (a, b) => a === b,
+  "!=": (a, b) => a !== b,
+  ">": (a, b) => a > b,
+  "<": (a, b) => a < b,
+  ">=": (a, b) => a >= b,
+  "<=": (a, b) => a <= b
+};
+function truthyString(value) {
+  return value === "true" || value === "1" ? "true" : "false";
+}
+function toNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function parseRoll2(spec, rng) {
+  const match = /^(\d*)d(\d+)$/i.exec(spec.trim());
+  if (match === null) {
+    const single = toNumber(spec.trim());
+    if (single !== null) return single;
+    throw new ScriptError(`invalid roll spec: ${spec}`);
+  }
+  const count = Math.min(Math.max(Number(match[1] || "1"), 1), 100);
+  const sides = Math.max(Number(match[2]), 1);
+  let total = 0;
+  for (let i = 0; i < count; i++) total += Math.floor(rng() * sides) + 1;
+  return total;
+}
+function pickRandom(list, rng) {
+  if (list.length === 0) return "";
+  return list[Math.floor(rng() * list.length)] ?? "";
+}
+function splitChoices(raw) {
+  if (raw.includes("::")) return raw.split("::").map((item) => item.trim()).filter((item) => item !== "");
+  return raw.split(",").map((item) => item.trim()).filter((item) => item !== "");
+}
+function varTarget(cmd) {
+  const first = Object.entries(cmd.named)[0];
+  if (first !== void 0 && cmd.args.length === 0) return { name: first[0], value: first[1] };
+  return { name: cmd.args[0] ?? "", value: cmd.args.length > 1 ? cmd.args.slice(1).join(" ") : "" };
+}
+async function requireAction(env, command) {
+  if (env === void 0) throw new ScriptError(`/${command} is not available in this context`);
+  return env;
+}
+async function runCommand(command, env, piped) {
+  const withPipe = () => {
+    if (piped === null || piped === "") return command;
+    if (command.raw.includes("{{pipe}}")) {
+      return { ...command, args: command.args.map((a) => a.replace(/\{\{pipe\}\}/gi, piped)), raw: command.raw.replace(/\{\{pipe\}\}/gi, piped) };
+    }
+    return { ...command, args: [...command.args, piped], raw: `${command.raw} ${piped}`.trim() };
+  };
+  const cmd = withPipe();
+  const rng = env.rng ?? Math.random;
+  const changed = () => ({ output: "", chatChanged: true });
+  switch (cmd.name) {
+    case "echo":
+    case "comment": {
+      const text = cmd.raw;
+      if (cmd.name === "echo") env.echo?.(text);
+      return { output: text, chatChanged: false };
+    }
+    case "setvar":
+    case "setglobalvar": {
+      const setter = cmd.name === "setvar" ? env.setVar : env.setGlobalVar;
+      const target = varTarget(cmd);
+      if (target.name === "") throw new ScriptError(`/${cmd.name} requires a variable name`);
+      setter(target.name, target.value);
+      return changed();
+    }
+    case "getvar":
+    case "getglobalvar": {
+      const getter = cmd.name === "getvar" ? env.getVar : env.getGlobalVar;
+      const name2 = cmd.args[0] ?? "";
+      if (name2 === "") throw new ScriptError(`/${cmd.name} requires a variable name`);
+      return { output: String(getter(name2) ?? ""), chatChanged: false };
+    }
+    case "addvar": {
+      const target = varTarget(cmd);
+      if (target.name === "") throw new ScriptError("/addvar requires a variable name");
+      const delta = target.value === "" ? "1" : target.value;
+      const current = env.getVar(target.name);
+      const currentNum = typeof current === "boolean" ? null : toNumber(String(current ?? ""));
+      const deltaNum = toNumber(delta);
+      if (current === void 0) {
+        env.setVar(target.name, delta);
+      } else if (currentNum !== null && deltaNum !== null) {
+        env.setVar(target.name, currentNum + deltaNum);
+      } else {
+        env.setVar(target.name, `${String(current)}${delta}`);
+      }
+      return changed();
+    }
+    case "incvar":
+    case "decvar": {
+      const name2 = cmd.args[0] ?? "";
+      const current = toNumber(String(env.getVar(name2) ?? "0")) ?? 0;
+      env.setVar(name2, current + (cmd.name === "incvar" ? 1 : -1));
+      return changed();
+    }
+    case "hasvar":
+    case "hasglobalvar": {
+      const checker = cmd.name === "hasvar" ? env.getVar : env.getGlobalVar;
+      return { output: truthyString(String(checker(cmd.args[0] ?? "") !== void 0)), chatChanged: false };
+    }
+    case "delvar":
+    case "delglobalvar": {
+      const remover = cmd.name === "delvar" ? env.deleteVar : env.deleteGlobalVar;
+      remover(cmd.args[0] ?? "");
+      return changed();
+    }
+    case "if": {
+      const left = cmd.named["left"] ?? cmd.args[0] ?? "";
+      const right = cmd.named["right"] ?? cmd.args[1] ?? "";
+      const op = (cmd.named["op"] ?? cmd.args[2] ?? "=").trim();
+      let passes;
+      if (op === "contains" || op === "!contains") {
+        const contains = left.includes(right);
+        passes = op === "contains" ? contains : !contains;
+      } else {
+        const numericOp = NUMERIC_OPS[op];
+        if (numericOp === void 0) throw new ScriptError(`unsupported /if op: ${op}`);
+        const leftNum = toNumber(left);
+        const rightNum = toNumber(right);
+        if (leftNum !== null && rightNum !== null) passes = numericOp(leftNum, rightNum);
+        else if (op === "=" || op === "==") passes = left === right;
+        else if (op === "!=") passes = left !== right;
+        else passes = false;
+      }
+      const branch = passes ? cmd.named["then"] : cmd.named["else"] ?? "";
+      if (branch === void 0 || branch.trim() === "") return { output: "", chatChanged: false };
+      return runNested(branch, env);
+    }
+    case "random": {
+      const raw = cmd.raw.trim();
+      const range = /^(-?\d+)\s*-\s*(-?\d+)$/.exec(raw);
+      if (range !== null) {
+        const low = Number(range[1]);
+        const high = Number(range[2]);
+        const min = Math.min(low, high);
+        return { output: String(min + Math.floor(rng() * (Math.max(low, high) - min + 1))), chatChanged: false };
+      }
+      return { output: pickRandom(splitChoices(raw), rng), chatChanged: false };
+    }
+    case "roll":
+      return { output: String(parseRoll2(cmd.raw.trim() || "1d6", rng)), chatChanged: false };
+    case "pick":
+      return { output: pickRandom(splitChoices(cmd.raw), rng), chatChanged: false };
+    case "send": {
+      const action = await requireAction(env.send, "send");
+      await action(cmd.raw);
+      return changed();
+    }
+    case "trigger": {
+      const action = await requireAction(env.trigger, "trigger");
+      await action(cmd.args[0]);
+      return changed();
+    }
+    case "regenerate": {
+      const action = await requireAction(env.regenerate, "regenerate");
+      await action();
+      return changed();
+    }
+    case "stop": {
+      const action = await requireAction(env.stop, "stop");
+      action();
+      return changed();
+    }
+    case "cut": {
+      const action = await requireAction(env.cut, "cut");
+      const range = /^(-?\d+)(?:\s*-\s*(-?\d+))?$/.exec(cmd.raw.trim());
+      if (range === null) throw new ScriptError(`/cut expects a range like 0-2, got: ${cmd.raw.trim()}`);
+      const from = Number(range[1]);
+      const to = range[2] === void 0 ? from : Number(range[2]);
+      await action(Math.min(from, to), Math.max(from, to));
+      return changed();
+    }
+    default:
+      throw new ScriptError(`unknown command: /${cmd.name}`);
+  }
+}
+async function runNested(commandText, env) {
+  const command = parseCommand(commandText, env.expand);
+  return runCommand(command, env, null);
+}
+async function runScript(script, env) {
+  const lines = script.split(/\r?\n/).filter((line) => line.trim() !== "" && !line.trim().startsWith("//"));
+  let output = "";
+  let chatChanged = false;
+  let executed = false;
+  for (const line of lines) {
+    let piped = null;
+    for (const part of splitPipeline(line)) {
+      const command = parseCommand(part, env.expand);
+      const result = await runCommand(command, env, piped);
+      output = result.output;
+      chatChanged = chatChanged || result.chatChanged;
+      piped = result.output;
+      executed = true;
+    }
+  }
+  if (!executed) throw new ScriptError("script has no commands");
+  return { output, chatChanged };
+}
+
 // packages/tavern-store/src/store.ts
+import { createHash } from "node:crypto";
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
 var ChatRevisionConflictError = class extends Error {
   constructor(expectedRevision, actualRevision) {
     super("Chat changed in another tab. Reloaded the latest version; review it before retrying.");
@@ -2753,7 +3470,15 @@ var ChatRevisionConflictError = class extends Error {
   }
   code = "CHAT_REVISION_CONFLICT";
 };
-var DEFAULT_STATE = { activeWorlds: [], sessionBindings: {}, modelSelections: {}, chats: {} };
+var DEFAULT_STATE = {
+  activeWorlds: [],
+  sessionBindings: {},
+  modelSelections: {},
+  chats: {},
+  regexScripts: [],
+  scriptGlobals: {},
+  pipelineMode: "chat"
+};
 var TavernStore = class _TavernStore {
   constructor(root) {
     this.root = root;
@@ -2761,7 +3486,7 @@ var TavernStore = class _TavernStore {
   chatMutationTail = Promise.resolve();
   stateMutationTail = Promise.resolve();
   static async open(root) {
-    for (const dir of ["characters", "worlds", "presets", "chats", "personas"]) {
+    for (const dir of ["characters", "worlds", "presets", "chats", "personas", "groups", "personas/avatars"]) {
       await fs.mkdir(path.join(root, dir), { recursive: true });
     }
     return new _TavernStore(root);
@@ -2932,6 +3657,25 @@ var TavernStore = class _TavernStore {
       }
     });
   }
+  /* ------------------------------ 群组 ------------------------------ */
+  async putGroup(group2) {
+    await this.writeAtomic(
+      path.join(this.root, "groups", `${safeFileName(group2.name)}.json`),
+      jsonBytes(serializeGroupFile(group2))
+    );
+  }
+  async getGroup(name2) {
+    const bytes = await this.tryRead(path.join(this.root, "groups", `${safeFileName(name2)}.json`));
+    if (bytes === void 0) return void 0;
+    return parseGroupFile(JSON.parse(Buffer.from(bytes).toString("utf8")), name2);
+  }
+  async listGroups() {
+    const files = await this.listDir("groups");
+    return files.filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort();
+  }
+  async deleteGroup(name2) {
+    await fs.rm(path.join(this.root, "groups", `${safeFileName(name2)}.json`), { force: true });
+  }
   /* ------------------------------ 预设 ------------------------------ */
   /** 预设按原样 JSON 存取（含采样参数与 prompts/prompt_order 全量）。 */
   async putPreset(name2, preset) {
@@ -2950,8 +3694,30 @@ var TavernStore = class _TavernStore {
     await fs.rm(path.join(this.root, "presets", `${safeFileName(name2)}.json`), { force: true });
   }
   /* ----------------------------- persona ----------------------------- */
-  async putPersona(persona) {
+  async putPersona(persona, avatar) {
     await this.writeAtomic(path.join(this.root, "personas", `${safeFileName(persona.name)}.json`), jsonBytes(persona));
+    if (avatar !== void 0) {
+      await this.writeAtomic(path.join(this.root, "personas", "avatars", `${safeFileName(persona.name)}.png`), avatar);
+    }
+  }
+  /**
+   * 导入 persona PNG：内嵌 `chara`/`ccv3` 的 description 作为人设描述
+   * （ST persona 导入行为），文件名 stem 作为 persona 名；头像原字节保存。
+   */
+  async importPersonaPng(bytes, fallbackName) {
+    let description = "";
+    try {
+      const card = decodeCharacterCard2(bytes);
+      description = card.data.description;
+    } catch {
+    }
+    const name2 = safeFileName(fallbackName) || "Persona";
+    const persona = { name: name2, description, position: 0, hasAvatar: true };
+    await this.putPersona(persona, bytes);
+    return persona;
+  }
+  async getPersonaAvatar(name2) {
+    return this.tryRead(path.join(this.root, "personas", "avatars", `${safeFileName(name2)}.png`));
   }
   async getPersona(name2) {
     const bytes = await this.tryRead(path.join(this.root, "personas", `${safeFileName(name2)}.json`));
@@ -2961,6 +3727,54 @@ var TavernStore = class _TavernStore {
   async listPersonas() {
     const files = await this.listDir("personas");
     return files.filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort();
+  }
+  async deletePersona(name2) {
+    let deleted = false;
+    const json = path.join(this.root, "personas", `${safeFileName(name2)}.json`);
+    const avatar = path.join(this.root, "personas", "avatars", `${safeFileName(name2)}.png`);
+    try {
+      await fs.unlink(json);
+      deleted = true;
+    } catch (cause) {
+      if (cause.code !== "ENOENT") throw cause;
+    }
+    await fs.rm(avatar, { force: true });
+    return deleted;
+  }
+  /* ------------------------------ 分支 ------------------------------ */
+  /**
+   * 从 messageId（含）截断复制为新聊天；chat_metadata.bookmark_link 记录回链。
+   * 分支命名 `${stem} - branch N.jsonl`（N 递增至不冲突，字符集安全）。
+   */
+  async branchChat(characterName, chatId, messageId, expectedRevision, name2) {
+    return this.mutateChat(async () => {
+      const dir = path.join(this.root, "chats", safeFileName(characterName));
+      const source = path.join(dir, safeChatFileName(chatId));
+      await this.assertChatRevision(source, expectedRevision);
+      const bytes = await this.tryRead(source);
+      if (bytes === void 0) throw new Error(`chat '${chatId}' not found`);
+      const log = parseChatLog(Buffer.from(bytes).toString("utf8"));
+      if (messageId < 0 || messageId >= log.messages.length) {
+        throw new Error(`branch messageId ${messageId} out of range (0..${log.messages.length - 1})`);
+      }
+      const branchMessages = log.messages.slice(0, messageId + 1).map((m) => ({ ...m }));
+      const header = structuredClone(log.header);
+      header.chat_metadata = {
+        ...header.chat_metadata ?? {},
+        bookmark_link: { character: characterName, chatId, messageId }
+      };
+      const stem = (name2 !== void 0 && name2.trim() !== "" ? name2.trim() : chatId.replace(/\.jsonl$/i, "")).replace(/\.jsonl$/i, "");
+      const safeStem = stem.replace(/[^A-Za-z0-9@ _.-]/g, "_").slice(0, 80) || "chat";
+      let nextId = `${safeStem} - branch 1.jsonl`;
+      let counter = 1;
+      while (await this.tryRead(path.join(dir, nextId)) !== void 0) {
+        counter += 1;
+        nextId = `${safeStem} - branch ${counter}.jsonl`;
+      }
+      const branchLog = { header, messages: branchMessages };
+      await this.writeAtomic(path.join(dir, nextId), chatBytes(branchLog));
+      return { chatId: nextId, chat: branchLog };
+    });
   }
   /* ------------------------------ 状态 ------------------------------ */
   async getState() {
@@ -2990,7 +3804,10 @@ var TavernStore = class _TavernStore {
       activeWorlds: parsed.activeWorlds ?? [],
       sessionBindings: parsed.sessionBindings ?? {},
       modelSelections: parsed.modelSelections ?? {},
-      chats: parsed.chats ?? {}
+      chats: parsed.chats ?? {},
+      regexScripts: parsed.regexScripts ?? [],
+      scriptGlobals: parsed.scriptGlobals ?? {},
+      pipelineMode: parsed.pipelineMode === "text" ? "text" : "chat"
     };
   }
   async assertChatRevision(file, expectedRevision) {
@@ -3110,7 +3927,7 @@ function apply(ctx) {
       const chat = await db.getChat(parsed.character, parsed.chatId);
       if (!chat) return { kind: "error", text: "Tavern chat not found." };
       const previous = (await db.getState()).sessionBindings[agent.id];
-      await bindSession(db, agent.id, parsed.character, parsed.chatId);
+      await bindSession(db, agent.id, parsed.character, parsed.chatId, parsed.group === true);
       await refreshActivePrompt();
       if (previous?.character !== parsed.character || previous.chatId !== parsed.chatId) {
         agent.session.append("user/message", createMessage({
@@ -3151,41 +3968,51 @@ async function handleApi(ctx, req, res) {
   if (method === "GET" && route === "bootstrap") {
     const state = await db.getState();
     const active = state.activeCharacter ? await db.getCharacter(state.activeCharacter) : void 0;
+    const groups = [];
+    for (const name2 of await db.listGroups()) {
+      const group2 = await db.getGroup(name2);
+      if (group2) groups.push(publicGroup(group2));
+    }
+    const personas = [];
+    for (const name2 of await db.listPersonas()) {
+      const persona = await db.getPersona(name2);
+      if (persona) personas.push(persona);
+    }
+    const presetKinds = {};
+    for (const name2 of await db.listPresets()) {
+      const preset = await db.getPreset(name2);
+      if (preset) presetKinds[name2] = detectPresetKind(preset);
+    }
     return sendJson(res, 200, {
       ok: true,
       state,
       characters: await db.listCharacters(),
       worlds: await db.listWorlds(),
       presets: await db.listPresets(),
-      personas: await db.listPersonas(),
+      presetKinds,
+      personas,
+      groups,
       activeCard: active ? publicCard(active.card) : null,
       model: ctx.agentDefaultModel.currentSelection(),
       version: "0.1.0",
-      commit: "f6d2847"
+      commit: "09b0bfd"
     });
   }
   if (method === "GET" && route.startsWith("avatar/")) {
-    const characterName = decodeURIComponent(route.slice("avatar/".length));
-    const found = await db.getCharacter(characterName);
-    if (!found) return sendJson(res, 404, { ok: false, message: "character avatar not found" });
-    let bytes;
-    let contentType = "image/png";
-    if (found.kind === "png") {
-      bytes = await db.exportCharacter(characterName);
-    } else if (found.kind === "charx") {
-      const container = await db.exportCharacter(characterName);
-      const asset = found.card.data.assets?.find((item) => item.type === "icon" && item.uri.startsWith("embeded://")) ?? found.card.data.assets?.find((item) => item.uri.startsWith("embeded://") && item.ext === "png");
-      if (!asset) return sendJson(res, 404, { ok: false, message: "character avatar not found" });
-      bytes = decodeCharxAsset(container, asset.uri.slice("embeded://".length));
-      contentType = imageContentType(asset.ext);
-    } else {
-      return sendJson(res, 404, { ok: false, message: "character avatar not found" });
+    const name2 = decodeURIComponent(route.slice("avatar/".length));
+    const found = await db.getCharacter(name2);
+    if (found) {
+      return serveCharacterAvatar(res, db, name2, found);
     }
-    res.statusCode = 200;
-    res.setHeader("content-type", contentType);
-    res.setHeader("cache-control", "private, max-age=300");
-    res.end(Buffer.from(bytes));
-    return;
+    const group2 = await db.getGroup(name2);
+    if (group2) {
+      const enabled = group2.members.filter((member) => !group2.disabledMembers.includes(member));
+      for (const member of enabled.length > 0 ? enabled : group2.members) {
+        const memberFile = await db.getCharacter(member);
+        if (memberFile) return serveCharacterAvatar(res, db, member, memberFile);
+      }
+    }
+    return sendJson(res, 404, { ok: false, message: "character avatar not found" });
   }
   if (method === "GET" && route === "models") {
     return sendJson(res, 200, { ok: true, ...await buildModelCatalog(ctx) });
@@ -3211,13 +4038,17 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "state") {
     const body = await readJson(req);
-    const state = await db.patchState({
+    const patch = {
       ...typeof body.activeCharacter === "string" || body.activeCharacter === null ? { activeCharacter: body.activeCharacter || void 0 } : {},
       ...Array.isArray(body.activeWorlds) ? { activeWorlds: body.activeWorlds.filter((x) => typeof x === "string") } : {},
       ...typeof body.activePreset === "string" || body.activePreset === null ? { activePreset: body.activePreset || void 0 } : {},
       ...typeof body.activePersona === "string" || body.activePersona === null ? { activePersona: body.activePersona || void 0 } : {},
-      ...typeof body.nativeAgentPersona === "boolean" ? { nativeAgentPersona: body.nativeAgentPersona } : {}
-    });
+      ...typeof body.nativeAgentPersona === "boolean" ? { nativeAgentPersona: body.nativeAgentPersona } : {},
+      ...body.pipelineMode === "chat" || body.pipelineMode === "text" ? { pipelineMode: body.pipelineMode } : {},
+      ...isTextCompletionConfig(body.textCompletion) ? { textCompletion: normalizeTextCompletion(body.textCompletion) } : {},
+      ...body.textCompletion === null ? { textCompletion: void 0 } : {}
+    };
+    const state = await db.patchState(patch);
     await refreshActivePrompt();
     return sendJson(res, 200, { ok: true, state });
   }
@@ -3243,9 +4074,123 @@ async function handleApi(ctx, req, res) {
   if (method === "POST" && route === "import/preset") {
     const body = await readJson(req);
     if (typeof body.name !== "string" || !body.data || typeof body.data !== "object") throw new Error("expected { name, data }");
-    parsePreset(body.data);
+    parsePresetOrThrow(body.data);
     await db.putPreset(body.name, body.data);
-    return sendJson(res, 200, { ok: true, name: body.name });
+    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data) });
+  }
+  if (method === "POST" && route === "import/persona") {
+    const body = await readJson(req, 25 * 1024 * 1024);
+    if (typeof body.pngBase64 === "string" && typeof body.name === "string") {
+      const persona = await db.importPersonaPng(new Uint8Array(Buffer.from(body.pngBase64, "base64")), body.name);
+      return sendJson(res, 200, { ok: true, persona });
+    }
+    if (typeof body.name === "string") {
+      const persona = {
+        name: body.name,
+        description: typeof body.description === "string" ? body.description : "",
+        ...typeof body.position === "number" ? { position: body.position } : {},
+        ...typeof body.depth === "number" ? { depth: body.depth } : {},
+        ...typeof body.role === "number" ? { role: body.role } : {},
+        ...body.hasAvatar === true ? { hasAvatar: true } : {}
+      };
+      await db.putPersona(persona);
+      return sendJson(res, 200, { ok: true, persona });
+    }
+    throw new Error("expected { pngBase64, name } or { name, description }");
+  }
+  if (method === "PUT" && route === "persona") {
+    const body = await readJson(req);
+    if (typeof body.name !== "string" || typeof body.description !== "string") throw new Error("expected { name, description }");
+    const existing = await db.getPersona(body.name);
+    if (!existing) throw new Error(`persona '${body.name}' not found`);
+    const persona = {
+      ...existing,
+      description: body.description,
+      ...typeof body.position === "number" ? { position: body.position } : {},
+      ...typeof body.depth === "number" ? { depth: body.depth } : {},
+      ...typeof body.role === "number" ? { role: body.role } : {}
+    };
+    await db.putPersona(persona);
+    return sendJson(res, 200, { ok: true, persona });
+  }
+  if (method === "DELETE" && route === "persona") {
+    const name2 = url.searchParams.get("name");
+    if (!name2) throw new Error("name query is required");
+    const deleted = await db.deletePersona(name2);
+    const state = await db.updateState((current) => ({
+      activePersona: current.activePersona === name2 ? void 0 : current.activePersona
+    }));
+    if (!deleted) return sendJson(res, 404, { ok: false, message: "persona not found" });
+    return sendJson(res, 200, { ok: true, state });
+  }
+  if (method === "GET" && route.startsWith("persona-avatar/")) {
+    const name2 = decodeURIComponent(route.slice("persona-avatar/".length));
+    const avatar = await db.getPersonaAvatar(name2);
+    if (avatar === void 0) return sendJson(res, 404, { ok: false, message: "persona avatar not found" });
+    res.statusCode = 200;
+    res.setHeader("content-type", "image/png");
+    res.setHeader("cache-control", "private, max-age=300");
+    res.end(Buffer.from(avatar));
+    return;
+  }
+  if (method === "GET" && route === "groups") {
+    const groups = [];
+    for (const name2 of await db.listGroups()) {
+      const group2 = await db.getGroup(name2);
+      if (group2) groups.push(publicGroup(group2));
+    }
+    return sendJson(res, 200, { ok: true, groups });
+  }
+  if (method === "POST" && route === "groups") {
+    const body = await readJson(req);
+    if (typeof body.name !== "string" || !Array.isArray(body.members)) throw new Error("expected { name, members }");
+    for (const member of body.members) {
+      if (typeof member !== "string" || !await db.getCharacter(member)) {
+        throw new Error(`group member '${String(member)}' is not an imported character`);
+      }
+    }
+    await db.putGroup({
+      id: `group-${body.name}`,
+      name: body.name,
+      members: body.members,
+      allowSelfResponses: body.allowSelfResponses === true,
+      activationStrategy: body.activationStrategy === 2 ? 2 : 1,
+      disabledMembers: Array.isArray(body.disabledMembers) ? body.disabledMembers.filter((x) => typeof x === "string") : [],
+      chatId: "",
+      chats: [],
+      autoModeDelay: 3
+    });
+    const group2 = await db.getGroup(body.name);
+    return sendJson(res, 200, { ok: true, group: publicGroup(group2) });
+  }
+  if (method === "PUT" && route === "group") {
+    const body = await readJson(req);
+    if (typeof body.name !== "string") throw new Error("expected { name, ... }");
+    const group2 = await db.getGroup(body.name);
+    if (!group2) throw new Error(`group '${body.name}' not found`);
+    const members = Array.isArray(body.members) ? body.members.filter((x) => typeof x === "string") : group2.members;
+    for (const member of members) {
+      if (!await db.getCharacter(member)) throw new Error(`group member '${member}' is not an imported character`);
+    }
+    await db.putGroup({
+      ...group2,
+      members,
+      ...Array.isArray(body.disabledMembers) ? { disabledMembers: body.disabledMembers.filter((x) => typeof x === "string" && members.includes(x)) } : {},
+      ...typeof body.activationStrategy === "number" ? { activationStrategy: body.activationStrategy === 2 ? 2 : 1 } : {},
+      ...typeof body.allowSelfResponses === "boolean" ? { allowSelfResponses: body.allowSelfResponses } : {}
+    });
+    return sendJson(res, 200, { ok: true, group: publicGroup(await db.getGroup(body.name)) });
+  }
+  if (method === "DELETE" && route === "group") {
+    const name2 = url.searchParams.get("name");
+    if (!name2) throw new Error("name query is required");
+    const group2 = await db.getGroup(name2);
+    if (!group2) return sendJson(res, 404, { ok: false, message: "group not found" });
+    await db.deleteGroup(name2);
+    const state = await db.updateState((current) => ({
+      sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.character === name2 && binding.group === true)))
+    }));
+    return sendJson(res, 200, { ok: true, state });
   }
   if (method === "POST" && route === "binding") {
     const body = await readJson(req);
@@ -3254,7 +4199,7 @@ async function handleApi(ctx, req, res) {
     }
     const chat = await db.getChat(body.character, body.chatId);
     if (!chat) throw new Error("chat not found");
-    const state = await bindSession(db, body.sessionId, body.character, body.chatId);
+    const state = await bindSession(db, body.sessionId, body.character, body.chatId, body.group === true);
     await refreshActivePrompt();
     return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] });
   }
@@ -3291,6 +4236,32 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "chats") {
     const body = await readJson(req);
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    if (typeof body.group === "string") {
+      const group2 = await db.getGroup(body.group);
+      if (!group2) throw new Error(`group '${body.group}' not found`);
+      const enabled = group2.members.filter((member) => !group2.disabledMembers.includes(member));
+      const greetings = [];
+      for (const member of enabled) {
+        const file = await db.getCharacter(member);
+        const only = Array.isArray(file?.card.data.groupOnlyGreetings) ? file.card.data.groupOnlyGreetings : [];
+        const text = only[0];
+        if (typeof text === "string" && text.trim() !== "") {
+          greetings.push({ name: member, is_user: false, is_system: false, send_date: now, mes: text });
+        }
+      }
+      const id2 = await db.createChat(body.group, {
+        user_name: "unused",
+        character_name: "unused",
+        chat_metadata: {
+          group: { members: group2.members, disabledMembers: group2.disabledMembers },
+          createdAt: now,
+          timedWorldInfo: {}
+        }
+      }, greetings);
+      const snapshot2 = await db.getChatSnapshot(body.group, id2);
+      return sendJson(res, 200, { ok: true, id: id2, group: body.group, chat: snapshot2?.chat, revision: snapshot2?.revision });
+    }
     const character = typeof body.character === "string" ? body.character : (await db.getState()).activeCharacter;
     if (!character) throw new Error("no active character");
     const found = await db.getCharacter(character);
@@ -3298,27 +4269,72 @@ async function handleApi(ctx, req, res) {
     const id = await db.createChat(character, {
       user_name: "unused",
       character_name: "unused",
-      chat_metadata: { character, createdAt: (/* @__PURE__ */ new Date()).toISOString(), timedWorldInfo: {} }
+      chat_metadata: { character, createdAt: now, timedWorldInfo: {} }
     }, [{
       name: found.card.data.nickname || found.card.data.name,
       is_user: false,
       is_system: false,
-      send_date: (/* @__PURE__ */ new Date()).toISOString(),
+      send_date: now,
       mes: found.card.data.firstMes,
       swipe_id: 0,
       swipes: [found.card.data.firstMes, ...found.card.data.alternateGreetings],
-      swipe_info: [{ send_date: (/* @__PURE__ */ new Date()).toISOString() }, ...found.card.data.alternateGreetings.map(() => ({ send_date: (/* @__PURE__ */ new Date()).toISOString() }))]
+      swipe_info: [{ send_date: now }, ...found.card.data.alternateGreetings.map(() => ({ send_date: now }))]
     }]);
     const snapshot = await db.getChatSnapshot(character, id);
     return sendJson(res, 200, { ok: true, id, chat: snapshot?.chat, revision: snapshot?.revision });
   }
+  if (method === "POST" && route === "branch") {
+    const body = await readJson(req);
+    if (typeof body.character !== "string" || typeof body.chatId !== "string" || typeof body.messageId !== "number") {
+      throw new Error("expected { character, chatId, messageId, revision }");
+    }
+    if (typeof body.revision !== "string") throw new Error("revision is required");
+    const result = await db.branchChat(body.character, body.chatId, body.messageId, body.revision, body.name);
+    const snapshot = await db.getChatSnapshot(body.character, result.chatId);
+    return sendJson(res, 200, { ok: true, id: result.chatId, chat: snapshot?.chat ?? result.chat, revision: snapshot?.revision });
+  }
+  if (method === "GET" && route === "regex") {
+    const state = await db.getState();
+    return sendJson(res, 200, { ok: true, scripts: state.regexScripts });
+  }
+  if (method === "PUT" && route === "regex") {
+    const body = await readJson(req);
+    const scripts = Array.isArray(body.scripts) ? parseRegexScripts(body.scripts) : void 0;
+    if (scripts === void 0) throw new Error("expected { scripts }");
+    const state = await db.patchState({ regexScripts: scripts });
+    return sendJson(res, 200, { ok: true, scripts: state.regexScripts });
+  }
+  if (method === "POST" && route === "import/regex") {
+    const body = await readJson(req);
+    if (!Array.isArray(body.data) && typeof body.data !== "object") throw new Error("expected { data }");
+    const imported = parseRegexScripts(body.data);
+    const state = await db.updateState((current) => {
+      const seen = new Set(current.regexScripts.map((script) => script.scriptName));
+      const merged = [...current.regexScripts];
+      for (const script of imported) {
+        const index = seen.has(script.scriptName) ? merged.findIndex((item) => item.scriptName === script.scriptName) : -1;
+        if (index >= 0) merged[index] = script;
+        else merged.push(script);
+      }
+      return { regexScripts: merged };
+    });
+    return sendJson(res, 200, { ok: true, scripts: state.regexScripts });
+  }
+  if (method === "GET" && route === "tc/check") {
+    const state = await db.getState();
+    const config = state.textCompletion;
+    if (!config || config.endpoint === "") throw new Error("text completion endpoint is not configured");
+    const model = await koboldModelInfo(config);
+    return sendJson(res, 200, { ok: true, model });
+  }
   if (route.startsWith("chat/")) {
     const chatId = decodeURIComponent(route.slice("chat/".length));
-    const character = url.searchParams.get("character") || (await db.getState()).activeCharacter;
+    const state = await db.getState();
+    const character = url.searchParams.get("character") || state.activeCharacter;
     if (!character) throw new Error("no active character");
     if (method === "GET") {
       const snapshot = await db.getChatSnapshot(character, chatId);
-      return snapshot ? sendJson(res, 200, { ok: true, chat: snapshot.chat, revision: snapshot.revision }) : sendJson(res, 404, { ok: false, message: "chat not found" });
+      return snapshot ? sendJson(res, 200, { ok: true, chat: snapshot.chat, revision: snapshot.revision, displays: await displayTexts(db, state, character, snapshot.chat) }) : sendJson(res, 404, { ok: false, message: "chat not found" });
     }
     if (method === "PUT") {
       const body = await readJson(req);
@@ -3335,10 +4351,10 @@ async function handleApi(ctx, req, res) {
       }
       const nextChatId = normalizeChatId(body.name);
       await db.renameChat(character, chatId, nextChatId, body.revision);
-      const state = await db.updateState((current) => ({
+      const state2 = await db.updateState((current) => ({
         sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
           sessionId,
-          binding.character === character && binding.chatId === chatId ? { character, chatId: nextChatId } : binding
+          binding.character === character && binding.chatId === chatId ? { character, chatId: nextChatId, ...binding.group ? { group: true } : {} } : binding
         ]))
       }));
       const snapshot = await db.getChatSnapshot(character, nextChatId);
@@ -3347,7 +4363,7 @@ async function handleApi(ctx, req, res) {
         id: nextChatId,
         chat: snapshot?.chat,
         revision: snapshot?.revision,
-        state
+        state: state2
       });
     }
     if (method === "DELETE") {
@@ -3367,6 +4383,9 @@ async function handleApi(ctx, req, res) {
   if (method === "POST" && route === "generate") {
     return generate(ctx, req, res, db);
   }
+  if (method === "POST" && route === "script") {
+    return runTavernScript(ctx, req, res, db);
+  }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 async function generate(ctx, req, res, db) {
@@ -3378,24 +4397,124 @@ async function generate(ctx, req, res, db) {
   const mode = body.mode === "regenerate" ? "regenerate" : "send";
   if (!characterName || typeof chatId !== "string") throw new Error("character and chatId are required");
   if (mode === "send" && userText === "") throw new Error("message is empty");
-  const character = await db.getCharacter(characterName);
-  const snapshot = await db.getChatSnapshot(characterName, chatId);
-  const chat = snapshot?.chat;
-  if (!character || !chat || !snapshot) throw new Error("character or chat not found");
   if (typeof body.revision !== "string") throw new Error("revision is required");
+  const bindingGroup = body.group === true || await isGroupChat(db, characterName, chatId);
+  const snapshot = await db.getChatSnapshot(characterName, chatId);
+  if (!snapshot) throw new Error("character or chat not found");
   if (body.revision !== snapshot.revision) {
     throw new ChatRevisionConflictError(body.revision, snapshot.revision);
   }
+  res.statusCode = 200;
+  res.setHeader("content-type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("cache-control", "no-cache");
+  const ac = new AbortController();
+  req.on?.("aborted", () => ac.abort());
+  res.on?.("close", () => {
+    if (!res.writableEnded) ac.abort();
+  });
+  const write = (event) => res.write(JSON.stringify(event) + "\n");
+  try {
+    const result = await runGeneration(ctx, db, {
+      state,
+      characterName,
+      chatId,
+      snapshot,
+      mode,
+      userText,
+      group: bindingGroup,
+      triggerMember: typeof body.triggerMember === "string" ? body.triggerMember : void 0,
+      sessionId: typeof body.sessionId === "string" ? body.sessionId : void 0,
+      provider: typeof body.provider === "string" ? body.provider : void 0,
+      model: typeof body.model === "string" ? body.model : void 0,
+      reasoningEffort: typeof body.reasoningEffort === "string" ? body.reasoningEffort : void 0,
+      write,
+      signal: ac.signal
+    });
+    write({ type: "saved", chat: result.chat, revision: result.revision });
+    res.end();
+  } catch (error) {
+    if (!res.writableEnded) {
+      const message = error instanceof Error ? error.message : String(error);
+      const code = error instanceof ChatRevisionConflictError ? error.code : void 0;
+      write({ type: "error", message, code });
+      res.end();
+    }
+  }
+}
+async function runGeneration(ctx, db, options) {
+  const { state, characterName, chatId, snapshot, mode, group: group2, write, signal } = options;
+  const chat = snapshot.chat;
   let revision = snapshot.revision;
+  let speakerName = characterName;
+  let groupDef = void 0;
+  let turnMessages = chat.messages;
+  let nudge = void 0;
+  if (group2) {
+    groupDef = await db.getGroup(characterName);
+    if (!groupDef) throw new Error(`group '${characterName}' not found`);
+    const chatGroupMeta = chat.header.chat_metadata?.group;
+    const members = Array.isArray(chatGroupMeta?.members) && chatGroupMeta.members.length > 0 ? chatGroupMeta.members.filter((x) => typeof x === "string") : groupDef.members;
+    const disabled = Array.isArray(chatGroupMeta?.disabledMembers) ? chatGroupMeta.disabledMembers.filter((x) => typeof x === "string") : groupDef.disabledMembers;
+    const lastSpeaker = [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system)?.name;
+    const talkativeness = /* @__PURE__ */ new Map();
+    for (const member of members) {
+      const file = await db.getCharacter(member);
+      const raw = file?.card?.data?.extensions?.talkativeness;
+      talkativeness.set(member, typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0.5);
+    }
+    speakerName = options.triggerMember ?? (mode === "regenerate" ? members.includes(lastSpeaker) ? lastSpeaker : void 0 : void 0) ?? pickGroupMember({
+      strategy: groupDef.activationStrategy,
+      members,
+      disabled,
+      talkativeness: (member) => talkativeness.get(member) ?? 0.5,
+      lastSpeaker,
+      allowSelfResponses: groupDef.allowSelfResponses
+    });
+    if (!speakerName || !members.includes(speakerName)) throw new Error("no eligible group member to reply");
+    const rawNudge = await presetSamplerValue(db, state, "group_nudge_prompt");
+    const turn = buildGroupTurn({
+      speaker: speakerName,
+      members,
+      userName: DEFAULT_USER,
+      messages: chat.messages,
+      ...typeof rawNudge === "string" && rawNudge.trim() !== "" ? { groupNudgePrompt: rawNudge } : {}
+    });
+    turnMessages = turn.messages;
+    nudge = turn.nudge;
+  }
+  const character = await db.getCharacter(speakerName);
+  if (!character) throw new Error(`character '${speakerName}' not found`);
   let regenerated;
+  const scripts = await collectRegexScripts(db, state, character);
   if (mode === "send") {
-    chat.messages.push({ name: DEFAULT_USER, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: userText });
+    const transformed = applyRegexScripts(options.userText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t });
+    chat.messages.push({ name: DEFAULT_USER, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: transformed });
+    if (group2) {
+      const turn = buildGroupTurn({
+        speaker: speakerName,
+        members: groupDef?.members ?? [speakerName],
+        userName: DEFAULT_USER,
+        messages: chat.messages
+      });
+      turnMessages = turn.messages;
+    }
     revision = await db.saveChat(characterName, chatId, chat, revision);
   } else {
     const last = chat.messages[chat.messages.length - 1];
-    if (last?.is_user === false && !last.is_system) regenerated = chat.messages.pop();
+    if (last?.is_user === false && !last.is_system) {
+      regenerated = chat.messages.pop();
+      if (group2) {
+        const turn = buildGroupTurn({
+          speaker: speakerName,
+          members: groupDef?.members ?? [speakerName],
+          userName: DEFAULT_USER,
+          messages: chat.messages
+        });
+        turnMessages = turn.messages;
+      }
+    }
   }
-  const presetName = typeof body.preset === "string" ? body.preset : state.activePreset;
+  const presetName = state.activePreset;
   let presetObject = presetName ? await db.getPreset(presetName) : void 0;
   if (!presetObject) presetObject = defaultPreset();
   const preset = parsePreset(presetObject);
@@ -3408,20 +4527,18 @@ async function generate(ctx, req, res, db) {
   if (character.card.data.characterBook) {
     const embedded = parseCharacterBook(character.card.data.characterBook);
     books.unshift({
-      name: `${characterName}:embedded`,
+      name: `${speakerName}:embedded`,
       entries: embedded.entries,
       scanDepth: character.card.data.characterBook.scan_depth,
       tokenBudget: character.card.data.characterBook.token_budget,
       recursiveScanning: character.card.data.characterBook.recursive_scanning
     });
   }
-  const historyForLore = chat.messages.map((m) => ({ name: m.name, content: m.mes, isUser: m.is_user }));
-  const timedState = chat.header.chat_metadata.timedWorldInfo;
   const lore = activateWorldInfo({
     books,
-    chat: historyForLore,
+    chat: turnMessages.map((m) => ({ name: m.name, content: m.mes, isUser: m.is_user })),
     contextSize: Number(preset.sampler.openai_max_context ?? 4096),
-    trigger: mode === "regenerate" ? "regenerate" : "normal",
+    trigger: mode === "regenerate" ? "regenerate" : mode === "trigger" ? "quiet" : "normal",
     scanSources: {
       personaDescription: persona?.description,
       characterDescription: character.card.data.description,
@@ -3430,15 +4547,20 @@ async function generate(ctx, req, res, db) {
       creatorNotes: character.card.data.creatorNotes
     },
     settings: { recursive: true, scanDepth: 2, budgetPercent: 25 },
-    timedState: timedState && typeof timedState === "object" ? timedState : void 0,
-    messageCount: chat.messages.length
+    timedState: typeof chat.header.chat_metadata?.timedWorldInfo === "object" && chat.header.chat_metadata.timedWorldInfo ? chat.header.chat_metadata.timedWorldInfo : void 0,
+    messageCount: turnMessages.length
   });
   chat.header.chat_metadata.timedWorldInfo = lore.timedState;
-  const lastUser = [...chat.messages].reverse().find((m) => m.is_user);
-  const lastChar = [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system);
+  const wiDeps = { expand: (text2) => text2 };
+  const loreBefore = lore.worldInfoBefore.entries.map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps));
+  const loreAfter = lore.worldInfoAfter.entries.map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps));
+  const lastUser = [...turnMessages].reverse().find((m) => m.is_user);
+  const lastChar = [...turnMessages].reverse().find((m) => !m.is_user && !m.is_system);
+  const enabledMembers = groupDef ? groupDef.members.filter((member) => !groupDef.disabledMembers.includes(member)) : void 0;
   const macros = createMacroEngine({
     char: character.card.data.nickname || character.card.data.name,
     user: DEFAULT_USER,
+    ...enabledMembers ? { group: enabledMembers.join(", ") } : {},
     persona: persona?.description,
     card: {
       description: character.card.data.description,
@@ -3449,80 +4571,154 @@ async function generate(ctx, req, res, db) {
       postHistoryInstructions: character.card.data.postHistoryInstructions,
       creatorNotes: character.card.data.creatorNotes
     },
-    lastMessage: chat.messages[chat.messages.length - 1]?.mes,
+    lastMessage: turnMessages[turnMessages.length - 1]?.mes,
     lastUserMessage: lastUser?.mes,
     lastCharMessage: lastChar?.mes,
-    lastMessageId: chat.messages.length - 1,
-    chatId
+    lastMessageId: turnMessages.length - 1,
+    chatId,
+    local: chatVariables(chat),
+    global: state.scriptGlobals
   });
-  const assembled = assemblePrompt({
-    card: character.card,
-    preset,
-    personaDescription: persona?.description,
-    messages: chat.messages,
-    worldInfoBefore: lore.worldInfoBefore.entries.map((e) => e.content),
-    worldInfoAfter: lore.worldInfoAfter.entries.map((e) => e.content),
-    beforeExamples: lore.beforeExamples.entries.map((e) => e.content),
-    afterExamples: lore.afterExamples.entries.map((e) => e.content),
-    depthInjections: [
-      ...lore.atDepth.map((g) => ({ depth: g.depth, role: roleName(g.role), text: g.text })),
-      ...lore.topOfAuthorsNote.text ? [{ depth: 4, role: "system", text: lore.topOfAuthorsNote.text }] : [],
-      ...lore.bottomOfAuthorsNote.text ? [{ depth: 0, role: "system", text: lore.bottomOfAuthorsNote.text }] : []
-    ]
-  }, { expand: (text2) => macros.expand(text2), countTokens: (text2) => Math.ceil(text2.length / 3.5) });
-  const fallback = ctx.agentDefaultModel.currentSelection();
-  const saved = typeof body.sessionId === "string" ? state.modelSelections?.[body.sessionId] : void 0;
-  const explicit = typeof body.provider === "string" && typeof body.model === "string" ? {
-    provider: body.provider,
-    model: body.model,
-    ...typeof body.reasoningEffort === "string" ? { reasoningEffort: body.reasoningEffort } : {}
-  } : void 0;
-  const choice = explicit ?? saved ?? fallback;
-  const provider = choice.provider;
-  const model = choice.model;
-  const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
-  const requestMessages = [...assembled.messages];
-  const systemParts = [];
-  while (requestMessages[0]?.role === "system") systemParts.push(requestMessages.shift().content);
-  const llmMessages = requestMessages.map((m) => createMessage({
-    role: m.role,
-    content: [{ type: "text", text: m.content }],
-    source: m.role === "assistant" ? { kind: "model", provider, model } : m.role === "user" ? { kind: "user" } : { kind: "plugin", plugin: "dsh-tavern" }
-  }));
-  res.statusCode = 200;
-  res.setHeader("content-type", "application/x-ndjson; charset=utf-8");
-  res.setHeader("cache-control", "no-cache");
-  const ac = new AbortController();
-  req.on?.("aborted", () => ac.abort());
-  res.on?.("close", () => {
-    if (!res.writableEnded) ac.abort();
-  });
-  const write = (event) => res.write(JSON.stringify(event) + "\n");
-  write({ type: "start", provider, model, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: assembled.stats });
+  const expand = (text2) => macros.expand(text2);
+  const countTokens = (text2) => Math.ceil(text2.length / 3.5);
+  const personaInjections = [];
+  let personaDescription = persona?.description;
+  if (persona) {
+    const position = typeof persona.position === "number" ? persona.position : 0;
+    if (position === 4) {
+      personaInjections.push({ depth: persona.depth ?? 4, role: roleName(persona.role ?? 0), text: persona.description });
+      personaDescription = void 0;
+    } else if (position === 2 || position === 3) {
+      personaInjections.push({ depth: position === 2 ? 4 : 0, role: "system", text: persona.description });
+      personaDescription = void 0;
+    } else if (position === 9) {
+      personaDescription = void 0;
+    }
+  }
+  const promptOnlyScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly);
+  const historyForPrompt = promptOnlyScripts.length > 0 ? turnMessages.map((m, index) => ({
+    ...m,
+    mes: applyRegexScripts(m.mes, promptOnlyScripts, RegexPlacement.AI_OUTPUT, {}, { depth: turnMessages.length - 1 - index })
+  })) : turnMessages;
+  const depthInjections = [
+    ...lore.atDepth.map((g) => ({ depth: g.depth, role: roleName(g.role), text: g.text })),
+    ...lore.topOfAuthorsNote.text ? [{ depth: 4, role: "system", text: lore.topOfAuthorsNote.text }] : [],
+    ...lore.bottomOfAuthorsNote.text ? [{ depth: 0, role: "system", text: lore.bottomOfAuthorsNote.text }] : [],
+    ...personaInjections
+  ];
+  const isTextPipeline = state.pipelineMode === "text" && state.textCompletion?.endpoint;
+  let provider = "";
+  let model = "";
+  let reasoningEffort;
+  let promptString = "";
+  let assembled;
+  if (isTextPipeline) {
+    const config = state.textCompletion;
+    const contextPreset = config.contextPreset ? await db.getPreset(config.contextPreset) : void 0;
+    const instructPreset = config.instructPreset ? await db.getPreset(config.instructPreset) : void 0;
+    const samplerPreset = config.samplerPreset ? await db.getPreset(config.samplerPreset) : void 0;
+    const context = contextPreset && detectPresetKind(contextPreset) === "context" ? parseContextTemplate(contextPreset) : defaultContextTemplate();
+    const instruct = instructPreset && detectPresetKind(instructPreset) === "instruct" ? parseInstructTemplate(instructPreset) : void 0;
+    const tc = assembleTextCompletion({
+      context,
+      instruct,
+      speakerName: character.card.data.nickname || character.card.data.name,
+      userName: DEFAULT_USER,
+      speakerFields: {
+        description: character.card.data.description,
+        personality: character.card.data.personality,
+        scenario: character.card.data.scenario,
+        systemPrompt: character.card.data.systemPrompt,
+        postHistoryInstructions: character.card.data.postHistoryInstructions,
+        mesExample: character.card.data.mesExample
+      },
+      personaDescription,
+      systemPrompt: character.card.data.systemPrompt.trim() !== "" ? character.card.data.systemPrompt : preset.prompts.find((p) => p.identifier === "main" && !p.marker)?.content ?? "",
+      worldInfoBefore: loreBefore,
+      worldInfoAfter: loreAfter,
+      messages: [...historyForPrompt, ...nudge ? [{ name: DEFAULT_USER, is_user: true, is_system: false, send_date: "", mes: nudge.content }] : []],
+      depthInjections,
+      maxContextTokens: numberOr(samplerPreset?.["max_context_length"], numberOr(preset.sampler.openai_max_context, 4096)),
+      maxResponseTokens: numberOr(samplerPreset?.["max_length"], numberOr(preset.sampler.openai_max_tokens, 400))
+    }, { expand, countTokens });
+    promptString = tc.prompt;
+    provider = "kobold";
+    model = "kobold";
+    write({ type: "start", provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: tc.stats, warnings: tc.warnings });
+  } else {
+    assembled = assemblePrompt({
+      card: character.card,
+      preset,
+      personaDescription,
+      messages: historyForPrompt,
+      worldInfoBefore: loreBefore,
+      worldInfoAfter: loreAfter,
+      beforeExamples: lore.beforeExamples.entries.map((e) => e.content),
+      afterExamples: lore.afterExamples.entries.map((e) => e.content),
+      depthInjections
+    }, { expand, countTokens });
+    const fallback = ctx.agentDefaultModel.currentSelection();
+    const saved = options.sessionId ? state.modelSelections?.[options.sessionId] : void 0;
+    const explicit = options.provider !== void 0 && options.model !== void 0 ? {
+      provider: options.provider,
+      model: options.model,
+      ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {}
+    } : void 0;
+    const choice = explicit ?? saved ?? fallback;
+    provider = choice.provider;
+    model = choice.model;
+    reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
+    write({ type: "start", provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: assembled.stats });
+  }
   let text = "";
   let reasoning = "";
-  for await (const chunk of ctx.llm.stream({
-    provider,
-    model,
-    messages: llmMessages,
-    ...systemParts.length > 0 ? { system: systemParts.join("\n\n") } : {},
-    ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
-    temperature: numberOr(preset.sampler.temperature, void 0),
-    maxTokens: numberOr(preset.sampler.openai_max_tokens, void 0),
-    signal: ac.signal
-  })) {
-    if (chunk.type === "text-delta") {
-      text += chunk.text;
-      write({ type: "delta", text: chunk.text });
-    } else if (chunk.type === "reasoning-delta") {
-      reasoning += chunk.text;
-      write({ type: "reasoning", text: chunk.text });
-    } else if (chunk.type === "finish") {
-      if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
-      write({ type: "finish", reason: chunk.reason.kind });
+  if (isTextPipeline) {
+    const config = state.textCompletion;
+    const samplerPreset = config.samplerPreset ? await db.getPreset(config.samplerPreset) : void 0;
+    for await (const chunk of streamKobold(config, promptString, samplerPreset, signal)) {
+      if (chunk.type === "text-delta") {
+        text += chunk.text;
+        write({ type: "delta", text: chunk.text });
+      } else if (chunk.type === "reasoning-delta") {
+        reasoning += chunk.text;
+        write({ type: "reasoning", text: chunk.text });
+      }
+    }
+  } else {
+    const requestMessages = [...assembled.messages];
+    const systemParts = [];
+    while (requestMessages[0]?.role === "system") systemParts.push(requestMessages.shift().content);
+    const llmMessages = requestMessages.map((m) => createMessage({
+      role: m.role,
+      content: [{ type: "text", text: m.content }],
+      source: m.role === "assistant" ? { kind: "model", provider, model } : m.role === "user" ? { kind: "user" } : { kind: "plugin", plugin: "dsh-tavern" }
+    }));
+    for await (const chunk of ctx.llm.stream({
+      provider,
+      model,
+      messages: llmMessages,
+      ...systemParts.length > 0 ? { system: systemParts.join("\n\n") } : {},
+      ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
+      temperature: numberOr(preset.sampler.temperature, void 0),
+      maxTokens: numberOr(preset.sampler.openai_max_tokens, void 0),
+      signal
+    })) {
+      if (chunk.type === "text-delta") {
+        text += chunk.text;
+        write({ type: "delta", text: chunk.text });
+      } else if (chunk.type === "reasoning-delta") {
+        reasoning += chunk.text;
+        write({ type: "reasoning", text: chunk.text });
+      } else if (chunk.type === "finish") {
+        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
+        write({ type: "finish", reason: chunk.reason.kind });
+      }
     }
   }
   if (text.trim() === "") throw new Error("model returned no text");
+  const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly);
+  const finalText = saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement.AI_OUTPUT, { expand }) : text;
+  const finalReasoning = reasoning ? applyRegexScripts(reasoning, scripts, RegexPlacement.REASONING, { expand }) : reasoning;
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const oldSwipes = regenerated ? Array.isArray(regenerated.swipes) && regenerated.swipes.length > 0 ? regenerated.swipes : [regenerated.mes] : [];
   const oldSwipeInfo = regenerated ? Array.isArray(regenerated.swipe_info) ? regenerated.swipe_info : oldSwipes.map(() => ({})) : [];
@@ -3532,15 +4728,318 @@ async function generate(ctx, req, res, db) {
     is_user: false,
     is_system: false,
     send_date: now,
-    mes: text,
+    mes: finalText,
     swipe_id: oldSwipes.length,
-    swipes: [...oldSwipes, text],
-    swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider, model, reasoning: reasoning || void 0 } }],
-    extra: { ...regenerated?.extra ?? {}, api: provider, model, reasoning: reasoning || void 0, activatedLore: lore.allActivated.map((e) => e.entryId) }
+    swipes: [...oldSwipes, finalText],
+    swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider, model, reasoning: finalReasoning || void 0 } }],
+    extra: { ...regenerated?.extra ?? {}, api: provider, model, reasoning: finalReasoning || void 0, activatedLore: lore.allActivated.map((e) => e.entryId) }
   });
+  const varSnapshot = macros.snapshotVars().local;
+  if (Object.keys(varSnapshot).length > 0) chat.header.chat_metadata.variables = varSnapshot;
+  else delete chat.header.chat_metadata.variables;
   revision = await db.saveChat(characterName, chatId, chat, revision);
-  write({ type: "saved", chat, revision });
-  res.end();
+  return { chat, revision, speaker: speakerName };
+}
+function chatVariables(chat) {
+  const vars = chat?.header?.chat_metadata?.variables;
+  if (vars && typeof vars === "object" && !Array.isArray(vars)) {
+    return Object.fromEntries(Object.entries(vars).filter(([, value]) => typeof value === "string" || typeof value === "number" || typeof value === "boolean"));
+  }
+  return {};
+}
+async function runTavernScript(ctx, req, res, db) {
+  const body = await readJson(req);
+  const state = await db.getState();
+  const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
+  const chatId = body.chatId;
+  if (!characterName || typeof chatId !== "string") throw new Error("character and chatId are required");
+  const snapshot = await db.getChatSnapshot(characterName, chatId);
+  if (!snapshot) throw new Error("chat not found");
+  const group2 = body.group === true || await isGroupChat(db, characterName, chatId);
+  const chat = snapshot.chat;
+  let revision = snapshot.revision;
+  const character = await db.getCharacter(characterName);
+  const macros = createMacroEngine({
+    char: character?.card.data.nickname || character?.card.data.name || characterName,
+    user: DEFAULT_USER,
+    persona: state.activePersona ? (await db.getPersona(state.activePersona))?.description : void 0,
+    lastMessage: chat.messages[chat.messages.length - 1]?.mes,
+    lastUserMessage: [...chat.messages].reverse().find((m) => m.is_user)?.mes,
+    lastCharMessage: [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system)?.mes,
+    lastMessageId: chat.messages.length - 1,
+    chatId,
+    local: chatVariables(chat),
+    global: state.scriptGlobals
+  });
+  const persist = async () => {
+    const vars = macros.snapshotVars().local;
+    if (Object.keys(vars).length > 0) chat.header.chat_metadata.variables = vars;
+    else delete chat.header.chat_metadata.variables;
+    revision = await db.saveChat(characterName, chatId, chat, revision);
+  };
+  const triggerGeneration = async (member) => {
+    const fresh = await db.getChatSnapshot(characterName, chatId);
+    const result2 = await runGeneration(ctx, db, {
+      state: await db.getState(),
+      characterName,
+      chatId,
+      snapshot: fresh ?? { chat, revision },
+      mode: "trigger",
+      userText: "",
+      group: group2,
+      triggerMember: member,
+      write: () => {
+      },
+      signal: new AbortController().signal
+    });
+    chat.messages = result2.chat.messages;
+    chat.header = result2.chat.header;
+    revision = result2.revision;
+  };
+  const result = await runScript(typeof body.script === "string" ? body.script : "", {
+    expand: (text) => macros.expand(text),
+    getVar: (name2) => macros.getVar(name2),
+    setVar: (name2, value) => {
+      macros.setVar(name2, value);
+    },
+    deleteVar: (name2) => macros.deleteVar(name2),
+    getGlobalVar: (name2) => macros.getGlobalVar(name2),
+    setGlobalVar: (name2, value) => {
+      macros.setGlobalVar(name2, value);
+    },
+    deleteGlobalVar: (name2) => macros.deleteGlobalVar(name2),
+    send: async (text) => {
+      const trimmed = text.trim();
+      if (trimmed === "") return;
+      chat.messages.push({ name: DEFAULT_USER, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: trimmed });
+      await persist();
+    },
+    trigger: async (member) => {
+      await triggerGeneration(member);
+    },
+    regenerate: async () => {
+      const fresh = await db.getChatSnapshot(characterName, chatId);
+      const regen = await runGeneration(ctx, db, {
+        state: await db.getState(),
+        characterName,
+        chatId,
+        snapshot: fresh ?? { chat, revision },
+        mode: "regenerate",
+        userText: "",
+        group: group2,
+        write: () => {
+        },
+        signal: new AbortController().signal
+      });
+      chat.messages = regen.chat.messages;
+      chat.header = regen.chat.header;
+      revision = regen.revision;
+    },
+    stop: () => {
+    },
+    cut: async (from, to) => {
+      const total = chat.messages.length;
+      const start = from < 0 ? total + from : from;
+      const end = (to < 0 ? total + to : to) + 1;
+      chat.messages.splice(Math.max(0, start), Math.max(0, end - Math.max(0, start)));
+      await persist();
+    },
+    echo: () => {
+    }
+  });
+  const globals = macros.snapshotVars().global;
+  await db.updateState(() => ({ scriptGlobals: globals }));
+  const freshSnapshot = await db.getChatSnapshot(characterName, chatId);
+  return sendJson(res, 200, {
+    ok: true,
+    output: result.output,
+    chatChanged: result.chatChanged,
+    chat: freshSnapshot?.chat ?? chat,
+    revision: freshSnapshot?.revision ?? revision
+  });
+}
+var KOBOLD_SAMPLER_KEYS = [
+  "temperature",
+  "top_p",
+  "top_k",
+  "top_a",
+  "typical",
+  "min_p",
+  "tfs",
+  "rep_pen",
+  "rep_pen_range",
+  "rep_pen_slope",
+  "presence_penalty",
+  "seed"
+];
+function koboldRequestBody(prompt, sampler, maxContext, maxLength) {
+  const body = {
+    prompt,
+    max_context_length: maxContext,
+    max_length: maxLength
+  };
+  if (sampler !== void 0) {
+    for (const key of KOBOLD_SAMPLER_KEYS) {
+      const value = sampler[key];
+      if (typeof value === "number" && Number.isFinite(value)) body[key] = value;
+    }
+  }
+  return body;
+}
+async function* streamKobold(config, prompt, samplerPreset, signal) {
+  const sampler = samplerPreset ?? {};
+  const maxContext = numberOr(sampler["max_context_length"], 4096);
+  const maxLength = numberOr(sampler["max_length"], 400);
+  const body = koboldRequestBody(prompt, sampler, maxContext, maxLength);
+  const headers = {
+    "content-type": "application/json",
+    ...config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}
+  };
+  if (config.streaming !== false) {
+    try {
+      const response2 = await fetch(new URL("api/extra/generate/stream", ensureTrailingSlash(config.endpoint)), {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal
+      });
+      if (response2.ok && response2.body) {
+        const reader = response2.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const part = await reader.read();
+          buffer += decoder.decode(part.value || new Uint8Array(), { stream: !part.done });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            const data = line.startsWith("data:") ? line.slice(5).trim() : "";
+            if (data === "" || data === "[DONE]") continue;
+            try {
+              const token = JSON.parse(data);
+              if (typeof token === "string" && token !== "") yield { type: "text-delta", text: token };
+            } catch {
+            }
+          }
+          if (part.done) break;
+        }
+        return;
+      }
+    } catch (error) {
+      if (signal.aborted) throw error;
+    }
+  }
+  const response = await fetch(new URL("api/v1/generate", ensureTrailingSlash(config.endpoint)), {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal
+  });
+  if (!response.ok) throw new Error(`Kobold generate failed: HTTP ${response.status}`);
+  const payload = await response.json();
+  const text = payload?.results?.[0]?.text;
+  if (typeof text !== "string") throw new Error("Kobold generate returned no text");
+  yield { type: "text-delta", text };
+}
+async function koboldModelInfo(config) {
+  const response = await fetch(new URL("api/v1/model", ensureTrailingSlash(config.endpoint)), {
+    headers: config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {},
+    signal: AbortSignal.timeout(8e3)
+  });
+  if (!response.ok) throw new Error(`Kobold endpoint check failed: HTTP ${response.status}`);
+  const payload = await response.json();
+  const model = typeof payload?.result === "string" ? payload.result : payload?.result?.model ?? payload?.model ?? "kobold";
+  return { name: model, version: payload?.result?.version ?? void 0 };
+}
+function ensureTrailingSlash(endpoint) {
+  return endpoint.endsWith("/") ? endpoint : `${endpoint}/`;
+}
+async function serveCharacterAvatar(res, db, name2, found) {
+  let bytes;
+  let contentType = "image/png";
+  if (found.kind === "png") {
+    bytes = await db.exportCharacter(name2);
+  } else if (found.kind === "charx") {
+    const container = await db.exportCharacter(name2);
+    const asset = found.card.data.assets?.find((item) => item.type === "icon" && item.uri.startsWith("embeded://")) ?? found.card.data.assets?.find((item) => item.uri.startsWith("embeded://") && item.ext === "png");
+    if (!asset) return sendJson(res, 404, { ok: false, message: "character avatar not found" });
+    bytes = decodeCharxAsset(container, asset.uri.slice("embeded://".length));
+    contentType = imageContentType(asset.ext);
+  } else {
+    return sendJson(res, 404, { ok: false, message: "character avatar not found" });
+  }
+  res.statusCode = 200;
+  res.setHeader("content-type", contentType);
+  res.setHeader("cache-control", "private, max-age=300");
+  res.end(Buffer.from(bytes));
+}
+async function isGroupChat(db, characterName, chatId) {
+  const chat = await db.getChat(characterName, chatId);
+  return chat?.header?.chat_metadata?.group !== void 0;
+}
+async function displayTexts(db, state, characterName, chat) {
+  const character = await db.getCharacter(characterName);
+  const scripts = (await collectRegexScripts(db, state, character)).filter((script) => script.markdownOnly && !script.disabled);
+  if (scripts.length === 0) return void 0;
+  return chat.messages.map((message, index) => applyRegexScripts(message.mes ?? "", scripts, RegexPlacement.AI_OUTPUT, { expand: (t) => t }, { depth: chat.messages.length - 1 - index }));
+}
+async function collectRegexScripts(db, state, character) {
+  const scripts = [...state.regexScripts];
+  const cardScripts = character?.card?.data?.extensions?.regex_scripts;
+  if (Array.isArray(cardScripts)) {
+    try {
+      scripts.push(...parseRegexScripts(cardScripts));
+    } catch {
+    }
+  }
+  return scripts;
+}
+async function presetSamplerValue(db, state, key) {
+  const presetName = state.activePreset;
+  if (!presetName) return void 0;
+  const preset = await db.getPreset(presetName);
+  return preset?.[key];
+}
+function parsePresetOrThrow(data) {
+  const kind = detectPresetKind(data);
+  if (kind === "chat-completion") {
+    parsePreset(data);
+    return;
+  }
+  if (kind === "context") {
+    parseContextTemplate(data);
+    return;
+  }
+  if (kind === "instruct") {
+    parseInstructTemplate(data);
+    return;
+  }
+  if (kind === "textgen-sampler") return;
+  throw new Error("preset format not recognized (expected chat completion prompts, context, instruct, or textgen sampler)");
+}
+function isTextCompletionConfig(value) {
+  return typeof value === "object" && value !== null && typeof value.endpoint === "string";
+}
+function normalizeTextCompletion(value) {
+  return {
+    endpoint: String(value.endpoint).trim(),
+    ...typeof value.apiKey === "string" && value.apiKey !== "" ? { apiKey: value.apiKey } : {},
+    streaming: value.streaming !== false,
+    ...typeof value.contextPreset === "string" && value.contextPreset !== "" ? { contextPreset: value.contextPreset } : {},
+    ...typeof value.instructPreset === "string" && value.instructPreset !== "" ? { instructPreset: value.instructPreset } : {},
+    ...typeof value.samplerPreset === "string" && value.samplerPreset !== "" ? { samplerPreset: value.samplerPreset } : {}
+  };
+}
+function publicGroup(group2) {
+  return {
+    name: group2.name,
+    members: group2.members,
+    disabledMembers: group2.disabledMembers,
+    activationStrategy: group2.activationStrategy,
+    allowSelfResponses: group2.allowSelfResponses,
+    autoModeDelay: group2.autoModeDelay,
+    chatCount: group2.chats.length
+  };
 }
 async function buildModelCatalog(ctx) {
   const catalog = await Promise.all(ctx.llm.listProviders().map(async (provider) => {
@@ -3597,12 +5096,12 @@ async function refreshActivePrompt() {
     activeAgentPrompt = "";
   }
 }
-async function bindSession(db, sessionId, character, chatId) {
+async function bindSession(db, sessionId, character, chatId, group2 = false) {
   return db.updateState((state) => ({
-    activeCharacter: character,
+    activeCharacter: group2 ? state.activeCharacter : character,
     sessionBindings: {
       ...state.sessionBindings,
-      [sessionId]: { character, chatId }
+      [sessionId]: { character, chatId, ...group2 ? { group: true } : {} }
     }
   }));
 }
@@ -3618,7 +5117,7 @@ function parseTavernCommand(rawInput) {
     const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (parsed.action === "close") return { action: "close" };
     if (typeof parsed.character !== "string" || typeof parsed.chatId !== "string") return null;
-    return { action: "open", character: parsed.character, chatId: parsed.chatId };
+    return { action: "open", character: parsed.character, chatId: parsed.chatId, group: parsed.group === true };
   } catch {
     return null;
   }
@@ -3654,6 +5153,19 @@ function roleName(role) {
 }
 function numberOr(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+function defaultContextTemplate() {
+  return parseContextTemplate({
+    story_string: [
+      "{{#if system}}{{system}}",
+      "{{/if}}{{#if wiBefore}}{{wiBefore}}",
+      "{{/if}}{{#if description}}{{description}}",
+      "{{/if}}{{#if personality}}{{personality}}",
+      "{{/if}}{{#if scenario}}{{scenario}}",
+      "{{/if}}{{#if wiAfter}}{{wiAfter}}",
+      "{{/if}}{{#if persona}}{{persona}}{{/if}}"
+    ].join("")
+  });
 }
 function defaultPreset() {
   const prompts = [

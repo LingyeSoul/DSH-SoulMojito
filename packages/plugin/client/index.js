@@ -44,15 +44,64 @@ window.__ModuleLoader__.load({
       'settings.importing': 'Importing…',
       'settings.importTitle': 'Import {name}',
       'settings.version': 'Version',
+      'settings.personaManage': 'Personas',
+      'settings.personaEmpty': 'No personas yet',
+      'settings.personaNew': 'New persona',
+      'settings.personaImport': 'Persona PNG',
+      'settings.personaNamePrompt': 'Persona name',
+      'settings.personaDescPrompt': 'Persona description',
+      'settings.personaEdit': 'Edit {name}',
+      'settings.personaDelete': 'Delete {name}',
+      'settings.personaDeleteConfirm': 'Delete persona "{name}"?',
+      'settings.groups': 'Groups',
+      'settings.groupsEmpty': 'No groups created',
+      'settings.groupNew': 'New group',
+      'settings.groupNamePrompt': 'Group name',
+      'settings.groupPickMembers': 'Pick members',
+      'settings.groupCreate': 'Create group',
+      'settings.groupCancel': 'Cancel',
+      'settings.groupMembers': 'Members',
+      'settings.groupStrategy': 'Activation',
+      'settings.groupNatural': 'Natural (talkativeness)',
+      'settings.groupList': 'List order',
+      'settings.groupDelete': 'Delete {name}',
+      'settings.groupDeleteConfirm': 'Delete group "{name}"? Chats are kept.',
+      'settings.groupToggleMember': 'Enable or disable {member}',
+      'settings.groupRemoveMember': 'Remove {member}',
+      'settings.regex': 'Regex scripts',
+      'settings.regexEmpty': 'No regex scripts imported',
+      'settings.importRegex': 'Regex scripts',
+      'settings.regexDelete': 'Delete {name}',
+      'settings.regexToggle': 'Enable or disable {name}',
+      'settings.regexPlacements': 'Placements: {names}',
+      'settings.pipeline': 'Generation pipeline',
+      'settings.pipelineHint': 'Chooses how replies are generated. World Info, macros, regex scripts, swipes and revision protection behave identically in both modes.',
+      'settings.pipelineHintChat': 'Sends a messages[] list through the DSH model routing (providers, keys and the composer model picker). The active Chat Completion preset controls prompt order and sampling.',
+      'settings.pipelineHintText': 'Assembles a single prompt string (context template + instruct sequences) and calls a KoboldAI/KoboldCpp endpoint directly. Configure the endpoint below; the composer model picker does not apply in this mode.',
+      'settings.pipelineChat': 'Chat Completion (DSH models)',
+      'settings.pipelineText': 'Text Completion (Kobold)',
+      'settings.tcEndpoint': 'Kobold endpoint',
+      'settings.tcApiKey': 'API key (optional)',
+      'settings.tcStreaming': 'Prefer SSE streaming',
+      'settings.tcContext': 'Context template',
+      'settings.tcInstruct': 'Instruct template',
+      'settings.tcSampler': 'Textgen sampler',
+      'settings.tcTest': 'Test connection',
+      'settings.tcTesting': 'Testing…',
+      'settings.tcOk': 'Connected: {name}',
+      'settings.anyPreset': 'None',
       'message.user': 'User',
       'message.previousSwipe': 'Previous swipe',
       'message.nextSwipe': 'Next swipe',
       'message.edit': 'Edit message',
+      'message.branch': 'Branch chat from this message',
+      'message.branching': 'Branching…',
       'message.save': 'Save',
       'message.cancel': 'Cancel',
       'view.unbound': 'No Tavern chat is bound to this session.',
       'view.loading': 'Loading Tavern chat…',
       'view.regenerate': 'Regenerate last response',
+      'view.linkedFrom': 'Linked from {name}',
       'run.connecting': 'Connecting',
       'run.saved': 'Saved',
       'run.stopped': 'Stopped',
@@ -71,11 +120,15 @@ window.__ModuleLoader__.load({
       'composer.unavailable': 'Tavern binding unavailable',
       'composer.stop': 'Stop generation',
       'composer.send': 'Send',
+      'composer.script': 'Run STscript',
+      'composer.member': 'Reply as {name}',
       'nav.title': 'Tavern',
       'nav.chats': 'Tavern roleplay chats',
       'nav.open': 'Open Tavern roleplay chats',
       'nav.close': 'Close',
+      'nav.groups': 'Groups',
       'nav.newChat': 'New chat with {name}',
+      'nav.newGroupChat': 'New chat in {name}',
       'nav.loading': 'Loading…',
       'nav.noChats': 'No chats',
       'nav.noCharacters': 'No character cards',
@@ -109,15 +162,64 @@ window.__ModuleLoader__.load({
       'settings.importing': '导入中…',
       'settings.importTitle': '导入{name}',
       'settings.version': '版本',
+      'settings.personaManage': '用户人设',
+      'settings.personaEmpty': '尚未创建人设',
+      'settings.personaNew': '新建人设',
+      'settings.personaImport': '人设 PNG',
+      'settings.personaNamePrompt': '人设名称',
+      'settings.personaDescPrompt': '人设描述',
+      'settings.personaEdit': '编辑{name}',
+      'settings.personaDelete': '删除{name}',
+      'settings.personaDeleteConfirm': '删除人设“{name}”？',
+      'settings.groups': '群聊',
+      'settings.groupsEmpty': '尚未创建群聊',
+      'settings.groupNew': '新建群聊',
+      'settings.groupNamePrompt': '群组名称',
+      'settings.groupPickMembers': '选择成员',
+      'settings.groupCreate': '创建群组',
+      'settings.groupCancel': '取消',
+      'settings.groupMembers': '成员',
+      'settings.groupStrategy': '激活策略',
+      'settings.groupNatural': '自然（健谈度）',
+      'settings.groupList': '列表顺序',
+      'settings.groupDelete': '删除{name}',
+      'settings.groupDeleteConfirm': '删除群组“{name}”？聊天记录会保留。',
+      'settings.groupToggleMember': '启用或停用{member}',
+      'settings.groupRemoveMember': '移除{member}',
+      'settings.regex': '正则脚本',
+      'settings.regexEmpty': '尚未导入正则脚本',
+      'settings.importRegex': '正则脚本',
+      'settings.regexDelete': '删除{name}',
+      'settings.regexToggle': '启用或停用{name}',
+      'settings.regexPlacements': '作用位置：{names}',
+      'settings.pipeline': '生成管线',
+      'settings.pipelineHint': '选择回复的生成方式。世界书、宏、正则脚本、swipe 与修订冲突保护在两种方式下行为完全一致。',
+      'settings.pipelineHintChat': '按聊天预设的 prompts/prompt_order 组装消息列表，经 DSH 的模型路由发送（provider、密钥与 composer 的模型选择器均生效）。',
+      'settings.pipelineHintText': '把上下文模板与 instruct 序列拼成单条提示词，直连 KoboldAI/KoboldCpp 端点生成。需先在下方填写端点；composer 的模型选择器在此模式下不生效，采样参数来自选中的采样器预设。',
+      'settings.pipelineChat': 'Chat Completion（DSH 模型）',
+      'settings.pipelineText': 'Text Completion（Kobold）',
+      'settings.tcEndpoint': 'Kobold 端点',
+      'settings.tcApiKey': 'API 密钥（可选）',
+      'settings.tcStreaming': '优先 SSE 流式',
+      'settings.tcContext': '上下文模板',
+      'settings.tcInstruct': '指令模板',
+      'settings.tcSampler': '采样器预设',
+      'settings.tcTest': '测试连接',
+      'settings.tcTesting': '测试中…',
+      'settings.tcOk': '已连接：{name}',
+      'settings.anyPreset': '无',
       'message.user': '用户',
       'message.previousSwipe': '上一个候选',
       'message.nextSwipe': '下一个候选',
       'message.edit': '编辑消息',
+      'message.branch': '从此消息分支',
+      'message.branching': '分支中…',
       'message.save': '保存',
       'message.cancel': '取消',
       'view.unbound': '此会话未绑定酒馆聊天。',
       'view.loading': '正在加载酒馆聊天…',
       'view.regenerate': '重新生成最新回复',
+      'view.linkedFrom': '来源聊天：{name}',
       'run.connecting': '连接中',
       'run.saved': '已保存',
       'run.stopped': '已停止',
@@ -136,11 +238,15 @@ window.__ModuleLoader__.load({
       'composer.unavailable': '酒馆绑定不可用',
       'composer.stop': '停止生成',
       'composer.send': '发送',
+      'composer.script': '运行 STscript',
+      'composer.member': '由 {name} 回复',
       'nav.title': '酒馆',
       'nav.chats': '酒馆角色扮演聊天',
       'nav.open': '打开酒馆角色扮演聊天',
       'nav.close': '关闭',
+      'nav.groups': '群聊',
       'nav.newChat': '与 {name} 开新聊天',
+      'nav.newGroupChat': '在 {name} 开新聊天',
       'nav.loading': '加载中…',
       'nav.noChats': '暂无聊天',
       'nav.noCharacters': '暂无角色卡',
@@ -172,11 +278,13 @@ window.__ModuleLoader__.load({
     const STYLE_ID = 'dsh-tavern/native-ui'
     const REVISION_CONFLICT = 'CHAT_REVISION_CONFLICT'
     const EMPTY_BOOTSTRAP = {
-      state: { activeWorlds: [], sessionBindings: {}, modelSelections: {}, chats: {} },
+      state: { activeWorlds: [], sessionBindings: {}, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat' },
       characters: [],
       worlds: [],
       presets: [],
+      presetKinds: {},
       personas: [],
+      groups: [],
       activeCard: null,
       model: { provider: '', model: '' },
     }
@@ -188,6 +296,7 @@ window.__ModuleLoader__.load({
       chatLists: {},
       chats: {},
       revisions: {},
+      displays: {},
       runs: {},
       models: EMPTY_MODELS,
       sidebarAttached: false,
@@ -316,6 +425,7 @@ window.__ModuleLoader__.load({
           update({
             chats: { ...snapshot.chats, [key]: result.chat },
             revisions: { ...snapshot.revisions, [key]: result.revision },
+            displays: { ...snapshot.displays, [key]: result.displays },
           })
           return result.chat
         })
@@ -352,7 +462,7 @@ window.__ModuleLoader__.load({
       })
     }
 
-    async function generateFor(sessionId, binding, mode, text) {
+    async function generateFor(sessionId, binding, mode, text, options = {}) {
       const currentRun = snapshot.runs[sessionId]
       if (!binding || currentRun?.busy) return
       const key = chatKey(binding.character, binding.chatId)
@@ -387,6 +497,8 @@ window.__ModuleLoader__.load({
             revision: snapshot.revisions[key],
             message,
             mode,
+            ...(binding.group === true ? { group: true } : {}),
+            ...(options.triggerMember ? { triggerMember: options.triggerMember } : {}),
             ...(selection ? {
               provider: selection.provider,
               model: selection.model,
@@ -411,7 +523,10 @@ window.__ModuleLoader__.load({
           for (const line of lines) {
             if (!line.trim()) continue
             const event = JSON.parse(line)
-            if (event.type === 'start') setRun(sessionId, { status: `${event.provider}/${event.model}` })
+            if (event.type === 'start') {
+              const via = `${event.provider}/${event.model}`
+              setRun(sessionId, { status: event.speaker && event.speaker !== binding.character ? `${event.speaker} · ${via}` : via, speaker: event.speaker })
+            }
             if (event.type === 'delta') {
               streamed += event.text
               setRun(sessionId, { streamText: streamed })
@@ -480,7 +595,7 @@ window.__ModuleLoader__.load({
       if (attempt < 12) setTimeout(() => clickTavernTab(attempt + 1), 50)
     }
 
-    async function openTavernChat(ctx, character, chatId) {
+    async function openTavernChat(ctx, character, chatId, group = false) {
       update({ navigationStatus: '' })
       const sessions = ctx.sessions.list.getSnapshot()
       const existing = Object.entries(snapshot.bootstrap.state.sessionBindings || {})
@@ -499,11 +614,11 @@ window.__ModuleLoader__.load({
       const sessionId = await ctx.workspaces.connectWorkspace(workspace.workspaceId)
       const binding = ctx.sessions.binding(sessionId)
       if (!binding) throw new Error(translate('error.noBinding'))
-      const payload = base64Url(JSON.stringify({ character, chatId }))
+      const payload = base64Url(JSON.stringify({ character, chatId, ...(group ? { group: true } : {}) }))
       const result = await binding.session.command(`/tavern ${payload}`)
       if (!result.ok) throw new Error(result.error?.message || translate('error.activationFailed'))
       if (!result.value.matched) throw new Error(translate('error.hostCommandUnavailable'))
-      const label = sessionLabel(character, chatId)
+      const label = sessionLabel(character, chatId, group)
       await binding.session.rename(label).catch(() => {})
       await refreshBootstrap()
       ctx.sessions.open(sessionId)
@@ -512,11 +627,11 @@ window.__ModuleLoader__.load({
       return sessionId
     }
 
-    async function createTavernChat(ctx, character) {
+    async function createTavernChat(ctx, character, group = false) {
       const result = await api('chats', {
         method: 'POST',
         headers: jsonHeaders(),
-        body: JSON.stringify({ character }),
+        body: JSON.stringify(group ? { group: character } : { character }),
       })
       await loadChatList(character, true)
       const key = chatKey(character, result.id)
@@ -524,7 +639,55 @@ window.__ModuleLoader__.load({
         chats: { ...snapshot.chats, [key]: result.chat },
         revisions: { ...snapshot.revisions, [key]: result.revision },
       })
+      return openTavernChat(ctx, character, result.id, group)
+    }
+
+    async function branchTavernChat(ctx, character, chatId, index) {
+      const key = chatKey(character, chatId)
+      const revision = snapshot.revisions[key]
+      if (!revision) throw new Error(translate('view.loading'))
+      const result = await api('branch', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ character, chatId, messageId: index, revision }),
+      })
+      const nextKey = chatKey(character, result.id)
+      update({
+        chats: { ...snapshot.chats, [nextKey]: result.chat },
+        revisions: { ...snapshot.revisions, [nextKey]: result.revision },
+      })
+      await loadChatList(character, true)
       return openTavernChat(ctx, character, result.id)
+    }
+
+    async function runTavernScriptCommand(sessionId, binding, script) {
+      setRun(sessionId, { busy: true, streamText: '', status: 'composer.script', error: '' })
+      try {
+        const result = await api('script', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({
+            character: binding.character,
+            chatId: binding.chatId,
+            ...(binding.group === true ? { group: true } : {}),
+            script,
+          }),
+        })
+        const key = chatKey(binding.character, binding.chatId)
+        update({
+          chats: { ...snapshot.chats, [key]: result.chat },
+          revisions: { ...snapshot.revisions, [key]: result.revision },
+        })
+        setRun(sessionId, {
+          streamText: '',
+          status: result.output ? `↳ ${result.output.slice(0, 120)}` : 'run.saved',
+        })
+      } catch (cause) {
+        setRun(sessionId, { error: cause instanceof Error ? cause.message : String(cause), status: '' })
+        await loadChat(binding.character, binding.chatId, true).catch(() => {})
+      } finally {
+        setRun(sessionId, { busy: false })
+      }
     }
 
     function boundSessionIds(character, chatId) {
@@ -533,8 +696,9 @@ window.__ModuleLoader__.load({
         .map(([sessionId]) => sessionId)
     }
 
-    function sessionLabel(character, chatId) {
-      return `${character} · ${chatId.replace(/\.jsonl$/i, '').slice(0, 44)}`
+    function sessionLabel(character, chatId, group = false) {
+      const stem = chatId.replace(/\.jsonl$/i, '').slice(0, 44)
+      return group ? `☰ ${character} · ${stem}` : `${character} · ${stem}`
     }
 
     async function renameTavernChat(ctx, character, chatId) {
@@ -664,6 +828,23 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ card: JSON.parse(new TextDecoder().decode(bytes)) }),
           })
         }
+      } else if (kind === 'persona') {
+        const bytes = new Uint8Array(await readFile(file, true))
+        let binary = ''
+        for (let index = 0; index < bytes.length; index += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000))
+        }
+        await api('import/persona', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ pngBase64: btoa(binary), name: fileStem(file.name) }),
+        })
+      } else if (kind === 'regex') {
+        await api('import/regex', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ data: JSON.parse(await readFile(file, false)) }),
+        })
       } else {
         await api(`import/${kind}`, {
           method: 'POST',
@@ -674,11 +855,84 @@ window.__ModuleLoader__.load({
       await refreshBootstrap()
     }
 
+    async function createPersona(name, description) {
+      const result = await api('import/persona', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ name, description }),
+      })
+      await refreshBootstrap()
+      return result.persona
+    }
+
+    async function savePersona(name, description) {
+      const result = await api('persona', {
+        method: 'PUT',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ name, description }),
+      })
+      await refreshBootstrap()
+      return result.persona
+    }
+
+    async function deletePersona(name) {
+      await api(`persona?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
+      await refreshBootstrap()
+    }
+
+    async function createGroup(name, members, activationStrategy) {
+      const result = await api('groups', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ name, members, activationStrategy }),
+      })
+      await refreshBootstrap()
+      return result.group
+    }
+
+    async function updateGroup(payload) {
+      const result = await api('group', {
+        method: 'PUT',
+        headers: jsonHeaders(),
+        body: JSON.stringify(payload),
+      })
+      await refreshBootstrap()
+      return result.group
+    }
+
+    async function deleteGroup(name) {
+      await api(`group?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
+      await refreshBootstrap()
+    }
+
+    async function saveRegexScripts(scripts) {
+      const result = await api('regex', {
+        method: 'PUT',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ scripts }),
+      })
+      update({ bootstrap: { ...snapshot.bootstrap, state: { ...snapshot.bootstrap.state, regexScripts: result.scripts } } })
+      return result.scripts
+    }
+
+    async function saveTextCompletion(patch) {
+      await api('state', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify(patch),
+      })
+      await refreshBootstrap()
+    }
+
+    async function testKoboldConnection() {
+      return api('tc/check')
+    }
+
     function SettingSelect({ label, value, options, empty, onChange }) {
       return h('label', { className: 'dt-field' },
         h('span', { className: 'dt-label' }, label),
         h('select', { value: value || '', onChange: (event) => onChange(event.target.value || null) },
-          h('option', { value: '' }, empty),
+          ...(empty === undefined ? [] : [h('option', { key: '', value: '' }, empty)]),
           options.map((option) => h('option', { key: option, value: option }, option))))
     }
 
@@ -702,6 +956,273 @@ window.__ModuleLoader__.load({
           },
         }),
         error ? h('span', { className: 'dt-upload-error', title: error }, '!') : null)
+    }
+
+    function PersonaBand() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const [error, setError] = useState('')
+      const personas = state.bootstrap.personas || []
+      const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('settings.personaManage')),
+        h('div', { className: 'dt-imports' },
+          h('button', {
+            type: 'button',
+            className: 'dt-upload',
+            onClick: () => {
+              const name = window.prompt(t('settings.personaNamePrompt'), '')
+              if (name === null || name.trim() === '') return
+              run(createPersona(name.trim(), ''))
+            },
+          }, t('settings.personaNew')),
+          h(UploadButton, { kind: 'persona', label: t('settings.personaImport'), accept: '.png,image/png' })),
+        personas.length === 0 ? h('p', { className: 'dt-muted' }, t('settings.personaEmpty')) : h('div', { className: 'dt-persona-list' },
+          personas.map((persona) => h('div', { key: persona.name, className: 'dt-persona-row' },
+            h('img', {
+              className: 'dt-persona-avatar',
+              src: `${API}/persona-avatar/${encodeURIComponent(persona.name)}`,
+              alt: '',
+              onError: (event) => { event.currentTarget.style.visibility = 'hidden' },
+            }),
+            h('div', { className: 'dt-persona-copy' },
+              h('strong', null, persona.name),
+              h('span', { title: persona.description }, persona.description.slice(0, 140) || '—')),
+            h('div', { className: 'dt-persona-actions' },
+              h('button', {
+                type: 'button',
+                title: t('settings.personaEdit', { name: persona.name }),
+                onClick: () => {
+                  const next = window.prompt(t('settings.personaDescPrompt'), persona.description)
+                  if (next === null) return
+                  run(savePersona(persona.name, next))
+                },
+              }, h(IconEditOutline16)),
+              h('button', {
+                type: 'button',
+                title: t('settings.personaDelete', { name: persona.name }),
+                onClick: () => {
+                  if (window.confirm(t('settings.personaDeleteConfirm', { name: persona.name }))) run(deletePersona(persona.name))
+                },
+              }, h(IconTrashOutline16)))))),
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
+    function GroupBand() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const [error, setError] = useState('')
+      const [creating, setCreating] = useState(null)
+      const [selected, setSelected] = useState([])
+      const characters = state.bootstrap.characters
+      const groups = state.bootstrap.groups || []
+      const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('settings.groups')),
+        h('div', { className: 'dt-imports' },
+          h('button', {
+            type: 'button',
+            className: 'dt-upload',
+            onClick: () => {
+              const name = window.prompt(t('settings.groupNamePrompt'), '')
+              if (name === null || name.trim() === '') return
+              setCreating(name.trim())
+              setSelected([])
+            },
+          }, t('settings.groupNew'))),
+        creating !== null ? h('div', { className: 'dt-group-create' },
+          h('strong', null, `${t('settings.groupPickMembers')} — ${creating}`),
+          h('div', { className: 'dt-check-grid' }, characters.map((name) => h('label', { key: name },
+            h('input', {
+              type: 'checkbox',
+              checked: selected.includes(name),
+              onChange: (event) => {
+                setSelected(event.target.checked ? [...selected, name] : selected.filter((item) => item !== name))
+              },
+            }),
+            h('span', null, name))),
+          characters.length === 0 ? h('span', { className: 'dt-muted' }, t('nav.noCharacters')) : null),
+          h('div', { className: 'dt-imports' },
+            h('button', {
+              type: 'button',
+              className: 'dt-upload',
+              disabled: selected.length === 0,
+              onClick: () => {
+                const name = creating
+                setCreating(null)
+                run(createGroup(name, selected, 1))
+              },
+            }, t('settings.groupCreate')),
+            h('button', { type: 'button', className: 'dt-upload', onClick: () => setCreating(null) }, t('settings.groupCancel')))) : null,
+        groups.length === 0 ? h('p', { className: 'dt-muted' }, t('settings.groupsEmpty')) : h('div', { className: 'dt-group-list' },
+          groups.map((group) => h('div', { key: group.name, className: 'dt-group-manage' },
+            h('div', { className: 'dt-group-title' },
+              h('strong', null, `${group.name} (${group.members.length})`),
+              h('span', null, t('settings.groupMembers')),
+              h('select', {
+                value: group.activationStrategy,
+                'aria-label': t('settings.groupStrategy'),
+                onChange: (event) => run(updateGroup({ name: group.name, activationStrategy: Number(event.target.value) })),
+              },
+              h('option', { value: 1 }, t('settings.groupNatural')),
+              h('option', { value: 2 }, t('settings.groupList'))),
+              h('button', {
+                type: 'button',
+                title: t('settings.groupDelete', { name: group.name }),
+                onClick: () => {
+                  if (window.confirm(t('settings.groupDeleteConfirm', { name: group.name }))) run(deleteGroup(group.name))
+                },
+              }, h(IconTrashOutline16))),
+            h('div', { className: 'dt-group-members' }, group.members.map((member) => {
+              const disabled = group.disabledMembers.includes(member)
+              return h('span', {
+                key: member,
+                className: `dt-member-chip ${disabled ? 'dt-member-chip-off' : ''}`,
+                title: t('settings.groupToggleMember', { member }),
+                onClick: () => run(updateGroup({
+                  name: group.name,
+                  disabledMembers: disabled ? group.disabledMembers.filter((item) => item !== member) : [...group.disabledMembers, member],
+                })),
+              },
+              h('img', { src: `${API}/avatar/${encodeURIComponent(member)}`, alt: '' }),
+              h('span', null, member),
+              h('button', {
+                type: 'button',
+                title: t('settings.groupToggleMember', { member }),
+                onClick: (clickEvent) => {
+                  clickEvent.stopPropagation()
+                  run(updateGroup({
+                    name: group.name,
+                    disabledMembers: disabled ? group.disabledMembers.filter((item) => item !== member) : [...group.disabledMembers, member],
+                  }))
+                },
+              }, disabled ? '○' : '●'),
+              h('button', {
+                type: 'button',
+                title: t('settings.groupRemoveMember', { member }),
+                onClick: (clickEvent) => {
+                  clickEvent.stopPropagation()
+                  run(updateGroup({ name: group.name, members: group.members.filter((item) => item !== member) }))
+                },
+              }, '×'))
+            }))))),
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
+    const REGEX_PLACEMENT_NAMES = { 1: 'input', 2: 'output', 3: 'command', 5: 'world info', 6: 'reasoning' }
+
+    function RegexBand() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const [error, setError] = useState('')
+      const scripts = state.bootstrap.state.regexScripts || []
+      const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('settings.regex')),
+        h('div', { className: 'dt-imports' },
+          h(UploadButton, { kind: 'regex', label: t('settings.importRegex'), accept: '.json,application/json' })),
+        scripts.length === 0 ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : h('div', { className: 'dt-regex-list' },
+          scripts.map((script) => h('div', { key: script.id, className: `dt-regex-row ${script.disabled ? 'dt-regex-off' : ''}` },
+            h('label', { className: 'dt-toggle', title: t('settings.regexToggle', { name: script.scriptName }) },
+              h('input', {
+                type: 'checkbox',
+                checked: !script.disabled,
+                onChange: () => run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, disabled: !item.disabled } : item))),
+              }),
+              h('span', null, script.scriptName)),
+            h('span', { className: 'dt-muted', title: t('settings.regexPlacements', { names: script.placement.map((p) => REGEX_PLACEMENT_NAMES[p] || p).join(', ') }) },
+              script.findRegex.slice(0, 60)),
+            h('button', {
+              type: 'button',
+              title: t('settings.regexDelete', { name: script.scriptName }),
+              onClick: () => run(saveRegexScripts(scripts.filter((item) => item.id !== script.id))),
+            }, h(IconTrashOutline16))))),
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
+    function PipelineBand() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const [error, setError] = useState('')
+      const [testing, setTesting] = useState('')
+      const tavernState = state.bootstrap.state
+      const tc = tavernState.textCompletion || {}
+      const kinds = state.bootstrap.presetKinds || {}
+      const presetsOf = (kind) => Object.keys(kinds).filter((name) => kinds[name] === kind).sort()
+      const save = (patch) => { setError(''); void saveTextCompletion(patch).catch((cause) => setError(cause.message)) }
+      const saveTc = (patch) => save({ textCompletion: { endpoint: '', streaming: true, ...tc, ...patch } })
+      const mode = tavernState.pipelineMode === 'text' ? 'text' : 'chat'
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('settings.pipeline')),
+        h('p', { className: 'dt-hint' }, t('settings.pipelineHint')),
+        h('div', { className: 'dt-settings-grid' },
+          h('label', { className: 'dt-field' },
+            h('span', { className: 'dt-label' }, t('settings.pipeline')),
+            h('select', {
+              value: mode,
+              'aria-label': t('settings.pipeline'),
+              onChange: (event) => save({ pipelineMode: event.target.value || 'chat' }),
+            },
+            h('option', { value: 'chat' }, t('settings.pipelineChat')),
+            h('option', { value: 'text' }, t('settings.pipelineText')))),
+          h('p', { className: 'dt-hint dt-hint-wide' }, t(mode === 'text' ? 'settings.pipelineHintText' : 'settings.pipelineHintChat')),
+          h('label', { className: 'dt-field' },
+            h('span', { className: 'dt-label' }, t('settings.tcEndpoint')),
+            h('input', {
+              type: 'text',
+              defaultValue: tc.endpoint || '',
+              placeholder: 'http://127.0.0.1:5001',
+              onBlur: (event) => { if (event.target.value.trim() !== (tc.endpoint || '')) saveTc({ endpoint: event.target.value.trim() }) },
+            })),
+          h('label', { className: 'dt-field' },
+            h('span', { className: 'dt-label' }, t('settings.tcApiKey')),
+            h('input', {
+              type: 'password',
+              defaultValue: tc.apiKey || '',
+              onBlur: (event) => { if (event.target.value !== (tc.apiKey || '')) saveTc({ apiKey: event.target.value }) },
+            })),
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: tc.streaming !== false,
+              onChange: (event) => saveTc({ streaming: event.target.checked }),
+            }),
+            h('span', null, t('settings.tcStreaming'))),
+          h(SettingSelect, {
+            label: t('settings.tcContext'),
+            value: tc.contextPreset || '',
+            options: presetsOf('context'),
+            empty: t('settings.presetEmpty'),
+            onChange: (value) => saveTc({ contextPreset: value || undefined }),
+          }),
+          h(SettingSelect, {
+            label: t('settings.tcInstruct'),
+            value: tc.instructPreset || '',
+            options: presetsOf('instruct'),
+            empty: t('settings.anyPreset'),
+            onChange: (value) => saveTc({ instructPreset: value || undefined }),
+          }),
+          h(SettingSelect, {
+            label: t('settings.tcSampler'),
+            value: tc.samplerPreset || '',
+            options: presetsOf('textgen-sampler'),
+            empty: t('settings.anyPreset'),
+            onChange: (value) => saveTc({ samplerPreset: value || undefined }),
+          })),
+        h('div', { className: 'dt-imports' },
+          h('button', {
+            type: 'button',
+            className: 'dt-upload',
+            disabled: testing !== '',
+            onClick: () => {
+              setTesting(t('settings.tcTesting'))
+              setError('')
+              void testKoboldConnection()
+                .then((result) => setTesting(t('settings.tcOk', { name: result.model?.name || 'kobold' })))
+                .catch((cause) => { setTesting(''); setError(cause.message) })
+            },
+          }, testing !== '' ? testing : t('settings.tcTest'))),
+        error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
     function TavernSettings() {
@@ -743,7 +1264,7 @@ window.__ModuleLoader__.load({
             h(SettingSelect, {
               label: t('settings.persona'),
               value: bootstrap.state.activePersona,
-              options: bootstrap.personas,
+              options: bootstrap.personas.map((persona) => persona.name),
               empty: t('settings.personaEmpty'),
               onChange: (value) => applyPatch({ activePersona: value }),
             }),
@@ -770,6 +1291,10 @@ window.__ModuleLoader__.load({
                   },
                 }),
                 h('span', null, name))))),
+        h(PersonaBand),
+        h(GroupBand),
+        h(RegexBand),
+        h(PipelineBand),
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('settings.import')),
           h('div', { className: 'dt-imports' },
@@ -779,11 +1304,12 @@ window.__ModuleLoader__.load({
         error || state.error ? h('p', { className: 'dt-error' }, error || state.error) : null)
     }
 
-    function MessageRow({ sessionId, character, chatId, chat, message, index, busy }) {
+    function MessageRow({ sessionId, character, chatId, chat, message, index, busy, display }) {
       const t = useTranslate()
       const [editing, setEditing] = useState(false)
       const [draft, setDraft] = useState(message.mes || '')
       const [error, setError] = useState('')
+      const [branching, setBranching] = useState(false)
       useEffect(() => setDraft(message.mes || ''), [message.mes])
       const isUser = message.is_user === true
       const swipes = Array.isArray(message.swipes) && message.swipes.length > 0 ? message.swipes : [message.mes || '']
@@ -811,10 +1337,17 @@ window.__ModuleLoader__.load({
           setEditing(false)
         }
       }
+      const branch = () => {
+        setError('')
+        setBranching(true)
+        void branchTavernChat(SidebarAdapter.context, character, chatId, index)
+          .catch((cause) => setError(cause.message))
+          .finally(() => setBranching(false))
+      }
       return h('article', { className: `dt-message ${isUser ? 'dt-message-user' : 'dt-message-character'}` },
         !isUser ? h('img', {
           className: 'dt-message-avatar',
-          src: `${API}/avatar/${encodeURIComponent(character)}`,
+          src: `${API}/avatar/${encodeURIComponent(message.name || character)}`,
           alt: '',
           onError: (event) => { event.currentTarget.style.visibility = 'hidden' },
         }) : null,
@@ -822,7 +1355,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dt-message-name' }, message.name || (isUser ? t('message.user') : character)),
           editing
             ? h('textarea', { className: 'dt-message-edit', value: draft, disabled: busy, onChange: (event) => setDraft(event.target.value) })
-            : h('div', { className: 'dt-message-copy' }, message.mes || ''),
+            : h('div', { className: 'dt-message-copy' }, display ?? message.mes ?? ''),
           h('div', { className: 'dt-message-actions' },
             swipes.length > 1 ? h(React.Fragment, null,
               h('button', { type: 'button', title: t('message.previousSwipe'), disabled: busy, onClick: () => changeSwipe(-1) }, h(IconChevronLeftOutline14)),
@@ -831,7 +1364,10 @@ window.__ModuleLoader__.load({
             editing ? h(React.Fragment, null,
               h('button', { type: 'button', disabled: busy, onClick: () => void commit() }, t('message.save')),
               h('button', { type: 'button', onClick: () => { setDraft(message.mes || ''); setError(''); setEditing(false) } }, t('message.cancel')))
-              : h('button', { type: 'button', title: t('message.edit'), disabled: busy, onClick: () => setEditing(true) }, h(IconEditOutline16))),
+              : h(React.Fragment, null,
+                h('button', { type: 'button', title: t('message.edit'), disabled: busy, onClick: () => setEditing(true) }, h(IconEditOutline16)),
+                h('button', { type: 'button', className: 'dt-branch-btn', title: t('message.branch'), disabled: busy || branching, onClick: branch }, '⑂'))),
+          branching ? h('span', { className: 'dt-message-error' }, t('message.branching')) : null,
           error ? h('span', { className: 'dt-message-error' }, error) : null))
     }
 
@@ -853,8 +1389,17 @@ window.__ModuleLoader__.load({
       }
       if (!chat) return h('div', { className: 'dt-view dt-empty', 'data-dsh-tavern-surface': 'view' }, t('view.loading'))
       const messages = [...chat.messages]
-      if (run.streamText) messages.push({ name: binding.character, is_user: false, mes: run.streamText, streaming: true })
+      if (run.streamText) messages.push({ name: run.speaker || binding.character, is_user: false, mes: run.streamText, streaming: true })
+      const link = chat.header?.chat_metadata?.bookmark_link
       return h('div', { className: 'dt-view', 'data-dsh-tavern-surface': 'view' },
+        link ? h('div', { className: 'dt-backlink' },
+          h('button', {
+            type: 'button',
+            onClick: () => {
+              void openTavernChat(SidebarAdapter.context, link.character, link.chatId)
+                .catch((cause) => setRun(sessionId, { error: cause.message }))
+            },
+          }, `↩ ${t('view.linkedFrom', { name: `${link.character} · ${(link.chatId || '').replace(/\.jsonl$/i, '')}` })}`)) : null,
         h('div', { className: 'dt-scene-strip' },
           h('img', { src: `${API}/avatar/${encodeURIComponent(binding.character)}`, alt: '' }),
           h('div', null, h('strong', null, binding.character), h('span', null, binding.chatId.replace(/\.jsonl$/i, ''))),
@@ -874,6 +1419,7 @@ window.__ModuleLoader__.load({
             message,
             index,
             busy: run.busy || message.streaming,
+            display: state.displays[chatKey(binding.character, binding.chatId)]?.[index],
           })),
           h('div', { className: 'dt-transcript-end', ref: endRef })),
         run.error ? h('div', { className: 'dt-run-error' }, run.error) : null)
@@ -1113,24 +1659,54 @@ window.__ModuleLoader__.load({
         }, rootPane, modelPane, effortPane) : null)
     }
 
+    function MemberPicker({ binding, disabled, selected, onSelect }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const group = (state.bootstrap.groups || []).find((item) => item.name === binding.character)
+      if (!group) return null
+      const enabled = group.members.filter((member) => !group.disabledMembers.includes(member))
+      return h('div', { className: 'dt-member-row' },
+        enabled.map((member) => h('button', {
+          key: member,
+          type: 'button',
+          className: `dt-member-chip ${selected === member ? 'dt-member-chip-active' : ''}`,
+          title: t('composer.member', { name: member }),
+          disabled,
+          onClick: () => onSelect(selected === member ? '' : member),
+        },
+        h('img', { src: `${API}/avatar/${encodeURIComponent(member)}`, alt: '' }),
+        h('span', null, member))))
+    }
+
     function TavernComposer({ sessionId, useInput, inputActions }) {
       const state = useTavernStore()
       const t = useTranslate()
       const binding = state.bootstrap.state.sessionBindings?.[sessionId]
       const input = useInput((value) => value)
       const run = state.runs[sessionId] || {}
+      const [trigger, setTrigger] = useState('')
       const send = () => {
         const message = input.draft.trim()
         if (!binding || !message || run.busy) return
+        if (message.startsWith('/')) {
+          inputActions.setDraft('')
+          void runTavernScriptCommand(sessionId, binding, message)
+          return
+        }
         inputActions.setDraft('')
-        void generateFor(sessionId, binding, 'send', message)
+        void generateFor(sessionId, binding, 'send', message, trigger ? { triggerMember: trigger } : {})
+        setTrigger('')
       }
+      const placeholder = binding
+        ? `${binding.group === true ? '☰ ' : ''}${t('composer.writeTo', { name: binding.character })}`
+        : t('composer.unavailable')
       return h('div', { className: 'dt-composer-wrap', 'data-dsh-tavern-surface': 'composer' },
         h('div', { className: 'dt-composer' },
+          binding?.group === true ? h(MemberPicker, { binding, disabled: run.busy, selected: trigger, onSelect: setTrigger }) : null,
           h('textarea', {
             value: input.draft,
             disabled: !binding || run.busy,
-            placeholder: binding ? t('composer.writeTo', { name: binding.character }) : t('composer.unavailable'),
+            placeholder,
             rows: 2,
             onChange: (event) => inputActions.setDraft(event.target.value),
             onKeyDown: (event) => {
@@ -1146,7 +1722,13 @@ window.__ModuleLoader__.load({
               h(ModelSelect, { sessionId, locked: run.busy || !binding }),
               run.busy
                 ? h('button', { type: 'button', className: 'dt-primary-icon', title: t('composer.stop'), onClick: () => stopGeneration(sessionId) }, h(IconStopFill16))
-                : h('button', { type: 'button', className: 'dt-primary-icon', title: t('composer.send'), disabled: !binding || !input.draft.trim(), onClick: send }, h(IconSendOutline16))))))
+                : h('button', {
+                  type: 'button',
+                  className: 'dt-primary-icon',
+                  title: input.draft.trim().startsWith('/') ? t('composer.script') : t('composer.send'),
+                  disabled: !binding || !input.draft.trim(),
+                  onClick: send,
+                }, input.draft.trim().startsWith('/') ? h('span', { className: 'dt-script-glyph' }, '/') : h(IconSendOutline16))))))
     }
 
     function TavernHeaderAction({ sessionId, useSession }) {
@@ -1218,7 +1800,7 @@ window.__ModuleLoader__.load({
       return host
     }
 
-    function ChatList({ ctx, character, currentSession }) {
+    function ChatList({ ctx, character, currentSession, group = false }) {
       const state = useTavernStore()
       const t = useTranslate()
       const chats = state.chatLists[character]
@@ -1228,7 +1810,7 @@ window.__ModuleLoader__.load({
       const activeBinding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
       const open = (chatId) => {
         setError('')
-        void openTavernChat(ctx, character, chatId).catch((cause) => {
+        void openTavernChat(ctx, character, chatId, group).catch((cause) => {
           update({ navigationStatus: '' })
           setError(cause.message)
         })
@@ -1249,7 +1831,7 @@ window.__ModuleLoader__.load({
           title: chatId,
           disabled: busyChat === chatId,
           onClick: () => open(chatId),
-        }, h('span', null, chatId.replace(/\.jsonl$/i, ''))),
+        }, h('span', null, / - branch \d+$/.test(chatId.replace(/\.jsonl$/i, '')) ? '⑂ ' : '', chatId.replace(/\.jsonl$/i, ''))),
         h('button', {
           type: 'button',
           title: t('nav.rename', { name: chatId.replace(/\.jsonl$/i, '') }),
@@ -1272,7 +1854,9 @@ window.__ModuleLoader__.load({
       const t = useTranslate()
       const currentSession = useSessions((sessions) => sessions.current)
       const [expanded, setExpanded] = useState(state.bootstrap.state.activeCharacter || state.bootstrap.characters[0] || '')
+      const [expandedGroup, setExpandedGroup] = useState('')
       const [error, setError] = useState('')
+      const groups = state.bootstrap.groups || []
       return h('section', { className: `dt-sidebar ${floating ? 'dt-sidebar-floating' : ''}`, 'aria-label': t('nav.chats') },
         h('div', { className: 'dt-sidebar-heading' },
           h('span', null, h(IconUserOutline16), h('strong', null, t('nav.title'))),
@@ -1299,6 +1883,29 @@ window.__ModuleLoader__.load({
             open ? h(ChatList, { ctx, character, currentSession }) : null)
         }),
         state.bootstrap.characters.length === 0 ? h('span', { className: 'dt-sidebar-status' }, t('nav.noCharacters')) : null,
+        groups.length > 0 ? h('div', { className: 'dt-sidebar-heading dt-sidebar-subheading' },
+          h('span', null, '☰ ', h('strong', null, t('nav.groups')))) : null,
+        groups.map((group) => {
+          const open = expandedGroup === group.name
+          return h('div', { key: group.name, className: 'dt-character-group' },
+            h('div', { className: 'dt-character-row' },
+              h('button', { type: 'button', className: 'dt-character-toggle', 'aria-expanded': open, onClick: () => setExpandedGroup(open ? '' : group.name) },
+                h(IconChevronDownOutline14, { className: open ? 'dt-chevron-open' : '' }),
+                h('img', { src: `${API}/avatar/${encodeURIComponent(group.name)}`, alt: '' }),
+                h('span', null, `☰ ${group.name}`)),
+              h('button', {
+                type: 'button',
+                title: t('nav.newGroupChat', { name: group.name }),
+                onClick: () => {
+                  setError('')
+                  void createTavernChat(ctx, group.name, true).catch((cause) => {
+                    update({ navigationStatus: '' })
+                    setError(cause.message)
+                  })
+                },
+              }, h(IconPlusOutline16))),
+            open ? h(ChatList, { ctx, character: group.name, currentSession, group: true }) : null)
+        }),
         state.navigationStatus ? h('span', { className: 'dt-sidebar-status' }, state.navigationStatus) : null,
         error ? h('span', { className: 'dt-sidebar-error' }, error) : null)
     }
@@ -1356,6 +1963,14 @@ window.__ModuleLoader__.load({
         .dt-model-select{min-width:0;position:relative}.dt-model-trigger{min-width:0;max-width:220px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:24px;outline:none;align-items:center;gap:4px;padding:0 4px 0 8px;font-size:13px;font-weight:500;line-height:20px;display:flex}.dt-model-trigger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-model-trigger:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}.dt-model-trigger:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}.dt-model-trigger-label{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.dt-model-trigger-effort{color:var(--dsw-alias-label-caption);flex:none}.dt-model-chevron{color:var(--dsw-alias-label-caption);flex:none;transition:transform .12s}.dt-model-chevron-open{transform:rotate(180deg)}.dt-model-menu{z-index:20;border:1px solid var(--dsw-alias-border-inverted);background:var(--dsw-specific-menu);width:min(240px,100vw - 32px);max-height:min(360px,100vh - 96px);box-shadow:var(--dsw-shadow-lv3);color:var(--dsw-alias-label-primary);border-radius:12px;flex-direction:column;padding:4px;display:flex;position:absolute;bottom:calc(100% + 8px);right:0;overflow:hidden}.dt-model-status,.dt-model-empty{color:var(--dsw-alias-label-tertiary);padding:10px;font-size:13px;line-height:20px}.dt-model-error,.dt-model-warning{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);border-radius:8px;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px;padding:7px 8px;font-size:12px;line-height:18px;display:flex}.dt-model-warning{background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-state-warn-label)}.dt-model-retry{color:inherit;font:inherit;cursor:pointer;background:0 0;border:none;flex:none;padding:0;font-weight:600}.dt-model-groups{min-height:0;overflow-y:auto}.dt-model-group+.dt-model-group{margin-top:4px}.dt-model-group-title{z-index:1;background:var(--dsw-specific-menu);color:var(--dsw-alias-label-tertiary);padding:5px 8px 3px;font-size:12px;font-weight:500;line-height:18px;position:sticky;top:0}.dt-model-option{width:100%;min-height:38px;color:inherit;text-align:left;cursor:pointer;background:0 0;border:none;border-radius:10px;outline:none;align-items:center;gap:8px;padding:6px 8px;display:flex}.dt-model-option:hover:not(:disabled),.dt-model-option:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}.dt-model-option:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}.dt-model-option-copy{flex-direction:column;flex:1;min-width:0;display:flex}.dt-model-name{color:inherit;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:500;line-height:20px;overflow:hidden}.dt-model-description{color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:18px;overflow:hidden}.dt-model-check{color:var(--dsw-alias-label-primary);flex:0 0 18px;place-items:center;display:grid}.dt-model-cell{width:100%;height:40px;color:var(--dsw-alias-label-primary);cursor:pointer;text-align:left;background:0 0;border:none;border-radius:10px;align-items:center;gap:8px;padding:0 10px;font-size:14px;line-height:22px;display:flex}.dt-model-cell:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-model-cell-label{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.dt-model-cell-value{text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--dsw-alias-label-tertiary);flex:0 auto;overflow:hidden}.dt-model-cell-chevron{color:var(--dsw-alias-label-tertiary);flex:none}
         [data-dsh-tavern-sidebar-host]{flex:none;margin:0 0 6px;padding-right:var(--dsh-session-list-edge-inset,8px)}.dt-sidebar{box-sizing:border-box;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}.dt-sidebar-heading{display:flex;align-items:center;justify-content:space-between;height:30px;padding:0 5px;color:var(--dsw-alias-label-secondary)}.dt-sidebar-heading>span{display:flex;align-items:center;gap:6px;font-size:12px}.dt-sidebar-heading>button{width:26px;height:26px;border-radius:6px}.dt-character-group{margin-top:2px}.dt-character-row{display:flex;align-items:center;gap:2px}.dt-character-toggle{height:32px;min-width:0;flex:1;display:flex;align-items:center;gap:5px;border-radius:6px;padding:0 5px;text-align:left}.dt-character-toggle svg{transform:rotate(-90deg);transition:transform .15s}.dt-character-toggle svg.dt-chevron-open{transform:rotate(0)}.dt-character-toggle img{width:22px;height:22px;border-radius:5px;object-fit:cover}.dt-character-toggle span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.dt-character-row>button:last-child{width:28px;height:28px;display:grid;place-items:center;border-radius:6px;flex:none}.dt-sidebar-chats{display:flex;flex-direction:column;margin:1px 0 4px 28px}.dt-sidebar-chat-row{height:28px;border-radius:6px;display:grid;grid-template-columns:minmax(0,1fr) 26px 26px;align-items:center;color:var(--dsw-alias-label-secondary)}.dt-sidebar-chat-open{height:28px;min-width:0;text-align:left;padding:0 7px;color:inherit;font-size:12px}.dt-sidebar-chat-open span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-sidebar-chat-row>button:not(.dt-sidebar-chat-open){width:26px;height:26px;display:grid;place-items:center;border-radius:5px;opacity:0}.dt-sidebar-chat-row:hover>button:not(.dt-sidebar-chat-open),.dt-sidebar-chat-row:focus-within>button:not(.dt-sidebar-chat-open){opacity:1}.dt-sidebar-chat-row.dt-sidebar-chat-active{color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-interactive-bg-hover)}.dt-sidebar-status,.dt-sidebar-error{padding:4px 7px;font-size:11px;line-height:16px}.dt-floating-shell{position:fixed;z-index:2147400000;inset:64px auto 24px 12px;width:min(310px,calc(100vw - 24px));pointer-events:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);box-shadow:0 12px 40px rgba(0,0,0,.2);overflow:auto;padding:8px}.dt-footer-action{height:32px;display:flex;align-items:center;gap:7px;border-radius:6px;padding:0 7px}.dt-footer-action span{font-size:12px}
         @media(max-width:700px){[role="dialog"]:has(.dt-settings){flex-direction:column}[role="dialog"]:has(.dt-settings)>nav{box-sizing:border-box;width:100%;height:auto;max-height:190px;flex:none;overflow-y:auto;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}[role="dialog"]:has(.dt-settings)>nav>:last-child{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));height:auto}[role="dialog"]:has(.dt-settings)>nav>:last-child>button{width:100%;min-width:0}[role="dialog"]:has(.dt-settings)>:not(nav){width:100%;min-width:0;flex:1}.dt-settings-heading{padding:16px}.dt-settings-band{padding:16px}.dt-settings-grid,.dt-check-grid{grid-template-columns:1fr}.dt-view{padding-inline:10px}.dt-transcript-end{height:132px}.dt-message{max-width:94%}.dt-scene-strip{top:0}.dt-header-character>span{display:none}.dt-composer-wrap{padding-inline:8px}.dt-model-trigger{max-width:140px}.dt-message-edit{width:78vw}.dt-sidebar-chat-row>button:not(.dt-sidebar-chat-open){opacity:1}}
+        .dt-persona-list{display:flex;flex-direction:column;gap:6px}.dt-persona-row{display:flex;align-items:center;gap:10px;min-height:44px;padding:4px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}.dt-persona-avatar{width:34px;height:34px;border-radius:6px;object-fit:cover;flex:none}.dt-persona-copy{display:flex;flex-direction:column;min-width:0;flex:1;gap:2px}.dt-persona-copy span{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-persona-actions{display:flex;gap:2px}.dt-persona-actions button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-persona-actions button:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        .dt-group-create{display:flex;flex-direction:column;gap:8px;margin:10px 0;padding:10px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}.dt-group-list{display:flex;flex-direction:column;gap:12px}.dt-group-manage{display:flex;flex-direction:column;gap:6px}.dt-group-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.dt-group-title>span{color:var(--dsw-alias-label-tertiary);font-size:12px}.dt-group-title select{height:30px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:inherit;background:var(--dsw-alias-bg-base);padding:0 6px}.dt-group-title>button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-group-members{display:flex;flex-wrap:wrap;gap:6px}
+        .dt-member-chip{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 8px 0 3px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:transparent;color:inherit;font-size:12px;cursor:pointer}.dt-member-chip>img{width:22px;height:22px;border-radius:50%;object-fit:cover}.dt-member-chip-off{opacity:.45}.dt-member-chip-off>span{text-decoration:line-through}.dt-member-chip-active{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}.dt-member-chip>button{color:inherit;background:transparent;border:0;cursor:pointer;padding:0 2px;font-size:11px}
+        .dt-regex-list{display:flex;flex-direction:column;gap:6px}.dt-regex-row{display:flex;align-items:center;gap:10px;min-height:36px;padding:2px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}.dt-regex-row.dt-regex-off{opacity:.5}.dt-regex-row>.dt-toggle{flex:1;min-width:0}.dt-regex-row>.dt-muted{font-family:monospace;font-size:11px;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-regex-row>button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}
+        .dt-field input[type=text],.dt-field input[type=password]{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 10px}.dt-upload:disabled{opacity:.5;cursor:not-allowed}
+        .dt-backlink{display:flex;padding:2px 0}.dt-backlink>button{color:var(--dsw-alias-label-tertiary);background:transparent;border:0;cursor:pointer;font-size:12px;padding:4px 2px}.dt-backlink>button:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}
+        .dt-member-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}.dt-member-row .dt-member-chip>button{display:none}.dt-script-glyph{font-weight:700;font-size:15px;line-height:1}.dt-sidebar-subheading{margin-top:10px}.dt-branch-btn{font-size:13px}
+        .dt-hint{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;margin:0 0 12px}.dt-hint-wide{grid-column:1 / -1;margin:0 0 12px}
       `
       document.head.appendChild(tag)
     }

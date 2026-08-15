@@ -1,0 +1,24 @@
+{
+  "name": "@dsh-tavern/script",
+  "version": "0.1.0",
+  "description": "SillyTavern-compatible regex script execution engine and STscript interpreter (command subset with pipes, variables, conditionals, chat actions).",
+  "license": "GPL-3.0",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": ["lib"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "@dsh-tavern/format": "workspace:*",
+    "@dsh-tavern/lore": "workspace:*"
+  }
+}

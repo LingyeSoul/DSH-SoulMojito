@@ -517,6 +517,10 @@ export function createMacroEngine(init: MacroEngineInit): MacroEngine {
     hasGlobalVar: name => globalVars.has(name),
     deleteGlobalVar: name => globalVars.delete(name),
     registerMacro,
+    snapshotVars: () => ({
+      local: Object.fromEntries(localVars),
+      global: Object.fromEntries(globalVars),
+    }),
   };
 
   return api;

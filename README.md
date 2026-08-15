@@ -15,6 +15,12 @@
 - Chat Completion preset：`prompts[]`、`prompt_order[]`、marker 和采样参数。
 - SillyTavern chat JSONL：header、messages、`swipes`、`swipe_id`、`swipe_info`。
 - RP 交互：流式生成、Stop、消息编辑、swipe、regenerate、聊天创建、重命名和确认删除。
+- 消息分支 / bookmark：任意消息一键分支为新聊天，`chat_metadata.bookmark_link` 回链，视图可跳回父聊天。
+- Persona 管理：PNG 导入（内嵌描述提取）、头像、增删改、激活选择与 `position/depth/role` 注入。
+- 群聊：成员管理、自然（talkativeness 加权）/列表激活策略、成员点触发言、`group_only_greetings`、group nudge 和 `{{group}}` 宏。
+- 正则脚本：ST regex 扩展形态导入，全局 + 卡级合并，`USER_INPUT/AI_OUTPUT/WORLD_INFO/REASONING` placement、`minDepth/maxDepth`、`substituteRegex`、`trimStrings`。
+- STscript：管道、变量（聊天局部 + 全局）、`/if` 条件、随机/掷骰和聊天动作（`/send`、`/trigger`、`/regenerate`、`/cut`），composer `/` 前缀触发。
+- Text Completion / Kobold：context（story_string `{{#if}}` 子集）、instruct、textgen 采样器 preset 装配单串 prompt，KoboldAI/KoboldCpp SSE 流式 + 单发回退，端点/密钥/预设配置与连接测试。
 - Composer 模型选择：复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
 - 并发保护：聊天使用内容 revision 做 compare-and-swap；跨标签页冲突返回 `409`，客户端重新加载最新内容，不静默覆盖。
 - 可选的普通 Agent 人格注入，默认关闭。
@@ -40,10 +46,11 @@ DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏
 
 | Package | 说明 |
 |---|---|
-| `@dsh-tavern/format` | 卡、PNG/CHARX、世界书、preset 和 chat JSONL 的解析与无损往返 |
+| `@dsh-tavern/format` | 卡、PNG/CHARX、世界书、preset（chat completion / context / instruct / textgen）、群组文件、regex 脚本和 chat JSONL 的解析与无损往返 |
 | `@dsh-tavern/lore` | World Info 激活和 timed effects 引擎 |
 | `@dsh-tavern/macros` | 角色、时间、随机、变量等宏引擎 |
-| `@dsh-tavern/pipeline` | preset 顺序、lore、persona、历史和 token budget 的 prompt 装配 |
+| `@dsh-tavern/pipeline` | preset 顺序、lore、persona、历史和 token budget 的 prompt 装配（chat completion + text completion + 群聊回合） |
+| `@dsh-tavern/script` | ST regex 脚本执行器与 STscript 解释器 |
 | `@dsh-tavern/store` | `$DSH_HOME/tavern/` 原子文件存储、revision 和 session binding |
 | `dsh-tavern` | 自包含 Node half、Web client half、安装元数据和 gates |
 
@@ -101,16 +108,18 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：10 个测试文件、77 项测试通过；package contract、patch reference、server bundle、client bundle、client VM mount 和 Node half mount 六道 gate 全部通过。
+当前基线：15 个测试文件、134 项测试通过；package contract、patch reference、server bundle、client bundle、client VM mount 和 Node half mount 六道 gate 全部通过（路由保护覆盖 persona、群组、branch、regex、STscript 与 Kobold 端点）。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、折叠 fallback、conversation view/composer、设置页、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 
 ## 文档
 
 - [`docs/proposals/0001-tavern-architecture.md`](docs/proposals/0001-tavern-architecture.md)：当前架构、边界与后备路线。
+- [`docs/proposals/0002-branch-persona-groups-script-textcompletion.md`](docs/proposals/0002-branch-persona-groups-script-textcompletion.md)：branch/bookmark、persona 管理、群聊、STscript/regex 与 Text Completion/Kobold 的范围与格式。
 - [`docs/exploration/2026-08-14-fabric-architecture.md`](docs/exploration/2026-08-14-fabric-architecture.md)：Fabric 调研与后备定位。
 - [`docs/exploration/2026-08-14-st-formats.md`](docs/exploration/2026-08-14-st-formats.md)：SillyTavern 互操作格式与行为参考。
 - [`decisions/2026-08-14-card-raw-passthrough.md`](decisions/2026-08-14-card-raw-passthrough.md)：角色卡未知字段透传决策。
+- [`decisions/2026-08-15-v2-feature-scope.md`](decisions/2026-08-15-v2-feature-scope.md)：v2 功能面的范围与形态选择。
 
 ## 许可
 

@@ -114,4 +114,9 @@ export interface MacroEngine {
    * empty name or a name containing the surrounding braces.
    */
   registerMacro(name: string, fn: MacroFunction): void;
+  /**
+   * Copy of the current local (chat-scoped) and global variable maps.
+   * Callers persist these between evaluations (chat metadata / plugin state).
+   */
+  snapshotVars(): { local: VariableMap; global: VariableMap };
 }

@@ -141,7 +141,7 @@ describe('TavernStore', () => {
     await expect(store.saveChat('Test Char', '../state.json', { header, messages: [] })).rejects.toThrow('invalid chat id')
   }))
   it('状态：默认值 → patch 持久化', withStore(async (store) => {
-    expect(await store.getState()).toEqual({ activeWorlds: [], sessionBindings: {}, modelSelections: {}, chats: {} })
+    expect(await store.getState()).toEqual({ activeWorlds: [], sessionBindings: {}, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat' })
     await store.patchState({
       activeCharacter: 'ExampleCard',
       activeWorlds: ['ExampleWorld'],
@@ -170,5 +170,77 @@ describe('TavernStore', () => {
     await store.putPersona({ name: 'Main', description: 'A traveler' })
     expect(await store.listPersonas()).toEqual(['Main'])
     expect((await store.getPersona('Main'))?.description).toBe('A traveler')
+  }))
+
+  it('persona：导入 PNG 提取内嵌描述并保存头像', withStore(async (store) => {
+    const png = new Uint8Array(readFileSync(path.join(fixturesDir, 'ExampleCard.png')))
+    const persona = await store.importPersonaPng(png, 'ExampleCard')
+    expect(persona.name).toBe('ExampleCard')
+    expect(persona.description.length).toBeGreaterThan(0)
+    expect((await store.getPersonaAvatar('ExampleCard'))?.byteLength).toBe(png.byteLength)
+    expect(await store.listPersonas()).toEqual(['ExampleCard'])
+    expect(await store.deletePersona('ExampleCard')).toBe(true)
+    expect(await store.getPersonaAvatar('ExampleCard')).toBeUndefined()
+    expect(await store.deletePersona('ExampleCard')).toBe(false)
+  }))
+
+  it('persona：无内嵌卡的 PNG 退化为仅头像', withStore(async (store) => {
+    const fake = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
+    const persona = await store.importPersonaPng(fake, 'Plain')
+    expect(persona.name).toBe('Plain')
+    expect(persona.description).toBe('')
+    expect((await store.getPersonaAvatar('Plain'))?.byteLength).toBe(fake.byteLength)
+  }))
+
+  it('群组：CRUD 与 ST 文件往返', withStore(async (store) => {
+    await store.putGroup({
+      id: 'g1', name: 'Party', members: ['A', 'B'], allowSelfResponses: false,
+      activationStrategy: 2, disabledMembers: ['B'], chatId: '', chats: [], autoModeDelay: 3,
+    })
+    expect(await store.listGroups()).toEqual(['Party'])
+    const loaded = await store.getGroup('Party')
+    expect(loaded?.members).toEqual(['A', 'B'])
+    expect(loaded?.activationStrategy).toBe(2)
+    await store.deleteGroup('Party')
+    expect(await store.getGroup('Party')).toBeUndefined()
+  }))
+
+  it('分支：截断复制并写 bookmark_link', withStore(async (store) => {
+    const id = await store.createChat('Test Char', { user_name: 'unused', character_name: 'unused', chat_metadata: {} }, [
+      { name: 'Test Char', is_user: false, is_system: false, send_date: 'a', mes: 'one' },
+      { name: 'User', is_user: true, is_system: false, send_date: 'b', mes: 'two' },
+      { name: 'Test Char', is_user: false, is_system: false, send_date: 'c', mes: 'three' },
+    ])
+    const first = await store.getChatSnapshot('Test Char', id)
+    const branch = await store.branchChat('Test Char', id, 1, first?.revision)
+    expect(branch.chatId).toBe(id.replace(/\.jsonl$/, '') + ' - branch 1.jsonl')
+    expect(branch.chat.messages).toHaveLength(2)
+    expect(branch.chat.messages[1]?.mes).toBe('two')
+    expect(branch.chat.header.chat_metadata['bookmark_link']).toEqual({ character: 'Test Char', chatId: id, messageId: 1 })
+    // 第二个分支递增编号
+    const second = await store.branchChat('Test Char', id, 0, first?.revision)
+    expect(second.chatId).toContain('branch 2')
+    // revision 冲突传播
+    await expect(store.branchChat('Test Char', id, 0, 'stale')).rejects.toThrow()
+    // 越界报错
+    await expect(store.branchChat('Test Char', id, 99, first?.revision)).rejects.toThrow(/out of range/)
+  }))
+
+  it('状态：regex/脚本变量/管线配置随旧 state 补默认', withStore(async (store) => {
+    let state = await store.getState()
+    expect(state.regexScripts).toEqual([])
+    expect(state.scriptGlobals).toEqual({})
+    expect(state.pipelineMode).toBe('chat')
+    await store.patchState({
+      pipelineMode: 'text',
+      regexScripts: [{ id: 'r1', scriptName: 'strip', findRegex: 'x', replaceString: 'y', trimStrings: [], placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false, substituteRegex: false, minDepth: null, maxDepth: null }],
+      scriptGlobals: { mood: 'calm' },
+      textCompletion: { endpoint: 'http://127.0.0.1:5001', streaming: true },
+    })
+    state = await store.getState()
+    expect(state.pipelineMode).toBe('text')
+    expect(state.regexScripts[0]?.scriptName).toBe('strip')
+    expect(state.scriptGlobals['mood']).toBe('calm')
+    expect(state.textCompletion?.endpoint).toBe('http://127.0.0.1:5001')
   }))
 })

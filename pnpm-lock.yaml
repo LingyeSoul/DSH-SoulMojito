@@ -39,6 +39,15 @@ importers:
         specifier: workspace:*
         version: link:../tavern-format
 
+  packages/tavern-script:
+    dependencies:
+      '@dsh-tavern/format':
+        specifier: workspace:*
+        version: link:../tavern-format
+      '@dsh-tavern/lore':
+        specifier: workspace:*
+        version: link:../tavern-lore
+
   packages/tavern-store:
     dependencies:
       '@dsh-tavern/format':
