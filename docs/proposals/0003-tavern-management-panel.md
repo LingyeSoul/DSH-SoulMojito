@@ -23,11 +23,7 @@ DSH 侧边栏底部、紧挨 Settings 按钮的位置，常驻一个 Tavern 按�
 1. **管理面挤在 Settings 里**。`settings.section` 一个 section 承载了导入、
    persona CRUD、群组管理、regex、管线、Kobold 六块管理功能，纵向无限堆叠，
    没有 DataTable/网格空间，卡片级浏览（角色、世界书条目）放不下。
-2. **侧栏集成是 DOM 爬取 hack**。`useSidebarHost` 用 MutationObserver + 几何
-   启发式猜 DSH 会话列表 `[role="tree"]` 并插队宿主 div，fragile 且和宿主
-   UI 无契约。fallback 又造了一个 z-index 2147400000 的浮动 shell。
-
-结论：**走 DSH 官方扩展点，两处 hack 都退役**。
+2. **侧栏管理需要与宿主会话树并存**。最初方案误把 `useSidebarHost` 视为应退役的 hack，导致角色/聊天快速切换入口被删。事实是宿主没有可承载 Tavern 会话树的专用 slot；`useSidebarHost` 是当前兼容层，必须保留。需要退役的只是旧的独立浮动 fallback（`dt-floating-shell`），不是侧栏聊天树。
 
 | 需求 | 官方扩展点 | 证据 |
 |---|---|---|
@@ -40,24 +36,24 @@ DSH 侧边栏底部、紧挨 Settings 按钮的位置，常驻一个 Tavern 按�
 - **接管 `sidebar.settings`（single slot）**：会顶掉真正的 Settings 按钮，破坏宿主。
 - **`ctx.commandUi` 斜杠命令**：`CommandUiSpec.kind` 现阶段仅 `'popupSelect'`，
   挂不了任意 React 面板（`dsh-client-ui-commands/lib/types/client/contract.d.ts` L31-35）。
-- **继续 DOM 爬取**：与"复用侧边栏就像设置那样"的诉求相反；官方先例
-  （CordisPanel、dsh-rider）全部走 footer/dock + 自管浮层。
+- **继续制造独立浮动 shell**：不再保留旧的 `dt-floating-shell` fallback；面板统一走 `shell.overlay` + `Modal`，但侧栏会话树仍由 `useSidebarHost` 兼容层注入并保留。
 
 ## 2. 入口按钮（`sidebar.footer.action`）
 
-现有 `SidebarFooterAction` 从"侧栏挂载失败的回落开关"转正为**常驻主入口**：
+现有 `SidebarFooterAction` 从"侧栏挂载失败的回落开关"转正为**常驻主入口**，与保留的 Tavern 侧栏聊天树并列：
 
 - 点击行为：打开管理面板（`dsh-tavern:toggle-panel` window 事件 + store 状态，
   对齐现有 `toggle-sidebar` 模式），不再 toggle 浮动 shell。
-- wide 形态：图标 + label 行，chrome 对齐 CordisPanel footer 按钮（49px 行）；
-  rail 形态：36px 圆形图标按钮，`aria-label` + Tooltip。
+- wide 形态直接对齐原生 Settings trigger：`width:calc(100% + 8px)`、34px 高、
+  14px 字体/22px 行高、12px 圆角与相同 margin/padding；rail 形态同为 36px
+  圆形图标按钮（18px 图标），`aria-label` + Tooltip。
 - 图标：`IconSparkle16`（角色扮演语义，与宿主既有图标不撞车）；
   label 走 locale thunk（`nav.title`，中英已有）。
 - 同 slot 多占用者（CordisPanel 等）天然共存，list slot 按 order 排列。
 
 ## 3. 面板容器（`shell.overlay` + `Modal`）
 
-在现有 `shell.overlay` entry（SidebarAdapter 退役后由 PanelHost 接替）渲染：
+在现有 `shell.overlay` entry 中由 PanelHost 同时承载侧栏会话树 portal、bindings/prune 与面板 Modal：
 
 ```
 Modal(headless, open, onClose)          ← 原语：遮罩/Escape/aria-modal/焦点
@@ -74,9 +70,10 @@ Modal(headless, open, onClose)          ← 原语：遮罩/Escape/aria-modal/�
   对齐 Settings 设计稿（figma 501:29947, 1080x700）。
 - 响应式：≤700px 时 nav 折叠为顶部横向滚动条（复用现 settings 媒体查询思路）。
 - 动效：开合用 `--ds-transition-duration-slow` + `--ds-ease-in-out`。
-- 集成风险（实现时验证）：Modal 若以 fixed 定位 portal 渲染，在
-  pointer-events:none 的 overlay 层内需确保面板根节点显式
-  `pointer-events:auto`；若 Modal 自带遮罩则与 overlay 层叠加无碍。
+- 实现验证：Modal 会 portal 到 `document.body`，不受 `shell.overlay` 的
+  `pointer-events:none` 影响。宿主 dialog 默认 `padding-bottom:24px` 且背景为
+  `--dsw-alias-bg-layer-2`，会露出底部异色带；`.dt-panel-modal` 明确覆盖
+  `padding:0; gap:0; background:var(--dsw-alias-bg-base)`，由 `.dt-panel` 填满卡片。
 
 ## 4. 信息架构（左 nav 分区 → 能力矩阵）
 
@@ -84,7 +81,7 @@ Modal(headless, open, onClose)          ← 原语：遮罩/Escape/aria-modal/�
 |---|---|---|
 | 总览 | 设置页"Active setup" | 活跃配置卡片（角色/预设/persona/世界书多选）+ 版本/commit 戳 + 快速切换 + 各资产计数 |
 | 角色 | 设置页 select + 导入 | 卡片网格（头像/名字/creator/卡规格 Pill）；**完整卡查看器**（description/personality/scenario/firstMes/example dialogues，`MarkdownText` 渲染，`DisclosureRow` 折叠）；设为活跃；**删除**（RiskConfirmation）；**导出 PNG** |
-| 聊天 | DOM 爬取侧栏树 | 按角色/群组分组列表（⑂ 分支标记 + 回链）；新建/重命名/删除/打开到会话（`openTavernChat` 复用） |
+| 聊天 | 侧栏 Tavern 会话树（保留） | 同一 TavernSidebar/ChatList 在侧栏与面板双处复用；按角色/群组分组（⑂ 分支标记 + 回链），新建/重命名/删除/打开到会话（`openTavernChat` 复用） |
 | 群组 | 设置页管理带 | 成员 chips（启停/移除）、激活策略、allow_self_responses、群组头像（回落首成员，复用 avatar 路由） |
 | Persona | 设置页管理带 | CRUD、PNG 导入、头像、position/depth 编辑 |
 | 世界书 | 设置页 checkbox 列表 | 世界卡片（条目数 Pill + 激活开关）；**条目浏览器**（keys/content/深度/顺序，搜索过滤，`Input` + 虚拟滚动可后置）；**删除** |
@@ -136,10 +133,10 @@ state-error|success|warn-*`、`--dsw-shadow-lv3`、`--dsw-specific-menu`（浮�
 - **`settings.section` 瘦身保留**：仅"Active setup"快速切换（角色/预设/
   persona/世界书四个选择器）+ "打开 Tavern 面板"按钮（共享面板 open state）。
   重管理全部移入面板。肌肉记忆不破坏，设置页不再无限纵向堆叠。
-- **DOM 爬取侧栏树退役**：删除 `useSidebarHost`（MutationObserver + 几何启发式）、
-  `[data-dsh-tavern-sidebar-host]` 注入、`dt-floating-shell` 及
-  `dsh-tavern:toggle-sidebar` 事件链。聊天浏览由面板"聊天"分区承接
-  （一次点击的距离代价，换取与宿主的真实契约）。
+- **侧栏聊天树保留，与面板共存**：保留 `useSidebarHost`（MutationObserver + 几何
+  启发式）和 `[data-dsh-tavern-sidebar-host]` 注入，维持角色/聊天的日常快速选择；
+  同一 TavernSidebar/ChatList 也在面板"聊天"分区复用。只删除旧的
+  `dt-floating-shell`、`dsh-tavern:toggle-sidebar` 与 `sidebarAttached` fallback 状态。
 - **不动**：`conversation.view` / `conversation.composer` /
   `conversation.session.header.actions` / locale 注册 / API 面。
 
@@ -152,7 +149,7 @@ state-error|success|warn-*`、`--dsw-shadow-lv3`、`--dsw-specific-menu`（浮�
 - **M3** 迁移：角色/群组/persona/regex/生成五分区从设置页搬入（行为等价，
   locale 键复用）；settings.section 同步瘦身。
 - **M4** 新能力：卡查看器、世界书条目浏览器、变量、导出、删除闭环；
-  侧栏 hack 退役（删 `useSidebarHost` 一族）。
+  侧栏聊天树与面板聊天分区共存（同一 TavernSidebar/ChatList 复用），仅退役独立浮动 fallback。
 
 验证：`pnpm check`（tsc + vitest + build + gates）全绿；浏览器冒烟清单——
 footer 按钮 wide/rail 两形态、面板开合/Escape/遮罩点击、九分区渲染、

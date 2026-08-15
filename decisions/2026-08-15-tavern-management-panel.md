@@ -2,17 +2,26 @@
 
 日期：2026-08-15。状态：已接受。设计来源：`docs/proposals/0003-tavern-management-panel.md`。
 
-## 1. 入口走 `sidebar.footer.action` + `shell.overlay`，弃 DOM 爬取
+## 1. 面板入口走官方 slot；侧栏聊天树保留并与面板共存
 
-侧边栏集成的官方扩展点是 `sidebar.footer.action`（list slot，宿主语义即
+侧边栏面板入口的官方扩展点是 `sidebar.footer.action`（list slot，宿主语义即
 "Settings 旁边的可选动作"，官方占用者 CordisPanel 同在此）与 `shell.overlay`
 （frame 级浮层）。面板容器用 `@deepseek-ai/dsh-client-ui-primitives` 的
 `Modal`（headless）：它 portal 到 `document.body` 并自带遮罩/Escape/aria-modal，
-完全脱离 overlay 层的 `pointer-events:none`——提案 Bar Raiser #1 的叠层风险
-实测不成立。原 `useSidebarHost` 的 MutationObserver + 几何启发式爬取、
-`[data-dsh-tavern-sidebar-host]` 注入与 `dt-floating-shell` 浮动壳全部删除；
-`sidebar.footer.action` 从"挂载失败回落"转正为常驻主入口（wide=图标+文字，
-rail=圆钮+Tooltip）。`bindings/prune` 副作用随 PanelHost 保留在 shell.overlay。
+完全脱离 overlay 层的 `pointer-events:none`。
+
+初版实现错误删除了 `useSidebarHost`，导致侧边栏角色/聊天快速选择消失。该决定
+已撤销：宿主目前没有可承载 Tavern 会话树的专用 slot，因此保留
+MutationObserver + 几何定位的 `[data-dsh-tavern-sidebar-host]` 兼容层，并让同一
+TavernSidebar/ChatList 在面板聊天分区复用。只删除旧的 `dt-floating-shell`、
+`toggle-sidebar` 与 `sidebarAttached` fallback 状态。
+
+`sidebar.footer.action` 从"挂载失败回落"转正为常驻主入口。样式直接对齐原生
+Settings trigger：wide=`width:calc(100% + 8px)`/34px 高/14px 字体/22px 行高/
+12px 圆角，并复用相同 margin/padding；rail=36px 圆钮、18px 图标与 Tooltip。
+宿主 Modal dialog 默认 `padding-bottom:24px` 且背景为
+`--dsw-alias-bg-layer-2`，曾在面板底部露出异色带；`.dt-panel-modal` 覆盖
+`padding:0; gap:0; background:var(--dsw-alias-bg-base)` 后由面板根节点填满。
 
 ## 2. 删除角色连同聊天记录，并做三处级联
 

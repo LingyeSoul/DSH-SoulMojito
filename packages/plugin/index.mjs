@@ -3998,7 +3998,7 @@ async function handleApi(ctx, req, res) {
       activeCard: active ? publicCard(active.card) : null,
       model: ctx.agentDefaultModel.currentSelection(),
       version: "0.1.0",
-      commit: "6f8f889"
+      commit: "9b48be6"
     });
   }
   if (method === "GET" && route.startsWith("avatar/")) {

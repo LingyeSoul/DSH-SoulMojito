@@ -28,7 +28,7 @@
 | 2.2 | 面板状态 | snapshot += `panelOpen/panelSection`；`openPanel(section)/closePanel()`；window 事件 `dsh-tavern:toggle-panel` |
 | 2.3 | `PanelHost` | 接替 SidebarAdapter 注册 `shell.overlay`（id `dsh-tavern-panel`）；承接 bindings/prune 副作用；渲染 `Modal(headless)` + `TavernPanel` |
 | 2.4 | `TavernPanel` | 左 nav（PANEL_SECTIONS：overview/characters/chats/groups/personas/worlds/presets/regex/variables/generation）+ 右 content（header+body）；尺寸 `min(1080px,…)/min(700px,…)`；`pointer-events:auto` |
-| 2.5 | `SidebarFooterAction` 转正 | 常驻 `sidebar.footer.action`（id 改 `dsh-tavern-panel`），点击 `openPanel()`；wide=图标+文字，rail=圆钮+Tooltip |
+| 2.5 | `SidebarFooterAction` 转正 | 常驻 `sidebar.footer.action`（id 改 `dsh-tavern-panel`），点击 `openPanel()`；逐项对齐 Settings trigger：wide=34px 高/14px 字体/22px 行高，rail=36px 圆钮/18px 图标 + Tooltip |
 | 2.6 | 上下文持有者 | `SidebarAdapter.context` → 模块级 `runtimeContext`（apply() 赋值）；MessageRow.branch / TavernView 回链改引用 |
 
 ### M3 分区迁移 + settings 瘦身（client/index.js）
@@ -41,17 +41,17 @@
 | 3.4 | PipelineBand → PanelGeneration | 迁移 + 测试连接结果旁加 `StateDot`（done/error） |
 | 3.5 | TavernSettings 瘦身 | 保留：标题/版本 + Active setup（4 选择器 + nativePersona）+ 世界书开关 + "打开 Tavern 面板" `Button(primary)`；移除四带与导入带 |
 
-### M4 新能力 + 退役（client/index.js）
+### M4 新能力 + 侧栏共存（client/index.js）
 
 | # | 改动 | 细节 |
 |---|---|---|
 | 4.1 | PanelOverview | 活跃配置卡 + 资产计数 + 版本戳 |
 | 4.2 | PanelCharacters | 卡片网格 + 导入 + 完整卡查看器（GET character/，MarkdownText 渲染字段，DisclosureRow 式折叠）+ 设为活跃 + 删除（confirm）+ 导出（a[download]→export 路由） |
-| 4.3 | ChatBrowser → PanelChats | TavernSidebar/ChatList 主体保留，外壳从 DOM 注入宿主改为面板分区；新建/重命名/删除/打开 |
+| 4.3 | ChatBrowser → PanelChats | TavernSidebar/ChatList 主体同时复用于宿主侧栏与管理面板聊天分区；侧栏负责日常快速切换，面板负责集中管理；新建/重命名/删除/打开 |
 | 4.4 | PanelWorlds | 激活 checkbox + 条目浏览器（GET world/，搜索 Input 过滤 keys/content）+ 导入 + 删除 |
 | 4.5 | PanelPresets | 列表 + kind Pill + 设为活跃 + 删除 + 导入 |
 | 4.6 | PanelVariables | 全局变量编辑（GET/PUT variables；数值串自动转 number）+ 当前会话绑定聊天的局部变量只读展示 |
-| 4.7 | 侧栏 hack 退役 | 删 `useSidebarHost`/`visibleSidebarTree`/`[data-dsh-tavern-sidebar-host]`/`dt-floating-shell`/`toggle-sidebar` 事件/`sidebarAttached` 标志 + 对应 CSS |
+| 4.7 | 侧栏与面板共存 | 保留 `useSidebarHost`/`visibleSidebarTree`/`[data-dsh-tavern-sidebar-host]`，让 TavernSidebar 继续注入宿主侧栏；移除旧的独立 `dt-floating-shell`/`toggle-sidebar` 事件/`sidebarAttached` 标志；同一 ChatList 逻辑在面板聊天分区复用 |
 | 4.8 | locale | 新键 zh/en 成对增补（gates 强校验键齐性 + {param} 一致） |
 | 4.9 | gates 期望更新 | requiredSlots：`shell.overlay` id → `dsh-tavern-panel`；`sidebar.footer.action` id → `dsh-tavern-panel` |
 
@@ -61,7 +61,7 @@
 |---|---|
 | 5.1 | `pnpm check` 全绿（tsc/vitest/build/gates），失败项修复闭环 |
 | 5.2 | README 能力面 + UI 说明更新 |
-| 5.3 | proposal 0003 状态 → 已实现并验证；新增 `decisions/2026-08-15-tavern-management-panel.md`（记录：入口选型、Modal×overlay 叠层结论、删角色连聊天、变量数值收敛、DOM 爬取退役） |
+| 5.3 | proposal 0003 状态 → 已实现并验证；新增 `decisions/2026-08-15-tavern-management-panel.md`（记录：入口选型、Modal×overlay 叠层结论、删角色连聊天、变量数值收敛、侧栏聊天树与管理面板共存） |
 
 ## 风险与预案
 
