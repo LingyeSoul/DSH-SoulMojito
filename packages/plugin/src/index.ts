@@ -165,6 +165,52 @@ async function handleApi(ctx, req, res) {
     return sendJson(res, 404, { ok: false, message: 'character avatar not found' })
   }
 
+  if (method === 'GET' && route.startsWith('character/')) {
+    const name = decodeURIComponent(route.slice('character/'.length))
+    const found = await db.getCharacter(name)
+    if (!found) return sendJson(res, 404, { ok: false, message: 'character not found' })
+    return sendJson(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) })
+  }
+
+  if (method === 'DELETE' && route === 'character') {
+    const name = url.searchParams.get('name')
+    if (!name) throw new Error('name query is required')
+    const found = await db.getCharacter(name)
+    if (!found) return sendJson(res, 404, { ok: false, message: 'character not found' })
+    await db.deleteCharacter(name)
+    for (const groupName of await db.listGroups()) {
+      const group = await db.getGroup(groupName)
+      if (group?.members.includes(name)) {
+        await db.putGroup({
+          ...group,
+          members: group.members.filter((member) => member !== name),
+          disabledMembers: group.disabledMembers.filter((member) => member !== name),
+        })
+      }
+    }
+    // 群组绑定按组名寻址，与同名角色互不影响；这里只清 solo 绑定。
+    const state = await db.updateState((current) => ({
+      activeCharacter: current.activeCharacter === name ? undefined : current.activeCharacter,
+      sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings)
+        .filter(([, binding]) => !(binding.character === name && binding.group !== true))),
+    }))
+    await refreshActivePrompt()
+    return sendJson(res, 200, { ok: true, state })
+  }
+
+  if (method === 'GET' && route.startsWith('export/character/')) {
+    const name = decodeURIComponent(route.slice('export/character/'.length))
+    const found = await db.getCharacter(name)
+    if (!found) return sendJson(res, 404, { ok: false, message: 'character not found' })
+    const bytes = await db.exportCharacter(name)
+    const media = found.kind === 'charx' ? 'application/zip' : found.kind === 'json' ? 'application/json' : 'image/png'
+    res.statusCode = 200
+    res.setHeader('content-type', media)
+    res.setHeader('content-disposition', `attachment; filename="${encodeURIComponent(`${name}.${ext}`)}"`)
+    res.end(Buffer.from(bytes))
+    return
+  }
+
   if (method === 'GET' && route === 'models') {
     return sendJson(res, 200, { ok: true, ...await buildModelCatalog(ctx) })
   }
@@ -460,6 +506,74 @@ async function handleApi(ctx, req, res) {
     const result = await db.branchChat(body.character, body.chatId, body.messageId, body.revision, body.name)
     const snapshot = await db.getChatSnapshot(body.character, result.chatId)
     return sendJson(res, 200, { ok: true, id: result.chatId, chat: snapshot?.chat ?? result.chat, revision: snapshot?.revision })
+  }
+
+  if (method === 'GET' && route.startsWith('world/')) {
+    const name = decodeURIComponent(route.slice('world/'.length))
+    const book = await db.getWorld(name)
+    if (!book) return sendJson(res, 404, { ok: false, message: 'world not found' })
+    return sendJson(res, 200, { ok: true, book })
+  }
+
+  if (method === 'DELETE' && route === 'world') {
+    const name = url.searchParams.get('name')
+    if (!name) throw new Error('name query is required')
+    const book = await db.getWorld(name)
+    if (!book) return sendJson(res, 404, { ok: false, message: 'world not found' })
+    await db.deleteWorld(name)
+    const state = await db.updateState((current) => ({
+      activeWorlds: current.activeWorlds.filter((world) => world !== name),
+    }))
+    return sendJson(res, 200, { ok: true, state })
+  }
+
+  if (method === 'DELETE' && route === 'preset') {
+    const name = url.searchParams.get('name')
+    if (!name) throw new Error('name query is required')
+    const preset = await db.getPreset(name)
+    if (!preset) return sendJson(res, 404, { ok: false, message: 'preset not found' })
+    await db.deletePreset(name)
+    const state = await db.updateState((current) => {
+      const tc = current.textCompletion
+      const tcStale = tc !== undefined
+        && (tc.contextPreset === name || tc.instructPreset === name || tc.samplerPreset === name)
+      const textCompletion = tcStale
+        ? {
+            endpoint: tc.endpoint,
+            ...(tc.apiKey ? { apiKey: tc.apiKey } : {}),
+            streaming: tc.streaming !== false,
+            ...(tc.contextPreset !== undefined && tc.contextPreset !== name ? { contextPreset: tc.contextPreset } : {}),
+            ...(tc.instructPreset !== undefined && tc.instructPreset !== name ? { instructPreset: tc.instructPreset } : {}),
+            ...(tc.samplerPreset !== undefined && tc.samplerPreset !== name ? { samplerPreset: tc.samplerPreset } : {}),
+          }
+        : current.textCompletion
+      return {
+        activePreset: current.activePreset === name ? undefined : current.activePreset,
+        ...(tcStale ? { textCompletion } : {}),
+      }
+    })
+    return sendJson(res, 200, { ok: true, state })
+  }
+
+  if (method === 'GET' && route === 'variables') {
+    const state = await db.getState()
+    return sendJson(res, 200, { ok: true, globals: state.scriptGlobals })
+  }
+
+  if (method === 'PUT' && route === 'variables') {
+    const body = await readJson(req)
+    if (body.globals === null || typeof body.globals !== 'object' || Array.isArray(body.globals)) {
+      throw new Error('expected { globals }')
+    }
+    const globals: Record<string, string | number | boolean> = {}
+    for (const [key, value] of Object.entries(body.globals)) {
+      if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+        throw new Error(`global '${key}' must be a string, number or boolean`)
+      }
+      globals[key] = value
+    }
+    const state = await db.updateState(() => ({ scriptGlobals: globals }))
+    return sendJson(res, 200, { ok: true, globals: state.scriptGlobals })
   }
 
   if (method === 'GET' && route === 'regex') {

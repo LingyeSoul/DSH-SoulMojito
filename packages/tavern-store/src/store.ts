@@ -233,6 +233,10 @@ export class TavernStore {
         if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause
       }
     }
+    // 对齐 ST 语义：删角色连同其聊天记录（chats/<name>/ 一并移除）。
+    if (deleted) {
+      await fs.rm(path.join(this.root, 'chats', safeFileName(name)), { recursive: true, force: true })
+    }
     return deleted
   }
 

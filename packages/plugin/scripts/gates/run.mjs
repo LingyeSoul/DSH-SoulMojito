@@ -33,7 +33,10 @@ const REQUIRED_SERVER_ROUTES = [
   'models',
   'model',
   'import/character',
+  'character/',
+  'export/character/',
   'import/world',
+  'world/',
   'import/preset',
   'import/persona',
   'import/regex',
@@ -461,8 +464,8 @@ async function checkClientExecution(code) {
     ['conversation.view', 'tavern'],
     ['conversation.composer', undefined],
     ['conversation.session.header.actions', PLUGIN_NAME],
-    ['shell.overlay', 'dsh-tavern-sidebar-adapter'],
-    ['sidebar.footer.action', 'dsh-tavern-fallback'],
+    ['shell.overlay', 'dsh-tavern-panel'],
+    ['sidebar.footer.action', 'dsh-tavern-panel'],
   ]
   for (const [name, id] of requiredSlots) {
     if (!injections.includes(name)) problems.push(`client apply did not inject the '${name}' slot`)
@@ -724,7 +727,7 @@ const gates = [
     name: 'client-vm-mount',
     selfTest: async () => {
       const localeWiring = "ctx.effect(() => ctx.locale.register('dsh-tavern', { zh: { 'nav.title': '酒馆' }, en: { 'nav.title': 'Tavern' } })); ctx.locale.bind('dsh-tavern');"
-      const good = `window.__ModuleLoader__.load({ id: 'dsh-tavern', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); exports.name = 'dsh-tavern'; exports.inject = ['slots', 'locale']; exports.apply = (ctx) => { ${localeWiring} const entries = [['settings.section','dsh-tavern'],['conversation.view','tavern'],['conversation.composer',null],['conversation.session.header.actions','dsh-tavern'],['shell.overlay','dsh-tavern-sidebar-adapter'],['sidebar.footer.action','dsh-tavern-fallback']]; for (const [name,id] of entries) ctx.slots.inject(name, () => ctx.slots.register({ name, ...(id ? { id } : {}), ...(name === 'conversation.composer' ? { select: () => null } : {}) }, () => null)); }; return module.exports; } });`
+      const good = `window.__ModuleLoader__.load({ id: 'dsh-tavern', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); exports.name = 'dsh-tavern'; exports.inject = ['slots', 'locale']; exports.apply = (ctx) => { ${localeWiring} const entries = [['settings.section','dsh-tavern'],['conversation.view','tavern'],['conversation.composer',null],['conversation.session.header.actions','dsh-tavern'],['shell.overlay','dsh-tavern-panel'],['sidebar.footer.action','dsh-tavern-panel']]; for (const [name,id] of entries) ctx.slots.inject(name, () => ctx.slots.register({ name, ...(id ? { id } : {}), ...(name === 'conversation.composer' ? { select: () => null } : {}) }, () => null)); }; return module.exports; } });`
       const badSlot = good.replace("['conversation.view','tavern'],", '')
       const badLocale = good.replace("exports.inject = ['slots', 'locale']", "exports.inject = ['slots']")
       const badParity = good.replace("en: { 'nav.title': 'Tavern' }", "en: {}")

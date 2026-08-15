@@ -44,6 +44,21 @@ describe('TavernStore', () => {
     expect(await store.listCharacters()).toEqual([])
   }))
 
+  it('角色：删除连同聊天目录移除', withStore(async (store, dir) => {
+    await store.importCharacter(sampleCard)
+    const header = { user_name: 'unused', character_name: 'unused', chat_metadata: {} }
+    await store.createChat('Test Char', header, [
+      { name: 'Test Char', is_user: false, is_system: false, send_date: 'now', mes: 'hello' },
+    ])
+    expect(await store.listChats('Test Char')).toHaveLength(1)
+    expect(await store.deleteCharacter('Test Char')).toBe(true)
+    expect(await store.listChats('Test Char')).toEqual([])
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(path.join(dir, 'chats', 'Test Char'))).toBe(false)
+    // 卡不存在时为 no-op，不误删
+    expect(await store.deleteCharacter('Ghost')).toBe(false)
+  }))
+
   it('角色：PNG 原样导入（真实 ExampleCard），导出保留图像与卡数据', withStore(async (store) => {
     const png = new Uint8Array(readFileSync(`${fixturesDir}/ExampleCard.png`))
     const { card } = await store.importCharacter(png)

@@ -117,39 +117,39 @@ function parseCharacterBook(book) {
   return { name: book.name ?? "", entries };
 }
 function bookEntryToLoreEntry(raw, index) {
-  const ext = raw.extensions ?? {};
-  const uid = numOr(raw.id, ext["uid"], index);
+  const ext2 = raw.extensions ?? {};
+  const uid = numOr(raw.id, ext2["uid"], index);
   const entry = normalizeEntry({
     uid,
     key: raw.keys ?? [],
     keysecondary: raw.secondary_keys ?? [],
     comment: raw.comment ?? raw.name ?? "",
     content: raw.content ?? "",
-    constant: boolOr(raw.constant, ext["constant"], false),
+    constant: boolOr(raw.constant, ext2["constant"], false),
     disable: raw.enabled === false,
-    order: numOr(ext["order"], raw.insertion_order, 100),
-    position: bookPositionToSt(raw.position, ext["position"]),
-    selective: boolOr(raw.selective, ext["selective"], true),
-    selectiveLogic: num(ext["selectiveLogic"], 0),
-    caseSensitive: nullableBoolOr(raw.case_sensitive, ext["case_sensitive"]),
-    probability: numOr(ext["probability"], 100, 100),
-    useProbability: boolOr(ext["useProbability"], true, true),
-    depth: numOr(ext["depth"], 4, 4),
-    group: str(ext["group"]),
-    groupOverride: bool(ext["group_override"], false),
-    groupWeight: numOr(ext["group_weight"], 100, 100),
-    excludeRecursion: boolOr(ext["exclude_recursion"], false, false),
-    preventRecursion: boolOr(ext["prevent_recursion"], false, false),
-    delayUntilRecursion: numOr(ext["delay_until_recursion"], 0, 0),
-    scanDepth: nullableNum(ext["scan_depth"]),
-    matchWholeWords: nullableBool(ext["match_whole_words"]),
-    useGroupScoring: nullableBool(ext["use_group_scoring"]),
-    role: num(ext["role"], 0),
-    vectorized: bool(ext["vectorized"], false),
-    sticky: nullableNum(ext["sticky"]),
-    cooldown: nullableNum(ext["cooldown"]),
-    delay: nullableNum(ext["delay"]),
-    triggers: strArray(ext["triggers"])
+    order: numOr(ext2["order"], raw.insertion_order, 100),
+    position: bookPositionToSt(raw.position, ext2["position"]),
+    selective: boolOr(raw.selective, ext2["selective"], true),
+    selectiveLogic: num(ext2["selectiveLogic"], 0),
+    caseSensitive: nullableBoolOr(raw.case_sensitive, ext2["case_sensitive"]),
+    probability: numOr(ext2["probability"], 100, 100),
+    useProbability: boolOr(ext2["useProbability"], true, true),
+    depth: numOr(ext2["depth"], 4, 4),
+    group: str(ext2["group"]),
+    groupOverride: bool(ext2["group_override"], false),
+    groupWeight: numOr(ext2["group_weight"], 100, 100),
+    excludeRecursion: boolOr(ext2["exclude_recursion"], false, false),
+    preventRecursion: boolOr(ext2["prevent_recursion"], false, false),
+    delayUntilRecursion: numOr(ext2["delay_until_recursion"], 0, 0),
+    scanDepth: nullableNum(ext2["scan_depth"]),
+    matchWholeWords: nullableBool(ext2["match_whole_words"]),
+    useGroupScoring: nullableBool(ext2["use_group_scoring"]),
+    role: num(ext2["role"], 0),
+    vectorized: bool(ext2["vectorized"], false),
+    sticky: nullableNum(ext2["sticky"]),
+    cooldown: nullableNum(ext2["cooldown"]),
+    delay: nullableNum(ext2["delay"]),
+    triggers: strArray(ext2["triggers"])
   });
   const carried = {};
   if (raw.priority !== void 0) carried["book.priority"] = raw.priority;
@@ -3565,6 +3565,9 @@ var TavernStore = class _TavernStore {
         if (cause.code !== "ENOENT") throw cause;
       }
     }
+    if (deleted) {
+      await fs.rm(path.join(this.root, "chats", safeFileName(name2)), { recursive: true, force: true });
+    }
     return deleted;
   }
   /* ----------------------------- 世界书 ----------------------------- */
@@ -3995,7 +3998,7 @@ async function handleApi(ctx, req, res) {
       activeCard: active ? publicCard(active.card) : null,
       model: ctx.agentDefaultModel.currentSelection(),
       version: "0.1.0",
-      commit: "09b0bfd"
+      commit: "6f8f889"
     });
   }
   if (method === "GET" && route.startsWith("avatar/")) {
@@ -4013,6 +4016,47 @@ async function handleApi(ctx, req, res) {
       }
     }
     return sendJson(res, 404, { ok: false, message: "character avatar not found" });
+  }
+  if (method === "GET" && route.startsWith("character/")) {
+    const name2 = decodeURIComponent(route.slice("character/".length));
+    const found = await db.getCharacter(name2);
+    if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
+    return sendJson(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) });
+  }
+  if (method === "DELETE" && route === "character") {
+    const name2 = url.searchParams.get("name");
+    if (!name2) throw new Error("name query is required");
+    const found = await db.getCharacter(name2);
+    if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
+    await db.deleteCharacter(name2);
+    for (const groupName of await db.listGroups()) {
+      const group2 = await db.getGroup(groupName);
+      if (group2?.members.includes(name2)) {
+        await db.putGroup({
+          ...group2,
+          members: group2.members.filter((member) => member !== name2),
+          disabledMembers: group2.disabledMembers.filter((member) => member !== name2)
+        });
+      }
+    }
+    const state = await db.updateState((current) => ({
+      activeCharacter: current.activeCharacter === name2 ? void 0 : current.activeCharacter,
+      sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.character === name2 && binding.group !== true)))
+    }));
+    await refreshActivePrompt();
+    return sendJson(res, 200, { ok: true, state });
+  }
+  if (method === "GET" && route.startsWith("export/character/")) {
+    const name2 = decodeURIComponent(route.slice("export/character/".length));
+    const found = await db.getCharacter(name2);
+    if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
+    const bytes = await db.exportCharacter(name2);
+    const media = found.kind === "charx" ? "application/zip" : found.kind === "json" ? "application/json" : "image/png";
+    res.statusCode = 200;
+    res.setHeader("content-type", media);
+    res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(`${name2}.${ext}`)}"`);
+    res.end(Buffer.from(bytes));
+    return;
   }
   if (method === "GET" && route === "models") {
     return sendJson(res, 200, { ok: true, ...await buildModelCatalog(ctx) });
@@ -4292,6 +4336,66 @@ async function handleApi(ctx, req, res) {
     const result = await db.branchChat(body.character, body.chatId, body.messageId, body.revision, body.name);
     const snapshot = await db.getChatSnapshot(body.character, result.chatId);
     return sendJson(res, 200, { ok: true, id: result.chatId, chat: snapshot?.chat ?? result.chat, revision: snapshot?.revision });
+  }
+  if (method === "GET" && route.startsWith("world/")) {
+    const name2 = decodeURIComponent(route.slice("world/".length));
+    const book = await db.getWorld(name2);
+    if (!book) return sendJson(res, 404, { ok: false, message: "world not found" });
+    return sendJson(res, 200, { ok: true, book });
+  }
+  if (method === "DELETE" && route === "world") {
+    const name2 = url.searchParams.get("name");
+    if (!name2) throw new Error("name query is required");
+    const book = await db.getWorld(name2);
+    if (!book) return sendJson(res, 404, { ok: false, message: "world not found" });
+    await db.deleteWorld(name2);
+    const state = await db.updateState((current) => ({
+      activeWorlds: current.activeWorlds.filter((world) => world !== name2)
+    }));
+    return sendJson(res, 200, { ok: true, state });
+  }
+  if (method === "DELETE" && route === "preset") {
+    const name2 = url.searchParams.get("name");
+    if (!name2) throw new Error("name query is required");
+    const preset = await db.getPreset(name2);
+    if (!preset) return sendJson(res, 404, { ok: false, message: "preset not found" });
+    await db.deletePreset(name2);
+    const state = await db.updateState((current) => {
+      const tc = current.textCompletion;
+      const tcStale = tc !== void 0 && (tc.contextPreset === name2 || tc.instructPreset === name2 || tc.samplerPreset === name2);
+      const textCompletion = tcStale ? {
+        endpoint: tc.endpoint,
+        ...tc.apiKey ? { apiKey: tc.apiKey } : {},
+        streaming: tc.streaming !== false,
+        ...tc.contextPreset !== void 0 && tc.contextPreset !== name2 ? { contextPreset: tc.contextPreset } : {},
+        ...tc.instructPreset !== void 0 && tc.instructPreset !== name2 ? { instructPreset: tc.instructPreset } : {},
+        ...tc.samplerPreset !== void 0 && tc.samplerPreset !== name2 ? { samplerPreset: tc.samplerPreset } : {}
+      } : current.textCompletion;
+      return {
+        activePreset: current.activePreset === name2 ? void 0 : current.activePreset,
+        ...tcStale ? { textCompletion } : {}
+      };
+    });
+    return sendJson(res, 200, { ok: true, state });
+  }
+  if (method === "GET" && route === "variables") {
+    const state = await db.getState();
+    return sendJson(res, 200, { ok: true, globals: state.scriptGlobals });
+  }
+  if (method === "PUT" && route === "variables") {
+    const body = await readJson(req);
+    if (body.globals === null || typeof body.globals !== "object" || Array.isArray(body.globals)) {
+      throw new Error("expected { globals }");
+    }
+    const globals = {};
+    for (const [key, value] of Object.entries(body.globals)) {
+      if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+        throw new Error(`global '${key}' must be a string, number or boolean`);
+      }
+      globals[key] = value;
+    }
+    const state = await db.updateState(() => ({ scriptGlobals: globals }));
+    return sendJson(res, 200, { ok: true, globals: state.scriptGlobals });
   }
   if (method === "GET" && route === "regex") {
     const state = await db.getState();
@@ -5144,8 +5248,8 @@ function deepFreeze(value) {
 function publicCard(card) {
   return { spec: card.spec, specVersion: card.specVersion, data: card.data };
 }
-function imageContentType(ext) {
-  const normalized = String(ext || "").toLowerCase();
+function imageContentType(ext2) {
+  const normalized = String(ext2 || "").toLowerCase();
   return normalized === "jpg" || normalized === "jpeg" ? "image/jpeg" : normalized === "webp" ? "image/webp" : normalized === "gif" ? "image/gif" : "image/png";
 }
 function roleName(role) {
