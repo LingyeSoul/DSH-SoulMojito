@@ -187,6 +187,7 @@ GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern �
 - [`decisions/2026-08-15-v2-feature-scope.md`](decisions/2026-08-15-v2-feature-scope.md)：v2 功能面的范围与形态选择。
 - [`docs/proposals/0003-tavern-management-panel.md`](docs/proposals/0003-tavern-management-panel.md)：Tavern 管理面板的信息架构、slot 选择和交互范围。
 - [`docs/proposals/0004-agent-tavern-architecture.md`](docs/proposals/0004-agent-tavern-architecture.md)：AgentTavern 原生 AgentLoop 架构、记忆/变量工具、遗忘策略和 ST 兼容模式。
+- [`docs/plans/2026-08-16-agent-tavern-implementation.md`](docs/plans/2026-08-16-agent-tavern-implementation.md)：AgentTavern 的分阶段施工计划、宿主门禁、迁移规则与验证矩阵。
 - [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)：DSH `0.1.0-rc.6` 原生注入、compaction 与 Fabric fallback 审计。
 - [`decisions/2026-08-15-tavern-management-panel.md`](decisions/2026-08-15-tavern-management-panel.md)：面板入口、角色删除级联、变量与侧栏共存的落地决策。
 

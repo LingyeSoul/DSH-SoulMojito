@@ -608,7 +608,11 @@ function hasOfficialDependencies(root) {
 }
 
 function locateOfficialDependencyRoot() {
-  const candidates = []
+  const candidates = [
+    // Keep the rc.6 runtime copied into the workspace usable in restricted
+    // environments where the global npm installation is not readable.
+    join(REPO_ROOT, '.npm-cache', 'dsh-runtime', 'node_modules'),
+  ]
   for (const entry of (process.env.NODE_PATH ?? '').split(delimiter).filter(Boolean)) {
     candidates.push(entry, join(entry, '@deepseek-ai', 'dsh', 'node_modules'))
   }

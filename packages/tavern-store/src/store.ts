@@ -39,12 +39,24 @@ import {
   type WorldBookIR,
 } from '@dsh-tavern/format'
 
-export interface TavernSessionBinding {
+export type TavernArchitecture = 'agent-tavern' | 'st'
+export type TavernContextMode = 'dsh-native' | 'agent-managed'
+
+interface TavernSessionBase {
   character: string
   chatId: string
   /** 群聊绑定时为 true；character 字段承载群名。 */
   group?: boolean
 }
+
+export type TavernSessionBinding =
+  | (TavernSessionBase & {
+      architecture: 'agent-tavern'
+      contextMode: TavernContextMode
+    })
+  | (TavernSessionBase & {
+      architecture: 'st'
+    })
 
 /** 一个 DSH session 的模型选择；缺省回落 agentDefaultModel。 */
 export interface TavernModelSelection {
@@ -74,6 +86,10 @@ export interface TavernState {
   nativeAgentPersona?: boolean
   /** DSH session 到 Tavern 角色/聊天的持久绑定。 */
   sessionBindings: Record<string, TavernSessionBinding>
+  /** 新建会话的架构默认值；不影响已有 binding。 */
+  defaultArchitecture: TavernArchitecture
+  /** 新建 AgentTavern 会话的上下文模式；不影响已有 binding。 */
+  defaultContextMode: TavernContextMode
   /** DSH session 到模型选择的持久映射；随 bindings/prune 一同清理。 */
   modelSelections: Record<string, TavernModelSelection>
   /** 每聊天元数据（最后激活时间、swipe 指针等自由袋） */
@@ -127,6 +143,8 @@ export class ChatRevisionConflictError extends Error {
 const DEFAULT_STATE: TavernState = {
   activeWorlds: [],
   sessionBindings: {},
+  defaultArchitecture: 'agent-tavern',
+  defaultContextMode: 'dsh-native',
   modelSelections: {},
   chats: {},
   regexScripts: [],
@@ -593,7 +611,9 @@ export class TavernStore {
       ...structuredClone(DEFAULT_STATE),
       ...parsed,
       activeWorlds: parsed.activeWorlds ?? [],
-      sessionBindings: parsed.sessionBindings ?? {},
+      sessionBindings: normalizeSessionBindings(parsed.sessionBindings),
+      defaultArchitecture: parsed.defaultArchitecture === 'st' ? 'st' : 'agent-tavern',
+      defaultContextMode: parsed.defaultContextMode === 'agent-managed' ? 'agent-managed' : 'dsh-native',
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
@@ -646,6 +666,39 @@ export class TavernStore {
     await fs.writeFile(tmp, bytes)
     await fs.rename(tmp, file)
   }
+}
+
+/**
+ * Normalizes persisted bindings at the read seam. Bindings from before the
+ * architecture split are ST sessions so an upgrade cannot silently change
+ * their generation semantics. Unsupported group AgentTavern bindings also
+ * fail closed to ST until actor metadata exists in the host event stream.
+ */
+export function normalizeTavernSessionBinding(value: unknown): TavernSessionBinding | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const candidate = value as Record<string, unknown>
+  if (typeof candidate.character !== 'string' || candidate.character.trim() === '') return undefined
+  if (typeof candidate.chatId !== 'string' || candidate.chatId.trim() === '') return undefined
+  const base = {
+    character: candidate.character,
+    chatId: candidate.chatId,
+    ...(candidate.group === true ? { group: true as const } : {}),
+  }
+  if (candidate.architecture === 'agent-tavern' && base.group !== true) {
+    return {
+      ...base,
+      architecture: 'agent-tavern',
+      contextMode: candidate.contextMode === 'agent-managed' ? 'agent-managed' : 'dsh-native',
+    }
+  }
+  return { ...base, architecture: 'st' }
+}
+
+function normalizeSessionBindings(value: unknown): Record<string, TavernSessionBinding> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value)
+    .map(([sessionId, binding]) => [sessionId, normalizeTavernSessionBinding(binding)] as const)
+    .filter((entry): entry is readonly [string, TavernSessionBinding] => entry[1] !== undefined))
 }
 
 function safeFileName(name: string): string {

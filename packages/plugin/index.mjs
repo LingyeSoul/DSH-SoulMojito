@@ -4,8 +4,9 @@
 // packages/plugin/src/index.ts
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join as join2, relative, resolve } from "node:path";
+import { join as join3, relative, resolve } from "node:path";
 
 // packages/tavern-format/src/png.ts
 var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -3998,6 +3999,8 @@ var ChatRevisionConflictError = class extends Error {
 var DEFAULT_STATE = {
   activeWorlds: [],
   sessionBindings: {},
+  defaultArchitecture: "agent-tavern",
+  defaultContextMode: "dsh-native",
   modelSelections: {},
   chats: {},
   regexScripts: [],
@@ -4398,7 +4401,9 @@ var TavernStore = class _TavernStore {
       ...structuredClone(DEFAULT_STATE),
       ...parsed,
       activeWorlds: parsed.activeWorlds ?? [],
-      sessionBindings: parsed.sessionBindings ?? {},
+      sessionBindings: normalizeSessionBindings(parsed.sessionBindings),
+      defaultArchitecture: parsed.defaultArchitecture === "st" ? "st" : "agent-tavern",
+      defaultContextMode: parsed.defaultContextMode === "agent-managed" ? "agent-managed" : "dsh-native",
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
@@ -4452,6 +4457,29 @@ var TavernStore = class _TavernStore {
     await fs.rename(tmp, file);
   }
 };
+function normalizeTavernSessionBinding(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const candidate = value;
+  if (typeof candidate.character !== "string" || candidate.character.trim() === "") return void 0;
+  if (typeof candidate.chatId !== "string" || candidate.chatId.trim() === "") return void 0;
+  const base = {
+    character: candidate.character,
+    chatId: candidate.chatId,
+    ...candidate.group === true ? { group: true } : {}
+  };
+  if (candidate.architecture === "agent-tavern" && base.group !== true) {
+    return {
+      ...base,
+      architecture: "agent-tavern",
+      contextMode: candidate.contextMode === "agent-managed" ? "agent-managed" : "dsh-native"
+    };
+  }
+  return { ...base, architecture: "st" };
+}
+function normalizeSessionBindings(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).map(([sessionId, binding]) => [sessionId, normalizeTavernSessionBinding(binding)]).filter((entry) => entry[1] !== void 0));
+}
 function safeFileName(name2) {
   const cleaned = name2.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim();
   return cleaned.length > 0 ? cleaned.slice(0, 120) : "_unnamed";
@@ -4475,19 +4503,300 @@ function jsonBytes(obj) {
   return new Uint8Array(Buffer.from(JSON.stringify(obj, null, 2), "utf8"));
 }
 
+// packages/tavern-store/src/memory.ts
+var MAX_CONTENT = 64 * 1024;
+
+// packages/tavern-store/src/variable.ts
+var MAX_VALUE_BYTES = 32 * 1024;
+var MAX_SCOPE_BYTES = 256 * 1024;
+
+// packages/plugin/src/agent-tavern/capabilities.ts
+var AGENT_TAVERN_PRESET_ID = "agent-tavern";
+var REASONS = {
+  preset: "DSH agent preset mounting is unavailable.",
+  "scoped-prompt": "DSH agent-scoped system prompt registration is unavailable.",
+  tools: "DSH native tool registration is unavailable.",
+  "durable-events": "DSH durable agent session events are unavailable.",
+  "agent/context": "The host does not expose the agent/context history projection seam.",
+  "projection-aware-compaction": "The host cannot measure compaction against the effective AgentTavern projection."
+};
+function inspectAgentTavernCapabilities(adapter, presetId = AGENT_TAVERN_PRESET_ID) {
+  const nativeMissing = [];
+  if (typeof adapter.preset?.mount !== "function") nativeMissing.push("preset");
+  if (adapter.scopedPrompt !== true) nativeMissing.push("scoped-prompt");
+  if (adapter.tools !== true) nativeMissing.push("tools");
+  if (adapter.durableEvents !== true) nativeMissing.push("durable-events");
+  const managedMissing = [...nativeMissing];
+  if (adapter.contextProjection !== true) managedMissing.push("agent/context");
+  if (adapter.projectionAwareCompaction !== true) managedMissing.push("projection-aware-compaction");
+  return {
+    presetId,
+    native: status(nativeMissing),
+    managed: status(managedMissing),
+    checkedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+async function bootstrapAgentTavernCapabilities(adapter, options = {}) {
+  const presetId = options.presetId ?? AGENT_TAVERN_PRESET_ID;
+  let result = inspectAgentTavernCapabilities(adapter, presetId);
+  if (options.ensurePreset === void 0) return result;
+  try {
+    await options.ensurePreset();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    result = {
+      ...result,
+      native: unavailableWithReason(result.native, "preset", reason),
+      managed: unavailableWithReason(result.managed, "preset", reason)
+    };
+  }
+  return result;
+}
+function status(missing) {
+  return {
+    available: missing.length === 0,
+    missing: [...missing],
+    reasons: missing.map((name2) => REASONS[name2])
+  };
+}
+function unavailableWithReason(current, name2, detail) {
+  const missing = current.missing.includes(name2) ? current.missing : [name2, ...current.missing];
+  return { available: false, missing, reasons: [REASONS[name2], detail, ...current.reasons] };
+}
+
+// packages/plugin/src/agent-tavern/dsh-adapter.ts
+function createDshAgentTavernAdapter(ctx) {
+  return {
+    preset: typeof ctx.agentPresets?.mount === "function" ? {
+      mount: (agentContext, presetId) => ctx.agentPresets.mount(agentContext, presetId)
+    } : void 0,
+    scopedPrompt: typeof ctx.systemPrompt?.section === "function" && typeof ctx.systemPrompt?.context === "function",
+    tools: typeof ctx.tools?.register === "function",
+    // Agent.session is the durable event source; a live registry is the host's
+    // public proof that those sessions are available to the plugin.
+    durableEvents: typeof ctx.agents?.get === "function",
+    contextProjection: false,
+    projectionAwareCompaction: false
+  };
+}
+
+// packages/plugin/src/agent-tavern/projector.ts
+import { createHash as createHash2 } from "node:crypto";
+import { promises as fs2 } from "node:fs";
+import { join as join2 } from "node:path";
+var AgentTavernProjector = class _AgentTavernProjector {
+  constructor(root, store2) {
+    this.root = root;
+    this.store = store2;
+  }
+  tails = /* @__PURE__ */ new Map();
+  checkpoints = /* @__PURE__ */ new Map();
+  static async open(tavernRoot, store2) {
+    const root = join2(tavernRoot, "projections");
+    await fs2.mkdir(root, { recursive: true });
+    return new _AgentTavernProjector(root, store2);
+  }
+  project(session, event) {
+    const previous = this.tails.get(session.id) ?? Promise.resolve();
+    const current = previous.catch(() => {
+    }).then(() => this.projectOne(session, event));
+    this.tails.set(session.id, current);
+    return current.finally(() => {
+      if (this.tails.get(session.id) === current) this.tails.delete(session.id);
+    });
+  }
+  async replay(session) {
+    const events = [...session.events].sort((left, right) => left.seq - right.seq);
+    for (const event of events) await this.project(session, event);
+  }
+  async status(sessionId) {
+    return structuredClone(await this.readCheckpoint(sessionId));
+  }
+  async projectOne(session, event) {
+    if (!Number.isSafeInteger(event.seq) || event.seq < 0) throw new Error("invalid DSH event cursor");
+    const checkpoint = await this.readCheckpoint(session.id);
+    if (event.seq <= checkpoint.lastCursor) return;
+    try {
+      const state = await this.store.getState();
+      const binding = state.sessionBindings[session.id];
+      if (binding?.architecture === "agent-tavern" && binding.group !== true) {
+        const message = projectMessage(session, event, binding);
+        if (message !== void 0) await this.appendMessage(binding, session.id, event.seq, message);
+      }
+      await this.writeCheckpoint({
+        version: 1,
+        sessionId: session.id,
+        lastCursor: event.seq,
+        status: "ok",
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+    } catch (error) {
+      const pending = {
+        version: 1,
+        sessionId: session.id,
+        lastCursor: checkpoint.lastCursor,
+        status: "pending",
+        pendingCursor: event.seq,
+        error: error instanceof Error ? error.message : String(error),
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      await this.writeCheckpoint(pending);
+      throw error;
+    }
+  }
+  async appendMessage(binding, sessionId, eventSeq, message) {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const snapshot = await this.store.getChatSnapshot(binding.character, binding.chatId);
+      if (!snapshot) throw new Error("AgentTavern projection target chat not found");
+      if (snapshot.chat.messages.some((candidate) => projectionIdentity(candidate, sessionId, eventSeq))) return;
+      const next = structuredClone(snapshot.chat);
+      next.messages.push(message.is_user ? { ...message, name: next.header.user_name || "User" } : message);
+      try {
+        await this.store.saveChat(binding.character, binding.chatId, next, snapshot.revision);
+        return;
+      } catch (error) {
+        if (!(error instanceof ChatRevisionConflictError) || attempt === 3) throw error;
+      }
+    }
+  }
+  async readCheckpoint(sessionId) {
+    const cached = this.checkpoints.get(sessionId);
+    if (cached) return cached;
+    try {
+      const parsed = JSON.parse(await fs2.readFile(this.checkpointPath(sessionId), "utf8"));
+      validateCheckpoint(parsed, sessionId);
+      this.checkpoints.set(sessionId, parsed);
+      return parsed;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      const empty = {
+        version: 1,
+        sessionId,
+        lastCursor: -1,
+        status: "ok",
+        updatedAt: (/* @__PURE__ */ new Date(0)).toISOString()
+      };
+      this.checkpoints.set(sessionId, empty);
+      return empty;
+    }
+  }
+  async writeCheckpoint(checkpoint) {
+    const target = this.checkpointPath(checkpoint.sessionId);
+    const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+    await fs2.writeFile(temporary, `${JSON.stringify(checkpoint)}
+`, "utf8");
+    await fs2.rename(temporary, target);
+    this.checkpoints.set(checkpoint.sessionId, checkpoint);
+  }
+  checkpointPath(sessionId) {
+    const name2 = createHash2("sha256").update(sessionId).digest("hex");
+    return join2(this.root, `${name2}.json`);
+  }
+};
+function projectMessage(session, event, binding) {
+  if (event.type === "user/message") {
+    if (event.data?.source?.kind !== "user") return void 0;
+    const text2 = messageText(event.data?.content);
+    if (text2 === "") return void 0;
+    return {
+      name: "User",
+      is_user: true,
+      is_system: false,
+      send_date: eventDate(event.time),
+      mes: text2,
+      extra: projectionExtra(session, event, binding.contextMode, turnAt(session, event.seq))
+    };
+  }
+  if (event.type !== "assistant/message") return void 0;
+  const content = event.data?.message?.content;
+  if (!Array.isArray(content) || content.some((block) => block?.type === "tool-call")) return void 0;
+  const text = messageText(content);
+  if (text === "") return void 0;
+  return {
+    name: binding.character,
+    is_user: false,
+    is_system: false,
+    send_date: eventDate(event.time),
+    mes: text,
+    extra: projectionExtra(session, event, binding.contextMode, event.data?.turn, event.data?.step)
+  };
+}
+function projectionExtra(session, event, contextMode, turn, step) {
+  return {
+    agentTavern: {
+      architecture: "agent-tavern",
+      contextMode,
+      sessionId: session.id,
+      eventSeq: event.seq,
+      messageId: event.type === "assistant/message" ? event.data?.message?.id : event.data?.id,
+      ...Number.isSafeInteger(turn) ? { turn } : {},
+      ...Number.isSafeInteger(step) ? { step } : {}
+    }
+  };
+}
+function projectionIdentity(message, sessionId, eventSeq) {
+  const source = message.extra?.agentTavern;
+  return source?.sessionId === sessionId && source.eventSeq === eventSeq;
+}
+function messageText(content) {
+  if (!Array.isArray(content)) return "";
+  return content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("").trim();
+}
+function turnAt(session, cursor) {
+  let turn;
+  for (const event of session.events) {
+    if (event.seq > cursor) break;
+    if (event.type === "turn/start" && Number.isSafeInteger(event.data?.turn)) turn = event.data.turn;
+  }
+  return turn;
+}
+function eventDate(time) {
+  return new Date(Number.isFinite(time) ? time : Date.now()).toISOString();
+}
+function validateCheckpoint(value, sessionId) {
+  if (value.version !== 1 || value.sessionId !== sessionId || !Number.isSafeInteger(value.lastCursor) || !["ok", "pending"].includes(value.status)) {
+    throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`);
+  }
+}
+
 // packages/plugin/src/index.ts
 var name = "dsh-tavern";
-var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents"];
+var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents", "agentPresets", "tools"];
 var API = "/api/dsh-tavern";
 var DEFAULT_USER = "User";
 var BUILD_INFO = readBuildInfo();
 var TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit);
 var storePromise;
 var activeAgentPrompt = "";
+var agentTavernCapabilities = inspectAgentTavernCapabilities({});
+var agentTavernCapabilitiesPromise;
+var agentTavernProjectorPromise;
+var TavernArchitectureConflictError = class extends Error {
+  code = "TAVERN_ARCHITECTURE_CONFLICT";
+  constructor(message) {
+    super(message);
+    this.name = "TavernArchitectureConflictError";
+  }
+};
 function store() {
   return storePromise ??= TavernStore.open(dshHomePath("tavern"));
 }
 function apply(ctx) {
+  const adapter = createDshAgentTavernAdapter(ctx);
+  agentTavernCapabilitiesPromise = bootstrapAgentTavernCapabilities(adapter, {
+    presetId: AGENT_TAVERN_PRESET_ID,
+    ensurePreset: ensureBundledAgentTavernPreset
+  });
+  void agentTavernCapabilitiesPromise.then((value) => {
+    agentTavernCapabilities = value;
+  });
+  agentTavernProjectorPromise = store().then((db) => AgentTavernProjector.open(dshHomePath("tavern"), db));
+  ctx.on?.("session/event", (session, event) => {
+    void agentTavernProjectorPromise.then((projector) => projector.project(session, event)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection failed: ${error instanceof Error ? error.message : String(error)}`));
+  });
+  ctx.on?.("agent/created", ({ agent }) => {
+    void agentTavernProjectorPromise.then((projector) => projector.replay(agent.session)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`));
+  });
   void refreshActivePrompt();
   ctx.systemPrompt.section({
     name: "dsh-tavern:active-character",
@@ -4527,10 +4836,29 @@ function apply(ctx) {
       const chat = await db.getChat(parsed.character, parsed.chatId);
       if (!chat) return { kind: "error", text: "Tavern chat not found." };
       const previous = (await db.getState()).sessionBindings[agent.id];
-      await bindSession(db, agent.id, parsed.character, parsed.chatId, parsed.group === true);
+      await assertAgentTavernAvailable(parsed.architecture, parsed.contextMode);
+      if (parsed.architecture === "agent-tavern") {
+        if (agent.session.events.some((event) => event.type === "turn/start")) {
+          throw new TavernArchitectureConflictError("This host session already started; AgentTavern preset selection is locked.");
+        }
+        if (typeof ctx.agentPresets?.recompose !== "function") {
+          throw new TavernArchitectureConflictError("The host cannot recompose a blank session with the AgentTavern preset.");
+        }
+        const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_TAVERN_PRESET_ID);
+        agent.session.append("agent-preset/selected", { agentPreset: preset.id });
+      }
+      await bindSession(
+        db,
+        agent.id,
+        parsed.character,
+        parsed.chatId,
+        parsed.group === true,
+        parsed.architecture,
+        parsed.contextMode
+      );
       await refreshActivePrompt();
-      occupyHostSession(agent);
-      if (previous?.character !== parsed.character || previous.chatId !== parsed.chatId) {
+      if (parsed.architecture === "st") occupyHostSession(agent);
+      if (parsed.architecture === "st" && (previous?.character !== parsed.character || previous.chatId !== parsed.chatId)) {
         agent.session.append("user/message", createMessage({
           role: "user",
           content: [{ type: "text", text: `Tavern roleplay chat for ${parsed.character}.` }],
@@ -4549,12 +4877,12 @@ function apply(ctx) {
       } catch (error) {
         if (!res.writableEnded) {
           const message = error instanceof Error ? error.message : String(error);
-          const code = error instanceof ChatRevisionConflictError ? error.code : void 0;
+          const code = error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError ? error.code : void 0;
           if (res.headersSent) {
             res.write(JSON.stringify({ type: "error", message, code }) + "\n");
             res.end();
           } else {
-            sendJson(res, error instanceof ChatRevisionConflictError ? 409 : 500, { ok: false, message, code });
+            sendJson(res, error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError ? 409 : 500, { ok: false, message, code });
           }
         }
       }
@@ -4567,6 +4895,7 @@ async function handleApi(ctx, req, res) {
   const method = req.method ?? "GET";
   const db = await store();
   if (method === "GET" && route === "bootstrap") {
+    await agentTavernCapabilitiesPromise;
     const state = await db.getState();
     const active = state.activeCharacter ? await db.getCharacter(state.activeCharacter) : void 0;
     const groups = [];
@@ -4596,7 +4925,8 @@ async function handleApi(ctx, req, res) {
       activeCard: active ? publicCard(active.card) : null,
       model: ctx.agentDefaultModel.currentSelection(),
       version: BUILD_INFO.version,
-      commit: TAVERN_COMMIT
+      commit: TAVERN_COMMIT,
+      agentTavern: agentTavernCapabilities
     });
   }
   if (method === "GET" && route.startsWith("avatar/")) {
@@ -4620,6 +4950,13 @@ async function handleApi(ctx, req, res) {
     const found = await db.getCharacter(name2);
     if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
     return sendJson(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) });
+  }
+  if (method === "GET" && route === "projection") {
+    const sessionId = url.searchParams.get("sessionId");
+    if (!sessionId) throw new Error("sessionId query is required");
+    const projector = await agentTavernProjectorPromise;
+    if (!projector) throw new Error("AgentTavern projector is unavailable");
+    return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
   }
   if (method === "PUT" && route.startsWith("character/")) {
     const oldName = decodeURIComponent(route.slice("character/".length));
@@ -4905,7 +5242,11 @@ async function handleApi(ctx, req, res) {
     }
     const chat = await db.getChat(body.character, body.chatId);
     if (!chat) throw new Error("chat not found");
-    const state = await bindSession(db, body.sessionId, body.character, body.chatId, body.group === true);
+    const group2 = body.group === true;
+    const architecture = group2 ? "st" : requestedArchitecture(body.architecture);
+    const contextMode = requestedContextMode(body.contextMode);
+    await assertAgentTavernAvailable(architecture, contextMode);
+    const state = await bindSession(db, body.sessionId, body.character, body.chatId, group2, architecture, contextMode);
     await refreshActivePrompt();
     return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] });
   }
@@ -5192,6 +5533,7 @@ async function handleApi(ctx, req, res) {
 async function generate(ctx, req, res, db) {
   const body = await readJson(req);
   const state = await db.getState();
+  assertStGenerationBinding(state, body.sessionId);
   const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
   const chatId = body.chatId;
   const userText = typeof body.message === "string" ? body.message.trim() : "";
@@ -5568,6 +5910,7 @@ function chatVariables(chat) {
 async function runTavernScript(ctx, req, res, db) {
   const body = await readJson(req);
   const state = await db.getState();
+  assertStGenerationBinding(state, body.sessionId);
   const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
   const chatId = body.chatId;
   if (!characterName || typeof chatId !== "string") throw new Error("character and chatId are required");
@@ -5914,14 +6257,65 @@ async function refreshActivePrompt() {
     activeAgentPrompt = "";
   }
 }
-async function bindSession(db, sessionId, character, chatId, group2 = false) {
+async function ensureBundledAgentTavernPreset() {
+  const bundledRoots = [
+    resolve(import.meta.dirname, "agent-presets"),
+    resolve(import.meta.dirname, "..", "agent-presets")
+  ];
+  const bundledRoot = bundledRoots.find((candidate) => {
+    try {
+      return readFileSync(resolve(candidate, AGENT_TAVERN_PRESET_ID, "agent.cordis.yml"), "utf8").trim() !== "";
+    } catch {
+      return false;
+    }
+  });
+  if (!bundledRoot) throw new Error("bundled AgentTavern preset is missing from the plugin package");
+  const sourceRoot = resolve(bundledRoot, AGENT_TAVERN_PRESET_ID);
+  const targetRoot = dshHomePath(".agent-presets", AGENT_TAVERN_PRESET_ID);
+  await mkdir(targetRoot, { recursive: true });
+  for (const file of ["preset.yml", "agent.cordis.yml"]) {
+    const target = resolve(targetRoot, file);
+    try {
+      await writeFile(target, await readFile(resolve(sourceRoot, file)), { flag: "wx" });
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+    }
+  }
+}
+async function bindSession(db, sessionId, character, chatId, group2 = false, architecture = "st", contextMode = "dsh-native") {
+  const binding = architecture === "agent-tavern" && !group2 ? { architecture: "agent-tavern", contextMode, character, chatId } : { architecture: "st", character, chatId, ...group2 ? { group: true } : {} };
   return db.updateState((state) => ({
     activeCharacter: group2 ? state.activeCharacter : character,
     sessionBindings: {
       ...state.sessionBindings,
-      [sessionId]: { character, chatId, ...group2 ? { group: true } : {} }
+      [sessionId]: binding
     }
   }));
+}
+async function assertAgentTavernAvailable(architecture, contextMode) {
+  if (architecture !== "agent-tavern") return;
+  const capabilities = await agentTavernCapabilitiesPromise ?? agentTavernCapabilities;
+  const status2 = contextMode === "agent-managed" ? capabilities.managed : capabilities.native;
+  if (!status2.available) {
+    throw new TavernArchitectureConflictError(`AgentTavern ${contextMode} is unavailable: ${status2.reasons.join(" ")}`);
+  }
+}
+function requestedArchitecture(value) {
+  if (value === void 0 || value === "st") return "st";
+  if (value === "agent-tavern") return value;
+  throw new Error(`unsupported Tavern architecture '${String(value)}'`);
+}
+function requestedContextMode(value) {
+  if (value === void 0 || value === "dsh-native") return "dsh-native";
+  if (value === "agent-managed") return value;
+  throw new Error(`unsupported AgentTavern context mode '${String(value)}'`);
+}
+function assertStGenerationBinding(state, sessionId) {
+  if (typeof sessionId !== "string") return;
+  const binding = state.sessionBindings[sessionId];
+  if (binding?.architecture === "agent-tavern") {
+    throw new TavernArchitectureConflictError("AgentTavern sessions use the DSH native AgentLoop; the ST generation endpoint is unavailable.");
+  }
 }
 function occupyHostSession(agent) {
   try {
@@ -6035,14 +6429,23 @@ function parseTavernSessionCommand(rawInput) {
     const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (parsed.action === "close") return { action: "close" };
     if (typeof parsed.character !== "string" || typeof parsed.chatId !== "string") return null;
-    return { action: "open", character: parsed.character, chatId: parsed.chatId, group: parsed.group === true };
+    const group2 = parsed.group === true;
+    const architecture = group2 ? "st" : requestedArchitecture(parsed.architecture);
+    return {
+      action: "open",
+      character: parsed.character,
+      chatId: parsed.chatId,
+      group: group2,
+      architecture,
+      contextMode: requestedContextMode(parsed.contextMode)
+    };
   } catch {
     return null;
   }
 }
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
-  return join2(resolve(configured || join2(homedir(), ".dsh")), ...segments);
+  return join3(resolve(configured || join3(homedir(), ".dsh")), ...segments);
 }
 function readBuildInfo() {
   let version = "unknown";
@@ -6161,8 +6564,8 @@ function defaultPreset() {
     prompt_order: [{ character_id: 1e5, order: prompts.map((p) => ({ identifier: p.identifier, enabled: true })) }]
   };
 }
-function sendJson(res, status, body) {
-  res.statusCode = status;
+function sendJson(res, status2, body) {
+  res.statusCode = status2;
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
 }

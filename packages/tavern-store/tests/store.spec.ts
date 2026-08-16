@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { TavernStore } from '../src/index.js'
+import { MemoryStore, TavernStore, VariableStore } from '../src/index.js'
 import { decodeCharacterCard, encodeCharx, stableDeepEqual } from '@dsh-tavern/format'
 
 const fixturesDir = fileURLToPath(new URL('../../tavern-format/tests/fixtures', import.meta.url))
@@ -169,8 +169,8 @@ describe('TavernStore', () => {
       })),
     ])
     expect((await store.getState()).sessionBindings).toEqual({
-      session_1: { character: 'A', chatId: 'a.jsonl' },
-      session_2: { character: 'B', chatId: 'b.jsonl' },
+      session_1: { architecture: 'st', character: 'A', chatId: 'a.jsonl' },
+      session_2: { architecture: 'st', character: 'B', chatId: 'b.jsonl' },
     })
   }))
 
@@ -180,7 +180,10 @@ describe('TavernStore', () => {
     await expect(store.saveChat('Test Char', '../state.json', { header, messages: [] })).rejects.toThrow('invalid chat id')
   }))
   it('状态：默认值 → patch 持久化', withStore(async (store) => {
-    expect(await store.getState()).toEqual({ activeWorlds: [], sessionBindings: {}, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat' })
+    expect(await store.getState()).toEqual({
+      activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
+      modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat',
+    })
     await store.patchState({
       activeCharacter: 'ExampleCard',
       activeWorlds: ['ExampleWorld'],
@@ -189,7 +192,7 @@ describe('TavernStore', () => {
     const state = await store.getState()
     expect(state.activeCharacter).toBe('ExampleCard')
     expect(state.activeWorlds).toEqual(['ExampleWorld'])
-    expect(state.sessionBindings.session_1).toEqual({ character: 'ExampleCard', chatId: 'chat.jsonl' })
+    expect(state.sessionBindings.session_1).toEqual({ architecture: 'st', character: 'ExampleCard', chatId: 'chat.jsonl' })
   }))
 
   it('状态：模型选择按 session 存取并随旧 state 文件补默认', withStore(async (store) => {
@@ -203,6 +206,62 @@ describe('TavernStore', () => {
       session_1: { provider: 'deepseek', model: 'deepseek-chat' },
       session_2: { provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high' },
     })
+  }))
+
+  it('状态：legacy binding 迁移为 ST，AgentTavern 缺 mode 迁移为 native', withStore(async (store, dir) => {
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({
+      sessionBindings: {
+        legacy: { character: 'A', chatId: 'a.jsonl' },
+        agent: { architecture: 'agent-tavern', character: 'B', chatId: 'b.jsonl' },
+        group: { architecture: 'agent-tavern', group: true, character: 'G', chatId: 'g.jsonl' },
+        invalid: { architecture: 'agent-tavern', character: '' },
+      },
+    }))
+    expect((await store.getState()).sessionBindings).toEqual({
+      legacy: { architecture: 'st', character: 'A', chatId: 'a.jsonl' },
+      agent: { architecture: 'agent-tavern', contextMode: 'dsh-native', character: 'B', chatId: 'b.jsonl' },
+      group: { architecture: 'st', group: true, character: 'G', chatId: 'g.jsonl' },
+    })
+  }))
+
+  it('memory：确定性检索、CAS 更新与软删除', withStore(async (_store, dir) => {
+    const memory = await MemoryStore.open(path.join(dir, 'agent'))
+    const created = await memory.put({
+      scope: 'chat', scopeId: 'chat-1', kind: 'semantic', content: 'The silver key opens the west gate.',
+      tags: ['gate', 'key'], importance: 0.8, confidence: 0.9, source: { kind: 'user', id: 'm1' },
+    })
+    const hits = await memory.search({ scope: 'chat', scopeId: 'chat-1', query: 'silver gate', limit: 5 })
+    expect(hits).toHaveLength(1)
+    expect(hits[0]?.record.id).toBe(created.id)
+    await expect(memory.put({
+      id: created.id, scope: 'chat', scopeId: 'chat-1', kind: 'semantic', content: 'changed',
+      source: { kind: 'user' },
+    })).rejects.toMatchObject({ code: 'MEMORY_REVISION_CONFLICT' })
+    const updated = await memory.put({
+      id: created.id, scope: 'chat', scopeId: 'chat-1', kind: 'semantic', content: 'The silver key opens the north gate.',
+      source: { kind: 'user' },
+    }, created.revision)
+    await memory.forget(updated.id, 'chat', 'chat-1', updated.revision)
+    expect(await memory.read(updated.id, 'chat', 'chat-1')).toBeUndefined()
+    expect((await memory.read(updated.id, 'chat', 'chat-1', true))?.deletedAt).toBeDefined()
+  }))
+
+  it('variables：作用域隔离、CAS 与原子 patch', withStore(async (_store, dir) => {
+    const variables = await VariableStore.open(path.join(dir, 'agent'))
+    const score = await variables.set('chat', 'chat-1', 'score', 1)
+    expect((await variables.get('chat', 'chat-1', 'score'))?.value).toBe(1)
+    await expect(variables.set('chat', 'chat-1', 'score', 2, 'stale'))
+      .rejects.toMatchObject({ code: 'VARIABLE_REVISION_CONFLICT' })
+    const next = await variables.set('chat', 'chat-1', 'score', 2, score.revision)
+    const patched = await variables.patch('chat', 'chat-1', [
+      { name: 'visited', value: true, expectedRevision: undefined },
+      { name: 'label', value: 'north' },
+    ])
+    expect(patched.map((item) => item.name)).toEqual(['visited', 'label'])
+    expect((await variables.list('chat', 'chat-1')).map((item) => item.name)).toEqual(['label', 'score', 'visited'])
+    await variables.delete('chat', 'chat-1', 'score', next.revision)
+    expect(await variables.get('chat', 'chat-1', 'score')).toBeUndefined()
+    expect(await variables.get('character', 'chat-1', 'label')).toBeUndefined()
   }))
 
   it('persona：存取', withStore(async (store) => {

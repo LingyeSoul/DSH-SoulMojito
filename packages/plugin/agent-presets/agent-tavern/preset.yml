@@ -1,0 +1,3 @@
+name: AgentTavern
+description: 原生 DSH AgentLoop 角色扮演，会话级 Tavern 工具与作用域记忆。
+order: 10

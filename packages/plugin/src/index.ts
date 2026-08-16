@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import {
@@ -17,9 +18,17 @@ import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { assemblePrompt, assembleTextCompletion, buildGroupTurn, pickGroupMember } from '../../tavern-pipeline/src/index.js'
 import { applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
 import { ChatRevisionConflictError, TavernStore, type TavernModelSelection } from '../../tavern-store/src/index.js'
+import {
+  AGENT_TAVERN_PRESET_ID,
+  bootstrapAgentTavernCapabilities,
+  inspectAgentTavernCapabilities,
+  type AgentTavernCapabilities,
+} from './agent-tavern/capabilities.js'
+import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
+import { AgentTavernProjector } from './agent-tavern/projector.js'
 
 export const name = 'dsh-tavern'
-export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents']
+export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools']
 
 const API = '/api/dsh-tavern'
 const DEFAULT_USER = 'User'
@@ -27,12 +36,38 @@ const BUILD_INFO = readBuildInfo()
 const TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit)
 let storePromise
 let activeAgentPrompt = ''
+let agentTavernCapabilities: AgentTavernCapabilities = inspectAgentTavernCapabilities({})
+let agentTavernCapabilitiesPromise: Promise<AgentTavernCapabilities> | undefined
+let agentTavernProjectorPromise: Promise<AgentTavernProjector> | undefined
+
+class TavernArchitectureConflictError extends Error {
+  readonly code = 'TAVERN_ARCHITECTURE_CONFLICT'
+  constructor(message: string) {
+    super(message)
+    this.name = 'TavernArchitectureConflictError'
+  }
+}
 
 function store() {
   return (storePromise ??= TavernStore.open(dshHomePath('tavern')))
 }
 
 export function apply(ctx) {
+  const adapter = createDshAgentTavernAdapter(ctx)
+  agentTavernCapabilitiesPromise = bootstrapAgentTavernCapabilities(adapter, {
+    presetId: AGENT_TAVERN_PRESET_ID,
+    ensurePreset: ensureBundledAgentTavernPreset,
+  })
+  void agentTavernCapabilitiesPromise.then((value) => { agentTavernCapabilities = value })
+  agentTavernProjectorPromise = store().then((db) => AgentTavernProjector.open(dshHomePath('tavern'), db))
+  ctx.on?.('session/event', (session, event) => {
+    void agentTavernProjectorPromise!.then((projector) => projector.project(session, event))
+      .catch((error) => ctx.logger?.warn?.(`AgentTavern projection failed: ${error instanceof Error ? error.message : String(error)}`))
+  })
+  ctx.on?.('agent/created', ({ agent }) => {
+    void agentTavernProjectorPromise!.then((projector) => projector.replay(agent.session))
+      .catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`))
+  })
   void refreshActivePrompt()
   ctx.systemPrompt.section({
     name: 'dsh-tavern:active-character',
@@ -73,10 +108,29 @@ export function apply(ctx) {
       const chat = await db.getChat(parsed.character, parsed.chatId)
       if (!chat) return { kind: 'error', text: 'Tavern chat not found.' }
       const previous = (await db.getState()).sessionBindings[agent.id]
-      await bindSession(db, agent.id, parsed.character, parsed.chatId, parsed.group === true)
+      await assertAgentTavernAvailable(parsed.architecture, parsed.contextMode)
+      if (parsed.architecture === 'agent-tavern') {
+        if (agent.session.events.some((event) => event.type === 'turn/start')) {
+          throw new TavernArchitectureConflictError('This host session already started; AgentTavern preset selection is locked.')
+        }
+        if (typeof ctx.agentPresets?.recompose !== 'function') {
+          throw new TavernArchitectureConflictError('The host cannot recompose a blank session with the AgentTavern preset.')
+        }
+        const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_TAVERN_PRESET_ID)
+        agent.session.append('agent-preset/selected', { agentPreset: preset.id })
+      }
+      await bindSession(
+        db,
+        agent.id,
+        parsed.character,
+        parsed.chatId,
+        parsed.group === true,
+        parsed.architecture,
+        parsed.contextMode,
+      )
       await refreshActivePrompt()
-      occupyHostSession(agent)
-      if (previous?.character !== parsed.character || previous.chatId !== parsed.chatId) {
+      if (parsed.architecture === 'st') occupyHostSession(agent)
+      if (parsed.architecture === 'st' && (previous?.character !== parsed.character || previous.chatId !== parsed.chatId)) {
         agent.session.append('user/message', createMessage({
           role: 'user',
           content: [{ type: 'text', text: `Tavern roleplay chat for ${parsed.character}.` }],
@@ -96,12 +150,14 @@ export function apply(ctx) {
       } catch (error) {
         if (!res.writableEnded) {
           const message = error instanceof Error ? error.message : String(error)
-          const code = error instanceof ChatRevisionConflictError ? error.code : undefined
+          const code = error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError
+            ? error.code
+            : undefined
           if (res.headersSent) {
             res.write(JSON.stringify({ type: 'error', message, code }) + '\n')
             res.end()
           } else {
-            sendJson(res, error instanceof ChatRevisionConflictError ? 409 : 500, { ok: false, message, code })
+            sendJson(res, error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError ? 409 : 500, { ok: false, message, code })
           }
         }
       }
@@ -116,6 +172,7 @@ async function handleApi(ctx, req, res) {
   const db = await store()
 
   if (method === 'GET' && route === 'bootstrap') {
+    await agentTavernCapabilitiesPromise
     const state = await db.getState()
     const active = state.activeCharacter ? await db.getCharacter(state.activeCharacter) : undefined
     const groups = []
@@ -146,6 +203,7 @@ async function handleApi(ctx, req, res) {
       model: ctx.agentDefaultModel.currentSelection(),
       version: BUILD_INFO.version,
       commit: TAVERN_COMMIT,
+      agentTavern: agentTavernCapabilities,
     })
   }
 
@@ -172,6 +230,14 @@ async function handleApi(ctx, req, res) {
     const found = await db.getCharacter(name)
     if (!found) return sendJson(res, 404, { ok: false, message: 'character not found' })
     return sendJson(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) })
+  }
+
+  if (method === 'GET' && route === 'projection') {
+    const sessionId = url.searchParams.get('sessionId')
+    if (!sessionId) throw new Error('sessionId query is required')
+    const projector = await agentTavernProjectorPromise
+    if (!projector) throw new Error('AgentTavern projector is unavailable')
+    return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) })
   }
 
   if (method === 'PUT' && route.startsWith('character/')) {
@@ -486,7 +552,11 @@ async function handleApi(ctx, req, res) {
     }
     const chat = await db.getChat(body.character, body.chatId)
     if (!chat) throw new Error('chat not found')
-    const state = await bindSession(db, body.sessionId, body.character, body.chatId, body.group === true)
+    const group = body.group === true
+    const architecture = group ? 'st' : requestedArchitecture(body.architecture)
+    const contextMode = requestedContextMode(body.contextMode)
+    await assertAgentTavernAvailable(architecture, contextMode)
+    const state = await bindSession(db, body.sessionId, body.character, body.chatId, group, architecture, contextMode)
     await refreshActivePrompt()
     return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] })
   }
@@ -802,6 +872,7 @@ async function handleApi(ctx, req, res) {
 async function generate(ctx, req, res, db) {
   const body = await readJson(req)
   const state = await db.getState()
+  assertStGenerationBinding(state, body.sessionId)
   const characterName = typeof body.character === 'string' ? body.character : state.activeCharacter
   const chatId = body.chatId
   const userText = typeof body.message === 'string' ? body.message.trim() : ''
@@ -1241,6 +1312,7 @@ function chatVariables(chat): Record<string, string | number | boolean> {
 async function runTavernScript(ctx, req, res, db) {
   const body = await readJson(req)
   const state = await db.getState()
+  assertStGenerationBinding(state, body.sessionId)
   const characterName = typeof body.character === 'string' ? body.character : state.activeCharacter
   const chatId = body.chatId
   if (!characterName || typeof chatId !== 'string') throw new Error('character and chatId are required')
@@ -1600,14 +1672,82 @@ async function refreshActivePrompt() {
   }
 }
 
-async function bindSession(db, sessionId, character, chatId, group = false) {
+/** Install the shipped preset only into the user layer and never overwrite edits. */
+async function ensureBundledAgentTavernPreset(): Promise<void> {
+  const bundledRoots = [
+    resolve(import.meta.dirname, 'agent-presets'),
+    resolve(import.meta.dirname, '..', 'agent-presets'),
+  ]
+  const bundledRoot = bundledRoots.find((candidate) => {
+    try {
+      return readFileSync(resolve(candidate, AGENT_TAVERN_PRESET_ID, 'agent.cordis.yml'), 'utf8').trim() !== ''
+    } catch {
+      return false
+    }
+  })
+  if (!bundledRoot) throw new Error('bundled AgentTavern preset is missing from the plugin package')
+
+  const sourceRoot = resolve(bundledRoot, AGENT_TAVERN_PRESET_ID)
+  const targetRoot = dshHomePath('.agent-presets', AGENT_TAVERN_PRESET_ID)
+  await mkdir(targetRoot, { recursive: true })
+  for (const file of ['preset.yml', 'agent.cordis.yml']) {
+    const target = resolve(targetRoot, file)
+    try {
+      await writeFile(target, await readFile(resolve(sourceRoot, file)), { flag: 'wx' })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
+  }
+}
+
+async function bindSession(
+  db,
+  sessionId,
+  character,
+  chatId,
+  group = false,
+  architecture = 'st',
+  contextMode = 'dsh-native',
+) {
+  const binding = architecture === 'agent-tavern' && !group
+    ? { architecture: 'agent-tavern', contextMode, character, chatId }
+    : { architecture: 'st', character, chatId, ...(group ? { group: true } : {}) }
   return db.updateState((state) => ({
     activeCharacter: group ? state.activeCharacter : character,
     sessionBindings: {
       ...state.sessionBindings,
-      [sessionId]: { character, chatId, ...(group ? { group: true } : {}) },
+      [sessionId]: binding,
     },
   }))
+}
+
+async function assertAgentTavernAvailable(architecture, contextMode) {
+  if (architecture !== 'agent-tavern') return
+  const capabilities = await agentTavernCapabilitiesPromise ?? agentTavernCapabilities
+  const status = contextMode === 'agent-managed' ? capabilities.managed : capabilities.native
+  if (!status.available) {
+    throw new TavernArchitectureConflictError(`AgentTavern ${contextMode} is unavailable: ${status.reasons.join(' ')}`)
+  }
+}
+
+function requestedArchitecture(value) {
+  if (value === undefined || value === 'st') return 'st'
+  if (value === 'agent-tavern') return value
+  throw new Error(`unsupported Tavern architecture '${String(value)}'`)
+}
+
+function requestedContextMode(value) {
+  if (value === undefined || value === 'dsh-native') return 'dsh-native'
+  if (value === 'agent-managed') return value
+  throw new Error(`unsupported AgentTavern context mode '${String(value)}'`)
+}
+
+function assertStGenerationBinding(state, sessionId) {
+  if (typeof sessionId !== 'string') return
+  const binding = state.sessionBindings[sessionId]
+  if (binding?.architecture === 'agent-tavern') {
+    throw new TavernArchitectureConflictError('AgentTavern sessions use the DSH native AgentLoop; the ST generation endpoint is unavailable.')
+  }
 }
 
 /**
@@ -1746,7 +1886,16 @@ function parseTavernSessionCommand(rawInput) {
     const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
     if (parsed.action === 'close') return { action: 'close' }
     if (typeof parsed.character !== 'string' || typeof parsed.chatId !== 'string') return null
-    return { action: 'open', character: parsed.character, chatId: parsed.chatId, group: parsed.group === true }
+    const group = parsed.group === true
+    const architecture = group ? 'st' : requestedArchitecture(parsed.architecture)
+    return {
+      action: 'open',
+      character: parsed.character,
+      chatId: parsed.chatId,
+      group,
+      architecture,
+      contextMode: requestedContextMode(parsed.contextMode),
+    }
   } catch {
     return null
   }

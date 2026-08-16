@@ -4,3 +4,4 @@ dist/
 *.tsbuildinfo
 /.playwright-mcp
 /packages/plugin/version.json
+/.npm-cache

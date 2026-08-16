@@ -120,7 +120,7 @@ describe('internal Tavern session bridge occupation', () => {
     const agent = makeAgent('session-a')
     const result = await handler({ agent, rawInput: base64Url({ character: CHARACTER, chatId }) })
     expect(result.kind).toBe('success')
-    expect((await store.getState()).sessionBindings['session-a']).toEqual({ character: CHARACTER, chatId })
+    expect((await store.getState()).sessionBindings['session-a']).toEqual({ architecture: 'st', character: CHARACTER, chatId })
     const starts = turnStarts(agent)
     expect(starts).toHaveLength(1)
     expect(starts[0]!.data).toEqual({ turn: 1 })
@@ -169,6 +169,26 @@ describe('internal Tavern session bridge occupation', () => {
     })
     expect((agent.session.events.at(-1)?.data as { reason?: unknown }).reason).toEqual({ kind: 'completed' })
     expect(res.chunks.some((chunk) => chunk.includes('"type":"saved"'))).toBe(true)
+  })
+
+  it('rejects the ST generation endpoint for an AgentTavern binding', async () => {
+    await store.updateState((state) => ({
+      sessionBindings: {
+        ...state.sessionBindings,
+        'session-native': { architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER, chatId },
+      },
+    }))
+    const snapshot = await store.getChatSnapshot(CHARACTER, chatId)
+    const res = makeResponse()
+    await apiHandler(makeRequest({
+      character: CHARACTER,
+      chatId,
+      message: 'Must not use ST generation',
+      revision: snapshot!.revision,
+      sessionId: 'session-native',
+    }), res)
+    expect(res.statusCode).toBe(409)
+    expect(res.chunks.join('')).toContain('TAVERN_ARCHITECTURE_CONFLICT')
   })
 
   it('closes the mirrored trace as an error when generation fails', async () => {
