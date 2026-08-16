@@ -1,5 +1,7 @@
+import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import {
   RegexPlacement,
   decodeCharxAsset,
@@ -19,13 +21,10 @@ import { ChatRevisionConflictError, TavernStore, type TavernModelSelection } fro
 export const name = 'dsh-tavern'
 export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands']
 
-// Injected by scripts/build-plugin.mjs (esbuild define) from packages/plugin
-// package.json + git HEAD, so the settings page can stamp the artifact build.
-declare const __TAVERN_VERSION__: string
-declare const __TAVERN_COMMIT__: string
-
 const API = '/api/dsh-tavern'
 const DEFAULT_USER = 'User'
+const BUILD_INFO = readBuildInfo()
+const TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit)
 let storePromise
 let activeAgentPrompt = ''
 
@@ -143,8 +142,8 @@ async function handleApi(ctx, req, res) {
       groups,
       activeCard: active ? publicCard(active.card) : null,
       model: ctx.agentDefaultModel.currentSelection(),
-      version: __TAVERN_VERSION__,
-      commit: __TAVERN_COMMIT__,
+      version: BUILD_INFO.version,
+      commit: TAVERN_COMMIT,
     })
   }
 
@@ -1630,6 +1629,70 @@ function parseTavernCommand(rawInput) {
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim()
   return join(resolve(configured || join(homedir(), '.dsh')), ...segments)
+}
+
+function readBuildInfo(): { version: string; commit: string } {
+  let version = 'unknown'
+  let commit = 'unknown'
+
+  for (const packagePath of [
+    resolve(import.meta.dirname, 'package.json'),
+    resolve(import.meta.dirname, '..', 'package.json'),
+  ]) {
+    try {
+      const packageData = JSON.parse(readFileSync(packagePath, 'utf8'))
+      if (typeof packageData?.version === 'string' && packageData.version.trim() !== '') {
+        version = packageData.version.trim()
+        break
+      }
+    } catch {
+    }
+  }
+
+  try {
+    const generated = JSON.parse(readFileSync(resolve(import.meta.dirname, 'version.json'), 'utf8'))
+    if (typeof generated?.version === 'string' && generated.version.trim() !== '') {
+      version = generated.version.trim()
+    }
+    if (typeof generated?.commit === 'string') {
+      commit = normalizeCommit(generated.commit) ?? 'unknown'
+    }
+  } catch {
+  }
+
+  return { version, commit }
+}
+
+function resolveTavernCommit(buildFallback: string): string {
+  const fallback = normalizeCommit(process.env.DSH_TAVERN_COMMIT ?? buildFallback) ?? 'unknown'
+  const repositoryRoot = resolve(import.meta.dirname, '..', '..')
+  const packagePath = relative(repositoryRoot, import.meta.dirname).replaceAll('\\', '/')
+  if (packagePath !== 'packages/plugin') return fallback
+
+  const git = (args: string[]) => execFileSync('git', args, {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: 2000,
+    windowsHide: true,
+  }).trim()
+
+  try {
+    // Avoid reporting the host application's commit when this package lives in
+    // node_modules under an unrelated Git checkout.
+    const gitRoot = resolve(git(['rev-parse', '--show-toplevel']))
+    if (relative(repositoryRoot, gitRoot) !== '') return fallback
+    return normalizeCommit(git(['rev-parse', '--short=7', 'HEAD'])) ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
+function normalizeCommit(value: string): string | undefined {
+  const commit = value.trim()
+  return /^[0-9a-f]{7,40}$/i.test(commit)
+    ? commit.slice(0, 7).toLowerCase()
+    : undefined
 }
 
 function createMessage(input) {

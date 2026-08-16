@@ -20,6 +20,7 @@ import vm from 'node:vm'
 const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const REPO_ROOT = resolve(PLUGIN_ROOT, '../..')
 const PACKAGE_PATH = join(PLUGIN_ROOT, 'package.json')
+const VERSION_PATH = join(PLUGIN_ROOT, 'version.json')
 const PATCH_PATH = join(PLUGIN_ROOT, 'cordis.patch.yml')
 const SOURCE_PATH = join(PLUGIN_ROOT, 'src', 'index.ts')
 const SERVER_PATH = join(PLUGIN_ROOT, 'index.mjs')
@@ -99,7 +100,7 @@ function checkPackageObject(pkg, checkFiles = false) {
   if (!Array.isArray(pkg.files)) {
     problems.push('files must be an array')
   } else {
-    for (const entry of ['index.mjs', 'client', 'cordis.patch.yml', 'README.md']) {
+    for (const entry of ['index.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md']) {
       if (!pkg.files.includes(entry)) problems.push(`files must include '${entry}'`)
     }
   }
@@ -212,11 +213,39 @@ function checkServerText(text) {
       problems.push(`server bundle is missing API route marker '${route}'`)
     }
   }
-  if (!/\bversion:\s*["']/.test(text)) {
-    problems.push('bootstrap payload must carry a literal version stamp (scripts/build-plugin.mjs define)')
+  if (!/\bversion:\s*[A-Za-z_$][\w$]*/.test(text)) {
+    problems.push('bootstrap payload must carry a runtime version stamp from version.json')
   }
-  if (!/\bcommit:\s*["']/.test(text)) {
-    problems.push('bootstrap payload must carry a literal commit stamp (scripts/build-plugin.mjs define)')
+  if (!/\bcommit:\s*[A-Za-z_$][\w$]*/.test(text)) {
+    problems.push('bootstrap payload must carry a runtime-resolved commit stamp')
+  }
+  if (!text.includes('rev-parse') || !text.includes('--show-toplevel')) {
+    problems.push('server bundle must resolve the commit from its own Git checkout at runtime')
+  }
+  if (!text.includes('version.json')) {
+    problems.push('server bundle must read generated version.json')
+  }
+  return problems
+}
+
+function checkVersionFile() {
+  if (!existsSync(VERSION_PATH)) return ['generated packages/plugin/version.json does not exist']
+  let value
+  try {
+    value = readJson(VERSION_PATH)
+  } catch {
+    return ['generated packages/plugin/version.json is not valid JSON']
+  }
+  const problems = []
+  if (typeof value?.version !== 'string' || value.version.trim() === '') {
+    problems.push('generated version.json must contain a non-empty version')
+  } else if (value.version !== readJson(PACKAGE_PATH).version) {
+    problems.push('generated version.json version must match package.json')
+  }
+  if (typeof value?.commit !== 'string' || value.commit.trim() === '') {
+    problems.push('generated version.json must contain a non-empty commit')
+  } else if (value.commit !== 'unknown' && !/^[0-9a-f]{7,40}$/i.test(value.commit)) {
+    problems.push('generated version.json commit must be a Git SHA or unknown')
   }
   return problems
 }
@@ -225,6 +254,12 @@ function checkServerFreshness(sourceMtime, bundleMtime) {
   return bundleMtime >= sourceMtime
     ? []
     : [`server bundle is stale (${new Date(bundleMtime).toISOString()} < ${new Date(sourceMtime).toISOString()})`]
+}
+
+function checkVersionFreshness(sourceMtime, versionMtime) {
+  return versionMtime >= sourceMtime
+    ? []
+    : [`version.json is stale (${new Date(versionMtime).toISOString()} < ${new Date(sourceMtime).toISOString()})`]
 }
 
 function checkClientText(text) {
@@ -617,6 +652,7 @@ function runNodeMount() {
       }
       entryPath = join(tempRoot, 'index.mjs')
       copyFileSync(SERVER_PATH, entryPath)
+      copyFileSync(VERSION_PATH, join(tempRoot, 'version.json'))
       symlinkSync(dependencyRoot, join(tempRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
     }
 
@@ -661,7 +697,7 @@ const gates = [
           './cordis.patch.yml': './cordis.patch.yml',
           './package.json': './package.json',
         },
-        files: ['index.mjs', 'client', 'cordis.patch.yml', 'README.md'],
+        files: ['index.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md'],
         dsh: {
           bundle: { patch: './cordis.patch.yml' },
           client: { platform: 'web', inject: ['@deepseek-ai/dsh-client-runtime'] },
@@ -690,12 +726,16 @@ const gates = [
     name: 'server-bundle',
     selfTest: () => {
       const routeMarkers = REQUIRED_SERVER_ROUTES.map((route) => `"${route}"`).join('\n')
-      const good = `var name = "dsh-tavern"; var inject = []; function apply() {}\n${routeMarkers}\n"${API_PREFIX}"\nvar bootstrap = { ok: true, version: "0.0.0", commit: "stub" };\nexport { name, inject, apply };`
+      const versionReader = 'readFileSync("version.json", "utf8"); var BUILD_INFO = { version: "0.0.0", commit: "stub" };'
+      const commitResolver = 'function resolveCommit() { execFileSync("git", ["rev-parse", "--show-toplevel"]); return "stub"; } var TAVERN_COMMIT = resolveCommit();'
+      const good = `var name = "dsh-tavern"; var inject = []; function apply() {}\n${routeMarkers}\n"${API_PREFIX}"\n${versionReader}\n${commitResolver}\nvar bootstrap = { ok: true, version: BUILD_INFO.version, commit: TAVERN_COMMIT };\nexport { name, inject, apply };`
       const badRoute = good.replace('"generate"', '"missing"')
-      const badStamp = good.replace('version: "0.0.0", ', '')
+      const badStamp = good.replace('version: BUILD_INFO.version, ', '')
+      const hardcodedCommit = good.replace('commit: TAVERN_COMMIT', 'commit: "stub"')
       return checkServerText(good).length === 0
         && checkServerText(badRoute).length > 0
         && checkServerText(badStamp).length > 0
+        && checkServerText(hardcodedCommit).length > 0
         && checkServerFreshness(10, 10).length === 0
         && checkServerFreshness(11, 10).length > 0
         ? []
@@ -703,12 +743,16 @@ const gates = [
     },
     check: () => {
       if (!existsSync(SERVER_PATH)) return ['generated packages/plugin/index.mjs does not exist']
-      // package.json participates in freshness: the version stamp is baked in
-      // at build time, so a bump without a rebuild must fail the gate.
-      const newestSource = Math.max(statSync(SOURCE_PATH).mtimeMs, statSync(PACKAGE_PATH).mtimeMs)
+      const versionProblems = checkVersionFile()
+      const packageStat = statSync(PACKAGE_PATH)
+      const newestSource = Math.max(statSync(SOURCE_PATH).mtimeMs, packageStat.mtimeMs)
       const serverStat = statSync(SERVER_PATH)
       return [
         ...checkServerFreshness(newestSource, serverStat.mtimeMs),
+        ...versionProblems,
+        ...(versionProblems.length === 0
+          ? checkVersionFreshness(packageStat.mtimeMs, statSync(VERSION_PATH).mtimeMs)
+          : []),
         ...checkServerText(readFileSync(SERVER_PATH, 'utf8')),
       ]
     },

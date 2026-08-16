@@ -2,8 +2,10 @@
 
 
 // packages/plugin/src/index.ts
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join as join2, resolve } from "node:path";
+import { join as join2, relative, resolve } from "node:path";
 
 // packages/tavern-format/src/png.ts
 var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -4478,6 +4480,8 @@ var name = "dsh-tavern";
 var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands"];
 var API = "/api/dsh-tavern";
 var DEFAULT_USER = "User";
+var BUILD_INFO = readBuildInfo();
+var TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit);
 var storePromise;
 var activeAgentPrompt = "";
 function store() {
@@ -4589,8 +4593,8 @@ async function handleApi(ctx, req, res) {
       groups,
       activeCard: active ? publicCard(active.card) : null,
       model: ctx.agentDefaultModel.currentSelection(),
-      version: "0.1.0",
-      commit: "138c6e7"
+      version: BUILD_INFO.version,
+      commit: TAVERN_COMMIT
     });
   }
   if (method === "GET" && route.startsWith("avatar/")) {
@@ -5928,6 +5932,58 @@ function parseTavernCommand(rawInput) {
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
   return join2(resolve(configured || join2(homedir(), ".dsh")), ...segments);
+}
+function readBuildInfo() {
+  let version = "unknown";
+  let commit = "unknown";
+  for (const packagePath of [
+    resolve(import.meta.dirname, "package.json"),
+    resolve(import.meta.dirname, "..", "package.json")
+  ]) {
+    try {
+      const packageData = JSON.parse(readFileSync(packagePath, "utf8"));
+      if (typeof packageData?.version === "string" && packageData.version.trim() !== "") {
+        version = packageData.version.trim();
+        break;
+      }
+    } catch {
+    }
+  }
+  try {
+    const generated = JSON.parse(readFileSync(resolve(import.meta.dirname, "version.json"), "utf8"));
+    if (typeof generated?.version === "string" && generated.version.trim() !== "") {
+      version = generated.version.trim();
+    }
+    if (typeof generated?.commit === "string") {
+      commit = normalizeCommit(generated.commit) ?? "unknown";
+    }
+  } catch {
+  }
+  return { version, commit };
+}
+function resolveTavernCommit(buildFallback) {
+  const fallback = normalizeCommit(process.env.DSH_TAVERN_COMMIT ?? buildFallback) ?? "unknown";
+  const repositoryRoot = resolve(import.meta.dirname, "..", "..");
+  const packagePath = relative(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
+  if (packagePath !== "packages/plugin") return fallback;
+  const git = (args) => execFileSync("git", args, {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 2e3,
+    windowsHide: true
+  }).trim();
+  try {
+    const gitRoot = resolve(git(["rev-parse", "--show-toplevel"]));
+    if (relative(repositoryRoot, gitRoot) !== "") return fallback;
+    return normalizeCommit(git(["rev-parse", "--short=7", "HEAD"])) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+function normalizeCommit(value) {
+  const commit = value.trim();
+  return /^[0-9a-f]{7,40}$/i.test(commit) ? commit.slice(0, 7).toLowerCase() : void 0;
 }
 function createMessage(input) {
   return deepFreeze(structuredClone({ ...input, id: crypto.randomUUID() }));

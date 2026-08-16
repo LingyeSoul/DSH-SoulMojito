@@ -52,7 +52,7 @@
 | `shell.overlay` | Tavern 管理面板 Modal，以及侧栏聊天树 adapter 的生命周期承载 |
 | `sidebar.footer.action` | 常驻 Tavern 面板按钮，与原生 Settings 并列 |
 
-DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏因此使用一个集中、版本敏感但失败关闭的 DOM adapter：只匹配可见左侧 `[role="tree"]`，插入具名 `data-dsh-tavern-sidebar-host`，并在 teardown 时断开 `MutationObserver`、取消 animation frame、删除 host。面板入口本身走官方 `sidebar.footer.action`，不会替换 Settings，也不依赖 adapter 是否成功挂载。
+DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏因此使用一个集中、版本敏感但失败关闭的 DOM adapter：只匹配可见左侧 `[role="tree"]`，隐藏 `state.sessionBindings` 中的 Tavern 行并插入具名 `data-dsh-tavern-sidebar-host`；宿主重绘或虚拟列表更新时会重新应用过滤，解绑后可逆恢复。面板入口本身走官方 `sidebar.footer.action`，不会替换 Settings，也不依赖 adapter 是否成功挂载。
 
 每个 Tavern chat 绑定一个正式 DSH session。`/tavern` 内部命令追加 plugin notice marker，使 session 进入 active 状态而不调用模型；composer chain 仅接管带有效 Tavern marker 的 session。删除聊天时会追加 close marker并归档对应 DSH session。
 

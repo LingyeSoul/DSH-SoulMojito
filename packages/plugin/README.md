@@ -13,7 +13,7 @@ dsh --profile web
 安装后：
 
 - 侧边栏底部、紧挨设置按钮的 **Tavern 按钮**（rail 模式为圆形图标钮）打开「Tavern 管理面板」——与原生设置同构的模态面板（左侧导航 + 右侧内容），复用 DSH 的 Modal/Button/Input/Pill/StateDot 原语与 `--dsw-alias-*` 设计 token。面板十个分区：总览（活跃配置 + 资产计数）、角色（卡片网格、完整卡查看、设为活跃、导出、删除）、聊天（按角色/群组浏览、新建/重命名/删除/打开）、群组、用户人设、世界书（激活开关 + 条目浏览器 + 搜索）、预设（kind 标签、设为活跃、删除）、正则脚本、变量（全局 STscript 变量编辑 + 当前会话局部变量查看）、生成（管线模式 + Kobold 端点 + StateDot 连接状态）。
-- “设置 -> dsh-tavern”保留快速切换（角色/预设/persona/世界书）与「打开酒馆面板」入口；设置页标题下显示插件版本号与构建 commit 号（构建时由 `scripts/build-plugin.mjs` 注入 bootstrap）。
+- “设置 -> dsh-tavern”保留快速切换（角色/预设/persona/世界书）与「打开酒馆面板」入口；设置页标题下显示插件版本号与 commit 号。构建会生成不纳入 Git 的 `version.json` 旁车文件；源码检出运行时优先读取 Git HEAD，脱离 `.git` 的发布包读取该文件中的 commit，必要时可用 `DSH_TAVERN_COMMIT` 兜底。
 - 在原生 `Tavern` tab 使用 transcript、composer、Stop、edit、swipe 和 regenerate。
 
 聊天文件保存在 `$DSH_HOME/tavern/chats/`，并使用 revision compare-and-swap 防止跨标签页静默覆盖。删除角色会连同其聊天记录一并移除（对齐 ST 语义），并自动收敛群组成员与失效会话绑定。

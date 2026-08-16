@@ -11,7 +11,7 @@
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
-  "files": ["index.mjs", "client", "cordis.patch.yml", "README.md"],
+  "files": ["index.mjs", "version.json", "client", "cordis.patch.yml", "README.md"],
   "scripts": {
     "build": "node ../../scripts/build-plugin.mjs",
     "gates": "node scripts/gates/run.mjs"

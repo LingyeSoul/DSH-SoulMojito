@@ -2124,11 +2124,143 @@ window.__ModuleLoader__.load({
     // DSH 会话树并在其上方插入宿主 div（与面板聊天分区共存：这里管快速切换）。
     function visibleSidebarTree() {
       const candidates = [...document.querySelectorAll('[role="tree"]')]
-      return candidates.find((tree) => {
+      const found = candidates.find((tree) => {
         if (tree.closest('[data-dsh-tavern-sidebar-host]')) return false
         const rect = tree.getBoundingClientRect()
+        if (tree.dataset?.dshTavernNativeTree !== undefined) {
+          return rect.width > 0 && rect.left < Math.min(420, window.innerWidth * 0.4)
+        }
         return rect.width > 40 && rect.height > 20 && rect.left < Math.min(420, window.innerWidth * 0.4)
       }) || null
+      if (found) found.dataset.dshTavernNativeTree = ''
+      return found
+    }
+
+    // Tavern sessions remain real DSH sessions so the native conversation
+    // surface can render them, but they are owned by the Tavern navigator. The
+    // host has no session-tree slot, so hide only bound rows at the DOM edge.
+    // This adapter is deliberately reversible: unbinding a chat restores the
+    // row, while ordinary DSH sessions are never marked.
+    function nativeSessionReference(value, sessionIds) {
+      if (value === null || value === undefined) return false
+      let text = String(value)
+      try { text = decodeURIComponent(text) } catch {}
+      if (sessionIds.has(text)) return true
+      const parts = text.split(/[\\/?#=:]+/).filter(Boolean)
+      return parts.some((part) => sessionIds.has(part))
+    }
+
+    function nativeTreeRow(node, tree) {
+      let current = node
+      while (current && current !== tree) {
+        const role = current.getAttribute?.('role')
+        if (role === 'treeitem' || role === 'option' || current.tagName === 'LI') return current
+        current = current.parentElement
+      }
+      return node === tree ? null : node
+    }
+
+    function nativeTreeNodeMatches(node, sessionIds, labels) {
+      const values = []
+      const collect = (element) => {
+        if (!element?.getAttributeNames) return
+        for (const name of element.getAttributeNames()) {
+          if (name === 'id' || name === 'href' || name === 'title' || name === 'aria-label'
+            || name === 'aria-controls' || name === 'data-key' || name === 'data-id'
+            || name === 'data-item-id' || name === 'data-value' || name === 'data-session'
+            || name === 'data-session-id'
+            || name.includes('session')) {
+            values.push(element.getAttribute(name))
+          }
+        }
+      }
+      collect(node)
+      for (const child of node.querySelectorAll?.('*') || []) {
+        const nestedRow = child.closest?.('[role="treeitem"], [role="option"], li')
+        if (nestedRow && nestedRow !== node) continue
+        collect(child)
+      }
+      if (values.some((value) => nativeSessionReference(value, sessionIds))) return true
+      // Older host builds expose no session id in the DOM. Their tree row text
+      // is the renamed session label, which is safe to use only as a fallback.
+      if ((node.querySelectorAll?.('[role="treeitem"], [role="option"], li') || []).length > 0) return false
+      const text = node.textContent?.replace(/\s+/g, ' ').trim()
+      return Boolean(text && [...labels].some((label) => text === label || text.startsWith(`${label} `)))
+    }
+
+    function markNativeTreeRow(row) {
+      if (!row || row.dataset?.dshTavernNativeHidden !== undefined) return
+      row.dataset.dshTavernNativeHidden = ''
+      row.dataset.dshTavernNativeHiddenAria = row.getAttribute?.('aria-hidden') ?? ''
+      row.dataset.dshTavernNativeHiddenState = row.hidden ? 'hidden' : 'visible'
+      row.setAttribute?.('aria-hidden', 'true')
+      row.hidden = true
+    }
+
+    function unmarkNativeTreeRows(tree) {
+      for (const row of tree.querySelectorAll?.('[data-dsh-tavern-native-hidden]') || []) {
+        const aria = row.dataset?.dshTavernNativeHiddenAria || ''
+        const state = row.dataset?.dshTavernNativeHiddenState
+        if (aria) row.setAttribute('aria-hidden', aria)
+        else row.removeAttribute?.('aria-hidden')
+        row.hidden = state === 'hidden'
+        delete row.dataset.dshTavernNativeHidden
+        delete row.dataset.dshTavernNativeHiddenAria
+        delete row.dataset.dshTavernNativeHiddenState
+      }
+    }
+
+    function filterNativeSessionTree(tree, bindings) {
+      if (!tree) return
+      const sessionIds = new Set(Object.keys(bindings || {}))
+      unmarkNativeTreeRows(tree)
+      if (sessionIds.size === 0) return
+      const labels = new Set(Object.entries(bindings)
+        .filter(([, binding]) => typeof binding?.character === 'string' && typeof binding?.chatId === 'string')
+        .map(([, binding]) => sessionLabel(binding.character, binding.chatId, binding.group === true)))
+      const candidates = [...tree.querySelectorAll?.('[role="treeitem"], [role="option"], li, [data-session-id], [data-session], [data-item-id]') || []]
+      const rows = new Set()
+      for (const candidate of candidates) {
+        const row = nativeTreeRow(candidate, tree)
+        if (row && nativeTreeNodeMatches(row, sessionIds, labels)) rows.add(row)
+      }
+      for (const row of rows) {
+        if (row.parentElement?.closest?.('[data-dsh-tavern-native-hidden]')) continue
+        markNativeTreeRow(row)
+      }
+    }
+
+    function useNativeSessionTreeFilter(bindingIds) {
+      const bindingKey = bindingIds.join('\u0000')
+      useEffect(() => {
+        let frame = 0
+        let observer
+        const apply = () => {
+          frame = 0
+          filterNativeSessionTree(visibleSidebarTree(), snapshot.bootstrap.state.sessionBindings)
+        }
+        const schedule = () => {
+          if (!frame) frame = requestAnimationFrame(apply)
+        }
+        apply()
+        if (typeof MutationObserver !== 'undefined') {
+          observer = new MutationObserver(schedule)
+          observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['id', 'href', 'title', 'aria-label', 'aria-controls', 'data-key', 'data-id', 'data-item-id', 'data-value', 'data-session', 'data-session-id'],
+          })
+        }
+        window.addEventListener('resize', schedule)
+        return () => {
+          observer?.disconnect()
+          window.removeEventListener('resize', schedule)
+          if (frame) cancelAnimationFrame(frame)
+          const tree = visibleSidebarTree()
+          if (tree) unmarkNativeTreeRows(tree)
+        }
+      }, [bindingKey])
     }
 
     function useSidebarHost() {
@@ -2929,15 +3061,16 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dt-panel-body' }, body)))
     }
 
-    // shell.overlay 占用者：常驻挂载，三件事——侧边栏会话树注入（快速切换）、
-    // 会话绑定清理、Tavern 管理面板（Modal portal 到 document.body）。
+    // shell.overlay 占用者：常驻挂载，四件事——隐藏原生树中的 Tavern 会话、
+    // 侧边栏会话树注入（快速切换）、会话绑定清理、Tavern 管理面板。
     function PanelHost({ useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
-      const host = useSidebarHost()
       const sessionIds = useSessions((value) => value.ids)
       const sessionPhase = useSessions((value) => value.phase)
       const bindingIds = Object.keys(state.bootstrap.state.sessionBindings || {})
+      useNativeSessionTreeFilter(bindingIds)
+      const host = useSidebarHost()
       useEffect(() => {
         if (sessionPhase !== 'ready') return
         if (bindingIds.every((sessionId) => sessionIds.includes(sessionId))) return
@@ -2998,6 +3131,7 @@ window.__ModuleLoader__.load({
       tag.dataset.plugin = 'dsh-tavern'
       tag.dataset.pluginCss = STYLE_ID
       tag.textContent = `
+        [data-dsh-tavern-native-hidden]{display:none!important}
         .dt-settings{color:var(--dsw-alias-label-primary);display:flex;flex-direction:column;gap:0;min-height:100%;font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}.dt-settings-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:20px 24px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-settings h2{font-size:20px;line-height:28px;margin:0;font-weight:600}.dt-settings-heading p{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px;margin:4px 0 0}.dt-settings-version{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;margin:2px 0 0;user-select:text}.dt-settings-band{padding:20px 24px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-settings-band h3{font-size:14px;line-height:20px;margin:0 0 14px;font-weight:600}.dt-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 20px}.dt-field{display:flex;flex-direction:column;gap:6px}.dt-label{color:var(--dsw-alias-label-secondary);font-size:12px}.dt-field select{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 10px}.dt-toggle,.dt-check-grid label{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary);font-size:13px}.dt-toggle{min-height:36px}.dt-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 20px}.dt-imports{display:flex;gap:8px;flex-wrap:wrap}.dt-upload{position:relative;cursor:pointer;height:34px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;font-size:13px}.dt-upload input{position:absolute;inset:0;opacity:0;cursor:pointer}.dt-upload-error{color:var(--dsw-alias-state-error-primary);margin-left:5px}.dt-error,.dt-run-error,.dt-sidebar-error{color:var(--dsw-alias-state-error-primary)}.dt-muted{color:var(--dsw-alias-label-tertiary)}
         .dt-view{box-sizing:border-box;width:100%;max-width:780px;margin:0 auto;display:flex;flex-direction:column;min-height:100%;padding:8px 16px 28px;color:var(--dsw-alias-label-primary);letter-spacing:0}.dt-empty{min-height:300px;align-items:center;justify-content:center;gap:10px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:13px}.dt-scene-strip{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:9px;min-height:48px;padding:8px 4px;background:color-mix(in srgb,var(--dsw-alias-bg-base) 94%,transparent);border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-scene-strip>img{width:32px;height:32px;border-radius:6px;object-fit:cover}.dt-scene-strip>div{display:flex;flex-direction:column;min-width:0;flex:1}.dt-scene-strip strong{font-size:13px;line-height:18px}.dt-scene-strip span{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dt-scene-strip button,.dt-message-actions button,.dt-header-character button,.dt-sidebar button,.dt-footer-action{color:inherit;background:transparent;border:0;cursor:pointer}.dt-scene-strip button{width:30px;height:30px;display:grid;place-items:center;border-radius:6px}.dt-scene-strip button:hover,.dt-message-actions button:hover,.dt-header-character button:hover,.dt-sidebar button:hover,.dt-footer-action:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-view button:disabled,.dt-composer button:disabled,.dt-sidebar button:disabled{cursor:not-allowed;opacity:.45}.dt-transcript{display:flex;flex-direction:column;gap:22px;padding:22px 4px}.dt-message{display:flex;gap:10px;max-width:88%;min-width:0}.dt-message-user{align-self:flex-end}.dt-message-character{align-self:flex-start}.dt-message-avatar{width:30px;height:30px;object-fit:cover;border-radius:6px;flex:none}.dt-message-body{display:flex;flex-direction:column;gap:4px;min-width:0}.dt-message-user .dt-message-body{align-items:flex-end}.dt-message-name{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-message-copy{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.65;padding:9px 11px;border-radius:8px;background:var(--dsw-alias-bg-raised,rgba(127,127,127,.08));border:1px solid var(--dsw-alias-border-l2)}.dt-message-user .dt-message-copy{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,var(--dsw-alias-bg-base))}.dt-message-actions{display:flex;align-items:center;gap:4px;min-height:24px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dt-message-actions button{min-width:24px;height:24px;border-radius:5px;display:inline-grid;place-items:center;padding:0 5px}.dt-message-edit{box-sizing:border-box;width:min(620px,70vw);max-width:100%;min-height:100px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:9px;font:inherit;line-height:1.55}.dt-transcript-end{height:1px;flex:none}.dt-message-error{max-width:620px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px}.dt-run-error{padding:7px 12px;font-size:12px}
         .dt-composer-wrap{box-sizing:border-box;width:100%;padding:6px var(--dsh-composer-side-clearance,16px) 14px;pointer-events:auto}.dt-composer{box-sizing:border-box;width:min(var(--dsh-composer-card-max-width,780px),100%);margin:0 auto;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);padding:10px 10px 8px;box-shadow:0 2px 10px rgba(0,0,0,.06)}.dt-composer textarea{box-sizing:border-box;width:100%;min-height:52px;max-height:200px;resize:vertical;border:0;outline:0;color:var(--dsw-alias-label-primary);background:transparent;font:inherit;font-size:14px;line-height:1.5}.dt-composer-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:30px;font-size:11px}.dt-composer-row>span{min-width:0;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dt-composer-actions{display:flex;align-items:center;gap:8px;flex:none}.dt-primary-icon{width:30px;height:30px;border:0;border-radius:7px;display:grid;place-items:center;background:var(--dsw-alias-state-business-primary);color:#fff;cursor:pointer}.dt-header-character{height:28px;display:flex;align-items:center;gap:6px;padding:0 4px 0 5px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;font-size:12px}.dt-header-character>img{width:20px;height:20px;border-radius:4px;object-fit:cover}.dt-header-character>span{max-width:100px;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dt-header-character>button{width:24px;height:24px;border-radius:5px;display:grid;place-items:center}

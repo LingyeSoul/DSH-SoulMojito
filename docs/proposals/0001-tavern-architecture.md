@@ -62,7 +62,8 @@ DSH `0.1.0-rc.6` 的 `sidebar.workspaces` 是完整 single/root 接管点，没�
 - 在原生 tree 前插入 `data-dsh-tavern-sidebar-host`，通过 React portal 渲染。
 - `MutationObserver` 与 resize 只负责重新匹配，使用 animation frame 合并。
 - teardown 时断开 observer、取消 frame、删除 host。
-- 不依赖 DSH CSS module hash，不隐藏原生 session tree。
+- 不依赖 DSH CSS module hash；绑定的 Tavern session 行由同一 adapter 隐藏，普通
+  DSH session 保持原样，解绑时过滤标记可逆移除。
 - 匹配失败时保持原生 UI，并由 `sidebar.footer.action` 提供浮动 Tavern 导航。
 
 该 adapter 是明确的版本敏感边界；DSH 升级验收必须覆盖它。
