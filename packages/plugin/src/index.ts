@@ -173,6 +173,45 @@ async function handleApi(ctx, req, res) {
     return sendJson(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) })
   }
 
+  if (method === 'PUT' && route.startsWith('character/')) {
+    const oldName = decodeURIComponent(route.slice('character/'.length))
+    const body = await readJson(req, 25 * 1024 * 1024)
+    if (!body.card || typeof body.card !== 'object' || Array.isArray(body.card)) {
+      throw new Error('expected { card }')
+    }
+    const saved = await db.updateCharacter(oldName, body.card)
+    const nextName = saved.card.data.name
+    const state = await db.updateState((current) => {
+      const activeCharacter = current.activeCharacter === oldName ? nextName : current.activeCharacter
+      const sessionBindings = Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
+        sessionId,
+        binding.character === oldName && binding.group !== true ? { ...binding, character: nextName } : binding,
+      ]))
+      const prefix = `${oldName}\u0000`
+      const chats = nextName === oldName
+        ? current.chats
+        : Object.fromEntries(Object.entries(current.chats).map(([key, value]) => [
+            key.startsWith(prefix) ? `${nextName}\u0000${key.slice(prefix.length)}` : key,
+            value,
+          ]))
+      return { activeCharacter, sessionBindings, chats }
+    })
+    if (nextName !== oldName) {
+      for (const groupName of await db.listGroups()) {
+        const group = await db.getGroup(groupName)
+        if (group?.members.includes(oldName)) {
+          await db.putGroup({
+            ...group,
+            members: group.members.map((member) => member === oldName ? nextName : member),
+            disabledMembers: group.disabledMembers.map((member) => member === oldName ? nextName : member),
+          })
+        }
+      }
+    }
+    await refreshActivePrompt()
+    return sendJson(res, 200, { ok: true, kind: saved.kind, card: publicCard(saved.card), state })
+  }
+
   if (method === 'DELETE' && route === 'character') {
     const name = url.searchParams.get('name')
     if (!name) throw new Error('name query is required')
@@ -207,6 +246,7 @@ async function handleApi(ctx, req, res) {
     const media = found.kind === 'charx' ? 'application/zip' : found.kind === 'json' ? 'application/json' : 'image/png'
     res.statusCode = 200
     res.setHeader('content-type', media)
+    const ext = found.kind === 'charx' ? 'charx' : found.kind === 'json' ? 'json' : 'png'
     res.setHeader('content-disposition', `attachment; filename="${encodeURIComponent(`${name}.${ext}`)}"`)
     res.end(Buffer.from(bytes))
     return
@@ -282,6 +322,37 @@ async function handleApi(ctx, req, res) {
     parsePresetOrThrow(body.data)
     await db.putPreset(body.name, body.data)
     return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data) })
+  }
+
+  if (method === 'GET' && route.startsWith('preset/')) {
+    const name = decodeURIComponent(route.slice('preset/'.length))
+    const data = await db.getPreset(name)
+    if (!data) return sendJson(res, 404, { ok: false, message: 'preset not found' })
+    return sendJson(res, 200, { ok: true, name, kind: detectPresetKind(data), data })
+  }
+
+  if (method === 'PUT' && route.startsWith('preset/')) {
+    const oldName = decodeURIComponent(route.slice('preset/'.length))
+    const body = await readJson(req, 10 * 1024 * 1024)
+    if (typeof body.name !== 'string' || body.name.trim() === '' || !body.data || typeof body.data !== 'object' || Array.isArray(body.data)) {
+      throw new Error('expected { name, data }')
+    }
+    parsePresetOrThrow(body.data)
+    await db.putPreset(body.name, body.data)
+    if (body.name !== oldName) await db.deletePreset(oldName)
+    const state = await db.updateState((current) => ({
+      activePreset: current.activePreset === oldName ? body.name : current.activePreset,
+      textCompletion: current.textCompletion
+        ? {
+            ...current.textCompletion,
+            ...(current.textCompletion.contextPreset === oldName ? { contextPreset: body.name } : {}),
+            ...(current.textCompletion.instructPreset === oldName ? { instructPreset: body.name } : {}),
+            ...(current.textCompletion.samplerPreset === oldName ? { samplerPreset: body.name } : {}),
+          }
+        : current.textCompletion,
+    }))
+    await refreshActivePrompt()
+    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data), data: body.data, state })
   }
 
   if (method === 'POST' && route === 'import/persona') {
@@ -516,6 +587,32 @@ async function handleApi(ctx, req, res) {
     return sendJson(res, 200, { ok: true, book })
   }
 
+  if (method === 'PUT' && route.startsWith('world/')) {
+    const oldName = decodeURIComponent(route.slice('world/'.length))
+    const body = await readJson(req, 10 * 1024 * 1024)
+    if (typeof body.name !== 'string' || body.name.trim() === '' || !body.data || typeof body.data !== 'object' || Array.isArray(body.data)) {
+      throw new Error('expected { name, data }')
+    }
+    const book = await db.importWorldFile(body.name, body.data)
+    if (body.name !== oldName) {
+      await db.deleteWorld(oldName)
+      await db.updateState((current) => ({ activeWorlds: current.activeWorlds.map((name) => name === oldName ? body.name : name) }))
+    }
+    return sendJson(res, 200, { ok: true, name: book.name, book })
+  }
+
+  if (method === 'GET' && route.startsWith('export/world/')) {
+    const name = decodeURIComponent(route.slice('export/world/'.length))
+    const book = await db.getWorld(name)
+    if (!book) return sendJson(res, 404, { ok: false, message: 'world not found' })
+    const bytes = await db.exportWorld(name)
+    res.statusCode = 200
+    res.setHeader('content-type', 'application/json; charset=utf-8')
+    res.setHeader('content-disposition', `attachment; filename="${encodeURIComponent(`${name}.json`)}"`)
+    res.end(Buffer.from(bytes))
+    return
+  }
+
   if (method === 'DELETE' && route === 'world') {
     const name = url.searchParams.get('name')
     if (!name) throw new Error('name query is required')
@@ -554,6 +651,18 @@ async function handleApi(ctx, req, res) {
       }
     })
     return sendJson(res, 200, { ok: true, state })
+  }
+
+  if (method === 'GET' && route.startsWith('export/preset/')) {
+    const name = decodeURIComponent(route.slice('export/preset/'.length))
+    const preset = await db.getPreset(name)
+    if (!preset) return sendJson(res, 404, { ok: false, message: 'preset not found' })
+    const bytes = await db.exportPreset(name)
+    res.statusCode = 200
+    res.setHeader('content-type', 'application/json; charset=utf-8')
+    res.setHeader('content-disposition', `attachment; filename="${encodeURIComponent(`${name}.json`)}"`)
+    res.end(Buffer.from(bytes))
+    return
   }
 
   if (method === 'GET' && route === 'variables') {

@@ -22,6 +22,8 @@ import * as path from 'node:path'
 import {
   decodeCharacterCard,
   decodeCharx,
+  decodeCharxAsset,
+  encodeCharx,
   encodeCharacterCardJson,
   encodeCharacterCardPng,
   parseChatLog,
@@ -196,6 +198,70 @@ export class TavernStore {
     return new Uint8Array(Buffer.from(JSON.stringify(encodeCharacterCardJson(file.card), null, 2), 'utf8'))
   }
 
+  /**
+   * 保存已编辑的角色卡，并尽量保留原始容器：PNG 继续写回原图的 chunks，
+   * CHARX 继续保留 zip 内全部资源；名称变更时同步迁移文件名。
+   */
+  async updateCharacter(name: string, source: object): Promise<CharacterFile> {
+    const current = await this.getCharacter(name)
+    if (current === undefined) throw new Error(`character '${name}' not found`)
+    const incomingData = (source as { data?: unknown }).data
+    const card = typeof incomingData === 'object' && incomingData !== null && !Array.isArray(incomingData)
+      && Object.prototype.hasOwnProperty.call(incomingData, 'firstMes')
+      ? {
+          ...current.card,
+          spec: (source as { spec?: CharacterCardIR['spec'] }).spec ?? current.card.spec,
+          specVersion: typeof (source as { specVersion?: unknown }).specVersion === 'string'
+            ? (source as { specVersion: string }).specVersion
+            : current.card.specVersion,
+          data: { ...current.card.data, ...(incomingData as Partial<CharacterCardIR['data']>) },
+          raw: structuredClone(current.card.raw),
+        }
+      : decodeCharacterCard(source)
+    if (typeof card.data.name !== 'string' || card.data.name.trim() === '') {
+      throw new Error('character name cannot be empty')
+    }
+    const nextStem = safeFileName(card.data.name)
+    const currentStem = safeFileName(name)
+    const collision = await this.getCharacter(card.data.name)
+    if (collision !== undefined && nextStem !== currentStem) {
+      throw new Error(`character '${card.data.name}' already exists`)
+    }
+    let bytes: Uint8Array
+    let kind: 'png' | 'charx' | 'json' = current.kind
+    const original = new Uint8Array(await fs.readFile(path.join(this.root, 'characters', current.fileName)))
+    if (current.kind === 'png') {
+      bytes = encodeCharacterCardPng(card, original)
+    } else if (current.kind === 'charx') {
+      const decoded = decodeCharx(original)
+      bytes = encodeCharx(card, decoded.assetPaths.map((assetPath) => ({ path: assetPath, data: decodeCharxAsset(original, assetPath) })))
+    } else {
+      bytes = jsonBytes(encodeCharacterCardJson(card))
+    }
+    await this.writeAtomic(path.join(this.root, 'characters', `${nextStem}.${kind}`), bytes)
+    if (currentStem !== nextStem || current.kind !== kind) {
+      await fs.rm(path.join(this.root, 'characters', current.fileName), { force: true })
+    }
+    if (currentStem !== nextStem) {
+      try {
+        await fs.access(path.join(this.root, 'chats', nextStem))
+      } catch (cause) {
+        if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause
+        try {
+          await fs.rename(path.join(this.root, 'chats', currentStem), path.join(this.root, 'chats', nextStem))
+        } catch (renameCause) {
+          if ((renameCause as NodeJS.ErrnoException).code !== 'ENOENT') throw renameCause
+        }
+      }
+    }
+    for (const other of (['png', 'json', 'charx'] as const).filter((other) => other !== kind)) {
+      await fs.rm(path.join(this.root, 'characters', `${nextStem}.${other}`), { force: true })
+    }
+    const saved = await this.getCharacter(card.data.name)
+    if (saved === undefined) throw new Error(`character '${card.data.name}' could not be reloaded`)
+    return saved
+  }
+
   async listCharacters(): Promise<string[]> {
     const files = await this.listDir('characters')
     return [...new Set(files
@@ -265,6 +331,12 @@ export class TavernStore {
     const bytes = await this.tryRead(path.join(this.root, 'worlds', `${safeFileName(name)}.json`))
     if (bytes === undefined) return undefined
     return parseWorldInfoFile(name, JSON.parse(Buffer.from(bytes).toString('utf8')))
+  }
+
+  async exportWorld(name: string): Promise<Uint8Array> {
+    const book = await this.getWorld(name)
+    if (book === undefined) throw new Error(`world '${name}' not found`)
+    return jsonBytes(serializeWorldInfoFile(book))
   }
 
   async deleteWorld(name: string): Promise<void> {
@@ -379,6 +451,12 @@ export class TavernStore {
     const bytes = await this.tryRead(path.join(this.root, 'presets', `${safeFileName(name)}.json`))
     if (bytes === undefined) return undefined
     return JSON.parse(Buffer.from(bytes).toString('utf8')) as Record<string, unknown>
+  }
+
+  async exportPreset(name: string): Promise<Uint8Array> {
+    const preset = await this.getPreset(name)
+    if (preset === undefined) throw new Error(`preset '${name}' not found`)
+    return jsonBytes(preset)
   }
 
   async listPresets(): Promise<string[]> {

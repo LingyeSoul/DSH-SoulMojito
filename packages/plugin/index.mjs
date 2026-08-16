@@ -117,39 +117,39 @@ function parseCharacterBook(book) {
   return { name: book.name ?? "", entries };
 }
 function bookEntryToLoreEntry(raw, index) {
-  const ext2 = raw.extensions ?? {};
-  const uid = numOr(raw.id, ext2["uid"], index);
+  const ext = raw.extensions ?? {};
+  const uid = numOr(raw.id, ext["uid"], index);
   const entry = normalizeEntry({
     uid,
     key: raw.keys ?? [],
     keysecondary: raw.secondary_keys ?? [],
     comment: raw.comment ?? raw.name ?? "",
     content: raw.content ?? "",
-    constant: boolOr(raw.constant, ext2["constant"], false),
+    constant: boolOr(raw.constant, ext["constant"], false),
     disable: raw.enabled === false,
-    order: numOr(ext2["order"], raw.insertion_order, 100),
-    position: bookPositionToSt(raw.position, ext2["position"]),
-    selective: boolOr(raw.selective, ext2["selective"], true),
-    selectiveLogic: num(ext2["selectiveLogic"], 0),
-    caseSensitive: nullableBoolOr(raw.case_sensitive, ext2["case_sensitive"]),
-    probability: numOr(ext2["probability"], 100, 100),
-    useProbability: boolOr(ext2["useProbability"], true, true),
-    depth: numOr(ext2["depth"], 4, 4),
-    group: str(ext2["group"]),
-    groupOverride: bool(ext2["group_override"], false),
-    groupWeight: numOr(ext2["group_weight"], 100, 100),
-    excludeRecursion: boolOr(ext2["exclude_recursion"], false, false),
-    preventRecursion: boolOr(ext2["prevent_recursion"], false, false),
-    delayUntilRecursion: numOr(ext2["delay_until_recursion"], 0, 0),
-    scanDepth: nullableNum(ext2["scan_depth"]),
-    matchWholeWords: nullableBool(ext2["match_whole_words"]),
-    useGroupScoring: nullableBool(ext2["use_group_scoring"]),
-    role: num(ext2["role"], 0),
-    vectorized: bool(ext2["vectorized"], false),
-    sticky: nullableNum(ext2["sticky"]),
-    cooldown: nullableNum(ext2["cooldown"]),
-    delay: nullableNum(ext2["delay"]),
-    triggers: strArray(ext2["triggers"])
+    order: numOr(ext["order"], raw.insertion_order, 100),
+    position: bookPositionToSt(raw.position, ext["position"]),
+    selective: boolOr(raw.selective, ext["selective"], true),
+    selectiveLogic: num(ext["selectiveLogic"], 0),
+    caseSensitive: nullableBoolOr(raw.case_sensitive, ext["case_sensitive"]),
+    probability: numOr(ext["probability"], 100, 100),
+    useProbability: boolOr(ext["useProbability"], true, true),
+    depth: numOr(ext["depth"], 4, 4),
+    group: str(ext["group"]),
+    groupOverride: bool(ext["group_override"], false),
+    groupWeight: numOr(ext["group_weight"], 100, 100),
+    excludeRecursion: boolOr(ext["exclude_recursion"], false, false),
+    preventRecursion: boolOr(ext["prevent_recursion"], false, false),
+    delayUntilRecursion: numOr(ext["delay_until_recursion"], 0, 0),
+    scanDepth: nullableNum(ext["scan_depth"]),
+    matchWholeWords: nullableBool(ext["match_whole_words"]),
+    useGroupScoring: nullableBool(ext["use_group_scoring"]),
+    role: num(ext["role"], 0),
+    vectorized: bool(ext["vectorized"], false),
+    sticky: nullableNum(ext["sticky"]),
+    cooldown: nullableNum(ext["cooldown"]),
+    delay: nullableNum(ext["delay"]),
+    triggers: strArray(ext["triggers"])
   });
   const carried = {};
   if (raw.priority !== void 0) carried["book.priority"] = raw.priority;
@@ -386,7 +386,9 @@ var fdt = new u8(32);
 for (i = 0; i < 32; ++i)
   fdt[i] = 5;
 var i;
+var flm = /* @__PURE__ */ hMap(flt, 9, 0);
 var flrm = /* @__PURE__ */ hMap(flt, 9, 1);
+var fdm = /* @__PURE__ */ hMap(fdt, 5, 0);
 var fdrm = /* @__PURE__ */ hMap(fdt, 5, 1);
 var max = function(a) {
   var m = a[0];
@@ -582,7 +584,353 @@ var inflt = function(dat, st, buf, dict) {
   } while (!final);
   return bt != buf.length && noBuf ? slc(buf, 0, bt) : buf.subarray(0, bt);
 };
+var wbits = function(d, p, v) {
+  v <<= p & 7;
+  var o = p / 8 | 0;
+  d[o] |= v;
+  d[o + 1] |= v >> 8;
+};
+var wbits16 = function(d, p, v) {
+  v <<= p & 7;
+  var o = p / 8 | 0;
+  d[o] |= v;
+  d[o + 1] |= v >> 8;
+  d[o + 2] |= v >> 16;
+};
+var hTree = function(d, mb) {
+  var t = [];
+  for (var i = 0; i < d.length; ++i) {
+    if (d[i])
+      t.push({ s: i, f: d[i] });
+  }
+  var s = t.length;
+  var t2 = t.slice();
+  if (!s)
+    return { t: et, l: 0 };
+  if (s == 1) {
+    var v = new u8(t[0].s + 1);
+    v[t[0].s] = 1;
+    return { t: v, l: 1 };
+  }
+  t.sort(function(a, b) {
+    return a.f - b.f;
+  });
+  t.push({ s: -1, f: 25001 });
+  var l = t[0], r = t[1], i0 = 0, i1 = 1, i2 = 2;
+  t[0] = { s: -1, f: l.f + r.f, l, r };
+  while (i1 != s - 1) {
+    l = t[t[i0].f < t[i2].f ? i0++ : i2++];
+    r = t[i0 != i1 && t[i0].f < t[i2].f ? i0++ : i2++];
+    t[i1++] = { s: -1, f: l.f + r.f, l, r };
+  }
+  var maxSym = t2[0].s;
+  for (var i = 1; i < s; ++i) {
+    if (t2[i].s > maxSym)
+      maxSym = t2[i].s;
+  }
+  var tr = new u16(maxSym + 1);
+  var mbt = ln(t[i1 - 1], tr, 0);
+  if (mbt > mb) {
+    var i = 0, dt = 0;
+    var lft = mbt - mb, cst = 1 << lft;
+    t2.sort(function(a, b) {
+      return tr[b.s] - tr[a.s] || a.f - b.f;
+    });
+    for (; i < s; ++i) {
+      var i2_1 = t2[i].s;
+      if (tr[i2_1] > mb) {
+        dt += cst - (1 << mbt - tr[i2_1]);
+        tr[i2_1] = mb;
+      } else
+        break;
+    }
+    dt >>= lft;
+    while (dt > 0) {
+      var i2_2 = t2[i].s;
+      if (tr[i2_2] < mb)
+        dt -= 1 << mb - tr[i2_2]++ - 1;
+      else
+        ++i;
+    }
+    for (; i >= 0 && dt; --i) {
+      var i2_3 = t2[i].s;
+      if (tr[i2_3] == mb) {
+        --tr[i2_3];
+        ++dt;
+      }
+    }
+    mbt = mb;
+  }
+  return { t: new u8(tr), l: mbt };
+};
+var ln = function(n, l, d) {
+  return n.s == -1 ? Math.max(ln(n.l, l, d + 1), ln(n.r, l, d + 1)) : l[n.s] = d;
+};
+var lc = function(c) {
+  var s = c.length;
+  while (s && !c[--s])
+    ;
+  var cl = new u16(++s);
+  var cli = 0, cln = c[0], cls = 1;
+  var w = function(v) {
+    cl[cli++] = v;
+  };
+  for (var i = 1; i <= s; ++i) {
+    if (c[i] == cln && i != s)
+      ++cls;
+    else {
+      if (!cln && cls > 2) {
+        for (; cls > 138; cls -= 138)
+          w(32754);
+        if (cls > 2) {
+          w(cls > 10 ? cls - 11 << 5 | 28690 : cls - 3 << 5 | 12305);
+          cls = 0;
+        }
+      } else if (cls > 3) {
+        w(cln), --cls;
+        for (; cls > 6; cls -= 6)
+          w(8304);
+        if (cls > 2)
+          w(cls - 3 << 5 | 8208), cls = 0;
+      }
+      while (cls--)
+        w(cln);
+      cls = 1;
+      cln = c[i];
+    }
+  }
+  return { c: cl.subarray(0, cli), n: s };
+};
+var clen = function(cf, cl) {
+  var l = 0;
+  for (var i = 0; i < cl.length; ++i)
+    l += cf[i] * cl[i];
+  return l;
+};
+var wfblk = function(out, pos, dat) {
+  var s = dat.length;
+  var o = shft(pos + 2);
+  out[o] = s & 255;
+  out[o + 1] = s >> 8;
+  out[o + 2] = out[o] ^ 255;
+  out[o + 3] = out[o + 1] ^ 255;
+  for (var i = 0; i < s; ++i)
+    out[o + i + 4] = dat[i];
+  return (o + 4 + s) * 8;
+};
+var wblk = function(dat, out, final, syms, lf, df, eb, li, bs, bl, p) {
+  wbits(out, p++, final);
+  ++lf[256];
+  var _a2 = hTree(lf, 15), dlt = _a2.t, mlb = _a2.l;
+  var _b2 = hTree(df, 15), ddt = _b2.t, mdb = _b2.l;
+  var _c = lc(dlt), lclt = _c.c, nlc = _c.n;
+  var _d = lc(ddt), lcdt = _d.c, ndc = _d.n;
+  var lcfreq = new u16(19);
+  for (var i = 0; i < lclt.length; ++i)
+    ++lcfreq[lclt[i] & 31];
+  for (var i = 0; i < lcdt.length; ++i)
+    ++lcfreq[lcdt[i] & 31];
+  var _e = hTree(lcfreq, 7), lct = _e.t, mlcb = _e.l;
+  var nlcc = 19;
+  for (; nlcc > 4 && !lct[clim[nlcc - 1]]; --nlcc)
+    ;
+  var flen = bl + 5 << 3;
+  var ftlen = clen(lf, flt) + clen(df, fdt) + eb;
+  var dtlen = clen(lf, dlt) + clen(df, ddt) + eb + 14 + 3 * nlcc + clen(lcfreq, lct) + 2 * lcfreq[16] + 3 * lcfreq[17] + 7 * lcfreq[18];
+  if (bs >= 0 && flen <= ftlen && flen <= dtlen)
+    return wfblk(out, p, dat.subarray(bs, bs + bl));
+  var lm, ll, dm, dl;
+  wbits(out, p, 1 + (dtlen < ftlen)), p += 2;
+  if (dtlen < ftlen) {
+    lm = hMap(dlt, mlb, 0), ll = dlt, dm = hMap(ddt, mdb, 0), dl = ddt;
+    var llm = hMap(lct, mlcb, 0);
+    wbits(out, p, nlc - 257);
+    wbits(out, p + 5, ndc - 1);
+    wbits(out, p + 10, nlcc - 4);
+    p += 14;
+    for (var i = 0; i < nlcc; ++i)
+      wbits(out, p + 3 * i, lct[clim[i]]);
+    p += 3 * nlcc;
+    var lcts = [lclt, lcdt];
+    for (var it = 0; it < 2; ++it) {
+      var clct = lcts[it];
+      for (var i = 0; i < clct.length; ++i) {
+        var len = clct[i] & 31;
+        wbits(out, p, llm[len]), p += lct[len];
+        if (len > 15)
+          wbits(out, p, clct[i] >> 5 & 127), p += clct[i] >> 12;
+      }
+    }
+  } else {
+    lm = flm, ll = flt, dm = fdm, dl = fdt;
+  }
+  for (var i = 0; i < li; ++i) {
+    var sym = syms[i];
+    if (sym > 255) {
+      var len = sym >> 18 & 31;
+      wbits16(out, p, lm[len + 257]), p += ll[len + 257];
+      if (len > 7)
+        wbits(out, p, sym >> 23 & 31), p += fleb[len];
+      var dst = sym & 31;
+      wbits16(out, p, dm[dst]), p += dl[dst];
+      if (dst > 3)
+        wbits16(out, p, sym >> 5 & 8191), p += fdeb[dst];
+    } else {
+      wbits16(out, p, lm[sym]), p += ll[sym];
+    }
+  }
+  wbits16(out, p, lm[256]);
+  return p + ll[256];
+};
+var deo = /* @__PURE__ */ new i32([65540, 131080, 131088, 131104, 262176, 1048704, 1048832, 2114560, 2117632]);
 var et = /* @__PURE__ */ new u8(0);
+var dflt = function(dat, lvl, plvl, pre, post, st) {
+  var s = st.z || dat.length;
+  var o = new u8(pre + s + 5 * (1 + Math.ceil(s / 7e3)) + post);
+  var w = o.subarray(pre, o.length - post);
+  var lst = st.l;
+  var pos = (st.r || 0) & 7;
+  if (lvl) {
+    if (pos)
+      w[0] = st.r >> 3;
+    var opt2 = deo[lvl - 1];
+    var n = opt2 >> 13, c = opt2 & 8191;
+    var msk_1 = (1 << plvl) - 1;
+    var prev = st.p || new u16(32768), head = st.h || new u16(msk_1 + 1);
+    var bs1_1 = Math.ceil(plvl / 3), bs2_1 = 2 * bs1_1;
+    var hsh = function(i2) {
+      return (dat[i2] ^ dat[i2 + 1] << bs1_1 ^ dat[i2 + 2] << bs2_1) & msk_1;
+    };
+    var syms = new i32(25e3);
+    var lf = new u16(288), df = new u16(32);
+    var lc_1 = 0, eb = 0, i = st.i || 0, li = 0, wi = st.w || 0, bs = 0;
+    for (; i + 2 < s; ++i) {
+      var hv = hsh(i);
+      var imod = i & 32767, pimod = head[hv];
+      prev[imod] = pimod;
+      head[hv] = imod;
+      if (wi <= i) {
+        var rem = s - i;
+        if ((lc_1 > 7e3 || li > 24576) && (rem > 423 || !lst)) {
+          pos = wblk(dat, w, 0, syms, lf, df, eb, li, bs, i - bs, pos);
+          li = lc_1 = eb = 0, bs = i;
+          for (var j = 0; j < 286; ++j)
+            lf[j] = 0;
+          for (var j = 0; j < 30; ++j)
+            df[j] = 0;
+        }
+        var l = 2, d = 0, ch_1 = c, dif = imod - pimod & 32767;
+        if (rem > 2 && hv == hsh(i - dif)) {
+          var maxn = Math.min(n, rem) - 1;
+          var maxd = Math.min(32767, i);
+          var ml = Math.min(258, rem);
+          while (dif <= maxd && --ch_1 && imod != pimod) {
+            if (dat[i + l] == dat[i + l - dif]) {
+              var nl = 0;
+              for (; nl < ml && dat[i + nl] == dat[i + nl - dif]; ++nl)
+                ;
+              if (nl > l) {
+                l = nl, d = dif;
+                if (nl > maxn)
+                  break;
+                var mmd = Math.min(dif, nl - 2);
+                var md = 0;
+                for (var j = 0; j < mmd; ++j) {
+                  var ti = i - dif + j & 32767;
+                  var pti = prev[ti];
+                  var cd = ti - pti & 32767;
+                  if (cd > md)
+                    md = cd, pimod = ti;
+                }
+              }
+            }
+            imod = pimod, pimod = prev[imod];
+            dif += imod - pimod & 32767;
+          }
+        }
+        if (d) {
+          syms[li++] = 268435456 | revfl[l] << 18 | revfd[d];
+          var lin = revfl[l] & 31, din = revfd[d] & 31;
+          eb += fleb[lin] + fdeb[din];
+          ++lf[257 + lin];
+          ++df[din];
+          wi = i + l;
+          ++lc_1;
+        } else {
+          syms[li++] = dat[i];
+          ++lf[dat[i]];
+        }
+      }
+    }
+    for (i = Math.max(i, wi); i < s; ++i) {
+      syms[li++] = dat[i];
+      ++lf[dat[i]];
+    }
+    pos = wblk(dat, w, lst, syms, lf, df, eb, li, bs, i - bs, pos);
+    if (!lst) {
+      st.r = pos & 7 | w[pos / 8 | 0] << 3;
+      pos -= 7;
+      st.h = head, st.p = prev, st.i = i, st.w = wi;
+    }
+  } else {
+    for (var i = st.w || 0; i < s + lst; i += 65535) {
+      var e = i + 65535;
+      if (e >= s) {
+        w[pos / 8 | 0] = lst;
+        e = s;
+      }
+      pos = wfblk(w, pos + 1, dat.subarray(i, e));
+    }
+    st.i = s;
+  }
+  return slc(o, 0, pre + shft(pos) + post);
+};
+var crct = /* @__PURE__ */ function() {
+  var t = new Int32Array(256);
+  for (var i = 0; i < 256; ++i) {
+    var c = i, k = 9;
+    while (--k)
+      c = (c & 1 && -306674912) ^ c >>> 1;
+    t[i] = c;
+  }
+  return t;
+}();
+var crc = function() {
+  var c = -1;
+  return {
+    p: function(d) {
+      var cr = c;
+      for (var i = 0; i < d.length; ++i)
+        cr = crct[cr & 255 ^ d[i]] ^ cr >>> 8;
+      c = cr;
+    },
+    d: function() {
+      return ~c;
+    }
+  };
+};
+var dopt = function(dat, opt2, pre, post, st) {
+  if (!st) {
+    st = { l: 1 };
+    if (opt2.dictionary) {
+      var dict = opt2.dictionary.subarray(-32768);
+      var newDat = new u8(dict.length + dat.length);
+      newDat.set(dict);
+      newDat.set(dat, dict.length);
+      dat = newDat;
+      st.w = dict.length;
+    }
+  }
+  return dflt(dat, opt2.level == null ? 6 : opt2.level, opt2.mem == null ? st.l ? Math.ceil(Math.max(8, Math.min(13, Math.log(dat.length))) * 1.5) : 20 : 12 + opt2.mem, pre, post, st);
+};
+var mrg = function(a, b) {
+  var o = {};
+  for (var k in a)
+    o[k] = a[k];
+  for (var k in b)
+    o[k] = b[k];
+  return o;
+};
 var b2 = function(d, b) {
   return d[b] | d[b + 1] << 8;
 };
@@ -592,9 +940,30 @@ var b4 = function(d, b) {
 var b8 = function(d, b) {
   return b4(d, b) + b4(d, b + 4) * 4294967296;
 };
+var wbytes = function(d, b, v) {
+  for (; v; ++b)
+    d[b] = v, v >>>= 8;
+};
+function deflateSync(data, opts) {
+  return dopt(data, opts || {}, 0, 0);
+}
 function inflateSync(data, opts) {
   return inflt(data, { i: 2 }, opts && opts.out, opts && opts.dictionary);
 }
+var fltn = function(d, p, t, o) {
+  for (var k in d) {
+    var val = d[k], n = p + k, op = o;
+    if (Array.isArray(val))
+      op = mrg(o, val[1]), val = val[0];
+    if (ArrayBuffer.isView(val))
+      t[n] = [val, op];
+    else {
+      t[n += "/"] = [new u8(0), op];
+      fltn(val, n, t, o);
+    }
+  }
+};
+var te = typeof TextEncoder != "undefined" && /* @__PURE__ */ new TextEncoder();
 var td = typeof TextDecoder != "undefined" && /* @__PURE__ */ new TextDecoder();
 var tds = 0;
 try {
@@ -618,6 +987,39 @@ var dutf8 = function(d) {
       r += String.fromCharCode((c & 15) << 12 | (d[i++] & 63) << 6 | d[i++] & 63);
   }
 };
+function strToU8(str8, latin1) {
+  if (latin1) {
+    var ar_1 = new u8(str8.length);
+    for (var i = 0; i < str8.length; ++i)
+      ar_1[i] = str8.charCodeAt(i);
+    return ar_1;
+  }
+  if (te)
+    return te.encode(str8);
+  var l = str8.length;
+  var ar = new u8(str8.length + (str8.length >> 1));
+  var ai = 0;
+  var w = function(v) {
+    ar[ai++] = v;
+  };
+  for (var i = 0; i < l; ++i) {
+    if (ai + 5 > ar.length) {
+      var n = new u8(ai + 8 + (l - i << 1));
+      n.set(ar);
+      ar = n;
+    }
+    var c = str8.charCodeAt(i);
+    if (c < 128 || latin1)
+      w(c);
+    else if (c < 2048)
+      w(192 | c >> 6), w(128 | c & 63);
+    else if (c > 55295 && c < 57344)
+      c = 65536 + (c & 1023 << 10) | str8.charCodeAt(++i) & 1023, w(240 | c >> 18), w(128 | c >> 12 & 63), w(128 | c >> 6 & 63), w(128 | c & 63);
+    else
+      w(224 | c >> 12), w(128 | c >> 6 & 63), w(128 | c & 63);
+  }
+  return slc(ar, 0, ai);
+}
 function strFromU8(dat, latin1) {
   if (latin1) {
     var r = "";
@@ -660,6 +1062,107 @@ var z64hs = function(d, b, l, z, sc, su, off) {
   }
   return [sc, su, off, 0];
 };
+var exfl = function(ex) {
+  var le = 0;
+  if (ex) {
+    for (var k in ex) {
+      var l = ex[k].length;
+      if (l > 65535)
+        err(9);
+      le += l + 4;
+    }
+  }
+  return le;
+};
+var wzh = function(d, b, f, fn, u, c, ce, co) {
+  var fl2 = fn.length, ex = f.extra, col = co && co.length;
+  var exl = exfl(ex);
+  wbytes(d, b, ce != null ? 33639248 : 67324752), b += 4;
+  if (ce != null)
+    d[b++] = 20, d[b++] = f.os;
+  d[b] = 20, b += 2;
+  d[b++] = f.flag << 1 | (c < 0 && 8), d[b++] = u && 8;
+  d[b++] = f.compression & 255, d[b++] = f.compression >> 8;
+  var dt = new Date(f.mtime == null ? Date.now() : f.mtime), y = dt.getFullYear() - 1980;
+  if (y < 0 || y > 119)
+    err(10);
+  wbytes(d, b, y << 25 | dt.getMonth() + 1 << 21 | dt.getDate() << 16 | dt.getHours() << 11 | dt.getMinutes() << 5 | dt.getSeconds() >> 1), b += 4;
+  if (c != -1) {
+    wbytes(d, b, f.crc);
+    wbytes(d, b + 4, c < 0 ? -c - 2 : c);
+    wbytes(d, b + 8, f.size);
+  }
+  wbytes(d, b + 12, fl2);
+  wbytes(d, b + 14, exl), b += 16;
+  if (ce != null) {
+    wbytes(d, b, col);
+    wbytes(d, b + 6, f.attrs);
+    wbytes(d, b + 10, ce), b += 14;
+  }
+  d.set(fn, b);
+  b += fl2;
+  if (exl) {
+    for (var k in ex) {
+      var exf = ex[k], l = exf.length;
+      wbytes(d, b, +k);
+      wbytes(d, b + 2, l);
+      d.set(exf, b + 4), b += 4 + l;
+    }
+  }
+  if (col)
+    d.set(co, b), b += col;
+  return b;
+};
+var wzf = function(o, b, c, d, e) {
+  wbytes(o, b, 101010256);
+  wbytes(o, b + 8, c);
+  wbytes(o, b + 10, c);
+  wbytes(o, b + 12, d);
+  wbytes(o, b + 16, e);
+};
+function zipSync(data, opts) {
+  if (!opts)
+    opts = {};
+  var r = {};
+  var files = [];
+  fltn(data, "", r, opts);
+  var o = 0;
+  var tot = 0;
+  for (var fn in r) {
+    var _a2 = r[fn], file = _a2[0], p = _a2[1];
+    var compression = p.level == 0 ? 0 : 8;
+    var f = strToU8(fn), s = f.length;
+    var com = p.comment, m = com && strToU8(com), ms = m && m.length;
+    var exl = exfl(p.extra);
+    if (s > 65535)
+      err(11);
+    var d = compression ? deflateSync(file, p) : file, l = d.length;
+    var c = crc();
+    c.p(file);
+    files.push(mrg(p, {
+      size: file.length,
+      crc: c.d(),
+      c: d,
+      f,
+      m,
+      u: s != fn.length || m && com.length != ms,
+      o,
+      compression
+    }));
+    o += 30 + s + exl + l;
+    tot += 76 + 2 * (s + exl) + (ms || 0) + l;
+  }
+  var out = new u8(tot + 22), oe = o, cdl = tot - o;
+  for (var i = 0; i < files.length; ++i) {
+    var f = files[i];
+    wzh(out, f.o, f, f.f, f.u, f.c.length);
+    var badd = 30 + f.f.length + exfl(f.extra);
+    out.set(f.c, f.o + badd);
+    wzh(out, o, f, f.f, f.u, f.c.length, f.o, f.m), o += 16 + badd + (f.m ? f.m.length : 0);
+  }
+  wzf(out, o, files.length, cdl, oe);
+  return out;
+}
 function unzipSync(data, opts) {
   var files = {};
   var e = data.length - 22;
@@ -2511,13 +3014,13 @@ var CRC_TABLE2 = (() => {
   return table;
 })();
 function crc32(...buffers) {
-  let crc = 4294967295;
+  let crc2 = 4294967295;
   for (const buf of buffers) {
     for (let i = 0; i < buf.length; i++) {
-      crc = CRC_TABLE2[(crc ^ buf[i]) >>> 0 & 255] ^ crc >>> 8;
+      crc2 = CRC_TABLE2[(crc2 ^ buf[i]) >>> 0 & 255] ^ crc2 >>> 8;
     }
   }
-  return (crc ^ 4294967295) >>> 0;
+  return (crc2 ^ 4294967295) >>> 0;
 }
 function isPng2(buf) {
   if (buf.length < PNG_SIGNATURE2.length)
@@ -2589,12 +3092,12 @@ function u32be(value) {
 }
 function encodeChunk(type, data) {
   const typeBytes = latin1Encode(type);
-  const crc = crc32(typeBytes, data);
+  const crc2 = crc32(typeBytes, data);
   const out = new Uint8Array(12 + data.length);
   out.set(u32be(data.length), 0);
   out.set(typeBytes, 4);
   out.set(data, 8);
-  out.set(u32be(crc), 8 + data.length);
+  out.set(u32be(crc2), 8 + data.length);
   return out;
 }
 function encodeTextChunk(keyword, text) {
@@ -3052,6 +3555,26 @@ function decodeCharx(bytes) {
   const card = decodeCharacterCard2(JSON.parse(strFromU8(cardJson)));
   const assetPaths = Object.keys(files).filter((p) => p !== "card.json");
   return { card, assetPaths };
+}
+function decodeCharxAsset2(bytes, path2) {
+  let files;
+  try {
+    files = unzipSync(bytes);
+  } catch (cause) {
+    throw new CharxFormatError2(`not a valid zip: ${String(cause)}`);
+  }
+  const asset = files[path2];
+  if (asset === void 0)
+    throw new CharxFormatError2(`CHARX has no asset '${path2}'`);
+  return asset;
+}
+function encodeCharx(ir, assets) {
+  const files = {
+    "card.json": strToU8(JSON.stringify(encodeCharacterCardJson2(ir)))
+  };
+  for (const asset of assets ?? [])
+    files[asset.path] = asset.data;
+  return zipSync(files);
 }
 
 // packages/tavern-format/lib/group.js
@@ -3537,6 +4060,64 @@ var TavernStore = class _TavernStore {
     if (template !== void 0) return encodeCharacterCardPng(file.card, template);
     return new Uint8Array(Buffer.from(JSON.stringify(encodeCharacterCardJson2(file.card), null, 2), "utf8"));
   }
+  /**
+   * 保存已编辑的角色卡，并尽量保留原始容器：PNG 继续写回原图的 chunks，
+   * CHARX 继续保留 zip 内全部资源；名称变更时同步迁移文件名。
+   */
+  async updateCharacter(name2, source) {
+    const current = await this.getCharacter(name2);
+    if (current === void 0) throw new Error(`character '${name2}' not found`);
+    const incomingData = source.data;
+    const card = typeof incomingData === "object" && incomingData !== null && !Array.isArray(incomingData) && Object.prototype.hasOwnProperty.call(incomingData, "firstMes") ? {
+      ...current.card,
+      spec: source.spec ?? current.card.spec,
+      specVersion: typeof source.specVersion === "string" ? source.specVersion : current.card.specVersion,
+      data: { ...current.card.data, ...incomingData },
+      raw: structuredClone(current.card.raw)
+    } : decodeCharacterCard2(source);
+    if (typeof card.data.name !== "string" || card.data.name.trim() === "") {
+      throw new Error("character name cannot be empty");
+    }
+    const nextStem = safeFileName(card.data.name);
+    const currentStem = safeFileName(name2);
+    const collision = await this.getCharacter(card.data.name);
+    if (collision !== void 0 && nextStem !== currentStem) {
+      throw new Error(`character '${card.data.name}' already exists`);
+    }
+    let bytes;
+    let kind = current.kind;
+    const original = new Uint8Array(await fs.readFile(path.join(this.root, "characters", current.fileName)));
+    if (current.kind === "png") {
+      bytes = encodeCharacterCardPng(card, original);
+    } else if (current.kind === "charx") {
+      const decoded = decodeCharx(original);
+      bytes = encodeCharx(card, decoded.assetPaths.map((assetPath) => ({ path: assetPath, data: decodeCharxAsset2(original, assetPath) })));
+    } else {
+      bytes = jsonBytes(encodeCharacterCardJson2(card));
+    }
+    await this.writeAtomic(path.join(this.root, "characters", `${nextStem}.${kind}`), bytes);
+    if (currentStem !== nextStem || current.kind !== kind) {
+      await fs.rm(path.join(this.root, "characters", current.fileName), { force: true });
+    }
+    if (currentStem !== nextStem) {
+      try {
+        await fs.access(path.join(this.root, "chats", nextStem));
+      } catch (cause) {
+        if (cause.code !== "ENOENT") throw cause;
+        try {
+          await fs.rename(path.join(this.root, "chats", currentStem), path.join(this.root, "chats", nextStem));
+        } catch (renameCause) {
+          if (renameCause.code !== "ENOENT") throw renameCause;
+        }
+      }
+    }
+    for (const other of ["png", "json", "charx"].filter((other2) => other2 !== kind)) {
+      await fs.rm(path.join(this.root, "characters", `${nextStem}.${other}`), { force: true });
+    }
+    const saved = await this.getCharacter(card.data.name);
+    if (saved === void 0) throw new Error(`character '${card.data.name}' could not be reloaded`);
+    return saved;
+  }
   async listCharacters() {
     const files = await this.listDir("characters");
     return [...new Set(files.filter((f) => /\.(png|json|charx)$/.test(f)).map((f) => f.replace(/\.(png|json|charx)$/, "")))].sort();
@@ -3591,6 +4172,11 @@ var TavernStore = class _TavernStore {
     const bytes = await this.tryRead(path.join(this.root, "worlds", `${safeFileName(name2)}.json`));
     if (bytes === void 0) return void 0;
     return parseWorldInfoFile(name2, JSON.parse(Buffer.from(bytes).toString("utf8")));
+  }
+  async exportWorld(name2) {
+    const book = await this.getWorld(name2);
+    if (book === void 0) throw new Error(`world '${name2}' not found`);
+    return jsonBytes(serializeWorldInfoFile(book));
   }
   async deleteWorld(name2) {
     await fs.rm(path.join(this.root, "worlds", `${safeFileName(name2)}.json`), { force: true });
@@ -3688,6 +4274,11 @@ var TavernStore = class _TavernStore {
     const bytes = await this.tryRead(path.join(this.root, "presets", `${safeFileName(name2)}.json`));
     if (bytes === void 0) return void 0;
     return JSON.parse(Buffer.from(bytes).toString("utf8"));
+  }
+  async exportPreset(name2) {
+    const preset = await this.getPreset(name2);
+    if (preset === void 0) throw new Error(`preset '${name2}' not found`);
+    return jsonBytes(preset);
   }
   async listPresets() {
     const files = await this.listDir("presets");
@@ -3999,7 +4590,7 @@ async function handleApi(ctx, req, res) {
       activeCard: active ? publicCard(active.card) : null,
       model: ctx.agentDefaultModel.currentSelection(),
       version: "0.1.0",
-      commit: "0ce2477"
+      commit: "138c6e7"
     });
   }
   if (method === "GET" && route.startsWith("avatar/")) {
@@ -4023,6 +4614,42 @@ async function handleApi(ctx, req, res) {
     const found = await db.getCharacter(name2);
     if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
     return sendJson(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) });
+  }
+  if (method === "PUT" && route.startsWith("character/")) {
+    const oldName = decodeURIComponent(route.slice("character/".length));
+    const body = await readJson(req, 25 * 1024 * 1024);
+    if (!body.card || typeof body.card !== "object" || Array.isArray(body.card)) {
+      throw new Error("expected { card }");
+    }
+    const saved = await db.updateCharacter(oldName, body.card);
+    const nextName = saved.card.data.name;
+    const state = await db.updateState((current) => {
+      const activeCharacter = current.activeCharacter === oldName ? nextName : current.activeCharacter;
+      const sessionBindings = Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
+        sessionId,
+        binding.character === oldName && binding.group !== true ? { ...binding, character: nextName } : binding
+      ]));
+      const prefix = `${oldName}\0`;
+      const chats = nextName === oldName ? current.chats : Object.fromEntries(Object.entries(current.chats).map(([key, value]) => [
+        key.startsWith(prefix) ? `${nextName}\0${key.slice(prefix.length)}` : key,
+        value
+      ]));
+      return { activeCharacter, sessionBindings, chats };
+    });
+    if (nextName !== oldName) {
+      for (const groupName of await db.listGroups()) {
+        const group2 = await db.getGroup(groupName);
+        if (group2?.members.includes(oldName)) {
+          await db.putGroup({
+            ...group2,
+            members: group2.members.map((member) => member === oldName ? nextName : member),
+            disabledMembers: group2.disabledMembers.map((member) => member === oldName ? nextName : member)
+          });
+        }
+      }
+    }
+    await refreshActivePrompt();
+    return sendJson(res, 200, { ok: true, kind: saved.kind, card: publicCard(saved.card), state });
   }
   if (method === "DELETE" && route === "character") {
     const name2 = url.searchParams.get("name");
@@ -4055,6 +4682,7 @@ async function handleApi(ctx, req, res) {
     const media = found.kind === "charx" ? "application/zip" : found.kind === "json" ? "application/json" : "image/png";
     res.statusCode = 200;
     res.setHeader("content-type", media);
+    const ext = found.kind === "charx" ? "charx" : found.kind === "json" ? "json" : "png";
     res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(`${name2}.${ext}`)}"`);
     res.end(Buffer.from(bytes));
     return;
@@ -4122,6 +4750,33 @@ async function handleApi(ctx, req, res) {
     parsePresetOrThrow(body.data);
     await db.putPreset(body.name, body.data);
     return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data) });
+  }
+  if (method === "GET" && route.startsWith("preset/")) {
+    const name2 = decodeURIComponent(route.slice("preset/".length));
+    const data = await db.getPreset(name2);
+    if (!data) return sendJson(res, 404, { ok: false, message: "preset not found" });
+    return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data });
+  }
+  if (method === "PUT" && route.startsWith("preset/")) {
+    const oldName = decodeURIComponent(route.slice("preset/".length));
+    const body = await readJson(req, 10 * 1024 * 1024);
+    if (typeof body.name !== "string" || body.name.trim() === "" || !body.data || typeof body.data !== "object" || Array.isArray(body.data)) {
+      throw new Error("expected { name, data }");
+    }
+    parsePresetOrThrow(body.data);
+    await db.putPreset(body.name, body.data);
+    if (body.name !== oldName) await db.deletePreset(oldName);
+    const state = await db.updateState((current) => ({
+      activePreset: current.activePreset === oldName ? body.name : current.activePreset,
+      textCompletion: current.textCompletion ? {
+        ...current.textCompletion,
+        ...current.textCompletion.contextPreset === oldName ? { contextPreset: body.name } : {},
+        ...current.textCompletion.instructPreset === oldName ? { instructPreset: body.name } : {},
+        ...current.textCompletion.samplerPreset === oldName ? { samplerPreset: body.name } : {}
+      } : current.textCompletion
+    }));
+    await refreshActivePrompt();
+    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data), data: body.data, state });
   }
   if (method === "POST" && route === "import/persona") {
     const body = await readJson(req, 25 * 1024 * 1024);
@@ -4344,6 +4999,30 @@ async function handleApi(ctx, req, res) {
     if (!book) return sendJson(res, 404, { ok: false, message: "world not found" });
     return sendJson(res, 200, { ok: true, book });
   }
+  if (method === "PUT" && route.startsWith("world/")) {
+    const oldName = decodeURIComponent(route.slice("world/".length));
+    const body = await readJson(req, 10 * 1024 * 1024);
+    if (typeof body.name !== "string" || body.name.trim() === "" || !body.data || typeof body.data !== "object" || Array.isArray(body.data)) {
+      throw new Error("expected { name, data }");
+    }
+    const book = await db.importWorldFile(body.name, body.data);
+    if (body.name !== oldName) {
+      await db.deleteWorld(oldName);
+      await db.updateState((current) => ({ activeWorlds: current.activeWorlds.map((name2) => name2 === oldName ? body.name : name2) }));
+    }
+    return sendJson(res, 200, { ok: true, name: book.name, book });
+  }
+  if (method === "GET" && route.startsWith("export/world/")) {
+    const name2 = decodeURIComponent(route.slice("export/world/".length));
+    const book = await db.getWorld(name2);
+    if (!book) return sendJson(res, 404, { ok: false, message: "world not found" });
+    const bytes = await db.exportWorld(name2);
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(`${name2}.json`)}"`);
+    res.end(Buffer.from(bytes));
+    return;
+  }
   if (method === "DELETE" && route === "world") {
     const name2 = url.searchParams.get("name");
     if (!name2) throw new Error("name query is required");
@@ -4378,6 +5057,17 @@ async function handleApi(ctx, req, res) {
       };
     });
     return sendJson(res, 200, { ok: true, state });
+  }
+  if (method === "GET" && route.startsWith("export/preset/")) {
+    const name2 = decodeURIComponent(route.slice("export/preset/".length));
+    const preset = await db.getPreset(name2);
+    if (!preset) return sendJson(res, 404, { ok: false, message: "preset not found" });
+    const bytes = await db.exportPreset(name2);
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(`${name2}.json`)}"`);
+    res.end(Buffer.from(bytes));
+    return;
   }
   if (method === "GET" && route === "variables") {
     const state = await db.getState();
@@ -5257,8 +5947,8 @@ function deepFreeze(value) {
 function publicCard(card) {
   return { spec: card.spec, specVersion: card.specVersion, data: card.data };
 }
-function imageContentType(ext2) {
-  const normalized = String(ext2 || "").toLowerCase();
+function imageContentType(ext) {
+  const normalized = String(ext || "").toLowerCase();
   return normalized === "jpg" || normalized === "jpeg" ? "image/jpeg" : normalized === "webp" ? "image/webp" : normalized === "gif" ? "image/gif" : "image/png";
 }
 function roleName(role) {

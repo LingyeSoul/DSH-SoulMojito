@@ -140,16 +140,59 @@ window.__ModuleLoader__.load({
       'panel.characters.creatorNotes': 'Creator notes',
       'panel.characters.creator': 'By {name}',
       'panel.characters.loadFailed': 'Failed to load card: {message}',
+      'panel.edit': 'Edit',
+      'panel.save': 'Save changes',
+      'panel.saved': 'Saved',
+      'panel.unsaved': 'Unsaved changes',
+      'panel.cancel': 'Cancel',
+      'panel.add': 'Add',
+      'panel.remove': 'Remove',
+      'panel.rename': 'Name',
+      'panel.exportJson': 'Export JSON',
+      'panel.characters.nickname': 'Nickname',
+      'panel.characters.tags': 'Tags (comma separated)',
+      'panel.characters.systemPrompt': 'System prompt',
+      'panel.characters.postHistory': 'Post-history instructions',
+      'panel.characters.alternateGreetings': 'Alternate greetings (one per line)',
+      'panel.characters.advancedJson': 'Advanced card data (JSON)',
+      'panel.characters.editHint': 'Edits keep the original card container and embedded assets when possible.',
       'panel.worlds.entries': '{count} entries',
       'panel.worlds.search': 'Search entries',
       'panel.worlds.noEntries': 'No entries match the search.',
       'panel.worlds.delete': 'Delete {name}',
       'panel.worlds.deleteConfirm': 'Delete world book "{name}"?',
       'panel.worlds.keys': 'Keys: {keys}',
+      'panel.worlds.edit': 'Edit world book',
+      'panel.worlds.name': 'World book name',
+      'panel.worlds.entry': 'Entry',
+      'panel.worlds.comment': 'Comment',
+      'panel.worlds.keysPrimary': 'Primary keys (comma separated)',
+      'panel.worlds.keysSecondary': 'Secondary keys (comma separated)',
+      'panel.worlds.content': 'Content',
+      'panel.worlds.order': 'Order',
+      'panel.worlds.depth': 'Depth',
+      'panel.worlds.enabled': 'Enabled',
+      'panel.worlds.constant': 'Constant',
+      'panel.worlds.selective': 'Selective',
+      'panel.worlds.addEntry': 'Add entry',
       'panel.presets.empty': 'No presets imported',
       'panel.presets.setActive': 'Set active',
       'panel.presets.delete': 'Delete {name}',
       'panel.presets.deleteConfirm': 'Delete preset "{name}"?',
+      'panel.presets.edit': 'Edit preset',
+      'panel.presets.prompts': 'Prompt stack',
+      'panel.presets.promptName': 'Prompt name',
+      'panel.presets.identifier': 'Identifier',
+      'panel.presets.role': 'Role',
+      'panel.presets.content': 'Content',
+      'panel.presets.marker': 'Marker',
+      'panel.presets.enabled': 'Enabled',
+      'panel.presets.addPrompt': 'Add prompt',
+      'panel.presets.removePrompt': 'Remove prompt',
+      'panel.presets.sampler': 'Sampling and advanced fields (JSON)',
+      'panel.presets.invalidJson': 'Advanced fields must be valid JSON.',
+      'panel.presets.identifierInvalid': 'Prompt identifiers must be non-empty and unique.',
+      'panel.presets.editHint': 'Prompt order and unknown sampler fields are preserved on save.',
       'panel.variables.globals': 'Global STscript variables',
       'panel.variables.globalsHint': 'Shared across every chat through the getvar/setvar macros.',
       'panel.variables.empty': 'No variables set',
@@ -310,16 +353,59 @@ window.__ModuleLoader__.load({
       'panel.characters.creatorNotes': '作者注',
       'panel.characters.creator': '作者：{name}',
       'panel.characters.loadFailed': '卡面加载失败：{message}',
+      'panel.edit': '编辑',
+      'panel.save': '保存修改',
+      'panel.saved': '已保存',
+      'panel.unsaved': '有未保存修改',
+      'panel.cancel': '取消',
+      'panel.add': '新增',
+      'panel.remove': '移除',
+      'panel.rename': '名称',
+      'panel.exportJson': '导出 JSON',
+      'panel.characters.nickname': '昵称',
+      'panel.characters.tags': '标签（逗号分隔）',
+      'panel.characters.systemPrompt': '系统提示词',
+      'panel.characters.postHistory': '历史后指令',
+      'panel.characters.alternateGreetings': '备用开场白（每行一个）',
+      'panel.characters.advancedJson': '高级卡片数据（JSON）',
+      'panel.characters.editHint': '保存时会尽量保留原始卡片容器与内嵌资源。',
       'panel.worlds.entries': '{count} 条目',
       'panel.worlds.search': '搜索条目',
       'panel.worlds.noEntries': '没有匹配的条目。',
       'panel.worlds.delete': '删除 {name}',
       'panel.worlds.deleteConfirm': '删除世界书“{name}”？',
       'panel.worlds.keys': '键：{keys}',
+      'panel.worlds.edit': '编辑世界书',
+      'panel.worlds.name': '世界书名称',
+      'panel.worlds.entry': '条目',
+      'panel.worlds.comment': '备注',
+      'panel.worlds.keysPrimary': '主关键词（逗号分隔）',
+      'panel.worlds.keysSecondary': '次关键词（逗号分隔）',
+      'panel.worlds.content': '内容',
+      'panel.worlds.order': '排序',
+      'panel.worlds.depth': '深度',
+      'panel.worlds.enabled': '启用',
+      'panel.worlds.constant': '常驻',
+      'panel.worlds.selective': '选择性匹配',
+      'panel.worlds.addEntry': '新增条目',
       'panel.presets.empty': '尚未导入预设',
       'panel.presets.setActive': '设为当前',
       'panel.presets.delete': '删除 {name}',
       'panel.presets.deleteConfirm': '删除预设“{name}”？',
+      'panel.presets.edit': '编辑预设',
+      'panel.presets.prompts': '提示词堆栈',
+      'panel.presets.promptName': '提示词名称',
+      'panel.presets.identifier': '标识符',
+      'panel.presets.role': '角色',
+      'panel.presets.content': '内容',
+      'panel.presets.marker': '插槽标记',
+      'panel.presets.enabled': '启用',
+      'panel.presets.addPrompt': '新增提示词',
+      'panel.presets.removePrompt': '移除提示词',
+      'panel.presets.sampler': '采样与高级字段（JSON）',
+      'panel.presets.invalidJson': '高级字段必须是有效 JSON。',
+      'panel.presets.identifierInvalid': '提示词标识符不能为空且必须唯一。',
+      'panel.presets.editHint': '保存时会保留提示词顺序与未知采样字段。',
       'panel.variables.globals': '全局 STscript 变量',
       'panel.variables.globalsHint': '所有聊天通过 getvar/setvar 宏共享。',
       'panel.variables.empty': '暂无变量',
@@ -1092,6 +1178,16 @@ window.__ModuleLoader__.load({
       return result.card
     }
 
+    async function saveCharacterCard(name, card) {
+      const result = await api(`character/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ card }),
+      })
+      await refreshBootstrap()
+      return result.card
+    }
+
     async function deleteCharacterAsset(name) {
       await api(`character?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
       await refreshBootstrap()
@@ -1099,6 +1195,16 @@ window.__ModuleLoader__.load({
 
     async function fetchWorldBook(name) {
       const result = await api(`world/${encodeURIComponent(name)}`)
+      return result.book
+    }
+
+    async function saveWorldBook(name, book) {
+      const result = await api(`world/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ name: book.name, data: worldBookToFile(book) }),
+      })
+      await refreshBootstrap()
       return result.book
     }
 
@@ -1110,6 +1216,66 @@ window.__ModuleLoader__.load({
     async function deletePresetAsset(name) {
       await api(`preset?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
       await refreshBootstrap()
+    }
+
+    async function fetchPreset(name) {
+      const result = await api(`preset/${encodeURIComponent(name)}`)
+      return result.data
+    }
+
+    async function savePreset(name, data, nextName = name) {
+      nextName = String(nextName || name).trim() || name
+      const result = await api(`preset/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ name: nextName, data }),
+      })
+      await refreshBootstrap()
+      return result.data
+    }
+
+    function downloadAsset(path, fallbackName) {
+      const anchor = document.createElement('a')
+      anchor.href = `${API}/${path}`
+      anchor.download = fallbackName
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+    }
+
+    function commaList(value) {
+      return Array.isArray(value) ? value.join(', ') : ''
+    }
+
+    function parseCommaList(value) {
+      return String(value || '').split(',').map((item) => item.trim()).filter(Boolean)
+    }
+
+    function worldBookToFile(book) {
+      const entries = {}
+      for (const entry of book.entries || []) {
+        const {
+          uid, key, keysecondary, comment, content, constant, vectorized, selective, selectiveLogic,
+          addMemo, order, position, disable, ignoreBudget, excludeRecursion, preventRecursion,
+          delayUntilRecursion, probability, useProbability, depth, outletName, group, groupOverride,
+          groupWeight, scanDepth, caseSensitive, matchWholeWords, useGroupScoring, automationId,
+          role, sticky, cooldown, delay, triggers, matchPersonaDescription, matchCharacterDescription,
+          matchCharacterPersonality, matchCharacterDepthPrompt, matchScenario, matchCreatorNotes, extra,
+        } = entry
+        entries[String(uid)] = {
+          ...(extra || {}), uid, key: key || [], keysecondary: keysecondary || [], comment: comment || '', content: content || '',
+          constant: Boolean(constant), vectorized: Boolean(vectorized), selective: Boolean(selective), selectiveLogic: Number(selectiveLogic || 0),
+          addMemo: Boolean(addMemo), order: Number(order || 100), position: Number(position || 0), disable: Boolean(disable), ignoreBudget: Boolean(ignoreBudget),
+          excludeRecursion: Boolean(excludeRecursion), preventRecursion: Boolean(preventRecursion), delayUntilRecursion: Number(delayUntilRecursion || 0),
+          probability: Number(probability ?? 100), useProbability: useProbability !== false, depth: Number(depth || 4), outletName: outletName || '',
+          group: group || '', groupOverride: Boolean(groupOverride), groupWeight: Number(groupWeight || 100), scanDepth, caseSensitive, matchWholeWords,
+          useGroupScoring, automationId: automationId || '', role: Number(role || 0), sticky, cooldown, delay, triggers: triggers || [],
+          matchPersonaDescription: Boolean(matchPersonaDescription), matchCharacterDescription: Boolean(matchCharacterDescription),
+          matchCharacterPersonality: Boolean(matchCharacterPersonality), matchCharacterDepthPrompt: Boolean(matchCharacterDepthPrompt),
+          matchScenario: Boolean(matchScenario), matchCreatorNotes: Boolean(matchCreatorNotes),
+        }
+      }
+      return { ...(book.extra || {}), entries }
     }
 
     async function fetchGlobals() {
@@ -2154,6 +2320,85 @@ window.__ModuleLoader__.load({
         state.error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, state.error)) : null)
     }
 
+    function cloneValue(value) {
+      return value === undefined ? value : JSON.parse(JSON.stringify(value))
+    }
+
+    function EditorField({ label, value, onChange, multiline = false, type = 'text', min, max, step, className = '' }) {
+      const props = {
+        value: value ?? '',
+        type,
+        min,
+        max,
+        step,
+        onChange: (event) => onChange(event.target.value),
+      }
+      return h('label', { className: `dt-editor-field ${className}` },
+        h('span', { className: 'dt-label' }, label),
+        multiline ? h('textarea', { ...props, type: undefined }) : h('input', props))
+    }
+
+    function CardEditor({ card, name, onSave, onCancel }) {
+      const t = useTranslate()
+      const [draft, setDraft] = useState(() => cloneValue(card))
+      const [saving, setSaving] = useState(false)
+      const [error, setError] = useState('')
+      const [advanced, setAdvanced] = useState(() => JSON.stringify({ extensions: card?.data?.extensions || {}, characterBook: card?.data?.characterBook, assets: card?.data?.assets, source: card?.data?.source, groupOnlyGreetings: card?.data?.groupOnlyGreetings, creatorNotesMultilingual: card?.data?.creatorNotesMultilingual, characterVersion: card?.data?.characterVersion, creationDate: card?.data?.creationDate, modificationDate: card?.data?.modificationDate }, null, 2))
+      const data = draft?.data || {}
+      const advancedBaseline = JSON.stringify({ extensions: card?.data?.extensions || {}, characterBook: card?.data?.characterBook, assets: card?.data?.assets, source: card?.data?.source, groupOnlyGreetings: card?.data?.groupOnlyGreetings, creatorNotesMultilingual: card?.data?.creatorNotesMultilingual, characterVersion: card?.data?.characterVersion, creationDate: card?.data?.creationDate, modificationDate: card?.data?.modificationDate }, null, 2)
+      const dirty = JSON.stringify(draft) !== JSON.stringify(card) || advanced !== advancedBaseline
+      useEffect(() => {
+        if (draft === null && card) {
+          setDraft(cloneValue(card))
+          setAdvanced(JSON.stringify({ extensions: card.data?.extensions || {}, characterBook: card.data?.characterBook, assets: card.data?.assets, source: card.data?.source, groupOnlyGreetings: card.data?.groupOnlyGreetings, creatorNotesMultilingual: card.data?.creatorNotesMultilingual, characterVersion: card.data?.characterVersion, creationDate: card.data?.creationDate, modificationDate: card.data?.modificationDate }, null, 2))
+        }
+      }, [card])
+      useEffect(() => {
+        if (!dirty) return undefined
+        const handleBeforeUnload = (event) => { event.preventDefault(); event.returnValue = '' }
+        window.addEventListener('beforeunload', handleBeforeUnload)
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+      }, [dirty])
+      const setData = (key, value) => setDraft((current) => ({ ...current, data: { ...(current.data || {}), [key]: value } }))
+      const cancel = () => {
+        if (!dirty || window.confirm(`${t('panel.unsaved')}?`)) onCancel()
+      }
+      const save = () => {
+        let extra
+        try { extra = advanced.trim() === '' ? {} : JSON.parse(advanced) } catch { setError('Advanced card data must be valid JSON.'); return }
+        if (!extra || typeof extra !== 'object' || Array.isArray(extra)) { setError('Advanced card data must be a JSON object.'); return }
+        setSaving(true)
+        setError('')
+        void Promise.resolve(onSave({ ...draft, data: { ...data, ...extra, name: String(data.name || '').trim() } }))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setSaving(false))
+      }
+      if (!draft) return h('p', { className: 'dt-muted' }, t('nav.loading'))
+      return h('div', { className: 'dt-editor' },
+        h('div', { className: 'dt-editor-toolbar' },
+          h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+          h('div', { className: 'dt-editor-actions' },
+            h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+            h(Button, { size: 'sm', variant: 'primary', disabled: saving || !String(data.name || '').trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
+        h('p', { className: 'dt-hint' }, t('panel.characters.editHint')),
+        h('div', { className: 'dt-editor-grid' },
+          h(EditorField, { label: t('panel.rename'), value: data.name, onChange: (value) => setData('name', value) }),
+          h(EditorField, { label: t('panel.characters.nickname'), value: data.nickname, onChange: (value) => setData('nickname', value) }),
+          h(EditorField, { label: t('panel.characters.creator'), value: data.creator, onChange: (value) => setData('creator', value) }),
+          h(EditorField, { label: t('panel.characters.tags'), value: commaList(data.tags), onChange: (value) => setData('tags', parseCommaList(value)) }),
+          h(EditorField, { label: t('panel.characters.description'), value: data.description, onChange: (value) => setData('description', value), multiline: true, className: 'dt-editor-wide' }),
+          h(EditorField, { label: t('panel.characters.personality'), value: data.personality, onChange: (value) => setData('personality', value), multiline: true, className: 'dt-editor-wide' }),
+          h(EditorField, { label: t('panel.characters.scenario'), value: data.scenario, onChange: (value) => setData('scenario', value), multiline: true, className: 'dt-editor-wide' }),
+          h(EditorField, { label: t('panel.characters.firstMes'), value: data.firstMes, onChange: (value) => setData('firstMes', value), multiline: true, className: 'dt-editor-wide' }),
+          h(EditorField, { label: t('panel.characters.mesExample'), value: data.mesExample, onChange: (value) => setData('mesExample', value), multiline: true, className: 'dt-editor-wide' }),
+          h(EditorField, { label: t('panel.characters.alternateGreetings'), value: (data.alternateGreetings || []).join('\n'), onChange: (value) => setData('alternateGreetings', value.split('\n').map((item) => item.trim()).filter(Boolean)), multiline: true, className: 'dt-editor-wide' }),
+          h(EditorField, { label: t('panel.characters.systemPrompt'), value: data.systemPrompt, onChange: (value) => setData('systemPrompt', value), multiline: true, className: 'dt-editor-wide' }),
+          h(EditorField, { label: t('panel.characters.postHistory'), value: data.postHistoryInstructions, onChange: (value) => setData('postHistoryInstructions', value), multiline: true, className: 'dt-editor-wide' }),
+          h(EditorField, { label: t('panel.characters.creatorNotes'), value: data.creatorNotes, onChange: (value) => setData('creatorNotes', value), multiline: true, className: 'dt-editor-wide' }),
+          h(EditorField, { label: t('panel.characters.advancedJson'), value: advanced, onChange: setAdvanced, multiline: true, className: 'dt-editor-wide dt-editor-json' })),
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
     function CharacterCardFields({ card }) {
       const t = useTranslate()
       const [expanded, setExpanded] = useState({})
@@ -2177,9 +2422,9 @@ window.__ModuleLoader__.load({
         field('description', t('panel.characters.description')),
         field('personality', t('panel.characters.personality')),
         field('scenario', t('panel.characters.scenario')),
-        field('first_mes', t('panel.characters.firstMes')),
-        field('mes_example', t('panel.characters.mesExample')),
-        field('creator_notes', t('panel.characters.creatorNotes')))
+         field('firstMes', t('panel.characters.firstMes')),
+         field('mesExample', t('panel.characters.mesExample')),
+         field('creatorNotes', t('panel.characters.creatorNotes')))
     }
 
     function PanelCharacters() {
@@ -2187,9 +2432,11 @@ window.__ModuleLoader__.load({
       const t = useTranslate()
       const [error, setError] = useState('')
       const [viewing, setViewing] = useState('')
+      const [editing, setEditing] = useState('')
       const [cards, setCards] = useState({})
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
       const viewCard = (name) => {
+        if (editing === name) return
         if (viewing === name) { setViewing(''); return }
         setViewing(name)
         if (!(name in cards)) {
@@ -2204,16 +2451,29 @@ window.__ModuleLoader__.load({
               })
               setViewing('')
               setError(t('panel.characters.loadFailed', { message: cause instanceof Error ? cause.message : String(cause) }))
-            })
+          })
         }
       }
-      const exportCharacterCard = (name) => {
-        const anchor = document.createElement('a')
-        anchor.href = `${API}/export/character/${encodeURIComponent(name)}`
-        document.body.appendChild(anchor)
-        anchor.click()
-        anchor.remove()
+      const editCard = (name) => {
+        if (editing === name) { setEditing(''); return }
+        setEditing(name)
+        setViewing(name)
+        if (!(name in cards)) {
+          setCards((current) => ({ ...current, [name]: null }))
+          void fetchCharacterCard(name).then((card) => setCards((current) => ({ ...current, [name]: card })))
+            .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+        }
       }
+      const save = (name, card) => saveCharacterCard(name, card).then((saved) => {
+        const nextName = saved?.data?.name || name
+        setCards((current) => {
+          const next = { ...current, [nextName]: saved }
+          if (nextName !== name) delete next[name]
+          return next
+        })
+        setEditing('')
+        setViewing(nextName)
+      })
       const characters = state.bootstrap.characters
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
@@ -2226,7 +2486,7 @@ window.__ModuleLoader__.load({
             : h('div', { className: 'dt-card-grid' }, characters.map((name) => {
               const active = state.bootstrap.state.activeCharacter === name
               const card = cards[name]
-              return h('div', { key: name, className: 'dt-card' },
+              return h('div', { key: name, className: `dt-card ${editing === name ? 'dt-card-editing' : ''}` },
                 h('div', { className: 'dt-card-head' },
                   h('img', { src: `${API}/avatar/${encodeURIComponent(name)}`, alt: '' }),
                   h('div', { className: 'dt-card-title' },
@@ -2237,13 +2497,14 @@ window.__ModuleLoader__.load({
                     ? h(Pill, { active: true }, t('panel.characters.active'))
                     : h(Button, { size: 'sm', variant: 'outline', onClick: () => run(patchState({ activeCharacter: name })) }, t('panel.characters.setActive')),
                   h(Button, { size: 'sm', variant: 'ghost', onClick: () => viewCard(name) }, t(viewing === name ? 'panel.characters.hideCard' : 'panel.characters.viewCard')),
+                  h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editCard(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),
                   h(Button, {
                     size: 'sm',
                     variant: 'ghost',
                     icon: h(IconDownloadOutline16),
                     'aria-label': t('panel.characters.export', { name }),
                     title: t('panel.characters.export', { name }),
-                    onClick: () => exportCharacterCard(name),
+                    onClick: () => downloadAsset(`export/character/${encodeURIComponent(name)}`, `${name}.png`),
                   }),
                   h(Button, {
                     size: 'sm',
@@ -2255,7 +2516,9 @@ window.__ModuleLoader__.load({
                       if (window.confirm(t('panel.characters.deleteConfirm', { name }))) run(deleteCharacterAsset(name))
                     },
                   })),
-                viewing === name ? h(CharacterCardFields, { card }) : null)
+                editing === name
+                  ? h(CardEditor, { card, name, onSave: (next) => save(name, next), onCancel: () => setEditing('') })
+                  : viewing === name ? h(CharacterCardFields, { card }) : null)
             }))),
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
@@ -2266,11 +2529,71 @@ window.__ModuleLoader__.load({
       return [...primary, ...secondary].filter((value) => value !== '').join(', ')
     }
 
+    function ToggleField({ label, checked, onChange }) {
+      return h('label', { className: 'dt-editor-toggle' },
+        h('input', { type: 'checkbox', checked: checked === true, onChange: (event) => onChange(event.target.checked) }),
+        h('span', null, label))
+    }
+
+    function WorldBookEditor({ book, onSave, onCancel }) {
+      const t = useTranslate()
+      const [draft, setDraft] = useState(() => cloneValue(book))
+      const [saving, setSaving] = useState(false)
+      const [error, setError] = useState('')
+      const dirty = JSON.stringify(draft) !== JSON.stringify(book)
+      const entries = draft?.entries || []
+      const setBook = (key, value) => setDraft((current) => ({ ...current, [key]: value }))
+      const setEntry = (uid, key, value) => setDraft((current) => ({ ...current, entries: (current.entries || []).map((entry) => entry.uid === uid ? { ...entry, [key]: value } : entry) }))
+      const addEntry = () => {
+        const uid = entries.reduce((max, entry) => Math.max(max, Number(entry.uid) || 0), -1) + 1
+        setDraft((current) => ({ ...current, entries: [...(current.entries || []), { uid, key: [], keysecondary: [], comment: '', content: '', constant: false, vectorized: false, selective: true, selectiveLogic: 0, addMemo: true, order: 100, position: 0, disable: false, ignoreBudget: false, excludeRecursion: false, preventRecursion: false, delayUntilRecursion: 0, probability: 100, useProbability: true, depth: 4, outletName: '', group: '', groupOverride: false, groupWeight: 100, scanDepth: null, caseSensitive: null, matchWholeWords: null, useGroupScoring: null, automationId: '', role: 0, sticky: null, cooldown: null, delay: null, triggers: [], matchPersonaDescription: false, matchCharacterDescription: false, matchCharacterPersonality: false, matchCharacterDepthPrompt: false, matchScenario: false, matchCreatorNotes: false }] }))
+      }
+      const removeEntry = (uid) => setDraft((current) => ({ ...current, entries: (current.entries || []).filter((entry) => entry.uid !== uid) }))
+      const save = () => {
+        setSaving(true)
+        setError('')
+        void Promise.resolve(onSave({ ...draft, name: String(draft.name || '').trim(), entries: entries.map((entry) => ({ ...entry, order: Number(entry.order) || 0, depth: Number(entry.depth) || 0 })) }))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setSaving(false))
+      }
+      const cancel = () => { if (!dirty || window.confirm(`${t('panel.unsaved')}?`)) onCancel() }
+      if (!draft) return h('p', { className: 'dt-muted' }, t('nav.loading'))
+      return h('div', { className: 'dt-editor' },
+        h('div', { className: 'dt-editor-toolbar' },
+          h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+          h('div', { className: 'dt-editor-actions' },
+            h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+            h(Button, { size: 'sm', variant: 'primary', disabled: saving || !String(draft.name || '').trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
+        h('div', { className: 'dt-editor-grid' },
+          h(EditorField, { label: t('panel.worlds.name'), value: draft.name, onChange: (value) => setBook('name', value) })),
+        h('div', { className: 'dt-editor-section-title' },
+          h('strong', null, t('panel.worlds.entry')),
+          h(Button, { size: 'sm', variant: 'outline', icon: h(IconPlusOutline16), onClick: addEntry }, t('panel.worlds.addEntry'))),
+        h('div', { className: 'dt-editor-entries' }, entries.map((entry, index) => h('section', { key: entry.uid ?? index, className: 'dt-editor-entry' },
+          h('div', { className: 'dt-editor-entry-head' },
+            h('strong', null, entry.comment || `#${index + 1}`),
+            h(Button, { size: 'sm', variant: 'ghost', icon: h(IconTrashOutline16), 'aria-label': t('panel.remove'), title: t('panel.remove'), onClick: () => removeEntry(entry.uid) })),
+          h('div', { className: 'dt-editor-grid' },
+            h(EditorField, { label: t('panel.worlds.comment'), value: entry.comment, onChange: (value) => setEntry(entry.uid, 'comment', value) }),
+            h(EditorField, { label: t('panel.worlds.keysPrimary'), value: commaList(entry.key), onChange: (value) => setEntry(entry.uid, 'key', parseCommaList(value)) }),
+            h(EditorField, { label: t('panel.worlds.keysSecondary'), value: commaList(entry.keysecondary), onChange: (value) => setEntry(entry.uid, 'keysecondary', parseCommaList(value)) }),
+            h(EditorField, { label: t('panel.worlds.order'), value: entry.order, type: 'number', onChange: (value) => setEntry(entry.uid, 'order', value) }),
+            h(EditorField, { label: t('panel.worlds.depth'), value: entry.depth, type: 'number', min: 0, onChange: (value) => setEntry(entry.uid, 'depth', value) }),
+            h(EditorField, { label: 'Probability', value: entry.probability, type: 'number', min: 0, max: 100, onChange: (value) => setEntry(entry.uid, 'probability', value) }),
+            h(EditorField, { label: t('panel.worlds.content'), value: entry.content, onChange: (value) => setEntry(entry.uid, 'content', value), multiline: true, className: 'dt-editor-wide' }),
+            h('div', { className: 'dt-editor-toggles dt-editor-wide' },
+              h(ToggleField, { label: t('panel.worlds.enabled'), checked: !entry.disable, onChange: (value) => setEntry(entry.uid, 'disable', !value) }),
+              h(ToggleField, { label: t('panel.worlds.constant'), checked: entry.constant, onChange: (value) => setEntry(entry.uid, 'constant', value) }),
+              h(ToggleField, { label: t('panel.worlds.selective'), checked: entry.selective, onChange: (value) => setEntry(entry.uid, 'selective', value) })))))),
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
     function PanelWorlds() {
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
       const [browse, setBrowse] = useState('')
+      const [editing, setEditing] = useState('')
       const [books, setBooks] = useState({})
       const [filter, setFilter] = useState('')
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
@@ -2287,6 +2610,25 @@ window.__ModuleLoader__.load({
             })
         }
       }
+      const editBook = (name) => {
+        setEditing(editing === name ? '' : name)
+        setBrowse(name)
+        if (!(name in books)) {
+          setBooks((current) => ({ ...current, [name]: null }))
+          void fetchWorldBook(name).then((book) => setBooks((current) => ({ ...current, [name]: book })))
+            .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+        }
+      }
+      const save = (name, book) => saveWorldBook(name, book).then((saved) => {
+        const next = saved?.name || name
+        setBooks((current) => {
+          const result = { ...current, [next]: saved }
+          if (next !== name) delete result[name]
+          return result
+        })
+        setBrowse(next)
+        setEditing('')
+      })
       const worlds = state.bootstrap.worlds
       const book = browse !== '' ? books[browse] : undefined
       const entries = book?.entries
@@ -2315,6 +2657,8 @@ window.__ModuleLoader__.load({
                 h('span', null, name)),
               h(Button, { size: 'sm', variant: 'ghost', onClick: () => toggleBrowse(name) },
                 browse === name ? t('panel.characters.hideCard') : t('panel.worlds.entries', { count: books[name]?.entries?.length ?? 0 })),
+              h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editBook(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),
+              h(Button, { size: 'sm', variant: 'ghost', icon: h(IconDownloadOutline16), 'aria-label': t('panel.exportJson'), title: t('panel.exportJson'), onClick: () => downloadAsset(`export/world/${encodeURIComponent(name)}`, `${name}.json`) }),
               h(Button, {
                 size: 'sm',
                 variant: 'ghost',
@@ -2325,28 +2669,125 @@ window.__ModuleLoader__.load({
                   if (window.confirm(t('panel.worlds.deleteConfirm', { name }))) run(deleteWorldBook(name))
                 },
               }))))),
-        browse !== '' ? h('section', { className: 'dt-settings-band' },
-          h('h3', null, browse),
-          h('div', { className: 'dt-imports' },
-            h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.worlds.search'), value: filter, onChange: (event) => setFilter(event.target.value) })),
-          !book
-            ? h('p', { className: 'dt-muted' }, t('nav.loading'))
-            : entries.length === 0
-              ? h('p', { className: 'dt-muted' }, t('panel.worlds.noEntries'))
-              : h('div', { className: 'dt-entry-list' }, entries.map((entry, index) => h('div', { key: entry.uid ?? index, className: `dt-entry ${entry.disable ? 'dt-entry-off' : ''}` },
-                h('div', { className: 'dt-entry-head' },
-                  h('strong', null, entry.comment || `#${entry.uid ?? index + 1}`),
-                  h('span', { className: 'dt-entry-keys' }, t('panel.worlds.keys', { keys: loreKeys(entry) }))),
-                h('div', { className: 'dt-entry-content' }, entry.content))))) : null,
-        error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
+         browse !== '' ? h('section', { className: 'dt-settings-band' },
+           h('h3', null, browse),
+           editing === browse && book
+             ? h(WorldBookEditor, { book, onSave: (next) => save(browse, next), onCancel: () => setEditing('') })
+             : h(React.Fragment, null,
+               h('div', { className: 'dt-imports' },
+                 h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.worlds.search'), value: filter, onChange: (event) => setFilter(event.target.value) })),
+               !book
+                 ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+                 : entries.length === 0
+                   ? h('p', { className: 'dt-muted' }, t('panel.worlds.noEntries'))
+                   : h('div', { className: 'dt-entry-list' }, entries.map((entry, index) => h('div', { key: entry.uid ?? index, className: `dt-entry ${entry.disable ? 'dt-entry-off' : ''}` },
+                     h('div', { className: 'dt-entry-head' },
+                       h('strong', null, entry.comment || `#${entry.uid ?? index + 1}`),
+                       h('span', { className: 'dt-entry-keys' }, t('panel.worlds.keys', { keys: loreKeys(entry) }))),
+                     h('div', { className: 'dt-entry-content' }, entry.content)))))) : null,
+         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
+    }
+
+    function PresetEditor({ name, data, kind, onSave, onCancel }) {
+      const t = useTranslate()
+      const [draft, setDraft] = useState(() => cloneValue(data) || {})
+      const [presetName, setPresetName] = useState(name)
+      const [advanced, setAdvanced] = useState(() => JSON.stringify(Object.fromEntries(Object.entries(data || {}).filter(([key]) => key !== 'prompts' && key !== 'prompt_order')), null, 2))
+      const [error, setError] = useState('')
+      const [saving, setSaving] = useState(false)
+      const prompts = draft.prompts || []
+      const chatPreset = kind === 'chat-completion' || Array.isArray(data?.prompts)
+      const dirty = presetName !== name || advanced !== JSON.stringify(Object.fromEntries(Object.entries(data || {}).filter(([key]) => key !== 'prompts' && key !== 'prompt_order')), null, 2) || JSON.stringify(draft.prompts) !== JSON.stringify((data || {}).prompts)
+      const setPrompt = (index, key, value) => setDraft((current) => {
+        const previous = current.prompts?.[index]
+        const next = { ...current, prompts: (current.prompts || []).map((prompt, promptIndex) => promptIndex === index ? { ...prompt, [key]: value } : prompt) }
+        if (key === 'identifier' && previous?.identifier !== value) {
+          next.prompt_order = (current.prompt_order || []).map((item) => ({ ...item, order: (item.order || []).map((entry) => entry.identifier === previous?.identifier ? { ...entry, identifier: value } : entry) }))
+        }
+        return next
+      })
+      const addPrompt = () => {
+        const identifier = `customPrompt${prompts.length + 1}`
+        const prompt = { name: 'New prompt', identifier, role: 'system', content: '', system_prompt: true }
+        setDraft((current) => {
+          const order = Array.isArray(current.prompt_order) && current.prompt_order.length > 0 ? current.prompt_order.map((item) => ({ ...item, order: [...(item.order || []), { identifier, enabled: true }] })) : [{ character_id: 100000, order: [{ identifier, enabled: true }] }]
+          return { ...current, prompts: [...(current.prompts || []), prompt], prompt_order: order }
+        })
+      }
+      const removePrompt = (index) => {
+        const identifier = prompts[index]?.identifier
+        setDraft((current) => ({
+          ...current,
+          prompts: (current.prompts || []).filter((_, promptIndex) => promptIndex !== index),
+          prompt_order: (current.prompt_order || []).map((item) => ({ ...item, order: (item.order || []).filter((entry) => entry.identifier !== identifier) })),
+        }))
+      }
+      const save = () => {
+        let sampler
+        try { sampler = advanced.trim() === '' ? {} : JSON.parse(advanced) } catch { setError(t('panel.presets.invalidJson')); return }
+        if (!sampler || typeof sampler !== 'object' || Array.isArray(sampler)) { setError(t('panel.presets.invalidJson')); return }
+        if (chatPreset && prompts.some((prompt) => !String(prompt.identifier || '').trim() || prompts.filter((candidate) => candidate.identifier === prompt.identifier).length > 1)) {
+          setError(t('panel.presets.identifierInvalid'))
+          return
+        }
+        setSaving(true)
+        setError('')
+        const nextData = chatPreset ? { ...sampler, prompts: draft.prompts || [], prompt_order: draft.prompt_order || [] } : sampler
+        void Promise.resolve(onSave(nextData, presetName.trim() || name))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setSaving(false))
+      }
+      const cancel = () => { if (!dirty || window.confirm(`${t('panel.unsaved')}?`)) onCancel() }
+      return h('div', { className: 'dt-editor' },
+        h('div', { className: 'dt-editor-toolbar' },
+          h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+          h('div', { className: 'dt-editor-actions' },
+            h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+            h(Button, { size: 'sm', variant: 'primary', disabled: saving || !presetName.trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
+        h('p', { className: 'dt-hint' }, t('panel.presets.editHint')),
+        h('div', { className: 'dt-editor-grid' }, h(EditorField, { label: t('panel.rename'), value: presetName, onChange: setPresetName })),
+        chatPreset ? h('div', { className: 'dt-editor-section-title' },
+          h('strong', null, t('panel.presets.prompts')),
+          h(Button, { size: 'sm', variant: 'outline', icon: h(IconPlusOutline16), onClick: addPrompt }, t('panel.presets.addPrompt'))) : null,
+        chatPreset ? h('div', { className: 'dt-editor-entries' }, prompts.map((prompt, index) => h('section', { key: `${prompt.identifier || 'prompt'}-${index}`, className: 'dt-editor-entry' },
+          h('div', { className: 'dt-editor-entry-head' }, h('strong', null, prompt.name || prompt.identifier || `#${index + 1}`), h(Button, { size: 'sm', variant: 'ghost', icon: h(IconTrashOutline16), 'aria-label': t('panel.presets.removePrompt'), title: t('panel.presets.removePrompt'), onClick: () => removePrompt(index) })),
+          h('div', { className: 'dt-editor-grid' },
+            h(EditorField, { label: t('panel.presets.promptName'), value: prompt.name, onChange: (value) => setPrompt(index, 'name', value) }),
+            h(EditorField, { label: t('panel.presets.identifier'), value: prompt.identifier, onChange: (value) => setPrompt(index, 'identifier', value) }),
+            h('label', { className: 'dt-editor-field' }, h('span', { className: 'dt-label' }, t('panel.presets.role')), h('select', { value: prompt.role || 'system', onChange: (event) => setPrompt(index, 'role', event.target.value) }, h('option', { value: 'system' }, 'system'), h('option', { value: 'user' }, 'user'), h('option', { value: 'assistant' }, 'assistant'))),
+            h(EditorField, { label: t('panel.presets.content'), value: prompt.content, onChange: (value) => setPrompt(index, 'content', value), multiline: true, className: 'dt-editor-wide' }),
+            h('div', { className: 'dt-editor-toggles dt-editor-wide' },
+              h(ToggleField, { label: t('panel.presets.marker'), checked: prompt.marker === true, onChange: (value) => setPrompt(index, 'marker', value) }),
+              h(ToggleField, { label: t('panel.presets.enabled'), checked: prompt.system_prompt !== false, onChange: (value) => setPrompt(index, 'system_prompt', value) })))))) : null,
+        h(EditorField, { label: t('panel.presets.sampler'), value: advanced, onChange: setAdvanced, multiline: true, className: 'dt-editor-wide dt-editor-json' }),
+        error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
     function PanelPresets() {
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
+      const [editing, setEditing] = useState('')
+      const [presets, setPresets] = useState({})
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
       const kinds = state.bootstrap.presetKinds || {}
+      const editPreset = (name) => {
+        setEditing(editing === name ? '' : name)
+        if (!(name in presets)) {
+          setPresets((current) => ({ ...current, [name]: null }))
+          void fetchPreset(name).then((data) => setPresets((current) => ({ ...current, [name]: data })))
+            .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+        }
+      }
+      const save = (name, data, nextName) => savePreset(name, data, nextName).then((saved) => {
+        const target = nextName || name
+        setPresets((current) => {
+          const next = { ...current, [target]: saved }
+          if (target !== name) delete next[name]
+          return next
+        })
+        setEditing('')
+      })
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('settings.import')),
@@ -2358,6 +2799,8 @@ window.__ModuleLoader__.load({
             : h('div', { className: 'dt-preset-list' }, state.bootstrap.presets.map((name) => h('div', { key: name, className: 'dt-preset-row' },
               h('strong', { className: 'dt-preset-name' }, name),
               h(Pill, null, kinds[name] || 'preset'),
+              h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editPreset(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),
+              h(Button, { size: 'sm', variant: 'ghost', icon: h(IconDownloadOutline16), 'aria-label': t('panel.exportJson'), title: t('panel.exportJson'), onClick: () => downloadAsset(`export/preset/${encodeURIComponent(name)}`, `${name}.json`) }),
               state.bootstrap.state.activePreset === name
                 ? h(Pill, { active: true }, t('panel.characters.active'))
                 : h(Button, { size: 'sm', variant: 'outline', onClick: () => run(patchState({ activePreset: name })) }, t('panel.presets.setActive')),
@@ -2370,7 +2813,8 @@ window.__ModuleLoader__.load({
                 onClick: () => {
                   if (window.confirm(t('panel.presets.deleteConfirm', { name }))) run(deletePresetAsset(name))
                 },
-              }))))),
+              })),
+            editing === name ? h('div', { className: 'dt-preset-editor-wrap' }, presets[name] ? h(PresetEditor, { name, kind: kinds[name], data: presets[name], onSave: (data, nextName) => save(name, data, nextName), onCancel: () => setEditing('') }) : h('p', { className: 'dt-muted' }, t('nav.loading'))) : null))),
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
 
@@ -2589,6 +3033,7 @@ window.__ModuleLoader__.load({
         .dt-panel-body .dt-sidebar{padding:0 4px}
         .dt-card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
         .dt-card{display:flex;flex-direction:column;gap:9px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px}
+        .dt-card-editing{grid-column:1 / -1;border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 1px color-mix(in srgb,var(--dsw-alias-state-business-primary) 22%,transparent)}
         .dt-card-head{display:flex;align-items:center;gap:9px}
         .dt-card-head>img{width:40px;height:40px;border-radius:8px;object-fit:cover;flex:none}
         .dt-card-title{display:flex;flex-direction:column;min-width:0;flex:1}
@@ -2611,15 +3056,34 @@ window.__ModuleLoader__.load({
         .dt-entry-keys{color:var(--dsw-alias-label-tertiary);font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .dt-entry-content{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.55;color:var(--dsw-alias-label-secondary);max-height:160px;overflow-y:auto}
         .dt-preset-list{display:flex;flex-direction:column;gap:6px}
-        .dt-preset-row{display:flex;align-items:center;gap:8px;min-height:36px;padding:2px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-preset-row{display:flex;align-items:center;gap:8px;min-height:36px;padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;flex-wrap:wrap}
         .dt-preset-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+        .dt-preset-editor-wrap{flex-basis:100%;min-width:0;border-top:1px solid var(--dsw-alias-border-l2);padding-top:8px}
+        .dt-editor{display:flex;flex-direction:column;gap:12px;min-width:0}
+        .dt-editor-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:34px;flex-wrap:wrap}
+        .dt-editor-status{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+        .dt-editor-actions{display:flex;align-items:center;gap:6px}
+        .dt-editor-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+        .dt-editor-field{display:flex;flex-direction:column;gap:5px;min-width:0}
+        .dt-editor-field input,.dt-editor-field textarea,.dt-editor-field select{box-sizing:border-box;width:100%;min-height:34px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:7px 9px;font:inherit;font-size:13px;line-height:18px;outline:none}
+        .dt-editor-field input:focus,.dt-editor-field textarea:focus,.dt-editor-field select:focus{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 20%,transparent)}
+        .dt-editor-field textarea{min-height:108px;resize:vertical;white-space:pre-wrap}
+        .dt-editor-field.dt-editor-json textarea{min-height:180px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+        .dt-editor-wide{grid-column:1 / -1}
+        .dt-editor-section-title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:4px}
+        .dt-editor-entries{display:flex;flex-direction:column;gap:10px}
+        .dt-editor-entry{display:flex;flex-direction:column;gap:10px;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-bg-base))}
+        .dt-editor-entry-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:28px}
+        .dt-editor-toggles{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding-top:3px}
+        .dt-editor-toggle{display:inline-flex;align-items:center;gap:6px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;cursor:pointer}
+        .dt-editor-toggle input{width:15px;height:15px;margin:0;accent-color:var(--dsw-alias-state-business-primary)}
         .dt-kv-list{display:flex;flex-direction:column;gap:6px;max-width:640px}
         .dt-kv-row{display:grid;grid-template-columns:minmax(110px,200px) 1fr 28px;gap:8px;align-items:center}
         .dt-kv-readonly>span{font-size:13px;line-height:18px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .dt-kv-key{color:var(--dsw-alias-label-secondary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
         .dt-kv-value{color:var(--dsw-alias-label-primary)}
         .dt-tc-state{display:inline-flex;align-items:center;padding:0 4px}
-        @media(max-width:700px){.dt-panel{flex-direction:column}.dt-panel-nav{width:100%;flex-direction:row;align-items:center;overflow-x:auto;overflow-y:hidden;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-panel-brand{padding:4px 8px}.dt-panel-brand-copy{display:none}.dt-panel-navcell{flex:none}.dt-card-grid{grid-template-columns:1fr}.dt-kv-row{grid-template-columns:1fr 1fr 28px}}
+        @media(max-width:700px){.dt-panel{flex-direction:column}.dt-panel-nav{width:100%;flex-direction:row;align-items:center;overflow-x:auto;overflow-y:hidden;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-panel-brand{padding:4px 8px}.dt-panel-brand-copy{display:none}.dt-panel-navcell{flex:none}.dt-card-grid{grid-template-columns:1fr}.dt-kv-row{grid-template-columns:1fr 1fr 28px}.dt-editor-grid{grid-template-columns:1fr}.dt-editor-wide{grid-column:auto}.dt-editor-toolbar{align-items:flex-start}.dt-preset-row{align-items:flex-start}.dt-preset-name{flex-basis:100%}}
       `
       document.head.appendChild(tag)
     }

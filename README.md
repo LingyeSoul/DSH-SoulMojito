@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-第一版主线已经可用：插件复用 DSH 的 LLM 路由、默认模型、密钥管理、Web 容器和插件安装机制，同时在 DSH 原生侧边栏和 conversation 区域提供 Tavern 角色扮演体验。设置页只负责资产与行为配置，不承载聊天工作台。
+第一版主线已经可用：插件复用 DSH 的 LLM 路由、默认模型、密钥管理、Web 容器和插件安装机制，同时在 DSH 原生侧边栏和 conversation 区域提供 Tavern 角色扮演体验。管理入口是独立的 Tavern 面板；设置页保留当前配置的快速切换，不再承载全部资产管理表单。
 
 当前面向 DSH `0.1.0-rc.6` 验证。Fabric 不在第一版运行路径中。
 
@@ -25,6 +25,20 @@
 - 并发保护：聊天使用内容 revision 做 compare-and-swap；跨标签页冲突返回 `409`，客户端重新加载最新内容，不静默覆盖。
 - 可选的普通 Agent 人格注入，默认关闭。
 
+### Tavern 管理面板
+
+点击 DSH 原生侧栏底部的 Tavern 按钮即可打开管理面板。面板采用与 DSH Settings 接近的两栏布局，左侧切换分区，右侧集中处理资产和行为配置；窄屏会自动将分区导航折叠为横向滚动栏。
+
+面板包含以下分区：
+
+- **总览**：查看当前角色、预设、人设、世界书开关和各类资产数量。
+- **角色卡**：导入 PNG、CHARX、JSON；查看卡面；编辑名称、昵称、描述、性格、场景、开场白、示例对话、系统提示词、作者信息和高级 JSON；保存时尽量保留原始 PNG/CHARX 容器及内嵌资源；可导出原格式并删除角色及其聊天。
+- **世界书**：导入和导出原生世界书 JSON；编辑世界书名称、条目关键词、次关键词、备注、正文、排序、深度、概率、启用、常驻和选择性匹配；支持新增、删除和搜索条目。
+- **预设**：导入和导出原生 preset JSON；聊天补全预设可以编辑提示词堆栈、标识符、角色、内容和 marker；context、instruct、textgen sampler 等预设可以通过高级 JSON 编辑全部字段。
+- **聊天、群组、人设、正则、变量、生成**：沿用原有管理能力，并统一放在同一面板中，避免在设置页堆叠长表单。
+
+编辑器会显示未保存状态，取消离开时提示确认，页面关闭时提供浏览器级离开保护。角色卡、世界书和预设的保存都经过服务端格式校验，再写回 `$DSH_HOME/tavern/`。
+
 ## 原生集成
 
 插件保留独立的 RP prompt/生成循环，但 UI 进入 DSH 原生表面：
@@ -34,11 +48,11 @@
 | `conversation.view` | Tavern JSONL transcript |
 | `conversation.composer` | Tavern session 的 RP 输入框、模型选择与 Stop |
 | `conversation.session.header.actions` | 当前角色与 regenerate |
-| `settings.section` | 角色、世界书、preset、persona、导入和行为开关 |
-| `shell.overlay` | 侧边栏 adapter 生命周期与折叠后的浮动导航 |
-| `sidebar.footer.action` | 原生侧边栏不可挂载时的 Tavern fallback 入口 |
+| `settings.section` | Active setup 快速切换与打开 Tavern 面板的入口 |
+| `shell.overlay` | Tavern 管理面板 Modal，以及侧栏聊天树 adapter 的生命周期承载 |
+| `sidebar.footer.action` | 常驻 Tavern 面板按钮，与原生 Settings 并列 |
 
-DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏因此使用一个集中、版本敏感但失败关闭的 DOM adapter：只匹配可见左侧 `[role="tree"]`，插入具名 `data-dsh-tavern-sidebar-host`，并在 teardown 时断开 `MutationObserver`、取消 animation frame、删除 host。匹配失败时保留原生 UI，只显示 footer fallback。
+DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏因此使用一个集中、版本敏感但失败关闭的 DOM adapter：只匹配可见左侧 `[role="tree"]`，插入具名 `data-dsh-tavern-sidebar-host`，并在 teardown 时断开 `MutationObserver`、取消 animation frame、删除 host。面板入口本身走官方 `sidebar.footer.action`，不会替换 Settings，也不依赖 adapter 是否成功挂载。
 
 每个 Tavern chat 绑定一个正式 DSH session。`/tavern` 内部命令追加 plugin notice marker，使 session 进入 active 状态而不调用模型；composer chain 仅接管带有效 Tavern marker 的 session。删除聊天时会追加 close marker并归档对应 DSH session。
 
@@ -96,9 +110,10 @@ pnpm run check
 
 打开 DSH 后：
 
-1. 在“设置 -> dsh-tavern”导入角色卡、世界书和 Chat Completion preset。
-2. 在原生左侧 Tavern 分支展开角色并创建或打开聊天。
-3. 在原生 `Tavern` tab 中对话、编辑、切换 swipe 或 regenerate。
+1. 点击侧栏底部的 Tavern 按钮，或从“设置 -> dsh-tavern”打开 Tavern 面板。
+2. 在“角色卡 / 世界书 / 预设”分区导入资产；导入后可以直接编辑、保存、搜索、设为当前或导出。
+3. 在原生左侧 Tavern 分支展开角色并创建或打开聊天。
+4. 在原生 `Tavern` tab 中对话、编辑、切换 swipe 或 regenerate。
 
 插件 Node bundle 是单一 `packages/plugin/index.mjs`，五个纯库均已内联。无需用户额外安装公共 `@deepseek-ai/*` 运行时依赖；client closure 由 DSH profile 注入。
 
@@ -108,9 +123,9 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：15 个测试文件、134 项测试通过；package contract、patch reference、server bundle、client bundle、client VM mount 和 Node half mount 六道 gate 全部通过（路由保护覆盖 persona、群组、branch、regex、STscript 与 Kobold 端点）。
+当前基线：18 个测试文件、140 项测试通过；package contract、patch reference、server bundle、client bundle 和 client VM mount gates 通过。完整 `pnpm run check` 的 Node half mount 需要已安装并可解析的 DSH 官方运行时（`@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-home-paths`）。
 
-GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、折叠 fallback、conversation view/composer、设置页、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
+GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 
 ## 文档
 
@@ -120,6 +135,8 @@ GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、折叠 f
 - [`docs/exploration/2026-08-14-st-formats.md`](docs/exploration/2026-08-14-st-formats.md)：SillyTavern 互操作格式与行为参考。
 - [`decisions/2026-08-14-card-raw-passthrough.md`](decisions/2026-08-14-card-raw-passthrough.md)：角色卡未知字段透传决策。
 - [`decisions/2026-08-15-v2-feature-scope.md`](decisions/2026-08-15-v2-feature-scope.md)：v2 功能面的范围与形态选择。
+- [`docs/proposals/0003-tavern-management-panel.md`](docs/proposals/0003-tavern-management-panel.md)：Tavern 管理面板的信息架构、slot 选择和交互范围。
+- [`decisions/2026-08-15-tavern-management-panel.md`](decisions/2026-08-15-tavern-management-panel.md)：面板入口、角色删除级联、变量与侧栏共存的落地决策。
 
 ## 许可
 
