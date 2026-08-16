@@ -28,7 +28,16 @@
 
 ### 酒馆美化前端
 
-把完整 HTML（包含 `<html>`、`<head>` 或 `<body>`）放进助手消息，或使用 Markdown 代码块：
+把完整 HTML 文档、`<head>`/`<body>` 片段放进助手消息，或使用 `html` Markdown 代码块。消息保存后，
+Tavern transcript 会识别并挂载前端；流式生成和编辑消息时仍显示源码，避免半成品脚本被重复执行。
+
+支持的输入形式：
+
+- 完整文档：`<!doctype html>...` 或同时包含 `<html>` 与 `<head>`/`<body>` 的文档。
+- HTML 片段：包含 `<head>` 或 `<body>` 的片段；缺少外层文档时，运行时会自动补齐 `doctype`、viewport 和基础样式。
+- Markdown fenced code block：代码块语言可以写成 `html`；普通代码块和不完整 HTML 仍按文本显示。
+
+例如：
 
 ````markdown
 ```html
@@ -47,8 +56,23 @@
 ```
 ````
 
-保存消息后，Tavern transcript 会隐藏源码并挂载可交互的前端。每个前端使用
-`sandbox="allow-scripts"` 的独立 iframe，宿主页面、Cookie 和 DSH API 不会暴露给消息脚本；CSP 仅允许内联脚本、常用静态 CDN 和图片/字体资源，网络请求、嵌套 iframe、表单提交均被禁止。
+每个前端使用 `sandbox="allow-scripts"` 的独立 iframe，且不授予 `allow-same-origin`：脚本不能读取或操作宿主页面、
+Cookie、`window.parent`、`TavernHelper` 和 DSH API（高度回传仅使用受校验的 `postMessage`）。运行时 CSP 允许内联 CSS/JavaScript，
+以及以下静态资源源：`cdn.jsdelivr.net`、`testingcf.jsdelivr.net`、`cdn.tailwindcss.com`、
+`cdnjs.cloudflare.com`、`unpkg.com`、`esm.sh`、`fonts.googleapis.com` 和 `fonts.gstatic.com`；图片、字体和媒体
+可使用 `https:`、`data:` 或 `blob:` URL。
+
+以下能力明确不在运行时范围内：
+
+- `fetch`、XHR、WebSocket 等业务网络连接（`connect-src 'none'`）。
+- 嵌套 iframe、`object`/插件、表单提交和访问宿主 DOM、Cookie、存储或 API。
+- 依赖 SillyTavern 宿主注入对象的脚本；需要这些对象时应改为自包含 HTML/JS。
+
+iframe 高度由 `ResizeObserver` 回传，并限制在 80-1200px；超出部分在 iframe 内滚动。TUI/headless
+仍显示原始消息文本，不执行前端脚本。
+
+安装插件并重启 DSH 后，可以在 Tavern 聊天中发送上面的示例，或让模型生成一个带按钮的 `html` 代码块，
+保存消息后点击按钮即可验证 HTML、CSS 和 JavaScript 是否正常运行。
 
 ### Tavern 管理面板
 
