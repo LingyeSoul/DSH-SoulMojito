@@ -24,6 +24,7 @@
 - Composer 模型选择：复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
 - 并发保护：聊天使用内容 revision 做 compare-and-swap；跨标签页冲突返回 `409`，客户端重新加载最新内容，不静默覆盖。
 - 可选的普通 Agent 人格注入，默认关闭。
+- AgentTavern 架构设计（提议）：默认复用 DSH 原生 AgentLoop，通过记忆/变量/资产工具按需取回上下文；每个 AgentTavern 会话可在“DSH 原生上下文”（不主动遗忘，容量服从实际模型）和“Agent 管理上下文”（非破坏性主动遗忘）之间切换。现有 ST 兼容架构继续保留。详见 [`docs/proposals/0004-agent-tavern-architecture.md`](docs/proposals/0004-agent-tavern-architecture.md)。
 - 美化前端：助手消息中的完整 HTML 文档或 `html` 代码块会在隔离 iframe 中运行，支持内联 CSS、JavaScript 和常用 CDN 资源；普通文本与不完整流式内容仍按文本显示。
 
 ### 酒馆美化前端
@@ -172,7 +173,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：18 个测试文件、140 项测试通过；package contract、patch reference、server bundle、client bundle、frontend runtime 和 client VM mount gates 通过。完整 `pnpm run check` 的 Node half mount 需要已安装并可解析的 DSH 官方运行时（`@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-home-paths`）。
+当前基线：18 个测试文件、142 项测试通过；package contract、patch reference、server bundle、client bundle、frontend runtime 和 client VM mount gates 通过。完整 `pnpm run check` 的 Node half mount 需要已安装并可解析的 DSH 官方运行时（`@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-home-paths`）。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 
@@ -185,6 +186,8 @@ GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern �
 - [`decisions/2026-08-14-card-raw-passthrough.md`](decisions/2026-08-14-card-raw-passthrough.md)：角色卡未知字段透传决策。
 - [`decisions/2026-08-15-v2-feature-scope.md`](decisions/2026-08-15-v2-feature-scope.md)：v2 功能面的范围与形态选择。
 - [`docs/proposals/0003-tavern-management-panel.md`](docs/proposals/0003-tavern-management-panel.md)：Tavern 管理面板的信息架构、slot 选择和交互范围。
+- [`docs/proposals/0004-agent-tavern-architecture.md`](docs/proposals/0004-agent-tavern-architecture.md)：AgentTavern 原生 AgentLoop 架构、记忆/变量工具、遗忘策略和 ST 兼容模式。
+- [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)：DSH `0.1.0-rc.6` 原生注入、compaction 与 Fabric fallback 审计。
 - [`decisions/2026-08-15-tavern-management-panel.md`](decisions/2026-08-15-tavern-management-panel.md)：面板入口、角色删除级联、变量与侧栏共存的落地决策。
 
 ## 许可

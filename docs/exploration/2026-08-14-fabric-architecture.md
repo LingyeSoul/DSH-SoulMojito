@@ -13,6 +13,8 @@ Cordis Fabric 是受 Minecraft Fabric 启发的 DSH mod 层，分三档能力：
 
 对酒馆平台而言：协作层覆盖 prompt 注入（角色卡/世界书 = 有序 prompt 段 + 动态 context）、工具注册、命令、UI slots；低层 patch 是逃生舱（消息历史重写、LLM 请求塑造、会话持久化）。
 
+> 2026-08-16 对 DSH `0.1.0-rc.6` 编译产物复核后，AgentTavern 的 `dsh-native` 模式不启用 Fabric：`dsh-agent-presets`、agent-scoped `dsh-system-prompt` 和原生 AgentLoop 已覆盖 profile、固定 context 与工具回流，容量行为直接服从 DSH。只有 `agent-managed` 的非破坏性历史投影仍需要未来的 `agent/context` seam；Fabric 仅保留为 source checkout 上验证该 seam 的版本门控 fallback。详见 [DSH AgentLoop 原生能力审计](2026-08-16-dsh-agentloop-native-audit.md)。
+
 ## 1. 核心机制
 
 ### 1.1 三个协作件
