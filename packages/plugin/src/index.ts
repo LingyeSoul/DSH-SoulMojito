@@ -74,6 +74,7 @@ export function apply(ctx) {
       const previous = (await db.getState()).sessionBindings[agent.id]
       await bindSession(db, agent.id, parsed.character, parsed.chatId, parsed.group === true)
       await refreshActivePrompt()
+      occupyHostSession(agent)
       if (previous?.character !== parsed.character || previous.chatId !== parsed.chatId) {
         agent.session.append('user/message', createMessage({
           role: 'user',
@@ -1477,6 +1478,25 @@ async function bindSession(db, sessionId, character, chatId, group = false) {
       [sessionId]: { character, chatId, ...(group ? { group: true } : {}) },
     },
   }))
+}
+
+/**
+ * 宿主把「日志中从未出现 turn/start」的会话视为可复用的 blank 草稿：原生「新建
+ * 会话」（workspaces.startSession → connectWorkspace）会直接复用它并切换过去。
+ * Tavern 会话的激活 marker 与聊天生成都不经过宿主 agent loop，永远不产生宿主
+ * turn——不摘除的话每个绑定的 Tavern 会话都会劫持原生新建会话。这里追加一对
+ * 无 step 的空转 turn（reason=completed 与 agent-loop 对零消息 turn 的关闭方式
+ * 一致）把会话标记为已占用；agent-loop 的真实 turn 号取 findLast(turn/start)+1，
+ * 编号保持连续。幂等：仅在会话还没有任何 turn/start 时写入。
+ */
+function occupyHostSession(agent) {
+  try {
+    if (agent.session.events.some((event) => event.type === 'turn/start')) return
+    agent.session.append('turn/start', { turn: 1 })
+    agent.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  } catch {
+    // 宿主拒绝插件追加 turn 事件时仅失去防复用保护，不阻断激活本身。
+  }
 }
 
 function normalizeChatId(name) {

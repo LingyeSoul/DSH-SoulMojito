@@ -431,6 +431,8 @@ window.__ModuleLoader__.load({
     const pendingLists = new Map()
     const pendingModels = new Map()
     const controllers = new Map()
+    // 存量 blank 绑定会话的修复去重（成功修复的 sessionId；失败会移除以待重试）
+    const repairedBindings = new Set()
 
     function update(patch) {
       snapshot = { ...snapshot, ...patch }
@@ -719,6 +721,28 @@ window.__ModuleLoader__.load({
       if (attempt < 12) setTimeout(() => clickTavernTab(attempt + 1), 50)
     }
 
+    // 旧版本激活的绑定会话在宿主侧仍是 blank（无 turn/start），会被原生「新建
+    // 会话」的 blank 复用逻辑劫持。对其幂等重发绑定命令，服务端 occupyHostSession
+    // 补齐占位 turn 对即摘除。命令本身幂等（marker 与 turn 对均带防重条件）；成功
+    // 记入 repairedBindings，失败移除以待下次触发重试。
+    async function repairBinding(ctx, sessionId, binding) {
+      if (!binding || repairedBindings.has(sessionId)) return
+      repairedBindings.add(sessionId)
+      try {
+        const payload = base64Url(JSON.stringify({
+          character: binding.character,
+          chatId: binding.chatId,
+          ...(binding.group === true ? { group: true } : {}),
+        }))
+        const bound = ctx?.sessions?.binding(sessionId)
+        if (!bound) throw new Error('session binding unavailable')
+        const result = await bound.session.command(`/tavern ${payload}`)
+        if (!result?.ok) throw new Error('tavern command rejected')
+      } catch {
+        repairedBindings.delete(sessionId)
+      }
+    }
+
     async function openTavernChat(ctx, character, chatId, group = false) {
       update({ navigationStatus: '' })
       const sessions = ctx.sessions.list.getSnapshot()
@@ -727,6 +751,9 @@ window.__ModuleLoader__.load({
           && binding.character === character
           && binding.chatId === chatId)
       if (existing) {
+        // 已绑定的会话也重发一次绑定命令：旧版本激活的会话宿主侧可能仍 blank，
+        // 服务端借此补占位 turn 对，解除原生「新建会话」的复用劫持（幂等）。
+        void repairBinding(ctx, existing[0], existing[1])
         ctx.sessions.open(existing[0])
         clickTavernTab(0)
         return existing[0]
@@ -1553,6 +1580,9 @@ window.__ModuleLoader__.load({
       const chat = binding ? state.chats[chatKey(binding.character, binding.chatId)] : null
       const run = state.runs[sessionId] || {}
       const endRef = useRef(null)
+      useEffect(() => {
+        if (binding) void repairBinding(PanelHost.context, sessionId, binding)
+      }, [sessionId, binding?.character, binding?.chatId])
       useEffect(() => {
         if (binding) void loadChat(binding.character, binding.chatId).catch((cause) => setRun(sessionId, { error: cause.message }))
       }, [binding?.character, binding?.chatId, sessionId])
@@ -2473,6 +2503,20 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({ sessionIds }),
         }).then((result) => update({ bootstrap: { ...snapshot.bootstrap, state: result.state } })).catch(() => {})
       }, [sessionPhase, sessionIds.join('\u0000'), bindingIds.join('\u0000')])
+      // 存量修复：旧版本激活的绑定会话在宿主侧仍是 blank（无 turn/start），会被
+      // 原生「新建会话」的 blank 复用逻辑劫持。会话列表就绪后对宿主仍标记 blank
+      // 的绑定会话统一修复（repairBinding 幂等、失败可重试；点击聊天/Tavern 视图
+      // 挂载两个路径也会补触发）。
+      useEffect(() => {
+        if (sessionPhase !== 'ready' || state.loading) return
+        const ctx = PanelHost.context
+        const byId = ctx?.sessions?.list?.getSnapshot?.().byId
+        if (!byId) return
+        for (const [sessionId, binding] of Object.entries(snapshot.bootstrap.state.sessionBindings || {})) {
+          if (byId[sessionId]?.blank !== true) continue
+          void repairBinding(ctx, sessionId, binding)
+        }
+      }, [sessionPhase, state.loading, sessionIds.join('\u0000'), bindingIds.join('\u0000')])
       useEffect(() => {
         const toggle = () => update({ panelOpen: !snapshot.panelOpen })
         window.addEventListener('dsh-tavern:toggle-panel', toggle)

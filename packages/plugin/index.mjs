@@ -3932,6 +3932,7 @@ function apply(ctx) {
       const previous = (await db.getState()).sessionBindings[agent.id];
       await bindSession(db, agent.id, parsed.character, parsed.chatId, parsed.group === true);
       await refreshActivePrompt();
+      occupyHostSession(agent);
       if (previous?.character !== parsed.character || previous.chatId !== parsed.chatId) {
         agent.session.append("user/message", createMessage({
           role: "user",
@@ -3998,7 +3999,7 @@ async function handleApi(ctx, req, res) {
       activeCard: active ? publicCard(active.card) : null,
       model: ctx.agentDefaultModel.currentSelection(),
       version: "0.1.0",
-      commit: "9b48be6"
+      commit: "0ce2477"
     });
   }
   if (method === "GET" && route.startsWith("avatar/")) {
@@ -5208,6 +5209,14 @@ async function bindSession(db, sessionId, character, chatId, group2 = false) {
       [sessionId]: { character, chatId, ...group2 ? { group: true } : {} }
     }
   }));
+}
+function occupyHostSession(agent) {
+  try {
+    if (agent.session.events.some((event) => event.type === "turn/start")) return;
+    agent.session.append("turn/start", { turn: 1 });
+    agent.session.append("turn/end", { turn: 1, reason: { kind: "completed" } });
+  } catch {
+  }
 }
 function normalizeChatId(name2) {
   const stem = name2.replace(/\.jsonl$/i, "").trim();
