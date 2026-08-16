@@ -24,6 +24,31 @@
 - Composer 模型选择：复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
 - 并发保护：聊天使用内容 revision 做 compare-and-swap；跨标签页冲突返回 `409`，客户端重新加载最新内容，不静默覆盖。
 - 可选的普通 Agent 人格注入，默认关闭。
+- 美化前端：助手消息中的完整 HTML 文档或 `html` 代码块会在隔离 iframe 中运行，支持内联 CSS、JavaScript 和常用 CDN 资源；普通文本与不完整流式内容仍按文本显示。
+
+### 酒馆美化前端
+
+把完整 HTML（包含 `<html>`、`<head>` 或 `<body>`）放进助手消息，或使用 Markdown 代码块：
+
+````markdown
+```html
+<!doctype html>
+<html>
+  <body>
+    <button id="counter">0</button>
+    <script>
+      let count = 0
+      document.querySelector('#counter').onclick = () => {
+        document.querySelector('#counter').textContent = String(++count)
+      }
+    </script>
+  </body>
+</html>
+```
+````
+
+保存消息后，Tavern transcript 会隐藏源码并挂载可交互的前端。每个前端使用
+`sandbox="allow-scripts"` 的独立 iframe，宿主页面、Cookie 和 DSH API 不会暴露给消息脚本；CSP 仅允许内联脚本、常用静态 CDN 和图片/字体资源，网络请求、嵌套 iframe、表单提交均被禁止。
 
 ### Tavern 管理面板
 
@@ -123,7 +148,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：18 个测试文件、140 项测试通过；package contract、patch reference、server bundle、client bundle 和 client VM mount gates 通过。完整 `pnpm run check` 的 Node half mount 需要已安装并可解析的 DSH 官方运行时（`@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-home-paths`）。
+当前基线：18 个测试文件、140 项测试通过；package contract、patch reference、server bundle、client bundle、frontend runtime 和 client VM mount gates 通过。完整 `pnpm run check` 的 Node half mount 需要已安装并可解析的 DSH 官方运行时（`@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-home-paths`）。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 

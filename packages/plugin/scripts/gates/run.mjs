@@ -295,6 +295,22 @@ function checkClientText(text) {
   return problems
 }
 
+function checkFrontendRuntimeText(text) {
+  const problems = []
+  for (const marker of [
+    'function extractFrontendDocuments',
+    'function buildFrontendDocument',
+    'dsh-tavern:frontend-height',
+    "sandbox: 'allow-scripts'",
+    "connect-src 'none'",
+    'event.source !== frameRef.current?.contentWindow',
+    'message.streaming',
+  ]) {
+    if (!text.includes(marker)) problems.push(`frontend runtime is missing marker '${marker}'`)
+  }
+  return problems
+}
+
 function callableStub(label = 'stub') {
   const target = function stub() {}
   return new Proxy(target, {
@@ -768,6 +784,27 @@ const gates = [
     },
     check: () => existsSync(CLIENT_PATH)
       ? checkClientText(readFileSync(CLIENT_PATH, 'utf8'))
+      : ['generated packages/plugin/client/index.js does not exist'],
+  },
+  {
+    name: 'frontend-runtime',
+    selfTest: () => {
+      const good = [
+        'function extractFrontendDocuments() {}',
+        'function buildFrontendDocument() {}',
+        'dsh-tavern:frontend-height',
+        "sandbox: 'allow-scripts'",
+        "connect-src 'none'",
+        'event.source !== frameRef.current?.contentWindow',
+        'message.streaming',
+      ].join('\n')
+      const bad = good.replace("sandbox: 'allow-scripts'", "sandbox: 'allow-forms'")
+      return checkFrontendRuntimeText(good).length === 0 && checkFrontendRuntimeText(bad).length > 0
+        ? []
+        : ['frontend runtime marker self-test did not distinguish an unsafe sample']
+    },
+    check: () => existsSync(CLIENT_PATH)
+      ? checkFrontendRuntimeText(readFileSync(CLIENT_PATH, 'utf8'))
       : ['generated packages/plugin/client/index.js does not exist'],
   },
   {
