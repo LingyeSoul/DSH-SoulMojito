@@ -96,14 +96,14 @@ iframe 高度由 `ResizeObserver` 回传，并限制在 80-1200px；超出部分
 |---|---|
 | `conversation.view` | Tavern JSONL transcript |
 | `conversation.composer` | Tavern session 的 RP 输入框、模型选择与 Stop |
-| `conversation.session.header.actions` | 当前角色与 regenerate |
+| `conversation.session.header.actions` | 当前角色、regenerate 与原生 session stats |
 | `settings.section` | Active setup 快速切换与打开 Tavern 面板的入口 |
 | `shell.overlay` | Tavern 管理面板 Modal，以及侧栏聊天树 adapter 的生命周期承载 |
 | `sidebar.footer.action` | 常驻 Tavern 面板按钮，与原生 Settings 并列 |
 
 DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏因此使用一个集中、版本敏感但失败关闭的 DOM adapter：只匹配可见左侧 `[role="tree"]`，隐藏 `state.sessionBindings` 中的 Tavern 行并插入具名 `data-dsh-tavern-sidebar-host`；宿主重绘或虚拟列表更新时会重新应用过滤，解绑后可逆恢复。面板入口本身走官方 `sidebar.footer.action`，不会替换 Settings，也不依赖 adapter 是否成功挂载。
 
-每个 Tavern chat 绑定一个正式 DSH session。`/tavern` 内部命令追加 plugin notice marker，使 session 进入 active 状态而不调用模型；composer chain 仅接管带有效 Tavern marker 的 session。删除聊天时会追加 close marker并归档对应 DSH session。
+每个 Tavern chat 绑定一个正式 DSH session。绑定 API 通过插件内部桥接追加 plugin notice marker，使 session 进入 active 状态而不调用模型；Tavern view、composer 和标题栏 action 仅接管带有效 Tavern marker 的 session，普通 DSH 会话保持原生表面。酒馆标题栏会局部隐藏 DSH 自带的 agent preset 标签，并在切换回普通会话时恢复；Tavern 自建生成循环会把 turn/step、流式 chunk、assistant message 和 provider usage 镜像进同一 session，因此标题栏直接复用 DSH 的 `sessionStats` / `tokenUsage` projection。删除聊天时会追加 close marker 并归档对应 DSH session。
 
 ## Packages
 

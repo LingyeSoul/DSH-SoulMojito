@@ -39,7 +39,7 @@ window.__ModuleLoader__.load({
       StateDot,
       Tooltip,
     } = require('@deepseek-ai/dsh-client-ui-primitives')
-    const { useEffect, useId, useRef, useState, useSyncExternalStore } = React
+    const { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } = React
     const h = React.createElement.bind(React)
 
     const API = '/api/dsh-tavern'
@@ -337,6 +337,13 @@ window.__ModuleLoader__.load({
       'view.loading': 'Loading Tavern chat…',
       'view.regenerate': 'Regenerate last response',
       'view.linkedFrom': 'Linked from {name}',
+      'stats.counts': '{turns} turns · {steps} steps',
+      'stats.llm': 'LLM {duration}',
+      'stats.toolCall': 'Tool calls {duration}',
+      'stats.ttftAverage': 'Avg. TTFT {duration}',
+      'stats.tokensPerSecond': '{throughput} tok/s',
+      'stats.cacheHit': 'Cache hit {percent}%',
+      'stats.tokens': 'Input {input} tok · Output {output} tok',
       'run.connecting': 'Connecting',
       'run.saved': 'Saved',
       'run.stopped': 'Stopped',
@@ -550,6 +557,13 @@ window.__ModuleLoader__.load({
       'view.loading': '正在加载酒馆聊天…',
       'view.regenerate': '重新生成最新回复',
       'view.linkedFrom': '来源聊天：{name}',
+      'stats.counts': '{turns} 轮 · {steps} 步',
+      'stats.llm': 'LLM {duration}',
+      'stats.toolCall': '工具调用 {duration}',
+      'stats.ttftAverage': '首 token 平均 {duration}',
+      'stats.tokensPerSecond': '{throughput} tok/s',
+      'stats.cacheHit': '缓存命中 {percent}%',
+      'stats.tokens': '输入 {input} tok · 输出 {output} tok',
       'run.connecting': '连接中',
       'run.saved': '已保存',
       'run.stopped': '已停止',
@@ -929,9 +943,9 @@ window.__ModuleLoader__.load({
     }
 
     // 旧版本激活的绑定会话在宿主侧仍是 blank（无 turn/start），会被原生「新建
-    // 会话」的 blank 复用逻辑劫持。对其幂等重发绑定命令，服务端 occupyHostSession
-    // 补齐占位 turn 对即摘除。命令本身幂等（marker 与 turn 对均带防重条件）；成功
-    // 记入 repairedBindings，失败移除以待下次触发重试。
+    // 会话」的 blank 复用逻辑劫持。对其幂等重发内部绑定桥接命令，服务端
+    // 补齐 marker 和占位 turn 对即摘除。成功记入 repairedBindings，失败移除以待
+    // 下次触发重试。
     async function repairBinding(ctx, sessionId, binding) {
       if (!binding || repairedBindings.has(sessionId)) return
       repairedBindings.add(sessionId)
@@ -943,8 +957,8 @@ window.__ModuleLoader__.load({
         }))
         const bound = ctx?.sessions?.binding(sessionId)
         if (!bound) throw new Error('session binding unavailable')
-        const result = await bound.session.command(`/tavern ${payload}`)
-        if (!result?.ok) throw new Error('tavern command rejected')
+        const result = await bound.session.command(`/dsh-tavern-session ${payload}`)
+        if (!result?.ok || !result.value?.matched) throw new Error('Tavern session bridge rejected')
       } catch {
         repairedBindings.delete(sessionId)
       }
@@ -972,10 +986,26 @@ window.__ModuleLoader__.load({
       const sessionId = await ctx.workspaces.connectWorkspace(workspace.workspaceId)
       const binding = ctx.sessions.binding(sessionId)
       if (!binding) throw new Error(translate('error.noBinding'))
-      const payload = base64Url(JSON.stringify({ character, chatId, ...(group ? { group: true } : {}) }))
-      const result = await binding.session.command(`/tavern ${payload}`)
-      if (!result.ok) throw new Error(result.error?.message || translate('error.activationFailed'))
-      if (!result.value.matched) throw new Error(translate('error.hostCommandUnavailable'))
+      const payload = JSON.stringify({ sessionId, character, chatId, ...(group ? { group: true } : {}) })
+      await api('binding', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: payload,
+      })
+      const commandPayload = base64Url(JSON.stringify({
+        character,
+        chatId,
+        ...(group ? { group: true } : {}),
+      }))
+      const result = await binding.session.command(`/dsh-tavern-session ${commandPayload}`)
+      if (!result.ok || !result.value?.matched) {
+        await api('binding', {
+          method: 'DELETE',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ sessionId }),
+        }).catch(() => {})
+        throw new Error(result.error?.message || translate('error.activationFailed'))
+      }
       const label = sessionLabel(character, chatId, group)
       await binding.session.rename(label).catch(() => {})
       await refreshBootstrap()
@@ -1115,7 +1145,12 @@ window.__ModuleLoader__.load({
       const closePayload = base64Url(JSON.stringify({ action: 'close' }))
       await Promise.all(sessionIds.map(async (sessionId) => {
         const binding = ctx.sessions.binding(sessionId)
-        await binding?.session.command(`/tavern ${closePayload}`).catch(() => {})
+        await api('binding', {
+          method: 'DELETE',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ sessionId }),
+        }).catch(() => {})
+        await binding?.session.command(`/dsh-tavern-session ${closePayload}`).catch(() => {})
         await ctx.workspaces.archiveSession(sessionId).catch(() => {})
       }))
       const chats = { ...snapshot.chats }
@@ -1903,15 +1938,6 @@ window.__ModuleLoader__.load({
                 .catch((cause) => setRun(sessionId, { error: cause.message }))
             },
           }, `↩ ${t('view.linkedFrom', { name: `${link.character} · ${(link.chatId || '').replace(/\.jsonl$/i, '')}` })}`)) : null,
-        h('div', { className: 'dt-scene-strip' },
-          h('img', { src: `${API}/avatar/${encodeURIComponent(binding.character)}`, alt: '' }),
-          h('div', null, h('strong', null, binding.character), h('span', null, binding.chatId.replace(/\.jsonl$/i, ''))),
-          h('button', {
-            type: 'button',
-            title: t('view.regenerate'),
-            disabled: run.busy || !chat.messages.some((message) => !message.is_user),
-            onClick: () => void generateFor(sessionId, binding, 'regenerate', ''),
-          }, h(IconRefreshOutline16))),
         h('div', { className: 'dt-transcript' },
           messages.map((message, index) => h(MessageRow, {
             key: `${index}-${message.send_date || ''}-${message.streaming ? 'stream' : 'saved'}`,
@@ -2234,22 +2260,222 @@ window.__ModuleLoader__.load({
                 }, input.draft.trim().startsWith('/') ? h('span', { className: 'dt-script-glyph' }, '/') : h(IconSendOutline16))))))
     }
 
-    function TavernHeaderAction({ sessionId, useSession }) {
+    function formatStatsTokens(value) {
+      const n = Number(value)
+      if (!Number.isFinite(n) || n < 0) return '0'
+      const scaled = (amount) => amount >= 100 ? String(Math.round(amount)) : String(Math.round(amount * 10) / 10)
+      if (n < 1e3) return String(Math.round(n))
+      if (n < 1e6) return `${scaled(n / 1e3)}K`
+      return `${scaled(n / 1e6)}M`
+    }
+
+    function formatStatsDuration(value) {
+      const ms = Number(value)
+      if (!Number.isFinite(ms) || ms < 0) return '0s'
+      const seconds = ms / 1e3
+      if (seconds < 60) return `${Math.round(seconds * 10) / 10}s`
+      const whole = Math.round(seconds)
+      return `${Math.floor(whole / 60)}m${whole % 60}s`
+    }
+
+    function formatStatsThroughput(value) {
+      const tps = Math.max(0, Number(value) || 0)
+      return tps >= 10 ? String(Math.round(tps)) : String(Math.round(tps * 10) / 10)
+    }
+
+    function buildTavernStatsLine(stats, usage, t) {
+      const groups = []
+      if (stats && Number(stats.steps) > 0) {
+        groups.push(t('stats.counts', { turns: stats.turns, steps: stats.steps }))
+        const durations = []
+        if (Number(stats.llmMs) > 0) durations.push(t('stats.llm', { duration: formatStatsDuration(stats.llmMs) }))
+        if (Number(stats.toolMs) > 0) durations.push(t('stats.toolCall', { duration: formatStatsDuration(stats.toolMs) }))
+        if (durations.length > 0) groups.push(durations.join(' · '))
+        const speeds = []
+        if (Number(stats.ttftSteps) > 0) speeds.push(t('stats.ttftAverage', { duration: formatStatsDuration(Number(stats.ttftMs) / Number(stats.ttftSteps)) }))
+        if (Number(stats.decodeMs) > 0) speeds.push(t('stats.tokensPerSecond', { throughput: formatStatsThroughput(Number(stats.decodeTokens) / (Number(stats.decodeMs) / 1e3)) }))
+        if (speeds.length > 0) groups.push(speeds.join(' · '))
+      }
+      if (usage && (Number(usage.uncachedInputTokens) + Number(usage.cacheReadTokens) + Number(usage.cacheWriteTokens) > 0 || Number(usage.outputTokens) > 0)) {
+        const input = Number(usage.uncachedInputTokens) + Number(usage.cacheReadTokens) + Number(usage.cacheWriteTokens)
+        if (input > 0) {
+          const cacheHit = Math.round(Number(usage.cacheReadTokens) / input * 100)
+          groups.push(t('stats.cacheHit', { percent: cacheHit }))
+        }
+        groups.push(t('stats.tokens', { input: formatStatsTokens(input), output: formatStatsTokens(usage.outputTokens) }))
+      }
+      return groups.join(' | ')
+    }
+
+    // The native agent-preset entry has no session filter prop. Resolve its
+    // CSS-module class from the host marker, then hide only that sibling.
+    const AGENT_PRESET_LABEL_STYLE = '@deepseek-ai/dsh-client-ui-agent-preset/AgentPresetLabel.module.css'
+
+    function nativeAgentPresetLabelClass() {
+      const style = document.querySelector(`style[data-plugin-css="${AGENT_PRESET_LABEL_STYLE}"]`)
+      return /\.([_a-zA-Z][\w-]*_label)\s*\{/.exec(style?.textContent || '')?.[1] || null
+    }
+
+    function nativeAgentPresetLabel(marker) {
+      const parent = marker?.parentElement
+      if (!parent) return null
+      const siblings = [...parent.children]
+      const markerIndex = siblings.indexOf(marker)
+      if (markerIndex <= 0) return null
+      const labelClass = nativeAgentPresetLabelClass()
+      if (labelClass) {
+        return siblings.slice(0, markerIndex).reverse()
+          .find((element) => element.classList?.contains(labelClass)) || null
+      }
+      const previous = marker.previousElementSibling
+      return previous?.tagName === 'SPAN'
+        && [...(previous.classList || [])].some((name) => name.endsWith('_label'))
+        && previous.querySelector?.('svg')
+        ? previous
+        : null
+    }
+
+    function hideNativeAgentPresetLabel(label) {
+      if (!label || label.dataset?.dshTavernAgentPresetHidden !== undefined) return
+      label.dataset.dshTavernAgentPresetHidden = ''
+      label.dataset.dshTavernAgentPresetHiddenAria = label.getAttribute?.('aria-hidden') ?? ''
+      label.dataset.dshTavernAgentPresetHiddenState = label.hidden ? 'hidden' : 'visible'
+      label.setAttribute?.('aria-hidden', 'true')
+      label.hidden = true
+    }
+
+    function restoreNativeAgentPresetLabel(label) {
+      if (!label || label.dataset?.dshTavernAgentPresetHidden === undefined) return
+      const aria = label.dataset.dshTavernAgentPresetHiddenAria || ''
+      if (aria) label.setAttribute('aria-hidden', aria)
+      else label.removeAttribute?.('aria-hidden')
+      label.hidden = label.dataset.dshTavernAgentPresetHiddenState === 'hidden'
+      delete label.dataset.dshTavernAgentPresetHidden
+      delete label.dataset.dshTavernAgentPresetHiddenAria
+      delete label.dataset.dshTavernAgentPresetHiddenState
+    }
+
+    function useNativeAgentPresetLabelFilter(active) {
+      const markerRef = useRef(null)
+      useLayoutEffect(() => {
+        if (!active) return undefined
+        const marked = new Set()
+        let frame = 0
+        const apply = () => {
+          frame = 0
+          const label = nativeAgentPresetLabel(markerRef.current)
+          for (const previous of [...marked]) {
+            if (previous === label) continue
+            restoreNativeAgentPresetLabel(previous)
+            marked.delete(previous)
+          }
+          if (!label) return
+          hideNativeAgentPresetLabel(label)
+          marked.add(label)
+        }
+        const schedule = () => {
+          if (!frame) frame = requestAnimationFrame(apply)
+        }
+        apply()
+        const parent = markerRef.current?.parentElement
+        const observer = parent && typeof MutationObserver !== 'undefined'
+          ? new MutationObserver(schedule)
+          : null
+        observer?.observe(parent, { childList: true })
+        return () => {
+          observer?.disconnect()
+          if (frame) cancelAnimationFrame(frame)
+          for (const label of marked) restoreNativeAgentPresetLabel(label)
+        }
+      }, [active])
+      return markerRef
+    }
+
+    function TavernHeaderAction({ sessionId, useSession, useProjection }) {
       const state = useTavernStore()
       const t = useTranslate()
       const active = useSession((session) => isTavernSession(session) !== null)
+      const stats = useProjection ? useProjection('sessionStats') : undefined
+      const usage = useProjection ? useProjection('tokenUsage') : undefined
       const binding = state.bootstrap.state.sessionBindings?.[sessionId]
       const run = state.runs[sessionId] || {}
+      const markerRef = useNativeAgentPresetLabelFilter(Boolean(active && binding))
       if (!active || !binding) return null
-      return h('div', { className: 'dt-header-character', 'data-dsh-tavern-surface': 'header' },
+      const statsLine = buildTavernStatsLine(stats, usage, t)
+      return h('div', { ref: markerRef, className: 'dt-header-character', 'data-dsh-tavern-surface': 'header' },
         h('img', { src: `${API}/avatar/${encodeURIComponent(binding.character)}`, alt: '' }),
-        h('span', null, binding.character),
+        h('div', { className: 'dt-header-character-copy' },
+          h('span', { className: 'dt-header-character-name' }, binding.character),
+          statsLine ? h('span', { className: 'dt-header-stats', title: statsLine }, statsLine) : null),
         h('button', {
           type: 'button',
           title: t('view.regenerate'),
           disabled: run.busy,
           onClick: () => void generateFor(sessionId, binding, 'regenerate', ''),
         }, h(IconRefreshOutline16)))
+    }
+
+    function nativeTavernTabs() {
+      const titles = [MESSAGES_EN['nav.title'], MESSAGES_ZH['nav.title']]
+      return [...document.querySelectorAll('[role="tab"]')]
+        .filter((item) => titles.includes(item.textContent?.trim() || ''))
+    }
+
+    function restoreNativeTavernTabs() {
+      for (const tab of nativeTavernTabs()) {
+        if (tab.dataset?.dshTavernTabHidden === undefined) continue
+        const aria = tab.dataset.dshTavernTabHiddenAria || ''
+        if (aria) tab.setAttribute('aria-hidden', aria)
+        else tab.removeAttribute?.('aria-hidden')
+        tab.hidden = tab.dataset.dshTavernTabHiddenState === 'hidden'
+        delete tab.dataset.dshTavernTabHidden
+        delete tab.dataset.dshTavernTabHiddenAria
+        delete tab.dataset.dshTavernTabHiddenState
+      }
+    }
+
+    function filterNativeTavernTab(show) {
+      const tabs = [...document.querySelectorAll('[role="tab"]')]
+      const tavernTabs = nativeTavernTabs()
+      if (show) {
+        restoreNativeTavernTabs()
+        return
+      }
+      for (const tab of tavernTabs) {
+        if (tab.getAttribute('aria-selected') === 'true') {
+          const fallback = tabs.find((item) => item !== tab && !nativeTavernTabs().includes(item))
+          if (fallback instanceof HTMLElement) fallback.click()
+        }
+        if (tab.dataset?.dshTavernTabHidden !== undefined) continue
+        tab.dataset.dshTavernTabHidden = ''
+        tab.dataset.dshTavernTabHiddenAria = tab.getAttribute?.('aria-hidden') ?? ''
+        tab.dataset.dshTavernTabHiddenState = tab.hidden ? 'hidden' : 'visible'
+        tab.setAttribute?.('aria-hidden', 'true')
+        tab.hidden = true
+      }
+    }
+
+    function useNativeTavernTabFilter(show) {
+      useEffect(() => {
+        let frame = 0
+        const apply = () => {
+          frame = 0
+          filterNativeTavernTab(show)
+        }
+        const schedule = () => {
+          if (!frame) frame = requestAnimationFrame(apply)
+        }
+        apply()
+        const observer = new MutationObserver(schedule)
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-selected', 'aria-hidden'] })
+        window.addEventListener('resize', schedule)
+        return () => {
+          observer.disconnect()
+          window.removeEventListener('resize', schedule)
+          if (frame) cancelAnimationFrame(frame)
+          restoreNativeTavernTabs()
+        }
+      }, [show])
     }
 
     // 侧边栏会话树的 DOM 注入：宿主未提供会话列表扩展 slot，按几何特征定位
@@ -3200,7 +3426,9 @@ window.__ModuleLoader__.load({
       const t = useTranslate()
       const sessionIds = useSessions((value) => value.ids)
       const sessionPhase = useSessions((value) => value.phase)
+      const currentSession = useSessions((value) => value.current)
       const bindingIds = Object.keys(state.bootstrap.state.sessionBindings || {})
+      useNativeTavernTabFilter(Boolean(currentSession && state.bootstrap.state.sessionBindings?.[currentSession]))
       useNativeSessionTreeFilter(bindingIds)
       const host = useSidebarHost()
       useEffect(() => {
@@ -3263,13 +3491,13 @@ window.__ModuleLoader__.load({
       tag.dataset.plugin = 'dsh-tavern'
       tag.dataset.pluginCss = STYLE_ID
       tag.textContent = `
-        [data-dsh-tavern-native-hidden]{display:none!important}
+         [data-dsh-tavern-native-hidden],[data-dsh-tavern-tab-hidden],[data-dsh-tavern-agent-preset-hidden]{display:none!important}
         .dt-settings{color:var(--dsw-alias-label-primary);display:flex;flex-direction:column;gap:0;min-height:100%;font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}.dt-settings-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:20px 24px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-settings h2{font-size:20px;line-height:28px;margin:0;font-weight:600}.dt-settings-heading p{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px;margin:4px 0 0}.dt-settings-version{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;margin:2px 0 0;user-select:text}.dt-settings-band{padding:20px 24px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-settings-band h3{font-size:14px;line-height:20px;margin:0 0 14px;font-weight:600}.dt-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 20px}.dt-field{display:flex;flex-direction:column;gap:6px}.dt-label{color:var(--dsw-alias-label-secondary);font-size:12px}.dt-field select{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 10px}.dt-toggle,.dt-check-grid label{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary);font-size:13px}.dt-toggle{min-height:36px}.dt-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 20px}.dt-imports{display:flex;gap:8px;flex-wrap:wrap}.dt-upload{position:relative;cursor:pointer;height:34px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;font-size:13px}.dt-upload input{position:absolute;inset:0;opacity:0;cursor:pointer}.dt-upload-error{color:var(--dsw-alias-state-error-primary);margin-left:5px}.dt-error,.dt-run-error,.dt-sidebar-error{color:var(--dsw-alias-state-error-primary)}.dt-muted{color:var(--dsw-alias-label-tertiary)}
-        .dt-view{box-sizing:border-box;width:100%;max-width:780px;margin:0 auto;display:flex;flex-direction:column;min-height:100%;padding:8px 16px 28px;color:var(--dsw-alias-label-primary);letter-spacing:0}.dt-empty{min-height:300px;align-items:center;justify-content:center;gap:10px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:13px}.dt-scene-strip{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:9px;min-height:48px;padding:8px 4px;background:color-mix(in srgb,var(--dsw-alias-bg-base) 94%,transparent);border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-scene-strip>img{width:32px;height:32px;border-radius:6px;object-fit:cover}.dt-scene-strip>div{display:flex;flex-direction:column;min-width:0;flex:1}.dt-scene-strip strong{font-size:13px;line-height:18px}.dt-scene-strip span{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dt-scene-strip button,.dt-message-actions button,.dt-header-character button,.dt-sidebar button,.dt-footer-action{color:inherit;background:transparent;border:0;cursor:pointer}.dt-scene-strip button{width:30px;height:30px;display:grid;place-items:center;border-radius:6px}.dt-scene-strip button:hover,.dt-message-actions button:hover,.dt-header-character button:hover,.dt-sidebar button:hover,.dt-footer-action:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-view button:disabled,.dt-composer button:disabled,.dt-sidebar button:disabled{cursor:not-allowed;opacity:.45}.dt-transcript{display:flex;flex-direction:column;gap:22px;padding:22px 4px}.dt-message{display:flex;gap:10px;max-width:88%;min-width:0}.dt-message-user{align-self:flex-end}.dt-message-character{align-self:flex-start}.dt-message-avatar{width:30px;height:30px;object-fit:cover;border-radius:6px;flex:none}.dt-message-body{display:flex;flex-direction:column;gap:4px;min-width:0}.dt-message-user .dt-message-body{align-items:flex-end}.dt-message-name{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-message-copy{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.65;padding:9px 11px;border-radius:8px;background:var(--dsw-alias-bg-raised,rgba(127,127,127,.08));border:1px solid var(--dsw-alias-border-l2)}.dt-message-user .dt-message-copy{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,var(--dsw-alias-bg-base))}.dt-message-frontend{width:min(760px,82vw);max-width:100%;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base)}.dt-frontend-frame{display:block;width:100%;border:0;background:transparent;transition:height 180ms ease}.dt-message-actions{display:flex;align-items:center;gap:4px;min-height:24px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dt-message-actions button{min-width:24px;height:24px;border-radius:5px;display:inline-grid;place-items:center;padding:0 5px}.dt-message-edit{box-sizing:border-box;width:min(620px,70vw);max-width:100%;min-height:100px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:9px;font:inherit;line-height:1.55}.dt-transcript-end{height:1px;flex:none}.dt-message-error{max-width:620px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px}.dt-run-error{padding:7px 12px;font-size:12px}
-        .dt-composer-wrap{box-sizing:border-box;width:100%;padding:6px var(--dsh-composer-side-clearance,16px) 14px;pointer-events:auto}.dt-composer{box-sizing:border-box;width:min(var(--dsh-composer-card-max-width,780px),100%);margin:0 auto;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);padding:10px 10px 8px;box-shadow:0 2px 10px rgba(0,0,0,.06)}.dt-composer textarea{box-sizing:border-box;width:100%;min-height:52px;max-height:200px;resize:vertical;border:0;outline:0;color:var(--dsw-alias-label-primary);background:transparent;font:inherit;font-size:14px;line-height:1.5}.dt-composer-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:30px;font-size:11px}.dt-composer-row>span{min-width:0;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dt-composer-actions{display:flex;align-items:center;gap:8px;flex:none}.dt-primary-icon{width:30px;height:30px;border:0;border-radius:7px;display:grid;place-items:center;background:var(--dsw-alias-state-business-primary);color:#fff;cursor:pointer}.dt-header-character{height:28px;display:flex;align-items:center;gap:6px;padding:0 4px 0 5px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;font-size:12px}.dt-header-character>img{width:20px;height:20px;border-radius:4px;object-fit:cover}.dt-header-character>span{max-width:100px;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dt-header-character>button{width:24px;height:24px;border-radius:5px;display:grid;place-items:center}
+         .dt-view{box-sizing:border-box;width:100%;max-width:780px;margin:0 auto;display:flex;flex-direction:column;min-height:100%;padding:8px 16px 28px;color:var(--dsw-alias-label-primary);letter-spacing:0}.dt-empty{min-height:300px;align-items:center;justify-content:center;gap:10px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:13px}.dt-message-actions button,.dt-header-character button,.dt-sidebar button,.dt-footer-action{color:inherit;background:transparent;border:0;cursor:pointer}.dt-message-actions button:hover,.dt-header-character button:hover,.dt-sidebar button:hover,.dt-footer-action:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-view button:disabled,.dt-composer button:disabled,.dt-sidebar button:disabled{cursor:not-allowed;opacity:.45}.dt-transcript{display:flex;flex-direction:column;gap:22px;padding:22px 4px}.dt-message{display:flex;gap:10px;max-width:88%;min-width:0}.dt-message-user{align-self:flex-end}.dt-message-character{align-self:flex-start}.dt-message-avatar{width:30px;height:30px;object-fit:cover;border-radius:6px;flex:none}.dt-message-body{display:flex;flex-direction:column;gap:4px;min-width:0}.dt-message-user .dt-message-body{align-items:flex-end}.dt-message-name{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-message-copy{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.65;padding:9px 11px;border-radius:8px;background:var(--dsw-alias-bg-raised,rgba(127,127,127,.08));border:1px solid var(--dsw-alias-border-l2)}.dt-message-user .dt-message-copy{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,var(--dsw-alias-bg-base))}.dt-message-frontend{width:min(760px,82vw);max-width:100%;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base)}.dt-frontend-frame{display:block;width:100%;border:0;background:transparent;transition:height 180ms ease}.dt-message-actions{display:flex;align-items:center;gap:4px;min-height:24px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dt-message-actions button{min-width:24px;height:24px;border-radius:5px;display:inline-grid;place-items:center;padding:0 5px}.dt-message-edit{box-sizing:border-box;width:min(620px,70vw);max-width:100%;min-height:100px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:9px;font:inherit;line-height:1.55}.dt-transcript-end{height:1px;flex:none}.dt-message-error{max-width:620px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px}.dt-run-error{padding:7px 12px;font-size:12px}
+         .dt-composer-wrap{box-sizing:border-box;width:100%;padding:6px var(--dsh-composer-side-clearance,16px) 14px;pointer-events:auto}.dt-composer{box-sizing:border-box;width:min(var(--dsh-composer-card-max-width,780px),100%);margin:0 auto;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);padding:10px 10px 8px;box-shadow:0 2px 10px rgba(0,0,0,.06)}.dt-composer textarea{box-sizing:border-box;width:100%;min-height:52px;max-height:200px;resize:vertical;border:0;outline:0;color:var(--dsw-alias-label-primary);background:transparent;font:inherit;font-size:14px;line-height:1.5}.dt-composer-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:30px;font-size:11px}.dt-composer-row>span{min-width:0;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dt-composer-actions{display:flex;align-items:center;gap:8px;flex:none}.dt-primary-icon{width:30px;height:30px;border:0;border-radius:7px;display:grid;place-items:center;background:var(--dsw-alias-state-business-primary);color:#fff;cursor:pointer}.dt-header-character{min-width:0;display:flex;align-items:center;gap:7px;padding:2px 4px 2px 5px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;font-size:12px}.dt-header-character>img{width:20px;height:20px;border-radius:4px;object-fit:cover;flex:none}.dt-header-character-copy{display:flex;flex-direction:column;min-width:0;max-width:min(520px,55vw);gap:0}.dt-header-character-name{max-width:100%;text-overflow:ellipsis;white-space:nowrap;overflow:hidden;line-height:16px}.dt-header-stats{display:block;max-width:100%;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.dt-header-character>button{width:24px;height:24px;border-radius:5px;display:grid;place-items:center;flex:none}
         .dt-model-select{min-width:0;position:relative}.dt-model-trigger{min-width:0;max-width:220px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:24px;outline:none;align-items:center;gap:4px;padding:0 4px 0 8px;font-size:13px;font-weight:500;line-height:20px;display:flex}.dt-model-trigger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-model-trigger:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}.dt-model-trigger:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}.dt-model-trigger-label{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.dt-model-trigger-effort{color:var(--dsw-alias-label-caption);flex:none}.dt-model-chevron{color:var(--dsw-alias-label-caption);flex:none;transition:transform .12s}.dt-model-chevron-open{transform:rotate(180deg)}.dt-model-menu{z-index:20;border:1px solid var(--dsw-alias-border-inverted);background:var(--dsw-specific-menu);width:min(240px,100vw - 32px);max-height:min(360px,100vh - 96px);box-shadow:var(--dsw-shadow-lv3);color:var(--dsw-alias-label-primary);border-radius:12px;flex-direction:column;padding:4px;display:flex;position:absolute;bottom:calc(100% + 8px);right:0;overflow:hidden}.dt-model-status,.dt-model-empty{color:var(--dsw-alias-label-tertiary);padding:10px;font-size:13px;line-height:20px}.dt-model-error,.dt-model-warning{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);border-radius:8px;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px;padding:7px 8px;font-size:12px;line-height:18px;display:flex}.dt-model-warning{background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-state-warn-label)}.dt-model-retry{color:inherit;font:inherit;cursor:pointer;background:0 0;border:none;flex:none;padding:0;font-weight:600}.dt-model-groups{min-height:0;overflow-y:auto}.dt-model-group+.dt-model-group{margin-top:4px}.dt-model-group-title{z-index:1;background:var(--dsw-specific-menu);color:var(--dsw-alias-label-tertiary);padding:5px 8px 3px;font-size:12px;font-weight:500;line-height:18px;position:sticky;top:0}.dt-model-option{width:100%;min-height:38px;color:inherit;text-align:left;cursor:pointer;background:0 0;border:none;border-radius:10px;outline:none;align-items:center;gap:8px;padding:6px 8px;display:flex}.dt-model-option:hover:not(:disabled),.dt-model-option:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}.dt-model-option:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}.dt-model-option-copy{flex-direction:column;flex:1;min-width:0;display:flex}.dt-model-name{color:inherit;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:500;line-height:20px;overflow:hidden}.dt-model-description{color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:18px;overflow:hidden}.dt-model-check{color:var(--dsw-alias-label-primary);flex:0 0 18px;place-items:center;display:grid}.dt-model-cell{width:100%;height:40px;color:var(--dsw-alias-label-primary);cursor:pointer;text-align:left;background:0 0;border:none;border-radius:10px;align-items:center;gap:8px;padding:0 10px;font-size:14px;line-height:22px;display:flex}.dt-model-cell:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-model-cell-label{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.dt-model-cell-value{text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--dsw-alias-label-tertiary);flex:0 auto;overflow:hidden}.dt-model-cell-chevron{color:var(--dsw-alias-label-tertiary);flex:none}
         [data-dsh-tavern-sidebar-host]{flex:none;margin:0 0 6px;padding-right:var(--dsh-session-list-edge-inset,8px)}.dt-sidebar{box-sizing:border-box;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}.dt-sidebar-heading{display:flex;align-items:center;justify-content:space-between;height:30px;padding:0 5px;color:var(--dsw-alias-label-secondary)}.dt-sidebar-heading>span{display:flex;align-items:center;gap:6px;font-size:12px}.dt-sidebar-heading>button{width:26px;height:26px;border-radius:6px}.dt-character-group{margin-top:2px}.dt-character-row{display:flex;align-items:center;gap:2px}.dt-character-toggle{height:32px;min-width:0;flex:1;display:flex;align-items:center;gap:5px;border-radius:6px;padding:0 5px;text-align:left}.dt-character-toggle svg{transform:rotate(-90deg);transition:transform .15s}.dt-character-toggle svg.dt-chevron-open{transform:rotate(0)}.dt-character-toggle img{width:22px;height:22px;border-radius:5px;object-fit:cover}.dt-character-toggle span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.dt-character-row>button:last-child{width:28px;height:28px;display:grid;place-items:center;border-radius:6px;flex:none}.dt-sidebar-chats{display:flex;flex-direction:column;margin:1px 0 4px 28px}.dt-sidebar-chat-row{height:28px;border-radius:6px;display:grid;grid-template-columns:minmax(0,1fr) 26px 26px;align-items:center;color:var(--dsw-alias-label-secondary)}.dt-sidebar-chat-open{height:28px;min-width:0;text-align:left;padding:0 7px;color:inherit;font-size:12px}.dt-sidebar-chat-open span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-sidebar-chat-row>button:not(.dt-sidebar-chat-open){width:26px;height:26px;display:grid;place-items:center;border-radius:5px;opacity:0}.dt-sidebar-chat-row:hover>button:not(.dt-sidebar-chat-open),.dt-sidebar-chat-row:focus-within>button:not(.dt-sidebar-chat-open){opacity:1}.dt-sidebar-chat-row.dt-sidebar-chat-active{color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-interactive-bg-hover)}.dt-sidebar-status,.dt-sidebar-error{padding:4px 7px;font-size:11px;line-height:16px}.dt-footer-action{box-sizing:border-box;cursor:pointer;color:var(--dsw-alias-label-primary);background:transparent;border:none;font-family:inherit;display:flex;align-items:center;overflow:hidden}.dt-footer-action-wide{width:calc(100% + 8px);height:34px;flex:none;justify-content:flex-start;gap:8px;margin:4px -4px;padding:6px 2px 6px 10px;border-radius:12px;font-size:14px;line-height:22px}.dt-footer-action-wide:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-footer-action-rail{width:36px;height:36px;flex:none;justify-content:center;gap:0;margin:8px 0 10px;padding:0;border-radius:50%}.dt-footer-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;line-height:22px}
-        @media(max-width:700px){[role="dialog"]:has(.dt-settings){flex-direction:column}[role="dialog"]:has(.dt-settings)>nav{box-sizing:border-box;width:100%;height:auto;max-height:190px;flex:none;overflow-y:auto;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}[role="dialog"]:has(.dt-settings)>nav>:last-child{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));height:auto}[role="dialog"]:has(.dt-settings)>nav>:last-child>button{width:100%;min-width:0}[role="dialog"]:has(.dt-settings)>:not(nav){width:100%;min-width:0;flex:1}.dt-settings-heading{padding:16px}.dt-settings-band{padding:16px}.dt-settings-grid,.dt-check-grid{grid-template-columns:1fr}.dt-view{padding-inline:10px}.dt-transcript-end{height:132px}.dt-message{max-width:94%}.dt-scene-strip{top:0}.dt-header-character>span{display:none}.dt-composer-wrap{padding-inline:8px}.dt-model-trigger{max-width:140px}.dt-message-edit{width:78vw}.dt-sidebar-chat-row>button:not(.dt-sidebar-chat-open){opacity:1}}
+         @media(max-width:700px){[role="dialog"]:has(.dt-settings){flex-direction:column}[role="dialog"]:has(.dt-settings)>nav{box-sizing:border-box;width:100%;height:auto;max-height:190px;flex:none;overflow-y:auto;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}[role="dialog"]:has(.dt-settings)>nav>:last-child{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));height:auto}[role="dialog"]:has(.dt-settings)>nav>:last-child>button{width:100%;min-width:0}[role="dialog"]:has(.dt-settings)>:not(nav){width:100%;min-width:0;flex:1}.dt-settings-heading{padding:16px}.dt-settings-band{padding:16px}.dt-settings-grid,.dt-check-grid{grid-template-columns:1fr}.dt-view{padding-inline:10px}.dt-transcript-end{height:132px}.dt-message{max-width:94%}.dt-header-character-copy{max-width:min(340px,52vw)}.dt-header-stats{max-width:100%}.dt-composer-wrap{padding-inline:8px}.dt-model-trigger{max-width:140px}.dt-message-edit{width:78vw}.dt-sidebar-chat-row>button:not(.dt-sidebar-chat-open){opacity:1}}
         .dt-persona-list{display:flex;flex-direction:column;gap:6px}.dt-persona-row{display:flex;align-items:center;gap:10px;min-height:44px;padding:4px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}.dt-persona-avatar{width:34px;height:34px;border-radius:6px;object-fit:cover;flex:none}.dt-persona-copy{display:flex;flex-direction:column;min-width:0;flex:1;gap:2px}.dt-persona-copy span{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-persona-actions{display:flex;gap:2px}.dt-persona-actions button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-persona-actions button:hover{background:var(--dsw-alias-interactive-bg-hover)}
         .dt-group-create{display:flex;flex-direction:column;gap:8px;margin:10px 0;padding:10px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}.dt-group-list{display:flex;flex-direction:column;gap:12px}.dt-group-manage{display:flex;flex-direction:column;gap:6px}.dt-group-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.dt-group-title>span{color:var(--dsw-alias-label-tertiary);font-size:12px}.dt-group-title select{height:30px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:inherit;background:var(--dsw-alias-bg-base);padding:0 6px}.dt-group-title>button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-group-members{display:flex;flex-wrap:wrap;gap:6px}
         .dt-member-chip{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 8px 0 3px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:transparent;color:inherit;font-size:12px;cursor:pointer}.dt-member-chip>img{width:22px;height:22px;border-radius:50%;object-fit:cover}.dt-member-chip-off{opacity:.45}.dt-member-chip-off>span{text-decoration:line-through}.dt-member-chip-active{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}.dt-member-chip>button{color:inherit;background:transparent;border:0;cursor:pointer;padding:0 2px;font-size:11px}
@@ -3349,6 +3577,7 @@ window.__ModuleLoader__.load({
         .dt-kv-key{color:var(--dsw-alias-label-secondary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
         .dt-kv-value{color:var(--dsw-alias-label-primary)}
         .dt-tc-state{display:inline-flex;align-items:center;padding:0 4px}
+        .dt-header-character{padding:0;border:0;border-radius:0}
         @media(max-width:700px){.dt-panel{flex-direction:column}.dt-panel-nav{width:100%;flex-direction:row;align-items:center;overflow-x:auto;overflow-y:hidden;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-panel-brand{padding:4px 8px}.dt-panel-brand-copy{display:none}.dt-panel-navcell{flex:none}.dt-card-grid{grid-template-columns:1fr}.dt-kv-row{grid-template-columns:1fr 1fr 28px}.dt-editor-grid{grid-template-columns:1fr}.dt-editor-wide{grid-column:auto}.dt-editor-toolbar{align-items:flex-start}.dt-preset-row{align-items:flex-start}.dt-preset-name{flex-basis:100%}}
       `
       document.head.appendChild(tag)

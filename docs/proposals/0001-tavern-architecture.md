@@ -12,8 +12,8 @@ dsh-tavern 让 DSH 用户直接使用 SillyTavern 的角色扮演资产和交互
 
 DSH 的 agentic 工具循环和 SillyTavern 的纯 RP 循环用途不同。第一版采用以下分工：
 
-- Tavern Node half 自建 RP 循环：世界书扫描、宏展开、preset prompt 装配、`ctx.llm.stream`、JSONL 保存。
-- DSH 提供模型选择、provider 路由、密钥、session 容器、Web server 和插件生命周期。
+- Tavern Node half 自建 RP 循环：世界书扫描、宏展开、preset prompt 装配、`ctx.llm.stream`、JSONL 保存，并将生成过程镜像为宿主 session 的原生 turn/step/chunk/message 事件。
+- DSH 提供模型选择、provider 路由、密钥、session 容器、Web server、插件生命周期和 session projection 统计。
 - Tavern client half 使用 DSH 正式 slots 进入原生 UI，不把完整工作台放在设置页。
 - Fabric 不进入第一版运行路径；只有正式插件层无法实现未来需求时才考虑。
 
@@ -45,7 +45,7 @@ $DSH_HOME/tavern/state.json -> sessionBindings
 打开新 Tavern chat 时：
 
 1. 连接当前 workspace 的 blank DSH session。
-2. 调用内部 `/tavern <base64url-json>` command。
+2. 调用插件内部 session bridge command（不暴露 Tavern 激活斜杠命令）。
 3. Node half 校验 chat 并原子保存 binding。
 4. 向 session 追加 `plugin:dsh-tavern` 的 `user/message` notice marker。
 5. marker 让 blank session 进入 active 状态，但不触发模型调用。

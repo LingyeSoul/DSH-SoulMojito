@@ -4477,7 +4477,7 @@ function jsonBytes(obj) {
 
 // packages/plugin/src/index.ts
 var name = "dsh-tavern";
-var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands"];
+var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents"];
 var API = "/api/dsh-tavern";
 var DEFAULT_USER = "User";
 var BUILD_INFO = readBuildInfo();
@@ -4495,12 +4495,14 @@ function apply(ctx) {
     text: () => activeAgentPrompt
   });
   ctx.commands.register({
-    name: "tavern",
-    description: "activate a Tavern roleplay chat in this session",
+    // Internal bridge for the client binding API. It is intentionally separate
+    // from the public slash-command surface.
+    name: "dsh-tavern-session",
+    description: "internal dsh-tavern session bridge",
     input: { hint: "<character> <chat-id>" },
     recordInput: false,
     handler: async ({ agent, rawInput }) => {
-      const parsed = parseTavernCommand(rawInput);
+      const parsed = parseTavernSessionCommand(rawInput);
       if (!parsed) return { kind: "error", text: "Invalid Tavern activation payload." };
       const db = await store();
       if (parsed.action === "close") {
@@ -5227,7 +5229,8 @@ async function generate(ctx, req, res, db) {
       model: typeof body.model === "string" ? body.model : void 0,
       reasoningEffort: typeof body.reasoningEffort === "string" ? body.reasoningEffort : void 0,
       write,
-      signal: ac.signal
+      signal: ac.signal,
+      hostAgent: typeof body.sessionId === "string" ? ctx.agents?.get?.(body.sessionId) : void 0
     });
     write({ type: "saved", chat: result.chat, revision: result.revision });
     res.end();
@@ -5244,64 +5247,54 @@ async function runGeneration(ctx, db, options) {
   const { state, characterName, chatId, snapshot, mode, group: group2, write, signal } = options;
   const chat = snapshot.chat;
   let revision = snapshot.revision;
-  let speakerName = characterName;
-  let groupDef = void 0;
-  let turnMessages = chat.messages;
-  let nudge = void 0;
-  if (group2) {
-    groupDef = await db.getGroup(characterName);
-    if (!groupDef) throw new Error(`group '${characterName}' not found`);
-    const chatGroupMeta = chat.header.chat_metadata?.group;
-    const members = Array.isArray(chatGroupMeta?.members) && chatGroupMeta.members.length > 0 ? chatGroupMeta.members.filter((x) => typeof x === "string") : groupDef.members;
-    const disabled = Array.isArray(chatGroupMeta?.disabledMembers) ? chatGroupMeta.disabledMembers.filter((x) => typeof x === "string") : groupDef.disabledMembers;
-    const lastSpeaker = [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system)?.name;
-    const talkativeness = /* @__PURE__ */ new Map();
-    for (const member of members) {
-      const file = await db.getCharacter(member);
-      const raw = file?.card?.data?.extensions?.talkativeness;
-      talkativeness.set(member, typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0.5);
-    }
-    speakerName = options.triggerMember ?? (mode === "regenerate" ? members.includes(lastSpeaker) ? lastSpeaker : void 0 : void 0) ?? pickGroupMember({
-      strategy: groupDef.activationStrategy,
-      members,
-      disabled,
-      talkativeness: (member) => talkativeness.get(member) ?? 0.5,
-      lastSpeaker,
-      allowSelfResponses: groupDef.allowSelfResponses
-    });
-    if (!speakerName || !members.includes(speakerName)) throw new Error("no eligible group member to reply");
-    const rawNudge = await presetSamplerValue(db, state, "group_nudge_prompt");
-    const turn = buildGroupTurn({
-      speaker: speakerName,
-      members,
-      userName: DEFAULT_USER,
-      messages: chat.messages,
-      ...typeof rawNudge === "string" && rawNudge.trim() !== "" ? { groupNudgePrompt: rawNudge } : {}
-    });
-    turnMessages = turn.messages;
-    nudge = turn.nudge;
-  }
-  const character = await db.getCharacter(speakerName);
-  if (!character) throw new Error(`character '${speakerName}' not found`);
-  let regenerated;
-  const scripts = await collectRegexScripts(db, state, character);
-  if (mode === "send") {
-    const transformed = applyRegexScripts(options.userText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t });
-    chat.messages.push({ name: DEFAULT_USER, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: transformed });
+  let hostTrace;
+  try {
+    let speakerName = characterName;
+    let groupDef = void 0;
+    let turnMessages = chat.messages;
+    let nudge = void 0;
     if (group2) {
+      groupDef = await db.getGroup(characterName);
+      if (!groupDef) throw new Error(`group '${characterName}' not found`);
+      const chatGroupMeta = chat.header.chat_metadata?.group;
+      const members = Array.isArray(chatGroupMeta?.members) && chatGroupMeta.members.length > 0 ? chatGroupMeta.members.filter((x) => typeof x === "string") : groupDef.members;
+      const disabled = Array.isArray(chatGroupMeta?.disabledMembers) ? chatGroupMeta.disabledMembers.filter((x) => typeof x === "string") : groupDef.disabledMembers;
+      const lastSpeaker = [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system)?.name;
+      const talkativeness = /* @__PURE__ */ new Map();
+      for (const member of members) {
+        const file = await db.getCharacter(member);
+        const raw = file?.card?.data?.extensions?.talkativeness;
+        talkativeness.set(member, typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0.5);
+      }
+      speakerName = options.triggerMember ?? (mode === "regenerate" ? members.includes(lastSpeaker) ? lastSpeaker : void 0 : void 0) ?? pickGroupMember({
+        strategy: groupDef.activationStrategy,
+        members,
+        disabled,
+        talkativeness: (member) => talkativeness.get(member) ?? 0.5,
+        lastSpeaker,
+        allowSelfResponses: groupDef.allowSelfResponses
+      });
+      if (!speakerName || !members.includes(speakerName)) throw new Error("no eligible group member to reply");
+      const rawNudge = await presetSamplerValue(db, state, "group_nudge_prompt");
       const turn = buildGroupTurn({
         speaker: speakerName,
-        members: groupDef?.members ?? [speakerName],
+        members,
         userName: DEFAULT_USER,
-        messages: chat.messages
+        messages: chat.messages,
+        ...typeof rawNudge === "string" && rawNudge.trim() !== "" ? { groupNudgePrompt: rawNudge } : {}
       });
       turnMessages = turn.messages;
+      nudge = turn.nudge;
     }
-    revision = await db.saveChat(characterName, chatId, chat, revision);
-  } else {
-    const last = chat.messages[chat.messages.length - 1];
-    if (last?.is_user === false && !last.is_system) {
-      regenerated = chat.messages.pop();
+    const character = await db.getCharacter(speakerName);
+    if (!character) throw new Error(`character '${speakerName}' not found`);
+    let regenerated;
+    let hostUserText = "";
+    const scripts = await collectRegexScripts(db, state, character);
+    if (mode === "send") {
+      const transformed = applyRegexScripts(options.userText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t });
+      hostUserText = transformed;
+      chat.messages.push({ name: DEFAULT_USER, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: transformed });
       if (group2) {
         const turn = buildGroupTurn({
           speaker: speakerName,
@@ -5311,233 +5304,259 @@ async function runGeneration(ctx, db, options) {
         });
         turnMessages = turn.messages;
       }
+      revision = await db.saveChat(characterName, chatId, chat, revision);
+    } else {
+      const last = chat.messages[chat.messages.length - 1];
+      if (last?.is_user === false && !last.is_system) {
+        regenerated = chat.messages.pop();
+        if (group2) {
+          const turn = buildGroupTurn({
+            speaker: speakerName,
+            members: groupDef?.members ?? [speakerName],
+            userName: DEFAULT_USER,
+            messages: chat.messages
+          });
+          turnMessages = turn.messages;
+        }
+      }
     }
-  }
-  const presetName = state.activePreset;
-  let presetObject = presetName ? await db.getPreset(presetName) : void 0;
-  if (!presetObject) presetObject = defaultPreset();
-  const preset = parsePreset(presetObject);
-  const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
-  const books = [];
-  for (const worldName of state.activeWorlds) {
-    const world = await db.getWorld(worldName);
-    if (world) books.push({ name: world.name, entries: world.entries });
-  }
-  if (character.card.data.characterBook) {
-    const embedded = parseCharacterBook(character.card.data.characterBook);
-    books.unshift({
-      name: `${speakerName}:embedded`,
-      entries: embedded.entries,
-      scanDepth: character.card.data.characterBook.scan_depth,
-      tokenBudget: character.card.data.characterBook.token_budget,
-      recursiveScanning: character.card.data.characterBook.recursive_scanning
+    hostTrace = beginTavernSessionTurn(options.hostAgent, hostUserText);
+    const presetName = state.activePreset;
+    let presetObject = presetName ? await db.getPreset(presetName) : void 0;
+    if (!presetObject) presetObject = defaultPreset();
+    const preset = parsePreset(presetObject);
+    const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
+    const books = [];
+    for (const worldName of state.activeWorlds) {
+      const world = await db.getWorld(worldName);
+      if (world) books.push({ name: world.name, entries: world.entries });
+    }
+    if (character.card.data.characterBook) {
+      const embedded = parseCharacterBook(character.card.data.characterBook);
+      books.unshift({
+        name: `${speakerName}:embedded`,
+        entries: embedded.entries,
+        scanDepth: character.card.data.characterBook.scan_depth,
+        tokenBudget: character.card.data.characterBook.token_budget,
+        recursiveScanning: character.card.data.characterBook.recursive_scanning
+      });
+    }
+    const lore = activateWorldInfo({
+      books,
+      chat: turnMessages.map((m) => ({ name: m.name, content: m.mes, isUser: m.is_user })),
+      contextSize: Number(preset.sampler.openai_max_context ?? 4096),
+      trigger: mode === "regenerate" ? "regenerate" : mode === "trigger" ? "quiet" : "normal",
+      scanSources: {
+        personaDescription: persona?.description,
+        characterDescription: character.card.data.description,
+        characterPersonality: character.card.data.personality,
+        scenario: character.card.data.scenario,
+        creatorNotes: character.card.data.creatorNotes
+      },
+      settings: { recursive: true, scanDepth: 2, budgetPercent: 25 },
+      timedState: typeof chat.header.chat_metadata?.timedWorldInfo === "object" && chat.header.chat_metadata.timedWorldInfo ? chat.header.chat_metadata.timedWorldInfo : void 0,
+      messageCount: turnMessages.length
     });
-  }
-  const lore = activateWorldInfo({
-    books,
-    chat: turnMessages.map((m) => ({ name: m.name, content: m.mes, isUser: m.is_user })),
-    contextSize: Number(preset.sampler.openai_max_context ?? 4096),
-    trigger: mode === "regenerate" ? "regenerate" : mode === "trigger" ? "quiet" : "normal",
-    scanSources: {
-      personaDescription: persona?.description,
-      characterDescription: character.card.data.description,
-      characterPersonality: character.card.data.personality,
-      scenario: character.card.data.scenario,
-      creatorNotes: character.card.data.creatorNotes
-    },
-    settings: { recursive: true, scanDepth: 2, budgetPercent: 25 },
-    timedState: typeof chat.header.chat_metadata?.timedWorldInfo === "object" && chat.header.chat_metadata.timedWorldInfo ? chat.header.chat_metadata.timedWorldInfo : void 0,
-    messageCount: turnMessages.length
-  });
-  chat.header.chat_metadata.timedWorldInfo = lore.timedState;
-  const wiDeps = { expand: (text2) => text2 };
-  const loreBefore = lore.worldInfoBefore.entries.map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps));
-  const loreAfter = lore.worldInfoAfter.entries.map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps));
-  const lastUser = [...turnMessages].reverse().find((m) => m.is_user);
-  const lastChar = [...turnMessages].reverse().find((m) => !m.is_user && !m.is_system);
-  const enabledMembers = groupDef ? groupDef.members.filter((member) => !groupDef.disabledMembers.includes(member)) : void 0;
-  const macros = createMacroEngine({
-    char: character.card.data.nickname || character.card.data.name,
-    user: DEFAULT_USER,
-    ...enabledMembers ? { group: enabledMembers.join(", ") } : {},
-    persona: persona?.description,
-    card: {
-      description: character.card.data.description,
-      personality: character.card.data.personality,
-      scenario: character.card.data.scenario,
-      mesExample: character.card.data.mesExample,
-      systemPrompt: character.card.data.systemPrompt,
-      postHistoryInstructions: character.card.data.postHistoryInstructions,
-      creatorNotes: character.card.data.creatorNotes
-    },
-    lastMessage: turnMessages[turnMessages.length - 1]?.mes,
-    lastUserMessage: lastUser?.mes,
-    lastCharMessage: lastChar?.mes,
-    lastMessageId: turnMessages.length - 1,
-    chatId,
-    local: chatVariables(chat),
-    global: state.scriptGlobals
-  });
-  const expand = (text2) => macros.expand(text2);
-  const countTokens = (text2) => Math.ceil(text2.length / 3.5);
-  const personaInjections = [];
-  let personaDescription = persona?.description;
-  if (persona) {
-    const position = typeof persona.position === "number" ? persona.position : 0;
-    if (position === 4) {
-      personaInjections.push({ depth: persona.depth ?? 4, role: roleName(persona.role ?? 0), text: persona.description });
-      personaDescription = void 0;
-    } else if (position === 2 || position === 3) {
-      personaInjections.push({ depth: position === 2 ? 4 : 0, role: "system", text: persona.description });
-      personaDescription = void 0;
-    } else if (position === 9) {
-      personaDescription = void 0;
-    }
-  }
-  const promptOnlyScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly);
-  const historyForPrompt = promptOnlyScripts.length > 0 ? turnMessages.map((m, index) => ({
-    ...m,
-    mes: applyRegexScripts(m.mes, promptOnlyScripts, RegexPlacement.AI_OUTPUT, {}, { depth: turnMessages.length - 1 - index })
-  })) : turnMessages;
-  const depthInjections = [
-    ...lore.atDepth.map((g) => ({ depth: g.depth, role: roleName(g.role), text: g.text })),
-    ...lore.topOfAuthorsNote.text ? [{ depth: 4, role: "system", text: lore.topOfAuthorsNote.text }] : [],
-    ...lore.bottomOfAuthorsNote.text ? [{ depth: 0, role: "system", text: lore.bottomOfAuthorsNote.text }] : [],
-    ...personaInjections
-  ];
-  const isTextPipeline = state.pipelineMode === "text" && state.textCompletion?.endpoint;
-  let provider = "";
-  let model = "";
-  let reasoningEffort;
-  let promptString = "";
-  let assembled;
-  if (isTextPipeline) {
-    const config = state.textCompletion;
-    const contextPreset = config.contextPreset ? await db.getPreset(config.contextPreset) : void 0;
-    const instructPreset = config.instructPreset ? await db.getPreset(config.instructPreset) : void 0;
-    const samplerPreset = config.samplerPreset ? await db.getPreset(config.samplerPreset) : void 0;
-    const context = contextPreset && detectPresetKind(contextPreset) === "context" ? parseContextTemplate(contextPreset) : defaultContextTemplate();
-    const instruct = instructPreset && detectPresetKind(instructPreset) === "instruct" ? parseInstructTemplate(instructPreset) : void 0;
-    const tc = assembleTextCompletion({
-      context,
-      instruct,
-      speakerName: character.card.data.nickname || character.card.data.name,
-      userName: DEFAULT_USER,
-      speakerFields: {
+    chat.header.chat_metadata.timedWorldInfo = lore.timedState;
+    const wiDeps = { expand: (text2) => text2 };
+    const loreBefore = lore.worldInfoBefore.entries.map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps));
+    const loreAfter = lore.worldInfoAfter.entries.map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps));
+    const lastUser = [...turnMessages].reverse().find((m) => m.is_user);
+    const lastChar = [...turnMessages].reverse().find((m) => !m.is_user && !m.is_system);
+    const enabledMembers = groupDef ? groupDef.members.filter((member) => !groupDef.disabledMembers.includes(member)) : void 0;
+    const macros = createMacroEngine({
+      char: character.card.data.nickname || character.card.data.name,
+      user: DEFAULT_USER,
+      ...enabledMembers ? { group: enabledMembers.join(", ") } : {},
+      persona: persona?.description,
+      card: {
         description: character.card.data.description,
         personality: character.card.data.personality,
         scenario: character.card.data.scenario,
+        mesExample: character.card.data.mesExample,
         systemPrompt: character.card.data.systemPrompt,
         postHistoryInstructions: character.card.data.postHistoryInstructions,
-        mesExample: character.card.data.mesExample
+        creatorNotes: character.card.data.creatorNotes
       },
-      personaDescription,
-      systemPrompt: character.card.data.systemPrompt.trim() !== "" ? character.card.data.systemPrompt : preset.prompts.find((p) => p.identifier === "main" && !p.marker)?.content ?? "",
-      worldInfoBefore: loreBefore,
-      worldInfoAfter: loreAfter,
-      messages: [...historyForPrompt, ...nudge ? [{ name: DEFAULT_USER, is_user: true, is_system: false, send_date: "", mes: nudge.content }] : []],
-      depthInjections,
-      maxContextTokens: numberOr(samplerPreset?.["max_context_length"], numberOr(preset.sampler.openai_max_context, 4096)),
-      maxResponseTokens: numberOr(samplerPreset?.["max_length"], numberOr(preset.sampler.openai_max_tokens, 400))
-    }, { expand, countTokens });
-    promptString = tc.prompt;
-    provider = "kobold";
-    model = "kobold";
-    write({ type: "start", provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: tc.stats, warnings: tc.warnings });
-  } else {
-    assembled = assemblePrompt({
-      card: character.card,
-      preset,
-      personaDescription,
-      messages: historyForPrompt,
-      worldInfoBefore: loreBefore,
-      worldInfoAfter: loreAfter,
-      beforeExamples: lore.beforeExamples.entries.map((e) => e.content),
-      afterExamples: lore.afterExamples.entries.map((e) => e.content),
-      depthInjections
-    }, { expand, countTokens });
-    const fallback = ctx.agentDefaultModel.currentSelection();
-    const saved = options.sessionId ? state.modelSelections?.[options.sessionId] : void 0;
-    const explicit = options.provider !== void 0 && options.model !== void 0 ? {
-      provider: options.provider,
-      model: options.model,
-      ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {}
-    } : void 0;
-    const choice = explicit ?? saved ?? fallback;
-    provider = choice.provider;
-    model = choice.model;
-    reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
-    write({ type: "start", provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: assembled.stats });
-  }
-  let text = "";
-  let reasoning = "";
-  if (isTextPipeline) {
-    const config = state.textCompletion;
-    const samplerPreset = config.samplerPreset ? await db.getPreset(config.samplerPreset) : void 0;
-    for await (const chunk of streamKobold(config, promptString, samplerPreset, signal)) {
-      if (chunk.type === "text-delta") {
-        text += chunk.text;
-        write({ type: "delta", text: chunk.text });
-      } else if (chunk.type === "reasoning-delta") {
-        reasoning += chunk.text;
-        write({ type: "reasoning", text: chunk.text });
+      lastMessage: turnMessages[turnMessages.length - 1]?.mes,
+      lastUserMessage: lastUser?.mes,
+      lastCharMessage: lastChar?.mes,
+      lastMessageId: turnMessages.length - 1,
+      chatId,
+      local: chatVariables(chat),
+      global: state.scriptGlobals
+    });
+    const expand = (text2) => macros.expand(text2);
+    const countTokens = (text2) => Math.ceil(text2.length / 3.5);
+    const personaInjections = [];
+    let personaDescription = persona?.description;
+    if (persona) {
+      const position = typeof persona.position === "number" ? persona.position : 0;
+      if (position === 4) {
+        personaInjections.push({ depth: persona.depth ?? 4, role: roleName(persona.role ?? 0), text: persona.description });
+        personaDescription = void 0;
+      } else if (position === 2 || position === 3) {
+        personaInjections.push({ depth: position === 2 ? 4 : 0, role: "system", text: persona.description });
+        personaDescription = void 0;
+      } else if (position === 9) {
+        personaDescription = void 0;
       }
     }
-  } else {
-    const requestMessages = [...assembled.messages];
-    const systemParts = [];
-    while (requestMessages[0]?.role === "system") systemParts.push(requestMessages.shift().content);
-    const llmMessages = requestMessages.map((m) => createMessage({
-      role: m.role,
-      content: [{ type: "text", text: m.content }],
-      source: m.role === "assistant" ? { kind: "model", provider, model } : m.role === "user" ? { kind: "user" } : { kind: "plugin", plugin: "dsh-tavern" }
-    }));
-    for await (const chunk of ctx.llm.stream({
-      provider,
-      model,
-      messages: llmMessages,
-      ...systemParts.length > 0 ? { system: systemParts.join("\n\n") } : {},
-      ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
-      temperature: numberOr(preset.sampler.temperature, void 0),
-      maxTokens: numberOr(preset.sampler.openai_max_tokens, void 0),
-      signal
-    })) {
-      if (chunk.type === "text-delta") {
-        text += chunk.text;
-        write({ type: "delta", text: chunk.text });
-      } else if (chunk.type === "reasoning-delta") {
-        reasoning += chunk.text;
-        write({ type: "reasoning", text: chunk.text });
-      } else if (chunk.type === "finish") {
-        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
-        write({ type: "finish", reason: chunk.reason.kind });
+    const promptOnlyScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly);
+    const historyForPrompt = promptOnlyScripts.length > 0 ? turnMessages.map((m, index) => ({
+      ...m,
+      mes: applyRegexScripts(m.mes, promptOnlyScripts, RegexPlacement.AI_OUTPUT, {}, { depth: turnMessages.length - 1 - index })
+    })) : turnMessages;
+    const depthInjections = [
+      ...lore.atDepth.map((g) => ({ depth: g.depth, role: roleName(g.role), text: g.text })),
+      ...lore.topOfAuthorsNote.text ? [{ depth: 4, role: "system", text: lore.topOfAuthorsNote.text }] : [],
+      ...lore.bottomOfAuthorsNote.text ? [{ depth: 0, role: "system", text: lore.bottomOfAuthorsNote.text }] : [],
+      ...personaInjections
+    ];
+    const isTextPipeline = state.pipelineMode === "text" && state.textCompletion?.endpoint;
+    let provider = "";
+    let model = "";
+    let reasoningEffort;
+    let promptString = "";
+    let assembled;
+    if (isTextPipeline) {
+      const config = state.textCompletion;
+      const contextPreset = config.contextPreset ? await db.getPreset(config.contextPreset) : void 0;
+      const instructPreset = config.instructPreset ? await db.getPreset(config.instructPreset) : void 0;
+      const samplerPreset = config.samplerPreset ? await db.getPreset(config.samplerPreset) : void 0;
+      const context = contextPreset && detectPresetKind(contextPreset) === "context" ? parseContextTemplate(contextPreset) : defaultContextTemplate();
+      const instruct = instructPreset && detectPresetKind(instructPreset) === "instruct" ? parseInstructTemplate(instructPreset) : void 0;
+      const tc = assembleTextCompletion({
+        context,
+        instruct,
+        speakerName: character.card.data.nickname || character.card.data.name,
+        userName: DEFAULT_USER,
+        speakerFields: {
+          description: character.card.data.description,
+          personality: character.card.data.personality,
+          scenario: character.card.data.scenario,
+          systemPrompt: character.card.data.systemPrompt,
+          postHistoryInstructions: character.card.data.postHistoryInstructions,
+          mesExample: character.card.data.mesExample
+        },
+        personaDescription,
+        systemPrompt: character.card.data.systemPrompt.trim() !== "" ? character.card.data.systemPrompt : preset.prompts.find((p) => p.identifier === "main" && !p.marker)?.content ?? "",
+        worldInfoBefore: loreBefore,
+        worldInfoAfter: loreAfter,
+        messages: [...historyForPrompt, ...nudge ? [{ name: DEFAULT_USER, is_user: true, is_system: false, send_date: "", mes: nudge.content }] : []],
+        depthInjections,
+        maxContextTokens: numberOr(samplerPreset?.["max_context_length"], numberOr(preset.sampler.openai_max_context, 4096)),
+        maxResponseTokens: numberOr(samplerPreset?.["max_length"], numberOr(preset.sampler.openai_max_tokens, 400))
+      }, { expand, countTokens });
+      promptString = tc.prompt;
+      provider = "kobold";
+      model = "kobold";
+      write({ type: "start", provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: tc.stats, warnings: tc.warnings });
+    } else {
+      assembled = assemblePrompt({
+        card: character.card,
+        preset,
+        personaDescription,
+        messages: historyForPrompt,
+        worldInfoBefore: loreBefore,
+        worldInfoAfter: loreAfter,
+        beforeExamples: lore.beforeExamples.entries.map((e) => e.content),
+        afterExamples: lore.afterExamples.entries.map((e) => e.content),
+        depthInjections
+      }, { expand, countTokens });
+      const fallback = ctx.agentDefaultModel.currentSelection();
+      const saved = options.sessionId ? state.modelSelections?.[options.sessionId] : void 0;
+      const explicit = options.provider !== void 0 && options.model !== void 0 ? {
+        provider: options.provider,
+        model: options.model,
+        ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {}
+      } : void 0;
+      const choice = explicit ?? saved ?? fallback;
+      provider = choice.provider;
+      model = choice.model;
+      reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
+      write({ type: "start", provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: assembled.stats });
+    }
+    let text = "";
+    let reasoning = "";
+    let hostUsage;
+    hostTrace = startTavernSessionStep(hostTrace);
+    if (isTextPipeline) {
+      const config = state.textCompletion;
+      const samplerPreset = config.samplerPreset ? await db.getPreset(config.samplerPreset) : void 0;
+      for await (const chunk of streamKobold(config, promptString, samplerPreset, signal)) {
+        if (chunk.type === "text-delta" || chunk.type === "reasoning-delta") {
+          recordTavernSessionChunk(hostTrace, { type: chunk.type, index: 0, text: chunk.text });
+        }
+        if (chunk.type === "text-delta") {
+          text += chunk.text;
+          write({ type: "delta", text: chunk.text });
+        } else if (chunk.type === "reasoning-delta") {
+          reasoning += chunk.text;
+          write({ type: "reasoning", text: chunk.text });
+        }
+      }
+    } else {
+      const requestMessages = [...assembled.messages];
+      const systemParts = [];
+      while (requestMessages[0]?.role === "system") systemParts.push(requestMessages.shift().content);
+      const llmMessages = requestMessages.map((m) => createMessage({
+        role: m.role,
+        content: [{ type: "text", text: m.content }],
+        source: m.role === "assistant" ? { kind: "model", provider, model } : m.role === "user" ? { kind: "user" } : { kind: "plugin", plugin: "dsh-tavern" }
+      }));
+      for await (const chunk of ctx.llm.stream({
+        provider,
+        model,
+        messages: llmMessages,
+        ...systemParts.length > 0 ? { system: systemParts.join("\n\n") } : {},
+        ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
+        temperature: numberOr(preset.sampler.temperature, void 0),
+        maxTokens: numberOr(preset.sampler.openai_max_tokens, void 0),
+        signal
+      })) {
+        recordTavernSessionChunk(hostTrace, chunk);
+        if (chunk.type === "usage") hostUsage = chunk.usage;
+        if (chunk.type === "text-delta") {
+          text += chunk.text;
+          write({ type: "delta", text: chunk.text });
+        } else if (chunk.type === "reasoning-delta") {
+          reasoning += chunk.text;
+          write({ type: "reasoning", text: chunk.text });
+        } else if (chunk.type === "finish") {
+          if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
+          write({ type: "finish", reason: chunk.reason.kind });
+        }
       }
     }
+    if (text.trim() === "") throw new Error("model returned no text");
+    const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly);
+    const finalText = saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement.AI_OUTPUT, { expand }) : text;
+    const finalReasoning = reasoning ? applyRegexScripts(reasoning, scripts, RegexPlacement.REASONING, { expand }) : reasoning;
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const oldSwipes = regenerated ? Array.isArray(regenerated.swipes) && regenerated.swipes.length > 0 ? regenerated.swipes : [regenerated.mes] : [];
+    const oldSwipeInfo = regenerated ? Array.isArray(regenerated.swipe_info) ? regenerated.swipe_info : oldSwipes.map(() => ({})) : [];
+    chat.messages.push({
+      ...regenerated ?? {},
+      name: character.card.data.nickname || character.card.data.name,
+      is_user: false,
+      is_system: false,
+      send_date: now,
+      mes: finalText,
+      swipe_id: oldSwipes.length,
+      swipes: [...oldSwipes, finalText],
+      swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider, model, reasoning: finalReasoning || void 0 } }],
+      extra: { ...regenerated?.extra ?? {}, api: provider, model, reasoning: finalReasoning || void 0, activatedLore: lore.allActivated.map((e) => e.entryId) }
+    });
+    const varSnapshot = macros.snapshotVars().local;
+    if (Object.keys(varSnapshot).length > 0) chat.header.chat_metadata.variables = varSnapshot;
+    else delete chat.header.chat_metadata.variables;
+    revision = await db.saveChat(characterName, chatId, chat, revision);
+    hostTrace = recordTavernSessionAssistant(hostTrace, finalText, finalReasoning, provider, model, hostUsage);
+    return { chat, revision, speaker: speakerName };
+  } finally {
+    finishTavernSessionTrace(hostTrace);
   }
-  if (text.trim() === "") throw new Error("model returned no text");
-  const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly);
-  const finalText = saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement.AI_OUTPUT, { expand }) : text;
-  const finalReasoning = reasoning ? applyRegexScripts(reasoning, scripts, RegexPlacement.REASONING, { expand }) : reasoning;
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  const oldSwipes = regenerated ? Array.isArray(regenerated.swipes) && regenerated.swipes.length > 0 ? regenerated.swipes : [regenerated.mes] : [];
-  const oldSwipeInfo = regenerated ? Array.isArray(regenerated.swipe_info) ? regenerated.swipe_info : oldSwipes.map(() => ({})) : [];
-  chat.messages.push({
-    ...regenerated ?? {},
-    name: character.card.data.nickname || character.card.data.name,
-    is_user: false,
-    is_system: false,
-    send_date: now,
-    mes: finalText,
-    swipe_id: oldSwipes.length,
-    swipes: [...oldSwipes, finalText],
-    swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider, model, reasoning: finalReasoning || void 0 } }],
-    extra: { ...regenerated?.extra ?? {}, api: provider, model, reasoning: finalReasoning || void 0, activatedLore: lore.allActivated.map((e) => e.entryId) }
-  });
-  const varSnapshot = macros.snapshotVars().local;
-  if (Object.keys(varSnapshot).length > 0) chat.header.chat_metadata.variables = varSnapshot;
-  else delete chat.header.chat_metadata.variables;
-  revision = await db.saveChat(characterName, chatId, chat, revision);
-  return { chat, revision, speaker: speakerName };
 }
 function chatVariables(chat) {
   const vars = chat?.header?.chat_metadata?.variables;
@@ -5912,12 +5931,104 @@ function occupyHostSession(agent) {
   } catch {
   }
 }
+function beginTavernSessionTurn(agent, userText) {
+  const session = agent?.session;
+  if (!session?.append || !Array.isArray(session.events)) return null;
+  let openTurn = false;
+  for (const event of session.events) {
+    if (event.type === "turn/start") openTurn = true;
+    else if (event.type === "turn/end") openTurn = false;
+  }
+  if (openTurn) return null;
+  const turn = Math.max(0, ...session.events.filter((event) => event.type === "turn/start" && Number.isSafeInteger(event.data?.turn)).map((event) => event.data.turn)) + 1;
+  let started = false;
+  try {
+    session.append("turn/start", { turn });
+    started = true;
+    if (userText.trim() !== "") {
+      session.append("user/message", createMessage({
+        role: "user",
+        content: [{ type: "text", text: userText }],
+        source: { kind: "user" }
+      }), { surfaceOp: "append" });
+    }
+    return { session, turn, step: 1, stepOpen: false, turnOpen: true, logging: true, completed: false };
+  } catch {
+    if (started) {
+      try {
+        session.append("turn/end", {
+          turn,
+          reason: { kind: "error", error: { message: "Tavern session trace failed", code: "TAVERN_TRACE" } }
+        });
+      } catch {
+      }
+    }
+    return null;
+  }
+}
+function startTavernSessionStep(trace) {
+  if (!trace?.logging) return trace;
+  try {
+    trace.session.append("step/start", { turn: trace.turn, step: trace.step });
+    trace.stepOpen = true;
+  } catch {
+    trace.logging = false;
+  }
+  return trace;
+}
+function recordTavernSessionChunk(trace, chunk) {
+  if (!trace?.logging || !trace.stepOpen) return;
+  try {
+    trace.session.append("assistant/chunk", { turn: trace.turn, step: trace.step, chunk });
+  } catch {
+    trace.logging = false;
+  }
+}
+function recordTavernSessionAssistant(trace, text, reasoning, provider, model, usage) {
+  if (!trace?.logging || !trace.stepOpen) return trace;
+  try {
+    const content = [{ type: "text", text }];
+    if (reasoning) content.push({ type: "reasoning", text: reasoning });
+    trace.session.append("assistant/message", {
+      turn: trace.turn,
+      step: trace.step,
+      message: createMessage({
+        role: "assistant",
+        content,
+        source: { kind: "model", provider, model }
+      }),
+      ...usage ? { usage } : {}
+    }, { surfaceOp: "append" });
+    trace.completed = true;
+  } catch {
+    trace.logging = false;
+  }
+  return trace;
+}
+function finishTavernSessionTrace(trace) {
+  if (!trace?.turnOpen) return;
+  if (trace.stepOpen) {
+    try {
+      trace.session.append("step/end", { turn: trace.turn, step: trace.step });
+    } catch {
+    }
+    trace.stepOpen = false;
+  }
+  try {
+    trace.session.append("turn/end", {
+      turn: trace.turn,
+      reason: trace.completed ? { kind: "completed" } : { kind: "error", error: { message: "Tavern generation failed", code: "TAVERN_GENERATION" } }
+    });
+  } catch {
+  }
+  trace.turnOpen = false;
+}
 function normalizeChatId(name2) {
   const stem = name2.replace(/\.jsonl$/i, "").trim();
   if (stem === "") throw new Error("chat name is required");
   return `${stem}.jsonl`;
 }
-function parseTavernCommand(rawInput) {
+function parseTavernSessionCommand(rawInput) {
   const payload = rawInput.trim();
   if (payload === "") return null;
   try {

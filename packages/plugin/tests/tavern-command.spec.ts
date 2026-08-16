@@ -22,34 +22,93 @@ function makeAgent(id: string) {
   }
 }
 
+function makeRequest(body: unknown) {
+  const listeners = new Map<string, (value?: unknown) => void>()
+  return {
+    method: 'POST',
+    url: '/api/dsh-tavern/generate',
+    on: (event: string, listener: (value?: unknown) => void) => {
+      listeners.set(event, listener)
+      if (event === 'end') {
+        listeners.get('data')?.(Buffer.from(JSON.stringify(body)))
+        listener()
+      }
+      return undefined
+    },
+    destroy: () => {},
+  }
+}
+
+function makeResponse() {
+  const chunks: string[] = []
+  const response = {
+    chunks,
+    statusCode: 0,
+    writableEnded: false,
+    setHeader: () => {},
+    write: (chunk: string) => { chunks.push(chunk); return true },
+    end: (chunk?: string) => {
+      if (chunk) chunks.push(chunk)
+      response.writableEnded = true
+    },
+    on: () => {},
+  }
+  return response
+}
+
 function turnStarts(agent: ReturnType<typeof makeAgent>) {
   return agent.session.events.filter((event) => event.type === 'turn/start')
 }
 
-describe('/tavern command host-session occupation', () => {
+describe('internal Tavern session bridge occupation', () => {
   let home: string
   let store: TavernStore
   let handler: (input: { agent: unknown; rawInput: string }) => Promise<{ kind: string }>
+  let apiHandler: (req: unknown, res: unknown) => Promise<void>
+  let agents: Map<string, ReturnType<typeof makeAgent>>
+  let failGeneration = false
   let chatId: string
 
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-tavern-occupy-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
+    await store.importCharacter({
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: CHARACTER, description: 'A test character', personality: '', scenario: '', first_mes: 'Hello',
+        mes_example: '', creator_notes: '', system_prompt: '', post_history_instructions: '',
+        alternate_greetings: [], tags: [], creator: '', character_version: '', extensions: {},
+      },
+    })
     chatId = await store.createChat(CHARACTER, {
       user_name: 'unused', character_name: 'unused',
       chat_metadata: { createdAt: new Date().toISOString(), timedWorldInfo: {} },
     }, [])
 
     let definition: { handler: (input: { agent: unknown; rawInput: string }) => Promise<{ kind: string }> } | undefined
+    agents = new Map()
     apply({
       systemPrompt: { section: () => {} },
       commands: { register: (def) => { definition = def } },
-      webServer: { register: () => () => {} },
+      webServer: { register: (def) => { apiHandler = def.handler; return () => {} } },
+      llm: {
+        stream: async function* () {
+          if (failGeneration) throw new Error('test generation failure')
+          yield { type: 'text-delta', text: 'reply' }
+          yield { type: 'usage', usage: { inputTokens: 11, outputTokens: 7, cacheReadTokens: 89, cacheWriteTokens: 0 } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        },
+      },
+      agentDefaultModel: { currentSelection: () => ({ provider: 'test-provider', model: 'test-model' }) },
+      agents: { get: (id: string) => agents.get(id) },
       effect: (fn) => { fn(); return () => {} },
     } as never)
     expect(definition).toBeDefined()
+    expect((definition as { name?: string }).name).toBe('dsh-tavern-session')
     handler = definition!.handler
+    expect(apiHandler).toBeDefined()
   })
 
   afterAll(() => {
@@ -83,5 +142,59 @@ describe('/tavern command host-session occupation', () => {
     await handler({ agent, rawInput: base64Url({ character: CHARACTER, chatId }) })
     expect(turnStarts(agent)).toHaveLength(1)
     expect(agent.session.events.filter((event) => event.type === 'turn/end')).toHaveLength(0)
+  })
+
+  it('mirrors Tavern generation into the native session trace with usage', async () => {
+    const agent = makeAgent('session-generate')
+    agents.set(agent.id, agent)
+    const snapshot = await store.getChatSnapshot(CHARACTER, chatId)
+    const req = makeRequest({
+      character: CHARACTER,
+      chatId,
+      message: 'Write a reply',
+      revision: snapshot!.revision,
+      sessionId: agent.id,
+    })
+    const res = makeResponse()
+    await apiHandler(req, res)
+    const eventTypes = agent.session.events.map((event) => event.type)
+    expect(eventTypes).toEqual([
+      'turn/start', 'user/message', 'step/start',
+      'assistant/chunk', 'assistant/chunk', 'assistant/chunk',
+      'assistant/message', 'step/end', 'turn/end',
+    ])
+    const assistant = agent.session.events.find((event) => event.type === 'assistant/message')
+    expect((assistant?.data as { usage?: unknown }).usage).toEqual({
+      inputTokens: 11, outputTokens: 7, cacheReadTokens: 89, cacheWriteTokens: 0,
+    })
+    expect((agent.session.events.at(-1)?.data as { reason?: unknown }).reason).toEqual({ kind: 'completed' })
+    expect(res.chunks.some((chunk) => chunk.includes('"type":"saved"'))).toBe(true)
+  })
+
+  it('closes the mirrored trace as an error when generation fails', async () => {
+    failGeneration = true
+    const agent = makeAgent('session-failure')
+    agents.set(agent.id, agent)
+    const failureChatId = await store.createChat(CHARACTER, {
+      user_name: 'unused', character_name: 'unused', chat_metadata: { timedWorldInfo: {} },
+    }, [])
+    const snapshot = await store.getChatSnapshot(CHARACTER, failureChatId)
+    const req = makeRequest({
+      character: CHARACTER,
+      chatId: failureChatId,
+      message: 'This will fail',
+      revision: snapshot!.revision,
+      sessionId: agent.id,
+    })
+    const res = makeResponse()
+    await apiHandler(req, res)
+    expect(agent.session.events.map((event) => event.type)).toEqual([
+      'turn/start', 'user/message', 'step/start', 'step/end', 'turn/end',
+    ])
+    expect((agent.session.events.at(-1)?.data as { reason?: unknown }).reason).toEqual({
+      kind: 'error', error: { message: 'Tavern generation failed', code: 'TAVERN_GENERATION' },
+    })
+    expect(res.chunks.some((chunk) => chunk.includes('test generation failure'))).toBe(true)
+    failGeneration = false
   })
 })

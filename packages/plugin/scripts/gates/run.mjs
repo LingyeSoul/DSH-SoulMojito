@@ -311,6 +311,20 @@ function checkFrontendRuntimeText(text) {
   return problems
 }
 
+function checkNativeHeaderAdapterText(text) {
+  const problems = []
+  for (const marker of [
+    'AgentPresetLabel.module.css',
+    'function useNativeAgentPresetLabelFilter',
+    'dshTavernAgentPresetHiddenState',
+    'data-dsh-tavern-agent-preset-hidden',
+    'useNativeAgentPresetLabelFilter(Boolean(active && binding))',
+  ]) {
+    if (!text.includes(marker)) problems.push(`native Tavern header adapter is missing marker '${marker}'`)
+  }
+  return problems
+}
+
 function callableStub(label = 'stub') {
   const target = function stub() {}
   return new Proxy(target, {
@@ -638,7 +652,7 @@ function checkNodeMountResult(result) {
   if (!Array.isArray(result.inject)) {
     problems.push('Node module inject export must be an array')
   } else {
-    for (const service of ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands']) {
+    for (const service of ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents']) {
       if (!result.inject.includes(service)) problems.push(`Node module inject must include '${service}'`)
     }
   }
@@ -650,9 +664,12 @@ function checkNodeMountResult(result) {
   const route = result.registrations?.find((value) => value.kind === 'prefix' && value.path === API_PREFIX)
   if (route === undefined) problems.push(`Node apply did not register webServer prefix ${API_PREFIX}`)
   else if (route.handlerType !== 'function') problems.push('Node webServer prefix has no handler function')
-  const command = result.registrations?.find((value) => value.kind === 'command' && value.name === 'tavern')
-  if (command === undefined) problems.push("Node apply did not register the '/tavern' activation command")
-  else if (command.handlerType !== 'function') problems.push("Node '/tavern' command has no handler function")
+  const command = result.registrations?.find((value) => value.kind === 'command' && value.name === 'dsh-tavern-session')
+  if (command === undefined) problems.push("Node apply did not register the internal Tavern session bridge")
+  else if (command.handlerType !== 'function') problems.push('Node Tavern session bridge has no handler function')
+  if (result.registrations?.some((value) => value.kind === 'command' && value.name === 'tavern')) {
+    problems.push("Node apply must not expose the public '/tavern' activation command")
+  }
   return problems
 }
 
@@ -808,6 +825,26 @@ const gates = [
       : ['generated packages/plugin/client/index.js does not exist'],
   },
   {
+    name: 'native-header-adapter',
+    selfTest: () => {
+      const good = [
+        'AgentPresetLabel.module.css',
+        'function useNativeAgentPresetLabelFilter() {}',
+        'dshTavernAgentPresetHiddenState',
+        'data-dsh-tavern-agent-preset-hidden',
+        'useNativeAgentPresetLabelFilter(Boolean(active && binding))',
+      ].join('\n')
+      const bad = good.replace('Boolean(active && binding)', 'true')
+      return checkNativeHeaderAdapterText(good).length === 0
+        && checkNativeHeaderAdapterText(bad).length > 0
+        ? []
+        : ['native header adapter self-test did not distinguish a globally enabled sample']
+    },
+    check: () => existsSync(CLIENT_PATH)
+      ? checkNativeHeaderAdapterText(readFileSync(CLIENT_PATH, 'utf8'))
+      : ['generated packages/plugin/client/index.js does not exist'],
+  },
+  {
     name: 'client-vm-mount',
     selfTest: async () => {
       const localeWiring = "ctx.effect(() => ctx.locale.register('dsh-tavern', { zh: { 'nav.title': '酒馆' }, en: { 'nav.title': 'Tavern' } })); ctx.locale.bind('dsh-tavern');"
@@ -831,12 +868,12 @@ const gates = [
     selfTest: () => {
       const good = {
         name: PLUGIN_NAME,
-        inject: ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands'],
+        inject: ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents'],
         applyType: 'function',
         sections: [{ name: 'dsh-tavern:active-character', textType: 'function' }],
         registrations: [
           { kind: 'prefix', path: API_PREFIX, handlerType: 'function' },
-          { kind: 'command', name: 'tavern', handlerType: 'function' },
+          { kind: 'command', name: 'dsh-tavern-session', handlerType: 'function' },
         ],
       }
       const bad = { ...good, registrations: [] }

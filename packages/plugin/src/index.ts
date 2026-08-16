@@ -19,7 +19,7 @@ import { applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
 import { ChatRevisionConflictError, TavernStore, type TavernModelSelection } from '../../tavern-store/src/index.js'
 
 export const name = 'dsh-tavern'
-export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands']
+export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents']
 
 const API = '/api/dsh-tavern'
 const DEFAULT_USER = 'User'
@@ -41,12 +41,14 @@ export function apply(ctx) {
   })
 
   ctx.commands.register({
-    name: 'tavern',
-    description: 'activate a Tavern roleplay chat in this session',
+    // Internal bridge for the client binding API. It is intentionally separate
+    // from the public slash-command surface.
+    name: 'dsh-tavern-session',
+    description: 'internal dsh-tavern session bridge',
     input: { hint: '<character> <chat-id>' },
     recordInput: false,
     handler: async ({ agent, rawInput }) => {
-      const parsed = parseTavernCommand(rawInput)
+      const parsed = parseTavernSessionCommand(rawInput)
       if (!parsed) return { kind: 'error', text: 'Invalid Tavern activation payload.' }
       const db = await store()
       if (parsed.action === 'close') {
@@ -838,6 +840,7 @@ async function generate(ctx, req, res, db) {
       reasoningEffort: typeof body.reasoningEffort === 'string' ? body.reasoningEffort : undefined,
       write,
       signal: ac.signal,
+      hostAgent: typeof body.sessionId === 'string' ? ctx.agents?.get?.(body.sessionId) : undefined,
     })
     write({ type: 'saved', chat: result.chat, revision: result.revision })
     res.end()
@@ -867,6 +870,7 @@ interface GenerationOptions {
   reasoningEffort?: string
   write: (event: unknown) => void
   signal: AbortSignal
+  hostAgent?: unknown
 }
 
 /**
@@ -877,6 +881,9 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   const { state, characterName, chatId, snapshot, mode, group, write, signal } = options
   const chat = snapshot.chat
   let revision = snapshot.revision
+  let hostTrace
+
+  try {
 
   // ---- 发言者与成员解析 ----
   let speakerName = characterName
@@ -929,9 +936,11 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
 
   // ---- 发送模式：先落用户消息（regex USER_INPUT），regenerate 弹出旧回复 ----
   let regenerated
+  let hostUserText = ''
   const scripts = await collectRegexScripts(db, state, character)
   if (mode === 'send') {
     const transformed = applyRegexScripts(options.userText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t })
+    hostUserText = transformed
     chat.messages.push({ name: DEFAULT_USER, is_user: true, is_system: false, send_date: new Date().toISOString(), mes: transformed })
     if (group) {
       const turn = buildGroupTurn({
@@ -958,6 +967,8 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
       }
     }
   }
+
+  hostTrace = beginTavernSessionTurn(options.hostAgent, hostUserText)
 
   // ---- 预设 / persona / 世界书 ----
   const presetName = state.activePreset
@@ -1141,10 +1152,15 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   // ---- 流式生成 ----
   let text = ''
   let reasoning = ''
+  let hostUsage
+  hostTrace = startTavernSessionStep(hostTrace)
   if (isTextPipeline) {
     const config = state.textCompletion
     const samplerPreset = config.samplerPreset ? await db.getPreset(config.samplerPreset) : undefined
     for await (const chunk of streamKobold(config, promptString, samplerPreset, signal)) {
+      if (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta') {
+        recordTavernSessionChunk(hostTrace, { type: chunk.type, index: 0, text: chunk.text })
+      }
       if (chunk.type === 'text-delta') { text += chunk.text; write({ type: 'delta', text: chunk.text }) }
       else if (chunk.type === 'reasoning-delta') { reasoning += chunk.text; write({ type: 'reasoning', text: chunk.text }) }
     }
@@ -1165,6 +1181,8 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
       maxTokens: numberOr(preset.sampler.openai_max_tokens, undefined),
       signal,
     })) {
+      recordTavernSessionChunk(hostTrace, chunk)
+      if (chunk.type === 'usage') hostUsage = chunk.usage
       if (chunk.type === 'text-delta') { text += chunk.text; write({ type: 'delta', text: chunk.text }) }
       else if (chunk.type === 'reasoning-delta') { reasoning += chunk.text; write({ type: 'reasoning', text: chunk.text }) }
       else if (chunk.type === 'finish') {
@@ -1202,7 +1220,11 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   if (Object.keys(varSnapshot).length > 0) chat.header.chat_metadata.variables = varSnapshot
   else delete chat.header.chat_metadata.variables
   revision = await db.saveChat(characterName, chatId, chat, revision)
+  hostTrace = recordTavernSessionAssistant(hostTrace, finalText, finalReasoning, provider, model, hostUsage)
   return { chat, revision, speaker: speakerName }
+  } finally {
+    finishTavernSessionTrace(hostTrace)
+  }
 }
 
 /* --------------------------- STscript 执行 --------------------------- */
@@ -1607,13 +1629,117 @@ function occupyHostSession(agent) {
   }
 }
 
+// Tavern generation runs outside the native agent loop. Mirror its durable
+// boundaries into the host session so native projections (stats/token usage)
+// observe the same work as the injected Tavern surface.
+function beginTavernSessionTurn(agent, userText) {
+  const session = agent?.session
+  if (!session?.append || !Array.isArray(session.events)) return null
+  let openTurn = false
+  for (const event of session.events) {
+    if (event.type === 'turn/start') openTurn = true
+    else if (event.type === 'turn/end') openTurn = false
+  }
+  if (openTurn) return null
+  const turn = Math.max(0, ...session.events
+    .filter((event) => event.type === 'turn/start' && Number.isSafeInteger(event.data?.turn))
+    .map((event) => event.data.turn)) + 1
+  let started = false
+  try {
+    session.append('turn/start', { turn })
+    started = true
+    if (userText.trim() !== '') {
+      session.append('user/message', createMessage({
+        role: 'user',
+        content: [{ type: 'text', text: userText }],
+        source: { kind: 'user' },
+      }), { surfaceOp: 'append' })
+    }
+    return { session, turn, step: 1, stepOpen: false, turnOpen: true, logging: true, completed: false }
+  } catch {
+    if (started) {
+      try {
+        session.append('turn/end', {
+          turn,
+          reason: { kind: 'error', error: { message: 'Tavern session trace failed', code: 'TAVERN_TRACE' } },
+        })
+      } catch {
+      }
+    }
+    return null
+  }
+}
+
+function startTavernSessionStep(trace) {
+  if (!trace?.logging) return trace
+  try {
+    trace.session.append('step/start', { turn: trace.turn, step: trace.step })
+    trace.stepOpen = true
+  } catch {
+    trace.logging = false
+  }
+  return trace
+}
+
+function recordTavernSessionChunk(trace, chunk) {
+  if (!trace?.logging || !trace.stepOpen) return
+  try {
+    trace.session.append('assistant/chunk', { turn: trace.turn, step: trace.step, chunk })
+  } catch {
+    trace.logging = false
+  }
+}
+
+function recordTavernSessionAssistant(trace, text, reasoning, provider, model, usage) {
+  if (!trace?.logging || !trace.stepOpen) return trace
+  try {
+    const content = [{ type: 'text', text }]
+    if (reasoning) content.push({ type: 'reasoning', text: reasoning })
+    trace.session.append('assistant/message', {
+      turn: trace.turn,
+      step: trace.step,
+      message: createMessage({
+        role: 'assistant',
+        content,
+        source: { kind: 'model', provider, model },
+      }),
+      ...(usage ? { usage } : {}),
+    }, { surfaceOp: 'append' })
+    trace.completed = true
+  } catch {
+    trace.logging = false
+  }
+  return trace
+}
+
+function finishTavernSessionTrace(trace) {
+  if (!trace?.turnOpen) return
+  if (trace.stepOpen) {
+    try {
+      trace.session.append('step/end', { turn: trace.turn, step: trace.step })
+    } catch {
+    }
+    trace.stepOpen = false
+  }
+  try {
+    trace.session.append('turn/end', {
+      turn: trace.turn,
+      reason: trace.completed
+        ? { kind: 'completed' }
+        : { kind: 'error', error: { message: 'Tavern generation failed', code: 'TAVERN_GENERATION' } },
+    })
+  } catch {
+  }
+  trace.turnOpen = false
+}
+
 function normalizeChatId(name) {
   const stem = name.replace(/\.jsonl$/i, '').trim()
   if (stem === '') throw new Error('chat name is required')
   return `${stem}.jsonl`
 }
 
-function parseTavernCommand(rawInput) {
+function parseTavernSessionCommand(rawInput) {
   const payload = rawInput.trim()
   if (payload === '') return null
   try {

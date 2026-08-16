@@ -17,8 +17,8 @@ proposal 0001 中「marker 让 blank session 进入 active 状态」是与宿主
 
 ## 决策
 
-1. **`/tavern` 绑定成功后追加一对占位空转 turn 事件**（`occupyHostSession`）：仅当会话还没有任何 `turn/start` 时，`append('turn/start', { turn: 1 })` + `append('turn/end', { turn: 1, reason: { kind: 'completed' } })`。`reason: completed` 与 agent-loop 对零消息 turn 的关闭方式一致；无 surfaceOp 的 log-only 事件经 `Session.append` 运行时校验放行（`planSurfaceEvent` 对非 surface 事件早退）。agent-loop 的真实 turn 号取 `findLast(turn/start) + 1`，编号保持连续。宿主拒绝追加时不阻断激活（仅失去防复用保护）。
-2. **存量修复走 client，三路触发共用 `repairBinding`**（幂等重发 `/tavern` 绑定命令，借服务端补占位 turn 对；按会话粒度去重，命令失败不标记、待下次触发重试）：
+1. **绑定成功后追加一对占位空转 turn 事件**（`occupyHostSession`）：仅当会话还没有任何 `turn/start` 时，`append('turn/start', { turn: 1 })` + `append('turn/end', { turn: 1, reason: { kind: 'completed' } })`。`reason: completed` 与 agent-loop 对零消息 turn 的关闭方式一致；无 surfaceOp 的 log-only 事件经 `Session.append` 运行时校验放行（`planSurfaceEvent` 对非 surface 事件早退）。agent-loop 的真实 turn 号取 `findLast(turn/start) + 1`，编号保持连续。宿主拒绝追加时不阻断激活（仅失去防复用保护）。
+2. **存量修复走 client，三路触发共用 `repairBinding`**（幂等重发内部 session bridge，借服务端补占位 turn 对；按会话粒度去重，命令失败不标记、待下次触发重试）：
    - `openTavernChat` 的已绑定去重分支——点击任意已绑定聊天即修复。首轮实现漏掉此分支（去重分支不发命令），旧绑定会话即便全部新代码生效也无从修复；
    - `TavernView` 挂载——任何方式（含原生新建会话的复用劫持）落入绑定会话时修复；
    - `PanelHost` 启动清扫——会话列表 ready 且 bootstrap 加载后，对宿主仍标记 blank 的绑定会话统一修复。复用 `binding.session.command()` 通道（与 deleteTavernChat 的 close 广播同款），可对非当前会话执行。
@@ -34,6 +34,6 @@ proposal 0001 中「marker 让 blank session 进入 active 状态」是与宿主
 
 - 绑定会话在宿主列表从 blank（仅当前时可见、作为「新建会话」临时行）变为正常可见条目——会话已 rename（`角色 · chat`），可见即预期。宿主 workspace UI 的可见性规则：`!session.blank || session.id === current`，blank 会话本就不该长期滞留。
 - close（解绑）不回滚占位 turn 对：带 closed marker 的会话不应再被复用为 blank 草稿。
-- 已有真实 turn 的会话再绑定（用户在用过一半的普通会话里执行 `/tavern`）不追加占位对，日志零污染。
+- 已有真实 turn 的会话再绑定不追加占位对，日志零污染。
 - 多窗口并发修复安全：命令串行执行，第二个执行方发现 turn/start 已存在即跳过。
 - 修复命令会在宿主会话日志留下一行 command lifecycle 记录（control-plane 内容，不影响 blank 判定与 UI）。
