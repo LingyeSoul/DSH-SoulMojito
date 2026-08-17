@@ -83,7 +83,6 @@ export async function buildAgentTavernPreloadSnapshot(
   writer.add('character.example_dialogue', data.mesExample, 3_000)
   writer.add('character.system_prompt', data.systemPrompt, 2_000)
   writer.add('character.post_history_instructions', data.postHistoryInstructions, 2_000)
-  writer.add('character.creator_notes', data.creatorNotes, 1_000)
   writer.add('character.alternate_greetings', data.alternateGreetings.join('\n---\n'), 2_000)
 
   for (const book of books) {

@@ -1321,7 +1321,8 @@ window.__ModuleLoader__.load({
         const node = session.chat.nodes.get(key)
         if (node?.kind === 'context'
           && node.data?.source?.kind === 'plugin'
-          && node.data.source.plugin === 'dsh-tavern') {
+          && node.data.source.plugin === 'dsh-tavern'
+          && node.data.source.form === 'notice') {
           match = node.data.source.tavernState === 'closed' ? null : { marker: node.key }
         }
       }

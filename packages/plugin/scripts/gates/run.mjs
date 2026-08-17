@@ -657,12 +657,19 @@ async function checkClientExecution(code) {
     const stMarker = {
       key: 'marker',
       kind: 'context',
-      data: { source: { kind: 'plugin', plugin: 'dsh-tavern', tavernState: 'open' } },
+      data: { source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', tavernState: 'open' } },
+    }
+    const agentPreload = {
+      key: 'preload',
+      kind: 'context',
+      data: { source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'context' } },
     }
     const stSelected = selectComposer({ session: { chat: { order: ['marker'], nodes: new Map([['marker', stMarker]]) } } })
-    const agentSelected = selectComposer({ session: { chat: { order: [], nodes: new Map() } } })
+    const agentSelected = selectComposer({ session: { chat: { order: ['preload'], nodes: new Map([['preload', agentPreload]]) } } })
+    const nativeSelected = selectComposer({ session: { chat: { order: [], nodes: new Map() } } })
     if (stSelected === null || stSelected === undefined) problems.push('legacy ST session must select the Tavern composer')
-    if (agentSelected !== null) problems.push('AgentTavern/native session must keep the native composer')
+    if (agentSelected !== null) problems.push('AgentTavern preload context must keep the native composer')
+    if (nativeSelected !== null) problems.push('native session must keep the native composer')
   }
   return problems
 }
@@ -1023,14 +1030,15 @@ const gates = [
     name: 'client-vm-mount',
     selfTest: async () => {
       const localeWiring = "ctx.effect(() => ctx.locale.register('dsh-tavern', { zh: { 'nav.title': '酒馆' }, en: { 'nav.title': 'Tavern' } })); ctx.locale.bind('dsh-tavern');"
-      const good = `window.__ModuleLoader__.load({ id: 'dsh-tavern', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); exports.name = 'dsh-tavern'; exports.inject = ['slots', 'locale']; exports.apply = (ctx) => { ${localeWiring} const entries = [['settings.section','dsh-tavern'],['conversation.view','tavern'],['conversation.composer',null],['conversation.session.header.actions','dsh-tavern'],['shell.overlay','dsh-tavern-panel'],['sidebar.footer.action','dsh-tavern-panel']]; for (const [name,id] of entries) ctx.slots.inject(name, () => ctx.slots.register({ name, ...(id ? { id } : {}), ...(name === 'conversation.composer' ? { select: (owner) => owner?.session?.chat?.order?.length ? {} : null } : {}) }, () => null)); }; return module.exports; } });`
+      const good = `window.__ModuleLoader__.load({ id: 'dsh-tavern', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); exports.name = 'dsh-tavern'; exports.inject = ['slots', 'locale']; exports.apply = (ctx) => { ${localeWiring} const entries = [['settings.section','dsh-tavern'],['conversation.view','tavern'],['conversation.composer',null],['conversation.session.header.actions','dsh-tavern'],['shell.overlay','dsh-tavern-panel'],['sidebar.footer.action','dsh-tavern-panel']]; for (const [name,id] of entries) ctx.slots.inject(name, () => ctx.slots.register({ name, ...(id ? { id } : {}), ...(name === 'conversation.composer' ? { select: (owner) => owner?.session?.chat?.order?.some((key) => owner.session.chat.nodes.get(key)?.data?.source?.form === 'notice') ? {} : null } : {}) }, () => null)); }; return module.exports; } });`
       const badSlot = good.replace("['conversation.view','tavern'],", '')
       const badLocale = good.replace("exports.inject = ['slots', 'locale']", "exports.inject = ['slots']")
       const badParity = good.replace("en: { 'nav.title': 'Tavern' }", "en: {}")
+      const badComposer = good.replace("owner.session.chat.nodes.get(key)?.data?.source?.form === 'notice'", 'true')
       const goodProblems = await checkClientExecution(good)
-      const failureCounts = (await Promise.all([badSlot, badLocale, badParity].map((sample) => checkClientExecution(sample))))
+      const failureCounts = (await Promise.all([badSlot, badLocale, badParity, badComposer].map((sample) => checkClientExecution(sample))))
         .filter((problems) => problems.length > 0).length
-      return goodProblems.length === 0 && failureCounts === 3
+      return goodProblems.length === 0 && failureCounts === 4
         ? []
         : ['client VM bad samples were not rejected']
     },
