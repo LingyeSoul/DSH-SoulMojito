@@ -5,3 +5,4 @@ dist/
 /.playwright-mcp
 /packages/plugin/version.json
 /.npm-cache
+/.pnpm-store

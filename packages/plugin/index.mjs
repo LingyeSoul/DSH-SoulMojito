@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join as join3, relative, resolve } from "node:path";
+import { join as join5, relative, resolve } from "node:path";
 
 // packages/tavern-format/src/png.ts
 var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -1215,15 +1215,15 @@ var CharxFormatError = class extends Error {
     this.name = "CharxFormatError";
   }
 };
-function decodeCharxAsset(bytes, path2) {
+function decodeCharxAsset(bytes, path4) {
   let files;
   try {
     files = unzipSync(bytes);
   } catch (cause) {
     throw new CharxFormatError(`not a valid zip: ${String(cause)}`);
   }
-  const asset = files[path2];
-  if (asset === void 0) throw new CharxFormatError(`CHARX has no asset '${path2}'`);
+  const asset = files[path4];
+  if (asset === void 0) throw new CharxFormatError(`CHARX has no asset '${path4}'`);
   return asset;
 }
 
@@ -3559,16 +3559,16 @@ function decodeCharx(bytes) {
   const assetPaths = Object.keys(files).filter((p) => p !== "card.json");
   return { card, assetPaths };
 }
-function decodeCharxAsset2(bytes, path2) {
+function decodeCharxAsset2(bytes, path4) {
   let files;
   try {
     files = unzipSync(bytes);
   } catch (cause) {
     throw new CharxFormatError2(`not a valid zip: ${String(cause)}`);
   }
-  const asset = files[path2];
+  const asset = files[path4];
   if (asset === void 0)
-    throw new CharxFormatError2(`CHARX has no asset '${path2}'`);
+    throw new CharxFormatError2(`CHARX has no asset '${path4}'`);
   return asset;
 }
 function encodeCharx(ir, assets) {
@@ -4345,7 +4345,7 @@ var TavernStore = class _TavernStore {
    * 从 messageId（含）截断复制为新聊天；chat_metadata.bookmark_link 记录回链。
    * 分支命名 `${stem} - branch N.jsonl`（N 递增至不冲突，字符集安全）。
    */
-  async branchChat(characterName, chatId, messageId, expectedRevision, name2) {
+  async branchChat(characterName, chatId, messageId, expectedRevision, name2, metadata) {
     return this.mutateChat(async () => {
       const dir = path.join(this.root, "chats", safeFileName(characterName));
       const source = path.join(dir, safeChatFileName(chatId));
@@ -4360,7 +4360,8 @@ var TavernStore = class _TavernStore {
       const header = structuredClone(log.header);
       header.chat_metadata = {
         ...header.chat_metadata ?? {},
-        bookmark_link: { character: characterName, chatId, messageId }
+        bookmark_link: { character: characterName, chatId, messageId },
+        ...metadata ?? {}
       };
       const stem = (name2 !== void 0 && name2.trim() !== "" ? name2.trim() : chatId.replace(/\.jsonl$/i, "")).replace(/\.jsonl$/i, "");
       const safeStem = stem.replace(/[^A-Za-z0-9@ _.-]/g, "_").slice(0, 80) || "chat";
@@ -4504,11 +4505,472 @@ function jsonBytes(obj) {
 }
 
 // packages/tavern-store/src/memory.ts
+import { createHash as createHash2, randomUUID } from "node:crypto";
+import { promises as fs2 } from "node:fs";
+import * as path2 from "node:path";
+var MemoryRevisionConflictError = class extends Error {
+  constructor(id, expectedRevision, actualRevision) {
+    super(`Memory '${id}' changed in another operation.`);
+    this.id = id;
+    this.expectedRevision = expectedRevision;
+    this.actualRevision = actualRevision;
+    this.name = "MemoryRevisionConflictError";
+  }
+  code = "MEMORY_REVISION_CONFLICT";
+};
+var SCOPES = /* @__PURE__ */ new Set(["turn", "chat", "character", "agent", "global"]);
+var KINDS = /* @__PURE__ */ new Set(["semantic", "episodic"]);
 var MAX_CONTENT = 64 * 1024;
+var MAX_TAGS = 32;
+var MAX_RESULTS = 50;
+var DEFAULT_RESULTS = 10;
+var MemoryStore = class _MemoryStore {
+  constructor(root) {
+    this.root = root;
+  }
+  mutationTail = Promise.resolve();
+  static async open(root) {
+    await fs2.mkdir(path2.join(root, "memories"), { recursive: true });
+    await fs2.mkdir(path2.join(root, "memory-audit"), { recursive: true });
+    return new _MemoryStore(root);
+  }
+  async search(query) {
+    const normalized = normalizeQuery(query);
+    const records = await this.listRecords(normalized);
+    const tokens = tokenize(normalized.query);
+    const now = Date.now();
+    const hits = records.map((record) => {
+      const haystack = `${record.content}
+${record.tags.join(" ")}`.toLocaleLowerCase();
+      const matched = tokens.filter((token) => haystack.includes(token)).length;
+      const lexical = tokens.length === 0 ? 0 : matched / tokens.length;
+      const freshness = freshnessScore(record, now);
+      const score = lexical * 100 + record.importance * 10 + record.confidence * 5 + freshness;
+      return { record, score, truncated: false };
+    }).filter((hit) => tokens.length === 0 || hit.score >= 0);
+    hits.sort((left, right) => right.score - left.score || right.record.updatedAt.localeCompare(left.record.updatedAt) || left.record.id.localeCompare(right.record.id));
+    const result = [];
+    let usedTokens = 0;
+    for (const hit of hits.slice(0, normalized.limit)) {
+      const budget = normalized.maxTokens;
+      if (budget === void 0) {
+        result.push(hit);
+        continue;
+      }
+      const words = roughTokens(hit.record.content);
+      if (usedTokens >= budget) break;
+      if (usedTokens + words <= budget) {
+        usedTokens += words;
+        result.push(hit);
+        continue;
+      }
+      const remaining = Math.max(0, budget - usedTokens);
+      if (remaining === 0) break;
+      result.push({
+        ...hit,
+        record: { ...hit.record, content: truncateByTokens(hit.record.content, remaining) },
+        truncated: true
+      });
+      break;
+    }
+    return result;
+  }
+  async read(id, scope, scopeId, includeDeleted = false) {
+    validateScope(scope, scopeId);
+    const record = await this.readRecord(id, scope, scopeId);
+    if (record === void 0 || !includeDeleted && isInactive(record)) return void 0;
+    return structuredClone(record);
+  }
+  async put(input, expectedRevision) {
+    validateWrite(input);
+    return this.mutate(async () => {
+      const id = input.id ?? randomUUID();
+      const previous = await this.readRecord(id, input.scope, input.scopeId);
+      if (previous !== void 0) {
+        if (expectedRevision === void 0 || previous.revision !== expectedRevision) {
+          throw new MemoryRevisionConflictError(id, expectedRevision, previous.revision);
+        }
+      } else if (expectedRevision !== void 0) {
+        throw new MemoryRevisionConflictError(id, expectedRevision);
+      }
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const nextBase = {
+        id,
+        scope: input.scope,
+        scopeId: input.scopeId,
+        kind: input.kind,
+        content: input.content,
+        tags: normalizeTags(input.tags),
+        importance: normalizeScore(input.importance),
+        confidence: normalizeScore(input.confidence, 1),
+        source: structuredClone(input.source),
+        createdAt: previous?.createdAt ?? now,
+        updatedAt: now,
+        ...input.expiresAt === void 0 ? {} : { expiresAt: validateDate(input.expiresAt, "expiresAt") }
+      };
+      const record = withRevision(nextBase);
+      await this.writeRecord(record);
+      await this.audit(previous === void 0 ? "put" : "update", record);
+      return structuredClone(record);
+    });
+  }
+  async forget(id, scope, scopeId, expectedRevision) {
+    validateScope(scope, scopeId);
+    await this.mutate(async () => {
+      const previous = await this.readRecord(id, scope, scopeId);
+      if (previous === void 0) return;
+      if (expectedRevision === void 0 || previous.revision !== expectedRevision) {
+        throw new MemoryRevisionConflictError(id, expectedRevision, previous.revision);
+      }
+      const next = withRevision({
+        ...previous,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        deletedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      await this.writeRecord(next);
+      await this.audit("forget", next);
+    });
+  }
+  async listRecords(query) {
+    const scopes = query.scope === void 0 ? [...SCOPES] : [query.scope];
+    const result = [];
+    for (const scope of scopes) {
+      const scopeRoot = path2.join(this.root, "memories", scope);
+      for (const scopeId of await readDirectories(scopeRoot)) {
+        for (const file of await readFiles(path2.join(scopeRoot, scopeId))) {
+          if (!file.endsWith(".json")) continue;
+          const record = await this.readJson(path2.join(scopeRoot, scopeId, file));
+          if (record === void 0 || !query.includeDeleted && isInactive(record)) continue;
+          if (query.scopeId !== void 0 && query.scopeId !== record.scopeId) continue;
+          if (query.tags?.some((tag) => !record.tags.includes(tag))) continue;
+          result.push(record);
+        }
+      }
+    }
+    return result;
+  }
+  async readRecord(id, scope, scopeId) {
+    const file = this.recordPath(id, scope, scopeId);
+    return this.readJson(file);
+  }
+  async readJson(file) {
+    try {
+      const parsed = JSON.parse(await fs2.readFile(file, "utf8"));
+      validateRecord(parsed);
+      return parsed;
+    } catch (cause) {
+      if (cause.code === "ENOENT") return void 0;
+      if (cause instanceof SyntaxError || cause instanceof Error && cause.message.startsWith("invalid memory")) {
+        throw new Error(`invalid memory record '${path2.basename(file)}'`);
+      }
+      throw cause;
+    }
+  }
+  async writeRecord(record) {
+    const file = this.recordPath(record.id, record.scope, record.scopeId);
+    await fs2.mkdir(path2.dirname(file), { recursive: true });
+    await writeAtomic(file, `${JSON.stringify(record)}
+`);
+  }
+  recordPath(id, scope, scopeId) {
+    validateScope(scope, scopeId);
+    return path2.join(this.root, "memories", scope, safeSegment(scopeId), `${safeSegment(id)}.json`);
+  }
+  async audit(action, record) {
+    const line = JSON.stringify({ action, id: record.id, scope: record.scope, scopeId: record.scopeId, revision: record.revision, at: record.updatedAt });
+    await fs2.appendFile(path2.join(this.root, "memory-audit", `${record.scope}.jsonl`), `${line}
+`, "utf8");
+  }
+  mutate(operation) {
+    const result = this.mutationTail.catch(() => {
+    }).then(operation);
+    this.mutationTail = result.then(() => {
+    }, () => {
+    });
+    return result;
+  }
+};
+function normalizeQuery(query) {
+  if (query.scope !== void 0 && !SCOPES.has(query.scope)) throw new Error(`invalid memory scope '${query.scope}'`);
+  if (query.limit !== void 0 && (!Number.isInteger(query.limit) || query.limit < 1)) throw new Error("memory limit must be a positive integer");
+  if (query.maxTokens !== void 0 && (!Number.isInteger(query.maxTokens) || query.maxTokens < 1)) throw new Error("memory maxTokens must be a positive integer");
+  return { ...query, limit: Math.min(query.limit ?? DEFAULT_RESULTS, MAX_RESULTS) };
+}
+function validateWrite(input) {
+  validateScope(input.scope, input.scopeId);
+  if (!KINDS.has(input.kind)) throw new Error(`invalid memory kind '${input.kind}'`);
+  if (typeof input.content !== "string" || input.content.trim() === "" || input.content.length > MAX_CONTENT) throw new Error("invalid memory content");
+  if (typeof input.source !== "object" || input.source === null || Array.isArray(input.source) || typeof input.source.kind !== "string" || input.source.kind === "") throw new Error("invalid memory source");
+  if (input.expiresAt !== void 0) validateDate(input.expiresAt, "expiresAt");
+  normalizeTags(input.tags);
+  normalizeScore(input.importance);
+  normalizeScore(input.confidence, 1);
+  if (input.id !== void 0) safeSegment(input.id);
+}
+function validateRecord(record) {
+  validateWrite(record);
+  if (typeof record.id !== "string" || record.id === "") throw new Error("invalid memory id");
+  if (typeof record.revision !== "string" || record.revision === "") throw new Error("invalid memory revision");
+  if (typeof record.createdAt !== "string" || typeof record.updatedAt !== "string") throw new Error("invalid memory timestamps");
+}
+function validateScope(scope, scopeId) {
+  if (!SCOPES.has(scope)) throw new Error(`invalid memory scope '${scope}'`);
+  if (typeof scopeId !== "string" || scopeId.trim() === "") throw new Error("memory scopeId is required");
+  safeSegment(scopeId);
+}
+function normalizeTags(tags) {
+  if (tags === void 0) return [];
+  if (!Array.isArray(tags) || tags.length > MAX_TAGS || tags.some((tag) => typeof tag !== "string" || tag.trim() === "")) throw new Error("invalid memory tags");
+  return [...new Set(tags.map((tag) => tag.trim().slice(0, 100)))].sort();
+}
+function normalizeScore(value, fallback = 0) {
+  const score = value ?? fallback;
+  if (!Number.isFinite(score) || score < 0 || score > 1) throw new Error("memory importance/confidence must be between 0 and 1");
+  return score;
+}
+function validateDate(value, field) {
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) throw new Error(`invalid memory ${field}`);
+  return value;
+}
+function withRevision(record) {
+  const revision = createHash2("sha256").update(JSON.stringify(record)).digest("hex").slice(0, 16);
+  return { ...record, revision };
+}
+function isInactive(record) {
+  return record.deletedAt !== void 0 || record.expiresAt !== void 0 && Date.parse(record.expiresAt) <= Date.now();
+}
+function tokenize(value) {
+  return [...new Set((value ?? "").toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])];
+}
+function roughTokens(value) {
+  return Math.max(1, Math.ceil(value.length / 4));
+}
+function truncateByTokens(value, tokens) {
+  return value.slice(0, Math.max(1, tokens * 4)).trimEnd();
+}
+function freshnessScore(record, now) {
+  const age = Math.max(0, now - Date.parse(record.updatedAt));
+  return 1 / (1 + age / 864e5);
+}
+function safeSegment(value) {
+  if (typeof value !== "string" || value === "" || value === "." || value === ".." || /[\\/\0]/.test(value)) throw new Error("invalid memory path segment");
+  return encodeURIComponent(value);
+}
+async function readDirectories(root) {
+  try {
+    const entries = await fs2.readdir(root, { withFileTypes: true });
+    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  } catch (cause) {
+    if (cause.code === "ENOENT") return [];
+    throw cause;
+  }
+}
+async function readFiles(root) {
+  try {
+    const entries = await fs2.readdir(root, { withFileTypes: true });
+    return entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
+  } catch (cause) {
+    if (cause.code === "ENOENT") return [];
+    throw cause;
+  }
+}
+async function writeAtomic(file, text) {
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs2.writeFile(tmp, text, "utf8");
+  await fs2.rename(tmp, file);
+}
 
 // packages/tavern-store/src/variable.ts
+import { createHash as createHash3 } from "node:crypto";
+import { promises as fs3 } from "node:fs";
+import * as path3 from "node:path";
+var VariableRevisionConflictError = class extends Error {
+  constructor(name2, expectedRevision, actualRevision) {
+    super(`Variable '${name2}' changed in another operation.`);
+    this.name = name2;
+    this.expectedRevision = expectedRevision;
+    this.actualRevision = actualRevision;
+    this.name = "VariableRevisionConflictError";
+  }
+  code = "VARIABLE_REVISION_CONFLICT";
+};
+var SCOPES2 = /* @__PURE__ */ new Set(["turn", "chat", "character", "agent", "global"]);
+var NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
 var MAX_VALUE_BYTES = 32 * 1024;
 var MAX_SCOPE_BYTES = 256 * 1024;
+var MAX_LIST = 100;
+var VariableStore = class _VariableStore {
+  constructor(root) {
+    this.root = root;
+  }
+  mutationTail = Promise.resolve();
+  static async open(root) {
+    await fs3.mkdir(path3.join(root, "variables"), { recursive: true });
+    return new _VariableStore(root);
+  }
+  async get(scope, scopeId, name2) {
+    validateScope2(scope, scopeId);
+    validateName(name2);
+    const file = await this.readFile(scope, scopeId);
+    if (file === void 0 || !Object.prototype.hasOwnProperty.call(file.values, name2)) return void 0;
+    return snapshot(file, name2);
+  }
+  async set(scope, scopeId, name2, value, expectedRevision) {
+    validateScope2(scope, scopeId);
+    validateName(name2);
+    validateValue(value);
+    return this.mutate(async () => {
+      const file = await this.readFile(scope, scopeId) ?? emptyFile(scope, scopeId);
+      const actual = file.revisions[name2];
+      if (actual !== expectedRevision) throw new VariableRevisionConflictError(name2, expectedRevision, actual);
+      const next = applyChanges(file, [{ name: name2, value }]);
+      await this.writeFile(next);
+      return snapshot(next, name2);
+    });
+  }
+  async patch(scope, scopeId, changes, expectedRevision) {
+    validateScope2(scope, scopeId);
+    if (!Array.isArray(changes) || changes.length === 0) throw new Error("variable patch requires changes");
+    const normalized = changes.map((change) => {
+      validateName(change.name);
+      validateValue(change.value);
+      return change;
+    });
+    return this.mutate(async () => {
+      const file = await this.readFile(scope, scopeId) ?? emptyFile(scope, scopeId);
+      const fileRevision = revisionOfFile(file);
+      if (expectedRevision !== void 0 && expectedRevision !== fileRevision) {
+        throw new VariableRevisionConflictError("*", expectedRevision, fileRevision);
+      }
+      for (const change of normalized) {
+        const actual = file.revisions[change.name];
+        if (change.expectedRevision !== void 0 && change.expectedRevision !== actual) {
+          throw new VariableRevisionConflictError(change.name, change.expectedRevision, actual);
+        }
+      }
+      const next = applyChanges(file, normalized);
+      await this.writeFile(next);
+      return normalized.map((change) => snapshot(next, change.name));
+    });
+  }
+  async delete(scope, scopeId, name2, expectedRevision) {
+    validateScope2(scope, scopeId);
+    validateName(name2);
+    await this.mutate(async () => {
+      const file = await this.readFile(scope, scopeId);
+      if (file === void 0 || !Object.prototype.hasOwnProperty.call(file.values, name2)) return;
+      const actual = file.revisions[name2];
+      if (actual !== expectedRevision) throw new VariableRevisionConflictError(name2, expectedRevision, actual);
+      const next = structuredClone(file);
+      delete next.values[name2];
+      delete next.revisions[name2];
+      next.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      await this.writeFile(next);
+    });
+  }
+  async list(scope, scopeId, prefix = "", limit = MAX_LIST) {
+    validateScope2(scope, scopeId);
+    if (typeof prefix !== "string" || prefix.length > 64) throw new Error("invalid variable prefix");
+    if (!Number.isInteger(limit) || limit < 1) throw new Error("variable limit must be a positive integer");
+    const file = await this.readFile(scope, scopeId);
+    if (file === void 0) return [];
+    return Object.keys(file.values).filter((name2) => name2.startsWith(prefix)).sort().slice(0, Math.min(limit, MAX_LIST)).map((name2) => snapshot(file, name2));
+  }
+  async readFile(scope, scopeId) {
+    try {
+      const parsed = JSON.parse(await fs3.readFile(this.filePath(scope, scopeId), "utf8"));
+      validateFile(parsed, scope, scopeId);
+      return parsed;
+    } catch (cause) {
+      if (cause.code === "ENOENT") return void 0;
+      if (cause instanceof SyntaxError || cause instanceof Error && cause.message.startsWith("invalid variable")) {
+        throw new Error(`invalid variable store for scope '${scope}'`);
+      }
+      throw cause;
+    }
+  }
+  async writeFile(file) {
+    const target = this.filePath(file.scope, file.scopeId);
+    await fs3.mkdir(path3.dirname(target), { recursive: true });
+    const text = `${JSON.stringify(file)}
+`;
+    if (Buffer.byteLength(text, "utf8") > MAX_SCOPE_BYTES) throw new Error("variable scope exceeds size limit");
+    await writeAtomic2(target, text);
+  }
+  filePath(scope, scopeId) {
+    validateScope2(scope, scopeId);
+    return path3.join(this.root, "variables", scope, `${safeSegment2(scopeId)}.json`);
+  }
+  mutate(operation) {
+    const result = this.mutationTail.catch(() => {
+    }).then(operation);
+    this.mutationTail = result.then(() => {
+    }, () => {
+    });
+    return result;
+  }
+};
+function emptyFile(scope, scopeId) {
+  return { version: 1, scope, scopeId, values: {}, revisions: {}, updatedAt: (/* @__PURE__ */ new Date(0)).toISOString() };
+}
+function applyChanges(file, changes) {
+  const next = structuredClone(file);
+  for (const change of changes) {
+    next.values[change.name] = structuredClone(change.value);
+    next.revisions[change.name] = revisionOfValue(change.value);
+  }
+  next.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+  return next;
+}
+function snapshot(file, name2) {
+  return {
+    scope: file.scope,
+    scopeId: file.scopeId,
+    name: name2,
+    value: structuredClone(file.values[name2]),
+    revision: file.revisions[name2],
+    updatedAt: file.updatedAt
+  };
+}
+function revisionOfValue(value) {
+  return createHash3("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+}
+function revisionOfFile(file) {
+  return createHash3("sha256").update(JSON.stringify(file.values)).digest("hex").slice(0, 16);
+}
+function validateFile(file, scope, scopeId) {
+  if (file.version !== 1 || file.scope !== scope || file.scopeId !== scopeId || typeof file.values !== "object" || file.values === null || typeof file.revisions !== "object" || file.revisions === null) throw new Error("invalid variable file");
+  for (const [name2, value] of Object.entries(file.values)) {
+    validateName(name2);
+    validateValue(value);
+    if (typeof file.revisions[name2] !== "string" || file.revisions[name2] === "") throw new Error("invalid variable revision");
+  }
+}
+function validateScope2(scope, scopeId) {
+  if (!SCOPES2.has(scope)) throw new Error(`invalid variable scope '${scope}'`);
+  if (typeof scopeId !== "string" || scopeId.trim() === "") throw new Error("variable scopeId is required");
+  safeSegment2(scopeId);
+}
+function validateName(name2) {
+  if (typeof name2 !== "string" || !NAME.test(name2)) throw new Error(`invalid variable name '${String(name2)}'`);
+}
+function validateValue(value) {
+  if (value === void 0 || typeof value === "function" || typeof value === "symbol") throw new Error("invalid variable value");
+  if (typeof value === "number" && !Number.isFinite(value)) throw new Error("variable number must be finite");
+  const text = JSON.stringify(value);
+  if (text === void 0 || Buffer.byteLength(text, "utf8") > MAX_VALUE_BYTES) throw new Error("variable value exceeds size limit");
+  if (Array.isArray(value)) value.forEach(validateValue);
+  else if (typeof value === "object" && value !== null) Object.values(value).forEach(validateValue);
+}
+function safeSegment2(value) {
+  if (value === "." || value === ".." || /[\\/\0]/.test(value)) throw new Error("invalid variable path segment");
+  return encodeURIComponent(value);
+}
+async function writeAtomic2(file, text) {
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs3.writeFile(tmp, text, "utf8");
+  await fs3.rename(tmp, file);
+}
 
 // packages/plugin/src/agent-tavern/capabilities.ts
 var AGENT_TAVERN_PRESET_ID = "agent-tavern";
@@ -4581,9 +5043,9 @@ function createDshAgentTavernAdapter(ctx) {
 }
 
 // packages/plugin/src/agent-tavern/projector.ts
-import { createHash as createHash2 } from "node:crypto";
-import { promises as fs2 } from "node:fs";
-import { join as join2 } from "node:path";
+import { createHash as createHash4 } from "node:crypto";
+import { promises as fs4 } from "node:fs";
+import { join as join4 } from "node:path";
 var AgentTavernProjector = class _AgentTavernProjector {
   constructor(root, store2) {
     this.root = root;
@@ -4592,8 +5054,8 @@ var AgentTavernProjector = class _AgentTavernProjector {
   tails = /* @__PURE__ */ new Map();
   checkpoints = /* @__PURE__ */ new Map();
   static async open(tavernRoot, store2) {
-    const root = join2(tavernRoot, "projections");
-    await fs2.mkdir(root, { recursive: true });
+    const root = join4(tavernRoot, "projections");
+    await fs4.mkdir(root, { recursive: true });
     return new _AgentTavernProjector(root, store2);
   }
   project(session, event) {
@@ -4646,13 +5108,13 @@ var AgentTavernProjector = class _AgentTavernProjector {
   }
   async appendMessage(binding, sessionId, eventSeq, message) {
     for (let attempt = 0; attempt < 4; attempt += 1) {
-      const snapshot = await this.store.getChatSnapshot(binding.character, binding.chatId);
-      if (!snapshot) throw new Error("AgentTavern projection target chat not found");
-      if (snapshot.chat.messages.some((candidate) => projectionIdentity(candidate, sessionId, eventSeq))) return;
-      const next = structuredClone(snapshot.chat);
+      const snapshot2 = await this.store.getChatSnapshot(binding.character, binding.chatId);
+      if (!snapshot2) throw new Error("AgentTavern projection target chat not found");
+      if (snapshot2.chat.messages.some((candidate) => projectionIdentity(candidate, sessionId, eventSeq))) return;
+      const next = structuredClone(snapshot2.chat);
       next.messages.push(message.is_user ? { ...message, name: next.header.user_name || "User" } : message);
       try {
-        await this.store.saveChat(binding.character, binding.chatId, next, snapshot.revision);
+        await this.store.saveChat(binding.character, binding.chatId, next, snapshot2.revision);
         return;
       } catch (error) {
         if (!(error instanceof ChatRevisionConflictError) || attempt === 3) throw error;
@@ -4663,7 +5125,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
     const cached = this.checkpoints.get(sessionId);
     if (cached) return cached;
     try {
-      const parsed = JSON.parse(await fs2.readFile(this.checkpointPath(sessionId), "utf8"));
+      const parsed = JSON.parse(await fs4.readFile(this.checkpointPath(sessionId), "utf8"));
       validateCheckpoint(parsed, sessionId);
       this.checkpoints.set(sessionId, parsed);
       return parsed;
@@ -4683,14 +5145,14 @@ var AgentTavernProjector = class _AgentTavernProjector {
   async writeCheckpoint(checkpoint) {
     const target = this.checkpointPath(checkpoint.sessionId);
     const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
-    await fs2.writeFile(temporary, `${JSON.stringify(checkpoint)}
+    await fs4.writeFile(temporary, `${JSON.stringify(checkpoint)}
 `, "utf8");
-    await fs2.rename(temporary, target);
+    await fs4.rename(temporary, target);
     this.checkpoints.set(checkpoint.sessionId, checkpoint);
   }
   checkpointPath(sessionId) {
-    const name2 = createHash2("sha256").update(sessionId).digest("hex");
-    return join2(this.root, `${name2}.json`);
+    const name2 = createHash4("sha256").update(sessionId).digest("hex");
+    return join4(this.root, `${name2}.json`);
   }
 };
 function projectMessage(session, event, binding) {
@@ -4767,6 +5229,8 @@ var DEFAULT_USER = "User";
 var BUILD_INFO = readBuildInfo();
 var TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit);
 var storePromise;
+var memoryStorePromise;
+var variableStorePromise;
 var activeAgentPrompt = "";
 var agentTavernCapabilities = inspectAgentTavernCapabilities({});
 var agentTavernCapabilitiesPromise;
@@ -4780,6 +5244,12 @@ var TavernArchitectureConflictError = class extends Error {
 };
 function store() {
   return storePromise ??= TavernStore.open(dshHomePath("tavern"));
+}
+function memories() {
+  return memoryStorePromise ??= MemoryStore.open(dshHomePath("tavern"));
+}
+function variables() {
+  return variableStorePromise ??= VariableStore.open(dshHomePath("tavern"));
 }
 function apply(ctx) {
   const adapter = createDshAgentTavernAdapter(ctx);
@@ -4958,6 +5428,38 @@ async function handleApi(ctx, req, res) {
     if (!projector) throw new Error("AgentTavern projector is unavailable");
     return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
   }
+  if (method === "GET" && route === "agent-tavern/audit") {
+    const sessionId = url.searchParams.get("sessionId");
+    if (!sessionId) throw new Error("sessionId query is required");
+    const state = await db.getState();
+    const binding = state.sessionBindings[sessionId];
+    if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
+      throw new TavernArchitectureConflictError("AgentTavern audit requires a native single-character binding.");
+    }
+    const scopes = [
+      { scope: "chat", scopeId: binding.chatId },
+      { scope: "character", scopeId: binding.character },
+      { scope: "agent", scopeId: sessionId }
+    ];
+    const [memoryGroups, variableGroups, projector] = await Promise.all([
+      Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store2) => store2.search({
+        scope,
+        scopeId,
+        includeDeleted: true,
+        limit: 50
+      })))),
+      Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store2) => store2.list(scope, scopeId, "", 100)))),
+      agentTavernProjectorPromise
+    ]);
+    return sendJson(res, 200, {
+      ok: true,
+      architecture: binding.architecture,
+      contextMode: binding.contextMode,
+      projection: projector ? await projector.status(sessionId) : null,
+      memories: memoryGroups.flat().map((hit) => hit.record),
+      variables: variableGroups.flat()
+    });
+  }
   if (method === "PUT" && route.startsWith("character/")) {
     const oldName = decodeURIComponent(route.slice("character/".length));
     const body = await readJson(req, 25 * 1024 * 1024);
@@ -5060,6 +5562,8 @@ async function handleApi(ctx, req, res) {
       ...typeof body.activePreset === "string" || body.activePreset === null ? { activePreset: body.activePreset || void 0 } : {},
       ...typeof body.activePersona === "string" || body.activePersona === null ? { activePersona: body.activePersona || void 0 } : {},
       ...typeof body.nativeAgentPersona === "boolean" ? { nativeAgentPersona: body.nativeAgentPersona } : {},
+      ...body.defaultArchitecture === "agent-tavern" || body.defaultArchitecture === "st" ? { defaultArchitecture: body.defaultArchitecture } : {},
+      ...body.defaultContextMode === "dsh-native" || body.defaultContextMode === "agent-managed" ? { defaultContextMode: body.defaultContextMode } : {},
       ...body.pipelineMode === "chat" || body.pipelineMode === "text" ? { pipelineMode: body.pipelineMode } : {},
       ...isTextCompletionConfig(body.textCompletion) ? { textCompletion: normalizeTextCompletion(body.textCompletion) } : {},
       ...body.textCompletion === null ? { textCompletion: void 0 } : {}
@@ -5306,8 +5810,8 @@ async function handleApi(ctx, req, res) {
           timedWorldInfo: {}
         }
       }, greetings);
-      const snapshot2 = await db.getChatSnapshot(body.group, id2);
-      return sendJson(res, 200, { ok: true, id: id2, group: body.group, chat: snapshot2?.chat, revision: snapshot2?.revision });
+      const snapshot3 = await db.getChatSnapshot(body.group, id2);
+      return sendJson(res, 200, { ok: true, id: id2, group: body.group, chat: snapshot3?.chat, revision: snapshot3?.revision });
     }
     const character = typeof body.character === "string" ? body.character : (await db.getState()).activeCharacter;
     if (!character) throw new Error("no active character");
@@ -5327,8 +5831,8 @@ async function handleApi(ctx, req, res) {
       swipes: [found.card.data.firstMes, ...found.card.data.alternateGreetings],
       swipe_info: [{ send_date: now }, ...found.card.data.alternateGreetings.map(() => ({ send_date: now }))]
     }]);
-    const snapshot = await db.getChatSnapshot(character, id);
-    return sendJson(res, 200, { ok: true, id, chat: snapshot?.chat, revision: snapshot?.revision });
+    const snapshot2 = await db.getChatSnapshot(character, id);
+    return sendJson(res, 200, { ok: true, id, chat: snapshot2?.chat, revision: snapshot2?.revision });
   }
   if (method === "POST" && route === "branch") {
     const body = await readJson(req);
@@ -5336,9 +5840,17 @@ async function handleApi(ctx, req, res) {
       throw new Error("expected { character, chatId, messageId, revision }");
     }
     if (typeof body.revision !== "string") throw new Error("revision is required");
-    const result = await db.branchChat(body.character, body.chatId, body.messageId, body.revision, body.name);
-    const snapshot = await db.getChatSnapshot(body.character, result.chatId);
-    return sendJson(res, 200, { ok: true, id: result.chatId, chat: snapshot?.chat ?? result.chat, revision: snapshot?.revision });
+    const originArchitecture = body.originArchitecture === "agent-tavern" ? "agent-tavern" : "st";
+    const targetArchitecture = body.targetArchitecture === "agent-tavern" ? "agent-tavern" : "st";
+    const result = await db.branchChat(body.character, body.chatId, body.messageId, body.revision, body.name, {
+      agentTavernOrigin: {
+        architecture: originArchitecture,
+        targetArchitecture,
+        ...typeof body.sessionId === "string" ? { sessionId: body.sessionId } : {}
+      }
+    });
+    const snapshot2 = await db.getChatSnapshot(body.character, result.chatId);
+    return sendJson(res, 200, { ok: true, id: result.chatId, chat: snapshot2?.chat ?? result.chat, revision: snapshot2?.revision });
   }
   if (method === "GET" && route.startsWith("world/")) {
     const name2 = decodeURIComponent(route.slice("world/".length));
@@ -5475,8 +5987,8 @@ async function handleApi(ctx, req, res) {
     const character = url.searchParams.get("character") || state.activeCharacter;
     if (!character) throw new Error("no active character");
     if (method === "GET") {
-      const snapshot = await db.getChatSnapshot(character, chatId);
-      return snapshot ? sendJson(res, 200, { ok: true, chat: snapshot.chat, revision: snapshot.revision, displays: await displayTexts(db, state, character, snapshot.chat) }) : sendJson(res, 404, { ok: false, message: "chat not found" });
+      const snapshot2 = await db.getChatSnapshot(character, chatId);
+      return snapshot2 ? sendJson(res, 200, { ok: true, chat: snapshot2.chat, revision: snapshot2.revision, displays: await displayTexts(db, state, character, snapshot2.chat) }) : sendJson(res, 404, { ok: false, message: "chat not found" });
     }
     if (method === "PUT") {
       const body = await readJson(req);
@@ -5499,12 +6011,12 @@ async function handleApi(ctx, req, res) {
           binding.character === character && binding.chatId === chatId ? { character, chatId: nextChatId, ...binding.group ? { group: true } : {} } : binding
         ]))
       }));
-      const snapshot = await db.getChatSnapshot(character, nextChatId);
+      const snapshot2 = await db.getChatSnapshot(character, nextChatId);
       return sendJson(res, 200, {
         ok: true,
         id: nextChatId,
-        chat: snapshot?.chat,
-        revision: snapshot?.revision,
+        chat: snapshot2?.chat,
+        revision: snapshot2?.revision,
         state: state2
       });
     }
@@ -5542,10 +6054,10 @@ async function generate(ctx, req, res, db) {
   if (mode === "send" && userText === "") throw new Error("message is empty");
   if (typeof body.revision !== "string") throw new Error("revision is required");
   const bindingGroup = body.group === true || await isGroupChat(db, characterName, chatId);
-  const snapshot = await db.getChatSnapshot(characterName, chatId);
-  if (!snapshot) throw new Error("character or chat not found");
-  if (body.revision !== snapshot.revision) {
-    throw new ChatRevisionConflictError(body.revision, snapshot.revision);
+  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
+  if (!snapshot2) throw new Error("character or chat not found");
+  if (body.revision !== snapshot2.revision) {
+    throw new ChatRevisionConflictError(body.revision, snapshot2.revision);
   }
   res.statusCode = 200;
   res.setHeader("content-type", "application/x-ndjson; charset=utf-8");
@@ -5561,7 +6073,7 @@ async function generate(ctx, req, res, db) {
       state,
       characterName,
       chatId,
-      snapshot,
+      snapshot: snapshot2,
       mode,
       userText,
       group: bindingGroup,
@@ -5586,9 +6098,9 @@ async function generate(ctx, req, res, db) {
   }
 }
 async function runGeneration(ctx, db, options) {
-  const { state, characterName, chatId, snapshot, mode, group: group2, write, signal } = options;
-  const chat = snapshot.chat;
-  let revision = snapshot.revision;
+  const { state, characterName, chatId, snapshot: snapshot2, mode, group: group2, write, signal } = options;
+  const chat = snapshot2.chat;
+  let revision = snapshot2.revision;
   let hostTrace;
   try {
     let speakerName = characterName;
@@ -5914,11 +6426,11 @@ async function runTavernScript(ctx, req, res, db) {
   const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
   const chatId = body.chatId;
   if (!characterName || typeof chatId !== "string") throw new Error("character and chatId are required");
-  const snapshot = await db.getChatSnapshot(characterName, chatId);
-  if (!snapshot) throw new Error("chat not found");
+  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
+  if (!snapshot2) throw new Error("chat not found");
   const group2 = body.group === true || await isGroupChat(db, characterName, chatId);
-  const chat = snapshot.chat;
-  let revision = snapshot.revision;
+  const chat = snapshot2.chat;
+  let revision = snapshot2.revision;
   const character = await db.getCharacter(characterName);
   const macros = createMacroEngine({
     char: character?.card.data.nickname || character?.card.data.name || characterName,
@@ -6445,7 +6957,7 @@ function parseTavernSessionCommand(rawInput) {
 }
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
-  return join3(resolve(configured || join3(homedir(), ".dsh")), ...segments);
+  return join5(resolve(configured || join5(homedir(), ".dsh")), ...segments);
 }
 function readBuildInfo() {
   let version = "unknown";

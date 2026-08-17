@@ -548,7 +548,14 @@ export class TavernStore {
    * 从 messageId（含）截断复制为新聊天；chat_metadata.bookmark_link 记录回链。
    * 分支命名 `${stem} - branch N.jsonl`（N 递增至不冲突，字符集安全）。
    */
-  async branchChat(characterName: string, chatId: string, messageId: number, expectedRevision?: string, name?: string): Promise<{ chatId: string; chat: ChatLogIR }> {
+  async branchChat(
+    characterName: string,
+    chatId: string,
+    messageId: number,
+    expectedRevision?: string,
+    name?: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<{ chatId: string; chat: ChatLogIR }> {
     return this.mutateChat(async () => {
       const dir = path.join(this.root, 'chats', safeFileName(characterName))
       const source = path.join(dir, safeChatFileName(chatId))
@@ -564,6 +571,7 @@ export class TavernStore {
       header.chat_metadata = {
         ...(header.chat_metadata ?? {}),
         bookmark_link: { character: characterName, chatId, messageId },
+        ...(metadata ?? {}),
       }
       const stem = (name !== undefined && name.trim() !== ''
         ? name.trim()

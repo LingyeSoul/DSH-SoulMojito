@@ -15,6 +15,7 @@ function makeAgent(id: string) {
   const events: Array<{ type: string; data: unknown }> = []
   return {
     id,
+    ctx: { id },
     session: {
       events,
       append: (type: string, data: unknown) => { events.push({ type, data }) },
@@ -22,11 +23,11 @@ function makeAgent(id: string) {
   }
 }
 
-function makeRequest(body: unknown) {
+function makeRequest(body: unknown, url = '/api/dsh-tavern/generate') {
   const listeners = new Map<string, (value?: unknown) => void>()
   return {
     method: 'POST',
-    url: '/api/dsh-tavern/generate',
+    url,
     on: (event: string, listener: (value?: unknown) => void) => {
       listeners.set(event, listener)
       if (event === 'end') {
@@ -35,6 +36,15 @@ function makeRequest(body: unknown) {
       }
       return undefined
     },
+    destroy: () => {},
+  }
+}
+
+function makeGetRequest(url: string) {
+  return {
+    method: 'GET',
+    url,
+    on: () => undefined,
     destroy: () => {},
   }
 }
@@ -66,6 +76,7 @@ describe('internal Tavern session bridge occupation', () => {
   let handler: (input: { agent: unknown; rawInput: string }) => Promise<{ kind: string }>
   let apiHandler: (req: unknown, res: unknown) => Promise<void>
   let agents: Map<string, ReturnType<typeof makeAgent>>
+  let recomposeCalls: Array<{ agent: unknown; presetId: string }>
   let failGeneration = false
   let chatId: string
 
@@ -89,10 +100,19 @@ describe('internal Tavern session bridge occupation', () => {
 
     let definition: { handler: (input: { agent: unknown; rawInput: string }) => Promise<{ kind: string }> } | undefined
     agents = new Map()
+    recomposeCalls = []
     apply({
-      systemPrompt: { section: () => {} },
+      systemPrompt: { section: () => {}, context: () => {} },
       commands: { register: (def) => { definition = def } },
       webServer: { register: (def) => { apiHandler = def.handler; return () => {} } },
+      agentPresets: {
+        mount: async () => ({ id: 'agent-tavern' }),
+        recompose: async (agent: unknown, presetId: string) => {
+          recomposeCalls.push({ agent, presetId })
+          return { id: presetId }
+        },
+      },
+      tools: { register: () => {} },
       llm: {
         stream: async function* () {
           if (failGeneration) throw new Error('test generation failure')
@@ -189,6 +209,51 @@ describe('internal Tavern session bridge occupation', () => {
     }), res)
     expect(res.statusCode).toBe(409)
     expect(res.chunks.join('')).toContain('TAVERN_ARCHITECTURE_CONFLICT')
+  })
+
+  it('recomposes a blank session with AgentTavern without occupying native turns', async () => {
+    const agent = makeAgent('session-agent-tavern')
+    const result = await handler({
+      agent,
+      rawInput: base64Url({ character: CHARACTER, chatId, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+    })
+    expect(result.kind).toBe('success')
+    expect(recomposeCalls).toEqual([{ agent: agent.ctx, presetId: 'agent-tavern' }])
+    expect(agent.session.events).toEqual([{ type: 'agent-preset/selected', data: { agentPreset: 'agent-tavern' } }])
+    expect((await store.getState()).sessionBindings['session-agent-tavern']).toEqual({
+      architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER, chatId,
+    })
+    expect(turnStarts(agent)).toHaveLength(0)
+  })
+
+  it('exposes the read-only AgentTavern projection and state audit', async () => {
+    const res = makeResponse()
+    await apiHandler(makeGetRequest('/api/dsh-tavern/agent-tavern/audit?sessionId=session-agent-tavern'), res)
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.chunks.join(''))).toMatchObject({
+      ok: true,
+      architecture: 'agent-tavern',
+      contextMode: 'dsh-native',
+      projection: { sessionId: 'session-agent-tavern', lastCursor: -1, status: 'ok' },
+      memories: [],
+      variables: [],
+    })
+  })
+
+  it('fails closed when AgentTavern managed context is unavailable', async () => {
+    const agent = makeAgent('session-agent-managed')
+    await expect(handler({
+      agent,
+      rawInput: base64Url({ character: CHARACTER, chatId, architecture: 'agent-tavern', contextMode: 'agent-managed' }),
+    })).rejects.toMatchObject({ code: 'TAVERN_ARCHITECTURE_CONFLICT' })
+    expect(recomposeCalls.some((call) => call.agent === agent.ctx)).toBe(false)
+    expect((await store.getState()).sessionBindings['session-agent-managed']).toBeUndefined()
+    expect(agent.session.events).toHaveLength(0)
+    const res = makeResponse()
+    await apiHandler(makeRequest({ defaultContextMode: 'agent-managed' }, '/api/dsh-tavern/state'), res)
+    expect(res.statusCode).toBe(409)
+    expect(res.chunks.join('')).toContain('TAVERN_ARCHITECTURE_CONFLICT')
+    expect((await store.getState()).defaultContextMode).toBe('dsh-native')
   })
 
   it('closes the mirrored trace as an error when generation fails', async () => {

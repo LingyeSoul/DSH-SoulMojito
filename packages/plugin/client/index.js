@@ -175,6 +175,14 @@ window.__ModuleLoader__.load({
       'settings.persona': 'Persona',
       'settings.personaEmpty': 'Default user',
       'settings.nativePersona': 'Use active character in standard DSH Agent chats',
+      'settings.defaultArchitecture': 'New chat architecture',
+      'settings.architectureAgent': 'AgentTavern',
+      'settings.architectureSt': 'ST',
+      'settings.architectureHint': 'Only new single-character chats use this default. Group chats always use ST.',
+      'settings.contextMode': 'AgentTavern context',
+      'settings.contextNative': 'DSH context',
+      'settings.contextManaged': 'Agent memory',
+      'settings.contextManagedUnavailable': 'Agent memory is unavailable: {reason}',
       'settings.worldInfo': 'World Info',
       'settings.worldsEmpty': 'No world books imported',
       'settings.import': 'Import',
@@ -325,6 +333,17 @@ window.__ModuleLoader__.load({
       'panel.variables.remove': 'Remove {key}',
       'panel.variables.chatLocal': 'Chat variables (current session)',
       'panel.variables.chatLocalEmpty': 'This session has no bound Tavern chat.',
+      'panel.variables.agentAudit': 'AgentTavern audit',
+      'panel.variables.agentAuditEmpty': 'No AgentTavern session is active.',
+      'panel.variables.projection': 'Projection: {status} · cursor {cursor}',
+      'panel.variables.memories': 'Memories',
+      'panel.variables.nativeVariables': 'Agent variables',
+      'panel.variables.auditLoading': 'Loading AgentTavern audit…',
+      'panel.variables.auditProjectionError': 'Projection error: {message}',
+      'panel.variables.auditSource': 'Source: {source}',
+      'panel.variables.auditRevision': 'Revision: {revision}',
+      'panel.variables.auditExpired': 'Expired: {value}',
+      'panel.variables.auditDeleted': 'Soft-deleted: {value}',
       'message.user': 'User',
       'message.previousSwipe': 'Previous swipe',
       'message.nextSwipe': 'Next swipe',
@@ -336,6 +355,9 @@ window.__ModuleLoader__.load({
       'view.unbound': 'No Tavern chat is bound to this session.',
       'view.loading': 'Loading Tavern chat…',
       'view.regenerate': 'Regenerate last response',
+      'view.forkArchitecture': 'Fork to {architecture}',
+      'view.architectureAgent': 'AgentTavern',
+      'view.architectureSt': 'ST',
       'view.linkedFrom': 'Linked from {name}',
       'stats.counts': '{turns} turns · {steps} steps',
       'stats.llm': 'LLM {duration}',
@@ -383,6 +405,7 @@ window.__ModuleLoader__.load({
       'error.noWorkspace': 'No DSH workspace is available for a Tavern session.',
       'error.noBinding': 'DSH did not expose the new session binding.',
       'error.activationFailed': 'Tavern activation failed.',
+      'error.agentTavernUnavailable': 'AgentTavern is unavailable: {reason}',
       'error.hostCommandUnavailable': 'The Tavern host command is unavailable.',
     }
     const MESSAGES_ZH = {
@@ -395,6 +418,14 @@ window.__ModuleLoader__.load({
       'settings.persona': '用户人设',
       'settings.personaEmpty': '默认用户',
       'settings.nativePersona': '在标准 DSH Agent 会话中使用当前角色',
+      'settings.defaultArchitecture': '新聊天架构',
+      'settings.architectureAgent': 'AgentTavern',
+      'settings.architectureSt': 'ST',
+      'settings.architectureHint': '仅影响新建的单角色聊天；群聊始终使用 ST。',
+      'settings.contextMode': 'AgentTavern 上下文',
+      'settings.contextNative': 'DSH 上下文',
+      'settings.contextManaged': 'Agent 记忆',
+      'settings.contextManagedUnavailable': 'Agent 记忆不可用：{reason}',
       'settings.worldInfo': '世界书',
       'settings.worldsEmpty': '尚未导入世界书',
       'settings.import': '导入',
@@ -545,6 +576,17 @@ window.__ModuleLoader__.load({
       'panel.variables.remove': '移除 {key}',
       'panel.variables.chatLocal': '聊天局部变量（当前会话）',
       'panel.variables.chatLocalEmpty': '当前会话未绑定酒馆聊天。',
+      'panel.variables.agentAudit': 'AgentTavern 审计',
+      'panel.variables.agentAuditEmpty': '当前没有 AgentTavern 会话。',
+      'panel.variables.projection': '投影：{status} · 游标 {cursor}',
+      'panel.variables.memories': '记忆',
+      'panel.variables.nativeVariables': 'Agent 变量',
+      'panel.variables.auditLoading': '正在加载 AgentTavern 审计…',
+      'panel.variables.auditProjectionError': '投影错误：{message}',
+      'panel.variables.auditSource': '来源：{source}',
+      'panel.variables.auditRevision': '修订：{revision}',
+      'panel.variables.auditExpired': '过期：{value}',
+      'panel.variables.auditDeleted': '软删除：{value}',
       'message.user': '用户',
       'message.previousSwipe': '上一个候选',
       'message.nextSwipe': '下一个候选',
@@ -556,6 +598,9 @@ window.__ModuleLoader__.load({
       'view.unbound': '此会话未绑定酒馆聊天。',
       'view.loading': '正在加载酒馆聊天…',
       'view.regenerate': '重新生成最新回复',
+      'view.forkArchitecture': '分叉到 {architecture}',
+      'view.architectureAgent': 'AgentTavern',
+      'view.architectureSt': 'ST',
       'view.linkedFrom': '来源聊天：{name}',
       'stats.counts': '{turns} 轮 · {steps} 步',
       'stats.llm': 'LLM {duration}',
@@ -603,6 +648,7 @@ window.__ModuleLoader__.load({
       'error.noWorkspace': '没有可用于酒馆会话的 DSH 工作区。',
       'error.noBinding': 'DSH 未返回新建会话的绑定。',
       'error.activationFailed': '酒馆激活失败。',
+      'error.agentTavernUnavailable': 'AgentTavern 不可用：{reason}',
       'error.hostCommandUnavailable': '宿主的酒馆命令不可用。',
     }
     // translate follows the host locale service once apply() binds it; the
@@ -622,7 +668,10 @@ window.__ModuleLoader__.load({
     const STYLE_ID = 'dsh-tavern/native-ui'
     const REVISION_CONFLICT = 'CHAT_REVISION_CONFLICT'
     const EMPTY_BOOTSTRAP = {
-      state: { activeWorlds: [], sessionBindings: {}, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat' },
+      state: {
+        activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
+        modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat',
+      },
       characters: [],
       worlds: [],
       presets: [],
@@ -631,6 +680,10 @@ window.__ModuleLoader__.load({
       groups: [],
       activeCard: null,
       model: { provider: '', model: '' },
+      agentTavern: {
+        native: { available: false, missing: [], reasons: [] },
+        managed: { available: false, missing: [], reasons: [] },
+      },
     }
     const EMPTY_MODELS = { status: 'idle', groups: [], failures: [], error: '' }
     let snapshot = {
@@ -929,6 +982,51 @@ window.__ModuleLoader__.load({
         || workspaces.items[0]
     }
 
+    function bindingArchitecture(binding) {
+      return binding?.architecture === 'agent-tavern' ? 'agent-tavern' : 'st'
+    }
+
+    function architectureLabel(architecture) {
+      return architecture === 'agent-tavern' ? translate('view.architectureAgent') : translate('view.architectureSt')
+    }
+
+    function newChatPolicy(group = false, override = {}) {
+      if (group) return { architecture: 'st', contextMode: 'dsh-native' }
+      const state = snapshot.bootstrap.state || {}
+      const architecture = override.architecture === 'st' || override.architecture === 'agent-tavern'
+        ? override.architecture
+        : state.defaultArchitecture === 'st' ? 'st' : 'agent-tavern'
+      const contextMode = override.contextMode === 'agent-managed' || state.defaultContextMode === 'agent-managed'
+        ? 'agent-managed'
+        : 'dsh-native'
+      if (architecture === 'agent-tavern') {
+        const status = contextMode === 'agent-managed'
+          ? snapshot.bootstrap.agentTavern?.managed
+          : snapshot.bootstrap.agentTavern?.native
+        if (!status?.available) {
+          const reason = status?.reasons?.join(' ') || translate('error.agentTavernUnavailable', { reason: 'host capability check failed' })
+          const error = new Error(translate('error.agentTavernUnavailable', { reason }))
+          error.code = 'TAVERN_ARCHITECTURE_CONFLICT'
+          error.status = 409
+          throw error
+        }
+      }
+      return { architecture, contextMode }
+    }
+
+    function activationFields(policy) {
+      return policy.architecture === 'agent-tavern'
+        ? { architecture: policy.architecture, contextMode: policy.contextMode }
+        : { architecture: 'st' }
+    }
+
+    function reserveTavernSession(ctx, sessionId) {
+      // rc.6 connectWorkspace reuses any locally blank session. AgentTavern
+      // cannot append a synthetic turn/start, so clear only the client blank
+      // mirror while keeping the durable event log untouched.
+      ctx?.sessions?.binding(sessionId)?.session?.handleBlank?.(false)
+    }
+
     function clickTavernTab(attempt) {
       // The conversation.view tab label is translated via the slot's label()
       // callback, so match every shipped spelling of the Tavern title.
@@ -950,21 +1048,27 @@ window.__ModuleLoader__.load({
       if (!binding || repairedBindings.has(sessionId)) return
       repairedBindings.add(sessionId)
       try {
+        const policy = {
+          architecture: bindingArchitecture(binding),
+          contextMode: binding.contextMode === 'agent-managed' ? 'agent-managed' : 'dsh-native',
+        }
         const payload = base64Url(JSON.stringify({
           character: binding.character,
           chatId: binding.chatId,
           ...(binding.group === true ? { group: true } : {}),
+          ...activationFields(policy),
         }))
         const bound = ctx?.sessions?.binding(sessionId)
         if (!bound) throw new Error('session binding unavailable')
         const result = await bound.session.command(`/dsh-tavern-session ${payload}`)
         if (!result?.ok || !result.value?.matched) throw new Error('Tavern session bridge rejected')
+        reserveTavernSession(ctx, sessionId)
       } catch {
         repairedBindings.delete(sessionId)
       }
     }
 
-    async function openTavernChat(ctx, character, chatId, group = false) {
+    async function openTavernChat(ctx, character, chatId, group = false, policyOverride) {
       update({ navigationStatus: '' })
       const sessions = ctx.sessions.list.getSnapshot()
       const existing = Object.entries(snapshot.bootstrap.state.sessionBindings || {})
@@ -974,11 +1078,14 @@ window.__ModuleLoader__.load({
       if (existing) {
         // 已绑定的会话也重发一次绑定命令：旧版本激活的会话宿主侧可能仍 blank，
         // 服务端借此补占位 turn 对，解除原生「新建会话」的复用劫持（幂等）。
-        void repairBinding(ctx, existing[0], existing[1])
+        if (bindingArchitecture(existing[1]) === 'st') void repairBinding(ctx, existing[0], existing[1])
+        reserveTavernSession(ctx, existing[0])
         ctx.sessions.open(existing[0])
-        clickTavernTab(0)
+        if (bindingArchitecture(existing[1]) === 'st') clickTavernTab(0)
         return existing[0]
       }
+
+      const policy = newChatPolicy(group, policyOverride)
 
       const workspace = currentWorkspace(ctx)
       if (!workspace) throw new Error(translate('error.noWorkspace'))
@@ -986,7 +1093,7 @@ window.__ModuleLoader__.load({
       const sessionId = await ctx.workspaces.connectWorkspace(workspace.workspaceId)
       const binding = ctx.sessions.binding(sessionId)
       if (!binding) throw new Error(translate('error.noBinding'))
-      const payload = JSON.stringify({ sessionId, character, chatId, ...(group ? { group: true } : {}) })
+      const payload = JSON.stringify({ sessionId, character, chatId, ...(group ? { group: true } : {}), ...activationFields(policy) })
       await api('binding', {
         method: 'POST',
         headers: jsonHeaders(),
@@ -996,6 +1103,7 @@ window.__ModuleLoader__.load({
         character,
         chatId,
         ...(group ? { group: true } : {}),
+        ...activationFields(policy),
       }))
       const result = await binding.session.command(`/dsh-tavern-session ${commandPayload}`)
       if (!result.ok || !result.value?.matched) {
@@ -1006,16 +1114,17 @@ window.__ModuleLoader__.load({
         }).catch(() => {})
         throw new Error(result.error?.message || translate('error.activationFailed'))
       }
-      const label = sessionLabel(character, chatId, group)
+      reserveTavernSession(ctx, sessionId)
+      const label = sessionLabel(character, chatId, group, policy.architecture)
       await binding.session.rename(label).catch(() => {})
       await refreshBootstrap()
       ctx.sessions.open(sessionId)
       update({ navigationStatus: '' })
-      clickTavernTab(0)
+      if (policy.architecture === 'st') clickTavernTab(0)
       return sessionId
     }
 
-    async function createTavernChat(ctx, character, group = false) {
+    async function createTavernChat(ctx, character, group = false, policyOverride) {
       const result = await api('chats', {
         method: 'POST',
         headers: jsonHeaders(),
@@ -1027,17 +1136,22 @@ window.__ModuleLoader__.load({
         chats: { ...snapshot.chats, [key]: result.chat },
         revisions: { ...snapshot.revisions, [key]: result.revision },
       })
-      return openTavernChat(ctx, character, result.id, group)
+      return openTavernChat(ctx, character, result.id, group, policyOverride)
     }
 
-    async function branchTavernChat(ctx, character, chatId, index) {
+    async function branchTavernChat(ctx, character, chatId, index, sessionId, targetArchitecture) {
       const key = chatKey(character, chatId)
       const revision = snapshot.revisions[key]
       if (!revision) throw new Error(translate('view.loading'))
       const result = await api('branch', {
         method: 'POST',
         headers: jsonHeaders(),
-        body: JSON.stringify({ character, chatId, messageId: index, revision }),
+        body: JSON.stringify({
+          character, chatId, messageId: index, revision,
+          ...(typeof sessionId === 'string' ? { sessionId } : {}),
+          originArchitecture: bindingArchitecture(snapshot.bootstrap.state.sessionBindings?.[sessionId]),
+          targetArchitecture: targetArchitecture === 'agent-tavern' ? 'agent-tavern' : 'st',
+        }),
       })
       const nextKey = chatKey(character, result.id)
       update({
@@ -1045,7 +1159,17 @@ window.__ModuleLoader__.load({
         revisions: { ...snapshot.revisions, [nextKey]: result.revision },
       })
       await loadChatList(character, true)
-      return openTavernChat(ctx, character, result.id)
+      return openTavernChat(ctx, character, result.id, false, {
+        architecture: targetArchitecture === 'agent-tavern' ? 'agent-tavern' : 'st',
+        contextMode: 'dsh-native',
+      })
+    }
+
+    async function forkTavernArchitecture(ctx, sessionId, binding) {
+      const chat = await loadChat(binding.character, binding.chatId)
+      if (!chat || chat.messages.length === 0) throw new Error(translate('view.loading'))
+      const target = bindingArchitecture(binding) === 'agent-tavern' ? 'st' : 'agent-tavern'
+      return branchTavernChat(ctx, binding.character, binding.chatId, chat.messages.length - 1, sessionId, target)
     }
 
     async function runTavernScriptCommand(sessionId, binding, script) {
@@ -1084,9 +1208,18 @@ window.__ModuleLoader__.load({
         .map(([sessionId]) => sessionId)
     }
 
-    function sessionLabel(character, chatId, group = false) {
+    function sessionLabel(character, chatId, group = false, architecture = 'st') {
       const stem = chatId.replace(/\.jsonl$/i, '').slice(0, 44)
-      return group ? `☰ ${character} · ${stem}` : `${character} · ${stem}`
+      const prefix = group ? '☰' : architecture === 'agent-tavern' ? 'AgentTavern' : 'ST'
+      return `${prefix} ${character} · ${stem}`
+    }
+
+    function chatArchitectureLabels(character, chatId, group = false) {
+      const matches = Object.values(snapshot.bootstrap.state.sessionBindings || {})
+        .filter((binding) => binding?.character === character && binding?.chatId === chatId)
+        .map((binding) => architectureLabel(bindingArchitecture(binding)))
+      if (matches.length === 0) return [architectureLabel(group ? 'st' : snapshot.bootstrap.state.defaultArchitecture)]
+      return [...new Set(matches)]
     }
 
     async function renameTavernChat(ctx, character, chatId) {
@@ -1117,7 +1250,7 @@ window.__ModuleLoader__.load({
         await loadChatList(character, true)
         await Promise.all(sessionIds.map(async (sessionId) => {
           const binding = ctx.sessions.binding(sessionId)
-          await binding?.session.rename(sessionLabel(character, result.id)).catch(() => {})
+          await binding?.session.rename(sessionLabel(character, result.id, binding?.group === true, bindingArchitecture(binding))).catch(() => {})
         }))
         return result.id
       } catch (cause) {
@@ -1789,6 +1922,47 @@ window.__ModuleLoader__.load({
               onChange: (event) => applyPatch({ nativeAgentPersona: event.target.checked }),
             }),
             h('span', null, t('settings.nativePersona')))),
+        h('div', { className: 'dt-architecture-settings' },
+          h('div', { className: 'dt-field' },
+            h('span', { className: 'dt-label' }, t('settings.defaultArchitecture')),
+            h('div', { className: 'dt-segmented', role: 'group', 'aria-label': t('settings.defaultArchitecture') },
+              h('button', {
+                type: 'button',
+                className: bootstrap.state.defaultArchitecture === 'agent-tavern' ? 'dt-segmented-active' : '',
+                'aria-pressed': bootstrap.state.defaultArchitecture === 'agent-tavern',
+                disabled: bootstrap.agentTavern?.native?.available !== true,
+                onClick: () => applyPatch({ defaultArchitecture: 'agent-tavern' }),
+              }, t('settings.architectureAgent')),
+              h('button', {
+                type: 'button',
+                className: bootstrap.state.defaultArchitecture === 'st' ? 'dt-segmented-active' : '',
+                'aria-pressed': bootstrap.state.defaultArchitecture === 'st',
+                onClick: () => applyPatch({ defaultArchitecture: 'st' }),
+              }, t('settings.architectureSt')))),
+          h('p', { className: 'dt-hint' }, t('settings.architectureHint')),
+          bootstrap.state.defaultArchitecture === 'agent-tavern'
+            ? h('div', { className: 'dt-field' },
+              h('span', { className: 'dt-label' }, t('settings.contextMode')),
+              h('div', { className: 'dt-segmented', role: 'group', 'aria-label': t('settings.contextMode') },
+                h('button', {
+                  type: 'button',
+                  className: bootstrap.state.defaultContextMode === 'dsh-native' ? 'dt-segmented-active' : '',
+                  'aria-pressed': bootstrap.state.defaultContextMode === 'dsh-native',
+                  onClick: () => applyPatch({ defaultContextMode: 'dsh-native' }),
+                }, t('settings.contextNative')),
+                h('button', {
+                  type: 'button',
+                  className: bootstrap.state.defaultContextMode === 'agent-managed' ? 'dt-segmented-active' : '',
+                  'aria-pressed': bootstrap.state.defaultContextMode === 'agent-managed',
+                  disabled: bootstrap.agentTavern?.managed?.available !== true,
+                  onClick: () => applyPatch({ defaultContextMode: 'agent-managed' }),
+                }, t('settings.contextManaged'))),
+              bootstrap.agentTavern?.managed?.available !== true
+                ? h('p', { className: 'dt-hint' }, t('settings.contextManagedUnavailable', {
+                  reason: bootstrap.agentTavern?.managed?.reasons?.join(' ') || 'host capability check failed',
+                }))
+                : null)
+            : null),
         h('div', { className: 'dt-check-grid' },
           bootstrap.worlds.length === 0
             ? h('span', { className: 'dt-muted' }, t('settings.worldsEmpty'))
@@ -1869,7 +2043,14 @@ window.__ModuleLoader__.load({
       const branch = () => {
         setError('')
         setBranching(true)
-        void branchTavernChat(PanelHost.context, character, chatId, index)
+        void branchTavernChat(PanelHost.context, character, chatId, index, sessionId, 'st')
+          .catch((cause) => setError(cause.message))
+          .finally(() => setBranching(false))
+      }
+      const branchAgent = () => {
+        setError('')
+        setBranching(true)
+        void branchTavernChat(PanelHost.context, character, chatId, index, sessionId, 'agent-tavern')
           .catch((cause) => setError(cause.message))
           .finally(() => setBranching(false))
       }
@@ -1901,7 +2082,8 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', onClick: () => { setDraft(message.mes || ''); setError(''); setEditing(false) } }, t('message.cancel')))
               : h(React.Fragment, null,
                 h('button', { type: 'button', title: t('message.edit'), disabled: busy, onClick: () => setEditing(true) }, h(IconEditOutline16)),
-                h('button', { type: 'button', className: 'dt-branch-btn', title: t('message.branch'), disabled: busy || branching, onClick: branch }, '⑂'))),
+                h('button', { type: 'button', className: 'dt-branch-btn', title: t('message.branch'), disabled: busy || branching, onClick: branch }, '⑂'),
+                h('button', { type: 'button', title: t('view.forkArchitecture', { architecture: t('view.architectureAgent') }), disabled: busy || branching, onClick: branchAgent }, h(IconAgentPresetOutline16)))),
           branching ? h('span', { className: 'dt-message-error' }, t('message.branching')) : null,
           error ? h('span', { className: 'dt-message-error' }, error) : null))
     }
@@ -2394,25 +2576,34 @@ window.__ModuleLoader__.load({
     function TavernHeaderAction({ sessionId, useSession, useProjection }) {
       const state = useTavernStore()
       const t = useTranslate()
-      const active = useSession((session) => isTavernSession(session) !== null)
-      const stats = useProjection ? useProjection('sessionStats') : undefined
       const usage = useProjection ? useProjection('tokenUsage') : undefined
       const binding = state.bootstrap.state.sessionBindings?.[sessionId]
+      const architecture = bindingArchitecture(binding)
+      const active = useSession((session) => architecture === 'agent-tavern' || isTavernSession(session) !== null)
+      const stats = useProjection ? useProjection('sessionStats') : undefined
       const run = state.runs[sessionId] || {}
-      const markerRef = useNativeAgentPresetLabelFilter(Boolean(active && binding))
+      const markerRef = useNativeAgentPresetLabelFilter(Boolean(active && binding && architecture === 'st'))
       if (!active || !binding) return null
       const statsLine = buildTavernStatsLine(stats, usage, t)
       return h('div', { ref: markerRef, className: 'dt-header-character', 'data-dsh-tavern-surface': 'header' },
         h('img', { src: `${API}/avatar/${encodeURIComponent(binding.character)}`, alt: '' }),
         h('div', { className: 'dt-header-character-copy' },
           h('span', { className: 'dt-header-character-name' }, binding.character),
+          h('span', { className: `dt-architecture-badge dt-architecture-${architecture}` }, architectureLabel(architecture)),
           statsLine ? h('span', { className: 'dt-header-stats', title: statsLine }, statsLine) : null),
-        h('button', {
-          type: 'button',
-          title: t('view.regenerate'),
-          disabled: run.busy,
-          onClick: () => void generateFor(sessionId, binding, 'regenerate', ''),
-        }, h(IconRefreshOutline16)))
+        architecture === 'st'
+          ? h('button', {
+            type: 'button',
+            title: t('view.regenerate'),
+            disabled: run.busy,
+            onClick: () => void generateFor(sessionId, binding, 'regenerate', ''),
+          }, h(IconRefreshOutline16))
+          : h('button', {
+            type: 'button',
+            title: t('view.forkArchitecture', { architecture: architectureLabel('st') }),
+            disabled: run.busy,
+            onClick: () => void forkTavernArchitecture(PanelHost.context, sessionId, binding),
+          }, h(IconAgentPresetOutline16)))
     }
 
     function nativeTavernTabs() {
@@ -2575,7 +2766,7 @@ window.__ModuleLoader__.load({
       if (sessionIds.size === 0) return
       const labels = new Set(Object.entries(bindings)
         .filter(([, binding]) => typeof binding?.character === 'string' && typeof binding?.chatId === 'string')
-        .map(([, binding]) => sessionLabel(binding.character, binding.chatId, binding.group === true)))
+        .map(([, binding]) => sessionLabel(binding.character, binding.chatId, binding.group === true, bindingArchitecture(binding))))
       const candidates = [...tree.querySelectorAll?.('[role="treeitem"], [role="option"], li, [data-session-id], [data-session], [data-item-id]') || []]
       const rows = new Set()
       for (const candidate of candidates) {
@@ -2681,29 +2872,33 @@ window.__ModuleLoader__.load({
         void action().catch((cause) => setError(cause.message)).finally(() => setBusyChat(''))
       }
       return h('div', { className: 'dt-sidebar-chats' },
-        chats?.map((chatId) => h('div', {
-          key: chatId,
-          className: `dt-sidebar-chat-row ${activeBinding?.character === character && activeBinding.chatId === chatId ? 'dt-sidebar-chat-active' : ''}`,
-        },
-        h('button', {
-          type: 'button',
-          className: 'dt-sidebar-chat-open',
-          title: chatId,
-          disabled: busyChat === chatId,
-          onClick: () => open(chatId),
-        }, h('span', null, / - branch \d+$/.test(chatId.replace(/\.jsonl$/i, '')) ? '⑂ ' : '', chatId.replace(/\.jsonl$/i, ''))),
-        h('button', {
-          type: 'button',
-          title: t('nav.rename', { name: chatId.replace(/\.jsonl$/i, '') }),
-          disabled: busyChat === chatId,
-          onClick: () => runAction(chatId, () => renameTavernChat(ctx, character, chatId)),
-        }, h(IconEditOutline16)),
-        h('button', {
-          type: 'button',
-          title: t('nav.delete', { name: chatId.replace(/\.jsonl$/i, '') }),
-          disabled: busyChat === chatId,
-          onClick: () => runAction(chatId, () => deleteTavernChat(ctx, character, chatId)),
-        }, h(IconTrashOutline16)))),
+        chats?.map((chatId) => {
+          const labels = chatArchitectureLabels(character, chatId, group)
+          return h('div', {
+            key: chatId,
+            className: `dt-sidebar-chat-row ${activeBinding?.character === character && activeBinding.chatId === chatId ? 'dt-sidebar-chat-active' : ''}`,
+          },
+          h('button', {
+            type: 'button',
+            className: 'dt-sidebar-chat-open',
+            title: chatId,
+            disabled: busyChat === chatId,
+            onClick: () => open(chatId),
+          }, h('span', null, / - branch \d+$/.test(chatId.replace(/\.jsonl$/i, '')) ? '⑂ ' : '', chatId.replace(/\.jsonl$/i, '')),
+          h('span', { className: 'dt-chat-architecture' }, labels.join(' / '))),
+          h('button', {
+            type: 'button',
+            title: t('nav.rename', { name: chatId.replace(/\.jsonl$/i, '') }),
+            disabled: busyChat === chatId,
+            onClick: () => runAction(chatId, () => renameTavernChat(ctx, character, chatId)),
+          }, h(IconEditOutline16)),
+          h('button', {
+            type: 'button',
+            title: t('nav.delete', { name: chatId.replace(/\.jsonl$/i, '') }),
+            disabled: busyChat === chatId,
+            onClick: () => runAction(chatId, () => deleteTavernChat(ctx, character, chatId)),
+          }, h(IconTrashOutline16)))
+        }),
         !chats ? h('span', { className: 'dt-sidebar-status' }, t('nav.loading')) : null,
         chats?.length === 0 ? h('span', { className: 'dt-sidebar-status' }, t('nav.noChats')) : null,
         error ? h('span', { className: 'dt-sidebar-error' }, error) : null)
@@ -3308,14 +3503,40 @@ window.__ModuleLoader__.load({
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
 
+    function AuditMemoryRow({ memory, t }) {
+      const inactive = Boolean(memory.deletedAt || memory.expiresAt && Date.parse(memory.expiresAt) <= Date.now())
+      return h('article', { className: `dt-audit-row ${inactive ? 'dt-audit-row-inactive' : ''}` },
+        h('div', { className: 'dt-audit-row-head' },
+          h('strong', null, `${memory.scope} · ${memory.kind}`),
+          h('span', null, memory.id)),
+        h('p', null, memory.content),
+        h('div', { className: 'dt-audit-meta' },
+          h('span', null, t('panel.variables.auditSource', { source: memory.source?.kind || '-' })),
+          h('span', null, t('panel.variables.auditRevision', { revision: memory.revision })),
+          h('span', null, t('panel.variables.auditExpired', { value: memory.expiresAt || '-' })),
+          h('span', null, t('panel.variables.auditDeleted', { value: memory.deletedAt || '-' }))))
+    }
+
+    function AuditVariableRow({ variable, t }) {
+      return h('article', { className: 'dt-audit-row' },
+        h('div', { className: 'dt-audit-row-head' },
+          h('strong', null, `${variable.scope} · ${variable.name}`),
+          h('span', null, t('panel.variables.auditRevision', { revision: variable.revision }))),
+        h('pre', null, JSON.stringify(variable.value, null, 2)))
+    }
+
     function PanelVariables({ useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
       const [rows, setRows] = useState(null)
       const [error, setError] = useState('')
+      const [audit, setAudit] = useState(null)
+      const [auditLoading, setAuditLoading] = useState(false)
+      const [auditError, setAuditError] = useState('')
       const [saved, setSaved] = useState(false)
       const currentSession = useSessions ? useSessions((sessions) => sessions.current) : null
       const binding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
+      const agentBinding = binding && bindingArchitecture(binding) === 'agent-tavern' ? binding : null
       const localChat = binding ? state.chats[chatKey(binding.character, binding.chatId)] : null
       const localVars = localChat?.header?.chat_metadata?.variables
       useEffect(() => {
@@ -3326,6 +3547,21 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (binding && !localChat) void loadChat(binding.character, binding.chatId).catch(() => {})
       }, [binding?.character, binding?.chatId])
+      useEffect(() => {
+        let cancelled = false
+        setAudit(null)
+        setAuditError('')
+        if (!currentSession || !agentBinding) {
+          setAuditLoading(false)
+          return () => { cancelled = true }
+        }
+        setAuditLoading(true)
+        void api(`agent-tavern/audit?sessionId=${encodeURIComponent(currentSession)}`)
+          .then((result) => { if (!cancelled) setAudit(result) })
+          .catch((cause) => { if (!cancelled) setAuditError(cause instanceof Error ? cause.message : String(cause)) })
+          .finally(() => { if (!cancelled) setAuditLoading(false) })
+        return () => { cancelled = true }
+      }, [currentSession, agentBinding?.character, agentBinding?.chatId, agentBinding?.contextMode])
       const updateRow = (index, patch) => setRows(rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row))
       const save = () => {
         const globals = {}
@@ -3372,6 +3608,42 @@ window.__ModuleLoader__.load({
                   h('span', { className: 'dt-kv-value' }, String(value)),
                   h('span'))))
               : h('p', { className: 'dt-muted' }, t('panel.variables.empty'))),
+        h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('panel.variables.agentAudit')),
+          !agentBinding
+            ? h('p', { className: 'dt-muted' }, t('panel.variables.agentAuditEmpty'))
+            : auditLoading
+              ? h('p', { className: 'dt-muted' }, t('panel.variables.auditLoading'))
+              : audit
+                ? h('div', { className: 'dt-audit' },
+                  h('div', { className: 'dt-audit-summary' },
+                    h('span', { className: 'dt-architecture-badge dt-architecture-agent-tavern' }, architectureLabel('agent-tavern')),
+                    h('span', null, audit.contextMode === 'agent-managed' ? t('settings.contextManaged') : t('settings.contextNative')),
+                    audit.projection ? h('span', null, t('panel.variables.projection', {
+                      status: audit.projection.status,
+                      cursor: audit.projection.lastCursor,
+                    })) : null),
+                  audit.projection?.error
+                    ? h('p', { className: 'dt-error' }, t('panel.variables.auditProjectionError', { message: audit.projection.error }))
+                    : null,
+                  h('h4', null, t('panel.variables.memories')),
+                  audit.memories?.length
+                    ? h('div', { className: 'dt-audit-list' }, audit.memories.map((memory) => h(AuditMemoryRow, {
+                      key: `${memory.scope}:${memory.id}`,
+                      memory,
+                      t,
+                    })))
+                    : h('p', { className: 'dt-muted' }, t('panel.variables.empty')),
+                  h('h4', null, t('panel.variables.nativeVariables')),
+                  audit.variables?.length
+                    ? h('div', { className: 'dt-audit-list' }, audit.variables.map((variable) => h(AuditVariableRow, {
+                      key: `${variable.scope}:${variable.name}`,
+                      variable,
+                      t,
+                    })))
+                    : h('p', { className: 'dt-muted' }, t('panel.variables.empty')))
+                : null),
+        auditError ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, auditError)) : null,
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
 
@@ -3428,7 +3700,10 @@ window.__ModuleLoader__.load({
       const sessionPhase = useSessions((value) => value.phase)
       const currentSession = useSessions((value) => value.current)
       const bindingIds = Object.keys(state.bootstrap.state.sessionBindings || {})
-      useNativeTavernTabFilter(Boolean(currentSession && state.bootstrap.state.sessionBindings?.[currentSession]))
+      const currentBinding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
+      // AgentTavern stays hidden from the native session tree, but its native
+      // conversation view must not be forced into the legacy Tavern tab.
+      useNativeTavernTabFilter(Boolean(currentBinding && bindingArchitecture(currentBinding) === 'st'))
       useNativeSessionTreeFilter(bindingIds)
       const host = useSidebarHost()
       useEffect(() => {
@@ -3576,6 +3851,30 @@ window.__ModuleLoader__.load({
         .dt-kv-readonly>span{font-size:13px;line-height:18px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .dt-kv-key{color:var(--dsw-alias-label-secondary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
         .dt-kv-value{color:var(--dsw-alias-label-primary)}
+        .dt-architecture-settings{display:flex;flex-direction:column;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l2)}
+        .dt-segmented{display:inline-flex;align-items:stretch;align-self:flex-start;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;overflow:hidden}
+        .dt-segmented button{min-height:32px;padding:0 12px;border:0;border-right:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-base);cursor:pointer;font:inherit;font-size:12px}
+        .dt-segmented button:last-child{border-right:0}
+        .dt-segmented button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .dt-segmented button:disabled{cursor:not-allowed;opacity:.45}
+        .dt-segmented .dt-segmented-active{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary);font-weight:600}
+        .dt-architecture-badge{display:inline-flex;align-items:center;align-self:flex-start;min-height:18px;padding:0 6px;border-radius:4px;font-size:10px;line-height:18px;font-weight:600;white-space:nowrap}
+        .dt-architecture-agent-tavern{color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent)}
+        .dt-architecture-st{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}
+        .dt-sidebar-chat-open{display:flex;align-items:center;gap:6px}
+        .dt-sidebar-chat-open>span:first-child{min-width:0;flex:1}
+        .dt-chat-architecture{margin-left:auto;flex:none;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:16px;white-space:nowrap}
+        .dt-audit{display:flex;flex-direction:column;gap:8px}
+        .dt-audit-summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+        .dt-audit h4{margin:10px 0 2px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-weight:600}
+        .dt-audit-list{display:flex;flex-direction:column;gap:6px}
+        .dt-audit-row{display:flex;flex-direction:column;gap:5px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-bg-base))}
+        .dt-audit-row-inactive{opacity:.65}
+        .dt-audit-row-head{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px}
+        .dt-audit-row-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+        .dt-audit-row p{margin:0;color:var(--dsw-alias-label-primary);font-size:13px;line-height:19px;white-space:pre-wrap;overflow-wrap:anywhere}
+        .dt-audit-meta{display:flex;gap:8px;flex-wrap:wrap;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:15px}
+        .dt-audit-row pre{margin:0;max-height:120px;overflow:auto;color:var(--dsw-alias-label-primary);font:11px/16px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
         .dt-tc-state{display:inline-flex;align-items:center;padding:0 4px}
         .dt-header-character{padding:0;border:0;border-radius:0}
         @media(max-width:700px){.dt-panel{flex-direction:column}.dt-panel-nav{width:100%;flex-direction:row;align-items:center;overflow-x:auto;overflow-y:hidden;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-panel-brand{padding:4px 8px}.dt-panel-brand-copy{display:none}.dt-panel-navcell{flex:none}.dt-card-grid{grid-template-columns:1fr}.dt-kv-row{grid-template-columns:1fr 1fr 28px}.dt-editor-grid{grid-template-columns:1fr}.dt-editor-wide{grid-column:auto}.dt-editor-toolbar{align-items:flex-start}.dt-preset-row{align-items:flex-start}.dt-preset-name{flex-basis:100%}}

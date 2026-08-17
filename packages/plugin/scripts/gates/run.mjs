@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -53,6 +54,7 @@ const REQUIRED_SERVER_ROUTES = [
   'chats',
   'chat/',
   'branch',
+  'agent-tavern/audit',
   'regex',
   'script',
   'tc/check',
@@ -225,6 +227,9 @@ function checkServerText(text) {
   if (!text.includes('version.json')) {
     problems.push('server bundle must read generated version.json')
   }
+  if (!text.includes('assertStGenerationBinding')) {
+    problems.push('server bundle must guard the ST generation route by architecture')
+  }
   return problems
 }
 
@@ -318,11 +323,56 @@ function checkNativeHeaderAdapterText(text) {
     'function useNativeAgentPresetLabelFilter',
     'dshTavernAgentPresetHiddenState',
     'data-dsh-tavern-agent-preset-hidden',
-    'useNativeAgentPresetLabelFilter(Boolean(active && binding))',
+    'useNativeAgentPresetLabelFilter(Boolean(active && binding && architecture === \'st\'))',
   ]) {
     if (!text.includes(marker)) problems.push(`native Tavern header adapter is missing marker '${marker}'`)
   }
   return problems
+}
+
+function checkClientArchitectureText(text) {
+  const problems = []
+  for (const marker of [
+    'function newChatPolicy(group = false',
+    "if (group) return { architecture: 'st', contextMode: 'dsh-native' }",
+    ": state.defaultArchitecture === 'st' ? 'st' : 'agent-tavern'",
+    "state.defaultContextMode === 'agent-managed'",
+    "useNativeSessionTreeFilter(bindingIds)",
+    "const bindingIds = Object.keys(state.bootstrap.state.sessionBindings || {})",
+    "useNativeTavernTabFilter(Boolean(currentBinding && bindingArchitecture(currentBinding) === 'st'))",
+    "if (policy.architecture === 'st') clickTavernTab(0)",
+    'function reserveTavernSession(ctx, sessionId)',
+    'select: selectTavernComposer',
+    "disabled: bootstrap.agentTavern?.managed?.available !== true",
+  ]) {
+    if (!text.includes(marker)) problems.push(`client architecture split is missing marker '${marker}'`)
+  }
+  return problems
+}
+
+function checkAgentTavernIsolation(sourceFiles, serverText) {
+  const problems = []
+  for (const [name, text] of sourceFiles) {
+    for (const [label, pattern] of [
+      ['llm.stream', /\bllm\.stream\b/],
+      ['runGeneration', /\brunGeneration\b/],
+      ['ST prompt pipeline', /\bassemble(?:Prompt|TextCompletion)\b|\bpipelineMode\b/],
+    ]) {
+      if (pattern.test(text)) problems.push(`AgentTavern module '${name}' references ${label}`)
+    }
+  }
+  for (const marker of ['agent-tavern/audit', 'assertStGenerationBinding(state, body.sessionId)']) {
+    if (!serverText.includes(marker)) problems.push(`server architecture isolation is missing marker '${marker}'`)
+  }
+  return problems
+}
+
+function agentTavernSourceFiles() {
+  const root = join(PLUGIN_ROOT, 'src', 'agent-tavern')
+  if (!existsSync(root)) return []
+  return readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /\.(?:ts|tsx|js|mjs)$/.test(entry.name))
+    .map((entry) => [entry.name, readFileSync(join(root, entry.name), 'utf8')])
 }
 
 function callableStub(label = 'stub') {
@@ -574,6 +624,21 @@ async function checkClientExecution(code) {
   if (/generateFor|dt-transcript|MessageRow/.test(settingsSource)) {
     problems.push('settings.section must not own the Tavern transcript or generation workflow')
   }
+  const composer = registrations.find((candidate) => (candidate?.options ?? candidate?.opts)?.name === 'conversation.composer')
+  const selectComposer = (composer?.options ?? composer?.opts)?.select
+  if (typeof selectComposer !== 'function') {
+    problems.push('conversation.composer must expose a select function')
+  } else {
+    const stMarker = {
+      key: 'marker',
+      kind: 'context',
+      data: { source: { kind: 'plugin', plugin: 'dsh-tavern', tavernState: 'open' } },
+    }
+    const stSelected = selectComposer({ session: { chat: { order: ['marker'], nodes: new Map([['marker', stMarker]]) } } })
+    const agentSelected = selectComposer({ session: { chat: { order: [], nodes: new Map() } } })
+    if (stSelected === null || stSelected === undefined) problems.push('legacy ST session must select the Tavern composer')
+    if (agentSelected !== null) problems.push('AgentTavern/native session must keep the native composer')
+  }
   return problems
 }
 
@@ -765,7 +830,7 @@ const gates = [
       const routeMarkers = REQUIRED_SERVER_ROUTES.map((route) => `"${route}"`).join('\n')
       const versionReader = 'readFileSync("version.json", "utf8"); var BUILD_INFO = { version: "0.0.0", commit: "stub" };'
       const commitResolver = 'function resolveCommit() { execFileSync("git", ["rev-parse", "--show-toplevel"]); return "stub"; } var TAVERN_COMMIT = resolveCommit();'
-      const good = `var name = "dsh-tavern"; var inject = []; function apply() {}\n${routeMarkers}\n"${API_PREFIX}"\n${versionReader}\n${commitResolver}\nvar bootstrap = { ok: true, version: BUILD_INFO.version, commit: TAVERN_COMMIT };\nexport { name, inject, apply };`
+      const good = `var name = "dsh-tavern"; var inject = []; function apply() {} function assertStGenerationBinding() {}\n${routeMarkers}\n"${API_PREFIX}"\n${versionReader}\n${commitResolver}\nvar bootstrap = { ok: true, version: BUILD_INFO.version, commit: TAVERN_COMMIT };\nexport { name, inject, apply };`
       const badRoute = good.replace('"generate"', '"missing"')
       const badStamp = good.replace('version: BUILD_INFO.version, ', '')
       const hardcodedCommit = good.replace('commit: TAVERN_COMMIT', 'commit: "stub"')
@@ -836,9 +901,9 @@ const gates = [
         'function useNativeAgentPresetLabelFilter() {}',
         'dshTavernAgentPresetHiddenState',
         'data-dsh-tavern-agent-preset-hidden',
-        'useNativeAgentPresetLabelFilter(Boolean(active && binding))',
+        "useNativeAgentPresetLabelFilter(Boolean(active && binding && architecture === 'st'))",
       ].join('\n')
-      const bad = good.replace('Boolean(active && binding)', 'true')
+      const bad = good.replace("Boolean(active && binding && architecture === 'st')", 'true')
       return checkNativeHeaderAdapterText(good).length === 0
         && checkNativeHeaderAdapterText(bad).length > 0
         ? []
@@ -849,10 +914,57 @@ const gates = [
       : ['generated packages/plugin/client/index.js does not exist'],
   },
   {
+    name: 'client-architecture-split',
+    selfTest: () => {
+      const good = [
+        'function newChatPolicy(group = false',
+        "if (group) return { architecture: 'st', contextMode: 'dsh-native' }",
+        ": state.defaultArchitecture === 'st' ? 'st' : 'agent-tavern'",
+        "state.defaultContextMode === 'agent-managed'",
+        'useNativeSessionTreeFilter(bindingIds)',
+        "const bindingIds = Object.keys(state.bootstrap.state.sessionBindings || {})",
+        "useNativeTavernTabFilter(Boolean(currentBinding && bindingArchitecture(currentBinding) === 'st'))",
+        "if (policy.architecture === 'st') clickTavernTab(0)",
+        'function reserveTavernSession(ctx, sessionId)',
+        'select: selectTavernComposer',
+        "disabled: bootstrap.agentTavern?.managed?.available !== true",
+      ].join('\n')
+      const badTree = good.replace('useNativeSessionTreeFilter(bindingIds)', 'useNativeSessionTreeFilter([])')
+      const badTab = good.replace("bindingArchitecture(currentBinding) === 'st'", 'true')
+      return checkClientArchitectureText(good).length === 0
+        && checkClientArchitectureText(badTree).length > 0
+        && checkClientArchitectureText(badTab).length > 0
+        ? []
+        : ['client architecture split self-test did not protect the native tree and tab routing']
+    },
+    check: () => existsSync(CLIENT_PATH)
+      ? checkClientArchitectureText(readFileSync(CLIENT_PATH, 'utf8'))
+      : ['generated packages/plugin/client/index.js does not exist'],
+  },
+  {
+    name: 'agent-tavern-isolation',
+    selfTest: () => {
+      const good = checkAgentTavernIsolation([
+        ['runtime.ts', 'export function runAgentLoop() {}'],
+        ['tools.ts', 'export function tool() {}'],
+      ], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)')
+      const bad = checkAgentTavernIsolation([
+        ['runtime.ts', 'ctx.llm.stream()'],
+      ], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)')
+      return good.length === 0 && bad.length > 0
+        ? []
+        : ['AgentTavern isolation self-test did not reject ST generation calls']
+    },
+    check: () => {
+      if (!existsSync(SERVER_PATH)) return ['generated packages/plugin/index.mjs does not exist']
+      return checkAgentTavernIsolation(agentTavernSourceFiles(), readFileSync(SERVER_PATH, 'utf8'))
+    },
+  },
+  {
     name: 'client-vm-mount',
     selfTest: async () => {
       const localeWiring = "ctx.effect(() => ctx.locale.register('dsh-tavern', { zh: { 'nav.title': '酒馆' }, en: { 'nav.title': 'Tavern' } })); ctx.locale.bind('dsh-tavern');"
-      const good = `window.__ModuleLoader__.load({ id: 'dsh-tavern', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); exports.name = 'dsh-tavern'; exports.inject = ['slots', 'locale']; exports.apply = (ctx) => { ${localeWiring} const entries = [['settings.section','dsh-tavern'],['conversation.view','tavern'],['conversation.composer',null],['conversation.session.header.actions','dsh-tavern'],['shell.overlay','dsh-tavern-panel'],['sidebar.footer.action','dsh-tavern-panel']]; for (const [name,id] of entries) ctx.slots.inject(name, () => ctx.slots.register({ name, ...(id ? { id } : {}), ...(name === 'conversation.composer' ? { select: () => null } : {}) }, () => null)); }; return module.exports; } });`
+      const good = `window.__ModuleLoader__.load({ id: 'dsh-tavern', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); exports.name = 'dsh-tavern'; exports.inject = ['slots', 'locale']; exports.apply = (ctx) => { ${localeWiring} const entries = [['settings.section','dsh-tavern'],['conversation.view','tavern'],['conversation.composer',null],['conversation.session.header.actions','dsh-tavern'],['shell.overlay','dsh-tavern-panel'],['sidebar.footer.action','dsh-tavern-panel']]; for (const [name,id] of entries) ctx.slots.inject(name, () => ctx.slots.register({ name, ...(id ? { id } : {}), ...(name === 'conversation.composer' ? { select: (owner) => owner?.session?.chat?.order?.length ? {} : null } : {}) }, () => null)); }; return module.exports; } });`
       const badSlot = good.replace("['conversation.view','tavern'],", '')
       const badLocale = good.replace("exports.inject = ['slots', 'locale']", "exports.inject = ['slots']")
       const badParity = good.replace("en: { 'nav.title': 'Tavern' }", "en: {}")

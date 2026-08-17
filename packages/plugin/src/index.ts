@@ -17,7 +17,13 @@ import { activateWorldInfo } from '../../tavern-lore/src/index.js'
 import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { assemblePrompt, assembleTextCompletion, buildGroupTurn, pickGroupMember } from '../../tavern-pipeline/src/index.js'
 import { applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
-import { ChatRevisionConflictError, TavernStore, type TavernModelSelection } from '../../tavern-store/src/index.js'
+import {
+  ChatRevisionConflictError,
+  MemoryStore,
+  TavernStore,
+  VariableStore,
+  type TavernModelSelection,
+} from '../../tavern-store/src/index.js'
 import {
   AGENT_TAVERN_PRESET_ID,
   bootstrapAgentTavernCapabilities,
@@ -35,6 +41,8 @@ const DEFAULT_USER = 'User'
 const BUILD_INFO = readBuildInfo()
 const TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit)
 let storePromise
+let memoryStorePromise: Promise<MemoryStore> | undefined
+let variableStorePromise: Promise<VariableStore> | undefined
 let activeAgentPrompt = ''
 let agentTavernCapabilities: AgentTavernCapabilities = inspectAgentTavernCapabilities({})
 let agentTavernCapabilitiesPromise: Promise<AgentTavernCapabilities> | undefined
@@ -50,6 +58,14 @@ class TavernArchitectureConflictError extends Error {
 
 function store() {
   return (storePromise ??= TavernStore.open(dshHomePath('tavern')))
+}
+
+function memories() {
+  return (memoryStorePromise ??= MemoryStore.open(dshHomePath('tavern')))
+}
+
+function variables() {
+  return (variableStorePromise ??= VariableStore.open(dshHomePath('tavern')))
 }
 
 export function apply(ctx) {
@@ -240,6 +256,36 @@ async function handleApi(ctx, req, res) {
     return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) })
   }
 
+  if (method === 'GET' && route === 'agent-tavern/audit') {
+    const sessionId = url.searchParams.get('sessionId')
+    if (!sessionId) throw new Error('sessionId query is required')
+    const state = await db.getState()
+    const binding = state.sessionBindings[sessionId]
+    if (!binding || binding.architecture !== 'agent-tavern' || binding.group === true) {
+      throw new TavernArchitectureConflictError('AgentTavern audit requires a native single-character binding.')
+    }
+    const scopes = [
+      { scope: 'chat' as const, scopeId: binding.chatId },
+      { scope: 'character' as const, scopeId: binding.character },
+      { scope: 'agent' as const, scopeId: sessionId },
+    ]
+    const [memoryGroups, variableGroups, projector] = await Promise.all([
+      Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store) => store.search({
+        scope, scopeId, includeDeleted: true, limit: 50,
+      })))),
+      Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store) => store.list(scope, scopeId, '', 100)))),
+      agentTavernProjectorPromise,
+    ])
+    return sendJson(res, 200, {
+      ok: true,
+      architecture: binding.architecture,
+      contextMode: binding.contextMode,
+      projection: projector ? await projector.status(sessionId) : null,
+      memories: memoryGroups.flat().map((hit) => hit.record),
+      variables: variableGroups.flat(),
+    })
+  }
+
   if (method === 'PUT' && route.startsWith('character/')) {
     const oldName = decodeURIComponent(route.slice('character/'.length))
     const body = await readJson(req, 25 * 1024 * 1024)
@@ -347,12 +393,27 @@ async function handleApi(ctx, req, res) {
 
   if (method === 'POST' && route === 'state') {
     const body = await readJson(req)
+    if (body.defaultContextMode === 'agent-managed') {
+      await assertAgentTavernAvailable('agent-tavern', 'agent-managed')
+    } else if (body.defaultArchitecture === 'agent-tavern') {
+      const current = await db.getState()
+      await assertAgentTavernAvailable(
+        'agent-tavern',
+        body.defaultContextMode === 'dsh-native' ? 'dsh-native' : current.defaultContextMode,
+      )
+    }
     const patch = {
       ...(typeof body.activeCharacter === 'string' || body.activeCharacter === null ? { activeCharacter: body.activeCharacter || undefined } : {}),
       ...(Array.isArray(body.activeWorlds) ? { activeWorlds: body.activeWorlds.filter((x) => typeof x === 'string') } : {}),
       ...(typeof body.activePreset === 'string' || body.activePreset === null ? { activePreset: body.activePreset || undefined } : {}),
       ...(typeof body.activePersona === 'string' || body.activePersona === null ? { activePersona: body.activePersona || undefined } : {}),
       ...(typeof body.nativeAgentPersona === 'boolean' ? { nativeAgentPersona: body.nativeAgentPersona } : {}),
+      ...(body.defaultArchitecture === 'agent-tavern' || body.defaultArchitecture === 'st'
+        ? { defaultArchitecture: body.defaultArchitecture }
+        : {}),
+      ...(body.defaultContextMode === 'dsh-native' || body.defaultContextMode === 'agent-managed'
+        ? { defaultContextMode: body.defaultContextMode }
+        : {}),
       ...(body.pipelineMode === 'chat' || body.pipelineMode === 'text' ? { pipelineMode: body.pipelineMode } : {}),
       ...(isTextCompletionConfig(body.textCompletion) ? { textCompletion: normalizeTextCompletion(body.textCompletion) } : {}),
       ...(body.textCompletion === null ? { textCompletion: undefined } : {}),
@@ -646,7 +707,15 @@ async function handleApi(ctx, req, res) {
       throw new Error('expected { character, chatId, messageId, revision }')
     }
     if (typeof body.revision !== 'string') throw new Error('revision is required')
-    const result = await db.branchChat(body.character, body.chatId, body.messageId, body.revision, body.name)
+    const originArchitecture = body.originArchitecture === 'agent-tavern' ? 'agent-tavern' : 'st'
+    const targetArchitecture = body.targetArchitecture === 'agent-tavern' ? 'agent-tavern' : 'st'
+    const result = await db.branchChat(body.character, body.chatId, body.messageId, body.revision, body.name, {
+      agentTavernOrigin: {
+        architecture: originArchitecture,
+        targetArchitecture,
+        ...(typeof body.sessionId === 'string' ? { sessionId: body.sessionId } : {}),
+      },
+    })
     const snapshot = await db.getChatSnapshot(body.character, result.chatId)
     return sendJson(res, 200, { ok: true, id: result.chatId, chat: snapshot?.chat ?? result.chat, revision: snapshot?.revision })
   }

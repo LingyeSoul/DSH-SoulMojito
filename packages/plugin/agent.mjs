@@ -2017,7 +2017,7 @@ var TavernStore = class _TavernStore {
    * 从 messageId（含）截断复制为新聊天；chat_metadata.bookmark_link 记录回链。
    * 分支命名 `${stem} - branch N.jsonl`（N 递增至不冲突，字符集安全）。
    */
-  async branchChat(characterName, chatId, messageId, expectedRevision, name2) {
+  async branchChat(characterName, chatId, messageId, expectedRevision, name2, metadata) {
     return this.mutateChat(async () => {
       const dir = path.join(this.root, "chats", safeFileName(characterName));
       const source = path.join(dir, safeChatFileName(chatId));
@@ -2032,7 +2032,8 @@ var TavernStore = class _TavernStore {
       const header = structuredClone(log.header);
       header.chat_metadata = {
         ...header.chat_metadata ?? {},
-        bookmark_link: { character: characterName, chatId, messageId }
+        bookmark_link: { character: characterName, chatId, messageId },
+        ...metadata ?? {}
       };
       const stem = (name2 !== void 0 && name2.trim() !== "" ? name2.trim() : chatId.replace(/\.jsonl$/i, "")).replace(/\.jsonl$/i, "");
       const safeStem = stem.replace(/[^A-Za-z0-9@ _.-]/g, "_").slice(0, 80) || "chat";

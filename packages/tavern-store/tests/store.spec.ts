@@ -310,11 +310,20 @@ describe('TavernStore', () => {
       { name: 'Test Char', is_user: false, is_system: false, send_date: 'c', mes: 'three' },
     ])
     const first = await store.getChatSnapshot('Test Char', id)
-    const branch = await store.branchChat('Test Char', id, 1, first?.revision)
+    const branch = await store.branchChat('Test Char', id, 1, first?.revision, undefined, {
+      agentTavernOrigin: {
+        architecture: 'st',
+        targetArchitecture: 'agent-tavern',
+        sessionId: 'session-source',
+      },
+    })
     expect(branch.chatId).toBe(id.replace(/\.jsonl$/, '') + ' - branch 1.jsonl')
     expect(branch.chat.messages).toHaveLength(2)
     expect(branch.chat.messages[1]?.mes).toBe('two')
     expect(branch.chat.header.chat_metadata['bookmark_link']).toEqual({ character: 'Test Char', chatId: id, messageId: 1 })
+    expect(branch.chat.header.chat_metadata['agentTavernOrigin']).toEqual({
+      architecture: 'st', targetArchitecture: 'agent-tavern', sessionId: 'session-source',
+    })
     // 第二个分支递增编号
     const second = await store.branchChat('Test Char', id, 0, first?.revision)
     expect(second.chatId).toContain('branch 2')
