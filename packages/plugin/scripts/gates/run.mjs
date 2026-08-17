@@ -337,7 +337,7 @@ function checkClientArchitectureText(text) {
     "if (group) return { architecture: 'st', contextMode: 'dsh-native' }",
     ": state.defaultArchitecture === 'st' ? 'st' : 'agent-tavern'",
     "state.defaultContextMode === 'agent-managed'",
-    "useNativeSessionTreeFilter(bindingIds)",
+    "useNativeSessionTreeFilter(bindingIds, PanelHost.context",
     "const bindingIds = Object.keys(state.bootstrap.state.sessionBindings || {})",
     "useNativeTavernTabFilter(Boolean(currentBinding && bindingArchitecture(currentBinding) === 'st'))",
     "if (policy.architecture === 'st') clickTavernTab(0)",
@@ -346,6 +346,29 @@ function checkClientArchitectureText(text) {
     "disabled: bootstrap.agentTavern?.managed?.available !== true",
   ]) {
     if (!text.includes(marker)) problems.push(`client architecture split is missing marker '${marker}'`)
+  }
+  return problems
+}
+
+function checkInternalWorkspaceText(serverText, clientText) {
+  const problems = []
+  for (const marker of ['internalWorkspace', 'TAVERN_WORKSPACE_TITLE', 'dshHomePath("tavern", "workspace")']) {
+    if (!serverText.includes(marker)) problems.push(`server internal workspace is missing marker '${marker}'`)
+  }
+  for (const marker of [
+    'function ensureTavernWorkspace(ctx)',
+    'ctx.workspaces.create({ path: config.path })',
+    'ctx.workspaces.connectWorkspace(workspace.workspaceId)',
+    'function internalWorkspaceSnapshot(ctx)',
+    'normalizeWorkspacePath(item?.path) === expectedPath',
+    'function nativeTreeNodeMatchesWorkspace(node, workspace, titleFallback)',
+    "items.filter((item) => item?.title === workspace.title).length === 1",
+    "markNativeTreeRow(nativeTreeWorkspaceGroup(header, tree), 'internal-workspace')",
+  ]) {
+    if (!clientText.includes(marker)) problems.push(`client internal workspace is missing marker '${marker}'`)
+  }
+  if (clientText.includes('function currentWorkspace(ctx)')) {
+    problems.push('client must not route Tavern sessions through the current native workspace')
   }
   return problems
 }
@@ -921,7 +944,7 @@ const gates = [
         "if (group) return { architecture: 'st', contextMode: 'dsh-native' }",
         ": state.defaultArchitecture === 'st' ? 'st' : 'agent-tavern'",
         "state.defaultContextMode === 'agent-managed'",
-        'useNativeSessionTreeFilter(bindingIds)',
+        'useNativeSessionTreeFilter(bindingIds, PanelHost.context',
         "const bindingIds = Object.keys(state.bootstrap.state.sessionBindings || {})",
         "useNativeTavernTabFilter(Boolean(currentBinding && bindingArchitecture(currentBinding) === 'st'))",
         "if (policy.architecture === 'st') clickTavernTab(0)",
@@ -929,7 +952,7 @@ const gates = [
         'select: selectTavernComposer',
         "disabled: bootstrap.agentTavern?.managed?.available !== true",
       ].join('\n')
-      const badTree = good.replace('useNativeSessionTreeFilter(bindingIds)', 'useNativeSessionTreeFilter([])')
+      const badTree = good.replace('useNativeSessionTreeFilter(bindingIds, PanelHost.context', 'useNativeSessionTreeFilter([], PanelHost.context')
       const badTab = good.replace("bindingArchitecture(currentBinding) === 'st'", 'true')
       return checkClientArchitectureText(good).length === 0
         && checkClientArchitectureText(badTree).length > 0
@@ -940,6 +963,38 @@ const gates = [
     check: () => existsSync(CLIENT_PATH)
       ? checkClientArchitectureText(readFileSync(CLIENT_PATH, 'utf8'))
       : ['generated packages/plugin/client/index.js does not exist'],
+  },
+  {
+    name: 'internal-workspace',
+    selfTest: () => {
+      const server = 'internalWorkspace TAVERN_WORKSPACE_TITLE dshHomePath("tavern", "workspace")'
+      const client = [
+        'function ensureTavernWorkspace(ctx)',
+        'ctx.workspaces.create({ path: config.path })',
+        'ctx.workspaces.connectWorkspace(workspace.workspaceId)',
+        'function internalWorkspaceSnapshot(ctx)',
+        'normalizeWorkspacePath(item?.path) === expectedPath',
+        'function nativeTreeNodeMatchesWorkspace(node, workspace, titleFallback)',
+        "items.filter((item) => item?.title === workspace.title).length === 1",
+        "markNativeTreeRow(nativeTreeWorkspaceGroup(header, tree), 'internal-workspace')",
+      ].join('\n')
+      const bad = `${client}\nfunction currentWorkspace(ctx) {}`
+      const titleOnly = [
+        'function ensureTavernWorkspace(ctx)',
+        'ctx.workspaces.create({ path: config.path })',
+        'ctx.workspaces.connectWorkspace(workspace.workspaceId)',
+        "if (node.textContent === 'Tavern (internal)') node.hidden = true",
+      ].join('\n')
+      return checkInternalWorkspaceText(server, client).length === 0
+        && checkInternalWorkspaceText(server, bad).length > 0
+        && checkInternalWorkspaceText(server, titleOnly).length > 0
+        && checkInternalWorkspaceText('', client).length > 0
+        ? []
+        : ['internal workspace self-test did not reject native-workspace routing']
+    },
+    check: () => existsSync(SERVER_PATH) && existsSync(CLIENT_PATH)
+      ? checkInternalWorkspaceText(readFileSync(SERVER_PATH, 'utf8'), readFileSync(CLIENT_PATH, 'utf8'))
+      : ['internal workspace gate requires both server and client bundles'],
   },
   {
     name: 'agent-tavern-isolation',

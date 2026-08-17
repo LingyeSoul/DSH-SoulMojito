@@ -2691,7 +2691,7 @@ function createTools() {
         description: limitText(data.description, 2e3),
         personality: limitText(data.personality, 1e3),
         scenario: limitText(data.scenario, 1e3),
-        source: { kind: "character-card", id: binding.character, version: found.card.spec_version },
+        source: { kind: "character-card", id: binding.character, version: found.card.specVersion },
         truncated: data.description.length > 2e3 || data.personality.length > 1e3 || data.scenario.length > 1e3
       };
     }),

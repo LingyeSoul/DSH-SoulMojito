@@ -240,6 +240,16 @@ describe('internal Tavern session bridge occupation', () => {
     })
   })
 
+  it('publishes a dedicated path-backed DSH workspace for every Tavern architecture', async () => {
+    const res = makeResponse()
+    await apiHandler(makeGetRequest('/api/dsh-tavern/bootstrap'), res)
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.chunks.join('')).internalWorkspace).toEqual({
+      path: join(home, 'tavern', 'workspace'),
+      title: 'Tavern (internal)',
+    })
+  })
+
   it('fails closed when AgentTavern managed context is unavailable', async () => {
     const agent = makeAgent('session-agent-managed')
     await expect(handler({

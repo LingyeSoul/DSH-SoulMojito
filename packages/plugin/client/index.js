@@ -680,6 +680,7 @@ window.__ModuleLoader__.load({
       groups: [],
       activeCard: null,
       model: { provider: '', model: '' },
+      internalWorkspace: null,
       agentTavern: {
         native: { available: false, missing: [], reasons: [] },
         managed: { available: false, missing: [], reasons: [] },
@@ -707,6 +708,8 @@ window.__ModuleLoader__.load({
     const controllers = new Map()
     // 存量 blank 绑定会话的修复去重（成功修复的 sessionId；失败会移除以待重试）
     const repairedBindings = new Set()
+    let internalWorkspace
+    let internalWorkspacePromise
 
     function update(patch) {
       snapshot = { ...snapshot, ...patch }
@@ -973,13 +976,28 @@ window.__ModuleLoader__.load({
       return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
     }
 
-    function currentWorkspace(ctx) {
-      const sessions = ctx.sessions.list.getSnapshot()
-      const workspaces = ctx.workspaces.list.getSnapshot()
-      const current = sessions.current
-      return workspaces.items.find((item) => current && item.sessionIds.includes(current))
-        || workspaces.items.find((item) => item.workspaceId === workspaces.recentWorkspaceId)
-        || workspaces.items[0]
+    async function ensureTavernWorkspace(ctx) {
+      const config = snapshot.bootstrap.internalWorkspace
+      if (!config?.path) throw new Error(translate('error.noWorkspace'))
+      if (internalWorkspace?.path === config.path) return internalWorkspace
+      if (internalWorkspacePromise) return internalWorkspacePromise
+      if (typeof ctx?.workspaces?.create !== 'function') throw new Error(translate('error.noWorkspace'))
+      internalWorkspacePromise = (async () => {
+        const created = await ctx.workspaces.create({ path: config.path })
+        let workspace = created?.workspace || created
+        if (!workspace?.workspaceId) throw new Error(translate('error.noWorkspace'))
+        if (config.title && workspace.title !== config.title && typeof ctx.workspaces.rename === 'function') {
+          try {
+            workspace = await ctx.workspaces.rename(workspace.workspaceId, config.title)
+          } catch {
+            // A user-owned workspace may already use the display title; the
+            // canonical path remains the identity and is safe to reuse.
+          }
+        }
+        internalWorkspace = workspace
+        return workspace
+      })().finally(() => { internalWorkspacePromise = undefined })
+      return internalWorkspacePromise
     }
 
     function bindingArchitecture(binding) {
@@ -1086,9 +1104,8 @@ window.__ModuleLoader__.load({
       }
 
       const policy = newChatPolicy(group, policyOverride)
+      const workspace = await ensureTavernWorkspace(ctx)
 
-      const workspace = currentWorkspace(ctx)
-      if (!workspace) throw new Error(translate('error.noWorkspace'))
       update({ navigationStatus: translate('nav.opening', { name: character }) })
       const sessionId = await ctx.workspaces.connectWorkspace(workspace.workspaceId)
       const binding = ctx.sessions.binding(sessionId)
@@ -2709,6 +2726,64 @@ window.__ModuleLoader__.load({
       return node === tree ? null : node
     }
 
+    function normalizeWorkspacePath(value) {
+      if (typeof value !== 'string') return ''
+      let path = value.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+      if (/^[a-z]:\//i.test(path)) path = path.toLowerCase()
+      return path
+    }
+
+    function internalWorkspaceSnapshot(ctx) {
+      const config = snapshot.bootstrap.internalWorkspace
+      const items = ctx?.workspaces?.list?.getSnapshot?.().items || []
+      const expectedPath = normalizeWorkspacePath(config?.path)
+      if (!expectedPath) return null
+      const workspace = items.find((item) => normalizeWorkspacePath(item?.path) === expectedPath)
+      if (!workspace?.workspaceId) return null
+      const titleFallback = typeof workspace.title === 'string'
+        && items.filter((item) => item?.title === workspace.title).length === 1
+        ? workspace.title
+        : ''
+      return { workspace, titleFallback }
+    }
+
+    function nativeWorkspaceReference(value, workspace) {
+      if (value === null || value === undefined) return false
+      let text = String(value)
+      try { text = decodeURIComponent(text) } catch {}
+      if (text === workspace.workspaceId) return true
+      if (normalizeWorkspacePath(text) === normalizeWorkspacePath(workspace.path)) return true
+      return text.split(/[\\/?#=:]+/).filter(Boolean).some((part) => part === workspace.workspaceId)
+    }
+
+    function nativeTreeNodeMatchesWorkspace(node, workspace, titleFallback) {
+      const values = []
+      const collect = (element) => {
+        if (!element?.getAttributeNames) return
+        for (const name of element.getAttributeNames()) {
+          if (name === 'id' || name === 'href' || name === 'data-key' || name === 'data-id'
+            || name === 'data-item-id' || name === 'data-value' || name === 'data-path'
+            || name === 'data-workspace' || name === 'data-workspace-id'
+            || name.includes('workspace')) {
+            values.push(element.getAttribute(name))
+          }
+        }
+      }
+      collect(node)
+      for (const child of node.querySelectorAll?.('*') || []) collect(child)
+      if (values.some((value) => nativeWorkspaceReference(value, workspace))) return true
+      // rc.6 does not expose workspace identity in the DOM. A title fallback is
+      // safe only when that title belongs to exactly one registered workspace.
+      const text = node.textContent?.replace(/\s+/g, ' ').trim()
+      return Boolean(titleFallback && text === titleFallback)
+    }
+
+    function nativeTreeWorkspaceGroup(row, tree) {
+      let current = row
+      while (current?.parentElement && current.parentElement !== tree) current = current.parentElement
+      return current?.parentElement === tree ? current : row
+    }
+
     function nativeTreeNodeMatches(node, sessionIds, labels) {
       const values = []
       const collect = (element) => {
@@ -2737,9 +2812,10 @@ window.__ModuleLoader__.load({
       return Boolean(text && [...labels].some((label) => text === label || text.startsWith(`${label} `)))
     }
 
-    function markNativeTreeRow(row) {
+    function markNativeTreeRow(row, kind = 'session') {
       if (!row || row.dataset?.dshTavernNativeHidden !== undefined) return
       row.dataset.dshTavernNativeHidden = ''
+      row.dataset.dshTavernNativeHiddenKind = kind
       row.dataset.dshTavernNativeHiddenAria = row.getAttribute?.('aria-hidden') ?? ''
       row.dataset.dshTavernNativeHiddenState = row.hidden ? 'hidden' : 'visible'
       row.setAttribute?.('aria-hidden', 'true')
@@ -2754,15 +2830,24 @@ window.__ModuleLoader__.load({
         else row.removeAttribute?.('aria-hidden')
         row.hidden = state === 'hidden'
         delete row.dataset.dshTavernNativeHidden
+        delete row.dataset.dshTavernNativeHiddenKind
         delete row.dataset.dshTavernNativeHiddenAria
         delete row.dataset.dshTavernNativeHiddenState
       }
     }
 
-    function filterNativeSessionTree(tree, bindings) {
+    function filterNativeSessionTree(tree, bindings, ctx) {
       if (!tree) return
       const sessionIds = new Set(Object.keys(bindings || {}))
       unmarkNativeTreeRows(tree)
+      const internal = internalWorkspaceSnapshot(ctx)
+      if (internal) {
+        const headers = [...tree.querySelectorAll?.('[role="treeitem"][aria-expanded]') || []]
+        for (const header of headers) {
+          if (!nativeTreeNodeMatchesWorkspace(header, internal.workspace, internal.titleFallback)) continue
+          markNativeTreeRow(nativeTreeWorkspaceGroup(header, tree), 'internal-workspace')
+        }
+      }
       if (sessionIds.size === 0) return
       const labels = new Set(Object.entries(bindings)
         .filter(([, binding]) => typeof binding?.character === 'string' && typeof binding?.chatId === 'string')
@@ -2779,14 +2864,14 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function useNativeSessionTreeFilter(bindingIds) {
+    function useNativeSessionTreeFilter(bindingIds, ctx, internalWorkspacePath) {
       const bindingKey = bindingIds.join('\u0000')
       useEffect(() => {
         let frame = 0
         let observer
         const apply = () => {
           frame = 0
-          filterNativeSessionTree(visibleSidebarTree(), snapshot.bootstrap.state.sessionBindings)
+          filterNativeSessionTree(visibleSidebarTree(), snapshot.bootstrap.state.sessionBindings, ctx)
         }
         const schedule = () => {
           if (!frame) frame = requestAnimationFrame(apply)
@@ -2798,7 +2883,7 @@ window.__ModuleLoader__.load({
             childList: true,
             subtree: true,
             attributes: true,
-            attributeFilter: ['id', 'href', 'title', 'aria-label', 'aria-controls', 'data-key', 'data-id', 'data-item-id', 'data-value', 'data-session', 'data-session-id'],
+            attributeFilter: ['id', 'href', 'title', 'aria-label', 'aria-controls', 'data-key', 'data-id', 'data-item-id', 'data-value', 'data-path', 'data-workspace', 'data-workspace-id', 'data-session', 'data-session-id'],
           })
         }
         window.addEventListener('resize', schedule)
@@ -2809,7 +2894,7 @@ window.__ModuleLoader__.load({
           const tree = visibleSidebarTree()
           if (tree) unmarkNativeTreeRows(tree)
         }
-      }, [bindingKey])
+      }, [bindingKey, ctx, internalWorkspacePath])
     }
 
     function useSidebarHost() {
@@ -3704,7 +3789,7 @@ window.__ModuleLoader__.load({
       // AgentTavern stays hidden from the native session tree, but its native
       // conversation view must not be forced into the legacy Tavern tab.
       useNativeTavernTabFilter(Boolean(currentBinding && bindingArchitecture(currentBinding) === 'st'))
-      useNativeSessionTreeFilter(bindingIds)
+      useNativeSessionTreeFilter(bindingIds, PanelHost.context, state.bootstrap.internalWorkspace?.path || '')
       const host = useSidebarHost()
       useEffect(() => {
         if (sessionPhase !== 'ready') return

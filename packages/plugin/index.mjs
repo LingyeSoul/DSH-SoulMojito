@@ -5226,6 +5226,7 @@ var name = "dsh-tavern";
 var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents", "agentPresets", "tools"];
 var API = "/api/dsh-tavern";
 var DEFAULT_USER = "User";
+var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
 var BUILD_INFO = readBuildInfo();
 var TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit);
 var storePromise;
@@ -5366,6 +5367,7 @@ async function handleApi(ctx, req, res) {
   const db = await store();
   if (method === "GET" && route === "bootstrap") {
     await agentTavernCapabilitiesPromise;
+    const internalWorkspace = await prepareInternalWorkspace();
     const state = await db.getState();
     const active = state.activeCharacter ? await db.getCharacter(state.activeCharacter) : void 0;
     const groups = [];
@@ -5396,6 +5398,7 @@ async function handleApi(ctx, req, res) {
       model: ctx.agentDefaultModel.currentSelection(),
       version: BUILD_INFO.version,
       commit: TAVERN_COMMIT,
+      internalWorkspace,
       agentTavern: agentTavernCapabilities
     });
   }
@@ -5556,6 +5559,15 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "state") {
     const body = await readJson(req);
+    if (body.defaultContextMode === "agent-managed") {
+      await assertAgentTavernAvailable("agent-tavern", "agent-managed");
+    } else if (body.defaultArchitecture === "agent-tavern") {
+      const current = await db.getState();
+      await assertAgentTavernAvailable(
+        "agent-tavern",
+        body.defaultContextMode === "dsh-native" ? "dsh-native" : current.defaultContextMode
+      );
+    }
     const patch = {
       ...typeof body.activeCharacter === "string" || body.activeCharacter === null ? { activeCharacter: body.activeCharacter || void 0 } : {},
       ...Array.isArray(body.activeWorlds) ? { activeWorlds: body.activeWorlds.filter((x) => typeof x === "string") } : {},
@@ -6958,6 +6970,11 @@ function parseTavernSessionCommand(rawInput) {
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
   return join5(resolve(configured || join5(homedir(), ".dsh")), ...segments);
+}
+async function prepareInternalWorkspace() {
+  const path4 = dshHomePath("tavern", "workspace");
+  await mkdir(path4, { recursive: true });
+  return { path: path4, title: TAVERN_WORKSPACE_TITLE };
 }
 function readBuildInfo() {
   let version = "unknown";

@@ -30,6 +30,8 @@ CSP 允许内联 CSS/JavaScript，以及 `cdn.jsdelivr.net`、`testingcf.jsdeliv
 
 聊天文件保存在 `$DSH_HOME/tavern/chats/`，并使用 revision compare-and-swap 防止跨标签页静默覆盖。删除角色会连同其聊天记录一并移除（对齐 ST 语义），并自动收敛群组成员与失效会话绑定。
 
+ST 与 AgentTavern 共用 DSH 中的 `Tavern (internal)` 专用工作区。插件首次新建聊天时会创建 `$DSH_HOME/tavern/workspace/` 目录并幂等注册该工作区；新会话不会再进入当前或最近使用的原生工作区，Agent 的工作区工具也不会直接落到角色卡和聊天数据根目录。该内部工作区由插件从原生侧边栏会话树隐藏，识别以注册路径和 workspace ID 为准；旧版宿主没有暴露身份属性时，仅在显示名全局唯一的情况下按标题回退，卸载插件会恢复原 DOM。升级前已经创建的宿主会话因 DSH 的工作目录不可变而保留原归属。
+
 ## 语言
 
 插件 UI 跟随 DSH 的语言设置（`@deepseek-ai/dsh-client-locale`，zh/en）：client half 声明 `inject: [..., 'locale']`，向 locale 服务注册 `dsh-tavern` 命名空间字典并经 `useSyncExternalStore` 订阅快照，在“通用设置 -> 语言”切换后无需刷新即时生效。字典 zh/en 键集与 `{param}` 占位符的对称性由 `client-vm-mount` gate 校验。

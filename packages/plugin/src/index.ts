@@ -38,6 +38,7 @@ export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 
 
 const API = '/api/dsh-tavern'
 const DEFAULT_USER = 'User'
+const TAVERN_WORKSPACE_TITLE = 'Tavern (internal)'
 const BUILD_INFO = readBuildInfo()
 const TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit)
 let storePromise
@@ -189,6 +190,7 @@ async function handleApi(ctx, req, res) {
 
   if (method === 'GET' && route === 'bootstrap') {
     await agentTavernCapabilitiesPromise
+    const internalWorkspace = await prepareInternalWorkspace()
     const state = await db.getState()
     const active = state.activeCharacter ? await db.getCharacter(state.activeCharacter) : undefined
     const groups = []
@@ -219,6 +221,7 @@ async function handleApi(ctx, req, res) {
       model: ctx.agentDefaultModel.currentSelection(),
       version: BUILD_INFO.version,
       commit: TAVERN_COMMIT,
+      internalWorkspace,
       agentTavern: agentTavernCapabilities,
     })
   }
@@ -1973,6 +1976,12 @@ function parseTavernSessionCommand(rawInput) {
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim()
   return join(resolve(configured || join(homedir(), '.dsh')), ...segments)
+}
+
+async function prepareInternalWorkspace() {
+  const path = dshHomePath('tavern', 'workspace')
+  await mkdir(path, { recursive: true })
+  return { path, title: TAVERN_WORKSPACE_TITLE }
 }
 
 function readBuildInfo(): { version: string; commit: string } {

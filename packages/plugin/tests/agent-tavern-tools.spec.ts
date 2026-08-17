@@ -81,7 +81,13 @@ describe('AgentTavern native tools', () => {
     const exec = { agent: { id: 'native' } }
     const character = await tools.get('tavern_character_get')!.execute({}, exec)
     const scene = await tools.get('tavern_scene_get')!.execute({}, exec)
-    expect(character).toMatchObject({ character: CHARACTER, nickname: CHARACTER, truncated: false })
+    expect(character).toMatchObject({
+      character: CHARACTER,
+      nickname: CHARACTER,
+      source: { kind: 'character-card', id: CHARACTER, version: '2.0' },
+      truncated: false,
+    })
+    expect(JSON.parse(JSON.stringify(character))).toEqual(character)
     expect(scene).toMatchObject({ character: CHARACTER, messageCount: 0, truncated: false })
   })
 

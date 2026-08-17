@@ -88,7 +88,7 @@ function createTools(): ToolDefinition[] {
         description: limitText(data.description, 2000),
         personality: limitText(data.personality, 1000),
         scenario: limitText(data.scenario, 1000),
-        source: { kind: 'character-card', id: binding.character, version: found.card.spec_version },
+        source: { kind: 'character-card', id: binding.character, version: found.card.specVersion },
         truncated: data.description.length > 2000 || data.personality.length > 1000 || data.scenario.length > 1000,
       }
     }),
