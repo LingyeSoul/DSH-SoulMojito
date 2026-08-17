@@ -24,7 +24,8 @@
 - Composer 模型选择：复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
 - 并发保护：聊天使用内容 revision 做 compare-and-swap；跨标签页冲突返回 `409`，客户端重新加载最新内容，不静默覆盖。
 - 可选的普通 Agent 人格注入，默认关闭。
-- AgentTavern 架构设计（提议）：默认复用 DSH 原生 AgentLoop，通过记忆/变量/资产工具按需取回上下文；每个 AgentTavern 会话可在“DSH 原生上下文”（不主动遗忘，容量服从实际模型）和“Agent 管理上下文”（非破坏性主动遗忘）之间切换。现有 ST 兼容架构继续保留。详见 [`docs/proposals/0004-agent-tavern-architecture.md`](docs/proposals/0004-agent-tavern-architecture.md)。
+- AgentTavern 原生模式：单角色新聊天默认复用 DSH AgentLoop、原生 composer、Stop、错误处理和统计；角色、场景、记忆和变量通过会话级工具按需读取，原生事件幂等投影回 Tavern JSONL。现有 ST 兼容架构继续保留。
+- AgentTavern managed 模式：在 DSH `0.1.0-rc.6` 上保持关闭。宿主尚未提供 `agent/context` 历史投影和 projection-aware compaction，插件不会把普通 compaction 冒充为主动遗忘，也不会静默回退到伪 managed 模式。详见 [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)。
 - 美化前端：助手消息中的完整 HTML 文档或 `html` 代码块会在隔离 iframe 中运行，支持内联 CSS、JavaScript 和常用 CDN 资源；普通文本与不完整流式内容仍按文本显示。
 
 ### 酒馆美化前端
@@ -102,9 +103,31 @@ iframe 高度由 `ResizeObserver` 回传，并限制在 80-1200px；超出部分
 | `shell.overlay` | Tavern 管理面板 Modal，以及侧栏聊天树 adapter 的生命周期承载 |
 | `sidebar.footer.action` | 常驻 Tavern 面板按钮，与原生 Settings 并列 |
 
-DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏因此使用一个集中、版本敏感但失败关闭的 DOM adapter：只匹配可见左侧 `[role="tree"]`，隐藏 `state.sessionBindings` 中的 Tavern 行并插入具名 `data-dsh-tavern-sidebar-host`；宿主重绘或虚拟列表更新时会重新应用过滤，解绑后可逆恢复。面板入口本身走官方 `sidebar.footer.action`，不会替换 Settings，也不依赖 adapter 是否成功挂载。
+DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏因此使用一个集中、版本敏感但失败关闭的 DOM adapter：只匹配可见左侧 `[role="tree"]`，按 workspace 路径/ID 隐藏 `Tavern (internal)` 分组，并按 `state.sessionBindings` 过滤旧版 Tavern 会话行；同时插入具名 `data-dsh-tavern-sidebar-host`。宿主重绘或虚拟列表更新时会重新应用过滤，解绑或卸载时可逆恢复。面板入口本身走官方 `sidebar.footer.action`，不会替换 Settings，也不依赖 adapter 是否成功挂载。
 
 每个 Tavern chat 绑定一个正式 DSH session。绑定 API 通过插件内部桥接追加 plugin notice marker，使 session 进入 active 状态而不调用模型；Tavern view、composer 和标题栏 action 仅接管带有效 Tavern marker 的 session，普通 DSH 会话保持原生表面。酒馆标题栏会局部隐藏 DSH 自带的 agent preset 标签，并在切换回普通会话时恢复；Tavern 自建生成循环会把 turn/step、流式 chunk、assistant message 和 provider usage 镜像进同一 session，因此标题栏直接复用 DSH 的 `sessionStats` / `tokenUsage` projection。删除聊天时会追加 close marker 并归档对应 DSH session。
+
+### AgentTavern 当前状态
+
+| 架构 / 模式 | 状态 | 实际行为 |
+|---|---|---|
+| `agent-tavern` + `dsh-native` | rc.6 可用，单角色新聊天默认启用 | 使用 DSH 原生 AgentLoop 和 composer；模型、工具调用、Stop、错误与统计都由宿主处理，原生 user/final assistant 事件投影到 Tavern JSONL。 |
+| `agent-tavern` + `agent-managed` | rc.6 不可用 | 设置页显示宿主缺少 `agent/context` 与 projection-aware compaction 的原因并禁用选项；服务端也会拒绝该模式。 |
+| `st` | 保留并兼容 | 使用 Tavern 自有 `/generate`、流式生成、swipe、regenerate、STscript 和 Text Completion 路径。 |
+| 群聊 | 固定使用 `st` | 宿主尚未提供可靠的 actor 元数据前，不创建群聊 AgentTavern 会话。 |
+
+AgentTavern 工具的身份来自真实 DSH agent binding，模型不能通过参数伪造 `sessionId`、`scopeId`、角色或聊天身份。当前工具面如下：
+
+| 工具 | 作用 |
+|---|---|
+| `tavern_character_get` | 读取当前绑定角色的名称、昵称、描述、性格、场景和角色卡版本。 |
+| `tavern_scene_get` | 读取当前绑定聊天的场景、消息数量和聊天元数据。 |
+| `memory_search` | 在当前 chat、character 或 agent 作用域做有来源的词法记忆检索。 |
+| `memory_write` | 在选定作用域写入带来源、标签、置信度和 revision 的记忆。 |
+| `variable_get` | 读取当前作用域中的 typed JSON 变量。 |
+| `variable_set` | 写入变量并支持 expected revision 的 CAS 冲突保护。 |
+
+ST 与 AgentTavern 新聊天共用 `$DSH_HOME/tavern/workspace/` 下的 `Tavern (internal)` 工作区；插件按 workspace 路径/ID 从原生侧边栏隐藏整个分组，旧宿主没有身份属性时仅在标题唯一时回退。升级前已经存在的宿主会话不会跨工作区迁移，但绑定的 Tavern 会话行仍会按插件过滤。
 
 ## Packages
 
@@ -162,8 +185,9 @@ pnpm run check
 
 1. 点击侧栏底部的 Tavern 按钮，或从“设置 -> dsh-tavern”打开 Tavern 面板。
 2. 在“角色卡 / 世界书 / 预设”分区导入资产；导入后可以直接编辑、保存、搜索、设为当前或导出。
-3. 在原生左侧 Tavern 分支展开角色并创建或打开聊天。
-4. 在原生 `Tavern` tab 中对话、编辑、切换 swipe 或 regenerate。
+3. 在设置中选择新聊天架构（rc.6 默认是 AgentTavern/native）；群聊始终使用 ST。
+4. 在原生左侧 Tavern 分支展开角色并创建或打开单角色聊天：AgentTavern 使用 DSH 原生 conversation，ST 使用原生 `Tavern` tab。
+5. 在 ST 聊天中验证编辑、swipe、regenerate 和 STscript；在 AgentTavern 聊天中验证原生 composer、工具调用、Stop 和会话统计。
 
 插件 Node bundle 是单一 `packages/plugin/index.mjs`，五个纯库均已内联。无需用户额外安装公共 `@deepseek-ai/*` 运行时依赖；client closure 由 DSH profile 注入。
 
@@ -173,7 +197,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：18 个测试文件、142 项测试通过；package contract、patch reference、server bundle、client bundle、frontend runtime 和 client VM mount gates 通过。完整 `pnpm run check` 的 Node half mount 需要已安装并可解析的 DSH 官方运行时（`@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-home-paths`）。
+当前基线：21 个测试文件、162 项测试通过；11 个插件 gates（含 AgentTavern 隔离、native header adapter、内部工作区和 client VM mount）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.1.0-rc.6` 的隔离 runtime。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 
@@ -190,6 +214,14 @@ GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern �
 - [`docs/plans/2026-08-16-agent-tavern-implementation.md`](docs/plans/2026-08-16-agent-tavern-implementation.md)：AgentTavern 的分阶段施工计划、宿主门禁、迁移规则与验证矩阵。
 - [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)：DSH `0.1.0-rc.6` 原生注入、compaction 与 Fabric fallback 审计。
 - [`decisions/2026-08-15-tavern-management-panel.md`](decisions/2026-08-15-tavern-management-panel.md)：面板入口、角色删除级联、变量与侧栏共存的落地决策。
+
+## 插件管理
+
+已安装插件建议使用 plugin-registry 的薄控制台管理 profile 中的 bundle 层栈、insert 行和启停状态，避免手改配置。将 `<plugin-registry>` 替换为该工具仓库的本地路径：
+
+```sh
+dsh plugin --profile web add <plugin-registry>/packages/plugin/console
+```
 
 ## 许可
 

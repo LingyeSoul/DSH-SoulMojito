@@ -2601,7 +2601,7 @@ window.__ModuleLoader__.load({
       const run = state.runs[sessionId] || {}
       const markerRef = useNativeAgentPresetLabelFilter(Boolean(active && binding && architecture === 'st'))
       if (!active || !binding) return null
-      const statsLine = buildTavernStatsLine(stats, usage, t)
+      const statsLine = architecture === 'st' ? buildTavernStatsLine(stats, usage, t) : ''
       return h('div', { ref: markerRef, className: 'dt-header-character', 'data-dsh-tavern-surface': 'header' },
         h('img', { src: `${API}/avatar/${encodeURIComponent(binding.character)}`, alt: '' }),
         h('div', { className: 'dt-header-character-copy' },

@@ -14,7 +14,7 @@ dsh --profile web
 
 - 侧边栏底部、紧挨设置按钮的 **Tavern 按钮**（rail 模式为圆形图标钮）打开「Tavern 管理面板」——与原生设置同构的模态面板（左侧导航 + 右侧内容），复用 DSH 的 Modal/Button/Input/Pill/StateDot 原语与 `--dsw-alias-*` 设计 token。面板十个分区：总览（活跃配置 + 资产计数）、角色（卡片网格、完整卡查看、设为活跃、导出、删除）、聊天（按角色/群组浏览、新建/重命名/删除/打开）、群组、用户人设、世界书（激活开关 + 条目浏览器 + 搜索）、预设（kind 标签、设为活跃、删除）、正则脚本、变量（全局 STscript 变量编辑 + 当前会话局部变量查看）、生成（管线模式 + Kobold 端点 + StateDot 连接状态）。
 - “设置 -> dsh-tavern”保留快速切换（角色/预设/persona/世界书）与「打开酒馆面板」入口；设置页标题下显示插件版本号与 commit 号。构建会生成不纳入 Git 的 `version.json` 旁车文件；源码检出运行时优先读取 Git HEAD，脱离 `.git` 的发布包读取该文件中的 commit，必要时可用 `DSH_TAVERN_COMMIT` 兜底。
-- 在原生 `Tavern` tab 使用 transcript、composer、Stop、edit、swipe 和 regenerate。
+- ST 聊天在原生 `Tavern` tab 使用 Tavern transcript、composer、Stop、edit、swipe 和 regenerate；AgentTavern/native 聊天使用 DSH 原生 conversation、composer、Stop、错误处理和统计。
 - 助手消息中的完整 HTML 文档、`<head>`/`<body>` 片段，或 `html` Markdown 代码块会在 `sandbox="allow-scripts"` iframe 中运行；源码不会直接插入宿主页面。
 
 前端代码只要包含 `<!doctype html>`，或包含 `<html>` 与 `<head>`/`<body>`，或直接包含 `<head>`/`<body>` 即可识别；
@@ -32,6 +32,28 @@ CSP 允许内联 CSS/JavaScript，以及 `cdn.jsdelivr.net`、`testingcf.jsdeliv
 
 ST 与 AgentTavern 共用 DSH 中的 `Tavern (internal)` 专用工作区。插件首次新建聊天时会创建 `$DSH_HOME/tavern/workspace/` 目录并幂等注册该工作区；新会话不会再进入当前或最近使用的原生工作区，Agent 的工作区工具也不会直接落到角色卡和聊天数据根目录。该内部工作区由插件从原生侧边栏会话树隐藏，识别以注册路径和 workspace ID 为准；旧版宿主没有暴露身份属性时，仅在显示名全局唯一的情况下按标题回退，卸载插件会恢复原 DOM。升级前已经创建的宿主会话因 DSH 的工作目录不可变而保留原归属。
 
+## AgentTavern 当前状态
+
+| 架构 / 模式 | 状态 | 行为 |
+|---|---|---|
+| `agent-tavern` + `dsh-native` | rc.6 可用，单角色新聊天默认启用 | 使用 DSH 原生 AgentLoop；Tavern 只提供角色资产、聊天投影和作用域工具。 |
+| `agent-tavern` + `agent-managed` | rc.6 不可用 | 宿主缺少 `agent/context` 和 projection-aware compaction，设置项禁用，服务端拒绝，不伪造主动遗忘。 |
+| `st` | 可用 | 保留原有 Tavern `/generate`、swipe、regenerate、STscript 和 Text Completion 路径。 |
+| 群聊 | 固定 `st` | 在宿主提供 actor 元数据前，不启用群聊 AgentTavern。 |
+
+当前 AgentTavern 工具只从真实 session binding 推导身份，不接受模型传入的 `sessionId` 或 `scopeId`：
+
+| 工具 | 作用 |
+|---|---|
+| `tavern_character_get` | 当前角色卡摘要、场景字段和卡片版本。 |
+| `tavern_scene_get` | 当前聊天的场景、消息数量和 metadata。 |
+| `memory_search` | chat、character、agent 作用域的有来源词法检索。 |
+| `memory_write` | 带来源、标签、revision 和大小限制的记忆写入。 |
+| `variable_get` | 读取作用域内 typed JSON 变量。 |
+| `variable_set` | 写入变量并支持 expected revision CAS。 |
+
+AgentTavern 的原生 user/final assistant 事件会幂等投影到 Tavern JSONL；tool、chunk 和 reasoning 事件不会伪装成 Tavern 消息。缺少宿主能力时，插件保持 native 或 ST 的明确边界，不把 compaction 误称为 managed context。
+
 ## 语言
 
 插件 UI 跟随 DSH 的语言设置（`@deepseek-ai/dsh-client-locale`，zh/en）：client half 声明 `inject: [..., 'locale']`，向 locale 服务注册 `dsh-tavern` 命名空间字典并经 `useSyncExternalStore` 订阅快照，在“通用设置 -> 语言”切换后无需刷新即时生效。字典 zh/en 键集与 `{param}` 占位符的对称性由 `client-vm-mount` gate 校验。
@@ -43,4 +65,12 @@ pnpm run build:plugin
 node packages/plugin/scripts/gates/run.mjs
 ```
 
-当前 gate 覆盖包元数据、Cordis patch、Node/client bundle、frontend runtime、client VM mount、Node half mount，以及原生 slot、revision、stale binding 和设置页边界。
+当前 gate 覆盖包元数据、Cordis patch、Node/client bundle、frontend runtime、client VM mount、Node half mount、AgentTavern 隔离、native header adapter、内部工作区、revision、stale binding 和设置页边界。完整仓库基线为 21 个测试文件、162 项测试。
+
+## 插件管理
+
+已安装插件建议使用 plugin-registry 的薄控制台管理 profile 中的 bundle 层栈、insert 行和启停状态，避免手改配置。将 `<plugin-registry>` 替换为该工具仓库的本地路径：
+
+```sh
+dsh plugin --profile web add <plugin-registry>/packages/plugin/console
+```
