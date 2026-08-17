@@ -182,7 +182,7 @@ describe('TavernStore', () => {
   it('状态：默认值 → patch 持久化', withStore(async (store) => {
     expect(await store.getState()).toEqual({
       activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
-      modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat',
+      agentTavernPreloadAssets: false, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat',
     })
     await store.patchState({
       activeCharacter: 'ExampleCard',
@@ -222,6 +222,7 @@ describe('TavernStore', () => {
       agent: { architecture: 'agent-tavern', contextMode: 'dsh-native', character: 'B', chatId: 'b.jsonl' },
       group: { architecture: 'st', group: true, character: 'G', chatId: 'g.jsonl' },
     })
+    expect((await store.getState()).agentTavernPreloadAssets).toBe(false)
   }))
 
   it('memory：确定性检索、CAS 更新与软删除', withStore(async (_store, dir) => {

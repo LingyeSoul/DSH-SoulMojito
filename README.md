@@ -24,7 +24,7 @@
 - Composer 模型选择：复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
 - 并发保护：聊天使用内容 revision 做 compare-and-swap；跨标签页冲突返回 `409`，客户端重新加载最新内容，不静默覆盖。
 - 可选的普通 Agent 人格注入，默认关闭。
-- AgentTavern 原生模式：单角色新聊天默认复用 DSH AgentLoop、原生 composer、Stop、错误处理和统计；角色、场景、记忆和变量通过会话级工具按需读取，原生事件幂等投影回 Tavern JSONL。现有 ST 兼容架构继续保留。
+- AgentTavern 原生模式：单角色新聊天默认复用 DSH AgentLoop、原生 composer、Stop、错误处理和统计；角色、世界书、场景、记忆和变量通过会话级工具按需读取，原生事件幂等投影回 Tavern JSONL。可选开关会在新 AgentTavern 会话初始化时一次性预载角色信息和常驻世界书条目，默认关闭且不追溯修改已有会话。现有 ST 兼容架构继续保留。
 - AgentTavern managed 模式：在 DSH `0.1.0-rc.6` 上保持关闭。宿主尚未提供 `agent/context` 历史投影和 projection-aware compaction，插件不会把普通 compaction 冒充为主动遗忘，也不会静默回退到伪 managed 模式。详见 [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)。
 - 美化前端：助手消息中的完整 HTML 文档或 `html` 代码块会在隔离 iframe 中运行，支持内联 CSS、JavaScript 和常用 CDN 资源；普通文本与不完整流式内容仍按文本显示。
 
@@ -121,6 +121,7 @@ AgentTavern 工具的身份来自真实 DSH agent binding，模型不能通过�
 | 工具 | 作用 |
 |---|---|
 | `tavern_character_get` | 读取当前绑定角色的名称、昵称、描述、性格、场景和角色卡版本。 |
+| `tavern_lore_search` | 按查询词和预算检索全局启用、角色关联及卡内嵌世界书。 |
 | `tavern_scene_get` | 读取当前绑定聊天的场景、消息数量和聊天元数据。 |
 | `memory_search` | 在当前 chat、character 或 agent 作用域做有来源的词法记忆检索。 |
 | `memory_write` | 在选定作用域写入带来源、标签、置信度和 revision 的记忆。 |
@@ -197,7 +198,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：21 个测试文件、162 项测试通过；11 个插件 gates（含 AgentTavern 隔离、native header adapter、内部工作区和 client VM mount）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.1.0-rc.6` 的隔离 runtime。
+当前基线：21 个测试文件、169 项测试通过；11 个插件 gates（含 AgentTavern 隔离、native header adapter、内部工作区和 client VM mount）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.1.0-rc.6` 的隔离 runtime。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 

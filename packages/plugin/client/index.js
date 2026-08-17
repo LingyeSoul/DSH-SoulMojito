@@ -183,7 +183,7 @@ window.__ModuleLoader__.load({
       'settings.contextNative': 'DSH context',
       'settings.contextManaged': 'Agent memory',
       'settings.contextManagedUnavailable': 'Agent memory is unavailable: {reason}',
-      'settings.worldInfo': 'World Info',
+      'settings.preloadAssets': 'Preload character and constant World Info when a new AgentTavern session starts',
       'settings.worldsEmpty': 'No world books imported',
       'settings.import': 'Import',
       'settings.importCharacter': 'Character card',
@@ -426,7 +426,7 @@ window.__ModuleLoader__.load({
       'settings.contextNative': 'DSH 上下文',
       'settings.contextManaged': 'Agent 记忆',
       'settings.contextManagedUnavailable': 'Agent 记忆不可用：{reason}',
-      'settings.worldInfo': '世界书',
+      'settings.preloadAssets': '新 AgentTavern 会话开始时预载角色信息和常驻世界书条目',
       'settings.worldsEmpty': '尚未导入世界书',
       'settings.import': '导入',
       'settings.importCharacter': '角色卡',
@@ -670,7 +670,7 @@ window.__ModuleLoader__.load({
     const EMPTY_BOOTSTRAP = {
       state: {
         activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
-        modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat',
+        agentTavernPreloadAssets: false, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat',
       },
       characters: [],
       worlds: [],
@@ -1096,7 +1096,9 @@ window.__ModuleLoader__.load({
       if (existing) {
         // 已绑定的会话也重发一次绑定命令：旧版本激活的会话宿主侧可能仍 blank，
         // 服务端借此补占位 turn 对，解除原生「新建会话」的复用劫持（幂等）。
-        if (bindingArchitecture(existing[1]) === 'st') void repairBinding(ctx, existing[0], existing[1])
+        if (bindingArchitecture(existing[1]) === 'st' || existing[1].initializationPending === true) {
+          void repairBinding(ctx, existing[0], existing[1])
+        }
         reserveTavernSession(ctx, existing[0])
         ctx.sessions.open(existing[0])
         if (bindingArchitecture(existing[1]) === 'st') clickTavernTab(0)
@@ -1958,43 +1960,36 @@ window.__ModuleLoader__.load({
               }, t('settings.architectureSt')))),
           h('p', { className: 'dt-hint' }, t('settings.architectureHint')),
           bootstrap.state.defaultArchitecture === 'agent-tavern'
-            ? h('div', { className: 'dt-field' },
-              h('span', { className: 'dt-label' }, t('settings.contextMode')),
-              h('div', { className: 'dt-segmented', role: 'group', 'aria-label': t('settings.contextMode') },
-                h('button', {
-                  type: 'button',
-                  className: bootstrap.state.defaultContextMode === 'dsh-native' ? 'dt-segmented-active' : '',
-                  'aria-pressed': bootstrap.state.defaultContextMode === 'dsh-native',
-                  onClick: () => applyPatch({ defaultContextMode: 'dsh-native' }),
-                }, t('settings.contextNative')),
-                h('button', {
-                  type: 'button',
-                  className: bootstrap.state.defaultContextMode === 'agent-managed' ? 'dt-segmented-active' : '',
-                  'aria-pressed': bootstrap.state.defaultContextMode === 'agent-managed',
-                  disabled: bootstrap.agentTavern?.managed?.available !== true,
-                  onClick: () => applyPatch({ defaultContextMode: 'agent-managed' }),
-                }, t('settings.contextManaged'))),
-              bootstrap.agentTavern?.managed?.available !== true
-                ? h('p', { className: 'dt-hint' }, t('settings.contextManagedUnavailable', {
-                  reason: bootstrap.agentTavern?.managed?.reasons?.join(' ') || 'host capability check failed',
-                }))
-                : null)
+            ? h(React.Fragment, null,
+              h('div', { className: 'dt-field' },
+                h('span', { className: 'dt-label' }, t('settings.contextMode')),
+                h('div', { className: 'dt-segmented', role: 'group', 'aria-label': t('settings.contextMode') },
+                  h('button', {
+                    type: 'button',
+                    className: bootstrap.state.defaultContextMode === 'dsh-native' ? 'dt-segmented-active' : '',
+                    'aria-pressed': bootstrap.state.defaultContextMode === 'dsh-native',
+                    onClick: () => applyPatch({ defaultContextMode: 'dsh-native' }),
+                  }, t('settings.contextNative')),
+                  h('button', {
+                    type: 'button',
+                    className: bootstrap.state.defaultContextMode === 'agent-managed' ? 'dt-segmented-active' : '',
+                    'aria-pressed': bootstrap.state.defaultContextMode === 'agent-managed',
+                    disabled: bootstrap.agentTavern?.managed?.available !== true,
+                    onClick: () => applyPatch({ defaultContextMode: 'agent-managed' }),
+                  }, t('settings.contextManaged'))),
+                bootstrap.agentTavern?.managed?.available !== true
+                  ? h('p', { className: 'dt-hint' }, t('settings.contextManagedUnavailable', {
+                    reason: bootstrap.agentTavern?.managed?.reasons?.join(' ') || 'host capability check failed',
+                  }))
+                  : null),
+              h('label', { className: 'dt-toggle' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: bootstrap.state.agentTavernPreloadAssets === true,
+                  onChange: (event) => applyPatch({ agentTavernPreloadAssets: event.target.checked }),
+                }),
+                h('span', null, t('settings.preloadAssets'))))
             : null),
-        h('div', { className: 'dt-check-grid' },
-          bootstrap.worlds.length === 0
-            ? h('span', { className: 'dt-muted' }, t('settings.worldsEmpty'))
-            : bootstrap.worlds.map((name) => h('label', { key: name },
-              h('input', {
-                type: 'checkbox',
-                checked: bootstrap.state.activeWorlds.includes(name),
-                onChange: (event) => {
-                  const worlds = new Set(bootstrap.state.activeWorlds)
-                  if (event.target.checked) worlds.add(name)
-                  else worlds.delete(name)
-                  applyPatch({ activeWorlds: [...worlds] })
-                },
-              }),
-              h('span', null, name)))),
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 

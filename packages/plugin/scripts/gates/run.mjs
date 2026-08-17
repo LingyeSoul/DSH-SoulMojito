@@ -344,6 +344,8 @@ function checkClientArchitectureText(text) {
     'function reserveTavernSession(ctx, sessionId)',
     'select: selectTavernComposer',
     "disabled: bootstrap.agentTavern?.managed?.available !== true",
+    'checked: bootstrap.state.agentTavernPreloadAssets === true',
+    'existing[1].initializationPending === true',
   ]) {
     if (!text.includes(marker)) problems.push(`client architecture split is missing marker '${marker}'`)
   }
@@ -951,6 +953,8 @@ const gates = [
         'function reserveTavernSession(ctx, sessionId)',
         'select: selectTavernComposer',
         "disabled: bootstrap.agentTavern?.managed?.available !== true",
+        'checked: bootstrap.state.agentTavernPreloadAssets === true',
+        'existing[1].initializationPending === true',
       ].join('\n')
       const badTree = good.replace('useNativeSessionTreeFilter(bindingIds, PanelHost.context', 'useNativeSessionTreeFilter([], PanelHost.context')
       const badTab = good.replace("bindingArchitecture(currentBinding) === 'st'", 'true')

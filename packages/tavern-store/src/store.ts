@@ -53,6 +53,8 @@ export type TavernSessionBinding =
   | (TavernSessionBase & {
       architecture: 'agent-tavern'
       contextMode: TavernContextMode
+      /** 客户端已预绑定，等待内部命令完成 AgentTavern 初始化。 */
+      initializationPending?: true
     })
   | (TavernSessionBase & {
       architecture: 'st'
@@ -90,6 +92,8 @@ export interface TavernState {
   defaultArchitecture: TavernArchitecture
   /** 新建 AgentTavern 会话的上下文模式；不影响已有 binding。 */
   defaultContextMode: TavernContextMode
+  /** 新建 AgentTavern 会话初始化时预注入角色信息与常驻世界书条目。 */
+  agentTavernPreloadAssets: boolean
   /** DSH session 到模型选择的持久映射；随 bindings/prune 一同清理。 */
   modelSelections: Record<string, TavernModelSelection>
   /** 每聊天元数据（最后激活时间、swipe 指针等自由袋） */
@@ -145,6 +149,7 @@ const DEFAULT_STATE: TavernState = {
   sessionBindings: {},
   defaultArchitecture: 'agent-tavern',
   defaultContextMode: 'dsh-native',
+  agentTavernPreloadAssets: false,
   modelSelections: {},
   chats: {},
   regexScripts: [],
@@ -622,6 +627,7 @@ export class TavernStore {
       sessionBindings: normalizeSessionBindings(parsed.sessionBindings),
       defaultArchitecture: parsed.defaultArchitecture === 'st' ? 'st' : 'agent-tavern',
       defaultContextMode: parsed.defaultContextMode === 'agent-managed' ? 'agent-managed' : 'dsh-native',
+      agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
@@ -697,6 +703,7 @@ export function normalizeTavernSessionBinding(value: unknown): TavernSessionBind
       ...base,
       architecture: 'agent-tavern',
       contextMode: candidate.contextMode === 'agent-managed' ? 'agent-managed' : 'dsh-native',
+      ...(candidate.initializationPending === true ? { initializationPending: true } : {}),
     }
   }
   return { ...base, architecture: 'st' }

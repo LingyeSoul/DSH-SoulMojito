@@ -31,7 +31,25 @@ describe('AgentTavern native tools', () => {
         scenario: 'A quiet test scene.',
         first_mes: 'Hello',
         mes_example: '', creator_notes: '', system_prompt: '', post_history_instructions: '',
-        alternate_greetings: [], tags: [], creator: '', character_version: '', extensions: {},
+        alternate_greetings: [], tags: [], creator: '', character_version: '', extensions: { world: 'Native Lore' },
+      },
+    })
+    await store.importWorldFile('Native Lore', {
+      entries: {
+        '0': {
+          uid: 0, key: ['moon gate'], keysecondary: [], comment: 'Gate',
+          content: 'The moon gate opens only at midnight.', constant: false,
+          selective: false, order: 100, position: 0, disable: false,
+        },
+      },
+    })
+    await store.importWorldFile('Active Lore', {
+      entries: {
+        '0': {
+          uid: 0, key: ['star archive'], keysecondary: [], comment: 'Archive',
+          content: 'The star archive records every voyage.', constant: false,
+          selective: false, order: 100, position: 0, disable: false,
+        },
       },
     })
     const chatId = await store.createChat(CHARACTER, {
@@ -40,6 +58,7 @@ describe('AgentTavern native tools', () => {
       chat_metadata: { createdAt: new Date().toISOString() },
     })
     await store.updateState(() => ({
+      activeWorlds: ['Active Lore'],
       sessionBindings: {
         native: { architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER, chatId },
         st: { architecture: 'st', character: CHARACTER, chatId },
@@ -63,6 +82,7 @@ describe('AgentTavern native tools', () => {
   it('registers only scope-derived tools without identity parameters', () => {
     expect([...tools.keys()]).toEqual([
       'tavern_character_get',
+      'tavern_lore_search',
       'tavern_scene_get',
       'memory_search',
       'memory_write',
@@ -89,6 +109,37 @@ describe('AgentTavern native tools', () => {
     })
     expect(JSON.parse(JSON.stringify(character))).toEqual(character)
     expect(scene).toMatchObject({ character: CHARACTER, messageCount: 0, truncated: false })
+  })
+
+  it('searches the world book linked to the bound character', async () => {
+    const result = await tools.get('tavern_lore_search')!.execute({
+      query: 'moon gate', limit: 5, maxTokens: 200,
+    }, { agent: { id: 'native' } })
+    expect(result).toMatchObject({ sourceCount: 1, truncated: false })
+    expect(result.hits[0]).toMatchObject({
+      book: 'Native Lore', uid: 0, comment: 'Gate',
+      content: 'The moon gate opens only at midnight.',
+      source: { kind: 'world-book', id: 'Native Lore.0' },
+    })
+  })
+
+  it('searches globally active world books', async () => {
+    const result = await tools.get('tavern_lore_search')!.execute({
+      query: 'star archive', limit: 5, maxTokens: 200,
+    }, { agent: { id: 'native' } })
+    expect(result.hits[0]).toMatchObject({
+      book: 'Active Lore', comment: 'Archive', content: 'The star archive records every voyage.',
+    })
+  })
+
+  it('enforces the lore result token budget', async () => {
+    const result = await tools.get('tavern_lore_search')!.execute({
+      query: 'moon gate', limit: 20, maxTokens: 1,
+    }, { agent: { id: 'native' } })
+    expect(result.hits).toHaveLength(1)
+    expect(result.hits[0].content.length).toBeLessThanOrEqual(4)
+    expect(result.hits[0].truncated).toBe(true)
+    expect(result.truncated).toBe(true)
   })
 
   it('writes and searches memory only through the derived scope', async () => {

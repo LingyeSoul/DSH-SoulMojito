@@ -7,7 +7,6 @@ import {
   RegexPlacement,
   decodeCharxAsset,
   detectPresetKind,
-  parseCharacterBook,
   parseContextTemplate,
   parseInstructTemplate,
   parsePreset,
@@ -32,6 +31,7 @@ import {
 } from './agent-tavern/capabilities.js'
 import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
 import { AgentTavernProjector } from './agent-tavern/projector.js'
+import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
 
 export const name = 'dsh-tavern'
 export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools']
@@ -124,7 +124,13 @@ export function apply(ctx) {
       }
       const chat = await db.getChat(parsed.character, parsed.chatId)
       if (!chat) return { kind: 'error', text: 'Tavern chat not found.' }
-      const previous = (await db.getState()).sessionBindings[agent.id]
+      const currentState = await db.getState()
+      const previous = currentState.sessionBindings[agent.id]
+      const shouldPreloadAssets = parsed.architecture === 'agent-tavern'
+        && parsed.group !== true
+        && currentState.agentTavernPreloadAssets === true
+        && (previous?.architecture !== 'agent-tavern' || previous.initializationPending === true)
+      let preloadSnapshot: string | undefined
       await assertAgentTavernAvailable(parsed.architecture, parsed.contextMode)
       if (parsed.architecture === 'agent-tavern') {
         if (agent.session.events.some((event) => event.type === 'turn/start')) {
@@ -132,6 +138,14 @@ export function apply(ctx) {
         }
         if (typeof ctx.agentPresets?.recompose !== 'function') {
           throw new TavernArchitectureConflictError('The host cannot recompose a blank session with the AgentTavern preset.')
+        }
+        if (shouldPreloadAssets) {
+          if (typeof agent.inject !== 'function') {
+            throw new TavernArchitectureConflictError('This host cannot preload AgentTavern session context.')
+          }
+          const character = await db.getCharacter(parsed.character)
+          if (!character) throw new Error('Tavern character not found.')
+          preloadSnapshot = await buildAgentTavernPreloadSnapshot(db, currentState, parsed.character, character)
         }
         const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_TAVERN_PRESET_ID)
         agent.session.append('agent-preset/selected', { agentPreset: preset.id })
@@ -145,6 +159,18 @@ export function apply(ctx) {
         parsed.architecture,
         parsed.contextMode,
       )
+      if (preloadSnapshot !== undefined) {
+        agent.inject(createMessage({
+          role: 'user',
+          content: [{ type: 'text', text: preloadSnapshot }],
+          source: {
+            kind: 'plugin',
+            plugin: 'dsh-tavern',
+            form: 'context',
+            summary: `AgentTavern preload: ${parsed.character}`,
+          },
+        }))
+      }
       await refreshActivePrompt()
       if (parsed.architecture === 'st') occupyHostSession(agent)
       if (parsed.architecture === 'st' && (previous?.character !== parsed.character || previous.chatId !== parsed.chatId)) {
@@ -417,6 +443,9 @@ async function handleApi(ctx, req, res) {
       ...(body.defaultContextMode === 'dsh-native' || body.defaultContextMode === 'agent-managed'
         ? { defaultContextMode: body.defaultContextMode }
         : {}),
+      ...(typeof body.agentTavernPreloadAssets === 'boolean'
+        ? { agentTavernPreloadAssets: body.agentTavernPreloadAssets }
+        : {}),
       ...(body.pipelineMode === 'chat' || body.pipelineMode === 'text' ? { pipelineMode: body.pipelineMode } : {}),
       ...(isTextCompletionConfig(body.textCompletion) ? { textCompletion: normalizeTextCompletion(body.textCompletion) } : {}),
       ...(body.textCompletion === null ? { textCompletion: undefined } : {}),
@@ -620,7 +649,7 @@ async function handleApi(ctx, req, res) {
     const architecture = group ? 'st' : requestedArchitecture(body.architecture)
     const contextMode = requestedContextMode(body.contextMode)
     await assertAgentTavernAvailable(architecture, contextMode)
-    const state = await bindSession(db, body.sessionId, body.character, body.chatId, group, architecture, contextMode)
+    const state = await bindSession(db, body.sessionId, body.character, body.chatId, group, architecture, contextMode, true)
     await refreshActivePrompt()
     return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] })
   }
@@ -1080,7 +1109,7 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   // ---- 发送模式：先落用户消息（regex USER_INPUT），regenerate 弹出旧回复 ----
   let regenerated
   let hostUserText = ''
-  const scripts = await collectRegexScripts(db, state, character)
+  const scripts = collectRegexScripts(state, character)
   if (mode === 'send') {
     const transformed = applyRegexScripts(options.userText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t })
     hostUserText = transformed
@@ -1120,18 +1149,7 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   const preset = parsePreset(presetObject)
   const persona = state.activePersona ? await db.getPersona(state.activePersona) : undefined
 
-  const books = []
-  for (const worldName of state.activeWorlds) {
-    const world = await db.getWorld(worldName)
-    if (world) books.push({ name: world.name, entries: world.entries })
-  }
-  if (character.card.data.characterBook) {
-    const embedded = parseCharacterBook(character.card.data.characterBook)
-    books.unshift({ name: `${speakerName}:embedded`, entries: embedded.entries,
-      scanDepth: character.card.data.characterBook.scan_depth,
-      tokenBudget: character.card.data.characterBook.token_budget,
-      recursiveScanning: character.card.data.characterBook.recursive_scanning })
-  }
+  const books = await collectWorldInfoBooks(db, state, speakerName, character)
 
   const lore = activateWorldInfo({
     books,
@@ -1621,24 +1639,11 @@ async function isGroupChat(db, characterName, chatId) {
  */
 async function displayTexts(db, state, characterName, chat) {
   const character = await db.getCharacter(characterName)
-  const scripts = (await collectRegexScripts(db, state, character))
+  const scripts = collectRegexScripts(state, character)
     .filter((script) => script.markdownOnly && !script.disabled)
   if (scripts.length === 0) return undefined
   return chat.messages.map((message, index) =>
     applyRegexScripts(message.mes ?? '', scripts, RegexPlacement.AI_OUTPUT, { expand: (t) => t }, { depth: chat.messages.length - 1 - index }))
-}
-
-async function collectRegexScripts(db, state, character) {
-  const scripts = [...state.regexScripts]
-  const cardScripts = character?.card?.data?.extensions?.regex_scripts
-  if (Array.isArray(cardScripts)) {
-    try {
-      scripts.push(...parseRegexScripts(cardScripts))
-    } catch {
-      // 卡级脚本损坏时忽略（不影响全局脚本）
-    }
-  }
-  return scripts
 }
 
 async function presetSamplerValue(db, state, key) {
@@ -1780,17 +1785,29 @@ async function bindSession(
   group = false,
   architecture = 'st',
   contextMode = 'dsh-native',
+  initializationPending = false,
 ) {
-  const binding = architecture === 'agent-tavern' && !group
-    ? { architecture: 'agent-tavern', contextMode, character, chatId }
-    : { architecture: 'st', character, chatId, ...(group ? { group: true } : {}) }
-  return db.updateState((state) => ({
-    activeCharacter: group ? state.activeCharacter : character,
-    sessionBindings: {
-      ...state.sessionBindings,
-      [sessionId]: binding,
-    },
-  }))
+  return db.updateState((state) => {
+    const existing = state.sessionBindings[sessionId]
+    const sameAgentBinding = existing?.architecture === 'agent-tavern'
+      && existing.character === character
+      && existing.chatId === chatId
+    const pending = initializationPending
+      && (existing?.initializationPending === true || !sameAgentBinding)
+    const binding = architecture === 'agent-tavern' && !group
+      ? {
+          architecture: 'agent-tavern', contextMode, character, chatId,
+          ...(pending ? { initializationPending: true } : {}),
+        }
+      : { architecture: 'st', character, chatId, ...(group ? { group: true } : {}) }
+    return {
+      activeCharacter: group ? state.activeCharacter : character,
+      sessionBindings: {
+        ...state.sessionBindings,
+        [sessionId]: binding,
+      },
+    }
+  })
 }
 
 async function assertAgentTavernAvailable(architecture, contextMode) {

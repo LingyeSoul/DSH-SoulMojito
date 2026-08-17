@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { apply } from '../src/index.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
+import { parseRegexScripts } from '../../tavern-format/src/index.js'
 
 const CHARACTER = '露西'
 
@@ -13,9 +14,12 @@ function base64Url(value: unknown) {
 
 function makeAgent(id: string) {
   const events: Array<{ type: string; data: unknown }> = []
+  const injections: unknown[] = []
   return {
     id,
     ctx: { id },
+    injections,
+    inject: (message: unknown) => { injections.push(message) },
     session: {
       events,
       append: (type: string, data: unknown) => { events.push({ type, data }) },
@@ -77,6 +81,7 @@ describe('internal Tavern session bridge occupation', () => {
   let apiHandler: (req: unknown, res: unknown) => Promise<void>
   let agents: Map<string, ReturnType<typeof makeAgent>>
   let recomposeCalls: Array<{ agent: unknown; presetId: string }>
+  let llmRequests: Array<{ system?: string }>
   let failGeneration = false
   let chatId: string
 
@@ -90,8 +95,54 @@ describe('internal Tavern session bridge occupation', () => {
       data: {
         name: CHARACTER, description: 'A test character', personality: '', scenario: '', first_mes: 'Hello',
         mes_example: '', creator_notes: '', system_prompt: '', post_history_instructions: '',
-        alternate_greetings: [], tags: [], creator: '', character_version: '', extensions: {},
+        alternate_greetings: [], tags: [], creator: '', character_version: '',
+        character_book: {
+          entries: [
+            { id: 10, keys: [], content: 'embedded default lore', enabled: true, insertion_order: 100, constant: true },
+            { id: 11, keys: ['secret'], content: 'embedded keyword lore', enabled: true, insertion_order: 90, constant: false },
+          ],
+        },
+        extensions: {
+          world: 'Linked Lore',
+          regex_scripts: {
+            scripts: [{
+              scriptName: 'filter linked lore', findRegex: 'unfiltered lore', replaceString: 'filtered lore',
+              placement: [5],
+            }],
+          },
+        },
       },
+    })
+    await store.importWorldFile('Linked Lore', {
+      entries: {
+        '0': {
+          uid: 0, key: [], keysecondary: [], comment: 'linked', content: 'unfiltered lore',
+          constant: true, selective: false, order: 100, position: 0, disable: false,
+        },
+      },
+    })
+    await store.importWorldFile('Active Lore', {
+      entries: {
+        '0': {
+          uid: 0, key: [], keysecondary: [], comment: 'active', content: 'unfiltered active lore',
+          constant: true, selective: false, order: 100, position: 0, disable: false,
+        },
+        '1': {
+          uid: 1, key: ['trigger'], keysecondary: [], comment: 'keyword', content: 'active keyword lore',
+          constant: false, selective: false, order: 90, position: 0, disable: false,
+        },
+        '2': {
+          uid: 2, key: [], keysecondary: [], comment: 'disabled', content: 'disabled default lore',
+          constant: true, selective: false, order: 80, position: 0, disable: true,
+        },
+      },
+    })
+    await store.patchState({
+      activeWorlds: ['Active Lore'],
+      regexScripts: parseRegexScripts([{
+        scriptName: 'filter active lore', findRegex: 'unfiltered active lore', replaceString: 'filtered active lore',
+        placement: [5],
+      }]),
     })
     chatId = await store.createChat(CHARACTER, {
       user_name: 'unused', character_name: 'unused',
@@ -101,6 +152,7 @@ describe('internal Tavern session bridge occupation', () => {
     let definition: { handler: (input: { agent: unknown; rawInput: string }) => Promise<{ kind: string }> } | undefined
     agents = new Map()
     recomposeCalls = []
+    llmRequests = []
     apply({
       systemPrompt: { section: () => {}, context: () => {} },
       commands: { register: (def) => { definition = def } },
@@ -114,7 +166,8 @@ describe('internal Tavern session bridge occupation', () => {
       },
       tools: { register: () => {} },
       llm: {
-        stream: async function* () {
+        stream: async function* (request: { system?: string }) {
+          llmRequests.push(request)
           if (failGeneration) throw new Error('test generation failure')
           yield { type: 'text-delta', text: 'reply' }
           yield { type: 'usage', usage: { inputTokens: 11, outputTokens: 7, cacheReadTokens: 89, cacheWriteTokens: 0 } }
@@ -191,6 +244,23 @@ describe('internal Tavern session bridge occupation', () => {
     expect(res.chunks.some((chunk) => chunk.includes('"type":"saved"'))).toBe(true)
   })
 
+  it('automatically loads active/linked worlds and global/card regex in ST mode', async () => {
+    const snapshot = await store.getChatSnapshot(CHARACTER, chatId)
+    const res = makeResponse()
+    await apiHandler(makeRequest({
+      character: CHARACTER,
+      chatId,
+      message: 'Continue',
+      revision: snapshot!.revision,
+      sessionId: 'session-generate',
+    }), res)
+    const request = llmRequests.at(-1)
+    expect(request?.system).toContain('filtered lore')
+    expect(request?.system).not.toContain('unfiltered lore')
+    expect(request?.system).toContain('filtered active lore')
+    expect(request?.system).not.toContain('unfiltered active lore')
+  })
+
   it('rejects the ST generation endpoint for an AgentTavern binding', async () => {
     await store.updateState((state) => ({
       sessionBindings: {
@@ -224,6 +294,58 @@ describe('internal Tavern session bridge occupation', () => {
       architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER, chatId,
     })
     expect(turnStarts(agent)).toHaveLength(0)
+    expect(agent.injections).toHaveLength(0)
+  })
+
+  it('accepts the AgentTavern one-time asset preload setting', async () => {
+    const res = makeResponse()
+    await apiHandler(makeRequest({ agentTavernPreloadAssets: true }, '/api/dsh-tavern/state'), res)
+    expect(res.statusCode).toBe(200)
+    expect((await store.getState()).agentTavernPreloadAssets).toBe(true)
+  })
+
+  it('does not retroactively preload an existing AgentTavern binding', async () => {
+    const agent = makeAgent('session-agent-tavern')
+    await handler({
+      agent,
+      rawInput: base64Url({ character: CHARACTER, chatId, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+    })
+    expect(agent.injections).toHaveLength(0)
+  })
+
+  it('injects character data and constant lore once when an AgentTavern session is initialized', async () => {
+    const agent = makeAgent('session-agent-preload')
+    const rawInput = base64Url({ character: CHARACTER, chatId, architecture: 'agent-tavern', contextMode: 'dsh-native' })
+    const bindingBody = {
+      sessionId: agent.id,
+      character: CHARACTER,
+      chatId,
+      architecture: 'agent-tavern',
+      contextMode: 'dsh-native',
+    }
+    const bindingResponse = makeResponse()
+    await apiHandler(makeRequest(bindingBody, '/api/dsh-tavern/binding'), bindingResponse)
+    expect(bindingResponse.statusCode).toBe(200)
+    expect((await store.getState()).sessionBindings[agent.id]).toMatchObject({ initializationPending: true })
+
+    await handler({ agent, rawInput })
+    await apiHandler(makeRequest(bindingBody, '/api/dsh-tavern/binding'), makeResponse())
+    await handler({ agent, rawInput })
+
+    expect(agent.injections).toHaveLength(1)
+    const message = agent.injections[0] as { role: string; content: Array<{ type: string; text: string }>; source: Record<string, unknown> }
+    expect(message.role).toBe('user')
+    expect(message.source).toMatchObject({ kind: 'plugin', plugin: 'dsh-tavern', form: 'context' })
+    expect(message.content[0]?.text).toContain('A test character')
+    expect(message.content[0]?.text).toContain('unfiltered lore')
+    expect(message.content[0]?.text).toContain('unfiltered active lore')
+    expect(message.content[0]?.text).toContain('embedded default lore')
+    expect(message.content[0]?.text).not.toContain('active keyword lore')
+    expect(message.content[0]?.text).not.toContain('embedded keyword lore')
+    expect(message.content[0]?.text).not.toContain('disabled default lore')
+    expect((await store.getState()).sessionBindings[agent.id]).not.toHaveProperty('initializationPending')
+
+    await store.patchState({ agentTavernPreloadAssets: false })
   })
 
   it('exposes the read-only AgentTavern projection and state audit', async () => {
