@@ -26,6 +26,7 @@ import {
   encodeCharx,
   encodeCharacterCardJson,
   encodeCharacterCardPng,
+  parseCharacterBook,
   parseChatLog,
   parseGroupFile,
   parseWorldInfoFile,
@@ -80,7 +81,7 @@ export interface TextCompletionConfig {
 
 export interface TavernState {
   activeCharacter?: string
-  /** 启用的世界书名列表（含卡内嵌书的角色书按卡名引用） */
+  /** 启用的世界书名列表；角色绑定的世界书（extensions.world）在使用该角色时自动并入 */
   activeWorlds: string[]
   activePreset?: string
   activePersona?: string
@@ -175,11 +176,13 @@ export class TavernStore {
 
   /* ------------------------------ 角色 ------------------------------ */
 
-  /** 导入角色卡：PNG/CHARX 原字节落盘保留资源；JSON 对象序列化落盘。重名覆盖。 */
-  async importCharacter(source: Uint8Array | object): Promise<{ fileName: string; card: CharacterCardIR }> {
+  /** 导入角色卡：PNG/CHARX 原字节落盘保留资源；JSON 对象序列化落盘。重名覆盖。
+   *  卡内嵌角色书自动物化为世界书文件并写回 extensions.world 链接（对齐 ST 导入语义）。 */
+  async importCharacter(source: Uint8Array | object): Promise<{ fileName: string; card: CharacterCardIR; importedWorld?: string }> {
     let bytes: Uint8Array
     let kind: 'png' | 'json' | 'charx'
     let card: CharacterCardIR
+    let charxAssets: Array<{ path: string; data: Uint8Array }> | undefined
     if (source instanceof Uint8Array) {
       if (source[0] === 0x89 && source[1] === 0x50) {
         bytes = source
@@ -188,7 +191,9 @@ export class TavernStore {
       } else if (source[0] === 0x50 && source[1] === 0x4b) {
         bytes = source
         kind = 'charx'
-        card = decodeCharx(bytes).card
+        const decoded = decodeCharx(bytes)
+        card = decoded.card
+        charxAssets = decoded.assetPaths.map((assetPath) => ({ path: assetPath, data: decodeCharxAsset(bytes, assetPath) }))
       } else {
         card = decodeCharacterCard(JSON.parse(Buffer.from(source).toString('utf8')))
         bytes = jsonBytes(encodeCharacterCardJson(card))
@@ -199,13 +204,42 @@ export class TavernStore {
       bytes = jsonBytes(encodeCharacterCardJson(card))
       kind = 'json'
     }
+    const importedWorld = await this.materializeEmbeddedBook(card)
+    if (importedWorld !== undefined) {
+      // 链接写回了卡数据，容器需重编码以携带新 extensions.world（图像等资源经模板/资产保留）
+      bytes = kind === 'png'
+        ? encodeCharacterCardPng(card, bytes)
+        : kind === 'charx'
+          ? encodeCharx(card, charxAssets!)
+          : jsonBytes(encodeCharacterCardJson(card))
+    }
     const stem = safeFileName(card.data.name)
     const fileName = `${stem}.${kind}`
     await this.writeAtomic(path.join(this.root, 'characters', fileName), bytes)
     await Promise.all((['png', 'json', 'charx'] as const)
       .filter((other) => other !== kind)
       .map((other) => fs.rm(path.join(this.root, 'characters', `${stem}.${other}`), { force: true })))
-    return { fileName, card }
+    return { fileName, card, importedWorld }
+  }
+
+  /**
+   * 卡内嵌角色书 → worlds/ 下的世界书文件（重名覆盖，导入以卡内嵌书为准），
+   * 并把 extensions.world 链接写回卡数据。返回物化的世界书名；无内嵌书时为 undefined。
+   * 命名：已有链接名 > 内嵌书自身名 > 角色名。
+   */
+  private async materializeEmbeddedBook(card: CharacterCardIR): Promise<string | undefined> {
+    const book = card.data.characterBook
+    if (!book) return undefined
+    const rawLinked = card.data.extensions['world']
+    const linkedName = typeof rawLinked === 'string' ? rawLinked.trim() : ''
+    const bookName = linkedName !== ''
+      ? linkedName
+      : (typeof book.name === 'string' && book.name.trim() !== '' ? book.name.trim() : card.data.name)
+    await this.putWorld({ ...parseCharacterBook(book), name: bookName })
+    if (linkedName === '') {
+      card.data.extensions = { ...card.data.extensions, world: bookName }
+    }
+    return bookName
   }
 
   /** 导出角色卡 PNG（带模板图）；无图像模板时导出 JSON。 */

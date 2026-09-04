@@ -21,16 +21,22 @@ export async function collectWorldInfoBooks(
 ): Promise<Lorebook[]> {
   const worldNames = new Set(state.activeWorlds)
   const linkedWorld = character.card.data.extensions['world']
-  if (typeof linkedWorld === 'string' && linkedWorld.trim() !== '') worldNames.add(linkedWorld.trim())
+  const linkedName = typeof linkedWorld === 'string' && linkedWorld.trim() !== '' ? linkedWorld.trim() : undefined
+  if (linkedName !== undefined) worldNames.add(linkedName)
 
   const books: Lorebook[] = []
+  let linkedImported = false
   for (const worldName of worldNames) {
     const world = await db.getWorld(worldName)
-    if (world) books.push({ name: world.name, entries: world.entries })
+    if (world) {
+      books.push({ name: world.name, entries: world.entries })
+      if (worldName === linkedName) linkedImported = true
+    }
   }
 
+  // 卡内嵌书只在链接世界缺失（未导入/未物化）时兜底，避免与已导入的世界书重复激活。
   const characterBook = character.card.data.characterBook
-  if (characterBook) {
+  if (characterBook && !linkedImported) {
     const embedded = parseCharacterBook(characterBook)
     books.unshift({
       name: `${characterName}:embedded`,

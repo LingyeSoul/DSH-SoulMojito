@@ -339,7 +339,8 @@ describe('internal Tavern session bridge occupation', () => {
     expect(message.content[0]?.text).toContain('A test character')
     expect(message.content[0]?.text).toContain('unfiltered lore')
     expect(message.content[0]?.text).toContain('unfiltered active lore')
-    expect(message.content[0]?.text).toContain('embedded default lore')
+    // 链接世界已导入：内嵌书不再叠加，避免同一份条目重复激活
+    expect(message.content[0]?.text).not.toContain('embedded default lore')
     expect(message.content[0]?.text).not.toContain('active keyword lore')
     expect(message.content[0]?.text).not.toContain('embedded keyword lore')
     expect(message.content[0]?.text).not.toContain('disabled default lore')
@@ -413,5 +414,57 @@ describe('internal Tavern session bridge occupation', () => {
     })
     expect(res.chunks.some((chunk) => chunk.includes('test generation failure'))).toBe(true)
     failGeneration = false
+  })
+
+  it('imports an embedded character book as a linked world file', async () => {
+    const card = {
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: 'Lore Carrier', description: 'carries lore', personality: '', scenario: '', first_mes: 'hi',
+        mes_example: '', creator_notes: '', system_prompt: '', post_history_instructions: '',
+        alternate_greetings: [], tags: [], creator: '', character_version: '',
+        character_book: {
+          name: 'Carrier Lore',
+          entries: [
+            { id: 0, keys: [], content: 'carrier constant lore', enabled: true, insertion_order: 100, constant: true },
+          ],
+        },
+        extensions: {},
+      },
+    }
+    const res = makeResponse()
+    await apiHandler(makeRequest({ card }, '/api/dsh-tavern/import/character'), res)
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.chunks.join(''))).toMatchObject({ ok: true, name: 'Lore Carrier', world: 'Carrier Lore' })
+    expect(await store.listWorlds()).toContain('Carrier Lore')
+    expect((await store.getCharacter('Lore Carrier'))?.card.data.extensions['world']).toBe('Carrier Lore')
+    const book = await store.getWorld('Carrier Lore')
+    expect(book?.entries).toHaveLength(1)
+    expect(book?.entries[0]?.content).toBe('carrier constant lore')
+  })
+
+  it('activates the linked world when a character becomes active', async () => {
+    const res = makeResponse()
+    await apiHandler(makeRequest({ activeCharacter: 'Lore Carrier' }, '/api/dsh-tavern/state'), res)
+    expect(res.statusCode).toBe(200)
+    expect((await store.getState()).activeWorlds).toContain('Carrier Lore')
+    // 切回原角色：手动激活的世界书保持，新角色的链接世界并入
+    await apiHandler(makeRequest({ activeCharacter: CHARACTER }, '/api/dsh-tavern/state'), makeResponse())
+    const state = await store.getState()
+    expect(state.activeWorlds).toContain('Carrier Lore')
+    expect(state.activeWorlds).toContain('Linked Lore')
+  })
+
+  it('activates the linked world when a session binds the character', async () => {
+    const chatId = await store.createChat('Lore Carrier', {
+      user_name: 'unused', character_name: 'unused', chat_metadata: { timedWorldInfo: {} },
+    }, [])
+    const res = makeResponse()
+    await apiHandler(makeRequest({
+      sessionId: 'session-carrier', character: 'Lore Carrier', chatId,
+    }, '/api/dsh-tavern/binding'), res)
+    expect(res.statusCode).toBe(200)
+    expect((await store.getState()).activeWorlds).toContain('Carrier Lore')
   })
 })

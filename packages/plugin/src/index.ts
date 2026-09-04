@@ -458,9 +458,20 @@ async function handleApi(ctx, req, res) {
         body.defaultContextMode === 'dsh-native' ? 'dsh-native' : current.defaultContextMode,
       )
     }
+    // 使用角色时自动激活其绑定的世界书：并入本次 activeWorlds（用户同请求显式给的列表优先保留）
+    const activateWorlds = typeof body.activeCharacter === 'string' && body.activeCharacter !== ''
+      ? await characterLinkedWorlds(db, body.activeCharacter)
+      : []
     const patch = {
       ...(typeof body.activeCharacter === 'string' || body.activeCharacter === null ? { activeCharacter: body.activeCharacter || undefined } : {}),
-      ...(Array.isArray(body.activeWorlds) ? { activeWorlds: body.activeWorlds.filter((x) => typeof x === 'string') } : {}),
+      ...(Array.isArray(body.activeWorlds) || activateWorlds.length > 0
+        ? {
+            activeWorlds: [...new Set([
+              ...(Array.isArray(body.activeWorlds) ? body.activeWorlds.filter((x) => typeof x === 'string') : (await db.getState()).activeWorlds),
+              ...activateWorlds,
+            ])],
+          }
+        : {}),
       ...(typeof body.activePreset === 'string' || body.activePreset === null ? { activePreset: body.activePreset || undefined } : {}),
       ...(typeof body.activePersona === 'string' || body.activePersona === null ? { activePersona: body.activePersona || undefined } : {}),
       ...(typeof body.nativeAgentPersona === 'boolean' ? { nativeAgentPersona: body.nativeAgentPersona } : {}),
@@ -494,9 +505,16 @@ async function handleApi(ctx, req, res) {
     else throw new Error('expected { pngBase64 }, { charxBase64 } or { card }')
     const result = await db.importCharacter(source)
     const current = await db.getState()
-    if (!current.activeCharacter) await db.patchState({ activeCharacter: result.card.data.name })
+    if (!current.activeCharacter) {
+      // 首个导入的角色成为活跃角色，并自动激活其绑定的世界书
+      const linked = await characterLinkedWorlds(db, result.card.data.name)
+      await db.patchState({
+        activeCharacter: result.card.data.name,
+        ...(linked.length > 0 ? { activeWorlds: [...new Set([...current.activeWorlds, ...linked])] } : {}),
+      })
+    }
     await refreshActivePrompt()
-    return sendJson(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card) })
+    return sendJson(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card), world: result.importedWorld ?? null })
   }
 
   if (method === 'POST' && route === 'import/world') {
@@ -1664,6 +1682,18 @@ async function isGroupChat(db, characterName, chatId) {
 }
 
 /**
+ * 角色卡 extensions.world 绑定且已存在的世界书名（自动激活目标）。
+ * 世界书文件不存在（外部引用未导入）时返回空，不产生悬空激活。
+ */
+async function characterLinkedWorlds(db, characterName) {
+  const found = await db.getCharacter(characterName)
+  const world = found?.card.data.extensions['world']
+  if (typeof world !== 'string' || world.trim() === '') return []
+  const book = await db.getWorld(world.trim())
+  return book ? [book.name] : []
+}
+
+/**
  * markdownOnly AI_OUTPUT 脚本的展示层文本（ST 语义：仅改显示，不进 prompt、不落盘）。
  * 返回与 messages 平行的数组；无脚本时返回 undefined。
  */
@@ -1817,6 +1847,8 @@ async function bindSession(
   contextMode = 'dsh-native',
   initializationPending = false,
 ) {
+  // 使用角色（会话绑定）时自动激活其绑定的世界书；群聊无单一角色，不并入
+  const linkedWorlds = group ? [] : await characterLinkedWorlds(db, character)
   return db.updateState((state) => {
     const existing = state.sessionBindings[sessionId]
     const sameAgentBinding = existing?.architecture === 'agent-tavern'
@@ -1832,6 +1864,9 @@ async function bindSession(
       : { architecture: 'st', character, chatId, ...(group ? { group: true } : {}) }
     return {
       activeCharacter: group ? state.activeCharacter : character,
+      ...(group || linkedWorlds.length === 0
+        ? {}
+        : { activeWorlds: [...new Set([...state.activeWorlds, ...linkedWorlds])] }),
       sessionBindings: {
         ...state.sessionBindings,
         [sessionId]: binding,

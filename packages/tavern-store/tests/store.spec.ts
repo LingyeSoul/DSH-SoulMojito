@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MemoryStore, TavernStore, VariableStore } from '../src/index.js'
-import { decodeCharacterCard, encodeCharx, stableDeepEqual } from '@dsh-tavern/format'
+import { decodeCharacterCard, encodeCharx, encodeCharacterCardPng, stableDeepEqual } from '@dsh-tavern/format'
 
 const fixturesDir = fileURLToPath(new URL('../../tavern-format/tests/fixtures', import.meta.url))
 
@@ -103,6 +103,72 @@ describe('TavernStore', () => {
     await store.importCharacter(sampleCard)
     expect((await store.getCharacter('Test Char'))?.kind).toBe('json')
     expect(await store.listCharacters()).toEqual(['Test Char'])
+  }))
+
+  it('角色：内嵌角色书自动物化为世界书并写回 extensions.world 链接', withStore(async (store) => {
+    const card = {
+      ...sampleCard,
+      data: {
+        ...sampleCard.data,
+        character_book: {
+          name: 'Carrier Lore',
+          entries: [{ id: 0, keys: ['gate'], content: 'embedded lore', enabled: true, insertion_order: 100 }],
+        },
+      },
+    }
+    const { importedWorld, card: ir } = await store.importCharacter(card)
+    expect(importedWorld).toBe('Carrier Lore')
+    expect(await store.listWorlds()).toEqual(['Carrier Lore'])
+    expect((await store.getWorld('Carrier Lore'))?.entries).toHaveLength(1)
+    expect(ir.data.extensions['world']).toBe('Carrier Lore')
+    // 落盘的卡重新读取后仍携带链接
+    expect((await store.getCharacter('Test Char'))?.card.data.extensions['world']).toBe('Carrier Lore')
+  }))
+
+  it('角色：内嵌书物化沿用已有链接名并覆盖同名世界书（对齐 ST 覆盖语义）', withStore(async (store) => {
+    await store.importWorldFile('Linked Lore', {
+      entries: {
+        '0': { uid: 0, key: [], keysecondary: [], comment: '', content: 'manual lore', constant: true, selective: false, order: 100, position: 0, disable: false },
+      },
+    })
+    const card = {
+      ...sampleCard,
+      data: {
+        ...sampleCard.data,
+        character_book: {
+          entries: [{ id: 0, keys: [], content: 'embedded lore', enabled: true, insertion_order: 100 }],
+        },
+        extensions: { world: 'Linked Lore' },
+      },
+    }
+    const { importedWorld, card: ir } = await store.importCharacter(card)
+    expect(importedWorld).toBe('Linked Lore')
+    expect(ir.data.extensions['world']).toBe('Linked Lore')
+    expect(await store.listWorlds()).toEqual(['Linked Lore'])
+    expect((await store.getWorld('Linked Lore'))?.entries[0]?.content).toBe('embedded lore')
+  }))
+
+  it('角色：PNG 内嵌书物化后图像保留、链接写回 chunk', withStore(async (store) => {
+    const png = new Uint8Array(readFileSync(`${fixturesDir}/ExampleCard.png`))
+    const base = decodeCharacterCard(png)
+    const withBook = {
+      ...base,
+      data: {
+        ...base.data,
+        characterBook: {
+          name: 'PNG Lore',
+          entries: [{ id: 0, keys: ['k'], content: 'png lore', enabled: true, insertion_order: 100 }],
+        },
+        extensions: {},
+      },
+    }
+    const { importedWorld } = await store.importCharacter(encodeCharacterCardPng(withBook, png))
+    expect(importedWorld).toBe('PNG Lore')
+    expect(await store.listWorlds()).toContain('PNG Lore')
+    const exported = await store.exportCharacter('ExampleCard')
+    expect(exported.length).toBeGreaterThan(100_000)
+    expect(decodeCharacterCard(exported).data.extensions['world']).toBe('PNG Lore')
+    expect(decodeCharacterCard(exported).data.characterBook?.entries).toHaveLength(1)
   }))
 
   it('世界书：导入 → 读取 roundtrip → 删除', withStore(async (store) => {

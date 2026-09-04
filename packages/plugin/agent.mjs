@@ -495,11 +495,71 @@ function entryToFileObject(entry) {
   const { extra, ...fields } = entry;
   return { ...fields, ...extra ?? {} };
 }
+function parseCharacterBook(book) {
+  const entries = (book.entries ?? []).map((raw, index) => bookEntryToLoreEntry(raw, index));
+  return { name: book.name ?? "", entries };
+}
+function bookEntryToLoreEntry(raw, index) {
+  const ext = raw.extensions ?? {};
+  const uid = numOr(raw.id, ext["uid"], index);
+  const entry = normalizeEntry({
+    uid,
+    key: raw.keys ?? [],
+    keysecondary: raw.secondary_keys ?? [],
+    comment: raw.comment ?? raw.name ?? "",
+    content: raw.content ?? "",
+    constant: boolOr(raw.constant, ext["constant"], false),
+    disable: raw.enabled === false,
+    order: numOr(ext["order"], raw.insertion_order, 100),
+    position: bookPositionToSt(raw.position, ext["position"]),
+    selective: boolOr(raw.selective, ext["selective"], true),
+    selectiveLogic: num(ext["selectiveLogic"], 0),
+    caseSensitive: nullableBoolOr(raw.case_sensitive, ext["case_sensitive"]),
+    probability: numOr(ext["probability"], 100, 100),
+    useProbability: boolOr(ext["useProbability"], true, true),
+    depth: numOr(ext["depth"], 4, 4),
+    group: str2(ext["group"]),
+    groupOverride: bool(ext["group_override"], false),
+    groupWeight: numOr(ext["group_weight"], 100, 100),
+    excludeRecursion: boolOr(ext["exclude_recursion"], false, false),
+    preventRecursion: boolOr(ext["prevent_recursion"], false, false),
+    delayUntilRecursion: numOr(ext["delay_until_recursion"], 0, 0),
+    scanDepth: nullableNum(ext["scan_depth"]),
+    matchWholeWords: nullableBool(ext["match_whole_words"]),
+    useGroupScoring: nullableBool(ext["use_group_scoring"]),
+    role: num(ext["role"], 0),
+    vectorized: bool(ext["vectorized"], false),
+    sticky: nullableNum(ext["sticky"]),
+    cooldown: nullableNum(ext["cooldown"]),
+    delay: nullableNum(ext["delay"]),
+    triggers: strArray2(ext["triggers"])
+  });
+  const carried = {};
+  if (raw.priority !== void 0)
+    carried["book.priority"] = raw.priority;
+  if (raw.use_regex !== void 0)
+    carried["book.use_regex"] = raw.use_regex;
+  if (raw.name !== void 0)
+    carried["book.name"] = raw.name;
+  if (Object.keys(carried).length > 0)
+    entry.extra = { ...entry.extra ?? {}, ...carried };
+  return entry;
+}
+function bookPositionToSt(bookPos, extPos) {
+  if (typeof extPos === "number")
+    return extPos;
+  if (bookPos === "after_char")
+    return 1;
+  return 0;
+}
 function str2(v) {
   return typeof v === "string" ? v : "";
 }
 function num(v, fallback) {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+function numOr(v, v2, fallback) {
+  return typeof v === "number" && Number.isFinite(v) ? v : num(v2, fallback);
 }
 function nullableNum(v) {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
@@ -507,8 +567,14 @@ function nullableNum(v) {
 function bool(v, fallback) {
   return typeof v === "boolean" ? v : fallback;
 }
+function boolOr(v, v2, fallback) {
+  return typeof v === "boolean" ? v : bool(v2, fallback);
+}
 function nullableBool(v) {
   return typeof v === "boolean" ? v : null;
+}
+function nullableBoolOr(v, v2) {
+  return typeof v === "boolean" ? v : nullableBool(v2);
 }
 function strArray2(v) {
   return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
@@ -1694,11 +1760,13 @@ var TavernStore = class _TavernStore {
     return new _TavernStore(root);
   }
   /* ------------------------------ 角色 ------------------------------ */
-  /** 导入角色卡：PNG/CHARX 原字节落盘保留资源；JSON 对象序列化落盘。重名覆盖。 */
+  /** 导入角色卡：PNG/CHARX 原字节落盘保留资源；JSON 对象序列化落盘。重名覆盖。
+   *  卡内嵌角色书自动物化为世界书文件并写回 extensions.world 链接（对齐 ST 导入语义）。 */
   async importCharacter(source) {
     let bytes;
     let kind;
     let card;
+    let charxAssets;
     if (source instanceof Uint8Array) {
       if (source[0] === 137 && source[1] === 80) {
         bytes = source;
@@ -1707,7 +1775,9 @@ var TavernStore = class _TavernStore {
       } else if (source[0] === 80 && source[1] === 75) {
         bytes = source;
         kind = "charx";
-        card = decodeCharx(bytes).card;
+        const decoded = decodeCharx(bytes);
+        card = decoded.card;
+        charxAssets = decoded.assetPaths.map((assetPath) => ({ path: assetPath, data: decodeCharxAsset(bytes, assetPath) }));
       } else {
         card = decodeCharacterCard(JSON.parse(Buffer.from(source).toString("utf8")));
         bytes = jsonBytes(encodeCharacterCardJson(card));
@@ -1718,11 +1788,32 @@ var TavernStore = class _TavernStore {
       bytes = jsonBytes(encodeCharacterCardJson(card));
       kind = "json";
     }
+    const importedWorld = await this.materializeEmbeddedBook(card);
+    if (importedWorld !== void 0) {
+      bytes = kind === "png" ? encodeCharacterCardPng(card, bytes) : kind === "charx" ? encodeCharx(card, charxAssets) : jsonBytes(encodeCharacterCardJson(card));
+    }
     const stem = safeFileName(card.data.name);
     const fileName = `${stem}.${kind}`;
     await this.writeAtomic(path.join(this.root, "characters", fileName), bytes);
     await Promise.all(["png", "json", "charx"].filter((other) => other !== kind).map((other) => fs.rm(path.join(this.root, "characters", `${stem}.${other}`), { force: true })));
-    return { fileName, card };
+    return { fileName, card, importedWorld };
+  }
+  /**
+   * 卡内嵌角色书 → worlds/ 下的世界书文件（重名覆盖，导入以卡内嵌书为准），
+   * 并把 extensions.world 链接写回卡数据。返回物化的世界书名；无内嵌书时为 undefined。
+   * 命名：已有链接名 > 内嵌书自身名 > 角色名。
+   */
+  async materializeEmbeddedBook(card) {
+    const book = card.data.characterBook;
+    if (!book) return void 0;
+    const rawLinked = card.data.extensions["world"];
+    const linkedName = typeof rawLinked === "string" ? rawLinked.trim() : "";
+    const bookName = linkedName !== "" ? linkedName : typeof book.name === "string" && book.name.trim() !== "" ? book.name.trim() : card.data.name;
+    await this.putWorld({ ...parseCharacterBook(book), name: bookName });
+    if (linkedName === "") {
+      card.data.extensions = { ...card.data.extensions, world: bookName };
+    }
+    return bookName;
   }
   /** 导出角色卡 PNG（带模板图）；无图像模板时导出 JSON。 */
   async exportCharacter(name2, template) {
@@ -3523,35 +3614,35 @@ function normalizeEntry3(raw) {
     extra: Object.keys(extra).length > 0 ? extra : void 0
   };
 }
-function parseCharacterBook(book) {
-  const entries = (book.entries ?? []).map((raw, index) => bookEntryToLoreEntry(raw, index));
+function parseCharacterBook2(book) {
+  const entries = (book.entries ?? []).map((raw, index) => bookEntryToLoreEntry2(raw, index));
   return { name: book.name ?? "", entries };
 }
-function bookEntryToLoreEntry(raw, index) {
+function bookEntryToLoreEntry2(raw, index) {
   const ext = raw.extensions ?? {};
-  const uid = numOr(raw.id, ext["uid"], index);
+  const uid = numOr2(raw.id, ext["uid"], index);
   const entry = normalizeEntry3({
     uid,
     key: raw.keys ?? [],
     keysecondary: raw.secondary_keys ?? [],
     comment: raw.comment ?? raw.name ?? "",
     content: raw.content ?? "",
-    constant: boolOr(raw.constant, ext["constant"], false),
+    constant: boolOr2(raw.constant, ext["constant"], false),
     disable: raw.enabled === false,
-    order: numOr(ext["order"], raw.insertion_order, 100),
-    position: bookPositionToSt(raw.position, ext["position"]),
-    selective: boolOr(raw.selective, ext["selective"], true),
+    order: numOr2(ext["order"], raw.insertion_order, 100),
+    position: bookPositionToSt2(raw.position, ext["position"]),
+    selective: boolOr2(raw.selective, ext["selective"], true),
     selectiveLogic: num4(ext["selectiveLogic"], 0),
-    caseSensitive: nullableBoolOr(raw.case_sensitive, ext["case_sensitive"]),
-    probability: numOr(ext["probability"], 100, 100),
-    useProbability: boolOr(ext["useProbability"], true, true),
-    depth: numOr(ext["depth"], 4, 4),
+    caseSensitive: nullableBoolOr2(raw.case_sensitive, ext["case_sensitive"]),
+    probability: numOr2(ext["probability"], 100, 100),
+    useProbability: boolOr2(ext["useProbability"], true, true),
+    depth: numOr2(ext["depth"], 4, 4),
     group: str5(ext["group"]),
     groupOverride: bool4(ext["group_override"], false),
-    groupWeight: numOr(ext["group_weight"], 100, 100),
-    excludeRecursion: boolOr(ext["exclude_recursion"], false, false),
-    preventRecursion: boolOr(ext["prevent_recursion"], false, false),
-    delayUntilRecursion: numOr(ext["delay_until_recursion"], 0, 0),
+    groupWeight: numOr2(ext["group_weight"], 100, 100),
+    excludeRecursion: boolOr2(ext["exclude_recursion"], false, false),
+    preventRecursion: boolOr2(ext["prevent_recursion"], false, false),
+    delayUntilRecursion: numOr2(ext["delay_until_recursion"], 0, 0),
     scanDepth: nullableNum2(ext["scan_depth"]),
     matchWholeWords: nullableBool2(ext["match_whole_words"]),
     useGroupScoring: nullableBool2(ext["use_group_scoring"]),
@@ -3569,7 +3660,7 @@ function bookEntryToLoreEntry(raw, index) {
   if (Object.keys(carried).length > 0) entry.extra = { ...entry.extra ?? {}, ...carried };
   return entry;
 }
-function bookPositionToSt(bookPos, extPos) {
+function bookPositionToSt2(bookPos, extPos) {
   if (typeof extPos === "number") return extPos;
   if (bookPos === "after_char") return 1;
   return 0;
@@ -3580,7 +3671,7 @@ function str5(v) {
 function num4(v, fallback) {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
-function numOr(v, v2, fallback) {
+function numOr2(v, v2, fallback) {
   return typeof v === "number" && Number.isFinite(v) ? v : num4(v2, fallback);
 }
 function nullableNum2(v) {
@@ -3589,13 +3680,13 @@ function nullableNum2(v) {
 function bool4(v, fallback) {
   return typeof v === "boolean" ? v : fallback;
 }
-function boolOr(v, v2, fallback) {
+function boolOr2(v, v2, fallback) {
   return typeof v === "boolean" ? v : bool4(v2, fallback);
 }
 function nullableBool2(v) {
   return typeof v === "boolean" ? v : null;
 }
-function nullableBoolOr(v, v2) {
+function nullableBoolOr2(v, v2) {
   return typeof v === "boolean" ? v : nullableBool2(v2);
 }
 function strArray4(v) {
@@ -3606,15 +3697,20 @@ function strArray4(v) {
 async function collectWorldInfoBooks(db, state, characterName, character) {
   const worldNames = new Set(state.activeWorlds);
   const linkedWorld = character.card.data.extensions["world"];
-  if (typeof linkedWorld === "string" && linkedWorld.trim() !== "") worldNames.add(linkedWorld.trim());
+  const linkedName = typeof linkedWorld === "string" && linkedWorld.trim() !== "" ? linkedWorld.trim() : void 0;
+  if (linkedName !== void 0) worldNames.add(linkedName);
   const books = [];
+  let linkedImported = false;
   for (const worldName of worldNames) {
     const world = await db.getWorld(worldName);
-    if (world) books.push({ name: world.name, entries: world.entries });
+    if (world) {
+      books.push({ name: world.name, entries: world.entries });
+      if (worldName === linkedName) linkedImported = true;
+    }
   }
   const characterBook = character.card.data.characterBook;
-  if (characterBook) {
-    const embedded = parseCharacterBook(characterBook);
+  if (characterBook && !linkedImported) {
+    const embedded = parseCharacterBook2(characterBook);
     books.unshift({
       name: `${characterName}:embedded`,
       entries: embedded.entries,

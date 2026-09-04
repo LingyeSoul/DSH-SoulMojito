@@ -3482,11 +3482,71 @@ function entryToFileObject(entry) {
   const { extra, ...fields } = entry;
   return { ...fields, ...extra ?? {} };
 }
+function parseCharacterBook2(book) {
+  const entries = (book.entries ?? []).map((raw, index) => bookEntryToLoreEntry2(raw, index));
+  return { name: book.name ?? "", entries };
+}
+function bookEntryToLoreEntry2(raw, index) {
+  const ext = raw.extensions ?? {};
+  const uid = numOr3(raw.id, ext["uid"], index);
+  const entry = normalizeEntry4({
+    uid,
+    key: raw.keys ?? [],
+    keysecondary: raw.secondary_keys ?? [],
+    comment: raw.comment ?? raw.name ?? "",
+    content: raw.content ?? "",
+    constant: boolOr2(raw.constant, ext["constant"], false),
+    disable: raw.enabled === false,
+    order: numOr3(ext["order"], raw.insertion_order, 100),
+    position: bookPositionToSt2(raw.position, ext["position"]),
+    selective: boolOr2(raw.selective, ext["selective"], true),
+    selectiveLogic: num4(ext["selectiveLogic"], 0),
+    caseSensitive: nullableBoolOr2(raw.case_sensitive, ext["case_sensitive"]),
+    probability: numOr3(ext["probability"], 100, 100),
+    useProbability: boolOr2(ext["useProbability"], true, true),
+    depth: numOr3(ext["depth"], 4, 4),
+    group: str6(ext["group"]),
+    groupOverride: bool5(ext["group_override"], false),
+    groupWeight: numOr3(ext["group_weight"], 100, 100),
+    excludeRecursion: boolOr2(ext["exclude_recursion"], false, false),
+    preventRecursion: boolOr2(ext["prevent_recursion"], false, false),
+    delayUntilRecursion: numOr3(ext["delay_until_recursion"], 0, 0),
+    scanDepth: nullableNum2(ext["scan_depth"]),
+    matchWholeWords: nullableBool2(ext["match_whole_words"]),
+    useGroupScoring: nullableBool2(ext["use_group_scoring"]),
+    role: num4(ext["role"], 0),
+    vectorized: bool5(ext["vectorized"], false),
+    sticky: nullableNum2(ext["sticky"]),
+    cooldown: nullableNum2(ext["cooldown"]),
+    delay: nullableNum2(ext["delay"]),
+    triggers: strArray4(ext["triggers"])
+  });
+  const carried = {};
+  if (raw.priority !== void 0)
+    carried["book.priority"] = raw.priority;
+  if (raw.use_regex !== void 0)
+    carried["book.use_regex"] = raw.use_regex;
+  if (raw.name !== void 0)
+    carried["book.name"] = raw.name;
+  if (Object.keys(carried).length > 0)
+    entry.extra = { ...entry.extra ?? {}, ...carried };
+  return entry;
+}
+function bookPositionToSt2(bookPos, extPos) {
+  if (typeof extPos === "number")
+    return extPos;
+  if (bookPos === "after_char")
+    return 1;
+  return 0;
+}
 function str6(v) {
   return typeof v === "string" ? v : "";
 }
 function num4(v, fallback) {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+function numOr3(v, v2, fallback) {
+  return typeof v === "number" && Number.isFinite(v) ? v : num4(v2, fallback);
 }
 function nullableNum2(v) {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
@@ -3494,8 +3554,14 @@ function nullableNum2(v) {
 function bool5(v, fallback) {
   return typeof v === "boolean" ? v : fallback;
 }
+function boolOr2(v, v2, fallback) {
+  return typeof v === "boolean" ? v : bool5(v2, fallback);
+}
 function nullableBool2(v) {
   return typeof v === "boolean" ? v : null;
+}
+function nullableBoolOr2(v, v2) {
+  return typeof v === "boolean" ? v : nullableBool2(v2);
 }
 function strArray4(v) {
   return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
@@ -4022,11 +4088,13 @@ var TavernStore = class _TavernStore {
     return new _TavernStore(root);
   }
   /* ------------------------------ 角色 ------------------------------ */
-  /** 导入角色卡：PNG/CHARX 原字节落盘保留资源；JSON 对象序列化落盘。重名覆盖。 */
+  /** 导入角色卡：PNG/CHARX 原字节落盘保留资源；JSON 对象序列化落盘。重名覆盖。
+   *  卡内嵌角色书自动物化为世界书文件并写回 extensions.world 链接（对齐 ST 导入语义）。 */
   async importCharacter(source) {
     let bytes;
     let kind;
     let card;
+    let charxAssets;
     if (source instanceof Uint8Array) {
       if (source[0] === 137 && source[1] === 80) {
         bytes = source;
@@ -4035,7 +4103,9 @@ var TavernStore = class _TavernStore {
       } else if (source[0] === 80 && source[1] === 75) {
         bytes = source;
         kind = "charx";
-        card = decodeCharx(bytes).card;
+        const decoded = decodeCharx(bytes);
+        card = decoded.card;
+        charxAssets = decoded.assetPaths.map((assetPath) => ({ path: assetPath, data: decodeCharxAsset2(bytes, assetPath) }));
       } else {
         card = decodeCharacterCard2(JSON.parse(Buffer.from(source).toString("utf8")));
         bytes = jsonBytes(encodeCharacterCardJson2(card));
@@ -4046,11 +4116,32 @@ var TavernStore = class _TavernStore {
       bytes = jsonBytes(encodeCharacterCardJson2(card));
       kind = "json";
     }
+    const importedWorld = await this.materializeEmbeddedBook(card);
+    if (importedWorld !== void 0) {
+      bytes = kind === "png" ? encodeCharacterCardPng(card, bytes) : kind === "charx" ? encodeCharx(card, charxAssets) : jsonBytes(encodeCharacterCardJson2(card));
+    }
     const stem = safeFileName(card.data.name);
     const fileName = `${stem}.${kind}`;
     await this.writeAtomic(path.join(this.root, "characters", fileName), bytes);
     await Promise.all(["png", "json", "charx"].filter((other) => other !== kind).map((other) => fs.rm(path.join(this.root, "characters", `${stem}.${other}`), { force: true })));
-    return { fileName, card };
+    return { fileName, card, importedWorld };
+  }
+  /**
+   * 卡内嵌角色书 → worlds/ 下的世界书文件（重名覆盖，导入以卡内嵌书为准），
+   * 并把 extensions.world 链接写回卡数据。返回物化的世界书名；无内嵌书时为 undefined。
+   * 命名：已有链接名 > 内嵌书自身名 > 角色名。
+   */
+  async materializeEmbeddedBook(card) {
+    const book = card.data.characterBook;
+    if (!book) return void 0;
+    const rawLinked = card.data.extensions["world"];
+    const linkedName = typeof rawLinked === "string" ? rawLinked.trim() : "";
+    const bookName = linkedName !== "" ? linkedName : typeof book.name === "string" && book.name.trim() !== "" ? book.name.trim() : card.data.name;
+    await this.putWorld({ ...parseCharacterBook2(book), name: bookName });
+    if (linkedName === "") {
+      card.data.extensions = { ...card.data.extensions, world: bookName };
+    }
+    return bookName;
   }
   /** 导出角色卡 PNG（带模板图）；无图像模板时导出 JSON。 */
   async exportCharacter(name2, template) {
@@ -5238,14 +5329,19 @@ var AGENT_TAVERN_PRELOAD_MAX_CHARS = 32e3;
 async function collectWorldInfoBooks(db, state, characterName, character) {
   const worldNames = new Set(state.activeWorlds);
   const linkedWorld = character.card.data.extensions["world"];
-  if (typeof linkedWorld === "string" && linkedWorld.trim() !== "") worldNames.add(linkedWorld.trim());
+  const linkedName = typeof linkedWorld === "string" && linkedWorld.trim() !== "" ? linkedWorld.trim() : void 0;
+  if (linkedName !== void 0) worldNames.add(linkedName);
   const books = [];
+  let linkedImported = false;
   for (const worldName of worldNames) {
     const world = await db.getWorld(worldName);
-    if (world) books.push({ name: world.name, entries: world.entries });
+    if (world) {
+      books.push({ name: world.name, entries: world.entries });
+      if (worldName === linkedName) linkedImported = true;
+    }
   }
   const characterBook = character.card.data.characterBook;
-  if (characterBook) {
+  if (characterBook && !linkedImported) {
     const embedded = parseCharacterBook(characterBook);
     books.unshift({
       name: `${characterName}:embedded`,
@@ -5726,9 +5822,15 @@ async function handleApi(ctx, req, res) {
         body.defaultContextMode === "dsh-native" ? "dsh-native" : current.defaultContextMode
       );
     }
+    const activateWorlds = typeof body.activeCharacter === "string" && body.activeCharacter !== "" ? await characterLinkedWorlds(db, body.activeCharacter) : [];
     const patch = {
       ...typeof body.activeCharacter === "string" || body.activeCharacter === null ? { activeCharacter: body.activeCharacter || void 0 } : {},
-      ...Array.isArray(body.activeWorlds) ? { activeWorlds: body.activeWorlds.filter((x) => typeof x === "string") } : {},
+      ...Array.isArray(body.activeWorlds) || activateWorlds.length > 0 ? {
+        activeWorlds: [.../* @__PURE__ */ new Set([
+          ...Array.isArray(body.activeWorlds) ? body.activeWorlds.filter((x) => typeof x === "string") : (await db.getState()).activeWorlds,
+          ...activateWorlds
+        ])]
+      } : {},
       ...typeof body.activePreset === "string" || body.activePreset === null ? { activePreset: body.activePreset || void 0 } : {},
       ...typeof body.activePersona === "string" || body.activePersona === null ? { activePersona: body.activePersona || void 0 } : {},
       ...typeof body.nativeAgentPersona === "boolean" ? { nativeAgentPersona: body.nativeAgentPersona } : {},
@@ -5753,9 +5855,15 @@ async function handleApi(ctx, req, res) {
     else throw new Error("expected { pngBase64 }, { charxBase64 } or { card }");
     const result = await db.importCharacter(source);
     const current = await db.getState();
-    if (!current.activeCharacter) await db.patchState({ activeCharacter: result.card.data.name });
+    if (!current.activeCharacter) {
+      const linked = await characterLinkedWorlds(db, result.card.data.name);
+      await db.patchState({
+        activeCharacter: result.card.data.name,
+        ...linked.length > 0 ? { activeWorlds: [.../* @__PURE__ */ new Set([...current.activeWorlds, ...linked])] } : {}
+      });
+    }
     await refreshActivePrompt();
-    return sendJson(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card) });
+    return sendJson(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card), world: result.importedWorld ?? null });
   }
   if (method === "POST" && route === "import/world") {
     const body = await readJson(req);
@@ -6808,6 +6916,13 @@ async function isGroupChat(db, characterName, chatId) {
   const chat = await db.getChat(characterName, chatId);
   return chat?.header?.chat_metadata?.group !== void 0;
 }
+async function characterLinkedWorlds(db, characterName) {
+  const found = await db.getCharacter(characterName);
+  const world = found?.card.data.extensions["world"];
+  if (typeof world !== "string" || world.trim() === "") return [];
+  const book = await db.getWorld(world.trim());
+  return book ? [book.name] : [];
+}
 async function displayTexts(db, state, characterName, chat) {
   const character = await db.getCharacter(characterName);
   const scripts = collectRegexScripts(state, character).filter((script) => script.markdownOnly && !script.disabled);
@@ -6942,6 +7057,7 @@ async function ensureBundledAgentTavernPreset() {
   }
 }
 async function bindSession(db, sessionId, character, chatId, group2 = false, architecture = "st", contextMode = "dsh-native", initializationPending = false) {
+  const linkedWorlds = group2 ? [] : await characterLinkedWorlds(db, character);
   return db.updateState((state) => {
     const existing = state.sessionBindings[sessionId];
     const sameAgentBinding = existing?.architecture === "agent-tavern" && existing.character === character && existing.chatId === chatId;
@@ -6955,6 +7071,7 @@ async function bindSession(db, sessionId, character, chatId, group2 = false, arc
     } : { architecture: "st", character, chatId, ...group2 ? { group: true } : {} };
     return {
       activeCharacter: group2 ? state.activeCharacter : character,
+      ...group2 || linkedWorlds.length === 0 ? {} : { activeWorlds: [.../* @__PURE__ */ new Set([...state.activeWorlds, ...linkedWorlds])] },
       sessionBindings: {
         ...state.sessionBindings,
         [sessionId]: binding
