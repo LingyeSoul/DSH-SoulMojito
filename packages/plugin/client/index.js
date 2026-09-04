@@ -184,6 +184,7 @@ window.__ModuleLoader__.load({
       'settings.contextManaged': 'Agent memory',
       'settings.contextManagedUnavailable': 'Agent memory is unavailable: {reason}',
       'settings.preloadAssets': 'Preload character and constant World Info when a new AgentTavern session starts',
+      'settings.allowGlobalWrites': 'Allow AgentTavern tools to write memories and variables in the global scope',
       'settings.worldsEmpty': 'No world books imported',
       'settings.import': 'Import',
       'settings.importCharacter': 'Character card',
@@ -285,6 +286,8 @@ window.__ModuleLoader__.load({
       'panel.characters.alternateGreetings': 'Alternate greetings (one per line)',
       'panel.characters.advancedJson': 'Advanced card data (JSON)',
       'panel.characters.editHint': 'Edits keep the original card container and embedded assets when possible.',
+      'panel.characters.identitySummary': 'Identity summary (AgentTavern)',
+      'panel.characters.identitySummaryHint': 'Short third-person identity the AgentTavern kernel injects every turn. Leave empty to derive a minimal summary from the description.',
       'panel.worlds.entries': '{count} entries',
       'panel.worlds.search': 'Search entries',
       'panel.worlds.noEntries': 'No entries match the search.',
@@ -340,6 +343,8 @@ window.__ModuleLoader__.load({
       'panel.variables.nativeVariables': 'Agent variables',
       'panel.variables.auditLoading': 'Loading AgentTavern audit…',
       'panel.variables.auditProjectionError': 'Projection error: {message}',
+      'panel.variables.replayProjection': 'Replay projection',
+      'panel.variables.replaying': 'Replaying…',
       'panel.variables.auditSource': 'Source: {source}',
       'panel.variables.auditRevision': 'Revision: {revision}',
       'panel.variables.auditExpired': 'Expired: {value}',
@@ -427,6 +432,7 @@ window.__ModuleLoader__.load({
       'settings.contextManaged': 'Agent 记忆',
       'settings.contextManagedUnavailable': 'Agent 记忆不可用：{reason}',
       'settings.preloadAssets': '新 AgentTavern 会话开始时预载角色信息和常驻世界书条目',
+      'settings.allowGlobalWrites': '允许 AgentTavern 工具写入 global 作用域的记忆和变量',
       'settings.worldsEmpty': '尚未导入世界书',
       'settings.import': '导入',
       'settings.importCharacter': '角色卡',
@@ -528,6 +534,8 @@ window.__ModuleLoader__.load({
       'panel.characters.alternateGreetings': '备用开场白（每行一个）',
       'panel.characters.advancedJson': '高级卡片数据（JSON）',
       'panel.characters.editHint': '保存时会尽量保留原始卡片容器与内嵌资源。',
+      'panel.characters.identitySummary': '身份摘要（AgentTavern）',
+      'panel.characters.identitySummaryHint': 'AgentTavern 内核每轮注入的简短第三人称身份描述；留空时从角色描述派生极短摘要。',
       'panel.worlds.entries': '{count} 条目',
       'panel.worlds.search': '搜索条目',
       'panel.worlds.noEntries': '没有匹配的条目。',
@@ -583,6 +591,8 @@ window.__ModuleLoader__.load({
       'panel.variables.nativeVariables': 'Agent 变量',
       'panel.variables.auditLoading': '正在加载 AgentTavern 审计…',
       'panel.variables.auditProjectionError': '投影错误：{message}',
+      'panel.variables.replayProjection': '重放投影',
+      'panel.variables.replaying': '重放中…',
       'panel.variables.auditSource': '来源：{source}',
       'panel.variables.auditRevision': '修订：{revision}',
       'panel.variables.auditExpired': '过期：{value}',
@@ -670,7 +680,7 @@ window.__ModuleLoader__.load({
     const EMPTY_BOOTSTRAP = {
       state: {
         activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
-        agentTavernPreloadAssets: false, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat',
+        agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat',
       },
       characters: [],
       worlds: [],
@@ -1989,7 +1999,14 @@ window.__ModuleLoader__.load({
                   checked: bootstrap.state.agentTavernPreloadAssets === true,
                   onChange: (event) => applyPatch({ agentTavernPreloadAssets: event.target.checked }),
                 }),
-                h('span', null, t('settings.preloadAssets'))))
+                h('span', null, t('settings.preloadAssets'))),
+              h('label', { className: 'dt-toggle' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: bootstrap.state.agentTavernAllowGlobalWrites === true,
+                  onChange: (event) => applyPatch({ agentTavernAllowGlobalWrites: event.target.checked }),
+                }),
+                h('span', null, t('settings.allowGlobalWrites'))))
             : null),
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
@@ -3090,7 +3107,7 @@ window.__ModuleLoader__.load({
       return value === undefined ? value : JSON.parse(JSON.stringify(value))
     }
 
-    function EditorField({ label, value, onChange, multiline = false, type = 'text', min, max, step, className = '' }) {
+    function EditorField({ label, value, onChange, multiline = false, type = 'text', min, max, step, className = '', hint }) {
       const props = {
         value: value ?? '',
         type,
@@ -3101,7 +3118,8 @@ window.__ModuleLoader__.load({
       }
       return h('label', { className: `dt-editor-field ${className}` },
         h('span', { className: 'dt-label' }, label),
-        multiline ? h('textarea', { ...props, type: undefined }) : h('input', props))
+        multiline ? h('textarea', { ...props, type: undefined }) : h('input', props),
+        hint ? h('span', { className: 'dt-hint' }, hint) : null)
     }
 
     function CardEditor({ card, name, onSave, onCancel }) {
@@ -3126,6 +3144,19 @@ window.__ModuleLoader__.load({
         return () => window.removeEventListener('beforeunload', handleBeforeUnload)
       }, [dirty])
       const setData = (key, value) => setDraft((current) => ({ ...current, data: { ...(current.data || {}), [key]: value } }))
+      const identitySummary = typeof data.extensions?.agentTavern?.identitySummary === 'string'
+        ? data.extensions.agentTavern.identitySummary
+        : ''
+      const setIdentitySummary = (value) => setDraft((current) => ({
+        ...current,
+        data: {
+          ...(current.data || {}),
+          extensions: {
+            ...(current.data?.extensions || {}),
+            agentTavern: { ...((current.data?.extensions || {}).agentTavern || {}), identitySummary: value },
+          },
+        },
+      }))
       const cancel = () => {
         if (!dirty || window.confirm(`${t('panel.unsaved')}?`)) onCancel()
       }
@@ -3133,9 +3164,23 @@ window.__ModuleLoader__.load({
         let extra
         try { extra = advanced.trim() === '' ? {} : JSON.parse(advanced) } catch { setError('Advanced card data must be valid JSON.'); return }
         if (!extra || typeof extra !== 'object' || Array.isArray(extra)) { setError('Advanced card data must be a JSON object.'); return }
+        // 专用编辑字段对 identitySummary 有更高优先级；留空且原卡也没有时不动
+        // extensions，避免给无关卡片塞进空命名空间。
+        const nextData = { ...data, ...extra, name: String(data.name || '').trim() }
+        const originalSummary = typeof card?.data?.extensions?.agentTavern?.identitySummary === 'string'
+          ? card.data.extensions.agentTavern.identitySummary
+          : ''
+        if (identitySummary !== '' || originalSummary !== '') {
+          nextData.extensions = { ...(nextData.extensions || {}) }
+          const agentExtensions = { ...((nextData.extensions || {}).agentTavern || {}) }
+          if (identitySummary !== '') agentExtensions.identitySummary = identitySummary
+          else delete agentExtensions.identitySummary
+          if (Object.keys(agentExtensions).length > 0) nextData.extensions.agentTavern = agentExtensions
+          else delete nextData.extensions.agentTavern
+        }
         setSaving(true)
         setError('')
-        void Promise.resolve(onSave({ ...draft, data: { ...data, ...extra, name: String(data.name || '').trim() } }))
+        void Promise.resolve(onSave({ ...draft, data: nextData }))
           .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
           .finally(() => setSaving(false))
       }
@@ -3152,6 +3197,7 @@ window.__ModuleLoader__.load({
           h(EditorField, { label: t('panel.characters.nickname'), value: data.nickname, onChange: (value) => setData('nickname', value) }),
           h(EditorField, { label: t('panel.characters.creator'), value: data.creator, onChange: (value) => setData('creator', value) }),
           h(EditorField, { label: t('panel.characters.tags'), value: commaList(data.tags), onChange: (value) => setData('tags', parseCommaList(value)) }),
+          h(EditorField, { label: t('panel.characters.identitySummary'), value: identitySummary, onChange: setIdentitySummary, multiline: true, className: 'dt-editor-wide', hint: t('panel.characters.identitySummaryHint') }),
           h(EditorField, { label: t('panel.characters.description'), value: data.description, onChange: (value) => setData('description', value), multiline: true, className: 'dt-editor-wide' }),
           h(EditorField, { label: t('panel.characters.personality'), value: data.personality, onChange: (value) => setData('personality', value), multiline: true, className: 'dt-editor-wide' }),
           h(EditorField, { label: t('panel.characters.scenario'), value: data.scenario, onChange: (value) => setData('scenario', value), multiline: true, className: 'dt-editor-wide' }),
@@ -3614,6 +3660,8 @@ window.__ModuleLoader__.load({
       const [audit, setAudit] = useState(null)
       const [auditLoading, setAuditLoading] = useState(false)
       const [auditError, setAuditError] = useState('')
+      const [replayBusy, setReplayBusy] = useState(false)
+      const [replayNonce, setReplayNonce] = useState(0)
       const [saved, setSaved] = useState(false)
       const currentSession = useSessions ? useSessions((sessions) => sessions.current) : null
       const binding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
@@ -3642,7 +3690,20 @@ window.__ModuleLoader__.load({
           .catch((cause) => { if (!cancelled) setAuditError(cause instanceof Error ? cause.message : String(cause)) })
           .finally(() => { if (!cancelled) setAuditLoading(false) })
         return () => { cancelled = true }
-      }, [currentSession, agentBinding?.character, agentBinding?.chatId, agentBinding?.contextMode])
+      }, [currentSession, agentBinding?.character, agentBinding?.chatId, agentBinding?.contextMode, replayNonce])
+      const replayProjection = () => {
+        if (!currentSession || replayBusy) return
+        setReplayBusy(true)
+        setAuditError('')
+        void api('projection/replay', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ sessionId: currentSession }),
+        })
+          .then(() => setReplayNonce((nonce) => nonce + 1))
+          .catch((cause) => setAuditError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setReplayBusy(false))
+      }
       const updateRow = (index, patch) => setRows(rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row))
       const save = () => {
         const globals = {}
@@ -3706,6 +3767,15 @@ window.__ModuleLoader__.load({
                     })) : null),
                   audit.projection?.error
                     ? h('p', { className: 'dt-error' }, t('panel.variables.auditProjectionError', { message: audit.projection.error }))
+                    : null,
+                  audit.projection?.status === 'pending'
+                    ? h('div', { className: 'dt-imports' },
+                      h(Button, {
+                        size: 'sm',
+                        variant: 'outline',
+                        disabled: replayBusy,
+                        onClick: replayProjection,
+                      }, replayBusy ? t('panel.variables.replaying') : t('panel.variables.replayProjection')))
                     : null,
                   h('h4', null, t('panel.variables.memories')),
                   audit.memories?.length

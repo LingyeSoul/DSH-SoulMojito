@@ -182,7 +182,7 @@ describe('TavernStore', () => {
   it('状态：默认值 → patch 持久化', withStore(async (store) => {
     expect(await store.getState()).toEqual({
       activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
-      agentTavernPreloadAssets: false, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat',
+      agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat',
     })
     await store.patchState({
       activeCharacter: 'ExampleCard',
@@ -263,6 +263,19 @@ describe('TavernStore', () => {
     await variables.delete('chat', 'chat-1', 'score', next.revision)
     expect(await variables.get('chat', 'chat-1', 'score')).toBeUndefined()
     expect(await variables.get('character', 'chat-1', 'label')).toBeUndefined()
+  }))
+
+  it('variables：turn 作用域整体 clear（turn 结束过期）', withStore(async (_store, dir) => {
+    const variables = await VariableStore.open(path.join(dir, 'agent'))
+    await variables.set('turn', 'session-1', 'step', 1)
+    await variables.set('turn', 'session-1', 'mood', 'calm')
+    await variables.set('turn', 'session-2', 'step', 2)
+    expect(await variables.get('turn', 'session-1', 'step')).toBeDefined()
+    await variables.clear('turn', 'session-1')
+    expect(await variables.get('turn', 'session-1', 'step')).toBeUndefined()
+    expect(await variables.get('turn', 'session-1', 'mood')).toBeUndefined()
+    expect((await variables.get('turn', 'session-2', 'step'))?.value).toBe(2)
+    await variables.clear('turn', 'missing')
   }))
 
   it('persona：存取', withStore(async (store) => {

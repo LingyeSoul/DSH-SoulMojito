@@ -80,6 +80,10 @@ export function apply(ctx) {
   ctx.on?.('session/event', (session, event) => {
     void agentTavernProjectorPromise!.then((projector) => projector.project(session, event))
       .catch((error) => ctx.logger?.warn?.(`AgentTavern projection failed: ${error instanceof Error ? error.message : String(error)}`))
+    // turn 作用域变量是单轮 scratch 状态，turn 结束即过期。
+    if (event?.type === 'turn/end' && typeof session?.id === 'string') {
+      void variables().then((store) => store.clear('turn', session.id)).catch(() => {})
+    }
   })
   ctx.on?.('agent/created', ({ agent }) => {
     void agentTavernProjectorPromise!.then((projector) => projector.replay(agent.session))
@@ -285,6 +289,26 @@ async function handleApi(ctx, req, res) {
     return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) })
   }
 
+  if (method === 'POST' && route === 'projection/replay') {
+    const body = await readJson(req).catch(() => ({}) as Record<string, unknown>)
+    const sessionId = typeof body.sessionId === 'string' ? body.sessionId : url.searchParams.get('sessionId')
+    if (!sessionId) throw new Error('sessionId is required')
+    const state = await db.getState()
+    const binding = state.sessionBindings[sessionId]
+    if (!binding || binding.architecture !== 'agent-tavern' || binding.group === true) {
+      throw new TavernArchitectureConflictError('Projection replay requires an AgentTavern single-character binding.')
+    }
+    const agent = ctx.agents?.get?.(sessionId) as { session?: { events?: unknown[] } } | undefined
+    const session = agent?.session
+    if (!session || !Array.isArray(session.events)) {
+      throw new Error('AgentTavern session is not loaded in this host process; open the chat first and retry.')
+    }
+    const projector = await agentTavernProjectorPromise
+    if (!projector) throw new Error('AgentTavern projector is unavailable')
+    await projector.replay(session as never)
+    return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) })
+  }
+
   if (method === 'GET' && route === 'agent-tavern/audit') {
     const sessionId = url.searchParams.get('sessionId')
     if (!sessionId) throw new Error('sessionId query is required')
@@ -298,11 +322,13 @@ async function handleApi(ctx, req, res) {
       { scope: 'character' as const, scopeId: binding.character },
       { scope: 'agent' as const, scopeId: sessionId },
     ]
-    const [memoryGroups, variableGroups, projector] = await Promise.all([
+    const [memoryGroups, variableGroups, globalMemories, globalVariables, projector] = await Promise.all([
       Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store) => store.search({
         scope, scopeId, includeDeleted: true, limit: 50,
       })))),
       Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store) => store.list(scope, scopeId, '', 100)))),
+      memories().then((store) => store.search({ scope: 'global', includeDeleted: true, limit: 50 })),
+      variables().then((store) => store.list('global', 'global', '', 100)),
       agentTavernProjectorPromise,
     ])
     return sendJson(res, 200, {
@@ -310,8 +336,8 @@ async function handleApi(ctx, req, res) {
       architecture: binding.architecture,
       contextMode: binding.contextMode,
       projection: projector ? await projector.status(sessionId) : null,
-      memories: memoryGroups.flat().map((hit) => hit.record),
-      variables: variableGroups.flat(),
+      memories: [...memoryGroups.flat(), ...globalMemories.map((hit) => hit.record)],
+      variables: [...variableGroups.flat(), ...globalVariables],
     })
   }
 
@@ -321,6 +347,7 @@ async function handleApi(ctx, req, res) {
     if (!body.card || typeof body.card !== 'object' || Array.isArray(body.card)) {
       throw new Error('expected { card }')
     }
+    clampIdentitySummary(body.card)
     const saved = await db.updateCharacter(oldName, body.card)
     const nextName = saved.card.data.name
     const state = await db.updateState((current) => {
@@ -445,6 +472,9 @@ async function handleApi(ctx, req, res) {
         : {}),
       ...(typeof body.agentTavernPreloadAssets === 'boolean'
         ? { agentTavernPreloadAssets: body.agentTavernPreloadAssets }
+        : {}),
+      ...(typeof body.agentTavernAllowGlobalWrites === 'boolean'
+        ? { agentTavernAllowGlobalWrites: body.agentTavernAllowGlobalWrites }
         : {}),
       ...(body.pipelineMode === 'chat' || body.pipelineMode === 'text' ? { pipelineMode: body.pipelineMode } : {}),
       ...(isTextCompletionConfig(body.textCompletion) ? { textCompletion: normalizeTextCompletion(body.textCompletion) } : {}),
@@ -2084,6 +2114,20 @@ function deepFreeze(value) {
 
 function publicCard(card) {
   return { spec: card.spec, specVersion: card.specVersion, data: card.data }
+}
+
+/** 角色短身份摘要存在 data.extensions.agentTavern 下；服务端钳制长度，非字符串直接拒绝。 */
+function clampIdentitySummary(card) {
+  const extensions = card?.data?.extensions
+  const agentTavern = extensions?.agentTavern
+  if (!agentTavern || typeof agentTavern !== 'object' || Array.isArray(agentTavern)) return
+  const summary = agentTavern.identitySummary
+  if (summary === undefined || summary === null || summary === '') {
+    delete agentTavern.identitySummary
+    return
+  }
+  if (typeof summary !== 'string') throw new Error('identitySummary must be a string')
+  agentTavern.identitySummary = summary.slice(0, 2000)
 }
 
 function imageContentType(ext) {

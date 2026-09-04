@@ -128,6 +128,14 @@ export class VariableStore {
       .map((name) => snapshot(file, name))
   }
 
+  /** Drop the whole scope file; used for turn-scoped scratch state that expires at turn end. */
+  async clear(scope: VariableScope, scopeId: string): Promise<void> {
+    validateScope(scope, scopeId)
+    await this.mutate(async () => {
+      await fs.rm(this.filePath(scope, scopeId), { force: true })
+    })
+  }
+
   private async readFile(scope: VariableScope, scopeId: string): Promise<VariableFile | undefined> {
     try {
       const parsed = JSON.parse(await fs.readFile(this.filePath(scope, scopeId), 'utf8')) as VariableFile

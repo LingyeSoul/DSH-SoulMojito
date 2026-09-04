@@ -94,6 +94,8 @@ export interface TavernState {
   defaultContextMode: TavernContextMode
   /** 新建 AgentTavern 会话初始化时预注入角色信息与常驻世界书条目。 */
   agentTavernPreloadAssets: boolean
+  /** 允许 AgentTavern 工具写入 global 作用域的记忆/变量；默认关闭。 */
+  agentTavernAllowGlobalWrites: boolean
   /** DSH session 到模型选择的持久映射；随 bindings/prune 一同清理。 */
   modelSelections: Record<string, TavernModelSelection>
   /** 每聊天元数据（最后激活时间、swipe 指针等自由袋） */
@@ -150,6 +152,7 @@ const DEFAULT_STATE: TavernState = {
   defaultArchitecture: 'agent-tavern',
   defaultContextMode: 'dsh-native',
   agentTavernPreloadAssets: false,
+  agentTavernAllowGlobalWrites: false,
   modelSelections: {},
   chats: {},
   regexScripts: [],
@@ -628,6 +631,7 @@ export class TavernStore {
       defaultArchitecture: parsed.defaultArchitecture === 'st' ? 'st' : 'agent-tavern',
       defaultContextMode: parsed.defaultContextMode === 'agent-managed' ? 'agent-managed' : 'dsh-native',
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
+      agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],

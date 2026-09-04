@@ -55,6 +55,8 @@ const REQUIRED_SERVER_ROUTES = [
   'chat/',
   'branch',
   'agent-tavern/audit',
+  'projection',
+  'projection/replay',
   'regex',
   'script',
   'tc/check',

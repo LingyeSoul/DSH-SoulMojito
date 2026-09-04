@@ -120,13 +120,22 @@ AgentTavern 工具的身份来自真实 DSH agent binding，模型不能通过�
 
 | 工具 | 作用 |
 |---|---|
-| `tavern_character_get` | 读取当前绑定角色的名称、昵称、描述、性格、场景和角色卡版本。 |
+| `tavern_character_get` | 读取当前绑定角色的名称、昵称、身份摘要、描述、性格、场景和角色卡版本。 |
 | `tavern_lore_search` | 按查询词和预算检索全局启用、角色关联及卡内嵌世界书。 |
+| `tavern_history_search` | 在当前绑定聊天（可选回溯 bookmark 父分支）按词法检索历史消息。 |
 | `tavern_scene_get` | 读取当前绑定聊天的场景、消息数量和聊天元数据。 |
-| `memory_search` | 在当前 chat、character 或 agent 作用域做有来源的词法记忆检索。 |
-| `memory_write` | 在选定作用域写入带来源、标签、置信度和 revision 的记忆。 |
+| `memory_search` | 在当前 chat、character、agent 或 global 作用域做有来源的词法记忆检索。 |
+| `memory_read` | 按稳定 id 读取一条记忆及其来源。 |
+| `memory_write` | 在选定作用域写入带来源、标签、置信度的记忆；global 写入需在设置中显式开启。 |
+| `memory_update` | 按 id + expected revision 条件更新记忆，未提供的字段保持原值。 |
+| `memory_forget` | 按 id + expected revision 软删除记忆，保留审计记录。 |
 | `variable_get` | 读取当前作用域中的 typed JSON 变量。 |
 | `variable_set` | 写入变量并支持 expected revision 的 CAS 冲突保护。 |
+| `variable_patch` | 在同一作用域原子写入多个变量，任一 revision 冲突则整批失败。 |
+| `variable_delete` | 删除当前作用域变量，需 revision 匹配。 |
+| `variable_list` | 按前缀列出作用域内变量名和值摘要。 |
+
+变量工具支持 `chat`、`character`、`agent`、`global` 与 `turn` 作用域；`turn` 作用域是单轮 scratch 状态，turn 结束时自动清空，`global` 写入默认关闭、需在设置中开启。角色卡支持可编辑的 `agentTavern.identitySummary` 身份摘要（管理面板角色编辑器内），AgentTavern 内核每轮注入该摘要；缺失时回退为名称和极短描述。投影失败时管理面板"变量"分区提供状态查询和一键重放入口。
 
 ST 与 AgentTavern 新聊天共用 `$DSH_HOME/tavern/workspace/` 下的 `Tavern (internal)` 工作区；插件按 workspace 路径/ID 从原生侧边栏隐藏整个分组，旧宿主没有身份属性时仅在标题唯一时回退。升级前已经存在的宿主会话不会跨工作区迁移，但绑定的 Tavern 会话行仍会按插件过滤。
 
@@ -198,7 +207,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：21 个测试文件、169 项测试通过；11 个插件 gates（含 AgentTavern 隔离、native header adapter、内部工作区和 client VM mount）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.1.0-rc.6` 的隔离 runtime。
+当前基线：21 个测试文件、174 项测试通过；11 个插件 gates（含 AgentTavern 隔离、native header adapter、内部工作区和 client VM mount）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.1.0-rc.6` 的隔离 runtime。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 
