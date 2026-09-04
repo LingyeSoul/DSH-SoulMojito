@@ -30,7 +30,7 @@ import {
   type AgentTavernCapabilities,
 } from './agent-tavern/capabilities.js'
 import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
-import { AgentTavernProjector } from './agent-tavern/projector.js'
+import { AgentTavernProjector, historyImportAppends, type SessionImportAppend } from './agent-tavern/projector.js'
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
 
 export const name = 'dsh-tavern'
@@ -130,11 +130,13 @@ export function apply(ctx) {
       if (!chat) return { kind: 'error', text: 'Tavern chat not found.' }
       const currentState = await db.getState()
       const previous = currentState.sessionBindings[agent.id]
-      const shouldPreloadAssets = parsed.architecture === 'agent-tavern'
+      const initializeAgentTavern = parsed.architecture === 'agent-tavern'
+        && (previous?.architecture !== 'agent-tavern' || previous.initializationPending === true)
+      const shouldPreloadAssets = initializeAgentTavern
         && parsed.group !== true
         && currentState.agentTavernPreloadAssets === true
-        && (previous?.architecture !== 'agent-tavern' || previous.initializationPending === true)
       let preloadSnapshot: string | undefined
+      let historyImport: SessionImportAppend[] | undefined
       await assertAgentTavernAvailable(parsed.architecture, parsed.contextMode)
       if (parsed.architecture === 'agent-tavern') {
         if (agent.session.events.some((event) => event.type === 'turn/start')) {
@@ -143,11 +145,19 @@ export function apply(ctx) {
         if (typeof ctx.agentPresets?.recompose !== 'function') {
           throw new TavernArchitectureConflictError('The host cannot recompose a blank session with the AgentTavern preset.')
         }
+        const character = parsed.group !== true && (initializeAgentTavern || shouldPreloadAssets)
+          ? await db.getCharacter(parsed.character)
+          : undefined
+        if (initializeAgentTavern && parsed.group !== true) {
+          // 开场白与既有聊天记录必须先落到原生会话，用户才能在 DSH 会话里看到
+          // 角色开口；带插件来源的导入事件由投影器跳过，不会重复写回 JSONL。
+          // 历史文本应用 prompt 层正则，模型上下文与 ST 管线一致。
+          historyImport = historyImportAppends(chat, agent.id, character ? collectRegexScripts(currentState, character) : [])
+        }
         if (shouldPreloadAssets) {
           if (typeof agent.inject !== 'function') {
             throw new TavernArchitectureConflictError('This host cannot preload AgentTavern session context.')
           }
-          const character = await db.getCharacter(parsed.character)
           if (!character) throw new Error('Tavern character not found.')
           preloadSnapshot = await buildAgentTavernPreloadSnapshot(db, currentState, parsed.character, character)
         }
@@ -174,6 +184,16 @@ export function apply(ctx) {
             summary: `AgentTavern preload: ${parsed.character}`,
           },
         }))
+      }
+      if (historyImport !== undefined) {
+        try {
+          for (const item of historyImport) {
+            agent.session.append(item.type, item.data, item.surfaceOp === undefined ? undefined : { surfaceOp: item.surfaceOp })
+          }
+        } catch (error) {
+          // 导入失败不阻断绑定；用户仍可直接对话，缺失的历史留在 JSONL 可重放。
+          ctx.logger?.warn?.(`AgentTavern history import failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
       }
       await refreshActivePrompt()
       if (parsed.architecture === 'st') occupyHostSession(agent)
@@ -514,7 +534,7 @@ async function handleApi(ctx, req, res) {
       })
     }
     await refreshActivePrompt()
-    return sendJson(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card), world: result.importedWorld ?? null })
+    return sendJson(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card), world: result.importedWorld ?? null, importedRegex: result.importedRegex })
   }
 
   if (method === 'POST' && route === 'import/world') {
@@ -922,18 +942,9 @@ async function handleApi(ctx, req, res) {
   if (method === 'POST' && route === 'import/regex') {
     const body = await readJson(req)
     if (!Array.isArray(body.data) && typeof body.data !== 'object') throw new Error('expected { data }')
-    const imported = parseRegexScripts(body.data)
-    const state = await db.updateState((current) => {
-      const seen = new Set(current.regexScripts.map((script) => script.scriptName))
-      const merged = [...current.regexScripts]
-      for (const script of imported) {
-        const index = seen.has(script.scriptName) ? merged.findIndex((item) => item.scriptName === script.scriptName) : -1
-        if (index >= 0) merged[index] = script
-        else merged.push(script)
-      }
-      return { regexScripts: merged }
-    })
-    return sendJson(res, 200, { ok: true, scripts: state.regexScripts })
+    const imported = await db.importRegexScripts(body.data)
+    const state = await db.getState()
+    return sendJson(res, 200, { ok: true, imported, scripts: state.regexScripts })
   }
 
   if (method === 'GET' && route === 'tc/check') {

@@ -13,7 +13,7 @@ function base64Url(value: unknown) {
 }
 
 function makeAgent(id: string) {
-  const events: Array<{ type: string; data: unknown }> = []
+  const events: Array<{ type: string; data: unknown; opts?: unknown }> = []
   const injections: unknown[] = []
   return {
     id,
@@ -22,7 +22,9 @@ function makeAgent(id: string) {
     inject: (message: unknown) => { injections.push(message) },
     session: {
       events,
-      append: (type: string, data: unknown) => { events.push({ type, data }) },
+      append: (type: string, data: unknown, opts?: unknown) => {
+        events.push(opts === undefined ? { type, data } : { type, data, opts })
+      },
     },
   }
 }
@@ -84,6 +86,7 @@ describe('internal Tavern session bridge occupation', () => {
   let llmRequests: Array<{ system?: string }>
   let failGeneration = false
   let chatId: string
+  let emptyChatId: string
 
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-tavern-occupy-'))
@@ -145,6 +148,11 @@ describe('internal Tavern session bridge occupation', () => {
       }]),
     })
     chatId = await store.createChat(CHARACTER, {
+      user_name: 'unused', character_name: 'unused',
+      chat_metadata: { createdAt: new Date().toISOString(), timedWorldInfo: {} },
+    }, [])
+    // AgentTavern 激活测试专用：保持零消息，下面的 ST 生成测试只写 chatId。
+    emptyChatId = await store.createChat(CHARACTER, {
       user_name: 'unused', character_name: 'unused',
       chat_metadata: { createdAt: new Date().toISOString(), timedWorldInfo: {} },
     }, [])
@@ -285,16 +293,77 @@ describe('internal Tavern session bridge occupation', () => {
     const agent = makeAgent('session-agent-tavern')
     const result = await handler({
       agent,
-      rawInput: base64Url({ character: CHARACTER, chatId, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+      rawInput: base64Url({ character: CHARACTER, chatId: emptyChatId, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
     })
     expect(result.kind).toBe('success')
     expect(recomposeCalls).toEqual([{ agent: agent.ctx, presetId: 'agent-tavern' }])
     expect(agent.session.events).toEqual([{ type: 'agent-preset/selected', data: { agentPreset: 'agent-tavern' } }])
-    expect((await store.getState()).sessionBindings['session-agent-tavern']).toEqual({
-      architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER, chatId,
-    })
     expect(turnStarts(agent)).toHaveLength(0)
     expect(agent.injections).toHaveLength(0)
+  })
+
+  it('imports the greeting and existing history into a fresh AgentTavern session', async () => {
+    const now = new Date().toISOString()
+    const greetingChat = await store.createChat(CHARACTER, {
+      user_name: 'unused', character_name: 'unused',
+      chat_metadata: { createdAt: now, timedWorldInfo: {} },
+    }, [
+      { name: CHARACTER, is_user: false, is_system: false, send_date: now, mes: '早上好，旅行者。' },
+      { name: 'User', is_user: true, is_system: false, send_date: now, mes: '你也是早上好。' },
+      { name: CHARACTER, is_user: false, is_system: false, send_date: now, mes: '今天想去哪里？' },
+    ])
+    const agent = makeAgent('session-agent-greeting')
+    const result = await handler({
+      agent,
+      rawInput: base64Url({ character: CHARACTER, chatId: greetingChat, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+    })
+    expect(result.kind).toBe('success')
+    expect(agent.session.events.map((event) => event.type)).toEqual([
+      'agent-preset/selected',
+      'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+      'turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+    ])
+    const greeting = agent.session.events[3]!
+    expect(greeting.data).toMatchObject({
+      turn: 1, step: 1,
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: '早上好，旅行者。' }],
+        source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'greeting' },
+      },
+    })
+    expect(greeting.opts).toEqual({ surfaceOp: 'append' })
+    expect((greeting.data as { usage?: unknown }).usage).toBeUndefined()
+    const importedUser = agent.session.events[7]!
+    expect(importedUser.data).toMatchObject({
+      role: 'user',
+      content: [{ type: 'text', text: '你也是早上好。' }],
+      source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'history' },
+    })
+    expect(importedUser.opts).toEqual({ surfaceOp: 'append' })
+    const followUp = agent.session.events[9]!
+    expect(followUp.data).toMatchObject({
+      turn: 2, step: 1,
+      message: {
+        content: [{ type: 'text', text: '今天想去哪里？' }],
+        source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'history' },
+      },
+    })
+    expect(turnStarts(agent).map((event) => event.data)).toEqual([{ turn: 1 }, { turn: 2 }])
+  })
+
+  it('keeps the AgentTavern session locked after the history import created turns', async () => {
+    const agent = makeAgent('session-agent-greeting-locked')
+    const now = new Date().toISOString()
+    const lockedChat = await store.createChat(CHARACTER, {
+      user_name: 'unused', character_name: 'unused',
+      chat_metadata: { createdAt: now, timedWorldInfo: {} },
+    }, [{ name: CHARACTER, is_user: false, is_system: false, send_date: now, mes: '嗨。' }])
+    const rawInput = base64Url({ character: CHARACTER, chatId: lockedChat, architecture: 'agent-tavern', contextMode: 'dsh-native' })
+    await handler({ agent, rawInput })
+    expect(agent.session.events.filter((event) => event.type === 'assistant/message')).toHaveLength(1)
+    await expect(handler({ agent, rawInput })).rejects.toThrow('already started')
+    expect(agent.session.events.filter((event) => event.type === 'assistant/message')).toHaveLength(1)
   })
 
   it('accepts the AgentTavern one-time asset preload setting', async () => {
@@ -308,18 +377,18 @@ describe('internal Tavern session bridge occupation', () => {
     const agent = makeAgent('session-agent-tavern')
     await handler({
       agent,
-      rawInput: base64Url({ character: CHARACTER, chatId, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+      rawInput: base64Url({ character: CHARACTER, chatId: emptyChatId, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
     })
     expect(agent.injections).toHaveLength(0)
   })
 
   it('injects character data and constant lore once when an AgentTavern session is initialized', async () => {
     const agent = makeAgent('session-agent-preload')
-    const rawInput = base64Url({ character: CHARACTER, chatId, architecture: 'agent-tavern', contextMode: 'dsh-native' })
+    const rawInput = base64Url({ character: CHARACTER, chatId: emptyChatId, architecture: 'agent-tavern', contextMode: 'dsh-native' })
     const bindingBody = {
       sessionId: agent.id,
       character: CHARACTER,
-      chatId,
+      chatId: emptyChatId,
       architecture: 'agent-tavern',
       contextMode: 'dsh-native',
     }
@@ -442,6 +511,29 @@ describe('internal Tavern session bridge occupation', () => {
     const book = await store.getWorld('Carrier Lore')
     expect(book?.entries).toHaveLength(1)
     expect(book?.entries[0]?.content).toBe('carrier constant lore')
+  })
+
+  it('imports card-embedded regex scripts into the global script list', async () => {
+    const card = {
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: 'Regex Carrier', description: 'carries regex', personality: '', scenario: '', first_mes: 'hi',
+        mes_example: '', creator_notes: '', system_prompt: '', post_history_instructions: '',
+        alternate_greetings: [], tags: [], creator: '', character_version: '',
+        extensions: {
+          regex_scripts: [
+            { scriptName: 'card strip', findRegex: '<div>|</div>', replaceString: '', placement: [2], markdownOnly: true },
+          ],
+        },
+      },
+    }
+    const res = makeResponse()
+    await apiHandler(makeRequest({ card }, '/api/dsh-tavern/import/character'), res)
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.chunks.join(''))).toMatchObject({ ok: true, name: 'Regex Carrier', importedRegex: 1 })
+    const state = await store.getState()
+    expect(state.regexScripts.some((script) => script.scriptName === 'card strip')).toBe(true)
   })
 
   it('activates the linked world when a character becomes active', async () => {

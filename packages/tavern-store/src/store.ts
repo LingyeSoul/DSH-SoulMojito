@@ -29,6 +29,7 @@ import {
   parseCharacterBook,
   parseChatLog,
   parseGroupFile,
+  parseRegexScripts,
   parseWorldInfoFile,
   serializeChatLog,
   serializeGroupFile,
@@ -177,8 +178,9 @@ export class TavernStore {
   /* ------------------------------ 角色 ------------------------------ */
 
   /** 导入角色卡：PNG/CHARX 原字节落盘保留资源；JSON 对象序列化落盘。重名覆盖。
-   *  卡内嵌角色书自动物化为世界书文件并写回 extensions.world 链接（对齐 ST 导入语义）。 */
-  async importCharacter(source: Uint8Array | object): Promise<{ fileName: string; card: CharacterCardIR; importedWorld?: string }> {
+   *  卡内嵌角色书自动物化为世界书文件并写回 extensions.world 链接（对齐 ST 导入语义）。
+   *  卡内嵌 regex_scripts 物化为全局脚本（按 scriptName 合并）。 */
+  async importCharacter(source: Uint8Array | object): Promise<{ fileName: string; card: CharacterCardIR; importedWorld?: string; importedRegex: number }> {
     let bytes: Uint8Array
     let kind: 'png' | 'json' | 'charx'
     let card: CharacterCardIR
@@ -205,6 +207,7 @@ export class TavernStore {
       kind = 'json'
     }
     const importedWorld = await this.materializeEmbeddedBook(card)
+    const importedRegex = await this.importEmbeddedRegex(card)
     if (importedWorld !== undefined) {
       // 链接写回了卡数据，容器需重编码以携带新 extensions.world（图像等资源经模板/资产保留）
       bytes = kind === 'png'
@@ -219,7 +222,7 @@ export class TavernStore {
     await Promise.all((['png', 'json', 'charx'] as const)
       .filter((other) => other !== kind)
       .map((other) => fs.rm(path.join(this.root, 'characters', `${stem}.${other}`), { force: true })))
-    return { fileName, card, importedWorld }
+    return { fileName, card, importedWorld, importedRegex }
   }
 
   /**
@@ -240,6 +243,17 @@ export class TavernStore {
       card.data.extensions = { ...card.data.extensions, world: bookName }
     }
     return bookName
+  }
+
+  /** 卡内嵌 regex_scripts 物化为全局脚本；脚本格式非法时整体跳过，不阻断角色导入。 */
+  private async importEmbeddedRegex(card: CharacterCardIR): Promise<number> {
+    const embedded = card.data.extensions['regex_scripts']
+    if (embedded === undefined || embedded === null) return 0
+    try {
+      return await this.importRegexScripts(embedded)
+    } catch {
+      return 0
+    }
   }
 
   /** 导出角色卡 PNG（带模板图）；无图像模板时导出 JSON。 */
@@ -651,6 +665,16 @@ export class TavernStore {
     })
   }
 
+  /** 解析 regex 脚本并合并进全局状态（scriptName 相同即覆盖）；返回导入的脚本数。 */
+  async importRegexScripts(input: unknown): Promise<number> {
+    const imported = parseRegexScripts(input)
+    if (imported.length === 0) return 0
+    await this.updateState((current) => ({
+      regexScripts: mergeRegexScripts(current.regexScripts, imported),
+    }))
+    return imported.length
+  }
+
   /* ------------------------------ 内部 ------------------------------ */
 
   private async readState(): Promise<TavernState> {
@@ -752,6 +776,17 @@ function normalizeSessionBindings(value: unknown): Record<string, TavernSessionB
   return Object.fromEntries(Object.entries(value)
     .map(([sessionId, binding]) => [sessionId, normalizeTavernSessionBinding(binding)] as const)
     .filter((entry): entry is readonly [string, TavernSessionBinding] => entry[1] !== undefined))
+}
+
+/** 按 scriptName 合并脚本：同名覆盖，其余追加；保持既有顺序。 */
+function mergeRegexScripts(current: RegexScriptIR[], imported: RegexScriptIR[]): RegexScriptIR[] {
+  const merged = [...current]
+  for (const script of imported) {
+    const index = merged.findIndex((item) => item.scriptName === script.scriptName)
+    if (index >= 0) merged[index] = script
+    else merged.push(script)
+  }
+  return merged
 }
 
 function safeFileName(name: string): string {

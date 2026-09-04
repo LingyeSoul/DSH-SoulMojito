@@ -171,6 +171,60 @@ describe('TavernStore', () => {
     expect(decodeCharacterCard(exported).data.characterBook?.entries).toHaveLength(1)
   }))
 
+  it('角色：卡内嵌 regex_scripts 物化为全局脚本，重名覆盖且非法跳过', withStore(async (store) => {
+    const card = {
+      ...sampleCard,
+      data: {
+        ...sampleCard.data,
+        extensions: {
+          regex_scripts: [
+            { scriptName: 'Strip Thoughts', findRegex: '<think>[\\s\\S]*?</think>', replaceString: '', placement: [2], markdownOnly: true },
+            { scriptName: 'Tame Input', findRegex: '你', replaceString: '您', placement: [1] },
+          ],
+        },
+      },
+    }
+    const { importedRegex } = await store.importCharacter(card)
+    expect(importedRegex).toBe(2)
+    const state = await store.getState()
+    expect(state.regexScripts.map((script) => script.scriptName)).toEqual(['Strip Thoughts', 'Tame Input'])
+    expect(state.regexScripts[0]?.placement).toEqual([2])
+    expect(state.regexScripts[0]?.markdownOnly).toBe(true)
+
+    // 重导入同名脚本覆盖，不产生重复
+    await store.importCharacter({
+      ...card,
+      data: {
+        ...card.data,
+        extensions: { regex_scripts: [{ scriptName: 'Strip Thoughts', findRegex: '<think>.*?</think>', replaceString: '', placement: [2] }] },
+      },
+    })
+    const updated = await store.getState()
+    expect(updated.regexScripts).toHaveLength(2)
+    expect(updated.regexScripts.find((script) => script.scriptName === 'Strip Thoughts')?.findRegex).toBe('<think>.*?</think>')
+
+    // 非法脚本不阻断角色导入
+    const broken = await store.importCharacter({
+      ...sampleCard,
+      data: { ...sampleCard.data, name: 'Broken Regex Char', extensions: { regex_scripts: [{ scriptName: 'Bad', findRegex: '' }] } },
+    })
+    expect(broken.importedRegex).toBe(0)
+    expect((await store.getState()).regexScripts).toHaveLength(2)
+  }))
+
+  it('状态：importRegexScripts 按 scriptName 合并且保持既有顺序', withStore(async (store) => {
+    await store.updateState(() => ({
+      regexScripts: [{ id: 'a', scriptName: 'A', findRegex: 'a', replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false, substituteRegex: false, minDepth: null, maxDepth: null }],
+    }))
+    const imported = await store.importRegexScripts([
+      { scriptName: 'B', findRegex: 'b', replaceString: '' },
+      { scriptName: 'A', findRegex: 'a2', replaceString: '' },
+    ])
+    expect(imported).toBe(2)
+    const state = await store.getState()
+    expect(state.regexScripts.map((script) => [script.scriptName, script.findRegex])).toEqual([['A', 'a2'], ['B', 'b']])
+  }))
+
   it('世界书：导入 → 读取 roundtrip → 删除', withStore(async (store) => {
     const raw = JSON.parse(readFileSync(`${fixturesDir}/ExampleWorld.json`, 'utf8'))
     const ir = await store.importWorldFile('ExampleWorld', raw)

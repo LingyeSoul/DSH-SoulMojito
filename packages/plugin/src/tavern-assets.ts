@@ -53,11 +53,19 @@ export function collectRegexScripts(
   state: Pick<TavernState, 'regexScripts'>,
   character?: CharacterAsset,
 ): RegexScriptIR[] {
+  // 导入角色卡时卡内嵌脚本已物化进全局列表；运行期合并时按 scriptName 去重，
+  // 全局（可编辑、已导入）优先，避免同一脚本被应用两次。
   const scripts = [...state.regexScripts]
+  const names = new Set(scripts.map((script) => script.scriptName))
   const cardScripts = character?.card.data.extensions['regex_scripts']
   if (cardScripts !== undefined && cardScripts !== null) {
     try {
-      scripts.push(...parseRegexScripts(cardScripts))
+      for (const script of parseRegexScripts(cardScripts)) {
+        if (!names.has(script.scriptName)) {
+          names.add(script.scriptName)
+          scripts.push(script)
+        }
+      }
     } catch {
       // A malformed card extension must not disable valid global scripts.
     }

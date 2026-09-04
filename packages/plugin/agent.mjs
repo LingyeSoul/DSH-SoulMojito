@@ -1385,17 +1385,17 @@ var dutf8 = function(d) {
       r += String.fromCharCode((c & 15) << 12 | (d[i++] & 63) << 6 | d[i++] & 63);
   }
 };
-function strToU8(str6, latin1) {
+function strToU8(str7, latin1) {
   if (latin1) {
-    var ar_1 = new u8(str6.length);
-    for (var i = 0; i < str6.length; ++i)
-      ar_1[i] = str6.charCodeAt(i);
+    var ar_1 = new u8(str7.length);
+    for (var i = 0; i < str7.length; ++i)
+      ar_1[i] = str7.charCodeAt(i);
     return ar_1;
   }
   if (te)
-    return te.encode(str6);
-  var l = str6.length;
-  var ar = new u8(str6.length + (str6.length >> 1));
+    return te.encode(str7);
+  var l = str7.length;
+  var ar = new u8(str7.length + (str7.length >> 1));
   var ai = 0;
   var w = function(v) {
     ar[ai++] = v;
@@ -1406,13 +1406,13 @@ function strToU8(str6, latin1) {
       n.set(ar);
       ar = n;
     }
-    var c = str6.charCodeAt(i);
+    var c = str7.charCodeAt(i);
     if (c < 128 || latin1)
       w(c);
     else if (c < 2048)
       w(192 | c >> 6), w(128 | c & 63);
     else if (c > 55295 && c < 57344)
-      c = 65536 + (c & 1023 << 10) | str6.charCodeAt(++i) & 1023, w(240 | c >> 18), w(128 | c >> 12 & 63), w(128 | c >> 6 & 63), w(128 | c & 63);
+      c = 65536 + (c & 1023 << 10) | str7.charCodeAt(++i) & 1023, w(240 | c >> 18), w(128 | c >> 12 & 63), w(128 | c >> 6 & 63), w(128 | c & 63);
     else
       w(224 | c >> 12), w(128 | c >> 6 & 63), w(128 | c & 63);
   }
@@ -1724,6 +1724,94 @@ function bool2(value, fallback) {
   return typeof value === "boolean" ? value : fallback;
 }
 
+// packages/tavern-format/lib/regex-script.js
+var RegexPlacement = {
+  USER_INPUT: 1,
+  AI_OUTPUT: 2,
+  SLASH_COMMAND: 3,
+  WORLD_INFO: 5,
+  REASONING: 6
+};
+var RegexScriptFormatError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "RegexScriptFormatError";
+  }
+};
+var KNOWN_FIELDS2 = /* @__PURE__ */ new Set([
+  "id",
+  "scriptName",
+  "findRegex",
+  "replaceString",
+  "trimStrings",
+  "placement",
+  "disabled",
+  "markdownOnly",
+  "promptOnly",
+  "runOnEdit",
+  "substituteRegex",
+  "minDepth",
+  "maxDepth"
+]);
+var PLACEMENT_VALUES = /* @__PURE__ */ new Set([1, 2, 3, 5, 6]);
+function parseRegexScripts(input) {
+  let list;
+  if (Array.isArray(input))
+    list = input;
+  else if (typeof input === "object" && input !== null) {
+    const obj = input;
+    if (Array.isArray(obj["scripts"]))
+      list = obj["scripts"];
+    else if (Array.isArray(obj["regex_scripts"]))
+      list = obj["regex_scripts"];
+    else
+      list = [input];
+  } else {
+    throw new RegexScriptFormatError("regex scripts input must be an array or object");
+  }
+  return list.map((item, index) => parseRegexScript(item, index));
+}
+function parseRegexScript(raw, index = 0) {
+  if (typeof raw !== "object" || raw === null) {
+    throw new RegexScriptFormatError(`regex script ${index} is not an object`);
+  }
+  const obj = raw;
+  const findRegex = str4(obj["findRegex"]);
+  if (findRegex === "")
+    throw new RegexScriptFormatError(`regex script ${index} has empty findRegex`);
+  const extra = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (!KNOWN_FIELDS2.has(k))
+      extra[k] = v;
+  }
+  const placement = (Array.isArray(obj["placement"]) ? obj["placement"] : [obj["placement"]]).map((value) => typeof value === "number" && Number.isFinite(value) ? value : 0).filter((value) => PLACEMENT_VALUES.has(value));
+  return {
+    id: str4(obj["id"]) || `regex-${index}-${str4(obj["scriptName"]) || "script"}`,
+    scriptName: str4(obj["scriptName"]) || str4(obj["script_name"]) || `Script ${index + 1}`,
+    findRegex,
+    replaceString: str4(obj["replaceString"]),
+    trimStrings: Array.isArray(obj["trimStrings"]) ? obj["trimStrings"].filter((value) => typeof value === "string") : [],
+    placement: placement.length > 0 ? [...new Set(placement)] : [RegexPlacement.AI_OUTPUT],
+    disabled: bool3(obj["disabled"], false),
+    markdownOnly: bool3(obj["markdownOnly"], false),
+    promptOnly: bool3(obj["promptOnly"], false),
+    runOnEdit: bool3(obj["runOnEdit"], false),
+    substituteRegex: bool3(obj["substituteRegex"], false),
+    minDepth: numOrNull(obj["minDepth"]),
+    maxDepth: numOrNull(obj["maxDepth"]),
+    extra: Object.keys(extra).length > 0 ? extra : void 0
+  };
+}
+function str4(value) {
+  return typeof value === "string" ? value : "";
+}
+function bool3(value, fallback) {
+  return typeof value === "boolean" ? value : fallback;
+}
+function numOrNull(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 // packages/tavern-store/src/store.ts
 var ChatRevisionConflictError = class extends Error {
   constructor(expectedRevision, actualRevision) {
@@ -1761,7 +1849,8 @@ var TavernStore = class _TavernStore {
   }
   /* ------------------------------ 角色 ------------------------------ */
   /** 导入角色卡：PNG/CHARX 原字节落盘保留资源；JSON 对象序列化落盘。重名覆盖。
-   *  卡内嵌角色书自动物化为世界书文件并写回 extensions.world 链接（对齐 ST 导入语义）。 */
+   *  卡内嵌角色书自动物化为世界书文件并写回 extensions.world 链接（对齐 ST 导入语义）。
+   *  卡内嵌 regex_scripts 物化为全局脚本（按 scriptName 合并）。 */
   async importCharacter(source) {
     let bytes;
     let kind;
@@ -1789,6 +1878,7 @@ var TavernStore = class _TavernStore {
       kind = "json";
     }
     const importedWorld = await this.materializeEmbeddedBook(card);
+    const importedRegex = await this.importEmbeddedRegex(card);
     if (importedWorld !== void 0) {
       bytes = kind === "png" ? encodeCharacterCardPng(card, bytes) : kind === "charx" ? encodeCharx(card, charxAssets) : jsonBytes(encodeCharacterCardJson(card));
     }
@@ -1796,7 +1886,7 @@ var TavernStore = class _TavernStore {
     const fileName = `${stem}.${kind}`;
     await this.writeAtomic(path.join(this.root, "characters", fileName), bytes);
     await Promise.all(["png", "json", "charx"].filter((other) => other !== kind).map((other) => fs.rm(path.join(this.root, "characters", `${stem}.${other}`), { force: true })));
-    return { fileName, card, importedWorld };
+    return { fileName, card, importedWorld, importedRegex };
   }
   /**
    * 卡内嵌角色书 → worlds/ 下的世界书文件（重名覆盖，导入以卡内嵌书为准），
@@ -1814,6 +1904,16 @@ var TavernStore = class _TavernStore {
       card.data.extensions = { ...card.data.extensions, world: bookName };
     }
     return bookName;
+  }
+  /** 卡内嵌 regex_scripts 物化为全局脚本；脚本格式非法时整体跳过，不阻断角色导入。 */
+  async importEmbeddedRegex(card) {
+    const embedded = card.data.extensions["regex_scripts"];
+    if (embedded === void 0 || embedded === null) return 0;
+    try {
+      return await this.importRegexScripts(embedded);
+    } catch {
+      return 0;
+    }
   }
   /** 导出角色卡 PNG（带模板图）；无图像模板时导出 JSON。 */
   async exportCharacter(name2, template) {
@@ -2158,6 +2258,15 @@ var TavernStore = class _TavernStore {
       return next;
     });
   }
+  /** 解析 regex 脚本并合并进全局状态（scriptName 相同即覆盖）；返回导入的脚本数。 */
+  async importRegexScripts(input) {
+    const imported = parseRegexScripts(input);
+    if (imported.length === 0) return 0;
+    await this.updateState((current) => ({
+      regexScripts: mergeRegexScripts(current.regexScripts, imported)
+    }));
+    return imported.length;
+  }
   /* ------------------------------ 内部 ------------------------------ */
   async readState() {
     const bytes = await this.tryRead(path.join(this.root, "state.json"));
@@ -2248,6 +2357,15 @@ function normalizeTavernSessionBinding(value) {
 function normalizeSessionBindings(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value).map(([sessionId, binding]) => [sessionId, normalizeTavernSessionBinding(binding)]).filter((entry) => entry[1] !== void 0));
+}
+function mergeRegexScripts(current, imported) {
+  const merged = [...current];
+  for (const script of imported) {
+    const index = merged.findIndex((item) => item.scriptName === script.scriptName);
+    if (index >= 0) merged[index] = script;
+    else merged.push(script);
+  }
+  return merged;
 }
 function safeFileName(name2) {
   const cleaned = name2.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim();
@@ -2780,8 +2898,8 @@ var MESSAGE_BOUNDARY = "";
 var MAX_SCAN_DEPTH = 1e3;
 
 // packages/tavern-lore/src/regex.ts
-function escapeRegex(str6) {
-  return str6.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function escapeRegex(str7) {
+  return str7.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function parseRegexFromString(input) {
   const match = input.match(/^\/([\w\W]+?)\/([gimsuy]*)$/);
@@ -2859,9 +2977,9 @@ var ScanBuffer = class {
     }
     return result;
   }
-  transformString(str6, entry) {
+  transformString(str7, entry) {
     const caseSensitive = entry.caseSensitive ?? this.globals.caseSensitive;
-    return caseSensitive ? str6 : str6.toLowerCase();
+    return caseSensitive ? str7 : str7.toLowerCase();
   }
   /**
    * 键匹配（verified vs WorldInfoBuffer.matchKeys）：
@@ -2961,10 +3079,10 @@ function bookRef(book, index) {
 function num3(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
-function bool3(value, fallback) {
+function bool4(value, fallback) {
   return typeof value === "boolean" ? value : fallback;
 }
-function str4(value, fallback) {
+function str5(value, fallback) {
   return typeof value === "string" ? value : fallback;
 }
 function strArray3(value) {
@@ -2975,45 +3093,45 @@ function normalizeEntry2(raw) {
   normalized["uid"] = num3(raw["uid"], NaN);
   normalized["key"] = strArray3(raw["key"]);
   normalized["keysecondary"] = strArray3(raw["keysecondary"]);
-  normalized["comment"] = str4(raw["comment"], "");
-  normalized["content"] = str4(raw["content"], "");
-  normalized["constant"] = bool3(raw["constant"], false);
-  normalized["vectorized"] = bool3(raw["vectorized"], false);
-  normalized["selective"] = bool3(raw["selective"], true);
+  normalized["comment"] = str5(raw["comment"], "");
+  normalized["content"] = str5(raw["content"], "");
+  normalized["constant"] = bool4(raw["constant"], false);
+  normalized["vectorized"] = bool4(raw["vectorized"], false);
+  normalized["selective"] = bool4(raw["selective"], true);
   normalized["selectiveLogic"] = num3(raw["selectiveLogic"], 0);
-  normalized["addMemo"] = bool3(raw["addMemo"], false);
+  normalized["addMemo"] = bool4(raw["addMemo"], false);
   normalized["order"] = num3(raw["order"], DEFAULT_ORDER);
   normalized["position"] = num3(raw["position"], 0);
-  normalized["disable"] = bool3(raw["disable"], false);
-  normalized["ignoreBudget"] = bool3(raw["ignoreBudget"], false);
-  normalized["excludeRecursion"] = bool3(raw["excludeRecursion"], false);
-  normalized["preventRecursion"] = bool3(raw["preventRecursion"], false);
+  normalized["disable"] = bool4(raw["disable"], false);
+  normalized["ignoreBudget"] = bool4(raw["ignoreBudget"], false);
+  normalized["excludeRecursion"] = bool4(raw["excludeRecursion"], false);
+  normalized["preventRecursion"] = bool4(raw["preventRecursion"], false);
   normalized["delayUntilRecursion"] = raw["delayUntilRecursion"] === true ? 1 : num3(raw["delayUntilRecursion"], 0);
-  normalized["matchPersonaDescription"] = bool3(raw["matchPersonaDescription"], false);
-  normalized["matchCharacterDescription"] = bool3(raw["matchCharacterDescription"], false);
-  normalized["matchCharacterPersonality"] = bool3(raw["matchCharacterPersonality"], false);
-  normalized["matchCharacterDepthPrompt"] = bool3(raw["matchCharacterDepthPrompt"], false);
-  normalized["matchScenario"] = bool3(raw["matchScenario"], false);
-  normalized["matchCreatorNotes"] = bool3(raw["matchCreatorNotes"], false);
+  normalized["matchPersonaDescription"] = bool4(raw["matchPersonaDescription"], false);
+  normalized["matchCharacterDescription"] = bool4(raw["matchCharacterDescription"], false);
+  normalized["matchCharacterPersonality"] = bool4(raw["matchCharacterPersonality"], false);
+  normalized["matchCharacterDepthPrompt"] = bool4(raw["matchCharacterDepthPrompt"], false);
+  normalized["matchScenario"] = bool4(raw["matchScenario"], false);
+  normalized["matchCreatorNotes"] = bool4(raw["matchCreatorNotes"], false);
   normalized["probability"] = num3(raw["probability"], DEFAULT_PROBABILITY);
-  normalized["useProbability"] = bool3(raw["useProbability"], true);
+  normalized["useProbability"] = bool4(raw["useProbability"], true);
   normalized["depth"] = num3(raw["depth"], DEFAULT_DEPTH);
-  normalized["outletName"] = str4(raw["outletName"], "");
-  normalized["group"] = str4(raw["group"], "");
-  normalized["groupOverride"] = bool3(raw["groupOverride"], false);
+  normalized["outletName"] = str5(raw["outletName"], "");
+  normalized["group"] = str5(raw["group"], "");
+  normalized["groupOverride"] = bool4(raw["groupOverride"], false);
   normalized["groupWeight"] = num3(raw["groupWeight"], DEFAULT_WEIGHT);
   normalized["scanDepth"] = typeof raw["scanDepth"] === "number" && Number.isFinite(raw["scanDepth"]) ? raw["scanDepth"] : null;
   normalized["caseSensitive"] = typeof raw["caseSensitive"] === "boolean" ? raw["caseSensitive"] : null;
   normalized["matchWholeWords"] = typeof raw["matchWholeWords"] === "boolean" ? raw["matchWholeWords"] : null;
   normalized["useGroupScoring"] = typeof raw["useGroupScoring"] === "boolean" ? raw["useGroupScoring"] : null;
-  normalized["automationId"] = str4(raw["automationId"], "");
+  normalized["automationId"] = str5(raw["automationId"], "");
   normalized["role"] = num3(raw["role"], 0);
   normalized["sticky"] = typeof raw["sticky"] === "number" && Number.isFinite(raw["sticky"]) ? raw["sticky"] : null;
   normalized["cooldown"] = typeof raw["cooldown"] === "number" && Number.isFinite(raw["cooldown"]) ? raw["cooldown"] : null;
   normalized["delay"] = typeof raw["delay"] === "number" && Number.isFinite(raw["delay"]) ? raw["delay"] : null;
   normalized["characterFilterNames"] = strArray3(raw["characterFilterNames"]);
   normalized["characterFilterTags"] = strArray3(raw["characterFilterTags"]);
-  normalized["characterFilterExclude"] = bool3(raw["characterFilterExclude"], false);
+  normalized["characterFilterExclude"] = bool4(raw["characterFilterExclude"], false);
   const triggers = strArray3(raw["triggers"]);
   normalized["triggers"] = triggers;
   return normalized;
@@ -3522,7 +3640,7 @@ var CRC_TABLE2 = (() => {
 })();
 
 // packages/tavern-format/src/worldbook.ts
-var KNOWN_FIELDS2 = /* @__PURE__ */ new Set([
+var KNOWN_FIELDS3 = /* @__PURE__ */ new Set([
   "uid",
   "key",
   "keysecondary",
@@ -3568,49 +3686,49 @@ var KNOWN_FIELDS2 = /* @__PURE__ */ new Set([
 function normalizeEntry3(raw) {
   const extra = {};
   for (const [k, v] of Object.entries(raw)) {
-    if (!KNOWN_FIELDS2.has(k)) extra[k] = v;
+    if (!KNOWN_FIELDS3.has(k)) extra[k] = v;
   }
   return {
     uid: num4(raw["uid"], 0),
     key: strArray4(raw["key"]),
     keysecondary: strArray4(raw["keysecondary"]),
-    comment: str5(raw["comment"]),
-    content: str5(raw["content"]),
-    constant: bool4(raw["constant"], false),
-    vectorized: bool4(raw["vectorized"], false),
-    selective: bool4(raw["selective"], true),
+    comment: str6(raw["comment"]),
+    content: str6(raw["content"]),
+    constant: bool5(raw["constant"], false),
+    vectorized: bool5(raw["vectorized"], false),
+    selective: bool5(raw["selective"], true),
     selectiveLogic: num4(raw["selectiveLogic"], 0),
-    addMemo: bool4(raw["addMemo"], false),
+    addMemo: bool5(raw["addMemo"], false),
     order: num4(raw["order"], 100),
     position: num4(raw["position"], 0),
-    disable: bool4(raw["disable"], false),
-    ignoreBudget: bool4(raw["ignoreBudget"], false),
-    excludeRecursion: bool4(raw["excludeRecursion"], false),
-    preventRecursion: bool4(raw["preventRecursion"], false),
+    disable: bool5(raw["disable"], false),
+    ignoreBudget: bool5(raw["ignoreBudget"], false),
+    excludeRecursion: bool5(raw["excludeRecursion"], false),
+    preventRecursion: bool5(raw["preventRecursion"], false),
     delayUntilRecursion: num4(raw["delayUntilRecursion"], 0),
     probability: num4(raw["probability"], 100),
-    useProbability: bool4(raw["useProbability"], true),
+    useProbability: bool5(raw["useProbability"], true),
     depth: num4(raw["depth"], 4),
-    outletName: str5(raw["outletName"]),
-    group: str5(raw["group"]),
-    groupOverride: bool4(raw["groupOverride"], false),
+    outletName: str6(raw["outletName"]),
+    group: str6(raw["group"]),
+    groupOverride: bool5(raw["groupOverride"], false),
     groupWeight: num4(raw["groupWeight"], 100),
     scanDepth: nullableNum2(raw["scanDepth"]),
     caseSensitive: nullableBool2(raw["caseSensitive"]),
     matchWholeWords: nullableBool2(raw["matchWholeWords"]),
     useGroupScoring: nullableBool2(raw["useGroupScoring"]),
-    automationId: str5(raw["automationId"]),
+    automationId: str6(raw["automationId"]),
     role: num4(raw["role"], 0),
     sticky: nullableNum2(raw["sticky"]),
     cooldown: nullableNum2(raw["cooldown"]),
     delay: nullableNum2(raw["delay"]),
     triggers: strArray4(raw["triggers"]),
-    matchPersonaDescription: bool4(raw["matchPersonaDescription"], false),
-    matchCharacterDescription: bool4(raw["matchCharacterDescription"], false),
-    matchCharacterPersonality: bool4(raw["matchCharacterPersonality"], false),
-    matchCharacterDepthPrompt: bool4(raw["matchCharacterDepthPrompt"], false),
-    matchScenario: bool4(raw["matchScenario"], false),
-    matchCreatorNotes: bool4(raw["matchCreatorNotes"], false),
+    matchPersonaDescription: bool5(raw["matchPersonaDescription"], false),
+    matchCharacterDescription: bool5(raw["matchCharacterDescription"], false),
+    matchCharacterPersonality: bool5(raw["matchCharacterPersonality"], false),
+    matchCharacterDepthPrompt: bool5(raw["matchCharacterDepthPrompt"], false),
+    matchScenario: bool5(raw["matchScenario"], false),
+    matchCreatorNotes: bool5(raw["matchCreatorNotes"], false),
     extra: Object.keys(extra).length > 0 ? extra : void 0
   };
 }
@@ -3637,8 +3755,8 @@ function bookEntryToLoreEntry2(raw, index) {
     probability: numOr2(ext["probability"], 100, 100),
     useProbability: boolOr2(ext["useProbability"], true, true),
     depth: numOr2(ext["depth"], 4, 4),
-    group: str5(ext["group"]),
-    groupOverride: bool4(ext["group_override"], false),
+    group: str6(ext["group"]),
+    groupOverride: bool5(ext["group_override"], false),
     groupWeight: numOr2(ext["group_weight"], 100, 100),
     excludeRecursion: boolOr2(ext["exclude_recursion"], false, false),
     preventRecursion: boolOr2(ext["prevent_recursion"], false, false),
@@ -3647,7 +3765,7 @@ function bookEntryToLoreEntry2(raw, index) {
     matchWholeWords: nullableBool2(ext["match_whole_words"]),
     useGroupScoring: nullableBool2(ext["use_group_scoring"]),
     role: num4(ext["role"], 0),
-    vectorized: bool4(ext["vectorized"], false),
+    vectorized: bool5(ext["vectorized"], false),
     sticky: nullableNum2(ext["sticky"]),
     cooldown: nullableNum2(ext["cooldown"]),
     delay: nullableNum2(ext["delay"]),
@@ -3665,7 +3783,7 @@ function bookPositionToSt2(bookPos, extPos) {
   if (bookPos === "after_char") return 1;
   return 0;
 }
-function str5(v) {
+function str6(v) {
   return typeof v === "string" ? v : "";
 }
 function num4(v, fallback) {
@@ -3677,11 +3795,11 @@ function numOr2(v, v2, fallback) {
 function nullableNum2(v) {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
-function bool4(v, fallback) {
+function bool5(v, fallback) {
   return typeof v === "boolean" ? v : fallback;
 }
 function boolOr2(v, v2, fallback) {
-  return typeof v === "boolean" ? v : bool4(v2, fallback);
+  return typeof v === "boolean" ? v : bool5(v2, fallback);
 }
 function nullableBool2(v) {
   return typeof v === "boolean" ? v : null;

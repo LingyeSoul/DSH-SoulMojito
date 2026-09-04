@@ -1,8 +1,10 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
-import { ChatRevisionConflictError, type TavernSessionBinding } from '../../../tavern-store/src/index.js'
-import type { ChatLogIR, ChatMessage } from '../../../tavern-format/src/index.js'
+import { ChatRevisionConflictError, type TavernSessionBinding, type TavernState } from '../../../tavern-store/src/index.js'
+import { RegexPlacement, type CharacterCardIR, type ChatLogIR, type ChatMessage, type RegexScriptIR } from '../../../tavern-format/src/index.js'
+import { applyRegexScripts } from '../../../tavern-script/src/index.js'
+import { collectRegexScripts } from '../tavern-assets.js'
 
 export interface NativeSessionEvent {
   type: string
@@ -11,13 +13,21 @@ export interface NativeSessionEvent {
   data: any
 }
 
+/** 一次宿主 Session.append 的计划项；surfaceOp 缺省表示 log-only 事件。 */
+export interface SessionImportAppend {
+  type: string
+  data: Record<string, unknown>
+  surfaceOp?: 'append'
+}
+
 export interface NativeSession {
   id: string
   events: readonly NativeSessionEvent[]
 }
 
 export interface ProjectorStore {
-  getState(): Promise<{ sessionBindings: Record<string, TavernSessionBinding> }>
+  getState(): Promise<Pick<TavernState, 'sessionBindings' | 'regexScripts'>>
+  getCharacter(name: string): Promise<{ card: CharacterCardIR } | undefined>
   getChatSnapshot(character: string, chatId: string): Promise<{ chat: ChatLogIR; revision: string } | undefined>
   saveChat(character: string, chatId: string, chat: ChatLogIR, expectedRevision?: string): Promise<string>
 }
@@ -74,7 +84,9 @@ export class AgentTavernProjector {
       const state = await this.store.getState()
       const binding = state.sessionBindings[session.id]
       if (binding?.architecture === 'agent-tavern' && binding.group !== true) {
-        const message = projectMessage(session, event, binding)
+        const character = await this.store.getCharacter(binding.character)
+        const scripts = collectRegexScripts(state, character)
+        const message = projectMessage(session, event, binding, scripts)
         if (message !== undefined) await this.appendMessage(binding, session.id, event.seq, message)
       }
       await this.writeCheckpoint({
@@ -160,6 +172,7 @@ function projectMessage(
   session: NativeSession,
   event: NativeSessionEvent,
   binding: Extract<TavernSessionBinding, { architecture: 'agent-tavern' }>,
+  scripts: RegexScriptIR[],
 ): ChatMessage | undefined {
   if (event.type === 'user/message') {
     if (event.data?.source?.kind !== 'user') return undefined
@@ -170,22 +183,28 @@ function projectMessage(
       is_user: true,
       is_system: false,
       send_date: eventDate(event.time),
-      mes: text,
+      // ST 语义：USER_INPUT 正则在消息落库前生效（ST 管线同样保存变换后文本）。
+      mes: applyRegexScripts(text, scripts, RegexPlacement.USER_INPUT),
       extra: projectionExtra(session, event, binding.contextMode, turnAt(session, event.seq)),
     }
   }
 
   if (event.type !== 'assistant/message') return undefined
+  // 从 Tavern 聊天导入的镜像消息（开场白/历史）不再投影回 JSONL，否则会重复。
+  if (isTavernMirrorSource(event.data?.message?.source)) return undefined
   const content = event.data?.message?.content
   if (!Array.isArray(content) || content.some((block) => block?.type === 'tool-call')) return undefined
   const text = messageText(content)
   if (text === '') return undefined
+  // 落库层只应用非 promptOnly、非 markdownOnly 的脚本；display 与 prompt 层
+  // 分别由 displayTexts 和历史导入处理。
+  const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly)
   return {
     name: binding.character,
     is_user: false,
     is_system: false,
     send_date: eventDate(event.time),
-    mes: text,
+    mes: saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement.AI_OUTPUT) : text,
     extra: projectionExtra(session, event, binding.contextMode, event.data?.turn, event.data?.step),
   }
 }
@@ -213,6 +232,90 @@ function projectionExtra(
 function projectionIdentity(message: ChatMessage, sessionId: string, eventSeq: number): boolean {
   const source = message.extra?.agentTavern as Record<string, unknown> | undefined
   return source?.sessionId === sessionId && source.eventSeq === eventSeq
+}
+
+function isTavernMirrorSource(source: unknown): boolean {
+  if (typeof source !== 'object' || source === null) return false
+  const record = source as Record<string, unknown>
+  return record.kind === 'plugin' && record.plugin === 'dsh-tavern'
+}
+
+/**
+ * 把聊天里尚未出现在原生会话中的消息（开场白、ST 时代的记录或其他会话投影的
+ * 记录）转成宿主 Session.append 计划：每条用户消息开启一个新 turn，角色消息
+ * 作为 turn 内的 step。事件带 dsh-tavern 插件来源，投影器会跳过它们，因此
+ * 导入不会把消息重复写回 JSONL；不带 usage，也不会被统计成一次模型生成。
+ *
+ * scripts 提供 prompt 层正则（promptOnly AI_OUTPUT，与 ST 管线的 promptOnly
+ * 历史变换一致，按消息深度过滤），使 AgentTavern 模型上下文看到与 ST 相同的
+ * 变换后历史；落库文本保持不变。
+ */
+export function historyImportAppends(chat: ChatLogIR, sessionId: string, scripts: RegexScriptIR[] = []): SessionImportAppend[] {
+  const promptScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly)
+  const promptView = (message: ChatMessage, index: number): string =>
+    promptScripts.length === 0
+      ? message.mes
+      : applyRegexScripts(message.mes, promptScripts, RegexPlacement.AI_OUTPUT, {}, { depth: chat.messages.length - 1 - index })
+
+  const appends: SessionImportAppend[] = []
+  let turn = 0
+  let step = 0
+  let turnOpen = false
+
+  const openTurn = () => {
+    turn += 1
+    step = 0
+    turnOpen = true
+    appends.push({ type: 'turn/start', data: { turn } })
+  }
+  const closeTurn = () => {
+    if (!turnOpen) return
+    turnOpen = false
+    appends.push({ type: 'turn/end', data: { turn, reason: { kind: 'completed' } } })
+  }
+
+  for (const [index, message] of chat.messages.entries()) {
+    if (message.is_system === true || typeof message.mes !== 'string' || message.mes.trim() === '') continue
+    const origin = message.extra?.agentTavern as Record<string, unknown> | undefined
+    if (origin?.sessionId === sessionId) continue
+    if (message.is_user === true) {
+      closeTurn()
+      openTurn()
+      appends.push({
+        type: 'user/message',
+        data: {
+          id: randomUUID(),
+          role: 'user',
+          content: [{ type: 'text', text: promptView(message, index) }],
+          source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'history' },
+        },
+        surfaceOp: 'append',
+      })
+      continue
+    }
+    if (!turnOpen) openTurn()
+    step += 1
+    appends.push(
+      { type: 'step/start', data: { turn, step } },
+      {
+        type: 'assistant/message',
+        data: {
+          turn,
+          step,
+          message: {
+            id: randomUUID(),
+            role: 'assistant',
+            content: [{ type: 'text', text: promptView(message, index) }],
+            source: { kind: 'plugin', plugin: 'dsh-tavern', form: turn === 1 && step === 1 ? 'greeting' : 'history' },
+          },
+        },
+        surfaceOp: 'append',
+      },
+      { type: 'step/end', data: { turn, step } },
+    )
+  }
+  closeTurn()
+  return appends
 }
 
 function messageText(content: unknown): string {

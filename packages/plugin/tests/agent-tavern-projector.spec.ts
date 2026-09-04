@@ -2,13 +2,20 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { AgentTavernProjector, type NativeSession } from '../src/agent-tavern/projector.js'
+import { AgentTavernProjector, historyImportAppends, type NativeSession } from '../src/agent-tavern/projector.js'
 import { ChatRevisionConflictError, TavernStore } from '../../tavern-store/src/index.js'
+import type { ChatLogIR, RegexScriptIR } from '../../tavern-format/src/index.js'
 
 const roots: string[] = []
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
+
+const cardData = (extensions: Record<string, unknown> = {}) => ({
+  name: 'Projector Character', description: '', personality: '', scenario: '', first_mes: '', mes_example: '',
+  creator_notes: '', system_prompt: '', post_history_instructions: '', alternate_greetings: [], tags: [], creator: '',
+  character_version: '', extensions,
 })
 
 async function fixture(sessionId = 'native-session') {
@@ -17,11 +24,7 @@ async function fixture(sessionId = 'native-session') {
   const store = await TavernStore.open(root)
   await store.importCharacter({
     spec: 'chara_card_v2', spec_version: '2.0',
-    data: {
-      name: 'Projector Character', description: '', personality: '', scenario: '', first_mes: '', mes_example: '',
-      creator_notes: '', system_prompt: '', post_history_instructions: '', alternate_greetings: [], tags: [], creator: '',
-      character_version: '', extensions: {},
-    },
+    data: cardData(),
   })
   const chatId = await store.createChat('Projector Character', {
     user_name: 'Alice', character_name: 'Projector Character', chat_metadata: {},
@@ -101,11 +104,50 @@ describe('AgentTavern native event projector', () => {
     expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual(['Open the door.', 'The door opens.', 'Step inside.'])
   })
 
+  it('does not project dsh-tavern mirrored imports back into the chat', async () => {
+    const { root, store, chatId, sessionId } = await fixture('import-session')
+    const native: NativeSession = {
+      id: sessionId,
+      events: [
+        { type: 'turn/start', seq: 0, time: 1000, data: { turn: 1 } },
+        { type: 'step/start', seq: 1, time: 1010, data: { turn: 1, step: 1 } },
+        {
+          type: 'assistant/message', seq: 2, time: 1100,
+          data: {
+            turn: 1, step: 1,
+            message: {
+              id: 'imported-greeting', role: 'assistant',
+              content: [{ type: 'text', text: 'Hello, traveler.' }],
+              source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'greeting' },
+            },
+          },
+        },
+        { type: 'step/end', seq: 3, time: 1110, data: { turn: 1, step: 1 } },
+        { type: 'turn/end', seq: 4, time: 1120, data: { turn: 1, reason: { kind: 'completed' } } },
+        {
+          type: 'user/message', seq: 5, time: 1200,
+          data: { id: 'imported-user', role: 'user', content: [{ type: 'text', text: 'Imported turn.' }], source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'history' } },
+        },
+        {
+          type: 'user/message', seq: 6, time: 1300,
+          data: { id: 'user-1', role: 'user', content: [{ type: 'text', text: 'Live message.' }], source: { kind: 'user' } },
+        },
+      ],
+    }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+    await projector.replay(native)
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual(['Live message.'])
+    expect(await projector.status(sessionId)).toMatchObject({ lastCursor: 6, status: 'ok' })
+  })
+
   it('retries a chat CAS conflict without duplicating the event', async () => {
     const { root, store, chatId, sessionId } = await fixture('cas-session')
     let conflict = true
     const projector = await AgentTavernProjector.open(root, {
       getState: () => store.getState(),
+      getCharacter: (name) => store.getCharacter(name),
       getChatSnapshot: (character, id) => store.getChatSnapshot(character, id),
       saveChat: async (character, id, chat, revision) => {
         if (conflict) {
@@ -142,5 +184,82 @@ describe('AgentTavern native event projector', () => {
     }))
     await projector.project(native, native.events[1]!)
     expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 1 })
+  })
+
+  it('applies USER_INPUT and non-layered AI_OUTPUT regex when projecting live messages', async () => {
+    const { root, store, chatId, sessionId } = await fixture('regex-session')
+    // 卡内嵌脚本经导入物化为全局脚本；collectRegexScripts 按名去重后只应用一次。
+    await store.importCharacter({
+      spec: 'chara_card_v2', spec_version: '2.0',
+      data: cardData({
+        regex_scripts: [
+          { scriptName: 'Echo Input', findRegex: 'door', replaceString: 'gate', placement: [1] },
+          { scriptName: 'Trim Quotes', findRegex: '"([^"]*)"', replaceString: '$1', placement: [2] },
+          { scriptName: 'Display Only', findRegex: 'opens', replaceString: 'unlocks', placement: [2], markdownOnly: true },
+          { scriptName: 'Prompt Only', findRegex: 'The door', replaceString: 'A door', placement: [2], promptOnly: true },
+        ],
+      }),
+    })
+    const native: NativeSession = {
+      id: sessionId,
+      events: [
+        { type: 'turn/start', seq: 0, time: 1000, data: { turn: 1 } },
+        {
+          type: 'user/message', seq: 1, time: 1100,
+          data: { id: 'user-1', role: 'user', content: [{ type: 'text', text: 'Open the door.' }], source: { kind: 'user' } },
+        },
+        {
+          type: 'assistant/message', seq: 2, time: 1200,
+          data: {
+            turn: 1, step: 1,
+            message: {
+              id: 'assistant-1', role: 'assistant',
+              content: [{ type: 'text', text: 'The door "opens".' }],
+              source: { kind: 'model', provider: 'test', model: 'test' },
+            },
+          },
+        },
+      ],
+    }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    // USER_INPUT 落库变换；AI_OUTPUT 只应用非 promptOnly、非 markdownOnly 脚本。
+    expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual([
+      'Open the gate.',
+      'The door opens.',
+    ])
+  })
+
+  it('applies prompt-only regex to imported history without touching stored text', () => {
+    const chat: ChatLogIR = {
+      header: { user_name: 'Alice', character_name: 'Projector Character', chat_metadata: {} },
+      messages: [
+        { name: 'Projector Character', is_user: false, is_system: false, send_date: '', mes: 'first word' },
+        { name: 'Alice', is_user: true, is_system: false, send_date: '', mes: 'second word' },
+        { name: 'Projector Character', is_user: false, is_system: false, send_date: '', mes: 'third word' },
+      ],
+    }
+    const script = (overrides: Partial<RegexScriptIR>): RegexScriptIR => ({
+      id: 's', scriptName: 's', findRegex: 'word', replaceString: '<$&>', trimStrings: [], placement: [2],
+      disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false, substituteRegex: false,
+      minDepth: null, maxDepth: null, ...overrides,
+    })
+    const appends = historyImportAppends(chat, 'session-1', [
+      script({ scriptName: 'Prompt Wrap', promptOnly: true }),
+      // 深度限制：depth 0（最新）之内才生效
+      script({ scriptName: 'Depth Shout', promptOnly: true, maxDepth: 0, findRegex: 'third', replaceString: 'THIRD' }),
+      // 非 promptOnly 脚本已含在落库文本里，导入时不得重复应用
+      script({ scriptName: 'Save Wrap', replaceString: '!' }),
+    ])
+    const texts = appends
+      .filter((item) => item.type === 'user/message' || item.type === 'assistant/message')
+      .map((item) => {
+        const data = item.data as { content?: Array<{ text?: string }>; message?: { content?: Array<{ text?: string }> } }
+        return (data.message?.content ?? data.content)?.[0]?.text
+      })
+    // depth 2 / 1 / 0：Depth Shout 只作用于最新一条，Prompt Wrap 作用于全部
+    expect(texts).toEqual(['first <word>', 'second <word>', 'THIRD <word>'])
+    expect(chat.messages.map((message) => message.mes)).toEqual(['first word', 'second word', 'third word'])
   })
 })
