@@ -118,7 +118,7 @@ describe('AgentTavern native event projector', () => {
             message: {
               id: 'imported-greeting', role: 'assistant',
               content: [{ type: 'text', text: 'Hello, traveler.' }],
-              source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'greeting' },
+              source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import', plugin: 'dsh-tavern', form: 'greeting' },
             },
           },
         },

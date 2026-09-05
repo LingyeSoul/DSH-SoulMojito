@@ -237,14 +237,21 @@ function projectionIdentity(message: ChatMessage, sessionId: string, eventSeq: n
 function isTavernMirrorSource(source: unknown): boolean {
   if (typeof source !== 'object' || source === null) return false
   const record = source as Record<string, unknown>
-  return record.kind === 'plugin' && record.plugin === 'dsh-tavern'
+  if (record.plugin !== 'dsh-tavern') return false
+  return record.kind === 'plugin' || record.kind === 'model'
 }
+
+/** 宿主会话要求 assistant 消息的 source 必须是 model 来源且带 provider/model； */
+/** 导入的镜像消息用合成 provider/model 补足校验，plugin/form 标记保留镜像语义。 */
+const TAVERN_MIRROR_MODEL_SOURCE = { provider: 'dsh-tavern', model: 'agent-tavern-import' } as const
 
 /**
  * 把聊天里尚未出现在原生会话中的消息（开场白、ST 时代的记录或其他会话投影的
  * 记录）转成宿主 Session.append 计划：每条用户消息开启一个新 turn，角色消息
- * 作为 turn 内的 step。事件带 dsh-tavern 插件来源，投影器会跳过它们，因此
- * 导入不会把消息重复写回 JSONL；不带 usage，也不会被统计成一次模型生成。
+ * 作为 turn 内的 step。角色消息的 source 是带 dsh-tavern 标记的 model 来源
+ * （宿主强制 assistant 消息用 model 来源，见 TAVERN_MIRROR_MODEL_SOURCE），
+ * 投影器凭 plugin 标记跳过它们，因此导入不会把消息重复写回 JSONL；不带
+ * usage，也不会被统计成一次模型生成。
  *
  * scripts 提供 prompt 层正则（promptOnly AI_OUTPUT，与 ST 管线的 promptOnly
  * 历史变换一致，按消息深度过滤），使 AgentTavern 模型上下文看到与 ST 相同的
@@ -314,7 +321,14 @@ export function historyImportAppends(
             id: randomUUID(),
             role: 'assistant',
             content: [{ type: 'text', text: promptView(message, index) }],
-            source: { kind: 'plugin', plugin: 'dsh-tavern', form: turn === 1 && step === 1 ? 'greeting' : 'history' },
+            // 宿主在会话加载时校验 assistant 消息必须是 model 来源；纯 plugin
+            // 来源会把整个会话变成 SessionPersistenceCorruptionError 拒载。
+            source: {
+              kind: 'model',
+              ...TAVERN_MIRROR_MODEL_SOURCE,
+              plugin: 'dsh-tavern',
+              form: turn === 1 && step === 1 ? 'greeting' : 'history',
+            },
           },
         },
         surfaceOp: 'append',

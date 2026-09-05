@@ -329,7 +329,7 @@ describe('internal Tavern session bridge occupation', () => {
       message: {
         role: 'assistant',
         content: [{ type: 'text', text: '早上好，旅行者。' }],
-        source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'greeting' },
+        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import', plugin: 'dsh-tavern', form: 'greeting' },
       },
     })
     expect(greeting.opts).toEqual({ surfaceOp: 'append' })
@@ -346,7 +346,7 @@ describe('internal Tavern session bridge occupation', () => {
       turn: 2, step: 1,
       message: {
         content: [{ type: 'text', text: '今天想去哪里？' }],
-        source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'history' },
+        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import', plugin: 'dsh-tavern', form: 'history' },
       },
     })
     expect(turnStarts(agent).map((event) => event.data)).toEqual([{ turn: 1 }, { turn: 2 }])
