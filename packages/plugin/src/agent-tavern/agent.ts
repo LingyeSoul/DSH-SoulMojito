@@ -24,7 +24,9 @@ const KERNEL = [
   '- Do not invent world canon. Before narrating specifics of a proper noun not already established in this chat (person, place, faction, technique, item), call tavern_lore_search for it and stay consistent with the returned entries.',
   '- Recover continuity from tools, not guesses: when past events, locations, or open threads are unclear, use tavern_history_search or memory_search.',
   '- Keep maintenance invisible: tool calls stay outside the story text; never mention memory or tools inside the narrative.',
-].join('\n')
+  '',
+  'Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge — the card details and world-info entries behind it are not in your context, so its proper nouns are NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search before replying.',
+ ].join('\n')
 
 const facts = new Map<string, string>()
 let tavernStorePromise: Promise<TavernStore> | undefined

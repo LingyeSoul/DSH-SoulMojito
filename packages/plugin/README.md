@@ -66,6 +66,20 @@ AgentTavern 的原生 user/final assistant 事件会幂等投影到 Tavern JSONL
 
 回退：在 profile `cordis.patch.yml` 写 `- id: compaction-basic` + `name: '@deepseek-ai/dsh-compaction-basic'` 覆写回去。摘要调用与宿主默认 summarizer 同为 logged 的 `ctx.llm.stream` 辅助调用，`;compact` 手动命令与自动 compaction 共用该后端。
 
+## 锚定提醒（anchor：开场装载引导 + 周期锚定）
+
+工具调用衰减有两个实证窗口，本插件通过宿主 `agent/pre-step` 在批次末尾（注意力最高点）追加提醒（与宿主 `dsh-time-context` 同款追加模式）：
+
+- **开场不装载**：29f49b5 起开场白与既有聊天历史会镜像进原生会话，模型把镜像剧情当作"本聊天已确立的事实"，KERNEL 的 established-in-this-chat 豁免条款反而抑制了开场查证，开场完全跳过工具。第一个真实用户轮（会话尚无 `source.kind === 'user'` 消息）注入一次性的开场装载引导（`tavern_character_get` / `tavern_lore_search` / `memory_search` / `tavern_history_search` 清单），不受轮数节流；其后由周期锚定接管。
+- **长上下文衰减**：system prompt 里的 KERNEL 职责会被剧情文本稀释，模型在若干轮后停止主动写记忆/查世界书。默认每 5 个 turn 的 step 1 注入一次周期维护提醒，把职责重新拉回注意力。
+
+共同契约：
+
+- **触发**：仅 step 1；去重（同 turn 不重复，开场与周期共用去重账本）、空批次/拒绝/中止/非 AgentTavern 会话全部原样透传；存储读取只发生在注入点，非注入 step 零开销。
+- **缓存安全契约**（不可破坏）：提醒 append-only 且 write-once——只追加到当前批次末尾、写入 durable log 后永不改写，因此对 KV 前缀缓存完全透明；内容不含易变计数器。
+- **投影安全**：消息带 `dsh-tavern` plugin source，投影器按 `source.kind !== 'user'` 过滤，不会写进 Tavern JSONL 剧情记录。
+- **配置**：`dsh-tavern` 行 config 的 `anchorEveryTurns`（整数；`0` 同时关闭开场引导与周期锚定，缺省 5，非法值回退默认）。
+
 ## 语言
 
 插件 UI 跟随 DSH 的语言设置（`@deepseek-ai/dsh-client-locale`，zh/en）：client half 声明 `inject: [..., 'locale']`，向 locale 服务注册 `dsh-tavern` 命名空间字典并经 `useSyncExternalStore` 订阅快照，在“通用设置 -> 语言”切换后无需刷新即时生效。字典 zh/en 键集与 `{param}` 占位符的对称性由 `client-vm-mount` gate 校验。

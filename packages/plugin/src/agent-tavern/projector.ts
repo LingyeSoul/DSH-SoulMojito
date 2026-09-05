@@ -248,14 +248,22 @@ function isTavernMirrorSource(source: unknown): boolean {
  *
  * scripts 提供 prompt 层正则（promptOnly AI_OUTPUT，与 ST 管线的 promptOnly
  * 历史变换一致，按消息深度过滤），使 AgentTavern 模型上下文看到与 ST 相同的
- * 变换后历史；落库文本保持不变。
+ * 变换后历史；落库文本保持不变。expand 提供 ST substituteParams 语义的宏展开
+ * （{{char}}/{{user}} 等），同样只作用于模型上下文。
  */
-export function historyImportAppends(chat: ChatLogIR, sessionId: string, scripts: RegexScriptIR[] = []): SessionImportAppend[] {
+export function historyImportAppends(
+  chat: ChatLogIR,
+  sessionId: string,
+  scripts: RegexScriptIR[] = [],
+  expand?: (text: string) => string,
+): SessionImportAppend[] {
   const promptScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly)
-  const promptView = (message: ChatMessage, index: number): string =>
-    promptScripts.length === 0
+  const promptView = (message: ChatMessage, index: number): string => {
+    const transformed = promptScripts.length === 0
       ? message.mes
       : applyRegexScripts(message.mes, promptScripts, RegexPlacement.AI_OUTPUT, {}, { depth: chat.messages.length - 1 - index })
+    return expand ? expand(transformed) : transformed
+  }
 
   const appends: SessionImportAppend[] = []
   let turn = 0

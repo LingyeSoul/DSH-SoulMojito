@@ -352,7 +352,7 @@ describe('internal Tavern session bridge occupation', () => {
     expect(turnStarts(agent).map((event) => event.data)).toEqual([{ turn: 1 }, { turn: 2 }])
   })
 
-  it('keeps the AgentTavern session locked after the history import created turns', async () => {
+  it('re-activation of the same AgentTavern binding after the greeting import is an idempotent no-op', async () => {
     const agent = makeAgent('session-agent-greeting-locked')
     const now = new Date().toISOString()
     const lockedChat = await store.createChat(CHARACTER, {
@@ -362,8 +362,76 @@ describe('internal Tavern session bridge occupation', () => {
     const rawInput = base64Url({ character: CHARACTER, chatId: lockedChat, architecture: 'agent-tavern', contextMode: 'dsh-native' })
     await handler({ agent, rawInput })
     expect(agent.session.events.filter((event) => event.type === 'assistant/message')).toHaveLength(1)
-    await expect(handler({ agent, rawInput })).rejects.toThrow('already started')
+    recomposeCalls.length = 0
+    const result = await handler({ agent, rawInput })
+    expect(result.kind).toBe('success')
     expect(agent.session.events.filter((event) => event.type === 'assistant/message')).toHaveLength(1)
+    expect(agent.session.events.filter((event) => event.type === 'agent-preset/selected')).toHaveLength(1)
+    expect(agent.session.events.map((event) => event.type)).toEqual([
+      'agent-preset/selected',
+      'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+    ])
+    expect(recomposeCalls).toEqual([])
+  })
+
+  it('keeps a started AgentTavern session locked against rebinding to another chat', async () => {
+    const agent = makeAgent('session-agent-greeting-retarget')
+    const now = new Date().toISOString()
+    const firstChat = await store.createChat(CHARACTER, {
+      user_name: 'unused', character_name: 'unused',
+      chat_metadata: { createdAt: now, timedWorldInfo: {} },
+    }, [{ name: CHARACTER, is_user: false, is_system: false, send_date: now, mes: '嗨。' }])
+    const otherChat = await store.createChat(CHARACTER, {
+      user_name: 'unused', character_name: 'unused',
+      chat_metadata: { createdAt: now, timedWorldInfo: {} },
+    }, [])
+    await handler({
+      agent,
+      rawInput: base64Url({ character: CHARACTER, chatId: firstChat, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+    })
+    const eventsBefore = agent.session.events.length
+    await expect(handler({
+      agent,
+      rawInput: base64Url({ character: CHARACTER, chatId: otherChat, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+    })).rejects.toThrow('already started')
+    expect(agent.session.events).toHaveLength(eventsBefore)
+    expect((await store.getState()).sessionBindings[agent.id]).toMatchObject({ character: CHARACTER, chatId: firstChat })
+  })
+
+  it('completes a pending AgentTavern initialization whose history the projector replayed first', async () => {
+    const agent = makeAgent('session-agent-pending-replay')
+    const now = new Date().toISOString()
+    const replayedChat = await store.createChat(CHARACTER, {
+      user_name: 'unused', character_name: 'unused',
+      chat_metadata: { createdAt: now, timedWorldInfo: {} },
+    }, [{ name: CHARACTER, is_user: false, is_system: false, send_date: now, mes: '重放的开场白。' }])
+    await apiHandler(makeRequest({
+      sessionId: agent.id,
+      character: CHARACTER,
+      chatId: replayedChat,
+      architecture: 'agent-tavern',
+      contextMode: 'dsh-native',
+    }, '/api/dsh-tavern/binding'), makeResponse())
+    expect((await store.getState()).sessionBindings[agent.id]).toMatchObject({ initializationPending: true })
+    // 投影器重放先于激活命令到达：会话里已有 turn，但没有预设 marker。
+    agent.session.append('turn/start', { turn: 1 })
+    agent.session.append('step/start', { turn: 1, step: 1 })
+    agent.session.append('assistant/message', {
+      turn: 1, step: 1,
+      message: { id: 'replayed', role: 'assistant', content: [{ type: 'text', text: '重放的开场白。' }] },
+    })
+    agent.session.append('step/end', { turn: 1, step: 1 })
+    agent.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    const result = await handler({
+      agent,
+      rawInput: base64Url({ character: CHARACTER, chatId: replayedChat, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+    })
+    expect(result.kind).toBe('success')
+    expect(agent.session.events.filter((event) => event.type === 'assistant/message')).toHaveLength(1)
+    expect(agent.session.events.filter((event) => event.type === 'agent-preset/selected')).toHaveLength(1)
+    const binding = (await store.getState()).sessionBindings[agent.id]
+    expect(binding).toMatchObject({ architecture: 'agent-tavern', character: CHARACTER, chatId: replayedChat })
+    expect(binding.initializationPending).toBeUndefined()
   })
 
   it('accepts the AgentTavern one-time asset preload setting', async () => {

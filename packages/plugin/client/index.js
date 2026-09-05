@@ -1071,10 +1071,16 @@ window.__ModuleLoader__.load({
     // 旧版本激活的绑定会话在宿主侧仍是 blank（无 turn/start），会被原生「新建
     // 会话」的 blank 复用逻辑劫持。对其幂等重发内部绑定桥接命令，服务端
     // 补齐 marker 和占位 turn 对即摘除。成功记入 repairedBindings，失败移除以待
-    // 下次触发重试。
+    // 下次触发重试。AgentTavern 桥接命令对已初始化会话是一次性的，重发只会
+    // 往会话记录里塞报错，摘除客户端 blank 镜像即可；仅 initializationPending
+    // 的绑定才需要重发以补完初始化。
     async function repairBinding(ctx, sessionId, binding) {
       if (!binding || repairedBindings.has(sessionId)) return
       repairedBindings.add(sessionId)
+      if (bindingArchitecture(binding) !== 'st' && binding.initializationPending !== true) {
+        reserveTavernSession(ctx, sessionId)
+        return
+      }
       try {
         const policy = {
           architecture: bindingArchitecture(binding),
@@ -2032,7 +2038,17 @@ window.__ModuleLoader__.load({
         state.error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, state.error)) : null)
     }
 
-    function MessageRow({ sessionId, character, chatId, chat, message, index, busy, display }) {
+    // 显示层宏替换（ST substituteParams 的常用子集）：只影响渲染，落库文本保持
+    // 原样，切换 swipe / 编辑框读原始 mes 都不受影响。
+    function expandDisplayMacros(text, user, char) {
+      if (typeof text !== 'string' || !text.includes('{')) return text
+      return text
+        .replace(/\{\{user\}\}/gi, user)
+        .replace(/\{\{char\}\}/gi, char)
+        .replace(/\{\{bot\}\}/gi, char)
+    }
+
+    function MessageRow({ sessionId, character, chatId, chat, message, index, busy, display, persona }) {
       const t = useTranslate()
       const [editing, setEditing] = useState(false)
       const [draft, setDraft] = useState(message.mes || '')
@@ -2042,7 +2058,10 @@ window.__ModuleLoader__.load({
       const isUser = message.is_user === true
       const swipes = Array.isArray(message.swipes) && message.swipes.length > 0 ? message.swipes : [message.mes || '']
       const swipeIndex = Math.min(Math.max(Number(message.swipe_id) || 0, 0), swipes.length - 1)
-      const renderedText = display ?? message.mes ?? ''
+      const renderedText = expandDisplayMacros(
+        display ?? message.mes ?? '',
+        persona || 'User',
+        !isUser && message.name ? message.name : character)
       // Do not execute a half-streamed document. Once persisted, complete HTML
       // documents are rendered in isolated frames while ordinary prose remains
       // text, matching Tavern Helper's frontend code-block behavior.
@@ -2161,6 +2180,7 @@ window.__ModuleLoader__.load({
             index,
             busy: run.busy || message.streaming,
             display: state.displays[chatKey(binding.character, binding.chatId)]?.[index],
+            persona: state.bootstrap.state?.activePersona,
           })),
           h('div', { className: 'dt-transcript-end', ref: endRef })),
         run.error ? h('div', { className: 'dt-run-error' }, run.error) : null)

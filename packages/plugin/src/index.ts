@@ -30,6 +30,7 @@ import {
   type AgentTavernCapabilities,
 } from './agent-tavern/capabilities.js'
 import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
+import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
 import { AgentTavernProjector, historyImportAppends, type SessionImportAppend } from './agent-tavern/projector.js'
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
 
@@ -69,7 +70,8 @@ function variables() {
   return (variableStorePromise ??= VariableStore.open(dshHomePath('tavern')))
 }
 
-export function apply(ctx) {
+export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
+  registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns })
   const adapter = createDshAgentTavernAdapter(ctx)
   agentTavernCapabilitiesPromise = bootstrapAgentTavernCapabilities(adapter, {
     presetId: AGENT_TAVERN_PRESET_ID,
@@ -139,7 +141,14 @@ export function apply(ctx) {
       let historyImport: SessionImportAppend[] | undefined
       await assertAgentTavernAvailable(parsed.architecture, parsed.contextMode)
       if (parsed.architecture === 'agent-tavern') {
-        if (agent.session.events.some((event) => event.type === 'turn/start')) {
+        // 客户端修复路径（视图挂载、blank 修复）会对已激活会话重发本命令；同绑定
+        // 的重复激活必须幂等成功，否则开场白导入写入的 turn 会把修复变成用户可见
+        // 的报错。已启动的会话只锁定换绑定目标（换角色/聊天或从 ST 转换会换预设）。
+        const sameTavernBinding = previous?.architecture === 'agent-tavern'
+          && previous.character === parsed.character
+          && previous.chatId === parsed.chatId
+        const sessionStarted = agent.session.events.some((event) => event.type === 'turn/start')
+        if (sessionStarted && !sameTavernBinding) {
           throw new TavernArchitectureConflictError('This host session already started; AgentTavern preset selection is locked.')
         }
         if (typeof ctx.agentPresets?.recompose !== 'function') {
@@ -151,18 +160,25 @@ export function apply(ctx) {
         if (initializeAgentTavern && parsed.group !== true) {
           // 开场白与既有聊天记录必须先落到原生会话，用户才能在 DSH 会话里看到
           // 角色开口；带插件来源的导入事件由投影器跳过，不会重复写回 JSONL。
-          // 历史文本应用 prompt 层正则，模型上下文与 ST 管线一致。
-          historyImport = historyImportAppends(chat, agent.id, character ? collectRegexScripts(currentState, character) : [])
+          // 历史文本应用 prompt 层正则与宏展开（{{char}}/{{user}}），模型上下文
+          // 与 ST 管线一致。会话已有 turn（投影器重放先于激活完成）时历史已在
+          // 场，跳过导入防重复。
+          historyImport = sessionStarted
+            ? undefined
+            : historyImportAppends(chat, agent.id, character ? collectRegexScripts(currentState, character) : [], tavernMacroExpand(currentState, parsed.character, character))
         }
         if (shouldPreloadAssets) {
           if (typeof agent.inject !== 'function') {
             throw new TavernArchitectureConflictError('This host cannot preload AgentTavern session context.')
           }
           if (!character) throw new Error('Tavern character not found.')
-          preloadSnapshot = await buildAgentTavernPreloadSnapshot(db, currentState, parsed.character, character)
+          preloadSnapshot = await buildAgentTavernPreloadSnapshot(db, currentState, parsed.character, character, tavernMacroExpand(currentState, parsed.character, character))
         }
-        const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_TAVERN_PRESET_ID)
-        agent.session.append('agent-preset/selected', { agentPreset: preset.id })
+        // 幂等：重复激活不重复 recompose，也不叠加预设 marker。
+        if (!agent.session.events.some((event) => event.type === 'agent-preset/selected' && event.data?.agentPreset === AGENT_TAVERN_PRESET_ID)) {
+          const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_TAVERN_PRESET_ID)
+          agent.session.append('agent-preset/selected', { agentPreset: preset.id })
+        }
       }
       await bindSession(
         db,
@@ -1113,6 +1129,8 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   const chat = snapshot.chat
   let revision = snapshot.revision
   let hostTrace
+  // {{user}} / 消息落库名：激活 persona 名称（ST name1 语义），未配置时回退默认
+  const userName = state.activePersona ?? DEFAULT_USER
 
   try {
 
@@ -1155,7 +1173,7 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     const turn = buildGroupTurn({
       speaker: speakerName,
       members,
-      userName: DEFAULT_USER,
+      userName,
       messages: chat.messages,
       ...(typeof rawNudge === 'string' && rawNudge.trim() !== '' ? { groupNudgePrompt: rawNudge } : {}),
     })
@@ -1172,12 +1190,12 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   if (mode === 'send') {
     const transformed = applyRegexScripts(options.userText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t })
     hostUserText = transformed
-    chat.messages.push({ name: DEFAULT_USER, is_user: true, is_system: false, send_date: new Date().toISOString(), mes: transformed })
+    chat.messages.push({ name: userName, is_user: true, is_system: false, send_date: new Date().toISOString(), mes: transformed })
     if (group) {
       const turn = buildGroupTurn({
         speaker: speakerName,
         members: groupDef?.members ?? [speakerName],
-        userName: DEFAULT_USER,
+        userName,
         messages: chat.messages,
       })
       turnMessages = turn.messages
@@ -1191,7 +1209,7 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
         const turn = buildGroupTurn({
           speaker: speakerName,
           members: groupDef?.members ?? [speakerName],
-          userName: DEFAULT_USER,
+          userName,
           messages: chat.messages,
         })
         turnMessages = turn.messages
@@ -1242,7 +1260,7 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     : undefined
   const macros = createMacroEngine({
     char: character.card.data.nickname || character.card.data.name,
-    user: DEFAULT_USER,
+    user: userName,
     ...(enabledMembers ? { group: enabledMembers.join(', ') } : {}),
     persona: persona?.description,
     card: {
@@ -1318,7 +1336,7 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
       context,
       instruct,
       speakerName: character.card.data.nickname || character.card.data.name,
-      userName: DEFAULT_USER,
+      userName,
       speakerFields: {
         description: character.card.data.description,
         personality: character.card.data.personality,
@@ -1333,7 +1351,7 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
         : (preset.prompts.find((p) => p.identifier === 'main' && !p.marker)?.content ?? ''),
       worldInfoBefore: loreBefore,
       worldInfoAfter: loreAfter,
-      messages: [...historyForPrompt, ...(nudge ? [{ name: DEFAULT_USER, is_user: true, is_system: false, send_date: '', mes: nudge.content }] : [])],
+      messages: [...historyForPrompt, ...(nudge ? [{ name: userName, is_user: true, is_system: false, send_date: '', mes: nudge.content }] : [])],
       depthInjections,
       maxContextTokens: numberOr(samplerPreset?.['max_context_length'], numberOr(preset.sampler.openai_max_context, 4096)),
       maxResponseTokens: numberOr(samplerPreset?.['max_length'], numberOr(preset.sampler.openai_max_tokens, 400)),
@@ -1474,7 +1492,7 @@ async function runTavernScript(ctx, req, res, db) {
 
   const macros = createMacroEngine({
     char: character?.card.data.nickname || character?.card.data.name || characterName,
-    user: DEFAULT_USER,
+    user: state.activePersona ?? DEFAULT_USER,
     persona: state.activePersona ? (await db.getPersona(state.activePersona))?.description : undefined,
     lastMessage: chat.messages[chat.messages.length - 1]?.mes,
     lastUserMessage: [...chat.messages].reverse().find((m) => m.is_user)?.mes,
@@ -1523,7 +1541,7 @@ async function runTavernScript(ctx, req, res, db) {
     send: async (text) => {
       const trimmed = text.trim()
       if (trimmed === '') return
-      chat.messages.push({ name: DEFAULT_USER, is_user: true, is_system: false, send_date: new Date().toISOString(), mes: trimmed })
+      chat.messages.push({ name: state.activePersona ?? DEFAULT_USER, is_user: true, is_system: false, send_date: new Date().toISOString(), mes: trimmed })
       await persist()
     },
     trigger: async (member) => { await triggerGeneration(member) },
@@ -1690,6 +1708,18 @@ async function serveCharacterAvatar(res, db, name, found) {
 async function isGroupChat(db, characterName, chatId) {
   const chat = await db.getChat(characterName, chatId)
   return chat?.header?.chat_metadata?.group !== undefined
+}
+
+/**
+ * AgentTavern 导入/预加载的宏展开：{{char}}=角色名，{{user}}=激活 persona 名。
+ * 与 ST substituteParams 对齐；未知宏保持原样。
+ */
+function tavernMacroExpand(state, characterName, character) {
+  const macros = createMacroEngine({
+    char: character?.card.data.nickname || character?.card.data.name || characterName,
+    user: state.activePersona ?? DEFAULT_USER,
+  })
+  return (text) => macros.expand(text)
 }
 
 /**

@@ -113,3 +113,22 @@ describe('collectRegexScripts', () => {
     expect(scripts.map((item) => item.scriptName)).toEqual(['Global'])
   })
 })
+
+describe('buildAgentTavernPreloadSnapshot', () => {
+  it('卡片字段在写入快照前完成宏展开', async () => {
+    const { buildAgentTavernPreloadSnapshot } = await import('../src/tavern-assets.js')
+    const card = decodeCharacterCard({
+      spec: 'chara_card_v2', spec_version: '2.0',
+      data: {
+        name: CHARACTER, description: '{{char}} meets {{user}}.', personality: '', scenario: '', first_mes: 'Hi {{user}}!',
+        mes_example: '', creator_notes: '', system_prompt: '', post_history_instructions: '',
+        alternate_greetings: [], tags: [], creator: '', character_version: '', extensions: {},
+      },
+    })
+    const snapshot = await buildAgentTavernPreloadSnapshot(
+      { getWorld: async () => undefined }, { activeWorlds: [] }, CHARACTER, { card },
+      (text) => text.replaceAll('{{char}}', 'Carrier').replaceAll('{{user}}', 'Alice'))
+    expect(snapshot).toContain('[character.description]\nCarrier meets Alice.')
+    expect(snapshot).toContain('[character.first_message]\nHi Alice!')
+  })
+})

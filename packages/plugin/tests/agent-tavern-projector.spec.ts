@@ -262,4 +262,24 @@ describe('AgentTavern native event projector', () => {
     expect(texts).toEqual(['first <word>', 'second <word>', 'THIRD <word>'])
     expect(chat.messages.map((message) => message.mes)).toEqual(['first word', 'second word', 'third word'])
   })
+
+  it('expands macros in the imported prompt view without touching stored text', () => {
+    const chat: ChatLogIR = {
+      header: { user_name: 'Alice', character_name: 'Projector Character', chat_metadata: {} },
+      messages: [
+        { name: 'Projector Character', is_user: false, is_system: false, send_date: '', mes: '{{char}} waves at {{user}}.' },
+        { name: 'Alice', is_user: true, is_system: false, send_date: '', mes: 'hello {{char}}' },
+      ],
+    }
+    const appends = historyImportAppends(chat, 'session-1', [], (text) =>
+      text.replaceAll('{{char}}', 'Nova').replaceAll('{{user}}', 'Alice'))
+    const texts = appends
+      .filter((item) => item.type === 'user/message' || item.type === 'assistant/message')
+      .map((item) => {
+        const data = item.data as { content?: Array<{ text?: string }>; message?: { content?: Array<{ text?: string }> } }
+        return (data.message?.content ?? data.content)?.[0]?.text
+      })
+    expect(texts).toEqual(['Nova waves at Alice.', 'hello Nova'])
+    expect(chat.messages.map((message) => message.mes)).toEqual(['{{char}} waves at {{user}}.', 'hello {{char}}'])
+  })
 })

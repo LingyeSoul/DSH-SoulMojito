@@ -79,10 +79,11 @@ export async function buildAgentTavernPreloadSnapshot(
   state: Pick<TavernState, 'activeWorlds'>,
   characterName: string,
   character: CharacterAsset,
+  expand: (text: string) => string = (text) => text,
 ): Promise<string> {
   const books = await collectWorldInfoBooks(db, state, characterName, character)
   const data = character.card.data
-  const writer = new BoundedSnapshotWriter(AGENT_TAVERN_PRELOAD_MAX_CHARS)
+  const writer = new BoundedSnapshotWriter(AGENT_TAVERN_PRELOAD_MAX_CHARS, expand)
 
   writer.addRaw([
     'AgentTavern session initialization context.',
@@ -115,7 +116,11 @@ class BoundedSnapshotWriter {
   private value = ''
   private truncated = false
 
-  constructor(private readonly maxChars: number) {}
+  constructor(
+    private readonly maxChars: number,
+    /** 字段值入快照前的宏展开（{{char}}/{{user}}），保持截断预算按展开后文本计算。 */
+    private readonly expand: (text: string) => string = (text) => text,
+  ) {}
 
   addRaw(value: string): void {
     this.append(value)
@@ -123,8 +128,9 @@ class BoundedSnapshotWriter {
 
   add(label: string, value: string, fieldLimit: number): void {
     if (value === '') return
-    const bounded = value.length > fieldLimit ? value.slice(0, fieldLimit) : value
-    if (bounded.length < value.length) this.truncated = true
+    const expanded = this.expand(value)
+    const bounded = expanded.length > fieldLimit ? expanded.slice(0, fieldLimit) : expanded
+    if (bounded.length < expanded.length) this.truncated = true
     this.append(`\n\n[${label}]\n${bounded}`)
   }
 
