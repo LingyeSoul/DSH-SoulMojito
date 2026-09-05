@@ -56,6 +56,16 @@ ST 与 AgentTavern 共用 DSH 中的 `Tavern (internal)` 专用工作区。插�
 
 AgentTavern 的原生 user/final assistant 事件会幂等投影到 Tavern JSONL；tool、chunk 和 reasoning 事件不会伪装成 Tavern 消息。缺少宿主能力时，插件保持 native 或 ST 的明确边界，不把 compaction 误称为 managed context。
 
+## Compaction curator
+
+`dsh-native` 模式下历史容量由宿主 `dsh-compaction-basic` 决定，而它的自动摘要是编码助手导向的（Files and Code / Pending Jobs 等段落），会把剧情状态、人物关系和记忆维护习惯摘要掉。本插件的 bundle patch 因此把 `compaction-basic` 一行覆写为 `dsh-tavern/compaction`：该引擎继承宿主 basic 实现，触发时机、保留预算、overflow recovery 与工具结果修剪全部复用宿主，仅覆写摘要指令——
+
+- **AgentTavern 绑定的会话**使用 RP 检查点模板（Story So Far / Characters / World Canon / Open Threads / Current Scene / Memory Maintenance / Critical Context），其中 Memory Maintenance 段显式记录记忆工具的维护状态，使 KERNEL 的记忆职责跨 compaction 延续；摘要语言跟随对话。
+- **其余会话**（编码等）原样透传宿主默认摘要，零影响。
+- 可选 curator 专属配置（其余配置键与 basic 完全一致）：`curatorProvider` / `curatorModel` 为 RP 摘要指定独立模型（缺省跟随当前路由），`curatorMaxTokens` 覆盖摘要输出上限（缺省 8192）。在 profile 的 `cordis.patch.yml` 给 `id: compaction-basic` 行加 `config` 即可。
+
+回退：在 profile `cordis.patch.yml` 写 `- id: compaction-basic` + `name: '@deepseek-ai/dsh-compaction-basic'` 覆写回去。摘要调用与宿主默认 summarizer 同为 logged 的 `ctx.llm.stream` 辅助调用，`;compact` 手动命令与自动 compaction 共用该后端。
+
 ## 语言
 
 插件 UI 跟随 DSH 的语言设置（`@deepseek-ai/dsh-client-locale`，zh/en）：client half 声明 `inject: [..., 'locale']`，向 locale 服务注册 `dsh-tavern` 命名空间字典并经 `useSyncExternalStore` 订阅快照，在“通用设置 -> 语言”切换后无需刷新即时生效。字典 zh/en 键集与 `{param}` 占位符的对称性由 `client-vm-mount` gate 校验。

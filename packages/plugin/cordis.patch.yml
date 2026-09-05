@@ -2,3 +2,13 @@
 - insert:
     - id: dsh-tavern
       name: 'dsh-tavern'
+
+# compaction curator：覆写 dsh-base 的 compaction 后端（patch 按 id 覆写、
+# 后写胜出；本 bundle 在 dsh-base 之后加载）。仅覆写摘要器：AgentTavern 绑定
+# 会话用 RP 检查点模板，其余会话原样透传 basic 默认行为；触发时机、保留
+# 预算与工具结果修剪全部复用宿主实现。`/compact` 命令与 overflow recovery
+# 是后端无关的，自动跟随本服务。回退：在 profile cordis.patch.yml 用
+# `- id: compaction-basic
+#    name: '@deepseek-ai/dsh-compaction-basic'` 覆写回来。
+- id: compaction-basic
+  name: 'dsh-tavern/compaction'
