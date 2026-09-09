@@ -355,6 +355,8 @@ describe('internal Tavern session bridge occupation', () => {
     ])
     const greeting = agent.session.events[1]!
     expect(greeting.data).toMatchObject({
+      turn: 0,
+      step: 1,
       message: {
         role: 'assistant',
         content: [{ type: 'text', text: '早上好，旅行者。' }],
@@ -372,6 +374,8 @@ describe('internal Tavern session bridge occupation', () => {
     expect(importedUser.opts).toEqual({ surfaceOp: 'append' })
     const followUp = agent.session.events[3]!
     expect(followUp.data).toMatchObject({
+      turn: 0,
+      step: 2,
       message: {
         content: [{ type: 'text', text: '今天想去哪里？' }],
         source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import', plugin: 'dsh-tavern', form: 'history' },

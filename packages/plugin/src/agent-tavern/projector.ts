@@ -254,6 +254,16 @@ const TAVERN_MIRROR_MODEL_SOURCE = { provider: 'dsh-tavern', model: 'agent-taver
  * at one. Model sources satisfy host validation; plugin markers prevent
  * projection back into the saved chat. Prompt-only regex and macros never
  * alter stored text.
+ *
+ * Imported assistant messages carry explicit `turn: 0` and per-import step
+ * numbers: the client conversation assembler publishes assistant messages at
+ * `{ turn, step }` coordinates read straight off the event payload, and a
+ * message without them dies with "published invalid turn undefined", which
+ * kills the whole event-feed subscriber and renders the chat empty. Turn
+ * containers are created implicitly from payload coordinates, so no
+ * turn/start|end events are needed and the host blank criterion (a logged
+ * turn/start) stays false. Turn 0 keeps imports below the live loop's first
+ * turn (its lastTurn defaults to 0, so live turn 1 never collides).
  */
 export function historyImportAppends(
   chat: ChatLogIR,
@@ -289,9 +299,12 @@ export function historyImportAppends(
       })
       continue
     }
+    assistantCount += 1
     appends.push({
       type: 'assistant/message',
       data: {
+        turn: 0,
+        step: assistantCount,
         message: {
           id: randomUUID(),
           role: 'assistant',
@@ -301,13 +314,12 @@ export function historyImportAppends(
             kind: 'model',
             ...TAVERN_MIRROR_MODEL_SOURCE,
             plugin: 'dsh-tavern',
-            form: assistantCount === 0 ? 'greeting' : 'history',
+            form: assistantCount === 1 ? 'greeting' : 'history',
           },
         },
       },
       surfaceOp: 'append',
     })
-    assistantCount += 1
   }
   return appends
 }

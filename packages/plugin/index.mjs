@@ -5698,9 +5698,12 @@ function historyImportAppends(chat, sessionId, scripts, expand) {
       });
       continue;
     }
+    assistantCount += 1;
     appends.push({
       type: "assistant/message",
       data: {
+        turn: 0,
+        step: assistantCount,
         message: {
           id: randomUUID3(),
           role: "assistant",
@@ -5710,13 +5713,12 @@ function historyImportAppends(chat, sessionId, scripts, expand) {
             kind: "model",
             ...TAVERN_MIRROR_MODEL_SOURCE,
             plugin: "dsh-tavern",
-            form: assistantCount === 0 ? "greeting" : "history"
+            form: assistantCount === 1 ? "greeting" : "history"
           }
         }
       },
       surfaceOp: "append"
     });
-    assistantCount += 1;
   }
   return appends;
 }

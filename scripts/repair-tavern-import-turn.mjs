@@ -5,9 +5,10 @@ import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { createHistoryValidator, createHostPersistenceValidator, readSessionRecords } from './verify-tavern-history.mjs'
 
 /**
- * Convert the legacy synthetic import turn into session-level messages.
- * The imported assistant message is retained and all synthetic boundaries
- * are removed. Sequence references are remapped after the deletion.
+ * Convert the legacy synthetic import turn into the canonical session-level
+ * import shape: the imported assistant message is retained with explicit
+ * `{ turn: 0, step: 1 }` payload coordinates and all synthetic boundaries are
+ * removed. Sequence references are remapped after the deletion.
  */
 export function repairImportedPrelude(events) {
   const start = events.findIndex((event) => event.type === 'turn/start'
@@ -57,8 +58,13 @@ export function repairImportedPrelude(events) {
       const next = structuredClone(event)
       next.seq = remapSeq(event.seq)
       if (event === assistant) {
-        delete next.data.turn
-        delete next.data.step
+        // The client conversation assembler publishes assistant messages at
+        // `{ turn, step }` coordinates read off the payload; bare messages
+        // kill the event-feed subscriber ("published invalid turn undefined")
+        // and render the chat empty. Turn 0 stays below the live loop's
+        // first turn.
+        next.data.turn = 0
+        next.data.step = 1
       }
       if (Array.isArray(next.sourceEventSeqs)) {
         next.sourceEventSeqs = next.sourceEventSeqs.map(remapSeq)
@@ -68,6 +74,36 @@ export function repairImportedPrelude(events) {
       }
       return next
     })
+}
+
+/**
+ * Stamp `{ turn: 0, step: n }` onto imported assistant messages that were
+ * persisted in the bare (coordinate-free) shape produced by the 0.3.1
+ * importer and the first repair revision. Events keep their seq; only the
+ * assistant payloads gain the coordinates the client fold requires.
+ */
+export function stampImportedTurnCoordinates(events) {
+  let stamped = 0
+  let lastStep = 0
+  const next = events.map((event) => {
+    if (event.type !== 'assistant/message') return event
+    const source = event.data?.message?.source
+    if (source?.kind !== 'model' || source.plugin !== 'dsh-tavern'
+      || source.provider !== 'dsh-tavern' || source.model !== 'agent-tavern-import') {
+      return event
+    }
+    if (Number.isSafeInteger(event.data.turn) && Number.isSafeInteger(event.data.step)) {
+      lastStep = Math.max(lastStep, event.data.step)
+      return event
+    }
+    const mutated = structuredClone(event)
+    lastStep += 1
+    mutated.data.turn = 0
+    mutated.data.step = lastStep
+    stamped += 1
+    return mutated
+  })
+  return { events: next, stamped }
 }
 
 function decodeEvents(records, decodeStorageRecord) {
@@ -123,44 +159,62 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     dirname(dirname(dirname(artifact))),
   )
   const before = decodeEvents(storedBefore, decodeStorageRecord)
-  const after = repairImportedPrelude(before)
-  validateEvents(after, adoptSessionEvent, validateHistory)
+  let working = before
+  let removedEvents = 0
+  try {
+    working = repairImportedPrelude(before)
+    removedEvents = before.length - working.length
+  } catch (error) {
+    if (!/no legacy imported turn/i.test(error.message)) throw error
+  }
+  const { events: after, stamped } = stampImportedTurnCoordinates(working)
+  if (removedEvents === 0 && stamped === 0) {
+    console.log(JSON.stringify({
+      artifact,
+      repaired: false,
+      note: 'No legacy imported turn and no bare imported assistant messages; nothing to repair.',
+    }, null, 2))
+  } else {
+    validateEvents(after, adoptSessionEvent, validateHistory)
 
-  const encoded = encodeArtifact(header, after)
-  if (decodeFrames(encoded.bytes) !== encoded.plaintext) {
-    throw new Error('Repaired artifact failed compressed round-trip validation')
-  }
-  if (!readFileSync(artifact).equals(original)) {
-    throw new Error('Session changed during validation; stop DSH before repairing')
-  }
+    const encoded = encodeArtifact(header, after)
+    if (decodeFrames(encoded.bytes) !== encoded.plaintext) {
+      throw new Error('Repaired artifact failed compressed round-trip validation')
+    }
+    if (!readFileSync(artifact).equals(original)) {
+      throw new Error('Session changed during validation; stop DSH before repairing')
+    }
 
-  const stamp = `${Date.now()}-${process.pid}`
-  const backup = `${artifact}.bak-import-session-level-${stamp}`
-  const temporary = `${artifact}.${stamp}.tmp`
-  copyFileSync(artifact, backup, constants.COPYFILE_EXCL)
-  writeFileSync(temporary, encoded.bytes, { flag: 'wx' })
-  if (!readFileSync(artifact).equals(original)) {
-    throw new Error(`Session changed before replacement; original backup: ${backup}`)
-  }
-  renameSync(temporary, artifact)
+    const stamp = `${Date.now()}-${process.pid}`
+    const backup = `${artifact}.bak-import-session-level-${stamp}`
+    const temporary = `${artifact}.${stamp}.tmp`
+    copyFileSync(artifact, backup, constants.COPYFILE_EXCL)
+    writeFileSync(temporary, encoded.bytes, { flag: 'wx' })
+    if (!readFileSync(artifact).equals(original)) {
+      throw new Error(`Session changed before replacement; original backup: ${backup}`)
+    }
+    renameSync(temporary, artifact)
 
-  const persistedStored = readSessionRecords(artifact)
-  const persisted = decodeEvents(persistedStored, decodeStorageRecord)
-  validateEvents(persisted, adoptSessionEvent, validateHistory)
-  const inspection = await validateHostPersistence(header.id)
-  if (JSON.stringify(persisted) !== JSON.stringify(after)) {
-    throw new Error(`Post-write verification failed; original backup: ${backup}`)
+    const persistedStored = readSessionRecords(artifact)
+    const persisted = decodeEvents(persistedStored, decodeStorageRecord)
+    validateEvents(persisted, adoptSessionEvent, validateHistory)
+    const inspection = await validateHostPersistence(header.id)
+    if (JSON.stringify(persisted) !== JSON.stringify(after)) {
+      throw new Error(`Post-write verification failed; original backup: ${backup}`)
+    }
+    if (inspection.events.length !== after.length) {
+      throw new Error(`Host persistence verification returned ${inspection.events.length} events; expected ${after.length}`)
+    }
+    console.log(JSON.stringify({
+      artifact,
+      repaired: true,
+      backup,
+      beforeEvents: before.length,
+      afterEvents: after.length,
+      removedEvents,
+      stampedEvents: stamped,
+      hostInspectionEvents: inspection.events.length,
+      validated: true,
+    }, null, 2))
   }
-  if (inspection.events.length !== after.length) {
-    throw new Error(`Host persistence verification returned ${inspection.events.length} events; expected ${after.length}`)
-  }
-  console.log(JSON.stringify({
-    artifact,
-    backup,
-    beforeEvents: before.length,
-    afterEvents: after.length,
-    removedEvents: before.length - after.length,
-    hostInspectionEvents: inspection.events.length,
-    validated: true,
-  }, null, 2))
 }

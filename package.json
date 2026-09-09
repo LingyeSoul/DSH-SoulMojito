@@ -1,6 +1,6 @@
 {
   "name": "dsh-tavern",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "SillyTavern-compatible roleplay layer for DSH (deepseek-harness): character cards, world info, presets.",
   "license": "GPL-3.0",

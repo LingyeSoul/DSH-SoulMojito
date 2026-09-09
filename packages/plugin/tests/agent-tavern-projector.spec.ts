@@ -259,7 +259,12 @@ describe('AgentTavern native event projector', () => {
       'assistant/message', 'user/message', 'assistant/message', 'user/message',
     ])
     expect(appends.every((event) => !['turn/start', 'turn/end', 'step/start', 'step/end'].includes(event.type))).toBe(true)
-    expect(appends.filter((event) => event.type === 'assistant/message').every((event) => (
+    // 客户端装配器从事件载荷直接读 { turn, step } 坐标并据此隐式建 turn 容器；
+    // 缺坐标会让 assistant-step 定义抛 "published invalid turn undefined"，
+    // 杀死整个事件流订阅（对话区空白）。turn 0 与 live loop 的 turn 1 错开。
+    expect(appends.filter((event) => event.type === 'assistant/message').map((event) => event.data.turn)).toEqual([0, 0])
+    expect(appends.filter((event) => event.type === 'assistant/message').map((event) => event.data.step)).toEqual([1, 2])
+    expect(appends.filter((event) => event.type === 'user/message').every((event) => (
       !('turn' in event.data) && !('step' in event.data)
     ))).toBe(true)
     expect(appends.filter((event) => event.type === 'user/message')).toHaveLength(2)
