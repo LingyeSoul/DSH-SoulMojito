@@ -106,6 +106,30 @@ export function stampImportedTurnCoordinates(events) {
   return { events: next, stamped }
 }
 
+/**
+ * Drop `sourceEventSeqs` entries that are not earlier than the owning event.
+ * Hosts before 0.1.2 wrote step-provenance runs that include the owning
+ * event's own seq and same-step successors, which 0.1.2's restore validation
+ * rejects as corruption (`sourceEventSeqs must reference earlier events`),
+ * blocking the whole session at PersistenceCoordinator.prepareCore. Only the
+ * forward entries are removed; earlier references are kept and the field is
+ * dropped entirely when nothing survives.
+ */
+export function trimForwardSourceEventRefs(events) {
+  let trimmed = 0
+  const next = events.map((event) => {
+    if (!Array.isArray(event.sourceEventSeqs)) return event
+    const kept = event.sourceEventSeqs.filter((seq) => Number.isSafeInteger(seq) && seq < event.seq)
+    if (kept.length === event.sourceEventSeqs.length) return event
+    const mutated = structuredClone(event)
+    if (kept.length === 0) delete mutated.sourceEventSeqs
+    else mutated.sourceEventSeqs = kept
+    trimmed += 1
+    return mutated
+  })
+  return { events: next, trimmed }
+}
+
 function decodeEvents(records, decodeStorageRecord) {
   return records.filter((record) => record.type !== 'session')
     .flatMap((record) => decodeStorageRecord(record))
@@ -139,9 +163,16 @@ function decodeFrames(buffer) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const [dependencyRoot, artifactArgument] = process.argv.slice(2)
+  // --stamp-only: sessions whose `turn/start { turn: 1 }` is the live loop's
+  // first real turn (session-level greeting import plus native-loop history)
+  // fail repairImportedPrelude's legacy-shape probe, which would otherwise
+  // hard-error before the coordinate stamp runs. Stamping alone is what the
+  // client fold requires; the legacy prelude rewrite stays opt-out.
+  const stampOnly = process.argv.includes('--stamp-only')
+  const positional = process.argv.slice(2).filter((argument) => argument !== '--stamp-only')
+  const [dependencyRoot, artifactArgument] = positional
   if (!dependencyRoot || !artifactArgument) {
-    throw new Error('Usage: node scripts/repair-tavern-import-turn.mjs <host-node-modules> <session.jsonl.zstd>')
+    throw new Error('Usage: node scripts/repair-tavern-import-turn.mjs <host-node-modules> <session.jsonl.zstd> [--stamp-only]')
   }
 
   const artifact = resolve(artifactArgument)
@@ -161,18 +192,23 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const before = decodeEvents(storedBefore, decodeStorageRecord)
   let working = before
   let removedEvents = 0
-  try {
-    working = repairImportedPrelude(before)
-    removedEvents = before.length - working.length
-  } catch (error) {
-    if (!/no legacy imported turn/i.test(error.message)) throw error
+  if (stampOnly) {
+    console.log('stamp-only: skipping legacy imported-turn probe')
+  } else {
+    try {
+      working = repairImportedPrelude(before)
+      removedEvents = before.length - working.length
+    } catch (error) {
+      if (!/no legacy imported turn/i.test(error.message)) throw error
+    }
   }
-  const { events: after, stamped } = stampImportedTurnCoordinates(working)
-  if (removedEvents === 0 && stamped === 0) {
+  const { events: stamped, stamped: stampedCount } = stampImportedTurnCoordinates(working)
+  const { events: after, trimmed } = trimForwardSourceEventRefs(stamped)
+  if (removedEvents === 0 && stampedCount === 0 && trimmed === 0) {
     console.log(JSON.stringify({
       artifact,
       repaired: false,
-      note: 'No legacy imported turn and no bare imported assistant messages; nothing to repair.',
+      note: 'No legacy imported turn, no bare imported assistant messages, and no forward sourceEventSeqs; nothing to repair.',
     }, null, 2))
   } else {
     validateEvents(after, adoptSessionEvent, validateHistory)
@@ -212,7 +248,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       beforeEvents: before.length,
       afterEvents: after.length,
       removedEvents,
-      stampedEvents: stamped,
+      stampedEvents: stampedCount,
+      trimmedRefEvents: trimmed,
       hostInspectionEvents: inspection.events.length,
       validated: true,
     }, null, 2))
