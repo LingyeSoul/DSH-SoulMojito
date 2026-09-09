@@ -5656,34 +5656,19 @@ function isTavernMirrorSource(source) {
   return record.kind === "plugin" || record.kind === "model";
 }
 var TAVERN_MIRROR_MODEL_SOURCE = { provider: "dsh-tavern", model: "agent-tavern-import" };
-function historyImportAppends(chat, sessionId, scripts = [], expand) {
+function historyImportAppends(chat, sessionId, scripts, expand) {
   const promptScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly);
   const promptView = (message, index) => {
     const transformed = promptScripts.length === 0 ? message.mes : applyRegexScripts(message.mes, promptScripts, RegexPlacement.AI_OUTPUT, {}, { depth: chat.messages.length - 1 - index });
     return expand ? expand(transformed) : transformed;
   };
   const appends = [];
-  let turn = 0;
-  let step = 0;
-  let turnOpen = false;
-  const openTurn = () => {
-    turn += 1;
-    step = 0;
-    turnOpen = true;
-    appends.push({ type: "turn/start", data: { turn } });
-  };
-  const closeTurn = () => {
-    if (!turnOpen) return;
-    turnOpen = false;
-    appends.push({ type: "turn/end", data: { turn, reason: { kind: "completed" } } });
-  };
+  let assistantCount = 0;
   for (const [index, message] of chat.messages.entries()) {
     if (message.is_system === true || typeof message.mes !== "string" || message.mes.trim() === "") continue;
     const origin = message.extra?.agentTavern;
     if (origin?.sessionId === sessionId) continue;
     if (message.is_user === true) {
-      closeTurn();
-      openTurn();
       appends.push({
         type: "user/message",
         data: {
@@ -5696,35 +5681,26 @@ function historyImportAppends(chat, sessionId, scripts = [], expand) {
       });
       continue;
     }
-    if (!turnOpen) openTurn();
-    step += 1;
-    appends.push(
-      { type: "step/start", data: { turn, step } },
-      {
-        type: "assistant/message",
-        data: {
-          turn,
-          step,
-          message: {
-            id: randomUUID3(),
-            role: "assistant",
-            content: [{ type: "text", text: promptView(message, index) }],
-            // 宿主在会话加载时校验 assistant 消息必须是 model 来源；纯 plugin
-            // 来源会把整个会话变成 SessionPersistenceCorruptionError 拒载。
-            source: {
-              kind: "model",
-              ...TAVERN_MIRROR_MODEL_SOURCE,
-              plugin: "dsh-tavern",
-              form: turn === 1 && step === 1 ? "greeting" : "history"
-            }
+    appends.push({
+      type: "assistant/message",
+      data: {
+        message: {
+          id: randomUUID3(),
+          role: "assistant",
+          content: [{ type: "text", text: promptView(message, index) }],
+          // The host rejects assistant messages without a model source.
+          source: {
+            kind: "model",
+            ...TAVERN_MIRROR_MODEL_SOURCE,
+            plugin: "dsh-tavern",
+            form: assistantCount === 0 ? "greeting" : "history"
           }
-        },
-        surfaceOp: "append"
+        }
       },
-      { type: "step/end", data: { turn, step } }
-    );
+      surfaceOp: "append"
+    });
+    assistantCount += 1;
   }
-  closeTurn();
   return appends;
 }
 function messageText(content) {
@@ -5848,7 +5824,12 @@ function apply(ctx, config = {}) {
       if (parsed.architecture === "agent-tavern") {
         const sameTavernBinding = previous?.architecture === "agent-tavern" && previous.character === parsed.character && previous.chatId === parsed.chatId;
         const sessionStarted = agent.session.events.some((event) => event.type === "turn/start");
-        if (sessionStarted && !sameTavernBinding) {
+        const historyImported = agent.session.events.some((event) => {
+          if (event.type !== "user/message" && event.type !== "assistant/message") return false;
+          const source = event.type === "user/message" ? event.data?.source : event.data?.message?.source;
+          return source?.plugin === "dsh-tavern" && source.form !== "context";
+        });
+        if ((sessionStarted || historyImported) && !sameTavernBinding) {
           throw new TavernArchitectureConflictError("This host session already started; AgentTavern preset selection is locked.");
         }
         if (typeof ctx.agentPresets?.recompose !== "function") {
@@ -5856,7 +5837,7 @@ function apply(ctx, config = {}) {
         }
         const character = parsed.group !== true && (initializeAgentTavern || shouldPreloadAssets) ? await db.getCharacter(parsed.character) : void 0;
         if (initializeAgentTavern && parsed.group !== true) {
-          historyImport = sessionStarted ? void 0 : historyImportAppends(chat, agent.id, character ? collectRegexScripts(currentState, character) : [], tavernMacroExpand(currentState, parsed.character, character));
+          historyImport = sessionStarted || historyImported ? void 0 : historyImportAppends(chat, agent.id, character ? collectRegexScripts(currentState, character) : [], tavernMacroExpand(currentState, parsed.character, character));
         }
         if (shouldPreloadAssets) {
           if (typeof agent.inject !== "function") {

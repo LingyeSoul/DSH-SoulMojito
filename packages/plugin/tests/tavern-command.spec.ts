@@ -320,12 +320,10 @@ describe('internal Tavern session bridge occupation', () => {
     expect(result.kind).toBe('success')
     expect(agent.session.events.map((event) => event.type)).toEqual([
       'agent-preset/selected',
-      'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
-      'turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+      'assistant/message', 'user/message', 'assistant/message',
     ])
-    const greeting = agent.session.events[3]!
+    const greeting = agent.session.events[1]!
     expect(greeting.data).toMatchObject({
-      turn: 1, step: 1,
       message: {
         role: 'assistant',
         content: [{ type: 'text', text: '早上好，旅行者。' }],
@@ -334,22 +332,21 @@ describe('internal Tavern session bridge occupation', () => {
     })
     expect(greeting.opts).toEqual({ surfaceOp: 'append' })
     expect((greeting.data as { usage?: unknown }).usage).toBeUndefined()
-    const importedUser = agent.session.events[7]!
+    const importedUser = agent.session.events[2]!
     expect(importedUser.data).toMatchObject({
       role: 'user',
       content: [{ type: 'text', text: '你也是早上好。' }],
       source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'history' },
     })
     expect(importedUser.opts).toEqual({ surfaceOp: 'append' })
-    const followUp = agent.session.events[9]!
+    const followUp = agent.session.events[3]!
     expect(followUp.data).toMatchObject({
-      turn: 2, step: 1,
       message: {
         content: [{ type: 'text', text: '今天想去哪里？' }],
         source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import', plugin: 'dsh-tavern', form: 'history' },
       },
     })
-    expect(turnStarts(agent).map((event) => event.data)).toEqual([{ turn: 1 }, { turn: 2 }])
+    expect(turnStarts(agent)).toHaveLength(0)
   })
 
   it('re-activation of the same AgentTavern binding after the greeting import is an idempotent no-op', async () => {
@@ -369,7 +366,7 @@ describe('internal Tavern session bridge occupation', () => {
     expect(agent.session.events.filter((event) => event.type === 'agent-preset/selected')).toHaveLength(1)
     expect(agent.session.events.map((event) => event.type)).toEqual([
       'agent-preset/selected',
-      'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+      'assistant/message',
     ])
     expect(recomposeCalls).toEqual([])
   })

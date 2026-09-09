@@ -1,6 +1,6 @@
 {
   "name": "dsh-tavern",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "DSH plugin: SillyTavern-compatible roleplay workspace with Character Card V2/V3/PNG import, World Info lore engine, presets, swipes, chat editing and streaming LLM generation. Official bundle, install via dsh plugin --profile web add.",
   "license": "GPL-3.0",
   "type": "module",

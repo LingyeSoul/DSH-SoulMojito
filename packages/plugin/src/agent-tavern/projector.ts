@@ -246,23 +246,17 @@ function isTavernMirrorSource(source: unknown): boolean {
 const TAVERN_MIRROR_MODEL_SOURCE = { provider: 'dsh-tavern', model: 'agent-tavern-import' } as const
 
 /**
- * 把聊天里尚未出现在原生会话中的消息（开场白、ST 时代的记录或其他会话投影的
- * 记录）转成宿主 Session.append 计划：每条用户消息开启一个新 turn，角色消息
- * 作为 turn 内的 step。角色消息的 source 是带 dsh-tavern 标记的 model 来源
- * （宿主强制 assistant 消息用 model 来源，见 TAVERN_MIRROR_MODEL_SOURCE），
- * 投影器凭 plugin 标记跳过它们，因此导入不会把消息重复写回 JSONL；不带
- * usage，也不会被统计成一次模型生成。
- *
- * scripts 提供 prompt 层正则（promptOnly AI_OUTPUT，与 ST 管线的 promptOnly
- * 历史变换一致，按消息深度过滤），使 AgentTavern 模型上下文看到与 ST 相同的
- * 变换后历史；落库文本保持不变。expand 提供 ST substituteParams 语义的宏展开
- * （{{char}}/{{user}} 等），同样只作用于模型上下文。
+ * Import saved messages as session-level surface events without creating loop
+ * boundaries. The native AgentLoop then owns the first live turn and starts it
+ * at one. Model sources satisfy host validation; plugin markers prevent
+ * projection back into the saved chat. Prompt-only regex and macros never
+ * alter stored text.
  */
 export function historyImportAppends(
   chat: ChatLogIR,
   sessionId: string,
-  scripts: RegexScriptIR[] = [],
-  expand?: (text: string) => string,
+  scripts: RegexScriptIR[],
+  expand: ((text: string) => string) | undefined,
 ): SessionImportAppend[] {
   const promptScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly)
   const promptView = (message: ChatMessage, index: number): string => {
@@ -273,29 +267,13 @@ export function historyImportAppends(
   }
 
   const appends: SessionImportAppend[] = []
-  let turn = 0
-  let step = 0
-  let turnOpen = false
-
-  const openTurn = () => {
-    turn += 1
-    step = 0
-    turnOpen = true
-    appends.push({ type: 'turn/start', data: { turn } })
-  }
-  const closeTurn = () => {
-    if (!turnOpen) return
-    turnOpen = false
-    appends.push({ type: 'turn/end', data: { turn, reason: { kind: 'completed' } } })
-  }
+  let assistantCount = 0
 
   for (const [index, message] of chat.messages.entries()) {
     if (message.is_system === true || typeof message.mes !== 'string' || message.mes.trim() === '') continue
     const origin = message.extra?.agentTavern as Record<string, unknown> | undefined
     if (origin?.sessionId === sessionId) continue
     if (message.is_user === true) {
-      closeTurn()
-      openTurn()
       appends.push({
         type: 'user/message',
         data: {
@@ -308,35 +286,26 @@ export function historyImportAppends(
       })
       continue
     }
-    if (!turnOpen) openTurn()
-    step += 1
-    appends.push(
-      { type: 'step/start', data: { turn, step } },
-      {
-        type: 'assistant/message',
-        data: {
-          turn,
-          step,
-          message: {
-            id: randomUUID(),
-            role: 'assistant',
-            content: [{ type: 'text', text: promptView(message, index) }],
-            // 宿主在会话加载时校验 assistant 消息必须是 model 来源；纯 plugin
-            // 来源会把整个会话变成 SessionPersistenceCorruptionError 拒载。
-            source: {
-              kind: 'model',
-              ...TAVERN_MIRROR_MODEL_SOURCE,
-              plugin: 'dsh-tavern',
-              form: turn === 1 && step === 1 ? 'greeting' : 'history',
-            },
+    appends.push({
+      type: 'assistant/message',
+      data: {
+        message: {
+          id: randomUUID(),
+          role: 'assistant',
+          content: [{ type: 'text', text: promptView(message, index) }],
+          // The host rejects assistant messages without a model source.
+          source: {
+            kind: 'model',
+            ...TAVERN_MIRROR_MODEL_SOURCE,
+            plugin: 'dsh-tavern',
+            form: assistantCount === 0 ? 'greeting' : 'history',
           },
         },
-        surfaceOp: 'append',
       },
-      { type: 'step/end', data: { turn, step } },
-    )
+      surfaceOp: 'append',
+    })
+    assistantCount += 1
   }
-  closeTurn()
   return appends
 }
 

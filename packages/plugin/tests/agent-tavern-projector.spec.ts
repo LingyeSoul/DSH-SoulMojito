@@ -231,6 +231,59 @@ describe('AgentTavern native event projector', () => {
     ])
   })
 
+  it('imports history as session-level messages before the live loop first turn', () => {
+    const chat: ChatLogIR = {
+      header: { user_name: 'Alice', character_name: 'Projector Character', chat_metadata: {} },
+      messages: [
+        { name: 'Projector Character', is_user: false, is_system: false, send_date: '', mes: 'Greeting.' },
+        { name: 'Alice', is_user: true, is_system: false, send_date: '', mes: 'Hello.' },
+        { name: 'Projector Character', is_user: false, is_system: false, send_date: '', mes: 'Welcome.' },
+        { name: 'Alice', is_user: true, is_system: false, send_date: '', mes: 'Continue.' },
+      ],
+    }
+    const original = structuredClone(chat)
+    const appends = historyImportAppends(chat, 'session-1', [], undefined)
+    expect(appends.map((event) => event.type)).toEqual([
+      'assistant/message', 'user/message', 'assistant/message', 'user/message',
+    ])
+    expect(appends.every((event) => !['turn/start', 'turn/end', 'step/start', 'step/end'].includes(event.type))).toBe(true)
+    expect(appends.filter((event) => event.type === 'assistant/message').every((event) => (
+      !('turn' in event.data) && !('step' in event.data)
+    ))).toBe(true)
+    expect(appends.filter((event) => event.type === 'user/message')).toHaveLength(2)
+    expect(appends.filter((event) => event.type === 'assistant/message')).toHaveLength(2)
+    expect(appends.at(0)?.data).toMatchObject({
+      message: {
+        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import', form: 'greeting' },
+      },
+    })
+    expect(appends.at(2)?.data).toMatchObject({
+      message: {
+        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import', form: 'history' },
+      },
+    })
+    // The first live AgentLoop turn remains one because imports reserve no turn.
+    expect([...appends.filter((event) => event.type === 'turn/start'), { type: 'turn/start', data: { turn: 1 } }])
+      .toEqual([{ type: 'turn/start', data: { turn: 1 } }])
+    expect(chat).toEqual(original)
+  })
+
+  it('does not import empty, system-only or already projected history', () => {
+    const chat: ChatLogIR = {
+      header: { user_name: 'Alice', character_name: 'Projector Character', chat_metadata: {} },
+      messages: [
+        { name: 'System', is_user: false, is_system: true, send_date: '', mes: 'System.' },
+        { name: 'Alice', is_user: true, is_system: false, send_date: '', mes: ' ' },
+        {
+          name: 'Projector Character', is_user: false, is_system: false, send_date: '', mes: 'Already here.',
+          extra: { agentTavern: { sessionId: 'session-1' } },
+        },
+      ],
+    }
+    expect(historyImportAppends(chat, 'session-1', [], undefined)).toEqual([])
+    expect(historyImportAppends({ ...chat, messages: [] }, 'session-1', [], undefined)).toEqual([])
+  })
+
   it('applies prompt-only regex to imported history without touching stored text', () => {
     const chat: ChatLogIR = {
       header: { user_name: 'Alice', character_name: 'Projector Character', chat_metadata: {} },
@@ -251,7 +304,7 @@ describe('AgentTavern native event projector', () => {
       script({ scriptName: 'Depth Shout', promptOnly: true, maxDepth: 0, findRegex: 'third', replaceString: 'THIRD' }),
       // 非 promptOnly 脚本已含在落库文本里，导入时不得重复应用
       script({ scriptName: 'Save Wrap', replaceString: '!' }),
-    ])
+    ], undefined)
     const texts = appends
       .filter((item) => item.type === 'user/message' || item.type === 'assistant/message')
       .map((item) => {

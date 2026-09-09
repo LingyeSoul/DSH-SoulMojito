@@ -148,7 +148,14 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
           && previous.character === parsed.character
           && previous.chatId === parsed.chatId
         const sessionStarted = agent.session.events.some((event) => event.type === 'turn/start')
-        if (sessionStarted && !sameTavernBinding) {
+        const historyImported = agent.session.events.some((event) => {
+          if (event.type !== 'user/message' && event.type !== 'assistant/message') return false
+          const source = event.type === 'user/message'
+            ? event.data?.source
+            : event.data?.message?.source
+          return source?.plugin === 'dsh-tavern' && source.form !== 'context'
+        })
+        if ((sessionStarted || historyImported) && !sameTavernBinding) {
           throw new TavernArchitectureConflictError('This host session already started; AgentTavern preset selection is locked.')
         }
         if (typeof ctx.agentPresets?.recompose !== 'function') {
@@ -161,9 +168,9 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
           // 开场白与既有聊天记录必须先落到原生会话，用户才能在 DSH 会话里看到
           // 角色开口；带插件来源的导入事件由投影器跳过，不会重复写回 JSONL。
           // 历史文本应用 prompt 层正则与宏展开（{{char}}/{{user}}），模型上下文
-          // 与 ST 管线一致。会话已有 turn（投影器重放先于激活完成）时历史已在
-          // 场，跳过导入防重复。
-          historyImport = sessionStarted
+          // 与 ST 管线一致。会话已有原生 turn 或导入消息（投影器重放先于
+          // 激活完成）时历史已在场，跳过导入防重复。
+          historyImport = sessionStarted || historyImported
             ? undefined
             : historyImportAppends(chat, agent.id, character ? collectRegexScripts(currentState, character) : [], tavernMacroExpand(currentState, parsed.character, character))
         }
