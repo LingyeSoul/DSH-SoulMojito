@@ -5265,6 +5265,23 @@ function createDshAgentTavernAdapter(ctx) {
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { homedir } from "node:os";
 import { join as join4, resolve } from "node:path";
+
+// packages/plugin/src/host-session.ts
+function readSessionEvents(session) {
+  if (!session) return void 0;
+  if (Array.isArray(session.events)) return session.events;
+  if (typeof session.snapshotEvents === "function") {
+    const snapshot2 = session.snapshotEvents();
+    if (Array.isArray(snapshot2)) return snapshot2;
+  }
+  if (Array.isArray(session.log)) return session.log;
+  return void 0;
+}
+function sessionEvents(session) {
+  return readSessionEvents(session) ?? [];
+}
+
+// packages/plugin/src/agent-tavern/anchor.ts
 var ANCHOR_EVERY_TURNS_DEFAULT = 5;
 var ANCHOR_TEXT = [
   "<tavern-anchor>",
@@ -5356,7 +5373,7 @@ function registerAgentTavernAnchor(ctx, options = {}) {
   ctx.on?.("agent/pre-step", async (payload, next) => {
     const decision = await next();
     if (decision?.kind !== "enter" || payload.signal?.aborted) return decision;
-    const events = payload.agent?.session?.events ?? [];
+    const events = sessionEvents(payload.agent?.session);
     const kind = reminderDue(
       { turn: payload.turn, step: payload.step, messages: decision.messages },
       everyTurns,
@@ -5512,7 +5529,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
     });
   }
   async replay(session) {
-    const events = [...session.events].sort((left, right) => left.seq - right.seq);
+    const events = [...sessionEvents(session)].sort((left, right) => left.seq - right.seq);
     for (const event of events) await this.project(session, event);
   }
   async status(sessionId) {
@@ -5709,7 +5726,7 @@ function messageText(content) {
 }
 function turnAt(session, cursor) {
   let turn;
-  for (const event of session.events) {
+  for (const event of sessionEvents(session)) {
     if (event.seq > cursor) break;
     if (event.type === "turn/start" && Number.isSafeInteger(event.data?.turn)) turn = event.data.turn;
   }
@@ -5823,8 +5840,9 @@ function apply(ctx, config = {}) {
       await assertAgentTavernAvailable(parsed.architecture, parsed.contextMode);
       if (parsed.architecture === "agent-tavern") {
         const sameTavernBinding = previous?.architecture === "agent-tavern" && previous.character === parsed.character && previous.chatId === parsed.chatId;
-        const sessionStarted = agent.session.events.some((event) => event.type === "turn/start");
-        const historyImported = agent.session.events.some((event) => {
+        const activationEvents = sessionEvents(agent.session);
+        const sessionStarted = activationEvents.some((event) => event.type === "turn/start");
+        const historyImported = activationEvents.some((event) => {
           if (event.type !== "user/message" && event.type !== "assistant/message") return false;
           const source = event.type === "user/message" ? event.data?.source : event.data?.message?.source;
           return source?.plugin === "dsh-tavern" && source.form !== "context";
@@ -5846,7 +5864,7 @@ function apply(ctx, config = {}) {
           if (!character) throw new Error("Tavern character not found.");
           preloadSnapshot = await buildAgentTavernPreloadSnapshot(db, currentState, parsed.character, character, tavernMacroExpand(currentState, parsed.character, character));
         }
-        if (!agent.session.events.some((event) => event.type === "agent-preset/selected" && event.data?.agentPreset === AGENT_TAVERN_PRESET_ID)) {
+        if (!activationEvents.some((event) => event.type === "agent-preset/selected" && event.data?.agentPreset === AGENT_TAVERN_PRESET_ID)) {
           const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_TAVERN_PRESET_ID);
           agent.session.append("agent-preset/selected", { agentPreset: preset.id });
         }
@@ -5996,7 +6014,7 @@ async function handleApi(ctx, req, res) {
     }
     const agent = ctx.agents?.get?.(sessionId);
     const session = agent?.session;
-    if (!session || !Array.isArray(session.events)) {
+    if (!session || readSessionEvents(session) === void 0) {
       throw new Error("AgentTavern session is not loaded in this host process; open the chat first and retry.");
     }
     const projector = await agentTavernProjectorPromise;
@@ -7427,7 +7445,7 @@ function assertStGenerationBinding(state, sessionId) {
 }
 function occupyHostSession(agent) {
   try {
-    if (agent.session.events.some((event) => event.type === "turn/start")) return;
+    if (sessionEvents(agent.session).some((event) => event.type === "turn/start")) return;
     agent.session.append("turn/start", { turn: 1 });
     agent.session.append("turn/end", { turn: 1, reason: { kind: "completed" } });
   } catch {
@@ -7435,14 +7453,15 @@ function occupyHostSession(agent) {
 }
 function beginTavernSessionTurn(agent, userText) {
   const session = agent?.session;
-  if (!session?.append || !Array.isArray(session.events)) return null;
+  if (!session?.append || readSessionEvents(session) === void 0) return null;
+  const logEvents = sessionEvents(session);
   let openTurn = false;
-  for (const event of session.events) {
+  for (const event of logEvents) {
     if (event.type === "turn/start") openTurn = true;
     else if (event.type === "turn/end") openTurn = false;
   }
   if (openTurn) return null;
-  const turn = Math.max(0, ...session.events.filter((event) => event.type === "turn/start" && Number.isSafeInteger(event.data?.turn)).map((event) => event.data.turn)) + 1;
+  const turn = Math.max(0, ...logEvents.filter((event) => event.type === "turn/start" && Number.isSafeInteger(event.data?.turn)).map((event) => event.data.turn)) + 1;
   let started = false;
   try {
     session.append("turn/start", { turn });

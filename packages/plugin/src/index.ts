@@ -33,6 +33,7 @@ import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
 import { AgentTavernProjector, historyImportAppends, type SessionImportAppend } from './agent-tavern/projector.js'
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
+import { readSessionEvents, sessionEvents, type HostSessionLog } from './host-session.js'
 
 export const name = 'dsh-tavern'
 export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools']
@@ -147,8 +148,11 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
         const sameTavernBinding = previous?.architecture === 'agent-tavern'
           && previous.character === parsed.character
           && previous.chatId === parsed.chatId
-        const sessionStarted = agent.session.events.some((event) => event.type === 'turn/start')
-        const historyImported = agent.session.events.some((event) => {
+        // 宿主 0.1.2 起事件日志经 host-session 兼容层读取（events →
+        // snapshotEvents() → log）；同一激活流程内无追加，读一次即可。
+        const activationEvents = sessionEvents(agent.session)
+        const sessionStarted = activationEvents.some((event) => event.type === 'turn/start')
+        const historyImported = activationEvents.some((event) => {
           if (event.type !== 'user/message' && event.type !== 'assistant/message') return false
           const source = event.type === 'user/message'
             ? event.data?.source
@@ -182,7 +186,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
           preloadSnapshot = await buildAgentTavernPreloadSnapshot(db, currentState, parsed.character, character, tavernMacroExpand(currentState, parsed.character, character))
         }
         // 幂等：重复激活不重复 recompose，也不叠加预设 marker。
-        if (!agent.session.events.some((event) => event.type === 'agent-preset/selected' && event.data?.agentPreset === AGENT_TAVERN_PRESET_ID)) {
+        if (!activationEvents.some((event) => event.type === 'agent-preset/selected' && event.data?.agentPreset === AGENT_TAVERN_PRESET_ID)) {
           const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_TAVERN_PRESET_ID)
           agent.session.append('agent-preset/selected', { agentPreset: preset.id })
         }
@@ -341,9 +345,9 @@ async function handleApi(ctx, req, res) {
     if (!binding || binding.architecture !== 'agent-tavern' || binding.group === true) {
       throw new TavernArchitectureConflictError('Projection replay requires an AgentTavern single-character binding.')
     }
-    const agent = ctx.agents?.get?.(sessionId) as { session?: { events?: unknown[] } } | undefined
+    const agent = ctx.agents?.get?.(sessionId) as { session?: HostSessionLog } | undefined
     const session = agent?.session
-    if (!session || !Array.isArray(session.events)) {
+    if (!session || readSessionEvents(session) === undefined) {
       throw new Error('AgentTavern session is not loaded in this host process; open the chat first and retry.')
     }
     const projector = await agentTavernProjectorPromise
@@ -1963,7 +1967,7 @@ function assertStGenerationBinding(state, sessionId) {
  */
 function occupyHostSession(agent) {
   try {
-    if (agent.session.events.some((event) => event.type === 'turn/start')) return
+    if (sessionEvents(agent.session).some((event) => event.type === 'turn/start')) return
     agent.session.append('turn/start', { turn: 1 })
     agent.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
   } catch {
@@ -1976,14 +1980,15 @@ function occupyHostSession(agent) {
 // observe the same work as the injected Tavern surface.
 function beginTavernSessionTurn(agent, userText) {
   const session = agent?.session
-  if (!session?.append || !Array.isArray(session.events)) return null
+  if (!session?.append || readSessionEvents(session) === undefined) return null
+  const logEvents = sessionEvents(session)
   let openTurn = false
-  for (const event of session.events) {
+  for (const event of logEvents) {
     if (event.type === 'turn/start') openTurn = true
     else if (event.type === 'turn/end') openTurn = false
   }
   if (openTurn) return null
-  const turn = Math.max(0, ...session.events
+  const turn = Math.max(0, ...logEvents
     .filter((event) => event.type === 'turn/start' && Number.isSafeInteger(event.data?.turn))
     .map((event) => event.data.turn)) + 1
   let started = false

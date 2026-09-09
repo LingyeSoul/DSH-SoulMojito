@@ -362,7 +362,9 @@ function checkInternalWorkspaceText(serverText, clientText) {
   for (const marker of [
     'function ensureTavernWorkspace(ctx)',
     'ctx.workspaces.create({ path: config.path })',
-    'ctx.workspaces.connectWorkspace(workspace.workspaceId)',
+        'function connectTavernWorkspace(ctx, workspaceId)',
+    'uiWorkspace.connectWorkspace(workspaceId)',
+    'ctx.workspaces.connectWorkspace(workspaceId)',
     'function internalWorkspaceSnapshot(ctx)',
     'normalizeWorkspacePath(item?.path) === expectedPath',
     'function nativeTreeNodeMatchesWorkspace(node, workspace, titleFallback)',
@@ -984,7 +986,9 @@ const gates = [
       const client = [
         'function ensureTavernWorkspace(ctx)',
         'ctx.workspaces.create({ path: config.path })',
-        'ctx.workspaces.connectWorkspace(workspace.workspaceId)',
+                'function connectTavernWorkspace(ctx, workspaceId)',
+        'uiWorkspace.connectWorkspace(workspaceId)',
+        'ctx.workspaces.connectWorkspace(workspaceId)',
         'function internalWorkspaceSnapshot(ctx)',
         'normalizeWorkspacePath(item?.path) === expectedPath',
         'function nativeTreeNodeMatchesWorkspace(node, workspace, titleFallback)',
@@ -995,7 +999,9 @@ const gates = [
       const titleOnly = [
         'function ensureTavernWorkspace(ctx)',
         'ctx.workspaces.create({ path: config.path })',
-        'ctx.workspaces.connectWorkspace(workspace.workspaceId)',
+                'function connectTavernWorkspace(ctx, workspaceId)',
+        'uiWorkspace.connectWorkspace(workspaceId)',
+        'ctx.workspaces.connectWorkspace(workspaceId)',
         "if (node.textContent === 'Tavern (internal)') node.hidden = true",
       ].join('\n')
       return checkInternalWorkspaceText(server, client).length === 0

@@ -22,6 +22,10 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { TavernStore } from '../../../tavern-store/src/index.js'
+import { sessionEvents, type HostSessionLog } from '../host-session.js'
+
+/** 宿主会话形状经 host-session 兼容层读取（0.1.2 无 events 数组属性）。 */
+type AnchorSessionLike = HostSessionLog & { id?: string }
 
 export const ANCHOR_EVERY_TURNS_DEFAULT = 5
 
@@ -162,7 +166,7 @@ async function isAgentTavernSession(sessionId: string): Promise<boolean> {
 }
 
 interface AnchorAgentLike {
-  session?: { id?: string; events?: readonly unknown[] }
+  session?: AnchorSessionLike
 }
 
 interface AnchorDecisionLike {
@@ -189,7 +193,7 @@ export function registerAgentTavernAnchor(ctx: {
   }, next: () => Promise<AnchorDecisionLike>) => {
     const decision = await next()
     if (decision?.kind !== 'enter' || payload.signal?.aborted) return decision
-    const events = payload.agent?.session?.events ?? []
+    const events = sessionEvents(payload.agent?.session)
     const kind = reminderDue(
       { turn: payload.turn, step: payload.step, messages: decision.messages },
       everyTurns,

@@ -5,6 +5,7 @@ import { ChatRevisionConflictError, type TavernSessionBinding, type TavernState 
 import { RegexPlacement, type CharacterCardIR, type ChatLogIR, type ChatMessage, type RegexScriptIR } from '../../../tavern-format/src/index.js'
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
 import { collectRegexScripts } from '../tavern-assets.js'
+import { sessionEvents } from '../host-session.js'
 
 export interface NativeSessionEvent {
   type: string
@@ -22,6 +23,8 @@ export interface SessionImportAppend {
 
 export interface NativeSession {
   id: string
+  /** 投影器规范化视图；宿主原生会话（rc.6 events / 0.1.2 snapshotEvents）经
+   * host-session 兼容层读取，不要求本形状完整。 */
   events: readonly NativeSessionEvent[]
 }
 
@@ -67,7 +70,7 @@ export class AgentTavernProjector {
   }
 
   async replay(session: NativeSession): Promise<void> {
-    const events = [...session.events].sort((left, right) => left.seq - right.seq)
+    const events = [...sessionEvents(session) as readonly NativeSessionEvent[]].sort((left, right) => left.seq - right.seq)
     for (const event of events) await this.project(session, event)
   }
 
@@ -320,7 +323,7 @@ function messageText(content: unknown): string {
 
 function turnAt(session: NativeSession, cursor: number): number | undefined {
   let turn: number | undefined
-  for (const event of session.events) {
+  for (const event of sessionEvents(session) as readonly NativeSessionEvent[]) {
     if (event.seq > cursor) break
     if (event.type === 'turn/start' && Number.isSafeInteger(event.data?.turn)) turn = event.data.turn
   }

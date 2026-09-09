@@ -29,6 +29,27 @@ function makeAgent(id: string) {
   }
 }
 
+// DSH 0.1.2 的 Session 形状：事件日志是私有 log + snapshotEvents() 冻结快照，
+// 没有 events 数组属性（激活曾在此形状上抛 reading 'some' of undefined）。
+function makeHostSessionAgent(id: string) {
+  const injections: unknown[] = []
+  const log: Array<{ type: string; seq: number; time: number; data: unknown; opts?: unknown }> = []
+  return {
+    id,
+    ctx: { id },
+    injections,
+    inject: (message: unknown) => { injections.push(message) },
+    log,
+    session: {
+      log,
+      snapshotEvents: () => Object.freeze([...log]),
+      append: (type: string, data: unknown, opts?: unknown) => {
+        log.push({ type, seq: log.length, time: 0, data, ...(opts === undefined ? {} : { opts }) })
+      },
+    },
+  }
+}
+
 function makeRequest(body: unknown, url = '/api/dsh-tavern/generate') {
   const listeners = new Map<string, (value?: unknown) => void>()
   return {
@@ -215,6 +236,16 @@ describe('internal Tavern session bridge occupation', () => {
     await handler({ agent, rawInput: base64Url({ character: CHARACTER, chatId }) })
     expect(turnStarts(agent)).toHaveLength(1)
     expect(agent.session.events.filter((event) => event.type === 'user/message')).toHaveLength(0)
+  })
+
+  it('occupies a DSH 0.1.2 session whose event log rides snapshotEvents()', async () => {
+    const agent = makeHostSessionAgent('session-012-st')
+    const result = await handler({ agent, rawInput: base64Url({ character: CHARACTER, chatId }) })
+    expect(result.kind).toBe('success')
+    expect((await store.getState()).sessionBindings['session-012-st']).toEqual({ architecture: 'st', character: CHARACTER, chatId })
+    const starts = agent.log.filter((event) => event.type === 'turn/start')
+    expect(starts).toHaveLength(1)
+    expect(starts[0]!.data).toEqual({ turn: 1 })
   })
 
   it('does not pollute a session that already has real host turns', async () => {
@@ -624,4 +655,21 @@ describe('internal Tavern session bridge occupation', () => {
     expect(res.statusCode).toBe(200)
     expect((await store.getState()).activeWorlds).toContain('Carrier Lore')
   })
+
+  // 放在末尾：recomposeCalls 是累积数组，前面的测试对其做精确断言。
+  it('recomposes a blank AgentTavern session on a DSH 0.1.2-shaped host session', async () => {
+    const agent = makeHostSessionAgent('session-012-agent-tavern')
+    const result = await handler({
+      agent,
+      rawInput: base64Url({ character: CHARACTER, chatId: emptyChatId, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+    })
+    expect(result.kind).toBe('success')
+    expect(agent.log.map((event) => event.type)).toEqual(['agent-preset/selected'])
+    expect(turnStartsOn(agent.log)).toHaveLength(0)
+    expect(agent.injections).toHaveLength(0)
+  })
 })
+
+function turnStartsOn(log: Array<{ type: string }>) {
+  return log.filter((event) => event.type === 'turn/start')
+}

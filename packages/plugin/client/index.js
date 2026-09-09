@@ -1010,6 +1010,20 @@ window.__ModuleLoader__.load({
       return internalWorkspacePromise
     }
 
+    function connectTavernWorkspace(ctx, workspaceId) {
+      // DSH 0.1.2 moved connectWorkspace from the workspaces controller face
+      // onto the uiWorkspace service; rc.6 hosts still expose it on
+      // ctx.workspaces. ctx.get is the client guard's declaration-free
+      // optional lookup and returns undefined for absent services, so the
+      // probe stays safe on both hosts without an inject declaration
+      // (declaring uiWorkspace would park the plugin forever on rc.6).
+      const uiWorkspace = ctx.get?.('uiWorkspace')
+      if (typeof uiWorkspace?.connectWorkspace === 'function') {
+        return uiWorkspace.connectWorkspace(workspaceId)
+      }
+      return ctx.workspaces.connectWorkspace(workspaceId)
+    }
+
     function bindingArchitecture(binding) {
       return binding?.architecture === 'agent-tavern' ? 'agent-tavern' : 'st'
     }
@@ -1125,7 +1139,7 @@ window.__ModuleLoader__.load({
       const workspace = await ensureTavernWorkspace(ctx)
 
       update({ navigationStatus: translate('nav.opening', { name: character }) })
-      const sessionId = await ctx.workspaces.connectWorkspace(workspace.workspaceId)
+      const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId)
       const binding = ctx.sessions.binding(sessionId)
       if (!binding) throw new Error(translate('error.noBinding'))
       const payload = JSON.stringify({ sessionId, character, chatId, ...(group ? { group: true } : {}), ...activationFields(policy) })

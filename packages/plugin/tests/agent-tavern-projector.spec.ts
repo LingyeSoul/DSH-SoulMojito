@@ -104,6 +104,18 @@ describe('AgentTavern native event projector', () => {
     expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual(['Open the door.', 'The door opens.', 'Step inside.'])
   })
 
+  it('replays a DSH 0.1.2 host session whose log rides snapshotEvents()', async () => {
+    const { root, store, chatId, sessionId } = await fixture('snapshot-session')
+    const native = session(sessionId)
+    // DSH 0.1.2 形状：无 events 属性，事件日志经 snapshotEvents() 冻结快照暴露。
+    const legacy = { id: sessionId, snapshotEvents: () => native.events } as unknown as NativeSession
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(legacy)
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual(['Open the door.', 'The door opens.'])
+    expect(await projector.status(sessionId)).toMatchObject({ lastCursor: 4, status: 'ok' })
+  })
+
   it('does not project dsh-tavern mirrored imports back into the chat', async () => {
     const { root, store, chatId, sessionId } = await fixture('import-session')
     const native: NativeSession = {
