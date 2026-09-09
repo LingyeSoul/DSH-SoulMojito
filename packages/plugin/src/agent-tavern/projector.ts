@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import { ChatRevisionConflictError, type TavernSessionBinding, type TavernState } from '../../../tavern-store/src/index.js'
 import { RegexPlacement, type CharacterCardIR, type ChatLogIR, type ChatMessage, type RegexScriptIR } from '../../../tavern-format/src/index.js'
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
+import { sessionEvents } from '../../../bind/src/index.js'
 import { collectRegexScripts } from '../tavern-assets.js'
-import { sessionEvents } from '../host-session.js'
 
 export interface NativeSessionEvent {
   type: string

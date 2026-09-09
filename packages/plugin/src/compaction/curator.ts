@@ -18,10 +18,9 @@
  * 路径（gates 的 agent-tavern-isolation 因此不扫描本目录）；摘要调用与
  * 宿主 basic 的默认 summarizer 同为 ctx.llm.stream 辅助调用。
  */
-import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { importHostPackage } from '../../../bind/src/index.js'
 import { TavernStore } from '../../../tavern-store/src/index.js'
 import { RP_COMPACTION_INSTRUCTION, splitCuratorConfig, type CuratorOptions } from './shared.js'
 
@@ -104,20 +103,6 @@ export class TavernCompactionCurator extends BasicCompactionEngine {
 }
 
 export default TavernCompactionCurator
-
-/** 从运行中的 dsh 安装锚解析包路径；失败则回退标准解析（物理安装形态）。 */
-async function importHostPackage<T>(name: string): Promise<T> {
-  const anchor = process.argv[1]
-  if (typeof anchor === 'string' && anchor !== '') {
-    try {
-      const hostRequire = createRequire(anchor)
-      return (await import(pathToFileURL(hostRequire.resolve(name)).href)) as T
-    } catch {
-      // 锚缺失（嵌入/打包运行时）或包不可达时走标准解析。
-    }
-  }
-  return (await import(name)) as T
-}
 
 /** 行配置只保留宿主 basic 契约键；curator 键单独读取。basic 自身的
  * resolveConfig 会对透传键做 fail-closed 校验，与直接挂载 basic 等价。 */

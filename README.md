@@ -185,6 +185,16 @@ dsh plugin --profile web remove dsh-tavern
 dsh plugin --profile web add ./packages/plugin
 ```
 
+### 插件结构备注
+
+跨 DSH 版本的宿主形状兼容层（会话事件日志探测、宿主包锚解析、client 工作区
+连接双面回退、宿主形状诊断）集中在 `packages/bind`（`@dsh-tavern/bind`），
+更新版本适配时先改这里。client half 的源文件是 `packages/plugin/client/main.js`；
+`client/index.js` 是 `pnpm run build:plugin` 的拼接产物（把 bind 的 client
+探测模块注入 `__DSH_BIND_CLIENT_SLOT__` 标记处），不要直接手改，改了会被下次
+构建覆盖。插件激活时会输出一行 `dsh-tavern host shape: {...}` 日志，报告命中的
+宿主形状绑定路径，排查宿主版本差异从它读起。
+
 ### 验证
 
 ```sh

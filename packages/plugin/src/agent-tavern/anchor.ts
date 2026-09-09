@@ -22,7 +22,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { TavernStore } from '../../../tavern-store/src/index.js'
-import { sessionEvents, type HostSessionLog } from '../host-session.js'
+import { sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
 
 /** 宿主会话形状经 host-session 兼容层读取（0.1.2 无 events 数组属性）。 */
 type AnchorSessionLike = HostSessionLog & { id?: string }

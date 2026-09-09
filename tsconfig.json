@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "packages/bind" },
     { "path": "packages/tavern-format" },
     { "path": "packages/tavern-lore" },
     { "path": "packages/tavern-macros" },

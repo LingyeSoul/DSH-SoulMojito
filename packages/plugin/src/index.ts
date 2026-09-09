@@ -23,6 +23,7 @@ import {
   VariableStore,
   type TavernModelSelection,
 } from '../../tavern-store/src/index.js'
+import { describeHostShape, readSessionEvents, sessionEvents, type HostSessionLog } from '../../bind/src/index.js'
 import {
   AGENT_TAVERN_PRESET_ID,
   bootstrapAgentTavernCapabilities,
@@ -33,7 +34,6 @@ import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
 import { AgentTavernProjector, historyImportAppends, type SessionImportAppend } from './agent-tavern/projector.js'
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
-import { readSessionEvents, sessionEvents, type HostSessionLog } from './host-session.js'
 
 export const name = 'dsh-tavern'
 export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools']
@@ -74,6 +74,8 @@ function variables() {
 export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns })
   const adapter = createDshAgentTavernAdapter(ctx)
+  // 宿主形状一次性上报：rc.6 与 0.1.2+ 的绑定路径差异排查从这行日志读起。
+  ctx.logger?.info?.(`dsh-tavern host shape: ${JSON.stringify(describeHostShape(ctx))}`)
   agentTavernCapabilitiesPromise = bootstrapAgentTavernCapabilities(adapter, {
     presetId: AGENT_TAVERN_PRESET_ID,
     ensurePreset: ensureBundledAgentTavernPreset,

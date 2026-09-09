@@ -1,0 +1,20 @@
+{
+  "name": "@dsh-tavern/bind",
+  "version": "0.1.0",
+  "description": "DSH host shape compatibility layer: session event log probing, host package resolution, and host shape reports across DSH host versions (rc.6 / 0.1.0 / 0.1.2+). Consumed by dsh-tavern plugin bundles via source-relative imports.",
+  "license": "GPL-3.0",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": ["lib"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  }
+}

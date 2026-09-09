@@ -1,21 +1,5 @@
 import type { AgentTavernAdapter } from './capabilities.js'
-
-export interface DshContextLike {
-  agentPresets?: {
-    mount?: (agentContext: unknown, presetId: string) => Promise<unknown>
-  }
-  systemPrompt?: {
-    section?: (...args: unknown[]) => unknown
-    context?: (...args: unknown[]) => unknown
-  }
-  tools?: {
-    register?: (...args: unknown[]) => unknown
-  }
-  agents?: {
-    get?: (...args: unknown[]) => unknown
-    create?: (...args: unknown[]) => unknown
-  }
-}
+import type { DshContextLike } from '../../../bind/src/index.js'
 
 /** Keep rc-specific service probing in one place instead of spreading it through tools. */
 export function createDshAgentTavernAdapter(ctx: DshContextLike): AgentTavernAdapter {

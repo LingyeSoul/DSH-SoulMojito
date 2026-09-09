@@ -2,10 +2,22 @@
 
 
 // packages/plugin/src/compaction/curator.ts
-import { createRequire as createRequire2 } from "node:module";
 import { homedir } from "node:os";
 import { join as join2, resolve } from "node:path";
+
+// packages/bind/src/host-package.ts
+import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+async function importHostPackage(name2, anchor = process.argv[1]) {
+  if (typeof anchor === "string" && anchor !== "") {
+    try {
+      const hostRequire = createRequire(anchor);
+      return await import(pathToFileURL(hostRequire.resolve(name2)).href);
+    } catch {
+    }
+  }
+  return await import(name2);
+}
 
 // packages/tavern-store/src/store.ts
 import { createHash } from "node:crypto";
@@ -620,8 +632,8 @@ function serializeChatLog(ir) {
 }
 
 // node_modules/.pnpm/fflate@0.8.3/node_modules/fflate/esm/index.mjs
-import { createRequire } from "module";
-var require2 = createRequire("/");
+import { createRequire as createRequire2 } from "module";
+var require2 = createRequire2("/");
 var _a;
 var Worker;
 var isMarkedAsUntransferable;
@@ -2482,17 +2494,6 @@ var TavernCompactionCurator = class extends BasicCompactionEngine {
   }
 };
 var curator_default = TavernCompactionCurator;
-async function importHostPackage(name2) {
-  const anchor = process.argv[1];
-  if (typeof anchor === "string" && anchor !== "") {
-    try {
-      const hostRequire = createRequire2(anchor);
-      return await import(pathToFileURL(hostRequire.resolve(name2)).href);
-    } catch {
-    }
-  }
-  return await import(name2);
-}
 function basicConfigOnly(config) {
   return Object.fromEntries(Object.entries(config).filter(([key]) => BASIC_CONFIG_KEYS.has(key)));
 }

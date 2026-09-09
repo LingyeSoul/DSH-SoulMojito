@@ -4,5 +4,7 @@ dist/
 *.tsbuildinfo
 /.playwright-mcp
 /packages/plugin/version.json
+/packages/plugin/client/index.js
 /.npm-cache
 /.pnpm-store
+/.zcode

@@ -21,6 +21,8 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@24.13.3)
 
+  packages/bind: {}
+
   packages/plugin: {}
 
   packages/tavern-format:

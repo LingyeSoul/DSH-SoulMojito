@@ -5191,6 +5191,42 @@ async function writeAtomic2(file, text) {
   await fs3.rename(tmp, file);
 }
 
+// packages/bind/src/host-session.ts
+function readSessionEvents(session) {
+  if (!session) return void 0;
+  if (Array.isArray(session.events)) return session.events;
+  if (typeof session.snapshotEvents === "function") {
+    const snapshot2 = session.snapshotEvents();
+    if (Array.isArray(snapshot2)) return snapshot2;
+  }
+  if (Array.isArray(session.log)) return session.log;
+  return void 0;
+}
+function sessionEvents(session) {
+  return readSessionEvents(session) ?? [];
+}
+
+// packages/bind/src/host-shape.ts
+function probeSessionShape(session) {
+  if (!session) return "absent";
+  if (Array.isArray(session.events)) return "events";
+  if (typeof session.snapshotEvents === "function" && Array.isArray(session.snapshotEvents())) return "snapshotEvents";
+  if (Array.isArray(session.log)) return "log";
+  return "unreadable";
+}
+function describeHostShape(ctx, session) {
+  return {
+    sessionShape: probeSessionShape(session),
+    services: {
+      agentPresets: typeof ctx?.agentPresets?.mount === "function",
+      systemPrompt: typeof ctx?.systemPrompt?.section === "function" && typeof ctx?.systemPrompt?.context === "function",
+      tools: typeof ctx?.tools?.register === "function",
+      agents: typeof ctx?.agents?.get === "function"
+    },
+    checkedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+
 // packages/plugin/src/agent-tavern/capabilities.ts
 var AGENT_TAVERN_PRESET_ID = "agent-tavern";
 var REASONS = {
@@ -5265,23 +5301,6 @@ function createDshAgentTavernAdapter(ctx) {
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { homedir } from "node:os";
 import { join as join4, resolve } from "node:path";
-
-// packages/plugin/src/host-session.ts
-function readSessionEvents(session) {
-  if (!session) return void 0;
-  if (Array.isArray(session.events)) return session.events;
-  if (typeof session.snapshotEvents === "function") {
-    const snapshot2 = session.snapshotEvents();
-    if (Array.isArray(snapshot2)) return snapshot2;
-  }
-  if (Array.isArray(session.log)) return session.log;
-  return void 0;
-}
-function sessionEvents(session) {
-  return readSessionEvents(session) ?? [];
-}
-
-// packages/plugin/src/agent-tavern/anchor.ts
 var ANCHOR_EVERY_TURNS_DEFAULT = 5;
 var ANCHOR_TEXT = [
   "<tavern-anchor>",
@@ -5777,6 +5796,7 @@ function variables() {
 function apply(ctx, config = {}) {
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns });
   const adapter = createDshAgentTavernAdapter(ctx);
+  ctx.logger?.info?.(`dsh-tavern host shape: ${JSON.stringify(describeHostShape(ctx))}`);
   agentTavernCapabilitiesPromise = bootstrapAgentTavernCapabilities(adapter, {
     presetId: AGENT_TAVERN_PRESET_ID,
     ensurePreset: ensureBundledAgentTavernPreset
