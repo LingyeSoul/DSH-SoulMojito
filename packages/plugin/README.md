@@ -53,8 +53,19 @@ ST 与 AgentTavern 共用 DSH 中的 `Tavern (internal)` 专用工作区。插�
 | `memory_write` | 带来源、标签、revision 和大小限制的记忆写入。 |
 | `variable_get` | 读取作用域内 typed JSON 变量。 |
 | `variable_set` | 写入变量并支持 expected revision CAS。 |
+| `tavern_deduce` | 基于 SubAgent 的多角色推演：为 2-5 个命名角色各派生一个纯推理子 Agent，按 1-3 轮交叉站位，返回各轮位置由主 Agent 叙述。 |
 
 AgentTavern 的原生 user/final assistant 事件会幂等投影到 Tavern JSONL；tool、chunk 和 reasoning 事件不会伪装成 Tavern 消息。缺少宿主能力时，插件保持 native 或 ST 的明确边界，不把 compaction 误称为 managed context。
+
+## 多Agent推演（tavern_deduce）
+
+新版 DSH（0.1.2+）提供 SubAgent capability seam（`ctx.subagents`）与 in-process `spawn` 驱动。`tavern_deduce` 在此之上实现沙盘推演：调用方（RP 主 Agent）从剧情中归纳 2-5 个有利害冲突的角色（关键人物、阵营或全知视角），本工具为每个角色派生一个一次性子 Agent——spawn 语义不带父会话上下文，`toolFilter: { allow: [] }` 清空工具保持纯推理，`finally` 中 dispose 保证零泄漏。第 2 轮起每个角色的 prompt 携带此前各轮的全员站位，形成交叉推演（对峙、让步、反制）；transcript 由本工具无状态维护，不依赖 continuable 持久化。
+
+边界与失败语义：
+
+- 单角色失败（非 `completed` 或空输出）只进 `failures` 数组，不阻断其余角色；全员失败才抛错。
+- 推演结论不由子 Agent 合成——工具只回传各轮 `positions`，由主 Agent 织入叙事，保持单一叙事声音。
+- 仅 AgentTavern 绑定会话可用（复用 binding 门禁，群聊拒绝）；未部署 dsh-subagent 的宿主上明确报错，而不是静默降级。
 
 ## Compaction curator
 

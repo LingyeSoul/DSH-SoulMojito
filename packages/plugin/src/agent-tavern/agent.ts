@@ -8,6 +8,14 @@ import {
 import { activateWorldInfo } from '../../../tavern-lore/src/index.js'
 import type { ChatLogIR } from '../../../tavern-format/src/index.js'
 import { collectWorldInfoBooks } from '../tavern-assets.js'
+import {
+  DEDUCE_MAX_ROLES,
+  DEDUCE_MAX_ROUNDS,
+  type DeductionExecAgent,
+  parseDeductionRequest,
+  runDeduction,
+  subagentRuntimeOf,
+} from './deduce.js'
 
 export const name = 'dsh-tavern/agent'
 export const inject = ['systemPrompt', 'tools']
@@ -447,6 +455,30 @@ function createTools(): ToolDefinition[] {
         truncated: entries.length >= clampInt(args.limit, 1, 100, 50),
       }
     }),
+    tool('tavern_deduce', 'Run a multi-role scenario deduction: derive 2-5 named roles from the current story, spawn one reasoning-only subagent per role, and collect their predicted positions across 1-3 rounds. Use when the user asks to simulate, war-game, or deduce how a situation would unfold. Returns each role\'s position per round; weave the conclusion into the narrative yourself.', {
+      scenario: { type: 'string', required: true, description: 'The concrete situation or what-if to deduce, grounded in established story facts, capped at 2000 characters.' },
+      roles: {
+        type: 'array', required: true, description: `2-${DEDUCE_MAX_ROLES} roles with distinct stakes, e.g. key characters, groups, or an omniscient narrator. Each brief states the role\'s perspective, knowledge and goal.`,
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Unique short role name, capped at 80 characters.' },
+            brief: { type: 'string', description: 'Role perspective, knowledge and goal, capped at 1500 characters.' },
+          },
+          required: ['name', 'brief'],
+          additionalProperties: false,
+        },
+      },
+      rounds: { type: 'integer', description: `Cross-examination rounds, 1-${DEDUCE_MAX_ROUNDS}. Rounds after the first let each role see and react to earlier positions. Default 1.` },
+    }, deductionOutput, async (args, exec) => {
+      await bindingFor(exec)
+      const parent = exec.agent as DeductionExecAgent | undefined
+      const subagents = subagentRuntimeOf(parent)
+      if (!subagents) {
+        throw new Error('subagent runtime is unavailable in this deployment; enable the dsh-subagent bundle with an in-process "spawn" provider to run deductions')
+      }
+      return runDeduction({ subagents, parent, signal: exec.signal }, parseDeductionRequest(args))
+    }),
   ]
 }
 
@@ -536,6 +568,12 @@ const variableDeleteOutput = objectOutput(
   { found: { type: 'boolean' }, scope: { type: 'string' }, name: { type: 'string' } },
   [],
 )
+const deductionOutput = objectOutput({
+  scenario: { type: 'string' }, rounds: { type: 'integer' }, roleCount: { type: 'integer' },
+  positions: { type: 'array', items: { type: 'object', additionalProperties: true } },
+  failures: { type: 'array', items: { type: 'object', additionalProperties: true } },
+  truncated: { type: 'boolean' },
+})
 
 function memoryView(record: {
   id: string

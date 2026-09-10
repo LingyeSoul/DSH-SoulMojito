@@ -3840,6 +3840,129 @@ async function collectWorldInfoBooks(db, state, characterName, character) {
   return books;
 }
 
+// packages/plugin/src/agent-tavern/deduce.ts
+var DEDUCE_PROVIDER = "spawn";
+var DEDUCE_MAX_ROLES = 5;
+var DEDUCE_MIN_ROLES = 2;
+var DEDUCE_MAX_ROUNDS = 3;
+var DEDUCE_POSITION_LIMIT = 4e3;
+function subagentRuntimeOf(parent) {
+  const ctx = parent?.ctx;
+  if (!ctx) return void 0;
+  const direct = ctx.subagents;
+  if (isRuntime(direct)) return direct;
+  try {
+    const looked = ctx.get?.("subagents");
+    if (isRuntime(looked)) return looked;
+  } catch {
+  }
+  return void 0;
+}
+function isRuntime(candidate) {
+  return typeof candidate === "object" && candidate !== null && typeof candidate.start === "function";
+}
+function parseDeductionRequest(args) {
+  const scenario = boundedText(args.scenario, 2e3, "scenario");
+  const rawRoles = args.roles;
+  if (!Array.isArray(rawRoles) || rawRoles.length < DEDUCE_MIN_ROLES) {
+    throw new Error(`roles requires at least ${DEDUCE_MIN_ROLES} entries`);
+  }
+  if (rawRoles.length > DEDUCE_MAX_ROLES) {
+    throw new Error(`roles accepts at most ${DEDUCE_MAX_ROLES} entries`);
+  }
+  const roles = rawRoles.map((entry) => {
+    const role = entry;
+    return {
+      name: boundedText(role?.name, 80, "role name"),
+      brief: boundedText(role?.brief, 1500, "role brief")
+    };
+  });
+  const names = new Set(roles.map((role) => role.name));
+  if (names.size !== roles.length) throw new Error("deduction role names must be unique");
+  let rounds = 1;
+  if (Number.isInteger(args.rounds)) rounds = Math.max(1, Math.min(DEDUCE_MAX_ROUNDS, args.rounds));
+  return { scenario, roles, rounds };
+}
+async function runDeduction(deps, request) {
+  const { subagents, parent } = deps;
+  const signal = deps.signal ?? new AbortController().signal;
+  const positions = [];
+  const failures = [];
+  const transcript = [];
+  let truncated = false;
+  for (let round = 1; round <= request.rounds; round += 1) {
+    signal.throwIfAborted();
+    const settled = await Promise.all(request.roles.map(async (role) => {
+      let run;
+      try {
+        run = await subagents.start(DEDUCE_PROVIDER, {
+          label: `dsh-tavern deduce \xB7 ${role.name}`,
+          prompt: [{ type: "text", text: roleRoundPrompt({ role, scenario: request.scenario, round, transcript }) }],
+          parent,
+          signal,
+          toolFilter: { allow: [] }
+        });
+        const result = await run.result;
+        return { role, result };
+      } finally {
+        await run?.dispose().catch(() => {
+        });
+      }
+    }));
+    for (const entry of settled) {
+      if (entry.result.stopReason !== "completed") {
+        failures.push({
+          name: entry.role.name,
+          round,
+          stopReason: entry.result.stopReason,
+          ...entry.result.diagnostic !== void 0 ? { diagnostic: entry.result.diagnostic } : {}
+        });
+        continue;
+      }
+      const text = textOf(entry.result.output);
+      if (text === "") {
+        failures.push({ name: entry.role.name, round, stopReason: "empty-output" });
+        continue;
+      }
+      const clipped = text.length > DEDUCE_POSITION_LIMIT;
+      if (clipped) truncated = true;
+      positions.push({ name: entry.role.name, round, text: text.slice(0, DEDUCE_POSITION_LIMIT) });
+      transcript.push(positions[positions.length - 1]);
+    }
+  }
+  if (positions.length === 0) {
+    const detail = failures[0]?.diagnostic ?? failures[0]?.stopReason ?? "no detail";
+    throw new Error(`all deduction roles failed: ${detail}`);
+  }
+  return { scenario: request.scenario, rounds: request.rounds, roleCount: request.roles.length, positions, failures, truncated };
+}
+function roleRoundPrompt(input) {
+  const { role, scenario, round, transcript } = input;
+  const lines = [
+    `You are "${role.name}" in a multi-role scenario deduction exercise.`,
+    `Role brief: ${role.brief}`,
+    `Scenario to deduce: ${scenario}`,
+    "",
+    "This is a hypothetical exercise inside a roleplay session. Tools are unavailable here: do not call tools, and never mention tools, memory, or the exercise mechanics in your answer.",
+    "Speak only as this role, first person. In at most 3 sentences: what you perceive, what you want, what you do next, and the outcome you predict."
+  ];
+  if (round > 1) {
+    lines.push("", `Round ${round} of the deduction. Positions from earlier rounds:`);
+    for (const entry of transcript) {
+      lines.push(`[round ${entry.round}] ${entry.name}: ${entry.text}`);
+    }
+    lines.push(`Continue as "${role.name}" in round ${round}: react to the other positions (hold, adapt, or counter) and sharpen your predicted outcome. At most 3 sentences.`);
+  }
+  return lines.join("\n");
+}
+function textOf(output) {
+  return output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text ?? "").join("\n").trim();
+}
+function boundedText(value, max2, label) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error(`${label} is required`);
+  return value.trim().slice(0, max2);
+}
+
 // packages/plugin/src/agent-tavern/agent.ts
 var name = "dsh-tavern/agent";
 var inject = ["systemPrompt", "tools"];
@@ -4237,6 +4360,32 @@ function createTools() {
         sourceCount: entries.length,
         truncated: entries.length >= clampInt(args.limit, 1, 100, 50)
       };
+    }),
+    tool("tavern_deduce", "Run a multi-role scenario deduction: derive 2-5 named roles from the current story, spawn one reasoning-only subagent per role, and collect their predicted positions across 1-3 rounds. Use when the user asks to simulate, war-game, or deduce how a situation would unfold. Returns each role's position per round; weave the conclusion into the narrative yourself.", {
+      scenario: { type: "string", required: true, description: "The concrete situation or what-if to deduce, grounded in established story facts, capped at 2000 characters." },
+      roles: {
+        type: "array",
+        required: true,
+        description: `2-${DEDUCE_MAX_ROLES} roles with distinct stakes, e.g. key characters, groups, or an omniscient narrator. Each brief states the role's perspective, knowledge and goal.`,
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Unique short role name, capped at 80 characters." },
+            brief: { type: "string", description: "Role perspective, knowledge and goal, capped at 1500 characters." }
+          },
+          required: ["name", "brief"],
+          additionalProperties: false
+        }
+      },
+      rounds: { type: "integer", description: `Cross-examination rounds, 1-${DEDUCE_MAX_ROUNDS}. Rounds after the first let each role see and react to earlier positions. Default 1.` }
+    }, deductionOutput, async (args, exec) => {
+      await bindingFor(exec);
+      const parent = exec.agent;
+      const subagents = subagentRuntimeOf(parent);
+      if (!subagents) {
+        throw new Error('subagent runtime is unavailable in this deployment; enable the dsh-subagent bundle with an in-process "spawn" provider to run deductions');
+      }
+      return runDeduction({ subagents, parent, signal: exec.signal }, parseDeductionRequest(args));
     })
   ];
 }
@@ -4336,6 +4485,14 @@ var variableDeleteOutput = objectOutput(
   { found: { type: "boolean" }, scope: { type: "string" }, name: { type: "string" } },
   []
 );
+var deductionOutput = objectOutput({
+  scenario: { type: "string" },
+  rounds: { type: "integer" },
+  roleCount: { type: "integer" },
+  positions: { type: "array", items: { type: "object", additionalProperties: true } },
+  failures: { type: "array", items: { type: "object", additionalProperties: true } },
+  truncated: { type: "boolean" }
+});
 function memoryView(record) {
   return {
     found: true,

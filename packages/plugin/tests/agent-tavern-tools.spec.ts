@@ -109,6 +109,7 @@ describe('AgentTavern native tools', () => {
       'variable_patch',
       'variable_delete',
       'variable_list',
+      'tavern_deduce',
     ])
     for (const tool of tools.values()) {
       expect(tool.parameters.properties).not.toHaveProperty('sessionId')
@@ -297,5 +298,15 @@ describe('AgentTavern native tools', () => {
   it('rejects ST agents instead of silently using the native tool path', async () => {
     await expect(tools.get('tavern_character_get')!.execute({}, { agent: { id: 'st' } }))
       .rejects.toThrow('AgentTavern binding is unavailable')
+  })
+
+  it('fails the deduction tool loud when the deployment has no subagent runtime', async () => {
+    await expect(tools.get('tavern_deduce')!.execute({
+      scenario: 'The moon gate falls at midnight.',
+      roles: [
+        { name: 'Defender', brief: 'Holds the gate.' },
+        { name: 'Besieger', brief: 'Wants the gate.' },
+      ],
+    }, { agent: { id: 'native' } })).rejects.toThrow('subagent runtime is unavailable')
   })
 })
