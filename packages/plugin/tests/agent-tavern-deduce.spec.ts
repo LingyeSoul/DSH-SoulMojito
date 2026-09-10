@@ -189,6 +189,16 @@ describe('tavern_deduce runtime probe', () => {
     expect(subagentRuntimeOf({ id: 'a', ctx: { get: (name) => (name === 'subagents' ? runtime : undefined) } })).toBe(runtime)
   })
 
+  it('survives a host ctx whose property access throws without inject', () => {
+    const hostCtx = {
+      get subagents(): unknown {
+        throw new Error('cannot get property "subagents" without inject')
+      },
+      get: (name: string) => (name === 'subagents' ? runtime : undefined),
+    }
+    expect(subagentRuntimeOf({ id: 'a', ctx: hostCtx })).toBe(runtime)
+  })
+
   it('returns undefined without a usable runtime', () => {
     expect(subagentRuntimeOf(undefined)).toBeUndefined()
     expect(subagentRuntimeOf({ id: 'a' })).toBeUndefined()
@@ -196,6 +206,15 @@ describe('tavern_deduce runtime probe', () => {
     expect(subagentRuntimeOf({
       id: 'a',
       ctx: { get: () => { throw new Error('service not found') } },
+    })).toBeUndefined()
+    expect(subagentRuntimeOf({
+      id: 'a',
+      ctx: {
+        get subagents(): unknown {
+          throw new Error('cannot get property "subagents" without inject')
+        },
+        get: () => { throw new Error('service not found') },
+      },
     })).toBeUndefined()
   })
 })

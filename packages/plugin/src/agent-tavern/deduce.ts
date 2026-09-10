@@ -80,13 +80,17 @@ export interface DeductionExecAgent {
 export function subagentRuntimeOf(parent: DeductionExecAgent | undefined): SubagentRuntimeLike | undefined {
   const ctx = parent?.ctx
   if (!ctx) return undefined
-  const direct = ctx.subagents
-  if (isRuntime(direct)) return direct
   try {
     const looked = ctx.get?.('subagents')
     if (isRuntime(looked)) return looked as SubagentRuntimeLike
   } catch {
-    // 未部署 subagent 服务时 get 可能抛错；按缺失处理。
+    // 未部署 subagent 服务时 get 可能抛错；继续试属性通道。
+  }
+  try {
+    const direct = ctx.subagents
+    if (isRuntime(direct)) return direct
+  } catch {
+    // 未 inject 声明的宿主上属性访问会同步抛 without inject；按缺失处理。
   }
   return undefined
 }
