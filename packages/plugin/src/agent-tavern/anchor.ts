@@ -33,7 +33,7 @@ export const ANCHOR_EVERY_TURNS_DEFAULT = 5
 export const ANCHOR_TEXT = [
   '<tavern-anchor>',
   'Periodic maintenance reminder (system message, not story content — do not narrate, quote, or reference it):',
-  'Before continuing, check your standing duties. If recent turns introduced significant story facts (new characters, places, promises, injuries, items, relationship or status changes) that are not yet recorded, persist them with memory_write or memory_update in chat scope. If the upcoming narration involves a proper noun not yet established in this chat, consult tavern_lore_search first. Recover unclear continuity from tavern_history_search or memory_search rather than inventing it. When nothing applies, simply continue the scene without mentioning this reminder.',
+  'Before continuing, check your standing duties. If the upcoming beat hinges on a character, place, faction, item, or a past event, research it first — tavern_character_get for the card, tavern_lore_search for world canon, tavern_history_search or memory_search for continuity — instead of improvising. If recent turns introduced significant story facts (new characters, places, promises, injuries, items, relationship or status changes) that are not yet recorded, persist them with memory_write or memory_update in chat scope. When nothing applies, simply continue the scene without mentioning this reminder.',
   '</tavern-anchor>',
 ].join('\n')
 

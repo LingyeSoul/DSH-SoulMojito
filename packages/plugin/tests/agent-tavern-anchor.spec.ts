@@ -126,9 +126,10 @@ describe('AgentTavern reminder message contracts', () => {
     expect(message.content).toEqual([{ type: 'text', text: ANCHOR_TEXT }])
   })
 
-  it('anchors all three KERNEL duties behind a not-story-content guard', () => {
+  it('anchors the KERNEL duties behind a not-story-content guard', () => {
     expect(ANCHOR_TEXT).toContain('<tavern-anchor>')
     expect(ANCHOR_TEXT).toContain('not story content — do not narrate, quote, or reference it')
+    expect(ANCHOR_TEXT).toContain('research it first')
     expect(ANCHOR_TEXT).toContain('memory_write or memory_update')
     expect(ANCHOR_TEXT).toContain('tavern_lore_search')
     expect(ANCHOR_TEXT).toContain('tavern_history_search or memory_search')
