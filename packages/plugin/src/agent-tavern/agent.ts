@@ -286,22 +286,25 @@ function createTools(): ToolDefinition[] {
       kind: { type: 'string', enum: ['semantic', 'episodic'], required: true },
       content: { type: 'string', required: true, description: 'A concise fact or event.' },
       tags: { type: 'array', items: { type: 'string' } },
-      importance: { type: 'number' },
-      confidence: { type: 'number' },
-      expiresAt: { type: 'string' },
+      importance: { type: 'number', description: 'Salience from 0 (trivial) to 1 (critical); out-of-range values are clamped.' },
+      confidence: { type: 'number', description: 'Certainty from 0 (guess) to 1 (confirmed); out-of-range values are clamped.' },
+      expiresAt: { type: 'string', description: 'Optional ISO 8601 timestamp after which the memory expires; omit it when there is no expiry.' },
     }, memoryWriteOutput, async (args, exec) => {
       const binding = await bindingFor(exec)
       const target = selectedMemoryScopes(args.scope, binding)[0]!
       await assertWriteScopeAllowed(target.scope)
+      const importance = clampScore(args.importance)
+      const confidence = clampScore(args.confidence)
+      const expiresAt = optionalExpiry(args.expiresAt)
       const record = await (await memoryStore()).put({
         scope: target.scope,
         scopeId: target.scopeId,
         kind: args.kind === 'episodic' ? 'episodic' : 'semantic',
         content: limitText(stringArg(args.content), 64 * 1024),
         ...(Array.isArray(args.tags) ? { tags: args.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 32) } : {}),
-        ...(typeof args.importance === 'number' ? { importance: args.importance } : {}),
-        ...(typeof args.confidence === 'number' ? { confidence: args.confidence } : {}),
-        ...(typeof args.expiresAt === 'string' ? { expiresAt: args.expiresAt } : {}),
+        ...(importance === undefined ? {} : { importance }),
+        ...(confidence === undefined ? {} : { confidence }),
+        ...(expiresAt === undefined ? {} : { expiresAt }),
         source: { kind: 'agent-tool', sessionId: binding.agentId, chatId: binding.chatId, character: binding.character },
       })
       return { id: record.id, scope: record.scope, revision: record.revision, source: record.source }
@@ -312,9 +315,9 @@ function createTools(): ToolDefinition[] {
       expectedRevision: { type: 'string', required: true },
       content: { type: 'string', description: 'Replacement fact or event.' },
       tags: { type: 'array', items: { type: 'string' } },
-      importance: { type: 'number' },
-      confidence: { type: 'number' },
-      expiresAt: { type: 'string' },
+      importance: { type: 'number', description: 'Salience from 0 (trivial) to 1 (critical); out-of-range values are clamped.' },
+      confidence: { type: 'number', description: 'Certainty from 0 (guess) to 1 (confirmed); out-of-range values are clamped.' },
+      expiresAt: { type: 'string', description: 'ISO 8601 expiry timestamp; an empty string clears the expiry, omitting it keeps the current one.' },
     }, memoryWriteOutput, async (args, exec) => {
       const binding = await bindingFor(exec)
       const target = selectedMemoryScopes(args.scope, binding)[0]!
@@ -323,6 +326,9 @@ function createTools(): ToolDefinition[] {
       const id = stringArg(args.id)
       const previous = await store.read(id, target.scope, target.scopeId, true)
       if (previous === undefined) throw new Error(`memory '${id}' not found in scope '${target.scope}'`)
+      const importance = clampScore(args.importance) ?? previous.importance
+      const confidence = clampScore(args.confidence) ?? previous.confidence
+      const expiresAt = typeof args.expiresAt === 'string' ? optionalExpiry(args.expiresAt) : previous.expiresAt
       const record = await store.put({
         id,
         scope: previous.scope,
@@ -332,9 +338,9 @@ function createTools(): ToolDefinition[] {
         ...(Array.isArray(args.tags)
           ? { tags: args.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 32) }
           : { tags: previous.tags }),
-        ...(typeof args.importance === 'number' ? { importance: args.importance } : { importance: previous.importance }),
-        ...(typeof args.confidence === 'number' ? { confidence: args.confidence } : { confidence: previous.confidence }),
-        ...(typeof args.expiresAt === 'string' ? { expiresAt: args.expiresAt } : { expiresAt: previous.expiresAt }),
+        importance,
+        confidence,
+        ...(expiresAt === undefined ? {} : { expiresAt }),
         source: { kind: 'agent-tool', sessionId: binding.agentId, chatId: binding.chatId, character: binding.character },
       }, stringArg(args.expectedRevision))
       return { id: record.id, scope: record.scope, revision: record.revision, source: record.source }
@@ -540,8 +546,9 @@ const memoryReadOutput = objectOutput(
     importance: { type: 'number' }, confidence: { type: 'number' },
     source: { type: 'object', additionalProperties: true },
     createdAt: { type: 'string' }, updatedAt: { type: 'string' }, revision: { type: 'string' },
+    expiresAt: { type: 'string' },
   },
-  ['scope', 'kind', 'content', 'tags', 'importance', 'confidence', 'source', 'createdAt', 'updatedAt', 'revision'],
+  ['scope', 'kind', 'content', 'tags', 'importance', 'confidence', 'source', 'createdAt', 'updatedAt', 'revision', 'expiresAt'],
 )
 const memoryWriteOutput = objectOutput({ id: { type: 'string' }, scope: { type: 'string' }, revision: { type: 'string' }, source: { type: 'object', additionalProperties: true } })
 const memoryForgetOutput = objectOutput(
@@ -753,6 +760,17 @@ function boundedStringArg(value: unknown, maxLength: number): string {
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
   if (!Number.isInteger(value)) return fallback
   return Math.max(min, Math.min(max, value as number))
+}
+
+function clampScore(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  return Math.max(0, Math.min(1, value))
+}
+
+function optionalExpiry(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
 }
 
 function limitText(value: string | undefined, max: number): string {

@@ -21,7 +21,7 @@ window.__ModuleLoader__.load({
       };
       var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-      // packages/bind/src/client/host-probe.ts
+      // ../bind/src/client/host-probe.ts
       var host_probe_exports = {};
       __export(host_probe_exports, {
         connectHostWorkspace: () => connectHostWorkspace,

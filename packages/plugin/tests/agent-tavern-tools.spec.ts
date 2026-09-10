@@ -224,6 +224,30 @@ describe('AgentTavern native tools', () => {
     expect(search.sourceCount).toBe(0)
   })
 
+  it('clamps out-of-range scores and lets an empty expiresAt mean no expiry', async () => {
+    const exec = { agent: { id: 'native' } }
+    const written = await tools.get('memory_write')!.execute({
+      scope: 'chat', kind: 'episodic', content: 'The maid bought azure cloth at the tailor shop.',
+      importance: 3, confidence: 4, expiresAt: '',
+    }, exec)
+    const read = await tools.get('memory_read')!.execute({ id: written.id, scope: 'chat' }, exec)
+    expect(read).toMatchObject({ found: true, importance: 1, confidence: 1 })
+    expect(read.expiresAt).toBeUndefined()
+    const extended = await tools.get('memory_update')!.execute({
+      id: written.id, scope: 'chat', expectedRevision: written.revision,
+      importance: 0.5, expiresAt: '2099-01-01T00:00:00.000Z',
+    }, exec)
+    expect(await tools.get('memory_read')!.execute({ id: written.id, scope: 'chat' }, exec))
+      .toMatchObject({ importance: 0.5, expiresAt: '2099-01-01T00:00:00.000Z' })
+    const cleared = await tools.get('memory_update')!.execute({
+      id: written.id, scope: 'chat', expectedRevision: extended.revision, expiresAt: '',
+    }, exec)
+    const reread = await tools.get('memory_read')!.execute({ id: written.id, scope: 'chat' }, exec)
+    expect(reread).toMatchObject({ importance: 0.5 })
+    expect(reread.expiresAt).toBeUndefined()
+    await tools.get('memory_forget')!.execute({ id: written.id, scope: 'chat', expectedRevision: cleared.revision }, exec)
+  })
+
   it('patches, lists, and deletes variables behind CAS revisions', async () => {
     const exec = { agent: { id: 'native' } }
     const first = await tools.get('variable_set')!.execute({ scope: 'agent', name: 'relationship', value: { trust: 2 } }, exec)
