@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { apply } from '../src/index.js'
-import { TavernStore } from '../../tavern-store/src/index.js'
+import { MemoryStore, TavernStore } from '../../tavern-store/src/index.js'
 import { parseRegexScripts } from '../../tavern-format/src/index.js'
 
 const CHARACTER = '露西'
@@ -671,6 +671,33 @@ describe('internal Tavern session bridge occupation', () => {
     expect(agent.log.map((event) => event.type)).toEqual(['agent-preset/selected'])
     expect(turnStartsOn(agent.log)).toHaveLength(0)
     expect(agent.injections).toHaveLength(0)
+  })
+
+  // 放在末尾：向共享记忆目录写入记录，会改变前面 audit 测试的 memories 断言。
+  it('returns memory records, not search hits, from the AgentTavern audit', async () => {
+    const memories = await MemoryStore.open(join(home, 'tavern'))
+    await memories.put({
+      scope: 'character',
+      scopeId: CHARACTER,
+      kind: 'semantic',
+      content: '露西习惯把酒单藏在吧台第三层',
+      source: { kind: 'deduce', sessionId: 'session-agent-tavern' },
+    })
+    const res = makeResponse()
+    await apiHandler(makeGetRequest('/api/dsh-tavern/agent-tavern/audit?sessionId=session-agent-tavern'), res)
+    expect(res.statusCode).toBe(200)
+    const memory = JSON.parse(res.chunks.join('')).memories
+      .find((candidate: { id?: unknown }) => candidate.id !== undefined)
+    expect(memory).toMatchObject({
+      scope: 'character',
+      kind: 'semantic',
+      content: '露西习惯把酒单藏在吧台第三层',
+      source: { kind: 'deduce' },
+    })
+    expect(typeof memory.revision).toBe('string')
+    // 回归：曾把 MemoryHit 包装（{ record, score }）直接下发，面板渲染成 undefined · undefined
+    expect(memory).not.toHaveProperty('record')
+    expect(memory).not.toHaveProperty('score')
   })
 })
 

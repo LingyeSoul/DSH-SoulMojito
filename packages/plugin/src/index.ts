@@ -385,7 +385,7 @@ async function handleApi(ctx, req, res) {
       architecture: binding.architecture,
       contextMode: binding.contextMode,
       projection: projector ? await projector.status(sessionId) : null,
-      memories: [...memoryGroups.flat(), ...globalMemories.map((hit) => hit.record)],
+      memories: [...memoryGroups.flat().map((hit) => hit.record), ...globalMemories.map((hit) => hit.record)],
       variables: [...variableGroups.flat(), ...globalVariables],
     })
   }
