@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEDUCE_POSITION_LIMIT,
+  deductionSharedBody,
   parseDeductionRequest,
   roleRoundPrompt,
   runDeduction,
@@ -105,7 +106,8 @@ describe('tavern_deduce runDeduction', () => {
     expect(fake.calls).toHaveLength(4)
     const spyRound2 = fake.calls.find((call) => call.role === 'Spy' && call.round === 2)
     expect(spyRound2?.prompt[0]!.text).toContain('[round 1] Commander: Commander position round 1')
-    expect(spyRound2?.prompt[0]!.text).toContain('Continue as "Spy" in round 2')
+    expect(spyRound2?.prompt[0]!.text).toContain('Round 2 of the deduction.')
+    expect(spyRound2?.prompt[0]!.text).toContain('Continue as "Spy"')
     // 第 2 轮的角色必须在第 1 轮全部 settle 之后才允许 start。
     const settleRound1 = fake.startOrder.filter((entry) => entry.startsWith('settle:'))
     const startRound2 = fake.calls.filter((call) => call.round === 2).map((call) => `start:${call.role}#2`)
@@ -157,6 +159,36 @@ describe('tavern_deduce runDeduction', () => {
     const fake = scriptedRuntime(({ role }) => (role === 'Spy' ? { failStart: new Error('depth exhausted') } : {}))
     await expect(runDeduction({ subagents: fake.runtime, parent: null }, REQUEST))
       .rejects.toThrow('depth exhausted')
+  })
+
+  it('reuses one byte-identical shared body across roles for provider prefix caches', async () => {
+    const fake = scriptedRuntime(() => ({}))
+    await runDeduction({ subagents: fake.runtime, parent: null }, REQUEST)
+    const body = deductionSharedBody({ scenario: REQUEST.scenario, transcript: [] })
+    for (const call of fake.calls) {
+      expect(call.prompt[0]!.text.startsWith(body)).toBe(true)
+    }
+    // 角色身份只允许出现在共享体之后的尾段，前缀必须逐字节相同。
+    const [first, second] = fake.calls.map((call) => call.prompt[0]!.text!)
+    expect(first.slice(0, body.length)).toBe(second.slice(0, body.length))
+    expect(first).not.toBe(second)
+  })
+
+  it('extends the shared body append-only across rounds so later rounds hit earlier prefixes', async () => {
+    const fake = scriptedRuntime(() => ({}))
+    await runDeduction({ subagents: fake.runtime, parent: null }, { ...REQUEST, rounds: 2 })
+    const bodyRound1 = deductionSharedBody({ scenario: REQUEST.scenario, transcript: [] })
+    const bodyRound2 = deductionSharedBody({
+      scenario: REQUEST.scenario,
+      transcript: [
+        { name: 'Commander', round: 1, text: 'Commander position round 1' },
+        { name: 'Spy', round: 1, text: 'Spy position round 1' },
+      ],
+    })
+    expect(bodyRound2.startsWith(bodyRound1)).toBe(true)
+    for (const call of fake.calls.filter((entry) => entry.round === 2)) {
+      expect(call.prompt[0]!.text.startsWith(bodyRound2)).toBe(true)
+    }
   })
 })
 

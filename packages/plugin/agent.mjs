@@ -3939,24 +3939,31 @@ async function runDeduction(deps, request) {
   }
   return { scenario: request.scenario, rounds: request.rounds, roleCount: request.roles.length, positions, failures, truncated };
 }
-function roleRoundPrompt(input) {
-  const { role, scenario, round, transcript } = input;
+function deductionSharedBody(input) {
+  const { scenario, transcript } = input;
   const lines = [
-    `You are "${role.name}" in a multi-role scenario deduction exercise.`,
-    `Role brief: ${role.brief}`,
-    `Scenario to deduce: ${scenario}`,
+    "You are taking part in a multi-role scenario deduction exercise. This is a hypothetical exercise inside a roleplay session. Tools are unavailable here: do not call tools, and never mention tools, memory, or the exercise mechanics in your answer.",
     "",
-    "This is a hypothetical exercise inside a roleplay session. Tools are unavailable here: do not call tools, and never mention tools, memory, or the exercise mechanics in your answer.",
-    "Speak only as this role, first person. In at most 3 sentences: what you perceive, what you want, what you do next, and the outcome you predict."
+    `Scenario to deduce: ${scenario}`
   ];
-  if (round > 1) {
-    lines.push("", `Round ${round} of the deduction. Positions from earlier rounds:`);
+  if (transcript.length > 0) {
+    lines.push("", "Positions from earlier rounds:");
     for (const entry of transcript) {
       lines.push(`[round ${entry.round}] ${entry.name}: ${entry.text}`);
     }
-    lines.push(`Continue as "${role.name}" in round ${round}: react to the other positions (hold, adapt, or counter) and sharpen your predicted outcome. At most 3 sentences.`);
   }
   return lines.join("\n");
+}
+function roleRoundPrompt(input) {
+  const { role, round } = input;
+  const tail = [
+    "",
+    `You are "${role.name}". Round ${round} of the deduction.`,
+    `Role brief: ${role.brief}`,
+    round === 1 ? "Speak only as this role, first person. In at most 3 sentences: what you perceive, what you want, what you do next, and the outcome you predict." : `Continue as "${role.name}": react to the positions above (hold, adapt, or counter) and sharpen your predicted outcome. At most 3 sentences.`
+  ];
+  return `${deductionSharedBody(input)}
+${tail.join("\n")}`;
 }
 function textOf(output) {
   return output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text ?? "").join("\n").trim();

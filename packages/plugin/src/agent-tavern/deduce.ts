@@ -3,6 +3,16 @@
 // 父会话上下文（spawn 语义），工具被 toolFilter 清空以保持纯推理；跨轮
 // 传导靠本模块维护的无状态 transcript，不依赖 continuable 持久化。综合
 // 由调用方（RP 主 Agent）完成——它才是叙事者，本工具只回传各轮角色站位。
+//
+// 缓存复用：spawn 的一次性 run 没有同步续会话通道（continuable 是异步消息
+// 驱动且强依赖 sessionPersistence，对同步编排的推演工具是错误形状），所以
+// 复用做在请求前缀层。子 Agent 的模型可见请求 = 继承自父的 system prompt
+// （同一父的全部子已共享）+ 单条 user 消息；user 消息固定为「共享体 +
+// 角色尾段」：共享体（指令、场景、历轮站位）对所有角色×所有轮字节相同，
+// 且第 r 轮 = 第 r-1 轮共享体原样追加站位条目（append-only，不重写、不插
+// 轮次头）。同轮 N 个并发请求共享同一前缀；下一轮在上一轮 settle 后才发
+// 出、前缀恰好是扩写，provider 的自动前缀缓存从第 2 轮起可命中除尾段外的
+// 全部输入。角色身份与轮次措辞只允许出现在共享体之后的尾段。
 
 export const DEDUCE_PROVIDER = 'spawn'
 export const DEDUCE_MAX_ROLES = 5
@@ -124,7 +134,9 @@ export function parseDeductionRequest(args: Record<string, unknown>): DeductionR
 
 /**
  * 无状态多轮推演。每一轮内全部角色并行派生一次性子 Agent；后续轮把此前
- * 各轮的站位写进角色 prompt 形成交叉推演。任何单角色失败不阻断其余角色，
+ * 各轮的站位追加进共享体（append-only，见模块头注释的缓存复用说明）形成
+ * 交叉推演。轮间必须等上一轮全部 settle：既是站位依赖，也让下一轮请求
+ * 的扩写前缀在 provider 缓存里保持温热。任何单角色失败不阻断其余角色，
  * 全员失败才抛错。所有 run 在 settle 后立即 dispose。
  */
 export async function runDeduction(deps: {
@@ -185,29 +197,41 @@ export async function runDeduction(deps: {
   return { scenario: request.scenario, rounds: request.rounds, roleCount: request.roles.length, positions, failures, truncated }
 }
 
+export function deductionSharedBody(input: {
+  scenario: string
+  transcript: readonly DeductionPosition[]
+}): string {
+  const { scenario, transcript } = input
+  const lines = [
+    'You are taking part in a multi-role scenario deduction exercise. This is a hypothetical exercise inside a roleplay session. Tools are unavailable here: do not call tools, and never mention tools, memory, or the exercise mechanics in your answer.',
+    '',
+    `Scenario to deduce: ${scenario}`,
+  ]
+  if (transcript.length > 0) {
+    lines.push('', 'Positions from earlier rounds:')
+    for (const entry of transcript) {
+      lines.push(`[round ${entry.round}] ${entry.name}: ${entry.text}`)
+    }
+  }
+  return lines.join('\n')
+}
+
 export function roleRoundPrompt(input: {
   role: DeductionRole
   scenario: string
   round: number
   transcript: readonly DeductionPosition[]
 }): string {
-  const { role, scenario, round, transcript } = input
-  const lines = [
-    `You are "${role.name}" in a multi-role scenario deduction exercise.`,
-    `Role brief: ${role.brief}`,
-    `Scenario to deduce: ${scenario}`,
+  const { role, round } = input
+  const tail = [
     '',
-    'This is a hypothetical exercise inside a roleplay session. Tools are unavailable here: do not call tools, and never mention tools, memory, or the exercise mechanics in your answer.',
-    'Speak only as this role, first person. In at most 3 sentences: what you perceive, what you want, what you do next, and the outcome you predict.',
+    `You are "${role.name}". Round ${round} of the deduction.`,
+    `Role brief: ${role.brief}`,
+    round === 1
+      ? 'Speak only as this role, first person. In at most 3 sentences: what you perceive, what you want, what you do next, and the outcome you predict.'
+      : `Continue as "${role.name}": react to the positions above (hold, adapt, or counter) and sharpen your predicted outcome. At most 3 sentences.`,
   ]
-  if (round > 1) {
-    lines.push('', `Round ${round} of the deduction. Positions from earlier rounds:`)
-    for (const entry of transcript) {
-      lines.push(`[round ${entry.round}] ${entry.name}: ${entry.text}`)
-    }
-    lines.push(`Continue as "${role.name}" in round ${round}: react to the other positions (hold, adapt, or counter) and sharpen your predicted outcome. At most 3 sentences.`)
-  }
-  return lines.join('\n')
+  return `${deductionSharedBody(input)}\n${tail.join('\n')}`
 }
 
 function textOf(output: ContentBlockLike[]): string {
