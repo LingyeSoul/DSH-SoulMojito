@@ -8,6 +8,15 @@ const versionPath = resolve(root, 'packages/plugin/version.json')
 const version = JSON.parse(readFileSync(resolve(root, 'packages/plugin/package.json'), 'utf8')).version
 const commit = resolveCommit()
 
+// workspace 包的 exports 指向 tsc 产物 lib/（gitignored），esbuild 只打包不编译，
+// 这里先跑 tsc -b，保证新 clone 上 pnpm install 后直接 build:plugin 可用
+// （增量构建，产物已最新时近乎空转）。
+execFileSync(process.execPath, [resolve(root, 'node_modules/typescript/bin/tsc'), '-b'], {
+  cwd: root,
+  stdio: 'inherit',
+  windowsHide: true,
+})
+
 await build({
   entryPoints: [resolve(root, 'packages/plugin/src/index.ts')],
   outfile: resolve(root, 'packages/plugin/index.mjs'),
