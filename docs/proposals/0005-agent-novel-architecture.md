@@ -1,272 +1,541 @@
 # 提案 0005：AgentNovel 全自动小说推演架构
 
-> 状态：提议。日期：2026-09-11。前置提案：0004。关联决策：2026-09-10-subagent-deduction、2026-09-10-deduce-prefix-cache-reuse、2026-08-16-occupy-blank-session、2026-09-09-dsh-bind-library。
+> 状态：已实施（2026-09-17 首版代码落地；`pnpm check` 全绿——tsc、388 项 Vitest、插件构建与 gates）。设计日期：2026-09-16。前置提案：[0004](0004-agent-tavern-architecture.md)。关联决策：[多 Agent 推演](../../decisions/2026-09-10-subagent-deduction.md)。本文是 AgentNovel 的唯一设计说明。待办：§16 的真实宿主运行时验证（能力探测已代码化且 fail-closed，但未在真实宿主上执行 N0 探针）与 §18 的端到端真实模型验证尚未进行——构建通过不等于 Web 已运行。
 
-## 1. 结论先行
+## 1. 目标与设计结论
 
-AgentNovel 是 dsh-tavern 的第三种会话架构 `agent-novel`：运行在 DSH 原生 AgentLoop 上的长篇小说自动写作 profile。它复用 AgentTavern 的资产模型（角色卡、世界书、记忆、变量、推演工具），新增三样东西：
+AgentNovel 是与 AgentTavern、ST 并列的 `agent-novel` 会话架构：用户给出要求，系统基于角色卡和世界书生成并保存大纲，然后自主推演、分段写作、保存正文，直至故事完成；运行中的用户输入可以改变后续方向。
 
-1. **大纲（outline）作为唯一推进契约**——存 NovelStore，CAS 修订，driver 与模型只通过它对齐进度；
-2. **NovelDriver**——一个不含 LLM 的会话级调度器，在 turn 边界用宿主 `Agent.followup()` 排队下一个写作单元，实现零人工干预的连续推进；
-3. **作者语义的用户消息**——小说运行期间 composer 消息是创作指令（requirement），不是剧情内发言；模型收到后先修大纲再继续写。
+核心选择：
+
+1. **原生执行**：所有生成使用 DSH AgentLoop；独立小说 preset 提供作者协议，不复用角色扮演身份，不创建插件侧 LLM 循环。
+2. **先规划再写作**：完整故事粗纲先落盘，当前章节逐步细化；大纲是创作计划，不兼任正文、指令收件箱和调度事实来源。
+3. **以场景推进**：一个写作单元对应一个场景或连贯片段，可以小于一章；模型 turn 与章节不是一一对应关系。
+4. **显式提交正文**：仅正文提交工具能产生小说内容，提交记录同时确认正文、剧情事实和进度；普通 assistant 回复不是正文来源。
+5. **作者干预有边界**：指令先可靠接收，在当前已认领单元结束后修订大纲，再执行下一单元；取消另有即时停止语义。
+6. **幂等在存储层保证**：稳定单元 ID、执行令牌、版本校验和原子提交防止重复正文，不能依赖模型“读大纲后不要重复”。
+7. **篇幅与运行成本分离**：目标字数指导结构和收尾，轮数、用量、推演规模限制运行；任何一个都不能成为无限续写理由。
 
 ```text
-kickoff 用户要求（一条消息）
-  -> DSH AgentLoop turn：调研资产 -> 生成大纲 -> novel_outline_write
-  -> NovelDriver（无 LLM）：读大纲 -> followup(<novel_brief 第1章>)
-  -> AgentLoop turn：调研 -> 写正文 -> 更新章节状态/记忆
-  -> NovelDriver：读大纲 -> followup(下一单元)      ← 循环，无用户参与
-  中途用户消息 -> 原生 inbox FIFO -> 模型先修订大纲再续写
-完结（全部章节 final）-> driver 停止，产出 chapters/*.md
+选择角色卡、世界书，提交创作要求与篇幅目标
+  -> 固定资产快照、登记作者指令
+  -> 原生 AgentLoop 调研，创建大纲并持久化
+  -> 自动开始 / 等待用户批准大纲
+  -> 调度并认领一个写作单元
+  -> 查资料 -> 必要时多角色推演 -> 写正文 -> 原子提交正文与进度
+  -> 有新指令：先修订大纲；无新指令：继续下一单元
+  -> 回收伏笔、完成结局、校验完成条件 -> completed
 ```
 
-插件侧不出现第二个 LLM 循环：driver 只做事件监听、存储读取和 `followup()` 排队，所有生成仍由原生 AgentLoop 完成；`checkAgentTavernIsolation` 三禁同样覆盖 `src/agent-novel/`。这与宿主自带 `dsh-goal-round-driver` 用 `followup()` 驱动 goal rounds 是同一平台语义，不是新造的循环。
+“自动”表示正常创作不需要反复输入“继续”，不表示掩盖故障、忽略矛盾或绕过预算。真实冲突、存储故障和能力缺失必须给出明确原因。
 
-## 2. 问题边界
+## 2. 现有基础与复用边界
 
-"全自动"拆成可验收的三条痛点：
+当前仓库提供以下基础，但不能把复用理解为直接放宽 `bindingFor` 的架构判断：
 
-| 痛点 | 本设计的回答 |
+| 现有模块 | 可复用部分 | 必须适配的边界 |
+|---|---|---|
+| `packages/tavern-store/src/store.ts` | 角色卡、世界书解析及文件访问模式 | 当前架构联合类型只有 AgentTavern/ST；小说需独立绑定和存储 |
+| `packages/plugin/src/agent-tavern/agent.ts` | 资料检索、作用域校验、工具注册经验 | 当前资料工具围绕单角色及角色聊天；不能虚构一个主角色来兼容多角色小说 |
+| `packages/plugin/src/agent-tavern/deduce.ts` | 宿主子 Agent 推演核心、共享请求前缀 | 子 Agent 无写权限；候选推演不能变成已发生事实 |
+| `packages/plugin/src/agent-tavern/projector.ts` | 游标、重放、投影状态的设计经验 | 不能把通用 assistant 消息投影为正文，也不能用事件去重代替写作单元去重 |
+| `packages/tavern-store/src/memory.ts`、`variable.ts` | 检索和结构化状态的基础能力 | 当前独立写入不与正文原子提交；小说正典写入走新提交协议 |
+| `packages/bind/src/` | 宿主包解析和运行时形状探测 | 自动调度及接收钩子的行为需真实宿主验证 |
+
+只抽取实际重复的资料读取、检索和校验逻辑，保留 AgentTavern 原有工具行为，不顺便重构整个工具框架。规划、版本判断、预算计算、brief 渲染使用纯函数；文件系统和宿主调用集中到连接适配层。
+
+## 3. 领域概念与事实来源
+
+| 概念 | 含义与权威来源 |
 |---|---|
-| 每章写完就停，要用户手动发"继续" | driver 在每个 turn/end 排队下一单元 brief（goal-round-driver 同型方案） |
-| 模型中途向用户提问、等回答 | kernel 作者协议禁止提问；preset 工具面不含 ask-user 类工具 |
-| 宿主重启或出错后静默死掉 | run 状态持久化，apply/`agent/created` 重臂；连续失败/停滞上限触发暂停并 surfaced |
+| 小说项目 | 独立 `novelId`，包含资产快照、计划、正文及运行记录 |
+| 静态设定 | 被固定版本的角色卡、世界书及选定背景资料；对模型是资料而不是系统指令 |
+| 大纲 | 主题、结局方向、人物弧线、章节和待发生事件的版本化计划 |
+| 作者指令 | 用户原文及其顺序、处理结果、生效位置；接收由程序负责 |
+| 写作单元 | 一个需要被调度、认领和提交的场景或正文片段 |
+| 剧情正典 | 已提交正文及其有来源的事实记录；尚未完成的章节也可以包含不可回改的已提交片段 |
+| 候选推演 | 尚未发生的可能行动和结果，只有被写入并提交才成为事实 |
+| 运行状态 | 是否允许执行、当前单元、暂停原因、预算消耗和恢复检查结果 |
+| 阅读投影 | 由提交记录生成的章节 Markdown、目录和导出文件；不是唯一存档 |
 
-以及一条正向需求：中途插入的新要求要"调整大纲 + 正在推演的后续剧情"，已写正文不被回改（详见 §7）。
+大纲决定“打算怎么写”，提交记录决定“已经写了什么”，指令台账决定“用户要求了什么”，运行状态决定“现在是否可以继续”。压缩摘要、记忆索引和 UI 缓存均不能覆盖这些来源。
 
-## 3. 架构语言（提议并入 CONTEXT.md）
+## 4. 产品流程与会话绑定
 
-**AgentNovel**：运行在 DSH 原生 AgentLoop 上的小说自动推演 profile。它规定作者身份、大纲协议、工具权限和推进策略；推进由宿主 followup 语义承载，不拥有第二个执行循环。
-_Avoid_：小说循环、自动续写器、Novel loop
+### 4.1 创建输入
 
-**大纲**：小说会话的持久化推进契约，含章节列表、章节状态与修订日志。大纲是 driver 与模型之间唯一的进度事实来源。
-_Avoid_：剧情记忆、章节数组（脱离 NovelStore 称呼时）
+创建表单包含角色卡多选、世界书多选、创作要求、语言、题材、叙事视角、文风和篇幅设置。允许不选角色卡或世界书，写原创故事；空集合是明确选择，不自动读取全局当前资产。
 
-**写作单元**：一个 turn 承担的最小推进单位：开写一章、延续一章，或一次大纲修订。
-_Avoid_：回合（与 RP turn 混淆）
+篇幅可以不限定，或指定目标总字数与浮动比例；章节数可另行约束。未指定的非关键创作细节由作者 Agent 决定并记录在大纲中，不反复询问。表单展示产品预设值，提交时传完整配置，内部函数不使用默认参数。
 
-**创作指令**：小说运行期间用户消息的语义——对大纲与后续剧情的要求，不是剧情内发言。
-_Avoid_：用户发言、对话输入
+新建过程先创建项目与绑定，再提交带稳定请求 ID 的首条创作指令。请求重试不能创建两个项目或登记两条相同指令；绑定未完成的项目不能开始生成。
 
-**NovelDriver**：插件内会话级调度器。监听事件、读大纲、渲染 brief、排队 followup；不调用模型。
-_Avoid_：生成循环、后台 worker
-
-## 4. 会话模型与绑定
+### 4.2 绑定
 
 ```ts
-type TavernArchitecture = 'agent-tavern' | 'st' | 'agent-novel'
-
 interface NovelSessionBinding {
   architecture: 'agent-novel'
   novelId: string
-  character?: string     // 可选：以某角色卡为人物基底
-  lorebooks: string[]    // 世界书集合
-  chatId: string         // 记忆 chat 作用域，与 novelId 同值
 }
 ```
 
-- 独立 preset `agent-novel`（`agent-presets/agent-novel/`，挂载 `dsh-tavern/agent-novel` 模块），有自己的 kernel；不与 RP kernel 混用。
-- composer 交还原生（同 agent-tavern）；Tavern 会话 tab 不挂载——小说的读模型是章节文件投影，不是 JSONL 聊天投影。
-- 桥接命令 `/dsh-tavern-session` 的 payload 扩展 action：`novel-open`（novelId、character?、lorebooks[]）、`novel-pause`、`novel-resume`，仍 `recordInput: false`。
-- 架构互斥沿用 `TavernArchitectureConflictError` 守卫：已有真实 turn 的会话不能改绑 `agent-novel`。从 RP 聊天分叉出小说会话时，原 JSONL 作为可检索历史导入（turn 0 坐标，沿用 import 契约）。
+绑定仅保存项目身份，资产列表存项目内，避免两份可变资产配置。作用域由宿主端从绑定推导，模型不能传任意项目 ID 越权访问其他小说。
 
-## 5. 大纲：唯一的推进契约
+- 使用独立 `agent-novel` preset 和 kernel，主 Agent 是作者，不固定扮演某张角色卡。
+- 一个项目同一时间只有一个拥有写权限的宿主会话；可以有多个只读浏览器视图。
+- 已经开始真实 turn 的 AgentTavern/ST 会话不能原地改绑小说，沿用架构冲突守卫。
+- 首版只创建独立小说，不实现 RP 聊天分叉；未来引入历史时只使用既有 session-level import 契约，绝不伪造 `turn/start`、`step/start` 或“turn 0”边界。
+- 管理命令使用既有内部桥接方式，`novel-open`、`novel-pause`、`novel-resume`、`novel-approve-outline` 不作为小说正文或作者要求重复登记。
 
-`packages/tavern-store` 新增 `NovelStore`，文件布局 `$DSH_HOME/tavern/novels/<novelId>/`：
+### 4.3 大纲批准
 
-```text
-outline.json              大纲本体（CAS，sha16 revision）
-run.json                  driver 运行状态
-chapters/NNN-<slug>.md    正文投影（幂等，按 eventSeq）
-```
+创建时明确选择 `automatic` 或 `manual`，产品初始选择为 `automatic`。两者都先保存大纲；自动模式在保存成功后启动第一个写作单元，手动模式进入 `awaiting-approval`，批准绑定具体大纲版本。
 
-outline.json 结构：
+批准前收到新要求必须先修订大纲，旧版本批准不能开启新版正文。首轮不顺带写“冷开场”，以保持“先存大纲、再写正文”的可验证边界。
 
-```jsonc
-{
-  "revision": "…",
-  "title": "…", "premise": "…", "genre": "…",
-  "requirements": [
-    { "id": "R1", "text": "用户原话", "status": "active",
-      "createdAt": "…", "appliedAtRevision": "…" }
-  ],
-  "chapters": [
-    { "index": 1, "title": "…", "beats": "本单元要发生什么（≤2000 字符）",
-      "status": "planned", "wordTarget": 3000, "file": "chapters/001-<slug>.md" }
-  ],
-  "revisionLog": [
-    { "revision": "…", "cause": "kickoff | user-requirement:R2 | agent-refine",
-      "summary": "改了什么", "at": "…" }
-  ]
-}
-```
+等待批准时输入新要求只登记，不自动调用模型；用户点击“更新大纲”明确授权一次规划，状态暂时为 `active/revising`，修订成功后重新进入 `paused(awaiting-approval)`。只有在无待处理或冲突指令时，才能批准当前版本并开始正文。初次批准后的常规滚动细化不再逐次要求批准；手动批准是开写门槛，不是每章审稿流程。
 
-- 章节状态机：`planned → drafting → drafted → final`。driver 靠它决定下一个 brief 是"开新章/收尾"还是"延续 drafting"。
-- `requirements` 是创作指令台账：kickoff 消息与每条中途用户消息各记一条；指令被后续指令显式取代时置 `retired`。active 指令逐条进入每个 brief 的固定段（前缀缓存友好）。
-- 修订纪律：`drafted|final` 章节是既成事实（canon），用户指令只允许修改 `planned|drafting` 章节的 beats 以及后续章节的增删；每次修订必须落 revisionLog，cause 可追溯。
-- 工具面：`novel_outline_read(selector?)`（按章节/范围读，带预算；无 selector 时默认当前章节 ±2 与台账摘要，不提供无界全量读）、`novel_outline_write(patch, expectedRevision)`（CAS；接受章节状态迁移、beats 修订、requirements 状态变化与章节文件映射写入）。
+## 5. 资产固定与设定优先级
 
-## 6. NovelDriver：无 LLM 的自动推进
+创建时保存选定资产的规范化快照、原资产 ID、内容哈希、导入格式版本及显示名称。格式版本不是内容版本，不能用 `specVersion` 代替哈希。
 
-`src/agent-novel/driver.ts`。每个 agent-novel 会话一个实例，事件驱动，agent 内串行（沿用 goal-round-driver 的 requestDrive 合并纪律）：
+- 从选定角色卡解析附带世界书，和显式选择的世界书合并、去重，并在创建界面展示最终集合。
+- 禁止运行中跟随全局 `activeWorlds` 或源角色卡的编辑自动漂移；源资产删除后，现有小说仍可读取其快照。
+- 角色用稳定 `characterId` 区分；重名角色必须可区分。章节和世界书条目同样使用稳定 ID，不以标题作为身份。
+- 世界书冲突不得简单“最后一个覆盖”；保留来源，相关冲突在规划时解决并记录设定裁决，重大矛盾暂停。
+- 用户明确要求偏离某项设定时，保存小说局部设定覆盖及指令来源，不修改原角色卡或世界书；与已提交事实冲突时走第 9 节流程。
+- 首版不做运行中源资产版本升级。更换资产的完整合并和历史影响分析留待后续。
 
-```text
-on session/event（binding 为 agent-novel）:
-  turn/end                                   -> schedule drive(agent)
-  user/message(source.kind === 'user')       -> 记 pendingRequirement
-  agent/inbox/*                              -> N0 核实排队消息落点事件后用于 pending 检测
+写作读取有效的小说设定与已提交事实。计划和候选推演永远不能充当事件已发生的证据。角色知识与读者知识分别记录，避免全知作者把秘密泄露给不知情角色。
 
-drive(agent):   // 串行化；run.status !== 'active' 直接返回
-  1. 失败/取消计数与停止条件判定（§11）
-  2. outline = NovelStore.readOutline(novelId)
-  3. 全部章节 final -> run.status = 'completed'，停止
-  4. inbox 有未消费的真实用户消息 -> 本拍不排队（用户消息自己唤醒下一 turn）
-  5. unit = outline 首个非 final 单元
-       planned / drafted -> "开写第 N 章" / "收尾第 N 章" brief
-       drafting          -> "延续第 N 章" brief
-  6. message = createUserMessage({
-       content: renderBrief(unit, run, outline),
-       source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'novel-brief' } })
-     ctx.agents.withoutInitiator(() => agent.followup(message))
-  7. 持久化 run.json（lastQueuedTurn、pendingRequirement 清账）
-```
+## 6. 分层大纲与滚动细化
 
-- **brief 渲染**（纯函数，`outline.ts`）：固定头（作者身份与纪律：先调研后动笔、持久化章节状态与剧情记忆、禁止向用户提问、写作单元完成即结束 turn）→ active 创作指令逐条（稳定段）→ 变长尾（章节号/状态/beats/接续锚点）。共享前缀字节稳定、尾段追加，沿用 deduce 前缀缓存决策的纪律。
-- **重臂**：插件 apply 时扫描 `run.json status === 'active'` 的绑定重臂 driver；`agent/created`（宿主重启后会话加载）同样重臂，必要时 `whenIdle()` 后补排队。重启丢失的未消费 followup 由持久化 run 状态重建，不依赖 inbox 跨重启持久性。
-- **并发纪律**：只在 turn 边界排队；同一 agent 的 drive 调度合并；`followup` 抛错计一次失败（goal-round-driver 同款 try/catch + surfaced）。
-- v1 不使用 `agent/turn-stopping` veto（避免单 turn 无界步进与 token 失控），也不使用 `steer`；两者记录为后续评估项。单元没写完 turn 就结束是无害的：下一个 brief 依据 outline 状态自然变成"延续"。
+### 6.1 内容结构
 
-## 7. 中途插入新要求
-
-时序依赖宿主 inbox 的 FIFO 语义（N0 验证项①）：
-
-```text
-turn N 运行中，用户在 composer 发"让女主提前黑化"
-  -> 宿主把消息排入 next-turn 队列（原生行为，无需插件参与）
-turn N end
-  -> driver 检测到未消费用户消息 -> 本拍不排 brief
-turn N+1（由用户消息驱动）
-  -> kernel 作者协议：这是创作指令——
-     1) novel_outline_write：指令入账 requirements（Rn），
-        修改 planned/drafting 章节 beats、增删后续章节，
-        落 revisionLog（cause: user-requirement:Rn）
-     2) 继续当前写作单元：把指令消化进自然延续，按新方向推进；
-        不改写 drafted|final 正文
-turn N+1 end -> driver 恢复正常链接
-```
-
-kernel 对应条款（作者协议）："小说运行期间的用户消息是创作指令，不是剧情内发言。收到后先修订大纲再继续写作；把指令消化进当前单元的自然延续，而不是中断叙事另起炉灶。若指令与已定稿内容冲突，调整后续章节并在大纲修订说明中记录权衡，不回改正文。"
-
-## 8. Kickoff 与大纲生成
-
-- 入口一（面板）：新建小说表单（角色/世界书多选、体裁、目标章节数、要求文本）→ 创建会话、绑定架构，由客户端把要求作为首条真实用户消息发出（或预填 composer 由用户回车发送）。
-- 入口二：在 agent-novel 会话的 composer 直接输入要求，首条用户消息即 kickoff。
-- kickoff turn 的协议：用 `tavern_character_get` / `tavern_lore_search` 调研人物与世界基底 → 产出大纲（标题/前提/主题/人物弧线/章节列表，章节数受 `novel.maxChapters` 配置约束）→ `novel_outline_write` 全量落盘 → 可写一个冷开场。turn 结束后 driver 接管。
-- `novel.outlineApproval: 'auto'（默认） | 'manual'`：manual 时 driver 在大纲完成后暂停，等用户一条"开始"再推进。这是显式 opt-in 的干预点，默认关闭以守住"零干预"承诺。
-
-## 9. 工具面
-
-| 组 | 工具 | 与 AgentTavern 的关系 |
-|---|---|---|
-| 小说 | `novel_outline_read` / `novel_outline_write` | 新增；绑定解析复用 `bindingFor`（扩展接受 agent-novel） |
-| 资料只读 | `tavern_character_get` / `tavern_lore_search` / `tavern_history_search` / `tavern_scene_get` | 复用 |
-| 记忆 | `memory_search` / `memory_read` / `memory_write` / `memory_update` / `memory_forget` | 复用；chat 作用域解析为 novelId |
-| 变量 | `variable_get` / `variable_set` / `variable_patch` / `variable_delete` / `variable_list` | 复用；turn 作用域清理同现有 |
-| 推演 | `tavern_deduce` | 复用；kernel 建议在重大剧情转折前做沙盘推演 |
-
-- preset 不注册任何用户阻塞型工具（ask-user 类）；若宿主默认工具面注入之，以 toolFilter deny 对冲（N0 核实项③）。
-- 隔离 gates（`checkAgentTavernIsolation`）把 `src/agent-novel/` 纳入三禁：`llm.stream`、`runGeneration`、ST prompt pipeline。driver 只触 `followup`，天然满足。
-
-## 10. 产出投影
-
-`src/agent-novel/projector.ts`，沿用 AgentTavern projector 的全部纪律（事件驱动、eventSeq 幂等、checkpoint、CAS 重试、`agent/created` replay、失败置 pending 上面板）：
-
-- 投影对象：无 tool-call 块的最终 `assistant/message` → 追加进 `chapters/NNN-<slug>.md`（按 outline 章节归属；drafting 延续段追加到同一文件）。
-- 过滤：`source.kind === 'plugin'`（novel-brief、anchor）与用户消息不进正文。
-- 章节文件映射由 driver/模型经 `novel_outline_write` 写入 `chapter.file`，投影器只认 outline 映射，不自作命名。
-- 导出：面板一键打包 outline + chapters（zip）。
-
-## 11. 可靠性、预算与安全
-
-| 停止条件 | 行为 |
+| 层级 | 必须表达的内容 |
 |---|---|
-| 全部章节 final | `completed`，正常完结 |
-| 面板 Stop / `novel-pause` | `paused(user)`；driver 不再排队，Resume 重臂 |
-| turn 以 cancelled 结束且无 pending 用户消息 | `paused(user-cancel)`——用户主动干预即让路 |
-| 连续 `maxConsecutiveFailures`（默认 3）个 error turn | `paused(errors)`，surfaced 原因 |
-| 连续 `maxStalledTurns`（默认 3）turn 无进度 | `paused(stalled)`；进度 = outline revision 变化 ∨ 章节文件增长 ∨ 记忆审计新增（全部插件侧可观测，无需 LLM） |
-| `novel.maxTurns`（可选，默认不限） | `paused(budget)`，面板一键续 |
+| 故事层 | 标题、前提、主题、主要冲突、结局方向、视角与文风、禁忌、局部设定覆盖 |
+| 人物层 | 角色引用、初始状态、动机、关系、预期弧线与关键抉择 |
+| 章节层 | 稳定章节 ID、顺序、标题、叙事目的、关键事件、预计字数、进入及结束条件 |
+| 当前细纲 | 场景目标、参与人物、时空位置、因果承接、冲突、预期变化、接续锚点 |
+| 伏笔层 | 稳定 ID、预期埋设及回收位置、是否必须回收；实际状态由正文提交更新 |
 
-- 所有 brief/notice 都是 logged user message（plugin source），走 sanctioned channel；不伪造 assistant 事件。
-- 大纲、run、章节文件全部 CAS/幂等；driver 崩溃至多重复排队一个 brief，而 kernel 的"读大纲再动笔"纪律使重复 brief 无害（幂等推进）。
-- 记忆/变量写入沿用 AgentTavern 权限模型（global 写入默认关闭）。
-- 上下文容量完全服从宿主 surface/compaction 策略（与 dsh-native 同款立场）；长篇必然触发 compaction，见 §12。
+完整粗纲先覆盖到结局，只细化当前章节及必要的下一章衔接。后续章节可增删、重排；包含已提交正文的章节不可删除或重排，未提交部分可以调整。
 
-## 12. 记忆与 compaction
+每次修订记录 `outlineRevision`、父版本、原因、来源指令 ID、变更摘要与受影响章节。纯标题、说明文字变化不能冒充创作进展。
 
-- 记忆作用域：chat=novelId 存剧情事实与人物状态迁移；character 作用域仍指向角色卡（小说与 RP 共享人物正典）；默认只写 chat 作用域。
-- `TavernCompactionCurator` 增加小说分支：checkpoint 模板含章节进度（curator 侧从 NovelStore 注入快照）/ 主线与伏笔 / 人物状态 / active 创作指令 / 文风与叙事视角约束 / 关键既成事实。沿用"同语言、verbatim 名称、不发明、不提及压缩机制"规则。
-- 章节正文的完整事实来源是 `chapters/*.md` 投影与 session log；compaction 只影响上下文投影，不消灭小说本体。
+### 6.2 生命周期
 
-## 13. 宿主 seam 核查
+章节使用 `planned -> writing -> completed`，由正文提交及明确的章节完成操作推进，不允许通用大纲 patch 任意写状态。“已提交”与“整章完成”不同，`writing` 章节里的已提交正文也不可自动覆写。
 
-| 需求 | DSH 原生能力（0.1.2 已核） | AgentNovel 用法 |
-|---|---|---|
-| 自动续 turn | `Agent.followup(UserMessage)`（runtime-types.d.ts:118） | turn 边界排队写作单元 |
-| 中途吸收 | 原生 composer → inbox FIFO；`Agent.steer()`（:126） | 用户消息自然排队；v1 不用 steer |
-| 空闲同步 | `Agent.whenIdle()`（:90） | 重臂后等待 settle |
-| 发起方隐藏 | `ctx.agents.withoutInitiator`（goal-round-driver 同款） | driver 排队不标记 initiator |
-| 消息构造 | `createUserMessage`（`@deepseek-ai/dsh-llm`） | 经 bind `importHostPackage` 取宿主同源实例 |
-| 事件观察 | `session/event` + `agent/inbox/*` + `agent/status` | driver 触发面 |
-| 不停机 veto | `agent/turn-stopping`（:305） | v1 不用，评估记录 |
+写作单元使用 `prepared -> claimed -> committed`，未开始的过期单元进入 `superseded`，失败或取消的执行尝试留存原因。一个单元只接受一次成功正文提交；重试通过新的执行尝试令牌沿用同一单元 ID。
 
-能力探测 fail-closed：绑定时探测 `typeof agent.followup === 'function'`；缺失则拒绝创建 agent-novel 会话，原因并入 bootstrap 端点的 capability 报告（沿用 `agentTavern` 字段模式，新增 `agentNovel`）。不 inject 声明、不做版本号判断——bind 库纪律。
+大纲修订本身是独立工作类型，不伪装成零字数正文单元。一个宿主 turn 最多认领并提交一个写作单元；超时或输出不足时不能靠自动拆出多个未校验单元越过作者干预边界。
 
-N0 待核实项：① followup 排队消息与 composer 提交的 FIFO 顺序保证；② 排队未消费 followup 的重启持久性（设计不依赖，run.json 重建）；③ 宿主默认工具面是否含用户阻塞工具；④ `withoutInitiator` 精确语义。
+### 6.3 从计划到下一个单元
 
-## 14. UI（v1 最小面）
+当前章细纲包含有序、稳定 ID 的场景计划及目标；初始规划至少准备首个场景。driver 只选择首个未完成场景并准备单元，不自行生成场景内容。
 
-- 管理面板：小说列表（状态徽章：outlining / writing ch3/12 / paused+原因 / completed）、大纲查看、Pause/Resume、导出 zip。
-- 会话头：复用 `conversation.session.header.actions` 槽位显示 novel 徽章（TavernHeaderAction 同型）。
-- 新建表单：角色/世界书多选、体裁、目标章节数、要求文本框。
-- i18n 按 locale-following 决策处理。
+正文提交给出场景目标完成依据或尚未完成的目标，并记录下一片段接续锚点。场景需要延续时，driver 创建该场景的下一个片段单元，每个已提交片段仍是独立的不可变正文；当前场景结束才移向下一个。
 
-## 15. 里程碑
+当前章没有可执行细纲时，调度 `agent-refine` 规划工作，通过 `novel_outline_revise` 细化，而不是让不含 LLM 的 driver 发明剧情。该操作不推进作者指令水位，必须实际新增可执行场景或解决未决计划项，受独立规划轮数及总轮数限制。
 
-- **N0 宿主契约验证**：对 0.1.2 实测 followup/FIFO/重启持久性/默认工具面/withoutInitiator，写探针脚本落 `docs/exploration/`。
-- **N1 存储与工具**：NovelStore、`novel_outline_*` 工具、binding 类型与冲突守卫、gates 扩展（run.mjs 含 NUL 字节，用 Python 编辑）。
-- **N2 preset 与协议**：agent-novel preset、kernel（作者协议）、kickoff 大纲生成。无 driver 时可手动逐 turn 使用——降级形态是一台"小说家聊天"，独立可用。
-- **N3 自动推进**：NovelDriver、brief 渲染、用户指令吸收、重启重臂、全部停止条件。
-- **N4 投影与面板**：chapters 投影、compaction 小说模板、面板与导出。
+当前章场景均完成后，调度章节完成检查；全部章节完成后调度全书完成检查。章节完成与正文提交分开执行，不能因 kernel 要求“正文提交后结束 turn”而永远无法关闭章节。空正文不能作为延续片段提交。
 
-## 16. 不做的事
+## 7. 篇幅、节奏与完成条件
 
-- 不在插件内做任何 LLM 调用或第二执行循环；"自动"只存在于 followup 排队。
-- 不用 `agent/turn-stopping` 强撑单 turn 无界步进。
-- 不把完整大纲塞进每请求固定 prompt（按需经工具读取；brief 只带当前单元）。
-- 不自动改写已 drafted/final 正文来迎合新指令；改历史的正道是从 chapters 投影分叉新会话。
-- v1 不做 continuable 编辑子 Agent（`startContinuable`/`sendMessage` 留作后续"审稿人"扩展）、不做自动修订 pass、不做向量检索。
-- 不依赖 ask-user 类工具推进剧情。
+### 7.1 可计算的字数契约
 
-## 17. 验收标准
+```ts
+type LengthBudget =
+  | { kind: 'unbounded' }
+  | {
+      kind: 'target'
+      targetCharacters: number
+      toleranceRatio: number
+      hardMaximumCharacters: number | null
+    }
+```
 
-1. kickoff 一条消息后全程零干预：大纲生成 → 逐章推进 → completed，无任何"等待继续"停顿；期间模型不向用户提问。
-2. 运行中发送新要求：当前单元完成后被吸收——requirements 台账入账、大纲修订落 revisionLog、后续章节按新方向推进、已写正文未被改写。
-3. 宿主重启后 active 运行自动恢复推进；driver 崩溃不产生重复正文（幂等投影验证）。
-4. 取消/连续失败/停滞任一停止条件触发后 driver 不再排队，面板 surfaced 原因；恢复需显式操作。
-5. 全程只有原生 AgentLoop 事件；`src/agent-novel/` 通过三禁 gates。
-6. 缺 followup seam 的宿主上拒绝创建 agent-novel 会话并给出可解释原因，不静默降级。
-7. outline 与 chapters/*.md 可完整导出；brief/plugin 消息不出现在正文中。
+目标字数必须为正整数，浮动比例范围为 `[0, 1)`，硬上限不得低于目标。章节数、单元输出上限和运行预算也必须通过运行时校验；明显不可兼容的配置拒绝创建，而不是静默钳制。
 
-## 18. 与现有代码的对应关系
+首版正文提交采用纯文本段落，章节标题独立存储，Markdown 只用于导出。计数口径为正文按 Unicode code point 统计字母与数字，忽略空白、标点和排版符号；中文汉字计入，英文按字母而非单词计入。计数策略以 `countPolicyVersion` 固定在项目中，UI 明确称为“正文有效字符”，不以 UTF-16 长度或 token 数代替。
 
-| 模块 | 变更 |
+不限定篇幅仍需要有限运行预算，不等于无限运行。
+
+### 7.2 分配与收尾
+
+- 初始大纲为章节分配字数，预留结局预算；比例是保存的显式配置，不散落为魔法常量。
+- 每次提交后重新计算实际字数、剩余预算、未完成主线、必须回收伏笔和结局所需容量，调整尚未提交部分的预算。
+- 单元 brief 带本单元目标范围、全书剩余范围及当前叙事阶段，接近目标时减少新支线并优先收束。
+- 软目标允许自然收尾，不通过截断句子、删除段落或机械补字达标；超出浮动范围且计划无法自然调整时暂停并展示差额。
+- 硬上限在正文提交前由程序检查，超限返回 `NovelLengthLimitError`，保留现有作品，不裁切候选正文；有限纠正后仍无法满足则暂停。
+- 用户增加情节或修改篇幅时，先评估剩余预算；无法兼顾时记录冲突，不能默默扩大目标。
+
+### 7.3 完成不是模型自报
+
+仅当所有章节完成、结局正文已提交、必须回收的伏笔已有来源、没有未处理指令、没有在途单元、字数符合约束时，程序才允许 `completed`。
+
+场景因果、文风、人物弧线等语义质量由作者在提交前检查，完成工具要求给出依据，但程序只验证引用和结构，不宣称能机械证明文学质量。字数不足不能靠更新记忆“刷进度”，模型宣布“全文完”也不能绕过完成守卫。
+
+## 8. 推演、写作和记忆
+
+### 8.1 场景工作流
+
+认领单元后，读取当前细纲、有效要求、人物状态、相关世界书、近期正文与未解决伏笔；补齐必要资料，形成因果明确的场景，再写作和提交。
+
+普通过渡场景直接写作，重大抉择、冲突或复杂局势使用既有 `tavern_deduce` 推演核心。沿用现有角色数和轮数边界，并计入总预算，不另造多 Agent 编排系统。
+
+子 Agent 只收到明确的角色知识和场景简报，无工具写权限，不直接写大纲、记忆或正文。推演结果必须标记为候选，主 Agent 选择和叙事后才可提交。现有推演核心支持部分角色失败，小说工具包装层必须显式展示 `failures`；首版所请求角色有失败则该次推演不作为完整成功返回，有限重试后暂停，不能静默退化为缺角推演。
+
+### 8.2 正典与检索索引
+
+正文提交同时包含有正文段落来源的事件摘要、人物状态变化、关系变化、伏笔变化和精确变量变化。未发生的推测不能写入这些字段，来源引用必须落在本次或此前已提交正文中。
+
+小说正典及精确变量以提交记录为权威来源，现有 MemoryStore 只作为可重建检索索引，不让通用 `memory_write`、`variable_set` 在正文提交前独立改变正典。同一提交重建索引使用稳定 ID，不能重复新增记忆。
+
+小说作用域映射为命名空间化的 `chat` ID，例如 `novel:<novelId>`，避免与普通聊天碰撞。角色、agent、global 作用域的旧记忆不隐式引入小说；首版仅共享所选静态角色资料，不共享其他故事的动态经历。
+
+### 8.3 上下文与压缩
+
+固定前缀放作者协议、资料信任边界和稳定文风，变化尾部放单元信息、大纲版本、要求摘要、接续锚点和剩余预算；不为缓存命中而保留过期指令。
+
+每次可见上下文保留全部有效硬约束及待处理指令，按预算加入相关设定、近期正文、事实摘要和伏笔；完整大纲、作者原话及历史正文可通过有界分页检索读取。必要约束无法容纳时明确暂停或要求整理，不静默丢弃。
+
+沿用宿主上下文和 compaction 机制，小说 checkpoint 包含来源版本、章节进度、人物状态、当前指令水位、关键事实、伏笔与文风。摘要是投影而非唯一记忆；压缩后必须能检索完整正文和指令。UI 中“保持全文存档”不能被描述成“模型始终看到全文”。
+
+## 9. 作者指令、冲突与并发
+
+### 9.1 接收和台账
+
+首条要求和后续每条真实用户消息均由接收适配器登记，不委托模型补写。字段至少包括稳定指令 ID、宿主消息 ID、单调 `sequence`、原文、接收时间、接收时单元、处理状态、生效版本及位置。
+
+状态为 `pending -> applied | superseded | blocked`；被取代的指令保留原文和明确的替代指令 ID。已应用指令的有效性与处理水位分别保存，不能因为一条指令已应用就从持续约束中消失。
+
+被阻塞指令只有在用户澄清或明确撤回之后，才可通过后续修订转为 `applied` 或 `superseded`，必须引用澄清/撤回消息并保留原冲突记录。处理水位只越过已应用或已取代的连续前缀，不把 blocked 当成处理成功。
+
+接收必须在消息对作者 Agent 可见及下一单元可认领之前持久化，UI 只有拿到持久化回执才显示“已接收”。宿主接收和 NovelStore 并非跨系统原子事务，需用稳定消息 ID、持久接收游标及恢复补登记弥合；实现依赖第 16 节验证的入口屏障。
+
+若原生 composer 无法提供上述屏障和接收顺序，不得把异步 `session/event` 监听当成等价保证；先明确补齐宿主集成契约，不静默更换语义或发布“支持实时干预”的能力声明。
+
+### 9.2 当前单元与下一单元
+
+默认规则是“已认领单元可以结束，尚未认领单元必须让路”：
+
+| 指令到达时机 | 行为 |
 |---|---|
-| `packages/plugin/src/index.ts` | 桥接命令 novel-* action、capability 探测、driver 重臂、compaction 分支接入 |
-| `packages/plugin/src/agent-novel/`（新） | `agent.ts`（preset 模块：kernel + 工具注册）、`driver.ts`、`outline.ts`（brief/协议纯函数）、`projector.ts` |
-| `packages/plugin/src/agent-tavern/agent.ts` | `bindingFor` 扩展接受 agent-novel；工具集复用导出 |
-| `packages/tavern-store` | `NovelStore`（`novel.ts`）：outline/run/chapters，CAS + 审计 |
-| `packages/plugin/agent-presets/agent-novel/`（新） | `preset.yml` + `agent.cordis.yml` |
-| `packages/plugin/client/main.js` | 新建小说表单、面板列表/Pause/Resume/导出、会话头徽章 |
-| `packages/plugin/scripts/gates/run.mjs` | isolation 三禁覆盖 `src/agent-novel/`；新 preset 工件漂移检查 |
-| 测试 | `agent-novel-{driver,outline,projector}.spec.ts`；mutating 用例按共享状态纪律放最后 |
+| 未调度单元 | 先处理指令，禁止按旧大纲调度 |
+| 已排 brief、未认领 | 旧任务失效；认领守卫拒绝生成正文，转入指令处理 |
+| 单元已认领 | 允许该单元按认领版本提交；UI 标记新要求在其后生效 |
+| 正文提交后、下一调度前 | 先处理指令，禁止继续旧方向 |
+| 多条指令连续到达 | 按接收序号处理；可一次修订覆盖连续前缀，必须逐条记录结果 |
+| 暂停期间 | 只登记，用户明确恢复后先处理指令；等待批准使用“更新大纲”操作 |
+| 完结之后 | 明确返回作品已完结，不接收新的创作指令；首版需另建小说，不重开原作 |
+
+写作认领保存 `outlineRevision`、`appliedRequirementSequence`、执行代次和所属宿主 turn。指令到达后全局存储版本可以变化，但不能因此错误否决一个按照上述规则仍被允许完成的单元。
+
+相反，大纲修订只能在无已认领写作单元时提交；修订期间新到达的指令保留为 pending，不得被修订回执顺便清空。新单元认领要求所有已持久接收指令均已处理且不存在 blocked 指令。
+
+### 9.3 修订协议
+
+作者读取待处理连续指令、大纲和已提交事实，提交修订方案：每条指令的处理结果、设定变化、受影响章节、篇幅重分配、变更理由和生效位置。程序验证不可变正文、稳定身份、引用、预算及处理水位，随后原子更新大纲和指令结果。
+
+旧 brief 的版本、指令水位或执行代次不匹配时，不得凭自然语言提示继续写作。过期任务只能读取当前状态并结束或进入经过校验的规划工作，不能认领旧单元。
+
+### 9.4 冲突与取消
+
+“让配角提前背叛”可以通过修订未来动机和事件实现；“让已经死亡的人从未死亡”直接改变既成事实，必须标记 `blocked`，给出对应正文来源和冲突原因，不擅自解释成复活或梦境。
+
+首版允许用户澄清为后续剧情安排；追溯改写、分叉和重写已有正文不在首版范围，不能给出不可执行的按钮。正常创作不提问，重大冲突通过暂停状态请求用户决策，不注册常规 ask-user 工具。
+
+用户提交澄清后仍保持暂停，点击恢复才授权规划工作；此时允许进入 `revising` 处理 blocked 指令，但正文认领仍被阻止。冲突全部解除才进入写作，仍不兼容则再次暂停；普通恢复操作不能直接把 blocked 清为成功。
+
+“暂停”禁止认领新单元，当前已认领单元可以完成；“立即停止”请求宿主取消并撤销当前执行令牌。取消先于提交生效则拒绝该提交，提交先于取消完成则保留已提交正文，界面明确两者顺序。
+
+自由文本“停止”按作者消息接收，不能承诺即时取消；即时控制使用明确按钮或控制命令。即使队列里还有用户消息，明确取消也不能被调度器自行当作恢复授权。
+
+## 10. 持久化与原子提交
+
+### 10.1 文件布局和单一提交点
+
+首版沿用 Node 文件存储，不引入数据库或通用事件总线。避免把 outline、run、正文分别写入三个可变文件然后声称整体原子：
+
+```text
+$DSH_HOME/tavern/novels/<novelId>/
+  HEAD.json
+  revisions/<revisionId>.json
+  assets/<contentHash>.json
+  bodies/<contentHash>.txt
+  projections/chapters/<chapterId>.md
+  projections/status.json
+```
+
+- `HEAD.json` 是唯一权威提交点，指向一份不可变修订快照；快照保存项目配置、资产引用、大纲、指令台账、运行状态、单元及正文提交索引。
+- 每份修订保存父版本、schema 版本、动作原因及审计信息。正文和资产存不可变内容文件，快照只引用其哈希，避免每次写进度复制全文。
+- 一个成功提交的正文记录至少含 `commitId`、`unitId`、`chapterId`、执行代次、正文哈希及长度、有效字符数、正文段落来源、正典变化、计划版本和指令水位。
+- 章节 Markdown 及记忆索引是可重建投影，不能用章节文件是否存在判断正文是否成功提交。
+
+### 10.2 写入过程
+
+所有状态修改通过同一个按小说串行的存储写入口，入口内重新读取 HEAD 并检查前置条件：
+
+1. 验证请求结构、绑定权限、幂等键、动作允许的状态及相关领域版本。
+2. 写入正文或资产不可变对象，校验哈希和大小，同步文件后关闭句柄。
+3. 构造完整下一快照，包含该动作需要共同变化的字段；写入临时文件并同步后发布不可变修订。
+4. 在同一文件系统内用临时 HEAD 替换当前 HEAD，替换成功是逻辑提交点；成功回执只在该点后返回。
+5. 异步更新阅读及检索投影，记录投影版本；失败报告 `projection-pending`，不得重新生成正文补偿。
+
+进程内串行不能冒充跨进程 CAS。首版要求小说根目录单宿主写所有权；用独占所有权机制拒绝第二写者，不能只检查一次 PID 或靠内存 Map。进程重启后的陈旧所有权处理必须确认旧写者已退出，无法确认则暂停，不按超时自动抢锁。确认方式（2026-09-18 修订）：记录的 pid 已死、pid 已被非 dsh 宿主进程复用、或同 pid 但 bootId 不属于本进程任何存活模块，即证明旧写者不可能再写，自动接管所有权；pid 仍为存活的 dsh 宿主、或探查无法判定时保持拒绝。
+
+文件替换、进程崩溃和掉电的保证不同；N1 必须在实际 Windows 文件系统验证发布顺序和重启结果。未验证目录同步等掉电语义之前，只承诺已验证的进程崩溃恢复，不宣传任意断电下零丢失。网络共享目录和多宿主并发写不在首版支持范围。
+
+### 10.3 版本与幂等
+
+- 全局快照 `revision` 用于串行化和审计；`outlineRevision` 用于计划并发校验；指令水位用于控制是否有新要求；执行代次用于撤销旧尝试，四者不可混为一个值。
+- 普通 API 修改使用预期版本并在冲突时返回具体错误；接收指令和运行状态更新在锁内基于最新快照合并，不覆盖并发登记。
+- 同一 `unitId`、同一已提交业务内容重试，返回原提交回执；不同内容重用同一单元 ID 返回 `NovelDuplicateCommitError`，不能再次追加。
+- 先校验调用者项目权限，再查已提交回执，最后对尚未提交的单元检查当前执行令牌；否则一次成功提交后的重试会因令牌已消费被误判失败。业务内容哈希包含正文、章节、场景完成声明和正典变化，不包含重试时间、请求 ID 或执行尝试编号。
+- 正文提交检查调用方实际所属宿主 turn、当前执行令牌和认领版本，不能相信模型自报的身份或来源。
+- 返回提交成功后，模型未收到工具结果或 turn 随即出错，正文仍已提交；恢复通过提交记录处理，不能把“没有最终回复”当成未完成。
+- HEAD 发布前的文件是未引用对象，不自动接纳为正文；首版保留以便诊断，后续清理需独立、显式且可验证。
+- HEAD 或其引用损坏时抛 `NovelStorageCorruptionError` 并停止，不静默退回上一版本、丢弃指令或从聊天文本猜正文。
+
+快照随指令和提交数量增长，首版通过明确项目规模及运行预算控制，不预先建设分片或数据库。达到已声明存储上限时暂停并解释，不自动删审计。
+
+### 10.4 关键操作的输入与回执
+
+服务端从执行上下文补齐真实 session/turn 身份，不把这些字段交给模型自由填写。下表中的列表允许显式空值，字段本身不能省略；未命中查询使用带状态的结果，不伪造空实体。
+
+| 操作 | 必需业务输入 | 成功回执 |
+|---|---|---|
+| 接收指令 | 稳定消息 ID、原文、来源类型 | 指令 ID、sequence、接收时单元和持久版本 |
+| 修订大纲 | 预期大纲版本、修订原因、明确处理的指令 ID/序号及结果、结构化计划变更 | 新大纲版本、已处理水位、生效位置 |
+| 认领单元 | 工作意图 ID、单元 ID、预期大纲版本、预期指令水位 | 执行令牌、场景目标、正文锚点和预算 |
+| 提交正文 | 单元 ID、执行令牌、纯文本段落、场景完成声明、正典变化及段落引用 | commitId、正文哈希、字数增量、累计字数和持久版本 |
+| 完成章节 | 章节 ID、预期内容版本、完成依据及未决项 | 章节完成记录和持久版本 |
+| 完成作品 | 预期内容/大纲版本、结局提交引用、完成检查依据 | completed 记录、最终字数和导出快照版本 |
+
+正文段落引用采用 `commitId + paragraphIndex`；新提交内部用当前段落索引，服务端在提交时补齐 commitId。段落数组到正文文件的序列化必须固定，提交后不得通过空白重排改变来源坐标。
+
+## 11. 工具与作者协议
+
+工具保持单一用途，所有参数显式传入；对外部数据进行运行时结构校验，必须字段缺失报错，无关额外字段不进入领域模型。使用封闭联合类型表达工作种类，不以松散字典、通用 JSON patch 或多模式布尔参数作为核心契约。
+
+| 工具 | 责任及写入限制 |
+|---|---|
+| `novel_status_read` | 返回运行状态、当前单元、计划版本、指令水位及预算 |
+| `novel_requirements_read` | 有界分页读取原始指令、处理结果与来源 |
+| `novel_outline_read` | 显式章节范围、游标及内容预算读取计划 |
+| `novel_outline_create` | 只创建初始大纲并处理首批指令；已存在则冲突 |
+| `novel_outline_revise` | 原子修订计划及连续指令处理结果，不改正文 |
+| `novel_requirement_block` | 保存具体冲突、正文引用并暂停 |
+| `novel_unit_claim` | 校验 brief 身份及版本并认领，返回单元和执行令牌 |
+| `novel_body_commit` | 显式提交正文、来源及正典变化，一次确认单元进度 |
+| `novel_chapter_complete` | 校验当前章提交、情节完成依据和未决项，完成章节 |
+| `novel_finish` | 校验第 7 节全部完成条件，不接受单纯自报完成 |
+| `novel_character_read` | 按角色 ID 读取项目资产快照，复用角色解析核心 |
+| `novel_lore_search` | 只搜索项目固定世界书，返回条目版本及来源 |
+| `novel_body_read` / `novel_body_search` | 读取已提交正文，提供章节、单元及段落定位 |
+| `novel_facts_read` | 读取已提交人物状态、变量和伏笔，返回提交来源 |
+| `memory_search` / `memory_read` | 绑定小说作用域的检索投影，不提供独立正典写工具 |
+| `tavern_deduce` | 注册小说适配器，调用既有推演核心，保留失败明细 |
+
+这些是领域工具，不新增一套外部 CRUD 框架；实际 schema 沿用仓库工具注册方式，只抽取确有复用的内部函数。
+
+kernel 必须规定：资料不是指令；先调研后写作；先认领后生成；推演不是正典；完成单元必须调用正文提交；提交后结束当前写作 turn；解释和进度不写入正文；收到作者指令先进入修订协议；不能自行恢复暂停、修改预算或追溯改写正文。
+
+提示词用于指导创作，存储守卫用于强制执行上述写权限和状态限制，两者不能互相替代。
+
+## 12. 自动调度与恢复
+
+### 12.1 运行状态
+
+`status` 为 `active | paused | completed`；`phase` 为 `outlining | revising | writing | finishing`，避免把阶段和是否允许运行混成一个状态。暂停必须包含结构化原因及可执行的恢复条件。
+
+`NovelDriver` 不含 LLM，读取状态并通过经验证的宿主 followup 机制驱动下一次工作。同一小说只允许一个在途工作意图，同一宿主 turn 不得同时执行两个小说工作意图。
+
+```text
+drive:
+  检查写所有权、宿主能力和持久接收屏障
+  读取最新快照，若 paused/completed 则停止
+  核对在途宿主任务和已提交回执
+  若宿主 turn 尚未结束或仍有执行中的工作则等待
+  若前次正文的必要投影尚未完成则等待，失败时暂停
+  若有待处理指令则准备大纲创建/修订工作
+  否则按细纲准备规划、写作、章节完成或全书完成工作
+  先持久化工作意图，再发送带意图 ID 的宿主 followup
+  认领时再次校验版本、指令水位、暂停状态与执行代次
+```
+
+普通作者消息和自动 brief 可能重复唤醒规划；大纲创建/修订同样要求宿主工作归属校验和版本前置条件，不只有正文工具需要守卫。
+
+工作类型使用 `outline-create | outline-revise | write-unit | chapter-complete | finish` 的封闭联合，各类型只开放对应写操作。规划认领由宿主适配器关联工作意图，正文使用显式 `novel_unit_claim`；不能只凭模型在提示词里读到了某个意图 ID 就授予权限。
+
+### 12.2 不承诺调度恰好一次
+
+持久化意图和调用宿主不是一个事务，崩溃可能造成重复 brief。设计接受至少一次唤醒，靠认领、提交去重和执行代次保证每个单元最多一次正文提交。
+
+重复 brief 在宿主开始模型请求前应尽可能被识别并消费；即使宿主无法避免一次额外请求，也不得绕过认领生成新的持久正文。具体可避免多少重复模型成本必须由 N0 实测，不以“正文幂等”宣称请求零重复。
+
+### 12.3 重启顺序
+
+1. 获取唯一写所有权，验证 HEAD、schema、资产和正文引用。
+2. 等待绑定宿主会话恢复，按稳定消息 ID 补登记接收记录，完成接收屏障。
+3. 对照宿主在途任务、小说单元和提交回执；已提交单元不重写，paused/completed 项目不自动唤醒。
+4. 确认旧执行已终止后才撤销其令牌；未提交单元使用新的执行代次重试，原尝试保留诊断。
+5. 重建过期阅读/记忆投影，报告恢复结果，再为 active 项目安排下一工作。
+
+无法证明宿主旧任务已结束、消息接收完整或绑定匹配时，进入 `paused(recovery-required)`，不能猜测并重发。自动恢复只适用于已验证的可恢复状态，错误和取消不被重启静默清除。
+
+## 13. 停止、预算与错误处理
+
+| 条件 | 行为 |
+|---|---|
+| 完成条件全部成立 | 原子转入 completed，不再排队 |
+| 请求暂停 | 撤销未认领意图；允许现有单元完成后保持 paused |
+| 请求立即停止/宿主取消 | 撤销在途执行令牌，保持 paused，即使有新指令也不自启 |
+| 等待大纲批准 | 保存版本，paused(awaiting-approval) |
+| 与已写事实冲突 | paused(requirement-conflict)，列出指令和正文位置 |
+| 可重试外部错误 | 有界重试并发出结构化警告，耗尽后抛最后一个错误并暂停 |
+| 验证、权限、存储损坏错误 | 立即停止对应动作并明确报错，不盲目重试 |
+| 无实际进展超过阈值 | paused(stalled)，给出最近工作和无进展原因 |
+| 轮数、时限、用量或篇幅预算达到边界 | paused(budget)，修改预算或恢复需明确用户操作 |
+| 投影失败 | 标记 projection-pending 并暂停下一单元，修复时只重放投影 |
+
+进展按阶段定义：outlining 需要有效大纲创建，revising 需要推进待处理指令水位，writing 需要新增正文提交或真实完成一章，finishing 需要减少实际未决项或完成作品。仅修改大纲措辞、反复检索、写审计或刷新记忆不能重置写作停滞计数；另设总轮数上限防止在多个阶段之间来回消耗。
+
+运行配置必须显式保存最大轮数、最大时长、连续失败和停滞阈值、外部重试策略及推演预算。模型用量包含子 Agent；若宿主不能提供所选硬 token/费用限制所需的可靠统计或调用上限，则拒绝启用该硬限制并展示能力原因，不用估算冒充保证。时间限制也需区分“停止新调度”与可取消的在途请求。
+
+模型请求重试优先由宿主统一负责，driver 不能在宿主仍重试时叠加重发整个单元。计数区分模型请求尝试、宿主 turn 和写作单元；恢复不会重置累计额度，增加额度必须显式保存为用户控制变更。大纲版本冲突和合法过期任务作为协调结果处理，不算外部服务失败，也不能无界重试。
+
+错误类型至少包含 `NovelRevisionConflictError`、`NovelStaleUnitError`、`NovelRequirementConflictError`、`NovelDuplicateCommitError`、`NovelLengthLimitError`、`NovelOwnershipError`、`NovelCapabilityError`、`NovelStorageCorruptionError`。每项给出具体原因、相关 ID、预期与实际版本、恢复动作；外部调用错误保留状态码及经脱敏的响应正文，不泄露凭证。
+
+日志使用独立结构化字段：`novelId`、`sessionId`、`unitId`、`attemptId`、`requirementId`、`revision`、`operation`、`errorCode`，不把所有信息拼进动态消息字符串。
+
+## 14. 阅读投影、导出与界面
+
+### 14.1 正文投影
+
+投影器按提交索引中的章节及单元顺序拼接正文，输出路径由程序基于稳定 ID 生成，不接受模型提供任意文件路径或 slug。标题修改不改变章节身份。
+
+每次投影绑定确定快照版本，以完整章节临时文件替换目标文件；不能反复追加文本后单独更新游标。投影重放必须生成相同正文，候选推演、作者消息、brief、错误和 assistant 解释永远不进入正文。
+
+投影另记录 `contentRevision`，只有正文、章节展示信息或正典变化才使其失效；登记指令、认领和更新运行状态不要求重写全部正文。driver 等待的是必要内容版本，不是持续变化的最新全局 HEAD，避免投影与调度互相触发。
+
+前端正文成功状态以提交回执为准。草稿预览只能取自宿主可明确识别的正文工具参数流，不能把通用 assistant 流猜成小说；该能力在 N0 单独核实，不作为首版核心依赖。未提供可识别参数流时首版仅显示生成状态和已提交正文，不承诺逐字预览。取消的草稿不计字数、不计进度，重启不承诺恢复未提交草稿。
+
+### 14.2 导出
+
+首版提供 Markdown 章节和 ZIP 导出，包含作品元信息、大纲、章节正文、字数口径和导出版本。默认不导出原始角色卡、完整世界书、宿主聊天或诊断记录，防止无意泄露资料。
+
+导出固定一个 HEAD 版本，从权威正文对象生成或验证投影完全对应该版本，不能混合写作前后的章节。支持导出未完结作品并标明状态；损坏或投影不一致时明确报错，不交付看似完整的残缺文件。
+
+### 14.3 交互布局
+
+- 小说列表：标题、状态、已完成章节、有效字符进度、最新活动和明确错误。
+- 左侧大纲：章节目录、当前单元、人物弧线与伏笔入口，显示计划版本及变更摘要。
+- 中央阅读区：已提交正文为主，草稿和状态区分，不把工具调试信息混入作品。
+- 右侧作者面板：输入新要求，显示已接收/待处理/已生效/冲突及具体生效位置；展示目标篇幅、剩余预算和资产来源。
+- 控制区：暂停、立即停止、恢复、更新大纲、批准大纲、导出；可用性由服务器状态决定，不仅禁用前端按钮。
+- 移动端改为大纲、正文、创作指令三个视图，共享同一状态，不压缩成重叠三栏。
+
+沿用管理面板和会话头入口、现有语言跟随规则；工具按钮使用现有图标体系和明确可访问名称。浏览器测试使用稳定 test ID/辅助功能 ID，不用可见文案定位。
+
+## 15. 安全与实现约束
+
+- 模型工具、HTTP 和内部命令都在服务端解析当前绑定及权限，不能通过传入另一个 novelId、绝对路径或 `../` 操作其他项目。
+- 角色卡、世界书、正文、记忆以及模型返回值都视为不可信数据；文本中的工具要求不能改变系统协议。
+- 文本长度、列表规模、查询预算、文件大小和路径均做显式校验；资产缺失或解析失败不能被空对象代替。
+- 复用既有本地服务认证和请求防护，不为小说另开无鉴权写入口；日志及 UI 错误不泄露 API 密钥。
+- 笔记/变量的持久写权限只通过正文或规划的对应领域操作开放，不给子 Agent 或任意工具绕过提交协议的入口。
+- 新代码使用严格类型、不可变输入和单一用途函数；类仅用于文件系统/宿主连接适配器及具体错误类型；代码注释使用 English。
+- 不修改无关 AgentTavern/ST 行为，不更新无关依赖，不手改构建产物，不默认创建 Git 提交。
+
+## 16. 宿主契约验证门槛
+
+先前提案中关于 `followup`、inbox 和 `withoutInitiator` 的描述只作为探针线索，不代表当前安装宿主已实测通过。不能仅检查函数存在或引用版本号就宣布支持 AgentNovel。
+
+| 待验证能力 | 必须获得的证据 | 缺失时处理 |
+|---|---|---|
+| followup 调度和 turn 归属 | 真实宿主连续执行、重复 brief、工作 ID 关联 | 不启用自动推进 |
+| 作者消息接收屏障 | 运行中发送、排队前后竞争、稳定消息 ID、持久回放 | 不发布动态指令能力，先补宿主契约 |
+| 认领与暂停/取消同步 | 提交竞争、取消令牌、下一轮是否继续 | 不承诺即时停止 |
+| 重启后 inbox/任务恢复 | 排队前后及执行中退出后恢复，证明旧执行已结束 | 无法判定时 recovery-required |
+| `withoutInitiator` 和消息来源 | 实际来源字段与发起者传播结果 | 不依赖猜测隐藏自动消息 |
+| 工具权限及子 Agent 继承 | 小说 kernel、无阻塞工具、推演子 Agent 无写权限 | 拒绝不安全 preset |
+| 用量与子 Agent 统计 | 主/子请求统计、重试计入及限制时机 | 不提供无法保证的硬额度 |
+| 宿主持久化完整性 | 真实 SessionStore 与 inspect/restore 通过 | 不以事件形状单测代替恢复验证 |
+
+能力结果进入 bootstrap 的 `agentNovel` 报告，区分核心创建能力和明确可选的额度功能，给出每项失败原因。核心契约不满足就拒绝创建自动小说，不静默降级成手动聊天。
+
+首版不使用 steer 强改正在生成的正文，不用 turn-stopping veto 延长单 turn，不修改宿主事件序号或伪造 assistant/turn 事件。
+
+## 17. 实施里程碑与代码落点
+
+| 阶段 | 交付 | 退出条件 |
+|---|---|---|
+| N0 宿主验证 | 最小真实宿主探针、能力报告、接收/取消/恢复时序证据 | 第 16 节核心契约可证明；不支持项明确阻断 |
+| N1 最小持久闭环 | 多资产快照、NovelStore、正文提交、初始大纲工具和独立 preset | 一章保存、重读、重复提交和进程中断恢复通过 |
+| N2 自动创作 | driver、滚动细纲、篇幅分配、推演、预算及完成守卫 | 一条要求自动完成短篇，不无限等待“继续” |
+| N3 作者干预 | 台账、接收屏障、版本失效、连续指令修订、冲突和取消 | 并发到达不丢要求、不写重复正文、不越过暂停 |
+| N4 使用闭环 | 阅读面板、投影、导出、压缩恢复和端到端验证 | 用户完整创作、调整方向、恢复及导出可复现 |
+
+N1 的手动调用仅是内部验证步骤，不是核心能力缺失时交付给用户的降级产品。N2 在 N3 前只用于受控验证，不宣称已支持中途调整。
+
+| 文件/目录 | 拟议变更 |
+|---|---|
+| `packages/tavern-store/src/novel.ts` | 文件存储适配器、所有权和原子提交入口 |
+| `packages/tavern-store/src/novel-model.ts` | 严格领域类型、状态迁移、预算和校验纯函数 |
+| `packages/tavern-store/src/store.ts`、`index.ts` | 架构联合类型、独立小说绑定和导出 |
+| `packages/plugin/src/agent-novel/agent.ts` | 作者 kernel、工具注册和作用域权限 |
+| `packages/plugin/src/agent-novel/driver.ts` | 持久工作意图、宿主调度、认领/恢复协调 |
+| `packages/plugin/src/agent-novel/requirements.ts` | 指令接收去重、连续水位及生效规则 |
+| `packages/plugin/src/agent-novel/outline.ts` | 大纲及 brief 纯函数 |
+| `packages/plugin/src/agent-novel/projector.ts` | 正文、记忆索引和导出的一致版本投影 |
+| `packages/plugin/src/agent-tavern/agent.ts`、`tavern-assets.ts` | 最小抽取可共用资料逻辑，保留 RP 工具行为 |
+| `packages/plugin/src/index.ts` | 内部命令、HTTP 接入、能力报告及生命周期挂载 |
+| `packages/plugin/agent-presets/agent-novel/` | `preset.yml` 与 `agent.cordis.yml` |
+| `packages/plugin/package.json`、`scripts/build-plugin.mjs` | 新 preset 模块导出、打包工件和分发验证 |
+| `packages/plugin/client/main.js` | 小说入口、阅读区、指令与控制界面 |
+| `packages/plugin/scripts/gates/run.mjs` | 原生执行隔离和新工件检查 |
+
+文件名是职责落点，不要求提前创建空模块。小型纯函数保持内聚，实际规模需要时再拆分；不为本提案建立通用工作流引擎、插件 registry 或第二套 preset 系统。
+
+## 18. 验证与验收
+
+优先真实文件系统、真实宿主、集成和端到端验证；仅对计数、版本判断等确定性纯函数补最小测试，不用大规模伪造宿主代替契约验证。
+
+| 场景 | 可观察验收 |
+|---|---|
+| 一次启动 | 资料读取、大纲落盘、正文提交有明确先后；正常短篇自动 completed |
+| 手动批准 | 批准前无正文；暂停时可显式更新大纲，旧批准被拒绝 |
+| 多角色与资产版本 | 角色可区分；源卡/世界书修改或删除不改变项目快照 |
+| 篇幅控制 | 程序计数一致、目标范围内自然结尾、硬上限不截断或越界 |
+| 作者干预 | 排队前、认领前、生成中、提交后分别注入要求，生效边界符合第 9 节 |
+| 连续作者要求 | 每条原文和结果可追踪，后续要求不被旧修订清账 |
+| 既成事实冲突 | 明确暂停并指向正文；澄清加恢复可解除冲突，不改历史 |
+| 重复提交 | 同内容返回原回执，异内容冲突，正文和字数均不重复 |
+| 崩溃窗口 | 对象写后、修订写后、HEAD 替换后、回执前退出，恢复均只看到完整旧/新状态 |
+| 调度竞争 | 意图写后发送前、发送后确认前退出，重复唤醒不产生重复单元正文 |
+| 暂停和立即停止 | 暂停允许已认领单元结束；停止撤销令牌；重启不自动越过 paused |
+| 投影故障 | 权威正文完好，错误可见，只重建投影，不重新调用模型写同一段 |
+| 压缩恢复 | 人物、伏笔和要求可检索，恢复后不把推演当已发生事件 |
+| 完成竞争 | 完成前已接收要求阻止完成；完成后新要求明确拒绝，不丢入无处理路径的队列 |
+| 导出一致性 | 创作期间导出固定快照，不含提示、推演、错误或原始私有资产 |
+| 故障和预算 | 有限重试、有警告、明确最后错误；无进展不会被记忆写入掩盖 |
+| 宿主隔离 | 无插件 `llm.stream`、`runGeneration`、ST prompt pipeline 调用 |
+| UI | 桌面/移动端可阅读、操作不重叠、稳定 ID 测试通过，刷新后指令状态一致 |
+
+故障注入使用真实临时目录和受控子进程退出，不破坏用户小说存档。宿主恢复验证构建真实 `SessionStore`，运行 `JsonlSessionPersistence.inspect()` 或宿主支持的等价恢复路径，不能只检查事件字段。
+
+代码实施后运行仓库 `pnpm check`，其当前定义包含 TypeScript、Vitest、插件构建和 gates；再启动真实宿主验证 listener、HTTP、浏览器完整流程，并记录真实模型用量。构建通过不等于 Web 已运行，未完成的宿主或 UI 验证必须明确标注。
+
+文学质量另用小规模真实作品检查人物一致性、因果承接、伏笔回收、文风和结尾；结构校验不能代替阅读评估，也不以一次好结果保证所有生成质量。
+
+## 19. 首版范围
+
+首版交付：独立小说、多角色/世界书、可选篇幅、先存大纲、自动分单元推进、必要的多角色推演、作者中途调整、可靠正文提交、暂停恢复、阅读和 Markdown/ZIP 导出。
+
+不做：追溯改写已提交正文、多分支时间线、RP 历史迁移、运行中资产版本合并、自动全文重写、独立审稿 Agent、向量数据库、多人协作写作、远程多写者、任意网络文件系统、复杂排版出版或新建 LLM 执行循环。
+
+后续扩展必须继续遵守稳定单元身份、明确事实来源及原子提交，不通过增加提示词掩盖一致性问题。本文在实施时更新为实际契约，不另建重复的 AgentNovel 架构说明或变更流水账。

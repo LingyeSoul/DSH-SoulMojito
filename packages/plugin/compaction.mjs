@@ -2351,6 +2351,15 @@ var TavernStore = class _TavernStore {
 function normalizeTavernSessionBinding(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
   const candidate = value;
+  if (candidate.architecture === "agent-novel") {
+    if (typeof candidate.novelId !== "string" || candidate.novelId.trim() === "") return void 0;
+    return {
+      character: typeof candidate.character === "string" ? candidate.character : "",
+      chatId: typeof candidate.chatId === "string" ? candidate.chatId : "",
+      architecture: "agent-novel",
+      novelId: candidate.novelId
+    };
+  }
   if (typeof candidate.character !== "string" || candidate.character.trim() === "") return void 0;
   if (typeof candidate.chatId !== "string" || candidate.chatId.trim() === "") return void 0;
   const base = {
@@ -2410,6 +2419,10 @@ var MAX_CONTENT = 64 * 1024;
 // packages/tavern-store/src/variable.ts
 var MAX_VALUE_BYTES = 32 * 1024;
 var MAX_SCOPE_BYTES = 256 * 1024;
+
+// packages/tavern-store/src/novel.ts
+import { createHash as createHash2, randomBytes } from "node:crypto";
+var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("hex");
 
 // packages/plugin/src/compaction/shared.ts
 var SUMMARY_OPEN_TAG = "<compacted-summary>";

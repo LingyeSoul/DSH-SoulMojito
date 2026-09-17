@@ -2337,6 +2337,15 @@ var TavernStore = class _TavernStore {
 function normalizeTavernSessionBinding(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
   const candidate = value;
+  if (candidate.architecture === "agent-novel") {
+    if (typeof candidate.novelId !== "string" || candidate.novelId.trim() === "") return void 0;
+    return {
+      character: typeof candidate.character === "string" ? candidate.character : "",
+      chatId: typeof candidate.chatId === "string" ? candidate.chatId : "",
+      architecture: "agent-novel",
+      novelId: candidate.novelId
+    };
+  }
   if (typeof candidate.character !== "string" || candidate.character.trim() === "") return void 0;
   if (typeof candidate.chatId !== "string" || candidate.chatId.trim() === "") return void 0;
   const base = {
@@ -2864,6 +2873,10 @@ async function writeAtomic2(file, text) {
   await fs3.writeFile(tmp, text, "utf8");
   await fs3.rename(tmp, file);
 }
+
+// packages/tavern-store/src/novel.ts
+import { createHash as createHash4, randomBytes } from "node:crypto";
+var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("hex");
 
 // packages/tavern-lore/src/types.ts
 var WI_POSITION = {

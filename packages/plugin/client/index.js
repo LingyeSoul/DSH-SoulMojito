@@ -467,6 +467,129 @@ window.__ModuleLoader__.load({
       'error.activationFailed': 'Tavern activation failed.',
       'error.agentTavernUnavailable': 'AgentTavern is unavailable: {reason}',
       'error.hostCommandUnavailable': 'The Tavern host command is unavailable.',
+      // AgentNovel surface (proposal 0005). zh/en keys must stay mirrored with
+      // identical {param} placeholders; the client-vm-mount gate enforces it.
+      'panel.section.novels': 'Novels',
+      'view.architectureNovel': 'AgentNovel',
+      'novel.empty': 'No novels yet. Create one to start automatic writing.',
+      'novel.create': 'New novel',
+      'novel.creating': 'Creating…',
+      'novel.createUnavailable': 'AgentNovel is unavailable: {reason}',
+      'novel.open': 'Open novel session',
+      'novel.opening': 'Opening novel…',
+      'novel.openPanel': 'Open novel panel',
+      'novel.bindTimeout': 'The host did not confirm the novel session binding.',
+      'novel.conflict': 'The novel changed elsewhere; the latest state was reloaded.',
+      'novel.viewNotice': 'This is an AgentNovel session; the story is managed from the novels panel.',
+      'novel.status.active': 'Active',
+      'novel.status.paused': 'Paused',
+      'novel.status.completed': 'Completed',
+      'novel.phase.outlining': 'Outlining',
+      'novel.phase.revising': 'Revising outline',
+      'novel.phase.writing': 'Writing',
+      'novel.phase.finishing': 'Finishing',
+      'novel.pauseReason.awaiting-approval': 'Awaiting outline approval',
+      'novel.pauseReason.requirement-conflict': 'Requirement conflicts with committed text',
+      'novel.pauseReason.stalled': 'Stalled without progress',
+      'novel.pauseReason.budget': 'Run or length budget reached',
+      'novel.pauseReason.recovery-required': 'Recovery required',
+      'novel.pauseReason.projection-pending': 'Reading projection pending',
+      'novel.chapters': 'Chapters {completed}/{total}',
+      'novel.characters': '{effective} characters',
+      'novel.charactersTarget': '{effective} / {target} characters',
+      'novel.updatedAt': 'Updated {time}',
+      'novel.lastError': 'Last error: {message}',
+      'novel.pauseDetail': 'Pause detail: {detail}',
+      'novel.resumeHint': 'Resume hint: {hint}',
+      'novel.pause': 'Pause',
+      'novel.resume': 'Resume',
+      'novel.stop': 'Stop now',
+      'novel.stopConfirm': 'Stop "{name}" immediately? In-flight generation is cancelled and the novel stays paused.',
+      'novel.approveOutline': 'Approve outline',
+      'novel.updateOutline': 'Update outline',
+      'novel.outlineRevision': 'Outline revision',
+      'novel.approveHint': 'Approving revision {revision} begins the first writing unit.',
+      'novel.exportMd': 'Export Markdown',
+      'novel.exportZip': 'Export ZIP',
+      'novel.editTitle': 'Edit novel',
+      'novel.genre': 'Genre',
+      'novel.delete': 'Delete {name}',
+      'novel.deleteConfirm': 'Delete novel "{name}"? An active novel is paused first, its sessions are unbound, and all novel data is removed. This cannot be undone.',
+      'novel.refresh': 'Refresh',
+      'novel.back': 'Back to novels',
+      'novel.loadingDetail': 'Loading novel…',
+      'novel.chaptersTitle': 'Chapters',
+      'novel.chapterState.planned': 'Planned',
+      'novel.chapterState.writing': 'Writing',
+      'novel.chapterState.completed': 'Completed',
+      'novel.storyPremise': 'Premise',
+      'novel.storyTheme': 'Theme',
+      'novel.storyEnding': 'Ending direction',
+      'novel.foreshadowing': 'Foreshadowing',
+      'novel.foreshadowingRequired': 'Must resolve',
+      'novel.showOutline': 'View full outline',
+      'novel.outlineTitle': 'Full outline',
+      'novel.readerTitle': 'Committed text',
+      'novel.readerEmpty': 'No committed text yet.',
+      'novel.loadMore': 'Load more',
+      'novel.authorPanel': 'Author panel',
+      'novel.authorHint': 'Send new instructions as ordinary messages in the novel session. They are registered in the ledger and take effect through the outline revision protocol.',
+      'novel.authorOpenSession': 'Open session to write',
+      'novel.requirements': 'Instruction ledger',
+      'novel.requirementsEmpty': 'No instructions registered.',
+      'novel.req.status.pending': 'Pending',
+      'novel.req.status.applied': 'Applied',
+      'novel.req.status.superseded': 'Superseded',
+      'novel.req.status.blocked': 'Blocked',
+      'novel.req.effectiveAt': 'Effective: {location}',
+      'novel.req.blockedReason': 'Blocked: {reason}',
+      'novel.budgetTitle': 'Length and run budget',
+      'novel.lengthUnbounded': 'Length: unbounded',
+      'novel.lengthTarget': 'Target: {target} characters',
+      'novel.remainingCharacters': 'Remaining: {value} characters',
+      'novel.remainingUnbounded': 'Remaining: not limited',
+      'novel.runBudget': 'Turns {used}/{max} · Deduce {deduce}/{maxDeduce}',
+      'novel.assets': 'Asset sources',
+      'novel.assetsCharacters': 'Characters: {names}',
+      'novel.assetsWorlds': 'World books: {names}',
+      'novel.assetsNone': 'Original story without selected assets.',
+      'novel.form.title': 'Title',
+      'novel.form.requirement': 'Creative requirement',
+      'novel.form.requirementHint': 'Describe the story you want; this text becomes the first registered instruction.',
+      'novel.form.language': 'Language',
+      'novel.form.language.zh': 'Chinese',
+      'novel.form.language.en': 'English',
+      'novel.form.genre': 'Genre',
+      'novel.form.genrePlaceholder': 'e.g. sci-fi mystery',
+      'novel.form.perspective': 'Narrative perspective',
+      'novel.form.perspective.third': 'Third person',
+      'novel.form.perspective.first': 'First person',
+      'novel.form.perspective.second': 'Second person',
+      'novel.form.perspective.mixed': 'Mixed viewpoints',
+      'novel.form.styleNotes': 'Style notes',
+      'novel.form.length': 'Length budget',
+      'novel.form.length.unbounded': 'Unbounded',
+      'novel.form.length.target': 'Target length',
+      'novel.form.targetCharacters': 'Target characters',
+      'novel.form.toleranceRatio': 'Tolerance ratio [0,1)',
+      'novel.form.hardMaximum': 'Hard maximum (optional)',
+      'novel.form.maxChapters': 'Chapter limit (optional)',
+      'novel.form.approval': 'Outline approval',
+      'novel.form.approval.automatic': 'Automatic',
+      'novel.form.approval.manual': 'Manual',
+      'novel.form.characters': 'Character cards',
+      'novel.form.worlds': 'World books',
+      'novel.form.budgets': 'Run budgets',
+      'novel.form.maxTurns': 'Max turns',
+      'novel.form.maxDurationMs': 'Max duration (ms)',
+      'novel.form.stallThresholdTurns': 'Stall threshold (turns)',
+      'novel.form.consecutiveFailureLimit': 'Consecutive failure limit',
+      'novel.form.retryMaxAttempts': 'External retry attempts',
+      'novel.form.retryBackoffMs': 'External retry backoff (ms)',
+      'novel.form.maxDeduceRuns': 'Deduce run limit',
+      'novel.form.submit': 'Create novel',
+      'novel.form.missingRequired': 'Title and creative requirement are required.',
+      'novel.form.invalidNumbers': 'Check the numeric fields: target characters must be a positive integer, tolerance ratio within [0,1), and the hard maximum must not be below the target.',
     }
     const MESSAGES_ZH = {
       'settings.subtitle': '角色卡、世界书与预设管理',
@@ -715,6 +838,127 @@ window.__ModuleLoader__.load({
       'error.activationFailed': '酒馆激活失败。',
       'error.agentTavernUnavailable': 'AgentTavern 不可用：{reason}',
       'error.hostCommandUnavailable': '宿主的酒馆命令不可用。',
+      'panel.section.novels': '小说',
+      'view.architectureNovel': 'AgentNovel',
+      'novel.empty': '还没有小说，创建一部开始全自动创作。',
+      'novel.create': '新建小说',
+      'novel.creating': '创建中…',
+      'novel.createUnavailable': 'AgentNovel 不可用：{reason}',
+      'novel.open': '打开小说会话',
+      'novel.opening': '正在打开小说…',
+      'novel.openPanel': '打开小说面板',
+      'novel.bindTimeout': '宿主未确认小说会话绑定。',
+      'novel.conflict': '小说已在其他位置修改，已重新加载最新状态。',
+      'novel.viewNotice': '这是 AgentNovel 小说会话，请在小说面板中管理创作。',
+      'novel.status.active': '创作中',
+      'novel.status.paused': '已暂停',
+      'novel.status.completed': '已完成',
+      'novel.phase.outlining': '构思大纲',
+      'novel.phase.revising': '修订大纲',
+      'novel.phase.writing': '写作中',
+      'novel.phase.finishing': '收尾中',
+      'novel.pauseReason.awaiting-approval': '等待大纲批准',
+      'novel.pauseReason.requirement-conflict': '创作要求与已提交正文冲突',
+      'novel.pauseReason.stalled': '写作停滞',
+      'novel.pauseReason.budget': '运行或篇幅预算已达上限',
+      'novel.pauseReason.recovery-required': '需要恢复',
+      'novel.pauseReason.projection-pending': '阅读投影待重建',
+      'novel.chapters': '章节 {completed}/{total}',
+      'novel.characters': '有效字符 {effective}',
+      'novel.charactersTarget': '有效字符 {effective} / {target}',
+      'novel.updatedAt': '更新于 {time}',
+      'novel.lastError': '最近错误：{message}',
+      'novel.pauseDetail': '暂停详情：{detail}',
+      'novel.resumeHint': '恢复提示：{hint}',
+      'novel.pause': '暂停',
+      'novel.resume': '恢复',
+      'novel.stop': '立即停止',
+      'novel.stopConfirm': '立即停止“{name}”？在途生成会被取消，小说保持暂停。',
+      'novel.approveOutline': '批准大纲',
+      'novel.updateOutline': '更新大纲',
+      'novel.outlineRevision': '大纲版本',
+      'novel.approveHint': '批准版本 {revision} 后开始第一个写作单元。',
+      'novel.exportMd': '导出 Markdown',
+      'novel.exportZip': '导出 ZIP',
+      'novel.editTitle': '编辑小说',
+      'novel.genre': '题材',
+      'novel.delete': '删除 {name}',
+      'novel.deleteConfirm': '删除小说“{name}”？运行中的小说会先暂停，绑定会话会解绑，全部小说数据将被删除，且不可撤销。',
+      'novel.refresh': '刷新',
+      'novel.back': '返回小说列表',
+      'novel.loadingDetail': '正在加载小说…',
+      'novel.chaptersTitle': '章节目录',
+      'novel.chapterState.planned': '已规划',
+      'novel.chapterState.writing': '写作中',
+      'novel.chapterState.completed': '已完成',
+      'novel.storyPremise': '前提',
+      'novel.storyTheme': '主题',
+      'novel.storyEnding': '结局方向',
+      'novel.foreshadowing': '伏笔',
+      'novel.foreshadowingRequired': '必须回收',
+      'novel.showOutline': '查看完整大纲',
+      'novel.outlineTitle': '完整大纲',
+      'novel.readerTitle': '已提交正文',
+      'novel.readerEmpty': '尚未提交正文。',
+      'novel.loadMore': '加载更多',
+      'novel.authorPanel': '作者面板',
+      'novel.authorHint': '在小说会话中像普通消息一样发送新的创作要求；指令会登记进台账，并按大纲修订协议生效。',
+      'novel.authorOpenSession': '打开会话发送指令',
+      'novel.requirements': '指令台账',
+      'novel.requirementsEmpty': '暂无指令记录。',
+      'novel.req.status.pending': '待处理',
+      'novel.req.status.applied': '已生效',
+      'novel.req.status.superseded': '已取代',
+      'novel.req.status.blocked': '已阻塞',
+      'novel.req.effectiveAt': '生效位置：{location}',
+      'novel.req.blockedReason': '阻塞原因：{reason}',
+      'novel.budgetTitle': '篇幅与运行预算',
+      'novel.lengthUnbounded': '篇幅：不限',
+      'novel.lengthTarget': '目标篇幅：{target} 字符',
+      'novel.remainingCharacters': '剩余：{value} 字符',
+      'novel.remainingUnbounded': '剩余：不限',
+      'novel.runBudget': '轮次 {used}/{max} · 推演 {deduce}/{maxDeduce}',
+      'novel.assets': '资产来源',
+      'novel.assetsCharacters': '角色：{names}',
+      'novel.assetsWorlds': '世界书：{names}',
+      'novel.assetsNone': '原创故事，未选择资产。',
+      'novel.form.title': '标题',
+      'novel.form.requirement': '创作要求',
+      'novel.form.requirementHint': '描述你想要的故事；这段文本会作为首条指令登记。',
+      'novel.form.language': '语言',
+      'novel.form.language.zh': '中文',
+      'novel.form.language.en': '英语',
+      'novel.form.genre': '题材',
+      'novel.form.genrePlaceholder': '例如：科幻悬疑',
+      'novel.form.perspective': '叙事视角',
+      'novel.form.perspective.third': '第三人称',
+      'novel.form.perspective.first': '第一人称',
+      'novel.form.perspective.second': '第二人称',
+      'novel.form.perspective.mixed': '多视角混合',
+      'novel.form.styleNotes': '文风要求',
+      'novel.form.length': '篇幅设置',
+      'novel.form.length.unbounded': '不限',
+      'novel.form.length.target': '目标字数',
+      'novel.form.targetCharacters': '目标字符数',
+      'novel.form.toleranceRatio': '浮动比例 [0,1)',
+      'novel.form.hardMaximum': '硬上限（可选）',
+      'novel.form.maxChapters': '章节数上限（可选）',
+      'novel.form.approval': '大纲批准',
+      'novel.form.approval.automatic': '自动',
+      'novel.form.approval.manual': '手动批准',
+      'novel.form.characters': '角色卡',
+      'novel.form.worlds': '世界书',
+      'novel.form.budgets': '运行预算',
+      'novel.form.maxTurns': '最大轮数',
+      'novel.form.maxDurationMs': '最大时长（毫秒）',
+      'novel.form.stallThresholdTurns': '停滞阈值（轮）',
+      'novel.form.consecutiveFailureLimit': '连续失败上限',
+      'novel.form.retryMaxAttempts': '外部重试次数',
+      'novel.form.retryBackoffMs': '外部重试退避（毫秒）',
+      'novel.form.maxDeduceRuns': '推演次数上限',
+      'novel.form.submit': '创建小说',
+      'novel.form.missingRequired': '标题与创作要求为必填项。',
+      'novel.form.invalidNumbers': '请检查数值字段：目标字符数须为正整数，浮动比例在 [0,1) 内，硬上限不得低于目标。',
     }
     // translate follows the host locale service once apply() binds it; the
     // identity fallback mirrors LocaleRuntime.translate (missing key -> key,
@@ -732,6 +976,7 @@ window.__ModuleLoader__.load({
     }
     const STYLE_ID = 'dsh-tavern/native-ui'
     const REVISION_CONFLICT = 'CHAT_REVISION_CONFLICT'
+    const NOVEL_REVISION_CONFLICT = 'NOVEL_REVISION_CONFLICT'
     const EMPTY_BOOTSTRAP = {
       state: {
         activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
@@ -750,6 +995,7 @@ window.__ModuleLoader__.load({
         native: { available: false, missing: [], reasons: [] },
         managed: { available: false, missing: [], reasons: [] },
       },
+      agentNovel: { available: false, missing: [], reasons: [] },
     }
     const EMPTY_MODELS = { status: 'idle', groups: [], failures: [], error: '' }
     let snapshot = {
@@ -1074,10 +1320,14 @@ window.__ModuleLoader__.load({
     }
 
     function bindingArchitecture(binding) {
+      // agent-novel sessions keep the native composer and conversation view;
+      // classifying them as 'st' would force the ST Tavern tab and composer.
+      if (binding?.architecture === 'agent-novel') return 'agent-novel'
       return binding?.architecture === 'agent-tavern' ? 'agent-tavern' : 'st'
     }
 
     function architectureLabel(architecture) {
+      if (architecture === 'agent-novel') return translate('view.architectureNovel')
       return architecture === 'agent-tavern' ? translate('view.architectureAgent') : translate('view.architectureSt')
     }
 
@@ -1140,6 +1390,13 @@ window.__ModuleLoader__.load({
     async function repairBinding(ctx, sessionId, binding) {
       if (!binding || repairedBindings.has(sessionId)) return
       repairedBindings.add(sessionId)
+      // Novel bindings are established by the novel-open bridge command; the
+      // generic repair path only clears the client blank mirror so the native
+      // new-chat reuse cannot hijack the session.
+      if (binding.architecture === 'agent-novel') {
+        reserveTavernSession(ctx, sessionId)
+        return
+      }
       if (bindingArchitecture(binding) !== 'st' && binding.initializationPending !== true) {
         reserveTavernSession(ctx, sessionId)
         return
@@ -1235,6 +1492,60 @@ window.__ModuleLoader__.load({
         revisions: { ...snapshot.revisions, [key]: result.revision },
       })
       return openTavernChat(ctx, character, result.id, group, policyOverride)
+    }
+
+    function novelSessionLabel(title) {
+      return `AgentNovel · ${String(title || '').slice(0, 60)}`.slice(0, 80)
+    }
+
+    // novel-open 通过既有内部桥接命令绑定会话（服务端负责绑定 + recompose
+    // agent-novel preset + 唤醒 driver）；发送后轮询 bootstrap 直到会话出现在
+    // sessionBindings 且 architecture === 'agent-novel'。
+    async function waitForNovelBinding(sessionId, novelId) {
+      for (let attempt = 0; attempt < 25; attempt += 1) {
+        try {
+          const bootstrap = await refreshBootstrap()
+          const binding = bootstrap?.state?.sessionBindings?.[sessionId]
+          if (binding?.architecture === 'agent-novel' && (novelId === null || binding.novelId === novelId)) return binding
+        } catch {
+          // Bootstrap may briefly fail while the server binds; keep polling.
+        }
+        await new Promise((resolve) => setTimeout(resolve, 400))
+      }
+      return null
+    }
+
+    async function openNovelSession(ctx, novel) {
+      update({ navigationStatus: translate('novel.opening') })
+      try {
+        const sessions = ctx.sessions.list.getSnapshot()
+        const existing = Object.entries(snapshot.bootstrap.state.sessionBindings || {})
+          .find(([sessionId, binding]) => binding?.architecture === 'agent-novel'
+            && binding.novelId === novel.novelId
+            && sessions.byId[sessionId])
+        if (existing) {
+          reserveTavernSession(ctx, existing[0])
+          ctx.sessions.open(existing[0])
+          return existing[0]
+        }
+        const workspace = await ensureTavernWorkspace(ctx)
+        const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId)
+        const binding = ctx.sessions.binding(sessionId)
+        if (!binding) throw new Error(translate('error.noBinding'))
+        const commandPayload = base64Url(JSON.stringify({ action: 'novel-open', novelId: novel.novelId }))
+        const result = await binding.session.command(`/dsh-tavern-session ${commandPayload}`)
+        if (!result?.ok || !result.value?.matched) {
+          throw new Error(result.error?.message || translate('error.activationFailed'))
+        }
+        reserveTavernSession(ctx, sessionId)
+        const bound = await waitForNovelBinding(sessionId, novel.novelId)
+        if (!bound) throw new Error(translate('novel.bindTimeout'))
+        await binding.session.rename(novelSessionLabel(novel.title)).catch(() => {})
+        ctx.sessions.open(sessionId)
+        return sessionId
+      } finally {
+        update({ navigationStatus: '' })
+      }
     }
 
     async function branchTavernChat(ctx, character, chatId, index, sessionId, targetArchitecture) {
@@ -1678,6 +1989,100 @@ window.__ModuleLoader__.load({
         body: JSON.stringify({ globals }),
       })
       return result.globals
+    }
+
+    // AgentNovel HTTP contract (docs/proposals/0005-agent-novel-architecture.md):
+    // GET/POST novels, novels/:id detail, outline, paginated body, control
+    // actions, CAS patch and blob export. The server is authoritative; the UI
+    // only presents the latest known status.
+    function novelPath(novelId, suffix) {
+      return `novels/${encodeURIComponent(novelId)}${suffix || ''}`
+    }
+
+    async function fetchNovelList() {
+      const result = await api('novels')
+      return Array.isArray(result.novels) ? result.novels : []
+    }
+
+    async function fetchNovelDetail(novelId) {
+      const result = await api(novelPath(novelId))
+      return result.novel
+    }
+
+    async function fetchNovelOutline(novelId) {
+      const result = await api(novelPath(novelId, '/outline'))
+      return result.outline
+    }
+
+    async function fetchNovelBody(novelId, chapterId, cursor, limit) {
+      const params = new URLSearchParams()
+      if (chapterId) params.set('chapterId', chapterId)
+      if (cursor) params.set('cursor', cursor)
+      if (limit) params.set('limit', String(limit))
+      const query = params.toString()
+      const result = await api(novelPath(novelId, `/body${query ? `?${query}` : ''}`))
+      return {
+        paragraphs: Array.isArray(result.paragraphs) ? result.paragraphs : [],
+        nextCursor: result.nextCursor || null,
+      }
+    }
+
+    async function createNovel(config) {
+      const result = await api('novels', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify(config),
+      })
+      return result.novel
+    }
+
+    async function runNovelAction(novelId, action, body) {
+      return api(novelPath(novelId, `/${action}`), body === undefined
+        ? { method: 'POST' }
+        : { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(body) })
+    }
+
+    function isNovelConflict(cause) {
+      return cause?.code === NOVEL_REVISION_CONFLICT || cause?.status === 409
+    }
+
+    async function patchNovel(novelId, expectedRevision, patch) {
+      return api(novelPath(novelId), {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ expectedRevision, patch, cause: 'panel-edit' }),
+      })
+    }
+
+    async function deleteNovel(novelId) {
+      await api(novelPath(novelId), { method: 'DELETE' })
+      await refreshBootstrap().catch(() => {})
+    }
+
+    function novelExportFileStem(title) {
+      const stem = String(title || 'novel').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 120)
+      return stem !== '' ? stem : 'novel'
+    }
+
+    async function downloadNovelExport(novelId, format, title) {
+      const kind = format === 'zip' ? 'zip' : 'md'
+      const response = await fetch(`${API}/novels/${encodeURIComponent(novelId)}/export?format=${kind}`)
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        const error = new Error(body.message || `HTTP ${response.status}`)
+        error.status = response.status
+        error.code = body.code
+        throw error
+      }
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `${novelExportFileStem(title)}.${kind}`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
     }
 
     function SettingSelect({ label, value, options, empty, onChange }) {
@@ -2219,6 +2624,15 @@ window.__ModuleLoader__.load({
           h(IconUserOutline16, { size: 22 }),
           h('strong', null, t('view.unbound')))
       }
+      // Novel sessions keep the native conversation surface; this legacy view
+      // only points back at the novels panel (the tab itself stays hidden by
+      // useNativeTavernTabFilter in PanelHost).
+      if (binding.architecture === 'agent-novel') {
+        return h('div', { className: 'dt-view dt-empty', 'data-dsh-tavern-surface': 'view' },
+          h(IconListPenOutline16, { size: 22 }),
+          h('strong', null, t('novel.viewNotice')),
+          h('button', { type: 'button', className: 'dt-upload', onClick: () => openPanel('novels') }, t('novel.openPanel')))
+      }
       if (!chat) return h('div', { className: 'dt-view dt-empty', 'data-dsh-tavern-surface': 'view' }, t('view.loading'))
       const messages = [...chat.messages]
       if (run.streamText) messages.push({ name: run.speaker || binding.character, is_user: false, mes: run.streamText, streaming: true })
@@ -2692,11 +3106,63 @@ window.__ModuleLoader__.load({
       const usage = useProjection ? useProjection('tokenUsage') : undefined
       const binding = state.bootstrap.state.sessionBindings?.[sessionId]
       const architecture = bindingArchitecture(binding)
-      const active = useSession((session) => architecture === 'agent-tavern' || isTavernSession(session) !== null)
+      const novelId = binding?.architecture === 'agent-novel' && typeof binding.novelId === 'string' ? binding.novelId : null
+      const active = useSession((session) => architecture === 'agent-tavern' || isTavernSession(session) !== null || novelId !== null)
       const stats = useProjection ? useProjection('sessionStats') : undefined
       const run = state.runs[sessionId] || {}
       const markerRef = useNativeAgentPresetLabelFilter(Boolean(active && binding && architecture === 'st'))
+      // Novel sessions surface the project status here; the server stays the
+      // authority, so the buttons only present the latest known state.
+      const [novelSummary, setNovelSummary] = useState(null)
+      useEffect(() => {
+        if (novelId === null) {
+          setNovelSummary(null)
+          return undefined
+        }
+        let cancelled = false
+        const load = () => {
+          void fetchNovelDetail(novelId)
+            .then((next) => { if (!cancelled) setNovelSummary(next) })
+            .catch(() => {})
+        }
+        load()
+        const timer = setInterval(load, 10000)
+        return () => { cancelled = true; clearInterval(timer) }
+      }, [novelId])
       if (!active || !binding) return null
+      if (novelId !== null) {
+        const novel = novelSummary || { title: novelId, status: 'active' }
+        const novelStatus = novelStatusId(novel)
+        const runNovelHeader = (action) => {
+          if (action === 'stop' && !window.confirm(t('novel.stopConfirm', { name: novel.title || novelId }))) return
+          void runNovelAction(novelId, action)
+            .catch(() => {})
+            .finally(() => {
+              void fetchNovelDetail(novelId).then((next) => setNovelSummary(next)).catch(() => {})
+            })
+        }
+        return h('div', { className: 'dt-header-character dt-header-novel', 'data-dsh-tavern-surface': 'header' },
+          h('div', { className: 'dt-header-character-copy' },
+            h('span', { className: 'dt-header-character-name', title: novel.title || novelId }, novel.title || novelId),
+            h('span', { className: `dt-novel-badge dt-novel-badge-${novelStatus}` },
+              novelStatusLabel(t, novel),
+              novel.status === 'paused' && novel.pauseReason ? ` · ${novelPauseReasonLabel(t, novel.pauseReason)}` : '')),
+          h('div', { className: 'dt-header-novel-actions' },
+            novelStatus === 'active' ? h('button', { type: 'button', title: t('novel.pause'), onClick: () => runNovelHeader('pause') }, t('novel.pause')) : null,
+            novelStatus === 'paused' ? h('button', { type: 'button', title: t('novel.resume'), onClick: () => runNovelHeader('resume') }, t('novel.resume')) : null,
+            novelStatus === 'active' ? h('button', {
+              type: 'button',
+              title: t('novel.stop'),
+              'aria-label': t('novel.stop'),
+              onClick: () => runNovelHeader('stop'),
+            }, h(IconStopFill16)) : null,
+            h('button', {
+              type: 'button',
+              title: t('novel.openPanel'),
+              'aria-label': t('novel.openPanel'),
+              onClick: () => openPanel('novels'),
+            }, h(IconListPenOutline16))))
+      }
       const statsLine = architecture === 'st' ? buildTavernStatsLine(stats, usage, t) : ''
       return h('div', { ref: markerRef, className: 'dt-header-character', 'data-dsh-tavern-surface': 'header' },
         h('img', { src: `${API}/avatar/${encodeURIComponent(binding.character)}`, alt: '' }),
@@ -3150,6 +3616,7 @@ window.__ModuleLoader__.load({
       { id: 'overview', icon: IconSparkle16 },
       { id: 'characters', icon: IconUserOutline16 },
       { id: 'chats', icon: IconQueueOutline14 },
+      { id: 'novels', icon: IconListPenOutline16 },
       { id: 'groups', icon: IconPersonalizationOutline16 },
       { id: 'personas', icon: IconDataOutline16 },
       { id: 'worlds', icon: IconBrowseOutline16 },
@@ -3190,13 +3657,14 @@ window.__ModuleLoader__.load({
       return value === undefined ? value : JSON.parse(JSON.stringify(value))
     }
 
-    function EditorField({ label, value, onChange, multiline = false, type = 'text', min, max, step, className = '', hint }) {
+    function EditorField({ label, value, onChange, multiline = false, type = 'text', min, max, step, className = '', hint, placeholder }) {
       const props = {
         value: value ?? '',
         type,
         min,
         max,
         step,
+        placeholder,
         onChange: (event) => onChange(event.target.value),
       }
       return h('label', { className: `dt-editor-field ${className}` },
@@ -3881,10 +4349,890 @@ window.__ModuleLoader__.load({
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
 
+    // ---- AgentNovel panel surface (proposal 0005 §14.3) ----
+
+    function novelStatusId(novel) {
+      return novel?.status === 'paused' || novel?.status === 'completed' ? novel.status : 'active'
+    }
+
+    // translate() falls back to the key itself for unknown keys, so a missing
+    // enum value degrades to the raw server string instead of a broken label.
+    function translatedEnum(t, prefix, value) {
+      const key = `${prefix}${value}`
+      const label = t(key)
+      return label === key ? String(value ?? '—') : label
+    }
+
+    function novelStatusLabel(t, novel) {
+      return translatedEnum(t, 'novel.status.', novelStatusId(novel))
+    }
+
+    function novelPhaseLabel(t, phase) {
+      return phase ? translatedEnum(t, 'novel.phase.', phase) : ''
+    }
+
+    function novelPauseReasonLabel(t, reason) {
+      return reason ? translatedEnum(t, 'novel.pauseReason.', reason) : ''
+    }
+
+    function novelChapterStateLabel(t, state) {
+      return state ? translatedEnum(t, 'novel.chapterState.', state) : '—'
+    }
+
+    function novelRequirementStatusLabel(t, status) {
+      return translatedEnum(t, 'novel.req.status.', status)
+    }
+
+    function novelDetailText(value) {
+      if (value === null || value === undefined || value === '') return ''
+      return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+    }
+
+    function formatNovelTime(value) {
+      const parsed = Date.parse(value || '')
+      return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : String(value || '—')
+    }
+
+    function novelCharactersText(t, novel) {
+      const effective = Number(novel?.effectiveCharacters || 0).toLocaleString()
+      if (novel?.targetCharacters === null || novel?.targetCharacters === undefined) {
+        return t('novel.characters', { effective })
+      }
+      return t('novel.charactersTarget', { effective, target: Number(novel.targetCharacters).toLocaleString() })
+    }
+
+    function NovelModalFrame({ title, closeLabel, onClose, children, footer, className = '' }) {
+      return h(Modal, {
+        open: true,
+        onClose,
+        title,
+        closeLabel,
+        headless: true,
+        className: `dt-novel-modal ${className}`.trim(),
+      },
+      h('div', { className: 'dt-novel-modal-head' },
+        h('h2', null, title),
+        h('button', {
+          type: 'button',
+          className: 'dt-panel-close',
+          'aria-label': closeLabel,
+          onClick: onClose,
+        }, h(IconCloseOutline16))),
+      h('div', { className: 'dt-novel-modal-body' }, children),
+      footer ? h('div', { className: 'dt-novel-modal-foot' }, footer) : null)
+    }
+
+    function NovelChapters({ novel, chapterId, onSelect, t }) {
+      const chapters = novel?.chapters || []
+      return h('div', { className: 'dt-novel-block' },
+        h('h4', null, t('novel.chaptersTitle')),
+        chapters.length === 0
+          ? h('p', { className: 'dt-muted' }, '—')
+          : h('div', { className: 'dt-novel-toc' }, chapters.map((chapter) => h('button', {
+            key: chapter.chapterId,
+            type: 'button',
+            className: `dt-novel-chapter ${chapterId === chapter.chapterId ? 'dt-novel-chapter-active' : ''}`,
+            onClick: () => onSelect(chapter.chapterId),
+          },
+          h('span', { className: 'dt-novel-chapter-title', title: chapter.title || chapter.chapterId },
+            `${chapter.order}. ${chapter.title || chapter.chapterId}`),
+          h('span', { className: 'dt-novel-chapter-meta' },
+            `${novelChapterStateLabel(t, chapter.state)} · ${Number(chapter.committedCharacters || 0).toLocaleString()}`)))))
+    }
+
+    function NovelOutlineSummaryBlock({ novel, t }) {
+      const summary = novel?.outlineSummary
+      if (!summary) return null
+      const story = summary.story || {}
+      const note = (label, value) => value
+        ? h('p', { className: 'dt-novel-note' }, `${label}: ${value}`)
+        : null
+      return h('div', { className: 'dt-novel-block' },
+        h('h4', null, `${t('novel.outlineRevision')}: ${summary.outlineRevision ?? '—'}`),
+        note(t('novel.storyPremise'), story.premise),
+        note(t('novel.storyTheme'), story.theme),
+        note(t('novel.storyEnding'), story.endingDirection),
+        Array.isArray(summary.foreshadowing) && summary.foreshadowing.length > 0
+          ? h('div', { className: 'dt-novel-fores' },
+            h('h4', null, t('novel.foreshadowing')),
+            summary.foreshadowing.map((item) => h('div', { key: item.id, className: 'dt-novel-fore' },
+              h('span', null, item.description || item.id),
+              h('span', { className: 'dt-novel-fore-meta' },
+                `${item.status || '—'}${item.required === true ? ` · ${t('novel.foreshadowingRequired')}` : ''}`))))
+          : null)
+    }
+
+    function NovelReaderBlock({ novel, chapterId, paragraphs, nextCursor, loading, error, onLoadMore, t }) {
+      const chapter = (novel?.chapters || []).find((item) => item.chapterId === chapterId)
+      return h('div', { className: 'dt-novel-block' },
+        h('h4', null, t('novel.readerTitle')),
+        chapter ? h('p', { className: 'dt-muted' },
+          `${chapter.order}. ${chapter.title || chapter.chapterId} · ${novelChapterStateLabel(t, chapter.state)} · ${Number(chapter.committedCharacters || 0).toLocaleString()}`) : null,
+        error ? h('p', { className: 'dt-error' }, error) : null,
+        !error && paragraphs.length === 0 && !loading ? h('p', { className: 'dt-muted' }, t('novel.readerEmpty')) : null,
+        h('div', { className: 'dt-novel-paragraphs' },
+          paragraphs.map((paragraph) => h('p', {
+            key: `${paragraph.commitId}:${paragraph.paragraphIndex}`,
+            className: 'dt-novel-paragraph',
+          }, paragraph.text)),
+          loading ? h('p', { className: 'dt-muted' }, t('nav.loading')) : null,
+          nextCursor !== null && !loading
+            ? h('button', { type: 'button', className: 'dt-upload', onClick: onLoadMore }, t('novel.loadMore'))
+            : null))
+    }
+
+    function NovelAuthorPanel({ novel, t, onOpenSession }) {
+      const budget = novel?.budget || {}
+      const target = novel?.targetCharacters ?? null
+      const remaining = budget.remainingCharacters ?? null
+      const requirements = Array.isArray(novel?.requirements) ? novel.requirements : []
+      const config = novel?.config || {}
+      return h('div', { className: 'dt-novel-block' },
+        h('h4', null, t('novel.authorPanel')),
+        h('p', { className: 'dt-hint' }, t('novel.authorHint')),
+        h('button', { type: 'button', className: 'dt-upload', onClick: onOpenSession }, t('novel.authorOpenSession')),
+        h('h4', null, t('novel.requirements')),
+        requirements.length === 0
+          ? h('p', { className: 'dt-muted' }, t('novel.requirementsEmpty'))
+          : h('div', { className: 'dt-novel-reqs' }, requirements.map((item) => h('div', {
+            key: item.requirementId,
+            className: `dt-novel-req ${item.status === 'blocked' ? 'dt-novel-req-blocked' : ''}`,
+          },
+          h('div', { className: 'dt-novel-req-head' },
+            h('span', { className: 'dt-novel-req-status' }, novelRequirementStatusLabel(t, item.status)),
+            h('span', { className: 'dt-muted' }, `#${item.sequence ?? '—'}`)),
+          h('p', { className: 'dt-novel-req-text' }, item.text || ''),
+          item.effectiveLocation
+            ? h('span', { className: 'dt-novel-req-meta' }, t('novel.req.effectiveAt', { location: novelDetailText(item.effectiveLocation) || '—' }))
+            : null,
+          item.blockedReason
+            ? h('span', { className: 'dt-novel-req-meta dt-error' }, t('novel.req.blockedReason', { reason: novelDetailText(item.blockedReason) }))
+            : null))),
+        h('h4', null, t('novel.budgetTitle')),
+        h('div', { className: 'dt-novel-kv' },
+          h('span', null, target === null
+            ? t('novel.lengthUnbounded')
+            : t('novel.lengthTarget', { target: Number(target).toLocaleString() })),
+          h('span', null, remaining === null
+            ? t('novel.remainingUnbounded')
+            : t('novel.remainingCharacters', { value: Number(remaining).toLocaleString() })),
+          h('span', null, t('novel.runBudget', {
+            used: budget.turnsRun ?? 0,
+            max: budget.maxTurns ?? '—',
+            deduce: budget.deduceRuns ?? 0,
+            maxDeduce: budget.maxDeduceRuns ?? '—',
+          }))),
+        h('h4', null, t('novel.assets')),
+        (config.characterNames?.length || 0) + (config.worldNames?.length || 0) > 0
+          ? h('div', { className: 'dt-novel-kv' },
+            config.characterNames?.length
+              ? h('span', null, t('novel.assetsCharacters', { names: config.characterNames.join(', ') }))
+              : null,
+            config.worldNames?.length
+              ? h('span', null, t('novel.assetsWorlds', { names: config.worldNames.join(', ') }))
+              : null)
+          : h('p', { className: 'dt-muted' }, t('novel.assetsNone')))
+    }
+
+    const NOVEL_BODY_PAGE_SIZE = 200
+
+    function NovelDetail({ ctx, novelId, onBack, onChanged }) {
+      const t = useTranslate()
+      const [novel, setNovel] = useState(null)
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [chapterId, setChapterId] = useState('')
+      const [paragraphs, setParagraphs] = useState([])
+      const [nextCursor, setNextCursor] = useState(null)
+      const [bodyLoading, setBodyLoading] = useState(false)
+      const [bodyError, setBodyError] = useState('')
+      const [bodyNonce, setBodyNonce] = useState(0)
+      const [outline, setOutline] = useState(null)
+      const [outlineError, setOutlineError] = useState('')
+      const [outlineOpen, setOutlineOpen] = useState(false)
+      const [approveRevision, setApproveRevision] = useState('')
+      const syncedRevisionRef = useRef(null)
+      const loadDetail = () => fetchNovelDetail(novelId)
+        .then((next) => {
+          setNovel(next)
+          setError('')
+          const revision = next?.outlineSummary?.outlineRevision
+          if (revision !== undefined && revision !== null && syncedRevisionRef.current !== revision) {
+            syncedRevisionRef.current = revision
+            setApproveRevision(String(revision))
+          }
+          return next
+        })
+        .catch((cause) => {
+          setError(cause instanceof Error ? cause.message : String(cause))
+          return null
+        })
+      useEffect(() => { void loadDetail() }, [novelId])
+      useEffect(() => {
+        if (!novel) return
+        const chapters = novel.chapters || []
+        if (chapters.length === 0) {
+          if (chapterId !== '') setChapterId('')
+          return
+        }
+        if (chapters.some((chapter) => chapter.chapterId === chapterId)) return
+        const firstWithBody = chapters.find((chapter) => Number(chapter.committedCharacters) > 0)
+        setChapterId((firstWithBody || chapters[0]).chapterId)
+      }, [novel])
+      useEffect(() => {
+        if (!novel || chapterId === '') return
+        let cancelled = false
+        setBodyLoading(true)
+        setBodyError('')
+        setParagraphs([])
+        setNextCursor(null)
+        void fetchNovelBody(novelId, chapterId, null, NOVEL_BODY_PAGE_SIZE)
+          .then((page) => {
+            if (cancelled) return
+            setParagraphs(page.paragraphs)
+            setNextCursor(page.nextCursor)
+          })
+          .catch((cause) => { if (!cancelled) setBodyError(cause instanceof Error ? cause.message : String(cause)) })
+          .finally(() => { if (!cancelled) setBodyLoading(false) })
+        return () => { cancelled = true }
+      }, [novelId, chapterId, bodyNonce])
+      const loadMoreBody = () => {
+        if (novel === null || chapterId === '' || bodyLoading || nextCursor === null) return
+        setBodyLoading(true)
+        void fetchNovelBody(novelId, chapterId, nextCursor, NOVEL_BODY_PAGE_SIZE)
+          .then((page) => {
+            setParagraphs((current) => [...current, ...page.paragraphs])
+            setNextCursor(page.nextCursor)
+          })
+          .catch((cause) => setBodyError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBodyLoading(false))
+      }
+      const runAction = (action) => {
+        if (busy) return
+        setBusy(true)
+        setError('')
+        setNotice('')
+        void Promise.resolve(action())
+          .then(() => loadDetail())
+          .then(() => { onChanged?.() })
+          .catch((cause) => {
+            if (isNovelConflict(cause)) setNotice(t('novel.conflict'))
+            else setError(cause instanceof Error ? cause.message : String(cause))
+            void loadDetail()
+          })
+          .finally(() => setBusy(false))
+      }
+      const approve = () => {
+        const text = approveRevision.trim()
+        const parsed = Number(text)
+        if (text === '' || !Number.isFinite(parsed)) {
+          setError(t('novel.form.invalidNumbers'))
+          return
+        }
+        runAction(() => runNovelAction(novelId, 'approve-outline', { expectedOutlineRevision: parsed }))
+      }
+      const openOutline = () => {
+        setOutlineOpen(true)
+        setOutline(null)
+        setOutlineError('')
+        void fetchNovelOutline(novelId)
+          .then((result) => setOutline(result))
+          .catch((cause) => setOutlineError(cause instanceof Error ? cause.message : String(cause)))
+      }
+      if (novel === null) {
+        return h('section', { className: 'dt-settings-band' },
+          h('div', { className: 'dt-editor-toolbar' },
+            h(Button, { size: 'sm', variant: 'ghost', onClick: onBack }, `← ${t('novel.back')}`)),
+          error !== '' ? h('p', { className: 'dt-error' }, error) : h('p', { className: 'dt-muted' }, t('novel.loadingDetail')))
+      }
+      const awaitingApproval = novel.status === 'paused' && novel.pauseReason === 'awaiting-approval'
+      return h(React.Fragment, null,
+        h('section', { className: 'dt-settings-band' },
+          h('div', { className: 'dt-editor-toolbar' },
+            h('div', { className: 'dt-editor-actions' },
+              h(Button, { size: 'sm', variant: 'ghost', onClick: onBack }, `← ${t('novel.back')}`),
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                icon: h(IconRefreshOutline16),
+                onClick: () => { setError(''); setNotice(''); void loadDetail().then(() => onChanged?.()) },
+              }, t('novel.refresh')))),
+          h('div', { className: 'dt-novel-head' },
+            h('strong', { className: 'dt-novel-title-text', title: novel.title }, novel.title),
+            h('span', { className: `dt-novel-badge dt-novel-badge-${novelStatusId(novel)}` }, novelStatusLabel(t, novel)),
+            novel.status === 'paused' && novel.pauseReason
+              ? h('span', { className: 'dt-novel-reason' }, novelPauseReasonLabel(t, novel.pauseReason))
+              : null,
+            novel.phase ? h('span', { className: 'dt-muted' }, novelPhaseLabel(t, novel.phase)) : null),
+          h('div', { className: 'dt-novel-meta' },
+            h('span', null, t('novel.chapters', { completed: novel.chaptersCompleted ?? 0, total: novel.chaptersTotal ?? 0 })),
+            h('span', null, novelCharactersText(t, novel)),
+            novel.updatedAt ? h('span', null, t('novel.updatedAt', { time: formatNovelTime(novel.updatedAt) })) : null),
+          novel.lastError ? h('p', { className: 'dt-error' }, t('novel.lastError', { message: novel.lastError })) : null,
+          novel.pauseDetail ? h('p', { className: 'dt-hint' }, t('novel.pauseDetail', { detail: novelDetailText(novel.pauseDetail) })) : null,
+          novel.resumeHint ? h('p', { className: 'dt-hint' }, t('novel.resumeHint', { hint: novelDetailText(novel.resumeHint) })) : null,
+          h('div', { className: 'dt-novel-actions' },
+            h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => runAction(() => openNovelSession(ctx, novel)) }, t('novel.open')),
+            novel.status === 'active'
+              ? h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => runAction(() => runNovelAction(novelId, 'pause')) }, t('novel.pause'))
+              : null,
+            novel.status === 'paused'
+              ? h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => runAction(() => runNovelAction(novelId, 'resume')) }, t('novel.resume'))
+              : null,
+            novel.status === 'active' ? h(Button, {
+              size: 'sm',
+              variant: 'ghost',
+              disabled: busy,
+              onClick: () => {
+                if (window.confirm(t('novel.stopConfirm', { name: novel.title }))) runAction(() => runNovelAction(novelId, 'stop'))
+              },
+            }, t('novel.stop')) : null,
+            awaitingApproval
+              ? h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => runAction(() => runNovelAction(novelId, 'update-outline')) }, t('novel.updateOutline'))
+              : null,
+            h(Button, {
+              size: 'sm',
+              variant: 'ghost',
+              icon: h(IconDownloadOutline16),
+              'aria-label': t('novel.exportMd'),
+              title: t('novel.exportMd'),
+              disabled: busy,
+              onClick: () => runAction(() => downloadNovelExport(novelId, 'md', novel.title)),
+            }),
+            h(Button, {
+              size: 'sm',
+              variant: 'ghost',
+              icon: h(IconDownloadOutline16),
+              'aria-label': t('novel.exportZip'),
+              title: t('novel.exportZip'),
+              disabled: busy,
+              onClick: () => runAction(() => downloadNovelExport(novelId, 'zip', novel.title)),
+            }),
+            h(Button, { size: 'sm', variant: 'ghost', icon: h(IconListPenOutline16), onClick: openOutline }, t('novel.showOutline'))),
+          awaitingApproval ? h('div', { className: 'dt-novel-approve' },
+            h('span', { className: 'dt-label' }, t('novel.outlineRevision')),
+            h('input', {
+              value: approveRevision,
+              'aria-label': t('novel.outlineRevision'),
+              onChange: (event) => setApproveRevision(event.target.value),
+            }),
+            h(Button, { size: 'sm', variant: 'primary', disabled: busy, onClick: approve }, t('novel.approveOutline')),
+            h('span', { className: 'dt-muted' }, t('novel.approveHint', { revision: novel.outlineSummary?.outlineRevision ?? '—' }))) : null,
+          error ? h('p', { className: 'dt-error' }, error) : null,
+          notice ? h('p', { className: 'dt-muted' }, notice) : null),
+        h('section', { className: 'dt-settings-band' },
+          h('div', { className: 'dt-novel-detail' },
+            h('div', { className: 'dt-novel-col' },
+              h(NovelChapters, { novel, chapterId, onSelect: setChapterId, t }),
+              h(NovelOutlineSummaryBlock, { novel, t })),
+            h('div', { className: 'dt-novel-col' },
+              h(NovelReaderBlock, {
+                novel,
+                chapterId,
+                paragraphs,
+                nextCursor,
+                loading: bodyLoading,
+                error: bodyError,
+                onLoadMore: loadMoreBody,
+                t,
+              })),
+            h('div', { className: 'dt-novel-col' },
+              h(NovelAuthorPanel, { novel, t, onOpenSession: () => runAction(() => openNovelSession(ctx, novel)) })))),
+        outlineOpen ? h(NovelModalFrame, {
+          title: t('novel.outlineTitle'),
+          closeLabel: t('panel.close'),
+          onClose: () => setOutlineOpen(false),
+        },
+        outlineError !== ''
+          ? h('p', { className: 'dt-error' }, outlineError)
+          : outline === null
+            ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+            : h('pre', { className: 'dt-novel-outline-pre' }, JSON.stringify(outline, null, 2))) : null)
+    }
+
+    function NovelCard({ ctx, novel, t, onDetail, onEdit, onChanged }) {
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const run = (action) => {
+        if (busy) return
+        setError('')
+        setBusy(true)
+        void Promise.resolve(action())
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => {
+            setBusy(false)
+            void onChanged().catch(() => {})
+          })
+      }
+      const awaitingApproval = novel.status === 'paused' && novel.pauseReason === 'awaiting-approval'
+      return h('div', { className: 'dt-novel-card' },
+        h('div', { className: 'dt-novel-head' },
+          h('button', { type: 'button', className: 'dt-novel-title', title: novel.title, onClick: onDetail }, novel.title),
+          h('span', { className: `dt-novel-badge dt-novel-badge-${novelStatusId(novel)}` }, novelStatusLabel(t, novel)),
+          novel.status === 'paused' && novel.pauseReason
+            ? h('span', { className: 'dt-novel-reason', title: novelPauseReasonLabel(t, novel.pauseReason) }, novelPauseReasonLabel(t, novel.pauseReason))
+            : null,
+          novel.phase ? h('span', { className: 'dt-muted' }, novelPhaseLabel(t, novel.phase)) : null),
+        h('div', { className: 'dt-novel-meta' },
+          h('span', null, t('novel.chapters', { completed: novel.chaptersCompleted ?? 0, total: novel.chaptersTotal ?? 0 })),
+          h('span', null, novelCharactersText(t, novel)),
+          novel.updatedAt ? h('span', null, t('novel.updatedAt', { time: formatNovelTime(novel.updatedAt) })) : null),
+        novel.lastError ? h('p', { className: 'dt-error' }, t('novel.lastError', { message: novel.lastError })) : null,
+        h('div', { className: 'dt-novel-actions' },
+          h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => run(() => openNovelSession(ctx, novel)) }, t('novel.open')),
+          novel.status === 'active'
+            ? h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => run(() => runNovelAction(novel.novelId, 'pause')) }, t('novel.pause'))
+            : null,
+          novel.status === 'paused'
+            ? h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => run(() => runNovelAction(novel.novelId, 'resume')) }, t('novel.resume'))
+            : null,
+          novel.status === 'active' ? h(Button, {
+            size: 'sm',
+            variant: 'ghost',
+            disabled: busy,
+            onClick: () => {
+              if (window.confirm(t('novel.stopConfirm', { name: novel.title }))) run(() => runNovelAction(novel.novelId, 'stop'))
+            },
+          }, t('novel.stop')) : null,
+          awaitingApproval ? h(Button, {
+            size: 'sm',
+            variant: 'outline',
+            disabled: busy,
+            onClick: () => run(async () => {
+              const detail = await fetchNovelDetail(novel.novelId)
+              const revision = detail?.outlineSummary?.outlineRevision
+              if (revision === undefined || revision === null) throw new Error(t('novel.loadingDetail'))
+              await runNovelAction(novel.novelId, 'approve-outline', { expectedOutlineRevision: revision })
+            }),
+          }, t('novel.approveOutline')) : null,
+          awaitingApproval
+            ? h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => run(() => runNovelAction(novel.novelId, 'update-outline')) }, t('novel.updateOutline'))
+            : null,
+          h(Button, {
+            size: 'sm',
+            variant: 'ghost',
+            icon: h(IconDownloadOutline16),
+            'aria-label': t('novel.exportMd'),
+            title: t('novel.exportMd'),
+            disabled: busy,
+            onClick: () => run(() => downloadNovelExport(novel.novelId, 'md', novel.title)),
+          }),
+          h(Button, {
+            size: 'sm',
+            variant: 'ghost',
+            icon: h(IconDownloadOutline16),
+            'aria-label': t('novel.exportZip'),
+            title: t('novel.exportZip'),
+            disabled: busy,
+            onClick: () => run(() => downloadNovelExport(novel.novelId, 'zip', novel.title)),
+          }),
+          h(Button, {
+            size: 'sm',
+            variant: 'ghost',
+            icon: h(IconEditOutline16),
+            'aria-label': t('novel.editTitle'),
+            title: t('novel.editTitle'),
+            disabled: busy,
+            onClick: onEdit,
+          }),
+          h(Button, {
+            size: 'sm',
+            variant: 'ghost',
+            icon: h(IconTrashOutline16),
+            'aria-label': t('novel.delete', { name: novel.title }),
+            title: t('novel.delete', { name: novel.title }),
+            disabled: busy,
+            onClick: () => {
+              if (window.confirm(t('novel.deleteConfirm', { name: novel.title }))) {
+                run(() => deleteNovel(novel.novelId))
+              }
+            },
+          })),
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
+    const NOVEL_PERSPECTIVES = ['third-person', 'first-person', 'second-person', 'mixed']
+    const NOVEL_PERSPECTIVE_LABEL_KEYS = {
+      'third-person': 'novel.form.perspective.third',
+      'first-person': 'novel.form.perspective.first',
+      'second-person': 'novel.form.perspective.second',
+      mixed: 'novel.form.perspective.mixed',
+    }
+    // 产品预设值：提交时传完整配置（提案 §4.1），内部不依赖服务端默认参数。
+    const NOVEL_FORM_PRESETS = {
+      targetCharacters: '20000',
+      toleranceRatio: '0.1',
+      maxTurns: '200',
+      maxDurationMs: '3600000',
+      stallThresholdTurns: '6',
+      consecutiveFailureLimit: '3',
+      retryMaxAttempts: '3',
+      retryBackoffMs: '2000',
+      maxDeduceRuns: '20',
+    }
+
+    function novelFormLanguage() {
+      return translate('panel.title') === MESSAGES_ZH['panel.title'] ? 'zh' : 'en'
+    }
+
+    function parseNovelPositiveInt(raw) {
+      const text = String(raw ?? '').trim()
+      if (!/^\d+$/.test(text)) return null
+      const value = Number(text)
+      return Number.isInteger(value) && value >= 1 ? value : null
+    }
+
+    function NovelCheckGrid({ label, options, selected, onToggle, emptyLabel }) {
+      return h('div', { className: 'dt-novel-form-wide' },
+        h('span', { className: 'dt-label' }, label),
+        options.length === 0
+          ? h('span', { className: 'dt-muted' }, emptyLabel)
+          : h('div', { className: 'dt-check-grid' }, options.map((name) => h('label', { key: name },
+            h('input', {
+              type: 'checkbox',
+              checked: selected.includes(name),
+              onChange: (event) => onToggle(name, event.target.checked),
+            }),
+            h('span', null, name)))))
+    }
+
+    function NovelCreateForm({ onClose, onCreated }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const [form, setForm] = useState(() => ({
+        title: '',
+        requirement: '',
+        language: novelFormLanguage(),
+        genre: '',
+        narrativePerspective: 'third-person',
+        styleNotes: '',
+        lengthKind: 'unbounded',
+        hardMaximumCharacters: '',
+        maxChapters: '',
+        approvalMode: 'automatic',
+        characterNames: [],
+        worldNames: [],
+        ...NOVEL_FORM_PRESETS,
+      }))
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+      const toggleAsset = (key, name, checked) => setForm((current) => ({
+        ...current,
+        [key]: checked ? [...current[key], name] : current[key].filter((item) => item !== name),
+      }))
+      const segmented = (labelKey, value, options) => h('div', { className: 'dt-field' },
+        h('span', { className: 'dt-label' }, t(labelKey)),
+        h('div', { className: 'dt-segmented', role: 'group', 'aria-label': t(labelKey) },
+          options.map((option) => h('button', {
+            key: option.value,
+            type: 'button',
+            className: value === option.value ? 'dt-segmented-active' : '',
+            'aria-pressed': value === option.value,
+            onClick: () => set(option.key, option.value),
+          }, t(option.label)))))
+      const submit = () => {
+        const titleValue = form.title.trim()
+        const requirementValue = form.requirement.trim()
+        if (!titleValue || !requirementValue) {
+          setError(t('novel.form.missingRequired'))
+          return
+        }
+        const target = form.lengthKind === 'target' ? parseNovelPositiveInt(form.targetCharacters) : null
+        const tolerance = Number(String(form.toleranceRatio).trim())
+        const hardText = String(form.hardMaximumCharacters).trim()
+        const hardMaximum = hardText === '' ? null : parseNovelPositiveInt(hardText)
+        const maxChaptersText = String(form.maxChapters).trim()
+        const maxChapters = maxChaptersText === '' ? null : parseNovelPositiveInt(form.maxChapters)
+        const budgets = {
+          maxTurns: parseNovelPositiveInt(form.maxTurns),
+          maxDurationMs: parseNovelPositiveInt(form.maxDurationMs),
+          stallThresholdTurns: parseNovelPositiveInt(form.stallThresholdTurns),
+          consecutiveFailureLimit: parseNovelPositiveInt(form.consecutiveFailureLimit),
+          externalRetry: {
+            maxAttempts: parseNovelPositiveInt(form.retryMaxAttempts),
+            backoffMs: parseNovelPositiveInt(form.retryBackoffMs),
+          },
+          maxDeduceRuns: parseNovelPositiveInt(form.maxDeduceRuns),
+        }
+        const lengthValid = form.lengthKind !== 'target'
+          || (target !== null
+            && Number.isFinite(tolerance) && tolerance >= 0 && tolerance < 1
+            && (hardText === '' || hardMaximum !== null)
+            && (hardMaximum === null || hardMaximum >= target))
+        const maxChaptersValid = maxChaptersText === '' || maxChapters !== null
+        const budgetValues = [budgets.maxTurns, budgets.maxDurationMs, budgets.stallThresholdTurns,
+          budgets.consecutiveFailureLimit, budgets.externalRetry.maxAttempts, budgets.externalRetry.backoffMs, budgets.maxDeduceRuns]
+        if (!lengthValid || !maxChaptersValid || budgetValues.some((value) => value === null)) {
+          setError(t('novel.form.invalidNumbers'))
+          return
+        }
+        const config = {
+          title: titleValue,
+          requirement: requirementValue,
+          language: form.language === 'en' ? 'en' : 'zh',
+          genre: form.genre.trim(),
+          narrativePerspective: form.narrativePerspective,
+          styleNotes: form.styleNotes.trim(),
+          lengthBudget: form.lengthKind === 'target'
+            ? { kind: 'target', targetCharacters: target, toleranceRatio: tolerance, hardMaximumCharacters: hardMaximum }
+            : { kind: 'unbounded' },
+          maxChapters,
+          approvalMode: form.approvalMode === 'manual' ? 'manual' : 'automatic',
+          characterNames: [...form.characterNames],
+          worldNames: [...form.worldNames],
+          budgets,
+        }
+        setBusy(true)
+        setError('')
+        void createNovel(config)
+          .then((created) => onCreated(created))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBusy(false))
+      }
+      return h(NovelModalFrame, {
+        title: t('novel.create'),
+        closeLabel: t('panel.close'),
+        onClose,
+        footer: h(React.Fragment, null,
+          h(Button, { size: 'sm', variant: 'ghost', onClick: onClose }, t('panel.cancel')),
+          h(Button, { size: 'sm', variant: 'primary', disabled: busy || !form.title.trim() || !form.requirement.trim(), onClick: submit },
+            busy ? t('novel.creating') : t('novel.form.submit'))),
+      },
+      h('div', { className: 'dt-novel-form-grid' },
+        h(EditorField, { label: t('novel.form.title'), value: form.title, onChange: (value) => set('title', value) }),
+        h('label', { className: 'dt-editor-field' },
+          h('span', { className: 'dt-label' }, t('novel.form.language')),
+          h('select', {
+            value: form.language,
+            'aria-label': t('novel.form.language'),
+            onChange: (event) => set('language', event.target.value),
+          },
+          h('option', { value: 'zh' }, t('novel.form.language.zh')),
+          h('option', { value: 'en' }, t('novel.form.language.en')))),
+        h(EditorField, { label: t('novel.form.genre'), value: form.genre, placeholder: t('novel.form.genrePlaceholder'), onChange: (value) => set('genre', value) }),
+        h('label', { className: 'dt-editor-field' },
+          h('span', { className: 'dt-label' }, t('novel.form.perspective')),
+          h('select', {
+            value: form.narrativePerspective,
+            'aria-label': t('novel.form.perspective'),
+            onChange: (event) => set('narrativePerspective', event.target.value),
+          },
+          NOVEL_PERSPECTIVES.map((value) => h('option', { key: value, value }, t(NOVEL_PERSPECTIVE_LABEL_KEYS[value]))))),
+        h(EditorField, {
+          label: t('novel.form.requirement'),
+          value: form.requirement,
+          onChange: (value) => set('requirement', value),
+          multiline: true,
+          className: 'dt-novel-form-wide',
+          hint: t('novel.form.requirementHint'),
+        }),
+        h(EditorField, {
+          label: t('novel.form.styleNotes'),
+          value: form.styleNotes,
+          onChange: (value) => set('styleNotes', value),
+          multiline: true,
+          className: 'dt-novel-form-wide',
+        })),
+      h('div', { className: 'dt-novel-form-section' },
+        h('h4', null, t('novel.form.length')),
+        h('div', { className: 'dt-novel-form-grid' },
+          segmented('novel.form.length', form.lengthKind, [
+            { key: 'lengthKind', value: 'unbounded', label: 'novel.form.length.unbounded' },
+            { key: 'lengthKind', value: 'target', label: 'novel.form.length.target' },
+          ]),
+          form.lengthKind === 'target' ? h(React.Fragment, null,
+            h(EditorField, { label: t('novel.form.targetCharacters'), value: form.targetCharacters, type: 'number', min: 1, onChange: (value) => set('targetCharacters', value) }),
+            h(EditorField, { label: t('novel.form.toleranceRatio'), value: form.toleranceRatio, type: 'number', min: 0, max: 0.99, step: 0.05, onChange: (value) => set('toleranceRatio', value) }),
+            h(EditorField, { label: t('novel.form.hardMaximum'), value: form.hardMaximumCharacters, type: 'number', min: 1, onChange: (value) => set('hardMaximumCharacters', value) })) : null,
+          h(EditorField, { label: t('novel.form.maxChapters'), value: form.maxChapters, type: 'number', min: 1, onChange: (value) => set('maxChapters', value) }),
+          segmented('novel.form.approval', form.approvalMode, [
+            { key: 'approvalMode', value: 'automatic', label: 'novel.form.approval.automatic' },
+            { key: 'approvalMode', value: 'manual', label: 'novel.form.approval.manual' },
+          ]))),
+      h('div', { className: 'dt-novel-form-section' },
+        h('h4', null, t('novel.form.characters')),
+        h(NovelCheckGrid, {
+          label: t('novel.form.characters'),
+          options: state.bootstrap.characters,
+          selected: form.characterNames,
+          onToggle: (name, checked) => toggleAsset('characterNames', name, checked),
+          emptyLabel: t('nav.noCharacters'),
+        }),
+        h(NovelCheckGrid, {
+          label: t('novel.form.worlds'),
+          options: state.bootstrap.worlds,
+          selected: form.worldNames,
+          onToggle: (name, checked) => toggleAsset('worldNames', name, checked),
+          emptyLabel: t('settings.worldsEmpty'),
+        })),
+      h('div', { className: 'dt-novel-form-section' },
+        h('h4', null, t('novel.form.budgets')),
+        h('div', { className: 'dt-novel-form-grid' },
+          h(EditorField, { label: t('novel.form.maxTurns'), value: form.maxTurns, type: 'number', min: 1, onChange: (value) => set('maxTurns', value) }),
+          h(EditorField, { label: t('novel.form.maxDurationMs'), value: form.maxDurationMs, type: 'number', min: 1, onChange: (value) => set('maxDurationMs', value) }),
+          h(EditorField, { label: t('novel.form.stallThresholdTurns'), value: form.stallThresholdTurns, type: 'number', min: 1, onChange: (value) => set('stallThresholdTurns', value) }),
+          h(EditorField, { label: t('novel.form.consecutiveFailureLimit'), value: form.consecutiveFailureLimit, type: 'number', min: 1, onChange: (value) => set('consecutiveFailureLimit', value) }),
+          h(EditorField, { label: t('novel.form.retryMaxAttempts'), value: form.retryMaxAttempts, type: 'number', min: 1, onChange: (value) => set('retryMaxAttempts', value) }),
+          h(EditorField, { label: t('novel.form.retryBackoffMs'), value: form.retryBackoffMs, type: 'number', min: 1, onChange: (value) => set('retryBackoffMs', value) }),
+          h(EditorField, { label: t('novel.form.maxDeduceRuns'), value: form.maxDeduceRuns, type: 'number', min: 1, onChange: (value) => set('maxDeduceRuns', value) }))),
+      error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
+    function NovelEditForm({ novel, onClose, onSaved }) {
+      const t = useTranslate()
+      const [detail, setDetail] = useState(null)
+      const [title, setTitle] = useState(novel.title || '')
+      const [genre, setGenre] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      useEffect(() => {
+        let cancelled = false
+        void fetchNovelDetail(novel.novelId)
+          .then((next) => {
+            if (cancelled) return
+            setDetail(next)
+            setTitle(typeof next?.title === 'string' ? next.title : novel.title || '')
+            setGenre(typeof next?.config?.genre === 'string' ? next.config.genre : '')
+          })
+          .catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause)) })
+        return () => { cancelled = true }
+      }, [novel.novelId])
+      const save = () => {
+        if (busy || detail === null) return
+        const patch = {}
+        const nextTitle = title.trim()
+        const nextGenre = genre.trim()
+        if (nextTitle !== '' && nextTitle !== detail.title) patch.title = nextTitle
+        if (nextGenre !== (detail.config?.genre ?? '')) patch.genre = nextGenre
+        if (Object.keys(patch).length === 0) {
+          onSaved()
+          return
+        }
+        setBusy(true)
+        setError('')
+        setNotice('')
+        void patchNovel(novel.novelId, detail.revision, patch)
+          .then(() => onSaved())
+          .catch((cause) => {
+            if (isNovelConflict(cause)) {
+              // CAS 冲突：自动重取详情并提示（契约要求），保留弹窗让用户重试。
+              setNotice(t('novel.conflict'))
+              void fetchNovelDetail(novel.novelId)
+                .then((next) => {
+                  setDetail(next)
+                  setTitle(typeof next?.title === 'string' ? next.title : title)
+                  setGenre(typeof next?.config?.genre === 'string' ? next.config.genre : genre)
+                })
+                .catch(() => {})
+            } else {
+              setError(cause instanceof Error ? cause.message : String(cause))
+            }
+          })
+          .finally(() => setBusy(false))
+      }
+      return h(NovelModalFrame, {
+        title: t('novel.editTitle'),
+        closeLabel: t('panel.close'),
+        onClose,
+        className: 'dt-novel-modal-sm',
+        footer: h(React.Fragment, null,
+          h(Button, { size: 'sm', variant: 'ghost', onClick: onClose }, t('panel.cancel')),
+          h(Button, { size: 'sm', variant: 'primary', disabled: busy || detail === null || title.trim() === '', onClick: save },
+            busy ? t('settings.importing') : t('panel.save'))),
+      },
+      h('div', { className: 'dt-novel-form-grid' },
+        h(EditorField, { label: t('novel.form.title'), value: title, onChange: setTitle }),
+        h(EditorField, { label: t('novel.genre'), value: genre, onChange: setGenre })),
+      error ? h('p', { className: 'dt-error' }, error) : null,
+      notice ? h('p', { className: 'dt-muted' }, notice) : null)
+    }
+
+    function PanelNovels({ ctx }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const [novels, setNovels] = useState(null)
+      const [error, setError] = useState('')
+      const [selected, setSelected] = useState('')
+      const [creating, setCreating] = useState(false)
+      const [editing, setEditing] = useState(null)
+      const capability = state.bootstrap.agentNovel || { available: false, missing: [], reasons: [] }
+      const unavailableReason = capability.reasons?.length ? capability.reasons.join(' ')
+        : capability.missing?.length ? capability.missing.join(', ') : ''
+      const reload = () => fetchNovelList()
+        .then((list) => { setNovels(list); setError(''); return list })
+        .catch((cause) => { setError(cause instanceof Error ? cause.message : String(cause)); return null })
+      useEffect(() => { void reload() }, [])
+      if (selected !== '') {
+        return h(NovelDetail, {
+          ctx,
+          novelId: selected,
+          onBack: () => setSelected(''),
+          onChanged: () => { void reload() },
+        })
+      }
+      return h(React.Fragment, null,
+        h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('panel.section.novels')),
+          h('div', { className: 'dt-imports' },
+            h(Button, {
+              size: 'sm',
+              variant: 'primary',
+              icon: h(IconPlusOutline16),
+              disabled: capability.available !== true,
+              title: capability.available !== true && unavailableReason !== ''
+                ? t('novel.createUnavailable', { reason: unavailableReason })
+                : undefined,
+              onClick: () => setCreating(true),
+            }, t('novel.create')),
+            h(Button, {
+              size: 'sm',
+              variant: 'ghost',
+              icon: h(IconRefreshOutline16),
+              onClick: () => { setError(''); void reload() },
+            }, t('novel.refresh'))),
+          capability.available !== true
+            ? h('p', { className: 'dt-hint' }, t('novel.createUnavailable', { reason: unavailableReason || '—' }))
+            : null),
+        h('section', { className: 'dt-settings-band' },
+          novels === null
+            ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+            : novels.length === 0
+              ? h('p', { className: 'dt-muted' }, t('novel.empty'))
+              : h('div', { className: 'dt-novel-list' }, novels.map((novel) => h(NovelCard, {
+                key: novel.novelId,
+                ctx,
+                novel,
+                t,
+                onDetail: () => setSelected(novel.novelId),
+                onEdit: () => setEditing(novel),
+                onChanged: reload,
+              }))),
+          error ? h('p', { className: 'dt-error' }, error) : null),
+        creating ? h(NovelCreateForm, {
+          onClose: () => setCreating(false),
+          onCreated: (created) => {
+            setCreating(false)
+            void reload().then((list) => {
+              if (list !== null && created?.novelId) setSelected(created.novelId)
+            })
+          },
+        }) : null,
+        editing ? h(NovelEditForm, {
+          novel: editing,
+          onClose: () => setEditing(null),
+          onSaved: () => { setEditing(null); void reload() },
+        }) : null)
+    }
+
     function TavernPanel({ ctx, useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
-      const [section, setSection] = useState(state.panelSection || 'overview')
+      // 分区跟随 store 的 panelSection（openPanel(section) 可在面板已打开时切换，
+      // 例如小说会话头的“打开小说面板”入口）；导航点击同步写回 store。
+      const section = state.panelSection || 'overview'
       useEffect(() => { if (state.loading) void refreshBootstrap().catch(() => {}) }, [])
       const stamp = state.bootstrap.version || state.bootstrap.commit
         ? `v${state.bootstrap.version || '?'}${state.bootstrap.commit ? ` (${state.bootstrap.commit})` : ''}`
@@ -3892,6 +5240,7 @@ window.__ModuleLoader__.load({
       const body = section === 'overview' ? h(PanelOverview)
         : section === 'characters' ? h(PanelCharacters)
         : section === 'chats' ? h(TavernSidebar, { ctx, useSessions })
+        : section === 'novels' ? h(PanelNovels, { ctx })
         : section === 'groups' ? h(GroupBand)
         : section === 'personas' ? h(PersonaBand)
         : section === 'worlds' ? h(PanelWorlds)
@@ -3911,7 +5260,7 @@ window.__ModuleLoader__.load({
             type: 'button',
             className: `dt-panel-navcell ${section === item.id ? 'dt-panel-navcell-active' : ''}`,
             'aria-current': section === item.id ? 'page' : undefined,
-            onClick: () => setSection(item.id),
+            onClick: () => update({ panelSection: item.id }),
           }, h(item.icon), h('span', null, t(`panel.section.${item.id}`))))),
         h('div', { className: 'dt-panel-main' },
           h('header', { className: 'dt-panel-header' },
@@ -4112,6 +5461,63 @@ window.__ModuleLoader__.load({
         .dt-tc-state{display:inline-flex;align-items:center;padding:0 4px}
         .dt-header-character{padding:0;border:0;border-radius:0}
         @media(max-width:700px){.dt-panel{flex-direction:column}.dt-panel-nav{width:100%;flex-direction:row;align-items:center;overflow-x:auto;overflow-y:hidden;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-panel-brand{padding:4px 8px}.dt-panel-brand-copy{display:none}.dt-panel-navcell{flex:none}.dt-card-grid{grid-template-columns:1fr}.dt-kv-row{grid-template-columns:1fr 1fr 28px}.dt-editor-grid{grid-template-columns:1fr}.dt-editor-wide{grid-column:auto}.dt-editor-toolbar{align-items:flex-start}.dt-preset-row{align-items:flex-start}.dt-preset-name{flex-basis:100%}}
+        .dt-novel-badge{display:inline-flex;align-items:center;min-height:18px;padding:0 7px;border-radius:9px;font-size:10px;line-height:18px;font-weight:600;white-space:nowrap}
+        .dt-novel-badge-active{color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent)}
+        .dt-novel-badge-paused{color:var(--dsw-alias-state-warn-label,var(--dsw-alias-label-secondary));background:var(--dsw-alias-interactive-bg-hover)}
+        .dt-novel-badge-completed{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}
+        .dt-novel-list{display:flex;flex-direction:column;gap:10px}
+        .dt-novel-card{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px}
+        .dt-novel-card .dt-error,.dt-novel-detail .dt-error{margin:0}
+        .dt-novel-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+        .dt-novel-title{min-width:0;flex:1;text-align:left;border:0;background:transparent;color:inherit;cursor:pointer;font:inherit;font-size:14px;font-weight:600;padding:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .dt-novel-title:hover{color:var(--dsw-alias-state-business-primary)}
+        .dt-novel-title-text{font-size:14px;line-height:20px;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .dt-novel-reason{color:var(--dsw-alias-state-warn-label,var(--dsw-alias-label-secondary));font-size:11px;line-height:16px}
+        .dt-novel-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+        .dt-novel-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+        .dt-novel-detail{display:grid;grid-template-columns:210px minmax(0,1fr) 250px;gap:14px;align-items:start}
+        .dt-novel-col{display:flex;flex-direction:column;gap:12px;min-width:0}
+        .dt-novel-block{display:flex;flex-direction:column;gap:6px;min-width:0}
+        .dt-novel-block h4{margin:0;font-size:12px;line-height:18px;font-weight:600;color:var(--dsw-alias-label-secondary)}
+        .dt-novel-note{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+        .dt-novel-toc{display:flex;flex-direction:column;gap:2px}
+        .dt-novel-chapter{display:flex;flex-direction:column;gap:1px;align-items:flex-start;text-align:left;border:0;background:transparent;color:inherit;cursor:pointer;font:inherit;padding:5px 6px;border-radius:6px}
+        .dt-novel-chapter:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        .dt-novel-chapter-active{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-state-business-primary)}
+        .dt-novel-chapter-title{font-size:13px;line-height:18px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .dt-novel-chapter-meta{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px}
+        .dt-novel-paragraphs{display:flex;flex-direction:column;gap:12px}
+        .dt-novel-paragraph{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.7;color:var(--dsw-alias-label-primary)}
+        .dt-novel-reqs{display:flex;flex-direction:column;gap:6px}
+        .dt-novel-req{display:flex;flex-direction:column;gap:3px;padding:7px 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px}
+        .dt-novel-req-head{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px;line-height:16px}
+        .dt-novel-req-status{font-weight:600;color:var(--dsw-alias-label-secondary)}
+        .dt-novel-req-blocked .dt-novel-req-status{color:var(--dsw-alias-state-error-primary)}
+        .dt-novel-req-text{margin:0;font-size:12px;line-height:18px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--dsw-alias-label-primary)}
+        .dt-novel-req-meta{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;overflow-wrap:anywhere}
+        .dt-novel-kv{display:flex;flex-direction:column;gap:4px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+        .dt-novel-kv span{overflow-wrap:anywhere}
+        .dt-novel-fores{display:flex;flex-direction:column;gap:4px}
+        .dt-novel-fore{display:flex;flex-direction:column;gap:1px;font-size:12px;line-height:17px}
+        .dt-novel-fore-meta{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px}
+        .dt-novel-outline-pre{margin:0;max-height:60vh;overflow:auto;font:11px/16px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--dsw-alias-label-primary)}
+        .dt-novel-approve{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+        .dt-novel-approve input{box-sizing:border-box;width:130px;min-height:30px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:5px 8px;font:inherit;font-size:12px}
+        .dt-novel-modal{pointer-events:auto;display:flex;flex-direction:column;width:min(760px,calc(100vw - 48px));height:min(680px,calc(100vh - 64px));max-width:100%;max-height:100%;padding:0;gap:0;border-color:var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
+        .dt-novel-modal-sm{width:min(480px,calc(100vw - 48px));height:auto;max-height:min(480px,calc(100vh - 64px))}
+        .dt-novel-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}
+        .dt-novel-modal-head h2{margin:0;font-size:16px;line-height:22px;font-weight:600}
+        .dt-novel-modal-body{flex:1;min-height:0;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:12px}
+        .dt-novel-modal-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 20px;border-top:1px solid var(--dsw-alias-border-l2)}
+        .dt-novel-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+        .dt-novel-form-wide{grid-column:1 / -1}
+        .dt-novel-form-section{display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l2)}
+        .dt-novel-form-section h4{margin:0;font-size:12px;line-height:18px;font-weight:600;color:var(--dsw-alias-label-secondary)}
+        .dt-header-novel-actions{display:flex;align-items:center;gap:2px}
+        .dt-header-novel-actions button{min-width:24px;height:24px;padding:0 6px;border:0;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;gap:3px;color:inherit;background:transparent;cursor:pointer;font:inherit;font-size:11px}
+        .dt-header-novel-actions button:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        @media(max-width:900px){.dt-novel-detail{grid-template-columns:1fr}}
+        @media(max-width:700px){.dt-novel-form-grid{grid-template-columns:1fr}.dt-novel-form-wide{grid-column:auto}}
       `
       document.head.appendChild(tag)
     }

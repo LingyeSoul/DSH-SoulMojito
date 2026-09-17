@@ -9,11 +9,12 @@
     ".": "./index.mjs",
     "./agent": "./agent.mjs",
     "./compaction": "./compaction.mjs",
+    "./novel": "./novel.mjs",
     "./client": "./client/index.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
-  "files": ["index.mjs", "agent.mjs", "compaction.mjs", "version.json", "agent-presets", "client", "cordis.patch.yml", "README.md"],
+  "files": ["index.mjs", "agent.mjs", "compaction.mjs", "novel.mjs", "version.json", "agent-presets", "client", "cordis.patch.yml", "README.md"],
   "scripts": {
     "build": "node ../../scripts/build-plugin.mjs",
     "gates": "node scripts/gates/run.mjs"

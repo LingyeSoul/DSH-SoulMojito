@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
-import { join as join6, relative, resolve as resolve2 } from "node:path";
+import { join as join8, relative, resolve as resolve2 } from "node:path";
 
 // packages/tavern-format/src/png.ts
 var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -1215,15 +1215,15 @@ var CharxFormatError = class extends Error {
     this.name = "CharxFormatError";
   }
 };
-function decodeCharxAsset(bytes, path4) {
+function decodeCharxAsset(bytes, path6) {
   let files;
   try {
     files = unzipSync(bytes);
   } catch (cause) {
     throw new CharxFormatError(`not a valid zip: ${String(cause)}`);
   }
-  const asset = files[path4];
-  if (asset === void 0) throw new CharxFormatError(`CHARX has no asset '${path4}'`);
+  const asset = files[path6];
+  if (asset === void 0) throw new CharxFormatError(`CHARX has no asset '${path6}'`);
   return asset;
 }
 
@@ -3625,16 +3625,16 @@ function decodeCharx(bytes) {
   const assetPaths = Object.keys(files).filter((p) => p !== "card.json");
   return { card, assetPaths };
 }
-function decodeCharxAsset2(bytes, path4) {
+function decodeCharxAsset2(bytes, path6) {
   let files;
   try {
     files = unzipSync(bytes);
   } catch (cause) {
     throw new CharxFormatError2(`not a valid zip: ${String(cause)}`);
   }
-  const asset = files[path4];
+  const asset = files[path6];
   if (asset === void 0)
-    throw new CharxFormatError2(`CHARX has no asset '${path4}'`);
+    throw new CharxFormatError2(`CHARX has no asset '${path6}'`);
   return asset;
 }
 function encodeCharx(ir, assets) {
@@ -4663,6 +4663,15 @@ var TavernStore = class _TavernStore {
 function normalizeTavernSessionBinding(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
   const candidate = value;
+  if (candidate.architecture === "agent-novel") {
+    if (typeof candidate.novelId !== "string" || candidate.novelId.trim() === "") return void 0;
+    return {
+      character: typeof candidate.character === "string" ? candidate.character : "",
+      chatId: typeof candidate.chatId === "string" ? candidate.chatId : "",
+      architecture: "agent-novel",
+      novelId: candidate.novelId
+    };
+  }
   if (typeof candidate.character !== "string" || candidate.character.trim() === "") return void 0;
   if (typeof candidate.chatId !== "string" || candidate.chatId.trim() === "") return void 0;
   const base = {
@@ -5191,6 +5200,1818 @@ async function writeAtomic2(file, text) {
   await fs3.rename(tmp, file);
 }
 
+// packages/tavern-store/src/novel-model.ts
+function countEffectiveCharacters(text) {
+  let count = 0;
+  for (const ch of text) {
+    if (/[\p{L}\p{N}]/u.test(ch)) count += 1;
+  }
+  return count;
+}
+function isPositiveInteger(value) {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+function validateCreateConfig(config) {
+  const errors = [];
+  const c = config;
+  for (const field of ["title", "requirement", "language", "genre", "narrativePerspective"]) {
+    if (typeof c[field] !== "string" || c[field].trim() === "") {
+      errors.push({ field, message: `${field} must be a non-empty string` });
+    }
+  }
+  if (typeof c.styleNotes !== "string") {
+    errors.push({ field: "styleNotes", message: "styleNotes must be a string" });
+  }
+  const budget = c.lengthBudget;
+  if (typeof budget !== "object" || budget === null || Array.isArray(budget)) {
+    errors.push({ field: "lengthBudget", message: "lengthBudget is required" });
+  } else {
+    const b = budget;
+    if (b.kind !== "unbounded" && b.kind !== "target") {
+      errors.push({ field: "lengthBudget.kind", message: "lengthBudget.kind must be 'unbounded' or 'target'" });
+    } else if (b.kind === "target") {
+      if (!isPositiveInteger(b.targetCharacters)) {
+        errors.push({ field: "lengthBudget.targetCharacters", message: "targetCharacters must be a positive integer" });
+      }
+      const tolerance = b.toleranceRatio;
+      if (typeof tolerance !== "number" || !Number.isFinite(tolerance) || tolerance < 0 || tolerance >= 1) {
+        errors.push({ field: "lengthBudget.toleranceRatio", message: "toleranceRatio must be within [0, 1)" });
+      }
+      const hardMax = b.hardMaximumCharacters;
+      if (hardMax !== null && hardMax !== void 0) {
+        if (!isPositiveInteger(hardMax)) {
+          errors.push({ field: "lengthBudget.hardMaximumCharacters", message: "hardMaximumCharacters must be a positive integer or null" });
+        } else if (isPositiveInteger(b.targetCharacters) && hardMax < b.targetCharacters) {
+          errors.push({ field: "lengthBudget.hardMaximumCharacters", message: "hardMaximumCharacters must not be lower than targetCharacters" });
+        }
+      } else if (hardMax === void 0) {
+        errors.push({ field: "lengthBudget.hardMaximumCharacters", message: "hardMaximumCharacters must be a positive integer or null" });
+      }
+    }
+  }
+  if (c.maxChapters !== null && c.maxChapters !== void 0 && !isPositiveInteger(c.maxChapters)) {
+    errors.push({ field: "maxChapters", message: "maxChapters must be a positive integer or null" });
+  }
+  if (c.approvalMode !== "automatic" && c.approvalMode !== "manual") {
+    errors.push({ field: "approvalMode", message: "approvalMode must be 'automatic' or 'manual'" });
+  }
+  for (const field of ["characterNames", "worldNames"]) {
+    const list = c[field];
+    if (!Array.isArray(list) || list.some((name2) => typeof name2 !== "string" || name2.trim() === "")) {
+      errors.push({ field, message: `${field} must be an array of non-empty strings` });
+    } else if (new Set(list).size !== list.length) {
+      errors.push({ field, message: `${field} must not contain duplicates` });
+    }
+  }
+  const budgets = c.budgets;
+  if (typeof budgets !== "object" || budgets === null || Array.isArray(budgets)) {
+    errors.push({ field: "budgets", message: "budgets is required" });
+  } else {
+    const b = budgets;
+    for (const field of ["maxTurns", "maxDurationMs", "stallThresholdTurns", "consecutiveFailureLimit", "maxDeduceRuns"]) {
+      if (!isPositiveInteger(b[field])) {
+        errors.push({ field: `budgets.${field}`, message: `${field} must be a positive integer` });
+      }
+    }
+    const retry = b.externalRetry;
+    if (typeof retry !== "object" || retry === null || Array.isArray(retry) || !isPositiveInteger(retry.maxAttempts) || !isPositiveInteger(retry.backoffMs)) {
+      errors.push({ field: "budgets.externalRetry", message: "externalRetry.maxAttempts and backoffMs must be positive integers" });
+    }
+  }
+  return errors;
+}
+function totalEffectiveCharacters(commits) {
+  return commits.reduce((total, commit) => total + commit.effectiveCharacters, 0);
+}
+function lengthWithinBudget(total, budget) {
+  if (budget.kind === "unbounded") return true;
+  const lower = budget.targetCharacters * (1 - budget.toleranceRatio);
+  const upper = budget.hardMaximumCharacters ?? budget.targetCharacters * (1 + budget.toleranceRatio);
+  return total >= lower && total <= upper;
+}
+var ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+function isSafeId(value) {
+  return typeof value === "string" && ID_PATTERN.test(value);
+}
+function validateOutlinePayload(payload) {
+  const errors = [];
+  const p = payload;
+  const story = p.story;
+  if (typeof story !== "object" || story === null || Array.isArray(story)) {
+    errors.push({ field: "story", message: "story is required" });
+  } else {
+    for (const field of ["premise", "theme", "mainConflict", "endingDirection"]) {
+      if (typeof story[field] !== "string" || story[field].trim() === "") {
+        errors.push({ field: `story.${field}`, message: `${field} must be a non-empty string` });
+      }
+    }
+    if (!Array.isArray(story.taboos) || story.taboos.some((t) => typeof t !== "string")) {
+      errors.push({ field: "story.taboos", message: "taboos must be an array of strings" });
+    }
+  }
+  const characters = p.characters;
+  if (!Array.isArray(characters)) {
+    errors.push({ field: "characters", message: "characters must be an array" });
+  } else {
+    const seen = /* @__PURE__ */ new Set();
+    characters.forEach((character, index) => {
+      const c = character;
+      if (!isSafeId(c.characterId)) {
+        errors.push({ field: `characters[${index}].characterId`, message: "characterId must match [A-Za-z0-9][A-Za-z0-9_-]{0,63}" });
+      } else if (seen.has(c.characterId)) {
+        errors.push({ field: `characters[${index}].characterId`, message: `duplicate characterId '${c.characterId}'` });
+      } else {
+        seen.add(c.characterId);
+      }
+      for (const field of ["name", "initialState", "motivation", "arc"]) {
+        if (typeof c[field] !== "string" || c[field].trim() === "") {
+          errors.push({ field: `characters[${index}].${field}`, message: `${field} must be a non-empty string` });
+        }
+      }
+      if (!Array.isArray(c.relations) || c.relations.some((r) => typeof r !== "string")) {
+        errors.push({ field: `characters[${index}].relations`, message: "relations must be an array of strings" });
+      }
+    });
+  }
+  const chapterIds = /* @__PURE__ */ new Set();
+  const orders = [];
+  const chapters = p.chapters;
+  if (!Array.isArray(chapters)) {
+    errors.push({ field: "chapters", message: "chapters must be an array" });
+  } else {
+    chapters.forEach((chapter, index) => {
+      const c = chapter;
+      if (!isSafeId(c.chapterId)) {
+        errors.push({ field: `chapters[${index}].chapterId`, message: "chapterId must match [A-Za-z0-9][A-Za-z0-9_-]{0,63}" });
+      } else if (chapterIds.has(c.chapterId)) {
+        errors.push({ field: `chapters[${index}].chapterId`, message: `duplicate chapterId '${c.chapterId}'` });
+      } else {
+        chapterIds.add(c.chapterId);
+      }
+      if (!isPositiveInteger(c.order)) {
+        errors.push({ field: `chapters[${index}].order`, message: "order must be a positive integer" });
+      } else {
+        orders.push(c.order);
+      }
+      for (const field of ["title", "purpose", "entryCondition", "exitCondition"]) {
+        if (typeof c[field] !== "string" || c[field].trim() === "") {
+          errors.push({ field: `chapters[${index}].${field}`, message: `${field} must be a non-empty string` });
+        }
+      }
+      if (!Array.isArray(c.keyEvents) || c.keyEvents.some((e) => typeof e !== "string")) {
+        errors.push({ field: `chapters[${index}].keyEvents`, message: "keyEvents must be an array of strings" });
+      }
+      if (c.plannedCharacters !== null && c.plannedCharacters !== void 0 && !isPositiveInteger(c.plannedCharacters)) {
+        errors.push({ field: `chapters[${index}].plannedCharacters`, message: "plannedCharacters must be a positive integer or null" });
+      }
+    });
+    if (orders.length > 0 && new Set(orders).size !== orders.length) {
+      errors.push({ field: "chapters.order", message: "chapter order values must be unique" });
+    }
+  }
+  const currentChapterId = p.currentChapterId;
+  if (currentChapterId !== null && currentChapterId !== void 0) {
+    if (typeof currentChapterId !== "string" || !chapterIds.has(currentChapterId)) {
+      errors.push({ field: "currentChapterId", message: "currentChapterId must reference a chapter in chapters" });
+    }
+  } else if (chapterIds.size > 0) {
+    errors.push({ field: "currentChapterId", message: "currentChapterId is required when chapters exist" });
+  }
+  const scenes = p.scenes;
+  if (!Array.isArray(scenes)) {
+    errors.push({ field: "scenes", message: "scenes must be an array" });
+  } else {
+    const seen = /* @__PURE__ */ new Set();
+    scenes.forEach((scene, index) => {
+      const s = scene;
+      if (!isSafeId(s.sceneId)) {
+        errors.push({ field: `scenes[${index}].sceneId`, message: "sceneId must match [A-Za-z0-9][A-Za-z0-9_-]{0,63}" });
+      } else if (seen.has(s.sceneId)) {
+        errors.push({ field: `scenes[${index}].sceneId`, message: `duplicate sceneId '${s.sceneId}'` });
+      } else {
+        seen.add(s.sceneId);
+      }
+      if (!isPositiveInteger(s.order)) {
+        errors.push({ field: `scenes[${index}].order`, message: "order must be a positive integer" });
+      }
+      for (const field of ["goal", "timeLocation", "causality", "conflict", "expectedChange"]) {
+        if (typeof s[field] !== "string" || s[field].trim() === "") {
+          errors.push({ field: `scenes[${index}].${field}`, message: `${field} must be a non-empty string` });
+        }
+      }
+      if (!Array.isArray(s.participants) || s.participants.some((x) => typeof x !== "string")) {
+        errors.push({ field: `scenes[${index}].participants`, message: "participants must be an array of strings" });
+      }
+    });
+  }
+  const foreshadowing = p.foreshadowing;
+  if (!Array.isArray(foreshadowing)) {
+    errors.push({ field: "foreshadowing", message: "foreshadowing must be an array" });
+  } else {
+    const seen = /* @__PURE__ */ new Set();
+    foreshadowing.forEach((item, index) => {
+      const f = item;
+      if (!isSafeId(f.id)) {
+        errors.push({ field: `foreshadowing[${index}].id`, message: "id must match [A-Za-z0-9][A-Za-z0-9_-]{0,63}" });
+      } else if (seen.has(f.id)) {
+        errors.push({ field: `foreshadowing[${index}].id`, message: `duplicate foreshadowing id '${f.id}'` });
+      } else {
+        seen.add(f.id);
+      }
+      if (typeof f.description !== "string" || f.description.trim() === "") {
+        errors.push({ field: `foreshadowing[${index}].description`, message: "description must be a non-empty string" });
+      }
+      if (f.status !== "open" && f.status !== "planted" && f.status !== "resolved") {
+        errors.push({ field: `foreshadowing[${index}].status`, message: "status must be 'open' | 'planted' | 'resolved'" });
+      }
+      if (typeof f.required !== "boolean") {
+        errors.push({ field: `foreshadowing[${index}].required`, message: "required must be a boolean" });
+      }
+    });
+  }
+  return errors;
+}
+function requirementWatermark(records) {
+  const ordered = [...records].sort((left, right) => left.sequence - right.sequence);
+  let watermark = 0;
+  for (const record of ordered) {
+    if (record.status !== "applied" && record.status !== "superseded") break;
+    watermark = record.sequence;
+  }
+  return watermark;
+}
+function summarizeNovel(snapshot2) {
+  return {
+    novelId: snapshot2.novelId,
+    title: snapshot2.config.title,
+    status: snapshot2.run.status,
+    phase: snapshot2.run.phase,
+    pauseReason: snapshot2.run.pauseReason,
+    chaptersCompleted: snapshot2.completedChapters.length,
+    chaptersTotal: snapshot2.outline?.chapters.length ?? 0,
+    effectiveCharacters: totalEffectiveCharacters(snapshot2.commits),
+    targetCharacters: snapshot2.config.lengthBudget.kind === "target" ? snapshot2.config.lengthBudget.targetCharacters : null,
+    updatedAt: snapshot2.updatedAt,
+    lastError: snapshot2.run.lastError
+  };
+}
+function finishGuardViolations(snapshot2) {
+  const violations = [];
+  const outline = snapshot2.outline;
+  if (outline === null) {
+    violations.push("outline-missing");
+    return violations;
+  }
+  const completedIds = new Set(snapshot2.completedChapters.map((entry) => entry.chapterId));
+  for (const chapter of outline.chapters) {
+    if (!completedIds.has(chapter.chapterId)) violations.push(`chapters-incomplete:${chapter.chapterId}`);
+  }
+  for (const item of outline.foreshadowing) {
+    if (item.required && item.status !== "resolved") violations.push(`foreshadowing-unresolved:${item.id}`);
+  }
+  for (const record of snapshot2.requirements) {
+    if (record.status === "pending" || record.status === "blocked") violations.push(`requirement-unprocessed:${record.requirementId}`);
+  }
+  for (const unit of snapshot2.units) {
+    if (unit.state === "prepared" || unit.state === "claimed") violations.push(`unit-in-flight:${unit.unitId}`);
+  }
+  const total = totalEffectiveCharacters(snapshot2.commits);
+  if (!lengthWithinBudget(total, snapshot2.config.lengthBudget)) violations.push(`length-out-of-budget:${total}`);
+  return violations;
+}
+function stableStringify(value) {
+  return serialize(value);
+  function serialize(input) {
+    if (input === null) return "null";
+    switch (typeof input) {
+      case "string":
+        return JSON.stringify(input);
+      case "number":
+        return Number.isFinite(input) ? JSON.stringify(input) : "null";
+      case "boolean":
+        return input ? "true" : "false";
+      case "object": {
+        if (Array.isArray(input)) return `[${input.map(serialize).join(",")}]`;
+        const record = input;
+        const keys = Object.keys(record).filter((key) => record[key] !== void 0).sort();
+        return `{${keys.map((key) => `${JSON.stringify(key)}:${serialize(record[key])}`).join(",")}}`;
+      }
+      default:
+        return "null";
+    }
+  }
+}
+var NovelConfigError = class extends Error {
+  code = "NOVEL_CONFIG";
+  errors;
+  constructor({ message, errors = [] }) {
+    super(message);
+    this.name = "NovelConfigError";
+    this.errors = errors;
+  }
+};
+var NovelRevisionConflictError = class extends Error {
+  code = "NOVEL_REVISION_CONFLICT";
+  expectedRevision;
+  actualRevision;
+  detail;
+  constructor({ expected, actual = null, detail = null }) {
+    super(`Novel revision conflict: expected ${expected}, actual ${actual ?? "none"}${detail === null ? "" : ` (${detail})`}`);
+    this.name = "NovelRevisionConflictError";
+    this.expectedRevision = expected;
+    this.actualRevision = actual;
+    this.detail = detail;
+  }
+};
+var NovelStaleUnitError = class extends Error {
+  code = "NOVEL_STALE_UNIT";
+  unitId;
+  attempt;
+  constructor({ unitId, attempt }) {
+    super(`Stale writing unit '${unitId}' (attempt ${attempt}): the claim was superseded, revoked or already consumed.`);
+    this.name = "NovelStaleUnitError";
+    this.unitId = unitId;
+    this.attempt = attempt;
+  }
+};
+var NovelRequirementConflictError = class extends Error {
+  code = "NOVEL_REQUIREMENT_CONFLICT";
+  requirementId;
+  conflictReason;
+  bodySources;
+  constructor({ requirementId, conflictReason, bodySources = [] }) {
+    super(`Requirement '${requirementId}' conflicts with committed facts: ${conflictReason}`);
+    this.name = "NovelRequirementConflictError";
+    this.requirementId = requirementId;
+    this.conflictReason = conflictReason;
+    this.bodySources = bodySources;
+  }
+};
+var NovelDuplicateCommitError = class extends Error {
+  code = "NOVEL_DUPLICATE_COMMIT";
+  unitId;
+  existingCommitId;
+  constructor({ unitId, existingCommitId }) {
+    super(`Unit '${unitId}' already committed as '${existingCommitId}' with different business content.`);
+    this.name = "NovelDuplicateCommitError";
+    this.unitId = unitId;
+    this.existingCommitId = existingCommitId;
+  }
+};
+var NovelLengthLimitError = class extends Error {
+  code = "NOVEL_LENGTH_LIMIT";
+  current;
+  target;
+  hardMaximum;
+  constructor({ current, target = null, hardMaximum = null }) {
+    super(`Length limit exceeded: ${current} effective characters (target ${target ?? "none"}, hard maximum ${hardMaximum ?? "none"}). The candidate body was not written.`);
+    this.name = "NovelLengthLimitError";
+    this.current = current;
+    this.target = target;
+    this.hardMaximum = hardMaximum;
+  }
+};
+var NovelOwnershipError = class extends Error {
+  code = "NOVEL_OWNERSHIP";
+  novelId;
+  pid;
+  alive;
+  constructor({ novelId, pid = null, alive = false, detail }) {
+    super(`Novel '${novelId}' is owned by pid ${pid ?? "unknown"} (${alive ? "running" : "not running"}): ${detail}`);
+    this.name = "NovelOwnershipError";
+    this.novelId = novelId;
+    this.pid = pid;
+    this.alive = alive;
+  }
+};
+var NovelCapabilityError = class extends Error {
+  code = "NOVEL_CAPABILITY";
+  reason;
+  constructor({ reason }) {
+    super(`Novel capability error: ${reason}`);
+    this.name = "NovelCapabilityError";
+    this.reason = reason;
+  }
+};
+var NovelStorageCorruptionError = class extends Error {
+  code = "NOVEL_STORAGE_CORRUPTION";
+  novelId;
+  path;
+  detail;
+  constructor({ novelId, path: path6, detail }) {
+    super(`Novel storage corruption in '${novelId}' at ${path6}: ${detail}`);
+    this.name = "NovelStorageCorruptionError";
+    this.novelId = novelId;
+    this.path = path6;
+    this.detail = detail;
+  }
+};
+var NovelNotFoundError = class extends Error {
+  code = "NOVEL_NOT_FOUND";
+  novelId;
+  constructor({ novelId }) {
+    super(`Novel '${novelId}' not found.`);
+    this.name = "NovelNotFoundError";
+    this.novelId = novelId;
+  }
+};
+var NovelPreconditionError = class extends Error {
+  code = "NOVEL_PRECONDITION";
+  rule;
+  violations;
+  constructor({ rule, violations = [] }) {
+    super(`Novel precondition '${rule}' failed${violations.length === 0 ? "" : `: ${violations.join("; ")}`}`);
+    this.name = "NovelPreconditionError";
+    this.rule = rule;
+    this.violations = violations;
+  }
+};
+
+// packages/tavern-store/src/novel.ts
+import { createHash as createHash4, randomBytes } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promises as fs4 } from "node:fs";
+import * as path4 from "node:path";
+var SCHEMA_VERSION = 1;
+var NOVEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
+var REQUIREMENT_SOURCES = /* @__PURE__ */ new Set(["composer", "panel", "internal"]);
+var CANON_KINDS = /* @__PURE__ */ new Set(["event", "character-state", "relation", "foreshadowing", "variable"]);
+var SOURCE_REF_PATTERN = /^(commit-\d+)(?:#(\d+))?$/;
+var PARAGRAPH_SEPARATOR = "\n\n";
+var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("hex");
+var DSH_HOST_COMMAND = /@deepseek-ai[\\/]dsh\b|(?:^|[\\/ \t"'])dsh(?:\.(?:cmd|js|ps1|exe|bat))?["']?[ \t]+web\b/;
+function commandLineOf(pid) {
+  if (process.platform === "win32") {
+    return new Promise((resolve3) => {
+      execFile("powershell.exe", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`], { timeout: 5e3, windowsHide: true }, (error, stdout) => {
+        if (error) resolve3(null);
+        else resolve3(stdout.trim() === "" ? void 0 : stdout.trim());
+      });
+    });
+  }
+  if (process.platform === "linux") {
+    return fs4.readFile(`/proc/${pid}/cmdline`, "utf8").then(
+      (raw) => raw.split("\0").join(" ").trim() || void 0,
+      (cause) => {
+        const code = cause.code;
+        return code === "ENOENT" || code === "ESRCH" ? void 0 : null;
+      }
+    );
+  }
+  if (process.platform === "darwin") {
+    return new Promise((resolve3) => {
+      execFile("ps", ["-p", String(pid), "-o", "command="], { timeout: 5e3 }, (error, stdout) => {
+        if (error) resolve3(Number(error.code) === 1 ? void 0 : null);
+        else resolve3(stdout.trim() === "" ? void 0 : stdout.trim());
+      });
+    });
+  }
+  return Promise.resolve(null);
+}
+async function isLiveDshWriter(pid) {
+  if (pid === process.pid) return false;
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  let alive = true;
+  try {
+    process.kill(pid, 0);
+  } catch (cause) {
+    alive = cause.code === "EPERM";
+  }
+  if (!alive) return false;
+  const command = await commandLineOf(pid);
+  if (command === void 0) return false;
+  if (command === null) return true;
+  return DSH_HOST_COMMAND.test(command);
+}
+var NovelStore = class _NovelStore {
+  novelsRoot;
+  mutationTails = /* @__PURE__ */ new Map();
+  /** Serialized async projection updates per novel; deleteNovel drains them. */
+  projectionTails = /* @__PURE__ */ new Map();
+  constructor(root) {
+    this.novelsRoot = path4.join(root, "novels");
+  }
+  static async open(tavernRoot) {
+    await fs4.mkdir(path4.join(tavernRoot, "novels"), { recursive: true });
+    return new _NovelStore(tavernRoot);
+  }
+  /* ------------------------------ projects ------------------------------ */
+  /**
+   * Creates a project: validates config, snapshots the selected assets
+   * (character-embedded world books merge into worldNames, §5), registers the
+   * first requirement and writes the initial snapshot. Missing source assets
+   * throw NovelConfigError instead of becoming empty objects (§15).
+   */
+  async createNovel(tavern, config) {
+    const errors = validateCreateConfig(config);
+    if (errors.length > 0) throw new NovelConfigError({ message: "invalid novel config", errors });
+    const characters = [];
+    for (const name2 of config.characterNames) {
+      const file = await tavern.getCharacter(name2);
+      if (file === void 0) {
+        throw new NovelConfigError({ message: `source character '${name2}' not found (\xA715: missing assets must fail, not degrade to empty objects)` });
+      }
+      characters.push({ name: name2, card: file.card });
+    }
+    const embeddedWorlds = /* @__PURE__ */ new Set();
+    for (const { card } of characters) {
+      const embedded = embeddedWorldName(card);
+      if (embedded !== null) embeddedWorlds.add(embedded);
+    }
+    const worldNames = [.../* @__PURE__ */ new Set([...config.worldNames, ...embeddedWorlds])];
+    const worlds = [];
+    for (const name2 of worldNames) {
+      const book = await tavern.getWorld(name2);
+      if (book === void 0) {
+        throw new NovelConfigError({ message: `source world '${name2}' not found (\xA715: missing assets must fail, not degrade to empty objects)` });
+      }
+      worlds.push({ name: name2, book });
+    }
+    const novelId = `nvl-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
+    return this.mutate(novelId, async () => {
+      const dir = this.novelDir(novelId);
+      for (const sub of ["revisions", "assets", "bodies", path4.join("projections", "chapters")]) {
+        await fs4.mkdir(path4.join(dir, sub), { recursive: true });
+      }
+      await this.ensureOwnership(novelId, dir);
+      const assets = [];
+      for (const { name: name2, card } of characters) {
+        const contentHash = sha256hex(stableStringify(card));
+        await writeImmutableBytes(path4.join(dir, "assets", `${contentHash}.json`), jsonBytes2(card));
+        assets.push({
+          kind: "character",
+          sourceId: name2,
+          displayName: card.data.name,
+          contentHash,
+          specVersion: typeof card.specVersion === "string" && card.specVersion !== "" ? card.specVersion : null
+        });
+      }
+      for (const { name: name2, book } of worlds) {
+        const contentHash = sha256hex(stableStringify(book));
+        await writeImmutableBytes(path4.join(dir, "assets", `${contentHash}.json`), jsonBytes2(book));
+        assets.push({ kind: "world", sourceId: name2, displayName: name2, contentHash, specVersion: null });
+      }
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const run = config.approvalMode === "manual" ? {
+        status: "paused",
+        phase: "outlining",
+        pauseReason: "awaiting-approval",
+        pauseDetail: "manual mode: waiting for the initial outline",
+        resumeHint: "approve the outline after it is created (\xA74.3)",
+        currentUnitId: null,
+        turnsRun: 0,
+        deduceRuns: 0,
+        startedAt: now,
+        completedAt: null,
+        lastProgressSignature: null,
+        stalledTurns: 0,
+        consecutiveFailures: 0,
+        lastError: null,
+        inFlightIntent: null,
+        awaitingApprovalRevision: null
+      } : {
+        status: "active",
+        phase: "outlining",
+        pauseReason: null,
+        pauseDetail: null,
+        resumeHint: null,
+        currentUnitId: null,
+        turnsRun: 0,
+        deduceRuns: 0,
+        startedAt: now,
+        completedAt: null,
+        lastProgressSignature: null,
+        stalledTurns: 0,
+        consecutiveFailures: 0,
+        lastError: null,
+        inFlightIntent: null,
+        awaitingApprovalRevision: null
+      };
+      const requirement = {
+        requirementId: "req-1",
+        hostMessageId: `create:${novelId}`,
+        sequence: 1,
+        text: config.requirement,
+        receivedAt: now,
+        receivedUnitId: null,
+        status: "pending",
+        appliedRevision: null,
+        effectiveLocation: null,
+        blockedReason: null,
+        supersededBy: null
+      };
+      const snapshot2 = {
+        novelId,
+        revision: "",
+        schemaVersion: SCHEMA_VERSION,
+        createdAt: now,
+        updatedAt: now,
+        config: structuredClone(config),
+        assets,
+        outline: null,
+        requirements: [requirement],
+        units: [],
+        commits: [],
+        completedChapters: [],
+        premiseNote: null,
+        run,
+        contentRevision: "",
+        countPolicyVersion: 1
+      };
+      snapshot2.contentRevision = contentRevisionOf(snapshot2);
+      const revision = await this.publish(dir, null, snapshot2, "create-novel");
+      return { novelId, revision, requirementId: "req-1" };
+    });
+  }
+  async listNovels() {
+    const summaries = [];
+    for (const entry of await readDirectories2(this.novelsRoot)) {
+      const snapshot2 = await this.readSnapshot(entry);
+      if (snapshot2 === void 0) continue;
+      summaries.push(summarizeNovel(snapshot2));
+    }
+    summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.novelId.localeCompare(right.novelId));
+    return summaries;
+  }
+  /** HEAD or referenced revision corruption throws NovelStorageCorruptionError (§10.3). */
+  async getNovel(novelId) {
+    return this.readSnapshot(novelId);
+  }
+  async patchNovelMeta(novelId, input) {
+    if (typeof input.cause !== "string" || input.cause.trim() === "") throw new NovelConfigError({ message: "patch cause must be a non-empty string" });
+    const patch = input.patch;
+    if (patch.title !== void 0 && (typeof patch.title !== "string" || patch.title.trim() === "")) {
+      throw new NovelConfigError({ message: "patch.title must be a non-empty string" });
+    }
+    if (patch.genre !== void 0 && (typeof patch.genre !== "string" || patch.genre.trim() === "")) {
+      throw new NovelConfigError({ message: "patch.genre must be a non-empty string" });
+    }
+    if (patch.premiseNote !== void 0 && typeof patch.premiseNote !== "string") {
+      throw new NovelConfigError({ message: "patch.premiseNote must be a string" });
+    }
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      this.assertRevision(current, input.expectedRevision);
+      const next = {
+        ...current,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        config: { ...current.config, ...patch.title !== void 0 ? { title: patch.title } : {}, ...patch.genre !== void 0 ? { genre: patch.genre } : {} },
+        premiseNote: patch.premiseNote ?? current.premiseNote
+      };
+      const revision = await this.publish(dir, current.revision, next, `patch-meta:${input.cause}`);
+      return { revision };
+    });
+  }
+  async deleteNovel(novelId) {
+    return this.mutate(novelId, async () => {
+      const dir = this.novelDir(novelId);
+      const current = await this.readSnapshot(novelId);
+      if (current === void 0) return false;
+      await this.ensureOwnership(novelId, dir);
+      await this.projectionTails.get(novelId)?.catch(() => {
+      });
+      await fs4.rm(dir, { recursive: true, force: true });
+      return true;
+    });
+  }
+  /* --------------------------- requirements (§9) --------------------------- */
+  /**
+   * Registers an author directive. Idempotent on hostMessageId (§9.1).
+   * Completed novels reject new directives with NovelCapabilityError (§9.2).
+   */
+  async receiveRequirement(novelId, input) {
+    if (typeof input.hostMessageId !== "string" || input.hostMessageId.trim() === "") throw new NovelConfigError({ message: "hostMessageId must be a non-empty string" });
+    if (typeof input.text !== "string" || input.text.trim() === "") throw new NovelConfigError({ message: "requirement text must be a non-empty string" });
+    if (!REQUIREMENT_SOURCES.has(input.sourceKind)) throw new NovelConfigError({ message: `sourceKind must be one of composer|panel|internal` });
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.status === "completed") {
+        throw new NovelCapabilityError({ reason: "novel completed: new requirements are rejected; create a new novel instead (\xA79.2)" });
+      }
+      const existing = current.requirements.find((record2) => record2.hostMessageId === input.hostMessageId);
+      if (existing !== void 0) {
+        return { requirementId: existing.requirementId, sequence: existing.sequence, revision: current.revision, duplicate: true };
+      }
+      const sequence = current.requirements.reduce((max2, record2) => Math.max(max2, record2.sequence), 0) + 1;
+      const record = {
+        requirementId: `req-${sequence}`,
+        hostMessageId: input.hostMessageId,
+        sequence,
+        text: input.text,
+        receivedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        receivedUnitId: current.run.currentUnitId,
+        status: "pending",
+        appliedRevision: null,
+        effectiveLocation: null,
+        blockedReason: null,
+        supersededBy: null
+      };
+      const next = {
+        ...current,
+        updatedAt: record.receivedAt,
+        requirements: [...current.requirements, record]
+      };
+      const revision = await this.publish(dir, current.revision, next, `requirement:${sequence}`);
+      return { requirementId: record.requirementId, sequence, revision, duplicate: false };
+    });
+  }
+  /* ----------------------------- outline (§6) ----------------------------- */
+  /** Creates the initial outline and processes the first requirement batch (§4.3). */
+  async createOutline(novelId, input) {
+    const payloadErrors = validateOutlinePayload(input.outline);
+    if (payloadErrors.length > 0) throw new NovelConfigError({ message: "invalid outline payload", errors: payloadErrors });
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      this.assertRevision(current, input.expectedRevision);
+      if (current.outline !== null) throw new NovelPreconditionError({ rule: "outline-exists" });
+      const handled = this.validateHandledRequirements(current, input.handledRequirements);
+      const outlineRevision = hash16({ kind: "outline", parent: null, reason: "initial outline", payload: input.outline });
+      const built = {
+        outlineRevision,
+        parentRevision: null,
+        reason: "initial outline",
+        sourceRequirementIds: handled.map((item) => item.requirementId),
+        story: structuredClone(input.outline.story),
+        characters: structuredClone(input.outline.characters),
+        chapters: structuredClone(input.outline.chapters),
+        currentChapterId: input.outline.currentChapterId,
+        scenes: structuredClone(input.outline.scenes),
+        foreshadowing: structuredClone(input.outline.foreshadowing)
+      };
+      const requirements = applyHandledRequirements(current.requirements, handled, outlineRevision);
+      const watermark = assertWatermarkAdvanced(current.requirements, requirements);
+      const run = this.runAfterOutlineChange(current.run, current.config.approvalMode, outlineRevision, requirements);
+      const next = { ...current, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), outline: built, requirements, run };
+      const revision = await this.publish(dir, current.revision, next, `outline-create:${outlineRevision}`);
+      return { outlineRevision, revision, watermark };
+    });
+  }
+  /**
+   * Atomically revises the plan and the handled requirement results (§9.3).
+   * Rejected while any unit is claimed (§9.2) and never drops or reorders
+   * chapters that contain committed bodies (§6.1).
+   */
+  async reviseOutline(novelId, input) {
+    if (typeof input.reason !== "string" || input.reason.trim() === "") throw new NovelConfigError({ message: "revision reason must be a non-empty string" });
+    const payloadErrors = validateOutlinePayload(input.changes);
+    if (payloadErrors.length > 0) throw new NovelConfigError({ message: "invalid outline payload", errors: payloadErrors });
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      this.assertRevision(current, input.expectedRevision);
+      const previous = current.outline;
+      if (previous === null) throw new NovelPreconditionError({ rule: "outline-missing" });
+      if (previous.outlineRevision !== input.expectedOutlineRevision) {
+        throw new NovelRevisionConflictError({ expected: input.expectedOutlineRevision, actual: previous.outlineRevision, detail: "outline revision" });
+      }
+      if (current.units.some((unit) => unit.state === "claimed")) {
+        throw new NovelRevisionConflictError({ expected: input.expectedRevision, actual: current.revision, detail: "claimed writing units in flight" });
+      }
+      this.assertProtectedChapters(previous, current, input.changes.chapters);
+      const handled = this.validateHandledRequirements(current, input.handledRequirements);
+      const outlineRevision = hash16({ kind: "outline", parent: previous.outlineRevision, reason: input.reason, payload: input.changes });
+      const built = {
+        outlineRevision,
+        parentRevision: previous.outlineRevision,
+        reason: input.reason,
+        sourceRequirementIds: handled.map((item) => item.requirementId),
+        story: structuredClone(input.changes.story),
+        characters: structuredClone(input.changes.characters),
+        chapters: structuredClone(input.changes.chapters),
+        currentChapterId: input.changes.currentChapterId,
+        scenes: structuredClone(input.changes.scenes),
+        foreshadowing: structuredClone(input.changes.foreshadowing)
+      };
+      const requirements = applyHandledRequirements(current.requirements, handled, outlineRevision);
+      const watermark = assertWatermarkAdvanced(current.requirements, requirements);
+      const run = this.runAfterOutlineChange(current.run, current.config.approvalMode, outlineRevision, requirements);
+      const next = { ...current, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), outline: built, requirements, run };
+      const revision = await this.publish(dir, current.revision, next, `outline-revise:${outlineRevision}`);
+      return { outlineRevision, revision, watermark };
+    });
+  }
+  /** Marks a requirement as blocked against committed facts and pauses (§9.4). */
+  async blockRequirement(novelId, input) {
+    if (typeof input.conflictReason !== "string" || input.conflictReason.trim() === "") throw new NovelConfigError({ message: "conflictReason must be a non-empty string" });
+    if (!Array.isArray(input.bodySources) || input.bodySources.some((source) => typeof source !== "string")) {
+      throw new NovelConfigError({ message: "bodySources must be an array of strings" });
+    }
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      this.assertRevision(current, input.expectedRevision);
+      const record = current.requirements.find((item) => item.requirementId === input.requirementId);
+      if (record === void 0) {
+        throw new NovelRequirementConflictError({ requirementId: input.requirementId, conflictReason: "requirement not found" });
+      }
+      if (record.status !== "pending" && record.status !== "blocked") {
+        throw new NovelRequirementConflictError({ requirementId: record.requirementId, conflictReason: `requirement is '${record.status}', only pending requirements can be blocked`, bodySources: input.bodySources });
+      }
+      const next = {
+        ...current,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        requirements: current.requirements.map((item) => item.requirementId === record.requirementId ? { ...item, status: "blocked", blockedReason: input.conflictReason } : item),
+        run: {
+          ...current.run,
+          status: "paused",
+          pauseReason: "requirement-conflict",
+          pauseDetail: `${input.conflictReason}${input.bodySources.length > 0 ? ` (sources: ${input.bodySources.join(", ")})` : ""}`,
+          resumeHint: "clarify or withdraw the requirement, then resume (\xA79.4)"
+        }
+      };
+      const revision = await this.publish(dir, current.revision, next, `requirement-block:${record.requirementId}`);
+      return { revision };
+    });
+  }
+  /* ------------------------------ units (§6.2) ------------------------------ */
+  async prepareUnit(novelId, input) {
+    for (const [field, value] of [["chapterId", input.chapterId], ["sceneId", input.sceneId], ["label", input.label], ["goal", input.goal]]) {
+      if (typeof value !== "string" || value.trim() === "") throw new NovelConfigError({ message: `${field} must be a non-empty string` });
+    }
+    if (input.continuationAnchor !== void 0 && input.continuationAnchor !== null && typeof input.continuationAnchor !== "string") {
+      throw new NovelConfigError({ message: "continuationAnchor must be a string or null" });
+    }
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.status !== "active") throw new NovelPreconditionError({ rule: "not-active" });
+      const outline = current.outline ?? (() => {
+        throw new NovelPreconditionError({ rule: "outline-missing" });
+      })();
+      if (!outline.chapters.some((chapter) => chapter.chapterId === input.chapterId)) throw new NovelPreconditionError({ rule: "chapter-not-found", violations: [input.chapterId] });
+      if (!outline.scenes.some((scene) => scene.sceneId === input.sceneId)) throw new NovelPreconditionError({ rule: "scene-not-found", violations: [input.sceneId] });
+      const existing = current.units.find((unit2) => unit2.chapterId === input.chapterId && unit2.sceneId === input.sceneId && unit2.state === "prepared");
+      if (existing !== void 0) return { unitId: existing.unitId };
+      const unitId = `unit-${current.units.length + 1}`;
+      const unit = {
+        unitId,
+        chapterId: input.chapterId,
+        sceneId: input.sceneId,
+        label: input.label,
+        state: "prepared",
+        attempt: 0,
+        claimedRevision: null,
+        claimedRequirementSequence: null,
+        hostTurn: null,
+        goal: input.goal,
+        continuationAnchor: input.continuationAnchor ?? null,
+        lastError: null,
+        executionTokenHash: null
+      };
+      const next = { ...current, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), units: [...current.units, unit] };
+      await this.publish(dir, current.revision, next, `prepare-unit:${unitId}`);
+      return { unitId };
+    });
+  }
+  /** Retires an unclaimed unit (§6.2); claimed units must finish or be stopped. */
+  async supersedeUnit(novelId, input) {
+    if (typeof input.reason !== "string" || input.reason.trim() === "") throw new NovelConfigError({ message: "reason must be a non-empty string" });
+    await this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      const unit = current.units.find((item) => item.unitId === input.unitId);
+      if (unit === void 0) throw new NovelPreconditionError({ rule: "unit-not-found", violations: [input.unitId] });
+      if (unit.state === "claimed") throw new NovelPreconditionError({ rule: "unit-claimed", violations: [input.unitId] });
+      if (unit.state !== "prepared") throw new NovelPreconditionError({ rule: "unit-not-prepared", violations: [input.unitId] });
+      const next = {
+        ...current,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        units: current.units.map((item) => item.unitId === unit.unitId ? { ...item, state: "superseded", lastError: input.reason, executionTokenHash: null } : item)
+      };
+      await this.publish(dir, current.revision, next, `supersede-unit:${unit.unitId}`);
+    });
+  }
+  /**
+   * Claims a unit: requires status active, every received requirement processed
+   * with none blocked (§9.2), outline revision and watermark CAS, and the unit
+   * still prepared. Attempt increments on every claim (§6.2).
+   */
+  async claimUnit(novelId, input) {
+    if (!Number.isInteger(input.expectedRequirementSequence) || input.expectedRequirementSequence < 0) {
+      throw new NovelConfigError({ message: "expectedRequirementSequence must be a non-negative integer" });
+    }
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.status !== "active") throw new NovelPreconditionError({ rule: "not-active" });
+      const outline = current.outline ?? (() => {
+        throw new NovelPreconditionError({ rule: "outline-missing" });
+      })();
+      if (outline.outlineRevision !== input.expectedOutlineRevision) {
+        throw new NovelRevisionConflictError({ expected: input.expectedOutlineRevision, actual: outline.outlineRevision, detail: "outline revision at claim" });
+      }
+      const watermark = requirementWatermark(current.requirements);
+      if (watermark !== input.expectedRequirementSequence) {
+        throw new NovelRevisionConflictError({ expected: String(input.expectedRequirementSequence), actual: String(watermark), detail: "requirement watermark at claim" });
+      }
+      const unprocessed = current.requirements.filter((record) => record.status === "pending" || record.status === "blocked").map((record) => `${record.requirementId}:${record.status}`);
+      if (unprocessed.length > 0) throw new NovelPreconditionError({ rule: "requirements-unprocessed", violations: unprocessed });
+      if (current.units.some((unit2) => unit2.state === "claimed")) throw new NovelPreconditionError({ rule: "unit-in-flight" });
+      const unit = current.units.find((item) => item.unitId === input.unitId);
+      if (unit === void 0) throw new NovelPreconditionError({ rule: "unit-not-found", violations: [input.unitId] });
+      if (unit.state !== "prepared") throw new NovelStaleUnitError({ unitId: unit.unitId, attempt: unit.attempt });
+      const executionToken = randomBytes(24).toString("hex");
+      const attempt = unit.attempt + 1;
+      const next = {
+        ...current,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        units: current.units.map((item) => item.unitId === unit.unitId ? {
+          ...item,
+          state: "claimed",
+          attempt,
+          claimedRevision: outline.outlineRevision,
+          claimedRequirementSequence: watermark,
+          hostTurn: input.hostTurn ?? null,
+          executionTokenHash: sha256hex(executionToken)
+        } : item),
+        run: { ...current.run, currentUnitId: unit.unitId }
+      };
+      await this.publish(dir, current.revision, next, `claim-unit:${unit.unitId}:${attempt}`);
+      return { unitId: unit.unitId, executionToken, attempt };
+    });
+  }
+  /**
+   * Explicit body commit (§10.3/§10.4). Order of checks: duplicate receipt
+   * first, then execution token, then hard length limit (before any file is
+   * written), then the immutable body object and snapshot publish.
+   */
+  async commitBody(novelId, input) {
+    if (!Array.isArray(input.paragraphs)) throw new NovelConfigError({ message: "paragraphs must be an array of strings" });
+    for (const paragraph of input.paragraphs) {
+      if (typeof paragraph !== "string") throw new NovelConfigError({ message: "paragraphs must be strings" });
+      if (paragraph.includes(PARAGRAPH_SEPARATOR)) {
+        throw new NovelConfigError({ message: `paragraph must not contain the fixed separator '${JSON.stringify(PARAGRAPH_SEPARATOR)}' (\xA710.4 fixed serialization)` });
+      }
+    }
+    const completion = input.sceneCompletion;
+    if (typeof completion !== "object" || completion === null || typeof completion.completed !== "boolean" || typeof completion.basis !== "string" || completion.basis.trim() === "" || !Array.isArray(completion.outstandingGoals) || completion.outstandingGoals.some((goal) => typeof goal !== "string") || !(completion.nextAnchor === null || typeof completion.nextAnchor === "string")) {
+      throw new NovelConfigError({ message: "invalid sceneCompletion" });
+    }
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      const unit = current.units.find((item) => item.unitId === input.unitId);
+      if (unit === void 0) throw new NovelPreconditionError({ rule: "unit-not-found", violations: [input.unitId] });
+      const businessHash = sha256hex(stableStringify({
+        paragraphs: input.paragraphs,
+        sceneCompletion: completion,
+        canonChanges: input.canonChanges
+      }));
+      const existing = current.commits.find((commit2) => commit2.unitId === unit.unitId);
+      if (existing !== void 0) {
+        if (existing.bodyHash !== businessHash) throw new NovelDuplicateCommitError({ unitId: unit.unitId, existingCommitId: existing.commitId });
+        let total = 0;
+        for (const commit2 of current.commits) {
+          total += commit2.effectiveCharacters;
+          if (commit2.commitId === existing.commitId) break;
+        }
+        return {
+          commitId: existing.commitId,
+          unitId: unit.unitId,
+          bodyHash: existing.bodyHash,
+          effectiveCharacters: existing.effectiveCharacters,
+          deltaCharacters: existing.effectiveCharacters,
+          totalCharacters: total,
+          revision: current.revision,
+          duplicate: true
+        };
+      }
+      if (unit.state !== "claimed") throw new NovelStaleUnitError({ unitId: unit.unitId, attempt: unit.attempt });
+      if (unit.executionTokenHash !== sha256hex(input.executionToken)) throw new NovelStaleUnitError({ unitId: unit.unitId, attempt: unit.attempt });
+      if (input.paragraphs.length === 0 || input.paragraphs.every((paragraph) => paragraph.trim() === "")) {
+        throw new NovelPreconditionError({ rule: "empty-body" });
+      }
+      const budget = current.config.lengthBudget;
+      const delta = input.paragraphs.reduce((sum, paragraph) => sum + countEffectiveCharacters(paragraph), 0);
+      const totalBefore = totalEffectiveCharacters(current.commits);
+      const totalAfter = totalBefore + delta;
+      if (budget.kind === "target" && budget.hardMaximumCharacters !== null && totalAfter > budget.hardMaximumCharacters) {
+        throw new NovelLengthLimitError({ current: totalAfter, target: budget.targetCharacters, hardMaximum: budget.hardMaximumCharacters });
+      }
+      const upcomingCommitId = `commit-${current.commits.length + 1}`;
+      validateCanonChanges(input.canonChanges, current.commits, upcomingCommitId, input.paragraphs.length);
+      await writeImmutableBytes(path4.join(dir, "bodies", `${businessHash}.txt`), textBytes(input.paragraphs.join(PARAGRAPH_SEPARATOR)));
+      const commit = {
+        commitId: upcomingCommitId,
+        unitId: unit.unitId,
+        chapterId: unit.chapterId,
+        attempt: unit.attempt,
+        bodyHash: businessHash,
+        paragraphCount: input.paragraphs.length,
+        effectiveCharacters: delta,
+        sceneCompleted: completion.completed,
+        completionBasis: completion.basis,
+        outstandingGoals: [...completion.outstandingGoals],
+        canonChanges: structuredClone(input.canonChanges),
+        outlineRevision: unit.claimedRevision ?? current.outline?.outlineRevision ?? "",
+        requirementSequence: unit.claimedRequirementSequence ?? requirementWatermark(current.requirements),
+        committedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      const next = {
+        ...current,
+        updatedAt: commit.committedAt,
+        units: current.units.map((item) => item.unitId === unit.unitId ? { ...item, state: "committed", executionTokenHash: null } : item),
+        commits: [...current.commits, commit],
+        run: { ...current.run, currentUnitId: null, stalledTurns: 0, phase: "writing" }
+      };
+      next.contentRevision = contentRevisionOf(next);
+      const revision = await this.publish(dir, current.revision, next, `commit-body:${commit.commitId}`);
+      return {
+        commitId: commit.commitId,
+        unitId: unit.unitId,
+        bodyHash: commit.bodyHash,
+        effectiveCharacters: delta,
+        deltaCharacters: delta,
+        totalCharacters: totalAfter,
+        revision,
+        duplicate: false
+      };
+    });
+  }
+  /* ------------------------- chapter / finish (§7) ------------------------- */
+  async completeChapter(novelId, input) {
+    if (typeof input.basis !== "string" || input.basis.trim() === "") throw new NovelConfigError({ message: "basis must be a non-empty string" });
+    if (!Array.isArray(input.openItems) || input.openItems.some((item) => typeof item !== "string")) {
+      throw new NovelConfigError({ message: "openItems must be an array of strings" });
+    }
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.contentRevision !== input.expectedContentRevision) {
+        throw new NovelRevisionConflictError({ expected: input.expectedContentRevision, actual: current.contentRevision, detail: "contentRevision" });
+      }
+      const outline = current.outline ?? (() => {
+        throw new NovelPreconditionError({ rule: "outline-missing" });
+      })();
+      const chapter = outline.chapters.find((item) => item.chapterId === input.chapterId);
+      if (chapter === void 0) throw new NovelPreconditionError({ rule: "chapter-not-found", violations: [input.chapterId] });
+      if (current.completedChapters.some((entry) => entry.chapterId === input.chapterId)) {
+        throw new NovelPreconditionError({ rule: "chapter-completed", violations: [input.chapterId] });
+      }
+      if (!current.commits.some((commit) => commit.chapterId === input.chapterId)) {
+        throw new NovelPreconditionError({ rule: "chapter-empty", violations: [input.chapterId] });
+      }
+      const completion = {
+        chapterId: input.chapterId,
+        basis: input.basis,
+        openItems: [...input.openItems],
+        completedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      const completedChapters = [...current.completedChapters, completion];
+      const next = {
+        ...current,
+        updatedAt: completion.completedAt,
+        completedChapters,
+        run: { ...current.run, phase: completedChapters.length >= outline.chapters.length ? "finishing" : current.run.phase }
+      };
+      next.contentRevision = contentRevisionOf(next);
+      const revision = await this.publish(dir, current.revision, next, `chapter-complete:${input.chapterId}`);
+      return { revision };
+    });
+  }
+  /** Finish guards are program-verifiable only (§7.3); violations list why not. */
+  async finishNovel(novelId, input) {
+    if (typeof input.basis !== "string" || input.basis.trim() === "") throw new NovelConfigError({ message: "basis must be a non-empty string" });
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.status === "completed") throw new NovelCapabilityError({ reason: "novel completed" });
+      this.assertRevision(current, input.expectedRevision);
+      const violations = finishGuardViolations(current);
+      if (violations.length > 0) throw new NovelPreconditionError({ rule: "finish-guards", violations });
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const next = {
+        ...current,
+        updatedAt: now,
+        run: {
+          ...current.run,
+          status: "completed",
+          phase: "finishing",
+          pauseReason: null,
+          pauseDetail: null,
+          resumeHint: null,
+          currentUnitId: null,
+          inFlightIntent: null,
+          completedAt: now
+        }
+      };
+      const revision = await this.publish(dir, current.revision, next, "finish-novel");
+      return { revision, totalCharacters: totalEffectiveCharacters(next.commits) };
+    });
+  }
+  /* ------------------------------- run (§12) ------------------------------- */
+  /** At most one in-flight intent per novel; repeated calls are idempotent (§12.1). */
+  async recordWorkIntent(novelId, input) {
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.status === "completed") throw new NovelCapabilityError({ reason: "novel completed" });
+      const inFlight = current.run.inFlightIntent;
+      if (inFlight !== null) return { intentId: inFlight.intentId, revision: current.revision };
+      const record = {
+        intentId: `wi-${randomBytes(6).toString("hex")}`,
+        kind: input.kind,
+        unitId: input.unitId ?? null,
+        expectedOutlineRevision: input.expectedOutlineRevision ?? null,
+        expectedRequirementSequence: input.expectedRequirementSequence ?? null,
+        hostTurn: input.hostTurn ?? null,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      const next = {
+        ...current,
+        updatedAt: record.createdAt,
+        run: { ...current.run, inFlightIntent: record }
+      };
+      const revision = await this.publish(dir, current.revision, next, `work-intent:${record.kind}`);
+      return { intentId: record.intentId, revision };
+    });
+  }
+  async resolveWorkIntent(novelId, input) {
+    if (!["delivered", "failed", "cancelled"].includes(input.outcome)) throw new NovelConfigError({ message: "outcome must be 'delivered' | 'failed' | 'cancelled'" });
+    await this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      const inFlight = current.run.inFlightIntent;
+      if (inFlight === null || inFlight.intentId !== input.intentId) return;
+      const next = {
+        ...current,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        run: {
+          ...current.run,
+          inFlightIntent: null,
+          ...input.outcome === "failed" ? { lastError: input.error ?? `work intent ${inFlight.intentId} failed` } : {}
+        }
+      };
+      await this.publish(dir, current.revision, next, `work-intent-resolve:${input.intentId}:${input.outcome}`);
+    });
+  }
+  async pause(novelId, input) {
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.status === "completed") throw new NovelCapabilityError({ reason: "novel completed" });
+      const next = {
+        ...current,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        run: {
+          ...current.run,
+          // §13: pausing revokes unclaimed intents; claimed units may still finish.
+          status: "paused",
+          pauseReason: input.reason,
+          pauseDetail: input.detail ?? null,
+          resumeHint: input.resumeHint ?? null,
+          inFlightIntent: null
+        }
+      };
+      const revision = await this.publish(dir, current.revision, next, `pause:${input.reason}`);
+      return { revision };
+    });
+  }
+  /**
+   * Resume authorizes work again. With blocked requirements present the novel
+   * resumes into active/revising for planning, while body claims stay blocked
+   * by the claim guard until conflicts are resolved (§9.4).
+   */
+  async resume(novelId) {
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.status === "completed") throw new NovelCapabilityError({ reason: "novel completed" });
+      if (current.run.status !== "paused") throw new NovelPreconditionError({ rule: "not-paused" });
+      if (current.run.pauseReason === "awaiting-approval") {
+        throw new NovelPreconditionError({ rule: "awaiting-approval", violations: ["use approveOutline or requestRevision (\xA79.2)"] });
+      }
+      const blocked = current.requirements.filter((record) => record.status === "blocked");
+      const pending = current.requirements.filter((record) => record.status === "pending");
+      const phase = current.outline === null ? "outlining" : blocked.length > 0 || pending.length > 0 ? "revising" : "writing";
+      const next = {
+        ...current,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        run: {
+          ...current.run,
+          status: "active",
+          phase,
+          pauseReason: null,
+          pauseDetail: null,
+          // An explicit resume opens a fresh progress window; cumulative
+          // budgets (turns, duration) are never reset by recovery (§13).
+          stalledTurns: 0,
+          resumeHint: blocked.length > 0 ? "planning authorized; body claims stay blocked until conflicts are resolved (\xA79.4)" : null
+        }
+      };
+      const revision = await this.publish(dir, current.revision, next, "resume");
+      return { revision };
+    });
+  }
+  /**
+   * Immediate stop (§9.4/§13): revokes in-flight execution tokens by returning
+   * claimed, uncommitted units to prepared with attempt+1 and records the stop
+   * as their lastError; the novel stays paused even if new directives arrive.
+   */
+  async stop(novelId) {
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.status === "completed") throw new NovelCapabilityError({ reason: "novel completed" });
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const next = {
+        ...current,
+        updatedAt: now,
+        units: current.units.map((unit) => unit.state === "claimed" ? {
+          ...unit,
+          state: "prepared",
+          attempt: unit.attempt + 1,
+          claimedRevision: null,
+          claimedRequirementSequence: null,
+          hostTurn: null,
+          executionTokenHash: null,
+          lastError: "stopped: execution token revoked by immediate stop (\xA713)"
+        } : unit),
+        run: {
+          ...current.run,
+          status: "paused",
+          pauseReason: "stopped",
+          pauseDetail: "immediate stop: execution tokens revoked",
+          resumeHint: "resume explicitly after reviewing pending directives (\xA79.4)",
+          currentUnitId: null,
+          inFlightIntent: null
+        }
+      };
+      const revision = await this.publish(dir, current.revision, next, "stop");
+      return { revision };
+    });
+  }
+  /** Manual outline approval binds a concrete outline revision (§4.3). */
+  async approveOutline(novelId, input) {
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.status !== "paused" || current.run.pauseReason !== "awaiting-approval") {
+        throw new NovelPreconditionError({ rule: "not-awaiting-approval" });
+      }
+      const unprocessed = current.requirements.filter((record) => record.status === "pending" || record.status === "blocked").map((record) => `${record.requirementId}:${record.status}`);
+      if (unprocessed.length > 0) throw new NovelPreconditionError({ rule: "requirements-unprocessed", violations: unprocessed });
+      const outline = current.outline ?? (() => {
+        throw new NovelPreconditionError({ rule: "outline-missing" });
+      })();
+      if (outline.outlineRevision !== input.expectedOutlineRevision) {
+        throw new NovelRevisionConflictError({ expected: input.expectedOutlineRevision, actual: outline.outlineRevision, detail: "outline approval" });
+      }
+      const next = {
+        ...current,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        run: {
+          ...current.run,
+          status: "active",
+          phase: "writing",
+          pauseReason: null,
+          pauseDetail: null,
+          resumeHint: null,
+          awaitingApprovalRevision: null
+        }
+      };
+      const revision = await this.publish(dir, current.revision, next, `approve-outline:${outline.outlineRevision}`);
+      return { revision };
+    });
+  }
+  /** "Update outline" authorizes exactly one planning pass (§4.3). */
+  async requestRevision(novelId) {
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.pauseReason !== "awaiting-approval") throw new NovelPreconditionError({ rule: "not-awaiting-approval" });
+      const next = {
+        ...current,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        run: {
+          ...current.run,
+          status: "active",
+          phase: "revising",
+          pauseReason: null,
+          pauseDetail: null,
+          resumeHint: null
+        }
+      };
+      const revision = await this.publish(dir, current.revision, next, "request-revision");
+      return { revision };
+    });
+  }
+  /** Merges the progress signature inside the lock (§10.3); resets stall count. */
+  async noteProgress(novelId, input) {
+    if (typeof input.signature !== "string" || input.signature.trim() === "") throw new NovelConfigError({ message: "signature must be a non-empty string" });
+    await this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.status === "completed") return;
+      const next = {
+        ...current,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        run: { ...current.run, lastProgressSignature: input.signature, stalledTurns: 0 }
+      };
+      await this.publish(dir, current.revision, next, "note-progress");
+    });
+  }
+  /** Turn accounting; crossing a budget/stall threshold auto-pauses (§13). */
+  async noteTurn(novelId, input) {
+    await this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.status === "completed") return;
+      const budgets = current.config.budgets;
+      let run = {
+        ...current.run,
+        turnsRun: current.run.turnsRun + 1,
+        stalledTurns: current.run.stalledTurns + 1,
+        consecutiveFailures: input.failed ? current.run.consecutiveFailures + 1 : 0,
+        ...input.failed && input.error !== void 0 ? { lastError: input.error } : {}
+      };
+      if (run.status === "active") {
+        if (run.consecutiveFailures >= budgets.consecutiveFailureLimit) {
+          run = { ...run, status: "paused", pauseReason: "budget", pauseDetail: `consecutive failure limit ${budgets.consecutiveFailureLimit} reached` };
+        } else if (run.stalledTurns >= budgets.stallThresholdTurns) {
+          run = { ...run, status: "paused", pauseReason: "stalled", pauseDetail: `no progress for ${run.stalledTurns} turns` };
+        } else if (run.turnsRun >= budgets.maxTurns) {
+          run = { ...run, status: "paused", pauseReason: "budget", pauseDetail: `max turns ${budgets.maxTurns} reached` };
+        } else if (run.startedAt !== null && Date.now() - Date.parse(run.startedAt) >= budgets.maxDurationMs) {
+          run = { ...run, status: "paused", pauseReason: "budget", pauseDetail: "max duration reached" };
+        }
+      }
+      const next = { ...current, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), run };
+      await this.publish(dir, current.revision, next, `note-turn:${input.failed ? "failed" : "ok"}`);
+    });
+  }
+  /** Deduction run accounting (§8.1/§13): merges deduceRuns++ inside the lock;
+   *  crossing maxDeduceRuns auto-pauses with a budget reason. */
+  async noteDeduceRun(novelId) {
+    await this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.status === "completed") return;
+      const budgets = current.config.budgets;
+      let run = { ...current.run, deduceRuns: current.run.deduceRuns + 1 };
+      if (run.status === "active" && run.deduceRuns >= budgets.maxDeduceRuns) {
+        run = { ...run, status: "paused", pauseReason: "budget", pauseDetail: `max deduction runs ${budgets.maxDeduceRuns} reached` };
+      }
+      const next = { ...current, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), run };
+      await this.publish(dir, current.revision, next, "note-deduce-run");
+    });
+  }
+  /* -------------------------------- reads -------------------------------- */
+  async readBody(novelId, query) {
+    if (query.limit !== void 0 && (!Number.isInteger(query.limit) || query.limit < 1)) throw new NovelConfigError({ message: "limit must be a positive integer" });
+    const cursor = query.cursor === void 0 ? 0 : Number(query.cursor);
+    if (!Number.isInteger(cursor) || cursor < 0) throw new NovelConfigError({ message: "cursor must be a non-negative integer string" });
+    const current = await this.readSnapshot(novelId);
+    if (current === void 0) throw new NovelNotFoundError({ novelId });
+    const dir = this.novelDir(novelId);
+    const selected = current.commits.filter((commit) => (query.chapterId === void 0 || commit.chapterId === query.chapterId) && (query.unitId === void 0 || commit.unitId === query.unitId));
+    const flattened = [];
+    for (const commit of selected) {
+      const paragraphs = await this.readBodyParagraphs(novelId, dir, commit.bodyHash, commit.paragraphCount);
+      paragraphs.forEach((text, index) => flattened.push({ commitId: commit.commitId, paragraphIndex: index, chapterId: commit.chapterId, text }));
+    }
+    const limit = query.limit ?? Number.MAX_SAFE_INTEGER;
+    const page = flattened.slice(cursor, cursor + limit);
+    const nextCursor = cursor + page.length < flattened.length ? String(cursor + page.length) : null;
+    return { paragraphs: page, nextCursor };
+  }
+  async bodyHashOf(novelId, commitId) {
+    const current = await this.readSnapshot(novelId);
+    if (current === void 0) throw new NovelNotFoundError({ novelId });
+    return current.commits.find((commit) => commit.commitId === commitId)?.bodyHash ?? null;
+  }
+  /**
+   * Reads one fixed asset snapshot by content hash (§5: project snapshots
+   * stay readable after the source tavern asset is edited or deleted). Pure
+   * read with fail-closed resolution: only hashes referenced by the current
+   * snapshot resolve, so arbitrary file reads are impossible (§15).
+   */
+  async readAsset(novelId, contentHash) {
+    if (typeof contentHash !== "string" || !/^[0-9a-f]{64}$/.test(contentHash)) {
+      throw new NovelConfigError({ message: "contentHash must be a full sha256 hex string" });
+    }
+    const current = await this.readSnapshot(novelId);
+    if (current === void 0) throw new NovelNotFoundError({ novelId });
+    if (!current.assets.some((asset) => asset.contentHash === contentHash)) {
+      throw new NovelPreconditionError({ rule: "asset-not-referenced", violations: [contentHash] });
+    }
+    const assetPath = path4.join(this.novelDir(novelId), "assets", `${contentHash}.json`);
+    const raw = await tryReadText(assetPath);
+    if (raw === void 0) {
+      throw new NovelStorageCorruptionError({ novelId, path: assetPath, detail: "referenced asset object is missing" });
+    }
+    try {
+      return JSON.parse(raw);
+    } catch (cause) {
+      throw new NovelStorageCorruptionError({ novelId, path: assetPath, detail: `asset object is not valid JSON: ${cause.message}` });
+    }
+  }
+  /* ------------------------------- internal ------------------------------- */
+  novelDir(novelId) {
+    if (!NOVEL_ID_PATTERN.test(novelId)) throw new Error(`invalid novel id '${novelId}'`);
+    return path4.join(this.novelsRoot, novelId);
+  }
+  mutate(novelId, operation) {
+    const tail = this.mutationTails.get(novelId) ?? Promise.resolve();
+    const result = tail.catch(() => {
+    }).then(operation);
+    this.mutationTails.set(novelId, result.then(() => {
+    }, () => {
+    }));
+    return result;
+  }
+  /** Re-reads HEAD inside the mutation entry and verifies write ownership. */
+  async beginMutation(novelId) {
+    const dir = this.novelDir(novelId);
+    const current = await this.readSnapshot(novelId);
+    if (current === void 0) throw new NovelNotFoundError({ novelId });
+    await this.ensureOwnership(novelId, dir);
+    return { dir, current };
+  }
+  assertRevision(current, expected) {
+    if (current.revision !== expected) {
+      throw new NovelRevisionConflictError({ expected, actual: current.revision, detail: "snapshot revision" });
+    }
+  }
+  /**
+   * Single-writer ownership (§10.2 end): `.owner.json` must belong to this
+   * process (pid + process-shared bootId, so multiple instances — and the
+   * several bundled copies of this module — in one process re-enter). A
+   * recorded writer that provably cannot write again (dead pid, pid recycled
+   * to a non-dsh process, foreign boot id under this pid) is taken over
+   * automatically; only a live dsh-shaped pid — or an undecidable probe —
+   * is refused as a concurrent writer.
+   */
+  async ensureOwnership(novelId, dir) {
+    await fs4.mkdir(dir, { recursive: true });
+    const ownerPath = path4.join(dir, ".owner.json");
+    for (let attempt = 0; ; attempt++) {
+      const raw = await tryReadText(ownerPath);
+      if (raw !== void 0) {
+        const owner = parseOwnerFile(novelId, ownerPath, raw);
+        if (owner.pid === process.pid && owner.bootId === BOOT_ID) return;
+        if (await isLiveDshWriter(owner.pid)) {
+          throw new NovelOwnershipError({
+            novelId,
+            pid: owner.pid,
+            alive: true,
+            detail: "another writer holds the novel; single-writer ownership refuses concurrent writers (\xA710.2)"
+          });
+        }
+        await fs4.rm(ownerPath, { force: true });
+      }
+      const token = { pid: process.pid, bootId: BOOT_ID, acquiredAt: (/* @__PURE__ */ new Date()).toISOString() };
+      try {
+        const fh = await fs4.open(ownerPath, "wx");
+        try {
+          await fh.writeFile(jsonBytes2(token));
+          await fh.sync();
+        } finally {
+          await fh.close();
+        }
+        return;
+      } catch (cause) {
+        if (cause.code === "EEXIST" && attempt < 3) continue;
+        throw cause;
+      }
+    }
+  }
+  /**
+   * HEAD is the only authority (§10.1). Returns undefined when no HEAD exists
+   * (never-committed project); corruption of HEAD or its referenced revision
+   * throws NovelStorageCorruptionError without silent fallback (§10.3).
+   */
+  async readSnapshot(novelId) {
+    const dir = this.novelDir(novelId);
+    const headPath = path4.join(dir, "HEAD.json");
+    const headRaw = await tryReadText(headPath);
+    if (headRaw === void 0) return void 0;
+    let head;
+    try {
+      head = JSON.parse(headRaw);
+    } catch (cause) {
+      throw new NovelStorageCorruptionError({ novelId, path: headPath, detail: `HEAD.json is not valid JSON: ${cause.message}` });
+    }
+    if (typeof head !== "object" || head === null || head.novelId !== novelId || typeof head.revision !== "string" || !/^[0-9a-f]{16}$/.test(head.revision) || head.schemaVersion !== SCHEMA_VERSION) {
+      throw new NovelStorageCorruptionError({ novelId, path: headPath, detail: "HEAD.json has an invalid shape" });
+    }
+    const revisionPath = path4.join(dir, "revisions", `${head.revision}.json`);
+    const revisionRaw = await tryReadText(revisionPath);
+    if (revisionRaw === void 0) {
+      throw new NovelStorageCorruptionError({ novelId, path: revisionPath, detail: "HEAD references a missing revision file" });
+    }
+    let file;
+    try {
+      file = JSON.parse(revisionRaw);
+    } catch (cause) {
+      throw new NovelStorageCorruptionError({ novelId, path: revisionPath, detail: `revision file is not valid JSON: ${cause.message}` });
+    }
+    const snapshot2 = file.snapshot;
+    if (typeof file !== "object" || file === null || file.schemaVersion !== SCHEMA_VERSION || file.revision !== head.revision || typeof snapshot2 !== "object" || snapshot2 === null || snapshot2.novelId !== novelId || snapshot2.revision !== head.revision || typeof snapshot2.updatedAt !== "string" || typeof snapshot2.config !== "object" || typeof snapshot2.run !== "object" || !Array.isArray(snapshot2.requirements) || !Array.isArray(snapshot2.units) || !Array.isArray(snapshot2.commits)) {
+      throw new NovelStorageCorruptionError({ novelId, path: revisionPath, detail: "revision file has an invalid shape" });
+    }
+    return snapshot2;
+  }
+  async readBodyParagraphs(novelId, dir, bodyHash, paragraphCount) {
+    const bodyPath = path4.join(dir, "bodies", `${bodyHash}.txt`);
+    const raw = await tryReadText(bodyPath);
+    if (raw === void 0) {
+      throw new NovelStorageCorruptionError({ novelId, path: bodyPath, detail: "committed body object is missing" });
+    }
+    const paragraphs = raw.split(PARAGRAPH_SEPARATOR);
+    if (paragraphs.length !== paragraphCount) {
+      throw new NovelStorageCorruptionError({ novelId, path: bodyPath, detail: `body object paragraph count ${paragraphs.length} does not match commit record ${paragraphCount}` });
+    }
+    return paragraphs;
+  }
+  /**
+   * §10.2 commit protocol: immutable objects are written by the callers; here
+   * we write the revision file (tmp + fsync + rename), then atomically replace
+   * HEAD (the logical commit point), then update projections asynchronously.
+   */
+  async publish(dir, parentRevision, snapshot2, cause) {
+    const revision = hash16({ ...snapshot2, revision: void 0 });
+    const withRevision2 = { ...snapshot2, revision };
+    const file = {
+      schemaVersion: SCHEMA_VERSION,
+      revision,
+      parentRevision,
+      cause,
+      committedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      snapshot: withRevision2
+    };
+    await writeImmutableBytes(path4.join(dir, "revisions", `${revision}.json`), jsonBytes2(file));
+    const head = { novelId: snapshot2.novelId, revision, schemaVersion: SCHEMA_VERSION, updatedAt: snapshot2.updatedAt };
+    await replaceHead(path4.join(dir, "HEAD.json"), jsonBytes2(head));
+    const tail = this.projectionTails.get(snapshot2.novelId) ?? Promise.resolve();
+    const projected = tail.catch(() => {
+    }).then(() => this.updateProjections(dir, withRevision2));
+    this.projectionTails.set(snapshot2.novelId, projected.then(() => {
+    }, () => {
+    }));
+    projected.catch(() => {
+    });
+    return revision;
+  }
+  async updateProjections(dir, snapshot2) {
+    const projectionsDir = path4.join(dir, "projections");
+    try {
+      await fs4.mkdir(path4.join(projectionsDir, "chapters"), { recursive: true });
+      const summary = summarizeNovel(snapshot2);
+      await writeAtomicText(path4.join(projectionsDir, "status.json"), JSON.stringify({
+        novelId: snapshot2.novelId,
+        revision: snapshot2.revision,
+        contentRevision: snapshot2.contentRevision,
+        status: summary.status,
+        phase: summary.phase,
+        pauseReason: summary.pauseReason,
+        chaptersCompleted: summary.chaptersCompleted,
+        chaptersTotal: summary.chaptersTotal,
+        effectiveCharacters: summary.effectiveCharacters,
+        updatedAt: snapshot2.updatedAt
+      }, null, 2));
+      const titleByChapter = new Map((snapshot2.outline?.chapters ?? []).map((chapter) => [chapter.chapterId, chapter.title]));
+      for (const chapterId of new Set(snapshot2.commits.map((commit) => commit.chapterId))) {
+        const parts = [`# ${titleByChapter.get(chapterId) ?? chapterId}`, ""];
+        for (const commit of snapshot2.commits.filter((item) => item.chapterId === chapterId)) {
+          const paragraphs = await this.readBodyParagraphs(snapshot2.novelId, dir, commit.bodyHash, commit.paragraphCount);
+          parts.push(paragraphs.join(PARAGRAPH_SEPARATOR), "");
+        }
+        await writeAtomicText(path4.join(projectionsDir, "chapters", `${chapterId}.md`), `${parts.join(PARAGRAPH_SEPARATOR).trimEnd()}
+`);
+      }
+    } catch (cause) {
+      try {
+        await writeAtomicText(path4.join(projectionsDir, "status.json"), JSON.stringify({
+          state: "projection-pending",
+          novelId: snapshot2.novelId,
+          revision: snapshot2.revision,
+          error: String(cause)
+        }, null, 2));
+      } catch {
+      }
+    }
+  }
+  validateHandledRequirements(current, handled) {
+    if (!Array.isArray(handled)) throw new NovelConfigError({ message: "handledRequirements must be an array" });
+    const seen = /* @__PURE__ */ new Set();
+    for (const item of handled) {
+      if (typeof item !== "object" || item === null || typeof item.requirementId !== "string") {
+        throw new NovelConfigError({ message: "handledRequirements entries must carry a requirementId" });
+      }
+      if (item.result !== "applied" && item.result !== "superseded" && item.result !== "blocked") {
+        throw new NovelConfigError({ message: `invalid handled result for '${item.requirementId}'` });
+      }
+      if (seen.has(item.requirementId)) {
+        throw new NovelPreconditionError({ rule: "duplicate-requirement", violations: [item.requirementId] });
+      }
+      seen.add(item.requirementId);
+      const record = current.requirements.find((candidate) => candidate.requirementId === item.requirementId);
+      if (record === void 0) {
+        throw new NovelPreconditionError({ rule: "requirement-not-found", violations: [item.requirementId] });
+      }
+      if (record.status !== "pending" && record.status !== "blocked") {
+        throw new NovelPreconditionError({ rule: "requirement-state", violations: [`${item.requirementId}:${record.status}`] });
+      }
+      if (item.result === "blocked" && (item.blockedReason === void 0 || item.blockedReason.trim() === "")) {
+        throw new NovelPreconditionError({ rule: "blocked-reason", violations: [item.requirementId] });
+      }
+      if (item.supersededBy !== void 0 && typeof item.supersededBy !== "string") {
+        throw new NovelConfigError({ message: "supersededBy must be a string" });
+      }
+    }
+    return handled.map((item) => ({ ...item }));
+  }
+  /**
+   * Chapters containing committed bodies (or explicit completions) must be
+   * kept, and no retained old chapter may cross over a protected chapter in
+   * either direction (§6.1: committed chapters cannot be deleted or
+   * reordered; newly added chapters are free to go anywhere).
+   */
+  assertProtectedChapters(previous, current, nextChapters) {
+    const oldOrder = [...previous.chapters].sort((left, right) => left.order - right.order).map((chapter) => chapter.chapterId);
+    const oldIndexById = new Map(oldOrder.map((chapterId, index) => [chapterId, index]));
+    const protectedIds = new Set(oldOrder.filter((chapterId) => current.commits.some((commit) => commit.chapterId === chapterId) || current.completedChapters.some((entry) => entry.chapterId === chapterId)));
+    const nextOrder = [...nextChapters].sort((left, right) => left.order - right.order).map((chapter) => chapter.chapterId);
+    const nextIndexById = new Map(nextOrder.map((chapterId, index) => [chapterId, index]));
+    const violations = [];
+    for (const protectedId of protectedIds) {
+      const protectedIndex = nextIndexById.get(protectedId);
+      const oldProtectedIndex = oldIndexById.get(protectedId) ?? 0;
+      if (protectedIndex === void 0) {
+        violations.push(`chapter-missing:${protectedId}`);
+        continue;
+      }
+      for (const otherId of oldOrder) {
+        if (otherId === protectedId) continue;
+        const otherIndex = nextIndexById.get(otherId);
+        if (otherIndex === void 0) continue;
+        const wasBefore = (oldIndexById.get(otherId) ?? 0) < oldProtectedIndex;
+        const isBefore = otherIndex < protectedIndex;
+        if (wasBefore !== isBefore) violations.push(`chapter-reordered:${protectedId}`);
+      }
+    }
+    if (violations.length > 0) throw new NovelPreconditionError({ rule: "committed-chapters", violations });
+  }
+  /** Run-state transitions after an outline create/revise (§4.3, §9.4). */
+  runAfterOutlineChange(run, approvalMode, outlineRevision, requirements) {
+    const blocked = requirements.some((record) => record.status === "blocked");
+    if (run.awaitingApprovalRevision !== null || approvalMode === "manual" && run.pauseReason === "awaiting-approval") {
+      return {
+        ...run,
+        status: "paused",
+        phase: "outlining",
+        pauseReason: "awaiting-approval",
+        pauseDetail: "outline saved; waiting for approval",
+        resumeHint: "approve the outline or request another revision (\xA74.3)",
+        awaitingApprovalRevision: outlineRevision
+      };
+    }
+    if (blocked) {
+      return { ...run, status: "paused", phase: run.phase === "outlining" ? "outlining" : run.phase, pauseReason: "requirement-conflict", pauseDetail: "a requirement was marked blocked during the outline change", resumeHint: "clarify or withdraw blocked requirements, then resume (\xA79.4)" };
+    }
+    if (run.status === "active") {
+      return { ...run, phase: "writing" };
+    }
+    return run;
+  }
+};
+function applyHandledRequirements(records, handled, outlineRevision) {
+  const byId = new Map(handled.map((item) => [item.requirementId, item]));
+  return records.map((record) => {
+    const item = byId.get(record.requirementId);
+    if (item === void 0) return record;
+    if (item.result === "applied") {
+      return { ...record, status: "applied", appliedRevision: outlineRevision, effectiveLocation: item.effectiveLocation ?? null, blockedReason: null, supersededBy: null };
+    }
+    if (item.result === "superseded") {
+      return { ...record, status: "superseded", appliedRevision: outlineRevision, supersededBy: item.supersededBy ?? null, blockedReason: null };
+    }
+    return { ...record, status: "blocked", blockedReason: item.blockedReason ?? "blocked during outline change", appliedRevision: null, effectiveLocation: null };
+  });
+}
+function assertWatermarkAdvanced(before, after) {
+  const beforeMark = requirementWatermark(before);
+  const afterMark = requirementWatermark(after);
+  if (afterMark < beforeMark) {
+    throw new NovelPreconditionError({ rule: "watermark-regression", violations: [`${beforeMark} -> ${afterMark}`] });
+  }
+  return afterMark;
+}
+function validateCanonChanges(changes, commits, upcomingCommitId, upcomingParagraphCount) {
+  if (!Array.isArray(changes)) throw new NovelConfigError({ message: "canonChanges must be an array" });
+  for (const change of changes) {
+    if (typeof change !== "object" || change === null || !CANON_KINDS.has(change.kind) || typeof change.summary !== "string" || change.summary.trim() === "" || !Array.isArray(change.sources)) {
+      throw new NovelConfigError({ message: "invalid canon change entry" });
+    }
+    if (change.detail !== void 0 && (typeof change.detail !== "object" || change.detail === null || Array.isArray(change.detail))) {
+      throw new NovelConfigError({ message: "canon change detail must be an object" });
+    }
+    for (const source of change.sources) {
+      if (typeof source !== "string") throw new NovelConfigError({ message: "canon sources must be strings" });
+      const match = SOURCE_REF_PATTERN.exec(source);
+      if (match === null) throw new NovelConfigError({ message: `invalid canon source '${source}' (expected <commitId> or <commitId>#<index>)` });
+      const commitId = match[1];
+      const indexRaw = match[2];
+      if (commitId === void 0) throw new NovelConfigError({ message: `invalid canon source '${source}'` });
+      if (commitId === upcomingCommitId) {
+        if (indexRaw !== void 0 && Number(indexRaw) >= upcomingParagraphCount) {
+          throw new NovelConfigError({ message: `canon source '${source}' references a paragraph beyond the candidate body` });
+        }
+        continue;
+      }
+      const existing = commits.find((commit) => commit.commitId === commitId);
+      if (existing === void 0) throw new NovelConfigError({ message: `canon source '${source}' references an unknown commit` });
+      if (indexRaw !== void 0 && Number(indexRaw) >= existing.paragraphCount) {
+        throw new NovelConfigError({ message: `canon source '${source}' references a paragraph beyond commit ${commitId}` });
+      }
+    }
+  }
+}
+function parseOwnerFile(novelId, ownerPath, raw) {
+  try {
+    const owner = JSON.parse(raw);
+    if (typeof owner !== "object" || owner === null || !Number.isInteger(owner.pid) || typeof owner.bootId !== "string") {
+      throw new Error("invalid shape");
+    }
+    return owner;
+  } catch (cause) {
+    throw new NovelStorageCorruptionError({ novelId, path: ownerPath, detail: `.owner.json is unreadable: ${cause.message}` });
+  }
+}
+function embeddedWorldName(card) {
+  const book = card.data.characterBook;
+  if (book === void 0 || book === null) return null;
+  const linked = card.data.extensions["world"];
+  if (typeof linked === "string" && linked.trim() !== "") return linked.trim();
+  if (typeof book.name === "string" && book.name.trim() !== "") return book.name.trim();
+  return card.data.name;
+}
+function contentRevisionOf(snapshot2) {
+  return hash16({
+    chapters: (snapshot2.outline?.chapters ?? []).map((chapter) => ({ chapterId: chapter.chapterId, order: chapter.order, title: chapter.title })),
+    completedChapters: snapshot2.completedChapters,
+    commits: snapshot2.commits.map((commit) => ({ commitId: commit.commitId, bodyHash: commit.bodyHash, effectiveCharacters: commit.effectiveCharacters }))
+  });
+}
+function sha256hex(data) {
+  return createHash4("sha256").update(data).digest("hex");
+}
+function hash16(value) {
+  return sha256hex(stableStringify(value)).slice(0, 16);
+}
+function jsonBytes2(obj) {
+  return textBytes(JSON.stringify(obj, null, 2));
+}
+function textBytes(text) {
+  return new Uint8Array(Buffer.from(text, "utf8"));
+}
+async function tryReadText(file) {
+  try {
+    return await fs4.readFile(file, "utf8");
+  } catch (cause) {
+    if (cause.code === "ENOENT") return void 0;
+    throw cause;
+  }
+}
+async function writeImmutableBytes(file, bytes) {
+  try {
+    await fs4.access(file);
+    return;
+  } catch (cause) {
+    if (cause.code !== "ENOENT") throw cause;
+  }
+  const tmp = `${file}.${process.pid}.${Date.now()}.${randomBytes(2).toString("hex")}.tmp`;
+  const fh = await fs4.open(tmp, "w");
+  try {
+    await fh.writeFile(bytes);
+    await fh.sync();
+  } finally {
+    await fh.close();
+  }
+  await fs4.rename(tmp, file);
+}
+async function replaceHead(head, bytes) {
+  const tmp = `${head}.${process.pid}.${Date.now()}.${randomBytes(2).toString("hex")}.tmp`;
+  const fh = await fs4.open(tmp, "w");
+  try {
+    await fh.writeFile(bytes);
+    await fh.sync();
+  } finally {
+    await fh.close();
+  }
+  try {
+    await fs4.rename(tmp, head);
+  } catch (cause) {
+    const code = cause.code;
+    if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY") {
+      try {
+        await fs4.rm(tmp, { force: true });
+      } catch {
+      }
+      throw cause;
+    }
+    await new Promise((resolve3) => setTimeout(resolve3, 25));
+    await fs4.rename(tmp, head);
+  }
+}
+async function writeAtomicText(file, text) {
+  const tmp = `${file}.${process.pid}.${Date.now()}.${randomBytes(2).toString("hex")}.tmp`;
+  await fs4.writeFile(tmp, text, "utf8");
+  await fs4.rename(tmp, file);
+}
+async function readDirectories2(root) {
+  try {
+    const entries = await fs4.readdir(root, { withFileTypes: true });
+    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  } catch (cause) {
+    if (cause.code === "ENOENT") return [];
+    throw cause;
+  }
+}
+
 // packages/bind/src/host-session.ts
 function readSessionEvents(session) {
   if (!session) return void 0;
@@ -5281,6 +7102,1186 @@ function unavailableWithReason(current, name2, detail) {
   return { available: false, missing, reasons: [REASONS[name2], detail, ...current.reasons] };
 }
 
+// packages/plugin/src/agent-novel/capabilities.ts
+var AGENT_NOVEL_PRESET_ID = "agent-novel";
+function isObject(value) {
+  return typeof value === "object" && value !== null;
+}
+function isFunction(value) {
+  return typeof value === "function";
+}
+var REQUIRED_EVENT_TYPES = ["session/event", "agent/created", "agent/status"];
+function inspectAgentNovelCapabilities(ctx) {
+  const missing = [];
+  const reasons = [];
+  const need = (id, ok, reason) => {
+    if (ok) return;
+    missing.push(id);
+    reasons.push(reason);
+  };
+  const agents = isObject(ctx?.agents) ? ctx?.agents : void 0;
+  need("agents", agents !== void 0, "host context exposes no 'agents' service object (\xA716 followup scheduling)");
+  need("agents.withoutInitiator", isFunction(agents?.withoutInitiator), "agents.withoutInitiator is not callable; agent-initiated followups without a user initiator cannot be driven (\xA716)");
+  const presets = isObject(ctx?.agentPresets) ? ctx?.agentPresets : void 0;
+  need("agentPresets.mount", isFunction(presets?.mount), "agentPresets.mount is not callable; the novel preset cannot be mounted (\xA716)");
+  need("agentPresets.recompose", isFunction(presets?.recompose), "agentPresets.recompose is not callable; preset recomposition for the novel architecture is unavailable (\xA716)");
+  const systemPrompt = isObject(ctx?.systemPrompt) ? ctx?.systemPrompt : void 0;
+  need("systemPrompt.section", isFunction(systemPrompt?.section), "systemPrompt.section is not callable; the novel kernel cannot be registered (\xA711)");
+  need("tools.register", isFunction(isObject(ctx?.tools) ? (ctx?.tools).register : void 0), "tools.register is not callable; the novel tool surface cannot be registered (\xA711)");
+  for (const eventType of REQUIRED_EVENT_TYPES) {
+    need(
+      `on:${eventType}`,
+      isFunction(ctx?.on),
+      `event subscription for '${eventType}' is unavailable: the host exposes no 'on' hook, and actual emission of the event type cannot be probed statically (\xA716)`
+    );
+  }
+  return {
+    available: missing.length === 0,
+    missing,
+    reasons,
+    checkedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+
+// packages/plugin/src/agent-novel/outline.ts
+function scenesByOrder(snapshot2) {
+  const outline = snapshot2.outline;
+  if (outline === null) return [];
+  return [...outline.scenes].sort((left, right) => left.order - right.order);
+}
+function nextWork(snapshot2) {
+  if (snapshot2.run.status === "completed") return null;
+  const outline = snapshot2.outline;
+  if (outline === null) {
+    return {
+      kind: "outline-create",
+      chapterId: null,
+      sceneId: null,
+      reason: "no outline exists yet; create the initial plan from the creation requirement (\xA76.3)"
+    };
+  }
+  const unprocessed = snapshot2.requirements.filter((record) => record.status === "pending" || record.status === "blocked");
+  if (unprocessed.length > 0) {
+    return {
+      kind: "outline-revise",
+      chapterId: null,
+      sceneId: null,
+      reason: `requirements: ${unprocessed.map((record) => `${record.requirementId}(${record.status})`).join(", ")} must be handled through a revision before writing continues (\xA79.2)`
+    };
+  }
+  const currentChapterId = outline.currentChapterId;
+  if (currentChapterId === null) {
+    return {
+      kind: "outline-revise",
+      chapterId: null,
+      sceneId: null,
+      reason: "refine: no current chapter is selected; set currentChapterId and prepare ordered scenes (\xA76.3)"
+    };
+  }
+  const scenes = scenesByOrder(snapshot2);
+  if (scenes.length === 0) {
+    return {
+      kind: "outline-revise",
+      chapterId: currentChapterId,
+      sceneId: null,
+      reason: `refine: chapter ${currentChapterId} has no executable scene plan; add ordered scenes (\xA76.3)`
+    };
+  }
+  const unfinished = scenes.find((scene) => !sceneFinished(snapshot2, scene.sceneId));
+  if (unfinished !== void 0) {
+    return {
+      kind: "write-unit",
+      chapterId: currentChapterId,
+      sceneId: unfinished.sceneId,
+      reason: `scene ${unfinished.sceneId} is the first unfinished scene of chapter ${currentChapterId} by scene order (\xA76.3)`
+    };
+  }
+  if (!snapshot2.completedChapters.some((entry) => entry.chapterId === currentChapterId)) {
+    return {
+      kind: "chapter-complete",
+      chapterId: currentChapterId,
+      sceneId: null,
+      reason: `all scenes of chapter ${currentChapterId} declared complete; run the chapter completion check (\xA76.3)`
+    };
+  }
+  if (outline.chapters.every((chapter) => snapshot2.completedChapters.some((entry) => entry.chapterId === chapter.chapterId))) {
+    return {
+      kind: "finish",
+      chapterId: null,
+      sceneId: null,
+      reason: "all chapters completed; run the full completion checks (\xA77.3)"
+    };
+  }
+  return {
+    kind: "outline-revise",
+    chapterId: null,
+    sceneId: null,
+    reason: `chapter ${currentChapterId} is complete; refine the plan to select and detail the next chapter (\xA76.3)`
+  };
+}
+function sceneFinished(snapshot2, sceneId) {
+  const sceneOfUnit = new Map(snapshot2.units.map((unit) => [unit.unitId, unit.sceneId]));
+  for (let index = snapshot2.commits.length - 1; index >= 0; index -= 1) {
+    const commit = snapshot2.commits[index];
+    if (sceneOfUnit.get(commit.unitId) === sceneId) return commit.sceneCompleted;
+  }
+  return false;
+}
+function unitTargetRange(config, committed) {
+  const budget = config.lengthBudget;
+  if (budget.kind === "unbounded") return { min: 0, max: Number.MAX_SAFE_INTEGER };
+  const lower = budget.targetCharacters * (1 - budget.toleranceRatio);
+  const upper = budget.hardMaximumCharacters ?? budget.targetCharacters * (1 + budget.toleranceRatio);
+  const min = Math.max(0, Math.floor(lower - committed));
+  const max2 = Math.max(min, Math.min(Number.MAX_SAFE_INTEGER, Math.ceil(upper - committed)));
+  return { min, max: max2 };
+}
+function narrativeStage(config, committed) {
+  const budget = config.lengthBudget;
+  if (budget.kind === "unbounded") return committed === 0 ? "early" : "middle";
+  if (committed >= budget.targetCharacters * (1 - budget.toleranceRatio)) return "ending";
+  const ratio = committed / budget.targetCharacters;
+  if (ratio >= 2 / 3) return "late";
+  if (ratio >= 1 / 3) return "middle";
+  return "early";
+}
+function anchorFor(snapshot2, sceneId) {
+  if (sceneId === null) return null;
+  const units = snapshot2.units.filter((unit) => unit.sceneId === sceneId);
+  for (let index = units.length - 1; index >= 0; index -= 1) {
+    const anchor = units[index].continuationAnchor;
+    if (anchor !== null) return anchor;
+  }
+  return snapshot2.outline?.scenes.find((scene) => scene.sceneId === sceneId)?.continuationAnchor ?? null;
+}
+function truncateText(text, max2) {
+  return text.length <= max2 ? text : `${text.slice(0, max2)}\u2026`;
+}
+function renderWorkBrief(snapshot2, work) {
+  const committed = totalEffectiveCharacters(snapshot2.commits);
+  const budget = snapshot2.config.lengthBudget;
+  const stage = narrativeStage(snapshot2.config, committed);
+  const range = unitTargetRange(snapshot2.config, committed);
+  const lines = [
+    `Novel work brief \u2014 ${snapshot2.config.title} (${snapshot2.novelId})`,
+    `Work: ${work.kind}${work.chapterId === null ? "" : ` \xB7 chapter ${work.chapterId}`}${work.sceneId === null ? "" : ` \xB7 scene ${work.sceneId}`}`,
+    `Reason: ${work.reason}`
+  ];
+  if (work.kind === "write-unit") {
+    const scene = snapshot2.outline?.scenes.find((candidate) => candidate.sceneId === work.sceneId);
+    if (scene !== void 0) {
+      lines.push("", "Scene plan (\xA76.1 current-chapter detail):");
+      lines.push(`- goal: ${scene.goal}`);
+      lines.push(`- participants: ${scene.participants.join(", ")}`);
+      lines.push(`- time/location: ${scene.timeLocation}`);
+      lines.push(`- causality: ${scene.causality}`);
+      lines.push(`- conflict: ${scene.conflict}`);
+      lines.push(`- expected change: ${scene.expectedChange}`);
+    }
+    const anchor = anchorFor(snapshot2, work.sceneId);
+    if (anchor !== null) lines.push(`- continuation anchor: ${anchor}`);
+  }
+  lines.push("", "Length (\xA77.2):");
+  lines.push(budget.kind === "unbounded" ? "- unit target: unbounded (finite run budgets still apply, \xA77.1)" : `- unit target range: ${range.min}-${range.max} effective characters`);
+  if (budget.kind === "target") {
+    lines.push(`- committed ${committed} of target ${budget.targetCharacters} (tolerance ${budget.toleranceRatio}${budget.hardMaximumCharacters === null ? "" : `, hard max ${budget.hardMaximumCharacters}`})`);
+  }
+  lines.push(`- narrative stage: ${stage}${stage === "late" || stage === "ending" ? " \u2014 reduce new subplots and prioritize convergence (\xA77.2)" : ""}`);
+  const pending = snapshot2.requirements.filter((record) => record.status === "pending").slice(0, 5);
+  if (pending.length === 0) {
+    lines.push("", "Pending author directives: none.");
+  } else {
+    lines.push("", "Pending author directives (verbatim, first 5, each capped at 200 characters) (\xA79):");
+    for (const record of pending) lines.push(`- [${record.requirementId}] ${truncateText(record.text, 200)}`);
+  }
+  lines.push("", "Relevant lore: use novel_lore_search over the project world snapshots for setting details; entries are not inlined here (\xA711).");
+  lines.push(`Versions: outline ${snapshot2.outline?.outlineRevision ?? "none"}, requirement watermark ${requirementWatermark(snapshot2.requirements)}.`);
+  lines.push(`Run budget: ${snapshot2.run.turnsRun}/${snapshot2.config.budgets.maxTurns} turns.`);
+  return lines.join("\n");
+}
+
+// packages/plugin/src/agent-novel/driver.ts
+var NovelDriver = class _NovelDriver {
+  constructor(host, options) {
+    this.host = host;
+    this.store = options.store;
+    this.tavern = options.tavern;
+    this.projector = options.projector;
+  }
+  store;
+  tavern;
+  projector;
+  disposed = false;
+  states = /* @__PURE__ */ new Map();
+  liveAgents = /* @__PURE__ */ new Map();
+  novelSessions = /* @__PURE__ */ new Map();
+  sessionNovels = /* @__PURE__ */ new Map();
+  disposers = [];
+  /** Creates the driver and subscribes agent/created, agent/disposed and agent/status (§12.1). */
+  static create(host, options) {
+    const driver = new _NovelDriver(host, options);
+    driver.mount();
+    return driver;
+  }
+  mount() {
+    const subscribe = () => {
+      this.subscribeTo("agent/created", (payload) => {
+        const agent = agentOf(payload);
+        if (agent !== null) this.liveAgents.set(agent.id, agent);
+      });
+      this.subscribeTo("agent/disposed", (payload) => {
+        const agent = agentOf(payload);
+        if (agent !== null) this.liveAgents.delete(agent.id);
+      });
+      this.subscribeTo("agent/status", (payload) => {
+        const agent = agentOf(payload);
+        if (agent === null) return;
+        this.liveAgents.set(agent.id, agent);
+        if (payload.status !== "idle") return;
+        void this.scheduleForSession(agent);
+      });
+    };
+    const effect = this.host.effect;
+    if (typeof effect === "function") {
+      try {
+        effect(subscribe, "dsh-tavern:novel-driver");
+        return;
+      } catch {
+      }
+    }
+    subscribe();
+  }
+  subscribeTo(event, handler) {
+    try {
+      const on = this.host.on;
+      if (typeof on !== "function") return;
+      const dispose = on(event, handler);
+      if (typeof dispose === "function") this.disposers.push(dispose);
+    } catch (error) {
+      this.logWarn("subscribe-failed", { event, errorCode: errorCodeOf(error) });
+    }
+  }
+  /* ------------------------------ entry points ------------------------------ */
+  /** Called by the internal novel-open command: captures the agent, applies the
+   *  horizontal kickoff gate and schedules (§12.1). The command handler always
+   *  receives a live agent, which is the cold-session kickoff guarantee. */
+  async handleNovelOpen(agent, novelId) {
+    if (this.disposed) return;
+    this.liveAgents.set(agent.id, agent);
+    this.sessionNovels.set(agent.session.id, novelId);
+    this.novelSessions.set(novelId, agent.id);
+    try {
+      const snapshot2 = await this.store.getNovel(novelId);
+      if ((snapshot2?.outline?.chapters.length ?? 0) > 0) this.stateFor(novelId).kickoffSent = true;
+    } catch (error) {
+      this.logWarn("novel-open-read-failed", { novelId, sessionId: agent.session.id, errorCode: errorCodeOf(error) });
+    }
+    this.schedule(novelId);
+  }
+  /** Session event edge (§12.1): turn/end of a bound novel session accounts the
+   *  turn (§13), resolves the delivered work intent and schedules the next
+   *  work. Duplicate edges of the same turn boundary are deduped; drives that
+   *  observe a still-running agent level out via whenIdle. */
+  async handleSessionEvent(session, event) {
+    if (this.disposed || event.type !== "turn/end") return;
+    const novelId = await this.novelOfSession(session.id);
+    if (novelId === null) return;
+    const state = this.stateFor(novelId);
+    const turn = turnOf(event.data);
+    if (turn !== null && turn <= state.lastAccountedTurn) return;
+    if (turn !== null) state.lastAccountedTurn = turn;
+    try {
+      const snapshot2 = await this.store.getNovel(novelId);
+      if (snapshot2 !== void 0 && snapshot2.run.status !== "completed") {
+        const failed = failedStopReason(event.data);
+        await this.store.noteTurn(novelId, {
+          failed,
+          ...failed ? { error: `turn ended with stop reason ${stopReasonOf(event.data)}` } : {}
+        });
+        const signature = progressSignature(snapshot2);
+        if (signature !== snapshot2.run.lastProgressSignature) {
+          await this.store.noteProgress(novelId, { signature });
+        }
+        const inFlight = snapshot2.run.inFlightIntent;
+        if (inFlight !== null && state.queued.has(inFlight.intentId)) {
+          await this.store.resolveWorkIntent(novelId, { intentId: inFlight.intentId, outcome: "delivered" });
+          state.queued.delete(inFlight.intentId);
+        }
+      }
+    } catch (error) {
+      this.logWarn("turn-accounting-failed", { novelId, sessionId: session.id, operation: "note-turn", errorCode: errorCodeOf(error) });
+    }
+    this.schedule(novelId);
+  }
+  /* ------------------------------- scheduling ------------------------------- */
+  stateFor(novelId) {
+    const existing = this.states.get(novelId);
+    if (existing !== void 0) return existing;
+    const state = { requested: false, run: void 0, queued: /* @__PURE__ */ new Set(), kickoffSent: false, warnedNoAgent: false, lastAccountedTurn: 0 };
+    this.states.set(novelId, state);
+    return state;
+  }
+  schedule(novelId) {
+    if (this.disposed) return;
+    const state = this.stateFor(novelId);
+    state.requested = true;
+    if (state.run !== void 0) return;
+    const loop = this.withoutInitiator(() => this.driveLoop(novelId, state));
+    state.run = loop;
+    const retire = () => {
+      if (state.run === loop) state.run = void 0;
+      if (state.requested && !this.disposed) this.schedule(novelId);
+    };
+    loop.then(retire, (error) => {
+      this.logWarn("drive-loop-rejected", { novelId, operation: "drive", errorCode: errorCodeOf(error) });
+      retire();
+    });
+  }
+  async scheduleForSession(agent) {
+    const novelId = await this.novelOfSession(agent.session.id);
+    if (novelId !== null) this.schedule(novelId);
+  }
+  async driveLoop(novelId, state) {
+    while (state.requested && !this.disposed) {
+      state.requested = false;
+      try {
+        await this.drive(novelId, state);
+      } catch (error) {
+        this.logWarn("drive-failed", { novelId, operation: "drive", errorCode: errorCodeOf(error) });
+      }
+    }
+  }
+  /** One serialized pass of the §12.1 drive pseudocode for a single novel. */
+  async drive(novelId, state) {
+    const snapshot2 = await this.store.getNovel(novelId);
+    if (snapshot2 === void 0) {
+      this.states.delete(novelId);
+      this.novelSessions.delete(novelId);
+      for (const [sessionId, bound] of this.sessionNovels) {
+        if (bound === novelId) this.sessionNovels.delete(sessionId);
+      }
+      return;
+    }
+    if (snapshot2.run.status !== "active") return;
+    const agent = this.liveAgentFor(novelId);
+    if (agent === null) {
+      if (!state.warnedNoAgent) {
+        state.warnedNoAgent = true;
+        this.logWarn("no-live-agent", { novelId, operation: "drive" });
+      }
+      return;
+    }
+    state.warnedNoAgent = false;
+    if (agent.status !== "idle") {
+      try {
+        await agent.whenIdle();
+      } catch (error) {
+        this.logWarn("when-idle-failed", { novelId, sessionId: agent.session.id, operation: "when-idle", errorCode: errorCodeOf(error) });
+      }
+      state.requested = true;
+      return;
+    }
+    if (this.projector !== void 0) {
+      let pending = false;
+      try {
+        pending = await this.projector.projectionPending(novelId);
+      } catch (error) {
+        this.logWarn("projection-pending-check-failed", { novelId, operation: "projection-pending", errorCode: errorCodeOf(error) });
+      }
+      if (pending) {
+        try {
+          await this.projector.repairProjections(novelId);
+        } catch (error) {
+          this.logWarn("projection-repair-failed", { novelId, operation: "projection-repair", errorCode: errorCodeOf(error) });
+          await this.store.pause(novelId, {
+            reason: "projection-pending",
+            detail: `projection repair failed: ${messageOf(error)}`,
+            resumeHint: "repair the reading projections, then resume explicitly (\xA713)"
+          });
+          return;
+        }
+      }
+    }
+    const inFlight = snapshot2.run.inFlightIntent;
+    if (inFlight !== null && state.queued.has(inFlight.intentId)) return;
+    const work = nextWork(snapshot2);
+    if (work === null) return;
+    if (work.kind === "outline-create" && inFlight === null && this.kickoffDelivered(novelId, snapshot2)) {
+      return;
+    }
+    let unitId = null;
+    let briefSnapshot = snapshot2;
+    if (work.kind === "write-unit" && work.chapterId !== null && work.sceneId !== null) {
+      const scene = snapshot2.outline?.scenes.find((candidate) => candidate.sceneId === work.sceneId);
+      if (scene === void 0) {
+        this.logWarn("scene-missing", { novelId, sceneId: work.sceneId });
+        return;
+      }
+      try {
+        const prepared = await this.store.prepareUnit(novelId, {
+          chapterId: work.chapterId,
+          sceneId: scene.sceneId,
+          label: scene.goal.slice(0, 80),
+          goal: scene.goal,
+          continuationAnchor: anchorForScene(snapshot2, scene.sceneId)
+        });
+        unitId = prepared.unitId;
+        briefSnapshot = await this.store.getNovel(novelId) ?? snapshot2;
+      } catch (error) {
+        this.logWarn("prepare-unit-failed", { novelId, sceneId: work.sceneId, errorCode: errorCodeOf(error) });
+        return;
+      }
+    }
+    const intent = await this.store.recordWorkIntent(novelId, {
+      kind: work.kind,
+      ...unitId !== null ? { unitId } : {},
+      expectedOutlineRevision: briefSnapshot.outline?.outlineRevision ?? null,
+      expectedRequirementSequence: requirementWatermark(briefSnapshot.requirements)
+    });
+    if (state.queued.has(intent.intentId)) return;
+    const message = buildNoticeMessage(novelId, intent.intentId, briefSnapshot, work, unitId);
+    try {
+      await this.deliverFollowup(agent, novelId, intent.intentId, message, briefSnapshot.config.budgets.externalRetry);
+    } catch (error) {
+      this.logWarn("followup-failed", { novelId, sessionId: agent.session.id, intentId: intent.intentId, errorCode: errorCodeOf(error) });
+      try {
+        await this.store.resolveWorkIntent(novelId, {
+          intentId: intent.intentId,
+          outcome: "failed",
+          error: `followup delivery failed: ${messageOf(error)}`
+        });
+        await this.store.pause(novelId, {
+          reason: "stalled",
+          detail: `followup delivery failed after ${briefSnapshot.config.budgets.externalRetry.maxAttempts} attempts: ${messageOf(error)}`,
+          resumeHint: "resume explicitly after reviewing the delivery failure (\xA713)"
+        });
+      } catch (handled) {
+        this.logWarn("followup-failure-handling-failed", { novelId, intentId: intent.intentId, operation: "pause", errorCode: errorCodeOf(handled) });
+      }
+      return;
+    }
+    state.queued.add(intent.intentId);
+    if (work.kind === "outline-create") state.kickoffSent = true;
+  }
+  async deliverFollowup(agent, novelId, intentId, message, retry) {
+    let lastError = new Error("followup delivery was not attempted");
+    for (let attempt = 1; attempt <= retry.maxAttempts; attempt += 1) {
+      try {
+        await agent.followup(message);
+        return;
+      } catch (error) {
+        lastError = error;
+        this.logWarn("followup-attempt-failed", { novelId, sessionId: agent.session.id, intentId, errorCode: errorCodeOf(error), attempt });
+        if (attempt < retry.maxAttempts) await new Promise((resolve3) => setTimeout(resolve3, retry.backoffMs));
+      }
+    }
+    throw lastError;
+  }
+  /* -------------------------------- recovery -------------------------------- */
+  /** Restart recovery (§12.3). Never crosses a paused state automatically. */
+  async recover() {
+    let summaries;
+    try {
+      summaries = await this.store.listNovels();
+    } catch (error) {
+      this.logWarn("recovery-list-failed", { operation: "recover", errorCode: errorCodeOf(error) });
+      return;
+    }
+    let bindings;
+    try {
+      bindings = (await this.tavern.getState()).sessionBindings;
+    } catch (error) {
+      this.logWarn("recovery-bindings-failed", { operation: "recover", errorCode: errorCodeOf(error) });
+      return;
+    }
+    const sessionsByNovel = /* @__PURE__ */ new Map();
+    for (const [sessionId, binding] of Object.entries(bindings)) {
+      if (binding.architecture !== "agent-novel" || typeof binding.novelId !== "string") continue;
+      const list = sessionsByNovel.get(binding.novelId) ?? [];
+      list.push(sessionId);
+      sessionsByNovel.set(binding.novelId, list);
+    }
+    for (const summary of summaries) {
+      if (summary.status !== "active") continue;
+      const sessions = sessionsByNovel.get(summary.novelId) ?? [];
+      if (sessions.length === 0) continue;
+      let snapshot2;
+      try {
+        snapshot2 = await this.store.getNovel(summary.novelId);
+      } catch (error) {
+        this.logWarn("recovery-read-failed", { novelId: summary.novelId, operation: "recover", errorCode: errorCodeOf(error) });
+        continue;
+      }
+      if (snapshot2 === void 0) continue;
+      for (const sessionId of sessions) this.sessionNovels.set(sessionId, summary.novelId);
+      const agent = this.liveAgentForSessions(sessions);
+      if (snapshot2.run.inFlightIntent !== null) {
+        if (agent !== null && agent.status === "running") {
+          try {
+            await this.store.pause(summary.novelId, {
+              reason: "recovery-required",
+              detail: "bound agent is still running; cannot prove the previous execution ended (\xA712.3)",
+              resumeHint: "wait for or stop the running agent, then resume explicitly"
+            });
+          } catch (error) {
+            this.logWarn("recovery-pause-failed", { novelId: summary.novelId, operation: "recover", errorCode: errorCodeOf(error) });
+          }
+          continue;
+        }
+        try {
+          await this.store.resolveWorkIntent(summary.novelId, { intentId: snapshot2.run.inFlightIntent.intentId, outcome: "cancelled" });
+        } catch (error) {
+          this.logWarn("recovery-resolve-failed", { novelId: summary.novelId, operation: "recover", errorCode: errorCodeOf(error) });
+        }
+      }
+      if (this.projector !== void 0) {
+        try {
+          if (await this.projector.projectionPending(summary.novelId)) await this.projector.repairProjections(summary.novelId);
+        } catch (error) {
+          this.logWarn("recovery-projection-failed", { novelId: summary.novelId, operation: "recover", errorCode: errorCodeOf(error) });
+          try {
+            await this.store.pause(summary.novelId, {
+              reason: "recovery-required",
+              detail: `projection repair failed during recovery: ${messageOf(error)}`
+            });
+          } catch {
+          }
+          continue;
+        }
+      }
+      this.schedule(summary.novelId);
+    }
+  }
+  async dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const dispose of this.disposers.splice(0)) {
+      try {
+        const result = dispose();
+        if (result instanceof Promise) await result.catch(() => {
+        });
+      } catch {
+      }
+    }
+    const runs = [];
+    for (const state of this.states.values()) {
+      if (state.run !== void 0) runs.push(state.run);
+    }
+    await Promise.allSettled(runs);
+    this.states.clear();
+    this.liveAgents.clear();
+    this.novelSessions.clear();
+    this.sessionNovels.clear();
+  }
+  /* --------------------------------- lookups --------------------------------- */
+  kickoffDelivered(novelId, snapshot2) {
+    if (this.states.get(novelId)?.kickoffSent === true) return true;
+    return (snapshot2.outline?.chapters.length ?? 0) > 0;
+  }
+  async novelOfSession(sessionId) {
+    const cached = this.sessionNovels.get(sessionId);
+    if (cached !== void 0) return cached;
+    try {
+      const binding = (await this.tavern.getState()).sessionBindings[sessionId];
+      if (binding === void 0 || binding.architecture !== "agent-novel") return null;
+      this.sessionNovels.set(sessionId, binding.novelId);
+      return binding.novelId;
+    } catch (error) {
+      this.logWarn("binding-read-failed", { sessionId, operation: "binding", errorCode: errorCodeOf(error) });
+      return null;
+    }
+  }
+  liveAgentFor(novelId) {
+    const preferred = this.novelSessions.get(novelId);
+    if (preferred !== void 0) {
+      const agent = this.liveAgents.get(preferred);
+      if (agent !== void 0 && this.agentStillLive(agent)) return agent;
+    }
+    for (const agent of this.liveAgents.values()) {
+      if (this.sessionNovels.get(agent.session.id) === novelId && this.agentStillLive(agent)) return agent;
+    }
+    return null;
+  }
+  liveAgentForSessions(sessionIds) {
+    for (const agent of this.liveAgents.values()) {
+      if (sessionIds.includes(agent.session.id) && this.agentStillLive(agent)) return agent;
+    }
+    return null;
+  }
+  /** Gated service probe with the two degradation shapes: undefined or throw. */
+  agentStillLive(agent) {
+    try {
+      const agents = this.host.agents;
+      if (typeof agents !== "object" || agents === null) return true;
+      const get = agents.get;
+      if (typeof get !== "function") return true;
+      return get.call(agents, agent.id) === agent;
+    } catch {
+      return true;
+    }
+  }
+  withoutInitiator(op) {
+    let wrap;
+    try {
+      const agents = this.host.agents;
+      if (typeof agents === "object" && agents !== null) {
+        const candidate = agents.withoutInitiator;
+        if (typeof candidate === "function") wrap = candidate;
+      }
+    } catch {
+    }
+    if (wrap === void 0) return op();
+    try {
+      return wrap(op);
+    } catch {
+      return op();
+    }
+  }
+  logWarn(operation, fields) {
+    const record = { ...fields, operation };
+    try {
+      const warn = this.host.logger?.warn;
+      if (typeof warn === "function") warn(`novel-driver: ${operation}`, record);
+      else console.warn(`novel-driver: ${operation}`, JSON.stringify(record));
+    } catch {
+    }
+  }
+};
+async function recoverNovels(driver) {
+  await driver.recover();
+}
+function agentOf(payload) {
+  if (typeof payload !== "object" || payload === null) return null;
+  const record = payload;
+  const agent = record.agent;
+  if (typeof agent !== "object" || agent === null) return null;
+  const candidate = agent;
+  if (typeof candidate.id !== "string" || typeof candidate.followup !== "function" || typeof candidate.whenIdle !== "function") return null;
+  if (typeof candidate.session !== "object" || candidate.session === null || typeof candidate.session.id !== "string") return null;
+  if (candidate.status !== "idle" && candidate.status !== "running") return null;
+  return candidate;
+}
+function turnOf(data) {
+  if (typeof data !== "object" || data === null) return null;
+  const turn = data.turn;
+  return typeof turn === "number" && Number.isInteger(turn) ? turn : null;
+}
+function stopReasonOf(data) {
+  if (typeof data !== "object" || data === null) return "unknown";
+  const reason = data.reason;
+  if (typeof reason !== "object" || reason === null) return "unknown";
+  const kind = reason.kind;
+  return typeof kind === "string" ? kind : "unknown";
+}
+function failedStopReason(data) {
+  const reason = stopReasonOf(data);
+  return reason === "max-tokens" || reason === "aborted";
+}
+function progressSignature(snapshot2) {
+  switch (snapshot2.run.phase) {
+    case "outlining":
+      return snapshot2.outline === null ? "outline:none" : `outline:${snapshot2.outline.outlineRevision}`;
+    case "revising":
+      return `watermark:${requirementWatermark(snapshot2.requirements)}`;
+    case "writing":
+      return `commits:${snapshot2.commits.length};chapters:${snapshot2.completedChapters.length}`;
+    case "finishing":
+      return snapshot2.run.status === "completed" ? "finished" : `violations:${countFinishViolations(snapshot2)}`;
+  }
+}
+function countFinishViolations(snapshot2) {
+  let violations = 0;
+  const outline = snapshot2.outline;
+  if (outline === null) return 1;
+  const completed = new Set(snapshot2.completedChapters.map((entry) => entry.chapterId));
+  for (const chapter of outline.chapters) {
+    if (!completed.has(chapter.chapterId)) violations += 1;
+  }
+  for (const item of outline.foreshadowing) {
+    if (item.required && item.status !== "resolved") violations += 1;
+  }
+  for (const record of snapshot2.requirements) {
+    if (record.status === "pending" || record.status === "blocked") violations += 1;
+  }
+  for (const unit of snapshot2.units) {
+    if (unit.state === "prepared" || unit.state === "claimed") violations += 1;
+  }
+  return violations;
+}
+function anchorForScene(snapshot2, sceneId) {
+  const units = snapshot2.units.filter((unit) => unit.sceneId === sceneId);
+  for (let index = units.length - 1; index >= 0; index -= 1) {
+    const anchor = units[index].continuationAnchor;
+    if (anchor !== null) return anchor;
+  }
+  return snapshot2.outline?.scenes.find((scene) => scene.sceneId === sceneId)?.continuationAnchor ?? null;
+}
+function workInstruction(snapshot2, work, unitId) {
+  const outlineRevision = snapshot2.outline?.outlineRevision ?? "none";
+  const watermark = requirementWatermark(snapshot2.requirements);
+  switch (work.kind) {
+    case "outline-create":
+      return "Kickoff work (\xA76.3): read the creation directive with novel_requirements_read, then create the initial plan with novel_outline_create (expectedRevision from novel_status_read; handle the pending directive in handledRequirements). End the turn after the outline is saved.";
+    case "outline-revise":
+      return `Planning work (\xA76.3/\xA79.3): ${work.reason} Read the pending directives (novel_requirements_read) and the plan (novel_outline_read), then submit novel_outline_revise with the handled requirement results, or novel_requirement_block for directives conflicting with committed facts. End the turn afterwards.`;
+    case "write-unit":
+      return `Writing unit ${unitId} (\xA76.2): claim it first with novel_unit_claim { unitId: '${unitId}', expectedOutlineRevision: '${outlineRevision}', expectedRequirementSequence: ${watermark} }, write the scene prose, then commit exactly once with novel_body_commit (plain-text paragraphs, the scene completion declaration and canon changes with paragraph sources). End the turn immediately after the commit (\xA711).`;
+    case "chapter-complete":
+      return `Chapter completion check (\xA76.3): verify the committed bodies with novel_body_read, then call novel_chapter_complete { chapterId: '${work.chapterId}', expectedContentRevision: '${snapshot2.contentRevision}', basis, openItems }. End the turn afterwards.`;
+    case "finish":
+      return `All chapters are complete (\xA77.3): run the completion checks and call novel_finish { expectedRevision: '${snapshot2.revision}', basis }. The store verifies every guard; self-reported completion is never accepted.`;
+  }
+}
+function buildNoticeMessage(novelId, intentId, snapshot2, work, unitId) {
+  const text = [
+    renderWorkBrief(snapshot2, work),
+    ...unitId !== null ? [`Prepared writing unit for this brief: ${unitId}.`] : [],
+    "",
+    workInstruction(snapshot2, work, unitId),
+    "",
+    `Automated scheduler notice (work intent ${intentId}); not an author directive (\xA79.1).`
+  ].join("\n");
+  return {
+    id: `novel-notice-${intentId}`,
+    role: "user",
+    content: [{ type: "text", text }],
+    source: { kind: "plugin", plugin: "dsh-tavern", form: "novel-notice", novelId, intentId }
+  };
+}
+function messageOf(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function errorCodeOf(error) {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = error.code;
+    if (typeof code === "string" && code !== "") return code;
+  }
+  return error instanceof Error ? error.name : typeof error;
+}
+
+// packages/plugin/src/agent-novel/projector.ts
+import { promises as fs5 } from "node:fs";
+import { crc32 as crc322 } from "node:zlib";
+import * as path5 from "node:path";
+var NOVEL_ID_PATTERN2 = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
+var PARAGRAPH_SEPARATOR2 = "\n\n";
+var NovelProjector = class _NovelProjector {
+  constructor(tavernRoot, store2, memory) {
+    this.tavernRoot = tavernRoot;
+    this.store = store2;
+    this.memory = memory;
+  }
+  static async open(tavernRoot, store2, memory) {
+    return new _NovelProjector(tavernRoot, store2, memory);
+  }
+  /* ----------------------------- memory index (§8.2) ----------------------------- */
+  /**
+   * Writes the commit's canon changes and a scene summary into the novel
+   * memory namespace with stable ids `novel-<novelId>-<commitId>-<i>`
+   * (canon changes first, the scene summary last). Idempotent: re-indexing an
+   * unchanged commit rewrites nothing and adds no duplicate records.
+   */
+  async indexCommit(novelId, commitId) {
+    const snapshot2 = await this.requireSnapshot(novelId);
+    const commit = snapshot2.commits.find((candidate) => candidate.commitId === commitId);
+    if (commit === void 0) throw new NovelPreconditionError({ rule: "commit-not-found", violations: [commitId] });
+    const paragraphs = await this.readCommitParagraphs(novelId, commit);
+    const scopeId = novelScopeId(novelId);
+    for (const record of memoryRecordsFor(novelId, commit, paragraphs)) {
+      const existing = await this.memory.read(record.id, "chat", scopeId, true);
+      if (existing !== void 0) {
+        if (existing.content === record.content && existing.deletedAt === void 0) continue;
+        await this.memory.put(record, existing.revision);
+        continue;
+      }
+      try {
+        await this.memory.put(record);
+      } catch (cause) {
+        if (cause instanceof Error && cause.name === "MemoryRevisionConflictError") continue;
+        throw cause;
+      }
+    }
+  }
+  /**
+   * Full rebuild from the commit index (§12.3 restart recovery): clears the
+   * namespace, then re-indexes every commit in order.
+   */
+  async rebuildMemoryIndex(novelId) {
+    const snapshot2 = await this.requireSnapshot(novelId);
+    const scopeId = novelScopeId(novelId);
+    for (const stale of await this.existingMemoryRecords(novelId)) {
+      await this.memory.forget(stale.id, "chat", scopeId, stale.revision);
+    }
+    for (const commit of snapshot2.commits) {
+      await this.indexCommit(novelId, commit.commitId);
+    }
+    return { indexed: snapshot2.commits.length };
+  }
+  /* ------------------------- projection recovery (§12.3) ------------------------- */
+  /** Whether the store's reading projection carries a projection-pending marker (§13). */
+  async projectionPending(novelId) {
+    this.assertNovelId(novelId);
+    const statusPath = path5.join(this.novelDir(novelId), "projections", "status.json");
+    let raw;
+    try {
+      raw = await fs5.readFile(statusPath, "utf8");
+    } catch (cause) {
+      if (cause.code === "ENOENT") return false;
+      throw cause;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed.state === "projection-pending" || parsed.state === void 0 && !("status" in parsed);
+    } catch {
+      return true;
+    }
+  }
+  /** Rebuilds the chapter markdown projections from the authoritative snapshot. */
+  async repairProjections(novelId) {
+    const snapshot2 = await this.requireSnapshot(novelId);
+    const paragraphsByChapter = await this.readAllCommitParagraphs(novelId, snapshot2);
+    const projectionsDir = path5.join(this.novelDir(novelId), "projections");
+    await fs5.rm(path5.join(projectionsDir, "chapters"), { recursive: true, force: true });
+    await fs5.mkdir(path5.join(projectionsDir, "chapters"), { recursive: true });
+    const titleByChapter = new Map((snapshot2.outline?.chapters ?? []).map((chapter) => [chapter.chapterId, chapter.title]));
+    for (const [chapterId, commitGroups] of paragraphsByChapter) {
+      const parts = [`# ${titleByChapter.get(chapterId) ?? chapterId}`, ""];
+      for (const paragraphs of commitGroups) parts.push(paragraphs.join(PARAGRAPH_SEPARATOR2), "");
+      await writeAtomicText2(path5.join(projectionsDir, "chapters", `${chapterId}.md`), `${parts.join(PARAGRAPH_SEPARATOR2).trimEnd()}
+`);
+    }
+    const summary = summarizeNovel(snapshot2);
+    await writeAtomicText2(path5.join(projectionsDir, "status.json"), JSON.stringify({
+      novelId: snapshot2.novelId,
+      revision: snapshot2.revision,
+      contentRevision: snapshot2.contentRevision,
+      status: summary.status,
+      phase: summary.phase,
+      pauseReason: summary.pauseReason,
+      chaptersCompleted: summary.chaptersCompleted,
+      chaptersTotal: summary.chaptersTotal,
+      effectiveCharacters: summary.effectiveCharacters,
+      updatedAt: snapshot2.updatedAt
+    }, null, 2));
+  }
+  /* ------------------------------- export (§14.2) ------------------------------- */
+  async exportNovel(novelId, format) {
+    const snapshot2 = await this.requireSnapshot(novelId);
+    const paragraphsByChapter = await this.readAllCommitParagraphs(novelId, snapshot2);
+    const head = renderHead(snapshot2);
+    const chapters = orderedChapters(snapshot2).map((chapter) => ({
+      order: chapter.order,
+      title: chapter.title,
+      body: chapterBody(paragraphsByChapter.get(chapter.chapterId) ?? [])
+    }));
+    const base = sanitizeFilename(snapshot2.config.title);
+    if (format === "md") {
+      const document = [
+        head,
+        ...chapters.map((chapter) => [`# ${chapter.title}`, "", chapter.body].join("\n"))
+      ].join("\n\n");
+      return {
+        filename: `${base}.md`,
+        contentType: "text/markdown; charset=utf-8",
+        bytes: textBytes2(`${document.trimEnd()}
+`)
+      };
+    }
+    const entries = [
+      { name: "README.md", data: textBytes2(head) },
+      ...chapters.map((chapter) => ({
+        name: `chapters/${String(chapter.order).padStart(2, "0")}-${sanitizeFilename(chapter.title) || "chapter"}.md`,
+        data: textBytes2(`${["# " + chapter.title, "", chapter.body].join("\n").trimEnd()}
+`)
+      }))
+    ];
+    return {
+      filename: `${base}.zip`,
+      contentType: "application/zip",
+      bytes: buildStoredZip(entries)
+    };
+  }
+  /* --------------------------------- internals --------------------------------- */
+  assertNovelId(novelId) {
+    if (!NOVEL_ID_PATTERN2.test(novelId)) throw new NovelNotFoundError({ novelId });
+  }
+  novelDir(novelId) {
+    this.assertNovelId(novelId);
+    return path5.join(this.tavernRoot, "novels", novelId);
+  }
+  async requireSnapshot(novelId) {
+    this.assertNovelId(novelId);
+    const snapshot2 = await this.store.getNovel(novelId);
+    if (snapshot2 === void 0) throw new NovelNotFoundError({ novelId });
+    return snapshot2;
+  }
+  /**
+   * Reads one commit's immutable body object and verifies it against the
+   * commit record: existence, fixed paragraph count and the effective-character
+   * invariant (countPolicyVersion 1 ignores whitespace, so the joined text
+   * must count exactly `effectiveCharacters`).
+   */
+  async readCommitParagraphs(novelId, commit) {
+    const bodyPath = path5.join(this.novelDir(novelId), "bodies", `${commit.bodyHash}.txt`);
+    let raw;
+    try {
+      raw = await fs5.readFile(bodyPath, "utf8");
+    } catch (cause) {
+      if (cause.code === "ENOENT") {
+        throw new NovelStorageCorruptionError({ novelId, path: bodyPath, detail: `committed body object of ${commit.commitId} is missing` });
+      }
+      throw cause;
+    }
+    const paragraphs = raw.split(PARAGRAPH_SEPARATOR2);
+    if (paragraphs.length !== commit.paragraphCount) {
+      throw new NovelStorageCorruptionError({
+        novelId,
+        path: bodyPath,
+        detail: `body object paragraph count ${paragraphs.length} does not match commit ${commit.commitId} record ${commit.paragraphCount}`
+      });
+    }
+    if (countEffectiveCharacters(raw) !== commit.effectiveCharacters) {
+      throw new NovelStorageCorruptionError({
+        novelId,
+        path: bodyPath,
+        detail: `body object effective characters do not match commit ${commit.commitId} record ${commit.effectiveCharacters}`
+      });
+    }
+    return paragraphs;
+  }
+  async readAllCommitParagraphs(novelId, snapshot2) {
+    const byChapter = /* @__PURE__ */ new Map();
+    for (const commit of snapshot2.commits) {
+      const paragraphs = await this.readCommitParagraphs(novelId, commit);
+      const list = byChapter.get(commit.chapterId) ?? [];
+      list.push(paragraphs);
+      byChapter.set(commit.chapterId, list);
+    }
+    return byChapter;
+  }
+  /** Enumerates the raw memory records of the novel namespace (MemoryStore layout). */
+  async existingMemoryRecords(novelId) {
+    const dir = path5.join(this.tavernRoot, "memories", "chat", encodeURIComponent(novelScopeId(novelId)));
+    let files;
+    try {
+      files = await fs5.readdir(dir);
+    } catch (cause) {
+      if (cause.code === "ENOENT") return [];
+      throw cause;
+    }
+    const records = [];
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+      const parsed = JSON.parse(await fs5.readFile(path5.join(dir, file), "utf8"));
+      if (typeof parsed.id === "string" && typeof parsed.revision === "string") {
+        records.push({ id: parsed.id, revision: parsed.revision });
+      }
+    }
+    return records;
+  }
+};
+function novelScopeId(novelId) {
+  return `novel:${novelId}`;
+}
+function memoryRecordsFor(novelId, commit, paragraphs) {
+  const scopeId = novelScopeId(novelId);
+  const records = commit.canonChanges.map((change, index) => ({
+    id: `novel-${novelId}-${commit.commitId}-${index}`,
+    scope: "chat",
+    scopeId,
+    kind: "semantic",
+    content: `[${change.kind}] ${change.summary} (sources: ${change.sources.join(", ")})`,
+    tags: ["novel", "canon", change.kind],
+    importance: 0.6,
+    confidence: 1,
+    source: { kind: "novel-commit", novelId, commitId: commit.commitId, unitId: commit.unitId, chapterId: commit.chapterId }
+  }));
+  records.push({
+    id: `novel-${novelId}-${commit.commitId}-${commit.canonChanges.length}`,
+    scope: "chat",
+    scopeId,
+    kind: "episodic",
+    content: `Scene prose ${commit.commitId} (${commit.completionBasis}): ${paragraphs.join(" ").slice(0, 300)}`,
+    tags: ["novel", "scene"],
+    importance: 0.4,
+    confidence: 1,
+    source: { kind: "novel-commit", novelId, commitId: commit.commitId, unitId: commit.unitId, chapterId: commit.chapterId }
+  });
+  return records;
+}
+function orderedChapters(snapshot2) {
+  return [...snapshot2.outline?.chapters ?? []].sort((left, right) => left.order - right.order);
+}
+function chapterBody(commitGroups) {
+  const parts = [];
+  for (const paragraphs of commitGroups) {
+    for (const paragraph of paragraphs) parts.push(paragraph);
+  }
+  return parts.join(PARAGRAPH_SEPARATOR2);
+}
+function renderHead(snapshot2) {
+  const summary = summarizeNovel(snapshot2);
+  const lines = [
+    `# ${snapshot2.config.title}`,
+    "",
+    `- Novel ID: ${snapshot2.novelId}`,
+    `- Status: ${summary.status}${summary.pauseReason === null ? "" : ` (${summary.pauseReason})`}`,
+    `- Effective characters: ${summary.effectiveCharacters} (count policy version ${snapshot2.countPolicyVersion}: Unicode code points, letters and digits only)`,
+    `- Outline revision: ${snapshot2.outline?.outlineRevision ?? "none"}`,
+    `- Exported at HEAD revision: ${snapshot2.revision} (fixed snapshot, \xA714.2)`,
+    `- Updated: ${snapshot2.updatedAt}`
+  ];
+  if (snapshot2.outline !== null) {
+    const outline = snapshot2.outline;
+    lines.push("", "## Outline", "");
+    lines.push("- Premise: " + outline.story.premise);
+    lines.push("- Theme: " + outline.story.theme);
+    lines.push("- Main conflict: " + outline.story.mainConflict);
+    lines.push("- Ending direction: " + outline.story.endingDirection);
+    if (outline.story.taboos.length > 0) lines.push("- Taboos: " + outline.story.taboos.join("; "));
+    lines.push("", "### Chapters", "");
+    for (const chapter of orderedChapters(snapshot2)) {
+      const completed = snapshot2.completedChapters.some((entry) => entry.chapterId === chapter.chapterId);
+      lines.push(`${chapter.order}. ${chapter.title} \u2014 ${chapter.purpose}${completed ? " (completed)" : ""}`);
+    }
+    if (outline.foreshadowing.length > 0) {
+      lines.push("", "### Foreshadowing", "");
+      for (const item of outline.foreshadowing) {
+        lines.push(`- ${item.id} \u2014 ${item.description} [${item.status}]${item.required ? " (required)" : ""}`);
+      }
+    }
+  }
+  return lines.join("\n");
+}
+function sanitizeFilename(value) {
+  const cleaned = value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().replace(/[. ]+$/, "").slice(0, 60);
+  return cleaned;
+}
+function textBytes2(text) {
+  return new Uint8Array(Buffer.from(text, "utf8"));
+}
+async function writeAtomicText2(file, text) {
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs5.writeFile(tmp, text, "utf8");
+  await fs5.rename(tmp, file);
+}
+var ZIP_UTF8_FLAG = 2048;
+var DOS_TIME = 0;
+var DOS_DATE = 33;
+function buildStoredZip(entries) {
+  const localChunks = [];
+  const centralChunks = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const nameBytes = textBytes2(entry.name);
+    const checksum = crc322(entry.data) >>> 0;
+    const local = new Uint8Array(30 + nameBytes.length);
+    const localView = new DataView(local.buffer);
+    localView.setUint32(0, 67324752, true);
+    localView.setUint16(4, 20, true);
+    localView.setUint16(6, ZIP_UTF8_FLAG, true);
+    localView.setUint16(8, 0, true);
+    localView.setUint16(10, DOS_TIME, true);
+    localView.setUint16(12, DOS_DATE, true);
+    localView.setUint32(14, checksum, true);
+    localView.setUint32(18, entry.data.length, true);
+    localView.setUint32(22, entry.data.length, true);
+    localView.setUint16(26, nameBytes.length, true);
+    localView.setUint16(28, 0, true);
+    local.set(nameBytes, 30);
+    const central = new Uint8Array(46 + nameBytes.length);
+    const centralView = new DataView(central.buffer);
+    centralView.setUint32(0, 33639248, true);
+    centralView.setUint16(4, 20, true);
+    centralView.setUint16(6, 20, true);
+    centralView.setUint16(8, ZIP_UTF8_FLAG, true);
+    centralView.setUint16(10, 0, true);
+    centralView.setUint16(12, DOS_TIME, true);
+    centralView.setUint16(14, DOS_DATE, true);
+    centralView.setUint32(16, checksum, true);
+    centralView.setUint32(20, entry.data.length, true);
+    centralView.setUint32(24, entry.data.length, true);
+    centralView.setUint16(28, nameBytes.length, true);
+    centralView.setUint16(30, 0, true);
+    centralView.setUint16(32, 0, true);
+    centralView.setUint16(34, 0, true);
+    centralView.setUint16(36, 0, true);
+    centralView.setUint32(38, 0, true);
+    centralView.setUint32(42, offset, true);
+    central.set(nameBytes, 46);
+    localChunks.push(local, entry.data);
+    centralChunks.push(central);
+    offset += local.length + entry.data.length;
+  }
+  const centralOffset = offset;
+  let centralSize = 0;
+  for (const chunk of centralChunks) centralSize += chunk.length;
+  const eocd = new Uint8Array(22);
+  const eocdView = new DataView(eocd.buffer);
+  eocdView.setUint32(0, 101010256, true);
+  eocdView.setUint16(4, 0, true);
+  eocdView.setUint16(6, 0, true);
+  eocdView.setUint16(8, entries.length, true);
+  eocdView.setUint16(10, entries.length, true);
+  eocdView.setUint32(12, centralSize, true);
+  eocdView.setUint32(16, centralOffset, true);
+  eocdView.setUint16(20, 0, true);
+  const total = offset + centralSize + eocd.length;
+  const out = new Uint8Array(total);
+  let cursor = 0;
+  for (const chunk of [...localChunks, ...centralChunks, eocd]) {
+    out.set(chunk, cursor);
+    cursor += chunk.length;
+  }
+  return out;
+}
+
+// packages/plugin/src/agent-novel/requirements.ts
+import { createHash as createHash5 } from "node:crypto";
+function stableMessageKey(sessionId, messageKey) {
+  return createHash5("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
+}
+function isNovelAuthorMessage(event) {
+  return extractAuthorMessage(event) !== null;
+}
+async function receiveAuthorMessage(store2, novelId, sessionId, event) {
+  const extracted = extractAuthorMessage(event);
+  if (extracted === null) {
+    return { accepted: false, duplicate: false, reason: "event is not a real user author message (user/message with user source and non-empty text)" };
+  }
+  try {
+    const received = await store2.receiveRequirement(novelId, {
+      hostMessageId: stableMessageKey(sessionId, extracted.messageId),
+      text: extracted.text,
+      sourceKind: extracted.sourceKind
+    });
+    return { accepted: true, duplicate: received.duplicate };
+  } catch (cause) {
+    if (cause instanceof NovelCapabilityError) {
+      return { accepted: false, duplicate: false, reason: cause.reason };
+    }
+    return { accepted: false, duplicate: false, reason: `${cause.name}: ${cause.message}` };
+  }
+}
+function extractAuthorMessage(event) {
+  if (typeof event !== "object" || event === null) return null;
+  const record = event;
+  if (record.type !== "user/message") return null;
+  if (typeof record.data !== "object" || record.data === null) return null;
+  const data = record.data;
+  if (data.source === null || typeof data.source !== "object") return null;
+  if (data.source.kind !== "user") return null;
+  if (typeof data.id !== "string" || data.id.trim() === "") return null;
+  const text = textBlocks(data.content);
+  if (text.trim() === "") return null;
+  const sourceKind = data.source.channel === "panel" || data.source.panel === true ? "panel" : "composer";
+  return { messageId: data.id, text, sourceKind };
+}
+function textBlocks(content) {
+  if (!Array.isArray(content)) return "";
+  return content.filter((block) => typeof block === "object" && block !== null && block.type === "text").map((block) => typeof block.text === "string" ? block.text : "").join("").trim();
+}
+
 // packages/plugin/src/agent-tavern/dsh-adapter.ts
 function createDshAgentTavernAdapter(ctx) {
   return {
@@ -5300,7 +8301,7 @@ function createDshAgentTavernAdapter(ctx) {
 // packages/plugin/src/agent-tavern/anchor.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { homedir } from "node:os";
-import { join as join4, resolve } from "node:path";
+import { join as join6, resolve } from "node:path";
 var ANCHOR_EVERY_TURNS_DEFAULT = 5;
 var ANCHOR_TEXT = [
   "<tavern-anchor>",
@@ -5375,7 +8376,7 @@ function anchorTavernStore() {
 }
 function anchorDshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
-  return join4(resolve(configured || join4(homedir(), ".dsh")), ...segments);
+  return join6(resolve(configured || join6(homedir(), ".dsh")), ...segments);
 }
 async function isAgentTavernSession(sessionId) {
   try {
@@ -5411,9 +8412,9 @@ function registerAgentTavernAnchor(ctx, options = {}) {
 }
 
 // packages/plugin/src/agent-tavern/projector.ts
-import { createHash as createHash4, randomUUID as randomUUID3 } from "node:crypto";
-import { promises as fs4 } from "node:fs";
-import { join as join5 } from "node:path";
+import { createHash as createHash6, randomUUID as randomUUID3 } from "node:crypto";
+import { promises as fs6 } from "node:fs";
+import { join as join7 } from "node:path";
 
 // packages/plugin/src/tavern-assets.ts
 var AGENT_TAVERN_PRELOAD_MAX_CHARS = 32e3;
@@ -5534,8 +8535,8 @@ var AgentTavernProjector = class _AgentTavernProjector {
   tails = /* @__PURE__ */ new Map();
   checkpoints = /* @__PURE__ */ new Map();
   static async open(tavernRoot, store2) {
-    const root = join5(tavernRoot, "projections");
-    await fs4.mkdir(root, { recursive: true });
+    const root = join7(tavernRoot, "projections");
+    await fs6.mkdir(root, { recursive: true });
     return new _AgentTavernProjector(root, store2);
   }
   project(session, event) {
@@ -5607,7 +8608,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
     const cached = this.checkpoints.get(sessionId);
     if (cached) return cached;
     try {
-      const parsed = JSON.parse(await fs4.readFile(this.checkpointPath(sessionId), "utf8"));
+      const parsed = JSON.parse(await fs6.readFile(this.checkpointPath(sessionId), "utf8"));
       validateCheckpoint(parsed, sessionId);
       this.checkpoints.set(sessionId, parsed);
       return parsed;
@@ -5627,14 +8628,14 @@ var AgentTavernProjector = class _AgentTavernProjector {
   async writeCheckpoint(checkpoint) {
     const target = this.checkpointPath(checkpoint.sessionId);
     const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
-    await fs4.writeFile(temporary, `${JSON.stringify(checkpoint)}
+    await fs6.writeFile(temporary, `${JSON.stringify(checkpoint)}
 `, "utf8");
-    await fs4.rename(temporary, target);
+    await fs6.rename(temporary, target);
     this.checkpoints.set(checkpoint.sessionId, checkpoint);
   }
   checkpointPath(sessionId) {
-    const name2 = createHash4("sha256").update(sessionId).digest("hex");
-    return join5(this.root, `${name2}.json`);
+    const name2 = createHash6("sha256").update(sessionId).digest("hex");
+    return join7(this.root, `${name2}.json`);
   }
 };
 function projectMessage(session, event, binding, scripts) {
@@ -5777,6 +8778,10 @@ var activeAgentPrompt = "";
 var agentTavernCapabilities = inspectAgentTavernCapabilities({});
 var agentTavernCapabilitiesPromise;
 var agentTavernProjectorPromise;
+var agentNovelCapabilities = inspectAgentNovelCapabilities({});
+var novelStorePromise;
+var novelProjectorPromise;
+var novelDriverPromise;
 var TavernArchitectureConflictError = class extends Error {
   code = "TAVERN_ARCHITECTURE_CONFLICT";
   constructor(message) {
@@ -5793,6 +8798,9 @@ function memories() {
 function variables() {
   return variableStorePromise ??= VariableStore.open(dshHomePath("tavern"));
 }
+function novelStore() {
+  return novelStorePromise ??= NovelStore.open(dshHomePath("tavern"));
+}
 function apply(ctx, config = {}) {
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns });
   const adapter = createDshAgentTavernAdapter(ctx);
@@ -5805,17 +8813,34 @@ function apply(ctx, config = {}) {
     agentTavernCapabilities = value;
   });
   agentTavernProjectorPromise = store().then((db) => AgentTavernProjector.open(dshHomePath("tavern"), db));
+  agentNovelCapabilities = inspectAgentNovelCapabilities(ctx);
+  novelProjectorPromise = Promise.all([novelStore(), memories()]).then(([store2, memory]) => NovelProjector.open(dshHomePath("tavern"), store2, memory));
+  novelDriverPromise = Promise.all([novelStore(), store(), novelProjectorPromise]).then(([novelDb, tavern, projector]) => {
+    const driver = NovelDriver.create(ctx, { store: novelDb, tavern, projector });
+    try {
+      ctx.effect?.(() => () => {
+        void driver.dispose();
+      }, "dsh-tavern:novel-driver-dispose");
+    } catch {
+    }
+    return driver;
+  }).catch((error) => {
+    ctx.logger?.warn?.(`dsh-tavern: AgentNovel driver unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    return void 0;
+  });
   ctx.on?.("session/event", (session, event) => {
     void agentTavernProjectorPromise.then((projector) => projector.project(session, event)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection failed: ${error instanceof Error ? error.message : String(error)}`));
     if (event?.type === "turn/end" && typeof session?.id === "string") {
       void variables().then((store2) => store2.clear("turn", session.id)).catch(() => {
       });
     }
+    void handleNovelSessionEvent(ctx, session, event);
   });
   ctx.on?.("agent/created", ({ agent }) => {
     void agentTavernProjectorPromise.then((projector) => projector.replay(agent.session)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`));
   });
   void refreshActivePrompt();
+  void recoverMountedNovels(ctx);
   ctx.systemPrompt.section({
     name: "dsh-tavern:active-character",
     order: 25,
@@ -5850,6 +8875,9 @@ function apply(ctx, config = {}) {
           }
         }), { surfaceOp: "append" });
         return { kind: "success", text: "Tavern closed" };
+      }
+      if (parsed.action === "novel-open") {
+        return handleNovelOpenCommand(ctx, agent, parsed.novelId);
       }
       const chat = await db.getChat(parsed.character, parsed.chatId);
       if (!chat) return { kind: "error", text: "Tavern chat not found." };
@@ -5941,13 +8969,18 @@ function apply(ctx, config = {}) {
         await handleApi(ctx, req, res);
       } catch (error) {
         if (!res.writableEnded) {
-          const message = error instanceof Error ? error.message : String(error);
-          const code = error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError ? error.code : void 0;
+          const novelFailure = novelHttpFailure(error);
+          if (novelFailure !== void 0) {
+            ctx.logger?.warn?.(`dsh-tavern: novel route failed (${novelFailure.code}): ${error instanceof Error ? error.message : String(error)}`, { operation: "novels-api", errorCode: novelFailure.code });
+          }
+          const message = novelFailure?.sanitized === true ? `Novel failure '${novelFailure.code}'; see the server log for details.` : error instanceof Error ? error.message : String(error);
+          const code = error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError ? error.code : novelFailure?.code;
           if (res.headersSent) {
             res.write(JSON.stringify({ type: "error", message, code }) + "\n");
             res.end();
           } else {
-            sendJson(res, error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError ? 409 : 500, { ok: false, message, code });
+            const status2 = error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError ? 409 : novelFailure?.status ?? 500;
+            sendJson(res, status2, { ok: false, message, code, ...novelFailure?.extra ?? {} });
           }
         }
       }
@@ -5993,7 +9026,8 @@ async function handleApi(ctx, req, res) {
       version: BUILD_INFO.version,
       commit: TAVERN_COMMIT,
       internalWorkspace,
-      agentTavern: agentTavernCapabilities
+      agentTavern: agentTavernCapabilities,
+      agentNovel: agentNovelCapabilities
     });
   }
   if (method === "GET" && route.startsWith("avatar/")) {
@@ -6077,6 +9111,9 @@ async function handleApi(ctx, req, res) {
       memories: [...memoryGroups.flat().map((hit) => hit.record), ...globalMemories.map((hit) => hit.record)],
       variables: [...variableGroups.flat(), ...globalVariables]
     });
+  }
+  if (route === "novels" || route.startsWith("novels/")) {
+    return handleNovelsApi(ctx, req, res, url, route, method);
   }
   if (method === "PUT" && route.startsWith("character/")) {
     const oldName = decodeURIComponent(route.slice("character/".length));
@@ -6674,6 +9711,384 @@ async function handleApi(ctx, req, res) {
     return runTavernScript(ctx, req, res, db);
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+}
+var NOVEL_SUBPATHS = ["novels/outline", "novels/body", "novels/export", "novels/pause", "novels/resume", "novels/stop", "novels/update-outline", "novels/approve-outline"];
+var NOVEL_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
+function novelHttpFailure(error) {
+  if (error instanceof NovelRevisionConflictError) {
+    return { status: 409, code: error.code, sanitized: false, extra: { actualRevision: error.actualRevision } };
+  }
+  if (error instanceof NovelDuplicateCommitError) return { status: 409, code: error.code, sanitized: false };
+  if (error instanceof NovelStaleUnitError) return { status: 409, code: error.code, sanitized: false };
+  if (error instanceof NovelRequirementConflictError) return { status: 409, code: error.code, sanitized: false };
+  if (error instanceof NovelLengthLimitError) return { status: 409, code: error.code, sanitized: false };
+  if (error instanceof NovelPreconditionError) {
+    return {
+      status: 409,
+      code: error.code,
+      sanitized: false,
+      extra: { rule: error.rule, ...error.violations.length > 0 ? { violations: [...error.violations] } : {} }
+    };
+  }
+  if (error instanceof NovelNotFoundError) return { status: 404, code: error.code, sanitized: false };
+  if (error instanceof NovelConfigError) {
+    return {
+      status: 400,
+      code: error.code,
+      sanitized: false,
+      ...error.errors.length > 0 ? { extra: { violations: error.errors.map((item) => ({ field: item.field, message: item.message })) } } : {}
+    };
+  }
+  if (error instanceof NovelCapabilityError) return { status: 503, code: error.code, sanitized: false };
+  if (error instanceof NovelStorageCorruptionError) return { status: 500, code: error.code, sanitized: true };
+  if (error instanceof NovelOwnershipError) return { status: 500, code: error.code, sanitized: true };
+  return void 0;
+}
+function parseNovelRoute(route) {
+  if (!route.startsWith("novels/")) return null;
+  const [idSegment, ...rest] = route.slice("novels/".length).split("/");
+  if (idSegment === void 0) return null;
+  const tail = rest.join("/");
+  return {
+    novelId: decodeURIComponent(idSegment),
+    subpath: tail === "" ? null : NOVEL_SUBPATHS.find((marker) => marker === `novels/${tail}`) ?? null
+  };
+}
+async function requireNovel(db, novelId) {
+  if (!NOVEL_ID_SHAPE.test(novelId)) throw new NovelNotFoundError({ novelId });
+  const snapshot2 = await db.getNovel(novelId);
+  if (snapshot2 === void 0) throw new NovelNotFoundError({ novelId });
+  return snapshot2;
+}
+function novelDetail(snapshot2) {
+  const summary = summarizeNovel(snapshot2);
+  const outline = snapshot2.outline;
+  const completed = new Set(snapshot2.completedChapters.map((entry) => entry.chapterId));
+  const chapters = [...outline?.chapters ?? []].sort((left, right) => left.order - right.order).map((chapter) => {
+    const chapterCommits = snapshot2.commits.filter((commit) => commit.chapterId === chapter.chapterId);
+    return {
+      chapterId: chapter.chapterId,
+      order: chapter.order,
+      title: chapter.title,
+      state: completed.has(chapter.chapterId) ? "completed" : chapterCommits.length > 0 ? "writing" : "planned",
+      committedCharacters: totalEffectiveCharacters(chapterCommits)
+    };
+  });
+  const budget = snapshot2.config.lengthBudget;
+  return {
+    novelId: summary.novelId,
+    title: summary.title,
+    status: summary.status,
+    phase: summary.phase,
+    pauseReason: summary.pauseReason,
+    chaptersCompleted: summary.chaptersCompleted,
+    chaptersTotal: summary.chaptersTotal,
+    effectiveCharacters: summary.effectiveCharacters,
+    targetCharacters: summary.targetCharacters,
+    updatedAt: summary.updatedAt,
+    lastError: summary.lastError,
+    revision: snapshot2.revision,
+    config: snapshot2.config,
+    pauseDetail: snapshot2.run.pauseDetail,
+    resumeHint: snapshot2.run.resumeHint,
+    requirements: snapshot2.requirements.map((record) => ({
+      requirementId: record.requirementId,
+      sequence: record.sequence,
+      text: record.text,
+      status: record.status,
+      effectiveLocation: record.effectiveLocation,
+      blockedReason: record.blockedReason
+    })),
+    chapters,
+    outlineSummary: outline === null ? null : {
+      outlineRevision: outline.outlineRevision,
+      story: { premise: outline.story.premise, theme: outline.story.theme, endingDirection: outline.story.endingDirection },
+      chapterTitles: outline.chapters.map((chapter) => ({ chapterId: chapter.chapterId, title: chapter.title })),
+      foreshadowing: outline.foreshadowing.map((item) => ({ id: item.id, description: item.description, status: item.status, required: item.required }))
+    },
+    budget: {
+      turnsRun: snapshot2.run.turnsRun,
+      maxTurns: snapshot2.config.budgets.maxTurns,
+      deduceRuns: snapshot2.run.deduceRuns,
+      maxDeduceRuns: snapshot2.config.budgets.maxDeduceRuns,
+      remainingCharacters: budget.kind === "target" ? Math.max(0, unitTargetRange(snapshot2.config, summary.effectiveCharacters).max) : null
+    }
+  };
+}
+async function handleNovelsApi(ctx, req, res, url, route, method) {
+  const novels = await novelStore();
+  if (method === "GET" && route === "novels") {
+    return sendJson(res, 200, { ok: true, novels: await novels.listNovels() });
+  }
+  if (method === "POST" && route === "novels") {
+    const body = await readJson(req);
+    const capabilities = inspectAgentNovelCapabilities(ctx);
+    if (!capabilities.available) {
+      return sendJson(res, 503, {
+        ok: false,
+        message: `AgentNovel is unavailable on this host: ${capabilities.reasons.join(" ")}`,
+        code: "NOVEL_CAPABILITY",
+        reasons: [...capabilities.reasons]
+      });
+    }
+    const config = body;
+    const violations = validateCreateConfig(config);
+    if (violations.length > 0) {
+      return sendJson(res, 400, {
+        ok: false,
+        message: "invalid novel config",
+        code: "NOVEL_CONFIG",
+        violations: violations.map((item) => ({ field: item.field, message: item.message }))
+      });
+    }
+    const created = await novels.createNovel(await store(), config);
+    const snapshot2 = await novels.getNovel(created.novelId);
+    const summary = snapshot2 === void 0 ? void 0 : summarizeNovel(snapshot2);
+    return sendJson(res, 200, {
+      ok: true,
+      novel: {
+        novelId: created.novelId,
+        title: config.title,
+        status: summary?.status ?? (config.approvalMode === "manual" ? "paused" : "active"),
+        phase: summary?.phase ?? "outlining",
+        revision: created.revision
+      }
+    });
+  }
+  const parts = parseNovelRoute(route);
+  if (parts === null) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  const { novelId, subpath } = parts;
+  if (method === "GET" && subpath === null) {
+    const snapshot2 = await requireNovel(novels, novelId);
+    return sendJson(res, 200, { ok: true, novel: novelDetail(snapshot2) });
+  }
+  if (method === "PATCH" && subpath === null) {
+    const body = await readJson(req);
+    if (typeof body.expectedRevision !== "string" || typeof body.patch !== "object" || body.patch === null || Array.isArray(body.patch)) {
+      throw new Error("expected { expectedRevision, patch }");
+    }
+    const result = await novels.patchNovelMeta(novelId, {
+      expectedRevision: body.expectedRevision,
+      patch: body.patch,
+      cause: typeof body.cause === "string" && body.cause.trim() !== "" ? body.cause : "panel-edit"
+    });
+    return sendJson(res, 200, { ok: true, revision: result.revision });
+  }
+  if (method === "DELETE" && subpath === null) {
+    await novels.pause(novelId, { reason: "user-request", detail: "deletion requested from the novels panel" }).catch(() => {
+    });
+    const db = await store();
+    await db.updateState((current) => ({
+      sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.architecture === "agent-novel" && binding.novelId === novelId)))
+    }));
+    await novels.deleteNovel(novelId);
+    return sendJson(res, 200, { ok: true });
+  }
+  if (method === "POST" && subpath === "novels/pause") {
+    const result = await novels.pause(novelId, {
+      reason: "user-request",
+      detail: "paused from the novels panel",
+      resumeHint: "resume explicitly to authorize further work (proposal 0005 \xA713)"
+    });
+    return sendJson(res, 200, { ok: true, revision: result.revision });
+  }
+  if (method === "POST" && subpath === "novels/resume") {
+    const result = await novels.resume(novelId);
+    return sendJson(res, 200, { ok: true, revision: result.revision });
+  }
+  if (method === "POST" && subpath === "novels/stop") {
+    const result = await novels.stop(novelId);
+    return sendJson(res, 200, { ok: true, revision: result.revision });
+  }
+  if (method === "POST" && subpath === "novels/update-outline") {
+    const result = await novels.requestRevision(novelId);
+    return sendJson(res, 200, { ok: true, revision: result.revision });
+  }
+  if (method === "POST" && subpath === "novels/approve-outline") {
+    const body = await readJson(req).catch(() => void 0);
+    const fromQuery = url.searchParams.get("expectedOutlineRevision");
+    const expected = typeof body?.expectedOutlineRevision === "string" && body.expectedOutlineRevision.trim() !== "" ? body.expectedOutlineRevision : fromQuery;
+    if (expected === null || expected === void 0 || expected.trim() === "") throw new Error("expected { expectedOutlineRevision }");
+    const result = await novels.approveOutline(novelId, { expectedOutlineRevision: expected });
+    return sendJson(res, 200, { ok: true, revision: result.revision });
+  }
+  if (method === "GET" && subpath === "novels/outline") {
+    const snapshot2 = await requireNovel(novels, novelId);
+    return sendJson(res, 200, { ok: true, outline: snapshot2.outline });
+  }
+  if (method === "GET" && subpath === "novels/body") {
+    const chapterId = url.searchParams.get("chapterId");
+    const cursor = url.searchParams.get("cursor");
+    const limitRaw = url.searchParams.get("limit");
+    const page = await novels.readBody(novelId, {
+      ...chapterId !== null && chapterId !== "" ? { chapterId } : {},
+      ...cursor !== null && cursor !== "" ? { cursor } : {},
+      ...limitRaw !== null && limitRaw !== "" ? { limit: Number(limitRaw) } : {}
+    });
+    return sendJson(res, 200, { ok: true, paragraphs: [...page.paragraphs], nextCursor: page.nextCursor });
+  }
+  if (method === "GET" && subpath === "novels/export") {
+    const projector = await novelProjectorPromise;
+    if (projector === void 0) throw new Error("AgentNovel projector is unavailable");
+    const format = url.searchParams.get("format") === "zip" ? "zip" : "md";
+    const exported = await projector.exportNovel(novelId, format);
+    res.statusCode = 200;
+    res.setHeader("content-type", exported.contentType);
+    res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(exported.filename)}"`);
+    res.end(Buffer.from(exported.bytes));
+    return;
+  }
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+}
+function errorCodeText(error) {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = error.code;
+    if (typeof code === "string" && code !== "") return code;
+  }
+  return error instanceof Error ? error.name : String(error);
+}
+async function recoverMountedNovels(ctx) {
+  const driver = await novelDriverPromise;
+  if (driver === void 0) return;
+  await recoverNovels(driver);
+  try {
+    const db = await store();
+    const state = await db.getState();
+    for (const binding of Object.values(state.sessionBindings)) {
+      if (binding.architecture !== "agent-novel") continue;
+      await indexPendingCommits(ctx, binding.novelId);
+    }
+  } catch (error) {
+    ctx.logger?.warn?.("dsh-tavern: AgentNovel recovery indexing failed", { operation: "recover", errorCode: errorCodeText(error) });
+  }
+}
+async function handleNovelSessionEvent(ctx, session, event) {
+  const sessionId = session?.id;
+  if (typeof sessionId !== "string") return;
+  let novelId;
+  try {
+    const db = await store();
+    const state = await db.getState();
+    const binding = state.sessionBindings[sessionId];
+    if (binding === void 0 || binding.architecture !== "agent-novel") return;
+    novelId = binding.novelId;
+  } catch (error) {
+    ctx.logger?.warn?.("dsh-tavern: AgentNovel binding read failed", { sessionId, operation: "novel-event", errorCode: errorCodeText(error) });
+    return;
+  }
+  const record = event;
+  try {
+    if (record?.type === "turn/end") {
+      const driver = await novelDriverPromise;
+      if (driver !== void 0) await driver.handleSessionEvent({ id: sessionId }, event);
+      await indexPendingCommits(ctx, novelId);
+      return;
+    }
+    if (isNovelAuthorMessage(event)) {
+      const outcome = await receiveAuthorMessage(await novelStore(), novelId, sessionId, event);
+      if (!outcome.accepted && !outcome.duplicate) {
+        ctx.logger?.warn?.("dsh-tavern: AgentNovel receive barrier rejected a message", {
+          novelId,
+          sessionId,
+          operation: "receive-requirement",
+          reason: outcome.reason ?? "unknown"
+        });
+      }
+    }
+  } catch (error) {
+    ctx.logger?.warn?.("dsh-tavern: AgentNovel session event handling failed", { novelId, sessionId, operation: "novel-event", errorCode: errorCodeText(error) });
+  }
+}
+async function indexPendingCommits(ctx, novelId) {
+  const [novels, memory, projector] = await Promise.all([novelStore(), memories(), novelProjectorPromise]);
+  if (projector === void 0) return;
+  const snapshot2 = await novels.getNovel(novelId);
+  if (snapshot2 === void 0) return;
+  const scopeId = `novel:${novelId}`;
+  for (const commit of snapshot2.commits) {
+    const summaryId = `novel-${novelId}-${commit.commitId}-${commit.canonChanges.length}`;
+    const indexed = await memory.read(summaryId, "chat", scopeId, true).catch(() => void 0);
+    if (indexed !== void 0) continue;
+    try {
+      await projector.indexCommit(novelId, commit.commitId);
+    } catch (error) {
+      ctx.logger?.warn?.("dsh-tavern: AgentNovel memory index write failed", { novelId, commitId: commit.commitId, operation: "index-commit", errorCode: errorCodeText(error) });
+    }
+  }
+}
+function driverCompatibleAgent(agent) {
+  if (typeof agent !== "object" || agent === null) return false;
+  const candidate = agent;
+  return typeof candidate.id === "string" && typeof candidate.session === "object" && candidate.session !== null && typeof candidate.session.id === "string" && (candidate.status === "idle" || candidate.status === "running") && typeof candidate.followup === "function" && typeof candidate.whenIdle === "function";
+}
+async function handleNovelOpenCommand(ctx, agent, novelId) {
+  const db = await store();
+  const novels = await novelStore();
+  if (await novels.getNovel(novelId) === void 0) {
+    return { kind: "error", text: `Novel '${novelId}' not found.` };
+  }
+  if (!agentNovelCapabilities.available) {
+    return { kind: "error", text: `AgentNovel is unavailable on this host: ${agentNovelCapabilities.reasons.join(" ")}` };
+  }
+  await ensureBundledAgentNovelPreset();
+  const currentState = await db.getState();
+  const previous = currentState.sessionBindings[agent.id];
+  const activationEvents = sessionEvents(agent.session);
+  const sessionStarted = activationEvents.some((event) => event.type === "turn/start") || activationEvents.some((event) => {
+    if (event.type !== "user/message" && event.type !== "assistant/message") return false;
+    const source = event.type === "user/message" ? event.data?.source : event.data?.message?.source;
+    return source?.plugin === "dsh-tavern" && source.form !== "context";
+  });
+  const sameNovelBinding = previous?.architecture === "agent-novel" && previous.novelId === novelId;
+  if (!sameNovelBinding && sessionStarted) {
+    throw new TavernArchitectureConflictError("This host session already started; rebinding it to an AgentNovel project is locked (proposal 0005 \xA74.2).");
+  }
+  if (typeof ctx.agentPresets?.recompose !== "function") {
+    throw new TavernArchitectureConflictError("The host cannot recompose a blank session with the AgentNovel preset.");
+  }
+  await bindNovelSession(db, agent.id, novelId);
+  if (!activationEvents.some((event) => event.type === "agent-preset/selected" && event.data?.agentPreset === AGENT_NOVEL_PRESET_ID)) {
+    const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_NOVEL_PRESET_ID);
+    agent.session.append("agent-preset/selected", { agentPreset: preset.id });
+  }
+  const driver = await novelDriverPromise;
+  if (driver !== void 0 && driverCompatibleAgent(agent)) {
+    await driver.handleNovelOpen(agent, novelId);
+  }
+  return { kind: "success", text: `Novel: ${novelId}` };
+}
+async function bindNovelSession(db, sessionId, novelId) {
+  return db.updateState((state) => ({
+    sessionBindings: {
+      ...state.sessionBindings,
+      [sessionId]: { architecture: "agent-novel", novelId, character: "", chatId: "" }
+    }
+  }));
+}
+async function ensureBundledAgentNovelPreset() {
+  const bundledRoots = [
+    resolve2(import.meta.dirname, "agent-presets"),
+    resolve2(import.meta.dirname, "..", "agent-presets")
+  ];
+  const bundledRoot = bundledRoots.find((candidate) => {
+    try {
+      return readFileSync(resolve2(candidate, AGENT_NOVEL_PRESET_ID, "agent.cordis.yml"), "utf8").trim() !== "";
+    } catch {
+      return false;
+    }
+  });
+  if (!bundledRoot) throw new Error("bundled AgentNovel preset is missing from the plugin package");
+  const sourceRoot = resolve2(bundledRoot, AGENT_NOVEL_PRESET_ID);
+  const targetRoot = dshHomePath(".agent-presets", AGENT_NOVEL_PRESET_ID);
+  await mkdir(targetRoot, { recursive: true });
+  for (const file of ["preset.yml", "agent.cordis.yml"]) {
+    const target = resolve2(targetRoot, file);
+    try {
+      await writeFile(target, await readFile(resolve2(sourceRoot, file)), { flag: "wx" });
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+    }
+  }
 }
 async function generate(ctx, req, res, db) {
   const body = await readJson(req);
@@ -7577,6 +10992,9 @@ function parseTavernSessionCommand(rawInput) {
   try {
     const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (parsed.action === "close") return { action: "close" };
+    if (parsed.action === "novel-open") {
+      return typeof parsed.novelId === "string" && parsed.novelId.trim() !== "" ? { action: "novel-open", novelId: parsed.novelId } : null;
+    }
     if (typeof parsed.character !== "string" || typeof parsed.chatId !== "string") return null;
     const group2 = parsed.group === true;
     const architecture = group2 ? "st" : requestedArchitecture(parsed.architecture);
@@ -7594,12 +11012,12 @@ function parseTavernSessionCommand(rawInput) {
 }
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
-  return join6(resolve2(configured || join6(homedir2(), ".dsh")), ...segments);
+  return join8(resolve2(configured || join8(homedir2(), ".dsh")), ...segments);
 }
 async function prepareInternalWorkspace() {
-  const path4 = dshHomePath("tavern", "workspace");
-  await mkdir(path4, { recursive: true });
-  return { path: path4, title: TAVERN_WORKSPACE_TITLE };
+  const path6 = dshHomePath("tavern", "workspace");
+  await mkdir(path6, { recursive: true });
+  return { path: path6, title: TAVERN_WORKSPACE_TITLE };
 }
 function readBuildInfo() {
   let version = "unknown";

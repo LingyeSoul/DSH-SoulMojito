@@ -41,7 +41,7 @@ import {
   type WorldBookIR,
 } from '@dsh-tavern/format'
 
-export type TavernArchitecture = 'agent-tavern' | 'st'
+export type TavernArchitecture = 'agent-tavern' | 'st' | 'agent-novel'
 export type TavernContextMode = 'dsh-native' | 'agent-managed'
 
 interface TavernSessionBase {
@@ -60,6 +60,13 @@ export type TavernSessionBinding =
     })
   | (TavernSessionBase & {
       architecture: 'st'
+    })
+  | (TavernSessionBase & {
+      /** AgentNovel project binding (proposal 0005 §4.2): identity is novelId
+       *  alone; the legacy character/chatId string fields are kept as empty
+       *  strings for schema compatibility and carry no meaning. */
+      architecture: 'agent-novel'
+      novelId: string
     })
 
 /** 一个 DSH session 的模型选择；缺省回落 agentDefaultModel。 */
@@ -753,6 +760,18 @@ export class TavernStore {
 export function normalizeTavernSessionBinding(value: unknown): TavernSessionBinding | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   const candidate = value as Record<string, unknown>
+  // AgentNovel bindings are identified by novelId alone (proposal 0005 §4.2);
+  // the legacy character/chatId fields are compatibility-only and may be
+  // empty strings, so this branch must run before their presence checks.
+  if (candidate.architecture === 'agent-novel') {
+    if (typeof candidate.novelId !== 'string' || candidate.novelId.trim() === '') return undefined
+    return {
+      character: typeof candidate.character === 'string' ? candidate.character : '',
+      chatId: typeof candidate.chatId === 'string' ? candidate.chatId : '',
+      architecture: 'agent-novel',
+      novelId: candidate.novelId,
+    }
+  }
   if (typeof candidate.character !== 'string' || candidate.character.trim() === '') return undefined
   if (typeof candidate.chatId !== 'string' || candidate.chatId.trim() === '') return undefined
   const base = {

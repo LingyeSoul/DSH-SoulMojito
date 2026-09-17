@@ -61,6 +61,15 @@ const REQUIRED_SERVER_ROUTES = [
   'script',
   'tc/check',
   'generate',
+  'novels',
+  'novels/pause',
+  'novels/resume',
+  'novels/stop',
+  'novels/update-outline',
+  'novels/approve-outline',
+  'novels/export',
+  'novels/outline',
+  'novels/body',
 ]
 
 // DSH client-web's platform module table. Third-party plugin values must flow
@@ -98,13 +107,16 @@ function checkPackageObject(pkg, checkFiles = false) {
   if (pkg.exports?.['./cordis.patch.yml'] !== './cordis.patch.yml') {
     problems.push("exports['./cordis.patch.yml'] must be './cordis.patch.yml'")
   }
+  if (pkg.exports?.['./novel'] !== './novel.mjs') {
+    problems.push("exports['./novel'] must be './novel.mjs'")
+  }
   if (pkg.exports?.['./package.json'] !== './package.json') {
     problems.push("exports['./package.json'] must be './package.json'")
   }
   if (!Array.isArray(pkg.files)) {
     problems.push('files must be an array')
   } else {
-    for (const entry of ['index.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md']) {
+    for (const entry of ['index.mjs', 'novel.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md']) {
       if (!pkg.files.includes(entry)) problems.push(`files must include '${entry}'`)
     }
   }
@@ -122,6 +134,7 @@ function checkPackageObject(pkg, checkFiles = false) {
       ["exports['.']", pkg.exports?.['.']],
       ["exports['./client']", pkg.exports?.['./client']],
       ["exports['./cordis.patch.yml']", pkg.exports?.['./cordis.patch.yml']],
+      ["exports['./novel']", pkg.exports?.['./novel']],
       ["exports['./package.json']", pkg.exports?.['./package.json']],
       ['dsh.bundle.patch', pkg.dsh?.bundle?.patch],
     ]) {
@@ -397,11 +410,20 @@ function checkAgentTavernIsolation(sourceFiles, serverText) {
 }
 
 function agentTavernSourceFiles() {
-  const root = join(PLUGIN_ROOT, 'src', 'agent-tavern')
-  if (!existsSync(root)) return []
-  return readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && /\.(?:ts|tsx|js|mjs)$/.test(entry.name))
-    .map((entry) => [entry.name, readFileSync(join(root, entry.name), 'utf8')])
+  // Native-execution isolation covers both agent architectures (proposal
+  // 0005 §18 host isolation): agent-tavern and agent-novel sources must stay
+  // free of plugin-side LLM loops and ST prompt pipeline calls.
+  const files = []
+  for (const dir of ['agent-tavern', 'agent-novel']) {
+    const root = join(PLUGIN_ROOT, 'src', dir)
+    if (!existsSync(root)) continue
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (entry.isFile() && /\.(?:ts|tsx|js|mjs)$/.test(entry.name)) {
+        files.push([`${dir}/${entry.name}`, readFileSync(join(root, entry.name), 'utf8')])
+      }
+    }
+  }
+  return files
 }
 
 function callableStub(label = 'stub') {
@@ -732,14 +754,37 @@ const sections = []
 const registrations = []
 const effects = []
 const ctx = {
-  commands: { register: (value) => { registrations.push({ kind: 'command', name: value.name, handlerType: typeof value.handler }); return () => {} } },
+  commands: { register: (value) => { registrations.push({ kind: 'command', name: value.name, handlerType: typeof value.handler }); if (value.name === 'dsh-tavern-session') commandHandler = value.handler; return () => {} } },
   systemPrompt: { section: (value) => { sections.push(value) } },
   webServer: { register: (value) => { registrations.push(value); return () => {} } },
   effect: (callback, label) => { effects.push(label); return callback() },
   llm: { stream: async function* () {} },
   agentDefaultModel: { currentSelection: () => ({ provider: 'stub', model: 'stub' }) },
 }
+let commandHandler = null
 mod.apply(ctx)
+// Novel-open payload parse probe (proposal 0005 §4.2 bridge): an unknown novel
+// must produce a handled error, never the invalid-payload rejection.
+let novelOpen = { kind: null, invalidPayload: true }
+if (typeof commandHandler === 'function') {
+  try {
+    const sessionLog = []
+    const novelAgent = {
+      id: 'gate-novel-probe',
+      ctx: {},
+      session: {
+        log: sessionLog,
+        snapshotEvents: () => Object.freeze([...sessionLog]),
+        append: (type, data) => { sessionLog.push({ type, seq: sessionLog.length, time: 0, data }) },
+      },
+    }
+    const payload = Buffer.from(JSON.stringify({ action: 'novel-open', novelId: 'gate-probe' })).toString('base64url')
+    const outcome = await commandHandler({ agent: novelAgent, rawInput: payload })
+    novelOpen = { kind: outcome?.kind ?? null, invalidPayload: outcome?.text === 'Invalid Tavern activation payload.' }
+  } catch (error) {
+    novelOpen = { kind: 'threw', invalidPayload: true, message: String(error?.message ?? error) }
+  }
+}
 console.log('DSH_TAVERN_GATE_RESULT=' + JSON.stringify({
   name: mod.name,
   inject: mod.inject,
@@ -747,6 +792,7 @@ console.log('DSH_TAVERN_GATE_RESULT=' + JSON.stringify({
   sections: sections.map(({ name, order, text }) => ({ name, order, textType: typeof text })),
   registrations: registrations.map(({ kind, path, name, handler, handlerType }) => ({ kind, path, name, handlerType: handlerType ?? typeof handler })),
   effects,
+  novelOpen,
 }))
 `
 
@@ -774,6 +820,9 @@ function checkNodeMountResult(result) {
   else if (command.handlerType !== 'function') problems.push('Node Tavern session bridge has no handler function')
   if (result.registrations?.some((value) => value.kind === 'command' && value.name === 'tavern')) {
     problems.push("Node apply must not expose the public '/tavern' activation command")
+  }
+  if (result.novelOpen?.invalidPayload !== false) {
+    problems.push('internal session bridge must parse novel-open payloads (expected a handled unknown-novel error)')
   }
   return problems
 }
@@ -833,9 +882,10 @@ const gates = [
           '.': './index.mjs',
           './client': './client/index.js',
           './cordis.patch.yml': './cordis.patch.yml',
+          './novel': './novel.mjs',
           './package.json': './package.json',
         },
-        files: ['index.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md'],
+        files: ['index.mjs', 'novel.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md'],
         dsh: {
           bundle: { patch: './cordis.patch.yml' },
           client: { platform: 'web', inject: ['@deepseek-ai/dsh-client-runtime'] },
@@ -1066,6 +1116,7 @@ const gates = [
           { kind: 'prefix', path: API_PREFIX, handlerType: 'function' },
           { kind: 'command', name: 'dsh-tavern-session', handlerType: 'function' },
         ],
+        novelOpen: { kind: 'error', invalidPayload: false },
       }
       const bad = { ...good, registrations: [] }
       return checkNodeMountResult(good).length === 0 && checkNodeMountResult(bad).length > 0

@@ -19,8 +19,25 @@ import { applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
 import {
   ChatRevisionConflictError,
   MemoryStore,
+  NovelCapabilityError,
+  NovelConfigError,
+  NovelDuplicateCommitError,
+  NovelLengthLimitError,
+  NovelNotFoundError,
+  NovelOwnershipError,
+  NovelPreconditionError,
+  NovelRequirementConflictError,
+  NovelRevisionConflictError,
+  NovelStaleUnitError,
+  NovelStorageCorruptionError,
+  NovelStore,
   TavernStore,
   VariableStore,
+  summarizeNovel,
+  totalEffectiveCharacters,
+  validateCreateConfig,
+  type NovelCreateConfig,
+  type NovelSnapshot,
   type TavernModelSelection,
 } from '../../tavern-store/src/index.js'
 import { describeHostShape, readSessionEvents, sessionEvents, type HostSessionLog } from '../../bind/src/index.js'
@@ -30,6 +47,11 @@ import {
   inspectAgentTavernCapabilities,
   type AgentTavernCapabilities,
 } from './agent-tavern/capabilities.js'
+import { AGENT_NOVEL_PRESET_ID, inspectAgentNovelCapabilities, type AgentNovelCapabilities } from './agent-novel/capabilities.js'
+import { NovelDriver, recoverNovels, type DriverAgentLike } from './agent-novel/driver.js'
+import { unitTargetRange } from './agent-novel/outline.js'
+import { NovelProjector } from './agent-novel/projector.js'
+import { isNovelAuthorMessage, receiveAuthorMessage } from './agent-novel/requirements.js'
 import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
 import { AgentTavernProjector, historyImportAppends, type SessionImportAppend } from './agent-tavern/projector.js'
@@ -50,6 +72,13 @@ let activeAgentPrompt = ''
 let agentTavernCapabilities: AgentTavernCapabilities = inspectAgentTavernCapabilities({})
 let agentTavernCapabilitiesPromise: Promise<AgentTavernCapabilities> | undefined
 let agentTavernProjectorPromise: Promise<AgentTavernProjector> | undefined
+// AgentNovel mount state (proposal 0005 §4.2/§12): capabilities are inspected
+// once at apply (§16); the store/projector/driver follow the storePromise
+// memoization pattern so a single DSH home owns a single writer.
+let agentNovelCapabilities: AgentNovelCapabilities = inspectAgentNovelCapabilities({})
+let novelStorePromise: Promise<NovelStore> | undefined
+let novelProjectorPromise: Promise<NovelProjector> | undefined
+let novelDriverPromise: Promise<NovelDriver | undefined> | undefined
 
 class TavernArchitectureConflictError extends Error {
   readonly code = 'TAVERN_ARCHITECTURE_CONFLICT'
@@ -71,6 +100,10 @@ function variables() {
   return (variableStorePromise ??= VariableStore.open(dshHomePath('tavern')))
 }
 
+function novelStore(): Promise<NovelStore> {
+  return (novelStorePromise ??= NovelStore.open(dshHomePath('tavern')))
+}
+
 export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns })
   const adapter = createDshAgentTavernAdapter(ctx)
@@ -82,6 +115,31 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
   })
   void agentTavernCapabilitiesPromise.then((value) => { agentTavernCapabilities = value })
   agentTavernProjectorPromise = store().then((db) => AgentTavernProjector.open(dshHomePath('tavern'), db))
+  // AgentNovel capability snapshot (proposal 0005 §16): read by the bootstrap
+  // route and the novel-open command. Pure shape probing; the bundled preset
+  // is installed on demand via ensureBundledAgentNovelPreset, not forced here.
+  agentNovelCapabilities = inspectAgentNovelCapabilities(ctx)
+  novelProjectorPromise = Promise.all([novelStore(), memories()])
+    .then(([store, memory]) => NovelProjector.open(dshHomePath('tavern'), store, memory))
+  novelDriverPromise = Promise.all([novelStore(), store(), novelProjectorPromise])
+    .then(([novelDb, tavern, projector]) => {
+      // The driver subscribes agent/created|disposed|status itself and owns
+      // its gated degradation (§12.1); dispose rides the effect hook.
+      const driver = NovelDriver.create(ctx, { store: novelDb, tavern, projector })
+      try {
+        // ctx.effect runs the callback now and calls its return value at
+        // unload; returning the disposer keeps that contract intact.
+        ctx.effect?.(() => () => { void driver.dispose() }, 'dsh-tavern:novel-driver-dispose')
+      } catch {
+        // A host that rejects a late effect registration only loses unload
+        // disposal; scheduling itself is unaffected.
+      }
+      return driver
+    })
+    .catch((error: unknown) => {
+      ctx.logger?.warn?.(`dsh-tavern: AgentNovel driver unavailable: ${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    })
   ctx.on?.('session/event', (session, event) => {
     void agentTavernProjectorPromise!.then((projector) => projector.project(session, event))
       .catch((error) => ctx.logger?.warn?.(`AgentTavern projection failed: ${error instanceof Error ? error.message : String(error)}`))
@@ -89,12 +147,17 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
     if (event?.type === 'turn/end' && typeof session?.id === 'string') {
       void variables().then((store) => store.clear('turn', session.id)).catch(() => {})
     }
+    // AgentNovel (proposal 0005 §9.1/§12.1): the receive barrier and the turn
+    // accounting ride the SAME listener; no second session/event subscription.
+    void handleNovelSessionEvent(ctx, session, event)
   })
   ctx.on?.('agent/created', ({ agent }) => {
     void agentTavernProjectorPromise!.then((projector) => projector.replay(agent.session))
       .catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`))
   })
   void refreshActivePrompt()
+  // §12.3 restart recovery runs after apply returns; it never blocks mounting.
+  void recoverMountedNovels(ctx)
   ctx.systemPrompt.section({
     name: 'dsh-tavern:active-character',
     order: 25,
@@ -130,6 +193,9 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
           },
         }), { surfaceOp: 'append' })
         return { kind: 'success', text: 'Tavern closed' }
+      }
+      if (parsed.action === 'novel-open') {
+        return handleNovelOpenCommand(ctx, agent, parsed.novelId)
       }
       const chat = await db.getChat(parsed.character, parsed.chatId)
       if (!chat) return { kind: 'error', text: 'Tavern chat not found.' }
@@ -245,15 +311,27 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
         await handleApi(ctx, req, res)
       } catch (error) {
         if (!res.writableEnded) {
-          const message = error instanceof Error ? error.message : String(error)
+          // Novel domain errors map onto structured HTTP statuses (§13); the
+          // original detail is logged server-side because corruption and
+          // ownership messages carry internal paths and pids.
+          const novelFailure = novelHttpFailure(error)
+          if (novelFailure !== undefined) {
+            ctx.logger?.warn?.(`dsh-tavern: novel route failed (${novelFailure.code}): ${error instanceof Error ? error.message : String(error)}`, { operation: 'novels-api', errorCode: novelFailure.code })
+          }
+          const message = novelFailure?.sanitized === true
+            ? `Novel failure '${novelFailure.code}'; see the server log for details.`
+            : error instanceof Error ? error.message : String(error)
           const code = error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError
             ? error.code
-            : undefined
+            : novelFailure?.code
           if (res.headersSent) {
             res.write(JSON.stringify({ type: 'error', message, code }) + '\n')
             res.end()
           } else {
-            sendJson(res, error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError ? 409 : 500, { ok: false, message, code })
+            const status = error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError
+              ? 409
+              : novelFailure?.status ?? 500
+            sendJson(res, status, { ok: false, message, code, ...(novelFailure?.extra ?? {}) })
           }
         }
       }
@@ -302,6 +380,7 @@ async function handleApi(ctx, req, res) {
       commit: TAVERN_COMMIT,
       internalWorkspace,
       agentTavern: agentTavernCapabilities,
+      agentNovel: agentNovelCapabilities,
     })
   }
 
@@ -388,6 +467,10 @@ async function handleApi(ctx, req, res) {
       memories: [...memoryGroups.flat().map((hit) => hit.record), ...globalMemories.map((hit) => hit.record)],
       variables: [...variableGroups.flat(), ...globalVariables],
     })
+  }
+
+  if (route === 'novels' || route.startsWith('novels/')) {
+    return handleNovelsApi(ctx, req, res, url, route, method)
   }
 
   if (method === 'PUT' && route.startsWith('character/')) {
@@ -1054,6 +1137,524 @@ async function handleApi(ctx, req, res) {
   }
 
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+}
+
+/* --------------------------- AgentNovel HTTP API --------------------------- */
+
+/**
+ * Literal subpath markers of the novels route tree. They double as the
+ * server-contract gate markers: parameterized routes are prefix-matched, so
+ * these constants are the only stable place the subpath literals appear in
+ * the bundle (see packages/plugin/scripts/gates/run.mjs).
+ */
+const NOVEL_SUBPATHS = ['novels/outline', 'novels/body', 'novels/export', 'novels/pause', 'novels/resume', 'novels/stop', 'novels/update-outline', 'novels/approve-outline'] as const
+type NovelSubpath = (typeof NOVEL_SUBPATHS)[number]
+
+const NOVEL_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/
+
+interface NovelApiRequest {
+  method?: string
+  url?: string
+  on?: (event: string, listener: (chunk?: unknown) => void) => unknown
+  destroy?: () => void
+}
+
+interface NovelApiResponse {
+  statusCode: number
+  setHeader: (name: string, value: string) => void
+  end: (chunk?: string | Uint8Array) => void
+}
+
+interface NovelHttpFailure {
+  status: number
+  code: string
+  /** §13/§15: corruption and ownership detail stays in the server log only. */
+  sanitized: boolean
+  extra?: Record<string, unknown>
+}
+
+/** Maps novel domain errors onto structured HTTP failures (proposal 0005 §13). */
+function novelHttpFailure(error: unknown): NovelHttpFailure | undefined {
+  if (error instanceof NovelRevisionConflictError) {
+    return { status: 409, code: error.code, sanitized: false, extra: { actualRevision: error.actualRevision } }
+  }
+  if (error instanceof NovelDuplicateCommitError) return { status: 409, code: error.code, sanitized: false }
+  if (error instanceof NovelStaleUnitError) return { status: 409, code: error.code, sanitized: false }
+  if (error instanceof NovelRequirementConflictError) return { status: 409, code: error.code, sanitized: false }
+  if (error instanceof NovelLengthLimitError) return { status: 409, code: error.code, sanitized: false }
+  if (error instanceof NovelPreconditionError) {
+    return {
+      status: 409,
+      code: error.code,
+      sanitized: false,
+      extra: { rule: error.rule, ...(error.violations.length > 0 ? { violations: [...error.violations] } : {}) },
+    }
+  }
+  if (error instanceof NovelNotFoundError) return { status: 404, code: error.code, sanitized: false }
+  if (error instanceof NovelConfigError) {
+    return {
+      status: 400,
+      code: error.code,
+      sanitized: false,
+      ...(error.errors.length > 0 ? { extra: { violations: error.errors.map((item) => ({ field: item.field, message: item.message })) } } : {}),
+    }
+  }
+  if (error instanceof NovelCapabilityError) return { status: 503, code: error.code, sanitized: false }
+  if (error instanceof NovelStorageCorruptionError) return { status: 500, code: error.code, sanitized: true }
+  if (error instanceof NovelOwnershipError) return { status: 500, code: error.code, sanitized: true }
+  return undefined
+}
+
+/** Splits 'novels/<id>[/<subpath>]' against the known marker table. */
+function parseNovelRoute(route: string): { novelId: string; subpath: NovelSubpath | null } | null {
+  if (!route.startsWith('novels/')) return null
+  const [idSegment, ...rest] = route.slice('novels/'.length).split('/')
+  if (idSegment === undefined) return null
+  const tail = rest.join('/')
+  return {
+    novelId: decodeURIComponent(idSegment),
+    subpath: tail === '' ? null : NOVEL_SUBPATHS.find((marker) => marker === `novels/${tail}`) ?? null,
+  }
+}
+
+async function requireNovel(db: NovelStore, novelId: string): Promise<NovelSnapshot> {
+  if (!NOVEL_ID_SHAPE.test(novelId)) throw new NovelNotFoundError({ novelId })
+  const snapshot = await db.getNovel(novelId)
+  if (snapshot === undefined) throw new NovelNotFoundError({ novelId })
+  return snapshot
+}
+
+/** Detail projection for GET novels/:id (client contract, proposal 0005 §14.3). */
+function novelDetail(snapshot: NovelSnapshot) {
+  const summary = summarizeNovel(snapshot)
+  const outline = snapshot.outline
+  const completed = new Set(snapshot.completedChapters.map((entry) => entry.chapterId))
+  const chapters = [...(outline?.chapters ?? [])]
+    .sort((left, right) => left.order - right.order)
+    .map((chapter) => {
+      const chapterCommits = snapshot.commits.filter((commit) => commit.chapterId === chapter.chapterId)
+      return {
+        chapterId: chapter.chapterId,
+        order: chapter.order,
+        title: chapter.title,
+        state: completed.has(chapter.chapterId)
+          ? 'completed' as const
+          : chapterCommits.length > 0 ? 'writing' as const : 'planned' as const,
+        committedCharacters: totalEffectiveCharacters(chapterCommits),
+      }
+    })
+  const budget = snapshot.config.lengthBudget
+  return {
+    novelId: summary.novelId,
+    title: summary.title,
+    status: summary.status,
+    phase: summary.phase,
+    pauseReason: summary.pauseReason,
+    chaptersCompleted: summary.chaptersCompleted,
+    chaptersTotal: summary.chaptersTotal,
+    effectiveCharacters: summary.effectiveCharacters,
+    targetCharacters: summary.targetCharacters,
+    updatedAt: summary.updatedAt,
+    lastError: summary.lastError,
+    revision: snapshot.revision,
+    config: snapshot.config,
+    pauseDetail: snapshot.run.pauseDetail,
+    resumeHint: snapshot.run.resumeHint,
+    requirements: snapshot.requirements.map((record) => ({
+      requirementId: record.requirementId,
+      sequence: record.sequence,
+      text: record.text,
+      status: record.status,
+      effectiveLocation: record.effectiveLocation,
+      blockedReason: record.blockedReason,
+    })),
+    chapters,
+    outlineSummary: outline === null ? null : {
+      outlineRevision: outline.outlineRevision,
+      story: { premise: outline.story.premise, theme: outline.story.theme, endingDirection: outline.story.endingDirection },
+      chapterTitles: outline.chapters.map((chapter) => ({ chapterId: chapter.chapterId, title: chapter.title })),
+      foreshadowing: outline.foreshadowing.map((item) => ({ id: item.id, description: item.description, status: item.status, required: item.required })),
+    },
+    budget: {
+      turnsRun: snapshot.run.turnsRun,
+      maxTurns: snapshot.config.budgets.maxTurns,
+      deduceRuns: snapshot.run.deduceRuns,
+      maxDeduceRuns: snapshot.config.budgets.maxDeduceRuns,
+      remainingCharacters: budget.kind === 'target'
+        ? Math.max(0, unitTargetRange(snapshot.config, summary.effectiveCharacters).max)
+        : null,
+    },
+  }
+}
+
+async function handleNovelsApi(
+  ctx: { agents?: unknown; agentPresets?: unknown; systemPrompt?: unknown; tools?: unknown; on?: unknown },
+  req: NovelApiRequest,
+  res: NovelApiResponse,
+  url: URL,
+  route: string,
+  method: string,
+): Promise<void> {
+  const novels = await novelStore()
+
+  if (method === 'GET' && route === 'novels') {
+    return sendJson(res, 200, { ok: true, novels: await novels.listNovels() })
+  }
+
+  if (method === 'POST' && route === 'novels') {
+    const body = await readJson(req) as Record<string, unknown>
+    // §16 fail-closed: capability reasons outrank config validation, so a
+    // degraded host reports why instead of a stream of field errors.
+    const capabilities = inspectAgentNovelCapabilities(ctx)
+    if (!capabilities.available) {
+      return sendJson(res, 503, {
+        ok: false,
+        message: `AgentNovel is unavailable on this host: ${capabilities.reasons.join(' ')}`,
+        code: 'NOVEL_CAPABILITY',
+        reasons: [...capabilities.reasons],
+      })
+    }
+    const config = body as unknown as NovelCreateConfig
+    const violations = validateCreateConfig(config)
+    if (violations.length > 0) {
+      return sendJson(res, 400, {
+        ok: false,
+        message: 'invalid novel config',
+        code: 'NOVEL_CONFIG',
+        violations: violations.map((item) => ({ field: item.field, message: item.message })),
+      })
+    }
+    const created = await novels.createNovel(await store(), config)
+    const snapshot = await novels.getNovel(created.novelId)
+    const summary = snapshot === undefined ? undefined : summarizeNovel(snapshot)
+    return sendJson(res, 200, {
+      ok: true,
+      novel: {
+        novelId: created.novelId,
+        title: config.title,
+        status: summary?.status ?? (config.approvalMode === 'manual' ? 'paused' : 'active'),
+        phase: summary?.phase ?? 'outlining',
+        revision: created.revision,
+      },
+    })
+  }
+
+  const parts = parseNovelRoute(route)
+  if (parts === null) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  const { novelId, subpath } = parts
+
+  if (method === 'GET' && subpath === null) {
+    const snapshot = await requireNovel(novels, novelId)
+    return sendJson(res, 200, { ok: true, novel: novelDetail(snapshot) })
+  }
+
+  if (method === 'PATCH' && subpath === null) {
+    const body = await readJson(req) as Record<string, unknown>
+    if (typeof body.expectedRevision !== 'string' || typeof body.patch !== 'object' || body.patch === null || Array.isArray(body.patch)) {
+      throw new Error('expected { expectedRevision, patch }')
+    }
+    const result = await novels.patchNovelMeta(novelId, {
+      expectedRevision: body.expectedRevision,
+      patch: body.patch as { title?: string; genre?: string },
+      cause: typeof body.cause === 'string' && body.cause.trim() !== '' ? body.cause : 'panel-edit',
+    })
+    return sendJson(res, 200, { ok: true, revision: result.revision })
+  }
+
+  if (method === 'DELETE' && subpath === null) {
+    // Deletion discipline (proposal 0005 §13/§4.2): revoke scheduling first
+    // (tolerated on completed/missing novels), drop every session binding
+    // that points at the project, then remove the project itself. Missing
+    // novels stay a success so client retries are idempotent.
+    await novels.pause(novelId, { reason: 'user-request', detail: 'deletion requested from the novels panel' }).catch(() => {})
+    const db: TavernStore = await store()
+    await db.updateState((current) => ({
+      sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings)
+        .filter(([, binding]) => !(binding.architecture === 'agent-novel' && binding.novelId === novelId))),
+    }))
+    await novels.deleteNovel(novelId)
+    return sendJson(res, 200, { ok: true })
+  }
+
+  if (method === 'POST' && subpath === 'novels/pause') {
+    const result = await novels.pause(novelId, {
+      reason: 'user-request',
+      detail: 'paused from the novels panel',
+      resumeHint: 'resume explicitly to authorize further work (proposal 0005 §13)',
+    })
+    return sendJson(res, 200, { ok: true, revision: result.revision })
+  }
+  if (method === 'POST' && subpath === 'novels/resume') {
+    const result = await novels.resume(novelId)
+    return sendJson(res, 200, { ok: true, revision: result.revision })
+  }
+  if (method === 'POST' && subpath === 'novels/stop') {
+    const result = await novels.stop(novelId)
+    return sendJson(res, 200, { ok: true, revision: result.revision })
+  }
+  if (method === 'POST' && subpath === 'novels/update-outline') {
+    const result = await novels.requestRevision(novelId)
+    return sendJson(res, 200, { ok: true, revision: result.revision })
+  }
+  if (method === 'POST' && subpath === 'novels/approve-outline') {
+    const body = await readJson(req).catch(() => undefined) as Record<string, unknown> | undefined
+    const fromQuery = url.searchParams.get('expectedOutlineRevision')
+    const expected = typeof body?.expectedOutlineRevision === 'string' && body.expectedOutlineRevision.trim() !== ''
+      ? body.expectedOutlineRevision
+      : fromQuery
+    if (expected === null || expected === undefined || expected.trim() === '') throw new Error('expected { expectedOutlineRevision }')
+    // Post-approval continuation is carried by the driver's existing edges;
+    // no special-casing here (proposal 0005 §4.3).
+    const result = await novels.approveOutline(novelId, { expectedOutlineRevision: expected })
+    return sendJson(res, 200, { ok: true, revision: result.revision })
+  }
+
+  if (method === 'GET' && subpath === 'novels/outline') {
+    const snapshot = await requireNovel(novels, novelId)
+    return sendJson(res, 200, { ok: true, outline: snapshot.outline })
+  }
+
+  if (method === 'GET' && subpath === 'novels/body') {
+    const chapterId = url.searchParams.get('chapterId')
+    const cursor = url.searchParams.get('cursor')
+    const limitRaw = url.searchParams.get('limit')
+    const page = await novels.readBody(novelId, {
+      ...(chapterId !== null && chapterId !== '' ? { chapterId } : {}),
+      ...(cursor !== null && cursor !== '' ? { cursor } : {}),
+      ...(limitRaw !== null && limitRaw !== '' ? { limit: Number(limitRaw) } : {}),
+    })
+    // nextCursor is null when the page is exhausted; the client treats both
+    // states, null is the chosen representation.
+    return sendJson(res, 200, { ok: true, paragraphs: [...page.paragraphs], nextCursor: page.nextCursor })
+  }
+
+  if (method === 'GET' && subpath === 'novels/export') {
+    const projector = await novelProjectorPromise
+    if (projector === undefined) throw new Error('AgentNovel projector is unavailable')
+    const format = url.searchParams.get('format') === 'zip' ? 'zip' as const : 'md' as const
+    const exported = await projector.exportNovel(novelId, format)
+    res.statusCode = 200
+    res.setHeader('content-type', exported.contentType)
+    res.setHeader('content-disposition', `attachment; filename="${encodeURIComponent(exported.filename)}"`)
+    res.end(Buffer.from(exported.bytes))
+    return
+  }
+
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+}
+
+/* ------------------------- AgentNovel lifecycle ------------------------- */
+
+interface NovelPluginContext {
+  logger?: { warn?: (message: string, fields?: Record<string, unknown>) => void }
+}
+
+function errorCodeText(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = (error as { code?: unknown }).code
+    if (typeof code === 'string' && code !== '') return code
+  }
+  return error instanceof Error ? error.name : String(error)
+}
+
+/**
+ * §12.3 restart recovery: re-arm active novels and catch the memory index up
+ * for every bound project. Runs once per apply, never blocks mounting.
+ */
+async function recoverMountedNovels(ctx: NovelPluginContext): Promise<void> {
+  const driver = await novelDriverPromise
+  if (driver === undefined) return
+  await recoverNovels(driver)
+  try {
+    const db: TavernStore = await store()
+    const state = await db.getState()
+    for (const binding of Object.values(state.sessionBindings)) {
+      if (binding.architecture !== 'agent-novel') continue
+      await indexPendingCommits(ctx, binding.novelId)
+    }
+  } catch (error) {
+    ctx.logger?.warn?.('dsh-tavern: AgentNovel recovery indexing failed', { operation: 'recover', errorCode: errorCodeText(error) })
+  }
+}
+
+/**
+ * Session/event entry for bound novel sessions (proposal 0005 §9.1/§12.1):
+ * real user messages persist through the receive barrier BEFORE they can
+ * unblock the next unit claim, and turn/end edges feed driver accounting.
+ * Failures are logged with structured fields and never break the event stream.
+ */
+async function handleNovelSessionEvent(ctx: NovelPluginContext, session: unknown, event: unknown): Promise<void> {
+  const sessionId = (session as { id?: unknown } | null | undefined)?.id
+  if (typeof sessionId !== 'string') return
+  let novelId: string
+  try {
+    const db: TavernStore = await store()
+    const state = await db.getState()
+    const binding = state.sessionBindings[sessionId]
+    if (binding === undefined || binding.architecture !== 'agent-novel') return
+    novelId = binding.novelId
+  } catch (error) {
+    ctx.logger?.warn?.('dsh-tavern: AgentNovel binding read failed', { sessionId, operation: 'novel-event', errorCode: errorCodeText(error) })
+    return
+  }
+  const record = event as { type?: unknown } | null | undefined
+  try {
+    if (record?.type === 'turn/end') {
+      const driver = await novelDriverPromise
+      if (driver !== undefined) await driver.handleSessionEvent({ id: sessionId }, event as { type?: string; data?: unknown })
+      await indexPendingCommits(ctx, novelId)
+      return
+    }
+    if (isNovelAuthorMessage(event as { type?: string; data?: unknown })) {
+      const outcome = await receiveAuthorMessage(await novelStore(), novelId, sessionId, event)
+      if (!outcome.accepted && !outcome.duplicate) {
+        ctx.logger?.warn?.('dsh-tavern: AgentNovel receive barrier rejected a message', {
+          novelId,
+          sessionId,
+          operation: 'receive-requirement',
+          reason: outcome.reason ?? 'unknown',
+        })
+      }
+    }
+  } catch (error) {
+    ctx.logger?.warn?.('dsh-tavern: AgentNovel session event handling failed', { novelId, sessionId, operation: 'novel-event', errorCode: errorCodeText(error) })
+  }
+}
+
+/**
+ * Commit-driven memory index catch-up (proposal 0005 §8.2): the projector
+ * writes a commit's scene summary record LAST, so the absence of that stable
+ * id marks the commit as unindexed. Idempotent; called from turn/end edges
+ * and restart recovery without touching the store commit path.
+ */
+async function indexPendingCommits(ctx: NovelPluginContext, novelId: string): Promise<void> {
+  const [novels, memory, projector] = await Promise.all([novelStore(), memories(), novelProjectorPromise])
+  if (projector === undefined) return
+  const snapshot = await novels.getNovel(novelId)
+  if (snapshot === undefined) return
+  const scopeId = `novel:${novelId}`
+  for (const commit of snapshot.commits) {
+    const summaryId = `novel-${novelId}-${commit.commitId}-${commit.canonChanges.length}`
+    const indexed = await memory.read(summaryId, 'chat', scopeId, true).catch(() => undefined)
+    if (indexed !== undefined) continue
+    try {
+      await projector.indexCommit(novelId, commit.commitId)
+    } catch (error) {
+      ctx.logger?.warn?.('dsh-tavern: AgentNovel memory index write failed', { novelId, commitId: commit.commitId, operation: 'index-commit', errorCode: errorCodeText(error) })
+    }
+  }
+}
+
+interface NovelCommandAgent {
+  id: string
+  ctx: unknown
+  session: HostSessionLog & { append: (type: string, data: unknown, opts?: unknown) => void }
+}
+
+/** Structural check against DriverAgentLike; degrades silently otherwise. */
+function driverCompatibleAgent(agent: unknown): agent is DriverAgentLike {
+  if (typeof agent !== 'object' || agent === null) return false
+  const candidate = agent as { id?: unknown; session?: unknown; status?: unknown; followup?: unknown; whenIdle?: unknown }
+  return typeof candidate.id === 'string'
+    && typeof candidate.session === 'object' && candidate.session !== null && typeof (candidate.session as { id?: unknown }).id === 'string'
+    && (candidate.status === 'idle' || candidate.status === 'running')
+    && typeof candidate.followup === 'function'
+    && typeof candidate.whenIdle === 'function'
+}
+
+/**
+ * Internal novel-open command handler (proposal 0005 §4.2): existence gate,
+ * fail-closed capability gate (§16), architecture conflict guard, serialized
+ * binding write, idempotent preset marker + recompose, then the driver kick.
+ * No placeholder turn events are ever appended: the kickoff guarantee is the
+ * agent liveness carried by handleNovelOpen (§12.1), which keeps real turn
+ * numbering intact for client replay.
+ */
+async function handleNovelOpenCommand(
+  ctx: NovelPluginContext & { agentPresets?: { recompose?: (agentCtx: unknown, presetId: string) => Promise<{ id: string }> } },
+  agent: NovelCommandAgent,
+  novelId: string,
+): Promise<{ kind: string; text: string }> {
+  const db: TavernStore = await store()
+  const novels = await novelStore()
+  if ((await novels.getNovel(novelId)) === undefined) {
+    return { kind: 'error', text: `Novel '${novelId}' not found.` }
+  }
+  // §16 fail-closed: refuse with the concrete reasons, never degrade to chat.
+  if (!agentNovelCapabilities.available) {
+    return { kind: 'error', text: `AgentNovel is unavailable on this host: ${agentNovelCapabilities.reasons.join(' ')}` }
+  }
+  await ensureBundledAgentNovelPreset()
+  const currentState = await db.getState()
+  const previous = currentState.sessionBindings[agent.id]
+  const activationEvents = sessionEvents(agent.session)
+  // Same guard family as the AgentTavern lock: a session that already began
+  // real turns (or imported history) cannot be re-bound in place (§4.2).
+  const sessionStarted = activationEvents.some((event) => event.type === 'turn/start')
+    || activationEvents.some((event) => {
+      if (event.type !== 'user/message' && event.type !== 'assistant/message') return false
+      const source = event.type === 'user/message' ? event.data?.source : event.data?.message?.source
+      return source?.plugin === 'dsh-tavern' && source.form !== 'context'
+    })
+  const sameNovelBinding = previous?.architecture === 'agent-novel' && previous.novelId === novelId
+  if (!sameNovelBinding && sessionStarted) {
+    throw new TavernArchitectureConflictError('This host session already started; rebinding it to an AgentNovel project is locked (proposal 0005 §4.2).')
+  }
+  if (typeof ctx.agentPresets?.recompose !== 'function') {
+    throw new TavernArchitectureConflictError('The host cannot recompose a blank session with the AgentNovel preset.')
+  }
+  await bindNovelSession(db, agent.id, novelId)
+  // Idempotent marker: a repeated novel-open on the same binding neither
+  // stacks markers nor recomposes twice.
+  if (!activationEvents.some((event) => event.type === 'agent-preset/selected' && event.data?.agentPreset === AGENT_NOVEL_PRESET_ID)) {
+    const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_NOVEL_PRESET_ID)
+    agent.session.append('agent-preset/selected', { agentPreset: preset.id })
+  }
+  const driver = await novelDriverPromise
+  if (driver !== undefined && driverCompatibleAgent(agent)) {
+    // driverCompatibleAgent validated the driver surface at runtime; the cast
+    // only satisfies the structural gap between the two local host shapes.
+    await driver.handleNovelOpen(agent as unknown as DriverAgentLike, novelId)
+  }
+  return { kind: 'success', text: `Novel: ${novelId}` }
+}
+
+/** AgentNovel session binding write (proposal 0005 §4.2). */
+async function bindNovelSession(db: TavernStore, sessionId: string, novelId: string) {
+  return db.updateState((state) => ({
+    sessionBindings: {
+      ...state.sessionBindings,
+      [sessionId]: { architecture: 'agent-novel', novelId, character: '', chatId: '' },
+    },
+  }))
+}
+
+/** Install the shipped AgentNovel preset only into the user layer and never overwrite edits. */
+async function ensureBundledAgentNovelPreset(): Promise<void> {
+  const bundledRoots = [
+    resolve(import.meta.dirname, 'agent-presets'),
+    resolve(import.meta.dirname, '..', 'agent-presets'),
+  ]
+  const bundledRoot = bundledRoots.find((candidate) => {
+    try {
+      return readFileSync(resolve(candidate, AGENT_NOVEL_PRESET_ID, 'agent.cordis.yml'), 'utf8').trim() !== ''
+    } catch {
+      return false
+    }
+  })
+  if (!bundledRoot) throw new Error('bundled AgentNovel preset is missing from the plugin package')
+
+  const sourceRoot = resolve(bundledRoot, AGENT_NOVEL_PRESET_ID)
+  const targetRoot = dshHomePath('.agent-presets', AGENT_NOVEL_PRESET_ID)
+  await mkdir(targetRoot, { recursive: true })
+  for (const file of ['preset.yml', 'agent.cordis.yml']) {
+    const target = resolve(targetRoot, file)
+    try {
+      await writeFile(target, await readFile(resolve(sourceRoot, file)), { flag: 'wx' })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
+  }
 }
 
 /* --------------------------- 生成内核（共享） --------------------------- */
@@ -2094,6 +2695,13 @@ function parseTavernSessionCommand(rawInput) {
   try {
     const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
     if (parsed.action === 'close') return { action: 'close' }
+    // AgentNovel bridge (proposal 0005 §4.2): management commands ride the
+    // existing internal bridge and are never registered as author directives.
+    if (parsed.action === 'novel-open') {
+      return typeof parsed.novelId === 'string' && parsed.novelId.trim() !== ''
+        ? { action: 'novel-open', novelId: parsed.novelId }
+        : null
+    }
     if (typeof parsed.character !== 'string' || typeof parsed.chatId !== 'string') return null
     const group = parsed.group === true
     const architecture = group ? 'st' : requestedArchitecture(parsed.architecture)
