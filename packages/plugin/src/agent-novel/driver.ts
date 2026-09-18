@@ -207,6 +207,15 @@ export class NovelDriver {
 
   /* ------------------------------- scheduling ------------------------------- */
 
+  /** External re-arm for user-driven state flips (resume, outline approval,
+   * revision authorization): those routes turn a paused novel active without
+   * any session event, and an idle agent produces no turn/end or agent/status
+   * edge — without this poke the active novel would never be scheduled again
+   * (§12.1 edges alone cannot wake it). */
+  kick(novelId: string): void {
+    this.schedule(novelId)
+  }
+
   private stateFor(novelId: string): NovelDriveState {
     const existing = this.states.get(novelId)
     if (existing !== undefined) return existing
@@ -263,7 +272,7 @@ export class NovelDriver {
     }
     if (snapshot.run.status !== 'active') return // §12.3: paused/completed never self-wake
 
-    const agent = this.liveAgentFor(novelId)
+    const agent = await this.agentFor(novelId)
     if (agent === null) {
       if (!state.warnedNoAgent) {
         state.warnedNoAgent = true
@@ -425,9 +434,14 @@ export class NovelDriver {
       sessionsByNovel.set(binding.novelId, list)
     }
     for (const summary of summaries) {
-      if (summary.status !== 'active') continue // §12.3 step 3
       const sessions = sessionsByNovel.get(summary.novelId) ?? []
       if (sessions.length === 0) continue
+      // The binding map is registered for every bound novel regardless of
+      // status: a restart while paused must still leave the kick path able
+      // to discover the bound agent (§12.1); scheduling below stays
+      // active-only.
+      for (const sessionId of sessions) this.sessionNovels.set(sessionId, summary.novelId)
+      if (summary.status !== 'active') continue // §12.3 step 3
       let snapshot: NovelSnapshot | undefined
       try {
         snapshot = await this.store.getNovel(summary.novelId)
@@ -436,7 +450,6 @@ export class NovelDriver {
         continue
       }
       if (snapshot === undefined) continue
-      for (const sessionId of sessions) this.sessionNovels.set(sessionId, summary.novelId)
       // §12.3 step 4: only revoke after the old execution provably ended.
       const agent = this.liveAgentForSessions(sessions)
       if (snapshot.run.inFlightIntent !== null) {
@@ -536,6 +549,50 @@ export class NovelDriver {
     return null
   }
 
+  /** liveAgentFor plus service discovery (§12.1 cold map): a host restart can
+   * mount the plugin after the session remounted, so no agent/* event ever
+   * reaches the driver, and recover's registration alone leaves paused
+   * novels without an in-memory agent. Falls back to the host's agents
+   * service keyed by bound session id, re-verifies the binding and adopts
+   * the handle. Async because the binding re-check reads the tavern state. */
+  private async agentFor(novelId: string): Promise<DriverAgentLike | null> {
+    const registered = this.liveAgentFor(novelId)
+    if (registered !== null) return registered
+    for (const [sessionId, bound] of this.sessionNovels) {
+      if (bound !== novelId) continue
+      const agent = agentLikeOf(this.agentsGet(sessionId))
+      if (agent === null) continue
+      let bindingValid = false
+      try {
+        const state = (await this.tavern.getState()) as { sessionBindings?: Record<string, { architecture?: string; novelId?: unknown }> }
+        const binding = state.sessionBindings?.[agent.session.id]
+        bindingValid = binding?.architecture === 'agent-novel' && binding.novelId === novelId
+      } catch {
+        // A gated state read cannot disprove the binding; the recovery-time
+        // registration is trusted as-is.
+        bindingValid = true
+      }
+      if (!bindingValid) continue
+      this.liveAgents.set(agent.id, agent)
+      this.novelSessions.set(novelId, agent.id)
+      return agent
+    }
+    return null
+  }
+
+  /** Gated probe of the host agents service; null when absent or throwing. */
+  private agentsGet(sessionId: string): unknown {
+    try {
+      const agents = (this.host as { agents?: unknown }).agents
+      if (typeof agents !== 'object' || agents === null) return null
+      const get = (agents as { get?: unknown }).get
+      if (typeof get !== 'function') return null
+      return (get as (id: string) => unknown).call(agents, sessionId) ?? null
+    } catch {
+      return null
+    }
+  }
+
   private liveAgentForSessions(sessionIds: readonly string[]): DriverAgentLike | null {
     for (const agent of this.liveAgents.values()) {
       if (sessionIds.includes(agent.session.id) && this.agentStillLive(agent)) return agent
@@ -596,14 +653,17 @@ export async function recoverNovels(driver: NovelDriver): Promise<void> {
 
 function agentOf(payload: unknown): DriverAgentLike | null {
   if (typeof payload !== 'object' || payload === null) return null
-  const record = payload as { agent?: unknown }
-  const agent = record.agent
-  if (typeof agent !== 'object' || agent === null) return null
-  const candidate = agent as { id?: unknown; session?: unknown; status?: unknown; followup?: unknown; whenIdle?: unknown }
-  if (typeof candidate.id !== 'string' || typeof candidate.followup !== 'function' || typeof candidate.whenIdle !== 'function') return null
-  if (typeof candidate.session !== 'object' || candidate.session === null || typeof (candidate.session as { id?: unknown }).id !== 'string') return null
-  if (candidate.status !== 'idle' && candidate.status !== 'running') return null
-  return candidate as DriverAgentLike
+  return agentLikeOf((payload as { agent?: unknown }).agent)
+}
+
+/** Shape probe shared by the agent/* events and service discovery. */
+function agentLikeOf(candidate: unknown): DriverAgentLike | null {
+  if (typeof candidate !== 'object' || candidate === null) return null
+  const agent = candidate as { id?: unknown; session?: unknown; status?: unknown; followup?: unknown; whenIdle?: unknown }
+  if (typeof agent.id !== 'string' || typeof agent.followup !== 'function' || typeof agent.whenIdle !== 'function') return null
+  if (typeof agent.session !== 'object' || agent.session === null || typeof (agent.session as { id?: unknown }).id !== 'string') return null
+  if (agent.status !== 'idle' && agent.status !== 'running') return null
+  return agent as DriverAgentLike
 }
 
 function turnOf(data: unknown): number | null {

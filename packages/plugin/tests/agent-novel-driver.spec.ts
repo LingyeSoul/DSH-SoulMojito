@@ -571,4 +571,65 @@ describe('NovelDriver scheduling', () => {
     expect(revision).toMatch(/^[0-9a-f]{16}$/)
     await driver.dispose()
   })
+
+  it('kick re-arms a user-resumed novel that no session edge would wake (route poke regression)', async () => {
+    // Real-machine incident (2026-09-18): the user paused the novel mid-turn
+    // (aborting it), clicked resume the next morning, and the run sat active
+    // with an idle agent forever — resume flips the store state without any
+    // turn/end or agent/status edge, so §12.1 scheduling never fired.
+    const { tavern, novels, novelId, revision } = await fixture()
+    const agent = new FakeAgent(AGENT_ID)
+    const { host, emit } = harness(agent)
+    const driver = NovelDriver.create(host, { store: novels, tavern })
+    await driver.handleNovelOpen(agent, novelId)
+    await vi.waitFor(async () => {
+      if (agent.followups.length < 1) throw new Error('kickoff missing')
+    })
+    await createOutline(novels, novelId, (await novels.getNovel(novelId))!.revision)
+
+    // User pause mid-turn: the abort edge accounts a failed turn, then the
+    // novel is resumed through the HTTP route — no edge accompanies it.
+    await novels.pause(novelId, { reason: 'user-request' })
+    await driver.handleSessionEvent({ id: SESSION_ID }, turnEnd(1, 'aborted'))
+    await settle()
+    await novels.resume(novelId)
+    await settle()
+    expect(agent.followups).toHaveLength(1) // the deadlock: nothing schedules
+    expect((await novels.getNovel(novelId))?.run.lastError).toBe('turn ended with stop reason aborted')
+
+    // The route's driver.kick is the only wake-up for this state.
+    driver.kick(novelId)
+    await vi.waitFor(async () => {
+      if (agent.followups.length < 2) throw new Error(`expected the post-resume work brief, saw ${agent.followups.length}`)
+    })
+    expect(textOf(noticeOf(agent, 1))).toContain('Novel work brief')
+    expect((await novels.getNovel(novelId))?.run.inFlightIntent?.kind).toBe('write-unit')
+    await driver.dispose()
+  })
+
+  it('kick discovers the bound agent through the agents service when a restart skipped every event (cold-map regression)', async () => {
+    // Real-machine hole (2026-09-18, second incident): the host restarted
+    // while the novel was paused — recover registered no binding and no
+    // agent/* event ever reached the driver — so the resume kick found no
+    // agent and silently delivered nothing.
+    const { tavern, novels, novelId, revision } = await fixture()
+    await createOutline(novels, novelId, revision)
+    // Same id as the session: workspace agents are keyed by session id.
+    const agent = new FakeAgent(SESSION_ID)
+    const { host } = harness(agent)
+    const driver = NovelDriver.create(host, { store: novels, tavern })
+
+    await novels.pause(novelId, { reason: 'budget', detail: 'max duration reached' })
+    await driver.recover() // registers the binding map; scheduling stays active-only
+    await novels.resume(novelId)
+    await settle()
+    expect(agent.followups).toHaveLength(0)
+
+    driver.kick(novelId)
+    await vi.waitFor(async () => {
+      if (agent.followups.length < 1) throw new Error(`expected the discovered work brief, saw ${agent.followups.length}`)
+    })
+    expect(textOf(noticeOf(agent, 0))).toContain('Novel work brief')
+    await driver.dispose()
+  })
 })

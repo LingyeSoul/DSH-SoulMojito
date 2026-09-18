@@ -1386,6 +1386,9 @@ async function handleNovelsApi(
   }
   if (method === 'POST' && subpath === 'novels/resume') {
     const result = await novels.resume(novelId)
+    // Resuming flips the run active with no session event in flight; the
+    // driver must be poked or an idle bound agent never gets scheduled (§12.1).
+    ;(await novelDriverPromise)?.kick(novelId)
     return sendJson(res, 200, { ok: true, revision: result.revision })
   }
   if (method === 'POST' && subpath === 'novels/stop') {
@@ -1394,6 +1397,9 @@ async function handleNovelsApi(
   }
   if (method === 'POST' && subpath === 'novels/update-outline') {
     const result = await novels.requestRevision(novelId)
+    // The authorized planning pass needs the driver poked like resume: no
+    // session edge fires while the bound agent sits idle (§4.3/§12.1).
+    ;(await novelDriverPromise)?.kick(novelId)
     return sendJson(res, 200, { ok: true, revision: result.revision })
   }
   if (method === 'POST' && subpath === 'novels/approve-outline') {
@@ -1403,9 +1409,11 @@ async function handleNovelsApi(
       ? body.expectedOutlineRevision
       : fromQuery
     if (expected === null || expected === undefined || expected.trim() === '') throw new Error('expected { expectedOutlineRevision }')
-    // Post-approval continuation is carried by the driver's existing edges;
-    // no special-casing here (proposal 0005 §4.3).
     const result = await novels.approveOutline(novelId, { expectedOutlineRevision: expected })
+    // Post-approval continuation previously claimed to ride "the driver's
+    // existing edges" — but an idle agent emits none, so the driver is poked
+    // here explicitly (proposal 0005 §4.3/§12.1).
+    ;(await novelDriverPromise)?.kick(novelId)
     return sendJson(res, 200, { ok: true, revision: result.revision })
   }
 

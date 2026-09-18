@@ -5683,6 +5683,14 @@ async function isLiveDshWriter(pid) {
   if (command === null) return true;
   return DSH_HOST_COMMAND.test(command);
 }
+function foldActiveDuration(run, nowMs) {
+  const open = run.status === "active" && run.activeWindowStart !== void 0 && run.activeWindowStart !== null ? Math.max(0, nowMs - Date.parse(run.activeWindowStart)) : 0;
+  return { activeDurationMs: (run.activeDurationMs ?? 0) + open, activeWindowStart: null };
+}
+function elapsedActiveDuration(run, nowMs) {
+  const open = run.status === "active" && run.activeWindowStart !== void 0 && run.activeWindowStart !== null ? Math.max(0, nowMs - Date.parse(run.activeWindowStart)) : 0;
+  return (run.activeDurationMs ?? 0) + open;
+}
 var NovelStore = class _NovelStore {
   novelsRoot;
   mutationTails = /* @__PURE__ */ new Map();
@@ -5768,7 +5776,9 @@ var NovelStore = class _NovelStore {
         consecutiveFailures: 0,
         lastError: null,
         inFlightIntent: null,
-        awaitingApprovalRevision: null
+        awaitingApprovalRevision: null,
+        activeDurationMs: 0,
+        activeWindowStart: null
       } : {
         status: "active",
         phase: "outlining",
@@ -5785,7 +5795,9 @@ var NovelStore = class _NovelStore {
         consecutiveFailures: 0,
         lastError: null,
         inFlightIntent: null,
-        awaitingApprovalRevision: null
+        awaitingApprovalRevision: null,
+        activeDurationMs: 0,
+        activeWindowStart: now
       };
       const requirement = {
         requirementId: "req-1",
@@ -6344,6 +6356,7 @@ var NovelStore = class _NovelStore {
         updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
         run: {
           ...current.run,
+          ...foldActiveDuration(current.run, Date.now()),
           // §13: pausing revokes unclaimed intents; claimed units may still finish.
           status: "paused",
           pauseReason: input.reason,
@@ -6381,9 +6394,14 @@ var NovelStore = class _NovelStore {
           phase,
           pauseReason: null,
           pauseDetail: null,
-          // An explicit resume opens a fresh progress window; cumulative
-          // budgets (turns, duration) are never reset by recovery (§13).
+          // An explicit resume is a user override of the pause: the stall
+          // counter resets and the duration budget gets a fresh full
+          // allowance. The turn count stays cumulative (§13) — a hard cap
+          // is raised through config, not through resume clicks. Restart
+          // recovery never calls this, so a crash loop cannot farm budget.
           stalledTurns: 0,
+          activeDurationMs: 0,
+          activeWindowStart: (/* @__PURE__ */ new Date()).toISOString(),
           resumeHint: blocked.length > 0 ? "planning authorized; body claims stay blocked until conflicts are resolved (\xA79.4)" : null
         }
       };
@@ -6416,6 +6434,7 @@ var NovelStore = class _NovelStore {
         } : unit),
         run: {
           ...current.run,
+          ...foldActiveDuration(current.run, Date.now()),
           status: "paused",
           pauseReason: "stopped",
           pauseDetail: "immediate stop: execution tokens revoked",
@@ -6453,7 +6472,9 @@ var NovelStore = class _NovelStore {
           pauseReason: null,
           pauseDetail: null,
           resumeHint: null,
-          awaitingApprovalRevision: null
+          awaitingApprovalRevision: null,
+          // Approval re-enters active: open a fresh duration window (§13).
+          activeWindowStart: (/* @__PURE__ */ new Date()).toISOString()
         }
       };
       const revision = await this.publish(dir, current.revision, next, `approve-outline:${outline.outlineRevision}`);
@@ -6474,7 +6495,9 @@ var NovelStore = class _NovelStore {
           phase: "revising",
           pauseReason: null,
           pauseDetail: null,
-          resumeHint: null
+          resumeHint: null,
+          // The authorized planning pass re-enters active: fresh window (§13).
+          activeWindowStart: (/* @__PURE__ */ new Date()).toISOString()
         }
       };
       const revision = await this.publish(dir, current.revision, next, "request-revision");
@@ -6506,7 +6529,11 @@ var NovelStore = class _NovelStore {
         turnsRun: current.run.turnsRun + 1,
         stalledTurns: current.run.stalledTurns + 1,
         consecutiveFailures: input.failed ? current.run.consecutiveFailures + 1 : 0,
-        ...input.failed && input.error !== void 0 ? { lastError: input.error } : {}
+        // §13 run error trail: a failed turn records it and the next
+        // successful turn clears it, so the surfaced "recent error" always
+        // reflects failures not yet followed by success — never a zombie
+        // from a turn that has long since recovered.
+        lastError: input.failed ? input.error ?? current.run.lastError : null
       };
       if (run.status === "active") {
         if (run.consecutiveFailures >= budgets.consecutiveFailureLimit) {
@@ -6515,8 +6542,8 @@ var NovelStore = class _NovelStore {
           run = { ...run, status: "paused", pauseReason: "stalled", pauseDetail: `no progress for ${run.stalledTurns} turns` };
         } else if (run.turnsRun >= budgets.maxTurns) {
           run = { ...run, status: "paused", pauseReason: "budget", pauseDetail: `max turns ${budgets.maxTurns} reached` };
-        } else if (run.startedAt !== null && Date.now() - Date.parse(run.startedAt) >= budgets.maxDurationMs) {
-          run = { ...run, status: "paused", pauseReason: "budget", pauseDetail: "max duration reached" };
+        } else if (run.startedAt !== null && elapsedActiveDuration(run, Date.now()) >= budgets.maxDurationMs) {
+          run = { ...run, ...foldActiveDuration(run, Date.now()), status: "paused", pauseReason: "budget", pauseDetail: "max duration reached" };
         }
       }
       const next = { ...current, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), run };
@@ -7414,6 +7441,14 @@ var NovelDriver = class _NovelDriver {
     this.schedule(novelId);
   }
   /* ------------------------------- scheduling ------------------------------- */
+  /** External re-arm for user-driven state flips (resume, outline approval,
+   * revision authorization): those routes turn a paused novel active without
+   * any session event, and an idle agent produces no turn/end or agent/status
+   * edge — without this poke the active novel would never be scheduled again
+   * (§12.1 edges alone cannot wake it). */
+  kick(novelId) {
+    this.schedule(novelId);
+  }
   stateFor(novelId) {
     const existing = this.states.get(novelId);
     if (existing !== void 0) return existing;
@@ -7463,7 +7498,7 @@ var NovelDriver = class _NovelDriver {
       return;
     }
     if (snapshot2.run.status !== "active") return;
-    const agent = this.liveAgentFor(novelId);
+    const agent = await this.agentFor(novelId);
     if (agent === null) {
       if (!state.warnedNoAgent) {
         state.warnedNoAgent = true;
@@ -7602,9 +7637,10 @@ var NovelDriver = class _NovelDriver {
       sessionsByNovel.set(binding.novelId, list);
     }
     for (const summary of summaries) {
-      if (summary.status !== "active") continue;
       const sessions = sessionsByNovel.get(summary.novelId) ?? [];
       if (sessions.length === 0) continue;
+      for (const sessionId of sessions) this.sessionNovels.set(sessionId, summary.novelId);
+      if (summary.status !== "active") continue;
       let snapshot2;
       try {
         snapshot2 = await this.store.getNovel(summary.novelId);
@@ -7613,7 +7649,6 @@ var NovelDriver = class _NovelDriver {
         continue;
       }
       if (snapshot2 === void 0) continue;
-      for (const sessionId of sessions) this.sessionNovels.set(sessionId, summary.novelId);
       const agent = this.liveAgentForSessions(sessions);
       if (snapshot2.run.inFlightIntent !== null) {
         if (agent !== null && agent.status === "running") {
@@ -7702,6 +7737,46 @@ var NovelDriver = class _NovelDriver {
     }
     return null;
   }
+  /** liveAgentFor plus service discovery (§12.1 cold map): a host restart can
+   * mount the plugin after the session remounted, so no agent/* event ever
+   * reaches the driver, and recover's registration alone leaves paused
+   * novels without an in-memory agent. Falls back to the host's agents
+   * service keyed by bound session id, re-verifies the binding and adopts
+   * the handle. Async because the binding re-check reads the tavern state. */
+  async agentFor(novelId) {
+    const registered = this.liveAgentFor(novelId);
+    if (registered !== null) return registered;
+    for (const [sessionId, bound] of this.sessionNovels) {
+      if (bound !== novelId) continue;
+      const agent = agentLikeOf(this.agentsGet(sessionId));
+      if (agent === null) continue;
+      let bindingValid = false;
+      try {
+        const state = await this.tavern.getState();
+        const binding = state.sessionBindings?.[agent.session.id];
+        bindingValid = binding?.architecture === "agent-novel" && binding.novelId === novelId;
+      } catch {
+        bindingValid = true;
+      }
+      if (!bindingValid) continue;
+      this.liveAgents.set(agent.id, agent);
+      this.novelSessions.set(novelId, agent.id);
+      return agent;
+    }
+    return null;
+  }
+  /** Gated probe of the host agents service; null when absent or throwing. */
+  agentsGet(sessionId) {
+    try {
+      const agents = this.host.agents;
+      if (typeof agents !== "object" || agents === null) return null;
+      const get = agents.get;
+      if (typeof get !== "function") return null;
+      return get.call(agents, sessionId) ?? null;
+    } catch {
+      return null;
+    }
+  }
   liveAgentForSessions(sessionIds) {
     for (const agent of this.liveAgents.values()) {
       if (sessionIds.includes(agent.session.id) && this.agentStillLive(agent)) return agent;
@@ -7752,14 +7827,15 @@ async function recoverNovels(driver) {
 }
 function agentOf(payload) {
   if (typeof payload !== "object" || payload === null) return null;
-  const record = payload;
-  const agent = record.agent;
-  if (typeof agent !== "object" || agent === null) return null;
-  const candidate = agent;
-  if (typeof candidate.id !== "string" || typeof candidate.followup !== "function" || typeof candidate.whenIdle !== "function") return null;
-  if (typeof candidate.session !== "object" || candidate.session === null || typeof candidate.session.id !== "string") return null;
-  if (candidate.status !== "idle" && candidate.status !== "running") return null;
-  return candidate;
+  return agentLikeOf(payload.agent);
+}
+function agentLikeOf(candidate) {
+  if (typeof candidate !== "object" || candidate === null) return null;
+  const agent = candidate;
+  if (typeof agent.id !== "string" || typeof agent.followup !== "function" || typeof agent.whenIdle !== "function") return null;
+  if (typeof agent.session !== "object" || agent.session === null || typeof agent.session.id !== "string") return null;
+  if (agent.status !== "idle" && agent.status !== "running") return null;
+  return agent;
 }
 function turnOf(data) {
   if (typeof data !== "object" || data === null) return null;
@@ -9894,6 +9970,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
   }
   if (method === "POST" && subpath === "novels/resume") {
     const result = await novels.resume(novelId);
+    (await novelDriverPromise)?.kick(novelId);
     return sendJson(res, 200, { ok: true, revision: result.revision });
   }
   if (method === "POST" && subpath === "novels/stop") {
@@ -9902,6 +9979,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
   }
   if (method === "POST" && subpath === "novels/update-outline") {
     const result = await novels.requestRevision(novelId);
+    (await novelDriverPromise)?.kick(novelId);
     return sendJson(res, 200, { ok: true, revision: result.revision });
   }
   if (method === "POST" && subpath === "novels/approve-outline") {
@@ -9910,6 +9988,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
     const expected = typeof body?.expectedOutlineRevision === "string" && body.expectedOutlineRevision.trim() !== "" ? body.expectedOutlineRevision : fromQuery;
     if (expected === null || expected === void 0 || expected.trim() === "") throw new Error("expected { expectedOutlineRevision }");
     const result = await novels.approveOutline(novelId, { expectedOutlineRevision: expected });
+    (await novelDriverPromise)?.kick(novelId);
     return sendJson(res, 200, { ok: true, revision: result.revision });
   }
   if (method === "GET" && subpath === "novels/outline") {

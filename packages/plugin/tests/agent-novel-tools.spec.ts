@@ -612,4 +612,130 @@ describe('AgentNovel author tools', () => {
     expect(snapshot?.run).toMatchObject({ status: 'paused', pauseReason: 'requirement-conflict' })
     expect(snapshot?.requirements[0]).toMatchObject({ status: 'blocked', blockedReason: '让已死的人复活与既成事实冲突' })
   })
+
+  it('normalizes omitted empty-meaning fields the way real models send them (§11 tool-layer tolerance)', async () => {
+    // A real-model run (2026-09-17 session) had novel_body_commit rejected
+    // because the model omitted sceneCompletion.nextAnchor for a completed
+    // scene; the retry re-sent the full payload with "nextAnchor":null. Same
+    // class: outline arrays, plannedCharacters, plant/payoff anchors, block
+    // bodySources, chapter openItems. The tool layer now fills the explicit
+    // empty value; the store never sees an omission.
+    const third = await novels.createNovel(tavern, novelConfig({ characterNames: [], worldNames: [], lengthBudget: { kind: 'unbounded' } }))
+    await tavern.updateState((state) => ({
+      sessionBindings: { ...state.sessionBindings, novelist: { architecture: 'agent-novel', novelId: third.novelId } },
+    }))
+
+    // Sparse outline payload: taboos/relations/keyEvents/plannedCharacters/
+    // participants/plantAt/payoffAt all omitted.
+    const created = await tools.get('novel_outline_create')!.execute({
+      expectedRevision: third.revision,
+      outline: {
+        story: { premise: 'Sparse payload survives', theme: 'tolerance', mainConflict: 'models omit fields', endingDirection: 'explicit empties' },
+        characters: [{ characterId: 'solo', name: 'Solo', initialState: 'intact', motivation: 'prove the normalizer', arc: 'unchanged' }],
+        chapters: [{ chapterId: 'ch-1', order: 1, title: 'Sparse', purpose: 'one chapter', entryCondition: 'start', exitCondition: 'done' }],
+        currentChapterId: 'ch-1',
+        scenes: [{ sceneId: 'sc-1', order: 1, goal: 'commit with omitted empty fields', timeLocation: 'tool layer', causality: 'regression', conflict: 'strictness', expectedChange: 'normalized defaults' }],
+        foreshadowing: [{ id: 'f-1', description: 'optional plant', required: false, status: 'open' }],
+      },
+      handledRequirements: [{ requirementId: 'req-1', result: 'applied', effectiveLocation: 'story.premise' }],
+    }, exec)
+    expect(created.watermark).toBe(1)
+    let snapshot = await novels.getNovel(third.novelId)
+    expect(snapshot?.outline?.story.taboos).toEqual([])
+    expect(snapshot?.outline?.characters[0]?.relations).toEqual([])
+    expect(snapshot?.outline?.chapters[0]?.keyEvents).toEqual([])
+    expect(snapshot?.outline?.chapters[0]?.plannedCharacters).toBeNull()
+    expect(snapshot?.outline?.scenes[0]?.participants).toEqual([])
+    expect(snapshot?.outline?.foreshadowing[0]?.plantAt).toBeNull()
+    expect(snapshot?.outline?.foreshadowing[0]?.payoffAt).toBeNull()
+    expectLossless(snapshot?.outline)
+
+    // The observed failure itself: completed scene, nextAnchor and
+    // outstandingGoals omitted.
+    await novels.prepareUnit(third.novelId, { chapterId: 'ch-1', sceneId: 'sc-1', label: 'sc-1', goal: 'commit with omitted empty fields' })
+    const claim = await tools.get('novel_unit_claim')!.execute({
+      unitId: 'unit-1', expectedOutlineRevision: created.outlineRevision, expectedRequirementSequence: 1,
+    }, exec)
+    const receipt = await tools.get('novel_body_commit')!.execute({
+      unitId: 'unit-1',
+      executionToken: claim.executionToken,
+      paragraphs: ['The sparse payload went through unchanged where it mattered.'],
+      sceneCompletion: { completed: true, basis: 'goal achieved with omitted empty fields' },
+      canonChanges: [{ kind: 'event', summary: 'normalizer proven', sources: ['inline#0'] }],
+    }, exec)
+    expect(receipt).toMatchObject({ commitId: 'commit-1', duplicate: false })
+    expectLossless(receipt)
+    snapshot = await novels.getNovel(third.novelId)
+    expect(snapshot?.commits[0]).toMatchObject({ sceneCompleted: true, outstandingGoals: [] })
+
+    // Tolerance fills omissions only: present-but-wrong values still reject.
+    await novels.prepareUnit(third.novelId, { chapterId: 'ch-1', sceneId: 'sc-1', label: 'sc-1', goal: 'negative guard' })
+    const secondClaim = await tools.get('novel_unit_claim')!.execute({
+      unitId: 'unit-2', expectedOutlineRevision: created.outlineRevision, expectedRequirementSequence: 1,
+    }, exec)
+    await expect(tools.get('novel_body_commit')!.execute({
+      unitId: 'unit-2',
+      executionToken: secondClaim.executionToken,
+      paragraphs: ['Still fine.'],
+      sceneCompletion: { completed: true, basis: 'valid', nextAnchor: 7 },
+      canonChanges: [],
+    }, exec)).rejects.toThrow('sceneCompletion must carry')
+    await expect(tools.get('novel_body_commit')!.execute({
+      unitId: 'unit-2',
+      executionToken: secondClaim.executionToken,
+      paragraphs: ['Still fine.'],
+      sceneCompletion: { completed: true, basis: 'valid', outstandingGoals: ['not strings', 3] },
+      canonChanges: [],
+    }, exec)).rejects.toThrow('sceneCompletion must carry')
+
+    // Release the claim so the later outline revision is not blocked (§9.2).
+    await tools.get('novel_body_commit')!.execute({
+      unitId: 'unit-2',
+      executionToken: secondClaim.executionToken,
+      paragraphs: ['The negative guards left the unit claimed; this releases it.'],
+      sceneCompletion: { completed: true, basis: 'guard unit released' },
+      canonChanges: [],
+    }, exec)
+
+    // Chapter completion without openItems.
+    snapshot = await novels.getNovel(third.novelId)
+    const chapter = await tools.get('novel_chapter_complete')!.execute({
+      chapterId: 'ch-1',
+      expectedContentRevision: snapshot!.contentRevision,
+      basis: 'the sparse chapter is done',
+    }, exec)
+    expect(typeof chapter.revision).toBe('string')
+    expectLossless(chapter)
+    snapshot = await novels.getNovel(third.novelId)
+    expect(snapshot?.completedChapters[0]?.openItems).toEqual([])
+
+    // Requirement block without bodySources.
+    await novels.receiveRequirement(third.novelId, { hostMessageId: 'm-tol', text: '与既成事实冲突', sourceKind: 'composer' })
+    const blocked = await tools.get('novel_requirement_block')!.execute({
+      expectedRevision: (await novels.getNovel(third.novelId))!.revision,
+      requirementId: 'req-2',
+      conflictReason: 'resurrection contradicts committed canon',
+    }, exec)
+    expect(typeof blocked.revision).toBe('string')
+    expectLossless(blocked)
+
+    // Outline revise without handledRequirements (nothing pending anymore).
+    const revised = await tools.get('novel_outline_revise')!.execute({
+      expectedRevision: (await novels.getNovel(third.novelId))!.revision,
+      expectedOutlineRevision: created.outlineRevision,
+      reason: 'tolerance regression: no directive to handle',
+      changes: {
+        story: { premise: 'Sparse payload survives', theme: 'tolerance', mainConflict: 'models omit fields', endingDirection: 'explicit empties, revised' },
+        characters: [{ characterId: 'solo', name: 'Solo', initialState: 'intact', motivation: 'prove the normalizer', arc: 'unchanged' }],
+        chapters: [{ chapterId: 'ch-1', order: 1, title: 'Sparse', purpose: 'one chapter', entryCondition: 'start', exitCondition: 'done' }],
+        currentChapterId: 'ch-1',
+        scenes: [{ sceneId: 'sc-1', order: 1, goal: 'commit with omitted empty fields', timeLocation: 'tool layer', causality: 'regression', conflict: 'strictness', expectedChange: 'normalized defaults' }],
+        foreshadowing: [{ id: 'f-1', description: 'optional plant', required: false, status: 'open' }],
+      },
+    }, exec)
+    // Blocked requirements do not advance the watermark (§9.1); the empty
+    // handled prefix is legal because nothing is pending.
+    expect(revised.watermark).toBe(1)
+    expectLossless(revised)
+  })
 })

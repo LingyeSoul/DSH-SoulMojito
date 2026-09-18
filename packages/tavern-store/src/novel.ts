@@ -154,6 +154,26 @@ interface OwnerFile {
   acquiredAt: string
 }
 
+/** §13 duration budget: folds the open active window into the cumulative
+ * total and closes it. Paused runs and legacy snapshots (created before the
+ * window fields existed) have no open window — legacy history is amnestied
+ * rather than reconstructed from wall-clock, which would charge host downtime
+ * to the writing budget all over again. */
+function foldActiveDuration(run: NovelRunState, nowMs: number): { activeDurationMs: number; activeWindowStart: null } {
+  const open = run.status === 'active' && run.activeWindowStart !== undefined && run.activeWindowStart !== null
+    ? Math.max(0, nowMs - Date.parse(run.activeWindowStart))
+    : 0
+  return { activeDurationMs: (run.activeDurationMs ?? 0) + open, activeWindowStart: null }
+}
+
+/** Elapsed active milliseconds under the §13 duration budget right now. */
+function elapsedActiveDuration(run: NovelRunState, nowMs: number): number {
+  const open = run.status === 'active' && run.activeWindowStart !== undefined && run.activeWindowStart !== null
+    ? Math.max(0, nowMs - Date.parse(run.activeWindowStart))
+    : 0
+  return (run.activeDurationMs ?? 0) + open
+}
+
 interface HeadFile {
   novelId: string
   revision: string
@@ -274,6 +294,8 @@ export class NovelStore {
             lastError: null,
             inFlightIntent: null,
             awaitingApprovalRevision: null,
+            activeDurationMs: 0,
+            activeWindowStart: null,
           }
         : {
             status: 'active',
@@ -292,6 +314,8 @@ export class NovelStore {
             lastError: null,
             inFlightIntent: null,
             awaitingApprovalRevision: null,
+            activeDurationMs: 0,
+            activeWindowStart: now,
           }
       // First requirement: the creation requirement with a stable host message
       // id derived from the project id (§4.1: request retries must not register
@@ -930,6 +954,7 @@ export class NovelStore {
         updatedAt: new Date().toISOString(),
         run: {
           ...current.run,
+          ...foldActiveDuration(current.run, Date.now()),
           // §13: pausing revokes unclaimed intents; claimed units may still finish.
           status: 'paused',
           pauseReason: input.reason,
@@ -968,9 +993,14 @@ export class NovelStore {
           phase,
           pauseReason: null,
           pauseDetail: null,
-          // An explicit resume opens a fresh progress window; cumulative
-          // budgets (turns, duration) are never reset by recovery (§13).
+          // An explicit resume is a user override of the pause: the stall
+          // counter resets and the duration budget gets a fresh full
+          // allowance. The turn count stays cumulative (§13) — a hard cap
+          // is raised through config, not through resume clicks. Restart
+          // recovery never calls this, so a crash loop cannot farm budget.
           stalledTurns: 0,
+          activeDurationMs: 0,
+          activeWindowStart: new Date().toISOString(),
           resumeHint: blocked.length > 0 ? 'planning authorized; body claims stay blocked until conflicts are resolved (§9.4)' : null,
         },
       }
@@ -1006,6 +1036,7 @@ export class NovelStore {
           : unit),
         run: {
           ...current.run,
+          ...foldActiveDuration(current.run, Date.now()),
           status: 'paused',
           pauseReason: 'stopped',
           pauseDetail: 'immediate stop: execution tokens revoked',
@@ -1045,6 +1076,8 @@ export class NovelStore {
           pauseDetail: null,
           resumeHint: null,
           awaitingApprovalRevision: null,
+          // Approval re-enters active: open a fresh duration window (§13).
+          activeWindowStart: new Date().toISOString(),
         },
       }
       const revision = await this.publish(dir, current.revision, next, `approve-outline:${outline.outlineRevision}`)
@@ -1067,6 +1100,8 @@ export class NovelStore {
           pauseReason: null,
           pauseDetail: null,
           resumeHint: null,
+          // The authorized planning pass re-enters active: fresh window (§13).
+          activeWindowStart: new Date().toISOString(),
         },
       }
       const revision = await this.publish(dir, current.revision, next, 'request-revision')
@@ -1100,7 +1135,11 @@ export class NovelStore {
         turnsRun: current.run.turnsRun + 1,
         stalledTurns: current.run.stalledTurns + 1,
         consecutiveFailures: input.failed ? current.run.consecutiveFailures + 1 : 0,
-        ...(input.failed && input.error !== undefined ? { lastError: input.error } : {}),
+        // §13 run error trail: a failed turn records it and the next
+        // successful turn clears it, so the surfaced "recent error" always
+        // reflects failures not yet followed by success — never a zombie
+        // from a turn that has long since recovered.
+        lastError: input.failed ? input.error ?? current.run.lastError : null,
       }
       if (run.status === 'active') {
         if (run.consecutiveFailures >= budgets.consecutiveFailureLimit) {
@@ -1109,8 +1148,8 @@ export class NovelStore {
           run = { ...run, status: 'paused', pauseReason: 'stalled', pauseDetail: `no progress for ${run.stalledTurns} turns` }
         } else if (run.turnsRun >= budgets.maxTurns) {
           run = { ...run, status: 'paused', pauseReason: 'budget', pauseDetail: `max turns ${budgets.maxTurns} reached` }
-        } else if (run.startedAt !== null && Date.now() - Date.parse(run.startedAt) >= budgets.maxDurationMs) {
-          run = { ...run, status: 'paused', pauseReason: 'budget', pauseDetail: 'max duration reached' }
+        } else if (run.startedAt !== null && elapsedActiveDuration(run, Date.now()) >= budgets.maxDurationMs) {
+          run = { ...run, ...foldActiveDuration(run, Date.now()), status: 'paused', pauseReason: 'budget', pauseDetail: 'max duration reached' }
         }
       }
       const next: NovelSnapshot = { ...current, updatedAt: new Date().toISOString(), run }

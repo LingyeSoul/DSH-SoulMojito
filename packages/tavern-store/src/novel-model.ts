@@ -558,6 +558,12 @@ export interface NovelRunState {
   inFlightIntent: WorkIntentRecord | null
   /** Outline revision pending manual approval (§4.3); null when not awaiting. */
   awaitingApprovalRevision: string | null
+  /** Cumulative active milliseconds for the §13 duration budget: pause
+   * windows and host downtime never consume it. Absent on legacy snapshots,
+   * where the open window falls back to startedAt until the first fold. */
+  activeDurationMs?: number
+  /** Start of the current active window; null while paused. */
+  activeWindowStart?: string | null
 }
 
 /* -------------------------------- assets ------------------------------- */

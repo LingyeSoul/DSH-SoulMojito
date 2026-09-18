@@ -1033,4 +1033,79 @@ describe('NovelStore readAsset（纯读，§5/§15）', () => {
     const reread = (await novels.readAsset(created.novelId, character!.contentHash)) as { data?: { name?: string } }
     expect(reread.data?.name).toBe('Test Char')
   }))
+
+  it('§13 duration budget counts active windows only: pause/host-down time is excluded', withStores(async (tavern, novels) => {
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+    const created = await novels.createNovel(tavern, baseConfig({ budgets: {
+      maxTurns: 100, maxDurationMs: 150, stallThresholdTurns: 10, consecutiveFailureLimit: 3,
+      externalRetry: { maxAttempts: 2, backoffMs: 5 }, maxDeduceRuns: 5,
+    } }))
+    let snapshot = await novels.getNovel(created.novelId)
+    expect(snapshot?.run).toMatchObject({ status: 'active', activeWindowStart: expect.any(String) })
+
+    // Active time below the budget keeps the run active.
+    await sleep(60)
+    await novels.noteTurn(created.novelId, { failed: false })
+    snapshot = await novels.getNovel(created.novelId)
+    expect(snapshot?.run.status).toBe('active')
+
+    // A pause folds the open window and closes it; the paused span (a user
+    // pause, or an overnight host shutdown in production) never consumes
+    // budget, so the resume inherits only what was actually active.
+    await novels.pause(created.novelId, { reason: 'user-request' })
+    snapshot = await novels.getNovel(created.novelId)
+    expect(snapshot?.run.activeWindowStart).toBeNull()
+    expect(snapshot?.run.activeDurationMs ?? 0).toBeGreaterThanOrEqual(50)
+    await sleep(300)
+    await novels.resume(created.novelId)
+    await novels.noteTurn(created.novelId, { failed: false })
+    snapshot = await novels.getNovel(created.novelId)
+    expect(snapshot?.run.status).toBe('active')
+    expect(snapshot?.run.pauseReason).toBeNull()
+    // An explicit resume grants a fresh full duration allowance.
+    expect(snapshot?.run.activeDurationMs).toBe(0)
+
+    // Exceeding the budget inside a fresh active window still pauses.
+    await sleep(200)
+    await novels.noteTurn(created.novelId, { failed: false })
+    snapshot = await novels.getNovel(created.novelId)
+    expect(snapshot?.run).toMatchObject({ status: 'paused', pauseReason: 'budget' })
+    expect(snapshot?.run.pauseDetail).toBe('max duration reached')
+  }))
+
+  it('§13 lastError is a live health signal: failed turns set it, the next successful turn clears it', withStores(async (tavern, novels) => {
+    const created = await novels.createNovel(tavern, baseConfig())
+    await novels.noteTurn(created.novelId, { failed: true, error: 'turn ended with stop reason aborted' })
+    expect((await novels.getNovel(created.novelId))?.run.lastError).toBe('turn ended with stop reason aborted')
+    // Real-machine zombie: the run recovered (resume + kick) and turns
+    // completed, yet the UI kept showing the stale aborted error.
+    await novels.noteTurn(created.novelId, { failed: false })
+    expect((await novels.getNovel(created.novelId))?.run.lastError).toBeNull()
+    // A failure without a message keeps the previous trail.
+    await novels.noteTurn(created.novelId, { failed: true })
+    expect((await novels.getNovel(created.novelId))?.run.lastError).toBeNull()
+  }))
+
+  it('§13 legacy snapshots without window fields are amnestied, never charged wall-clock', withStores(async (tavern, novels, root) => {
+    // Real-machine migration trap (2026-09-18): the first new-code pause of a
+    // legacy snapshot folded startedAt→now wall-clock into activeDurationMs,
+    // freezing the overnight host downtime as writing debt and re-pausing
+    // every resumed turn. Legacy history is amnestied instead.
+    const created = await novels.createNovel(tavern, baseConfig({ budgets: {
+      maxTurns: 100, maxDurationMs: 100, stallThresholdTurns: 10, consecutiveFailureLimit: 3,
+      externalRetry: { maxAttempts: 2, backoffMs: 5 }, maxDeduceRuns: 5,
+    } }))
+    await novels.noteTurn(created.novelId, { failed: false })
+    const head = JSON.parse(await readFile(path.join(root, 'novels', created.novelId, 'HEAD.json'), 'utf8')) as { revision: string }
+    const revPath = path.join(root, 'novels', created.novelId, 'revisions', `${head.revision}.json`)
+    const revision = JSON.parse(await readFile(revPath, 'utf8')) as { snapshot: { run: Record<string, unknown> } }
+    delete revision.snapshot.run.activeWindowStart
+    delete revision.snapshot.run.activeDurationMs
+    revision.snapshot.run.startedAt = '2020-01-01T00:00:00.000Z'
+    await writeFile(revPath, JSON.stringify(revision))
+    await novels.noteTurn(created.novelId, { failed: false })
+    const snapshot = await novels.getNovel(created.novelId)
+    expect(snapshot?.run.status).toBe('active')
+    expect(snapshot?.run.pauseReason).toBeNull()
+  }))
 })

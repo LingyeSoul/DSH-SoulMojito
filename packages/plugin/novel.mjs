@@ -3162,6 +3162,14 @@ async function isLiveDshWriter(pid) {
   if (command === null) return true;
   return DSH_HOST_COMMAND.test(command);
 }
+function foldActiveDuration(run, nowMs) {
+  const open = run.status === "active" && run.activeWindowStart !== void 0 && run.activeWindowStart !== null ? Math.max(0, nowMs - Date.parse(run.activeWindowStart)) : 0;
+  return { activeDurationMs: (run.activeDurationMs ?? 0) + open, activeWindowStart: null };
+}
+function elapsedActiveDuration(run, nowMs) {
+  const open = run.status === "active" && run.activeWindowStart !== void 0 && run.activeWindowStart !== null ? Math.max(0, nowMs - Date.parse(run.activeWindowStart)) : 0;
+  return (run.activeDurationMs ?? 0) + open;
+}
 var NovelStore = class _NovelStore {
   novelsRoot;
   mutationTails = /* @__PURE__ */ new Map();
@@ -3247,7 +3255,9 @@ var NovelStore = class _NovelStore {
         consecutiveFailures: 0,
         lastError: null,
         inFlightIntent: null,
-        awaitingApprovalRevision: null
+        awaitingApprovalRevision: null,
+        activeDurationMs: 0,
+        activeWindowStart: null
       } : {
         status: "active",
         phase: "outlining",
@@ -3264,7 +3274,9 @@ var NovelStore = class _NovelStore {
         consecutiveFailures: 0,
         lastError: null,
         inFlightIntent: null,
-        awaitingApprovalRevision: null
+        awaitingApprovalRevision: null,
+        activeDurationMs: 0,
+        activeWindowStart: now
       };
       const requirement = {
         requirementId: "req-1",
@@ -3823,6 +3835,7 @@ var NovelStore = class _NovelStore {
         updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
         run: {
           ...current.run,
+          ...foldActiveDuration(current.run, Date.now()),
           // §13: pausing revokes unclaimed intents; claimed units may still finish.
           status: "paused",
           pauseReason: input.reason,
@@ -3860,9 +3873,14 @@ var NovelStore = class _NovelStore {
           phase,
           pauseReason: null,
           pauseDetail: null,
-          // An explicit resume opens a fresh progress window; cumulative
-          // budgets (turns, duration) are never reset by recovery (§13).
+          // An explicit resume is a user override of the pause: the stall
+          // counter resets and the duration budget gets a fresh full
+          // allowance. The turn count stays cumulative (§13) — a hard cap
+          // is raised through config, not through resume clicks. Restart
+          // recovery never calls this, so a crash loop cannot farm budget.
           stalledTurns: 0,
+          activeDurationMs: 0,
+          activeWindowStart: (/* @__PURE__ */ new Date()).toISOString(),
           resumeHint: blocked.length > 0 ? "planning authorized; body claims stay blocked until conflicts are resolved (\xA79.4)" : null
         }
       };
@@ -3895,6 +3913,7 @@ var NovelStore = class _NovelStore {
         } : unit),
         run: {
           ...current.run,
+          ...foldActiveDuration(current.run, Date.now()),
           status: "paused",
           pauseReason: "stopped",
           pauseDetail: "immediate stop: execution tokens revoked",
@@ -3932,7 +3951,9 @@ var NovelStore = class _NovelStore {
           pauseReason: null,
           pauseDetail: null,
           resumeHint: null,
-          awaitingApprovalRevision: null
+          awaitingApprovalRevision: null,
+          // Approval re-enters active: open a fresh duration window (§13).
+          activeWindowStart: (/* @__PURE__ */ new Date()).toISOString()
         }
       };
       const revision = await this.publish(dir, current.revision, next, `approve-outline:${outline.outlineRevision}`);
@@ -3953,7 +3974,9 @@ var NovelStore = class _NovelStore {
           phase: "revising",
           pauseReason: null,
           pauseDetail: null,
-          resumeHint: null
+          resumeHint: null,
+          // The authorized planning pass re-enters active: fresh window (§13).
+          activeWindowStart: (/* @__PURE__ */ new Date()).toISOString()
         }
       };
       const revision = await this.publish(dir, current.revision, next, "request-revision");
@@ -3985,7 +4008,11 @@ var NovelStore = class _NovelStore {
         turnsRun: current.run.turnsRun + 1,
         stalledTurns: current.run.stalledTurns + 1,
         consecutiveFailures: input.failed ? current.run.consecutiveFailures + 1 : 0,
-        ...input.failed && input.error !== void 0 ? { lastError: input.error } : {}
+        // §13 run error trail: a failed turn records it and the next
+        // successful turn clears it, so the surfaced "recent error" always
+        // reflects failures not yet followed by success — never a zombie
+        // from a turn that has long since recovered.
+        lastError: input.failed ? input.error ?? current.run.lastError : null
       };
       if (run.status === "active") {
         if (run.consecutiveFailures >= budgets.consecutiveFailureLimit) {
@@ -3994,8 +4021,8 @@ var NovelStore = class _NovelStore {
           run = { ...run, status: "paused", pauseReason: "stalled", pauseDetail: `no progress for ${run.stalledTurns} turns` };
         } else if (run.turnsRun >= budgets.maxTurns) {
           run = { ...run, status: "paused", pauseReason: "budget", pauseDetail: `max turns ${budgets.maxTurns} reached` };
-        } else if (run.startedAt !== null && Date.now() - Date.parse(run.startedAt) >= budgets.maxDurationMs) {
-          run = { ...run, status: "paused", pauseReason: "budget", pauseDetail: "max duration reached" };
+        } else if (run.startedAt !== null && elapsedActiveDuration(run, Date.now()) >= budgets.maxDurationMs) {
+          run = { ...run, ...foldActiveDuration(run, Date.now()), status: "paused", pauseReason: "budget", pauseDetail: "max duration reached" };
         }
       }
       const next = { ...current, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), run };
@@ -4848,9 +4875,9 @@ var outlinePayloadParameter = {
         theme: { type: "string" },
         mainConflict: { type: "string" },
         endingDirection: { type: "string" },
-        taboos: { type: "array", items: { type: "string" } }
+        taboos: { type: "array", items: { type: "string" }, description: "May be omitted; defaults to no taboos." }
       },
-      required: ["premise", "theme", "mainConflict", "endingDirection", "taboos"]
+      required: ["premise", "theme", "mainConflict", "endingDirection"]
     },
     characters: {
       type: "array",
@@ -4863,10 +4890,10 @@ var outlinePayloadParameter = {
           assetRef: { type: "string", description: "contentHash of a project character asset from novel_outline_read assets (\xA75)." },
           initialState: { type: "string" },
           motivation: { type: "string" },
-          relations: { type: "array", items: { type: "string" } },
+          relations: { type: "array", items: { type: "string" }, description: "May be omitted; defaults to no relations." },
           arc: { type: "string" }
         },
-        required: ["characterId", "name", "initialState", "motivation", "relations", "arc"]
+        required: ["characterId", "name", "initialState", "motivation", "arc"]
       }
     },
     chapters: {
@@ -4879,12 +4906,12 @@ var outlinePayloadParameter = {
           order: { type: "integer" },
           title: { type: "string" },
           purpose: { type: "string" },
-          keyEvents: { type: "array", items: { type: "string" } },
-          plannedCharacters: { type: ["integer", "null"], description: "Planned effective characters or null." },
+          keyEvents: { type: "array", items: { type: "string" }, description: "May be omitted; defaults to no key events." },
+          plannedCharacters: { type: ["integer", "null"], description: "Planned effective characters, null when unplanned; may be omitted (treated as null)." },
           entryCondition: { type: "string" },
           exitCondition: { type: "string" }
         },
-        required: ["chapterId", "order", "title", "purpose", "keyEvents", "plannedCharacters", "entryCondition", "exitCondition"]
+        required: ["chapterId", "order", "title", "purpose", "entryCondition", "exitCondition"]
       }
     },
     currentChapterId: { type: ["string", "null"], description: "chapterId of the current chapter; null only when chapters is empty." },
@@ -4898,14 +4925,14 @@ var outlinePayloadParameter = {
           sceneId: { type: "string" },
           order: { type: "integer" },
           goal: { type: "string" },
-          participants: { type: "array", items: { type: "string" } },
+          participants: { type: "array", items: { type: "string" }, description: "May be omitted; defaults to no participants." },
           timeLocation: { type: "string" },
           causality: { type: "string" },
           conflict: { type: "string" },
           expectedChange: { type: "string" },
           continuationAnchor: { type: "string" }
         },
-        required: ["sceneId", "order", "goal", "participants", "timeLocation", "causality", "conflict", "expectedChange"]
+        required: ["sceneId", "order", "goal", "timeLocation", "causality", "conflict", "expectedChange"]
       }
     },
     foreshadowing: {
@@ -4916,12 +4943,12 @@ var outlinePayloadParameter = {
         properties: {
           id: { type: "string" },
           description: { type: "string" },
-          plantAt: { type: ["string", "null"] },
-          payoffAt: { type: ["string", "null"] },
+          plantAt: { type: ["string", "null"], description: "May be omitted or null when unplanned." },
+          payoffAt: { type: ["string", "null"], description: "May be omitted or null when unplanned." },
           required: { type: "boolean" },
           status: { type: "string", enum: ["open", "planted", "resolved"] }
         },
-        required: ["id", "description", "plantAt", "payoffAt", "required", "status"]
+        required: ["id", "description", "required", "status"]
       }
     }
   },
@@ -4965,10 +4992,10 @@ var sceneCompletionParameter = {
   properties: {
     completed: { type: "boolean", description: "True only when the scene goal is fully achieved on screen." },
     basis: { type: "string", description: "Why the scene is (or is not yet) complete." },
-    outstandingGoals: { type: "array", items: { type: "string" }, description: "Scene goals still open; empty when completed." },
-    nextAnchor: { type: ["string", "null"], description: "Continuation anchor for the next fragment; null when the scene is complete." }
+    outstandingGoals: { type: "array", items: { type: "string" }, description: "Scene goals still open; may be omitted, defaults to none." },
+    nextAnchor: { type: ["string", "null"], description: "Continuation anchor for the next fragment; null (or omitted) when the scene is complete." }
   },
-  required: ["completed", "basis", "outstandingGoals", "nextAnchor"]
+  required: ["completed", "basis"]
 };
 var statusOutput = objectOutput2({
   novelId: { type: "string" },
@@ -5253,12 +5280,12 @@ function createTools() {
     tool("novel_outline_create", "Create the initial outline and process the first requirement batch (\xA74.3/\xA76.3). Only succeeds while no outline exists; conflicts surface the store error.", {
       expectedRevision: { type: "string", required: true, description: "Snapshot revision you read via novel_status_read." },
       outline: { ...outlinePayloadParameter, required: true },
-      handledRequirements: { ...handledRequirementsParameter, required: true, description: "Processing results for the pending requirements; the creation requirement must be handled here." }
+      handledRequirements: { ...handledRequirementsParameter, description: "Processing results for the pending requirements; the creation requirement must be handled here. May be omitted only when nothing is handled." }
     }, outlineWriteOutput, async (args, exec) => {
       const novelId = await novelBindingFor(exec);
       const result = await (await novelStore()).createOutline(novelId, {
         expectedRevision: stringArg(args.expectedRevision),
-        outline: args.outline,
+        outline: normalizeOutlinePayload(args.outline),
         handledRequirements: handledRequirementsArg(args.handledRequirements)
       });
       return { outlineRevision: result.outlineRevision, revision: result.revision, watermark: result.watermark, source: { kind: "novel-outline-create", id: novelId } };
@@ -5268,14 +5295,14 @@ function createTools() {
       expectedOutlineRevision: { type: "string", required: true, description: "Outline revision this revision is based on." },
       reason: { type: "string", required: true, description: "Why the plan changes; cite the directive ids or planning reason." },
       changes: { ...outlinePayloadParameter, required: true, description: "The complete next outline payload (not a patch)." },
-      handledRequirements: { ...handledRequirementsParameter, required: true, description: "Per-directive results for the pending contiguous prefix." }
+      handledRequirements: { ...handledRequirementsParameter, description: "Per-directive results for the pending contiguous prefix. May be omitted only when nothing is handled." }
     }, outlineWriteOutput, async (args, exec) => {
       const novelId = await novelBindingFor(exec);
       const result = await (await novelStore()).reviseOutline(novelId, {
         expectedRevision: stringArg(args.expectedRevision),
         expectedOutlineRevision: stringArg(args.expectedOutlineRevision),
         reason: stringArg(args.reason),
-        changes: args.changes,
+        changes: normalizeOutlinePayload(args.changes),
         handledRequirements: handledRequirementsArg(args.handledRequirements)
       });
       return { outlineRevision: result.outlineRevision, revision: result.revision, watermark: result.watermark, source: { kind: "novel-outline-revise", id: novelId } };
@@ -5284,17 +5311,17 @@ function createTools() {
       expectedRevision: { type: "string", required: true },
       requirementId: { type: "string", required: true },
       conflictReason: { type: "string", required: true, description: "Why the directive contradicts committed facts." },
-      bodySources: { type: "array", required: true, items: { type: "string" }, description: "Conflicting paragraphs as commit-<n>#<index> references; may be empty but must be present." }
+      bodySources: { type: "array", items: { type: "string" }, description: "Conflicting paragraphs as commit-<n>#<index> references; may be omitted or empty." }
     }, blockOutput, async (args, exec) => {
       const novelId = await novelBindingFor(exec);
-      if (!Array.isArray(args.bodySources) || args.bodySources.some((source) => typeof source !== "string")) {
+      if (args.bodySources !== void 0 && (!Array.isArray(args.bodySources) || args.bodySources.some((source) => typeof source !== "string"))) {
         throw new Error("bodySources must be an array of strings");
       }
       const result = await (await novelStore()).blockRequirement(novelId, {
         expectedRevision: stringArg(args.expectedRevision),
         requirementId: stringArg(args.requirementId),
         conflictReason: stringArg(args.conflictReason),
-        bodySources: args.bodySources
+        bodySources: args.bodySources ?? []
       });
       return { revision: result.revision, source: { kind: "novel-requirement-block", id: novelId } };
     }),
@@ -5340,10 +5367,7 @@ function createTools() {
         if (typeof paragraph !== "string") throw new Error("paragraphs must be strings");
         if (paragraph.trim() === "") throw new Error("paragraphs must not contain blank entries (\xA76.3: empty bodies cannot be committed)");
       }
-      const completion = args.sceneCompletion;
-      if (typeof completion !== "object" || completion === null || typeof completion.completed !== "boolean" || typeof completion.basis !== "string" || completion.basis.trim() === "" || !Array.isArray(completion.outstandingGoals) || completion.outstandingGoals.some((goal) => typeof goal !== "string") || !(completion.nextAnchor === null || typeof completion.nextAnchor === "string")) {
-        throw new Error("sceneCompletion must carry completed (boolean), a non-empty basis, outstandingGoals (string[]) and nextAnchor (string|null)");
-      }
+      const completion = normalizeSceneCompletion(args.sceneCompletion);
       if (!Array.isArray(args.canonChanges)) throw new Error("canonChanges must be an array (\xA78.2)");
       const unitId = stringArg(args.unitId);
       const snapshot = await snapshotOf(novelId);
@@ -5377,17 +5401,17 @@ function createTools() {
       chapterId: { type: "string", required: true },
       expectedContentRevision: { type: "string", required: true, description: "Content projection revision; changes on body/chapter display/canon changes." },
       basis: { type: "string", required: true, description: "Why the chapter purpose is achieved." },
-      openItems: { type: "array", required: true, items: { type: "string" }, description: "Deliberately open threads carried into later chapters; may be empty." }
+      openItems: { type: "array", items: { type: "string" }, description: "Deliberately open threads carried into later chapters; may be omitted or empty." }
     }, chapterCompleteOutput, async (args, exec) => {
       const novelId = await novelBindingFor(exec);
-      if (!Array.isArray(args.openItems) || args.openItems.some((item) => typeof item !== "string")) {
+      if (args.openItems !== void 0 && (!Array.isArray(args.openItems) || args.openItems.some((item) => typeof item !== "string"))) {
         throw new Error("openItems must be an array of strings");
       }
       const result = await (await novelStore()).completeChapter(novelId, {
         chapterId: stringArg(args.chapterId),
         expectedContentRevision: stringArg(args.expectedContentRevision),
         basis: stringArg(args.basis),
-        openItems: args.openItems
+        openItems: args.openItems ?? []
       });
       return { revision: result.revision, source: { kind: "novel-chapter-complete", id: novelId } };
     }),
@@ -5699,8 +5723,73 @@ function novelScopeId(novelId) {
   return `novel:${novelId}`;
 }
 function handledRequirementsArg(value) {
-  if (!Array.isArray(value)) throw new Error("handledRequirements must be an array (explicitly empty when there is nothing to handle, \xA710.4)");
+  if (value === void 0) return [];
+  if (!Array.isArray(value)) throw new Error("handledRequirements must be an array (\xA710.4)");
   return value;
+}
+function normalizeSceneCompletion(value) {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("sceneCompletion must carry completed (boolean), a non-empty basis, outstandingGoals (string[]) and nextAnchor (string|null)");
+  }
+  const completion = value;
+  const outstandingGoals = completion.outstandingGoals;
+  const nextAnchor = completion.nextAnchor;
+  if (typeof completion.completed !== "boolean" || typeof completion.basis !== "string" || completion.basis.trim() === "" || outstandingGoals !== void 0 && (!Array.isArray(outstandingGoals) || outstandingGoals.some((goal) => typeof goal !== "string")) || nextAnchor !== void 0 && nextAnchor !== null && typeof nextAnchor !== "string") {
+    throw new Error("sceneCompletion must carry completed (boolean), a non-empty basis, outstandingGoals (string[]) and nextAnchor (string|null)");
+  }
+  return {
+    completed: completion.completed,
+    basis: completion.basis,
+    outstandingGoals: Array.isArray(outstandingGoals) ? outstandingGoals : [],
+    nextAnchor: nextAnchor === void 0 ? null : nextAnchor
+  };
+}
+function normalizeOutlinePayload(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
+  const outline = { ...value };
+  if (isJsonObject(outline.story)) {
+    const story = { ...outline.story };
+    if (story.taboos === void 0) story.taboos = [];
+    outline.story = story;
+  }
+  if (Array.isArray(outline.characters)) {
+    outline.characters = outline.characters.map((entry) => {
+      if (!isJsonObject(entry)) return entry;
+      const character = { ...entry };
+      if (character.relations === void 0) character.relations = [];
+      return character;
+    });
+  }
+  if (Array.isArray(outline.chapters)) {
+    outline.chapters = outline.chapters.map((entry) => {
+      if (!isJsonObject(entry)) return entry;
+      const chapter = { ...entry };
+      if (chapter.keyEvents === void 0) chapter.keyEvents = [];
+      if (chapter.plannedCharacters === void 0) chapter.plannedCharacters = null;
+      return chapter;
+    });
+  }
+  if (Array.isArray(outline.scenes)) {
+    outline.scenes = outline.scenes.map((entry) => {
+      if (!isJsonObject(entry)) return entry;
+      const scene = { ...entry };
+      if (scene.participants === void 0) scene.participants = [];
+      return scene;
+    });
+  }
+  if (Array.isArray(outline.foreshadowing)) {
+    outline.foreshadowing = outline.foreshadowing.map((entry) => {
+      if (!isJsonObject(entry)) return entry;
+      const item = { ...entry };
+      if (item.plantAt === void 0) item.plantAt = null;
+      if (item.payoffAt === void 0) item.payoffAt = null;
+      return item;
+    });
+  }
+  return outline;
+}
+function isJsonObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function resolveCanonSource(source, targetCommitId) {
   if (typeof source !== "string" || source.trim() === "") throw new Error("canon sources must be non-empty strings");

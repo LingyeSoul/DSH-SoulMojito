@@ -145,9 +145,10 @@ const outlinePayloadParameter: Record<string, unknown> = {
       type: 'object', additionalProperties: false,
       properties: {
         premise: { type: 'string' }, theme: { type: 'string' }, mainConflict: { type: 'string' },
-        endingDirection: { type: 'string' }, taboos: { type: 'array', items: { type: 'string' } },
+        endingDirection: { type: 'string' },
+        taboos: { type: 'array', items: { type: 'string' }, description: 'May be omitted; defaults to no taboos.' },
       },
-      required: ['premise', 'theme', 'mainConflict', 'endingDirection', 'taboos'],
+      required: ['premise', 'theme', 'mainConflict', 'endingDirection'],
     },
     characters: {
       type: 'array',
@@ -158,9 +159,10 @@ const outlinePayloadParameter: Record<string, unknown> = {
           name: { type: 'string' },
           assetRef: { type: 'string', description: 'contentHash of a project character asset from novel_outline_read assets (§5).' },
           initialState: { type: 'string' }, motivation: { type: 'string' },
-          relations: { type: 'array', items: { type: 'string' } }, arc: { type: 'string' },
+          relations: { type: 'array', items: { type: 'string' }, description: 'May be omitted; defaults to no relations.' },
+          arc: { type: 'string' },
         },
-        required: ['characterId', 'name', 'initialState', 'motivation', 'relations', 'arc'],
+        required: ['characterId', 'name', 'initialState', 'motivation', 'arc'],
       },
     },
     chapters: {
@@ -169,11 +171,11 @@ const outlinePayloadParameter: Record<string, unknown> = {
         type: 'object', additionalProperties: false,
         properties: {
           chapterId: { type: 'string' }, order: { type: 'integer' }, title: { type: 'string' }, purpose: { type: 'string' },
-          keyEvents: { type: 'array', items: { type: 'string' } },
-          plannedCharacters: { type: ['integer', 'null'], description: 'Planned effective characters or null.' },
+          keyEvents: { type: 'array', items: { type: 'string' }, description: 'May be omitted; defaults to no key events.' },
+          plannedCharacters: { type: ['integer', 'null'], description: 'Planned effective characters, null when unplanned; may be omitted (treated as null).' },
           entryCondition: { type: 'string' }, exitCondition: { type: 'string' },
         },
-        required: ['chapterId', 'order', 'title', 'purpose', 'keyEvents', 'plannedCharacters', 'entryCondition', 'exitCondition'],
+        required: ['chapterId', 'order', 'title', 'purpose', 'entryCondition', 'exitCondition'],
       },
     },
     currentChapterId: { type: ['string', 'null'], description: 'chapterId of the current chapter; null only when chapters is empty.' },
@@ -183,11 +185,12 @@ const outlinePayloadParameter: Record<string, unknown> = {
         type: 'object', additionalProperties: false,
         properties: {
           sceneId: { type: 'string' }, order: { type: 'integer' }, goal: { type: 'string' },
-          participants: { type: 'array', items: { type: 'string' } }, timeLocation: { type: 'string' },
+          participants: { type: 'array', items: { type: 'string' }, description: 'May be omitted; defaults to no participants.' },
+          timeLocation: { type: 'string' },
           causality: { type: 'string' }, conflict: { type: 'string' }, expectedChange: { type: 'string' },
           continuationAnchor: { type: 'string' },
         },
-        required: ['sceneId', 'order', 'goal', 'participants', 'timeLocation', 'causality', 'conflict', 'expectedChange'],
+        required: ['sceneId', 'order', 'goal', 'timeLocation', 'causality', 'conflict', 'expectedChange'],
       },
     },
     foreshadowing: {
@@ -196,10 +199,11 @@ const outlinePayloadParameter: Record<string, unknown> = {
         type: 'object', additionalProperties: false,
         properties: {
           id: { type: 'string' }, description: { type: 'string' },
-          plantAt: { type: ['string', 'null'] }, payoffAt: { type: ['string', 'null'] },
+          plantAt: { type: ['string', 'null'], description: 'May be omitted or null when unplanned.' },
+          payoffAt: { type: ['string', 'null'], description: 'May be omitted or null when unplanned.' },
           required: { type: 'boolean' }, status: { type: 'string', enum: ['open', 'planted', 'resolved'] },
         },
-        required: ['id', 'description', 'plantAt', 'payoffAt', 'required', 'status'],
+        required: ['id', 'description', 'required', 'status'],
       },
     },
   },
@@ -242,10 +246,10 @@ const sceneCompletionParameter: Record<string, unknown> = {
   properties: {
     completed: { type: 'boolean', description: 'True only when the scene goal is fully achieved on screen.' },
     basis: { type: 'string', description: 'Why the scene is (or is not yet) complete.' },
-    outstandingGoals: { type: 'array', items: { type: 'string' }, description: 'Scene goals still open; empty when completed.' },
-    nextAnchor: { type: ['string', 'null'], description: 'Continuation anchor for the next fragment; null when the scene is complete.' },
+    outstandingGoals: { type: 'array', items: { type: 'string' }, description: 'Scene goals still open; may be omitted, defaults to none.' },
+    nextAnchor: { type: ['string', 'null'], description: 'Continuation anchor for the next fragment; null (or omitted) when the scene is complete.' },
   },
-  required: ['completed', 'basis', 'outstandingGoals', 'nextAnchor'],
+  required: ['completed', 'basis'],
 }
 
 /* ------------------------------ output schemas ------------------------------ */
@@ -486,12 +490,12 @@ function createTools(): ToolDefinition[] {
     tool('novel_outline_create', 'Create the initial outline and process the first requirement batch (§4.3/§6.3). Only succeeds while no outline exists; conflicts surface the store error.', {
       expectedRevision: { type: 'string', required: true, description: 'Snapshot revision you read via novel_status_read.' },
       outline: { ...outlinePayloadParameter, required: true },
-      handledRequirements: { ...handledRequirementsParameter, required: true, description: 'Processing results for the pending requirements; the creation requirement must be handled here.' },
+      handledRequirements: { ...handledRequirementsParameter, description: 'Processing results for the pending requirements; the creation requirement must be handled here. May be omitted only when nothing is handled.' },
     }, outlineWriteOutput, async (args, exec) => {
       const novelId = await novelBindingFor(exec)
       const result = await (await novelStore()).createOutline(novelId, {
         expectedRevision: stringArg(args.expectedRevision),
-        outline: args.outline as NovelOutlinePayload,
+        outline: normalizeOutlinePayload(args.outline),
         handledRequirements: handledRequirementsArg(args.handledRequirements),
       })
       return { outlineRevision: result.outlineRevision, revision: result.revision, watermark: result.watermark, source: { kind: 'novel-outline-create', id: novelId } }
@@ -501,14 +505,14 @@ function createTools(): ToolDefinition[] {
       expectedOutlineRevision: { type: 'string', required: true, description: 'Outline revision this revision is based on.' },
       reason: { type: 'string', required: true, description: 'Why the plan changes; cite the directive ids or planning reason.' },
       changes: { ...outlinePayloadParameter, required: true, description: 'The complete next outline payload (not a patch).' },
-      handledRequirements: { ...handledRequirementsParameter, required: true, description: 'Per-directive results for the pending contiguous prefix.' },
+      handledRequirements: { ...handledRequirementsParameter, description: 'Per-directive results for the pending contiguous prefix. May be omitted only when nothing is handled.' },
     }, outlineWriteOutput, async (args, exec) => {
       const novelId = await novelBindingFor(exec)
       const result = await (await novelStore()).reviseOutline(novelId, {
         expectedRevision: stringArg(args.expectedRevision),
         expectedOutlineRevision: stringArg(args.expectedOutlineRevision),
         reason: stringArg(args.reason),
-        changes: args.changes as NovelOutlinePayload,
+        changes: normalizeOutlinePayload(args.changes),
         handledRequirements: handledRequirementsArg(args.handledRequirements),
       })
       return { outlineRevision: result.outlineRevision, revision: result.revision, watermark: result.watermark, source: { kind: 'novel-outline-revise', id: novelId } }
@@ -517,17 +521,17 @@ function createTools(): ToolDefinition[] {
       expectedRevision: { type: 'string', required: true },
       requirementId: { type: 'string', required: true },
       conflictReason: { type: 'string', required: true, description: 'Why the directive contradicts committed facts.' },
-      bodySources: { type: 'array', required: true, items: { type: 'string' }, description: "Conflicting paragraphs as commit-<n>#<index> references; may be empty but must be present." },
+      bodySources: { type: 'array', items: { type: 'string' }, description: "Conflicting paragraphs as commit-<n>#<index> references; may be omitted or empty." },
     }, blockOutput, async (args, exec) => {
       const novelId = await novelBindingFor(exec)
-      if (!Array.isArray(args.bodySources) || args.bodySources.some((source) => typeof source !== 'string')) {
+      if (args.bodySources !== undefined && (!Array.isArray(args.bodySources) || args.bodySources.some((source) => typeof source !== 'string'))) {
         throw new Error('bodySources must be an array of strings')
       }
       const result = await (await novelStore()).blockRequirement(novelId, {
         expectedRevision: stringArg(args.expectedRevision),
         requirementId: stringArg(args.requirementId),
         conflictReason: stringArg(args.conflictReason),
-        bodySources: args.bodySources,
+        bodySources: args.bodySources ?? [],
       })
       return { revision: result.revision, source: { kind: 'novel-requirement-block', id: novelId } }
     }),
@@ -574,14 +578,7 @@ function createTools(): ToolDefinition[] {
         if (typeof paragraph !== 'string') throw new Error('paragraphs must be strings')
         if (paragraph.trim() === '') throw new Error('paragraphs must not contain blank entries (§6.3: empty bodies cannot be committed)')
       }
-      const completion = args.sceneCompletion
-      if (typeof completion !== 'object' || completion === null
-        || typeof (completion as Record<string, unknown>).completed !== 'boolean'
-        || typeof (completion as Record<string, unknown>).basis !== 'string' || ((completion as Record<string, unknown>).basis as string).trim() === ''
-        || !Array.isArray((completion as Record<string, unknown>).outstandingGoals) || ((completion as Record<string, unknown>).outstandingGoals as unknown[]).some((goal) => typeof goal !== 'string')
-        || !((completion as Record<string, unknown>).nextAnchor === null || typeof (completion as Record<string, unknown>).nextAnchor === 'string')) {
-        throw new Error('sceneCompletion must carry completed (boolean), a non-empty basis, outstandingGoals (string[]) and nextAnchor (string|null)')
-      }
+      const completion = normalizeSceneCompletion(args.sceneCompletion)
       if (!Array.isArray(args.canonChanges)) throw new Error('canonChanges must be an array (§8.2)')
       const unitId = stringArg(args.unitId)
       const snapshot = await snapshotOf(novelId)
@@ -600,7 +597,7 @@ function createTools(): ToolDefinition[] {
         unitId,
         executionToken: stringArg(args.executionToken),
         paragraphs: paragraphs as string[],
-        sceneCompletion: completion as unknown as SceneCompletion,
+        sceneCompletion: completion,
         canonChanges,
       })
       return {
@@ -619,17 +616,17 @@ function createTools(): ToolDefinition[] {
       chapterId: { type: 'string', required: true },
       expectedContentRevision: { type: 'string', required: true, description: 'Content projection revision; changes on body/chapter display/canon changes.' },
       basis: { type: 'string', required: true, description: 'Why the chapter purpose is achieved.' },
-      openItems: { type: 'array', required: true, items: { type: 'string' }, description: 'Deliberately open threads carried into later chapters; may be empty.' },
+      openItems: { type: 'array', items: { type: 'string' }, description: 'Deliberately open threads carried into later chapters; may be omitted or empty.' },
     }, chapterCompleteOutput, async (args, exec) => {
       const novelId = await novelBindingFor(exec)
-      if (!Array.isArray(args.openItems) || args.openItems.some((item) => typeof item !== 'string')) {
+      if (args.openItems !== undefined && (!Array.isArray(args.openItems) || args.openItems.some((item) => typeof item !== 'string'))) {
         throw new Error('openItems must be an array of strings')
       }
       const result = await (await novelStore()).completeChapter(novelId, {
         chapterId: stringArg(args.chapterId),
         expectedContentRevision: stringArg(args.expectedContentRevision),
         basis: stringArg(args.basis),
-        openItems: args.openItems,
+        openItems: args.openItems ?? [],
       })
       return { revision: result.revision, source: { kind: 'novel-chapter-complete', id: novelId } }
     }),
@@ -953,8 +950,92 @@ function novelScopeId(novelId: string): string {
 }
 
 function handledRequirementsArg(value: unknown): HandledRequirement[] {
-  if (!Array.isArray(value)) throw new Error('handledRequirements must be an array (explicitly empty when there is nothing to handle, §10.4)')
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new Error('handledRequirements must be an array (§10.4)')
   return value as HandledRequirement[]
+}
+
+/* ------------------------- argument tolerance (§11) ------------------------- */
+
+/**
+ * Models legitimately omit fields whose absence has exactly one empty meaning
+ * — null for nullable scalars, no entries for arrays (a real-model run showed
+ * `sceneCompletion.nextAnchor` dropped when the scene completed, which forced
+ * a full payload regeneration on retry). The tool layer fills the explicit
+ * empty value; the store contract stays strict and semantic fields (ids,
+ * revisions, non-empty strings, canon sources) remain required.
+ */
+function normalizeSceneCompletion(value: unknown): SceneCompletion {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error('sceneCompletion must carry completed (boolean), a non-empty basis, outstandingGoals (string[]) and nextAnchor (string|null)')
+  }
+  const completion = value as Record<string, unknown>
+  const outstandingGoals = completion.outstandingGoals
+  const nextAnchor = completion.nextAnchor
+  if (typeof completion.completed !== 'boolean'
+    || typeof completion.basis !== 'string' || completion.basis.trim() === ''
+    || (outstandingGoals !== undefined && (!Array.isArray(outstandingGoals) || outstandingGoals.some((goal) => typeof goal !== 'string')))
+    || (nextAnchor !== undefined && nextAnchor !== null && typeof nextAnchor !== 'string')) {
+    throw new Error('sceneCompletion must carry completed (boolean), a non-empty basis, outstandingGoals (string[]) and nextAnchor (string|null)')
+  }
+  return {
+    completed: completion.completed,
+    basis: completion.basis,
+    outstandingGoals: Array.isArray(outstandingGoals) ? outstandingGoals as string[] : [],
+    nextAnchor: nextAnchor === undefined ? null : nextAnchor as string | null,
+  }
+}
+
+/** Fills omitted empty-meaning fields of an outline payload; anything the
+ * model did send passes through untouched so the store reports real shape
+ * errors instead of the normalizer silently masking them. */
+function normalizeOutlinePayload(value: unknown): NovelOutlinePayload {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value as NovelOutlinePayload
+  const outline = { ...(value as Record<string, unknown>) }
+  if (isJsonObject(outline.story)) {
+    const story = { ...(outline.story as Record<string, unknown>) }
+    if (story.taboos === undefined) story.taboos = []
+    outline.story = story
+  }
+  if (Array.isArray(outline.characters)) {
+    outline.characters = (outline.characters as unknown[]).map((entry) => {
+      if (!isJsonObject(entry)) return entry
+      const character = { ...(entry as Record<string, unknown>) }
+      if (character.relations === undefined) character.relations = []
+      return character
+    })
+  }
+  if (Array.isArray(outline.chapters)) {
+    outline.chapters = (outline.chapters as unknown[]).map((entry) => {
+      if (!isJsonObject(entry)) return entry
+      const chapter = { ...(entry as Record<string, unknown>) }
+      if (chapter.keyEvents === undefined) chapter.keyEvents = []
+      if (chapter.plannedCharacters === undefined) chapter.plannedCharacters = null
+      return chapter
+    })
+  }
+  if (Array.isArray(outline.scenes)) {
+    outline.scenes = (outline.scenes as unknown[]).map((entry) => {
+      if (!isJsonObject(entry)) return entry
+      const scene = { ...(entry as Record<string, unknown>) }
+      if (scene.participants === undefined) scene.participants = []
+      return scene
+    })
+  }
+  if (Array.isArray(outline.foreshadowing)) {
+    outline.foreshadowing = (outline.foreshadowing as unknown[]).map((entry) => {
+      if (!isJsonObject(entry)) return entry
+      const item = { ...(entry as Record<string, unknown>) }
+      if (item.plantAt === undefined) item.plantAt = null
+      if (item.payoffAt === undefined) item.payoffAt = null
+      return item
+    })
+  }
+  return outline as unknown as NovelOutlinePayload
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /** Resolves inline canon sources to the target commit id (§10.4: the server fills in the commitId). */
