@@ -224,7 +224,7 @@ async function summarizeStoryCheckpoint(
   agent: HostAgent,
   signal?: AbortSignal,
 ): Promise<HostCompactionSummary> {
-  const target = resolveCuratorTarget(config, curator, agent)
+  const target = await resolveCuratorTarget(config, curator, agent)
   if (target === undefined) {
     throw new Error('no provider/model available for AgentTavern story compaction: route one request or set curatorProvider and curatorModel')
   }

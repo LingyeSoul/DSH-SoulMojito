@@ -2623,7 +2623,7 @@ async function resolveCuratorTarget(config, curator, agent) {
   });
 }
 async function summarizeStoryCheckpoint(ctx, config, curator, input, agent, signal) {
-  const target = resolveCuratorTarget(config, curator, agent);
+  const target = await resolveCuratorTarget(config, curator, agent);
   if (target === void 0) {
     throw new Error("no provider/model available for AgentTavern story compaction: route one request or set curatorProvider and curatorModel");
   }
