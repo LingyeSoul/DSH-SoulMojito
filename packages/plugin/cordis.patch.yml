@@ -3,12 +3,20 @@
     - id: dsh-tavern
       name: 'dsh-tavern'
 
-# compaction curator：覆写 dsh-base 的 compaction 后端（patch 按 id 覆写、
-# 后写胜出；本 bundle 在 dsh-base 之后加载）。仅覆写摘要器：AgentTavern 绑定
-# 会话用 RP 检查点模板，其余会话原样透传 basic 默认行为；触发时机、保留
-# 预算与工具结果修剪全部复用宿主实现。`/compact` 命令与 overflow recovery
-# 是后端无关的，自动跟随本服务。回退：在 profile cordis.patch.yml 用
-# `- id: compaction-basic
-#    name: '@deepseek-ai/dsh-compaction-basic'` 覆写回来。
+# compaction curator：替换 dsh-base 的 compaction 后端（本 bundle 在
+# dsh-base/dsh-web-app 之后加载，patch 后写胜出）。宿主 patch 方言里覆写项
+# 的 `name` 是"条目当前模块名"守卫——不匹配只告警跳过、并不能改模块，所以
+# 换引擎必须"停旧入口 + insert 新入口"，不能 `- id: compaction-basic
+# name: 'dsh-tavern/compaction'`（真机会报 name mismatch 并跳过，web profile
+# 因此没有任何 compaction 服务，dsh-tavern 的 inject 永远 pending）。仅覆写
+# 摘要器：AgentTavern 绑定会话用 RP 检查点模板，其余会话原样透传 basic 默认
+# 行为；触发时机、保留预算与工具结果修剪全部复用宿主实现。`/compact` 命令
+# 与 overflow recovery 是后端无关的，自动跟随本服务。回退：在 profile
+# cordis.patch.yml 用 `- id: tavern-compaction disabled: true` 加
+# `- id: compaction-basic disabled: false` 覆写回来。
 - id: compaction-basic
-  name: 'dsh-tavern/compaction'
+  disabled: true
+
+- insert:
+    - id: tavern-compaction
+      name: 'dsh-tavern/compaction'

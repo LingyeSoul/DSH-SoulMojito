@@ -230,6 +230,9 @@ window.__ModuleLoader__.load({
       'settings.persona': 'Persona',
       'settings.personaEmpty': 'Default user',
       'settings.nativePersona': 'Use active character in standard DSH Agent chats',
+      'settings.compactionModel': 'Compaction summarizer',
+      'settings.compactionModelFollow': 'Follow deployment config',
+      'settings.compactionModelHint': 'Model that condenses story sessions (AgentTavern / AgentNovel) when context is compacted. Prefer a large-context model; empty falls back to the deployment config, then the session model.',
       'settings.defaultArchitecture': 'New chat architecture',
       'settings.architectureAgent': 'AgentTavern',
       'settings.architectureSt': 'ST',
@@ -601,6 +604,9 @@ window.__ModuleLoader__.load({
       'settings.persona': '用户人设',
       'settings.personaEmpty': '默认用户',
       'settings.nativePersona': '在标准 DSH Agent 会话中使用当前角色',
+      'settings.compactionModel': '压缩总结模型',
+      'settings.compactionModelFollow': '跟随部署配置',
+      'settings.compactionModelHint': '剧情会话（AgentTavern / AgentNovel）上下文压缩时生成检查点摘要的模型，建议选大上下文窗口模型；留空回落部署配置，再回落会话模型。',
       'settings.defaultArchitecture': '新聊天架构',
       'settings.architectureAgent': 'AgentTavern',
       'settings.architectureSt': 'ST',
@@ -2395,6 +2401,32 @@ window.__ModuleLoader__.load({
         setError('')
         void patchState(patch).catch((cause) => setError(cause.message))
       }
+      // 压缩总结模型（提案 0006 §4.3）：选项来自宿主模型目录，值用
+      // provider\u0000model 组合以免跨 provider 的同名模型撞 key；空值回落
+      // 部署配置（profile patch 的 curatorProvider/Model），再回落会话模型。
+      useEffect(() => { if (snapshot.models.status === 'idle') void loadModels().catch(() => {}) }, [])
+      const compaction = bootstrap.state.compaction
+      const compactionValue = compaction?.curatorProvider && compaction?.curatorModel
+        ? `${compaction.curatorProvider}\u0000${compaction.curatorModel}` : ''
+      const compactionOptions = []
+      for (const group of state.models.groups ?? []) {
+        for (const model of group.models ?? []) {
+          compactionOptions.push({
+            value: `${group.id}\u0000${model.id}`,
+            label: `${group.name ?? group.id} · ${model.name ?? model.id}`,
+          })
+        }
+      }
+      const changeCompaction = (next) => {
+        if (next === '') { applyPatch({ compaction: null }); return }
+        const separator = next.indexOf('\u0000')
+        applyPatch({
+          compaction: {
+            curatorProvider: next.slice(0, separator),
+            curatorModel: next.slice(separator + 1),
+          },
+        })
+      }
       return h('section', { className: 'dt-settings-band' },
         h('h3', null, t('settings.activeSetup')),
         h('div', { className: 'dt-settings-grid' },
@@ -2419,6 +2451,14 @@ window.__ModuleLoader__.load({
             empty: t('settings.personaEmpty'),
             onChange: (value) => applyPatch({ activePersona: value }),
           }),
+          h('label', { className: 'dt-field', title: t('settings.compactionModelHint') },
+            h('span', { className: 'dt-label' }, t('settings.compactionModel')),
+            h('select', {
+              value: compactionValue,
+              onChange: (event) => changeCompaction(event.target.value),
+            },
+              h('option', { key: '', value: '' }, t('settings.compactionModelFollow')),
+              compactionOptions.map((option) => h('option', { key: option.value, value: option.value }, option.label)))),
           h('label', { className: 'dt-toggle' },
             h('input', {
               type: 'checkbox',

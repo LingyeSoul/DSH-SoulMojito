@@ -58,7 +58,7 @@ import { AgentTavernProjector, historyImportAppends, type SessionImportAppend } 
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
 
 export const name = 'dsh-tavern'
-export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools']
+export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools', 'compaction']
 
 const API = '/api/dsh-tavern'
 const DEFAULT_USER = 'User'
@@ -437,6 +437,28 @@ async function handleApi(ctx, req, res) {
     return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) })
   }
 
+  if (method === 'POST' && route === 'compact') {
+    // /compact 只在宿主 TUI 命令注册表，dsh web 的 HTTP 层不暴露；已超限
+    // 会话（真实 usage 超窗）每个请求都溢出，宿主 pre-step 压力压缩与
+    // agent/request-error 恢复都救不回，必须显式触发一次压缩。本端点在同
+    // 进程内调 curator 的 compactNow，总结走剧情会话的 curatorProvider/Model。
+    // 注意：Cordis Context.get(plugin) 用 resolve() 解析、只认函数/.apply 对象，
+    // 字符串名解析不到服务——必须经 inject 注入后用 ctx.compaction 读取。
+    const body = await readJson(req).catch(() => ({}) as Record<string, unknown>)
+    const sessionId = typeof body.sessionId === 'string' ? body.sessionId : url.searchParams.get('sessionId')
+    if (!sessionId) throw new Error('sessionId is required')
+    const agent = ctx.agents?.get?.(sessionId) as { status?: unknown } | undefined
+    if (!agent || agent.status !== 'idle') {
+      throw new Error(`session ${sessionId} has no idle agent in this host process; pause the novel and retry.`)
+    }
+    const compaction = ctx.compaction as { compactNow?: (a: unknown, s: AbortSignal, id?: string) => Promise<unknown> } | undefined
+    if (!compaction || typeof compaction.compactNow !== 'function') {
+      throw new Error('compaction service is unavailable in this host process')
+    }
+    const result = await compaction.compactNow(agent, new AbortController().signal)
+    return sendJson(res, 200, { ok: true, result: result ?? null })
+  }
+
   if (method === 'GET' && route === 'agent-tavern/audit') {
     const sessionId = url.searchParams.get('sessionId')
     if (!sessionId) throw new Error('sessionId query is required')
@@ -622,6 +644,7 @@ async function handleApi(ctx, req, res) {
       ...(body.pipelineMode === 'chat' || body.pipelineMode === 'text' ? { pipelineMode: body.pipelineMode } : {}),
       ...(isTextCompletionConfig(body.textCompletion) ? { textCompletion: normalizeTextCompletion(body.textCompletion) } : {}),
       ...(body.textCompletion === null ? { textCompletion: undefined } : {}),
+      ...(body.compaction !== undefined ? { compaction: compactionOverrideOf(body.compaction) } : {}),
     }
     const state = await db.patchState(patch)
     await refreshActivePrompt()
@@ -2396,6 +2419,17 @@ function parsePresetOrThrow(data) {
 
 function isTextCompletionConfig(value) {
   return typeof value === 'object' && value !== null && typeof value.endpoint === 'string'
+}
+
+/** 压缩总结模型覆盖（提案 0006 §4.3）：成对非空 provider/model 才生效，
+ * null/空串/半空一律清除为 undefined（回落部署配置与会话路由）。 */
+function compactionOverrideOf(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const provider = typeof value.curatorProvider === 'string' ? value.curatorProvider.trim() : ''
+  const model = typeof value.curatorModel === 'string' ? value.curatorModel.trim() : ''
+  return provider !== '' && model !== ''
+    ? { curatorProvider: provider, curatorModel: model }
+    : undefined
 }
 
 function normalizeTextCompletion(value) {

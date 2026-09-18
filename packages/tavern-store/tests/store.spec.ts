@@ -328,6 +328,22 @@ describe('TavernStore', () => {
     })
   }))
 
+  it('状态：压缩总结模型覆盖成对存取，半空/空白形状视为未设置', withStore(async (store, dir) => {
+    await store.patchState({ compaction: { curatorProvider: 'siliconflow', curatorModel: 'zai-org/GLM-5.2' } })
+    expect((await store.getState()).compaction).toEqual({ curatorProvider: 'siliconflow', curatorModel: 'zai-org/GLM-5.2' })
+    // 持久化后重开（readState 归一化）保持不变。
+    await store.patchState({ compaction: { curatorProvider: 'siliconflow', curatorModel: 'zai-org/GLM-5.2' } })
+    expect((await store.getState()).compaction).toEqual({ curatorProvider: 'siliconflow', curatorModel: 'zai-org/GLM-5.2' })
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({
+      compaction: { curatorProvider: 'only-provider' },
+    }))
+    expect((await store.getState()).compaction).toBeUndefined()
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({
+      compaction: { curatorProvider: '  ', curatorModel: 'm' },
+    }))
+    expect((await store.getState()).compaction).toBeUndefined()
+  }))
+
   it('状态：legacy binding 迁移为 ST，AgentTavern 缺 mode 迁移为 native', withStore(async (store, dir) => {
     await writeFile(path.join(dir, 'state.json'), JSON.stringify({
       sessionBindings: {

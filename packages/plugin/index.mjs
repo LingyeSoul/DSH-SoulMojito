@@ -4611,7 +4611,8 @@ var TavernStore = class _TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
-      pipelineMode: parsed.pipelineMode === "text" ? "text" : "chat"
+      pipelineMode: parsed.pipelineMode === "text" ? "text" : "chat",
+      compaction: normalizeCompactionOverride(parsed.compaction)
     };
   }
   async assertChatRevision(file, expectedRevision) {
@@ -4692,6 +4693,14 @@ function normalizeTavernSessionBinding(value) {
 function normalizeSessionBindings(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value).map(([sessionId, binding]) => [sessionId, normalizeTavernSessionBinding(binding)]).filter((entry) => entry[1] !== void 0));
+}
+function normalizeCompactionOverride(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const provider = value.curatorProvider;
+  const model = value.curatorModel;
+  if (typeof provider !== "string" || typeof model !== "string") return void 0;
+  if (provider.trim() === "" || model.trim() === "") return void 0;
+  return { curatorProvider: provider, curatorModel: model };
 }
 function mergeRegexScripts(current, imported) {
   const merged = [...current];
@@ -8841,7 +8850,7 @@ function validateCheckpoint(value, sessionId) {
 
 // packages/plugin/src/index.ts
 var name = "dsh-tavern";
-var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents", "agentPresets", "tools"];
+var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents", "agentPresets", "tools", "compaction"];
 var API = "/api/dsh-tavern";
 var DEFAULT_USER = "User";
 var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
@@ -9154,6 +9163,21 @@ async function handleApi(ctx, req, res) {
     await projector.replay(session);
     return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
   }
+  if (method === "POST" && route === "compact") {
+    const body = await readJson(req).catch(() => ({}));
+    const sessionId = typeof body.sessionId === "string" ? body.sessionId : url.searchParams.get("sessionId");
+    if (!sessionId) throw new Error("sessionId is required");
+    const agent = ctx.agents?.get?.(sessionId);
+    if (!agent || agent.status !== "idle") {
+      throw new Error(`session ${sessionId} has no idle agent in this host process; pause the novel and retry.`);
+    }
+    const compaction = ctx.compaction;
+    if (!compaction || typeof compaction.compactNow !== "function") {
+      throw new Error("compaction service is unavailable in this host process");
+    }
+    const result = await compaction.compactNow(agent, new AbortController().signal);
+    return sendJson(res, 200, { ok: true, result: result ?? null });
+  }
   if (method === "GET" && route === "agent-tavern/audit") {
     const sessionId = url.searchParams.get("sessionId");
     if (!sessionId) throw new Error("sessionId query is required");
@@ -9315,7 +9339,8 @@ async function handleApi(ctx, req, res) {
       ...typeof body.agentTavernAllowGlobalWrites === "boolean" ? { agentTavernAllowGlobalWrites: body.agentTavernAllowGlobalWrites } : {},
       ...body.pipelineMode === "chat" || body.pipelineMode === "text" ? { pipelineMode: body.pipelineMode } : {},
       ...isTextCompletionConfig(body.textCompletion) ? { textCompletion: normalizeTextCompletion(body.textCompletion) } : {},
-      ...body.textCompletion === null ? { textCompletion: void 0 } : {}
+      ...body.textCompletion === null ? { textCompletion: void 0 } : {},
+      ...body.compaction !== void 0 ? { compaction: compactionOverrideOf(body.compaction) } : {}
     };
     const state = await db.patchState(patch);
     await refreshActivePrompt();
@@ -10809,6 +10834,12 @@ function parsePresetOrThrow(data) {
 }
 function isTextCompletionConfig(value) {
   return typeof value === "object" && value !== null && typeof value.endpoint === "string";
+}
+function compactionOverrideOf(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  const provider = typeof value.curatorProvider === "string" ? value.curatorProvider.trim() : "";
+  const model = typeof value.curatorModel === "string" ? value.curatorModel.trim() : "";
+  return provider !== "" && model !== "" ? { curatorProvider: provider, curatorModel: model } : void 0;
 }
 function normalizeTextCompletion(value) {
   return {

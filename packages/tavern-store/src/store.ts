@@ -117,6 +117,18 @@ export interface TavernState {
   pipelineMode: 'chat' | 'text'
   /** Text Completion 管线配置。 */
   textCompletion?: TextCompletionConfig
+  /**
+   * 压缩总结模型的运行时覆盖（提案 0006 §4.3）：剧情会话（AgentTavern 非分组、
+   * AgentNovel）压缩检查点的摘要目标。解析顺序：本覆盖 > 部署层 curator 行配置
+   * （profile patch）> 会话路由。undefined 表示未覆盖。
+   */
+  compaction?: TavernCompactionOverride
+}
+
+/** 面板可写的压缩设置；provider/model 必须成对出现，空串视为未设置。 */
+export interface TavernCompactionOverride {
+  curatorProvider: string
+  curatorModel: string
 }
 
 export interface Persona {
@@ -702,6 +714,7 @@ export class TavernStore {
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
       pipelineMode: parsed.pipelineMode === 'text' ? 'text' : 'chat',
+      compaction: normalizeCompactionOverride(parsed.compaction),
     }
   }
 
@@ -795,6 +808,16 @@ function normalizeSessionBindings(value: unknown): Record<string, TavernSessionB
   return Object.fromEntries(Object.entries(value)
     .map(([sessionId, binding]) => [sessionId, normalizeTavernSessionBinding(binding)] as const)
     .filter((entry): entry is readonly [string, TavernSessionBinding] => entry[1] !== undefined))
+}
+
+/** 压缩覆盖只接受成对的非空 provider/model；其余形状一律视为未设置。 */
+function normalizeCompactionOverride(value: unknown): TavernCompactionOverride | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const provider = (value as Record<string, unknown>).curatorProvider
+  const model = (value as Record<string, unknown>).curatorModel
+  if (typeof provider !== 'string' || typeof model !== 'string') return undefined
+  if (provider.trim() === '' || model.trim() === '') return undefined
+  return { curatorProvider: provider, curatorModel: model }
 }
 
 /** 按 scriptName 合并脚本：同名覆盖，其余追加；保持既有顺序。 */

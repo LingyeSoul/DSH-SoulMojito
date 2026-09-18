@@ -2285,7 +2285,8 @@ var TavernStore = class _TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
-      pipelineMode: parsed.pipelineMode === "text" ? "text" : "chat"
+      pipelineMode: parsed.pipelineMode === "text" ? "text" : "chat",
+      compaction: normalizeCompactionOverride(parsed.compaction)
     };
   }
   async assertChatRevision(file, expectedRevision) {
@@ -2366,6 +2367,14 @@ function normalizeTavernSessionBinding(value) {
 function normalizeSessionBindings(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value).map(([sessionId, binding]) => [sessionId, normalizeTavernSessionBinding(binding)]).filter((entry) => entry[1] !== void 0));
+}
+function normalizeCompactionOverride(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const provider = value.curatorProvider;
+  const model = value.curatorModel;
+  if (typeof provider !== "string" || typeof model !== "string") return void 0;
+  if (provider.trim() === "" || model.trim() === "") return void 0;
+  return { curatorProvider: provider, curatorModel: model };
 }
 function mergeRegexScripts(current, imported) {
   const merged = [...current];

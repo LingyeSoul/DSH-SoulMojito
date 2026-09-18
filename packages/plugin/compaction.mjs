@@ -2299,7 +2299,8 @@ var TavernStore = class _TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
-      pipelineMode: parsed.pipelineMode === "text" ? "text" : "chat"
+      pipelineMode: parsed.pipelineMode === "text" ? "text" : "chat",
+      compaction: normalizeCompactionOverride(parsed.compaction)
     };
   }
   async assertChatRevision(file, expectedRevision) {
@@ -2380,6 +2381,14 @@ function normalizeTavernSessionBinding(value) {
 function normalizeSessionBindings(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value).map(([sessionId, binding]) => [sessionId, normalizeTavernSessionBinding(binding)]).filter((entry) => entry[1] !== void 0));
+}
+function normalizeCompactionOverride(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const provider = value.curatorProvider;
+  const model = value.curatorModel;
+  if (typeof provider !== "string" || typeof model !== "string") return void 0;
+  if (provider.trim() === "" || model.trim() === "") return void 0;
+  return { curatorProvider: provider, curatorModel: model };
 }
 function mergeRegexScripts(current, imported) {
   const merged = [...current];
@@ -2470,11 +2479,41 @@ function splitCuratorConfig(config) {
       if (typeof value === "string" && value.trim() !== "") curator.curatorModel = value;
     } else if (key === "curatorMaxTokens") {
       if (typeof value === "number" && Number.isInteger(value) && value > 0) curator.curatorMaxTokens = value;
+    } else if (key === "usageThresholdRatio") {
+      if (typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 1) curator.usageThresholdRatio = value;
     } else {
       basic[key] = value;
     }
   }
   return { curator, basic };
+}
+var DEFAULT_USAGE_THRESHOLD_RATIO = 0.7;
+function finiteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+function projectedPressureTokens(state) {
+  if (!finiteNumber(state.pressureTokens) || !finiteNumber(state.sampledSurfaceTokens)) return void 0;
+  const surface = finiteNumber(state.surfaceTokens) ? state.surfaceTokens : state.sampledSurfaceTokens;
+  return Math.max(0, state.pressureTokens + surface - state.sampledSurfaceTokens);
+}
+function usagePressureDecision(state, usageThresholdRatio) {
+  if (state === void 0 || !finiteNumber(state.contextWindow) || state.contextWindow <= 0) return { kind: "passthrough" };
+  const projected = projectedPressureTokens(state);
+  if (projected === void 0) return { kind: "passthrough" };
+  return projected >= usageThresholdRatio * state.contextWindow ? { kind: "delegate" } : { kind: "block" };
+}
+function isStorySessionBinding(binding) {
+  if (binding === void 0 || typeof binding !== "object") return false;
+  if (binding.architecture === "agent-novel") {
+    return typeof binding.novelId === "string" && binding.novelId.trim() !== "";
+  }
+  return binding.architecture === "agent-tavern" && binding.group !== true;
+}
+function targetPair(provider, model) {
+  return typeof provider === "string" && provider.trim().length > 0 && typeof model === "string" && model.trim().length > 0 ? { provider, model } : void 0;
+}
+function mergeSummarizerTarget(layers) {
+  return targetPair(layers.runtime?.curatorProvider, layers.runtime?.curatorModel) ?? targetPair(layers.config?.curatorProvider, layers.config?.curatorModel) ?? targetPair(layers.routed?.provider, layers.routed?.model) ?? targetPair(layers.agentOptions?.provider, layers.agentOptions?.model);
 }
 
 // packages/plugin/src/compaction/curator.ts
@@ -2496,13 +2535,44 @@ var { BlockAssembler, createUserMessage, contentHasImage, LlmError } = await imp
 var TavernCompactionCurator = class extends BasicCompactionEngine {
   static inject = ["llm", "tokenMeter", "sessions"];
   curator;
+  usageThresholdRatio;
   constructor(ctx, config = {}) {
     super(ctx, basicConfigOnly(config));
     this.curator = readCuratorOptions(config);
+    this.usageThresholdRatio = this.curator.usageThresholdRatio ?? DEFAULT_USAGE_THRESHOLD_RATIO;
+    info(ctx, `dsh-tavern/compaction curator loaded: usageThresholdRatio=${this.usageThresholdRatio} curatorTarget=${this.curator.curatorProvider ?? ""}/${this.curator.curatorModel ?? "(route)"} summarization=${JSON.stringify(this.config.summarizationProvider ?? "")}`);
   }
-  /** 非 AgentTavern 会话透传宿主默认摘要；Tavern 会话改用 RP 检查点。 */
+  /**
+   * 真实用量闸门（提案 0006 §4.2）：pressure 触发先按 contextPressure 投影决策——
+   * 真实压力未到直接拦截（防启发式高估导致过早压缩）；锚定不可用（冷启动、投影
+   * 缺失）维持宿主原生行为；真实压力已到则委托宿主压力路径，若宿主启发式门没过
+   * （低估超过策略阈值补偿范围）再以 context-overflow 无门限路径兜底一次。
+   * context-overflow 触发本身原样透传，宿主溢出恢复不受影响。
+   */
+  async compactIfNeeded(agent, trigger, signal) {
+    if (trigger !== "pressure") {
+      if (trigger === "context-overflow") {
+        const state2 = pressureStateOf(this.ctx, agent.session);
+        info(this.ctx, `curator overflow-recovery: pressureTokens=${state2?.pressureTokens ?? "none"} surfaceTokens=${state2?.surfaceTokens ?? "none"} contextWindow=${state2?.contextWindow ?? "none"}`);
+      }
+      return super.compactIfNeeded(agent, trigger, signal);
+    }
+    const state = pressureStateOf(this.ctx, agent.session);
+    const decision = usagePressureDecision(state, this.usageThresholdRatio);
+    if (decision.kind === "block") return null;
+    if (decision.kind === "passthrough") return super.compactIfNeeded(agent, trigger, signal);
+    const result = await super.compactIfNeeded(agent, trigger, signal);
+    if (result !== null && result !== void 0) return result;
+    try {
+      return await super.compactIfNeeded(agent, "context-overflow", signal);
+    } catch (error) {
+      warn(this.ctx, `usage-anchored compaction fallback failed: ${messageOf(error)}`);
+      return null;
+    }
+  }
+  /** 非剧情会话透传宿主默认摘要；剧情会话改用 RP 检查点。 */
   async summarize(input, agent, signal) {
-    if (!await isAgentTavernSession(agent.session.id)) return super.summarize(input, agent, signal);
+    if (!await isStorySession(agent.session.id)) return super.summarize(input, agent, signal);
     return summarizeStoryCheckpoint(this.ctx, this.config, this.curator, input, agent, signal);
   }
 };
@@ -2514,19 +2584,43 @@ function readCuratorOptions(config) {
   const { curator } = splitCuratorConfig(config);
   return curator;
 }
-function resolveCuratorTarget(config, curator, agent) {
-  if (curator.curatorProvider !== void 0 && curator.curatorModel !== void 0) {
-    return { provider: curator.curatorProvider, model: curator.curatorModel };
+function pressureStateOf(ctx, session) {
+  try {
+    const state = ctx.sessionProjections?.stateOf?.(session, "contextPressure");
+    return typeof state === "object" && state !== null ? state : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function warn(ctx, message) {
+  try {
+    ctx.logger?.warn?.(message);
+  } catch {
+  }
+}
+function info(ctx, message) {
+  try {
+    ctx.logger?.info?.(message);
+  } catch {
+  }
+}
+function messageOf(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+async function resolveCuratorTarget(config, curator, agent) {
+  let runtime;
+  try {
+    runtime = (await (await tavernStore()).getState()).compaction;
+  } catch {
+    runtime = void 0;
   }
   const routed = agent.session.requestHeader()?.config;
-  if (typeof routed?.provider === "string" && routed.provider.length > 0 && typeof routed.model === "string" && routed.model.length > 0) {
-    return { provider: routed.provider, model: routed.model };
-  }
-  const options = agent.options;
-  if (typeof options?.provider === "string" && options.provider.length > 0 && typeof options.model === "string" && options.model.length > 0) {
-    return { provider: options.provider, model: options.model };
-  }
-  return void 0;
+  return mergeSummarizerTarget({
+    runtime,
+    config: curator,
+    routed: { provider: routed?.provider, model: routed?.model },
+    agentOptions: { provider: agent.options?.provider, model: agent.options?.model }
+  });
 }
 async function summarizeStoryCheckpoint(ctx, config, curator, input, agent, signal) {
   const target = resolveCuratorTarget(config, curator, agent);
@@ -2600,10 +2694,10 @@ function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
   return join2(resolve(configured || join2(homedir(), ".dsh")), ...segments);
 }
-async function isAgentTavernSession(sessionId) {
+async function isStorySession(sessionId) {
   try {
     const binding = (await (await tavernStore()).getState()).sessionBindings[sessionId];
-    return binding !== void 0 && binding.architecture === "agent-tavern" && binding.group !== true;
+    return isStorySessionBinding(binding);
   } catch {
     return false;
   }
