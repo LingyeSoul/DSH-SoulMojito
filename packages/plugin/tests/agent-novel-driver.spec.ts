@@ -418,6 +418,7 @@ describe('NovelDriver scheduling', () => {
     })
     const text = textOf(noticeOf(agent, 0))
     expect(text).toContain('novel_outline_revise')
+    expect(text).toContain('droppedChapterIds')
     expect(text).not.toContain('novel_unit_claim')
     expect((await novels.getNovel(novelId))?.run.inFlightIntent?.kind).toBe('outline-revise')
     await driver.dispose()

@@ -93,7 +93,7 @@ curator 配置行与宿主策略共用 settings.yaml 的 `compaction-basic:` 键
 
 ### 4.4 降级与版本漂移
 
-- 宿主无 `sessionProjections` 服务、投影未注册、状态形状漂移 → `usagePressureDecision` 收到 `undefined`/不完整形状 → `passthrough`，行为与今日完全一致。
+- 宿主无 `sessionProjections` 服务、投影未注册、状态形状漂移 → `usagePressureDecision` 收到 `undefined`/不完整形状 → `passthrough`，压缩决策与今日完全一致；但降级不再无声——curator 按 (session, 原因) 去重打一条 `usage gate unanchored` warn（2026-09-18 增：真机 churn 事故里静默降级让闸门形同虚设，重启会话后也无人察觉；去重集有上限，满即清空重计）。
 - 宿主未来重命名 `compactIfNeeded` → 覆写不再被调用，自然回退原生策略（不 fail）。
 - 读取用 `this.ctx.sessionProjections?.stateOf?.(…)` 容忍式调用，不新增 `static inject` 硬依赖。
 
@@ -104,7 +104,7 @@ curator 配置行与宿主策略共用 settings.yaml 的 `compaction-basic:` 键
 | 中文正文低估 ~2x（本次故障） | 真实闸门 0.7×512k=358k 触发 → 宿主压力路径（策略 0.2 下限必过）压缩 → 溢出前拦截 |
 | 极端低估（估算 < 策略下限） | delegate + super no-op → `context-overflow` 兜底压一次 |
 | 启发式**高**估（过早压缩风险） | 真实压力未到 → `block`，跳过本次触发（附带收益） |
-| 冷启动会话（无 usage 样本） | `passthrough`，宿主原生启发式 |
+| 冷启动会话（无 usage 样本） | `passthrough`，宿主原生启发式；每 (session, 原因) 附一条 unanchored warn（§4.4） |
 | 单步暴涨越过窗口（一个大工具结果） | 闸门在 pre-step 只能看上一步之后的投影；来不及的部分仍由宿主溢出恢复兜底（本设计不削弱它） |
 | 压缩中再触发 | 宿主 `assertNoActiveCompaction` / replaceGeneration 语义原样生效 |
 

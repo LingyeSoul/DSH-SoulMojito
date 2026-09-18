@@ -168,6 +168,7 @@ const outlinePayloadParameter: Record<string, unknown> = {
     },
     chapters: {
       type: 'array',
+      description: 'The whole plan. novel_outline_revise replaces every chapter: carry forward ALL existing chapters (page novel_outline_read until truncated is false) and omit one only to remove it, listing its chapterId in droppedChapterIds.',
       items: {
         type: 'object', additionalProperties: false,
         properties: {
@@ -178,6 +179,11 @@ const outlinePayloadParameter: Record<string, unknown> = {
         },
         required: ['chapterId', 'order', 'title', 'purpose', 'entryCondition', 'exitCondition'],
       },
+    },
+    droppedChapterIds: {
+      type: 'array',
+      description: 'chapterIds intentionally removed from the plan (revise only). Every existing chapter absent from chapters must be listed here; omit the field when nothing is removed.',
+      items: { type: 'string' },
     },
     currentChapterId: { type: ['string', 'null'], description: 'chapterId of the current chapter; null only when chapters is empty.' },
     scenes: {
@@ -505,7 +511,7 @@ function createTools(): ToolDefinition[] {
       expectedRevision: { type: 'string', required: true, description: 'Snapshot revision you read via novel_status_read.' },
       expectedOutlineRevision: { type: 'string', required: true, description: 'Outline revision this revision is based on.' },
       reason: { type: 'string', required: true, description: 'Why the plan changes; cite the directive ids or planning reason.' },
-      changes: { ...outlinePayloadParameter, required: true, description: 'The complete next outline payload (not a patch).' },
+      changes: { ...outlinePayloadParameter, required: true, description: 'The complete next outline payload (not a patch). Every existing chapter absent from it counts as a removal and must be declared in droppedChapterIds.' },
       handledRequirements: { ...handledRequirementsParameter, description: 'Per-directive results for the pending contiguous prefix. May be omitted only when nothing is handled.' },
     }, outlineWriteOutput, async (args, exec) => {
       const novelId = await novelBindingFor(exec)

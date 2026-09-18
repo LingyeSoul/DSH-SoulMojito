@@ -52,6 +52,7 @@ import {
   totalEffectiveCharacters,
   validateCreateConfig,
   validateOutlinePayload,
+  validateRunBudgets,
   type BodyCommit,
   type CanonChange,
   type ChapterCompletion,
@@ -62,6 +63,7 @@ import {
   type NovelOutline,
   type NovelOutlinePayload,
   type NovelPauseReason,
+  type NovelRunBudgets,
   type NovelRunState,
   type NovelSnapshot,
   type NovelSummary,
@@ -376,7 +378,7 @@ export class NovelStore {
 
   async patchNovelMeta(
     novelId: string,
-    input: { expectedRevision: string; patch: { title?: string; genre?: string; premiseNote?: string }; cause: string },
+    input: { expectedRevision: string; patch: { title?: string; genre?: string; premiseNote?: string; budgets?: NovelRunBudgets }; cause: string },
   ): Promise<{ revision: string }> {
     if (typeof input.cause !== 'string' || input.cause.trim() === '') throw new NovelConfigError({ message: 'patch cause must be a non-empty string' })
     const patch = input.patch
@@ -389,13 +391,25 @@ export class NovelStore {
     if (patch.premiseNote !== undefined && typeof patch.premiseNote !== 'string') {
       throw new NovelConfigError({ message: 'patch.premiseNote must be a string' })
     }
+    // Edited budgets meet the created ones' contract (§7.1); the panel sends
+    // the complete object, so partial objects fall out as field errors.
+    const budgetErrors = patch.budgets === undefined ? [] : validateRunBudgets(patch.budgets)
+    if (budgetErrors.length > 0) throw new NovelConfigError({ message: 'invalid patch.budgets', errors: budgetErrors })
     return this.mutate(novelId, async () => {
       const { dir, current } = await this.beginMutation(novelId)
       this.assertRevision(current, input.expectedRevision)
       const next: NovelSnapshot = {
         ...current,
         updatedAt: new Date().toISOString(),
-        config: { ...current.config, ...(patch.title !== undefined ? { title: patch.title } : {}), ...(patch.genre !== undefined ? { genre: patch.genre } : {}) },
+        config: {
+          ...current.config,
+          ...(patch.title !== undefined ? { title: patch.title } : {}),
+          ...(patch.genre !== undefined ? { genre: patch.genre } : {}),
+          // Budgets are read fresh from the snapshot by turn accounting
+          // (noteTurn/noteDeduceRun), so an edit applies from the next turn
+          // without touching a live run (§13).
+          ...(patch.budgets !== undefined ? { budgets: structuredClone(patch.budgets) } : {}),
+        },
         premiseNote: patch.premiseNote ?? current.premiseNote,
       }
       const revision = await this.publish(dir, current.revision, next, `patch-meta:${input.cause}`)
@@ -471,6 +485,12 @@ export class NovelStore {
   ): Promise<{ outlineRevision: string; revision: string; watermark: number }> {
     const payloadErrors = validateOutlinePayload(input.outline)
     if (payloadErrors.length > 0) throw new NovelConfigError({ message: 'invalid outline payload', errors: payloadErrors })
+    if (input.outline.droppedChapterIds?.length) {
+      throw new NovelConfigError({
+        message: 'invalid outline payload',
+        errors: [{ field: 'droppedChapterIds', message: 'nothing can be dropped when creating the initial outline' }],
+      })
+    }
     return this.mutate(novelId, async () => {
       const { dir, current } = await this.beginMutation(novelId)
       this.assertRevision(current, input.expectedRevision)
@@ -523,6 +543,7 @@ export class NovelStore {
         throw new NovelRevisionConflictError({ expected: input.expectedRevision, actual: current.revision, detail: 'claimed writing units in flight' })
       }
       this.assertProtectedChapters(previous, current, input.changes.chapters)
+      this.assertAcknowledgedChapterDrops(previous, input.changes)
       const handled = this.validateHandledRequirements(current, input.handledRequirements)
       const outlineRevision = hash16({ kind: 'outline', parent: previous.outlineRevision, reason: input.reason, payload: input.changes })
       const built: NovelOutline = {
@@ -1500,6 +1521,33 @@ export class NovelStore {
       }
     }
     if (violations.length > 0) throw new NovelPreconditionError({ rule: 'committed-chapters', violations })
+  }
+
+  /**
+   * §6.1 allows pruning uncommitted chapters, but only explicitly: the revise
+   * payload replaces the whole plan, so a model that merely echoes back the
+   * chapter window it read (a 150-chapter plan shrank to its 12 written
+   * chapters in the field) must not silently delete the unwritten rest. Every
+   * previous chapter absent from the payload must be declared in
+   * droppedChapterIds; declarations must reference real, actually-removed
+   * chapters.
+   */
+  private assertAcknowledgedChapterDrops(previous: NovelOutline, changes: NovelOutlinePayload): void {
+    const declared = new Set(changes.droppedChapterIds ?? [])
+    const nextIds = new Set(changes.chapters.map((chapter) => chapter.chapterId))
+    const previousIds = previous.chapters.map((chapter) => chapter.chapterId)
+    const violations: string[] = []
+    for (const id of declared) {
+      if (!previousIds.includes(id)) violations.push(`drop-not-planned:${id}`)
+      else if (nextIds.has(id)) violations.push(`drop-contradicts-payload:${id}`)
+    }
+    const unacknowledged = previousIds.filter((id) => !nextIds.has(id) && !declared.has(id))
+    const shown = unacknowledged.slice(0, 20)
+    for (const id of shown) violations.push(`chapter-dropped-without-acknowledgement:${id}`)
+    if (unacknowledged.length > shown.length) {
+      violations.push(`plus ${unacknowledged.length - shown.length} more silent drops; carry forward every existing chapter or list each removed chapterId in droppedChapterIds`)
+    }
+    if (violations.length > 0) throw new NovelPreconditionError({ rule: 'unacknowledged-chapter-drops', violations })
   }
 
   /** Run-state transitions after an outline create/revise (§4.3, §9.4). */

@@ -2699,6 +2699,23 @@ function countEffectiveCharacters(text) {
 function isPositiveInteger(value) {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
+function validateRunBudgets(budgets) {
+  if (typeof budgets !== "object" || budgets === null || Array.isArray(budgets)) {
+    return [{ field: "budgets", message: "budgets is required" }];
+  }
+  const errors = [];
+  const b = budgets;
+  for (const field of ["maxTurns", "maxDurationMs", "stallThresholdTurns", "consecutiveFailureLimit", "maxDeduceRuns"]) {
+    if (!isPositiveInteger(b[field])) {
+      errors.push({ field: `budgets.${field}`, message: `${field} must be a positive integer` });
+    }
+  }
+  const retry = b.externalRetry;
+  if (typeof retry !== "object" || retry === null || Array.isArray(retry) || !isPositiveInteger(retry.maxAttempts) || !isPositiveInteger(retry.backoffMs)) {
+    errors.push({ field: "budgets.externalRetry", message: "externalRetry.maxAttempts and backoffMs must be positive integers" });
+  }
+  return errors;
+}
 function validateCreateConfig(config) {
   const errors = [];
   const c = config;
@@ -2751,21 +2768,7 @@ function validateCreateConfig(config) {
       errors.push({ field, message: `${field} must not contain duplicates` });
     }
   }
-  const budgets = c.budgets;
-  if (typeof budgets !== "object" || budgets === null || Array.isArray(budgets)) {
-    errors.push({ field: "budgets", message: "budgets is required" });
-  } else {
-    const b = budgets;
-    for (const field of ["maxTurns", "maxDurationMs", "stallThresholdTurns", "consecutiveFailureLimit", "maxDeduceRuns"]) {
-      if (!isPositiveInteger(b[field])) {
-        errors.push({ field: `budgets.${field}`, message: `${field} must be a positive integer` });
-      }
-    }
-    const retry = b.externalRetry;
-    if (typeof retry !== "object" || retry === null || Array.isArray(retry) || !isPositiveInteger(retry.maxAttempts) || !isPositiveInteger(retry.backoffMs)) {
-      errors.push({ field: "budgets.externalRetry", message: "externalRetry.maxAttempts and backoffMs must be positive integers" });
-    }
-  }
+  errors.push(...validateRunBudgets(c.budgets));
   return errors;
 }
 function totalEffectiveCharacters(commits) {
@@ -2916,6 +2919,14 @@ function validateOutlinePayload(payload) {
         errors.push({ field: `foreshadowing[${index}].required`, message: "required must be a boolean" });
       }
     });
+  }
+  const droppedChapterIds = p.droppedChapterIds;
+  if (droppedChapterIds !== void 0) {
+    if (!Array.isArray(droppedChapterIds) || droppedChapterIds.some((id) => !isSafeId(id))) {
+      errors.push({ field: "droppedChapterIds", message: "droppedChapterIds must be an array of chapterIds matching [A-Za-z0-9][A-Za-z0-9_-]{0,63}" });
+    } else if (new Set(droppedChapterIds).size !== droppedChapterIds.length) {
+      errors.push({ field: "droppedChapterIds", message: "droppedChapterIds must not contain duplicates" });
+    }
   }
   return errors;
 }
@@ -3349,13 +3360,23 @@ var NovelStore = class _NovelStore {
     if (patch.premiseNote !== void 0 && typeof patch.premiseNote !== "string") {
       throw new NovelConfigError({ message: "patch.premiseNote must be a string" });
     }
+    const budgetErrors = patch.budgets === void 0 ? [] : validateRunBudgets(patch.budgets);
+    if (budgetErrors.length > 0) throw new NovelConfigError({ message: "invalid patch.budgets", errors: budgetErrors });
     return this.mutate(novelId, async () => {
       const { dir, current } = await this.beginMutation(novelId);
       this.assertRevision(current, input.expectedRevision);
       const next = {
         ...current,
         updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-        config: { ...current.config, ...patch.title !== void 0 ? { title: patch.title } : {}, ...patch.genre !== void 0 ? { genre: patch.genre } : {} },
+        config: {
+          ...current.config,
+          ...patch.title !== void 0 ? { title: patch.title } : {},
+          ...patch.genre !== void 0 ? { genre: patch.genre } : {},
+          // Budgets are read fresh from the snapshot by turn accounting
+          // (noteTurn/noteDeduceRun), so an edit applies from the next turn
+          // without touching a live run (§13).
+          ...patch.budgets !== void 0 ? { budgets: structuredClone(patch.budgets) } : {}
+        },
         premiseNote: patch.premiseNote ?? current.premiseNote
       };
       const revision = await this.publish(dir, current.revision, next, `patch-meta:${input.cause}`);
@@ -3420,6 +3441,12 @@ var NovelStore = class _NovelStore {
   async createOutline(novelId, input) {
     const payloadErrors = validateOutlinePayload(input.outline);
     if (payloadErrors.length > 0) throw new NovelConfigError({ message: "invalid outline payload", errors: payloadErrors });
+    if (input.outline.droppedChapterIds?.length) {
+      throw new NovelConfigError({
+        message: "invalid outline payload",
+        errors: [{ field: "droppedChapterIds", message: "nothing can be dropped when creating the initial outline" }]
+      });
+    }
     return this.mutate(novelId, async () => {
       const { dir, current } = await this.beginMutation(novelId);
       this.assertRevision(current, input.expectedRevision);
@@ -3467,6 +3494,7 @@ var NovelStore = class _NovelStore {
         throw new NovelRevisionConflictError({ expected: input.expectedRevision, actual: current.revision, detail: "claimed writing units in flight" });
       }
       this.assertProtectedChapters(previous, current, input.changes.chapters);
+      this.assertAcknowledgedChapterDrops(previous, input.changes);
       const handled = this.validateHandledRequirements(current, input.handledRequirements);
       const outlineRevision = hash16({ kind: "outline", parent: previous.outlineRevision, reason: input.reason, payload: input.changes });
       const built = {
@@ -4350,6 +4378,32 @@ var NovelStore = class _NovelStore {
     }
     if (violations.length > 0) throw new NovelPreconditionError({ rule: "committed-chapters", violations });
   }
+  /**
+   * §6.1 allows pruning uncommitted chapters, but only explicitly: the revise
+   * payload replaces the whole plan, so a model that merely echoes back the
+   * chapter window it read (a 150-chapter plan shrank to its 12 written
+   * chapters in the field) must not silently delete the unwritten rest. Every
+   * previous chapter absent from the payload must be declared in
+   * droppedChapterIds; declarations must reference real, actually-removed
+   * chapters.
+   */
+  assertAcknowledgedChapterDrops(previous, changes) {
+    const declared = new Set(changes.droppedChapterIds ?? []);
+    const nextIds = new Set(changes.chapters.map((chapter) => chapter.chapterId));
+    const previousIds = previous.chapters.map((chapter) => chapter.chapterId);
+    const violations = [];
+    for (const id of declared) {
+      if (!previousIds.includes(id)) violations.push(`drop-not-planned:${id}`);
+      else if (nextIds.has(id)) violations.push(`drop-contradicts-payload:${id}`);
+    }
+    const unacknowledged = previousIds.filter((id) => !nextIds.has(id) && !declared.has(id));
+    const shown = unacknowledged.slice(0, 20);
+    for (const id of shown) violations.push(`chapter-dropped-without-acknowledgement:${id}`);
+    if (unacknowledged.length > shown.length) {
+      violations.push(`plus ${unacknowledged.length - shown.length} more silent drops; carry forward every existing chapter or list each removed chapterId in droppedChapterIds`);
+    }
+    if (violations.length > 0) throw new NovelPreconditionError({ rule: "unacknowledged-chapter-drops", violations });
+  }
   /** Run-state transitions after an outline create/revise (§4.3, §9.4). */
   runAfterOutlineChange(run, approvalMode, outlineRevision, requirements) {
     const blocked = requirements.some((record) => record.status === "blocked");
@@ -4908,6 +4962,7 @@ var outlinePayloadParameter = {
     },
     chapters: {
       type: "array",
+      description: "The whole plan. novel_outline_revise replaces every chapter: carry forward ALL existing chapters (page novel_outline_read until truncated is false) and omit one only to remove it, listing its chapterId in droppedChapterIds.",
       items: {
         type: "object",
         additionalProperties: false,
@@ -4923,6 +4978,11 @@ var outlinePayloadParameter = {
         },
         required: ["chapterId", "order", "title", "purpose", "entryCondition", "exitCondition"]
       }
+    },
+    droppedChapterIds: {
+      type: "array",
+      description: "chapterIds intentionally removed from the plan (revise only). Every existing chapter absent from chapters must be listed here; omit the field when nothing is removed.",
+      items: { type: "string" }
     },
     currentChapterId: { type: ["string", "null"], description: "chapterId of the current chapter; null only when chapters is empty." },
     scenes: {
@@ -5304,7 +5364,7 @@ function createTools() {
       expectedRevision: { type: "string", required: true, description: "Snapshot revision you read via novel_status_read." },
       expectedOutlineRevision: { type: "string", required: true, description: "Outline revision this revision is based on." },
       reason: { type: "string", required: true, description: "Why the plan changes; cite the directive ids or planning reason." },
-      changes: { ...outlinePayloadParameter, required: true, description: "The complete next outline payload (not a patch)." },
+      changes: { ...outlinePayloadParameter, required: true, description: "The complete next outline payload (not a patch). Every existing chapter absent from it counts as a removal and must be declared in droppedChapterIds." },
       handledRequirements: { ...handledRequirementsParameter, description: "Per-directive results for the pending contiguous prefix. May be omitted only when nothing is handled." }
     }, outlineWriteOutput, async (args, exec) => {
       const novelId = await novelBindingFor(exec);

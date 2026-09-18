@@ -86,6 +86,30 @@ function isPositiveInteger(value: unknown): value is number {
 }
 
 /**
+ * Structural validation for run budgets (§7.1, §13). Shared by creation and
+ * meta patches so edited budgets meet the same contract as created ones.
+ */
+export function validateRunBudgets(budgets: unknown): ValidationError[] {
+  if (typeof budgets !== 'object' || budgets === null || Array.isArray(budgets)) {
+    return [{ field: 'budgets', message: 'budgets is required' }]
+  }
+  const errors: ValidationError[] = []
+  const b = budgets as Record<string, unknown>
+  for (const field of ['maxTurns', 'maxDurationMs', 'stallThresholdTurns', 'consecutiveFailureLimit', 'maxDeduceRuns'] as const) {
+    if (!isPositiveInteger(b[field])) {
+      errors.push({ field: `budgets.${field}`, message: `${field} must be a positive integer` })
+    }
+  }
+  const retry = b.externalRetry
+  if (typeof retry !== 'object' || retry === null || Array.isArray(retry)
+    || !isPositiveInteger((retry as Record<string, unknown>).maxAttempts)
+    || !isPositiveInteger((retry as Record<string, unknown>).backoffMs)) {
+    errors.push({ field: 'budgets.externalRetry', message: 'externalRetry.maxAttempts and backoffMs must be positive integers' })
+  }
+  return errors
+}
+
+/**
  * Structural validation for creation config (§7.1: obviously incompatible
  * configs are rejected, never silently clamped). Returns concrete errors;
  * createNovel throws NovelConfigError when the list is non-empty.
@@ -142,23 +166,7 @@ export function validateCreateConfig(config: NovelCreateConfig): ValidationError
       errors.push({ field, message: `${field} must not contain duplicates` })
     }
   }
-  const budgets = c.budgets
-  if (typeof budgets !== 'object' || budgets === null || Array.isArray(budgets)) {
-    errors.push({ field: 'budgets', message: 'budgets is required' })
-  } else {
-    const b = budgets as Record<string, unknown>
-    for (const field of ['maxTurns', 'maxDurationMs', 'stallThresholdTurns', 'consecutiveFailureLimit', 'maxDeduceRuns'] as const) {
-      if (!isPositiveInteger(b[field])) {
-        errors.push({ field: `budgets.${field}`, message: `${field} must be a positive integer` })
-      }
-    }
-    const retry = b.externalRetry
-    if (typeof retry !== 'object' || retry === null || Array.isArray(retry)
-      || !isPositiveInteger((retry as Record<string, unknown>).maxAttempts)
-      || !isPositiveInteger((retry as Record<string, unknown>).backoffMs)) {
-      errors.push({ field: 'budgets.externalRetry', message: 'externalRetry.maxAttempts and backoffMs must be positive integers' })
-    }
-  }
+  errors.push(...validateRunBudgets(c.budgets))
   return errors
 }
 
@@ -253,6 +261,13 @@ export interface NovelOutlinePayload {
   currentChapterId: string | null
   scenes: readonly ScenePlan[]
   foreshadowing: readonly Foreshadowing[]
+  /**
+   * Revision-only: chapterIds intentionally pruned from the plan (§6.1 allows
+   * dropping uncommitted chapters). The payload replaces the whole plan, so
+   * every previous chapter absent from `chapters` must be declared here —
+   * otherwise a windowed novel_outline_read echo silently shrinks the plan.
+   */
+  droppedChapterIds?: readonly string[]
 }
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
@@ -397,6 +412,14 @@ export function validateOutlinePayload(payload: NovelOutlinePayload): Validation
         errors.push({ field: `foreshadowing[${index}].required`, message: 'required must be a boolean' })
       }
     })
+  }
+  const droppedChapterIds = p.droppedChapterIds
+  if (droppedChapterIds !== undefined) {
+    if (!Array.isArray(droppedChapterIds) || droppedChapterIds.some((id) => !isSafeId(id))) {
+      errors.push({ field: 'droppedChapterIds', message: 'droppedChapterIds must be an array of chapterIds matching [A-Za-z0-9][A-Za-z0-9_-]{0,63}' })
+    } else if (new Set(droppedChapterIds).size !== droppedChapterIds.length) {
+      errors.push({ field: 'droppedChapterIds', message: 'droppedChapterIds must not contain duplicates' })
+    }
   }
   return errors
 }

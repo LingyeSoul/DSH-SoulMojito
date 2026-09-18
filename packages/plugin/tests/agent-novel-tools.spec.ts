@@ -225,6 +225,11 @@ describe('AgentNovel author tools', () => {
     }
   })
 
+  it('novel_outline_revise declares droppedChapterIds so plan pruning stays explicit (§6.1)', () => {
+    const changes = tools.get('novel_outline_revise')!.parameters.properties.changes as { properties: Record<string, unknown> }
+    expect(changes.properties.droppedChapterIds).toMatchObject({ type: 'array' })
+  })
+
   it('rejects agents without an agent-novel binding', async () => {
     await expect(tools.get('novel_status_read')!.execute({}, { agent: { id: 'unknown' } }))
       .rejects.toThrow('AgentNovel binding is unavailable')

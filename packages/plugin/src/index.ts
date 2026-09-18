@@ -37,6 +37,7 @@ import {
   totalEffectiveCharacters,
   validateCreateConfig,
   type NovelCreateConfig,
+  type NovelRunBudgets,
   type NovelSnapshot,
   type TavernModelSelection,
 } from '../../tavern-store/src/index.js'
@@ -1378,7 +1379,7 @@ async function handleNovelsApi(
     }
     const result = await novels.patchNovelMeta(novelId, {
       expectedRevision: body.expectedRevision,
-      patch: body.patch as { title?: string; genre?: string },
+      patch: body.patch as { title?: string; genre?: string; budgets?: NovelRunBudgets },
       cause: typeof body.cause === 'string' && body.cause.trim() !== '' ? body.cause : 'panel-edit',
     })
     return sendJson(res, 200, { ok: true, revision: result.revision })

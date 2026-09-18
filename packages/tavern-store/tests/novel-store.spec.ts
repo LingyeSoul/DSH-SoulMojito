@@ -164,6 +164,24 @@ describe('NovelStore 项目', () => {
     expect(repatched?.config.title).toBe('灯塔纪事')
     expect(repatched?.premiseNote).toBe('关于守望')
     expect(repatched?.revision).toBe(patched.revision)
+
+    // 预算补丁：面板可编辑运行预算（长章节场景），noteTurn 实时读取快照故下一轮生效。
+    const budgeted = await novels.patchNovelMeta(created.novelId, {
+      expectedRevision: patched.revision,
+      patch: { budgets: { ...repatched!.config.budgets, maxTurns: 500 } },
+      cause: 'raise-turn-budget',
+    })
+    const rebudgeted = await novels.getNovel(created.novelId)
+    expect(rebudgeted?.config.budgets.maxTurns).toBe(500)
+    expect(rebudgeted?.config.budgets.externalRetry).toEqual(repatched?.config.budgets.externalRetry)
+    expect(rebudgeted?.config.title).toBe('灯塔纪事')
+    expect(rebudgeted?.revision).toBe(budgeted.revision)
+
+    await expect(novels.patchNovelMeta(created.novelId, {
+      expectedRevision: budgeted.revision,
+      patch: { budgets: { ...rebudgeted!.config.budgets, maxTurns: 0 } },
+      cause: 'bad-budget',
+    })).rejects.toBeInstanceOf(NovelConfigError)
     await expect(novels.patchNovelMeta(created.novelId, { expectedRevision: created.revision, patch: { title: 'X' }, cause: 'stale' })).rejects.toBeInstanceOf(NovelRevisionConflictError)
 
     expect(await novels.deleteNovel(created.novelId)).toBe(true)
@@ -376,6 +394,72 @@ describe('NovelStore 大纲（§6）', () => {
       handledRequirements: [],
     })
     expect(kept.outlineRevision).toMatch(/^[0-9a-f]{16}$/)
+  }))
+
+  it('静默删减规划章节被拒绝，显式 droppedChapterIds 才生效（§6.1）', withStores(async (tavern, novels) => {
+    const { novelId, outlineRevision } = await startedNovel(tavern, novels, { maxChapters: null })
+    const current = await novels.getNovel(novelId)
+    const grown = await novels.reviseOutline(novelId, {
+      expectedRevision: current!.revision,
+      expectedOutlineRevision: outlineRevision,
+      reason: '扩为三章',
+      changes: outlinePayload(3),
+      handledRequirements: [],
+    })
+    // The 150->12 field regression: a payload that only echoes the window the
+    // model read must not silently delete the unwritten rest of the plan.
+    await expect(novels.reviseOutline(novelId, {
+      expectedRevision: (await novels.getNovel(novelId))!.revision,
+      expectedOutlineRevision: grown.outlineRevision,
+      reason: '只回显读到的窗口',
+      changes: outlinePayload(1),
+      handledRequirements: [],
+    })).rejects.toMatchObject({
+      code: 'NOVEL_PRECONDITION',
+      rule: 'unacknowledged-chapter-drops',
+      violations: expect.arrayContaining([
+        expect.stringContaining('chapter-dropped-without-acknowledgement:ch-2'),
+        expect.stringContaining('chapter-dropped-without-acknowledgement:ch-3'),
+      ]),
+    })
+    // Phantom declarations and declarations that contradict the payload are named.
+    const phantom = outlinePayload(3)
+    phantom.droppedChapterIds = ['ch-9', 'ch-2']
+    await expect(novels.reviseOutline(novelId, {
+      expectedRevision: (await novels.getNovel(novelId))!.revision,
+      expectedOutlineRevision: grown.outlineRevision,
+      reason: '声明了不存在的章节，且 ch-2 仍在载荷中',
+      changes: phantom,
+      handledRequirements: [],
+    })).rejects.toMatchObject({
+      rule: 'unacknowledged-chapter-drops',
+      violations: expect.arrayContaining([
+        expect.stringContaining('drop-not-planned:ch-9'),
+        expect.stringContaining('drop-contradicts-payload:ch-2'),
+      ]),
+    })
+    // Declared pruning goes through and really removes the chapters.
+    const pruned = outlinePayload(1)
+    pruned.droppedChapterIds = ['ch-2', 'ch-3']
+    await novels.reviseOutline(novelId, {
+      expectedRevision: (await novels.getNovel(novelId))!.revision,
+      expectedOutlineRevision: grown.outlineRevision,
+      reason: '作者确认砍掉后续两章',
+      changes: pruned,
+      handledRequirements: [],
+    })
+    expect((await novels.getNovel(novelId))?.outline?.chapters.map((chapter) => chapter.chapterId)).toEqual(['ch-1'])
+  }))
+
+  it('初始大纲不接受 droppedChapterIds', withStores(async (tavern, novels) => {
+    const created = await novels.createNovel(tavern, baseConfig())
+    const payload = outlinePayload()
+    payload.droppedChapterIds = ['ch-1']
+    await expect(novels.createOutline(created.novelId, {
+      expectedRevision: created.revision,
+      outline: payload,
+      handledRequirements: [{ requirementId: 'req-1', result: 'applied', effectiveLocation: 'story' }],
+    })).rejects.toMatchObject({ code: 'NOVEL_CONFIG', errors: [{ field: 'droppedChapterIds' }] })
   }))
 
   it('修订时有已认领单元则拒绝（§9.2）', withStores(async (tavern, novels) => {

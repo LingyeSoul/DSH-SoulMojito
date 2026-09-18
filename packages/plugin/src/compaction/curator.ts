@@ -94,6 +94,10 @@ const BASIC_CONFIG_KEYS = new Set([
   'compactionRetries', 'maxOverflowRetries', 'modelPolicies', 'auto',
 ])
 
+/** 未锚定告警去重集上限：键含 sessionId，长寿命宿主下不设限会无界增长；
+ * 满即整体清空，活跃会话至多重新告警一次。 */
+const UNANCHORED_WARN_DEDUP_LIMIT = 1024
+
 const { BasicCompactionEngine } = await importHostPackage<HostBasicEngine>('@deepseek-ai/dsh-compaction-basic')
 const { BlockAssembler, createUserMessage, contentHasImage, LlmError } = await importHostPackage<HostLlmModule>('@deepseek-ai/dsh-llm')
 
@@ -102,6 +106,8 @@ export class TavernCompactionCurator extends BasicCompactionEngine {
 
   private readonly curator: CuratorOptions
   private readonly usageThresholdRatio: number
+  /** 闸门未锚定告警的去重键（session:reason）；服务是单例，实例级去重即进程级。 */
+  private readonly unanchoredWarnings = new Set<string>()
 
   constructor(ctx: unknown, config: Record<string, unknown> = {}) {
     super(ctx, basicConfigOnly(config))
@@ -116,6 +122,10 @@ export class TavernCompactionCurator extends BasicCompactionEngine {
    * 缺失）维持宿主原生行为；真实压力已到则委托宿主压力路径，若宿主启发式门没过
    * （低估超过策略阈值补偿范围）再以 context-overflow 无门限路径兜底一次。
    * context-overflow 触发本身原样透传，宿主溢出恢复不受影响。
+   *
+   * 未锚定放行 = 0006 闸门对 会话 失效、宿主启发式在无否决下裸奔（2026-09-18
+   * 真机 churn：闸门静默降级 + thresholdRatio 窄带配置，152 步空转压缩 117 次），
+   * 因此降级必须按 (session, 原因) 留一条 warn，禁止无声 passthrough。
    */
   async compactIfNeeded(agent: HostAgent, trigger: string, signal?: AbortSignal): Promise<unknown> {
     if (trigger !== 'pressure') {
@@ -123,15 +133,19 @@ export class TavernCompactionCurator extends BasicCompactionEngine {
       // 低估可能导致 range=null 静默放弃。这里先打诊断，便于区分"配置未生效"与
       // "宿主启发式选不出可压范围"。
       if (trigger === 'context-overflow') {
-        const state = pressureStateOf(this.ctx, agent.session)
-        info(this.ctx, `curator overflow-recovery: pressureTokens=${state?.pressureTokens ?? 'none'} surfaceTokens=${state?.surfaceTokens ?? 'none'} contextWindow=${state?.contextWindow ?? 'none'}`)
+        const read = pressureStateOf(this.ctx, agent.session)
+        const state = read.ok ? read.state : undefined
+        info(this.ctx, `curator overflow-recovery: pressureTokens=${state?.pressureTokens ?? 'none'} surfaceTokens=${state?.surfaceTokens ?? 'none'} contextWindow=${state?.contextWindow ?? 'none'}${read.ok ? '' : ` failure=${read.failure}`}`)
       }
       return super.compactIfNeeded(agent, trigger, signal)
     }
-    const state = pressureStateOf(this.ctx, agent.session)
-    const decision = usagePressureDecision(state, this.usageThresholdRatio)
+    const read = pressureStateOf(this.ctx, agent.session)
+    const decision = usagePressureDecision(read.ok ? read.state : undefined, this.usageThresholdRatio)
     if (decision.kind === 'block') return null
-    if (decision.kind === 'passthrough') return super.compactIfNeeded(agent, trigger, signal)
+    if (decision.kind === 'passthrough') {
+      this.warnGateUnanchoredOnce(agent.session.id, read.ok ? unanchoredReasonOf(read.state) : read.failure)
+      return super.compactIfNeeded(agent, trigger, signal)
+    }
     const result = await super.compactIfNeeded(agent, trigger, signal)
     if (result !== null && result !== undefined) return result
     try {
@@ -146,6 +160,15 @@ export class TavernCompactionCurator extends BasicCompactionEngine {
   async summarize(input: HostCompactionInput, agent: HostAgent, signal?: AbortSignal): Promise<HostCompactionSummary> {
     if (!(await isStorySession(agent.session.id))) return super.summarize(input, agent, signal)
     return summarizeStoryCheckpoint(this.ctx, this.config, this.curator, input, agent, signal)
+  }
+
+  /** 未锚定放行按 (session, 原因) 只告警一次：churn 会话每步都过这里，全量打点会把日志刷成灾。 */
+  private warnGateUnanchoredOnce(sessionId: string, reason: string): void {
+    const key = `${sessionId}:${reason}`
+    if (this.unanchoredWarnings.has(key)) return
+    if (this.unanchoredWarnings.size >= UNANCHORED_WARN_DEDUP_LIMIT) this.unanchoredWarnings.clear()
+    this.unanchoredWarnings.add(key)
+    warn(this.ctx, `usage gate unanchored; host heuristic pressure gate runs without the 0006 real-usage veto: session=${sessionId} reason=${reason}`)
   }
 }
 
@@ -162,15 +185,36 @@ function readCuratorOptions(config: Record<string, unknown>): CuratorOptions {
   return curator
 }
 
+/** pressureStateOf 的读取结果判别联合：可读给 state，不可读给 failure 原因供诊断日志，
+ * 让「恰好一者存在」成为类型保证而非调用方约定。 */
+type PressureStateRead = { ok: true; state: UsagePressureState } | { ok: false; failure: string }
+
 /** 容忍式读取宿主 contextPressure 投影状态；服务缺失、抛错或形状漂移一律
- * 返回 undefined（提案 0006 §4.4 降级路径），不新增 static inject 硬依赖。 */
-function pressureStateOf(ctx: any, session: HostAgent['session']): UsagePressureState | undefined {
+ * 返回 failure（提案 0006 §4.4 降级路径），不新增 static inject 硬依赖。
+ * 降级不再无声：failure 会经 warnGateUnanchoredOnce 落日志——静默降级曾让
+ * 0006 闸门在真机形同虚设（2026-09-18 churn 事故），重启会话后也无人察觉。 */
+function pressureStateOf(ctx: any, session: HostAgent['session']): PressureStateRead {
   try {
-    const state = ctx.sessionProjections?.stateOf?.(session, 'contextPressure')
-    return typeof state === 'object' && state !== null ? (state as UsagePressureState) : undefined
-  } catch {
-    return undefined
+    const service = ctx.sessionProjections
+    if (typeof service?.stateOf !== 'function') return { ok: false, failure: 'sessionProjections service unavailable or shape-drifted' }
+    const state = service.stateOf(session, 'contextPressure')
+    if (typeof state !== 'object' || state === null) return { ok: false, failure: 'contextPressure projection not registered or state empty' }
+    return { ok: true, state: state as UsagePressureState }
+  } catch (error) {
+    return { ok: false, failure: `contextPressure projection read threw: ${messageOf(error)}` }
   }
+}
+
+/** 状态可读但 usagePressureDecision 仍 passthrough 时的未锚定原因分类（状态不可读
+ * 的原因由 PressureStateRead 的 failure 分支承载，不经此函数）。 */
+function unanchoredReasonOf(state: UsagePressureState): string {
+  if (typeof state.contextWindow !== 'number' || !Number.isFinite(state.contextWindow) || state.contextWindow <= 0) {
+    return 'contextWindow missing or invalid (no request/context record?)'
+  }
+  if (typeof state.pressureTokens !== 'number' || typeof state.sampledSurfaceTokens !== 'number') {
+    return 'no usage sample yet (cold start) or projection state shape-drifted'
+  }
+  return 'projection not anchorable (unknown reason)'
 }
 
 function warn(ctx: any, message: string): void {

@@ -461,6 +461,8 @@ window.__ModuleLoader__.load({
       'novel.exportMd': 'Export Markdown',
       'novel.exportZip': 'Export ZIP',
       'novel.editTitle': 'Edit novel',
+      'novel.edit.invalidBudgets': 'Run budgets must be positive integers.',
+      'novel.edit.budgetsHint': 'Budgets apply from the next turn; a novel paused by a budget needs an explicit resume to continue.',
       'novel.genre': 'Genre',
       'novel.delete': 'Delete {name}',
       'novel.deleteConfirm': 'Delete novel "{name}"? An active novel is paused first, its sessions are unbound, and all novel data is removed. This cannot be undone.',
@@ -833,6 +835,8 @@ window.__ModuleLoader__.load({
       'novel.exportMd': '导出 Markdown',
       'novel.exportZip': '导出 ZIP',
       'novel.editTitle': '编辑小说',
+      'novel.edit.invalidBudgets': '运行预算必须为正整数。',
+      'novel.edit.budgetsHint': '预算自下一轮起生效；因预算暂停的小说需手动恢复后才会继续。',
       'novel.genre': '题材',
       'novel.delete': '删除 {name}',
       'novel.deleteConfirm': '删除小说“{name}”？运行中的小说会先暂停，绑定会话会解绑，全部小说数据将被删除，且不可撤销。',
@@ -3643,7 +3647,7 @@ window.__ModuleLoader__.load({
       return value === undefined ? value : JSON.parse(JSON.stringify(value))
     }
 
-    function EditorField({ label, value, onChange, multiline = false, type = 'text', min, max, step, className = '', hint, placeholder }) {
+    function EditorField({ label, value, onChange, multiline = false, type = 'text', min, max, step, className = '', hint, placeholder, disabled }) {
       const props = {
         value: value ?? '',
         type,
@@ -3652,6 +3656,7 @@ window.__ModuleLoader__.load({
         step,
         placeholder,
         onChange: (event) => onChange(event.target.value),
+        ...(disabled === true ? { disabled: true } : {}),
       }
       return h('label', { className: `dt-editor-field ${className}` },
         h('span', { className: 'dt-label' }, label),
@@ -4162,8 +4167,8 @@ window.__ModuleLoader__.load({
                 onClick: () => {
                   if (window.confirm(t('panel.presets.deleteConfirm', { name }))) run(deletePresetAsset(name))
                 },
-              })),
-            editing === name ? h('div', { className: 'dt-preset-editor-wrap' }, presets[name] ? h(PresetEditor, { name, kind: kinds[name], data: presets[name], onSave: (data, nextName) => save(name, data, nextName), onCancel: () => setEditing('') }) : h('p', { className: 'dt-muted' }, t('nav.loading'))) : null))),
+              }),
+            editing === name ? h('div', { className: 'dt-preset-editor-wrap' }, presets[name] ? h(PresetEditor, { name, kind: kinds[name], data: presets[name], onSave: (data, nextName) => save(name, data, nextName), onCancel: () => setEditing('') }) : h('p', { className: 'dt-muted' }, t('nav.loading'))) : null)))),
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
 
@@ -4845,17 +4850,40 @@ window.__ModuleLoader__.load({
       'second-person': 'novel.form.perspective.second',
       mixed: 'novel.form.perspective.mixed',
     }
-    // 产品预设值：提交时传完整配置（提案 §4.1），内部不依赖服务端默认参数。
+    // 运行预算字段描述符：创建与编辑共用同一组输入（编辑面板可改预算以应对长章节）。
+    // pick/put 承载表单平铺键与 budgets 嵌套结构（externalRetry）的互转——新增预算
+    // 字段只改这一张表，换算/校验/比较/默认值全部自动跟进。
+    const NOVEL_BUDGET_FIELDS = [
+      { key: 'maxTurns', label: 'novel.form.maxTurns', preset: '200', pick: (b) => b?.maxTurns, put: (b, v) => ({ ...b, maxTurns: v }) },
+      { key: 'maxDurationMs', label: 'novel.form.maxDurationMs', preset: '3600000', pick: (b) => b?.maxDurationMs, put: (b, v) => ({ ...b, maxDurationMs: v }) },
+      { key: 'stallThresholdTurns', label: 'novel.form.stallThresholdTurns', preset: '6', pick: (b) => b?.stallThresholdTurns, put: (b, v) => ({ ...b, stallThresholdTurns: v }) },
+      { key: 'consecutiveFailureLimit', label: 'novel.form.consecutiveFailureLimit', preset: '3', pick: (b) => b?.consecutiveFailureLimit, put: (b, v) => ({ ...b, consecutiveFailureLimit: v }) },
+      { key: 'retryMaxAttempts', label: 'novel.form.retryMaxAttempts', preset: '3', pick: (b) => b?.externalRetry?.maxAttempts, put: (b, v) => ({ ...b, externalRetry: { ...b?.externalRetry, maxAttempts: v } }) },
+      { key: 'retryBackoffMs', label: 'novel.form.retryBackoffMs', preset: '2000', pick: (b) => b?.externalRetry?.backoffMs, put: (b, v) => ({ ...b, externalRetry: { ...b?.externalRetry, backoffMs: v } }) },
+      { key: 'maxDeduceRuns', label: 'novel.form.maxDeduceRuns', preset: '20', pick: (b) => b?.maxDeduceRuns, put: (b, v) => ({ ...b, maxDeduceRuns: v }) },
+    ]
+    // 产品预设值：提交时传完整配置（提案 §4.1），内部不依赖服务端默认参数；预算默认取自字段描述符。
     const NOVEL_FORM_PRESETS = {
       targetCharacters: '20000',
       toleranceRatio: '0.1',
-      maxTurns: '200',
-      maxDurationMs: '3600000',
-      stallThresholdTurns: '6',
-      consecutiveFailureLimit: '3',
-      retryMaxAttempts: '3',
-      retryBackoffMs: '2000',
-      maxDeduceRuns: '20',
+      ...Object.fromEntries(NOVEL_BUDGET_FIELDS.map((field) => [field.key, field.preset])),
+    }
+
+    function novelBudgetsToForm(budgets) {
+      return Object.fromEntries(NOVEL_BUDGET_FIELDS.map((field) => [field.key, String(field.pick(budgets) ?? '')]))
+    }
+
+    function novelFormToBudgets(form) {
+      return NOVEL_BUDGET_FIELDS.reduce((budgets, field) => field.put(budgets, parseNovelPositiveInt(form[field.key])), {})
+    }
+
+    function novelBudgetsEqual(left, right) {
+      return NOVEL_BUDGET_FIELDS.every((field) => field.pick(left) === field.pick(right))
+    }
+
+    /** 表单值与快照预算双方归一化（快照经 form 往返）后比较，判定是否需要下发。 */
+    function novelBudgetsChanged(form, budgets) {
+      return !novelBudgetsEqual(novelFormToBudgets(form), novelFormToBudgets(novelBudgetsToForm(budgets)))
     }
 
     function novelFormLanguage() {
@@ -4931,26 +4959,14 @@ window.__ModuleLoader__.load({
         const hardMaximum = hardText === '' ? null : parseNovelPositiveInt(hardText)
         const maxChaptersText = String(form.maxChapters).trim()
         const maxChapters = maxChaptersText === '' ? null : parseNovelPositiveInt(form.maxChapters)
-        const budgets = {
-          maxTurns: parseNovelPositiveInt(form.maxTurns),
-          maxDurationMs: parseNovelPositiveInt(form.maxDurationMs),
-          stallThresholdTurns: parseNovelPositiveInt(form.stallThresholdTurns),
-          consecutiveFailureLimit: parseNovelPositiveInt(form.consecutiveFailureLimit),
-          externalRetry: {
-            maxAttempts: parseNovelPositiveInt(form.retryMaxAttempts),
-            backoffMs: parseNovelPositiveInt(form.retryBackoffMs),
-          },
-          maxDeduceRuns: parseNovelPositiveInt(form.maxDeduceRuns),
-        }
+        const budgets = novelFormToBudgets(form)
         const lengthValid = form.lengthKind !== 'target'
           || (target !== null
             && Number.isFinite(tolerance) && tolerance >= 0 && tolerance < 1
             && (hardText === '' || hardMaximum !== null)
             && (hardMaximum === null || hardMaximum >= target))
         const maxChaptersValid = maxChaptersText === '' || maxChapters !== null
-        const budgetValues = [budgets.maxTurns, budgets.maxDurationMs, budgets.stallThresholdTurns,
-          budgets.consecutiveFailureLimit, budgets.externalRetry.maxAttempts, budgets.externalRetry.backoffMs, budgets.maxDeduceRuns]
-        if (!lengthValid || !maxChaptersValid || budgetValues.some((value) => value === null)) {
+        if (!lengthValid || !maxChaptersValid || NOVEL_BUDGET_FIELDS.some((field) => field.pick(budgets) === null)) {
           setError(t('novel.form.invalidNumbers'))
           return
         }
@@ -5056,13 +5072,14 @@ window.__ModuleLoader__.load({
       h('div', { className: 'dt-novel-form-section' },
         h('h4', null, t('novel.form.budgets')),
         h('div', { className: 'dt-novel-form-grid' },
-          h(EditorField, { label: t('novel.form.maxTurns'), value: form.maxTurns, type: 'number', min: 1, onChange: (value) => set('maxTurns', value) }),
-          h(EditorField, { label: t('novel.form.maxDurationMs'), value: form.maxDurationMs, type: 'number', min: 1, onChange: (value) => set('maxDurationMs', value) }),
-          h(EditorField, { label: t('novel.form.stallThresholdTurns'), value: form.stallThresholdTurns, type: 'number', min: 1, onChange: (value) => set('stallThresholdTurns', value) }),
-          h(EditorField, { label: t('novel.form.consecutiveFailureLimit'), value: form.consecutiveFailureLimit, type: 'number', min: 1, onChange: (value) => set('consecutiveFailureLimit', value) }),
-          h(EditorField, { label: t('novel.form.retryMaxAttempts'), value: form.retryMaxAttempts, type: 'number', min: 1, onChange: (value) => set('retryMaxAttempts', value) }),
-          h(EditorField, { label: t('novel.form.retryBackoffMs'), value: form.retryBackoffMs, type: 'number', min: 1, onChange: (value) => set('retryBackoffMs', value) }),
-          h(EditorField, { label: t('novel.form.maxDeduceRuns'), value: form.maxDeduceRuns, type: 'number', min: 1, onChange: (value) => set('maxDeduceRuns', value) }))),
+          NOVEL_BUDGET_FIELDS.map((field) => h(EditorField, {
+            key: field.key,
+            label: t(field.label),
+            value: form[field.key],
+            type: 'number',
+            min: 1,
+            onChange: (value) => set(field.key, value),
+          })))),
       error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
@@ -5071,28 +5088,41 @@ window.__ModuleLoader__.load({
       const [detail, setDetail] = useState(null)
       const [title, setTitle] = useState(novel.title || '')
       const [genre, setGenre] = useState('')
+      const [budgets, setBudgets] = useState(null)
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
+      const applyDetail = (next) => {
+        setDetail(next)
+        setTitle(typeof next?.title === 'string' ? next.title : novel.title || '')
+        setGenre(typeof next?.config?.genre === 'string' ? next.config.genre : '')
+        setBudgets(novelBudgetsToForm(next?.config?.budgets))
+      }
       useEffect(() => {
         let cancelled = false
         void fetchNovelDetail(novel.novelId)
-          .then((next) => {
-            if (cancelled) return
-            setDetail(next)
-            setTitle(typeof next?.title === 'string' ? next.title : novel.title || '')
-            setGenre(typeof next?.config?.genre === 'string' ? next.config.genre : '')
-          })
+          .then((next) => { if (!cancelled) applyDetail(next) })
           .catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause)) })
         return () => { cancelled = true }
       }, [novel.novelId])
+      const setBudgetField = (key, value) => setBudgets((current) => ({ ...current, [key]: value }))
       const save = () => {
-        if (busy || detail === null) return
+        if (busy || detail === null || budgets === null) return
         const patch = {}
         const nextTitle = title.trim()
         const nextGenre = genre.trim()
         if (nextTitle !== '' && nextTitle !== detail.title) patch.title = nextTitle
         if (nextGenre !== (detail.config?.genre ?? '')) patch.genre = nextGenre
+        const parsed = novelFormToBudgets(budgets)
+        if (NOVEL_BUDGET_FIELDS.some((field) => field.pick(parsed) === null)) {
+          setError(t('novel.edit.invalidBudgets'))
+          return
+        }
+        // 预算在 noteTurn 中从快照实时读取（§13），改完下一轮即生效；
+        // 未改动的预算不下发，避免无意义的 revision 递增。
+        if (novelBudgetsChanged(budgets, detail.config?.budgets)) {
+          patch.budgets = parsed
+        }
         if (Object.keys(patch).length === 0) {
           onSaved()
           return
@@ -5107,11 +5137,7 @@ window.__ModuleLoader__.load({
               // CAS 冲突：自动重取详情并提示（契约要求），保留弹窗让用户重试。
               setNotice(t('novel.conflict'))
               void fetchNovelDetail(novel.novelId)
-                .then((next) => {
-                  setDetail(next)
-                  setTitle(typeof next?.title === 'string' ? next.title : title)
-                  setGenre(typeof next?.config?.genre === 'string' ? next.config.genre : genre)
-                })
+                .then((next) => applyDetail(next))
                 .catch(() => {})
             } else {
               setError(cause instanceof Error ? cause.message : String(cause))
@@ -5123,7 +5149,6 @@ window.__ModuleLoader__.load({
         title: t('novel.editTitle'),
         closeLabel: t('panel.close'),
         onClose,
-        className: 'dt-novel-modal-sm',
         footer: h(React.Fragment, null,
           h(Button, { size: 'sm', variant: 'ghost', onClick: onClose }, t('panel.cancel')),
           h(Button, { size: 'sm', variant: 'primary', disabled: busy || detail === null || title.trim() === '', onClick: save },
@@ -5132,6 +5157,19 @@ window.__ModuleLoader__.load({
       h('div', { className: 'dt-novel-form-grid' },
         h(EditorField, { label: t('novel.form.title'), value: title, onChange: setTitle }),
         h(EditorField, { label: t('novel.genre'), value: genre, onChange: setGenre })),
+      h('div', { className: 'dt-novel-form-section' },
+        h('h4', null, t('novel.form.budgets')),
+        h('div', { className: 'dt-novel-form-grid' },
+          NOVEL_BUDGET_FIELDS.map((field) => h(EditorField, {
+            key: field.key,
+            label: t(field.label),
+            value: budgets?.[field.key] ?? '',
+            type: 'number',
+            min: 1,
+            disabled: budgets === null,
+            onChange: (value) => setBudgetField(field.key, value),
+          }))),
+        h('p', { className: 'dt-hint' }, t('novel.edit.budgetsHint'))),
       error ? h('p', { className: 'dt-error' }, error) : null,
       notice ? h('p', { className: 'dt-muted' }, notice) : null)
     }
@@ -5490,7 +5528,6 @@ window.__ModuleLoader__.load({
         .dt-novel-approve{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
         .dt-novel-approve input{box-sizing:border-box;width:130px;min-height:30px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:5px 8px;font:inherit;font-size:12px}
         .dt-novel-modal{pointer-events:auto;display:flex;flex-direction:column;width:min(760px,calc(100vw - 48px));height:min(680px,calc(100vh - 64px));max-width:100%;max-height:100%;padding:0;gap:0;border-color:var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
-        .dt-novel-modal-sm{width:min(480px,calc(100vw - 48px));height:auto;max-height:min(480px,calc(100vh - 64px))}
         .dt-novel-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}
         .dt-novel-modal-head h2{margin:0;font-size:16px;line-height:22px;font-weight:600}
         .dt-novel-modal-body{flex:1;min-height:0;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:12px}

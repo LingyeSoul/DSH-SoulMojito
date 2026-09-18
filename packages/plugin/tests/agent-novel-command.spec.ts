@@ -599,6 +599,28 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     const next = (await novels.getNovel(created.novelId))!
     expect(jsonBody(patch)).toEqual({ ok: true, revision: next.revision })
     expect(next.config).toMatchObject({ title: '补丁后的标题', genre: '悬疑' })
+
+    // 预算补丁：面板编辑最大轮数（长章节场景）；noteTurn 实时读快照，下一轮生效。
+    const budgetPatch = makeResponse()
+    await apiHandler(makeRequest({
+      expectedRevision: next.revision,
+      patch: { budgets: { ...next.config.budgets, maxTurns: 321 } },
+      cause: 'panel-edit',
+    }, `/api/dsh-tavern/novels/${created.novelId}`, 'PATCH'), budgetPatch)
+    expect(budgetPatch.statusCode).toBe(200)
+    const budgeted = (await novels.getNovel(created.novelId))!
+    expect(jsonBody(budgetPatch)).toEqual({ ok: true, revision: budgeted.revision })
+    expect(budgeted.config.budgets.maxTurns).toBe(321)
+    expect(budgeted.config.budgets.externalRetry).toEqual(next.config.budgets.externalRetry)
+
+    const badBudget = makeResponse()
+    await apiHandler(makeRequest({
+      expectedRevision: budgeted.revision,
+      patch: { budgets: { ...budgeted.config.budgets, maxTurns: 0 } },
+      cause: 'panel-edit',
+    }, `/api/dsh-tavern/novels/${created.novelId}`, 'PATCH'), badBudget)
+    expect(badBudget.statusCode).toBe(400)
+    expect(jsonBody(badBudget)).toMatchObject({ ok: false, code: 'NOVEL_CONFIG' })
   })
 
   // Mutating tests last (shared-state discipline): deletion is terminal.

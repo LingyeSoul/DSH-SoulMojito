@@ -6,12 +6,17 @@
  * 压缩尝试全部静默失败（105 次，会话涨到 84% 无压缩）。本 spec 直接实例化
  * TavernCompactionCurator 走真实 summarize 接线，假 llm 强制执行宿主的
  * adapter 注册契约：provider 未注册（含 undefined）必须抛 NO_ADAPTER。
+ *
+ * 同日第二起真机事故（churn）另见文末 describe：0006 闸门静默降级成
+ * passthrough 时宿主启发式裸奔，152 步空转压缩 117 次；降级现在必须 warn。
  */
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TavernStore } from '../../tavern-store/src/index.js'
+
+const mockState = vi.hoisted(() => ({ basicCalls: [] as Array<{ agent: unknown; trigger: string }> }))
 
 vi.mock('../../bind/src/index.js', () => {
   class LlmError extends Error {
@@ -41,7 +46,8 @@ vi.mock('../../bind/src/index.js', () => {
       this.ctx = ctx
       this.config = config
     }
-    async compactIfNeeded(): Promise<unknown> {
+    async compactIfNeeded(agent: unknown, trigger: string): Promise<unknown> {
+      mockState.basicCalls.push({ agent, trigger })
       return null
     }
     async summarize(): Promise<never> {
@@ -69,7 +75,11 @@ const { TavernCompactionCurator } = await import('../src/compaction/curator.js')
 /** 与宿主一致：只有注册过的 provider 才放行，其余（含 undefined）抛 NO_ADAPTER。 */
 const registeredProviders = new Set(['siliconflow', 'minimax-cn', 'runtime-p'])
 const streamCalls: Array<Record<string, unknown>> = []
-function freshCtx(): { llm: { stream: (options: Record<string, unknown>) => AsyncIterable<unknown> } } {
+interface GateLogger {
+  warn: (message: string) => void
+  info: (message: string) => void
+}
+function freshCtx(options: { sessionProjections?: unknown; logger?: GateLogger } = {}): Record<string, unknown> {
   streamCalls.length = 0
   return {
     llm: {
@@ -87,6 +97,8 @@ function freshCtx(): { llm: { stream: (options: Record<string, unknown>) => Asyn
         })()
       },
     },
+    ...(options.sessionProjections === undefined ? {} : { sessionProjections: options.sessionProjections }),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
   }
 }
 
@@ -172,5 +184,87 @@ describe('curator summarize wiring (regression: unawaited async target resolutio
     const curator = new TavernCompactionCurator(freshCtx(), { curatorProvider: 'siliconflow', curatorModel: 'zai-org/GLM-5.2' })
     const agent = { session: { id: 'session-3', requestHeader: () => ({ config: { provider: 'minimax-cn', model: 'MiniMax-M3' } }) } }
     await expect(curator.summarize(storyInput as never, agent as never)).rejects.toThrow('host default summarize must not run')
+  })
+})
+
+/**
+ * 0006 闸门未锚定诊断（2026-09-18 churn 回归）：闸门在真机上静默降级成
+ * passthrough，宿主 thresholdRatio 窄带启发式裸奔，152 步空转压缩 117 次
+ * 而日志里没有丝毫闸门失效的痕迹。契约：降级放行必须按 (session, 原因)
+ * warn 一次；锚定可读时 block/delegate 照旧且不打扰。
+ */
+describe('curator pressure gate anchoring diagnostics (churn regression)', () => {
+  function capturingLogger(): { warns: string[]; logger: GateLogger } {
+    const warns: string[] = []
+    return { warns, logger: { warn: (message) => { warns.push(message) }, info: () => {} } }
+  }
+  function pressureAgent(sessionId = 'session-1'): { session: { id: string; requestHeader(): { config?: { provider?: string; model?: string } } } } {
+    return { session: { id: sessionId, requestHeader: () => ({ config: { provider: 'minimax-cn', model: 'MiniMax-M3' } }) } }
+  }
+
+  beforeEach(() => {
+    mockState.basicCalls.length = 0
+  })
+
+  it('warns once per session and reason when the projection service is missing, still passing through', async () => {
+    const { warns, logger } = capturingLogger()
+    const curator = new TavernCompactionCurator(freshCtx({ logger }), {})
+    const agent = pressureAgent()
+    await curator.compactIfNeeded(agent as never, 'pressure')
+    expect(mockState.basicCalls).toEqual([{ agent, trigger: 'pressure' }])
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain('usage gate unanchored')
+    expect(warns[0]).toContain('sessionProjections service unavailable')
+    expect(warns[0]).toContain('session=session-1')
+    await curator.compactIfNeeded(agent as never, 'pressure')
+    await curator.compactIfNeeded(pressureAgent('session-2') as never, 'pressure')
+    expect(warns).toHaveLength(2)
+  })
+
+  it('reports projection read failures with the thrown cause', async () => {
+    const { warns, logger } = capturingLogger()
+    const curator = new TavernCompactionCurator(freshCtx({
+      logger,
+      sessionProjections: { stateOf: () => { throw new Error('boom') } },
+    }), {})
+    await curator.compactIfNeeded(pressureAgent() as never, 'pressure')
+    expect(warns[0]).toContain('contextPressure projection read threw: boom')
+  })
+
+  it('classifies a sampleless state as cold start instead of service failure', async () => {
+    const { warns, logger } = capturingLogger()
+    const curator = new TavernCompactionCurator(freshCtx({
+      logger,
+      sessionProjections: { stateOf: () => ({ surfaceTokens: 100, contextWindow: 512_000 }) },
+    }), {})
+    await curator.compactIfNeeded(pressureAgent() as never, 'pressure')
+    expect(warns[0]).toContain('no usage sample yet')
+  })
+
+  it('stays silent and blocks when the anchored projection reads below the gate', async () => {
+    const { warns, logger } = capturingLogger()
+    const curator = new TavernCompactionCurator(freshCtx({
+      logger,
+      sessionProjections: {
+        stateOf: () => ({ pressureTokens: 100_000, sampledSurfaceTokens: 100_000, surfaceTokens: 100_000, contextWindow: 512_000 }),
+      },
+    }), {})
+    const result = await curator.compactIfNeeded(pressureAgent() as never, 'pressure')
+    expect(result).toBeNull()
+    expect(mockState.basicCalls).toEqual([])
+    expect(warns).toEqual([])
+  })
+
+  it('delegates without warnings when the anchored projection reaches the gate', async () => {
+    const { warns, logger } = capturingLogger()
+    const curator = new TavernCompactionCurator(freshCtx({
+      logger,
+      sessionProjections: {
+        stateOf: () => ({ pressureTokens: 400_000, sampledSurfaceTokens: 100, surfaceTokens: 100, contextWindow: 512_000 }),
+      },
+    }), {})
+    await curator.compactIfNeeded(pressureAgent() as never, 'pressure')
+    expect(mockState.basicCalls.map((call) => call.trigger)).toEqual(['pressure', 'context-overflow'])
+    expect(warns).toEqual([])
   })
 })
