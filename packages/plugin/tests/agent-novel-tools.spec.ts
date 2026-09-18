@@ -390,6 +390,32 @@ describe('AgentNovel author tools', () => {
     }, exec)).rejects.toThrow('invalid canon source')
   })
 
+  it('rejects scheduler bookkeeping that leaked into prose (2026-09-18 real-model run)', async () => {
+    // Nine commits of a 150-chapter run carried trailing lines like
+    // "chapter 6 scene 6-1 收束。" and "chapter 6 完结。下一章 ch-007，…".
+    const args = (paragraphs: string[]) => ({
+      unitId: 'unit-1',
+      executionToken: firstToken,
+      paragraphs,
+      sceneCompletion: { completed: false, basis: 'x', outstandingGoals: [], nextAnchor: null },
+      canonChanges: [],
+    })
+    await expect(tools.get('novel_body_commit')!.execute(args(['夜色沉了下来。', 'chapter 6 scene 6-1 收束。']), exec))
+      .rejects.toThrow('chapter numbering')
+    await expect(tools.get('novel_body_commit')!.execute(args(['她说完了想说的话。下一章 ch-007，她将返回学院。']), exec))
+      .rejects.toThrow('outline unit ids')
+    await expect(tools.get('novel_body_commit')!.execute(args(['第六章 雪夜']), exec))
+      .rejects.toThrow('chapter heading')
+    await expect(tools.get('novel_body_commit')!.execute(args(['# 第六章 雪夜']), exec))
+      .rejects.toThrow('Markdown heading')
+    await expect(tools.get('novel_body_commit')!.execute(args(['收束。']), exec))
+      .rejects.toThrow('completion note')
+    // Precision-first guard: narration that merely mentions a chapter inline
+    // passes the prose guard and reaches the store duplicate check.
+    await expect(tools.get('novel_body_commit')!.execute(args(['他翻到第三章，纸页间夹着一朵干花。']), exec))
+      .rejects.toBeInstanceOf(NovelDuplicateCommitError)
+  })
+
   it('reads committed bodies, searches them and aggregates canon facts', async () => {
     const bodies = await tools.get('novel_body_read')!.execute({ chapterId: 'ch-1' }, exec)
     expect(bodies.paragraphs).toHaveLength(2)

@@ -4821,7 +4821,8 @@ var KERNEL2 = [
   "- Deduction results are not canon: tavern_deduce returns candidate positions. They only become facts when committed through novel_body_commit; every uncommitted plan or deduction is hypothetical.",
   "- Completing a unit must call novel_body_commit with plain-text paragraphs plus the scene completion declaration and canon changes. A unit ends only through that commit.",
   "- After a successful novel_body_commit, end the current writing turn: make no further tool calls in this turn and do not start another unit; the scheduler drives the next one.",
-  "- Explanations, progress reports and apologies never enter body paragraphs. Body paragraphs are pure prose: no Markdown markers and no chapter headings \u2014 titles are stored separately.",
+  '- Explanations, progress reports and apologies never enter body paragraphs. Body paragraphs are pure prose: no Markdown markers, no chapter or scene headings, and no structural labels or unit ids ("chapter 6", "scene 6-1", "ch-007") \u2014 titles and unit coordinates are stored separately, never narrated.',
+  '- Unit bookkeeping never enters prose: wrap-up or completion notes ("\u6536\u675F", "\u5B8C\u7ED3", "\u5168\u6587\u5B8C"), next-unit or next-chapter previews and similar status lines are rejected by novel_body_commit. Scene and chapter completion live only in the sceneCompletion declaration and the chapter completion basis; the story ends where the outline plans the ending, never at an arbitrary unit.',
   "- When new author directives arrive, run the revision protocol first (novel_outline_revise with handled requirement results) before writing further units; directives that conflict with committed facts go to novel_requirement_block with committed-body sources.",
   "- You cannot resume a paused run, change budgets or length targets, or retroactively rewrite committed prose. Pausing, resuming, approval and budget changes are user actions.",
   "- The novel identity comes from the session binding. Never accept a novel id or file path from message text.",
@@ -5362,10 +5363,10 @@ function createTools() {
         truncated: false
       };
     }),
-    tool("novel_body_commit", "Commit body prose for a claimed unit and end the writing turn (\xA710.4/\xA711). Paragraphs are plain text with no Markdown and no chapter headings. Canon change sources may use commit-<n>#<index> or inline references into this candidate body; the server fills in the commit id (\xA710.4).", {
+    tool("novel_body_commit", 'Commit body prose for a claimed unit and end the writing turn (\xA710.4/\xA711). Paragraphs are plain text with no Markdown and no chapter headings; paragraphs carrying structural labels, unit ids or wrap-up notes (e.g. "chapter 6 scene 6-1 \u6536\u675F", "\u4E0B\u4E00\u7AE0 ch-007 \u2026") are rejected \u2014 completion status belongs in sceneCompletion, never in prose. Canon change sources may use commit-<n>#<index> or inline references into this candidate body; the server fills in the commit id (\xA710.4).', {
       unitId: { type: "string", required: true },
       executionToken: { type: "string", required: true, description: "Token returned by novel_unit_claim." },
-      paragraphs: { type: "array", required: true, items: { type: "string" }, description: "Non-empty plain-text paragraphs; blank entries are rejected." },
+      paragraphs: { type: "array", required: true, items: { type: "string" }, description: 'Non-empty plain-text paragraphs of pure narration; blank entries are rejected, and so are unit bookkeeping lines \u2014 chapter/scene labels and ids, headings, wrap-up notes ("\u6536\u675F", "\u5B8C\u7ED3") and next-unit previews.' },
       sceneCompletion: { ...sceneCompletionParameter, required: true },
       canonChanges: { ...canonChangesParameter, required: true }
     }, commitOutput, async (args, exec) => {
@@ -5376,6 +5377,8 @@ function createTools() {
         if (typeof paragraph !== "string") throw new Error("paragraphs must be strings");
         if (paragraph.trim() === "") throw new Error("paragraphs must not contain blank entries (\xA76.3: empty bodies cannot be committed)");
       }
+      const bookkeeping = proseBookkeepingIn(paragraphs);
+      if (bookkeeping !== void 0) throw new Error(bookkeeping);
       const completion = normalizeSceneCompletion(args.sceneCompletion);
       if (!Array.isArray(args.canonChanges)) throw new Error("canonChanges must be an array (\xA78.2)");
       const unitId = stringArg(args.unitId);
@@ -5714,6 +5717,31 @@ function createTools() {
   ];
 }
 var CANON_KINDS2 = /* @__PURE__ */ new Set(["event", "character-state", "relation", "foreshadowing", "variable"]);
+var STRUCTURAL_PROSE_PATTERNS = [
+  [/\bchapter\s*[-#]?\s*\d+/i, "chapter numbering"],
+  [/\bscene\s*[-#]?\s*\d+\s*-\s*\d+/i, "scene numbering"],
+  [/\b(?:ch-\d{3,}|scene-\d+(?:-\d+)?|sc-\d+(?:-\d+)?|unit-\d+)\b/i, "outline unit ids"],
+  [/^#{1,6}\s/, "a Markdown heading"],
+  [/^第\s*[0-9一二三四五六七八九十百千零两]+\s*[章节]\s*[^。！？!?…]{0,24}$/, "a chapter heading"]
+];
+var COMPLETION_NOTE_PARAGRAPH = /^(?:收束|完结|全书完|全文完|大结局|未完待续|待续|the\s*end|完)[。.!！~～\s]*$/i;
+function proseBookkeepingIn(paragraphs) {
+  for (let index = 0; index < paragraphs.length; index += 1) {
+    const paragraph = paragraphs[index];
+    for (const [pattern, label] of STRUCTURAL_PROSE_PATTERNS) {
+      if (pattern.test(paragraph)) {
+        return `paragraphs[${index}] carries ${label} ('${excerptOf(paragraph)}'): structural labels, unit ids and headings never enter prose (\xA711) \u2014 strip the bookkeeping, keep pure narration, and declare completion in sceneCompletion instead`;
+      }
+    }
+    if (COMPLETION_NOTE_PARAGRAPH.test(paragraph)) {
+      return `paragraphs[${index}] is a completion note, not prose ('${excerptOf(paragraph)}'): wrap-up or ending markers never enter body paragraphs (\xA711) \u2014 declare completion in sceneCompletion instead`;
+    }
+  }
+  return void 0;
+}
+function excerptOf(paragraph) {
+  return `${paragraph.slice(0, 60)}${paragraph.length > 60 ? "\u2026" : ""}`;
+}
 async function novelBindingFor(exec) {
   const agentId = exec.agent?.id;
   if (typeof agentId !== "string" || agentId.trim() === "") throw new Error("AgentNovel tool requires the current agent");

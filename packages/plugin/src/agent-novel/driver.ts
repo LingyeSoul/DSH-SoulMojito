@@ -746,7 +746,7 @@ function workInstruction(snapshot: NovelSnapshot, work: NovelWork, unitId: strin
     case 'outline-revise':
       return `Planning work (§6.3/§9.3): ${work.reason} Read the pending directives (novel_requirements_read) and the plan (novel_outline_read), then submit novel_outline_revise with the handled requirement results, or novel_requirement_block for directives conflicting with committed facts. End the turn afterwards.`
     case 'write-unit':
-      return `Writing unit ${unitId} (§6.2): claim it first with novel_unit_claim { unitId: '${unitId}', expectedOutlineRevision: '${outlineRevision}', expectedRequirementSequence: ${watermark} }, write the scene prose, then commit exactly once with novel_body_commit (plain-text paragraphs, the scene completion declaration and canon changes with paragraph sources). End the turn immediately after the commit (§11).`
+      return `Writing unit ${unitId} (§6.2): claim it first with novel_unit_claim { unitId: '${unitId}', expectedOutlineRevision: '${outlineRevision}', expectedRequirementSequence: ${watermark} }, write the scene prose, then commit exactly once with novel_body_commit (plain-text paragraphs, the scene completion declaration and canon changes with paragraph sources). Paragraphs are pure narration: chapter/scene labels, headings, wrap-up notes ("收束", "完结") and next-unit previews never enter prose (§11). End the turn immediately after the commit (§11).`
     case 'chapter-complete':
       return `Chapter completion check (§6.3): verify the committed bodies with novel_body_read, then call novel_chapter_complete { chapterId: '${work.chapterId}', expectedContentRevision: '${snapshot.contentRevision}', basis, openItems }. End the turn afterwards.`
     case 'finish':

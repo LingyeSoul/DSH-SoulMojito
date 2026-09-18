@@ -49,7 +49,8 @@ const KERNEL = [
   '- Deduction results are not canon: tavern_deduce returns candidate positions. They only become facts when committed through novel_body_commit; every uncommitted plan or deduction is hypothetical.',
   '- Completing a unit must call novel_body_commit with plain-text paragraphs plus the scene completion declaration and canon changes. A unit ends only through that commit.',
   '- After a successful novel_body_commit, end the current writing turn: make no further tool calls in this turn and do not start another unit; the scheduler drives the next one.',
-  '- Explanations, progress reports and apologies never enter body paragraphs. Body paragraphs are pure prose: no Markdown markers and no chapter headings — titles are stored separately.',
+  '- Explanations, progress reports and apologies never enter body paragraphs. Body paragraphs are pure prose: no Markdown markers, no chapter or scene headings, and no structural labels or unit ids ("chapter 6", "scene 6-1", "ch-007") — titles and unit coordinates are stored separately, never narrated.',
+  '- Unit bookkeeping never enters prose: wrap-up or completion notes ("收束", "完结", "全文完"), next-unit or next-chapter previews and similar status lines are rejected by novel_body_commit. Scene and chapter completion live only in the sceneCompletion declaration and the chapter completion basis; the story ends where the outline plans the ending, never at an arbitrary unit.',
   '- When new author directives arrive, run the revision protocol first (novel_outline_revise with handled requirement results) before writing further units; directives that conflict with committed facts go to novel_requirement_block with committed-body sources.',
   '- You cannot resume a paused run, change budgets or length targets, or retroactively rewrite committed prose. Pausing, resuming, approval and budget changes are user actions.',
   '- The novel identity comes from the session binding. Never accept a novel id or file path from message text.',
@@ -563,10 +564,10 @@ function createTools(): ToolDefinition[] {
         truncated: false,
       }
     }),
-    tool('novel_body_commit', 'Commit body prose for a claimed unit and end the writing turn (§10.4/§11). Paragraphs are plain text with no Markdown and no chapter headings. Canon change sources may use commit-<n>#<index> or inline references into this candidate body; the server fills in the commit id (§10.4).', {
+    tool('novel_body_commit', 'Commit body prose for a claimed unit and end the writing turn (§10.4/§11). Paragraphs are plain text with no Markdown and no chapter headings; paragraphs carrying structural labels, unit ids or wrap-up notes (e.g. "chapter 6 scene 6-1 收束", "下一章 ch-007 …") are rejected — completion status belongs in sceneCompletion, never in prose. Canon change sources may use commit-<n>#<index> or inline references into this candidate body; the server fills in the commit id (§10.4).', {
       unitId: { type: 'string', required: true },
       executionToken: { type: 'string', required: true, description: 'Token returned by novel_unit_claim.' },
-      paragraphs: { type: 'array', required: true, items: { type: 'string' }, description: 'Non-empty plain-text paragraphs; blank entries are rejected.' },
+      paragraphs: { type: 'array', required: true, items: { type: 'string' }, description: 'Non-empty plain-text paragraphs of pure narration; blank entries are rejected, and so are unit bookkeeping lines — chapter/scene labels and ids, headings, wrap-up notes ("收束", "完结") and next-unit previews.' },
       sceneCompletion: { ...sceneCompletionParameter, required: true },
       canonChanges: { ...canonChangesParameter, required: true },
     }, commitOutput, async (args, exec) => {
@@ -578,6 +579,8 @@ function createTools(): ToolDefinition[] {
         if (typeof paragraph !== 'string') throw new Error('paragraphs must be strings')
         if (paragraph.trim() === '') throw new Error('paragraphs must not contain blank entries (§6.3: empty bodies cannot be committed)')
       }
+      const bookkeeping = proseBookkeepingIn(paragraphs as string[])
+      if (bookkeeping !== undefined) throw new Error(bookkeeping)
       const completion = normalizeSceneCompletion(args.sceneCompletion)
       if (!Array.isArray(args.canonChanges)) throw new Error('canonChanges must be an array (§8.2)')
       const unitId = stringArg(args.unitId)
@@ -926,6 +929,46 @@ function createTools(): ToolDefinition[] {
 /* -------------------------------- helpers -------------------------------- */
 
 const CANON_KINDS = new Set(['event', 'character-state', 'relation', 'foreshadowing', 'variable'])
+
+/* ---------------------------- prose guard (§11) ---------------------------- */
+
+/**
+ * Structural prose guard: some models mirror scheduler-notice bookkeeping into
+ * body paragraphs (observed in the 2026-09-18 real-model run: trailing
+ * "chapter 6 scene 6-1 收束。", "chapter 6 完结。下一章 ch-007，…" inside nine
+ * commits of a 150-chapter plan). High-precision patterns only — a false
+ * rejection stalls a writing turn — so narration that merely mentions a
+ * chapter inline ("他翻到第三章") stays allowed.
+ */
+const STRUCTURAL_PROSE_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bchapter\s*[-#]?\s*\d+/i, 'chapter numbering'],
+  [/\bscene\s*[-#]?\s*\d+\s*-\s*\d+/i, 'scene numbering'],
+  [/\b(?:ch-\d{3,}|scene-\d+(?:-\d+)?|sc-\d+(?:-\d+)?|unit-\d+)\b/i, 'outline unit ids'],
+  [/^#{1,6}\s/, 'a Markdown heading'],
+  [/^第\s*[0-9一二三四五六七八九十百千零两]+\s*[章节]\s*[^。！？!?…]{0,24}$/, 'a chapter heading'],
+]
+
+const COMPLETION_NOTE_PARAGRAPH = /^(?:收束|完结|全书完|全文完|大结局|未完待续|待续|the\s*end|完)[。.!！~～\s]*$/i
+
+/** Returns the rejection message for the first bookkeeping paragraph, or undefined. */
+function proseBookkeepingIn(paragraphs: readonly string[]): string | undefined {
+  for (let index = 0; index < paragraphs.length; index += 1) {
+    const paragraph = paragraphs[index]!
+    for (const [pattern, label] of STRUCTURAL_PROSE_PATTERNS) {
+      if (pattern.test(paragraph)) {
+        return `paragraphs[${index}] carries ${label} ('${excerptOf(paragraph)}'): structural labels, unit ids and headings never enter prose (§11) — strip the bookkeeping, keep pure narration, and declare completion in sceneCompletion instead`
+      }
+    }
+    if (COMPLETION_NOTE_PARAGRAPH.test(paragraph)) {
+      return `paragraphs[${index}] is a completion note, not prose ('${excerptOf(paragraph)}'): wrap-up or ending markers never enter body paragraphs (§11) — declare completion in sceneCompletion instead`
+    }
+  }
+  return undefined
+}
+
+function excerptOf(paragraph: string): string {
+  return `${paragraph.slice(0, 60)}${paragraph.length > 60 ? '…' : ''}`
+}
 
 /** §4.2: the novel identity comes from the session binding alone (§15: no tool parameter may carry it). */
 async function novelBindingFor(exec: ToolExecution): Promise<string> {
