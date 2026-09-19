@@ -32,6 +32,7 @@ import {
   type TavernStore,
 } from '../../../tavern-store/src/index.js'
 import { nextWork, renderWorkBrief, type NovelWork } from './outline.js'
+import { drainToolOutputBytes, drainWriterRunUsage } from './usage.js'
 
 /* ------------------------------ host shapes ------------------------------ */
 
@@ -189,6 +190,7 @@ export class NovelDriver {
           failed,
           ...(failed ? { error: `turn ended with stop reason ${stopReasonOf(event.data)}` } : {}),
         })
+        await this.sampleToolUsage(novelId, turn)
         const signature = progressSignature(snapshot)
         if (signature !== snapshot.run.lastProgressSignature) {
           await this.store.noteProgress(novelId, { signature })
@@ -203,6 +205,38 @@ export class NovelDriver {
       this.logWarn('turn-accounting-failed', { novelId, sessionId: session.id, operation: 'note-turn', errorCode: errorCodeOf(error) })
     }
     this.schedule(novelId)
+  }
+
+  /**
+   * W0 usage sampling (0007 §7): after a successful noteTurn, drain the
+   * in-process per-tool output-byte accumulator and the writer-run observation
+   * slot (P4 fail-open: host-reported usage counters and the delegated
+   * writer's prose size) and persist one audit sample. Audit-grade, never
+   * authoritative: both slots are process-global without novel attribution,
+   * so with multiple novels running concurrently the drained values are
+   * attributed to the novel whose turn just ended — a known limitation
+   * accepted for an observation-only signal. Sampling failures are logged and
+   * never affect accounting or scheduling. Turn edges without a session turn
+   * number (degraded host shape) still account the turn but skip the sample:
+   * the recorded turn ordinal must come from the same source as the
+   * accounting edge.
+   */
+  private async sampleToolUsage(novelId: string, turn: number | null): Promise<void> {
+    if (turn === null) return
+    try {
+      const toolBytes = drainToolOutputBytes()
+      const writerUsage = drainWriterRunUsage()
+      if (Object.keys(toolBytes).length === 0 && writerUsage.outputChars === null && writerUsage.usage === null) return
+      await this.store.noteUsageSample(novelId, {
+        recordedAt: new Date().toISOString(),
+        turn,
+        toolBytes,
+        ...(writerUsage.outputChars !== null ? { writerOutputChars: writerUsage.outputChars } : {}),
+        ...(writerUsage.usage !== null ? { usage: writerUsage.usage } : {}),
+      })
+    } catch (error) {
+      this.logWarn('usage-sample-failed', { novelId, operation: 'note-usage-sample', errorCode: errorCodeOf(error) })
+    }
   }
 
   /* ------------------------------- scheduling ------------------------------- */
@@ -744,9 +778,16 @@ function workInstruction(snapshot: NovelSnapshot, work: NovelWork, unitId: strin
     case 'outline-create':
       return 'Kickoff work (§6.3): read the creation directive with novel_requirements_read, then create the initial plan with novel_outline_create (expectedRevision from novel_status_read; handle the pending directive in handledRequirements). End the turn after the outline is saved.'
     case 'outline-revise':
-      return `Planning work (§6.3/§9.3): ${work.reason} Read the pending directives (novel_requirements_read) and the plan (novel_outline_read), then submit novel_outline_revise with the handled requirement results, or novel_requirement_block for directives conflicting with committed facts. The revise payload replaces the whole plan: page novel_outline_read (chapterFrom/chapterCount) until truncated is false and carry forward every existing chapter — a chapter absent from the payload counts as removed and must be declared in droppedChapterIds. End the turn afterwards.`
-    case 'write-unit':
+      return `Planning work (§6.3/§9.3): ${work.reason} Read the pending directives (novel_requirements_read) and the plan (novel_outline_read), then submit novel_outline_revise with the handled requirement results, or novel_requirement_block for directives conflicting with committed facts. The revise chapters are an overlay: send only the chapters you add or rewrite in full (omitted keyEvents are inherited) and set currentChapterId — untouched chapters are carried forward automatically, so do not page or re-echo the whole plan; removing a chapter requires its chapterId in droppedChapterIds. End the turn afterwards.`
+    case 'write-unit': {
+      // 0007 §7/§8: writerMode read from the post-prepare brief snapshot (the
+      // re-read after prepareUnit), so a mid-flight PATCH is honoured by the
+      // next unit; legacy snapshots without the field read as inline.
+      if ((snapshot.config.writerMode ?? 'inline') === 'subagent') {
+        return `Delegated writing unit ${unitId} (§6.2, writerMode=subagent): call novel_writer_delegate { unitId: '${unitId}' } directly — do NOT call novel_unit_claim first; the delegate tool claims the unit internally (a manual claim is only adopted when you pass its executionToken). The delegated writer subagent researches, writes and commits the prose itself: never write body text yourself in this mode. Check the returned receipt (commitId, effective characters, sceneCompletion — verified against the store, never model-reported) and end the turn immediately afterwards (§11). If the delegation fails, end the turn as well so the failure path can release the unit (§5.3).`
+      }
       return `Writing unit ${unitId} (§6.2): claim it first with novel_unit_claim { unitId: '${unitId}', expectedOutlineRevision: '${outlineRevision}', expectedRequirementSequence: ${watermark} }, write the scene prose, then commit exactly once with novel_body_commit (plain-text paragraphs, the scene completion declaration and canon changes with paragraph sources). Paragraphs are pure narration: chapter/scene labels, headings, wrap-up notes ("收束", "完结") and next-unit previews never enter prose (§11). End the turn immediately after the commit (§11).`
+    }
     case 'chapter-complete':
       return `Chapter completion check (§6.3): verify the committed bodies with novel_body_read, then call novel_chapter_complete { chapterId: '${work.chapterId}', expectedContentRevision: '${snapshot.contentRevision}', basis, openItems }. End the turn afterwards.`
     case 'finish':

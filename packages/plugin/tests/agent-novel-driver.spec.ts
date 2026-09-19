@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -9,6 +9,7 @@ import {
   type NovelDriverHost,
 } from '../src/agent-novel/driver.js'
 import { isNovelAuthorMessage, receiveAuthorMessage } from '../src/agent-novel/requirements.js'
+import { noteToolOutputBytes } from '../src/agent-novel/usage.js'
 import {
   NovelStore,
   TavernStore,
@@ -631,6 +632,142 @@ describe('NovelDriver scheduling', () => {
       if (agent.followups.length < 1) throw new Error(`expected the discovered work brief, saw ${agent.followups.length}`)
     })
     expect(textOf(noticeOf(agent, 0))).toContain('Novel work brief')
+    await driver.dispose()
+  })
+})
+
+describe('NovelDriver writerMode notice branching (0007 §7/§8)', () => {
+  /** Strips config.writerMode from the head revision file: simulates a
+   *  pre-0007 on-disk snapshot, which the read side must treat as inline. */
+  async function stripWriterMode(root: string, novelId: string): Promise<void> {
+    const dir = join(root, 'novels', novelId)
+    const head = JSON.parse(await readFile(join(dir, 'HEAD.json'), 'utf8')) as { revision: string }
+    const revisionPath = join(dir, 'revisions', `${head.revision}.json`)
+    const file = JSON.parse(await readFile(revisionPath, 'utf8')) as { snapshot: { config: Record<string, unknown> } }
+    delete file.snapshot.config.writerMode
+    await writeFile(revisionPath, JSON.stringify(file), 'utf8')
+  }
+
+  async function driveToWriteUnit(overrides?: Partial<NovelCreateConfig>): Promise<{
+    novels: NovelStore
+    tavern: TavernStore
+    novelId: string
+    revision: string
+    agent: FakeAgent
+    driver: NovelDriver
+  }> {
+    const { tavern, novels, novelId, revision } = await fixture(overrides)
+    const agent = new FakeAgent(AGENT_ID)
+    const { host } = harness(agent)
+    const driver = NovelDriver.create(host, { store: novels, tavern })
+    await driver.handleNovelOpen(agent, novelId)
+    await vi.waitFor(async () => {
+      if (agent.followups.length < 1) throw new Error('kickoff missing')
+    })
+    await createOutline(novels, novelId, (await novels.getNovel(novelId))?.revision ?? revision)
+    await driver.handleSessionEvent({ id: SESSION_ID }, turnEnd(1))
+    await vi.waitFor(async () => {
+      if (agent.followups.length < 2) throw new Error(`expected the write-unit followup, saw ${agent.followups.length}`)
+    })
+    return { novels, tavern, novelId, revision, agent, driver }
+  }
+
+  it('subagent mode: the write-unit notice delegates without a prior claim', async () => {
+    const { agent, driver } = await driveToWriteUnit({ writerMode: 'subagent' })
+    const text = textOf(noticeOf(agent, 1))
+    expect(text).toContain("novel_writer_delegate { unitId: 'unit-1' }")
+    expect(text).toContain('do NOT call novel_unit_claim first')
+    expect(text).toContain('never write body text yourself')
+    expect(text).toContain('end the turn immediately')
+    expect(text).not.toContain('claim it first with novel_unit_claim')
+    // The delegated mode never asks the author to commit prose itself.
+    expect(text).not.toContain('commit exactly once with novel_body_commit')
+    await driver.dispose()
+  })
+
+  it('inline mode (default): the write-unit instruction text is unchanged', async () => {
+    const { agent, driver } = await driveToWriteUnit()
+    const text = textOf(noticeOf(agent, 1))
+    expect(text).toContain(`claim it first with novel_unit_claim { unitId: 'unit-1'`)
+    expect(text).toContain('commit exactly once with novel_body_commit')
+    expect(text).toContain('End the turn immediately after the commit (§11)')
+    expect(text).not.toContain('novel_writer_delegate')
+    await driver.dispose()
+  })
+
+  it('legacy snapshots without writerMode read as inline', async () => {
+    const { root, tavern, novels, novelId, revision } = await fixture()
+    const agent = new FakeAgent(AGENT_ID)
+    const { host } = harness(agent)
+    const driver = NovelDriver.create(host, { store: novels, tavern })
+    await driver.handleNovelOpen(agent, novelId)
+    await vi.waitFor(async () => {
+      if (agent.followups.length < 1) throw new Error('kickoff missing')
+    })
+    await createOutline(novels, novelId, (await novels.getNovel(novelId))?.revision ?? revision)
+    await stripWriterMode(root, novelId)
+    expect((await novels.getNovel(novelId))?.config).not.toHaveProperty('writerMode')
+    await driver.handleSessionEvent({ id: SESSION_ID }, turnEnd(1))
+    await vi.waitFor(async () => {
+      if (agent.followups.length < 2) throw new Error(`expected the write-unit followup, saw ${agent.followups.length}`)
+    })
+    expect(textOf(noticeOf(agent, 1))).toContain('claim it first with novel_unit_claim')
+    await driver.dispose()
+  })
+})
+
+describe('NovelDriver turn/end usage sampling (0007 §7 W0)', () => {
+  it('persists the drained per-tool output bytes with the same turn ordinal as noteTurn', async () => {
+    const { tavern, novels, novelId, revision } = await fixture()
+    const agent = new FakeAgent(AGENT_ID)
+    const { host } = harness(agent)
+    const driver = NovelDriver.create(host, { store: novels, tavern })
+    await driver.handleNovelOpen(agent, novelId)
+    await vi.waitFor(async () => {
+      if (agent.followups.length < 1) throw new Error('kickoff missing')
+    })
+    await createOutline(novels, novelId, (await novels.getNovel(novelId))?.revision ?? revision)
+
+    noteToolOutputBytes('novel_status_read', 42)
+    noteToolOutputBytes('novel_outline_read', 7)
+    await driver.handleSessionEvent({ id: SESSION_ID }, turnEnd(1))
+    await vi.waitFor(async () => {
+      const snapshot = await novels.getNovel(novelId)
+      if ((snapshot?.run.usageSamples ?? []).length !== 1) throw new Error('usage sample not landed')
+      if (snapshot?.run.turnsRun !== 1) throw new Error('turn 1 not accounted')
+    })
+    const sampled = (await novels.getNovel(novelId))!.run.usageSamples!
+    expect(sampled).toHaveLength(1)
+    expect(sampled[0]).toMatchObject({ turn: 1, toolBytes: { novel_status_read: 42, novel_outline_read: 7 } })
+    expect(sampled[0]!.recordedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+
+    // The drain cleared the accumulator: a turn with no tool bytes adds no sample.
+    await driver.handleSessionEvent({ id: SESSION_ID }, turnEnd(2))
+    await vi.waitFor(async () => {
+      const snapshot = await novels.getNovel(novelId)
+      if (snapshot?.run.turnsRun !== 2) throw new Error('turn 2 not accounted')
+    })
+    expect((await novels.getNovel(novelId))!.run.usageSamples!).toHaveLength(1)
+    await driver.dispose()
+  })
+
+  it('skips the sample on degraded turn edges without a turn ordinal but still accounts', async () => {
+    const { tavern, novels, novelId, revision } = await fixture()
+    const agent = new FakeAgent(AGENT_ID)
+    const { host } = harness(agent)
+    const driver = NovelDriver.create(host, { store: novels, tavern })
+    await driver.handleNovelOpen(agent, novelId)
+    await vi.waitFor(async () => {
+      if (agent.followups.length < 1) throw new Error('kickoff missing')
+    })
+    await createOutline(novels, novelId, (await novels.getNovel(novelId))?.revision ?? revision)
+    noteToolOutputBytes('novel_status_read', 5)
+    await driver.handleSessionEvent({ id: SESSION_ID }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+    await vi.waitFor(async () => {
+      const snapshot = await novels.getNovel(novelId)
+      if (snapshot?.run.turnsRun !== 1) throw new Error('turn not accounted')
+    })
+    expect((await novels.getNovel(novelId))!.run.usageSamples!).toHaveLength(0)
     await driver.dispose()
   })
 })

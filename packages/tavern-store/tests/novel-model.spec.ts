@@ -96,6 +96,7 @@ function snapshot(parts?: Partial<NovelSnapshot>): NovelSnapshot {
       currentUnitId: null,
       turnsRun: 0,
       deduceRuns: 0,
+      writerRuns: 0,
       startedAt: null,
       completedAt: null,
       lastProgressSignature: null,
@@ -104,6 +105,7 @@ function snapshot(parts?: Partial<NovelSnapshot>): NovelSnapshot {
       lastError: null,
       inFlightIntent: null,
       awaitingApprovalRevision: null,
+      usageSamples: [],
     },
     contentRevision: 'c1',
     countPolicyVersion: 1,
@@ -188,9 +190,22 @@ describe('validateCreateConfig (§7.1)', () => {
   it('运行预算必须全部为正数', () => {
     expect(validateCreateConfig(baseConfig({ budgets: { ...baseConfig().budgets, maxTurns: 0 } })).map((e) => e.field)).toContain('budgets.maxTurns')
     expect(validateCreateConfig(baseConfig({ budgets: { ...baseConfig().budgets, externalRetry: { maxAttempts: 2, backoffMs: 0 } } })).map((e) => e.field)).toContain('budgets.externalRetry')
+    expect(validateCreateConfig(baseConfig({ budgets: { ...baseConfig().budgets, writerDispatchLimit: 0 } })).map((e) => e.field)).toContain('budgets.writerDispatchLimit')
+    expect(validateCreateConfig(baseConfig({ budgets: { ...baseConfig().budgets, writerDispatchLimit: 1 } })).map((e) => e.field)).not.toContain('budgets.writerDispatchLimit')
     expect(validateCreateConfig(baseConfig({ maxChapters: 0 })).map((e) => e.field)).toContain('maxChapters')
     expect(validateCreateConfig(baseConfig({ title: ' ' })).map((e) => e.field)).toContain('title')
     expect(validateCreateConfig(baseConfig({ characterNames: ['A', 'A'] })).map((e) => e.field)).toContain('characterNames')
+  })
+
+  it('writerMode 只接受 inline | subagent，缺省合法（0007 §8）', () => {
+    // Absent stays valid at the model layer; the store normalizes it to
+    // 'inline' at creation (storage-layer default, not mode magic).
+    expect(validateCreateConfig(baseConfig()).map((e) => e.field)).not.toContain('writerMode')
+    expect(validateCreateConfig(baseConfig({ writerMode: 'inline' })).map((e) => e.field)).not.toContain('writerMode')
+    expect(validateCreateConfig(baseConfig({ writerMode: 'subagent' })).map((e) => e.field)).not.toContain('writerMode')
+    expect(validateCreateConfig(baseConfig({ writerMode: 'hybrid' as NovelCreateConfig['writerMode'] })).map((e) => e.field)).toContain('writerMode')
+    expect(validateCreateConfig(baseConfig({ writerMode: 'inline' as NovelCreateConfig['writerMode'] })))
+      .toEqual([])
   })
 })
 

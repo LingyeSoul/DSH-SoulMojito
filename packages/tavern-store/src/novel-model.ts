@@ -38,6 +38,19 @@ export interface NovelRunBudgets {
   consecutiveFailureLimit: number
   externalRetry: { maxAttempts: number; backoffMs: number }
   maxDeduceRuns: number
+  /** Per-claim writer dispatch ceiling (0007 §5.3): total dispatches per
+   *  claim including the first. Optional so legacy snapshots stay valid;
+   *  absent falls back to the built-in default of 3. A retry parameter,
+   *  not a cost edge — §7's "no new limit" scopes budget stops like
+   *  maxTurns/maxDurationMs. */
+  writerDispatchLimit?: number
+}
+
+/** Where write-unit model execution happens (0007 §8). */
+export type WriterMode = 'inline' | 'subagent'
+
+export function isWriterMode(value: unknown): value is WriterMode {
+  return value === 'inline' || value === 'subagent'
 }
 
 export interface NovelCreateConfig {
@@ -53,6 +66,12 @@ export interface NovelCreateConfig {
   characterNames: readonly string[]
   worldNames: readonly string[]
   budgets: NovelRunBudgets
+  /** Where write-unit model execution happens (0007 §8): 'inline' = the
+   *  author agent writes inside its own session; 'subagent' = a one-shot
+   *  writer subagent per unit. Optional on input so legacy fixtures and
+   *  callers stay valid; the store normalizes absent values to 'inline' at
+   *  creation (W3 may flip the default after A/B, not before). */
+  writerMode?: WriterMode
 }
 
 /** Counting policy version fixed in the project (§7.1): 1 = Unicode code
@@ -106,6 +125,9 @@ export function validateRunBudgets(budgets: unknown): ValidationError[] {
     || !isPositiveInteger((retry as Record<string, unknown>).backoffMs)) {
     errors.push({ field: 'budgets.externalRetry', message: 'externalRetry.maxAttempts and backoffMs must be positive integers' })
   }
+  if (b.writerDispatchLimit !== undefined && !isPositiveInteger(b.writerDispatchLimit)) {
+    errors.push({ field: 'budgets.writerDispatchLimit', message: 'writerDispatchLimit must be a positive integer' })
+  }
   return errors
 }
 
@@ -157,6 +179,11 @@ export function validateCreateConfig(config: NovelCreateConfig): ValidationError
   }
   if (c.approvalMode !== 'automatic' && c.approvalMode !== 'manual') {
     errors.push({ field: 'approvalMode', message: "approvalMode must be 'automatic' or 'manual'" })
+  }
+  // 0007 §8: writerMode is an explicit two-value enum; absent means the
+  // store-side 'inline' default applies (creation normalizes it).
+  if (c.writerMode !== undefined && !isWriterMode(c.writerMode)) {
+    errors.push({ field: 'writerMode', message: "writerMode must be 'inline' or 'subagent'" })
   }
   for (const field of ['characterNames', 'worldNames'] as const) {
     const list = c[field]
@@ -217,6 +244,23 @@ export interface OutlineChapter {
   exitCondition: string
 }
 
+/**
+ * Chapter as supplied in a payload: the optional fields may be omitted. On
+ * revise an omitted field is inherited from the existing chapter with the
+ * same id; on create (and for newly inserted chapters) it defaults to an
+ * empty list / unplanned.
+ */
+export interface OutlineChapterInput {
+  chapterId: string
+  order: number
+  title: string
+  purpose: string
+  keyEvents?: readonly string[]
+  plannedCharacters?: number | null
+  entryCondition: string
+  exitCondition: string
+}
+
 /** Current-chapter scene plan (§6.1 detail layer). */
 export interface ScenePlan {
   sceneId: string
@@ -253,19 +297,21 @@ export interface NovelOutline {
   foreshadowing: readonly Foreshadowing[]
 }
 
-/** Outline content supplied by the author agent; revision metadata is store-side. */
+/** Outline content supplied by the author agent; revision metadata is store-side.
+ * On revise, `chapters` is an overlay: each entry replaces (or inserts) the
+ * same-id chapter and every untouched chapter is carried forward unchanged. */
 export interface NovelOutlinePayload {
   story: OutlineStory
   characters: readonly OutlineCharacter[]
-  chapters: readonly OutlineChapter[]
+  chapters: readonly OutlineChapterInput[]
   currentChapterId: string | null
   scenes: readonly ScenePlan[]
   foreshadowing: readonly Foreshadowing[]
-  /**
+/**
    * Revision-only: chapterIds intentionally pruned from the plan (§6.1 allows
-   * dropping uncommitted chapters). The payload replaces the whole plan, so
-   * every previous chapter absent from `chapters` must be declared here —
-   * otherwise a windowed novel_outline_read echo silently shrinks the plan.
+   * dropping uncommitted chapters). Chapters absent from `chapters` are
+   * carried forward, so a windowed novel_outline_read echo can never shrink
+   * the plan; only ids listed here are removed.
    */
   droppedChapterIds?: readonly string[]
 }
@@ -342,8 +388,8 @@ export function validateOutlinePayload(payload: NovelOutlinePayload): Validation
           errors.push({ field: `chapters[${index}].${field}`, message: `${field} must be a non-empty string` })
         }
       }
-      if (!Array.isArray(c.keyEvents) || (c.keyEvents as unknown[]).some((e) => typeof e !== 'string')) {
-        errors.push({ field: `chapters[${index}].keyEvents`, message: 'keyEvents must be an array of strings' })
+      if (c.keyEvents !== undefined && (!Array.isArray(c.keyEvents) || (c.keyEvents as unknown[]).some((e) => typeof e !== 'string'))) {
+        errors.push({ field: `chapters[${index}].keyEvents`, message: 'keyEvents must be an array of strings when provided' })
       }
       if (c.plannedCharacters !== null && c.plannedCharacters !== undefined && !isPositiveInteger(c.plannedCharacters)) {
         errors.push({ field: `chapters[${index}].plannedCharacters`, message: 'plannedCharacters must be a positive integer or null' })
@@ -354,12 +400,8 @@ export function validateOutlinePayload(payload: NovelOutlinePayload): Validation
     }
   }
   const currentChapterId = p.currentChapterId
-  if (currentChapterId !== null && currentChapterId !== undefined) {
-    if (typeof currentChapterId !== 'string' || !chapterIds.has(currentChapterId)) {
-      errors.push({ field: 'currentChapterId', message: 'currentChapterId must reference a chapter in chapters' })
-    }
-  } else if (chapterIds.size > 0) {
-    errors.push({ field: 'currentChapterId', message: 'currentChapterId is required when chapters exist' })
+  if (currentChapterId !== null && currentChapterId !== undefined && typeof currentChapterId !== 'string') {
+    errors.push({ field: 'currentChapterId', message: 'currentChapterId must be a string or null' })
   }
   const scenes = p.scenes
   if (!Array.isArray(scenes)) {
@@ -420,6 +462,32 @@ export function validateOutlinePayload(payload: NovelOutlinePayload): Validation
     } else if (new Set(droppedChapterIds).size !== droppedChapterIds.length) {
       errors.push({ field: 'droppedChapterIds', message: 'droppedChapterIds must not contain duplicates' })
     }
+  }
+  return errors
+}
+
+/**
+ * Cross-field outline checks that depend on the full chapter set — the merged
+ * plan on revise (payload overlay + carried-forward chapters), the payload
+ * itself on create: order values unique across the whole set, and a
+ * currentChapterId that references an existing chapter whenever any exist.
+ */
+export function validateOutlineConsistency(
+  chapters: readonly { chapterId: string; order: number }[],
+  currentChapterId: string | null | undefined,
+): ValidationError[] {
+  const errors: ValidationError[] = []
+  const orders = chapters.map((chapter) => chapter.order)
+  if (new Set(orders).size !== orders.length) {
+    errors.push({ field: 'chapters.order', message: 'chapter order values must be unique across the plan (payload orders collide with carried-forward chapters)' })
+  }
+  const ids = new Set(chapters.map((chapter) => chapter.chapterId))
+  if (currentChapterId !== null && currentChapterId !== undefined) {
+    if (!ids.has(currentChapterId)) {
+      errors.push({ field: 'currentChapterId', message: 'currentChapterId must reference a chapter in the plan' })
+    }
+  } else if (ids.size > 0) {
+    errors.push({ field: 'currentChapterId', message: 'currentChapterId is required when chapters exist' })
   }
   return errors
 }
@@ -563,6 +631,23 @@ export interface WorkIntentRecord {
   createdAt: string
 }
 
+/**
+ * One W0 usage sampling point (0007 §7): audit-grade observation, never an
+ * authoritative billing record. toolBytes accumulates output bytes per tool
+ * name over one turn; writerOutputChars is the subagent writer's prose size
+ * when the unit ran delegated; usage carries host-reported token counters
+ * when the runtime exposes them (probe P4, fail-open — observation only).
+ * Kept as a bounded ring: the store retains the most recent 50 samples and
+ * drops the oldest, so snapshots stay lossless and finite.
+ */
+export interface NovelUsageSample {
+  recordedAt: string
+  turn: number
+  toolBytes: Record<string, number>
+  writerOutputChars?: number
+  usage?: Record<string, number>
+}
+
 export interface NovelRunState {
   status: NovelStatus
   phase: NovelPhase
@@ -572,6 +657,11 @@ export interface NovelRunState {
   currentUnitId: string | null
   turnsRun: number
   deduceRuns: number
+  /** Completed writer-subagent delegations (0007 §7): a counter aligned with
+   *  deduceRuns but deliberately uncapped — hard budget edges stay with
+   *  maxTurns/maxDurationMs; NovelRunBudgets gains no new cost limit (the
+   *  §5.3 writerDispatchLimit retry parameter aside). */
+  writerRuns: number
   startedAt: string | null
   completedAt: string | null
   lastProgressSignature: string | null
@@ -587,6 +677,8 @@ export interface NovelRunState {
   activeDurationMs?: number
   /** Start of the current active window; null while paused. */
   activeWindowStart?: string | null
+  /** Most recent usage samples (0007 §7, W0): audit-only ring, last 50 kept. */
+  usageSamples: NovelUsageSample[]
 }
 
 /* -------------------------------- assets ------------------------------- */

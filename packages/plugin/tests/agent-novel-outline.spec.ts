@@ -2,7 +2,15 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { narrativeStage, nextWork, renderWorkBrief, unitTargetRange } from '../src/agent-novel/outline.js'
+import {
+  BRIEF_PARTICIPANT_LIMIT,
+  BRIEF_PARTICIPANTS_MAX,
+  BRIEF_STORY_LIMIT,
+  narrativeStage,
+  nextWork,
+  renderWorkBrief,
+  unitTargetRange,
+} from '../src/agent-novel/outline.js'
 import { isNovelAuthorMessage, receiveAuthorMessage, stableMessageKey } from '../src/agent-novel/requirements.js'
 import { AGENT_NOVEL_PRESET_ID, inspectAgentNovelCapabilities, type AgentNovelCapabilityContext } from '../src/agent-novel/capabilities.js'
 import {
@@ -359,6 +367,135 @@ describe('renderWorkBrief (§8.3)', () => {
     const brief = renderWorkBrief(snapshot, nextWork(snapshot)!)
     expect(brief).toContain('narrative stage: ending')
     expect(brief).toContain('reduce new subplots')
+  })
+})
+
+describe('renderWorkBrief outline digest (0007 §11)', () => {
+  function digestSnapshot(outline: NovelOutline): NovelSnapshot {
+    return snapshotFixture({ outline })
+  }
+
+  function digestFixture(options: {
+    premise?: string
+    mainConflict?: string
+    entryCondition?: string
+    exitCondition?: string
+    participants?: string[]
+    characters?: Array<{ characterId: string; name: string; initialState: string; motivation: string }>
+  } = {}): NovelSnapshot {
+    const outline = {
+      ...outlineFixture(),
+      story: {
+        premise: options.premise ?? '看守人发现海面异象',
+        theme: '孤独与守望',
+        mainConflict: options.mainConflict ?? '人与海',
+        endingDirection: '黎明到来',
+        taboos: [],
+      },
+      chapters: [{
+        chapterId: 'ch-1',
+        order: 1,
+        title: '第一章',
+        purpose: '推进主线',
+        keyEvents: [],
+        plannedCharacters: null,
+        entryCondition: options.entryCondition ?? '前章结束',
+        exitCondition: options.exitCondition ?? '本章目标达成',
+      }],
+      characters: options.characters ?? [{
+        characterId: 'keeper', name: '守塔人', initialState: '平静值守', motivation: '守到最后一次日出', relations: [], arc: '从逃避到直面',
+      }],
+      scenes: [{
+        sceneId: 'sc-1', order: 1, goal: '发现海面异象并做出决定',
+        participants: options.participants ?? ['keeper'],
+        timeLocation: '塔顶 / 深夜', causality: '承接开篇', conflict: '风暴逼近', expectedChange: '下定决心',
+      }],
+    } satisfies NovelOutline
+    return digestSnapshot(outline)
+  }
+
+  it('adds the bounded outline digest before the scene plan for a write-unit', () => {
+    const snapshot = digestFixture()
+    const work = nextWork(snapshot)
+    expect(work).toMatchObject({ kind: 'write-unit' })
+    const brief = renderWorkBrief(snapshot, work!)
+    expect(brief).toContain('Outline digest (§6.1):')
+    expect(brief).toContain('story: 看守人发现海面异象 — 人与海')
+    expect(brief).toContain('chapter entry: 前章结束')
+    expect(brief).toContain('chapter exit: 本章目标达成')
+    expect(brief).toContain('participant: 守塔人 (keeper): 平静值守 · 守到最后一次日出')
+    // The digest precedes the scene plan (global context before local detail).
+    expect(brief.indexOf('Outline digest')).toBeLessThan(brief.indexOf('Scene plan'))
+    // Revision work shares the brief renderer but carries no digest.
+    const revising = snapshotFixture({ requirements: [requirementFixture(1)] })
+    expect(renderWorkBrief(revising, nextWork(revising)!)).not.toContain('Outline digest')
+  })
+
+  it('clips the story line and participant summaries to their bounds', () => {
+    const snapshot = digestFixture({
+      premise: '甲'.repeat(BRIEF_STORY_LIMIT + 50),
+      mainConflict: '',
+      characters: [{
+        characterId: 'keeper', name: '守塔人',
+        initialState: '乙'.repeat(BRIEF_PARTICIPANT_LIMIT + 20),
+        motivation: '',
+      }],
+    })
+    const brief = renderWorkBrief(snapshot, nextWork(snapshot)!)
+    expect(brief).toContain(`story: ${'甲'.repeat(BRIEF_STORY_LIMIT)}…`)
+    expect(brief).not.toContain(`story: ${'甲'.repeat(BRIEF_STORY_LIMIT + 1)}`)
+    expect(brief).toContain(`守塔人 (keeper): ${'乙'.repeat(BRIEF_PARTICIPANT_LIMIT)}…`)
+    expect(brief).not.toContain(`守塔人 (keeper): ${'乙'.repeat(BRIEF_PARTICIPANT_LIMIT + 1)}`)
+  })
+
+  it('caps participants at the configured maximum', () => {
+    const snapshot = digestFixture({
+      participants: Array.from({ length: BRIEF_PARTICIPANTS_MAX + 2 }, (_, index) => `p-${index}`),
+      characters: [],
+    })
+    const brief = renderWorkBrief(snapshot, nextWork(snapshot)!)
+    expect(brief.match(/- participant: /g)).toHaveLength(BRIEF_PARTICIPANTS_MAX)
+    expect(brief).toContain('participant: p-0')
+    expect(brief).not.toContain('participant: p-6')
+  })
+
+  it('omits empty digest fields and the whole block when nothing is present', () => {
+    const partial = digestFixture({ premise: '', mainConflict: '', entryCondition: '' })
+    const brief = renderWorkBrief(partial, nextWork(partial)!)
+    expect(brief).toContain('Outline digest (§6.1):')
+    expect(brief).not.toContain('- story:')
+    expect(brief).not.toContain('- chapter entry:')
+    expect(brief).toContain('- chapter exit:')
+
+    const empty = digestSnapshot({
+      ...outlineFixture(),
+      story: { premise: '', theme: '', mainConflict: '', endingDirection: '', taboos: [] },
+      chapters: [{
+        chapterId: 'ch-1', order: 1, title: '第一章', purpose: '推进主线', keyEvents: [],
+        plannedCharacters: null, entryCondition: '', exitCondition: '',
+      }],
+      characters: [],
+      scenes: [{
+        sceneId: 'sc-1', order: 1, goal: '发现异象', participants: [],
+        timeLocation: '塔顶', causality: '承接', conflict: '风暴', expectedChange: '决心',
+      }],
+    })
+    expect(renderWorkBrief(empty, nextWork(empty)!)).not.toContain('Outline digest')
+  })
+
+  it('keeps the digest increment bounded (compact brief budget)', () => {
+    const snapshot = digestFixture({
+      premise: '甲'.repeat(400),
+      mainConflict: '乙'.repeat(400),
+      participants: Array.from({ length: BRIEF_PARTICIPANTS_MAX }, (_, index) => `p-${index}`),
+      characters: Array.from({ length: BRIEF_PARTICIPANTS_MAX }, (_, index) => ({
+        characterId: `p-${index}`, name: `角色${index}`,
+        initialState: '丙'.repeat(300), motivation: '丁'.repeat(300),
+      })),
+    })
+    const withDigest = renderWorkBrief(snapshot, nextWork(snapshot)!)
+    const withoutDigest = withDigest.replace(/^Outline digest \(§6\.1\):\n(?:- .*\n)*- .*(?=\n\nScene plan)/m, '')
+    expect(withDigest.length - withoutDigest.length).toBeLessThanOrEqual(1400)
   })
 })
 

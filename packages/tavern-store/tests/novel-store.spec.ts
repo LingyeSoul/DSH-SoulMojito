@@ -22,6 +22,7 @@ import {
   stableStringify,
   type NovelCreateConfig,
   type NovelOutlinePayload,
+  type NovelUsageSample,
 } from '../src/index.js'
 
 function withStores(fn: (tavern: TavernStore, novels: NovelStore, root: string) => Promise<void>): () => Promise<void> {
@@ -361,10 +362,11 @@ describe('NovelStore 大纲（§6）', () => {
       canonChanges: [],
     })
     const after = await novels.getNovel(novelId)
-    // Drop ch-1 (has committed body), keep only ch-2.
+    // Drop ch-1 (has committed body) explicitly; keep only ch-2.
     const removeCommitted = outlinePayload(2)
     removeCommitted.chapters = removeCommitted.chapters.filter((chapter) => chapter.chapterId !== 'ch-1')
     removeCommitted.currentChapterId = 'ch-2'
+    removeCommitted.droppedChapterIds = ['ch-1']
     await expect(novels.reviseOutline(novelId, {
       expectedRevision: after!.revision,
       expectedOutlineRevision: after!.outline!.outlineRevision,
@@ -396,7 +398,7 @@ describe('NovelStore 大纲（§6）', () => {
     expect(kept.outlineRevision).toMatch(/^[0-9a-f]{16}$/)
   }))
 
-  it('静默删减规划章节被拒绝，显式 droppedChapterIds 才生效（§6.1）', withStores(async (tavern, novels) => {
+  it('revise 章节是覆盖层：省略即保留，显式 droppedChapterIds 才删除（§6.1）', withStores(async (tavern, novels) => {
     const { novelId, outlineRevision } = await startedNovel(tavern, novels, { maxChapters: null })
     const current = await novels.getNovel(novelId)
     const grown = await novels.reviseOutline(novelId, {
@@ -406,33 +408,27 @@ describe('NovelStore 大纲（§6）', () => {
       changes: outlinePayload(3),
       handledRequirements: [],
     })
-    // The 150->12 field regression: a payload that only echoes the window the
-    // model read must not silently delete the unwritten rest of the plan.
-    await expect(novels.reviseOutline(novelId, {
+    // The 150->12 field regression, now structural: a payload that only
+    // echoes the window the model read carries the unwritten rest forward.
+    await novels.reviseOutline(novelId, {
       expectedRevision: (await novels.getNovel(novelId))!.revision,
       expectedOutlineRevision: grown.outlineRevision,
       reason: '只回显读到的窗口',
       changes: outlinePayload(1),
       handledRequirements: [],
-    })).rejects.toMatchObject({
-      code: 'NOVEL_PRECONDITION',
-      rule: 'unacknowledged-chapter-drops',
-      violations: expect.arrayContaining([
-        expect.stringContaining('chapter-dropped-without-acknowledgement:ch-2'),
-        expect.stringContaining('chapter-dropped-without-acknowledgement:ch-3'),
-      ]),
     })
+    expect((await novels.getNovel(novelId))?.outline?.chapters.map((chapter) => chapter.chapterId)).toEqual(['ch-1', 'ch-2', 'ch-3'])
     // Phantom declarations and declarations that contradict the payload are named.
     const phantom = outlinePayload(3)
     phantom.droppedChapterIds = ['ch-9', 'ch-2']
     await expect(novels.reviseOutline(novelId, {
       expectedRevision: (await novels.getNovel(novelId))!.revision,
-      expectedOutlineRevision: grown.outlineRevision,
+      expectedOutlineRevision: (await novels.getNovel(novelId))!.outline!.outlineRevision,
       reason: '声明了不存在的章节，且 ch-2 仍在载荷中',
       changes: phantom,
       handledRequirements: [],
     })).rejects.toMatchObject({
-      rule: 'unacknowledged-chapter-drops',
+      rule: 'invalid-chapter-drops',
       violations: expect.arrayContaining([
         expect.stringContaining('drop-not-planned:ch-9'),
         expect.stringContaining('drop-contradicts-payload:ch-2'),
@@ -443,12 +439,66 @@ describe('NovelStore 大纲（§6）', () => {
     pruned.droppedChapterIds = ['ch-2', 'ch-3']
     await novels.reviseOutline(novelId, {
       expectedRevision: (await novels.getNovel(novelId))!.revision,
-      expectedOutlineRevision: grown.outlineRevision,
+      expectedOutlineRevision: (await novels.getNovel(novelId))!.outline!.outlineRevision,
       reason: '作者确认砍掉后续两章',
       changes: pruned,
       handledRequirements: [],
     })
     expect((await novels.getNovel(novelId))?.outline?.chapters.map((chapter) => chapter.chapterId)).toEqual(['ch-1'])
+  }))
+
+  it('revise 覆盖层：可选字段继承、currentChapterId 可指向保留章节、order 冲突被拒（§6.1）', withStores(async (tavern, novels) => {
+    const { novelId, outlineRevision } = await startedNovel(tavern, novels, { maxChapters: null })
+    const base = outlinePayload(3)
+    const seeded = {
+      ...base,
+      chapters: [
+        ...base.chapters.slice(0, 1),
+        { chapterId: 'ch-2', order: 2, title: '第二章', purpose: '铺垫', keyEvents: ['伏笔A', '伏笔B'], plannedCharacters: 4000, entryCondition: '前章结束', exitCondition: '目标达成' },
+        ...base.chapters.slice(2),
+      ] as typeof base.chapters,
+    }
+    await novels.reviseOutline(novelId, {
+      expectedRevision: (await novels.getNovel(novelId))!.revision,
+      expectedOutlineRevision: outlineRevision,
+      reason: '扩为三章并给 ch-2 埋伏笔',
+      changes: seeded,
+      handledRequirements: [],
+    })
+    // Upsert ch-2 with omitted keyEvents/plannedCharacters: inherited, not wiped.
+    await novels.reviseOutline(novelId, {
+      expectedRevision: (await novels.getNovel(novelId))!.revision,
+      expectedOutlineRevision: (await novels.getNovel(novelId))!.outline!.outlineRevision,
+      reason: '改写 ch-2 标题',
+      changes: { ...outlinePayload(1), chapters: [{ chapterId: 'ch-2', order: 2, title: '第二章（改）', purpose: '强化', entryCondition: '前章结束', exitCondition: '目标达成' }], currentChapterId: 'ch-2' },
+      handledRequirements: [],
+    })
+    let outline = (await novels.getNovel(novelId))!.outline!
+    const ch2 = outline.chapters.find((chapter) => chapter.chapterId === 'ch-2')!
+    expect(ch2.title).toBe('第二章（改）')
+    expect(ch2.keyEvents).toEqual(['伏笔A', '伏笔B'])
+    expect(ch2.plannedCharacters).toBe(4000)
+    // currentChapterId may point at a chapter only present through carry-forward.
+    await novels.reviseOutline(novelId, {
+      expectedRevision: (await novels.getNovel(novelId))!.revision,
+      expectedOutlineRevision: outline.outlineRevision,
+      reason: '推进到未随载荷提交的章节',
+      changes: { ...outlinePayload(1), chapters: [], currentChapterId: 'ch-3' },
+      handledRequirements: [],
+    })
+    expect((await novels.getNovel(novelId))?.outline?.currentChapterId).toBe('ch-3')
+    // An inserted chapter colliding with a carried-forward order is rejected with field detail.
+    await expect(novels.reviseOutline(novelId, {
+      expectedRevision: (await novels.getNovel(novelId))!.revision,
+      expectedOutlineRevision: (await novels.getNovel(novelId))!.outline!.outlineRevision,
+      reason: 'order 冲突',
+      changes: { ...outlinePayload(1), chapters: [{ chapterId: 'ch-4', order: 2, title: '插入章', purpose: 'p', entryCondition: 'x', exitCondition: 'y' }] },
+      handledRequirements: [],
+    })).rejects.toMatchObject({
+      code: 'NOVEL_CONFIG',
+      message: expect.stringContaining('invalid outline payload: chapters.order'),
+      errors: [expect.objectContaining({ field: 'chapters.order' })],
+    })
   }))
 
   it('初始大纲不接受 droppedChapterIds', withStores(async (tavern, novels) => {
@@ -1191,5 +1241,127 @@ describe('NovelStore readAsset（纯读，§5/§15）', () => {
     const snapshot = await novels.getNovel(created.novelId)
     expect(snapshot?.run.status).toBe('active')
     expect(snapshot?.run.pauseReason).toBeNull()
+  }))
+})
+
+/** One W0 usage sampling point fixture (0007 §7): distinct per turn. */
+function usageSample(turn: number, overrides?: Partial<NovelUsageSample>): NovelUsageSample {
+  return {
+    recordedAt: `2026-09-18T00:00:${String(turn % 60).padStart(2, '0')}.000Z`,
+    turn,
+    toolBytes: { novel_outline_read: turn * 10 },
+    ...overrides,
+  }
+}
+
+describe('NovelStore 写手模式与用量采样（0007 §7/§8）', () => {
+  it('writerMode：缺省归一化 inline，显式 subagent 落盘，非法值拒绝创建', withStores(async (tavern, novels) => {
+    const plain = await novels.createNovel(tavern, baseConfig())
+    expect((await novels.getNovel(plain.novelId))?.config.writerMode).toBe('inline')
+
+    const delegated = await novels.createNovel(tavern, baseConfig({ writerMode: 'subagent' }))
+    const snapshot = await novels.getNovel(delegated.novelId)
+    expect(snapshot?.config.writerMode).toBe('subagent')
+    // New runs carry the W0 observation counters from the start.
+    expect(snapshot?.run.writerRuns).toBe(0)
+    expect(snapshot?.run.usageSamples).toEqual([])
+
+    await expect(novels.createNovel(tavern, baseConfig({ writerMode: 'hybrid' as NovelCreateConfig['writerMode'] })))
+      .rejects.toMatchObject({ code: 'NOVEL_CONFIG', errors: [expect.objectContaining({ field: 'writerMode' })] })
+  }))
+
+  it('patchNovelMeta 切换 writerMode，非法值报 ValidationError（0007 §8）', withStores(async (tavern, novels) => {
+    const created = await novels.createNovel(tavern, baseConfig())
+    const patched = await novels.patchNovelMeta(created.novelId, {
+      expectedRevision: created.revision,
+      patch: { writerMode: 'subagent' },
+      cause: 'switch-writer-mode',
+    })
+    const snapshot = await novels.getNovel(created.novelId)
+    expect(snapshot?.config.writerMode).toBe('subagent')
+    expect(snapshot?.revision).toBe(patched.revision)
+    // Other config fields survive the mode switch untouched.
+    expect(snapshot?.config.title).toBe('灯塔')
+
+    await expect(novels.patchNovelMeta(created.novelId, {
+      expectedRevision: patched.revision,
+      patch: { writerMode: 'hybrid' as NovelCreateConfig['writerMode'] },
+      cause: 'bad-writer-mode',
+    })).rejects.toMatchObject({ code: 'NOVEL_CONFIG', errors: [expect.objectContaining({ field: 'writerMode' })] })
+    expect((await novels.getNovel(created.novelId))?.config.writerMode).toBe('subagent')
+  }))
+
+  it('patchNovelMeta 透传 budgets.writerDispatchLimit，非法值报 ValidationError（0007 §5.3）', withStores(async (tavern, novels) => {
+    const created = await novels.createNovel(tavern, baseConfig())
+    const base = (await novels.getNovel(created.novelId))!.config.budgets
+    const patched = await novels.patchNovelMeta(created.novelId, {
+      expectedRevision: created.revision,
+      patch: { budgets: { ...base, writerDispatchLimit: 1 } },
+      cause: 'tighten-writer-dispatch',
+    })
+    expect((await novels.getNovel(created.novelId))?.config.budgets.writerDispatchLimit).toBe(1)
+    await expect(novels.patchNovelMeta(created.novelId, {
+      expectedRevision: patched.revision,
+      patch: { budgets: { ...base, writerDispatchLimit: 0 } },
+      cause: 'bad-writer-dispatch',
+    })).rejects.toMatchObject({ code: 'NOVEL_CONFIG', errors: [expect.objectContaining({ field: 'budgets.writerDispatchLimit' })] })
+  }))
+
+  it('noteWriterRun 只计数不封顶，completed 短路（0007 §7）', withStores(async (tavern, novels) => {
+    const { novelId, outlineRevision } = await startedNovel(tavern, novels)
+    // baseConfig caps maxDeduceRuns at 5: six writer runs past it prove the
+    // counter shares no hard cap with the deduce budget (proposal §7 — hard
+    // edges stay with maxTurns/maxDurationMs, NovelRunBudgets gains no limit).
+    for (let i = 0; i < 6; i++) await novels.noteWriterRun(novelId)
+    let snapshot = await novels.getNovel(novelId)
+    expect(snapshot?.run.writerRuns).toBe(6)
+    expect(snapshot?.run.status).toBe('active')
+    expect(snapshot?.run.pauseReason).toBeNull()
+
+    // Finish the novel, then the counter and the sample ring freeze.
+    const claim = await claimFirstScene(novels, novelId, outlineRevision)
+    await novels.commitBody(novelId, {
+      unitId: claim.unitId,
+      executionToken: claim.executionToken,
+      paragraphs: ['黎明到来，守塔人放下望远镜。'],
+      sceneCompletion: { completed: true, basis: '场景目标完成', outstandingGoals: [], nextAnchor: null },
+      canonChanges: [],
+    })
+    await novels.completeChapter(novelId, {
+      chapterId: 'ch-1',
+      expectedContentRevision: (await novels.getNovel(novelId))!.contentRevision,
+      basis: '主线收束',
+      openItems: [],
+    })
+    await novels.finishNovel(novelId, { expectedRevision: (await novels.getNovel(novelId))!.revision, basis: '短篇完成' })
+    await novels.noteWriterRun(novelId)
+    await novels.noteUsageSample(novelId, usageSample(99))
+    snapshot = await novels.getNovel(novelId)
+    expect(snapshot?.run.writerRuns).toBe(6)
+    expect(snapshot?.run.usageSamples).toEqual([])
+  }))
+
+  it('noteUsageSample 环形保留最近 50 条，最旧丢弃，非法采样拒绝', withStores(async (tavern, novels) => {
+    const { novelId } = await startedNovel(tavern, novels)
+    // Invalid shapes are rejected before any write (lossless discipline:
+    // no NaN/Infinity/negative counts can reach a persisted snapshot).
+    await expect(novels.noteUsageSample(novelId, usageSample(0, { recordedAt: '' }))).rejects.toMatchObject({ code: 'NOVEL_CONFIG' })
+    await expect(novels.noteUsageSample(novelId, usageSample(-1))).rejects.toMatchObject({ code: 'NOVEL_CONFIG' })
+    await expect(novels.noteUsageSample(novelId, usageSample(0, { toolBytes: { novel_outline_read: 12.5 } }))).rejects.toMatchObject({ code: 'NOVEL_CONFIG' })
+    await expect(novels.noteUsageSample(novelId, usageSample(0, { writerOutputChars: -3 }))).rejects.toMatchObject({ code: 'NOVEL_CONFIG' })
+    expect((await novels.getNovel(novelId))?.run.usageSamples).toEqual([])
+
+    for (let turn = 0; turn < 55; turn++) {
+      await novels.noteUsageSample(novelId, usageSample(turn, turn === 54 ? { writerOutputChars: 2400 } : undefined))
+    }
+    const snapshot = await novels.getNovel(novelId)
+    const samples = snapshot?.run.usageSamples ?? []
+    expect(samples).toHaveLength(50)
+    // Oldest five dropped; the ring keeps turns 5..54 in arrival order.
+    expect(samples.map((s) => s.turn)).toEqual(Array.from({ length: 50 }, (_, i) => i + 5))
+    // Optional fields stay lossless: absent when not supplied, present when set.
+    expect('writerOutputChars' in samples[0]!).toBe(false)
+    expect(samples[49]?.writerOutputChars).toBe(2400)
+    expect(samples[49]?.toolBytes).toEqual({ novel_outline_read: 540 })
   }))
 })

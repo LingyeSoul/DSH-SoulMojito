@@ -517,6 +517,7 @@ window.__ModuleLoader__.load({
       'novel.editTitle': 'Edit novel',
       'novel.edit.invalidBudgets': 'Run budgets must be positive integers.',
       'novel.edit.budgetsHint': 'Budgets apply from the next turn; a novel paused by a budget needs an explicit resume to continue.',
+      'novel.edit.writerModeHint': 'The writing mode applies from the next writing unit; a unit already claimed finishes in the mode it was claimed with.',
       'novel.genre': 'Genre',
       'novel.delete': 'Delete {name}',
       'novel.deleteConfirm': 'Delete novel "{name}"? An active novel is paused first, its sessions are unbound, and all novel data is removed. This cannot be undone.',
@@ -554,6 +555,14 @@ window.__ModuleLoader__.load({
       'novel.remainingCharacters': 'Remaining: {value} characters',
       'novel.remainingUnbounded': 'Remaining: not limited',
       'novel.runBudget': 'Turns {used}/{max} · Deduce {deduce}/{maxDeduce}',
+      'novel.runWriterRuns': 'Writer runs {count}',
+      'novel.usageSample.title': 'Usage sampling',
+      'novel.usageSample.hint': 'Per-turn tool output sizes recorded for auditing; not authoritative billing data.',
+      'novel.usageSample.empty': 'No samples yet.',
+      'novel.usageSample.latest': 'Latest sample: turn {turn} · {time}',
+      'novel.usageSample.toolBytesTotal': 'Tool output total: {size}',
+      'novel.usageSample.toolBytes': '{tool}: {size}',
+      'novel.usageSample.writerOutput': 'Writer output: {chars} characters',
       'novel.assets': 'Asset sources',
       'novel.assetsCharacters': 'Characters: {names}',
       'novel.assetsWorlds': 'World books: {names}',
@@ -592,6 +601,11 @@ window.__ModuleLoader__.load({
       'novel.form.retryMaxAttempts': 'External retry attempts',
       'novel.form.retryBackoffMs': 'External retry backoff (ms)',
       'novel.form.maxDeduceRuns': 'Deduce run limit',
+      'novel.form.writerDispatchLimit': 'Writer dispatch limit (per claim)',
+      'novel.form.writerMode': 'Writing mode',
+      'novel.form.writerMode.inline': 'In-session',
+      'novel.form.writerMode.subagent': 'Writer subagent',
+      'novel.form.writerMode.hint': 'The writer subagent drafts each unit in its own bounded writing context; in-session mode drafts directly in the main session context.',
       'novel.form.submit': 'Create novel',
       'novel.form.missingRequired': 'Title and creative requirement are required.',
       'novel.form.invalidNumbers': 'Check the numeric fields: target characters must be a positive integer, tolerance ratio within [0,1), and the hard maximum must not be below the target.',
@@ -891,6 +905,7 @@ window.__ModuleLoader__.load({
       'novel.editTitle': '编辑小说',
       'novel.edit.invalidBudgets': '运行预算必须为正整数。',
       'novel.edit.budgetsHint': '预算自下一轮起生效；因预算暂停的小说需手动恢复后才会继续。',
+      'novel.edit.writerModeHint': '写作模式自下一写作单元起生效；已认领的单元按认领时的模式完成。',
       'novel.genre': '题材',
       'novel.delete': '删除 {name}',
       'novel.deleteConfirm': '删除小说“{name}”？运行中的小说会先暂停，绑定会话会解绑，全部小说数据将被删除，且不可撤销。',
@@ -928,6 +943,14 @@ window.__ModuleLoader__.load({
       'novel.remainingCharacters': '剩余：{value} 字符',
       'novel.remainingUnbounded': '剩余：不限',
       'novel.runBudget': '轮次 {used}/{max} · 推演 {deduce}/{maxDeduce}',
+      'novel.runWriterRuns': '写手运行 {count}',
+      'novel.usageSample.title': '用量采样',
+      'novel.usageSample.hint': '按轮次采样的工具输出用量，仅供审计参考，非权威计费数据。',
+      'novel.usageSample.empty': '暂无采样。',
+      'novel.usageSample.latest': '最近采样：第 {turn} 轮 · {time}',
+      'novel.usageSample.toolBytesTotal': '工具输出合计：{size}',
+      'novel.usageSample.toolBytes': '{tool}：{size}',
+      'novel.usageSample.writerOutput': '写手产出：{chars} 字符',
       'novel.assets': '资产来源',
       'novel.assetsCharacters': '角色：{names}',
       'novel.assetsWorlds': '世界书：{names}',
@@ -966,6 +989,11 @@ window.__ModuleLoader__.load({
       'novel.form.retryMaxAttempts': '外部重试次数',
       'novel.form.retryBackoffMs': '外部重试退避（毫秒）',
       'novel.form.maxDeduceRuns': '推演次数上限',
+      'novel.form.writerDispatchLimit': '写手派发上限（每认领）',
+      'novel.form.writerMode': '写作模式',
+      'novel.form.writerMode.inline': '主会话写作',
+      'novel.form.writerMode.subagent': '写手子代理',
+      'novel.form.writerMode.hint': '写手子代理在每单元独立的有界写作上下文中完成正文；主会话模式在主会话上下文中直接写作。',
       'novel.form.submit': '创建小说',
       'novel.form.missingRequired': '标题与创作要求为必填项。',
       'novel.form.invalidNumbers': '请检查数值字段：目标字符数须为正整数，浮动比例在 [0,1) 内，硬上限不得低于目标。',
@@ -4438,6 +4466,46 @@ window.__ModuleLoader__.load({
       return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : String(value || '—')
     }
 
+    // 写手运行计数（0007 §7）：与 deduceRuns 同类的运行计数、无上限；detail 投影
+    // 未暴露该字段时返回 null，面板隐藏而不显示编造的 0。多路径读取兼容
+    // budget 投影（对齐 deduceRuns 的暴露位置）与 run 快照两种形态。
+    function novelWriterRuns(novel) {
+      const value = novel?.budget?.writerRuns ?? novel?.run?.writerRuns
+      return Number.isFinite(value) ? value : null
+    }
+
+    // 用量采样（0007 §7 W0）：审计性质、非权威——客户端只如实展示实测字段，
+    // 不做四分类等分析性投影。采样数组按写入顺序追加，末位即最近一条；
+    // 仍以 recordedAt 兜底比较，防御乱序数据。
+    function novelUsageSamples(novel) {
+      const raw = novel?.usageSamples ?? novel?.run?.usageSamples ?? novel?.budget?.usageSamples
+      if (!Array.isArray(raw)) return []
+      return raw.filter((item) => item !== null && typeof item === 'object')
+    }
+
+    function novelLatestUsageSample(novel) {
+      const samples = novelUsageSamples(novel)
+      if (samples.length === 0) return null
+      return samples.reduce((latest, item) => (
+        Date.parse(item.recordedAt || '') > Date.parse(latest.recordedAt || '') ? item : latest
+      ))
+    }
+
+    function novelToolBytesEntries(sample) {
+      const raw = sample?.toolBytes
+      if (raw === null || typeof raw !== 'object') return []
+      return Object.entries(raw).filter(([, bytes]) => Number.isFinite(bytes))
+    }
+
+    function novelToolBytesTotal(sample) {
+      return novelToolBytesEntries(sample).reduce((sum, [, bytes]) => sum + bytes, 0)
+    }
+
+    function formatNovelBytes(bytes) {
+      const value = Number.isFinite(bytes) ? bytes : 0
+      return `${(value / 1024).toFixed(1)} KB`
+    }
+
     function novelCharactersText(t, novel) {
       const effective = Number(novel?.effectiveCharacters || 0).toLocaleString()
       if (novel?.targetCharacters === null || novel?.targetCharacters === undefined) {
@@ -4532,6 +4600,11 @@ window.__ModuleLoader__.load({
       const remaining = budget.remainingCharacters ?? null
       const requirements = Array.isArray(novel?.requirements) ? novel.requirements : []
       const config = novel?.config || {}
+      const writerRuns = novelWriterRuns(novel)
+      const usageSample = novelLatestUsageSample(novel)
+      const usageTools = novelToolBytesEntries(usageSample)
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 5)
       return h('div', { className: 'dt-novel-block' },
         h('h4', null, t('novel.authorPanel')),
         h('p', { className: 'dt-hint' }, t('novel.authorHint')),
@@ -4566,7 +4639,25 @@ window.__ModuleLoader__.load({
             max: budget.maxTurns ?? '—',
             deduce: budget.deduceRuns ?? 0,
             maxDeduce: budget.maxDeduceRuns ?? '—',
-          }))),
+          })),
+          writerRuns === null
+            ? null
+            : h('span', null, t('novel.runWriterRuns', { count: Number(writerRuns).toLocaleString() }))),
+        h('h4', null, t('novel.usageSample.title')),
+        usageSample === null
+          ? h('p', { className: 'dt-muted' }, t('novel.usageSample.empty'))
+          : h('div', { className: 'dt-novel-kv' },
+            h('span', null, t('novel.usageSample.latest', {
+              turn: usageSample.turn ?? '—',
+              time: formatNovelTime(usageSample.recordedAt),
+            })),
+            h('span', null, t('novel.usageSample.toolBytesTotal', { size: formatNovelBytes(novelToolBytesTotal(usageSample)) })),
+            usageTools.map(([tool, bytes]) => h('span', { key: tool },
+              t('novel.usageSample.toolBytes', { tool, size: formatNovelBytes(bytes) }))),
+            Number.isFinite(usageSample.writerOutputChars)
+              ? h('span', null, t('novel.usageSample.writerOutput', { chars: Number(usageSample.writerOutputChars).toLocaleString() }))
+              : null),
+        h('p', { className: 'dt-hint' }, t('novel.usageSample.hint')),
         h('h4', null, t('novel.assets')),
         (config.characterNames?.length || 0) + (config.worldNames?.length || 0) > 0
           ? h('div', { className: 'dt-novel-kv' },
@@ -4915,6 +5006,10 @@ window.__ModuleLoader__.load({
       { key: 'retryMaxAttempts', label: 'novel.form.retryMaxAttempts', preset: '3', pick: (b) => b?.externalRetry?.maxAttempts, put: (b, v) => ({ ...b, externalRetry: { ...b?.externalRetry, maxAttempts: v } }) },
       { key: 'retryBackoffMs', label: 'novel.form.retryBackoffMs', preset: '2000', pick: (b) => b?.externalRetry?.backoffMs, put: (b, v) => ({ ...b, externalRetry: { ...b?.externalRetry, backoffMs: v } }) },
       { key: 'maxDeduceRuns', label: 'novel.form.maxDeduceRuns', preset: '20', pick: (b) => b?.maxDeduceRuns, put: (b, v) => ({ ...b, maxDeduceRuns: v }) },
+      // 可选预算字段：留空 = 省略该键（服务端回落到 0007 §5.3 内置默认 3）。
+      // optional 标记让旧快照（无此字段）的编辑面板不因空值判无效，也不会
+      // 把它从既有 budgets 中抹掉——清空输入即回归默认，与全量编辑语义自洽。
+      { key: 'writerDispatchLimit', label: 'novel.form.writerDispatchLimit', preset: '3', optional: true, pick: (b) => b?.writerDispatchLimit, put: (b, v) => (v === null ? { ...b } : { ...b, writerDispatchLimit: v }) },
     ]
     // 产品预设值：提交时传完整配置（提案 §4.1），内部不依赖服务端默认参数；预算默认取自字段描述符。
     const NOVEL_FORM_PRESETS = {
@@ -4979,6 +5074,7 @@ window.__ModuleLoader__.load({
         hardMaximumCharacters: '',
         maxChapters: '',
         approvalMode: 'automatic',
+        writerMode: 'inline',
         characterNames: [],
         worldNames: [],
         ...NOVEL_FORM_PRESETS,
@@ -5020,7 +5116,7 @@ window.__ModuleLoader__.load({
             && (hardText === '' || hardMaximum !== null)
             && (hardMaximum === null || hardMaximum >= target))
         const maxChaptersValid = maxChaptersText === '' || maxChapters !== null
-        if (!lengthValid || !maxChaptersValid || NOVEL_BUDGET_FIELDS.some((field) => field.pick(budgets) === null)) {
+        if (!lengthValid || !maxChaptersValid || NOVEL_BUDGET_FIELDS.some((field) => !field.optional && field.pick(budgets) === null)) {
           setError(t('novel.form.invalidNumbers'))
           return
         }
@@ -5036,6 +5132,7 @@ window.__ModuleLoader__.load({
             : { kind: 'unbounded' },
           maxChapters,
           approvalMode: form.approvalMode === 'manual' ? 'manual' : 'automatic',
+          writerMode: form.writerMode === 'subagent' ? 'subagent' : 'inline',
           characterNames: [...form.characterNames],
           worldNames: [...form.worldNames],
           budgets,
@@ -5106,7 +5203,14 @@ window.__ModuleLoader__.load({
           segmented('novel.form.approval', form.approvalMode, [
             { key: 'approvalMode', value: 'automatic', label: 'novel.form.approval.automatic' },
             { key: 'approvalMode', value: 'manual', label: 'novel.form.approval.manual' },
-          ]))),
+          ]),
+          // 写作模式（0007 §8）：与大纲批准同一控件风格；说明只描述上下文有界，
+          // 不做成本承诺（账单结论等 W3 实测数据）。预设 inline 直至默认切换。
+          segmented('novel.form.writerMode', form.writerMode, [
+            { key: 'writerMode', value: 'inline', label: 'novel.form.writerMode.inline' },
+            { key: 'writerMode', value: 'subagent', label: 'novel.form.writerMode.subagent' },
+          ]),
+          h('span', { className: 'dt-hint dt-novel-form-wide' }, t('novel.form.writerMode.hint')))),
       h('div', { className: 'dt-novel-form-section' },
         h('h4', null, t('novel.form.characters')),
         h(NovelCheckGrid, {
@@ -5143,6 +5247,7 @@ window.__ModuleLoader__.load({
       const [title, setTitle] = useState(novel.title || '')
       const [genre, setGenre] = useState('')
       const [budgets, setBudgets] = useState(null)
+      const [writerMode, setWriterMode] = useState('inline')
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
@@ -5151,6 +5256,7 @@ window.__ModuleLoader__.load({
         setTitle(typeof next?.title === 'string' ? next.title : novel.title || '')
         setGenre(typeof next?.config?.genre === 'string' ? next.config.genre : '')
         setBudgets(novelBudgetsToForm(next?.config?.budgets))
+        setWriterMode(next?.config?.writerMode === 'subagent' ? 'subagent' : 'inline')
       }
       useEffect(() => {
         let cancelled = false
@@ -5168,7 +5274,7 @@ window.__ModuleLoader__.load({
         if (nextTitle !== '' && nextTitle !== detail.title) patch.title = nextTitle
         if (nextGenre !== (detail.config?.genre ?? '')) patch.genre = nextGenre
         const parsed = novelFormToBudgets(budgets)
-        if (NOVEL_BUDGET_FIELDS.some((field) => field.pick(parsed) === null)) {
+        if (NOVEL_BUDGET_FIELDS.some((field) => !field.optional && field.pick(parsed) === null)) {
           setError(t('novel.edit.invalidBudgets'))
           return
         }
@@ -5176,6 +5282,13 @@ window.__ModuleLoader__.load({
         // 未改动的预算不下发，避免无意义的 revision 递增。
         if (novelBudgetsChanged(budgets, detail.config?.budgets)) {
           patch.budgets = parsed
+        }
+        // 写作模式（0007 §8）：与预算同走既有 PATCH 通道，仅在值变化时下发；
+        // 切换只影响下一单元（服务端语义），面板只如实展示与提交。
+        const nextWriterMode = writerMode === 'subagent' ? 'subagent' : 'inline'
+        const currentWriterMode = detail.config?.writerMode === 'subagent' ? 'subagent' : 'inline'
+        if (nextWriterMode !== currentWriterMode) {
+          patch.writerMode = nextWriterMode
         }
         if (Object.keys(patch).length === 0) {
           onSaved()
@@ -5224,6 +5337,25 @@ window.__ModuleLoader__.load({
             onChange: (value) => setBudgetField(field.key, value),
           }))),
         h('p', { className: 'dt-hint' }, t('novel.edit.budgetsHint'))),
+      h('div', { className: 'dt-novel-form-section' },
+        h('h4', null, t('novel.form.writerMode')),
+        h('div', { className: 'dt-novel-form-grid' },
+          h('div', { className: 'dt-field' },
+            h('span', { className: 'dt-label' }, t('novel.form.writerMode')),
+            h('div', { className: 'dt-segmented', role: 'group', 'aria-label': t('novel.form.writerMode') },
+              [
+                { value: 'inline', label: 'novel.form.writerMode.inline' },
+                { value: 'subagent', label: 'novel.form.writerMode.subagent' },
+              ].map((option) => h('button', {
+                key: option.value,
+                type: 'button',
+                className: writerMode === option.value ? 'dt-segmented-active' : '',
+                'aria-pressed': writerMode === option.value,
+                disabled: detail === null,
+                onClick: () => setWriterMode(option.value),
+              }, t(option.label)))))),
+        h('p', { className: 'dt-hint' }, t('novel.form.writerMode.hint')),
+        h('p', { className: 'dt-hint' }, t('novel.edit.writerModeHint'))),
       error ? h('p', { className: 'dt-error' }, error) : null,
       notice ? h('p', { className: 'dt-muted' }, notice) : null)
     }

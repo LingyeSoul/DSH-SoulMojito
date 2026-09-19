@@ -5210,6 +5210,9 @@ async function writeAtomic2(file, text) {
 }
 
 // packages/tavern-store/src/novel-model.ts
+function isWriterMode(value) {
+  return value === "inline" || value === "subagent";
+}
 function countEffectiveCharacters(text) {
   let count = 0;
   for (const ch of text) {
@@ -5234,6 +5237,9 @@ function validateRunBudgets(budgets) {
   const retry = b.externalRetry;
   if (typeof retry !== "object" || retry === null || Array.isArray(retry) || !isPositiveInteger(retry.maxAttempts) || !isPositiveInteger(retry.backoffMs)) {
     errors.push({ field: "budgets.externalRetry", message: "externalRetry.maxAttempts and backoffMs must be positive integers" });
+  }
+  if (b.writerDispatchLimit !== void 0 && !isPositiveInteger(b.writerDispatchLimit)) {
+    errors.push({ field: "budgets.writerDispatchLimit", message: "writerDispatchLimit must be a positive integer" });
   }
   return errors;
 }
@@ -5280,6 +5286,9 @@ function validateCreateConfig(config) {
   }
   if (c.approvalMode !== "automatic" && c.approvalMode !== "manual") {
     errors.push({ field: "approvalMode", message: "approvalMode must be 'automatic' or 'manual'" });
+  }
+  if (c.writerMode !== void 0 && !isWriterMode(c.writerMode)) {
+    errors.push({ field: "writerMode", message: "writerMode must be 'inline' or 'subagent'" });
   }
   for (const field of ["characterNames", "worldNames"]) {
     const list = c[field];
@@ -5370,8 +5379,8 @@ function validateOutlinePayload(payload) {
           errors.push({ field: `chapters[${index}].${field}`, message: `${field} must be a non-empty string` });
         }
       }
-      if (!Array.isArray(c.keyEvents) || c.keyEvents.some((e) => typeof e !== "string")) {
-        errors.push({ field: `chapters[${index}].keyEvents`, message: "keyEvents must be an array of strings" });
+      if (c.keyEvents !== void 0 && (!Array.isArray(c.keyEvents) || c.keyEvents.some((e) => typeof e !== "string"))) {
+        errors.push({ field: `chapters[${index}].keyEvents`, message: "keyEvents must be an array of strings when provided" });
       }
       if (c.plannedCharacters !== null && c.plannedCharacters !== void 0 && !isPositiveInteger(c.plannedCharacters)) {
         errors.push({ field: `chapters[${index}].plannedCharacters`, message: "plannedCharacters must be a positive integer or null" });
@@ -5382,12 +5391,8 @@ function validateOutlinePayload(payload) {
     }
   }
   const currentChapterId = p.currentChapterId;
-  if (currentChapterId !== null && currentChapterId !== void 0) {
-    if (typeof currentChapterId !== "string" || !chapterIds.has(currentChapterId)) {
-      errors.push({ field: "currentChapterId", message: "currentChapterId must reference a chapter in chapters" });
-    }
-  } else if (chapterIds.size > 0) {
-    errors.push({ field: "currentChapterId", message: "currentChapterId is required when chapters exist" });
+  if (currentChapterId !== null && currentChapterId !== void 0 && typeof currentChapterId !== "string") {
+    errors.push({ field: "currentChapterId", message: "currentChapterId must be a string or null" });
   }
   const scenes = p.scenes;
   if (!Array.isArray(scenes)) {
@@ -5448,6 +5453,22 @@ function validateOutlinePayload(payload) {
     } else if (new Set(droppedChapterIds).size !== droppedChapterIds.length) {
       errors.push({ field: "droppedChapterIds", message: "droppedChapterIds must not contain duplicates" });
     }
+  }
+  return errors;
+}
+function validateOutlineConsistency(chapters, currentChapterId) {
+  const errors = [];
+  const orders = chapters.map((chapter) => chapter.order);
+  if (new Set(orders).size !== orders.length) {
+    errors.push({ field: "chapters.order", message: "chapter order values must be unique across the plan (payload orders collide with carried-forward chapters)" });
+  }
+  const ids = new Set(chapters.map((chapter) => chapter.chapterId));
+  if (currentChapterId !== null && currentChapterId !== void 0) {
+    if (!ids.has(currentChapterId)) {
+      errors.push({ field: "currentChapterId", message: "currentChapterId must reference a chapter in the plan" });
+    }
+  } else if (ids.size > 0) {
+    errors.push({ field: "currentChapterId", message: "currentChapterId is required when chapters exist" });
   }
   return errors;
 }
@@ -5658,6 +5679,7 @@ var REQUIREMENT_SOURCES = /* @__PURE__ */ new Set(["composer", "panel", "interna
 var CANON_KINDS = /* @__PURE__ */ new Set(["event", "character-state", "relation", "foreshadowing", "variable"]);
 var SOURCE_REF_PATTERN = /^(commit-\d+)(?:#(\d+))?$/;
 var PARAGRAPH_SEPARATOR = "\n\n";
+var USAGE_SAMPLE_LIMIT = 50;
 var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("hex");
 var DSH_HOST_COMMAND = /@deepseek-ai[\\/]dsh\b|(?:^|[\\/ \t"'])dsh(?:\.(?:cmd|js|ps1|exe|bat))?["']?[ \t]+web\b/;
 function commandLineOf(pid) {
@@ -5789,6 +5811,8 @@ var NovelStore = class _NovelStore {
         currentUnitId: null,
         turnsRun: 0,
         deduceRuns: 0,
+        writerRuns: 0,
+        usageSamples: [],
         startedAt: now,
         completedAt: null,
         lastProgressSignature: null,
@@ -5808,6 +5832,8 @@ var NovelStore = class _NovelStore {
         currentUnitId: null,
         turnsRun: 0,
         deduceRuns: 0,
+        writerRuns: 0,
+        usageSamples: [],
         startedAt: now,
         completedAt: null,
         lastProgressSignature: null,
@@ -5838,7 +5864,10 @@ var NovelStore = class _NovelStore {
         schemaVersion: SCHEMA_VERSION,
         createdAt: now,
         updatedAt: now,
-        config: structuredClone(config),
+        // Storage-layer normalization (0007 §8): absent writerMode becomes
+        // 'inline' at creation — an explicit default, not mode magic; the
+        // panel can switch it later via patchNovelMeta.
+        config: { ...structuredClone(config), writerMode: config.writerMode ?? "inline" },
         assets,
         outline: null,
         requirements: [requirement],
@@ -5881,6 +5910,12 @@ var NovelStore = class _NovelStore {
     if (patch.premiseNote !== void 0 && typeof patch.premiseNote !== "string") {
       throw new NovelConfigError({ message: "patch.premiseNote must be a string" });
     }
+    if (patch.writerMode !== void 0 && !isWriterMode(patch.writerMode)) {
+      throw new NovelConfigError({
+        message: "patch.writerMode must be 'inline' or 'subagent'",
+        errors: [{ field: "writerMode", message: "writerMode must be 'inline' or 'subagent'" }]
+      });
+    }
     const budgetErrors = patch.budgets === void 0 ? [] : validateRunBudgets(patch.budgets);
     if (budgetErrors.length > 0) throw new NovelConfigError({ message: "invalid patch.budgets", errors: budgetErrors });
     return this.mutate(novelId, async () => {
@@ -5896,7 +5931,8 @@ var NovelStore = class _NovelStore {
           // Budgets are read fresh from the snapshot by turn accounting
           // (noteTurn/noteDeduceRun), so an edit applies from the next turn
           // without touching a live run (§13).
-          ...patch.budgets !== void 0 ? { budgets: structuredClone(patch.budgets) } : {}
+          ...patch.budgets !== void 0 ? { budgets: structuredClone(patch.budgets) } : {},
+          ...patch.writerMode !== void 0 ? { writerMode: patch.writerMode } : {}
         },
         premiseNote: patch.premiseNote ?? current.premiseNote
       };
@@ -5961,10 +5997,13 @@ var NovelStore = class _NovelStore {
   /** Creates the initial outline and processes the first requirement batch (§4.3). */
   async createOutline(novelId, input) {
     const payloadErrors = validateOutlinePayload(input.outline);
-    if (payloadErrors.length > 0) throw new NovelConfigError({ message: "invalid outline payload", errors: payloadErrors });
+    if (payloadErrors.length > 0) throw new NovelConfigError({ message: outlinePayloadErrorMessage(payloadErrors), errors: payloadErrors });
+    const chapters = materializeOutlineChapters(input.outline.chapters, /* @__PURE__ */ new Map());
+    const consistencyErrors = validateOutlineConsistency(chapters, input.outline.currentChapterId);
+    if (consistencyErrors.length > 0) throw new NovelConfigError({ message: outlinePayloadErrorMessage(consistencyErrors), errors: consistencyErrors });
     if (input.outline.droppedChapterIds?.length) {
       throw new NovelConfigError({
-        message: "invalid outline payload",
+        message: outlinePayloadErrorMessage([{ field: "droppedChapterIds", message: "nothing can be dropped when creating the initial outline" }]),
         errors: [{ field: "droppedChapterIds", message: "nothing can be dropped when creating the initial outline" }]
       });
     }
@@ -5981,7 +6020,7 @@ var NovelStore = class _NovelStore {
         sourceRequirementIds: handled.map((item) => item.requirementId),
         story: structuredClone(input.outline.story),
         characters: structuredClone(input.outline.characters),
-        chapters: structuredClone(input.outline.chapters),
+        chapters,
         currentChapterId: input.outline.currentChapterId,
         scenes: structuredClone(input.outline.scenes),
         foreshadowing: structuredClone(input.outline.foreshadowing)
@@ -5998,11 +6037,18 @@ var NovelStore = class _NovelStore {
    * Atomically revises the plan and the handled requirement results (§9.3).
    * Rejected while any unit is claimed (§9.2) and never drops or reorders
    * chapters that contain committed bodies (§6.1).
+   *
+   * `changes.chapters` is an overlay (§6.1): each entry replaces (or inserts)
+   * the same-id chapter, omitted optional fields are inherited from the
+   * existing entry, and every untouched chapter is carried forward — so a
+   * model working from a windowed novel_outline_read can advance the plan
+   * without echoing the whole chapter list. Removal happens only through
+   * droppedChapterIds.
    */
   async reviseOutline(novelId, input) {
     if (typeof input.reason !== "string" || input.reason.trim() === "") throw new NovelConfigError({ message: "revision reason must be a non-empty string" });
     const payloadErrors = validateOutlinePayload(input.changes);
-    if (payloadErrors.length > 0) throw new NovelConfigError({ message: "invalid outline payload", errors: payloadErrors });
+    if (payloadErrors.length > 0) throw new NovelConfigError({ message: outlinePayloadErrorMessage(payloadErrors), errors: payloadErrors });
     return this.mutate(novelId, async () => {
       const { dir, current } = await this.beginMutation(novelId);
       this.assertRevision(current, input.expectedRevision);
@@ -6014,10 +6060,16 @@ var NovelStore = class _NovelStore {
       if (current.units.some((unit) => unit.state === "claimed")) {
         throw new NovelRevisionConflictError({ expected: input.expectedRevision, actual: current.revision, detail: "claimed writing units in flight" });
       }
-      this.assertProtectedChapters(previous, current, input.changes.chapters);
-      this.assertAcknowledgedChapterDrops(previous, input.changes);
+      this.assertChapterDropDeclarations(previous, input.changes);
+      const previousById = new Map(previous.chapters.map((chapter) => [chapter.chapterId, chapter]));
+      const chapters = materializeOutlineChapters(input.changes.chapters, previousById, input.changes.droppedChapterIds);
+      const consistencyErrors = validateOutlineConsistency(chapters, input.changes.currentChapterId);
+      if (consistencyErrors.length > 0) {
+        throw new NovelConfigError({ message: outlinePayloadErrorMessage(consistencyErrors), errors: consistencyErrors });
+      }
+      this.assertProtectedChapters(previous, current, chapters);
       const handled = this.validateHandledRequirements(current, input.handledRequirements);
-      const outlineRevision = hash16({ kind: "outline", parent: previous.outlineRevision, reason: input.reason, payload: input.changes });
+      const outlineRevision = hash16({ kind: "outline", parent: previous.outlineRevision, reason: input.reason, payload: { ...input.changes, chapters } });
       const built = {
         outlineRevision,
         parentRevision: previous.outlineRevision,
@@ -6025,7 +6077,7 @@ var NovelStore = class _NovelStore {
         sourceRequirementIds: handled.map((item) => item.requirementId),
         story: structuredClone(input.changes.story),
         characters: structuredClone(input.changes.characters),
-        chapters: structuredClone(input.changes.chapters),
+        chapters,
         currentChapterId: input.changes.currentChapterId,
         scenes: structuredClone(input.changes.scenes),
         foreshadowing: structuredClone(input.changes.foreshadowing)
@@ -6602,6 +6654,48 @@ var NovelStore = class _NovelStore {
       await this.publish(dir, current.revision, next, "note-deduce-run");
     });
   }
+  /**
+   * Writer-subagent run accounting (0007 §7): merges writerRuns++ inside the
+   * lock. Deliberately no hard cap and no auto-pause — NovelRunBudgets gains
+   * no new limit; the hard budget edges stay with maxTurns/maxDurationMs.
+   * The `?? 0` amnesties legacy snapshots created before the field existed.
+   */
+  async noteWriterRun(novelId) {
+    await this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.status === "completed") return;
+      const run = { ...current.run, writerRuns: (current.run.writerRuns ?? 0) + 1 };
+      const next = { ...current, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), run };
+      await this.publish(dir, current.revision, next, "note-writer-run");
+    });
+  }
+  /**
+   * Appends one W0 usage sample (0007 §7, audit-grade — never authoritative
+   * billing): mutate + publish without CAS, same as noteTurn; completed runs
+   * short-circuit. Bounded ring: only the most recent 50 samples are kept,
+   * older ones dropped. The `?? []` amnesties legacy snapshots.
+   */
+  async noteUsageSample(novelId, sample) {
+    const errors = validateUsageSample(sample);
+    if (errors.length > 0) throw new NovelConfigError({ message: "invalid usage sample", errors });
+    await this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      if (current.run.status === "completed") return;
+      const stored = {
+        recordedAt: sample.recordedAt,
+        turn: sample.turn,
+        toolBytes: { ...sample.toolBytes },
+        ...sample.writerOutputChars !== void 0 ? { writerOutputChars: sample.writerOutputChars } : {},
+        ...sample.usage !== void 0 ? { usage: { ...sample.usage } } : {}
+      };
+      const run = {
+        ...current.run,
+        usageSamples: [...current.run.usageSamples ?? [], stored].slice(-USAGE_SAMPLE_LIMIT)
+      };
+      const next = { ...current, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), run };
+      await this.publish(dir, current.revision, next, "note-usage-sample");
+    });
+  }
   /* -------------------------------- reads -------------------------------- */
   async readBody(novelId, query) {
     if (query.limit !== void 0 && (!Number.isInteger(query.limit) || query.limit < 1)) throw new NovelConfigError({ message: "limit must be a positive integer" });
@@ -6900,15 +6994,15 @@ var NovelStore = class _NovelStore {
     if (violations.length > 0) throw new NovelPreconditionError({ rule: "committed-chapters", violations });
   }
   /**
-   * §6.1 allows pruning uncommitted chapters, but only explicitly: the revise
-   * payload replaces the whole plan, so a model that merely echoes back the
-   * chapter window it read (a 150-chapter plan shrank to its 12 written
-   * chapters in the field) must not silently delete the unwritten rest. Every
-   * previous chapter absent from the payload must be declared in
-   * droppedChapterIds; declarations must reference real, actually-removed
-   * chapters.
+   * §6.1 allows pruning uncommitted chapters, but only explicitly. Revise is
+   * an overlay — chapters absent from the payload are carried forward, so a
+   * model echoing back only the window it read (the 150→16 field shrink) can
+   * no longer silently delete the unwritten rest; deletion is structurally
+   * impossible without an explicit droppedChapterIds entry. Declarations must
+   * reference real chapters that are actually absent from the payload;
+   * committed/completed chapters are guarded by assertProtectedChapters.
    */
-  assertAcknowledgedChapterDrops(previous, changes) {
+  assertChapterDropDeclarations(previous, changes) {
     const declared = new Set(changes.droppedChapterIds ?? []);
     const nextIds = new Set(changes.chapters.map((chapter) => chapter.chapterId));
     const previousIds = previous.chapters.map((chapter) => chapter.chapterId);
@@ -6917,13 +7011,7 @@ var NovelStore = class _NovelStore {
       if (!previousIds.includes(id)) violations.push(`drop-not-planned:${id}`);
       else if (nextIds.has(id)) violations.push(`drop-contradicts-payload:${id}`);
     }
-    const unacknowledged = previousIds.filter((id) => !nextIds.has(id) && !declared.has(id));
-    const shown = unacknowledged.slice(0, 20);
-    for (const id of shown) violations.push(`chapter-dropped-without-acknowledgement:${id}`);
-    if (unacknowledged.length > shown.length) {
-      violations.push(`plus ${unacknowledged.length - shown.length} more silent drops; carry forward every existing chapter or list each removed chapterId in droppedChapterIds`);
-    }
-    if (violations.length > 0) throw new NovelPreconditionError({ rule: "unacknowledged-chapter-drops", violations });
+    if (violations.length > 0) throw new NovelPreconditionError({ rule: "invalid-chapter-drops", violations });
   }
   /** Run-state transitions after an outline create/revise (§4.3, §9.4). */
   runAfterOutlineChange(run, approvalMode, outlineRevision, requirements) {
@@ -6948,6 +7036,32 @@ var NovelStore = class _NovelStore {
     return run;
   }
 };
+function materializeOutlineChapters(overlay, previousById, droppedChapterIds) {
+  const overlayById = new Map(overlay.map((chapter) => [chapter.chapterId, chapter]));
+  const dropped = new Set(droppedChapterIds ?? []);
+  const merged = [];
+  for (const chapter of previousById.values()) {
+    if (dropped.has(chapter.chapterId) || overlayById.has(chapter.chapterId)) continue;
+    merged.push(structuredClone(chapter));
+  }
+  for (const chapter of overlay) {
+    const prior = previousById.get(chapter.chapterId);
+    merged.push({
+      chapterId: chapter.chapterId,
+      order: chapter.order,
+      title: chapter.title,
+      purpose: chapter.purpose,
+      keyEvents: [...chapter.keyEvents ?? prior?.keyEvents ?? []],
+      plannedCharacters: chapter.plannedCharacters ?? prior?.plannedCharacters ?? null,
+      entryCondition: chapter.entryCondition,
+      exitCondition: chapter.exitCondition
+    });
+  }
+  return merged.sort((left, right) => left.order - right.order);
+}
+function outlinePayloadErrorMessage(errors) {
+  return `invalid outline payload: ${errors.map((error) => `${error.field} ${error.message}`).join("; ")}`;
+}
 function applyHandledRequirements(records, handled, outlineRevision) {
   const byId = new Map(handled.map((item) => [item.requirementId, item]));
   return records.map((record) => {
@@ -7010,6 +7124,39 @@ function parseOwnerFile(novelId, ownerPath, raw) {
   } catch (cause) {
     throw new NovelStorageCorruptionError({ novelId, path: ownerPath, detail: `.owner.json is unreadable: ${cause.message}` });
   }
+}
+function isNonNegativeInteger(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+function validateUsageSample(sample) {
+  const errors = [];
+  const s = sample;
+  if (typeof s.recordedAt !== "string" || s.recordedAt.trim() === "") {
+    errors.push({ field: "recordedAt", message: "recordedAt must be a non-empty string" });
+  }
+  if (!isNonNegativeInteger(s.turn)) {
+    errors.push({ field: "turn", message: "turn must be a non-negative integer" });
+  }
+  errors.push(...validateSampleCounts(s.toolBytes, "toolBytes"));
+  if (s.writerOutputChars !== void 0 && !isNonNegativeInteger(s.writerOutputChars)) {
+    errors.push({ field: "writerOutputChars", message: "writerOutputChars must be a non-negative integer" });
+  }
+  if (s.usage !== void 0) {
+    errors.push(...validateSampleCounts(s.usage, "usage"));
+  }
+  return errors;
+}
+function validateSampleCounts(value, field) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return [{ field, message: `${field} must be an object of numbers` }];
+  }
+  const errors = [];
+  for (const [key, count] of Object.entries(value)) {
+    if (!isNonNegativeInteger(count)) {
+      errors.push({ field: `${field}.${key}`, message: `${field}.${key} must be a non-negative integer` });
+    }
+  }
+  return errors;
 }
 function embeddedWorldName(card) {
   const book = card.data.characterBook;
@@ -7192,6 +7339,41 @@ function unavailableWithReason(current, name2, detail) {
   return { available: false, missing, reasons: [REASONS[name2], detail, ...current.reasons] };
 }
 
+// packages/plugin/src/agent-novel/usage.ts
+var USAGE_SAMPLER_KEY = Symbol.for("dsh-tavern:novel-usage-sampler");
+var samplerTable = globalThis[USAGE_SAMPLER_KEY] ??= /* @__PURE__ */ new Map();
+function drainToolOutputBytes() {
+  const drained = {};
+  for (const [toolName, bytes] of samplerTable) {
+    drained[toolName] = bytes;
+  }
+  samplerTable.clear();
+  return drained;
+}
+var PROBE_AGENT_ID_KEY = Symbol.for("dsh-tavern:novel-writer-probe-agent-id");
+var probeAgentSlot = globalThis[PROBE_AGENT_ID_KEY] ??= {};
+function takeProbeAgentId() {
+  try {
+    const id = probeAgentSlot.id;
+    delete probeAgentSlot.id;
+    return typeof id === "string" && id !== "" ? id : null;
+  } catch {
+    return null;
+  }
+}
+var WRITER_RUN_USAGE_KEY = Symbol.for("dsh-tavern:novel-writer-run-usage");
+var writerRunUsageSlot = globalThis[WRITER_RUN_USAGE_KEY] ??= { outputChars: null, usage: null };
+function drainWriterRunUsage() {
+  try {
+    const drained = { outputChars: writerRunUsageSlot.outputChars, usage: writerRunUsageSlot.usage };
+    writerRunUsageSlot.outputChars = null;
+    writerRunUsageSlot.usage = null;
+    return drained;
+  } catch {
+    return { outputChars: null, usage: null };
+  }
+}
+
 // packages/plugin/src/agent-novel/capabilities.ts
 var AGENT_NOVEL_PRESET_ID = "agent-novel";
 function isObject(value) {
@@ -7230,6 +7412,103 @@ function inspectAgentNovelCapabilities(ctx) {
     missing,
     reasons,
     checkedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+var PROBE_TOOL = "novel_status_read";
+function messageOf(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function outputExcerptOf(output) {
+  const text = output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text ?? "").join("\n").trim();
+  return text === "" ? "(no text output)" : `output '${text.slice(0, 120)}'`;
+}
+async function probeSpawn(deps, label, prompt, allow) {
+  const runtime = deps.runtime;
+  if (runtime === void 0 || typeof runtime.start !== "function") {
+    return { ok: false, error: 'subagent runtime is unavailable in this deployment (enable the dsh-subagent bundle with an in-process "spawn" provider, 0007 \xA75)' };
+  }
+  const signal = deps.signal ?? new AbortController().signal;
+  let run;
+  try {
+    run = await runtime.start("spawn", {
+      label,
+      prompt: [{ type: "text", text: prompt }],
+      parent: deps.parent,
+      signal,
+      ...allow === null ? {} : { toolFilter: { allow } }
+    });
+  } catch (error) {
+    return { ok: false, error: `spawn failed: ${messageOf(error)}` };
+  }
+  try {
+    const result = await run.result;
+    return { ok: true, runId: run.id, result };
+  } catch (error) {
+    return { ok: false, error: `run result rejected: ${messageOf(error)}` };
+  } finally {
+    try {
+      await run.dispose();
+    } catch {
+    }
+  }
+}
+async function probeIdentityCorrelation(deps) {
+  takeProbeAgentId();
+  const spawn = await probeSpawn(
+    deps,
+    "dsh-tavern writer-probe \xB7 p1-identity",
+    `Host capability probe. Call the tool ${PROBE_TOOL} exactly once, then reply with exactly: ok. The tool may return an error about a missing novel binding \u2014 that is expected and fine; still reply ok after the single call.`,
+    [PROBE_TOOL]
+  );
+  if (!spawn.ok) return { item: { status: "fail", detail: `P1 spawn did not complete: ${spawn.error}` }, spawnOk: false };
+  const recorded = takeProbeAgentId();
+  if (recorded === spawn.runId) {
+    return {
+      item: { status: "pass", detail: `subagent tool execution carried exec.agent.id '${recorded}' equal to the spawn run id; the delegation registry key (0007 \xA76.2) is derivable` },
+      spawnOk: true
+    };
+  }
+  const detail = recorded === null ? `${PROBE_TOOL} never executed inside the probe subagent (stopReason ${spawn.result.stopReason}; ${outputExcerptOf(spawn.result.output)}) \u2014 the model may have skipped the call; re-run the probe before treating this as a host gap` : `exec.agent.id '${recorded}' does not match the spawn run id '${spawn.runId}' (stopReason ${spawn.result.stopReason}) \u2014 subagent tool executions are not attributable to their run`;
+  return { item: { status: "fail", detail }, spawnOk: true };
+}
+async function probeAllowList(deps, p1, spawnOk) {
+  if (!spawnOk) return { status: "fail", detail: `allow-reachable half not probed: the P1 spawn itself failed (${p1.detail})` };
+  if (p1.status !== "pass") {
+    return { status: "inconclusive", detail: `allow-reachable half unproven because P1 did not confirm a tool execution inside an allow-listed subagent (${p1.detail})` };
+  }
+  takeProbeAgentId();
+  const spawn = await probeSpawn(
+    deps,
+    "dsh-tavern writer-probe \xB7 p2-allowlist",
+    `Host capability probe. Try calling the tool ${PROBE_TOOL} once. If the tool is available to you, reply with exactly: tool-ran. If the tool is not available to you, reply with exactly: unavailable.`,
+    []
+  );
+  if (!spawn.ok) return { status: "fail", detail: `P2 spawn did not complete: ${spawn.error}` };
+  const recorded = takeProbeAgentId();
+  if (recorded !== null) {
+    return { status: "fail", detail: `${PROBE_TOOL} executed inside a subagent spawned with an empty allow list (exec.agent.id '${recorded}') \u2014 the host toolFilter does not enforce allow lists` };
+  }
+  const text = spawn.result.output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => (block.text ?? "").trim().toLocaleLowerCase()).join("\n");
+  if (text.includes("unavailable")) {
+    return { status: "pass", detail: `allow-reachable proven by the P1 execution; the empty-allow subagent reported the tool unavailable (observational \u2014 model-reported, not a host-side denial proof)` };
+  }
+  return {
+    status: "inconclusive",
+    detail: `allow-reachable proven by the P1 execution; the empty-allow subagent neither executed the tool nor clearly reported it unavailable (stopReason ${spawn.result.stopReason}; ${outputExcerptOf(spawn.result.output)}) \u2014 model compliance limits the probe; re-run or verify on a real E2E delegation`
+  };
+}
+async function inspectWriterSubagentCapabilities(deps = {}) {
+  const { item: p1, spawnOk } = await probeIdentityCorrelation(deps);
+  const p2 = await probeAllowList(deps, p1, spawnOk);
+  return {
+    probedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    spawnOk,
+    p1,
+    p2,
+    p3: {
+      status: "deferred-to-e2e",
+      reason: "end-to-end delegation (research \u2192 commit \u2192 out-of-scope rejection timing) requires a real-model run; not automatable in-process (0007 \xA79 P3)"
+    }
   };
 }
 
@@ -7347,6 +7626,39 @@ function anchorFor(snapshot2, sceneId) {
 function truncateText(text, max2) {
   return text.length <= max2 ? text : `${text.slice(0, max2)}\u2026`;
 }
+function allParticipantsOf(outline) {
+  const participants = /* @__PURE__ */ new Set();
+  for (const scene of outline.scenes) {
+    for (const participant of scene.participants) participants.add(participant);
+  }
+  return participants;
+}
+var BRIEF_STORY_LIMIT = 200;
+var BRIEF_CONDITION_LIMIT = 160;
+var BRIEF_PARTICIPANT_LIMIT = 120;
+var BRIEF_PARTICIPANTS_MAX = 6;
+function pushOutlineDigest(lines, snapshot2, chapterId) {
+  const outline = snapshot2.outline;
+  if (outline === null) return;
+  const story = [outline.story.premise, outline.story.mainConflict].filter((part) => part.trim() !== "");
+  const chapter = chapterId === null ? void 0 : outline.chapters.find((candidate) => candidate.chapterId === chapterId);
+  const participants = allParticipantsOf(outline);
+  const intros = [...participants].slice(0, BRIEF_PARTICIPANTS_MAX).map((participant) => {
+    const character = outline.characters.find((candidate) => candidate.characterId === participant || candidate.name === participant);
+    if (character === void 0) return participant;
+    const summary = [character.initialState, character.motivation].filter((part) => part.trim() !== "").join(" \xB7 ");
+    return summary === "" ? `${character.name} (${character.characterId})` : `${character.name} (${character.characterId}): ${truncateText(summary, BRIEF_PARTICIPANT_LIMIT)}`;
+  });
+  const digest = [];
+  if (story.length > 0) digest.push(`- story: ${truncateText(story.join(" \u2014 "), BRIEF_STORY_LIMIT)}`);
+  if (chapter !== void 0) {
+    if (chapter.entryCondition.trim() !== "") digest.push(`- chapter entry: ${truncateText(chapter.entryCondition, BRIEF_CONDITION_LIMIT)}`);
+    if (chapter.exitCondition.trim() !== "") digest.push(`- chapter exit: ${truncateText(chapter.exitCondition, BRIEF_CONDITION_LIMIT)}`);
+  }
+  for (const intro of intros) digest.push(`- participant: ${intro}`);
+  if (digest.length === 0) return;
+  lines.push("", "Outline digest (\xA76.1):", ...digest);
+}
 function renderWorkBrief(snapshot2, work) {
   const committed = totalEffectiveCharacters(snapshot2.commits);
   const budget = snapshot2.config.lengthBudget;
@@ -7358,6 +7670,7 @@ function renderWorkBrief(snapshot2, work) {
     `Reason: ${work.reason}`
   ];
   if (work.kind === "write-unit") {
+    pushOutlineDigest(lines, snapshot2, work.chapterId);
     const scene = snapshot2.outline?.scenes.find((candidate) => candidate.sceneId === work.sceneId);
     if (scene !== void 0) {
       lines.push("", "Scene plan (\xA76.1 current-chapter detail):");
@@ -7488,6 +7801,7 @@ var NovelDriver = class _NovelDriver {
           failed,
           ...failed ? { error: `turn ended with stop reason ${stopReasonOf(event.data)}` } : {}
         });
+        await this.sampleToolUsage(novelId, turn);
         const signature = progressSignature(snapshot2);
         if (signature !== snapshot2.run.lastProgressSignature) {
           await this.store.noteProgress(novelId, { signature });
@@ -7502,6 +7816,37 @@ var NovelDriver = class _NovelDriver {
       this.logWarn("turn-accounting-failed", { novelId, sessionId: session.id, operation: "note-turn", errorCode: errorCodeOf(error) });
     }
     this.schedule(novelId);
+  }
+  /**
+   * W0 usage sampling (0007 §7): after a successful noteTurn, drain the
+   * in-process per-tool output-byte accumulator and the writer-run observation
+   * slot (P4 fail-open: host-reported usage counters and the delegated
+   * writer's prose size) and persist one audit sample. Audit-grade, never
+   * authoritative: both slots are process-global without novel attribution,
+   * so with multiple novels running concurrently the drained values are
+   * attributed to the novel whose turn just ended — a known limitation
+   * accepted for an observation-only signal. Sampling failures are logged and
+   * never affect accounting or scheduling. Turn edges without a session turn
+   * number (degraded host shape) still account the turn but skip the sample:
+   * the recorded turn ordinal must come from the same source as the
+   * accounting edge.
+   */
+  async sampleToolUsage(novelId, turn) {
+    if (turn === null) return;
+    try {
+      const toolBytes = drainToolOutputBytes();
+      const writerUsage = drainWriterRunUsage();
+      if (Object.keys(toolBytes).length === 0 && writerUsage.outputChars === null && writerUsage.usage === null) return;
+      await this.store.noteUsageSample(novelId, {
+        recordedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        turn,
+        toolBytes,
+        ...writerUsage.outputChars !== null ? { writerOutputChars: writerUsage.outputChars } : {},
+        ...writerUsage.usage !== null ? { usage: writerUsage.usage } : {}
+      });
+    } catch (error) {
+      this.logWarn("usage-sample-failed", { novelId, operation: "note-usage-sample", errorCode: errorCodeOf(error) });
+    }
   }
   /* ------------------------------- scheduling ------------------------------- */
   /** External re-arm for user-driven state flips (resume, outline approval,
@@ -7593,7 +7938,7 @@ var NovelDriver = class _NovelDriver {
           this.logWarn("projection-repair-failed", { novelId, operation: "projection-repair", errorCode: errorCodeOf(error) });
           await this.store.pause(novelId, {
             reason: "projection-pending",
-            detail: `projection repair failed: ${messageOf(error)}`,
+            detail: `projection repair failed: ${messageOf2(error)}`,
             resumeHint: "repair the reading projections, then resume explicitly (\xA713)"
           });
           return;
@@ -7646,11 +7991,11 @@ var NovelDriver = class _NovelDriver {
         await this.store.resolveWorkIntent(novelId, {
           intentId: intent.intentId,
           outcome: "failed",
-          error: `followup delivery failed: ${messageOf(error)}`
+          error: `followup delivery failed: ${messageOf2(error)}`
         });
         await this.store.pause(novelId, {
           reason: "stalled",
-          detail: `followup delivery failed after ${briefSnapshot.config.budgets.externalRetry.maxAttempts} attempts: ${messageOf(error)}`,
+          detail: `followup delivery failed after ${briefSnapshot.config.budgets.externalRetry.maxAttempts} attempts: ${messageOf2(error)}`,
           resumeHint: "resume explicitly after reviewing the delivery failure (\xA713)"
         });
       } catch (handled) {
@@ -7740,7 +8085,7 @@ var NovelDriver = class _NovelDriver {
           try {
             await this.store.pause(summary.novelId, {
               reason: "recovery-required",
-              detail: `projection repair failed during recovery: ${messageOf(error)}`
+              detail: `projection repair failed during recovery: ${messageOf2(error)}`
             });
           } catch {
           }
@@ -7962,9 +8307,13 @@ function workInstruction(snapshot2, work, unitId) {
     case "outline-create":
       return "Kickoff work (\xA76.3): read the creation directive with novel_requirements_read, then create the initial plan with novel_outline_create (expectedRevision from novel_status_read; handle the pending directive in handledRequirements). End the turn after the outline is saved.";
     case "outline-revise":
-      return `Planning work (\xA76.3/\xA79.3): ${work.reason} Read the pending directives (novel_requirements_read) and the plan (novel_outline_read), then submit novel_outline_revise with the handled requirement results, or novel_requirement_block for directives conflicting with committed facts. The revise payload replaces the whole plan: page novel_outline_read (chapterFrom/chapterCount) until truncated is false and carry forward every existing chapter \u2014 a chapter absent from the payload counts as removed and must be declared in droppedChapterIds. End the turn afterwards.`;
-    case "write-unit":
+      return `Planning work (\xA76.3/\xA79.3): ${work.reason} Read the pending directives (novel_requirements_read) and the plan (novel_outline_read), then submit novel_outline_revise with the handled requirement results, or novel_requirement_block for directives conflicting with committed facts. The revise chapters are an overlay: send only the chapters you add or rewrite in full (omitted keyEvents are inherited) and set currentChapterId \u2014 untouched chapters are carried forward automatically, so do not page or re-echo the whole plan; removing a chapter requires its chapterId in droppedChapterIds. End the turn afterwards.`;
+    case "write-unit": {
+      if ((snapshot2.config.writerMode ?? "inline") === "subagent") {
+        return `Delegated writing unit ${unitId} (\xA76.2, writerMode=subagent): call novel_writer_delegate { unitId: '${unitId}' } directly \u2014 do NOT call novel_unit_claim first; the delegate tool claims the unit internally (a manual claim is only adopted when you pass its executionToken). The delegated writer subagent researches, writes and commits the prose itself: never write body text yourself in this mode. Check the returned receipt (commitId, effective characters, sceneCompletion \u2014 verified against the store, never model-reported) and end the turn immediately afterwards (\xA711). If the delegation fails, end the turn as well so the failure path can release the unit (\xA75.3).`;
+      }
       return `Writing unit ${unitId} (\xA76.2): claim it first with novel_unit_claim { unitId: '${unitId}', expectedOutlineRevision: '${outlineRevision}', expectedRequirementSequence: ${watermark} }, write the scene prose, then commit exactly once with novel_body_commit (plain-text paragraphs, the scene completion declaration and canon changes with paragraph sources). Paragraphs are pure narration: chapter/scene labels, headings, wrap-up notes ("\u6536\u675F", "\u5B8C\u7ED3") and next-unit previews never enter prose (\xA711). End the turn immediately after the commit (\xA711).`;
+    }
     case "chapter-complete":
       return `Chapter completion check (\xA76.3): verify the committed bodies with novel_body_read, then call novel_chapter_complete { chapterId: '${work.chapterId}', expectedContentRevision: '${snapshot2.contentRevision}', basis, openItems }. End the turn afterwards.`;
     case "finish":
@@ -7987,7 +8336,7 @@ function buildNoticeMessage(novelId, intentId, snapshot2, work, unitId) {
     source: { kind: "plugin", plugin: "dsh-tavern", form: "novel-notice", novelId, intentId }
   };
 }
-function messageOf(error) {
+function messageOf2(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function errorCodeOf(error) {
@@ -8900,6 +9249,26 @@ function validateCheckpoint(value, sessionId) {
   if (value.version !== 1 || value.sessionId !== sessionId || !Number.isSafeInteger(value.lastCursor) || !["ok", "pending"].includes(value.status)) {
     throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`);
   }
+}
+
+// packages/plugin/src/agent-tavern/deduce.ts
+function subagentRuntimeOf(parent) {
+  const ctx = parent?.ctx;
+  if (!ctx) return void 0;
+  try {
+    const looked = ctx.get?.("subagents");
+    if (isRuntime(looked)) return looked;
+  } catch {
+  }
+  try {
+    const direct = ctx.subagents;
+    if (isRuntime(direct)) return direct;
+  } catch {
+  }
+  return void 0;
+}
+function isRuntime(candidate) {
+  return typeof candidate === "object" && candidate !== null && typeof candidate.start === "function";
 }
 
 // packages/plugin/src/index.ts
@@ -9966,9 +10335,35 @@ function novelDetail(snapshot2) {
       maxTurns: snapshot2.config.budgets.maxTurns,
       deduceRuns: snapshot2.run.deduceRuns,
       maxDeduceRuns: snapshot2.config.budgets.maxDeduceRuns,
+      // 0007 §7: writerRuns rides the deduceRuns convention (uncapped counter
+      // beside the budget edges); usageSamples is the W0 audit ring. Both
+      // coalesce so legacy snapshots lacking the fields still project a
+      // constant shape — the store applies the same amnesty on write.
+      writerRuns: snapshot2.run.writerRuns ?? 0,
+      usageSamples: snapshot2.run.usageSamples ?? [],
       remainingCharacters: budget.kind === "target" ? Math.max(0, unitTargetRange(snapshot2.config, summary.effectiveCharacters).max) : null
     }
   };
+}
+async function discoverWriterProbeRuntime(ctx) {
+  try {
+    const db = await store();
+    const state = await db.getState();
+    for (const [sessionId, binding] of Object.entries(state.sessionBindings)) {
+      if (binding.architecture !== "agent-novel") continue;
+      let agent;
+      try {
+        agent = ctx.agents?.get?.(sessionId);
+      } catch {
+        continue;
+      }
+      const runtime2 = subagentRuntimeOf(agent);
+      if (runtime2 !== void 0) return { runtime: runtime2, parent: agent, channel: "bound-agent" };
+    }
+  } catch {
+  }
+  const runtime = subagentRuntimeOf({ ctx });
+  return runtime === void 0 ? void 0 : { runtime, parent: ctx, channel: "plugin-context" };
 }
 async function handleNovelsApi(ctx, req, res, url, route, method) {
   const novels = await novelStore();
@@ -9996,6 +10391,18 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
         violations: violations.map((item) => ({ field: item.field, message: item.message }))
       });
     }
+    if (config.writerMode === "subagent") {
+      const channel = await discoverWriterProbeRuntime(ctx);
+      const probe = await inspectWriterSubagentCapabilities(channel);
+      if (!probe.spawnOk || probe.p1.status === "fail") {
+        return sendJson(res, 400, {
+          ok: false,
+          message: `writer subagent mode is unavailable on this host (${probe.p1.detail}); create the novel with writerMode 'inline' instead (0007 \xA79)`,
+          code: "NOVEL_WRITER_PROBE",
+          probe
+        });
+      }
+    }
     const created = await novels.createNovel(await store(), config);
     const snapshot2 = await novels.getNovel(created.novelId);
     const summary = snapshot2 === void 0 ? void 0 : summarizeNovel(snapshot2);
@@ -10009,6 +10416,11 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
         revision: created.revision
       }
     });
+  }
+  if (method === "GET" && route === "novels/writer-probe") {
+    const channel = await discoverWriterProbeRuntime(ctx);
+    const probe = await inspectWriterSubagentCapabilities(channel);
+    return sendJson(res, 200, { ok: true, probe, channel: channel?.channel ?? "none" });
   }
   const parts = parseNovelRoute(route);
   if (parts === null) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });

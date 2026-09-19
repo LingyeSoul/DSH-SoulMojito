@@ -309,7 +309,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     expect(full.resumeHint).toBeNull()
     expect(full.chapters).toEqual([])
     expect(full.outlineSummary).toBeNull()
-    expect(full.budget).toMatchObject({ turnsRun: 0, maxTurns: 50, deduceRuns: 0, maxDeduceRuns: 5, remainingCharacters: null })
+    expect(full.budget).toMatchObject({ turnsRun: 0, maxTurns: 50, deduceRuns: 0, maxDeduceRuns: 5, writerRuns: 0, usageSamples: [], remainingCharacters: null })
     expect(full.requirements).toHaveLength(1)
     expect(full.requirements[0]).toMatchObject({ requirementId: 'req-1', sequence: 1, status: 'pending', text: '写一个酒馆老板与常客的故事' })
   })
@@ -319,6 +319,54 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     await apiHandler(makeGetRequest('/api/dsh-tavern/novels/missing-one'), res)
     expect(res.statusCode).toBe(404)
     expect(jsonBody(res)).toMatchObject({ ok: false, code: 'NOVEL_NOT_FOUND' })
+  })
+
+  it('projects writerRuns and usage samples in the detail budget block (0007 §7)', async () => {
+    const created = await novels.createNovel(store, novelConfig({ title: '写手投影' }) as never)
+    await novels.noteWriterRun(created.novelId)
+    await novels.noteUsageSample(created.novelId, {
+      recordedAt: '2026-09-18T00:00:00.000Z',
+      turn: 3,
+      toolBytes: { novel_outline_read: 2048 },
+      writerOutputChars: 1200,
+    })
+    const res = makeResponse()
+    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${created.novelId}`), res)
+    expect(res.statusCode).toBe(200)
+    const budget = jsonBody(res).novel.budget
+    // deduceRuns convention: writerRuns sits beside the budget edges and
+    // usageSamples is the audit ring; both are always present in the client
+    // contract (the client reads budget.writerRuns / budget.usageSamples).
+    expect(budget.writerRuns).toBe(1)
+    expect(budget.usageSamples).toEqual([
+      { recordedAt: '2026-09-18T00:00:00.000Z', turn: 3, toolBytes: { novel_outline_read: 2048 }, writerOutputChars: 1200 },
+    ])
+  })
+
+  it('blocks writerMode=subagent creation with probe evidence when no subagent runtime exists (0007 §9 fail-closed)', async () => {
+    const before = (await novels.listNovels()).length
+    const res = makeResponse()
+    await apiHandler(makeRequest(novelConfig({ title: '被闸门拦下的写手小说', writerMode: 'subagent' }), '/api/dsh-tavern/novels'), res)
+    expect(res.statusCode).toBe(400)
+    const body = jsonBody(res)
+    expect(body).toMatchObject({ ok: false, code: 'NOVEL_WRITER_PROBE' })
+    expect(body.message).toContain("writerMode 'inline'")
+    // The probe report rides along as evidence; without a runtime P1 must fail.
+    expect(body.probe).toMatchObject({ spawnOk: false, p1: { status: 'fail' } })
+    // Fail-closed means fail-closed: nothing was created.
+    expect((await novels.listNovels())).toHaveLength(before)
+  })
+
+  it('serves the writer probe report on GET novels/writer-probe (0007 §9)', async () => {
+    const res = makeResponse()
+    await apiHandler(makeGetRequest('/api/dsh-tavern/novels/writer-probe'), res)
+    expect(res.statusCode).toBe(200)
+    const body = jsonBody(res)
+    expect(body.ok).toBe(true)
+    expect(body.channel).toBe('none') // this test host exposes no subagent runtime
+    expect(body.probe.spawnOk).toBe(false)
+    expect(body.probe.p1.status).toBe('fail')
+    expect(body.probe.p3).toMatchObject({ status: 'deferred-to-e2e' })
   })
 
   it('serves a null outline before the plan exists', async () => {

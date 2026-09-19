@@ -23,16 +23,35 @@ import {
   type NovelOutlinePayload,
   type NovelSnapshot,
   type SceneCompletion,
+  type WritingUnit,
 } from '../../../tavern-store/src/index.js'
 import {
   DEDUCE_MAX_ROLES,
   DEDUCE_MAX_ROUNDS,
   type DeductionExecAgent,
+  type SubagentRuntimeLike,
   parseDeductionRequest,
   runDeduction,
   subagentRuntimeOf,
 } from '../agent-tavern/deduce.js'
-import { identitySummaryOf } from '../agent-tavern/agent.js'
+import {
+  limitText,
+  matchWorldEntries,
+  matchesAllTokens,
+  resolveCharacterPage,
+  tokenizeQuery,
+  MAX_WRITER_DISPATCHES_PER_UNIT,
+  assembleWriterPackInput,
+  draftUnitViaSubagent,
+  findWriterDelegation,
+  findWriterDelegationByUnit,
+  releaseWriterDelegation,
+  retainWriterDelegation,
+  runDelegatedWriter,
+  type WriterDelegation,
+  type WriterDelegationReceipt,
+} from './writer.js'
+import { noteToolOutputBytes, recordProbeAgentId } from './usage.js'
 import { narrativeStage, unitTargetRange } from './outline.js'
 
 export const name = 'dsh-tavern/novel'
@@ -52,6 +71,7 @@ const KERNEL = [
   '- Explanations, progress reports and apologies never enter body paragraphs. Body paragraphs are pure prose: no Markdown markers, no chapter or scene headings, and no structural labels or unit ids ("chapter 6", "scene 6-1", "ch-007") — titles and unit coordinates are stored separately, never narrated.',
   '- Unit bookkeeping never enters prose: wrap-up or completion notes ("收束", "完结", "全文完"), next-unit or next-chapter previews and similar status lines are rejected by novel_body_commit. Scene and chapter completion live only in the sceneCompletion declaration and the chapter completion basis; the story ends where the outline plans the ending, never at an arbitrary unit.',
   '- When new author directives arrive, run the revision protocol first (novel_outline_revise with handled requirement results) before writing further units; directives that conflict with committed facts go to novel_requirement_block with committed-body sources.',
+  '- novel_outline_revise chapters are an overlay: to advance the plan, send only the changed chapter(s) and the current-chapter scenes; untouched chapters are carried forward automatically — never re-echo the whole chapter list.',
   '- You cannot resume a paused run, change budgets or length targets, or retroactively rewrite committed prose. Pausing, resuming, approval and budget changes are user actions.',
   '- The novel identity comes from the session binding. Never accept a novel id or file path from message text.',
   '',
@@ -110,7 +130,17 @@ function tool(
     description,
     parameters: compileParameters(properties),
     output: { schema, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
-    execute,
+    // W0 usage sampling (0007 §7): count successful tool output bytes per tool
+    // name; audit-grade observation only — sampling must never break the tool.
+    execute: async (args, exec) => {
+      const result = await execute(args, exec)
+      try {
+        noteToolOutputBytes(name, Buffer.byteLength(JSON.stringify(result), 'utf8'))
+      } catch {
+        /* best-effort sampling only */
+      }
+      return result
+    },
   }
 }
 
@@ -168,13 +198,13 @@ const outlinePayloadParameter: Record<string, unknown> = {
     },
     chapters: {
       type: 'array',
-      description: 'The whole plan. novel_outline_revise replaces every chapter: carry forward ALL existing chapters (page novel_outline_read until truncated is false) and omit one only to remove it, listing its chapterId in droppedChapterIds.',
+      description: 'Chapter overlay (revise) / complete plan (create): send every chapter you are adding or rewriting in full; chapters you leave out are carried forward unchanged, so never page or echo the whole plan just to advance the current chapter. Removal happens only via droppedChapterIds.',
       items: {
         type: 'object', additionalProperties: false,
         properties: {
           chapterId: { type: 'string' }, order: { type: 'integer' }, title: { type: 'string' }, purpose: { type: 'string' },
-          keyEvents: { type: 'array', items: { type: 'string' }, description: 'May be omitted; defaults to no key events.' },
-          plannedCharacters: { type: ['integer', 'null'], description: 'Planned effective characters, null when unplanned; may be omitted (treated as null).' },
+          keyEvents: { type: 'array', items: { type: 'string' }, description: 'May be omitted: inherited from the existing chapter of the same id on revise, none for new chapters; send [] to clear.' },
+          plannedCharacters: { type: ['integer', 'null'], description: 'Planned effective characters, null when unplanned; may be omitted (inherited on revise, null otherwise).' },
           entryCondition: { type: 'string' }, exitCondition: { type: 'string' },
         },
         required: ['chapterId', 'order', 'title', 'purpose', 'entryCondition', 'exitCondition'],
@@ -182,7 +212,7 @@ const outlinePayloadParameter: Record<string, unknown> = {
     },
     droppedChapterIds: {
       type: 'array',
-      description: 'chapterIds intentionally removed from the plan (revise only). Every existing chapter absent from chapters must be listed here; omit the field when nothing is removed.',
+      description: 'chapterIds intentionally removed from the plan (revise only). They must exist and carry no committed prose; omit the field when nothing is removed.',
       items: { type: 'string' },
     },
     currentChapterId: { type: ['string', 'null'], description: 'chapterId of the current chapter; null only when chapters is empty.' },
@@ -352,12 +382,63 @@ const deductionOutput = objectOutput({
   failures: { type: 'array', items: { type: 'object', additionalProperties: true } },
   complete: { type: 'boolean' }, truncated: { type: 'boolean' },
 }, ['complete'])
+const writerDraftOutput = objectOutput({
+  unitId: { type: 'string' },
+  candidate: { type: 'object', additionalProperties: true, description: 'Candidate draft in the novel_body_commit payload shape: paragraphs (string[]), sceneCompletion, canonChanges.' },
+  stopReason: { type: 'string' },
+})
+const writerDelegateOutput = objectOutput({
+  unitId: { type: 'string' },
+  commitId: { type: 'string' },
+  effectiveChars: { type: 'integer' },
+  sceneCompletion: { type: 'object', additionalProperties: true },
+  dispatchCount: { type: 'integer' },
+}, ['dispatchCount'])
+
+/** Per-claim writer dispatch ceiling (0007 §5.3): the budgets override wins,
+ *  the built-in default otherwise. */
+function dispatchLimitFor(snapshot: NovelSnapshot): number {
+  return snapshot.config.budgets.writerDispatchLimit ?? MAX_WRITER_DISPATCHES_PER_UNIT
+}
+
+/** Shared launch preamble of the two writer tools (0007 §5.1/§5.2): resolve
+ *  the author binding, refuse nested delegations, then load the unit and the
+ *  subagent runtime. The optional guard runs after the unit resolves and
+ *  before the runtime probe — caller argument errors (like a wrong unit
+ *  state) must not be masked by a deployment gap. */
+async function requireWriterLaunchContext(exec: ToolExecution, args: Record<string, unknown>, section: '5.1' | '5.2', guard?: (unit: WritingUnit) => void): Promise<{
+  novelId: string
+  unitId: string
+  parent: DeductionExecAgent | undefined
+  runtime: SubagentRuntimeLike
+  snapshot: NovelSnapshot
+  unit: WritingUnit
+}> {
+  const binding = await resolveNovelBinding(exec)
+  if (binding.delegatedUnitId !== undefined) {
+    throw new Error('Delegated writers cannot spawn further writers (0007 §13: nested writer delegation is out of scope)')
+  }
+  const unitId = stringArg(args.unitId)
+  const snapshot = await snapshotOf(binding.novelId)
+  const unit = snapshot.units.find((item) => item.unitId === unitId)
+  if (unit === undefined) throw new Error(`writing unit '${unitId}' does not exist in this novel`)
+  guard?.(unit)
+  const parent = exec.agent as DeductionExecAgent | undefined
+  const runtime = subagentRuntimeOf(parent)
+  if (!runtime) {
+    throw new NovelCapabilityError({ reason: `subagent runtime is unavailable in this deployment; enable the dsh-subagent bundle with an in-process "spawn" provider to run writer subagents (0007 §${section})` })
+  }
+  return { novelId: binding.novelId, unitId, parent, runtime, snapshot, unit }
+}
 
 /* --------------------------------- tools --------------------------------- */
 
 function createTools(): ToolDefinition[] {
   return [
     tool('novel_status_read', 'Read the novel run state: status, phase, pause reason, current unit, outline revision, requirement watermark, budgets and length progress. No parameters; the novel identity comes from the session binding.', {}, statusOutput, async (_args, exec) => {
+      // P1 探针记录槽（0007 §9，Task D）：无条件 best-effort 覆盖写本次执行
+      // 身份，drain 后即空——正常路径零行为影响（见 usage.ts 模块头）。
+      recordProbeAgentId(exec.agent?.id)
       const novelId = await novelBindingFor(exec)
       const snapshot = await snapshotOf(novelId)
       const budget = snapshot.config.lengthBudget
@@ -499,7 +580,7 @@ function createTools(): ToolDefinition[] {
       outline: { ...outlinePayloadParameter, required: true },
       handledRequirements: { ...handledRequirementsParameter, description: 'Processing results for the pending requirements; the creation requirement must be handled here. May be omitted only when nothing is handled.' },
     }, outlineWriteOutput, async (args, exec) => {
-      const novelId = await novelBindingFor(exec)
+      const novelId = await authorBindingFor(exec)
       const result = await (await novelStore()).createOutline(novelId, {
         expectedRevision: stringArg(args.expectedRevision),
         outline: normalizeOutlinePayload(args.outline),
@@ -507,14 +588,14 @@ function createTools(): ToolDefinition[] {
       })
       return { outlineRevision: result.outlineRevision, revision: result.revision, watermark: result.watermark, source: { kind: 'novel-outline-create', id: novelId } }
     }),
-    tool('novel_outline_revise', 'Atomically revise the plan and the handled directive results (§9.3). Never touches committed prose; rejected while a unit is claimed.', {
+    tool('novel_outline_revise', 'Atomically revise the plan and the handled directive results (§9.3). Never touches committed prose; rejected while a unit is claimed. changes.chapters is an overlay: send only the chapters you add or rewrite in full — untouched chapters are carried forward automatically.', {
       expectedRevision: { type: 'string', required: true, description: 'Snapshot revision you read via novel_status_read.' },
       expectedOutlineRevision: { type: 'string', required: true, description: 'Outline revision this revision is based on.' },
       reason: { type: 'string', required: true, description: 'Why the plan changes; cite the directive ids or planning reason.' },
-      changes: { ...outlinePayloadParameter, required: true, description: 'The complete next outline payload (not a patch). Every existing chapter absent from it counts as a removal and must be declared in droppedChapterIds.' },
+      changes: { ...outlinePayloadParameter, required: true, description: 'The next outline. story, characters, scenes and foreshadowing replace wholesale; chapters is an overlay (only the chapters you send are replaced or inserted, omitted chapters are carried forward, droppedChapterIds removes explicitly).' },
       handledRequirements: { ...handledRequirementsParameter, description: 'Per-directive results for the pending contiguous prefix. May be omitted only when nothing is handled.' },
     }, outlineWriteOutput, async (args, exec) => {
-      const novelId = await novelBindingFor(exec)
+      const novelId = await authorBindingFor(exec)
       const result = await (await novelStore()).reviseOutline(novelId, {
         expectedRevision: stringArg(args.expectedRevision),
         expectedOutlineRevision: stringArg(args.expectedOutlineRevision),
@@ -530,7 +611,7 @@ function createTools(): ToolDefinition[] {
       conflictReason: { type: 'string', required: true, description: 'Why the directive contradicts committed facts.' },
       bodySources: { type: 'array', items: { type: 'string' }, description: "Conflicting paragraphs as commit-<n>#<index> references; may be omitted or empty." },
     }, blockOutput, async (args, exec) => {
-      const novelId = await novelBindingFor(exec)
+      const novelId = await authorBindingFor(exec)
       if (args.bodySources !== undefined && (!Array.isArray(args.bodySources) || args.bodySources.some((source) => typeof source !== 'string'))) {
         throw new Error('bodySources must be an array of strings')
       }
@@ -547,7 +628,14 @@ function createTools(): ToolDefinition[] {
       expectedOutlineRevision: { type: 'string', required: true, description: 'Outline revision you base this unit on.' },
       expectedRequirementSequence: { type: 'integer', required: true, description: 'Requirement watermark you read via novel_status_read.' },
     }, claimOutput, async (args, exec) => {
-      const novelId = await novelBindingFor(exec)
+      // §6: claim is author-only — a delegated writer must never claim (claim
+      // is not in WRITER_ALLOW_LIST; this is the tool-layer backstop when the
+      // host toolFilter is absent or ineffective).
+      const claimBinding = await resolveNovelBinding(exec)
+      if (claimBinding.delegatedUnitId !== undefined) {
+        throw new Error('Unit claiming must be performed by the delegating author (§6: claim is not part of the writer delegation)')
+      }
+      const novelId = claimBinding.novelId
       const snapshot = await snapshotOf(novelId)
       const claim = await (await novelStore()).claimUnit(novelId, {
         unitId: stringArg(args.unitId),
@@ -572,12 +660,21 @@ function createTools(): ToolDefinition[] {
     }),
     tool('novel_body_commit', 'Commit body prose for a claimed unit and end the writing turn (§10.4/§11). Paragraphs are plain text with no Markdown and no chapter headings; paragraphs carrying structural labels, unit ids or wrap-up notes (e.g. "chapter 6 scene 6-1 收束", "下一章 ch-007 …") are rejected — completion status belongs in sceneCompletion, never in prose. Canon change sources may use commit-<n>#<index> or inline references into this candidate body; the server fills in the commit id (§10.4).', {
       unitId: { type: 'string', required: true },
-      executionToken: { type: 'string', required: true, description: 'Token returned by novel_unit_claim.' },
+      executionToken: { type: 'string', description: 'Token returned by novel_unit_claim; delegated writer runs omit it.' },
       paragraphs: { type: 'array', required: true, items: { type: 'string' }, description: 'Non-empty plain-text paragraphs of pure narration; blank entries are rejected, and so are unit bookkeeping lines — chapter/scene labels and ids, headings, wrap-up notes ("收束", "完结") and next-unit previews.' },
       sceneCompletion: { ...sceneCompletionParameter, required: true },
       canonChanges: { ...canonChangesParameter, required: true },
     }, commitOutput, async (args, exec) => {
-      const novelId = await novelBindingFor(exec)
+      const binding = await resolveNovelBinding(exec)
+      const novelId = binding.novelId
+      const unitId = stringArg(args.unitId)
+      // §6.2 delegated scope: a writer subagent may only commit its delegated
+      // unit — any other unit id is rejected before any store call. This is
+      // the tool-layer front gate; the commitBody token-hash check stays the
+      // final guard.
+      if (binding.delegatedUnitId !== undefined && unitId !== binding.delegatedUnitId) {
+        throw new Error(`delegated writer may only commit unit '${binding.delegatedUnitId}' of novel '${novelId}' (§6.2 delegation scope)`)
+      }
       // Tool-layer structural validation (§11: runtime structure checks first).
       const paragraphs = args.paragraphs
       if (!Array.isArray(paragraphs) || paragraphs.length === 0) throw new Error('paragraphs must be a non-empty array of plain-text strings')
@@ -589,7 +686,6 @@ function createTools(): ToolDefinition[] {
       if (bookkeeping !== undefined) throw new Error(bookkeeping)
       const completion = normalizeSceneCompletion(args.sceneCompletion)
       if (!Array.isArray(args.canonChanges)) throw new Error('canonChanges must be an array (§8.2)')
-      const unitId = stringArg(args.unitId)
       const snapshot = await snapshotOf(novelId)
       // §10.3 idempotent retry: a unit that already committed resolves inline
       // sources against its own existing commit, so an identical retry replays
@@ -604,7 +700,7 @@ function createTools(): ToolDefinition[] {
       })
       const receipt = await (await novelStore()).commitBody(novelId, {
         unitId,
-        executionToken: stringArg(args.executionToken),
+        executionToken: executionTokenFor(args, exec, binding),
         paragraphs: paragraphs as string[],
         sceneCompletion: completion,
         canonChanges,
@@ -621,13 +717,144 @@ function createTools(): ToolDefinition[] {
         source: { kind: 'novel-commit', id: receipt.commitId },
       }
     }),
+    tool('novel_writer_draft', 'Delegate the drafting of one claimed writing unit to a one-shot tool-free writer subagent (0007 §5.1, W1). Flow: claim the unit with novel_unit_claim first, then call this tool; it assembles a bounded writer pack from the store (story, chapter, scene, character pages, lore, body tail, foreshadowing, canon, unit parameters), spawns the writer, and returns the candidate draft ({paragraphs, sceneCompletion, canonChanges}). The candidate is NOT committed prose: review it, then submit exactly once with novel_body_commit. Pack assembly or writer failures throw structured errors and never degrade to silent partial output.', {
+      unitId: { type: 'string', required: true, description: 'The claimed writing unit id from novel_unit_claim.' },
+    }, writerDraftOutput, async (args, exec) => {
+      const { novelId, unitId, parent, runtime, snapshot, unit } = await requireWriterLaunchContext(exec, args, '5.1', (candidate) => {
+        if (candidate.state !== 'claimed') {
+          throw new Error(`writing unit '${candidate.unitId}' is '${candidate.state}', not claimed — claim it with novel_unit_claim before drafting (§6.2)`)
+        }
+      })
+      const store = await novelStore()
+      const input = await assembleWriterPackInput({ novelStore: store, snapshot, unit, mode: 'full' })
+      const drafted = await draftUnitViaSubagent({ runtime, parent, signal: exec.signal, novelId, unitId }, input)
+      return {
+        unitId,
+        candidate: {
+          paragraphs: [...drafted.candidate.paragraphs],
+          sceneCompletion: drafted.candidate.sceneCompletion,
+          canonChanges: [...drafted.candidate.canonChanges],
+        },
+        stopReason: drafted.stopReason,
+      }
+    }),
+    tool('novel_writer_delegate', 'Delegate a writing unit end-to-end to a delegated writer subagent (0007 §5.2, W2). The tool claims the unit internally, spawns a writer holding a single-unit delegation that researches with read tools and commits itself, verifies the commit against the store snapshot (never trusting model self-report), and returns the receipt (commitId, effective characters, scene completion). The main agent never touches body bytes. Pass executionToken only when you already claimed this unit manually via novel_unit_claim (the claim is adopted); otherwise omit it. Calling again after a success replays the receipt idempotently. Dispatches per claim are capped (budgets.writerDispatchLimit, default 3); failures retain the claim for re-dispatch until the limit is reached.', {
+      unitId: { type: 'string', required: true, description: 'The writing unit to delegate (prepared, or already claimed by you).' },
+      executionToken: { type: 'string', description: 'Only for adopting a manual claim: the token returned by your novel_unit_claim. Omit it in the normal subagent flow — the tool claims internally.' },
+    }, writerDelegateOutput, async (args, exec) => {
+      const { novelId, unitId, parent, runtime, snapshot, unit } = await requireWriterLaunchContext(exec, args, '5.2')
+      const store = await novelStore()
+
+      // Unit dispatch state machine (0007 §5.2/§5.3).
+      let delegation: WriterDelegation
+      if (unit.state === 'committed') {
+        // Idempotent success (0005 §12 retry discipline): replay the receipt
+        // straight from the commit record; the consumed claim is released.
+        releaseWriterDelegation(novelId, unitId)
+        const commit = snapshot.commits.find((entry) => entry.unitId === unitId)
+        if (commit === undefined) throw new Error(`unit '${unitId}' is committed but carries no commit record (inconsistent snapshot)`)
+        return {
+          unitId,
+          commitId: commit.commitId,
+          effectiveChars: commit.effectiveCharacters,
+          sceneCompletion: { completed: commit.sceneCompleted, basis: commit.completionBasis, outstandingGoals: [...commit.outstandingGoals] },
+        }
+      }
+      if (unit.state === 'prepared') {
+        // Internal claim: outline revision and watermark come from the snapshot
+        // the driver's notice interpolated the same values from — a racing
+        // revision surfaces the store's CAS conflict verbatim.
+        const outlineRevision = snapshot.outline?.outlineRevision
+        if (outlineRevision === undefined || outlineRevision === null) {
+          throw new Error('novel has no outline yet; a writing unit cannot be delegated without one (§6.3)')
+        }
+        const claim = await store.claimUnit(novelId, {
+          unitId,
+          expectedOutlineRevision: outlineRevision,
+          expectedRequirementSequence: requirementWatermark(snapshot.requirements),
+        })
+        delegation = {
+          novelId,
+          unitId,
+          executionToken: claim.executionToken,
+          intentId: snapshot.run.inFlightIntent?.intentId ?? null,
+          grantedAt: new Date().toISOString(),
+          dispatchCount: 1,
+        }
+      } else if (unit.state === 'claimed') {
+        const retained = findWriterDelegationByUnit(novelId, unitId)
+        if (retained !== undefined) {
+          // Same-claim re-dispatch (§5.3): the token is unconsumed and the unit
+          // still claimed, so the previous dispatch count carries forward.
+          const nextDispatch = retained.dispatchCount + 1
+          if (nextDispatch > dispatchLimitFor(snapshot)) {
+            releaseWriterDelegation(novelId, unitId)
+            throw new Error(`writer re-dispatch limit reached for unit '${unitId}': ${dispatchLimitFor(snapshot)} dispatches exhausted on this claim (§5.3) — end the turn and let the failure path release the unit`)
+          }
+          delegation = { ...retained, dispatchCount: nextDispatch, grantedAt: new Date().toISOString() }
+        } else if (typeof args.executionToken === 'string' && args.executionToken.trim() !== '') {
+          // Adoption of a manual claim: dispatchCount starts at 1; the token's
+          // validity is ultimately proven by the commitBody hash check.
+          delegation = {
+            novelId,
+            unitId,
+            executionToken: stringArg(args.executionToken),
+            intentId: snapshot.run.inFlightIntent?.intentId ?? null,
+            grantedAt: new Date().toISOString(),
+            dispatchCount: 1,
+          }
+        } else {
+          throw new Error(`unit '${unitId}' is already claimed but no writer delegation is registered for it: in subagent mode call novel_writer_delegate directly (it claims internally) instead of claiming manually first, or pass the executionToken returned by your novel_unit_claim (§5.2)`)
+        }
+      } else {
+        // superseded / anything else: the unit left the claimable states.
+        releaseWriterDelegation(novelId, unitId)
+        throw new Error(`writing unit '${unitId}' is '${unit.state}' and cannot be delegated (§6.2)`)
+      }
+
+      // Drop any retained copy so the live run-scoped entry is the only one;
+      // runDelegatedWriter registers under the spawn run id and clears it in
+      // its finally block.
+      releaseWriterDelegation(novelId, unitId)
+      let receipt: WriterDelegationReceipt
+      try {
+        receipt = await runDelegatedWriter({ runtime, parent, signal: exec.signal, novelStore: store }, delegation)
+      } catch (cause) {
+        // Failure retains the claim for same-claim re-dispatch (§5.3). The
+        // registry stays a volatile in-process map: a process crash wipes it
+        // and recovery goes through the existing stop/retry path (claimed and
+        // uncommitted units are reset to prepared with attempt+1, §12.3) — no
+        // duplicated prose, no new persisted state.
+        retainWriterDelegation(delegation)
+        throw cause
+      }
+      // Success: the token is consumed and the unit committed — nothing to
+      // retain. Accounting mirrors noteDeduceRun: successful delegations only,
+      // best-effort, never breaking the tool result.
+      try {
+        await store.noteWriterRun(novelId)
+      } catch {
+        /* best-effort accounting only */
+      }
+      return {
+        unitId: receipt.unitId,
+        commitId: receipt.commitId,
+        effectiveChars: receipt.effectiveChars,
+        sceneCompletion: {
+          completed: receipt.sceneCompletion.completed,
+          basis: receipt.sceneCompletion.basis,
+          outstandingGoals: [...receipt.sceneCompletion.outstandingGoals],
+        },
+        dispatchCount: delegation.dispatchCount,
+      }
+    }),
     tool('novel_chapter_complete', 'Complete a chapter after its bodies are committed (§6.3/§7.3): an explicit check separate from body commits, with the completion basis and open items.', {
       chapterId: { type: 'string', required: true },
       expectedContentRevision: { type: 'string', required: true, description: 'Content projection revision; changes on body/chapter display/canon changes.' },
       basis: { type: 'string', required: true, description: 'Why the chapter purpose is achieved.' },
       openItems: { type: 'array', items: { type: 'string' }, description: 'Deliberately open threads carried into later chapters; may be omitted or empty.' },
     }, chapterCompleteOutput, async (args, exec) => {
-      const novelId = await novelBindingFor(exec)
+      const novelId = await authorBindingFor(exec)
       if (args.openItems !== undefined && (!Array.isArray(args.openItems) || args.openItems.some((item) => typeof item !== 'string'))) {
         throw new Error('openItems must be an array of strings')
       }
@@ -643,7 +870,7 @@ function createTools(): ToolDefinition[] {
       expectedRevision: { type: 'string', required: true },
       basis: { type: 'string', required: true, description: 'The completion check basis: ending commit reference and resolved threads.' },
     }, finishOutput, async (args, exec) => {
-      const novelId = await novelBindingFor(exec)
+      const novelId = await authorBindingFor(exec)
       const result = await (await novelStore()).finishNovel(novelId, {
         expectedRevision: stringArg(args.expectedRevision),
         basis: stringArg(args.basis),
@@ -655,37 +882,8 @@ function createTools(): ToolDefinition[] {
     }, characterReadOutput, async (args, exec) => {
       const novelId = await novelBindingFor(exec)
       const snapshot = await snapshotOf(novelId)
-      const characterId = stringArg(args.characterId)
-      const outlineCharacter = snapshot.outline?.characters.find((candidate) => candidate.characterId === characterId)
-      if (outlineCharacter === undefined) {
-        throw new Error(`character '${characterId}' is not part of the outline (§5: characters are referenced by stable characterId)`)
-      }
-      const ref = outlineCharacter.assetRef !== undefined && snapshot.assets.some((asset) => asset.contentHash === outlineCharacter.assetRef)
-        ? snapshot.assets.find((asset) => asset.contentHash === outlineCharacter.assetRef)
-        : snapshot.assets.find((asset) => asset.kind === 'character' && asset.displayName === outlineCharacter.name)
-      if (ref === undefined) {
-        throw new Error(`no project character asset found for '${characterId}'; set assetRef from the novel_outline_read assets list (§5)`)
-      }
-      const asset = await (await novelStore()).readAsset(novelId, ref.contentHash) as { data?: Record<string, unknown> }
-      const data = typeof asset === 'object' && asset !== null && typeof asset.data === 'object' && asset.data !== null ? asset.data : undefined
-      if (data === undefined || typeof data.name !== 'string') {
-        throw new Error(`character asset for '${characterId}' has an unexpected shape`)
-      }
-      const description = typeof data.description === 'string' ? data.description : ''
-      const personality = typeof data.personality === 'string' ? data.personality : ''
-      const scenario = typeof data.scenario === 'string' ? data.scenario : ''
-      const identitySummary = identitySummaryOf(data as { extensions?: Record<string, unknown> })
-      return {
-        characterId,
-        name: data.name,
-        nickname: typeof data.nickname === 'string' && data.nickname !== '' ? data.nickname : data.name,
-        ...(identitySummary !== undefined ? { identitySummary } : {}),
-        description: limitText(description, 2000),
-        personality: limitText(personality, 1000),
-        scenario: limitText(scenario, 1000),
-        source: { kind: 'novel-character-snapshot', id: ref.contentHash, ...(ref.specVersion !== null ? { specVersion: ref.specVersion } : {}) },
-        truncated: description.length > 2000 || personality.length > 1000 || scenario.length > 1000,
-      }
+      const store = await novelStore()
+      return resolveCharacterPage({ novelId, snapshot, readAsset: (id, hash) => store.readAsset(id, hash) }, stringArg(args.characterId))
     }),
     tool('novel_lore_search', 'Search only this project\'s fixed world book snapshots (§5) by entry keys and content keywords; entries return with their source content hash and never drift with global activeWorlds.', {
       query: { type: 'string', required: true, description: 'Keyword query; matches entry keys contained in the query or query words in entry content, capped at 2000 characters.' },
@@ -698,35 +896,11 @@ function createTools(): ToolDefinition[] {
       const limit = clampInt(args.limit, 1, 20, 10)
       const snapshot = await snapshotOf(novelId)
       const store = await novelStore()
-      const queryLower = query.toLocaleLowerCase()
-      const matched: Array<Record<string, unknown>> = []
-      let contentTruncated = false
-      for (const asset of snapshot.assets) {
-        if (asset.kind !== 'world') continue
-        const book = await store.readAsset(novelId, asset.contentHash) as { entries?: unknown }
-        if (typeof book !== 'object' || book === null || !Array.isArray(book.entries)) {
-          throw new Error(`world asset '${asset.sourceId}' has an unexpected shape`)
-        }
-        for (const entry of book.entries as Array<Record<string, unknown>>) {
-          if (entry.disable === true) continue
-          const keys = Array.isArray(entry.key) ? entry.key.filter((key): key is string => typeof key === 'string') : []
-          const content = typeof entry.content === 'string' ? entry.content : ''
-          const keyHit = keys.some((key) => key !== '' && queryLower.includes(key.toLocaleLowerCase()))
-          const contentHit = tokens.some((token) => content.toLocaleLowerCase().includes(token))
-          if (!keyHit && !contentHit) continue
-          const clipped = limitText(content, 1200)
-          if (clipped.length < content.length) contentTruncated = true
-          matched.push({
-            book: asset.displayName,
-            uid: typeof entry.uid === 'number' ? entry.uid : -1,
-            comment: limitText(typeof entry.comment === 'string' ? entry.comment : '', 500),
-            keys: keys.slice(0, 20),
-            content: clipped,
-            source: { kind: 'novel-world-asset', id: `${asset.sourceId}.${String(entry.uid)}`, contentHash: asset.contentHash },
-            truncated: clipped.length < content.length,
-          })
-        }
-      }
+      const { matched, contentTruncated } = await matchWorldEntries(
+        { novelId, snapshot, readAsset: (id, hash) => store.readAsset(id, hash) },
+        query,
+        tokens,
+      )
       const hits = matched.slice(0, limit)
       return {
         hits,
@@ -903,7 +1077,7 @@ function createTools(): ToolDefinition[] {
       },
       rounds: { type: 'integer', description: `Cross-examination rounds, 1-${DEDUCE_MAX_ROUNDS}. Default 1.` },
     }, deductionOutput, async (args, exec) => {
-      const novelId = await novelBindingFor(exec)
+      const novelId = await authorBindingFor(exec)
       const parent = exec.agent as DeductionExecAgent | undefined
       const subagents = subagentRuntimeOf(parent)
       if (!subagents) {
@@ -978,13 +1152,68 @@ function excerptOf(paragraph: string): string {
 
 /** §4.2: the novel identity comes from the session binding alone (§15: no tool parameter may carry it). */
 async function novelBindingFor(exec: ToolExecution): Promise<string> {
+  return (await resolveNovelBinding(exec)).novelId
+}
+
+interface NovelBindingResolution {
+  novelId: string
+  /** Present when the caller is a delegated writer subagent (0007 §6.2): the single unit its delegation covers. */
+  delegatedUnitId?: string
+}
+
+/**
+ * Binding resolution order (0007 §6.2): first the session binding keyed by
+ * exec.agent.id (the author); on a miss, the in-process writer delegation
+ * registry keyed by the spawn run id — a delegated writer is never
+ * session-bound, its authority is the delegation alone. Both misses keep the
+ * existing binding error semantics (delegation validity included in the hint).
+ */
+async function resolveNovelBinding(exec: ToolExecution): Promise<NovelBindingResolution> {
   const agentId = exec.agent?.id
   if (typeof agentId !== 'string' || agentId.trim() === '') throw new Error('AgentNovel tool requires the current agent')
   const binding = (await (await tavernStore()).getState()).sessionBindings[agentId]
-  if (binding === undefined || binding.architecture !== 'agent-novel' || typeof binding.novelId !== 'string' || binding.novelId.trim() === '') {
-    throw new Error('AgentNovel binding is unavailable for this agent')
+  if (binding !== undefined && binding.architecture === 'agent-novel' && typeof binding.novelId === 'string' && binding.novelId.trim() !== '') {
+    return { novelId: binding.novelId }
+  }
+  const delegation = findWriterDelegation(agentId)
+  if (delegation !== undefined && delegation.novelId.trim() !== '') {
+    return { novelId: delegation.novelId, delegatedUnitId: delegation.unitId }
+  }
+  throw new Error('AgentNovel binding is unavailable for this agent (a delegated writer additionally requires an active delegation)')
+}
+
+/**
+ * Author-only gate for write-sensitive tools outside WRITER_ALLOW_LIST (0007
+ * §5.2/§6.2): the host toolFilter is the primary fence, this is the tool-layer
+ * backstop against a missing or ineffective toolFilter. Covers
+ * novel_outline_create/revise, novel_requirement_block, novel_unit_claim,
+ * novel_chapter_complete, novel_finish, tavern_deduce and both writer tools.
+ */
+async function authorBindingFor(exec: ToolExecution): Promise<string> {
+  const binding = await resolveNovelBinding(exec)
+  if (binding.delegatedUnitId !== undefined) {
+    throw new Error(`this author tool is not part of the delegated writer allow list (§5.2); the delegation covers unit '${binding.delegatedUnitId}' only`)
   }
   return binding.novelId
+}
+
+/**
+ * §6.2/§6.3: delegated writers never carry the execution token on a
+ * model-visible channel — the in-process registry pays the claim, so a
+ * delegated commit always uses the registry token (a writer cannot hold a
+ * valid token: claim is author-only, so honouring a model-supplied one could
+ * only produce a guaranteed hash failure). Authors supply the token from
+ * novel_unit_claim; the commitBody hash check stays the final guard for both.
+ */
+function executionTokenFor(args: Record<string, unknown>, exec: ToolExecution, binding: NovelBindingResolution): string {
+  if (binding.delegatedUnitId !== undefined) {
+    const delegation = findWriterDelegation(exec.agent?.id ?? '')
+    if (delegation === undefined) {
+      throw new Error('writer delegation is no longer active for this agent (§6.2: delegation not found — fail-closed; the writer run must fail or retry after the delegation registers)')
+    }
+    return delegation.executionToken
+  }
+  return stringArg(args.executionToken)
 }
 
 async function snapshotOf(novelId: string): Promise<NovelSnapshot> {
@@ -1037,7 +1266,9 @@ function normalizeSceneCompletion(value: unknown): SceneCompletion {
 
 /** Fills omitted empty-meaning fields of an outline payload; anything the
  * model did send passes through untouched so the store reports real shape
- * errors instead of the normalizer silently masking them. */
+ * errors instead of the normalizer silently masking them. Chapter
+ * keyEvents/plannedCharacters stay omitted on purpose: the store inherits
+ * them from the existing chapter on revise (§6.1 overlay semantics). */
 function normalizeOutlinePayload(value: unknown): NovelOutlinePayload {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return value as NovelOutlinePayload
   const outline = { ...(value as Record<string, unknown>) }
@@ -1052,15 +1283,6 @@ function normalizeOutlinePayload(value: unknown): NovelOutlinePayload {
       const character = { ...(entry as Record<string, unknown>) }
       if (character.relations === undefined) character.relations = []
       return character
-    })
-  }
-  if (Array.isArray(outline.chapters)) {
-    outline.chapters = (outline.chapters as unknown[]).map((entry) => {
-      if (!isJsonObject(entry)) return entry
-      const chapter = { ...(entry as Record<string, unknown>) }
-      if (chapter.keyEvents === undefined) chapter.keyEvents = []
-      if (chapter.plannedCharacters === undefined) chapter.plannedCharacters = null
-      return chapter
     })
   }
   if (Array.isArray(outline.scenes)) {
@@ -1128,18 +1350,8 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
   return Math.max(min, Math.min(max, value as number))
 }
 
-function limitText(value: string | undefined, max: number): string {
-  return typeof value === 'string' ? value.slice(0, max) : ''
-}
-
-function tokenizeQuery(value: string): string[] {
-  return [...new Set(value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])]
-}
-
-function matchesAllTokens(text: string, tokens: string[]): boolean {
-  const haystack = text.toLocaleLowerCase()
-  return tokens.every((token) => haystack.includes(token))
-}
+// limitText / tokenizeQuery / matchesAllTokens 以及 character/lore 的解析匹配核心
+// 已搬家到 ./writer.js（0007 Task B），本模块 import 使用，行为逐字等价。
 
 function excerptAround(text: string, tokens: string[], maxChars: number): string {
   if (text.length <= maxChars) return text

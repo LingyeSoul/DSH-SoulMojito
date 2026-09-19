@@ -172,6 +172,59 @@ function truncateText(text: string, max: number): string {
 }
 
 /**
+ * Union of every scene's participants across the whole outline (0007 §4.2 /
+ * §14 deviation 3): ScenePlan carries no chapter binding, so per-chapter
+ * filtering is impossible — this is the honest shape behind the writer pack's
+ * character pages, the canon filter and the outline digest. Outline
+ * declaration order via Set insertion.
+ */
+export function allParticipantsOf(outline: NonNullable<NovelSnapshot['outline']>): Set<string> {
+  const participants = new Set<string>()
+  for (const scene of outline.scenes) {
+    for (const participant of scene.participants) participants.add(participant)
+  }
+  return participants
+}
+
+/* ---------------- outline digest bounds (0007 §11, Task D) ---------------- */
+
+/** 摘要块上限：紧凑性质优先——总增量目标 ≤1k 字符（最坏情况 ~1.3k）。 */
+export const BRIEF_STORY_LIMIT = 200
+export const BRIEF_CONDITION_LIMIT = 160
+export const BRIEF_PARTICIPANT_LIMIT = 120
+export const BRIEF_PARTICIPANTS_MAX = 6
+
+/**
+ * 大纲摘要（0007 §11，inline 模式同享）：story 一句话 + 当前章进出条件 +
+ * 参与者简介。纯快照投影（identitySummary 需异步资产解析，纯函数取
+ * outline.characters 的 initialState/motivation 作简介），有界、空字段省略。
+ * 参与者取全书场景 participants 的并集（ScenePlan 无章绑定，outline 声明序），
+ * 与写手包角色页同口径，同一章连续单元间字节稳定。
+ */
+function pushOutlineDigest(lines: string[], snapshot: NovelSnapshot, chapterId: string | null): void {
+  const outline = snapshot.outline
+  if (outline === null) return
+  const story = [outline.story.premise, outline.story.mainConflict].filter((part) => part.trim() !== '')
+  const chapter = chapterId === null ? undefined : outline.chapters.find((candidate) => candidate.chapterId === chapterId)
+  const participants = allParticipantsOf(outline)
+  const intros = [...participants].slice(0, BRIEF_PARTICIPANTS_MAX).map((participant) => {
+    const character = outline.characters.find((candidate) => candidate.characterId === participant || candidate.name === participant)
+    if (character === undefined) return participant
+    const summary = [character.initialState, character.motivation].filter((part) => part.trim() !== '').join(' · ')
+    return summary === '' ? `${character.name} (${character.characterId})` : `${character.name} (${character.characterId}): ${truncateText(summary, BRIEF_PARTICIPANT_LIMIT)}`
+  })
+  const digest: string[] = []
+  if (story.length > 0) digest.push(`- story: ${truncateText(story.join(' — '), BRIEF_STORY_LIMIT)}`)
+  if (chapter !== undefined) {
+    if (chapter.entryCondition.trim() !== '') digest.push(`- chapter entry: ${truncateText(chapter.entryCondition, BRIEF_CONDITION_LIMIT)}`)
+    if (chapter.exitCondition.trim() !== '') digest.push(`- chapter exit: ${truncateText(chapter.exitCondition, BRIEF_CONDITION_LIMIT)}`)
+  }
+  for (const intro of intros) digest.push(`- participant: ${intro}`)
+  if (digest.length === 0) return // 全空字段：整块省略，不输出裸标题
+  lines.push('', 'Outline digest (§6.1):', ...digest)
+}
+
+/**
  * Renders the work brief (§8.3 variable tail): goal, scene plan, continuation
  * anchor, unit target range, remaining book budget, narrative stage, pending
  * directive excerpts and a lore lookup hint. World entries are never inlined
@@ -189,6 +242,7 @@ export function renderWorkBrief(snapshot: NovelSnapshot, work: NovelWork): strin
   ]
 
   if (work.kind === 'write-unit') {
+    pushOutlineDigest(lines, snapshot, work.chapterId)
     const scene = snapshot.outline?.scenes.find((candidate) => candidate.sceneId === work.sceneId)
     if (scene !== undefined) {
       lines.push('', 'Scene plan (§6.1 current-chapter detail):')

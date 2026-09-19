@@ -207,6 +207,8 @@ describe('AgentNovel author tools', () => {
       'novel_requirement_block',
       'novel_unit_claim',
       'novel_body_commit',
+      'novel_writer_draft',
+      'novel_writer_delegate',
       'novel_chapter_complete',
       'novel_finish',
       'novel_character_read',

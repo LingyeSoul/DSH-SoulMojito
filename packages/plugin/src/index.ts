@@ -40,6 +40,7 @@ import {
   type NovelRunBudgets,
   type NovelSnapshot,
   type TavernModelSelection,
+  type WriterMode,
 } from '../../tavern-store/src/index.js'
 import { describeHostShape, readSessionEvents, sessionEvents, type HostSessionLog } from '../../bind/src/index.js'
 import {
@@ -48,7 +49,7 @@ import {
   inspectAgentTavernCapabilities,
   type AgentTavernCapabilities,
 } from './agent-tavern/capabilities.js'
-import { AGENT_NOVEL_PRESET_ID, inspectAgentNovelCapabilities, type AgentNovelCapabilities } from './agent-novel/capabilities.js'
+import { AGENT_NOVEL_PRESET_ID, inspectAgentNovelCapabilities, inspectWriterSubagentCapabilities, type AgentNovelCapabilities } from './agent-novel/capabilities.js'
 import { NovelDriver, recoverNovels, type DriverAgentLike } from './agent-novel/driver.js'
 import { unitTargetRange } from './agent-novel/outline.js'
 import { NovelProjector } from './agent-novel/projector.js'
@@ -56,6 +57,7 @@ import { isNovelAuthorMessage, receiveAuthorMessage } from './agent-novel/requir
 import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
 import { AgentTavernProjector, historyImportAppends, type SessionImportAppend } from './agent-tavern/projector.js'
+import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from './agent-tavern/deduce.js'
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
 
 export const name = 'dsh-tavern'
@@ -1304,11 +1306,48 @@ function novelDetail(snapshot: NovelSnapshot) {
       maxTurns: snapshot.config.budgets.maxTurns,
       deduceRuns: snapshot.run.deduceRuns,
       maxDeduceRuns: snapshot.config.budgets.maxDeduceRuns,
+      // 0007 §7: writerRuns rides the deduceRuns convention (uncapped counter
+      // beside the budget edges); usageSamples is the W0 audit ring. Both
+      // coalesce so legacy snapshots lacking the fields still project a
+      // constant shape — the store applies the same amnesty on write.
+      writerRuns: snapshot.run.writerRuns ?? 0,
+      usageSamples: snapshot.run.usageSamples ?? [],
       remainingCharacters: budget.kind === 'target'
         ? Math.max(0, unitTargetRange(snapshot.config, summary.effectiveCharacters).max)
         : null,
     },
   }
+}
+
+/**
+ * Best-effort discovery of a subagent runtime for the writer probes (0007 §9).
+ * Preferred channel: a live agent bound to an agent-novel session — the exact
+ * channel novel_writer_delegate itself uses at runtime (exec.agent →
+ * subagentRuntimeOf), so a pass proves the path W2 actually runs on. Fallback:
+ * the plugin context's own service lookup. Both degrade silently to undefined
+ * (gated services throw or return nothing); callers treat a missing runtime as
+ * a failed probe, never as an implicit inline downgrade.
+ */
+async function discoverWriterProbeRuntime(ctx: unknown): Promise<{ runtime: SubagentRuntimeLike; parent: unknown; channel: 'bound-agent' | 'plugin-context' } | undefined> {
+  try {
+    const db: TavernStore = await store()
+    const state = await db.getState()
+    for (const [sessionId, binding] of Object.entries(state.sessionBindings)) {
+      if (binding.architecture !== 'agent-novel') continue
+      let agent: unknown
+      try {
+        agent = (ctx as { agents?: { get?: (id: string) => unknown } }).agents?.get?.(sessionId)
+      } catch {
+        continue // gated service access on an inactive fiber
+      }
+      const runtime = subagentRuntimeOf(agent as DeductionExecAgent | undefined)
+      if (runtime !== undefined) return { runtime, parent: agent, channel: 'bound-agent' }
+    }
+  } catch {
+    // A failed state read falls through to the context channel below.
+  }
+  const runtime = subagentRuntimeOf({ ctx } as DeductionExecAgent)
+  return runtime === undefined ? undefined : { runtime, parent: ctx, channel: 'plugin-context' }
 }
 
 async function handleNovelsApi(
@@ -1348,6 +1387,23 @@ async function handleNovelsApi(
         violations: violations.map((item) => ({ field: item.field, message: item.message })),
       })
     }
+    // 0007 §8/§9 fail-closed creation gate: writerMode=subagent (W2) requires
+    // the P1 host contract probe to pass; a failed probe (or an unresolvable
+    // subagent runtime) blocks the creation with the evidence instead of
+    // silently degrading to inline. The probe spawns two one-shot subagents —
+    // only reachable from this explicit request surface, never at startup.
+    if (config.writerMode === 'subagent') {
+      const channel = await discoverWriterProbeRuntime(ctx)
+      const probe = await inspectWriterSubagentCapabilities(channel)
+      if (!probe.spawnOk || probe.p1.status === 'fail') {
+        return sendJson(res, 400, {
+          ok: false,
+          message: `writer subagent mode is unavailable on this host (${probe.p1.detail}); create the novel with writerMode 'inline' instead (0007 §9)`,
+          code: 'NOVEL_WRITER_PROBE',
+          probe,
+        })
+      }
+    }
     const created = await novels.createNovel(await store(), config)
     const snapshot = await novels.getNovel(created.novelId)
     const summary = snapshot === undefined ? undefined : summarizeNovel(snapshot)
@@ -1361,6 +1417,16 @@ async function handleNovelsApi(
         revision: created.revision,
       },
     })
+  }
+
+  if (method === 'GET' && route === 'novels/writer-probe') {
+    // Debug surface for the writer-subagent probes (0007 §9): panels and CLI
+    // can trigger the report without attempting a subagent-mode creation. The
+    // literal must be matched before parseNovelRoute, which would otherwise
+    // read 'writer-probe' as a novel id.
+    const channel = await discoverWriterProbeRuntime(ctx)
+    const probe = await inspectWriterSubagentCapabilities(channel)
+    return sendJson(res, 200, { ok: true, probe, channel: channel?.channel ?? 'none' })
   }
 
   const parts = parseNovelRoute(route)
@@ -1377,9 +1443,11 @@ async function handleNovelsApi(
     if (typeof body.expectedRevision !== 'string' || typeof body.patch !== 'object' || body.patch === null || Array.isArray(body.patch)) {
       throw new Error('expected { expectedRevision, patch }')
     }
+    // patchNovelMeta validates the writerMode enum (0007 §8 Task A); the mode
+    // switch only affects the next scheduled unit.
     const result = await novels.patchNovelMeta(novelId, {
       expectedRevision: body.expectedRevision,
-      patch: body.patch as { title?: string; genre?: string; budgets?: NovelRunBudgets },
+      patch: body.patch as { title?: string; genre?: string; budgets?: NovelRunBudgets; writerMode?: WriterMode },
       cause: typeof body.cause === 'string' && body.cause.trim() !== '' ? body.cause : 'panel-edit',
     })
     return sendJson(res, 200, { ok: true, revision: result.revision })

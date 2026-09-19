@@ -46,11 +46,13 @@ import {
   NovelStorageCorruptionError,
   countEffectiveCharacters,
   finishGuardViolations,
+  isWriterMode,
   requirementWatermark,
   stableStringify,
   summarizeNovel,
   totalEffectiveCharacters,
   validateCreateConfig,
+  validateOutlineConsistency,
   validateOutlinePayload,
   validateRunBudgets,
   type BodyCommit,
@@ -67,12 +69,16 @@ import {
   type NovelRunState,
   type NovelSnapshot,
   type NovelSummary,
+  type NovelUsageSample,
   type OutlineChapter,
+  type OutlineChapterInput,
   type RequirementRecord,
   type RequirementStatus,
   type SceneCompletion,
+  type ValidationError,
   type WorkIntentKind,
   type WorkIntentRecord,
+  type WriterMode,
   type WritingUnit,
 } from './novel-model.js'
 
@@ -83,6 +89,9 @@ const CANON_KINDS = new Set(['event', 'character-state', 'relation', 'foreshadow
 const SOURCE_REF_PATTERN = /^(commit-\d+)(?:#(\d+))?$/
 /** Paragraph separator for the fixed body-file serialization (§10.4). */
 const PARAGRAPH_SEPARATOR = '\n\n'
+/** Usage sampling ring size (0007 §7 W0): the store keeps only the most
+ *  recent samples per novel so run state stays finite and lossless. */
+const USAGE_SAMPLE_LIMIT = 50
 
 /** Process identity shared by every bundled copy of this module: the build
  *  ships tavern-store inside several entry bundles (index.mjs and novel.mjs
@@ -288,6 +297,8 @@ export class NovelStore {
             currentUnitId: null,
             turnsRun: 0,
             deduceRuns: 0,
+            writerRuns: 0,
+            usageSamples: [],
             startedAt: now,
             completedAt: null,
             lastProgressSignature: null,
@@ -308,6 +319,8 @@ export class NovelStore {
             currentUnitId: null,
             turnsRun: 0,
             deduceRuns: 0,
+            writerRuns: 0,
+            usageSamples: [],
             startedAt: now,
             completedAt: null,
             lastProgressSignature: null,
@@ -341,7 +354,10 @@ export class NovelStore {
         schemaVersion: SCHEMA_VERSION,
         createdAt: now,
         updatedAt: now,
-        config: structuredClone(config),
+        // Storage-layer normalization (0007 §8): absent writerMode becomes
+        // 'inline' at creation — an explicit default, not mode magic; the
+        // panel can switch it later via patchNovelMeta.
+        config: { ...structuredClone(config), writerMode: config.writerMode ?? 'inline' },
         assets,
         outline: null,
         requirements: [requirement],
@@ -378,7 +394,7 @@ export class NovelStore {
 
   async patchNovelMeta(
     novelId: string,
-    input: { expectedRevision: string; patch: { title?: string; genre?: string; premiseNote?: string; budgets?: NovelRunBudgets }; cause: string },
+    input: { expectedRevision: string; patch: { title?: string; genre?: string; premiseNote?: string; budgets?: NovelRunBudgets; writerMode?: WriterMode }; cause: string },
   ): Promise<{ revision: string }> {
     if (typeof input.cause !== 'string' || input.cause.trim() === '') throw new NovelConfigError({ message: 'patch cause must be a non-empty string' })
     const patch = input.patch
@@ -390,6 +406,15 @@ export class NovelStore {
     }
     if (patch.premiseNote !== undefined && typeof patch.premiseNote !== 'string') {
       throw new NovelConfigError({ message: 'patch.premiseNote must be a string' })
+    }
+    // 0007 §8: writerMode switches meet the creation contract's enum; a
+    // switch only affects the next unit, claimed units finish under the mode
+    // they were claimed in (enforced by the caller-side notice branching).
+    if (patch.writerMode !== undefined && !isWriterMode(patch.writerMode)) {
+      throw new NovelConfigError({
+        message: "patch.writerMode must be 'inline' or 'subagent'",
+        errors: [{ field: 'writerMode', message: "writerMode must be 'inline' or 'subagent'" }],
+      })
     }
     // Edited budgets meet the created ones' contract (§7.1); the panel sends
     // the complete object, so partial objects fall out as field errors.
@@ -409,6 +434,7 @@ export class NovelStore {
           // (noteTurn/noteDeduceRun), so an edit applies from the next turn
           // without touching a live run (§13).
           ...(patch.budgets !== undefined ? { budgets: structuredClone(patch.budgets) } : {}),
+          ...(patch.writerMode !== undefined ? { writerMode: patch.writerMode } : {}),
         },
         premiseNote: patch.premiseNote ?? current.premiseNote,
       }
@@ -484,10 +510,13 @@ export class NovelStore {
     input: { expectedRevision: string; outline: NovelOutlinePayload; handledRequirements: readonly HandledRequirement[] },
   ): Promise<{ outlineRevision: string; revision: string; watermark: number }> {
     const payloadErrors = validateOutlinePayload(input.outline)
-    if (payloadErrors.length > 0) throw new NovelConfigError({ message: 'invalid outline payload', errors: payloadErrors })
+    if (payloadErrors.length > 0) throw new NovelConfigError({ message: outlinePayloadErrorMessage(payloadErrors), errors: payloadErrors })
+    const chapters = materializeOutlineChapters(input.outline.chapters, new Map())
+    const consistencyErrors = validateOutlineConsistency(chapters, input.outline.currentChapterId)
+    if (consistencyErrors.length > 0) throw new NovelConfigError({ message: outlinePayloadErrorMessage(consistencyErrors), errors: consistencyErrors })
     if (input.outline.droppedChapterIds?.length) {
       throw new NovelConfigError({
-        message: 'invalid outline payload',
+        message: outlinePayloadErrorMessage([{ field: 'droppedChapterIds', message: 'nothing can be dropped when creating the initial outline' }]),
         errors: [{ field: 'droppedChapterIds', message: 'nothing can be dropped when creating the initial outline' }],
       })
     }
@@ -504,7 +533,7 @@ export class NovelStore {
         sourceRequirementIds: handled.map((item) => item.requirementId),
         story: structuredClone(input.outline.story),
         characters: structuredClone(input.outline.characters),
-        chapters: structuredClone(input.outline.chapters),
+        chapters,
         currentChapterId: input.outline.currentChapterId,
         scenes: structuredClone(input.outline.scenes),
         foreshadowing: structuredClone(input.outline.foreshadowing),
@@ -522,6 +551,13 @@ export class NovelStore {
    * Atomically revises the plan and the handled requirement results (§9.3).
    * Rejected while any unit is claimed (§9.2) and never drops or reorders
    * chapters that contain committed bodies (§6.1).
+   *
+   * `changes.chapters` is an overlay (§6.1): each entry replaces (or inserts)
+   * the same-id chapter, omitted optional fields are inherited from the
+   * existing entry, and every untouched chapter is carried forward — so a
+   * model working from a windowed novel_outline_read can advance the plan
+   * without echoing the whole chapter list. Removal happens only through
+   * droppedChapterIds.
    */
   async reviseOutline(
     novelId: string,
@@ -529,7 +565,7 @@ export class NovelStore {
   ): Promise<{ outlineRevision: string; revision: string; watermark: number }> {
     if (typeof input.reason !== 'string' || input.reason.trim() === '') throw new NovelConfigError({ message: 'revision reason must be a non-empty string' })
     const payloadErrors = validateOutlinePayload(input.changes)
-    if (payloadErrors.length > 0) throw new NovelConfigError({ message: 'invalid outline payload', errors: payloadErrors })
+    if (payloadErrors.length > 0) throw new NovelConfigError({ message: outlinePayloadErrorMessage(payloadErrors), errors: payloadErrors })
     return this.mutate(novelId, async () => {
       const { dir, current } = await this.beginMutation(novelId)
       this.assertRevision(current, input.expectedRevision)
@@ -542,10 +578,16 @@ export class NovelStore {
         // §9.2: outline revisions require no claimed writing units.
         throw new NovelRevisionConflictError({ expected: input.expectedRevision, actual: current.revision, detail: 'claimed writing units in flight' })
       }
-      this.assertProtectedChapters(previous, current, input.changes.chapters)
-      this.assertAcknowledgedChapterDrops(previous, input.changes)
+      this.assertChapterDropDeclarations(previous, input.changes)
+      const previousById = new Map(previous.chapters.map((chapter) => [chapter.chapterId, chapter]))
+      const chapters = materializeOutlineChapters(input.changes.chapters, previousById, input.changes.droppedChapterIds)
+      const consistencyErrors = validateOutlineConsistency(chapters, input.changes.currentChapterId)
+      if (consistencyErrors.length > 0) {
+        throw new NovelConfigError({ message: outlinePayloadErrorMessage(consistencyErrors), errors: consistencyErrors })
+      }
+      this.assertProtectedChapters(previous, current, chapters)
       const handled = this.validateHandledRequirements(current, input.handledRequirements)
-      const outlineRevision = hash16({ kind: 'outline', parent: previous.outlineRevision, reason: input.reason, payload: input.changes })
+      const outlineRevision = hash16({ kind: 'outline', parent: previous.outlineRevision, reason: input.reason, payload: { ...input.changes, chapters } })
       const built: NovelOutline = {
         outlineRevision,
         parentRevision: previous.outlineRevision,
@@ -553,7 +595,7 @@ export class NovelStore {
         sourceRequirementIds: handled.map((item) => item.requirementId),
         story: structuredClone(input.changes.story),
         characters: structuredClone(input.changes.characters),
-        chapters: structuredClone(input.changes.chapters),
+        chapters,
         currentChapterId: input.changes.currentChapterId,
         scenes: structuredClone(input.changes.scenes),
         foreshadowing: structuredClone(input.changes.foreshadowing),
@@ -1194,6 +1236,50 @@ export class NovelStore {
     })
   }
 
+  /**
+   * Writer-subagent run accounting (0007 §7): merges writerRuns++ inside the
+   * lock. Deliberately no hard cap and no auto-pause — NovelRunBudgets gains
+   * no new limit; the hard budget edges stay with maxTurns/maxDurationMs.
+   * The `?? 0` amnesties legacy snapshots created before the field existed.
+   */
+  async noteWriterRun(novelId: string): Promise<void> {
+    await this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId)
+      if (current.run.status === 'completed') return
+      const run: NovelRunState = { ...current.run, writerRuns: (current.run.writerRuns ?? 0) + 1 }
+      const next: NovelSnapshot = { ...current, updatedAt: new Date().toISOString(), run }
+      await this.publish(dir, current.revision, next, 'note-writer-run')
+    })
+  }
+
+  /**
+   * Appends one W0 usage sample (0007 §7, audit-grade — never authoritative
+   * billing): mutate + publish without CAS, same as noteTurn; completed runs
+   * short-circuit. Bounded ring: only the most recent 50 samples are kept,
+   * older ones dropped. The `?? []` amnesties legacy snapshots.
+   */
+  async noteUsageSample(novelId: string, sample: NovelUsageSample): Promise<void> {
+    const errors = validateUsageSample(sample)
+    if (errors.length > 0) throw new NovelConfigError({ message: 'invalid usage sample', errors })
+    await this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId)
+      if (current.run.status === 'completed') return
+      const stored: NovelUsageSample = {
+        recordedAt: sample.recordedAt,
+        turn: sample.turn,
+        toolBytes: { ...sample.toolBytes },
+        ...(sample.writerOutputChars !== undefined ? { writerOutputChars: sample.writerOutputChars } : {}),
+        ...(sample.usage !== undefined ? { usage: { ...sample.usage } } : {}),
+      }
+      const run: NovelRunState = {
+        ...current.run,
+        usageSamples: [...(current.run.usageSamples ?? []), stored].slice(-USAGE_SAMPLE_LIMIT),
+      }
+      const next: NovelSnapshot = { ...current, updatedAt: new Date().toISOString(), run }
+      await this.publish(dir, current.revision, next, 'note-usage-sample')
+    })
+  }
+
   /* -------------------------------- reads -------------------------------- */
 
   async readBody(
@@ -1524,15 +1610,15 @@ export class NovelStore {
   }
 
   /**
-   * §6.1 allows pruning uncommitted chapters, but only explicitly: the revise
-   * payload replaces the whole plan, so a model that merely echoes back the
-   * chapter window it read (a 150-chapter plan shrank to its 12 written
-   * chapters in the field) must not silently delete the unwritten rest. Every
-   * previous chapter absent from the payload must be declared in
-   * droppedChapterIds; declarations must reference real, actually-removed
-   * chapters.
+   * §6.1 allows pruning uncommitted chapters, but only explicitly. Revise is
+   * an overlay — chapters absent from the payload are carried forward, so a
+   * model echoing back only the window it read (the 150→16 field shrink) can
+   * no longer silently delete the unwritten rest; deletion is structurally
+   * impossible without an explicit droppedChapterIds entry. Declarations must
+   * reference real chapters that are actually absent from the payload;
+   * committed/completed chapters are guarded by assertProtectedChapters.
    */
-  private assertAcknowledgedChapterDrops(previous: NovelOutline, changes: NovelOutlinePayload): void {
+  private assertChapterDropDeclarations(previous: NovelOutline, changes: NovelOutlinePayload): void {
     const declared = new Set(changes.droppedChapterIds ?? [])
     const nextIds = new Set(changes.chapters.map((chapter) => chapter.chapterId))
     const previousIds = previous.chapters.map((chapter) => chapter.chapterId)
@@ -1541,13 +1627,7 @@ export class NovelStore {
       if (!previousIds.includes(id)) violations.push(`drop-not-planned:${id}`)
       else if (nextIds.has(id)) violations.push(`drop-contradicts-payload:${id}`)
     }
-    const unacknowledged = previousIds.filter((id) => !nextIds.has(id) && !declared.has(id))
-    const shown = unacknowledged.slice(0, 20)
-    for (const id of shown) violations.push(`chapter-dropped-without-acknowledgement:${id}`)
-    if (unacknowledged.length > shown.length) {
-      violations.push(`plus ${unacknowledged.length - shown.length} more silent drops; carry forward every existing chapter or list each removed chapterId in droppedChapterIds`)
-    }
-    if (violations.length > 0) throw new NovelPreconditionError({ rule: 'unacknowledged-chapter-drops', violations })
+    if (violations.length > 0) throw new NovelPreconditionError({ rule: 'invalid-chapter-drops', violations })
   }
 
   /** Run-state transitions after an outline create/revise (§4.3, §9.4). */
@@ -1577,6 +1657,50 @@ export class NovelStore {
 }
 
 /* ------------------------------ pure helpers ------------------------------ */
+
+/**
+ * Materializes a payload chapter overlay into the complete stored chapter
+ * list: droppedChapterIds and overlay ids remove/replace their previous
+ * entries, omitted optional fields are inherited from the previous entry
+ * with the same id, every untouched chapter is carried forward verbatim, and
+ * the result is ordered by `order`.
+ */
+function materializeOutlineChapters(
+  overlay: readonly OutlineChapterInput[],
+  previousById: ReadonlyMap<string, OutlineChapter>,
+  droppedChapterIds?: readonly string[],
+): OutlineChapter[] {
+  const overlayById = new Map(overlay.map((chapter) => [chapter.chapterId, chapter]))
+  const dropped = new Set(droppedChapterIds ?? [])
+  const merged: OutlineChapter[] = []
+  for (const chapter of previousById.values()) {
+    if (dropped.has(chapter.chapterId) || overlayById.has(chapter.chapterId)) continue
+    merged.push(structuredClone(chapter))
+  }
+  for (const chapter of overlay) {
+    const prior = previousById.get(chapter.chapterId)
+    merged.push({
+      chapterId: chapter.chapterId,
+      order: chapter.order,
+      title: chapter.title,
+      purpose: chapter.purpose,
+      keyEvents: [...(chapter.keyEvents ?? prior?.keyEvents ?? [])],
+      plannedCharacters: chapter.plannedCharacters ?? prior?.plannedCharacters ?? null,
+      entryCondition: chapter.entryCondition,
+      exitCondition: chapter.exitCondition,
+    })
+  }
+  return merged.sort((left, right) => left.order - right.order)
+}
+
+/**
+ * Field-level summary the model can act on. A bare "invalid outline payload"
+ * hides which field failed; in the field the model then retried blind and
+ * burned the session.
+ */
+function outlinePayloadErrorMessage(errors: readonly ValidationError[]): string {
+  return `invalid outline payload: ${errors.map((error) => `${error.field} ${error.message}`).join('; ')}`
+}
 
 function applyHandledRequirements(
   records: readonly RequirementRecord[],
@@ -1651,6 +1775,49 @@ function parseOwnerFile(novelId: string, ownerPath: string, raw: string): OwnerF
   } catch (cause) {
     throw new NovelStorageCorruptionError({ novelId, path: ownerPath, detail: `.owner.json is unreadable: ${(cause as Error).message}` })
   }
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+}
+
+/**
+ * Structural validation of one usage sample (0007 §7): every numeric value
+ * must be a non-negative integer so the persisted record stays JSON-lossless
+ * (no NaN/Infinity can survive JSON serialization) and audit arithmetic is
+ * well-defined. Mirrors validateRunBudgets' field-error style.
+ */
+function validateUsageSample(sample: NovelUsageSample): ValidationError[] {
+  const errors: ValidationError[] = []
+  const s = sample as unknown as Record<string, unknown>
+  if (typeof s.recordedAt !== 'string' || s.recordedAt.trim() === '') {
+    errors.push({ field: 'recordedAt', message: 'recordedAt must be a non-empty string' })
+  }
+  if (!isNonNegativeInteger(s.turn)) {
+    errors.push({ field: 'turn', message: 'turn must be a non-negative integer' })
+  }
+  errors.push(...validateSampleCounts(s.toolBytes, 'toolBytes'))
+  if (s.writerOutputChars !== undefined && !isNonNegativeInteger(s.writerOutputChars)) {
+    errors.push({ field: 'writerOutputChars', message: 'writerOutputChars must be a non-negative integer' })
+  }
+  if (s.usage !== undefined) {
+    errors.push(...validateSampleCounts(s.usage, 'usage'))
+  }
+  return errors
+}
+
+/** Shared shape check for the numeric maps of a usage sample. */
+function validateSampleCounts(value: unknown, field: string): ValidationError[] {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return [{ field, message: `${field} must be an object of numbers` }]
+  }
+  const errors: ValidationError[] = []
+  for (const [key, count] of Object.entries(value as Record<string, unknown>)) {
+    if (!isNonNegativeInteger(count)) {
+      errors.push({ field: `${field}.${key}`, message: `${field}.${key} must be a non-negative integer` })
+    }
+  }
+  return errors
 }
 
 /** World name attached to a character card, mirroring store.ts materializeEmbeddedBook naming. */
