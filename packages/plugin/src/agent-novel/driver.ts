@@ -362,6 +362,14 @@ export class NovelDriver {
     let unitId: string | null = null
     let briefSnapshot = snapshot
     if (work.kind === 'write-unit' && work.chapterId !== null && work.sceneId !== null) {
+      // A claimed unit for this scene is being written right now. Its commit —
+      // or its turn ending — re-arms the drive, so wait instead of preparing a
+      // duplicate unit or re-delivering the same brief (a claim legitimately
+      // survives its turn ending, §12.1; the nextWork scene check is
+      // commit-based and cannot see it). A merely prepared unit does not
+      // skip: the in-flight intent machinery may still owe it a delivery.
+      const claimedSibling = snapshot.units.find((unit) => unit.chapterId === work.chapterId && unit.sceneId === work.sceneId && unit.state === 'claimed')
+      if (claimedSibling !== undefined) return
       const scene = snapshot.outline?.scenes.find((candidate) => candidate.sceneId === work.sceneId)
       if (scene === undefined) {
         this.logWarn('scene-missing', { novelId, sceneId: work.sceneId })

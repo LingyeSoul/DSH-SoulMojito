@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { apply } from '../src/index.js'
+import { apply as applyNovelSurface } from '../src/agent-novel/agent.js'
+import type { SubagentRuntimeLike } from '../src/agent-tavern/deduce.js'
 import { NovelStore, TavernStore, type NovelOutlinePayload } from '../../tavern-store/src/index.js'
 
 const CHARACTER = '酒保'
@@ -45,6 +47,12 @@ function makePlainAgent(id: string) {
       },
     },
   }
+}
+
+/** Minimal shape of the captured agent-novel tool surface (apply 捕获范式). */
+interface CapturedTool {
+  name: string
+  execute: (args: Record<string, unknown>, exec: { agent?: { id?: string } }) => Promise<unknown>
 }
 
 function makeRequest(body: unknown, url: string, method = 'POST') {
@@ -173,6 +181,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
   let sessionEventHandlers: Array<(session: unknown, event: unknown) => void>
   let agents: Map<string, unknown>
   let recomposeCalls: Array<{ agent: unknown; presetId: string }>
+  let novelTools: Map<string, CapturedTool>
 
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-tavern-novel-'))
@@ -190,6 +199,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
       },
     })
     agents = new Map()
+    novelTools = new Map()
     recomposeCalls = []
     sessionEventHandlers = []
     const apiHandlers: Array<(req: unknown, res: unknown) => Promise<void>> = []
@@ -231,7 +241,16 @@ describe('AgentNovel command bridge and HTTP contract', () => {
         get: (id: string) => agents.get(id),
         withoutInitiator: <T>(op: () => T) => op(),
       },
+      tools: { register: (tool: { name: string }) => { novelTools.set(tool.name, tool as CapturedTool) } },
     } as never)
+    // The novel tool surface rides the bundled preset on a real host (proposal
+    // 0005 §17); the harness mounts it directly so the writer-probe fake
+    // runtime can execute novel_status_read the way a real subagent would.
+    applyNovelSurface({
+      systemPrompt: { section: () => {}, context: () => {} },
+      tools: { register: (tool: { name: string }) => { novelTools.set(tool.name, tool as CapturedTool) } },
+      effect: (fn: () => unknown) => { fn(); return () => {} },
+    })
     expect(definitions).toHaveLength(1)
     expect((definitions[0] as { name?: string }).name).toBe('dsh-tavern-session')
     handler = definitions[0]!.handler
@@ -669,6 +688,65 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     }, `/api/dsh-tavern/novels/${created.novelId}`, 'PATCH'), badBudget)
     expect(badBudget.statusCode).toBe(400)
     expect(jsonBody(badBudget)).toMatchObject({ ok: false, code: 'NOVEL_CONFIG' })
+  })
+
+  // Mutating (session binding + novel + probe spawns), so it sits beside the
+  // terminal deletion test under the shared-state discipline.
+  it('creates a writerMode=subagent novel over HTTP when the creation probe passes (0007 §9 happy path)', async () => {
+    // Scripted fake runtime: the P1 spawn really executes novel_status_read
+    // with exec.agent.id = run.id — the binding miss throws afterwards, which
+    // is expected, because the identity record happens before binding
+    // resolution (usage.ts probe slot). The empty-allow P2 spawn never touches
+    // the tool and reports it unavailable (observational pass, §9 P2 wording).
+    let counter = 0
+    const calls: Array<{ label: string | undefined; allow: readonly string[] }> = []
+    const probeRuntime: SubagentRuntimeLike = {
+      async start(_provider, request) {
+        counter += 1
+        const spawnIndex = counter
+        const allow = [...(request.toolFilter?.allow ?? [])]
+        calls.push({ label: request.label, allow })
+        const result = (async () => {
+          if (allow.includes('novel_status_read')) {
+            await novelTools.get('novel_status_read')!.execute({}, { agent: { id: `probe-run-${spawnIndex}` } }).catch(() => {})
+          }
+          return {
+            output: [{ type: 'text', text: spawnIndex === 1 ? 'ok' : 'unavailable' }],
+            stopReason: 'completed' as const,
+          }
+        })()
+        return { id: `probe-run-${spawnIndex}`, result, async dispose() {} }
+      },
+    }
+    // bound-agent channel: the exact discovery path novel_writer_delegate uses
+    // at runtime (exec.agent → subagentRuntimeOf) — discoverWriterProbeRuntime's
+    // preferred channel, so a pass here proves the path W2 actually runs on.
+    agents.set('probe-host-agent', {
+      id: 'probe-host-agent',
+      ctx: { id: 'probe-host-agent', get: (name: string) => (name === 'subagents' ? probeRuntime : undefined) },
+    })
+    const host = await novels.createNovel(store, novelConfig({ title: '探针宿主' }) as never)
+    await store.updateState((current) => ({
+      sessionBindings: {
+        ...current.sessionBindings,
+        'probe-host-agent': { architecture: 'agent-novel', novelId: host.novelId, character: '', chatId: '' },
+      },
+    }))
+
+    const res = makeResponse()
+    await apiHandler(makeRequest(novelConfig({ title: '写手子代理小说', writerMode: 'subagent' }), '/api/dsh-tavern/novels'), res)
+    expect(res.statusCode).toBe(200)
+    const body = jsonBody(res)
+    expect(body).toMatchObject({ ok: true, novel: { title: '写手子代理小说', status: 'active', phase: 'outlining' } })
+    // The gate really spawned both probes: the closed allow list, then the
+    // empty one — no probe, no creation.
+    expect(calls.map((call) => call.allow)).toEqual([['novel_status_read'], []])
+    // Explicit subagent mode is stored verbatim; the absent-mode inline
+    // normalization is the store layer's contract (novel.ts) and is asserted
+    // in the novel-store spec, not re-proven here.
+    const detail = makeResponse()
+    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${body.novel.novelId as string}`), detail)
+    expect(jsonBody(detail).novel.config).toMatchObject({ writerMode: 'subagent' })
   })
 
   // Mutating tests last (shared-state discipline): deletion is terminal.

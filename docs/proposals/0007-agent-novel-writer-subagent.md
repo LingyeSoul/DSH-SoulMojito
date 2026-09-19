@@ -246,4 +246,6 @@ A/B 目标线（W0 后可修订）：subagent 模式**原始输入总量 ≤ inl
 
 **2026-09-19 审查改进**（双轴代码审查后落地）：W2 trimmed 包回归 §4.1 保留清单——不再渲染伏笔页（伏笔由写手经只读工具自助检索），此前 trimmed 模式仍渲染伏笔页使 ≤8k 目标恶化；P4 fail-open 写入从"仅测试赋值"变为生产路径——writer.ts 编排在 run.result settle 后记录宿主回传 usage（仅数值字段，形状不对静默跳过），委托成功记 writerOutputChars，driver turn/end 采样 drain 并入 `NovelUsageSample`；§5.3 上限入配置（偏离 10）；`allParticipantsOf(outline)` 提取角色页/正典过滤/outline digest 三处全书并集循环，修正"当前章 participants"名不副实的注释；agent.ts 两写手工具前置序列去重（`requireWriterLaunchContext`：绑定守卫/单元存在性/runtime 探测，单元存在性先于 runtime 探测报错）；`WriterMode`/`isWriterMode` 共享枚举校验（创建校验/patch 校验/面板 cast 三处）。
 
+**2026-09-19 补测**：POST novels subagent 创建闸门的 happy-path HTTP 级测试落地（`packages/plugin/tests/agent-novel-command.spec.ts`），关闭此前"需在 command harness 挂假 runtime、Task F 判定成本高于收益、记录在案未做"的缺口。做法：harness 直接挂载 novel 工具面（真实宿主上由捆绑 preset 承载，0005 §17），bound-agent 通道（`discoverWriterProbeRuntime` 首选通道，即 `novel_writer_delegate` 运行时的同一条解析路径）挂剧本 fake runtime——P1 spawn 真实执行 `novel_status_read`（绑定缺失报错发生在身份记录之后，属探针预期），P2 空 allow 列表不执行工具、自述 unavailable（观测性通过）。证据链：allow 序列 `[['novel_status_read'], []]` 两连 spawn + 200 创建 + `config.writerMode: 'subagent'` 原样落库。**边界**：fake runtime 中 `exec.agent.id === run.id` 是剧本使然，本测试证明的是闸门接线（探针不过不创建），不能替代 §9 P1 的真机关联性复核。
+
 **未竟事项**：W3 默认切换与同题 A/B 实测（原始输入 ≤ inline 40% 目标线、窗口峰值、账单三列归档）；真机 E2E（P1 真机关联性复核、P3 端到端检索→commit→越权拒绝时序）；§10 W1 的"同题质量盲评"。

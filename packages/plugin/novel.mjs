@@ -3617,7 +3617,7 @@ var NovelStore = class _NovelStore {
       })();
       if (!outline.chapters.some((chapter) => chapter.chapterId === input.chapterId)) throw new NovelPreconditionError({ rule: "chapter-not-found", violations: [input.chapterId] });
       if (!outline.scenes.some((scene) => scene.sceneId === input.sceneId)) throw new NovelPreconditionError({ rule: "scene-not-found", violations: [input.sceneId] });
-      const existing = current.units.find((unit2) => unit2.chapterId === input.chapterId && unit2.sceneId === input.sceneId && unit2.state === "prepared");
+      const existing = current.units.find((unit2) => unit2.chapterId === input.chapterId && unit2.sceneId === input.sceneId && (unit2.state === "prepared" || unit2.state === "claimed"));
       if (existing !== void 0) return { unitId: existing.unitId };
       const unitId = `unit-${current.units.length + 1}`;
       const unit = {
@@ -5922,6 +5922,13 @@ var commitOutput = objectOutput2({
   duplicate: { type: "boolean" },
   source: { type: "object", additionalProperties: true }
 });
+var supersedeOutput = objectOutput2({
+  unitId: { type: "string" },
+  sceneId: { type: "string" },
+  state: { type: "string" },
+  completedBy: { type: "string" },
+  source: { type: "object", additionalProperties: true }
+});
 var chapterCompleteOutput = objectOutput2({ revision: { type: "string" }, source: { type: "object", additionalProperties: true } });
 var finishOutput = objectOutput2({
   revision: { type: "string" },
@@ -6240,6 +6247,40 @@ function createTools() {
         truncated: false
       };
     }),
+    tool("novel_unit_supersede", "Retire a PREPARED writing unit whose scene already has a completed body commit \u2014 duplicate-leftover cleanup (\xA76.2). When finish-guards report unit-in-flight for such a unit, the scene prose already exists under the earlier commit; supersede the leftover and retry novel_finish. Refuses for units whose scene is not complete (write them instead), for claimed units (a claim must finish or be stopped), and for delegated writers (author-only).", {
+      unitId: { type: "string", required: true },
+      reason: { type: "string", required: true, description: "Why this unit is a duplicate leftover, citing the commit that completed the scene." }
+    }, supersedeOutput, async (args, exec) => {
+      const binding = await resolveNovelBinding(exec);
+      if (binding.delegatedUnitId !== void 0) {
+        throw new Error("Unit superseding is author-only; a delegated writer never retires units (\xA76.2)");
+      }
+      const novelId = binding.novelId;
+      const store = await novelStore();
+      const snapshot = await snapshotOf(novelId);
+      const unitId = stringArg(args.unitId);
+      const unit = snapshot.units.find((item) => item.unitId === unitId);
+      if (unit === void 0) throw new Error(`writing unit '${unitId}' not found`);
+      if (unit.state === "claimed") {
+        throw new Error(`unit '${unitId}' is claimed: a claim must finish or be stopped before the unit can be superseded (\xA76.2); a claimed duplicate means an earlier execution is still holding it`);
+      }
+      if (unit.state !== "prepared") throw new Error(`unit '${unitId}' is '${unit.state}' and cannot be superseded (\xA76.2)`);
+      const sceneOfUnit = new Map(snapshot.units.map((item) => [item.unitId, item.sceneId]));
+      let completedBy = null;
+      for (let index = snapshot.commits.length - 1; index >= 0; index -= 1) {
+        const commit = snapshot.commits[index];
+        if (sceneOfUnit.get(commit.unitId) === unit.sceneId) {
+          if (commit.sceneCompleted) completedBy = commit.commitId;
+          break;
+        }
+      }
+      if (completedBy === null) {
+        throw new Error(`scene '${unit.sceneId}' has no completed commit: unit '${unitId}' is unfinished work \u2014 claim and write it instead of superseding (\xA76.2)`);
+      }
+      const reason = stringArg(args.reason);
+      await store.supersedeUnit(novelId, { unitId, reason: `${reason} (duplicate of ${unit.sceneId}; completed by ${completedBy})` });
+      return { unitId, sceneId: unit.sceneId, state: "superseded", completedBy, source: { kind: "novel-supersede", id: unitId } };
+    }),
     tool("novel_body_commit", 'Commit body prose for a claimed unit and end the writing turn (\xA710.4/\xA711). Paragraphs are plain text with no Markdown and no chapter headings; paragraphs carrying structural labels, unit ids or wrap-up notes (e.g. "chapter 6 scene 6-1 \u6536\u675F", "\u4E0B\u4E00\u7AE0 ch-007 \u2026") are rejected \u2014 completion status belongs in sceneCompletion, never in prose. Canon change sources may use commit-<n>#<index> or inline references into this candidate body; the server fills in the commit id (\xA710.4).', {
       unitId: { type: "string", required: true },
       executionToken: { type: "string", description: "Token returned by novel_unit_claim; delegated writer runs omit it." },
@@ -6414,7 +6455,7 @@ function createTools() {
       });
       return { revision: result.revision, source: { kind: "novel-chapter-complete", id: novelId } };
     }),
-    tool("novel_finish", "Finish the novel (\xA77.3). The store verifies every completion condition \u2014 chapters, required foreshadowing, processed directives, no in-flight units, length budget \u2014 and surfaces violations verbatim; self-reported completion is never accepted.", {
+    tool("novel_finish", "Finish the novel (\xA77.3). The store verifies every completion condition \u2014 chapters, required foreshadowing, processed directives, no in-flight units, length budget \u2014 and surfaces violations verbatim; self-reported completion is never accepted. Recovery: when a violation reads unit-in-flight:<id> and that unit's scene already has a completed commit, the unit is a duplicate leftover \u2014 retire it with novel_unit_supersede and retry; never claim such a unit.", {
       expectedRevision: { type: "string", required: true },
       basis: { type: "string", required: true, description: "The completion check basis: ending commit reference and resolved threads." }
     }, finishOutput, async (args, exec) => {

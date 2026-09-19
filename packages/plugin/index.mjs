@@ -6138,7 +6138,7 @@ var NovelStore = class _NovelStore {
       })();
       if (!outline.chapters.some((chapter) => chapter.chapterId === input.chapterId)) throw new NovelPreconditionError({ rule: "chapter-not-found", violations: [input.chapterId] });
       if (!outline.scenes.some((scene) => scene.sceneId === input.sceneId)) throw new NovelPreconditionError({ rule: "scene-not-found", violations: [input.sceneId] });
-      const existing = current.units.find((unit2) => unit2.chapterId === input.chapterId && unit2.sceneId === input.sceneId && unit2.state === "prepared");
+      const existing = current.units.find((unit2) => unit2.chapterId === input.chapterId && unit2.sceneId === input.sceneId && (unit2.state === "prepared" || unit2.state === "claimed"));
       if (existing !== void 0) return { unitId: existing.unitId };
       const unitId = `unit-${current.units.length + 1}`;
       const unit = {
@@ -7955,6 +7955,8 @@ var NovelDriver = class _NovelDriver {
     let unitId = null;
     let briefSnapshot = snapshot2;
     if (work.kind === "write-unit" && work.chapterId !== null && work.sceneId !== null) {
+      const claimedSibling = snapshot2.units.find((unit) => unit.chapterId === work.chapterId && unit.sceneId === work.sceneId && unit.state === "claimed");
+      if (claimedSibling !== void 0) return;
       const scene = snapshot2.outline?.scenes.find((candidate) => candidate.sceneId === work.sceneId);
       if (scene === void 0) {
         this.logWarn("scene-missing", { novelId, sceneId: work.sceneId });

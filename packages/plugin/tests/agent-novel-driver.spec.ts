@@ -324,6 +324,54 @@ describe('NovelDriver scheduling', () => {
     await driver.dispose()
   })
 
+  it('waits while the next scene has a claimed unit in flight: no duplicate prepare, no re-notice', async () => {
+    const { tavern, novels, novelId, revision } = await fixture()
+    const agent = new FakeAgent(AGENT_ID)
+    const { host } = harness(agent)
+    const driver = NovelDriver.create(host, { store: novels, tavern })
+    await driver.handleNovelOpen(agent, novelId)
+    await vi.waitFor(async () => {
+      if (agent.followups.length < 1) throw new Error('kickoff missing')
+    })
+    await createOutline(novels, novelId, (await novels.getNovel(novelId))?.revision ?? revision)
+    const outlineRevision = (await novels.getNovel(novelId))!.outline!.outlineRevision
+
+    // The author claims the unit, then its turn ends WITHOUT a commit (turn
+    // budget, interruption, ...). The claim legitimately survives the turn.
+    await driver.handleSessionEvent({ id: SESSION_ID }, turnEnd(1))
+    await vi.waitFor(async () => {
+      if (agent.followups.length < 2) throw new Error('write-unit followup missing')
+    })
+    const unitId = (await novels.getNovel(novelId))!.run.inFlightIntent!.unitId!
+    const claim = await novels.claimUnit(novelId, { unitId, expectedOutlineRevision: outlineRevision, expectedRequirementSequence: 1, hostTurn: 2 })
+
+    // Regression: while the claim is open, a drive pass must neither prepare a
+    // duplicate unit for the same scene nor deliver another notice. (Before
+    // the fix this pass re-prepared the scene as a second unit and nagged the
+    // agent, who then hit unit-in-flight on every claim attempt.)
+    await driver.handleSessionEvent({ id: SESSION_ID }, turnEnd(2))
+    await settle(120)
+    expect(agent.followups).toHaveLength(2)
+    const mid = await novels.getNovel(novelId)
+    expect(mid?.units).toHaveLength(1)
+    expect(mid?.units[0]).toMatchObject({ unitId, state: 'claimed' })
+
+    // Once the claim commits, the drive unblocks on the next turn end.
+    await novels.commitBody(novelId, {
+      unitId: claim.unitId,
+      executionToken: claim.executionToken,
+      paragraphs: ['守塔人看见了光。'],
+      sceneCompletion: { completed: true, basis: '异象确认', outstandingGoals: [], nextAnchor: null },
+      canonChanges: [],
+    })
+    await driver.handleSessionEvent({ id: SESSION_ID }, turnEnd(3))
+    await vi.waitFor(async () => {
+      if (agent.followups.length < 3) throw new Error('expected the drive to unblock after the commit')
+    })
+    expect(textOf(noticeOf(agent, 2))).toContain('novel_chapter_complete')
+    await driver.dispose()
+  })
+
   it('ignores turn/end edges of sessions without an agent-novel binding', async () => {
     const { tavern, novels, novelId } = await fixture()
     const agent = new FakeAgent(AGENT_ID)

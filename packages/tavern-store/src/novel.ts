@@ -665,8 +665,12 @@ export class NovelStore {
       const outline = current.outline ?? (() => { throw new NovelPreconditionError({ rule: 'outline-missing' }) })()
       if (!outline.chapters.some((chapter) => chapter.chapterId === input.chapterId)) throw new NovelPreconditionError({ rule: 'chapter-not-found', violations: [input.chapterId] })
       if (!outline.scenes.some((scene) => scene.sceneId === input.sceneId)) throw new NovelPreconditionError({ rule: 'scene-not-found', violations: [input.sceneId] })
-      // Preparing the same scene twice returns the existing prepared unit.
-      const existing = current.units.find((unit) => unit.chapterId === input.chapterId && unit.sceneId === input.sceneId && unit.state === 'prepared')
+      // Preparing a scene with an in-flight unit (prepared or claimed) returns
+      // that unit instead of creating a second one: a claimed unit is being
+      // written, and a duplicate would strand and later fail finish-guards as
+      // unit-in-flight. Committed units do not block: continuation fragments
+      // prepare a fresh unit after the previous one committed.
+      const existing = current.units.find((unit) => unit.chapterId === input.chapterId && unit.sceneId === input.sceneId && (unit.state === 'prepared' || unit.state === 'claimed'))
       if (existing !== undefined) return { unitId: existing.unitId }
       const unitId = `unit-${current.units.length + 1}`
       const unit: WritingUnit = {

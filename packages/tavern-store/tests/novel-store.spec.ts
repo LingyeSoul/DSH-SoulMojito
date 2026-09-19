@@ -585,6 +585,37 @@ describe('NovelStore 单元与提交（§6.2/§10.3/§10.4）', () => {
       .rejects.toMatchObject({ code: 'NOVEL_PRECONDITION', rule: 'not-active' })
   }))
 
+  it('同场次在途单元幂等：prepared/claimed 都返回既有单元，commit 后续段仍可开新单元', withStores(async (tavern, novels) => {
+    const { novelId, outlineRevision } = await startedNovel(tavern, novels)
+    const prepared = await novels.prepareUnit(novelId, { chapterId: 'ch-1', sceneId: 'sc-1', label: '开场', goal: '发现异象' })
+    // Prepared idempotency (unchanged).
+    await expect(novels.prepareUnit(novelId, { chapterId: 'ch-1', sceneId: 'sc-1', label: '重复', goal: 'g' }))
+      .resolves.toEqual({ unitId: prepared.unitId })
+
+    // Regression: while the unit is claimed (turn ended without a commit), a
+    // re-driven prepare for the same scene must NOT create a duplicate unit —
+    // the stranded duplicate later fails finish-guards as unit-in-flight.
+    const claim = await novels.claimUnit(novelId, { unitId: prepared.unitId, expectedOutlineRevision: outlineRevision, expectedRequirementSequence: 1, hostTurn: 1 })
+    expect(claim.attempt).toBe(1)
+    const whileClaimed = await novels.prepareUnit(novelId, { chapterId: 'ch-1', sceneId: 'sc-1', label: '重复', goal: 'g' })
+    expect(whileClaimed.unitId).toBe(prepared.unitId)
+    let snapshot = await novels.getNovel(novelId)
+    expect(snapshot?.units).toHaveLength(1)
+
+    // Continuation still works: after the commit, a fresh unit may be prepared.
+    await novels.commitBody(novelId, {
+      unitId: claim.unitId,
+      executionToken: claim.executionToken,
+      paragraphs: ['第一段事实。'],
+      sceneCompletion: { completed: false, basis: '场景延续', outstandingGoals: ['次日行动'], nextAnchor: '清晨' },
+      canonChanges: [],
+    })
+    const continuation = await novels.prepareUnit(novelId, { chapterId: 'ch-1', sceneId: 'sc-1', label: '续段', goal: '次日行动', continuationAnchor: '清晨' })
+    expect(continuation.unitId).not.toBe(prepared.unitId)
+    snapshot = await novels.getNovel(novelId)
+    expect(snapshot?.units).toHaveLength(2)
+  }))
+
   it('提交往返：令牌、计数、readBody 坐标、重复与令牌错误', withStores(async (tavern, novels, root) => {
     const { novelId, outlineRevision } = await startedNovel(tavern, novels)
     const prepared = await novels.prepareUnit(novelId, { chapterId: 'ch-1', sceneId: 'sc-1', label: '开场', goal: '发现异象' })

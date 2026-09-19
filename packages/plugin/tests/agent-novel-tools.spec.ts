@@ -206,6 +206,7 @@ describe('AgentNovel author tools', () => {
       'novel_outline_revise',
       'novel_requirement_block',
       'novel_unit_claim',
+      'novel_unit_supersede',
       'novel_body_commit',
       'novel_writer_draft',
       'novel_writer_delegate',
@@ -612,6 +613,104 @@ describe('AgentNovel author tools', () => {
     expect((await novels.getNovel(third.novelId))?.run.deduceRuns).toBe(1)
 
     // Restore the binding for the later asset-snapshot tests.
+    await tavern.updateState((state) => ({
+      sessionBindings: { ...state.sessionBindings, novelist: { architecture: 'agent-novel', novelId, character: '', chatId: '' } },
+    }))
+  })
+
+  it('novel_unit_supersede retires duplicate leftovers but refuses real work (2026-09-19 finish-guards incident)', async () => {
+    // Fresh novel: sc-1 committed complete through unit-1, then a duplicate
+    // unit-2 for the same scene was left prepared — exactly the leftover that
+    // made finish-guards report unit-in-flight and blocked finishing.
+    const fresh = await novels.createNovel(tavern, novelConfig({
+      title: '收尾篇', characterNames: [], worldNames: [],
+      lengthBudget: { kind: 'unbounded' },
+    }))
+    await tavern.updateState((state) => ({
+      sessionBindings: { ...state.sessionBindings, novelist: { architecture: 'agent-novel', novelId: fresh.novelId, character: '', chatId: '' } },
+    }))
+    const scopedExec = { agent: { id: 'novelist' } }
+    const outlined = await novels.createOutline(fresh.novelId, {
+      expectedRevision: fresh.revision,
+      outline: {
+        story: { premise: 'p', theme: 't', mainConflict: 'c', endingDirection: 'e', taboos: [] },
+        characters: [],
+        chapters: [{
+          chapterId: 'ch-1', order: 1, title: '一', purpose: 'p', keyEvents: [], plannedCharacters: null,
+          entryCondition: 'x', exitCondition: 'y',
+        }],
+        currentChapterId: 'ch-1',
+        scenes: [
+          { sceneId: 'sc-1', order: 1, goal: 'g1', participants: [], timeLocation: 't1', causality: 'c1', conflict: 'f1', expectedChange: 'e1' },
+          { sceneId: 'sc-2', order: 2, goal: 'g2', participants: [], timeLocation: 't2', causality: 'c2', conflict: 'f2', expectedChange: 'e2' },
+        ],
+        foreshadowing: [],
+      },
+      handledRequirements: [{ requirementId: 'req-1', result: 'applied', effectiveLocation: 'story.premise' }],
+    })
+    const claim = await novels.claimUnit(fresh.novelId, {
+      unitId: (await novels.prepareUnit(fresh.novelId, { chapterId: 'ch-1', sceneId: 'sc-1', label: 'l', goal: 'g1' })).unitId,
+      expectedOutlineRevision: outlined.outlineRevision,
+      expectedRequirementSequence: 1,
+      hostTurn: 1,
+    })
+    await novels.commitBody(fresh.novelId, {
+      unitId: claim.unitId,
+      executionToken: claim.executionToken,
+      paragraphs: ['第一段事实。'],
+      sceneCompletion: { completed: true, basis: 'scene done', outstandingGoals: [], nextAnchor: null },
+      canonChanges: [],
+    })
+    // The duplicate leftover (same scene, still prepared).
+    const leftover = await novels.prepareUnit(fresh.novelId, { chapterId: 'ch-1', sceneId: 'sc-1', label: 'l2', goal: 'g1' })
+
+    // Real unfinished work must not be superseded: sc-2 has no commit.
+    const sc2 = await novels.prepareUnit(fresh.novelId, { chapterId: 'ch-1', sceneId: 'sc-2', label: 'l', goal: 'g2' })
+    await expect(tools.get('novel_unit_supersede')!.execute({ unitId: sc2.unitId, reason: 'x' }, scopedExec))
+      .rejects.toThrow('unfinished work')
+
+    // A claimed unit cannot be superseded either.
+    const sc2Claim = await novels.claimUnit(fresh.novelId, {
+      unitId: sc2.unitId, expectedOutlineRevision: outlined.outlineRevision, expectedRequirementSequence: 1, hostTurn: 2,
+    })
+    await expect(tools.get('novel_unit_supersede')!.execute({ unitId: sc2.unitId, reason: 'x' }, scopedExec))
+      .rejects.toThrow('claimed')
+
+    // The duplicate leftover retires with the completing commit recorded.
+    const superseded = await tools.get('novel_unit_supersede')!.execute({
+      unitId: leftover.unitId, reason: 'duplicate of sc-1 prepared while unit-1 was claimed',
+    }, scopedExec)
+    expect(superseded).toMatchObject({ unitId: leftover.unitId, sceneId: 'sc-1', state: 'superseded', completedBy: 'commit-1' })
+    expectLossless(superseded)
+    expect((await novels.getNovel(fresh.novelId))!.units.find((unit) => unit.unitId === leftover.unitId)).toMatchObject({
+      state: 'superseded',
+      lastError: expect.stringContaining('completed by commit-1'),
+    })
+    await expect(tools.get('novel_unit_supersede')!.execute({ unitId: leftover.unitId, reason: 'x' }, scopedExec))
+      .rejects.toThrow('cannot be superseded')
+
+    // Finish the run: sc-2 commits, chapter completes, guards pass with the
+    // leftover retired (the exact recovery the incident novel lacked).
+    await novels.commitBody(fresh.novelId, {
+      unitId: sc2Claim.unitId,
+      executionToken: sc2Claim.executionToken,
+      paragraphs: ['第二段事实。'],
+      sceneCompletion: { completed: true, basis: 'scene done', outstandingGoals: [], nextAnchor: null },
+      canonChanges: [],
+    })
+    await novels.completeChapter(fresh.novelId, {
+      chapterId: 'ch-1',
+      expectedContentRevision: (await novels.getNovel(fresh.novelId))!.contentRevision,
+      basis: 'both scenes committed',
+      openItems: [],
+    })
+    const finished = await tools.get('novel_finish')!.execute({
+      expectedRevision: (await novels.getNovel(fresh.novelId))!.revision,
+      basis: 'duplicate retired, scenes committed',
+    }, scopedExec)
+    expect(typeof finished.totalCharacters).toBe('number')
+
+    // Restore the binding for the asset-snapshot tests.
     await tavern.updateState((state) => ({
       sessionBindings: { ...state.sessionBindings, novelist: { architecture: 'agent-novel', novelId, character: '', chatId: '' } },
     }))

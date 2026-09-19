@@ -336,6 +336,11 @@ const commitOutput = objectOutput({
   totalCharacters: { type: 'integer' }, revision: { type: 'string' }, duplicate: { type: 'boolean' },
   source: { type: 'object', additionalProperties: true },
 })
+const supersedeOutput = objectOutput({
+  unitId: { type: 'string' }, sceneId: { type: 'string' }, state: { type: 'string' },
+  completedBy: { type: 'string' },
+  source: { type: 'object', additionalProperties: true },
+})
 const chapterCompleteOutput = objectOutput({ revision: { type: 'string' }, source: { type: 'object', additionalProperties: true } })
 const finishOutput = objectOutput({
   revision: { type: 'string' }, totalCharacters: { type: 'integer' },
@@ -658,6 +663,42 @@ function createTools(): ToolDefinition[] {
         truncated: false,
       }
     }),
+    tool('novel_unit_supersede', 'Retire a PREPARED writing unit whose scene already has a completed body commit — duplicate-leftover cleanup (§6.2). When finish-guards report unit-in-flight for such a unit, the scene prose already exists under the earlier commit; supersede the leftover and retry novel_finish. Refuses for units whose scene is not complete (write them instead), for claimed units (a claim must finish or be stopped), and for delegated writers (author-only).', {
+      unitId: { type: 'string', required: true },
+      reason: { type: 'string', required: true, description: 'Why this unit is a duplicate leftover, citing the commit that completed the scene.' },
+    }, supersedeOutput, async (args, exec) => {
+      const binding = await resolveNovelBinding(exec)
+      if (binding.delegatedUnitId !== undefined) {
+        throw new Error('Unit superseding is author-only; a delegated writer never retires units (§6.2)')
+      }
+      const novelId = binding.novelId
+      const store = await novelStore()
+      const snapshot = await snapshotOf(novelId)
+      const unitId = stringArg(args.unitId)
+      const unit = snapshot.units.find((item) => item.unitId === unitId)
+      if (unit === undefined) throw new Error(`writing unit '${unitId}' not found`)
+      if (unit.state === 'claimed') {
+        throw new Error(`unit '${unitId}' is claimed: a claim must finish or be stopped before the unit can be superseded (§6.2); a claimed duplicate means an earlier execution is still holding it`)
+      }
+      if (unit.state !== 'prepared') throw new Error(`unit '${unitId}' is '${unit.state}' and cannot be superseded (§6.2)`)
+      // Duplicate signature: the scene's latest commit already declared
+      // completion. Otherwise this is real unfinished work — write it.
+      const sceneOfUnit = new Map(snapshot.units.map((item) => [item.unitId, item.sceneId]))
+      let completedBy: string | null = null
+      for (let index = snapshot.commits.length - 1; index >= 0; index -= 1) {
+        const commit = snapshot.commits[index]!
+        if (sceneOfUnit.get(commit.unitId) === unit.sceneId) {
+          if (commit.sceneCompleted) completedBy = commit.commitId
+          break
+        }
+      }
+      if (completedBy === null) {
+        throw new Error(`scene '${unit.sceneId}' has no completed commit: unit '${unitId}' is unfinished work — claim and write it instead of superseding (§6.2)`)
+      }
+      const reason = stringArg(args.reason)
+      await store.supersedeUnit(novelId, { unitId, reason: `${reason} (duplicate of ${unit.sceneId}; completed by ${completedBy})` })
+      return { unitId, sceneId: unit.sceneId, state: 'superseded', completedBy, source: { kind: 'novel-supersede', id: unitId } }
+    }),
     tool('novel_body_commit', 'Commit body prose for a claimed unit and end the writing turn (§10.4/§11). Paragraphs are plain text with no Markdown and no chapter headings; paragraphs carrying structural labels, unit ids or wrap-up notes (e.g. "chapter 6 scene 6-1 收束", "下一章 ch-007 …") are rejected — completion status belongs in sceneCompletion, never in prose. Canon change sources may use commit-<n>#<index> or inline references into this candidate body; the server fills in the commit id (§10.4).', {
       unitId: { type: 'string', required: true },
       executionToken: { type: 'string', description: 'Token returned by novel_unit_claim; delegated writer runs omit it.' },
@@ -866,7 +907,7 @@ function createTools(): ToolDefinition[] {
       })
       return { revision: result.revision, source: { kind: 'novel-chapter-complete', id: novelId } }
     }),
-    tool('novel_finish', 'Finish the novel (§7.3). The store verifies every completion condition — chapters, required foreshadowing, processed directives, no in-flight units, length budget — and surfaces violations verbatim; self-reported completion is never accepted.', {
+    tool('novel_finish', 'Finish the novel (§7.3). The store verifies every completion condition — chapters, required foreshadowing, processed directives, no in-flight units, length budget — and surfaces violations verbatim; self-reported completion is never accepted. Recovery: when a violation reads unit-in-flight:<id> and that unit\'s scene already has a completed commit, the unit is a duplicate leftover — retire it with novel_unit_supersede and retry; never claim such a unit.', {
       expectedRevision: { type: 'string', required: true },
       basis: { type: 'string', required: true, description: 'The completion check basis: ending commit reference and resolved threads.' },
     }, finishOutput, async (args, exec) => {
