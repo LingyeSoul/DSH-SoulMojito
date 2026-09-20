@@ -468,8 +468,9 @@ describe('AgentNovel command bridge and HTTP contract', () => {
 
     // §12.1 driver kick: the outline-create notice reaches the live agent.
     expect(await until(() => agent.followups.length > 0)).toBe(true)
-    const notice = agent.followups[0] as { content?: Array<{ text?: string }>; source?: { form?: string } }
-    expect(notice.source).toMatchObject({ kind: 'plugin', form: 'novel-notice' })
+    const notice = agent.followups[0] as { content?: Array<{ text?: string }>; source?: { form?: string; summary?: string } }
+    expect(notice.source).toMatchObject({ kind: 'plugin', plugin: 'dsh-tavern', form: 'notice' })
+    expect(notice.source?.summary).toContain('AgentNovel work notice')
     expect(notice.content?.[0]?.text).toContain('Novel work brief')
 
     // Idempotent re-open: no extra marker, no second recompose.
@@ -528,8 +529,8 @@ describe('AgentNovel command bridge and HTTP contract', () => {
 
     // Host retries of the same message id dedupe to one ledger record.
     dispatch({ type: 'user/message', data: { id: 'msg-real-1', content: [{ type: 'text', text: '让常客在第三章回来' }], source: { kind: 'user' } } })
-    // Driver notices (plugin source, form novel-notice) are never directives.
-    dispatch({ type: 'user/message', data: { id: 'msg-notice-1', content: [{ type: 'text', text: 'scheduled work' }], source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'novel-notice' } } })
+    // Driver notices (plugin source) are never directives.
+    dispatch({ type: 'user/message', data: { id: 'msg-notice-1', content: [{ type: 'text', text: 'scheduled work' }], source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: 'AgentNovel work notice (novel nvl-x, intent wi-x)' } } })
     dispatch({ type: 'user/message', data: { id: 'msg-notice-2', content: [{ type: 'text', text: 'closed' }], source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice' } } })
     await new Promise((resolve) => setTimeout(resolve, 150))
     expect(await requirementCount()).toBe(2)

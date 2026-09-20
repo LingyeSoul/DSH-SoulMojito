@@ -130,7 +130,7 @@ describe('AgentTavern native event projector', () => {
             message: {
               id: 'imported-greeting', role: 'assistant',
               content: [{ type: 'text', text: 'Hello, traveler.' }],
-              source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import', plugin: 'dsh-tavern', form: 'greeting' },
+              source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' },
             },
           },
         },
@@ -138,7 +138,7 @@ describe('AgentTavern native event projector', () => {
         { type: 'turn/end', seq: 4, time: 1120, data: { turn: 1, reason: { kind: 'completed' } } },
         {
           type: 'user/message', seq: 5, time: 1200,
-          data: { id: 'imported-user', role: 'user', content: [{ type: 'text', text: 'Imported turn.' }], source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'history' } },
+          data: { id: 'imported-user', role: 'user', content: [{ type: 'text', text: 'Imported turn.' }], source: { kind: 'plugin', plugin: 'dsh-tavern' } },
         },
         {
           type: 'user/message', seq: 6, time: 1300,
@@ -269,16 +269,28 @@ describe('AgentTavern native event projector', () => {
     ))).toBe(true)
     expect(appends.filter((event) => event.type === 'user/message')).toHaveLength(2)
     expect(appends.filter((event) => event.type === 'assistant/message')).toHaveLength(2)
+    // v0 Session dispositions admit no plugin/form members on model sources;
+    // the synthetic provider/model pair is the mirror marker.
     expect(appends.at(0)?.data).toMatchObject({
       message: {
-        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import', form: 'greeting' },
+        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' },
       },
     })
     expect(appends.at(2)?.data).toMatchObject({
       message: {
-        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import', form: 'history' },
+        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' },
       },
     })
+    for (const event of appends.filter((item) => item.type === 'assistant/message')) {
+      expect((event.data.message as { source: Record<string, unknown> }).source).toEqual({
+        kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import',
+      })
+    }
+    for (const event of appends.filter((item) => item.type === 'user/message')) {
+      expect((event.data as { source: Record<string, unknown> }).source).toEqual({
+        kind: 'plugin', plugin: 'dsh-tavern',
+      })
+    }
     // The first live AgentLoop turn remains one because imports reserve no turn.
     expect([...appends.filter((event) => event.type === 'turn/start'), { type: 'turn/start', data: { turn: 1 } }])
       .toEqual([{ type: 'turn/start', data: { turn: 1 } }])

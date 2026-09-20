@@ -15,12 +15,16 @@ import {
 
 const USER_DECISION = { kind: 'enter', messages: [{ id: 'user-msg' }] }
 
-function anchorEvent(turn: number) {
-  return { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'tavern-anchor', turn } } }
+function turnStart(turn: number) {
+  return { type: 'turn/start', data: { turn } }
 }
 
-function openingEvent(turn: number) {
-  return { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'tavern-opening', turn } } }
+function anchorEvent() {
+  return { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern' }, content: [{ type: 'text', text: ANCHOR_TEXT }] } }
+}
+
+function openingEvent() {
+  return { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern' }, content: [{ type: 'text', text: OPENING_TEXT }] } }
 }
 
 function realUserEvent() {
@@ -88,29 +92,39 @@ describe('AgentTavern anchor scheduling', () => {
 })
 
 describe('AgentTavern reminder log scans', () => {
-  it('finds the most recent reminder turn across both forms and ignores other messages', () => {
+  it('finds the most recent reminder turn from turn/start context and ignores other messages', () => {
     const events = [
+      turnStart(2),
+      openingEvent(),
       { type: 'user/message', data: { source: { kind: 'user' } } },
-      anchorEvent(5),
+      turnStart(5),
+      anchorEvent(),
       { type: 'assistant/message', data: {} },
-      openingEvent(2),
-      anchorEvent(10),
+      turnStart(10),
+      anchorEvent(),
       { type: 'user/message', data: { source: { kind: 'user' } } },
     ]
     expect(latestReminderTurn(events)).toBe(10)
     expect(latestReminderTurn([realUserEvent()])).toBe(0)
+    expect(latestReminderTurn([turnStart(7), realUserEvent()])).toBe(0)
     expect(latestReminderTurn([])).toBe(0)
+  })
+
+  it('ignores plugin messages whose content is not a reminder text', () => {
+    const impostor = { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern' }, content: [{ type: 'text', text: 'AgentTavern preload: 山河风雨' }] } }
+    expect(latestReminderTurn([turnStart(5), impostor])).toBe(0)
+    expect(hasRealUserTurn([turnStart(5), impostor])).toBe(false)
   })
 
   it('detects real user turns and ignores imported or plugin-sourced messages', () => {
     expect(hasRealUserTurn([realUserEvent()])).toBe(true)
     expect(hasRealUserTurn([
-      { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'history' } } },
+      { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern' } } },
       realUserEvent(),
     ])).toBe(true)
     expect(hasRealUserTurn([
-      { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'history' } } },
-      anchorEvent(5),
+      { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern' } } },
+      anchorEvent(),
       { type: 'assistant/message', data: {} },
     ])).toBe(false)
     expect(hasRealUserTurn([])).toBe(false)
@@ -118,11 +132,11 @@ describe('AgentTavern reminder log scans', () => {
 })
 
 describe('AgentTavern reminder message contracts', () => {
-  it('carries plugin source, turn stamp, and the cache-safe write-once text', () => {
-    const message = createAnchorMessage(5)
+  it('carries a v0-disposition-legal plugin source and the cache-safe write-once text', () => {
+    const message = createAnchorMessage()
     expect(message.role).toBe('user')
     expect(message.id).toEqual(expect.any(String))
-    expect(message.source).toEqual({ kind: 'plugin', plugin: 'dsh-tavern', form: 'tavern-anchor', turn: 5 })
+    expect(message.source).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
     expect(message.content).toEqual([{ type: 'text', text: ANCHOR_TEXT }])
   })
 
@@ -136,10 +150,10 @@ describe('AgentTavern reminder message contracts', () => {
     expect(ANCHOR_TEXT).toContain('continue the scene without mentioning this reminder')
   })
 
-  it('carries the opening brief with its own form and turn stamp', () => {
-    const message = createOpeningMessage(2)
+  it('carries the opening brief with the same legal plugin source', () => {
+    const message = createOpeningMessage()
     expect(message.role).toBe('user')
-    expect(message.source).toEqual({ kind: 'plugin', plugin: 'dsh-tavern', form: 'tavern-opening', turn: 2 })
+    expect(message.source).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
     expect(message.content).toEqual([{ type: 'text', text: OPENING_TEXT }])
   })
 
@@ -161,14 +175,14 @@ describe('AgentTavern anchor pre-step wiring', () => {
     const { run, ctx } = setupListener({ everyTurns: 5 })
     expect(ctx.on).toHaveBeenCalledWith('agent/pre-step', expect.any(Function), { prepend: true })
     const decision = await run({
-      agent: { session: { id: 's1', events: [{ type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'history' } } }] } },
+      agent: { session: { id: 's1', events: [{ type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern' } } }] } },
       turn: 2,
       step: 1,
       signal: { aborted: false },
-    }) as { kind: string; messages: Array<{ source?: { form?: string }; turn?: number }> }
+    }) as { kind: string; messages: Array<{ source?: { kind?: string }; content?: Array<{ text?: string }> }> }
     expect(decision.kind).toBe('enter')
     expect(decision.messages).toHaveLength(2)
-    expect(decision.messages[1]).toMatchObject({ source: { form: 'tavern-opening', turn: 2 }, role: 'user' })
+    expect(decision.messages[1]).toMatchObject({ source: { kind: 'plugin', plugin: 'dsh-tavern' }, role: 'user', content: [{ type: 'text', text: OPENING_TEXT }] })
   })
 
   it('subsumes the periodic anchor when the opening turn is also a multiple', async () => {
@@ -178,21 +192,21 @@ describe('AgentTavern anchor pre-step wiring', () => {
       turn: 10,
       step: 1,
       signal: { aborted: false },
-    }) as { messages: Array<{ source?: { form?: string } }> }
+    }) as { messages: Array<{ content?: Array<{ text?: string }> }> }
     expect(decision.messages).toHaveLength(2)
-    expect(decision.messages[1]).toMatchObject({ source: { form: 'tavern-opening' } })
+    expect(decision.messages[1]).toMatchObject({ content: [{ type: 'text', text: OPENING_TEXT }] })
   })
 
   it('switches to periodic anchors after the first real user message', async () => {
     const { run } = setupListener({ everyTurns: 5 })
     const lateDecision = await run({
-      agent: { session: { id: 's1', events: [realUserEvent(), anchorEvent(5)] } },
+      agent: { session: { id: 's1', events: [realUserEvent(), turnStart(5), anchorEvent()] } },
       turn: 10,
       step: 1,
       signal: { aborted: false },
-    }) as { messages: Array<{ source?: { form?: string } }> }
+    }) as { messages: Array<{ content?: Array<{ text?: string }> }> }
     expect(lateDecision.messages).toHaveLength(2)
-    expect(lateDecision.messages[1]).toMatchObject({ source: { form: 'tavern-anchor', turn: 10 } })
+    expect(lateDecision.messages[1]).toMatchObject({ source: { kind: 'plugin', plugin: 'dsh-tavern' }, content: [{ type: 'text', text: ANCHOR_TEXT }] })
   })
 
   it('passes through on non-due steps, repeats, rejects, aborts, empty batches, and non-tavern sessions', async () => {
@@ -207,12 +221,12 @@ describe('AgentTavern anchor pre-step wiring', () => {
       step,
       signal: { aborted: false },
     })
-    const importedHistory = [{ type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'history' } } }]
+    const importedHistory = [{ type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern' } } }]
 
     // 已有真实用户消息后，非周期点的 turn 透传。
-    await passthrough({ everyTurns: 5 }, payload(4, [realUserEvent(), anchorEvent(5)]))
+    await passthrough({ everyTurns: 5 }, payload(4, [realUserEvent(), turnStart(5), anchorEvent()]))
     await passthrough({ everyTurns: 5 }, payload(2, importedHistory, 2))
-    await passthrough({ everyTurns: 5 }, payload(2, [...importedHistory, openingEvent(2)]))
+    await passthrough({ everyTurns: 5 }, payload(2, [...importedHistory, turnStart(2), openingEvent()]))
     await passthrough({ everyTurns: 5 }, payload(2), { kind: 'reject' })
     await passthrough({ everyTurns: 5 }, { ...payload(2), signal: { aborted: true } })
     await passthrough({ everyTurns: 5 }, payload(2), { kind: 'enter', messages: [] })

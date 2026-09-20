@@ -56,7 +56,7 @@ import { NovelProjector } from './agent-novel/projector.js'
 import { isNovelAuthorMessage, receiveAuthorMessage } from './agent-novel/requirements.js'
 import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
-import { AgentTavernProjector, historyImportAppends, type SessionImportAppend } from './agent-tavern/projector.js'
+import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, type SessionImportAppend } from './agent-tavern/projector.js'
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from './agent-tavern/deduce.js'
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
 import { dshHomePath } from './dsh-home.js'
@@ -193,7 +193,6 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
             plugin: 'dsh-tavern',
             form: 'notice',
             summary: 'Tavern closed',
-            tavernState: 'closed',
           },
         }), { surfaceOp: 'append' })
         return { kind: 'success', text: 'Tavern closed' }
@@ -229,7 +228,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
           const source = event.type === 'user/message'
             ? event.data?.source
             : event.data?.message?.source
-          return source?.plugin === 'dsh-tavern' && source.form !== 'context'
+          return isTavernSessionMarker(source)
         })
         if ((sessionStarted || historyImported) && !sameTavernBinding) {
           throw new TavernArchitectureConflictError('This host session already started; AgentTavern preset selection is locked.')
@@ -279,7 +278,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
           source: {
             kind: 'plugin',
             plugin: 'dsh-tavern',
-            form: 'context',
+            form: 'notice',
             summary: `AgentTavern preload: ${parsed.character}`,
           },
         }))
@@ -1693,7 +1692,7 @@ async function handleNovelOpenCommand(
     || activationEvents.some((event) => {
       if (event.type !== 'user/message' && event.type !== 'assistant/message') return false
       const source = event.type === 'user/message' ? event.data?.source : event.data?.message?.source
-      return source?.plugin === 'dsh-tavern' && source.form !== 'context'
+      return isTavernSessionMarker(source)
     })
   const sameNovelBinding = previous?.architecture === 'agent-novel' && previous.novelId === novelId
   if (!sameNovelBinding && sessionStarted) {

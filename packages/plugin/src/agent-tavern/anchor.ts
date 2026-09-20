@@ -51,8 +51,9 @@ export const OPENING_TEXT = [
   '</tavern-opening>',
 ].join('\n')
 
-/** 提醒消息的 source.form；latestReminderTurn 按这一组做去重扫描。 */
-const REMINDER_FORMS = new Set(['tavern-anchor', 'tavern-opening'])
+/** 提醒消息按稳定正文标签识别（ANCHOR_TEXT / OPENING_TEXT 全文相等）；
+ * released v0 Session disposition 禁止 plugin source 携带自定义 form 值或
+ * turn 等额外成员，latestReminderTurn 改从事件流的 turn/start 推导轮数。 */
 
 /** 纯算术判定：仅在 turn 周期点的 step 1（用户消息进入的那一步）触发。 */
 export function anchorDue(turn: unknown, step: unknown, everyTurns: number): boolean {
@@ -79,31 +80,31 @@ export function reminderDue(
   return anchorDue(turn, input.step, everyTurns) ? 'periodic' : undefined
 }
 
-export function createAnchorMessage(turn: number): {
+export function createAnchorMessage(): {
   id: string
   role: 'user'
   content: Array<{ type: 'text'; text: string }>
-  source: { kind: 'plugin'; plugin: 'dsh-tavern'; form: 'tavern-anchor'; turn: number }
+  source: { kind: 'plugin'; plugin: 'dsh-tavern' }
 } {
   return {
     id: randomUUID(),
     role: 'user',
     content: [{ type: 'text', text: ANCHOR_TEXT }],
-    source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'tavern-anchor', turn },
+    source: { kind: 'plugin', plugin: 'dsh-tavern' },
   }
 }
 
-export function createOpeningMessage(turn: number): {
+export function createOpeningMessage(): {
   id: string
   role: 'user'
   content: Array<{ type: 'text'; text: string }>
-  source: { kind: 'plugin'; plugin: 'dsh-tavern'; form: 'tavern-opening'; turn: number }
+  source: { kind: 'plugin'; plugin: 'dsh-tavern' }
 } {
   return {
     id: randomUUID(),
     role: 'user',
     content: [{ type: 'text', text: OPENING_TEXT }],
-    source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'tavern-opening', turn },
+    source: { kind: 'plugin', plugin: 'dsh-tavern' },
   }
 }
 
@@ -120,19 +121,30 @@ export function hasRealUserTurn(events: readonly unknown[]): boolean {
   return false
 }
 
-/** 反向找该会话最近一次提醒（开场或周期）的 turn；无则 0。扫描在首个命中处停止。 */
+/** 正向扫描该会话最近一次提醒（开场或周期）所在 turn；无则 0。提醒按稳定
+ *  正文标签识别；turn 取提醒事件之前最近一次 turn/start 的轮数（提醒注入
+ *  在 turn N 的 step 1，turn/start N 必然先于它落日志）。 */
 export function latestReminderTurn(events: readonly unknown[]): number {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index] as { type?: string; data?: { source?: Record<string, unknown> } } | undefined
-    if (event?.type !== 'user/message') continue
-    const source = event.data?.source
-    if (source?.kind === 'plugin' && source.plugin === 'dsh-tavern'
-      && typeof source.form === 'string' && REMINDER_FORMS.has(source.form)
-      && typeof source.turn === 'number' && Number.isSafeInteger(source.turn)) {
-      return source.turn
+  let turn = 0
+  let latest = 0
+  for (const event of events) {
+    const record = event as { type?: string; data?: unknown } | undefined
+    if (record?.type === 'turn/start') {
+      const value = (record.data as { turn?: unknown } | undefined)?.turn
+      if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) turn = value
+      continue
     }
+    if (record?.type === 'user/message' && isReminderMessage(record.data)) latest = turn
   }
-  return 0
+  return latest
+}
+
+function isReminderMessage(data: unknown): boolean {
+  if (typeof data !== 'object' || data === null) return false
+  const content = (data as { content?: unknown }).content
+  if (!Array.isArray(content) || content.length === 0) return false
+  const first = content[0] as { type?: unknown; text?: unknown }
+  return first?.type === 'text' && (first.text === ANCHOR_TEXT || first.text === OPENING_TEXT)
 }
 
 /** 配置解析：未配置用默认；0 关闭；非法值退回默认（fail-soft，不阻塞插件加载）。 */
@@ -204,10 +216,9 @@ export function registerAgentTavernAnchor(ctx: {
     // 存储读取只发生在注入点，保持非注入 step 的零开销路径。
     const sessionId = payload.agent?.session?.id
     if (typeof sessionId !== 'string' || !(await isTavernSession(sessionId))) return decision
-    const turn = payload.turn as number
     return {
       kind: 'enter',
-      messages: [...decision.messages ?? [], kind === 'opening' ? createOpeningMessage(turn) : createAnchorMessage(turn)],
+      messages: [...decision.messages ?? [], kind === 'opening' ? createOpeningMessage() : createAnchorMessage()],
     }
   }, { prepend: true })
 }

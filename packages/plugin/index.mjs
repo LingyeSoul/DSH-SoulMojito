@@ -8357,7 +8357,7 @@ function buildNoticeMessage(novelId, intentId, snapshot2, work, unitId) {
     id: `novel-notice-${intentId}`,
     role: "user",
     content: [{ type: "text", text }],
-    source: { kind: "plugin", plugin: "dsh-tavern", form: "novel-notice", novelId, intentId }
+    source: { kind: "plugin", plugin: "dsh-tavern", form: "notice", summary: `AgentNovel work notice (novel ${novelId}, intent ${intentId})` }
   };
 }
 function messageOf2(error) {
@@ -8831,7 +8831,6 @@ var OPENING_TEXT = [
   "Before writing this reply, load the scene with the tools: tavern_character_get for the bound character card, tavern_lore_search for each proper noun this opening relies on (persons, places, factions, techniques, items), memory_search for established facts, and tavern_history_search when continuity is unclear. Then continue the scene naturally without mentioning this brief.",
   "</tavern-opening>"
 ].join("\n");
-var REMINDER_FORMS = /* @__PURE__ */ new Set(["tavern-anchor", "tavern-opening"]);
 function anchorDue(turn, step, everyTurns) {
   if (everyTurns <= 0) return false;
   return step === 1 && typeof turn === "number" && Number.isSafeInteger(turn) && turn > 0 && turn % everyTurns === 0;
@@ -8845,20 +8844,20 @@ function reminderDue(input, everyTurns, latest, hasUserTurn) {
   if (!hasUserTurn) return "opening";
   return anchorDue(turn, input.step, everyTurns) ? "periodic" : void 0;
 }
-function createAnchorMessage(turn) {
+function createAnchorMessage() {
   return {
     id: randomUUID2(),
     role: "user",
     content: [{ type: "text", text: ANCHOR_TEXT }],
-    source: { kind: "plugin", plugin: "dsh-tavern", form: "tavern-anchor", turn }
+    source: { kind: "plugin", plugin: "dsh-tavern" }
   };
 }
-function createOpeningMessage(turn) {
+function createOpeningMessage() {
   return {
     id: randomUUID2(),
     role: "user",
     content: [{ type: "text", text: OPENING_TEXT }],
-    source: { kind: "plugin", plugin: "dsh-tavern", form: "tavern-opening", turn }
+    source: { kind: "plugin", plugin: "dsh-tavern" }
   };
 }
 function hasRealUserTurn(events) {
@@ -8870,15 +8869,25 @@ function hasRealUserTurn(events) {
   return false;
 }
 function latestReminderTurn(events) {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event?.type !== "user/message") continue;
-    const source = event.data?.source;
-    if (source?.kind === "plugin" && source.plugin === "dsh-tavern" && typeof source.form === "string" && REMINDER_FORMS.has(source.form) && typeof source.turn === "number" && Number.isSafeInteger(source.turn)) {
-      return source.turn;
+  let turn = 0;
+  let latest = 0;
+  for (const event of events) {
+    const record = event;
+    if (record?.type === "turn/start") {
+      const value = record.data?.turn;
+      if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) turn = value;
+      continue;
     }
+    if (record?.type === "user/message" && isReminderMessage(record.data)) latest = turn;
   }
-  return 0;
+  return latest;
+}
+function isReminderMessage(data) {
+  if (typeof data !== "object" || data === null) return false;
+  const content = data.content;
+  if (!Array.isArray(content) || content.length === 0) return false;
+  const first = content[0];
+  return first?.type === "text" && (first.text === ANCHOR_TEXT || first.text === OPENING_TEXT);
 }
 function resolveAnchorEveryTurns(value) {
   if (value === void 0) return ANCHOR_EVERY_TURNS_DEFAULT;
@@ -8918,10 +8927,9 @@ function registerAgentTavernAnchor(ctx, options = {}) {
     if (kind === void 0) return decision;
     const sessionId = payload.agent?.session?.id;
     if (typeof sessionId !== "string" || !await isTavernSession(sessionId)) return decision;
-    const turn = payload.turn;
     return {
       kind: "enter",
-      messages: [...decision.messages ?? [], kind === "opening" ? createOpeningMessage(turn) : createAnchorMessage(turn)]
+      messages: [...decision.messages ?? [], kind === "opening" ? createOpeningMessage() : createAnchorMessage()]
     };
   }, { prepend: true });
 }
@@ -9201,11 +9209,15 @@ function projectionIdentity(message, sessionId, eventSeq) {
   const source = message.extra?.agentTavern;
   return source?.sessionId === sessionId && source.eventSeq === eventSeq;
 }
-function isTavernMirrorSource(source) {
+function isTavernSessionMarker(source) {
   if (typeof source !== "object" || source === null) return false;
   const record = source;
-  if (record.plugin !== "dsh-tavern") return false;
-  return record.kind === "plugin" || record.kind === "model";
+  if (record.kind === "model") return record.provider === "dsh-tavern" && record.model === "agent-tavern-import";
+  if (record.kind !== "plugin" || record.plugin !== "dsh-tavern") return false;
+  return !(typeof record.summary === "string" && record.summary.startsWith("AgentTavern preload: "));
+}
+function isTavernMirrorSource(source) {
+  return isTavernSessionMarker(source);
 }
 var TAVERN_MIRROR_MODEL_SOURCE = { provider: "dsh-tavern", model: "agent-tavern-import" };
 function historyImportAppends(chat, sessionId, scripts, expand) {
@@ -9227,7 +9239,7 @@ function historyImportAppends(chat, sessionId, scripts, expand) {
           id: randomUUID3(),
           role: "user",
           content: [{ type: "text", text: promptView(message, index) }],
-          source: { kind: "plugin", plugin: "dsh-tavern", form: "history" }
+          source: { kind: "plugin", plugin: "dsh-tavern" }
         },
         surfaceOp: "append"
       });
@@ -9243,12 +9255,12 @@ function historyImportAppends(chat, sessionId, scripts, expand) {
           id: randomUUID3(),
           role: "assistant",
           content: [{ type: "text", text: promptView(message, index) }],
-          // The host rejects assistant messages without a model source.
+          // The host rejects assistant messages without a model source; the
+          // synthetic provider/model pair doubles as the mirror marker because
+          // released v0 dispositions admit no extra members on model sources.
           source: {
             kind: "model",
-            ...TAVERN_MIRROR_MODEL_SOURCE,
-            plugin: "dsh-tavern",
-            form: assistantCount === 1 ? "greeting" : "history"
+            ...TAVERN_MIRROR_MODEL_SOURCE
           }
         }
       },
@@ -9413,8 +9425,7 @@ function apply(ctx, config = {}) {
             kind: "plugin",
             plugin: "dsh-tavern",
             form: "notice",
-            summary: "Tavern closed",
-            tavernState: "closed"
+            summary: "Tavern closed"
           }
         }), { surfaceOp: "append" });
         return { kind: "success", text: "Tavern closed" };
@@ -9438,7 +9449,7 @@ function apply(ctx, config = {}) {
         const historyImported = activationEvents.some((event) => {
           if (event.type !== "user/message" && event.type !== "assistant/message") return false;
           const source = event.type === "user/message" ? event.data?.source : event.data?.message?.source;
-          return source?.plugin === "dsh-tavern" && source.form !== "context";
+          return isTavernSessionMarker(source);
         });
         if ((sessionStarted || historyImported) && !sameTavernBinding) {
           throw new TavernArchitectureConflictError("This host session already started; AgentTavern preset selection is locked.");
@@ -9478,7 +9489,7 @@ function apply(ctx, config = {}) {
           source: {
             kind: "plugin",
             plugin: "dsh-tavern",
-            form: "context",
+            form: "notice",
             summary: `AgentTavern preload: ${parsed.character}`
           }
         }));
@@ -10641,7 +10652,7 @@ async function handleNovelOpenCommand(ctx, agent, novelId) {
   const sessionStarted = activationEvents.some((event) => event.type === "turn/start") || activationEvents.some((event) => {
     if (event.type !== "user/message" && event.type !== "assistant/message") return false;
     const source = event.type === "user/message" ? event.data?.source : event.data?.message?.source;
-    return source?.plugin === "dsh-tavern" && source.form !== "context";
+    return isTavernSessionMarker(source);
   });
   const sameNovelBinding = previous?.architecture === "agent-novel" && previous.novelId === novelId;
   if (!sameNovelBinding && sessionStarted) {

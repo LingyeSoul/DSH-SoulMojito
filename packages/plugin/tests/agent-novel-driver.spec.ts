@@ -209,12 +209,20 @@ describe('NovelDriver scheduling', () => {
     })
 
     const kickoff = noticeOf(agent, 0)
-    expect(kickoff.source).toMatchObject({ kind: 'plugin', plugin: 'dsh-tavern', form: 'novel-notice', novelId })
-    expect(kickoff.source.intentId).toMatch(/^wi-/)
-    expect(kickoff.id).toBe(`novel-notice-${kickoff.source.intentId}`)
+    // v0 Session dispositions admit only {kind, plugin, form, sections, summary}
+    // on plugin sources (form limited to the released literal set), so the
+    // notice's identity rides in the message id and the source summary.
+    expect(kickoff.id).toMatch(/^novel-notice-wi-/)
+    const kickoffIntentId = kickoff.id.slice('novel-notice-'.length)
+    expect(kickoff.source).toEqual({
+      kind: 'plugin',
+      plugin: 'dsh-tavern',
+      form: 'notice',
+      summary: `AgentNovel work notice (novel ${novelId}, intent ${kickoffIntentId})`,
+    })
     expect(kickoff.role).toBe('user')
     const snapshot = await novels.getNovel(novelId)
-    expect(snapshot?.run.inFlightIntent).toMatchObject({ kind: 'outline-create', intentId: kickoff.source.intentId })
+    expect(snapshot?.run.inFlightIntent).toMatchObject({ kind: 'outline-create', intentId: kickoffIntentId })
     expect(textOf(kickoff)).toContain('Novel work brief')
     expect(textOf(kickoff)).toContain('novel_outline_create')
 
@@ -226,7 +234,7 @@ describe('NovelDriver scheduling', () => {
     })
 
     const writeUnit = noticeOf(agent, 1)
-    expect(writeUnit.source.form).toBe('novel-notice')
+    expect(writeUnit.source).toMatchObject({ kind: 'plugin', plugin: 'dsh-tavern', form: 'notice' })
     expect(textOf(writeUnit)).toContain('novel_unit_claim')
     expect(textOf(writeUnit)).toContain('unit-1')
     const after = await novels.getNovel(novelId)
@@ -235,7 +243,7 @@ describe('NovelDriver scheduling', () => {
     expect(after?.units.find((unit) => unit.unitId === 'unit-1')).toMatchObject({ state: 'prepared', sceneId: 'sc-1' })
     // §13 accounting: one host turn counted, kickoff intent resolved delivered.
     expect(after?.run.turnsRun).toBe(1)
-    expect(after?.run.inFlightIntent?.intentId).not.toBe(kickoff.source.intentId)
+    expect(after?.run.inFlightIntent?.intentId).not.toBe(kickoffIntentId)
 
     await driver.dispose()
   })

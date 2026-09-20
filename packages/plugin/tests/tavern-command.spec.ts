@@ -360,7 +360,7 @@ describe('internal Tavern session bridge occupation', () => {
       message: {
         role: 'assistant',
         content: [{ type: 'text', text: '早上好，旅行者。' }],
-        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import', plugin: 'dsh-tavern', form: 'greeting' },
+        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' },
       },
     })
     expect(greeting.opts).toEqual({ surfaceOp: 'append' })
@@ -369,7 +369,7 @@ describe('internal Tavern session bridge occupation', () => {
     expect(importedUser.data).toMatchObject({
       role: 'user',
       content: [{ type: 'text', text: '你也是早上好。' }],
-      source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'history' },
+      source: { kind: 'plugin', plugin: 'dsh-tavern' },
     })
     expect(importedUser.opts).toEqual({ surfaceOp: 'append' })
     const followUp = agent.session.events[3]!
@@ -378,7 +378,7 @@ describe('internal Tavern session bridge occupation', () => {
       step: 2,
       message: {
         content: [{ type: 'text', text: '今天想去哪里？' }],
-        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import', plugin: 'dsh-tavern', form: 'history' },
+        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' },
       },
     })
     expect(turnStarts(agent)).toHaveLength(0)
@@ -504,7 +504,7 @@ describe('internal Tavern session bridge occupation', () => {
     expect(agent.injections).toHaveLength(1)
     const message = agent.injections[0] as { role: string; content: Array<{ type: string; text: string }>; source: Record<string, unknown> }
     expect(message.role).toBe('user')
-    expect(message.source).toMatchObject({ kind: 'plugin', plugin: 'dsh-tavern', form: 'context' })
+    expect(message.source).toEqual({ kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: expect.stringContaining('AgentTavern preload') })
     expect(message.content[0]?.text).toContain('A test character')
     expect(message.content[0]?.text).toContain('unfiltered lore')
     expect(message.content[0]?.text).toContain('unfiltered active lore')

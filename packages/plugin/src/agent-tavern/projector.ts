@@ -237,15 +237,27 @@ function projectionIdentity(message: ChatMessage, sessionId: string, eventSeq: n
   return source?.sessionId === sessionId && source.eventSeq === eventSeq
 }
 
-function isTavernMirrorSource(source: unknown): boolean {
+/**
+ * 会话事件是否带 dsh-tavern 写入标记（导入镜像、锚定提醒、插件通知）。
+ * 预加载通知（summary 以 "AgentTavern preload: " 开头）除外：它不构成
+ * "会话已启动"，客户端修复路径的重复激活不能被它锁死。model 镜像靠合成
+ * provider/model 对识别——released v0 Session disposition 禁止 model
+ * source 携带 plugin/form 等额外成员。
+ */
+export function isTavernSessionMarker(source: unknown): boolean {
   if (typeof source !== 'object' || source === null) return false
   const record = source as Record<string, unknown>
-  if (record.plugin !== 'dsh-tavern') return false
-  return record.kind === 'plugin' || record.kind === 'model'
+  if (record.kind === 'model') return record.provider === 'dsh-tavern' && record.model === 'agent-tavern-import'
+  if (record.kind !== 'plugin' || record.plugin !== 'dsh-tavern') return false
+  return !(typeof record.summary === 'string' && record.summary.startsWith('AgentTavern preload: '))
+}
+
+function isTavernMirrorSource(source: unknown): boolean {
+  return isTavernSessionMarker(source)
 }
 
 /** 宿主会话要求 assistant 消息的 source 必须是 model 来源且带 provider/model； */
-/** 导入的镜像消息用合成 provider/model 补足校验，plugin/form 标记保留镜像语义。 */
+/** 导入的镜像消息用合成 provider/model 补足校验，合成 provider/model 对即镜像标记。 */
 const TAVERN_MIRROR_MODEL_SOURCE = { provider: 'dsh-tavern', model: 'agent-tavern-import' } as const
 
 /**
@@ -293,7 +305,7 @@ export function historyImportAppends(
           id: randomUUID(),
           role: 'user',
           content: [{ type: 'text', text: promptView(message, index) }],
-          source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'history' },
+          source: { kind: 'plugin', plugin: 'dsh-tavern' },
         },
         surfaceOp: 'append',
       })
@@ -309,12 +321,12 @@ export function historyImportAppends(
           id: randomUUID(),
           role: 'assistant',
           content: [{ type: 'text', text: promptView(message, index) }],
-          // The host rejects assistant messages without a model source.
+          // The host rejects assistant messages without a model source; the
+          // synthetic provider/model pair doubles as the mirror marker because
+          // released v0 dispositions admit no extra members on model sources.
           source: {
             kind: 'model',
             ...TAVERN_MIRROR_MODEL_SOURCE,
-            plugin: 'dsh-tavern',
-            form: assistantCount === 1 ? 'greeting' : 'history',
           },
         },
       },

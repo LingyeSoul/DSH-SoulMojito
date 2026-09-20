@@ -20,9 +20,12 @@
  *   `whenIdle()` once and re-arming instead of returning bare.
  * - Synthetic turn/start|turn/end events are never appended to sessions; the
  *   kickoff guarantee is the agent liveness carried by the novel-open command.
- * - Driver notices use source form 'novel-notice' (never 'notice', the ST
- *   composer marker) so the requirements receive barrier can distinguish them
- *   from real user author messages (§9.1).
+ * - Driver notices carry a plugin source (never a user source), which is what
+ *   the requirements receive barrier keys on (§9.1); the notice's novel and
+ *   intent identity rides in the message id and the source summary because the
+ *   released v0 Session dispositions admit only {kind, plugin, form, sections,
+ *   summary} members on plugin sources, with form limited to instructions |
+ *   catalog | snapshot | notice | relay | recall.
  */
 
 import {
@@ -803,8 +806,10 @@ function workInstruction(snapshot: NovelSnapshot, work: NovelWork, unitId: strin
   }
 }
 
-/** Driver notice message: source form 'novel-notice' distinguishes it from real
- *  user author messages (§9.1) and from the ST composer marker 'notice'. */
+/** Driver notice message. The plugin source keeps the requirements receive
+ *  barrier from counting it as an author message (§9.1); novel and intent
+ *  identity ride in the message id and the summary because the released v0
+ *  Session dispositions admit no other plugin-source members. */
 function buildNoticeMessage(novelId: string, intentId: string, snapshot: NovelSnapshot, work: NovelWork, unitId: string | null): unknown {
   const text = [
     renderWorkBrief(snapshot, work),
@@ -818,7 +823,7 @@ function buildNoticeMessage(novelId: string, intentId: string, snapshot: NovelSn
     id: `novel-notice-${intentId}`,
     role: 'user',
     content: [{ type: 'text', text }],
-    source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'novel-notice', novelId, intentId },
+    source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: `AgentNovel work notice (novel ${novelId}, intent ${intentId})` },
   }
 }
 
