@@ -6,7 +6,7 @@
 
 第一版主线已经可用：插件复用 DSH 的 LLM 路由、默认模型、密钥管理、Web 容器和插件安装机制，同时在 DSH 原生侧边栏和 conversation 区域提供 Tavern 角色扮演体验。管理入口是独立的 Tavern 面板；设置页保留当前配置的快速切换，不再承载全部资产管理表单。
 
-当前面向 DSH `0.1.0-rc.6` 验证。Fabric 不在第一版运行路径中。
+当前面向 DSH `0.1.5-rc.2` 验证。Fabric 不在第一版运行路径中。
 
 ## 能力
 
@@ -25,7 +25,7 @@
 - 并发保护：聊天使用内容 revision 做 compare-and-swap；跨标签页冲突返回 `409`，客户端重新加载最新内容，不静默覆盖。
 - 可选的普通 Agent 人格注入，默认关闭。
 - AgentTavern 原生模式：单角色新聊天默认复用 DSH AgentLoop、原生 composer、Stop、错误处理和统计；角色、世界书、场景、记忆和变量通过会话级工具按需读取，原生事件幂等投影回 Tavern JSONL。可选开关会在新 AgentTavern 会话初始化时一次性预载角色信息和常驻世界书条目，默认关闭且不追溯修改已有会话。现有 ST 兼容架构继续保留。
-- AgentTavern managed 模式：在 DSH `0.1.0-rc.6` 上保持关闭。宿主尚未提供 `agent/context` 历史投影和 projection-aware compaction，插件不会把普通 compaction 冒充为主动遗忘，也不会静默回退到伪 managed 模式。详见 [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)。
+- AgentTavern managed 模式：保持关闭。该门禁的宿主能力审计基于 DSH `0.1.0-rc.6`（宿主尚未提供 `agent/context` 历史投影和 projection-aware compaction）；`0.1.5-rc.2` 尚未复审该能力面。插件不会把普通 compaction 冒充为主动遗忘，也不会静默回退到伪 managed 模式。详见 [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)。
 - 美化前端：助手消息中的完整 HTML 文档或 `html` 代码块会在隔离 iframe 中运行，支持内联 CSS、JavaScript 和常用 CDN 资源；普通文本与不完整流式内容仍按文本显示。
 
 ### 酒馆美化前端
@@ -230,7 +230,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：38 个测试文件、507 项测试通过；11 个插件 gates（含 AgentTavern 隔离、native header adapter、内部工作区和 client VM mount）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.1.0-rc.6` 的隔离 runtime。
+当前基线：38 个测试文件、507 项测试通过；11 个插件 gates（含 AgentTavern 隔离、native header adapter、内部工作区和 client VM mount）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.1.5-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 

@@ -72,19 +72,22 @@ const REQUIRED_SERVER_ROUTES = [
   'novels/body',
 ]
 
-// DSH client-web's platform module table. Third-party plugin values must flow
-// through injected services, not through client-side package imports.
+// DSH client-web's platform module table, mirrored from the host web shell's
+// staticModules seed (verified against DSH 0.1.5-rc.2's dsh-web-frontend).
+// Third-party plugin values must flow through injected services, not through
+// client-side package imports. The host dropped web-react / schema-form /
+// ui-attachment and added client-store / ui-dockkit between 0.1.0-rc.6 and
+// 0.1.5-rc.2 — re-sync this copy whenever the verification baseline moves.
 const CLIENT_STATIC_MODULES = new Set([
   'react',
   'react/jsx-runtime',
   'react-dom',
   'react-dom/client',
   '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-web-react',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-ui-attachment',
-  '@deepseek-ai/dsh-client-schema-form',
+  '@deepseek-ai/dsh-client-ui-dockkit',
 ])
 
 function readJson(path) {
@@ -124,8 +127,8 @@ function checkPackageObject(pkg, checkFiles = false) {
     problems.push("dsh.bundle.patch must be './cordis.patch.yml'")
   }
   if (pkg.dsh?.client?.platform !== 'web') problems.push("dsh.client.platform must be 'web'")
-  if (!Array.isArray(pkg.dsh?.client?.inject) || !pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-runtime')) {
-    problems.push("dsh.client.inject must include '@deepseek-ai/dsh-client-runtime'")
+  if (!Array.isArray(pkg.dsh?.client?.inject) || !pkg.dsh.client.inject.every((value) => typeof value === 'string')) {
+    problems.push('dsh.client.inject must be an array of package-name strings')
   }
 
   if (checkFiles) {
@@ -141,6 +144,33 @@ function checkPackageObject(pkg, checkFiles = false) {
       if (typeof value === 'string' && !declaredPathExists(value)) {
         problems.push(`${label} target does not exist: ${value}`)
       }
+    }
+  }
+  return problems
+}
+
+/**
+ * client.inject edges name host client packages the boot wire must load before
+ * this plugin's client half arrives. A name the host no longer ships (DSH
+ * 0.1.5-rc.2 removed dsh-client-runtime) leaves a dangling wire edge — the
+ * current loader skips it silently, but that is host grace, not a contract.
+ * Guard it here so a stale manifest fails the gate instead of the browser.
+ * Degrades to a no-op when no official dependency root is locatable, matching
+ * the restricted-environment pattern of runNodeMount.
+ */
+function checkClientInjectPackagesResolvable(pkg) {
+  const inject = pkg?.dsh?.client?.inject
+  if (!Array.isArray(inject) || inject.length === 0) return []
+  const root = locateOfficialDependencyRoot()
+  if (root === null) return []
+  const problems = []
+  for (const name of inject) {
+    if (typeof name !== 'string') continue
+    const segments = name.split('/')
+    const resolvable = existsSync(join(root, ...segments, 'package.json'))
+      || existsSync(join(root, '@deepseek-ai', 'dsh', 'node_modules', ...segments, 'package.json'))
+    if (!resolvable) {
+      problems.push(`dsh.client.inject entry '${name}' does not resolve in the official DSH install (dangling client edge)`)
     }
   }
   return problems
@@ -478,11 +508,10 @@ function makeClientRequire() {
     'react-dom': { createPortal: (node) => node },
     'react-dom/client': { createRoot: () => ({ render: () => {}, unmount: () => {} }) },
     '@deepseek-ai/cordis': generic,
+    '@deepseek-ai/dsh-client-store': generic,
     '@deepseek-ai/dsh-client-ui-slots': generic,
-    '@deepseek-ai/dsh-client-web-react': generic,
     '@deepseek-ai/dsh-client-ui-primitives': primitives,
-    '@deepseek-ai/dsh-client-ui-attachment': generic,
-    '@deepseek-ai/dsh-client-schema-form': generic,
+    '@deepseek-ai/dsh-client-ui-dockkit': generic,
   }
   return (specifier) => {
     if (!CLIENT_STATIC_MODULES.has(specifier) || !(specifier in modules)) {
@@ -732,7 +761,7 @@ function hasOfficialDependencies(root) {
 
 function locateOfficialDependencyRoot() {
   const candidates = [
-    // Keep the rc.6 runtime copied into the workspace usable in restricted
+    // Keep the vendored runtime copied into the workspace usable in restricted
     // environments where the global npm installation is not readable.
     join(REPO_ROOT, '.npm-cache', 'dsh-runtime', 'node_modules'),
   ]
@@ -888,7 +917,7 @@ const gates = [
         files: ['index.mjs', 'novel.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md'],
         dsh: {
           bundle: { patch: './cordis.patch.yml' },
-          client: { platform: 'web', inject: ['@deepseek-ai/dsh-client-runtime'] },
+          client: { platform: 'web', inject: [] },
         },
       }
       const bad = structuredClone(valid)
@@ -897,7 +926,10 @@ const gates = [
         ? []
         : ['package contract bad sample was not distinguished from the valid sample']
     },
-    check: () => checkPackageObject(readJson(PACKAGE_PATH), true),
+    check: () => {
+      const pkg = readJson(PACKAGE_PATH)
+      return [...checkPackageObject(pkg, true), ...checkClientInjectPackagesResolvable(pkg)]
+    },
   },
   {
     name: 'patch-reference',
