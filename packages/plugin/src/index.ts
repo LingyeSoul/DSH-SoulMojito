@@ -1,7 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import {
   RegexPlacement,
@@ -33,6 +32,7 @@ import {
   NovelStore,
   TavernStore,
   VariableStore,
+  isValidNovelId,
   summarizeNovel,
   totalEffectiveCharacters,
   validateCreateConfig,
@@ -59,6 +59,7 @@ import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
 import { AgentTavernProjector, historyImportAppends, type SessionImportAppend } from './agent-tavern/projector.js'
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from './agent-tavern/deduce.js'
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
+import { dshHomePath } from './dsh-home.js'
 
 export const name = 'dsh-tavern'
 export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools', 'compaction']
@@ -1176,8 +1177,6 @@ async function handleApi(ctx, req, res) {
 const NOVEL_SUBPATHS = ['novels/outline', 'novels/body', 'novels/export', 'novels/pause', 'novels/resume', 'novels/stop', 'novels/update-outline', 'novels/approve-outline'] as const
 type NovelSubpath = (typeof NOVEL_SUBPATHS)[number]
 
-const NOVEL_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/
-
 interface NovelApiRequest {
   method?: string
   url?: string
@@ -1244,7 +1243,7 @@ function parseNovelRoute(route: string): { novelId: string; subpath: NovelSubpat
 }
 
 async function requireNovel(db: NovelStore, novelId: string): Promise<NovelSnapshot> {
-  if (!NOVEL_ID_SHAPE.test(novelId)) throw new NovelNotFoundError({ novelId })
+  if (!isValidNovelId(novelId)) throw new NovelNotFoundError({ novelId })
   const snapshot = await db.getNovel(novelId)
   if (snapshot === undefined) throw new NovelNotFoundError({ novelId })
   return snapshot
@@ -2827,11 +2826,6 @@ function parseTavernSessionCommand(rawInput) {
   } catch {
     return null
   }
-}
-
-function dshHomePath(...segments) {
-  const configured = process.env.DSH_HOME?.trim()
-  return join(resolve(configured || join(homedir(), '.dsh')), ...segments)
 }
 
 async function prepareInternalWorkspace() {

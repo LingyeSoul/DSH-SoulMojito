@@ -745,6 +745,107 @@ describe('AgentNovel author tools', () => {
     expect(snapshot?.requirements[0]).toMatchObject({ status: 'blocked', blockedReason: '让已死的人复活与既成事实冲突' })
   })
 
+  it('resolves a blocked directive through the revise tool only with a cited clarification, keeping the conflict record (§9.1)', async () => {
+    const fourth = await novels.createNovel(tavern, novelConfig({ title: '澄清篇', characterNames: [], worldNames: [], lengthBudget: { kind: 'unbounded' } }))
+    await tavern.updateState((state) => ({
+      sessionBindings: { ...state.sessionBindings, novelist: { architecture: 'agent-novel', novelId: fourth.novelId } },
+    }))
+    let snapshot = await novels.getNovel(fourth.novelId)
+    const created = await tools.get('novel_outline_create')!.execute({
+      expectedRevision: fourth.revision,
+      outline: {
+        story: { premise: 'P', theme: 't', mainConflict: 'c', endingDirection: 'e' },
+        characters: [{ characterId: 'solo', name: 'Solo', initialState: 'i', motivation: 'm', arc: 'a' }],
+        chapters: [{ chapterId: 'ch-1', order: 1, title: 'T', purpose: 'p', entryCondition: 's', exitCondition: 'd' }],
+        currentChapterId: 'ch-1',
+        scenes: [{ sceneId: 'sc-1', order: 1, goal: 'g', timeLocation: 'tl', causality: 'c', conflict: 'c', expectedChange: 'ec' }],
+        foreshadowing: [],
+      },
+      handledRequirements: [{ requirementId: 'req-1', result: 'applied', effectiveLocation: 'story.premise' }],
+    }, exec)
+    // A second directive conflicts with committed facts and gets blocked.
+    const received = await novels.receiveRequirement(fourth.novelId, { hostMessageId: 'm-conflict', text: '让已死的人复活', sourceKind: 'composer' })
+    const blocked = await tools.get('novel_requirement_block')!.execute({
+      expectedRevision: received.revision,
+      requirementId: 'req-2',
+      conflictReason: 'resurrection contradicts committed canon',
+      bodySources: [],
+    }, exec)
+    expect(typeof blocked.revision).toBe('string')
+
+    // Revise without the citation: rejected, the directive stays blocked.
+    await expect(tools.get('novel_outline_revise')!.execute({
+      expectedRevision: (await novels.getNovel(fourth.novelId))!.revision,
+      expectedOutlineRevision: created.outlineRevision,
+      reason: 'resolve without citation',
+      changes: {
+        story: { premise: 'P', theme: 't', mainConflict: 'c', endingDirection: 'e2' },
+        characters: [{ characterId: 'solo', name: 'Solo', initialState: 'i', motivation: 'm', arc: 'a' }],
+        chapters: [{ chapterId: 'ch-1', order: 1, title: 'T', purpose: 'p', entryCondition: 's', exitCondition: 'd' }],
+        currentChapterId: 'ch-1',
+        scenes: [{ sceneId: 'sc-1', order: 1, goal: 'g', timeLocation: 'tl', causality: 'c', conflict: 'c', expectedChange: 'ec' }],
+        foreshadowing: [],
+      },
+      handledRequirements: [{ requirementId: 'req-2', result: 'applied', effectiveLocation: 'story.endingDirection' }],
+    }, exec)).rejects.toThrow('blocked-resolution-citation')
+    snapshot = await novels.getNovel(fourth.novelId)
+    expect(snapshot?.requirements.find((record) => record.requirementId === 'req-2')?.status).toBe('blocked')
+
+    // The user clarifies; the cited hostMessageId must exist in the ledger.
+    const clarified = await novels.receiveRequirement(fourth.novelId, { hostMessageId: 'm-clarify', text: '改为用梦境闪回呈现复活', sourceKind: 'composer' })
+    await expect(tools.get('novel_outline_revise')!.execute({
+      expectedRevision: clarified.revision,
+      expectedOutlineRevision: created.outlineRevision,
+      reason: 'resolve with a fabricated citation',
+      changes: {
+        story: { premise: 'P', theme: 't', mainConflict: 'c', endingDirection: 'e2' },
+        characters: [{ characterId: 'solo', name: 'Solo', initialState: 'i', motivation: 'm', arc: 'a' }],
+        chapters: [{ chapterId: 'ch-1', order: 1, title: 'T', purpose: 'p', entryCondition: 's', exitCondition: 'd' }],
+        currentChapterId: 'ch-1',
+        scenes: [{ sceneId: 'sc-1', order: 1, goal: 'g', timeLocation: 'tl', causality: 'c', conflict: 'c', expectedChange: 'ec' }],
+        foreshadowing: [],
+      },
+      handledRequirements: [
+        { requirementId: 'req-2', result: 'applied', effectiveLocation: 'story.endingDirection', resolvedBy: { kind: 'clarification', messageId: 'm-fabricated' } },
+        { requirementId: 'req-3', result: 'applied', effectiveLocation: 'story.endingDirection' },
+      ],
+    }, exec)).rejects.toThrow('blocked-resolution-citation')
+
+    // Cited properly: the transition succeeds and the conflict survives it.
+    const revised = await tools.get('novel_outline_revise')!.execute({
+      expectedRevision: (await novels.getNovel(fourth.novelId))!.revision,
+      expectedOutlineRevision: created.outlineRevision,
+      reason: 'resolve with the cited clarification',
+      changes: {
+        story: { premise: 'P', theme: 't', mainConflict: 'c', endingDirection: 'e2' },
+        characters: [{ characterId: 'solo', name: 'Solo', initialState: 'i', motivation: 'm', arc: 'a' }],
+        chapters: [{ chapterId: 'ch-1', order: 1, title: 'T', purpose: 'p', entryCondition: 's', exitCondition: 'd' }],
+        currentChapterId: 'ch-1',
+        scenes: [{ sceneId: 'sc-1', order: 1, goal: 'g', timeLocation: 'tl', causality: 'c', conflict: 'c', expectedChange: 'ec' }],
+        foreshadowing: [],
+      },
+      handledRequirements: [
+        { requirementId: 'req-2', result: 'applied', effectiveLocation: 'story.endingDirection', resolvedBy: { kind: 'clarification', messageId: 'm-clarify' } },
+        { requirementId: 'req-3', result: 'applied', effectiveLocation: 'story.endingDirection' },
+      ],
+    }, exec)
+    expect(revised.watermark).toBe(3)
+    expectLossless(revised)
+    snapshot = await novels.getNovel(fourth.novelId)
+    expect(snapshot?.requirements.find((record) => record.requirementId === 'req-2')).toMatchObject({
+      status: 'applied',
+      blockedReason: null,
+      resolvedConflict: { reason: 'resurrection contradicts committed canon', resolvedBy: { kind: 'clarification', messageId: 'm-clarify' } },
+    })
+    // The preserved record is model-visible through the ledger read.
+    const ledger = await tools.get('novel_requirements_read')!.execute({}, exec)
+    expectLossless(ledger)
+    expect(ledger.requirements.find((record: { requirementId: string }) => record.requirementId === 'req-2').resolvedConflict).toEqual({
+      reason: 'resurrection contradicts committed canon',
+      resolvedBy: { kind: 'clarification', messageId: 'm-clarify' },
+    })
+  })
+
   it('normalizes omitted empty-meaning fields the way real models send them (§11 tool-layer tolerance)', async () => {
     // A real-model run (2026-09-17 session) had novel_body_commit rejected
     // because the model omitted sceneCompletion.nextAnchor for a completed

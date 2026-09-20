@@ -1,5 +1,3 @@
-import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
 import {
   MemoryStore,
   TavernStore,
@@ -8,6 +6,7 @@ import {
 import { activateWorldInfo } from '../../../tavern-lore/src/index.js'
 import type { ChatLogIR } from '../../../tavern-format/src/index.js'
 import { collectWorldInfoBooks } from '../tavern-assets.js'
+import { dshHomePath } from '../dsh-home.js'
 import {
   DEDUCE_MAX_ROLES,
   DEDUCE_MAX_ROUNDS,
@@ -741,11 +740,6 @@ function memoryStore(): Promise<MemoryStore> {
 
 function variableStore(): Promise<VariableStore> {
   return (variableStorePromise ??= VariableStore.open(dshHomePath('tavern')))
-}
-
-function dshHomePath(...segments: string[]): string {
-  const configured = process.env.DSH_HOME?.trim()
-  return join(resolve(configured || join(homedir(), '.dsh')), ...segments)
 }
 
 function stringArg(value: unknown): string {

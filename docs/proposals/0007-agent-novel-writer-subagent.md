@@ -151,7 +151,7 @@ interface WriterDelegation {
 - 委托作用域由进程内注册表承载，不经 prompt 文本——正文/lore/消息里的任何文字都不能注入委托（§15 材料不是指令的延伸）。
 - executionToken 不出现在任何模型可见通道：比现状（claim 工具结果直接返回 bearer token 给模型）收紧。
 - `commitBody` 的既有校验（状态 + token 哈希）不变，是最终守卫；工具层作用域校验是前道闸。
-- `claimUnit` 的可选 `hostTurn` 维持现状（当前工具层未传，记录 null）；turn 身份加固是 0005 §10.3 既有积压项，本提案不扩其范围。
+- `claimUnit` 的可选 `hostTurn` 维持现状（当前工具层未传，记录 null）；turn 身份加固是 0005 §10.3 既有积压项，本提案不扩其范围。2026-09-20 审查复核：工具执行上下文（`exec.agent.id`/`exec.ctx`/`exec.signal`）确实不暴露任何宿主 session/turn 身份，宿主仅在场外 session `turn/end` 事件中携带轮号——"补齐 turn 身份"需要宿主契约扩展，维持 deferred。工具层现已显式传 `hostTurn: null`（`novel_unit_claim` 与 `novel_writer_delegate` 内部认领两处），`novel_unit_claim` 的工具描述也改为如实陈述"turn 身份当前不记录"（原文误称 server-side 填充）；不引入任何模型可填的 turn 字段（0005 §10.4 红线）。
 
 ## 7. 调度、记账与预算
 
@@ -243,9 +243,17 @@ A/B 目标线（W0 后可修订）：subagent 模式**原始输入总量 ≤ inl
 10. §5.3"每单元重派上限 3 次（常量入配置）"落地为 `NovelRunBudgets.writerDispatchLimit`（可选正整数，缺省回落内置默认 3，面板沿 budgets 全量编辑通道可改）；语义是**每 claim 总派发次数（含首派）**，与"重派 3 次"字面相差一次首派。§7"NovelRunBudgets 不新增硬上限"限定为成本类预算边界（maxTurns/maxDurationMs 一类），重试参数不在此列。
 11. §9 P2 的"allow 外工具被拒"证据为 observational：子代理自述 allow 外能力 unavailable 判 pass（代码自注），宿主侧拒绝证明与 P3 同批 deferred-to-e2e。
 12. outline-revise 章节覆盖层重构（`materialize`/`assertChapterDropDeclarations` 等，修订 0005 §6.1 契约）为随本提案落地的捆绑修复，非 0007 范围内工作；变更记录见 0005 文档 2026-09-18 修订说明。
+13. `novel_unit_supersede` 工具（`agent.ts`）：已实现但未列入 0005 §11 工具表——收尾 finish-guards 报 `unit-in-flight` 且该单元场景已有完成提交时（窗口化 echo 事故类的遗留单元）的显式退役通道；拒绝 claimed 单元与未完成场景。0005 §11 表的补充记录在案。
+14. `scripts/repair-novel-outline.mjs`：已实现的运维修复脚本（重放被窗口化 echo 静默砍掉的章节，见 §14 交付摘要前的事故记录），不在 0005 §17 文件落点表内；属一次性事故恢复工具，不构成产品能力。
+15. `proseBookkeepingIn` 正文结构守卫（`agent.ts`）：`novel_body_commit` 以高精度正则拒绝携带章节编号/单元 id/收尾标记的段落——0005 §11"解释和进度不写入正文"的 prompt 纪律之外补的存储侧结构闸门，正则清单来自 2026-09-18 真机事故样本。
 
 **2026-09-19 审查改进**（双轴代码审查后落地）：W2 trimmed 包回归 §4.1 保留清单——不再渲染伏笔页（伏笔由写手经只读工具自助检索），此前 trimmed 模式仍渲染伏笔页使 ≤8k 目标恶化；P4 fail-open 写入从"仅测试赋值"变为生产路径——writer.ts 编排在 run.result settle 后记录宿主回传 usage（仅数值字段，形状不对静默跳过），委托成功记 writerOutputChars，driver turn/end 采样 drain 并入 `NovelUsageSample`；§5.3 上限入配置（偏离 10）；`allParticipantsOf(outline)` 提取角色页/正典过滤/outline digest 三处全书并集循环，修正"当前章 participants"名不副实的注释；agent.ts 两写手工具前置序列去重（`requireWriterLaunchContext`：绑定守卫/单元存在性/runtime 探测，单元存在性先于 runtime 探测报错）；`WriterMode`/`isWriterMode` 共享枚举校验（创建校验/patch 校验/面板 cast 三处）。
 
 **2026-09-19 补测**：POST novels subagent 创建闸门的 happy-path HTTP 级测试落地（`packages/plugin/tests/agent-novel-command.spec.ts`），关闭此前"需在 command harness 挂假 runtime、Task F 判定成本高于收益、记录在案未做"的缺口。做法：harness 直接挂载 novel 工具面（真实宿主上由捆绑 preset 承载，0005 §17），bound-agent 通道（`discoverWriterProbeRuntime` 首选通道，即 `novel_writer_delegate` 运行时的同一条解析路径）挂剧本 fake runtime——P1 spawn 真实执行 `novel_status_read`（绑定缺失报错发生在身份记录之后，属探针预期），P2 空 allow 列表不执行工具、自述 unavailable（观测性通过）。证据链：allow 序列 `[['novel_status_read'], []]` 两连 spawn + 200 创建 + `config.writerMode: 'subagent'` 原样落库。**边界**：fake runtime 中 `exec.agent.id === run.id` 是剧本使然，本测试证明的是闸门接线（探针不过不创建），不能替代 §9 P1 的真机关联性复核。
+
+**2026-09-20 审查修复**（blocked 指令转换契约等三项）：
+1. **0005 §9.1 blocked 转换契约落地**：此前 `reviseOutline` 允许 blocked→applied/superseded 无任何澄清引用，且转换把 `blockedReason` 清 null 抹掉冲突记录。现 `HandledRequirement` 新增 `resolvedBy: { kind: 'clarification' | 'withdrawal', messageId }`（`novel-model.ts`）；blocked→applied/superseded 缺引用或引用未知 `hostMessageId` 时按 `NovelPreconditionError{rule:'blocked-resolution-citation'}` 拒绝（`novel.ts` `validateHandledRequirements`，引用必须落在台账已接收消息上——与 canon source 必须指向真实提交同一纪律）；原冲突迁入新字段 `RequirementRecord.resolvedConflict{reason, resolvedBy}` 保留（`applyHandledRequirements`，blockedReason 置 null 而 resolvedConflict 存续）；普通 resume 仍不改指令状态（§9.4，claim 守卫拦截）。工具面：`novel_outline_revise` schema 暴露 `resolvedBy`，`novel_requirements_read` 回显 `resolvedConflict`，kernel 增补对应协议行。测试：store 侧缺失引用/伪造引用/无关字段/冲突存续（applied 与 superseded 两分支）/resume 后仍 blocked；工具面无引用拒绝、伪造引用拒绝、带引用成功且台账可见存续记录。
+2. **claim turn 身份描述纠偏**：见 §6.3 修订（deferred 结论复核，描述改为如实陈述，两处 claim 显式 `hostTurn: null`）。
+3. **去重**：novel id 校验收敛为 `novel-model.ts` 的 `isValidNovelId`（store 目录解析、HTTP 路由守卫、projector 三处共用）；`novelScopeId` 提取至 `agent-novel/scope.ts`（agent 工具面与 projector 共用）；`dshHomePath` 提取至 `plugin/src/dsh-home.ts`（index/agent-tavern/agent-novel/curator 四处共用，逐份核对行为一致后合并）。
 
 **未竟事项**：W3 默认切换与同题 A/B 实测（原始输入 ≤ inline 40% 目标线、窗口峰值、账单三列归档）；真机 E2E（P1 真机关联性复核、P3 端到端检索→commit→越权拒绝时序）；§10 W1 的"同题质量盲评"。

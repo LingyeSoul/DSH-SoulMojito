@@ -46,6 +46,7 @@ import {
   NovelStorageCorruptionError,
   countEffectiveCharacters,
   finishGuardViolations,
+  isValidNovelId,
   isWriterMode,
   requirementWatermark,
   stableStringify,
@@ -74,6 +75,7 @@ import {
   type OutlineChapterInput,
   type RequirementRecord,
   type RequirementStatus,
+  type ResolvedConflict,
   type SceneCompletion,
   type ValidationError,
   type WorkIntentKind,
@@ -83,7 +85,6 @@ import {
 } from './novel-model.js'
 
 const SCHEMA_VERSION = 1
-const NOVEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/
 const REQUIREMENT_SOURCES = new Set(['composer', 'panel', 'internal'])
 const CANON_KINDS = new Set(['event', 'character-state', 'relation', 'foreshadowing', 'variable'])
 const SOURCE_REF_PATTERN = /^(commit-\d+)(?:#(\d+))?$/
@@ -347,6 +348,7 @@ export class NovelStore {
         effectiveLocation: null,
         blockedReason: null,
         supersededBy: null,
+        resolvedConflict: null,
       }
       const snapshot: NovelSnapshot = {
         novelId,
@@ -491,6 +493,7 @@ export class NovelStore {
         effectiveLocation: null,
         blockedReason: null,
         supersededBy: null,
+        resolvedConflict: null,
       }
       const next: NovelSnapshot = {
         ...current,
@@ -1346,7 +1349,7 @@ export class NovelStore {
   /* ------------------------------- internal ------------------------------- */
 
   private novelDir(novelId: string): string {
-    if (!NOVEL_ID_PATTERN.test(novelId)) throw new Error(`invalid novel id '${novelId}'`)
+    if (!isValidNovelId(novelId)) throw new Error(`invalid novel id '${novelId}'`)
     return path.join(this.novelsRoot, novelId)
   }
 
@@ -1575,6 +1578,27 @@ export class NovelStore {
       if (item.supersededBy !== undefined && typeof item.supersededBy !== 'string') {
         throw new NovelConfigError({ message: 'supersededBy must be a string' })
       }
+      // §9.1 (line 215): a blocked requirement only becomes applied/superseded
+      // after the user clarifies or explicitly withdraws — the entry MUST cite
+      // that message. The citation must resolve to a received directive's
+      // hostMessageId (the receive barrier registers every real user message
+      // before any revision runs), mirroring canon sources which must resolve
+      // to real commits; an unresolvable id is a fabricated citation.
+      if (record.status === 'blocked' && (item.result === 'applied' || item.result === 'superseded')) {
+        const ref = item.resolvedBy
+        if (typeof ref !== 'object' || ref === null
+          || (ref.kind !== 'clarification' && ref.kind !== 'withdrawal')
+          || typeof ref.messageId !== 'string' || ref.messageId.trim() === '') {
+          throw new NovelPreconditionError({ rule: 'blocked-resolution-citation', violations: [item.requirementId] })
+        }
+        if (!current.requirements.some((candidate) => candidate.hostMessageId === ref.messageId)) {
+          throw new NovelPreconditionError({ rule: 'blocked-resolution-citation', violations: [`${item.requirementId}:unknown message '${ref.messageId}'`] })
+        }
+      } else if (item.resolvedBy !== undefined) {
+        // The citation is load-bearing only for blocked resolutions; on any
+        // other entry it is an unrelated field and must not enter the model (§11).
+        throw new NovelConfigError({ message: `resolvedBy is only valid when resolving a blocked requirement to applied/superseded (§9.1): '${item.requirementId}'` })
+      }
     }
     return handled.map((item) => ({ ...item }))
   }
@@ -1716,13 +1740,30 @@ function applyHandledRequirements(
     const item = byId.get(record.requirementId)
     if (item === undefined) return record
     if (item.result === 'applied') {
-      return { ...record, status: 'applied' as RequirementStatus, appliedRevision: outlineRevision, effectiveLocation: item.effectiveLocation ?? null, blockedReason: null, supersededBy: null }
+      return { ...record, status: 'applied' as RequirementStatus, appliedRevision: outlineRevision, effectiveLocation: item.effectiveLocation ?? null, blockedReason: null, supersededBy: null, resolvedConflict: resolvedConflictOf(record, item) }
     }
     if (item.result === 'superseded') {
-      return { ...record, status: 'superseded' as RequirementStatus, appliedRevision: outlineRevision, supersededBy: item.supersededBy ?? null, blockedReason: null }
+      return { ...record, status: 'superseded' as RequirementStatus, appliedRevision: outlineRevision, supersededBy: item.supersededBy ?? null, blockedReason: null, resolvedConflict: resolvedConflictOf(record, item) }
     }
     return { ...record, status: 'blocked' as RequirementStatus, blockedReason: item.blockedReason ?? 'blocked during outline change', appliedRevision: null, effectiveLocation: null }
   })
+}
+
+/**
+ * §9.1 (line 215): resolving a blocked requirement to applied/superseded must
+ * preserve the original conflict record alongside the clarification/
+ * withdrawal citation. blockedReason moves into resolvedConflict.reason (the
+ * live field reads null — the requirement is no longer blocked — while the
+ * ledger keeps the history). validateHandledRequirements has already proved
+ * resolvedBy present whenever this transition occurs, so the fallback only
+ * guards a blocked -> blocked re-block, which resolves nothing.
+ */
+function resolvedConflictOf(record: RequirementRecord, item: HandledRequirement): ResolvedConflict | null {
+  if (record.status !== 'blocked' || item.resolvedBy === undefined) return null
+  return {
+    reason: record.blockedReason ?? 'blocked during outline change',
+    resolvedBy: { kind: item.resolvedBy.kind, messageId: item.resolvedBy.messageId },
+  }
 }
 
 /** Watermark must only advance across a revision (§9.3). */

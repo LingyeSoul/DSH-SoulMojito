@@ -228,8 +228,8 @@ describe('NovelStore 指令台账（§9）', () => {
     await expect(novels.receiveRequirement(novelId, { hostMessageId: '', text: 'x', sourceKind: 'composer' })).rejects.toBeInstanceOf(NovelConfigError)
   }))
 
-  it('blocked 指令：blockRequirement 暂停并保留水位；澄清后可经修订转 applied', withStores(async (tavern, novels) => {
-    const { novelId, revision } = await startedNovel(tavern, novels)
+  it('blocked 指令：无澄清引用拒绝转 applied；引用后冲突记录保留（§9.1/§9.4）', withStores(async (tavern, novels) => {
+    const { novelId, revision, outlineRevision } = await startedNovel(tavern, novels)
     const received = await novels.receiveRequirement(novelId, { hostMessageId: 'm-2', text: '让已死的人复活', sourceKind: 'composer' })
     const blocked = await novels.blockRequirement(novelId, {
       expectedRevision: received.revision,
@@ -240,21 +240,79 @@ describe('NovelStore 指令台账（§9）', () => {
     const snapshot = await novels.getNovel(novelId)
     expect(snapshot?.run.pauseReason).toBe('requirement-conflict')
     expect(snapshot?.requirements.find((r) => r.requirementId === 'req-2')?.blockedReason).toBe('与已提交正文冲突')
-    // Claiming stays blocked while a blocked requirement exists.
+    // Claiming stays blocked while a blocked requirement exists, and a plain
+    // resume clears nothing (§9.4): the record stays blocked after resuming.
     await novels.resume(novelId)
+    expect((await novels.getNovel(novelId))?.requirements.find((r) => r.requirementId === 'req-2')?.status).toBe('blocked')
     const { unitId } = await novels.prepareUnit(novelId, { chapterId: 'ch-1', sceneId: 'sc-1', label: 'l', goal: 'g' })
-    await expect(novels.claimUnit(novelId, { unitId, expectedOutlineRevision: snapshot!.outline!.outlineRevision, expectedRequirementSequence: 1, hostTurn: 1 }))
+    await expect(novels.claimUnit(novelId, { unitId, expectedOutlineRevision: outlineRevision, expectedRequirementSequence: 1, hostTurn: 1 }))
       .rejects.toMatchObject({ code: 'NOVEL_PRECONDITION', rule: 'requirements-unprocessed' })
-    // Clarification lets a later revision move blocked -> applied (§9.1).
-    const revised = await novels.reviseOutline(novelId, {
+    // §9.1: resolving blocked -> applied requires citing the user
+    // clarification/withdrawal message; a missing or unknown citation is
+    // rejected and the requirement stays blocked.
+    await expect(novels.reviseOutline(novelId, {
       expectedRevision: (await novels.getNovel(novelId))!.revision,
-      expectedOutlineRevision: snapshot!.outline!.outlineRevision,
-      reason: '澄清后调整',
+      expectedOutlineRevision: outlineRevision,
+      reason: '缺少澄清引用',
       changes: outlinePayload(),
       handledRequirements: [{ requirementId: 'req-2', result: 'applied', effectiveLocation: 'story.endingDirection' }],
+    })).rejects.toMatchObject({ code: 'NOVEL_PRECONDITION', rule: 'blocked-resolution-citation' })
+    await expect(novels.reviseOutline(novelId, {
+      expectedRevision: (await novels.getNovel(novelId))!.revision,
+      expectedOutlineRevision: outlineRevision,
+      reason: '伪造澄清消息',
+      changes: outlinePayload(),
+      handledRequirements: [{ requirementId: 'req-2', result: 'applied', effectiveLocation: 'story.endingDirection', resolvedBy: { kind: 'clarification', messageId: 'm-fabricated' } }],
+    })).rejects.toMatchObject({ code: 'NOVEL_PRECONDITION', rule: 'blocked-resolution-citation' })
+    expect((await novels.getNovel(novelId))?.requirements.find((r) => r.requirementId === 'req-2')?.status).toBe('blocked')
+    // A citation on an entry that resolves nothing is an unrelated field (§11).
+    await novels.receiveRequirement(novelId, { hostMessageId: 'm-3', text: '加一场雨', sourceKind: 'composer' })
+    await expect(novels.reviseOutline(novelId, {
+      expectedRevision: (await novels.getNovel(novelId))!.revision,
+      expectedOutlineRevision: outlineRevision,
+      reason: '无关字段',
+      changes: outlinePayload(),
+      handledRequirements: [{ requirementId: 'req-3', result: 'applied', effectiveLocation: 'ch-1', resolvedBy: { kind: 'withdrawal', messageId: 'm-2' } }],
+    })).rejects.toBeInstanceOf(NovelConfigError)
+    // A second blocked requirement exercises the blocked -> superseded branch.
+    await novels.blockRequirement(novelId, {
+      expectedRevision: (await novels.getNovel(novelId))!.revision,
+      requirementId: 'req-3',
+      conflictReason: '与既有场景时序冲突',
+      bodySources: [],
     })
-    expect(revised.watermark).toBe(2)
+    // Real user messages (registered by the receive barrier) let a later
+    // revision move blocked -> applied and superseded, and the conflict
+    // record survives both transitions alongside the citation (§9.1).
+    await novels.receiveRequirement(novelId, { hostMessageId: 'm-clarify', text: '改为用梦境闪回呈现', sourceKind: 'composer' })
+    await novels.receiveRequirement(novelId, { hostMessageId: 'm-withdraw', text: '撤回加一场雨的要求', sourceKind: 'composer' })
+    const revised = await novels.reviseOutline(novelId, {
+      expectedRevision: (await novels.getNovel(novelId))!.revision,
+      expectedOutlineRevision: outlineRevision,
+      reason: '澄清后调整',
+      changes: outlinePayload(),
+      handledRequirements: [
+        { requirementId: 'req-2', result: 'applied', effectiveLocation: 'story.endingDirection', resolvedBy: { kind: 'clarification', messageId: 'm-clarify' } },
+        { requirementId: 'req-3', result: 'superseded', resolvedBy: { kind: 'withdrawal', messageId: 'm-withdraw' } },
+        { requirementId: 'req-4', result: 'applied', effectiveLocation: 'ch-1' },
+        { requirementId: 'req-5', result: 'applied', effectiveLocation: 'ch-1' },
+      ],
+    })
+    expect(revised.watermark).toBe(5)
     expect(revision).toMatch(/^[0-9a-f]{16}$/)
+    const resolved = await novels.getNovel(novelId)
+    expect(resolved?.requirements.find((r) => r.requirementId === 'req-2')).toMatchObject({
+      status: 'applied',
+      blockedReason: null,
+      resolvedConflict: { reason: '与已提交正文冲突', resolvedBy: { kind: 'clarification', messageId: 'm-clarify' } },
+    })
+    expect(resolved?.requirements.find((r) => r.requirementId === 'req-3')).toMatchObject({
+      status: 'superseded',
+      blockedReason: null,
+      resolvedConflict: { reason: '与既有场景时序冲突', resolvedBy: { kind: 'withdrawal', messageId: 'm-withdraw' } },
+    })
+    // The clarification directive itself was never blocked: no conflict record.
+    expect(resolved?.requirements.find((r) => r.requirementId === 'req-4')?.resolvedConflict).toBeNull()
     // Blocking a non-pending requirement is a conflict error.
     await expect(novels.blockRequirement(novelId, {
       expectedRevision: revised.revision,

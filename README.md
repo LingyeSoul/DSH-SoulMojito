@@ -139,6 +139,19 @@ AgentTavern 工具的身份来自真实 DSH agent binding，模型不能通过�
 
 ST 与 AgentTavern 新聊天共用 `$DSH_HOME/tavern/workspace/` 下的 `Tavern (internal)` 工作区；插件按 workspace 路径/ID 从原生侧边栏隐藏整个分组，旧宿主没有身份属性时仅在标题唯一时回退。升级前已经存在的宿主会话不会跨工作区迁移，但绑定的 Tavern 会话行仍会按插件过滤。
 
+### AgentNovel 当前状态
+
+`agent-novel` 是与 AgentTavern、ST 并列的第三种会话架构：全自动小说推演（[提案 0005](docs/proposals/0005-agent-novel-architecture.md)、写手子代理补充见 [提案 0007](docs/proposals/0007-agent-novel-writer-subagent.md)）。先落盘大纲再分单元写作，正文只经 `novel_body_commit` 原子提交，作者指令走台账 + 修订协议，冲突指令必须引用用户澄清/撤回消息才能解除。
+
+| 能力面 | 状态 |
+|---|---|
+| 存储 / 调度 / 提交协议 | 可用：HEAD 单一提交点、不可变修订快照、单写者所有权、认领令牌与幂等重试 |
+| 作者干预 | 可用：指令接收屏障、修订覆盖层（chapters overlay + droppedChapterIds）、blocked 冲突暂停与澄清引用解除 |
+| 写手子代理 | 可用（`writerMode: inline | subagent`，默认 inline）：W1 产稿 + W2 单单元委托自提交，真机 A/B 后再切默认 |
+| 阅读 / 导出 | 可用：章节 Markdown 投影、ZIP 导出、记忆检索索引 |
+
+模型侧工具面（`novel_*`，身份一律来自会话绑定，不接受参数传入 novelId）：`novel_status_read`、`novel_requirements_read`、`novel_outline_read/create/revise`、`novel_requirement_block`、`novel_unit_claim/supersede`、`novel_body_commit/read/search`、`novel_chapter_complete`、`novel_finish`、`novel_character_read`、`novel_lore_search`、`novel_facts_read`、`novel_writer_draft/delegate`，以及绑定小说作用域的 `memory_search` / `memory_read` 和 `tavern_deduce` 适配器。设计契约以提案 0005 §11 工具表为准。
+
 ## Packages
 
 | Package | 说明 |
@@ -217,7 +230,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：21 个测试文件、174 项测试通过；11 个插件 gates（含 AgentTavern 隔离、native header adapter、内部工作区和 client VM mount）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.1.0-rc.6` 的隔离 runtime。
+当前基线：38 个测试文件、507 项测试通过；11 个插件 gates（含 AgentTavern 隔离、native header adapter、内部工作区和 client VM mount）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.1.0-rc.6` 的隔离 runtime。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 

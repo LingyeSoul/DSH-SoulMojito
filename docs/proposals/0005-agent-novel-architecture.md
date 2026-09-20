@@ -330,6 +330,7 @@ $DSH_HOME/tavern/novels/<novelId>/
 | `novel_outline_revise` | 原子修订计划及连续指令处理结果，不改正文 |
 | `novel_requirement_block` | 保存具体冲突、正文引用并暂停 |
 | `novel_unit_claim` | 校验 brief 身份及版本并认领，返回单元和执行令牌 |
+| `novel_unit_supersede` | 退役"场景已有完成提交"的 prepared 遗留单元（2026-09-20 补录：实现早于本表更新，事故背景见 0007 §14 偏离清单第 13 条） |
 | `novel_body_commit` | 显式提交正文、来源及正典变化，一次确认单元进度 |
 | `novel_chapter_complete` | 校验当前章提交、情节完成依据和未决项，完成章节 |
 | `novel_finish` | 校验第 7 节全部完成条件，不接受单纯自报完成 |

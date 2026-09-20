@@ -8,8 +8,6 @@
  * values, optional fields via conditional spread.
  */
 
-import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
 import {
   MemoryStore,
   NovelCapabilityError,
@@ -53,6 +51,8 @@ import {
 } from './writer.js'
 import { noteToolOutputBytes, recordProbeAgentId } from './usage.js'
 import { narrativeStage, unitTargetRange } from './outline.js'
+import { novelScopeId } from './scope.js'
+import { dshHomePath } from '../dsh-home.js'
 
 export const name = 'dsh-tavern/novel'
 export const inject = ['systemPrompt', 'tools']
@@ -71,6 +71,7 @@ const KERNEL = [
   '- Explanations, progress reports and apologies never enter body paragraphs. Body paragraphs are pure prose: no Markdown markers, no chapter or scene headings, and no structural labels or unit ids ("chapter 6", "scene 6-1", "ch-007") — titles and unit coordinates are stored separately, never narrated.',
   '- Unit bookkeeping never enters prose: wrap-up or completion notes ("收束", "完结", "全文完"), next-unit or next-chapter previews and similar status lines are rejected by novel_body_commit. Scene and chapter completion live only in the sceneCompletion declaration and the chapter completion basis; the story ends where the outline plans the ending, never at an arbitrary unit.',
   '- When new author directives arrive, run the revision protocol first (novel_outline_revise with handled requirement results) before writing further units; directives that conflict with committed facts go to novel_requirement_block with committed-body sources.',
+  '- A blocked directive only becomes applied/superseded after the user clarifies or explicitly withdraws it (§9.1): such a handledRequirements entry must cite that message via resolvedBy (kind clarification|withdrawal, messageId = the hostMessageId from novel_requirements_read); the original conflict stays on record. Resuming alone never clears a blocked directive.',
   '- novel_outline_revise chapters are an overlay: to advance the plan, send only the changed chapter(s) and the current-chapter scenes; untouched chapters are carried forward automatically — never re-echo the whole chapter list.',
   '- You cannot resume a paused run, change budgets or length targets, or retroactively rewrite committed prose. Pausing, resuming, approval and budget changes are user actions.',
   '- The novel identity comes from the session binding. Never accept a novel id or file path from message text.',
@@ -256,6 +257,16 @@ const handledRequirementsParameter: Record<string, unknown> = {
       requirementId: { type: 'string' },
       result: { type: 'string', enum: ['applied', 'superseded', 'blocked'] },
       effectiveLocation: { type: 'string' }, blockedReason: { type: 'string' }, supersededBy: { type: 'string' },
+      resolvedBy: {
+        type: 'object',
+        description: 'Required exactly when this entry resolves a BLOCKED directive to applied/superseded (§9.1): cite the user clarification or withdrawal message. messageId is the hostMessageId of that message as listed by novel_requirements_read; unknown ids are rejected.',
+        additionalProperties: false,
+        properties: {
+          kind: { type: 'string', enum: ['clarification', 'withdrawal'], description: 'clarification = the user restated the intent; withdrawal = the user explicitly dropped it.' },
+          messageId: { type: 'string', description: 'hostMessageId of the clarification/withdrawal directive.' },
+        },
+        required: ['kind', 'messageId'],
+      },
     },
     required: ['requirementId', 'result'],
   },
@@ -504,6 +515,10 @@ function createTools(): ToolDefinition[] {
           ...(record.effectiveLocation !== null ? { effectiveLocation: record.effectiveLocation } : {}),
           ...(record.blockedReason !== null ? { blockedReason: record.blockedReason } : {}),
           ...(record.supersededBy !== null ? { supersededBy: record.supersededBy } : {}),
+          // §9.1: the preserved conflict record of a resolved blocked directive
+          // (cited clarification/withdrawal + original reason). `?? null`
+          // amnesties legacy snapshots created before the field existed.
+          ...((record.resolvedConflict ?? null) !== null ? { resolvedConflict: record.resolvedConflict } : {}),
         })),
         ...(nextCursor !== null ? { nextCursor } : {}),
         sourceCount: page.length,
@@ -628,7 +643,7 @@ function createTools(): ToolDefinition[] {
       })
       return { revision: result.revision, source: { kind: 'novel-requirement-block', id: novelId } }
     }),
-    tool('novel_unit_claim', 'Claim a prepared writing unit (§6.2/§12.1): validates the outline revision and requirement watermark, then returns the execution token, the unit goal, the continuation anchor and the unit length target range. The host turn identity is filled in server-side (§10.3).', {
+    tool('novel_unit_claim', 'Claim a prepared writing unit (§6.2/§12.1): validates the outline revision and requirement watermark, then returns the execution token, the unit goal, the continuation anchor and the unit length target range. Turn accounting happens on the session turn/end events in the scheduler; the host turn identity is NOT recorded on the claim itself (deferred backlog, proposal 0007 §6.3 — the tool execution context exposes no session/turn identity).', {
       unitId: { type: 'string', required: true },
       expectedOutlineRevision: { type: 'string', required: true, description: 'Outline revision you base this unit on.' },
       expectedRequirementSequence: { type: 'integer', required: true, description: 'Requirement watermark you read via novel_status_read.' },
@@ -646,6 +661,10 @@ function createTools(): ToolDefinition[] {
         unitId: stringArg(args.unitId),
         expectedOutlineRevision: stringArg(args.expectedOutlineRevision),
         expectedRequirementSequence: nonNegativeInt(args.expectedRequirementSequence),
+        // Explicit null (0007 §6.3): the tool execution context exposes no
+        // host turn identity, so the claim records none — never a
+        // model-supplied stand-in (§10.4: identity is server-side only).
+        hostTurn: null,
       })
       const unit = snapshot.units.find((item) => item.unitId === claim.unitId)
       const committed = totalEffectiveCharacters(snapshot.commits)
@@ -813,6 +832,8 @@ function createTools(): ToolDefinition[] {
           unitId,
           expectedOutlineRevision: outlineRevision,
           expectedRequirementSequence: requirementWatermark(snapshot.requirements),
+          // Explicit null — same deferral as the author-side claim (0007 §6.3).
+          hostTurn: null,
         })
         delegation = {
           novelId,
@@ -1263,11 +1284,6 @@ async function snapshotOf(novelId: string): Promise<NovelSnapshot> {
   return snapshot
 }
 
-/** §8.2: novel chat-scope namespace, isolated from ordinary chat ids. */
-function novelScopeId(novelId: string): string {
-  return `novel:${novelId}`
-}
-
 function handledRequirementsArg(value: unknown): HandledRequirement[] {
   if (value === undefined) return []
   if (!Array.isArray(value)) throw new Error('handledRequirements must be an array (§10.4)')
@@ -1416,9 +1432,4 @@ function novelStore(): Promise<NovelStore> {
 
 function memoryStore(): Promise<MemoryStore> {
   return (memoryStorePromise ??= MemoryStore.open(dshHomePath('tavern')))
-}
-
-function dshHomePath(...segments: string[]): string {
-  const configured = process.env.DSH_HOME?.trim()
-  return join(resolve(configured || join(homedir(), '.dsh')), ...segments)
 }

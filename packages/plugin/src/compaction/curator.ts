@@ -20,9 +20,8 @@
  * 路径（gates 的 agent-tavern-isolation 因此不扫描本目录）；摘要调用与
  * 宿主 basic 的默认 summarizer 同为 ctx.llm.stream 辅助调用。
  */
-import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
 import { importHostPackage } from '../../../bind/src/index.js'
+import { dshHomePath } from '../dsh-home.js'
 import { TavernStore } from '../../../tavern-store/src/index.js'
 import {
   DEFAULT_USAGE_THRESHOLD_RATIO,
@@ -342,11 +341,6 @@ let tavernStorePromise: Promise<TavernStore> | undefined
 
 function tavernStore(): Promise<TavernStore> {
   return (tavernStorePromise ??= TavernStore.open(dshHomePath('tavern')))
-}
-
-function dshHomePath(...segments: string[]): string {
-  const configured = process.env.DSH_HOME?.trim()
-  return join(resolve(configured || join(homedir(), '.dsh')), ...segments)
 }
 
 /** 存储缺失、读取失败或绑定不完整时按非剧情会话处理，摘要退回宿主默认行为。 */

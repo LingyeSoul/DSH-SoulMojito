@@ -5,8 +5,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir as homedir2 } from "node:os";
-import { join as join8, relative, resolve as resolve2 } from "node:path";
+import { relative, resolve as resolve3 } from "node:path";
 
 // packages/tavern-format/src/png.ts
 var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -5223,6 +5222,10 @@ function countEffectiveCharacters(text) {
 function isPositiveInteger(value) {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
+var NOVEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
+function isValidNovelId(value) {
+  return NOVEL_ID_PATTERN.test(value);
+}
 function validateRunBudgets(budgets) {
   if (typeof budgets !== "object" || budgets === null || Array.isArray(budgets)) {
     return [{ field: "budgets", message: "budgets is required" }];
@@ -5674,7 +5677,6 @@ import { execFile } from "node:child_process";
 import { promises as fs4 } from "node:fs";
 import * as path4 from "node:path";
 var SCHEMA_VERSION = 1;
-var NOVEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 var REQUIREMENT_SOURCES = /* @__PURE__ */ new Set(["composer", "panel", "internal"]);
 var CANON_KINDS = /* @__PURE__ */ new Set(["event", "character-state", "relation", "foreshadowing", "variable"]);
 var SOURCE_REF_PATTERN = /^(commit-\d+)(?:#(\d+))?$/;
@@ -5684,10 +5686,10 @@ var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("he
 var DSH_HOST_COMMAND = /@deepseek-ai[\\/]dsh\b|(?:^|[\\/ \t"'])dsh(?:\.(?:cmd|js|ps1|exe|bat))?["']?[ \t]+web\b/;
 function commandLineOf(pid) {
   if (process.platform === "win32") {
-    return new Promise((resolve3) => {
+    return new Promise((resolve4) => {
       execFile("powershell.exe", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`], { timeout: 5e3, windowsHide: true }, (error, stdout) => {
-        if (error) resolve3(null);
-        else resolve3(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve4(null);
+        else resolve4(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -5701,10 +5703,10 @@ function commandLineOf(pid) {
     );
   }
   if (process.platform === "darwin") {
-    return new Promise((resolve3) => {
+    return new Promise((resolve4) => {
       execFile("ps", ["-p", String(pid), "-o", "command="], { timeout: 5e3 }, (error, stdout) => {
-        if (error) resolve3(Number(error.code) === 1 ? void 0 : null);
-        else resolve3(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve4(Number(error.code) === 1 ? void 0 : null);
+        else resolve4(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -5856,7 +5858,8 @@ var NovelStore = class _NovelStore {
         appliedRevision: null,
         effectiveLocation: null,
         blockedReason: null,
-        supersededBy: null
+        supersededBy: null,
+        resolvedConflict: null
       };
       const snapshot2 = {
         novelId,
@@ -5982,7 +5985,8 @@ var NovelStore = class _NovelStore {
         appliedRevision: null,
         effectiveLocation: null,
         blockedReason: null,
-        supersededBy: null
+        supersededBy: null,
+        resolvedConflict: null
       };
       const next = {
         ...current,
@@ -6748,7 +6752,7 @@ var NovelStore = class _NovelStore {
   }
   /* ------------------------------- internal ------------------------------- */
   novelDir(novelId) {
-    if (!NOVEL_ID_PATTERN.test(novelId)) throw new Error(`invalid novel id '${novelId}'`);
+    if (!isValidNovelId(novelId)) throw new Error(`invalid novel id '${novelId}'`);
     return path4.join(this.novelsRoot, novelId);
   }
   mutate(novelId, operation) {
@@ -6959,6 +6963,17 @@ var NovelStore = class _NovelStore {
       if (item.supersededBy !== void 0 && typeof item.supersededBy !== "string") {
         throw new NovelConfigError({ message: "supersededBy must be a string" });
       }
+      if (record.status === "blocked" && (item.result === "applied" || item.result === "superseded")) {
+        const ref = item.resolvedBy;
+        if (typeof ref !== "object" || ref === null || ref.kind !== "clarification" && ref.kind !== "withdrawal" || typeof ref.messageId !== "string" || ref.messageId.trim() === "") {
+          throw new NovelPreconditionError({ rule: "blocked-resolution-citation", violations: [item.requirementId] });
+        }
+        if (!current.requirements.some((candidate) => candidate.hostMessageId === ref.messageId)) {
+          throw new NovelPreconditionError({ rule: "blocked-resolution-citation", violations: [`${item.requirementId}:unknown message '${ref.messageId}'`] });
+        }
+      } else if (item.resolvedBy !== void 0) {
+        throw new NovelConfigError({ message: `resolvedBy is only valid when resolving a blocked requirement to applied/superseded (\xA79.1): '${item.requirementId}'` });
+      }
     }
     return handled.map((item) => ({ ...item }));
   }
@@ -7068,13 +7083,20 @@ function applyHandledRequirements(records, handled, outlineRevision) {
     const item = byId.get(record.requirementId);
     if (item === void 0) return record;
     if (item.result === "applied") {
-      return { ...record, status: "applied", appliedRevision: outlineRevision, effectiveLocation: item.effectiveLocation ?? null, blockedReason: null, supersededBy: null };
+      return { ...record, status: "applied", appliedRevision: outlineRevision, effectiveLocation: item.effectiveLocation ?? null, blockedReason: null, supersededBy: null, resolvedConflict: resolvedConflictOf(record, item) };
     }
     if (item.result === "superseded") {
-      return { ...record, status: "superseded", appliedRevision: outlineRevision, supersededBy: item.supersededBy ?? null, blockedReason: null };
+      return { ...record, status: "superseded", appliedRevision: outlineRevision, supersededBy: item.supersededBy ?? null, blockedReason: null, resolvedConflict: resolvedConflictOf(record, item) };
     }
     return { ...record, status: "blocked", blockedReason: item.blockedReason ?? "blocked during outline change", appliedRevision: null, effectiveLocation: null };
   });
+}
+function resolvedConflictOf(record, item) {
+  if (record.status !== "blocked" || item.resolvedBy === void 0) return null;
+  return {
+    reason: record.blockedReason ?? "blocked during outline change",
+    resolvedBy: { kind: item.resolvedBy.kind, messageId: item.resolvedBy.messageId }
+  };
 }
 function assertWatermarkAdvanced(before, after) {
   const beforeMark = requirementWatermark(before);
@@ -7230,7 +7252,7 @@ async function replaceHead(head, bytes) {
       }
       throw cause;
     }
-    await new Promise((resolve3) => setTimeout(resolve3, 25));
+    await new Promise((resolve4) => setTimeout(resolve4, 25));
     await fs4.rename(tmp, head);
   }
 }
@@ -8017,7 +8039,7 @@ var NovelDriver = class _NovelDriver {
       } catch (error) {
         lastError = error;
         this.logWarn("followup-attempt-failed", { novelId, sessionId: agent.session.id, intentId, errorCode: errorCodeOf(error), attempt });
-        if (attempt < retry.maxAttempts) await new Promise((resolve3) => setTimeout(resolve3, retry.backoffMs));
+        if (attempt < retry.maxAttempts) await new Promise((resolve4) => setTimeout(resolve4, retry.backoffMs));
       }
     }
     throw lastError;
@@ -8353,7 +8375,13 @@ function errorCodeOf(error) {
 import { promises as fs5 } from "node:fs";
 import { crc32 as crc322 } from "node:zlib";
 import * as path5 from "node:path";
-var NOVEL_ID_PATTERN2 = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
+
+// packages/plugin/src/agent-novel/scope.ts
+function novelScopeId(novelId) {
+  return `novel:${novelId}`;
+}
+
+// packages/plugin/src/agent-novel/projector.ts
 var PARAGRAPH_SEPARATOR2 = "\n\n";
 var NovelProjector = class _NovelProjector {
   constructor(tavernRoot, store2, memory) {
@@ -8493,7 +8521,7 @@ var NovelProjector = class _NovelProjector {
   }
   /* --------------------------------- internals --------------------------------- */
   assertNovelId(novelId) {
-    if (!NOVEL_ID_PATTERN2.test(novelId)) throw new NovelNotFoundError({ novelId });
+    if (!isValidNovelId(novelId)) throw new NovelNotFoundError({ novelId });
   }
   novelDir(novelId) {
     this.assertNovelId(novelId);
@@ -8570,9 +8598,6 @@ var NovelProjector = class _NovelProjector {
     return records;
   }
 };
-function novelScopeId(novelId) {
-  return `novel:${novelId}`;
-}
 function memoryRecordsFor(novelId, commit, paragraphs) {
   const scopeId = novelScopeId(novelId);
   const records = commit.canonChanges.map((change, index) => ({
@@ -9271,6 +9296,14 @@ function subagentRuntimeOf(parent) {
 }
 function isRuntime(candidate) {
   return typeof candidate === "object" && candidate !== null && typeof candidate.start === "function";
+}
+
+// packages/plugin/src/dsh-home.ts
+import { homedir as homedir2 } from "node:os";
+import { join as join8, resolve as resolve2 } from "node:path";
+function dshHomePath(...segments) {
+  const configured = process.env.DSH_HOME?.trim();
+  return join8(resolve2(configured || join8(homedir2(), ".dsh")), ...segments);
 }
 
 // packages/plugin/src/index.ts
@@ -10239,7 +10272,6 @@ async function handleApi(ctx, req, res) {
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 var NOVEL_SUBPATHS = ["novels/outline", "novels/body", "novels/export", "novels/pause", "novels/resume", "novels/stop", "novels/update-outline", "novels/approve-outline"];
-var NOVEL_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 function novelHttpFailure(error) {
   if (error instanceof NovelRevisionConflictError) {
     return { status: 409, code: error.code, sanitized: false, extra: { actualRevision: error.actualRevision } };
@@ -10281,7 +10313,7 @@ function parseNovelRoute(route) {
   };
 }
 async function requireNovel(db, novelId) {
-  if (!NOVEL_ID_SHAPE.test(novelId)) throw new NovelNotFoundError({ novelId });
+  if (!isValidNovelId(novelId)) throw new NovelNotFoundError({ novelId });
   const snapshot2 = await db.getNovel(novelId);
   if (snapshot2 === void 0) throw new NovelNotFoundError({ novelId });
   return snapshot2;
@@ -10639,24 +10671,24 @@ async function bindNovelSession(db, sessionId, novelId) {
 }
 async function ensureBundledAgentNovelPreset() {
   const bundledRoots = [
-    resolve2(import.meta.dirname, "agent-presets"),
-    resolve2(import.meta.dirname, "..", "agent-presets")
+    resolve3(import.meta.dirname, "agent-presets"),
+    resolve3(import.meta.dirname, "..", "agent-presets")
   ];
   const bundledRoot = bundledRoots.find((candidate) => {
     try {
-      return readFileSync(resolve2(candidate, AGENT_NOVEL_PRESET_ID, "agent.cordis.yml"), "utf8").trim() !== "";
+      return readFileSync(resolve3(candidate, AGENT_NOVEL_PRESET_ID, "agent.cordis.yml"), "utf8").trim() !== "";
     } catch {
       return false;
     }
   });
   if (!bundledRoot) throw new Error("bundled AgentNovel preset is missing from the plugin package");
-  const sourceRoot = resolve2(bundledRoot, AGENT_NOVEL_PRESET_ID);
+  const sourceRoot = resolve3(bundledRoot, AGENT_NOVEL_PRESET_ID);
   const targetRoot = dshHomePath(".agent-presets", AGENT_NOVEL_PRESET_ID);
   await mkdir(targetRoot, { recursive: true });
   for (const file of ["preset.yml", "agent.cordis.yml"]) {
-    const target = resolve2(targetRoot, file);
+    const target = resolve3(targetRoot, file);
     try {
-      await writeFile(target, await readFile(resolve2(sourceRoot, file)), { flag: "wx" });
+      await writeFile(target, await readFile(resolve3(sourceRoot, file)), { flag: "wx" });
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
     }
@@ -11387,24 +11419,24 @@ async function refreshActivePrompt() {
 }
 async function ensureBundledAgentTavernPreset() {
   const bundledRoots = [
-    resolve2(import.meta.dirname, "agent-presets"),
-    resolve2(import.meta.dirname, "..", "agent-presets")
+    resolve3(import.meta.dirname, "agent-presets"),
+    resolve3(import.meta.dirname, "..", "agent-presets")
   ];
   const bundledRoot = bundledRoots.find((candidate) => {
     try {
-      return readFileSync(resolve2(candidate, AGENT_TAVERN_PRESET_ID, "agent.cordis.yml"), "utf8").trim() !== "";
+      return readFileSync(resolve3(candidate, AGENT_TAVERN_PRESET_ID, "agent.cordis.yml"), "utf8").trim() !== "";
     } catch {
       return false;
     }
   });
   if (!bundledRoot) throw new Error("bundled AgentTavern preset is missing from the plugin package");
-  const sourceRoot = resolve2(bundledRoot, AGENT_TAVERN_PRESET_ID);
+  const sourceRoot = resolve3(bundledRoot, AGENT_TAVERN_PRESET_ID);
   const targetRoot = dshHomePath(".agent-presets", AGENT_TAVERN_PRESET_ID);
   await mkdir(targetRoot, { recursive: true });
   for (const file of ["preset.yml", "agent.cordis.yml"]) {
-    const target = resolve2(targetRoot, file);
+    const target = resolve3(targetRoot, file);
     try {
-      await writeFile(target, await readFile(resolve2(sourceRoot, file)), { flag: "wx" });
+      await writeFile(target, await readFile(resolve3(sourceRoot, file)), { flag: "wx" });
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
     }
@@ -11588,10 +11620,6 @@ function parseTavernSessionCommand(rawInput) {
     return null;
   }
 }
-function dshHomePath(...segments) {
-  const configured = process.env.DSH_HOME?.trim();
-  return join8(resolve2(configured || join8(homedir2(), ".dsh")), ...segments);
-}
 async function prepareInternalWorkspace() {
   const path6 = dshHomePath("tavern", "workspace");
   await mkdir(path6, { recursive: true });
@@ -11601,8 +11629,8 @@ function readBuildInfo() {
   let version = "unknown";
   let commit = "unknown";
   for (const packagePath of [
-    resolve2(import.meta.dirname, "package.json"),
-    resolve2(import.meta.dirname, "..", "package.json")
+    resolve3(import.meta.dirname, "package.json"),
+    resolve3(import.meta.dirname, "..", "package.json")
   ]) {
     try {
       const packageData = JSON.parse(readFileSync(packagePath, "utf8"));
@@ -11614,7 +11642,7 @@ function readBuildInfo() {
     }
   }
   try {
-    const generated = JSON.parse(readFileSync(resolve2(import.meta.dirname, "version.json"), "utf8"));
+    const generated = JSON.parse(readFileSync(resolve3(import.meta.dirname, "version.json"), "utf8"));
     if (typeof generated?.version === "string" && generated.version.trim() !== "") {
       version = generated.version.trim();
     }
@@ -11627,7 +11655,7 @@ function readBuildInfo() {
 }
 function resolveTavernCommit(buildFallback) {
   const fallback = normalizeCommit(process.env.DSH_TAVERN_COMMIT ?? buildFallback) ?? "unknown";
-  const repositoryRoot = resolve2(import.meta.dirname, "..", "..");
+  const repositoryRoot = resolve3(import.meta.dirname, "..", "..");
   const packagePath = relative(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
   if (packagePath !== "packages/plugin") return fallback;
   const git = (args) => execFileSync("git", args, {
@@ -11638,7 +11666,7 @@ function resolveTavernCommit(buildFallback) {
     windowsHide: true
   }).trim();
   try {
-    const gitRoot = resolve2(git(["rev-parse", "--show-toplevel"]));
+    const gitRoot = resolve3(git(["rev-parse", "--show-toplevel"]));
     if (relative(repositoryRoot, gitRoot) !== "") return fallback;
     return normalizeCommit(git(["rev-parse", "--short=7", "HEAD"])) ?? fallback;
   } catch {
@@ -11732,7 +11760,7 @@ function sendJson(res, status2, body) {
   res.end(JSON.stringify(body));
 }
 function readJson(req, maxBytes = 2 * 1024 * 1024) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (chunk) => {
@@ -11744,7 +11772,7 @@ function readJson(req, maxBytes = 2 * 1024 * 1024) {
     });
     req.on("end", () => {
       try {
-        resolve3(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve4(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         reject(new Error("invalid JSON body"));
       }

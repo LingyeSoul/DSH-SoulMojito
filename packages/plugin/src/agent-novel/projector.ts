@@ -22,6 +22,7 @@ import {
   NovelPreconditionError,
   NovelStorageCorruptionError,
   countEffectiveCharacters,
+  isValidNovelId,
   summarizeNovel,
   type BodyCommit,
   type MemoryStore,
@@ -29,8 +30,8 @@ import {
   type NovelSnapshot,
   type NovelStore,
 } from '../../../tavern-store/src/index.js'
+import { novelScopeId } from './scope.js'
 
-const NOVEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/
 /** Fixed body-file serialization (§10.4); must match the store writer. */
 const PARAGRAPH_SEPARATOR = '\n\n'
 
@@ -201,7 +202,7 @@ export class NovelProjector {
   /* --------------------------------- internals --------------------------------- */
 
   private assertNovelId(novelId: string): void {
-    if (!NOVEL_ID_PATTERN.test(novelId)) throw new NovelNotFoundError({ novelId })
+    if (!isValidNovelId(novelId)) throw new NovelNotFoundError({ novelId })
   }
 
   private novelDir(novelId: string): string {
@@ -285,10 +286,6 @@ export class NovelProjector {
 }
 
 /* --------------------------------- helpers --------------------------------- */
-
-function novelScopeId(novelId: string): string {
-  return `novel:${novelId}`
-}
 
 /** A planned memory write with the required stable id. */
 interface PlannedMemoryRecord extends MemoryWrite {

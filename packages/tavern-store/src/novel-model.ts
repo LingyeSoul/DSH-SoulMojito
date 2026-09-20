@@ -104,6 +104,16 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0
 }
 
+/** Novel id shape: one kebab-ish token naming the project directory. Stricter
+ *  than the generic outline id pattern (no underscore). Shared by the store's
+ *  directory resolver, the projector and the HTTP route guard so all three
+ *  agree by construction instead of by copy-pasted regex. */
+const NOVEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/
+
+export function isValidNovelId(value: string): boolean {
+  return NOVEL_ID_PATTERN.test(value)
+}
+
 /**
  * Structural validation for run budgets (§7.1, §13). Shared by creation and
  * meta patches so edited budgets meet the same contract as created ones.
@@ -496,6 +506,30 @@ export function validateOutlineConsistency(
 
 export type RequirementStatus = 'pending' | 'applied' | 'superseded' | 'blocked'
 
+/** How a user resolved a blocked requirement (§9.1): a clarification
+ *  (澄清 — the user restated the intent so future prose can honor it) or an
+ *  explicit withdrawal (撤回 — the user dropped the directive). */
+export type BlockedResolutionKind = 'clarification' | 'withdrawal'
+
+/** Citation of the user clarification/withdrawal message that authorizes
+ *  moving a blocked requirement to applied/superseded (§9.1). The message id
+ *  must reference a received directive's hostMessageId — the receive barrier
+ *  guarantees every real user message is in the ledger before any revision
+ *  runs, so an unresolvable citation is a fabrication, not a clarification. */
+export interface BlockedResolutionRef {
+  kind: BlockedResolutionKind
+  messageId: string
+}
+
+/** The preserved conflict record of a resolved blocked requirement (§9.1:
+ *  the transition to applied/superseded must keep the original conflict). */
+export interface ResolvedConflict {
+  /** The blockedReason as it stood when the requirement was blocked. */
+  reason: string
+  /** The clarification/withdrawal citation that authorized the resolution. */
+  resolvedBy: BlockedResolutionRef
+}
+
 /** Author directive ledger entry (§9.1). */
 export interface RequirementRecord {
   requirementId: string
@@ -509,6 +543,11 @@ export interface RequirementRecord {
   effectiveLocation: string | null
   blockedReason: string | null
   supersededBy: string | null
+  /** Null unless this requirement was blocked and later resolved through a
+   *  cited clarification/withdrawal (§9.1). Legacy snapshots created before
+   *  the field existed read as undefined and are amnestied to null at use
+   *  sites (same convention as run.writerRuns / run.usageSamples). */
+  resolvedConflict: ResolvedConflict | null
 }
 
 /**
@@ -534,6 +573,10 @@ export interface HandledRequirement {
   blockedReason?: string
   /** Replacing requirement id for 'superseded' (§9.1: keep the replacement id). */
   supersededBy?: string
+  /** Required exactly when this entry moves a BLOCKED requirement to
+   *  applied/superseded (§9.1): the user clarification or withdrawal the
+   *  resolution relies on, cited by its stable host message id. */
+  resolvedBy?: BlockedResolutionRef
 }
 
 /* -------------------------------- units -------------------------------- */
