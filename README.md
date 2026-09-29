@@ -179,6 +179,37 @@ dsh plugin --profile web add ./packages/plugin
 dsh --profile web
 ```
 
+### 桌面版（desktop profile）
+
+DSH 桌面版的插件安装框等价于在 profile 目录执行 `pnpm add <spec>`，安装目标是 `desktop` profile。spec 必须落到 `packages/plugin`：仓库根是 monorepo 容器，不声明 `dsh.bundle.patch`，插件管理器会以「这个包没有声明组合包，不能作为插件管理」拒绝，并回滚 `package.json` 与 `pnpm-lock.yaml`。
+
+桌面版「设置 → 插件 → Git 仓库」填子目录 spec：
+
+```sh
+github:LingyeSoul/dsh-tavern#path:/packages/plugin
+```
+
+等价的 HTTPS 写法（`#path:` 参数相同）：
+
+```sh
+https://github.com/LingyeSoul/dsh-tavern#path:/packages/plugin
+```
+
+命令行安装到 desktop profile（`dsh plugin` 把参数原样转发给 pnpm）：
+
+```sh
+dsh plugin --profile desktop add github:LingyeSoul/dsh-tavern#path:/packages/plugin
+dsh --profile desktop
+```
+
+已有源码检出时可直接挂本地目录；桌面版安装框只接受绝对路径，相对路径会被 install-spec 拒绝：
+
+```sh
+dsh plugin --profile desktop add <仓库绝对路径>/packages/plugin
+```
+
+git spec 固定到安装时的提交，不跟随源码更新，升级走「更新」一节的移除后重新添加；`version.json` 不纳入 Git，设置页的 commit 显示为构建时写入的值，版本号仍读 `package.json`。
+
 ### 更新
 
 `dsh plugin add` 以本地 link 方式挂载插件，因此代码更新后只需重新构建并重启 DSH：

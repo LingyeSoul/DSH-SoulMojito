@@ -10,6 +10,16 @@ dsh plugin --profile web add ./packages/plugin
 dsh --profile web
 ```
 
+桌面版（`desktop` profile）用 Git 子目录 spec 安装，「设置 → 插件 → Git 仓库」或命令行填入下面的值。spec 必须指向本目录：仓库根是 monorepo 容器，没有 `dsh.bundle` 声明，会被插件管理器以「这个包没有声明组合包，不能作为插件管理」拒绝。
+
+```sh
+github:LingyeSoul/dsh-tavern#path:/packages/plugin
+```
+
+```sh
+dsh plugin --profile desktop add github:LingyeSoul/dsh-tavern#path:/packages/plugin
+```
+
 安装后：
 
 - 侧边栏底部、紧挨设置按钮的 **Tavern 按钮**（rail 模式为圆形图标钮）打开「Tavern 管理面板」——与原生设置同构的模态面板（左侧导航 + 右侧内容），复用 DSH 的 Modal/Button/Input/Pill/StateDot 原语与 `--dsw-alias-*` 设计 token。面板十个分区：总览（活跃配置 + 资产计数）、角色（卡片网格、完整卡查看、设为活跃、导出、删除）、聊天（按角色/群组浏览、新建/重命名/删除/打开）、群组、用户人设、世界书（激活开关 + 条目浏览器 + 搜索）、预设（kind 标签、设为活跃、删除）、正则脚本、变量（全局 STscript 变量编辑 + 当前会话局部变量查看）、生成（管线模式 + Kobold 端点 + StateDot 连接状态）。
