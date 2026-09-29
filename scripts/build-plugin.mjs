@@ -59,7 +59,8 @@ await build({
 
 // AgentNovel 作者 Agent（novel.mjs）：与 agent.mjs 同构的独立 preset 模块，
 // 模块名 'dsh-tavern/novel' 由 package.json exports['./novel'] 解析，preset
-// 条目见 agent-presets/agent-novel/agent.cordis.yml（提案 0005 §17）。
+// 声明行（@deepseek-ai/dsh-agent-preset）见 cordis.patch.yml 的
+// preset-agent-novel（提案 0005 §17，DSH 0.2.0-rc.2 起的 profile 声明式投递）。
 await build({
   entryPoints: [resolve(root, 'packages/plugin/src/agent-novel/agent.ts')],
   outfile: resolve(root, 'packages/plugin/novel.mjs'),

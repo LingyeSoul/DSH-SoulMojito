@@ -13,7 +13,7 @@ _Avoid_: 旧架构、普通 Tavern
 **AgentLoop**：DSH 负责 turn、step、模型请求、工具调用和事件记录的原生执行循环。AgentTavern 只能通过 profile、上下文和工具扩展它。
 _Avoid_: Tavern loop、生成循环
 
-**Agent preset**：DSH `dsh-agent-presets` 提供的可持久组合。preset 在 agent 发布前挂载 scoped 工具、prompt、变量和其他 projection 插件，并以可重建的 preset id 绑定会话。
+**Agent preset**：DSH `dsh-agent-preset` / `dsh-agent-preset-registry`（DSH `0.2.0-rc.2` 起 `dsh-agent-presets` 拆分而来，`agentPresets` 服务面不变）提供的可持久组合。preset 在 agent 发布前挂载 scoped 工具、prompt、变量和其他 projection 插件，并以可重建的 preset id 绑定会话。
 _Avoid_: 在 dsh-tavern 内另造一套 profile registry
 
 ## 状态语言

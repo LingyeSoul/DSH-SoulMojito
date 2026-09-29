@@ -3,6 +3,39 @@
     - id: dsh-tavern
       name: 'dsh-tavern'
 
+# Agent preset 声明（DSH 0.2.0 起的投递方式）：registry 不再扫描
+# ~/.dsh/.agent-presets 目录，preset 改为 profile 里的 @deepseek-ai/
+# dsh-agent-preset 声明行（见该包 README："the registry neither scans
+# directories nor accepts preset paths"）。config 字段直接映射旧
+# preset.yml（name/description/order）与旧 agent.cordis.yml 条目表
+# （plugins）；插件运行时通过 ctx.agentPresets.recompose(agent.ctx, id)
+# 按 config.id 挂载，签名与 0.1.5 相同。dsh-tavern/agent 与
+# dsh-tavern/novel 只 inject 不 provide，无 isolate group 必要（registry
+# 的泄漏审计只针对发布服务的行）。用户要改写本声明时，在 profile 的
+# cordis.patch.yml 里按 preset-agent-tavern / preset-agent-novel 的 id 覆写。
+- insert:
+    - id: preset-agent-tavern
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: agent-tavern
+        name: AgentTavern
+        description: 原生 DSH AgentLoop 角色扮演，会话级 Tavern 工具与作用域记忆。
+        order: 10
+        plugins:
+          - id: dsh-tavern-agent
+            name: 'dsh-tavern/agent'
+
+    - id: preset-agent-novel
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: agent-novel
+        name: AgentNovel
+        description: 原生 DSH AgentLoop 全自动小说推演，作者 Agent 与领域工具，先存大纲再分单元写作。
+        order: 11
+        plugins:
+          - id: dsh-novel-author
+            name: 'dsh-tavern/novel'
+
 # compaction curator：替换 dsh-base 的 compaction 后端（本 bundle 在
 # dsh-base/dsh-web-app 之后加载，patch 后写胜出）。宿主 patch 方言里覆写项
 # 的 `name` 是"条目当前模块名"守卫——不匹配只告警跳过、并不能改模块，所以

@@ -73,11 +73,12 @@ const REQUIRED_SERVER_ROUTES = [
 ]
 
 // DSH client-web's platform module table, mirrored from the host web shell's
-// staticModules seed (verified against DSH 0.1.5-rc.2's dsh-web-frontend).
+// staticModules seed (verified against DSH 0.2.0-rc.2's dsh-web-frontend).
 // Third-party plugin values must flow through injected services, not through
 // client-side package imports. The host dropped web-react / schema-form /
 // ui-attachment and added client-store / ui-dockkit between 0.1.0-rc.6 and
-// 0.1.5-rc.2 — re-sync this copy whenever the verification baseline moves.
+// 0.1.5-rc.2 — re-sync this copy whenever the verification baseline moves
+// (the seed is unchanged from 0.1.5-rc.2 through 0.2.0-rc.2).
 const CLIENT_STATIC_MODULES = new Set([
   'react',
   'react/jsx-runtime',

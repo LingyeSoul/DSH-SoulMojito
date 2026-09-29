@@ -192,6 +192,7 @@ describe('internal Tavern session bridge occupation', () => {
           recomposeCalls.push({ agent, presetId })
           return { id: presetId }
         },
+        compositionInventory: async () => [{ id: 'standard' }, { id: 'agent-tavern' }, { id: 'agent-novel' }],
       },
       tools: { register: () => {} },
       llm: {

@@ -4,7 +4,7 @@
 // packages/plugin/src/index.ts
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { relative, resolve as resolve3 } from "node:path";
 
 // packages/tavern-format/src/png.ts
@@ -9362,7 +9362,7 @@ function apply(ctx, config = {}) {
   ctx.logger?.info?.(`dsh-tavern host shape: ${JSON.stringify(describeHostShape(ctx))}`);
   agentTavernCapabilitiesPromise = bootstrapAgentTavernCapabilities(adapter, {
     presetId: AGENT_TAVERN_PRESET_ID,
-    ensurePreset: ensureBundledAgentTavernPreset
+    ensurePreset: () => ensureAgentPresetDeclared(ctx, AGENT_TAVERN_PRESET_ID)
   });
   void agentTavernCapabilitiesPromise.then((value) => {
     agentTavernCapabilities = value;
@@ -10645,7 +10645,7 @@ async function handleNovelOpenCommand(ctx, agent, novelId) {
   if (!agentNovelCapabilities.available) {
     return { kind: "error", text: `AgentNovel is unavailable on this host: ${agentNovelCapabilities.reasons.join(" ")}` };
   }
-  await ensureBundledAgentNovelPreset();
+  await ensureAgentPresetDeclared(ctx, AGENT_NOVEL_PRESET_ID);
   const currentState = await db.getState();
   const previous = currentState.sessionBindings[agent.id];
   const activationEvents = sessionEvents(agent.session);
@@ -10680,29 +10680,12 @@ async function bindNovelSession(db, sessionId, novelId) {
     }
   }));
 }
-async function ensureBundledAgentNovelPreset() {
-  const bundledRoots = [
-    resolve3(import.meta.dirname, "agent-presets"),
-    resolve3(import.meta.dirname, "..", "agent-presets")
-  ];
-  const bundledRoot = bundledRoots.find((candidate) => {
-    try {
-      return readFileSync(resolve3(candidate, AGENT_NOVEL_PRESET_ID, "agent.cordis.yml"), "utf8").trim() !== "";
-    } catch {
-      return false;
-    }
-  });
-  if (!bundledRoot) throw new Error("bundled AgentNovel preset is missing from the plugin package");
-  const sourceRoot = resolve3(bundledRoot, AGENT_NOVEL_PRESET_ID);
-  const targetRoot = dshHomePath(".agent-presets", AGENT_NOVEL_PRESET_ID);
-  await mkdir(targetRoot, { recursive: true });
-  for (const file of ["preset.yml", "agent.cordis.yml"]) {
-    const target = resolve3(targetRoot, file);
-    try {
-      await writeFile(target, await readFile(resolve3(sourceRoot, file)), { flag: "wx" });
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-    }
+async function ensureAgentPresetDeclared(ctx, presetId) {
+  const inventory = typeof ctx.agentPresets?.compositionInventory === "function" ? await ctx.agentPresets.compositionInventory() : void 0;
+  if (!Array.isArray(inventory) || !inventory.some((entry) => entry?.id === presetId)) {
+    throw new Error(
+      `preset '${presetId}' is not declared on this host; reinstall the dsh-tavern bundle so its cordis.patch.yml preset rows mount (DSH 0.2.0-rc.2+ preset delivery)`
+    );
   }
 }
 async function generate(ctx, req, res, db) {
@@ -11426,31 +11409,6 @@ async function refreshActivePrompt() {
     ].filter(Boolean).join("\n\n");
   } catch {
     activeAgentPrompt = "";
-  }
-}
-async function ensureBundledAgentTavernPreset() {
-  const bundledRoots = [
-    resolve3(import.meta.dirname, "agent-presets"),
-    resolve3(import.meta.dirname, "..", "agent-presets")
-  ];
-  const bundledRoot = bundledRoots.find((candidate) => {
-    try {
-      return readFileSync(resolve3(candidate, AGENT_TAVERN_PRESET_ID, "agent.cordis.yml"), "utf8").trim() !== "";
-    } catch {
-      return false;
-    }
-  });
-  if (!bundledRoot) throw new Error("bundled AgentTavern preset is missing from the plugin package");
-  const sourceRoot = resolve3(bundledRoot, AGENT_TAVERN_PRESET_ID);
-  const targetRoot = dshHomePath(".agent-presets", AGENT_TAVERN_PRESET_ID);
-  await mkdir(targetRoot, { recursive: true });
-  for (const file of ["preset.yml", "agent.cordis.yml"]) {
-    const target = resolve3(targetRoot, file);
-    try {
-      await writeFile(target, await readFile(resolve3(sourceRoot, file)), { flag: "wx" });
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-    }
   }
 }
 async function bindSession(db, sessionId, character, chatId, group2 = false, architecture = "st", contextMode = "dsh-native", initializationPending = false) {

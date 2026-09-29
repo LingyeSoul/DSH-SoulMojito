@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -181,6 +181,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
   let sessionEventHandlers: Array<(session: unknown, event: unknown) => void>
   let agents: Map<string, unknown>
   let recomposeCalls: Array<{ agent: unknown; presetId: string }>
+  let inventoryProbes: Array<string[]>
   let novelTools: Map<string, CapturedTool>
 
   beforeAll(async () => {
@@ -201,6 +202,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     agents = new Map()
     novelTools = new Map()
     recomposeCalls = []
+    inventoryProbes = []
     sessionEventHandlers = []
     const apiHandlers: Array<(req: unknown, res: unknown) => Promise<void>> = []
     let definitions: Array<{ handler: (input: { agent: unknown; rawInput: string }) => Promise<{ kind: string; text?: string }> }> = []
@@ -235,6 +237,11 @@ describe('AgentNovel command bridge and HTTP contract', () => {
         recompose: async (agent: unknown, presetId: string) => {
           recomposeCalls.push({ agent, presetId })
           return { id: presetId }
+        },
+        compositionInventory: async () => {
+          const ids = ['standard', 'agent-tavern', 'agent-novel']
+          inventoryProbes.push(ids)
+          return ids.map((id) => ({ id }))
         },
       },
       agents: {
@@ -458,10 +465,10 @@ describe('AgentNovel command bridge and HTTP contract', () => {
       character: '',
       chatId: '',
     })
-    // Bundled preset installed into the user layer (proposal 0005 §17).
-    expect(existsSync(join(home, '.agent-presets', 'agent-novel', 'preset.yml'))).toBe(true)
-    expect(readFileSync(join(home, '.agent-presets', 'agent-novel', 'agent.cordis.yml'), 'utf8'))
-      .toContain("name: 'dsh-tavern/novel'")
+    // Bundled preset declared in the host registry (DSH 0.2.0-rc.2 profile-row
+    // delivery; proposal 0005 §17): the declaration probe passed and the
+    // composition carries our row.
+    expect(inventoryProbes.map((ids) => ids.includes('agent-novel'))).toContain(true)
     // Marker + recompose exactly once; no placeholder turn events.
     expect(agent.session.events).toEqual([{ type: 'agent-preset/selected', data: { agentPreset: 'agent-novel' } }])
     expect(recomposeCalls).toContainEqual({ agent: agent.ctx, presetId: 'agent-novel' })
