@@ -80,8 +80,9 @@ describe('AgentTavern native tools', () => {
     }))
 
     tools = new Map()
+    // 挂载契约只含声明过的服务：agent 身份不经插件 ctx 传递（facts 走
+    // systemPrompt 装配上下文，工具走 exec.agent，见 agent-tavern-mount.spec.ts）。
     apply({
-      agent: { id: 'native' },
       systemPrompt: { section: () => {}, context: () => {} },
       tools: { register: (tool) => { tools.set(tool.name, tool as RegisteredTool) } },
       effect: (factory) => factory(),

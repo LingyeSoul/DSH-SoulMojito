@@ -4024,7 +4024,6 @@ var tavernStorePromise;
 var memoryStorePromise;
 var variableStorePromise;
 function apply(ctx) {
-  const agentId = ctx.agent?.id;
   ctx.systemPrompt?.section?.({
     name: "dsh-tavern:agent-kernel",
     order: -80,
@@ -4033,9 +4032,8 @@ function apply(ctx) {
   ctx.systemPrompt?.context?.({
     name: "dsh-tavern:agent-facts",
     order: -70,
-    text: () => agentId === void 0 ? "" : facts.get(agentId) ?? ""
+    text: (assembly) => agentFactsText(assembly?.agent?.id)
   });
-  if (agentId !== void 0) void loadAgentFacts(agentId);
   const tools = createTools();
   for (const tool2 of tools) {
     if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool2), `dsh-tavern:agent:${tool2.name}`);
@@ -4620,6 +4618,15 @@ async function bindingFor(exec) {
     throw new Error("AgentTavern binding is unavailable for this agent");
   }
   return { agentId, character: binding.character, chatId: binding.chatId };
+}
+var factsLoadStarted = /* @__PURE__ */ new Set();
+function agentFactsText(agentId) {
+  if (typeof agentId !== "string" || agentId.trim() === "") return "";
+  if (!factsLoadStarted.has(agentId)) {
+    factsLoadStarted.add(agentId);
+    void loadAgentFacts(agentId);
+  }
+  return facts.get(agentId) ?? "";
 }
 async function loadAgentFacts(agentId) {
   try {

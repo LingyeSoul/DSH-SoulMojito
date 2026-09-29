@@ -43,19 +43,23 @@ let memoryStorePromise: Promise<MemoryStore> | undefined
 let variableStorePromise: Promise<VariableStore> | undefined
 
 export function apply(ctx: AgentContextLike): void {
-  const agentId = ctx.agent?.id
   ctx.systemPrompt?.section?.({
     name: 'dsh-tavern:agent-kernel',
     order: -80,
     text: KERNEL,
   })
+  // 当前 agent 身份只从装配上下文取：宿主 assemble() 的上下文携带
+  // { agent, scope, signal }（@deepseek-ai/dsh-agent 的 assembleContextFor），
+  // 与本插件 ctx 上没有任何 agent 服务这一事实无关。反之，未 inject 的属性
+  // 访问会被宿主代理同步抛 `cannot get property "agent" without inject`，在
+  // apply() 期直接让整个模块挂载失败（0.2.0-rc.2 实测），所以这里不做任何
+  // ctx.agent 探测——身份通道与 dsh-user-approval / dsh-sandbox-policy 一致。
   ctx.systemPrompt?.context?.({
     name: 'dsh-tavern:agent-facts',
     order: -70,
-    text: () => (agentId === undefined ? '' : facts.get(agentId) ?? ''),
+    text: (assembly) => agentFactsText(assembly?.agent?.id),
   })
 
-  if (agentId !== undefined) void loadAgentFacts(agentId)
   const tools = createTools()
   for (const tool of tools) {
     if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool), `dsh-tavern:agent:${tool.name}`)
@@ -64,13 +68,22 @@ export function apply(ctx: AgentContextLike): void {
 }
 
 export interface AgentContextLike {
-  agent?: { id?: string }
   systemPrompt?: {
     section?: (section: { name: string; order: number; text: string | (() => string) }) => unknown
-    context?: (context: { name: string; order: number; text: string | (() => string) }) => unknown
+    context?: (context: {
+      name: string
+      order: number
+      /** 装配回调的入参是宿主的装配上下文（{ agent, scope, signal }），
+       *  与 section 的无参回调不同——facts 的 agent 身份由此而来。 */
+      text: string | ((assembly?: AgentAssemblyLike) => string)
+    }) => unknown
   }
   tools?: { register?: (tool: ToolDefinition) => unknown }
   effect?: (factory: () => unknown, label?: string) => unknown
+}
+
+interface AgentAssemblyLike {
+  agent?: { id?: string }
 }
 
 interface ToolDefinition {
@@ -700,6 +713,20 @@ async function bindingFor(exec: ToolExecution): Promise<BindingContext> {
     throw new Error('AgentTavern binding is unavailable for this agent')
   }
   return { agentId, character: binding.character, chatId: binding.chatId }
+}
+
+/** facts 文本通道：首次为某 agent 装配时异步装载一次，装载完成前返回空串。
+ *  与挂载期装载（apply 里同步取 ctx.agent）等价：best-effort、不阻塞装配、
+ *  失败即静默留空；不同点只是身份从装配上下文来。 */
+const factsLoadStarted = new Set<string>()
+
+function agentFactsText(agentId: string | undefined): string {
+  if (typeof agentId !== 'string' || agentId.trim() === '') return ''
+  if (!factsLoadStarted.has(agentId)) {
+    factsLoadStarted.add(agentId)
+    void loadAgentFacts(agentId)
+  }
+  return facts.get(agentId) ?? ''
 }
 
 async function loadAgentFacts(agentId: string): Promise<void> {

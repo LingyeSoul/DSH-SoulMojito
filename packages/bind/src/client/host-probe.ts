@@ -9,6 +9,8 @@
  * factory 顶部，无 DOM/宿主依赖，可在 Node 里直接测试。
  */
 
+import { type UiPrimitiveShapeTrace } from './ui-primitives.js'
+
 export interface ClientWorkspaceContext {
   get?: (serviceId: string) => unknown
   workspaces?: {
@@ -24,7 +26,18 @@ export type ClientProbePath = 'uiWorkspace' | 'workspaces' | 'unavailable'
 export interface ClientShapeTrace {
   connectPath?: ClientProbePath
   connectCalls: number
+  /** 宿主 UI 原子的解析结果；见 ui-primitives.ts。 */
+  uiPrimitives?: UiPrimitiveShapeTrace
 }
+
+// client half 的 UI 原子适配与本探测模块一起注入同一个 factory（见
+// scripts/build-plugin.mjs 的 __DSH_BIND_CLIENT_SLOT__），因此在此转出。
+export { resolveUiPrimitives } from './ui-primitives.js'
+export type {
+  CreateElementLike,
+  UiPrimitiveResolveOptions,
+  UiPrimitiveShapeTrace,
+} from './ui-primitives.js'
 
 export function createClientShapeTrace(): ClientShapeTrace {
   return { connectCalls: 0 }

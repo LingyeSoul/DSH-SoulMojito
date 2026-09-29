@@ -39,7 +39,15 @@ window.__ModuleLoader__.load({
       Pill,
       StateDot,
       Tooltip,
-    } = require('@deepseek-ai/dsh-client-ui-primitives')
+    } = DshBindClient.resolveUiPrimitives(require('@deepseek-ai/dsh-client-ui-primitives'), {
+      // 宿主图标在 0.2.0-rc.2 换成描边后缀命名（IconSparkleRegular/Medium），
+      // 旧尺寸后缀名不再导出；解析与降级见 @dsh-tavern/bind 的 ui-primitives。
+      createElement: React.createElement,
+      trace: clientShapeTrace,
+    })
+    if (clientShapeTrace.uiPrimitives?.synthesized?.length > 0 || clientShapeTrace.uiPrimitives?.missing?.length > 0) {
+      console.warn('dsh-tavern: host UI primitives diverge from this build', clientShapeTrace.uiPrimitives)
+    }
     const { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } = React
     const h = React.createElement.bind(React)
 

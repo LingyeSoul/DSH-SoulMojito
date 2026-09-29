@@ -25,8 +25,66 @@ window.__ModuleLoader__.load({
       var host_probe_exports = {};
       __export(host_probe_exports, {
         connectHostWorkspace: () => connectHostWorkspace,
-        createClientShapeTrace: () => createClientShapeTrace
+        createClientShapeTrace: () => createClientShapeTrace,
+        resolveUiPrimitives: () => resolveUiPrimitives
       });
+
+      // packages/bind/src/client/ui-primitives.ts
+      var LEGACY_ICON_NAME = /^(Icon[A-Za-z]+?)(\d{2})$/;
+      function primitiveCandidates(name) {
+        const legacy = LEGACY_ICON_NAME.exec(name);
+        if (legacy === null) return [{ name }];
+        const [, base = "", suffix = ""] = legacy;
+        const size = Number(suffix);
+        return [
+          { name },
+          { name: `${base}Regular`, size },
+          { name: `${base}Medium`, size }
+        ];
+      }
+      function withDefaultSize(component, size, createElement) {
+        return (props) => createElement(component, { size, ...props ?? {} });
+      }
+      function nullIcon() {
+        return () => null;
+      }
+      function resolveUiPrimitives(namespace, options = {}) {
+        const host = namespace ?? {};
+        const createElement = options.createElement;
+        const shape = { direct: 0, aliased: {}, synthesized: [], missing: [] };
+        if (options.trace !== void 0) options.trace.uiPrimitives = shape;
+        const cache = /* @__PURE__ */ new Map();
+        function resolve(name) {
+          if (cache.has(name)) return cache.get(name);
+          const value = resolveUncached(name);
+          cache.set(name, value);
+          return value;
+        }
+        function resolveUncached(name) {
+          const direct = host[name];
+          if (direct !== void 0) {
+            shape.direct += 1;
+            return direct;
+          }
+          for (const candidate of primitiveCandidates(name).slice(1)) {
+            const component = host[candidate.name];
+            if (component === void 0) continue;
+            shape.aliased[name] = candidate.name;
+            return candidate.size === void 0 || createElement === void 0 ? component : withDefaultSize(component, candidate.size, createElement);
+          }
+          if (name.startsWith("Icon")) {
+            shape.synthesized.push(name);
+            return nullIcon();
+          }
+          shape.missing.push(name);
+          return void 0;
+        }
+        return new Proxy({}, {
+          get: (_target, key) => typeof key === "string" ? resolve(key) : void 0
+        });
+      }
+
+      // packages/bind/src/client/host-probe.ts
       function createClientShapeTrace() {
         return { connectCalls: 0 };
       }
@@ -93,7 +151,15 @@ window.__ModuleLoader__.load({
       Pill,
       StateDot,
       Tooltip,
-    } = require('@deepseek-ai/dsh-client-ui-primitives')
+    } = DshBindClient.resolveUiPrimitives(require('@deepseek-ai/dsh-client-ui-primitives'), {
+      // 宿主图标在 0.2.0-rc.2 换成描边后缀命名（IconSparkleRegular/Medium），
+      // 旧尺寸后缀名不再导出；解析与降级见 @dsh-tavern/bind 的 ui-primitives。
+      createElement: React.createElement,
+      trace: clientShapeTrace,
+    })
+    if (clientShapeTrace.uiPrimitives?.synthesized?.length > 0 || clientShapeTrace.uiPrimitives?.missing?.length > 0) {
+      console.warn('dsh-tavern: host UI primitives diverge from this build', clientShapeTrace.uiPrimitives)
+    }
     const { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } = React
     const h = React.createElement.bind(React)
 

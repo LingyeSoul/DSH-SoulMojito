@@ -167,7 +167,6 @@ describe('AgentNovel author tools', () => {
     sections = []
     tools = new Map()
     apply({
-      agent: { id: 'novelist' },
       systemPrompt: { section: (section) => { sections.push({ name: section.name, order: section.order, text: section.text as string }) } },
       tools: { register: (tool) => { tools.set(tool.name, tool as RegisteredTool) } },
       effect: (factory) => factory(),

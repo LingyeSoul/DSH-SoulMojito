@@ -892,7 +892,6 @@ describe('agent-novel writer tool integration', () => {
     }))
     tools = new Map()
     apply({
-      agent: { id: AUTHOR },
       tools: { register: (tool) => { tools.set(tool.name, tool as IntegrationTool) } },
       effect: (factory) => factory(),
     } satisfies AgentContextLike)

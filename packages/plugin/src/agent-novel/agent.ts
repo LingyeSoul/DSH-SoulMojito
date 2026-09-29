@@ -97,7 +97,6 @@ export function apply(ctx: AgentContextLike): void {
 }
 
 export interface AgentContextLike {
-  agent?: { id?: string }
   systemPrompt?: {
     section?: (section: { name: string; order: number; text: string | (() => string) }) => unknown
     context?: (context: { name: string; order: number; text: string | (() => string) }) => unknown

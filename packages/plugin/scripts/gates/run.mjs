@@ -493,11 +493,15 @@ function makeReactStub() {
   return React
 }
 
-function makeClientRequire() {
+function makeClientRequire(primitives) {
   const React = makeReactStub()
-  const primitives = new Proxy({}, {
-    get: (_target, name) => callableStub(`primitives.${String(name)}`),
-  })
+  // The host's UI primitive table is the parity baseline: when it is readable the
+  // stub exposes exactly those names, so a primitive the plugin asks for but the
+  // host does not export stays undefined here just like it would in the browser.
+  // Only the unreachable-host fallback keeps the permissive stub.
+  const primitivesModule = primitives === null
+    ? new Proxy({}, { get: (_target, name) => callableStub(`primitives.${String(name)}`) })
+    : Object.fromEntries([...primitives].map((name) => [name, callableStub(`primitives.${name}`)]))
   const generic = callableStub('platform')
   const modules = {
     react: React,
@@ -511,7 +515,7 @@ function makeClientRequire() {
     '@deepseek-ai/cordis': generic,
     '@deepseek-ai/dsh-client-store': generic,
     '@deepseek-ai/dsh-client-ui-slots': generic,
-    '@deepseek-ai/dsh-client-ui-primitives': primitives,
+    '@deepseek-ai/dsh-client-ui-primitives': primitivesModule,
     '@deepseek-ai/dsh-client-ui-dockkit': generic,
   }
   return (specifier) => {
@@ -550,7 +554,7 @@ function memoryStorage() {
   }
 }
 
-function loadClientModule(code) {
+function loadClientModule(code, options = {}) {
   let handoff = null
   const sandbox = {
     AbortController,
@@ -588,11 +592,11 @@ function loadClientModule(code) {
   if (handoff === null) throw new Error('client did not hand a module to __ModuleLoader__.load')
   if (handoff.id !== PLUGIN_NAME) throw new Error(`client loader id must be '${PLUGIN_NAME}', got '${handoff.id}'`)
   if (typeof handoff.factory !== 'function') throw new Error('client loader handoff has no factory function')
-  const module = handoff.factory(makeClientRequire())
+  const module = handoff.factory(makeClientRequire(options.primitives ?? null))
   if (module === null || typeof module !== 'object' || typeof module.then === 'function') {
     throw new Error('client factory must synchronously return module exports')
   }
-  return module
+  return { module, sandbox }
 }
 
 function iterableEntries(value) {
@@ -601,11 +605,37 @@ function iterableEntries(value) {
   return [value]
 }
 
-async function checkClientExecution(code) {
+/**
+ * The client half resolves host UI atoms through @dsh-tavern/bind, which records
+ * what it could actually serve. Anything the host cannot serve is either an icon
+ * degraded to a null renderer (invisible button glyph) or a missing layout atom
+ * (slot crashes on render) — both must fail the gate, which is what keeps a host
+ * icon-set rename from shipping as a runtime React #130.
+ */
+function checkPrimitiveParity(trace) {
+  const shape = trace?.uiPrimitives
+  if (shape === undefined) {
+    return ['client bundle must report host UI primitive resolution (window.__DSH_TAVERN_BIND__.uiPrimitives)']
+  }
+  if (!Array.isArray(shape.synthesized) || !Array.isArray(shape.missing)) {
+    return ['client shape trace must expose synthesized/missing UI primitive lists']
+  }
+  const problems = []
+  if (shape.synthesized.length > 0) {
+    problems.push(`host ${PRIMITIVES_PACKAGE} cannot serve these icons: ${shape.synthesized.join(', ')} (the 0.2.0-rc.2 set is stroke-suffixed, e.g. IconSparkleRegular/IconSparkleMedium)`)
+  }
+  if (shape.missing.length > 0) {
+    problems.push(`host ${PRIMITIVES_PACKAGE} does not export: ${shape.missing.join(', ')}`)
+  }
+  return problems
+}
+
+async function checkClientExecution(code, options = {}) {
   const problems = []
   let module
+  let sandbox
   try {
-    module = loadClientModule(code)
+    ({ module, sandbox } = loadClientModule(code, options))
   } catch (error) {
     return [`client VM load failed: ${error.message}`]
   }
@@ -727,6 +757,9 @@ async function checkClientExecution(code) {
     if (agentSelected !== null) problems.push('AgentTavern preload context must keep the native composer')
     if (nativeSelected !== null) problems.push('native session must keep the native composer')
   }
+  if (options.requirePrimitiveParity === true) {
+    problems.push(...checkPrimitiveParity(sandbox.window?.__DSH_TAVERN_BIND__))
+  }
   return problems
 }
 
@@ -774,6 +807,34 @@ function locateOfficialDependencyRoot() {
     candidates.push(globalRoot, join(globalRoot, '@deepseek-ai', 'dsh', 'node_modules'))
   }
   return candidates.find(hasOfficialDependencies) ?? null
+}
+
+const PRIMITIVES_PACKAGE = '@deepseek-ai/dsh-client-ui-primitives'
+
+/**
+ * The host's runtime export names for the UI primitive table. DSH 0.2.0-rc.2
+ * renamed the whole product icon set from size suffixes (IconSparkle16) to
+ * stroke suffixes (IconSparkleRegular/Medium); a plugin that still asks for the
+ * old names destructures undefined and renders React #130 into every slot that
+ * mounts the icon, so the client VM gate compares against this table instead of
+ * handing out a stub for any name.
+ */
+function hostPrimitiveExports() {
+  const root = locateOfficialDependencyRoot()
+  if (root === null) return null
+  const entry = [
+    join(root, PRIMITIVES_PACKAGE, 'lib', 'index.js'),
+    join(root, '@deepseek-ai', 'dsh', 'node_modules', PRIMITIVES_PACKAGE, 'lib', 'index.js'),
+  ].find((candidate) => existsSync(candidate))
+  if (entry === undefined) return null
+  const names = new Set()
+  for (const block of readFileSync(entry, 'utf8').matchAll(/export\s*\{([\s\S]*?)\}/g)) {
+    for (const part of block[1].split(',')) {
+      const name = part.trim().split(/\s+as\s+/).pop()?.trim()
+      if (name) names.add(name)
+    }
+  }
+  return names.size > 0 ? names : null
 }
 
 const NODE_MOUNT_SCRIPT = String.raw`
@@ -1129,13 +1190,37 @@ const gates = [
       const goodProblems = await checkClientExecution(good)
       const failureCounts = (await Promise.all([badSlot, badLocale, badParity, badComposer].map((sample) => checkClientExecution(sample))))
         .filter((problems) => problems.length > 0).length
-      return goodProblems.length === 0 && failureCounts === 4
+      const parityShape = { uiPrimitives: { direct: 30, aliased: { IconSparkle16: 'IconSparkleRegular' }, synthesized: [], missing: [] } }
+      const parityBad = [
+        { uiPrimitives: { direct: 29, aliased: {}, synthesized: ['IconSparkle16'], missing: [] } },
+        { uiPrimitives: { direct: 29, aliased: {}, synthesized: [], missing: ['Modal'] } },
+        { uiPrimitives: { direct: 30, aliased: {} } },
+        undefined,
+      ]
+      const parityRejected = parityBad.filter((sample) => checkPrimitiveParity(sample).length > 0).length
+      const traced = good.replace(
+        'exports.apply = (ctx) => {',
+        `window.__DSH_TAVERN_BIND__ = ${JSON.stringify(parityShape)}; exports.apply = (ctx) => {`,
+      )
+      const wiringOk = (await checkClientExecution(traced, { requirePrimitiveParity: true })).length === 0
+      const wiringRejectsUntraced = (await checkClientExecution(good, { requirePrimitiveParity: true })).length > 0
+      return goodProblems.length === 0
+        && failureCounts === 4
+        && checkPrimitiveParity(parityShape).length === 0
+        && parityRejected === parityBad.length
+        && wiringOk
+        && wiringRejectsUntraced
         ? []
         : ['client VM bad samples were not rejected']
     },
-    check: () => existsSync(CLIENT_PATH)
-      ? checkClientExecution(readFileSync(CLIENT_PATH, 'utf8'))
-      : ['generated packages/plugin/client/index.js does not exist'],
+    check: () => {
+      if (!existsSync(CLIENT_PATH)) return ['generated packages/plugin/client/index.js does not exist']
+      const primitives = hostPrimitiveExports()
+      if (primitives === null) {
+        return [`${PRIMITIVES_PACKAGE} is not resolvable from the repo, NODE_PATH, or global DSH install`]
+      }
+      return checkClientExecution(readFileSync(CLIENT_PATH, 'utf8'), { primitives, requirePrimitiveParity: true })
+    },
   },
   {
     name: 'node-half-mount',
