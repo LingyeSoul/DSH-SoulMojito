@@ -1809,11 +1809,14 @@ window.__ModuleLoader__.load({
       let match = null
       for (const key of session.chat.order) {
         const node = session.chat.nodes.get(key)
-        if (node?.kind === 'context'
-          && node.data?.source?.kind === 'plugin'
-          && node.data.source.plugin === 'dsh-tavern'
-          && node.data.source.form === 'notice') {
-          match = node.data.source.tavernState === 'closed' ? null : { marker: node.key }
+        if (node?.kind !== 'context') continue
+        // v4 宿主把 plugin source 归并为 producer-owned kind（'plugin:dsh-tavern'，
+        // 与宿主 v3→v4 迁移产物一致）；v0-v3 宿主仍是 { kind: 'plugin', plugin }。
+        const source = node.data?.source
+        const isTavernSource = source?.kind === 'plugin:dsh-tavern'
+          || (source?.kind === 'plugin' && source.plugin === 'dsh-tavern')
+        if (isTavernSource && source.form === 'notice') {
+          match = source.tavernState === 'closed' ? null : { marker: node.key }
         }
       }
       return match

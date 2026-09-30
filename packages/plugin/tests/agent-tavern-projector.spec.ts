@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { AgentTavernProjector, historyImportAppends, type NativeSession } from '../src/agent-tavern/projector.js'
+import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, type NativeSession } from '../src/agent-tavern/projector.js'
 import { ChatRevisionConflictError, TavernStore } from '../../tavern-store/src/index.js'
 import type { ChatLogIR, RegexScriptIR } from '../../tavern-format/src/index.js'
 
@@ -295,6 +295,36 @@ describe('AgentTavern native event projector', () => {
     expect([...appends.filter((event) => event.type === 'turn/start'), { type: 'turn/start', data: { turn: 1 } }])
       .toEqual([{ type: 'turn/start', data: { turn: 1 } }])
     expect(chat).toEqual(original)
+  })
+
+  it('imports history with the producer-owned plugin kind on v4 sessions', () => {
+    const chat: ChatLogIR = {
+      header: { user_name: 'Alice', character_name: 'Projector Character', chat_metadata: {} },
+      messages: [{ name: 'Alice', is_user: true, is_system: false, send_date: '', mes: 'Hello.' }],
+    }
+    const appends = historyImportAppends(chat, 'session-1', [], undefined, { header: { version: 4 } })
+    for (const event of appends.filter((item) => item.type === 'user/message')) {
+      expect((event.data as { source: Record<string, unknown> }).source).toEqual({
+        kind: 'plugin:dsh-tavern',
+      })
+    }
+  })
+
+  it('recognizes both plugin-source shapes as Tavern session markers', () => {
+    // v4（0.2.0-rc.2+）：宿主迁移产物与新写入同为 'plugin:dsh-tavern'。
+    expect(isTavernSessionMarker({ kind: 'plugin:dsh-tavern' })).toBe(true)
+    expect(isTavernSessionMarker({ kind: 'plugin:dsh-tavern', form: 'notice', summary: 'Tavern closed' })).toBe(true)
+    // v0-v3：{ kind: 'plugin', plugin } 老形状（防御直读未迁移日志）。
+    expect(isTavernSessionMarker({ kind: 'plugin', plugin: 'dsh-tavern' })).toBe(true)
+    // 预加载通知不构成「会话已启动」。
+    expect(isTavernSessionMarker({ kind: 'plugin:dsh-tavern', summary: 'AgentTavern preload: 山河风雨' })).toBe(false)
+    expect(isTavernSessionMarker({ kind: 'plugin', plugin: 'dsh-tavern', summary: 'AgentTavern preload: 山河风雨' })).toBe(false)
+    // model 镜像标记与无关 source。
+    expect(isTavernSessionMarker({ kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' })).toBe(true)
+    expect(isTavernSessionMarker({ kind: 'model', provider: 'other', model: 'm' })).toBe(false)
+    expect(isTavernSessionMarker({ kind: 'plugin', plugin: 'someone-else' })).toBe(false)
+    expect(isTavernSessionMarker({ kind: 'user' })).toBe(false)
+    expect(isTavernSessionMarker(null)).toBe(false)
   })
 
   it('does not import empty, system-only or already projected history', () => {

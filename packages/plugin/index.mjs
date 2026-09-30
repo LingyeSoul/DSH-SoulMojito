@@ -7190,6 +7190,22 @@ function readSessionEvents(session) {
 function sessionEvents(session) {
   return readSessionEvents(session) ?? [];
 }
+var TAVERN_PLUGIN_SOURCE_KIND = "plugin:dsh-tavern";
+function hostPluginMessageSource(session, members) {
+  const version = session?.header?.version;
+  const kind = typeof version === "number" && Number.isSafeInteger(version) && version >= 4 ? TAVERN_PLUGIN_SOURCE_KIND : "plugin";
+  return {
+    ...kind === "plugin" ? { plugin: "dsh-tavern" } : {},
+    ...members,
+    kind
+  };
+}
+function isHostPluginMessageSource(source) {
+  if (typeof source !== "object" || source === null) return false;
+  const record = source;
+  if (record.kind === TAVERN_PLUGIN_SOURCE_KIND) return true;
+  return record.kind === "plugin" && record.plugin === "dsh-tavern";
+}
 
 // packages/bind/src/host-shape.ts
 function probeSessionShape(session) {
@@ -7911,7 +7927,7 @@ var NovelDriver = class _NovelDriver {
       expectedRequirementSequence: requirementWatermark(briefSnapshot.requirements)
     });
     if (state.queued.has(intent.intentId)) return;
-    const message = buildNoticeMessage(novelId, intent.intentId, briefSnapshot, work, unitId);
+    const message = buildNoticeMessage(novelId, intent.intentId, briefSnapshot, work, unitId, agent.session);
     try {
       await this.deliverFollowup(agent, novelId, intent.intentId, message, briefSnapshot.config.budgets.externalRetry);
     } catch (error) {
@@ -8249,7 +8265,7 @@ function workInstruction(snapshot2, work, unitId) {
       return `All chapters are complete (\xA77.3): run the completion checks and call novel_finish { expectedRevision: '${snapshot2.revision}', basis }. The store verifies every guard; self-reported completion is never accepted.`;
   }
 }
-function buildNoticeMessage(novelId, intentId, snapshot2, work, unitId) {
+function buildNoticeMessage(novelId, intentId, snapshot2, work, unitId, session) {
   const text = [
     renderWorkBrief(snapshot2, work),
     ...unitId !== null ? [`Prepared writing unit for this brief: ${unitId}.`] : [],
@@ -8262,7 +8278,7 @@ function buildNoticeMessage(novelId, intentId, snapshot2, work, unitId) {
     id: `novel-notice-${intentId}`,
     role: "user",
     content: [{ type: "text", text }],
-    source: { kind: "plugin", plugin: "dsh-tavern", form: "notice", summary: `AgentNovel work notice (novel ${novelId}, intent ${intentId})` }
+    source: hostPluginMessageSource(session, { form: "notice", summary: `AgentNovel work notice (novel ${novelId}, intent ${intentId})` })
   };
 }
 function messageOf2(error) {
@@ -8749,20 +8765,20 @@ function reminderDue(input, everyTurns, latest, hasUserTurn) {
   if (!hasUserTurn) return "opening";
   return anchorDue(turn, input.step, everyTurns) ? "periodic" : void 0;
 }
-function createAnchorMessage() {
+function createAnchorMessage(session) {
   return {
     id: randomUUID2(),
     role: "user",
     content: [{ type: "text", text: ANCHOR_TEXT }],
-    source: { kind: "plugin", plugin: "dsh-tavern" }
+    source: hostPluginMessageSource(session)
   };
 }
-function createOpeningMessage() {
+function createOpeningMessage(session) {
   return {
     id: randomUUID2(),
     role: "user",
     content: [{ type: "text", text: OPENING_TEXT }],
-    source: { kind: "plugin", plugin: "dsh-tavern" }
+    source: hostPluginMessageSource(session)
   };
 }
 function hasRealUserTurn(events) {
@@ -8834,7 +8850,7 @@ function registerAgentTavernAnchor(ctx, options = {}) {
     if (typeof sessionId !== "string" || !await isTavernSession(sessionId)) return decision;
     return {
       kind: "enter",
-      messages: [...decision.messages ?? [], kind === "opening" ? createOpeningMessage() : createAnchorMessage()]
+      messages: [...decision.messages ?? [], kind === "opening" ? createOpeningMessage(payload.agent?.session) : createAnchorMessage(payload.agent?.session)]
     };
   }, { prepend: true });
 }
@@ -9118,14 +9134,14 @@ function isTavernSessionMarker(source) {
   if (typeof source !== "object" || source === null) return false;
   const record = source;
   if (record.kind === "model") return record.provider === "dsh-tavern" && record.model === "agent-tavern-import";
-  if (record.kind !== "plugin" || record.plugin !== "dsh-tavern") return false;
+  if (!isHostPluginMessageSource(record)) return false;
   return !(typeof record.summary === "string" && record.summary.startsWith("AgentTavern preload: "));
 }
 function isTavernMirrorSource(source) {
   return isTavernSessionMarker(source);
 }
 var TAVERN_MIRROR_MODEL_SOURCE = { provider: "dsh-tavern", model: "agent-tavern-import" };
-function historyImportAppends(chat, sessionId, scripts, expand) {
+function historyImportAppends(chat, sessionId, scripts, expand, session) {
   const promptScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly);
   const promptView = (message, index) => {
     const transformed = promptScripts.length === 0 ? message.mes : applyRegexScripts(message.mes, promptScripts, RegexPlacement.AI_OUTPUT, {}, { depth: chat.messages.length - 1 - index });
@@ -9144,7 +9160,7 @@ function historyImportAppends(chat, sessionId, scripts, expand) {
           id: randomUUID3(),
           role: "user",
           content: [{ type: "text", text: promptView(message, index) }],
-          source: { kind: "plugin", plugin: "dsh-tavern" }
+          source: hostPluginMessageSource(session)
         },
         surfaceOp: "append"
       });
@@ -9326,12 +9342,10 @@ function apply(ctx, config = {}) {
         agent.session.append("user/message", createMessage({
           role: "user",
           content: [{ type: "text", text: "Tavern roleplay mode closed." }],
-          source: {
-            kind: "plugin",
-            plugin: "dsh-tavern",
+          source: hostPluginMessageSource(agent.session, {
             form: "notice",
             summary: "Tavern closed"
-          }
+          })
         }), { surfaceOp: "append" });
         return { kind: "success", text: "Tavern closed" };
       }
@@ -9364,7 +9378,7 @@ function apply(ctx, config = {}) {
         }
         const character = parsed.group !== true && (initializeAgentTavern || shouldPreloadAssets) ? await db.getCharacter(parsed.character) : void 0;
         if (initializeAgentTavern && parsed.group !== true) {
-          historyImport = sessionStarted || historyImported ? void 0 : historyImportAppends(chat, agent.id, character ? collectRegexScripts(currentState, character) : [], tavernMacroExpand(currentState, parsed.character, character));
+          historyImport = sessionStarted || historyImported ? void 0 : historyImportAppends(chat, agent.id, character ? collectRegexScripts(currentState, character) : [], tavernMacroExpand(currentState, parsed.character, character), agent.session);
         }
         if (shouldPreloadAssets) {
           if (typeof agent.inject !== "function") {
@@ -9391,12 +9405,10 @@ function apply(ctx, config = {}) {
         agent.inject(createMessage({
           role: "user",
           content: [{ type: "text", text: preloadSnapshot }],
-          source: {
-            kind: "plugin",
-            plugin: "dsh-tavern",
+          source: hostPluginMessageSource(agent.session, {
             form: "notice",
             summary: `AgentTavern preload: ${parsed.character}`
-          }
+          })
         }));
       }
       if (historyImport !== void 0) {
@@ -9414,7 +9426,7 @@ function apply(ctx, config = {}) {
         agent.session.append("user/message", createMessage({
           role: "user",
           content: [{ type: "text", text: `Tavern roleplay chat for ${parsed.character}.` }],
-          source: { kind: "plugin", plugin: "dsh-tavern", form: "notice", summary: `Tavern: ${parsed.character}` }
+          source: hostPluginMessageSource(agent.session, { form: "notice", summary: `Tavern: ${parsed.character}` })
         }), { surfaceOp: "append" });
       }
       return { kind: "success", text: `Tavern: ${parsed.character}` };
@@ -10809,6 +10821,9 @@ async function runGeneration(ctx, db, options) {
     const llmMessages = requestMessages.map((m) => createMessage({
       role: m.role,
       content: [{ type: "text", text: m.content }],
+      // 仅进 ctx.llm.stream 的请求消息，不落会话日志（该调用不带 sessionId），
+      // dsh-llm 对 source 不校验；v0 形状在此保留——runGeneration 作用域内没有
+      // 会话对象可供格式探测。
       source: m.role === "assistant" ? { kind: "model", provider, model } : m.role === "user" ? { kind: "user" } : { kind: "plugin", plugin: "dsh-tavern" }
     }));
     for await (const chunk of ctx.llm.stream({

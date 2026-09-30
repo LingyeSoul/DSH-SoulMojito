@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { ChatRevisionConflictError, type TavernSessionBinding, type TavernState } from '../../../tavern-store/src/index.js'
 import { RegexPlacement, type CharacterCardIR, type ChatLogIR, type ChatMessage, type RegexScriptIR } from '../../../tavern-format/src/index.js'
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
-import { sessionEvents } from '../../../bind/src/index.js'
+import { hostPluginMessageSource, isHostPluginMessageSource, sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
 import { collectRegexScripts } from '../tavern-assets.js'
 
 export interface NativeSessionEvent {
@@ -248,7 +248,7 @@ export function isTavernSessionMarker(source: unknown): boolean {
   if (typeof source !== 'object' || source === null) return false
   const record = source as Record<string, unknown>
   if (record.kind === 'model') return record.provider === 'dsh-tavern' && record.model === 'agent-tavern-import'
-  if (record.kind !== 'plugin' || record.plugin !== 'dsh-tavern') return false
+  if (!isHostPluginMessageSource(record)) return false
   return !(typeof record.summary === 'string' && record.summary.startsWith('AgentTavern preload: '))
 }
 
@@ -263,9 +263,10 @@ const TAVERN_MIRROR_MODEL_SOURCE = { provider: 'dsh-tavern', model: 'agent-taver
 /**
  * Import saved messages as session-level surface events without creating loop
  * boundaries. The native AgentLoop then owns the first live turn and starts it
- * at one. Model sources satisfy host validation; plugin markers prevent
- * projection back into the saved chat. Prompt-only regex and macros never
- * alter stored text.
+ * at one. Model sources satisfy host validation; plugin markers (shape branched
+ * by session format version, see hostPluginMessageSource) prevent projection
+ * back into the saved chat. Prompt-only regex and macros never alter stored
+ * text.
  *
  * Imported assistant messages carry explicit `turn: 0` and per-import step
  * numbers: the client conversation assembler publishes assistant messages at
@@ -282,6 +283,7 @@ export function historyImportAppends(
   sessionId: string,
   scripts: RegexScriptIR[],
   expand: ((text: string) => string) | undefined,
+  session?: HostSessionLog,
 ): SessionImportAppend[] {
   const promptScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly)
   const promptView = (message: ChatMessage, index: number): string => {
@@ -305,7 +307,7 @@ export function historyImportAppends(
           id: randomUUID(),
           role: 'user',
           content: [{ type: 'text', text: promptView(message, index) }],
-          source: { kind: 'plugin', plugin: 'dsh-tavern' },
+          source: hostPluginMessageSource(session),
         },
         surfaceOp: 'append',
       })

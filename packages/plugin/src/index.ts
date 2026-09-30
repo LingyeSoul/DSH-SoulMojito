@@ -42,7 +42,7 @@ import {
   type TavernModelSelection,
   type WriterMode,
 } from '../../tavern-store/src/index.js'
-import { describeHostShape, readSessionEvents, sessionEvents, type HostSessionLog } from '../../bind/src/index.js'
+import { describeHostShape, hostPluginMessageSource, readSessionEvents, sessionEvents, type HostSessionLog } from '../../bind/src/index.js'
 import {
   AGENT_TAVERN_PRESET_ID,
   bootstrapAgentTavernCapabilities,
@@ -189,12 +189,10 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
         agent.session.append('user/message', createMessage({
           role: 'user',
           content: [{ type: 'text', text: 'Tavern roleplay mode closed.' }],
-          source: {
-            kind: 'plugin',
-            plugin: 'dsh-tavern',
+          source: hostPluginMessageSource(agent.session, {
             form: 'notice',
             summary: 'Tavern closed',
-          },
+          }),
         }), { surfaceOp: 'append' })
         return { kind: 'success', text: 'Tavern closed' }
       }
@@ -248,7 +246,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
           // 激活完成）时历史已在场，跳过导入防重复。
           historyImport = sessionStarted || historyImported
             ? undefined
-            : historyImportAppends(chat, agent.id, character ? collectRegexScripts(currentState, character) : [], tavernMacroExpand(currentState, parsed.character, character))
+            : historyImportAppends(chat, agent.id, character ? collectRegexScripts(currentState, character) : [], tavernMacroExpand(currentState, parsed.character, character), agent.session)
         }
         if (shouldPreloadAssets) {
           if (typeof agent.inject !== 'function') {
@@ -276,12 +274,10 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
         agent.inject(createMessage({
           role: 'user',
           content: [{ type: 'text', text: preloadSnapshot }],
-          source: {
-            kind: 'plugin',
-            plugin: 'dsh-tavern',
+          source: hostPluginMessageSource(agent.session, {
             form: 'notice',
             summary: `AgentTavern preload: ${parsed.character}`,
-          },
+          }),
         }))
       }
       if (historyImport !== undefined) {
@@ -300,7 +296,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
         agent.session.append('user/message', createMessage({
           role: 'user',
           content: [{ type: 'text', text: `Tavern roleplay chat for ${parsed.character}.` }],
-          source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: `Tavern: ${parsed.character}` },
+          source: hostPluginMessageSource(agent.session, { form: 'notice', summary: `Tavern: ${parsed.character}` }),
         }), { surfaceOp: 'append' })
       }
       return { kind: 'success', text: `Tavern: ${parsed.character}` }
@@ -2023,6 +2019,9 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   const llmMessages = requestMessages.map((m) => createMessage({
     role: m.role,
     content: [{ type: 'text', text: m.content }],
+    // 仅进 ctx.llm.stream 的请求消息，不落会话日志（该调用不带 sessionId），
+    // dsh-llm 对 source 不校验；v0 形状在此保留——runGeneration 作用域内没有
+    // 会话对象可供格式探测。
     source: m.role === 'assistant' ? { kind: 'model', provider, model } : m.role === 'user' ? { kind: 'user' } : { kind: 'plugin', plugin: 'dsh-tavern' },
   }))
   for await (const chunk of ctx.llm.stream({

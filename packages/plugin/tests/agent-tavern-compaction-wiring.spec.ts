@@ -18,7 +18,8 @@ import { TavernStore } from '../../tavern-store/src/index.js'
 
 const mockState = vi.hoisted(() => ({ basicCalls: [] as Array<{ agent: unknown; trigger: string }> }))
 
-vi.mock('../../bind/src/index.js', () => {
+vi.mock('../../bind/src/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../bind/src/index.js')>()
   class LlmError extends Error {
     code: string
     constructor(message: string, code: string) {
@@ -67,6 +68,7 @@ vi.mock('../../bind/src/index.js', () => {
       }
       throw new Error(`unexpected host package import: ${name}`)
     },
+    hostPluginMessageSource: actual.hostPluginMessageSource,
   }
 })
 

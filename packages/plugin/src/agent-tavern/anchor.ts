@@ -22,7 +22,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { TavernStore } from '../../../tavern-store/src/index.js'
-import { sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
+import { hostPluginMessageSource, sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
 
 /** 宿主会话形状经 host-session 兼容层读取（0.1.2 无 events 数组属性）。 */
 type AnchorSessionLike = HostSessionLog & { id?: string }
@@ -52,8 +52,9 @@ export const OPENING_TEXT = [
 ].join('\n')
 
 /** 提醒消息按稳定正文标签识别（ANCHOR_TEXT / OPENING_TEXT 全文相等）；
- * released v0 Session disposition 禁止 plugin source 携带自定义 form 值或
- * turn 等额外成员，latestReminderTurn 改从事件流的 turn/start 推导轮数。 */
+ * source 形状按会话格式版本分支（见 bind 的 hostPluginMessageSource），
+ * 自定义 form 值或 turn 等额外成员在 v0/v4 disposition 下都不合法，
+ * latestReminderTurn 改从事件流的 turn/start 推导轮数。 */
 
 /** 纯算术判定：仅在 turn 周期点的 step 1（用户消息进入的那一步）触发。 */
 export function anchorDue(turn: unknown, step: unknown, everyTurns: number): boolean {
@@ -80,31 +81,31 @@ export function reminderDue(
   return anchorDue(turn, input.step, everyTurns) ? 'periodic' : undefined
 }
 
-export function createAnchorMessage(): {
+export function createAnchorMessage(session?: HostSessionLog): {
   id: string
   role: 'user'
   content: Array<{ type: 'text'; text: string }>
-  source: { kind: 'plugin'; plugin: 'dsh-tavern' }
+  source: Record<string, unknown>
 } {
   return {
     id: randomUUID(),
     role: 'user',
     content: [{ type: 'text', text: ANCHOR_TEXT }],
-    source: { kind: 'plugin', plugin: 'dsh-tavern' },
+    source: hostPluginMessageSource(session),
   }
 }
 
-export function createOpeningMessage(): {
+export function createOpeningMessage(session?: HostSessionLog): {
   id: string
   role: 'user'
   content: Array<{ type: 'text'; text: string }>
-  source: { kind: 'plugin'; plugin: 'dsh-tavern' }
+  source: Record<string, unknown>
 } {
   return {
     id: randomUUID(),
     role: 'user',
     content: [{ type: 'text', text: OPENING_TEXT }],
-    source: { kind: 'plugin', plugin: 'dsh-tavern' },
+    source: hostPluginMessageSource(session),
   }
 }
 
@@ -218,7 +219,9 @@ export function registerAgentTavernAnchor(ctx: {
     if (typeof sessionId !== 'string' || !(await isTavernSession(sessionId))) return decision
     return {
       kind: 'enter',
-      messages: [...decision.messages ?? [], kind === 'opening' ? createOpeningMessage() : createAnchorMessage()],
+      messages: [...decision.messages ?? [], kind === 'opening'
+        ? createOpeningMessage(payload.agent?.session)
+        : createAnchorMessage(payload.agent?.session)],
     }
   }, { prepend: true })
 }

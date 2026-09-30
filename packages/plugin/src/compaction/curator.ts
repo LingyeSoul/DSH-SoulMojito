@@ -20,7 +20,7 @@
  * 路径（gates 的 agent-tavern-isolation 因此不扫描本目录）；摘要调用与
  * 宿主 basic 的默认 summarizer 同为 ctx.llm.stream 辅助调用。
  */
-import { importHostPackage } from '../../../bind/src/index.js'
+import { hostPluginMessageSource, importHostPackage } from '../../../bind/src/index.js'
 import { dshHomePath } from '../dsh-home.js'
 import { TavernStore } from '../../../tavern-store/src/index.js'
 import {
@@ -276,7 +276,7 @@ async function summarizeStoryCheckpoint(
     ...input.messages,
     createUserMessage({
       content: [{ type: 'text', text: RP_COMPACTION_INSTRUCTION }],
-      source: { kind: 'plugin', plugin: 'dsh-tavern' },
+      source: hostPluginMessageSource(agent.session),
     }),
   ]
   const maxTokens = curator.curatorMaxTokens

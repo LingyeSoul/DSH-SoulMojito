@@ -185,6 +185,17 @@ describe('AgentTavern anchor pre-step wiring', () => {
     expect(decision.messages[1]).toMatchObject({ source: { kind: 'plugin', plugin: 'dsh-tavern' }, role: 'user', content: [{ type: 'text', text: OPENING_TEXT }] })
   })
 
+  it('carries the producer-owned source kind on v4 sessions (0.2.0-rc.2 format)', async () => {
+    const { run } = setupListener({ everyTurns: 5 })
+    const decision = await run({
+      agent: { session: { id: 's1', header: { version: 4 }, events: [{ type: 'user/message', data: { source: { kind: 'plugin:dsh-tavern' } } }] } },
+      turn: 2,
+      step: 1,
+      signal: { aborted: false },
+    }) as { messages: Array<{ source?: { kind?: string }; content?: Array<{ text?: string }> }> }
+    expect(decision.messages[1]).toMatchObject({ source: { kind: 'plugin:dsh-tavern' }, content: [{ type: 'text', text: OPENING_TEXT }] })
+  })
+
   it('subsumes the periodic anchor when the opening turn is also a multiple', async () => {
     const { run } = setupListener({ everyTurns: 5 })
     const decision = await run({

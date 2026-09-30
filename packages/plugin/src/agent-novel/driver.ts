@@ -34,6 +34,7 @@ import {
   type NovelStore,
   type TavernStore,
 } from '../../../tavern-store/src/index.js'
+import { hostPluginMessageSource, type HostSessionLog } from '../../../bind/src/index.js'
 import { nextWork, renderWorkBrief, type NovelWork } from './outline.js'
 import { drainToolOutputBytes, drainWriterRunUsage } from './usage.js'
 
@@ -406,7 +407,7 @@ export class NovelDriver {
     })
     if (state.queued.has(intent.intentId)) return
 
-    const message = buildNoticeMessage(novelId, intent.intentId, briefSnapshot, work, unitId)
+    const message = buildNoticeMessage(novelId, intent.intentId, briefSnapshot, work, unitId, agent.session)
     try {
       await this.deliverFollowup(agent, novelId, intent.intentId, message, briefSnapshot.config.budgets.externalRetry)
     } catch (error) {
@@ -808,9 +809,11 @@ function workInstruction(snapshot: NovelSnapshot, work: NovelWork, unitId: strin
 
 /** Driver notice message. The plugin source keeps the requirements receive
  *  barrier from counting it as an author message (§9.1); novel and intent
- *  identity ride in the message id and the summary because the released v0
- *  Session dispositions admit no other plugin-source members. */
-function buildNoticeMessage(novelId: string, intentId: string, snapshot: NovelSnapshot, work: NovelWork, unitId: string | null): unknown {
+ *  identity ride in the message id and the summary because the v0/v4 Session
+ *  dispositions admit no plugin-source members beyond {kind, plugin, form,
+ *  sections, summary}（kind 形状按会话格式版本分支，见 bind 的
+ *  hostPluginMessageSource）. */
+function buildNoticeMessage(novelId: string, intentId: string, snapshot: NovelSnapshot, work: NovelWork, unitId: string | null, session?: HostSessionLog): unknown {
   const text = [
     renderWorkBrief(snapshot, work),
     ...(unitId !== null ? [`Prepared writing unit for this brief: ${unitId}.`] : []),
@@ -823,7 +826,7 @@ function buildNoticeMessage(novelId: string, intentId: string, snapshot: NovelSn
     id: `novel-notice-${intentId}`,
     role: 'user',
     content: [{ type: 'text', text }],
-    source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: `AgentNovel work notice (novel ${novelId}, intent ${intentId})` },
+    source: hostPluginMessageSource(session, { form: 'notice', summary: `AgentNovel work notice (novel ${novelId}, intent ${intentId})` }),
   }
 }
 
