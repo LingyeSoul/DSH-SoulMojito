@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { connectHostWorkspace, createClientShapeTrace } from '../src/client/host-probe.js'
+import { connectHostWorkspace, createClientShapeTrace, openHostSession } from '../src/client/host-probe.js'
 
 function uiWorkspaceHost() {
   const calls: string[] = []
@@ -21,6 +21,31 @@ function legacyWorkspacesHost() {
       get: () => undefined,
       workspaces: {
         connectWorkspace: (id: string) => { calls.push(`workspaces:${id}`); return { via: 'workspaces', id } },
+      },
+    },
+  }
+}
+
+function openSessionHost() {
+  const calls: string[] = []
+  return {
+    calls,
+    ctx: {
+      get: (serviceId: string) => serviceId === 'uiWorkspace'
+        ? { openSession: (id: string) => { calls.push(`uiWorkspace:${id}`) } }
+        : undefined,
+    },
+  }
+}
+
+function legacySessionsOpenHost() {
+  const calls: string[] = []
+  return {
+    calls,
+    ctx: {
+      get: () => undefined,
+      sessions: {
+        open: (id: string) => { calls.push(`sessions:${id}`) },
       },
     },
   }
@@ -81,5 +106,46 @@ describe('createClientShapeTrace', () => {
     const trace = createClientShapeTrace()
     expect(trace.connectPath).toBeUndefined()
     expect(trace.connectCalls).toBe(0)
+    expect(trace.openSessionPath).toBeUndefined()
+    expect(trace.openSessionCalls).toBe(0)
+  })
+})
+
+describe('openHostSession', () => {
+  it('prefers the 0.2.0 uiWorkspace.openSession face', () => {
+    const { ctx, calls } = openSessionHost()
+    const trace = createClientShapeTrace()
+    openHostSession(ctx, 's-1', trace)
+    expect(calls).toEqual(['uiWorkspace:s-1'])
+    expect(trace.openSessionPath).toBe('uiWorkspace')
+    expect(trace.openSessionCalls).toBe(1)
+  })
+
+  it('falls back to the legacy sessions.open face when uiWorkspace is absent', () => {
+    const { ctx, calls } = legacySessionsOpenHost()
+    const trace = createClientShapeTrace()
+    openHostSession(ctx, 's-2', trace)
+    expect(calls).toEqual(['sessions:s-2'])
+    expect(trace.openSessionPath).toBe('sessions')
+  })
+
+  it('throws with a semantic message and records "unavailable" when no face exists', () => {
+    const trace = createClientShapeTrace()
+    expect(() => openHostSession({}, 's-3', trace)).toThrow('no session open face')
+    expect(trace.openSessionPath).toBe('unavailable')
+    expect(trace.openSessionCalls).toBe(1)
+  })
+
+  it('skips the sessions fallback on hosts whose sessions service has no open method', () => {
+    const trace = createClientShapeTrace()
+    const ctx = { get: () => undefined, sessions: { list: {} } }
+    expect(() => openHostSession(ctx, 's-4', trace)).toThrow('no session open face')
+    expect(trace.openSessionPath).toBe('unavailable')
+  })
+
+  it('works without a trace', () => {
+    const { ctx, calls } = openSessionHost()
+    expect(() => openHostSession(ctx, 's-5')).not.toThrow()
+    expect(calls).toEqual(['uiWorkspace:s-5'])
   })
 })

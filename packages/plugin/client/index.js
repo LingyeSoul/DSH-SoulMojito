@@ -26,6 +26,7 @@ window.__ModuleLoader__.load({
       __export(host_probe_exports, {
         connectHostWorkspace: () => connectHostWorkspace,
         createClientShapeTrace: () => createClientShapeTrace,
+        openHostSession: () => openHostSession,
         resolveUiPrimitives: () => resolveUiPrimitives
       });
 
@@ -86,7 +87,7 @@ window.__ModuleLoader__.load({
 
       // packages/bind/src/client/host-probe.ts
       function createClientShapeTrace() {
-        return { connectCalls: 0 };
+        return { connectCalls: 0, openSessionCalls: 0 };
       }
       function connectHostWorkspace(ctx, workspaceId, trace) {
         const uiWorkspace = ctx.get?.("uiWorkspace");
@@ -109,6 +110,30 @@ window.__ModuleLoader__.load({
           trace.connectCalls += 1;
         }
         throw new Error("no workspace connect face on this host (uiWorkspace/workspaces both unavailable)");
+      }
+      function openHostSession(ctx, sessionId, trace) {
+        const uiWorkspace = ctx.get?.("uiWorkspace");
+        if (typeof uiWorkspace?.openSession === "function") {
+          if (trace) {
+            trace.openSessionPath = "uiWorkspace";
+            trace.openSessionCalls += 1;
+          }
+          uiWorkspace.openSession(sessionId);
+          return;
+        }
+        if (typeof ctx.sessions?.open === "function") {
+          if (trace) {
+            trace.openSessionPath = "sessions";
+            trace.openSessionCalls += 1;
+          }
+          ctx.sessions.open(sessionId);
+          return;
+        }
+        if (trace) {
+          trace.openSessionPath = "unavailable";
+          trace.openSessionCalls += 1;
+        }
+        throw new Error("no session open face on this host (uiWorkspace.openSession/sessions.open both unavailable)");
       }
       return __toCommonJS(host_probe_exports);
     })();
@@ -1387,6 +1412,13 @@ window.__ModuleLoader__.load({
       return DshBindClient.connectHostWorkspace(ctx, workspaceId, clientShapeTrace)
     }
 
+    function openSessionView(ctx, sessionId) {
+      // 0.2.0 宿主把「会话进入主视图」从 sessions.open 挪到 uiWorkspace
+      // .openSession（retain mainView + 替换 selection）；双面回退与轨迹记录
+      // 同样集中在 @dsh-tavern/bind 的 client 探测模块。
+      return DshBindClient.openHostSession(ctx, sessionId, clientShapeTrace)
+    }
+
     function bindingArchitecture(binding) {
       // agent-novel sessions keep the native composer and conversation view;
       // classifying them as 'st' would force the ST Tavern tab and composer.
@@ -1504,7 +1536,7 @@ window.__ModuleLoader__.load({
           void repairBinding(ctx, existing[0], existing[1])
         }
         reserveTavernSession(ctx, existing[0])
-        ctx.sessions.open(existing[0])
+        openSessionView(ctx, existing[0])
         if (bindingArchitecture(existing[1]) === 'st') clickTavernTab(0)
         return existing[0]
       }
@@ -1541,7 +1573,7 @@ window.__ModuleLoader__.load({
       const label = sessionLabel(character, chatId, group, policy.architecture)
       await binding.session.rename(label).catch(() => {})
       await refreshBootstrap()
-      ctx.sessions.open(sessionId)
+      openSessionView(ctx, sessionId)
       update({ navigationStatus: '' })
       if (policy.architecture === 'st') clickTavernTab(0)
       return sessionId
@@ -1593,7 +1625,7 @@ window.__ModuleLoader__.load({
             && sessions.byId[sessionId])
         if (existing) {
           reserveTavernSession(ctx, existing[0])
-          ctx.sessions.open(existing[0])
+          openSessionView(ctx, existing[0])
           return existing[0]
         }
         const workspace = await ensureTavernWorkspace(ctx)
@@ -1609,7 +1641,7 @@ window.__ModuleLoader__.load({
         const bound = await waitForNovelBinding(sessionId, novel.novelId)
         if (!bound) throw new Error(translate('novel.bindTimeout'))
         await binding.session.rename(novelSessionLabel(novel.title)).catch(() => {})
-        ctx.sessions.open(sessionId)
+        openSessionView(ctx, sessionId)
         return sessionId
       } finally {
         update({ navigationStatus: '' })

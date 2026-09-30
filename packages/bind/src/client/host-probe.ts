@@ -16,16 +16,24 @@ export interface ClientWorkspaceContext {
   workspaces?: {
     connectWorkspace?: (workspaceId: string) => unknown
   }
+  sessions?: {
+    open?: (sessionId: string) => unknown
+  }
   [key: string]: unknown
 }
 
 /** 本次连接命中的绑定路径：uiWorkspace 为 0.1.2 服务面，workspaces 为 rc.6 回退。 */
 export type ClientProbePath = 'uiWorkspace' | 'workspaces' | 'unavailable'
 
+/** 会话打开命中的绑定路径：uiWorkspace.openSession 为 0.2.0 服务面，sessions.open 为旧宿主回退。 */
+export type ClientOpenSessionPath = 'uiWorkspace' | 'sessions' | 'unavailable'
+
 /** 连接探测轨迹；client half 持有一份并在诊断输出里上报。 */
 export interface ClientShapeTrace {
   connectPath?: ClientProbePath
   connectCalls: number
+  openSessionPath?: ClientOpenSessionPath
+  openSessionCalls: number
   /** 宿主 UI 原子的解析结果；见 ui-primitives.ts。 */
   uiPrimitives?: UiPrimitiveShapeTrace
 }
@@ -40,7 +48,7 @@ export type {
 } from './ui-primitives.js'
 
 export function createClientShapeTrace(): ClientShapeTrace {
-  return { connectCalls: 0 }
+  return { connectCalls: 0, openSessionCalls: 0 }
 }
 
 export function connectHostWorkspace(
@@ -70,4 +78,40 @@ export function connectHostWorkspace(
     trace.connectCalls += 1
   }
   throw new Error('no workspace connect face on this host (uiWorkspace/workspaces both unavailable)')
+}
+
+/**
+ * 把一个会话打开到宿主主视图。DSH 0.2.0-rc.2 起「打开会话」不在 sessions
+ * 控制器面上（ClientSessions 只剩 retain/using/create/fork/binding/list），
+ * 主视图切换由 UiWorkspaceService.openSession 负责（retain source=mainView +
+ * 替换 selection）；旧宿主的 sessions.open 保留为回退，行为与 connectHostWorkspace
+ * 的双面探测同构。
+ */
+export function openHostSession(
+  ctx: ClientWorkspaceContext,
+  sessionId: string,
+  trace?: ClientShapeTrace,
+): void {
+  const uiWorkspace = ctx.get?.('uiWorkspace') as { openSession?: (target: string) => unknown } | undefined
+  if (typeof uiWorkspace?.openSession === 'function') {
+    if (trace) {
+      trace.openSessionPath = 'uiWorkspace'
+      trace.openSessionCalls += 1
+    }
+    uiWorkspace.openSession(sessionId)
+    return
+  }
+  if (typeof ctx.sessions?.open === 'function') {
+    if (trace) {
+      trace.openSessionPath = 'sessions'
+      trace.openSessionCalls += 1
+    }
+    ctx.sessions.open(sessionId)
+    return
+  }
+  if (trace) {
+    trace.openSessionPath = 'unavailable'
+    trace.openSessionCalls += 1
+  }
+  throw new Error('no session open face on this host (uiWorkspace.openSession/sessions.open both unavailable)')
 }
