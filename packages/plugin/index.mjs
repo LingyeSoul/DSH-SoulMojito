@@ -2826,100 +2826,6 @@ function numOr2(v, fallback) {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
 
-// packages/tavern-pipeline/src/textcompletion.ts
-function assembleTextCompletion(input, deps) {
-  const warnings = [];
-  const { expand, countTokens } = deps;
-  const maxContext = input.maxContextTokens ?? 4096;
-  const maxResponse = input.maxResponseTokens ?? 400;
-  const instruct = input.instruct;
-  const namesMode = instruct?.namesBehavior ?? 0;
-  const joinBlocks = (blocks) => blocks.filter((block) => block.trim() !== "").join("\n");
-  const values = {
-    char: input.speakerName,
-    user: input.userName,
-    system: expand(input.systemPrompt ?? input.speakerFields.systemPrompt ?? ""),
-    description: "",
-    personality: "",
-    scenario: "",
-    persona: input.personaDescription ?? "",
-    wiBefore: joinBlocks(input.worldInfoBefore),
-    wiAfter: joinBlocks(input.worldInfoAfter)
-  };
-  for (const field of ["description", "personality", "scenario"]) {
-    const raw = input.speakerFields[field];
-    if (typeof raw === "string" && raw.trim() !== "") values[field] = expand(raw);
-  }
-  const story = renderStoryString(input.context.storyString, values, expand).trim();
-  const storyTokens = countTokens(story);
-  const budget = maxContext - maxResponse - storyTokens;
-  const usable = input.messages.filter((m) => !m.is_system && typeof m.mes === "string" && m.mes.length > 0);
-  const formatted = [];
-  for (const message of usable) {
-    formatted.push({ text: formatMessage(message, input, namesMode), tokens: 0 });
-  }
-  for (const item of formatted) item.tokens = countTokens(item.text);
-  let used = 0;
-  let dropped = 0;
-  const kept = [];
-  for (let i = formatted.length - 1; i >= 0; i--) {
-    const item = formatted[i];
-    if (used + item.tokens > budget && kept.length > 0) {
-      dropped = i + 1;
-      break;
-    }
-    used += item.tokens;
-    kept.unshift(item.text);
-  }
-  if (dropped > 0) warnings.push(`context budget exceeded: dropped ${dropped} oldest message(s)`);
-  const history = [...kept];
-  for (const injection of [...input.depthInjections ?? []].sort((a, b) => b.depth - a.depth)) {
-    const segment = instruct ? `${instruct.systemSequence}${expand(injection.text)}${instruct.systemSequenceEnd}` : expand(injection.text);
-    history.splice(Math.max(0, history.length - injection.depth), 0, segment);
-  }
-  const historyText = instruct ? history.join("") : joinBlocks(history);
-  const prompt = joinBlocks([story, historyText]);
-  return {
-    prompt: prompt.endsWith("\n") ? prompt : `${prompt}
-`,
-    stats: {
-      promptTokens: storyTokens + used,
-      historyKept: kept.length,
-      historyDropped: dropped
-    },
-    warnings
-  };
-}
-function formatMessage(message, input, namesMode) {
-  const instruct = input.instruct;
-  if (instruct === void 0) {
-    return message.mes;
-  }
-  const isUser = message.is_user;
-  const prefix = isUser ? instruct.inputPrefix : instruct.outputPrefix;
-  const suffix = isUser ? instruct.inputSuffix : instruct.outputSuffix;
-  const name2 = message.name || (isUser ? input.userName : input.speakerName);
-  const includeName = namesMode === 1 || namesMode === 0 && isUser;
-  return `${prefix}${includeName ? `${name2}: ` : ""}${message.mes}${suffix}`;
-}
-function renderStoryString(template, values, expand) {
-  let text = template;
-  const ifPattern = /\{\{#if\s+(\w+)\s*\}\}([\s\S]*?)(?:\{\{else\}\}([\s\S]*?))?\{\{\/if\}\}/;
-  let previous;
-  do {
-    previous = text;
-    text = text.replace(ifPattern, (_match, field, thenBranch, elseBranch) => {
-      const value = values[field];
-      return value !== void 0 && value.trim() !== "" ? thenBranch : elseBranch ?? "";
-    });
-  } while (text !== previous);
-  return text.replace(/\{\{(\w+)\}\}/g, (match, field) => {
-    if (field in values) return values[field] ?? "";
-    const expanded = expand(match);
-    return expanded;
-  });
-}
-
 // packages/tavern-pipeline/src/group.ts
 function buildGroupTurn(input) {
   const messages = [];
@@ -4157,8 +4063,7 @@ var DEFAULT_STATE = {
   modelSelections: {},
   chats: {},
   regexScripts: [],
-  scriptGlobals: {},
-  pipelineMode: "chat"
+  scriptGlobals: {}
 };
 var TavernStore = class _TavernStore {
   constructor(root) {
@@ -4597,9 +4502,10 @@ var TavernStore = class _TavernStore {
     const bytes = await this.tryRead(path.join(this.root, "state.json"));
     if (bytes === void 0) return structuredClone(DEFAULT_STATE);
     const parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+    const { pipelineMode: _legacyPipelineMode, textCompletion: _legacyTextCompletion, ...rest } = parsed;
     return {
       ...structuredClone(DEFAULT_STATE),
-      ...parsed,
+      ...rest,
       activeWorlds: parsed.activeWorlds ?? [],
       sessionBindings: normalizeSessionBindings(parsed.sessionBindings),
       defaultArchitecture: parsed.defaultArchitecture === "st" ? "st" : "agent-tavern",
@@ -4610,7 +4516,6 @@ var TavernStore = class _TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
-      pipelineMode: parsed.pipelineMode === "text" ? "text" : "chat",
       compaction: normalizeCompactionOverride(parsed.compaction)
     };
   }
@@ -9806,9 +9711,6 @@ async function handleApi(ctx, req, res) {
       ...body.defaultContextMode === "dsh-native" || body.defaultContextMode === "agent-managed" ? { defaultContextMode: body.defaultContextMode } : {},
       ...typeof body.agentTavernPreloadAssets === "boolean" ? { agentTavernPreloadAssets: body.agentTavernPreloadAssets } : {},
       ...typeof body.agentTavernAllowGlobalWrites === "boolean" ? { agentTavernAllowGlobalWrites: body.agentTavernAllowGlobalWrites } : {},
-      ...body.pipelineMode === "chat" || body.pipelineMode === "text" ? { pipelineMode: body.pipelineMode } : {},
-      ...isTextCompletionConfig(body.textCompletion) ? { textCompletion: normalizeTextCompletion(body.textCompletion) } : {},
-      ...body.textCompletion === null ? { textCompletion: void 0 } : {},
       ...body.compaction !== void 0 ? { compaction: compactionOverrideOf(body.compaction) } : {}
     };
     const state = await db.patchState(patch);
@@ -9863,13 +9765,7 @@ async function handleApi(ctx, req, res) {
     await db.putPreset(body.name, body.data);
     if (body.name !== oldName) await db.deletePreset(oldName);
     const state = await db.updateState((current) => ({
-      activePreset: current.activePreset === oldName ? body.name : current.activePreset,
-      textCompletion: current.textCompletion ? {
-        ...current.textCompletion,
-        ...current.textCompletion.contextPreset === oldName ? { contextPreset: body.name } : {},
-        ...current.textCompletion.instructPreset === oldName ? { instructPreset: body.name } : {},
-        ...current.textCompletion.samplerPreset === oldName ? { samplerPreset: body.name } : {}
-      } : current.textCompletion
+      activePreset: current.activePreset === oldName ? body.name : current.activePreset
     }));
     await refreshActivePrompt();
     return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data), data: body.data, state });
@@ -10148,22 +10044,9 @@ async function handleApi(ctx, req, res) {
     const preset = await db.getPreset(name2);
     if (!preset) return sendJson(res, 404, { ok: false, message: "preset not found" });
     await db.deletePreset(name2);
-    const state = await db.updateState((current) => {
-      const tc = current.textCompletion;
-      const tcStale = tc !== void 0 && (tc.contextPreset === name2 || tc.instructPreset === name2 || tc.samplerPreset === name2);
-      const textCompletion = tcStale ? {
-        endpoint: tc.endpoint,
-        ...tc.apiKey ? { apiKey: tc.apiKey } : {},
-        streaming: tc.streaming !== false,
-        ...tc.contextPreset !== void 0 && tc.contextPreset !== name2 ? { contextPreset: tc.contextPreset } : {},
-        ...tc.instructPreset !== void 0 && tc.instructPreset !== name2 ? { instructPreset: tc.instructPreset } : {},
-        ...tc.samplerPreset !== void 0 && tc.samplerPreset !== name2 ? { samplerPreset: tc.samplerPreset } : {}
-      } : current.textCompletion;
-      return {
-        activePreset: current.activePreset === name2 ? void 0 : current.activePreset,
-        ...tcStale ? { textCompletion } : {}
-      };
-    });
+    const state = await db.updateState((current) => ({
+      activePreset: current.activePreset === name2 ? void 0 : current.activePreset
+    }));
     return sendJson(res, 200, { ok: true, state });
   }
   if (method === "GET" && route.startsWith("export/preset/")) {
@@ -10213,13 +10096,6 @@ async function handleApi(ctx, req, res) {
     const imported = await db.importRegexScripts(body.data);
     const state = await db.getState();
     return sendJson(res, 200, { ok: true, imported, scripts: state.regexScripts });
-  }
-  if (method === "GET" && route === "tc/check") {
-    const state = await db.getState();
-    const config = state.textCompletion;
-    if (!config || config.endpoint === "") throw new Error("text completion endpoint is not configured");
-    const model = await koboldModelInfo(config);
-    return sendJson(res, 200, { ok: true, model });
   }
   if (route.startsWith("chat/")) {
     const chatId = decodeURIComponent(route.slice("chat/".length));
@@ -10900,120 +10776,62 @@ async function runGeneration(ctx, db, options) {
       ...lore.bottomOfAuthorsNote.text ? [{ depth: 0, role: "system", text: lore.bottomOfAuthorsNote.text }] : [],
       ...personaInjections
     ];
-    const isTextPipeline = state.pipelineMode === "text" && state.textCompletion?.endpoint;
-    let provider = "";
-    let model = "";
-    let reasoningEffort;
-    let promptString = "";
-    let assembled;
-    if (isTextPipeline) {
-      const config = state.textCompletion;
-      const contextPreset = config.contextPreset ? await db.getPreset(config.contextPreset) : void 0;
-      const instructPreset = config.instructPreset ? await db.getPreset(config.instructPreset) : void 0;
-      const samplerPreset = config.samplerPreset ? await db.getPreset(config.samplerPreset) : void 0;
-      const context = contextPreset && detectPresetKind(contextPreset) === "context" ? parseContextTemplate(contextPreset) : defaultContextTemplate();
-      const instruct = instructPreset && detectPresetKind(instructPreset) === "instruct" ? parseInstructTemplate(instructPreset) : void 0;
-      const tc = assembleTextCompletion({
-        context,
-        instruct,
-        speakerName: character.card.data.nickname || character.card.data.name,
-        userName,
-        speakerFields: {
-          description: character.card.data.description,
-          personality: character.card.data.personality,
-          scenario: character.card.data.scenario,
-          systemPrompt: character.card.data.systemPrompt,
-          postHistoryInstructions: character.card.data.postHistoryInstructions,
-          mesExample: character.card.data.mesExample
-        },
-        personaDescription,
-        systemPrompt: character.card.data.systemPrompt.trim() !== "" ? character.card.data.systemPrompt : preset.prompts.find((p) => p.identifier === "main" && !p.marker)?.content ?? "",
-        worldInfoBefore: loreBefore,
-        worldInfoAfter: loreAfter,
-        messages: [...historyForPrompt, ...nudge ? [{ name: userName, is_user: true, is_system: false, send_date: "", mes: nudge.content }] : []],
-        depthInjections,
-        maxContextTokens: numberOr(samplerPreset?.["max_context_length"], numberOr(preset.sampler.openai_max_context, 4096)),
-        maxResponseTokens: numberOr(samplerPreset?.["max_length"], numberOr(preset.sampler.openai_max_tokens, 400))
-      }, { expand, countTokens });
-      promptString = tc.prompt;
-      provider = "kobold";
-      model = "kobold";
-      write({ type: "start", provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: tc.stats, warnings: tc.warnings });
-    } else {
-      assembled = assemblePrompt({
-        card: character.card,
-        preset,
-        personaDescription,
-        messages: historyForPrompt,
-        worldInfoBefore: loreBefore,
-        worldInfoAfter: loreAfter,
-        beforeExamples: lore.beforeExamples.entries.map((e) => e.content),
-        afterExamples: lore.afterExamples.entries.map((e) => e.content),
-        depthInjections
-      }, { expand, countTokens });
-      const fallback = ctx.agentDefaultModel.currentSelection();
-      const saved = options.sessionId ? state.modelSelections?.[options.sessionId] : void 0;
-      const explicit = options.provider !== void 0 && options.model !== void 0 ? {
-        provider: options.provider,
-        model: options.model,
-        ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {}
-      } : void 0;
-      const choice = explicit ?? saved ?? fallback;
-      provider = choice.provider;
-      model = choice.model;
-      reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
-      write({ type: "start", provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: assembled.stats });
-    }
+    const assembled = assemblePrompt({
+      card: character.card,
+      preset,
+      personaDescription,
+      messages: historyForPrompt,
+      worldInfoBefore: loreBefore,
+      worldInfoAfter: loreAfter,
+      beforeExamples: lore.beforeExamples.entries.map((e) => e.content),
+      afterExamples: lore.afterExamples.entries.map((e) => e.content),
+      depthInjections
+    }, { expand, countTokens });
+    const fallback = ctx.agentDefaultModel.currentSelection();
+    const saved = options.sessionId ? state.modelSelections?.[options.sessionId] : void 0;
+    const explicit = options.provider !== void 0 && options.model !== void 0 ? {
+      provider: options.provider,
+      model: options.model,
+      ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {}
+    } : void 0;
+    const choice = explicit ?? saved ?? fallback;
+    const provider = choice.provider;
+    const model = choice.model;
+    const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
+    write({ type: "start", provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: assembled.stats });
     let text = "";
     let reasoning = "";
     let hostUsage;
     hostTrace = startTavernSessionStep(hostTrace);
-    if (isTextPipeline) {
-      const config = state.textCompletion;
-      const samplerPreset = config.samplerPreset ? await db.getPreset(config.samplerPreset) : void 0;
-      for await (const chunk of streamKobold(config, promptString, samplerPreset, signal)) {
-        if (chunk.type === "text-delta" || chunk.type === "reasoning-delta") {
-          recordTavernSessionChunk(hostTrace, { type: chunk.type, index: 0, text: chunk.text });
-        }
-        if (chunk.type === "text-delta") {
-          text += chunk.text;
-          write({ type: "delta", text: chunk.text });
-        } else if (chunk.type === "reasoning-delta") {
-          reasoning += chunk.text;
-          write({ type: "reasoning", text: chunk.text });
-        }
-      }
-    } else {
-      const requestMessages = [...assembled.messages];
-      const systemParts = [];
-      while (requestMessages[0]?.role === "system") systemParts.push(requestMessages.shift().content);
-      const llmMessages = requestMessages.map((m) => createMessage({
-        role: m.role,
-        content: [{ type: "text", text: m.content }],
-        source: m.role === "assistant" ? { kind: "model", provider, model } : m.role === "user" ? { kind: "user" } : { kind: "plugin", plugin: "dsh-tavern" }
-      }));
-      for await (const chunk of ctx.llm.stream({
-        provider,
-        model,
-        messages: llmMessages,
-        ...systemParts.length > 0 ? { system: systemParts.join("\n\n") } : {},
-        ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
-        temperature: numberOr(preset.sampler.temperature, void 0),
-        maxTokens: numberOr(preset.sampler.openai_max_tokens, void 0),
-        signal
-      })) {
-        recordTavernSessionChunk(hostTrace, chunk);
-        if (chunk.type === "usage") hostUsage = chunk.usage;
-        if (chunk.type === "text-delta") {
-          text += chunk.text;
-          write({ type: "delta", text: chunk.text });
-        } else if (chunk.type === "reasoning-delta") {
-          reasoning += chunk.text;
-          write({ type: "reasoning", text: chunk.text });
-        } else if (chunk.type === "finish") {
-          if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
-          write({ type: "finish", reason: chunk.reason.kind });
-        }
+    const requestMessages = [...assembled.messages];
+    const systemParts = [];
+    while (requestMessages[0]?.role === "system") systemParts.push(requestMessages.shift().content);
+    const llmMessages = requestMessages.map((m) => createMessage({
+      role: m.role,
+      content: [{ type: "text", text: m.content }],
+      source: m.role === "assistant" ? { kind: "model", provider, model } : m.role === "user" ? { kind: "user" } : { kind: "plugin", plugin: "dsh-tavern" }
+    }));
+    for await (const chunk of ctx.llm.stream({
+      provider,
+      model,
+      messages: llmMessages,
+      ...systemParts.length > 0 ? { system: systemParts.join("\n\n") } : {},
+      ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
+      temperature: numberOr(preset.sampler.temperature, void 0),
+      maxTokens: numberOr(preset.sampler.openai_max_tokens, void 0),
+      signal
+    })) {
+      recordTavernSessionChunk(hostTrace, chunk);
+      if (chunk.type === "usage") hostUsage = chunk.usage;
+      if (chunk.type === "text-delta") {
+        text += chunk.text;
+        write({ type: "delta", text: chunk.text });
+      } else if (chunk.type === "reasoning-delta") {
+        reasoning += chunk.text;
+        write({ type: "reasoning", text: chunk.text });
+      } else if (chunk.type === "finish") {
+        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
+        write({ type: "finish", reason: chunk.reason.kind });
       }
     }
     if (text.trim() === "") throw new Error("model returned no text");
@@ -11164,102 +10982,6 @@ async function runTavernScript(ctx, req, res, db) {
     revision: freshSnapshot?.revision ?? revision
   });
 }
-var KOBOLD_SAMPLER_KEYS = [
-  "temperature",
-  "top_p",
-  "top_k",
-  "top_a",
-  "typical",
-  "min_p",
-  "tfs",
-  "rep_pen",
-  "rep_pen_range",
-  "rep_pen_slope",
-  "presence_penalty",
-  "seed"
-];
-function koboldRequestBody(prompt, sampler, maxContext, maxLength) {
-  const body = {
-    prompt,
-    max_context_length: maxContext,
-    max_length: maxLength
-  };
-  if (sampler !== void 0) {
-    for (const key of KOBOLD_SAMPLER_KEYS) {
-      const value = sampler[key];
-      if (typeof value === "number" && Number.isFinite(value)) body[key] = value;
-    }
-  }
-  return body;
-}
-async function* streamKobold(config, prompt, samplerPreset, signal) {
-  const sampler = samplerPreset ?? {};
-  const maxContext = numberOr(sampler["max_context_length"], 4096);
-  const maxLength = numberOr(sampler["max_length"], 400);
-  const body = koboldRequestBody(prompt, sampler, maxContext, maxLength);
-  const headers = {
-    "content-type": "application/json",
-    ...config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}
-  };
-  if (config.streaming !== false) {
-    try {
-      const response2 = await fetch(new URL("api/extra/generate/stream", ensureTrailingSlash(config.endpoint)), {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal
-      });
-      if (response2.ok && response2.body) {
-        const reader = response2.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        while (true) {
-          const part = await reader.read();
-          buffer += decoder.decode(part.value || new Uint8Array(), { stream: !part.done });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          for (const line of lines) {
-            const data = line.startsWith("data:") ? line.slice(5).trim() : "";
-            if (data === "" || data === "[DONE]") continue;
-            try {
-              const token = JSON.parse(data);
-              if (typeof token === "string" && token !== "") yield { type: "text-delta", text: token };
-            } catch {
-            }
-          }
-          if (part.done) break;
-        }
-        return;
-      }
-    } catch (error) {
-      if (signal.aborted) throw error;
-    }
-  }
-  const response = await fetch(new URL("api/v1/generate", ensureTrailingSlash(config.endpoint)), {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    signal
-  });
-  if (!response.ok) throw new Error(`Kobold generate failed: HTTP ${response.status}`);
-  const payload = await response.json();
-  const text = payload?.results?.[0]?.text;
-  if (typeof text !== "string") throw new Error("Kobold generate returned no text");
-  yield { type: "text-delta", text };
-}
-async function koboldModelInfo(config) {
-  const response = await fetch(new URL("api/v1/model", ensureTrailingSlash(config.endpoint)), {
-    headers: config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {},
-    signal: AbortSignal.timeout(8e3)
-  });
-  if (!response.ok) throw new Error(`Kobold endpoint check failed: HTTP ${response.status}`);
-  const payload = await response.json();
-  const model = typeof payload?.result === "string" ? payload.result : payload?.result?.model ?? payload?.model ?? "kobold";
-  return { name: model, version: payload?.result?.version ?? void 0 };
-}
-function ensureTrailingSlash(endpoint) {
-  return endpoint.endsWith("/") ? endpoint : `${endpoint}/`;
-}
 async function serveCharacterAvatar(res, db, name2, found) {
   let bytes;
   let contentType = "image/png";
@@ -11326,24 +11048,11 @@ function parsePresetOrThrow(data) {
   if (kind === "textgen-sampler") return;
   throw new Error("preset format not recognized (expected chat completion prompts, context, instruct, or textgen sampler)");
 }
-function isTextCompletionConfig(value) {
-  return typeof value === "object" && value !== null && typeof value.endpoint === "string";
-}
 function compactionOverrideOf(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
   const provider = typeof value.curatorProvider === "string" ? value.curatorProvider.trim() : "";
   const model = typeof value.curatorModel === "string" ? value.curatorModel.trim() : "";
   return provider !== "" && model !== "" ? { curatorProvider: provider, curatorModel: model } : void 0;
-}
-function normalizeTextCompletion(value) {
-  return {
-    endpoint: String(value.endpoint).trim(),
-    ...typeof value.apiKey === "string" && value.apiKey !== "" ? { apiKey: value.apiKey } : {},
-    streaming: value.streaming !== false,
-    ...typeof value.contextPreset === "string" && value.contextPreset !== "" ? { contextPreset: value.contextPreset } : {},
-    ...typeof value.instructPreset === "string" && value.instructPreset !== "" ? { instructPreset: value.instructPreset } : {},
-    ...typeof value.samplerPreset === "string" && value.samplerPreset !== "" ? { samplerPreset: value.samplerPreset } : {}
-  };
 }
 function publicGroup(group2) {
   return {
@@ -11685,19 +11394,6 @@ function roleName(role) {
 }
 function numberOr(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-function defaultContextTemplate() {
-  return parseContextTemplate({
-    story_string: [
-      "{{#if system}}{{system}}",
-      "{{/if}}{{#if wiBefore}}{{wiBefore}}",
-      "{{/if}}{{#if description}}{{description}}",
-      "{{/if}}{{#if personality}}{{personality}}",
-      "{{/if}}{{#if scenario}}{{scenario}}",
-      "{{/if}}{{#if wiAfter}}{{wiAfter}}",
-      "{{/if}}{{#if persona}}{{persona}}{{/if}}"
-    ].join("")
-  });
 }
 function defaultPreset() {
   const prompts = [

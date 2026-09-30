@@ -59,7 +59,6 @@ const REQUIRED_SERVER_ROUTES = [
   'projection/replay',
   'regex',
   'script',
-  'tc/check',
   'generate',
   'novels',
   'novels/pause',

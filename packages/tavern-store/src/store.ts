@@ -73,18 +73,7 @@ export type TavernSessionBinding =
 export interface TavernModelSelection {
   provider: string
   model: string
-  reasoningEffort?: string
-}
-
-/** Text Completion 管线配置（Kobold 端点与预设选择）。 */
-export interface TextCompletionConfig {
-  endpoint: string
-  apiKey?: string
-  /** 优先 SSE 流式端点，失败回退单发 */
-  streaming: boolean
-  contextPreset?: string
-  instructPreset?: string
-  samplerPreset?: string
+    reasoningEffort?: string
 }
 
 export interface TavernState {
@@ -113,10 +102,6 @@ export interface TavernState {
   regexScripts: RegexScriptIR[]
   /** STscript 全局变量。 */
   scriptGlobals: Record<string, string | number | boolean>
-  /** 生成管线选择：chat completion（默认）或 text completion。 */
-  pipelineMode: 'chat' | 'text'
-  /** Text Completion 管线配置。 */
-  textCompletion?: TextCompletionConfig
   /**
    * 压缩总结模型的运行时覆盖（提案 0006 §4.3）：剧情会话（AgentTavern 非分组、
    * AgentNovel）压缩检查点的摘要目标。解析顺序：本覆盖 > 部署层 curator 行配置
@@ -178,7 +163,6 @@ const DEFAULT_STATE: TavernState = {
   chats: {},
   regexScripts: [],
   scriptGlobals: {},
-  pipelineMode: 'chat',
 }
 
 export class TavernStore {
@@ -699,10 +683,16 @@ export class TavernStore {
   private async readState(): Promise<TavernState> {
     const bytes = await this.tryRead(path.join(this.root, 'state.json'))
     if (bytes === undefined) return structuredClone(DEFAULT_STATE)
-    const parsed = JSON.parse(Buffer.from(bytes).toString('utf8')) as Partial<TavernState>
+    // 旧 state.json 可能残留已下线的 text-completion 管线字段（pipelineMode/
+    // textCompletion，含 Kobold 端点与密钥），读取时丢弃，下次写盘即清除。
+    const parsed = JSON.parse(Buffer.from(bytes).toString('utf8')) as Partial<TavernState> & {
+      pipelineMode?: unknown
+      textCompletion?: unknown
+    }
+    const { pipelineMode: _legacyPipelineMode, textCompletion: _legacyTextCompletion, ...rest } = parsed
     return {
       ...structuredClone(DEFAULT_STATE),
-      ...parsed,
+      ...rest,
       activeWorlds: parsed.activeWorlds ?? [],
       sessionBindings: normalizeSessionBindings(parsed.sessionBindings),
       defaultArchitecture: parsed.defaultArchitecture === 'st' ? 'st' : 'agent-tavern',
@@ -713,7 +703,6 @@ export class TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
-      pipelineMode: parsed.pipelineMode === 'text' ? 'text' : 'chat',
       compaction: normalizeCompactionOverride(parsed.compaction),
     }
   }

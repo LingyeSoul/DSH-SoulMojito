@@ -302,7 +302,7 @@ describe('TavernStore', () => {
   it('状态：默认值 → patch 持久化', withStore(async (store) => {
     expect(await store.getState()).toEqual({
       activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
-      agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat',
+      agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
     })
     await store.patchState({
       activeCharacter: 'ExampleCard',
@@ -483,21 +483,26 @@ describe('TavernStore', () => {
     await expect(store.branchChat('Test Char', id, 99, first?.revision)).rejects.toThrow(/out of range/)
   }))
 
-  it('状态：regex/脚本变量/管线配置随旧 state 补默认', withStore(async (store) => {
+  it('状态：regex/脚本变量随旧 state 补默认，已下线管线字段丢弃', withStore(async (store, dir) => {
     let state = await store.getState()
     expect(state.regexScripts).toEqual([])
     expect(state.scriptGlobals).toEqual({})
-    expect(state.pipelineMode).toBe('chat')
     await store.patchState({
-      pipelineMode: 'text',
       regexScripts: [{ id: 'r1', scriptName: 'strip', findRegex: 'x', replaceString: 'y', trimStrings: [], placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false, substituteRegex: false, minDepth: null, maxDepth: null }],
       scriptGlobals: { mood: 'calm' },
-      textCompletion: { endpoint: 'http://127.0.0.1:5001', streaming: true },
     })
     state = await store.getState()
-    expect(state.pipelineMode).toBe('text')
     expect(state.regexScripts[0]?.scriptName).toBe('strip')
     expect(state.scriptGlobals['mood']).toBe('calm')
-    expect(state.textCompletion?.endpoint).toBe('http://127.0.0.1:5001')
+    // 旧 state.json 的 text-completion 管线残留（Kobold 端点/密钥）读取时丢弃。
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({
+      pipelineMode: 'text',
+      textCompletion: { endpoint: 'http://127.0.0.1:5001', apiKey: 'secret', streaming: true },
+      scriptGlobals: { mood: 'calm' },
+    }))
+    state = await store.getState()
+    expect((state as Record<string, unknown>).pipelineMode).toBeUndefined()
+    expect((state as Record<string, unknown>).textCompletion).toBeUndefined()
+    expect(state.scriptGlobals['mood']).toBe('calm')
   }))
 })

@@ -28,7 +28,6 @@ window.__ModuleLoader__.load({
       IconRefreshOutline16,
       IconSearchOutline16,
       IconSendOutline16,
-      IconSettingsOutline16,
       IconSparkle16,
       IconStopFill16,
       IconTrashOutline16,
@@ -37,7 +36,6 @@ window.__ModuleLoader__.load({
       MarkdownText,
       Modal,
       Pill,
-      StateDot,
       Tooltip,
     } = DshBindClient.resolveUiPrimitives(require('@deepseek-ai/dsh-client-ui-primitives'), {
       // 宿主图标在 0.2.0-rc.2 换成描边后缀命名（IconSparkleRegular/Medium），
@@ -235,22 +233,6 @@ window.__ModuleLoader__.load({
       'settings.regexDelete': 'Delete {name}',
       'settings.regexToggle': 'Enable or disable {name}',
       'settings.regexPlacements': 'Placements: {names}',
-      'settings.pipeline': 'Generation pipeline',
-      'settings.pipelineHint': 'Chooses how replies are generated. World Info, macros, regex scripts, swipes and revision protection behave identically in both modes.',
-      'settings.pipelineHintChat': 'Sends a messages[] list through the DSH model routing (providers, keys and the composer model picker). The active Chat Completion preset controls prompt order and sampling.',
-      'settings.pipelineHintText': 'Assembles a single prompt string (context template + instruct sequences) and calls a KoboldAI/KoboldCpp endpoint directly. Configure the endpoint below; the composer model picker does not apply in this mode.',
-      'settings.pipelineChat': 'Chat Completion (DSH models)',
-      'settings.pipelineText': 'Text Completion (Kobold)',
-      'settings.tcEndpoint': 'Kobold endpoint',
-      'settings.tcApiKey': 'API key (optional)',
-      'settings.tcStreaming': 'Prefer SSE streaming',
-      'settings.tcContext': 'Context template',
-      'settings.tcInstruct': 'Instruct template',
-      'settings.tcSampler': 'Textgen sampler',
-      'settings.tcTest': 'Test connection',
-      'settings.tcTesting': 'Testing…',
-      'settings.tcOk': 'Connected: {name}',
-      'settings.anyPreset': 'None',
       'panel.title': 'Tavern management',
       'panel.close': 'Close panel',
       'panel.open': 'Open Tavern panel',
@@ -264,7 +246,6 @@ window.__ModuleLoader__.load({
       'panel.section.presets': 'Presets',
       'panel.section.regex': 'Regex scripts',
       'panel.section.variables': 'Variables',
-      'panel.section.generation': 'Generation',
       'panel.overview.counts': 'Characters {characters} · Chats {chats} · Worlds {worlds} · Presets {presets} · Personas {personas} · Groups {groups}',
       'panel.characters.empty': 'No character cards imported',
       'panel.characters.viewCard': 'View card',
@@ -625,22 +606,6 @@ window.__ModuleLoader__.load({
       'settings.regexDelete': '删除{name}',
       'settings.regexToggle': '启用或停用{name}',
       'settings.regexPlacements': '作用位置：{names}',
-      'settings.pipeline': '生成管线',
-      'settings.pipelineHint': '选择回复的生成方式。世界书、宏、正则脚本、swipe 与修订冲突保护在两种方式下行为完全一致。',
-      'settings.pipelineHintChat': '按聊天预设的 prompts/prompt_order 组装消息列表，经 DSH 的模型路由发送（provider、密钥与 composer 的模型选择器均生效）。',
-      'settings.pipelineHintText': '把上下文模板与 instruct 序列拼成单条提示词，直连 KoboldAI/KoboldCpp 端点生成。需先在下方填写端点；composer 的模型选择器在此模式下不生效，采样参数来自选中的采样器预设。',
-      'settings.pipelineChat': 'Chat Completion（DSH 模型）',
-      'settings.pipelineText': 'Text Completion（Kobold）',
-      'settings.tcEndpoint': 'Kobold 端点',
-      'settings.tcApiKey': 'API 密钥（可选）',
-      'settings.tcStreaming': '优先 SSE 流式',
-      'settings.tcContext': '上下文模板',
-      'settings.tcInstruct': '指令模板',
-      'settings.tcSampler': '采样器预设',
-      'settings.tcTest': '测试连接',
-      'settings.tcTesting': '测试中…',
-      'settings.tcOk': '已连接：{name}',
-      'settings.anyPreset': '无',
       'panel.title': '酒馆管理面板',
       'panel.close': '关闭面板',
       'panel.open': '打开酒馆面板',
@@ -654,7 +619,6 @@ window.__ModuleLoader__.load({
       'panel.section.presets': '预设',
       'panel.section.regex': '正则脚本',
       'panel.section.variables': '变量',
-      'panel.section.generation': '生成',
       'panel.overview.counts': '角色 {characters} · 聊天 {chats} · 世界书 {worlds} · 预设 {presets} · 人设 {personas} · 群组 {groups}',
       'panel.characters.empty': '尚未导入角色卡',
       'panel.characters.viewCard': '查看卡面',
@@ -972,7 +936,7 @@ window.__ModuleLoader__.load({
     const EMPTY_BOOTSTRAP = {
       state: {
         activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
-        agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {}, pipelineMode: 'chat',
+        agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
       },
       characters: [],
       worlds: [],
@@ -1843,19 +1807,6 @@ window.__ModuleLoader__.load({
       return result.scripts
     }
 
-    async function saveTextCompletion(patch) {
-      await api('state', {
-        method: 'POST',
-        headers: jsonHeaders(),
-        body: JSON.stringify(patch),
-      })
-      await refreshBootstrap()
-    }
-
-    async function testKoboldConnection() {
-      return api('tc/check')
-    }
-
     function openPanel(section) {
       update({ panelOpen: true, ...(typeof section === 'string' && section !== '' ? { panelSection: section } : {}) })
     }
@@ -2286,95 +2237,6 @@ window.__ModuleLoader__.load({
               title: t('settings.regexDelete', { name: script.scriptName }),
               onClick: () => run(saveRegexScripts(scripts.filter((item) => item.id !== script.id))),
             }, h(IconTrashOutline16))))),
-        error ? h('p', { className: 'dt-error' }, error) : null)
-    }
-
-    function PipelineBand() {
-      const state = useTavernStore()
-      const t = useTranslate()
-      const [error, setError] = useState('')
-      const [testing, setTesting] = useState('')
-      const [tested, setTested] = useState(false)
-      const tavernState = state.bootstrap.state
-      const tc = tavernState.textCompletion || {}
-      const kinds = state.bootstrap.presetKinds || {}
-      const presetsOf = (kind) => Object.keys(kinds).filter((name) => kinds[name] === kind).sort()
-      const save = (patch) => { setError(''); void saveTextCompletion(patch).catch((cause) => setError(cause.message)) }
-      const saveTc = (patch) => save({ textCompletion: { endpoint: '', streaming: true, ...tc, ...patch } })
-      const mode = tavernState.pipelineMode === 'text' ? 'text' : 'chat'
-      return h('section', { className: 'dt-settings-band' },
-        h('h3', null, t('settings.pipeline')),
-        h('p', { className: 'dt-hint' }, t('settings.pipelineHint')),
-        h('div', { className: 'dt-settings-grid' },
-          h('label', { className: 'dt-field' },
-            h('span', { className: 'dt-label' }, t('settings.pipeline')),
-            h('select', {
-              value: mode,
-              'aria-label': t('settings.pipeline'),
-              onChange: (event) => save({ pipelineMode: event.target.value || 'chat' }),
-            },
-            h('option', { value: 'chat' }, t('settings.pipelineChat')),
-            h('option', { value: 'text' }, t('settings.pipelineText')))),
-          h('p', { className: 'dt-hint dt-hint-wide' }, t(mode === 'text' ? 'settings.pipelineHintText' : 'settings.pipelineHintChat')),
-          h('label', { className: 'dt-field' },
-            h('span', { className: 'dt-label' }, t('settings.tcEndpoint')),
-            h('input', {
-              type: 'text',
-              defaultValue: tc.endpoint || '',
-              placeholder: 'http://127.0.0.1:5001',
-              onBlur: (event) => { if (event.target.value.trim() !== (tc.endpoint || '')) saveTc({ endpoint: event.target.value.trim() }) },
-            })),
-          h('label', { className: 'dt-field' },
-            h('span', { className: 'dt-label' }, t('settings.tcApiKey')),
-            h('input', {
-              type: 'password',
-              defaultValue: tc.apiKey || '',
-              onBlur: (event) => { if (event.target.value !== (tc.apiKey || '')) saveTc({ apiKey: event.target.value }) },
-            })),
-          h('label', { className: 'dt-toggle' },
-            h('input', {
-              type: 'checkbox',
-              checked: tc.streaming !== false,
-              onChange: (event) => saveTc({ streaming: event.target.checked }),
-            }),
-            h('span', null, t('settings.tcStreaming'))),
-          h(SettingSelect, {
-            label: t('settings.tcContext'),
-            value: tc.contextPreset || '',
-            options: presetsOf('context'),
-            empty: t('settings.presetEmpty'),
-            onChange: (value) => saveTc({ contextPreset: value || undefined }),
-          }),
-          h(SettingSelect, {
-            label: t('settings.tcInstruct'),
-            value: tc.instructPreset || '',
-            options: presetsOf('instruct'),
-            empty: t('settings.anyPreset'),
-            onChange: (value) => saveTc({ instructPreset: value || undefined }),
-          }),
-          h(SettingSelect, {
-            label: t('settings.tcSampler'),
-            value: tc.samplerPreset || '',
-            options: presetsOf('textgen-sampler'),
-            empty: t('settings.anyPreset'),
-            onChange: (value) => saveTc({ samplerPreset: value || undefined }),
-          })),
-        h('div', { className: 'dt-imports' },
-          h('button', {
-            type: 'button',
-            className: 'dt-upload',
-            disabled: testing !== '',
-            onClick: () => {
-              setTesting(t('settings.tcTesting'))
-              setError('')
-              setTested(false)
-              void testKoboldConnection()
-                .then((result) => { setTested(true); setTesting(t('settings.tcOk', { name: result.model?.name || 'kobold' })) })
-                .catch((cause) => { setTesting(''); setError(cause.message) })
-            },
-          }, testing !== '' ? testing : t('settings.tcTest')),
-          h('span', { className: 'dt-tc-state', 'aria-hidden': 'true' },
-            h(StateDot, { state: tested ? 'done' : error ? 'error' : 'ongoing', size: 8 }))),
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
@@ -3649,7 +3511,6 @@ window.__ModuleLoader__.load({
       { id: 'presets', icon: IconAgentPresetOutline16 },
       { id: 'regex', icon: IconListPenOutline16 },
       { id: 'variables', icon: IconCordisPluginOutline14 },
-      { id: 'generation', icon: IconSettingsOutline16 },
     ]
 
     function PanelOverview() {
@@ -5411,7 +5272,7 @@ window.__ModuleLoader__.load({
         : section === 'presets' ? h(PanelPresets)
         : section === 'regex' ? h(RegexBand)
         : section === 'variables' ? h(PanelVariables, { useSessions })
-        : h(PipelineBand)
+        : h(PanelOverview)
       return h('div', { className: 'dt-panel' },
         h('nav', { className: 'dt-panel-nav', 'aria-label': t('panel.nav') },
           h('div', { className: 'dt-panel-brand' },

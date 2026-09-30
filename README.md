@@ -20,7 +20,6 @@
 - 群聊：成员管理、自然（talkativeness 加权）/列表激活策略、成员点触发言、`group_only_greetings`、group nudge 和 `{{group}}` 宏。
 - 正则脚本：ST regex 扩展形态导入，全局 + 卡级合并，`USER_INPUT/AI_OUTPUT/WORLD_INFO/REASONING` placement、`minDepth/maxDepth`、`substituteRegex`、`trimStrings`。
 - STscript：管道、变量（聊天局部 + 全局）、`/if` 条件、随机/掷骰和聊天动作（`/send`、`/trigger`、`/regenerate`、`/cut`），composer `/` 前缀触发。
-- Text Completion / Kobold：context（story_string `{{#if}}` 子集）、instruct、textgen 采样器 preset 装配单串 prompt，KoboldAI/KoboldCpp SSE 流式 + 单发回退，端点/密钥/预设配置与连接测试。
 - Composer 模型选择：复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
 - 并发保护：聊天使用内容 revision 做 compare-and-swap；跨标签页冲突返回 `409`，客户端重新加载最新内容，不静默覆盖。
 - 可选的普通 Agent 人格注入，默认关闭。
@@ -113,7 +112,7 @@ DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏
 |---|---|---|
 | `agent-tavern` + `dsh-native` | rc.6 可用，单角色新聊天默认启用 | 使用 DSH 原生 AgentLoop 和 composer；模型、工具调用、Stop、错误与统计都由宿主处理，原生 user/final assistant 事件投影到 Tavern JSONL。 |
 | `agent-tavern` + `agent-managed` | rc.6 不可用 | 设置页显示宿主缺少 `agent/context` 与 projection-aware compaction 的原因并禁用选项；服务端也会拒绝该模式。 |
-| `st` | 保留并兼容 | 使用 Tavern 自有 `/generate`、流式生成、swipe、regenerate、STscript 和 Text Completion 路径。 |
+| `st` | 保留并兼容 | 使用 Tavern 自有 `/generate`、流式生成、swipe、regenerate 和 STscript 路径。 |
 | 群聊 | 固定使用 `st` | 宿主尚未提供可靠的 actor 元数据前，不创建群聊 AgentTavern 会话。 |
 
 AgentTavern 工具的身份来自真实 DSH agent binding，模型不能通过参数伪造 `sessionId`、`scopeId`、角色或聊天身份。当前工具面如下：
@@ -159,7 +158,7 @@ ST 与 AgentTavern 新聊天共用 `$DSH_HOME/tavern/workspace/` 下的 `Tavern 
 | `@dsh-tavern/format` | 卡、PNG/CHARX、世界书、preset（chat completion / context / instruct / textgen）、群组文件、regex 脚本和 chat JSONL 的解析与无损往返 |
 | `@dsh-tavern/lore` | World Info 激活和 timed effects 引擎 |
 | `@dsh-tavern/macros` | 角色、时间、随机、变量等宏引擎 |
-| `@dsh-tavern/pipeline` | preset 顺序、lore、persona、历史和 token budget 的 prompt 装配（chat completion + text completion + 群聊回合） |
+| `@dsh-tavern/pipeline` | preset 顺序、lore、persona、历史和 token budget 的 prompt 装配（chat completion + 群聊回合） |
 | `@dsh-tavern/script` | ST regex 脚本执行器与 STscript 解释器 |
 | `@dsh-tavern/store` | `$DSH_HOME/tavern/` 原子文件存储、revision 和 session binding |
 | `dsh-tavern` | 自包含 Node half、Web client half、安装元数据和 gates |

@@ -1850,8 +1850,7 @@ var DEFAULT_STATE = {
   modelSelections: {},
   chats: {},
   regexScripts: [],
-  scriptGlobals: {},
-  pipelineMode: "chat"
+  scriptGlobals: {}
 };
 var TavernStore = class _TavernStore {
   constructor(root) {
@@ -2290,9 +2289,10 @@ var TavernStore = class _TavernStore {
     const bytes = await this.tryRead(path.join(this.root, "state.json"));
     if (bytes === void 0) return structuredClone(DEFAULT_STATE);
     const parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+    const { pipelineMode: _legacyPipelineMode, textCompletion: _legacyTextCompletion, ...rest } = parsed;
     return {
       ...structuredClone(DEFAULT_STATE),
-      ...parsed,
+      ...rest,
       activeWorlds: parsed.activeWorlds ?? [],
       sessionBindings: normalizeSessionBindings(parsed.sessionBindings),
       defaultArchitecture: parsed.defaultArchitecture === "st" ? "st" : "agent-tavern",
@@ -2303,7 +2303,6 @@ var TavernStore = class _TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
-      pipelineMode: parsed.pipelineMode === "text" ? "text" : "chat",
       compaction: normalizeCompactionOverride(parsed.compaction)
     };
   }

@@ -13,7 +13,7 @@ import {
 } from '../../tavern-format/src/index.js'
 import { activateWorldInfo } from '../../tavern-lore/src/index.js'
 import { createMacroEngine } from '../../tavern-macros/src/index.js'
-import { assemblePrompt, assembleTextCompletion, buildGroupTurn, pickGroupMember } from '../../tavern-pipeline/src/index.js'
+import { assemblePrompt, buildGroupTurn, pickGroupMember } from '../../tavern-pipeline/src/index.js'
 import { applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
 import {
   ChatRevisionConflictError,
@@ -645,9 +645,6 @@ async function handleApi(ctx, req, res) {
       ...(typeof body.agentTavernAllowGlobalWrites === 'boolean'
         ? { agentTavernAllowGlobalWrites: body.agentTavernAllowGlobalWrites }
         : {}),
-      ...(body.pipelineMode === 'chat' || body.pipelineMode === 'text' ? { pipelineMode: body.pipelineMode } : {}),
-      ...(isTextCompletionConfig(body.textCompletion) ? { textCompletion: normalizeTextCompletion(body.textCompletion) } : {}),
-      ...(body.textCompletion === null ? { textCompletion: undefined } : {}),
       ...(body.compaction !== undefined ? { compaction: compactionOverrideOf(body.compaction) } : {}),
     }
     const state = await db.patchState(patch)
@@ -709,14 +706,6 @@ async function handleApi(ctx, req, res) {
     if (body.name !== oldName) await db.deletePreset(oldName)
     const state = await db.updateState((current) => ({
       activePreset: current.activePreset === oldName ? body.name : current.activePreset,
-      textCompletion: current.textCompletion
-        ? {
-            ...current.textCompletion,
-            ...(current.textCompletion.contextPreset === oldName ? { contextPreset: body.name } : {}),
-            ...(current.textCompletion.instructPreset === oldName ? { instructPreset: body.name } : {}),
-            ...(current.textCompletion.samplerPreset === oldName ? { samplerPreset: body.name } : {}),
-          }
-        : current.textCompletion,
     }))
     await refreshActivePrompt()
     return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data), data: body.data, state })
@@ -1010,25 +999,9 @@ async function handleApi(ctx, req, res) {
     const preset = await db.getPreset(name)
     if (!preset) return sendJson(res, 404, { ok: false, message: 'preset not found' })
     await db.deletePreset(name)
-    const state = await db.updateState((current) => {
-      const tc = current.textCompletion
-      const tcStale = tc !== undefined
-        && (tc.contextPreset === name || tc.instructPreset === name || tc.samplerPreset === name)
-      const textCompletion = tcStale
-        ? {
-            endpoint: tc.endpoint,
-            ...(tc.apiKey ? { apiKey: tc.apiKey } : {}),
-            streaming: tc.streaming !== false,
-            ...(tc.contextPreset !== undefined && tc.contextPreset !== name ? { contextPreset: tc.contextPreset } : {}),
-            ...(tc.instructPreset !== undefined && tc.instructPreset !== name ? { instructPreset: tc.instructPreset } : {}),
-            ...(tc.samplerPreset !== undefined && tc.samplerPreset !== name ? { samplerPreset: tc.samplerPreset } : {}),
-          }
-        : current.textCompletion
-      return {
-        activePreset: current.activePreset === name ? undefined : current.activePreset,
-        ...(tcStale ? { textCompletion } : {}),
-      }
-    })
+    const state = await db.updateState((current) => ({
+      activePreset: current.activePreset === name ? undefined : current.activePreset,
+    }))
     return sendJson(res, 200, { ok: true, state })
   }
 
@@ -1084,14 +1057,6 @@ async function handleApi(ctx, req, res) {
     const imported = await db.importRegexScripts(body.data)
     const state = await db.getState()
     return sendJson(res, 200, { ok: true, imported, scripts: state.regexScripts })
-  }
-
-  if (method === 'GET' && route === 'tc/check') {
-    const state = await db.getState()
-    const config = state.textCompletion
-    if (!config || config.endpoint === '') throw new Error('text completion endpoint is not configured')
-    const model = await koboldModelInfo(config)
-    return sendJson(res, 200, { ok: true, model })
   }
 
   if (route.startsWith('chat/')) {
@@ -2022,118 +1987,59 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     ...personaInjections,
   ]
 
-  const isTextPipeline = state.pipelineMode === 'text' && state.textCompletion?.endpoint
-  let provider = ''
-  let model = ''
-  let reasoningEffort: string | undefined
-  let promptString = ''
-  let assembled
-  if (isTextPipeline) {
-    const config = state.textCompletion
-    const contextPreset = config.contextPreset ? await db.getPreset(config.contextPreset) : undefined
-    const instructPreset = config.instructPreset ? await db.getPreset(config.instructPreset) : undefined
-    const samplerPreset = config.samplerPreset ? await db.getPreset(config.samplerPreset) : undefined
-    const context = contextPreset && detectPresetKind(contextPreset) === 'context'
-      ? parseContextTemplate(contextPreset)
-      : defaultContextTemplate()
-    const instruct = instructPreset && detectPresetKind(instructPreset) === 'instruct'
-      ? parseInstructTemplate(instructPreset)
-      : undefined
-    const tc = assembleTextCompletion({
-      context,
-      instruct,
-      speakerName: character.card.data.nickname || character.card.data.name,
-      userName,
-      speakerFields: {
-        description: character.card.data.description,
-        personality: character.card.data.personality,
-        scenario: character.card.data.scenario,
-        systemPrompt: character.card.data.systemPrompt,
-        postHistoryInstructions: character.card.data.postHistoryInstructions,
-        mesExample: character.card.data.mesExample,
-      },
-      personaDescription,
-      systemPrompt: character.card.data.systemPrompt.trim() !== ''
-        ? character.card.data.systemPrompt
-        : (preset.prompts.find((p) => p.identifier === 'main' && !p.marker)?.content ?? ''),
-      worldInfoBefore: loreBefore,
-      worldInfoAfter: loreAfter,
-      messages: [...historyForPrompt, ...(nudge ? [{ name: userName, is_user: true, is_system: false, send_date: '', mes: nudge.content }] : [])],
-      depthInjections,
-      maxContextTokens: numberOr(samplerPreset?.['max_context_length'], numberOr(preset.sampler.openai_max_context, 4096)),
-      maxResponseTokens: numberOr(samplerPreset?.['max_length'], numberOr(preset.sampler.openai_max_tokens, 400)),
-    }, { expand, countTokens })
-    promptString = tc.prompt
-    provider = 'kobold'
-    model = 'kobold'
-    write({ type: 'start', provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: tc.stats, warnings: tc.warnings })
-  } else {
-    assembled = assemblePrompt({
-      card: character.card, preset, personaDescription,
-      messages: historyForPrompt,
-      worldInfoBefore: loreBefore,
-      worldInfoAfter: loreAfter,
-      beforeExamples: lore.beforeExamples.entries.map((e) => e.content),
-      afterExamples: lore.afterExamples.entries.map((e) => e.content),
-      depthInjections,
-    }, { expand, countTokens })
-    const fallback = ctx.agentDefaultModel.currentSelection()
-    const saved = options.sessionId ? state.modelSelections?.[options.sessionId] : undefined
-    const explicit = options.provider !== undefined && options.model !== undefined
-      ? {
-          provider: options.provider,
-          model: options.model,
-          ...(options.reasoningEffort !== undefined ? { reasoningEffort: options.reasoningEffort } : {}),
-        }
-      : undefined
-    const choice = explicit ?? saved ?? fallback
-    provider = choice.provider
-    model = choice.model
-    reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort
-      ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : undefined)
-    write({ type: 'start', provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: assembled.stats })
-  }
+  const assembled = assemblePrompt({
+    card: character.card, preset, personaDescription,
+    messages: historyForPrompt,
+    worldInfoBefore: loreBefore,
+    worldInfoAfter: loreAfter,
+    beforeExamples: lore.beforeExamples.entries.map((e) => e.content),
+    afterExamples: lore.afterExamples.entries.map((e) => e.content),
+    depthInjections,
+  }, { expand, countTokens })
+  const fallback = ctx.agentDefaultModel.currentSelection()
+  const saved = options.sessionId ? state.modelSelections?.[options.sessionId] : undefined
+  const explicit = options.provider !== undefined && options.model !== undefined
+    ? {
+        provider: options.provider,
+        model: options.model,
+        ...(options.reasoningEffort !== undefined ? { reasoningEffort: options.reasoningEffort } : {}),
+      }
+    : undefined
+  const choice = explicit ?? saved ?? fallback
+  const provider = choice.provider
+  const model = choice.model
+  const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort
+    ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : undefined)
+  write({ type: 'start', provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: assembled.stats })
 
   // ---- 流式生成 ----
   let text = ''
   let reasoning = ''
   let hostUsage
   hostTrace = startTavernSessionStep(hostTrace)
-  if (isTextPipeline) {
-    const config = state.textCompletion
-    const samplerPreset = config.samplerPreset ? await db.getPreset(config.samplerPreset) : undefined
-    for await (const chunk of streamKobold(config, promptString, samplerPreset, signal)) {
-      if (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta') {
-        recordTavernSessionChunk(hostTrace, { type: chunk.type, index: 0, text: chunk.text })
-      }
-      if (chunk.type === 'text-delta') { text += chunk.text; write({ type: 'delta', text: chunk.text }) }
-      else if (chunk.type === 'reasoning-delta') { reasoning += chunk.text; write({ type: 'reasoning', text: chunk.text }) }
-    }
-  } else {
-    const requestMessages = [...assembled.messages]
-    const systemParts = []
-    while (requestMessages[0]?.role === 'system') systemParts.push(requestMessages.shift().content)
-    const llmMessages = requestMessages.map((m) => createMessage({
-      role: m.role,
-      content: [{ type: 'text', text: m.content }],
-      source: m.role === 'assistant' ? { kind: 'model', provider, model } : m.role === 'user' ? { kind: 'user' } : { kind: 'plugin', plugin: 'dsh-tavern' },
-    }))
-    for await (const chunk of ctx.llm.stream({
-      provider, model, messages: llmMessages,
-      ...(systemParts.length > 0 ? { system: systemParts.join('\n\n') } : {}),
-      ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
-      temperature: numberOr(preset.sampler.temperature, undefined),
-      maxTokens: numberOr(preset.sampler.openai_max_tokens, undefined),
-      signal,
-    })) {
-      recordTavernSessionChunk(hostTrace, chunk)
-      if (chunk.type === 'usage') hostUsage = chunk.usage
-      if (chunk.type === 'text-delta') { text += chunk.text; write({ type: 'delta', text: chunk.text }) }
-      else if (chunk.type === 'reasoning-delta') { reasoning += chunk.text; write({ type: 'reasoning', text: chunk.text }) }
-      else if (chunk.type === 'finish') {
-        if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted') throw new Error(chunk.reason.failure.message)
-        write({ type: 'finish', reason: chunk.reason.kind })
-      }
+  const requestMessages = [...assembled.messages]
+  const systemParts = []
+  while (requestMessages[0]?.role === 'system') systemParts.push(requestMessages.shift().content)
+  const llmMessages = requestMessages.map((m) => createMessage({
+    role: m.role,
+    content: [{ type: 'text', text: m.content }],
+    source: m.role === 'assistant' ? { kind: 'model', provider, model } : m.role === 'user' ? { kind: 'user' } : { kind: 'plugin', plugin: 'dsh-tavern' },
+  }))
+  for await (const chunk of ctx.llm.stream({
+    provider, model, messages: llmMessages,
+    ...(systemParts.length > 0 ? { system: systemParts.join('\n\n') } : {}),
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    temperature: numberOr(preset.sampler.temperature, undefined),
+    maxTokens: numberOr(preset.sampler.openai_max_tokens, undefined),
+    signal,
+  })) {
+    recordTavernSessionChunk(hostTrace, chunk)
+    if (chunk.type === 'usage') hostUsage = chunk.usage
+    if (chunk.type === 'text-delta') { text += chunk.text; write({ type: 'delta', text: chunk.text }) }
+    else if (chunk.type === 'reasoning-delta') { reasoning += chunk.text; write({ type: 'reasoning', text: chunk.text }) }
+    else if (chunk.type === 'finish') {
+      if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted') throw new Error(chunk.reason.failure.message)
+      write({ type: 'finish', reason: chunk.reason.kind })
     }
   }
   if (text.trim() === '') throw new Error('model returned no text')
@@ -2293,102 +2199,6 @@ async function runTavernScript(ctx, req, res, db) {
   })
 }
 
-/* --------------------------- Kobold 客户端 --------------------------- */
-
-const KOBOLD_SAMPLER_KEYS = [
-  'temperature', 'top_p', 'top_k', 'top_a', 'typical', 'min_p', 'tfs',
-  'rep_pen', 'rep_pen_range', 'rep_pen_slope', 'presence_penalty', 'seed',
-]
-
-function koboldRequestBody(prompt: string, sampler: Record<string, unknown> | undefined, maxContext: number, maxLength: number) {
-  const body = {
-    prompt,
-    max_context_length: maxContext,
-    max_length: maxLength,
-  }
-  if (sampler !== undefined) {
-    for (const key of KOBOLD_SAMPLER_KEYS) {
-      const value = sampler[key]
-      if (typeof value === 'number' && Number.isFinite(value)) body[key] = value
-    }
-  }
-  return body
-}
-
-async function* streamKobold(config, prompt, samplerPreset, signal) {
-  const sampler = samplerPreset ?? {}
-  const maxContext = numberOr(sampler['max_context_length'], 4096)
-  const maxLength = numberOr(sampler['max_length'], 400)
-  const body = koboldRequestBody(prompt, sampler, maxContext, maxLength)
-  const headers = {
-    'content-type': 'application/json',
-    ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}),
-  }
-  if (config.streaming !== false) {
-    try {
-      const response = await fetch(new URL('api/extra/generate/stream', ensureTrailingSlash(config.endpoint)), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal,
-      })
-      if (response.ok && response.body) {
-        const reader = response.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
-        while (true) {
-          const part = await reader.read()
-          buffer += decoder.decode(part.value || new Uint8Array(), { stream: !part.done })
-          const lines = buffer.split('\n')
-          buffer = lines.pop() || ''
-          for (const line of lines) {
-            const data = line.startsWith('data:') ? line.slice(5).trim() : ''
-            if (data === '' || data === '[DONE]') continue
-            try {
-              const token = JSON.parse(data)
-              if (typeof token === 'string' && token !== '') yield { type: 'text-delta', text: token }
-            } catch {
-              // 非 JSON 行忽略（KoboldCpp 事件注释行）
-            }
-          }
-          if (part.done) break
-        }
-        return
-      }
-      // 非 2xx：落到单发回退（404/405 = 端点不存在）
-    } catch (error) {
-      if (signal.aborted) throw error
-      // 网络错误继续尝试单发端点（可能是不同实现）
-    }
-  }
-  const response = await fetch(new URL('api/v1/generate', ensureTrailingSlash(config.endpoint)), {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal,
-  })
-  if (!response.ok) throw new Error(`Kobold generate failed: HTTP ${response.status}`)
-  const payload = await response.json()
-  const text = payload?.results?.[0]?.text
-  if (typeof text !== 'string') throw new Error('Kobold generate returned no text')
-  yield { type: 'text-delta', text }
-}
-
-async function koboldModelInfo(config) {
-  const response = await fetch(new URL('api/v1/model', ensureTrailingSlash(config.endpoint)), {
-    headers: config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {},
-    signal: AbortSignal.timeout(8000),
-  })
-  if (!response.ok) throw new Error(`Kobold endpoint check failed: HTTP ${response.status}`)
-  const payload = await response.json()
-  const model = typeof payload?.result === 'string' ? payload.result : payload?.result?.model ?? payload?.model ?? 'kobold'
-  return { name: model, version: payload?.result?.version ?? undefined }
-}
-
-function ensureTrailingSlash(endpoint: string): string {
-  return endpoint.endsWith('/') ? endpoint : `${endpoint}/`
-}
-
 /* ------------------------------ 辅助 ------------------------------ */
 
 async function serveCharacterAvatar(res, db, name, found) {
@@ -2479,10 +2289,6 @@ function parsePresetOrThrow(data) {
   throw new Error('preset format not recognized (expected chat completion prompts, context, instruct, or textgen sampler)')
 }
 
-function isTextCompletionConfig(value) {
-  return typeof value === 'object' && value !== null && typeof value.endpoint === 'string'
-}
-
 /** 压缩总结模型覆盖（提案 0006 §4.3）：成对非空 provider/model 才生效，
  * null/空串/半空一律清除为 undefined（回落部署配置与会话路由）。 */
 function compactionOverrideOf(value) {
@@ -2492,17 +2298,6 @@ function compactionOverrideOf(value) {
   return provider !== '' && model !== ''
     ? { curatorProvider: provider, curatorModel: model }
     : undefined
-}
-
-function normalizeTextCompletion(value) {
-  return {
-    endpoint: String(value.endpoint).trim(),
-    ...(typeof value.apiKey === 'string' && value.apiKey !== '' ? { apiKey: value.apiKey } : {}),
-    streaming: value.streaming !== false,
-    ...(typeof value.contextPreset === 'string' && value.contextPreset !== '' ? { contextPreset: value.contextPreset } : {}),
-    ...(typeof value.instructPreset === 'string' && value.instructPreset !== '' ? { instructPreset: value.instructPreset } : {}),
-    ...(typeof value.samplerPreset === 'string' && value.samplerPreset !== '' ? { samplerPreset: value.samplerPreset } : {}),
-  }
 }
 
 function publicGroup(group) {
@@ -2916,20 +2711,6 @@ function roleName(role) {
 
 function numberOr(value, fallback) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
-}
-
-function defaultContextTemplate() {
-  return parseContextTemplate({
-    story_string: [
-      '{{#if system}}{{system}}',
-      '{{/if}}{{#if wiBefore}}{{wiBefore}}',
-      '{{/if}}{{#if description}}{{description}}',
-      '{{/if}}{{#if personality}}{{personality}}',
-      '{{/if}}{{#if scenario}}{{scenario}}',
-      '{{/if}}{{#if wiAfter}}{{wiAfter}}',
-      '{{/if}}{{#if persona}}{{persona}}{{/if}}',
-    ].join(''),
-  })
 }
 
 function defaultPreset() {

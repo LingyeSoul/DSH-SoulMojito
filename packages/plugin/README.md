@@ -22,7 +22,7 @@ dsh plugin --profile desktop add github:LingyeSoul/dsh-tavern#path:/packages/plu
 
 安装后：
 
-- 侧边栏底部、紧挨设置按钮的 **Tavern 按钮**（rail 模式为圆形图标钮）打开「Tavern 管理面板」——与原生设置同构的模态面板（左侧导航 + 右侧内容），复用 DSH 的 Modal/Button/Input/Pill/StateDot 原语与 `--dsw-alias-*` 设计 token。面板十个分区：总览（活跃配置 + 资产计数）、角色（卡片网格、完整卡查看、设为活跃、导出、删除）、聊天（按角色/群组浏览、新建/重命名/删除/打开）、群组、用户人设、世界书（激活开关 + 条目浏览器 + 搜索）、预设（kind 标签、设为活跃、删除）、正则脚本、变量（全局 STscript 变量编辑 + 当前会话局部变量查看）、生成（管线模式 + Kobold 端点 + StateDot 连接状态）。
+- 侧边栏底部、紧挨设置按钮的 **Tavern 按钮**（rail 模式为圆形图标钮）打开「Tavern 管理面板」——与原生设置同构的模态面板（左侧导航 + 右侧内容），复用 DSH 的 Modal/Button/Input/Pill 原语与 `--dsw-alias-*` 设计 token。面板九个分区：总览（活跃配置 + 资产计数）、角色（卡片网格、完整卡查看、设为活跃、导出、删除）、聊天（按角色/群组浏览、新建/重命名/删除/打开）、群组、用户人设、世界书（激活开关 + 条目浏览器 + 搜索）、预设（kind 标签、设为活跃、删除）、正则脚本、变量（全局 STscript 变量编辑 + 当前会话局部变量查看）。
 - “设置 -> dsh-tavern”保留快速切换（角色/预设/persona）与「打开酒馆面板」入口，世界书激活开关在管理面板「世界书」分区管理；设置页标题下显示插件版本号与 commit 号。构建会生成不纳入 Git 的 `version.json` 旁车文件；源码检出运行时优先读取 Git HEAD，脱离 `.git` 的发布包读取该文件中的 commit，必要时可用 `DSH_TAVERN_COMMIT` 兜底。
 - ST 聊天在原生 `Tavern` tab 使用 Tavern transcript、composer、Stop、edit、swipe 和 regenerate；AgentTavern/native 聊天使用 DSH 原生 conversation、composer、Stop、错误处理和统计。
 - 设置页可选择在新 AgentTavern 会话初始化时一次性预载角色信息和常驻世界书条目。开关默认关闭，只影响之后新建的 AgentTavern 会话，不会在每次模型请求时重复注入，也不追溯修改已有会话。
@@ -49,7 +49,7 @@ ST 与 AgentTavern 共用 DSH 中的 `Tavern (internal)` 专用工作区。插�
 |---|---|---|
 | `agent-tavern` + `dsh-native` | rc.6 可用，单角色新聊天默认启用 | 使用 DSH 原生 AgentLoop；Tavern 只提供角色资产、聊天投影和作用域工具。 |
 | `agent-tavern` + `agent-managed` | rc.6 不可用 | 宿主缺少 `agent/context` 和 projection-aware compaction，设置项禁用，服务端拒绝，不伪造主动遗忘。 |
-| `st` | 可用 | 保留原有 Tavern `/generate`、swipe、regenerate、STscript 和 Text Completion 路径。 |
+| `st` | 可用 | 保留原有 Tavern `/generate`、swipe、regenerate 和 STscript 路径。 |
 | 群聊 | 固定 `st` | 在宿主提供 actor 元数据前，不启用群聊 AgentTavern。 |
 
 当前 AgentTavern 工具只从真实 session binding 推导身份，不接受模型传入的 `sessionId` 或 `scopeId`：
