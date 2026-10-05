@@ -20,6 +20,7 @@
     "gates": "node scripts/gates/run.mjs"
   },
   "dsh": {
+    "manifestVersion": 1,
     "bundle": { "patch": "./cordis.patch.yml" },
     "client": {
       "inject": [],

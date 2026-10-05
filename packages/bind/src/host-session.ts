@@ -41,6 +41,19 @@ export function sessionEvents(session: HostSessionLog | null | undefined): reado
 export const TAVERN_PLUGIN_SOURCE_KIND = 'plugin:dsh-tavern'
 
 /**
+ * 宿主会话格式版本（`session.header.version`，宿主 Session 公开字段，创建时
+ * 即定）。header 缺失或版本不可读时返回 undefined——旧宿主与测试 stub（无
+ * header）按 v4 前格式处理，v4 宿主必定带 header.version = 4。事件形状按此
+ * 分支：v4 加载边界额外强制 assistant/message 携带 `stream` 数组（settlement
+ * 校验）且 turn/step 必须落在 open turn+step 里（关系校验），v4 前格式保持
+ * 旧形状以免老宿主工件升级时被毒化。
+ */
+export function hostSessionFormatVersion(session: HostSessionLog | null | undefined): number | undefined {
+  const version = (session as { header?: { version?: unknown } } | undefined)?.header?.version
+  return typeof version === 'number' && Number.isSafeInteger(version) ? version : undefined
+}
+
+/**
  * 会话消息的插件 source 形状，按宿主 session format 版本分支：
  *
  * - v4+（DSH 0.2.0-rc.2 起）：持久化校验显式拒绝 `kind === 'plugin'`
@@ -59,10 +72,8 @@ export function hostPluginMessageSource(
   session: HostSessionLog | null | undefined,
   members?: Record<string, unknown>,
 ): Record<string, unknown> {
-  const version = (session as { header?: { version?: unknown } } | undefined)?.header?.version
-  const kind = typeof version === 'number' && Number.isSafeInteger(version) && version >= 4
-    ? TAVERN_PLUGIN_SOURCE_KIND
-    : 'plugin'
+  const version = hostSessionFormatVersion(session)
+  const kind = version !== undefined && version >= 4 ? TAVERN_PLUGIN_SOURCE_KIND : 'plugin'
   return {
     ...(kind === 'plugin' ? { plugin: 'dsh-tavern' } : {}),
     ...members,

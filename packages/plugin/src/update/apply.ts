@@ -24,7 +24,7 @@
  * plugin-manager 自己的 `application: 'restart-required'` 就是这个语义。
  */
 import { spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
@@ -66,8 +66,62 @@ export interface TavernInstallRequest {
 
 const DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
 /** 插件包的发布文件（package.json 的 `files`）。checkout 兜底只覆盖这些。 */
-const SHIPPED_FILES = ['index.mjs', 'agent.mjs', 'compaction.mjs', 'novel.mjs', 'cordis.patch.yml', 'README.md', 'package.json']
+const SHIPPED_FILES = ['index.mjs', 'agent.mjs', 'compaction.mjs', 'novel.mjs', 'version.json', 'cordis.patch.yml', 'README.md', 'package.json']
 const SHIPPED_DIRS = ['client']
+/** Windows 上杀毒/索引器对刚落盘文件的瞬时锁：有界重试，仍失败才上抛。 */
+const FILE_LOCK_RETRY_DELAYS_MS = [20, 50, 100, 200]
+
+function isTransientLockError(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code
+  return code === 'EBUSY' || code === 'EPERM' || code === 'EACCES'
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/**
+ * 单文件原子替换：先写同目录临时文件再 rename 顶上（libuv 的 rename 在
+ * Windows 用 MoveFileEx(REPLACE_EXISTING)，同卷内替换目标目录项，不触碰
+ * pnpm store 的硬链接 inode）。与旧「rm 后 copy」相比，目标文件暴露半新
+ * 半旧内容的窗口从整个拷贝时长缩到 rename 一瞬；瞬时锁做有界重试。
+ */
+function replaceFileAtomic(source: string, target: string): void {
+  const temp = `${target}.dsh-tavern-partial`
+  copyFileSync(source, temp)
+  for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
+    try {
+      renameSync(temp, target)
+      return
+    } catch (error) {
+      if (attempt > 0 && isTransientLockError(error)) {
+        sleepSync(FILE_LOCK_RETRY_DELAYS_MS[FILE_LOCK_RETRY_DELAYS_MS.length - attempt] ?? 50)
+        continue
+      }
+      rmSync(temp, { force: true })
+      throw error
+    }
+  }
+}
+
+/** 同 {@link replaceFileAtomic}，但内容来自内存（client 目录逐文件覆盖用）。 */
+function writeFileAtomic(target: string, data: string | NodeJS.ArrayBufferView): void {
+  const temp = `${target}.dsh-tavern-partial`
+  writeFileSync(temp, data)
+  for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
+    try {
+      renameSync(temp, target)
+      return
+    } catch (error) {
+      if (attempt > 0 && isTransientLockError(error)) {
+        sleepSync(FILE_LOCK_RETRY_DELAYS_MS[FILE_LOCK_RETRY_DELAYS_MS.length - attempt] ?? 50)
+        continue
+      }
+      rmSync(temp, { force: true })
+      throw error
+    }
+  }
+}
 
 export async function installUpdate(request: TavernInstallRequest): Promise<TavernInstallOutcome> {
   let pluginManager: any = request.pluginManager ?? null
@@ -151,20 +205,47 @@ export function resolvePluginManager(ctx: any): any {
 /**
  * 动态注入 pluginManager：服务在 apply 之后才挂载时，回调会在它就绪时触发。
  * 返回 disposer；宿主没有 `inject` 方法（老版本）时返回 noop。
+ *
+ * 注意 cordis 4 的 `ctx.inject(deps, cb)` 返回的是 Fiber（PromiseLike），不是
+ * 函数——`typeof returned === 'function'` 恒 false 会把监听 fiber 永远留在
+ * 宿主上。Fiber 的卸载方法是 `.dispose()`，两种形状都兼容。
  */
 export function watchPluginManager(ctx: any, onReady: (service: any) => void): () => void {
   if (typeof ctx?.inject !== 'function') return () => {}
   try {
-    const dispose = ctx.inject(['pluginManager'], (serviceCtx: any) => {
+    const returned: any = ctx.inject(['pluginManager'], (serviceCtx: any) => {
       try {
         if (serviceCtx?.pluginManager !== undefined) onReady(serviceCtx.pluginManager)
       } catch {
       }
     })
-    return typeof dispose === 'function' ? dispose : () => {}
+    return () => {
+      try {
+        if (typeof returned?.dispose === 'function') returned.dispose()
+        else if (typeof returned === 'function') returned()
+      } catch {
+      }
+    }
   } catch {
     return () => {}
   }
+}
+
+/**
+ * 当前 profile 名。宿主进程不设置 `DSH_PROFILE`（那只在 shell 工具的环境快照
+ * 里出现），dsh 启动的 profile 会挂 `ctx.profileContext.name`
+ * （dsh-app-boot 的 ProfileContext）；两级探测后仍未知则回退 'desktop'。
+ */
+export function resolveProfileName(ctx: any): string {
+  for (const read of [() => ctx?.profileContext?.name, () => process.env.DSH_PROFILE]) {
+    try {
+      const value = read()
+      if (typeof value === 'string' && value.trim() !== '') return value.trim()
+    } catch {
+      // Cordis 对未声明 inject 的服务属性会抛错，继续试下一级。
+    }
+  }
+  return 'desktop'
 }
 
 /**
@@ -194,7 +275,7 @@ export function resolveDesktopCli(
 export async function installViaCli(request: TavernInstallRequest): Promise<TavernInstallOutcome | null> {
   const cli = resolveDesktopCli()
   if (cli === null) return null
-  const profile = process.env.DSH_PROFILE?.trim() || 'desktop'
+  const profile = resolveProfileName(request.ctx)
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit)
   const args = [...cli.args, 'plugin', '--profile', profile, 'add', spec]
   request.log(`dsh plugin --profile ${profile} add ${spec}`)
@@ -243,8 +324,11 @@ export async function installViaPluginManager(
         ? `plugin-manager install failed: ${detail || 'see the profile .plugin-manager logs'}${ambiguous ? ' (git dependency target is ambiguous: the manifest specifier never changes, so `dsh plugin` is the path that works)' : ''}`
         : application === 'restart-required'
           ? 'installed through the DSH plugin manager; restart DSH to load the new module generation'
-          : 'installed through the DSH plugin manager',
-      restartRequired: !failed && application === 'restart-required',
+          : 'installed through the DSH plugin manager; restart DSH to load the new module generation (the host reported "applied" under HMR, but package replacements still need a fresh module generation)',
+      // 宿主 HMR 下回报 'applied'，但包替换必须重启进程才加载新 JS generation
+      // （dsh-plugin-manager 自述语义）——两种回报都按需重启处理；service 层
+      // 再以「磁盘 stamp 是否被内存 stamp 追上」决定过渡态怎么解除。
+      restartRequired: !failed,
       installed: readInstalledStamp(request.pluginDir, spec),
     }
   } catch (error) {
@@ -317,7 +401,7 @@ function describeFailure(result: any): string {
 export async function installViaCheckout(request: TavernInstallRequest): Promise<TavernInstallOutcome> {
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit)
   const repository = repositorySlug(request.repository)
-  const profile = process.env.DSH_PROFILE?.trim() || 'desktop'
+  const profile = resolveProfileName(request.ctx)
   const checkout = mkdtempSync(join(tmpdir(), 'dsh-tavern-checkout-'))
   try {
     request.log(`fallback: git clone --depth 1 https://github.com/${repository}.git`)
@@ -333,6 +417,7 @@ export async function installViaCheckout(request: TavernInstallRequest): Promise
     const source = join(checkout, 'packages', 'plugin')
     if (!existsSync(source)) throw new Error('packages/plugin is missing from the checkout')
     const copied = copyShippedFiles(source, request.pluginDir)
+    if (ensureVersionStamp(source, request.pluginDir, request.commit)) copied.push('version.json (synthesized)')
     request.log(`copied ${copied.length} shipped entries into ${request.pluginDir}`)
     return {
       ok: true,
@@ -370,16 +455,15 @@ async function mustRun(command: string, args: string[], request: TavernInstallRe
 
 /**
  * 覆盖已安装目录里的发布产物。pnpm 的 hoisted 布局里的文件可能是 store 的
- * 硬链接，直接 copyFile 会改写共享 inode，因此先删后拷。
+ * 硬链接，直接 copyFile 会改写共享 inode——原子替换只动目标目录项，store
+ * 里的旧内容不受影响。逐文件原子化：任何一步失败，已完成的文件保持完整。
  */
 export function copyShippedFiles(sourceDir: string, targetDir: string): string[] {
   const copied: string[] = []
   for (const file of SHIPPED_FILES) {
     const from = join(sourceDir, file)
     if (!existsSync(from)) continue
-    const to = join(targetDir, file)
-    rmSync(to, { force: true })
-    copyFileSync(from, to)
+    replaceFileAtomic(from, join(targetDir, file))
     copied.push(file)
   }
   for (const dir of SHIPPED_DIRS) {
@@ -389,12 +473,33 @@ export function copyShippedFiles(sourceDir: string, targetDir: string): string[]
       const relative = file.slice(from.length + 1)
       const to = join(targetDir, dir, relative)
       mkdirSync(dirname(to), { recursive: true })
-      rmSync(to, { force: true })
-      writeFileSync(to, readFileSync(file))
+      writeFileAtomic(to, readFileSync(file))
       copied.push(`${dir}/${relative.replaceAll('\\', '/')}`)
     }
   }
   return copied
+}
+
+/**
+ * checkout 兜底的 version.json 保障：仓库把 version.json 排除在 git 之外
+ * （构建旁车），git 源里读不到它。不补写的话，registry 安装（tarball 带
+ * version.json）走 checkout 更新后旧 stamp 残留——readInstalledStamp 会把
+ * 已安装版本读回旧值，pendingRestart 被立即解除，更新徽标反复回弹。
+ * checkout 提供了就用 checkout 的；否则从刚拷贝的 package.json 版本和目标
+ * commit 现写一份。
+ */
+export function ensureVersionStamp(sourceDir: string, targetDir: string, commit: string): boolean {
+  if (existsSync(join(sourceDir, 'version.json'))) return false
+  try {
+    const version = JSON.parse(readFileSync(join(targetDir, 'package.json'), 'utf8'))?.version
+    if (typeof version !== 'string' || version.trim() === '') return false
+    const stamp: Record<string, string> = { version: version.trim() }
+    if (isCommit(commit)) stamp.commit = shortCommit(commit)
+    writeFileAtomic(join(targetDir, 'version.json'), `${JSON.stringify(stamp, null, 2)}\n`)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function listFiles(root: string): string[] {

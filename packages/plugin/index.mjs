@@ -7191,9 +7191,13 @@ function sessionEvents(session) {
   return readSessionEvents(session) ?? [];
 }
 var TAVERN_PLUGIN_SOURCE_KIND = "plugin:dsh-tavern";
-function hostPluginMessageSource(session, members) {
+function hostSessionFormatVersion(session) {
   const version = session?.header?.version;
-  const kind = typeof version === "number" && Number.isSafeInteger(version) && version >= 4 ? TAVERN_PLUGIN_SOURCE_KIND : "plugin";
+  return typeof version === "number" && Number.isSafeInteger(version) ? version : void 0;
+}
+function hostPluginMessageSource(session, members) {
+  const version = hostSessionFormatVersion(session);
+  const kind = version !== void 0 && version >= 4 ? TAVERN_PLUGIN_SOURCE_KIND : "plugin";
   return {
     ...kind === "plugin" ? { plugin: "dsh-tavern" } : {},
     ...members,
@@ -9147,8 +9151,21 @@ function historyImportAppends(chat, sessionId, scripts, expand, session) {
     const transformed = promptScripts.length === 0 ? message.mes : applyRegexScripts(message.mes, promptScripts, RegexPlacement.AI_OUTPUT, {}, { depth: chat.messages.length - 1 - index });
     return expand ? expand(transformed) : transformed;
   };
+  const version = hostSessionFormatVersion(session);
+  const v4 = version !== void 0 && version >= 4;
+  let importTurn = 0;
+  if (v4) {
+    for (const event of sessionEvents(session)) {
+      if (event.type === "turn/start" && Number.isSafeInteger(event.data?.turn)) {
+        importTurn = Math.max(importTurn, event.data.turn);
+      }
+    }
+    importTurn += 1;
+  }
   const appends = [];
   let assistantCount = 0;
+  let importStep = 0;
+  if (v4) appends.push({ type: "turn/start", data: { turn: importTurn } });
   for (const [index, message] of chat.messages.entries()) {
     if (message.is_system === true || typeof message.mes !== "string" || message.mes.trim() === "") continue;
     const origin = message.extra?.agentTavern;
@@ -9167,11 +9184,13 @@ function historyImportAppends(chat, sessionId, scripts, expand, session) {
       continue;
     }
     assistantCount += 1;
+    importStep += 1;
+    if (v4) appends.push({ type: "step/start", data: { turn: importTurn, step: importStep } });
     appends.push({
       type: "assistant/message",
       data: {
-        turn: 0,
-        step: assistantCount,
+        turn: v4 ? importTurn : 0,
+        step: v4 ? importStep : assistantCount,
         message: {
           id: randomUUID3(),
           role: "assistant",
@@ -9183,10 +9202,21 @@ function historyImportAppends(chat, sessionId, scripts, expand, session) {
             kind: "model",
             ...TAVERN_MIRROR_MODEL_SOURCE
           }
-        }
+        },
+        // v4 settlement 校验要求数组形状的 stream；镜像导入无流式细节，空数组
+        // 即合法。v0-v3 格式不写此成员，避免老宿主工件升级时被毒化。
+        ...v4 ? { stream: [] } : {}
       },
       surfaceOp: "append"
     });
+    if (v4) appends.push({ type: "step/end", data: { turn: importTurn, step: importStep } });
+  }
+  if (v4) {
+    if (appends.length > 1) {
+      appends.push({ type: "turn/end", data: { turn: importTurn, reason: { kind: "completed" } } });
+    } else {
+      appends.shift();
+    }
   }
   return appends;
 }
@@ -9240,7 +9270,7 @@ function dshHomePath(...segments) {
 }
 
 // packages/plugin/src/update/service.ts
-import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname4, join as join10 } from "node:path";
 
 // packages/plugin/src/update/github.ts
@@ -9594,12 +9624,54 @@ function curlGet(url, accept, timeoutMs, exec = execFile2) {
 
 // packages/plugin/src/update/apply.ts
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname as dirname3, join as join9 } from "node:path";
 var DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
-var SHIPPED_FILES = ["index.mjs", "agent.mjs", "compaction.mjs", "novel.mjs", "cordis.patch.yml", "README.md", "package.json"];
+var SHIPPED_FILES = ["index.mjs", "agent.mjs", "compaction.mjs", "novel.mjs", "version.json", "cordis.patch.yml", "README.md", "package.json"];
 var SHIPPED_DIRS = ["client"];
+var FILE_LOCK_RETRY_DELAYS_MS = [20, 50, 100, 200];
+function isTransientLockError(error) {
+  const code = error?.code;
+  return code === "EBUSY" || code === "EPERM" || code === "EACCES";
+}
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function replaceFileAtomic(source, target) {
+  const temp = `${target}.dsh-tavern-partial`;
+  copyFileSync(source, temp);
+  for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
+    try {
+      renameSync(temp, target);
+      return;
+    } catch (error) {
+      if (attempt > 0 && isTransientLockError(error)) {
+        sleepSync(FILE_LOCK_RETRY_DELAYS_MS[FILE_LOCK_RETRY_DELAYS_MS.length - attempt] ?? 50);
+        continue;
+      }
+      rmSync(temp, { force: true });
+      throw error;
+    }
+  }
+}
+function writeFileAtomic(target, data) {
+  const temp = `${target}.dsh-tavern-partial`;
+  writeFileSync(temp, data);
+  for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
+    try {
+      renameSync(temp, target);
+      return;
+    } catch (error) {
+      if (attempt > 0 && isTransientLockError(error)) {
+        sleepSync(FILE_LOCK_RETRY_DELAYS_MS[FILE_LOCK_RETRY_DELAYS_MS.length - attempt] ?? 50);
+        continue;
+      }
+      rmSync(temp, { force: true });
+      throw error;
+    }
+  }
+}
 async function installUpdate(request) {
   let pluginManager = request.pluginManager ?? null;
   return runInstallChain(request, [
@@ -9658,18 +9730,33 @@ function watchPluginManager(ctx, onReady) {
   if (typeof ctx?.inject !== "function") return () => {
   };
   try {
-    const dispose = ctx.inject(["pluginManager"], (serviceCtx) => {
+    const returned = ctx.inject(["pluginManager"], (serviceCtx) => {
       try {
         if (serviceCtx?.pluginManager !== void 0) onReady(serviceCtx.pluginManager);
       } catch {
       }
     });
-    return typeof dispose === "function" ? dispose : () => {
+    return () => {
+      try {
+        if (typeof returned?.dispose === "function") returned.dispose();
+        else if (typeof returned === "function") returned();
+      } catch {
+      }
     };
   } catch {
     return () => {
     };
   }
+}
+function resolveProfileName(ctx) {
+  for (const read of [() => ctx?.profileContext?.name, () => process.env.DSH_PROFILE]) {
+    try {
+      const value = read();
+      if (typeof value === "string" && value.trim() !== "") return value.trim();
+    } catch {
+    }
+  }
+  return "desktop";
 }
 function resolveDesktopCli(argv = process.argv, execPath = process.execPath, exists = existsSync) {
   const configured = process.env.DSH_TAVERN_DSH_CLI?.trim();
@@ -9685,7 +9772,7 @@ function resolveDesktopCli(argv = process.argv, execPath = process.execPath, exi
 async function installViaCli(request) {
   const cli = resolveDesktopCli();
   if (cli === null) return null;
-  const profile = process.env.DSH_PROFILE?.trim() || "desktop";
+  const profile = resolveProfileName(request.ctx);
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
   const args = [...cli.args, "plugin", "--profile", profile, "add", spec];
   request.log(`dsh plugin --profile ${profile} add ${spec}`);
@@ -9724,8 +9811,11 @@ async function installViaPluginManager(request, pluginManager) {
       ok: !failed,
       strategy: "plugin-manager",
       application,
-      message: failed ? `plugin-manager install failed: ${detail || "see the profile .plugin-manager logs"}${ambiguous ? " (git dependency target is ambiguous: the manifest specifier never changes, so `dsh plugin` is the path that works)" : ""}` : application === "restart-required" ? "installed through the DSH plugin manager; restart DSH to load the new module generation" : "installed through the DSH plugin manager",
-      restartRequired: !failed && application === "restart-required",
+      message: failed ? `plugin-manager install failed: ${detail || "see the profile .plugin-manager logs"}${ambiguous ? " (git dependency target is ambiguous: the manifest specifier never changes, so `dsh plugin` is the path that works)" : ""}` : application === "restart-required" ? "installed through the DSH plugin manager; restart DSH to load the new module generation" : 'installed through the DSH plugin manager; restart DSH to load the new module generation (the host reported "applied" under HMR, but package replacements still need a fresh module generation)',
+      // 宿主 HMR 下回报 'applied'，但包替换必须重启进程才加载新 JS generation
+      // （dsh-plugin-manager 自述语义）——两种回报都按需重启处理；service 层
+      // 再以「磁盘 stamp 是否被内存 stamp 追上」决定过渡态怎么解除。
+      restartRequired: !failed,
       installed: readInstalledStamp(request.pluginDir, spec)
     };
   } catch (error) {
@@ -9789,7 +9879,7 @@ function describeFailure(result) {
 async function installViaCheckout(request) {
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
   const repository = repositorySlug(request.repository);
-  const profile = process.env.DSH_PROFILE?.trim() || "desktop";
+  const profile = resolveProfileName(request.ctx);
   const checkout = mkdtempSync(join9(tmpdir(), "dsh-tavern-checkout-"));
   try {
     request.log(`fallback: git clone --depth 1 https://github.com/${repository}.git`);
@@ -9805,6 +9895,7 @@ async function installViaCheckout(request) {
     const source = join9(checkout, "packages", "plugin");
     if (!existsSync(source)) throw new Error("packages/plugin is missing from the checkout");
     const copied = copyShippedFiles(source, request.pluginDir);
+    if (ensureVersionStamp(source, request.pluginDir, request.commit)) copied.push("version.json (synthesized)");
     request.log(`copied ${copied.length} shipped entries into ${request.pluginDir}`);
     return {
       ok: true,
@@ -9842,9 +9933,7 @@ function copyShippedFiles(sourceDir, targetDir) {
   for (const file of SHIPPED_FILES) {
     const from = join9(sourceDir, file);
     if (!existsSync(from)) continue;
-    const to = join9(targetDir, file);
-    rmSync(to, { force: true });
-    copyFileSync(from, to);
+    replaceFileAtomic(from, join9(targetDir, file));
     copied.push(file);
   }
   for (const dir of SHIPPED_DIRS) {
@@ -9854,12 +9943,25 @@ function copyShippedFiles(sourceDir, targetDir) {
       const relative2 = file.slice(from.length + 1);
       const to = join9(targetDir, dir, relative2);
       mkdirSync(dirname3(to), { recursive: true });
-      rmSync(to, { force: true });
-      writeFileSync(to, readFileSync(file));
+      writeFileAtomic(to, readFileSync(file));
       copied.push(`${dir}/${relative2.replaceAll("\\", "/")}`);
     }
   }
   return copied;
+}
+function ensureVersionStamp(sourceDir, targetDir, commit) {
+  if (existsSync(join9(sourceDir, "version.json"))) return false;
+  try {
+    const version = JSON.parse(readFileSync(join9(targetDir, "package.json"), "utf8"))?.version;
+    if (typeof version !== "string" || version.trim() === "") return false;
+    const stamp = { version: version.trim() };
+    if (isCommit(commit)) stamp.commit = shortCommit(commit);
+    writeFileAtomic(join9(targetDir, "version.json"), `${JSON.stringify(stamp, null, 2)}
+`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 function listFiles(root) {
   const found = [];
@@ -9965,11 +10067,16 @@ var TavernUpdateService = class {
   pendingRestart = null;
   timer;
   disposed = false;
+  started = false;
   pluginManager = null;
   disposePluginManagerWatch;
   constructor(options) {
     this.options = options;
     this.loadCache();
+  }
+  /** 已 dispose 的实例定时器与监听都已拆除；持有方据此决定重建（HMR 重挂）。 */
+  get isDisposed() {
+    return this.disposed;
   }
   get repository() {
     return this.options.repository ?? UPDATE_REPOSITORY;
@@ -10112,6 +10219,8 @@ var TavernUpdateService = class {
   start() {
     if (this.options.enabled === false || this.disposed) return () => {
     };
+    if (this.started) return () => this.dispose();
+    this.started = true;
     this.disposePluginManagerWatch = watchPluginManager(this.options.ctx, (service) => {
       this.pluginManager = service;
     });
@@ -10161,7 +10270,7 @@ var TavernUpdateService = class {
     };
     if (!outcome.ok) return;
     this.checkedAt = this.nowIso();
-    if (outcome.restartRequired) {
+    if (outcome.restartRequired || !sameCommit(this.local.commit, outcome.installed.commit)) {
       this.pendingRestart = outcome.installed;
       this.status = "restart-required";
       this.reason = `installed ${outcome.installed.version} (${outcome.installed.commit}) via ${outcome.strategy}; restart DSH to load it`;
@@ -10215,7 +10324,7 @@ var TavernUpdateService = class {
       const temp = `${path6}.tmp`;
       writeFileSync2(temp, `${JSON.stringify(payload, null, 2)}
 `, "utf8");
-      renameSync(temp, path6);
+      renameSync2(temp, path6);
     } catch {
     }
   }
@@ -10289,7 +10398,7 @@ function novelStore() {
   return novelStorePromise ??= NovelStore.open(dshHomePath("tavern"));
 }
 function tavernUpdate(ctx) {
-  if (updateServiceInstance !== void 0) return updateServiceInstance;
+  if (updateServiceInstance !== void 0 && !updateServiceInstance.isDisposed) return updateServiceInstance;
   updateServiceInstance = new TavernUpdateService({
     ctx,
     home: dshHomePath("tavern"),
@@ -11871,7 +11980,6 @@ async function runGeneration(ctx, db, options) {
       maxTokens: numberOr(preset.sampler.openai_max_tokens, void 0),
       signal
     })) {
-      recordTavernSessionChunk(hostTrace, chunk);
       if (chunk.type === "usage") hostUsage = chunk.usage;
       if (chunk.type === "text-delta") {
         text += chunk.text;
@@ -12272,19 +12380,12 @@ function startTavernSessionStep(trace) {
   }
   return trace;
 }
-function recordTavernSessionChunk(trace, chunk) {
-  if (!trace?.logging || !trace.stepOpen) return;
-  try {
-    trace.session.append("assistant/chunk", { turn: trace.turn, step: trace.step, chunk });
-  } catch {
-    trace.logging = false;
-  }
-}
 function recordTavernSessionAssistant(trace, text, reasoning, provider, model, usage) {
   if (!trace?.logging || !trace.stepOpen) return trace;
   try {
     const content = [{ type: "text", text }];
     if (reasoning) content.push({ type: "reasoning", text: reasoning });
+    const version = hostSessionFormatVersion(trace.session);
     trace.session.append("assistant/message", {
       turn: trace.turn,
       step: trace.step,
@@ -12293,7 +12394,11 @@ function recordTavernSessionAssistant(trace, text, reasoning, provider, model, u
         content,
         source: { kind: "model", provider, model }
       }),
-      ...usage ? { usage } : {}
+      ...usage ? { usage } : {},
+      // v4 加载边界强制 settlement 形状（seed 校验要求 data.stream 为数组），
+      // 缺失时 append 照常成功但会话重启即拒载；v0-v3 格式无此成员，多写
+      // 反而毒化老宿主工件，故按版本分支。
+      ...version !== void 0 && version >= 4 ? { stream: [] } : {}
     }, { surfaceOp: "append" });
     trace.completed = true;
   } catch {
@@ -12307,6 +12412,9 @@ function finishTavernSessionTrace(trace) {
     try {
       trace.session.append("step/end", { turn: trace.turn, step: trace.step });
     } catch {
+      trace.stepOpen = false;
+      trace.turnOpen = false;
+      return;
     }
     trace.stepOpen = false;
   }
@@ -12385,7 +12493,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.3.9".trim() : "";
-  const commit = true ? normalizeCommit("8271f20") : void 0;
+  const commit = true ? normalizeCommit("e2a1d98") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

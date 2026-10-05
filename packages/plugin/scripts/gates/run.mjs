@@ -10,13 +10,15 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { delimiter, dirname, join, resolve } from 'node:path'
+import { basename, delimiter, dirname, join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import vm from 'node:vm'
+import { build as esbuildBuild } from 'esbuild'
 
 const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const REPO_ROOT = resolve(PLUGIN_ROOT, '../..')
@@ -25,6 +27,8 @@ const VERSION_PATH = join(PLUGIN_ROOT, 'version.json')
 const PATCH_PATH = join(PLUGIN_ROOT, 'cordis.patch.yml')
 const SOURCE_PATH = join(PLUGIN_ROOT, 'src', 'index.ts')
 const SERVER_PATH = join(PLUGIN_ROOT, 'index.mjs')
+const AGENT_PATH = join(PLUGIN_ROOT, 'agent.mjs')
+const NOVEL_PATH = join(PLUGIN_ROOT, 'novel.mjs')
 const CLIENT_PATH = join(PLUGIN_ROOT, 'client', 'index.js')
 const PLUGIN_NAME = 'dsh-tavern'
 const API_PREFIX = '/api/dsh-tavern'
@@ -129,6 +133,14 @@ function checkPackageObject(pkg, checkFiles = false) {
   if (pkg.dsh?.bundle?.patch !== './cordis.patch.yml') {
     problems.push("dsh.bundle.patch must be './cordis.patch.yml'")
   }
+  if (pkg.dsh?.manifestVersion !== 1) {
+    problems.push('dsh.manifestVersion must be 1')
+  }
+  // 注：不要在这里加 @deepseek-ai/dsh* 的 peerDependencies 版本护栏。宿主的
+  // evaluatePluginCompatibility 确实只按名字模式 + semver 读取它，但 pnpm v11
+  // 的 autoInstallPeer 会无视 optional 元数据把整棵宿主运行时（node-pty/koffi
+  // 等原生构建）拖进每个安装现场，pnpm check 已实证撞 ERR_PNPM_IGNORED_BUILDS。
+  // 版本边界由本 gate 集与 .npm-cache 运行时基线共同守护。
   if (pkg.dsh?.client?.platform !== 'web') problems.push("dsh.client.platform must be 'web'")
   if (!Array.isArray(pkg.dsh?.client?.inject) || !pkg.dsh.client.inject.every((value) => typeof value === 'string')) {
     problems.push('dsh.client.inject must be an array of package-name strings')
@@ -216,11 +228,18 @@ function parsePatchEntries(text) {
       const lineIndent = /^\s*/.exec(line)[0].length
       if (lineIndent <= indent) break
       const nameMatch = /^\s*name:\s*(.*?)\s*$/.exec(line)
-      if (nameMatch !== null) entry.name = unquoteYamlScalar(nameMatch[1])
+      // 只取 id 后的第一个 name：preset 行的 config.plugins 子块里还有更深的
+      // `- id / name` 对，后扫描的浅层 name 不能被子条目覆盖。
+      if (nameMatch !== null && entry.name === undefined) entry.name = unquoteYamlScalar(nameMatch[1])
     }
     entries.push(entry)
   }
   return entries
+}
+
+/** ST 生成轨迹的词汇表 tripwire：assistant/chunk 是 v0 词汇，v4 加载整件拒收。 */
+function serverAppendsAssistantChunk(text) {
+  return /append\(\s*['"]assistant\/chunk['"]/.test(text)
 }
 
 function checkPatchText(text) {
@@ -229,6 +248,18 @@ function checkPatchText(text) {
   const entries = parsePatchEntries(text)
   if (!entries.some((entry) => entry.id === PLUGIN_NAME && entry.name === PLUGIN_NAME)) {
     problems.push(`patch must insert id/name '${PLUGIN_NAME}'`)
+  }
+  // 两个 Agent preset 声明行（DSH 0.2.0 起 preset 的唯一投递方式）：行在、
+  // 目标包名对、config.id 与 bundle 内常量一致。config.id 是会话日志里的
+  // agent-preset/selected 持久值——改 id 会让旧会话的 preset 恢复被宿主拒绝
+  // （"rejects a missing definition"），所以这里同时锁定 patch 与产物两侧。
+  for (const [rowId, presetId] of [['preset-agent-tavern', 'agent-tavern'], ['preset-agent-novel', 'agent-novel']]) {
+    if (!entries.some((entry) => entry.id === rowId && entry.name === '@deepseek-ai/dsh-agent-preset')) {
+      problems.push(`patch must insert preset row '${rowId}' targeting @deepseek-ai/dsh-agent-preset`)
+    }
+    if (!new RegExp(`id:\\s*['"]?${presetId}['"]?\\s*$`, 'm').test(text)) {
+      problems.push(`patch preset row '${rowId}' must declare config.id '${presetId}'`)
+    }
   }
   return problems
 }
@@ -760,7 +791,7 @@ async function checkClientExecution(code, options = {}) {
     const zhKeys = Object.keys(zh ?? {}).sort()
     const enKeys = Object.keys(en ?? {}).sort()
     if (zhKeys.length === 0) problems.push('locale dictionaries must not be empty')
-    if (zhKeys.join(' ') !== enKeys.join(' ')) {
+    if (zhKeys.join('\u0000') !== enKeys.join('\u0000')) {
       const missingInEn = zhKeys.filter((key) => !(key in (en ?? {})))
       const missingInZh = enKeys.filter((key) => !(key in (zh ?? {})))
       problems.push(`locale zh/en dictionaries diverge (missing in en: ${missingInEn.join(', ') || 'none'}; missing in zh: ${missingInZh.join(', ') || 'none'})`)
@@ -951,7 +982,9 @@ function checkNodeMountResult(result) {
   if (!Array.isArray(result.inject)) {
     problems.push('Node module inject export must be an array')
   } else {
-    for (const service of ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents']) {
+    // 与 src/index.ts 的 inject 声明同步的宿主服务全集（0.2.0-rc.2 审计后从 6
+    // 项补齐到 9 项）：宿主移除任一服务时这里必须报警，而不是等运行期抛错。
+    for (const service of ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools', 'compaction']) {
       if (!result.inject.includes(service)) problems.push(`Node module inject must include '${service}'`)
     }
   }
@@ -1245,15 +1278,18 @@ const gates = [
         },
         files: ['index.mjs', 'novel.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md'],
         dsh: {
+          manifestVersion: 1,
           bundle: { patch: './cordis.patch.yml' },
           client: { platform: 'web', inject: [] },
         },
       }
       const bad = structuredClone(valid)
       bad.dsh.client.platform = 'node'
-      return checkPackageObject(valid).length === 0 && checkPackageObject(bad).length > 0
+      const badManifest = structuredClone(valid)
+      delete badManifest.dsh.manifestVersion
+      return checkPackageObject(valid).length === 0 && checkPackageObject(bad).length > 0 && checkPackageObject(badManifest).length > 0
         ? []
-        : ['package contract bad sample was not distinguished from the valid sample']
+        : ['package contract bad samples were not distinguished from the valid sample']
     },
     check: () => {
       const pkg = readJson(PACKAGE_PATH)
@@ -1263,13 +1299,34 @@ const gates = [
   {
     name: 'patch-reference',
     selfTest: () => {
-      const good = "- insert:\n    - id: dsh-tavern\n      name: 'dsh-tavern'\n"
+      const good = '- insert:\n'
+        + '    - id: dsh-tavern\n      name: \'dsh-tavern\'\n'
+        + '    - id: preset-agent-tavern\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-tavern\n'
+        + '    - id: preset-agent-novel\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-novel\n'
       const bad = "- insert:\n    - id: other\n      name: 'other'\n"
-      return checkPatchText(good).length === 0 && checkPatchText(bad).length > 0
+      const badPresetId = good.replace('id: agent-tavern', 'id: agent-tavern-x')
+      return checkPatchText(good).length === 0 && checkPatchText(bad).length > 0 && checkPatchText(badPresetId).length > 0
         ? []
-        : ['patch reference bad sample was not rejected']
+        : ['patch reference bad samples were not rejected']
     },
-    check: () => checkPatchText(readFileSync(PATCH_PATH, 'utf8')),
+    check: () => {
+      const problems = checkPatchText(readFileSync(PATCH_PATH, 'utf8'))
+      // patch 声明的 config.id 必须与构建产物内的常量同值（见 checkPatchText 注释）。
+      if (existsSync(SERVER_PATH)) {
+        const server = readFileSync(SERVER_PATH, 'utf8')
+        if (!server.includes('agent-tavern')) problems.push('built server bundle lost the agent-tavern preset id constant')
+      }
+      for (const [path, presetId] of [[AGENT_PATH, 'agent-tavern'], [NOVEL_PATH, 'agent-novel']]) {
+        if (!existsSync(path)) {
+          problems.push(`generated ${path} does not exist`)
+          continue
+        }
+        if (!readFileSync(path, 'utf8').includes(presetId)) {
+          problems.push(`built ${basename(path)} lost the '${presetId}' preset id constant`)
+        }
+      }
+      return problems
+    },
   },
   {
     name: 'server-bundle',
@@ -1514,7 +1571,7 @@ const gates = [
     selfTest: () => {
       const good = {
         name: PLUGIN_NAME,
-        inject: ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents'],
+        inject: ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools', 'compaction'],
         applyType: 'function',
         sections: [{ name: 'dsh-tavern:active-character', textType: 'function' }],
         registrations: [
@@ -1529,6 +1586,139 @@ const gates = [
         : ['Node mount bad sample was not rejected']
     },
     check: () => existsSync(SERVER_PATH) ? runNodeMount() : ['generated packages/plugin/index.mjs does not exist'],
+  },
+  {
+    // v4 会话准入回归网（0.2.0-rc.2 审计产出）：插件的每类会话写入序列都必须
+    // 通过真实宿主校验——词汇表（事件类型 ∈ KNOWN_SESSION_EVENT_TYPES）与
+    // turn/step 关系（assertReleasedV4Relationships）。历史导入序列直接跑真实
+    // 的 historyImportAppends（esbuild 现场打包 src，杜绝 gate 镜像漂移）；
+    // ST 生成轨迹与 notice 是 recordTavernSessionAssistant 等内部函数的静态
+    // 镜像（未导出），加 assistant/chunk 落盘 tripwire 兜底。负样本（旧裸
+    // turn:0 导入形状）必须被拒——证明 gate 接的是真校验器而非橡皮图章。
+    name: 'v4-session-admission',
+    selfTest: () => {
+      const dirty = 'trace.session.append(\'assistant/chunk\', { turn: 1 })'
+      const clean = 'trace.session.append(\'assistant/message\', { turn: 1, stream: [] })'
+      return serverAppendsAssistantChunk(dirty) && !serverAppendsAssistantChunk(clean)
+        ? []
+        : ['assistant/chunk tripwire failed its self samples']
+    },
+    check: async () => {
+      if (!existsSync(SERVER_PATH)) return ['generated packages/plugin/index.mjs does not exist']
+      const problems = []
+      if (serverAppendsAssistantChunk(readFileSync(SERVER_PATH, 'utf8'))) {
+        problems.push("server bundle still appends 'assistant/chunk' — v0 vocabulary the v4 loader refuses the whole artifact for")
+      }
+      const runtime = locateOfficialDependencyRoot()
+      if (runtime === null) return problems
+      const migrationEntry = join(runtime, '@deepseek-ai', 'dsh-session-format-v3-to-v4', 'lib', 'index.js')
+      const sessionEntry = join(runtime, '@deepseek-ai', 'dsh-session', 'lib', 'index.js')
+      const v3to4 = await import(pathToFileURL(migrationEntry).href)
+      const dshSession = await import(pathToFileURL(sessionEntry).href)
+      const known = dshSession.KNOWN_SESSION_EVENT_TYPES
+      const assertRelationships = v3to4.assertReleasedV4Relationships
+
+      const header = { version: 4, id: 'gate-v4-admission', createdAt: 1, isSeeded: false, delegationDepth: 0 }
+      const toEvents = (rows) => rows.map((row, index) => ({
+        type: row.type,
+        seq: index,
+        time: 1000 + index,
+        data: row.data,
+        ...(row.surfaceOp === undefined ? {} : { surfaceOp: row.surfaceOp }),
+      }))
+      const admissionProblems = (label, rows) => {
+        const events = toEvents(rows)
+        for (const event of events) {
+          if (!known.has(event.type)) return [`${label}: event type '${event.type}' is outside the host KNOWN vocabulary`]
+        }
+        for (const event of events) {
+          if (event.type === 'assistant/message' && !Array.isArray(event.data?.stream)) {
+            return [`${label}: assistant/message lacks the settlement stream array (load-boundary seed check throws)`]
+          }
+        }
+        try {
+          assertRelationships({ header, events, inheritedEventCount: 0 }, known)
+        } catch (error) {
+          return [`${label}: real v4 relationship admission rejected the stream: ${error.message}`]
+        }
+        return []
+      }
+
+      // 1) 历史导入序列：真实 historyImportAppends 输出（现有闭合 turn 1 的 v4 会话）。
+      const tempRoot = mkdtempSync(join(tmpdir(), 'dsh-tavern-gate-v4-'))
+      try {
+        const bundle = await esbuildBuild({
+          entryPoints: [join(PLUGIN_ROOT, 'src', 'agent-tavern', 'projector.ts')],
+          bundle: true,
+          format: 'esm',
+          platform: 'node',
+          sourcemap: false,
+          write: false,
+        })
+        const modulePath = join(tempRoot, 'projector.mjs')
+        writeFileSync(modulePath, bundle.outputFiles[0].text, 'utf8')
+        const { historyImportAppends } = await import(pathToFileURL(modulePath).href)
+        const chat = {
+          header: { user_name: 'Alice', character_name: 'Gate Character', chat_metadata: {} },
+          messages: [
+            { name: 'Gate Character', is_user: false, is_system: false, send_date: '', mes: 'Greeting.' },
+            { name: 'Alice', is_user: true, is_system: false, send_date: '', mes: 'Hello.' },
+          ],
+        }
+        const session = {
+          header: { version: 4 },
+          events: [
+            { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
+            { type: 'turn/end', seq: 1, time: 2, data: { turn: 1, reason: { kind: 'completed' } } },
+          ],
+        }
+        const importRows = [
+          // 桩会话已有的事件先行（validator 的 nextTurn 从 1 起算，导入必须接续）
+          { type: 'turn/start', data: { turn: 1 } },
+          { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
+          ...historyImportAppends(chat, 'gate-session', [], undefined, session),
+        ]
+        problems.push(...admissionProblems('history import', importRows))
+
+        // 负控：旧形状（剥掉边界 + turn:0 裸消息 + 无 stream）必须被真实校验拒绝。
+        const legacyShape = importRows
+          .filter((row) => row.type !== 'turn/start' && row.type !== 'turn/end' && row.type !== 'step/start' && row.type !== 'step/end')
+          .map((row) => row.type === 'assistant/message' ? { ...row, data: { turn: 0, step: 1 } } : row)
+        let rejected = true
+        try {
+          assertRelationships({
+            header,
+            events: toEvents(legacyShape).map((event) => event.type === 'assistant/message' ? { ...event, data: { ...event.data, stream: [] } } : event),
+            inheritedEventCount: 0,
+          }, known)
+          rejected = false
+        } catch {
+          rejected = true
+        }
+        if (!rejected) problems.push('negative control passed: the bare turn:0 import shape was NOT rejected — admission wiring is broken')
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true })
+      }
+
+      // 2) ST 生成轨迹（recordTavernSessionAssistant 等内部函数的静态镜像）。
+      const traceRows = [
+        { type: 'turn/start', data: { turn: 1 } },
+        { type: 'user/message', data: { id: 'gate-user', role: 'user', content: [{ type: 'text', text: 'Write' }], source: { kind: 'user' } }, surfaceOp: 'append' },
+        { type: 'step/start', data: { turn: 1, step: 1 } },
+        { type: 'assistant/message', data: { turn: 1, step: 1, message: { id: 'gate-assistant', role: 'assistant', content: [{ type: 'text', text: 'Reply' }], source: { kind: 'model', provider: 'gate', model: 'gate' } }, stream: [] }, surfaceOp: 'append' },
+        { type: 'step/end', data: { turn: 1, step: 1 } },
+        { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
+      ]
+      problems.push(...admissionProblems('ST generation trace', traceRows))
+
+      // 3) notice（插件 producer-owned source 的 user/message）。
+      const noticeRows = [
+        { type: 'user/message', data: { id: 'gate-notice', role: 'user', content: [{ type: 'text', text: 'Tavern roleplay chat.' }], source: { kind: 'plugin:dsh-tavern', form: 'notice', summary: 'Tavern' } }, surfaceOp: 'append' },
+      ]
+      problems.push(...admissionProblems('activation notice', noticeRows))
+
+      return problems
+    },
   },
 ]
 

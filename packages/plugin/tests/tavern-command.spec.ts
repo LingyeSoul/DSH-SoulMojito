@@ -50,6 +50,13 @@ function makeHostSessionAgent(id: string) {
   }
 }
 
+// DSH 0.2.0-rc.2 的 Session 形状：header.version = 4（format v4），事件日志经
+// snapshotEvents() 快照读取。用于断言 v4 会话的 settlement/词汇表合规性。
+function makeV4SessionAgent(id: string) {
+  const agent = makeHostSessionAgent(id)
+  return { ...agent, session: { ...agent.session, header: { version: 4 } } }
+}
+
 function makeRequest(body: unknown, url = '/api/dsh-tavern/generate') {
   const listeners = new Map<string, (value?: unknown) => void>()
   return {
@@ -257,7 +264,7 @@ describe('internal Tavern session bridge occupation', () => {
     expect(agent.session.events.filter((event) => event.type === 'turn/end')).toHaveLength(0)
   })
 
-  it('mirrors Tavern generation into the native session trace with usage', async () => {
+  it('mirrors Tavern generation into the native session trace with usage (pre-v4 host session)', async () => {
     const agent = makeAgent('session-generate')
     agents.set(agent.id, agent)
     const snapshot = await store.getChatSnapshot(CHARACTER, chatId)
@@ -273,15 +280,39 @@ describe('internal Tavern session bridge occupation', () => {
     const eventTypes = agent.session.events.map((event) => event.type)
     expect(eventTypes).toEqual([
       'turn/start', 'user/message', 'step/start',
-      'assistant/chunk', 'assistant/chunk', 'assistant/chunk',
       'assistant/message', 'step/end', 'turn/end',
     ])
     const assistant = agent.session.events.find((event) => event.type === 'assistant/message')
     expect((assistant?.data as { usage?: unknown }).usage).toEqual({
       inputTokens: 11, outputTokens: 7, cacheReadTokens: 89, cacheWriteTokens: 0,
     })
+    // v4 前格式不写 settlement 成员：老宿主工件升级时多余成员会毒化会话。
+    expect(assistant?.data).not.toHaveProperty('stream')
     expect((agent.session.events.at(-1)?.data as { reason?: unknown }).reason).toEqual({ kind: 'completed' })
     expect(res.chunks.some((chunk) => chunk.includes('"type":"saved"'))).toBe(true)
+  })
+
+  it('writes v4 settlement fields on a format-v4 host session and drops assistant/chunk', async () => {
+    const agent = makeV4SessionAgent('session-generate')
+    agents.set(agent.id, agent)
+    const snapshot = await store.getChatSnapshot(CHARACTER, chatId)
+    await apiHandler(makeRequest({
+      character: CHARACTER,
+      chatId,
+      message: 'Write another reply',
+      revision: snapshot!.revision,
+      sessionId: agent.id,
+    }), makeResponse())
+    const eventTypes = agent.log.map((event) => event.type)
+    expect(eventTypes).toEqual([
+      'turn/start', 'user/message', 'step/start',
+      'assistant/message', 'step/end', 'turn/end',
+    ])
+    // assistant/chunk 是 v0 词汇，v4 宿主加载期整会话拒载，绝不允许再出现。
+    expect(agent.log.some((event) => event.type === 'assistant/chunk')).toBe(false)
+    const assistant = agent.log.find((event) => event.type === 'assistant/message')
+    // v4 settlement 校验要求 data.stream 为数组，缺失时 append 成功但重载即拒载。
+    expect(assistant?.data).toMatchObject({ turn: 1, step: 1, stream: [] })
   })
 
   it('automatically loads active/linked worlds and global/card regex in ST mode', async () => {

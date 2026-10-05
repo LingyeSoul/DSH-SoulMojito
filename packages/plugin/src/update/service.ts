@@ -112,12 +112,18 @@ export class TavernUpdateService {
   private pendingRestart: TavernLocalBuild | null = null
   private timer: ReturnType<typeof setTimeout> | undefined
   private disposed = false
+  private started = false
   private pluginManager: any = null
   private disposePluginManagerWatch: (() => void) | undefined
 
   constructor(options: TavernUpdateServiceOptions) {
     this.options = options
     this.loadCache()
+  }
+
+  /** 已 dispose 的实例定时器与监听都已拆除；持有方据此决定重建（HMR 重挂）。 */
+  get isDisposed(): boolean {
+    return this.disposed
   }
 
   get repository(): string {
@@ -270,6 +276,10 @@ export class TavernUpdateService {
    */
   start(): () => void {
     if (this.options.enabled === false || this.disposed) return () => {}
+    // 同一实例重复 start 会叠加第二条定时器链（apply 被宿主重复触发时）；
+    // 已启动的实例直接复用，disposer 语义保持幂等。
+    if (this.started) return () => this.dispose()
+    this.started = true
     this.disposePluginManagerWatch = watchPluginManager(this.options.ctx, (service) => {
       this.pluginManager = service
     })
@@ -323,8 +333,12 @@ export class TavernUpdateService {
     }
     if (!outcome.ok) return
     this.checkedAt = this.nowIso()
-    if (outcome.restartRequired) {
-      // 已安装但运行中的仍是旧构建：进入过渡态，避免下一次检查重复提示。
+    // 包替换必须重启进程才加载新 module generation（宿主 plugin-manager 既有
+    // 语义）：即使宿主在 HMR 下回报 application:'applied'，运行中的内存 stamp
+    // 仍是旧的。只要磁盘安装结果还没被本地构建追上（commit 不同），一律进入
+    // 过渡态——否则 status 落回 up-to-date，下一个 TTL 周期又会对同一版本报
+    // update-available（徽标回弹）。
+    if (outcome.restartRequired || !sameCommit(this.local.commit, outcome.installed.commit)) {
       this.pendingRestart = outcome.installed
       this.status = 'restart-required'
       this.reason = `installed ${outcome.installed.version} (${outcome.installed.commit}) via ${outcome.strategy}; restart DSH to load it`

@@ -16,11 +16,14 @@ import { fetchRemoteBuild } from '../src/update/sources.js'
 import { TavernUpdateService, updateChangelog } from '../src/update/service.js'
 import {
   copyShippedFiles,
+  ensureVersionStamp,
   installViaCli,
   installViaPluginManager,
   readInstalledStamp,
   resolveDesktopCli,
+  resolveProfileName,
   runInstallChain,
+  watchPluginManager,
 } from '../src/update/apply.js'
 
 const REMOTE_SHA = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
@@ -583,5 +586,86 @@ describe('落地工具', () => {
     expect(cli?.command).toBe('exe.exe')
     expect(cli?.env.ELECTRON_RUN_AS_NODE).toBe('1')
     expect(resolveDesktopCli([], 'exe.exe', () => true)).toBeNull()
+  })
+})
+
+describe('update flow hardening (0.2.0-rc.2 audit)', () => {
+  const local = { version: '0.3.8', commit: LOCAL_SHA }
+
+  function makeService(options: Record<string, unknown> = {}) {
+    const home = tempDir('tavern-update-hard-')
+    const stub = fetchStub((url: string) => {
+      if (url.includes('/commits/')) return jsonResponse({ sha: REMOTE_SHA, commit: { message: 'feat: update', author: { date: '2026-10-05T00:00:00Z' } } })
+      if (url.includes('raw.githubusercontent.com')) return jsonResponse({ version: '0.3.9' })
+      if (url.includes('/compare/')) return jsonResponse({ commits: [{ sha: REMOTE_SHA, commit: { message: 'feat: update' } }], files: [{ filename: 'packages/plugin/index.mjs' }] })
+      return jsonResponse({}, 404)
+    })
+    return { home, stub, instance: new TavernUpdateService({ home, pluginDir: home, local, fetchImpl: stub.impl, ...options }) }
+  }
+
+  it('applied(HMR) outcome with a newer disk commit still enters restart-required (no badge bounce)', async () => {
+    const { instance } = makeService({
+      installerImpl: async () => ({
+        ok: true, strategy: 'plugin-manager', application: 'applied',
+        message: 'hmr applied', restartRequired: false,
+        installed: { version: '0.3.9', commit: 'a1b2c3d' },
+      }),
+    })
+    await instance.check({ force: true })
+    await instance.install()
+    expect(instance.snapshot().status).toBe('restart-required')
+    // 下一个检查周期不得回到 update-available：内存 stamp 没追上前 check 短路。
+    await instance.check({ force: true })
+    expect(instance.snapshot().status).toBe('restart-required')
+  })
+
+  it('dispose marks the instance dead and start() is idempotent while alive', () => {
+    const { instance } = makeService({ firstCheckDelayMs: 60_000, ctx: {} })
+    const disposeA = instance.start()
+    expect(instance.isDisposed).toBe(false)
+    const disposeB = instance.start()
+    disposeA()
+    expect(instance.isDisposed).toBe(true)
+    disposeB()
+  })
+
+  it('ensureVersionStamp synthesizes the build sidecar for git checkouts', () => {
+    const source = tempDir('stamp-source-')
+    const target = tempDir('stamp-target-')
+    writeFileSync(join(target, 'package.json'), JSON.stringify({ name: 'dsh-tavern', version: '0.4.0' }))
+    expect(ensureVersionStamp(source, target, REMOTE_SHA)).toBe(true)
+    expect(JSON.parse(readFileSync(join(target, 'version.json'), 'utf8'))).toEqual({ version: '0.4.0', commit: 'a1b2c3d' })
+    // checkout 自带 version.json 时以 checkout 为准，不做合成覆盖。
+    writeFileSync(join(source, 'version.json'), JSON.stringify({ version: '0.4.1', commit: 'deadbee' }))
+    expect(ensureVersionStamp(source, target, REMOTE_SHA)).toBe(false)
+    expect(JSON.parse(readFileSync(join(target, 'version.json'), 'utf8')).version).toBe('0.4.0')
+  })
+
+  it('watchPluginManager disposes the returned cordis Fiber, not a phantom function', () => {
+    let fiberDisposed = 0
+    const ctx = {
+      inject: (_deps: string[], cb: (c: unknown) => void) => {
+        cb({ pluginManager: { tag: 'svc' } })
+        return { dispose: () => { fiberDisposed += 1 } }
+      },
+    }
+    let captured: unknown
+    const stop = watchPluginManager(ctx as never, (svc) => { captured = svc })
+    stop()
+    expect(fiberDisposed).toBe(1)
+    expect((captured as { tag: string }).tag).toBe('svc')
+  })
+
+  it('resolveProfileName prefers ctx.profileContext over env and fallback', () => {
+    expect(resolveProfileName({ profileContext: { name: 'web' } })).toBe('web')
+    const throwing = { get profileContext() { throw new Error('not injected') } }
+    process.env.DSH_PROFILE = 'env-profile'
+    try {
+      expect(resolveProfileName(throwing as never)).toBe('env-profile')
+      expect(resolveProfileName({})).toBe('env-profile')
+    } finally {
+      delete process.env.DSH_PROFILE
+    }
+    expect(resolveProfileName({})).toBe('desktop')
   })
 })

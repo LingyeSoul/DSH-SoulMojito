@@ -310,6 +310,57 @@ describe('AgentTavern native event projector', () => {
     }
   })
 
+  it('imports history with real turn boundaries and settlement fields on v4 sessions', () => {
+    const chat: ChatLogIR = {
+      header: { user_name: 'Alice', character_name: 'Projector Character', chat_metadata: {} },
+      messages: [
+        { name: 'Projector Character', is_user: false, is_system: false, send_date: '', mes: 'Greeting.' },
+        { name: 'Alice', is_user: true, is_system: false, send_date: '', mes: 'Hello.' },
+        { name: 'Projector Character', is_user: false, is_system: false, send_date: '', mes: 'Welcome.' },
+        { name: 'Alice', is_user: true, is_system: false, send_date: '', mes: 'Continue.' },
+      ],
+    }
+    // 会话已有一个闭合的 live turn：导入必须开新 turn（nextTurn = 2）且完整开合，
+    // 镜像 assistant 落在 open step 内并携带 settlement stream——v4 加载期的
+    // 关系校验与 settlement 校验都不再留毒（v3 时代的裸消息 + turn:0 已非法）。
+    const session = {
+      header: { version: 4 },
+      events: [
+        { type: 'agent-preset/selected', seq: 0, time: 1, data: { agentPreset: 'agent-tavern' } },
+        { type: 'turn/start', seq: 1, time: 2, data: { turn: 1 } },
+        { type: 'turn/end', seq: 2, time: 3, data: { turn: 1, reason: { kind: 'completed' } } },
+      ],
+    }
+    const appends = historyImportAppends(chat, 'session-1', [], undefined, session)
+    expect(appends.map((event) => event.type)).toEqual([
+      'turn/start',
+      'step/start', 'assistant/message', 'step/end',
+      'user/message',
+      'step/start', 'assistant/message', 'step/end',
+      'user/message',
+      'turn/end',
+    ])
+    expect(appends.filter((event) => event.type === 'turn/start').map((event) => event.data)).toEqual([{ turn: 2 }])
+    expect(appends.filter((event) => event.type === 'turn/end').map((event) => event.data))
+      .toEqual([{ turn: 2, reason: { kind: 'completed' } }])
+    const assistants = appends.filter((event) => event.type === 'assistant/message')
+    expect(assistants.map((event) => ({ turn: event.data.turn, step: event.data.step, stream: event.data.stream })))
+      .toEqual([
+        { turn: 2, step: 1, stream: [] },
+        { turn: 2, step: 2, stream: [] },
+      ])
+    expect(appends.filter((event) => event.type === 'user/message')
+      .every((event) => !('turn' in event.data) && !('step' in event.data))).toBe(true)
+
+    // 空白会话（无既有 turn）：导入从 turn 1 起步，与宿主 nextTurn 初值一致。
+    const blank = historyImportAppends(chat, 'session-1', [], undefined, { header: { version: 4 } })
+    expect(blank.filter((event) => event.type === 'turn/start').map((event) => event.data)).toEqual([{ turn: 1 }])
+
+    // 没有任何可导入消息时不开空 turn，日志保持导入前形状。
+    const emptyChat: ChatLogIR = { header: chat.header, messages: [] }
+    expect(historyImportAppends(emptyChat, 'session-1', [], undefined, { header: { version: 4 } })).toEqual([])
+  })
+
   it('recognizes both plugin-source shapes as Tavern session markers', () => {
     // v4（0.2.0-rc.2+）：宿主迁移产物与新写入同为 'plugin:dsh-tavern'。
     expect(isTavernSessionMarker({ kind: 'plugin:dsh-tavern' })).toBe(true)

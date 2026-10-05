@@ -42,7 +42,7 @@ import {
   type TavernModelSelection,
   type WriterMode,
 } from '../../tavern-store/src/index.js'
-import { describeHostShape, hostPluginMessageSource, readSessionEvents, sessionEvents, type HostSessionLog } from '../../bind/src/index.js'
+import { describeHostShape, hostPluginMessageSource, hostSessionFormatVersion, readSessionEvents, sessionEvents, type HostSessionLog } from '../../bind/src/index.js'
 import {
   AGENT_TAVERN_PRESET_ID,
   bootstrapAgentTavernCapabilities,
@@ -126,7 +126,11 @@ function novelStore(): Promise<NovelStore> {
  * version.json 旁车文件，只有构建期 define 才能在安装现场说清「跑的是哪个 commit」。
  */
 function tavernUpdate(ctx): TavernUpdateService {
-  if (updateServiceInstance !== undefined) return updateServiceInstance
+  // HMR recompose 复用同一 module generation 重挂时，旧实例已被上一个 effect
+  // 的 disposer 走到 dispose()——它的定时器与 pluginManager 监听都已拆除，
+  // start() 会短路。这里检测已 dispose 就地重建，自动检查才不会静默死亡
+  // （手动 check/install 路由拿的也是同一实例）。
+  if (updateServiceInstance !== undefined && !updateServiceInstance.isDisposed) return updateServiceInstance
   updateServiceInstance = new TavernUpdateService({
     ctx,
     home: dshHomePath('tavern'),
@@ -494,8 +498,9 @@ async function handleApi(ctx, req, res) {
     // 会话（真实 usage 超窗）每个请求都溢出，宿主 pre-step 压力压缩与
     // agent/request-error 恢复都救不回，必须显式触发一次压缩。本端点在同
     // 进程内调 curator 的 compactNow，总结走剧情会话的 curatorProvider/Model。
-    // 注意：Cordis Context.get(plugin) 用 resolve() 解析、只认函数/.apply 对象，
-    // 字符串名解析不到服务——必须经 inject 注入后用 ctx.compaction 读取。
+    // 注意：Cordis 的 Context.get(name) 本身支持字符串服务名（cordis 4 的
+    // reflect 声明），但插件未 inject 的服务经属性/get 读取会因门控抛错——
+    // compaction 已在 inject 列表，这里用 ctx.compaction 属性通道最直接。
     const body = await readJson(req).catch(() => ({}) as Record<string, unknown>)
     const sessionId = typeof body.sessionId === 'string' ? body.sessionId : url.searchParams.get('sessionId')
     if (!sessionId) throw new Error('sessionId is required')
@@ -2084,7 +2089,9 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     maxTokens: numberOr(preset.sampler.openai_max_tokens, undefined),
     signal,
   })) {
-    recordTavernSessionChunk(hostTrace, chunk)
+    // 逐 chunk 事件不落宿主会话：`assistant/chunk` 是 v0 词汇，v4 宿主加载期
+    // 直接整会话拒载（SessionFormatUnsupportedError）；流式反馈走 SSE write，
+    // 持久轨迹由终态 assistant/message 的 stream/settlement 承载。
     if (chunk.type === 'usage') hostUsage = chunk.usage
     if (chunk.type === 'text-delta') { text += chunk.text; write({ type: 'delta', text: chunk.text }) }
     else if (chunk.type === 'reasoning-delta') { reasoning += chunk.text; write({ type: 'reasoning', text: chunk.text }) }
@@ -2553,20 +2560,12 @@ function startTavernSessionStep(trace) {
   return trace
 }
 
-function recordTavernSessionChunk(trace, chunk) {
-  if (!trace?.logging || !trace.stepOpen) return
-  try {
-    trace.session.append('assistant/chunk', { turn: trace.turn, step: trace.step, chunk })
-  } catch {
-    trace.logging = false
-  }
-}
-
 function recordTavernSessionAssistant(trace, text, reasoning, provider, model, usage) {
   if (!trace?.logging || !trace.stepOpen) return trace
   try {
     const content = [{ type: 'text', text }]
     if (reasoning) content.push({ type: 'reasoning', text: reasoning })
+    const version = hostSessionFormatVersion(trace.session)
     trace.session.append('assistant/message', {
       turn: trace.turn,
       step: trace.step,
@@ -2576,6 +2575,10 @@ function recordTavernSessionAssistant(trace, text, reasoning, provider, model, u
         source: { kind: 'model', provider, model },
       }),
       ...(usage ? { usage } : {}),
+      // v4 加载边界强制 settlement 形状（seed 校验要求 data.stream 为数组），
+      // 缺失时 append 照常成功但会话重启即拒载；v0-v3 格式无此成员，多写
+      // 反而毒化老宿主工件，故按版本分支。
+      ...(version !== undefined && version >= 4 ? { stream: [] } : {}),
     }, { surfaceOp: 'append' })
     trace.completed = true
   } catch {
@@ -2590,6 +2593,12 @@ function finishTavernSessionTrace(trace) {
     try {
       trace.session.append('step/end', { turn: trace.turn, step: trace.step })
     } catch {
+      // step/end 落不下去意味着 open step 仍留在日志里，其后任何 turn/end 都
+      // 会被 v4 关系校验拒绝（"turn/end does not match the open turn with no
+      // open step"）——立即终止 trace，不再追加注定拒载的事件。
+      trace.stepOpen = false
+      trace.turnOpen = false
+      return
     }
     trace.stepOpen = false
   }

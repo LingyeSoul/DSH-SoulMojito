@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { ChatRevisionConflictError, type TavernSessionBinding, type TavernState } from '../../../tavern-store/src/index.js'
 import { RegexPlacement, type CharacterCardIR, type ChatLogIR, type ChatMessage, type RegexScriptIR } from '../../../tavern-format/src/index.js'
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
-import { hostPluginMessageSource, isHostPluginMessageSource, sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
+import { hostPluginMessageSource, hostSessionFormatVersion, isHostPluginMessageSource, sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
 import { collectRegexScripts } from '../tavern-assets.js'
 
 export interface NativeSessionEvent {
@@ -261,22 +261,24 @@ function isTavernMirrorSource(source: unknown): boolean {
 const TAVERN_MIRROR_MODEL_SOURCE = { provider: 'dsh-tavern', model: 'agent-tavern-import' } as const
 
 /**
- * Import saved messages as session-level surface events without creating loop
- * boundaries. The native AgentLoop then owns the first live turn and starts it
- * at one. Model sources satisfy host validation; plugin markers (shape branched
- * by session format version, see hostPluginMessageSource) prevent projection
- * back into the saved chat. Prompt-only regex and macros never alter stored
- * text.
+ * Import saved messages as session-level surface events. Model sources satisfy
+ * host validation; plugin markers (shape branched by session format version, see
+ * hostPluginMessageSource) prevent projection back into the saved chat.
+ * Prompt-only regex and macros never alter stored text.
  *
- * Imported assistant messages carry explicit `turn: 0` and per-import step
- * numbers: the client conversation assembler publishes assistant messages at
- * `{ turn, step }` coordinates read straight off the event payload, and a
- * message without them dies with "published invalid turn undefined", which
- * kills the whole event-feed subscriber and renders the chat empty. Turn
- * containers are created implicitly from payload coordinates, so no
- * turn/start|end events are needed and the host blank criterion (a logged
- * turn/start) stays false. Turn 0 keeps imports below the live loop's first
- * turn (its lastTurn defaults to 0, so live turn 1 never collides).
+ * Two event dialects by session format version (hostSessionFormatVersion):
+ *
+ * - v4+ (DSH 0.2.0-rc.2)：加载边界的关系校验要求 assistant/message 落在 open
+ *   turn+step 里、turn/start 必须等于 nextTurn（从 1 起），且 settlement 校验
+ *   要求 data.stream 为数组——v3 时代"裸消息 + turn:0 盖章"的形状在 v4 上
+ *   append 成功但重载即拒载。导入因此改为真实边界的完整开合：turn/start →
+ *   （user 消息）→ 每条镜像消息一组 step/start|end（内含 stream:[]）→
+ *   turn/end。导入 turn 取日志现有最大 turn+1，live loop 继续 max+1，编号天然
+ *   错开且严格递增。
+ * - v0-v3：保持"无边界 + turn:0 + 递增 step"旧形状。客户端装配器从事件载荷
+ *   直接读 { turn, step } 坐标并隐式建 turn 容器；缺坐标会以 "published
+ *   invalid turn undefined" 杀死事件流订阅（对话区空白），turn 0 与 live
+ *   loop 首个 turn 1 错开。
  */
 export function historyImportAppends(
   chat: ChatLogIR,
@@ -293,8 +295,23 @@ export function historyImportAppends(
     return expand ? expand(transformed) : transformed
   }
 
+  const version = hostSessionFormatVersion(session)
+  const v4 = version !== undefined && version >= 4
+  let importTurn = 0
+  if (v4) {
+    for (const event of sessionEvents(session)) {
+      if (event.type === 'turn/start' && Number.isSafeInteger(event.data?.turn)) {
+        importTurn = Math.max(importTurn, event.data.turn)
+      }
+    }
+    importTurn += 1
+  }
+
   const appends: SessionImportAppend[] = []
   let assistantCount = 0
+  let importStep = 0
+
+  if (v4) appends.push({ type: 'turn/start', data: { turn: importTurn } })
 
   for (const [index, message] of chat.messages.entries()) {
     if (message.is_system === true || typeof message.mes !== 'string' || message.mes.trim() === '') continue
@@ -314,11 +331,13 @@ export function historyImportAppends(
       continue
     }
     assistantCount += 1
+    importStep += 1
+    if (v4) appends.push({ type: 'step/start', data: { turn: importTurn, step: importStep } })
     appends.push({
       type: 'assistant/message',
       data: {
-        turn: 0,
-        step: assistantCount,
+        turn: v4 ? importTurn : 0,
+        step: v4 ? importStep : assistantCount,
         message: {
           id: randomUUID(),
           role: 'assistant',
@@ -331,9 +350,23 @@ export function historyImportAppends(
             ...TAVERN_MIRROR_MODEL_SOURCE,
           },
         },
+        // v4 settlement 校验要求数组形状的 stream；镜像导入无流式细节，空数组
+        // 即合法。v0-v3 格式不写此成员，避免老宿主工件升级时被毒化。
+        ...(v4 ? { stream: [] } : {}),
       },
       surfaceOp: 'append',
     })
+    if (v4) appends.push({ type: 'step/end', data: { turn: importTurn, step: importStep } })
+  }
+  if (v4) {
+    if (appends.length > 1) {
+      // 开过的 turn 必须闭合（含只导入 user 消息的情形——user/message 虽无
+      // turn 关系约束，但留在日志里的 open turn 会让 v4 加载拒绝后续事件）。
+      appends.push({ type: 'turn/end', data: { turn: importTurn, reason: { kind: 'completed' } } })
+    } else {
+      // 没有任何可导入消息时不开空 turn：撤回占位 turn/start，日志与导入前一致。
+      appends.shift()
+    }
   }
   return appends
 }

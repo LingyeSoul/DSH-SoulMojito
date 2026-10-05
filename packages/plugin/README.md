@@ -134,3 +134,18 @@ node packages/plugin/scripts/gates/run.mjs
 ```sh
 dsh plugin --profile web add <plugin-registry>/packages/plugin/console
 ```
+
+## 存量会话修复
+
+历史版本写入的会话事件形状在 DSH 0.2.0-rc.2（session format v4）宿主上会让会话文件重开即拒载。仓库根提供两个修复脚本（默认 dry-run，`--apply` 落盘前自动备份 `.bak-<时间戳>`，且改写结果必须先通过真实宿主编解码/准入校验）：
+
+```sh
+# v4 工件四类毒化：assistant/chunk 毒事件、assistant/message 缺 settlement
+# stream、turn:0 裸导入镜像（补全边界并重编号后续 turn）、裸 plugin source
+node scripts/repair-v4-sessions.mjs <session.jsonl.zstd | sessions 目录> [--apply]
+
+# v0 工件的消息 source 超员成员（0.3.9 之前写入 novelId/intentId 等）
+node scripts/repair-session-sources.mjs <session.jsonl.zstd | sessions 目录> [--apply]
+```
+
+会话目录一般在 `$DSH_HOME/sessions`（默认 `~/.dsh/sessions`）。修复前先退出 `dsh web`——并发追加的帧会丢失。宿主运行时缓存不可用时加 `--runtime <node_modules>`（`pnpm check` 会装 `.npm-cache/dsh-runtime`）。
