@@ -83,7 +83,17 @@ describe('session-log source dispositions (v0 hosts)', () => {
       ],
     }
     const appends = historyImportAppends(chat, 'session-1', [], undefined)
-    expect(appends.map((append) => append.type)).toEqual(['assistant/message', 'user/message'])
+    // 导入现在携带完整 turn/step 边界（v4 准入要求）；source 形状仍然只允许
+    // 表内的成员，边界事件不参与 source 校验。
+    expect(appends.map((append) => append.type)).toEqual([
+      'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+      'turn/start', 'user/message', 'turn/end',
+    ])
+    // v0 宿主没有 assistant 结算流（`stream` 是 v4 的 token-meter 契约）：v0 会话
+    // 的导入不得写入 v4 专属成员。
+    for (const append of appends) {
+      if (append.type === 'assistant/message') expect('stream' in append.data).toBe(false)
+    }
     for (const append of appends) {
       if (append.type === 'user/message') expectV0LegalSource((append.data as { source: unknown }).source)
       if (append.type === 'assistant/message') {
@@ -110,6 +120,11 @@ describe('session-log source dispositions (v4 hosts)', () => {
     const userAppend = appends.find((append) => append.type === 'user/message')
     expect(userAppend).toBeDefined()
     expect((userAppend!.data as { source: unknown }).source).toEqual({ kind: 'plugin:dsh-tavern' })
+    // v4 assistant 结算契约：token-meter 的 usageOf() 在 usage/stream 双缺时读
+    // undefined.length 抛 TypeError，整会话投影失效；导入补空流。
+    for (const append of appends.filter((item) => item.type === 'assistant/message')) {
+      expect((append.data as { stream?: unknown }).stream).toEqual([])
+    }
   })
 
   it('falls back to the v0 shape when the session header is unreadable', () => {

@@ -1665,19 +1665,9 @@ const gates = [
             { name: 'Alice', is_user: true, is_system: false, send_date: '', mes: 'Hello.' },
           ],
         }
-        const session = {
-          header: { version: 4 },
-          events: [
-            { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
-            { type: 'turn/end', seq: 1, time: 2, data: { turn: 1, reason: { kind: 'completed' } } },
-          ],
-        }
-        const importRows = [
-          // 桩会话已有的事件先行（validator 的 nextTurn 从 1 起算，导入必须接续）
-          { type: 'turn/start', data: { turn: 1 } },
-          { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
-          ...historyImportAppends(chat, 'gate-session', [], undefined, session),
-        ]
+        // 导入契约面向空白会话（激活流程保证），turn 号从 1 起步。
+        const session = { header: { version: 4 } }
+        const importRows = historyImportAppends(chat, 'gate-session', [], undefined, session)
         problems.push(...admissionProblems('history import', importRows))
 
         // 负控：旧形状（剥掉边界 + turn:0 裸消息 + 无 stream）必须被真实校验拒绝。

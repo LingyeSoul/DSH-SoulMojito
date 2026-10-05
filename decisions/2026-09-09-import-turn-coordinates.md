@@ -1,6 +1,22 @@
 # 导入历史补 turn/step 载荷坐标，修复新建聊天空白
 
-日期：2026-09-09。状态：已实施。
+日期：2026-09-09。状态：**已被取代**（见
+[`2026-10-05-import-turn-boundaries-and-settlement.md`](2026-10-05-import-turn-boundaries-and-settlement.md)）。
+
+> ⚠️ 本决策的结论在 DSH `0.2.0-rc.2` 上是错的，保留仅作历史。
+> - 「不写 `turn/start`、只带 `turn: 0 / step: n` 坐标」被原生 V4 准入拒绝
+>   （`assistant/message does not match an open turn and step`），整个持久化会话被判损坏；
+>   `turn: 0` 无法补救：`turn/start` 必须从 1 起连续编号。
+> - 「宿主 blank 判据保持 false」被当成特性，实际是缺陷：会话因此一直是原生「新建会话」的
+>   blank 复用候选，一个坏会话会拖累后续所有新建（`新建会话失败：gateway/internal: Cannot read
+>   properties of undefined (reading 'length')`）。
+> - 「恢复合成 turn/start|step/start 边界……且会重新激活 blank 复用劫持，否决」中的两个理由都不成立：
+>   写 `turn/start` 正是**摘除** blank 复用资格的手段（见 `2026-08-16-occupy-blank-session.md`）；
+>   「宿主侧 replay/repair 问题」在本仓库与宿主源码中都没有可复现的证据。
+> - 当时的真正约束是 live loop 的轮次基线：会话与 Agent 在插件写入前就已创建，`AgentLoop` 快照的
+>   `lastTurn` 恒为 0。正确做法是写完边界后推进该基线，而不是回避轮次。
+> - 本条同时漏掉了第二个契约：assistant/message 缺 `usage`/`stream` 会让 token-meter 的
+>   `usageOf()` 抛 `Cannot read properties of undefined (reading 'length')`，整会话投影失效。
 
 ## Problem
 

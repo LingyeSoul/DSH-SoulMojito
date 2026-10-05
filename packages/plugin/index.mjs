@@ -9151,26 +9151,29 @@ function historyImportAppends(chat, sessionId, scripts, expand, session) {
     const transformed = promptScripts.length === 0 ? message.mes : applyRegexScripts(message.mes, promptScripts, RegexPlacement.AI_OUTPUT, {}, { depth: chat.messages.length - 1 - index });
     return expand ? expand(transformed) : transformed;
   };
-  const version = hostSessionFormatVersion(session);
-  const v4 = version !== void 0 && version >= 4;
-  let importTurn = 0;
-  if (v4) {
-    for (const event of sessionEvents(session)) {
-      if (event.type === "turn/start" && Number.isSafeInteger(event.data?.turn)) {
-        importTurn = Math.max(importTurn, event.data.turn);
-      }
-    }
-    importTurn += 1;
-  }
   const appends = [];
-  let assistantCount = 0;
-  let importStep = 0;
-  if (v4) appends.push({ type: "turn/start", data: { turn: importTurn } });
+  const settlement = (hostSessionFormatVersion(session) ?? 0) >= 4 ? { stream: [] } : {};
+  let turn = 0;
+  let step = 0;
+  let turnOpen = false;
+  const openTurn = () => {
+    turn += 1;
+    step = 0;
+    turnOpen = true;
+    appends.push({ type: "turn/start", data: { turn } });
+  };
+  const closeTurn = () => {
+    if (!turnOpen) return;
+    turnOpen = false;
+    appends.push({ type: "turn/end", data: { turn, reason: { kind: "completed" } } });
+  };
   for (const [index, message] of chat.messages.entries()) {
     if (message.is_system === true || typeof message.mes !== "string" || message.mes.trim() === "") continue;
     const origin = message.extra?.agentTavern;
     if (origin?.sessionId === sessionId) continue;
     if (message.is_user === true) {
+      closeTurn();
+      openTurn();
       appends.push({
         type: "user/message",
         data: {
@@ -9183,14 +9186,15 @@ function historyImportAppends(chat, sessionId, scripts, expand, session) {
       });
       continue;
     }
-    assistantCount += 1;
-    importStep += 1;
-    if (v4) appends.push({ type: "step/start", data: { turn: importTurn, step: importStep } });
+    if (!turnOpen) openTurn();
+    step += 1;
+    appends.push({ type: "step/start", data: { turn, step } });
     appends.push({
       type: "assistant/message",
       data: {
-        turn: v4 ? importTurn : 0,
-        step: v4 ? importStep : assistantCount,
+        turn,
+        step,
+        ...settlement,
         message: {
           id: randomUUID3(),
           role: "assistant",
@@ -9202,23 +9206,24 @@ function historyImportAppends(chat, sessionId, scripts, expand, session) {
             kind: "model",
             ...TAVERN_MIRROR_MODEL_SOURCE
           }
-        },
-        // v4 settlement 校验要求数组形状的 stream；镜像导入无流式细节，空数组
-        // 即合法。v0-v3 格式不写此成员，避免老宿主工件升级时被毒化。
-        ...v4 ? { stream: [] } : {}
+        }
       },
       surfaceOp: "append"
     });
-    if (v4) appends.push({ type: "step/end", data: { turn: importTurn, step: importStep } });
+    appends.push({ type: "step/end", data: { turn, step } });
   }
-  if (v4) {
-    if (appends.length > 1) {
-      appends.push({ type: "turn/end", data: { turn: importTurn, reason: { kind: "completed" } } });
-    } else {
-      appends.shift();
+  closeTurn();
+  return appends;
+}
+function lastImportedTurn(appends) {
+  let last;
+  for (const append of appends) {
+    const value = append.data?.turn;
+    if (append.type === "turn/start" && Number.isSafeInteger(value) && (last === void 0 || value > last)) {
+      last = value;
     }
   }
-  return appends;
+  return last;
 }
 function messageText(content) {
   if (!Array.isArray(content)) return "";
@@ -10549,12 +10554,25 @@ function apply(ctx, config = {}) {
         }));
       }
       if (historyImport !== void 0) {
-        try {
-          for (const item of historyImport) {
-            agent.session.append(item.type, item.data, item.surfaceOp === void 0 ? void 0 : { surfaceOp: item.surfaceOp });
+        const importedTurn = lastImportedTurn(historyImport);
+        if (importedTurn !== void 0 && !canAdvanceHostTurnBase(agent)) {
+          ctx.logger?.warn?.("AgentTavern history import skipped: the host session exposes no advanceable turn base, so imported turn boundaries would desynchronise the live loop.");
+        } else {
+          let written;
+          try {
+            for (const item of historyImport) {
+              agent.session.append(item.type, item.data, item.surfaceOp === void 0 ? void 0 : { surfaceOp: item.surfaceOp });
+            }
+            written = importedTurn;
+          } catch (error) {
+            written = closeImportBracket(agent, {
+              kind: "error",
+              error: { message: "AgentTavern history import failed", code: "TAVERN_IMPORT" }
+            });
+            ctx.logger?.warn?.(`AgentTavern history import failed: ${error instanceof Error ? error.message : String(error)}`);
+          } finally {
+            if (written !== void 0) advanceHostTurnBase(agent, written);
           }
-        } catch (error) {
-          ctx.logger?.warn?.(`AgentTavern history import failed: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
       await refreshActivePrompt();
@@ -12329,10 +12347,83 @@ function assertStGenerationBinding(state, sessionId) {
 function occupyHostSession(agent) {
   try {
     if (sessionEvents(agent.session).some((event) => event.type === "turn/start")) return;
+    if (!canAdvanceHostTurnBase(agent)) return;
     agent.session.append("turn/start", { turn: 1 });
     agent.session.append("turn/end", { turn: 1, reason: { kind: "completed" } });
+    advanceHostTurnBase(agent, 1);
   } catch {
   }
+}
+function loopPhase(agent) {
+  const phase = agent?.phase;
+  return typeof phase === "object" && phase !== null ? phase : void 0;
+}
+function canAdvanceHostTurnBase(agent) {
+  const phase = loopPhase(agent);
+  if (phase === void 0 || phase.kind !== "idle") return false;
+  if (!Number.isSafeInteger(phase.lastTurn)) return false;
+  const before = phase.lastTurn;
+  try {
+    phase.lastTurn = before;
+  } catch {
+    return false;
+  }
+  return phase.lastTurn === before;
+}
+function advanceHostTurnBase(agent, turn) {
+  if (!Number.isSafeInteger(turn) || turn < 1) return false;
+  const phase = loopPhase(agent);
+  if (phase === void 0 || phase.kind !== "idle") return false;
+  if (Number.isSafeInteger(phase.lastTurn) && phase.lastTurn >= turn) return true;
+  try {
+    phase.lastTurn = turn;
+  } catch {
+    return false;
+  }
+  return phase.lastTurn === turn;
+}
+function lastLoggedTurn(agent) {
+  let last;
+  for (const event of sessionEvents(agent.session)) {
+    if (event.type !== "turn/start") continue;
+    const value = event.data?.turn;
+    if (Number.isSafeInteger(value) && (last === void 0 || value > last)) last = value;
+  }
+  return last;
+}
+function closeImportBracket(agent, reason) {
+  let openTurn;
+  let openStep;
+  for (const event of sessionEvents(agent.session)) {
+    if (event.type === "turn/start" && Number.isSafeInteger(event.data?.turn)) {
+      openTurn = event.data.turn;
+      openStep = void 0;
+      continue;
+    }
+    if (event.type === "turn/end") {
+      openTurn = void 0;
+      openStep = void 0;
+      continue;
+    }
+    if (event.type === "step/start" && Number.isSafeInteger(event.data?.step)) {
+      openStep = { turn: event.data.turn, step: event.data.step };
+      continue;
+    }
+    if (event.type === "step/end") openStep = void 0;
+  }
+  if (openStep !== void 0) {
+    try {
+      agent.session.append("step/end", { turn: openStep.turn, step: openStep.step });
+    } catch {
+    }
+  }
+  if (openTurn !== void 0) {
+    try {
+      agent.session.append("turn/end", { turn: openTurn, reason });
+    } catch {
+    }
+  }
+  return lastLoggedTurn(agent);
 }
 function beginTavernSessionTurn(agent, userText) {
   const session = agent?.session;
@@ -12356,7 +12447,7 @@ function beginTavernSessionTurn(agent, userText) {
         source: { kind: "user" }
       }), { surfaceOp: "append" });
     }
-    return { session, turn, step: 1, stepOpen: false, turnOpen: true, logging: true, completed: false };
+    return { session, turn, step: 1, stepOpen: false, turnOpen: true, logging: true, completed: false, agent };
   } catch {
     if (started) {
       try {
@@ -12364,6 +12455,7 @@ function beginTavernSessionTurn(agent, userText) {
           turn,
           reason: { kind: "error", error: { message: "Tavern session trace failed", code: "TAVERN_TRACE" } }
         });
+        advanceHostTurnBase(agent, turn);
       } catch {
       }
     }
@@ -12395,9 +12487,10 @@ function recordTavernSessionAssistant(trace, text, reasoning, provider, model, u
         source: { kind: "model", provider, model }
       }),
       ...usage ? { usage } : {},
-      // v4 加载边界强制 settlement 形状（seed 校验要求 data.stream 为数组），
-      // 缺失时 append 照常成功但会话重启即拒载；v0-v3 格式无此成员，多写
-      // 反而毒化老宿主工件，故按版本分支。
+      // v4 加载边界强制 settlement 形状（seed 校验无条件要求 data.stream 为数组，
+      // 有 usage 也不豁免），缺失时 append 照常成功但会话重启即拒载；token-meter
+      // 的 usageOf() 同样要求 usage/stream 至少一个，空流可保投影物化。v0-v3
+      // 格式无此成员，多写反而毒化老宿主工件，故按版本分支。
       ...version !== void 0 && version >= 4 ? { stream: [] } : {}
     }, { surfaceOp: "append" });
     trace.completed = true;
@@ -12423,6 +12516,7 @@ function finishTavernSessionTrace(trace) {
       turn: trace.turn,
       reason: trace.completed ? { kind: "completed" } : { kind: "error", error: { message: "Tavern generation failed", code: "TAVERN_GENERATION" } }
     });
+    if (trace.agent !== void 0) advanceHostTurnBase(trace.agent, trace.turn);
   } catch {
   }
   trace.turnOpen = false;
@@ -12493,7 +12587,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.3.9".trim() : "";
-  const commit = true ? normalizeCommit("e2a1d98") : void 0;
+  const commit = true ? normalizeCommit("239ea09") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

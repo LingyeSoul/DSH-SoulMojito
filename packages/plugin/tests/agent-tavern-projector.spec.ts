@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, type NativeSession } from '../src/agent-tavern/projector.js'
+import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type NativeSession } from '../src/agent-tavern/projector.js'
 import { ChatRevisionConflictError, TavernStore } from '../../tavern-store/src/index.js'
 import type { ChatLogIR, RegexScriptIR } from '../../tavern-format/src/index.js'
 
@@ -243,7 +243,7 @@ describe('AgentTavern native event projector', () => {
     ])
   })
 
-  it('imports history as session-level messages before the live loop first turn', () => {
+  it('imports history as real turn boundaries the live loop can continue after', () => {
     const chat: ChatLogIR = {
       header: { user_name: 'Alice', character_name: 'Projector Character', chat_metadata: {} },
       messages: [
@@ -254,16 +254,30 @@ describe('AgentTavern native event projector', () => {
       ],
     }
     const original = structuredClone(chat)
-    const appends = historyImportAppends(chat, 'session-1', [], undefined)
+    const appends = historyImportAppends(chat, 'session-1', [], undefined, { header: { version: 4 } })
+    // 宿主 v4 准入要求每条 assistant/message 落在「已打开的 turn + step」内：只带
+    // payload 坐标（turn 0）不构成边界，`turn/start` 又必须从 1 开始连续编号，
+    // 因此导入必须写出完整 turn/step 边界，再由调用方推进 live loop 的轮次基线。
     expect(appends.map((event) => event.type)).toEqual([
-      'assistant/message', 'user/message', 'assistant/message', 'user/message',
+      'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+      'turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+      'turn/start', 'user/message', 'turn/end',
     ])
-    expect(appends.every((event) => !['turn/start', 'turn/end', 'step/start', 'step/end'].includes(event.type))).toBe(true)
-    // 客户端装配器从事件载荷直接读 { turn, step } 坐标并据此隐式建 turn 容器；
-    // 缺坐标会让 assistant-step 定义抛 "published invalid turn undefined"，
-    // 杀死整个事件流订阅（对话区空白）。turn 0 与 live loop 的 turn 1 错开。
-    expect(appends.filter((event) => event.type === 'assistant/message').map((event) => event.data.turn)).toEqual([0, 0])
-    expect(appends.filter((event) => event.type === 'assistant/message').map((event) => event.data.step)).toEqual([1, 2])
+    expect(appends.filter((event) => event.type === 'turn/start').map((event) => event.data.turn)).toEqual([1, 2, 3])
+    expect(appends.filter((event) => event.type === 'turn/end').map((event) => event.data)).toEqual([
+      { turn: 1, reason: { kind: 'completed' } },
+      { turn: 2, reason: { kind: 'completed' } },
+      { turn: 3, reason: { kind: 'completed' } },
+    ])
+    expect(appends.filter((event) => event.type === 'step/start').map((event) => [event.data.turn, event.data.step]))
+      .toEqual([[1, 1], [2, 1]])
+    expect(appends.filter((event) => event.type === 'step/end').map((event) => [event.data.turn, event.data.step]))
+      .toEqual([[1, 1], [2, 1]])
+    expect(lastImportedTurn(appends)).toBe(3)
+    // turn/step/step 边界不是 surface 事件：不能带 surfaceOp。
+    expect(appends.filter((event) => ['turn/start', 'turn/end', 'step/start', 'step/end'].includes(event.type))
+      .every((event) => event.surfaceOp === undefined)).toBe(true)
+    // 导入的 user 消息保持宿主原生形状（无坐标）。
     expect(appends.filter((event) => event.type === 'user/message').every((event) => (
       !('turn' in event.data) && !('step' in event.data)
     ))).toBe(true)
@@ -271,29 +285,19 @@ describe('AgentTavern native event projector', () => {
     expect(appends.filter((event) => event.type === 'assistant/message')).toHaveLength(2)
     // v0 Session dispositions admit no plugin/form members on model sources;
     // the synthetic provider/model pair is the mirror marker.
-    expect(appends.at(0)?.data).toMatchObject({
-      message: {
-        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' },
-      },
-    })
-    expect(appends.at(2)?.data).toMatchObject({
-      message: {
-        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' },
-      },
-    })
     for (const event of appends.filter((item) => item.type === 'assistant/message')) {
       expect((event.data.message as { source: Record<string, unknown> }).source).toEqual({
         kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import',
       })
+      // token-meter 的 usageOf() 在 usage/stream 双缺时抛 TypeError；导入消息必须
+      // 带一个诚实的空流，否则该会话的所有投影读取都会失败。
+      expect(event.data.stream).toEqual([])
     }
     for (const event of appends.filter((item) => item.type === 'user/message')) {
       expect((event.data as { source: Record<string, unknown> }).source).toEqual({
-        kind: 'plugin', plugin: 'dsh-tavern',
+        kind: 'plugin:dsh-tavern',
       })
     }
-    // The first live AgentLoop turn remains one because imports reserve no turn.
-    expect([...appends.filter((event) => event.type === 'turn/start'), { type: 'turn/start', data: { turn: 1 } }])
-      .toEqual([{ type: 'turn/start', data: { turn: 1 } }])
     expect(chat).toEqual(original)
   })
 
@@ -320,41 +324,39 @@ describe('AgentTavern native event projector', () => {
         { name: 'Alice', is_user: true, is_system: false, send_date: '', mes: 'Continue.' },
       ],
     }
-    // 会话已有一个闭合的 live turn：导入必须开新 turn（nextTurn = 2）且完整开合，
-    // 镜像 assistant 落在 open step 内并携带 settlement stream——v4 加载期的
-    // 关系校验与 settlement 校验都不再留毒（v3 时代的裸消息 + turn:0 已非法）。
-    const session = {
-      header: { version: 4 },
-      events: [
-        { type: 'agent-preset/selected', seq: 0, time: 1, data: { agentPreset: 'agent-tavern' } },
-        { type: 'turn/start', seq: 1, time: 2, data: { turn: 1 } },
-        { type: 'turn/end', seq: 2, time: 3, data: { turn: 1, reason: { kind: 'completed' } } },
-      ],
-    }
+    // 导入契约（与 live loop 语义一致，见 index.ts 的 advanceHostTurnBase 注释）：
+    // 每条 user 消息开启一个 turn（开场白这类无 user 前导的 assistant 也自成一个
+    // turn），assistant 是 turn 内的一个 step，全部 turn 完整开合并带 settlement
+    // stream——v4 加载期的关系校验与 settlement 校验都不留毒（v3 时代的裸消息 +
+    // turn:0 已非法）。导入只面向空白会话（激活流程保证），turn 号从 1 起步。
+    const session = { header: { version: 4 } }
     const appends = historyImportAppends(chat, 'session-1', [], undefined, session)
     expect(appends.map((event) => event.type)).toEqual([
-      'turn/start',
-      'step/start', 'assistant/message', 'step/end',
-      'user/message',
-      'step/start', 'assistant/message', 'step/end',
-      'user/message',
-      'turn/end',
+      // 开场白 assistant 自成 turn 1
+      'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+      // user 'Hello.' 开 turn 2，assistant 'Welcome.' 是其 step 1
+      'turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+      // user 'Continue.' 开 turn 3（空 turn 也要闭合）
+      'turn/start', 'user/message', 'turn/end',
     ])
-    expect(appends.filter((event) => event.type === 'turn/start').map((event) => event.data)).toEqual([{ turn: 2 }])
+    expect(appends.filter((event) => event.type === 'turn/start').map((event) => event.data))
+      .toEqual([{ turn: 1 }, { turn: 2 }, { turn: 3 }])
     expect(appends.filter((event) => event.type === 'turn/end').map((event) => event.data))
-      .toEqual([{ turn: 2, reason: { kind: 'completed' } }])
+      .toEqual([
+        { turn: 1, reason: { kind: 'completed' } },
+        { turn: 2, reason: { kind: 'completed' } },
+        { turn: 3, reason: { kind: 'completed' } },
+      ])
     const assistants = appends.filter((event) => event.type === 'assistant/message')
     expect(assistants.map((event) => ({ turn: event.data.turn, step: event.data.step, stream: event.data.stream })))
       .toEqual([
+        { turn: 1, step: 1, stream: [] },
         { turn: 2, step: 1, stream: [] },
-        { turn: 2, step: 2, stream: [] },
       ])
     expect(appends.filter((event) => event.type === 'user/message')
       .every((event) => !('turn' in event.data) && !('step' in event.data))).toBe(true)
-
-    // 空白会话（无既有 turn）：导入从 turn 1 起步，与宿主 nextTurn 初值一致。
-    const blank = historyImportAppends(chat, 'session-1', [], undefined, { header: { version: 4 } })
-    expect(blank.filter((event) => event.type === 'turn/start').map((event) => event.data)).toEqual([{ turn: 1 }])
+    // 调用方靠它推进 live loop 轮次基线（index.ts advanceHostTurnBase）。
+    expect(lastImportedTurn(appends)).toBe(3)
 
     // 没有任何可导入消息时不开空 turn，日志保持导入前形状。
     const emptyChat: ChatLogIR = { header: chat.header, messages: [] }
