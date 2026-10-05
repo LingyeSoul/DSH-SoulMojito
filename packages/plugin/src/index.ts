@@ -60,6 +60,12 @@ import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, type
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from './agent-tavern/deduce.js'
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
 import { dshHomePath } from './dsh-home.js'
+import { TavernUpdateService, updateChangelog } from './update/service.js'
+
+// 构建期 stamp：由 scripts/build-plugin.mjs 经 esbuild define 注入，用于在
+// 没有 version.json / 没有 .git 的安装现场给出「跑的是哪个版本和 commit」。
+declare const __TAVERN_VERSION__: string | undefined
+declare const __TAVERN_COMMIT__: string | undefined
 
 export const name = 'dsh-tavern'
 export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools', 'compaction']
@@ -83,6 +89,11 @@ let agentNovelCapabilities: AgentNovelCapabilities = inspectAgentNovelCapabiliti
 let novelStorePromise: Promise<NovelStore> | undefined
 let novelProjectorPromise: Promise<NovelProjector> | undefined
 let novelDriverPromise: Promise<NovelDriver | undefined> | undefined
+// 自更新服务（GitHub 版本发现 + 一键更新）：单进程单实例，apply 时启动自动轮询，
+// HTTP 路由与 bootstrap 共用同一份快照。开关由 profile 配置/环境变量决定，
+// 在这里记一次供路由与 bootstrap 复用。
+let updateServiceInstance: TavernUpdateService | undefined
+let updateChecksEnabledFlag = true
 
 class TavernArchitectureConflictError extends Error {
   readonly code = 'TAVERN_ARCHITECTURE_CONFLICT'
@@ -108,8 +119,37 @@ function novelStore(): Promise<NovelStore> {
   return (novelStorePromise ??= NovelStore.open(dshHomePath('tavern')))
 }
 
-export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
+/**
+ * 自更新服务：默认开启自动发现（延迟首查 + 6h 复查），profile 里给 dsh-tavern
+ * 行写 `checkForUpdates: false` 或设 `DSH_TAVERN_DISABLE_UPDATE_CHECK=1` 可关闭。
+ * 本地 stamp 取构建期注入的 version/commit（见 readBuildInfo）——git 安装没有
+ * version.json 旁车文件，只有构建期 define 才能在安装现场说清「跑的是哪个 commit」。
+ */
+function tavernUpdate(ctx): TavernUpdateService {
+  if (updateServiceInstance !== undefined) return updateServiceInstance
+  updateServiceInstance = new TavernUpdateService({
+    ctx,
+    home: dshHomePath('tavern'),
+    pluginDir: import.meta.dirname,
+    local: { version: BUILD_INFO.version, commit: TAVERN_COMMIT },
+    enabled: updateChecksEnabledFlag,
+  })
+  return updateServiceInstance
+}
+
+/**
+ * 自动发现的开关：profile 的 dsh-tavern 行 `checkForUpdates: false`
+ * 或环境变量 `DSH_TAVERN_DISABLE_UPDATE_CHECK` 非空即关闭。
+ */
+function updateChecksEnabled(config: { checkForUpdates?: unknown } = {}): boolean {
+  if (config.checkForUpdates === false) return false
+  const disabled = process.env.DSH_TAVERN_DISABLE_UPDATE_CHECK?.trim()
+  return !(disabled !== undefined && disabled !== '' && disabled !== '0' && disabled !== 'false')
+}
+
+export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates?: unknown } = {}) {
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns })
+  updateChecksEnabledFlag = updateChecksEnabled(config)
   const adapter = createDshAgentTavernAdapter(ctx)
   // 宿主形状一次性上报：rc.6 与 0.1.2+ 的绑定路径差异排查从这行日志读起。
   ctx.logger?.info?.(`dsh-tavern host shape: ${JSON.stringify(describeHostShape(ctx))}`)
@@ -303,6 +343,8 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown } = {}) {
     },
   })
 
+  ctx.effect(() => tavernUpdate(ctx).start(), 'dsh-tavern: update auto-check')
+
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: API,
@@ -343,6 +385,13 @@ async function handleApi(ctx, req, res) {
   const url = new URL(req.url ?? API, 'http://localhost')
   const route = url.pathname.slice(API.length).replace(/^\//, '')
   const method = req.method ?? 'GET'
+
+  // 自更新走独立处理器：它不依赖 Tavern store，且在 store 打不开时仍要能回答
+  // 「有新版本吗」——升级本身正是修数据/兼容问题的入口。
+  if (route === 'update' || route.startsWith('update/')) {
+    return handleUpdateApi(ctx, req, res, url, route, method)
+  }
+
   const db = await store()
 
   if (method === 'GET' && route === 'bootstrap') {
@@ -381,6 +430,9 @@ async function handleApi(ctx, req, res) {
       internalWorkspace,
       agentTavern: agentTavernCapabilities,
       agentNovel: agentNovelCapabilities,
+      // 自更新快照：只读缓存结论，检查/安装分别走 update/check 与 update/install，
+      // 保证 bootstrap 永远不因网络失败而变慢或报错。
+      update: tavernUpdate(ctx).snapshot(),
     })
   }
 
@@ -2598,6 +2650,12 @@ function readBuildInfo(): { version: string; commit: string } {
   let version = 'unknown'
   let commit = 'unknown'
 
+  // 构建期 stamp（esbuild define）：git 安装现场没有 version.json 旁车文件
+  // （仓库 .gitignore 排除它），install 目录也不是 Git 检出，只有打进 bundle
+  // 的字面量能说清「这个包是哪个 commit 构建的」。自更新要靠它做比较。
+  const stamped = buildTimeStamp()
+  if (stamped.commit !== '') commit = stamped.commit
+
   for (const packagePath of [
     resolve(import.meta.dirname, 'package.json'),
     resolve(import.meta.dirname, '..', 'package.json'),
@@ -2617,13 +2675,24 @@ function readBuildInfo(): { version: string; commit: string } {
     if (typeof generated?.version === 'string' && generated.version.trim() !== '') {
       version = generated.version.trim()
     }
-    if (typeof generated?.commit === 'string') {
+    if (commit === 'unknown' && typeof generated?.commit === 'string') {
       commit = normalizeCommit(generated.commit) ?? 'unknown'
     }
   } catch {
   }
 
   return { version, commit }
+}
+
+/**
+ * 读构建期注入的 `__TAVERN_VERSION__` / `__TAVERN_COMMIT__`。未定义时
+ * （vitest、未走 build-plugin.mjs 的运行）返回空串，`typeof` 对未声明标识符
+ * 安全，不会抛 ReferenceError。
+ */
+function buildTimeStamp(): { version: string; commit: string } {
+  const version = typeof __TAVERN_VERSION__ === 'string' ? __TAVERN_VERSION__.trim() : ''
+  const commit = typeof __TAVERN_COMMIT__ === 'string' ? normalizeCommit(__TAVERN_COMMIT__) : undefined
+  return { version, commit: commit ?? '' }
 }
 
 function resolveTavernCommit(buildFallback: string): string {
@@ -2731,6 +2800,40 @@ function defaultPreset() {
     prompts,
     prompt_order: [{ character_id: 100000, order: prompts.map((p) => ({ identifier: p.identifier, enabled: true })) }],
   }
+}
+
+/**
+ * `/api/dsh-tavern/update` 路由族：
+ * - `GET  update`         → 缓存快照（`?refresh=1` 穿透 TTL 重新检查）；
+ * - `POST update/check`   → 强制检查远端；
+ * - `POST update/install` → 开始安装。默认等安装结束再回；`{ wait: false }`
+ *   立刻返回，客户端轮询 `GET update` 读进度（安装本身跑在本进程里，不会因
+ *   浏览器断开而中断）。
+ */
+async function handleUpdateApi(ctx, req, res, url, route, method) {
+  const service = tavernUpdate(ctx)
+  if (method === 'GET' && route === 'update') {
+    const refresh = url.searchParams.get('refresh')
+    const fresh = refresh === '1' || refresh === 'true'
+    const snapshot = fresh ? await service.check({ force: true }) : service.snapshot()
+    return sendJson(res, 200, { ok: true, update: snapshot, changelog: updateChangelog(snapshot) })
+  }
+  if (method === 'POST' && route === 'update/check') {
+    const snapshot = await service.check({ force: true })
+    return sendJson(res, 200, { ok: true, update: snapshot, changelog: updateChangelog(snapshot) })
+  }
+  if (method === 'POST' && route === 'update/install') {
+    const body = await readJson(req).catch(() => ({}) as Record<string, unknown>)
+    const force = body.force === true
+    if (body.wait === false) {
+      void service.install({ force }).catch(() => {})
+      const snapshot = service.snapshot()
+      return sendJson(res, 200, { ok: true, started: true, update: snapshot, changelog: updateChangelog(snapshot) })
+    }
+    const snapshot = await service.install({ force })
+    return sendJson(res, 200, { ok: true, update: snapshot, changelog: updateChangelog(snapshot) })
+  }
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
 }
 
 function sendJson(res, status, body) {

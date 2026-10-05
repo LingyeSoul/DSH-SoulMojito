@@ -69,6 +69,9 @@ const REQUIRED_SERVER_ROUTES = [
   'novels/export',
   'novels/outline',
   'novels/body',
+  'update',
+  'update/check',
+  'update/install',
 ]
 
 // DSH client-web's platform module table, mirrored from the host web shell's
@@ -274,6 +277,29 @@ function checkServerText(text) {
   }
   if (!text.includes('assertStGenerationBinding')) {
     problems.push('server bundle must guard the ST generation route by architecture')
+  }
+  return problems
+}
+
+
+/**
+ * 构建期 stamp 断言：esbuild define 必须把 __TAVERN_VERSION__ /
+ * __TAVERN_COMMIT__ 全部替换成字面量。未替换的标识符在运行期 typeof 判断为
+ * undefined，会让自更新退化成「commit 未知、只能比版本号」——静默失效比报错更
+ * 难查，所以在 gate 里硬断言。
+ */
+function checkBuildStamps(text, version, commit) {
+  const problems = []
+  for (const stamp of ['__TAVERN_VERSION__', '__TAVERN_COMMIT__']) {
+    if (text.includes(stamp)) {
+      problems.push(`server bundle still contains the unstamped ${stamp} identifier (build through scripts/build-plugin.mjs)`)
+    }
+  }
+  if (typeof version === 'string' && version !== '' && !text.includes(JSON.stringify(version))) {
+    problems.push(`server bundle must carry the built version literal '${version}'`)
+  }
+  if (typeof commit === 'string' && commit !== '' && commit !== 'unknown' && !text.includes(JSON.stringify(commit))) {
+    problems.push(`server bundle must carry the built commit literal '${commit}'`)
   }
   return problems
 }
@@ -629,6 +655,28 @@ function checkPrimitiveParity(trace) {
   return problems
 }
 
+
+const REQUIRED_UPDATE_KEYS = [
+  'update.title',
+  'update.current',
+  'update.latest',
+  'update.check',
+  'update.checking',
+  'update.now',
+  'update.installing',
+  'update.confirm',
+  'update.restartHint',
+  'update.restartHintWeb',
+  'update.checkedAt',
+  'update.notes',
+  'update.remoteError',
+  'update.status.available',
+  'update.status.upToDate',
+  'update.status.localAhead',
+  'update.status.restartRequired',
+  'update.status.unknown',
+]
+
 async function checkClientExecution(code, options = {}) {
   const problems = []
   let module
@@ -724,6 +772,16 @@ async function checkClientExecution(code, options = {}) {
           problems.push(`locale key '${key}' must use the same {param} placeholders in zh and en`)
         }
       }
+    }
+  }
+  if (options.requireUpdateWiring === true) {
+    for (const marker of ['update/check', 'update/install']) {
+      if (!code.includes(marker)) problems.push(`client bundle must call the host '${marker}' route`)
+    }
+    if (!/\bUpdateBand\b/.test(code)) problems.push('client bundle must render the UpdateBand surface')
+    for (const key of REQUIRED_UPDATE_KEYS) {
+      if (!(key in (localeRegistration?.dicts?.zh ?? {}))) problems.push(`zh dictionary is missing '${key}'`)
+      if (!(key in (localeRegistration?.dicts?.en ?? {}))) problems.push(`en dictionary is missing '${key}'`)
     }
   }
   if (!localeBinds.includes(PLUGIN_NAME)) {
@@ -960,7 +1018,217 @@ function runNodeMount() {
   }
 }
 
+
+const UPDATE_ROUTE_SCRIPT = String.raw`
+const entry = process.env.DSH_TAVERN_GATE_ENTRY
+if (!entry) throw new Error('missing DSH_TAVERN_GATE_ENTRY')
+const mod = await import(entry)
+const registrations = []
+const installedSpecs = []
+const installBundleOptions = []
+let installLogHandler = null
+const pluginManagerStub = {
+  installBundle: (spec, options) => {
+    installedSpecs.push(spec)
+    installBundleOptions.push(options || {})
+    if (typeof installLogHandler === 'function') {
+      installLogHandler({ requestId: options?.requestId, jobId: 'gate', argv: ['pnpm', 'add', spec], cwd: process.cwd(), stream: 'stdout', text: 'Progress: resolved 1, added 1' })
+    }
+    return Promise.resolve({ changed: true, application: 'restart-required', stage: 'install', target: spec, bundle: 'dsh-tavern' })
+  },
+}
+const ctx = {
+  commands: { register: () => () => {} },
+  systemPrompt: { section: () => {} },
+  webServer: { register: (value) => { registrations.push(value); return () => {} } },
+  effect: (callback) => callback(),
+  llm: { stream: async function* () {} },
+  agentDefaultModel: { currentSelection: () => ({ provider: 'stub', model: 'stub' }) },
+  get: (name) => (name === 'pluginManager' ? pluginManagerStub : undefined),
+  on: (event, handler) => { if (event === 'plugin-manager/install-log') installLogHandler = handler; return () => {} },
+}
+mod.apply(ctx)
+const UPDATE_SHA = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
+globalThis.fetch = async (url) => {
+  const target = String(url)
+  const reply = (value) => ({ ok: true, status: 200, json: async () => value, text: async () => JSON.stringify(value) })
+  if (target.includes('api.github.com') && target.includes('/commits/')) return reply({ sha: UPDATE_SHA, commit: { message: 'feat: update', author: { date: '2026-10-05T00:00:00Z' } } })
+  if (target.includes('api.github.com') && target.includes('/compare/')) return reply({ commits: [{ sha: UPDATE_SHA, commit: { message: 'feat: update' } }], files: [{ filename: 'packages/plugin/index.mjs' }] })
+  if (target.includes('raw.githubusercontent.com')) return reply({ version: '9.9.9' })
+  return { ok: false, status: 404, json: async () => ({}), text: async () => '' }
+}
+const route = registrations.find((value) => value.kind === 'prefix' && value.path === '/api/dsh-tavern')
+function callRoute(method, url, body) {
+  return new Promise((resolve, reject) => {
+    const chunks = body === undefined ? [] : [Buffer.from(JSON.stringify(body))]
+    const req = {
+      method,
+      url,
+      on: (event, handler) => { if (event === 'data') for (const chunk of chunks) handler(chunk); if (event === 'end') handler(); return req },
+    }
+    const res = {
+      statusCode: 0,
+      headersSent: false,
+      writableEnded: false,
+      setHeader: () => {},
+      write: () => {},
+      end: (payload) => {
+        res.writableEnded = true
+        try { resolve({ status: res.statusCode, body: payload === undefined ? null : JSON.parse(payload) }) } catch (error) { reject(error) }
+      },
+    }
+    Promise.resolve(route.handler(req, res)).catch(reject)
+  })
+}
+const probe = { reachable: false }
+if (route !== undefined && typeof route.handler === 'function') {
+  const checked = await callRoute('GET', '/api/dsh-tavern/update?refresh=1')
+  const checkedUpdate = checked.body && checked.body.update ? checked.body.update : {}
+  const changelog = checked.body && Array.isArray(checked.body.changelog) ? checked.body.changelog : []
+  const missing = await callRoute('GET', '/api/dsh-tavern/update/nope')
+  const installed = await callRoute('POST', '/api/dsh-tavern/update/install', { wait: false })
+  const startedFlag = installed.body ? installed.body.started === true : false
+  let afterInstall = installed.body && installed.body.update ? installed.body.update : {}
+  for (let attempt = 0; attempt < 40 && afterInstall.install && afterInstall.install.running === true; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    const polled = await callRoute('GET', '/api/dsh-tavern/update')
+    afterInstall = polled.body && polled.body.update ? polled.body.update : afterInstall
+  }
+  const installState = afterInstall.install || {}
+  const log = Array.isArray(installState.log) ? installState.log : []
+  probe.reachable = true
+  probe.checkStatus = checkedUpdate.status || null
+  probe.checkCommit = checkedUpdate.remote ? checkedUpdate.remote.commit || null : null
+  probe.checkVersion = checkedUpdate.remote ? checkedUpdate.remote.version || null : null
+  probe.localVersion = checkedUpdate.local ? checkedUpdate.local.version || null : null
+  probe.spec = checkedUpdate.spec || null
+  probe.changelog = changelog
+  probe.missingRouteStatus = missing.status
+  probe.installStarted = startedFlag
+  probe.installPhase = installState.phase || null
+  probe.installStrategy = installState.strategy || null
+  probe.installRestartRequired = installState.restartRequired === true
+  probe.installLogTail = log.length > 0 ? log[log.length - 1] : ''
+  probe.installedSpecs = installedSpecs
+  probe.installRequestId = typeof installBundleOptions[0]?.requestId === 'string'
+}
+console.log('DSH_TAVERN_GATE_RESULT=' + JSON.stringify(probe))
+`
+
+function checkUpdateRouteResult(result) {
+  const problems = []
+  if (result?.reachable !== true) {
+    problems.push('update routes did not answer through the webServer prefix handler')
+    return problems
+  }
+  if (result.checkStatus !== 'update-available') problems.push('update check must report update-available for a newer remote build')
+  if (result.checkCommit !== 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678') problems.push('update check must carry the remote commit')
+  if (result.checkVersion !== '9.9.9') problems.push('update check must read the remote package.json version')
+  if (typeof result.localVersion !== 'string' || result.localVersion === '') problems.push('update check must report the local build version')
+  if (result.spec !== 'github:LingyeSoul/dsh-tavern#a1b2c3d4e5f60718293a4b5c6d7e8f9012345678&path:/packages/plugin') {
+    problems.push('update snapshot must expose a pinned pnpm git spec')
+  }
+  if (!Array.isArray(result.changelog) || result.changelog.length === 0) problems.push('update check must return a changelog')
+  if (result.missingRouteStatus !== 404) problems.push('unknown update subroutes must answer 404')
+  if (result.installStarted !== true) problems.push('update install must acknowledge the started job')
+  if (result.installPhase !== 'done') problems.push('update install must finish in the done phase when the plugin manager succeeds')
+  if (result.installStrategy !== 'plugin-manager') problems.push('update install must report which落地 strategy ran')
+  if (result.installRestartRequired !== true) problems.push('a plugin-manager package replacement must report restart-required')
+  if (!result.installLogTail.includes('Progress: resolved 1')) problems.push('pnpm install-log chunks must reach the update snapshot')
+  if (result.installRequestId !== true) problems.push('installBundle must receive a requestId so pnpm output can be correlated')
+  const specs = Array.isArray(result.installedSpecs) ? result.installedSpecs : []
+  if (specs.length !== 1 || !String(specs[0]).includes('#a1b2c3d4e5f60718293a4b5c6d7e8f9012345678&path:/packages/plugin')) {
+    problems.push('installBundle must be called once with the pinned subdirectory spec')
+  }
+  return problems
+}
+
+function runUpdateRouteProbe() {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'dsh-tavern-update-gate-'))
+  try {
+    let entryPath = SERVER_PATH
+    let dependencyRoot = null
+    if (!canResolveOfficialDependenciesFromRepo()) {
+      dependencyRoot = locateOfficialDependencyRoot()
+      if (dependencyRoot === null) {
+        return ['official @deepseek-ai dependencies are not resolvable from the repo, NODE_PATH, or global DSH install']
+      }
+      entryPath = join(tempRoot, 'index.mjs')
+      copyFileSync(SERVER_PATH, entryPath)
+      copyFileSync(VERSION_PATH, join(tempRoot, 'version.json'))
+      symlinkSync(dependencyRoot, join(tempRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
+    }
+    const dshHome = join(tempRoot, 'dsh-home')
+    mkdirSync(dshHome, { recursive: true })
+    const child = spawnSync(process.execPath, ['--input-type=module', '--eval', UPDATE_ROUTE_SCRIPT], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        DSH_HOME: dshHome,
+        DSH_PROFILE: 'desktop',
+        // 让 CLI 落地路径确定性失败（文件不存在），把安装逼到 plugin-manager 替身上。
+        DSH_TAVERN_DSH_CLI: join(tempRoot, 'missing-cli.js'),
+        DSH_TAVERN_GATE_ENTRY: pathToFileURL(entryPath).href,
+        ...(dependencyRoot === null ? {} : { NODE_PATH: dependencyRoot }),
+      },
+      timeout: 30_000,
+      windowsHide: true,
+    })
+    if (child.error) return ['update route subprocess failed: ' + child.error.message]
+    if (child.status !== 0) {
+      const detail = (child.stderr || child.stdout).trim().split(/\r?\n/).at(-1) ?? 'exit ' + child.status
+      return ['update route subprocess exited ' + child.status + ': ' + detail]
+    }
+    const line = child.stdout.split(/\r?\n/).find((value) => value.startsWith('DSH_TAVERN_GATE_RESULT='))
+    if (line === undefined) return ['update route subprocess returned no result record']
+    return checkUpdateRouteResult(JSON.parse(line.slice('DSH_TAVERN_GATE_RESULT='.length)))
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true })
+  }
+}
+
 const gates = [
+  {
+    name: 'update-routes',
+    selfTest: () => {
+      const good = {
+        reachable: true,
+        checkStatus: 'update-available',
+        checkCommit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+        checkVersion: '9.9.9',
+        localVersion: '0.3.8',
+        spec: 'github:LingyeSoul/dsh-tavern#a1b2c3d4e5f60718293a4b5c6d7e8f9012345678&path:/packages/plugin',
+        changelog: ['a1b2c3d feat: update'],
+        missingRouteStatus: 404,
+        installStarted: true,
+        installPhase: 'done',
+        installStrategy: 'plugin-manager',
+        installRestartRequired: true,
+        installLogTail: '12:00:00 pnpm stdout: Progress: resolved 1, added 1',
+        installedSpecs: ['github:LingyeSoul/dsh-tavern#a1b2c3d4e5f60718293a4b5c6d7e8f9012345678&path:/packages/plugin'],
+        installRequestId: true,
+      }
+      const badSamples = [
+        { ...good, reachable: false },
+        { ...good, checkStatus: 'up-to-date' },
+        { ...good, spec: 'github:LingyeSoul/dsh-tavern#main&path:/packages/plugin' },
+        { ...good, installPhase: 'failed' },
+        { ...good, installStrategy: 'checkout' },
+        { ...good, installRestartRequired: false },
+        { ...good, installLogTail: '' },
+        { ...good, installRequestId: false },
+        { ...good, installedSpecs: [] },
+        { ...good, changelog: [] },
+        { ...good, missingRouteStatus: 200 },
+      ]
+      const rejected = badSamples.filter((sample) => checkUpdateRouteResult(sample).length > 0).length
+      return checkUpdateRouteResult(good).length === 0 && rejected === badSamples.length
+        ? []
+        : ['update route bad samples were not rejected']
+    },
+    check: () => existsSync(SERVER_PATH) ? runUpdateRouteProbe() : ['generated packages/plugin/index.mjs does not exist'],
+  },
   {
     name: 'package-contract',
     selfTest: () => {
@@ -1018,6 +1286,9 @@ const gates = [
         && checkServerText(badStamp).length > 0
         && checkServerText(hardcodedCommit).length > 0
         && checkServerFreshness(10, 10).length === 0
+        && checkBuildStamps('var built = { version: "0.0.0", commit: "abc1234" };', '0.0.0', 'abc1234').length === 0
+        && checkBuildStamps('var built = { version: __TAVERN_VERSION__, commit: __TAVERN_COMMIT__ };', '0.0.0', 'abc1234').length > 0
+        && checkBuildStamps('var built = { version: "0.0.0", commit: "abc1234" };', '9.9.9', 'abc1234').length > 0
         && checkServerFreshness(11, 10).length > 0
         ? []
         : ['server bundle bad samples were not rejected']
@@ -1035,6 +1306,7 @@ const gates = [
           ? checkVersionFreshness(packageStat.mtimeMs, statSync(VERSION_PATH).mtimeMs)
           : []),
         ...checkServerText(readFileSync(SERVER_PATH, 'utf8')),
+        ...checkBuildStamps(readFileSync(SERVER_PATH, 'utf8'), readJson(PACKAGE_PATH).version, readJson(VERSION_PATH).commit),
       ]
     },
   },
@@ -1203,12 +1475,28 @@ const gates = [
       )
       const wiringOk = (await checkClientExecution(traced, { requirePrimitiveParity: true })).length === 0
       const wiringRejectsUntraced = (await checkClientExecution(good, { requirePrimitiveParity: true })).length > 0
+      const updateZh = "{ 'update.title': '插件更新', 'update.current': '已安装 v{version}（{commit}）', 'update.latest': 'GitHub v{version}（{commit}）', 'update.check': '检查更新', 'update.checking': '检查中…', 'update.now': '立即更新', 'update.installing': '更新中…', 'update.confirm': '安装 v{version}？', 'update.restartHint': '重启生效', 'update.restartHintWeb': '重启并刷新', 'update.checkedAt': '上次 {at}', 'update.notes': '改动', 'update.remoteError': '查询失败 {error}', 'update.status.available': '有 v{version}', 'update.status.upToDate': '最新', 'update.status.localAhead': '本地更新', 'update.status.restartRequired': '需重启', 'update.status.unknown': '未知' }"
+      const updateEn = "{ 'update.title': 'Plugin update', 'update.current': 'Installed v{version} ({commit})', 'update.latest': 'GitHub v{version} ({commit})', 'update.check': 'Check', 'update.checking': 'Checking…', 'update.now': 'Update now', 'update.installing': 'Updating…', 'update.confirm': 'Install v{version}?', 'update.restartHint': 'Restart', 'update.restartHintWeb': 'Restart and reload', 'update.checkedAt': 'Checked {at}', 'update.notes': 'Changes', 'update.remoteError': 'Lookup failed {error}', 'update.status.available': 'v{version} available', 'update.status.upToDate': 'Up to date', 'update.status.localAhead': 'Local newer', 'update.status.restartRequired': 'Restart', 'update.status.unknown': 'Unknown' }"
+      const updateMissing = updateEn.replace("'update.now': 'Update now', ", '')
+      const goodWithUpdate = good
+        .replace("zh: { 'nav.title': '酒馆' }", `zh: { 'nav.title': '酒馆', ${updateZh.slice(1, -1)} }`)
+        .replace("en: { 'nav.title': 'Tavern' }", `en: { 'nav.title': 'Tavern', ${updateEn.slice(1, -1)} }`)
+        .replace('exports.apply = (ctx) => {', "exports.apply = (ctx) => { const updateMarkers = ['update/check', 'update/install']; const UpdateBand = () => null; void updateMarkers; void UpdateBand; ")
+      const badUpdateKeys = goodWithUpdate.replace(updateEn.slice(1, -1), updateMissing.slice(1, -1))
+      const updateWiringOk = (await checkClientExecution(goodWithUpdate, { requireUpdateWiring: true })).length === 0
+      const updateWiringRejectsPlain = (await checkClientExecution(good, { requireUpdateWiring: true })).length > 0
+      const updateWiringRejectsMissingKey = (await checkClientExecution(badUpdateKeys, { requireUpdateWiring: true })).length > 0
+      const updateWiringRejectsNoMarker = (await checkClientExecution(goodWithUpdate.replace("'update/check', 'update/install'", "'update/check'"), { requireUpdateWiring: true })).length > 0
       return goodProblems.length === 0
         && failureCounts === 4
         && checkPrimitiveParity(parityShape).length === 0
         && parityRejected === parityBad.length
         && wiringOk
         && wiringRejectsUntraced
+        && updateWiringOk
+        && updateWiringRejectsPlain
+        && updateWiringRejectsMissingKey
+        && updateWiringRejectsNoMarker
         ? []
         : ['client VM bad samples were not rejected']
     },
@@ -1218,7 +1506,7 @@ const gates = [
       if (primitives === null) {
         return [`${PRIMITIVES_PACKAGE} is not resolvable from the repo, NODE_PATH, or global DSH install`]
       }
-      return checkClientExecution(readFileSync(CLIENT_PATH, 'utf8'), { primitives, requirePrimitiveParity: true })
+      return checkClientExecution(readFileSync(CLIENT_PATH, 'utf8'), { primitives, requirePrimitiveParity: true, requireUpdateWiring: true })
     },
   },
   {

@@ -405,6 +405,26 @@ window.__ModuleLoader__.load({
       'error.activationFailed': 'Tavern activation failed.',
       'error.agentTavernUnavailable': 'AgentTavern is unavailable: {reason}',
       'error.hostCommandUnavailable': 'The Tavern host command is unavailable.',
+      // 自更新（GitHub 版本发现 + 一键更新）。zh/en 键集与 {param} 占位符必须
+      // 完全镜像，由 client-vm-mount gate 校验。
+      'update.title': 'Plugin update',
+      'update.current': 'Installed v{version} ({commit})',
+      'update.latest': 'GitHub v{version} ({commit})',
+      'update.check': 'Check for updates',
+      'update.checking': 'Checking…',
+      'update.now': 'Update now',
+      'update.installing': 'Updating…',
+      'update.confirm': 'Install Tavern v{version} from GitHub now? DSH must be restarted afterwards.',
+      'update.restartHint': 'Restart DeepSeek Harness to load the new version (the running host keeps the old module generation).',
+      'update.restartHintWeb': 'Restart DSH to load the new version, then reload this page.',
+      'update.checkedAt': 'Last checked {at}',
+      'update.notes': 'Incoming changes',
+      'update.remoteError': 'GitHub lookup failed: {error}',
+      'update.status.available': 'v{version} available',
+      'update.status.upToDate': 'Up to date',
+      'update.status.localAhead': 'Local build is newer',
+      'update.status.restartRequired': 'Restart required',
+      'update.status.unknown': 'Update status unknown',
       // AgentNovel surface (proposal 0005). zh/en keys must stay mirrored with
       // identical {param} placeholders; the client-vm-mount gate enforces it.
       'panel.section.novels': 'Novels',
@@ -778,6 +798,24 @@ window.__ModuleLoader__.load({
       'error.activationFailed': '酒馆激活失败。',
       'error.agentTavernUnavailable': 'AgentTavern 不可用：{reason}',
       'error.hostCommandUnavailable': '宿主的酒馆命令不可用。',
+      'update.title': '插件更新',
+      'update.current': '已安装 v{version}（{commit}）',
+      'update.latest': 'GitHub v{version}（{commit}）',
+      'update.check': '检查更新',
+      'update.checking': '检查中…',
+      'update.now': '立即更新',
+      'update.installing': '更新中…',
+      'update.confirm': '现在从 GitHub 安装酒馆 v{version}？安装后需要重启 DSH。',
+      'update.restartHint': '重启 DeepSeek Harness 后新版本才会生效（运行中的宿主仍是旧模块）。',
+      'update.restartHintWeb': '重启 DSH 后新版本生效，然后刷新本页面。',
+      'update.checkedAt': '上次检查 {at}',
+      'update.notes': '即将合入的改动',
+      'update.remoteError': 'GitHub 查询失败：{error}',
+      'update.status.available': '有新版本 v{version}',
+      'update.status.upToDate': '已是最新',
+      'update.status.localAhead': '本地构建更新',
+      'update.status.restartRequired': '需要重启',
+      'update.status.unknown': '更新状态未知',
       'panel.section.novels': '小说',
       'view.architectureNovel': 'AgentNovel',
       'novel.empty': '还没有小说，创建一部开始全自动创作。',
@@ -952,6 +990,16 @@ window.__ModuleLoader__.load({
         managed: { available: false, missing: [], reasons: [] },
       },
       agentNovel: { available: false, missing: [], reasons: [] },
+      // 宿主 /update 快照（bootstrap 里带的是磁盘缓存结论）。字段与
+      // src/update/service.ts 的 TavernUpdateSnapshot 对齐。
+      update: {
+        status: 'unknown', reason: '', checkedAt: null, nextCheckAt: null, error: '', source: 'none',
+        repository: '', ref: '', local: { version: '', commit: '' }, remote: null, spec: '',
+        install: {
+          running: false, phase: 'idle', strategy: null, startedAt: null, finishedAt: null,
+          message: '', restartRequired: false, installed: null, log: [],
+        },
+      },
     }
     const EMPTY_MODELS = { status: 'idle', groups: [], failures: [], error: '' }
     let snapshot = {
@@ -1021,6 +1069,28 @@ window.__ModuleLoader__.load({
         update({ loading: false, error: cause instanceof Error ? cause.message : String(cause) })
         throw cause
       }
+    }
+
+    // 自更新三件套：读快照（宿主缓存结论，默认不打网络）、强制检查、开始安装。
+    // 安装可能跑几十秒（pnpm add），宿主在 install 里维护进度日志，客户端按
+    // 1.5s 轮询快照即可看到阶段与日志，不需要 SSE。
+    async function loadUpdateSnapshot(refresh) {
+      const result = await api(refresh === true ? 'update?refresh=1' : 'update')
+      return result.update || null
+    }
+
+    async function requestUpdateCheck() {
+      const result = await api('update/check', { method: 'POST', headers: jsonHeaders(), body: '{}' })
+      return result.update || null
+    }
+
+    async function requestUpdateInstall(force) {
+      const result = await api('update/install', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ force: force === true, wait: false }),
+      })
+      return result.update || null
     }
 
     async function patchState(patch) {
@@ -2383,6 +2453,150 @@ window.__ModuleLoader__.load({
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
+    // 自更新卡片/徽标。数据来自宿主 /update 快照：bootstrap 里带的是磁盘缓存
+    // 结论（首屏立刻可显示，不打网络），点「检查更新」才穿透 TTL 打 GitHub，
+    // 「立即更新」交给宿主依次尝试 dsh plugin → plugin-manager → checkout。
+    // 安装期间按 1.5s 轮询宿主快照，面板关掉再打开也能恢复当前阶段。
+    function updateStatusText(t, current) {
+      const status = current?.status
+      if (status === 'update-available') return t('update.status.available', { version: current?.remote?.version || '?' })
+      if (status === 'up-to-date') return t('update.status.upToDate')
+      if (status === 'local-ahead') return t('update.status.localAhead')
+      if (status === 'restart-required') return t('update.status.restartRequired')
+      return t('update.status.unknown')
+    }
+
+    function updateStatusClass(current) {
+      const status = current?.status
+      if (status === 'update-available') return 'dt-update-badge-available'
+      if (status === 'restart-required') return 'dt-update-badge-pending'
+      if (status === 'up-to-date') return 'dt-update-badge-current'
+      return 'dt-update-badge-unknown'
+    }
+
+    function updateNotes(current) {
+      const commits = current?.remote?.commits
+      if (!Array.isArray(commits)) return []
+      return commits.slice(0, 5).map((commit) => (commit.message ? `${commit.short} ${commit.message}` : commit.short))
+    }
+
+    function useUpdateController() {
+      const state = useTavernStore()
+      const [current, setCurrent] = useState(null)
+      const [busy, setBusy] = useState('')
+      const [error, setError] = useState('')
+      const snapshot = current || state.bootstrap.update || null
+      const installing = snapshot?.install?.running === true
+
+      useEffect(() => {
+        let cancelled = false
+        void loadUpdateSnapshot()
+          .then((next) => { if (!cancelled && next) setCurrent(next) })
+          .catch(() => {})
+        return () => { cancelled = true }
+      }, [])
+
+      // 安装是宿主侧的后台任务：这里只轮询快照直到 running 变 false。
+      useEffect(() => {
+        if (!installing) return undefined
+        let cancelled = false
+        const timer = setInterval(() => {
+          void loadUpdateSnapshot()
+            .then((next) => { if (!cancelled && next) setCurrent(next) })
+            .catch(() => {})
+        }, 1500)
+        return () => { cancelled = true; clearInterval(timer) }
+      }, [installing])
+
+      const check = () => {
+        setBusy('check')
+        setError('')
+        return requestUpdateCheck()
+          .then((next) => { if (next) setCurrent(next) })
+          .catch((cause) => setError(cause.message))
+          .finally(() => setBusy(''))
+      }
+
+      const install = (t) => {
+        if (!window.confirm(t('update.confirm', { version: snapshot?.remote?.version || '?' }))) return
+        setBusy('install')
+        setError('')
+        void requestUpdateInstall(false)
+          .then((next) => { if (next) setCurrent(next) })
+          .catch((cause) => setError(cause.message))
+          .finally(() => setBusy(''))
+      }
+
+      return { snapshot, busy, error, installing, check, install }
+    }
+
+    // compact：设置页标题行（状态徽标 + 按钮）；完整版：管理面板「总览」分区。
+    function UpdateBand({ compact }) {
+      const t = useTranslate()
+      const { snapshot, busy, error, installing, check, install } = useUpdateController()
+      const local = snapshot?.local || {}
+      const remoteBuild = snapshot?.remote || null
+      const canInstall = snapshot?.status === 'update-available' && busy === '' && !installing
+      const statusLabel = updateStatusText(t, snapshot)
+      const checkButton = h(Button, {
+        size: 'sm',
+        variant: 'outline',
+        icon: h(IconRefreshOutline16),
+        disabled: busy !== '' || installing,
+        onClick: check,
+      }, busy === 'check' ? t('update.checking') : t('update.check'))
+      const installButton = h(Button, {
+        size: 'sm',
+        variant: 'primary',
+        icon: h(IconDownloadOutline16),
+        disabled: !canInstall,
+        onClick: () => install(t),
+      }, busy === 'install' || installing ? t('update.installing') : t('update.now'))
+
+      if (compact) {
+        return h('div', { className: 'dt-settings-update' },
+          h('span', { className: `dt-update-badge ${updateStatusClass(snapshot)}` }, statusLabel),
+          checkButton,
+          snapshot?.status === 'update-available' || installing ? installButton : null,
+          error ? h('span', { className: 'dt-error' }, error) : null)
+      }
+
+      const notes = updateNotes(snapshot)
+      const installState = snapshot?.install || {}
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('update.title')),
+        h('div', { className: 'dt-update-row' },
+          h('span', { className: `dt-update-badge ${updateStatusClass(snapshot)}` }, statusLabel),
+          h('span', { className: 'dt-update-stamp' }, t('update.current', {
+            version: local.version || '?',
+            commit: local.commit && local.commit !== 'unknown' ? local.commit : '?',
+          })),
+          remoteBuild
+            ? h('span', { className: 'dt-update-stamp' }, t('update.latest', {
+              version: remoteBuild.version && remoteBuild.version !== 'unknown' ? remoteBuild.version : '?',
+              commit: remoteBuild.commit ? String(remoteBuild.commit).slice(0, 7) : '?',
+            }))
+            : null),
+        notes.length > 0 && snapshot?.status === 'update-available'
+          ? h('div', { className: 'dt-update-notes' },
+            h('span', { className: 'dt-update-notes-title' }, t('update.notes')),
+            h('ul', null, notes.map((note, index) => h('li', { key: `${index}:${note}` }, note))))
+          : null,
+        h('div', { className: 'dt-update-actions' }, checkButton, installButton),
+        installState.message
+          ? h('p', { className: installState.phase === 'failed' ? 'dt-error' : 'dt-hint' }, installState.message)
+          : null,
+        installState.restartRequired
+          ? h('p', { className: 'dt-hint' }, t('update.restartHint'))
+          : null,
+        Array.isArray(installState.log) && installState.log.length > 0
+          ? h('pre', { className: 'dt-update-log' }, installState.log.slice(-6).join('\n'))
+          : null,
+        snapshot?.checkedAt ? h('p', { className: 'dt-hint' }, t('update.checkedAt', { at: new Date(snapshot.checkedAt).toLocaleString() })) : null,
+        snapshot?.error ? h('p', { className: 'dt-hint' }, t('update.remoteError', { error: snapshot.error })) : null,
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
     function TavernSettings() {
       const state = useTavernStore()
       const t = useTranslate()
@@ -2398,7 +2612,8 @@ window.__ModuleLoader__.load({
           h('div', null,
             h('h2', null, 'dsh-tavern'),
             h('p', null, t('settings.subtitle')),
-            stamp ? h('p', { className: 'dt-settings-version' }, `${t('settings.version')} ${stamp}`) : null),
+            stamp ? h('p', { className: 'dt-settings-version' }, `${t('settings.version')} ${stamp}`) : null,
+            h(UpdateBand, { compact: true })),
           h(Button, { variant: 'primary', size: 'sm', icon: h(IconSparkle16), onClick: () => openPanel() }, t('panel.open'))),
         h(ActiveSetupBand),
         state.error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, state.error)) : null)
@@ -3547,6 +3762,7 @@ window.__ModuleLoader__.load({
             personas: bootstrap.personas.length,
             groups: (bootstrap.groups || []).length,
           }))),
+        h(UpdateBand, { compact: false }),
         state.error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, state.error)) : null)
     }
 
@@ -5399,6 +5615,19 @@ window.__ModuleLoader__.load({
         .dt-backlink{display:flex;padding:2px 0}.dt-backlink>button{color:var(--dsw-alias-label-tertiary);background:transparent;border:0;cursor:pointer;font-size:12px;padding:4px 2px}.dt-backlink>button:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}
         .dt-member-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}.dt-member-row .dt-member-chip>button{display:none}.dt-script-glyph{font-weight:700;font-size:15px;line-height:1}.dt-sidebar-subheading{margin-top:10px}.dt-branch-btn{font-size:13px}
         .dt-hint{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;margin:0 0 12px}.dt-hint-wide{grid-column:1 / -1;margin:0 0 12px}
+        .dt-settings-update{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+        .dt-update-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+        .dt-update-stamp{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;user-select:text}
+        .dt-update-badge{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:999px;font-size:11px;line-height:1;font-weight:600;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}
+        .dt-update-badge-available{color:var(--dsw-alias-state-business-primary);border-color:var(--dsw-alias-state-business-primary)}
+        .dt-update-badge-pending{color:var(--dsw-alias-state-warning-primary,var(--dsw-alias-state-business-primary));border-color:var(--dsw-alias-state-warning-primary,var(--dsw-alias-state-business-primary))}
+        .dt-update-badge-current{color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary))}
+        .dt-update-badge-unknown{opacity:.75}
+        .dt-update-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 12px}
+        .dt-update-notes{margin:0 0 12px}
+        .dt-update-notes-title{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+        .dt-update-notes ul{margin:6px 0 0;padding-left:18px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+        .dt-update-log{margin:0 0 12px;padding:8px 10px;max-height:132px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-sunken,var(--dsw-alias-bg-base));color:var(--dsw-alias-label-tertiary);font-family:monospace;font-size:11px;line-height:16px;white-space:pre-wrap}
         .dt-panel-modal{pointer-events:auto;width:min(1080px,calc(100vw - 48px));height:min(700px,calc(100vh - 64px));max-width:100%;max-height:100%;padding:0;gap:0;border-color:var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
         .dt-panel{display:flex;width:100%;height:100%;min-height:0;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0;background:var(--dsw-alias-bg-base);border-radius:12px;overflow:hidden}
         .dt-panel-nav{display:flex;flex-direction:column;gap:2px;width:198px;flex:none;padding:10px 8px;border-right:1px solid var(--dsw-alias-border-l2);overflow-y:auto}

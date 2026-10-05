@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -39,6 +40,27 @@ afterEach(async () => {
 
 const PARAGRAPHS_ONE = ['风暴之夜，海面泛起不祥的光。', '守塔人握紧了栏杆。']
 const PARAGRAPHS_TWO = ['黎明到来。']
+
+/**
+ * NovelStore 的投影写入是提交之后的异步收尾（§10.2 step 5，fire-and-forget 进
+ * 每个 novel 的 projectionTails）；每个 fixture 会排队多次写入（建本、大纲、
+ * 两次提交），提交返回时后台可能还没写完。测试要植入自己的 marker 之前必须先
+ * 等最后一次写入（revision 与 fixture 返回的最终 revision 一致）落盘，否则并行
+ * 负载下后台写入会覆盖 marker，这个用例就会读到一份完整的 status 而不是 marker。
+ */
+async function waitForProjectionWrite(statusPath: string, revision: string, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    try {
+      const parsed = JSON.parse(await readFile(statusPath, 'utf8')) as { revision?: unknown, state?: unknown }
+      if (parsed.revision === revision && parsed.state !== 'projection-pending') return
+    } catch {
+      // 还没写出来或是写给上一个 revision 的中间态，继续等。
+    }
+    if (Date.now() > deadline) throw new Error(`projection status for revision ${revision} was not written within ${timeoutMs}ms`)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
 
 async function fixture(): Promise<{
   root: string
@@ -303,9 +325,10 @@ describe('NovelProjector export (§14.2)', () => {
   })
 
   it('detects and repairs a projection-pending marker from the store', async () => {
-    const { root, projector, novelId } = await fixture()
-    expect(await projector.projectionPending(novelId)).toBe(false)
+    const { root, projector, novelId, revision } = await fixture()
     const statusPath = join(root, 'novels', novelId, 'projections', 'status.json')
+    await waitForProjectionWrite(statusPath, revision)
+    expect(await projector.projectionPending(novelId)).toBe(false)
     await writeFile(statusPath, JSON.stringify({ state: 'projection-pending', novelId, error: 'simulated' }), 'utf8')
     expect(await projector.projectionPending(novelId)).toBe(true)
 

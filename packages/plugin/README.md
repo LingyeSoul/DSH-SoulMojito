@@ -112,9 +112,22 @@ pnpm run build:plugin
 node packages/plugin/scripts/gates/run.mjs
 ```
 
-当前 gate 覆盖包元数据、Cordis patch、Node/client bundle、frontend runtime、client VM mount、Node half mount、AgentTavern 隔离、native header adapter、内部工作区、revision、stale binding 和设置页边界。完整仓库基线为 21 个测试文件、169 项测试。
+当前 gate 覆盖包元数据、Cordis patch、Node/client bundle、构建期 stamp、自更新路由、frontend runtime、client VM mount、Node half mount、AgentTavern 隔离、native header adapter、内部工作区、revision、stale binding 和设置页边界。完整仓库基线为 41 个测试文件、569 项测试。
 
 ## 插件管理
+
+### 内置自更新
+
+插件自带「从 GitHub 发现新版本 + 一键更新」：设置页「dsh-tavern」标题下与管理面板「总览」分区显示当前构建与 GitHub 最新构建，并提供「检查更新 / 立即更新」。
+
+- 发现：仓库不发 release/tag，新版本以 main 分支最新 commit + `packages/plugin/package.json` 的 version 判定；启动后延迟首查、每 6h 复查，缓存 `$DSH_HOME/tavern/update-state.json`。
+- 落地顺序：`dsh plugin --profile <p> add <spec>`（桌面版自带 CLI）→ 宿主 `plugin-manager` 服务 → GitHub checkout 覆写。前两条会同步 `package.json` / `pnpm-lock.yaml`，第三条只覆盖文件并在结果里提示补一条 CLI 命令。
+- 装完必须重启 DSH：包替换需要新的 JS module generation，宿主 HMR 不监听 `node_modules`。
+- 来源降级：`api.github.com` → `raw.githubusercontent.com` + `git ls-remote` → commits atom feed；HTTP 请求在 `fetch` 失败后自动用系统 `curl` 重试（企业 TLS 中间人下 node 的 CA bundle 不认本机根证书）。
+- 关闭与调优：profile 的 `dsh-tavern` 行 `checkForUpdates: false`、环境变量 `DSH_TAVERN_DISABLE_UPDATE_CHECK`、`DSH_TAVERN_DISABLE_CURL`、`DSH_TAVERN_CURL`、`GITHUB_TOKEN`/`GH_TOKEN`。
+- HTTP 端点：`GET update`（`?refresh=1` 穿透 TTL）、`POST update/check`、`POST update/install`（`{ "wait": false }` 立刻返回，客户端轮询 `GET update` 读进度）。
+
+完整决策与实测证据见 [`decisions/2026-10-05-desktop-plugin-self-update.md`](../../decisions/2026-10-05-desktop-plugin-self-update.md)。
 
 已安装插件建议使用 plugin-registry 的薄控制台管理 profile 中的 bundle 层栈、insert 行和启停状态，避免手改配置。将 `<plugin-registry>` 替换为该工具仓库的本地路径：
 

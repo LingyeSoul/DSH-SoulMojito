@@ -207,9 +207,22 @@ dsh --profile desktop
 dsh plugin --profile desktop add <仓库绝对路径>/packages/plugin
 ```
 
-git spec 固定到安装时的提交，不跟随源码更新，升级走「更新」一节的移除后重新添加；`version.json` 不纳入 Git，设置页的 commit 显示为构建时写入的值，版本号仍读 `package.json`。
+git spec 固定到安装时的提交，不跟随源码更新；`version.json` 不纳入 Git，设置页显示的是构建期注入的版本与 commit（`scripts/build-plugin.mjs` 经 esbuild `define` 写入 `__TAVERN_VERSION__`/`__TAVERN_COMMIT__`）。
+
+### 内置自更新（发现新版本 + 一键更新）
+
+插件自带从 GitHub 发现新版本与一键更新，桌面版不需要再手敲 `dsh plugin`。
+
+- **发现**：「设置 → dsh-tavern」标题下与管理面板「总览」分区显示当前构建（`已安装 v0.3.9 (8271f20)`）、GitHub 上的最新构建、待合入的 commit 列表与上次检查时间。启动后延迟 12s 首查、每 6h 复查，结果缓存在 `$DSH_HOME/tavern/update-state.json`；「检查更新」按钮穿透缓存立即查。
+- **判定**：仓库不发 release/tag，因此以 main 分支最新 commit + `packages/plugin/package.json` 的 version 为准（规则见 [`decisions/2026-10-05-desktop-plugin-self-update.md`](decisions/2026-10-05-desktop-plugin-self-update.md)）。
+- **更新**：「立即更新」按 `dsh plugin`（桌面版自带 CLI，直接改 profile 的 `package.json` + `pnpm-lock.yaml`）→ `plugin-manager` 服务 → GitHub checkout 覆写的顺序落地，进度日志实时显示在卡片里。三条路径都需要**重启 DeepSeek Harness**：包替换要新的 JS module generation，宿主 HMR 不监听 `node_modules`。
+- **来源降级**：`api.github.com` → `raw.githubusercontent.com` + `git ls-remote` → commits atom feed。企业 TLS 中间人会让 node 的 `fetch` 证书校验失败（`unable to verify the first certificate`），因此每个 HTTP 请求在 fetch 失败后自动用系统 `curl` 重试。
+- **开关**：profile 的 `dsh-tavern` 行写 `checkForUpdates: false`，或设 `DSH_TAVERN_DISABLE_UPDATE_CHECK=1` 关闭自动发现；`DSH_TAVERN_DISABLE_CURL=1` 关闭 curl 兜底；`GITHUB_TOKEN`/`GH_TOKEN` 可提高 GitHub 限流配额。
+- **HTTP 端点**：`GET /api/dsh-tavern/update`（缓存快照，`?refresh=1` 穿透 TTL）、`POST /api/dsh-tavern/update/check`、`POST /api/dsh-tavern/update/install`（`{ "wait": false }` 立刻返回，进度轮询 `GET update`）。
 
 ### 更新
+
+装了插件之后优先用面板里的内置自更新（见「内置自更新」一节）：发现新版本 → 一键更新 → 重启 DSH。手改源码的开发流程仍是：
 
 `dsh plugin add` 以本地 link 方式挂载插件，因此代码更新后只需重新构建并重启 DSH：
 
@@ -261,7 +274,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：39 个测试文件、510 项测试通过；11 个插件 gates（含 AgentTavern 隔离、native header adapter、内部工作区和 client VM mount）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。
+当前基线：41 个测试文件、569 项测试通过；12 个插件 gates（含 update-routes、构建 stamp 断言、AgentTavern 隔离、native header adapter、内部工作区和 client VM mount）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 
@@ -278,6 +291,7 @@ GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern �
 - [`docs/plans/2026-08-16-agent-tavern-implementation.md`](docs/plans/2026-08-16-agent-tavern-implementation.md)：AgentTavern 的分阶段施工计划、宿主门禁、迁移规则与验证矩阵。
 - [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)：DSH `0.1.0-rc.6` 原生注入、compaction 与 Fabric fallback 审计。
 - [`decisions/2026-08-15-tavern-management-panel.md`](decisions/2026-08-15-tavern-management-panel.md)：面板入口、角色删除级联、变量与侧栏共存的落地决策。
+- [`decisions/2026-10-05-desktop-plugin-self-update.md`](decisions/2026-10-05-desktop-plugin-self-update.md)：桌面版内置自更新（GitHub 版本发现、落地路径顺序、curl 兜底、构建期 stamp）。
 
 ## 插件管理
 

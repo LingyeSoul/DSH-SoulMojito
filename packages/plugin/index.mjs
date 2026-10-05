@@ -3,7 +3,7 @@
 
 // packages/plugin/src/index.ts
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync as readFileSync3 } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { relative, resolve as resolve3 } from "node:path";
 
@@ -7397,21 +7397,21 @@ async function probeSpawn(deps, label, prompt, allow) {
 }
 async function probeIdentityCorrelation(deps) {
   takeProbeAgentId();
-  const spawn = await probeSpawn(
+  const spawn2 = await probeSpawn(
     deps,
     "dsh-tavern writer-probe \xB7 p1-identity",
     `Host capability probe. Call the tool ${PROBE_TOOL} exactly once, then reply with exactly: ok. The tool may return an error about a missing novel binding \u2014 that is expected and fine; still reply ok after the single call.`,
     [PROBE_TOOL]
   );
-  if (!spawn.ok) return { item: { status: "fail", detail: `P1 spawn did not complete: ${spawn.error}` }, spawnOk: false };
+  if (!spawn2.ok) return { item: { status: "fail", detail: `P1 spawn did not complete: ${spawn2.error}` }, spawnOk: false };
   const recorded = takeProbeAgentId();
-  if (recorded === spawn.runId) {
+  if (recorded === spawn2.runId) {
     return {
       item: { status: "pass", detail: `subagent tool execution carried exec.agent.id '${recorded}' equal to the spawn run id; the delegation registry key (0007 \xA76.2) is derivable` },
       spawnOk: true
     };
   }
-  const detail = recorded === null ? `${PROBE_TOOL} never executed inside the probe subagent (stopReason ${spawn.result.stopReason}; ${outputExcerptOf(spawn.result.output)}) \u2014 the model may have skipped the call; re-run the probe before treating this as a host gap` : `exec.agent.id '${recorded}' does not match the spawn run id '${spawn.runId}' (stopReason ${spawn.result.stopReason}) \u2014 subagent tool executions are not attributable to their run`;
+  const detail = recorded === null ? `${PROBE_TOOL} never executed inside the probe subagent (stopReason ${spawn2.result.stopReason}; ${outputExcerptOf(spawn2.result.output)}) \u2014 the model may have skipped the call; re-run the probe before treating this as a host gap` : `exec.agent.id '${recorded}' does not match the spawn run id '${spawn2.runId}' (stopReason ${spawn2.result.stopReason}) \u2014 subagent tool executions are not attributable to their run`;
   return { item: { status: "fail", detail }, spawnOk: true };
 }
 async function probeAllowList(deps, p1, spawnOk) {
@@ -7420,24 +7420,24 @@ async function probeAllowList(deps, p1, spawnOk) {
     return { status: "inconclusive", detail: `allow-reachable half unproven because P1 did not confirm a tool execution inside an allow-listed subagent (${p1.detail})` };
   }
   takeProbeAgentId();
-  const spawn = await probeSpawn(
+  const spawn2 = await probeSpawn(
     deps,
     "dsh-tavern writer-probe \xB7 p2-allowlist",
     `Host capability probe. Try calling the tool ${PROBE_TOOL} once. If the tool is available to you, reply with exactly: tool-ran. If the tool is not available to you, reply with exactly: unavailable.`,
     []
   );
-  if (!spawn.ok) return { status: "fail", detail: `P2 spawn did not complete: ${spawn.error}` };
+  if (!spawn2.ok) return { status: "fail", detail: `P2 spawn did not complete: ${spawn2.error}` };
   const recorded = takeProbeAgentId();
   if (recorded !== null) {
     return { status: "fail", detail: `${PROBE_TOOL} executed inside a subagent spawned with an empty allow list (exec.agent.id '${recorded}') \u2014 the host toolFilter does not enforce allow lists` };
   }
-  const text = spawn.result.output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => (block.text ?? "").trim().toLocaleLowerCase()).join("\n");
+  const text = spawn2.result.output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => (block.text ?? "").trim().toLocaleLowerCase()).join("\n");
   if (text.includes("unavailable")) {
     return { status: "pass", detail: `allow-reachable proven by the P1 execution; the empty-allow subagent reported the tool unavailable (observational \u2014 model-reported, not a host-side denial proof)` };
   }
   return {
     status: "inconclusive",
-    detail: `allow-reachable proven by the P1 execution; the empty-allow subagent neither executed the tool nor clearly reported it unavailable (stopReason ${spawn.result.stopReason}; ${outputExcerptOf(spawn.result.output)}) \u2014 model compliance limits the probe; re-run or verify on a real E2E delegation`
+    detail: `allow-reachable proven by the P1 execution; the empty-allow subagent neither executed the tool nor clearly reported it unavailable (stopReason ${spawn2.result.stopReason}; ${outputExcerptOf(spawn2.result.output)}) \u2014 model compliance limits the probe; re-run or verify on a real E2E delegation`
   };
 }
 async function inspectWriterSubagentCapabilities(deps = {}) {
@@ -9239,6 +9239,1015 @@ function dshHomePath(...segments) {
   return join8(resolve2(configured || join8(homedir2(), ".dsh")), ...segments);
 }
 
+// packages/plugin/src/update/service.ts
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname4, join as join10 } from "node:path";
+
+// packages/plugin/src/update/github.ts
+var UPDATE_REPOSITORY = "LingyeSoul/dsh-tavern";
+var UPDATE_REF = "main";
+var UPDATE_PLUGIN_PATH = "/packages/plugin";
+var UNKNOWN_FIELD = "unknown";
+function isCommit(value) {
+  return typeof value === "string" && /^[0-9a-f]{7,40}$/i.test(value.trim());
+}
+function shortCommit(value) {
+  return isCommit(value) ? value.trim().slice(0, 7).toLowerCase() : UNKNOWN_FIELD;
+}
+function repositorySlug(repository) {
+  return repository.trim().replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
+}
+function commitsApiUrl(repository, ref) {
+  return `https://api.github.com/repos/${repositorySlug(repository)}/commits/${encodeURIComponent(ref)}`;
+}
+function compareApiUrl(repository, base, head) {
+  return `https://api.github.com/repos/${repositorySlug(repository)}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
+}
+function packageJsonUrl(repository, ref) {
+  return `https://raw.githubusercontent.com/${repositorySlug(repository)}/${encodeURIComponent(ref)}/packages/plugin/package.json`;
+}
+function commitsAtomUrl(repository, ref) {
+  return `https://github.com/${repositorySlug(repository)}/commits/${encodeURIComponent(ref)}.atom`;
+}
+function commitWebUrl(repository, sha) {
+  return `https://github.com/${repositorySlug(repository)}/commit/${sha}`;
+}
+function compareTavernVersions(left, right) {
+  const parsedLeft = parseVersion(left);
+  const parsedRight = parseVersion(right);
+  for (let index = 0; index < 3; index += 1) {
+    const a = parsedLeft.numbers[index] ?? 0;
+    const b = parsedRight.numbers[index] ?? 0;
+    if (a !== b) return a < b ? -1 : 1;
+  }
+  if (parsedLeft.prerelease === parsedRight.prerelease) return 0;
+  if (parsedLeft.prerelease === "") return 1;
+  if (parsedRight.prerelease === "") return -1;
+  return parsedLeft.prerelease < parsedRight.prerelease ? -1 : 1;
+}
+function parseVersion(value) {
+  const text = typeof value === "string" ? value.trim().replace(/^v/i, "") : "";
+  const [core = "", prerelease = ""] = text.split("-", 2);
+  const numbers = core.split(".").slice(0, 3).map((part) => {
+    const parsed = Number.parseInt(part, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  });
+  return { numbers, prerelease };
+}
+function pluginFilesIn(files) {
+  return files.filter((file) => {
+    const normalized = String(file).replace(/^\/+/, "");
+    return normalized === "packages/plugin" || normalized.startsWith("packages/plugin/");
+  });
+}
+function compareBuilds(input) {
+  const localCommit = isCommit(input.local.commit) ? input.local.commit.trim().toLowerCase().slice(0, 7) : UNKNOWN_FIELD;
+  const remoteCommit = isCommit(input.remote.commit) ? input.remote.commit.trim().toLowerCase() : UNKNOWN_FIELD;
+  if (localCommit !== UNKNOWN_FIELD && remoteCommit !== UNKNOWN_FIELD && remoteCommit.startsWith(localCommit)) {
+    return { status: "up-to-date", reason: `already at ${remoteCommit.slice(0, 7)}` };
+  }
+  const remoteVersionKnown = isKnownVersion(input.remote.version);
+  const localVersionKnown = isKnownVersion(input.local.version);
+  if (remoteVersionKnown && localVersionKnown) {
+    const order = compareTavernVersions(input.remote.version, input.local.version);
+    if (order > 0) return { status: "update-available", reason: `version ${input.remote.version} > ${input.local.version}` };
+    if (order < 0) return { status: "local-ahead", reason: `local version ${input.local.version} > ${input.remote.version}` };
+    const filesKnown = input.remote.filesKnown ?? input.remote.changedPluginFiles.length > 0;
+    if (filesKnown) {
+      if (pluginFilesIn(input.remote.changedPluginFiles).length > 0) {
+        return { status: "update-available", reason: `plugin files changed at ${remoteCommit.slice(0, 7)}` };
+      }
+      return { status: "up-to-date", reason: `same version ${input.local.version} and no plugin file changed` };
+    }
+    if (localCommit !== UNKNOWN_FIELD && remoteCommit !== UNKNOWN_FIELD) {
+      return {
+        status: "update-available",
+        reason: `remote commit ${remoteCommit.slice(0, 7)} differs from ${localCommit}; changed files are unavailable on this source`
+      };
+    }
+    return { status: "up-to-date", reason: `same version ${input.local.version}` };
+  }
+  if (localCommit !== UNKNOWN_FIELD && remoteCommit !== UNKNOWN_FIELD) {
+    return {
+      status: "update-available",
+      reason: `remote commit ${remoteCommit.slice(0, 7)} differs from ${localCommit} (remote version unavailable)`
+    };
+  }
+  return {
+    status: "unknown",
+    reason: remoteVersionKnown || localVersionKnown ? "the local build has no commit stamp, so only the version could be compared" : "neither the remote version nor a comparable commit could be read"
+  };
+}
+function isKnownVersion(value) {
+  return typeof value === "string" && value.trim() !== "" && value.trim().toLowerCase() !== UNKNOWN_FIELD;
+}
+function commitFromApi(value) {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value;
+  const sha = typeof record.sha === "string" ? record.sha : "";
+  if (!isCommit(sha)) return null;
+  const commit = record.commit ?? {};
+  return {
+    sha,
+    short: sha.slice(0, 7),
+    message: firstLine(commit.message),
+    date: typeof commit.author?.date === "string" ? commit.author.date : typeof commit.committer?.date === "string" ? commit.committer.date : "",
+    url: typeof record.html_url === "string" ? record.html_url : commitWebUrl(UPDATE_REPOSITORY, sha)
+  };
+}
+function parseCommitResponse(value) {
+  return commitFromApi(value);
+}
+function parseCompareResponse(value) {
+  const record = typeof value === "object" && value !== null ? value : {};
+  const filesKnown = Array.isArray(record.files);
+  const commits = Array.isArray(record.commits) ? record.commits.map(commitFromApi).filter((item) => item !== null) : [];
+  const files = filesKnown ? record.files.map((file) => typeof file?.filename === "string" ? file.filename : "").filter(Boolean) : [];
+  return { commits: commits.reverse(), files, filesKnown };
+}
+function parsePackageVersion(value) {
+  const record = typeof value === "object" && value !== null ? value : {};
+  return typeof record.version === "string" && record.version.trim() !== "" ? record.version.trim() : UNKNOWN_FIELD;
+}
+function parseAtomFeed(xml) {
+  const entries = String(xml ?? "").split(/<entry>/i).slice(1);
+  const commits = [];
+  for (const entry of entries) {
+    const sha = /<id>[^<]*?(?:commit\/|\/commit\/)([0-9a-f]{7,40})<\/id>/i.exec(entry)?.[1] ?? /commit\/([0-9a-f]{7,40})/i.exec(entry)?.[1];
+    if (!isCommit(sha)) continue;
+    commits.push({
+      sha,
+      short: sha.slice(0, 7),
+      message: decodeXml(/<title>([\s\S]*?)<\/title>/i.exec(entry)?.[1] ?? ""),
+      date: /<updated>([^<]*)<\/updated>/i.exec(entry)?.[1] ?? "",
+      url: commitWebUrl(UPDATE_REPOSITORY, sha)
+    });
+  }
+  return commits;
+}
+function decodeXml(value) {
+  return value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+}
+function firstLine(value) {
+  const text = typeof value === "string" ? value.replace(/\r\n?/g, "\n").trim() : "";
+  return text.split("\n")[0]?.trim() ?? "";
+}
+function pluginInstallSpec(repository, ref, commit) {
+  const target = isCommit(commit) ? commit.trim() : ref;
+  return `github:${repositorySlug(repository)}#${target}&path:${UPDATE_PLUGIN_PATH}`;
+}
+
+// packages/plugin/src/update/sources.ts
+import { execFile as execFile2 } from "node:child_process";
+var DEFAULT_TIMEOUT_MS = 8e3;
+var DEFAULT_MAX_COMMITS = 12;
+async function fetchRemoteBuild(options) {
+  const failures = [];
+  for (const source of ["api", "raw-git", "atom"]) {
+    try {
+      const build = source === "api" ? await fetchFromApi(options) : source === "raw-git" ? await fetchFromRawAndGit(options) : await fetchFromAtom(options);
+      if (build !== null) return { build, error: "" };
+      failures.push(`${source}: no commit found`);
+    } catch (error) {
+      failures.push(`${source}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return { build: null, error: failures.join("; ") };
+}
+async function fetchFromApi(options) {
+  const { repository, ref, localCommit = UNKNOWN_FIELD } = options;
+  const now = options.now ?? (() => /* @__PURE__ */ new Date());
+  const latest = parseCommitResponse(await getJson(options, commitsApiUrl(repository, ref)));
+  if (latest === null) return null;
+  let version = UNKNOWN_FIELD;
+  try {
+    version = parsePackageVersion(await getJson(options, packageJsonUrl(repository, latest.sha)));
+  } catch {
+  }
+  let commits = [latest];
+  let changedPluginFiles = [];
+  let filesKnown = false;
+  if (isCommit(localCommit) && !latest.sha.startsWith(localCommit.trim().slice(0, 7))) {
+    try {
+      const compared = parseCompareResponse(await getJson(options, compareApiUrl(repository, localCommit, latest.sha)));
+      if (compared.commits.length > 0) commits = compared.commits;
+      changedPluginFiles = compared.files;
+      filesKnown = compared.filesKnown;
+    } catch {
+    }
+  } else if (isCommit(localCommit)) {
+    filesKnown = true;
+  }
+  return {
+    ref,
+    version,
+    commit: latest.sha,
+    source: "api",
+    commits: commits.slice(0, options.maxCommits ?? DEFAULT_MAX_COMMITS),
+    changedPluginFiles,
+    filesKnown,
+    checkedAt: now().toISOString()
+  };
+}
+async function fetchFromRawAndGit(options) {
+  const { repository, ref } = options;
+  const now = options.now ?? (() => /* @__PURE__ */ new Date());
+  const [version, commit] = await Promise.all([
+    getJson(options, packageJsonUrl(repository, ref)).then(parsePackageVersion).catch(() => UNKNOWN_FIELD),
+    (options.resolveCommitImpl ?? resolveRemoteCommit)(repository, ref, options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  ]);
+  if (!isCommit(commit)) return null;
+  return {
+    ref,
+    version,
+    commit: commit.toLowerCase(),
+    source: "raw-git",
+    commits: [{
+      sha: commit.toLowerCase(),
+      short: shortCommit(commit),
+      message: "",
+      date: "",
+      url: `https://github.com/${repository.replace(/\.git$/i, "")}/commit/${commit.toLowerCase()}`
+    }],
+    changedPluginFiles: [],
+    filesKnown: false,
+    checkedAt: now().toISOString()
+  };
+}
+async function fetchFromAtom(options) {
+  const { repository, ref } = options;
+  const now = options.now ?? (() => /* @__PURE__ */ new Date());
+  const xml = await getText(options, commitsAtomUrl(repository, ref), "application/atom+xml, text/xml, */*");
+  const commits = parseAtomFeed(xml);
+  const latest = commits[0];
+  if (latest === void 0) return null;
+  let version = UNKNOWN_FIELD;
+  try {
+    version = parsePackageVersion(await getJson(options, packageJsonUrl(repository, latest.sha)));
+  } catch {
+  }
+  return {
+    ref,
+    version,
+    commit: latest.sha,
+    source: "atom",
+    commits: commits.slice(0, options.maxCommits ?? DEFAULT_MAX_COMMITS),
+    changedPluginFiles: [],
+    filesKnown: false,
+    checkedAt: now().toISOString()
+  };
+}
+function resolveRemoteCommit(repository, ref, timeoutMs) {
+  return new Promise((resolve4) => {
+    const url = /^https?:|^git@/i.test(repository) ? repository : `https://github.com/${repository.replace(/^\//, "")}.git`;
+    execFile2("git", ["ls-remote", url, `refs/heads/${ref}`, ref], {
+      encoding: "utf8",
+      timeout: timeoutMs,
+      windowsHide: true,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
+    }, (error, stdout) => {
+      if (error) {
+        resolve4("");
+        return;
+      }
+      const first = String(stdout ?? "").split("\n").map((line) => line.trim()).find(Boolean) ?? "";
+      resolve4(first.split(/\s+/)[0] ?? "");
+    });
+  });
+}
+async function getJson(options, url) {
+  return JSON.parse(await getText(options, url, "application/vnd.github+json"));
+}
+async function getText(options, url, accept) {
+  return httpGet(options, url, accept);
+}
+async function httpGet(options, url, accept) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const failures = [];
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  if (typeof fetchImpl === "function") {
+    try {
+      const token = options.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? "";
+      const response = await fetchImpl(url, {
+        headers: {
+          accept,
+          "user-agent": "dsh-tavern-update-check",
+          ...token ? { authorization: `Bearer ${token}` } : {}
+        },
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.text();
+    } catch (error) {
+      failures.push(`fetch: ${describeError(error)}`);
+    }
+  }
+  const curlDisabled = (process.env.DSH_TAVERN_DISABLE_CURL ?? "").trim() !== "";
+  if (!curlDisabled) {
+    try {
+      return await (options.curlImpl ?? curlGet)(url, accept, timeoutMs);
+    } catch (error) {
+      failures.push(`curl: ${describeError(error)}`);
+    }
+  }
+  throw new Error(failures.join(" | "));
+}
+function describeError(error) {
+  if (error instanceof Error) {
+    const cause = error.cause;
+    const detail = cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "";
+    return detail === "" ? error.message : `${error.message} (${detail})`;
+  }
+  return String(error);
+}
+function curlGet(url, accept, timeoutMs, exec = execFile2) {
+  const command = process.env.DSH_TAVERN_CURL?.trim() || (process.platform === "win32" ? "curl.exe" : "curl");
+  const seconds = String(Math.max(1, Math.ceil(timeoutMs / 1e3)));
+  return new Promise((resolve4, reject) => {
+    exec(command, [
+      "--silent",
+      "--show-error",
+      "--fail",
+      "--location",
+      "--max-time",
+      seconds,
+      "-H",
+      `accept: ${accept}`,
+      "-H",
+      "user-agent: dsh-tavern-update-check",
+      url
+    ], {
+      encoding: "utf8",
+      timeout: timeoutMs + 5e3,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024
+    }, (error, stdout) => {
+      if (error) {
+        const detail = String(stdout ?? "").trim();
+        reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
+        return;
+      }
+      resolve4(String(stdout ?? ""));
+    });
+  });
+}
+
+// packages/plugin/src/update/apply.ts
+import { spawn } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname as dirname3, join as join9 } from "node:path";
+var DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
+var SHIPPED_FILES = ["index.mjs", "agent.mjs", "compaction.mjs", "novel.mjs", "cordis.patch.yml", "README.md", "package.json"];
+var SHIPPED_DIRS = ["client"];
+async function installUpdate(request) {
+  let pluginManager = request.pluginManager ?? null;
+  return runInstallChain(request, [
+    { name: "cli", run: () => installViaCli(request) },
+    {
+      name: "plugin-manager",
+      run: () => {
+        pluginManager ??= resolvePluginManager(request.ctx);
+        return pluginManager === null || pluginManager === void 0 ? Promise.resolve(null) : installViaPluginManager(request, pluginManager);
+      }
+    },
+    { name: "checkout", run: () => installViaCheckout(request) }
+  ]);
+}
+async function runInstallChain(request, entries) {
+  const attempts = [];
+  let last = null;
+  for (const entry of entries) {
+    const outcome = await entry.run();
+    if (outcome === null) {
+      attempts.push(`${entry.name}: unavailable`);
+      continue;
+    }
+    if (outcome.ok) return outcome;
+    attempts.push(`${entry.name}: ${outcome.message}`);
+    last = outcome;
+  }
+  if (last !== null) {
+    request.log(`all package-manager paths failed (${attempts.join("; ")})`);
+    return last;
+  }
+  const failed = {
+    ok: false,
+    strategy: entries.at(-1)?.name ?? "checkout",
+    application: "failed",
+    message: `no update path is available in this host (${attempts.join("; ")})`,
+    restartRequired: false,
+    installed: readInstalledStamp(request.pluginDir)
+  };
+  return failed;
+}
+function resolvePluginManager(ctx) {
+  for (const read of [
+    () => ctx?.pluginManager,
+    () => ctx?.get?.("pluginManager")
+  ]) {
+    try {
+      const service = read();
+      if (service !== void 0 && service !== null && typeof service.installBundle === "function") return service;
+    } catch {
+    }
+  }
+  return null;
+}
+function watchPluginManager(ctx, onReady) {
+  if (typeof ctx?.inject !== "function") return () => {
+  };
+  try {
+    const dispose = ctx.inject(["pluginManager"], (serviceCtx) => {
+      try {
+        if (serviceCtx?.pluginManager !== void 0) onReady(serviceCtx.pluginManager);
+      } catch {
+      }
+    });
+    return typeof dispose === "function" ? dispose : () => {
+    };
+  } catch {
+    return () => {
+    };
+  }
+}
+function resolveDesktopCli(argv = process.argv, execPath = process.execPath, exists = existsSync) {
+  const configured = process.env.DSH_TAVERN_DSH_CLI?.trim();
+  if (configured !== void 0 && configured !== "") {
+    return { command: execPath, args: ["--expose-internals", configured], env: { ELECTRON_RUN_AS_NODE: "1" } };
+  }
+  const runtimeDir = typeof argv[2] === "string" ? argv[2].trim() : "";
+  if (runtimeDir === "") return null;
+  const cli = join9(runtimeDir, "node_modules", "@deepseek-ai", "dsh-desktop-host", "lib", "cli.js");
+  if (!exists(cli)) return null;
+  return { command: execPath, args: ["--expose-internals", cli], env: { ELECTRON_RUN_AS_NODE: "1" } };
+}
+async function installViaCli(request) {
+  const cli = resolveDesktopCli();
+  if (cli === null) return null;
+  const profile = process.env.DSH_PROFILE?.trim() || "desktop";
+  const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
+  const args = [...cli.args, "plugin", "--profile", profile, "add", spec];
+  request.log(`dsh plugin --profile ${profile} add ${spec}`);
+  try {
+    const result = await runCapture(cli.command, args, {
+      env: { ...cli.env },
+      timeoutMs: request.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS,
+      onLine: request.log
+    });
+    if (result.code !== 0) throw new Error(`exit ${result.code}`);
+    return {
+      ok: true,
+      strategy: "cli",
+      application: "restart-required",
+      message: "installed through `dsh plugin`; restart DSH to load the new module generation",
+      restartRequired: true,
+      installed: readInstalledStamp(request.pluginDir, spec)
+    };
+  } catch (error) {
+    request.log(`dsh plugin failed: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+async function installViaPluginManager(request, pluginManager) {
+  const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
+  const requestId = `dsh-tavern-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  request.log(`plugin-manager: installBundle ${spec}`);
+  const dispose = subscribeInstallEvents(request, requestId);
+  try {
+    const result = await pluginManager.installBundle(spec, { requestId, enabled: true });
+    const application = normalizeApplication(result?.application, result);
+    const failed = application === "failed" || application === "cancelled";
+    const detail = failed ? describeFailure(result) : "";
+    const ambiguous = detail.includes("ambiguous-install");
+    return {
+      ok: !failed,
+      strategy: "plugin-manager",
+      application,
+      message: failed ? `plugin-manager install failed: ${detail || "see the profile .plugin-manager logs"}${ambiguous ? " (git dependency target is ambiguous: the manifest specifier never changes, so `dsh plugin` is the path that works)" : ""}` : application === "restart-required" ? "installed through the DSH plugin manager; restart DSH to load the new module generation" : "installed through the DSH plugin manager",
+      restartRequired: !failed && application === "restart-required",
+      installed: readInstalledStamp(request.pluginDir, spec)
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    request.log(`plugin-manager: ${message}`);
+    return {
+      ok: false,
+      strategy: "plugin-manager",
+      application: "failed",
+      message: `plugin-manager install threw: ${message}`,
+      restartRequired: false,
+      installed: readInstalledStamp(request.pluginDir, spec)
+    };
+  } finally {
+    dispose();
+  }
+}
+function subscribeInstallEvents(request, requestId) {
+  const handlers = [];
+  const on = (event, handler) => {
+    try {
+      const dispose = request.ctx?.on?.(event, handler);
+      if (typeof dispose === "function") handlers.push(dispose);
+    } catch {
+    }
+  };
+  on("plugin-manager/install-log", (chunk) => {
+    if (chunk?.requestId !== requestId) return;
+    const text = typeof chunk?.text === "string" ? chunk.text.trimEnd() : "";
+    if (text !== "") request.log(`pnpm ${chunk?.stream ?? "out"}: ${text}`);
+    if (typeof chunk?.exitCode === "number") request.log(`pnpm exited with ${chunk.exitCode}`);
+  });
+  on("plugin-manager/install-state", (state) => {
+    if (state?.requestId !== requestId) return;
+    const attempt = state?.attempt;
+    request.log(`plugin-manager: ${state?.phase ?? "working"}${attempt?.registry === void 0 ? "" : ` (${attempt.registry} ${attempt.index}/${attempt.total})`}`);
+  });
+  return () => {
+    for (const dispose of handlers.splice(0)) {
+      try {
+        dispose();
+      } catch {
+      }
+    }
+  };
+}
+function normalizeApplication(application, result) {
+  if (application === "applied" || application === "restart-required" || application === "cancelled" || application === "failed") {
+    return application;
+  }
+  if (result?.error !== void 0) return "failed";
+  return "unknown";
+}
+function describeFailure(result) {
+  const error = result?.error;
+  const code = typeof error?.code === "string" ? error.code : "";
+  const message = typeof error?.message === "string" ? error.message : "";
+  const output = typeof result?.packageResult?.output === "string" ? result.packageResult.output.trim() : "";
+  return [code, message, output.split("\n").slice(-4).join(" ")].filter((item) => item !== "").join(" | ");
+}
+async function installViaCheckout(request) {
+  const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
+  const repository = repositorySlug(request.repository);
+  const profile = process.env.DSH_PROFILE?.trim() || "desktop";
+  const checkout = mkdtempSync(join9(tmpdir(), "dsh-tavern-checkout-"));
+  try {
+    request.log(`fallback: git clone --depth 1 https://github.com/${repository}.git`);
+    await mustRun("git", ["clone", "--depth", "1", "--branch", request.ref, `https://github.com/${repository}.git`, checkout], request);
+    if (isCommit(request.commit)) {
+      const head = (await mustRun("git", ["-C", checkout, "rev-parse", "HEAD"], request)).trim();
+      if (!head.startsWith(shortCommit(request.commit))) {
+        request.log(`checkout ${shortCommit(request.commit)}`);
+        await mustRun("git", ["-C", checkout, "fetch", "--depth", "1", "origin", request.commit], request);
+        await mustRun("git", ["-C", checkout, "checkout", "--quiet", request.commit], request);
+      }
+    }
+    const source = join9(checkout, "packages", "plugin");
+    if (!existsSync(source)) throw new Error("packages/plugin is missing from the checkout");
+    const copied = copyShippedFiles(source, request.pluginDir);
+    request.log(`copied ${copied.length} shipped entries into ${request.pluginDir}`);
+    return {
+      ok: true,
+      strategy: "checkout",
+      application: "restart-required",
+      message: `files replaced from a fresh GitHub checkout; the profile lockfile still pins the previous commit, so run \`dsh plugin --profile ${profile} add ${spec}\` to make it durable, then restart DSH`,
+      restartRequired: true,
+      installed: readInstalledStamp(request.pluginDir, spec)
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    request.log(`checkout fallback failed: ${message}`);
+    return {
+      ok: false,
+      strategy: "checkout",
+      application: "failed",
+      message: `update failed: ${message}. Manual fallback: dsh plugin --profile ${profile} add ${spec}`,
+      restartRequired: false,
+      installed: readInstalledStamp(request.pluginDir, spec)
+    };
+  } finally {
+    rmSync(checkout, { recursive: true, force: true });
+  }
+}
+async function mustRun(command, args, request) {
+  const result = await runCapture(command, args, {
+    timeoutMs: request.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS,
+    onLine: request.log
+  });
+  if (result.code !== 0) throw new Error(`${command} ${args.slice(0, 2).join(" ")} exited ${result.code}`);
+  return result.output;
+}
+function copyShippedFiles(sourceDir, targetDir) {
+  const copied = [];
+  for (const file of SHIPPED_FILES) {
+    const from = join9(sourceDir, file);
+    if (!existsSync(from)) continue;
+    const to = join9(targetDir, file);
+    rmSync(to, { force: true });
+    copyFileSync(from, to);
+    copied.push(file);
+  }
+  for (const dir of SHIPPED_DIRS) {
+    const from = join9(sourceDir, dir);
+    if (!existsSync(from)) continue;
+    for (const file of listFiles(from)) {
+      const relative2 = file.slice(from.length + 1);
+      const to = join9(targetDir, dir, relative2);
+      mkdirSync(dirname3(to), { recursive: true });
+      rmSync(to, { force: true });
+      writeFileSync(to, readFileSync(file));
+      copied.push(`${dir}/${relative2.replaceAll("\\", "/")}`);
+    }
+  }
+  return copied;
+}
+function listFiles(root) {
+  const found = [];
+  const pending = [root];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    for (const entry of readdirSyncSafe(current)) {
+      const full = join9(current, entry);
+      const stat = statSyncSafe(full);
+      if (stat === null) continue;
+      if (stat.isDirectory()) pending.push(full);
+      else found.push(full);
+    }
+  }
+  return found;
+}
+function readdirSyncSafe(path6) {
+  try {
+    return readdirSync(path6);
+  } catch {
+    return [];
+  }
+}
+function statSyncSafe(path6) {
+  try {
+    return statSync(path6);
+  } catch {
+    return null;
+  }
+}
+function readInstalledStamp(pluginDir, spec = "") {
+  let version = UNKNOWN_FIELD;
+  let commit = UNKNOWN_FIELD;
+  try {
+    const generated = JSON.parse(readFileSync(join9(pluginDir, "version.json"), "utf8"));
+    if (typeof generated?.version === "string" && generated.version.trim() !== "") version = generated.version.trim();
+    if (isCommit(generated?.commit)) commit = shortCommit(generated.commit);
+  } catch {
+  }
+  if (version === UNKNOWN_FIELD) {
+    try {
+      const manifest = JSON.parse(readFileSync(join9(pluginDir, "package.json"), "utf8"));
+      if (typeof manifest?.version === "string" && manifest.version.trim() !== "") version = manifest.version.trim();
+    } catch {
+    }
+  }
+  if (commit === UNKNOWN_FIELD) {
+    const pinned = /#([0-9a-f]{7,40})(?:&|$)/.exec(spec)?.[1];
+    if (isCommit(pinned)) commit = shortCommit(pinned);
+  }
+  return { version, commit };
+}
+function runCapture(command, args, options = {}) {
+  return new Promise((resolve4, reject) => {
+    const child = spawn(command, args, {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ...options.env ?? {} }
+    });
+    let output = "";
+    const feed = (chunk) => {
+      const text = chunk.toString("utf8");
+      output += text;
+      if (options.onLine !== void 0) {
+        for (const line of text.split("\n")) {
+          if (line.trim() !== "") options.onLine(line.trim());
+        }
+      }
+    };
+    child.stdout?.on("data", feed);
+    child.stderr?.on("data", feed);
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`${command} timed out after ${options.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS}ms`));
+    }, options.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS);
+    timer.unref?.();
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      resolve4({ code: code ?? -1, output });
+    });
+  });
+}
+
+// packages/plugin/src/update/service.ts
+var UPDATE_CACHE_FILE = "update-state.json";
+var UPDATE_CACHE_SCHEMA = 1;
+var UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1e3;
+var UPDATE_FIRST_CHECK_DELAY_MS = 12 * 1e3;
+var INSTALL_LOG_LIMIT = 60;
+var TavernUpdateService = class {
+  options;
+  remote = null;
+  status = "unknown";
+  reason = "";
+  checkedAt = null;
+  error = "";
+  source = "none";
+  installState = emptyInstallState();
+  pendingRestart = null;
+  timer;
+  disposed = false;
+  pluginManager = null;
+  disposePluginManagerWatch;
+  constructor(options) {
+    this.options = options;
+    this.loadCache();
+  }
+  get repository() {
+    return this.options.repository ?? UPDATE_REPOSITORY;
+  }
+  get ref() {
+    return this.options.ref ?? UPDATE_REF;
+  }
+  get local() {
+    return this.options.local;
+  }
+  snapshot() {
+    return {
+      schemaVersion: UPDATE_CACHE_SCHEMA,
+      status: this.status,
+      reason: this.reason,
+      checkedAt: this.checkedAt,
+      nextCheckAt: this.checkedAt === null ? null : new Date(Date.parse(this.checkedAt) + this.ttl()).toISOString(),
+      error: this.error,
+      source: this.source,
+      repository: this.repository,
+      ref: this.ref,
+      local: this.local,
+      remote: this.remote,
+      spec: pluginInstallSpec(this.repository, this.ref, this.remote?.commit),
+      install: { ...this.installState, log: [...this.installState.log] }
+    };
+  }
+  /**
+   * 检查一次。`force` 穿透 TTL；`restart-required` 过渡态下不复查（远端已经
+   * 装到磁盘，运行中的构建要等重启才会变），只在本地 stamp 追上安装结果时
+   * 解除该状态。任何失败都只写快照，不抛错。
+   */
+  async check(input = {}) {
+    if (this.options.enabled === false) {
+      this.status = "unknown";
+      this.reason = "update checks are disabled";
+      return this.snapshot();
+    }
+    if (this.pendingRestart !== null) {
+      if (sameCommit(this.local.commit, this.pendingRestart.commit)) {
+        this.pendingRestart = null;
+      } else {
+        this.status = "restart-required";
+        this.reason = `installed ${this.pendingRestart.version} (${this.pendingRestart.commit}); restart DSH to load it`;
+        return this.snapshot();
+      }
+    }
+    if (input.force !== true && this.checkedAt !== null && Date.now() - Date.parse(this.checkedAt) < this.ttl()) {
+      return this.snapshot();
+    }
+    const result = await fetchRemoteBuild({
+      repository: this.repository,
+      ref: this.ref,
+      localCommit: this.local.commit,
+      ...this.options.fetchImpl === void 0 ? {} : { fetchImpl: this.options.fetchImpl },
+      ...this.options.timeoutMs === void 0 ? {} : { timeoutMs: this.options.timeoutMs },
+      ...this.options.now === void 0 ? {} : { now: this.options.now },
+      ...this.options.resolveCommitImpl === void 0 ? {} : { resolveCommitImpl: this.options.resolveCommitImpl },
+      ...this.options.curlImpl === void 0 ? {} : { curlImpl: this.options.curlImpl }
+    });
+    this.error = result.error;
+    if (result.build === null) {
+      this.status = "unknown";
+      this.reason = "remote build could not be read";
+      this.source = "none";
+    } else {
+      this.remote = result.build;
+      this.source = result.build.source;
+      const comparison = compareBuilds({ local: this.local, remote: result.build });
+      const filesUnavailable = result.build.source !== "api" && result.build.changedPluginFiles.length === 0;
+      this.status = comparison.status;
+      this.reason = comparison.status === "up-to-date" && filesUnavailable && !result.build.commit.startsWith(shortCommit(this.local.commit)) ? `${comparison.reason}; changed files unknown on source '${result.build.source}'` : comparison.reason;
+    }
+    this.checkedAt = this.nowIso();
+    this.persistCache();
+    this.options.onDiscover?.(this.snapshot());
+    return this.snapshot();
+  }
+  /**
+   * 一键更新。默认只在发现新版本时执行；`force` 允许把当前 ref 重装一遍
+   * （例如本地构建 stamp 损坏时手工修复）。
+   */
+  async install(input = {}) {
+    if (this.installState.running) return this.snapshot();
+    if (this.pendingRestart !== null) {
+      this.installState = {
+        ...emptyInstallState(),
+        phase: "done",
+        message: "already installed; restart DSH to load it",
+        restartRequired: true,
+        installed: this.pendingRestart
+      };
+      return this.snapshot();
+    }
+    if (this.status !== "update-available" && input.force !== true) {
+      this.installState = { ...emptyInstallState(), message: `no update available (status: ${this.status})` };
+      return this.snapshot();
+    }
+    const target = this.remote;
+    this.installState = {
+      running: true,
+      phase: "installing",
+      strategy: null,
+      startedAt: this.nowIso(),
+      finishedAt: null,
+      message: "",
+      restartRequired: false,
+      installed: null,
+      log: []
+    };
+    try {
+      const outcome = await (this.options.installerImpl ?? installUpdate)({
+        ctx: this.options.ctx ?? {},
+        repository: this.repository,
+        ref: target?.ref ?? this.ref,
+        commit: target?.commit ?? "",
+        local: this.local,
+        pluginDir: this.options.pluginDir,
+        log: (line) => this.appendLog(line),
+        ...this.options.timeoutMs === void 0 ? {} : { timeoutMs: this.options.timeoutMs },
+        ...this.pluginManager === null ? {} : { pluginManager: this.pluginManager }
+      });
+      this.applyOutcome(outcome);
+    } catch (error) {
+      this.installState = {
+        ...this.installState,
+        running: false,
+        phase: "failed",
+        finishedAt: this.nowIso(),
+        message: error instanceof Error ? error.message : String(error)
+      };
+    }
+    this.persistCache();
+    return this.snapshot();
+  }
+  /**
+   * 启动自动发现：延迟首查（避免和宿主启动抢资源）+ 周期复查。返回 disposer，
+   * 交给 `ctx.effect` 管理生命周期。
+   */
+  start() {
+    if (this.options.enabled === false || this.disposed) return () => {
+    };
+    this.disposePluginManagerWatch = watchPluginManager(this.options.ctx, (service) => {
+      this.pluginManager = service;
+    });
+    const schedule = (delayMs) => {
+      this.timer = setTimeout(() => {
+        void this.check().catch(() => {
+        }).finally(() => {
+          if (!this.disposed) schedule(this.ttl());
+        });
+      }, delayMs);
+      this.timer?.unref?.();
+    };
+    schedule(this.options.firstCheckDelayMs ?? UPDATE_FIRST_CHECK_DELAY_MS);
+    return () => this.dispose();
+  }
+  dispose() {
+    this.disposed = true;
+    if (this.timer !== void 0) clearTimeout(this.timer);
+    this.timer = void 0;
+    this.disposePluginManagerWatch?.();
+    this.disposePluginManagerWatch = void 0;
+  }
+  ttl() {
+    return this.options.checkTtlMs ?? UPDATE_CHECK_TTL_MS;
+  }
+  nowIso() {
+    return (this.options.now ?? (() => /* @__PURE__ */ new Date()))().toISOString();
+  }
+  appendLog(line) {
+    const stamped = `${this.nowIso().slice(11, 19)} ${line}`;
+    this.installState.log = [...this.installState.log, stamped].slice(-INSTALL_LOG_LIMIT);
+    try {
+      this.options.ctx?.logger?.info?.(`dsh-tavern update: ${line}`);
+    } catch {
+    }
+  }
+  applyOutcome(outcome) {
+    this.installState = {
+      ...this.installState,
+      running: false,
+      phase: outcome.ok ? "done" : "failed",
+      strategy: outcome.strategy,
+      finishedAt: this.nowIso(),
+      message: outcome.message,
+      restartRequired: outcome.restartRequired,
+      installed: outcome.installed
+    };
+    if (!outcome.ok) return;
+    this.checkedAt = this.nowIso();
+    if (outcome.restartRequired) {
+      this.pendingRestart = outcome.installed;
+      this.status = "restart-required";
+      this.reason = `installed ${outcome.installed.version} (${outcome.installed.commit}) via ${outcome.strategy}; restart DSH to load it`;
+    } else {
+      this.pendingRestart = null;
+      this.status = "up-to-date";
+      this.reason = `installed ${outcome.installed.version} (${outcome.installed.commit}) via ${outcome.strategy}`;
+    }
+  }
+  cachePath() {
+    return join10(this.options.home, UPDATE_CACHE_FILE);
+  }
+  loadCache() {
+    try {
+      const cached = JSON.parse(readFileSync2(this.cachePath(), "utf8"));
+      if (cached?.schemaVersion !== UPDATE_CACHE_SCHEMA) return;
+      if (typeof cached.status === "string") this.status = cached.status;
+      if (typeof cached.reason === "string") this.reason = cached.reason;
+      if (typeof cached.checkedAt === "string") this.checkedAt = cached.checkedAt;
+      if (typeof cached.source === "string") this.source = cached.source;
+      if (cached.remote !== null && typeof cached.remote === "object") this.remote = cached.remote;
+      if (cached.pendingRestart !== null && typeof cached.pendingRestart === "object" && typeof cached.pendingRestart?.version === "string") {
+        this.pendingRestart = {
+          version: cached.pendingRestart.version,
+          commit: isCommitText(cached.pendingRestart.commit) ? shortCommit(cached.pendingRestart.commit) : UNKNOWN_FIELD
+        };
+      }
+      if (cached.local !== void 0 && !sameLocal(cached.local, this.local)) {
+        this.remote = null;
+        this.checkedAt = null;
+        this.status = "unknown";
+        this.reason = "local build changed since the cached check";
+      }
+    } catch {
+    }
+  }
+  persistCache() {
+    try {
+      const path6 = this.cachePath();
+      mkdirSync2(dirname4(path6), { recursive: true });
+      const payload = {
+        schemaVersion: UPDATE_CACHE_SCHEMA,
+        status: this.status,
+        reason: this.reason,
+        checkedAt: this.checkedAt,
+        source: this.source,
+        local: this.local,
+        remote: this.remote,
+        pendingRestart: this.pendingRestart
+      };
+      const temp = `${path6}.tmp`;
+      writeFileSync2(temp, `${JSON.stringify(payload, null, 2)}
+`, "utf8");
+      renameSync(temp, path6);
+    } catch {
+    }
+  }
+};
+function emptyInstallState() {
+  return {
+    running: false,
+    phase: "idle",
+    strategy: null,
+    startedAt: null,
+    finishedAt: null,
+    message: "",
+    restartRequired: false,
+    installed: null,
+    log: []
+  };
+}
+function sameLocal(left, right) {
+  return typeof left?.version === "string" && typeof left?.commit === "string" && left.version === right.version && left.commit === right.commit;
+}
+function isCommitText(value) {
+  return typeof value === "string" && /^[0-9a-f]{7,40}$/i.test(value.trim());
+}
+function sameCommit(left, right) {
+  if (!isCommitText(left) || !isCommitText(right)) return false;
+  return shortCommit(left) === shortCommit(right);
+}
+function updateChangelog(snapshot2, limit = 8) {
+  const commits = snapshot2.remote?.commits ?? [];
+  return commits.slice(0, limit).map((commit) => commit.message === "" ? commit.short : `${commit.short} ${commit.message}`);
+}
+
 // packages/plugin/src/index.ts
 var name = "dsh-tavern";
 var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents", "agentPresets", "tools", "compaction"];
@@ -9258,6 +10267,8 @@ var agentNovelCapabilities = inspectAgentNovelCapabilities({});
 var novelStorePromise;
 var novelProjectorPromise;
 var novelDriverPromise;
+var updateServiceInstance;
+var updateChecksEnabledFlag = true;
 var TavernArchitectureConflictError = class extends Error {
   code = "TAVERN_ARCHITECTURE_CONFLICT";
   constructor(message) {
@@ -9277,8 +10288,25 @@ function variables() {
 function novelStore() {
   return novelStorePromise ??= NovelStore.open(dshHomePath("tavern"));
 }
+function tavernUpdate(ctx) {
+  if (updateServiceInstance !== void 0) return updateServiceInstance;
+  updateServiceInstance = new TavernUpdateService({
+    ctx,
+    home: dshHomePath("tavern"),
+    pluginDir: import.meta.dirname,
+    local: { version: BUILD_INFO.version, commit: TAVERN_COMMIT },
+    enabled: updateChecksEnabledFlag
+  });
+  return updateServiceInstance;
+}
+function updateChecksEnabled(config = {}) {
+  if (config.checkForUpdates === false) return false;
+  const disabled = process.env.DSH_TAVERN_DISABLE_UPDATE_CHECK?.trim();
+  return !(disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false");
+}
 function apply(ctx, config = {}) {
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns });
+  updateChecksEnabledFlag = updateChecksEnabled(config);
   const adapter = createDshAgentTavernAdapter(ctx);
   ctx.logger?.info?.(`dsh-tavern host shape: ${JSON.stringify(describeHostShape(ctx))}`);
   agentTavernCapabilitiesPromise = bootstrapAgentTavernCapabilities(adapter, {
@@ -9432,6 +10460,7 @@ function apply(ctx, config = {}) {
       return { kind: "success", text: `Tavern: ${parsed.character}` };
     }
   });
+  ctx.effect(() => tavernUpdate(ctx).start(), "dsh-tavern: update auto-check");
   ctx.effect(() => ctx.webServer.register({
     kind: "prefix",
     path: API,
@@ -9462,6 +10491,9 @@ async function handleApi(ctx, req, res) {
   const url = new URL(req.url ?? API, "http://localhost");
   const route = url.pathname.slice(API.length).replace(/^\//, "");
   const method = req.method ?? "GET";
+  if (route === "update" || route.startsWith("update/")) {
+    return handleUpdateApi(ctx, req, res, url, route, method);
+  }
   const db = await store();
   if (method === "GET" && route === "bootstrap") {
     await agentTavernCapabilitiesPromise;
@@ -9498,7 +10530,10 @@ async function handleApi(ctx, req, res) {
       commit: TAVERN_COMMIT,
       internalWorkspace,
       agentTavern: agentTavernCapabilities,
-      agentNovel: agentNovelCapabilities
+      agentNovel: agentNovelCapabilities,
+      // 自更新快照：只读缓存结论，检查/安装分别走 update/check 与 update/install，
+      // 保证 bootstrap 永远不因网络失败而变慢或报错。
+      update: tavernUpdate(ctx).snapshot()
     });
   }
   if (method === "GET" && route.startsWith("avatar/")) {
@@ -11321,12 +12356,14 @@ async function prepareInternalWorkspace() {
 function readBuildInfo() {
   let version = "unknown";
   let commit = "unknown";
+  const stamped = buildTimeStamp();
+  if (stamped.commit !== "") commit = stamped.commit;
   for (const packagePath of [
     resolve3(import.meta.dirname, "package.json"),
     resolve3(import.meta.dirname, "..", "package.json")
   ]) {
     try {
-      const packageData = JSON.parse(readFileSync(packagePath, "utf8"));
+      const packageData = JSON.parse(readFileSync3(packagePath, "utf8"));
       if (typeof packageData?.version === "string" && packageData.version.trim() !== "") {
         version = packageData.version.trim();
         break;
@@ -11335,16 +12372,21 @@ function readBuildInfo() {
     }
   }
   try {
-    const generated = JSON.parse(readFileSync(resolve3(import.meta.dirname, "version.json"), "utf8"));
+    const generated = JSON.parse(readFileSync3(resolve3(import.meta.dirname, "version.json"), "utf8"));
     if (typeof generated?.version === "string" && generated.version.trim() !== "") {
       version = generated.version.trim();
     }
-    if (typeof generated?.commit === "string") {
+    if (commit === "unknown" && typeof generated?.commit === "string") {
       commit = normalizeCommit(generated.commit) ?? "unknown";
     }
   } catch {
   }
   return { version, commit };
+}
+function buildTimeStamp() {
+  const version = true ? "0.3.9".trim() : "";
+  const commit = true ? normalizeCommit("8271f20") : void 0;
+  return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
   const fallback = normalizeCommit(process.env.DSH_TAVERN_COMMIT ?? buildFallback) ?? "unknown";
@@ -11433,6 +12475,32 @@ function defaultPreset() {
     prompts,
     prompt_order: [{ character_id: 1e5, order: prompts.map((p) => ({ identifier: p.identifier, enabled: true })) }]
   };
+}
+async function handleUpdateApi(ctx, req, res, url, route, method) {
+  const service = tavernUpdate(ctx);
+  if (method === "GET" && route === "update") {
+    const refresh = url.searchParams.get("refresh");
+    const fresh = refresh === "1" || refresh === "true";
+    const snapshot2 = fresh ? await service.check({ force: true }) : service.snapshot();
+    return sendJson(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
+  }
+  if (method === "POST" && route === "update/check") {
+    const snapshot2 = await service.check({ force: true });
+    return sendJson(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
+  }
+  if (method === "POST" && route === "update/install") {
+    const body = await readJson(req).catch(() => ({}));
+    const force = body.force === true;
+    if (body.wait === false) {
+      void service.install({ force }).catch(() => {
+      });
+      const snapshot3 = service.snapshot();
+      return sendJson(res, 200, { ok: true, started: true, update: snapshot3, changelog: updateChangelog(snapshot3) });
+    }
+    const snapshot2 = await service.install({ force });
+    return sendJson(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
+  }
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 function sendJson(res, status2, body) {
   res.statusCode = status2;
