@@ -12,15 +12,21 @@ function base64Url(value: unknown) {
   return Buffer.from(JSON.stringify(value)).toString('base64url')
 }
 
-function makeAgent(id: string) {
+function makeAgent(id: string, hostFormatVersion?: number) {
   const events: Array<{ type: string; data: unknown; opts?: unknown }> = []
   const injections: unknown[] = []
   return {
     id,
     ctx: { id },
     injections,
+    // 宿主 AgentLoop 的公开运行状态对象：构造函数从 turnBoundary.lastTurn 快照一次，
+    // 之后只在 turn 结束时更新（dsh-agent-loop/lib/index.js 的 ReactLoopAgent）。
+    // 插件写入 turn 边界后必须推进 phase.lastTurn，否则 live loop 会重复轮号。
+    phase: { kind: 'idle', lastTurn: 0 },
     inject: (message: unknown) => { injections.push(message) },
     session: {
+      // 宿主 Session 公开 header：rc.2 为 format v4。省略时按旧宿主（v0 形状）处理。
+      ...(hostFormatVersion === undefined ? {} : { header: { version: hostFormatVersion } }),
       events,
       append: (type: string, data: unknown, opts?: unknown) => {
         events.push(opts === undefined ? { type, data } : { type, data, opts })
@@ -38,6 +44,7 @@ function makeHostSessionAgent(id: string) {
     id,
     ctx: { id },
     injections,
+    phase: { kind: 'idle', lastTurn: 0 },
     inject: (message: unknown) => { injections.push(message) },
     log,
     session: {
@@ -230,6 +237,19 @@ describe('internal Tavern session bridge occupation', () => {
     const ends = agent.session.events.filter((event) => event.type === 'turn/end')
     expect(ends).toHaveLength(1)
     expect(ends[0]!.data).toEqual({ turn: 1, reason: { kind: 'completed' } })
+    // 占位 turn 必须同时推进 live loop 的轮次基线：宿主的 AgentLoop 在会话创建时
+    // 就快照了 lastTurn = 0，不推进的话原生下一轮会再写 turn/start { turn: 1 }，
+    // v4 关系准入会判整个会话损坏（真实会话 session-4c468689 即此形状）。
+    expect(agent.phase.lastTurn).toBe(1)
+  })
+
+  it('leaves no turn boundary behind when the host loop base cannot be advanced', async () => {
+    const agent = makeAgent('session-a')
+    // 宿主换代：phase 不再可推进（缺失/冻结）。此时宁可不占位，也不写坏会话。
+    delete (agent as { phase?: unknown }).phase
+    const result = await handler({ agent, rawInput: base64Url({ character: CHARACTER, chatId }) })
+    expect(result.kind).toBe('success')
+    expect(turnStarts(agent)).toHaveLength(0)
   })
 
   it('is idempotent: repairing an already-occupied session appends no further turns', async () => {
@@ -282,6 +302,26 @@ describe('internal Tavern session bridge occupation', () => {
     })
     expect((agent.session.events.at(-1)?.data as { reason?: unknown }).reason).toEqual({ kind: 'completed' })
     expect(res.chunks.some((chunk) => chunk.includes('"type":"saved"'))).toBe(true)
+  })
+
+  it('records no v0 assistant/chunk stream rows on a v4 host session', async () => {
+    // `assistant/chunk` 在 v4 词汇表里不存在，写进 v4 会话会让持久化校验以
+    // "unknown to this harness and not marked ignorable" 拒绝整个会话文件
+    // （v1→v2 迁移会消费这个类型，v4 日志不可能合法地包含它）。
+    const agent = makeAgent('session-generate-v4', 4)
+    agents.set(agent.id, agent)
+    const snapshot = await store.getChatSnapshot(CHARACTER, chatId)
+    const res = makeResponse()
+    await apiHandler(makeRequest({
+      character: CHARACTER,
+      chatId,
+      message: 'Write a reply',
+      revision: snapshot!.revision,
+      sessionId: agent.id,
+    }), res)
+    expect(agent.session.events.map((event) => event.type)).toEqual([
+      'turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+    ])
   })
 
   it('automatically loads active/linked worlds and global/card regex in ST mode', async () => {
@@ -344,20 +384,28 @@ describe('internal Tavern session bridge occupation', () => {
       { name: 'User', is_user: true, is_system: false, send_date: now, mes: '你也是早上好。' },
       { name: CHARACTER, is_user: false, is_system: false, send_date: now, mes: '今天想去哪里？' },
     ])
-    const agent = makeAgent('session-agent-greeting')
+    const agent = makeAgent('session-agent-greeting', 4)
     const result = await handler({
       agent,
       rawInput: base64Url({ character: CHARACTER, chatId: greetingChat, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
     })
     expect(result.kind).toBe('success')
+    // 导入写出完整 turn/step 边界（v4 准入要求 assistant/message 落在打开的
+    // turn+step 内），最后一个导入轮号必须同时推进 live loop 的轮次基线，
+    // 否则 loop 的首轮会重复 turn 1 并被准入拒绝。
     expect(agent.session.events.map((event) => event.type)).toEqual([
       'agent-preset/selected',
-      'assistant/message', 'user/message', 'assistant/message',
+      'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+      'turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end',
     ])
-    const greeting = agent.session.events[1]!
+    expect(agent.phase.lastTurn).toBe(2)
+    const greeting = agent.session.events[3]!
     expect(greeting.data).toMatchObject({
-      turn: 0,
+      turn: 1,
       step: 1,
+      // v4 assistant 结算契约：token-meter 的 usageOf() 在 usage/stream 双缺时
+      // 抛 TypeError（"reading 'length'"），会话所有投影读取随之失败。
+      stream: [],
       message: {
         role: 'assistant',
         content: [{ type: 'text', text: '早上好，旅行者。' }],
@@ -366,23 +414,44 @@ describe('internal Tavern session bridge occupation', () => {
     })
     expect(greeting.opts).toEqual({ surfaceOp: 'append' })
     expect((greeting.data as { usage?: unknown }).usage).toBeUndefined()
-    const importedUser = agent.session.events[2]!
+    const importedUser = agent.session.events[7]!
     expect(importedUser.data).toMatchObject({
       role: 'user',
       content: [{ type: 'text', text: '你也是早上好。' }],
-      source: { kind: 'plugin', plugin: 'dsh-tavern' },
+      source: { kind: 'plugin:dsh-tavern' },
     })
     expect(importedUser.opts).toEqual({ surfaceOp: 'append' })
-    const followUp = agent.session.events[3]!
+    const followUp = agent.session.events[9]!
     expect(followUp.data).toMatchObject({
-      turn: 0,
-      step: 2,
+      turn: 2,
+      step: 1,
       message: {
         content: [{ type: 'text', text: '今天想去哪里？' }],
         source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' },
       },
     })
-    expect(turnStarts(agent)).toHaveLength(0)
+    expect(turnStarts(agent).map((event) => event.data)).toEqual([{ turn: 1 }, { turn: 2 }])
+  })
+
+  it('does not write turn boundaries when the host loop base cannot be advanced', async () => {
+    const now = new Date().toISOString()
+    const guardedChat = await store.createChat(CHARACTER, {
+      user_name: 'unused', character_name: 'unused',
+      chat_metadata: { createdAt: now, timedWorldInfo: {} },
+    }, [
+      { name: CHARACTER, is_user: false, is_system: false, send_date: now, mes: '开场白。' },
+    ])
+    const agent = makeAgent('session-agent-no-base')
+    delete (agent as { phase?: unknown }).phase
+    const result = await handler({
+      agent,
+      rawInput: base64Url({ character: CHARACTER, chatId: guardedChat, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+    })
+    // 无法推进基线时不能写 turn 边界：写了就会在 live loop 首轮撞号，v4 准入把
+    // 整个会话判成损坏。宁可少一次导入，也不写坏会话。
+    expect(result.kind).toBe('success')
+    expect(agent.session.events.map((event) => event.type)).toEqual(['agent-preset/selected'])
+    expect((await store.getState()).sessionBindings[agent.id]).toMatchObject({ architecture: 'agent-tavern', chatId: guardedChat })
   })
 
   it('re-activation of the same AgentTavern binding after the greeting import is an idempotent no-op', async () => {
@@ -402,7 +471,7 @@ describe('internal Tavern session bridge occupation', () => {
     expect(agent.session.events.filter((event) => event.type === 'agent-preset/selected')).toHaveLength(1)
     expect(agent.session.events.map((event) => event.type)).toEqual([
       'agent-preset/selected',
-      'assistant/message',
+      'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
     ])
     expect(recomposeCalls).toEqual([])
   })

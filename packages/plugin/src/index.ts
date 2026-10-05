@@ -42,7 +42,7 @@ import {
   type TavernModelSelection,
   type WriterMode,
 } from '../../tavern-store/src/index.js'
-import { describeHostShape, hostPluginMessageSource, readSessionEvents, sessionEvents, type HostSessionLog } from '../../bind/src/index.js'
+import { describeHostShape, hostPluginMessageSource, hostSessionFormatVersion, readSessionEvents, sessionEvents, type HostSessionLog } from '../../bind/src/index.js'
 import {
   AGENT_TAVERN_PRESET_ID,
   bootstrapAgentTavernCapabilities,
@@ -56,7 +56,7 @@ import { NovelProjector } from './agent-novel/projector.js'
 import { isNovelAuthorMessage, receiveAuthorMessage } from './agent-novel/requirements.js'
 import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
-import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, type SessionImportAppend } from './agent-tavern/projector.js'
+import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type SessionImportAppend } from './agent-tavern/projector.js'
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from './agent-tavern/deduce.js'
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
 import { dshHomePath } from './dsh-home.js'
@@ -321,13 +321,31 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
         }))
       }
       if (historyImport !== undefined) {
-        try {
-          for (const item of historyImport) {
-            agent.session.append(item.type, item.data, item.surfaceOp === undefined ? undefined : { surfaceOp: item.surfaceOp })
+        const importedTurn = lastImportedTurn(historyImport)
+        if (importedTurn !== undefined && !canAdvanceHostTurnBase(agent)) {
+          // 导入带真实 turn 边界；宿主 loop 的轮次基线不可推进时不能写入，
+          // 否则 live loop 的首轮会重复导入轮号，v4 准入把整个会话判成损坏。
+          // 代价是这次激活不留导入 marker，"已启动"锁定不建立——宁可在未知宿主上
+          // 保留一个合法会话，也不要一个锁死却损坏的会话。
+          ctx.logger?.warn?.('AgentTavern history import skipped: the host session exposes no advanceable turn base, so imported turn boundaries would desynchronise the live loop.')
+        } else {
+          let written
+          try {
+            for (const item of historyImport) {
+              agent.session.append(item.type, item.data, item.surfaceOp === undefined ? undefined : { surfaceOp: item.surfaceOp })
+            }
+            written = importedTurn
+          } catch (error) {
+            // 导入失败不阻断绑定；用户仍可直接对话，缺失的历史留在 JSONL 可重放。
+            // 半个导入必须兜底关闭已打开的 step/turn，否则损坏的是整个会话。
+            written = closeImportBracket(agent, {
+              kind: 'error',
+              error: { message: 'AgentTavern history import failed', code: 'TAVERN_IMPORT' },
+            })
+            ctx.logger?.warn?.(`AgentTavern history import failed: ${error instanceof Error ? error.message : String(error)}`)
+          } finally {
+            if (written !== undefined) advanceHostTurnBase(agent, written)
           }
-        } catch (error) {
-          // 导入失败不阻断绑定；用户仍可直接对话，缺失的历史留在 JSONL 可重放。
-          ctx.logger?.warn?.(`AgentTavern history import failed: ${error instanceof Error ? error.message : String(error)}`)
         }
       }
       await refreshActivePrompt()
@@ -2489,15 +2507,115 @@ function assertStGenerationBinding(state, sessionId) {
  * 无 step 的空转 turn（reason=completed 与 agent-loop 对零消息 turn 的关闭方式
  * 一致）把会话标记为已占用；agent-loop 的真实 turn 号取 findLast(turn/start)+1，
  * 编号保持连续。幂等：仅在会话还没有任何 turn/start 时写入。
+ *
+ * ⚠️ 写占位 turn 之后必须推进 live loop 的轮次基线（advanceHostTurnBase）：宿主
+ * 在构造 AgentLoop 时快照 `turnBoundary.lastTurn`（AgentLoop.phase.lastTurn），而
+ * 会话/Agent 由宿主在本函数写入之前创建，快照仍是 0——不推进的话 live loop 的首轮
+ * 会再写一次 `turn/start { turn: 1 }`，v4 关系准入（turn/start 必须等于 nextTurn）
+ * 直接判会话损坏。基线不可推进（宿主换代）时宁可不占位，也不写坏会话。
  */
 function occupyHostSession(agent) {
   try {
     if (sessionEvents(agent.session).some((event) => event.type === 'turn/start')) return
+    if (!canAdvanceHostTurnBase(agent)) return
     agent.session.append('turn/start', { turn: 1 })
     agent.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    advanceHostTurnBase(agent, 1)
   } catch {
     // 宿主拒绝插件追加 turn 事件时仅失去防复用保护，不阻断激活本身。
   }
+}
+
+/**
+ * live loop 的轮次基线位于 `AgentLoop.phase.lastTurn`：构造函数从
+ * `turnBoundary.lastTurn` 快照一次，此后只在每个 turn 结束时更新。插件写入 turn
+ * 边界后必须把基线推到最后一个已写入的 turn，否则 loop 会重复轮号（v4 准入拒绝
+ * `turn/start does not open the expected turn`，会话从此不可读）。
+ *
+ * 该字段不是宿主的公开 seam，因此只在确认「存在、idle、可写」时使用；探测失败时
+ * 调用方必须放弃写入 turn 边界（见 canAdvanceHostTurnBase）。
+ */
+function loopPhase(agent) {
+  const phase = agent?.phase
+  return typeof phase === 'object' && phase !== null ? phase : undefined
+}
+
+/** 探测 live loop 的轮次基线是否可推进：phase 存在、idle、且字段可写。 */
+function canAdvanceHostTurnBase(agent) {
+  const phase = loopPhase(agent)
+  if (phase === undefined || phase.kind !== 'idle') return false
+  if (!Number.isSafeInteger(phase.lastTurn)) return false
+  // 回写同值：冻结对象 / 只读 getter 会让写入静默失败，这里提前发现。
+  const before = phase.lastTurn
+  try {
+    phase.lastTurn = before
+  } catch {
+    return false
+  }
+  return phase.lastTurn === before
+}
+
+/** 把 live loop 的轮次基线推进到 turn（只增不减）。返回是否生效。 */
+function advanceHostTurnBase(agent, turn) {
+  if (!Number.isSafeInteger(turn) || turn < 1) return false
+  const phase = loopPhase(agent)
+  if (phase === undefined || phase.kind !== 'idle') return false
+  if (Number.isSafeInteger(phase.lastTurn) && phase.lastTurn >= turn) return true
+  try {
+    phase.lastTurn = turn
+  } catch {
+    return false
+  }
+  return phase.lastTurn === turn
+}
+
+/** 会话日志里已写入的最大 turn/start 轮号；没有 turn 边界时返回 undefined。 */
+function lastLoggedTurn(agent) {
+  let last
+  for (const event of sessionEvents(agent.session)) {
+    if (event.type !== 'turn/start') continue
+    const value = event.data?.turn
+    if (Number.isSafeInteger(value) && (last === undefined || value > last)) last = value
+  }
+  return last
+}
+
+/**
+ * 导入中断时兜底关闭仍然打开的 step/turn：无法确认宿主状态时以日志为准，
+ * 否则半个导入会留下未关闭的 turn，live loop 的下一个 turn/start 会被准入拒绝。
+ * 返回日志里已写入的最大轮号（供调用方推进基线）。
+ */
+function closeImportBracket(agent, reason) {
+  let openTurn
+  let openStep
+  for (const event of sessionEvents(agent.session)) {
+    if (event.type === 'turn/start' && Number.isSafeInteger(event.data?.turn)) {
+      openTurn = event.data.turn
+      openStep = undefined
+      continue
+    }
+    if (event.type === 'turn/end') { openTurn = undefined; openStep = undefined; continue }
+    if (event.type === 'step/start' && Number.isSafeInteger(event.data?.step)) {
+      openStep = { turn: event.data.turn, step: event.data.step }
+      continue
+    }
+    if (event.type === 'step/end') openStep = undefined
+  }
+  if (openStep !== undefined) {
+    try {
+      agent.session.append('step/end', { turn: openStep.turn, step: openStep.step })
+    } catch {
+      // 兜底关闭失败不再递归处理。
+    }
+  }
+  if (openTurn !== undefined) {
+    try {
+      agent.session.append('turn/end', { turn: openTurn, reason })
+    } catch {
+      // 同上。
+    }
+  }
+  return lastLoggedTurn(agent)
 }
 
 // Tavern generation runs outside the native agent loop. Mirror its durable
@@ -2555,6 +2673,11 @@ function startTavernSessionStep(trace) {
 
 function recordTavernSessionChunk(trace, chunk) {
   if (!trace?.logging || !trace.stepOpen) return
+  // `assistant/chunk` 是 v0/v1 的流式记录形态：v1→v2 迁移把它折进 assistant 结算，
+  // v4 词汇表里没有这个事件类型，持久化校验会以「unknown to this harness and not
+  // marked ignorable」拒绝整个会话文件——之后任何读取（会话列表、投影、新建会话
+  // 复用）都失败。v4 会话只写最终 assistant/message（正文完整），不写逐块记录。
+  if ((hostSessionFormatVersion(trace.session) ?? 0) >= 4) return
   try {
     trace.session.append('assistant/chunk', { turn: trace.turn, step: trace.step, chunk })
   } catch {
@@ -2575,7 +2698,10 @@ function recordTavernSessionAssistant(trace, text, reasoning, provider, model, u
         content,
         source: { kind: 'model', provider, model },
       }),
-      ...(usage ? { usage } : {}),
+      // token-meter 的 usageOf() 在 `usage`、`stream` 双缺时读 undefined.length 抛
+      // TypeError，会话的 stateOf()/snapshot() 从此失败。provider 未报 usage 时补空
+      // 流作为诚实的「没有流式记录」，保证投影单元可物化。
+      ...(usage ? { usage } : { stream: [] }),
     }, { surfaceOp: 'append' })
     trace.completed = true
   } catch {
@@ -2590,6 +2716,10 @@ function finishTavernSessionTrace(trace) {
     try {
       trace.session.append('step/end', { turn: trace.turn, step: trace.step })
     } catch {
+      // step 关不掉时不能再写 turn/end：v4 准入要求 turn/end 时没有打开的 step，
+      // 而「未关闭的尾巴」本身合法。宁可留下未关闭的 turn，也不写一条会让整个
+      // 会话被判损坏的 turn/end。
+      return
     }
     trace.stepOpen = false
   }

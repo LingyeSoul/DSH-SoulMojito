@@ -41,6 +41,16 @@ export function sessionEvents(session: HostSessionLog | null | undefined): reado
 export const TAVERN_PLUGIN_SOURCE_KIND = 'plugin:dsh-tavern'
 
 /**
+ * 会话持久化格式版本（`session.header.version`，宿主 Session 公开字段，创建时即定）。
+ * rc.2 起为 4（原生 V4 准入）；0.1.x 为 0-3。header 不可读时返回 undefined，
+ * 调用方据此回退老宿主行为（测试 stub 与旧宿主都没有 header）。
+ */
+export function hostSessionFormatVersion(session: HostSessionLog | null | undefined): number | undefined {
+  const version = (session as { header?: { version?: unknown } } | undefined)?.header?.version
+  return typeof version === 'number' && Number.isSafeInteger(version) ? version : undefined
+}
+
+/**
  * 会话消息的插件 source 形状，按宿主 session format 版本分支：
  *
  * - v4+（DSH 0.2.0-rc.2 起）：持久化校验显式拒绝 `kind === 'plugin'`
@@ -59,8 +69,8 @@ export function hostPluginMessageSource(
   session: HostSessionLog | null | undefined,
   members?: Record<string, unknown>,
 ): Record<string, unknown> {
-  const version = (session as { header?: { version?: unknown } } | undefined)?.header?.version
-  const kind = typeof version === 'number' && Number.isSafeInteger(version) && version >= 4
+  const version = hostSessionFormatVersion(session)
+  const kind = version !== undefined && version >= 4
     ? TAVERN_PLUGIN_SOURCE_KIND
     : 'plugin'
   return {

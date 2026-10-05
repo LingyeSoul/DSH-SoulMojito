@@ -3,9 +3,13 @@
 
 // packages/bind/src/host-session.ts
 var TAVERN_PLUGIN_SOURCE_KIND = "plugin:dsh-tavern";
-function hostPluginMessageSource(session, members) {
+function hostSessionFormatVersion(session) {
   const version = session?.header?.version;
-  const kind = typeof version === "number" && Number.isSafeInteger(version) && version >= 4 ? TAVERN_PLUGIN_SOURCE_KIND : "plugin";
+  return typeof version === "number" && Number.isSafeInteger(version) ? version : void 0;
+}
+function hostPluginMessageSource(session, members) {
+  const version = hostSessionFormatVersion(session);
+  const kind = version !== void 0 && version >= 4 ? TAVERN_PLUGIN_SOURCE_KIND : "plugin";
   return {
     ...kind === "plugin" ? { plugin: "dsh-tavern" } : {},
     ...members,

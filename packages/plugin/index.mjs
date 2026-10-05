@@ -7191,9 +7191,13 @@ function sessionEvents(session) {
   return readSessionEvents(session) ?? [];
 }
 var TAVERN_PLUGIN_SOURCE_KIND = "plugin:dsh-tavern";
-function hostPluginMessageSource(session, members) {
+function hostSessionFormatVersion(session) {
   const version = session?.header?.version;
-  const kind = typeof version === "number" && Number.isSafeInteger(version) && version >= 4 ? TAVERN_PLUGIN_SOURCE_KIND : "plugin";
+  return typeof version === "number" && Number.isSafeInteger(version) ? version : void 0;
+}
+function hostPluginMessageSource(session, members) {
+  const version = hostSessionFormatVersion(session);
+  const kind = version !== void 0 && version >= 4 ? TAVERN_PLUGIN_SOURCE_KIND : "plugin";
   return {
     ...kind === "plugin" ? { plugin: "dsh-tavern" } : {},
     ...members,
@@ -9148,12 +9152,28 @@ function historyImportAppends(chat, sessionId, scripts, expand, session) {
     return expand ? expand(transformed) : transformed;
   };
   const appends = [];
-  let assistantCount = 0;
+  const settlement = (hostSessionFormatVersion(session) ?? 0) >= 4 ? { stream: [] } : {};
+  let turn = 0;
+  let step = 0;
+  let turnOpen = false;
+  const openTurn = () => {
+    turn += 1;
+    step = 0;
+    turnOpen = true;
+    appends.push({ type: "turn/start", data: { turn } });
+  };
+  const closeTurn = () => {
+    if (!turnOpen) return;
+    turnOpen = false;
+    appends.push({ type: "turn/end", data: { turn, reason: { kind: "completed" } } });
+  };
   for (const [index, message] of chat.messages.entries()) {
     if (message.is_system === true || typeof message.mes !== "string" || message.mes.trim() === "") continue;
     const origin = message.extra?.agentTavern;
     if (origin?.sessionId === sessionId) continue;
     if (message.is_user === true) {
+      closeTurn();
+      openTurn();
       appends.push({
         type: "user/message",
         data: {
@@ -9166,12 +9186,15 @@ function historyImportAppends(chat, sessionId, scripts, expand, session) {
       });
       continue;
     }
-    assistantCount += 1;
+    if (!turnOpen) openTurn();
+    step += 1;
+    appends.push({ type: "step/start", data: { turn, step } });
     appends.push({
       type: "assistant/message",
       data: {
-        turn: 0,
-        step: assistantCount,
+        turn,
+        step,
+        ...settlement,
         message: {
           id: randomUUID3(),
           role: "assistant",
@@ -9187,8 +9210,20 @@ function historyImportAppends(chat, sessionId, scripts, expand, session) {
       },
       surfaceOp: "append"
     });
+    appends.push({ type: "step/end", data: { turn, step } });
   }
+  closeTurn();
   return appends;
+}
+function lastImportedTurn(appends) {
+  let last;
+  for (const append of appends) {
+    const value = append.data?.turn;
+    if (append.type === "turn/start" && Number.isSafeInteger(value) && (last === void 0 || value > last)) {
+      last = value;
+    }
+  }
+  return last;
 }
 function messageText(content) {
   if (!Array.isArray(content)) return "";
@@ -10440,12 +10475,25 @@ function apply(ctx, config = {}) {
         }));
       }
       if (historyImport !== void 0) {
-        try {
-          for (const item of historyImport) {
-            agent.session.append(item.type, item.data, item.surfaceOp === void 0 ? void 0 : { surfaceOp: item.surfaceOp });
+        const importedTurn = lastImportedTurn(historyImport);
+        if (importedTurn !== void 0 && !canAdvanceHostTurnBase(agent)) {
+          ctx.logger?.warn?.("AgentTavern history import skipped: the host session exposes no advanceable turn base, so imported turn boundaries would desynchronise the live loop.");
+        } else {
+          let written;
+          try {
+            for (const item of historyImport) {
+              agent.session.append(item.type, item.data, item.surfaceOp === void 0 ? void 0 : { surfaceOp: item.surfaceOp });
+            }
+            written = importedTurn;
+          } catch (error) {
+            written = closeImportBracket(agent, {
+              kind: "error",
+              error: { message: "AgentTavern history import failed", code: "TAVERN_IMPORT" }
+            });
+            ctx.logger?.warn?.(`AgentTavern history import failed: ${error instanceof Error ? error.message : String(error)}`);
+          } finally {
+            if (written !== void 0) advanceHostTurnBase(agent, written);
           }
-        } catch (error) {
-          ctx.logger?.warn?.(`AgentTavern history import failed: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
       await refreshActivePrompt();
@@ -12221,10 +12269,83 @@ function assertStGenerationBinding(state, sessionId) {
 function occupyHostSession(agent) {
   try {
     if (sessionEvents(agent.session).some((event) => event.type === "turn/start")) return;
+    if (!canAdvanceHostTurnBase(agent)) return;
     agent.session.append("turn/start", { turn: 1 });
     agent.session.append("turn/end", { turn: 1, reason: { kind: "completed" } });
+    advanceHostTurnBase(agent, 1);
   } catch {
   }
+}
+function loopPhase(agent) {
+  const phase = agent?.phase;
+  return typeof phase === "object" && phase !== null ? phase : void 0;
+}
+function canAdvanceHostTurnBase(agent) {
+  const phase = loopPhase(agent);
+  if (phase === void 0 || phase.kind !== "idle") return false;
+  if (!Number.isSafeInteger(phase.lastTurn)) return false;
+  const before = phase.lastTurn;
+  try {
+    phase.lastTurn = before;
+  } catch {
+    return false;
+  }
+  return phase.lastTurn === before;
+}
+function advanceHostTurnBase(agent, turn) {
+  if (!Number.isSafeInteger(turn) || turn < 1) return false;
+  const phase = loopPhase(agent);
+  if (phase === void 0 || phase.kind !== "idle") return false;
+  if (Number.isSafeInteger(phase.lastTurn) && phase.lastTurn >= turn) return true;
+  try {
+    phase.lastTurn = turn;
+  } catch {
+    return false;
+  }
+  return phase.lastTurn === turn;
+}
+function lastLoggedTurn(agent) {
+  let last;
+  for (const event of sessionEvents(agent.session)) {
+    if (event.type !== "turn/start") continue;
+    const value = event.data?.turn;
+    if (Number.isSafeInteger(value) && (last === void 0 || value > last)) last = value;
+  }
+  return last;
+}
+function closeImportBracket(agent, reason) {
+  let openTurn;
+  let openStep;
+  for (const event of sessionEvents(agent.session)) {
+    if (event.type === "turn/start" && Number.isSafeInteger(event.data?.turn)) {
+      openTurn = event.data.turn;
+      openStep = void 0;
+      continue;
+    }
+    if (event.type === "turn/end") {
+      openTurn = void 0;
+      openStep = void 0;
+      continue;
+    }
+    if (event.type === "step/start" && Number.isSafeInteger(event.data?.step)) {
+      openStep = { turn: event.data.turn, step: event.data.step };
+      continue;
+    }
+    if (event.type === "step/end") openStep = void 0;
+  }
+  if (openStep !== void 0) {
+    try {
+      agent.session.append("step/end", { turn: openStep.turn, step: openStep.step });
+    } catch {
+    }
+  }
+  if (openTurn !== void 0) {
+    try {
+      agent.session.append("turn/end", { turn: openTurn, reason });
+    } catch {
+    }
+  }
+  return lastLoggedTurn(agent);
 }
 function beginTavernSessionTurn(agent, userText) {
   const session = agent?.session;
@@ -12274,6 +12395,7 @@ function startTavernSessionStep(trace) {
 }
 function recordTavernSessionChunk(trace, chunk) {
   if (!trace?.logging || !trace.stepOpen) return;
+  if ((hostSessionFormatVersion(trace.session) ?? 0) >= 4) return;
   try {
     trace.session.append("assistant/chunk", { turn: trace.turn, step: trace.step, chunk });
   } catch {
@@ -12293,7 +12415,10 @@ function recordTavernSessionAssistant(trace, text, reasoning, provider, model, u
         content,
         source: { kind: "model", provider, model }
       }),
-      ...usage ? { usage } : {}
+      // token-meter 的 usageOf() 在 `usage`、`stream` 双缺时读 undefined.length 抛
+      // TypeError，会话的 stateOf()/snapshot() 从此失败。provider 未报 usage 时补空
+      // 流作为诚实的「没有流式记录」，保证投影单元可物化。
+      ...usage ? { usage } : { stream: [] }
     }, { surfaceOp: "append" });
     trace.completed = true;
   } catch {
@@ -12307,6 +12432,7 @@ function finishTavernSessionTrace(trace) {
     try {
       trace.session.append("step/end", { turn: trace.turn, step: trace.step });
     } catch {
+      return;
     }
     trace.stepOpen = false;
   }
@@ -12385,7 +12511,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.3.9".trim() : "";
-  const commit = true ? normalizeCommit("8271f20") : void 0;
+  const commit = true ? normalizeCommit("e2a1d98") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

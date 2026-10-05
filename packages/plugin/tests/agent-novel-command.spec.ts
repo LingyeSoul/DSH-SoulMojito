@@ -24,6 +24,9 @@ function makeNovelAgent(id: string) {
     followups,
     followup: async (message: unknown) => { followups.push(message) },
     whenIdle: async () => {},
+    // 宿主 AgentLoop 的公开运行状态：rc.2 的会话/Agent 在插件写入前就已构造，
+    // 导入 turn 边界必须同时推进这个基线（见 occupyHostSession/advanceHostTurnBase）。
+    phase: { kind: 'idle', lastTurn: 0 },
     session: {
       id,
       events,
@@ -40,6 +43,7 @@ function makePlainAgent(id: string) {
   return {
     id,
     ctx: { id },
+    phase: { kind: 'idle', lastTurn: 0 },
     session: {
       events,
       append: (type: string, data: unknown, opts?: unknown) => {

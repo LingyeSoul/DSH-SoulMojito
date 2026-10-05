@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { ChatRevisionConflictError, type TavernSessionBinding, type TavernState } from '../../../tavern-store/src/index.js'
 import { RegexPlacement, type CharacterCardIR, type ChatLogIR, type ChatMessage, type RegexScriptIR } from '../../../tavern-format/src/index.js'
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
-import { hostPluginMessageSource, isHostPluginMessageSource, sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
+import { hostPluginMessageSource, hostSessionFormatVersion, isHostPluginMessageSource, sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
 import { collectRegexScripts } from '../tavern-assets.js'
 
 export interface NativeSessionEvent {
@@ -261,22 +261,32 @@ function isTavernMirrorSource(source: unknown): boolean {
 const TAVERN_MIRROR_MODEL_SOURCE = { provider: 'dsh-tavern', model: 'agent-tavern-import' } as const
 
 /**
- * Import saved messages as session-level surface events without creating loop
- * boundaries. The native AgentLoop then owns the first live turn and starts it
- * at one. Model sources satisfy host validation; plugin markers (shape branched
+ * Import saved messages as real turn boundaries. The native AgentLoop then
+ * continues ABOVE the imported turns; the caller must advance the live loop's
+ * turn base (see `advanceHostTurnBase`) or the loop's first live turn repeats
+ * an imported turn number and the session stops being readable.
+ *
+ * Host admission (DSH `0.2.0-rc.2`, session format v4) requires every
+ * `assistant/message` to sit inside an OPEN turn and step whose numbers equal
+ * its payload coordinates:
+ *
+ * - `assistant/message` with neither an open turn nor an open step dies with
+ *   `SessionFormatError: assistant/message does not match an open turn and step`,
+ *   which marks the WHOLE persisted session corrupt — creation fails, history
+ *   stops loading, and later session operations fail with it.
+ * - Bare payload coordinates cannot repair that: turn numbers must be dense and
+ *   start at 1 (`nextTurn` starts at 1), so `turn: 0` can never be opened by any
+ *   `turn/start` (`turn/start does not open the expected turn`).
+ * - Dropping the coordinates instead (0.3.1 shape) breaks the client fold with
+ *   `published invalid turn undefined`, which empties the conversation.
+ *
+ * So the import mirrors a real conversation: each user message opens a turn,
+ * every assistant message is one step inside the current turn, and every turn
+ * closes with `reason: { kind: 'completed' }` like the loop's own zero-message
+ * turns. Model sources satisfy host validation; plugin markers (shape branched
  * by session format version, see hostPluginMessageSource) prevent projection
  * back into the saved chat. Prompt-only regex and macros never alter stored
  * text.
- *
- * Imported assistant messages carry explicit `turn: 0` and per-import step
- * numbers: the client conversation assembler publishes assistant messages at
- * `{ turn, step }` coordinates read straight off the event payload, and a
- * message without them dies with "published invalid turn undefined", which
- * kills the whole event-feed subscriber and renders the chat empty. Turn
- * containers are created implicitly from payload coordinates, so no
- * turn/start|end events are needed and the host blank criterion (a logged
- * turn/start) stays false. Turn 0 keeps imports below the live loop's first
- * turn (its lastTurn defaults to 0, so live turn 1 never collides).
  */
 export function historyImportAppends(
   chat: ChatLogIR,
@@ -294,13 +304,39 @@ export function historyImportAppends(
   }
 
   const appends: SessionImportAppend[] = []
-  let assistantCount = 0
+  // v4 宿主（rc.2 起）的 assistant 结算契约是「`usage` 或 `stream` 至少一个」：
+  // token-meter 的 usageOf() 在两者都缺失时把 undefined 交给
+  // lastAssistantStreamChunk()，后者读 `stream.length` 抛 TypeError，投影单元
+  // 无法物化，该会话的 stateOf()/snapshot() 全部失败——原生「新建会话」复用该
+  // 会话时直接报 gateway/internal: Cannot read properties of undefined
+  // (reading 'length')。导入消息没有流式记录，写空数组是诚实的（不产生 usage、
+  // 投影不变）。v0-v3 宿主把流式记录放在独立的 assistant/chunk 事件里，写入
+  // v4 专属成员会毒化老工件，因此按版本分支。
+  const settlement = (hostSessionFormatVersion(session) ?? 0) >= 4 ? { stream: [] } : {}
+  let turn = 0
+  let step = 0
+  let turnOpen = false
+
+  const openTurn = () => {
+    turn += 1
+    step = 0
+    turnOpen = true
+    appends.push({ type: 'turn/start', data: { turn } })
+  }
+  const closeTurn = () => {
+    if (!turnOpen) return
+    turnOpen = false
+    appends.push({ type: 'turn/end', data: { turn, reason: { kind: 'completed' } } })
+  }
 
   for (const [index, message] of chat.messages.entries()) {
     if (message.is_system === true || typeof message.mes !== 'string' || message.mes.trim() === '') continue
     const origin = message.extra?.agentTavern as Record<string, unknown> | undefined
     if (origin?.sessionId === sessionId) continue
     if (message.is_user === true) {
+      // 一个用户消息开启一个 turn（与 live loop 的真实语义一致）。
+      closeTurn()
+      openTurn()
       appends.push({
         type: 'user/message',
         data: {
@@ -313,12 +349,17 @@ export function historyImportAppends(
       })
       continue
     }
-    assistantCount += 1
+    if (!turnOpen) openTurn()
+    step += 1
+    // step/start 与 step/end 必须包住 assistant/message：v4 准入要求
+    // assistant/message 的 turn/step 与当前打开的 step 完全一致。
+    appends.push({ type: 'step/start', data: { turn, step } })
     appends.push({
       type: 'assistant/message',
       data: {
-        turn: 0,
-        step: assistantCount,
+        turn,
+        step,
+        ...settlement,
         message: {
           id: randomUUID(),
           role: 'assistant',
@@ -334,8 +375,25 @@ export function historyImportAppends(
       },
       surfaceOp: 'append',
     })
+    appends.push({ type: 'step/end', data: { turn, step } })
   }
+  closeTurn()
   return appends
+}
+
+/**
+ * 导入计划写入的最后一个 turn 号；没有 turn 边界时返回 undefined。
+ * 调用方用它推进 live loop 的轮次基线。
+ */
+export function lastImportedTurn(appends: readonly SessionImportAppend[]): number | undefined {
+  let last: number | undefined
+  for (const append of appends) {
+    const value = append.data?.turn
+    if (append.type === 'turn/start' && Number.isSafeInteger(value) && (last === undefined || (value as number) > last)) {
+      last = value as number
+    }
+  }
+  return last
 }
 
 function messageText(content: unknown): string {
