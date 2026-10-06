@@ -1401,6 +1401,21 @@ window.__ModuleLoader__.load({
       ctx?.sessions?.binding(sessionId)?.session?.handleBlank?.(false)
     }
 
+    // 诊断（0.2.0-rc.2 适配期临时）：侧边栏错误原本只显示 message，定位
+    // 「Cannot read properties of undefined (reading 'sessionId')」这类宿主链路
+    // 抛点需要首帧栈位。同时把完整 stack 存 window.__DSH_TAVERN_DIAG__ 供
+    // devtools 取用；问题定位后移除。
+    function sidebarErrorDetail(cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      const stack = cause instanceof Error ? String(cause.stack || '') : ''
+      try {
+        window.__DSH_TAVERN_DIAG__ = [...(window.__DSH_TAVERN_DIAG__ || []), { message, stack, at: new Date().toISOString() }].slice(-10)
+      } catch { /* 诊断本身不许抛 */ }
+      console.error('[dsh-tavern] sidebar error:', cause)
+      const frames = stack.split(/\r?\n/).slice(1, 4).map((line) => line.trim()).filter(Boolean)
+      return frames.length > 0 ? `${message} ⏎ ${frames.join(' ⏎ ')}` : message
+    }
+
     function clickTavernTab(attempt) {
       // The conversation.view tab label is translated via the slot's label()
       // callback, so match every shipped spelling of the Tavern title.
@@ -1434,6 +1449,9 @@ window.__ModuleLoader__.load({
         reserveTavernSession(ctx, sessionId)
         return
       }
+      // 待修复的会话可能早已离开主视图（mainView 保留已释放），同样需要显式
+      // 持有才能借到 binding；失败照旧由 catch 回落重试。
+      const heldSession = DshBindClient.retainHostSession(ctx, sessionId, clientShapeTrace)
       try {
         const policy = {
           architecture: bindingArchitecture(binding),
@@ -1452,6 +1470,8 @@ window.__ModuleLoader__.load({
         reserveTavernSession(ctx, sessionId)
       } catch {
         repairedBindings.delete(sessionId)
+      } finally {
+        heldSession.release()
       }
     }
 
@@ -1479,37 +1499,46 @@ window.__ModuleLoader__.load({
 
       update({ navigationStatus: translate('nav.opening', { name: character }) })
       const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId)
-      const binding = ctx.sessions.binding(sessionId)
-      if (!binding) throw new Error(translate('error.noBinding'))
-      const payload = JSON.stringify({ sessionId, character, chatId, ...(group ? { group: true } : {}), ...activationFields(policy) })
-      await api('binding', {
-        method: 'POST',
-        headers: jsonHeaders(),
-        body: payload,
-      })
-      const commandPayload = base64Url(JSON.stringify({
-        character,
-        chatId,
-        ...(group ? { group: true } : {}),
-        ...activationFields(policy),
-      }))
-      const result = await binding.session.command(`/dsh-tavern-session ${commandPayload}`)
-      if (!result.ok || !result.value?.matched) {
+      // 0.2.0-rc.2 起 connectWorkspace 内部走 sessions.create，不再隐式保留
+      // 作用域，未 retain 时 ctx.sessions.binding() 恒为 undefined（宿主契约：
+      // retain 后才能借 binding）。先以插件名义显式持有，openSessionView 建立
+      // mainView 保留后在 finally 归还，全程引用计数 ≥ 1。
+      const heldSession = DshBindClient.retainHostSession(ctx, sessionId, clientShapeTrace)
+      try {
+        const binding = ctx.sessions.binding(sessionId)
+        if (!binding) throw new Error(translate('error.noBinding'))
+        const payload = JSON.stringify({ sessionId, character, chatId, ...(group ? { group: true } : {}), ...activationFields(policy) })
         await api('binding', {
-          method: 'DELETE',
+          method: 'POST',
           headers: jsonHeaders(),
-          body: JSON.stringify({ sessionId }),
-        }).catch(() => {})
-        throw new Error(result.error?.message || translate('error.activationFailed'))
+          body: payload,
+        })
+        const commandPayload = base64Url(JSON.stringify({
+          character,
+          chatId,
+          ...(group ? { group: true } : {}),
+          ...activationFields(policy),
+        }))
+        const result = await binding.session.command(`/dsh-tavern-session ${commandPayload}`)
+        if (!result.ok || !result.value?.matched) {
+          await api('binding', {
+            method: 'DELETE',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ sessionId }),
+          }).catch(() => {})
+          throw new Error(result.error?.message || translate('error.activationFailed'))
+        }
+        reserveTavernSession(ctx, sessionId)
+        const label = sessionLabel(character, chatId, group, policy.architecture)
+        await binding.session.rename(label).catch(() => {})
+        await refreshBootstrap()
+        openSessionView(ctx, sessionId)
+        update({ navigationStatus: '' })
+        if (policy.architecture === 'st') clickTavernTab(0)
+        return sessionId
+      } finally {
+        heldSession.release()
       }
-      reserveTavernSession(ctx, sessionId)
-      const label = sessionLabel(character, chatId, group, policy.architecture)
-      await binding.session.rename(label).catch(() => {})
-      await refreshBootstrap()
-      openSessionView(ctx, sessionId)
-      update({ navigationStatus: '' })
-      if (policy.architecture === 'st') clickTavernTab(0)
-      return sessionId
     }
 
     async function createTavernChat(ctx, character, group = false, policyOverride) {
@@ -1563,19 +1592,26 @@ window.__ModuleLoader__.load({
         }
         const workspace = await ensureTavernWorkspace(ctx)
         const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId)
-        const binding = ctx.sessions.binding(sessionId)
-        if (!binding) throw new Error(translate('error.noBinding'))
-        const commandPayload = base64Url(JSON.stringify({ action: 'novel-open', novelId: novel.novelId }))
-        const result = await binding.session.command(`/dsh-tavern-session ${commandPayload}`)
-        if (!result?.ok || !result.value?.matched) {
-          throw new Error(result.error?.message || translate('error.activationFailed'))
+        // 与 openTavernChat 同因：0.2.0 宿主 connect 不再隐式 retain，先显式
+        // 持有再借 binding，openSessionView 接棒 mainView 保留后归还。
+        const heldSession = DshBindClient.retainHostSession(ctx, sessionId, clientShapeTrace)
+        try {
+          const binding = ctx.sessions.binding(sessionId)
+          if (!binding) throw new Error(translate('error.noBinding'))
+          const commandPayload = base64Url(JSON.stringify({ action: 'novel-open', novelId: novel.novelId }))
+          const result = await binding.session.command(`/dsh-tavern-session ${commandPayload}`)
+          if (!result?.ok || !result.value?.matched) {
+            throw new Error(result.error?.message || translate('error.activationFailed'))
+          }
+          reserveTavernSession(ctx, sessionId)
+          const bound = await waitForNovelBinding(sessionId, novel.novelId)
+          if (!bound) throw new Error(translate('novel.bindTimeout'))
+          await binding.session.rename(novelSessionLabel(novel.title)).catch(() => {})
+          openSessionView(ctx, sessionId)
+          return sessionId
+        } finally {
+          heldSession.release()
         }
-        reserveTavernSession(ctx, sessionId)
-        const bound = await waitForNovelBinding(sessionId, novel.novelId)
-        if (!bound) throw new Error(translate('novel.bindTimeout'))
-        await binding.session.rename(novelSessionLabel(novel.title)).catch(() => {})
-        openSessionView(ctx, sessionId)
-        return sessionId
       } finally {
         update({ navigationStatus: '' })
       }
@@ -1691,8 +1727,15 @@ window.__ModuleLoader__.load({
         })
         await loadChatList(character, true)
         await Promise.all(sessionIds.map(async (sessionId) => {
-          const binding = ctx.sessions.binding(sessionId)
-          await binding?.session.rename(sessionLabel(character, result.id, binding?.group === true, bindingArchitecture(binding))).catch(() => {})
+          // 已绑定会话可能不在主视图（binding() 为 undefined），显式持有后才
+          // 能补齐宿主侧 rename。
+          const heldSession = DshBindClient.retainHostSession(ctx, sessionId, clientShapeTrace)
+          try {
+            const binding = ctx.sessions.binding(sessionId)
+            await binding?.session.rename(sessionLabel(character, result.id, binding?.group === true, bindingArchitecture(binding))).catch(() => {})
+          } finally {
+            heldSession.release()
+          }
         }))
         return result.id
       } catch (cause) {
@@ -1719,14 +1762,20 @@ window.__ModuleLoader__.load({
       }
       const closePayload = base64Url(JSON.stringify({ action: 'close' }))
       await Promise.all(sessionIds.map(async (sessionId) => {
-        const binding = ctx.sessions.binding(sessionId)
-        await api('binding', {
-          method: 'DELETE',
-          headers: jsonHeaders(),
-          body: JSON.stringify({ sessionId }),
-        }).catch(() => {})
-        await binding?.session.command(`/dsh-tavern-session ${closePayload}`).catch(() => {})
-        await ctx.workspaces.archiveSession(sessionId).catch(() => {})
+        // close 桥接命令需要会话作用域存活；不在主视图的绑定会话先显式持有。
+        const heldSession = DshBindClient.retainHostSession(ctx, sessionId, clientShapeTrace)
+        try {
+          const binding = ctx.sessions.binding(sessionId)
+          await api('binding', {
+            method: 'DELETE',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ sessionId }),
+          }).catch(() => {})
+          await binding?.session.command(`/dsh-tavern-session ${closePayload}`).catch(() => {})
+          await ctx.workspaces.archiveSession(sessionId).catch(() => {})
+        } finally {
+          heldSession.release()
+        }
       }))
       const chats = { ...snapshot.chats }
       const revisions = { ...snapshot.revisions }
@@ -3617,13 +3666,13 @@ window.__ModuleLoader__.load({
       const chats = state.chatLists[character]
       const [error, setError] = useState('')
       const [busyChat, setBusyChat] = useState('')
-      useEffect(() => { void loadChatList(character).catch((cause) => setError(cause.message)) }, [character])
+      useEffect(() => { void loadChatList(character).catch((cause) => setError(sidebarErrorDetail(cause))) }, [character])
       const activeBinding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
       const open = (chatId) => {
         setError('')
         void openTavernChat(ctx, character, chatId, group).catch((cause) => {
           update({ navigationStatus: '' })
-          setError(cause.message)
+          setError(sidebarErrorDetail(cause))
         })
       }
       const runAction = (chatId, action) => {
@@ -3691,7 +3740,7 @@ window.__ModuleLoader__.load({
                   setError('')
                   void createTavernChat(ctx, character).catch((cause) => {
                     update({ navigationStatus: '' })
-                    setError(cause.message)
+                    setError(sidebarErrorDetail(cause))
                   })
                 },
               }, h(IconPlusOutline16))),
@@ -3715,7 +3764,7 @@ window.__ModuleLoader__.load({
                   setError('')
                   void createTavernChat(ctx, group.name, true).catch((cause) => {
                     update({ navigationStatus: '' })
-                    setError(cause.message)
+                    setError(sidebarErrorDetail(cause))
                   })
                 },
               }, h(IconPlusOutline16))),

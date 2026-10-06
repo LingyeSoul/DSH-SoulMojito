@@ -3,108 +3,7 @@ import { dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { createHistoryValidator, createHostPersistenceValidator, readSessionRecords } from './verify-tavern-history.mjs'
-
-/**
- * Convert the legacy synthetic import turn into the canonical session-level
- * import shape: the imported assistant message is retained with explicit
- * `{ turn: 0, step: 1 }` payload coordinates and all synthetic boundaries are
- * removed. Sequence references are remapped after the deletion.
- */
-export function repairImportedPrelude(events) {
-  const start = events.findIndex((event) => event.type === 'turn/start'
-    && (event.data?.turn === 0 || event.data?.turn === 1))
-  if (start < 0) throw new Error('Session has no legacy imported turn to repair')
-  const turn = events[start].data.turn
-  const end = events.findIndex((event, index) => index > start
-    && event.type === 'turn/end' && event.data?.turn === turn)
-  if (end < 0) throw new Error(`Imported turn ${turn} has no matching turn/end`)
-
-  const prelude = events.slice(start, end + 1)
-  const assistants = prelude.filter((event) => event.type === 'assistant/message')
-  if (assistants.length !== 1) throw new Error(`Expected one imported assistant; received ${assistants.length}`)
-  const assistant = assistants[0]
-  const source = assistant.data?.message?.source
-  if (source?.kind !== 'model' || source.plugin !== 'dsh-tavern'
-    || source.provider !== 'dsh-tavern' || source.model !== 'agent-tavern-import') {
-    throw new Error(`Assistant at seq ${assistant.seq} is not an AgentTavern import`)
-  }
-
-  for (const event of prelude) {
-    if (event.type === 'user/message') {
-      if (event.data?.source?.kind === 'plugin' && event.data.source.plugin === 'dsh-tavern') continue
-      throw new Error(`Unexpected non-imported user message at seq ${event.seq}`)
-    }
-    if (!['turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end'].includes(event.type)
-      || event.data?.turn !== turn) {
-      throw new Error(`Unexpected event ${event.type} at seq ${event.seq}`)
-    }
-  }
-  if (events.some((event) => event.type === 'turn/start'
-    && event.seq > events[end].seq && event.data?.turn === 0)) {
-    throw new Error('Found another zero-valued turn after the imported prelude')
-  }
-
-  const removed = new Set(prelude.filter((event) => event !== assistant).map((event) => event.seq))
-  const removedBefore = (seq) => [...removed].filter((removedSeq) => removedSeq < seq).length
-  const remapSeq = (seq) => {
-    if (!Number.isSafeInteger(seq) || seq < 0) throw new Error(`Invalid referenced sequence ${seq}`)
-    if (removed.has(seq)) throw new Error(`A retained event references removed sequence ${seq}`)
-    return seq - removedBefore(seq)
-  }
-
-  return events
-    .filter((event) => !removed.has(event.seq))
-    .map((event) => {
-      const next = structuredClone(event)
-      next.seq = remapSeq(event.seq)
-      if (event === assistant) {
-        // The client conversation assembler publishes assistant messages at
-        // `{ turn, step }` coordinates read off the payload; bare messages
-        // kill the event-feed subscriber ("published invalid turn undefined")
-        // and render the chat empty. Turn 0 stays below the live loop's
-        // first turn.
-        next.data.turn = 0
-        next.data.step = 1
-      }
-      if (Array.isArray(next.sourceEventSeqs)) {
-        next.sourceEventSeqs = next.sourceEventSeqs.map(remapSeq)
-      }
-      if (next.type === 'session/title' && Array.isArray(next.data?.messageSeqs)) {
-        next.data.messageSeqs = next.data.messageSeqs.map(remapSeq)
-      }
-      return next
-    })
-}
-
-/**
- * Stamp `{ turn: 0, step: n }` onto imported assistant messages that were
- * persisted in the bare (coordinate-free) shape produced by the 0.3.1
- * importer and the first repair revision. Events keep their seq; only the
- * assistant payloads gain the coordinates the client fold requires.
- */
-export function stampImportedTurnCoordinates(events) {
-  let stamped = 0
-  let lastStep = 0
-  const next = events.map((event) => {
-    if (event.type !== 'assistant/message') return event
-    const source = event.data?.message?.source
-    if (source?.kind !== 'model' || source.plugin !== 'dsh-tavern'
-      || source.provider !== 'dsh-tavern' || source.model !== 'agent-tavern-import') {
-      return event
-    }
-    if (Number.isSafeInteger(event.data.turn) && Number.isSafeInteger(event.data.step)) {
-      lastStep = Math.max(lastStep, event.data.step)
-      return event
-    }
-    const mutated = structuredClone(event)
-    lastStep += 1
-    mutated.data.turn = 0
-    mutated.data.step = lastStep
-    stamped += 1
-    return mutated
-  })
-  return { events: next, stamped }
-}
+import { repairSessionTurns } from './lib/session-turn-repair.mjs'
 
 /**
  * Drop `sourceEventSeqs` entries that are not earlier than the owning event.
@@ -163,12 +62,14 @@ function decodeFrames(buffer) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  // --stamp-only: sessions whose `turn/start { turn: 1 }` is the live loop's
-  // first real turn (session-level greeting import plus native-loop history)
-  // fail repairImportedPrelude's legacy-shape probe, which would otherwise
-  // hard-error before the coordinate stamp runs. Stamping alone is what the
-  // client fold requires; the legacy prelude rewrite stays opt-out.
+  // 本脚本历史上的两个 turn-0 产出函数（repairImportedPrelude /
+  // stampImportedTurnCoordinates）已被删除：`{ turn: 0 }` 被 0.2.0-rc.2 的
+  // v2→v3 迁移拒绝（"turn must be positive"），整会话不可加载。所有 legacy
+  // 导入形状（裸消息、turn-0 无边界、turn-0/重复/跳号包裹）统一由
+  // scripts/lib/session-turn-repair.mjs 修复成正 turn 包裹。--stamp-only
+  // 保留为兼容别名（引擎统一处理，不再有形状探测分支）。
   const stampOnly = process.argv.includes('--stamp-only')
+  if (stampOnly) console.log('note: --stamp-only is accepted for compatibility; the unified engine handles all legacy import shapes')
   const positional = process.argv.slice(2).filter((argument) => argument !== '--stamp-only')
   const [dependencyRoot, artifactArgument] = positional
   if (!dependencyRoot || !artifactArgument) {
@@ -189,26 +90,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     dependencyRoot,
     dirname(dirname(dirname(artifact))),
   )
+  // decodeStorageRecord 把列压缩行展开成逻辑事件（seq/time 标准、宽度 1），
+  // 引擎在展开空间工作；encodeArtifact 写回展开形态（v0 读取器原生词表）。
   const before = decodeEvents(storedBefore, decodeStorageRecord)
-  let working = before
-  let removedEvents = 0
-  if (stampOnly) {
-    console.log('stamp-only: skipping legacy imported-turn probe')
-  } else {
-    try {
-      working = repairImportedPrelude(before)
-      removedEvents = before.length - working.length
-    } catch (error) {
-      if (!/no legacy imported turn/i.test(error.message)) throw error
-    }
-  }
-  const { events: stamped, stamped: stampedCount } = stampImportedTurnCoordinates(working)
-  const { events: after, trimmed } = trimForwardSourceEventRefs(stamped)
-  if (removedEvents === 0 && stampedCount === 0 && trimmed === 0) {
+  const repaired = repairSessionTurns(before)
+  const { events: after, trimmed } = trimForwardSourceEventRefs(repaired === null ? before : repaired.events)
+  const stats = repaired === null ? null : repaired.stats
+  if (stats === null && trimmed === 0) {
     console.log(JSON.stringify({
       artifact,
       repaired: false,
-      note: 'No legacy imported turn, no bare imported assistant messages, and no forward sourceEventSeqs; nothing to repair.',
+      note: 'Turn coordinates are healthy and no forward sourceEventSeqs; nothing to repair.',
     }, null, 2))
   } else {
     validateEvents(after, adoptSessionEvent, validateHistory)
@@ -247,8 +139,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       backup,
       beforeEvents: before.length,
       afterEvents: after.length,
-      removedEvents,
-      stampedEvents: stampedCount,
+      turnStats: stats,
       trimmedRefEvents: trimmed,
       hostInspectionEvents: inspection.events.length,
       validated: true,

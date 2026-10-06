@@ -444,6 +444,11 @@ function checkClientArchitectureText(text) {
     "useNativeTavernTabFilter(Boolean(currentBinding && bindingArchitecture(currentBinding) === 'st'))",
     "if (policy.architecture === 'st') clickTavernTab(0)",
     'function reserveTavernSession(ctx, sessionId)',
+    // 0.2.0-rc.2 契约：connectWorkspace 内部走 sessions.create，不隐式保留
+    // 作用域；借 binding() 前必须显式 retain（ISessions.create 文档："retain
+    // it before borrowing its binding"）。
+    'DshBindClient.retainHostSession(ctx, sessionId, clientShapeTrace)',
+    'heldSession.release()',
     'select: selectTavernComposer',
     "disabled: bootstrap.agentTavern?.managed?.available !== true",
     'checked: bootstrap.state.agentTavernPreloadAssets === true',
@@ -1434,6 +1439,8 @@ const gates = [
         "useNativeTavernTabFilter(Boolean(currentBinding && bindingArchitecture(currentBinding) === 'st'))",
         "if (policy.architecture === 'st') clickTavernTab(0)",
         'function reserveTavernSession(ctx, sessionId)',
+        'DshBindClient.retainHostSession(ctx, sessionId, clientShapeTrace)',
+        'heldSession.release()',
         'select: selectTavernComposer',
         "disabled: bootstrap.agentTavern?.managed?.available !== true",
         'checked: bootstrap.state.agentTavernPreloadAssets === true',

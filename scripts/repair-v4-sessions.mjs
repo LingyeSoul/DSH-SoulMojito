@@ -1,6 +1,6 @@
 /**
- * Repair DSH format-v4 session artifacts poisoned by dsh-tavern ≤0.3.9's
- * pre-compat writers (the 0.2.0-rc.2 admission failures):
+ * Repair DSH session artifacts poisoned by dsh-tavern ≤0.3.9's pre-compat
+ * writers (the 0.2.0-rc.2 admission failures):
  *
  *   A. `assistant/chunk` rows — v0 vocabulary retired at the v1→v2 edge; the v4
  *      loader refuses the WHOLE artifact ("unknown to this harness and not
@@ -13,6 +13,15 @@
  *      (`turn/start` must equal nextTurn counting from 1). Rewritten into a
  *      fully opened/closed import turn; later live turns are renumbered by the
  *      number of inserted turns so nextTurn sequencing stays valid.
+ *   D. 裸 plugin source 归一化为 producer-owned kind。
+ *
+ * A-D 只作用于 version 4 工件。version 0 工件走同族的 turn 坐标修复
+ * （scripts/lib/session-turn-repair.mjs：孤儿 turn-0 导入包裹、重复/跳号
+ * turn/start 校正、密集重编号 + sourceEventSeqs/messageSeqs 引用重写）——
+ * v0 的 chunk/settlement/source 语义不同（v4 专属成员会毒化老工件），其余
+ * 修复类不适用。v0 修复后必须通过真实宿主 observe（持久化 open+read，
+ * 即 "failed to observe session" 的原生链路）与客户端会话折叠验证；
+ * 验证失败自动回滚备份。
  *
  * Usage:
  *   node scripts/repair-v4-sessions.mjs <session.jsonl.zstd | sessions-root> [--apply] [--runtime <node_modules>]
@@ -25,9 +34,11 @@
  * Quit `dsh web` first: a concurrently appended frame would be lost.
  */
 import { copyFileSync, existsSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
+import { createRequire } from 'node:module'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
+import { repairSessionTurns } from './lib/session-turn-repair.mjs'
 
 const args = process.argv.slice(2)
 const apply = args.includes('--apply')
@@ -96,12 +107,40 @@ async function loadAdmission() {
       const v3to4 = await import(pathToFileURL(migration).href)
       const dshSession = await import(pathToFileURL(session).href)
       return {
+        base,
         assertRelationships: v3to4.assertReleasedV4Relationships,
         known: dshSession.KNOWN_SESSION_EVENT_TYPES,
       }
     }
   }
   throw new Error('cannot locate @deepseek-ai/dsh-session-format-v3-to-v4 + dsh-session — pass --runtime <node_modules> (gates cache: pnpm check installs .npm-cache/dsh-runtime)')
+}
+
+/**
+ * v0 工件的硬验证：通过真实宿主持久化栈 open+read 整个工件——这正是
+ * "failed to observe session … refuses this format v2 Session" 的原生链路
+ * （v0→v1→v2→v3→v4 代际迁移 + 解码）。0.2.0-rc.2 的 jsonl 持久化包只导出
+ * default；老宿主是具名导出，两种形状都接。
+ */
+async function loadObserveValidator(base) {
+  const require2 = createRequire(join(base, '@deepseek-ai', 'dsh-session', 'lib', 'index.js'))
+  const { Context } = require2('@deepseek-ai/cordis')
+  const { SessionStore } = require2('@deepseek-ai/dsh-session')
+  const persistenceModule = require2('@deepseek-ai/dsh-session-persistence-jsonl')
+  const JsonlSessionPersistence = persistenceModule.JsonlSessionPersistence ?? persistenceModule.default
+  return async (artifact, sessionId) => {
+    const context = new Context()
+    new SessionStore(context)
+    const persistence = new JsonlSessionPersistence(context, {
+      // <sessions-root>/<encoded-workspace>/<session-dir>/session.jsonl.zstd
+      root: dirname(dirname(dirname(resolve(artifact)))),
+      compression: 'zstd',
+    })
+    const handle = await persistence.open(sessionId, 'read')
+    const result = await handle.read()
+    if (handle.id !== sessionId) throw new Error(`observed ${handle.id} for ${sessionId}`)
+    return result.events.length
+  }
 }
 
 /** 物理首行（{type:'session',...}）转逻辑 header：去掉物理 framing 成员。 */
@@ -245,6 +284,8 @@ const artifactPaths = statSync(root).isDirectory()
   : [root]
 
 const admission = await loadAdmission()
+let observeValidator = undefined
+let foldValidator = undefined
 let touched = 0
 let clean = 0
 let failed = 0
@@ -260,7 +301,105 @@ for (const path of artifactPaths) {
   }
   const frameLines = frames.map((frame) => zstdDecompressSync(buffer.subarray(frame.start, frame.end)).toString('utf8').split('\n').filter((line) => line.trim() !== ''))
   const rows = frameLines.flat().map((line) => JSON.parse(line))
-  if (rows[0]?.type !== 'session' || rows[0].version !== 4) {
+  if (rows[0]?.type !== 'session') {
+    clean += 1
+    continue
+  }
+
+  if (rows[0].version === 0) {
+    // v0 工件：只做 turn 坐标修复（chunk/settlement/source 语义与 v4 不同，
+    // 见文件头）。修复结果必须通过真实宿主 observe；--apply 写回后验证，
+    // 失败回滚备份。dry-run 先 observe 现文件确认症状再报告计划。
+    if (observeValidator === undefined) {
+      const runtimeBase = admission.base
+      if (runtimeBase === undefined) throw new Error('v0 repair needs the host runtime (pass --runtime)')
+      observeValidator = await loadObserveValidator(runtimeBase)
+    }
+    const sessionId = rows[0].id
+    if (typeof sessionId !== 'string' || basename(dirname(resolve(path))) !== sessionId) {
+      // 扁平/旧版布局：目录名不是 id 的编码，当前宿主根本枚举不到这些会话，
+      // 修复对加载无意义；如实跳过并提示。
+      console.log(`skip ${path}: flat/legacy layout (dir ≠ session id) — invisible to the current host`)
+      clean += 1
+      continue
+    }
+    let repair = null
+    try {
+      repair = repairSessionTurns(rows.slice(1))
+    } catch (error) {
+      console.error(`SKIP (turn repair threw) ${path}: ${error.message}`)
+      failed += 1
+      continue
+    }
+    if (repair === null) {
+      try {
+        await observeValidator(path, sessionId)
+        console.log(`clean ${path}`)
+      } catch (error) {
+        console.error(`DIRTY-BUT-UNRECOGNIZED ${path}: observe fails (${error.message}) but no known v0 repair applies — manual inspection needed`)
+        failed += 1
+      }
+      clean += 1
+      continue
+    }
+    let backup = undefined
+    try {
+      if (foldValidator === undefined) {
+        try {
+          const { createHistoryValidator } = await import('./verify-tavern-history.mjs')
+          foldValidator = createHistoryValidator(admission.base)
+        } catch (error) {
+          console.warn(`warn: client fold validator unavailable (${error.message}); host observe remains the gate`)
+          foldValidator = null
+        }
+      }
+      if (foldValidator !== null && foldValidator !== undefined) {
+        foldValidator([rows[0], ...repair.events])
+      }
+      const summary = `${repair.stats.orphanWraps} orphan import(s) wrapped, ${repair.stats.coercedTurnStarts} turn/start(s) coerced, ${repair.stats.shiftedEvents} event(s) renumbered`
+      const suffix = apply ? '' : ' (dry-run)'
+      // v0 工件容器契约：第一帧必须恰好一行 header，body 随后。宿主读取器
+      // 对第一帧行长严格（"first frame is not exactly one header line"）。
+      const headerFrame = zstdCompressSync(Buffer.from(`${JSON.stringify(rows[0])}\n`, 'utf8'))
+      const bodyFrame = zstdCompressSync(Buffer.from(`${repair.events.map((row) => JSON.stringify(row)).join('\n')}\n`, 'utf8'))
+      const encoded = Buffer.concat([headerFrame, bodyFrame])
+      const decoded = scanZstdFrames(encoded)
+        .map((frame) => zstdDecompressSync(encoded.subarray(frame.start, frame.end)).toString('utf8'))
+        .join('')
+      const expectedPlaintext = `${[rows[0], ...repair.events].map((row) => JSON.stringify(row)).join('\n')}\n`
+      if (decoded !== expectedPlaintext) throw new Error('repaired artifact failed compressed round-trip validation')
+      if (!apply) {
+        try {
+          await observeValidator(path, sessionId)
+          console.log(`repair${suffix} ${path}: ${summary}; note: current artifact already passes observe — repair is preventive`)
+        } catch {
+          console.log(`repair${suffix} ${path}: ${summary}`)
+        }
+        touched += 1
+        continue
+      }
+      backup = `${path}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`
+      copyFileSync(path, backup)
+      const temporary = `${path}.repair-${process.pid}.tmp`
+      writeFileSync(temporary, encoded)
+      renameSync(temporary, path)
+      const observed = await observeValidator(path, sessionId)
+      console.log(`repair${suffix} ${path}: ${summary}; host observe passes (${observed} events)`)
+      console.log(`   backup: ${backup}`)
+      touched += 1
+    } catch (error) {
+      if (backup !== undefined && existsSync(backup)) {
+        copyFileSync(backup, path)
+        console.error(`FAILED verification ${path}: ${error.message} — original restored from backup`)
+      } else {
+        console.error(`FAILED verification ${path}: ${error.message} — artifact left untouched`)
+      }
+      failed += 1
+    }
+    continue
+  }
+
+  if (rows[0].version !== 4) {
     clean += 1
     continue
   }

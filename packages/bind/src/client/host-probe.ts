@@ -18,6 +18,8 @@ export interface ClientWorkspaceContext {
   }
   sessions?: {
     open?: (sessionId: string) => unknown
+    binding?: (sessionId: string) => unknown
+    retain?: (target: string, options: { source: string }) => { release?: () => void } | undefined
   }
   [key: string]: unknown
 }
@@ -28,12 +30,23 @@ export type ClientProbePath = 'uiWorkspace' | 'workspaces' | 'unavailable'
 /** 会话打开命中的绑定路径：uiWorkspace.openSession 为 0.2.0 服务面，sessions.open 为旧宿主回退。 */
 export type ClientOpenSessionPath = 'uiWorkspace' | 'sessions' | 'unavailable'
 
+/** 会话保留命中的路径：retain 为显式保留（0.2.0 契约），borrow 为旧宿主直接借用，unavailable 为两面缺失。 */
+export type ClientRetainPath = 'retain' | 'borrow' | 'unavailable'
+
+/** retainHostSession 返回的持有句柄；release 幂等，回退路径为空操作。 */
+export interface HostSessionHold {
+  readonly path: ClientRetainPath
+  release(): void
+}
+
 /** 连接探测轨迹；client half 持有一份并在诊断输出里上报。 */
 export interface ClientShapeTrace {
   connectPath?: ClientProbePath
   connectCalls: number
   openSessionPath?: ClientOpenSessionPath
   openSessionCalls: number
+  retainPath?: ClientRetainPath
+  retainCalls: number
   /** 宿主 UI 原子的解析结果；见 ui-primitives.ts。 */
   uiPrimitives?: UiPrimitiveShapeTrace
 }
@@ -48,7 +61,7 @@ export type {
 } from './ui-primitives.js'
 
 export function createClientShapeTrace(): ClientShapeTrace {
-  return { connectCalls: 0, openSessionCalls: 0 }
+  return { connectCalls: 0, openSessionCalls: 0, retainCalls: 0 }
 }
 
 export function connectHostWorkspace(
@@ -114,4 +127,56 @@ export function openHostSession(
     trace.openSessionCalls += 1
   }
   throw new Error('no session open face on this host (uiWorkspace.openSession/sessions.open both unavailable)')
+}
+
+/**
+ * 以插件名义显式 retain 一个宿主会话作用域，使持有期内 ctx.sessions
+ * .binding(sessionId) 可借。DSH 0.2.0-rc.2 起 uiWorkspace.connectWorkspace
+ * 内部走 sessions.create（宿主契约「retain it before borrowing its
+ * binding」），不再隐式保留；binding() 只返回已 retain 的作用域，未保留时
+ * 恒为 undefined。调用方在 openSessionView 建立 mainView 保留后 release
+ * 归还本引用，全程保持引用计数 ≥ 1。
+ *
+ * retain 面缺失、宿主拒绝或 reference 形状不可用时退回旧宿主的直接借用
+ * （binding 无需 retain），本函数自身永不抛错；两面缺失时标记 unavailable。
+ */
+export function retainHostSession(
+  ctx: ClientWorkspaceContext,
+  sessionId: string,
+  trace?: ClientShapeTrace,
+): HostSessionHold {
+  const sessions = ctx?.sessions
+  if (typeof sessions?.retain === 'function') {
+    try {
+      const reference = sessions.retain(sessionId, { source: 'dsh-tavern' })
+      const releaseReference = reference?.release
+      if (typeof releaseReference === 'function') {
+        if (trace) {
+          trace.retainPath = 'retain'
+          trace.retainCalls += 1
+        }
+        let released = false
+        return {
+          path: 'retain',
+          release() {
+            if (released) return
+            released = true
+            releaseReference()
+          },
+        }
+      }
+    } catch {
+      // 未知会话或宿主拒绝 retain：落入下方 borrow 回退，调用方的 binding()
+      // 借用语义与旧宿主一致（可能为 undefined，由调用方决定跳过或报错）。
+    }
+  }
+  const fallbackPath: ClientRetainPath = typeof sessions?.binding === 'function' ? 'borrow' : 'unavailable'
+  if (trace) {
+    trace.retainPath = fallbackPath
+    trace.retainCalls += 1
+  }
+  return {
+    path: fallbackPath,
+    release() {},
+  }
 }

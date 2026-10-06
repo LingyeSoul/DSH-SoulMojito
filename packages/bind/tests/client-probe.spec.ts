@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { connectHostWorkspace, createClientShapeTrace, openHostSession } from '../src/client/host-probe.js'
+import { connectHostWorkspace, createClientShapeTrace, openHostSession, retainHostSession } from '../src/client/host-probe.js'
 
 function uiWorkspaceHost() {
   const calls: string[] = []
@@ -108,6 +108,8 @@ describe('createClientShapeTrace', () => {
     expect(trace.connectCalls).toBe(0)
     expect(trace.openSessionPath).toBeUndefined()
     expect(trace.openSessionCalls).toBe(0)
+    expect(trace.retainPath).toBeUndefined()
+    expect(trace.retainCalls).toBe(0)
   })
 })
 
@@ -147,5 +149,95 @@ describe('openHostSession', () => {
     const { ctx, calls } = openSessionHost()
     expect(() => openHostSession(ctx, 's-5')).not.toThrow()
     expect(calls).toEqual(['uiWorkspace:s-5'])
+  })
+})
+
+function retainHost() {
+  const calls: string[] = []
+  let live = false
+  return {
+    calls,
+    ctx: {
+      sessions: {
+        // 宿主语义镜像：binding() 只在作用域被 retain 期间返回绑定。
+        binding: (id: string) => (live ? { sessionId: id } : undefined),
+        retain: (id: string, options: { source: string }) => {
+          calls.push(`retain:${id}:${options.source}`)
+          live = true
+          return {
+            release: () => {
+              live = false
+              calls.push(`release:${id}`)
+            },
+          }
+        },
+      },
+    },
+  }
+}
+
+describe('retainHostSession', () => {
+  it('retains under the plugin source so binding() becomes borrowable, and releases exactly once', () => {
+    const { ctx, calls } = retainHost()
+    const trace = createClientShapeTrace()
+    const hold = retainHostSession(ctx, 's-1', trace)
+    expect(hold.path).toBe('retain')
+    expect(ctx.sessions.binding('s-1')).toEqual({ sessionId: 's-1' })
+    hold.release()
+    expect(ctx.sessions.binding('s-1')).toBeUndefined()
+    hold.release()
+    expect(calls).toEqual(['retain:s-1:dsh-tavern', 'release:s-1'])
+    expect(trace.retainPath).toBe('retain')
+    expect(trace.retainCalls).toBe(1)
+  })
+
+  it('falls back to borrowing when the retain face is missing', () => {
+    const trace = createClientShapeTrace()
+    const ctx = { sessions: { binding: (id: string) => ({ sessionId: id }) } }
+    const hold = retainHostSession(ctx, 's-2', trace)
+    expect(hold.path).toBe('borrow')
+    expect(() => hold.release()).not.toThrow()
+    expect(trace.retainPath).toBe('borrow')
+    expect(trace.retainCalls).toBe(1)
+  })
+
+  it('falls back to borrowing when the host refuses the retain (unknown session)', () => {
+    const trace = createClientShapeTrace()
+    const ctx = {
+      sessions: {
+        binding: (id: string) => ({ sessionId: id }),
+        retain: () => {
+          throw new Error('SessionCreateError')
+        },
+      },
+    }
+    const hold = retainHostSession(ctx, 's-3', trace)
+    expect(hold.path).toBe('borrow')
+    expect(() => hold.release()).not.toThrow()
+    expect(trace.retainPath).toBe('borrow')
+  })
+
+  it('records unavailable when neither face exists', () => {
+    const trace = createClientShapeTrace()
+    const hold = retainHostSession({}, 's-4', trace)
+    expect(hold.path).toBe('unavailable')
+    expect(() => hold.release()).not.toThrow()
+    expect(trace.retainPath).toBe('unavailable')
+    expect(trace.retainCalls).toBe(1)
+  })
+
+  it('falls back when the retained reference has no callable release', () => {
+    const trace = createClientShapeTrace()
+    const ctx = { sessions: { binding: (id: string) => ({ sessionId: id }), retain: () => ({}) } }
+    const hold = retainHostSession(ctx, 's-5', trace)
+    expect(hold.path).toBe('borrow')
+    expect(() => hold.release()).not.toThrow()
+  })
+
+  it('works without a trace', () => {
+    const { ctx } = retainHost()
+    const hold = retainHostSession(ctx, 's-6')
+    expect(hold.path).toBe('retain')
+    expect(() => hold.release()).not.toThrow()
   })
 })
