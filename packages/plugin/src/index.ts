@@ -56,6 +56,15 @@ import { NovelProjector } from './agent-novel/projector.js'
 import { isNovelAuthorMessage, receiveAuthorMessage } from './agent-novel/requirements.js'
 import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
 import { addGuide, emitGuidesChanged, formatGuidesBlock, normalizeGuides, removeGuide } from './guides.js'
+import {
+  readChatVariables,
+  readMvuReceipts,
+  recordMvuTurnReceipt,
+  renderMvuStatusTemplate,
+  retryMvuSettlement,
+  snapshotChatVariables,
+  statusTemplateOf,
+} from './mvu.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
 import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type SessionImportAppend } from './agent-tavern/projector.js'
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from './agent-tavern/deduce.js'
@@ -1115,6 +1124,66 @@ async function handleApi(ctx, req, res) {
     return sendJson(res, 200, { ok: true, items: result.items, generatedAt: result.generatedAt, revision: result.revision })
   }
 
+  // MVU 结算重试（提案 0012 P1）：只对最后一条助手楼层重跑模板输出渲染的变量
+  // 写穿部分（不重跑 AI_OUTPUT regex——非幂等），正文不动；CAS 冲突走既有通道。
+  if (method === 'POST' && route === 'mvu/retry') {
+    const body = await readJson(req)
+    const state = await db.getState()
+    assertStGenerationBinding(state, body.sessionId)
+    const characterName = typeof body.character === 'string' ? body.character : state.activeCharacter
+    const chatId = body.chatId
+    if (!characterName || typeof chatId !== 'string') throw new Error('character and chatId are required')
+    if (typeof body.revision !== 'string') throw new Error('revision is required')
+    const snapshot = await db.getChatSnapshot(characterName, chatId)
+    if (!snapshot) throw new Error('character or chat not found')
+    const result = await retryMvuSettlement(db, {
+      state,
+      characterName,
+      chatId,
+      snapshot,
+      revision: body.revision,
+      sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
+      templatesActive: templatesEnabledFlag && templatesEnabled(),
+    })
+    return sendJson(res, 200, { ok: true, receipt: result.receipt, revision: result.revision, variables: result.variables })
+  }
+
+  // MVU 状态（提案 0012 P1）：变量 + 回执快照；卡片约定字段
+  // data.extensions.agentTavern.statusTemplate（0013 工作台产出）存在时附带
+  // 模板化 renderedHtml（接线点）；渲染失败降级为不返回该字段，不 500。
+  if (method === 'GET' && route.startsWith('mvu/status/')) {
+    const rest = route.slice('mvu/status/'.length)
+    const separator = rest.indexOf('/')
+    if (separator === -1) throw new Error('expected route mvu/status/<character>/<chatId>')
+    const characterName = decodeURIComponent(rest.slice(0, separator))
+    const chatId = decodeURIComponent(rest.slice(separator + 1))
+    const snapshot = await db.getChatSnapshot(characterName, chatId)
+    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'character or chat not found' })
+    const chat = snapshot.chat
+    const variables = readChatVariables(chat)
+    const receipts = readMvuReceipts(chat)
+    const character = await db.getCharacter(characterName)
+    const statusTemplate = character ? statusTemplateOf(character.card) : undefined
+    let renderedHtml: string | undefined
+    if (statusTemplate !== undefined) {
+      const state = await db.getState()
+      try {
+        renderedHtml = await renderMvuStatusTemplate({
+          db, state, characterName, character: character!, chat, chatId, template: statusTemplate,
+        })
+      } catch {
+        // 渲染失败降级：不返回 renderedHtml，状态接口本身不失败
+      }
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      available: Object.keys(variables).length > 0,
+      variables,
+      receipts,
+      ...(renderedHtml !== undefined ? { renderedHtml } : {}),
+    })
+  }
+
   if (method === 'GET' && route.startsWith('world/')) {
     const name = decodeURIComponent(route.slice('world/'.length))
     const book = await db.getWorld(name)
@@ -1973,6 +2042,8 @@ interface GenerationOptions {
 async function runGeneration(ctx, db, options: GenerationOptions) {
   const { state, characterName, chatId, snapshot, mode, group, write, signal } = options
   const chat = snapshot.chat
+  // MVU 回执（提案 0012 P1）：深拷贝本轮结算前的变量基线，保存前 diff 出变更集落回执
+  const mvuVariablesBefore = snapshotChatVariables(chat)
   let revision = snapshot.revision
   let hostTrace
   // {{user}} / 消息落库名：激活 persona 名称（ST name1 语义），未配置时回退默认
@@ -2314,6 +2385,13 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   } else {
     delete chat.header.chat_metadata.variables
   }
+  // MVU 结算回执（提案 0012 P1）：diff 变量写穿前后（before 取自生成开始的基线），
+  // 把结算结果落成可见、可重试的回执（环形 20 条）；无变量也无变更的局不写 mvu 键
+  // （与 guides 空置摘键约定一致）。failures 收集本轮 templateWarnings。
+  recordMvuTurnReceipt(chat, mvuVariablesBefore, {
+    turnKey: String(chat.messages.length - 1),
+    failures: tpl?.warnings ?? [],
+  })
   revision = await db.saveChat(characterName, chatId, chat, revision)
   hostTrace = recordTavernSessionAssistant(hostTrace, finalText, finalReasoning, provider, model, hostUsage)
   return { chat, revision, speaker: speakerName }
