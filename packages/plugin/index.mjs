@@ -8738,6 +8738,59 @@ function createDshAgentTavernAdapter(ctx) {
   };
 }
 
+// packages/plugin/src/guides.ts
+var GUIDES_MAX_COUNT = 8;
+var GUIDE_MAX_TEXT_LENGTH = 500;
+var GUIDES_BLOCK_HEADER = "Conversation guides (persistent user directives; apply to every reply):";
+function normalizeGuides(value) {
+  if (!Array.isArray(value)) return [];
+  const guides = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const { id, text, createdAt } = entry;
+    if (typeof id !== "string" || id === "") continue;
+    if (typeof text !== "string" || text.trim() === "") continue;
+    if (typeof createdAt !== "string" || createdAt === "") continue;
+    guides.push({ id, text: text.trim(), createdAt });
+  }
+  return guides;
+}
+function addGuide(guides, text) {
+  if (typeof text !== "string" || text.trim() === "") {
+    return { ok: false, error: "guide text is required and must be a non-empty string" };
+  }
+  const trimmed = text.trim();
+  if (trimmed.length > GUIDE_MAX_TEXT_LENGTH) {
+    return { ok: false, error: `guide text must be at most ${GUIDE_MAX_TEXT_LENGTH} characters (got ${trimmed.length})` };
+  }
+  if (guides.length >= GUIDES_MAX_COUNT) {
+    return { ok: false, error: `guide limit reached: at most ${GUIDES_MAX_COUNT} guides per chat` };
+  }
+  const guide = { id: crypto.randomUUID(), text: trimmed, createdAt: (/* @__PURE__ */ new Date()).toISOString() };
+  return { ok: true, guide, guides: [...guides, guide] };
+}
+function removeGuide(guides, id) {
+  const next = guides.filter((guide) => guide.id !== id);
+  return { removed: next.length !== guides.length, guides: next };
+}
+function formatGuidesBlock(guides) {
+  const normalized = normalizeGuides(guides);
+  if (normalized.length === 0) return void 0;
+  return [
+    GUIDES_BLOCK_HEADER,
+    ...[...normalized].sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((guide) => `- ${guide.text}`)
+  ].join("\n");
+}
+var guidesChangedListeners = /* @__PURE__ */ new Set();
+async function emitGuidesChanged(character, chatId) {
+  for (const listener of [...guidesChangedListeners]) {
+    try {
+      await listener(character, chatId);
+    } catch {
+    }
+  }
+}
+
 // packages/plugin/src/agent-tavern/anchor.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { homedir } from "node:os";
@@ -11057,6 +11110,262 @@ function mergeTemplateLocalVars(chat, macroLocalSnapshot) {
   }
 }
 
+// packages/plugin/src/rewrite.ts
+var FEEDBACK_MAX_LENGTH = 1e3;
+function optionalFeedback(value) {
+  if (value === void 0) return void 0;
+  if (typeof value !== "string") throw new Error("feedback must be a string");
+  const trimmed = value.trim();
+  if (trimmed === "") return void 0;
+  if (trimmed.length > FEEDBACK_MAX_LENGTH) {
+    throw new Error(`feedback must be at most ${FEEDBACK_MAX_LENGTH} characters`);
+  }
+  return trimmed;
+}
+function formatRewriteBlock(feedback) {
+  if (feedback === void 0 || feedback === "") return void 0;
+  return `Rewrite directive for this reply (user feedback; the previous reply is being rewritten): ${feedback}`;
+}
+
+// packages/plugin/src/candidates.ts
+var CANDIDATE_HISTORY_WINDOW = 10;
+var CANDIDATE_MAX_COUNT = 6;
+var CANDIDATE_MAX_TEXT_LENGTH = 200;
+var CANDIDATE_CARD_EXCERPT = 1500;
+var DEFAULT_USER = "User";
+function excerpt(text, max2) {
+  if (typeof text !== "string") return void 0;
+  const trimmed = text.trim();
+  if (trimmed === "") return void 0;
+  return trimmed.length > max2 ? `${trimmed.slice(0, max2)}\u2026` : trimmed;
+}
+function formatGuidesBlock2(guides) {
+  if (guides.length === 0) return void 0;
+  const lines = guides.slice().sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? "")).map((guide) => `- ${guide.text}`);
+  return ["Conversation guides (persistent user directives; apply to every reply):", ...lines].join("\n");
+}
+function buildCandidateRequest(input) {
+  const systemParts = [
+    [
+      "You propose candidate inputs for an ongoing roleplay chat.",
+      "Based on the character, the user persona, the recent chat history and any conversation guides, propose 3 to 6 candidates for what the user could send next.",
+      "Rules:",
+      `- Each candidate is at most ${CANDIDATE_MAX_TEXT_LENGTH} characters and is written as the user's next message.`,
+      `- kind "action" proposes something the user's character does or says; kind "scene" proposes a scene change or a narrative shift.`,
+      "- Ground every candidate in the provided history and character; do not advance the plot yourself and do not narrate outcomes \u2014 only propose.",
+      '- Reply with ONLY a strict JSON array of objects, e.g. [{"kind":"action","text":"..."},{"kind":"scene","text":"..."}]. No prose, no code fences.'
+    ].join("\n")
+  ];
+  const card = [`Character: ${input.character.name}`];
+  const description = excerpt(input.character.description, CANDIDATE_CARD_EXCERPT);
+  if (description !== void 0) card.push(`Description: ${description}`);
+  const personality = excerpt(input.character.personality, CANDIDATE_CARD_EXCERPT);
+  if (personality !== void 0) card.push(`Personality: ${personality}`);
+  const scenario = excerpt(input.character.scenario, CANDIDATE_CARD_EXCERPT);
+  if (scenario !== void 0) card.push(`Scenario: ${scenario}`);
+  card.push(`User persona name: ${input.userName}`);
+  systemParts.push(card.join("\n"));
+  const guidesBlock = formatGuidesBlock2(input.guides ?? []);
+  if (guidesBlock !== void 0) systemParts.push(guidesBlock);
+  if (input.feedback !== void 0) {
+    const revision = [];
+    if (input.previousCandidates !== void 0 && input.previousCandidates.length > 0) {
+      revision.push("Previous candidates (the user reviewed them and asked for a revision):");
+      for (const item of input.previousCandidates) {
+        revision.push(`- [${item.kind}] ${item.text}`);
+      }
+    }
+    revision.push(`User feedback on the candidates: ${input.feedback}`);
+    revision.push("Revise the candidates according to the feedback: keep what the feedback does not object to, and replace or adjust what it asks to change. Follow the same output rules.");
+    systemParts.push(revision.join("\n"));
+  }
+  const history = input.history.slice(-CANDIDATE_HISTORY_WINDOW);
+  const messages = history.map((m) => ({
+    role: m.isUser ? "user" : "assistant",
+    content: `[${m.name}] ${m.text}`
+  }));
+  messages.push({
+    role: "user",
+    content: input.feedback !== void 0 ? "Propose 3 to 6 candidate inputs for the user's next message, revising the previous candidates according to the user feedback. Reply with ONLY the JSON array." : "Propose 3 to 6 candidate inputs for the user's next message. Reply with ONLY the JSON array."
+  });
+  return { system: systemParts.join("\n\n"), messages };
+}
+function tryParseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return void 0;
+  }
+}
+function extractFirstJsonArray(text) {
+  const trimmed = text.trim();
+  const direct = tryParseJson(trimmed);
+  if (Array.isArray(direct)) return direct;
+  const start = trimmed.indexOf("[");
+  if (start === -1) throw new Error("candidate output contains no JSON array");
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inString && ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') inString = !inString;
+    else if (!inString && ch === "[") depth++;
+    else if (!inString && ch === "]") {
+      depth--;
+      if (depth === 0) {
+        const parsed = tryParseJson(trimmed.slice(start, i + 1));
+        if (parsed === void 0) throw new Error("candidate output is not valid JSON");
+        if (!Array.isArray(parsed)) throw new Error("candidate output is not a JSON array");
+        return parsed;
+      }
+    }
+  }
+  throw new Error("candidate output contains no JSON array");
+}
+function normalizeCandidateText(value) {
+  return typeof value === "string" ? value.trim().slice(0, CANDIDATE_MAX_TEXT_LENGTH) : "";
+}
+function parseCandidates(text) {
+  const raw = extractFirstJsonArray(text);
+  const items = [];
+  for (const entry of raw) {
+    if (items.length >= CANDIDATE_MAX_COUNT) break;
+    if (typeof entry === "string") {
+      const candidate2 = normalizeCandidateText(entry);
+      if (candidate2 !== "") items.push({ kind: "action", text: candidate2 });
+      continue;
+    }
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry;
+    const candidate = normalizeCandidateText(record.text);
+    if (candidate === "") continue;
+    items.push({ kind: record.kind === "scene" ? "scene" : "action", text: candidate });
+  }
+  if (items.length === 0) throw new Error("candidate output contained no usable candidates");
+  return items;
+}
+function readStoredCandidates(chat) {
+  const raw = chat?.header?.chat_metadata?.candidates;
+  if (raw === void 0 || raw === null || typeof raw !== "object" || Array.isArray(raw)) return void 0;
+  const record = raw;
+  if (!Array.isArray(record.items)) return void 0;
+  const items = [];
+  for (const entry of record.items) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const candidate = normalizeCandidateText(entry.text);
+    if (candidate === "") continue;
+    items.push({
+      kind: entry.kind === "scene" ? "scene" : "action",
+      text: candidate
+    });
+  }
+  if (items.length === 0) return void 0;
+  return {
+    items,
+    generatedAt: typeof record.generatedAt === "string" ? record.generatedAt : "",
+    ...typeof record.feedback === "string" && record.feedback !== "" ? { feedback: record.feedback } : {}
+  };
+}
+function writeStoredCandidates(chat, payload) {
+  chat.header.chat_metadata.candidates = {
+    items: payload.items,
+    generatedAt: payload.generatedAt,
+    ...payload.feedback !== void 0 && payload.feedback !== "" ? { feedback: payload.feedback } : {}
+  };
+}
+function readGuides(chat) {
+  const raw = chat?.header?.chat_metadata?.guides;
+  if (!Array.isArray(raw)) return [];
+  const guides = [];
+  for (const entry of raw) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry;
+    if (typeof record.text !== "string" || record.text.trim() === "") continue;
+    guides.push({
+      id: typeof record.id === "string" ? record.id : "",
+      text: record.text,
+      ...typeof record.createdAt === "string" ? { createdAt: record.createdAt } : {}
+    });
+  }
+  return guides;
+}
+function assertStCandidateBinding(state, sessionId) {
+  if (typeof sessionId !== "string") return;
+  if (state.sessionBindings?.[sessionId]?.architecture === "agent-tavern") {
+    throw new Error("AgentTavern sessions use the DSH native AgentLoop; candidates are unavailable.");
+  }
+}
+async function runCandidateGeneration(ctx, db, options) {
+  const { state, characterName, chatId, snapshot: snapshot2 } = options;
+  assertStCandidateBinding(state, options.sessionId);
+  if (options.revision !== snapshot2.revision) {
+    throw new ChatRevisionConflictError(options.revision, snapshot2.revision);
+  }
+  const chat = snapshot2.chat;
+  const character = await db.getCharacter(characterName);
+  if (!character) throw new Error(`character '${characterName}' not found`);
+  const feedback = optionalFeedback(options.feedback);
+  const previous = feedback !== void 0 ? readStoredCandidates(chat) : void 0;
+  const request = buildCandidateRequest({
+    character: {
+      name: character.card.data.name || characterName,
+      description: character.card.data.description,
+      personality: character.card.data.personality,
+      scenario: character.card.data.scenario
+    },
+    userName: state.activePersona ?? DEFAULT_USER,
+    history: chat.messages.filter((m) => !m.is_system).map((m) => ({ name: m.name, isUser: m.is_user, text: m.mes })),
+    guides: readGuides(chat),
+    ...feedback !== void 0 ? { feedback } : {},
+    ...previous !== void 0 ? { previousCandidates: previous.items } : {}
+  });
+  const fallback = ctx.agentDefaultModel.currentSelection();
+  const saved = options.sessionId !== void 0 ? state.modelSelections?.[options.sessionId] : void 0;
+  const explicit = options.provider !== void 0 && options.model !== void 0 ? {
+    provider: options.provider,
+    model: options.model,
+    ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {}
+  } : void 0;
+  const choice = explicit ?? saved ?? fallback;
+  const provider = choice.provider;
+  const model = choice.model;
+  const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
+  let text = "";
+  for await (const chunk of ctx.llm.stream({
+    provider,
+    model,
+    messages: request.messages.map((m) => ({
+      id: crypto.randomUUID(),
+      role: m.role,
+      content: [{ type: "text", text: m.content }],
+      // 候选请求不带 sessionId：source 仅标注来源，dsh-llm 不校验（同 runGeneration）。
+      source: m.role === "assistant" ? { kind: "model", provider, model } : { kind: "user" }
+    })),
+    system: request.system,
+    ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
+    ...options.signal !== void 0 ? { signal: options.signal } : {}
+  })) {
+    if (chunk.type === "text-delta") text += chunk.text;
+    else if (chunk.type === "finish" && (chunk.reason.kind === "error" || chunk.reason.kind === "aborted")) {
+      throw new Error(chunk.reason.failure?.message ?? "candidate generation failed");
+    }
+  }
+  if (text.trim() === "") throw new Error("model returned no candidates");
+  const items = parseCandidates(text);
+  const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
+  writeStoredCandidates(chat, { items, generatedAt, ...feedback !== void 0 ? { feedback } : {} });
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
+  return { items, generatedAt, revision };
+}
+
 // packages/plugin/src/dsh-home.ts
 import { homedir as homedir2 } from "node:os";
 import { join as join8, resolve as resolve2 } from "node:path";
@@ -12157,7 +12466,7 @@ function updateChangelog(snapshot2, limit = 8) {
 var name = "dsh-tavern";
 var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents", "agentPresets", "tools", "compaction"];
 var API = "/api/dsh-tavern";
-var DEFAULT_USER = "User";
+var DEFAULT_USER2 = "User";
 var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
 var BUILD_INFO = readBuildInfo();
 var TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit);
@@ -12523,6 +12832,51 @@ async function handleApi(ctx, req, res) {
     }
     const result = await compaction.compactNow(agent, new AbortController().signal);
     return sendJson(res, 200, { ok: true, result: result ?? null });
+  }
+  if ((method === "GET" || method === "POST") && route.startsWith("guides/")) {
+    const segments = route.slice("guides/".length).split("/");
+    if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+    const character = decodeURIComponent(segments[0]);
+    const chatId = decodeURIComponent(segments[1]);
+    const snapshot2 = await db.getChatSnapshot(character, chatId);
+    if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
+    if (method === "GET") {
+      return sendJson(res, 200, {
+        ok: true,
+        guides: normalizeGuides(snapshot2.chat.header.chat_metadata?.guides),
+        revision: snapshot2.revision
+      });
+    }
+    const body = await readJson(req);
+    const added = addGuide(normalizeGuides(snapshot2.chat.header.chat_metadata?.guides), body.text);
+    if (!added.ok) return sendJson(res, 400, { ok: false, message: added.error, code: "TAVERN_GUIDES" });
+    const metadata = { ...snapshot2.chat.header.chat_metadata, guides: added.guides };
+    const revision = await db.saveChat(character, chatId, {
+      ...snapshot2.chat,
+      header: { ...snapshot2.chat.header, chat_metadata: metadata }
+    }, snapshot2.revision);
+    await emitGuidesChanged(character, chatId);
+    return sendJson(res, 200, { ok: true, guide: added.guide, guides: added.guides, revision });
+  }
+  if (method === "DELETE" && route.startsWith("guides/")) {
+    const segments = route.slice("guides/".length).split("/");
+    if (segments.length !== 3) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+    const character = decodeURIComponent(segments[0]);
+    const chatId = decodeURIComponent(segments[1]);
+    const id = decodeURIComponent(segments[2]);
+    const snapshot2 = await db.getChatSnapshot(character, chatId);
+    if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
+    const removed = removeGuide(normalizeGuides(snapshot2.chat.header.chat_metadata?.guides), id);
+    if (!removed.removed) return sendJson(res, 404, { ok: false, message: "guide not found" });
+    const metadata = { ...snapshot2.chat.header.chat_metadata };
+    if (removed.guides.length > 0) metadata.guides = removed.guides;
+    else delete metadata.guides;
+    const revision = await db.saveChat(character, chatId, {
+      ...snapshot2.chat,
+      header: { ...snapshot2.chat.header, chat_metadata: metadata }
+    }, snapshot2.revision);
+    await emitGuidesChanged(character, chatId);
+    return sendJson(res, 200, { ok: true, guides: removed.guides, revision });
   }
   if (method === "GET" && route === "agent-tavern/audit") {
     const sessionId = url.searchParams.get("sessionId");
@@ -12968,6 +13322,31 @@ async function handleApi(ctx, req, res) {
     });
     const snapshot2 = await db.getChatSnapshot(body.character, result.chatId);
     return sendJson(res, 200, { ok: true, id: result.chatId, chat: snapshot2?.chat ?? result.chat, revision: snapshot2?.revision });
+  }
+  if (method === "POST" && route === "candidates") {
+    const body = await readJson(req);
+    const state = await db.getState();
+    assertStGenerationBinding(state, body.sessionId);
+    const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
+    const chatId = body.chatId;
+    if (!characterName || typeof chatId !== "string") throw new Error("character and chatId are required");
+    if (typeof body.revision !== "string") throw new Error("revision is required");
+    const snapshot2 = await db.getChatSnapshot(characterName, chatId);
+    if (!snapshot2) throw new Error("character or chat not found");
+    const feedback = optionalFeedback(body.feedback);
+    const result = await runCandidateGeneration(ctx, db, {
+      state,
+      characterName,
+      chatId,
+      snapshot: snapshot2,
+      feedback,
+      revision: body.revision,
+      sessionId: typeof body.sessionId === "string" ? body.sessionId : void 0,
+      provider: typeof body.provider === "string" ? body.provider : void 0,
+      model: typeof body.model === "string" ? body.model : void 0,
+      reasoningEffort: typeof body.reasoningEffort === "string" ? body.reasoningEffort : void 0
+    });
+    return sendJson(res, 200, { ok: true, items: result.items, generatedAt: result.generatedAt, revision: result.revision });
   }
   if (method === "GET" && route.startsWith("world/")) {
     const name2 = decodeURIComponent(route.slice("world/".length));
@@ -13544,6 +13923,9 @@ async function generate(ctx, req, res, db) {
   const chatId = body.chatId;
   const userText = typeof body.message === "string" ? body.message.trim() : "";
   const mode = body.mode === "regenerate" ? "regenerate" : "send";
+  let feedback;
+  if (mode === "regenerate") feedback = optionalFeedback(body.feedback);
+  else if (body.feedback !== void 0) throw new Error("feedback is only allowed when mode is regenerate");
   if (!characterName || typeof chatId !== "string") throw new Error("character and chatId are required");
   if (mode === "send" && userText === "") throw new Error("message is empty");
   if (typeof body.revision !== "string") throw new Error("revision is required");
@@ -13570,6 +13952,7 @@ async function generate(ctx, req, res, db) {
       snapshot: snapshot2,
       mode,
       userText,
+      feedback,
       group: bindingGroup,
       triggerMember: typeof body.triggerMember === "string" ? body.triggerMember : void 0,
       sessionId: typeof body.sessionId === "string" ? body.sessionId : void 0,
@@ -13596,7 +13979,7 @@ async function runGeneration(ctx, db, options) {
   const chat = snapshot2.chat;
   let revision = snapshot2.revision;
   let hostTrace;
-  const userName = state.activePersona ?? DEFAULT_USER;
+  const userName = state.activePersona ?? DEFAULT_USER2;
   try {
     let speakerName = characterName;
     let groupDef = void 0;
@@ -13803,6 +14186,8 @@ async function runGeneration(ctx, db, options) {
     const requestMessages = [...finalMessages];
     const systemParts = [];
     while (requestMessages[0]?.role === "system") systemParts.push(requestMessages.shift().content);
+    const guidesBlock = formatGuidesBlock(chat.header.chat_metadata?.guides);
+    if (guidesBlock !== void 0) systemParts.push(guidesBlock);
     const llmMessages = requestMessages.map((m) => createMessage({
       role: m.role,
       content: [{ type: "text", text: m.content }],
@@ -13811,6 +14196,8 @@ async function runGeneration(ctx, db, options) {
       // 会话对象可供格式探测。
       source: m.role === "assistant" ? { kind: "model", provider, model } : m.role === "user" ? { kind: "user" } : { kind: "plugin", plugin: "dsh-tavern" }
     }));
+    const rewriteBlock = formatRewriteBlock(options.feedback);
+    if (rewriteBlock) systemParts.push(rewriteBlock);
     for await (const chunk of ctx.llm.stream({
       provider,
       model,
@@ -13850,7 +14237,7 @@ async function runGeneration(ctx, db, options) {
       mes: finalText,
       swipe_id: oldSwipes.length,
       swipes: [...oldSwipes, finalText],
-      swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider, model, reasoning: finalReasoning || void 0 } }],
+      swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider, model, reasoning: finalReasoning || void 0, ...options.feedback ? { feedback: options.feedback } : {} } }],
       extra: {
         ...regenerated?.extra ?? {},
         api: provider,
@@ -13900,7 +14287,7 @@ async function runTavernScript(ctx, req, res, db) {
   const character = await db.getCharacter(characterName);
   const macros = createMacroEngine({
     char: character?.card.data.nickname || character?.card.data.name || characterName,
-    user: state.activePersona ?? DEFAULT_USER,
+    user: state.activePersona ?? DEFAULT_USER2,
     persona: state.activePersona ? (await db.getPersona(state.activePersona))?.description : void 0,
     lastMessage: chat.messages[chat.messages.length - 1]?.mes,
     lastUserMessage: [...chat.messages].reverse().find((m) => m.is_user)?.mes,
@@ -13950,7 +14337,7 @@ async function runTavernScript(ctx, req, res, db) {
     send: async (text) => {
       const trimmed = text.trim();
       if (trimmed === "") return;
-      chat.messages.push({ name: state.activePersona ?? DEFAULT_USER, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: trimmed });
+      chat.messages.push({ name: state.activePersona ?? DEFAULT_USER2, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: trimmed });
       await persist();
     },
     trigger: async (member) => {
@@ -14023,7 +14410,7 @@ async function isGroupChat(db, characterName, chatId) {
 function tavernMacroExpand(state, characterName, character) {
   const macros = createMacroEngine({
     char: character?.card.data.nickname || character?.card.data.name || characterName,
-    user: state.activePersona ?? DEFAULT_USER
+    user: state.activePersona ?? DEFAULT_USER2
   });
   return (text) => macros.expand(text);
 }
@@ -14426,7 +14813,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.3.9".trim() : "";
-  const commit = true ? normalizeCommit("48f3f74") : void 0;
+  const commit = true ? normalizeCommit("309f922") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

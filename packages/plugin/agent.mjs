@@ -3865,6 +3865,37 @@ function dshHomePath(...segments) {
   return join4(resolve(configured || join4(homedir(), ".dsh")), ...segments);
 }
 
+// packages/plugin/src/guides.ts
+var GUIDES_BLOCK_HEADER = "Conversation guides (persistent user directives; apply to every reply):";
+function normalizeGuides(value) {
+  if (!Array.isArray(value)) return [];
+  const guides = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const { id, text, createdAt } = entry;
+    if (typeof id !== "string" || id === "") continue;
+    if (typeof text !== "string" || text.trim() === "") continue;
+    if (typeof createdAt !== "string" || createdAt === "") continue;
+    guides.push({ id, text: text.trim(), createdAt });
+  }
+  return guides;
+}
+function formatGuidesBlock(guides) {
+  const normalized = normalizeGuides(guides);
+  if (normalized.length === 0) return void 0;
+  return [
+    GUIDES_BLOCK_HEADER,
+    ...[...normalized].sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((guide) => `- ${guide.text}`)
+  ].join("\n");
+}
+var guidesChangedListeners = /* @__PURE__ */ new Set();
+function onGuidesChanged(listener) {
+  guidesChangedListeners.add(listener);
+  return () => {
+    guidesChangedListeners.delete(listener);
+  };
+}
+
 // packages/plugin/src/agent-tavern/deduce.ts
 var DEDUCE_PROVIDER = "spawn";
 var DEDUCE_MAX_ROLES = 5;
@@ -4032,6 +4063,11 @@ function apply(ctx) {
     name: "dsh-tavern:agent-facts",
     order: -70,
     text: (assembly) => agentFactsText(assembly?.agent?.id)
+  });
+  ctx.systemPrompt?.context?.({
+    name: "dsh-tavern:agent-guides",
+    order: -65,
+    text: (assembly) => agentGuidesText(assembly?.agent?.id)
   });
   const tools = createTools();
   for (const tool2 of tools) {
@@ -4647,6 +4683,42 @@ async function loadAgentFacts(agentId) {
   } catch {
   }
 }
+var guidesCache = /* @__PURE__ */ new Map();
+var guidesLoadStarted = /* @__PURE__ */ new Set();
+var guidesLoadTicket = /* @__PURE__ */ new Map();
+function agentGuidesText(agentId) {
+  if (typeof agentId !== "string" || agentId.trim() === "") return "";
+  if (!guidesLoadStarted.has(agentId)) {
+    guidesLoadStarted.add(agentId);
+    void loadAgentGuides(agentId);
+  }
+  return guidesCache.get(agentId) ?? "";
+}
+async function loadAgentGuides(agentId) {
+  const ticket = (guidesLoadTicket.get(agentId) ?? 0) + 1;
+  guidesLoadTicket.set(agentId, ticket);
+  try {
+    const db = await tavernStore();
+    const binding = (await db.getState()).sessionBindings[agentId];
+    if (!binding || binding.architecture !== "agent-tavern") return;
+    const chat = await db.getChat(binding.character, binding.chatId);
+    if (guidesLoadTicket.get(agentId) !== ticket) return;
+    guidesCache.set(agentId, formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? "");
+  } catch {
+  }
+}
+onGuidesChanged(async (character, chatId) => {
+  try {
+    const db = await tavernStore();
+    const state = await db.getState();
+    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+      if (binding.architecture !== "agent-tavern" || binding.character !== character || binding.chatId !== chatId) continue;
+      guidesLoadStarted.add(agentId);
+      await loadAgentGuides(agentId);
+    }
+  } catch {
+  }
+});
 function identitySummaryOf(data) {
   const agentTavern = data.extensions?.agentTavern;
   const summary = agentTavern?.identitySummary;

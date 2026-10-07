@@ -4907,6 +4907,37 @@ function dshHomePath(...segments) {
   return join4(resolve(configured || join4(homedir(), ".dsh")), ...segments);
 }
 
+// packages/plugin/src/guides.ts
+var GUIDES_BLOCK_HEADER = "Conversation guides (persistent user directives; apply to every reply):";
+function normalizeGuides(value) {
+  if (!Array.isArray(value)) return [];
+  const guides = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const { id, text, createdAt } = entry;
+    if (typeof id !== "string" || id === "") continue;
+    if (typeof text !== "string" || text.trim() === "") continue;
+    if (typeof createdAt !== "string" || createdAt === "") continue;
+    guides.push({ id, text: text.trim(), createdAt });
+  }
+  return guides;
+}
+function formatGuidesBlock(guides) {
+  const normalized = normalizeGuides(guides);
+  if (normalized.length === 0) return void 0;
+  return [
+    GUIDES_BLOCK_HEADER,
+    ...[...normalized].sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((guide) => `- ${guide.text}`)
+  ].join("\n");
+}
+var guidesChangedListeners = /* @__PURE__ */ new Set();
+function onGuidesChanged(listener) {
+  guidesChangedListeners.add(listener);
+  return () => {
+    guidesChangedListeners.delete(listener);
+  };
+}
+
 // packages/plugin/src/agent-tavern/agent.ts
 var KERNEL = [
   "You are AgentTavern running inside the DSH native AgentLoop.",
@@ -4925,6 +4956,7 @@ var KERNEL = [
   "",
   "Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge \u2014 the card details and world-info entries behind it are not in your context, so its proper nouns are NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search before replying."
 ].join("\n");
+var tavernStorePromise;
 var characterOutput = objectOutput({
   character: { type: "string" },
   name: { type: "string" },
@@ -5008,10 +5040,41 @@ var deductionOutput = objectOutput({
 function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
   return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
 }
+var guidesCache = /* @__PURE__ */ new Map();
+var guidesLoadStarted = /* @__PURE__ */ new Set();
+var guidesLoadTicket = /* @__PURE__ */ new Map();
+async function loadAgentGuides(agentId) {
+  const ticket = (guidesLoadTicket.get(agentId) ?? 0) + 1;
+  guidesLoadTicket.set(agentId, ticket);
+  try {
+    const db = await tavernStore();
+    const binding = (await db.getState()).sessionBindings[agentId];
+    if (!binding || binding.architecture !== "agent-tavern") return;
+    const chat = await db.getChat(binding.character, binding.chatId);
+    if (guidesLoadTicket.get(agentId) !== ticket) return;
+    guidesCache.set(agentId, formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? "");
+  } catch {
+  }
+}
+onGuidesChanged(async (character, chatId) => {
+  try {
+    const db = await tavernStore();
+    const state = await db.getState();
+    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+      if (binding.architecture !== "agent-tavern" || binding.character !== character || binding.chatId !== chatId) continue;
+      guidesLoadStarted.add(agentId);
+      await loadAgentGuides(agentId);
+    }
+  } catch {
+  }
+});
 function identitySummaryOf(data) {
   const agentTavern = data.extensions?.agentTavern;
   const summary = agentTavern?.identitySummary;
   return typeof summary === "string" && summary.trim() !== "" ? summary : void 0;
+}
+function tavernStore() {
+  return tavernStorePromise ??= TavernStore.open(dshHomePath("tavern"));
 }
 
 // packages/plugin/src/agent-novel/outline.ts
@@ -5686,7 +5749,7 @@ var KERNEL2 = [
   "",
   "Scope discipline: the memory tools are read-only projections of this novel's scope; the canon changes only through novel_body_commit. Attempt memory writes, variable writes or direct file access never."
 ].join("\n");
-var tavernStorePromise;
+var tavernStorePromise2;
 var novelStorePromise;
 var memoryStorePromise;
 function apply(ctx) {
@@ -6777,7 +6840,7 @@ async function novelBindingFor(exec) {
 async function resolveNovelBinding(exec) {
   const agentId = exec.agent?.id;
   if (typeof agentId !== "string" || agentId.trim() === "") throw new Error("AgentNovel tool requires the current agent");
-  const binding = (await (await tavernStore()).getState()).sessionBindings[agentId];
+  const binding = (await (await tavernStore2()).getState()).sessionBindings[agentId];
   if (binding !== void 0 && binding.architecture === "agent-novel" && typeof binding.novelId === "string" && binding.novelId.trim() !== "") {
     return { novelId: binding.novelId };
   }
@@ -6914,8 +6977,8 @@ function excerptAround(text, tokens, maxChars) {
   const start = Math.max(0, Math.min(anchor - 80, text.length - maxChars));
   return `${start > 0 ? "\u2026" : ""}${text.slice(start, start + maxChars)}${start + maxChars < text.length ? "\u2026" : ""}`;
 }
-function tavernStore() {
-  return tavernStorePromise ??= TavernStore.open(dshHomePath("tavern"));
+function tavernStore2() {
+  return tavernStorePromise2 ??= TavernStore.open(dshHomePath("tavern"));
 }
 function novelStore() {
   return novelStorePromise ??= NovelStore.open(dshHomePath("tavern"));

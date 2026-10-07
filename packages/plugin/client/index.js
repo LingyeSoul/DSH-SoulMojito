@@ -413,6 +413,7 @@ window.__ModuleLoader__.load({
       'panel.section.overview': 'Overview',
       'panel.section.characters': 'Characters',
       'panel.section.chats': 'Chats',
+      'panel.section.guides': 'Guides',
       'panel.section.groups': 'Groups',
       'panel.section.personas': 'Personas',
       'panel.section.worlds': 'World Info',
@@ -515,6 +516,25 @@ window.__ModuleLoader__.load({
       'panel.variables.auditRevision': 'Revision: {revision}',
       'panel.variables.auditExpired': 'Expired: {value}',
       'panel.variables.auditDeleted': 'Soft-deleted: {value}',
+      // 持续指引（提案 0009）/ 行动候选（提案 0010）的客户端文案；zh/en 键集
+      // 与 {param} 占位符必须完全镜像，由 client-vm-mount gate 校验。
+      'panel.guides.hint': 'Persistent directives applied to every generation in this chat (ST and AgentTavern alike): at most 8 guides, up to 500 characters each.',
+      'panel.guides.empty': 'No guides yet',
+      'panel.guides.placeholder': 'Add a guide for this chat…',
+      'panel.guides.add': 'Add',
+      'panel.guides.adding': 'Adding…',
+      'panel.guides.remove': 'Remove guide',
+      'candidates.title': 'Candidates',
+      'candidates.generate': 'Generate candidates',
+      'candidates.generating': 'Generating…',
+      'candidates.empty': 'No candidates yet. Generate a few suggestions for your next message.',
+      'candidates.generatedAt': 'Generated {time}',
+      'candidates.lastFeedback': 'Last feedback: {feedback}',
+      'candidates.feedbackPlaceholder': 'Feedback for regeneration (optional)',
+      'candidates.regenerate': 'Regenerate with feedback',
+      'candidates.fill': 'Fill the input box (edit before sending)',
+      'candidates.kind.action': 'Action',
+      'candidates.kind.scene': 'Scene',
       'message.user': 'User',
       'message.previousSwipe': 'Previous swipe',
       'message.nextSwipe': 'Next swipe',
@@ -526,6 +546,11 @@ window.__ModuleLoader__.load({
       'view.unbound': 'No Tavern chat is bound to this session.',
       'view.loading': 'Loading Tavern chat…',
       'view.regenerate': 'Regenerate last response',
+      'view.rewrite': 'Rewrite with feedback',
+      'view.rewriteFeedbackPlaceholder': 'What should change? Leave empty to just rewrite.',
+      'view.rewriteSubmit': 'Rewrite',
+      'view.rewritten': 'Rewritten with feedback',
+      'view.openGuides': 'Open guides panel',
       'view.forkArchitecture': 'Fork to {architecture}',
       'view.architectureAgent': 'AgentTavern',
       'view.architectureSt': 'ST',
@@ -806,6 +831,7 @@ window.__ModuleLoader__.load({
       'panel.section.overview': '总览',
       'panel.section.characters': '角色',
       'panel.section.chats': '聊天',
+      'panel.section.guides': '指引',
       'panel.section.groups': '群组',
       'panel.section.personas': '用户人设',
       'panel.section.worlds': '世界书',
@@ -908,6 +934,25 @@ window.__ModuleLoader__.load({
       'panel.variables.auditRevision': '修订：{revision}',
       'panel.variables.auditExpired': '过期：{value}',
       'panel.variables.auditDeleted': '软删除：{value}',
+      // 持续指引（提案 0009）/ 行动候选（提案 0010）的客户端文案；zh/en 键集
+      // 与 {param} 占位符必须完全镜像，由 client-vm-mount gate 校验。
+      'panel.guides.hint': '对本局每次生成（ST 与 AgentTavern 同样生效）持续作用的指引：最多 8 条，单条不超过 500 字符。',
+      'panel.guides.empty': '还没有指引',
+      'panel.guides.placeholder': '添加一条本局指引…',
+      'panel.guides.add': '添加',
+      'panel.guides.adding': '添加中…',
+      'panel.guides.remove': '删除指引',
+      'candidates.title': '行动候选',
+      'candidates.generate': '生成候选',
+      'candidates.generating': '生成中…',
+      'candidates.empty': '还没有候选。为你下一条消息生成几个建议吧。',
+      'candidates.generatedAt': '生成于 {time}',
+      'candidates.lastFeedback': '上次意见：{feedback}',
+      'candidates.feedbackPlaceholder': '对候选的意见（可空）',
+      'candidates.regenerate': '带意见重新生成',
+      'candidates.fill': '填入输入框（发送前可修改）',
+      'candidates.kind.action': '行动',
+      'candidates.kind.scene': '场景',
       'message.user': '用户',
       'message.previousSwipe': '上一个候选',
       'message.nextSwipe': '下一个候选',
@@ -919,6 +964,11 @@ window.__ModuleLoader__.load({
       'view.unbound': '此会话未绑定酒馆聊天。',
       'view.loading': '正在加载酒馆聊天…',
       'view.regenerate': '重新生成最新回复',
+      'view.rewrite': '带意见重写',
+      'view.rewriteFeedbackPlaceholder': '要改哪里？留空则直接重写。',
+      'view.rewriteSubmit': '重写',
+      'view.rewritten': '按意见重写',
+      'view.openGuides': '打开指引面板',
       'view.forkArchitecture': '分叉到 {architecture}',
       'view.architectureAgent': 'AgentTavern',
       'view.architectureSt': 'ST',
@@ -1375,6 +1425,74 @@ window.__ModuleLoader__.load({
       })
     }
 
+    // 持续指引（提案 0009）与行动候选（提案 0010）的写路径：服务端自读快照做
+    // revision CAS，响应携带新 revision。客户端照 chat 写路径（saveChat /
+    // runTavernScriptCommand）同步 revisions[key]，并强刷本地聊天快照——这两
+    // 类写只改 chat_metadata，不返回整个 chat，缓存里的 chats[key] 必须重取。
+    function syncChatRevision(character, chatId, revision) {
+      if (typeof revision !== 'string') return
+      const key = chatKey(character, chatId)
+      update({ revisions: { ...snapshot.revisions, [key]: revision } })
+      void loadChat(character, chatId, true).catch(() => {})
+    }
+
+    function guidesPath(character, chatId, id) {
+      const base = `guides/${encodeURIComponent(character)}/${encodeURIComponent(chatId)}`
+      return id === undefined ? base : `${base}/${encodeURIComponent(id)}`
+    }
+
+    function loadGuides(character, chatId) {
+      return api(guidesPath(character, chatId))
+    }
+
+    async function addChatGuide(character, chatId, text) {
+      const result = await api(guidesPath(character, chatId), {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ text }),
+      })
+      syncChatRevision(character, chatId, result.revision)
+      return result
+    }
+
+    async function removeChatGuide(character, chatId, id) {
+      const result = await api(guidesPath(character, chatId, id), { method: 'DELETE' })
+      syncChatRevision(character, chatId, result.revision)
+      return result
+    }
+
+    // chat_metadata.candidates 的读取容错（形状对齐 src/candidates.ts 的
+    // readStoredCandidates：kind 非 scene 即 action，缺文本丢弃，空集视为无）。
+    function normalizeStoredCandidates(value) {
+      if (!value || typeof value !== 'object' || !Array.isArray(value.items)) return null
+      const items = value.items
+        .filter((item) => item && typeof item === 'object' && typeof item.text === 'string' && item.text.trim() !== '')
+        .map((item) => ({ kind: item.kind === 'scene' ? 'scene' : 'action', text: item.text }))
+      if (items.length === 0) return null
+      return {
+        items,
+        generatedAt: typeof value.generatedAt === 'string' ? value.generatedAt : '',
+        ...(typeof value.feedback === 'string' && value.feedback !== '' ? { feedback: value.feedback } : {}),
+      }
+    }
+
+    async function generateChatCandidates(sessionId, binding, feedback) {
+      const key = chatKey(binding.character, binding.chatId)
+      const result = await api('candidates', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          sessionId,
+          character: binding.character,
+          chatId: binding.chatId,
+          revision: snapshot.revisions[key],
+          ...(feedback !== undefined ? { feedback } : {}),
+        }),
+      })
+      syncChatRevision(binding.character, binding.chatId, result.revision)
+      return result
+    }
+
     async function generateFor(sessionId, binding, mode, text, options = {}) {
       const currentRun = snapshot.runs[sessionId]
       if (!binding || currentRun?.busy) return
@@ -1410,6 +1528,9 @@ window.__ModuleLoader__.load({
             revision: snapshot.revisions[key],
             message,
             mode,
+            // 带意见重写（提案 0011）：feedback 仅 regenerate 可携带（服务端同款
+            // 校验，非 regenerate 带该字段会被拒）；空串等价普通重掷，不发送。
+            ...(mode === 'regenerate' && typeof options.feedback === 'string' && options.feedback.trim() !== '' ? { feedback: options.feedback.trim() } : {}),
             ...(binding.group === true ? { group: true } : {}),
             ...(options.triggerMember ? { triggerMember: options.triggerMember } : {}),
             ...(selection ? {
@@ -2861,6 +2982,12 @@ window.__ModuleLoader__.load({
       const isUser = message.is_user === true
       const swipes = Array.isArray(message.swipes) && message.swipes.length > 0 ? message.swipes : [message.mes || '']
       const swipeIndex = Math.min(Math.max(Number(message.swipe_id) || 0, 0), swipes.length - 1)
+      // 带意见重写（提案 0011）：swipe_info[].extra.feedback 记录该变体是按
+      // 哪条意见重写的；标题悬停可见全文，正文中不出现意见文本。
+      const swipeExtra = Array.isArray(message.swipe_info) ? message.swipe_info[swipeIndex] : null
+      const swipeFeedback = swipeExtra && typeof swipeExtra === 'object'
+        && typeof swipeExtra.extra?.feedback === 'string' && swipeExtra.extra.feedback !== ''
+        ? swipeExtra.extra.feedback : ''
       const renderedText = expandDisplayMacros(
         display ?? message.mes ?? '',
         persona || 'User',
@@ -2929,6 +3056,7 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', title: t('message.previousSwipe'), disabled: busy, onClick: () => changeSwipe(-1) }, h(IconChevronLeftOutline14)),
               h('span', null, `${swipeIndex + 1}/${swipes.length}`),
               h('button', { type: 'button', title: t('message.nextSwipe'), disabled: busy, onClick: () => changeSwipe(1) }, h(IconChevronRightOutline14))) : null,
+            !isUser && swipeFeedback ? h('span', { className: 'dt-swipe-feedback', title: swipeFeedback }, t('view.rewritten')) : null,
             editing ? h(React.Fragment, null,
               h('button', { type: 'button', disabled: busy, onClick: () => void commit() }, t('message.save')),
               h('button', { type: 'button', onClick: () => { setDraft(message.mes || ''); setError(''); setEditing(false) } }, t('message.cancel')))
@@ -3251,6 +3379,112 @@ window.__ModuleLoader__.load({
         h('span', null, member))))
     }
 
+    // 行动候选（提案 0010）：与正文生成解耦的轻量请求。仅 ST 生成入口可见
+    // （bindingArchitecture==='st'，与重掷按钮/Tavern 标签页的可见性判断同源；
+    // 群聊无单角色卡，服务端 getCharacter 必然落空，同样不暴露）；若 POST
+    // candidates 返回 TAVERN_ARCHITECTURE_CONFLICT 则兜底隐藏本面板。
+    // 候选项点击只填入输入框（可改再发，绝不自动发送）；带意见重新生成携带
+    // feedback；失败展示错误并保留旧候选（服务端失败不落聊天、revision 不动）。
+    function TavernCandidates({ sessionId, disabled, onFill }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const binding = state.bootstrap.state.sessionBindings?.[sessionId]
+      const chat = binding ? state.chats[chatKey(binding.character, binding.chatId)] : null
+      const key = binding ? chatKey(binding.character, binding.chatId) : ''
+      const stored = chat ? normalizeStoredCandidates(chat.header?.chat_metadata?.candidates) : null
+      const [open, setOpen] = useState(false)
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const [feedback, setFeedback] = useState('')
+      const [conflicted, setConflicted] = useState(false)
+      // 每个聊天最多自动展开一次：加载时已有候选则直接展示（提案 0010 §3.2），
+      // 用户手动收起后不再强制弹开；切换到无候选的聊天则回到折叠态。
+      const autoOpenedFor = useRef('')
+      useEffect(() => {
+        if (!key) return
+        if (autoOpenedFor.current === key) return
+        if (stored !== null) {
+          autoOpenedFor.current = key
+          setOpen(true)
+        } else {
+          setOpen(false)
+        }
+      }, [key, stored?.generatedAt])
+      const generate = (withFeedback) => {
+        if (!binding || busy || disabled) return
+        const text = withFeedback ? feedback.trim() : ''
+        setBusy(true)
+        setError('')
+        void (async () => {
+          try {
+            // 候选写走 revision CAS，必须先确保本地拿得到当前 revision。
+            await loadChat(binding.character, binding.chatId)
+            await generateChatCandidates(sessionId, binding, text === '' ? undefined : text)
+            if (withFeedback) setFeedback('')
+            setOpen(true)
+          } catch (cause) {
+            if (cause?.code === 'TAVERN_ARCHITECTURE_CONFLICT') {
+              setConflicted(true)
+              return
+            }
+            setError(cause instanceof Error ? cause.message : String(cause))
+            if (cause?.status === 409 || cause?.code === REVISION_CONFLICT) {
+              await loadChat(binding.character, binding.chatId, true).catch(() => {})
+            }
+          } finally {
+            setBusy(false)
+          }
+        })()
+      }
+      if (!binding || binding.group === true || bindingArchitecture(binding) !== 'st' || conflicted) return null
+      const blocked = busy || disabled === true
+      return h('div', { className: 'dt-candidates', 'data-dsh-tavern-surface': 'candidates' },
+        h('div', { className: 'dt-candidates-head' },
+          h('button', {
+            type: 'button',
+            className: 'dt-candidates-toggle',
+            'aria-expanded': open,
+            onClick: () => setOpen(!open),
+          },
+            h(IconChevronDownOutline14, { className: open ? 'dt-chevron-open' : undefined }),
+            h('span', null, t('candidates.title')),
+            stored ? h('span', { className: 'dt-candidates-count' }, String(stored.items.length)) : null),
+          h('div', { className: 'dt-candidates-actions' },
+            h('button', { type: 'button', disabled: blocked, onClick: () => generate(false) },
+              busy ? t('candidates.generating') : t('candidates.generate')))),
+        open ? h('div', { className: 'dt-candidates-body' },
+          busy ? h('p', { className: 'dt-muted' }, t('candidates.generating')) : null,
+          error ? h('p', { className: 'dt-error' }, error) : null,
+          stored
+            ? h(React.Fragment, null,
+              stored.generatedAt ? h('p', { className: 'dt-candidates-meta' }, t('candidates.generatedAt', { time: formatNovelTime(stored.generatedAt) })) : null,
+              stored.feedback ? h('p', { className: 'dt-candidates-meta' }, t('candidates.lastFeedback', { feedback: stored.feedback })) : null,
+              h('div', { className: 'dt-candidate-list' }, stored.items.map((item, index) => h('button', {
+                key: index,
+                type: 'button',
+                className: 'dt-candidate-item',
+                title: t('candidates.fill'),
+                onClick: () => onFill(item.text),
+              },
+                h('span', { className: `dt-candidate-kind dt-candidate-kind-${item.kind}` }, t(`candidates.kind.${item.kind}`)),
+                h('span', { className: 'dt-candidate-text' }, item.text)))))
+            : h('p', { className: 'dt-muted' }, t('candidates.empty')),
+          h('div', { className: 'dt-candidates-feedback' },
+            h('input', {
+              value: feedback,
+              placeholder: t('candidates.feedbackPlaceholder'),
+              disabled: blocked,
+              onChange: (event) => setFeedback(event.target.value),
+              onKeyDown: (event) => {
+                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent?.isComposing) {
+                  event.preventDefault()
+                  generate(true)
+                }
+              },
+            }),
+            h('button', { type: 'button', disabled: blocked, onClick: () => generate(true) }, t('candidates.regenerate')))) : null)
+    }
+
     function TavernComposer({ sessionId, useInput, inputActions }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -3274,6 +3508,13 @@ window.__ModuleLoader__.load({
         ? `${binding.group === true ? '☰ ' : ''}${t('composer.writeTo', { name: binding.character })}`
         : t('composer.unavailable')
       return h('div', { className: 'dt-composer-wrap', 'data-dsh-tavern-surface': 'composer' },
+        binding && bindingArchitecture(binding) === 'st' && binding.group !== true
+          ? h(TavernCandidates, {
+            sessionId,
+            disabled: run.busy,
+            onFill: (text) => inputActions.setDraft(text),
+          })
+          : null,
         h('div', { className: 'dt-composer' },
           binding?.group === true ? h(MemberPicker, { binding, disabled: run.busy, selected: trigger, onSelect: setTrigger }) : null,
           h('textarea', {
@@ -3464,6 +3705,20 @@ window.__ModuleLoader__.load({
         const timer = setInterval(load, 10000)
         return () => { cancelled = true; clearInterval(timer) }
       }, [novelId])
+      // 带意见重写（提案 0011）：意见可空 = 直接重写；提交走既有 regenerate
+      // 发送路径携带 feedback 字段。弹出层模式对齐 ModelSelect（绝对定位 +
+      // 点外关闭），锚定 header 故向下展开。
+      const [rewriteOpen, setRewriteOpen] = useState(false)
+      const [rewriteDraft, setRewriteDraft] = useState('')
+      const rewriteRef = useRef(null)
+      useEffect(() => {
+        if (!rewriteOpen) return undefined
+        const closeOutside = (event) => {
+          if (!rewriteRef.current?.contains(event.target)) setRewriteOpen(false)
+        }
+        document.addEventListener('mousedown', closeOutside)
+        return () => document.removeEventListener('mousedown', closeOutside)
+      }, [rewriteOpen])
       if (!active || !binding) return null
       if (novelId !== null) {
         const novel = novelSummary || { title: novelId, status: 'active' }
@@ -3499,25 +3754,70 @@ window.__ModuleLoader__.load({
             }, h(IconListPenOutline16))))
       }
       const statsLine = architecture === 'st' ? buildTavernStatsLine(stats, usage, t) : ''
+      const submitRewrite = () => {
+        if (run.busy) return
+        const feedback = rewriteDraft
+        setRewriteOpen(false)
+        void generateFor(sessionId, binding, 'regenerate', '', { feedback })
+      }
       return h('div', { ref: markerRef, className: 'dt-header-character', 'data-dsh-tavern-surface': 'header' },
         h('img', { src: `${API}/avatar/${encodeURIComponent(binding.character)}`, alt: '' }),
         h('div', { className: 'dt-header-character-copy' },
           h('span', { className: 'dt-header-character-name' }, binding.character),
           h('span', { className: `dt-architecture-badge dt-architecture-${architecture}` }, architectureLabel(architecture)),
           statsLine ? h('span', { className: 'dt-header-stats', title: statsLine }, statsLine) : null),
-        architecture === 'st'
-          ? h('button', {
+        h('div', { className: 'dt-header-actions' },
+          architecture === 'st'
+            ? h(React.Fragment, null,
+              h('button', {
+                type: 'button',
+                title: t('view.regenerate'),
+                'aria-label': t('view.regenerate'),
+                disabled: run.busy,
+                onClick: () => void generateFor(sessionId, binding, 'regenerate', ''),
+              }, h(IconRefreshOutline16)),
+              h('span', { className: 'dt-rewrite', ref: rewriteRef },
+                h('button', {
+                  type: 'button',
+                  title: t('view.rewrite'),
+                  'aria-label': t('view.rewrite'),
+                  'aria-expanded': rewriteOpen,
+                  disabled: run.busy,
+                  onClick: () => { setRewriteDraft(''); setRewriteOpen(!rewriteOpen) },
+                }, h(IconEditOutline16)),
+                rewriteOpen ? h('div', { className: 'dt-rewrite-pop' },
+                  h('textarea', {
+                    value: rewriteDraft,
+                    placeholder: t('view.rewriteFeedbackPlaceholder'),
+                    rows: 3,
+                    autoFocus: true,
+                    onChange: (event) => setRewriteDraft(event.target.value),
+                    onKeyDown: (event) => {
+                      if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent?.isComposing) {
+                        event.preventDefault()
+                        submitRewrite()
+                      }
+                      if (event.key === 'Escape') {
+                        event.preventDefault()
+                        setRewriteOpen(false)
+                      }
+                    },
+                  }),
+                  h('div', { className: 'dt-rewrite-actions' },
+                    h('button', { type: 'button', onClick: () => setRewriteOpen(false) }, t('message.cancel')),
+                    h('button', { type: 'button', className: 'dt-rewrite-go', disabled: run.busy, onClick: submitRewrite }, t('view.rewriteSubmit')))) : null))
+            : h('button', {
+              type: 'button',
+              title: t('view.forkArchitecture', { architecture: architectureLabel('st') }),
+              disabled: run.busy,
+              onClick: () => void forkTavernArchitecture(PanelHost.context, sessionId, binding),
+            }, h(IconAgentPresetOutline16)),
+          h('button', {
             type: 'button',
-            title: t('view.regenerate'),
-            disabled: run.busy,
-            onClick: () => void generateFor(sessionId, binding, 'regenerate', ''),
-          }, h(IconRefreshOutline16))
-          : h('button', {
-            type: 'button',
-            title: t('view.forkArchitecture', { architecture: architectureLabel('st') }),
-            disabled: run.busy,
-            onClick: () => void forkTavernArchitecture(PanelHost.context, sessionId, binding),
-          }, h(IconAgentPresetOutline16)))
+            title: t('view.openGuides'),
+            'aria-label': t('view.openGuides'),
+            onClick: () => openPanel('guides'),
+          }, h(IconListPenOutline16))))
     }
 
     function nativeTavernTabs() {
@@ -3951,6 +4251,7 @@ window.__ModuleLoader__.load({
       { id: 'overview', icon: IconSparkle16 },
       { id: 'characters', icon: IconUserOutline16 },
       { id: 'chats', icon: IconQueueOutline14 },
+      { id: 'guides', icon: IconListPenOutline16 },
       { id: 'novels', icon: IconListPenOutline16 },
       { id: 'groups', icon: IconPersonalizationOutline16 },
       { id: 'personas', icon: IconDataOutline16 },
@@ -4683,6 +4984,109 @@ window.__ModuleLoader__.load({
                 : null),
         auditError ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, auditError)) : null,
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
+    }
+
+    // 持续指引面板（提案 0009）：跟随当前会话绑定的聊天（ST 与 AgentTavern
+    // 都生效，不区分架构）。列出以 GET guides 为准（chat_metadata 里可能已有，
+// 也可能被其他端改过）；添加/删除成功后 revision 由服务端推进，客户端照
+    // saveChat 同款模式同步 revisions 并强刷聊天快照。
+    function PanelGuides({ useSessions }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const currentSession = useSessions ? useSessions((sessions) => sessions.current) : null
+      const binding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
+      const [guides, setGuides] = useState(null)
+      const [draft, setDraft] = useState('')
+      const [error, setError] = useState('')
+      const [adding, setAdding] = useState(false)
+      const [busyId, setBusyId] = useState('')
+      useEffect(() => {
+        let cancelled = false
+        setGuides(null)
+        setError('')
+        if (!binding) return () => { cancelled = true }
+        void loadGuides(binding.character, binding.chatId)
+          .then((result) => { if (!cancelled) setGuides(Array.isArray(result.guides) ? result.guides : []) })
+          .catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause)) })
+        return () => { cancelled = true }
+      }, [binding?.character, binding?.chatId])
+      const reloadGuides = () => {
+        if (!binding) return Promise.resolve()
+        return loadGuides(binding.character, binding.chatId)
+          .then((result) => setGuides(Array.isArray(result.guides) ? result.guides : []))
+          .catch(() => {})
+      }
+      const recoverConflict = (cause) => {
+        // 写路径 409（CHAT_REVISION_CONFLICT）：聊天在服务端被并发推进，重取
+        // guides + 强刷本地聊天快照后让用户重试。
+        if (cause?.status === 409 || cause?.code === REVISION_CONFLICT) {
+          void reloadGuides()
+          void loadChat(binding.character, binding.chatId, true).catch(() => {})
+        }
+      }
+      const add = () => {
+        const text = draft.trim()
+        if (!binding || text === '' || adding) return
+        setAdding(true)
+        setError('')
+        void addChatGuide(binding.character, binding.chatId, text)
+          .then((result) => {
+            setGuides(Array.isArray(result.guides) ? result.guides : [])
+            setDraft('')
+          })
+          .catch((cause) => {
+            setError(cause instanceof Error ? cause.message : String(cause))
+            recoverConflict(cause)
+          })
+          .finally(() => setAdding(false))
+      }
+      const remove = (id) => {
+        if (!binding || busyId !== '') return
+        setBusyId(id)
+        setError('')
+        void removeChatGuide(binding.character, binding.chatId, id)
+          .then((result) => setGuides(Array.isArray(result.guides) ? result.guides : []))
+          .catch((cause) => {
+            setError(cause instanceof Error ? cause.message : String(cause))
+            recoverConflict(cause)
+          })
+          .finally(() => setBusyId(''))
+      }
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('panel.section.guides')),
+        h('p', { className: 'dt-hint' }, t('panel.guides.hint')),
+        !binding
+          ? h('p', { className: 'dt-muted' }, t('panel.variables.chatLocalEmpty'))
+          : guides === null
+            ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+            : h(React.Fragment, null,
+              guides.length === 0 ? h('p', { className: 'dt-muted' }, t('panel.guides.empty')) : null,
+              h('div', { className: 'dt-guide-list' }, guides.map((guide) => h('div', { key: guide.id, className: 'dt-guide-row' },
+                h('span', { className: 'dt-guide-text' }, guide.text),
+                h(Button, {
+                  size: 'sm',
+                  variant: 'ghost',
+                  icon: h(IconTrashOutline16),
+                  'aria-label': t('panel.guides.remove'),
+                  title: t('panel.guides.remove'),
+                  disabled: busyId !== '' || adding,
+                  onClick: () => remove(guide.id),
+                })))),
+              h('div', { className: 'dt-guide-add' },
+                h('div', { className: 'dt-guide-add-field' },
+                  h(Input, {
+                    value: draft,
+                    placeholder: t('panel.guides.placeholder'),
+                    disabled: adding,
+                    onChange: (event) => setDraft(event.target.value),
+                  })),
+                h(Button, {
+                  size: 'sm',
+                  variant: 'primary',
+                  disabled: adding || draft.trim() === '',
+                  onClick: add,
+                }, adding ? t('panel.guides.adding') : t('panel.guides.add')))),
+        error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
     // ---- AgentNovel panel surface (proposal 0005 §14.3) ----
@@ -5713,6 +6117,7 @@ window.__ModuleLoader__.load({
       const body = section === 'overview' ? h(PanelOverview)
         : section === 'characters' ? h(PanelCharacters)
         : section === 'chats' ? h(TavernSidebar, { ctx, useSessions })
+        : section === 'guides' ? h(PanelGuides, { useSessions })
         : section === 'novels' ? h(PanelNovels, { ctx })
         : section === 'groups' ? h(GroupBand)
         : section === 'personas' ? h(PersonaBand)
@@ -6003,6 +6408,47 @@ window.__ModuleLoader__.load({
         .dt-header-novel-actions button:hover{background:var(--dsw-alias-interactive-bg-hover)}
         @media(max-width:900px){.dt-novel-detail{grid-template-columns:1fr}}
         @media(max-width:700px){.dt-novel-form-grid{grid-template-columns:1fr}.dt-novel-form-wide{grid-column:auto}}
+        .dt-header-actions{display:flex;align-items:center;gap:2px;flex:none}
+        .dt-header-actions>button,.dt-rewrite>button{width:24px;height:24px;border-radius:5px;display:grid;place-items:center;flex:none;color:inherit;background:transparent;border:0;cursor:pointer;padding:0}
+        .dt-header-actions>button:hover,.dt-rewrite>button:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        .dt-header-actions>button:disabled,.dt-rewrite>button:disabled,.dt-rewrite-actions>button:disabled,.dt-candidates button:disabled{cursor:not-allowed;opacity:.45}
+        .dt-rewrite{position:relative;display:inline-flex}
+        .dt-rewrite-pop{z-index:20;position:absolute;top:calc(100% + 8px);right:0;width:min(320px,calc(100vw - 32px));display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--dsw-alias-border-inverted);border-radius:12px;background:var(--dsw-specific-menu,var(--dsw-alias-bg-base));box-shadow:var(--dsw-shadow-lv3);color:var(--dsw-alias-label-primary)}
+        .dt-rewrite-pop textarea{box-sizing:border-box;width:100%;min-height:72px;max-height:180px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:7px 9px;font:inherit;font-size:13px;line-height:18px;outline:none}
+        .dt-rewrite-pop textarea:focus{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 20%,transparent)}
+        .dt-rewrite-actions{display:flex;justify-content:flex-end;gap:8px}
+        .dt-rewrite-actions>button{min-height:28px;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer;font:inherit;font-size:12px}
+        .dt-rewrite-actions>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .dt-rewrite-actions>.dt-rewrite-go{color:#fff;background:var(--dsw-alias-state-business-primary);border-color:transparent}
+        .dt-swipe-feedback{display:inline-flex;align-items:center;min-height:18px;padding:0 6px;border-radius:4px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary);font-size:10px;line-height:18px;font-weight:600;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .dt-guide-list{display:flex;flex-direction:column;gap:6px;max-width:640px}
+        .dt-guide-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:8px 8px 8px 10px}
+        .dt-guide-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.55;color:var(--dsw-alias-label-primary)}
+        .dt-guide-add{display:flex;gap:8px;align-items:center;max-width:640px;margin-top:8px;flex-wrap:wrap}
+        .dt-guide-add-field{flex:1;min-width:220px}
+        .dt-candidates{box-sizing:border-box;width:min(var(--dsh-composer-card-max-width,780px),100%);margin:0 auto 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:12px}
+        .dt-candidates-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:36px;padding:4px 8px 4px 6px}
+        .dt-candidates-toggle{display:flex;align-items:center;gap:6px;min-width:0;border:0;border-radius:6px;color:inherit;background:transparent;cursor:pointer;font:inherit;font-size:12px;padding:3px 6px}
+        .dt-candidates-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        .dt-candidates-toggle svg{flex:none;color:var(--dsw-alias-label-tertiary);transition:transform .12s}
+        .dt-candidates-toggle svg.dt-chevron-open{transform:rotate(180deg)}
+        .dt-candidates-count{color:var(--dsw-alias-label-tertiary);font-size:11px}
+        .dt-candidates-actions>button{height:26px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer;font:inherit;font-size:11px}
+        .dt-candidates-actions>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .dt-candidates-body{display:flex;flex-direction:column;gap:8px;padding:2px 10px 10px}
+        .dt-candidates-body p{margin:0}
+        .dt-candidates-meta{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;overflow-wrap:anywhere}
+        .dt-candidate-list{display:flex;flex-direction:column;gap:4px}
+        .dt-candidate-item{display:flex;align-items:flex-start;gap:8px;width:100%;min-height:30px;text-align:left;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;color:inherit;background:transparent;cursor:pointer;font:inherit;font-size:12px;line-height:17px;padding:6px 8px}
+        .dt-candidate-item:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+        .dt-candidate-kind{flex:none;display:inline-flex;align-items:center;min-height:16px;padding:0 5px;border-radius:4px;font-size:10px;line-height:16px;font-weight:600;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
+        .dt-candidate-kind-scene{color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent)}
+        .dt-candidate-text{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
+        .dt-candidates-feedback{display:flex;gap:6px;align-items:center}
+        .dt-candidates-feedback input{box-sizing:border-box;flex:1;min-width:0;height:28px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 8px;font:inherit;font-size:12px;outline:none}
+        .dt-candidates-feedback input:focus{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 20%,transparent)}
+        .dt-candidates-feedback>button{flex:none;height:28px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer;font:inherit;font-size:11px}
+        .dt-candidates-feedback>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
       `
       document.head.appendChild(tag)
     }
