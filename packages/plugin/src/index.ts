@@ -71,6 +71,16 @@ import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } 
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
 import { createGenerationTemplates, mergeTemplateLocalVars, type GenerationTemplates } from './template.js'
 import { runCandidateGeneration } from './candidates.js'
+import {
+  applyScriptBinding,
+  boundScriptOf,
+  formatScriptBlock,
+  getScript,
+  importScript,
+  listScripts,
+  normalizeScriptProgress,
+  shouldAdvance,
+} from '../../tavern-store/src/index.js'
 import { formatRewriteBlock, optionalFeedback } from './rewrite.js'
 import { saveOriginalSnapshot } from '../../tavern-store/src/index.js'
 import { dshHomePath } from './dsh-home.js'
@@ -611,6 +621,99 @@ async function handleApi(ctx, req, res) {
     }, snapshot.revision)
     await emitGuidesChanged(character, chatId)
     return sendJson(res, 200, { ok: true, guides: removed.guides, revision })
+  }
+
+  // ---- 剧本游玩（提案 0014 P1）----
+  // 剧本库：TXT/MD 素材分块存 <tavern>/scripts/<name>/script.json；绑定在卡
+  // data.extensions.agentTavern.scriptId（一对一）；进度在 chat_metadata.scriptProgress，
+  // 由生成链路的对齐推进写。进度是展示不是跳章（§4）：没有写进度的路由。
+  if (method === 'POST' && route === 'script/import') {
+    const body = await readJson(req, 8 * 1024 * 1024)
+    let imported
+    try {
+      imported = await importScript(dshHomePath('tavern'), body.name, body.content, body.format)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return sendJson(res, 400, { ok: false, message, code: 'TAVERN_SCRIPT' })
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      script: {
+        name: imported.name,
+        source: imported.source,
+        chunkCount: imported.chunks.length,
+        chunks: imported.chunks,
+      },
+    })
+  }
+
+  if (method === 'GET' && route === 'scripts') {
+    const scripts = await listScripts(dshHomePath('tavern'))
+    const bindings: Record<string, string> = {}
+    for (const name of await db.listCharacters()) {
+      const file = await db.getCharacter(name)
+      const bound = file === undefined ? undefined : boundScriptOf(file.card)
+      if (bound !== undefined) bindings[name] = bound
+    }
+    return sendJson(res, 200, { ok: true, scripts, bindings })
+  }
+
+  // progress 路由必须先于通用 script/<name> 匹配（同为 script/ 前缀）
+  if (method === 'GET' && route.startsWith('script/progress/')) {
+    const segments = route.slice('script/progress/'.length).split('/')
+    if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    const character = decodeURIComponent(segments[0])
+    const chatId = decodeURIComponent(segments[1])
+    const file = await db.getCharacter(character)
+    if (!file) return sendJson(res, 404, { ok: false, message: 'character not found' })
+    const scriptName = boundScriptOf(file.card)
+    if (scriptName === undefined) return sendJson(res, 404, { ok: false, message: 'no script bound to this character' })
+    const script = await getScript(dshHomePath('tavern'), scriptName)
+    if (!script) return sendJson(res, 404, { ok: false, message: `script '${scriptName}' not found` })
+    const snapshot = await db.getChatSnapshot(character, chatId)
+    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
+    const progress = normalizeScriptProgress(snapshot.chat.header.chat_metadata?.scriptProgress)
+    const active = progress !== undefined && progress.scriptName === scriptName ? progress : undefined
+    const chunkIndex = active !== undefined ? Math.min(active.chunkIndex, script.chunks.length - 1) : 0
+    return sendJson(res, 200, {
+      ok: true,
+      scriptName,
+      chunkIndex,
+      chunkCount: script.chunks.length,
+      currentPreview: script.chunks[chunkIndex]?.text.slice(0, 400) ?? '',
+      nextPreview: script.chunks[chunkIndex + 1]?.text.slice(0, 400) ?? '',
+      alignedAt: active?.alignedAt ?? null,
+    })
+  }
+
+  if (method === 'GET' && route.startsWith('script/')) {
+    const name = decodeURIComponent(route.slice('script/'.length))
+    if (name === '' || name.includes('/')) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    const script = await getScript(dshHomePath('tavern'), name)
+    if (!script) return sendJson(res, 404, { ok: false, message: `script '${name}' not found` })
+    return sendJson(res, 200, { ok: true, script: { name: script.name, source: script.source, chunks: script.chunks } })
+  }
+
+  if (method === 'POST' && (route === 'script/bind' || route === 'script/unbind')) {
+    const body = await readJson(req)
+    const characterName = typeof body.character === 'string' ? body.character : ''
+    if (characterName === '') throw new Error('character is required')
+    const binding = route === 'script/bind' && typeof body.scriptName === 'string' ? body.scriptName.trim() : undefined
+    if (route === 'script/bind' && (binding === undefined || binding === '')) {
+      throw new Error('scriptName is required')
+    }
+    if (binding !== undefined) {
+      const script = await getScript(dshHomePath('tavern'), binding)
+      if (!script) return sendJson(res, 404, { ok: false, message: `script '${binding}' not found` })
+    }
+    try {
+      await applyScriptBinding(db, characterName, binding)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (message.includes('not found')) return sendJson(res, 404, { ok: false, message })
+      throw error
+    }
+    return sendJson(res, 200, { ok: true, character: characterName, scriptName: binding ?? null })
   }
 
   if (method === 'GET' && route === 'agent-tavern/audit') {
@@ -2304,6 +2407,38 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   // ---- 模板消息级注入（GENERATE → @INJECT，提案 0008）----
   // AFTER 条目位于 prompt 末尾：所有字段渲染完成后才预渲染（变量副作用次序）
   if (tpl) await tpl.prerenderGenerateAfter()
+
+  // ---- 剧本游玩注入（提案 0014 P1）----
+  // 卡绑定了剧本时：先做对齐推进判定——以「最近一条已定稿助手楼层」为准
+  // （send 模式新用户消息已 push、regenerate 模式旧助手楼层已 pop，从
+  // chat.messages 末尾向前找 is_user=false 且非 system 的楼层两者得到同一条），
+  // 词法覆盖 ≥0.35 判定对齐 → chunkIndex+1（一次至多 +1，不跳块，末块不再
+  // 推进）；进度惰性初始化 chunkIndex=0 后写回 chat_metadata.scriptProgress
+  // （随本轮末尾的 saveChat 自然落盘）。然后把当前块 + 下一块预览作为世界书
+  // 式 system 条目 unshift 到消息头部——剧本块是参考不是约束（可偏离）。
+  const boundScriptId = boundScriptOf(character.card)
+  if (boundScriptId !== undefined) {
+    const scriptRecord = await getScript(dshHomePath('tavern'), boundScriptId)
+    if (scriptRecord !== undefined && scriptRecord.chunks.length > 0) {
+      const prior = normalizeScriptProgress(chat.header.chat_metadata?.scriptProgress)
+      let chunkIndex = prior !== undefined && prior.scriptName === boundScriptId
+        ? Math.min(prior.chunkIndex, scriptRecord.chunks.length - 1)
+        : 0
+      const lastAssistantFloor = [...chat.messages].reverse().find((m) => m.is_user === false && !m.is_system)
+      const advanced = lastAssistantFloor !== undefined
+        && chunkIndex < scriptRecord.chunks.length - 1
+        && shouldAdvance(scriptRecord.chunks[chunkIndex]!.text, lastAssistantFloor.mes)
+      if (advanced) chunkIndex += 1
+      if (advanced || prior === undefined || prior.scriptName !== boundScriptId || prior.chunkIndex !== chunkIndex) {
+        chat.header.chat_metadata = {
+          ...chat.header.chat_metadata,
+          scriptProgress: { scriptName: boundScriptId, chunkIndex, alignedAt: new Date().toISOString() },
+        }
+      }
+      const scriptBlock = formatScriptBlock(scriptRecord.chunks.map((chunk) => chunk.text), chunkIndex)
+      if (scriptBlock !== undefined) assembled.messages.unshift({ role: 'system', content: scriptBlock })
+    }
+  }
   const finalMessages = tpl ? await tpl.applyPromptInjections(assembled.messages) : assembled.messages
 
   // ---- 流式生成 ----
