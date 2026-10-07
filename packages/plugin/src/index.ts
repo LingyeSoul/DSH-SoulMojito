@@ -62,6 +62,7 @@ import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } 
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
 import { createGenerationTemplates, mergeTemplateLocalVars, type GenerationTemplates } from './template.js'
 import { runCandidateGeneration } from './candidates.js'
+import { formatRewriteBlock, optionalFeedback } from './rewrite.js'
 import { dshHomePath } from './dsh-home.js'
 import { TavernUpdateService, updateChangelog } from './update/service.js'
 
@@ -1891,6 +1892,10 @@ async function generate(ctx, req, res, db) {
   const chatId = body.chatId
   const userText = typeof body.message === 'string' ? body.message.trim() : ''
   const mode = body.mode === 'regenerate' ? 'regenerate' : 'send'
+  // 带意见重写（提案 0011）：feedback 仅 regenerate 可携带；空串等价普通重掷。
+  let feedback: string | undefined
+  if (mode === 'regenerate') feedback = optionalFeedback(body.feedback)
+  else if (body.feedback !== undefined) throw new Error('feedback is only allowed when mode is regenerate')
   if (!characterName || typeof chatId !== 'string') throw new Error('character and chatId are required')
   if (mode === 'send' && userText === '') throw new Error('message is empty')
   if (typeof body.revision !== 'string') throw new Error('revision is required')
@@ -1917,6 +1922,7 @@ async function generate(ctx, req, res, db) {
       snapshot,
       mode,
       userText,
+      feedback,
       group: bindingGroup,
       triggerMember: typeof body.triggerMember === 'string' ? body.triggerMember : undefined,
       sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
@@ -1947,6 +1953,8 @@ interface GenerationOptions {
   /** send=追加用户消息；regenerate=弹出旧回复重掷；trigger=按现状生成（STscript /trigger） */
   mode: 'send' | 'regenerate' | 'trigger'
   userText: string
+  /** regenerate 专用：带意见重写（提案 0011）；非 regenerate 不允许携带。 */
+  feedback?: string
   group: boolean
   triggerMember?: string
   sessionId?: string
@@ -2240,6 +2248,10 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     // 会话对象可供格式探测。
     source: m.role === 'assistant' ? { kind: 'model', provider, model } : m.role === 'user' ? { kind: 'user' } : { kind: 'plugin', plugin: 'dsh-tavern' },
   }))
+  // 带意见重写（提案 0011）：意见是一次性生成指引，作为 system 段末尾块
+  // （guides 块之后）注入，不落任何楼层。
+  const rewriteBlock = formatRewriteBlock(options.feedback)
+  if (rewriteBlock) systemParts.push(rewriteBlock)
   for await (const chunk of ctx.llm.stream({
     provider, model, messages: llmMessages,
     ...(systemParts.length > 0 ? { system: systemParts.join('\n\n') } : {}),
@@ -2281,7 +2293,7 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     is_user: false, is_system: false, send_date: now, mes: finalText,
     swipe_id: oldSwipes.length,
     swipes: [...oldSwipes, finalText],
-    swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider, model, reasoning: finalReasoning || undefined } }],
+    swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider, model, reasoning: finalReasoning || undefined, ...(options.feedback ? { feedback: options.feedback } : {}) } }],
     extra: {
       ...(regenerated?.extra ?? {}),
       api: provider, model, reasoning: finalReasoning || undefined,
