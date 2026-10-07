@@ -7,6 +7,7 @@ import { activateWorldInfo } from '../../../tavern-lore/src/index.js'
 import type { ChatLogIR } from '../../../tavern-format/src/index.js'
 import { collectWorldInfoBooks } from '../tavern-assets.js'
 import { dshHomePath } from '../dsh-home.js'
+import { formatGuidesBlock, onGuidesChanged } from '../guides.js'
 import {
   DEDUCE_MAX_ROLES,
   DEDUCE_MAX_ROUNDS,
@@ -58,6 +59,13 @@ export function apply(ctx: AgentContextLike): void {
     name: 'dsh-tavern:agent-facts',
     order: -70,
     text: (assembly) => agentFactsText(assembly?.agent?.id),
+  })
+  // 持续指引（提案 0009）：与 facts 同款 best-effort 异步装载；guide 写入经
+  // guides.ts 的 emitGuidesChanged 写穿缓存，下一次装配即时生效（见文件底部）。
+  ctx.systemPrompt?.context?.({
+    name: 'dsh-tavern:agent-guides',
+    order: -65,
+    text: (assembly) => agentGuidesText(assembly?.agent?.id),
   })
 
   const tools = createTools()
@@ -750,6 +758,56 @@ async function loadAgentFacts(agentId: string): Promise<void> {
     // A missing store must not prevent the host agent from starting.
   }
 }
+
+/** guides 文本通道（提案 0009）：与 facts 同款 best-effort 异步装载——首次为某
+ *  agent 装配时异步读一次 chat 的 guides，装载完成前返回空串，失败静默留空，
+ *  不阻塞装配。guide 写入（index.ts 的 guides 路由）经 emitGuidesChanged 按
+ *  character/chatId 反查绑定的 agentId 写穿缓存，删除同理即时生效。 */
+const guidesCache = new Map<string, string>()
+const guidesLoadStarted = new Set<string>()
+/** 装载票号：首次装载与写穿刷新可能在途并存，只允许最后发起的那次写缓存，
+ *  防止先发起、后完成的过期装载覆盖新写入的 guide（last-write-wins）。 */
+const guidesLoadTicket = new Map<string, number>()
+
+function agentGuidesText(agentId: string | undefined): string {
+  if (typeof agentId !== 'string' || agentId.trim() === '') return ''
+  if (!guidesLoadStarted.has(agentId)) {
+    guidesLoadStarted.add(agentId)
+    void loadAgentGuides(agentId)
+  }
+  return guidesCache.get(agentId) ?? ''
+}
+
+async function loadAgentGuides(agentId: string): Promise<void> {
+  const ticket = (guidesLoadTicket.get(agentId) ?? 0) + 1
+  guidesLoadTicket.set(agentId, ticket)
+  try {
+    const db = await tavernStore()
+    const binding = (await db.getState()).sessionBindings[agentId]
+    if (!binding || binding.architecture !== 'agent-tavern') return
+    const chat = await db.getChat(binding.character, binding.chatId)
+    if (guidesLoadTicket.get(agentId) !== ticket) return
+    guidesCache.set(agentId, formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? '')
+  } catch {
+    // A missing store must not prevent the host agent from starting.
+  }
+}
+
+// 模块加载即注册写穿回调：guide 增/删路由成功落库后按 character/chatId 匹配
+// sessionBindings 里绑定的 agentId 刷新缓存（无匹配则是无人装配过的 chat，跳过）。
+onGuidesChanged(async (character, chatId) => {
+  try {
+    const db = await tavernStore()
+    const state = await db.getState()
+    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+      if (binding.architecture !== 'agent-tavern' || binding.character !== character || binding.chatId !== chatId) continue
+      guidesLoadStarted.add(agentId)
+      await loadAgentGuides(agentId)
+    }
+  } catch {
+    // best-effort 写穿：失败只意味着下一次装配沿用旧缓存。
+  }
+})
 
 export function identitySummaryOf(data: { extensions?: Record<string, unknown> }): string | undefined {
   const agentTavern = data.extensions?.agentTavern as Record<string, unknown> | undefined

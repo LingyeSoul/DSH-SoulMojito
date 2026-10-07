@@ -55,6 +55,7 @@ import { unitTargetRange } from './agent-novel/outline.js'
 import { NovelProjector } from './agent-novel/projector.js'
 import { isNovelAuthorMessage, receiveAuthorMessage } from './agent-novel/requirements.js'
 import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
+import { addGuide, emitGuidesChanged, formatGuidesBlock, normalizeGuides, removeGuide } from './guides.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
 import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type SessionImportAppend } from './agent-tavern/projector.js'
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from './agent-tavern/deduce.js'
@@ -547,6 +548,57 @@ async function handleApi(ctx, req, res) {
     }
     const result = await compaction.compactNow(agent, new AbortController().signal)
     return sendJson(res, 200, { ok: true, result: result ?? null })
+  }
+
+  // 持续指引（提案 0009）：guide 属于单局聊天，随 chat_metadata 持久化；
+  // 读写走 getChatSnapshot + saveChat 的 revision CAS，与聊天写路径一致。
+  // 路径段解码与 character/ 前缀路由同款 decodeURIComponent（角色名可含空格/中文）。
+  if ((method === 'GET' || method === 'POST') && route.startsWith('guides/')) {
+    const segments = route.slice('guides/'.length).split('/')
+    if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    const character = decodeURIComponent(segments[0])
+    const chatId = decodeURIComponent(segments[1])
+    const snapshot = await db.getChatSnapshot(character, chatId)
+    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
+    if (method === 'GET') {
+      return sendJson(res, 200, {
+        ok: true,
+        guides: normalizeGuides(snapshot.chat.header.chat_metadata?.guides),
+        revision: snapshot.revision,
+      })
+    }
+    const body = await readJson(req)
+    const added = addGuide(normalizeGuides(snapshot.chat.header.chat_metadata?.guides), body.text)
+    if (!added.ok) return sendJson(res, 400, { ok: false, message: added.error, code: 'TAVERN_GUIDES' })
+    const metadata = { ...snapshot.chat.header.chat_metadata, guides: added.guides }
+    const revision = await db.saveChat(character, chatId, {
+      ...snapshot.chat,
+      header: { ...snapshot.chat.header, chat_metadata: metadata },
+    }, snapshot.revision)
+    await emitGuidesChanged(character, chatId)
+    return sendJson(res, 200, { ok: true, guide: added.guide, guides: added.guides, revision })
+  }
+
+  if (method === 'DELETE' && route.startsWith('guides/')) {
+    const segments = route.slice('guides/'.length).split('/')
+    if (segments.length !== 3) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    const character = decodeURIComponent(segments[0])
+    const chatId = decodeURIComponent(segments[1])
+    const id = decodeURIComponent(segments[2])
+    const snapshot = await db.getChatSnapshot(character, chatId)
+    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
+    const removed = removeGuide(normalizeGuides(snapshot.chat.header.chat_metadata?.guides), id)
+    if (!removed.removed) return sendJson(res, 404, { ok: false, message: 'guide not found' })
+    const metadata = { ...snapshot.chat.header.chat_metadata }
+    // 清空即摘除键：与 chat_metadata.variables 的空置清理约定一致，导出不含空 guides。
+    if (removed.guides.length > 0) metadata.guides = removed.guides
+    else delete metadata.guides
+    const revision = await db.saveChat(character, chatId, {
+      ...snapshot.chat,
+      header: { ...snapshot.chat.header, chat_metadata: metadata },
+    }, snapshot.revision)
+    await emitGuidesChanged(character, chatId)
+    return sendJson(res, 200, { ok: true, guides: removed.guides, revision })
   }
 
   if (method === 'GET' && route === 'agent-tavern/audit') {
@@ -2147,6 +2199,11 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   const requestMessages = [...finalMessages]
   const systemParts = []
   while (requestMessages[0]?.role === 'system') systemParts.push(requestMessages.shift().content)
+  // 持续指引（提案 0009）：会话级用户指令作为 system 段末尾块注入——位于所有
+  // 已装配 system 块之后；不进楼层内容，导出纯对话不携带。块自带 user
+  // directives 标注，不伪装世界书或角色设定。
+  const guidesBlock = formatGuidesBlock(chat.header.chat_metadata?.guides)
+  if (guidesBlock !== undefined) systemParts.push(guidesBlock)
   const llmMessages = requestMessages.map((m) => createMessage({
     role: m.role,
     content: [{ type: 'text', text: m.content }],
