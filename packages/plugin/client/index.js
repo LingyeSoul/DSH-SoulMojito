@@ -421,6 +421,22 @@ window.__ModuleLoader__.load({
       'panel.section.scripts': 'Scripts',
       'panel.section.regex': 'Regex scripts',
       'panel.section.variables': 'Variables',
+      'panel.section.workbench': 'Workbench plans',
+      'workbench.hint': 'Modification plans proposed by the Card Workbench agent. Expand a plan to review the per-field diff, then approve to apply it to the working copy, or reject it.',
+      'workbench.empty': 'No workbench plans yet',
+      'workbench.refresh': 'Refresh',
+      'workbench.approve': 'Approve and apply',
+      'workbench.reject': 'Reject',
+      'workbench.status.pending': 'Pending',
+      'workbench.status.approved': 'Approved',
+      'workbench.status.rejected': 'Rejected',
+      'workbench.status.applied': 'Applied',
+      'workbench.current': 'Current',
+      'workbench.new': 'New',
+      'workbench.showDiff': 'Show changes',
+      'workbench.hideDiff': 'Hide changes',
+      'workbench.appliedAt': 'Applied {time}',
+      'workbench.decidedAt': 'Decided {time}',
       'panel.overview.counts': 'Characters {characters} · Chats {chats} · Worlds {worlds} · Presets {presets} · Personas {personas} · Groups {groups}',
       'panel.characters.empty': 'No character cards imported',
       'panel.characters.viewCard': 'View card',
@@ -558,7 +574,7 @@ window.__ModuleLoader__.load({
       'script.hint': 'The script is a reference, not a chapter skip: the story may deviate at any time, and the position only advances when the latest reply covers the current segment.',
       'scripts.hint': 'Import a novel or outline as a script (auto-chunked for staged recall) and bind it to a character card — one script per card; new chats with a bound card follow the script.',
       'scripts.empty': 'No scripts imported yet',
-      'scripts.importFile': 'Import TXT/MD',
+      'scripts.importFile': 'Import TXT/MD/EPUB',
       'scripts.importing': 'Importing…',
       'scripts.paste': 'Paste text',
       'scripts.pasteName': 'Script name',
@@ -877,6 +893,22 @@ window.__ModuleLoader__.load({
       'panel.section.scripts': '剧本',
       'panel.section.regex': '正则脚本',
       'panel.section.variables': '变量',
+      'panel.section.workbench': '工作台方案',
+      'workbench.hint': '卡片工作台 Agent 提出的修改方案。展开查看逐字段改动，批准即应用到工作版，也可直接拒绝。',
+      'workbench.empty': '暂无工作台方案',
+      'workbench.refresh': '刷新',
+      'workbench.approve': '批准并应用',
+      'workbench.reject': '拒绝',
+      'workbench.status.pending': '待确认',
+      'workbench.status.approved': '已批准',
+      'workbench.status.rejected': '已拒绝',
+      'workbench.status.applied': '已应用',
+      'workbench.current': '当前',
+      'workbench.new': '改为',
+      'workbench.showDiff': '查看改动',
+      'workbench.hideDiff': '收起改动',
+      'workbench.appliedAt': '应用于 {time}',
+      'workbench.decidedAt': '决定于 {time}',
       'panel.overview.counts': '角色 {characters} · 聊天 {chats} · 世界书 {worlds} · 预设 {presets} · 人设 {personas} · 群组 {groups}',
       'panel.characters.empty': '尚未导入角色卡',
       'panel.characters.viewCard': '查看卡面',
@@ -1014,7 +1046,7 @@ window.__ModuleLoader__.load({
       'script.hint': '剧本是参考不是跳章：剧情可以随时偏离，只有正文覆盖当前片段时进度才会推进。',
       'scripts.hint': '把小说或大纲导入为剧本（自动分段、分段召回），并与人物卡一对一绑定；绑定的卡开新局会按剧本推进。',
       'scripts.empty': '尚未导入剧本',
-      'scripts.importFile': '导入 TXT/MD',
+      'scripts.importFile': '导入 TXT/MD/EPUB',
       'scripts.importing': '导入中…',
       'scripts.paste': '粘贴文本',
       'scripts.pasteName': '剧本名称',
@@ -1642,6 +1674,23 @@ window.__ModuleLoader__.load({
       update({ scriptsRevision: snapshot.scriptsRevision + 1 })
     }
 
+    // 卡片工作台方案确认协议（提案 0013 P2）：面板拉 pending/全量方案列表并
+    // 给决定；approve=true 由服务端执行核按方案写入工作版并标记 applied。
+    function loadWorkbenchPlans(status = 'all', character) {
+      const params = new URLSearchParams()
+      params.set('status', status)
+      if (character) params.set('character', character)
+      return api(`card-workbench/plans?${params.toString()}`)
+    }
+
+    function decideWorkbenchPlan(planId, approve) {
+      return api(`card-workbench/plans/${encodeURIComponent(planId)}/decision`, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ approve }),
+      })
+    }
+
     async function generateFor(sessionId, binding, mode, text, options = {}) {
       const currentRun = snapshot.runs[sessionId]
       if (!binding || currentRun?.busy) return
@@ -2263,6 +2312,15 @@ window.__ModuleLoader__.load({
 
     function fileStem(name) {
       return name.replace(/\.[^.]+$/, '') || 'Imported'
+    }
+
+    // 分块 btoa：避免大文件 String.fromCharCode 展开超出参数上限（与 importAsset 同款）。
+    function bytesToBase64(bytes) {
+      let binary = ''
+      for (let index = 0; index < bytes.length; index += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000))
+      }
+      return btoa(binary)
     }
 
     async function importAsset(kind, file) {
@@ -4613,6 +4671,7 @@ window.__ModuleLoader__.load({
       { id: 'scripts', icon: IconListPenOutline16 },
       { id: 'regex', icon: IconListPenOutline16 },
       { id: 'variables', icon: IconCordisPluginOutline14 },
+      { id: 'workbench', icon: IconListPenOutline16 },
     ]
 
     function PanelOverview() {
@@ -5521,14 +5580,22 @@ window.__ModuleLoader__.load({
               importing ? t('scripts.importing') : t('scripts.importFile'),
               h('input', {
                 type: 'file',
-                accept: '.txt,.md,.markdown,text/plain,text/markdown',
+                accept: '.txt,.md,.markdown,.epub,text/plain,text/markdown,application/epub+zip',
                 disabled: importing,
                 onChange: (event) => {
                   const file = event.target.files?.[0]
                   event.target.value = ''
                   if (!file) return
-                  void readFile(file, false)
-                    .then((content) => importText(fileStem(file.name), content, /\.md(?:own)?$/i.test(file.name) ? 'md' : 'txt'))
+                  // EPUB 走二进制（提案 0014 P2）：FileReader 读 ArrayBuffer →
+                  // base64，format 'epub'（服务端解码 zip 取 spine 正文）；TXT/MD
+                  // 路径不变，仍读文本按后缀推断。
+                  const epub = /\.epub$/i.test(file.name)
+                  void readFile(file, epub)
+                    .then((content) => importText(
+                      fileStem(file.name),
+                      epub ? bytesToBase64(new Uint8Array(content)) : content,
+                      epub ? 'epub' : (/\.md(?:own)?$/i.test(file.name) ? 'md' : 'txt'),
+                    ))
                     .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
                 },
               })),
@@ -5581,7 +5648,7 @@ window.__ModuleLoader__.load({
                 return h('div', { key: script.name, className: 'dt-script-row' },
                   h('div', { className: 'dt-script-row-head' },
                     h('strong', { className: 'dt-script-name' }, script.name),
-                    h(Pill, null, script.format === 'md' ? 'md' : 'txt'),
+                    h(Pill, null, script.format === 'epub' ? 'EPUB' : script.format === 'md' ? 'md' : 'txt'),
                     h('span', { className: 'dt-script-meta' }, t('scripts.chunks', { count: script.chunkCount })),
                     h('span', { className: 'dt-script-meta' }, t('scripts.characters', { count: script.totalCharacters })),
                     h('span', { className: 'dt-script-meta' }, t('scripts.importedAt', { time: formatNovelTime(script.importedAt) }))),
@@ -6552,6 +6619,97 @@ window.__ModuleLoader__.load({
       notice ? h('p', { className: 'dt-muted' }, notice) : null)
     }
 
+    function formatWorkbenchTime(value) {
+      const date = new Date(value)
+      return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString()
+    }
+
+    // 工作台方案卡片（提案 0013 P2）：pending 可批准/拒绝，已决定的显示状态；
+    // 展开即逐字段 diff（当前 → 改为，note 灰字）。
+    function WorkbenchPlanCard({ plan, busy, open, onToggle, onDecide }) {
+      const t = useTranslate()
+      const changes = Array.isArray(plan.changes) ? plan.changes : []
+      const meta = [plan.character, plan.id]
+      if (plan.appliedAt) meta.push(t('workbench.appliedAt', { time: formatWorkbenchTime(plan.appliedAt) }))
+      else if (plan.decidedAt) meta.push(t('workbench.decidedAt', { time: formatWorkbenchTime(plan.decidedAt) }))
+      else meta.push(formatWorkbenchTime(plan.createdAt))
+      return h('div', { className: `dt-workbench-plan${plan.status === 'pending' ? '' : ' dt-workbench-done'}` },
+        h('div', { className: 'dt-workbench-plan-head' },
+          h('button', {
+            type: 'button',
+            className: 'dt-workbench-plan-title',
+            onClick: onToggle,
+            title: open ? t('workbench.hideDiff') : t('workbench.showDiff'),
+          },
+            h('span', { className: 'dt-workbench-caret' }, open ? '▾' : '▸'),
+            h('span', null, plan.title || plan.id)),
+          h('span', { className: `dt-workbench-status dt-workbench-status-${plan.status}` }, t(`workbench.status.${plan.status}`)),
+          plan.status === 'pending'
+            ? h('span', { className: 'dt-workbench-actions' },
+                h(Button, { size: 'sm', variant: 'primary', disabled: busy, onClick: () => onDecide(plan, true) }, t('workbench.approve')),
+                h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => onDecide(plan, false) }, t('workbench.reject')))
+            : null),
+        h('div', { className: 'dt-workbench-meta' }, meta.join(' · ')),
+        open ? h('div', { className: 'dt-workbench-diff' }, changes.map((change, index) => h('div', { key: index, className: 'dt-workbench-change' },
+          h('div', { className: 'dt-workbench-change-field' }, change.field),
+          h('div', { className: 'dt-workbench-change-values' },
+            h('span', { className: 'dt-workbench-label' }, t('workbench.current')),
+            h('pre', { className: 'dt-workbench-old' }, change.currentValue || ''),
+            h('span', { className: 'dt-workbench-label' }, t('workbench.new')),
+            h('pre', { className: 'dt-workbench-new' }, change.newValue || '')),
+          change.note ? h('p', { className: 'dt-workbench-note' }, change.note) : null))) : null)
+    }
+
+    function PanelWorkbench() {
+      const t = useTranslate()
+      const [plans, setPlans] = useState(null)
+      const [error, setError] = useState('')
+      const [busyId, setBusyId] = useState('')
+      const [openId, setOpenId] = useState('')
+      const reload = () => loadWorkbenchPlans('all')
+        .then((result) => { setPlans(Array.isArray(result.plans) ? result.plans : []); setError(''); return result })
+        .catch((cause) => {
+          setError(cause instanceof Error ? cause.message : String(cause))
+          return null
+        })
+      useEffect(() => { void reload() }, [])
+      const decide = (plan, approve) => {
+        if (busyId !== '') return
+        setBusyId(plan.id)
+        setError('')
+        void decideWorkbenchPlan(plan.id, approve)
+          .then(() => reload())
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBusyId(''))
+      }
+      return h(React.Fragment, null,
+        h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('panel.section.workbench')),
+          h('p', { className: 'dt-hint' }, t('workbench.hint')),
+          h('div', { className: 'dt-imports' },
+            h(Button, {
+              size: 'sm',
+              variant: 'ghost',
+              icon: h(IconRefreshOutline16),
+              onClick: () => { setError(''); void reload() },
+            }, t('workbench.refresh')))),
+        h('section', { className: 'dt-settings-band' },
+          error ? h('p', { className: 'dt-error' }, error) : null,
+          plans === null
+            ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+            : plans.length === 0
+              ? h('p', { className: 'dt-muted' }, t('workbench.empty'))
+              : h('div', { className: 'dt-workbench-list' },
+                plans.map((plan) => h(WorkbenchPlanCard, {
+                  key: plan.id,
+                  plan,
+                  busy: busyId === plan.id,
+                  open: openId === plan.id,
+                  onToggle: () => setOpenId(openId === plan.id ? '' : plan.id),
+                  onDecide: decide,
+                })))))
+    }
+
     function PanelNovels({ ctx }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -6651,6 +6809,7 @@ window.__ModuleLoader__.load({
         : section === 'scripts' ? h(PanelScripts)
         : section === 'regex' ? h(RegexBand)
         : section === 'variables' ? h(PanelVariables, { useSessions })
+        : section === 'workbench' ? h(PanelWorkbench)
         : h(PanelOverview)
       return h('div', { className: 'dt-panel' },
         h('nav', { className: 'dt-panel-nav', 'aria-label': t('panel.nav') },
@@ -7030,6 +7189,26 @@ window.__ModuleLoader__.load({
         .dt-script-bound-chip>button{width:18px;height:18px;display:grid;place-items:center;border:0;border-radius:50%;color:inherit;background:transparent;cursor:pointer;font-size:12px;line-height:1}
         .dt-script-bound-chip>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
         .dt-script-paste{display:flex;flex-direction:column;gap:8px;margin-top:10px;padding:10px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-workbench-list{display:flex;flex-direction:column;gap:10px}
+        .dt-workbench-plan{display:flex;flex-direction:column;gap:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:10px}
+        .dt-workbench-plan.dt-workbench-done{opacity:.75}
+        .dt-workbench-plan-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+        .dt-workbench-plan-title{display:inline-flex;align-items:center;gap:6px;min-width:0;flex:1;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;padding:0;text-align:left}
+        .dt-workbench-plan-title:hover{color:var(--dsw-alias-label-primary)}
+        .dt-workbench-plan-title>span:last-child{min-width:0;overflow-wrap:anywhere;font-weight:600}
+        .dt-workbench-caret{flex:none;color:var(--dsw-alias-label-tertiary)}
+        .dt-workbench-status{flex:none;font-size:11px;line-height:18px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;color:var(--dsw-alias-label-secondary)}
+        .dt-workbench-status-applied{color:var(--dsw-alias-state-business-primary,inherit)}
+        .dt-workbench-actions{display:inline-flex;gap:6px;margin-left:auto}
+        .dt-workbench-meta{color:var(--dsw-alias-label-tertiary);font-size:11px}
+        .dt-workbench-diff{display:flex;flex-direction:column;gap:8px}
+        .dt-workbench-change{display:flex;flex-direction:column;gap:4px}
+        .dt-workbench-change-field{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary)}
+        .dt-workbench-change-values{display:flex;flex-direction:column;gap:4px}
+        .dt-workbench-label{color:var(--dsw-alias-label-tertiary);font-size:11px}
+        .dt-workbench-old,.dt-workbench-new{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.55;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;padding:6px 8px;max-height:160px;overflow-y:auto;background:var(--dsw-alias-bg-sunken,var(--dsw-alias-bg-base))}
+        .dt-workbench-old{color:var(--dsw-alias-label-secondary)}
+        .dt-workbench-note{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
       `
       document.head.appendChild(tag)
     }

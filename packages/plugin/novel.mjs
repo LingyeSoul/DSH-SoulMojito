@@ -4938,6 +4938,32 @@ function onGuidesChanged(listener) {
   };
 }
 
+// packages/tavern-template/src/api.ts
+var DEFAULT_CHAR_DEFINE = [
+  "<% if (name) { %>",
+  "<<%- name %>>",
+  "<% if (system_prompt) { %>System: <%- system_prompt %><% } %>",
+  "name: <%- name %>",
+  "<% if (personality) { %>personality: <%- personality %><% } %>",
+  "<% if (description) { %>description: <%- description %><% } %>",
+  "<% if (message_example) { %>",
+  "example:",
+  "<%- message_example %>",
+  "<% } %>",
+  "<% if (depth_prompt) { %>System: <%- depth_prompt %><% } %>",
+  "</<%- name %>>",
+  "<% } %>"
+].join("\n");
+
+// packages/tavern-lore/lib/types.js
+var MESSAGE_BOUNDARY2 = "";
+
+// packages/tavern-lore/lib/buffer.js
+var JOINER2 = "\n" + MESSAGE_BOUNDARY2;
+
+// packages/plugin/src/agent-tavern/projector.ts
+var mvuAuditTail = Promise.resolve();
+
 // packages/plugin/src/agent-tavern/agent.ts
 var KERNEL = [
   "You are AgentTavern running inside the DSH native AgentLoop.",
@@ -4952,6 +4978,7 @@ var KERNEL = [
   "- Research before you write: a scene that leans on character personality, backstory, speech, or relationships calls for tavern_character_get and memory_search; narrating a place, faction, technique, or item calls for tavern_lore_search; recalling an earlier event, promise, or open thread calls for tavern_history_search or memory_search. Fetch first, then narrate from what came back.",
   "- Do not invent world canon. Before narrating specifics of a proper noun not already established in this chat (person, place, faction, technique, item), call tavern_lore_search for it and stay consistent with the returned entries.",
   "- Persist significant story changes before finishing the reply: new characters, places, promises, injuries, items, relationship or status changes go to chat-scope memory via memory_write; refresh an existing entry with memory_update instead of duplicating it. Skip only when nothing significant changed.",
+  "- Settle variable state for the turn with one tavern_variable_settle call instead of scattered variable_set writes; its receipt records every before/after for retry.",
   "- Keep maintenance invisible: tool calls stay outside the story text; never mention memory or tools inside the narrative. Keep research lean: fetch what a beat needs, then commit to the scene instead of stalling on repeated lookups for details your context already answers.",
   "",
   "Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge \u2014 the card details and world-info entries behind it are not in your context, so its proper nouns are NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search before replying."
@@ -5029,6 +5056,29 @@ var variableDeleteOutput = objectOutput(
   { found: { type: "boolean" }, scope: { type: "string" }, name: { type: "string" } },
   []
 );
+var scriptReadOutput = objectOutput(
+  {
+    found: { type: "boolean" },
+    scriptName: { type: "string" },
+    chunkIndex: { type: "integer" },
+    chunkCount: { type: "integer" },
+    text: { type: "string" },
+    truncated: { type: "boolean" }
+  },
+  ["scriptName", "chunkIndex", "chunkCount", "text", "truncated"]
+);
+var scriptAdvanceOutput = objectOutput(
+  {
+    found: { type: "boolean" },
+    scriptName: { type: "string" },
+    chunkIndex: { type: "integer" },
+    chunkCount: { type: "integer" },
+    done: { type: "boolean" },
+    alignedAt: { type: "string" },
+    lastNote: { type: "string" }
+  },
+  ["scriptName", "chunkIndex", "chunkCount", "done", "alignedAt", "lastNote"]
+);
 var deductionOutput = objectOutput({
   scenario: { type: "string" },
   rounds: { type: "integer" },
@@ -5036,6 +5086,11 @@ var deductionOutput = objectOutput({
   positions: { type: "array", items: { type: "object", additionalProperties: true } },
   failures: { type: "array", items: { type: "object", additionalProperties: true } },
   truncated: { type: "boolean" }
+});
+var settleOutput = objectOutput({
+  applied: { type: "array", items: { type: "string" } },
+  failed: { type: "array", items: { type: "object", additionalProperties: true } },
+  receipt: { type: "object", additionalProperties: true }
 });
 function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
   return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };

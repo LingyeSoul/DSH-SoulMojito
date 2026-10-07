@@ -1620,16 +1620,16 @@ function decodeCharx(bytes) {
   const assetPaths = Object.keys(files).filter((p) => p !== "card.json");
   return { card, assetPaths };
 }
-function decodeCharxAsset(bytes, path4) {
+function decodeCharxAsset(bytes, path5) {
   let files;
   try {
     files = unzipSync(bytes);
   } catch (cause) {
     throw new CharxFormatError(`not a valid zip: ${String(cause)}`);
   }
-  const asset = files[path4];
+  const asset = files[path5];
   if (asset === void 0)
-    throw new CharxFormatError(`CHARX has no asset '${path4}'`);
+    throw new CharxFormatError(`CHARX has no asset '${path5}'`);
   return asset;
 }
 function encodeCharx(ir, assets) {
@@ -2882,6 +2882,58 @@ async function writeAtomic2(file, text) {
 import { createHash as createHash4, randomBytes } from "node:crypto";
 var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("hex");
 
+// packages/tavern-store/src/scripts.ts
+import { promises as fs4 } from "node:fs";
+import * as path4 from "node:path";
+function normalizeScriptProgress(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const { scriptName, chunkIndex, alignedAt, lastNote } = value;
+  if (typeof scriptName !== "string" || scriptName.trim() === "") return void 0;
+  if (!Number.isInteger(chunkIndex) || chunkIndex < 0) return void 0;
+  if (typeof alignedAt !== "string" || alignedAt === "") return void 0;
+  const note = typeof lastNote === "string" && lastNote.trim() !== "" ? lastNote.trim().slice(0, 200) : void 0;
+  return { scriptName, chunkIndex, alignedAt, ...note !== void 0 ? { lastNote: note } : {} };
+}
+function boundScriptOf(card) {
+  const extensions = card?.data?.extensions;
+  if (typeof extensions !== "object" || extensions === null) return void 0;
+  const agentTavern = extensions.agentTavern;
+  if (typeof agentTavern !== "object" || agentTavern === null || Array.isArray(agentTavern)) return void 0;
+  const scriptId = agentTavern.scriptId;
+  if (typeof scriptId !== "string" || scriptId.trim() === "") return void 0;
+  return scriptId;
+}
+async function getScript(dir, name2) {
+  return readScriptRecord(path4.join(dir, "scripts", safeScriptName(name2), "script.json"));
+}
+async function readScriptRecord(file) {
+  let bytes;
+  try {
+    bytes = await fs4.readFile(file);
+  } catch (cause) {
+    if (cause.code === "ENOENT") return void 0;
+    throw cause;
+  }
+  const parsed = JSON.parse(bytes.toString("utf8"));
+  if (typeof parsed.name !== "string" || parsed.name === "") throw new Error(`corrupted script record: ${file}`);
+  if (parsed.source === null || typeof parsed.source !== "object" || parsed.source.format !== "txt" && parsed.source.format !== "md" && parsed.source.format !== "epub" || typeof parsed.source.importedAt !== "string") {
+    throw new Error(`corrupted script record: ${file}`);
+  }
+  if (!Array.isArray(parsed.chunks)) throw new Error(`corrupted script record: ${file}`);
+  return {
+    name: parsed.name,
+    source: { format: parsed.source.format, importedAt: parsed.source.importedAt },
+    chunks: parsed.chunks.map((chunk, index) => ({
+      index: typeof chunk?.index === "number" ? chunk.index : index,
+      text: typeof chunk?.text === "string" ? chunk.text : ""
+    }))
+  };
+}
+function safeScriptName(name2) {
+  const cleaned = name2.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim();
+  return cleaned.length > 0 ? cleaned.slice(0, 120) : "_unnamed";
+}
+
 // packages/tavern-lore/src/types.ts
 var WI_POSITION = {
   /** Before Char Defs */
@@ -3859,10 +3911,10 @@ async function collectWorldInfoBooks(db, state, characterName, character) {
 
 // packages/plugin/src/dsh-home.ts
 import { homedir } from "node:os";
-import { join as join4, resolve } from "node:path";
+import { join as join5, resolve } from "node:path";
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
-  return join4(resolve(configured || join4(homedir(), ".dsh")), ...segments);
+  return join5(resolve(configured || join5(homedir(), ".dsh")), ...segments);
 }
 
 // packages/plugin/src/guides.ts
@@ -4029,6 +4081,90 @@ function boundedText(value, max2, label) {
   return value.trim().slice(0, max2);
 }
 
+// packages/tavern-template/src/api.ts
+var DEFAULT_CHAR_DEFINE = [
+  "<% if (name) { %>",
+  "<<%- name %>>",
+  "<% if (system_prompt) { %>System: <%- system_prompt %><% } %>",
+  "name: <%- name %>",
+  "<% if (personality) { %>personality: <%- personality %><% } %>",
+  "<% if (description) { %>description: <%- description %><% } %>",
+  "<% if (message_example) { %>",
+  "example:",
+  "<%- message_example %>",
+  "<% } %>",
+  "<% if (depth_prompt) { %>System: <%- depth_prompt %><% } %>",
+  "</<%- name %>>",
+  "<% } %>"
+].join("\n");
+
+// packages/plugin/src/mvu.ts
+var MVU_RECEIPTS_LIMIT = 20;
+function plainObject(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
+function readMvuReceipts(chat) {
+  const raw = plainObject(chat?.header?.chat_metadata?.mvu)?.receipts;
+  if (!Array.isArray(raw)) return [];
+  const receipts = [];
+  for (const entry of raw) {
+    const record = plainObject(entry);
+    if (record === void 0) continue;
+    const { at, turnKey, status, changes, failures } = record;
+    if (typeof at !== "string" || typeof turnKey !== "string") continue;
+    if (status !== "updated" && status !== "unchanged" && status !== "failed") continue;
+    receipts.push({
+      at,
+      turnKey,
+      status,
+      changes: Array.isArray(changes) ? changes.flatMap((item) => {
+        const change = plainObject(item);
+        if (change === void 0 || typeof change.name !== "string") return [];
+        const out = { name: change.name };
+        if ("before" in change) out.before = change.before;
+        if ("after" in change) out.after = change.after;
+        return [out];
+      }) : [],
+      failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : []
+    });
+  }
+  return receipts;
+}
+function appendMvuReceipt(chat, receipt) {
+  const metadata = chat.header.chat_metadata;
+  const receipts = [...readMvuReceipts(chat), receipt].slice(-MVU_RECEIPTS_LIMIT);
+  metadata.mvu = { receipts };
+}
+
+// packages/plugin/src/agent-tavern/projector.ts
+import { promises as fs5 } from "node:fs";
+import { join as join6 } from "node:path";
+
+// packages/tavern-lore/lib/types.js
+var MESSAGE_BOUNDARY2 = "";
+
+// packages/tavern-lore/lib/buffer.js
+var JOINER2 = "\n" + MESSAGE_BOUNDARY2;
+
+// packages/plugin/src/agent-tavern/projector.ts
+var mvuAuditTail = Promise.resolve();
+function mvuAuditPath(tavernRoot) {
+  return join6(tavernRoot, "mvu", "audit.jsonl");
+}
+async function appendMvuAudit(tavernRoot, record) {
+  const write = mvuAuditTail.catch(() => {
+  }).then(async () => {
+    await fs5.mkdir(join6(tavernRoot, "mvu"), { recursive: true });
+    await fs5.appendFile(mvuAuditPath(tavernRoot), `${JSON.stringify(record)}
+`, "utf8");
+  });
+  mvuAuditTail = write.then(() => {
+  }, () => {
+  });
+  await write;
+}
+
 // packages/plugin/src/agent-tavern/agent.ts
 var name = "dsh-tavern/agent";
 var inject = ["systemPrompt", "tools"];
@@ -4045,6 +4181,7 @@ var KERNEL = [
   "- Research before you write: a scene that leans on character personality, backstory, speech, or relationships calls for tavern_character_get and memory_search; narrating a place, faction, technique, or item calls for tavern_lore_search; recalling an earlier event, promise, or open thread calls for tavern_history_search or memory_search. Fetch first, then narrate from what came back.",
   "- Do not invent world canon. Before narrating specifics of a proper noun not already established in this chat (person, place, faction, technique, item), call tavern_lore_search for it and stay consistent with the returned entries.",
   "- Persist significant story changes before finishing the reply: new characters, places, promises, injuries, items, relationship or status changes go to chat-scope memory via memory_write; refresh an existing entry with memory_update instead of duplicating it. Skip only when nothing significant changed.",
+  "- Settle variable state for the turn with one tavern_variable_settle call instead of scattered variable_set writes; its receipt records every before/after for retry.",
   "- Keep maintenance invisible: tool calls stay outside the story text; never mention memory or tools inside the narrative. Keep research lean: fetch what a beat needs, then commit to the scene instead of stalling on repeated lookups for details your context already answers.",
   "",
   "Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge \u2014 the card details and world-info entries behind it are not in your context, so its proper nouns are NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search before replying."
@@ -4068,6 +4205,11 @@ function apply(ctx) {
     name: "dsh-tavern:agent-guides",
     order: -65,
     text: (assembly) => agentGuidesText(assembly?.agent?.id)
+  });
+  ctx.systemPrompt?.context?.({
+    name: "dsh-tavern:agent-script",
+    order: -64,
+    text: (assembly) => agentScriptText(assembly?.agent?.id)
   });
   const tools = createTools();
   for (const tool2 of tools) {
@@ -4438,6 +4580,73 @@ function createTools() {
         truncated: entries.length >= clampInt(args.limit, 1, 100, 50)
       };
     }),
+    tool("tavern_script_read", "Read one segment of the script bound to the current character: by default the segment at the current progress position, or the segment at chunkIndex when given. The script is a reference the player may deviate from, not a mandate. Returns found:false when no script is bound, so you can skip it gracefully.", {
+      chunkIndex: { type: "integer", description: "Zero-based segment index; omit it to read the segment at the current progress position. Out-of-range values are clamped." },
+      maxChars: { type: "integer", description: "Maximum segment text characters, default 2400, capped at 4000." }
+    }, scriptReadOutput, async (args, exec) => {
+      const binding = await bindingFor(exec);
+      const db = await tavernStore();
+      const character = await db.getCharacter(binding.character);
+      const scriptName = boundScriptOf(character?.card);
+      if (scriptName === void 0) return { found: false };
+      const script = await getScript(dshHomePath("tavern"), scriptName);
+      if (script === void 0 || script.chunks.length === 0) return { found: false };
+      const snapshot2 = await db.getChatSnapshot(binding.character, binding.chatId);
+      const progress = normalizeScriptProgress(snapshot2?.chat.header.chat_metadata?.scriptProgress);
+      const currentIndex = progress !== void 0 && progress.scriptName === scriptName ? Math.min(progress.chunkIndex, script.chunks.length - 1) : 0;
+      const chunkIndex = clampInt(args.chunkIndex, 0, script.chunks.length - 1, currentIndex);
+      const maxChars = clampInt(args.maxChars, 1, 4e3, 2400);
+      const chunk = script.chunks[chunkIndex];
+      return {
+        found: true,
+        scriptName,
+        chunkIndex,
+        chunkCount: script.chunks.length,
+        text: chunk.text.slice(0, maxChars),
+        truncated: chunk.text.length > maxChars
+      };
+    }),
+    tool("tavern_script_advance", "Advance the bound script progress by exactly one segment, after the latest story actually covered the current segment (the player may deviate; do not advance on a deviation). Records alignedAt and an optional short note on the progress. Returns done:true at the final segment.", {
+      note: { type: "string", description: "Optional alignment note recorded with the progress, capped at 200 characters." }
+    }, scriptAdvanceOutput, async (args, exec) => {
+      const binding = await bindingFor(exec);
+      const db = await tavernStore();
+      const character = await db.getCharacter(binding.character);
+      const scriptName = boundScriptOf(character?.card);
+      if (scriptName === void 0) return { found: false };
+      const script = await getScript(dshHomePath("tavern"), scriptName);
+      if (script === void 0 || script.chunks.length === 0) return { found: false };
+      const snapshot2 = await db.getChatSnapshot(binding.character, binding.chatId);
+      if (!snapshot2) throw new Error("bound Tavern chat not found");
+      const prior = normalizeScriptProgress(snapshot2.chat.header.chat_metadata?.scriptProgress);
+      const priorIndex = prior !== void 0 && prior.scriptName === scriptName ? Math.min(prior.chunkIndex, script.chunks.length - 1) : 0;
+      const done = priorIndex >= script.chunks.length - 1;
+      const chunkIndex = done ? priorIndex : priorIndex + 1;
+      const note = typeof args.note === "string" && args.note.trim() !== "" ? args.note.trim().slice(0, 200) : void 0;
+      const progress = {
+        scriptName,
+        chunkIndex,
+        alignedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        ...note !== void 0 ? { lastNote: note } : {}
+      };
+      await db.saveChat(binding.character, binding.chatId, {
+        ...snapshot2.chat,
+        header: {
+          ...snapshot2.chat.header,
+          chat_metadata: { ...snapshot2.chat.header.chat_metadata, scriptProgress: progress }
+        }
+      }, snapshot2.revision);
+      await refreshAgentScriptSummaries(binding.character, binding.chatId);
+      return {
+        found: true,
+        scriptName,
+        chunkIndex,
+        chunkCount: script.chunks.length,
+        done,
+        alignedAt: progress.alignedAt,
+        ...note !== void 0 ? { lastNote: note } : {}
+      };
+    }),
     tool("tavern_deduce", "Run a multi-role scenario deduction: derive 2-5 named roles from the current story, spawn one reasoning-only subagent per role, and collect their predicted positions across 1-3 rounds. Use when the user asks to simulate, war-game, or deduce how a situation would unfold. Returns each role's position per round; weave the conclusion into the narrative yourself.", {
       scenario: { type: "string", required: true, description: "The concrete situation or what-if to deduce, grounded in established story facts, capped at 2000 characters." },
       roles: {
@@ -4463,6 +4672,94 @@ function createTools() {
         throw new Error('subagent runtime is unavailable in this deployment; enable the dsh-subagent bundle with an in-process "spawn" provider to run deductions');
       }
       return runDeduction({ subagents, parent, signal: exec.signal }, parseDeductionRequest(args));
+    }),
+    tool("tavern_variable_settle", "Settle tracked variable state for the current turn in one batch: writes chat-scope variables and records an MVU receipt (before/after per change, per-item failures) plus an audit line. Use it instead of scattered variable_set calls whenever a turn moves tracked story state; retrying a failed item is a fresh settle, the narrative stays untouched.", {
+      changes: {
+        type: "array",
+        required: true,
+        description: "Up to 16 entries of { name, value, reason? }.",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Variable name, 1-64 characters." },
+            value: {},
+            reason: { type: "string", description: "Optional one-line settlement reason, capped at 200 characters." }
+          },
+          required: ["name", "value"],
+          additionalProperties: false
+        }
+      }
+    }, settleOutput, async (args, exec) => {
+      const binding = await bindingFor(exec);
+      exec.signal?.throwIfAborted();
+      if (!Array.isArray(args.changes) || args.changes.length === 0 || args.changes.length > 16) {
+        throw new Error("changes must be a non-empty array of at most 16 entries");
+      }
+      const requests = args.changes.map((change) => {
+        const entry = change;
+        if (typeof entry.name !== "string" || entry.name.trim() === "") {
+          throw new Error("each change requires a non-empty string name");
+        }
+        return {
+          name: entry.name,
+          value: entry.value,
+          reason: typeof entry.reason === "string" && entry.reason.trim() !== "" ? entry.reason.slice(0, 200) : void 0
+        };
+      });
+      const db = await tavernStore();
+      const snapshot2 = await db.getChatSnapshot(binding.character, binding.chatId);
+      if (!snapshot2) throw new Error("bound Tavern chat not found");
+      const chat = snapshot2.chat;
+      const store = await variableStore();
+      const applied = [];
+      const failed = [];
+      const receiptChanges = [];
+      const auditChanges = [];
+      for (const request of requests) {
+        try {
+          const existing = await store.get("chat", binding.chatId, request.name);
+          const written = await store.set("chat", binding.chatId, request.name, request.value, existing?.revision);
+          applied.push(request.name);
+          const change = {
+            name: request.name,
+            ...existing !== void 0 ? { before: existing.value } : {},
+            after: written.value
+          };
+          receiptChanges.push(change);
+          auditChanges.push({
+            name: request.name,
+            ...request.reason !== void 0 ? { reason: request.reason } : {},
+            ..."before" in change ? { before: change.before } : {},
+            after: change.after
+          });
+        } catch (error) {
+          failed.push({ name: request.name, error: error instanceof Error ? error.message : String(error) });
+          auditChanges.push({
+            name: request.name,
+            ...request.reason !== void 0 ? { reason: request.reason } : {}
+          });
+        }
+      }
+      const receipt = {
+        at: (/* @__PURE__ */ new Date()).toISOString(),
+        turnKey: String(chat.messages.length),
+        status: failed.length > 0 ? "failed" : receiptChanges.length > 0 ? "updated" : "unchanged",
+        changes: receiptChanges,
+        failures: failed.map((failure) => `${failure.name}: ${failure.error}`)
+      };
+      appendMvuReceipt(chat, receipt);
+      await db.saveChat(binding.character, binding.chatId, chat, snapshot2.revision);
+      await appendMvuAudit(dshHomePath("tavern"), {
+        at: receipt.at,
+        sessionId: binding.agentId,
+        character: binding.character,
+        chatId: binding.chatId,
+        turnKey: receipt.turnKey,
+        status: receipt.status,
+        changes: auditChanges,
+        failures: receipt.failures
+      });
+      return { applied, failed, receipt };
     })
   ];
 }
@@ -4563,6 +4860,29 @@ var variableDeleteOutput = objectOutput(
   { found: { type: "boolean" }, scope: { type: "string" }, name: { type: "string" } },
   []
 );
+var scriptReadOutput = objectOutput(
+  {
+    found: { type: "boolean" },
+    scriptName: { type: "string" },
+    chunkIndex: { type: "integer" },
+    chunkCount: { type: "integer" },
+    text: { type: "string" },
+    truncated: { type: "boolean" }
+  },
+  ["scriptName", "chunkIndex", "chunkCount", "text", "truncated"]
+);
+var scriptAdvanceOutput = objectOutput(
+  {
+    found: { type: "boolean" },
+    scriptName: { type: "string" },
+    chunkIndex: { type: "integer" },
+    chunkCount: { type: "integer" },
+    done: { type: "boolean" },
+    alignedAt: { type: "string" },
+    lastNote: { type: "string" }
+  },
+  ["scriptName", "chunkIndex", "chunkCount", "done", "alignedAt", "lastNote"]
+);
 var deductionOutput = objectOutput({
   scenario: { type: "string" },
   rounds: { type: "integer" },
@@ -4570,6 +4890,11 @@ var deductionOutput = objectOutput({
   positions: { type: "array", items: { type: "object", additionalProperties: true } },
   failures: { type: "array", items: { type: "object", additionalProperties: true } },
   truncated: { type: "boolean" }
+});
+var settleOutput = objectOutput({
+  applied: { type: "array", items: { type: "string" } },
+  failed: { type: "array", items: { type: "object", additionalProperties: true } },
+  receipt: { type: "object", additionalProperties: true }
 });
 function memoryView(record) {
   return {
@@ -4719,6 +5044,54 @@ onGuidesChanged(async (character, chatId) => {
   } catch {
   }
 });
+var scriptSummaryCache = /* @__PURE__ */ new Map();
+var scriptSummaryLoadStarted = /* @__PURE__ */ new Set();
+var scriptSummaryLoadTicket = /* @__PURE__ */ new Map();
+function agentScriptText(agentId) {
+  if (typeof agentId !== "string" || agentId.trim() === "") return "";
+  if (!scriptSummaryLoadStarted.has(agentId)) {
+    scriptSummaryLoadStarted.add(agentId);
+    void loadAgentScriptSummary(agentId);
+  }
+  return scriptSummaryCache.get(agentId) ?? "";
+}
+async function loadAgentScriptSummary(agentId) {
+  const ticket = (scriptSummaryLoadTicket.get(agentId) ?? 0) + 1;
+  scriptSummaryLoadTicket.set(agentId, ticket);
+  try {
+    const db = await tavernStore();
+    const binding = (await db.getState()).sessionBindings[agentId];
+    if (!binding || binding.architecture !== "agent-tavern") return;
+    const text = await scriptSummaryForChat(db, binding.character, binding.chatId);
+    if (scriptSummaryLoadTicket.get(agentId) !== ticket) return;
+    scriptSummaryCache.set(agentId, text);
+  } catch {
+  }
+}
+async function scriptSummaryForChat(db, character, chatId) {
+  const found = await db.getCharacter(character);
+  const scriptName = boundScriptOf(found?.card);
+  if (scriptName === void 0) return "";
+  const script = await getScript(dshHomePath("tavern"), scriptName);
+  if (script === void 0 || script.chunks.length === 0) return "";
+  const snapshot2 = await db.getChatSnapshot(character, chatId);
+  if (!snapshot2) return "";
+  const progress = normalizeScriptProgress(snapshot2.chat.header.chat_metadata?.scriptProgress);
+  const chunkIndex = progress !== void 0 && progress.scriptName === scriptName ? Math.min(progress.chunkIndex, script.chunks.length - 1) : 0;
+  return `Bound script: ${scriptName}, progress ${chunkIndex + 1}/${script.chunks.length}; call tavern_script_read for the current segment, tavern_script_advance when the scene has covered it`;
+}
+async function refreshAgentScriptSummaries(character, chatId) {
+  try {
+    const db = await tavernStore();
+    const state = await db.getState();
+    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+      if (binding.architecture !== "agent-tavern" || binding.character !== character || binding.chatId !== chatId) continue;
+      scriptSummaryLoadStarted.add(agentId);
+      await loadAgentScriptSummary(agentId);
+    }
+  } catch {
+  }
+}
 function identitySummaryOf(data) {
   const agentTavern = data.extensions?.agentTavern;
   const summary = agentTavern?.identitySummary;
