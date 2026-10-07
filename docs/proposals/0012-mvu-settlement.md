@@ -1,6 +1,6 @@
 # 提案 0012：MVU 后台变量结算 + 回执 + 固定状态栏 — dsh-tavern 功能复刻（设计）
 
-> 状态：P1 已实现（61871df），P2/P3 未实施。日期：2026-10-07。参照物：`flizzywine/dsh-tavern`（AGPL-3.0）
+> 状态：P1/P2 已实现（P1:61871df），P3 未实施。日期：2026-10-07。参照物：`flizzywine/dsh-tavern`（AGPL-3.0）
 > 公开功能文档（README「更稳」「人物卡转 MVU 版」、feature-inventory D02/D03/D04）。
 > clean-room：只依据行为规格，实施时禁止阅读其源码。
 

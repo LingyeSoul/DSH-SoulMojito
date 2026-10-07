@@ -16,6 +16,8 @@ import {
   runDeduction,
   subagentRuntimeOf,
 } from './deduce.js'
+import { appendMvuReceipt, type MvuReceipt, type MvuVariableChange } from '../mvu.js'
+import { appendMvuAudit } from './projector.js'
 
 export const name = 'dsh-tavern/agent'
 export const inject = ['systemPrompt', 'tools']
@@ -33,6 +35,7 @@ const KERNEL = [
   '- Research before you write: a scene that leans on character personality, backstory, speech, or relationships calls for tavern_character_get and memory_search; narrating a place, faction, technique, or item calls for tavern_lore_search; recalling an earlier event, promise, or open thread calls for tavern_history_search or memory_search. Fetch first, then narrate from what came back.',
   '- Do not invent world canon. Before narrating specifics of a proper noun not already established in this chat (person, place, faction, technique, item), call tavern_lore_search for it and stay consistent with the returned entries.',
   '- Persist significant story changes before finishing the reply: new characters, places, promises, injuries, items, relationship or status changes go to chat-scope memory via memory_write; refresh an existing entry with memory_update instead of duplicating it. Skip only when nothing significant changed.',
+  '- Settle variable state for the turn with one tavern_variable_settle call instead of scattered variable_set writes; its receipt records every before/after for retry.',
   '- Keep maintenance invisible: tool calls stay outside the story text; never mention memory or tools inside the narrative. Keep research lean: fetch what a beat needs, then commit to the scene instead of stalling on repeated lookups for details your context already answers.',
   '',
   'Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge — the card details and world-info entries behind it are not in your context, so its proper nouns are NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search before replying.',
@@ -507,6 +510,110 @@ function createTools(): ToolDefinition[] {
       }
       return runDeduction({ subagents, parent, signal: exec.signal }, parseDeductionRequest(args))
     }),
+    tool('tavern_variable_settle', 'Settle tracked variable state for the current turn in one batch: writes chat-scope variables and records an MVU receipt (before/after per change, per-item failures) plus an audit line. Use it instead of scattered variable_set calls whenever a turn moves tracked story state; retrying a failed item is a fresh settle, the narrative stays untouched.', {
+      changes: {
+        type: 'array', required: true, description: 'Up to 16 entries of { name, value, reason? }.',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Variable name, 1-64 characters.' },
+            value: {},
+            reason: { type: 'string', description: 'Optional one-line settlement reason, capped at 200 characters.' },
+          },
+          required: ['name', 'value'],
+          additionalProperties: false,
+        },
+      },
+    }, settleOutput, async (args, exec) => {
+      const binding = await bindingFor(exec)
+      exec.signal?.throwIfAborted()
+      if (!Array.isArray(args.changes) || args.changes.length === 0 || args.changes.length > 16) {
+        throw new Error('changes must be a non-empty array of at most 16 entries')
+      }
+      const requests = args.changes.map((change) => {
+        const entry = change as Record<string, unknown>
+        if (typeof entry.name !== 'string' || entry.name.trim() === '') {
+          throw new Error('each change requires a non-empty string name')
+        }
+        return {
+          name: entry.name,
+          value: entry.value as never,
+          reason: typeof entry.reason === 'string' && entry.reason.trim() !== '' ? entry.reason.slice(0, 200) : undefined,
+        }
+      })
+      // 读聊天对齐 tavern_scene_get（getChat），但保存必须带 revision CAS，故直接
+      // 取 snapshot（getChatSnapshot/saveChat，与 retryMvuSettlement 同通道）。
+      const db = await tavernStore()
+      const snapshot = await db.getChatSnapshot(binding.character, binding.chatId)
+      if (!snapshot) throw new Error('bound Tavern chat not found')
+      const chat = snapshot.chat
+
+      // 逐项写 chat 作用域变量（variable_set 同款 store 语义）：单项失败（非法
+      // 名、超限值等 store 层校验）只记入 failures，不影响其他项。
+      const store = await variableStore()
+      const applied: string[] = []
+      const failed: Array<{ name: string; error: string }> = []
+      const receiptChanges: MvuVariableChange[] = []
+      // 审计项与请求一一对应（成功项带 before/after，失败项只有名字），不能事后
+      // 按 receiptChanges 下标对账——失败项不入 receiptChanges，下标会错位。
+      const auditChanges: Array<{ name: string; reason?: string; before?: unknown; after?: unknown }> = []
+      for (const request of requests) {
+        try {
+          const existing = await store.get('chat', binding.chatId, request.name)
+          // set 的既有语义：无 expectedRevision 只允许创建，更新必须 CAS。写前
+          // 读旧值并以其 revision 作期望（variable_delete 同款习语）；get 与 set
+          // 之间的真并发写仍会冲突并落 failures，交给下一次结算重试。
+          const written = await store.set('chat', binding.chatId, request.name, request.value, existing?.revision)
+          applied.push(request.name)
+          const change: MvuVariableChange = {
+            name: request.name,
+            ...(existing !== undefined ? { before: existing.value } : {}),
+            after: written.value,
+          }
+          receiptChanges.push(change)
+          auditChanges.push({
+            name: request.name,
+            ...(request.reason !== undefined ? { reason: request.reason } : {}),
+            ...('before' in change ? { before: change.before } : {}),
+            after: change.after,
+          })
+        } catch (error) {
+          failed.push({ name: request.name, error: error instanceof Error ? error.message : String(error) })
+          auditChanges.push({
+            name: request.name,
+            ...(request.reason !== undefined ? { reason: request.reason } : {}),
+          })
+        }
+      }
+
+      // 回执落 chat_metadata.mvu.receipts（P1 结构，环形 20 条）。工具形态的
+      // turnKey 是「正在生成的楼层将占据的 messages 下标」：结算发生在楼层投影
+      // 落库之前，同一楼层的多次结算共享同一 turnKey（P1 重试同楼层同理）。
+      const receipt: MvuReceipt = {
+        at: new Date().toISOString(),
+        turnKey: String(chat.messages.length),
+        status: failed.length > 0 ? 'failed' : receiptChanges.length > 0 ? 'updated' : 'unchanged',
+        changes: receiptChanges,
+        failures: failed.map((failure) => `${failure.name}: ${failure.error}`),
+      }
+      appendMvuReceipt(chat, receipt)
+      // CAS 冲突抛 ChatRevisionConflictError：由 agent 重调工具重试（变量已写、
+      // 回执未落，重试幂等）。
+      await db.saveChat(binding.character, binding.chatId, chat, snapshot.revision)
+      // 回执的持久投影（提案 0012 P2）：会话事件词汇表对插件封闭（v4 宿主拒载
+      // 未知事件类型），审计线落独立文件 <tavern>/mvu/audit.jsonl，见 projector.ts。
+      await appendMvuAudit(dshHomePath('tavern'), {
+        at: receipt.at,
+        sessionId: binding.agentId,
+        character: binding.character,
+        chatId: binding.chatId,
+        turnKey: receipt.turnKey,
+        status: receipt.status,
+        changes: auditChanges,
+        failures: receipt.failures,
+      })
+      return { applied, failed, receipt }
+    }),
   ]
 }
 
@@ -807,6 +914,11 @@ onGuidesChanged(async (character, chatId) => {
   } catch {
     // best-effort 写穿：失败只意味着下一次装配沿用旧缓存。
   }
+})
+const settleOutput = objectOutput({
+  applied: { type: 'array', items: { type: 'string' } },
+  failed: { type: 'array', items: { type: 'object', additionalProperties: true } },
+  receipt: { type: 'object', additionalProperties: true },
 })
 
 export function identitySummaryOf(data: { extensions?: Record<string, unknown> }): string | undefined {

@@ -424,3 +424,68 @@ function validateCheckpoint(value: ProjectionCheckpoint, sessionId: string): voi
     throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`)
   }
 }
+
+/* --------------------- MVU 结算审计（提案 0012 P2） --------------------- */
+
+/**
+ * 回执的持久投影为什么不落宿主会话事件（选型证据链）：
+ *
+ * - v4 词汇表封闭：宿主持久化校验拒绝一切未知事件类型——`assistant/chunk`
+ *   （v0/v1 词汇）实测被整会话拒载 `SessionFormatUnsupportedError: contains
+ *   event type "assistant/chunk" (seq 3) unknown to this harness and not marked
+ *   ignorable`（decisions/2026-10-05-import-turn-boundaries-and-settlement.md
+ *   Decision 第 6 条 + Evidence 实测；同结论见 index.ts 生成链路的流式
+ *   注释）。自造 `mvu/receipt` 事件类型同型踩雷，直接否决。
+ * - 既有 assistant 事件没有插件可安全挂靠的可扩展数据面：model source 成员
+ *   封闭（v0 disposition 封闭成员集 {kind, plugin, form, sections, summary}，
+ *   decisions/2026-09-30-session-format-v4-producer-source.md；合成镜像
+ *   source 靠 provider/model 对即为此），live 楼层事件的 writer 是宿主 loop，
+ *   插件无从在别人的事件上补数据成员。
+ * - 工具形态下回执结果已随宿主自身的 tool-call/tool/result 事件进 durable
+ *   events（宿主词汇表原生成员，见 agent-tavern-projector.spec.ts 的 session
+ *   fixture）；插件自持的持久轨迹（含 reason、会话身份）走独立审计文件。
+ *
+ * 因此：tavern_variable_settle 成功落库后把审计线追加到
+ * `<tavern>/mvu/audit.jsonl`（逐行一条 JSON），与宿主会话格式彻底解耦——
+ * 宿主换代不迁移这份文件，也不会因它拒载会话。
+ */
+
+export interface MvuAuditRecord {
+  at: string
+  sessionId: string
+  character: string
+  chatId: string
+  turnKey: string
+  status: string
+  changes: Array<{ name: string; reason?: string; before?: unknown; after?: unknown }>
+  failures: string[]
+}
+
+/** 结算审计的串行尾巴：与 VariableStore.mutationTail 同款，保证追加顺序。 */
+let mvuAuditTail: Promise<void> = Promise.resolve()
+
+export function mvuAuditPath(tavernRoot: string): string {
+  return join(tavernRoot, 'mvu', 'audit.jsonl')
+}
+
+/** 追加一条结算审计线（<tavern>/mvu/audit.jsonl）。 */
+export async function appendMvuAudit(tavernRoot: string, record: MvuAuditRecord): Promise<void> {
+  const write = mvuAuditTail.catch(() => {}).then(async () => {
+    await fs.mkdir(join(tavernRoot, 'mvu'), { recursive: true })
+    await fs.appendFile(mvuAuditPath(tavernRoot), `${JSON.stringify(record)}\n`, 'utf8')
+  })
+  mvuAuditTail = write.then(() => {}, () => {})
+  await write
+}
+
+/** 读回审计线（测试与排查面）；文件不存在视为空。 */
+export async function readMvuAudit(tavernRoot: string): Promise<MvuAuditRecord[]> {
+  let text: string
+  try {
+    text = await fs.readFile(mvuAuditPath(tavernRoot), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    return []
+  }
+  return text.split('\n').filter((line) => line.trim() !== '').map((line) => JSON.parse(line) as MvuAuditRecord)
+}
