@@ -72,6 +72,7 @@ import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoB
 import { createGenerationTemplates, mergeTemplateLocalVars, type GenerationTemplates } from './template.js'
 import { runCandidateGeneration } from './candidates.js'
 import { formatRewriteBlock, optionalFeedback } from './rewrite.js'
+import { saveOriginalSnapshot } from '../../tavern-store/src/index.js'
 import { dshHomePath } from './dsh-home.js'
 import { TavernUpdateService, updateChangelog } from './update/service.js'
 
@@ -809,6 +810,13 @@ async function handleApi(ctx, req, res) {
     else if (body.card && typeof body.card === 'object') source = body.card
     else throw new Error('expected { pngBase64 }, { charxBase64 } or { card }')
     const result = await db.importCharacter(source)
+    // 原版快照（提案 0013 P1）：导入成功后 best-effort 一次性保留原版；已存在
+    // 不覆盖，失败只记警告不阻断导入——导入语义优先，快照是增值保障。
+    try {
+      await saveOriginalSnapshot(dshHomePath('tavern'), result.card.data.name, result.card)
+    } catch (error) {
+      console.warn(`dsh-tavern: original snapshot for '${result.card.data.name}' failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
     const current = await db.getState()
     if (!current.activeCharacter) {
       // 首个导入的角色成为活跃角色，并自动激活其绑定的世界书

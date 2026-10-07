@@ -820,7 +820,7 @@ function mergeRegexScripts(current: RegexScriptIR[], imported: RegexScriptIR[]):
   return merged
 }
 
-function safeFileName(name: string): string {
+export function safeFileName(name: string): string {
   const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim()
   return cleaned.length > 0 ? cleaned.slice(0, 120) : '_unnamed'
 }

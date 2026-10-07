@@ -36,6 +36,17 @@
           - id: dsh-novel-author
             name: 'dsh-tavern/novel'
 
+    - id: preset-card-workbench
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: card-workbench
+        name: CardWorkbench
+        description: 卡片工作台（提案 0013）：对话式修改人物卡，先逐字段方案、用户确认后写入，原版快照可恢复。
+        order: 12
+        plugins:
+          - id: dsh-card-workbench
+            name: 'dsh-tavern/card-workbench'
+
 # compaction curator：替换 dsh-base 的 compaction 后端（本 bundle 在
 # dsh-base/dsh-web-app 之后加载，patch 后写胜出）。宿主 patch 方言里覆写项
 # 的 `name` 是"条目当前模块名"守卫——不匹配只告警跳过、并不能改模块，所以
