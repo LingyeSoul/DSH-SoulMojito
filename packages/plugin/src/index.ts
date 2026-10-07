@@ -61,6 +61,7 @@ import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, last
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from './agent-tavern/deduce.js'
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
 import { createGenerationTemplates, mergeTemplateLocalVars, type GenerationTemplates } from './template.js'
+import { runCandidateGeneration } from './candidates.js'
 import { dshHomePath } from './dsh-home.js'
 import { TavernUpdateService, updateChangelog } from './update/service.js'
 
@@ -1084,6 +1085,33 @@ async function handleApi(ctx, req, res) {
     })
     const snapshot = await db.getChatSnapshot(body.character, result.chatId)
     return sendJson(res, 200, { ok: true, id: result.chatId, chat: snapshot?.chat ?? result.chat, revision: snapshot?.revision })
+  }
+
+  // 行动候选（提案 0010）：独立轻量请求，与正文生成解耦；失败不落聊天。
+  if (method === 'POST' && route === 'candidates') {
+    const body = await readJson(req)
+    const state = await db.getState()
+    assertStGenerationBinding(state, body.sessionId)
+    const characterName = typeof body.character === 'string' ? body.character : state.activeCharacter
+    const chatId = body.chatId
+    if (!characterName || typeof chatId !== 'string') throw new Error('character and chatId are required')
+    if (typeof body.revision !== 'string') throw new Error('revision is required')
+    const snapshot = await db.getChatSnapshot(characterName, chatId)
+    if (!snapshot) throw new Error('character or chat not found')
+    const feedback = optionalFeedback(body.feedback)
+    const result = await runCandidateGeneration(ctx, db, {
+      state,
+      characterName,
+      chatId,
+      snapshot,
+      feedback,
+      revision: body.revision,
+      sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
+      provider: typeof body.provider === 'string' ? body.provider : undefined,
+      model: typeof body.model === 'string' ? body.model : undefined,
+      reasoningEffort: typeof body.reasoningEffort === 'string' ? body.reasoningEffort : undefined,
+    })
+    return sendJson(res, 200, { ok: true, items: result.items, generatedAt: result.generatedAt, revision: result.revision })
   }
 
   if (method === 'GET' && route.startsWith('world/')) {
