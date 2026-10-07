@@ -9266,6 +9266,1797 @@ function isRuntime(candidate) {
   return typeof candidate === "object" && candidate !== null && typeof candidate.start === "function";
 }
 
+// packages/tavern-template/src/paths.ts
+function parsePath(path6) {
+  if (path6 === "") return [];
+  const segments = [];
+  let buf = "";
+  let i = 0;
+  while (i < path6.length) {
+    const ch = path6[i];
+    if (ch === ".") {
+      if (buf !== "") segments.push(buf);
+      buf = "";
+      i++;
+    } else if (ch === "[") {
+      const close = path6.indexOf("]", i);
+      if (close === -1) return [];
+      if (buf !== "") segments.push(buf);
+      const inner = path6.slice(i + 1, close).trim();
+      if (!/^-?\d+$/.test(inner)) return [];
+      segments.push(inner);
+      buf = "";
+      i = close + 1;
+      if (path6[i] === ".") i++;
+    } else {
+      buf += ch;
+      i++;
+    }
+  }
+  if (buf !== "") segments.push(buf);
+  return segments;
+}
+function isObjectLike(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function deepClone(value) {
+  if (Array.isArray(value)) return value.map((item) => deepClone(item));
+  if (isObjectLike(value)) {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) out[key] = deepClone(item);
+    return out;
+  }
+  return value;
+}
+function getPath(root, path6) {
+  const segments = parsePath(path6);
+  let cur = root;
+  for (const seg of segments) {
+    if (cur === null || cur === void 0) return void 0;
+    if (Array.isArray(cur)) {
+      const idx = Number(seg);
+      if (!Number.isInteger(idx)) return void 0;
+      cur = cur[idx < 0 ? cur.length + idx : idx];
+    } else if (isObjectLike(cur)) {
+      cur = Object.prototype.hasOwnProperty.call(cur, seg) ? cur[seg] : void 0;
+    } else {
+      return void 0;
+    }
+  }
+  return cur;
+}
+function setPath(root, path6, value) {
+  const segments = parsePath(path6);
+  if (segments.length === 0) return root;
+  const last = segments[segments.length - 1];
+  let cur = root;
+  for (const seg of segments.slice(0, -1)) {
+    const existing = cur[seg];
+    if (isObjectLike(existing)) {
+      cur = existing;
+    } else if (Array.isArray(existing)) {
+      const wrapper = {};
+      cur[seg] = wrapper;
+      cur = wrapper;
+    } else {
+      const next = {};
+      cur[seg] = next;
+      cur = next;
+    }
+  }
+  if (/^-?\d+$/.test(last) && Array.isArray(cur[last])) {
+    const arr = cur[last];
+    const idx = Number(last) < 0 ? arr.length + Number(last) : Number(last);
+    arr[idx < 0 ? 0 : idx] = value;
+  } else {
+    cur[last] = value;
+  }
+  return root;
+}
+function unsetPath(root, path6, index) {
+  if (index !== void 0) {
+    const target = getPath(root, path6);
+    if (Array.isArray(target)) {
+      const idx = typeof index === "number" ? index : Number(index);
+      if (Number.isInteger(idx) && idx >= 0 && idx < target.length) target.splice(idx, 1);
+    } else if (typeof target === "string") {
+      const idx = typeof index === "number" ? index : Number(index);
+      if (Number.isInteger(idx) && idx >= 0 && idx < target.length) {
+        setPath(root, path6, target.slice(0, idx) + target.slice(idx + 1));
+      }
+    } else if (isObjectLike(target)) {
+      delete target[String(index)];
+    }
+    return;
+  }
+  const segments = parsePath(path6);
+  if (segments.length === 0) return;
+  const last = segments[segments.length - 1];
+  let cur = root;
+  for (const seg of segments.slice(0, -1)) {
+    cur = getPath(cur, seg);
+    if (cur === null || cur === void 0) return;
+  }
+  if (isObjectLike(cur) || Array.isArray(cur)) delete cur[last];
+}
+function insertAtPath(root, path6, value, index) {
+  const target = getPath(root, path6);
+  if (Array.isArray(target)) {
+    const idx = index === void 0 ? target.length : Number(index);
+    if (Number.isInteger(idx) && idx >= 0 && idx <= target.length) target.splice(idx, 0, value);
+  } else if (typeof target === "string") {
+    const idx = index === void 0 ? target.length : Number(index);
+    if (Number.isInteger(idx) && idx >= 0 && idx <= target.length) {
+      setPath(root, path6, target.slice(0, idx) + String(value) + target.slice(idx));
+    }
+  } else if (isObjectLike(target)) {
+    target[index === void 0 ? String(target.length) : String(index)] = value;
+  }
+}
+function deepMerge(target, source) {
+  for (const [key, value] of Object.entries(source)) {
+    if (value === void 0) continue;
+    const dst = target[key];
+    if (isObjectLike(dst) && isObjectLike(value)) {
+      deepMerge(dst, value);
+    } else {
+      target[key] = deepClone(value);
+    }
+  }
+  return target;
+}
+
+// packages/tavern-template/src/api.ts
+var DEFAULT_CHAR_DEFINE = [
+  "<% if (name) { %>",
+  "<<%- name %>>",
+  "<% if (system_prompt) { %>System: <%- system_prompt %><% } %>",
+  "name: <%- name %>",
+  "<% if (personality) { %>personality: <%- personality %><% } %>",
+  "<% if (description) { %>description: <%- description %><% } %>",
+  "<% if (message_example) { %>",
+  "example:",
+  "<%- message_example %>",
+  "<% } %>",
+  "<% if (depth_prompt) { %>System: <%- depth_prompt %><% } %>",
+  "</<%- name %>>",
+  "<% } %>"
+].join("\n");
+var MAX_GETWI_DEPTH = 8;
+function createTemplateEnv(options) {
+  const { vars, host, defines } = options;
+  const depth = options.getwiDepth ?? { current: 0 };
+  const scopedVar = (scope) => ({
+    get: (key, opt2) => vars.getVar(key, { ...optAsRecord(opt2), scope }),
+    set: (key, value, opt2) => vars.setVar(key, value, { ...optAsRecord(opt2), scope }),
+    inc: (key, value = 1, opt2) => vars.incDecVar(key, value, { ...optAsRecord(opt2), outscope: scope }, 1),
+    dec: (key, value = 1, opt2) => vars.incDecVar(key, value, { ...optAsRecord(opt2), outscope: scope }, -1),
+    del: (key, index, opt2) => vars.delVar(key, index, { ...optAsRecord(opt2), scope }),
+    ins: (key, value, index, opt2) => vars.insVar(key, value, index, { ...optAsRecord(opt2), scope })
+  });
+  const local = scopedVar("local");
+  const global = scopedVar("global");
+  const message = scopedVar("message");
+  async function getwi(lorebookOrTitle, titleOrData, maybeData) {
+    let book;
+    let title;
+    let data = {};
+    if (lorebookOrTitle !== null && typeof lorebookOrTitle === "object") {
+      data = lorebookOrTitle;
+      title = titleOrData;
+    } else if (titleOrData !== null && typeof titleOrData === "object") {
+      title = lorebookOrTitle;
+      data = titleOrData;
+    } else if (titleOrData !== void 0) {
+      book = String(lorebookOrTitle);
+      title = titleOrData;
+      if (maybeData !== null && typeof maybeData === "object") data = maybeData;
+    } else {
+      title = lorebookOrTitle;
+    }
+    if (title === void 0 || title === "") return "";
+    if (depth.current >= MAX_GETWI_DEPTH) {
+      host.onWarning?.(`getwi recursion depth exceeded (${MAX_GETWI_DEPTH}) at "${String(title)}"`);
+      return "";
+    }
+    const entries = host.findWorldEntries(title, book);
+    if (entries.length === 0) return "";
+    const entry = entries[0];
+    depth.current++;
+    try {
+      return await host.renderNested(entry.content, {
+        world_info: worldInfoView(entry),
+        getwi_book: entry.book,
+        ...data
+      });
+    } catch (err2) {
+      host.onWarning?.(`getwi render failed for ${entry.book}#${entry.uid}: ${errorMessage(err2)}`);
+      return entry.content;
+    } finally {
+      depth.current--;
+    }
+  }
+  async function getchar(nameOrTemplate, templateArg, dataArg) {
+    let name2;
+    let template = DEFAULT_CHAR_DEFINE;
+    let data = {};
+    if (typeof nameOrTemplate === "string" && nameOrTemplate.includes("<%")) {
+      template = nameOrTemplate;
+      if (templateArg !== void 0 && typeof templateArg === "object") data = templateArg;
+    } else {
+      if (nameOrTemplate !== void 0) name2 = nameOrTemplate;
+      if (typeof templateArg === "string") template = templateArg;
+      else if (templateArg !== void 0) data = templateArg;
+      if (dataArg !== void 0) data = dataArg;
+    }
+    const card = host.getCard(name2);
+    if (!card) return "";
+    const fields = {
+      name: card.name,
+      system_prompt: card.systemPrompt,
+      personality: card.personality,
+      description: card.description,
+      scenario: card.scenario,
+      first_message: card.firstMes,
+      message_example: card.mesExample,
+      creatorcomment: card.creatorNotes,
+      depth_prompt: card.depthPrompt,
+      ...data
+    };
+    return await host.renderNested(template, fields);
+  }
+  async function getpreset(name2, data = {}) {
+    const prompt = host.findPresetPrompt(name2);
+    if (!prompt) return "";
+    return await host.renderNested(prompt.content, { preset_prompt_name: prompt.name, ...data });
+  }
+  function resolveMessageIdx(idx) {
+    const messages = host.messages;
+    return idx < 0 ? messages.length + idx : idx;
+  }
+  function getChatMessage(idx, role) {
+    const resolved = resolveMessageIdx(idx);
+    const msg = host.messages[resolved];
+    if (!msg) return "";
+    if (role !== void 0 && roleOf(msg) !== role) return "";
+    return msg.mes;
+  }
+  function getChatMessages(a, b, c) {
+    let start;
+    let end;
+    let role;
+    if (b === void 0 || b === "user" || b === "assistant" || b === "system") {
+      start = -a;
+      role = b;
+    } else {
+      start = a;
+      end = b;
+      role = c;
+    }
+    const from = resolveMessageIdx(start);
+    const to = end === void 0 ? host.messages.length - 1 : resolveMessageIdx(end);
+    const out = [];
+    for (let i = Math.max(0, from); i <= Math.min(to, host.messages.length - 1); i++) {
+      const msg = host.messages[i];
+      if (msg.mes === "") continue;
+      if (role !== void 0 && roleOf(msg) !== role) continue;
+      out.push(msg.mes);
+    }
+    return out;
+  }
+  function matchChatMessages(pattern, options2 = {}) {
+    const from = resolveMessageIdx(options2.start ?? -2);
+    const to = options2.end === null || options2.end === void 0 ? host.messages.length - 1 : resolveMessageIdx(options2.end);
+    const role = options2.role;
+    const texts = [];
+    for (let i = Math.max(0, from); i <= Math.min(to, host.messages.length - 1); i++) {
+      const msg = host.messages[i];
+      if (role !== void 0 && roleOf(msg) !== role) continue;
+      texts.push(msg.mes);
+    }
+    const patterns = Array.isArray(pattern) ? pattern : [pattern];
+    if (patterns.length === 0) return false;
+    const testOne = (p, text) => typeof p === "string" ? text.includes(p) : p.test(text);
+    if (!Array.isArray(pattern)) return texts.some((text) => testOne(pattern, text));
+    const needAll = options2.and === true;
+    return texts.some((text) => needAll ? patterns.every((p) => testOne(p, text)) : patterns.some((p) => testOne(p, text)));
+  }
+  const env = {
+    /* ---- 变量 API ---- */
+    variables: vars.view(),
+    getvar: (key, options2) => vars.getVar(key, options2),
+    setvar: (key, value, options2) => vars.setVar(key, value, options2),
+    incvar: (key, value = 1, options2) => vars.incDecVar(key, value, options2, 1),
+    decvar: (key, value = 1, options2) => vars.incDecVar(key, value, options2, -1),
+    delvar: (key, index, options2) => vars.delVar(key, index, options2),
+    insvar: (key, value, index, options2) => vars.insVar(key, value, index, options2),
+    getLocalVar: local.get,
+    setLocalVar: local.set,
+    incLocalVar: local.inc,
+    decLocalVar: local.dec,
+    delLocalVar: local.del,
+    insertLocalVar: local.ins,
+    getGlobalVar: global.get,
+    setGlobalVar: global.set,
+    incGlobalVar: global.inc,
+    decGlobalVar: global.dec,
+    delGlobalVar: global.del,
+    insertGlobalVar: global.ins,
+    getMessageVar: message.get,
+    setMessageVar: message.set,
+    incMessageVar: message.inc,
+    decMessageVar: message.dec,
+    delMessageVar: message.del,
+    insertMessageVar: message.ins,
+    patchVariables: (key, change, options2) => {
+      const current = vars.getVar(key, { scope: "local" }) ?? {};
+      const patched = applyJsonPatch(isObjectLike(current) ? deepClone(current) : {}, change);
+      return vars.setVar(key, patched, options2);
+    },
+    define: (name2, value, merge = false) => {
+      const registry = defines;
+      if (merge && isObjectLike(registry[name2]) && isObjectLike(value)) {
+        deepMerge(registry[name2], value);
+      } else {
+        registry[name2] = value;
+      }
+    },
+    /* ---- injectPrompt ---- */
+    injectPrompt: (key, prompt, order = 100, sticky = 0, uid = "") => vars.injectPrompt(key, prompt, order, sticky, uid),
+    getPromptsInjected: (key, postprocess) => vars.getPromptsInjected(key, postprocess),
+    hasPromptsInjected: (key) => vars.hasPromptsInjected(key),
+    /* ---- 资产读取 ---- */
+    getwi,
+    getWorldInfo: getwi,
+    getchar,
+    getChara: getchar,
+    getpreset,
+    getPresetPrompt: getpreset,
+    getCharData: (name2) => {
+      const card = host.getCard(name2);
+      return card ? deepClone(card.data) : null;
+    },
+    getChatMessage,
+    getChatMessages,
+    matchChatMessages,
+    evalTemplate: async (content, data = {}) => host.renderNested(content, data),
+    /* ---- JSON 工具 ---- */
+    parseJSON,
+    jsonPatch: (dest, change) => applyJsonPatch(deepClone(dest), change),
+    /* ---- 常量 ---- */
+    runType: host.runType,
+    userName: host.userName,
+    charName: host.charName,
+    chatId: host.chatId,
+    ...host.characterId !== void 0 ? { characterId: host.characterId } : {},
+    groupId: null,
+    groups: [],
+    charAvatar: host.charAvatar ?? "",
+    userAvatar: host.userAvatar ?? "",
+    lastUserMessageId: host.lastUserMessageId,
+    lastCharMessageId: host.lastCharMessageId,
+    model: host.model ?? "",
+    _: miniLodash
+  };
+  for (const [name2, value] of Object.entries(defines ?? {})) env[name2] = value;
+  return env;
+}
+function roleOf(msg) {
+  if (msg.is_system) return "system";
+  return msg.is_user ? "user" : "assistant";
+}
+function worldInfoView(entry) {
+  return {
+    uid: entry.uid,
+    world: entry.book,
+    comment: entry.comment ?? "",
+    content: entry.content,
+    disable: entry.disable === true,
+    ...entry.order !== void 0 ? { order: entry.order } : {}
+  };
+}
+function optAsRecord(input) {
+  return input !== null && typeof input === "object" ? input : {};
+}
+function errorMessage(err2) {
+  return err2 instanceof Error ? err2.message : String(err2);
+}
+function parseJSON(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+  }
+  let cleaned = text.trim();
+  const fence = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  if (fence) cleaned = fence[1].trim();
+  const firstObj = cleaned.search(/[[{]/);
+  if (firstObj > 0) cleaned = cleaned.slice(firstObj);
+  const lastObj = Math.max(cleaned.lastIndexOf("}"), cleaned.lastIndexOf("]"));
+  if (lastObj >= 0 && lastObj < cleaned.length - 1) cleaned = cleaned.slice(0, lastObj + 1);
+  cleaned = cleaned.replace(/[\u201c\u201d]/g, '"').replace(/[\u2018\u2019]/g, "'").replace(/,\s*([}\]])/g, "$1");
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    if (!cleaned.includes('"')) {
+      try {
+        return JSON.parse(cleaned.replace(/'([^']*)'/g, '"$1"'));
+      } catch {
+      }
+    }
+    throw new Error("parseJSON: not valid JSON even after cleanup");
+  }
+}
+function decodePointer(pointer) {
+  if (pointer === "") throw new Error("jsonPatch: empty JSON pointer");
+  if (!pointer.startsWith("/")) throw new Error(`jsonPatch: invalid JSON pointer "${pointer}"`);
+  return pointer.slice(1).split("/").map((seg) => seg.replace(/~1/g, "/").replace(/~0/g, "~"));
+}
+function applyJsonPatch(dest, change) {
+  const root = deepClone(dest);
+  const wrap = { "": root };
+  const walk = (segments) => {
+    let cur = wrap[""];
+    for (const seg of segments) {
+      if (Array.isArray(cur)) cur = cur[Number(seg)];
+      else if (isObjectLike(cur)) cur = cur[seg];
+      else return void 0;
+    }
+    return cur;
+  };
+  const parentOf = (segments) => {
+    const parent = walk(segments);
+    return isObjectLike(parent) || Array.isArray(parent) ? parent : void 0;
+  };
+  for (const raw of change) {
+    const op = raw;
+    const segs = decodePointer(op.path);
+    const parent = parentOf(segs.slice(0, -1));
+    if (parent === void 0) throw new Error(`jsonPatch: parent path missing for "${op.path}"`);
+    const key = segs[segs.length - 1];
+    if (op.op === "add" || op.op === "replace") {
+      if (Array.isArray(parent) && op.op === "add") {
+        if (key === "-") parent.push(deepClone(op.value));
+        else {
+          const idx = Number(key);
+          if (!Number.isInteger(idx) || idx < 0 || idx > parent.length) throw new Error(`jsonPatch: bad array index "${key}"`);
+          parent.splice(idx, 0, deepClone(op.value));
+        }
+      } else {
+        parent[key] = deepClone(op.value);
+      }
+      continue;
+    }
+    if (op.op === "remove") {
+      if (Array.isArray(parent)) {
+        const idx = Number(key);
+        if (Number.isInteger(idx) && idx >= 0 && idx < parent.length) parent.splice(idx, 1);
+      } else {
+        delete parent[key];
+      }
+      continue;
+    }
+    if (op.op === "move" || op.op === "copy") {
+      const fromSegs = decodePointer(op.from ?? "");
+      const value = walk(fromSegs);
+      if (value === void 0) throw new Error(`jsonPatch: from path missing "${op.from}"`);
+      if (op.op === "move") {
+        const fromParent = parentOf(fromSegs.slice(0, -1));
+        if (fromParent === void 0) throw new Error(`jsonPatch: from parent missing "${op.from}"`);
+        const fromKey = fromSegs[fromSegs.length - 1];
+        if (Array.isArray(fromParent)) {
+          const idx = Number(fromKey);
+          if (Number.isInteger(idx) && idx >= 0 && idx < fromParent.length) fromParent.splice(idx, 1);
+        } else {
+          delete fromParent[fromKey];
+        }
+      }
+      if (Array.isArray(parent)) {
+        if (key === "-") parent.push(deepClone(value));
+        else parent.splice(Number(key), 0, deepClone(value));
+      } else {
+        parent[key] = deepClone(value);
+      }
+      continue;
+    }
+    if (op.op === "test") {
+      const actual = walk(segs);
+      if (JSON.stringify(actual) !== JSON.stringify(op.value)) {
+        throw new Error(`jsonPatch: test failed at "${op.path}"`);
+      }
+      continue;
+    }
+    throw new Error(`jsonPatch: unknown op "${String(raw.op)}"`);
+  }
+  return wrap[""];
+}
+var miniLodash = {
+  get: (obj, path6, defaults) => {
+    const value = getPath(obj, path6);
+    return value === void 0 ? defaults : value;
+  },
+  set: (obj, path6, value) => setPath(obj, path6, value),
+  has: (obj, path6) => getPath(obj, path6) !== void 0,
+  merge: (dest, ...sources) => {
+    for (const src of sources) deepMerge(dest, src);
+    return dest;
+  },
+  cloneDeep: deepClone,
+  isArray: (v) => Array.isArray(v),
+  isObject: (v) => typeof v === "object" && v !== null,
+  isPlainObject: isObjectLike,
+  isString: (v) => typeof v === "string",
+  isNumber: (v) => typeof v === "number",
+  isBoolean: (v) => typeof v === "boolean",
+  isNull: (v) => v === null,
+  isUndefined: (v) => v === void 0,
+  isEmpty: (v) => v === null || v === void 0 || v === "" || Array.isArray(v) && v.length === 0 || isObjectLike(v) && Object.keys(v).length === 0,
+  keys: (v) => Object.keys(v),
+  values: (v) => Object.values(v),
+  entries: (v) => Object.entries(v),
+  first: (v) => v[0],
+  last: (v) => v[v.length - 1],
+  identity: (v) => v,
+  toArray: (v) => {
+    if (Array.isArray(v)) return v;
+    if (v === null || v === void 0) return [];
+    if (typeof v === "string") return v.split("");
+    if (isObjectLike(v)) return Object.values(v);
+    return [v];
+  }
+};
+
+// packages/tavern-template/src/runtime.ts
+import vm from "node:vm";
+
+// packages/tavern-template/src/syntax.ts
+var TemplateSyntaxError = class extends Error {
+  constructor(message, source) {
+    super(`template syntax error: ${message}`);
+    this.source = source;
+    this.name = "TemplateSyntaxError";
+  }
+};
+var OPEN = "<%";
+var CLOSE = "%>";
+function tokenize2(source) {
+  const tokens = [];
+  let buf = "";
+  let i = 0;
+  const flushText = () => {
+    if (buf !== "") {
+      tokens.push({ text: buf });
+      buf = "";
+    }
+  };
+  while (i < source.length) {
+    if (source.startsWith("<%%", i)) {
+      buf += OPEN;
+      i += 3;
+      continue;
+    }
+    if (source.startsWith("%%>", i)) {
+      buf += CLOSE;
+      i += 3;
+      continue;
+    }
+    if (!source.startsWith(OPEN, i)) {
+      buf += source[i];
+      i++;
+      continue;
+    }
+    flushText();
+    const tag = readTag(source, i);
+    if (tag.slurpBefore) {
+      const last = tokens[tokens.length - 1];
+      if (last && "text" in last) last.text = last.text.replace(/\s+$/, "");
+      else buf = "";
+    }
+    tokens.push({ tag });
+    i = tag.end;
+    if (tag.slurpAfter) {
+      while (i < source.length && /\s/.test(source[i])) i++;
+    } else if (tag.trimNewline) {
+      if (source.startsWith("\r\n", i)) i += 2;
+      else if (source[i] === "\n") i += 1;
+    }
+  }
+  flushText();
+  return tokens;
+}
+function readTag(source, start) {
+  let i = start + OPEN.length;
+  let slurpBefore = false;
+  if (source[i] === "_") {
+    slurpBefore = true;
+    i++;
+  }
+  let mode = "script";
+  const modeCh = source[i];
+  if (modeCh === "=") {
+    mode = "escape";
+    i++;
+  } else if (modeCh === "-") {
+    mode = "raw";
+    i++;
+  } else if (modeCh === "#") {
+    mode = "comment";
+    i++;
+  }
+  let code = "";
+  while (i < source.length) {
+    if (source.startsWith("-%>", i)) {
+      return { mode, code, trimNewline: true, slurpAfter: false, slurpBefore, end: i + 3 };
+    }
+    if (source.startsWith("_%>", i)) {
+      return { mode, code, trimNewline: false, slurpAfter: true, slurpBefore, end: i + 3 };
+    }
+    if (source.startsWith(CLOSE, i)) {
+      return { mode, code, trimNewline: false, slurpAfter: false, slurpBefore, end: i + 2 };
+    }
+    code += source[i];
+    i++;
+  }
+  throw new TemplateSyntaxError(`unclosed tag starting at offset ${start} (mode=${mode})`, source);
+}
+function compileTemplate(source) {
+  const tokens = tokenize2(source);
+  const parts = [];
+  for (const token of tokens) {
+    if ("text" in token) {
+      if (token.text !== "") parts.push(`__append(${JSON.stringify(token.text)});`);
+      continue;
+    }
+    const { mode, code } = token.tag;
+    if (mode === "comment") continue;
+    if (mode === "script") {
+      if (code.trim() !== "") parts.push(`${code}
+`);
+      continue;
+    }
+    const expr = code.trim();
+    if (expr === "") continue;
+    if (mode === "escape") parts.push(`__append(__escape(String(await (${expr}))));`);
+    else parts.push(`__append(await (${expr}));`);
+  }
+  parts.push("return __out;");
+  return parts.join("\n");
+}
+
+// packages/tavern-template/src/runtime.ts
+function protectBlocks(source) {
+  return source.replace(/<#escape-ejs>([\s\S]*?)<#\/escape-ejs>/g, (_m, inner) => `<#escape-ejs>${inner.replace(/<%/g, "<%%").replace(/%>/g, "%%>")}<#/escape-ejs>`).replace(/<(thinking|think|reasoning)>([\s\S]*?)<\/\1>/g, (m, tag, inner) => inner.includes("<%") ? `<${tag}>${inner.replace(/<%/g, "<%%").replace(/%>/g, "%%>")}</${tag}>` : m);
+}
+function htmlEscape(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+var compileCache = /* @__PURE__ */ new Map();
+var COMPILE_CACHE_MAX = 256;
+function compile(source) {
+  const cached = compileCache.get(source);
+  if (cached) return cached;
+  const body = compileTemplate(source);
+  const wrapper = `(async function (__env) { with (__env) {
+${body}
+} })`;
+  const script = new vm.Script(wrapper, { filename: "tavern-template.ejs" });
+  if (compileCache.size >= COMPILE_CACHE_MAX) {
+    const oldest = compileCache.keys().next().value;
+    if (oldest !== void 0) compileCache.delete(oldest);
+  }
+  const entry = { script };
+  compileCache.set(source, entry);
+  return entry;
+}
+function hasTemplateTag(source) {
+  return source.includes("<%");
+}
+function buildSandboxEnv(env) {
+  let out = "";
+  const sandboxEnv = /* @__PURE__ */ Object.create(null);
+  Object.assign(sandboxEnv, env);
+  const defineHidden = (key, descriptor) => {
+    Object.defineProperty(sandboxEnv, key, { ...descriptor, enumerable: false, configurable: true });
+  };
+  defineHidden("__out", {
+    get: () => out,
+    set: (value) => {
+      out = String(value ?? "");
+    }
+  });
+  defineHidden("__append", {
+    value: (value) => {
+      out += value === null || value === void 0 ? "" : String(value);
+    }
+  });
+  defineHidden("__escape", { value: htmlEscape });
+  defineHidden("print", {
+    value: (...args) => {
+      out += args.map((a) => a === null || a === void 0 ? "" : String(a)).join(" ");
+    }
+  });
+  return sandboxEnv;
+}
+async function renderSandboxed(source, env, options = {}) {
+  try {
+    const protectedSource = protectBlocks(source);
+    const sandboxEnv = buildSandboxEnv(env);
+    const factory = compile(protectedSource).script.runInNewContext(sandboxEnv);
+    return await factory(sandboxEnv);
+  } catch (err2) {
+    const where = options.where ? ` (${options.where})` : "";
+    const message = err2 instanceof Error ? `${err2.name}: ${err2.message}` : String(err2);
+    throw new Error(`template execution failed${where}: ${message}`);
+  }
+}
+async function evalExpressionSandboxed(expression, env) {
+  const wrapper = `(async function (__env) { with (__env) { return await (${expression}); } })`;
+  const script = new vm.Script(wrapper, { filename: "tavern-template-expr.ejs" });
+  const sandboxEnv = /* @__PURE__ */ Object.create(null);
+  Object.assign(sandboxEnv, env);
+  const factory = script.runInNewContext(sandboxEnv);
+  return await factory(sandboxEnv);
+}
+
+// packages/tavern-template/src/yaml.ts
+var YamlSubsetError = class extends Error {
+  constructor(message, line) {
+    super(`yaml subset parse error at line ${line}: ${message}`);
+    this.line = line;
+    this.name = "YamlSubsetError";
+  }
+};
+function parseYamlSubset(source) {
+  const lines = [];
+  for (const [i, raw] of source.split(/\r?\n/).entries()) {
+    const stripped = raw.replace(/\t/g, "  ");
+    const content = stripped.trim();
+    if (content === "" || content.startsWith("#")) continue;
+    const indent = stripped.length - stripped.trimStart().length;
+    lines.push({ indent, text: content, number: i + 1 });
+  }
+  if (lines.length === 0) return {};
+  const [value] = parseBlock(lines, 0, lines[0].indent);
+  return value;
+}
+function parseBlock(lines, pos, indent) {
+  const first = lines[pos];
+  if (first.text.startsWith("- ") || first.text === "-") return parseArray(lines, pos, indent);
+  return parseMap(lines, pos, indent);
+}
+function parseArray(lines, pos, indent) {
+  const out = [];
+  let i = pos;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.indent < indent) break;
+    if (line.indent > indent) throw new YamlSubsetError("unexpected indentation", line.number);
+    if (line.text === "-") {
+      const next = lines[i + 1];
+      if (next && next.indent > indent) {
+        const [value, consumed] = parseBlock(lines, i + 1, next.indent);
+        out.push(value);
+        i = consumed;
+      } else {
+        out.push(null);
+        i++;
+      }
+      continue;
+    }
+    if (!line.text.startsWith("- ")) break;
+    const rest = line.text.slice(2).trim();
+    const inlineKey = matchKey(rest);
+    if (inlineKey !== null) {
+      const itemIndent = indent + 2;
+      const synthetic = [{ indent: itemIndent, text: rest, number: line.number }];
+      let j = i + 1;
+      while (j < lines.length && lines[j].indent >= itemIndent && !lines[j].text.startsWith("- ")) {
+        synthetic.push(lines[j]);
+        j++;
+      }
+      const [value] = parseMap(synthetic, 0, itemIndent);
+      out.push(value);
+      i = j;
+      continue;
+    }
+    out.push(parseScalar(rest, line.number));
+    i++;
+  }
+  return [out, i];
+}
+function parseMap(lines, pos, indent) {
+  const out = {};
+  let i = pos;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.indent < indent) break;
+    if (line.indent > indent) throw new YamlSubsetError("unexpected indentation", line.number);
+    const key = matchKey(line.text);
+    if (key === null) throw new YamlSubsetError(`expected "key:" mapping, got "${line.text}"`, line.number);
+    const rest = line.text.slice(key.length + 1).trim();
+    if (rest !== "") {
+      out[key] = parseScalar(rest, line.number);
+      i++;
+      continue;
+    }
+    const next = lines[i + 1];
+    if (next && next.indent > indent) {
+      const [value, consumed] = parseBlock(lines, i + 1, next.indent);
+      out[key] = value;
+      i = consumed;
+    } else if (next && next.indent === indent && (next.text.startsWith("- ") || next.text === "-")) {
+      const [value, consumed] = parseArray(lines, i + 1, indent);
+      out[key] = value;
+      i = consumed;
+    } else {
+      out[key] = null;
+      i++;
+    }
+  }
+  return [out, i];
+}
+function matchKey(text) {
+  const quoted = text.match(/^"([^"]+)"\s*:(?=\s|$)/) ?? text.match(/^'([^']+)'\s*:(?=\s|$)/);
+  if (quoted) return quoted[1];
+  const plain = text.match(/^([^:\s][^:]*?)\s*:(?=\s|$)/);
+  if (plain) return plain[1];
+  return null;
+}
+function parseScalar(text, line) {
+  const value = text.trim();
+  if (value.startsWith("'") && value.endsWith("'") && value.length >= 2) return value.slice(1, -1);
+  if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) return value.slice(1, -1);
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (value === "null" || value === "~") return null;
+  if (/^-?\d+$/.test(value)) return Number(value);
+  if (/^-?\d+\.\d+$/.test(value)) return Number(value);
+  if (value.startsWith("[") || value.startsWith("{") || value.startsWith("|") || value.startsWith(">")) {
+    throw new YamlSubsetError(`unsupported yaml syntax: "${value}" (use JSON format for flow styles)`, line);
+  }
+  return value;
+}
+
+// packages/tavern-template/src/inject.ts
+function classifyComment(comment) {
+  let m = /^\[GENERATE:BEFORE\]/.exec(comment);
+  if (m) return { kind: "generate-before" };
+  m = /^\[GENERATE:AFTER\]/.exec(comment);
+  if (m) return { kind: "generate-after" };
+  m = /^\[GENERATE:(-?\d+):(BEFORE|AFTER)\]/.exec(comment);
+  if (m) return { kind: m[2] === "BEFORE" ? "generate-idx-before" : "generate-idx-after", arg: m[1] };
+  m = /^\[GENERATE:REGEX:(.*?)\]/.exec(comment);
+  if (m && m[1] !== "") return { kind: "generate-regex", arg: m[1] };
+  m = /^\[RENDER:(BEFORE|AFTER)\]/.exec(comment);
+  if (m) return { kind: m[1] === "BEFORE" ? "render-before" : "render-after" };
+  if (/^\[InitialVariables\]/.test(comment)) return { kind: "initial" };
+  m = /^@INJECT\b(.*)$/.exec(comment);
+  if (m) return { kind: "inject", arg: m[1].trim() };
+  return null;
+}
+function classifyContent(content) {
+  const lines = content.split("\n");
+  let special = null;
+  let ifCondition;
+  let privateBlock = false;
+  let i = 0;
+  for (; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.startsWith("@@")) break;
+    if (line.startsWith("@@@")) {
+      lines.splice(i, 1, line.slice(1));
+      const result2 = { special, content: lines.join("\n"), privateBlock };
+      if (ifCondition !== void 0) result2.ifCondition = ifCondition;
+      return result2;
+    }
+    const [name2, ...rest] = line.split(/\s+/);
+    const arg = rest.join(" ");
+    switch (name2) {
+      case "@@generate_before":
+        special ??= { kind: "generate-before" };
+        break;
+      case "@@generate_after":
+        special ??= { kind: "generate-after" };
+        break;
+      case "@@render_before":
+        special ??= { kind: "render-before" };
+        break;
+      case "@@render_after":
+        special ??= { kind: "render-after" };
+        break;
+      case "@@initial_variables":
+        special ??= { kind: "initial" };
+        break;
+      case "@@private":
+        privateBlock = true;
+        break;
+      case "@@if":
+        if (arg !== "") ifCondition ??= arg;
+        break;
+      default:
+        break;
+    }
+  }
+  const body = lines.slice(i).join("\n");
+  const result = { special, content: privateBlock ? `<% { %>${body}<% } %>` : body, privateBlock };
+  if (ifCondition !== void 0) result.ifCondition = ifCondition;
+  return result;
+}
+function classifySpecialEntry(entry) {
+  const fromComment = entry.comment !== void 0 ? classifyComment(entry.comment.trim()) : null;
+  const classified = classifyContent(entry.content ?? "");
+  const kind = fromComment?.kind ?? classified.special?.kind;
+  if (kind === void 0) return null;
+  const arg = fromComment?.arg ?? classified.special?.arg;
+  const result = {
+    kind,
+    content: classified.content
+  };
+  if (arg !== void 0) result.arg = arg;
+  if (classified.ifCondition !== void 0) result.ifCondition = classified.ifCondition;
+  return result;
+}
+async function applyGenerateInjections(messages, entries, render, env, evaluateCondition, warn) {
+  const out = messages.map((m) => ({ ...m }));
+  const beforeTexts = /* @__PURE__ */ new Map();
+  const afterTexts = /* @__PURE__ */ new Map();
+  const pushText2 = (map, idx, text) => {
+    const list = map.get(idx) ?? [];
+    list.push(text);
+    map.set(idx, list);
+  };
+  const ordered = [...entries].sort((a, b) => a.order - b.order || a.uid - b.uid);
+  for (const entry of ordered) {
+    if (entry.useProbability && entry.probability !== void 0 && Math.random() * 100 >= entry.probability) continue;
+    if (entry.kind === "generate-before") {
+      const text = await renderChecked(entry, render, env, evaluateCondition, warn);
+      if (text !== null) pushText2(beforeTexts, 0, text);
+      continue;
+    }
+    if (entry.kind === "generate-after") {
+      const text = await renderChecked(entry, render, env, evaluateCondition, warn);
+      if (text !== null && out.length > 0) pushText2(afterTexts, out.length - 1, text);
+      else if (text !== null) pushText2(beforeTexts, 0, text);
+      continue;
+    }
+    if (entry.kind === "generate-idx-before" || entry.kind === "generate-idx-after") {
+      const idx = resolveIndex(Number(entry.arg ?? "0"), out.length);
+      if (idx === null) {
+        warn(`[GENERATE:${entry.arg}] index out of range (${entry.book}#${entry.uid})`);
+        continue;
+      }
+      const text = await renderChecked(entry, render, env, evaluateCondition, warn);
+      if (text === null) continue;
+      pushText2(entry.kind === "generate-idx-before" ? beforeTexts : afterTexts, idx, text);
+      continue;
+    }
+    if (entry.kind === "generate-regex") {
+      let re;
+      try {
+        re = new RegExp(entry.arg ?? "", "i");
+      } catch (err2) {
+        warn(`[GENERATE:REGEX] invalid pattern /${entry.arg}/: ${err2 instanceof Error ? err2.message : String(err2)}`);
+        continue;
+      }
+      for (let i = 0; i < out.length; i++) {
+        if (!re.test(out[i].content)) continue;
+        const text = await render(entry.content, {
+          ...env,
+          matched_message: out[i].content,
+          matched_message_index: i,
+          matched_message_role: out[i].role
+        });
+        pushText2(beforeTexts, i, text);
+      }
+    }
+  }
+  for (let i = 0; i < out.length; i++) {
+    const before = beforeTexts.get(i);
+    const after = afterTexts.get(i);
+    if (before === void 0 && after === void 0) continue;
+    const parts = [...before ?? [], out[i].content, ...after ?? []];
+    out[i] = { ...out[i], content: parts.join("\n") };
+  }
+  return out;
+}
+async function renderChecked(entry, render, env, evaluateCondition, warn) {
+  if (entry.ifCondition !== void 0 && !await evaluateCondition(entry.ifCondition)) return null;
+  if (entry.renderedContent !== void 0) return entry.renderedContent;
+  try {
+    return await render(entry.content, { ...env, world_info: { uid: entry.uid, world: entry.book, comment: entry.comment, content: entry.content } });
+  } catch (err2) {
+    warn(`template entry ${entry.book}#${entry.uid} ("${entry.comment}") render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
+    return null;
+  }
+}
+function splitParams(params) {
+  const chunks = [];
+  let buf = "";
+  let quote;
+  for (const ch of params) {
+    if (quote !== void 0) {
+      buf += ch;
+      if (ch === quote) quote = void 0;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      buf += ch;
+      continue;
+    }
+    if (ch === ",") {
+      chunks.push(buf);
+      buf = "";
+      continue;
+    }
+    buf += ch;
+  }
+  chunks.push(buf);
+  const out = [];
+  for (const chunk of chunks) {
+    const eq = chunk.indexOf("=");
+    if (eq <= 0) continue;
+    const key = chunk.slice(0, eq).trim();
+    const raw = chunk.slice(eq + 1).trim();
+    const unquoted = raw.length >= 2 && (raw.startsWith('"') && raw.endsWith('"') || raw.startsWith("'") && raw.endsWith("'")) ? raw.slice(1, -1) : raw;
+    out.push({ key, value: unquoted });
+  }
+  return out;
+}
+function parseInjectParams(params, entry) {
+  const kv = new Map(splitParams(params).map((p) => [p.key, p.value]));
+  const roleRaw = kv.get("role");
+  const role = roleRaw === "user" || roleRaw === "assistant" || roleRaw === "system" ? roleRaw : "system";
+  const base = { role, order: entry.order };
+  const pos = kv.get("pos");
+  if (pos !== void 0 && /^-?\d+$/.test(pos)) return { instruction: { ...base, type: "pos", pos: Number(pos) } };
+  const target = kv.get("target");
+  if (target !== void 0) {
+    const index = kv.get("index");
+    const at = kv.get("at");
+    return {
+      instruction: {
+        ...base,
+        type: "target",
+        target,
+        targetIndex: index !== void 0 && /^-?\d+$/.test(index) ? Number(index) : 1,
+        at: at === "after" ? "after" : "before"
+      }
+    };
+  }
+  const regex = kv.get("regex");
+  if (regex !== void 0) {
+    if (regex === "") return { instruction: { ...base, type: "regex", regex: "" }, warning: "@INJECT empty regex pattern" };
+    const at = kv.get("at");
+    return { instruction: { ...base, type: "regex", regex, at: at === "after" ? "after" : "before" } };
+  }
+  return null;
+}
+async function applyInjectEntries(messages, entries, render, env, evaluateCondition, warn) {
+  const out = messages.map((m) => ({ ...m }));
+  const instructions = [];
+  for (const entry of entries) {
+    if (entry.useProbability && entry.probability !== void 0 && Math.random() * 100 >= entry.probability) continue;
+    if (entry.arg === void 0 || entry.arg === "") {
+      warn(`@INJECT entry ${entry.book}#${entry.uid} ("${entry.comment}") has no parameters`);
+      continue;
+    }
+    const parsed = parseInjectParams(entry.arg, entry);
+    if (!parsed) {
+      warn(`@INJECT entry ${entry.book}#${entry.uid} ("${entry.comment}") has invalid parameters: "${entry.arg}"`);
+      continue;
+    }
+    if (entry.ifCondition !== void 0 && !await evaluateCondition(entry.ifCondition)) continue;
+    let content;
+    try {
+      content = await render(entry.content, { ...env, world_info: { uid: entry.uid, world: entry.book, comment: entry.comment, content: entry.content } });
+    } catch (err2) {
+      warn(`@INJECT entry ${entry.book}#${entry.uid} render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
+      continue;
+    }
+    if (content.trim() === "") continue;
+    if (parsed.warning) warn(parsed.warning);
+    instructions.push({ instruction: { ...parsed.instruction, entry }, content });
+  }
+  if (instructions.length === 0) return out;
+  const roleIndex = (role, occurrence) => {
+    const indices = out.map((m, i) => m.role === role ? i : -1).filter((i) => i >= 0);
+    const n = occurrence < 0 ? indices.length + occurrence + 1 : occurrence;
+    const idx = indices[n - 1];
+    return idx === void 0 ? null : idx;
+  };
+  const positionBased = [];
+  for (const { instruction, content } of instructions) {
+    if (instruction.type === "pos") {
+      const pos = instruction.pos ?? 1;
+      const insertAt = pos === 0 ? 0 : pos > 0 ? pos - 1 : Math.max(0, out.length + pos);
+      positionBased.push({ insertAt, order: instruction.order, typeRank: 0, content, role: instruction.role });
+    } else if (instruction.type === "target") {
+      const idx = roleIndex(instruction.target ?? "user", instruction.targetIndex ?? 1);
+      if (idx === null) {
+        warn(`@INJECT target=${instruction.target}[${instruction.targetIndex}] not found (${instruction.entry.book}#${instruction.entry.uid})`);
+        continue;
+      }
+      const insertAt = instruction.at === "after" ? idx + 1 : idx;
+      positionBased.push({ insertAt, order: instruction.order, typeRank: 1, content, role: instruction.role });
+    }
+  }
+  positionBased.sort((a, b) => b.insertAt - a.insertAt || b.order - a.order || b.typeRank - a.typeRank);
+  for (const item of positionBased) {
+    out.splice(Math.min(item.insertAt, out.length), 0, { role: item.role, content: item.content });
+  }
+  const regexBased = instructions.filter((x) => x.instruction.type === "regex").map((x) => ({ ...x, instruction: x.instruction }));
+  const regexQueue = [];
+  for (const { instruction, content } of regexBased) {
+    let re;
+    try {
+      re = new RegExp(instruction.regex, "i");
+    } catch (err2) {
+      warn(`@INJECT invalid regex /${instruction.regex}/: ${err2 instanceof Error ? err2.message : String(err2)}`);
+      continue;
+    }
+    const matchIdx = out.findIndex((m) => re.test(m.content));
+    if (matchIdx === -1) {
+      warn(`@INJECT regex /${instruction.regex}/ matched no message (${instruction.entry.book}#${instruction.entry.uid})`);
+      continue;
+    }
+    regexQueue.push({
+      insertAt: instruction.at === "after" ? matchIdx + 1 : matchIdx,
+      order: instruction.order,
+      content,
+      role: instruction.role
+    });
+  }
+  regexQueue.sort((a, b) => b.insertAt - a.insertAt || b.order - a.order);
+  for (const item of regexQueue) {
+    out.splice(Math.min(item.insertAt, out.length), 0, { role: item.role, content: item.content });
+  }
+  return out;
+}
+async function applyRenderInjections(text, entries, render, env, evaluateCondition, warn) {
+  const ordered = [...entries].sort((a, b) => a.order - b.order || a.uid - b.uid);
+  let prefix = "";
+  let suffix = "";
+  for (const entry of ordered) {
+    if (entry.useProbability && entry.probability !== void 0 && Math.random() * 100 >= entry.probability) continue;
+    if (entry.kind !== "render-before" && entry.kind !== "render-after") continue;
+    if (entry.ifCondition !== void 0 && !await evaluateCondition(entry.ifCondition)) continue;
+    try {
+      const rendered = await render(entry.content, { ...env, world_info: { uid: entry.uid, world: entry.book, comment: entry.comment, content: entry.content } });
+      if (entry.kind === "render-before") prefix += rendered;
+      else suffix += rendered;
+    } catch (err2) {
+      warn(`[RENDER] entry ${entry.book}#${entry.uid} render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
+    }
+  }
+  return `${prefix}${text}${suffix}`;
+}
+function parseInitialVariables(content, warn) {
+  let data;
+  try {
+    data = JSON.parse(content);
+  } catch {
+    try {
+      data = parseYamlSubset(content);
+    } catch {
+      warn("[InitialVariables] content is neither valid JSON nor supported YAML subset");
+      return null;
+    }
+  }
+  if (!isObjectLike(data)) {
+    warn("[InitialVariables] parsed content is not an object");
+    return null;
+  }
+  return data;
+}
+function resolveIndex(idx, length) {
+  const resolved = idx < 0 ? length + idx : idx;
+  if (resolved < 0 || resolved >= length) return null;
+  return resolved;
+}
+
+// packages/tavern-template/src/variables.ts
+var SCOPES3 = ["global", "local", "message", "cache", "initial"];
+var FLAGS = ["nx", "xx", "n", "nxs", "xxs"];
+var RESULTS = ["old", "new", "fullcache"];
+function normalizeOptions(input, base) {
+  const out = { ...base };
+  const apply2 = (key, _value) => {
+    if (SCOPES3.includes(key)) {
+      out.scope = key;
+      return true;
+    }
+    if (FLAGS.includes(key)) {
+      out.flags = key;
+      return true;
+    }
+    if (RESULTS.includes(key)) {
+      out.results = key;
+      return true;
+    }
+    return false;
+  };
+  if (typeof input === "string") {
+    if (apply2(input, true)) return out;
+    throw new TypeError(`unknown option shorthand: ${input}`);
+  }
+  if (input !== null && typeof input === "object") {
+    const obj = input;
+    for (const [key, value] of Object.entries(obj)) {
+      switch (key) {
+        case "scope":
+          out.scope = value;
+          break;
+        case "inscope":
+          out.inscope = value;
+          break;
+        case "outscope":
+          out.outscope = value;
+          break;
+        case "flags":
+          out.flags = value;
+          break;
+        case "results":
+          out.results = value;
+          break;
+        case "defaults":
+          out.defaults = value;
+          break;
+        case "min":
+          out.min = value;
+          break;
+        case "max":
+          out.max = value;
+          break;
+        case "clone":
+          out.clone = value === true;
+          break;
+        case "dryRun":
+          break;
+        // dsh-tavern 单遍计算，无准备期（文档化偏差）
+        case "noCache":
+          break;
+        // 我们的 cache 写穿透，无需该开关
+        case "index":
+          break;
+        // 楼层变量索引，无楼层面
+        case "withMsg":
+          break;
+        case "merge":
+          break;
+        // 深合并是本实现默认行为
+        default:
+          break;
+      }
+    }
+    return out;
+  }
+  return out;
+}
+var TemplateVariableSystem = class {
+  local;
+  global;
+  initial;
+  /** 临时视图：global→initial→local 深合并快照 + 写穿透。 */
+  cache;
+  injected = /* @__PURE__ */ new Map();
+  injectSeq = 0;
+  constructor(stores) {
+    this.local = stores.local;
+    this.global = stores.global;
+    this.initial = stores.initial ?? {};
+    this.cache = {};
+    this.rebuildView();
+  }
+  /** 从 global→initial→local 重建 cache 视图（丢弃已有写穿透叠加）。 */
+  rebuildView() {
+    for (const key of Object.keys(this.cache)) delete this.cache[key];
+    deepMerge(this.cache, this.global);
+    deepMerge(this.cache, this.initial);
+    deepMerge(this.cache, deepClone(this.local));
+  }
+  /**
+   * 重置 initial 作用域并重建视图（ST「每次加载重算覆盖」语义）。
+   * 必须先于任何模板渲染调用（重建会丢弃渲染期写穿透）。
+   */
+  setInitialVariables(data) {
+    for (const key of Object.keys(this.initial)) delete this.initial[key];
+    deepMerge(this.initial, data);
+    this.rebuildView();
+  }
+  /** `variables` 常量（模板内可变视图）。 */
+  view() {
+    return this.cache;
+  }
+  /** 最终 local 值（宿主持久化用；返回原引用）。 */
+  localStore() {
+    return this.local;
+  }
+  scopeStore(scope) {
+    switch (scope) {
+      case "global":
+        return this.global;
+      case "initial":
+        return this.initial;
+      case "local":
+      case "message":
+        return this.local;
+      case "cache":
+        return this.cache;
+    }
+  }
+  /** flags 判定：nx/xx 基于 cache 视图，nxs/xxs 基于目标 scope（对照 ST 语义）。 */
+  flagAllows(flags, key, scope) {
+    switch (flags) {
+      case "nx":
+        return getPath(this.cache, key) === void 0;
+      case "xx":
+        return getPath(this.cache, key) !== void 0;
+      case "nxs":
+        return getPath(this.scopeStore(scope), key) === void 0;
+      case "xxs":
+        return getPath(this.scopeStore(scope), key) !== void 0;
+      case "n":
+        return true;
+    }
+  }
+  writeScope(scope, key, value) {
+    if (key === "") {
+      if (scope === "global" || scope === "cache") {
+        throw new TypeError("cannot replace the entire global/cache variable tree; use local or initial scope");
+      }
+      const store2 = this.scopeStore(scope);
+      for (const k of Object.keys(store2)) delete store2[k];
+      if (isObjectLike(value)) deepMerge(store2, value);
+      return;
+    }
+    if (scope === "global") {
+      if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+        throw new TypeError(
+          `global scope only accepts string|number|boolean in dsh-tavern (scriptGlobals constraint); got ${typeof value}. Use local scope for object trees.`
+        );
+      }
+      this.global[key] = value;
+      return;
+    }
+    if (scope === "cache") return;
+    setPath(this.scopeStore(scope), key, deepClone(value));
+  }
+  getVar(key, options = {}) {
+    const opts = normalizeOptions(options, {
+      scope: "cache",
+      inscope: "cache",
+      outscope: "message",
+      flags: "n",
+      results: "new",
+      clone: false
+    });
+    const store2 = key === null ? this.cache : this.scopeStore(opts.scope);
+    const value = key === null ? store2 : getPath(store2, key);
+    if (value === void 0) return opts.defaults;
+    return opts.clone ? deepClone(value) : value;
+  }
+  setVar(key, value, options = {}) {
+    const opts = normalizeOptions(options, {
+      scope: "message",
+      inscope: "cache",
+      outscope: "message",
+      flags: "n",
+      results: "new",
+      clone: false
+    });
+    const path6 = key ?? "";
+    const old = getPath(this.cache, path6);
+    if (!this.flagAllows(opts.flags, path6, opts.scope)) return void 0;
+    this.writeScope(opts.scope, path6, value);
+    if (path6 === "") {
+      if (isObjectLike(value)) {
+        for (const k of Object.keys(this.cache)) delete this.cache[k];
+        deepMerge(this.cache, value);
+      }
+    } else {
+      setPath(this.cache, path6, deepClone(value));
+    }
+    switch (opts.results) {
+      case "old":
+        return old;
+      case "new":
+        return value;
+      case "fullcache":
+        return deepClone(this.cache);
+    }
+  }
+  incDecVar(key, delta, options = {}, sign) {
+    const opts = normalizeOptions(options, {
+      scope: "message",
+      inscope: "cache",
+      outscope: "message",
+      flags: "n",
+      results: "new",
+      clone: false,
+      defaults: 0
+    });
+    const current = getPath(this.scopeStore(opts.inscope), key);
+    const base = typeof current === "number" ? current : opts.defaults;
+    const start = typeof base === "number" ? base : Number(base);
+    if (!Number.isFinite(start)) throw new TypeError(`incvar/decvar target "${key}" is not numeric`);
+    let next = start + sign * delta;
+    if (typeof opts.min === "number") next = Math.max(opts.min, next);
+    if (typeof opts.max === "number") next = Math.min(opts.max, next);
+    return this.setVar(key, next, { ...optionsAsRecord(options), scope: opts.outscope, results: opts.results, defaults: void 0 });
+  }
+  delVar(key, index, options = {}) {
+    const opts = normalizeOptions(options, {
+      scope: "message",
+      inscope: "cache",
+      outscope: "message",
+      flags: "n",
+      results: "new",
+      clone: false
+    });
+    const old = getPath(this.cache, key);
+    if (!this.flagAllows(opts.flags, key, opts.scope)) return void 0;
+    unsetPath(this.scopeStore(opts.scope), key, index);
+    if (opts.scope !== "cache") unsetPath(this.cache, key, index);
+    return opts.results === "old" ? old : opts.results === "fullcache" ? deepClone(this.cache) : true;
+  }
+  insVar(key, value, index, options = {}) {
+    const opts = normalizeOptions(options, {
+      scope: "message",
+      inscope: "cache",
+      outscope: "message",
+      flags: "n",
+      results: "new",
+      clone: false
+    });
+    insertAtPath(this.scopeStore(opts.scope), key, deepClone(value), index);
+    insertAtPath(this.cache, key, deepClone(value), index);
+    return opts.results === "old" ? void 0 : opts.results === "fullcache" ? deepClone(this.cache) : value;
+  }
+  /* ------------------------- injectPrompt 注册表 ------------------------- */
+  injectPrompt(key, prompt, order = 100, _sticky = 0, uid = "") {
+    const list = this.injected.get(key) ?? [];
+    list.push({ prompt, order, uid, seq: this.injectSeq++ });
+    this.injected.set(key, list);
+  }
+  getPromptsInjected(key, postprocess = []) {
+    const list = [...this.injected.get(key) ?? []].sort((a, b) => a.order - b.order || a.seq - b.seq);
+    return list.map((item) => {
+      let text = item.prompt;
+      for (const rule of postprocess) text = text.replace(rule.search, rule.replace);
+      return text;
+    }).join("\n");
+  }
+  hasPromptsInjected(key) {
+    return this.injected.has(key);
+  }
+};
+function optionsAsRecord(input) {
+  return input !== null && typeof input === "object" ? input : {};
+}
+
+// packages/tavern-template/src/index.ts
+function createTemplateRuntime(options) {
+  const { host, stores, onWarning } = options;
+  const warn = onWarning ?? (() => {
+  });
+  const variables2 = new TemplateVariableSystem(stores);
+  const defines = {};
+  const getwiDepth = { current: 0 };
+  host.onWarning = warn;
+  const buildEnv = (extra) => {
+    const env = createTemplateEnv({ vars: variables2, host, defines, getwiDepth });
+    if (extra !== void 0) Object.assign(env, extra);
+    return env;
+  };
+  const renderText = async (text, extraEnv, where) => {
+    if (!hasTemplateTag(text)) return text;
+    return await renderSandboxed(text, buildEnv(extraEnv), { where });
+  };
+  const evaluateCondition = async (condition) => {
+    try {
+      return Boolean(await evalExpressionSandboxed(condition, buildEnv()));
+    } catch (err2) {
+      warn(`@@if condition evaluation failed ("${condition}"): ${err2 instanceof Error ? err2.message : String(err2)}`);
+      return false;
+    }
+  };
+  const evaluate = (condition) => evaluateCondition(condition);
+  const render = (text, extraEnv) => renderText(text, extraEnv);
+  return {
+    variables: variables2,
+    defines,
+    renderText,
+    evaluateCondition,
+    classify: classifySpecialEntry,
+    applyGenerateInjections: (messages, entries) => applyGenerateInjections(messages, entries, render, buildEnv(), evaluate, warn),
+    applyInjectEntries: (messages, entries) => applyInjectEntries(messages, entries, render, buildEnv(), evaluate, warn),
+    applyRenderInjections: (text, entries) => applyRenderInjections(text, entries, render, buildEnv(), evaluate, warn),
+    parseInitialVariables: (content) => parseInitialVariables(content, warn),
+    setInitialVariables: (data) => {
+      variables2.setInitialVariables(data);
+    }
+  };
+}
+
+// packages/plugin/src/template.ts
+var INITIAL_VARIABLES_KEY = "initial_variables";
+function toSpecialEntry(kind, arg, content, ifCondition, source) {
+  const entry = {
+    kind,
+    book: source.book,
+    uid: source.uid,
+    comment: source.comment ?? "",
+    content,
+    order: source.order ?? 100,
+    ...source.probability !== void 0 ? { probability: source.probability } : {},
+    ...source.useProbability !== void 0 ? { useProbability: source.useProbability } : {}
+  };
+  if (arg !== void 0) entry.arg = arg;
+  if (ifCondition !== void 0) entry.ifCondition = ifCondition;
+  return entry;
+}
+function classifyRawEntry(raw) {
+  if ((raw.comment ?? "") === "" && (raw.content ?? "") === "") return null;
+  return classifySpecialEntry({ comment: raw.comment, content: raw.content ?? "" });
+}
+function partitionSpecialLore(lore, books) {
+  const generate2 = [];
+  const render = [];
+  const inject2 = [];
+  const seenInject = /* @__PURE__ */ new Set();
+  const isSpecial = /* @__PURE__ */ new Set();
+  for (const activated of lore.allActivated) {
+    const raw = activated.entry;
+    const classified = classifyRawEntry({ comment: raw.comment, content: raw.content });
+    if (classified === null) continue;
+    isSpecial.add(activated.entryId);
+    const source = {
+      book: activated.book,
+      uid: activated.uid,
+      comment: raw.comment,
+      order: typeof raw.order === "number" ? raw.order : activated.order,
+      probability: typeof raw.probability === "number" ? raw.probability : void 0,
+      useProbability: raw.useProbability === true ? true : void 0
+    };
+    const special = toSpecialEntry(classified.kind, classified.arg, classified.content, classified.ifCondition, source);
+    if (classified.kind === "inject") {
+      if (!seenInject.has(`${activated.book}#${activated.uid}`)) {
+        seenInject.add(`${activated.book}#${activated.uid}`);
+        inject2.push(special);
+      }
+    } else if (classified.kind.startsWith("render")) {
+      render.push(special);
+    } else if (classified.kind !== "initial") {
+      generate2.push(special);
+    }
+  }
+  const initial = [];
+  for (const book of books) {
+    for (const raw of book.entries) {
+      const classified = classifyRawEntry({ comment: raw.comment, content: raw.content });
+      if (classified === null) continue;
+      if (classified.kind === "inject" && !seenInject.has(`${book.name ?? ""}#${raw.uid}`)) {
+        seenInject.add(`${book.name ?? ""}#${raw.uid}`);
+        inject2.push(toSpecialEntry("inject", classified.arg, classified.content, classified.ifCondition, {
+          book: book.name ?? "",
+          uid: raw.uid,
+          comment: raw.comment,
+          order: typeof raw.order === "number" ? raw.order : 100,
+          probability: typeof raw.probability === "number" ? raw.probability : void 0,
+          useProbability: raw.useProbability === true ? true : void 0
+        }));
+        continue;
+      }
+      if (classified.kind === "initial" && raw.disable !== true) {
+        initial.push(toSpecialEntry("initial", void 0, classified.content, classified.ifCondition, {
+          book: book.name ?? "",
+          uid: raw.uid,
+          comment: raw.comment,
+          order: typeof raw.order === "number" ? raw.order : 100
+        }));
+      }
+    }
+  }
+  const normal = (entries) => entries.filter((e) => !isSpecial.has(e.entryId));
+  const joinText = (entries) => entries.map((e) => e.content).filter((text) => text.length > 0).join("\n");
+  return {
+    generate: generate2,
+    render,
+    inject: inject2,
+    initial,
+    normalBefore: normal(lore.worldInfoBefore.entries),
+    normalAfter: normal(lore.worldInfoAfter.entries),
+    normalBeforeExamples: normal(lore.beforeExamples.entries),
+    normalAfterExamples: normal(lore.afterExamples.entries),
+    normalAtDepth: lore.atDepth.map((group2) => {
+      const entries = group2.entries.filter((e) => !isSpecial.has(e.entryId));
+      return { depth: group2.depth, role: group2.role, text: joinText(entries) };
+    }).filter((group2) => group2.text !== "")
+  };
+}
+function ensureMetadataObject(metadata, key) {
+  const existing = metadata[key];
+  if (existing !== null && typeof existing === "object" && !Array.isArray(existing)) return existing;
+  const created = {};
+  metadata[key] = created;
+  return created;
+}
+async function createGenerationTemplates(options) {
+  const { chat, state, books, lore, card, preset, turnMessages, userName, characterName, chatId, model } = options;
+  const warnings = [];
+  const warn = (message) => {
+    warnings.push(message);
+    options.onWarning?.(message);
+  };
+  const partition = partitionSpecialLore(lore, books);
+  const localVars = ensureMetadataObject(chat.header.chat_metadata, "variables");
+  const initialVars = ensureMetadataObject(chat.header.chat_metadata, INITIAL_VARIABLES_KEY);
+  const cardName = card.data.nickname || card.data.name;
+  const lastUserIdx = (() => {
+    for (let i = turnMessages.length - 1; i >= 0; i--) if (turnMessages[i].is_user) return i;
+    return -1;
+  })();
+  const lastCharIdx = (() => {
+    for (let i = turnMessages.length - 1; i >= 0; i--) {
+      const m = turnMessages[i];
+      if (!m.is_user && !m.is_system) return i;
+    }
+    return -1;
+  })();
+  const host = {
+    runType: "generate",
+    userName,
+    charName: cardName,
+    chatId,
+    characterId: characterName,
+    model,
+    charAvatar: typeof card.data.extensions["avatar"] === "string" ? card.data.extensions["avatar"] : "",
+    messages: turnMessages.map((m) => ({ name: m.name, mes: m.mes, is_user: m.is_user, is_system: m.is_system })),
+    lastUserMessageId: lastUserIdx,
+    lastCharMessageId: lastCharIdx,
+    findWorldEntries: (title, book) => {
+      const out = [];
+      for (const lorebook of books) {
+        if (book !== void 0 && lorebook.name !== book) continue;
+        for (const entry of lorebook.entries) {
+          const comment = entry.comment ?? "";
+          const matched = typeof title === "number" ? entry.uid === title : comment === title;
+          if (!matched) continue;
+          out.push({
+            uid: entry.uid,
+            book: lorebook.name ?? "",
+            comment,
+            content: entry.content ?? "",
+            ...typeof entry.order === "number" ? { order: entry.order } : {},
+            disable: entry.disable === true
+          });
+        }
+      }
+      return out;
+    },
+    getCard: (name2) => {
+      if (name2 !== void 0 && name2 !== characterName && name2 !== cardName) return null;
+      const depthPrompt = card.data.extensions["depth_prompt"];
+      return {
+        name: cardName,
+        systemPrompt: card.data.systemPrompt,
+        personality: card.data.personality,
+        description: card.data.description,
+        scenario: card.data.scenario,
+        firstMes: card.data.firstMes,
+        mesExample: card.data.mesExample,
+        creatorNotes: card.data.creatorNotes,
+        depthPrompt: depthPrompt !== null && typeof depthPrompt === "object" ? String(depthPrompt.prompt ?? "") : "",
+        data: card.data
+      };
+    },
+    findPresetPrompt: (name2) => {
+      for (const prompt of preset.prompts) {
+        if ("marker" in prompt && prompt.marker) continue;
+        if (prompt.name === name2) return { name: prompt.name, content: prompt.content ?? "" };
+      }
+      return null;
+    },
+    renderNested: async () => ""
+  };
+  const runtime = createTemplateRuntime({
+    host,
+    stores: {
+      local: localVars,
+      global: state.scriptGlobals,
+      initial: initialVars
+    },
+    onWarning: warn
+  });
+  host.renderNested = (source, extra) => runtime.renderText(source, extra);
+  const renderText = async (text, where) => {
+    try {
+      return await runtime.renderText(text, void 0, where);
+    } catch (err2) {
+      warn(`template render failed${where ? ` (${where})` : ""}: ${err2 instanceof Error ? err2.message : String(err2)} \u2014 keeping original text`);
+      return text;
+    }
+  };
+  if (partition.initial.length > 0) {
+    const initialData = {};
+    for (const entry of partition.initial) {
+      const rendered = await renderText(entry.content, `initial-variables ${entry.book}#${entry.uid}`);
+      const parsed = runtime.parseInitialVariables(rendered);
+      if (parsed) deepMerge(initialData, parsed);
+    }
+    runtime.setInitialVariables(initialData);
+  }
+  const prerenderGenerate = async (kinds) => {
+    const ordered = partition.generate.filter((entry) => kinds.includes(entry.kind)).sort((a, b) => a.order - b.order || a.uid - b.uid);
+    for (const entry of ordered) {
+      entry.renderedContent = await renderText(entry.content, `generate ${entry.book}#${entry.uid}`);
+    }
+  };
+  await prerenderGenerate(["generate-before"]);
+  const preRenderCard = async (input) => {
+    const data = input.data;
+    return {
+      ...input,
+      data: {
+        ...data,
+        description: await renderText(data.description, "card.description"),
+        personality: await renderText(data.personality, "card.personality"),
+        scenario: await renderText(data.scenario, "card.scenario"),
+        systemPrompt: await renderText(data.systemPrompt, "card.systemPrompt"),
+        postHistoryInstructions: await renderText(data.postHistoryInstructions, "card.postHistoryInstructions"),
+        mesExample: await renderText(data.mesExample, "card.mesExample")
+      }
+    };
+  };
+  const preRenderPreset = async (input) => ({
+    ...input,
+    prompts: await Promise.all(input.prompts.map(async (prompt) => {
+      if ("marker" in prompt && prompt.marker) return prompt;
+      const content = prompt.content ?? "";
+      return { ...prompt, content: await renderText(content, `preset.${prompt.name}`) };
+    }))
+  });
+  const applyPromptInjections = async (messages) => {
+    let out = await runtime.applyGenerateInjections(messages, partition.generate);
+    out = await runtime.applyInjectEntries(out, partition.inject);
+    return out;
+  };
+  const renderOutput = async (text) => {
+    host.runType = "render";
+    try {
+      const rendered = await renderText(text, "llm-output");
+      return await runtime.applyRenderInjections(rendered, partition.render);
+    } finally {
+      host.runType = "generate";
+    }
+  };
+  return {
+    runtime,
+    partition,
+    warnings,
+    renderText,
+    setModel: (model2) => {
+      host.model = model2;
+    },
+    preRenderCard,
+    preRenderPreset,
+    prerenderGenerateAfter: () => prerenderGenerate(["generate-after"]),
+    applyPromptInjections,
+    renderOutput
+  };
+}
+function mergeTemplateLocalVars(chat, macroLocalSnapshot) {
+  const metadata = chat.header.chat_metadata;
+  const existing = metadata["variables"];
+  const merged = existing !== null && typeof existing === "object" && !Array.isArray(existing) ? existing : {};
+  for (const [key, value] of Object.entries(macroLocalSnapshot)) merged[key] = value;
+  if (Object.keys(merged).length > 0) metadata["variables"] = merged;
+  else delete metadata["variables"];
+  if (Object.keys(ensureMetadataObject(metadata, INITIAL_VARIABLES_KEY)).length === 0) {
+    delete metadata[INITIAL_VARIABLES_KEY];
+  }
+}
+
 // packages/plugin/src/dsh-home.ts
 import { homedir as homedir2 } from "node:os";
 import { join as join8, resolve as resolve2 } from "node:path";
@@ -10383,6 +12174,7 @@ var novelProjectorPromise;
 var novelDriverPromise;
 var updateServiceInstance;
 var updateChecksEnabledFlag = true;
+var templatesEnabledFlag = true;
 var TavernArchitectureConflictError = class extends Error {
   code = "TAVERN_ARCHITECTURE_CONFLICT";
   constructor(message) {
@@ -10418,9 +12210,15 @@ function updateChecksEnabled(config = {}) {
   const disabled = process.env.DSH_TAVERN_DISABLE_UPDATE_CHECK?.trim();
   return !(disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false");
 }
+function templatesEnabled(config = {}) {
+  if (config.templateEnabled === false) return false;
+  const disabled = process.env.DSH_TAVERN_DISABLE_TEMPLATES?.trim();
+  return !(disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false");
+}
 function apply(ctx, config = {}) {
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns });
   updateChecksEnabledFlag = updateChecksEnabled(config);
+  templatesEnabledFlag = templatesEnabled(config);
   const adapter = createDshAgentTavernAdapter(ctx);
   ctx.logger?.info?.(`dsh-tavern host shape: ${JSON.stringify(describeHostShape(ctx))}`);
   agentTavernCapabilitiesPromise = bootstrapAgentTavernCapabilities(adapter, {
@@ -11895,9 +13693,25 @@ async function runGeneration(ctx, db, options) {
       messageCount: turnMessages.length
     });
     chat.header.chat_metadata.timedWorldInfo = lore.timedState;
+    const templatesActive = templatesEnabledFlag && templatesEnabled();
+    const templateGlobalsBefore = templatesActive ? JSON.stringify(state.scriptGlobals) : void 0;
+    const tpl = templatesActive ? await createGenerationTemplates({
+      chat,
+      state,
+      books,
+      lore,
+      card: character.card,
+      preset,
+      turnMessages,
+      userName,
+      characterName: speakerName,
+      chatId
+    }) : null;
     const wiDeps = { expand: (text2) => text2 };
-    const loreBefore = lore.worldInfoBefore.entries.map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps));
-    const loreAfter = lore.worldInfoAfter.entries.map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps));
+    const loreBeforeBase = (tpl ? tpl.partition.normalBefore : lore.worldInfoBefore.entries).map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps));
+    const loreAfterBase = (tpl ? tpl.partition.normalAfter : lore.worldInfoAfter.entries).map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps));
+    const loreBefore = tpl ? await Promise.all(loreBeforeBase.map((t) => tpl.renderText(t, "wi-before"))) : loreBeforeBase;
+    const loreAfter = tpl ? await Promise.all(loreAfterBase.map((t) => tpl.renderText(t, "wi-after"))) : loreAfterBase;
     const lastUser = [...turnMessages].reverse().find((m) => m.is_user);
     const lastChar = [...turnMessages].reverse().find((m) => !m.is_user && !m.is_system);
     const enabledMembers = groupDef ? groupDef.members.filter((member) => !groupDef.disabledMembers.includes(member)) : void 0;
@@ -11939,26 +13753,32 @@ async function runGeneration(ctx, db, options) {
         personaDescription = void 0;
       }
     }
+    if (tpl && personaDescription) personaDescription = await tpl.renderText(personaDescription, "persona");
     const promptOnlyScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly);
-    const historyForPrompt = promptOnlyScripts.length > 0 ? turnMessages.map((m, index) => ({
+    const historyRegexed = promptOnlyScripts.length > 0 ? turnMessages.map((m, index) => ({
       ...m,
       mes: applyRegexScripts(m.mes, promptOnlyScripts, RegexPlacement.AI_OUTPUT, {}, { depth: turnMessages.length - 1 - index })
     })) : turnMessages;
-    const depthInjections = [
-      ...lore.atDepth.map((g) => ({ depth: g.depth, role: roleName(g.role), text: g.text })),
-      ...lore.topOfAuthorsNote.text ? [{ depth: 4, role: "system", text: lore.topOfAuthorsNote.text }] : [],
-      ...lore.bottomOfAuthorsNote.text ? [{ depth: 0, role: "system", text: lore.bottomOfAuthorsNote.text }] : [],
+    const historyForPrompt = tpl ? await Promise.all(historyRegexed.map((m, index) => tpl.renderText(m.mes, `history#${index}`).then((mes) => ({ ...m, mes })))) : historyRegexed;
+    const atDepthSource = tpl ? tpl.partition.normalAtDepth : lore.atDepth.map((g) => ({ depth: g.depth, role: g.role, text: g.text }));
+    const anTopText = tpl && lore.topOfAuthorsNote.text ? await tpl.renderText(lore.topOfAuthorsNote.text, "an-top") : lore.topOfAuthorsNote.text;
+    const anBottomText = tpl && lore.bottomOfAuthorsNote.text ? await tpl.renderText(lore.bottomOfAuthorsNote.text, "an-bottom") : lore.bottomOfAuthorsNote.text;
+    const depthInjectionsRaw = [
+      ...atDepthSource.map((g) => ({ depth: g.depth, role: roleName(g.role), text: g.text })),
+      ...anTopText ? [{ depth: 4, role: "system", text: anTopText }] : [],
+      ...anBottomText ? [{ depth: 0, role: "system", text: anBottomText }] : [],
       ...personaInjections
     ];
+    const depthInjections = tpl ? await Promise.all(depthInjectionsRaw.map(async (inj) => ({ ...inj, text: await tpl.renderText(inj.text, "depth-injection") }))) : depthInjectionsRaw;
     const assembled = assemblePrompt({
-      card: character.card,
-      preset,
+      card: tpl ? await tpl.preRenderCard(character.card) : character.card,
+      preset: tpl ? await tpl.preRenderPreset(preset) : preset,
       personaDescription,
       messages: historyForPrompt,
       worldInfoBefore: loreBefore,
       worldInfoAfter: loreAfter,
-      beforeExamples: lore.beforeExamples.entries.map((e) => e.content),
-      afterExamples: lore.afterExamples.entries.map((e) => e.content),
+      beforeExamples: tpl ? await Promise.all(tpl.partition.normalBeforeExamples.map((e, i) => tpl.renderText(e.content, `wi-em-before#${i}`))) : lore.beforeExamples.entries.map((e) => e.content),
+      afterExamples: tpl ? await Promise.all(tpl.partition.normalAfterExamples.map((e, i) => tpl.renderText(e.content, `wi-em-after#${i}`))) : lore.afterExamples.entries.map((e) => e.content),
       depthInjections
     }, { expand, countTokens });
     const fallback = ctx.agentDefaultModel.currentSelection();
@@ -11971,13 +13791,16 @@ async function runGeneration(ctx, db, options) {
     const choice = explicit ?? saved ?? fallback;
     const provider = choice.provider;
     const model = choice.model;
+    tpl?.setModel(model);
     const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
     write({ type: "start", provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: assembled.stats });
+    if (tpl) await tpl.prerenderGenerateAfter();
+    const finalMessages = tpl ? await tpl.applyPromptInjections(assembled.messages) : assembled.messages;
     let text = "";
     let reasoning = "";
     let hostUsage;
     hostTrace = startTavernSessionStep(hostTrace);
-    const requestMessages = [...assembled.messages];
+    const requestMessages = [...finalMessages];
     const systemParts = [];
     while (requestMessages[0]?.role === "system") systemParts.push(requestMessages.shift().content);
     const llmMessages = requestMessages.map((m) => createMessage({
@@ -12012,7 +13835,8 @@ async function runGeneration(ctx, db, options) {
     }
     if (text.trim() === "") throw new Error("model returned no text");
     const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly);
-    const finalText = saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement.AI_OUTPUT, { expand }) : text;
+    let finalText = saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement.AI_OUTPUT, { expand }) : text;
+    if (tpl) finalText = await tpl.renderOutput(finalText);
     const finalReasoning = reasoning ? applyRegexScripts(reasoning, scripts, RegexPlacement.REASONING, { expand }) : reasoning;
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const oldSwipes = regenerated ? Array.isArray(regenerated.swipes) && regenerated.swipes.length > 0 ? regenerated.swipes : [regenerated.mes] : [];
@@ -12027,11 +13851,26 @@ async function runGeneration(ctx, db, options) {
       swipe_id: oldSwipes.length,
       swipes: [...oldSwipes, finalText],
       swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider, model, reasoning: finalReasoning || void 0 } }],
-      extra: { ...regenerated?.extra ?? {}, api: provider, model, reasoning: finalReasoning || void 0, activatedLore: lore.allActivated.map((e) => e.entryId) }
+      extra: {
+        ...regenerated?.extra ?? {},
+        api: provider,
+        model,
+        reasoning: finalReasoning || void 0,
+        activatedLore: lore.allActivated.map((e) => e.entryId),
+        ...tpl && tpl.warnings.length > 0 ? { templateWarnings: tpl.warnings } : {}
+      }
     });
     const varSnapshot = macros.snapshotVars().local;
-    if (Object.keys(varSnapshot).length > 0) chat.header.chat_metadata.variables = varSnapshot;
-    else delete chat.header.chat_metadata.variables;
+    if (tpl) {
+      mergeTemplateLocalVars(chat, varSnapshot);
+      if (JSON.stringify(state.scriptGlobals) !== templateGlobalsBefore) {
+        await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }));
+      }
+    } else if (Object.keys(varSnapshot).length > 0) {
+      chat.header.chat_metadata.variables = varSnapshot;
+    } else {
+      delete chat.header.chat_metadata.variables;
+    }
     revision = await db.saveChat(characterName, chatId, chat, revision);
     hostTrace = recordTavernSessionAssistant(hostTrace, finalText, finalReasoning, provider, model, hostUsage);
     return { chat, revision, speaker: speakerName };
@@ -12587,7 +14426,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.3.9".trim() : "";
-  const commit = true ? normalizeCommit("8555481") : void 0;
+  const commit = true ? normalizeCommit("48f3f74") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

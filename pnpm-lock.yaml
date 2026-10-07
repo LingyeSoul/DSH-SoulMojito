@@ -56,6 +56,8 @@ importers:
         specifier: workspace:*
         version: link:../tavern-format
 
+  packages/tavern-template: {}
+
 packages:
 
   '@esbuild/aix-ppc64@0.25.0':

@@ -59,6 +59,7 @@ import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
 import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type SessionImportAppend } from './agent-tavern/projector.js'
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from './agent-tavern/deduce.js'
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
+import { createGenerationTemplates, mergeTemplateLocalVars, type GenerationTemplates } from './template.js'
 import { dshHomePath } from './dsh-home.js'
 import { TavernUpdateService, updateChangelog } from './update/service.js'
 
@@ -94,6 +95,9 @@ let novelDriverPromise: Promise<NovelDriver | undefined> | undefined
 // 在这里记一次供路由与 bootstrap 复用。
 let updateServiceInstance: TavernUpdateService | undefined
 let updateChecksEnabledFlag = true
+// Prompt Template（提案 0008）总开关：默认开启；profile 行 templateEnabled: false
+// 或 DSH_TAVERN_DISABLE_TEMPLATES=1 关闭。无模板标签时链路直通，无额外开销。
+let templatesEnabledFlag = true
 
 class TavernArchitectureConflictError extends Error {
   readonly code = 'TAVERN_ARCHITECTURE_CONFLICT'
@@ -151,9 +155,20 @@ function updateChecksEnabled(config: { checkForUpdates?: unknown } = {}): boolea
   return !(disabled !== undefined && disabled !== '' && disabled !== '0' && disabled !== 'false')
 }
 
-export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates?: unknown } = {}) {
+/**
+ * Prompt Template 开关（提案 0008）：profile 的 dsh-tavern 行 `templateEnabled: false`
+ * 或环境变量 `DSH_TAVERN_DISABLE_TEMPLATES` 非空即关闭。
+ */
+function templatesEnabled(config: { templateEnabled?: unknown } = {}): boolean {
+  if (config.templateEnabled === false) return false
+  const disabled = process.env.DSH_TAVERN_DISABLE_TEMPLATES?.trim()
+  return !(disabled !== undefined && disabled !== '' && disabled !== '0' && disabled !== 'false')
+}
+
+export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates?: unknown, templateEnabled?: unknown } = {}) {
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns })
   updateChecksEnabledFlag = updateChecksEnabled(config)
+  templatesEnabledFlag = templatesEnabled(config)
   const adapter = createDshAgentTavernAdapter(ctx)
   // 宿主形状一次性上报：rc.6 与 0.1.2+ 的绑定路径差异排查从这行日志读起。
   ctx.logger?.info?.(`dsh-tavern host shape: ${JSON.stringify(describeHostShape(ctx))}`)
@@ -1991,10 +2006,27 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   })
   chat.header.chat_metadata.timedWorldInfo = lore.timedState
 
-  // WI 内容进 prompt 前过 WORLD_INFO regex
+  // ---- Prompt Template 预备（提案 0008）：激活分区 + InitialVariables + 运行时 ----
+  // templatesEnabledFlag 承载 profile 配置决策；templatesEnabled() 实时读 env 覆盖
+  const templatesActive = templatesEnabledFlag && templatesEnabled()
+  const templateGlobalsBefore = templatesActive ? JSON.stringify(state.scriptGlobals) : undefined
+  const tpl: GenerationTemplates | null = templatesActive
+    ? await createGenerationTemplates({
+        chat, state, books, lore,
+        card: character.card, preset,
+        turnMessages,
+        userName, characterName: speakerName, chatId,
+      })
+    : null
+
+  // WI 内容进 prompt 前过 WORLD_INFO regex；模板开启时特殊条目已剔除、再过 EJS 渲染
   const wiDeps = { expand: (text) => text }
-  const loreBefore = lore.worldInfoBefore.entries.map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps))
-  const loreAfter = lore.worldInfoAfter.entries.map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps))
+  const loreBeforeBase = (tpl ? tpl.partition.normalBefore : lore.worldInfoBefore.entries)
+    .map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps))
+  const loreAfterBase = (tpl ? tpl.partition.normalAfter : lore.worldInfoAfter.entries)
+    .map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps))
+  const loreBefore = tpl ? await Promise.all(loreBeforeBase.map((t) => tpl.renderText(t, 'wi-before'))) : loreBeforeBase
+  const loreAfter = tpl ? await Promise.all(loreAfterBase.map((t) => tpl.renderText(t, 'wi-after'))) : loreAfterBase
 
   const lastUser = [...turnMessages].reverse().find((m) => m.is_user)
   const lastChar = [...turnMessages].reverse().find((m) => !m.is_user && !m.is_system)
@@ -2041,30 +2073,48 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
       personaDescription = undefined
     }
   }
+  if (tpl && personaDescription) personaDescription = await tpl.renderText(personaDescription, 'persona')
 
   // ---- promptOnly AI_OUTPUT：历史消息只影响 prompt 的变换 ----
   const promptOnlyScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly)
-  const historyForPrompt = promptOnlyScripts.length > 0
+  const historyRegexed = promptOnlyScripts.length > 0
     ? turnMessages.map((m, index) => ({
         ...m,
         mes: applyRegexScripts(m.mes, promptOnlyScripts, RegexPlacement.AI_OUTPUT, {}, { depth: turnMessages.length - 1 - index }),
       }))
     : turnMessages
+  // 模板开启时历史消息过 EJS（ST 默认语义：生成期处理消息中的 <% 块）
+  const historyForPrompt = tpl
+    ? await Promise.all(historyRegexed.map((m, index) =>
+        tpl.renderText(m.mes, `history#${index}`).then((mes) => ({ ...m, mes }))))
+    : historyRegexed
 
-  const depthInjections = [
-    ...lore.atDepth.map((g) => ({ depth: g.depth, role: roleName(g.role), text: g.text })),
-    ...(lore.topOfAuthorsNote.text ? [{ depth: 4, role: 'system', text: lore.topOfAuthorsNote.text }] : []),
-    ...(lore.bottomOfAuthorsNote.text ? [{ depth: 0, role: 'system', text: lore.bottomOfAuthorsNote.text }] : []),
+  const atDepthSource = tpl ? tpl.partition.normalAtDepth : lore.atDepth.map((g) => ({ depth: g.depth, role: g.role, text: g.text }))
+  const anTopText = tpl && lore.topOfAuthorsNote.text ? await tpl.renderText(lore.topOfAuthorsNote.text, 'an-top') : lore.topOfAuthorsNote.text
+  const anBottomText = tpl && lore.bottomOfAuthorsNote.text ? await tpl.renderText(lore.bottomOfAuthorsNote.text, 'an-bottom') : lore.bottomOfAuthorsNote.text
+  const depthInjectionsRaw = [
+    ...atDepthSource.map((g) => ({ depth: g.depth, role: roleName(g.role), text: g.text })),
+    ...(anTopText ? [{ depth: 4, role: 'system', text: anTopText }] : []),
+    ...(anBottomText ? [{ depth: 0, role: 'system', text: anBottomText }] : []),
     ...personaInjections,
   ]
+  const depthInjections = tpl
+    ? await Promise.all(depthInjectionsRaw.map(async (inj) => ({ ...inj, text: await tpl.renderText(inj.text, 'depth-injection') })))
+    : depthInjectionsRaw
 
   const assembled = assemblePrompt({
-    card: character.card, preset, personaDescription,
+    card: tpl ? await tpl.preRenderCard(character.card) : character.card,
+    preset: tpl ? await tpl.preRenderPreset(preset) : preset,
+    personaDescription,
     messages: historyForPrompt,
     worldInfoBefore: loreBefore,
     worldInfoAfter: loreAfter,
-    beforeExamples: lore.beforeExamples.entries.map((e) => e.content),
-    afterExamples: lore.afterExamples.entries.map((e) => e.content),
+    beforeExamples: tpl
+      ? await Promise.all(tpl.partition.normalBeforeExamples.map((e, i) => tpl.renderText(e.content, `wi-em-before#${i}`)))
+      : lore.beforeExamples.entries.map((e) => e.content),
+    afterExamples: tpl
+      ? await Promise.all(tpl.partition.normalAfterExamples.map((e, i) => tpl.renderText(e.content, `wi-em-after#${i}`)))
+      : lore.afterExamples.entries.map((e) => e.content),
     depthInjections,
   }, { expand, countTokens })
   const fallback = ctx.agentDefaultModel.currentSelection()
@@ -2079,16 +2129,22 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   const choice = explicit ?? saved ?? fallback
   const provider = choice.provider
   const model = choice.model
+  tpl?.setModel(model)
   const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort
     ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : undefined)
   write({ type: 'start', provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: assembled.stats })
+
+  // ---- 模板消息级注入（GENERATE → @INJECT，提案 0008）----
+  // AFTER 条目位于 prompt 末尾：所有字段渲染完成后才预渲染（变量副作用次序）
+  if (tpl) await tpl.prerenderGenerateAfter()
+  const finalMessages = tpl ? await tpl.applyPromptInjections(assembled.messages) : assembled.messages
 
   // ---- 流式生成 ----
   let text = ''
   let reasoning = ''
   let hostUsage
   hostTrace = startTavernSessionStep(hostTrace)
-  const requestMessages = [...assembled.messages]
+  const requestMessages = [...finalMessages]
   const systemParts = []
   while (requestMessages[0]?.role === 'system') systemParts.push(requestMessages.shift().content)
   const llmMessages = requestMessages.map((m) => createMessage({
@@ -2120,9 +2176,10 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   }
   if (text.trim() === '') throw new Error('model returned no text')
 
-  // ---- AI_OUTPUT regex（非 promptOnly）+ 保存 ----
+  // ---- AI_OUTPUT regex（非 promptOnly）→ 模板输出渲染（RENDER + setvar）→ 保存 ----
   const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly)
-  const finalText = saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement.AI_OUTPUT, { expand }) : text
+  let finalText = saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement.AI_OUTPUT, { expand }) : text
+  if (tpl) finalText = await tpl.renderOutput(finalText)
   const finalReasoning = reasoning
     ? applyRegexScripts(reasoning, scripts, RegexPlacement.REASONING, { expand })
     : reasoning
@@ -2140,12 +2197,26 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     swipe_id: oldSwipes.length,
     swipes: [...oldSwipes, finalText],
     swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider, model, reasoning: finalReasoning || undefined } }],
-    extra: { ...(regenerated?.extra ?? {}), api: provider, model, reasoning: finalReasoning || undefined, activatedLore: lore.allActivated.map((e) => e.entryId) },
+    extra: {
+      ...(regenerated?.extra ?? {}),
+      api: provider, model, reasoning: finalReasoning || undefined,
+      activatedLore: lore.allActivated.map((e) => e.entryId),
+      ...(tpl && tpl.warnings.length > 0 ? { templateWarnings: tpl.warnings } : {}),
+    },
   })
-  // STscript 局部变量持久化（宏展开期间的 {{setvar}} 等经引擎持有）
+  // 变量持久化：宏局部快照（原语）+ 模板写穿的 local/initial（chat_metadata live）合并；
+  // 模板 global 写穿 state.scriptGlobals，有变化时落 state.json
   const varSnapshot = macros.snapshotVars().local
-  if (Object.keys(varSnapshot).length > 0) chat.header.chat_metadata.variables = varSnapshot
-  else delete chat.header.chat_metadata.variables
+  if (tpl) {
+    mergeTemplateLocalVars(chat, varSnapshot)
+    if (JSON.stringify(state.scriptGlobals) !== templateGlobalsBefore) {
+      await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }))
+    }
+  } else if (Object.keys(varSnapshot).length > 0) {
+    chat.header.chat_metadata.variables = varSnapshot
+  } else {
+    delete chat.header.chat_metadata.variables
+  }
   revision = await db.saveChat(characterName, chatId, chat, revision)
   hostTrace = recordTavernSessionAssistant(hostTrace, finalText, finalReasoning, provider, model, hostUsage)
   return { chat, revision, speaker: speakerName }

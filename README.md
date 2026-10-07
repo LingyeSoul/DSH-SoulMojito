@@ -20,6 +20,7 @@
 - 群聊：成员管理、自然（talkativeness 加权）/列表激活策略、成员点触发言、`group_only_greetings`、group nudge 和 `{{group}}` 宏。
 - 正则脚本：ST regex 扩展形态导入，全局 + 卡级合并，`USER_INPUT/AI_OUTPUT/WORLD_INFO/REASONING` placement、`minDepth/maxDepth`、`substituteRegex`、`trimStrings`。
 - STscript：管道、变量（聊天局部 + 全局）、`/if` 条件、随机/掷骰和聊天动作（`/send`、`/trigger`、`/regenerate`、`/cut`），composer `/` 前缀触发。
+- Prompt Template（EJS）：在预设、世界书、角色卡字段与消息中执行 `<% %>` JavaScript（`node:vm` 沙箱）；`getvar/setvar` 族带作用域变量（chat local 任意 JSON / `scriptGlobals` 全局 / InitialVariables 初值）；`[GENERATE:*]` / `[RENDER:*]` 内容注入、`@INJECT` 整消息插队、`[InitialVariables]` 变量树、`getwi/getchar/getpreset` 资产读取、`@@if`/`@@private` 装饰器与 `<#escape-ejs>` 保护块。详见 [`docs/proposals/0008-prompt-template.md`](docs/proposals/0008-prompt-template.md)。
 - Composer 模型选择：复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
 - 并发保护：聊天使用内容 revision 做 compare-and-swap；跨标签页冲突返回 `409`，客户端重新加载最新内容，不静默覆盖。
 - 可选的普通 Agent 人格注入，默认关闭。

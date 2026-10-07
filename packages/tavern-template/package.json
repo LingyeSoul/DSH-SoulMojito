@@ -1,0 +1,20 @@
+{
+  "name": "@dsh-tavern/template",
+  "version": "0.1.0",
+  "description": "SillyTavern Prompt-Template-compatible EJS engine: sandboxed template rendering, scoped variables, GENERATE/RENDER/@INJECT/InitialVariables prompt injection.",
+  "license": "GPL-3.0",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": ["lib"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  }
+}

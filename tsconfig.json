@@ -7,6 +7,7 @@
     { "path": "packages/tavern-macros" },
     { "path": "packages/tavern-store" },
     { "path": "packages/tavern-pipeline" },
-    { "path": "packages/tavern-script" }
+    { "path": "packages/tavern-script" },
+    { "path": "packages/tavern-template" }
   ]
 }
