@@ -1,6 +1,6 @@
 # 提案 0014：剧本游玩模式 — dsh-tavern 功能复刻（设计）
 
-> 状态：P1 已实现（8f72d3e），P2/P3 未实施。日期：2026-10-07。参照物：`flizzywine/dsh-tavern`（AGPL-3.0）
+> 状态：P1/P2 已实现（P1:8f72d3e），P3 未实施。日期：2026-10-07。参照物：`flizzywine/dsh-tavern`（AGPL-3.0）
 > 公开功能文档（README「剧本模式」、feature-inventory C01–C04：导入小说/大纲/剧本绑定人物卡，
 > 按片段推进、可偏离、进度展示；分段读取不整本塞上下文）。clean-room：只依据行为规格，
 > 实施时禁止阅读其源码。

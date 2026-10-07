@@ -96,7 +96,7 @@ describe('AgentTavern native module mount', () => {
     expect(sections.map((section) => section.name)).toContain('dsh-tavern:agent-kernel')
     expect(contexts.map((context) => context.name)).toContain('dsh-tavern:agent-facts')
     expect([...tools.keys()]).toContain('tavern_character_get')
-    expect(tools.size).toBe(15)
+    expect(tools.size).toBe(18)
   })
 
   it('resolves the per-agent facts from the assembly context instead of the mount context', async () => {

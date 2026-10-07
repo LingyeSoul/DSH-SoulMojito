@@ -635,7 +635,16 @@ async function handleApi(ctx, req, res) {
     const body = await readJson(req, 8 * 1024 * 1024)
     let imported
     try {
-      imported = await importScript(dshHomePath('tavern'), body.name, body.content, body.format)
+      // EPUB（提案 0014 P2）：content 为 base64 编码的 zip 字节，解码后走
+      // importScript 的二进制分支（parseEpubText）；8MB 上限对 base64 文本照旧。
+      imported = await importScript(
+        dshHomePath('tavern'),
+        body.name,
+        body.format === 'epub'
+          ? Buffer.from(typeof body.content === 'string' ? body.content : '', 'base64')
+          : body.content,
+        body.format,
+      )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       return sendJson(res, 400, { ok: false, message, code: 'TAVERN_SCRIPT' })
@@ -2470,7 +2479,7 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
       const lastAssistantFloor = [...chat.messages].reverse().find((m) => m.is_user === false && !m.is_system)
       const advanced = lastAssistantFloor !== undefined
         && chunkIndex < scriptRecord.chunks.length - 1
-        && shouldAdvance(scriptRecord.chunks[chunkIndex]!.text, lastAssistantFloor.mes)
+        && shouldAdvance(scriptRecord.chunks[chunkIndex]!.text, [...chat.messages].reverse().filter((m) => m.is_user === false && !m.is_system).slice(0, 3).map((m) => m.mes))
       if (advanced) chunkIndex += 1
       if (advanced || prior === undefined || prior.scriptName !== boundScriptId || prior.chunkIndex !== chunkIndex) {
         chat.header.chat_metadata = {

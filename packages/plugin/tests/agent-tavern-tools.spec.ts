@@ -110,7 +110,11 @@ describe('AgentTavern native tools', () => {
       'variable_patch',
       'variable_delete',
       'variable_list',
+      // tavern_script_*（提案 0014 P2）由 scripts 侧并行接入，与本套共库注册。
+      'tavern_script_read',
+      'tavern_script_advance',
       'tavern_deduce',
+      'tavern_variable_settle',
     ])
     for (const tool of tools.values()) {
       expect(tool.parameters.properties).not.toHaveProperty('sessionId')

@@ -3,9 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { apply } from '../src/index.js'
+import { apply as applyAgentTools } from '../src/agent-tavern/agent.js'
 import {
   SCRIPT_ADVANCE_COVERAGE,
+  SCRIPT_ADVANCE_WINDOW,
   TavernStore,
+  applyScriptBinding,
   boundScriptOf,
   chunkScriptText,
   formatScriptBlock,
@@ -427,5 +430,188 @@ describe('Script Play (proposal 0014 P1)', () => {
     // 未绑定角色 → 404
     await post('script/unbind', { character: CHARACTER })
     expect((await get(progressUrl(CHARACTER, chatId))).status).toBe(404)
+  })
+})
+
+/* ================= P2：推进判定加固 + AgentTavern 工具面 ================= */
+
+describe('Script Play (proposal 0014 P2)', () => {
+  const P2_CHARACTER = 'P2 Toolbound Scribe'
+  const P2_LOOSE = 'P2 Loose Scribe'
+  const AGENT_ID = 'session-script-p2'
+  const LOOSE_AGENT_ID = 'session-script-p2-loose'
+
+  interface RegisteredTool {
+    name: string
+    parameters: { properties: Record<string, unknown> }
+    execute(args: Record<string, unknown>, exec: { agent?: { id?: string } }): Promise<any>
+  }
+  interface RegisteredContext {
+    name: string
+    order: number
+    text: (assembly?: { agent?: { id?: string } }) => string
+  }
+
+  let home: string
+  let tavernRoot: string
+  let store: TavernStore
+  let tools: Map<string, RegisteredTool>
+  let contexts: RegisteredContext[]
+  let chatId: string
+  let looseChatId: string
+
+  beforeAll(async () => {
+    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-script-p2-'))
+    process.env.DSH_HOME = home
+    tavernRoot = join(home, 'tavern')
+    store = await TavernStore.open(tavernRoot)
+    for (const name of [P2_CHARACTER, P2_LOOSE]) {
+      await store.importCharacter({
+        spec: 'chara_card_v2',
+        spec_version: '2.0',
+        data: {
+          name, description: 'A P2 script-play test character', personality: '', scenario: '', first_mes: 'Hello',
+          mes_example: '', creator_notes: '', system_prompt: '', post_history_instructions: '',
+          alternate_greetings: [], tags: [], creator: '', character_version: '', extensions: {},
+        },
+      })
+    }
+    await importScript(tavernRoot, SCRIPT_NAME, SCRIPT_CONTENT)
+    await applyScriptBinding(store, P2_CHARACTER, SCRIPT_NAME)
+    chatId = await store.createChat(P2_CHARACTER, {
+      user_name: 'User', character_name: P2_CHARACTER, chat_metadata: { createdAt: new Date().toISOString() },
+    }, [])
+    looseChatId = await store.createChat(P2_LOOSE, {
+      user_name: 'User', character_name: P2_LOOSE, chat_metadata: { createdAt: new Date().toISOString() },
+    }, [])
+    await store.updateState(() => ({
+      sessionBindings: {
+        [AGENT_ID]: { architecture: 'agent-tavern', contextMode: 'dsh-native', character: P2_CHARACTER, chatId },
+        [LOOSE_AGENT_ID]: { architecture: 'agent-tavern', contextMode: 'dsh-native', character: P2_LOOSE, chatId: looseChatId },
+      },
+    }))
+
+    tools = new Map()
+    contexts = []
+    applyAgentTools({
+      systemPrompt: {
+        section: () => {},
+        context: (context: RegisteredContext) => { contexts.push(context) },
+      },
+      tools: { register: (tool) => { tools.set(tool.name, tool as RegisteredTool) } },
+      effect: (factory) => factory(),
+    })
+  })
+
+  afterAll(() => {
+    delete process.env.DSH_HOME
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  /* ---------------- 推进判定加固：3 楼层窗口（纯函数） ---------------- */
+
+  it('advances when any of the last 3 assistant floors covers the chunk, and drops older floors', () => {
+    const words = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => `${prefix}${index}`).join(' ')
+    const chunk = words('w', 20)
+    const covering = words('w', 7) // 7/20 = 0.35 恰达阈值
+    const unrelated = 'nothing here at all'
+
+    // 单条重载（P1 兼容）与单元素数组同义
+    expect(shouldAdvance(chunk, covering)).toBe(true)
+    expect(shouldAdvance(chunk, [covering])).toBe(true)
+    expect(SCRIPT_ADVANCE_WINDOW).toBe(3)
+    expect(SCRIPT_ADVANCE_COVERAGE).toBe(0.35)
+
+    // 窗口内任一条覆盖即推进（覆盖条分别在最旧/中间/最新位置）
+    expect(shouldAdvance(chunk, [covering, unrelated, unrelated])).toBe(true)
+    expect(shouldAdvance(chunk, [unrelated, covering, unrelated])).toBe(true)
+    expect(shouldAdvance(chunk, [unrelated, unrelated, covering])).toBe(true)
+
+    // 三条都低于阈值（各 6/20）→ 不推进
+    expect(shouldAdvance(chunk, [words('w', 6), words('w', 6), words('w', 6)])).toBe(false)
+    // 覆盖条掉出窗口（第 4 条之前的楼层）→ 不推进
+    expect(shouldAdvance(chunk, [covering, unrelated, unrelated, unrelated])).toBe(false)
+    // 空窗口与非字符串楼层安全
+    expect(shouldAdvance(chunk, [])).toBe(false)
+    expect(shouldAdvance(chunk, [undefined as never, covering])).toBe(true)
+  })
+
+  /* ---------------- tavern_script_read：进度默认块 + 钳制 + 未绑定优雅跳过 ---------------- */
+
+  it('reads the bound script segment with progress defaults and clamped bounds', async () => {
+    const read = tools.get('tavern_script_read')!
+    const exec = { agent: { id: AGENT_ID } }
+    // 工具无身份参数（scope 派生，与 variable_list 等同款契约）
+    expect(read.parameters.properties).not.toHaveProperty('character')
+    expect(read.parameters.properties).not.toHaveProperty('chatId')
+
+    // 默认读当前进度块（尚无进度 → 块 0），全文不截断
+    const first = await read.execute({}, exec)
+    expect(first).toMatchObject({ found: true, scriptName: SCRIPT_NAME, chunkIndex: 0, chunkCount: 3, truncated: false })
+    expect(first.text.startsWith(MARKERS[0])).toBe(true)
+
+    // 指定块 + maxChars 截断
+    const clamped = await read.execute({ chunkIndex: 2, maxChars: 5 }, exec)
+    expect(clamped).toMatchObject({ chunkIndex: 2, truncated: true })
+    expect(clamped.text).toHaveLength(5)
+    // 越界钳制到末块；非整数回退当前进度块
+    expect(await read.execute({ chunkIndex: 99 }, exec)).toMatchObject({ chunkIndex: 2 })
+    expect(await read.execute({ chunkIndex: 1.5 }, exec)).toMatchObject({ chunkIndex: 0 })
+    // 未绑定剧本的角色 → found:false，不抛错（agent 可优雅跳过）
+    expect(await read.execute({}, { agent: { id: LOOSE_AGENT_ID } })).toEqual({ found: false })
+  })
+
+  /* ---------------- tavern_script_advance：CAS 落库 + note + done ---------------- */
+
+  it('advances at most one chunk per call, records the bounded note, and reports done at the end', async () => {
+    const advance = tools.get('tavern_script_advance')!
+    const read = tools.get('tavern_script_read')!
+    const exec = { agent: { id: AGENT_ID } }
+
+    const first = await advance.execute({ note: 'x'.repeat(300) }, exec)
+    expect(first).toMatchObject({ found: true, scriptName: SCRIPT_NAME, chunkIndex: 1, chunkCount: 3, done: false })
+    expect(first.alignedAt).toEqual(expect.any(String))
+    expect(first.lastNote).toHaveLength(200) // note ≤200 截断
+
+    // CAS 落库：进度 + note 持久化（chat_metadata.scriptProgress）
+    const progress = normalizeScriptProgress(
+      (await store.getChatSnapshot(P2_CHARACTER, chatId))!.chat.header.chat_metadata.scriptProgress,
+    )
+    expect(progress).toMatchObject({ scriptName: SCRIPT_NAME, chunkIndex: 1 })
+    expect(progress!.lastNote).toHaveLength(200)
+
+    // 读取默认跟随新进度
+    expect(await read.execute({}, exec)).toMatchObject({ chunkIndex: 1 })
+
+    // 一次至多 +1；末块 done:true 不再前进（alignedAt 照旧刷新）
+    await advance.execute({}, exec)
+    const last = await advance.execute({}, exec)
+    expect(last).toMatchObject({ chunkIndex: 2, done: true })
+    expect(await read.execute({}, exec)).toMatchObject({ chunkIndex: 2 })
+    expect(normalizeScriptProgress(
+      (await store.getChatSnapshot(P2_CHARACTER, chatId))!.chat.header.chat_metadata.scriptProgress,
+    )).toMatchObject({ chunkIndex: 2 })
+
+    // 未绑定 → found:false，不抛错、不动进度
+    expect(await advance.execute({}, { agent: { id: LOOSE_AGENT_ID } })).toEqual({ found: false })
+    expect(normalizeScriptProgress(
+      (await store.getChatSnapshot(P2_LOOSE, looseChatId))!.chat.header.chat_metadata.scriptProgress,
+    )).toBeUndefined()
+  })
+
+  /* ---------------- 进度摘要 context：注册 + 写穿 ---------------- */
+
+  it('registers the agent-script summary context and refreshes it after advances', async () => {
+    const context = contexts.find((registered) => registered.name === 'dsh-tavern:agent-script')
+    expect(context).toBeDefined()
+    expect(context!.order).toBe(-64)
+    // context 文案引导工具面（与 tavern_script_advance 的写穿缓存同步）
+    // tavern_script_advance 已 awaited 写穿：无需轮询，直接取到最新进度摘要
+    expect(context!.text({ agent: { id: AGENT_ID } })).toBe(
+      `Bound script: ${SCRIPT_NAME}, progress 3/3; call tavern_script_read for the current segment, tavern_script_advance when the scene has covered it`,
+    )
+    // 未绑定剧本的 agent → 空串（context 不占 system 段）
+    expect(context!.text({ agent: { id: LOOSE_AGENT_ID } })).toBe('')
+    expect(context!.text(undefined)).toBe('')
   })
 })

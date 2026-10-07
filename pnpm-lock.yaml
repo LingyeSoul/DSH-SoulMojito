@@ -55,6 +55,9 @@ importers:
       '@dsh-tavern/format':
         specifier: workspace:*
         version: link:../tavern-format
+      fflate:
+        specifier: ^0.8.0
+        version: 0.8.3
 
   packages/tavern-template: {}
 

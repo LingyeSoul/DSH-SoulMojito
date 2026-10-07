@@ -401,7 +401,7 @@ window.__ModuleLoader__.load({
       'script.hint': 'The script is a reference, not a chapter skip: the story may deviate at any time, and the position only advances when the latest reply covers the current segment.',
       'scripts.hint': 'Import a novel or outline as a script (auto-chunked for staged recall) and bind it to a character card — one script per card; new chats with a bound card follow the script.',
       'scripts.empty': 'No scripts imported yet',
-      'scripts.importFile': 'Import TXT/MD',
+      'scripts.importFile': 'Import TXT/MD/EPUB',
       'scripts.importing': 'Importing…',
       'scripts.paste': 'Paste text',
       'scripts.pasteName': 'Script name',
@@ -873,7 +873,7 @@ window.__ModuleLoader__.load({
       'script.hint': '剧本是参考不是跳章：剧情可以随时偏离，只有正文覆盖当前片段时进度才会推进。',
       'scripts.hint': '把小说或大纲导入为剧本（自动分段、分段召回），并与人物卡一对一绑定；绑定的卡开新局会按剧本推进。',
       'scripts.empty': '尚未导入剧本',
-      'scripts.importFile': '导入 TXT/MD',
+      'scripts.importFile': '导入 TXT/MD/EPUB',
       'scripts.importing': '导入中…',
       'scripts.paste': '粘贴文本',
       'scripts.pasteName': '剧本名称',
@@ -2139,6 +2139,15 @@ window.__ModuleLoader__.load({
 
     function fileStem(name) {
       return name.replace(/\.[^.]+$/, '') || 'Imported'
+    }
+
+    // 分块 btoa：避免大文件 String.fromCharCode 展开超出参数上限（与 importAsset 同款）。
+    function bytesToBase64(bytes) {
+      let binary = ''
+      for (let index = 0; index < bytes.length; index += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000))
+      }
+      return btoa(binary)
     }
 
     async function importAsset(kind, file) {
@@ -5398,14 +5407,22 @@ window.__ModuleLoader__.load({
               importing ? t('scripts.importing') : t('scripts.importFile'),
               h('input', {
                 type: 'file',
-                accept: '.txt,.md,.markdown,text/plain,text/markdown',
+                accept: '.txt,.md,.markdown,.epub,text/plain,text/markdown,application/epub+zip',
                 disabled: importing,
                 onChange: (event) => {
                   const file = event.target.files?.[0]
                   event.target.value = ''
                   if (!file) return
-                  void readFile(file, false)
-                    .then((content) => importText(fileStem(file.name), content, /\.md(?:own)?$/i.test(file.name) ? 'md' : 'txt'))
+                  // EPUB 走二进制（提案 0014 P2）：FileReader 读 ArrayBuffer →
+                  // base64，format 'epub'（服务端解码 zip 取 spine 正文）；TXT/MD
+                  // 路径不变，仍读文本按后缀推断。
+                  const epub = /\.epub$/i.test(file.name)
+                  void readFile(file, epub)
+                    .then((content) => importText(
+                      fileStem(file.name),
+                      epub ? bytesToBase64(new Uint8Array(content)) : content,
+                      epub ? 'epub' : (/\.md(?:own)?$/i.test(file.name) ? 'md' : 'txt'),
+                    ))
                     .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
                 },
               })),
@@ -5458,7 +5475,7 @@ window.__ModuleLoader__.load({
                 return h('div', { key: script.name, className: 'dt-script-row' },
                   h('div', { className: 'dt-script-row-head' },
                     h('strong', { className: 'dt-script-name' }, script.name),
-                    h(Pill, null, script.format === 'md' ? 'md' : 'txt'),
+                    h(Pill, null, script.format === 'epub' ? 'EPUB' : script.format === 'md' ? 'md' : 'txt'),
                     h('span', { className: 'dt-script-meta' }, t('scripts.chunks', { count: script.chunkCount })),
                     h('span', { className: 'dt-script-meta' }, t('scripts.characters', { count: script.totalCharacters })),
                     h('span', { className: 'dt-script-meta' }, t('scripts.importedAt', { time: formatNovelTime(script.importedAt) }))),
