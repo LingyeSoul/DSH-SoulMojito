@@ -245,6 +245,7 @@ window.__ModuleLoader__.load({
       'panel.section.personas': 'Personas',
       'panel.section.worlds': 'World Info',
       'panel.section.presets': 'Presets',
+      'panel.section.scripts': 'Scripts',
       'panel.section.regex': 'Regex scripts',
       'panel.section.variables': 'Variables',
       'panel.overview.counts': 'Characters {characters} · Chats {chats} · Worlds {worlds} · Presets {presets} · Personas {personas} · Groups {groups}',
@@ -362,6 +363,43 @@ window.__ModuleLoader__.load({
       'candidates.fill': 'Fill the input box (edit before sending)',
       'candidates.kind.action': 'Action',
       'candidates.kind.scene': 'Scene',
+      // MVU 状态与回执（提案 0012 P1）/ 剧本游玩（提案 0014 P1）的客户端文案；
+      // zh/en 键集与 {param} 占位符必须完全镜像，由 client-vm-mount gate 校验。
+      'mvu.title': 'MVU status',
+      'mvu.variables': 'Variables',
+      'mvu.receipts': 'Settlement receipts',
+      'mvu.receiptsEmpty': 'No settlement receipts yet',
+      'mvu.status.updated': 'updated',
+      'mvu.status.unchanged': 'unchanged',
+      'mvu.status.failed': 'failed',
+      'mvu.turn': 'Turn {turn}',
+      'mvu.change': '{name}: {before} → {after}',
+      'mvu.more': '+{count} more',
+      'mvu.less': 'Show fewer',
+      'mvu.failures': 'Failures',
+      'mvu.retry': 'Retry settlement',
+      'mvu.retrying': 'Retrying…',
+      'script.progressTitle': 'Script progress',
+      'script.position': 'Segment {current} of {total}',
+      'script.alignedAt': 'Aligned {time}',
+      'script.hint': 'The script is a reference, not a chapter skip: the story may deviate at any time, and the position only advances when the latest reply covers the current segment.',
+      'scripts.hint': 'Import a novel or outline as a script (auto-chunked for staged recall) and bind it to a character card — one script per card; new chats with a bound card follow the script.',
+      'scripts.empty': 'No scripts imported yet',
+      'scripts.importFile': 'Import TXT/MD',
+      'scripts.importing': 'Importing…',
+      'scripts.paste': 'Paste text',
+      'scripts.pasteName': 'Script name',
+      'scripts.pasteContent': 'Script text',
+      'scripts.pastePlaceholder': 'Paste the script text here…',
+      'scripts.pasteImport': 'Import pasted text',
+      'scripts.chunks': '{count} chunks',
+      'scripts.characters': '{count} characters',
+      'scripts.importedAt': 'Imported {time}',
+      'scripts.bindTo': 'Bind to a card',
+      'scripts.bind': 'Bind',
+      'scripts.unbind': 'Unbind {name}',
+      'scripts.noCharacters': 'No character cards imported yet; bind a script after importing a card.',
+      'scripts.refresh': 'Refresh',
       'message.user': 'User',
       'message.previousSwipe': 'Previous swipe',
       'message.nextSwipe': 'Next swipe',
@@ -663,6 +701,7 @@ window.__ModuleLoader__.load({
       'panel.section.personas': '用户人设',
       'panel.section.worlds': '世界书',
       'panel.section.presets': '预设',
+      'panel.section.scripts': '剧本',
       'panel.section.regex': '正则脚本',
       'panel.section.variables': '变量',
       'panel.overview.counts': '角色 {characters} · 聊天 {chats} · 世界书 {worlds} · 预设 {presets} · 人设 {personas} · 群组 {groups}',
@@ -780,6 +819,43 @@ window.__ModuleLoader__.load({
       'candidates.fill': '填入输入框（发送前可修改）',
       'candidates.kind.action': '行动',
       'candidates.kind.scene': '场景',
+      // MVU 状态与回执（提案 0012 P1）/ 剧本游玩（提案 0014 P1）的客户端文案；
+      // zh/en 键集与 {param} 占位符必须完全镜像，由 client-vm-mount gate 校验。
+      'mvu.title': 'MVU 状态',
+      'mvu.variables': '变量',
+      'mvu.receipts': '结算回执',
+      'mvu.receiptsEmpty': '还没有结算回执',
+      'mvu.status.updated': '已更新',
+      'mvu.status.unchanged': '未变化',
+      'mvu.status.failed': '失败',
+      'mvu.turn': '第 {turn} 楼',
+      'mvu.change': '{name}：{before} → {after}',
+      'mvu.more': '还有 {count} 条',
+      'mvu.less': '收起',
+      'mvu.failures': '失败项',
+      'mvu.retry': '重试结算',
+      'mvu.retrying': '重试中…',
+      'script.progressTitle': '剧本进度',
+      'script.position': '片段 {current} / {total}',
+      'script.alignedAt': '对齐于 {time}',
+      'script.hint': '剧本是参考不是跳章：剧情可以随时偏离，只有正文覆盖当前片段时进度才会推进。',
+      'scripts.hint': '把小说或大纲导入为剧本（自动分段、分段召回），并与人物卡一对一绑定；绑定的卡开新局会按剧本推进。',
+      'scripts.empty': '尚未导入剧本',
+      'scripts.importFile': '导入 TXT/MD',
+      'scripts.importing': '导入中…',
+      'scripts.paste': '粘贴文本',
+      'scripts.pasteName': '剧本名称',
+      'scripts.pasteContent': '剧本正文',
+      'scripts.pastePlaceholder': '在此粘贴剧本正文…',
+      'scripts.pasteImport': '导入粘贴文本',
+      'scripts.chunks': '{count} 块',
+      'scripts.characters': '{count} 字符',
+      'scripts.importedAt': '导入于 {time}',
+      'scripts.bindTo': '绑定到卡',
+      'scripts.bind': '绑定',
+      'scripts.unbind': '解绑 {name}',
+      'scripts.noCharacters': '尚未导入角色卡；导入卡后才能绑定剧本。',
+      'scripts.refresh': '刷新',
       'message.user': '用户',
       'message.previousSwipe': '上一个候选',
       'message.nextSwipe': '下一个候选',
@@ -1065,6 +1141,9 @@ window.__ModuleLoader__.load({
       panelOpen: false,
       panelSection: 'overview',
       navigationStatus: '',
+      // 剧本库写操作（导入/绑定/解绑）的广播计数：绑定写在卡 extensions 上，
+      // 不经过聊天 revision，进度卡靠它感知重取（绑定后出现 / 解绑后隐藏）。
+      scriptsRevision: 0,
     }
     const listeners = new Set()
     const pendingChats = new Map()
@@ -1318,6 +1397,76 @@ window.__ModuleLoader__.load({
       })
       syncChatRevision(binding.character, binding.chatId, result.revision)
       return result
+    }
+
+    // MVU 状态与回执（提案 0012 P1）的读写路径：GET mvu/status 与写路径同样
+    // 走 revision CAS（POST mvu/retry 响应携带新 revision，照 guides/candidates
+    // 模式同步 revisions[key] 并强刷本地聊天快照——回执落在 chat_metadata）。
+    function mvuStatusPath(character, chatId) {
+      return `mvu/status/${encodeURIComponent(character)}/${encodeURIComponent(chatId)}`
+    }
+
+    function loadMvuStatus(character, chatId) {
+      return api(mvuStatusPath(character, chatId))
+    }
+
+    async function retryMvuSettlement(sessionId, binding) {
+      const key = chatKey(binding.character, binding.chatId)
+      const result = await api('mvu/retry', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          sessionId,
+          character: binding.character,
+          chatId: binding.chatId,
+          revision: snapshot.revisions[key],
+        }),
+      })
+      syncChatRevision(binding.character, binding.chatId, result.revision)
+      return result
+    }
+
+    // 剧本游玩（提案 0014 P1）：剧本库（GET scripts / POST script/import）与
+    // 绑定（POST script/bind / script/unbind，写在卡 extensions 上，非聊天
+    // revision 域）；进度 GET script/progress 由生成链路的对齐推进写，这里只读。
+    function scriptProgressPath(character, chatId) {
+      return `script/progress/${encodeURIComponent(character)}/${encodeURIComponent(chatId)}`
+    }
+
+    function loadScriptProgress(character, chatId) {
+      return api(scriptProgressPath(character, chatId))
+    }
+
+    function loadScriptsLibrary() {
+      return api('scripts')
+    }
+
+    function importScriptAsset(name, content, format) {
+      return api('script/import', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ name, content, ...(format !== undefined ? { format } : {}) }),
+      })
+    }
+
+    function bindCharacterScript(character, scriptName) {
+      return api('script/bind', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ character, scriptName }),
+      })
+    }
+
+    function unbindCharacterScript(character) {
+      return api('script/unbind', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ character }),
+      })
+    }
+
+    function bumpScriptsRevision() {
+      update({ scriptsRevision: snapshot.scriptsRevision + 1 })
     }
 
     async function generateFor(sessionId, binding, mode, text, options = {}) {
@@ -2936,6 +3085,10 @@ window.__ModuleLoader__.load({
                 .catch((cause) => setRun(sessionId, { error: cause.message }))
             },
           }, `↩ ${t('view.linkedFrom', { name: `${link.character} · ${(link.chatId || '').replace(/\.jsonl$/i, '')}` })}`)) : null,
+        // MVU 状态与回执（0012）/ 剧本进度卡（0014）：available=false / 未绑定剧本
+        // 时组件自身返回 null，不占位
+        h(TavernMvuStatus, { sessionId }),
+        h(TavernScriptProgress, { sessionId }),
         h('div', { className: 'dt-transcript' },
           messages.map((message, index) => h(MessageRow, {
             key: `${index}-${message.send_date || ''}-${message.streaming ? 'stream' : 'saved'}`,
@@ -3310,6 +3463,206 @@ window.__ModuleLoader__.load({
               },
             }),
             h('button', { type: 'button', disabled: blocked, onClick: () => generate(true) }, t('candidates.regenerate')))) : null)
+    }
+
+    // MVU 状态与回执（提案 0012 P1）：聊天视图顶部的常驻状态面板，ST 与
+    // AgentTavern 聊天同样适用（状态 API 不限架构）。available=false（本局无
+    // 变量）时整块隐藏；renderedHtml 存在（卡带 statusTemplate）时用
+    // FrontendFrame 同款沙箱渲染，否则退回变量键值表（嵌套对象折叠成路径.值）。
+    // 重试按钮只对 ST 绑定暴露——POST mvu/retry 重跑的是 ST 生成链路的模板
+    // 输出渲染（AgentTavern 会话服务端 409 TAVERN_ARCHITECTURE_CONFLICT）；群聊
+    // 走 ST 链路，服务端按楼层发言人回落支持重试（src/mvu.ts），同样暴露。
+    function flattenMvuVariables(value, prefix = '') {
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) return []
+      const rows = []
+      for (const [name, entry] of Object.entries(value)) {
+        const path = prefix === '' ? name : `${prefix}.${name}`
+        if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
+          rows.push(...flattenMvuVariables(entry, path))
+        } else {
+          rows.push([path, entry])
+        }
+      }
+      return rows
+    }
+
+    function formatMvuValue(value) {
+      const text = typeof value === 'string' ? value : (() => {
+        try { return JSON.stringify(value) ?? String(value) } catch { return String(value) }
+      })()
+      return text.length > 96 ? `${text.slice(0, 95)}…` : text
+    }
+
+    function TavernMvuStatus({ sessionId }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const binding = state.bootstrap.state.sessionBindings?.[sessionId]
+      const key = binding ? chatKey(binding.character, binding.chatId) : ''
+      const chat = binding ? state.chats[key] : null
+      // revision / 楼层计数变化（生成、重试、写路径）后重取状态快照
+      const revision = binding ? state.revisions[key] : undefined
+      const messageCount = chat?.messages?.length ?? 0
+      const frameToken = useId()
+      const [status, setStatus] = useState(null)
+      const [open, setOpen] = useState(false)
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const [expandedReceipt, setExpandedReceipt] = useState('')
+      const [showAllReceipts, setShowAllReceipts] = useState(false)
+      const autoOpenedFor = useRef('')
+      const reload = () => {
+        if (!binding) return Promise.resolve(null)
+        return loadMvuStatus(binding.character, binding.chatId).catch(() => null)
+      }
+      useEffect(() => {
+        if (!binding) return undefined
+        let cancelled = false
+        // 读取失败（含 404 聊天竞态）静默隐藏本面板，不打扰正文流
+        void loadMvuStatus(binding.character, binding.chatId)
+          .then((result) => { if (!cancelled) setStatus(result) })
+          .catch(() => { if (!cancelled) setStatus(null) })
+        return () => { cancelled = true }
+      }, [binding?.character, binding?.chatId, revision, messageCount])
+      // 每个聊天最多自动展开一次（对齐 TavernCandidates）；用户手动收起后不再弹开
+      useEffect(() => {
+        if (!key || status?.available !== true) return
+        if (autoOpenedFor.current === key) return
+        autoOpenedFor.current = key
+        setOpen(true)
+      }, [key, status?.available])
+      const receipts = Array.isArray(status?.receipts) ? status.receipts : []
+      const latest = receipts[receipts.length - 1]
+      const canRetry = Boolean(binding)
+        && bindingArchitecture(binding) === 'st'
+        && latest !== undefined
+        && (latest.status === 'failed' || (Array.isArray(latest.failures) && latest.failures.length > 0))
+      const retry = () => {
+        if (!binding || busy) return
+        setBusy(true)
+        setError('')
+        void (async () => {
+          try {
+            // 写走 revision CAS，必须先确保本地拿得到当前 revision
+            await loadChat(binding.character, binding.chatId)
+            const result = await retryMvuSettlement(sessionId, binding)
+            const next = await reload()
+            if (next) setStatus(next)
+          } catch (cause) {
+            setError(cause instanceof Error ? cause.message : String(cause))
+            if (cause?.status === 409 || cause?.code === REVISION_CONFLICT) {
+              await loadChat(binding.character, binding.chatId, true).catch(() => {})
+              const next = await reload()
+              if (next) setStatus(next)
+            }
+          } finally {
+            setBusy(false)
+          }
+        })()
+      }
+      if (!binding || !status || status.available !== true) return null
+      const variables = flattenMvuVariables(status.variables)
+      const visibleReceipts = (showAllReceipts ? receipts : receipts.slice(-5)).slice().reverse()
+      const hiddenReceipts = Math.max(0, receipts.length - 5)
+      return h('div', { className: 'dt-mvu', 'data-dsh-tavern-surface': 'mvu' },
+        h('div', { className: 'dt-mvu-head' },
+          h('button', {
+            type: 'button',
+            className: 'dt-mvu-toggle',
+            'aria-expanded': open,
+            onClick: () => setOpen(!open),
+          },
+            h(IconChevronDownOutline14, { className: open ? 'dt-chevron-open' : undefined }),
+            h('span', null, t('mvu.title')),
+            receipts.length > 0 ? h('span', { className: 'dt-mvu-count' }, String(receipts.length)) : null),
+          canRetry ? h('div', { className: 'dt-mvu-actions' },
+            h('button', { type: 'button', disabled: busy, onClick: retry }, busy ? t('mvu.retrying') : t('mvu.retry'))) : null),
+        open ? h('div', { className: 'dt-mvu-body' },
+          busy ? h('p', { className: 'dt-muted' }, t('mvu.retrying')) : null,
+          error ? h('p', { className: 'dt-error' }, error) : null,
+          status.renderedHtml
+            ? h('div', { className: 'dt-mvu-rendered' }, h(FrontendFrame, { html: status.renderedHtml, token: frameToken }))
+            : variables.length > 0
+              ? h(React.Fragment, null,
+                h('div', { className: 'dt-mvu-section-title' }, t('mvu.variables')),
+                h('div', { className: 'dt-mvu-vars' }, variables.map(([path, value]) => h('div', { key: path, className: 'dt-mvu-var' },
+                  h('span', { className: 'dt-mvu-var-path' }, path),
+                  h('span', { className: 'dt-mvu-var-value' }, formatMvuValue(value))))))
+              : null,
+          h('div', { className: 'dt-mvu-section-title' }, t('mvu.receipts')),
+          receipts.length === 0
+            ? h('p', { className: 'dt-muted' }, t('mvu.receiptsEmpty'))
+            : h('div', { className: 'dt-mvu-receipts' },
+              visibleReceipts.map((receipt, index) => {
+                const rowKey = `${index}-${receipt.turnKey}-${receipt.at}`
+                const changes = Array.isArray(receipt.changes) ? receipt.changes : []
+                const failures = Array.isArray(receipt.failures) ? receipt.failures : []
+                const expanded = expandedReceipt === rowKey
+                const shownChanges = expanded ? changes : changes.slice(0, 3)
+                return h('div', { key: rowKey, className: 'dt-mvu-receipt' },
+                  h('div', { className: 'dt-mvu-receipt-head' },
+                    h('span', { className: `dt-mvu-badge dt-mvu-badge-${receipt.status}` }, t(`mvu.status.${receipt.status}`)),
+                    h('span', { className: 'dt-mvu-meta' }, `${t('mvu.turn', { turn: receipt.turnKey })} · ${formatNovelTime(receipt.at)}`)),
+                  shownChanges.map((change) => h('div', { key: change.name, className: 'dt-mvu-change' },
+                    t('mvu.change', {
+                      name: change.name,
+                      before: 'before' in change ? formatMvuValue(change.before) : '∅',
+                      after: 'after' in change ? formatMvuValue(change.after) : '∅',
+                    }))),
+                  changes.length > 3 ? h('button', {
+                    type: 'button',
+                    className: 'dt-mvu-more',
+                    onClick: () => setExpandedReceipt(expanded ? '' : rowKey),
+                  }, t('mvu.more', { count: changes.length - 3 })) : null,
+                  failures.length > 0 ? h('div', { className: 'dt-mvu-failures' },
+                    h('span', { className: 'dt-mvu-failures-title' }, t('mvu.failures')),
+                    failures.map((failure, failureIndex) => h('div', { key: failureIndex, className: 'dt-mvu-failure' }, failure))) : null)
+              }),
+              hiddenReceipts > 0 ? h('button', {
+                type: 'button',
+                className: 'dt-mvu-more',
+                onClick: () => setShowAllReceipts(!showAllReceipts),
+              }, showAllReceipts ? t('mvu.less') : t('mvu.more', { count: hiddenReceipts })) : null)) : null)
+    }
+
+    // 剧本进度卡（提案 0014 P1）：卡绑定剧本时在聊天视图顶部展示进度。进度是
+    // 展示不是跳章——只读渲染 chunkIndex+1/chunkCount 与当前片段预览（服务端
+    // 已截到 ≤400 字符），没有任何改写进度的入口；解绑（404）后隐藏。
+    function TavernScriptProgress({ sessionId }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const binding = state.bootstrap.state.sessionBindings?.[sessionId]
+      const key = binding ? chatKey(binding.character, binding.chatId) : ''
+      const chat = binding ? state.chats[key] : null
+      const revision = binding ? state.revisions[key] : undefined
+      const messageCount = chat?.messages?.length ?? 0
+      // 绑定/解绑不经过聊天 revision（写在卡上），靠剧本库写计数感知
+      const scriptsRevision = state.scriptsRevision
+      const [progress, setProgress] = useState(null)
+      useEffect(() => {
+        if (!binding) return undefined
+        let cancelled = false
+        // 404（卡未绑定剧本 / 聊天缺失）即隐藏本卡，绑定解绑对视图即时生效
+        void loadScriptProgress(binding.character, binding.chatId)
+          .then((result) => { if (!cancelled) setProgress(result) })
+          .catch(() => { if (!cancelled) setProgress(null) })
+        return () => { cancelled = true }
+      }, [binding?.character, binding?.chatId, revision, messageCount, scriptsRevision])
+      if (!binding || !progress) return null
+      const total = Number(progress.chunkCount)
+      if (!Number.isFinite(total) || total <= 0) return null
+      const current = Math.min(Math.max(Number(progress.chunkIndex) || 0, 0), total - 1) + 1
+      const percent = Math.round((current / total) * 100)
+      return h('div', { className: 'dt-script-card', 'data-dsh-tavern-surface': 'script-progress' },
+        h('div', { className: 'dt-script-card-head' },
+          h('span', { className: 'dt-script-card-title' }, t('script.progressTitle')),
+          h('span', { className: 'dt-script-card-pos' }, t('script.position', { current, total }))),
+        h('div', { className: 'dt-script-bar' },
+          h('div', { className: 'dt-script-bar-fill', style: { width: `${percent}%` } })),
+        h('div', { className: 'dt-script-card-meta' },
+          h('span', { className: 'dt-script-name', title: progress.scriptName }, progress.scriptName),
+          progress.alignedAt ? h('span', null, t('script.alignedAt', { time: formatNovelTime(progress.alignedAt) })) : null),
+        progress.currentPreview ? h('p', { className: 'dt-script-preview' }, progress.currentPreview) : null,
+        h('p', { className: 'dt-script-hint' }, t('script.hint')))
     }
 
     function TavernComposer({ sessionId, useInput, inputActions }) {
@@ -4084,6 +4437,7 @@ window.__ModuleLoader__.load({
       { id: 'personas', icon: IconDataOutline16 },
       { id: 'worlds', icon: IconBrowseOutline16 },
       { id: 'presets', icon: IconAgentPresetOutline16 },
+      { id: 'scripts', icon: IconListPenOutline16 },
       { id: 'regex', icon: IconListPenOutline16 },
       { id: 'variables', icon: IconCordisPluginOutline14 },
     ]
@@ -4914,6 +5268,177 @@ window.__ModuleLoader__.load({
                   onClick: add,
                 }, adding ? t('panel.guides.adding') : t('panel.guides.add')))),
         error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
+    // 剧本库管理（提案 0014 P1）：管理面板资源区，与世界书/预设库同级。列表
+    // 读 GET scripts（名称/分块数/绑定卡映射）；导入走 POST script/import
+    // （文件读文本或粘贴，名字默认取文件名去后缀，format 按后缀推断）；绑定/
+    // 解绑写在卡 extensions 上（POST script/bind / script/unbind），改完重取
+    // 列表刷新绑定映射。
+    function PanelScripts() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const [library, setLibrary] = useState(null)
+      const [error, setError] = useState('')
+      const [importing, setImporting] = useState(false)
+      const [pasteOpen, setPasteOpen] = useState(false)
+      const [pasteName, setPasteName] = useState('')
+      const [pasteContent, setPasteContent] = useState('')
+      const [selection, setSelection] = useState({})
+      const [busyKey, setBusyKey] = useState('')
+      const characters = state.bootstrap.characters || []
+      const reload = () => loadScriptsLibrary()
+        .then((result) => { setLibrary(result); setError(''); return result })
+        .catch((cause) => {
+          setError(cause instanceof Error ? cause.message : String(cause))
+          return null
+        })
+      useEffect(() => { void reload() }, [])
+      const scripts = Array.isArray(library?.scripts) ? library.scripts : []
+      const bindings = library?.bindings && typeof library.bindings === 'object' && !Array.isArray(library.bindings) ? library.bindings : {}
+      const importText = (name, content, format) => {
+        const trimmed = name.trim()
+        if (trimmed === '' || content.trim() === '' || importing) return Promise.resolve(false)
+        setImporting(true)
+        setError('')
+        return importScriptAsset(trimmed, content, format)
+          .then(() => {
+            bumpScriptsRevision()
+            void reload()
+            return true
+          })
+          .catch((cause) => {
+            setError(cause instanceof Error ? cause.message : String(cause))
+            return false
+          })
+          .finally(() => setImporting(false))
+      }
+      const bind = (scriptName) => {
+        const character = selection[scriptName]
+        if (!character || busyKey !== '') return
+        setBusyKey(scriptName)
+        setError('')
+        void bindCharacterScript(character, scriptName)
+          .then(() => {
+            setSelection((current) => ({ ...current, [scriptName]: '' }))
+            bumpScriptsRevision()
+            return reload()
+          })
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBusyKey(''))
+      }
+      const unbind = (character) => {
+        if (busyKey !== '') return
+        setBusyKey(character)
+        setError('')
+        void unbindCharacterScript(character)
+          .then(() => {
+            bumpScriptsRevision()
+            return reload()
+          })
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBusyKey(''))
+      }
+      return h(React.Fragment, null,
+        h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('panel.section.scripts')),
+          h('p', { className: 'dt-hint' }, t('scripts.hint')),
+          h('div', { className: 'dt-imports' },
+            h('label', { className: 'dt-upload', title: t('settings.importTitle', { name: t('scripts.importFile') }) },
+              importing ? t('scripts.importing') : t('scripts.importFile'),
+              h('input', {
+                type: 'file',
+                accept: '.txt,.md,.markdown,text/plain,text/markdown',
+                disabled: importing,
+                onChange: (event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (!file) return
+                  void readFile(file, false)
+                    .then((content) => importText(fileStem(file.name), content, /\.md(?:own)?$/i.test(file.name) ? 'md' : 'txt'))
+                    .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+                },
+              })),
+            h('button', {
+              type: 'button',
+              className: 'dt-upload',
+              onClick: () => setPasteOpen(!pasteOpen),
+            }, t('scripts.paste')),
+            h(Button, {
+              size: 'sm',
+              variant: 'ghost',
+              icon: h(IconRefreshOutline16),
+              onClick: () => { setError(''); void reload() },
+            }, t('scripts.refresh'))),
+          pasteOpen ? h('div', { className: 'dt-script-paste' },
+            h(EditorField, { label: t('scripts.pasteName'), value: pasteName, placeholder: 'my-script.md', onChange: setPasteName }),
+            h('label', { className: 'dt-editor-field dt-editor-wide' },
+              h('span', { className: 'dt-label' }, t('scripts.pasteContent')),
+              h('textarea', {
+                value: pasteContent,
+                rows: 6,
+                placeholder: t('scripts.pastePlaceholder'),
+                onChange: (event) => setPasteContent(event.target.value),
+              })),
+            h('div', { className: 'dt-imports' },
+              h(Button, {
+                size: 'sm',
+                variant: 'primary',
+                disabled: importing || pasteName.trim() === '' || pasteContent.trim() === '',
+                onClick: () => {
+                  // 失败保留草稿（错误显示在下方），成功才清空并收起
+                  void importText(pasteName, pasteContent, undefined).then((imported) => {
+                    if (imported !== true) return
+                    setPasteName('')
+                    setPasteContent('')
+                    setPasteOpen(false)
+                  })
+                },
+              }, importing ? t('scripts.importing') : t('scripts.pasteImport')),
+              h(Button, { size: 'sm', variant: 'ghost', onClick: () => setPasteOpen(false) }, t('panel.cancel')))) : null,
+          characters.length === 0 ? h('p', { className: 'dt-hint' }, t('scripts.noCharacters')) : null),
+        h('section', { className: 'dt-settings-band' },
+          library === null
+            ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+            : scripts.length === 0
+              ? h('p', { className: 'dt-muted' }, t('scripts.empty'))
+              : h('div', { className: 'dt-script-list' }, scripts.map((script) => {
+                const bound = Object.keys(bindings).filter((character) => bindings[character] === script.name)
+                const draft = selection[script.name] || ''
+                return h('div', { key: script.name, className: 'dt-script-row' },
+                  h('div', { className: 'dt-script-row-head' },
+                    h('strong', { className: 'dt-script-name' }, script.name),
+                    h(Pill, null, script.format === 'md' ? 'md' : 'txt'),
+                    h('span', { className: 'dt-script-meta' }, t('scripts.chunks', { count: script.chunkCount })),
+                    h('span', { className: 'dt-script-meta' }, t('scripts.characters', { count: script.totalCharacters })),
+                    h('span', { className: 'dt-script-meta' }, t('scripts.importedAt', { time: formatNovelTime(script.importedAt) }))),
+                  h('div', { className: 'dt-script-bind' },
+                    h('select', {
+                      value: draft,
+                      disabled: busyKey !== '' || characters.length === 0,
+                      'aria-label': t('scripts.bindTo'),
+                      onChange: (event) => setSelection((current) => ({ ...current, [script.name]: event.target.value })),
+                    },
+                      h('option', { key: '', value: '' }, t('scripts.bindTo')),
+                      characters.map((character) => h('option', { key: character, value: character }, character))),
+                    h(Button, {
+                      size: 'sm',
+                      variant: 'outline',
+                      disabled: busyKey !== '' || draft === '',
+                      onClick: () => bind(script.name),
+                    }, t('scripts.bind'))),
+                  bound.length > 0 ? h('div', { className: 'dt-script-bound' },
+                    bound.map((character) => h('span', { key: character, className: 'dt-script-bound-chip' },
+                      h('span', null, character),
+                      h('button', {
+                        type: 'button',
+                        title: t('scripts.unbind', { name: character }),
+                        'aria-label': t('scripts.unbind', { name: character }),
+                        disabled: busyKey !== '',
+                        onClick: () => unbind(character),
+                      }, '×')))) : null)
+              })),
+          error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
     // ---- AgentNovel panel surface (proposal 0005 §14.3) ----
@@ -5950,6 +6475,7 @@ window.__ModuleLoader__.load({
         : section === 'personas' ? h(PersonaBand)
         : section === 'worlds' ? h(PanelWorlds)
         : section === 'presets' ? h(PanelPresets)
+        : section === 'scripts' ? h(PanelScripts)
         : section === 'regex' ? h(RegexBand)
         : section === 'variables' ? h(PanelVariables, { useSessions })
         : h(PanelOverview)
@@ -6276,6 +6802,61 @@ window.__ModuleLoader__.load({
         .dt-candidates-feedback input:focus{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 20%,transparent)}
         .dt-candidates-feedback>button{flex:none;height:28px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer;font:inherit;font-size:11px}
         .dt-candidates-feedback>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .dt-mvu{box-sizing:border-box;width:100%;margin:0 auto 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:12px}
+        .dt-mvu button:disabled,.dt-script-bound-chip>button:disabled{cursor:not-allowed;opacity:.45}
+        .dt-mvu-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:36px;padding:4px 8px 4px 6px}
+        .dt-mvu-toggle{display:flex;align-items:center;gap:6px;min-width:0;border:0;border-radius:6px;color:inherit;background:transparent;cursor:pointer;font:inherit;font-size:12px;padding:3px 6px}
+        .dt-mvu-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        .dt-mvu-toggle svg{flex:none;color:var(--dsw-alias-label-tertiary);transition:transform .12s}
+        .dt-mvu-toggle svg.dt-chevron-open{transform:rotate(180deg)}
+        .dt-mvu-count{color:var(--dsw-alias-label-tertiary);font-size:11px}
+        .dt-mvu-actions>button{height:26px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer;font:inherit;font-size:11px}
+        .dt-mvu-actions>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .dt-mvu-body{display:flex;flex-direction:column;gap:8px;padding:2px 10px 10px}
+        .dt-mvu-body p{margin:0}
+        .dt-mvu-section-title{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+        .dt-mvu-vars{display:flex;flex-direction:column;gap:2px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;padding:6px 8px}
+        .dt-mvu-var{display:grid;grid-template-columns:minmax(90px,max-content) minmax(0,1fr);gap:2px 12px;min-width:0}
+        .dt-mvu-var-path{font-family:monospace;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+        .dt-mvu-var-value{font-size:12px;line-height:16px;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere}
+        .dt-mvu-rendered{width:100%;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base)}
+        .dt-mvu-receipts{display:flex;flex-direction:column;gap:4px}
+        .dt-mvu-receipt{display:flex;flex-direction:column;gap:3px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;padding:5px 8px}
+        .dt-mvu-receipt-head{display:flex;align-items:center;gap:8px;min-width:0}
+        .dt-mvu-badge{flex:none;display:inline-flex;align-items:center;min-height:16px;padding:0 6px;border-radius:4px;font-size:10px;line-height:16px;font-weight:600}
+        .dt-mvu-badge-updated{color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary));background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#3fb950) 12%,transparent)}
+        .dt-mvu-badge-unchanged{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}
+        .dt-mvu-badge-failed{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent)}
+        .dt-mvu-meta{color:var(--dsw-alias-label-tertiary);font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .dt-mvu-change{font-family:monospace;font-size:11px;line-height:16px;overflow-wrap:anywhere;color:var(--dsw-alias-label-primary)}
+        .dt-mvu-more{align-self:flex-start;border:0;padding:0;color:var(--dsw-alias-state-business-primary);background:transparent;cursor:pointer;font:inherit;font-size:11px}
+        .dt-mvu-more:hover{text-decoration:underline}
+        .dt-mvu-failures{display:flex;flex-direction:column;gap:2px}
+        .dt-mvu-failures-title{color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:14px}
+        .dt-mvu-failure{color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px;overflow-wrap:anywhere}
+        .dt-script-card{box-sizing:border-box;width:100%;margin:0 auto 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:12px;padding:8px 10px;display:flex;flex-direction:column;gap:6px}
+        .dt-script-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+        .dt-script-card-title{font-weight:600}
+        .dt-script-card-pos{color:var(--dsw-alias-label-secondary);font-size:11px;flex:none}
+        .dt-script-bar{height:6px;border-radius:3px;background:var(--dsw-alias-interactive-bg-hover);overflow:hidden}
+        .dt-script-bar-fill{height:100%;border-radius:3px;background:var(--dsw-alias-state-business-primary);transition:width .2s ease}
+        .dt-script-card-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+        .dt-script-card-meta>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--dsw-alias-label-tertiary)}
+        .dt-script-card-meta .dt-script-name{color:var(--dsw-alias-label-secondary)}
+        .dt-script-preview{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.55;color:var(--dsw-alias-label-secondary);max-height:132px;overflow-y:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;padding:6px 8px;background:var(--dsw-alias-bg-sunken,var(--dsw-alias-bg-base))}
+        .dt-script-hint{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+        .dt-script-list{display:flex;flex-direction:column;gap:10px}
+        .dt-script-row{display:flex;flex-direction:column;gap:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:10px}
+        .dt-script-row-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+        .dt-script-name{min-width:0;overflow-wrap:anywhere}
+        .dt-script-meta{color:var(--dsw-alias-label-tertiary);font-size:11px}
+        .dt-script-bind{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+        .dt-script-bind select{height:30px;min-width:200px;max-width:100%;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:inherit;background:var(--dsw-alias-bg-base);padding:0 6px}
+        .dt-script-bound{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+        .dt-script-bound-chip{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:0 4px 0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;font-size:11px;color:var(--dsw-alias-label-secondary)}
+        .dt-script-bound-chip>button{width:18px;height:18px;display:grid;place-items:center;border:0;border-radius:50%;color:inherit;background:transparent;cursor:pointer;font-size:12px;line-height:1}
+        .dt-script-bound-chip>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .dt-script-paste{display:flex;flex-direction:column;gap:8px;margin-top:10px;padding:10px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}
       `
       document.head.appendChild(tag)
     }
