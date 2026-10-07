@@ -85,6 +85,10 @@ import { formatRewriteBlock, optionalFeedback } from './rewrite.js'
 import { saveOriginalSnapshot } from '../../tavern-store/src/index.js'
 import { dshHomePath } from './dsh-home.js'
 import { TavernUpdateService, updateChangelog } from './update/service.js'
+// 卡片工作台方案确认协议（提案 0013 P2）：方案存储在 card-workbench/plans.ts，
+// 执行核（写入 + applied 标记）在 card-workbench/agent.ts，路由块在 mvu/status 之后。
+import { decideCardPlan, getCardPlan, listCardPlans } from './card-workbench/plans.js'
+import { executeCardPlan } from './card-workbench/agent.js'
 
 // 构建期 stamp：由 scripts/build-plugin.mjs 经 esbuild define 注入，用于在
 // 没有 version.json / 没有 .git 的安装现场给出「跑的是哪个版本和 commit」。
@@ -1293,6 +1297,45 @@ async function handleApi(ctx, req, res) {
       receipts,
       ...(renderedHtml !== undefined ? { renderedHtml } : {}),
     })
+  }
+
+  // ---- 卡片工作台方案确认协议（提案 0013 P2）----
+  // 方案 = card_plan_propose 落库的 pending 计划（<tavern>/card-workbench/plans/，
+  // 见 card-workbench/plans.ts）。面板拉列表看 diff、给决定；approve=true 经
+  // card-workbench/agent.ts 的执行核（executeCardPlan）按方案逐字段写入工作版
+  // 并标记 applied（执行不在存储层），false 只改状态。错误码 TAVERN_WORKBENCH。
+  if (method === 'GET' && route === 'card-workbench/plans') {
+    const statusParam = url.searchParams.get('status') ?? 'pending'
+    if (statusParam !== 'pending' && statusParam !== 'approved' && statusParam !== 'rejected' && statusParam !== 'applied' && statusParam !== 'all') {
+      return sendJson(res, 400, { ok: false, message: `unknown status filter '${statusParam}'`, code: 'TAVERN_WORKBENCH' })
+    }
+    const character = url.searchParams.get('character') ?? undefined
+    const plans = await listCardPlans(dshHomePath('tavern'), {
+      ...(character !== undefined && character !== '' ? { character } : {}),
+      status: statusParam,
+    })
+    return sendJson(res, 200, { ok: true, plans })
+  }
+
+  if (method === 'POST' && route.startsWith('card-workbench/plans/') && route.endsWith('/decision')) {
+    const planId = decodeURIComponent(route.slice('card-workbench/plans/'.length, route.length - '/decision'.length))
+    const body = await readJson(req)
+    if (typeof body.approve !== 'boolean') {
+      return sendJson(res, 400, { ok: false, message: 'expected { approve: boolean }', code: 'TAVERN_WORKBENCH' })
+    }
+    const plan = await getCardPlan(dshHomePath('tavern'), planId)
+    if (plan === undefined) return sendJson(res, 404, { ok: false, message: `plan '${planId}' not found`, code: 'TAVERN_WORKBENCH' })
+    try {
+      if (body.approve) {
+        // 执行核：过期检测 → 白名单写入工作版 → 标记 applied；失败不落 applied。
+        const executed = await executeCardPlan(plan)
+        return sendJson(res, 200, { ok: true, plan: executed.plan, applied: { character: executed.character, changes: executed.changes, fieldLengths: executed.fieldLengths } })
+      }
+      const decided = await decideCardPlan(dshHomePath('tavern'), planId, false)
+      return sendJson(res, 200, { ok: true, plan: decided })
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error), code: 'TAVERN_WORKBENCH' })
+    }
   }
 
   if (method === 'GET' && route.startsWith('world/')) {

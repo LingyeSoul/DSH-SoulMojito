@@ -1,6 +1,6 @@
 # 提案 0013：卡片 Agent 工作台 — dsh-tavern 功能复刻（设计）
 
-> 状态：P1 已实现（1710cb3），P2/P3 未实施。日期：2026-10-07。参照物：`flizzywine/dsh-tavern`（AGPL-3.0）
+> 状态：P1/P2 已实现（P1:1710cb3），P3 未实施。日期：2026-10-07。参照物：`flizzywine/dsh-tavern`（AGPL-3.0）
 > 公开功能文档（README「对话式修改人物卡」「自助调试 Agent」、feature-inventory H01–H09）。
 > clean-room：只依据行为规格，实施时禁止阅读其源码。
 
