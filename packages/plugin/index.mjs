@@ -13159,6 +13159,10 @@ var KERNEL = [
   "- Originals: card_original_get reads the import-time original snapshot; card_restore_original (also confirmed-only) overwrites the working copy with that original. Offer restore when the user dislikes accumulated edits.",
   "- Debugging: when asked to diagnose a play (regex, beautification, prose problems), read the actual floors with chat_log_read (character, chatId, floor range) instead of guessing from memory.",
   "",
+  "Starting tasks (P3):",
+  "- New card from an idea, material or script: gather the source first \u2014 material_list shows the script library, material_read fetches one chunk at a time (you never need the whole script in one call) \u2014 then discuss the draft fields with the user and call card_create with confirmed: true only after explicit approval. Creation binds nothing: scripts and world books attach through their own routes, chosen by the user or the panel.",
+  "- Convert a card to MVU (proposal 0012 P3): read the card with card_get, locate the old status-bar block in the prose, propose the variable structure and a statusTemplate draft, then call card_apply_mvu with confirmed: true after explicit approval. The tool only writes extensions.agentTavern (and snapshots the pre-conversion card as the original when none exists, keeping the conversion reversible via card_restore_original); it does NOT rewrite the prose \u2014 afterwards offer a separate confirmed card_put to strip the now-redundant status-bar block, and tell the user to start a new chat to verify the fixed right-side status panel.",
+  "",
   "Boundaries:",
   "- Editable card fields are limited to name, nickname, description, personality, scenario, firstMes and creatorNotes. World edits are limited to entry key/content/enabled (match by uid); preset edits to prompt role/content/enabled (match by name). Other areas (extensions, scripts, chat state) are out of scope; say so instead of working around the limit.",
   "- The original snapshot is immutable: all edits go to the working copy only.",
@@ -13249,6 +13253,35 @@ var chatLogOutput = objectOutput({
   to: { type: "number" },
   messages: { type: "array", items: { type: "object", additionalProperties: true } }
 });
+var cardCreateOutput = objectOutput({
+  created: { type: "boolean" },
+  character: { type: "string" },
+  fieldLengths: { type: "object", additionalProperties: true },
+  alternateGreetings: { type: "number", description: "Number of stored alternate greetings." },
+  source: { type: "object", additionalProperties: true }
+});
+var materialListOutput = objectOutput({
+  count: { type: "number" },
+  scripts: { type: "array", items: { type: "object", additionalProperties: true } }
+});
+var materialReadOutput = objectOutput({
+  found: { type: "boolean" },
+  script: { type: "string" },
+  chunkIndex: { type: "number" },
+  requestedChunkIndex: { type: "number" },
+  totalChunks: { type: "number" },
+  length: { type: "number" },
+  truncated: { type: "boolean" },
+  text: { type: "string" }
+}, ["chunkIndex", "requestedChunkIndex", "totalChunks", "length", "truncated", "text"]);
+var mvuApplyOutput = objectOutput({
+  character: { type: "string" },
+  statusTemplateLength: { type: "number" },
+  variableKeys: { type: "array", items: { type: "string" } },
+  snapshotTaken: { type: "boolean", description: "True when the pre-conversion card was saved as the original snapshot by this call." },
+  retainedAgentTavernKeys: { type: "array", items: { type: "string" }, description: "Pre-existing agentTavern keys preserved untouched (e.g. scriptId)." },
+  source: { type: "object", additionalProperties: true }
+}, ["retainedAgentTavernKeys"]);
 function tavernStore() {
   return tavernStorePromise ??= TavernStore.open(dshHomePath("tavern"));
 }
@@ -13323,6 +13356,8 @@ function editableValue(field, value) {
   if ((field === "name" || field === "nickname") && value.trim() === "") throw new Error(`field '${field}' must not be blank`);
   return value;
 }
+var CREATE_FIELD_KEYS = [...Object.keys(CARD_FIELDS), "alternateGreetings"];
+var INITIAL_VARIABLES_MAX_BYTES = 64 * 1024;
 function limitText(value, max2) {
   return typeof value === "string" ? value.slice(0, max2) : "";
 }
@@ -14246,10 +14281,17 @@ async function handleApi(ctx, req, res) {
     if (!character) throw new Error("no active character");
     const found = await db.getCharacter(character);
     if (!found) throw new Error(`character '${character}' not found`);
+    const seedVariables = (() => {
+      const holder = found.card.data.extensions.agentTavern;
+      if (typeof holder !== "object" || holder === null || Array.isArray(holder)) return void 0;
+      const initial = holder.initialVariables;
+      if (typeof initial !== "object" || initial === null || Array.isArray(initial) || Object.keys(initial).length === 0) return void 0;
+      return structuredClone(initial);
+    })();
     const id = await db.createChat(character, {
       user_name: "unused",
       character_name: "unused",
-      chat_metadata: { character, createdAt: now, timedWorldInfo: {} }
+      chat_metadata: { character, createdAt: now, timedWorldInfo: {}, ...seedVariables !== void 0 ? { variables: seedVariables } : {} }
     }, [{
       name: found.card.data.nickname || found.card.data.name,
       is_user: false,
@@ -15884,7 +15926,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.3.9".trim() : "";
-  const commit = true ? normalizeCommit("a64d929") : void 0;
+  const commit = true ? normalizeCommit("7df44cb") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

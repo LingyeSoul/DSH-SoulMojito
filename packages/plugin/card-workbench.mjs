@@ -1620,16 +1620,16 @@ function decodeCharx(bytes) {
   const assetPaths = Object.keys(files).filter((p) => p !== "card.json");
   return { card, assetPaths };
 }
-function decodeCharxAsset(bytes, path4) {
+function decodeCharxAsset(bytes, path5) {
   let files;
   try {
     files = unzipSync(bytes);
   } catch (cause) {
     throw new CharxFormatError(`not a valid zip: ${String(cause)}`);
   }
-  const asset = files[path4];
+  const asset = files[path5];
   if (asset === void 0)
-    throw new CharxFormatError(`CHARX has no asset '${path4}'`);
+    throw new CharxFormatError(`CHARX has no asset '${path5}'`);
   return asset;
 }
 function encodeCharx(ir, assets) {
@@ -2420,6 +2420,27 @@ import * as path2 from "node:path";
 function originalSnapshotPath(root, characterName) {
   return path2.join(root, "characters", "originals", `${safeFileName(characterName)}.json`);
 }
+async function fileExists(file) {
+  try {
+    await fs2.access(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function writeAtomicText(file, text) {
+  const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+  await fs2.writeFile(tmp, text, "utf8");
+  await fs2.rename(tmp, file);
+}
+async function saveOriginalSnapshot(root, characterName, card) {
+  const file = originalSnapshotPath(root, characterName);
+  await fs2.mkdir(path2.dirname(file), { recursive: true });
+  if (await fileExists(file)) return false;
+  await writeAtomicText(file, `${JSON.stringify(encodeCharacterCardJson(card), null, 2)}
+`);
+  return true;
+}
 async function readOriginalSnapshot(root, characterName) {
   let bytes;
   try {
@@ -2443,6 +2464,72 @@ async function restoreOriginal(root, characterName) {
   const restored = await store.getCharacter(original.data.name);
   if (restored === void 0) throw new Error(`character '${original.data.name}' could not be reloaded after restore`);
   return restored;
+}
+
+// packages/tavern-store/src/scripts.ts
+import { promises as fs3 } from "node:fs";
+import * as path3 from "node:path";
+function boundScriptOf(card) {
+  const extensions = card?.data?.extensions;
+  if (typeof extensions !== "object" || extensions === null) return void 0;
+  const agentTavern = extensions.agentTavern;
+  if (typeof agentTavern !== "object" || agentTavern === null || Array.isArray(agentTavern)) return void 0;
+  const scriptId = agentTavern.scriptId;
+  if (typeof scriptId !== "string" || scriptId.trim() === "") return void 0;
+  return scriptId;
+}
+async function listScripts(dir) {
+  const root = path3.join(dir, "scripts");
+  let entries;
+  try {
+    entries = await fs3.readdir(root);
+  } catch (cause) {
+    if (cause.code === "ENOENT") return [];
+    throw cause;
+  }
+  const summaries = [];
+  for (const entry of entries) {
+    const record = await readScriptRecord(path3.join(root, entry, "script.json"));
+    if (record === void 0) continue;
+    summaries.push({
+      name: record.name,
+      format: record.source.format,
+      importedAt: record.source.importedAt,
+      chunkCount: record.chunks.length,
+      totalCharacters: record.chunks.reduce((sum, chunk) => sum + chunk.text.length, 0)
+    });
+  }
+  return summaries.sort((left, right) => left.name.localeCompare(right.name));
+}
+async function getScript(dir, name2) {
+  return readScriptRecord(path3.join(dir, "scripts", safeScriptName(name2), "script.json"));
+}
+async function readScriptRecord(file) {
+  let bytes;
+  try {
+    bytes = await fs3.readFile(file);
+  } catch (cause) {
+    if (cause.code === "ENOENT") return void 0;
+    throw cause;
+  }
+  const parsed = JSON.parse(bytes.toString("utf8"));
+  if (typeof parsed.name !== "string" || parsed.name === "") throw new Error(`corrupted script record: ${file}`);
+  if (parsed.source === null || typeof parsed.source !== "object" || parsed.source.format !== "txt" && parsed.source.format !== "md" && parsed.source.format !== "epub" || typeof parsed.source.importedAt !== "string") {
+    throw new Error(`corrupted script record: ${file}`);
+  }
+  if (!Array.isArray(parsed.chunks)) throw new Error(`corrupted script record: ${file}`);
+  return {
+    name: parsed.name,
+    source: { format: parsed.source.format, importedAt: parsed.source.importedAt },
+    chunks: parsed.chunks.map((chunk, index) => ({
+      index: typeof chunk?.index === "number" ? chunk.index : index,
+      text: typeof chunk?.text === "string" ? chunk.text : ""
+    }))
+  };
+}
+function safeScriptName(name2) {
+  const cleaned = name2.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim();
+  return cleaned.length > 0 ? cleaned.slice(0, 120) : "_unnamed";
 }
 
 // packages/tavern-format/src/png.ts
@@ -2573,30 +2660,30 @@ function strArray3(v) {
 
 // packages/plugin/src/dsh-home.ts
 import { homedir } from "node:os";
-import { join as join3, resolve } from "node:path";
+import { join as join4, resolve } from "node:path";
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
-  return join3(resolve(configured || join3(homedir(), ".dsh")), ...segments);
+  return join4(resolve(configured || join4(homedir(), ".dsh")), ...segments);
 }
 
 // packages/plugin/src/card-workbench/plans.ts
-import { promises as fs3 } from "node:fs";
-import * as path3 from "node:path";
+import { promises as fs4 } from "node:fs";
+import * as path4 from "node:path";
 var MAX_PLAN_CHANGES = 16;
 var MAX_VALUE_LENGTH = 32e3;
 var MAX_TITLE_LENGTH = 200;
 var MAX_NOTE_LENGTH = 500;
 var PLAN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 function plansDir(dir) {
-  return path3.join(dir, "card-workbench", "plans");
+  return path4.join(dir, "card-workbench", "plans");
 }
 function planFile(dir, planId) {
-  return path3.join(plansDir(dir), `${planId}.json`);
+  return path4.join(plansDir(dir), `${planId}.json`);
 }
-async function writeAtomicText(file, text) {
+async function writeAtomicText2(file, text) {
   const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-  await fs3.writeFile(tmp, text, "utf8");
-  await fs3.rename(tmp, file);
+  await fs4.writeFile(tmp, text, "utf8");
+  await fs4.rename(tmp, file);
 }
 function newPlanId() {
   return `plan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -2659,8 +2746,8 @@ async function proposeCardPlan(dir, character, input) {
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     status: "pending"
   };
-  await fs3.mkdir(plansDir(dir), { recursive: true });
-  await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
+  await fs4.mkdir(plansDir(dir), { recursive: true });
+  await writeAtomicText2(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
 }
@@ -2668,7 +2755,7 @@ async function getCardPlan(dir, planId) {
   if (typeof planId !== "string" || !PLAN_ID_PATTERN.test(planId)) return void 0;
   let text;
   try {
-    text = (await fs3.readFile(planFile(dir, planId))).toString("utf8");
+    text = (await fs4.readFile(planFile(dir, planId))).toString("utf8");
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -2681,7 +2768,7 @@ async function applyCardPlan(dir, planId) {
   if (plan.status === "rejected") throw new Error(`plan '${planId}' was rejected and cannot be applied`);
   if (plan.status === "applied") throw new Error(`plan '${planId}' was already applied`);
   const applied = { ...plan, status: "applied", appliedAt: (/* @__PURE__ */ new Date()).toISOString() };
-  await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(applied, null, 2)}
+  await writeAtomicText2(planFile(dir, plan.id), `${JSON.stringify(applied, null, 2)}
 `);
   return applied;
 }
@@ -2703,6 +2790,10 @@ var KERNEL = [
   "- Report the result: after writing, summarize what changed (fields, entries and their new lengths) and suggest what to review next.",
   "- Originals: card_original_get reads the import-time original snapshot; card_restore_original (also confirmed-only) overwrites the working copy with that original. Offer restore when the user dislikes accumulated edits.",
   "- Debugging: when asked to diagnose a play (regex, beautification, prose problems), read the actual floors with chat_log_read (character, chatId, floor range) instead of guessing from memory.",
+  "",
+  "Starting tasks (P3):",
+  "- New card from an idea, material or script: gather the source first \u2014 material_list shows the script library, material_read fetches one chunk at a time (you never need the whole script in one call) \u2014 then discuss the draft fields with the user and call card_create with confirmed: true only after explicit approval. Creation binds nothing: scripts and world books attach through their own routes, chosen by the user or the panel.",
+  "- Convert a card to MVU (proposal 0012 P3): read the card with card_get, locate the old status-bar block in the prose, propose the variable structure and a statusTemplate draft, then call card_apply_mvu with confirmed: true after explicit approval. The tool only writes extensions.agentTavern (and snapshots the pre-conversion card as the original when none exists, keeping the conversion reversible via card_restore_original); it does NOT rewrite the prose \u2014 afterwards offer a separate confirmed card_put to strip the now-redundant status-bar block, and tell the user to start a new chat to verify the fixed right-side status panel.",
   "",
   "Boundaries:",
   "- Editable card fields are limited to name, nickname, description, personality, scenario, firstMes and creatorNotes. World edits are limited to entry key/content/enabled (match by uid); preset edits to prompt role/content/enabled (match by name). Other areas (extensions, scripts, chat state) are out of scope; say so instead of working around the limit.",
@@ -2832,6 +2923,35 @@ var chatLogOutput = objectOutput({
   to: { type: "number" },
   messages: { type: "array", items: { type: "object", additionalProperties: true } }
 });
+var cardCreateOutput = objectOutput({
+  created: { type: "boolean" },
+  character: { type: "string" },
+  fieldLengths: { type: "object", additionalProperties: true },
+  alternateGreetings: { type: "number", description: "Number of stored alternate greetings." },
+  source: { type: "object", additionalProperties: true }
+});
+var materialListOutput = objectOutput({
+  count: { type: "number" },
+  scripts: { type: "array", items: { type: "object", additionalProperties: true } }
+});
+var materialReadOutput = objectOutput({
+  found: { type: "boolean" },
+  script: { type: "string" },
+  chunkIndex: { type: "number" },
+  requestedChunkIndex: { type: "number" },
+  totalChunks: { type: "number" },
+  length: { type: "number" },
+  truncated: { type: "boolean" },
+  text: { type: "string" }
+}, ["chunkIndex", "requestedChunkIndex", "totalChunks", "length", "truncated", "text"]);
+var mvuApplyOutput = objectOutput({
+  character: { type: "string" },
+  statusTemplateLength: { type: "number" },
+  variableKeys: { type: "array", items: { type: "string" } },
+  snapshotTaken: { type: "boolean", description: "True when the pre-conversion card was saved as the original snapshot by this call." },
+  retainedAgentTavernKeys: { type: "array", items: { type: "string" }, description: "Pre-existing agentTavern keys preserved untouched (e.g. scriptId)." },
+  source: { type: "object", additionalProperties: true }
+}, ["retainedAgentTavernKeys"]);
 function createTools() {
   return [
     tool("card_get", "Read the working-copy summary of a Tavern character card: core fields (truncated previews), per-field full lengths, extension keys and the active user persona. Call it before proposing any card change.", {
@@ -3123,6 +3243,159 @@ function createTools() {
         truncated: typeof message.mes === "string" && message.mes.length > 2e3
       }));
       return { found: true, character, chatId, total, from: start, to: cappedEnd, messages };
+    }),
+    tool("card_create", "Create a new Tavern character card from a blank slate, raw material or a script (proposal 0013 P3). fields accepts the card_put whitelist (name must match the top-level name argument when present) plus alternateGreetings (up to 16 strings). Present the full field draft to the user FIRST; rejected without confirmed: true. Refuses when a card with the same name already exists. Creation binds no script and no world book \u2014 binding goes through the existing routes, by the user or the panel.", {
+      name: { type: "string", required: true, description: "Name of the new card (max 120 characters); must not collide with an existing card." },
+      fields: {
+        type: "object",
+        description: `Optional initial field values: ${[...Object.keys(CARD_FIELDS), "alternateGreetings"].join(", ")}.`,
+        properties: {
+          name: { type: "string" },
+          nickname: { type: "string" },
+          description: { type: "string" },
+          personality: { type: "string" },
+          scenario: { type: "string" },
+          firstMes: { type: "string" },
+          creatorNotes: { type: "string" },
+          alternateGreetings: { type: "array", items: { type: "string" }, description: "Up to 16 extra first messages (stored as swipes); each max 16000 characters." }
+        },
+        additionalProperties: false
+      },
+      confirmed: { type: "boolean", required: true, description: "True only after the user explicitly approved the presented card draft." }
+    }, cardCreateOutput, async (args, exec) => {
+      if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR);
+      const name2 = editableValue("name", args.name);
+      const fields = parseCreateFields(args.fields);
+      if (fields.name !== void 0 && fields.name !== name2) {
+        throw new Error(`fields.name ('${fields.name}') must match the name argument ('${name2}')`);
+      }
+      exec?.signal?.throwIfAborted();
+      const db = await tavernStore();
+      if (await db.getCharacter(name2) !== void 0) {
+        throw new Error(`character '${name2}' already exists; card_create never overwrites \u2014 pick a different name`);
+      }
+      const data = {
+        name: name2,
+        description: fields.description ?? "",
+        personality: fields.personality ?? "",
+        scenario: fields.scenario ?? "",
+        first_mes: fields.firstMes ?? "",
+        mes_example: "",
+        creator_notes: fields.creatorNotes ?? "",
+        system_prompt: "",
+        post_history_instructions: "",
+        alternate_greetings: fields.alternateGreetings ?? [],
+        tags: [],
+        creator: "",
+        character_version: "",
+        ...fields.nickname !== void 0 ? { nickname: fields.nickname } : {},
+        extensions: {}
+      };
+      const { card } = await db.importCharacter({ spec: "chara_card_v2", spec_version: "2.0", data });
+      return {
+        created: true,
+        character: card.data.name,
+        fieldLengths: fieldLengthsOf(card.data),
+        alternateGreetings: card.data.alternateGreetings.length,
+        source: { kind: "character-card", id: card.data.name, version: card.specVersion }
+      };
+    }),
+    tool("material_list", "List the script/material library (proposal 0014): name, format, chunk count and which cards are bound to each script (via extensions.agentTavern.scriptId). Entry point when the user wants a card made from a script or other material.", {}, materialListOutput, async (_args, exec) => {
+      exec?.signal?.throwIfAborted();
+      const summaries = await listScripts(dshHomePath("tavern"));
+      const db = await tavernStore();
+      const bindings = /* @__PURE__ */ new Map();
+      for (const characterName of await db.listCharacters()) {
+        const file = await db.getCharacter(characterName);
+        const bound = file === void 0 ? void 0 : boundScriptOf(file.card);
+        if (bound === void 0) continue;
+        const list = bindings.get(bound) ?? [];
+        list.push(characterName);
+        bindings.set(bound, list);
+      }
+      return {
+        count: summaries.length,
+        scripts: summaries.map((summary) => ({
+          name: summary.name,
+          format: summary.format,
+          chunkCount: summary.chunkCount,
+          totalCharacters: summary.totalCharacters,
+          importedAt: summary.importedAt,
+          boundCards: bindings.get(summary.name) ?? []
+        }))
+      };
+    }),
+    tool("material_read", "Read one chunk of a script from the material library (proposal 0014). chunkIndex defaults to 0 and is clamped into [0, totalChunks-1]; maxChars defaults to 2400 and is capped at 8000 (values below 1 clamp to 1). Unknown scripts return found: false instead of throwing. Read chunk by chunk \u2014 never assume the whole script fits in one call.", {
+      scriptName: { type: "string", required: true, description: "Script name from material_list." },
+      chunkIndex: { type: "integer", minimum: 0, description: "Chunk to read (0-based); out-of-range values are clamped into range." },
+      maxChars: { type: "integer", minimum: 1, maximum: 8e3, description: "Character budget for the returned text (default 2400, max 8000); longer chunks come back truncated." }
+    }, materialReadOutput, async (args, exec) => {
+      const scriptName = stringArg(args.scriptName);
+      let maxChars = 2400;
+      if (args.maxChars !== void 0) {
+        if (typeof args.maxChars !== "number" || !Number.isInteger(args.maxChars)) throw new Error("maxChars must be an integer");
+        maxChars = Math.min(8e3, Math.max(1, args.maxChars));
+      }
+      let requested = 0;
+      if (args.chunkIndex !== void 0) {
+        if (typeof args.chunkIndex !== "number" || !Number.isInteger(args.chunkIndex)) throw new Error("chunkIndex must be an integer");
+        requested = args.chunkIndex;
+      }
+      exec?.signal?.throwIfAborted();
+      const record = await getScript(dshHomePath("tavern"), scriptName);
+      if (record === void 0 || record.chunks.length === 0) return { found: false, script: scriptName };
+      const chunkIndex = Math.min(Math.max(requested, 0), record.chunks.length - 1);
+      const text = record.chunks[chunkIndex].text;
+      return {
+        found: true,
+        script: record.name,
+        chunkIndex,
+        ...requested !== chunkIndex ? { requestedChunkIndex: requested } : {},
+        totalChunks: record.chunks.length,
+        length: text.length,
+        truncated: text.length > maxChars,
+        text: text.slice(0, maxChars)
+      };
+    }),
+    tool("card_apply_mvu", "Convert a character card to the MVU pattern (proposal 0012 P3): writes extensions.agentTavern.statusTemplate (rendered into the fixed right-side status panel) and initialVariables (deep-copied into chat_metadata.variables of every NEW chat). When the card has no original snapshot yet \u2014 cards that never went through the import route \u2014 the pre-conversion working copy is saved as the original first (once, never overwritten), keeping the conversion reversible via card_restore_original. Pre-existing agentTavern keys (e.g. scriptId) are preserved. The prose is NOT rewritten: offer a separate confirmed card_put to strip the old status-bar block from description/firstMes. Present the variable structure and template draft to the user FIRST; rejected without confirmed: true.", {
+      character: { type: "string", required: true, description: "Character name to convert." },
+      statusTemplate: { type: "string", required: true, description: "Fixed status-panel template (EJS-style, rendered from chat variables); non-empty, max 16000 characters." },
+      initialVariables: { type: "object", description: "Initial variable tree seeded into every new chat for this card (plain JSON object; serialized size max 64KB). Omit to keep any existing value." },
+      confirmed: { type: "boolean", required: true, description: "True only after the user explicitly approved the conversion plan." }
+    }, mvuApplyOutput, async (args, exec) => {
+      if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR);
+      const character = stringArg(args.character);
+      const template = statusTemplateArg(args.statusTemplate);
+      const variables = args.initialVariables === void 0 ? void 0 : initialVariablesArg(args.initialVariables);
+      exec?.signal?.throwIfAborted();
+      const root = dshHomePath("tavern");
+      const db = await tavernStore();
+      const found = await requireCharacter(character);
+      let snapshotTaken = false;
+      if (await readOriginalSnapshot(root, character) === void 0) {
+        snapshotTaken = await saveOriginalSnapshot(root, character, found.card);
+      }
+      const extensions = { ...found.card.data.extensions };
+      const previous = extensions.agentTavern;
+      const agentTavern = typeof previous === "object" && previous !== null && !Array.isArray(previous) ? { ...previous } : {};
+      agentTavern.statusTemplate = template;
+      if (variables !== void 0) agentTavern.initialVariables = structuredClone(variables);
+      extensions.agentTavern = agentTavern;
+      const saved = await db.updateCharacter(character, {
+        spec: found.card.spec,
+        specVersion: found.card.specVersion,
+        data: { ...found.card.data, extensions }
+      });
+      const applied = saved.card.data.extensions.agentTavern ?? {};
+      const seeded = typeof applied.initialVariables === "object" && applied.initialVariables !== null && !Array.isArray(applied.initialVariables) ? applied.initialVariables : void 0;
+      return {
+        character: saved.card.data.name,
+        statusTemplateLength: typeof applied.statusTemplate === "string" ? applied.statusTemplate.length : 0,
+        variableKeys: seeded === void 0 ? [] : Object.keys(seeded),
+        snapshotTaken,
+        ...Object.keys(agentTavern).some((key) => key !== "statusTemplate" && key !== "initialVariables") ? { retainedAgentTavernKeys: Object.keys(agentTavern).filter((key) => key !== "statusTemplate" && key !== "initialVariables") } : {},
+        source: { kind: "character-card", id: saved.card.data.name, version: saved.card.specVersion }
+      };
     })
   ];
 }
@@ -3222,6 +3495,58 @@ function editableValue(field, value) {
   const max2 = CARD_FIELDS[field];
   if (value.length > max2) throw new Error(`value for field '${field}' exceeds the ${max2}-character limit (got ${value.length})`);
   if ((field === "name" || field === "nickname") && value.trim() === "") throw new Error(`field '${field}' must not be blank`);
+  return value;
+}
+var CREATE_FIELD_KEYS = [...Object.keys(CARD_FIELDS), "alternateGreetings"];
+function parseCreateFields(value) {
+  if (value === void 0) return {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("fields must be an object of { field: value } entries");
+  }
+  const parsed = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (key === "alternateGreetings") {
+      if (!Array.isArray(raw) || raw.length > 16 || raw.some((item) => typeof item !== "string")) {
+        throw new Error("alternateGreetings must be an array of at most 16 strings");
+      }
+      for (const item of raw) {
+        if (item.length > CARD_FIELDS.firstMes) {
+          throw new Error(`alternateGreetings entries exceed the ${CARD_FIELDS.firstMes}-character limit`);
+        }
+      }
+      parsed.alternateGreetings = raw;
+      continue;
+    }
+    if (!(key in CARD_FIELDS)) {
+      throw new Error(`field '${key}' is not settable; settable fields: ${CREATE_FIELD_KEYS.join(", ")}`);
+    }
+    parsed[key] = editableValue(key, raw);
+  }
+  return parsed;
+}
+var STATUS_TEMPLATE_MAX = 16e3;
+var INITIAL_VARIABLES_MAX_BYTES = 64 * 1024;
+function statusTemplateArg(value) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error("statusTemplate must be a non-empty string");
+  if (value.length > STATUS_TEMPLATE_MAX) {
+    throw new Error(`statusTemplate exceeds the ${STATUS_TEMPLATE_MAX}-character limit (got ${value.length})`);
+  }
+  return value;
+}
+function initialVariablesArg(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("initialVariables must be a plain object of variable name to JSON value");
+  }
+  let serialized;
+  try {
+    serialized = JSON.stringify(value) ?? "";
+  } catch (cause) {
+    throw new Error(`initialVariables is not JSON-serializable (${cause instanceof Error ? cause.message : String(cause)})`);
+  }
+  const bytes = Buffer.byteLength(serialized, "utf8");
+  if (bytes > INITIAL_VARIABLES_MAX_BYTES) {
+    throw new Error(`initialVariables exceeds the 64KB serialized limit (got ${bytes} bytes)`);
+  }
   return value;
 }
 function parsePlanChanges(value) {
