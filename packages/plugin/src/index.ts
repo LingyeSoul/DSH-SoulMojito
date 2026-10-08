@@ -1187,9 +1187,21 @@ async function handleApi(ctx, req, res) {
     if (!character) throw new Error('no active character')
     const found = await db.getCharacter(character)
     if (!found) throw new Error(`character '${character}' not found`)
+    // 提案 0012/0013 P3：转 MVU 的卡（card_apply_mvu 写入的
+    // extensions.agentTavern.initialVariables）给新聊天播种初始变量——深拷贝
+    // 进 chat.header.chat_metadata.variables（与 0008 模板变量的 local 作用域
+    // 同位，改聊天变量不回写卡）；缺省/非非空对象时不写键。
+    const seedVariables = (() => {
+      const holder = found.card.data.extensions.agentTavern
+      if (typeof holder !== 'object' || holder === null || Array.isArray(holder)) return undefined
+      const initial = (holder as Record<string, unknown>).initialVariables
+      if (typeof initial !== 'object' || initial === null || Array.isArray(initial)
+        || Object.keys(initial).length === 0) return undefined
+      return structuredClone(initial)
+    })()
     const id = await db.createChat(character, {
       user_name: 'unused', character_name: 'unused',
-      chat_metadata: { character, createdAt: now, timedWorldInfo: {} },
+      chat_metadata: { character, createdAt: now, timedWorldInfo: {}, ...(seedVariables !== undefined ? { variables: seedVariables } : {}) },
     }, [{
       name: found.card.data.nickname || found.card.data.name,
       is_user: false, is_system: false, send_date: now,

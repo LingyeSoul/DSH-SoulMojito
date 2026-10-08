@@ -125,6 +125,7 @@ describe('Card Workbench tools and original snapshots', () => {
     expect([...tools.keys()]).toEqual([
       'card_get', 'card_put', 'card_original_get', 'card_restore_original',
       'card_plan_propose', 'world_get', 'world_put', 'preset_get', 'preset_put', 'chat_log_read',
+      'card_create', 'material_list', 'material_read', 'card_apply_mvu',
     ])
     for (const name of ['card_get', 'card_put', 'card_original_get', 'card_restore_original', 'card_plan_propose', 'chat_log_read']) {
       expect(tools.get(name)!.parameters.properties).toHaveProperty('character')

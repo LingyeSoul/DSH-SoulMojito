@@ -21,12 +21,24 @@
  * staleness against the recorded currentValue, writes, then marks the plan
  * applied. world_put/preset_put edit whitelisted entry fields with the same
  * confirmed-only gate; chat_log_read gives debugging tasks the real chat log.
+ *
+ * P3 starting tasks: card_create builds new cards from a blank slate, material
+ * or script (confirmed-only, never overwrites, binds nothing — material_list/
+ * material_read are the script-library readers); card_apply_mvu converts a
+ * card to the MVU pattern by writing extensions.agentTavern only
+ * (statusTemplate + initialVariables), snapshotting the pre-conversion card as
+ * the original when none exists so the conversion stays reversible; prose
+ * cleanup stays with the confirmed card_put path.
  */
 
 import {
   TavernStore,
+  boundScriptOf,
+  getScript,
+  listScripts,
   readOriginalSnapshot,
   restoreOriginal,
+  saveOriginalSnapshot,
   type CharacterFile,
 } from '../../../tavern-store/src/index.js'
 import { normalizeEntry, type CardDataIR, type CharacterCardIR, type LoreEntry } from '../../../tavern-format/src/index.js'
@@ -50,6 +62,10 @@ const KERNEL = [
   '- Report the result: after writing, summarize what changed (fields, entries and their new lengths) and suggest what to review next.',
   '- Originals: card_original_get reads the import-time original snapshot; card_restore_original (also confirmed-only) overwrites the working copy with that original. Offer restore when the user dislikes accumulated edits.',
   '- Debugging: when asked to diagnose a play (regex, beautification, prose problems), read the actual floors with chat_log_read (character, chatId, floor range) instead of guessing from memory.',
+  '',
+  'Starting tasks (P3):',
+  '- New card from an idea, material or script: gather the source first — material_list shows the script library, material_read fetches one chunk at a time (you never need the whole script in one call) — then discuss the draft fields with the user and call card_create with confirmed: true only after explicit approval. Creation binds nothing: scripts and world books attach through their own routes, chosen by the user or the panel.',
+  '- Convert a card to MVU (proposal 0012 P3): read the card with card_get, locate the old status-bar block in the prose, propose the variable structure and a statusTemplate draft, then call card_apply_mvu with confirmed: true after explicit approval. The tool only writes extensions.agentTavern (and snapshots the pre-conversion card as the original when none exists, keeping the conversion reversible via card_restore_original); it does NOT rewrite the prose — afterwards offer a separate confirmed card_put to strip the now-redundant status-bar block, and tell the user to start a new chat to verify the fixed right-side status panel.',
   '',
   'Boundaries:',
   '- Editable card fields are limited to name, nickname, description, personality, scenario, firstMes and creatorNotes. World edits are limited to entry key/content/enabled (match by uid); preset edits to prompt role/content/enabled (match by name). Other areas (extensions, scripts, chat state) are out of scope; say so instead of working around the limit.',
@@ -195,6 +211,35 @@ const chatLogOutput = objectOutput({
   total: { type: 'number' }, from: { type: 'number' }, to: { type: 'number' },
   messages: { type: 'array', items: { type: 'object', additionalProperties: true } },
 })
+const cardCreateOutput = objectOutput({
+  created: { type: 'boolean' },
+  character: { type: 'string' },
+  fieldLengths: { type: 'object', additionalProperties: true },
+  alternateGreetings: { type: 'number', description: 'Number of stored alternate greetings.' },
+  source: { type: 'object', additionalProperties: true },
+})
+const materialListOutput = objectOutput({
+  count: { type: 'number' },
+  scripts: { type: 'array', items: { type: 'object', additionalProperties: true } },
+})
+const materialReadOutput = objectOutput({
+  found: { type: 'boolean' },
+  script: { type: 'string' },
+  chunkIndex: { type: 'number' },
+  requestedChunkIndex: { type: 'number' },
+  totalChunks: { type: 'number' },
+  length: { type: 'number' },
+  truncated: { type: 'boolean' },
+  text: { type: 'string' },
+}, ['chunkIndex', 'requestedChunkIndex', 'totalChunks', 'length', 'truncated', 'text'])
+const mvuApplyOutput = objectOutput({
+  character: { type: 'string' },
+  statusTemplateLength: { type: 'number' },
+  variableKeys: { type: 'array', items: { type: 'string' } },
+  snapshotTaken: { type: 'boolean', description: 'True when the pre-conversion card was saved as the original snapshot by this call.' },
+  retainedAgentTavernKeys: { type: 'array', items: { type: 'string' }, description: 'Pre-existing agentTavern keys preserved untouched (e.g. scriptId).' },
+  source: { type: 'object', additionalProperties: true },
+}, ['retainedAgentTavernKeys'])
 
 function createTools(): ToolDefinition[] {
   return [
@@ -483,6 +528,169 @@ function createTools(): ToolDefinition[] {
       }))
       return { found: true, character, chatId, total, from: start, to: cappedEnd, messages }
     }),
+    tool('card_create', 'Create a new Tavern character card from a blank slate, raw material or a script (proposal 0013 P3). fields accepts the card_put whitelist (name must match the top-level name argument when present) plus alternateGreetings (up to 16 strings). Present the full field draft to the user FIRST; rejected without confirmed: true. Refuses when a card with the same name already exists. Creation binds no script and no world book — binding goes through the existing routes, by the user or the panel.', {
+      name: { type: 'string', required: true, description: 'Name of the new card (max 120 characters); must not collide with an existing card.' },
+      fields: {
+        type: 'object',
+        description: `Optional initial field values: ${[...Object.keys(CARD_FIELDS), 'alternateGreetings'].join(', ')}.`,
+        properties: {
+          name: { type: 'string' },
+          nickname: { type: 'string' },
+          description: { type: 'string' },
+          personality: { type: 'string' },
+          scenario: { type: 'string' },
+          firstMes: { type: 'string' },
+          creatorNotes: { type: 'string' },
+          alternateGreetings: { type: 'array', items: { type: 'string' }, description: 'Up to 16 extra first messages (stored as swipes); each max 16000 characters.' },
+        },
+        additionalProperties: false,
+      },
+      confirmed: { type: 'boolean', required: true, description: 'True only after the user explicitly approved the presented card draft.' },
+    }, cardCreateOutput, async (args, exec) => {
+      if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR)
+      const name = editableValue('name', args.name)
+      const fields = parseCreateFields(args.fields)
+      if (fields.name !== undefined && fields.name !== name) {
+        throw new Error(`fields.name ('${fields.name}') must match the name argument ('${name}')`)
+      }
+      exec?.signal?.throwIfAborted()
+      const db = await tavernStore()
+      if ((await db.getCharacter(name)) !== undefined) {
+        throw new Error(`character '${name}' already exists; card_create never overwrites — pick a different name`)
+      }
+      const data: Record<string, unknown> = {
+        name,
+        description: fields.description ?? '',
+        personality: fields.personality ?? '',
+        scenario: fields.scenario ?? '',
+        first_mes: fields.firstMes ?? '',
+        mes_example: '',
+        creator_notes: fields.creatorNotes ?? '',
+        system_prompt: '',
+        post_history_instructions: '',
+        alternate_greetings: fields.alternateGreetings ?? [],
+        tags: [],
+        creator: '',
+        character_version: '',
+        ...(fields.nickname !== undefined ? { nickname: fields.nickname } : {}),
+        extensions: {},
+      }
+      const { card } = await db.importCharacter({ spec: 'chara_card_v2', spec_version: '2.0', data })
+      return {
+        created: true,
+        character: card.data.name,
+        fieldLengths: fieldLengthsOf(card.data),
+        alternateGreetings: card.data.alternateGreetings.length,
+        source: { kind: 'character-card', id: card.data.name, version: card.specVersion },
+      }
+    }),
+    tool('material_list', 'List the script/material library (proposal 0014): name, format, chunk count and which cards are bound to each script (via extensions.agentTavern.scriptId). Entry point when the user wants a card made from a script or other material.', {}, materialListOutput, async (_args, exec) => {
+      exec?.signal?.throwIfAborted()
+      const summaries = await listScripts(dshHomePath('tavern'))
+      const db = await tavernStore()
+      const bindings = new Map<string, string[]>()
+      for (const characterName of await db.listCharacters()) {
+        const file = await db.getCharacter(characterName)
+        const bound = file === undefined ? undefined : boundScriptOf(file.card)
+        if (bound === undefined) continue
+        const list = bindings.get(bound) ?? []
+        list.push(characterName)
+        bindings.set(bound, list)
+      }
+      return {
+        count: summaries.length,
+        scripts: summaries.map((summary) => ({
+          name: summary.name,
+          format: summary.format,
+          chunkCount: summary.chunkCount,
+          totalCharacters: summary.totalCharacters,
+          importedAt: summary.importedAt,
+          boundCards: bindings.get(summary.name) ?? [],
+        })),
+      }
+    }),
+    tool('material_read', 'Read one chunk of a script from the material library (proposal 0014). chunkIndex defaults to 0 and is clamped into [0, totalChunks-1]; maxChars defaults to 2400 and is capped at 8000 (values below 1 clamp to 1). Unknown scripts return found: false instead of throwing. Read chunk by chunk — never assume the whole script fits in one call.', {
+      scriptName: { type: 'string', required: true, description: 'Script name from material_list.' },
+      chunkIndex: { type: 'integer', minimum: 0, description: 'Chunk to read (0-based); out-of-range values are clamped into range.' },
+      maxChars: { type: 'integer', minimum: 1, maximum: 8000, description: 'Character budget for the returned text (default 2400, max 8000); longer chunks come back truncated.' },
+    }, materialReadOutput, async (args, exec) => {
+      const scriptName = stringArg(args.scriptName)
+      let maxChars = 2400
+      if (args.maxChars !== undefined) {
+        if (typeof args.maxChars !== 'number' || !Number.isInteger(args.maxChars)) throw new Error('maxChars must be an integer')
+        maxChars = Math.min(8000, Math.max(1, args.maxChars))
+      }
+      let requested = 0
+      if (args.chunkIndex !== undefined) {
+        if (typeof args.chunkIndex !== 'number' || !Number.isInteger(args.chunkIndex)) throw new Error('chunkIndex must be an integer')
+        requested = args.chunkIndex
+      }
+      exec?.signal?.throwIfAborted()
+      const record = await getScript(dshHomePath('tavern'), scriptName)
+      if (record === undefined || record.chunks.length === 0) return { found: false, script: scriptName }
+      const chunkIndex = Math.min(Math.max(requested, 0), record.chunks.length - 1)
+      const text = record.chunks[chunkIndex]!.text
+      return {
+        found: true,
+        script: record.name,
+        chunkIndex,
+        ...(requested !== chunkIndex ? { requestedChunkIndex: requested } : {}),
+        totalChunks: record.chunks.length,
+        length: text.length,
+        truncated: text.length > maxChars,
+        text: text.slice(0, maxChars),
+      }
+    }),
+    tool('card_apply_mvu', 'Convert a character card to the MVU pattern (proposal 0012 P3): writes extensions.agentTavern.statusTemplate (rendered into the fixed right-side status panel) and initialVariables (deep-copied into chat_metadata.variables of every NEW chat). When the card has no original snapshot yet — cards that never went through the import route — the pre-conversion working copy is saved as the original first (once, never overwritten), keeping the conversion reversible via card_restore_original. Pre-existing agentTavern keys (e.g. scriptId) are preserved. The prose is NOT rewritten: offer a separate confirmed card_put to strip the old status-bar block from description/firstMes. Present the variable structure and template draft to the user FIRST; rejected without confirmed: true.', {
+      character: { type: 'string', required: true, description: 'Character name to convert.' },
+      statusTemplate: { type: 'string', required: true, description: 'Fixed status-panel template (EJS-style, rendered from chat variables); non-empty, max 16000 characters.' },
+      initialVariables: { type: 'object', description: 'Initial variable tree seeded into every new chat for this card (plain JSON object; serialized size max 64KB). Omit to keep any existing value.' },
+      confirmed: { type: 'boolean', required: true, description: 'True only after the user explicitly approved the conversion plan.' },
+    }, mvuApplyOutput, async (args, exec) => {
+      if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR)
+      const character = stringArg(args.character)
+      const template = statusTemplateArg(args.statusTemplate)
+      const variables = args.initialVariables === undefined ? undefined : initialVariablesArg(args.initialVariables)
+      exec?.signal?.throwIfAborted()
+      const root = dshHomePath('tavern')
+      const db = await tavernStore()
+      const found = await requireCharacter(character)
+      // ① 转换前补拍原版快照（P1 导入钩子未覆盖的老卡；已存在则不覆盖——
+      //    saveOriginalSnapshot 自带「首个胜出」语义，转换可逆靠它）。
+      let snapshotTaken = false
+      if ((await readOriginalSnapshot(root, character)) === undefined) {
+        snapshotTaken = await saveOriginalSnapshot(root, character, found.card)
+      }
+      // ② 只写 extensions.agentTavern：与既有键合并（scriptId 等原样保留），
+      //    正文/开场白里的旧状态栏块不动——清理走确认后的 card_put。
+      const extensions: Record<string, unknown> = { ...found.card.data.extensions }
+      const previous = extensions.agentTavern
+      const agentTavern: Record<string, unknown> = typeof previous === 'object' && previous !== null && !Array.isArray(previous)
+        ? { ...(previous as Record<string, unknown>) }
+        : {}
+      agentTavern.statusTemplate = template
+      if (variables !== undefined) agentTavern.initialVariables = structuredClone(variables)
+      extensions.agentTavern = agentTavern
+      const saved = await db.updateCharacter(character, {
+        spec: found.card.spec,
+        specVersion: found.card.specVersion,
+        data: { ...found.card.data, extensions },
+      })
+      const applied = (saved.card.data.extensions.agentTavern ?? {}) as Record<string, unknown>
+      const seeded = typeof applied.initialVariables === 'object' && applied.initialVariables !== null && !Array.isArray(applied.initialVariables)
+        ? applied.initialVariables as Record<string, unknown>
+        : undefined
+      return {
+        character: saved.card.data.name,
+        statusTemplateLength: typeof applied.statusTemplate === 'string' ? applied.statusTemplate.length : 0,
+        variableKeys: seeded === undefined ? [] : Object.keys(seeded),
+        snapshotTaken,
+        ...(Object.keys(agentTavern).some((key) => key !== 'statusTemplate' && key !== 'initialVariables')
+          ? { retainedAgentTavernKeys: Object.keys(agentTavern).filter((key) => key !== 'statusTemplate' && key !== 'initialVariables') }
+          : {}),
+        source: { kind: 'character-card', id: saved.card.data.name, version: saved.card.specVersion },
+      }
+    }),
   ]
 }
 
@@ -625,6 +833,66 @@ function editableValue(field: string, value: unknown): string {
   if (value.length > max) throw new Error(`value for field '${field}' exceeds the ${max}-character limit (got ${value.length})`)
   if ((field === 'name' || field === 'nickname') && value.trim() === '') throw new Error(`field '${field}' must not be blank`)
   return value
+}
+
+/* --------------------- 制卡 / 转 MVU（P3）参数解析 --------------------- */
+
+/** card_create 的 fields 白名单 = card_put 白名单 + alternateGreetings。 */
+const CREATE_FIELD_KEYS = [...Object.keys(CARD_FIELDS), 'alternateGreetings'] as const
+
+function parseCreateFields(value: unknown): Partial<Record<CardField, string>> & { alternateGreetings?: string[] } {
+  if (value === undefined) return {}
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('fields must be an object of { field: value } entries')
+  }
+  const parsed: Partial<Record<CardField, string>> & { alternateGreetings?: string[] } = {}
+  for (const [key, raw] of Object.entries(value)) {
+    if (key === 'alternateGreetings') {
+      if (!Array.isArray(raw) || raw.length > 16 || raw.some((item) => typeof item !== 'string')) {
+        throw new Error('alternateGreetings must be an array of at most 16 strings')
+      }
+      for (const item of raw as unknown[]) {
+        if ((item as string).length > CARD_FIELDS.firstMes) {
+          throw new Error(`alternateGreetings entries exceed the ${CARD_FIELDS.firstMes}-character limit`)
+        }
+      }
+      parsed.alternateGreetings = raw as string[]
+      continue
+    }
+    if (!(key in CARD_FIELDS)) {
+      throw new Error(`field '${key}' is not settable; settable fields: ${CREATE_FIELD_KEYS.join(', ')}`)
+    }
+    parsed[key as CardField] = editableValue(key, raw)
+  }
+  return parsed
+}
+
+const STATUS_TEMPLATE_MAX = 16000
+const INITIAL_VARIABLES_MAX_BYTES = 64 * 1024
+
+function statusTemplateArg(value: unknown): string {
+  if (typeof value !== 'string' || value.trim() === '') throw new Error('statusTemplate must be a non-empty string')
+  if (value.length > STATUS_TEMPLATE_MAX) {
+    throw new Error(`statusTemplate exceeds the ${STATUS_TEMPLATE_MAX}-character limit (got ${value.length})`)
+  }
+  return value
+}
+
+function initialVariablesArg(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('initialVariables must be a plain object of variable name to JSON value')
+  }
+  let serialized: string
+  try {
+    serialized = JSON.stringify(value) ?? ''
+  } catch (cause) {
+    throw new Error(`initialVariables is not JSON-serializable (${cause instanceof Error ? cause.message : String(cause)})`)
+  }
+  const bytes = Buffer.byteLength(serialized, 'utf8')
+  if (bytes > INITIAL_VARIABLES_MAX_BYTES) {
+    throw new Error(`initialVariables exceeds the 64KB serialized limit (got ${bytes} bytes)`)
+  }
+  return value as Record<string, unknown>
 }
 
 function parsePlanChanges(value: unknown): Array<{ field: CardField; newValue: string; note?: string }> {
