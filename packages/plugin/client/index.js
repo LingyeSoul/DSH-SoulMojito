@@ -21,7 +21,7 @@ window.__ModuleLoader__.load({
       };
       var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-      // ../bind/src/client/host-probe.ts
+      // packages/bind/src/client/host-probe.ts
       var host_probe_exports = {};
       __export(host_probe_exports, {
         connectHostWorkspace: () => connectHostWorkspace,
@@ -31,7 +31,7 @@ window.__ModuleLoader__.load({
         retainHostSession: () => retainHostSession
       });
 
-      // ../bind/src/client/ui-primitives.ts
+      // packages/bind/src/client/ui-primitives.ts
       var LEGACY_ICON_NAME = /^(Icon[A-Za-z]+?)(\d{2})$/;
       function primitiveCandidates(name) {
         const legacy = LEGACY_ICON_NAME.exec(name);
@@ -86,7 +86,7 @@ window.__ModuleLoader__.load({
         });
       }
 
-      // ../bind/src/client/host-probe.ts
+      // packages/bind/src/client/host-probe.ts
       function createClientShapeTrace() {
         return { connectCalls: 0, openSessionCalls: 0, retainCalls: 0 };
       }
@@ -554,6 +554,7 @@ window.__ModuleLoader__.load({
       // 与 {param} 占位符必须完全镜像，由 client-vm-mount gate 校验。
       'panel.guides.hint': 'Persistent directives applied to every generation in this chat (ST and AgentTavern alike): at most 8 guides, up to 500 characters each.',
       'panel.guides.empty': 'No guides yet',
+      'panel.guides.unavailable': 'Guides follow a single bound chat; chat-less sessions (Card Workbench, novels) do not use guides.',
       'panel.guides.placeholder': 'Add a guide for this chat…',
       'panel.guides.add': 'Add',
       'panel.guides.adding': 'Adding…',
@@ -1051,6 +1052,7 @@ window.__ModuleLoader__.load({
       // 与 {param} 占位符必须完全镜像，由 client-vm-mount gate 校验。
       'panel.guides.hint': '对本局每次生成（ST 与 AgentTavern 同样生效）持续作用的指引：最多 8 条，单条不超过 500 字符。',
       'panel.guides.empty': '还没有指引',
+      'panel.guides.unavailable': '指引跟随单局绑定的聊天生效；写卡工作台等未绑定聊天的会话不使用指引。',
       'panel.guides.placeholder': '添加一条本局指引…',
       'panel.guides.add': '添加',
       'panel.guides.adding': '添加中…',
@@ -4927,9 +4929,12 @@ window.__ModuleLoader__.load({
         .filter(([sessionId, binding]) => binding?.architecture === 'card-workbench' && sessionIds.includes(sessionId))
       return h('div', { className: 'dt-sidebar-chats' },
         entries.map(([sessionId, binding]) => {
-          const label = binding.sourceCharacter
-            ? `${binding.sourceCharacter} · ${String(binding.sourceChatId).replace(/\.jsonl$/i, '')}`
-            : t('nav.workbenchFree')
+          // 出卡后会话改名为卡名（提案 0013 补充）：createdCard 优先于来源
+          // 聊天/自由工作台标签，与服务端 sessionTitle.rename 固定的宿主标题一致。
+          const label = binding.createdCard
+            || (binding.sourceCharacter
+              ? `${binding.sourceCharacter} · ${String(binding.sourceChatId).replace(/\.jsonl$/i, '')}`
+              : t('nav.workbenchFree'))
           return h('div', {
             key: sessionId,
             className: `dt-sidebar-chat-row dt-sidebar-chat-single ${currentSession === sessionId ? 'dt-sidebar-chat-active' : ''}`,
@@ -5855,14 +5860,19 @@ window.__ModuleLoader__.load({
     }
 
     // 持续指引面板（提案 0009）：跟随当前会话绑定的聊天（ST 与 AgentTavern
-    // 都生效，不区分架构）。列出以 GET guides 为准（chat_metadata 里可能已有，
-// 也可能被其他端改过）；添加/删除成功后 revision 由服务端推进，客户端照
-    // saveChat 同款模式同步 revisions 并强刷聊天快照。
+    // 都生效）。列出以 GET guides 为准（chat_metadata 里可能已有，也可能被
+    // 其他端改过）；添加/删除成功后 revision 由服务端推进，客户端照 saveChat
+    // 同款模式同步 revisions 并强刷聊天快照。
     function PanelGuides({ useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
       const currentSession = useSessions ? useCurrentSessionId(useSessions) : null
       const binding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
+      // 指引禁用面：写卡工作台会话不绑定聊天（binding.character/chatId 恒为空
+      // 串），小说会话同款空绑定。直接禁用——不请求、不渲染输入，避免空 id 打
+      // 到 guides 路由炸出 invalid chat id。
+      const guidesDisabled = !!binding
+        && (binding.architecture === 'card-workbench' || binding.character === '' || binding.chatId === '')
       const [guides, setGuides] = useState(null)
       const [draft, setDraft] = useState('')
       const [error, setError] = useState('')
@@ -5872,14 +5882,14 @@ window.__ModuleLoader__.load({
         let cancelled = false
         setGuides(null)
         setError('')
-        if (!binding) return () => { cancelled = true }
+        if (!binding || guidesDisabled) return () => { cancelled = true }
         void loadGuides(binding.character, binding.chatId)
           .then((result) => { if (!cancelled) setGuides(Array.isArray(result.guides) ? result.guides : []) })
           .catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause)) })
         return () => { cancelled = true }
-      }, [binding?.character, binding?.chatId])
+      }, [binding?.character, binding?.chatId, guidesDisabled])
       const reloadGuides = () => {
-        if (!binding) return Promise.resolve()
+        if (!binding || guidesDisabled) return Promise.resolve()
         return loadGuides(binding.character, binding.chatId)
           .then((result) => setGuides(Array.isArray(result.guides) ? result.guides : []))
           .catch(() => {})
@@ -5894,7 +5904,7 @@ window.__ModuleLoader__.load({
       }
       const add = () => {
         const text = draft.trim()
-        if (!binding || text === '' || adding) return
+        if (!binding || guidesDisabled || text === '' || adding) return
         setAdding(true)
         setError('')
         void addChatGuide(binding.character, binding.chatId, text)
@@ -5909,7 +5919,7 @@ window.__ModuleLoader__.load({
           .finally(() => setAdding(false))
       }
       const remove = (id) => {
-        if (!binding || busyId !== '') return
+        if (!binding || guidesDisabled || busyId !== '') return
         setBusyId(id)
         setError('')
         void removeChatGuide(binding.character, binding.chatId, id)
@@ -5925,21 +5935,23 @@ window.__ModuleLoader__.load({
         h('p', { className: 'dt-hint' }, t('panel.guides.hint')),
         !binding
           ? h('p', { className: 'dt-muted' }, t('panel.variables.chatLocalEmpty'))
-          : guides === null
-            ? h('p', { className: 'dt-muted' }, t('nav.loading'))
-            : h(React.Fragment, null,
-              guides.length === 0 ? h('p', { className: 'dt-muted' }, t('panel.guides.empty')) : null,
-              h('div', { className: 'dt-guide-list' }, guides.map((guide) => h('div', { key: guide.id, className: 'dt-guide-row' },
-                h('span', { className: 'dt-guide-text' }, guide.text),
-                h(Button, {
-                  size: 'sm',
-                  variant: 'ghost',
-                  icon: h(IconTrashOutline16),
-                  'aria-label': t('panel.guides.remove'),
-                  title: t('panel.guides.remove'),
-                  disabled: busyId !== '' || adding,
-                  onClick: () => remove(guide.id),
-                })))),
+          : guidesDisabled
+            ? h('p', { className: 'dt-muted' }, t('panel.guides.unavailable'))
+            : guides === null
+              ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+              : h(React.Fragment, null,
+                guides.length === 0 ? h('p', { className: 'dt-muted' }, t('panel.guides.empty')) : null,
+                h('div', { className: 'dt-guide-list' }, guides.map((guide) => h('div', { key: guide.id, className: 'dt-guide-row' },
+                  h('span', { className: 'dt-guide-text' }, guide.text),
+                  h(Button, {
+                    size: 'sm',
+                    variant: 'ghost',
+                    icon: h(IconTrashOutline16),
+                    'aria-label': t('panel.guides.remove'),
+                    title: t('panel.guides.remove'),
+                    disabled: busyId !== '' || adding,
+                    onClick: () => remove(guide.id),
+                  })))),
               h('div', { className: 'dt-guide-add' },
                 h('div', { className: 'dt-guide-add-field' },
                   h(Input, {
@@ -7109,9 +7121,10 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dt-workbench-change-field' }, change.field),
           h('div', { className: 'dt-workbench-change-values' },
             h('span', { className: 'dt-workbench-label' }, t('workbench.current')),
-            h('pre', { className: 'dt-workbench-old' }, change.currentValue || ''),
+            // 数组值（tags/alternateGreetings 整组替换）按行 join 展示，避免压成一行
+            h('pre', { className: 'dt-workbench-old' }, Array.isArray(change.currentValue) ? change.currentValue.join('\n') : (change.currentValue || '')),
             h('span', { className: 'dt-workbench-label' }, t('workbench.new')),
-            h('pre', { className: 'dt-workbench-new' }, change.newValue || '')),
+            h('pre', { className: 'dt-workbench-new' }, Array.isArray(change.newValue) ? change.newValue.join('\n') : (change.newValue || ''))),
           change.note ? h('p', { className: 'dt-workbench-note' }, change.note) : null))) : null)
     }
 

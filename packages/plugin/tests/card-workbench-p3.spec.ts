@@ -21,7 +21,14 @@ const SOURCE_NOVEL = 'Source Novel'
 interface RegisteredTool {
   name: string
   parameters: { properties: Record<string, unknown>; required?: string[] }
-  execute(args: Record<string, unknown>, exec?: { signal?: AbortSignal }): Promise<any>
+  execute(args: Record<string, unknown>, exec?: { signal?: AbortSignal; agent?: WorkbenchTestAgent }): Promise<any>
+}
+
+/** 测试侧工具执行身份面：对齐 agent.ts 的 WorkbenchExecAgent 鸭子形状。 */
+interface WorkbenchTestAgent {
+  id?: string
+  session?: unknown
+  ctx?: { get?: (name: string) => unknown; sessionTitle?: unknown }
 }
 
 function makeRequest(body: unknown, url: string) {
@@ -182,9 +189,12 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
       created: true,
       character: 'Blank Slate',
       alternateGreetings: 0,
+      snapshotTaken: true,
       fieldLengths: { description: 0, personality: 0, scenario: 0, firstMes: 0, creatorNotes: 0 },
     })
     expect(JSON.parse(JSON.stringify(blank))).toEqual(blank)
+    // 出厂快照可恢复:restore 回到创建态（快照在 <home>/tavern 下,不在 home 根）
+    expect((await readOriginalSnapshot(join(home, 'tavern'), 'Blank Slate'))?.data.name).toBe('Blank Slate')
 
     const populated = await tools.get('card_create')!.execute({
       name: 'Script Hero',
@@ -197,12 +207,18 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
         creatorNotes: 'Extracted via material_read.',
         nickname: 'Hero',
         alternateGreetings: ['Evening variant.', 'Storm variant.'],
+        mesExample: 'User: who rules here?\nHero: the harbour council.',
+        systemPrompt: 'Narrate in third person.',
+        tags: ['  fantasy ', '', 'harbour'],
+        creator: 'Workbench',
+        characterVersion: '2.0',
       },
     })
     expect(populated).toMatchObject({
       created: true,
       character: 'Script Hero',
       alternateGreetings: 2,
+      snapshotTaken: true,
       fieldLengths: { description: 'Distilled from the novel.'.length },
     })
     const saved = (await store.getCharacter('Script Hero'))!.card
@@ -210,8 +226,98 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
     expect(saved.data.personality).toBe('Brave.')
     expect(saved.data.nickname).toBe('Hero')
     expect(saved.data.alternateGreetings).toEqual(['Evening variant.', 'Storm variant.'])
+    expect(saved.data.mesExample).toBe('User: who rules here?\nHero: the harbour council.')
+    expect(saved.data.systemPrompt).toBe('Narrate in third person.')
+    expect(saved.data.tags).toEqual(['fantasy', 'harbour'])
+    expect(saved.data.creator).toBe('Workbench')
+    expect(saved.data.characterVersion).toBe('2.0')
     // 创建不绑定任何剧本/世界书：extensions 干净。
     expect(saved.data.extensions).toEqual({})
+  })
+
+  /* --------------------- 出卡后会话改名为卡名（补充） --------------------- */
+
+  it('card_create renames the hosting workbench session to the card name', async () => {
+    const renames: Array<{ session: unknown; title: string }> = []
+    const liveSession = { id: 'wb-renamed' }
+    await store.updateState((state) => ({
+      sessionBindings: {
+        ...state.sessionBindings,
+        'wb-renamed': {
+          architecture: 'card-workbench', character: '', chatId: '',
+          sourceCharacter: '', sourceChatId: '', createdCard: '',
+        },
+      },
+    }))
+    const result = await tools.get('card_create')!.execute(
+      { name: 'Renamed Hero', confirmed: true },
+      {
+        agent: {
+          id: 'wb-renamed',
+          session: liveSession,
+          ctx: { get: (name: string) => name === 'sessionTitle' ? { rename: (session: unknown, title: string) => { renames.push({ session, title }) } } : undefined },
+        },
+      },
+    )
+    expect(result).toMatchObject({ created: true, character: 'Renamed Hero' })
+    // 绑定面记卡名（侧边栏分组数据源），宿主面以活会话 + 卡名 rename。
+    expect((await store.getState()).sessionBindings['wb-renamed']).toMatchObject({
+      architecture: 'card-workbench',
+      createdCard: 'Renamed Hero',
+    })
+    expect(renames).toEqual([{ session: liveSession, title: 'Renamed Hero' }])
+
+    // 同会话再出一张卡：卡名最新胜出，rename 再发一次。
+    await tools.get('card_create')!.execute(
+      { name: 'Newer Hero', confirmed: true },
+      {
+        agent: {
+          id: 'wb-renamed',
+          session: liveSession,
+          ctx: { get: (name: string) => name === 'sessionTitle' ? { rename: (session: unknown, title: string) => { renames.push({ session, title }) } } : undefined },
+        },
+      },
+    )
+    expect((await store.getState()).sessionBindings['wb-renamed']).toMatchObject({ createdCard: 'Newer Hero' })
+    expect(renames).toHaveLength(2)
+  })
+
+  it('card_create never fails on missing host faces and leaves foreign sessions untouched', async () => {
+    // 自足绑定，不依赖上一条用例的写入顺序。
+    await store.updateState((state) => ({
+      sessionBindings: {
+        ...state.sessionBindings,
+        'wb-renamed': {
+          architecture: 'card-workbench', character: '', chatId: '',
+          sourceCharacter: '', sourceChatId: '', createdCard: '',
+        },
+      },
+    }))
+    // 无 agent 身份（老宿主/纯工具测试）：照常出卡。
+    const noAgent = await tools.get('card_create')!.execute({ name: 'No Agent Card', confirmed: true })
+    expect(noAgent).toMatchObject({ created: true })
+    // agent 存在但会话未绑定 card-workbench：不写绑定、不 rename。
+    const stray = await tools.get('card_create')!.execute(
+      { name: 'Stray Session Card', confirmed: true },
+      { agent: { id: 'stray-session', session: {}, ctx: { get: () => undefined } } },
+    )
+    expect(stray).toMatchObject({ created: true })
+    // 绑定会话但宿主没有 sessionTitle 服务：绑定面照写卡名，rename 静默跳过。
+    const noService = await tools.get('card_create')!.execute(
+      { name: 'No Service Card', confirmed: true },
+      { agent: { id: 'wb-renamed', session: {} } },
+    )
+    expect(noService).toMatchObject({ created: true })
+    expect((await store.getState()).sessionBindings['wb-renamed']).toMatchObject({ createdCard: 'No Service Card' })
+    // 宿主 rename 抛错（会话不活/标题被拒）不得让出卡失败。
+    const hostile = await tools.get('card_create')!.execute(
+      { name: 'Hostile Rename Card', confirmed: true },
+      { agent: { id: 'wb-renamed', session: {}, ctx: { get: () => ({ rename: () => { throw new Error('session not live') } }) } } },
+    )
+    expect(hostile).toMatchObject({ created: true })
+    expect((await store.getState()).sessionBindings['wb-renamed']).toMatchObject({ createdCard: 'Hostile Rename Card' })
+    // 无关会话从未被写进绑定。
+    expect((await store.getState()).sessionBindings['stray-session']).toBeUndefined()
   })
 
   /* -------------------------------- 素材 -------------------------------- */

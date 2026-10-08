@@ -21,11 +21,12 @@
 | 组件 | 决策 |
 |---|---|
 | preset | `card-workbench` preset：工具 + 提示词（讨论→方案→确认→写入），挂到独立工作台会话 |
-| 资产工具 | `card_get/card_put`（工作版）、`world_get/world_put`、`world_list/world_create`（本书库列举 + 新建世界书，2026-10-08 补齐）、`preset_get/preset_put`、`script_get/script_put`（剧本，读 0014）、`card_restore_original`（恢复原版）、`chat_log_read`（排错用，读真实游玩记录） |
+| 资产工具 | `card_get/card_put`（工作版）、`world_get/world_put`、`world_list/world_create`（本书库列举 + 新建世界书，2026-10-08 补齐）、`preset_get/preset_put`、`script_get/script_put`（剧本，读 0014）、`card_restore_original`（恢复原版）、`chat_log_read`（排错用，读真实游玩记录）。2026-10-08 完整扩展：世界书条目白名单放开到全量实用 ST LoreEntry 字段（声明式字段表驱动 schema/校验/写入/摘要）+ `remove` 删条目 + `uids` 全文读取；新增 `world_delete`（有卡链接先拒、清 activeWorlds）、`world_rename`（卡链接与 activeWorlds 随改）、`world_bind`（书↔卡挂载/解绑）、`world_copy`（整书无损分叉），见 `decisions/2026-10-08-worldbook-full-editing.md`。角色卡侧同构补全：字段白名单扩到 mesExample/systemPrompt/postHistoryInstructions/creator/characterVersion + tags/alternateGreetings 整组数组替换（方案协议值放宽 string\|string[]）、`card_get full` 全文读取、`card_create` 出厂快照、`card_delete` 双重闸门（有聊天先拒、`deleteChats` 二次确认；连带群组/绑定/原版快照清理），见 `decisions/2026-10-08-card-full-editing.md` |
 | 确认协议 | 写入工具必须携带 `planId`；方案先经 `card_plan_propose` 落库，用户在面板或对话确认后 `card_put(planId)` 才生效——对齐 flizzywine「先给方案，确认后写入」 |
 | 原版/工作版 | `tavern-store` 卡目录增加 `.original` 快照（导入时写一次）；工作版即现有文件 |
 | 排错入口 | 面板「交给工作台调试」：引用指定聊天 +楼层范围，工作台会话注入对应记录 |
 | 起始任务 | 修改卡 / 改世界书・预设・剧本 / 新建世界书 / 从素材制卡 / 转 MVU（0012 P3）/ 空白开始 |
+| 会话命名 | card_create 成功后把所在工作台会话改名为卡名（2026-10-08 补充）：绑定记 `createdCard`（自绘侧边栏「写卡工作台」分组据此显示，最新出卡胜出），宿主会话标题经 agent 作用域 ctx 探测 `sessionTitle` 服务后 `rename` 固定；两路均 best-effort，失败不阻断出卡，非工作台绑定会话不受影响 |
 
 ## 3. 阶段划分
 

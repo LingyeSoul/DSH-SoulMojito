@@ -12,7 +12,7 @@ import {
   listCardPlans,
   proposeCardPlan,
 } from '../src/card-workbench/plans.js'
-import { TavernStore } from '../../tavern-store/src/index.js'
+import { TavernStore, readOriginalSnapshot, saveOriginalSnapshot } from '../../tavern-store/src/index.js'
 
 const CHARACTER = 'Plan Card'
 const OTHER_CHARACTER = 'Bystander Card'
@@ -288,6 +288,134 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
     expect((await store.getCharacter(OTHER_CHARACTER))!.card.data.personality).toBe('Calm.')
   })
 
+  /* ------------------- 卡能力完整扩展（2026-10-08） ------------------- */
+
+  it('card_get exposes the full editable surface and fetches long fields untruncated via full', async () => {
+    const summary = await tools.get('card_get')!.execute({ character: CHARACTER })
+    expect(summary).toMatchObject({
+      found: true, character: CHARACTER,
+      mesExample: '', systemPrompt: '', postHistoryInstructions: '',
+      creator: '', characterVersion: '', tags: '',
+      alternateGreetingsCount: 0, alternateGreetingsPreviews: [],
+      fieldLengths: expect.objectContaining({ mesExample: 0, systemPrompt: 0, tags: 0 }),
+    })
+    // 新文本字段直写 + 摘要截断与全文读取
+    const long = 'D'.repeat(2600)
+    await tools.get('card_put')!.execute({
+      character: CHARACTER, confirmed: true,
+      changes: [
+        { field: 'description', value: long },
+        { field: 'mesExample', value: 'User: hi\nChar: hey there.' },
+      ],
+    })
+    const after = await tools.get('card_get')!.execute({ character: CHARACTER })
+    expect((after as Record<string, unknown>).description).toHaveLength(2000)
+    expect(after).toMatchObject({ truncated: true, fieldLengths: expect.objectContaining({ description: 2600 }) })
+    const full = await tools.get('card_get')!.execute({ character: CHARACTER, full: ['description', 'mesExample'] })
+    expect(full.fullValues).toEqual({ description: long, mesExample: 'User: hi\nChar: hey there.' })
+    await expect(tools.get('card_get')!.execute({ character: CHARACTER, full: ['bogus'] }))
+      .rejects.toThrow('is not a card field')
+  })
+
+  it('card_put edits array fields whole-group and the plan protocol round-trips array values', async () => {
+    // 整组替换:空白项丢弃,元数据/提示字段直写
+    const edited = await tools.get('card_put')!.execute({
+      character: OTHER_CHARACTER, confirmed: true,
+      changes: [
+        { field: 'tags', value: ['  fantasy ', '', 'tavern'] },
+        { field: 'alternateGreetings', value: ['Second opening.', '   ', 'Third opening.'] },
+        { field: 'systemPrompt', value: 'Speak as the narrator.' },
+        { field: 'postHistoryInstructions', value: 'Keep it tight.' },
+        { field: 'creator', value: 'Workbench Author' },
+        { field: 'characterVersion', value: '1.1' },
+      ],
+    })
+    const saved = (await store.getCharacter(OTHER_CHARACTER))!.card.data
+    expect(saved.tags).toEqual(['fantasy', 'tavern'])
+    expect(saved.alternateGreetings).toEqual(['Second opening.', 'Third opening.'])
+    expect(saved.systemPrompt).toBe('Speak as the narrator.')
+    expect(saved.postHistoryInstructions).toBe('Keep it tight.')
+    expect(saved.creator).toBe('Workbench Author')
+    expect(saved.characterVersion).toBe('1.1')
+    expect(edited.changes[0]).toMatchObject({ field: 'tags', length: 'fantasy\ntavern'.length })
+
+    // 数组字段进方案协议:currentValue 以数组快照,执行按方案原样落库
+    const proposed = await tools.get('card_plan_propose')!.execute({
+      character: OTHER_CHARACTER,
+      title: 'Rewrite greetings',
+      changes: [{ field: 'alternateGreetings', newValue: ['Rewritten A.', 'Rewritten B.'], note: 'punchier openings' }],
+    })
+    expect(proposed.changes[0]).toMatchObject({
+      field: 'alternateGreetings',
+      currentValue: ['Second opening.', 'Third opening.'],
+      newValue: ['Rewritten A.', 'Rewritten B.'],
+    })
+    await tools.get('card_put')!.execute({ character: OTHER_CHARACTER, planId: proposed.planId, confirmed: true })
+    expect((await store.getCharacter(OTHER_CHARACTER))!.card.data.alternateGreetings).toEqual(['Rewritten A.', 'Rewritten B.'])
+
+    // 数组过期检测:方案后卡被并发改 → stale 而不是覆盖
+    const second = await tools.get('card_plan_propose')!.execute({
+      character: OTHER_CHARACTER,
+      title: 'stale tags',
+      changes: [{ field: 'tags', newValue: ['from-plan'] }],
+    })
+    await tools.get('card_put')!.execute({ character: OTHER_CHARACTER, confirmed: true, changes: [{ field: 'tags', value: ['mutated'] }] })
+    await expect(tools.get('card_put')!.execute({ character: OTHER_CHARACTER, planId: second.planId, confirmed: true }))
+      .rejects.toThrow('stale')
+
+    // 数组校验:非数组拒绝;项数超限拒绝(空白项丢弃后计)
+    await expect(tools.get('card_put')!.execute({
+      character: OTHER_CHARACTER, confirmed: true, changes: [{ field: 'tags', value: 'fantasy' }],
+    })).rejects.toThrow('tags must be an array')
+    await expect(tools.get('card_put')!.execute({
+      character: OTHER_CHARACTER, confirmed: true, changes: [{ field: 'alternateGreetings', value: Array(17).fill('g') }],
+    })).rejects.toThrow('at most 16')
+  })
+
+  it('card_delete is double-gated and cleans chats, groups, state bindings and the original snapshot', async () => {
+    await store.importCharacter(cardPayload('Doomed Card'))
+    const doomed = (await store.getCharacter('Doomed Card'))!.card
+    await store.createChat('Doomed Card', { user_name: 'User', character_name: 'Doomed Card', chat_metadata: {} }, [
+      { is_user: true, is_system: false, send_date: '2026-01-01T00:00:00Z', mes: 'hello' },
+    ])
+    await store.putGroup({
+      id: 'group-doomed', name: 'Doomed Party', members: ['Doomed Card', CHARACTER], allowSelfResponses: false,
+      activationStrategy: 1, disabledMembers: [], chatId: '', chats: [], autoModeDelay: 3,
+    })
+    expect(await saveOriginalSnapshot(tavern, 'Doomed Card', doomed)).toBe(true)
+    // patchState 浅合并:保留既有绑定,只追加专用 solo 绑定
+    const beforeDelete = await store.getState()
+    await store.patchState({
+      activeCharacter: 'Doomed Card',
+      sessionBindings: { ...beforeDelete.sessionBindings, 'wb-doomed': { character: 'Doomed Card' } as never },
+    })
+
+    // 第一重闸门:无确认
+    await expect(tools.get('card_delete')!.execute({ character: 'Doomed Card' })).rejects.toThrow('confirmation required')
+    // 第二重闸门:有聊天时 confirmed 仍拒绝,报聊天数
+    await expect(tools.get('card_delete')!.execute({ character: 'Doomed Card', confirmed: true }))
+      .rejects.toThrow('1 chat log(s)')
+    // 二次确认后:卡/聊天/群组成员/状态/快照全清
+    const deleted = await tools.get('card_delete')!.execute({ character: 'Doomed Card', confirmed: true, deleteChats: true })
+    expect(deleted).toMatchObject({
+      deleted: true, character: 'Doomed Card', deletedChats: 1,
+      removedFromGroups: ['Doomed Party'], snapshotRemoved: true,
+    })
+    expect(await store.getCharacter('Doomed Card')).toBeUndefined()
+    expect(await store.listChats('Doomed Card')).toEqual([])
+    expect((await store.getGroup('Doomed Party'))!.members).toEqual([CHARACTER])
+    const state = await store.getState()
+    expect(state.activeCharacter).toBeUndefined()
+    expect(state.sessionBindings['wb-doomed']).toBeUndefined()
+    expect(await readOriginalSnapshot(tavern, 'Doomed Card')).toBeUndefined()
+    // 无聊天卡的删除不需要 deleteChats
+    await store.importCharacter(cardPayload('Quiet Card'))
+    const quiet = await tools.get('card_delete')!.execute({ character: 'Quiet Card', confirmed: true })
+    expect(quiet).toMatchObject({ deleted: true, deletedChats: 0, removedFromGroups: [], snapshotRemoved: false })
+    await expect(tools.get('card_delete')!.execute({ character: 'Doomed Card', confirmed: true, deleteChats: true }))
+      .rejects.toThrow('not found')
+  })
+
   /* ------------------------------ 面板路由 ------------------------------ */
 
   it('GET card-workbench/plans lists pending plans by default and honours filters', async () => {
@@ -396,10 +524,10 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
       world: 'Panel Lore',
       entries: [{ uid: 0, content: 'nope' }],
     })).rejects.toThrow('confirmation required')
-    // 白名单:未知字段拒绝
+    // 白名单:未知字段拒绝（order 已是合法高级字段,用真未知字段验核）
     await expect(tools.get('world_put')!.execute({
       world: 'Panel Lore', confirmed: true,
-      entries: [{ uid: 0, order: 5 }],
+      entries: [{ uid: 0, bogus: 5 }],
     })).rejects.toThrow('unknown entry field')
 
     const edited = await tools.get('world_put')!.execute({
@@ -427,14 +555,97 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
       [2, 'A quiet harbor.', ['harbor'], false],
     ])
     expect(after!.entries[2]).toMatchObject({ constant: false, order: 100, position: 0 })
+
+    // 高级字段:全白名单写入 + 未提及字段原样保留（uid0 的 disable 保持 true）
+    const advanced = await tools.get('world_put')!.execute({
+      world: 'Panel Lore', confirmed: true,
+      entries: [{
+        uid: 0,
+        comment: 'scene memo', keysecondary: ['north'], constant: true, order: 250, position: 1,
+        depth: 8, probability: 60, selectiveLogic: 3, group: 'scene-group', groupWeight: 40,
+        sticky: 5, cooldown: 2, scanDepth: 10, caseSensitive: true, matchWholeWords: false,
+        triggers: ['dawn'], excludeRecursion: true,
+      }],
+    })
+    expect(advanced.entries).toMatchObject([
+      { uid: 0, created: false, fields: expect.arrayContaining(['comment', 'constant', 'order', 'position', 'sticky']) },
+    ])
+    const advancedAfter = await store.getWorld('Panel Lore')
+    expect(advancedAfter!.entries[0]).toMatchObject({
+      comment: 'scene memo', keysecondary: ['north'], constant: true, order: 250, position: 1,
+      depth: 8, probability: 60, selectiveLogic: 3, group: 'scene-group', groupWeight: 40,
+      sticky: 5, cooldown: 2, scanDepth: 10, caseSensitive: true, matchWholeWords: false,
+      triggers: ['dawn'], excludeRecursion: true, disable: true,
+    })
+    // world_get 摘要只上报偏离缺省的高级字段
+    const advancedSummary = await tools.get('world_get')!.execute({ world: 'Panel Lore' })
+    expect((advancedSummary.entries as Array<Record<string, unknown>>)[0]).toMatchObject({
+      uid: 0, enabled: false, constant: true, order: 250, position: 1, depth: 8,
+      probability: 60, selectiveLogic: 3, group: 'scene-group', groupWeight: 40,
+      sticky: 5, cooldown: 2, scanDepth: 10, caseSensitive: true, matchWholeWords: false,
+      triggers: ['dawn'], excludeRecursion: true,
+    })
+    expect((advancedSummary.entries as Array<Record<string, unknown>>)[2]).not.toHaveProperty('probability')
+
+    // 字段表校验:范围/类型/可空按表拒绝
+    await expect(tools.get('world_put')!.execute({
+      world: 'Panel Lore', confirmed: true, entries: [{ uid: 0, probability: 101 }],
+    })).rejects.toThrow('probability for uid 0')
+    await expect(tools.get('world_put')!.execute({
+      world: 'Panel Lore', confirmed: true, entries: [{ uid: 0, selectiveLogic: 4 }],
+    })).rejects.toThrow('selectiveLogic for uid 0')
+    await expect(tools.get('world_put')!.execute({
+      world: 'Panel Lore', confirmed: true, entries: [{ uid: 0, sticky: -1 }],
+    })).rejects.toThrow('sticky for uid 0')
+    await expect(tools.get('world_put')!.execute({
+      world: 'Panel Lore', confirmed: true, entries: [{ uid: 0, key: ['a', '  '] }],
+    })).rejects.toThrow('key for uid 0')
+    await expect(tools.get('world_put')!.execute({
+      world: 'Panel Lore', confirmed: true, entries: [{ uid: 0, comment: 'x'.repeat(2001) }],
+    })).rejects.toThrow('comment for uid 0')
+    await expect(tools.get('world_put')!.execute({
+      world: 'Panel Lore', confirmed: true, entries: [{ uid: 0, caseSensitive: 'yes' }],
+    })).rejects.toThrow('caseSensitive for uid 0')
+
+    // remove:删除既有条目;与其它字段互斥;不存在的 uid 不能删
+    await expect(tools.get('world_put')!.execute({
+      world: 'Panel Lore', confirmed: true, entries: [{ uid: 0, remove: true, content: 'x' }],
+    })).rejects.toThrow('cannot be combined')
+    await expect(tools.get('world_put')!.execute({
+      world: 'Panel Lore', confirmed: true, entries: [{ uid: 99, remove: true }],
+    })).rejects.toThrow('uid 99 not found in world')
+    const removed = await tools.get('world_put')!.execute({
+      world: 'Panel Lore', confirmed: true,
+      entries: [{ uid: 1, remove: true }, { uid: 3, key: ['bell'], content: 'A bell tower.' }],
+    })
+    expect(removed).toMatchObject({
+      world: 'Panel Lore', entryCount: 3, nextUid: 4,
+      entries: [
+        { uid: 1, created: false, removed: true, fields: [] },
+        { uid: 3, created: true, fields: ['key', 'content'] },
+      ],
+    })
+    const afterRemove = await store.getWorld('Panel Lore')
+    expect(afterRemove!.entries.map((entry) => entry.uid)).toEqual([0, 2, 3])
+
+    // uids 过滤:命中条目全文返回,缺失 uid 上报;默认摘要仍是 500 字符预览
+    await tools.get('world_put')!.execute({
+      world: 'Panel Lore', confirmed: true, entries: [{ uid: 2, content: 'L'.repeat(600) }],
+    })
+    const preview = await tools.get('world_get')!.execute({ world: 'Panel Lore' })
+    expect((preview.entries as Array<Record<string, unknown>>).find((entry) => entry.uid === 2)!.content).toHaveLength(500)
+    const full = await tools.get('world_get')!.execute({ world: 'Panel Lore', uids: [2, 404] })
+    expect((full.entries as Array<Record<string, unknown>>).find((entry) => entry.uid === 2)!.content).toHaveLength(600)
+    expect(full.missingUids).toEqual([404])
+
     await expect(tools.get('world_put')!.execute({
       world: 'No Such World', confirmed: true, entries: [{ uid: 0, content: 'x' }],
     })).rejects.toThrow('not found')
   })
 
-  it('world_list reports the library and world_create seeds a new book behind the confirmation gate', async () => {
+  it('world_list reports the library with linked cards and world_create seeds a new book behind the confirmation gate', async () => {
     const listed = await tools.get('world_list')!.execute({})
-    expect(listed.worlds).toContainEqual({ name: 'Panel Lore', entryCount: 3 })
+    expect(listed.worlds).toContainEqual({ name: 'Panel Lore', entryCount: 3, linkedCards: [] })
 
     // 确认闸门与白名单核与 world_put 同款
     await expect(tools.get('world_create')!.execute({ name: 'Harbor Lore', entries: [{ content: 'x' }] }))
@@ -471,12 +682,100 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
     ])
     expect(book!.entries[0]).toMatchObject({ constant: false, order: 100, position: 0 })
 
-    // 创建后照常走 world_put，world_list/world_get 反映最新条目数
+    // 种子条目带高级字段:建书白名单与 world_put 同表
+    const rich = await tools.get('world_create')!.execute({
+      name: 'Deep Lore', confirmed: true,
+      entries: [{ key: ['abyss'], content: 'Deep down.', constant: true, order: 50, probability: 80, sticky: 3 }],
+    })
+    expect(rich).toEqual({ created: true, world: 'Deep Lore', entryCount: 1, nextUid: 1 })
+    expect((await store.getWorld('Deep Lore'))!.entries[0]).toMatchObject({ uid: 0, constant: true, order: 50, probability: 80, sticky: 3 })
+
+    // 创建后照常走 world_put，world_list/world_get 反映最新条目数与卡链接
     await tools.get('world_put')!.execute({
       world: 'Harbor Lore', confirmed: true, entries: [{ uid: 2, key: ['lighthouse'], content: 'It blinks.' }],
     })
     expect(await tools.get('world_get')!.execute({ world: 'Harbor Lore' })).toMatchObject({ entryCount: 3, nextUid: 3 })
-    expect((await tools.get('world_list')!.execute({})).worlds).toContainEqual({ name: 'Harbor Lore', entryCount: 3 })
+    expect((await tools.get('world_list')!.execute({})).worlds).toContainEqual({ name: 'Harbor Lore', entryCount: 3, linkedCards: [] })
+  })
+
+  it('world_bind attaches/detaches books on cards and reports switches', async () => {
+    await expect(tools.get('world_bind')!.execute({ world: 'Harbor Lore', character: OTHER_CHARACTER }))
+      .rejects.toThrow('confirmation required')
+    await expect(tools.get('world_bind')!.execute({ world: 'No Book', character: OTHER_CHARACTER, confirmed: true }))
+      .rejects.toThrow('not found')
+    await expect(tools.get('world_bind')!.execute({ world: 'Harbor Lore', character: 'Ghost Card', confirmed: true }))
+      .rejects.toThrow('not found')
+
+    const bound = await tools.get('world_bind')!.execute({ world: 'Harbor Lore', character: OTHER_CHARACTER, confirmed: true })
+    expect(bound).toEqual({ character: OTHER_CHARACTER, world: 'Harbor Lore', bound: true })
+    expect((await store.getCharacter(OTHER_CHARACTER))!.card.data.extensions['world']).toBe('Harbor Lore')
+    expect((await tools.get('world_list')!.execute({})).worlds).toContainEqual({ name: 'Harbor Lore', entryCount: 3, linkedCards: [OTHER_CHARACTER] })
+
+    // 重复绑定幂等;换绑回报旧书
+    const again = await tools.get('world_bind')!.execute({ world: 'Harbor Lore', character: OTHER_CHARACTER, confirmed: true })
+    expect(again).toEqual({ character: OTHER_CHARACTER, world: 'Harbor Lore', bound: true, alreadyBound: true })
+    const switched = await tools.get('world_bind')!.execute({ world: 'Blank Lore', character: OTHER_CHARACTER, confirmed: true })
+    expect(switched).toEqual({ character: OTHER_CHARACTER, world: 'Blank Lore', bound: true, previousWorld: 'Harbor Lore' })
+    expect((await store.getCharacter(OTHER_CHARACTER))!.card.data.extensions['world']).toBe('Blank Lore')
+
+    // 解绑错书报当前链接;解绑正确书后链接键消失
+    await expect(tools.get('world_bind')!.execute({ world: 'Harbor Lore', character: OTHER_CHARACTER, unbind: true, confirmed: true }))
+      .rejects.toThrow("currently links 'Blank Lore'")
+    const unbound = await tools.get('world_bind')!.execute({ world: 'Blank Lore', character: OTHER_CHARACTER, unbind: true, confirmed: true })
+    expect(unbound).toEqual({ character: OTHER_CHARACTER, world: 'Blank Lore', bound: false })
+    expect((await store.getCharacter(OTHER_CHARACTER))!.card.data.extensions['world']).toBeUndefined()
+  })
+
+  it('world_delete refuses linked books, then removes the book and clears activeWorlds', async () => {
+    await store.patchState({ activeWorlds: ['Harbor Lore', 'Blank Lore'] })
+    await tools.get('world_bind')!.execute({ world: 'Harbor Lore', character: CHARACTER, confirmed: true })
+    await expect(tools.get('world_delete')!.execute({ world: 'Harbor Lore' })).rejects.toThrow('confirmation required')
+    await expect(tools.get('world_delete')!.execute({ world: 'Harbor Lore', confirmed: true }))
+      .rejects.toThrow(`linked by character card(s) ${CHARACTER}`)
+    await tools.get('world_bind')!.execute({ world: 'Harbor Lore', character: CHARACTER, unbind: true, confirmed: true })
+
+    const deleted = await tools.get('world_delete')!.execute({ world: 'Harbor Lore', confirmed: true })
+    expect(deleted).toEqual({ deleted: true, world: 'Harbor Lore', wasActive: true })
+    expect(await store.getWorld('Harbor Lore')).toBeUndefined()
+    expect((await store.getState()).activeWorlds).toEqual(['Blank Lore'])
+    await expect(tools.get('world_delete')!.execute({ world: 'Harbor Lore', confirmed: true })).rejects.toThrow('not found')
+  })
+
+  it('world_rename re-points card links and activeWorlds; collisions are refused', async () => {
+    await store.patchState({ activeWorlds: ['Blank Lore'] })
+    await tools.get('world_bind')!.execute({ world: 'Blank Lore', character: OTHER_CHARACTER, confirmed: true })
+    await expect(tools.get('world_rename')!.execute({ world: 'Blank Lore', name: 'Panel Lore' })).rejects.toThrow('confirmation required')
+    await expect(tools.get('world_rename')!.execute({ world: 'Blank Lore', name: 'Panel Lore', confirmed: true }))
+      .rejects.toThrow('already exists')
+    await expect(tools.get('world_rename')!.execute({ world: 'Blank Lore', name: 'Blank Lore', confirmed: true }))
+      .rejects.toThrow('already named')
+    await expect(tools.get('world_rename')!.execute({ world: 'No Book', name: 'X Lore', confirmed: true }))
+      .rejects.toThrow('not found')
+
+    const renamed = await tools.get('world_rename')!.execute({ world: 'Blank Lore', name: 'Renamed Lore', confirmed: true })
+    expect(renamed).toEqual({
+      world: 'Renamed Lore', renamedFrom: 'Blank Lore', entryCount: 0,
+      reboundCards: [OTHER_CHARACTER], wasActive: true,
+    })
+    expect(await store.getWorld('Blank Lore')).toBeUndefined()
+    expect((await store.getWorld('Renamed Lore'))!.entries).toEqual([])
+    // 卡链接与 activeWorlds 都指到新名（面板 PUT 路由不回写卡链接,工具面补齐）
+    expect((await store.getCharacter(OTHER_CHARACTER))!.card.data.extensions['world']).toBe('Renamed Lore')
+    expect((await store.getState()).activeWorlds).toEqual(['Renamed Lore'])
+  })
+
+  it('world_copy forks a book verbatim and never overwrites', async () => {
+    await expect(tools.get('world_copy')!.execute({ world: 'Panel Lore', name: 'Renamed Lore' })).rejects.toThrow('confirmation required')
+    await expect(tools.get('world_copy')!.execute({ world: 'Panel Lore', name: 'Renamed Lore', confirmed: true })).rejects.toThrow('already exists')
+    await expect(tools.get('world_copy')!.execute({ world: 'Panel Lore', name: 'Panel Lore', confirmed: true })).rejects.toThrow('needs a new name')
+    await expect(tools.get('world_copy')!.execute({ world: 'No Book', name: 'Any Lore', confirmed: true })).rejects.toThrow('not found')
+
+    const copied = await tools.get('world_copy')!.execute({ world: 'Panel Lore', name: 'Panel Lore Copy', confirmed: true })
+    expect(copied).toEqual({ copied: true, from: 'Panel Lore', to: 'Panel Lore Copy', entryCount: 3 })
+    const source = await store.getWorld('Panel Lore')
+    const fork = await store.getWorld('Panel Lore Copy')
+    expect(fork!.entries).toEqual(source!.entries)
+    expect(fork!.name).toBe('Panel Lore Copy')
   })
 
   /* ------------------------------- 预设工具 ------------------------------- */

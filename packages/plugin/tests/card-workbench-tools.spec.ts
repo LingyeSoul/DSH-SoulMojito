@@ -125,14 +125,17 @@ describe('Card Workbench tools and original snapshots', () => {
     expect(kernel).toContain('world_create')
     expect([...tools.keys()]).toEqual([
       'card_get', 'card_put', 'card_original_get', 'card_restore_original',
-      'card_plan_propose', 'world_list', 'world_get', 'world_put', 'world_create', 'preset_get', 'preset_put', 'chat_log_read',
+      'card_delete', 'card_plan_propose',
+      'world_list', 'world_get', 'world_put', 'world_create',
+      'world_delete', 'world_rename', 'world_bind', 'world_copy',
+      'preset_get', 'preset_put', 'chat_log_read',
       'card_create', 'material_list', 'material_read', 'card_apply_mvu',
     ])
     for (const name of ['card_get', 'card_put', 'card_original_get', 'card_restore_original', 'card_plan_propose', 'chat_log_read']) {
       expect(tools.get(name)!.parameters.properties).toHaveProperty('character')
     }
     // 写入工具的确认闸门在参数面上可见：confirmed 是必填布尔（world/preset 同款）。
-    for (const name of ['card_put', 'card_restore_original', 'world_put', 'world_create', 'preset_put']) {
+    for (const name of ['card_put', 'card_restore_original', 'card_delete', 'world_put', 'world_create', 'world_delete', 'world_rename', 'world_bind', 'world_copy', 'preset_put']) {
       expect(tools.get(name)!.parameters).toMatchObject({ required: expect.arrayContaining(['confirmed']) })
     }
   })
@@ -208,7 +211,8 @@ describe('Card Workbench tools and original snapshots', () => {
     const base = { character: CHARACTER, confirmed: true }
     await expect(tools.get('card_put')!.execute({ ...base, changes: [{ field: 'extensions', value: '{}' }] }))
       .rejects.toThrow('is not editable')
-    await expect(tools.get('card_put')!.execute({ ...base, changes: [{ field: 'systemPrompt', value: 'no' }] }))
+    // 蛇形规范名不是白名单键（工具面用 IR 驼峰名）：防止模型把 spec 字段名直传进来
+    await expect(tools.get('card_put')!.execute({ ...base, changes: [{ field: 'mes_example', value: 'no' }] }))
       .rejects.toThrow('is not editable')
     await expect(tools.get('card_put')!.execute({ ...base, changes: [{ field: 'personality', value: 42 }] }))
       .rejects.toThrow('must be a string')

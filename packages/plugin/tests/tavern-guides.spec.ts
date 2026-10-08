@@ -276,6 +276,26 @@ describe('Conversation Guides (proposal 0009)', () => {
     expect((await listGuides('missing-chat.jsonl')).status).toBe(404)
   })
 
+  it('answers 404 chat not found for empty workbench-style bindings instead of a raw invalid chat id', async () => {
+    // 写卡工作台会话绑定的 character/chatId 为空串，面板曾以此打出 guides//
+    // 空 id：store 的 safeChatFileName 抛 'invalid chat id' 且以 500 裸透传。
+    // HTTP 层统一按「聊天不存在」应答（客户端已同步在该会话形态下禁用指引）。
+    const res = makeResponse()
+    await apiHandler(makeGetRequest('/api/dsh-tavern/guides//'), res)
+    expect(res.statusCode).toBe(404)
+    expect(JSON.parse(res.chunks.join('') || '{}')).toMatchObject({ ok: false, message: 'chat not found' })
+
+    const post = makeResponse()
+    await apiHandler(makeRequest({ text: '不该被写入' }, '/api/dsh-tavern/guides//'), post)
+    expect(post.statusCode).toBe(404)
+    expect(JSON.parse(post.chunks.join('') || '{}')).toMatchObject({ ok: false, message: 'chat not found' })
+
+    const del = makeResponse()
+    await apiHandler(makeDeleteRequest('/api/dsh-tavern/guides///g1'), del)
+    expect(del.statusCode).toBe(404)
+    expect(JSON.parse(del.chunks.join('') || '{}')).toMatchObject({ ok: false, message: 'chat not found' })
+  })
+
   it('rejects the ninth guide per chat with the cap error', async () => {
     const capChat = await store.createChat(CHARACTER, {
       user_name: 'User', character_name: CHARACTER, chat_metadata: { createdAt: new Date().toISOString() },

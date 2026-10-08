@@ -72,10 +72,13 @@ export type TavernSessionBinding =
     /** CardWorkbench session binding（提案 0013）：写卡 Agent 会话。与
      *  agent-novel 同理不绑角色/聊天，character/chatId 为空串；来源聊天身份
      *  存 sourceCharacter/sourceChatId——聊天侧「交给工作台」时每个聊天对应
-     *  一个写卡工作会话，面板自由拉起时两者为空串。 */
+     *  一个写卡工作会话，面板自由拉起时两者为空串。createdCard 记录该会话
+     *  最近一次 card_create 产出的卡名（空串 = 尚未出卡），会话标题与侧边栏
+     *  分组据此改名为卡名。 */
     architecture: 'card-workbench'
     sourceCharacter: string
     sourceChatId: string
+    createdCard: string
   })
 
 /** 一个 DSH session 的模型选择；缺省回落 agentDefaultModel。 */
@@ -806,7 +809,8 @@ export function normalizeTavernSessionBinding(value: unknown): TavernSessionBind
   }
   // CardWorkbench bindings（提案 0013）与 agent-novel 同理：character/chatId
   // 为空串，必须在非空存在性检查之前识别，否则会被降级成 st 绑定。
-  // sourceCharacter/sourceChatId 缺失（旧数据）时补空串 = 自由工作台。
+  // sourceCharacter/sourceChatId 缺失（旧数据）时补空串 = 自由工作台；
+  // createdCard 同理补空串 = 尚未出卡。
   if (candidate.architecture === 'card-workbench') {
     return {
       character: typeof candidate.character === 'string' ? candidate.character : '',
@@ -814,6 +818,7 @@ export function normalizeTavernSessionBinding(value: unknown): TavernSessionBind
       architecture: 'card-workbench',
       sourceCharacter: typeof candidate.sourceCharacter === 'string' ? candidate.sourceCharacter : '',
       sourceChatId: typeof candidate.sourceChatId === 'string' ? candidate.sourceChatId : '',
+      createdCard: typeof candidate.createdCard === 'string' ? candidate.createdCard : '',
     }
   }
   if (typeof candidate.character !== 'string' || candidate.character.trim() === '') return undefined

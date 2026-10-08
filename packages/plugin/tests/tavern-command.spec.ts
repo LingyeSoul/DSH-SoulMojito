@@ -792,6 +792,7 @@ describe('internal Tavern session bridge occupation', () => {
       chatId: '',
       sourceCharacter: '',
       sourceChatId: '',
+      createdCard: '',
     })
     // 面板「新建角色卡 → 写卡 Agent」桥：marker + recompose 各一次，无占位 turn。
     expect(agent.session.events).toEqual([{ type: 'agent-preset/selected', data: { agentPreset: 'card-workbench' } }])
@@ -820,13 +821,22 @@ describe('internal Tavern session bridge occupation', () => {
       chatId: '',
       sourceCharacter: CHARACTER,
       sourceChatId: chatId,
+      createdCard: '',
     })
-    // 同身份重复仍幂等：不叠加 marker、不重复 recompose。
+    // 同身份重复仍幂等：不叠加 marker、不重复 recompose，也不抹掉出卡后记下的
+    // 卡名（会话标题与侧边栏分组的数据源）。
+    await store.updateState((state) => ({
+      sessionBindings: {
+        ...state.sessionBindings,
+        'session-workbench-source': { ...state.sessionBindings['session-workbench-source']!, createdCard: '已出卡' },
+      },
+    }))
     const recomposeCount = recomposeCalls.length
     const again = await handler({ agent, rawInput: base64Url({ action: 'workbench-open', sourceCharacter: CHARACTER, sourceChatId: chatId }) })
     expect(again.kind).toBe('success')
     expect(agent.session.events.filter((event) => event.type === 'agent-preset/selected')).toHaveLength(1)
     expect(recomposeCalls).toHaveLength(recomposeCount)
+    expect((await store.getState()).sessionBindings['session-workbench-source']).toMatchObject({ sourceCharacter: CHARACTER, sourceChatId: chatId, createdCard: '已出卡' })
     // 已绑定会话拒绝换绑另一个来源（自由工作台身份也不行），绑定保持原身份。
     await expect(handler({ agent, rawInput: base64Url({ action: 'workbench-open' }) })).rejects.toThrow('already bound to another chat')
     expect((await store.getState()).sessionBindings['session-workbench-source']).toMatchObject({ sourceCharacter: CHARACTER, sourceChatId: chatId })

@@ -21,12 +21,15 @@ import * as path from 'node:path'
 
 export type CardPlanStatus = 'pending' | 'approved' | 'rejected' | 'applied'
 
+/** 方案字段值：文本字段为字符串；tags/alternateGreetings 整组替换为字符串数组。 */
+export type CardPlanValue = string | string[]
+
 export interface CardPlanChange {
-  /** 卡字段名（白名单校验在 agent 工具层，存储层只保证非空字符串） */
+  /** 卡字段名（白名单校验在 agent 工具层，存储层只保证值形状） */
   field: string
   /** 方案提出时的现行值（agent 工具层从活卡快照，执行前用作过期检测） */
-  currentValue: string
-  newValue: string
+  currentValue: CardPlanValue
+  newValue: CardPlanValue
   /** 给用户看的变更理由（可选） */
   note?: string
 }
@@ -80,7 +83,7 @@ function normalizePlan(raw: unknown): CardPlan | undefined {
   for (const entry of record.changes) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return undefined
     const change = entry as Record<string, unknown>
-    if (typeof change.field !== 'string' || typeof change.currentValue !== 'string' || typeof change.newValue !== 'string') return undefined
+    if (typeof change.field !== 'string' || !isValidPlanValue(change.currentValue) || !isValidPlanValue(change.newValue)) return undefined
     if (change.note !== undefined && typeof change.note !== 'string') return undefined
     changes.push(change.note === undefined
       ? { field: change.field, currentValue: change.currentValue, newValue: change.newValue }
@@ -98,16 +101,28 @@ function normalizePlan(raw: unknown): CardPlan | undefined {
   }
 }
 
+/** 值形状：字符串或字符串数组（数组项限非空字符串，项数与总长上限防异常膨胀）。 */
+function isValidPlanValue(value: unknown): value is CardPlanValue {
+  if (typeof value === 'string') return true
+  if (!Array.isArray(value) || value.length > 64) return false
+  return value.every((item) => typeof item === 'string')
+}
+
+/** 值体量：字符串取长度；数组取 join 后长度（存储层只防异常膨胀，分档在工具层）。 */
+function planValueLength(value: CardPlanValue): number {
+  return typeof value === 'string' ? value.length : value.join('\n').length
+}
+
 function validateChangeShape(entry: unknown, index: number): CardPlanChange {
   if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
     throw new Error(`changes[${index}] must be an object of { field, currentValue, newValue, note? }`)
   }
   const { field, currentValue, newValue, note } = entry as Record<string, unknown>
   if (typeof field !== 'string' || field.trim() === '') throw new Error(`changes[${index}].field must be a non-empty string`)
-  if (typeof currentValue !== 'string') throw new Error(`changes[${index}].currentValue for field '${field}' must be a string`)
-  if (typeof newValue !== 'string') throw new Error(`changes[${index}].newValue for field '${field}' must be a string`)
-  if (currentValue.length > MAX_VALUE_LENGTH) throw new Error(`changes[${index}].currentValue for field '${field}' exceeds the ${MAX_VALUE_LENGTH}-character limit`)
-  if (newValue.length > MAX_VALUE_LENGTH) throw new Error(`changes[${index}].newValue for field '${field}' exceeds the ${MAX_VALUE_LENGTH}-character limit`)
+  if (!isValidPlanValue(currentValue)) throw new Error(`changes[${index}].currentValue for field '${field}' must be a string or string array`)
+  if (!isValidPlanValue(newValue)) throw new Error(`changes[${index}].newValue for field '${field}' must be a string or string array`)
+  if (planValueLength(currentValue) > MAX_VALUE_LENGTH) throw new Error(`changes[${index}].currentValue for field '${field}' exceeds the ${MAX_VALUE_LENGTH}-character limit`)
+  if (planValueLength(newValue) > MAX_VALUE_LENGTH) throw new Error(`changes[${index}].newValue for field '${field}' exceeds the ${MAX_VALUE_LENGTH}-character limit`)
   if (note !== undefined && (typeof note !== 'string' || note.length > MAX_NOTE_LENGTH)) {
     throw new Error(`changes[${index}].note must be a string of at most ${MAX_NOTE_LENGTH} characters`)
   }
@@ -121,7 +136,7 @@ function validateChangeShape(entry: unknown, index: number): CardPlanChange {
 export async function proposeCardPlan(
   dir: string,
   character: string,
-  input: { title: string; changes: Array<{ field: string; currentValue: string; newValue: string; note?: string }> },
+  input: { title: string; changes: Array<{ field: string; currentValue: CardPlanValue; newValue: CardPlanValue; note?: string }> },
 ): Promise<CardPlan> {
   if (typeof character !== 'string' || character.trim() === '') throw new Error('character must be a non-empty string')
   if (typeof input.title !== 'string' || input.title.trim() === '' || input.title.length > MAX_TITLE_LENGTH) {

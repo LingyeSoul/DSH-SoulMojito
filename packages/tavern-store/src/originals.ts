@@ -67,6 +67,21 @@ export async function readOriginalSnapshot(root: string, characterName: string):
 }
 
 /**
+ * 删除原版快照（删卡时清理）；返回是否存在并删除。不清理会留下幽灵快照：
+ * 同名卡重建/再导入时 saveOriginalSnapshot 的「首个胜出」会保住陈旧快照，
+ * card_restore_original 就会把错误的旧卡写回去。
+ */
+export async function deleteOriginalSnapshot(root: string, characterName: string): Promise<boolean> {
+  try {
+    await fs.unlink(originalSnapshotPath(root, characterName))
+    return true
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw cause
+  }
+}
+
+/**
  * 恢复原版：把快照写回工作版，返回新工作版；无快照返回 undefined。
  * 工作版存在时走 updateCharacter（保留 PNG/CHARX 容器、迁移文件名与聊天
  * 目录，传规范 JSON 形态触发整体替换分支而非 data 合并，raw 袋也回到

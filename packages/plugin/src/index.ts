@@ -457,6 +457,19 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
   }), 'dsh-tavern: API')
 }
 
+/** guides 路由的聊天快照读取：store 的 safeChatFileName 对空/畸形 chatId 抛
+ * 'invalid chat id'（写卡工作台等会话的绑定 character/chatId 恒为空串，面板
+ * 曾经以此打出空 id、收到裸 500）——HTTP 层统一按「聊天不存在」应答，不把
+ * 内部文件名校验错误透传给客户端；其余异常照常上抛。 */
+async function readGuidesSnapshot(db: TavernStore, character: string, chatId: string) {
+  try {
+    return await db.getChatSnapshot(character, chatId)
+  } catch (cause) {
+    if (cause instanceof Error && cause.message === 'invalid chat id') return undefined
+    throw cause
+  }
+}
+
 async function handleApi(ctx, req, res) {
   const url = new URL(req.url ?? API, 'http://localhost')
   const route = url.pathname.slice(API.length).replace(/^\//, '')
@@ -531,7 +544,7 @@ async function handleApi(ctx, req, res) {
     if (found) {
       return serveCharacterAvatar(res, db, name, found)
     }
-    // 群组：回落第一个启用成员的头像
+    // 群组：回落第一个启用成员的头像；成员都没有头像时给默认替代头像
     const group = await db.getGroup(name)
     if (group) {
       const enabled = group.members.filter((member) => !group.disabledMembers.includes(member))
@@ -539,6 +552,7 @@ async function handleApi(ctx, req, res) {
         const memberFile = await db.getCharacter(member)
         if (memberFile) return serveCharacterAvatar(res, db, member, memberFile)
       }
+      return sendAvatarFallback(res, name)
     }
     return sendJson(res, 404, { ok: false, message: 'character avatar not found' })
   }
@@ -609,7 +623,7 @@ async function handleApi(ctx, req, res) {
     if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
     const character = decodeURIComponent(segments[0])
     const chatId = decodeURIComponent(segments[1])
-    const snapshot = await db.getChatSnapshot(character, chatId)
+    const snapshot = await readGuidesSnapshot(db, character, chatId)
     if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
     if (method === 'GET') {
       return sendJson(res, 200, {
@@ -636,7 +650,7 @@ async function handleApi(ctx, req, res) {
     const character = decodeURIComponent(segments[0])
     const chatId = decodeURIComponent(segments[1])
     const id = decodeURIComponent(segments[2])
-    const snapshot = await db.getChatSnapshot(character, chatId)
+    const snapshot = await readGuidesSnapshot(db, character, chatId)
     if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
     const removed = removeGuide(normalizeGuides(snapshot.chat.header.chat_metadata?.guides), id)
     if (!removed.removed) return sendJson(res, 404, { ok: false, message: 'guide not found' })
@@ -1060,7 +1074,13 @@ async function handleApi(ctx, req, res) {
   if (method === 'GET' && route.startsWith('persona-avatar/')) {
     const name = decodeURIComponent(route.slice('persona-avatar/'.length))
     const avatar = await db.getPersonaAvatar(name)
-    if (avatar === undefined) return sendJson(res, 404, { ok: false, message: 'persona avatar not found' })
+    if (avatar === undefined) {
+      // persona 存在但没有头像 PNG（如 prompt 新建的 persona）：默认替代头像；
+      // persona 本身不存在仍然 404，与 character 路由的语义对齐。
+      const persona = await db.getPersona(name)
+      if (persona) return sendAvatarFallback(res, name)
+      return sendJson(res, 404, { ok: false, message: 'persona avatar not found' })
+    }
     res.statusCode = 200
     res.setHeader('content-type', 'image/png')
     res.setHeader('cache-control', 'private, max-age=300')
@@ -2185,6 +2205,8 @@ async function handleWorkbenchOpenCommand(
         chatId: '',
         sourceCharacter: payload.sourceCharacter,
         sourceChatId: payload.sourceChatId,
+        // 幂等重发不抹掉出卡后记下的卡名（侧边栏分组与会话标题的数据源）。
+        createdCard: previous?.architecture === 'card-workbench' ? previous.createdCard : '',
       },
     },
   }))
@@ -2831,16 +2853,41 @@ async function serveCharacterAvatar(res, db, name, found) {
     const container = await db.exportCharacter(name)
     const asset = found.card.data.assets?.find((item) => item.type === 'icon' && item.uri.startsWith('embeded://'))
       ?? found.card.data.assets?.find((item) => item.uri.startsWith('embeded://') && item.ext === 'png')
-    if (!asset) return sendJson(res, 404, { ok: false, message: 'character avatar not found' })
+    if (!asset) return sendAvatarFallback(res, name)
     bytes = decodeCharxAsset(container, asset.uri.slice('embeded://'.length))
     contentType = imageContentType(asset.ext)
   } else {
-    return sendJson(res, 404, { ok: false, message: 'character avatar not found' })
+    return sendAvatarFallback(res, name)
   }
   res.statusCode = 200
   res.setHeader('content-type', contentType)
   res.setHeader('cache-control', 'private, max-age=300')
   res.end(Buffer.from(bytes))
+}
+
+/**
+ * 默认替代头像：角色卡/persona/群组没有头像图像时，按名字生成首字母色块 SVG。
+ * 色相由名字哈希决定（同名稳定、不同名尽量不同），饱和度/明度取双主题都可读的
+ * 中间值；客户端全部头像位都是正方形 + object-fit:cover，一张 1:1 viewBox 的
+ * SVG 覆盖所有渲染面，无需客户端改动。实体不存在仍然 404（真正的错误）。
+ */
+function sendAvatarFallback(res, name) {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < name.length; index++) {
+    hash ^= name.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  const hue = (hash >>> 0) % 360
+  const first = Array.from(name.trim())[0]
+  const initial = first ? first.toUpperCase() : '?'
+  const safeInitial = initial.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">`
+    + `<rect width="128" height="128" fill="hsl(${hue},42%,46%)"/>`
+    + `<text x="64" y="66" fill="#ffffff" opacity="0.95" font-family="-apple-system,'Segoe UI','Microsoft YaHei',system-ui,sans-serif" font-size="60" font-weight="600" text-anchor="middle" dominant-baseline="central">${safeInitial}</text></svg>`
+  res.statusCode = 200
+  res.setHeader('content-type', 'image/svg+xml')
+  res.setHeader('cache-control', 'private, max-age=300')
+  res.end(svg)
 }
 
 async function isGroupChat(db, characterName, chatId) {

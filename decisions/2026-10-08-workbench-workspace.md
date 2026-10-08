@@ -23,6 +23,12 @@
 - 原生侧边栏会话树对两个插件内部工作区整组隐藏；自绘 TavernSidebar 增加
   「写卡工作台」分组列出全部工作台会话（来源聊天命名 + 自由工作台），并提供
   自由工作台入口。
+- 出卡后会话改名（同日补充）：card_create 成功后，绑定记 `createdCard`
+  （侧边栏分组标签改为卡名，最新出卡胜出；workbench-open 幂等重写保留该
+  字段），宿主标题经 agent 作用域 ctx 运行时探测 `sessionTitle` 服务后
+  `rename(活会话, 卡名)` 固定（对齐 deduce.ts 的 subagents 探测模式，不 inject
+  声明）。两路 best-effort、失败不阻断出卡；非 card-workbench 绑定的会话
+  不受影响。
 
 ## Alternatives considered
 
