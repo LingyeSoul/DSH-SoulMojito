@@ -57,6 +57,7 @@ import { isNovelAuthorMessage, receiveAuthorMessage } from './agent-novel/requir
 import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
 import { addGuide, emitGuidesChanged, formatGuidesBlock, normalizeGuides, removeGuide } from './guides.js'
 import {
+  overlayScopedVariables,
   readChatVariables,
   readMvuReceipts,
   recordMvuTurnReceipt,
@@ -1311,6 +1312,10 @@ async function handleApi(ctx, req, res) {
   // MVU 状态（提案 0012 P1）：变量 + 回执快照；卡片约定字段
   // data.extensions.agentTavern.statusTemplate（0013 工作台产出）存在时附带
   // 模板化 renderedHtml（接线点）；渲染失败降级为不返回该字段，不 500。
+  // 变量源按绑定架构取：AgentTavern 聊天的权威源是 chat 作用域 VariableStore
+  // （variable_set/patch/delete 与 tavern_variable_settle 全族都写那里，从不写
+  // chat_metadata.variables），扁平点分名覆盖回嵌套树后与 ST 共用同一份显示与
+  // 模板语义；ST 绑定或未绑定的聊天不回读，避免架构切换后的残留值污染 ST 变量。
   if (method === 'GET' && route.startsWith('mvu/status/')) {
     const rest = route.slice('mvu/status/'.length)
     const separator = rest.indexOf('/')
@@ -1320,16 +1325,22 @@ async function handleApi(ctx, req, res) {
     const snapshot = await db.getChatSnapshot(characterName, chatId)
     if (!snapshot) return sendJson(res, 404, { ok: false, message: 'character or chat not found' })
     const chat = snapshot.chat
-    const variables = readChatVariables(chat)
+    const state = await db.getState()
     const receipts = readMvuReceipts(chat)
+    const agentTavernBound = Object.values(state.sessionBindings).some((binding) =>
+      binding.architecture === 'agent-tavern' && binding.chatId === chatId && binding.character === characterName)
+    const scopedVariables = agentTavernBound ? await (await variables()).list('chat', chatId, '', 100) : []
+    const displayVariables = scopedVariables.length > 0
+      ? overlayScopedVariables(readChatVariables(chat), scopedVariables)
+      : readChatVariables(chat)
     const character = await db.getCharacter(characterName)
     const statusTemplate = character ? statusTemplateOf(character.card) : undefined
     let renderedHtml: string | undefined
     if (statusTemplate !== undefined) {
-      const state = await db.getState()
       try {
         renderedHtml = await renderMvuStatusTemplate({
           db, state, characterName, character: character!, chat, chatId, template: statusTemplate,
+          localVariables: displayVariables,
         })
       } catch {
         // 渲染失败降级：不返回 renderedHtml，状态接口本身不失败
@@ -1337,8 +1348,9 @@ async function handleApi(ctx, req, res) {
     }
     return sendJson(res, 200, {
       ok: true,
-      available: Object.keys(variables).length > 0,
-      variables,
+      // 回执本身也是可展示内容：只有失败回执（全项失败、无变量落盘）时面板仍需可见可读。
+      available: Object.keys(displayVariables).length > 0 || receipts.length > 0,
+      variables: displayVariables,
       receipts,
       ...(renderedHtml !== undefined ? { renderedHtml } : {}),
     })

@@ -31,7 +31,7 @@
 - 可选的普通 Agent 人格注入，默认关闭。
 - AgentTavern 原生模式：单角色新聊天默认复用 DSH AgentLoop、原生 composer、Stop、错误处理和统计；角色、世界书、场景、记忆和变量通过会话级工具按需读取，原生事件幂等投影回 Tavern JSONL。可选开关会在新 AgentTavern 会话初始化时一次性预载角色信息和常驻世界书条目，默认关闭且不追溯修改已有会话。现有 ST 兼容架构继续保留。
 - AgentTavern managed 模式：保持关闭。该门禁的宿主能力审计基于 DSH `0.1.0-rc.6`（宿主尚未提供 `agent/context` 历史投影和 projection-aware compaction）；`0.2.0-rc.2` 已确认仍未提供该 seam。插件不会把普通 compaction 冒充为主动遗忘，也不会静默回退到伪 managed 模式。详见 [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)。
-- MVU 变量结算：变量由后台按卡内规则做**确定性脚本结算**（与 flizzywine 的后台 LLM 结算是不同的架构选择，日常结算零额外模型开销），正文不再夹带状态栏。每轮产出变量回执（每项变更的前后值、原因、失败项），失败项可单独重试而不动正文；右侧状态栏由固定模板渲染，不随流式生成掉格式。AgentTavern 侧提供 `tavern_variable_settle` 工具，ST 侧走同一结算执行器与回执投影。详见 [`docs/proposals/0012-mvu-settlement.md`](docs/proposals/0012-mvu-settlement.md)。
+- MVU 变量结算：变量由后台按卡内规则做**确定性脚本结算**（与 flizzywine 的后台 LLM 结算是不同的架构选择，日常结算零额外模型开销），正文不再夹带状态栏。每轮产出变量回执（每项变更的前后值、原因、失败项），失败项可单独重试而不动正文；固定状态栏模板由变量渲染，不随流式生成掉格式。面板与状态栏在两个架构表面都可达：ST 挂在聊天视图顶部，AgentTavern 从会话标题栏按钮弹出；变量源按绑定架构取（ST 读 `chat_metadata.variables`，AgentTavern 聊天读 chat 作用域变量存储并覆盖回同一棵嵌套树），只有回执、没有变量落盘的失败轮同样可见。AgentTavern 侧提供 `tavern_variable_settle` 工具，ST 侧走同一结算执行器与回执投影。详见 [`docs/proposals/0012-mvu-settlement.md`](docs/proposals/0012-mvu-settlement.md)。
 - 卡片工作台：`dsh-tavern/card-workbench` agent preset。用对话描述想改什么，Agent 先给出方案，经确认面板（diff 视图）确认后才写入——写入工具必须携带已确认方案的 `planId`。支持修改人物卡/世界书/预设、空白建卡、从素材或剧本提取人物制卡、card-to-mvu 转换（写入固定状态栏模板与新聊天初始变量），以及把指定聊天连同楼层范围交给工作台排错。导入资产时写一次原版快照，随时可恢复原版。写卡 Agent 落盘后面板自动吸收：打开面板即重取最新资产，页面可见期间按 store 变更水位（3s）轮询，写入到列表可见不需手动刷新页面。详见 [`docs/proposals/0013-card-workbench.md`](docs/proposals/0013-card-workbench.md)。
 - 剧本游玩：TXT/Markdown/EPUB 小说、大纲或剧本导入为剧本资产，与人物卡一对一绑定，新开局自动按剧本推进；只按进度召回附近片段，不整本注入上下文。剧本块是参考不是约束：玩家随时可偏离，只有正文实际覆盖当前片段的关键事件才推进进度；右侧剧本卡实时显示进度（是进度展示，不是跳章按钮）。详见 [`docs/proposals/0014-script-play.md`](docs/proposals/0014-script-play.md)。
 - 美化前端：助手消息中的完整 HTML 文档或 `html` 代码块会在隔离 iframe 中运行，支持内联 CSS、JavaScript 和常用 CDN 资源；普通文本与不完整流式内容仍按文本显示。
@@ -291,7 +291,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：57 个测试文件、758 项测试通过；13 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、内部工作区、client VM mount 和 V4 session admission）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
+当前基线：57 个测试文件、764 项测试通过（5 项需隔离 DSH runtime，缺失时跳过）；14 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount 和 V4 session admission）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 

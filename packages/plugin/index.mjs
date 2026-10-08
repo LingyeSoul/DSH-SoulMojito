@@ -10823,6 +10823,21 @@ function diffVariables(before, after) {
   walk("", before, after);
   return changes.sort((left, right) => left.name.localeCompare(right.name));
 }
+function overlayScopedVariables(base, entries) {
+  const tree = deepClone(base);
+  for (const entry of entries) {
+    const segments = entry.name.split(".");
+    const leaf = segments.pop();
+    let cursor = tree;
+    for (const segment of segments) {
+      const next = cursor[segment];
+      if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+      cursor = cursor[segment];
+    }
+    cursor[leaf] = entry.value;
+  }
+  return tree;
+}
 function readMvuReceipts(chat) {
   const raw = plainObject(chat?.header?.chat_metadata?.mvu)?.receipts;
   if (!Array.isArray(raw)) return [];
@@ -10961,7 +10976,7 @@ async function renderMvuStatusTemplate(input) {
       books
     },
     {
-      local: deepClone(readChatVariables(chat)),
+      local: deepClone(input.localVariables ?? readChatVariables(chat)),
       global: { ...input.state.scriptGlobals },
       initial: deepClone(plainObject(chat.header.chat_metadata[INITIAL_VARIABLES_KEY]) ?? {})
     }
@@ -14431,13 +14446,15 @@ async function handleApi(ctx, req, res) {
     const snapshot2 = await db.getChatSnapshot(characterName, chatId);
     if (!snapshot2) return sendJson(res, 404, { ok: false, message: "character or chat not found" });
     const chat = snapshot2.chat;
-    const variables2 = readChatVariables(chat);
+    const state = await db.getState();
     const receipts = readMvuReceipts(chat);
+    const agentTavernBound = Object.values(state.sessionBindings).some((binding) => binding.architecture === "agent-tavern" && binding.chatId === chatId && binding.character === characterName);
+    const scopedVariables = agentTavernBound ? await (await variables()).list("chat", chatId, "", 100) : [];
+    const displayVariables = scopedVariables.length > 0 ? overlayScopedVariables(readChatVariables(chat), scopedVariables) : readChatVariables(chat);
     const character = await db.getCharacter(characterName);
     const statusTemplate = character ? statusTemplateOf(character.card) : void 0;
     let renderedHtml;
     if (statusTemplate !== void 0) {
-      const state = await db.getState();
       try {
         renderedHtml = await renderMvuStatusTemplate({
           db,
@@ -14446,15 +14463,17 @@ async function handleApi(ctx, req, res) {
           character,
           chat,
           chatId,
-          template: statusTemplate
+          template: statusTemplate,
+          localVariables: displayVariables
         });
       } catch {
       }
     }
     return sendJson(res, 200, {
       ok: true,
-      available: Object.keys(variables2).length > 0,
-      variables: variables2,
+      // 回执本身也是可展示内容：只有失败回执（全项失败、无变量落盘）时面板仍需可见可读。
+      available: Object.keys(displayVariables).length > 0 || receipts.length > 0,
+      variables: displayVariables,
       receipts,
       ...renderedHtml !== void 0 ? { renderedHtml } : {}
     });
@@ -16027,7 +16046,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.0".trim() : "";
-  const commit = true ? normalizeCommit("7c1217b") : void 0;
+  const commit = true ? normalizeCommit("6fead34") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

@@ -585,6 +585,7 @@ window.__ModuleLoader__.load({
       'mvu.failures': 'Failures',
       'mvu.retry': 'Retry settlement',
       'mvu.retrying': 'Retrying…',
+      'mvu.unavailable': 'No variables or receipts in this chat',
       'script.progressTitle': 'Script progress',
       'script.position': 'Segment {current} of {total}',
       'script.alignedAt': 'Aligned {time}',
@@ -1079,6 +1080,7 @@ window.__ModuleLoader__.load({
       'mvu.failures': '失败项',
       'mvu.retry': '重试结算',
       'mvu.retrying': '重试中…',
+      'mvu.unavailable': '本聊暂无变量或回执',
       'script.progressTitle': '剧本进度',
       'script.position': '片段 {current} / {total}',
       'script.alignedAt': '对齐于 {time}',
@@ -3867,10 +3869,12 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', disabled: blocked, onClick: () => generate(true) }, t('candidates.regenerate')))) : null)
     }
 
-    // MVU 状态与回执（提案 0012 P1）：聊天视图顶部的常驻状态面板，ST 与
-    // AgentTavern 聊天同样适用（状态 API 不限架构）。available=false（本局无
-    // 变量）时整块隐藏；renderedHtml 存在（卡带 statusTemplate）时用
-    // FrontendFrame 同款沙箱渲染，否则退回变量键值表（嵌套对象折叠成路径.值）。
+    // MVU 状态与回执（提案 0012 P1）：ST 聊天挂在 TavernView 顶部的常驻面板，
+    // AgentTavern 会话改由标题栏按钮弹出同一面板（embedded 变体）——原生
+    // conversation 是宿主表面，插件没有可插入正文区的 slot，标题栏是两架构共有
+    // 的插件挂载点。available=false（本局无变量也无回执）时整块隐藏；renderedHtml
+    // 存在（卡带 statusTemplate）时用 FrontendFrame 同款沙箱渲染，否则退回变量
+    // 键值表（嵌套对象折叠成路径.值）。
     // 重试按钮只对 ST 绑定暴露——POST mvu/retry 重跑的是 ST 生成链路的模板
     // 输出渲染（AgentTavern 会话服务端 409 TAVERN_ARCHITECTURE_CONFLICT）；群聊
     // 走 ST 链路，服务端按楼层发言人回落支持重试（src/mvu.ts），同样暴露。
@@ -3895,7 +3899,7 @@ window.__ModuleLoader__.load({
       return text.length > 96 ? `${text.slice(0, 95)}…` : text
     }
 
-    function TavernMvuStatus({ sessionId }) {
+    function TavernMvuStatus({ sessionId, embedded = false }) {
       const state = useTavernStore()
       const t = useTranslate()
       const binding = state.bootstrap.state.sessionBindings?.[sessionId]
@@ -3961,7 +3965,10 @@ window.__ModuleLoader__.load({
           }
         })()
       }
-      if (!binding || !status || status.available !== true) return null
+      // 内嵌（标题栏弹出）时无内容也给出提示：用户是主动点开的，空面板比提示更困惑
+      if (!binding || !status || status.available !== true) {
+        return embedded ? h('p', { className: 'dt-muted' }, t('mvu.unavailable')) : null
+      }
       const variables = flattenMvuVariables(status.variables)
       const visibleReceipts = (showAllReceipts ? receipts : receipts.slice(-5)).slice().reverse()
       const hiddenReceipts = Math.max(0, receipts.length - 5)
@@ -4301,6 +4308,18 @@ window.__ModuleLoader__.load({
         document.addEventListener('mousedown', closeOutside)
         return () => document.removeEventListener('mousedown', closeOutside)
       }, [rewriteOpen])
+      // MVU 面板的标题栏挂载（AgentTavern 会话没有 TavernView）：弹出层模式与
+      // 带意见重写一致——绝对定位 + 点外关闭，锚定 header 向下展开。
+      const [mvuOpen, setMvuOpen] = useState(false)
+      const mvuRef = useRef(null)
+      useEffect(() => {
+        if (!mvuOpen) return undefined
+        const closeOutside = (event) => {
+          if (!mvuRef.current?.contains(event.target)) setMvuOpen(false)
+        }
+        document.addEventListener('mousedown', closeOutside)
+        return () => document.removeEventListener('mousedown', closeOutside)
+      }, [mvuOpen])
       if (!active || !binding) return null
       if (novelId !== null) {
         const novel = novelSummary || { title: novelId, status: 'active' }
@@ -4388,12 +4407,24 @@ window.__ModuleLoader__.load({
                   h('div', { className: 'dt-rewrite-actions' },
                     h('button', { type: 'button', onClick: () => setRewriteOpen(false) }, t('message.cancel')),
                     h('button', { type: 'button', className: 'dt-rewrite-go', disabled: run.busy, onClick: submitRewrite }, t('view.rewriteSubmit')))) : null))
-            : h('button', {
-              type: 'button',
-              title: t('view.forkArchitecture', { architecture: architectureLabel('st') }),
-              disabled: run.busy,
-              onClick: () => void forkTavernArchitecture(PanelHost.context, sessionId, binding),
-            }, h(IconAgentPresetOutline16)),
+            : h(React.Fragment, null,
+              h('button', {
+                type: 'button',
+                title: t('view.forkArchitecture', { architecture: architectureLabel('st') }),
+                disabled: run.busy,
+                onClick: () => void forkTavernArchitecture(PanelHost.context, sessionId, binding),
+              }, h(IconAgentPresetOutline16)),
+              // AgentTavern 的 native conversation 由宿主渲染，插件正文区没有
+              // 可插入的 slot：MVU 面板以标题栏弹出层挂载（ST 走 TavernView 内联面板）
+              h('span', { className: 'dt-mvu-slot', ref: mvuRef },
+                h('button', {
+                  type: 'button',
+                  title: t('mvu.title'),
+                  'aria-label': t('mvu.title'),
+                  'aria-expanded': mvuOpen,
+                  onClick: () => setMvuOpen(!mvuOpen),
+                }, h(IconDataOutline16)),
+                mvuOpen ? h('div', { className: 'dt-mvu-pop' }, h(TavernMvuStatus, { sessionId, embedded: true })) : null)),
           h('button', {
             type: 'button',
             title: t('view.openGuides'),
@@ -7444,11 +7475,13 @@ window.__ModuleLoader__.load({
         @media(max-width:900px){.dt-novel-detail{grid-template-columns:1fr}}
         @media(max-width:700px){.dt-novel-form-grid{grid-template-columns:1fr}.dt-novel-form-wide{grid-column:auto}}
         .dt-header-actions{display:flex;align-items:center;gap:2px;flex:none}
-        .dt-header-actions>button,.dt-rewrite>button{width:24px;height:24px;border-radius:5px;display:grid;place-items:center;flex:none;color:inherit;background:transparent;border:0;cursor:pointer;padding:0}
-        .dt-header-actions>button:hover,.dt-rewrite>button:hover{background:var(--dsw-alias-interactive-bg-hover)}
-        .dt-header-actions>button:disabled,.dt-rewrite>button:disabled,.dt-rewrite-actions>button:disabled,.dt-candidates button:disabled{cursor:not-allowed;opacity:.45}
+        .dt-header-actions>button,.dt-rewrite>button,.dt-mvu-slot>button{width:24px;height:24px;border-radius:5px;display:grid;place-items:center;flex:none;color:inherit;background:transparent;border:0;cursor:pointer;padding:0}
+        .dt-header-actions>button:hover,.dt-rewrite>button:hover,.dt-mvu-slot>button:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        .dt-header-actions>button:disabled,.dt-rewrite>button:disabled,.dt-mvu-slot>button:disabled,.dt-rewrite-actions>button:disabled,.dt-candidates button:disabled{cursor:not-allowed;opacity:.45}
         .dt-rewrite{position:relative;display:inline-flex}
         .dt-rewrite-pop{z-index:20;position:absolute;top:calc(100% + 8px);right:0;width:min(320px,calc(100vw - 32px));display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--dsw-alias-border-inverted);border-radius:12px;background:var(--dsw-specific-menu,var(--dsw-alias-bg-base));box-shadow:var(--dsw-shadow-lv3);color:var(--dsw-alias-label-primary)}
+        .dt-mvu-slot{position:relative;display:inline-flex}
+        .dt-mvu-pop{z-index:20;position:absolute;top:calc(100% + 8px);right:0;width:min(360px,calc(100vw - 32px));max-height:min(60vh,540px);overflow:auto;padding:6px;border:1px solid var(--dsw-alias-border-inverted);border-radius:12px;background:var(--dsw-specific-menu,var(--dsw-alias-bg-base));box-shadow:var(--dsw-shadow-lv3);color:var(--dsw-alias-label-primary)}
         .dt-rewrite-pop textarea{box-sizing:border-box;width:100%;min-height:72px;max-height:180px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:7px 9px;font:inherit;font-size:13px;line-height:18px;outline:none}
         .dt-rewrite-pop textarea:focus{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 20%,transparent)}
         .dt-rewrite-actions{display:flex;justify-content:flex-end;gap:8px}

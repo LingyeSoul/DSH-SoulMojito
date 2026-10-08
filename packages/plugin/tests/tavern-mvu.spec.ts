@@ -3,11 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { apply } from '../src/index.js'
-import { TavernStore } from '../../tavern-store/src/index.js'
+import { TavernStore, VariableStore } from '../../tavern-store/src/index.js'
 import {
   appendMvuReceipt,
   diffVariables,
   MVU_RECEIPTS_LIMIT,
+  overlayScopedVariables,
   readMvuReceipts,
   recordMvuTurnReceipt,
   type MvuReceipt,
@@ -61,6 +62,24 @@ describe('diffVariables', () => {
     ])
     expect(diffVariables({ mvu: { favor: 15 } }, {})).toEqual([{ name: 'mvu.favor', before: 15 }])
     expect(diffVariables({ a: { b: 1 } }, { a: 5 })).toEqual([{ name: 'a', before: { b: 1 }, after: 5 }])
+  })
+})
+
+describe('overlayScopedVariables', () => {
+  it('overlays flat dotted names onto the nested tree without mutating the base', () => {
+    expect(overlayScopedVariables({ mvu: { favor: 10, trust: 1 } }, [
+      { name: 'mvu.favor', value: 99 },
+      { name: 'scene', value: '夜' },
+    ])).toEqual({ mvu: { favor: 99, trust: 1 }, scene: '夜' })
+    expect(overlayScopedVariables({}, [{ name: 'a.b.c', value: 1 }])).toEqual({ a: { b: { c: 1 } } })
+    const base = { mvu: { favor: 10 } }
+    overlayScopedVariables(base, [{ name: 'mvu.favor', value: 1 }])
+    expect(base).toEqual({ mvu: { favor: 10 } })
+  })
+
+  it('replaces a non-object intermediate with an object when the dotted name needs the path', () => {
+    expect(overlayScopedVariables({ a: 5 }, [{ name: 'a.b', value: 1 }])).toEqual({ a: { b: 1 } })
+    expect(overlayScopedVariables({ list: [1, 2] }, [{ name: 'list', value: [3] }])).toEqual({ list: [3] })
   })
 })
 
@@ -410,5 +429,63 @@ describe('MVU settlement receipts (integration)', () => {
     await apiHandler(makeRequest({ character: CHARACTER, chatId, revision: snapshot!.revision, sessionId: 'session-native-mvu' }, '/api/dsh-tavern/mvu/retry'), res)
     expect(res.statusCode).toBe(409)
     expect(res.chunks.join('')).toContain('TAVERN_ARCHITECTURE_CONFLICT')
+  })
+
+  it('keeps the panel available when only receipts exist (nothing settled to a variable)', async () => {
+    const now = new Date().toISOString()
+    const receiptOnly = await store.createChat(PLAIN_CHARACTER, {
+      user_name: 'User', character_name: PLAIN_CHARACTER,
+      chat_metadata: {
+        createdAt: now, timedWorldInfo: {},
+        mvu: { receipts: [{ at: now, turnKey: '1', status: 'failed', changes: [], failures: ['boom'] }] },
+      },
+    }, [])
+    const res = makeResponse()
+    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/mvu/status/${encodeURIComponent(PLAIN_CHARACTER)}/${receiptOnly}`), res)
+    expect(res.statusCode).toBe(200)
+    const payload = JSON.parse(res.chunks.join(''))
+    expect(payload.available).toBe(true)
+    expect(payload.variables).toEqual({})
+    expect(payload.receipts).toHaveLength(1)
+  })
+
+  it('reads chat-scope AgentTavern variables for an agent-tavern binding and renders them into the status bar', async () => {
+    const scoped = await VariableStore.open(join(home, 'tavern'))
+    await scoped.set('chat', statusChatId, 'mvu.favor', 77)
+    await scoped.set('chat', statusChatId, 'scene', '夜')
+    await store.updateState((state) => ({
+      sessionBindings: {
+        ...state.sessionBindings,
+        'session-status-mvu': { architecture: 'agent-tavern', contextMode: 'dsh-native', character: STATUS_CHARACTER, chatId: statusChatId },
+      },
+    }))
+    const res = makeResponse()
+    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/mvu/status/${encodeURIComponent(STATUS_CHARACTER)}/${statusChatId}`), res)
+    expect(res.statusCode).toBe(200)
+    const payload = JSON.parse(res.chunks.join(''))
+    expect(payload.available).toBe(true)
+    // 卡上种子 mvu.favor=42 被作用域值覆盖；新增叶子按点分名还原成嵌套树
+    expect(payload.variables).toEqual({ mvu: { favor: 77 }, scene: '夜' })
+    expect(payload.renderedHtml).toContain('好感度：77/100')
+    // 只读渲染与只读读取：不回写聊天文件
+    const snapshot = await store.getChatSnapshot(STATUS_CHARACTER, statusChatId)
+    expect(snapshot!.chat.header.chat_metadata.variables).toEqual({ mvu: { favor: 42 } })
+  })
+
+  it('does not read chat-scope variables for ST-bound or unbound chats', async () => {
+    const scoped = await VariableStore.open(join(home, 'tavern'))
+    await scoped.set('chat', plainChatId, 'mvu.favor', 5)
+    await store.updateState((state) => ({
+      sessionBindings: {
+        ...state.sessionBindings,
+        'session-st-ignore': { architecture: 'st', character: PLAIN_CHARACTER, chatId: plainChatId },
+      },
+    }))
+    const res = makeResponse()
+    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/mvu/status/${encodeURIComponent(PLAIN_CHARACTER)}/${plainChatId}`), res)
+    expect(res.statusCode).toBe(200)
+    const payload = JSON.parse(res.chunks.join(''))
+    expect(payload.available).toBe(false)
+    expect(payload.variables).toEqual({})
   })
 })

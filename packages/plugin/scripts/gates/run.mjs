@@ -433,6 +433,27 @@ function checkNativeHeaderAdapterText(text) {
   return problems
 }
 
+/**
+ * MVU 面板（提案 0012）的挂载门禁：面板必须在两个架构表面都可达——ST 走
+ * TavernView 内联块，AgentTavern 走标题栏弹出层（原生 conversation 由宿主渲染，
+ * 插件没有可插入正文区的 slot）。这些标记同时锁住「只有回执也要可见」的空态
+ * 提示，防止「数据源修好了但界面又不挂载」的回归。
+ */
+function checkMvuSurfaceText(text) {
+  const problems = []
+  for (const marker of [
+    'function TavernMvuStatus(',
+    "'data-dsh-tavern-surface': 'mvu'",
+    'dt-mvu-slot',
+    'dt-mvu-pop',
+    'TavernMvuStatus, { sessionId, embedded: true',
+    "'mvu.unavailable'",
+  ]) {
+    if (!text.includes(marker)) problems.push(`MVU surface is missing marker '${marker}'`)
+  }
+  return problems
+}
+
 function checkClientArchitectureText(text) {
   const problems = []
   for (const marker of [
@@ -1433,6 +1454,29 @@ const gates = [
     },
     check: () => existsSync(CLIENT_PATH)
       ? checkNativeHeaderAdapterText(readFileSync(CLIENT_PATH, 'utf8'))
+      : ['generated packages/plugin/client/index.js does not exist'],
+  },
+  {
+    name: 'mvu-surface',
+    selfTest: () => {
+      const good = [
+        'function TavernMvuStatus({ sessionId, embedded = false }) {',
+        "h('div', { className: 'dt-mvu', 'data-dsh-tavern-surface': 'mvu' },",
+        '.dt-mvu-slot{position:relative;display:inline-flex}',
+        '.dt-mvu-pop{z-index:20;position:absolute}',
+        "mvuOpen ? h('div', { className: 'dt-mvu-pop' }, h(TavernMvuStatus, { sessionId, embedded: true })) : null",
+        "'mvu.unavailable': 'No variables or receipts in this chat',",
+      ].join('\n')
+      const unmounted = good.replace('TavernMvuStatus, { sessionId, embedded: true', 'TavernMvuStatus, { sessionId')
+      const noEmptyState = good.replace("'mvu.unavailable': 'No variables or receipts in this chat',", '')
+      return checkMvuSurfaceText(good).length === 0
+        && checkMvuSurfaceText(unmounted).length > 0
+        && checkMvuSurfaceText(noEmptyState).length > 0
+        ? []
+        : ['MVU surface bad samples were not rejected']
+    },
+    check: () => existsSync(CLIENT_PATH)
+      ? checkMvuSurfaceText(readFileSync(CLIENT_PATH, 'utf8'))
       : ['generated packages/plugin/client/index.js does not exist'],
   },
   {

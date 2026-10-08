@@ -129,6 +129,31 @@ export function diffVariables(before: Record<string, unknown>, after: Record<str
   return changes.sort((left, right) => left.name.localeCompare(right.name))
 }
 
+/**
+ * 把作用域变量覆盖回嵌套树（AgentTavern 的 chat 作用域变量是扁平点分名，
+ * 如 `mvu.favor`；而宏/模板与扁平化面板都按嵌套树 `getvar('mvu.favor')` 语义
+ * 访问）。同名路径整段覆盖；中间层不是普通对象时替换为对象（点分名与既有
+ * 树形状冲突时以作用域值为准）。base 不被修改。
+ */
+export function overlayScopedVariables(
+  base: Record<string, unknown>,
+  entries: ReadonlyArray<{ name: string; value: unknown }>,
+): Record<string, unknown> {
+  const tree = deepClone(base) as Record<string, unknown>
+  for (const entry of entries) {
+    const segments = entry.name.split('.')
+    const leaf = segments.pop()!
+    let cursor = tree
+    for (const segment of segments) {
+      const next = cursor[segment]
+      if (next === null || typeof next !== 'object' || Array.isArray(next)) cursor[segment] = {}
+      cursor = cursor[segment] as Record<string, unknown>
+    }
+    cursor[leaf] = entry.value
+  }
+  return tree
+}
+
 /* ------------------------------ 回执读写 ------------------------------ */
 
 /** 读 `chat_metadata.mvu.receipts`；形状不合法的条目跳过（手改 jsonl 的容错）。 */
@@ -307,6 +332,8 @@ export interface MvuStatusRenderInput {
   chat: ChatLogIR
   chatId: string
   template: string
+  /** 显示用变量树覆盖（路由已把 AgentTavern 作用域变量并入时传入）；缺省读 chat_metadata.variables。 */
+  localVariables?: Record<string, unknown>
 }
 
 /**
@@ -327,7 +354,7 @@ export async function renderMvuStatusTemplate(input: MvuStatusRenderInput): Prom
       books,
     },
     {
-      local: deepClone(readChatVariables(chat)) as JsonObject,
+      local: deepClone((input.localVariables ?? readChatVariables(chat)) as JsonObject),
       global: { ...input.state.scriptGlobals },
       initial: deepClone(plainObject(chat.header.chat_metadata[INITIAL_VARIABLES_KEY]) ?? {}) as JsonObject,
     },

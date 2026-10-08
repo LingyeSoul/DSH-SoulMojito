@@ -35,3 +35,23 @@
   （卡内 MVU 规则本就是脚本语义），LLM 只在 card-to-mvu 转换时介入。理由：可重放、可单测、
   不产生每轮额外模型费用；与 flizzywine 的差异属于架构选择，需在用户文档标注。
 - 姿势总结（posture-settlement 类 LLM 后台任务）不在本提案范围。
+
+## 5. 实现补充（2026-10-08）：AgentTavern 显示面打通
+
+P1-P3 落地时面板只挂在 `TavernView`（ST 表面）：AgentTavern 的 native conversation 由宿主
+渲染，插件没有可插入正文区的 slot，`useNativeTavernTabFilter` 又把 Tavern tab 对非 ST 绑定
+隐藏，因此 AgentTavern 会话里面板不可达；同时 `mvu/status` 的 `available` 只认
+`chat_metadata.variables`，而 `tavern_variable_settle` 只写 chat 作用域 VariableStore
+（`variable_set/patch/delete` 全族同理，从不写 chat 元数据），即使挂载也会整块隐藏。
+
+补充落地（改的是显示面，不动结算语义）：
+
+1. **变量源按绑定架构取**：`GET mvu/status` 对绑定到 `agent-tavern` 会话的聊天回读 chat 作用域
+   VariableStore，按扁平点分名覆盖回嵌套树（`overlayScopedVariables`）后与 ST 共用同一份
+   显示与 `statusTemplate` 渲染语义；ST 绑定或未绑定的聊天不回读，避免架构切换后的残留值
+   污染 ST 变量。
+2. **`available` 纳入回执**：`variables` 为空但存在回执（全项失败的结算）时面板仍可见可读。
+3. **AgentTavern 挂载点**：MVU 面板以会话标题栏按钮弹出（`dt-mvu-slot`/`dt-mvu-pop`，
+   点外关闭，与带意见重写同款弹出层模式），`TavernMvuStatus` 增 `embedded` 变体在无内容时
+   给出空态提示；ST 仍走 `TavernView` 顶部内联面板。
+4. `mvu-surface` gate 锁住上述挂载标记，防止「数据源修好、界面又不挂载」的回归。
