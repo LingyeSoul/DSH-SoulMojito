@@ -230,7 +230,7 @@ git spec 固定到安装时的提交，不跟随源码更新；`version.json` �
 
 插件自带从 GitHub 发现新版本与一键更新，桌面版不需要再手敲 `dsh plugin`。
 
-- **发现**：「设置 → dsh-tavern」标题下与管理面板「总览」分区显示当前构建（`已安装 v0.3.9 (8271f20)`）、GitHub 上的最新构建、待合入的 commit 列表与上次检查时间。启动后延迟 12s 首查、每 6h 复查，结果缓存在 `$DSH_HOME/tavern/update-state.json`；「检查更新」按钮穿透缓存立即查。
+- **发现**：「设置 → dsh-tavern」标题下与管理面板「总览」分区显示当前构建（`已安装 v0.4.0 (8271f20)`）、GitHub 上的最新构建、待合入的 commit 列表与上次检查时间。启动后延迟 12s 首查、每 6h 复查，结果缓存在 `$DSH_HOME/tavern/update-state.json`；「检查更新」按钮穿透缓存立即查。
 - **判定**：仓库不发 release/tag，因此以 main 分支最新 commit + `packages/plugin/package.json` 的 version 为准（规则见 [`decisions/2026-10-05-desktop-plugin-self-update.md`](decisions/2026-10-05-desktop-plugin-self-update.md)）。
 - **更新**：「立即更新」按 `dsh plugin`（桌面版自带 CLI，直接改 profile 的 `package.json` + `pnpm-lock.yaml`）→ `plugin-manager` 服务 → GitHub checkout 覆写的顺序落地，进度日志实时显示在卡片里。三条路径都需要**重启 DeepSeek Harness**：包替换要新的 JS module generation，宿主 HMR 不监听 `node_modules`。
 - **来源降级**：`api.github.com` → `raw.githubusercontent.com` + `git ls-remote` → commits atom feed。企业 TLS 中间人会让 node 的 `fetch` 证书校验失败（`unable to verify the first certificate`），因此每个 HTTP 请求在 fetch 失败后自动用系统 `curl` 重试。
