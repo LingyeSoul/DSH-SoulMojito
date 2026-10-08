@@ -2,7 +2,9 @@
  * Prompt 装配流水线（ST Chat Completion 语义）。
  *
  * 对齐 ST `openai.js`/`PromptManager.js` 的装配行为：
- * - prompt_order（默认 dummy id 100000）遍历，enabled 条目按序装配；
+ * - prompt_order 遍历：优先 global dummy 集（ST `openai.js` 的
+ *   `promptOrder: { strategy: 'global', dummyId: 100001 }`；100000 为旧常量/其他
+ *   残留，仅作回落），enabled 条目按序装配；
  * - marker 展开：worldInfoBefore/After、charDescription/charPersonality/scenario、
  *   personaDescription、dialogueExamples、chatHistory；
  * - 角色卡 system_prompt / post_history_instructions 分别覆盖 main / jailbreak
@@ -63,7 +65,12 @@ export interface AssembleResult {
   warnings: string[]
 }
 
-const HISTORY_DUMMY_ID = 100000
+/** ST global prompt order 的 dummy id（`openai.js`: strategy 'global', dummyId 100001）。
+ *  单聊（含 AgentTavern 的单角色会话）实际读取的就是这一组；社区预设普遍只带
+ *  100001 组、或把自定义全量栈放在 100001、旧默认序放在 100000。 */
+const GLOBAL_ORDER_DUMMY_ID = 100001
+/** 旧常量/群聊残留的 dummy id：仅作 100001 缺失时的回落。 */
+const LEGACY_ORDER_DUMMY_ID = 100000
 
 export function assemblePrompt(input: AssembleInput, deps: AssembleDeps): AssembleResult {
   const { expand, countTokens } = deps
@@ -86,6 +93,9 @@ export function assemblePrompt(input: AssembleInput, deps: AssembleDeps): Assemb
   for (const slot of order) {
     const prompt = byId.get(slot.identifier)
     if (prompt === undefined) continue
+    // ST 只装配 prompt_order 中启用的条目（PromptManager.getPromptCollection:
+    // allowedTrigger = entry.enabled && shouldTrigger(...)）；禁用条目直接跳过。
+    if (slot.enabled === false) continue
     // chatHistory 之后的位置（jailbreak/UJB 等）进 postHistory
     const target = historyInjected ? postHistory : preHistory
 
@@ -191,7 +201,9 @@ export function assemblePrompt(input: AssembleInput, deps: AssembleDeps): Assemb
 
 function resolvePromptOrder(preset: PresetIR): Array<{ identifier: string; enabled: boolean }> {
   const set: PromptOrderSet | undefined =
-    preset.promptOrder.find((o) => o.character_id === HISTORY_DUMMY_ID) ?? preset.promptOrder[0]
+    preset.promptOrder.find((o) => Number(o.character_id) === GLOBAL_ORDER_DUMMY_ID)
+    ?? preset.promptOrder.find((o) => Number(o.character_id) === LEGACY_ORDER_DUMMY_ID)
+    ?? preset.promptOrder[0]
   return set?.order ?? []
 }
 

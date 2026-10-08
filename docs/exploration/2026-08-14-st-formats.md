@@ -2,6 +2,7 @@
 
 > 调研日期：2026-08-14。来源：CCv2/V3 规范原文（GitHub raw）、SillyTavern `release` 分支源码（`world-info.js`、`PromptManager.js`、`openai.js`、`script.js`、`personas.js`、`char-data.js`、`src/character-card-parser.js`）、docs.sillytavern.app、ST 内置默认 preset。本地对照实现：`E:\WorkProject\SillyTavern`（源码 checkout，可作行为对照与 fixture 来源）。
 > 勘误：V2 规范仓库现为 `malfoyslastname/character-card-spec-v2`（旧名 404）；V3 为 `kwaroran/character-card-spec-v3` 的 `SPEC_V3.md`。当前 V3 规范**没有** `system_prompt_multilingual`/`post_history_instructions_multilingual`/`lorebook_version`（仅早期草案/第三方实现）。
+> 勘误（2026-10-09）：§3.1 中「100000 单聊 dummy、100001 群聊 dummy」的对应关系记反了。ST `openai.js` 的 ChatCompletion 装配传入 `promptOrder: { strategy: 'global', dummyId: 100001 }`——**单聊（global）读取 100001 组**；100000 是 `PromptManager` 的内部默认常量/其他残留。实现按「100001 → 100000 → 首组」回落。
 
 ## 1. 角色卡（Character Card）
 

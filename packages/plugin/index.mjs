@@ -2674,7 +2674,8 @@ function createMacroEngine(init) {
 }
 
 // packages/tavern-pipeline/src/pipeline.ts
-var HISTORY_DUMMY_ID = 1e5;
+var GLOBAL_ORDER_DUMMY_ID = 100001;
+var LEGACY_ORDER_DUMMY_ID = 1e5;
 function assemblePrompt(input, deps) {
   const { expand, countTokens } = deps;
   const warnings = [];
@@ -2693,6 +2694,7 @@ function assemblePrompt(input, deps) {
   for (const slot of order) {
     const prompt = byId.get(slot.identifier);
     if (prompt === void 0) continue;
+    if (slot.enabled === false) continue;
     const target = historyInjected ? postHistory : preHistory;
     if ("marker" in prompt && prompt.marker) {
       switch (prompt.identifier) {
@@ -2782,7 +2784,7 @@ function assemblePrompt(input, deps) {
   };
 }
 function resolvePromptOrder(preset) {
-  const set = preset.promptOrder.find((o) => o.character_id === HISTORY_DUMMY_ID) ?? preset.promptOrder[0];
+  const set = preset.promptOrder.find((o) => Number(o.character_id) === GLOBAL_ORDER_DUMMY_ID) ?? preset.promptOrder.find((o) => Number(o.character_id) === LEGACY_ORDER_DUMMY_ID) ?? preset.promptOrder[0];
   return set?.order ?? [];
 }
 function wrapAll(wiFormat, texts, expand) {
@@ -11542,7 +11544,7 @@ function isRuntime(candidate) {
 }
 
 // packages/plugin/src/agent-tavern/preset.ts
-var HISTORY_DUMMY_ID2 = 1e5;
+var GLOBAL_ORDER_DUMMY_ID2 = 100001;
 function defaultPreset() {
   const prompts = [
     { name: "Main Prompt", system_prompt: true, role: "system", content: "Write {{char}}'s next reply in a fictional roleplay chat between {{char}} and {{user}}. Stay in character and never write dialogue or actions for {{user}}.", identifier: "main" },
@@ -11564,7 +11566,7 @@ function defaultPreset() {
     scenario_format: "{{scenario}}",
     personality_format: "{{personality}}",
     prompts,
-    prompt_order: [{ character_id: HISTORY_DUMMY_ID2, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
+    prompt_order: [{ character_id: GLOBAL_ORDER_DUMMY_ID2, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
   };
 }
 var AGENT_PRESET_CHANGED_LISTENERS = Symbol.for("dsh-tavern:agent-preset-changed-listeners");
@@ -16603,7 +16605,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.1".trim() : "";
-  const commit = true ? normalizeCommit("a9d8826") : void 0;
+  const commit = true ? normalizeCommit("0a3288a") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

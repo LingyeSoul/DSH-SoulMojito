@@ -8,9 +8,14 @@
  * - 内容型提示词（非 marker）：按 prompt_order 顺序、启用语义过滤后合成一个
  *   systemPrompt section（order -75，kernel 之后）；main / jailbreak 沿用角色卡
  *   system_prompt / post_history_instructions 覆盖（空串回落、支持 {{original}}）。
- *   禁用信号取三处任一显式 false：prompt_order[].enabled（ST 原生）、prompt.enabled
- *   （工作台约定）、prompt.system_prompt（面板「启用」开关）——用户显式关掉的东西
- *   绝不静默注入。
+ * - 选集：优先 ST global dummy 集 100001（`openai.js`: strategy 'global',
+ *   dummyId 100001；社区预设的单聊全量栈带在这一组），其次旧 dummy 100000，再回落
+ *   首组——与 tavern-pipeline 同一语义。
+ * - 启用语义：`prompt_order[].enabled` 为权威（`PromptManager.getPromptCollection`:
+ *   allowedTrigger = entry.enabled）；仅当该组未给布尔值时回落 `prompt.enabled`。
+ *   `system_prompt` 只是「全局/预设提示词」的分类标记，不参与启用判定——社区
+ *   预设常把写作风格、思考链与格式约束条目标成 system_prompt:false 且启用，若当
+ *   禁用会整组丢失。
  * - 采样：只投影 temperature。max_context / max_tokens 归宿主：请求容量由实际
  *   provider/model route 与 DSH pressure policy 决定（提案 0004 §8），而在工具
  *   循环里按 ST 响应长度硬切输出上限会截断 tool-call。
@@ -18,7 +23,9 @@
  *   由工具、原生历史与可选预载承接（提案 0004 §5）。
  *
  * 文本进宿主前必须过 prompt-safety.ts 的宏展开 + {{...}} 中性化：预设内容是
- * ST 宏（{{char}}/{{user}}）的高频来源，原文进 section 会让宿主 interpolate 抛错。
+ * ST 宏（{{char}}/{{user}}、{{setvar}}/{{getvar}} 族）的高频来源，原文进 section
+ * 会让宿主 interpolate 抛错；setvar/getvar 在同一块内按顺序结算（先定义后消费，
+ * 与 ST 逐条 substituted 的顺序一致）。
  *
  * 变更失效走 globalThis 锚定的监听表（Symbol.for）：emit 发生在 index.mjs /
  * card-workbench.mjs，监听在 agent.mjs——分离 bundle 各持一份模块级 Set 会互不
@@ -30,8 +37,10 @@ import type { CharacterCardIR, PresetIR, PresetPrompt, PromptOrderSet } from '..
 
 export const AGENT_PRESET_BLOCK_HEADER = 'Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):'
 
-/** prompt_order 的单聊 dummy id（ST 约定；群聊 dummy 100001 与 AgentTavern 无关）。 */
-const HISTORY_DUMMY_ID = 100000
+/** ST global prompt order 的 dummy id（openai.js: strategy 'global', dummyId 100001）。 */
+const GLOBAL_ORDER_DUMMY_ID = 100001
+/** 旧常量/群聊残留 dummy：仅作 100001 缺失时的回落。 */
+const LEGACY_ORDER_DUMMY_ID = 100000
 
 export interface EffectivePresetPrompt {
   identifier: string
@@ -41,9 +50,9 @@ export interface EffectivePresetPrompt {
 }
 
 /**
- * 预设内容侧的有效提示词：按 prompt_order（优先 100000 组，缺省第一组）遍历，
- * 跳过 marker、未启用与（覆盖后）空内容的条目。无 prompt_order 时返回空数组
- * ——与 ST 装配一致：不在顺序表里的提示词不参与。
+ * 预设内容侧的有效提示词：按 prompt_order（优先 global dummy 100001，回落
+ * 100000/首组）遍历，跳过 marker、未启用与（覆盖后）空内容的条目。无
+ * prompt_order 时返回空数组——与 ST 装配一致：不在顺序表里的提示词不参与。
  */
 export function effectiveAgentPresetPrompts(preset: PresetIR, card?: CharacterCardIR): EffectivePresetPrompt[] {
   const order = resolvePromptOrder(preset)
@@ -100,7 +109,7 @@ export function defaultPreset(): Record<string, unknown> {
     temperature: 1, openai_max_context: 32768, openai_max_tokens: 800,
     wi_format: '{0}', scenario_format: '{{scenario}}', personality_format: '{{personality}}',
     prompts,
-    prompt_order: [{ character_id: HISTORY_DUMMY_ID, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }],
+    prompt_order: [{ character_id: GLOBAL_ORDER_DUMMY_ID, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }],
   }
 }
 
@@ -144,17 +153,17 @@ export async function emitAgentPresetChanged(): Promise<void> {
 
 function resolvePromptOrder(preset: PresetIR): Array<{ identifier: string; enabled?: unknown }> {
   const set: PromptOrderSet | undefined =
-    preset.promptOrder.find((order) => order.character_id === HISTORY_DUMMY_ID) ?? preset.promptOrder[0]
+    preset.promptOrder.find((order) => Number(order.character_id) === GLOBAL_ORDER_DUMMY_ID)
+    ?? preset.promptOrder.find((order) => Number(order.character_id) === LEGACY_ORDER_DUMMY_ID)
+    ?? preset.promptOrder[0]
   return Array.isArray(set?.order) ? set.order : []
 }
 
-/** 启用语义（文件头）：顺序表 slot.enabled 优先，其次 prompt.enabled，面板开关 system_prompt 也可禁用。 */
+/** 启用语义（文件头）：顺序表 slot.enabled 为权威，仅缺布尔值时回落 prompt.enabled。 */
 function entryEnabled(slot: { enabled?: unknown }, prompt: PresetPrompt): boolean {
-  if (slot.enabled === false) return false
+  if (typeof slot.enabled === 'boolean') return slot.enabled
   const record = prompt as unknown as Record<string, unknown>
-  if (record['enabled'] === false) return false
-  if (record['system_prompt'] === false) return false
-  return true
+  return record['enabled'] !== false
 }
 
 function promptContent(prompt: PresetPrompt): string {

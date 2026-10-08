@@ -128,3 +128,44 @@ describe('裁剪与注入', () => {
     expect(idxNote).toBe(idxLastHistory - 1)
   })
 })
+
+describe('prompt_order 选集与启用语义（ST openai.js: global dummy 100001）', () => {
+  const selection = parsePreset({
+    prompts: [
+      { name: 'Global', identifier: 'globalOnly', role: 'system', content: 'GLOBAL SET TEXT.', system_prompt: true },
+      { name: 'Legacy', identifier: 'legacyOnly', role: 'system', content: 'LEGACY SET TEXT.', system_prompt: true },
+      { name: 'Disabled', identifier: 'disabledEntry', role: 'system', content: 'DISABLED SET TEXT.', system_prompt: true },
+      { name: 'Style', identifier: 'styleEntry', role: 'system', content: 'STYLE MARKER TEXT.', system_prompt: false },
+    ],
+    prompt_order: [
+      { character_id: 100000, order: [{ identifier: 'legacyOnly', enabled: true }] },
+      {
+        character_id: 100001,
+        order: [
+          { identifier: 'globalOnly', enabled: true },
+          { identifier: 'disabledEntry', enabled: false },
+          { identifier: 'styleEntry', enabled: true },
+        ],
+      },
+    ],
+  })
+
+  it('优先装配 global dummy 100001 组，跳过 enabled:false，system_prompt:false 仍注入', () => {
+    const result = assemblePrompt(baseInput({ preset: selection }), deps)
+    const text = result.messages.map((m) => m.content).join('\n')
+    expect(text).toContain('GLOBAL SET TEXT.')
+    // system_prompt 只是分类标记，不参与启用判定（社区预设的写作风格条目形状）
+    expect(text).toContain('STYLE MARKER TEXT.')
+    expect(text).not.toContain('DISABLED SET TEXT.')
+    // 100001 存在时 100000 组不参与装配
+    expect(text).not.toContain('LEGACY SET TEXT.')
+  })
+
+  it('缺少 100001 时回落 100000 组', () => {
+    const legacy: PresetIR = { ...selection, promptOrder: selection.promptOrder.filter((o) => Number(o.character_id) !== 100001) }
+    const result = assemblePrompt(baseInput({ preset: legacy }), deps)
+    const text = result.messages.map((m) => m.content).join('\n')
+    expect(text).toContain('LEGACY SET TEXT.')
+    expect(text).not.toContain('GLOBAL SET TEXT.')
+  })
+})

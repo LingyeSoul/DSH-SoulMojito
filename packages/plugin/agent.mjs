@@ -4018,7 +4018,8 @@ function onGuidesChanged(listener) {
 
 // packages/plugin/src/agent-tavern/preset.ts
 var AGENT_PRESET_BLOCK_HEADER = "Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):";
-var HISTORY_DUMMY_ID = 1e5;
+var GLOBAL_ORDER_DUMMY_ID = 100001;
+var LEGACY_ORDER_DUMMY_ID = 1e5;
 function effectiveAgentPresetPrompts(preset, card) {
   const order = resolvePromptOrder(preset);
   const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
@@ -4069,7 +4070,7 @@ function defaultPreset() {
     scenario_format: "{{scenario}}",
     personality_format: "{{personality}}",
     prompts,
-    prompt_order: [{ character_id: HISTORY_DUMMY_ID, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
+    prompt_order: [{ character_id: GLOBAL_ORDER_DUMMY_ID, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
   };
 }
 var AGENT_PRESET_CHANGED_LISTENERS = Symbol.for("dsh-tavern:agent-preset-changed-listeners");
@@ -4085,15 +4086,13 @@ function onAgentPresetChanged(listener) {
   };
 }
 function resolvePromptOrder(preset) {
-  const set = preset.promptOrder.find((order) => order.character_id === HISTORY_DUMMY_ID) ?? preset.promptOrder[0];
+  const set = preset.promptOrder.find((order) => Number(order.character_id) === GLOBAL_ORDER_DUMMY_ID) ?? preset.promptOrder.find((order) => Number(order.character_id) === LEGACY_ORDER_DUMMY_ID) ?? preset.promptOrder[0];
   return Array.isArray(set?.order) ? set.order : [];
 }
 function entryEnabled(slot, prompt) {
-  if (slot.enabled === false) return false;
+  if (typeof slot.enabled === "boolean") return slot.enabled;
   const record = prompt;
-  if (record["enabled"] === false) return false;
-  if (record["system_prompt"] === false) return false;
-  return true;
+  return record["enabled"] !== false;
 }
 function promptContent(prompt) {
   const content = prompt["content"];

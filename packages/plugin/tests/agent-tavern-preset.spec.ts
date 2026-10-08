@@ -23,13 +23,13 @@ const PRESET_A = {
     { name: 'Main Prompt', identifier: 'main', role: 'system', content: 'Follow the preset main rule with {{char}} and {{user}}.', system_prompt: true },
     { name: 'Style Guide', identifier: 'styleGuide', role: 'system', content: 'Use terse prose.', system_prompt: true },
     { name: 'Disabled By Slot', identifier: 'slotOff', role: 'system', content: 'SHOULD NOT APPEAR (slot disabled).', system_prompt: true },
-    { name: 'Disabled By Prompt Field', identifier: 'promptOff', role: 'system', content: 'SHOULD NOT APPEAR (prompt disabled).', system_prompt: true, enabled: false },
-    { name: 'Disabled By Panel Toggle', identifier: 'panelOff', role: 'system', content: 'SHOULD NOT APPEAR (panel disabled).', system_prompt: false },
+    { name: 'Prompt Field False', identifier: 'promptOff', role: 'system', content: 'PROMPT-FIELD FALSE STILL INJECTS.', system_prompt: true, enabled: false },
+    { name: 'Panel Toggle False', identifier: 'panelOff', role: 'system', content: 'PANEL TOGGLE FALSE STILL INJECTS.', system_prompt: false },
     { name: 'Empty Entry', identifier: 'emptyOne', role: 'system', content: '   ', system_prompt: true },
     { name: 'Character Description', identifier: 'charDescription', marker: true, system_prompt: true },
   ],
   prompt_order: [{
-    character_id: 100000,
+    character_id: 100001,
     order: [
       { identifier: 'main', enabled: true },
       { identifier: 'styleGuide', enabled: true },
@@ -205,12 +205,18 @@ describe('AgentTavern preset projection', () => {
     rmSync(home, { recursive: true, force: true })
   })
 
-  it('renders only enabled content prompts in prompt_order and skips markers/disabled/empty', () => {
+  it('renders enabled content prompts in prompt_order and skips markers/disabled/empty', () => {
     const block = renderAgentPresetBlock(parsePreset(structuredClone(PRESET_A)))
     expect(block).toBeDefined()
     expect(block!.startsWith(AGENT_PRESET_BLOCK_HEADER)).toBe(true)
     expect(block).toContain('Follow the preset main rule with {{char}} and {{user}}.')
     expect(block).toContain('Use terse prose.')
+    // 启用判定只看 prompt_order[].enabled（ST PromptManager.getPromptCollection）：
+    // system_prompt 是分类标记、prompt.enabled 不覆盖 slot——两者为 false 仍注入
+    // （社区预设的写作风格/思考链条目常为 system_prompt:false 且启用，曾因误判整组丢失）。
+    expect(block).toContain('PANEL TOGGLE FALSE STILL INJECTS.')
+    expect(block).toContain('PROMPT-FIELD FALSE STILL INJECTS.')
+    // slot.enabled === false 才是禁用
     expect(block).not.toContain('SHOULD NOT APPEAR')
     // marker 条目（角色卡描述占位）不进固定 prompt
     expect(block).not.toContain('Character Description')
@@ -219,10 +225,37 @@ describe('AgentTavern preset projection', () => {
     // 只有 marker 的预设不产生注入块
     const markersOnly: PresetIR = {
       prompts: [{ name: 'Character Description', identifier: 'charDescription', marker: true, system_prompt: true }],
-      promptOrder: [{ character_id: 100000, order: [{ identifier: 'charDescription', enabled: true }] }],
+      promptOrder: [{ character_id: 100001, order: [{ identifier: 'charDescription', enabled: true }] }],
       sampler: {},
     }
     expect(renderAgentPresetBlock(markersOnly)).toBeUndefined()
+  })
+
+  it('prefers the ST global order set 100001 and falls back to 100000 then the first set', () => {
+    const raw = {
+      prompts: [
+        { name: 'Global', identifier: 'globalOnly', role: 'system', content: 'GLOBAL SET TEXT.', system_prompt: true },
+        { name: 'Legacy', identifier: 'legacyOnly', role: 'system', content: 'LEGACY SET TEXT.', system_prompt: true },
+        { name: 'First', identifier: 'firstOnly', role: 'system', content: 'FIRST SET TEXT.', system_prompt: true },
+      ],
+      prompt_order: [
+        { character_id: 100000, order: [{ identifier: 'legacyOnly', enabled: true }] },
+        { character_id: 100001, order: [{ identifier: 'globalOnly', enabled: true }] },
+        { character_id: 555, order: [{ identifier: 'firstOnly', enabled: true }] },
+      ],
+    }
+    const block = renderAgentPresetBlock(parsePreset(structuredClone(raw)))
+    expect(block).toContain('GLOBAL SET TEXT.')
+    expect(block).not.toContain('LEGACY SET TEXT.')
+    expect(block).not.toContain('FIRST SET TEXT.')
+
+    const legacyOnly = structuredClone(raw)
+    legacyOnly.prompt_order.splice(1, 1)
+    expect(renderAgentPresetBlock(parsePreset(legacyOnly))).toContain('LEGACY SET TEXT.')
+
+    const firstOnly = structuredClone(raw)
+    firstOnly.prompt_order.splice(0, 2)
+    expect(renderAgentPresetBlock(parsePreset(firstOnly))).toContain('FIRST SET TEXT.')
   })
 
   it('applies card systemPrompt/postHistoryInstructions overrides with {{original}}', () => {
