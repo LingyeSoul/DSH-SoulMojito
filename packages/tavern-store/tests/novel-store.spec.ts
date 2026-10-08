@@ -559,6 +559,54 @@ describe('NovelStore 大纲（§6）', () => {
     })
   }))
 
+  it('revise 载荷全层覆盖：省略的层原样保留，显式提交才替换（§6.1 overlay 2026-10-09）', withStores(async (tavern, novels) => {
+    const { novelId, outlineRevision } = await startedNovel(tavern, novels, { maxChapters: null })
+    const before = (await novels.getNovel(novelId))!.outline!
+    // The field failure this guards: a minimal revise payload (only the layer
+    // being changed) was rejected with "characters/chapters/scenes/
+    // foreshadowing must be an array" and the model retried blind.
+    const storyOnly = await novels.reviseOutline(novelId, {
+      expectedRevision: (await novels.getNovel(novelId))!.revision,
+      expectedOutlineRevision: outlineRevision,
+      reason: '只改故事层',
+      changes: { story: { premise: '看守人决心与海和解', theme: '孤独与守望', mainConflict: '人与海', endingDirection: '和解的黎明', taboos: [] } },
+      handledRequirements: [],
+    })
+    const afterStory = (await novels.getNovel(novelId))!.outline!
+    expect(afterStory.story.premise).toBe('看守人决心与海和解')
+    expect(afterStory.characters).toEqual(before.characters)
+    expect(afterStory.chapters).toEqual(before.chapters)
+    expect(afterStory.currentChapterId).toBe(before.currentChapterId)
+    expect(afterStory.scenes).toEqual(before.scenes)
+    expect(afterStory.foreshadowing).toEqual(before.foreshadowing)
+
+    // An explicit [] clears only the layer it replaces; the rest is untouched.
+    await novels.reviseOutline(novelId, {
+      expectedRevision: (await novels.getNovel(novelId))!.revision,
+      expectedOutlineRevision: storyOnly.outlineRevision,
+      reason: '清空伏笔层',
+      changes: { foreshadowing: [] },
+      handledRequirements: [],
+    })
+    const cleared = (await novels.getNovel(novelId))!.outline!
+    expect(cleared.foreshadowing).toEqual([])
+    expect(cleared.characters).toEqual(before.characters)
+    expect(cleared.currentChapterId).toBe(before.currentChapterId)
+
+    // Anything the payload does send is still shape-checked, without the
+    // doubled field name in the summary ("characters characters ...").
+    await expect(novels.reviseOutline(novelId, {
+      expectedRevision: (await novels.getNovel(novelId))!.revision,
+      expectedOutlineRevision: (await novels.getNovel(novelId))!.outline!.outlineRevision,
+      reason: '坏形状仍被拒',
+      changes: { characters: 'keeper', scenes: {} } as unknown as NovelOutlinePayload,
+      handledRequirements: [],
+    })).rejects.toMatchObject({
+      code: 'NOVEL_CONFIG',
+      message: 'invalid outline payload: characters must be an array; scenes must be an array',
+    })
+  }))
+
   it('初始大纲不接受 droppedChapterIds', withStores(async (tavern, novels) => {
     const created = await novels.createNovel(tavern, baseConfig())
     const payload = outlinePayload()

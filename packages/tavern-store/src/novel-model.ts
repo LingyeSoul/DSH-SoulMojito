@@ -326,18 +326,34 @@ export interface NovelOutlinePayload {
   droppedChapterIds?: readonly string[]
 }
 
+/**
+ * Revise overlay input (§6.1, 2026-10-09): every layer may be omitted — an
+ * omitted layer is carried forward from the previous outline unchanged; a
+ * present layer replaces wholesale (an explicit [] clears it). Create still
+ * requires the complete plan (NovelOutlinePayload).
+ */
+export type NovelOutlineChanges = Partial<NovelOutlinePayload>
+
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 
 function isSafeId(value: unknown): value is string {
   return typeof value === 'string' && ID_PATTERN.test(value)
 }
 
-/** Structural validation of an outline payload (stable IDs, §5/§6.1). */
-export function validateOutlinePayload(payload: NovelOutlinePayload): ValidationError[] {
+/**
+ * Structural validation of an outline payload (stable IDs, §5/§6.1). In
+ * 'revise' mode the top-level layers may be omitted — omitted layers are
+ * carried forward from the previous outline (§6.1 overlay, 2026-10-09) — while
+ * anything the payload does send is fully validated. 'create' (default)
+ * requires the complete plan.
+ */
+export function validateOutlinePayload(payload: NovelOutlinePayload | NovelOutlineChanges, mode: 'create' | 'revise' = 'create'): ValidationError[] {
   const errors: ValidationError[] = []
   const p = payload as unknown as Record<string, unknown>
   const story = p.story
-  if (typeof story !== 'object' || story === null || Array.isArray(story)) {
+  if (story === undefined && mode === 'revise') {
+    // omitted story is carried forward on revise (§6.1 overlay)
+  } else if (typeof story !== 'object' || story === null || Array.isArray(story)) {
     errors.push({ field: 'story', message: 'story is required' })
   } else {
     for (const field of ['premise', 'theme', 'mainConflict', 'endingDirection'] as const) {
@@ -350,7 +366,9 @@ export function validateOutlinePayload(payload: NovelOutlinePayload): Validation
     }
   }
   const characters = p.characters
-  if (!Array.isArray(characters)) {
+  if (characters === undefined && mode === 'revise') {
+    // omitted characters are carried forward on revise (§6.1 overlay)
+  } else if (!Array.isArray(characters)) {
     errors.push({ field: 'characters', message: 'characters must be an array' })
   } else {
     const seen = new Set<string>()
@@ -376,7 +394,9 @@ export function validateOutlinePayload(payload: NovelOutlinePayload): Validation
   const chapterIds = new Set<string>()
   const orders: number[] = []
   const chapters = p.chapters
-  if (!Array.isArray(chapters)) {
+  if (chapters === undefined && mode === 'revise') {
+    // omitted chapters are carried forward on revise (§6.1 overlay)
+  } else if (!Array.isArray(chapters)) {
     errors.push({ field: 'chapters', message: 'chapters must be an array' })
   } else {
     chapters.forEach((chapter, index) => {
@@ -414,7 +434,9 @@ export function validateOutlinePayload(payload: NovelOutlinePayload): Validation
     errors.push({ field: 'currentChapterId', message: 'currentChapterId must be a string or null' })
   }
   const scenes = p.scenes
-  if (!Array.isArray(scenes)) {
+  if (scenes === undefined && mode === 'revise') {
+    // omitted scenes are carried forward on revise (§6.1 overlay)
+  } else if (!Array.isArray(scenes)) {
     errors.push({ field: 'scenes', message: 'scenes must be an array' })
   } else {
     const seen = new Set<string>()
@@ -441,7 +463,9 @@ export function validateOutlinePayload(payload: NovelOutlinePayload): Validation
     })
   }
   const foreshadowing = p.foreshadowing
-  if (!Array.isArray(foreshadowing)) {
+  if (foreshadowing === undefined && mode === 'revise') {
+    // omitted foreshadowing is carried forward on revise (§6.1 overlay)
+  } else if (!Array.isArray(foreshadowing)) {
     errors.push({ field: 'foreshadowing', message: 'foreshadowing must be an array' })
   } else {
     const seen = new Set<string>()

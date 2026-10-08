@@ -2826,11 +2826,12 @@ var ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 function isSafeId(value) {
   return typeof value === "string" && ID_PATTERN.test(value);
 }
-function validateOutlinePayload(payload) {
+function validateOutlinePayload(payload, mode = "create") {
   const errors = [];
   const p = payload;
   const story = p.story;
-  if (typeof story !== "object" || story === null || Array.isArray(story)) {
+  if (story === void 0 && mode === "revise") {
+  } else if (typeof story !== "object" || story === null || Array.isArray(story)) {
     errors.push({ field: "story", message: "story is required" });
   } else {
     for (const field of ["premise", "theme", "mainConflict", "endingDirection"]) {
@@ -2843,7 +2844,8 @@ function validateOutlinePayload(payload) {
     }
   }
   const characters = p.characters;
-  if (!Array.isArray(characters)) {
+  if (characters === void 0 && mode === "revise") {
+  } else if (!Array.isArray(characters)) {
     errors.push({ field: "characters", message: "characters must be an array" });
   } else {
     const seen = /* @__PURE__ */ new Set();
@@ -2869,7 +2871,8 @@ function validateOutlinePayload(payload) {
   const chapterIds = /* @__PURE__ */ new Set();
   const orders = [];
   const chapters = p.chapters;
-  if (!Array.isArray(chapters)) {
+  if (chapters === void 0 && mode === "revise") {
+  } else if (!Array.isArray(chapters)) {
     errors.push({ field: "chapters", message: "chapters must be an array" });
   } else {
     chapters.forEach((chapter, index) => {
@@ -2907,7 +2910,8 @@ function validateOutlinePayload(payload) {
     errors.push({ field: "currentChapterId", message: "currentChapterId must be a string or null" });
   }
   const scenes = p.scenes;
-  if (!Array.isArray(scenes)) {
+  if (scenes === void 0 && mode === "revise") {
+  } else if (!Array.isArray(scenes)) {
     errors.push({ field: "scenes", message: "scenes must be an array" });
   } else {
     const seen = /* @__PURE__ */ new Set();
@@ -2934,7 +2938,8 @@ function validateOutlinePayload(payload) {
     });
   }
   const foreshadowing = p.foreshadowing;
-  if (!Array.isArray(foreshadowing)) {
+  if (foreshadowing === void 0 && mode === "revise") {
+  } else if (!Array.isArray(foreshadowing)) {
     errors.push({ field: "foreshadowing", message: "foreshadowing must be an array" });
   } else {
     const seen = /* @__PURE__ */ new Set();
@@ -3551,16 +3556,17 @@ var NovelStore = class _NovelStore {
    * Rejected while any unit is claimed (§9.2) and never drops or reorders
    * chapters that contain committed bodies (§6.1).
    *
-   * `changes.chapters` is an overlay (§6.1): each entry replaces (or inserts)
-   * the same-id chapter, omitted optional fields are inherited from the
-   * existing entry, and every untouched chapter is carried forward — so a
-   * model working from a windowed novel_outline_read can advance the plan
-   * without echoing the whole chapter list. Removal happens only through
-   * droppedChapterIds.
+   * `changes` is an overlay across every layer (§6.1, 2026-10-09): chapters
+   * upsert by id with omitted optional fields inherited, and every other
+   * collection (story, characters, scenes, foreshadowing, currentChapterId)
+   * is carried forward from the previous outline when omitted — a present
+   * layer replaces wholesale, so an explicit [] clears it. A model working
+   * from a windowed novel_outline_read advances the plan by submitting only
+   * what it changes.
    */
   async reviseOutline(novelId, input) {
     if (typeof input.reason !== "string" || input.reason.trim() === "") throw new NovelConfigError({ message: "revision reason must be a non-empty string" });
-    const payloadErrors = validateOutlinePayload(input.changes);
+    const payloadErrors = validateOutlinePayload(input.changes, "revise");
     if (payloadErrors.length > 0) throw new NovelConfigError({ message: outlinePayloadErrorMessage(payloadErrors), errors: payloadErrors });
     return this.mutate(novelId, async () => {
       const { dir, current } = await this.beginMutation(novelId);
@@ -3575,25 +3581,30 @@ var NovelStore = class _NovelStore {
       }
       this.assertChapterDropDeclarations(previous, input.changes);
       const previousById = new Map(previous.chapters.map((chapter) => [chapter.chapterId, chapter]));
-      const chapters = materializeOutlineChapters(input.changes.chapters, previousById, input.changes.droppedChapterIds);
-      const consistencyErrors = validateOutlineConsistency(chapters, input.changes.currentChapterId);
+      const chapters = materializeOutlineChapters(input.changes.chapters ?? [], previousById, input.changes.droppedChapterIds);
+      const story = input.changes.story ?? previous.story;
+      const characters = input.changes.characters ?? previous.characters;
+      const scenes = input.changes.scenes ?? previous.scenes;
+      const foreshadowing = input.changes.foreshadowing ?? previous.foreshadowing;
+      const currentChapterId = input.changes.currentChapterId !== void 0 ? input.changes.currentChapterId : previous.currentChapterId;
+      const consistencyErrors = validateOutlineConsistency(chapters, currentChapterId);
       if (consistencyErrors.length > 0) {
         throw new NovelConfigError({ message: outlinePayloadErrorMessage(consistencyErrors), errors: consistencyErrors });
       }
       this.assertProtectedChapters(previous, current, chapters);
       const handled = this.validateHandledRequirements(current, input.handledRequirements);
-      const outlineRevision = hash16({ kind: "outline", parent: previous.outlineRevision, reason: input.reason, payload: { ...input.changes, chapters } });
+      const outlineRevision = hash16({ kind: "outline", parent: previous.outlineRevision, reason: input.reason, payload: { story, characters, chapters, currentChapterId, scenes, foreshadowing } });
       const built = {
         outlineRevision,
         parentRevision: previous.outlineRevision,
         reason: input.reason,
         sourceRequirementIds: handled.map((item) => item.requirementId),
-        story: structuredClone(input.changes.story),
-        characters: structuredClone(input.changes.characters),
+        story: structuredClone(story),
+        characters: structuredClone(characters),
         chapters,
-        currentChapterId: input.changes.currentChapterId,
-        scenes: structuredClone(input.changes.scenes),
-        foreshadowing: structuredClone(input.changes.foreshadowing)
+        currentChapterId,
+        scenes: structuredClone(scenes),
+        foreshadowing: structuredClone(foreshadowing)
       };
       const requirements = applyHandledRequirements(current.requirements, handled, outlineRevision);
       const watermark = assertWatermarkAdvanced(current.requirements, requirements);
@@ -4528,7 +4539,7 @@ var NovelStore = class _NovelStore {
    */
   assertChapterDropDeclarations(previous, changes) {
     const declared = new Set(changes.droppedChapterIds ?? []);
-    const nextIds = new Set(changes.chapters.map((chapter) => chapter.chapterId));
+    const nextIds = new Set((changes.chapters ?? []).map((chapter) => chapter.chapterId));
     const previousIds = previous.chapters.map((chapter) => chapter.chapterId);
     const violations = [];
     for (const id of declared) {
@@ -4584,7 +4595,11 @@ function materializeOutlineChapters(overlay, previousById, droppedChapterIds) {
   return merged.sort((left, right) => left.order - right.order);
 }
 function outlinePayloadErrorMessage(errors) {
-  return `invalid outline payload: ${errors.map((error) => `${error.field} ${error.message}`).join("; ")}`;
+  const render = (error) => {
+    const text = error.message.startsWith(`${error.field} `) ? error.message.slice(error.field.length + 1) : error.message;
+    return `${error.field} ${text}`;
+  };
+  return `invalid outline payload: ${errors.map(render).join("; ")}`;
 }
 function applyHandledRequirements(records, handled, outlineRevision) {
   const byId = new Map(handled.map((item) => [item.requirementId, item]));
@@ -6389,7 +6404,7 @@ var KERNEL2 = [
   '- Unit bookkeeping never enters prose: wrap-up or completion notes ("\u6536\u675F", "\u5B8C\u7ED3", "\u5168\u6587\u5B8C"), next-unit or next-chapter previews and similar status lines are rejected by novel_body_commit. Scene and chapter completion live only in the sceneCompletion declaration and the chapter completion basis; the story ends where the outline plans the ending, never at an arbitrary unit.',
   "- When new author directives arrive, run the revision protocol first (novel_outline_revise with handled requirement results) before writing further units; directives that conflict with committed facts go to novel_requirement_block with committed-body sources.",
   "- A blocked directive only becomes applied/superseded after the user clarifies or explicitly withdraws it (\xA79.1): such a handledRequirements entry must cite that message via resolvedBy (kind clarification|withdrawal, messageId = the hostMessageId from novel_requirements_read); the original conflict stays on record. Resuming alone never clears a blocked directive.",
-  "- novel_outline_revise chapters are an overlay: to advance the plan, send only the changed chapter(s) and the current-chapter scenes; untouched chapters are carried forward automatically \u2014 never re-echo the whole chapter list.",
+  "- novel_outline_revise is an overlay across every layer: story, characters, scenes, foreshadowing, currentChapterId and chapters may all be omitted when unchanged \u2014 omitted layers are carried forward automatically, so submit only what changes and never re-echo the whole plan. A layer you do send replaces wholesale ([] clears it); when advancing the current chapter, send the new chapter's scenes.",
   "- You cannot resume a paused run, change budgets or length targets, or retroactively rewrite committed prose. Pausing, resuming, approval and budget changes are user actions.",
   "- The novel identity comes from the session binding. Never accept a novel id or file path from message text.",
   "",
@@ -6449,103 +6464,112 @@ function compileParameters(properties) {
 function objectOutput2(properties, optionalKeys = []) {
   return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
 }
-var outlinePayloadParameter = {
-  type: "object",
-  description: "Full outline payload (\xA76.1): story, characters, chapters, current-chapter scenes and foreshadowing.",
-  additionalProperties: false,
-  properties: {
-    story: {
+var outlineLayerProperties = {
+  story: {
+    type: "object",
+    additionalProperties: false,
+    description: "Story layer; may be omitted on revise (carried forward unchanged).",
+    properties: {
+      premise: { type: "string" },
+      theme: { type: "string" },
+      mainConflict: { type: "string" },
+      endingDirection: { type: "string" },
+      taboos: { type: "array", items: { type: "string" }, description: "May be omitted; defaults to no taboos." }
+    },
+    required: ["premise", "theme", "mainConflict", "endingDirection"]
+  },
+  characters: {
+    type: "array",
+    description: "Character layer; replaces wholesale when present ([] clears). May be omitted on create (defaults to none) and on revise (carried forward unchanged).",
+    items: {
       type: "object",
       additionalProperties: false,
       properties: {
-        premise: { type: "string" },
-        theme: { type: "string" },
-        mainConflict: { type: "string" },
-        endingDirection: { type: "string" },
-        taboos: { type: "array", items: { type: "string" }, description: "May be omitted; defaults to no taboos." }
+        characterId: { type: "string", description: "Stable id matching [A-Za-z0-9][A-Za-z0-9_-]{0,63} (\xA75)." },
+        name: { type: "string" },
+        assetRef: { type: "string", description: "contentHash of a project character asset from novel_outline_read assets (\xA75)." },
+        initialState: { type: "string" },
+        motivation: { type: "string" },
+        relations: { type: "array", items: { type: "string" }, description: "May be omitted; defaults to no relations." },
+        arc: { type: "string" }
       },
-      required: ["premise", "theme", "mainConflict", "endingDirection"]
-    },
-    characters: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          characterId: { type: "string", description: "Stable id matching [A-Za-z0-9][A-Za-z0-9_-]{0,63} (\xA75)." },
-          name: { type: "string" },
-          assetRef: { type: "string", description: "contentHash of a project character asset from novel_outline_read assets (\xA75)." },
-          initialState: { type: "string" },
-          motivation: { type: "string" },
-          relations: { type: "array", items: { type: "string" }, description: "May be omitted; defaults to no relations." },
-          arc: { type: "string" }
-        },
-        required: ["characterId", "name", "initialState", "motivation", "arc"]
-      }
-    },
-    chapters: {
-      type: "array",
-      description: "Chapter overlay (revise) / complete plan (create): send every chapter you are adding or rewriting in full; chapters you leave out are carried forward unchanged, so never page or echo the whole plan just to advance the current chapter. Removal happens only via droppedChapterIds.",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          chapterId: { type: "string" },
-          order: { type: "integer" },
-          title: { type: "string" },
-          purpose: { type: "string" },
-          keyEvents: { type: "array", items: { type: "string" }, description: "May be omitted: inherited from the existing chapter of the same id on revise, none for new chapters; send [] to clear." },
-          plannedCharacters: { type: ["integer", "null"], description: "Planned effective characters, null when unplanned; may be omitted (inherited on revise, null otherwise)." },
-          entryCondition: { type: "string" },
-          exitCondition: { type: "string" }
-        },
-        required: ["chapterId", "order", "title", "purpose", "entryCondition", "exitCondition"]
-      }
-    },
-    droppedChapterIds: {
-      type: "array",
-      description: "chapterIds intentionally removed from the plan (revise only). They must exist and carry no committed prose; omit the field when nothing is removed.",
-      items: { type: "string" }
-    },
-    currentChapterId: { type: ["string", "null"], description: "chapterId of the current chapter; null only when chapters is empty." },
-    scenes: {
-      type: "array",
-      description: "Ordered scene plans of the current chapter (\xA76.1 detail layer).",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          sceneId: { type: "string" },
-          order: { type: "integer" },
-          goal: { type: "string" },
-          participants: { type: "array", items: { type: "string" }, description: "May be omitted; defaults to no participants." },
-          timeLocation: { type: "string" },
-          causality: { type: "string" },
-          conflict: { type: "string" },
-          expectedChange: { type: "string" },
-          continuationAnchor: { type: "string" }
-        },
-        required: ["sceneId", "order", "goal", "timeLocation", "causality", "conflict", "expectedChange"]
-      }
-    },
-    foreshadowing: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          id: { type: "string" },
-          description: { type: "string" },
-          plantAt: { type: ["string", "null"], description: "May be omitted or null when unplanned." },
-          payoffAt: { type: ["string", "null"], description: "May be omitted or null when unplanned." },
-          required: { type: "boolean" },
-          status: { type: "string", enum: ["open", "planted", "resolved"] }
-        },
-        required: ["id", "description", "required", "status"]
-      }
+      required: ["characterId", "name", "initialState", "motivation", "arc"]
     }
   },
-  required: ["story", "characters", "chapters", "currentChapterId", "scenes", "foreshadowing"]
+  chapters: {
+    type: "array",
+    description: "Chapter overlay (revise) / complete plan (create): send every chapter you are adding or rewriting in full; chapters you leave out are carried forward unchanged, so never page or echo the whole plan just to advance the current chapter. Removal happens only via droppedChapterIds.",
+    items: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        chapterId: { type: "string" },
+        order: { type: "integer" },
+        title: { type: "string" },
+        purpose: { type: "string" },
+        keyEvents: { type: "array", items: { type: "string" }, description: "May be omitted: inherited from the existing chapter of the same id on revise, none for new chapters; send [] to clear." },
+        plannedCharacters: { type: ["integer", "null"], description: "Planned effective characters, null when unplanned; may be omitted (inherited on revise, null otherwise)." },
+        entryCondition: { type: "string" },
+        exitCondition: { type: "string" }
+      },
+      required: ["chapterId", "order", "title", "purpose", "entryCondition", "exitCondition"]
+    }
+  },
+  droppedChapterIds: {
+    type: "array",
+    description: "chapterIds intentionally removed from the plan (revise only). They must exist and carry no committed prose; omit the field when nothing is removed.",
+    items: { type: "string" }
+  },
+  currentChapterId: { type: ["string", "null"], description: "chapterId of the current chapter; null only when chapters is empty. May be omitted on revise (carried forward)." },
+  scenes: {
+    type: "array",
+    description: "Ordered scene plans of the current chapter (\xA76.1 detail layer); replaces wholesale when present ([] clears). May be omitted on create (defaults to none) and on revise (carried forward unchanged \u2014 send the new chapter's scenes when advancing).",
+    items: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        sceneId: { type: "string" },
+        order: { type: "integer" },
+        goal: { type: "string" },
+        participants: { type: "array", items: { type: "string" }, description: "May be omitted; defaults to no participants." },
+        timeLocation: { type: "string" },
+        causality: { type: "string" },
+        conflict: { type: "string" },
+        expectedChange: { type: "string" },
+        continuationAnchor: { type: "string" }
+      },
+      required: ["sceneId", "order", "goal", "timeLocation", "causality", "conflict", "expectedChange"]
+    }
+  },
+  foreshadowing: {
+    type: "array",
+    description: "Foreshadowing ledger; replaces wholesale when present ([] clears). May be omitted on create (defaults to none) and on revise (carried forward unchanged).",
+    items: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        id: { type: "string" },
+        description: { type: "string" },
+        plantAt: { type: ["string", "null"], description: "May be omitted or null when unplanned." },
+        payoffAt: { type: ["string", "null"], description: "May be omitted or null when unplanned." },
+        required: { type: "boolean" },
+        status: { type: "string", enum: ["open", "planted", "resolved"] }
+      },
+      required: ["id", "description", "required", "status"]
+    }
+  }
+};
+var outlineCreateParameter = {
+  type: "object",
+  description: "Full initial outline payload (\xA76.1): story and the complete chapter plan are required; characters, current-chapter scenes and foreshadowing may be omitted and default to none.",
+  additionalProperties: false,
+  properties: outlineLayerProperties
+};
+var outlineReviseParameter = {
+  type: "object",
+  description: "Outline overlay (\xA76.1): every layer may be omitted \u2014 omitted layers are carried forward unchanged. Send a layer only to replace it wholesale ([] clears it); chapter entries upsert by chapterId, and droppedChapterIds removes chapters explicitly.",
+  additionalProperties: false,
+  properties: outlineLayerProperties
 };
 var handledRequirementsParameter = {
   type: "array",
@@ -6924,24 +6948,24 @@ function createTools() {
         source: { kind: "novel-outline", id: novelId, revision: snapshot.revision }
       };
     }),
-    tool("novel_outline_create", "Create the initial outline and process the first requirement batch (\xA74.3/\xA76.3). Only succeeds while no outline exists; conflicts surface the store error.", {
+    tool("novel_outline_create", "Create the initial outline and process the first requirement batch (\xA74.3/\xA76.3). Only succeeds while no outline exists; conflicts surface the store error. story and the full chapter plan are required; characters, scenes and foreshadowing may be omitted and default to none.", {
       expectedRevision: { type: "string", required: true, description: "Snapshot revision you read via novel_status_read." },
-      outline: { ...outlinePayloadParameter, required: true },
+      outline: { ...outlineCreateParameter, required: true },
       handledRequirements: { ...handledRequirementsParameter, description: "Processing results for the pending requirements; the creation requirement must be handled here. May be omitted only when nothing is handled." }
     }, outlineWriteOutput, async (args, exec) => {
       const novelId = await authorBindingFor(exec);
       const result = await (await novelStore()).createOutline(novelId, {
         expectedRevision: stringArg(args.expectedRevision),
-        outline: normalizeOutlinePayload(args.outline),
+        outline: normalizeOutlinePayload(args.outline, "create"),
         handledRequirements: handledRequirementsArg(args.handledRequirements)
       });
       return { outlineRevision: result.outlineRevision, revision: result.revision, watermark: result.watermark, source: { kind: "novel-outline-create", id: novelId } };
     }),
-    tool("novel_outline_revise", "Atomically revise the plan and the handled directive results (\xA79.3). Never touches committed prose; rejected while a unit is claimed. changes.chapters is an overlay: send only the chapters you add or rewrite in full \u2014 untouched chapters are carried forward automatically.", {
+    tool("novel_outline_revise", "Atomically revise the plan and the handled directive results (\xA79.3). Never touches committed prose; rejected while a unit is claimed. changes is an overlay across every layer: send only what changes \u2014 omitted layers (story, characters, scenes, foreshadowing, currentChapterId, chapters) are carried forward unchanged; a layer you do send replaces wholesale ([] clears it); chapter entries upsert by chapterId and droppedChapterIds removes explicitly.", {
       expectedRevision: { type: "string", required: true, description: "Snapshot revision you read via novel_status_read." },
       expectedOutlineRevision: { type: "string", required: true, description: "Outline revision this revision is based on." },
       reason: { type: "string", required: true, description: "Why the plan changes; cite the directive ids or planning reason." },
-      changes: { ...outlinePayloadParameter, required: true, description: "The next outline. story, characters, scenes and foreshadowing replace wholesale; chapters is an overlay (only the chapters you send are replaced or inserted, omitted chapters are carried forward, droppedChapterIds removes explicitly)." },
+      changes: { ...outlineReviseParameter, required: true },
       handledRequirements: { ...handledRequirementsParameter, description: "Per-directive results for the pending contiguous prefix. May be omitted only when nothing is handled." }
     }, outlineWriteOutput, async (args, exec) => {
       const novelId = await authorBindingFor(exec);
@@ -6949,7 +6973,7 @@ function createTools() {
         expectedRevision: stringArg(args.expectedRevision),
         expectedOutlineRevision: stringArg(args.expectedOutlineRevision),
         reason: stringArg(args.reason),
-        changes: normalizeOutlinePayload(args.changes),
+        changes: normalizeOutlinePayload(args.changes, "revise"),
         handledRequirements: handledRequirementsArg(args.handledRequirements)
       });
       return { outlineRevision: result.outlineRevision, revision: result.revision, watermark: result.watermark, source: { kind: "novel-outline-revise", id: novelId } };
@@ -7542,9 +7566,14 @@ function normalizeSceneCompletion(value) {
     nextAnchor: nextAnchor === void 0 ? null : nextAnchor
   };
 }
-function normalizeOutlinePayload(value) {
+function normalizeOutlinePayload(value, mode) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
   const outline = { ...value };
+  if (mode === "create") {
+    if (outline.characters === void 0) outline.characters = [];
+    if (outline.scenes === void 0) outline.scenes = [];
+    if (outline.foreshadowing === void 0) outline.foreshadowing = [];
+  }
   if (isJsonObject(outline.story)) {
     const story = { ...outline.story };
     if (story.taboos === void 0) story.taboos = [];

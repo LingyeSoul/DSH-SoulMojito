@@ -5256,11 +5256,12 @@ var ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 function isSafeId(value) {
   return typeof value === "string" && ID_PATTERN.test(value);
 }
-function validateOutlinePayload(payload) {
+function validateOutlinePayload(payload, mode = "create") {
   const errors = [];
   const p = payload;
   const story = p.story;
-  if (typeof story !== "object" || story === null || Array.isArray(story)) {
+  if (story === void 0 && mode === "revise") {
+  } else if (typeof story !== "object" || story === null || Array.isArray(story)) {
     errors.push({ field: "story", message: "story is required" });
   } else {
     for (const field of ["premise", "theme", "mainConflict", "endingDirection"]) {
@@ -5273,7 +5274,8 @@ function validateOutlinePayload(payload) {
     }
   }
   const characters = p.characters;
-  if (!Array.isArray(characters)) {
+  if (characters === void 0 && mode === "revise") {
+  } else if (!Array.isArray(characters)) {
     errors.push({ field: "characters", message: "characters must be an array" });
   } else {
     const seen = /* @__PURE__ */ new Set();
@@ -5299,7 +5301,8 @@ function validateOutlinePayload(payload) {
   const chapterIds = /* @__PURE__ */ new Set();
   const orders = [];
   const chapters = p.chapters;
-  if (!Array.isArray(chapters)) {
+  if (chapters === void 0 && mode === "revise") {
+  } else if (!Array.isArray(chapters)) {
     errors.push({ field: "chapters", message: "chapters must be an array" });
   } else {
     chapters.forEach((chapter, index) => {
@@ -5337,7 +5340,8 @@ function validateOutlinePayload(payload) {
     errors.push({ field: "currentChapterId", message: "currentChapterId must be a string or null" });
   }
   const scenes = p.scenes;
-  if (!Array.isArray(scenes)) {
+  if (scenes === void 0 && mode === "revise") {
+  } else if (!Array.isArray(scenes)) {
     errors.push({ field: "scenes", message: "scenes must be an array" });
   } else {
     const seen = /* @__PURE__ */ new Set();
@@ -5364,7 +5368,8 @@ function validateOutlinePayload(payload) {
     });
   }
   const foreshadowing = p.foreshadowing;
-  if (!Array.isArray(foreshadowing)) {
+  if (foreshadowing === void 0 && mode === "revise") {
+  } else if (!Array.isArray(foreshadowing)) {
     errors.push({ field: "foreshadowing", message: "foreshadowing must be an array" });
   } else {
     const seen = /* @__PURE__ */ new Set();
@@ -5981,16 +5986,17 @@ var NovelStore = class _NovelStore {
    * Rejected while any unit is claimed (§9.2) and never drops or reorders
    * chapters that contain committed bodies (§6.1).
    *
-   * `changes.chapters` is an overlay (§6.1): each entry replaces (or inserts)
-   * the same-id chapter, omitted optional fields are inherited from the
-   * existing entry, and every untouched chapter is carried forward — so a
-   * model working from a windowed novel_outline_read can advance the plan
-   * without echoing the whole chapter list. Removal happens only through
-   * droppedChapterIds.
+   * `changes` is an overlay across every layer (§6.1, 2026-10-09): chapters
+   * upsert by id with omitted optional fields inherited, and every other
+   * collection (story, characters, scenes, foreshadowing, currentChapterId)
+   * is carried forward from the previous outline when omitted — a present
+   * layer replaces wholesale, so an explicit [] clears it. A model working
+   * from a windowed novel_outline_read advances the plan by submitting only
+   * what it changes.
    */
   async reviseOutline(novelId, input) {
     if (typeof input.reason !== "string" || input.reason.trim() === "") throw new NovelConfigError({ message: "revision reason must be a non-empty string" });
-    const payloadErrors = validateOutlinePayload(input.changes);
+    const payloadErrors = validateOutlinePayload(input.changes, "revise");
     if (payloadErrors.length > 0) throw new NovelConfigError({ message: outlinePayloadErrorMessage(payloadErrors), errors: payloadErrors });
     return this.mutate(novelId, async () => {
       const { dir, current } = await this.beginMutation(novelId);
@@ -6005,25 +6011,30 @@ var NovelStore = class _NovelStore {
       }
       this.assertChapterDropDeclarations(previous, input.changes);
       const previousById = new Map(previous.chapters.map((chapter) => [chapter.chapterId, chapter]));
-      const chapters = materializeOutlineChapters(input.changes.chapters, previousById, input.changes.droppedChapterIds);
-      const consistencyErrors = validateOutlineConsistency(chapters, input.changes.currentChapterId);
+      const chapters = materializeOutlineChapters(input.changes.chapters ?? [], previousById, input.changes.droppedChapterIds);
+      const story = input.changes.story ?? previous.story;
+      const characters = input.changes.characters ?? previous.characters;
+      const scenes = input.changes.scenes ?? previous.scenes;
+      const foreshadowing = input.changes.foreshadowing ?? previous.foreshadowing;
+      const currentChapterId = input.changes.currentChapterId !== void 0 ? input.changes.currentChapterId : previous.currentChapterId;
+      const consistencyErrors = validateOutlineConsistency(chapters, currentChapterId);
       if (consistencyErrors.length > 0) {
         throw new NovelConfigError({ message: outlinePayloadErrorMessage(consistencyErrors), errors: consistencyErrors });
       }
       this.assertProtectedChapters(previous, current, chapters);
       const handled = this.validateHandledRequirements(current, input.handledRequirements);
-      const outlineRevision = hash16({ kind: "outline", parent: previous.outlineRevision, reason: input.reason, payload: { ...input.changes, chapters } });
+      const outlineRevision = hash16({ kind: "outline", parent: previous.outlineRevision, reason: input.reason, payload: { story, characters, chapters, currentChapterId, scenes, foreshadowing } });
       const built = {
         outlineRevision,
         parentRevision: previous.outlineRevision,
         reason: input.reason,
         sourceRequirementIds: handled.map((item) => item.requirementId),
-        story: structuredClone(input.changes.story),
-        characters: structuredClone(input.changes.characters),
+        story: structuredClone(story),
+        characters: structuredClone(characters),
         chapters,
-        currentChapterId: input.changes.currentChapterId,
-        scenes: structuredClone(input.changes.scenes),
-        foreshadowing: structuredClone(input.changes.foreshadowing)
+        currentChapterId,
+        scenes: structuredClone(scenes),
+        foreshadowing: structuredClone(foreshadowing)
       };
       const requirements = applyHandledRequirements(current.requirements, handled, outlineRevision);
       const watermark = assertWatermarkAdvanced(current.requirements, requirements);
@@ -6958,7 +6969,7 @@ var NovelStore = class _NovelStore {
    */
   assertChapterDropDeclarations(previous, changes) {
     const declared = new Set(changes.droppedChapterIds ?? []);
-    const nextIds = new Set(changes.chapters.map((chapter) => chapter.chapterId));
+    const nextIds = new Set((changes.chapters ?? []).map((chapter) => chapter.chapterId));
     const previousIds = previous.chapters.map((chapter) => chapter.chapterId);
     const violations = [];
     for (const id of declared) {
@@ -7014,7 +7025,11 @@ function materializeOutlineChapters(overlay, previousById, droppedChapterIds) {
   return merged.sort((left, right) => left.order - right.order);
 }
 function outlinePayloadErrorMessage(errors) {
-  return `invalid outline payload: ${errors.map((error) => `${error.field} ${error.message}`).join("; ")}`;
+  const render = (error) => {
+    const text = error.message.startsWith(`${error.field} `) ? error.message.slice(error.field.length + 1) : error.message;
+    return `${error.field} ${text}`;
+  };
+  return `invalid outline payload: ${errors.map(render).join("; ")}`;
 }
 function applyHandledRequirements(records, handled, outlineRevision) {
   const byId = new Map(handled.map((item) => [item.requirementId, item]));
@@ -8640,7 +8655,7 @@ function workInstruction(snapshot2, work, unitId) {
     case "outline-create":
       return "Kickoff work (\xA76.3): read the creation directive with novel_requirements_read, then create the initial plan with novel_outline_create (expectedRevision from novel_status_read; handle the pending directive in handledRequirements). End the turn after the outline is saved.";
     case "outline-revise":
-      return `Planning work (\xA76.3/\xA79.3): ${work.reason} Read the pending directives (novel_requirements_read) and the plan (novel_outline_read), then submit novel_outline_revise with the handled requirement results, or novel_requirement_block for directives conflicting with committed facts. The revise chapters are an overlay: send only the chapters you add or rewrite in full (omitted keyEvents are inherited) and set currentChapterId \u2014 untouched chapters are carried forward automatically, so do not page or re-echo the whole plan; removing a chapter requires its chapterId in droppedChapterIds. End the turn afterwards.`;
+      return `Planning work (\xA76.3/\xA79.3): ${work.reason} Read the pending directives (novel_requirements_read) and the plan (novel_outline_read), then submit novel_outline_revise with the handled requirement results, or novel_requirement_block for directives conflicting with committed facts. The revise payload is an overlay across every layer: send only what changes \u2014 omitted layers (story, characters, scenes, foreshadowing, currentChapterId, chapters) are carried forward automatically, so do not page or re-echo the whole plan; a layer you send replaces wholesale, chapter entries upsert by chapterId (omitted keyEvents inherited), and removing a chapter requires its chapterId in droppedChapterIds. When advancing the current chapter, send the new chapter's scenes. End the turn afterwards.`;
     case "write-unit": {
       if ((snapshot2.config.writerMode ?? "inline") === "subagent") {
         return `Delegated writing unit ${unitId} (\xA76.2, writerMode=subagent): call novel_writer_delegate { unitId: '${unitId}' } directly \u2014 do NOT call novel_unit_claim first; the delegate tool claims the unit internally (a manual claim is only adopted when you pass its executionToken). The delegated writer subagent researches, writes and commits the prose itself: never write body text yourself in this mode. Check the returned receipt (commitId, effective characters, sceneCompletion \u2014 verified against the store, never model-reported) and end the turn immediately afterwards (\xA711). If the delegation fails, end the turn as well so the failure path can release the unit (\xA75.3).`;
@@ -16537,7 +16552,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.1".trim() : "";
-  const commit = true ? normalizeCommit("fdbfd2c") : void 0;
+  const commit = true ? normalizeCommit("f7b8aa8") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

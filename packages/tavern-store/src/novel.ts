@@ -64,6 +64,7 @@ import {
   type NovelAssetRef,
   type NovelCreateConfig,
   type NovelOutline,
+  type NovelOutlineChanges,
   type NovelOutlinePayload,
   type NovelPauseReason,
   type NovelRunBudgets,
@@ -555,19 +556,20 @@ export class NovelStore {
    * Rejected while any unit is claimed (§9.2) and never drops or reorders
    * chapters that contain committed bodies (§6.1).
    *
-   * `changes.chapters` is an overlay (§6.1): each entry replaces (or inserts)
-   * the same-id chapter, omitted optional fields are inherited from the
-   * existing entry, and every untouched chapter is carried forward — so a
-   * model working from a windowed novel_outline_read can advance the plan
-   * without echoing the whole chapter list. Removal happens only through
-   * droppedChapterIds.
+   * `changes` is an overlay across every layer (§6.1, 2026-10-09): chapters
+   * upsert by id with omitted optional fields inherited, and every other
+   * collection (story, characters, scenes, foreshadowing, currentChapterId)
+   * is carried forward from the previous outline when omitted — a present
+   * layer replaces wholesale, so an explicit [] clears it. A model working
+   * from a windowed novel_outline_read advances the plan by submitting only
+   * what it changes.
    */
   async reviseOutline(
     novelId: string,
-    input: { expectedRevision: string; expectedOutlineRevision: string; reason: string; changes: NovelOutlinePayload; handledRequirements: readonly HandledRequirement[] },
+    input: { expectedRevision: string; expectedOutlineRevision: string; reason: string; changes: NovelOutlineChanges; handledRequirements: readonly HandledRequirement[] },
   ): Promise<{ outlineRevision: string; revision: string; watermark: number }> {
     if (typeof input.reason !== 'string' || input.reason.trim() === '') throw new NovelConfigError({ message: 'revision reason must be a non-empty string' })
-    const payloadErrors = validateOutlinePayload(input.changes)
+    const payloadErrors = validateOutlinePayload(input.changes, 'revise')
     if (payloadErrors.length > 0) throw new NovelConfigError({ message: outlinePayloadErrorMessage(payloadErrors), errors: payloadErrors })
     return this.mutate(novelId, async () => {
       const { dir, current } = await this.beginMutation(novelId)
@@ -583,25 +585,32 @@ export class NovelStore {
       }
       this.assertChapterDropDeclarations(previous, input.changes)
       const previousById = new Map(previous.chapters.map((chapter) => [chapter.chapterId, chapter]))
-      const chapters = materializeOutlineChapters(input.changes.chapters, previousById, input.changes.droppedChapterIds)
-      const consistencyErrors = validateOutlineConsistency(chapters, input.changes.currentChapterId)
+      const chapters = materializeOutlineChapters(input.changes.chapters ?? [], previousById, input.changes.droppedChapterIds)
+      // §6.1 overlay (2026-10-09): omitted layers are carried forward from the
+      // previous outline; a present layer replaces wholesale ([] clears it).
+      const story = input.changes.story ?? previous.story
+      const characters = input.changes.characters ?? previous.characters
+      const scenes = input.changes.scenes ?? previous.scenes
+      const foreshadowing = input.changes.foreshadowing ?? previous.foreshadowing
+      const currentChapterId = input.changes.currentChapterId !== undefined ? input.changes.currentChapterId : previous.currentChapterId
+      const consistencyErrors = validateOutlineConsistency(chapters, currentChapterId)
       if (consistencyErrors.length > 0) {
         throw new NovelConfigError({ message: outlinePayloadErrorMessage(consistencyErrors), errors: consistencyErrors })
       }
       this.assertProtectedChapters(previous, current, chapters)
       const handled = this.validateHandledRequirements(current, input.handledRequirements)
-      const outlineRevision = hash16({ kind: 'outline', parent: previous.outlineRevision, reason: input.reason, payload: { ...input.changes, chapters } })
+      const outlineRevision = hash16({ kind: 'outline', parent: previous.outlineRevision, reason: input.reason, payload: { story, characters, chapters, currentChapterId, scenes, foreshadowing } })
       const built: NovelOutline = {
         outlineRevision,
         parentRevision: previous.outlineRevision,
         reason: input.reason,
         sourceRequirementIds: handled.map((item) => item.requirementId),
-        story: structuredClone(input.changes.story),
-        characters: structuredClone(input.changes.characters),
+        story: structuredClone(story),
+        characters: structuredClone(characters),
         chapters,
-        currentChapterId: input.changes.currentChapterId,
-        scenes: structuredClone(input.changes.scenes),
-        foreshadowing: structuredClone(input.changes.foreshadowing),
+        currentChapterId,
+        scenes: structuredClone(scenes),
+        foreshadowing: structuredClone(foreshadowing),
       }
       const requirements = applyHandledRequirements(current.requirements, handled, outlineRevision)
       const watermark = assertWatermarkAdvanced(current.requirements, requirements)
@@ -1646,9 +1655,9 @@ export class NovelStore {
    * reference real chapters that are actually absent from the payload;
    * committed/completed chapters are guarded by assertProtectedChapters.
    */
-  private assertChapterDropDeclarations(previous: NovelOutline, changes: NovelOutlinePayload): void {
+  private assertChapterDropDeclarations(previous: NovelOutline, changes: NovelOutlineChanges): void {
     const declared = new Set(changes.droppedChapterIds ?? [])
-    const nextIds = new Set(changes.chapters.map((chapter) => chapter.chapterId))
+    const nextIds = new Set((changes.chapters ?? []).map((chapter) => chapter.chapterId))
     const previousIds = previous.chapters.map((chapter) => chapter.chapterId)
     const violations: string[] = []
     for (const id of declared) {
@@ -1727,7 +1736,14 @@ function materializeOutlineChapters(
  * burned the session.
  */
 function outlinePayloadErrorMessage(errors: readonly ValidationError[]): string {
-  return `invalid outline payload: ${errors.map((error) => `${error.field} ${error.message}`).join('; ')}`
+  const render = (error: ValidationError): string => {
+    // Several messages already open with the field name; repeating it produced
+    // "characters characters must be an array" in the field, which read as a
+    // parsing glitch rather than a fixable shape error.
+    const text = error.message.startsWith(`${error.field} `) ? error.message.slice(error.field.length + 1) : error.message
+    return `${error.field} ${text}`
+  }
+  return `invalid outline payload: ${errors.map(render).join('; ')}`
 }
 
 function applyHandledRequirements(

@@ -970,4 +970,61 @@ describe('AgentNovel author tools', () => {
     expect(revised.watermark).toBe(1)
     expectLossless(revised)
   })
+
+  it('outline revise carries omitted layers forward and create defaults empty collections (§6.1 overlay 2026-10-09)', async () => {
+    const fifth = await novels.createNovel(tavern, novelConfig({ title: '覆盖层篇', characterNames: [], worldNames: [], lengthBudget: { kind: 'unbounded' } }))
+    await tavern.updateState((state) => ({
+      sessionBindings: { ...state.sessionBindings, novelist: { architecture: 'agent-novel', novelId: fifth.novelId } },
+    }))
+    const created = await tools.get('novel_outline_create')!.execute({
+      expectedRevision: fifth.revision,
+      outline: {
+        story: { premise: 'P', theme: 't', mainConflict: 'c', endingDirection: 'e' },
+        characters: [{ characterId: 'solo', name: 'Solo', initialState: 'i', motivation: 'm', arc: 'a' }],
+        chapters: [{ chapterId: 'ch-1', order: 1, title: 'T', purpose: 'p', entryCondition: 's', exitCondition: 'd' }],
+        currentChapterId: 'ch-1',
+        scenes: [{ sceneId: 'sc-1', order: 1, goal: 'g', timeLocation: 'tl', causality: 'c', conflict: 'c', expectedChange: 'ec' }],
+        foreshadowing: [{ id: 'f-1', description: 'plant', required: false, status: 'open' }],
+      },
+      handledRequirements: [{ requirementId: 'req-1', result: 'applied', effectiveLocation: 'story.premise' }],
+    }, exec)
+
+    // The field regression this guards: a minimal revise (only the changed
+    // layer) was rejected with "characters/chapters/scenes/foreshadowing must
+    // be an array" and the model retried blind.
+    const revised = await tools.get('novel_outline_revise')!.execute({
+      expectedRevision: (await novels.getNovel(fifth.novelId))!.revision,
+      expectedOutlineRevision: created.outlineRevision,
+      reason: 'story-only tweak',
+      changes: { story: { premise: 'P2', theme: 't', mainConflict: 'c', endingDirection: 'e2' } },
+    }, exec)
+    expect(revised.watermark).toBe(1)
+    expectLossless(revised)
+
+    const outline = await tools.get('novel_outline_read')!.execute({}, exec)
+    expect(outline.story).toMatchObject({ premise: 'P2', endingDirection: 'e2' })
+    expect(outline.characters.map((character: { characterId: string }) => character.characterId)).toEqual(['solo'])
+    expect(outline.chapters.map((chapter: { chapterId: string }) => chapter.chapterId)).toEqual(['ch-1'])
+    expect(outline.currentChapterId).toBe('ch-1')
+    expect(outline.scenes.map((scene: { sceneId: string }) => scene.sceneId)).toEqual(['sc-1'])
+    expect(outline.foreshadowing.map((item: { id: string }) => item.id)).toEqual(['f-1'])
+    expectLossless(outline)
+
+    // Create tolerates omitted empty collections (§11): the tool layer fills [].
+    const sixth = await novels.createNovel(tavern, novelConfig({ title: '稀疏创建篇', characterNames: [], worldNames: [], lengthBudget: { kind: 'unbounded' } }))
+    await tavern.updateState((state) => ({
+      sessionBindings: { ...state.sessionBindings, novelist: { architecture: 'agent-novel', novelId: sixth.novelId } },
+    }))
+    const sparse = await tools.get('novel_outline_create')!.execute({
+      expectedRevision: sixth.revision,
+      outline: {
+        story: { premise: 'spare', theme: 't', mainConflict: 'c', endingDirection: 'e' },
+        chapters: [{ chapterId: 'ch-1', order: 1, title: 'T', purpose: 'p', entryCondition: 's', exitCondition: 'd' }],
+        currentChapterId: 'ch-1',
+      },
+      handledRequirements: [{ requirementId: 'req-1', result: 'applied', effectiveLocation: 'ch-1' }],
+    }, exec)
+    expect(typeof sparse.outlineRevision).toBe('string')
+    expectLossless(sparse)
+  })
 })
