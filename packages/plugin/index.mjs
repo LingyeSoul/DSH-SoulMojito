@@ -7234,6 +7234,28 @@ async function saveOriginalSnapshot(root, characterName, card) {
 `);
   return true;
 }
+async function deleteOriginalSnapshot(root, characterName) {
+  try {
+    await fs5.unlink(originalSnapshotPath(root, characterName));
+    return true;
+  } catch (cause) {
+    if (cause.code === "ENOENT") return false;
+    throw cause;
+  }
+}
+async function moveOriginalSnapshot(root, fromName, toName) {
+  const from = originalSnapshotPath(root, fromName);
+  const to = originalSnapshotPath(root, toName);
+  if (from === to) return false;
+  if (!await fileExists(from)) return false;
+  try {
+    await fs5.unlink(to);
+  } catch (cause) {
+    if (cause.code !== "ENOENT") throw cause;
+  }
+  await fs5.rename(from, to);
+  return true;
+}
 
 // packages/tavern-store/src/scripts.ts
 import { promises as fs6 } from "node:fs";
@@ -13142,37 +13164,81 @@ async function writeAtomicText4(file, text) {
   await fs9.writeFile(tmp, text, "utf8");
   await fs9.rename(tmp, file);
 }
-function normalizePlan(raw) {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return void 0;
-  const record = raw;
-  if (typeof record.id !== "string" || typeof record.character !== "string" || typeof record.title !== "string" || !Array.isArray(record.changes) || typeof record.createdAt !== "string") return void 0;
-  const status2 = record.status;
-  if (status2 !== "pending" && status2 !== "approved" && status2 !== "rejected" && status2 !== "applied") return void 0;
+function normalizeCardPlan(raw) {
+  if (typeof raw.character !== "string" || typeof raw.title !== "string" || !Array.isArray(raw.changes) || typeof raw.createdAt !== "string") return void 0;
   const changes = [];
-  for (const entry of record.changes) {
+  for (const entry of raw.changes) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return void 0;
     const change = entry;
-    if (typeof change.field !== "string" || !isValidPlanValue(change.currentValue) || !isValidPlanValue(change.newValue)) return void 0;
+    if (typeof change.field !== "string" || !isValidCardPlanValue(change.currentValue) || !isValidCardPlanValue(change.newValue)) return void 0;
     if (change.note !== void 0 && typeof change.note !== "string") return void 0;
     changes.push(change.note === void 0 ? { field: change.field, currentValue: change.currentValue, newValue: change.newValue } : { field: change.field, currentValue: change.currentValue, newValue: change.newValue, note: change.note });
   }
   return {
-    id: record.id,
-    character: record.character,
-    title: record.title,
+    kind: "card",
+    id: raw.id,
+    character: raw.character,
+    title: raw.title,
     changes,
-    createdAt: record.createdAt,
-    status: status2,
-    ...typeof record.decidedAt === "string" ? { decidedAt: record.decidedAt } : {},
-    ...typeof record.appliedAt === "string" ? { appliedAt: record.appliedAt } : {}
+    createdAt: raw.createdAt,
+    status: raw.status,
+    ...typeof raw.decidedAt === "string" ? { decidedAt: raw.decidedAt } : {},
+    ...typeof raw.appliedAt === "string" ? { appliedAt: raw.appliedAt } : {}
   };
 }
-function isValidPlanValue(value) {
+function isValidCardPlanValue(value) {
   if (typeof value === "string") return true;
   if (!Array.isArray(value) || value.length > 64) return false;
   return value.every((item) => typeof item === "string");
 }
-async function getCardPlan(dir, planId) {
+function isValidWorldPlanValue(value) {
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return true;
+  if (!Array.isArray(value) || value.length > 64) return false;
+  return value.every((item) => typeof item === "string");
+}
+function normalizeWorldPlan(raw) {
+  if (raw.op !== "edit" && raw.op !== "create") return void 0;
+  if (typeof raw.world !== "string" || typeof raw.title !== "string" || !Array.isArray(raw.entries) || typeof raw.createdAt !== "string") return void 0;
+  const entries = [];
+  for (const entry of raw.entries) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return void 0;
+    const record = entry;
+    if (!Number.isInteger(record.uid) || record.uid === null || record.uid < 0) return void 0;
+    if (record.action !== "update" && record.action !== "create" && record.action !== "remove") return void 0;
+    if (!Array.isArray(record.fields)) return void 0;
+    const fields = [];
+    for (const fieldEntry of record.fields) {
+      if (typeof fieldEntry !== "object" || fieldEntry === null || Array.isArray(fieldEntry)) return void 0;
+      const field = fieldEntry;
+      if (typeof field.field !== "string" || !isValidWorldPlanValue(field.newValue)) return void 0;
+      if (field.currentValue !== void 0 && !isValidWorldPlanValue(field.currentValue)) return void 0;
+      fields.push(field.currentValue === void 0 ? { field: field.field, newValue: field.newValue } : { field: field.field, currentValue: field.currentValue, newValue: field.newValue });
+    }
+    entries.push(record.note === void 0 ? { uid: record.uid, action: record.action, fields } : { uid: record.uid, action: record.action, fields, note: record.note });
+  }
+  return {
+    kind: "world",
+    id: raw.id,
+    op: raw.op,
+    world: raw.world,
+    title: raw.title,
+    entries,
+    createdAt: raw.createdAt,
+    status: raw.status,
+    ...typeof raw.decidedAt === "string" ? { decidedAt: raw.decidedAt } : {},
+    ...typeof raw.appliedAt === "string" ? { appliedAt: raw.appliedAt } : {}
+  };
+}
+function normalizePlan(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return void 0;
+  const record = raw;
+  if (typeof record.id !== "string") return void 0;
+  const status2 = record.status;
+  if (status2 !== "pending" && status2 !== "approved" && status2 !== "rejected" && status2 !== "applied") return void 0;
+  if (record.kind === "world") return normalizeWorldPlan({ ...record, status: status2 });
+  return normalizeCardPlan({ ...record, status: status2 });
+}
+async function getPlan(dir, planId) {
   if (typeof planId !== "string" || !PLAN_ID_PATTERN.test(planId)) return void 0;
   let text;
   try {
@@ -13183,7 +13249,7 @@ async function getCardPlan(dir, planId) {
   }
   return normalizePlan(JSON.parse(text));
 }
-async function listCardPlans(dir, filter = {}) {
+async function listPlans(dir, filter = {}) {
   let files;
   try {
     files = await fs9.readdir(plansDir(dir));
@@ -13201,10 +13267,10 @@ async function listCardPlans(dir, filter = {}) {
     }
   }
   const wanted = filter.status !== void 0 && filter.status !== "all" ? filter.status : void 0;
-  return plans.filter((plan) => (wanted === void 0 || plan.status === wanted) && (filter.character === void 0 || plan.character === filter.character)).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+  return plans.filter((plan) => (wanted === void 0 || plan.status === wanted) && (filter.kind === void 0 || plan.kind === filter.kind) && (filter.character === void 0 || plan.kind === "card" && plan.character === filter.character) && (filter.world === void 0 || plan.kind === "world" && plan.world === filter.world)).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
 }
-async function decideCardPlan(dir, planId, approve) {
-  const plan = await getCardPlan(dir, planId);
+async function decidePlan(dir, planId, approve) {
+  const plan = await getPlan(dir, planId);
   if (plan === void 0) throw new Error(`plan '${planId}' not found`);
   if (plan.status !== "pending") throw new Error(`plan '${planId}' is already ${plan.status}`);
   const decided = { ...plan, status: approve ? "approved" : "rejected", decidedAt: (/* @__PURE__ */ new Date()).toISOString() };
@@ -13212,8 +13278,8 @@ async function decideCardPlan(dir, planId, approve) {
 `);
   return decided;
 }
-async function applyCardPlan(dir, planId) {
-  const plan = await getCardPlan(dir, planId);
+async function applyPlan(dir, planId) {
+  const plan = await getPlan(dir, planId);
   if (plan === void 0) throw new Error(`plan '${planId}' not found`);
   if (plan.status === "rejected") throw new Error(`plan '${planId}' was rejected and cannot be applied`);
   if (plan.status === "applied") throw new Error(`plan '${planId}' was already applied`);
@@ -13232,9 +13298,9 @@ var KERNEL = [
   "Working protocol for every modification request:",
   "- Read first: call card_get (cards), world_get (world books) or preset_get (presets) on the named resource to ground yourself in the current working copy before discussing any change. Previews truncate long values \u2014 card_get takes full: [fields] to fetch card fields in full and world_get takes uids to fetch entries in full; quote the exact text verbatim when rewriting or moving long content. world_list shows the whole world-book library (with the cards linking each book) when the user has not pinned an existing name.",
   "- Propose before writing: present a concrete plan \u2014 for every affected field or entry, show the current value (or an excerpt of it) and the full replacement value, plus why the change serves the user's intent. Quote exact text; never describe a change vaguely.",
-  "- Record card plans: for card edits, call card_plan_propose after the user reacts positively to the idea. It records the plan (planId) with the live current values and shows it in the workbench panel for review.",
+  "- Record plans: for card edits call card_plan_propose, and for world book edits or creations call world_plan_propose (create: true for new books), after the user reacts positively to the idea. They record the plan (planId) with the live current values and show it in the workbench panel for review.",
   '- Wait for explicit confirmation: the user must clearly approve the plan (e.g. "confirm", "apply it", or an equivalent). Silence, a new question, or a partial remark is NOT approval. Never write on an assumed yes.',
-  "- Only then write: for card plans call card_put with the planId and confirmed: true \u2014 it applies the recorded plan exactly. Direct card_put without a planId stays available for small in-conversation edits the user just approved verbatim. world_put and preset_put take confirmed: true as well; the tools reject calls without confirmation, and a rejection means go back to the user, never retry with the flag flipped on your own.",
+  "- Only then write: for card plans call card_put with the planId and confirmed: true \u2014 it applies the recorded plan exactly. For world edit plans call world_put with the planId, for world creation plans call world_create with the planId (both with confirmed: true). Direct card_put / world_put / world_create without a planId stay available for small in-conversation edits the user just approved verbatim; preset_put takes confirmed: true as well. The tools reject calls without confirmation, and a rejection means go back to the user, never retry with the flag flipped on your own.",
   "- Report the result: after writing, summarize what changed (fields, entries and their new lengths) and suggest what to review next.",
   "- Originals: card_original_get reads the import-time original snapshot; card_restore_original (also confirmed-only) overwrites the working copy with that original. Offer restore when the user dislikes accumulated edits. Cards built with card_create snapshot their as-created state, so restore works for hand-built cards too.",
   "- Deleting: card_delete removes a card PERMANENTLY with ALL its chat logs. Double gate: confirmed as usual, plus \u2014 when chats exist \u2014 a second call with deleteChats: true after you told the user the exact chat count. Group memberships, solo session bindings and the original snapshot are cleaned up with it.",
@@ -13243,7 +13309,7 @@ var KERNEL = [
   "Starting tasks (P3):",
   "- New card from an idea, material or script: gather the source first \u2014 material_list shows the script library, material_read fetches one chunk at a time (you never need the whole script in one call) \u2014 then discuss the draft fields with the user and call card_create with confirmed: true only after explicit approval. Creation binds nothing: scripts and world books attach through their own routes, chosen by the user or the panel. On success the workbench session renames itself to the new card name (the session the user is chatting in; mention it when reporting the result).",
   "- Convert a card to MVU (proposal 0012 P3): read the card with card_get, locate the old status-bar block in the prose, propose the variable structure and a statusTemplate draft, then call card_apply_mvu with confirmed: true after explicit approval. The tool only writes extensions.agentTavern (and snapshots the pre-conversion card as the original when none exists, keeping the conversion reversible via card_restore_original); it does NOT rewrite the prose \u2014 afterwards offer a separate confirmed card_put to strip the now-redundant status-bar block, and tell the user to start a new chat to verify the fixed right-side status panel.",
-  "- New world book: call world_list first so you propose a free name (and see what already exists), discuss the book name and its initial entries with the user, then call world_create with confirmed: true only after explicit approval. Seed entries get uids in array order (0, 1, \u2026); world_create never overwrites an existing book, and later entries and edits go through world_put. Creation binds nothing \u2014 attach the book to its card with world_bind once the user wants the pair to travel together (the card link is what makes the book join plays); world_copy forks an existing book verbatim when a new card should start from the same lore.",
+  "- New world book: call world_list first so you propose a free name (and see what already exists), discuss the book name and its initial entries with the user, then record the creation with world_plan_propose (create: true) and apply it with world_create (planId, confirmed: true) after explicit approval. Seed entries get uids in array order (0, 1, \u2026); world_create never overwrites an existing book, and later entries and edits go through world_put. Creation binds nothing \u2014 attach the book to its card with world_bind once the user wants the pair to travel together (the card link is what makes the book join plays); world_copy forks an existing book verbatim when a new card should start from the same lore.",
   "",
   "Boundaries:",
   "- Editable card fields: text fields name, nickname, description, personality, scenario, firstMes, creatorNotes, mesExample, systemPrompt, postHistoryInstructions, creator and characterVersion; array fields tags and alternateGreetings take the FULL replacement array (whole-group replace, blank items dropped). World entry edits match by uid and cover the full ST entry whitelist \u2014 key, keysecondary, comment, content, enabled plus advanced fields (constant, order, position, depth, probability, selective logic, inclusion groups, recursion flags, timed effects...); unmentioned fields are preserved verbatim and remove: true deletes an entry. Book-level operations: world_delete (refuses while cards still link the book), world_rename (re-points every card link and activeWorlds) and world_bind (attach/detach a book on a card). Preset edits to prompt role/content/enabled (match by name). Other areas (extensions, scripts, chat state) are out of scope; say so instead of working around the limit.",
@@ -13326,6 +13392,15 @@ var planProposeOutput = objectOutput({
   status: { type: "string" },
   createdAt: { type: "string" },
   changes: { type: "array", items: { type: "object", additionalProperties: true } }
+});
+var worldPlanProposeOutput = objectOutput({
+  planId: { type: "string" },
+  world: { type: "string" },
+  op: { type: "string" },
+  title: { type: "string" },
+  status: { type: "string" },
+  createdAt: { type: "string" },
+  entries: { type: "array", items: { type: "object", additionalProperties: true } }
 });
 var worldSummaryOutput = objectOutput({
   found: { type: "boolean" },
@@ -13458,6 +13533,9 @@ async function saveCardValues(character, values, found) {
     specVersion: current.card.specVersion,
     data: nextData
   });
+  if (saved.card.data.name !== current.card.data.name) {
+    await moveOriginalSnapshot(dshHomePath("tavern"), character, saved.card.data.name);
+  }
   return { found: current, saved };
 }
 function formatWriteResult(found, saved, values) {
@@ -13497,7 +13575,7 @@ async function executeCardPlan(plan) {
   }
   const { found: written, saved } = await saveCardValues(plan.character, values, found);
   const formatted = formatWriteResult(written, saved, values);
-  const applied = await applyCardPlan(dshHomePath("tavern"), plan.id);
+  const applied = await applyPlan(dshHomePath("tavern"), plan.id);
   return {
     plan: applied,
     character: formatted.character,
@@ -13505,6 +13583,72 @@ async function executeCardPlan(plan) {
     changes: formatted.changes,
     fieldLengths: formatted.fieldLengths,
     source: formatted.source
+  };
+}
+async function executeWorldPlan(plan) {
+  if (plan.status === "rejected") throw new Error(`plan '${plan.id}' was rejected and cannot be applied`);
+  if (plan.status === "applied") throw new Error(`plan '${plan.id}' was already applied`);
+  if (plan.entries.length === 0) throw new Error(`plan '${plan.id}' has no entries`);
+  const db = await tavernStore();
+  if (plan.op === "create") {
+    if (await db.getWorld(plan.world) !== void 0) {
+      throw new Error(`plan '${plan.id}' is stale: world '${plan.world}' already exists; re-propose the plan`);
+    }
+    const seeds = plan.entries.map((entry) => {
+      const values = {};
+      for (const field of entry.fields) values[editableWorldField(field.field)] = worldFieldValue(editableWorldField(field.field), field.newValue, ` for uid ${entry.uid}`);
+      return values;
+    });
+    const entries2 = seeds.map((values, uid) => worldEntryFromValues(uid, values));
+    await db.putWorld({ name: plan.world, entries: entries2 });
+    const applied2 = await applyPlan(dshHomePath("tavern"), plan.id);
+    return {
+      plan: applied2,
+      world: plan.world,
+      entryCount: entries2.length,
+      nextUid: entries2.length,
+      touched: entries2.map((_entry, uid) => ({ uid, created: true, fields: plan.entries[uid].fields.map((field) => field.field) }))
+    };
+  }
+  const book = await db.getWorld(plan.world);
+  if (book === void 0) throw new Error(`plan '${plan.id}' is stale: world '${plan.world}' no longer exists; re-propose the plan`);
+  const byUid = new Map(book.entries.map((entry) => [entry.uid, entry]));
+  const edits = plan.entries.map((entry) => {
+    const existing = byUid.get(entry.uid);
+    if (entry.action === "remove") {
+      if (existing === void 0) throw new Error(`plan '${plan.id}' is stale: uid ${entry.uid} no longer exists in world '${plan.world}'; re-propose the plan`);
+      return { uid: entry.uid, remove: true, values: {}, fields: [] };
+    }
+    if (entry.action === "update" && existing === void 0) {
+      throw new Error(`plan '${plan.id}' is stale: uid ${entry.uid} no longer exists in world '${plan.world}'; re-propose the plan`);
+    }
+    if (entry.action === "create" && existing !== void 0) {
+      throw new Error(`plan '${plan.id}' is stale: uid ${entry.uid} already exists in world '${plan.world}'; re-propose the plan`);
+    }
+    const values = {};
+    const fields = [];
+    for (const fieldChange of entry.fields) {
+      const field = editableWorldField(fieldChange.field);
+      if (entry.action === "update") {
+        const live = worldLiveValue(existing, field);
+        if (fieldChange.currentValue === void 0 || !worldPlanValueMatches(live, fieldChange.currentValue)) {
+          throw new Error(`plan '${plan.id}' is stale: field '${field}' on uid ${entry.uid} changed since the plan was proposed; re-propose the plan`);
+        }
+      }
+      values[field] = worldFieldValue(field, fieldChange.newValue, ` for uid ${entry.uid}`);
+      fields.push(field);
+    }
+    return { uid: entry.uid, remove: false, values, fields };
+  });
+  const { entries, touched } = applyWorldEdits(plan.world, book, edits);
+  await db.putWorld({ ...book, entries });
+  const applied = await applyPlan(dshHomePath("tavern"), plan.id);
+  return {
+    plan: applied,
+    world: plan.world,
+    entryCount: entries.length,
+    nextUid: entries.reduce((max2, entry) => Math.max(max2, entry.uid), -1) + 1,
+    touched
   };
 }
 function editableField(field) {
@@ -13576,6 +13720,103 @@ var WORLD_ENTRY_FIELDS = {
 };
 var WORLD_EDITABLE_FIELDS = Object.keys(WORLD_ENTRY_FIELDS);
 var WORLD_EDITABLE_FIELD_LIST = WORLD_EDITABLE_FIELDS.join(", ");
+function worldFieldValue(name2, raw, label) {
+  const spec = WORLD_ENTRY_FIELDS[name2];
+  const at = `${name2}${label}`;
+  switch (spec.type) {
+    case "string":
+      if (typeof raw !== "string") throw new Error(`${at} must be a string`);
+      if (raw.length > (spec.maxLength ?? Number.POSITIVE_INFINITY)) {
+        throw new Error(`${at} exceeds the ${spec.maxLength}-character limit (got ${raw.length})`);
+      }
+      return raw;
+    case "stringArray":
+      if (!Array.isArray(raw) || raw.length > (spec.maxItems ?? Number.POSITIVE_INFINITY) || raw.some((item) => typeof item !== "string" || item.trim() === "")) {
+        throw new Error(`${at} must be an array of at most ${spec.maxItems} non-empty strings`);
+      }
+      return raw;
+    case "boolean":
+      if (typeof raw !== "boolean") throw new Error(`${at} must be a boolean`);
+      return raw;
+    case "integer":
+      if (typeof raw !== "number" || !Number.isInteger(raw) || raw < (spec.min ?? Number.NEGATIVE_INFINITY) || raw > (spec.max ?? Number.POSITIVE_INFINITY)) {
+        throw new Error(`${at} must be an integer between ${spec.min} and ${spec.max}`);
+      }
+      return raw;
+    case "nullableBoolean":
+      if (raw === null) return null;
+      if (typeof raw !== "boolean") throw new Error(`${at} must be a boolean or null`);
+      return raw;
+    case "nullableInteger":
+      if (raw === null) return null;
+      if (typeof raw !== "number" || !Number.isInteger(raw) || raw < (spec.min ?? Number.NEGATIVE_INFINITY) || raw > (spec.max ?? Number.POSITIVE_INFINITY)) {
+        throw new Error(`${at} must be an integer between ${spec.min} and ${spec.max}, or null`);
+      }
+      return raw;
+  }
+}
+function worldFieldRawEntries(values) {
+  return Object.entries(values).map(([name2, value]) => {
+    const spec = WORLD_ENTRY_FIELDS[name2];
+    return [spec.loreKey ?? name2, spec.invert === true ? !value : value];
+  });
+}
+function applyWorldEntryFields(entry, values) {
+  const next = { ...entry };
+  const target = next;
+  for (const [key, value] of worldFieldRawEntries(values)) target[key] = value;
+  return next;
+}
+function worldEntryFromValues(uid, values) {
+  const raw = { uid };
+  for (const [key, value] of worldFieldRawEntries(values)) raw[key] = value;
+  return normalizeEntry(raw);
+}
+function applyWorldEdits(world, book, edits) {
+  const byUid = new Map(book.entries.map((entry) => [entry.uid, entry]));
+  const touched = [];
+  for (const edit of edits) {
+    const existing = byUid.get(edit.uid);
+    if (edit.remove) {
+      if (existing === void 0) throw new Error(`uid ${edit.uid} not found in world '${world}'; removal matches existing entries only (see world_get)`);
+      byUid.delete(edit.uid);
+      touched.push({ uid: edit.uid, created: false, removed: true, fields: [] });
+      continue;
+    }
+    if (existing === void 0) {
+      byUid.set(edit.uid, worldEntryFromValues(edit.uid, edit.values));
+      touched.push({ uid: edit.uid, created: true, fields: edit.fields });
+      continue;
+    }
+    byUid.set(edit.uid, applyWorldEntryFields(existing, edit.values));
+    touched.push({ uid: edit.uid, created: false, fields: edit.fields });
+  }
+  return { entries: [...byUid.values()].sort((a, b) => a.uid - b.uid), touched };
+}
+function worldLiveValue(entry, field) {
+  const spec = WORLD_ENTRY_FIELDS[field];
+  const record = entry;
+  const raw = record[spec.loreKey ?? field];
+  if (spec.invert === true) return typeof raw === "boolean" ? !raw : true;
+  if (raw === void 0) {
+    if (Array.isArray(spec.fallback)) return [];
+    return spec.fallback ?? null;
+  }
+  return raw;
+}
+function worldPlanValueMatches(live, recorded) {
+  if (Array.isArray(live) || Array.isArray(recorded)) {
+    if (!Array.isArray(live) || !Array.isArray(recorded)) return false;
+    return live.length === recorded.length && live.every((item, index) => item === recorded[index]);
+  }
+  return live === recorded;
+}
+function editableWorldField(field) {
+  if (!WORLD_EDITABLE_FIELDS.includes(field)) {
+    throw new Error(`field '${field}' is not an editable world entry field; editable fields: ${WORLD_EDITABLE_FIELD_LIST}`);
+  }
+  return field;
+}
 function limitText(value, max2) {
   return typeof value === "string" ? value.slice(0, max2) : "";
 }
@@ -14151,6 +14392,9 @@ async function handleApi(ctx, req, res) {
     clampIdentitySummary(body.card);
     const saved = await db.updateCharacter(oldName, body.card);
     const nextName = saved.card.data.name;
+    if (nextName !== oldName) {
+      await moveOriginalSnapshot(dshHomePath("tavern"), oldName, nextName);
+    }
     const state = await db.updateState((current) => {
       const activeCharacter = current.activeCharacter === oldName ? nextName : current.activeCharacter;
       const sessionBindings = Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
@@ -14199,6 +14443,7 @@ async function handleApi(ctx, req, res) {
       activeCharacter: current.activeCharacter === name2 ? void 0 : current.activeCharacter,
       sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.character === name2 && binding.group !== true)))
     }));
+    await deleteOriginalSnapshot(dshHomePath("tavern"), name2);
     await refreshActivePrompt();
     return sendJson(res, 200, { ok: true, state });
   }
@@ -14658,8 +14903,13 @@ async function handleApi(ctx, req, res) {
     if (statusParam !== "pending" && statusParam !== "approved" && statusParam !== "rejected" && statusParam !== "applied" && statusParam !== "all") {
       return sendJson(res, 400, { ok: false, message: `unknown status filter '${statusParam}'`, code: "TAVERN_WORKBENCH" });
     }
+    const kindParam = url.searchParams.get("kind");
+    if (kindParam !== null && kindParam !== "card" && kindParam !== "world") {
+      return sendJson(res, 400, { ok: false, message: `unknown kind filter '${kindParam}'`, code: "TAVERN_WORKBENCH" });
+    }
     const character = url.searchParams.get("character") ?? void 0;
-    const plans = await listCardPlans(dshHomePath("tavern"), {
+    const plans = await listPlans(dshHomePath("tavern"), {
+      ...kindParam !== null ? { kind: kindParam } : {},
       ...character !== void 0 && character !== "" ? { character } : {},
       status: statusParam
     });
@@ -14671,14 +14921,18 @@ async function handleApi(ctx, req, res) {
     if (typeof body.approve !== "boolean") {
       return sendJson(res, 400, { ok: false, message: "expected { approve: boolean }", code: "TAVERN_WORKBENCH" });
     }
-    const plan = await getCardPlan(dshHomePath("tavern"), planId);
+    const plan = await getPlan(dshHomePath("tavern"), planId);
     if (plan === void 0) return sendJson(res, 404, { ok: false, message: `plan '${planId}' not found`, code: "TAVERN_WORKBENCH" });
     try {
       if (body.approve) {
+        if (plan.kind === "world") {
+          const executed2 = await executeWorldPlan(plan);
+          return sendJson(res, 200, { ok: true, plan: executed2.plan, applied: { world: executed2.world, entryCount: executed2.entryCount, nextUid: executed2.nextUid, entries: executed2.touched } });
+        }
         const executed = await executeCardPlan(plan);
         return sendJson(res, 200, { ok: true, plan: executed.plan, applied: { character: executed.character, changes: executed.changes, fieldLengths: executed.fieldLengths } });
       }
-      const decided = await decideCardPlan(dshHomePath("tavern"), planId, false);
+      const decided = await decidePlan(dshHomePath("tavern"), planId, false);
       return sendJson(res, 200, { ok: true, plan: decided });
     } catch (error) {
       return sendJson(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error), code: "TAVERN_WORKBENCH" });
@@ -16239,7 +16493,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.0".trim() : "";
-  const commit = true ? normalizeCommit("a569448") : void 0;
+  const commit = true ? normalizeCommit("8fccc40") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

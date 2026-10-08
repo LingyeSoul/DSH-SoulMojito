@@ -62,5 +62,10 @@ Agent 大半不可见不可写：
   client/main.js 修为 join('\n')，构建产物随本次一并更新。
 - card_delete 的 deleteChats 二次确认是工具面语义；面板 DELETE 路由行为未变（单确认
   弹窗），两侧语义差异已在工具描述中向 Agent 声明。
-- 面板 DELETE character 路由仍不清理原版快照（存量 footgun 未修，影响面：面板删卡后
-  同名再导入）；后续修路由时可复用 deleteOriginalSnapshot。
+- 面板 DELETE character 路由的原版快照缺口已于同日修复（复用 deleteOriginalSnapshot，
+  见 `decisions/2026-10-08-worldbook-plan-protocol.md` 同批提交）：面板删卡后同名再
+  导入不再被「首个胜出」的陈旧快照污染。排查同时发现并修复同源缺口——**改名不迁移
+  快照**：面板 PUT 改名、card_put 改名（name 在白名单内）与 restoreOriginal 的整体
+  回写改名现在都通过新增的 moveOriginalSnapshot 把快照跟卡迁移（目标位置只可能是
+  无卡幽灵快照，删除让位），维持「快照按当前卡名寻址」不变量——否则改名后新名
+  restore 断链、旧名幽灵快照会污染将来同名卡的导入快照。

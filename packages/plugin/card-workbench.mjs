@@ -2491,6 +2491,19 @@ async function deleteOriginalSnapshot(root, characterName) {
     throw cause;
   }
 }
+async function moveOriginalSnapshot(root, fromName, toName) {
+  const from = originalSnapshotPath(root, fromName);
+  const to = originalSnapshotPath(root, toName);
+  if (from === to) return false;
+  if (!await fileExists(from)) return false;
+  try {
+    await fs2.unlink(to);
+  } catch (cause) {
+    if (cause.code !== "ENOENT") throw cause;
+  }
+  await fs2.rename(from, to);
+  return true;
+}
 async function restoreOriginal(root, characterName) {
   const original = await readOriginalSnapshot(root, characterName);
   if (original === void 0) return void 0;
@@ -2501,6 +2514,7 @@ async function restoreOriginal(root, characterName) {
   } else {
     await store.updateCharacter(characterName, encodeCharacterCardJson(original));
   }
+  await moveOriginalSnapshot(root, characterName, original.data.name);
   const restored = await store.getCharacter(original.data.name);
   if (restored === void 0) throw new Error(`character '${original.data.name}' could not be reloaded after restore`);
   return restored;
@@ -2710,9 +2724,12 @@ function dshHomePath(...segments) {
 import { promises as fs4 } from "node:fs";
 import * as path4 from "node:path";
 var MAX_PLAN_CHANGES = 16;
+var MAX_PLAN_ENTRIES = 32;
+var MAX_ENTRY_FIELDS = 64;
 var MAX_VALUE_LENGTH = 32e3;
 var MAX_TITLE_LENGTH = 200;
 var MAX_NOTE_LENGTH = 500;
+var MAX_WORLD_NAME_LENGTH = 200;
 var PLAN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 function plansDir(dir) {
   return path4.join(dir, "card-workbench", "plans");
@@ -2728,53 +2745,145 @@ async function writeAtomicText2(file, text) {
 function newPlanId() {
   return `plan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
-function normalizePlan(raw) {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return void 0;
-  const record = raw;
-  if (typeof record.id !== "string" || typeof record.character !== "string" || typeof record.title !== "string" || !Array.isArray(record.changes) || typeof record.createdAt !== "string") return void 0;
-  const status = record.status;
-  if (status !== "pending" && status !== "approved" && status !== "rejected" && status !== "applied") return void 0;
+function normalizeCardPlan(raw) {
+  if (typeof raw.character !== "string" || typeof raw.title !== "string" || !Array.isArray(raw.changes) || typeof raw.createdAt !== "string") return void 0;
   const changes = [];
-  for (const entry of record.changes) {
+  for (const entry of raw.changes) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return void 0;
     const change = entry;
-    if (typeof change.field !== "string" || !isValidPlanValue(change.currentValue) || !isValidPlanValue(change.newValue)) return void 0;
+    if (typeof change.field !== "string" || !isValidCardPlanValue(change.currentValue) || !isValidCardPlanValue(change.newValue)) return void 0;
     if (change.note !== void 0 && typeof change.note !== "string") return void 0;
     changes.push(change.note === void 0 ? { field: change.field, currentValue: change.currentValue, newValue: change.newValue } : { field: change.field, currentValue: change.currentValue, newValue: change.newValue, note: change.note });
   }
   return {
-    id: record.id,
-    character: record.character,
-    title: record.title,
+    kind: "card",
+    id: raw.id,
+    character: raw.character,
+    title: raw.title,
     changes,
-    createdAt: record.createdAt,
-    status,
-    ...typeof record.decidedAt === "string" ? { decidedAt: record.decidedAt } : {},
-    ...typeof record.appliedAt === "string" ? { appliedAt: record.appliedAt } : {}
+    createdAt: raw.createdAt,
+    status: raw.status,
+    ...typeof raw.decidedAt === "string" ? { decidedAt: raw.decidedAt } : {},
+    ...typeof raw.appliedAt === "string" ? { appliedAt: raw.appliedAt } : {}
   };
 }
-function isValidPlanValue(value) {
+function isValidCardPlanValue(value) {
   if (typeof value === "string") return true;
   if (!Array.isArray(value) || value.length > 64) return false;
   return value.every((item) => typeof item === "string");
 }
-function planValueLength(value) {
+function cardPlanValueLength(value) {
   return typeof value === "string" ? value.length : value.join("\n").length;
 }
-function validateChangeShape(entry, index) {
+function validateCardChangeShape(entry, index) {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
     throw new Error(`changes[${index}] must be an object of { field, currentValue, newValue, note? }`);
   }
   const { field, currentValue, newValue, note } = entry;
   if (typeof field !== "string" || field.trim() === "") throw new Error(`changes[${index}].field must be a non-empty string`);
-  if (!isValidPlanValue(currentValue)) throw new Error(`changes[${index}].currentValue for field '${field}' must be a string or string array`);
-  if (!isValidPlanValue(newValue)) throw new Error(`changes[${index}].newValue for field '${field}' must be a string or string array`);
-  if (planValueLength(currentValue) > MAX_VALUE_LENGTH) throw new Error(`changes[${index}].currentValue for field '${field}' exceeds the ${MAX_VALUE_LENGTH}-character limit`);
-  if (planValueLength(newValue) > MAX_VALUE_LENGTH) throw new Error(`changes[${index}].newValue for field '${field}' exceeds the ${MAX_VALUE_LENGTH}-character limit`);
+  if (!isValidCardPlanValue(currentValue)) throw new Error(`changes[${index}].currentValue for field '${field}' must be a string or string array`);
+  if (!isValidCardPlanValue(newValue)) throw new Error(`changes[${index}].newValue for field '${field}' must be a string or string array`);
+  if (cardPlanValueLength(currentValue) > MAX_VALUE_LENGTH) throw new Error(`changes[${index}].currentValue for field '${field}' exceeds the ${MAX_VALUE_LENGTH}-character limit`);
+  if (cardPlanValueLength(newValue) > MAX_VALUE_LENGTH) throw new Error(`changes[${index}].newValue for field '${field}' exceeds the ${MAX_VALUE_LENGTH}-character limit`);
   if (note !== void 0 && (typeof note !== "string" || note.length > MAX_NOTE_LENGTH)) {
     throw new Error(`changes[${index}].note must be a string of at most ${MAX_NOTE_LENGTH} characters`);
   }
   return note === void 0 ? { field, currentValue, newValue } : { field, currentValue, newValue, note };
+}
+function isValidWorldPlanValue(value) {
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return true;
+  if (!Array.isArray(value) || value.length > 64) return false;
+  return value.every((item) => typeof item === "string");
+}
+function worldPlanValueLength(value) {
+  if (typeof value === "string") return value.length;
+  if (Array.isArray(value)) return value.join("\n").length;
+  return 0;
+}
+function validateWorldFieldShape(entry, label) {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    throw new Error(`fields${label} entries must be objects of { field, currentValue?, newValue }`);
+  }
+  const { field, currentValue, newValue } = entry;
+  if (typeof field !== "string" || field.trim() === "") throw new Error(`field${label} must be a non-empty string`);
+  if (currentValue !== void 0 && !isValidWorldPlanValue(currentValue)) {
+    throw new Error(`currentValue${label} must be a string, number, boolean, null or string array`);
+  }
+  if (!isValidWorldPlanValue(newValue)) {
+    throw new Error(`newValue${label} must be a string, number, boolean, null or string array`);
+  }
+  if (currentValue !== void 0 && worldPlanValueLength(currentValue) > MAX_VALUE_LENGTH) {
+    throw new Error(`currentValue${label} exceeds the ${MAX_VALUE_LENGTH}-character limit`);
+  }
+  if (worldPlanValueLength(newValue) > MAX_VALUE_LENGTH) {
+    throw new Error(`newValue${label} exceeds the ${MAX_VALUE_LENGTH}-character limit`);
+  }
+  return currentValue === void 0 ? { field, newValue } : { field, currentValue, newValue };
+}
+function validateWorldEntryShape(entry, index) {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    throw new Error(`entries[${index}] must be an object of { uid, action, fields, note? }`);
+  }
+  const { uid, action, fields, note } = entry;
+  if (!Number.isInteger(uid) || uid < 0) throw new Error(`entries[${index}].uid must be a non-negative integer`);
+  if (action !== "update" && action !== "create" && action !== "remove") {
+    throw new Error(`entries[${index}].action must be 'update', 'create' or 'remove'`);
+  }
+  if (!Array.isArray(fields)) throw new Error(`entries[${index}].fields must be an array`);
+  if (fields.length > MAX_ENTRY_FIELDS) throw new Error(`entries[${index}].fields accepts at most ${MAX_ENTRY_FIELDS} entries`);
+  const label = ` for uid ${uid}`;
+  const parsedFields = fields.map((field, fieldIndex) => validateWorldFieldShape(field, `${label} [${fieldIndex}]`));
+  if (action === "remove" && parsedFields.length > 0) throw new Error(`entries[${index}].fields must be empty when action is 'remove'`);
+  if (action !== "remove" && parsedFields.length === 0) throw new Error(`entries[${index}].fields must have at least one entry when action is '${action}'`);
+  const fieldNames = new Set(parsedFields.map((field) => field.field));
+  if (fieldNames.size !== parsedFields.length) throw new Error(`duplicate field in entries[${index}]`);
+  if (note !== void 0 && (typeof note !== "string" || note.length > MAX_NOTE_LENGTH)) {
+    throw new Error(`entries[${index}].note must be a string of at most ${MAX_NOTE_LENGTH} characters`);
+  }
+  const base = { uid, action, fields: parsedFields };
+  return note === void 0 ? base : { ...base, note };
+}
+function normalizeWorldPlan(raw) {
+  if (raw.op !== "edit" && raw.op !== "create") return void 0;
+  if (typeof raw.world !== "string" || typeof raw.title !== "string" || !Array.isArray(raw.entries) || typeof raw.createdAt !== "string") return void 0;
+  const entries = [];
+  for (const entry of raw.entries) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return void 0;
+    const record = entry;
+    if (!Number.isInteger(record.uid) || record.uid === null || record.uid < 0) return void 0;
+    if (record.action !== "update" && record.action !== "create" && record.action !== "remove") return void 0;
+    if (!Array.isArray(record.fields)) return void 0;
+    const fields = [];
+    for (const fieldEntry of record.fields) {
+      if (typeof fieldEntry !== "object" || fieldEntry === null || Array.isArray(fieldEntry)) return void 0;
+      const field = fieldEntry;
+      if (typeof field.field !== "string" || !isValidWorldPlanValue(field.newValue)) return void 0;
+      if (field.currentValue !== void 0 && !isValidWorldPlanValue(field.currentValue)) return void 0;
+      fields.push(field.currentValue === void 0 ? { field: field.field, newValue: field.newValue } : { field: field.field, currentValue: field.currentValue, newValue: field.newValue });
+    }
+    entries.push(record.note === void 0 ? { uid: record.uid, action: record.action, fields } : { uid: record.uid, action: record.action, fields, note: record.note });
+  }
+  return {
+    kind: "world",
+    id: raw.id,
+    op: raw.op,
+    world: raw.world,
+    title: raw.title,
+    entries,
+    createdAt: raw.createdAt,
+    status: raw.status,
+    ...typeof raw.decidedAt === "string" ? { decidedAt: raw.decidedAt } : {},
+    ...typeof raw.appliedAt === "string" ? { appliedAt: raw.appliedAt } : {}
+  };
+}
+function normalizePlan(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return void 0;
+  const record = raw;
+  if (typeof record.id !== "string") return void 0;
+  const status = record.status;
+  if (status !== "pending" && status !== "approved" && status !== "rejected" && status !== "applied") return void 0;
+  if (record.kind === "world") return normalizeWorldPlan({ ...record, status });
+  return normalizeCardPlan({ ...record, status });
 }
 async function proposeCardPlan(dir, character, input) {
   if (typeof character !== "string" || character.trim() === "") throw new Error("character must be a non-empty string");
@@ -2783,10 +2892,11 @@ async function proposeCardPlan(dir, character, input) {
   }
   if (!Array.isArray(input.changes) || input.changes.length === 0) throw new Error("changes must be a non-empty array");
   if (input.changes.length > MAX_PLAN_CHANGES) throw new Error(`changes accepts at most ${MAX_PLAN_CHANGES} entries; split larger plans`);
-  const changes = input.changes.map((entry, index) => validateChangeShape(entry, index));
+  const changes = input.changes.map((entry, index) => validateCardChangeShape(entry, index));
   const fields = new Set(changes.map((change) => change.field));
   if (fields.size !== changes.length) throw new Error("duplicate change field in plan");
   const plan = {
+    kind: "card",
     id: newPlanId(),
     character,
     title: input.title,
@@ -2799,7 +2909,37 @@ async function proposeCardPlan(dir, character, input) {
 `);
   return plan;
 }
-async function getCardPlan(dir, planId) {
+async function proposeWorldPlan(dir, world, input) {
+  if (typeof world !== "string" || world.trim() === "") throw new Error("world must be a non-empty string");
+  if (world.length > MAX_WORLD_NAME_LENGTH) throw new Error(`world exceeds the ${MAX_WORLD_NAME_LENGTH}-character limit`);
+  if (input.op !== "edit" && input.op !== "create") throw new Error(`op must be 'edit' or 'create'`);
+  if (typeof input.title !== "string" || input.title.trim() === "" || input.title.length > MAX_TITLE_LENGTH) {
+    throw new Error(`title must be a non-empty string of at most ${MAX_TITLE_LENGTH} characters`);
+  }
+  if (!Array.isArray(input.entries) || input.entries.length === 0) throw new Error("entries must be a non-empty array");
+  if (input.entries.length > MAX_PLAN_ENTRIES) throw new Error(`entries accepts at most ${MAX_PLAN_ENTRIES} entries; split larger plans`);
+  if (input.op === "create" && input.entries.some((entry) => entry.action !== "create")) {
+    throw new Error("a 'create' plan takes only 'create' entries");
+  }
+  const entries = input.entries.map((entry, index) => validateWorldEntryShape(entry, index));
+  const uids = new Set(entries.map((entry) => entry.uid));
+  if (uids.size !== entries.length) throw new Error("duplicate uid in plan");
+  const plan = {
+    kind: "world",
+    id: newPlanId(),
+    op: input.op,
+    world,
+    title: input.title,
+    entries,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    status: "pending"
+  };
+  await fs4.mkdir(plansDir(dir), { recursive: true });
+  await writeAtomicText2(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
+`);
+  return plan;
+}
+async function getPlan(dir, planId) {
   if (typeof planId !== "string" || !PLAN_ID_PATTERN.test(planId)) return void 0;
   let text;
   try {
@@ -2810,8 +2950,8 @@ async function getCardPlan(dir, planId) {
   }
   return normalizePlan(JSON.parse(text));
 }
-async function applyCardPlan(dir, planId) {
-  const plan = await getCardPlan(dir, planId);
+async function applyPlan(dir, planId) {
+  const plan = await getPlan(dir, planId);
   if (plan === void 0) throw new Error(`plan '${planId}' not found`);
   if (plan.status === "rejected") throw new Error(`plan '${planId}' was rejected and cannot be applied`);
   if (plan.status === "applied") throw new Error(`plan '${planId}' was already applied`);
@@ -2832,9 +2972,9 @@ var KERNEL = [
   "Working protocol for every modification request:",
   "- Read first: call card_get (cards), world_get (world books) or preset_get (presets) on the named resource to ground yourself in the current working copy before discussing any change. Previews truncate long values \u2014 card_get takes full: [fields] to fetch card fields in full and world_get takes uids to fetch entries in full; quote the exact text verbatim when rewriting or moving long content. world_list shows the whole world-book library (with the cards linking each book) when the user has not pinned an existing name.",
   "- Propose before writing: present a concrete plan \u2014 for every affected field or entry, show the current value (or an excerpt of it) and the full replacement value, plus why the change serves the user's intent. Quote exact text; never describe a change vaguely.",
-  "- Record card plans: for card edits, call card_plan_propose after the user reacts positively to the idea. It records the plan (planId) with the live current values and shows it in the workbench panel for review.",
+  "- Record plans: for card edits call card_plan_propose, and for world book edits or creations call world_plan_propose (create: true for new books), after the user reacts positively to the idea. They record the plan (planId) with the live current values and show it in the workbench panel for review.",
   '- Wait for explicit confirmation: the user must clearly approve the plan (e.g. "confirm", "apply it", or an equivalent). Silence, a new question, or a partial remark is NOT approval. Never write on an assumed yes.',
-  "- Only then write: for card plans call card_put with the planId and confirmed: true \u2014 it applies the recorded plan exactly. Direct card_put without a planId stays available for small in-conversation edits the user just approved verbatim. world_put and preset_put take confirmed: true as well; the tools reject calls without confirmation, and a rejection means go back to the user, never retry with the flag flipped on your own.",
+  "- Only then write: for card plans call card_put with the planId and confirmed: true \u2014 it applies the recorded plan exactly. For world edit plans call world_put with the planId, for world creation plans call world_create with the planId (both with confirmed: true). Direct card_put / world_put / world_create without a planId stay available for small in-conversation edits the user just approved verbatim; preset_put takes confirmed: true as well. The tools reject calls without confirmation, and a rejection means go back to the user, never retry with the flag flipped on your own.",
   "- Report the result: after writing, summarize what changed (fields, entries and their new lengths) and suggest what to review next.",
   "- Originals: card_original_get reads the import-time original snapshot; card_restore_original (also confirmed-only) overwrites the working copy with that original. Offer restore when the user dislikes accumulated edits. Cards built with card_create snapshot their as-created state, so restore works for hand-built cards too.",
   "- Deleting: card_delete removes a card PERMANENTLY with ALL its chat logs. Double gate: confirmed as usual, plus \u2014 when chats exist \u2014 a second call with deleteChats: true after you told the user the exact chat count. Group memberships, solo session bindings and the original snapshot are cleaned up with it.",
@@ -2843,7 +2983,7 @@ var KERNEL = [
   "Starting tasks (P3):",
   "- New card from an idea, material or script: gather the source first \u2014 material_list shows the script library, material_read fetches one chunk at a time (you never need the whole script in one call) \u2014 then discuss the draft fields with the user and call card_create with confirmed: true only after explicit approval. Creation binds nothing: scripts and world books attach through their own routes, chosen by the user or the panel. On success the workbench session renames itself to the new card name (the session the user is chatting in; mention it when reporting the result).",
   "- Convert a card to MVU (proposal 0012 P3): read the card with card_get, locate the old status-bar block in the prose, propose the variable structure and a statusTemplate draft, then call card_apply_mvu with confirmed: true after explicit approval. The tool only writes extensions.agentTavern (and snapshots the pre-conversion card as the original when none exists, keeping the conversion reversible via card_restore_original); it does NOT rewrite the prose \u2014 afterwards offer a separate confirmed card_put to strip the now-redundant status-bar block, and tell the user to start a new chat to verify the fixed right-side status panel.",
-  "- New world book: call world_list first so you propose a free name (and see what already exists), discuss the book name and its initial entries with the user, then call world_create with confirmed: true only after explicit approval. Seed entries get uids in array order (0, 1, \u2026); world_create never overwrites an existing book, and later entries and edits go through world_put. Creation binds nothing \u2014 attach the book to its card with world_bind once the user wants the pair to travel together (the card link is what makes the book join plays); world_copy forks an existing book verbatim when a new card should start from the same lore.",
+  "- New world book: call world_list first so you propose a free name (and see what already exists), discuss the book name and its initial entries with the user, then record the creation with world_plan_propose (create: true) and apply it with world_create (planId, confirmed: true) after explicit approval. Seed entries get uids in array order (0, 1, \u2026); world_create never overwrites an existing book, and later entries and edits go through world_put. Creation binds nothing \u2014 attach the book to its card with world_bind once the user wants the pair to travel together (the card link is what makes the book join plays); world_copy forks an existing book verbatim when a new card should start from the same lore.",
   "",
   "Boundaries:",
   "- Editable card fields: text fields name, nickname, description, personality, scenario, firstMes, creatorNotes, mesExample, systemPrompt, postHistoryInstructions, creator and characterVersion; array fields tags and alternateGreetings take the FULL replacement array (whole-group replace, blank items dropped). World entry edits match by uid and cover the full ST entry whitelist \u2014 key, keysecondary, comment, content, enabled plus advanced fields (constant, order, position, depth, probability, selective logic, inclusion groups, recursion flags, timed effects...); unmentioned fields are preserved verbatim and remove: true deletes an entry. Book-level operations: world_delete (refuses while cards still link the book), world_rename (re-points every card link and activeWorlds) and world_bind (attach/detach a book on a card). Preset edits to prompt role/content/enabled (match by name). Other areas (extensions, scripts, chat state) are out of scope; say so instead of working around the limit.",
@@ -2964,6 +3104,15 @@ var planProposeOutput = objectOutput({
   status: { type: "string" },
   createdAt: { type: "string" },
   changes: { type: "array", items: { type: "object", additionalProperties: true } }
+});
+var worldPlanProposeOutput = objectOutput({
+  planId: { type: "string" },
+  world: { type: "string" },
+  op: { type: "string" },
+  title: { type: "string" },
+  status: { type: "string" },
+  createdAt: { type: "string" },
+  entries: { type: "array", items: { type: "object", additionalProperties: true } }
 });
 var worldSummaryOutput = objectOutput({
   found: { type: "boolean" },
@@ -3109,8 +3258,9 @@ function createTools() {
       exec?.signal?.throwIfAborted();
       if (args.planId !== void 0) {
         const planId = stringArg(args.planId);
-        const plan = await getCardPlan(dshHomePath("tavern"), planId);
+        const plan = await getPlan(dshHomePath("tavern"), planId);
         if (plan === void 0) throw new Error(`plan '${planId}' not found`);
+        if (plan.kind !== "card") throw new Error(`plan '${planId}' is a world plan; apply it with world_put (edit) or world_create (create)`);
         if (plan.character !== character) throw new Error(`plan '${planId}' belongs to character '${plan.character}', not '${character}'`);
         const executed = await executeCardPlan(plan);
         return {
@@ -3238,6 +3388,101 @@ function createTools() {
         }))
       };
     }),
+    tool("world_plan_propose", "Record a pending world book plan (confirmation protocol, same flow as card plans): per-entry field replacements, new entries or removals for an existing book, or the initial entries of a book to create. The CURRENT values are snapshotted from the live book so the diff shown to the user is truthful. Entries take the same shape as world_put edits (or world_create seeds when create: true). Returns a planId \u2014 the user then approves the plan in the workbench panel, or confirms in conversation and you call world_put (edit) / world_create (create) with that planId and confirmed: true. Proposing does not write the book.", {
+      world: { type: "string", required: true, description: "World book name the plan targets (the name of the book to create when create is true)." },
+      title: { type: "string", required: true, description: "Short human-readable plan title shown in the workbench panel (max 200 characters)." },
+      create: { type: "boolean", description: "True plans the creation of a new book with the given seed entries (uids in array order); false (default) plans edits to the existing book named world." },
+      entries: {
+        type: "array",
+        required: true,
+        description: `Up to 32 entries of { uid, <editable field>\u2026, remove?, note? } for edits (uid required per entry), or { <editable field>\u2026, note? } seeds for creation (uids follow array order). Editable fields: ${WORLD_EDITABLE_FIELD_LIST}.`,
+        items: {
+          type: "object",
+          properties: {
+            uid: { type: "integer", minimum: 0 },
+            remove: { type: "boolean", description: "Delete the entry (existing uids only); cannot be combined with other fields." },
+            note: { type: "string", description: "Why this entry change serves the user intent (max 500 characters)." },
+            ...worldEditableProperties()
+          },
+          additionalProperties: false
+        }
+      }
+    }, worldPlanProposeOutput, async (args, exec) => {
+      const world = worldNameArg(args.world);
+      const title = titleArg(args.title);
+      const create = args.create === true;
+      exec?.signal?.throwIfAborted();
+      const db = await tavernStore();
+      const book = await db.getWorld(world);
+      if (create && book !== void 0) {
+        throw new Error(`world '${world}' already exists; propose edits to it instead (drop create) or pick a different name (world_list)`);
+      }
+      if (!create && book === void 0) {
+        throw new Error(`world '${world}' not found; set create: true to plan a new book, or world_list shows the library`);
+      }
+      if (!Array.isArray(args.entries) || args.entries.length === 0) throw new Error("entries must be a non-empty array");
+      const noteAt = (index) => {
+        const raw = args.entries[index];
+        if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return void 0;
+        const note = raw.note;
+        if (note === void 0) return void 0;
+        if (typeof note !== "string" || note.length > 500) throw new Error(`note for entry ${index + 1} must be a string of at most 500 characters`);
+        return note;
+      };
+      const cleaned = args.entries.map((raw, index) => {
+        const note = noteAt(index);
+        if (note === void 0) return raw;
+        const { note: _drop, ...rest } = raw;
+        return rest;
+      });
+      const byUid = new Map((book?.entries ?? []).map((entry) => [entry.uid, entry]));
+      const proposed = create ? parseWorldSeedEntries(cleaned) : parseWorldEdits(cleaned);
+      const entries = proposed.map((edit, index) => {
+        const note = noteAt(index);
+        if (create) {
+          return {
+            uid: index,
+            action: "create",
+            fields: Object.entries(edit.values).map(([field, newValue]) => ({ field, newValue })),
+            ...note !== void 0 ? { note } : {}
+          };
+        }
+        const existing = byUid.get(edit.uid);
+        if (edit.remove) {
+          if (existing === void 0) throw new Error(`uid ${edit.uid} not found in world '${world}'; removal matches existing entries only (see world_get)`);
+          return { uid: edit.uid, action: "remove", fields: [], ...note !== void 0 ? { note } : {} };
+        }
+        const fields = edit.fields.map((field) => ({
+          field,
+          ...existing !== void 0 ? { currentValue: worldLiveValue(existing, field) } : {},
+          newValue: edit.values[field]
+        }));
+        return { uid: edit.uid, action: existing === void 0 ? "create" : "update", fields, ...note !== void 0 ? { note } : {} };
+      });
+      const plan = await proposeWorldPlan(dshHomePath("tavern"), world, {
+        op: create ? "create" : "edit",
+        title,
+        entries
+      });
+      return {
+        planId: plan.id,
+        world: plan.world,
+        op: plan.op,
+        title: plan.title,
+        status: plan.status,
+        createdAt: plan.createdAt,
+        entries: plan.entries.map((entry) => ({
+          uid: entry.uid,
+          action: entry.action,
+          fields: entry.fields.map((field) => ({
+            field: field.field,
+            ...field.currentValue !== void 0 ? { currentValue: previewWorldPlanValue(field.currentValue) } : {},
+            newValue: previewWorldPlanValue(field.newValue)
+          })),
+          ...entry.note !== void 0 ? { note: entry.note } : {}
+        }))
+      };
+    }),
     tool("world_list", "List the Tavern world-book library: every stored book name with its entry count and the character cards linking it (extensions.world). Call it before world_create to pick a free name, before world_delete/world_rename to check linked cards, or when the user refers to a world book and you are not sure of its exact name.", {}, worldListOutput, async (_args, exec) => {
       exec?.signal?.throwIfAborted();
       const db = await tavernStore();
@@ -3274,12 +3519,12 @@ function createTools() {
       }
       return summary;
     }),
-    tool("world_put", "Apply confirmed edits to a world book, matched by uid: existing entries get only the provided fields replaced (full ST entry whitelist \u2014 key, keysecondary, comment, content, enabled plus advanced fields like constant, order, position, depth, probability, selective logic, groups, recursion and timed effects); unmentioned fields are preserved verbatim. Unknown uids create new entries (use nextUid from world_get), and remove: true deletes an existing entry. Present the per-entry before/after plan to the user FIRST; rejected without confirmed: true. The book itself must already exist: world_create starts new books and world_list shows the library.", {
-      world: { type: "string", required: true, description: "World book name to edit." },
+    tool("world_put", "Apply confirmed edits to a world book, either from a recorded plan (planId from world_plan_propose \u2014 the recorded entries are applied exactly and any direct entries argument is ignored) or as direct edits matched by uid: existing entries get only the provided fields replaced (full ST entry whitelist \u2014 key, keysecondary, comment, content, enabled plus advanced fields like constant, order, position, depth, probability, selective logic, groups, recursion and timed effects); unmentioned fields are preserved verbatim. Unknown uids create new entries (use nextUid from world_get), and remove: true deletes an existing entry. Present the per-entry before/after plan to the user FIRST; rejected without confirmed: true. The book itself must already exist: world_create starts new books and world_list shows the library.", {
+      world: { type: "string", required: true, description: "World book name to edit; must match the plan when planId is given." },
+      planId: { type: "string", description: "ID of a world edit plan recorded by world_plan_propose; applies the recorded entries exactly and marks it applied." },
       entries: {
         type: "array",
-        required: true,
-        description: "Up to 32 edits, each { uid, <editable field>\u2026, remove? }: existing uids get only the provided fields replaced, unknown uids create entries, remove: true deletes the entry (exclusive with other fields). At least one editable field or remove per entry.",
+        description: "Ignored when planId is given. Otherwise up to 32 edits, each { uid, <editable field>\u2026, remove? }: existing uids get only the provided fields replaced, unknown uids create entries, remove: true deletes the entry (exclusive with other fields). At least one editable field or remove per entry.",
         items: {
           type: "object",
           properties: {
@@ -3295,39 +3540,38 @@ function createTools() {
     }, worldPutOutput, async (args, exec) => {
       if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR);
       const world = stringArg(args.world);
-      const edits = parseWorldEdits(args.entries);
       exec?.signal?.throwIfAborted();
+      if (args.planId !== void 0) {
+        const planId = stringArg(args.planId);
+        const plan = await getPlan(dshHomePath("tavern"), planId);
+        if (plan === void 0) throw new Error(`plan '${planId}' not found`);
+        if (plan.kind !== "world" || plan.op !== "edit") throw new Error(`plan '${planId}' is not a world edit plan; book creations go through world_create and card plans through card_put`);
+        if (plan.world !== world) throw new Error(`plan '${planId}' belongs to world '${plan.world}', not '${world}'`);
+        const executed = await executeWorldPlan(plan);
+        return {
+          world: executed.world,
+          entryCount: executed.entryCount,
+          nextUid: executed.nextUid,
+          entries: executed.touched,
+          planId,
+          planStatus: executed.plan.status
+        };
+      }
+      const edits = parseWorldEdits(args.entries);
       const db = await tavernStore();
       const book = await db.getWorld(world);
       if (book === void 0) throw new Error(`world '${world}' not found; create it with world_create first (world_list shows the library)`);
-      const byUid = new Map(book.entries.map((entry) => [entry.uid, entry]));
-      const touched = [];
-      for (const edit of edits) {
-        const existing = byUid.get(edit.uid);
-        if (edit.remove) {
-          if (existing === void 0) throw new Error(`uid ${edit.uid} not found in world '${world}'; removal matches existing entries only (see world_get)`);
-          byUid.delete(edit.uid);
-          touched.push({ uid: edit.uid, created: false, removed: true, fields: [] });
-          continue;
-        }
-        if (existing === void 0) {
-          byUid.set(edit.uid, worldEntryFromValues(edit.uid, edit.values));
-          touched.push({ uid: edit.uid, created: true, fields: edit.fields });
-          continue;
-        }
-        byUid.set(edit.uid, applyWorldEntryFields(existing, edit.values));
-        touched.push({ uid: edit.uid, created: false, fields: edit.fields });
-      }
-      const entries = [...byUid.values()].sort((a, b) => a.uid - b.uid);
+      const { entries, touched } = applyWorldEdits(world, book, edits);
       await db.putWorld({ ...book, entries });
       const summary = worldSummary(world, entries);
       return { world, entryCount: summary.entryCount, nextUid: summary.nextUid, entries: touched };
     }),
-    tool("world_create", "Create a new Tavern world book, optionally with initial entries: uids are assigned in array order (0, 1, \u2026) and every entry takes the full world_put whitelist (key, keysecondary, comment, content, enabled plus advanced ST fields) with the same limits. Present the book name and the full initial entry plan to the user FIRST; rejected without confirmed: true. Refuses when a book with the same name already exists \u2014 world_create never overwrites, and existing books are edited through world_put. Creation binds nothing; attach the book to a card with world_bind.", {
-      name: { type: "string", required: true, description: "Name of the new world book (max 120 characters); must not collide with an existing book (see world_list)." },
+    tool("world_create", "Create a new Tavern world book, either from a recorded creation plan (planId from world_plan_propose with create: true \u2014 the recorded seed entries are applied exactly and any direct entries argument is ignored) or directly with optional initial entries: uids are assigned in array order (0, 1, \u2026) and every entry takes the full world_put whitelist (key, keysecondary, comment, content, enabled plus advanced ST fields) with the same limits. Present the book name and the full initial entry plan to the user FIRST; rejected without confirmed: true. Refuses when a book with the same name already exists \u2014 world_create never overwrites, and existing books are edited through world_put. Creation binds nothing; attach the book to a card with world_bind.", {
+      name: { type: "string", required: true, description: "Name of the new world book (max 120 characters); must not collide with an existing book (see world_list) and must match the plan when planId is given." },
+      planId: { type: "string", description: "ID of a world creation plan recorded by world_plan_propose (create: true); applies the recorded book exactly and marks it applied." },
       entries: {
         type: "array",
-        description: "Optional initial entries (at most 32), each { <editable field>\u2026 } with at least one field; uid assignment follows array order.",
+        description: "Ignored when planId is given. Otherwise optional initial entries (at most 32), each { <editable field>\u2026 } with at least one field; uid assignment follows array order.",
         items: {
           type: "object",
           properties: worldEditableProperties(),
@@ -3338,8 +3582,24 @@ function createTools() {
     }, worldCreateOutput, async (args, exec) => {
       if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR);
       const name2 = worldNameArg(args.name);
-      const seeds = parseWorldSeedEntries(args.entries);
       exec?.signal?.throwIfAborted();
+      if (args.planId !== void 0) {
+        const planId = stringArg(args.planId);
+        const plan = await getPlan(dshHomePath("tavern"), planId);
+        if (plan === void 0) throw new Error(`plan '${planId}' not found`);
+        if (plan.kind !== "world" || plan.op !== "create") throw new Error(`plan '${planId}' is not a world creation plan; edit plans go through world_put and card plans through card_put`);
+        if (plan.world !== name2) throw new Error(`plan '${planId}' belongs to world '${plan.world}', not '${name2}'`);
+        const executed = await executeWorldPlan(plan);
+        return {
+          created: true,
+          world: executed.world,
+          entryCount: executed.entryCount,
+          nextUid: executed.nextUid,
+          planId,
+          planStatus: executed.plan.status
+        };
+      }
+      const seeds = parseWorldSeedEntries(args.entries);
       const db = await tavernStore();
       if (await db.getWorld(name2) !== void 0) {
         throw new Error(`world '${name2}' already exists; world_create never overwrites \u2014 edit it with world_put or pick a different name`);
@@ -3817,6 +4077,9 @@ async function saveCardValues(character, values, found) {
     specVersion: current.card.specVersion,
     data: nextData
   });
+  if (saved.card.data.name !== current.card.data.name) {
+    await moveOriginalSnapshot(dshHomePath("tavern"), character, saved.card.data.name);
+  }
   return { found: current, saved };
 }
 function formatWriteResult(found, saved, values) {
@@ -3856,7 +4119,7 @@ async function executeCardPlan(plan) {
   }
   const { found: written, saved } = await saveCardValues(plan.character, values, found);
   const formatted = formatWriteResult(written, saved, values);
-  const applied = await applyCardPlan(dshHomePath("tavern"), plan.id);
+  const applied = await applyPlan(dshHomePath("tavern"), plan.id);
   return {
     plan: applied,
     character: formatted.character,
@@ -3864,6 +4127,72 @@ async function executeCardPlan(plan) {
     changes: formatted.changes,
     fieldLengths: formatted.fieldLengths,
     source: formatted.source
+  };
+}
+async function executeWorldPlan(plan) {
+  if (plan.status === "rejected") throw new Error(`plan '${plan.id}' was rejected and cannot be applied`);
+  if (plan.status === "applied") throw new Error(`plan '${plan.id}' was already applied`);
+  if (plan.entries.length === 0) throw new Error(`plan '${plan.id}' has no entries`);
+  const db = await tavernStore();
+  if (plan.op === "create") {
+    if (await db.getWorld(plan.world) !== void 0) {
+      throw new Error(`plan '${plan.id}' is stale: world '${plan.world}' already exists; re-propose the plan`);
+    }
+    const seeds = plan.entries.map((entry) => {
+      const values = {};
+      for (const field of entry.fields) values[editableWorldField(field.field)] = worldFieldValue(editableWorldField(field.field), field.newValue, ` for uid ${entry.uid}`);
+      return values;
+    });
+    const entries2 = seeds.map((values, uid) => worldEntryFromValues(uid, values));
+    await db.putWorld({ name: plan.world, entries: entries2 });
+    const applied2 = await applyPlan(dshHomePath("tavern"), plan.id);
+    return {
+      plan: applied2,
+      world: plan.world,
+      entryCount: entries2.length,
+      nextUid: entries2.length,
+      touched: entries2.map((_entry, uid) => ({ uid, created: true, fields: plan.entries[uid].fields.map((field) => field.field) }))
+    };
+  }
+  const book = await db.getWorld(plan.world);
+  if (book === void 0) throw new Error(`plan '${plan.id}' is stale: world '${plan.world}' no longer exists; re-propose the plan`);
+  const byUid = new Map(book.entries.map((entry) => [entry.uid, entry]));
+  const edits = plan.entries.map((entry) => {
+    const existing = byUid.get(entry.uid);
+    if (entry.action === "remove") {
+      if (existing === void 0) throw new Error(`plan '${plan.id}' is stale: uid ${entry.uid} no longer exists in world '${plan.world}'; re-propose the plan`);
+      return { uid: entry.uid, remove: true, values: {}, fields: [] };
+    }
+    if (entry.action === "update" && existing === void 0) {
+      throw new Error(`plan '${plan.id}' is stale: uid ${entry.uid} no longer exists in world '${plan.world}'; re-propose the plan`);
+    }
+    if (entry.action === "create" && existing !== void 0) {
+      throw new Error(`plan '${plan.id}' is stale: uid ${entry.uid} already exists in world '${plan.world}'; re-propose the plan`);
+    }
+    const values = {};
+    const fields = [];
+    for (const fieldChange of entry.fields) {
+      const field = editableWorldField(fieldChange.field);
+      if (entry.action === "update") {
+        const live = worldLiveValue(existing, field);
+        if (fieldChange.currentValue === void 0 || !worldPlanValueMatches(live, fieldChange.currentValue)) {
+          throw new Error(`plan '${plan.id}' is stale: field '${field}' on uid ${entry.uid} changed since the plan was proposed; re-propose the plan`);
+        }
+      }
+      values[field] = worldFieldValue(field, fieldChange.newValue, ` for uid ${entry.uid}`);
+      fields.push(field);
+    }
+    return { uid: entry.uid, remove: false, values, fields };
+  });
+  const { entries, touched } = applyWorldEdits(plan.world, book, edits);
+  await db.putWorld({ ...book, entries });
+  const applied = await applyPlan(dshHomePath("tavern"), plan.id);
+  return {
+    plan: applied,
+    world: plan.world,
+    entryCount: entries.length,
+    nextUid: entries.reduce((max2, entry) => Math.max(max2, entry.uid), -1) + 1,
+    touched
   };
 }
 function titleArg(value) {
@@ -4136,6 +4465,56 @@ function worldEntryFromValues(uid, values) {
   for (const [key, value] of worldFieldRawEntries(values)) raw[key] = value;
   return normalizeEntry2(raw);
 }
+function applyWorldEdits(world, book, edits) {
+  const byUid = new Map(book.entries.map((entry) => [entry.uid, entry]));
+  const touched = [];
+  for (const edit of edits) {
+    const existing = byUid.get(edit.uid);
+    if (edit.remove) {
+      if (existing === void 0) throw new Error(`uid ${edit.uid} not found in world '${world}'; removal matches existing entries only (see world_get)`);
+      byUid.delete(edit.uid);
+      touched.push({ uid: edit.uid, created: false, removed: true, fields: [] });
+      continue;
+    }
+    if (existing === void 0) {
+      byUid.set(edit.uid, worldEntryFromValues(edit.uid, edit.values));
+      touched.push({ uid: edit.uid, created: true, fields: edit.fields });
+      continue;
+    }
+    byUid.set(edit.uid, applyWorldEntryFields(existing, edit.values));
+    touched.push({ uid: edit.uid, created: false, fields: edit.fields });
+  }
+  return { entries: [...byUid.values()].sort((a, b) => a.uid - b.uid), touched };
+}
+function worldLiveValue(entry, field) {
+  const spec = WORLD_ENTRY_FIELDS[field];
+  const record = entry;
+  const raw = record[spec.loreKey ?? field];
+  if (spec.invert === true) return typeof raw === "boolean" ? !raw : true;
+  if (raw === void 0) {
+    if (Array.isArray(spec.fallback)) return [];
+    return spec.fallback ?? null;
+  }
+  return raw;
+}
+function worldPlanValueMatches(live, recorded) {
+  if (Array.isArray(live) || Array.isArray(recorded)) {
+    if (!Array.isArray(live) || !Array.isArray(recorded)) return false;
+    return live.length === recorded.length && live.every((item, index) => item === recorded[index]);
+  }
+  return live === recorded;
+}
+function previewWorldPlanValue(value) {
+  if (typeof value === "string") return limitText(value, 200);
+  if (Array.isArray(value)) return value.map((item) => limitText(item, 200));
+  return value;
+}
+function editableWorldField(field) {
+  if (!WORLD_EDITABLE_FIELDS.includes(field)) {
+    throw new Error(`field '${field}' is not an editable world entry field; editable fields: ${WORLD_EDITABLE_FIELD_LIST}`);
+  }
+  return field;
+}
 function parseWorldUids(value) {
   if (!Array.isArray(value) || value.length === 0) throw new Error("uids must be a non-empty array of entry uids");
   if (value.length > 32) throw new Error("uids accepts at most 32 entries");
@@ -4328,6 +4707,7 @@ function limitText(value, max2) {
 export {
   apply,
   executeCardPlan,
+  executeWorldPlan,
   inject,
   name
 };

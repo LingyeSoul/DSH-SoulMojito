@@ -86,10 +86,11 @@ import { formatRewriteBlock, optionalFeedback } from './rewrite.js'
 import { deleteOriginalSnapshot, moveOriginalSnapshot, saveOriginalSnapshot } from '../../tavern-store/src/index.js'
 import { dshHomePath } from './dsh-home.js'
 import { TavernUpdateService, updateChangelog } from './update/service.js'
-// 卡片工作台方案确认协议（提案 0013 P2）：方案存储在 card-workbench/plans.ts，
-// 执行核（写入 + applied 标记）在 card-workbench/agent.ts，路由块在 mvu/status 之后。
-import { decideCardPlan, getCardPlan, listCardPlans } from './card-workbench/plans.js'
-import { executeCardPlan } from './card-workbench/agent.js'
+// 卡片工作台方案确认协议（提案 0013 P2；世界书面板化为同构扩展）：方案存储在
+// card-workbench/plans.ts（kind 判别：卡方案 / 世界书方案），执行核（写入 +
+// applied 标记）在 card-workbench/agent.ts，路由块在 mvu/status 之后。
+import { decidePlan, getPlan, listPlans } from './card-workbench/plans.js'
+import { executeCardPlan, executeWorldPlan } from './card-workbench/agent.js'
 
 // 构建期 stamp：由 scripts/build-plugin.mjs 经 esbuild define 注入，用于在
 // 没有 version.json / 没有 .git 的安装现场给出「跑的是哪个版本和 commit」。
@@ -1383,18 +1384,24 @@ async function handleApi(ctx, req, res) {
     })
   }
 
-  // ---- 卡片工作台方案确认协议（提案 0013 P2）----
-  // 方案 = card_plan_propose 落库的 pending 计划（<tavern>/card-workbench/plans/，
-  // 见 card-workbench/plans.ts）。面板拉列表看 diff、给决定；approve=true 经
-  // card-workbench/agent.ts 的执行核（executeCardPlan）按方案逐字段写入工作版
-  // 并标记 applied（执行不在存储层），false 只改状态。错误码 TAVERN_WORKBENCH。
+  // ---- 工作台方案确认协议（提案 0013 P2；世界书面板化同构扩展）----
+  // 方案 = card_plan_propose / world_plan_propose 落库的 pending 计划
+  // （<tavern>/card-workbench/plans/，见 card-workbench/plans.ts，kind 判别）。
+  // 面板拉列表看 diff、给决定；approve=true 经执行核（executeCardPlan /
+  // executeWorldPlan）按方案写入并标记 applied（执行不在存储层），false 只改
+  // 状态。错误码 TAVERN_WORKBENCH。
   if (method === 'GET' && route === 'card-workbench/plans') {
     const statusParam = url.searchParams.get('status') ?? 'pending'
     if (statusParam !== 'pending' && statusParam !== 'approved' && statusParam !== 'rejected' && statusParam !== 'applied' && statusParam !== 'all') {
       return sendJson(res, 400, { ok: false, message: `unknown status filter '${statusParam}'`, code: 'TAVERN_WORKBENCH' })
     }
+    const kindParam = url.searchParams.get('kind')
+    if (kindParam !== null && kindParam !== 'card' && kindParam !== 'world') {
+      return sendJson(res, 400, { ok: false, message: `unknown kind filter '${kindParam}'`, code: 'TAVERN_WORKBENCH' })
+    }
     const character = url.searchParams.get('character') ?? undefined
-    const plans = await listCardPlans(dshHomePath('tavern'), {
+    const plans = await listPlans(dshHomePath('tavern'), {
+      ...(kindParam !== null ? { kind: kindParam } : {}),
       ...(character !== undefined && character !== '' ? { character } : {}),
       status: statusParam,
     })
@@ -1407,15 +1414,19 @@ async function handleApi(ctx, req, res) {
     if (typeof body.approve !== 'boolean') {
       return sendJson(res, 400, { ok: false, message: 'expected { approve: boolean }', code: 'TAVERN_WORKBENCH' })
     }
-    const plan = await getCardPlan(dshHomePath('tavern'), planId)
+    const plan = await getPlan(dshHomePath('tavern'), planId)
     if (plan === undefined) return sendJson(res, 404, { ok: false, message: `plan '${planId}' not found`, code: 'TAVERN_WORKBENCH' })
     try {
       if (body.approve) {
-        // 执行核：过期检测 → 白名单写入工作版 → 标记 applied；失败不落 applied。
+        // 执行核：过期检测 → 白名单写入 → 标记 applied；失败不落 applied。
+        if (plan.kind === 'world') {
+          const executed = await executeWorldPlan(plan)
+          return sendJson(res, 200, { ok: true, plan: executed.plan, applied: { world: executed.world, entryCount: executed.entryCount, nextUid: executed.nextUid, entries: executed.touched } })
+        }
         const executed = await executeCardPlan(plan)
         return sendJson(res, 200, { ok: true, plan: executed.plan, applied: { character: executed.character, changes: executed.changes, fieldLengths: executed.fieldLengths } })
       }
-      const decided = await decideCardPlan(dshHomePath('tavern'), planId, false)
+      const decided = await decidePlan(dshHomePath('tavern'), planId, false)
       return sendJson(res, 200, { ok: true, plan: decided })
     } catch (error) {
       return sendJson(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error), code: 'TAVERN_WORKBENCH' })

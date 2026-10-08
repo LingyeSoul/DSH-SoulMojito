@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,11 +6,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { apply as applyPlugin } from '../src/index.js'
 import { apply, type AgentContextLike } from '../src/card-workbench/agent.js'
 import {
-  applyCardPlan,
-  decideCardPlan,
-  getCardPlan,
-  listCardPlans,
+  applyPlan,
+  decidePlan,
+  getPlan,
+  listPlans,
   proposeCardPlan,
+  type WorldPlan,
 } from '../src/card-workbench/plans.js'
 import { TavernStore, readOriginalSnapshot, saveOriginalSnapshot } from '../../tavern-store/src/index.js'
 
@@ -23,10 +24,10 @@ interface RegisteredTool {
   execute(args: Record<string, unknown>, exec?: { signal?: AbortSignal }): Promise<any>
 }
 
-function makeRequest(body: unknown, url: string) {
+function makeRequest(body: unknown, url: string, method: 'POST' | 'PUT' | 'DELETE' = 'POST') {
   const listeners = new Map<string, (value?: unknown) => void>()
   return {
-    method: 'POST',
+    method,
     url,
     on: (event: string, listener: (value?: unknown) => void) => {
       listeners.set(event, listener)
@@ -143,37 +144,37 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
     expect(existsSync(file)).toBe(true)
     // 人可读可 diff 的规范 JSON,且可原样读回。
     expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ id: plan.id, status: 'pending', character: CHARACTER })
-    expect((await getCardPlan(tavern, plan.id))!.title).toBe('Soften the personality')
+    expect((await getPlan(tavern, plan.id))!.title).toBe('Soften the personality')
   })
 
-  it('listCardPlans filters by character/status and decides transitions round-trip', async () => {
+  it('listPlans filters by character/status and decides transitions round-trip', async () => {
     const keep = await proposeCardPlan(tavern, CHARACTER, { title: 'keep pending', changes: [{ field: 'scenario', currentValue: 'x', newValue: 'y' }] })
     const approve = await proposeCardPlan(tavern, CHARACTER, { title: 'to approve', changes: [{ field: 'scenario', currentValue: 'x', newValue: 'z' }] })
     const reject = await proposeCardPlan(tavern, OTHER_CHARACTER, { title: 'to reject', changes: [{ field: 'scenario', currentValue: 'x', newValue: 'w' }] })
 
-    expect((await listCardPlans(tavern)).map((plan) => plan.id)).toContain(keep.id)
-    expect((await listCardPlans(tavern, { status: 'pending' })).map((plan) => plan.id)).toEqual(
+    expect((await listPlans(tavern)).map((plan) => plan.id)).toContain(keep.id)
+    expect((await listPlans(tavern, { status: 'pending' })).map((plan) => plan.id)).toEqual(
       expect.arrayContaining([keep.id, approve.id, reject.id]),
     )
-    expect((await listCardPlans(tavern, { character: OTHER_CHARACTER })).map((plan) => plan.id)).toEqual([reject.id])
+    expect((await listPlans(tavern, { character: OTHER_CHARACTER })).map((plan) => plan.id)).toEqual([reject.id])
 
-    const approved = await decideCardPlan(tavern, approve.id, true)
+    const approved = await decidePlan(tavern, approve.id, true)
     expect(approved.status).toBe('approved')
     expect(approved.decidedAt).toBeDefined()
-    const rejected = await decideCardPlan(tavern, reject.id, false)
+    const rejected = await decidePlan(tavern, reject.id, false)
     expect(rejected.status).toBe('rejected')
     // 状态过滤生效
-    expect((await listCardPlans(tavern, { character: OTHER_CHARACTER, status: 'rejected' })).map((plan) => plan.id)).toEqual([reject.id])
+    expect((await listPlans(tavern, { character: OTHER_CHARACTER, status: 'rejected' })).map((plan) => plan.id)).toEqual([reject.id])
     // 非pending不可再决定
-    await expect(decideCardPlan(tavern, approve.id, false)).rejects.toThrow('already approved')
-    await expect(decideCardPlan(tavern, 'plan-missing')).rejects.toThrow('not found')
+    await expect(decidePlan(tavern, approve.id, false)).rejects.toThrow('already approved')
+    await expect(decidePlan(tavern, 'plan-missing')).rejects.toThrow('not found')
 
-    const applied = await applyCardPlan(tavern, approve.id)
+    const applied = await applyPlan(tavern, approve.id)
     expect(applied.status).toBe('applied')
     expect(applied.appliedAt).toBeDefined()
-    await expect(applyCardPlan(tavern, approve.id)).rejects.toThrow('already applied')
-    await expect(applyCardPlan(tavern, reject.id)).rejects.toThrow('was rejected')
-    await expect(decideCardPlan(tavern, keep.id, true)).resolves.toMatchObject({ status: 'approved' })
+    await expect(applyPlan(tavern, approve.id)).rejects.toThrow('already applied')
+    await expect(applyPlan(tavern, reject.id)).rejects.toThrow('was rejected')
+    await expect(decidePlan(tavern, keep.id, true)).resolves.toMatchObject({ status: 'approved' })
     rmSync(join(tavern, 'card-workbench', 'plans', `${keep.id}.json`))
   })
 
@@ -188,7 +189,7 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
     await expect(proposeCardPlan(tavern, CHARACTER, { title: 't', changes: [{ field: 'personality', currentValue: '', newValue: 'x', note: 'n'.repeat(501) }] }))
       .rejects.toThrow('note')
     // planId 注入面:非法 id 直接视为不存在,而不是拼路径
-    expect(await getCardPlan(tavern, '../../etc/passwd')).toBeUndefined()
+    expect(await getPlan(tavern, '../../etc/passwd')).toBeUndefined()
   })
 
   /* --------------------------- 工具层:方案执行路径 --------------------------- */
@@ -235,7 +236,7 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
     // 未确认:方案不动,卡不动
     await expect(tools.get('card_put')!.execute({ character: CHARACTER, planId: proposed.planId }))
       .rejects.toThrow('confirmation required')
-    expect((await getCardPlan(tavern, proposed.planId))!.status).toBe('pending')
+    expect((await getPlan(tavern, proposed.planId))!.status).toBe('pending')
     expect((await store.getCharacter(CHARACTER))!.card.data.personality).toBe('Calm.')
     // 确认后:按方案执行,直传 changes 被忽略(这里是干扰值)
     const applied = await tools.get('card_put')!.execute({
@@ -273,7 +274,7 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
     await expect(tools.get('card_put')!.execute({ character: CHARACTER, planId: proposed.planId, confirmed: true }))
       .rejects.toThrow('stale')
     // 拒绝执行时方案保持 pending,可重新提案
-    expect((await getCardPlan(tavern, proposed.planId))!.status).toBe('pending')
+    expect((await getPlan(tavern, proposed.planId))!.status).toBe('pending')
   })
 
   it('card_put refuses a rejected plan', async () => {
@@ -282,7 +283,7 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
       title: 'will be rejected',
       changes: [{ field: 'personality', newValue: 'nope' }],
     })
-    await decideCardPlan(tavern, proposed.planId, false)
+    await decidePlan(tavern, proposed.planId, false)
     await expect(tools.get('card_put')!.execute({ character: OTHER_CHARACTER, planId: proposed.planId, confirmed: true }))
       .rejects.toThrow('was rejected')
     expect((await store.getCharacter(OTHER_CHARACTER))!.card.data.personality).toBe('Calm.')
@@ -416,6 +417,45 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
       .rejects.toThrow('not found')
   })
 
+  it('panel DELETE character route cleans the original snapshot so same-name re-imports stay truthful', async () => {
+    await store.importCharacter(cardPayload('Route Snapshot Card'))
+    const card = (await store.getCharacter('Route Snapshot Card'))!.card
+    expect(await saveOriginalSnapshot(tavern, 'Route Snapshot Card', card)).toBe(true)
+    const res = makeResponse()
+    await apiHandler({ method: 'DELETE', url: '/api/dsh-tavern/character?name=Route%20Snapshot%20Card', on: () => undefined, destroy: () => {} }, res)
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.chunks[0]!).ok).toBe(true)
+    expect(await store.getCharacter('Route Snapshot Card')).toBeUndefined()
+    // 面板删卡清快照：同名再导入拿到的是新快照，而不是「首个胜出」保住的陈旧旧卡
+    expect(await readOriginalSnapshot(tavern, 'Route Snapshot Card')).toBeUndefined()
+    const reimported = await store.importCharacter(cardPayload('Route Snapshot Card'))
+    expect(await saveOriginalSnapshot(tavern, 'Route Snapshot Card', reimported.card)).toBe(true)
+  })
+
+  it('renames carry the original snapshot along (panel PUT and card_put); restore moves it back', async () => {
+    await store.importCharacter(cardPayload('Snapshot Rename Card'))
+    const card = (await store.getCharacter('Snapshot Rename Card'))!.card
+    await saveOriginalSnapshot(tavern, 'Snapshot Rename Card', card)
+    // 面板 PUT 改名 → 快照跟卡走，旧名不留幽灵
+    const put = makeResponse()
+    await apiHandler(makeRequest({ card: { ...card, data: { ...card.data, name: 'Renamed Once' } } }, '/api/dsh-tavern/character/Snapshot%20Rename%20Card', 'PUT'), put)
+    expect(put.statusCode).toBe(200)
+    expect(JSON.parse(put.chunks[0]!).card.data.name).toBe('Renamed Once')
+    expect(await readOriginalSnapshot(tavern, 'Snapshot Rename Card')).toBeUndefined()
+    expect((await readOriginalSnapshot(tavern, 'Renamed Once'))!.data.name).toBe('Snapshot Rename Card')
+    // card_put 再改名（工具面路径）→ 同样迁移
+    const renamed = await tools.get('card_put')!.execute({ character: 'Renamed Once', confirmed: true, changes: [{ field: 'name', value: 'Renamed Twice' }] })
+    expect(renamed).toMatchObject({ character: 'Renamed Twice', renamedFrom: 'Renamed Once' })
+    expect(await readOriginalSnapshot(tavern, 'Renamed Once')).toBeUndefined()
+    expect((await readOriginalSnapshot(tavern, 'Renamed Twice'))!.data.name).toBe('Snapshot Rename Card')
+    // 恢复原版：工作版整体替换回原名，快照跟着回原名（按当前卡名寻址的不变量）
+    const restored = await tools.get('card_restore_original')!.execute({ character: 'Renamed Twice', confirmed: true })
+    expect(restored.character).toBe('Snapshot Rename Card')
+    expect(await readOriginalSnapshot(tavern, 'Renamed Twice')).toBeUndefined()
+    expect((await readOriginalSnapshot(tavern, 'Snapshot Rename Card'))!.data.name).toBe('Snapshot Rename Card')
+    await tools.get('card_delete')!.execute({ character: 'Snapshot Rename Card', confirmed: true })
+  })
+
   /* ------------------------------ 面板路由 ------------------------------ */
 
   it('GET card-workbench/plans lists pending plans by default and honours filters', async () => {
@@ -497,7 +537,7 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
     await apiHandler(makeRequest({ approve: true }, `/api/dsh-tavern/card-workbench/plans/${stalePlan.planId}/decision`), staleDecision)
     expect(staleDecision.statusCode).toBe(400)
     expect(JSON.parse(staleDecision.chunks[0]!).message).toContain('stale')
-    expect((await getCardPlan(tavern, stalePlan.planId))!.status).toBe('pending')
+    expect((await getPlan(tavern, stalePlan.planId))!.status).toBe('pending')
   })
 
   /* ------------------------------ 世界书工具 ------------------------------ */
@@ -776,6 +816,176 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
     const fork = await store.getWorld('Panel Lore Copy')
     expect(fork!.entries).toEqual(source!.entries)
     expect(fork!.name).toBe('Panel Lore Copy')
+  })
+
+  /* ---------------------- 世界书方案协议（面板化 diff） ---------------------- */
+
+  it('world_plan_propose snapshots live values for edit plans and refuses missing books / create-on-existing', async () => {
+    await store.importWorldFile('Plan Lore', {
+      entries: {
+        0: { uid: 0, key: ['alpha'], content: 'Alpha content.', disable: false },
+        1: { uid: 1, key: ['beta'], content: 'Beta content.', disable: true },
+      },
+    })
+    const proposed = await tools.get('world_plan_propose')!.execute({
+      world: 'Plan Lore',
+      title: 'rewrite beta, drop alpha, add gamma',
+      entries: [
+        { uid: 0, remove: true },
+        { uid: 1, content: 'Beta content, revised.', enabled: true },
+        { uid: 5, key: ['gamma'], content: 'Gamma entry.', note: 'background lore' },
+      ],
+    })
+    expect(proposed).toMatchObject({ world: 'Plan Lore', op: 'edit', title: 'rewrite beta, drop alpha, add gamma', status: 'pending' })
+    const stored = (await getPlan(tavern, proposed.planId)) as WorldPlan
+    expect(stored).toMatchObject({ kind: 'world', op: 'edit', world: 'Plan Lore', status: 'pending' })
+    // currentValue 一律从活书快照：disable:true → enabled:false；新 uid 无 currentValue
+    expect(stored.entries).toEqual([
+      { uid: 0, action: 'remove', fields: [] },
+      {
+        uid: 1, action: 'update',
+        fields: [
+          { field: 'content', currentValue: 'Beta content.', newValue: 'Beta content, revised.' },
+          { field: 'enabled', currentValue: false, newValue: true },
+        ],
+      },
+      { uid: 5, action: 'create', fields: [{ field: 'key', newValue: ['gamma'] }, { field: 'content', newValue: 'Gamma entry.' }], note: 'background lore' },
+    ])
+    // 只提案不落盘
+    expect((await store.getWorld('Plan Lore'))!.entries).toHaveLength(2)
+    await expect(tools.get('world_plan_propose')!.execute({ world: 'No Such Book', title: 'x', entries: [{ uid: 0, content: 'y' }] })).rejects.toThrow('not found')
+    await expect(tools.get('world_plan_propose')!.execute({ world: 'Plan Lore', create: true, title: 'x', entries: [{ content: 'y' }] })).rejects.toThrow('already exists')
+  })
+
+  it('world_put with planId applies the recorded entries exactly, ignores direct edits and marks applied', async () => {
+    const proposed = await tools.get('world_plan_propose')!.execute({
+      world: 'Plan Lore', title: 'apply me',
+      entries: [{ uid: 1, content: 'Applied content.' }],
+    })
+    await expect(tools.get('world_put')!.execute({ world: 'Plan Lore', planId: proposed.planId, entries: [{ uid: 1, content: 'x' }] })).rejects.toThrow('confirmation required')
+    await expect(tools.get('world_put')!.execute({ world: 'Somewhere Else', planId: proposed.planId, confirmed: true })).rejects.toThrow('belongs to world')
+    await expect(tools.get('world_put')!.execute({ world: 'Plan Lore', planId: 'plan-none', confirmed: true })).rejects.toThrow('not found')
+    // 卡方案不能经 world_put 执行（kind 分派）
+    const cardPlan = await tools.get('card_plan_propose')!.execute({ character: CHARACTER, title: 'wrong kind', changes: [{ field: 'personality', newValue: 'Nope.' }] })
+    await expect(tools.get('world_put')!.execute({ world: 'Plan Lore', planId: cardPlan.planId, confirmed: true })).rejects.toThrow('not a world edit plan')
+
+    const applied = await tools.get('world_put')!.execute({
+      world: 'Plan Lore', planId: proposed.planId, confirmed: true,
+      entries: [{ uid: 1, content: 'direct edits are ignored' }],
+    })
+    expect(applied).toMatchObject({
+      world: 'Plan Lore', planId: proposed.planId, planStatus: 'applied',
+      entries: [{ uid: 1, created: false, fields: ['content'] }],
+    })
+    expect((await store.getWorld('Plan Lore'))!.entries.find((entry) => entry.uid === 1)!.content).toBe('Applied content.')
+    expect((await getPlan(tavern, proposed.planId))!.status).toBe('applied')
+    await expect(tools.get('world_put')!.execute({ world: 'Plan Lore', planId: proposed.planId, confirmed: true })).rejects.toThrow('already applied')
+  })
+
+  it('world_put rejects a stale world plan instead of clobbering concurrent edits', async () => {
+    const proposed = await tools.get('world_plan_propose')!.execute({
+      world: 'Plan Lore', title: 'stale me',
+      entries: [{ uid: 1, order: 42 }],
+    })
+    // 并发直写同一字段 → currentValue 失配，方案拒绝且保持 pending
+    await tools.get('world_put')!.execute({ world: 'Plan Lore', confirmed: true, entries: [{ uid: 1, order: 7 }] })
+    await expect(tools.get('world_put')!.execute({ world: 'Plan Lore', planId: proposed.planId, confirmed: true })).rejects.toThrow('stale')
+    expect((await getPlan(tavern, proposed.planId))!.status).toBe('pending')
+    // remove 目标在提案后被并发删除 → 执行时同样过期
+    const removePlan = await tools.get('world_plan_propose')!.execute({
+      world: 'Plan Lore', title: 'remove the removed',
+      entries: [{ uid: 0, remove: true }],
+    })
+    await tools.get('world_put')!.execute({ world: 'Plan Lore', confirmed: true, entries: [{ uid: 0, remove: true }] })
+    await expect(tools.get('world_put')!.execute({ world: 'Plan Lore', planId: removePlan.planId, confirmed: true })).rejects.toThrow('stale')
+    expect((await getPlan(tavern, removePlan.planId))!.status).toBe('pending')
+  })
+
+  it('world_plan_propose create + world_create planId builds the recorded book; late name collisions refuse as stale', async () => {
+    const proposed = await tools.get('world_plan_propose')!.execute({
+      world: 'Fresh Lore', create: true, title: 'new book plan',
+      entries: [
+        { key: ['one'], content: 'First.', note: 'opener' },
+        { key: ['two'], content: 'Second.', constant: true },
+      ],
+    })
+    const stored = (await getPlan(tavern, proposed.planId)) as WorldPlan
+    expect(stored).toMatchObject({ kind: 'world', op: 'create', world: 'Fresh Lore' })
+    expect(stored.entries.map((entry) => [entry.uid, entry.action])).toEqual([[0, 'create'], [1, 'create']])
+    expect(stored.entries[0].fields.find((field) => field.field === 'key')).toEqual({ field: 'key', newValue: ['one'] })
+
+    await expect(tools.get('world_create')!.execute({ name: 'Fresh Lore', planId: proposed.planId })).rejects.toThrow('confirmation required')
+    await expect(tools.get('world_create')!.execute({ name: 'Elsewhere Lore', planId: proposed.planId, confirmed: true })).rejects.toThrow('belongs to world')
+    // 卡方案不能经 world_create 执行（kind 分派）
+    const cardPlan = await tools.get('card_plan_propose')!.execute({ character: CHARACTER, title: 'wrong kind for worlds', changes: [{ field: 'personality', newValue: 'Nope.' }] })
+    await expect(tools.get('world_create')!.execute({ name: 'Fresh Lore', planId: cardPlan.planId, confirmed: true })).rejects.toThrow('is not a world creation plan')
+    const created = await tools.get('world_create')!.execute({
+      name: 'Fresh Lore', planId: proposed.planId, confirmed: true,
+      entries: [{ key: ['ignored'], content: 'ignored' }],
+    })
+    expect(created).toMatchObject({ created: true, world: 'Fresh Lore', entryCount: 2, planId: proposed.planId, planStatus: 'applied' })
+    const book = await store.getWorld('Fresh Lore')
+    expect(book!.entries.map((entry) => [entry.uid, entry.content, entry.key])).toEqual([[0, 'First.', ['one']], [1, 'Second.', ['two']]])
+    expect(book!.entries[1].constant).toBe(true)
+
+    // 提案后书名被占 → 执行时按过期拒绝，不留半成品
+    const late = await tools.get('world_plan_propose')!.execute({
+      world: 'Late Lore', create: true, title: 'too late',
+      entries: [{ key: ['x'], content: 'y' }],
+    })
+    await tools.get('world_create')!.execute({ name: 'Late Lore', confirmed: true, entries: [{ key: ['z'], content: 'occupied' }] })
+    await expect(tools.get('world_create')!.execute({ name: 'Late Lore', planId: late.planId, confirmed: true })).rejects.toThrow('stale')
+    expect((await getPlan(tavern, late.planId))!.status).toBe('pending')
+    expect((await store.getWorld('Late Lore'))!.entries[0].content).toBe('occupied')
+  })
+
+  it('panel routes list world plans and dispatch decisions by kind', async () => {
+    const proposed = await tools.get('world_plan_propose')!.execute({
+      world: 'Plan Lore', title: 'panel approve me',
+      entries: [{ uid: 1, comment: 'Set by panel.' }],
+    })
+    const list = makeResponse()
+    await apiHandler(makeGetRequest('/api/dsh-tavern/card-workbench/plans?status=all'), list)
+    const plans = JSON.parse(list.chunks[0]!).plans
+    expect(plans.some((plan: { id: string; kind: string; op: string }) => plan.id === proposed.planId && plan.kind === 'world' && plan.op === 'edit')).toBe(true)
+
+    const approved = makeResponse()
+    await apiHandler(makeRequest({ approve: true }, `/api/dsh-tavern/card-workbench/plans/${proposed.planId}/decision`), approved)
+    expect(approved.statusCode).toBe(200)
+    const body = JSON.parse(approved.chunks[0]!)
+    expect(body.plan).toMatchObject({ id: proposed.planId, kind: 'world', status: 'applied' })
+    expect(body.applied).toMatchObject({ world: 'Plan Lore' })
+    expect((await store.getWorld('Plan Lore'))!.entries.find((entry) => entry.uid === 1)!.comment).toBe('Set by panel.')
+
+    const toReject = await tools.get('world_plan_propose')!.execute({
+      world: 'Plan Lore', title: 'panel reject me',
+      entries: [{ uid: 1, comment: 'Never.' }],
+    })
+    const rejected = makeResponse()
+    await apiHandler(makeRequest({ approve: false }, `/api/dsh-tavern/card-workbench/plans/${toReject.planId}/decision`), rejected)
+    expect(JSON.parse(rejected.chunks[0]!).plan).toMatchObject({ status: 'rejected' })
+    expect((await store.getWorld('Plan Lore'))!.entries.find((entry) => entry.uid === 1)!.comment).toBe('Set by panel.')
+
+    // kind 过滤：只列世界书方案；非法 kind 拒绝
+    const worldOnly = makeResponse()
+    await apiHandler(makeGetRequest('/api/dsh-tavern/card-workbench/plans?status=all&kind=world'), worldOnly)
+    const filtered = JSON.parse(worldOnly.chunks[0]!).plans
+    expect(filtered.length).toBeGreaterThan(0)
+    expect(filtered.every((plan: { kind: string }) => plan.kind === 'world')).toBe(true)
+    const badKind = makeResponse()
+    await apiHandler(makeGetRequest('/api/dsh-tavern/card-workbench/plans?kind=nope'), badKind)
+    expect(badKind.statusCode).toBe(400)
+  })
+
+  it('legacy plan files without kind normalize as card plans', async () => {
+    const legacy = {
+      id: 'plan-legacy-01', character: CHARACTER, title: 'legacy shape',
+      changes: [{ field: 'personality', currentValue: 'Calm.', newValue: 'Legacy.' }],
+      createdAt: '2026-10-08T00:00:00.000Z', status: 'pending',
+    }
+    writeFileSync(join(tavern, 'card-workbench', 'plans', 'plan-legacy-01.json'), JSON.stringify(legacy))
+    expect((await getPlan(tavern, 'plan-legacy-01'))!.kind).toBe('card')
+    expect((await listPlans(tavern, { status: 'all' })).some((plan) => plan.id === 'plan-legacy-01')).toBe(true)
   })
 
   /* ------------------------------- 预设工具 ------------------------------- */

@@ -76,7 +76,7 @@ import {
 } from '../../../tavern-store/src/index.js'
 import { normalizeEntry, type CardDataIR, type CharacterCardIR, type LoreEntry } from '../../../tavern-format/src/index.js'
 import { dshHomePath } from '../dsh-home.js'
-import { applyCardPlan, getCardPlan, proposeCardPlan, type CardPlan, type CardPlanValue } from './plans.js'
+import { applyPlan, getPlan, proposeCardPlan, proposeWorldPlan, type CardPlan, type CardPlanValue, type WorldPlan, type WorldPlanValue } from './plans.js'
 
 export const name = 'dsh-tavern/card-workbench'
 export const inject = ['systemPrompt', 'tools']
@@ -89,9 +89,9 @@ const KERNEL = [
   'Working protocol for every modification request:',
   '- Read first: call card_get (cards), world_get (world books) or preset_get (presets) on the named resource to ground yourself in the current working copy before discussing any change. Previews truncate long values — card_get takes full: [fields] to fetch card fields in full and world_get takes uids to fetch entries in full; quote the exact text verbatim when rewriting or moving long content. world_list shows the whole world-book library (with the cards linking each book) when the user has not pinned an existing name.',
   '- Propose before writing: present a concrete plan — for every affected field or entry, show the current value (or an excerpt of it) and the full replacement value, plus why the change serves the user\'s intent. Quote exact text; never describe a change vaguely.',
-  '- Record card plans: for card edits, call card_plan_propose after the user reacts positively to the idea. It records the plan (planId) with the live current values and shows it in the workbench panel for review.',
+  '- Record plans: for card edits call card_plan_propose, and for world book edits or creations call world_plan_propose (create: true for new books), after the user reacts positively to the idea. They record the plan (planId) with the live current values and show it in the workbench panel for review.',
   '- Wait for explicit confirmation: the user must clearly approve the plan (e.g. "confirm", "apply it", or an equivalent). Silence, a new question, or a partial remark is NOT approval. Never write on an assumed yes.',
-  '- Only then write: for card plans call card_put with the planId and confirmed: true — it applies the recorded plan exactly. Direct card_put without a planId stays available for small in-conversation edits the user just approved verbatim. world_put and preset_put take confirmed: true as well; the tools reject calls without confirmation, and a rejection means go back to the user, never retry with the flag flipped on your own.',
+  '- Only then write: for card plans call card_put with the planId and confirmed: true — it applies the recorded plan exactly. For world edit plans call world_put with the planId, for world creation plans call world_create with the planId (both with confirmed: true). Direct card_put / world_put / world_create without a planId stay available for small in-conversation edits the user just approved verbatim; preset_put takes confirmed: true as well. The tools reject calls without confirmation, and a rejection means go back to the user, never retry with the flag flipped on your own.',
   '- Report the result: after writing, summarize what changed (fields, entries and their new lengths) and suggest what to review next.',
   '- Originals: card_original_get reads the import-time original snapshot; card_restore_original (also confirmed-only) overwrites the working copy with that original. Offer restore when the user dislikes accumulated edits. Cards built with card_create snapshot their as-created state, so restore works for hand-built cards too.',
   '- Deleting: card_delete removes a card PERMANENTLY with ALL its chat logs. Double gate: confirmed as usual, plus — when chats exist — a second call with deleteChats: true after you told the user the exact chat count. Group memberships, solo session bindings and the original snapshot are cleaned up with it.',
@@ -100,7 +100,7 @@ const KERNEL = [
   'Starting tasks (P3):',
   '- New card from an idea, material or script: gather the source first — material_list shows the script library, material_read fetches one chunk at a time (you never need the whole script in one call) — then discuss the draft fields with the user and call card_create with confirmed: true only after explicit approval. Creation binds nothing: scripts and world books attach through their own routes, chosen by the user or the panel. On success the workbench session renames itself to the new card name (the session the user is chatting in; mention it when reporting the result).',
   '- Convert a card to MVU (proposal 0012 P3): read the card with card_get, locate the old status-bar block in the prose, propose the variable structure and a statusTemplate draft, then call card_apply_mvu with confirmed: true after explicit approval. The tool only writes extensions.agentTavern (and snapshots the pre-conversion card as the original when none exists, keeping the conversion reversible via card_restore_original); it does NOT rewrite the prose — afterwards offer a separate confirmed card_put to strip the now-redundant status-bar block, and tell the user to start a new chat to verify the fixed right-side status panel.',
-  '- New world book: call world_list first so you propose a free name (and see what already exists), discuss the book name and its initial entries with the user, then call world_create with confirmed: true only after explicit approval. Seed entries get uids in array order (0, 1, …); world_create never overwrites an existing book, and later entries and edits go through world_put. Creation binds nothing — attach the book to its card with world_bind once the user wants the pair to travel together (the card link is what makes the book join plays); world_copy forks an existing book verbatim when a new card should start from the same lore.',
+  '- New world book: call world_list first so you propose a free name (and see what already exists), discuss the book name and its initial entries with the user, then record the creation with world_plan_propose (create: true) and apply it with world_create (planId, confirmed: true) after explicit approval. Seed entries get uids in array order (0, 1, …); world_create never overwrites an existing book, and later entries and edits go through world_put. Creation binds nothing — attach the book to its card with world_bind once the user wants the pair to travel together (the card link is what makes the book join plays); world_copy forks an existing book verbatim when a new card should start from the same lore.',
   '',
   'Boundaries:',
   '- Editable card fields: text fields name, nickname, description, personality, scenario, firstMes, creatorNotes, mesExample, systemPrompt, postHistoryInstructions, creator and characterVersion; array fields tags and alternateGreetings take the FULL replacement array (whole-group replace, blank items dropped). World entry edits match by uid and cover the full ST entry whitelist — key, keysecondary, comment, content, enabled plus advanced fields (constant, order, position, depth, probability, selective logic, inclusion groups, recursion flags, timed effects...); unmentioned fields are preserved verbatim and remove: true deletes an entry. Book-level operations: world_delete (refuses while cards still link the book), world_rename (re-points every card link and activeWorlds) and world_bind (attach/detach a book on a card). Preset edits to prompt role/content/enabled (match by name). Other areas (extensions, scripts, chat state) are out of scope; say so instead of working around the limit.',
@@ -267,6 +267,11 @@ const planProposeOutput = objectOutput({
   status: { type: 'string' }, createdAt: { type: 'string' },
   changes: { type: 'array', items: { type: 'object', additionalProperties: true } },
 })
+const worldPlanProposeOutput = objectOutput({
+  planId: { type: 'string' }, world: { type: 'string' }, op: { type: 'string' }, title: { type: 'string' },
+  status: { type: 'string' }, createdAt: { type: 'string' },
+  entries: { type: 'array', items: { type: 'object', additionalProperties: true } },
+})
 const worldSummaryOutput = objectOutput({
   found: { type: 'boolean' }, world: { type: 'string' }, entryCount: { type: 'number' }, nextUid: { type: 'number' },
   entries: { type: 'array', items: { type: 'object', additionalProperties: true } }, truncated: { type: 'boolean' },
@@ -387,8 +392,9 @@ function createTools(): ToolDefinition[] {
       exec?.signal?.throwIfAborted()
       if (args.planId !== undefined) {
         const planId = stringArg(args.planId)
-        const plan = await getCardPlan(dshHomePath('tavern'), planId)
+        const plan = await getPlan(dshHomePath('tavern'), planId)
         if (plan === undefined) throw new Error(`plan '${planId}' not found`)
+        if (plan.kind !== 'card') throw new Error(`plan '${planId}' is a world plan; apply it with world_put (edit) or world_create (create)`)
         if (plan.character !== character) throw new Error(`plan '${planId}' belongs to character '${plan.character}', not '${character}'`)
         const executed = await executeCardPlan(plan)
         return {
@@ -518,6 +524,103 @@ function createTools(): ToolDefinition[] {
         })),
       }
     }),
+    tool('world_plan_propose', 'Record a pending world book plan (confirmation protocol, same flow as card plans): per-entry field replacements, new entries or removals for an existing book, or the initial entries of a book to create. The CURRENT values are snapshotted from the live book so the diff shown to the user is truthful. Entries take the same shape as world_put edits (or world_create seeds when create: true). Returns a planId — the user then approves the plan in the workbench panel, or confirms in conversation and you call world_put (edit) / world_create (create) with that planId and confirmed: true. Proposing does not write the book.', {
+      world: { type: 'string', required: true, description: 'World book name the plan targets (the name of the book to create when create is true).' },
+      title: { type: 'string', required: true, description: 'Short human-readable plan title shown in the workbench panel (max 200 characters).' },
+      create: { type: 'boolean', description: 'True plans the creation of a new book with the given seed entries (uids in array order); false (default) plans edits to the existing book named world.' },
+      entries: {
+        type: 'array', required: true,
+        description: `Up to 32 entries of { uid, <editable field>…, remove?, note? } for edits (uid required per entry), or { <editable field>…, note? } seeds for creation (uids follow array order). Editable fields: ${WORLD_EDITABLE_FIELD_LIST}.`,
+        items: {
+          type: 'object',
+          properties: {
+            uid: { type: 'integer', minimum: 0 },
+            remove: { type: 'boolean', description: 'Delete the entry (existing uids only); cannot be combined with other fields.' },
+            note: { type: 'string', description: 'Why this entry change serves the user intent (max 500 characters).' },
+            ...worldEditableProperties(),
+          },
+          additionalProperties: false,
+        },
+      },
+    }, worldPlanProposeOutput, async (args, exec) => {
+      const world = worldNameArg(args.world)
+      const title = titleArg(args.title)
+      const create = args.create === true
+      exec?.signal?.throwIfAborted()
+      const db = await tavernStore()
+      const book = await db.getWorld(world)
+      if (create && book !== undefined) {
+        throw new Error(`world '${world}' already exists; propose edits to it instead (drop create) or pick a different name (world_list)`)
+      }
+      if (!create && book === undefined) {
+        throw new Error(`world '${world}' not found; set create: true to plan a new book, or world_list shows the library`)
+      }
+      if (!Array.isArray(args.entries) || args.entries.length === 0) throw new Error('entries must be a non-empty array')
+      // note 不在条目白名单里，解析前剥离单独校验（长度上限对齐方案存储层）
+      const noteAt = (index: number): string | undefined => {
+        const raw = args.entries[index]
+        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+        const note = (raw as Record<string, unknown>).note
+        if (note === undefined) return undefined
+        if (typeof note !== 'string' || note.length > 500) throw new Error(`note for entry ${index + 1} must be a string of at most 500 characters`)
+        return note
+      }
+      const cleaned = args.entries.map((raw, index) => {
+        const note = noteAt(index)
+        if (note === undefined) return raw
+        const { note: _drop, ...rest } = raw as Record<string, unknown>
+        return rest
+      })
+      const byUid = new Map((book?.entries ?? []).map((entry) => [entry.uid, entry]))
+      const proposed = create ? parseWorldSeedEntries(cleaned) : parseWorldEdits(cleaned)
+      const entries = proposed.map((edit, index) => {
+        const note = noteAt(index)
+        if (create) {
+          // 建书方案：全部 create 动作，uid 按数组顺序（与 world_create 同款分配）
+          return {
+            uid: index,
+            action: 'create' as const,
+            fields: Object.entries(edit.values).map(([field, newValue]) => ({ field, newValue: newValue as WorldPlanValue })),
+            ...(note !== undefined ? { note } : {}),
+          }
+        }
+        const existing = byUid.get(edit.uid)
+        if (edit.remove) {
+          if (existing === undefined) throw new Error(`uid ${edit.uid} not found in world '${world}'; removal matches existing entries only (see world_get)`)
+          return { uid: edit.uid, action: 'remove' as const, fields: [], ...(note !== undefined ? { note } : {}) }
+        }
+        // currentValue 一律以活书为准（不信任模型复述），diff 面向用户保真
+        const fields = edit.fields.map((field) => ({
+          field,
+          ...(existing !== undefined ? { currentValue: worldLiveValue(existing, field as WorldEditableField) } : {}),
+          newValue: edit.values[field] as WorldPlanValue,
+        }))
+        return { uid: edit.uid, action: existing === undefined ? 'create' as const : 'update' as const, fields, ...(note !== undefined ? { note } : {}) }
+      })
+      const plan = await proposeWorldPlan(dshHomePath('tavern'), world, {
+        op: create ? 'create' : 'edit',
+        title,
+        entries,
+      })
+      return {
+        planId: plan.id,
+        world: plan.world,
+        op: plan.op,
+        title: plan.title,
+        status: plan.status,
+        createdAt: plan.createdAt,
+        entries: plan.entries.map((entry) => ({
+          uid: entry.uid,
+          action: entry.action,
+          fields: entry.fields.map((field) => ({
+            field: field.field,
+            ...(field.currentValue !== undefined ? { currentValue: previewWorldPlanValue(field.currentValue) } : {}),
+            newValue: previewWorldPlanValue(field.newValue),
+          })),
+          ...(entry.note !== undefined ? { note: entry.note } : {}),
+        })),
+      }
+    }),
     tool('world_list', 'List the Tavern world-book library: every stored book name with its entry count and the character cards linking it (extensions.world). Call it before world_create to pick a free name, before world_delete/world_rename to check linked cards, or when the user refers to a world book and you are not sure of its exact name.', {}, worldListOutput, async (_args, exec) => {
       exec?.signal?.throwIfAborted()
       const db = await tavernStore()
@@ -554,11 +657,11 @@ function createTools(): ToolDefinition[] {
       }
       return summary
     }),
-    tool('world_put', 'Apply confirmed edits to a world book, matched by uid: existing entries get only the provided fields replaced (full ST entry whitelist — key, keysecondary, comment, content, enabled plus advanced fields like constant, order, position, depth, probability, selective logic, groups, recursion and timed effects); unmentioned fields are preserved verbatim. Unknown uids create new entries (use nextUid from world_get), and remove: true deletes an existing entry. Present the per-entry before/after plan to the user FIRST; rejected without confirmed: true. The book itself must already exist: world_create starts new books and world_list shows the library.', {
-      world: { type: 'string', required: true, description: 'World book name to edit.' },
+    tool('world_put', 'Apply confirmed edits to a world book, either from a recorded plan (planId from world_plan_propose — the recorded entries are applied exactly and any direct entries argument is ignored) or as direct edits matched by uid: existing entries get only the provided fields replaced (full ST entry whitelist — key, keysecondary, comment, content, enabled plus advanced fields like constant, order, position, depth, probability, selective logic, groups, recursion and timed effects); unmentioned fields are preserved verbatim. Unknown uids create new entries (use nextUid from world_get), and remove: true deletes an existing entry. Present the per-entry before/after plan to the user FIRST; rejected without confirmed: true. The book itself must already exist: world_create starts new books and world_list shows the library.', {
+      world: { type: 'string', required: true, description: 'World book name to edit; must match the plan when planId is given.' },
+      planId: { type: 'string', description: 'ID of a world edit plan recorded by world_plan_propose; applies the recorded entries exactly and marks it applied.' },
       entries: {
-        type: 'array', required: true,
-        description: 'Up to 32 edits, each { uid, <editable field>…, remove? }: existing uids get only the provided fields replaced, unknown uids create entries, remove: true deletes the entry (exclusive with other fields). At least one editable field or remove per entry.',
+        type: 'array', description: 'Ignored when planId is given. Otherwise up to 32 edits, each { uid, <editable field>…, remove? }: existing uids get only the provided fields replaced, unknown uids create entries, remove: true deletes the entry (exclusive with other fields). At least one editable field or remove per entry.',
         items: {
           type: 'object',
           properties: {
@@ -574,39 +677,37 @@ function createTools(): ToolDefinition[] {
     }, worldPutOutput, async (args, exec) => {
       if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR)
       const world = stringArg(args.world)
-      const edits = parseWorldEdits(args.entries)
       exec?.signal?.throwIfAborted()
+      if (args.planId !== undefined) {
+        const planId = stringArg(args.planId)
+        const plan = await getPlan(dshHomePath('tavern'), planId)
+        if (plan === undefined) throw new Error(`plan '${planId}' not found`)
+        if (plan.kind !== 'world' || plan.op !== 'edit') throw new Error(`plan '${planId}' is not a world edit plan; book creations go through world_create and card plans through card_put`)
+        if (plan.world !== world) throw new Error(`plan '${planId}' belongs to world '${plan.world}', not '${world}'`)
+        const executed = await executeWorldPlan(plan)
+        return {
+          world: executed.world,
+          entryCount: executed.entryCount,
+          nextUid: executed.nextUid,
+          entries: executed.touched,
+          planId,
+          planStatus: executed.plan.status,
+        }
+      }
+      const edits = parseWorldEdits(args.entries)
       const db = await tavernStore()
       const book = await db.getWorld(world)
       if (book === undefined) throw new Error(`world '${world}' not found; create it with world_create first (world_list shows the library)`)
-      const byUid = new Map(book.entries.map((entry) => [entry.uid, entry]))
-      const touched: Array<{ uid: number; created: boolean; removed?: boolean; fields: string[] }> = []
-      for (const edit of edits) {
-        const existing = byUid.get(edit.uid)
-        if (edit.remove) {
-          if (existing === undefined) throw new Error(`uid ${edit.uid} not found in world '${world}'; removal matches existing entries only (see world_get)`)
-          byUid.delete(edit.uid)
-          touched.push({ uid: edit.uid, created: false, removed: true, fields: [] })
-          continue
-        }
-        if (existing === undefined) {
-          // 新条目：normalizeEntry 补全 ST 条目的全部默认字段，白名单之外不动
-          byUid.set(edit.uid, worldEntryFromValues(edit.uid, edit.values))
-          touched.push({ uid: edit.uid, created: true, fields: edit.fields })
-          continue
-        }
-        byUid.set(edit.uid, applyWorldEntryFields(existing, edit.values))
-        touched.push({ uid: edit.uid, created: false, fields: edit.fields })
-      }
-      const entries = [...byUid.values()].sort((a, b) => a.uid - b.uid)
+      const { entries, touched } = applyWorldEdits(world, book, edits)
       await db.putWorld({ ...book, entries })
       const summary = worldSummary(world, entries)
       return { world, entryCount: summary.entryCount, nextUid: summary.nextUid, entries: touched }
     }),
-    tool('world_create', 'Create a new Tavern world book, optionally with initial entries: uids are assigned in array order (0, 1, …) and every entry takes the full world_put whitelist (key, keysecondary, comment, content, enabled plus advanced ST fields) with the same limits. Present the book name and the full initial entry plan to the user FIRST; rejected without confirmed: true. Refuses when a book with the same name already exists — world_create never overwrites, and existing books are edited through world_put. Creation binds nothing; attach the book to a card with world_bind.', {
-      name: { type: 'string', required: true, description: 'Name of the new world book (max 120 characters); must not collide with an existing book (see world_list).' },
+    tool('world_create', 'Create a new Tavern world book, either from a recorded creation plan (planId from world_plan_propose with create: true — the recorded seed entries are applied exactly and any direct entries argument is ignored) or directly with optional initial entries: uids are assigned in array order (0, 1, …) and every entry takes the full world_put whitelist (key, keysecondary, comment, content, enabled plus advanced ST fields) with the same limits. Present the book name and the full initial entry plan to the user FIRST; rejected without confirmed: true. Refuses when a book with the same name already exists — world_create never overwrites, and existing books are edited through world_put. Creation binds nothing; attach the book to a card with world_bind.', {
+      name: { type: 'string', required: true, description: 'Name of the new world book (max 120 characters); must not collide with an existing book (see world_list) and must match the plan when planId is given.' },
+      planId: { type: 'string', description: 'ID of a world creation plan recorded by world_plan_propose (create: true); applies the recorded book exactly and marks it applied.' },
       entries: {
-        type: 'array', description: 'Optional initial entries (at most 32), each { <editable field>… } with at least one field; uid assignment follows array order.',
+        type: 'array', description: 'Ignored when planId is given. Otherwise optional initial entries (at most 32), each { <editable field>… } with at least one field; uid assignment follows array order.',
         items: {
           type: 'object',
           properties: worldEditableProperties(),
@@ -617,8 +718,24 @@ function createTools(): ToolDefinition[] {
     }, worldCreateOutput, async (args, exec) => {
       if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR)
       const name = worldNameArg(args.name)
-      const seeds = parseWorldSeedEntries(args.entries)
       exec?.signal?.throwIfAborted()
+      if (args.planId !== undefined) {
+        const planId = stringArg(args.planId)
+        const plan = await getPlan(dshHomePath('tavern'), planId)
+        if (plan === undefined) throw new Error(`plan '${planId}' not found`)
+        if (plan.kind !== 'world' || plan.op !== 'create') throw new Error(`plan '${planId}' is not a world creation plan; edit plans go through world_put and card plans through card_put`)
+        if (plan.world !== name) throw new Error(`plan '${planId}' belongs to world '${plan.world}', not '${name}'`)
+        const executed = await executeWorldPlan(plan)
+        return {
+          created: true,
+          world: executed.world,
+          entryCount: executed.entryCount,
+          nextUid: executed.nextUid,
+          planId,
+          planStatus: executed.plan.status,
+        }
+      }
+      const seeds = parseWorldSeedEntries(args.entries)
       const db = await tavernStore()
       if ((await db.getWorld(name)) !== undefined) {
         throw new Error(`world '${name}' already exists; world_create never overwrites — edit it with world_put or pick a different name`)
@@ -1211,14 +1328,95 @@ export async function executeCardPlan(plan: CardPlan): Promise<CardPlanExecution
   }
   const { found: written, saved } = await saveCardValues(plan.character, values, found)
   const formatted = formatWriteResult(written, saved, values)
-  const applied = await applyCardPlan(dshHomePath('tavern'), plan.id)
+  const applied = await applyPlan(dshHomePath('tavern'), plan.id)
   return {
-    plan: applied,
+    plan: applied as CardPlan,
     character: formatted.character as string,
     ...(formatted.renamedFrom !== undefined ? { renamedFrom: formatted.renamedFrom as string } : {}),
     changes: formatted.changes as Array<{ field: string; length: number; preview: string }>,
     fieldLengths: formatted.fieldLengths as Record<string, number>,
     source: formatted.source as Record<string, unknown>,
+  }
+}
+
+export interface WorldPlanExecution {
+  plan: WorldPlan
+  world: string
+  entryCount: number
+  nextUid: number
+  touched: Array<{ uid: number; created: boolean; removed?: boolean; fields: string[] }>
+}
+
+/**
+ * 按已落库的世界书方案执行（对话内 world_put/world_create(planId) 与面板
+ * decision 路由共用）：先做过期检测——update 逐字段核对 currentValue 仍在
+ * 活条目上、create 的 uid 尚不存在、remove 的条目仍在、建书名仍空闲（防
+ * 覆盖并发编辑），再经白名单/范围复检写入，成功才把方案标记 applied。
+ */
+export async function executeWorldPlan(plan: WorldPlan): Promise<WorldPlanExecution> {
+  if (plan.status === 'rejected') throw new Error(`plan '${plan.id}' was rejected and cannot be applied`)
+  if (plan.status === 'applied') throw new Error(`plan '${plan.id}' was already applied`)
+  if (plan.entries.length === 0) throw new Error(`plan '${plan.id}' has no entries`)
+  const db = await tavernStore()
+  if (plan.op === 'create') {
+    if ((await db.getWorld(plan.world)) !== undefined) {
+      throw new Error(`plan '${plan.id}' is stale: world '${plan.world}' already exists; re-propose the plan`)
+    }
+    const seeds = plan.entries.map((entry) => {
+      const values: Record<string, unknown> = {}
+      for (const field of entry.fields) values[editableWorldField(field.field)] = worldFieldValue(editableWorldField(field.field), field.newValue, ` for uid ${entry.uid}`)
+      return values
+    })
+    const entries = seeds.map((values, uid) => worldEntryFromValues(uid, values))
+    await db.putWorld({ name: plan.world, entries })
+    const applied = await applyPlan(dshHomePath('tavern'), plan.id)
+    return {
+      plan: applied as WorldPlan,
+      world: plan.world,
+      entryCount: entries.length,
+      nextUid: entries.length,
+      touched: entries.map((_entry, uid) => ({ uid, created: true, fields: plan.entries[uid].fields.map((field) => field.field) })),
+    }
+  }
+  const book = await db.getWorld(plan.world)
+  if (book === undefined) throw new Error(`plan '${plan.id}' is stale: world '${plan.world}' no longer exists; re-propose the plan`)
+  const byUid = new Map(book.entries.map((entry) => [entry.uid, entry]))
+  const edits: WorldEntryEdit[] = plan.entries.map((entry) => {
+    const existing = byUid.get(entry.uid)
+    if (entry.action === 'remove') {
+      if (existing === undefined) throw new Error(`plan '${plan.id}' is stale: uid ${entry.uid} no longer exists in world '${plan.world}'; re-propose the plan`)
+      return { uid: entry.uid, remove: true, values: {}, fields: [] }
+    }
+    if (entry.action === 'update' && existing === undefined) {
+      throw new Error(`plan '${plan.id}' is stale: uid ${entry.uid} no longer exists in world '${plan.world}'; re-propose the plan`)
+    }
+    if (entry.action === 'create' && existing !== undefined) {
+      throw new Error(`plan '${plan.id}' is stale: uid ${entry.uid} already exists in world '${plan.world}'; re-propose the plan`)
+    }
+    const values: Record<string, unknown> = {}
+    const fields: string[] = []
+    for (const fieldChange of entry.fields) {
+      const field = editableWorldField(fieldChange.field)
+      if (entry.action === 'update') {
+        const live = worldLiveValue(existing as LoreEntry, field)
+        if (fieldChange.currentValue === undefined || !worldPlanValueMatches(live, fieldChange.currentValue)) {
+          throw new Error(`plan '${plan.id}' is stale: field '${field}' on uid ${entry.uid} changed since the plan was proposed; re-propose the plan`)
+        }
+      }
+      values[field] = worldFieldValue(field, fieldChange.newValue, ` for uid ${entry.uid}`)
+      fields.push(field)
+    }
+    return { uid: entry.uid, remove: false, values, fields }
+  })
+  const { entries, touched } = applyWorldEdits(plan.world, book, edits)
+  await db.putWorld({ ...book, entries })
+  const applied = await applyPlan(dshHomePath('tavern'), plan.id)
+  return {
+    plan: applied as WorldPlan,
+    world: plan.world,
+    entryCount: entries.length,
+    nextUid: entries.reduce((max, entry) => Math.max(max, entry.uid), -1) + 1,
+    touched,
   }
 }
 
@@ -1558,6 +1756,75 @@ function worldEntryFromValues(uid: number, values: Record<string, unknown>): Lor
   const raw: Record<string, unknown> = { uid }
   for (const [key, value] of worldFieldRawEntries(values)) raw[key] = value
   return normalizeEntry(raw)
+}
+
+/**
+ * 世界书编辑应用核（world_put 直写路径与世界书方案执行核共用）：按 uid 覆盖
+ * 调用方给出的字段、未知 uid 建条目、remove 删条目；返回排序后的全量条目与
+ * 触碰回执。不落盘——调用方决定 putWorld。
+ */
+function applyWorldEdits(
+  world: string,
+  book: { name: string; entries: LoreEntry[] },
+  edits: WorldEntryEdit[],
+): { entries: LoreEntry[]; touched: Array<{ uid: number; created: boolean; removed?: boolean; fields: string[] }> } {
+  const byUid = new Map(book.entries.map((entry) => [entry.uid, entry]))
+  const touched: Array<{ uid: number; created: boolean; removed?: boolean; fields: string[] }> = []
+  for (const edit of edits) {
+    const existing = byUid.get(edit.uid)
+    if (edit.remove) {
+      if (existing === undefined) throw new Error(`uid ${edit.uid} not found in world '${world}'; removal matches existing entries only (see world_get)`)
+      byUid.delete(edit.uid)
+      touched.push({ uid: edit.uid, created: false, removed: true, fields: [] })
+      continue
+    }
+    if (existing === undefined) {
+      // 新条目：normalizeEntry 补全 ST 条目的全部默认字段，白名单之外不动
+      byUid.set(edit.uid, worldEntryFromValues(edit.uid, edit.values))
+      touched.push({ uid: edit.uid, created: true, fields: edit.fields })
+      continue
+    }
+    byUid.set(edit.uid, applyWorldEntryFields(existing, edit.values))
+    touched.push({ uid: edit.uid, created: false, fields: edit.fields })
+  }
+  return { entries: [...byUid.values()].sort((a, b) => a.uid - b.uid), touched }
+}
+
+/** 活条目上白名单字段的现行值（可编辑形态视角：enabled 是 disable 取反；缺失去表缺省）。 */
+function worldLiveValue(entry: LoreEntry, field: WorldEditableField): WorldPlanValue {
+  const spec = WORLD_ENTRY_FIELDS[field]
+  const record = entry as unknown as Record<string, unknown>
+  const raw = record[spec.loreKey ?? field]
+  if (spec.invert === true) return typeof raw === 'boolean' ? !raw : true
+  if (raw === undefined) {
+    if (Array.isArray(spec.fallback)) return []
+    return spec.fallback ?? null
+  }
+  return raw as WorldPlanValue
+}
+
+/** 方案过期检测的值等价：标量严格相等，数组逐项深比（引用不等 ≠ 值不等）。 */
+function worldPlanValueMatches(live: WorldPlanValue, recorded: WorldPlanValue): boolean {
+  if (Array.isArray(live) || Array.isArray(recorded)) {
+    if (!Array.isArray(live) || !Array.isArray(recorded)) return false
+    return live.length === recorded.length && live.every((item, index) => item === recorded[index])
+  }
+  return live === recorded
+}
+
+/** 方案回执里的值预览：字符串截 200，数组逐项截 200，标量原样。 */
+function previewWorldPlanValue(value: WorldPlanValue): WorldPlanValue {
+  if (typeof value === 'string') return limitText(value, 200)
+  if (Array.isArray(value)) return value.map((item) => limitText(item, 200))
+  return value
+}
+
+/** 方案字段名的白名单复检（执行核用，防手改方案文件注入未建模字段）。 */
+function editableWorldField(field: string): WorldEditableField {
+  if (!(WORLD_EDITABLE_FIELDS as string[]).includes(field)) {
+    throw new Error(`field '${field}' is not an editable world entry field; editable fields: ${WORLD_EDITABLE_FIELD_LIST}`)
+  }
+  return field as WorldEditableField
 }
 
 /** world_get 的 uid 过滤参数：≤32 个非负整数，去重保序。 */

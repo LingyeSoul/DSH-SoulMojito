@@ -74,3 +74,6 @@
   world_rename 工具行为不变。
 - 后续若做世界书面板化方案协议，四个书级工具的 confirmed 闸门可直接替换为 planId 闸门，
   工具签名已按"整书操作"建模，无需拆分。
+  （2026-10-08 同日更新：世界书面板化方案协议已实施，见
+  `decisions/2026-10-08-worldbook-plan-protocol.md`——world_put/world_create 接入
+  planId 路径；书级四工具经评估维持 confirmed 闸门，理由见该文 Alternatives。）

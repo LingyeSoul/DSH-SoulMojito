@@ -125,7 +125,7 @@ describe('Card Workbench tools and original snapshots', () => {
     expect(kernel).toContain('world_create')
     expect([...tools.keys()]).toEqual([
       'card_get', 'card_put', 'card_original_get', 'card_restore_original',
-      'card_delete', 'card_plan_propose',
+      'card_delete', 'card_plan_propose', 'world_plan_propose',
       'world_list', 'world_get', 'world_put', 'world_create',
       'world_delete', 'world_rename', 'world_bind', 'world_copy',
       'preset_get', 'preset_put', 'chat_log_read',

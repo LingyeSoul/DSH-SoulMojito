@@ -249,8 +249,13 @@ window.__ModuleLoader__.load({
       'panel.section.regex': 'Regex scripts',
       'panel.section.variables': 'Variables',
       'panel.section.workbench': 'Workbench plans',
-      'workbench.hint': 'Modification plans proposed by the Card Workbench agent. Expand a plan to review the per-field diff, then approve to apply it to the working copy, or reject it.',
+      'workbench.hint': 'Modification plans proposed by the Card Workbench agent — per-field card diffs and per-entry world book diffs. Expand a plan to review the changes, then approve to apply it to the working copy, or reject it.',
       'workbench.empty': 'No workbench plans yet',
+      'workbench.worldMeta': 'World · {world}',
+      'workbench.world.newBook': 'new book',
+      'workbench.world.update': 'update',
+      'workbench.world.create': 'new entry',
+      'workbench.world.remove': 'remove',
       'workbench.sessionLabel': 'CardWorkbench',
       'workbench.opening': 'Opening workbench…',
       'workbench.chatSessionLabel': 'Card · {character} · {chat}',
@@ -747,8 +752,13 @@ window.__ModuleLoader__.load({
       'panel.section.regex': '正则脚本',
       'panel.section.variables': '变量',
       'panel.section.workbench': '工作台方案',
-      'workbench.hint': '卡片工作台 Agent 提出的修改方案。展开查看逐字段改动，批准即应用到工作版，也可直接拒绝。',
+      'workbench.hint': '卡片工作台 Agent 提出的修改方案——角色卡逐字段、世界书逐条目。展开查看改动，批准即应用到工作版，也可直接拒绝。',
       'workbench.empty': '暂无工作台方案',
+      'workbench.worldMeta': '世界书 · {world}',
+      'workbench.world.newBook': '新建书',
+      'workbench.world.update': '更新',
+      'workbench.world.create': '新条目',
+      'workbench.world.remove': '删除',
       'workbench.sessionLabel': '写卡工作台',
       'workbench.opening': '正在打开写卡工作台…',
       'workbench.chatSessionLabel': '写卡 · {character} · {chat}',
@@ -6918,15 +6928,42 @@ window.__ModuleLoader__.load({
       return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString()
     }
 
-    // 工作台方案卡片（提案 0013 P2）：pending 可批准/拒绝，已决定的显示状态；
-    // 展开即逐字段 diff（当前 → 改为，note 灰字）。
+    // 世界书方案字段值（string|number|boolean|null|string[]）的展示形态：
+    // 数组按行 join，null 显式可见（可空字段有「跟随全局」语义），标量 String。
+    function formatWorldPlanValue(value) {
+      if (Array.isArray(value)) return value.join('\n')
+      if (value === null) return 'null'
+      if (value === undefined) return ''
+      return String(value)
+    }
+
+    // 工作台方案卡片（提案 0013 P2；世界书面板化同构扩展）：pending 可批准/
+    // 拒绝，已决定的显示状态；展开即 diff——卡方案逐字段，世界书方案按条目
+    // 分组（#uid + 动作 + 逐字段 当前 → 改为，note 灰字）。
     function WorkbenchPlanCard({ plan, busy, open, onToggle, onDecide }) {
       const t = useTranslate()
+      const isWorld = plan.kind === 'world'
       const changes = Array.isArray(plan.changes) ? plan.changes : []
-      const meta = [plan.character, plan.id]
+      const entries = Array.isArray(plan.entries) ? plan.entries : []
+      const meta = [isWorld
+        ? t('workbench.worldMeta', { world: plan.world }) + (plan.op === 'create' ? ` · ${t('workbench.world.newBook')}` : '')
+        : plan.character, plan.id]
       if (plan.appliedAt) meta.push(t('workbench.appliedAt', { time: formatWorkbenchTime(plan.appliedAt) }))
       else if (plan.decidedAt) meta.push(t('workbench.decidedAt', { time: formatWorkbenchTime(plan.decidedAt) }))
       else meta.push(formatWorkbenchTime(plan.createdAt))
+      const renderFieldChange = (change, key) => h('div', { key, className: 'dt-workbench-change' },
+        h('div', { className: 'dt-workbench-change-field' }, change.field),
+        h('div', { className: 'dt-workbench-change-values' },
+          change.currentValue !== undefined ? h('span', { className: 'dt-workbench-label' }, t('workbench.current')) : null,
+          change.currentValue !== undefined
+            ? h('pre', { className: 'dt-workbench-old' },
+              // 数组值（tags/alternateGreetings/worldbook key 列表）按行 join 展示，避免压成一行
+              Array.isArray(change.currentValue) ? change.currentValue.join('\n') : (change.currentValue || ''))
+            : null,
+          h('span', { className: 'dt-workbench-label' }, t('workbench.new')),
+          h('pre', { className: 'dt-workbench-new' },
+            Array.isArray(change.newValue) ? change.newValue.join('\n') : formatWorldPlanValue(change.newValue))),
+        change.note ? h('p', { className: 'dt-workbench-note' }, change.note) : null)
       return h('div', { className: `dt-workbench-plan${plan.status === 'pending' ? '' : ' dt-workbench-done'}` },
         h('div', { className: 'dt-workbench-plan-head' },
           h('button', {
@@ -6944,15 +6981,15 @@ window.__ModuleLoader__.load({
                 h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => onDecide(plan, false) }, t('workbench.reject')))
             : null),
         h('div', { className: 'dt-workbench-meta' }, meta.join(' · ')),
-        open ? h('div', { className: 'dt-workbench-diff' }, changes.map((change, index) => h('div', { key: index, className: 'dt-workbench-change' },
-          h('div', { className: 'dt-workbench-change-field' }, change.field),
-          h('div', { className: 'dt-workbench-change-values' },
-            h('span', { className: 'dt-workbench-label' }, t('workbench.current')),
-            // 数组值（tags/alternateGreetings 整组替换）按行 join 展示，避免压成一行
-            h('pre', { className: 'dt-workbench-old' }, Array.isArray(change.currentValue) ? change.currentValue.join('\n') : (change.currentValue || '')),
-            h('span', { className: 'dt-workbench-label' }, t('workbench.new')),
-            h('pre', { className: 'dt-workbench-new' }, Array.isArray(change.newValue) ? change.newValue.join('\n') : (change.newValue || ''))),
-          change.note ? h('p', { className: 'dt-workbench-note' }, change.note) : null))) : null)
+        open ? h('div', { className: 'dt-workbench-diff' },
+          isWorld
+            ? entries.map((entry, index) => h('div', { key: index, className: 'dt-workbench-entry' },
+              h('div', { className: 'dt-workbench-entry-head' },
+                h('span', { className: 'dt-workbench-entry-uid' }, `#${entry.uid}`),
+                h('span', { className: `dt-workbench-entry-action dt-workbench-entry-action-${entry.action}` }, t(`workbench.world.${entry.action}`))),
+              entry.fields.map((change, fieldIndex) => renderFieldChange(change, fieldIndex)),
+              entry.note ? h('p', { className: 'dt-workbench-note' }, entry.note) : null))
+            : changes.map((change, index) => renderFieldChange(change, index))) : null)
     }
 
     function PanelWorkbench() {
@@ -7564,6 +7601,11 @@ window.__ModuleLoader__.load({
         .dt-workbench-actions{display:inline-flex;gap:6px;margin-left:auto}
         .dt-workbench-meta{color:var(--dsw-alias-label-tertiary);font-size:11px}
         .dt-workbench-diff{display:flex;flex-direction:column;gap:8px}
+        .dt-workbench-entry{display:flex;flex-direction:column;gap:4px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;padding:8px}
+        .dt-workbench-entry-head{display:flex;align-items:center;gap:8px}
+        .dt-workbench-entry-uid{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary)}
+        .dt-workbench-entry-action{font-size:11px;line-height:18px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;color:var(--dsw-alias-label-secondary)}
+        .dt-workbench-entry-action-remove{color:var(--dsw-alias-state-danger,inherit)}
         .dt-workbench-change{display:flex;flex-direction:column;gap:4px}
         .dt-workbench-change-field{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary)}
         .dt-workbench-change-values{display:flex;flex-direction:column;gap:4px}
