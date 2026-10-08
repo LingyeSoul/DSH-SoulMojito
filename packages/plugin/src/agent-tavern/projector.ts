@@ -279,6 +279,12 @@ const TAVERN_MIRROR_MODEL_SOURCE = { provider: 'dsh-tavern', model: 'agent-taver
  *   `turn/start` (`turn/start does not open the expected turn`).
  * - Dropping the coordinates instead (0.3.1 shape) breaks the client fold with
  *   `published invalid turn undefined`, which empties the conversation.
+ * - The v4 surface is a protected-head sequence: the FIRST surface node must be
+ *   a `system/message` appended onto an empty surface. Any later
+ *   `system/message` append while the surface is already occupied and no
+ *   protected head exists kills the artifact with `SessionFormatError:
+ *   system/message requires a protected first surface head` (see
+ *   `protectedSurfaceHeadAppends`).
  *
  * So the import mirrors a real conversation: each user message opens a turn,
  * every assistant message is one step inside the current turn, and every turn
@@ -312,8 +318,13 @@ export function historyImportAppends(
   // (reading 'length')。导入消息没有流式记录，写空数组是诚实的（不产生 usage、
   // 投影不变）。v0-v3 宿主把流式记录放在独立的 assistant/chunk 事件里，写入
   // v4 专属成员会毒化老工件，因此按版本分支。
-  const settlement = (hostSessionFormatVersion(session) ?? 0) >= 4 ? { stream: [] } : {}
-  let turn = 0
+  const hostVersion = hostSessionFormatVersion(session) ?? 0
+  const settlement = hostVersion >= 4 ? { stream: [] } : {}
+  // 头与历史共用一个导入谓词：判定「有没有可导入消息」与主循环的跳过条件必须
+  // 同源，否则会在没有历史时写出一个只有头的空导入（或反之留下无头的 surface）。
+  const importable = chat.messages.filter((message) => isImportableMessage(message, sessionId))
+  const head = hostVersion >= 4 && importable.length > 0
+  let turn = head ? 1 : 0
   let step = 0
   let turnOpen = false
 
@@ -330,9 +341,7 @@ export function historyImportAppends(
   }
 
   for (const [index, message] of chat.messages.entries()) {
-    if (message.is_system === true || typeof message.mes !== 'string' || message.mes.trim() === '') continue
-    const origin = message.extra?.agentTavern as Record<string, unknown> | undefined
-    if (origin?.sessionId === sessionId) continue
+    if (!isImportableMessage(message, sessionId)) continue
     if (message.is_user === true) {
       // 一个用户消息开启一个 turn（与 live loop 的真实语义一致）。
       closeTurn()
@@ -378,7 +387,66 @@ export function historyImportAppends(
     appends.push({ type: 'step/end', data: { turn, step } })
   }
   closeTurn()
+  if (head) appends.unshift(...protectedSurfaceHeadAppends())
   return appends
+}
+
+/** 一条聊天消息是否会被导入：跳过 system、空文本与已投影回本会话的消息。 */
+function isImportableMessage(message: ChatMessage, sessionId: string): boolean {
+  if (message.is_system === true || typeof message.mes !== 'string' || message.mes.trim() === '') return false
+  const origin = message.extra?.agentTavern as Record<string, unknown> | undefined
+  return origin?.sessionId !== sessionId
+}
+
+/**
+ * v4 的 surface 是「受保护头」序列：宿主 `foldSurface` 只在 system/message
+ * 追加到空 surface 时建立 `protectedHead`，之后任何「surface 已有节点而受保护
+ * 头未建立」的 system/message 都判整份日志损坏——
+ *
+ *   SessionFormatError: system/message requires a protected first surface head
+ *
+ * 导入的历史消息本身就是 surface 节点（append）；先占首位后，宿主 live loop
+ * 首轮步骤里的 system prompt 提交（SystemPromptProjection 对
+ * `session.surface.nodes` 里首个 system 节点的替换或追加）必然踩中该判定，
+ * 会话从此不可加载（用户的 `stored session ... is corrupt` 即此形状）。
+ *
+ * 所以 v4 会话的导入在历史之前先写一个空 system 头：turn 1 / step 1 内的
+ * append，写入时 surface 为空，它自动成为受保护头。宿主随后按自己的语义
+ * 归一化它（首个请求把渲染后的 system prompt 替换进头，或把新文本作为后续
+ * system 节点追加），两条路径都能通过 fold。空内容不产生模型可见文本，
+ * 也不参与投影（projectMessage 只取 user/assistant）。
+ *
+ * source 必须恰好是 `{ kind: 'system-prompt' }`（宿主 createSystemMessage 的
+ * 形状）：恢复校验 `assertMessageEventShape` 要求 system/message 的 message
+ * 带 system-prompt source，plugin/marker 成员会被 `session event ... message
+ * must have system-prompt source` 拒绝——行准入与关系折叠都不查这一条，只有
+ * 真实 observe（持久化 open+read，即 seed 校验）会拦住，修复脚本的原生
+ * observe 门禁已把该类纳入回归。
+ *
+ * v0-v3 宿主没有这条 fold，写入 v4 形状反而会毒化老工件（同 2026-09-30
+ * 决策的 producer source 教训），因此按版本分支，只在 v4 写。
+ */
+function protectedSurfaceHeadAppends(): SessionImportAppend[] {
+  return [
+    { type: 'turn/start', data: { turn: 1 } },
+    { type: 'step/start', data: { turn: 1, step: 1 } },
+    {
+      type: 'system/message',
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          id: randomUUID(),
+          role: 'system',
+          content: [],
+          source: { kind: 'system-prompt' },
+        },
+      },
+      surfaceOp: 'append',
+    },
+    { type: 'step/end', data: { turn: 1, step: 1 } },
+    { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
+  ]
 }
 
 /**

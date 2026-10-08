@@ -120,6 +120,12 @@ describe('session-log source dispositions (v4 hosts)', () => {
     const userAppend = appends.find((append) => append.type === 'user/message')
     expect(userAppend).toBeDefined()
     expect((userAppend!.data as { source: unknown }).source).toEqual({ kind: 'plugin:dsh-tavern' })
+    // 受保护 system 头（surface 首节点）的 source 必须是宿主恢复校验唯一放行的
+    // system-prompt 形状；这层校验不查 plugin 成员以外还禁任何额外成员。
+    const headAppend = appends.find((append) => append.type === 'system/message')
+    expect(headAppend).toBeDefined()
+    expect(((headAppend!.data as { message: { source: unknown } }).message).source).toEqual({ kind: 'system-prompt' })
+    expect(((headAppend!.data as { message: { content: unknown } }).message).content).toEqual([])
     // v4 assistant 结算契约：token-meter 的 usageOf() 在 usage/stream 双缺时读
     // undefined.length 抛 TypeError，整会话投影失效；导入补空流。
     for (const append of appends.filter((item) => item.type === 'assistant/message')) {

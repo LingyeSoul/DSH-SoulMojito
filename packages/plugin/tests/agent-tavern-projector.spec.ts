@@ -258,22 +258,35 @@ describe('AgentTavern native event projector', () => {
     // 宿主 v4 准入要求每条 assistant/message 落在「已打开的 turn + step」内：只带
     // payload 坐标（turn 0）不构成边界，`turn/start` 又必须从 1 开始连续编号，
     // 因此导入必须写出完整 turn/step 边界，再由调用方推进 live loop 的轮次基线。
+    // 历史之前先写受保护 system 头（turn 1）：surface 首个节点必须是
+    // system/message，否则 live loop 首轮的 system prompt 提交会触发
+    // `system/message requires a protected first surface head`。
     expect(appends.map((event) => event.type)).toEqual([
+      'turn/start', 'step/start', 'system/message', 'step/end', 'turn/end',
       'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
       'turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end',
       'turn/start', 'user/message', 'turn/end',
     ])
-    expect(appends.filter((event) => event.type === 'turn/start').map((event) => event.data.turn)).toEqual([1, 2, 3])
+    expect(appends.filter((event) => event.type === 'turn/start').map((event) => event.data.turn)).toEqual([1, 2, 3, 4])
     expect(appends.filter((event) => event.type === 'turn/end').map((event) => event.data)).toEqual([
       { turn: 1, reason: { kind: 'completed' } },
       { turn: 2, reason: { kind: 'completed' } },
       { turn: 3, reason: { kind: 'completed' } },
+      { turn: 4, reason: { kind: 'completed' } },
     ])
     expect(appends.filter((event) => event.type === 'step/start').map((event) => [event.data.turn, event.data.step]))
-      .toEqual([[1, 1], [2, 1]])
+      .toEqual([[1, 1], [2, 1], [3, 1]])
     expect(appends.filter((event) => event.type === 'step/end').map((event) => [event.data.turn, event.data.step]))
-      .toEqual([[1, 1], [2, 1]])
-    expect(lastImportedTurn(appends)).toBe(3)
+      .toEqual([[1, 1], [2, 1], [3, 1]])
+    // 受保护头：空 system 消息、append、落在 turn 1 / step 1 内；surface 为空时
+    // 追加即建立 protectedHead（宿主 foldSurface 语义）。
+    const head = appends[2]
+    expect(head.type).toBe('system/message')
+    expect(head.surfaceOp).toBe('append')
+    expect(head.data.turn).toBe(1)
+    expect(head.data.step).toBe(1)
+    expect(head.data.message).toMatchObject({ role: 'system', content: [] })
+    expect(lastImportedTurn(appends)).toBe(4)
     // turn/step/step 边界不是 surface 事件：不能带 surfaceOp。
     expect(appends.filter((event) => ['turn/start', 'turn/end', 'step/start', 'step/end'].includes(event.type))
       .every((event) => event.surfaceOp === undefined)).toBe(true)
@@ -332,31 +345,34 @@ describe('AgentTavern native event projector', () => {
     const session = { header: { version: 4 } }
     const appends = historyImportAppends(chat, 'session-1', [], undefined, session)
     expect(appends.map((event) => event.type)).toEqual([
-      // 开场白 assistant 自成 turn 1
+      // v4 受保护头自成 turn 1（历史之前先占 surface 首位）
+      'turn/start', 'step/start', 'system/message', 'step/end', 'turn/end',
+      // 开场白 assistant 自成 turn 2
       'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
-      // user 'Hello.' 开 turn 2，assistant 'Welcome.' 是其 step 1
+      // user 'Hello.' 开 turn 3，assistant 'Welcome.' 是其 step 1
       'turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end',
-      // user 'Continue.' 开 turn 3（空 turn 也要闭合）
+      // user 'Continue.' 开 turn 4（空 turn 也要闭合）
       'turn/start', 'user/message', 'turn/end',
     ])
     expect(appends.filter((event) => event.type === 'turn/start').map((event) => event.data))
-      .toEqual([{ turn: 1 }, { turn: 2 }, { turn: 3 }])
+      .toEqual([{ turn: 1 }, { turn: 2 }, { turn: 3 }, { turn: 4 }])
     expect(appends.filter((event) => event.type === 'turn/end').map((event) => event.data))
       .toEqual([
         { turn: 1, reason: { kind: 'completed' } },
         { turn: 2, reason: { kind: 'completed' } },
         { turn: 3, reason: { kind: 'completed' } },
+        { turn: 4, reason: { kind: 'completed' } },
       ])
     const assistants = appends.filter((event) => event.type === 'assistant/message')
     expect(assistants.map((event) => ({ turn: event.data.turn, step: event.data.step, stream: event.data.stream })))
       .toEqual([
-        { turn: 1, step: 1, stream: [] },
         { turn: 2, step: 1, stream: [] },
+        { turn: 3, step: 1, stream: [] },
       ])
     expect(appends.filter((event) => event.type === 'user/message')
       .every((event) => !('turn' in event.data) && !('step' in event.data))).toBe(true)
     // 调用方靠它推进 live loop 轮次基线（index.ts advanceHostTurnBase）。
-    expect(lastImportedTurn(appends)).toBe(3)
+    expect(lastImportedTurn(appends)).toBe(4)
 
     // 没有任何可导入消息时不开空 turn，日志保持导入前形状。
     const emptyChat: ChatLogIR = { header: chat.header, messages: [] }

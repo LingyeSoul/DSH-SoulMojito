@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { afterAll, describe, expect, it } from 'vitest'
 
@@ -13,10 +13,11 @@ import { afterAll, describe, expect, it } from 'vitest'
  */
 const REPO_ROOT = resolve(import.meta.dirname, '../../..')
 const RUNTIME = join(REPO_ROOT, '.npm-cache', 'dsh-runtime', 'node_modules')
+// v4 与 v0 用独立沙箱（两组都要求宿主可见布局 <root>/<workspace>/<session>；
+// workspace 目录名由 header.cwd 编码而来，分开便于各自校准）。
 const SANDBOX = join(tmpdir(), `dsh-tavern-repair-v4-${process.pid}`)
-// v0 用独立沙箱：v4 用例把工件文件直接放在项目目录（宿主 observe 的根
-// 扫描会判 flat layout），不能与需要完整 <root>/<project>/<session>/ 布局的
-// v0 observe 验证共用一个根。
+// 受保护头用例的独立根：两种 surface 形态放同一根，目录模式一次处理。
+const SANDBOX_HEAD = join(tmpdir(), `dsh-tavern-repair-v4-head-${process.pid}`)
 const SANDBOX_V0 = join(tmpdir(), `dsh-tavern-repair-v0-${process.pid}`)
 
 function run(args: string[]) {
@@ -26,17 +27,34 @@ function run(args: string[]) {
   })
 }
 
+/** v4 容器契约：第一帧恰好一行 header，body 单独成帧（宿主读取器硬校验）。 */
+function writeV4Artifact(path: string, rows: Array<Record<string, unknown>>) {
+  const header = `${JSON.stringify(rows[0])}\n`
+  const body = `${rows.slice(1).map((row) => JSON.stringify(row)).join('\n')}\n`
+  writeFileSync(path, Buffer.concat([
+    zstdCompressSync(Buffer.from(header, 'utf8')),
+    zstdCompressSync(Buffer.from(body, 'utf8')),
+  ]))
+}
+
 afterAll(() => {
   rmSync(SANDBOX, { recursive: true, force: true })
+  rmSync(SANDBOX_HEAD, { recursive: true, force: true })
   rmSync(SANDBOX_V0, { recursive: true, force: true })
 })
 
 describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3-to-v4')))('repair-v4-sessions script', () => {
-  it('repairs all four poison classes and the result passes real v4 admission', () => {
-    const artifact = join(SANDBOX, 'session-poisoned', 'session.jsonl.zstd')
-    mkdirSync(join(SANDBOX, 'session-poisoned'), { recursive: true })
+  // 三次进程外脚本调用（dry-run / --apply / 复检）走真实宿主 runtime 与原生
+  // observe；全量并发下默认 5s 不够，显式放宽。
+  it('repairs all four poison classes and the result passes real v4 admission', { timeout: 60_000 }, () => {
+    // 宿主可见布局：<root>/<workspace>/<session-dir = session id>/，写回后的
+    // 容器契约与原生 observe 才会被真实执行。
+    // v4 代际文件名是 session.v4.jsonl.zstd（session.jsonl.zstd 被读取器判为
+    // v0 代际；"filename identifies v0, but its header identifies v4"）。
+    const artifact = join(SANDBOX, '--root-.dsh-tavern-workspace--', 'session-poisoned', 'session.v4.jsonl.zstd')
+    mkdirSync(join(SANDBOX, '--root-.dsh-tavern-workspace--', 'session-poisoned'), { recursive: true })
     const rows = [
-      { type: 'session', version: 4, id: 'session-poisoned', createdAt: 1700000000000, isSeeded: false, delegationDepth: 0 },
+      { type: 'session', version: 4, id: 'session-poisoned', createdAt: 1700000000000, cwd: '/root/.dsh/tavern/workspace', isSeeded: false, delegationDepth: 0 },
       { type: 'assistant/message', seq: 1, time: 1700000000001, data: { turn: 0, step: 1, message: { id: 'm1', role: 'assistant', content: [{ type: 'text', text: 'Greeting.' }], source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' } } }, surfaceOp: 'append' },
       { type: 'user/message', seq: 2, time: 1700000000002, data: { id: 'u1', role: 'user', content: [{ type: 'text', text: 'Hello.' }], source: { kind: 'plugin', plugin: 'dsh-tavern' } }, surfaceOp: 'append' },
       { type: 'turn/start', seq: 3, time: 1700000000003, data: { turn: 1 } },
@@ -46,7 +64,7 @@ describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3
       { type: 'step/end', seq: 7, time: 1700000000007, data: { turn: 1, step: 1 } },
       { type: 'turn/end', seq: 8, time: 1700000000008, data: { turn: 1, reason: { kind: 'completed' } } },
     ]
-    writeFileSync(artifact, zstdCompressSync(Buffer.from(`${rows.map((row) => JSON.stringify(row)).join('\n')}\n`, 'utf8')))
+    writeV4Artifact(artifact, rows)
 
     const dry = run([SANDBOX, '--runtime', RUNTIME])
     expect(dry).toContain('1 chunk(s) dropped')
@@ -62,8 +80,7 @@ describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3
     const recheck = run([SANDBOX, '--runtime', RUNTIME])
     expect(recheck).toContain('clean ')
 
-    const repaired = zstdDecompressSync(readFileSync(artifact)).toString('utf8')
-      .split('\n').filter((line) => line.trim() !== '').map((line) => JSON.parse(line))
+    const repaired = decodeArtifact(artifact)
     const types = repaired.slice(1).map((row) => row.type)
     // 导入被完整包裹成 turn 1，live turn 重编号为 2，无 assistant/chunk 残留。
     expect(types).toEqual([
@@ -75,6 +92,89 @@ describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3
     for (const row of repaired) {
       if (row.type === 'assistant/message') expect(Array.isArray(row.data.stream)).toBe(true)
     }
+  })
+
+  // 两种形态共用一个独立根，走目录模式的 dry-run / --apply / 复检（3 次进程外
+  // 调用，而非每形态 3 次）——每次调用都加载真实宿主 runtime 与原生 observe，
+  // 全量并发下默认 5s 不够，显式放宽。
+  it('inserts the protected surface head and renumbers references (both surface shapes)', { timeout: 60_000 }, () => {
+    // 形态一：老导入的首个 surface 节点（开场白 assistant）落在打开的 step 内——
+    // 头插进该 step，后续引用随插入点平移。
+    const withStep = join(SANDBOX_HEAD, '--root-.dsh-tavern-workspace--', 'session-head-step', 'session.v4.jsonl.zstd')
+    mkdirSync(dirname(withStep), { recursive: true })
+    const stepRows = [
+      { type: 'session', version: 4, id: 'session-head-step', createdAt: 1700000000000, cwd: '/root/.dsh/tavern/workspace', isSeeded: false, delegationDepth: 0 },
+      { type: 'turn/start', seq: 1, time: 1700000000001, data: { turn: 1 } },
+      { type: 'step/start', seq: 2, time: 1700000000002, data: { turn: 1, step: 1 } },
+      { type: 'assistant/message', seq: 3, time: 1700000000003, surfaceOp: 'append', data: { turn: 1, step: 1, stream: [], message: { id: 'm1', role: 'assistant', content: [{ type: 'text', text: 'Greeting.' }], source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' } } } },
+      { type: 'step/end', seq: 4, time: 1700000000004, data: { turn: 1, step: 1 } },
+      { type: 'turn/end', seq: 5, time: 1700000000005, data: { turn: 1, reason: { kind: 'completed' } } },
+      { type: 'turn/start', seq: 6, time: 1700000000006, data: { turn: 2 } },
+      { type: 'step/start', seq: 7, time: 1700000000007, data: { turn: 2, step: 1 } },
+      // 宿主 live loop 首轮的 system prompt 提交：surface 非空且无头时这就是
+      // `system/message requires a protected first surface head` 的触发点。
+      { type: 'system/message', seq: 8, time: 1700000000008, surfaceOp: 'append', data: { turn: 2, step: 1, message: { id: 'sys', role: 'system', content: [{ type: 'text', text: 'prompt' }], source: { kind: 'system-prompt' } } } },
+      { type: 'user/message', seq: 9, time: 1700000000009, surfaceOp: 'append', data: { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } } },
+      { type: 'assistant/message', seq: 10, time: 1700000000010, surfaceOp: 'append', data: { turn: 2, step: 1, stream: [], message: { id: 'm2', role: 'assistant', content: [{ type: 'text', text: 'reply' }, { type: 'tool-call', id: 'c1', name: 'lookup', arguments: '{}' }], source: { kind: 'model', provider: 'p', model: 'm' } } } },
+      { type: 'tool/call', seq: 11, time: 1700000000011, data: { turn: 2, step: 1, callId: 'c1', name: 'lookup', arguments: '{}' } },
+      { type: 'tool/result', seq: 12, time: 1700000000012, surfaceOp: 'append', sourceEventSeqs: [11], data: { turn: 2, step: 1, message: { id: 'r1', role: 'tool', toolCallId: 'c1', isError: false, content: [{ type: 'text', text: 'ok' }], source: { kind: 'tool', callId: 'c1' } } } },
+      { type: 'step/end', seq: 13, time: 1700000000013, data: { turn: 2, step: 1 } },
+      { type: 'turn/end', seq: 14, time: 1700000000014, data: { turn: 2, reason: { kind: 'completed' } } },
+    ]
+    writeV4Artifact(withStep, stepRows)
+
+    // 形态二：老 user 先行导入——首个 surface 是 user/message，当时没有打开的
+    // step；修复要新开 step 1 承接头，并把该 turn 原有的 step 1 平移为 step 2。
+    const userFirst = join(SANDBOX_HEAD, '--root-.dsh-tavern-workspace--', 'session-head-userfirst', 'session.v4.jsonl.zstd')
+    mkdirSync(dirname(userFirst), { recursive: true })
+    const userFirstRows = [
+      { type: 'session', version: 4, id: 'session-head-userfirst', createdAt: 1700000000000, cwd: '/root/.dsh/tavern/workspace', isSeeded: false, delegationDepth: 0 },
+      { type: 'turn/start', seq: 1, time: 1700000000001, data: { turn: 1 } },
+      { type: 'user/message', seq: 2, time: 1700000000002, surfaceOp: 'append', data: { id: 'u0', role: 'user', content: [{ type: 'text', text: 'old' }], source: { kind: 'plugin:dsh-tavern' } } },
+      { type: 'step/start', seq: 3, time: 1700000000003, data: { turn: 1, step: 1 } },
+      { type: 'assistant/message', seq: 4, time: 1700000000004, surfaceOp: 'append', data: { turn: 1, step: 1, stream: [], message: { id: 'm0', role: 'assistant', content: [{ type: 'text', text: 'old reply' }], source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' } } } },
+      { type: 'step/end', seq: 5, time: 1700000000005, data: { turn: 1, step: 1 } },
+      { type: 'turn/end', seq: 6, time: 1700000000006, data: { turn: 1, reason: { kind: 'completed' } } },
+      { type: 'turn/start', seq: 7, time: 1700000000007, data: { turn: 2 } },
+      { type: 'step/start', seq: 8, time: 1700000000008, data: { turn: 2, step: 1 } },
+      { type: 'system/message', seq: 9, time: 1700000000009, surfaceOp: 'append', data: { turn: 2, step: 1, message: { id: 'sys', role: 'system', content: [{ type: 'text', text: 'prompt' }], source: { kind: 'system-prompt' } } } },
+      { type: 'step/end', seq: 10, time: 1700000000010, data: { turn: 2, step: 1 } },
+      { type: 'turn/end', seq: 11, time: 1700000000011, data: { turn: 2, reason: { kind: 'completed' } } },
+    ]
+    writeV4Artifact(userFirst, userFirstRows)
+
+    const dry = run([SANDBOX_HEAD, '--runtime', RUNTIME])
+    expect(dry).toContain('dry-run: 2 artifact(s), 2 repaired, 0 clean/skipped, 0 failed')
+    expect(dry.match(/1 surface head\(s\) inserted/g)).toHaveLength(2)
+    expect(dry).toContain('real v4 admission passes')
+    const applied = run([SANDBOX_HEAD, '--apply', '--runtime', RUNTIME])
+    expect(applied).toContain('applied: 2 artifact(s), 2 repaired, 0 clean/skipped, 0 failed')
+    const recheck = run([SANDBOX_HEAD, '--runtime', RUNTIME])
+    expect(recheck).toContain('dry-run: 2 artifact(s), 0 repaired, 2 clean/skipped, 0 failed')
+
+    const stepRepaired = decodeArtifact(withStep).slice(1)
+    // 头是 surface 首节点（assistant 之前），且落在 turn 1 / step 1 内。
+    const headIndex = stepRepaired.findIndex((row) => row.type === 'system/message')
+    const firstImport = stepRepaired.findIndex((row) => row.type === 'assistant/message')
+    expect(headIndex).toBeGreaterThan(-1)
+    expect(headIndex).toBeLessThan(firstImport)
+    expect(stepRepaired[headIndex]).toMatchObject({ surfaceOp: 'append', data: { turn: 1, step: 1 } })
+    // 恢复校验唯一放行的 system 源形状（plugin 源会被真实 observe 拒绝）。
+    expect(stepRepaired[headIndex].data.message.source).toEqual({ kind: 'system-prompt' })
+    // 插入点之后的引用（tool/result → tool/call）随重编号平移，仍指向正确行。
+    const toolResult = stepRepaired.find((row) => row.type === 'tool/result')
+    const toolCall = stepRepaired.find((row) => row.type === 'tool/call')
+    expect(toolResult!.sourceEventSeqs).toEqual([toolCall!.seq])
+
+    // 形态二的修复结果：头占据 turn 1 / step 1；原 step 1 的 assistant 被
+    // 平移到 step 2（step/start 必须匹配 nextStep，不能留跳号）。
+    const userFirstRepaired = decodeArtifact(userFirst).slice(1)
+    // 头占据 turn 1 / step 1；原 step 1 的 assistant 被平移到 step 2。
+    const firstTurnSteps = userFirstRepaired.filter((row) => row.data?.turn === 1 && Number.isSafeInteger(row.data?.step))
+    expect(firstTurnSteps.map((row) => [row.type, row.data.step])).toEqual([
+      ['step/start', 1], ['system/message', 1], ['step/end', 1],
+      ['step/start', 2], ['assistant/message', 2], ['step/end', 2],
+    ])
   })
 })
 
@@ -97,13 +197,17 @@ function decodeArtifact(artifact: string) {
  * turn 1。修复后必须通过真实宿主 observe（v0→…→v4 迁移链）且复检 clean；
  * 健康工件必须零改动（2026-10-05 的 258 会话过度医疗事故的防线）。
  */
+// v0 组还要求统一修复引擎存在：scripts/lib/session-turn-repair.mjs 曾因
+// .gitignore 的全局 lib/ 规则被静默挡在 git 之外（见 decisions/2026-10-08），
+// 缺文件的检出上脚本会如实跳过 v0 工件，该组必须以同样条件跳过而不是变红。
 describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3-to-v4'))
-  || !existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-persistence-jsonl')))('repair-v4-sessions script (v0 artifacts)', () => {
+  || !existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-persistence-jsonl'))
+  || !existsSync(join(REPO_ROOT, 'scripts', 'lib', 'session-turn-repair.mjs')))('repair-v4-sessions script (v0 artifacts)', () => {
   /** 宿主可见布局：<sessions-root>/<project>/<session-dir>/session.jsonl.zstd */
   function v0Rows(sessionId: string, poisoned: boolean) {
     const t = 1789091280327
     const rows: any[] = [
-      { type: 'session', version: 0, id: sessionId, createdAt: t, cwd: 'C:\\tavern\\workspace', delegationDepth: 0, agentPreset: 'standard' },
+      { type: 'session', version: 0, id: sessionId, createdAt: t, cwd: '/root/.dsh/tavern/workspace', delegationDepth: 0, agentPreset: 'standard' },
       { type: 'permission/preset', seq: 0, time: t, data: { preset: 'workspace-write' } },
       { type: 'sandbox/mode', seq: 1, time: t, data: { mode: 'workspace-write' } },
       { type: 'approval/policy', seq: 2, time: t, data: { policy: 'ask' } },
@@ -162,7 +266,7 @@ describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3
   }
 
   it('wraps the orphan turn-0 import, renumbers the live turn, and passes host observe', () => {
-    const sessionDir = join(SANDBOX_V0, '--C-tavern-workspace--', 'session-v0poison')
+    const sessionDir = join(SANDBOX_V0, '--root-.dsh-tavern-workspace--', 'session-v0poison')
     const artifact = join(sessionDir, 'session.jsonl.zstd')
     mkdirSync(sessionDir, { recursive: true })
     writeV0Artifact(artifact, 'session-v0poison', true)
@@ -201,7 +305,7 @@ describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3
   })
 
   it('leaves a healthy v0 artifact byte-identical (no over-repair)', () => {
-    const sessionDir = join(SANDBOX_V0, '--C-tavern-workspace--', 'session-v0healthy')
+    const sessionDir = join(SANDBOX_V0, '--root-.dsh-tavern-workspace--', 'session-v0healthy')
     const artifact = join(sessionDir, 'session.jsonl.zstd')
     mkdirSync(sessionDir, { recursive: true })
     writeV0Artifact(artifact, 'session-v0healthy', false)

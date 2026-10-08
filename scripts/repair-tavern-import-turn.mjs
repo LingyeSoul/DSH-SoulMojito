@@ -3,7 +3,20 @@ import { dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { createHistoryValidator, createHostPersistenceValidator, readSessionRecords } from './verify-tavern-history.mjs'
-import { repairSessionTurns } from './lib/session-turn-repair.mjs'
+
+/**
+ * 统一 turn 修复引擎是懒加载的：`scripts/lib/session-turn-repair.mjs` 曾因
+ * .gitignore 的全局 `lib/` 规则被静默挡在 git 之外（48f3f74 引入的脚本引用
+ * 到孤儿模块），本检出可能缺失该文件。缺失时给出可执行的错误信息，而不是
+ * 裸 ERR_MODULE_NOT_FOUND。
+ */
+async function loadTurnRepairEngine() {
+  try {
+    return await import('./lib/session-turn-repair.mjs')
+  } catch (error) {
+    throw new Error(`scripts/lib/session-turn-repair.mjs is missing from this checkout (was lost to the .gitignore "lib/" rule): ${error.message}`)
+  }
+}
 
 /**
  * Drop `sourceEventSeqs` entries that are not earlier than the owning event.
@@ -29,14 +42,42 @@ export function trimForwardSourceEventRefs(events) {
   return { events: next, trimmed }
 }
 
-function decodeEvents(records, decodeStorageRecord) {
-  return records.filter((record) => record.type !== 'session')
-    .flatMap((record) => decodeStorageRecord(record))
+function decodeEvents(records, codec) {
+  const events = []
+  const context = { emitEvent: (event) => events.push(event), emitRun: (run) => events.push(...run.expand()) }
+  const decoder = codec.releasedV0SessionFormatCodec.createDecoder(records[0], 'strict')
+  for (const record of records.slice(1)) decoder.decodeRow(record, context)
+  decoder.finish(context)
+  return events
 }
 
-function validateEvents(events, adoptSessionEvent, validateHistory) {
-  for (const event of events) adoptSessionEvent(structuredClone(event))
+/**
+ * 宿主 0.2.0-rc.2 移除了 `dsh-session` 的 decodeStorageRecord（列压缩行展开
+ * 入口）；released-v0 codec 做同一件事：把磁盘行解成逻辑事件（seq/time
+ * 标准、宽度 1，sourceEventSeqs 区间展开为平铺序号），引擎在展开空间工作，
+ * encodeArtifact 写回展开形态（v0 读取器原生词表）。
+ */
+async function loadReleasedV0Codec(dependencyRoot) {
+  const entry = resolve(dependencyRoot, '@deepseek-ai', 'dsh-session-format-v0-to-v1', 'lib', 'index.js')
+  try {
+    return await import(pathToFileURL(entry).href)
+  } catch (error) {
+    throw new Error(`cannot locate @deepseek-ai/dsh-session-format-v0-to-v1 under ${dependencyRoot}: ${error.message}`)
+  }
+}
+
+function validateEvents(events, validateHistory) {
   validateHistory(events)
+}
+
+/** Message identities carried by a logical event stream (user data or nested message). */
+function messageIds(events) {
+  const ids = []
+  for (const event of events) {
+    const message = event?.type === 'user/message' ? event.data : event?.data?.message
+    if (typeof message?.id === 'string') ids.push(message.id)
+  }
+  return ids
 }
 
 function encodeArtifact(headerRecord, events) {
@@ -82,17 +123,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const header = storedBefore.find((record) => record.type === 'session')
   if (!header) throw new Error('Session artifact has no header')
 
-  const { adoptSessionEvent, decodeStorageRecord } = await import(pathToFileURL(
-    resolve(dependencyRoot, '@deepseek-ai/dsh-session/lib/index.js'),
-  ).href)
+  const codec = await loadReleasedV0Codec(dependencyRoot)
   const validateHistory = createHistoryValidator(dependencyRoot)
   const validateHostPersistence = createHostPersistenceValidator(
     dependencyRoot,
     dirname(dirname(dirname(artifact))),
   )
-  // decodeStorageRecord 把列压缩行展开成逻辑事件（seq/time 标准、宽度 1），
-  // 引擎在展开空间工作；encodeArtifact 写回展开形态（v0 读取器原生词表）。
-  const before = decodeEvents(storedBefore, decodeStorageRecord)
+  const before = decodeEvents(storedBefore, codec)
+  const { repairSessionTurns } = await loadTurnRepairEngine()
   const repaired = repairSessionTurns(before)
   const { events: after, trimmed } = trimForwardSourceEventRefs(repaired === null ? before : repaired.events)
   const stats = repaired === null ? null : repaired.stats
@@ -103,7 +141,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       note: 'Turn coordinates are healthy and no forward sourceEventSeqs; nothing to repair.',
     }, null, 2))
   } else {
-    validateEvents(after, adoptSessionEvent, validateHistory)
+    validateEvents(after, validateHistory)
 
     const encoded = encodeArtifact(header, after)
     if (decodeFrames(encoded.bytes) !== encoded.plaintext) {
@@ -124,14 +162,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     renameSync(temporary, artifact)
 
     const persistedStored = readSessionRecords(artifact)
-    const persisted = decodeEvents(persistedStored, decodeStorageRecord)
-    validateEvents(persisted, adoptSessionEvent, validateHistory)
+    const persisted = decodeEvents(persistedStored, codec)
+    validateEvents(persisted, validateHistory)
     const inspection = await validateHostPersistence(header.id)
     if (JSON.stringify(persisted) !== JSON.stringify(after)) {
       throw new Error(`Post-write verification failed; original backup: ${backup}`)
     }
-    if (inspection.events.length !== after.length) {
-      throw new Error(`Host persistence verification returned ${inspection.events.length} events; expected ${after.length}`)
+    // 宿主 read() 返回的是归并后的保留流（assistant chunk 运行被折回 run、
+    // 头/结算事件由迁移补齐），事件条数不能与展开形态对齐；按消息 id 验证
+    // 没有一条消息丢失。
+    const observedIds = new Set(messageIds(inspection.events))
+    const missing = messageIds(after).filter((id) => !observedIds.has(id))
+    if (missing.length > 0) {
+      throw new Error(`Host persistence verification lost ${missing.length} message(s) (first: ${missing[0]}); original backup: ${backup}`)
     }
     console.log(JSON.stringify({
       artifact,
@@ -142,6 +185,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       turnStats: stats,
       trimmedRefEvents: trimmed,
       hostInspectionEvents: inspection.events.length,
+      verifiedMessageIds: observedIds.size,
       validated: true,
     }, null, 2))
   }

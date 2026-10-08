@@ -424,16 +424,29 @@ describe('internal Tavern session bridge occupation', () => {
     expect(result.kind).toBe('success')
     // 导入写出完整 turn/step 边界（v4 准入要求 assistant/message 落在打开的
     // turn+step 内），最后一个导入轮号必须同时推进 live loop 的轮次基线，
-    // 否则 loop 的首轮会重复 turn 1 并被准入拒绝。
+    // 否则 loop 的首轮会重复 turn 1 并被准入拒绝。历史之前先写受保护 system
+    // 头（turn 1）：surface 首个节点必须是 system/message，否则 live 首轮的
+    // system prompt 提交触发 `system/message requires a protected first surface
+    // head`，会话在磁盘上判损坏。
     expect(agent.session.events.map((event) => event.type)).toEqual([
       'agent-preset/selected',
+      'turn/start', 'step/start', 'system/message', 'step/end', 'turn/end',
       'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
       'turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end',
     ])
-    expect(agent.phase.lastTurn).toBe(2)
-    const greeting = agent.session.events[3]!
-    expect(greeting.data).toMatchObject({
+    expect(agent.phase.lastTurn).toBe(3)
+    const head = agent.session.events[3]!
+    expect(head.data).toMatchObject({
       turn: 1,
+      step: 1,
+      // 恢复校验要求 system/message 的 source 恰好是 system-prompt（与宿主
+      // createSystemMessage 同形）；plugin/marker 成员会被 seed/observe 拒绝。
+      message: { role: 'system', content: [], source: { kind: 'system-prompt' } },
+    })
+    expect(head.opts).toEqual({ surfaceOp: 'append' })
+    const greeting = agent.session.events[8]!
+    expect(greeting.data).toMatchObject({
+      turn: 2,
       step: 1,
       // v4 assistant 结算契约：token-meter 的 usageOf() 在 usage/stream 双缺时
       // 抛 TypeError（"reading 'length'"），会话所有投影读取随之失败。
@@ -446,23 +459,23 @@ describe('internal Tavern session bridge occupation', () => {
     })
     expect(greeting.opts).toEqual({ surfaceOp: 'append' })
     expect((greeting.data as { usage?: unknown }).usage).toBeUndefined()
-    const importedUser = agent.session.events[7]!
+    const importedUser = agent.session.events[12]!
     expect(importedUser.data).toMatchObject({
       role: 'user',
       content: [{ type: 'text', text: '你也是早上好。' }],
       source: { kind: 'plugin:dsh-tavern' },
     })
     expect(importedUser.opts).toEqual({ surfaceOp: 'append' })
-    const followUp = agent.session.events[9]!
+    const followUp = agent.session.events[14]!
     expect(followUp.data).toMatchObject({
-      turn: 2,
+      turn: 3,
       step: 1,
       message: {
         content: [{ type: 'text', text: '今天想去哪里？' }],
         source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' },
       },
     })
-    expect(turnStarts(agent).map((event) => event.data)).toEqual([{ turn: 1 }, { turn: 2 }])
+    expect(turnStarts(agent).map((event) => event.data)).toEqual([{ turn: 1 }, { turn: 2 }, { turn: 3 }])
   })
 
   it('does not write turn boundaries when the host loop base cannot be advanced', async () => {
@@ -501,6 +514,8 @@ describe('internal Tavern session bridge occupation', () => {
     expect(result.kind).toBe('success')
     expect(agent.session.events.filter((event) => event.type === 'assistant/message')).toHaveLength(1)
     expect(agent.session.events.filter((event) => event.type === 'agent-preset/selected')).toHaveLength(1)
+    // 该假会话没有 v4 header（v0 形状）：导入写 turn 边界但不写受保护头
+    // （v4 专属形状，写入老工件会毒化），重复激活不重复导入。
     expect(agent.session.events.map((event) => event.type)).toEqual([
       'agent-preset/selected',
       'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',

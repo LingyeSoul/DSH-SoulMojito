@@ -11351,8 +11351,11 @@ function historyImportAppends(chat, sessionId, scripts, expand, session) {
     return expand ? expand(transformed) : transformed;
   };
   const appends = [];
-  const settlement = (hostSessionFormatVersion(session) ?? 0) >= 4 ? { stream: [] } : {};
-  let turn = 0;
+  const hostVersion = hostSessionFormatVersion(session) ?? 0;
+  const settlement = hostVersion >= 4 ? { stream: [] } : {};
+  const importable = chat.messages.filter((message) => isImportableMessage(message, sessionId));
+  const head = hostVersion >= 4 && importable.length > 0;
+  let turn = head ? 1 : 0;
   let step = 0;
   let turnOpen = false;
   const openTurn = () => {
@@ -11367,9 +11370,7 @@ function historyImportAppends(chat, sessionId, scripts, expand, session) {
     appends.push({ type: "turn/end", data: { turn, reason: { kind: "completed" } } });
   };
   for (const [index, message] of chat.messages.entries()) {
-    if (message.is_system === true || typeof message.mes !== "string" || message.mes.trim() === "") continue;
-    const origin = message.extra?.agentTavern;
-    if (origin?.sessionId === sessionId) continue;
+    if (!isImportableMessage(message, sessionId)) continue;
     if (message.is_user === true) {
       closeTurn();
       openTurn();
@@ -11412,7 +11413,35 @@ function historyImportAppends(chat, sessionId, scripts, expand, session) {
     appends.push({ type: "step/end", data: { turn, step } });
   }
   closeTurn();
+  if (head) appends.unshift(...protectedSurfaceHeadAppends());
   return appends;
+}
+function isImportableMessage(message, sessionId) {
+  if (message.is_system === true || typeof message.mes !== "string" || message.mes.trim() === "") return false;
+  const origin = message.extra?.agentTavern;
+  return origin?.sessionId !== sessionId;
+}
+function protectedSurfaceHeadAppends() {
+  return [
+    { type: "turn/start", data: { turn: 1 } },
+    { type: "step/start", data: { turn: 1, step: 1 } },
+    {
+      type: "system/message",
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          id: randomUUID3(),
+          role: "system",
+          content: [],
+          source: { kind: "system-prompt" }
+        }
+      },
+      surfaceOp: "append"
+    },
+    { type: "step/end", data: { turn: 1, step: 1 } },
+    { type: "turn/end", data: { turn: 1, reason: { kind: "completed" } } }
+  ];
 }
 function lastImportedTurn(appends) {
   let last;
@@ -16046,7 +16075,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.0".trim() : "";
-  const commit = true ? normalizeCommit("6fead34") : void 0;
+  const commit = true ? normalizeCommit("6d0861b") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

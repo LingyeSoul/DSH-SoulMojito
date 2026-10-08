@@ -1,5 +1,8 @@
 node_modules/
 lib/
+# 例外：scripts/lib 是仓库脚本（v0 turn 修复引擎等），不是构建产物。
+# 全局 lib/ 规则曾把它静默挡在 git 之外，导致 48f3f74 提交的脚本引用孤儿模块。
+!scripts/lib/
 dist/
 *.tsbuildinfo
 /.playwright-mcp

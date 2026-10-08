@@ -14,8 +14,17 @@
  *      fully opened/closed import turn; later live turns are renumbered by the
  *      number of inserted turns so nextTurn sequencing stays valid.
  *   D. 裸 plugin source 归一化为 producer-owned kind。
+ *   E. surface 无受保护头：v4 的 surface 首个节点必须是 system/message（宿主
+ *      foldSurface 只在 system/message 追加到空 surface 时建立 protectedHead），
+ *      否则后续 system/message 追加——最典型的是 live loop 首轮的 system prompt
+ *      提交——判整份日志损坏：`system/message requires a protected first surface
+ *      head`。≤0.3.9 的历史导入先写历史 surface 节点、不写头，必然踩中。修复
+ *      方式：在第一个 surface 事件之前、当前打开的 step 内插入一个空 system
+ *      头（surfaceOp append），并重编号其后事件；headSeq 之外的 seq 引用
+ *      （sourceEventSeqs / surfaceOp 范围 / headerSeq / messageSeqs /
+ *      sourceEventSeq / throughSeq）随映射一并重写。
  *
- * A-D 只作用于 version 4 工件。version 0 工件走同族的 turn 坐标修复
+ * A-E 只作用于 version 4 工件。version 0 工件走同族的 turn 坐标修复
  * （scripts/lib/session-turn-repair.mjs：孤儿 turn-0 导入包裹、重复/跳号
  * turn/start 校正、密集重编号 + sourceEventSeqs/messageSeqs 引用重写）——
  * v0 的 chunk/settlement/source 语义不同（v4 专属成员会毒化老工件），其余
@@ -34,11 +43,11 @@
  * Quit `dsh web` first: a concurrently appended frame would be lost.
  */
 import { copyFileSync, existsSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
-import { repairSessionTurns } from './lib/session-turn-repair.mjs'
 
 const args = process.argv.slice(2)
 const apply = args.includes('--apply')
@@ -109,11 +118,30 @@ async function loadAdmission() {
       return {
         base,
         assertRelationships: v3to4.assertReleasedV4Relationships,
+        assertRow: v3to4.assertV4RowAdmission,
         known: dshSession.KNOWN_SESSION_EVENT_TYPES,
       }
     }
   }
   throw new Error('cannot locate @deepseek-ai/dsh-session-format-v3-to-v4 + dsh-session — pass --runtime <node_modules> (gates cache: pnpm check installs .npm-cache/dsh-runtime)')
+}
+
+/**
+ * v0 turn 修复引擎（scripts/lib/session-turn-repair.mjs）是懒加载的：该文件曾因
+ * .gitignore 的全局 `lib/` 规则被静默挡在 git 之外（48f3f74 的提交引用到孤儿
+ * 模块），本检出可能缺失。缺失时 v4 修复（本文件的主用途）不受影响，v0 工件
+ * 如实跳过并给出可执行的错误信息。
+ */
+let v0Engine
+async function loadV0Engine() {
+  if (v0Engine !== undefined) return v0Engine
+  try {
+    v0Engine = await import('./lib/session-turn-repair.mjs')
+  } catch (error) {
+    v0Engine = null
+    console.warn(`warn: v0 repair engine unavailable (${error.message}); version 0 artifacts will be skipped`)
+  }
+  return v0Engine
 }
 
 /**
@@ -150,12 +178,41 @@ function logicalHeader(physicalRow) {
 }
 
 function verifyAdmission(admission, headerRow, rows) {
+  const events = rows.map((row, index) => ({ ...row, seq: index }))
   const artifact = {
     header: logicalHeader(headerRow),
-    events: rows.map((row, index) => ({ ...row, seq: index })),
+    events,
     inheritedEventCount: 0,
   }
+  // 与宿主加载路径同序：先逐行物理准入（codec decodeRow），再整份关系折叠。
+  for (const row of events) admission.assertRow(row, admission.known)
   admission.assertRelationships(artifact, admission.known)
+}
+
+/**
+ * v4 容器契约：第一帧必须恰好一行 header，body 单独成帧——读取器对首帧
+ * 行长严格（`first frame is not exactly one header line`）。历史单帧写回
+ * 产物能过内容准入却过不了宿主读取，故写回统一走两帧。
+ */
+function encodeV4Artifact(rows) {
+  return Buffer.concat([
+    zstdCompressSync(Buffer.from(`${JSON.stringify(rows[0])}\n`, 'utf8')),
+    zstdCompressSync(Buffer.from(`${rows.slice(1).map((row) => JSON.stringify(row)).join('\n')}\n`, 'utf8')),
+  ])
+}
+
+/** 写回前的容器 round-trip：帧切分正确、首帧单行、解码内容与行序逐字节一致。 */
+function assertV4Container(buffer, rows) {
+  const frames = scanZstdFrames(buffer)
+  if (frames.length < 2) throw new Error('repaired artifact must keep the header frame separate from the body')
+  const first = zstdDecompressSync(buffer.subarray(frames[0].start, frames[0].end)).toString('utf8')
+  if (first !== `${JSON.stringify(rows[0])}\n`) throw new Error('repaired artifact first frame is not exactly one header line')
+  const decoded = frames
+    .map((frame) => zstdDecompressSync(buffer.subarray(frame.start, frame.end)).toString('utf8'))
+    .join('')
+  if (decoded !== `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`) {
+    throw new Error('repaired artifact failed compressed round-trip validation')
+  }
 }
 
 /* -------------------------------- v4 repairs ------------------------------- */
@@ -172,14 +229,122 @@ function repairSourceKind(source, stats) {
   return { ...members, kind: 'plugin:dsh-tavern' }
 }
 
+/* ----------------------- protected surface head (E) ------------------------ */
+
+/** 宿主 foldSurface 的 surface 事件集合（v4 词汇表）。 */
+const SURFACE_EVENT_TYPES = new Set(['system/message', 'user/message', 'developer/message', 'assistant/message', 'tool/result'])
+
 /**
- * 单个 v4 工件的修复（返回 null 表示干净无需改写）。四类修复互不依赖，
+ * 探测「surface 无受保护头」损坏并给出修复计划（null = 干净或超出本修复类）。
+ * 与宿主 foldSurface 同语义：只在 system/message 追加到空 surface 时建立
+ * protectedHead；surface 非空且头未建立时的 system/message 追加判损坏。
+ *
+ * 修复位置固定在第一个 surface 事件之前（头必须是 surface 首节点）：
+ *  - 该处有打开的 step → 头插进打开的 step，坐标即该 step，不引入重编号；
+ *  - 只有打开的 turn（老 user 先行导入的形状）→ 新开一个 step
+ *    （step = 该 turn 的 nextStep）承接头并立即闭合；其后同 turn 的 step 坐标
+ *    整体 +1——step/start 必须匹配 nextStep，留出跳号即损坏。
+ */
+function planProtectedHead(events) {
+  let surfaceLength = 0
+  let protectedHead = false
+  let firstSurfaceIndex = -1
+  let violation = false
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index]
+    if (!SURFACE_EVENT_TYPES.has(event.type)) continue
+    // surfaceOp 非 append 的替换语义超出本修复类：交给人工。
+    if (event.surfaceOp !== 'append') return null
+    if (firstSurfaceIndex === -1) firstSurfaceIndex = index
+    if (event.type === 'system/message' && surfaceLength > 0 && !protectedHead) {
+      violation = true
+      break
+    }
+    if (event.type === 'system/message' && surfaceLength === 0) protectedHead = true
+    surfaceLength += 1
+  }
+  if (!violation) return null
+
+  let turn = null
+  let nextStep = 1
+  let openStep = null
+  let turnStartIndex = -1
+  for (let index = 0; index < firstSurfaceIndex; index += 1) {
+    const event = events[index]
+    if (event.type === 'turn/start' && Number.isSafeInteger(event.data?.turn)) {
+      turn = event.data.turn
+      nextStep = 1
+      openStep = null
+      turnStartIndex = index
+    } else if (event.type === 'turn/end') {
+      turn = null
+      openStep = null
+      turnStartIndex = -1
+    } else if (event.type === 'step/start' && Number.isSafeInteger(event.data?.step)) {
+      openStep = { turn: event.data.turn, step: event.data.step }
+    } else if (event.type === 'step/end') {
+      if (openStep !== null) nextStep = openStep.step + 1
+      openStep = null
+    }
+  }
+  if (turn === null || turnStartIndex === -1) return null
+  if (openStep !== null && openStep.turn === turn) {
+    return { insertAt: firstSurfaceIndex, wrapInStep: false, turn, step: openStep.step, shiftSteps: null }
+  }
+  return {
+    insertAt: turnStartIndex + 1,
+    wrapInStep: true,
+    turn,
+    step: nextStep,
+    shiftSteps: { turn, from: nextStep },
+  }
+}
+
+/**
+ * 重编号后按 seq 映射重写宿主词汇表里的全部 seq 引用：surface 的
+ * sourceEventSeqs、surfaceOp 的 startSeq/endSeq、command/done 的
+ * data.sourceEventSeq、session/title 的 data.messageSeqs、developer/message 的
+ * data.headerSeq、delivery 的 data.throughSeq。映射缺失（引用了被本类删除的
+ * 事件）时保持原值并留给准入校验裁决。
+ */
+function rewriteSeqReferences(rows, seqMap) {
+  const mapValue = (seq) => (Number.isSafeInteger(seq) && seqMap.has(seq) ? seqMap.get(seq) : seq)
+  return rows.map((row) => {
+    let next = row
+    if (Array.isArray(row.sourceEventSeqs)) {
+      const mapped = row.sourceEventSeqs.map(mapValue)
+      if (mapped.some((seq, index) => seq !== row.sourceEventSeqs[index])) next = { ...next, sourceEventSeqs: mapped }
+    }
+    const op = next.surfaceOp
+    if (op !== null && typeof op === 'object' && !Array.isArray(op)) {
+      const startSeq = mapValue(op.startSeq)
+      const endSeq = mapValue(op.endSeq)
+      if (startSeq !== op.startSeq || endSeq !== op.endSeq) next = { ...next, surfaceOp: { ...op, startSeq, endSeq } }
+    }
+    const data = next.data
+    if (data !== null && typeof data === 'object') {
+      const patch = {}
+      if (Number.isSafeInteger(data.headerSeq) && seqMap.has(data.headerSeq)) patch.headerSeq = seqMap.get(data.headerSeq)
+      if (Number.isSafeInteger(data.sourceEventSeq) && seqMap.has(data.sourceEventSeq)) patch.sourceEventSeq = seqMap.get(data.sourceEventSeq)
+      if (Number.isSafeInteger(data.throughSeq) && seqMap.has(data.throughSeq)) patch.throughSeq = seqMap.get(data.throughSeq)
+      if (Array.isArray(data.messageSeqs)) {
+        const mapped = data.messageSeqs.map(mapValue)
+        if (mapped.some((seq, index) => seq !== data.messageSeqs[index])) patch.messageSeqs = mapped
+      }
+      if (Object.keys(patch).length > 0) next = { ...next, data: { ...data, ...patch } }
+    }
+    return next
+  })
+}
+
+/**
+ * 单个 v4 工件的修复（返回 null 表示干净无需改写）。五类修复互不依赖，
  * 任何一类生效才写回；改写后必须能通过真实 v4 准入校验。
  */
 function repairV4Artifact(rows) {
   const headerRow = rows[0]
   const events = rows.slice(1)
-  const stats = { chunksDropped: 0, streamsBackfilled: 0, importWraps: 0, turnsShifted: 0, sourcesRewritten: 0 }
+  const stats = { chunksDropped: 0, streamsBackfilled: 0, importWraps: 0, turnsShifted: 0, sourcesRewritten: 0, headsInserted: 0 }
   const out = []
   let dirty = false
 
@@ -261,9 +426,63 @@ function repairV4Artifact(rows) {
   }
   closeWrap()
 
+  // E. surface 无受保护头（见文件头与 planProtectedHead）。结构性插入放最后，
+  //    使折叠模拟看到的是其余修复完成后的最终事件流。
+  const head = planProtectedHead(out)
+  if (head !== null) {
+    const time = Math.max(
+      typeof out[head.insertAt - 1]?.time === 'number' ? out[head.insertAt - 1].time : 0,
+      (typeof out[head.insertAt]?.time === 'number' ? out[head.insertAt].time : 0) - 1,
+    )
+    const headRow = {
+      type: 'system/message',
+      time,
+      data: {
+        turn: head.turn,
+        step: head.step,
+        message: {
+          id: randomUUID(),
+          role: 'system',
+          content: [],
+          // 恢复校验（dsh-session assertMessageEventShape）要求 system/message
+          // 的 source 恰好是 system-prompt；plugin/marker 成员会被真实 observe
+          // 拒绝（行准入与关系折叠不查这一条）。
+          source: { kind: 'system-prompt' },
+        },
+      },
+      surfaceOp: 'append',
+    }
+    const inserted = head.wrapInStep
+      ? [
+          { type: 'step/start', time, data: { turn: head.turn, step: head.step } },
+          headRow,
+          { type: 'step/end', time, data: { turn: head.turn, step: head.step } },
+        ]
+      : [headRow]
+    out.splice(head.insertAt, 0, ...inserted)
+    if (head.shiftSteps !== null) {
+      for (const event of out.slice(head.insertAt + inserted.length)) {
+        if (event.data !== null && typeof event.data === 'object'
+          && event.data.turn === head.shiftSteps.turn
+          && Number.isSafeInteger(event.data.step)
+          && event.data.step >= head.shiftSteps.from) {
+          event.data = { ...event.data, step: event.data.step + 1 }
+        }
+      }
+    }
+    stats.headsInserted += 1
+    dirty = true
+  }
+
   if (!dirty) return null
+  // 先按最终排位建 seq 映射，再重编号并重写引用：插入点之后的所有引用
+  // （sourceEventSeqs 等）必须与行号一起平移，否则溯源链接指向错误的行。
+  const seqMap = new Map()
+  out.forEach((row, index) => {
+    if (Number.isSafeInteger(row.seq)) seqMap.set(row.seq, index)
+  })
   const repaired = [headerRow, ...out.map((row, index) => ({ ...row, seq: index }))]
-  return { rows: repaired, stats }
+  return { rows: rewriteSeqReferences(repaired, seqMap), stats }
 }
 
 /* ------------------------------- driver ------------------------------------ */
@@ -275,7 +494,7 @@ const artifactPaths = statSync(root).isDirectory()
         for (const name of readdirSync(dir)) {
           const path = join(dir, name)
           if (statSync(path).isDirectory()) walk(path)
-          else if (name === 'session.jsonl.zstd') found.push(path)
+          else if (name === 'session.jsonl.zstd' || name === 'session.v4.jsonl.zstd') found.push(path)
         }
       }
       walk(root)
@@ -310,6 +529,12 @@ for (const path of artifactPaths) {
     // v0 工件：只做 turn 坐标修复（chunk/settlement/source 语义与 v4 不同，
     // 见文件头）。修复结果必须通过真实宿主 observe；--apply 写回后验证，
     // 失败回滚备份。dry-run 先 observe 现文件确认症状再报告计划。
+    const engine = await loadV0Engine()
+    if (engine === null) {
+      console.error(`SKIP (v0 repair engine missing from this checkout) ${path}`)
+      failed += 1
+      continue
+    }
     if (observeValidator === undefined) {
       const runtimeBase = admission.base
       if (runtimeBase === undefined) throw new Error('v0 repair needs the host runtime (pass --runtime)')
@@ -325,7 +550,7 @@ for (const path of artifactPaths) {
     }
     let repair = null
     try {
-      repair = repairSessionTurns(rows.slice(1))
+      repair = engine.repairSessionTurns(rows.slice(1))
     } catch (error) {
       console.error(`SKIP (turn repair threw) ${path}: ${error.message}`)
       failed += 1
@@ -403,6 +628,14 @@ for (const path of artifactPaths) {
     clean += 1
     continue
   }
+  const sessionId = typeof rows[0].id === 'string' ? rows[0].id : undefined
+  // 只有宿主可见布局（目录名 = session id）才能走原生 observe：持久化栈按
+  // <root>/<workspace>/<session-dir>/ 枚举，扁平/旧布局下找不到该工件
+  // （与 v0 分支同一判据）。
+  const hostVisible = sessionId !== undefined && basename(dirname(resolve(path))) === sessionId
+  if (hostVisible && admission.base !== undefined && observeValidator === undefined) {
+    observeValidator = await loadObserveValidator(admission.base)
+  }
   let repair
   try {
     repair = repairV4Artifact(rows)
@@ -414,6 +647,9 @@ for (const path of artifactPaths) {
   if (repair === null) {
     try {
       verifyAdmission(admission, rows[0], rows.slice(1))
+      // 内容准入可以过而容器损坏（历史单帧写回产物）：宿主可见布局下补一次
+      // 真实 observe，不把"脚本认为干净"的坏容器报成 clean。
+      if (hostVisible && observeValidator !== undefined) await observeValidator(path, sessionId)
       console.log(`clean ${path}`)
     } catch (error) {
       console.error(`DIRTY-BUT-UNRECOGNIZED ${path}: ${error.message} — manual inspection needed`)
@@ -422,24 +658,35 @@ for (const path of artifactPaths) {
     clean += 1
     continue
   }
+  let backup
   try {
     verifyAdmission(admission, repair.rows[0], repair.rows.slice(1))
-    const summary = `${repair.stats.chunksDropped} chunk(s) dropped, ${repair.stats.streamsBackfilled} stream(s) backfilled, ${repair.stats.importWraps} import turn(s) wrapped, ${repair.stats.turnsShifted} live event(s) renumbered, ${repair.stats.sourcesRewritten} source(s) rewritten`
+    const encoded = encodeV4Artifact(repair.rows)
+    assertV4Container(encoded, repair.rows)
+    const summary = `${repair.stats.chunksDropped} chunk(s) dropped, ${repair.stats.streamsBackfilled} stream(s) backfilled, ${repair.stats.importWraps} import turn(s) wrapped, ${repair.stats.turnsShifted} live event(s) renumbered, ${repair.stats.sourcesRewritten} source(s) rewritten, ${repair.stats.headsInserted} surface head(s) inserted`
     const suffix = apply ? '' : ' (dry-run)'
     console.log(`repair${suffix} ${path}: ${summary}; real v4 admission passes`)
     if (apply) {
-      const backup = `${path}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`
+      backup = `${path}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`
       copyFileSync(path, backup)
-      // 单帧写回：多帧工件（追加过）合并成一个完整帧，内容不丢。
-      const out = [repair.rows.map((row) => JSON.stringify(row)).join('\n') + '\n']
       const temporary = `${path}.repair-${process.pid}.tmp`
-      writeFileSync(temporary, zstdCompressSync(Buffer.from(out[0], 'utf8')))
+      writeFileSync(temporary, encoded)
       renameSync(temporary, path)
+      // 写后硬验证：宿主可见布局必须通过真实持久化 open+read；失败回滚备份。
+      if (hostVisible && observeValidator !== undefined) {
+        const observed = await observeValidator(path, sessionId)
+        console.log(`   host observe passes (${observed} events)`)
+      }
       console.log(`   backup: ${backup}`)
     }
     touched += 1
   } catch (error) {
-    console.error(`FAILED verification ${path}: ${error.message} — artifact left untouched`)
+    if (backup !== undefined && existsSync(backup)) {
+      copyFileSync(backup, path)
+      console.error(`FAILED verification ${path}: ${error.message} — original restored from backup`)
+    } else {
+      console.error(`FAILED verification ${path}: ${error.message} — artifact left untouched`)
+    }
     failed += 1
   }
 }
