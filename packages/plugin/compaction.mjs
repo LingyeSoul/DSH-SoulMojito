@@ -2384,7 +2384,9 @@ function normalizeTavernSessionBinding(value) {
     return {
       character: typeof candidate.character === "string" ? candidate.character : "",
       chatId: typeof candidate.chatId === "string" ? candidate.chatId : "",
-      architecture: "card-workbench"
+      architecture: "card-workbench",
+      sourceCharacter: typeof candidate.sourceCharacter === "string" ? candidate.sourceCharacter : "",
+      sourceChatId: typeof candidate.sourceChatId === "string" ? candidate.sourceChatId : ""
     };
   }
   if (typeof candidate.character !== "string" || candidate.character.trim() === "") return void 0;

@@ -253,6 +253,7 @@ window.__ModuleLoader__.load({
       'workbench.empty': 'No workbench plans yet',
       'workbench.sessionLabel': 'CardWorkbench',
       'workbench.opening': 'Opening workbench…',
+      'workbench.chatSessionLabel': 'Card · {character} · {chat}',
       'workbench.bindTimeout': 'Workbench session binding timed out.',
       'workbench.refresh': 'Refresh',
       'workbench.approve': 'Approve and apply',
@@ -484,6 +485,11 @@ window.__ModuleLoader__.load({
       'nav.open': 'Open Tavern roleplay chats',
       'nav.close': 'Close',
       'nav.groups': 'Groups',
+      'nav.workbench': 'Card Workbench',
+      'nav.workbenchFree': 'Free workbench',
+      'nav.workbenchNew': 'Open a free workbench session',
+      'nav.workbenchChat': 'Open this chat in the Card Workbench',
+      'nav.noWorkbench': 'No workbench sessions',
       'nav.newChat': 'New chat with {name}',
       'nav.newGroupChat': 'New chat in {name}',
       'nav.loading': 'Loading…',
@@ -741,6 +747,7 @@ window.__ModuleLoader__.load({
       'workbench.empty': '暂无工作台方案',
       'workbench.sessionLabel': '写卡工作台',
       'workbench.opening': '正在打开写卡工作台…',
+      'workbench.chatSessionLabel': '写卡 · {character} · {chat}',
       'workbench.bindTimeout': '写卡工作台会话绑定超时。',
       'workbench.refresh': '刷新',
       'workbench.approve': '批准并应用',
@@ -972,6 +979,11 @@ window.__ModuleLoader__.load({
       'nav.open': '打开酒馆角色扮演聊天',
       'nav.close': '关闭',
       'nav.groups': '群聊',
+      'nav.workbench': '写卡工作台',
+      'nav.workbenchFree': '自由写卡',
+      'nav.workbenchNew': '打开自由写卡工作台',
+      'nav.workbenchChat': '把该聊天交给写卡工作台',
+      'nav.noWorkbench': '暂无写卡工作会话',
       'nav.newChat': '与 {name} 开新聊天',
       'nav.newGroupChat': '在 {name} 开新聊天',
       'nav.loading': '加载中…',
@@ -1218,6 +1230,8 @@ window.__ModuleLoader__.load({
     const repairedBindings = new Set()
     let internalWorkspace
     let internalWorkspacePromise
+    let workbenchWorkspace
+    let workbenchWorkspacePromise
 
     function update(patch) {
       snapshot = { ...snapshot, ...patch }
@@ -1664,28 +1678,45 @@ window.__ModuleLoader__.load({
       return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
     }
 
+    // 路径而非显示名是插件内部工作区的身份依据（决策 2026-08-17）；写卡工作台
+    // 用同款注册核，只是路径/标题不同（bootstrap.workbenchWorkspace）。
+    async function registerPluginWorkspace(ctx, config) {
+      if (!config?.path) throw new Error(translate('error.noWorkspace'))
+      if (typeof ctx?.workspaces?.create !== 'function') throw new Error(translate('error.noWorkspace'))
+      const created = await ctx.workspaces.create({ path: config.path })
+      let workspace = created?.workspace || created
+      if (!workspace?.workspaceId) throw new Error(translate('error.noWorkspace'))
+      if (config.title && workspace.title !== config.title && typeof ctx.workspaces.rename === 'function') {
+        try {
+          workspace = await ctx.workspaces.rename(workspace.workspaceId, config.title)
+        } catch {
+          // A user-owned workspace may already use the display title; the
+          // canonical path remains the identity and is safe to reuse.
+        }
+      }
+      return workspace
+    }
+
     async function ensureTavernWorkspace(ctx) {
       const config = snapshot.bootstrap.internalWorkspace
       if (!config?.path) throw new Error(translate('error.noWorkspace'))
       if (internalWorkspace?.path === config.path) return internalWorkspace
       if (internalWorkspacePromise) return internalWorkspacePromise
-      if (typeof ctx?.workspaces?.create !== 'function') throw new Error(translate('error.noWorkspace'))
-      internalWorkspacePromise = (async () => {
-        const created = await ctx.workspaces.create({ path: config.path })
-        let workspace = created?.workspace || created
-        if (!workspace?.workspaceId) throw new Error(translate('error.noWorkspace'))
-        if (config.title && workspace.title !== config.title && typeof ctx.workspaces.rename === 'function') {
-          try {
-            workspace = await ctx.workspaces.rename(workspace.workspaceId, config.title)
-          } catch {
-            // A user-owned workspace may already use the display title; the
-            // canonical path remains the identity and is safe to reuse.
-          }
-        }
-        internalWorkspace = workspace
-        return workspace
-      })().finally(() => { internalWorkspacePromise = undefined })
+      internalWorkspacePromise = registerPluginWorkspace(ctx, config)
+        .then((workspace) => { internalWorkspace = workspace; return workspace })
+        .finally(() => { internalWorkspacePromise = undefined })
       return internalWorkspacePromise
+    }
+
+    async function ensureWorkbenchWorkspace(ctx) {
+      const config = snapshot.bootstrap.workbenchWorkspace
+      if (!config?.path) throw new Error(translate('error.noWorkspace'))
+      if (workbenchWorkspace?.path === config.path) return workbenchWorkspace
+      if (workbenchWorkspacePromise) return workbenchWorkspacePromise
+      workbenchWorkspacePromise = registerPluginWorkspace(ctx, config)
+        .then((workspace) => { workbenchWorkspace = workspace; return workspace })
+        .finally(() => { workbenchWorkspacePromise = undefined })
+      return workbenchWorkspacePromise
     }
 
     function connectTavernWorkspace(ctx, workspaceId) {
@@ -1989,13 +2020,21 @@ window.__ModuleLoader__.load({
 
     // workbench-open（提案 0013）：与 novel-open 同款桥接——服务端负责绑定 +
     // recompose card-workbench preset；发送后轮询 bootstrap 直到会话出现在
-    // sessionBindings 且 architecture === 'card-workbench'。
-    async function waitForWorkbenchBinding(sessionId) {
+    // sessionBindings 且 architecture === 'card-workbench'、来源身份匹配。
+    // source 为 null 时匹配自由工作台（sourceCharacter/sourceChatId 均空）。
+    function workbenchBindingMatches(binding, source) {
+      if (binding?.architecture !== 'card-workbench') return false
+      return source
+        ? binding.sourceCharacter === source.character && binding.sourceChatId === source.chatId
+        : !binding.sourceCharacter && !binding.sourceChatId
+    }
+
+    async function waitForWorkbenchBinding(sessionId, source) {
       for (let attempt = 0; attempt < 25; attempt += 1) {
         try {
           const bootstrap = await refreshBootstrap()
           const binding = bootstrap?.state?.sessionBindings?.[sessionId]
-          if (binding?.architecture === 'card-workbench') return binding
+          if (workbenchBindingMatches(binding, source)) return binding
         } catch {
           // Bootstrap may briefly fail while the server binds; keep polling.
         }
@@ -2004,19 +2043,31 @@ window.__ModuleLoader__.load({
       return null
     }
 
-    async function openWorkbenchSession(ctx) {
+    // 每个聊天对应一个写卡工作会话：source 携带来源聊天身份时按身份幂等复用
+    // （聊天侧「交给工作台」）；source 为 null 时是面板拉起的自由工作台，同样
+    // 幂等复用。工作台会话落在专用内部工作区（Tavern Workbench (internal)）。
+    function workbenchSessionLabel(source) {
+      return source
+        ? translate('workbench.chatSessionLabel', {
+          character: source.character,
+          chat: String(source.chatId).replace(/\.jsonl$/i, ''),
+        })
+        : translate('workbench.sessionLabel')
+    }
+
+    async function openWorkbenchSession(ctx, source = null) {
       update({ navigationStatus: translate('workbench.opening') })
       try {
-        // 幂等复用：已绑定且会话仍存活的工作台会话直接回到主视图。
+        // 幂等复用：同来源身份已绑定且会话仍存活的工作台会话直接回到主视图。
         const sessions = ctx.sessions.list.getSnapshot()
         const existing = Object.entries(snapshot.bootstrap.state.sessionBindings || {})
-          .find(([sessionId, binding]) => binding?.architecture === 'card-workbench' && sessions.byId[sessionId])
+          .find(([sessionId, binding]) => workbenchBindingMatches(binding, source) && sessions.byId[sessionId])
         if (existing) {
           reserveTavernSession(ctx, existing[0])
           openSessionView(ctx, existing[0])
           return existing[0]
         }
-        const workspace = await ensureTavernWorkspace(ctx)
+        const workspace = await ensureWorkbenchWorkspace(ctx)
         const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId)
         // 与 openTavernChat 同因：0.2.0 宿主 connect 不再隐式 retain，先显式
         // 持有再借 binding，openSessionView 接棒 mainView 保留后归还。
@@ -2024,15 +2075,17 @@ window.__ModuleLoader__.load({
         try {
           const binding = ctx.sessions.binding(sessionId)
           if (!binding) throw new Error(translate('error.noBinding'))
-          const commandPayload = base64Url(JSON.stringify({ action: 'workbench-open' }))
+          const commandPayload = base64Url(JSON.stringify(source
+            ? { action: 'workbench-open', sourceCharacter: source.character, sourceChatId: source.chatId }
+            : { action: 'workbench-open' }))
           const result = await binding.session.command(`/dsh-tavern-session ${commandPayload}`)
           if (!result?.ok || !result.value?.matched) {
             throw new Error(result.error?.message || translate('error.activationFailed'))
           }
           reserveTavernSession(ctx, sessionId)
-          const bound = await waitForWorkbenchBinding(sessionId)
+          const bound = await waitForWorkbenchBinding(sessionId, source)
           if (!bound) throw new Error(translate('workbench.bindTimeout'))
-          await binding.session.rename(translate('workbench.sessionLabel')).catch(() => {})
+          await binding.session.rename(workbenchSessionLabel(source)).catch(() => {})
           openSessionView(ctx, sessionId)
           return sessionId
         } finally {
@@ -4275,18 +4328,24 @@ window.__ModuleLoader__.load({
       return path
     }
 
-    function internalWorkspaceSnapshot(ctx) {
-      const config = snapshot.bootstrap.internalWorkspace
+    // 插件内部工作区（Tavern / Tavern Workbench）都要整组隐藏：会话由自绘
+    // 侧边栏导航，原生树只留普通用户工作区。身份依据是路径；显示名只在
+    // 全局唯一时作回退（决策 2026-08-17）。
+    function pluginWorkspaceSnapshots(ctx) {
       const items = ctx?.workspaces?.list?.getSnapshot?.().items || []
-      const expectedPath = normalizeWorkspacePath(config?.path)
-      if (!expectedPath) return null
-      const workspace = items.find((item) => normalizeWorkspacePath(item?.path) === expectedPath)
-      if (!workspace?.workspaceId) return null
-      const titleFallback = typeof workspace.title === 'string'
-        && items.filter((item) => item?.title === workspace.title).length === 1
-        ? workspace.title
-        : ''
-      return { workspace, titleFallback }
+      const snapshots = []
+      for (const config of [snapshot.bootstrap.internalWorkspace, snapshot.bootstrap.workbenchWorkspace]) {
+        const expectedPath = normalizeWorkspacePath(config?.path)
+        if (!expectedPath) continue
+        const workspace = items.find((item) => normalizeWorkspacePath(item?.path) === expectedPath)
+        if (!workspace?.workspaceId) continue
+        const titleFallback = typeof workspace.title === 'string'
+          && items.filter((item) => item?.title === workspace.title).length === 1
+          ? workspace.title
+          : ''
+        snapshots.push({ workspace, titleFallback })
+      }
+      return snapshots
     }
 
     function nativeWorkspaceReference(value, workspace) {
@@ -4382,8 +4441,7 @@ window.__ModuleLoader__.load({
       if (!tree) return
       const sessionIds = new Set(Object.keys(bindings || {}))
       unmarkNativeTreeRows(tree)
-      const internal = internalWorkspaceSnapshot(ctx)
-      if (internal) {
+      for (const internal of pluginWorkspaceSnapshots(ctx)) {
         const headers = [...tree.querySelectorAll?.('[role="treeitem"][aria-expanded]') || []]
         for (const header of headers) {
           if (!nativeTreeNodeMatchesWorkspace(header, internal.workspace, internal.titleFallback)) continue
@@ -4406,7 +4464,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function useNativeSessionTreeFilter(bindingIds, ctx, internalWorkspacePath) {
+    function useNativeSessionTreeFilter(bindingIds, ctx, internalWorkspacePaths) {
       const bindingKey = bindingIds.join('\u0000')
       useEffect(() => {
         let frame = 0
@@ -4436,7 +4494,7 @@ window.__ModuleLoader__.load({
           const tree = visibleSidebarTree()
           if (tree) unmarkNativeTreeRows(tree)
         }
-      }, [bindingKey, ctx, internalWorkspacePath])
+      }, [bindingKey, ctx, internalWorkspacePaths])
     }
 
     function useSidebarHost() {
@@ -4515,6 +4573,12 @@ window.__ModuleLoader__.load({
           h('span', { className: 'dt-chat-architecture' }, labels.join(' / '))),
           h('button', {
             type: 'button',
+            title: t('nav.workbenchChat'),
+            disabled: busyChat === chatId,
+            onClick: () => runAction(chatId, () => openWorkbenchSession(ctx, { character, chatId })),
+          }, h(IconSparkle16)),
+          h('button', {
+            type: 'button',
             title: t('nav.rename', { name: chatId.replace(/\.jsonl$/i, '') }),
             disabled: busyChat === chatId,
             onClick: () => runAction(chatId, () => renameTavernChat(ctx, character, chatId)),
@@ -4529,6 +4593,36 @@ window.__ModuleLoader__.load({
         !chats ? h('span', { className: 'dt-sidebar-status' }, t('nav.loading')) : null,
         chats?.length === 0 ? h('span', { className: 'dt-sidebar-status' }, t('nav.noChats')) : null,
         error ? h('span', { className: 'dt-sidebar-error' }, error) : null)
+    }
+
+    // 写卡工作台会话列表（侧边栏分组）：每个来源聊天一个工作会话，自由工作台
+    // 也在此列出；点击切回主视图，与 TavernSidebar 其余分组共用 dt-sidebar-* 样式。
+    function WorkbenchList({ ctx, useSessions, currentSession }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const sessionIds = useSessions((value) => value.ids)
+      const entries = Object.entries(state.bootstrap.state.sessionBindings || {})
+        .filter(([sessionId, binding]) => binding?.architecture === 'card-workbench' && sessionIds.includes(sessionId))
+      return h('div', { className: 'dt-sidebar-chats' },
+        entries.map(([sessionId, binding]) => {
+          const label = binding.sourceCharacter
+            ? `${binding.sourceCharacter} · ${String(binding.sourceChatId).replace(/\.jsonl$/i, '')}`
+            : t('nav.workbenchFree')
+          return h('div', {
+            key: sessionId,
+            className: `dt-sidebar-chat-row dt-sidebar-chat-single ${currentSession === sessionId ? 'dt-sidebar-chat-active' : ''}`,
+          },
+          h('button', {
+            type: 'button',
+            className: 'dt-sidebar-chat-open',
+            title: label,
+            onClick: () => {
+              reserveTavernSession(ctx, sessionId)
+              openSessionView(ctx, sessionId)
+            },
+          }, h('span', null, '✎ ', label)))
+        }),
+        entries.length === 0 ? h('span', { className: 'dt-sidebar-status' }, t('nav.noWorkbench')) : null)
     }
 
     function TavernSidebar({ ctx, useSessions, floating, onClose }) {
@@ -4588,6 +4682,20 @@ window.__ModuleLoader__.load({
               }, h(IconPlusOutline16))),
             open ? h(ChatList, { ctx, character: group.name, currentSession, group: true }) : null)
         }),
+        h('div', { className: 'dt-sidebar-heading dt-sidebar-subheading' },
+          h('span', null, '✎ ', h('strong', null, t('nav.workbench'))),
+          h('button', {
+            type: 'button',
+            title: t('nav.workbenchNew'),
+            onClick: () => {
+              setError('')
+              void openWorkbenchSession(ctx).catch((cause) => {
+                update({ navigationStatus: '' })
+                setError(sidebarErrorDetail(cause))
+              })
+            },
+          }, h(IconPlusOutline16))),
+        h(WorkbenchList, { ctx, useSessions, currentSession }),
         state.navigationStatus ? h('span', { className: 'dt-sidebar-status' }, state.navigationStatus) : null,
         error ? h('span', { className: 'dt-sidebar-error' }, error) : null)
     }
@@ -6875,7 +6983,7 @@ window.__ModuleLoader__.load({
       // AgentTavern stays hidden from the native session tree, but its native
       // conversation view must not be forced into the legacy Tavern tab.
       useNativeTavernTabFilter(Boolean(currentBinding && bindingArchitecture(currentBinding) === 'st'))
-      useNativeSessionTreeFilter(bindingIds, PanelHost.context, state.bootstrap.internalWorkspace?.path || '')
+      useNativeSessionTreeFilter(bindingIds, PanelHost.context, [state.bootstrap.internalWorkspace?.path, state.bootstrap.workbenchWorkspace?.path].filter(Boolean).join('\u0000'))
       const host = useSidebarHost()
       useEffect(() => {
         if (sessionPhase !== 'ready') return
@@ -6942,7 +7050,7 @@ window.__ModuleLoader__.load({
          .dt-view{box-sizing:border-box;width:100%;max-width:780px;margin:0 auto;display:flex;flex-direction:column;min-height:100%;padding:8px 16px 28px;color:var(--dsw-alias-label-primary);letter-spacing:0}.dt-empty{min-height:300px;align-items:center;justify-content:center;gap:10px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:13px}.dt-message-actions button,.dt-header-character button,.dt-sidebar button,.dt-footer-action{color:inherit;background:transparent;border:0;cursor:pointer}.dt-message-actions button:hover,.dt-header-character button:hover,.dt-sidebar button:hover,.dt-footer-action:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-view button:disabled,.dt-composer button:disabled,.dt-sidebar button:disabled{cursor:not-allowed;opacity:.45}.dt-transcript{display:flex;flex-direction:column;gap:22px;padding:22px 4px}.dt-message{display:flex;gap:10px;max-width:88%;min-width:0}.dt-message-user{align-self:flex-end}.dt-message-character{align-self:flex-start}.dt-message-avatar{width:30px;height:30px;object-fit:cover;border-radius:6px;flex:none}.dt-message-body{display:flex;flex-direction:column;gap:4px;min-width:0}.dt-message-user .dt-message-body{align-items:flex-end}.dt-message-name{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-message-copy{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.65;padding:9px 11px;border-radius:8px;background:var(--dsw-alias-bg-raised,rgba(127,127,127,.08));border:1px solid var(--dsw-alias-border-l2)}.dt-message-user .dt-message-copy{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,var(--dsw-alias-bg-base))}.dt-message-frontend{width:min(760px,82vw);max-width:100%;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base)}.dt-frontend-frame{display:block;width:100%;border:0;background:transparent;transition:height 180ms ease}.dt-message-actions{display:flex;align-items:center;gap:4px;min-height:24px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dt-message-actions button{min-width:24px;height:24px;border-radius:5px;display:inline-grid;place-items:center;padding:0 5px}.dt-message-edit{box-sizing:border-box;width:min(620px,70vw);max-width:100%;min-height:100px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:9px;font:inherit;line-height:1.55}.dt-transcript-end{height:1px;flex:none}.dt-message-error{max-width:620px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px}.dt-run-error{padding:7px 12px;font-size:12px}
          .dt-composer-wrap{box-sizing:border-box;width:100%;padding:6px var(--dsh-composer-side-clearance,16px) 14px;pointer-events:auto}.dt-composer{box-sizing:border-box;width:min(var(--dsh-composer-card-max-width,780px),100%);margin:0 auto;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);padding:10px 10px 8px;box-shadow:0 2px 10px rgba(0,0,0,.06)}.dt-composer textarea{box-sizing:border-box;width:100%;min-height:52px;max-height:200px;resize:vertical;border:0;outline:0;color:var(--dsw-alias-label-primary);background:transparent;font:inherit;font-size:14px;line-height:1.5}.dt-composer-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:30px;font-size:11px}.dt-composer-row>span{min-width:0;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dt-composer-actions{display:flex;align-items:center;gap:8px;flex:none}.dt-primary-icon{width:30px;height:30px;border:0;border-radius:7px;display:grid;place-items:center;background:var(--dsw-alias-state-business-primary);color:#fff;cursor:pointer}.dt-header-character{min-width:0;display:flex;align-items:center;gap:7px;padding:2px 4px 2px 5px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;font-size:12px}.dt-header-character>img{width:20px;height:20px;border-radius:4px;object-fit:cover;flex:none}.dt-header-character-copy{display:flex;flex-direction:column;min-width:0;max-width:min(520px,55vw);gap:0}.dt-header-character-name{max-width:100%;text-overflow:ellipsis;white-space:nowrap;overflow:hidden;line-height:16px}.dt-header-stats{display:block;max-width:100%;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.dt-header-character>button{width:24px;height:24px;border-radius:5px;display:grid;place-items:center;flex:none}
         .dt-model-select{min-width:0;position:relative}.dt-model-trigger{min-width:0;max-width:220px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:24px;outline:none;align-items:center;gap:4px;padding:0 4px 0 8px;font-size:13px;font-weight:500;line-height:20px;display:flex}.dt-model-trigger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-model-trigger:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}.dt-model-trigger:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}.dt-model-trigger-label{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.dt-model-trigger-effort{color:var(--dsw-alias-label-caption);flex:none}.dt-model-chevron{color:var(--dsw-alias-label-caption);flex:none;transition:transform .12s}.dt-model-chevron-open{transform:rotate(180deg)}.dt-model-menu{z-index:20;border:1px solid var(--dsw-alias-border-inverted);background:var(--dsw-specific-menu);width:min(240px,100vw - 32px);max-height:min(360px,100vh - 96px);box-shadow:var(--dsw-shadow-lv3);color:var(--dsw-alias-label-primary);border-radius:12px;flex-direction:column;padding:4px;display:flex;position:absolute;bottom:calc(100% + 8px);right:0;overflow:hidden}.dt-model-status,.dt-model-empty{color:var(--dsw-alias-label-tertiary);padding:10px;font-size:13px;line-height:20px}.dt-model-error,.dt-model-warning{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);border-radius:8px;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px;padding:7px 8px;font-size:12px;line-height:18px;display:flex}.dt-model-warning{background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-state-warn-label)}.dt-model-retry{color:inherit;font:inherit;cursor:pointer;background:0 0;border:none;flex:none;padding:0;font-weight:600}.dt-model-groups{min-height:0;overflow-y:auto}.dt-model-group+.dt-model-group{margin-top:4px}.dt-model-group-title{z-index:1;background:var(--dsw-specific-menu);color:var(--dsw-alias-label-tertiary);padding:5px 8px 3px;font-size:12px;font-weight:500;line-height:18px;position:sticky;top:0}.dt-model-option{width:100%;min-height:38px;color:inherit;text-align:left;cursor:pointer;background:0 0;border:none;border-radius:10px;outline:none;align-items:center;gap:8px;padding:6px 8px;display:flex}.dt-model-option:hover:not(:disabled),.dt-model-option:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}.dt-model-option:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}.dt-model-option-copy{flex-direction:column;flex:1;min-width:0;display:flex}.dt-model-name{color:inherit;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:500;line-height:20px;overflow:hidden}.dt-model-description{color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:18px;overflow:hidden}.dt-model-check{color:var(--dsw-alias-label-primary);flex:0 0 18px;place-items:center;display:grid}.dt-model-cell{width:100%;height:40px;color:var(--dsw-alias-label-primary);cursor:pointer;text-align:left;background:0 0;border:none;border-radius:10px;align-items:center;gap:8px;padding:0 10px;font-size:14px;line-height:22px;display:flex}.dt-model-cell:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-model-cell-label{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.dt-model-cell-value{text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--dsw-alias-label-tertiary);flex:0 auto;overflow:hidden}.dt-model-cell-chevron{color:var(--dsw-alias-label-tertiary);flex:none}
-        [data-dsh-tavern-sidebar-host]{flex:none;margin:0 0 6px;padding-right:var(--dsh-session-list-edge-inset,8px)}.dt-sidebar{box-sizing:border-box;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}.dt-sidebar-heading{display:flex;align-items:center;justify-content:space-between;height:30px;padding:0 5px;color:var(--dsw-alias-label-secondary)}.dt-sidebar-heading>span{display:flex;align-items:center;gap:6px;font-size:12px}.dt-sidebar-heading>button{width:26px;height:26px;border-radius:6px}.dt-character-group{margin-top:2px}.dt-character-row{display:flex;align-items:center;gap:2px}.dt-character-toggle{height:32px;min-width:0;flex:1;display:flex;align-items:center;gap:5px;border-radius:6px;padding:0 5px;text-align:left}.dt-character-toggle svg{transform:rotate(-90deg);transition:transform .15s}.dt-character-toggle svg.dt-chevron-open{transform:rotate(0)}.dt-character-toggle img{width:22px;height:22px;border-radius:5px;object-fit:cover}.dt-character-toggle span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.dt-character-row>button:last-child{width:28px;height:28px;display:grid;place-items:center;border-radius:6px;flex:none}.dt-sidebar-chats{display:flex;flex-direction:column;margin:1px 0 4px 28px}.dt-sidebar-chat-row{height:28px;border-radius:6px;display:grid;grid-template-columns:minmax(0,1fr) 26px 26px;align-items:center;color:var(--dsw-alias-label-secondary)}.dt-sidebar-chat-open{height:28px;min-width:0;text-align:left;padding:0 7px;color:inherit;font-size:12px}.dt-sidebar-chat-open span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-sidebar-chat-row>button:not(.dt-sidebar-chat-open){width:26px;height:26px;display:grid;place-items:center;border-radius:5px;opacity:0}.dt-sidebar-chat-row:hover>button:not(.dt-sidebar-chat-open),.dt-sidebar-chat-row:focus-within>button:not(.dt-sidebar-chat-open){opacity:1}.dt-sidebar-chat-row.dt-sidebar-chat-active{color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-interactive-bg-hover)}.dt-sidebar-status,.dt-sidebar-error{padding:4px 7px;font-size:11px;line-height:16px}.dt-footer-action{box-sizing:border-box;cursor:pointer;color:var(--dsw-alias-label-primary);background:transparent;border:none;font-family:inherit;display:flex;align-items:center;overflow:hidden}.dt-footer-action-wide{width:calc(100% + 8px);height:34px;flex:none;justify-content:flex-start;gap:8px;margin:4px -4px;padding:6px 2px 6px 10px;border-radius:12px;font-size:14px;line-height:22px}.dt-footer-action-wide:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-footer-action-rail{width:36px;height:36px;flex:none;justify-content:center;gap:0;margin:8px 0 10px;padding:0;border-radius:50%}.dt-footer-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;line-height:22px}
+        [data-dsh-tavern-sidebar-host]{flex:none;margin:0 0 6px;padding-right:var(--dsh-session-list-edge-inset,8px)}.dt-sidebar{box-sizing:border-box;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}.dt-sidebar-heading{display:flex;align-items:center;justify-content:space-between;height:30px;padding:0 5px;color:var(--dsw-alias-label-secondary)}.dt-sidebar-heading>span{display:flex;align-items:center;gap:6px;font-size:12px}.dt-sidebar-heading>button{width:26px;height:26px;border-radius:6px}.dt-character-group{margin-top:2px}.dt-character-row{display:flex;align-items:center;gap:2px}.dt-character-toggle{height:32px;min-width:0;flex:1;display:flex;align-items:center;gap:5px;border-radius:6px;padding:0 5px;text-align:left}.dt-character-toggle svg{transform:rotate(-90deg);transition:transform .15s}.dt-character-toggle svg.dt-chevron-open{transform:rotate(0)}.dt-character-toggle img{width:22px;height:22px;border-radius:5px;object-fit:cover}.dt-character-toggle span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.dt-character-row>button:last-child{width:28px;height:28px;display:grid;place-items:center;border-radius:6px;flex:none}.dt-sidebar-chats{display:flex;flex-direction:column;margin:1px 0 4px 28px}.dt-sidebar-chat-row{height:28px;border-radius:6px;display:grid;grid-template-columns:minmax(0,1fr) repeat(3,26px);align-items:center;color:var(--dsw-alias-label-secondary)}.dt-sidebar-chat-row.dt-sidebar-chat-single{grid-template-columns:minmax(0,1fr)}.dt-sidebar-chat-open{height:28px;min-width:0;text-align:left;padding:0 7px;color:inherit;font-size:12px}.dt-sidebar-chat-open span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-sidebar-chat-row>button:not(.dt-sidebar-chat-open){width:26px;height:26px;display:grid;place-items:center;border-radius:5px;opacity:0}.dt-sidebar-chat-row:hover>button:not(.dt-sidebar-chat-open),.dt-sidebar-chat-row:focus-within>button:not(.dt-sidebar-chat-open){opacity:1}.dt-sidebar-chat-row.dt-sidebar-chat-active{color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-interactive-bg-hover)}.dt-sidebar-status,.dt-sidebar-error{padding:4px 7px;font-size:11px;line-height:16px}.dt-footer-action{box-sizing:border-box;cursor:pointer;color:var(--dsw-alias-label-primary);background:transparent;border:none;font-family:inherit;display:flex;align-items:center;overflow:hidden}.dt-footer-action-wide{width:calc(100% + 8px);height:34px;flex:none;justify-content:flex-start;gap:8px;margin:4px -4px;padding:6px 2px 6px 10px;border-radius:12px;font-size:14px;line-height:22px}.dt-footer-action-wide:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-footer-action-rail{width:36px;height:36px;flex:none;justify-content:center;gap:0;margin:8px 0 10px;padding:0;border-radius:50%}.dt-footer-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;line-height:22px}
          @media(max-width:700px){[role="dialog"]:has(.dt-settings){flex-direction:column}[role="dialog"]:has(.dt-settings)>nav{box-sizing:border-box;width:100%;height:auto;max-height:190px;flex:none;overflow-y:auto;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}[role="dialog"]:has(.dt-settings)>nav>:last-child{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));height:auto}[role="dialog"]:has(.dt-settings)>nav>:last-child>button{width:100%;min-width:0}[role="dialog"]:has(.dt-settings)>:not(nav){width:100%;min-width:0;flex:1}.dt-settings-heading{padding:16px}.dt-settings-band{padding:16px}.dt-settings-grid,.dt-check-grid{grid-template-columns:1fr}.dt-view{padding-inline:10px}.dt-transcript-end{height:132px}.dt-message{max-width:94%}.dt-header-character-copy{max-width:min(340px,52vw)}.dt-header-stats{max-width:100%}.dt-composer-wrap{padding-inline:8px}.dt-model-trigger{max-width:140px}.dt-message-edit{width:78vw}.dt-sidebar-chat-row>button:not(.dt-sidebar-chat-open){opacity:1}}
         .dt-persona-list{display:flex;flex-direction:column;gap:6px}.dt-persona-row{display:flex;align-items:center;gap:10px;min-height:44px;padding:4px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}.dt-persona-avatar{width:34px;height:34px;border-radius:6px;object-fit:cover;flex:none}.dt-persona-copy{display:flex;flex-direction:column;min-width:0;flex:1;gap:2px}.dt-persona-copy span{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-persona-actions{display:flex;gap:2px}.dt-persona-actions button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-persona-actions button:hover{background:var(--dsw-alias-interactive-bg-hover)}
         .dt-group-create{display:flex;flex-direction:column;gap:8px;margin:10px 0;padding:10px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}.dt-group-list{display:flex;flex-direction:column;gap:12px}.dt-group-manage{display:flex;flex-direction:column;gap:6px}.dt-group-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.dt-group-title>span{color:var(--dsw-alias-label-tertiary);font-size:12px}.dt-group-title select{height:30px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:inherit;background:var(--dsw-alias-bg-base);padding:0 6px}.dt-group-title>button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-group-members{display:flex;flex-wrap:wrap;gap:6px}

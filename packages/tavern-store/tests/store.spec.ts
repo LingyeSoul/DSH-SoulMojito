@@ -361,20 +361,28 @@ describe('TavernStore', () => {
     expect((await store.getState()).agentTavernPreloadAssets).toBe(false)
   }))
 
-  it('状态：card-workbench 绑定空 character/chatId 经归一化保留（提案 0013）', withStore(async (store, dir) => {
+  it('状态：card-workbench 绑定与来源聊天身份经归一化保留（提案 0013）', withStore(async (store, dir) => {
     await store.updateState((state) => ({
-      sessionBindings: { ...state.sessionBindings, wb_1: { architecture: 'card-workbench', character: '', chatId: '' } },
+      sessionBindings: { ...state.sessionBindings, wb_1: { architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: 'A', sourceChatId: 'a.jsonl' } },
     }))
     expect((await store.getState()).sessionBindings.wb_1).toEqual({
-      architecture: 'card-workbench', character: '', chatId: '',
+      architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: 'A', sourceChatId: 'a.jsonl',
     })
-    // 手写 state 文件缺 character/chatId 字段时补空串，绝不降级为 st
-    // （降级会让客户端把工作台会话误判成 ST 架构、强制接管 composer）。
+    // 手写 state 文件缺 character/chatId/source 字段时补空串，绝不降级为 st
+    // （降级会让客户端把工作台会话误判成 ST 架构、强制接管 composer）；
+    // 旧数据（无 source 字段）归一化为自由工作台身份。
     await writeFile(path.join(dir, 'state.json'), JSON.stringify({
-      sessionBindings: { wb_2: { architecture: 'card-workbench' } },
+      sessionBindings: {
+        wb_2: { architecture: 'card-workbench' },
+        wb_3: { architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: 'B', sourceChatId: 'b.jsonl' },
+      },
     }))
-    expect((await store.getState()).sessionBindings.wb_2).toEqual({
-      architecture: 'card-workbench', character: '', chatId: '',
+    const bindings = await store.getState().then((state) => state.sessionBindings)
+    expect(bindings.wb_2).toEqual({
+      architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: '', sourceChatId: '',
+    })
+    expect(bindings.wb_3).toEqual({
+      architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: 'B', sourceChatId: 'b.jsonl',
     })
   }))
 

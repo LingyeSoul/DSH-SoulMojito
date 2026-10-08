@@ -461,16 +461,24 @@ function checkClientArchitectureText(text) {
 
 function checkInternalWorkspaceText(serverText, clientText) {
   const problems = []
-  for (const marker of ['internalWorkspace', 'TAVERN_WORKSPACE_TITLE', 'dshHomePath("tavern", "workspace")']) {
+  for (const marker of [
+    'internalWorkspace',
+    'workbenchWorkspace',
+    'TAVERN_WORKSPACE_TITLE',
+    'TAVERN_WORKBENCH_WORKSPACE_TITLE',
+    'dshHomePath("tavern", "workspace")',
+    'dshHomePath("tavern", "workbench")',
+  ]) {
     if (!serverText.includes(marker)) problems.push(`server internal workspace is missing marker '${marker}'`)
   }
   for (const marker of [
     'function ensureTavernWorkspace(ctx)',
+    'function ensureWorkbenchWorkspace(ctx)',
     'ctx.workspaces.create({ path: config.path })',
         'function connectTavernWorkspace(ctx, workspaceId)',
     'uiWorkspace.connectWorkspace(workspaceId)',
     'ctx.workspaces.connectWorkspace(workspaceId)',
-    'function internalWorkspaceSnapshot(ctx)',
+    'function pluginWorkspaceSnapshots(ctx)',
     'normalizeWorkspacePath(item?.path) === expectedPath',
     'function nativeTreeNodeMatchesWorkspace(node, workspace, titleFallback)',
     "items.filter((item) => item?.title === workspace.title).length === 1",
@@ -1461,14 +1469,19 @@ const gates = [
   {
     name: 'internal-workspace',
     selfTest: () => {
-      const server = 'internalWorkspace TAVERN_WORKSPACE_TITLE dshHomePath("tavern", "workspace")'
+      const server = [
+        'internalWorkspace workbenchWorkspace',
+        'TAVERN_WORKSPACE_TITLE TAVERN_WORKBENCH_WORKSPACE_TITLE',
+        'dshHomePath("tavern", "workspace") dshHomePath("tavern", "workbench")',
+      ].join('\n')
       const client = [
         'function ensureTavernWorkspace(ctx)',
+        'function ensureWorkbenchWorkspace(ctx)',
         'ctx.workspaces.create({ path: config.path })',
                 'function connectTavernWorkspace(ctx, workspaceId)',
         'uiWorkspace.connectWorkspace(workspaceId)',
         'ctx.workspaces.connectWorkspace(workspaceId)',
-        'function internalWorkspaceSnapshot(ctx)',
+        'function pluginWorkspaceSnapshots(ctx)',
         'normalizeWorkspacePath(item?.path) === expectedPath',
         'function nativeTreeNodeMatchesWorkspace(node, workspace, titleFallback)',
         "items.filter((item) => item?.title === workspace.title).length === 1",
@@ -1477,6 +1490,7 @@ const gates = [
       const bad = `${client}\nfunction currentWorkspace(ctx) {}`
       const titleOnly = [
         'function ensureTavernWorkspace(ctx)',
+        'function ensureWorkbenchWorkspace(ctx)',
         'ctx.workspaces.create({ path: config.path })',
                 'function connectTavernWorkspace(ctx, workspaceId)',
         'uiWorkspace.connectWorkspace(workspaceId)',

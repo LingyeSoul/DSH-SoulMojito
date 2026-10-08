@@ -101,6 +101,10 @@ export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 
 const API = '/api/dsh-tavern'
 const DEFAULT_USER = 'User'
 const TAVERN_WORKSPACE_TITLE = 'Tavern (internal)'
+// 写卡工作台专用内部工作区：工作台会话按聊天一一对应（提案 0013 排错场景），
+// 数量随聊天增长，与角色扮演会话混在同一个 Tavern (internal) 会互相污染；
+// 路径与角色卡/聊天记录等数据目录隔离，沿用 2026-08-17 决策的划分逻辑。
+const TAVERN_WORKBENCH_WORKSPACE_TITLE = 'Tavern Workbench (internal)'
 // 卡片工作台 preset（提案 0013）：cordis.patch.yml 的 preset-card-workbench 行
 // （config.id: card-workbench）。面板「新建角色卡 → 写卡 Agent」经内部桥接命令
 // 把空会话 recompose 到该 preset。
@@ -290,7 +294,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
         return handleNovelOpenCommand(ctx, agent, parsed.novelId)
       }
       if (parsed.action === 'workbench-open') {
-        return handleWorkbenchOpenCommand(ctx, agent)
+        return handleWorkbenchOpenCommand(ctx, agent, parsed)
       }
       const chat = await db.getChat(parsed.character, parsed.chatId)
       if (!chat) return { kind: 'error', text: 'Tavern chat not found.' }
@@ -468,6 +472,7 @@ async function handleApi(ctx, req, res) {
   if (method === 'GET' && route === 'bootstrap') {
     await agentTavernCapabilitiesPromise
     const internalWorkspace = await prepareInternalWorkspace()
+    const workbenchWorkspace = await prepareWorkbenchWorkspace()
     const state = await db.getState()
     const active = state.activeCharacter ? await db.getCharacter(state.activeCharacter) : undefined
     const groups = []
@@ -499,6 +504,7 @@ async function handleApi(ctx, req, res) {
       version: BUILD_INFO.version,
       commit: TAVERN_COMMIT,
       internalWorkspace,
+      workbenchWorkspace,
       agentTavern: agentTavernCapabilities,
       agentNovel: agentNovelCapabilities,
       // 自更新快照：只读缓存结论，检查/安装分别走 update/check 与 update/install，
@@ -2113,13 +2119,16 @@ async function bindNovelSession(db: TavernStore, sessionId: string, novelId: str
 
 /**
  * Internal workbench-open command handler（提案 0013）：面板「新建角色卡 →
- * 写卡 Agent」的会话启动桥。与 novel-open 同族的闸门——recompose 能力
- * fail-closed、preset 声明校验、已开始会话锁定；绑定写 + 幂等 marker +
- * recompose，无 driver 参与（工作台是纯对话式 preset）。
+ * 写卡 Agent」与聊天侧「交给工作台」共用的会话启动桥。与 novel-open 同族的
+ * 闸门——recompose 能力 fail-closed、preset 声明校验、已开始会话锁定；来源
+ * 聊天身份写进绑定（每个聊天对应一个写卡工作会话），已绑定其他来源的会话
+ * 拒绝换绑；绑定写 + 幂等 marker + recompose，无 driver 参与（工作台是纯
+ * 对话式 preset）。
  */
 async function handleWorkbenchOpenCommand(
   ctx: NovelPluginContext & { agentPresets?: { recompose?: (agentCtx: unknown, presetId: string) => Promise<{ id: string }> } },
   agent: NovelCommandAgent,
+  payload: { sourceCharacter: string; sourceChatId: string },
 ): Promise<{ kind: string; text: string }> {
   if (typeof ctx.agentPresets?.recompose !== 'function') {
     throw new TavernArchitectureConflictError('The host cannot recompose a blank session with the CardWorkbench preset.')
@@ -2137,10 +2146,23 @@ async function handleWorkbenchOpenCommand(
     throw new TavernArchitectureConflictError('This host session already started; recomposing it with the CardWorkbench preset is locked.')
   }
   const db: TavernStore = await store()
+  const previous = (await db.getState()).sessionBindings[agent.id]
+  if (previous?.architecture === 'card-workbench'
+    && (previous.sourceCharacter !== payload.sourceCharacter || previous.sourceChatId !== payload.sourceChatId)) {
+    // 必须在 marker 幂等检查之前拦截：否则不重复 recompose 但绑定被静默改写
+    // 成另一个聊天的身份，工作台会话与来源聊天的一一对应会被破坏。
+    throw new TavernArchitectureConflictError('This CardWorkbench session is already bound to another chat.')
+  }
   await db.updateState((state) => ({
     sessionBindings: {
       ...state.sessionBindings,
-      [agent.id]: { architecture: 'card-workbench', character: '', chatId: '' },
+      [agent.id]: {
+        architecture: 'card-workbench',
+        character: '',
+        chatId: '',
+        sourceCharacter: payload.sourceCharacter,
+        sourceChatId: payload.sourceChatId,
+      },
     },
   }))
   // 幂等 marker：重复 workbench-open 不叠加 marker 也不重复 recompose。
@@ -3260,8 +3282,14 @@ function parseTavernSessionCommand(rawInput) {
         : null
     }
     // CardWorkbench bridge（提案 0013）：面板「新建角色卡」引导的写卡 Agent
-    // 会话启动；无载荷，目标 preset 由服务端常量决定。
-    if (parsed.action === 'workbench-open') return { action: 'workbench-open' }
+    // 会话启动；sourceCharacter/sourceChatId 成对可选——聊天侧「交给工作台」
+    // 携带来源聊天身份（每个聊天对应一个写卡工作会话），面板自由拉起不带。
+    if (parsed.action === 'workbench-open') {
+      const sourceCharacter = typeof parsed.sourceCharacter === 'string' ? parsed.sourceCharacter : ''
+      const sourceChatId = typeof parsed.sourceChatId === 'string' ? parsed.sourceChatId : ''
+      if ((sourceCharacter !== '') !== (sourceChatId !== '')) return null
+      return { action: 'workbench-open', sourceCharacter, sourceChatId }
+    }
     if (typeof parsed.character !== 'string' || typeof parsed.chatId !== 'string') return null
     const group = parsed.group === true
     const architecture = group ? 'st' : requestedArchitecture(parsed.architecture)
@@ -3282,6 +3310,12 @@ async function prepareInternalWorkspace() {
   const path = dshHomePath('tavern', 'workspace')
   await mkdir(path, { recursive: true })
   return { path, title: TAVERN_WORKSPACE_TITLE }
+}
+
+async function prepareWorkbenchWorkspace() {
+  const path = dshHomePath('tavern', 'workbench')
+  await mkdir(path, { recursive: true })
+  return { path, title: TAVERN_WORKBENCH_WORKSPACE_TITLE }
 }
 
 function readBuildInfo(): { version: string; commit: string } {

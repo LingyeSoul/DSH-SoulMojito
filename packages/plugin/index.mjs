@@ -4581,7 +4581,9 @@ function normalizeTavernSessionBinding(value) {
     return {
       character: typeof candidate.character === "string" ? candidate.character : "",
       chatId: typeof candidate.chatId === "string" ? candidate.chatId : "",
-      architecture: "card-workbench"
+      architecture: "card-workbench",
+      sourceCharacter: typeof candidate.sourceCharacter === "string" ? candidate.sourceCharacter : "",
+      sourceChatId: typeof candidate.sourceChatId === "string" ? candidate.sourceChatId : ""
     };
   }
   if (typeof candidate.character !== "string" || candidate.character.trim() === "") return void 0;
@@ -13375,6 +13377,7 @@ var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands
 var API = "/api/dsh-tavern";
 var DEFAULT_USER3 = "User";
 var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
+var TAVERN_WORKBENCH_WORKSPACE_TITLE = "Tavern Workbench (internal)";
 var CARD_WORKBENCH_PRESET_ID = "card-workbench";
 var BUILD_INFO = readBuildInfo();
 var TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit);
@@ -13510,7 +13513,7 @@ function apply(ctx, config = {}) {
         return handleNovelOpenCommand(ctx, agent, parsed.novelId);
       }
       if (parsed.action === "workbench-open") {
-        return handleWorkbenchOpenCommand(ctx, agent);
+        return handleWorkbenchOpenCommand(ctx, agent, parsed);
       }
       const chat = await db.getChat(parsed.character, parsed.chatId);
       if (!chat) return { kind: "error", text: "Tavern chat not found." };
@@ -13643,6 +13646,7 @@ async function handleApi(ctx, req, res) {
   if (method === "GET" && route === "bootstrap") {
     await agentTavernCapabilitiesPromise;
     const internalWorkspace = await prepareInternalWorkspace();
+    const workbenchWorkspace = await prepareWorkbenchWorkspace();
     const state = await db.getState();
     const active = state.activeCharacter ? await db.getCharacter(state.activeCharacter) : void 0;
     const groups = [];
@@ -13674,6 +13678,7 @@ async function handleApi(ctx, req, res) {
       version: BUILD_INFO.version,
       commit: TAVERN_COMMIT,
       internalWorkspace,
+      workbenchWorkspace,
       agentTavern: agentTavernCapabilities,
       agentNovel: agentNovelCapabilities,
       // 自更新快照：只读缓存结论，检查/安装分别走 update/check 与 update/install，
@@ -15007,7 +15012,7 @@ async function bindNovelSession(db, sessionId, novelId) {
     }
   }));
 }
-async function handleWorkbenchOpenCommand(ctx, agent) {
+async function handleWorkbenchOpenCommand(ctx, agent, payload) {
   if (typeof ctx.agentPresets?.recompose !== "function") {
     throw new TavernArchitectureConflictError("The host cannot recompose a blank session with the CardWorkbench preset.");
   }
@@ -15022,10 +15027,20 @@ async function handleWorkbenchOpenCommand(ctx, agent) {
     throw new TavernArchitectureConflictError("This host session already started; recomposing it with the CardWorkbench preset is locked.");
   }
   const db = await store();
+  const previous = (await db.getState()).sessionBindings[agent.id];
+  if (previous?.architecture === "card-workbench" && (previous.sourceCharacter !== payload.sourceCharacter || previous.sourceChatId !== payload.sourceChatId)) {
+    throw new TavernArchitectureConflictError("This CardWorkbench session is already bound to another chat.");
+  }
   await db.updateState((state) => ({
     sessionBindings: {
       ...state.sessionBindings,
-      [agent.id]: { architecture: "card-workbench", character: "", chatId: "" }
+      [agent.id]: {
+        architecture: "card-workbench",
+        character: "",
+        chatId: "",
+        sourceCharacter: payload.sourceCharacter,
+        sourceChatId: payload.sourceChatId
+      }
     }
   }));
   if (!activationEvents.some((event) => event.type === "agent-preset/selected" && event.data?.agentPreset === CARD_WORKBENCH_PRESET_ID)) {
@@ -15912,7 +15927,12 @@ function parseTavernSessionCommand(rawInput) {
     if (parsed.action === "novel-open") {
       return typeof parsed.novelId === "string" && parsed.novelId.trim() !== "" ? { action: "novel-open", novelId: parsed.novelId } : null;
     }
-    if (parsed.action === "workbench-open") return { action: "workbench-open" };
+    if (parsed.action === "workbench-open") {
+      const sourceCharacter = typeof parsed.sourceCharacter === "string" ? parsed.sourceCharacter : "";
+      const sourceChatId = typeof parsed.sourceChatId === "string" ? parsed.sourceChatId : "";
+      if (sourceCharacter !== "" !== (sourceChatId !== "")) return null;
+      return { action: "workbench-open", sourceCharacter, sourceChatId };
+    }
     if (typeof parsed.character !== "string" || typeof parsed.chatId !== "string") return null;
     const group2 = parsed.group === true;
     const architecture = group2 ? "st" : requestedArchitecture(parsed.architecture);
@@ -15932,6 +15952,11 @@ async function prepareInternalWorkspace() {
   const path9 = dshHomePath("tavern", "workspace");
   await mkdir(path9, { recursive: true });
   return { path: path9, title: TAVERN_WORKSPACE_TITLE };
+}
+async function prepareWorkbenchWorkspace() {
+  const path9 = dshHomePath("tavern", "workbench");
+  await mkdir(path9, { recursive: true });
+  return { path: path9, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
 }
 function readBuildInfo() {
   let version = "unknown";
@@ -15965,7 +15990,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.3.9".trim() : "";
-  const commit = true ? normalizeCommit("7c11250") : void 0;
+  const commit = true ? normalizeCommit("9fcf18e") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

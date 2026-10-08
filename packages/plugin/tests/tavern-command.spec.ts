@@ -638,9 +638,14 @@ describe('internal Tavern session bridge occupation', () => {
     const res = makeResponse()
     await apiHandler(makeGetRequest('/api/dsh-tavern/bootstrap'), res)
     expect(res.statusCode).toBe(200)
-    expect(JSON.parse(res.chunks.join('')).internalWorkspace).toEqual({
+    const body = JSON.parse(res.chunks.join(''))
+    expect(body.internalWorkspace).toEqual({
       path: join(home, 'tavern', 'workspace'),
       title: 'Tavern (internal)',
+    })
+    expect(body.workbenchWorkspace).toEqual({
+      path: join(home, 'tavern', 'workbench'),
+      title: 'Tavern Workbench (internal)',
     })
   })
 
@@ -770,6 +775,8 @@ describe('internal Tavern session bridge occupation', () => {
       architecture: 'card-workbench',
       character: '',
       chatId: '',
+      sourceCharacter: '',
+      sourceChatId: '',
     })
     // 面板「新建角色卡 → 写卡 Agent」桥：marker + recompose 各一次，无占位 turn。
     expect(agent.session.events).toEqual([{ type: 'agent-preset/selected', data: { agentPreset: 'card-workbench' } }])
@@ -780,6 +787,34 @@ describe('internal Tavern session bridge occupation', () => {
     expect(again.kind).toBe('success')
     expect(agent.session.events.filter((event) => event.type === 'agent-preset/selected')).toHaveLength(1)
     expect(recomposeCalls).toHaveLength(recomposeCount)
+  })
+
+  it('workbench-open carries the source chat identity and locks a session to it', async () => {
+    // 聊天侧「交给工作台」：来源身份成对携带并写进绑定（每个聊天对应一个
+    // 写卡工作会话）；不成对的脏载荷直接拒绝。
+    const badPayload = await handler({ agent: makeAgent('session-workbench-bad'), rawInput: base64Url({ action: 'workbench-open', sourceCharacter: 'X' }) })
+    expect(badPayload.kind).toBe('error')
+    expect((await store.getState()).sessionBindings['session-workbench-bad']).toBeUndefined()
+
+    const agent = makeAgent('session-workbench-source')
+    const result = await handler({ agent, rawInput: base64Url({ action: 'workbench-open', sourceCharacter: CHARACTER, sourceChatId: chatId }) })
+    expect(result.kind).toBe('success')
+    expect((await store.getState()).sessionBindings['session-workbench-source']).toEqual({
+      architecture: 'card-workbench',
+      character: '',
+      chatId: '',
+      sourceCharacter: CHARACTER,
+      sourceChatId: chatId,
+    })
+    // 同身份重复仍幂等：不叠加 marker、不重复 recompose。
+    const recomposeCount = recomposeCalls.length
+    const again = await handler({ agent, rawInput: base64Url({ action: 'workbench-open', sourceCharacter: CHARACTER, sourceChatId: chatId }) })
+    expect(again.kind).toBe('success')
+    expect(agent.session.events.filter((event) => event.type === 'agent-preset/selected')).toHaveLength(1)
+    expect(recomposeCalls).toHaveLength(recomposeCount)
+    // 已绑定会话拒绝换绑另一个来源（自由工作台身份也不行），绑定保持原身份。
+    await expect(handler({ agent, rawInput: base64Url({ action: 'workbench-open' }) })).rejects.toThrow('already bound to another chat')
+    expect((await store.getState()).sessionBindings['session-workbench-source']).toMatchObject({ sourceCharacter: CHARACTER, sourceChatId: chatId })
   })
 
   it('refuses workbench-open on a session that already started real turns', async () => {
