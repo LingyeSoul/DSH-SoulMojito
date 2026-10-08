@@ -18,17 +18,35 @@ function hostPluginMessageSource(session, members) {
 }
 
 // packages/bind/src/host-package.ts
+import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 async function importHostPackage(name2, anchor = process.argv[1]) {
-  if (typeof anchor === "string" && anchor !== "") {
+  for (const candidate of anchorCandidates(anchor)) {
     try {
-      const hostRequire = createRequire(anchor);
+      const hostRequire = createRequire(candidate);
       return await import(pathToFileURL(hostRequire.resolve(name2)).href);
     } catch {
     }
   }
   return await import(name2);
+}
+function anchorCandidates(anchor) {
+  const candidates = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (value) => {
+    if (typeof value !== "string" || value === "" || seen.has(value)) return;
+    seen.add(value);
+    candidates.push(value);
+  };
+  push(anchor);
+  if (typeof anchor === "string" && anchor !== "") {
+    try {
+      push(realpathSync(anchor));
+    } catch {
+    }
+  }
+  return candidates;
 }
 
 // packages/plugin/src/dsh-home.ts
