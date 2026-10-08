@@ -782,6 +782,92 @@ describe('internal Tavern session bridge occupation', () => {
     expect((await store.getState()).activeWorlds).toContain('Carrier Lore')
   })
 
+  it('世界书跟随角色卡激活关闭时切换角色不并入绑定世界书', async () => {
+    const before = await store.getState()
+    try {
+      // 路由白名单可写开关；响应里的 state 反映归一化后的持久值
+      const patchRes = makeResponse()
+      await apiHandler(makeRequest({ worldFollowsCharacter: false }, '/api/dsh-tavern/state'), patchRes)
+      expect(patchRes.statusCode).toBe(200)
+      expect(JSON.parse(patchRes.chunks.join('')).state.worldFollowsCharacter).toBe(false)
+      await store.patchState({ activeWorlds: [] })
+      const res = makeResponse()
+      await apiHandler(makeRequest({ activeCharacter: 'Lore Carrier' }, '/api/dsh-tavern/state'), res)
+      expect(res.statusCode).toBe(200)
+      const state = await store.getState()
+      expect(state.activeCharacter).toBe('Lore Carrier')
+      expect(state.activeWorlds).not.toContain('Carrier Lore')
+      // 开关只关自动并入：同请求/单独请求显式给的世界书列表仍然生效
+      await apiHandler(makeRequest({ activeWorlds: ['Carrier Lore'] }, '/api/dsh-tavern/state'), makeResponse())
+      expect((await store.getState()).activeWorlds).toContain('Carrier Lore')
+    } finally {
+      await store.patchState({
+        worldFollowsCharacter: before.worldFollowsCharacter ?? true,
+        activeCharacter: before.activeCharacter,
+        activeWorlds: before.activeWorlds,
+      })
+    }
+  })
+
+  it('世界书跟随角色卡激活关闭时会话绑定不并入绑定世界书', async () => {
+    const before = await store.getState()
+    try {
+      await store.patchState({ worldFollowsCharacter: false, activeWorlds: [] })
+      const chatId = await store.createChat('Lore Carrier', {
+        user_name: 'unused', character_name: 'unused', chat_metadata: { timedWorldInfo: {} },
+      }, [])
+      const res = makeResponse()
+      await apiHandler(makeRequest({
+        sessionId: 'session-no-follow', character: 'Lore Carrier', chatId,
+      }, '/api/dsh-tavern/binding'), res)
+      expect(res.statusCode).toBe(200)
+      const state = await store.getState()
+      expect(state.activeCharacter).toBe('Lore Carrier')
+      expect(state.activeWorlds).not.toContain('Carrier Lore')
+    } finally {
+      await store.patchState({
+        worldFollowsCharacter: before.worldFollowsCharacter ?? true,
+        activeCharacter: before.activeCharacter,
+        activeWorlds: before.activeWorlds,
+      })
+    }
+  })
+
+  it('世界书跟随角色卡激活关闭时首个导入的角色不自动激活绑定世界书', async () => {
+    const before = await store.getState()
+    try {
+      await store.patchState({ worldFollowsCharacter: false, activeCharacter: undefined, activeWorlds: [] })
+      const card = {
+        spec: 'chara_card_v2',
+        spec_version: '2.0',
+        data: {
+          name: 'No Follow Carrier', description: 'carries lore', personality: '', scenario: '', first_mes: 'hi',
+          mes_example: '', creator_notes: '', system_prompt: '', post_history_instructions: '',
+          alternate_greetings: [], tags: [], creator: '', character_version: '',
+          character_book: {
+            name: 'No Follow Lore',
+            entries: [
+              { id: 0, keys: [], content: 'no follow lore', enabled: true, insertion_order: 100, constant: true },
+            ],
+          },
+          extensions: {},
+        },
+      }
+      const res = makeResponse()
+      await apiHandler(makeRequest({ card }, '/api/dsh-tavern/import/character'), res)
+      expect(res.statusCode).toBe(200)
+      const state = await store.getState()
+      expect(state.activeCharacter).toBe('No Follow Carrier')
+      expect(state.activeWorlds).not.toContain('No Follow Lore')
+    } finally {
+      await store.patchState({
+        worldFollowsCharacter: before.worldFollowsCharacter ?? true,
+        activeCharacter: before.activeCharacter,
+        activeWorlds: before.activeWorlds,
+      })
+    }
+  })
+
   it('workbench-open binds a blank session to the CardWorkbench preset once', async () => {
     const agent = makeAgent('session-workbench')
     const result = await handler({ agent, rawInput: base64Url({ action: 'workbench-open' }) })

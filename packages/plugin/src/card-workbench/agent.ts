@@ -76,6 +76,7 @@ import {
 } from '../../../tavern-store/src/index.js'
 import { normalizeEntry, type CardDataIR, type CharacterCardIR, type LoreEntry } from '../../../tavern-format/src/index.js'
 import { dshHomePath } from '../dsh-home.js'
+import { hostPromptSafe } from '../prompt-safety.js'
 import { applyPlan, getPlan, proposeCardPlan, proposeWorldPlan, type CardPlan, type CardPlanValue, type WorldPlan, type WorldPlanValue } from './plans.js'
 
 export const name = 'dsh-tavern/card-workbench'
@@ -115,7 +116,9 @@ export function apply(ctx: AgentContextLike): void {
   ctx.systemPrompt?.section?.({
     name: 'dsh-tavern:card-workbench-kernel',
     order: -80,
-    text: KERNEL,
+    // 守卫：内核为静态文本，但写入 {{...}}（宿主变量语法）会让装配抛错——
+    // 过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
+    text: hostPromptSafe(KERNEL),
   })
   const tools = createTools()
   for (const tool of tools) {
@@ -246,12 +249,16 @@ const cardSummaryOutput = objectOutput({
   extensionKeys: { type: 'array', items: { type: 'string' } },
   source: { type: 'object', additionalProperties: true }, truncated: { type: 'boolean' },
 }, ['name', 'nickname', 'description', 'personality', 'scenario', 'firstMes', 'creatorNotes', 'mesExample', 'systemPrompt', 'postHistoryInstructions', 'creator', 'characterVersion', 'tags', 'alternateGreetingsCount', 'alternateGreetingsPreviews', 'fullValues', 'persona', 'fieldLengths', 'extensionKeys', 'source', 'truncated'])
+// planId 执行路径的回执字段（planId/planStatus）只在该路径出现，必须声明为可选——
+// 宿主按 output.schema（additionalProperties:false）校验工具返回，漏声明即整次调用失败。
 const cardPutOutput = objectOutput({
   character: { type: 'string' }, renamedFrom: { type: 'string' },
+  planId: { type: 'string', description: 'Present when a recorded plan was applied: its id.' },
+  planStatus: { type: 'string', description: 'Present when a recorded plan was applied: the plan status after execution.' },
   changes: { type: 'array', items: { type: 'object', additionalProperties: true } },
   fieldLengths: { type: 'object', additionalProperties: true },
   source: { type: 'object', additionalProperties: true },
-}, ['renamedFrom'])
+}, ['renamedFrom', 'planId', 'planStatus'])
 const cardRestoreOutput = objectOutput({
   character: { type: 'string' }, fieldLengths: { type: 'object', additionalProperties: true },
   source: { type: 'object', additionalProperties: true },
@@ -279,15 +286,19 @@ const worldSummaryOutput = objectOutput({
 }, ['missingUids'])
 const worldPutOutput = objectOutput({
   world: { type: 'string' }, entryCount: { type: 'number' }, nextUid: { type: 'number' },
+  planId: { type: 'string', description: 'Present when a recorded plan was applied: its id.' },
+  planStatus: { type: 'string', description: 'Present when a recorded plan was applied: the plan status after execution.' },
   entries: { type: 'array', items: { type: 'object', additionalProperties: true } },
-})
+}, ['planId', 'planStatus'])
 const worldListOutput = objectOutput({
   count: { type: 'number' },
   worlds: { type: 'array', items: { type: 'object', additionalProperties: true } },
 })
 const worldCreateOutput = objectOutput({
   created: { type: 'boolean' }, world: { type: 'string' }, entryCount: { type: 'number' }, nextUid: { type: 'number' },
-})
+  planId: { type: 'string', description: 'Present when a recorded plan was applied: its id.' },
+  planStatus: { type: 'string', description: 'Present when a recorded plan was applied: the plan status after execution.' },
+}, ['planId', 'planStatus'])
 const worldDeleteOutput = objectOutput({
   deleted: { type: 'boolean' }, world: { type: 'string' },
   wasActive: { type: 'boolean', description: 'True when the book was in the session activeWorlds list and has been removed from it.' },

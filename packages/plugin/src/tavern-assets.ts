@@ -15,13 +15,16 @@ const AGENT_TAVERN_PRELOAD_MAX_CHARS = 32_000
 
 export async function collectWorldInfoBooks(
   db: Pick<TavernStore, 'getWorld'>,
-  state: Pick<TavernState, 'activeWorlds'>,
+  state: Pick<TavernState, 'activeWorlds' | 'worldFollowsCharacter'>,
   characterName: string,
   character: CharacterAsset,
 ): Promise<Lorebook[]> {
   const worldNames = new Set(state.activeWorlds)
+  // 世界书跟随角色卡激活（默认开启）：绑定的世界书随角色注入；关闭后仅生效
+  // activeWorlds 显式激活的世界书，卡内嵌书兜底一并关闭。
+  const follow = state.worldFollowsCharacter !== false
   const linkedWorld = character.card.data.extensions['world']
-  const linkedName = typeof linkedWorld === 'string' && linkedWorld.trim() !== '' ? linkedWorld.trim() : undefined
+  const linkedName = follow && typeof linkedWorld === 'string' && linkedWorld.trim() !== '' ? linkedWorld.trim() : undefined
   if (linkedName !== undefined) worldNames.add(linkedName)
 
   const books: Lorebook[] = []
@@ -35,7 +38,7 @@ export async function collectWorldInfoBooks(
   }
 
   // 卡内嵌书只在链接世界缺失（未导入/未物化）时兜底，避免与已导入的世界书重复激活。
-  const characterBook = character.card.data.characterBook
+  const characterBook = follow ? character.card.data.characterBook : undefined
   if (characterBook && !linkedImported) {
     const embedded = parseCharacterBook(characterBook)
     books.unshift({
@@ -76,7 +79,7 @@ export function collectRegexScripts(
 /** Build the one-time, model-facing AgentTavern initialization context. */
 export async function buildAgentTavernPreloadSnapshot(
   db: Pick<TavernStore, 'getWorld'>,
-  state: Pick<TavernState, 'activeWorlds'>,
+  state: Pick<TavernState, 'activeWorlds' | 'worldFollowsCharacter'>,
   characterName: string,
   character: CharacterAsset,
   expand: (text: string) => string = (text) => text,

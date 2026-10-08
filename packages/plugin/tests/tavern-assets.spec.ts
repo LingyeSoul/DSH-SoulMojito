@@ -75,6 +75,26 @@ describe('collectWorldInfoBooks', () => {
     const books = await booksFor({}, ['Active Lore'])
     expect(books.map((book) => book.name)).toEqual([`${CHARACTER}:embedded`, 'Active Lore'])
   })
+
+  it('worldFollowsCharacter 关闭时链接世界与卡内嵌书都不注入', async () => {
+    const books = await collectWorldInfoBooks(
+      store,
+      { activeWorlds: ['Active Lore'], worldFollowsCharacter: false },
+      CHARACTER,
+      { card: characterCard({ world: 'Linked Lore' }) },
+    )
+    expect(books.map((book) => book.name)).toEqual(['Active Lore'])
+  })
+
+  it('worldFollowsCharacter 关闭时无链接卡的卡内嵌书同样不注入', async () => {
+    const books = await collectWorldInfoBooks(
+      store,
+      { activeWorlds: [], worldFollowsCharacter: false },
+      CHARACTER,
+      { card: characterCard({}) },
+    )
+    expect(books).toEqual([])
+  })
 })
 
 describe('collectRegexScripts', () => {

@@ -326,7 +326,7 @@ export function statusTemplateOf(card: CharacterCardIR): string | undefined {
 
 export interface MvuStatusRenderInput {
   db: Pick<TavernStore, 'getWorld'>
-  state: Pick<TavernState, 'activeWorlds' | 'activePersona' | 'scriptGlobals'>
+  state: Pick<TavernState, 'activeWorlds' | 'activePersona' | 'scriptGlobals' | 'worldFollowsCharacter'>
   characterName: string
   character: { card: CharacterCardIR }
   chat: ChatLogIR
@@ -365,7 +365,7 @@ export async function renderMvuStatusTemplate(input: MvuStatusRenderInput): Prom
 /* ------------------------------ 结算重试 ------------------------------ */
 
 export interface MvuRetryOptions {
-  state: Pick<TavernState, 'activePersona' | 'activeWorlds' | 'scriptGlobals' | 'sessionBindings'>
+  state: Pick<TavernState, 'activePersona' | 'activeWorlds' | 'scriptGlobals' | 'sessionBindings' | 'worldFollowsCharacter'>
   characterName: string
   chatId: string
   snapshot: ChatSnapshot

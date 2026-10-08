@@ -109,6 +109,12 @@ export interface TavernState {
   agentTavernPreloadAssets: boolean
   /** 允许 AgentTavern 工具写入 global 作用域的记忆/变量；默认关闭。 */
   agentTavernAllowGlobalWrites: boolean
+  /**
+   * 世界书跟随角色卡激活（默认开启）：切换/导入/会话绑定角色时自动并入其绑定的
+   * 世界书（extensions.world），生成时也始终注入该书与卡内嵌书兜底；关闭后角色
+   * 绑定的世界书完全由 activeWorlds 显式控制，不再随角色注入。
+   */
+  worldFollowsCharacter?: boolean
   /** DSH session 到模型选择的持久映射；随 bindings/prune 一同清理。 */
   modelSelections: Record<string, TavernModelSelection>
   /** 每聊天元数据（最后激活时间、swipe 指针等自由袋） */
@@ -174,6 +180,7 @@ const DEFAULT_STATE: TavernState = {
   defaultContextMode: 'dsh-native',
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  worldFollowsCharacter: true,
   modelSelections: {},
   chats: {},
   regexScripts: [],
@@ -735,6 +742,7 @@ export class TavernStore {
       defaultContextMode: parsed.defaultContextMode === 'agent-managed' ? 'agent-managed' : 'dsh-native',
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],

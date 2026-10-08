@@ -23,6 +23,7 @@ import {
   type SceneCompletion,
   type WritingUnit,
 } from '../../../tavern-store/src/index.js'
+import { hostPromptSafe } from '../prompt-safety.js'
 import {
   DEDUCE_MAX_ROLES,
   DEDUCE_MAX_ROUNDS,
@@ -87,7 +88,9 @@ export function apply(ctx: AgentContextLike): void {
   ctx.systemPrompt?.section?.({
     name: 'dsh-tavern:novel-kernel',
     order: -80,
-    text: KERNEL,
+    // 守卫：内核为静态文本，但写入 {{...}}（宿主变量语法）会让装配抛错——
+    // 过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
+    text: hostPromptSafe(KERNEL),
   })
   const tools = createTools()
   for (const tool of tools) {

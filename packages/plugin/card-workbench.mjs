@@ -1825,6 +1825,7 @@ var DEFAULT_STATE = {
   defaultContextMode: "dsh-native",
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  worldFollowsCharacter: true,
   modelSelections: {},
   chats: {},
   regexScripts: [],
@@ -2298,6 +2299,7 @@ var TavernStore = class _TavernStore {
       defaultContextMode: parsed.defaultContextMode === "agent-managed" ? "agent-managed" : "dsh-native",
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
@@ -2721,6 +2723,14 @@ function dshHomePath(...segments) {
   return join4(resolve(configured || join4(homedir(), ".dsh")), ...segments);
 }
 
+// packages/tavern-macros/src/engine.ts
+var TRIM = Symbol("trim");
+
+// packages/plugin/src/prompt-safety.ts
+function hostPromptSafe(text, expand = (value) => value) {
+  return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
+}
+
 // packages/plugin/src/card-workbench/plans.ts
 import { promises as fs4 } from "node:fs";
 import * as path4 from "node:path";
@@ -2997,7 +3007,9 @@ function apply(ctx) {
   ctx.systemPrompt?.section?.({
     name: "dsh-tavern:card-workbench-kernel",
     order: -80,
-    text: KERNEL
+    // 守卫：内核为静态文本，但写入 {{...}}（宿主变量语法）会让装配抛错——
+    // 过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
+    text: hostPromptSafe(KERNEL)
   });
   const tools = createTools();
   for (const tool2 of tools) {
@@ -3082,10 +3094,12 @@ var cardSummaryOutput = objectOutput({
 var cardPutOutput = objectOutput({
   character: { type: "string" },
   renamedFrom: { type: "string" },
+  planId: { type: "string", description: "Present when a recorded plan was applied: its id." },
+  planStatus: { type: "string", description: "Present when a recorded plan was applied: the plan status after execution." },
   changes: { type: "array", items: { type: "object", additionalProperties: true } },
   fieldLengths: { type: "object", additionalProperties: true },
   source: { type: "object", additionalProperties: true }
-}, ["renamedFrom"]);
+}, ["renamedFrom", "planId", "planStatus"]);
 var cardRestoreOutput = objectOutput({
   character: { type: "string" },
   fieldLengths: { type: "object", additionalProperties: true },
@@ -3128,8 +3142,10 @@ var worldPutOutput = objectOutput({
   world: { type: "string" },
   entryCount: { type: "number" },
   nextUid: { type: "number" },
+  planId: { type: "string", description: "Present when a recorded plan was applied: its id." },
+  planStatus: { type: "string", description: "Present when a recorded plan was applied: the plan status after execution." },
   entries: { type: "array", items: { type: "object", additionalProperties: true } }
-});
+}, ["planId", "planStatus"]);
 var worldListOutput = objectOutput({
   count: { type: "number" },
   worlds: { type: "array", items: { type: "object", additionalProperties: true } }
@@ -3138,8 +3154,10 @@ var worldCreateOutput = objectOutput({
   created: { type: "boolean" },
   world: { type: "string" },
   entryCount: { type: "number" },
-  nextUid: { type: "number" }
-});
+  nextUid: { type: "number" },
+  planId: { type: "string", description: "Present when a recorded plan was applied: its id." },
+  planStatus: { type: "string", description: "Present when a recorded plan was applied: the plan status after execution." }
+}, ["planId", "planStatus"]);
 var worldDeleteOutput = objectOutput({
   deleted: { type: "boolean" },
   world: { type: "string" },

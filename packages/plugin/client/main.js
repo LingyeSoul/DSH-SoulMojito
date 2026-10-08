@@ -195,6 +195,7 @@ window.__ModuleLoader__.load({
       'settings.contextManagedUnavailable': 'Agent memory is unavailable: {reason}',
       'settings.preloadAssets': 'Preload character and constant World Info when a new AgentTavern session starts',
       'settings.allowGlobalWrites': 'Allow AgentTavern tools to write memories and variables in the global scope',
+      'settings.worldFollowsCharacter': 'World books follow character card activation',
       'settings.worldsEmpty': 'No world books imported',
       'settings.import': 'Import',
       'settings.importCharacter': 'Character card',
@@ -700,6 +701,7 @@ window.__ModuleLoader__.load({
       'settings.contextManagedUnavailable': 'Agent 记忆不可用：{reason}',
       'settings.preloadAssets': '新 AgentTavern 会话开始时预载角色信息和常驻世界书条目',
       'settings.allowGlobalWrites': '允许 AgentTavern 工具写入 global 作用域的记忆和变量',
+      'settings.worldFollowsCharacter': '世界书跟随角色卡激活',
       'settings.worldsEmpty': '尚未导入世界书',
       'settings.import': '导入',
       'settings.importCharacter': '角色卡',
@@ -1200,7 +1202,7 @@ window.__ModuleLoader__.load({
       storeRevision: '',
       state: {
         activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
-        agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
+        agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, worldFollowsCharacter: true, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
       },
       characters: [],
       worlds: [],
@@ -5525,6 +5527,13 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dt-imports' },
             h(UploadButton, { kind: 'world', label: t('settings.importWorld'), accept: '.json,application/json' }))),
         h('section', { className: 'dt-settings-band' },
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: state.bootstrap.state.worldFollowsCharacter !== false,
+              onChange: (event) => run(patchState({ worldFollowsCharacter: event.target.checked })),
+            }),
+            h('span', null, t('settings.worldFollowsCharacter'))),
           worlds.length === 0
             ? h('p', { className: 'dt-muted' }, t('settings.worldsEmpty'))
             : h('div', { className: 'dt-world-list' }, worlds.map((name) => h('div', { key: name, className: 'dt-world-row' },

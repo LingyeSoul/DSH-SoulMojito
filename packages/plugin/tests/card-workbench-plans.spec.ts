@@ -21,7 +21,45 @@ const OTHER_CHARACTER = 'Bystander Card'
 interface RegisteredTool {
   name: string
   parameters: { properties: Record<string, unknown> }
+  output: { schema: Record<string, unknown> }
   execute(args: Record<string, unknown>, exec?: { signal?: AbortSignal }): Promise<any>
+}
+
+/** 最小 JSON Schema 校验器：复现宿主对工具返回值的校验面（object/array/基础类型 +
+ * required + additionalProperties:false）。工具返回多带一个未声明字段，宿主会整次
+ * 拒绝（"not a declared property"）——这里让该类 schema 漂移在测试期先红。 */
+function schemaViolations(value: unknown, schema: unknown, path = 'value'): string[] {
+  if (schema === true || schema === undefined || schema === null) return []
+  if (typeof schema !== 'object') return []
+  const declared = schema as Record<string, unknown>
+  const types = Array.isArray(declared.type) ? declared.type as string[] : declared.type !== undefined ? [declared.type as string] : []
+  const actual = Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value
+  if (types.length > 0 && !types.includes(actual)) return [`${path}: expected ${types.join('|')}, got ${actual}`]
+  if (actual === 'object' && declared.properties !== undefined) {
+    const violations: string[] = []
+    const properties = declared.properties as Record<string, unknown>
+    const record = value as Record<string, unknown>
+    for (const key of (declared.required as string[] | undefined) ?? []) {
+      if (!(key in record)) violations.push(`${path}.${key}: required property missing`)
+    }
+    if (declared.additionalProperties === false) {
+      for (const key of Object.keys(record)) {
+        if (!(key in properties)) violations.push(`${path}.${key}: not a declared property`)
+      }
+    }
+    for (const [key, child] of Object.entries(properties)) {
+      if (record[key] !== undefined) violations.push(...schemaViolations(record[key], child, `${path}.${key}`))
+    }
+    return violations
+  }
+  if (actual === 'array' && declared.items !== undefined) {
+    const violations: string[] = []
+    ;(value as unknown[]).forEach((item, index) => {
+      violations.push(...schemaViolations(item, declared.items, `${path}[${index}]`))
+    })
+    return violations
+  }
+  return []
 }
 
 function makeRequest(body: unknown, url: string, method: 'POST' | 'PUT' | 'DELETE' = 'POST') {
@@ -937,6 +975,36 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
     await expect(tools.get('world_create')!.execute({ name: 'Late Lore', planId: late.planId, confirmed: true })).rejects.toThrow('stale')
     expect((await getPlan(tavern, late.planId))!.status).toBe('pending')
     expect((await store.getWorld('Late Lore'))!.entries[0].content).toBe('occupied')
+  })
+
+  it('plan-path tool returns satisfy their declared output schemas (additionalProperties: false)', async () => {
+    // 回归：world_put/card_put/world_create 带 planId 执行时返回 planId/planStatus，
+    // 三个 output schema 漏声明会让宿主整次拒绝工具调用（2026-10-08 线上事故）。
+    const cardPlan = await tools.get('card_plan_propose')!.execute({
+      character: CHARACTER, title: 'schema receipt check',
+      changes: [{ field: 'personality', newValue: 'Schema-checked.' }],
+    })
+    const cardApplied = await tools.get('card_put')!.execute({ character: CHARACTER, planId: cardPlan.planId, confirmed: true })
+    expect(schemaViolations(cardApplied, tools.get('card_put')!.output.schema)).toEqual([])
+    // 直写路径不带回执字段：planId/planStatus 只在 plan 路径出现（可选声明）
+    const cardDirect = await tools.get('card_put')!.execute({ character: CHARACTER, confirmed: true, changes: [{ field: 'personality', value: 'Direct again.' }] })
+    expect(schemaViolations(cardDirect, tools.get('card_put')!.output.schema)).toEqual([])
+
+    const editPlan = await tools.get('world_plan_propose')!.execute({
+      world: 'Plan Lore', title: 'schema receipt check',
+      entries: [{ uid: 1, content: 'Schema-checked.' }],
+    })
+    const worldApplied = await tools.get('world_put')!.execute({ world: 'Plan Lore', planId: editPlan.planId, confirmed: true })
+    expect(schemaViolations(worldApplied, tools.get('world_put')!.output.schema)).toEqual([])
+    const worldDirect = await tools.get('world_put')!.execute({ world: 'Plan Lore', confirmed: true, entries: [{ uid: 1, content: 'Direct again.' }] })
+    expect(schemaViolations(worldDirect, tools.get('world_put')!.output.schema)).toEqual([])
+
+    const createPlan = await tools.get('world_plan_propose')!.execute({
+      world: 'Schema Lore', create: true, title: 'schema receipt check',
+      entries: [{ key: ['schema'], content: 'Checked.' }],
+    })
+    const worldCreated = await tools.get('world_create')!.execute({ name: 'Schema Lore', planId: createPlan.planId, confirmed: true })
+    expect(schemaViolations(worldCreated, tools.get('world_create')!.output.schema)).toEqual([])
   })
 
   it('panel routes list world plans and dispatch decisions by kind', async () => {

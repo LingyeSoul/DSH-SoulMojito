@@ -4060,6 +4060,7 @@ var DEFAULT_STATE = {
   defaultContextMode: "dsh-native",
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  worldFollowsCharacter: true,
   modelSelections: {},
   chats: {},
   regexScripts: [],
@@ -4533,6 +4534,7 @@ var TavernStore = class _TavernStore {
       defaultContextMode: parsed.defaultContextMode === "agent-managed" ? "agent-managed" : "dsh-native",
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
@@ -10689,8 +10691,9 @@ function createTemplateRuntime(options) {
 var AGENT_TAVERN_PRELOAD_MAX_CHARS = 32e3;
 async function collectWorldInfoBooks(db, state, characterName, character) {
   const worldNames = new Set(state.activeWorlds);
+  const follow = state.worldFollowsCharacter !== false;
   const linkedWorld = character.card.data.extensions["world"];
-  const linkedName = typeof linkedWorld === "string" && linkedWorld.trim() !== "" ? linkedWorld.trim() : void 0;
+  const linkedName = follow && typeof linkedWorld === "string" && linkedWorld.trim() !== "" ? linkedWorld.trim() : void 0;
   if (linkedName !== void 0) worldNames.add(linkedName);
   const books = [];
   let linkedImported = false;
@@ -10701,7 +10704,7 @@ async function collectWorldInfoBooks(db, state, characterName, character) {
       if (worldName === linkedName) linkedImported = true;
     }
   }
-  const characterBook = character.card.data.characterBook;
+  const characterBook = follow ? character.card.data.characterBook : void 0;
   if (characterBook && !linkedImported) {
     const embedded = parseCharacterBook(characterBook);
     books.unshift({
@@ -12054,6 +12057,11 @@ async function runCandidateGeneration(ctx, db, options) {
   return { items, generatedAt, revision };
 }
 
+// packages/plugin/src/prompt-safety.ts
+function hostPromptSafe(text, expand = (value) => value) {
+  return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
+}
+
 // packages/plugin/src/dsh-home.ts
 import { homedir as homedir2 } from "node:os";
 import { join as join10, resolve as resolve2 } from "node:path";
@@ -13370,10 +13378,12 @@ var cardSummaryOutput = objectOutput({
 var cardPutOutput = objectOutput({
   character: { type: "string" },
   renamedFrom: { type: "string" },
+  planId: { type: "string", description: "Present when a recorded plan was applied: its id." },
+  planStatus: { type: "string", description: "Present when a recorded plan was applied: the plan status after execution." },
   changes: { type: "array", items: { type: "object", additionalProperties: true } },
   fieldLengths: { type: "object", additionalProperties: true },
   source: { type: "object", additionalProperties: true }
-}, ["renamedFrom"]);
+}, ["renamedFrom", "planId", "planStatus"]);
 var cardRestoreOutput = objectOutput({
   character: { type: "string" },
   fieldLengths: { type: "object", additionalProperties: true },
@@ -13416,8 +13426,10 @@ var worldPutOutput = objectOutput({
   world: { type: "string" },
   entryCount: { type: "number" },
   nextUid: { type: "number" },
+  planId: { type: "string", description: "Present when a recorded plan was applied: its id." },
+  planStatus: { type: "string", description: "Present when a recorded plan was applied: the plan status after execution." },
   entries: { type: "array", items: { type: "object", additionalProperties: true } }
-});
+}, ["planId", "planStatus"]);
 var worldListOutput = objectOutput({
   count: { type: "number" },
   worlds: { type: "array", items: { type: "object", additionalProperties: true } }
@@ -13426,8 +13438,10 @@ var worldCreateOutput = objectOutput({
   created: { type: "boolean" },
   world: { type: "string" },
   entryCount: { type: "number" },
-  nextUid: { type: "number" }
-});
+  nextUid: { type: "number" },
+  planId: { type: "string", description: "Present when a recorded plan was applied: its id." },
+  planStatus: { type: "string", description: "Present when a recorded plan was applied: the plan status after execution." }
+}, ["planId", "planStatus"]);
 var worldDeleteOutput = objectOutput({
   deleted: { type: "boolean" },
   world: { type: "string" },
@@ -14488,18 +14502,19 @@ async function handleApi(ctx, req, res) {
     if (body.defaultContextMode === "agent-managed") {
       await assertAgentTavernAvailable("agent-tavern", "agent-managed");
     } else if (body.defaultArchitecture === "agent-tavern") {
-      const current = await db.getState();
+      const current2 = await db.getState();
       await assertAgentTavernAvailable(
         "agent-tavern",
-        body.defaultContextMode === "dsh-native" ? "dsh-native" : current.defaultContextMode
+        body.defaultContextMode === "dsh-native" ? "dsh-native" : current2.defaultContextMode
       );
     }
-    const activateWorlds = typeof body.activeCharacter === "string" && body.activeCharacter !== "" ? await characterLinkedWorlds(db, body.activeCharacter) : [];
+    const current = await db.getState();
+    const activateWorlds = current.worldFollowsCharacter !== false && typeof body.activeCharacter === "string" && body.activeCharacter !== "" ? await characterLinkedWorlds(db, body.activeCharacter) : [];
     const patch = {
       ...typeof body.activeCharacter === "string" || body.activeCharacter === null ? { activeCharacter: body.activeCharacter || void 0 } : {},
       ...Array.isArray(body.activeWorlds) || activateWorlds.length > 0 ? {
         activeWorlds: [.../* @__PURE__ */ new Set([
-          ...Array.isArray(body.activeWorlds) ? body.activeWorlds.filter((x) => typeof x === "string") : (await db.getState()).activeWorlds,
+          ...Array.isArray(body.activeWorlds) ? body.activeWorlds.filter((x) => typeof x === "string") : current.activeWorlds,
           ...activateWorlds
         ])]
       } : {},
@@ -14510,6 +14525,7 @@ async function handleApi(ctx, req, res) {
       ...body.defaultContextMode === "dsh-native" || body.defaultContextMode === "agent-managed" ? { defaultContextMode: body.defaultContextMode } : {},
       ...typeof body.agentTavernPreloadAssets === "boolean" ? { agentTavernPreloadAssets: body.agentTavernPreloadAssets } : {},
       ...typeof body.agentTavernAllowGlobalWrites === "boolean" ? { agentTavernAllowGlobalWrites: body.agentTavernAllowGlobalWrites } : {},
+      ...typeof body.worldFollowsCharacter === "boolean" ? { worldFollowsCharacter: body.worldFollowsCharacter } : {},
       ...body.compaction !== void 0 ? { compaction: compactionOverrideOf(body.compaction) } : {}
     };
     const state = await db.patchState(patch);
@@ -14531,7 +14547,7 @@ async function handleApi(ctx, req, res) {
     }
     const current = await db.getState();
     if (!current.activeCharacter) {
-      const linked = await characterLinkedWorlds(db, result.card.data.name);
+      const linked = current.worldFollowsCharacter !== false ? await characterLinkedWorlds(db, result.card.data.name) : [];
       await db.patchState({
         activeCharacter: result.card.data.name,
         ...linked.length > 0 ? { activeWorlds: [.../* @__PURE__ */ new Set([...current.activeWorlds, ...linked])] } : {}
@@ -16207,18 +16223,20 @@ async function refreshActivePrompt() {
       return;
     }
     const d = found.card.data;
-    activeAgentPrompt = [
+    const expand = tavernMacroExpand(state, state.activeCharacter, found);
+    activeAgentPrompt = hostPromptSafe([
       `Active roleplay character: ${d.nickname || d.name}`,
       d.description,
       d.personality ? `Personality: ${d.personality}` : "",
       d.scenario ? `Scenario: ${d.scenario}` : ""
-    ].filter(Boolean).join("\n\n");
+    ].filter(Boolean).join("\n\n"), expand);
   } catch {
     activeAgentPrompt = "";
   }
 }
 async function bindSession(db, sessionId, character, chatId, group2 = false, architecture = "st", contextMode = "dsh-native", initializationPending = false) {
-  const linkedWorlds = group2 ? [] : await characterLinkedWorlds(db, character);
+  const follow = group2 ? false : (await db.getState()).worldFollowsCharacter !== false;
+  const linkedWorlds = follow ? await characterLinkedWorlds(db, character) : [];
   return db.updateState((state) => {
     const existing = state.sessionBindings[sessionId];
     const sameAgentBinding = existing?.architecture === "agent-tavern" && existing.character === character && existing.chatId === chatId;
@@ -16519,7 +16537,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.1".trim() : "";
-  const commit = true ? normalizeCommit("351698a") : void 0;
+  const commit = true ? normalizeCommit("fdbfd2c") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

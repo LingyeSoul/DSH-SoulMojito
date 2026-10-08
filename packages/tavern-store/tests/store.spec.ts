@@ -324,7 +324,8 @@ describe('TavernStore', () => {
   it('状态：默认值 → patch 持久化', withStore(async (store) => {
     expect(await store.getState()).toEqual({
       activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
-      agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
+      agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, worldFollowsCharacter: true,
+      modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
     })
     await store.patchState({
       activeCharacter: 'ExampleCard',
@@ -335,6 +336,17 @@ describe('TavernStore', () => {
     expect(state.activeCharacter).toBe('ExampleCard')
     expect(state.activeWorlds).toEqual(['ExampleWorld'])
     expect(state.sessionBindings.session_1).toEqual({ architecture: 'st', character: 'ExampleCard', chatId: 'chat.jsonl' })
+  }))
+
+  it('状态：世界书跟随角色卡开关默认开启，旧 state 文件缺字段补默认、显式 false 保留', withStore(async (store, dir) => {
+    expect((await store.getState()).worldFollowsCharacter).toBe(true)
+    // 旧版 state.json 没有该字段：归一化补默认 true，其余字段不受影响
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({ activeWorlds: ['ExampleWorld'] }))
+    expect((await store.getState()).worldFollowsCharacter).toBe(true)
+    expect((await store.getState()).activeWorlds).toEqual(['ExampleWorld'])
+    // 显式关闭持久化后重开仍保留
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({ worldFollowsCharacter: false }))
+    expect((await store.getState()).worldFollowsCharacter).toBe(false)
   }))
 
   it('状态：模型选择按 session 存取并随旧 state 文件补默认', withStore(async (store) => {

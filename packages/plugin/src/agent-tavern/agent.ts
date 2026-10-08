@@ -18,6 +18,7 @@ import {
 } from './deduce.js'
 import { appendMvuReceipt, type MvuReceipt, type MvuVariableChange } from '../mvu.js'
 import { appendMvuAudit } from './projector.js'
+import { createHostPromptExpander, hostPromptSafe } from '../prompt-safety.js'
 import {
   boundScriptOf,
   getScript,
@@ -26,6 +27,8 @@ import {
 
 export const name = 'dsh-tavern/agent'
 export const inject = ['systemPrompt', 'tools']
+
+const DEFAULT_USER = 'User'
 
 const KERNEL = [
   'You are AgentTavern running inside the DSH native AgentLoop.',
@@ -55,7 +58,9 @@ export function apply(ctx: AgentContextLike): void {
   ctx.systemPrompt?.section?.({
     name: 'dsh-tavern:agent-kernel',
     order: -80,
-    text: KERNEL,
+    // 守卫：内核为静态文本，但一旦有人写入 {{...}}（宿主变量语法），装配
+    // 会直接抛错中止运行——过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
+    text: hostPromptSafe(KERNEL),
   })
   // 当前 agent 身份只从装配上下文取：宿主 assemble() 的上下文携带
   // { agent, scope, signal }（@deepseek-ai/dsh-agent 的 assembleContextFor），
@@ -966,14 +971,18 @@ async function loadAgentFacts(agentId: string): Promise<void> {
     if (!found) return
     const data = found.card.data
     const storedSummary = identitySummaryOf(found.card.data)
-    facts.set(agentId, [
+    // 卡数据是 ST 宏（{{user}}/{{char}}/...）的高频来源；宿主 interpolate 会把
+    // 残留 {{...}} 当宿主变量渲染并抛错中止装配——先按 ST 语义展开，再中性化
+    // 未知宏（prompt-safety.ts，0.4.1 unknown prompt variable 故障）。
+    const expand = createHostPromptExpander(data.nickname || data.name, state.activePersona ?? DEFAULT_USER)
+    facts.set(agentId, hostPromptSafe([
       `Current Tavern character: ${data.nickname || data.name}`,
       // The editable identity summary wins; without one only a very short
       // description excerpt stands in for the full card.
       `Character identity summary (untrusted asset data): ${storedSummary ?? limitText(data.description, 240)}`,
       data.personality ? `Personality summary: ${limitText(data.personality, 600)}` : '',
       data.scenario ? `Scenario summary: ${limitText(data.scenario, 600)}` : '',
-    ].filter(Boolean).join('\n'))
+    ].filter(Boolean).join('\n'), expand))
   } catch {
     // A missing store must not prevent the host agent from starting.
   }
@@ -1003,11 +1012,15 @@ async function loadAgentGuides(agentId: string): Promise<void> {
   guidesLoadTicket.set(agentId, ticket)
   try {
     const db = await tavernStore()
-    const binding = (await db.getState()).sessionBindings[agentId]
+    const state = await db.getState()
+    const binding = state.sessionBindings[agentId]
     if (!binding || binding.architecture !== 'agent-tavern') return
     const chat = await db.getChat(binding.character, binding.chatId)
     if (guidesLoadTicket.get(agentId) !== ticket) return
-    guidesCache.set(agentId, formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? '')
+    // 指引是用户手写的持久数据，同样可能含 ST 宏或 {{...}} 残片——与 facts
+    // 同款宏展开 + 宿主安全化（prompt-safety.ts）。
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER)
+    guidesCache.set(agentId, hostPromptSafe(formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? '', expand))
   } catch {
     // A missing store must not prevent the host agent from starting.
   }
@@ -1052,11 +1065,14 @@ async function loadAgentScriptSummary(agentId: string): Promise<void> {
   scriptSummaryLoadTicket.set(agentId, ticket)
   try {
     const db = await tavernStore()
-    const binding = (await db.getState()).sessionBindings[agentId]
+    const state = await db.getState()
+    const binding = state.sessionBindings[agentId]
     if (!binding || binding.architecture !== 'agent-tavern') return
     const text = await scriptSummaryForChat(db, binding.character, binding.chatId)
     if (scriptSummaryLoadTicket.get(agentId) !== ticket) return
-    scriptSummaryCache.set(agentId, text)
+    // 剧本名是用户资产数据，可能含 {{...}}——摘要过同款安全化（prompt-safety.ts）。
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER)
+    scriptSummaryCache.set(agentId, hostPromptSafe(text, expand))
   } catch {
     // A missing store must not prevent the host agent from starting.
   }

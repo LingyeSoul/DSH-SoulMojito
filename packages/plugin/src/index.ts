@@ -83,6 +83,7 @@ import {
   shouldAdvance,
 } from '../../tavern-store/src/index.js'
 import { formatRewriteBlock, optionalFeedback } from './rewrite.js'
+import { hostPromptSafe } from './prompt-safety.js'
 import { deleteOriginalSnapshot, moveOriginalSnapshot, saveOriginalSnapshot } from '../../tavern-store/src/index.js'
 import { dshHomePath } from './dsh-home.js'
 import { TavernUpdateService, updateChangelog } from './update/service.js'
@@ -929,8 +930,10 @@ async function handleApi(ctx, req, res) {
         body.defaultContextMode === 'dsh-native' ? 'dsh-native' : current.defaultContextMode,
       )
     }
-    // 使用角色时自动激活其绑定的世界书：并入本次 activeWorlds（用户同请求显式给的列表优先保留）
-    const activateWorlds = typeof body.activeCharacter === 'string' && body.activeCharacter !== ''
+    // 使用角色时自动激活其绑定的世界书：并入本次 activeWorlds（用户同请求显式给的列表优先保留）。
+    // worldFollowsCharacter 关闭时不并入，绑定世界书完全由 activeWorlds 显式控制。
+    const current = await db.getState()
+    const activateWorlds = current.worldFollowsCharacter !== false && typeof body.activeCharacter === 'string' && body.activeCharacter !== ''
       ? await characterLinkedWorlds(db, body.activeCharacter)
       : []
     const patch = {
@@ -938,7 +941,7 @@ async function handleApi(ctx, req, res) {
       ...(Array.isArray(body.activeWorlds) || activateWorlds.length > 0
         ? {
             activeWorlds: [...new Set([
-              ...(Array.isArray(body.activeWorlds) ? body.activeWorlds.filter((x) => typeof x === 'string') : (await db.getState()).activeWorlds),
+              ...(Array.isArray(body.activeWorlds) ? body.activeWorlds.filter((x) => typeof x === 'string') : current.activeWorlds),
               ...activateWorlds,
             ])],
           }
@@ -957,6 +960,9 @@ async function handleApi(ctx, req, res) {
         : {}),
       ...(typeof body.agentTavernAllowGlobalWrites === 'boolean'
         ? { agentTavernAllowGlobalWrites: body.agentTavernAllowGlobalWrites }
+        : {}),
+      ...(typeof body.worldFollowsCharacter === 'boolean'
+        ? { worldFollowsCharacter: body.worldFollowsCharacter }
         : {}),
       ...(body.compaction !== undefined ? { compaction: compactionOverrideOf(body.compaction) } : {}),
     }
@@ -982,8 +988,8 @@ async function handleApi(ctx, req, res) {
     }
     const current = await db.getState()
     if (!current.activeCharacter) {
-      // 首个导入的角色成为活跃角色，并自动激活其绑定的世界书
-      const linked = await characterLinkedWorlds(db, result.card.data.name)
+      // 首个导入的角色成为活跃角色，并自动激活其绑定的世界书（worldFollowsCharacter 关闭时不并入）
+      const linked = current.worldFollowsCharacter !== false ? await characterLinkedWorlds(db, result.card.data.name) : []
       await db.patchState({
         activeCharacter: result.card.data.name,
         ...(linked.length > 0 ? { activeWorlds: [...new Set([...current.activeWorlds, ...linked])] } : {}),
@@ -3080,12 +3086,15 @@ async function refreshActivePrompt() {
     const found = await db.getCharacter(state.activeCharacter)
     if (!found) { activeAgentPrompt = ''; return }
     const d = found.card.data
-    activeAgentPrompt = [
+    // 卡字段原文含 ST 宏（{{user}}/{{char}}/...），宿主 interpolate 会把残留
+    // {{...}} 当宿主变量渲染并抛错中止装配——先宏展开再安全化（prompt-safety.ts）。
+    const expand = tavernMacroExpand(state, state.activeCharacter, found)
+    activeAgentPrompt = hostPromptSafe([
       `Active roleplay character: ${d.nickname || d.name}`,
       d.description,
       d.personality ? `Personality: ${d.personality}` : '',
       d.scenario ? `Scenario: ${d.scenario}` : '',
-    ].filter(Boolean).join('\n\n')
+    ].filter(Boolean).join('\n\n'), expand)
   } catch {
     activeAgentPrompt = ''
   }
@@ -3101,8 +3110,10 @@ async function bindSession(
   contextMode = 'dsh-native',
   initializationPending = false,
 ) {
-  // 使用角色（会话绑定）时自动激活其绑定的世界书；群聊无单一角色，不并入
-  const linkedWorlds = group ? [] : await characterLinkedWorlds(db, character)
+  // 使用角色（会话绑定）时自动激活其绑定的世界书；群聊无单一角色，不并入。
+  // worldFollowsCharacter 关闭时不并入，绑定世界书完全由 activeWorlds 显式控制。
+  const follow = group ? false : (await db.getState()).worldFollowsCharacter !== false
+  const linkedWorlds = follow ? await characterLinkedWorlds(db, character) : []
   return db.updateState((state) => {
     const existing = state.sessionBindings[sessionId]
     const sameAgentBinding = existing?.architecture === 'agent-tavern'
