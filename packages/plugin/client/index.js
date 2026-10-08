@@ -3937,6 +3937,40 @@ window.__ModuleLoader__.load({
       return text.length > limit ? `${text.slice(0, limit - 1)}…` : text
     }
 
+    // 原生会话（AgentTavern / 原生 conversation）的生成走宿主 AgentLoop：楼层
+    // 投影、MVU 结算、tavern_script_advance 全在服务端落库，插件本地
+    // chats/revisions 收不到任何信号（saved SSE 只在 ST 链路发）；后台写路径同
+    // 样没有推送通道。MVU 面板 / 剧本进度卡这类「服务端权威」的会话面板因此补
+    // 一条可见性门控的低频轮询（对齐 bootstrap 水位 3s / novel 10s 轮询的既有
+    // 模式）：页面可见期间每 5s 重取，回前台立即补一拍，隐藏期间停发。load 经
+    // latest ref 恒取最新闭包，父级重渲染不重置定时器；错误语义由 load 自理
+    // （瞬时错误保留上次快照，404 才回落空态）。
+    const SESSION_PANEL_POLL_MS = 5000
+
+    function useSessionPanelPoll(load, deps) {
+      const latest = useRef(load)
+      useEffect(() => { latest.current = load })
+      useEffect(() => {
+        let cancelled = false
+        let inFlight = false
+        const tick = () => {
+          if (cancelled || inFlight || document.visibilityState === 'hidden') return
+          inFlight = true
+          void Promise.resolve(latest.current())
+            .catch(() => {})
+            .finally(() => { inFlight = false })
+        }
+        const timer = setInterval(tick, SESSION_PANEL_POLL_MS)
+        const onVisibility = () => { if (document.visibilityState === 'visible') tick() }
+        document.addEventListener('visibilitychange', onVisibility)
+        return () => {
+          cancelled = true
+          clearInterval(timer)
+          document.removeEventListener('visibilitychange', onVisibility)
+        }
+      }, deps)
+    }
+
     function TavernMvuStatus({ sessionId, embedded = false, sidebar = false }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -3967,6 +4001,16 @@ window.__ModuleLoader__.load({
           .catch(() => { if (!cancelled) setStatus(null) })
         return () => { cancelled = true }
       }, [binding?.character, binding?.chatId, revision, messageCount])
+      // 原生会话 / 后台写路径不经过本地 revision：可见期间轮询补齐自动刷新
+      useSessionPanelPoll(() => {
+        if (!binding) return Promise.resolve()
+        return loadMvuStatus(binding.character, binding.chatId)
+          .then((result) => { setStatus(result) })
+          .catch((cause) => {
+            // 404（聊天删除 / 竞态）才回落空态；瞬时错误保留上次快照不打扰
+            if (cause?.status === 404) setStatus(null)
+          })
+      }, [binding?.character, binding?.chatId])
       // 每个聊天最多自动展开一次（对齐 TavernCandidates）；用户手动收起后不再弹开。
       // sidebar 变体没有折叠头（tab chip 就是容器），不参与自动展开。
       useEffect(() => {
@@ -4160,6 +4204,17 @@ window.__ModuleLoader__.load({
           .catch(() => { if (!cancelled) setProgress(null) })
         return () => { cancelled = true }
       }, [binding?.character, binding?.chatId, revision, messageCount, scriptsRevision])
+      // tavern_script_advance 是原生 AgentLoop 的 agent 工具：剧本推进同样
+      // 不经过本地 revision，可见期间轮询补齐自动刷新
+      useSessionPanelPoll(() => {
+        if (!binding) return Promise.resolve()
+        return loadScriptProgress(binding.character, binding.chatId)
+          .then((result) => { setProgress(result) })
+          .catch((cause) => {
+            // 404（解绑 / 聊天缺失）即隐藏本卡；瞬时错误保留上次进度
+            if (cause?.status === 404) setProgress(null)
+          })
+      }, [binding?.character, binding?.chatId])
       if (!binding || !progress) return null
       const total = Number(progress.chunkCount)
       if (!Number.isFinite(total) || total <= 0) return null
