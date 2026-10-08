@@ -6,6 +6,8 @@
 
 第一版主线已经可用：插件复用 DSH 的 LLM 路由、默认模型、密钥管理、Web 容器和插件安装机制，同时在 DSH 原生侧边栏和 conversation 区域提供 Tavern 角色扮演体验。管理入口是独立的 Tavern 面板；设置页保留当前配置的快速切换，不再承载全部资产管理表单。
 
+在此之上，交互面提供持续指引、行动候选与带意见重写；资产面提供 MVU 变量结算回执、卡片工作台（对话改卡 + 确认协议）与剧本游玩（提案 0009-0014，均已实现）。
+
 当前面向 DSH `0.2.0-rc.2` 验证。Fabric 不在第一版运行路径中。
 
 ## 能力
@@ -16,6 +18,9 @@
 - SillyTavern chat JSONL：header、messages、`swipes`、`swipe_id`、`swipe_info`。
 - RP 交互：流式生成、Stop、消息编辑、swipe、regenerate、聊天创建、重命名和确认删除。
 - 消息分支 / bookmark：任意消息一键分支为新聊天，`chat_metadata.bookmark_link` 回链，视图可跳回父聊天。
+- 持续指引（Conversation Guides）：把长期生效的写作/节奏要求（如「多写心理活动」「好感度涨得慢一点」）保存为 Guide，本局正文、行动候选与带意见重写自动参考；上限 8 条、单条 ≤500 字符，面板增删、删除即时生效，正文中不回显。AgentTavern 会话以 systemPrompt context 段注入。详见 [`docs/proposals/0009-conversation-guides.md`](docs/proposals/0009-conversation-guides.md)。
+- 行动候选（ST 聊天）：一键生成 3-6 个「人物行动 / 场景变化」候选，点击填入输入框（可改再发），或携带反馈重新生成；候选是建议不是指令，没有自动执行路径。详见 [`docs/proposals/0010-turn-candidates.md`](docs/proposals/0010-turn-candidates.md)。
+- 带意见重写（ST 聊天）：对当前轮回复附一句修改意见（可留空等价普通 regenerate）后重写，结果作为新 swipe 追加，可左右切换比较；意见只存在于该次请求与 swipe 元数据，不落盘为聊天楼层。详见 [`docs/proposals/0011-rewrite-with-feedback.md`](docs/proposals/0011-rewrite-with-feedback.md)。
 - Persona 管理：PNG 导入（内嵌描述提取）、头像、增删改、激活选择与 `position/depth/role` 注入。
 - 群聊：成员管理、自然（talkativeness 加权）/列表激活策略、成员点触发言、`group_only_greetings`、group nudge 和 `{{group}}` 宏。
 - 正则脚本：ST regex 扩展形态导入，全局 + 卡级合并，`USER_INPUT/AI_OUTPUT/WORLD_INFO/REASONING` placement、`minDepth/maxDepth`、`substituteRegex`、`trimStrings`。
@@ -26,6 +31,9 @@
 - 可选的普通 Agent 人格注入，默认关闭。
 - AgentTavern 原生模式：单角色新聊天默认复用 DSH AgentLoop、原生 composer、Stop、错误处理和统计；角色、世界书、场景、记忆和变量通过会话级工具按需读取，原生事件幂等投影回 Tavern JSONL。可选开关会在新 AgentTavern 会话初始化时一次性预载角色信息和常驻世界书条目，默认关闭且不追溯修改已有会话。现有 ST 兼容架构继续保留。
 - AgentTavern managed 模式：保持关闭。该门禁的宿主能力审计基于 DSH `0.1.0-rc.6`（宿主尚未提供 `agent/context` 历史投影和 projection-aware compaction）；`0.2.0-rc.2` 已确认仍未提供该 seam。插件不会把普通 compaction 冒充为主动遗忘，也不会静默回退到伪 managed 模式。详见 [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)。
+- MVU 变量结算：变量由后台按卡内规则做**确定性脚本结算**（与 flizzywine 的后台 LLM 结算是不同的架构选择，日常结算零额外模型开销），正文不再夹带状态栏。每轮产出变量回执（每项变更的前后值、原因、失败项），失败项可单独重试而不动正文；右侧状态栏由固定模板渲染，不随流式生成掉格式。AgentTavern 侧提供 `tavern_variable_settle` 工具，ST 侧走同一结算执行器与回执投影。详见 [`docs/proposals/0012-mvu-settlement.md`](docs/proposals/0012-mvu-settlement.md)。
+- 卡片工作台：`dsh-tavern/card-workbench` agent preset。用对话描述想改什么，Agent 先给出方案，经确认面板（diff 视图）确认后才写入——写入工具必须携带已确认方案的 `planId`。支持修改人物卡/世界书/预设、空白建卡、从素材或剧本提取人物制卡、card-to-mvu 转换（写入固定状态栏模板与新聊天初始变量），以及把指定聊天连同楼层范围交给工作台排错。导入资产时写一次原版快照，随时可恢复原版。详见 [`docs/proposals/0013-card-workbench.md`](docs/proposals/0013-card-workbench.md)。
+- 剧本游玩：TXT/Markdown/EPUB 小说、大纲或剧本导入为剧本资产，与人物卡一对一绑定，新开局自动按剧本推进；只按进度召回附近片段，不整本注入上下文。剧本块是参考不是约束：玩家随时可偏离，只有正文实际覆盖当前片段的关键事件才推进进度；右侧剧本卡实时显示进度（是进度展示，不是跳章按钮）。详见 [`docs/proposals/0014-script-play.md`](docs/proposals/0014-script-play.md)。
 - 美化前端：助手消息中的完整 HTML 文档或 `html` 代码块会在隔离 iframe 中运行，支持内联 CSS、JavaScript 和常用 CDN 资源；普通文本与不完整流式内容仍按文本显示。
 
 ### 酒馆美化前端
@@ -86,7 +94,10 @@ iframe 高度由 `ResizeObserver` 回传，并限制在 80-1200px；超出部分
 - **角色卡**：导入 PNG、CHARX、JSON；查看卡面；编辑名称、昵称、描述、性格、场景、开场白、示例对话、系统提示词、作者信息和高级 JSON；保存时尽量保留原始 PNG/CHARX 容器及内嵌资源；可导出原格式并删除角色及其聊天。
 - **世界书**：导入和导出原生世界书 JSON；编辑世界书名称、条目关键词、次关键词、备注、正文、排序、深度、概率、启用、常驻和选择性匹配；支持新增、删除和搜索条目。
 - **预设**：导入和导出原生 preset JSON；聊天补全预设可以编辑提示词堆栈、标识符、角色、内容和 marker；context、instruct、textgen sampler 等预设可以通过高级 JSON 编辑全部字段。
-- **聊天、群组、人设、正则、变量、生成**：沿用原有管理能力，并统一放在同一面板中，避免在设置页堆叠长表单。
+- **聊天、指引、群组、人设、正则、变量**：沿用原有管理能力，并统一放在同一面板中，避免在设置页堆叠长表单；指引分区管理当前角色 + 聊天的持续指引。
+- **小说**：AgentNovel 小说库，新建全自动写作的小说工程并查看既有工程。
+- **剧本**：导入 TXT/Markdown/EPUB 为剧本资产（自动分块），管理分块、与角色卡的绑定（一卡一剧本）和进度。
+- **工作台**：卡片工作台的方案确认入口——展开查看 Agent 提出方案的逐字段改动（当前 / 改为），「批准并应用」写入工作版或「拒绝」；方案带待确认/已批准/已拒绝/已应用状态。把聊天交给工作台排错在工作台会话内以对话完成（Agent 用 `chat_log_read` 引用指定聊天与楼层范围）。
 
 编辑器会显示未保存状态，取消离开时提示确认，页面关闭时提供浏览器级离开保护。角色卡、世界书和预设的保存都经过服务端格式校验，再写回 `$DSH_HOME/tavern/`。
 
@@ -134,6 +145,9 @@ AgentTavern 工具的身份来自真实 DSH agent binding，模型不能通过�
 | `variable_patch` | 在同一作用域原子写入多个变量，任一 revision 冲突则整批失败。 |
 | `variable_delete` | 删除当前作用域变量，需 revision 匹配。 |
 | `variable_list` | 按前缀列出作用域内变量名和值摘要。 |
+| `tavern_variable_settle` | 单轮批量结算受追踪变量：写 chat 作用域变量并记录 MVU 回执（每项变更前后值、失败项）与审计行；失败项重试是新的一次结算，正文不受影响。 |
+| `tavern_script_read` | 读取当前绑定剧本在进度位置（或指定 `chunkIndex`）的片段；未绑定剧本时返回 `found:false` 可优雅跳过。 |
+| `tavern_script_advance` | 最新正文实际覆盖当前片段后推进一格进度（玩家偏离不推进），记录 `alignedAt` 与可选备注；最后一段返回 `done:true`。 |
 
 变量工具支持 `chat`、`character`、`agent`、`global` 与 `turn` 作用域；`turn` 作用域是单轮 scratch 状态，turn 结束时自动清空，`global` 写入默认关闭、需在设置中开启。角色卡支持可编辑的 `agentTavern.identitySummary` 身份摘要（管理面板角色编辑器内），AgentTavern 内核每轮注入该摘要；缺失时回退为名称和极短描述。投影失败时管理面板"变量"分区提供状态查询和一键重放入口。
 
@@ -162,7 +176,9 @@ ST 与 AgentTavern 新聊天共用 `$DSH_HOME/tavern/workspace/` 下的 `Tavern 
 | `@dsh-tavern/pipeline` | preset 顺序、lore、persona、历史和 token budget 的 prompt 装配（chat completion + 群聊回合） |
 | `@dsh-tavern/script` | ST regex 脚本执行器与 STscript 解释器 |
 | `@dsh-tavern/store` | `$DSH_HOME/tavern/` 原子文件存储、revision 和 session binding |
-| `dsh-tavern` | 自包含 Node half、Web client half、安装元数据和 gates |
+| `@dsh-tavern/template` | EJS Prompt Template 引擎：`node:vm` 沙箱执行、作用域变量与内容注入（提案 0008） |
+| `@dsh-tavern/bind` | 跨 DSH 版本的宿主形状兼容层：会话事件探测、宿主包锚解析、client 连接双面回退与宿主形状诊断 |
+| `dsh-tavern` | 自包含 Node half（含 agent / compaction / novel / card-workbench 入口）、Web client half、安装元数据和 gates |
 
 ## 安装
 
@@ -263,19 +279,19 @@ pnpm run check
 
 1. 点击侧栏底部的 Tavern 按钮，或从“设置 -> dsh-tavern”打开 Tavern 面板。
 2. 在“角色卡 / 世界书 / 预设”分区导入资产；导入后可以直接编辑、保存、搜索、设为当前或导出。
-3. 在设置中选择新聊天架构（rc.6 默认是 AgentTavern/native）；群聊始终使用 ST。
+3. 在设置中选择新聊天架构（单角色新聊天默认 AgentTavern/native，群聊始终使用 ST）。
 4. 在原生左侧 Tavern 分支展开角色并创建或打开单角色聊天：AgentTavern 使用 DSH 原生 conversation，ST 使用原生 `Tavern` tab。
 5. 在 ST 聊天中验证编辑、swipe、regenerate 和 STscript；在 AgentTavern 聊天中验证原生 composer、工具调用、Stop 和会话统计。
 
 插件 Node bundle 是单一 `packages/plugin/index.mjs`，五个纯库均已内联。无需用户额外安装公共 `@deepseek-ai/*` 运行时依赖；client closure 由 DSH profile 注入。
 
-## 验证
+## 测试基线
 
 ```sh
 pnpm run check
 ```
 
-当前基线：42 个测试文件、574 项测试通过；12 个插件 gates（含 update-routes、构建 stamp 断言、AgentTavern 隔离、native header adapter、内部工作区和 client VM mount）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
+当前基线：56 个测试文件、754 项测试通过；13 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、内部工作区、client VM mount 和 V4 session admission）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 
@@ -289,6 +305,16 @@ GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern �
 - [`decisions/2026-08-15-v2-feature-scope.md`](decisions/2026-08-15-v2-feature-scope.md)：v2 功能面的范围与形态选择。
 - [`docs/proposals/0003-tavern-management-panel.md`](docs/proposals/0003-tavern-management-panel.md)：Tavern 管理面板的信息架构、slot 选择和交互范围。
 - [`docs/proposals/0004-agent-tavern-architecture.md`](docs/proposals/0004-agent-tavern-architecture.md)：AgentTavern 原生 AgentLoop 架构、记忆/变量工具、遗忘策略和 ST 兼容模式。
+- [`docs/proposals/0005-agent-novel-architecture.md`](docs/proposals/0005-agent-novel-architecture.md)：AgentNovel 全自动小说推演架构（存储、调度、提交协议与作者干预）。
+- [`docs/proposals/0006-usage-anchored-compaction-pressure.md`](docs/proposals/0006-usage-anchored-compaction-pressure.md)：以用量为锚的压缩压力设计。
+- [`docs/proposals/0007-agent-novel-writer-subagent.md`](docs/proposals/0007-agent-novel-writer-subagent.md)：AgentNovel 写手子代理（inline / subagent 两种模式）。
+- [`docs/proposals/0008-prompt-template.md`](docs/proposals/0008-prompt-template.md)：EJS Prompt Template 沙箱、作用域变量与内容注入。
+- [`docs/proposals/0009-conversation-guides.md`](docs/proposals/0009-conversation-guides.md)：持续指引（Guide）。
+- [`docs/proposals/0010-turn-candidates.md`](docs/proposals/0010-turn-candidates.md)：行动候选生成。
+- [`docs/proposals/0011-rewrite-with-feedback.md`](docs/proposals/0011-rewrite-with-feedback.md)：带意见重写。
+- [`docs/proposals/0012-mvu-settlement.md`](docs/proposals/0012-mvu-settlement.md)：MVU 后台变量结算、回执与固定状态栏。
+- [`docs/proposals/0013-card-workbench.md`](docs/proposals/0013-card-workbench.md)：卡片工作台（对话改卡 + 确认协议 + 制卡/排错）。
+- [`docs/proposals/0014-script-play.md`](docs/proposals/0014-script-play.md)：剧本游玩（剧本库、绑定、对齐推进）。
 - [`docs/plans/2026-08-16-agent-tavern-implementation.md`](docs/plans/2026-08-16-agent-tavern-implementation.md)：AgentTavern 的分阶段施工计划、宿主门禁、迁移规则与验证矩阵。
 - [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)：DSH `0.1.0-rc.6` 原生注入、compaction 与 Fabric fallback 审计。
 - [`decisions/2026-08-15-tavern-management-panel.md`](decisions/2026-08-15-tavern-management-panel.md)：面板入口、角色删除级联、变量与侧栏共存的落地决策。

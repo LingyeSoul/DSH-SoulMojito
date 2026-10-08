@@ -1678,6 +1678,22 @@ window.__ModuleLoader__.load({
       return binding?.architecture === 'agent-tavern' ? 'agent-tavern' : 'st'
     }
 
+    // 宿主 sessions store 的快照是 SessionListState { ids, byId, phase,
+    // projectionsBySession }——没有 current 字段（dsh-api-session-controller
+    // lib/types/client/sessions/service.d.ts）。宿主自己的组件（DocumentTitle /
+    // CordisPanel / ui-session.publishMain）一律以 retainedBy.mainView > 0 推导
+    // 「主视图中的会话」。这里照宿主同款口径推导；若未来宿主补充 current 字段则
+    // 优先直读。返回 string | undefined，引用稳定，可直接喂给 selector hook。
+    function useCurrentSessionId(useSessions) {
+      return useSessions((sessions) => {
+        if (typeof sessions?.current === 'string') return sessions.current
+        for (const session of Object.values(sessions?.byId || {})) {
+          if ((session?.retainedBy?.mainView ?? 0) > 0) return session.id
+        }
+        return undefined
+      })
+    }
+
     function architectureLabel(architecture) {
       if (architecture === 'agent-novel') return translate('view.architectureNovel')
       return architecture === 'agent-tavern' ? translate('view.architectureAgent') : translate('view.architectureSt')
@@ -4427,7 +4443,7 @@ window.__ModuleLoader__.load({
     function TavernSidebar({ ctx, useSessions, floating, onClose }) {
       const state = useTavernStore()
       const t = useTranslate()
-      const currentSession = useSessions((sessions) => sessions.current)
+      const currentSession = useCurrentSessionId(useSessions)
       const [expanded, setExpanded] = useState(state.bootstrap.state.activeCharacter || state.bootstrap.characters[0] || '')
       const [expandedGroup, setExpandedGroup] = useState('')
       const [error, setError] = useState('')
@@ -5091,7 +5107,7 @@ window.__ModuleLoader__.load({
       const [replayBusy, setReplayBusy] = useState(false)
       const [replayNonce, setReplayNonce] = useState(0)
       const [saved, setSaved] = useState(false)
-      const currentSession = useSessions ? useSessions((sessions) => sessions.current) : null
+      const currentSession = useSessions ? useCurrentSessionId(useSessions) : null
       const binding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
       const agentBinding = binding && bindingArchitecture(binding) === 'agent-tavern' ? binding : null
       const localChat = binding ? state.chats[chatKey(binding.character, binding.chatId)] : null
@@ -5233,7 +5249,7 @@ window.__ModuleLoader__.load({
     function PanelGuides({ useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
-      const currentSession = useSessions ? useSessions((sessions) => sessions.current) : null
+      const currentSession = useSessions ? useCurrentSessionId(useSessions) : null
       const binding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
       const [guides, setGuides] = useState(null)
       const [draft, setDraft] = useState('')
@@ -6671,7 +6687,7 @@ window.__ModuleLoader__.load({
       const t = useTranslate()
       const sessionIds = useSessions((value) => value.ids)
       const sessionPhase = useSessions((value) => value.phase)
-      const currentSession = useSessions((value) => value.current)
+      const currentSession = useCurrentSessionId(useSessions)
       const bindingIds = Object.keys(state.bootstrap.state.sessionBindings || {})
       const currentBinding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
       // AgentTavern stays hidden from the native session tree, but its native
