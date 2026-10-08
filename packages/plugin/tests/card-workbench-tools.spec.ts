@@ -122,16 +122,17 @@ describe('Card Workbench tools and original snapshots', () => {
   it('registers the workbench kernel and the P1+P2 tools (cards, plans, worlds, presets, chat logs)', () => {
     expect(kernel).toContain('Card Workbench')
     expect(kernel).toContain('explicit confirmation')
+    expect(kernel).toContain('world_create')
     expect([...tools.keys()]).toEqual([
       'card_get', 'card_put', 'card_original_get', 'card_restore_original',
-      'card_plan_propose', 'world_get', 'world_put', 'preset_get', 'preset_put', 'chat_log_read',
+      'card_plan_propose', 'world_list', 'world_get', 'world_put', 'world_create', 'preset_get', 'preset_put', 'chat_log_read',
       'card_create', 'material_list', 'material_read', 'card_apply_mvu',
     ])
     for (const name of ['card_get', 'card_put', 'card_original_get', 'card_restore_original', 'card_plan_propose', 'chat_log_read']) {
       expect(tools.get(name)!.parameters.properties).toHaveProperty('character')
     }
     // 写入工具的确认闸门在参数面上可见：confirmed 是必填布尔（world/preset 同款）。
-    for (const name of ['card_put', 'card_restore_original', 'world_put', 'preset_put']) {
+    for (const name of ['card_put', 'card_restore_original', 'world_put', 'world_create', 'preset_put']) {
       expect(tools.get(name)!.parameters).toMatchObject({ required: expect.arrayContaining(['confirmed']) })
     }
   })

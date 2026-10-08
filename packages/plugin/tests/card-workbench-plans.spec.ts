@@ -432,6 +432,53 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
     })).rejects.toThrow('not found')
   })
 
+  it('world_list reports the library and world_create seeds a new book behind the confirmation gate', async () => {
+    const listed = await tools.get('world_list')!.execute({})
+    expect(listed.worlds).toContainEqual({ name: 'Panel Lore', entryCount: 3 })
+
+    // 确认闸门与白名单核与 world_put 同款
+    await expect(tools.get('world_create')!.execute({ name: 'Harbor Lore', entries: [{ content: 'x' }] }))
+      .rejects.toThrow('confirmation required')
+    await expect(tools.get('world_create')!.execute({
+      name: 'Harbor Lore', confirmed: true, entries: [{ uid: 0, content: 'x' }],
+    })).rejects.toThrow('unknown entry field')
+    await expect(tools.get('world_create')!.execute({
+      name: 'Harbor Lore', confirmed: true, entries: [{}],
+    })).rejects.toThrow('has no editable field')
+    await expect(tools.get('world_create')!.execute({ name: '   ', confirmed: true })).rejects.toThrow('must not be blank')
+    await expect(tools.get('world_create')!.execute({ name: 'x'.repeat(121), confirmed: true })).rejects.toThrow('120-character limit')
+    // 重名拒绝：world_create 从不覆盖
+    await expect(tools.get('world_create')!.execute({ name: 'Panel Lore', confirmed: true }))
+      .rejects.toThrow('already exists')
+
+    const blank = await tools.get('world_create')!.execute({ name: 'Blank Lore', confirmed: true })
+    expect(blank).toEqual({ created: true, world: 'Blank Lore', entryCount: 0, nextUid: 0 })
+
+    // 种子条目：uid 按数组顺序分配，默认字段来自 normalizeEntry
+    const seeded = await tools.get('world_create')!.execute({
+      name: 'Harbor Lore',
+      confirmed: true,
+      entries: [
+        { key: ['harbor'], content: 'A quiet harbor.' },
+        { key: ['sea'], content: 'Storm season.', enabled: false },
+      ],
+    })
+    expect(seeded).toEqual({ created: true, world: 'Harbor Lore', entryCount: 2, nextUid: 2 })
+    const book = await store.getWorld('Harbor Lore')
+    expect(book!.entries.map((entry) => [entry.uid, entry.key, entry.content, entry.disable])).toEqual([
+      [0, ['harbor'], 'A quiet harbor.', false],
+      [1, ['sea'], 'Storm season.', true],
+    ])
+    expect(book!.entries[0]).toMatchObject({ constant: false, order: 100, position: 0 })
+
+    // 创建后照常走 world_put，world_list/world_get 反映最新条目数
+    await tools.get('world_put')!.execute({
+      world: 'Harbor Lore', confirmed: true, entries: [{ uid: 2, key: ['lighthouse'], content: 'It blinks.' }],
+    })
+    expect(await tools.get('world_get')!.execute({ world: 'Harbor Lore' })).toMatchObject({ entryCount: 3, nextUid: 3 })
+    expect((await tools.get('world_list')!.execute({})).worlds).toContainEqual({ name: 'Harbor Lore', entryCount: 3 })
+  })
+
   /* ------------------------------- 预设工具 ------------------------------- */
 
   it('preset_get summarizes prompts and preset_put edits whitelisted fields with confirmation', async () => {
