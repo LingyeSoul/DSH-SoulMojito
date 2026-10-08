@@ -438,6 +438,12 @@ function checkNativeHeaderAdapterText(text) {
  * TavernView 内联块，AgentTavern 走标题栏弹出层（原生 conversation 由宿主渲染，
  * 插件没有可插入正文区的 slot）。这些标记同时锁住「只有回执也要可见」的空态
  * 提示，防止「数据源修好了但界面又不挂载」的回归。
+ *
+ * 宿主 ≥0.2.0-rc.2 的原生右侧栏是第三个表面：tab 类型（kind tavern-mvu）经
+ * ctx.inject(['sidebarRightTabs','sidebarRight']) 动态注册——服务缺失的旧宿主
+ * 上回调不生效，插件其余表面照常工作，所以这两个服务名绝不能进 exports.inject
+ * （会让旧宿主 apply 永久挂起）；body 挂 keyed slot sidebar.right.pane.tab
+ * （key dsh-tavern/mvu），sessionId 由 keyed 注入回调显式传入。
  */
 function checkMvuSurfaceText(text) {
   const problems = []
@@ -448,8 +454,17 @@ function checkMvuSurfaceText(text) {
     'dt-mvu-pop',
     'TavernMvuStatus, { sessionId, embedded: true',
     "'mvu.unavailable'",
+    "const MVU_TAB_ID = 'dsh-tavern/mvu'",
+    "const MVU_TAB_KIND = 'tavern-mvu'",
+    "ctx.inject(['sidebarRightTabs', 'sidebarRight']",
+    "'sidebar.right.pane.tab'",
+    'sidebar: true',
+    "'data-dsh-tavern-surface': 'mvu-sidebar'",
   ]) {
     if (!text.includes(marker)) problems.push(`MVU surface is missing marker '${marker}'`)
+  }
+  if (/exports\s*\.\s*inject\s*=\s*\[[^\]]*'sidebarRight/.test(text)) {
+    problems.push("sidebarRight* must stay behind ctx.inject (exports.inject on pre-sidebar hosts would hang apply forever)")
   }
   return problems
 }
@@ -764,6 +779,7 @@ async function checkClientExecution(code, options = {}) {
   const injections = []
   const localeRegistrations = []
   const localeBinds = []
+  const sidebarRightTabTypes = []
   const slots = {
     inject: (name, callback) => {
       injections.push(name)
@@ -780,9 +796,25 @@ async function checkClientExecution(code, options = {}) {
     getVersion: () => 0,
     subscribe: () => () => {},
   }
+  // ctx.inject(names, callback)：真实宿主上等所有命名服务就绪才运行回调（cordis
+  // 动态注入）。VM 里模拟宿主已提供 sidebarRightTabs/sidebarRight 的 ≥0.2.0-rc.2
+  // 场景立即同步运行，回调拿到的 scope 暴露 tab 注册表与同一份 slots mock。
+  const serviceInjects = []
+  const scopeFor = (names) => new Proxy({
+    effect: (callback) => callback(),
+    slots,
+    ...(names.includes('sidebarRightTabs')
+      ? { sidebarRightTabs: { register: (definition) => { sidebarRightTabTypes.push(definition); return () => {} } } }
+      : {}),
+  }, { get: (target, key) => (key in target ? target[key] : undefined) })
   const serviceFallback = callableStub('ctx')
   const context = new Proxy({
     effect: (callback) => callback(),
+    inject: (names, callback) => {
+      serviceInjects.push([...names])
+      if (!names.includes('sidebarRightTabs') || !names.includes('sidebarRight')) return
+      callback(scopeFor(names))
+    },
     locale: {
       bind: (ns) => { localeBinds.push(ns); return (key) => key },
       register: (ns, dicts) => { localeRegistrations.push({ ns, dicts }) },
@@ -815,7 +847,29 @@ async function checkClientExecution(code, options = {}) {
       const options = candidate?.options ?? candidate?.opts
       return options?.name === name && (id === undefined || options?.id === id)
     })
-    if (entry === undefined) problems.push(`client apply did not register ${name}${id === undefined ? '' : ` id '${id}'`}`)
+    if (entry === undefined) problems.push(`client apply did not register ${name}${id === undefined ? '' : ` id '${id}'}`}`)
+  }
+  // 原生右侧栏接入（宿主 ≥0.2.0-rc.2）：sidebarRightTabs/sidebarRight 服务在场
+  // 时，apply 必须注册页面型 tab（kind tavern-mvu）并把 body 挂进 keyed slot
+  // sidebar.right.pane.tab（key dsh-tavern/mvu）——guide 入口与标题栏按钮都靠它。
+  if (!serviceInjects.some((names) => names.includes('sidebarRightTabs') && names.includes('sidebarRight'))) {
+    problems.push('client apply did not request the sidebarRightTabs/sidebarRight services via ctx.inject')
+  } else {
+    const mvuType = sidebarRightTabTypes.find((definition) => definition?.kind === 'tavern-mvu')
+    if (mvuType === undefined) {
+      problems.push("client apply must register the sidebar-right MVU tab type (kind 'tavern-mvu')")
+    } else {
+      if (mvuType.id !== 'dsh-tavern/mvu') problems.push("MVU sidebar tab type id must be 'dsh-tavern/mvu'")
+      if (typeof mvuType.title !== 'function') problems.push('MVU sidebar tab type must thunk its title for locale switches')
+      if (!Array.isArray(mvuType.guide) || mvuType.guide.length === 0) problems.push('MVU sidebar tab type must contribute a guide entry')
+      else if (typeof mvuType.guide[0]?.title !== 'function') problems.push('MVU sidebar guide entry must thunk its title')
+    }
+    const mvuBody = registrations.find((candidate) => {
+      const options = candidate?.options ?? candidate?.opts
+      return options?.name === 'sidebar.right.pane.tab' && options?.key === 'dsh-tavern/mvu'
+    })
+    if (mvuBody === undefined) problems.push("client apply must register the MVU sidebar body under keyed slot 'sidebar.right.pane.tab' (key 'dsh-tavern/mvu')")
+    else if (typeof mvuBody.options?.inject !== 'function') problems.push('MVU sidebar body must pass sessionId through its keyed inject callback')
   }
   const localeRegistration = localeRegistrations.find((entry) => entry?.ns === PLUGIN_NAME)
   if (localeRegistration === undefined) {
@@ -1460,18 +1514,32 @@ const gates = [
     name: 'mvu-surface',
     selfTest: () => {
       const good = [
-        'function TavernMvuStatus({ sessionId, embedded = false }) {',
+        'function TavernMvuStatus({ sessionId, embedded = false, sidebar = false }) {',
         "h('div', { className: 'dt-mvu', 'data-dsh-tavern-surface': 'mvu' },",
         '.dt-mvu-slot{position:relative;display:inline-flex}',
         '.dt-mvu-pop{z-index:20;position:absolute}',
         "mvuOpen ? h('div', { className: 'dt-mvu-pop' }, h(TavernMvuStatus, { sessionId, embedded: true })) : null",
         "'mvu.unavailable': 'No variables or receipts in this chat',",
+        "const MVU_TAB_ID = 'dsh-tavern/mvu'",
+        "const MVU_TAB_KIND = 'tavern-mvu'",
+        "ctx.inject(['sidebarRightTabs', 'sidebarRight'], (scope) => {",
+        "scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({",
+        "h(TavernMvuStatus, { sessionId, sidebar: true })",
+        "'data-dsh-tavern-surface': 'mvu-sidebar'",
+        "exports.inject = ['slots', 'sessions', 'workspaces', 'locale']",
       ].join('\n')
       const unmounted = good.replace('TavernMvuStatus, { sessionId, embedded: true', 'TavernMvuStatus, { sessionId')
       const noEmptyState = good.replace("'mvu.unavailable': 'No variables or receipts in this chat',", '')
+      const noSidebarTab = good.replace("const MVU_TAB_KIND = 'tavern-mvu'", "const MVU_TAB_KIND = 'other'")
+      const hardInjected = good.replace(
+        "exports.inject = ['slots', 'sessions', 'workspaces', 'locale']",
+        "exports.inject = ['slots', 'sessions', 'workspaces', 'locale', 'sidebarRight']",
+      )
       return checkMvuSurfaceText(good).length === 0
         && checkMvuSurfaceText(unmounted).length > 0
         && checkMvuSurfaceText(noEmptyState).length > 0
+        && checkMvuSurfaceText(noSidebarTab).length > 0
+        && checkMvuSurfaceText(hardInjected).length > 0
         ? []
         : ['MVU surface bad samples were not rejected']
     },
@@ -1576,13 +1644,15 @@ const gates = [
     name: 'client-vm-mount',
     selfTest: async () => {
       const localeWiring = "ctx.effect(() => ctx.locale.register('dsh-tavern', { zh: { 'nav.title': '酒馆' }, en: { 'nav.title': 'Tavern' } })); ctx.locale.bind('dsh-tavern');"
-      const good = `window.__ModuleLoader__.load({ id: 'dsh-tavern', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); exports.name = 'dsh-tavern'; exports.inject = ['slots', 'locale']; exports.apply = (ctx) => { ${localeWiring} const entries = [['settings.section','dsh-tavern'],['conversation.view','tavern'],['conversation.composer',null],['conversation.session.header.actions','dsh-tavern'],['shell.overlay','dsh-tavern-panel'],['sidebar.footer.action','dsh-tavern-panel']]; for (const [name,id] of entries) ctx.slots.inject(name, () => ctx.slots.register({ name, ...(id ? { id } : {}), ...(name === 'conversation.composer' ? { select: (owner) => owner?.session?.chat?.order?.some((key) => owner.session.chat.nodes.get(key)?.data?.source?.form === 'notice') ? {} : null } : {}) }, () => null)); }; return module.exports; } });`
+      const sidebarWiring = "ctx.inject(['sidebarRightTabs', 'sidebarRight'], (scope) => { scope.effect(() => scope.sidebarRightTabs.register({ id: 'dsh-tavern/mvu', kind: 'tavern-mvu', priority: 'extension', title: () => 'MVU', guide: [{ id: 'mvu', order: 40, title: () => 'MVU', description: () => 'MVU' }] })); scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({ name: 'sidebar.right.pane.tab', key: 'dsh-tavern/mvu', inject: (sessionId) => ({ sessionId }) }, () => null))); });"
+      const good = `window.__ModuleLoader__.load({ id: 'dsh-tavern', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); exports.name = 'dsh-tavern'; exports.inject = ['slots', 'locale']; exports.apply = (ctx) => { ${localeWiring} ${sidebarWiring} const entries = [['settings.section','dsh-tavern'],['conversation.view','tavern'],['conversation.composer',null],['conversation.session.header.actions','dsh-tavern'],['shell.overlay','dsh-tavern-panel'],['sidebar.footer.action','dsh-tavern-panel']]; for (const [name,id] of entries) ctx.slots.inject(name, () => ctx.slots.register({ name, ...(id ? { id } : {}), ...(name === 'conversation.composer' ? { select: (owner) => owner?.session?.chat?.order?.some((key) => owner.session.chat.nodes.get(key)?.data?.source?.form === 'notice') ? {} : null } : {}) }, () => null)); }; return module.exports; } });`
       const badSlot = good.replace("['conversation.view','tavern'],", '')
       const badLocale = good.replace("exports.inject = ['slots', 'locale']", "exports.inject = ['slots']")
       const badParity = good.replace("en: { 'nav.title': 'Tavern' }", "en: {}")
       const badComposer = good.replace("owner.session.chat.nodes.get(key)?.data?.source?.form === 'notice'", 'true')
+      const badSidebar = good.replace("ctx.inject(['sidebarRightTabs', 'sidebarRight'], ", 'void (')
       const goodProblems = await checkClientExecution(good)
-      const failureCounts = (await Promise.all([badSlot, badLocale, badParity, badComposer].map((sample) => checkClientExecution(sample))))
+      const failureCounts = (await Promise.all([badSlot, badLocale, badParity, badComposer, badSidebar].map((sample) => checkClientExecution(sample))))
         .filter((problems) => problems.length > 0).length
       const parityShape = { uiPrimitives: { direct: 30, aliased: { IconSparkle16: 'IconSparkleRegular' }, synthesized: [], missing: [] } }
       const parityBad = [
@@ -1611,7 +1681,7 @@ const gates = [
       const updateWiringRejectsMissingKey = (await checkClientExecution(badUpdateKeys, { requireUpdateWiring: true })).length > 0
       const updateWiringRejectsNoMarker = (await checkClientExecution(goodWithUpdate.replace("'update/check', 'update/install'", "'update/check'"), { requireUpdateWiring: true })).length > 0
       return goodProblems.length === 0
-        && failureCounts === 4
+        && failureCounts === 5
         && checkPrimitiveParity(parityShape).length === 0
         && parityRejected === parityBad.length
         && wiringOk

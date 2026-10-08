@@ -21,7 +21,7 @@ window.__ModuleLoader__.load({
       };
       var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-      // packages/bind/src/client/host-probe.ts
+      // ../bind/src/client/host-probe.ts
       var host_probe_exports = {};
       __export(host_probe_exports, {
         connectHostWorkspace: () => connectHostWorkspace,
@@ -31,7 +31,7 @@ window.__ModuleLoader__.load({
         retainHostSession: () => retainHostSession
       });
 
-      // packages/bind/src/client/ui-primitives.ts
+      // ../bind/src/client/ui-primitives.ts
       var LEGACY_ICON_NAME = /^(Icon[A-Za-z]+?)(\d{2})$/;
       function primitiveCandidates(name) {
         const legacy = LEGACY_ICON_NAME.exec(name);
@@ -86,7 +86,7 @@ window.__ModuleLoader__.load({
         });
       }
 
-      // packages/bind/src/client/host-probe.ts
+      // ../bind/src/client/host-probe.ts
       function createClientShapeTrace() {
         return { connectCalls: 0, openSessionCalls: 0, retainCalls: 0 };
       }
@@ -586,6 +586,8 @@ window.__ModuleLoader__.load({
       'mvu.retry': 'Retry settlement',
       'mvu.retrying': 'Retrying…',
       'mvu.unavailable': 'No variables or receipts in this chat',
+      'mvu.guide.description': 'Variables and settlement receipts for this chat',
+      'mvu.summary': '{variables} variables · {receipts} receipts',
       'script.progressTitle': 'Script progress',
       'script.position': 'Segment {current} of {total}',
       'script.alignedAt': 'Aligned {time}',
@@ -1081,6 +1083,8 @@ window.__ModuleLoader__.load({
       'mvu.retry': '重试结算',
       'mvu.retrying': '重试中…',
       'mvu.unavailable': '本聊暂无变量或回执',
+      'mvu.guide.description': '本聊的变量与结算回执',
+      'mvu.summary': '{variables} 个变量 · {receipts} 条回执',
       'script.progressTitle': '剧本进度',
       'script.position': '片段 {current} / {total}',
       'script.alignedAt': '对齐于 {time}',
@@ -3872,9 +3876,13 @@ window.__ModuleLoader__.load({
     // MVU 状态与回执（提案 0012 P1）：ST 聊天挂在 TavernView 顶部的常驻面板，
     // AgentTavern 会话改由标题栏按钮弹出同一面板（embedded 变体）——原生
     // conversation 是宿主表面，插件没有可插入正文区的 slot，标题栏是两架构共有
-    // 的插件挂载点。available=false（本局无变量也无回执）时整块隐藏；renderedHtml
-    // 存在（卡带 statusTemplate）时用 FrontendFrame 同款沙箱渲染，否则退回变量
-    // 键值表（嵌套对象折叠成路径.值）。
+    // 的插件挂载点。宿主带原生右侧栏（ui-sidebar-right，≥0.2.0-rc.2）时同一
+    // 面板还注册为页面型 tab（sidebar 变体）：面板成为会话右栏的一页而不是
+    // 弹层，标题栏按钮优先打开侧栏 tab，旧宿主回退弹层。
+    // available=false（本局无变量也无回执）时内联整块隐藏；sidebar/embedded 是
+    // 用户主动打开的表面，保留空态提示。renderedHtml 存在（卡带 statusTemplate）
+    // 时用 FrontendFrame 同款沙箱渲染，否则退回变量键值表（嵌套对象折叠成
+    // 路径.值；sidebar 变体按顶层段分组展示）。
     // 重试按钮只对 ST 绑定暴露——POST mvu/retry 重跑的是 ST 生成链路的模板
     // 输出渲染（AgentTavern 会话服务端 409 TAVERN_ARCHITECTURE_CONFLICT）；群聊
     // 走 ST 链路，服务端按楼层发言人回落支持重试（src/mvu.ts），同样暴露。
@@ -3892,14 +3900,32 @@ window.__ModuleLoader__.load({
       return rows
     }
 
-    function formatMvuValue(value) {
+    // sidebar 变体的变量分组：顶层段做组名，剩余路径做组内行键（无剩余路径时
+    // 行键退化为 '·' 占位，值即组值本身——单层变量树不因分组丢行）。
+    function groupMvuVariables(rows) {
+      const groups = []
+      const byName = new Map()
+      for (const [path, value] of rows) {
+        const separator = path.indexOf('.')
+        const name = separator === -1 ? path : path.slice(0, separator)
+        const rest = separator === -1 ? '·' : path.slice(separator + 1)
+        if (!byName.has(name)) {
+          byName.set(name, { name, rows: [] })
+          groups.push(byName.get(name))
+        }
+        byName.get(name).rows.push([rest, value])
+      }
+      return groups
+    }
+
+    function formatMvuValue(value, limit = 96) {
       const text = typeof value === 'string' ? value : (() => {
         try { return JSON.stringify(value) ?? String(value) } catch { return String(value) }
       })()
-      return text.length > 96 ? `${text.slice(0, 95)}…` : text
+      return text.length > limit ? `${text.slice(0, limit - 1)}…` : text
     }
 
-    function TavernMvuStatus({ sessionId, embedded = false }) {
+    function TavernMvuStatus({ sessionId, embedded = false, sidebar = false }) {
       const state = useTavernStore()
       const t = useTranslate()
       const binding = state.bootstrap.state.sessionBindings?.[sessionId]
@@ -3929,9 +3955,10 @@ window.__ModuleLoader__.load({
           .catch(() => { if (!cancelled) setStatus(null) })
         return () => { cancelled = true }
       }, [binding?.character, binding?.chatId, revision, messageCount])
-      // 每个聊天最多自动展开一次（对齐 TavernCandidates）；用户手动收起后不再弹开
+      // 每个聊天最多自动展开一次（对齐 TavernCandidates）；用户手动收起后不再弹开。
+      // sidebar 变体没有折叠头（tab chip 就是容器），不参与自动展开。
       useEffect(() => {
-        if (!key || status?.available !== true) return
+        if (sidebar || !key || status?.available !== true) return
         if (autoOpenedFor.current === key) return
         autoOpenedFor.current = key
         setOpen(true)
@@ -3965,13 +3992,92 @@ window.__ModuleLoader__.load({
           }
         })()
       }
+      // 回执卡片与「展开全部」钮在三个变体（内联 / 弹层 / 侧栏）间共享，收进
+      // 组件内闭包：状态（expandedReceipt / showAllReceipts）挂在同一实例上。
+      const receiptCard = (receipt, index) => {
+        const rowKey = `${index}-${receipt.turnKey}-${receipt.at}`
+        const changes = Array.isArray(receipt.changes) ? receipt.changes : []
+        const failures = Array.isArray(receipt.failures) ? receipt.failures : []
+        const expanded = expandedReceipt === rowKey
+        const shownChanges = expanded ? changes : changes.slice(0, 3)
+        return h('div', { key: rowKey, className: 'dt-mvu-receipt' },
+          h('div', { className: 'dt-mvu-receipt-head' },
+            h('span', { className: `dt-mvu-badge dt-mvu-badge-${receipt.status}` }, t(`mvu.status.${receipt.status}`)),
+            h('span', { className: 'dt-mvu-meta' }, `${t('mvu.turn', { turn: receipt.turnKey })} · ${formatNovelTime(receipt.at)}`)),
+          shownChanges.map((change) => h('div', { key: change.name, className: 'dt-mvu-change' },
+            t('mvu.change', {
+              name: change.name,
+              before: 'before' in change ? formatMvuValue(change.before) : '∅',
+              after: 'after' in change ? formatMvuValue(change.after) : '∅',
+            }))),
+          changes.length > 3 ? h('button', {
+            type: 'button',
+            className: 'dt-mvu-more',
+            onClick: () => setExpandedReceipt(expanded ? '' : rowKey),
+          }, t('mvu.more', { count: changes.length - 3 })) : null,
+          failures.length > 0 ? h('div', { className: 'dt-mvu-failures' },
+            h('span', { className: 'dt-mvu-failures-title' }, t('mvu.failures')),
+            failures.map((failure, failureIndex) => h('div', { key: failureIndex, className: 'dt-mvu-failure' }, failure))) : null)
+      }
+      const visibleReceipts = (showAllReceipts ? receipts : receipts.slice(-5)).slice().reverse()
+      const hiddenReceipts = Math.max(0, receipts.length - 5)
+      const receiptsMoreToggle = hiddenReceipts > 0 ? h('button', {
+        type: 'button',
+        className: 'dt-mvu-more',
+        onClick: () => setShowAllReceipts(!showAllReceipts),
+      }, showAllReceipts ? t('mvu.less') : t('mvu.more', { count: hiddenReceipts })) : null
+      // sidebar 变体（DSH 原生右侧栏页面型 tab）：无折叠头（tab chip 就是容器），
+      // 内容自滚动；按「模板状态栏 → 变量分组 → 结算回执」三段纵向排布，面板
+      // 取会话底色不加卡片底（宿主右栏设计约定：它是页面的一列，不是浮层卡片）。
+      if (sidebar) {
+        if (!binding || !status || status.available !== true) {
+          return h('div', { className: 'dt-mvu-side', 'data-dsh-tavern-surface': 'mvu-sidebar' },
+            h('div', { className: 'dt-mvu-side-empty' }, h(IconDataOutline16), h('span', null, t('mvu.unavailable'))))
+        }
+        const variables = flattenMvuVariables(status.variables)
+        const groups = groupMvuVariables(variables)
+        return h('div', { className: 'dt-mvu-side', 'data-dsh-tavern-surface': 'mvu-sidebar' },
+          h('div', { className: 'dt-mvu-side-head' },
+            h('span', { className: 'dt-mvu-summary' }, t('mvu.summary', { variables: variables.length, receipts: receipts.length })),
+            canRetry ? h('button', {
+              type: 'button',
+              className: 'dt-mvu-side-retry',
+              disabled: busy,
+              onClick: retry,
+            }, busy ? t('mvu.retrying') : t('mvu.retry')) : null),
+          busy ? h('p', { className: 'dt-muted' }, t('mvu.retrying')) : null,
+          error ? h('p', { className: 'dt-error' }, error) : null,
+          status.renderedHtml
+            ? h('div', { className: 'dt-mvu-rendered' }, h(FrontendFrame, { html: status.renderedHtml, token: frameToken }))
+            : null,
+          variables.length > 0
+            ? h('section', { className: 'dt-mvu-side-section' },
+              h('h3', { className: 'dt-mvu-side-h' },
+                h('span', null, t('mvu.variables')),
+                h('span', { className: 'dt-mvu-side-count' }, String(variables.length))),
+              h('div', { className: 'dt-mvu-groups' }, groups.map((group) => h('div', { key: group.name, className: 'dt-mvu-group' },
+                h('div', { className: 'dt-mvu-group-h' },
+                  h('span', { className: 'dt-mvu-group-name' }, group.name),
+                  h('span', { className: 'dt-mvu-group-count' }, String(group.rows.length))),
+                h('div', { className: 'dt-mvu-group-body' }, group.rows.map(([path, value]) => h('div', { key: path, className: 'dt-mvu-var-row' },
+                  h('span', { className: 'dt-mvu-var-path', title: path === '·' ? group.name : `${group.name}.${path}` }, path),
+                  h('span', { className: 'dt-mvu-var-value', title: formatMvuValue(value, 480) }, formatMvuValue(value, 240)))))))))
+            : null,
+          h('section', { className: 'dt-mvu-side-section' },
+            h('h3', { className: 'dt-mvu-side-h' },
+              h('span', null, t('mvu.receipts')),
+              receipts.length > 0 ? h('span', { className: 'dt-mvu-side-count' }, String(receipts.length)) : null),
+            receipts.length === 0
+              ? h('p', { className: 'dt-muted' }, t('mvu.receiptsEmpty'))
+              : h('div', { className: 'dt-mvu-receipts' },
+                visibleReceipts.map((receipt, index) => receiptCard(receipt, index)),
+                receiptsMoreToggle)))
+      }
       // 内嵌（标题栏弹出）时无内容也给出提示：用户是主动点开的，空面板比提示更困惑
       if (!binding || !status || status.available !== true) {
         return embedded ? h('p', { className: 'dt-muted' }, t('mvu.unavailable')) : null
       }
       const variables = flattenMvuVariables(status.variables)
-      const visibleReceipts = (showAllReceipts ? receipts : receipts.slice(-5)).slice().reverse()
-      const hiddenReceipts = Math.max(0, receipts.length - 5)
       return h('div', { className: 'dt-mvu', 'data-dsh-tavern-surface': 'mvu' },
         h('div', { className: 'dt-mvu-head' },
           h('button', {
@@ -4001,36 +4107,22 @@ window.__ModuleLoader__.load({
           receipts.length === 0
             ? h('p', { className: 'dt-muted' }, t('mvu.receiptsEmpty'))
             : h('div', { className: 'dt-mvu-receipts' },
-              visibleReceipts.map((receipt, index) => {
-                const rowKey = `${index}-${receipt.turnKey}-${receipt.at}`
-                const changes = Array.isArray(receipt.changes) ? receipt.changes : []
-                const failures = Array.isArray(receipt.failures) ? receipt.failures : []
-                const expanded = expandedReceipt === rowKey
-                const shownChanges = expanded ? changes : changes.slice(0, 3)
-                return h('div', { key: rowKey, className: 'dt-mvu-receipt' },
-                  h('div', { className: 'dt-mvu-receipt-head' },
-                    h('span', { className: `dt-mvu-badge dt-mvu-badge-${receipt.status}` }, t(`mvu.status.${receipt.status}`)),
-                    h('span', { className: 'dt-mvu-meta' }, `${t('mvu.turn', { turn: receipt.turnKey })} · ${formatNovelTime(receipt.at)}`)),
-                  shownChanges.map((change) => h('div', { key: change.name, className: 'dt-mvu-change' },
-                    t('mvu.change', {
-                      name: change.name,
-                      before: 'before' in change ? formatMvuValue(change.before) : '∅',
-                      after: 'after' in change ? formatMvuValue(change.after) : '∅',
-                    }))),
-                  changes.length > 3 ? h('button', {
-                    type: 'button',
-                    className: 'dt-mvu-more',
-                    onClick: () => setExpandedReceipt(expanded ? '' : rowKey),
-                  }, t('mvu.more', { count: changes.length - 3 })) : null,
-                  failures.length > 0 ? h('div', { className: 'dt-mvu-failures' },
-                    h('span', { className: 'dt-mvu-failures-title' }, t('mvu.failures')),
-                    failures.map((failure, failureIndex) => h('div', { key: failureIndex, className: 'dt-mvu-failure' }, failure))) : null)
-              }),
-              hiddenReceipts > 0 ? h('button', {
-                type: 'button',
-                className: 'dt-mvu-more',
-                onClick: () => setShowAllReceipts(!showAllReceipts),
-              }, showAllReceipts ? t('mvu.less') : t('mvu.more', { count: hiddenReceipts })) : null)) : null)
+              visibleReceipts.map((receipt, index) => receiptCard(receipt, index)),
+              receiptsMoreToggle)) : null)
+    }
+
+    // MVU 面板在 DSH 原生右侧栏的 tab 标识：id 是本实现在 tab 系统里的身份
+    // （也是 body/title 在 keyed slot 下的派发键），kind 是 openTab 的页面名。
+    const MVU_TAB_ID = 'dsh-tavern/mvu'
+    const MVU_TAB_KIND = 'tavern-mvu'
+
+    // MVU 面板的 DSH 原生右侧栏 body（sidebar.right.pane.tab keyed slot，按
+    // MVU_TAB_ID 派发到本组件）：会话作用域，sessionId 由 keyed 注入回调显式
+    // 传入（与官方 browser/terminal 提供者同款姿势，不依赖标准 kit 的投递细
+    // 节），渲染 TavernMvuStatus 的 sidebar 变体。tab 的 chip 标题、关闭、分栏
+    // 都由宿主右栏 kit 拥有，本组件只管内容。
+    function TavernMvuSidebarTab({ sessionId }) {
+      return h(TavernMvuStatus, { sessionId, sidebar: true })
     }
 
     // 剧本进度卡（提案 0014 P1）：卡绑定剧本时在聊天视图顶部展示进度。进度是
@@ -4308,8 +4400,10 @@ window.__ModuleLoader__.load({
         document.addEventListener('mousedown', closeOutside)
         return () => document.removeEventListener('mousedown', closeOutside)
       }, [rewriteOpen])
-      // MVU 面板的标题栏挂载（AgentTavern 会话没有 TavernView）：弹出层模式与
-      // 带意见重写一致——绝对定位 + 点外关闭，锚定 header 向下展开。
+      // MVU 面板的标题栏挂载（AgentTavern 会话没有 TavernView）：宿主带原生
+      // 右侧栏（≥0.2.0-rc.2）时优先把面板作为侧栏 tab 打开（openTab 会自动展
+      // 开右栏）；旧宿主或 openTab 抛错（无在屏会话）时回退弹出层模式——绝对
+      // 定位 + 点外关闭，锚定 header 向下展开，与带意见重写一致。
       const [mvuOpen, setMvuOpen] = useState(false)
       const mvuRef = useRef(null)
       useEffect(() => {
@@ -4320,6 +4414,18 @@ window.__ModuleLoader__.load({
         document.addEventListener('mousedown', closeOutside)
         return () => document.removeEventListener('mousedown', closeOutside)
       }, [mvuOpen])
+      const openMvuSurface = () => {
+        const sidebarRight = PanelHost.context?.get?.('sidebarRight')
+        if (sidebarRight && typeof sidebarRight.openTab === 'function') {
+          try {
+            sidebarRight.openTab(MVU_TAB_KIND)
+            return
+          } catch {
+            // 无在屏会话或 store 未铸：落回弹出层
+          }
+        }
+        setMvuOpen(!mvuOpen)
+      }
       if (!active || !binding) return null
       if (novelId !== null) {
         const novel = novelSummary || { title: novelId, status: 'active' }
@@ -4415,14 +4521,15 @@ window.__ModuleLoader__.load({
                 onClick: () => void forkTavernArchitecture(PanelHost.context, sessionId, binding),
               }, h(IconAgentPresetOutline16)),
               // AgentTavern 的 native conversation 由宿主渲染，插件正文区没有
-              // 可插入的 slot：MVU 面板以标题栏弹出层挂载（ST 走 TavernView 内联面板）
+              // 可插入的 slot：MVU 面板入口挂标题栏——右侧栏可用时开侧栏 tab
+              // （ST 走 TavernView 内联面板，两架构都能从右栏 guide 进入）
               h('span', { className: 'dt-mvu-slot', ref: mvuRef },
                 h('button', {
                   type: 'button',
                   title: t('mvu.title'),
                   'aria-label': t('mvu.title'),
                   'aria-expanded': mvuOpen,
-                  onClick: () => setMvuOpen(!mvuOpen),
+                  onClick: openMvuSurface,
                 }, h(IconDataOutline16)),
                 mvuOpen ? h('div', { className: 'dt-mvu-pop' }, h(TavernMvuStatus, { sessionId, embedded: true })) : null)),
           h('button', {
@@ -7549,6 +7656,32 @@ window.__ModuleLoader__.load({
         .dt-mvu-failures{display:flex;flex-direction:column;gap:2px}
         .dt-mvu-failures-title{color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:14px}
         .dt-mvu-failure{color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px;overflow-wrap:anywhere}
+        .dt-mvu-side{box-sizing:border-box;width:100%;height:100%;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:14px;padding:14px 14px 24px;color:var(--dsw-alias-label-primary);font-size:13px;font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}
+        .dt-mvu-side-head{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;flex:none}
+        .dt-mvu-summary{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .dt-mvu-side-retry{flex:none;height:28px;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer;font:inherit;font-size:12px}
+        .dt-mvu-side-retry:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .dt-mvu-side-retry:disabled{cursor:not-allowed;opacity:.45}
+        .dt-mvu-side-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-height:220px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:13px;line-height:20px}
+        .dt-mvu-side-empty svg{color:var(--dsw-alias-label-caption)}
+        .dt-mvu-side-section{display:flex;flex-direction:column;gap:8px;min-width:0}
+        .dt-mvu-side-h{display:flex;align-items:center;gap:8px;margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;font-weight:600;letter-spacing:.05em;text-transform:uppercase}
+        .dt-mvu-side-h>span:first-child{flex:none}
+        .dt-mvu-side-h::after{content:"";flex:1;height:1px;background:var(--dsw-alias-border-l2)}
+        .dt-mvu-side-count{flex:none;display:inline-flex;align-items:center;min-height:16px;padding:0 6px;border-radius:8px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:16px;font-weight:500;letter-spacing:0}
+        .dt-mvu-groups{display:flex;flex-direction:column;gap:10px}
+        .dt-mvu-group{display:flex;flex-direction:column;min-width:0;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;overflow:hidden}
+        .dt-mvu-group-h{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
+        .dt-mvu-group-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:18px;font-weight:600}
+        .dt-mvu-group-count{flex:none;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:14px}
+        .dt-mvu-group-body{display:flex;flex-direction:column}
+        .dt-mvu-var-row{display:grid;grid-template-columns:minmax(72px,max-content) minmax(0,1fr);gap:2px 12px;padding:5px 10px}
+        .dt-mvu-var-row+.dt-mvu-var-row{border-top:1px solid color-mix(in srgb,var(--dsw-alias-border-l2) 55%,transparent)}
+        .dt-mvu-side .dt-mvu-var-path{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px}
+        .dt-mvu-side .dt-mvu-var-value{color:var(--dsw-alias-label-primary);font-size:12px;line-height:17px;white-space:pre-wrap}
+        .dt-mvu-side .dt-mvu-receipt{gap:4px;border-radius:9px;padding:7px 10px}
+        .dt-mvu-side .dt-mvu-change{font-size:11.5px;line-height:17px}
+        .dt-mvu-side .dt-mvu-rendered{border-radius:10px}
         .dt-script-card{box-sizing:border-box;width:100%;margin:0 auto 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:12px;padding:8px 10px;display:flex;flex-direction:column;gap:6px}
         .dt-script-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
         .dt-script-card-title{font-weight:600}
@@ -7648,6 +7781,34 @@ window.__ModuleLoader__.load({
         order: 20,
         inject: () => ({}),
       }, SidebarFooterAction))
+      // DSH 原生右侧栏（宿主 ≥0.2.0-rc.2 的 ui-sidebar-right）：MVU 面板注册为
+      // 页面型 tab（无 patterns、按 kind 打开），guide 入口让任意会话都能从右栏
+      // 的「+」进入。sidebarRightTabs/sidebarRight 经 ctx.inject 动态等待——服务
+      // 就绪时回调生效、离开时随 scope 整体卸载；刻意不进 exports.inject：旧宿
+      // 主没有这两个服务，硬注入会让插件 apply 永久挂起，回退只剩标题栏弹层，
+      // 行为与侧栏存在前一致。
+      if (typeof ctx.inject === 'function') {
+        ctx.inject(['sidebarRightTabs', 'sidebarRight'], (scope) => {
+          scope.effect(() => scope.sidebarRightTabs.register({
+            id: MVU_TAB_ID,
+            kind: MVU_TAB_KIND,
+            priority: 'extension',
+            title: () => translate('mvu.title'),
+            guide: [{
+              id: 'mvu',
+              order: 40,
+              title: () => translate('mvu.title'),
+              description: () => translate('mvu.guide.description'),
+              icon: IconDataOutline16,
+            }],
+          }), 'dsh-tavern: sidebar-right mvu tab type')
+          scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+            name: 'sidebar.right.pane.tab',
+            key: MVU_TAB_ID,
+            inject: (sessionId) => ({ sessionId }),
+          }, TavernMvuSidebarTab)), 'dsh-tavern: sidebar-right mvu tab body')
+        })
+      }
     }
 
     exports.name = 'dsh-tavern'
