@@ -1385,6 +1385,32 @@ async function handleApi(ctx, req, res) {
   }
 
   // ---- 工作台方案确认协议（提案 0013 P2；世界书面板化同构扩展）----
+  // 写卡会话改名（对齐酒馆聊天的侧边栏改名能力）：title 写进 card-workbench
+  // 绑定——它是侧边栏分组与复用判定的数据源，客户端改名成功后另经宿主
+  // binding.session.rename 同步会话标题（best-effort）。只收 card-workbench
+  // 绑定，空 title / 非 workbench 会话 fail-closed。错误码 TAVERN_WORKBENCH。
+  if (method === 'POST' && route === 'card-workbench/rename') {
+    const body = await readJson(req)
+    if (typeof body.sessionId !== 'string' || typeof body.title !== 'string') {
+      return sendJson(res, 400, { ok: false, message: 'expected { sessionId, title }', code: 'TAVERN_WORKBENCH' })
+    }
+    const title = body.title.trim().slice(0, 200)
+    if (title === '') {
+      return sendJson(res, 400, { ok: false, message: 'title must be a non-empty string', code: 'TAVERN_WORKBENCH' })
+    }
+    const binding = (await db.getState()).sessionBindings[body.sessionId]
+    if (binding?.architecture !== 'card-workbench') {
+      return sendJson(res, 404, { ok: false, message: `session '${body.sessionId}' is not a CardWorkbench session`, code: 'TAVERN_WORKBENCH' })
+    }
+    const state = await db.updateState((current) => ({
+      sessionBindings: {
+        ...current.sessionBindings,
+        [body.sessionId]: { ...binding, title },
+      },
+    }))
+    return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] })
+  }
+
   // 方案 = card_plan_propose / world_plan_propose 落库的 pending 计划
   // （<tavern>/card-workbench/plans/，见 card-workbench/plans.ts，kind 判别）。
   // 面板拉列表看 diff、给决定；approve=true 经执行核（executeCardPlan /
@@ -2231,8 +2257,10 @@ async function handleWorkbenchOpenCommand(
         chatId: '',
         sourceCharacter: payload.sourceCharacter,
         sourceChatId: payload.sourceChatId,
-        // 幂等重发不抹掉出卡后记下的卡名（侧边栏分组与会话标题的数据源）。
+        // 幂等重发不抹掉出卡后记下的卡名（侧边栏分组与会话标题的数据源），
+        // 也不抹掉用户侧边栏显式改的名（title 压过一切派生标签）。
         createdCard: previous?.architecture === 'card-workbench' ? previous.createdCard : '',
+        ...(previous?.architecture === 'card-workbench' && previous.title !== undefined ? { title: previous.title } : {}),
       },
     },
   }))

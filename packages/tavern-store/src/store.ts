@@ -74,11 +74,14 @@ export type TavernSessionBinding =
      *  存 sourceCharacter/sourceChatId——聊天侧「交给工作台」时每个聊天对应
      *  一个写卡工作会话，面板自由拉起时两者为空串。createdCard 记录该会话
      *  最近一次 card_create 产出的卡名（空串 = 尚未出卡），会话标题与侧边栏
-     *  分组据此改名为卡名。 */
+     *  分组据此改名为卡名。title 是用户在侧边栏显式改的名（对齐酒馆聊天的
+     *  改名/删除能力）：一旦存在即压过 createdCard 与来源身份派生标签，
+     *  出卡自动改名不再覆盖它；缺失 = 未显式改名。 */
     architecture: 'card-workbench'
     sourceCharacter: string
     sourceChatId: string
     createdCard: string
+    title?: string
   })
 
 /** 一个 DSH session 的模型选择；缺省回落 agentDefaultModel。 */
@@ -810,7 +813,8 @@ export function normalizeTavernSessionBinding(value: unknown): TavernSessionBind
   // CardWorkbench bindings（提案 0013）与 agent-novel 同理：character/chatId
   // 为空串，必须在非空存在性检查之前识别，否则会被降级成 st 绑定。
   // sourceCharacter/sourceChatId 缺失（旧数据）时补空串 = 自由工作台；
-  // createdCard 同理补空串 = 尚未出卡。
+  // createdCard 同理补空串 = 尚未出卡。title 只接受非空字符串（空串/畸形
+  // 视为未显式改名，回落派生标签）。
   if (candidate.architecture === 'card-workbench') {
     return {
       character: typeof candidate.character === 'string' ? candidate.character : '',
@@ -819,6 +823,7 @@ export function normalizeTavernSessionBinding(value: unknown): TavernSessionBind
       sourceCharacter: typeof candidate.sourceCharacter === 'string' ? candidate.sourceCharacter : '',
       sourceChatId: typeof candidate.sourceChatId === 'string' ? candidate.sourceChatId : '',
       createdCard: typeof candidate.createdCard === 'string' ? candidate.createdCard : '',
+      ...(typeof candidate.title === 'string' && candidate.title.trim() !== '' ? { title: candidate.title } : {}),
     }
   }
   if (typeof candidate.character !== 'string' || candidate.character.trim() === '') return undefined

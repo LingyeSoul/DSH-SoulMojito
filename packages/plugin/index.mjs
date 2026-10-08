@@ -4605,7 +4605,8 @@ function normalizeTavernSessionBinding(value) {
       architecture: "card-workbench",
       sourceCharacter: typeof candidate.sourceCharacter === "string" ? candidate.sourceCharacter : "",
       sourceChatId: typeof candidate.sourceChatId === "string" ? candidate.sourceChatId : "",
-      createdCard: typeof candidate.createdCard === "string" ? candidate.createdCard : ""
+      createdCard: typeof candidate.createdCard === "string" ? candidate.createdCard : "",
+      ...typeof candidate.title === "string" && candidate.title.trim() !== "" ? { title: candidate.title } : {}
     };
   }
   if (typeof candidate.character !== "string" || candidate.character.trim() === "") return void 0;
@@ -14898,6 +14899,27 @@ async function handleApi(ctx, req, res) {
       ...renderedHtml !== void 0 ? { renderedHtml } : {}
     });
   }
+  if (method === "POST" && route === "card-workbench/rename") {
+    const body = await readJson(req);
+    if (typeof body.sessionId !== "string" || typeof body.title !== "string") {
+      return sendJson(res, 400, { ok: false, message: "expected { sessionId, title }", code: "TAVERN_WORKBENCH" });
+    }
+    const title = body.title.trim().slice(0, 200);
+    if (title === "") {
+      return sendJson(res, 400, { ok: false, message: "title must be a non-empty string", code: "TAVERN_WORKBENCH" });
+    }
+    const binding = (await db.getState()).sessionBindings[body.sessionId];
+    if (binding?.architecture !== "card-workbench") {
+      return sendJson(res, 404, { ok: false, message: `session '${body.sessionId}' is not a CardWorkbench session`, code: "TAVERN_WORKBENCH" });
+    }
+    const state = await db.updateState((current) => ({
+      sessionBindings: {
+        ...current.sessionBindings,
+        [body.sessionId]: { ...binding, title }
+      }
+    }));
+    return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] });
+  }
   if (method === "GET" && route === "card-workbench/plans") {
     const statusParam = url.searchParams.get("status") ?? "pending";
     if (statusParam !== "pending" && statusParam !== "approved" && statusParam !== "rejected" && statusParam !== "applied" && statusParam !== "all") {
@@ -15526,8 +15548,10 @@ async function handleWorkbenchOpenCommand(ctx, agent, payload) {
         chatId: "",
         sourceCharacter: payload.sourceCharacter,
         sourceChatId: payload.sourceChatId,
-        // 幂等重发不抹掉出卡后记下的卡名（侧边栏分组与会话标题的数据源）。
-        createdCard: previous?.architecture === "card-workbench" ? previous.createdCard : ""
+        // 幂等重发不抹掉出卡后记下的卡名（侧边栏分组与会话标题的数据源），
+        // 也不抹掉用户侧边栏显式改的名（title 压过一切派生标签）。
+        createdCard: previous?.architecture === "card-workbench" ? previous.createdCard : "",
+        ...previous?.architecture === "card-workbench" && previous.title !== void 0 ? { title: previous.title } : {}
       }
     }
   }));
@@ -16495,7 +16519,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.1".trim() : "";
-  const commit = true ? normalizeCommit("bc26cb3") : void 0;
+  const commit = true ? normalizeCommit("351698a") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

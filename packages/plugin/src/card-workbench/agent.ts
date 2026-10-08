@@ -1172,10 +1172,12 @@ function isSessionTitle(candidate: unknown): candidate is { rename: (session: un
  * 出卡后把本工作台会话改名为卡名（提案 0013 补充）：绑定面记 createdCard
  * （自绘侧边栏「写卡工作台」分组与复用判定据此显示卡名），宿主面经
  * sessionTitle.rename 固定会话标题（显式改名会停掉宿主的自动起名）。绑定
- * 先写——它不依赖宿主服务且是侧边栏的数据源；rename 后试。整个函数
- * best-effort：卡已落库，改名链路任何失败都不让 card_create 报错；非
- * card-workbench 绑定的会话（无身份通道的老宿主、preset 挂到了别的会话）
- * 直接跳过，不劫持无关会话的标题。
+ * 先写——它不依赖宿主服务且是侧边栏的数据源；rename 后试。用户在侧边栏
+ * 显式改过名（binding.title）时让位：createdCard 照记（数据），宿主标题与
+ * 侧边栏标签保持用户的名字不被卡名覆盖。整个函数 best-effort：卡已落库，
+ * 改名链路任何失败都不让 card_create 报错；非 card-workbench 绑定的会话
+ * （无身份通道的老宿主、preset 挂到了别的会话）直接跳过，不劫持无关会话
+ * 的标题。
  */
 async function nameSessionAfterCreatedCard(exec: ToolExecution, cardName: string): Promise<void> {
   try {
@@ -1193,7 +1195,7 @@ async function nameSessionAfterCreatedCard(exec: ToolExecution, cardName: string
         },
       }))
     }
-    if (agent.session !== undefined && agent.session !== null) {
+    if (binding.title === undefined && agent.session !== undefined && agent.session !== null) {
       sessionTitleOf(agent)?.rename(agent.session, cardName)
     }
   } catch {

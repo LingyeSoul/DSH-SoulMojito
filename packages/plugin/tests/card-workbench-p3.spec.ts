@@ -282,6 +282,38 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
     expect(renames).toHaveLength(2)
   })
 
+  it('card_create leaves a user-renamed workbench session title untouched', async () => {
+    // 用户在侧边栏显式改过名（binding.title）压过出卡自动改名：createdCard
+    // 照记（数据面），宿主标题不再被卡名覆盖（显式意图最新者胜）。
+    const renames: Array<{ session: unknown; title: string }> = []
+    const liveSession = { id: 'wb-user-title' }
+    await store.updateState((state) => ({
+      sessionBindings: {
+        ...state.sessionBindings,
+        'wb-user-title': {
+          architecture: 'card-workbench', character: '', chatId: '',
+          sourceCharacter: '', sourceChatId: '', createdCard: '', title: 'My draft corner',
+        },
+      },
+    }))
+    const result = await tools.get('card_create')!.execute(
+      { name: 'Titled Hero', confirmed: true },
+      {
+        agent: {
+          id: 'wb-user-title',
+          session: liveSession,
+          ctx: { get: (name: string) => name === 'sessionTitle' ? { rename: (session: unknown, title: string) => { renames.push({ session, title }) } } : undefined },
+        },
+      },
+    )
+    expect(result).toMatchObject({ created: true })
+    expect((await store.getState()).sessionBindings['wb-user-title']).toMatchObject({
+      createdCard: 'Titled Hero',
+      title: 'My draft corner',
+    })
+    expect(renames).toEqual([])
+  })
+
   it('card_create never fails on missing host faces and leaves foreign sessions untouched', async () => {
     // 自足绑定，不依赖上一条用例的写入顺序。
     await store.updateState((state) => ({
@@ -465,5 +497,42 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
       expect(body.chat.header.chat_metadata.variables).toBeUndefined()
       expect('variables' in body.chat.header.chat_metadata).toBe(false)
     }
+  })
+
+  /* --------------------- 写卡会话改名路由（能力补齐） --------------------- */
+
+  it('card-workbench/rename renames a bound workbench session and rejects everything else', async () => {
+    await store.updateState((state) => ({
+      sessionBindings: {
+        ...state.sessionBindings,
+        'wb-api': {
+          architecture: 'card-workbench', character: '', chatId: '',
+          sourceCharacter: '', sourceChatId: '', createdCard: '',
+        },
+        'st-api': { architecture: 'st', character: LEGACY, chatId: 'chat.jsonl' },
+      },
+    }))
+    const response = makeResponse()
+    await apiHandler(makeRequest({ sessionId: 'wb-api', title: '  Draft v2  ' }, '/api/dsh-tavern/card-workbench/rename'), response)
+    expect(response.statusCode).toBe(200)
+    const body = JSON.parse(response.chunks[0]!)
+    expect(body.ok).toBe(true)
+    // title 落绑定（侧边栏标签数据源），首尾空白收掉。
+    expect((await store.getState()).sessionBindings['wb-api']).toMatchObject({ title: 'Draft v2' })
+
+    // 非 workbench 绑定 / 未知会话 fail-closed，缺字段与空 title 同样拒绝。
+    for (const [payload, status] of [
+      [{ sessionId: 'st-api', title: 'X' }, 404],
+      [{ sessionId: 'ghost-api', title: 'X' }, 404],
+      [{ sessionId: 'wb-api' }, 400],
+      [{ sessionId: 'wb-api', title: '   ' }, 400],
+    ] as Array<[Record<string, unknown>, number]>) {
+      const rejected = makeResponse()
+      await apiHandler(makeRequest(payload, '/api/dsh-tavern/card-workbench/rename'), rejected)
+      expect(rejected.statusCode).toBe(status)
+      expect(JSON.parse(rejected.chunks[0]!).ok).toBe(false)
+    }
+    // 失败路径不留半写状态：wb-api 的 title 未被后续失败请求改动。
+    expect((await store.getState()).sessionBindings['wb-api']).toMatchObject({ title: 'Draft v2' })
   })
 })
