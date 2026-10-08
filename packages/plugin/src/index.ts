@@ -83,7 +83,7 @@ import {
   shouldAdvance,
 } from '../../tavern-store/src/index.js'
 import { formatRewriteBlock, optionalFeedback } from './rewrite.js'
-import { saveOriginalSnapshot } from '../../tavern-store/src/index.js'
+import { deleteOriginalSnapshot, moveOriginalSnapshot, saveOriginalSnapshot } from '../../tavern-store/src/index.js'
 import { dshHomePath } from './dsh-home.js'
 import { TavernUpdateService, updateChangelog } from './update/service.js'
 // 卡片工作台方案确认协议（提案 0013 P2）：方案存储在 card-workbench/plans.ts，
@@ -813,6 +813,10 @@ async function handleApi(ctx, req, res) {
     clampIdentitySummary(body.card)
     const saved = await db.updateCharacter(oldName, body.card)
     const nextName = saved.card.data.name
+    if (nextName !== oldName) {
+      // 原版快照按卡名寻址、跟卡走；不迁移则新名 restore 断链、旧名留幽灵快照。
+      await moveOriginalSnapshot(dshHomePath('tavern'), oldName, nextName)
+    }
     const state = await db.updateState((current) => {
       const activeCharacter = current.activeCharacter === oldName ? nextName : current.activeCharacter
       const sessionBindings = Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
@@ -866,6 +870,9 @@ async function handleApi(ctx, req, res) {
       sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings)
         .filter(([, binding]) => !(binding.character === name && binding.group !== true))),
     }))
+    // 删原版快照（对齐 card_delete 工具面）：否则同名卡再导入时「首个胜出」
+    // 保住陈旧快照，card_restore_original 会把旧卡写回新卡。
+    await deleteOriginalSnapshot(dshHomePath('tavern'), name)
     await refreshActivePrompt()
     return sendJson(res, 200, { ok: true, state })
   }

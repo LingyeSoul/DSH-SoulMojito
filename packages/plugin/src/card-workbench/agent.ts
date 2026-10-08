@@ -68,6 +68,7 @@ import {
   deleteOriginalSnapshot,
   getScript,
   listScripts,
+  moveOriginalSnapshot,
   readOriginalSnapshot,
   restoreOriginal,
   saveOriginalSnapshot,
@@ -1142,6 +1143,11 @@ async function saveCardValues(
     specVersion: current.card.specVersion,
     data: nextData,
   })
+  if (saved.card.data.name !== current.card.data.name) {
+    // 改名跟卡迁移原版快照（对齐面板 PUT 路由）：旧名快照不迁移会变幽灵，
+    // 污染将来同名卡的「首个胜出」导入快照。
+    await moveOriginalSnapshot(dshHomePath('tavern'), character, saved.card.data.name)
+  }
   return { found: current, saved }
 }
 

@@ -82,6 +82,26 @@ export async function deleteOriginalSnapshot(root: string, characterName: string
 }
 
 /**
+ * 改名时迁移原版快照（快照按卡名寻址、跟卡走）：旧名移到新名。不迁移的话
+ * 改名后新名 restore 断链，旧名快照变幽灵，会污染将来同名卡的导入快照。
+ * 目标位置若已有快照，只能是已删卡残留的幽灵（改名前 updateCharacter 已
+ * 确认无同名活卡），删除让位。无旧名快照（手工建卡）返回 false。
+ */
+export async function moveOriginalSnapshot(root: string, fromName: string, toName: string): Promise<boolean> {
+  const from = originalSnapshotPath(root, fromName)
+  const to = originalSnapshotPath(root, toName)
+  if (from === to) return false
+  if (!(await fileExists(from))) return false
+  try {
+    await fs.unlink(to)
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause
+  }
+  await fs.rename(from, to)
+  return true
+}
+
+/**
  * 恢复原版：把快照写回工作版，返回新工作版；无快照返回 undefined。
  * 工作版存在时走 updateCharacter（保留 PNG/CHARX 容器、迁移文件名与聊天
  * 目录，传规范 JSON 形态触发整体替换分支而非 data 合并，raw 袋也回到
@@ -97,6 +117,9 @@ export async function restoreOriginal(root: string, characterName: string): Prom
   } else {
     await store.updateCharacter(characterName, encodeCharacterCardJson(original))
   }
+  // 工作版可能被整体替换回原名（updateCharacter 全量 JSON 分支会改名迁移），
+  // 快照跟卡走：原 key 迁到恢复后的卡名，维持「快照按当前卡名寻址」不变量。
+  await moveOriginalSnapshot(root, characterName, original.data.name)
   const restored = await store.getCharacter(original.data.name)
   if (restored === undefined) throw new Error(`character '${original.data.name}' could not be reloaded after restore`)
   return restored
