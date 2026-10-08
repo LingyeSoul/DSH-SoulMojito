@@ -44,6 +44,28 @@ describe('TavernStore', () => {
     expect(await store.listCharacters()).toEqual([])
   }))
 
+  it('变更水位：资产写入推进、无写入稳定、聊天写入不参与', withStore(async (store) => {
+    const initial = await store.storeRevision()
+    expect(await store.storeRevision()).toBe(initial)
+    await store.importWorldFile('Watermark Lore', {
+      entries: {
+        '0': {
+          uid: 0, key: [], keysecondary: [], comment: 'watermark', content: 'lore',
+          constant: true, selective: false, order: 100, position: 0, disable: false,
+        },
+      },
+    })
+    const afterWorld = await store.storeRevision()
+    expect(afterWorld).not.toBe(initial)
+    await store.importCharacter(sampleCard)
+    const afterCharacter = await store.storeRevision()
+    expect(afterCharacter).not.toBe(afterWorld)
+    const header = { user_name: 'unused', character_name: 'unused', chat_metadata: {} }
+    await store.createChat('Test Char', header, [])
+    // 聊天有各自的 CAS revision 通道，不推资产水位（避免面板为聊天写入空转重取）
+    expect(await store.storeRevision()).toBe(afterCharacter)
+  }))
+
   it('角色：删除连同聊天目录移除', withStore(async (store, dir) => {
     await store.importCharacter(sampleCard)
     const header = { user_name: 'unused', character_name: 'unused', chat_metadata: {} }

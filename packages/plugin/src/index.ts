@@ -473,6 +473,9 @@ async function handleApi(ctx, req, res) {
     await agentTavernCapabilitiesPromise
     const internalWorkspace = await prepareInternalWorkspace()
     const workbenchWorkspace = await prepareWorkbenchWorkspace()
+    // store 变更水位先于资产列表读取：客户端以它做轮询水位线，先取水位后读
+    // 列表，最坏情况（读列表期间又有写入）只是下一轮多刷一次，不会漏刷新。
+    const storeRevision = await db.storeRevision()
     const state = await db.getState()
     const active = state.activeCharacter ? await db.getCharacter(state.activeCharacter) : undefined
     const groups = []
@@ -492,6 +495,7 @@ async function handleApi(ctx, req, res) {
     }
     return sendJson(res, 200, {
       ok: true,
+      storeRevision,
       state,
       characters: await db.listCharacters(),
       worlds: await db.listWorlds(),
@@ -511,6 +515,13 @@ async function handleApi(ctx, req, res) {
       // 保证 bootstrap 永远不因网络失败而变慢或报错。
       update: tavernUpdate(ctx).snapshot(),
     })
+  }
+
+  // 资产变更水位（写卡 Agent 等后台写入没有推送通道）：客户端页面可见期间
+  // 轮询这个轻量端点，与 bootstrap 携带的 storeRevision 比对，变化即重取
+  // bootstrap，刷新角色卡/世界书/预设等列表。
+  if (method === 'GET' && route === 'store-revision') {
+    return sendJson(res, 200, { ok: true, revision: await db.storeRevision() })
   }
 
   if (method === 'GET' && route.startsWith('avatar/')) {

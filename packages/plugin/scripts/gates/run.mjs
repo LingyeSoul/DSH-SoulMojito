@@ -35,6 +35,7 @@ const API_PREFIX = '/api/dsh-tavern'
 
 const REQUIRED_SERVER_ROUTES = [
   'bootstrap',
+  'store-revision',
   'state',
   'models',
   'model',
@@ -393,7 +394,7 @@ function checkClientText(text) {
   }
   if (!/exports\.inject\s*=/.test(text)) problems.push('client bundle must export inject')
   if (!/exports\.apply\s*=/.test(text)) problems.push('client bundle must export apply')
-  for (const marker of ['revision', 'CHAT_REVISION_CONFLICT', 'bindings/prune']) {
+  for (const marker of ['revision', 'CHAT_REVISION_CONFLICT', 'bindings/prune', 'store-revision']) {
     if (!text.includes(marker)) problems.push(`client bundle is missing state-safety marker '${marker}'`)
   }
   if (text.includes('data-conversation-composer-overlay')) {
@@ -1383,7 +1384,7 @@ const gates = [
   {
     name: 'client-bundle',
     selfTest: () => {
-      const good = "window.__ModuleLoader__.load({ id: 'dsh-tavern', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); require('@deepseek-ai/dsh-client-ui-primitives'); const markers = ['revision', 'CHAT_REVISION_CONFLICT', 'bindings/prune']; exports.name = 'dsh-tavern'; exports.inject = ['slots']; exports.apply = () => markers; return module.exports; } });"
+      const good = "window.__ModuleLoader__.load({ id: 'dsh-tavern', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); require('@deepseek-ai/dsh-client-ui-primitives'); const markers = ['revision', 'CHAT_REVISION_CONFLICT', 'bindings/prune', 'store-revision']; exports.name = 'dsh-tavern'; exports.inject = ['slots']; exports.apply = () => markers; return module.exports; } });"
       const bad = good.replace("require('react')", "require('@deepseek-ai/not-platform')")
       return checkClientText(good).length === 0 && checkClientText(bad).length > 0
         ? []

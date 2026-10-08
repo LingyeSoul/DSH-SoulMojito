@@ -1346,7 +1346,9 @@ window.__ModuleLoader__.load({
     const STYLE_ID = 'dsh-tavern/native-ui'
     const REVISION_CONFLICT = 'CHAT_REVISION_CONFLICT'
     const NOVEL_REVISION_CONFLICT = 'NOVEL_REVISION_CONFLICT'
+    const STORE_REVISION_POLL_MS = 3000
     const EMPTY_BOOTSTRAP = {
+      storeRevision: '',
       state: {
         activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
         agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
@@ -1449,6 +1451,15 @@ window.__ModuleLoader__.load({
         update({ loading: false, error: cause instanceof Error ? cause.message : String(cause) })
         throw cause
       }
+    }
+
+    // 资产变更水位（store-revision）：写卡 Agent 等后台写入直接在服务端落盘、
+    // 没有推送通道，客户端轮询它与 bootstrap 携带的 storeRevision 比对，变化
+    // 即重取 bootstrap。与自更新安装进度（1.5s 轮询 `/update`）同款轮询策略，
+    // 不引入 SSE。
+    async function fetchStoreRevision() {
+      const result = await api('store-revision')
+      return typeof result.revision === 'string' ? result.revision : ''
     }
 
     // 自更新三件套：读快照（宿主缓存结论，默认不打网络）、强制检查、开始安装。
@@ -6984,7 +6995,12 @@ window.__ModuleLoader__.load({
         setBusyId(plan.id)
         setError('')
         void decideWorkbenchPlan(plan.id, approve)
-          .then(() => reload())
+          .then(() => {
+            // 批准会写入资产（角色卡/世界书/预设）：立即重取 bootstrap，角色卡
+            // 分区与侧栏不必等下一次水位轮询就同步到新内容。
+            if (approve === true) void refreshBootstrap().catch(() => {})
+            return reload()
+          })
           .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
           .finally(() => setBusyId(''))
       }
@@ -7186,6 +7202,34 @@ window.__ModuleLoader__.load({
         window.addEventListener('dsh-tavern:toggle-panel', toggle)
         return () => window.removeEventListener('dsh-tavern:toggle-panel', toggle)
       }, [])
+      // 后台写入（写卡 Agent 等）没有推送通道：页面可见期间按 3s 轮询 store
+      // 变更水位，水位一变就重取 bootstrap——角色卡/世界书/预设与侧栏自动吸收，
+      // 不再需要手动刷新网页。refreshing 防抖避免慢请求期间重复触发。
+      useEffect(() => {
+        let disposed = false
+        let refreshing = false
+        const check = () => {
+          if (disposed || refreshing || document.visibilityState === 'hidden') return
+          refreshing = true
+          void fetchStoreRevision()
+            .then((revision) => {
+              if (disposed || revision === '' || revision === snapshot.bootstrap.storeRevision) return undefined
+              return refreshBootstrap()
+            })
+            .catch(() => {})
+            .finally(() => { refreshing = false })
+        }
+        const timer = setInterval(check, STORE_REVISION_POLL_MS)
+        return () => {
+          disposed = true
+          clearInterval(timer)
+        }
+      }, [])
+      // 打开面板先无条件重取一次：不等下一拍水位轮询，打开即最新。
+      useEffect(() => {
+        if (!state.panelOpen) return
+        void refreshBootstrap().catch(() => {})
+      }, [state.panelOpen])
       return h(React.Fragment, null,
         host ? createPortal(h(TavernSidebar, { ctx: PanelHost.context, useSessions }), host) : null,
         h(Modal, {

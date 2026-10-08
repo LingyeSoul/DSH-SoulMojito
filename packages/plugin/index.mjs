@@ -4077,6 +4077,27 @@ var TavernStore = class _TavernStore {
     }
     return new _TavernStore(root);
   }
+  /* ---------------------------- 变更水位 ---------------------------- */
+  /**
+   * 资产变更水位：characters/worlds/presets/personas(+avatars)/groups 的目录项
+   * 名、size 与 mtimeMs 的 sha256 摘要。写卡 Agent 等后台路径直接落盘、没有
+   * 推送通道，客户端面板靠轮询这个水位感知变化并重取 bootstrap；摘要只读目录
+   * 元数据而不是文件内容，保证按秒级轮询足够便宜。chats/ 有各自的 CAS revision、
+   * state.json 由面板写路径自行刷新，都不参与。
+   */
+  async storeRevision() {
+    const hash = createHash("sha256");
+    for (const dir of ["characters", "worlds", "presets", "personas", "personas/avatars", "groups"]) {
+      hash.update(`${dir}
+`);
+      for (const name2 of (await this.listDir(dir)).sort()) {
+        const stat = await fs.stat(path.join(this.root, dir, name2)).catch(() => void 0);
+        hash.update(`${name2}\0${stat === void 0 ? "missing" : `${stat.size}\0${stat.mtimeMs}`}
+`);
+      }
+    }
+    return hash.digest("base64url");
+  }
   /* ------------------------------ 角色 ------------------------------ */
   /** 导入角色卡：PNG/CHARX 原字节落盘保留资源；JSON 对象序列化落盘。重名覆盖。
    *  卡内嵌角色书自动物化为世界书文件并写回 extensions.world 链接（对齐 ST 导入语义）。
@@ -13647,6 +13668,7 @@ async function handleApi(ctx, req, res) {
     await agentTavernCapabilitiesPromise;
     const internalWorkspace = await prepareInternalWorkspace();
     const workbenchWorkspace = await prepareWorkbenchWorkspace();
+    const storeRevision = await db.storeRevision();
     const state = await db.getState();
     const active = state.activeCharacter ? await db.getCharacter(state.activeCharacter) : void 0;
     const groups = [];
@@ -13666,6 +13688,7 @@ async function handleApi(ctx, req, res) {
     }
     return sendJson(res, 200, {
       ok: true,
+      storeRevision,
       state,
       characters: await db.listCharacters(),
       worlds: await db.listWorlds(),
@@ -13685,6 +13708,9 @@ async function handleApi(ctx, req, res) {
       // 保证 bootstrap 永远不因网络失败而变慢或报错。
       update: tavernUpdate(ctx).snapshot()
     });
+  }
+  if (method === "GET" && route === "store-revision") {
+    return sendJson(res, 200, { ok: true, revision: await db.storeRevision() });
   }
   if (method === "GET" && route.startsWith("avatar/")) {
     const name2 = decodeURIComponent(route.slice("avatar/".length));
@@ -15990,7 +16016,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.0".trim() : "";
-  const commit = true ? normalizeCommit("d5bc356") : void 0;
+  const commit = true ? normalizeCommit("7be2ae3") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
