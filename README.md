@@ -29,7 +29,7 @@
 - Composer 模型选择：复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
 - 并发保护：聊天使用内容 revision 做 compare-and-swap；跨标签页冲突返回 `409`，客户端重新加载最新内容，不静默覆盖。
 - 可选的普通 Agent 人格注入，默认关闭。
-- AgentTavern 原生模式：单角色新聊天默认复用 DSH AgentLoop、原生 composer、Stop、错误处理和统计；角色、世界书、场景、记忆和变量通过会话级工具按需读取，原生事件幂等投影回 Tavern JSONL。可选开关会在新 AgentTavern 会话初始化时一次性预载角色信息和常驻世界书条目，默认关闭且不追溯修改已有会话。现有 ST 兼容架构继续保留。
+- AgentTavern 原生模式：单角色新聊天默认复用 DSH AgentLoop、原生 composer、Stop、错误处理和统计；角色、世界书、场景、记忆和变量通过会话级工具按需读取，原生事件幂等投影回 Tavern JSONL。激活预设同样生效：启用的内容型提示词按 `prompt_order` 顺序注入会话 system prompt（`main`/`jailbreak` 保留角色卡 `system_prompt`/`post_history_instructions` 覆盖语义），采样只投影 `temperature`；资产类 marker（角色卡字段、世界书、示例对话、历史）不重复固定注入，仍由工具、原生历史与可选预载承接。可选开关会在新 AgentTavern 会话初始化时一次性预载角色信息和常驻世界书条目，默认关闭且不追溯修改已有会话。现有 ST 兼容架构继续保留。
 - AgentTavern managed 模式：保持关闭。该门禁的宿主能力审计基于 DSH `0.1.0-rc.6`（宿主尚未提供 `agent/context` 历史投影和 projection-aware compaction）；`0.2.0-rc.2` 已确认仍未提供该 seam。插件不会把普通 compaction 冒充为主动遗忘，也不会静默回退到伪 managed 模式。详见 [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)。
 - MVU 变量结算：变量由后台按卡内规则做**确定性脚本结算**（与 flizzywine 的后台 LLM 结算是不同的架构选择，日常结算零额外模型开销），正文不再夹带状态栏。每轮产出变量回执（每项变更的前后值、原因、失败项），失败项可单独重试而不动正文；固定状态栏模板由变量渲染，不随流式生成掉格式。面板与状态栏在两个架构表面都可达：ST 挂在聊天视图顶部，AgentTavern 从会话标题栏按钮弹出；变量源按绑定架构取（ST 读 `chat_metadata.variables`，AgentTavern 聊天读 chat 作用域变量存储并覆盖回同一棵嵌套树），只有回执、没有变量落盘的失败轮同样可见。AgentTavern 侧提供 `tavern_variable_settle` 工具，ST 侧走同一结算执行器与回执投影。详见 [`docs/proposals/0012-mvu-settlement.md`](docs/proposals/0012-mvu-settlement.md)。
 - 卡片工作台：`dsh-tavern/card-workbench` agent preset。用对话描述想改什么，Agent 先给出方案，经确认面板（diff 视图）确认后才写入——写入工具必须携带已确认方案的 `planId`。支持修改人物卡/世界书/预设、空白建卡、从素材或剧本提取人物制卡、card-to-mvu 转换（写入固定状态栏模板与新聊天初始变量），以及把指定聊天连同楼层范围交给工作台排错。导入资产时写一次原版快照，随时可恢复原版。写卡 Agent 落盘后面板自动吸收：打开面板即重取最新资产，页面可见期间按 store 变更水位（3s）轮询，写入到列表可见不需手动刷新页面。详见 [`docs/proposals/0013-card-workbench.md`](docs/proposals/0013-card-workbench.md)。
@@ -122,7 +122,7 @@ DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏
 
 | 架构 / 模式 | 状态 | 实际行为 |
 |---|---|---|
-| `agent-tavern` + `dsh-native` | rc.6 可用，单角色新聊天默认启用 | 使用 DSH 原生 AgentLoop 和 composer；模型、工具调用、Stop、错误与统计都由宿主处理，原生 user/final assistant 事件投影到 Tavern JSONL。 |
+| `agent-tavern` + `dsh-native` | rc.6 可用，单角色新聊天默认启用 | 使用 DSH 原生 AgentLoop 和 composer；模型、工具调用、Stop、错误与统计都由宿主处理，原生 user/final assistant 事件投影到 Tavern JSONL。激活预设以 `dsh-tavern:agent-preset` systemPrompt section 注入（内容提示词 + `temperature`；资产 marker 由工具与可选预载承接）。 |
 | `agent-tavern` + `agent-managed` | rc.6 不可用 | 设置页显示宿主缺少 `agent/context` 与 projection-aware compaction 的原因并禁用选项；服务端也会拒绝该模式。 |
 | `st` | 保留并兼容 | 使用 Tavern 自有 `/generate`、流式生成、swipe、regenerate 和 STscript 路径。 |
 | 群聊 | 固定使用 `st` | 宿主尚未提供可靠的 actor 元数据前，不创建群聊 AgentTavern 会话。 |

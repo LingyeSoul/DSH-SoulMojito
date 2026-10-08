@@ -404,4 +404,22 @@ describe('Conversation Guides (proposal 0009)', () => {
       expect(guidesTextOf('native-guides-lazy')).toContain('好感度涨得慢一点')
     })
   })
+
+  it('keeps the guides invalidation registry shared across module instances (split bundles)', async () => {
+    // 真实部署里 emit 在 index.mjs 的 guides 路由、监听在 agent.mjs：模块级 Set
+    // 会各持一份，写穿静默失效。globalThis（Symbol.for）锚定必须跨实例共享。
+    vi.resetModules()
+    const first = await import('../src/guides.js')
+    let fired = 0
+    const dispose = first.onGuidesChanged(() => { fired += 1 })
+    try {
+      vi.resetModules()
+      const second = await import('../src/guides.js')
+      expect(second).not.toBe(first)
+      await second.emitGuidesChanged(CHARACTER, 'cross-instance-chat')
+      expect(fired).toBe(1)
+    } finally {
+      dispose()
+    }
+  })
 })

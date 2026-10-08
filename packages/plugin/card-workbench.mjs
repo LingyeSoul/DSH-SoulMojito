@@ -2731,6 +2731,21 @@ function hostPromptSafe(text, expand = (value) => value) {
   return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
 }
 
+// packages/plugin/src/agent-tavern/preset.ts
+var AGENT_PRESET_CHANGED_LISTENERS = Symbol.for("dsh-tavern:agent-preset-changed-listeners");
+function agentPresetChangedListeners() {
+  const holder = globalThis;
+  return holder[AGENT_PRESET_CHANGED_LISTENERS] ??= /* @__PURE__ */ new Set();
+}
+async function emitAgentPresetChanged() {
+  for (const listener of [...agentPresetChangedListeners()]) {
+    try {
+      await listener();
+    } catch {
+    }
+  }
+}
+
 // packages/plugin/src/card-workbench/plans.ts
 import { promises as fs4 } from "node:fs";
 import * as path4 from "node:path";
@@ -3807,6 +3822,7 @@ function createTools() {
         applied.push({ name: edit.name, identifiers, fields });
       }
       await db.putPreset(preset, next);
+      await emitAgentPresetChanged();
       return { preset, promptCount: next.prompts.length, edits: applied };
     }),
     tool("chat_log_read", "Read a bounded range of floors from a stored Tavern chat log (character + chatId) \u2014 the debugging entry point: compare what the model actually produced against regex/beautification output before touching resources. At most 50 messages per call, each message body truncated to 2000 characters.", {

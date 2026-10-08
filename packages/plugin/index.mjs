@@ -9180,9 +9180,13 @@ function formatGuidesBlock(guides) {
     ...[...normalized].sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((guide) => `- ${guide.text}`)
   ].join("\n");
 }
-var guidesChangedListeners = /* @__PURE__ */ new Set();
+var GUIDES_CHANGED_LISTENERS = Symbol.for("dsh-tavern:guides-changed-listeners");
+function guidesChangedListeners() {
+  const holder = globalThis;
+  return holder[GUIDES_CHANGED_LISTENERS] ??= /* @__PURE__ */ new Set();
+}
 async function emitGuidesChanged(character, chatId) {
-  for (const listener of [...guidesChangedListeners]) {
+  for (const listener of [...guidesChangedListeners()]) {
     try {
       await listener(character, chatId);
     } catch {
@@ -11535,6 +11539,46 @@ function subagentRuntimeOf(parent) {
 }
 function isRuntime(candidate) {
   return typeof candidate === "object" && candidate !== null && typeof candidate.start === "function";
+}
+
+// packages/plugin/src/agent-tavern/preset.ts
+var HISTORY_DUMMY_ID2 = 1e5;
+function defaultPreset() {
+  const prompts = [
+    { name: "Main Prompt", system_prompt: true, role: "system", content: "Write {{char}}'s next reply in a fictional roleplay chat between {{char}} and {{user}}. Stay in character and never write dialogue or actions for {{user}}.", identifier: "main" },
+    { identifier: "worldInfoBefore", name: "World Info (before)", system_prompt: true, marker: true },
+    { identifier: "personaDescription", name: "Persona", system_prompt: true, marker: true },
+    { identifier: "charDescription", name: "Character Description", system_prompt: true, marker: true },
+    { identifier: "charPersonality", name: "Character Personality", system_prompt: true, marker: true },
+    { identifier: "scenario", name: "Scenario", system_prompt: true, marker: true },
+    { identifier: "worldInfoAfter", name: "World Info (after)", system_prompt: true, marker: true },
+    { identifier: "dialogueExamples", name: "Dialogue Examples", system_prompt: true, marker: true },
+    { identifier: "chatHistory", name: "Chat History", system_prompt: true, marker: true },
+    { name: "Post-History Instructions", system_prompt: true, role: "system", content: "", identifier: "jailbreak" }
+  ];
+  return {
+    temperature: 1,
+    openai_max_context: 32768,
+    openai_max_tokens: 800,
+    wi_format: "{0}",
+    scenario_format: "{{scenario}}",
+    personality_format: "{{personality}}",
+    prompts,
+    prompt_order: [{ character_id: HISTORY_DUMMY_ID2, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
+  };
+}
+var AGENT_PRESET_CHANGED_LISTENERS = Symbol.for("dsh-tavern:agent-preset-changed-listeners");
+function agentPresetChangedListeners() {
+  const holder = globalThis;
+  return holder[AGENT_PRESET_CHANGED_LISTENERS] ??= /* @__PURE__ */ new Set();
+}
+async function emitAgentPresetChanged() {
+  for (const listener of [...agentPresetChangedListeners()]) {
+    try {
+      await listener();
+    } catch {
+    }
+  }
 }
 
 // packages/plugin/src/template.ts
@@ -14044,6 +14088,9 @@ function apply(ctx, config = {}) {
         parsed.architecture,
         parsed.contextMode
       );
+      if (parsed.architecture === "agent-tavern") {
+        await emitAgentPresetChanged();
+      }
       if (preloadSnapshot !== void 0) {
         agent.inject(createMessage({
           role: "user",
@@ -14544,6 +14591,7 @@ async function handleApi(ctx, req, res) {
       ...body.compaction !== void 0 ? { compaction: compactionOverrideOf(body.compaction) } : {}
     };
     const state = await db.patchState(patch);
+    if ("activePreset" in patch || "activePersona" in patch) await emitAgentPresetChanged();
     await refreshActivePrompt();
     return sendJson(res, 200, { ok: true, state });
   }
@@ -14582,6 +14630,7 @@ async function handleApi(ctx, req, res) {
     if (typeof body.name !== "string" || !body.data || typeof body.data !== "object") throw new Error("expected { name, data }");
     parsePresetOrThrow(body.data);
     await db.putPreset(body.name, body.data);
+    await emitAgentPresetChanged();
     return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data) });
   }
   if (method === "GET" && route.startsWith("preset/")) {
@@ -14602,6 +14651,7 @@ async function handleApi(ctx, req, res) {
     const state = await db.updateState((current) => ({
       activePreset: current.activePreset === oldName ? body.name : current.activePreset
     }));
+    await emitAgentPresetChanged();
     await refreshActivePrompt();
     return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data), data: body.data, state });
   }
@@ -15041,6 +15091,7 @@ async function handleApi(ctx, req, res) {
     const state = await db.updateState((current) => ({
       activePreset: current.activePreset === name2 ? void 0 : current.activePreset
     }));
+    await emitAgentPresetChanged();
     return sendJson(res, 200, { ok: true, state });
   }
   if (method === "GET" && route.startsWith("export/preset/")) {
@@ -16552,7 +16603,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.1".trim() : "";
-  const commit = true ? normalizeCommit("f7b8aa8") : void 0;
+  const commit = true ? normalizeCommit("a9d8826") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -16618,30 +16669,6 @@ function roleName(role) {
 }
 function numberOr(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-function defaultPreset() {
-  const prompts = [
-    { name: "Main Prompt", system_prompt: true, role: "system", content: "Write {{char}}'s next reply in a fictional roleplay chat between {{char}} and {{user}}. Stay in character and never write dialogue or actions for {{user}}.", identifier: "main" },
-    { identifier: "worldInfoBefore", name: "World Info (before)", system_prompt: true, marker: true },
-    { identifier: "personaDescription", name: "Persona", system_prompt: true, marker: true },
-    { identifier: "charDescription", name: "Character Description", system_prompt: true, marker: true },
-    { identifier: "charPersonality", name: "Character Personality", system_prompt: true, marker: true },
-    { identifier: "scenario", name: "Scenario", system_prompt: true, marker: true },
-    { identifier: "worldInfoAfter", name: "World Info (after)", system_prompt: true, marker: true },
-    { identifier: "dialogueExamples", name: "Dialogue Examples", system_prompt: true, marker: true },
-    { identifier: "chatHistory", name: "Chat History", system_prompt: true, marker: true },
-    { name: "Post-History Instructions", system_prompt: true, role: "system", content: "", identifier: "jailbreak" }
-  ];
-  return {
-    temperature: 1,
-    openai_max_context: 32768,
-    openai_max_tokens: 800,
-    wi_format: "{0}",
-    scenario_format: "{{scenario}}",
-    personality_format: "{{personality}}",
-    prompts,
-    prompt_order: [{ character_id: 1e5, order: prompts.map((p) => ({ identifier: p.identifier, enabled: true })) }]
-  };
 }
 async function handleUpdateApi(ctx, req, res, url, route, method) {
   const service = tavernUpdate(ctx);

@@ -77,6 +77,9 @@ import {
 import { normalizeEntry, type CardDataIR, type CharacterCardIR, type LoreEntry } from '../../../tavern-format/src/index.js'
 import { dshHomePath } from '../dsh-home.js'
 import { hostPromptSafe } from '../prompt-safety.js'
+// 预设写路径的失效信号（agent-tavern/preset.ts）：preset_put 可能改到激活预设，
+// 落库后写穿 AgentTavern 会话的预设投影缓存（跨 bundle 共享监听表）。
+import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import { applyPlan, getPlan, proposeCardPlan, proposeWorldPlan, type CardPlan, type CardPlanValue, type WorldPlan, type WorldPlanValue } from './plans.js'
 
 export const name = 'dsh-tavern/card-workbench'
@@ -932,6 +935,8 @@ function createTools(): ToolDefinition[] {
         applied.push({ name: edit.name, identifiers, fields })
       }
       await db.putPreset(preset, next)
+      // 写穿 AgentTavern 预设投影（激活预设被改动时下一次装配即时生效）。
+      await emitAgentPresetChanged()
       return { preset, promptCount: next.prompts.length, edits: applied }
     }),
     tool('chat_log_read', 'Read a bounded range of floors from a stored Tavern chat log (character + chatId) — the debugging entry point: compare what the model actually produced against regex/beautification output before touching resources. At most 50 messages per call, each message body truncated to 2000 characters.', {

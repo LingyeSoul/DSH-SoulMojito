@@ -83,6 +83,9 @@ describe('AgentTavern native module mount', () => {
         context: (context: RegisteredPromptContext) => { contexts.push(context) },
       },
       tools: { register: (tool: ToolLike) => { tools.set(tool.name, tool) } },
+      // Cordis 核心事件面（非 inject 服务）：agent/request 温度投影注册在真机上
+      // 走 ctx.on，mock 只需证明 apply 不因未声明属性被拒绝。
+      on: () => undefined,
       effect: (factory: () => unknown) => factory(),
     }))
   })
@@ -94,6 +97,7 @@ describe('AgentTavern native module mount', () => {
 
   it('mounts on a host context that refuses undeclared property access', () => {
     expect(sections.map((section) => section.name)).toContain('dsh-tavern:agent-kernel')
+    expect(sections.map((section) => section.name)).toContain('dsh-tavern:agent-preset')
     expect(contexts.map((context) => context.name)).toContain('dsh-tavern:agent-facts')
     expect([...tools.keys()]).toContain('tavern_character_get')
     expect(tools.size).toBe(18)

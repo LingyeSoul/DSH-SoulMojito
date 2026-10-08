@@ -3914,6 +3914,34 @@ function strArray4(v) {
   return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
 }
 
+// packages/tavern-format/src/preset.ts
+var PresetFormatError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "PresetFormatError";
+  }
+};
+function parsePreset(obj) {
+  const promptsRaw = obj["prompts"];
+  if (!Array.isArray(promptsRaw)) throw new PresetFormatError("preset has no 'prompts' array");
+  const prompts = promptsRaw.map((p, i) => {
+    if (typeof p !== "object" || p === null) throw new PresetFormatError(`prompts[${i}] is not an object`);
+    return p;
+  });
+  const orderRaw = obj["prompt_order"];
+  const promptOrder = Array.isArray(orderRaw) ? orderRaw.map((o, i) => {
+    if (typeof o !== "object" || o === null || !Array.isArray(o.order)) {
+      throw new PresetFormatError(`prompt_order[${i}] is malformed`);
+    }
+    return o;
+  }) : [];
+  const sampler = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (k !== "prompts" && k !== "prompt_order") sampler[k] = v;
+  }
+  return { prompts, promptOrder, sampler };
+}
+
 // packages/plugin/src/tavern-assets.ts
 async function collectWorldInfoBooks(db, state, characterName, character) {
   const worldNames = new Set(state.activeWorlds);
@@ -3975,12 +4003,110 @@ function formatGuidesBlock(guides) {
     ...[...normalized].sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((guide) => `- ${guide.text}`)
   ].join("\n");
 }
-var guidesChangedListeners = /* @__PURE__ */ new Set();
+var GUIDES_CHANGED_LISTENERS = Symbol.for("dsh-tavern:guides-changed-listeners");
+function guidesChangedListeners() {
+  const holder = globalThis;
+  return holder[GUIDES_CHANGED_LISTENERS] ??= /* @__PURE__ */ new Set();
+}
 function onGuidesChanged(listener) {
-  guidesChangedListeners.add(listener);
+  const listeners = guidesChangedListeners();
+  listeners.add(listener);
   return () => {
-    guidesChangedListeners.delete(listener);
+    listeners.delete(listener);
   };
+}
+
+// packages/plugin/src/agent-tavern/preset.ts
+var AGENT_PRESET_BLOCK_HEADER = "Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):";
+var HISTORY_DUMMY_ID = 1e5;
+function effectiveAgentPresetPrompts(preset, card) {
+  const order = resolvePromptOrder(preset);
+  const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
+  const effective = [];
+  for (const slot of order) {
+    const prompt = byId.get(slot.identifier);
+    if (prompt === void 0 || prompt.marker === true) continue;
+    if (!entryEnabled(slot, prompt)) continue;
+    const content = applyCardOverride(prompt.identifier, promptContent(prompt), card);
+    const trimmed = content.trim();
+    if (trimmed === "") continue;
+    effective.push({
+      identifier: prompt.identifier,
+      name: typeof prompt.name === "string" ? prompt.name : prompt.identifier,
+      role: promptRole(prompt),
+      content: trimmed
+    });
+  }
+  return effective;
+}
+function renderAgentPresetBlock(preset, card) {
+  const prompts = effectiveAgentPresetPrompts(preset, card);
+  if (prompts.length === 0) return void 0;
+  return [AGENT_PRESET_BLOCK_HEADER, ...prompts.map((prompt) => prompt.content)].join("\n\n");
+}
+function presetTemperature(preset) {
+  const value = preset.sampler["temperature"];
+  return typeof value === "number" && Number.isFinite(value) ? value : void 0;
+}
+function defaultPreset() {
+  const prompts = [
+    { name: "Main Prompt", system_prompt: true, role: "system", content: "Write {{char}}'s next reply in a fictional roleplay chat between {{char}} and {{user}}. Stay in character and never write dialogue or actions for {{user}}.", identifier: "main" },
+    { identifier: "worldInfoBefore", name: "World Info (before)", system_prompt: true, marker: true },
+    { identifier: "personaDescription", name: "Persona", system_prompt: true, marker: true },
+    { identifier: "charDescription", name: "Character Description", system_prompt: true, marker: true },
+    { identifier: "charPersonality", name: "Character Personality", system_prompt: true, marker: true },
+    { identifier: "scenario", name: "Scenario", system_prompt: true, marker: true },
+    { identifier: "worldInfoAfter", name: "World Info (after)", system_prompt: true, marker: true },
+    { identifier: "dialogueExamples", name: "Dialogue Examples", system_prompt: true, marker: true },
+    { identifier: "chatHistory", name: "Chat History", system_prompt: true, marker: true },
+    { name: "Post-History Instructions", system_prompt: true, role: "system", content: "", identifier: "jailbreak" }
+  ];
+  return {
+    temperature: 1,
+    openai_max_context: 32768,
+    openai_max_tokens: 800,
+    wi_format: "{0}",
+    scenario_format: "{{scenario}}",
+    personality_format: "{{personality}}",
+    prompts,
+    prompt_order: [{ character_id: HISTORY_DUMMY_ID, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
+  };
+}
+var AGENT_PRESET_CHANGED_LISTENERS = Symbol.for("dsh-tavern:agent-preset-changed-listeners");
+function agentPresetChangedListeners() {
+  const holder = globalThis;
+  return holder[AGENT_PRESET_CHANGED_LISTENERS] ??= /* @__PURE__ */ new Set();
+}
+function onAgentPresetChanged(listener) {
+  const listeners = agentPresetChangedListeners();
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+function resolvePromptOrder(preset) {
+  const set = preset.promptOrder.find((order) => order.character_id === HISTORY_DUMMY_ID) ?? preset.promptOrder[0];
+  return Array.isArray(set?.order) ? set.order : [];
+}
+function entryEnabled(slot, prompt) {
+  if (slot.enabled === false) return false;
+  const record = prompt;
+  if (record["enabled"] === false) return false;
+  if (record["system_prompt"] === false) return false;
+  return true;
+}
+function promptContent(prompt) {
+  const content = prompt["content"];
+  return typeof content === "string" ? content : "";
+}
+function promptRole(prompt) {
+  const role = prompt["role"];
+  return role === "user" || role === "assistant" ? role : "system";
+}
+function applyCardOverride(identifier, content, card) {
+  const override = identifier === "main" ? card?.data.systemPrompt.trim() : identifier === "jailbreak" ? card?.data.postHistoryInstructions.trim() : "";
+  if (override === void 0 || override === "") return content;
+  return override.replace(/\{\{original\}\}/gi, content);
 }
 
 // packages/plugin/src/agent-tavern/deduce.ts
@@ -4788,6 +4914,11 @@ function apply(ctx) {
     // 会直接抛错中止运行——过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
     text: hostPromptSafe(KERNEL)
   });
+  ctx.systemPrompt?.section?.({
+    name: "dsh-tavern:agent-preset",
+    order: -75,
+    text: (assembly) => agentPresetText(assembly?.agent?.id)
+  });
   ctx.systemPrompt?.context?.({
     name: "dsh-tavern:agent-facts",
     order: -70,
@@ -4802,6 +4933,12 @@ function apply(ctx) {
     name: "dsh-tavern:agent-script",
     order: -64,
     text: (assembly) => agentScriptText(assembly?.agent?.id)
+  });
+  ctx.on?.("agent/request", async (payload, next) => {
+    const config = await next();
+    const temperature = agentPresetTemperatureOf(payload?.agent?.id);
+    if (temperature === void 0) return config;
+    return { ...config, temperature };
   });
   const tools = createTools();
   for (const tool2 of tools) {
@@ -5689,6 +5826,62 @@ async function refreshAgentScriptSummaries(character, chatId) {
   } catch {
   }
 }
+var presetProjection = /* @__PURE__ */ new Map();
+var presetLoadStarted = /* @__PURE__ */ new Set();
+var presetLoadTicket = /* @__PURE__ */ new Map();
+function agentPresetText(agentId) {
+  if (typeof agentId !== "string" || agentId.trim() === "") return "";
+  if (!presetLoadStarted.has(agentId)) {
+    presetLoadStarted.add(agentId);
+    void loadAgentPreset(agentId);
+  }
+  return presetProjection.get(agentId)?.text ?? "";
+}
+function agentPresetTemperatureOf(agentId) {
+  if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
+  if (!presetLoadStarted.has(agentId)) {
+    presetLoadStarted.add(agentId);
+    void loadAgentPreset(agentId);
+  }
+  return presetProjection.get(agentId)?.temperature;
+}
+async function loadAgentPreset(agentId) {
+  const ticket = (presetLoadTicket.get(agentId) ?? 0) + 1;
+  presetLoadTicket.set(agentId, ticket);
+  try {
+    const db = await tavernStore();
+    const state = await db.getState();
+    const binding = state.sessionBindings[agentId];
+    if (!binding || binding.architecture !== "agent-tavern") return;
+    const character = await db.getCharacter(binding.character);
+    const activePreset = state.activePreset ? await db.getPreset(state.activePreset) : void 0;
+    const preset = parsePreset(activePreset ?? defaultPreset());
+    const block = renderAgentPresetBlock(preset, character?.card);
+    if (presetLoadTicket.get(agentId) !== ticket) return;
+    const expand = createHostPromptExpander(
+      character?.card.data.nickname || character?.card.data.name || binding.character,
+      state.activePersona ?? DEFAULT_USER
+    );
+    const temperature = presetTemperature(preset);
+    presetProjection.set(agentId, {
+      text: block === void 0 ? "" : hostPromptSafe(block, expand),
+      ...temperature === void 0 ? {} : { temperature }
+    });
+  } catch {
+  }
+}
+onAgentPresetChanged(async () => {
+  try {
+    const db = await tavernStore();
+    const state = await db.getState();
+    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+      if (binding.architecture !== "agent-tavern") continue;
+      presetLoadStarted.add(agentId);
+      await loadAgentPreset(agentId);
+    }
+  } catch {
+  }
+});
 function identitySummaryOf(data) {
   const agentTavern = data.extensions?.agentTavern;
   const summary = agentTavern?.identitySummary;

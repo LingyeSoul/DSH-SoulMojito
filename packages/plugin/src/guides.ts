@@ -79,7 +79,15 @@ export function formatGuidesBlock(guides: unknown): string | undefined {
 
 type GuidesChangedListener = (character: string, chatId: string) => void | Promise<void>
 
-const guidesChangedListeners = new Set<GuidesChangedListener>()
+// globalThis 锚定（同学科于 agent-novel/usage.ts 与 agent-tavern/preset.ts）：
+// emit 发生在 index.mjs 的 guides 路由，监听在 agent.mjs——分离 bundle 各持
+// 一份模块级 Set 会互不可见，写穿必须共享同一注册表。
+const GUIDES_CHANGED_LISTENERS = Symbol.for('dsh-tavern:guides-changed-listeners')
+
+function guidesChangedListeners(): Set<GuidesChangedListener> {
+  const holder = globalThis as Record<symbol, Set<GuidesChangedListener> | undefined>
+  return (holder[GUIDES_CHANGED_LISTENERS] ??= new Set())
+}
 
 /**
  * 注册 guides 变更回调（agent.ts 模块加载时调用，按 character/chatId 反查
@@ -87,8 +95,9 @@ const guidesChangedListeners = new Set<GuidesChangedListener>()
  * 返回反注册函数。
  */
 export function onGuidesChanged(listener: GuidesChangedListener): () => void {
-  guidesChangedListeners.add(listener)
-  return () => { guidesChangedListeners.delete(listener) }
+  const listeners = guidesChangedListeners()
+  listeners.add(listener)
+  return () => { listeners.delete(listener) }
 }
 
 /**
@@ -96,7 +105,7 @@ export function onGuidesChanged(listener: GuidesChangedListener): () => void {
  * 任何回调失败都不允许反过来把成功的写变成错误响应，所以逐个静默吞掉。
  */
 export async function emitGuidesChanged(character: string, chatId: string): Promise<void> {
-  for (const listener of [...guidesChangedListeners]) {
+  for (const listener of [...guidesChangedListeners()]) {
     try {
       await listener(character, chatId)
     } catch {

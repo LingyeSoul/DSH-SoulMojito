@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { apply } from '../src/index.js'
+import { apply as applyAgentTavern, type AgentContextLike } from '../src/agent-tavern/agent.js'
 import { MemoryStore, TavernStore } from '../../tavern-store/src/index.js'
 import { parseRegexScripts } from '../../tavern-format/src/index.js'
 
@@ -633,6 +634,38 @@ describe('internal Tavern session bridge occupation', () => {
     expect((await store.getState()).sessionBindings[agent.id]).not.toHaveProperty('initializationPending')
 
     await store.patchState({ agentTavernPreloadAssets: false })
+  })
+
+  it('warms the AgentTavern preset projection at activation so the first turn carries it', async () => {
+    // 预设投影与 facts/guides 同款异步装载；激活命令必须预热缓存，否则首轮装配
+    // 拿到空串——用户看到的现象就是「预设不生效」（见 agent-tavern/preset.ts）。
+    await store.putPreset('Command Preset', {
+      temperature: 0.5,
+      prompts: [{ name: 'Main Prompt', identifier: 'main', role: 'system', content: 'COMMAND PRESET RULE for {{char}}.', system_prompt: true }],
+      prompt_order: [{ character_id: 100000, order: [{ identifier: 'main', enabled: true }] }],
+    })
+    await store.patchState({ activePreset: 'Command Preset' })
+
+    const sections = new Map<string, { text: unknown }>()
+    applyAgentTavern({
+      systemPrompt: { section: (def: { name: string; text: unknown }) => { sections.set(def.name, def) }, context: () => {} },
+      tools: { register: () => {} },
+      on: () => undefined,
+      effect: (fn: () => unknown) => { fn(); return () => {} },
+    } as unknown as AgentContextLike)
+    const presetTextOf = (agentId: string): string =>
+      (sections.get('dsh-tavern:agent-preset')!.text as (assembly?: { agent?: { id?: string } }) => string)({ agent: { id: agentId } })
+
+    const agent = makeAgent('session-agent-preset')
+    const result = await handler({
+      agent,
+      rawInput: base64Url({ character: CHARACTER, chatId: emptyChatId, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+    })
+    expect(result.kind).toBe('success')
+    // 不经过任何装配读取：命令返回时缓存已被激活预热写入（宏同样已展开）。
+    expect(presetTextOf(agent.id)).toContain(`COMMAND PRESET RULE for ${CHARACTER}.`)
+
+    await store.patchState({ activePreset: undefined })
   })
 
   it('exposes the read-only AgentTavern projection and state audit', async () => {

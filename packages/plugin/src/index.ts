@@ -69,6 +69,9 @@ import {
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
 import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type SessionImportAppend } from './agent-tavern/projector.js'
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from './agent-tavern/deduce.js'
+// 预设 → AgentTavern 投影（agent-tavern/preset.ts）：本半持内置默认预设与
+// 写路径失效信号（预设 CRUD/激活后触发 agent.mjs 的投影缓存写穿）。
+import { defaultPreset, emitAgentPresetChanged } from './agent-tavern/preset.js'
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
 import { createGenerationTemplates, mergeTemplateLocalVars, type GenerationTemplates } from './template.js'
 import { runCandidateGeneration } from './candidates.js'
@@ -370,6 +373,12 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
         parsed.architecture,
         parsed.contextMode,
       )
+      if (parsed.architecture === 'agent-tavern') {
+        // 预热激活预设投影（agent-tavern/preset.ts）：投影与 facts/guides 同款
+        // 异步装载，激活时先写穿缓存，首轮请求就带预设——否则首轮装配拿到空串，
+        // 用户看到的现象就是「预设不生效」。绑定已落库，监听按 binding 反查。
+        await emitAgentPresetChanged()
+      }
       if (preloadSnapshot !== undefined) {
         agent.inject(createMessage({
           role: 'user',
@@ -967,6 +976,9 @@ async function handleApi(ctx, req, res) {
       ...(body.compaction !== undefined ? { compaction: compactionOverrideOf(body.compaction) } : {}),
     }
     const state = await db.patchState(patch)
+    // 激活预设/persona 是 AgentTavern 预设投影的输入（agent-tavern/preset.ts）：
+    // {{user}} 宏与预设选择变化后写穿各会话的投影缓存，下一次装配即时生效。
+    if ('activePreset' in patch || 'activePersona' in patch) await emitAgentPresetChanged()
     await refreshActivePrompt()
     return sendJson(res, 200, { ok: true, state })
   }
@@ -1011,6 +1023,8 @@ async function handleApi(ctx, req, res) {
     if (typeof body.name !== 'string' || !body.data || typeof body.data !== 'object') throw new Error('expected { name, data }')
     parsePresetOrThrow(body.data)
     await db.putPreset(body.name, body.data)
+    // 同名的激活预设被覆盖时 AgentTavern 投影必须跟着变（写穿，best-effort）。
+    await emitAgentPresetChanged()
     return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data) })
   }
 
@@ -1033,6 +1047,8 @@ async function handleApi(ctx, req, res) {
     const state = await db.updateState((current) => ({
       activePreset: current.activePreset === oldName ? body.name : current.activePreset,
     }))
+    // 内容或名字变化都要写穿 AgentTavern 投影缓存（激活预设可能是这个）。
+    await emitAgentPresetChanged()
     await refreshActivePrompt()
     return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data), data: body.data, state })
   }
@@ -1519,6 +1535,8 @@ async function handleApi(ctx, req, res) {
     const state = await db.updateState((current) => ({
       activePreset: current.activePreset === name ? undefined : current.activePreset,
     }))
+    // 删除激活预设会回落内置默认预设：AgentTavern 投影同样要写穿。
+    await emitAgentPresetChanged()
     return sendJson(res, 200, { ok: true, state })
   }
 
@@ -3592,27 +3610,6 @@ function roleName(role) {
 
 function numberOr(value, fallback) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
-}
-
-function defaultPreset() {
-  const prompts = [
-    { name: 'Main Prompt', system_prompt: true, role: 'system', content: "Write {{char}}'s next reply in a fictional roleplay chat between {{char}} and {{user}}. Stay in character and never write dialogue or actions for {{user}}.", identifier: 'main' },
-    { identifier: 'worldInfoBefore', name: 'World Info (before)', system_prompt: true, marker: true },
-    { identifier: 'personaDescription', name: 'Persona', system_prompt: true, marker: true },
-    { identifier: 'charDescription', name: 'Character Description', system_prompt: true, marker: true },
-    { identifier: 'charPersonality', name: 'Character Personality', system_prompt: true, marker: true },
-    { identifier: 'scenario', name: 'Scenario', system_prompt: true, marker: true },
-    { identifier: 'worldInfoAfter', name: 'World Info (after)', system_prompt: true, marker: true },
-    { identifier: 'dialogueExamples', name: 'Dialogue Examples', system_prompt: true, marker: true },
-    { identifier: 'chatHistory', name: 'Chat History', system_prompt: true, marker: true },
-    { name: 'Post-History Instructions', system_prompt: true, role: 'system', content: '', identifier: 'jailbreak' },
-  ]
-  return {
-    temperature: 1, openai_max_context: 32768, openai_max_tokens: 800,
-    wi_format: '{0}', scenario_format: '{{scenario}}', personality_format: '{{personality}}',
-    prompts,
-    prompt_order: [{ character_id: 100000, order: prompts.map((p) => ({ identifier: p.identifier, enabled: true })) }],
-  }
 }
 
 /**

@@ -4,10 +4,16 @@ import {
   VariableStore,
 } from '../../../tavern-store/src/index.js'
 import { activateWorldInfo } from '../../../tavern-lore/src/index.js'
-import type { ChatLogIR } from '../../../tavern-format/src/index.js'
+import { parsePreset, type ChatLogIR } from '../../../tavern-format/src/index.js'
 import { collectWorldInfoBooks } from '../tavern-assets.js'
 import { dshHomePath } from '../dsh-home.js'
 import { formatGuidesBlock, onGuidesChanged } from '../guides.js'
+import {
+  defaultPreset,
+  onAgentPresetChanged,
+  presetTemperature,
+  renderAgentPresetBlock,
+} from './preset.js'
 import {
   DEDUCE_MAX_ROLES,
   DEDUCE_MAX_ROUNDS,
@@ -62,6 +68,16 @@ export function apply(ctx: AgentContextLike): void {
     // 会直接抛错中止运行——过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
     text: hostPromptSafe(KERNEL),
   })
+  // 激活预设（ST 聊天补全预设）投影（order -75：kernel 之后、facts 之前）：
+  // 内容型提示词按 prompt_order 注入，main/jailbreak 沿用卡覆盖语义；marker
+  // （卡字段/世界书/示例/历史）仍走工具与原生历史（见 preset.ts 的映射说明）。
+  // 装载与 facts/guides 同款 best-effort 异步；预设增删改与激活预热经 preset.ts
+  // 的跨 bundle 监听表写穿缓存，下一次装配即时生效。
+  ctx.systemPrompt?.section?.({
+    name: 'dsh-tavern:agent-preset',
+    order: -75,
+    text: (assembly) => agentPresetText(assembly?.agent?.id),
+  })
   // 当前 agent 身份只从装配上下文取：宿主 assemble() 的上下文携带
   // { agent, scope, signal }（@deepseek-ai/dsh-agent 的 assembleContextFor），
   // 与本插件 ctx 上没有任何 agent 服务这一事实无关。反之，未 inject 的属性
@@ -88,6 +104,17 @@ export function apply(ctx: AgentContextLike): void {
     text: (assembly) => agentScriptText(assembly?.agent?.id),
   })
 
+  // 预设采样投影：宿主 model seat 不暴露温度，预设是用户唯一的调温入口；
+  // waterfall 先取下游装配的配置，再按激活预设覆盖 temperature（未绑定、
+  // 预设缺失或值非法时原样透传）。max_context/max_tokens 归宿主 surface，
+  // 不在工具循环里硬切输出上限（见 preset.ts）。
+  ctx.on?.('agent/request', async (payload, next) => {
+    const config = await next()
+    const temperature = agentPresetTemperatureOf(payload?.agent?.id)
+    if (temperature === undefined) return config
+    return { ...config, temperature }
+  })
+
   const tools = createTools()
   for (const tool of tools) {
     if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool), `dsh-tavern:agent:${tool.name}`)
@@ -97,7 +124,12 @@ export function apply(ctx: AgentContextLike): void {
 
 export interface AgentContextLike {
   systemPrompt?: {
-    section?: (section: { name: string; order: number; text: string | (() => string) }) => unknown
+    section?: (section: {
+      name: string
+      order: number
+      /** 与 context 同款装配回调：宿主 assemble() 携带 { agent, scope, signal }。 */
+      text: string | ((assembly?: AgentAssemblyLike) => string)
+    }) => unknown
     context?: (context: {
       name: string
       order: number
@@ -107,11 +139,27 @@ export interface AgentContextLike {
     }) => unknown
   }
   tools?: { register?: (tool: ToolDefinition) => unknown }
+  /** 宿主事件面（Cordis 核心 API，非 inject 服务）。agent/request 是 waterfall：
+   *  next() 取下游配置，返回值为权威结果（预设 temperature 覆盖在此实现）。 */
+  on?: (
+    event: 'agent/request',
+    listener: (
+      payload: { agent?: { id?: string } } | undefined,
+      next: () => Promise<LlmCallConfigLike>,
+    ) => Promise<LlmCallConfigLike>,
+  ) => unknown
   effect?: (factory: () => unknown, label?: string) => unknown
 }
 
 interface AgentAssemblyLike {
   agent?: { id?: string }
+}
+
+interface LlmCallConfigLike {
+  provider?: string
+  model?: string
+  temperature?: number
+  [key: string]: unknown
 }
 
 interface ToolDefinition {
@@ -1113,6 +1161,82 @@ async function refreshAgentScriptSummaries(character: string, chatId: string): P
     // best-effort 写穿：失败只意味着下一次装配沿用旧缓存。
   }
 }
+
+/** 激活预设投影文本通道（agent-tavern/preset.ts）：与 guides 同款 best-effort
+ *  异步装载——首次为某 agent 装配时异步读一次激活预设，装载完成前返回空串；
+ *  预设增删改（index.ts 路由、写卡工作台 preset_put）与激活预热经 preset.ts
+ *  的跨 bundle 监听表写穿缓存，下一次装配即时生效。temperature 与提示词块
+ *  共用同一份装载结果（agent/request 的覆盖值也从这里取）。 */
+const presetProjection = new Map<string, { text: string; temperature?: number }>()
+const presetLoadStarted = new Set<string>()
+/** 装载票号：与 guides 同款 last-write-wins，防在途过期装载覆盖新写入。 */
+const presetLoadTicket = new Map<string, number>()
+
+function agentPresetText(agentId: string | undefined): string {
+  if (typeof agentId !== 'string' || agentId.trim() === '') return ''
+  if (!presetLoadStarted.has(agentId)) {
+    presetLoadStarted.add(agentId)
+    void loadAgentPreset(agentId)
+  }
+  return presetProjection.get(agentId)?.text ?? ''
+}
+
+function agentPresetTemperatureOf(agentId: string | undefined): number | undefined {
+  if (typeof agentId !== 'string' || agentId.trim() === '') return undefined
+  if (!presetLoadStarted.has(agentId)) {
+    presetLoadStarted.add(agentId)
+    void loadAgentPreset(agentId)
+  }
+  return presetProjection.get(agentId)?.temperature
+}
+
+async function loadAgentPreset(agentId: string): Promise<void> {
+  const ticket = (presetLoadTicket.get(agentId) ?? 0) + 1
+  presetLoadTicket.set(agentId, ticket)
+  try {
+    const db = await tavernStore()
+    const state = await db.getState()
+    const binding = state.sessionBindings[agentId]
+    if (!binding || binding.architecture !== 'agent-tavern') return
+    const character = await db.getCharacter(binding.character)
+    const activePreset = state.activePreset ? await db.getPreset(state.activePreset) : undefined
+    // 与 ST 生成路径同款回落：未选择激活预设时用内置默认预设（面板显示为
+    // 「内置角色扮演预设」）。预设文件损坏（parse 抛错）由外层 catch 兜底。
+    const preset = parsePreset(activePreset ?? defaultPreset())
+    const block = renderAgentPresetBlock(preset, character?.card)
+    if (presetLoadTicket.get(agentId) !== ticket) return
+    // 预设内容是 ST 宏（{{char}}/{{user}}）的高频来源：与 facts/guides 同款
+    // 宏展开 + {{...}} 中性化（prompt-safety.ts，宿主 interpolate 会炸装配）。
+    const expand = createHostPromptExpander(
+      character?.card.data.nickname || character?.card.data.name || binding.character,
+      state.activePersona ?? DEFAULT_USER,
+    )
+    const temperature = presetTemperature(preset)
+    presetProjection.set(agentId, {
+      text: block === undefined ? '' : hostPromptSafe(block, expand),
+      ...(temperature === undefined ? {} : { temperature }),
+    })
+  } catch {
+    // A missing store must not prevent the host agent from starting.
+  }
+}
+
+// 模块加载即注册写穿回调：预设写路径（index.ts 的 settings/preset 路由、写卡
+// 工作台 preset_put、会话激活预热）成功后重新装载所有 AgentTavern 绑定；
+// 无绑定时是 no-op。
+onAgentPresetChanged(async () => {
+  try {
+    const db = await tavernStore()
+    const state = await db.getState()
+    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+      if (binding.architecture !== 'agent-tavern') continue
+      presetLoadStarted.add(agentId)
+      await loadAgentPreset(agentId)
+    }
+  } catch {
+    // best-effort 写穿：失败只意味着下一次装配沿用旧缓存。
+  }
+})
 
 export function identitySummaryOf(data: { extensions?: Record<string, unknown> }): string | undefined {
   const agentTavern = data.extensions?.agentTavern as Record<string, unknown> | undefined
