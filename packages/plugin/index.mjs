@@ -4577,6 +4577,13 @@ function normalizeTavernSessionBinding(value) {
       novelId: candidate.novelId
     };
   }
+  if (candidate.architecture === "card-workbench") {
+    return {
+      character: typeof candidate.character === "string" ? candidate.character : "",
+      chatId: typeof candidate.chatId === "string" ? candidate.chatId : "",
+      architecture: "card-workbench"
+    };
+  }
   if (typeof candidate.character !== "string" || candidate.character.trim() === "") return void 0;
   if (typeof candidate.chatId !== "string" || candidate.chatId.trim() === "") return void 0;
   const base = {
@@ -13368,6 +13375,7 @@ var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands
 var API = "/api/dsh-tavern";
 var DEFAULT_USER3 = "User";
 var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
+var CARD_WORKBENCH_PRESET_ID = "card-workbench";
 var BUILD_INFO = readBuildInfo();
 var TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit);
 var storePromise;
@@ -13500,6 +13508,9 @@ function apply(ctx, config = {}) {
       }
       if (parsed.action === "novel-open") {
         return handleNovelOpenCommand(ctx, agent, parsed.novelId);
+      }
+      if (parsed.action === "workbench-open") {
+        return handleWorkbenchOpenCommand(ctx, agent);
       }
       const chat = await db.getChat(parsed.character, parsed.chatId);
       if (!chat) return { kind: "error", text: "Tavern chat not found." };
@@ -14996,6 +15007,33 @@ async function bindNovelSession(db, sessionId, novelId) {
     }
   }));
 }
+async function handleWorkbenchOpenCommand(ctx, agent) {
+  if (typeof ctx.agentPresets?.recompose !== "function") {
+    throw new TavernArchitectureConflictError("The host cannot recompose a blank session with the CardWorkbench preset.");
+  }
+  await ensureAgentPresetDeclared(ctx, CARD_WORKBENCH_PRESET_ID);
+  const activationEvents = sessionEvents(agent.session);
+  const sessionStarted = activationEvents.some((event) => event.type === "turn/start") || activationEvents.some((event) => {
+    if (event.type !== "user/message" && event.type !== "assistant/message") return false;
+    const source = event.type === "user/message" ? event.data?.source : event.data?.message?.source;
+    return isTavernSessionMarker(source);
+  });
+  if (sessionStarted) {
+    throw new TavernArchitectureConflictError("This host session already started; recomposing it with the CardWorkbench preset is locked.");
+  }
+  const db = await store();
+  await db.updateState((state) => ({
+    sessionBindings: {
+      ...state.sessionBindings,
+      [agent.id]: { architecture: "card-workbench", character: "", chatId: "" }
+    }
+  }));
+  if (!activationEvents.some((event) => event.type === "agent-preset/selected" && event.data?.agentPreset === CARD_WORKBENCH_PRESET_ID)) {
+    const preset = await ctx.agentPresets.recompose(agent.ctx, CARD_WORKBENCH_PRESET_ID);
+    agent.session.append("agent-preset/selected", { agentPreset: preset.id });
+  }
+  return { kind: "success", text: "CardWorkbench" };
+}
 async function ensureAgentPresetDeclared(ctx, presetId) {
   const inventory = typeof ctx.agentPresets?.compositionInventory === "function" ? await ctx.agentPresets.compositionInventory() : void 0;
   if (!Array.isArray(inventory) || !inventory.some((entry) => entry?.id === presetId)) {
@@ -15874,6 +15912,7 @@ function parseTavernSessionCommand(rawInput) {
     if (parsed.action === "novel-open") {
       return typeof parsed.novelId === "string" && parsed.novelId.trim() !== "" ? { action: "novel-open", novelId: parsed.novelId } : null;
     }
+    if (parsed.action === "workbench-open") return { action: "workbench-open" };
     if (typeof parsed.character !== "string" || typeof parsed.chatId !== "string") return null;
     const group2 = parsed.group === true;
     const architecture = group2 ? "st" : requestedArchitecture(parsed.architecture);
@@ -15926,7 +15965,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.3.9".trim() : "";
-  const commit = true ? normalizeCommit("210ec91") : void 0;
+  const commit = true ? normalizeCommit("7c11250") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

@@ -361,6 +361,23 @@ describe('TavernStore', () => {
     expect((await store.getState()).agentTavernPreloadAssets).toBe(false)
   }))
 
+  it('状态：card-workbench 绑定空 character/chatId 经归一化保留（提案 0013）', withStore(async (store, dir) => {
+    await store.updateState((state) => ({
+      sessionBindings: { ...state.sessionBindings, wb_1: { architecture: 'card-workbench', character: '', chatId: '' } },
+    }))
+    expect((await store.getState()).sessionBindings.wb_1).toEqual({
+      architecture: 'card-workbench', character: '', chatId: '',
+    })
+    // 手写 state 文件缺 character/chatId 字段时补空串，绝不降级为 st
+    // （降级会让客户端把工作台会话误判成 ST 架构、强制接管 composer）。
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({
+      sessionBindings: { wb_2: { architecture: 'card-workbench' } },
+    }))
+    expect((await store.getState()).sessionBindings.wb_2).toEqual({
+      architecture: 'card-workbench', character: '', chatId: '',
+    })
+  }))
+
   it('memory：确定性检索、CAS 更新与软删除', withStore(async (_store, dir) => {
     const memory = await MemoryStore.open(path.join(dir, 'agent'))
     const created = await memory.put({

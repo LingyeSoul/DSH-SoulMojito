@@ -149,8 +149,14 @@ export function retainHostSession(
   if (typeof sessions?.retain === 'function') {
     try {
       const reference = sessions.retain(sessionId, { source: 'dsh-tavern' })
-      const releaseReference = reference?.release
-      if (typeof releaseReference === 'function') {
+      // 必须绑定宿主实例再存：宿主的 ClientSessionReference.release() 读
+      // this.sessionId，解构后裸调用 this === undefined，会以
+      // "Cannot read properties of undefined (reading 'sessionId')" 炸掉整个
+      // openTavernChat/openNovelSession/openWorkbenchSession 启动链。
+      const releaseReference = typeof reference?.release === 'function'
+        ? reference.release.bind(reference)
+        : undefined
+      if (releaseReference !== undefined) {
         if (trace) {
           trace.retainPath = 'retain'
           trace.retainCalls += 1

@@ -251,6 +251,9 @@ window.__ModuleLoader__.load({
       'panel.section.workbench': 'Workbench plans',
       'workbench.hint': 'Modification plans proposed by the Card Workbench agent. Expand a plan to review the per-field diff, then approve to apply it to the working copy, or reject it.',
       'workbench.empty': 'No workbench plans yet',
+      'workbench.sessionLabel': 'CardWorkbench',
+      'workbench.opening': 'Opening workbench…',
+      'workbench.bindTimeout': 'Workbench session binding timed out.',
       'workbench.refresh': 'Refresh',
       'workbench.approve': 'Approve and apply',
       'workbench.reject': 'Reject',
@@ -299,6 +302,19 @@ window.__ModuleLoader__.load({
       'panel.characters.editHint': 'Edits keep the original card container and embedded assets when possible.',
       'panel.characters.identitySummary': 'Identity summary (AgentTavern)',
       'panel.characters.identitySummaryHint': 'Short third-person identity the AgentTavern kernel injects every turn. Leave empty to derive a minimal summary from the description.',
+      'panel.characters.new': 'New character card',
+      'panel.characters.createTitle': 'Create a character card',
+      'panel.characters.createHint': 'Pick how you want to create the card.',
+      'panel.characters.createAgentTitle': 'Card Workbench agent',
+      'panel.characters.createAgentHint': 'Start a chat with the card-writing agent: describe the character (or point it at material/scripts), it drafts the fields and proposes a per-field plan you approve in the Workbench section. Best for full cards from an idea.',
+      'panel.characters.createAgentLaunch': 'Start workbench session',
+      'panel.characters.createManualTitle': 'Edit manually',
+      'panel.characters.createManualHint': 'Open a blank card right here and fill in the fields yourself.',
+      'panel.characters.createManualStart': 'Open blank card',
+      'panel.characters.creating': 'New card (unsaved)',
+      'panel.characters.createEditorHint': 'Filling the name and at least a description is usually enough to start; everything else is optional.',
+      'panel.characters.duplicate': 'Character "{name}" already exists; creating it again would overwrite that card. Pick another name or delete the existing card first.',
+      'panel.characters.createFailed': 'Failed to create card: {message}',
       'panel.worlds.entries': '{count} entries',
       'panel.worlds.search': 'Search entries',
       'panel.worlds.noEntries': 'No entries match the search.',
@@ -723,6 +739,9 @@ window.__ModuleLoader__.load({
       'panel.section.workbench': '工作台方案',
       'workbench.hint': '卡片工作台 Agent 提出的修改方案。展开查看逐字段改动，批准即应用到工作版，也可直接拒绝。',
       'workbench.empty': '暂无工作台方案',
+      'workbench.sessionLabel': '写卡工作台',
+      'workbench.opening': '正在打开写卡工作台…',
+      'workbench.bindTimeout': '写卡工作台会话绑定超时。',
       'workbench.refresh': '刷新',
       'workbench.approve': '批准并应用',
       'workbench.reject': '拒绝',
@@ -771,6 +790,19 @@ window.__ModuleLoader__.load({
       'panel.characters.editHint': '保存时会尽量保留原始卡片容器与内嵌资源。',
       'panel.characters.identitySummary': '身份摘要（AgentTavern）',
       'panel.characters.identitySummaryHint': 'AgentTavern 内核每轮注入的简短第三人称身份描述；留空时从角色描述派生极短摘要。',
+      'panel.characters.new': '新建角色卡',
+      'panel.characters.createTitle': '新建角色卡',
+      'panel.characters.createHint': '选择创建方式。',
+      'panel.characters.createAgentTitle': '写卡 Agent（卡片工作台）',
+      'panel.characters.createAgentHint': '拉起与写卡 Agent 的对话：描述想要的角色（或让它读取素材/剧本），它逐字段起草并提交方案，你在「工作台方案」分区审批后写入。适合从一个想法产出完整卡面。',
+      'panel.characters.createAgentLaunch': '启动写卡工作台',
+      'panel.characters.createManualTitle': '面板手动编辑',
+      'panel.characters.createManualHint': '在当前面板直接打开空白卡面，自己填写各字段。',
+      'panel.characters.createManualStart': '打开空白卡面',
+      'panel.characters.creating': '新卡（未保存）',
+      'panel.characters.createEditorHint': '填好名称和描述通常就够开聊了，其余字段都可以留空。',
+      'panel.characters.duplicate': '已存在同名角色「{name}」，再次创建会覆盖原卡。请换个名字，或先删除已有角色。',
+      'panel.characters.createFailed': '新建角色卡失败：{message}',
       'panel.worlds.entries': '{count} 条目',
       'panel.worlds.search': '搜索条目',
       'panel.worlds.noEntries': '没有匹配的条目。',
@@ -1672,9 +1704,11 @@ window.__ModuleLoader__.load({
     }
 
     function bindingArchitecture(binding) {
-      // agent-novel sessions keep the native composer and conversation view;
-      // classifying them as 'st' would force the ST Tavern tab and composer.
+      // agent-novel / card-workbench sessions keep the native composer and
+      // conversation view; classifying them as 'st' would force the ST Tavern
+      // tab and composer.
       if (binding?.architecture === 'agent-novel') return 'agent-novel'
+      if (binding?.architecture === 'card-workbench') return 'card-workbench'
       return binding?.architecture === 'agent-tavern' ? 'agent-tavern' : 'st'
     }
 
@@ -1696,6 +1730,7 @@ window.__ModuleLoader__.load({
 
     function architectureLabel(architecture) {
       if (architecture === 'agent-novel') return translate('view.architectureNovel')
+      if (architecture === 'card-workbench') return translate('workbench.sessionLabel')
       return architecture === 'agent-tavern' ? translate('view.architectureAgent') : translate('view.architectureSt')
     }
 
@@ -1942,6 +1977,62 @@ window.__ModuleLoader__.load({
           const bound = await waitForNovelBinding(sessionId, novel.novelId)
           if (!bound) throw new Error(translate('novel.bindTimeout'))
           await binding.session.rename(novelSessionLabel(novel.title)).catch(() => {})
+          openSessionView(ctx, sessionId)
+          return sessionId
+        } finally {
+          heldSession.release()
+        }
+      } finally {
+        update({ navigationStatus: '' })
+      }
+    }
+
+    // workbench-open（提案 0013）：与 novel-open 同款桥接——服务端负责绑定 +
+    // recompose card-workbench preset；发送后轮询 bootstrap 直到会话出现在
+    // sessionBindings 且 architecture === 'card-workbench'。
+    async function waitForWorkbenchBinding(sessionId) {
+      for (let attempt = 0; attempt < 25; attempt += 1) {
+        try {
+          const bootstrap = await refreshBootstrap()
+          const binding = bootstrap?.state?.sessionBindings?.[sessionId]
+          if (binding?.architecture === 'card-workbench') return binding
+        } catch {
+          // Bootstrap may briefly fail while the server binds; keep polling.
+        }
+        await new Promise((resolve) => setTimeout(resolve, 400))
+      }
+      return null
+    }
+
+    async function openWorkbenchSession(ctx) {
+      update({ navigationStatus: translate('workbench.opening') })
+      try {
+        // 幂等复用：已绑定且会话仍存活的工作台会话直接回到主视图。
+        const sessions = ctx.sessions.list.getSnapshot()
+        const existing = Object.entries(snapshot.bootstrap.state.sessionBindings || {})
+          .find(([sessionId, binding]) => binding?.architecture === 'card-workbench' && sessions.byId[sessionId])
+        if (existing) {
+          reserveTavernSession(ctx, existing[0])
+          openSessionView(ctx, existing[0])
+          return existing[0]
+        }
+        const workspace = await ensureTavernWorkspace(ctx)
+        const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId)
+        // 与 openTavernChat 同因：0.2.0 宿主 connect 不再隐式 retain，先显式
+        // 持有再借 binding，openSessionView 接棒 mainView 保留后归还。
+        const heldSession = DshBindClient.retainHostSession(ctx, sessionId, clientShapeTrace)
+        try {
+          const binding = ctx.sessions.binding(sessionId)
+          if (!binding) throw new Error(translate('error.noBinding'))
+          const commandPayload = base64Url(JSON.stringify({ action: 'workbench-open' }))
+          const result = await binding.session.command(`/dsh-tavern-session ${commandPayload}`)
+          if (!result?.ok || !result.value?.matched) {
+            throw new Error(result.error?.message || translate('error.activationFailed'))
+          }
+          reserveTavernSession(ctx, sessionId)
+          const bound = await waitForWorkbenchBinding(sessionId)
+          if (!bound) throw new Error(translate('workbench.bindTimeout'))
+          await binding.session.rename(translate('workbench.sessionLabel')).catch(() => {})
           openSessionView(ctx, sessionId)
           return sessionId
         } finally {
@@ -4566,7 +4657,7 @@ window.__ModuleLoader__.load({
         hint ? h('span', { className: 'dt-hint' }, hint) : null)
     }
 
-    function CardEditor({ card, name, onSave, onCancel }) {
+    function CardEditor({ card, name, onSave, onCancel, hint }) {
       const t = useTranslate()
       const [draft, setDraft] = useState(() => cloneValue(card))
       const [saving, setSaving] = useState(false)
@@ -4635,7 +4726,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dt-editor-actions' },
             h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
             h(Button, { size: 'sm', variant: 'primary', disabled: saving || !String(data.name || '').trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
-        h('p', { className: 'dt-hint' }, t('panel.characters.editHint')),
+        h('p', { className: 'dt-hint' }, hint || t('panel.characters.editHint')),
         h('div', { className: 'dt-editor-grid' },
           h(EditorField, { label: t('panel.rename'), value: data.name, onChange: (value) => setData('name', value) }),
           h(EditorField, { label: t('panel.characters.nickname'), value: data.nickname, onChange: (value) => setData('nickname', value) }),
@@ -4683,12 +4774,39 @@ window.__ModuleLoader__.load({
          field('creatorNotes', t('panel.characters.creatorNotes')))
     }
 
-    function PanelCharacters() {
+    // 手动新建的空白卡模板（提案 0013）：字段口径对齐 card_create 工具——
+    // spec_version 蛇形是 decode 端（tavern-format card.ts）的读取口径。
+    const BLANK_CHARACTER_CARD = {
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: '',
+        nickname: '',
+        description: '',
+        personality: '',
+        scenario: '',
+        firstMes: '',
+        mesExample: '',
+        creatorNotes: '',
+        systemPrompt: '',
+        postHistoryInstructions: '',
+        alternateGreetings: [],
+        tags: [],
+        creator: '',
+        characterVersion: '',
+        extensions: {},
+      },
+    }
+
+    function PanelCharacters({ ctx }) {
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
       const [viewing, setViewing] = useState('')
       const [editing, setEditing] = useState('')
+      const [creating, setCreating] = useState(false)
+      const [guideOpen, setGuideOpen] = useState(false)
+      const [launching, setLaunching] = useState(false)
       const [cards, setCards] = useState({})
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
       const viewCard = (name) => {
@@ -4730,16 +4848,60 @@ window.__ModuleLoader__.load({
         setEditing('')
         setViewing(nextName)
       })
+      // 手动新建走与 card_create 工具同一条 import/character 落库路径；导入语义
+      // 是重名覆盖，面板侧先拦同名（含大小写不敏感——落盘 stem 在部分文件系统
+      // 上不区分大小写），避免一键静默覆盖既有角色。
+      const createCharacter = (card) => {
+        const name = String(card?.data?.name || '').trim()
+        if (name === '') return Promise.reject(new Error(t('panel.rename')))
+        const normalized = name.toLowerCase()
+        if (state.bootstrap.characters.some((existing) => existing.toLowerCase() === normalized)) {
+          return Promise.reject(new Error(t('panel.characters.duplicate', { name })))
+        }
+        return api('import/character', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ card }),
+        })
+          .then(async (result) => {
+            await refreshBootstrap()
+            setCards((current) => ({ ...current, [result.name]: result.card }))
+            setCreating(false)
+            setViewing(result.name)
+            return result.card
+          })
+          .catch((cause) => {
+            throw new Error(t('panel.characters.createFailed', { message: cause instanceof Error ? cause.message : String(cause) }))
+          })
+      }
+      const launchWorkbench = () => {
+        if (launching) return
+        setLaunching(true)
+        setError('')
+        void openWorkbenchSession(ctx)
+          .then(() => setGuideOpen(false))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setLaunching(false))
+      }
       const characters = state.bootstrap.characters
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('settings.import')),
           h('div', { className: 'dt-imports' },
-            h(UploadButton, { kind: 'character', label: t('settings.importCharacter'), accept: '.png,.charx,.json,application/json,image/png,application/zip' }))),
+            h(UploadButton, { kind: 'character', label: t('settings.importCharacter'), accept: '.png,.charx,.json,application/json,image/png,application/zip' }),
+            h('button', { type: 'button', className: 'dt-upload', onClick: () => setGuideOpen(true) }, `+ ${t('panel.characters.new')}`))),
         h('section', { className: 'dt-settings-band' },
-          characters.length === 0
+          characters.length === 0 && !creating
             ? h('p', { className: 'dt-muted' }, t('panel.characters.empty'))
-            : h('div', { className: 'dt-card-grid' }, characters.map((name) => {
+            : h('div', { className: 'dt-card-grid' },
+              creating
+                ? h('div', { className: 'dt-card dt-card-editing' },
+                  h('div', { className: 'dt-card-head' },
+                    h('div', { className: 'dt-card-title' },
+                      h('strong', null, t('panel.characters.creating')))),
+                  h(CardEditor, { card: BLANK_CHARACTER_CARD, name: '', hint: t('panel.characters.createEditorHint'), onSave: createCharacter, onCancel: () => setCreating(false) }))
+                : null,
+              characters.map((name) => {
               const active = state.bootstrap.state.activeCharacter === name
               const card = cards[name]
               return h('div', { key: name, className: `dt-card ${editing === name ? 'dt-card-editing' : ''}` },
@@ -4776,6 +4938,26 @@ window.__ModuleLoader__.load({
                   ? h(CardEditor, { card, name, onSave: (next) => save(name, next), onCancel: () => setEditing('') })
                   : viewing === name ? h(CharacterCardFields, { card }) : null)
             }))),
+        guideOpen
+          ? h(NovelModalFrame, {
+            title: t('panel.characters.createTitle'),
+            closeLabel: t('panel.close'),
+            onClose: () => setGuideOpen(false),
+          },
+          h('p', { className: 'dt-hint' }, t('panel.characters.createHint')),
+          h('div', { className: 'dt-create-choices' },
+            h('div', { className: 'dt-create-choice' },
+              h('div', { className: 'dt-create-choice-copy' },
+                h('h3', null, t('panel.characters.createAgentTitle')),
+                h('p', { className: 'dt-hint' }, t('panel.characters.createAgentHint'))),
+              h(Button, { size: 'sm', variant: 'primary', icon: h(IconSparkle16), disabled: launching, onClick: launchWorkbench }, launching ? t('workbench.opening') : t('panel.characters.createAgentLaunch'))),
+            h('div', { className: 'dt-create-choice' },
+              h('div', { className: 'dt-create-choice-copy' },
+                h('h3', null, t('panel.characters.createManualTitle')),
+                h('p', { className: 'dt-hint' }, t('panel.characters.createManualHint'))),
+              h(Button, { size: 'sm', variant: 'outline', icon: h(IconEditOutline16), onClick: () => { setGuideOpen(false); setCreating(true) } }, t('panel.characters.createManualStart')))),
+          error ? h('p', { className: 'dt-error' }, error) : null)
+          : null,
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
 
@@ -6641,7 +6823,7 @@ window.__ModuleLoader__.load({
         ? `v${state.bootstrap.version || '?'}${state.bootstrap.commit ? ` (${state.bootstrap.commit})` : ''}`
         : ''
       const body = section === 'overview' ? h(PanelOverview)
-        : section === 'characters' ? h(PanelCharacters)
+        : section === 'characters' ? h(PanelCharacters, { ctx })
         : section === 'chats' ? h(TavernSidebar, { ctx, useSessions })
         : section === 'guides' ? h(PanelGuides, { useSessions })
         : section === 'novels' ? h(PanelNovels, { ctx })
@@ -7035,6 +7217,12 @@ window.__ModuleLoader__.load({
         .dt-workbench-list{display:flex;flex-direction:column;gap:10px}
         .dt-workbench-plan{display:flex;flex-direction:column;gap:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:10px}
         .dt-workbench-plan.dt-workbench-done{opacity:.75}
+        .dt-create-choices{display:flex;flex-direction:column;gap:12px}
+        .dt-create-choice{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px}
+        .dt-create-choice-copy{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+        .dt-create-choice-copy h3{margin:0;font-size:14px;line-height:20px;font-weight:600}
+        .dt-create-choice-copy .dt-hint{margin:0}
+        .dt-create-choice>button{flex:none}
         .dt-workbench-plan-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
         .dt-workbench-plan-title{display:inline-flex;align-items:center;gap:6px;min-width:0;flex:1;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;padding:0;text-align:left}
         .dt-workbench-plan-title:hover{color:var(--dsw-alias-label-primary)}

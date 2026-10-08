@@ -68,6 +68,12 @@ export type TavernSessionBinding =
       architecture: 'agent-novel'
       novelId: string
     })
+  | (TavernSessionBase & {
+      /** CardWorkbench session binding（提案 0013）：面板「新建角色卡」拉起的
+       *  写卡 Agent 会话。与 agent-novel 同理不绑角色/聊天，character/chatId
+       *  为空串，仅作会话身份与复用标记。 */
+      architecture: 'card-workbench'
+    })
 
 /** 一个 DSH session 的模型选择；缺省回落 agentDefaultModel。 */
 export interface TavernModelSelection {
@@ -772,6 +778,15 @@ export function normalizeTavernSessionBinding(value: unknown): TavernSessionBind
       chatId: typeof candidate.chatId === 'string' ? candidate.chatId : '',
       architecture: 'agent-novel',
       novelId: candidate.novelId,
+    }
+  }
+  // CardWorkbench bindings（提案 0013）与 agent-novel 同理：character/chatId
+  // 为空串，必须在非空存在性检查之前识别，否则会被降级成 st 绑定。
+  if (candidate.architecture === 'card-workbench') {
+    return {
+      character: typeof candidate.character === 'string' ? candidate.character : '',
+      chatId: typeof candidate.chatId === 'string' ? candidate.chatId : '',
+      architecture: 'card-workbench',
     }
   }
   if (typeof candidate.character !== 'string' || candidate.character.trim() === '') return undefined

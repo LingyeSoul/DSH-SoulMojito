@@ -101,6 +101,10 @@ export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 
 const API = '/api/dsh-tavern'
 const DEFAULT_USER = 'User'
 const TAVERN_WORKSPACE_TITLE = 'Tavern (internal)'
+// 卡片工作台 preset（提案 0013）：cordis.patch.yml 的 preset-card-workbench 行
+// （config.id: card-workbench）。面板「新建角色卡 → 写卡 Agent」经内部桥接命令
+// 把空会话 recompose 到该 preset。
+const CARD_WORKBENCH_PRESET_ID = 'card-workbench'
 const BUILD_INFO = readBuildInfo()
 const TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit)
 let storePromise
@@ -284,6 +288,9 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
       }
       if (parsed.action === 'novel-open') {
         return handleNovelOpenCommand(ctx, agent, parsed.novelId)
+      }
+      if (parsed.action === 'workbench-open') {
+        return handleWorkbenchOpenCommand(ctx, agent)
       }
       const chat = await db.getChat(parsed.character, parsed.chatId)
       if (!chat) return { kind: 'error', text: 'Tavern chat not found.' }
@@ -2105,6 +2112,46 @@ async function bindNovelSession(db: TavernStore, sessionId: string, novelId: str
 }
 
 /**
+ * Internal workbench-open command handler（提案 0013）：面板「新建角色卡 →
+ * 写卡 Agent」的会话启动桥。与 novel-open 同族的闸门——recompose 能力
+ * fail-closed、preset 声明校验、已开始会话锁定；绑定写 + 幂等 marker +
+ * recompose，无 driver 参与（工作台是纯对话式 preset）。
+ */
+async function handleWorkbenchOpenCommand(
+  ctx: NovelPluginContext & { agentPresets?: { recompose?: (agentCtx: unknown, presetId: string) => Promise<{ id: string }> } },
+  agent: NovelCommandAgent,
+): Promise<{ kind: string; text: string }> {
+  if (typeof ctx.agentPresets?.recompose !== 'function') {
+    throw new TavernArchitectureConflictError('The host cannot recompose a blank session with the CardWorkbench preset.')
+  }
+  await ensureAgentPresetDeclared(ctx, CARD_WORKBENCH_PRESET_ID)
+  const activationEvents = sessionEvents(agent.session)
+  // 与 novel-open 同款锁定：已开始真实轮次的会话不能再原地换 preset。
+  const sessionStarted = activationEvents.some((event) => event.type === 'turn/start')
+    || activationEvents.some((event) => {
+      if (event.type !== 'user/message' && event.type !== 'assistant/message') return false
+      const source = event.type === 'user/message' ? event.data?.source : event.data?.message?.source
+      return isTavernSessionMarker(source)
+    })
+  if (sessionStarted) {
+    throw new TavernArchitectureConflictError('This host session already started; recomposing it with the CardWorkbench preset is locked.')
+  }
+  const db: TavernStore = await store()
+  await db.updateState((state) => ({
+    sessionBindings: {
+      ...state.sessionBindings,
+      [agent.id]: { architecture: 'card-workbench', character: '', chatId: '' },
+    },
+  }))
+  // 幂等 marker：重复 workbench-open 不叠加 marker 也不重复 recompose。
+  if (!activationEvents.some((event) => event.type === 'agent-preset/selected' && event.data?.agentPreset === CARD_WORKBENCH_PRESET_ID)) {
+    const preset = await ctx.agentPresets.recompose(agent.ctx, CARD_WORKBENCH_PRESET_ID)
+    agent.session.append('agent-preset/selected', { agentPreset: preset.id })
+  }
+  return { kind: 'success', text: 'CardWorkbench' }
+}
+
+/**
  * 断言本 bundle 声明的 preset 已在宿主 preset registry 注册。DSH 0.2.0-rc.2
  * 起 preset 不再通过 ~/.dsh/.agent-presets 目录扫描投递（registry "neither
  * scans directories nor accepts preset paths"），而是 profile 里的
@@ -3212,6 +3259,9 @@ function parseTavernSessionCommand(rawInput) {
         ? { action: 'novel-open', novelId: parsed.novelId }
         : null
     }
+    // CardWorkbench bridge（提案 0013）：面板「新建角色卡」引导的写卡 Agent
+    // 会话启动；无载荷，目标 preset 由服务端常量决定。
+    if (parsed.action === 'workbench-open') return { action: 'workbench-open' }
     if (typeof parsed.character !== 'string' || typeof parsed.chatId !== 'string') return null
     const group = parsed.group === true
     const architecture = group ? 'st' : requestedArchitecture(parsed.architecture)

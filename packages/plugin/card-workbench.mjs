@@ -2342,6 +2342,13 @@ function normalizeTavernSessionBinding(value) {
       novelId: candidate.novelId
     };
   }
+  if (candidate.architecture === "card-workbench") {
+    return {
+      character: typeof candidate.character === "string" ? candidate.character : "",
+      chatId: typeof candidate.chatId === "string" ? candidate.chatId : "",
+      architecture: "card-workbench"
+    };
+  }
   if (typeof candidate.character !== "string" || candidate.character.trim() === "") return void 0;
   if (typeof candidate.chatId !== "string" || candidate.chatId.trim() === "") return void 0;
   const base = {

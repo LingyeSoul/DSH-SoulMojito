@@ -206,7 +206,7 @@ describe('internal Tavern session bridge occupation', () => {
           recomposeCalls.push({ agent, presetId })
           return { id: presetId }
         },
-        compositionInventory: async () => [{ id: 'standard' }, { id: 'agent-tavern' }, { id: 'agent-novel' }],
+        compositionInventory: async () => [{ id: 'standard' }, { id: 'agent-tavern' }, { id: 'agent-novel' }, { id: 'card-workbench' }],
       },
       tools: { register: () => {} },
       llm: {
@@ -760,6 +760,34 @@ describe('internal Tavern session bridge occupation', () => {
     }, '/api/dsh-tavern/binding'), res)
     expect(res.statusCode).toBe(200)
     expect((await store.getState()).activeWorlds).toContain('Carrier Lore')
+  })
+
+  it('workbench-open binds a blank session to the CardWorkbench preset once', async () => {
+    const agent = makeAgent('session-workbench')
+    const result = await handler({ agent, rawInput: base64Url({ action: 'workbench-open' }) })
+    expect(result.kind).toBe('success')
+    expect((await store.getState()).sessionBindings['session-workbench']).toEqual({
+      architecture: 'card-workbench',
+      character: '',
+      chatId: '',
+    })
+    // 面板「新建角色卡 → 写卡 Agent」桥：marker + recompose 各一次，无占位 turn。
+    expect(agent.session.events).toEqual([{ type: 'agent-preset/selected', data: { agentPreset: 'card-workbench' } }])
+    expect(recomposeCalls).toContainEqual({ agent: agent.ctx, presetId: 'card-workbench' })
+    // 幂等：重复 workbench-open 不叠加 marker、不重复 recompose。
+    const recomposeCount = recomposeCalls.length
+    const again = await handler({ agent, rawInput: base64Url({ action: 'workbench-open' }) })
+    expect(again.kind).toBe('success')
+    expect(agent.session.events.filter((event) => event.type === 'agent-preset/selected')).toHaveLength(1)
+    expect(recomposeCalls).toHaveLength(recomposeCount)
+  })
+
+  it('refuses workbench-open on a session that already started real turns', async () => {
+    const agent = makeAgent('session-workbench-started')
+    agent.session.append('turn/start', { turn: 1 })
+    await expect(handler({ agent, rawInput: base64Url({ action: 'workbench-open' }) })).rejects.toThrow('already started')
+    expect((await store.getState()).sessionBindings['session-workbench-started']).toBeUndefined()
+    expect(recomposeCalls.some((call) => call.agent === agent.ctx)).toBe(false)
   })
 
   // 放在末尾：recomposeCalls 是累积数组，前面的测试对其做精确断言。

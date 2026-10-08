@@ -240,4 +240,27 @@ describe('retainHostSession', () => {
     expect(hold.path).toBe('retain')
     expect(() => hold.release()).not.toThrow()
   })
+
+  it('invokes a host release method with its own this (ClientSessionReference shape)', () => {
+    // 回归：0.2.0-rc.2 宿主的 ClientSessionReference.release() 是读
+    // this.sessionId 的真方法；解构后裸调用会以 "reading 'sessionId'"
+    // TypeError 炸掉整个 openTavernChat/openNovelSession/openWorkbenchSession
+    // 启动链。夹具必须用方法（非闭包）才能守住这一点。
+    const released: string[] = []
+    class Reference {
+      readonly sessionId: string
+      constructor(sessionId: string) { this.sessionId = sessionId }
+      release(): void { released.push(this.sessionId) }
+    }
+    const ctx = {
+      sessions: {
+        binding: () => undefined,
+        retain: (id: string) => new Reference(id),
+      },
+    }
+    const hold = retainHostSession(ctx, 's-7')
+    expect(hold.path).toBe('retain')
+    expect(() => hold.release()).not.toThrow()
+    expect(released).toEqual(['s-7'])
+  })
 })
