@@ -794,14 +794,23 @@ describe('internal Tavern session bridge occupation', () => {
       sourceChatId: '',
       createdCard: '',
     })
-    // 面板「新建角色卡 → 写卡 Agent」桥：marker + recompose 各一次，无占位 turn。
-    expect(agent.session.events).toEqual([{ type: 'agent-preset/selected', data: { agentPreset: 'card-workbench' } }])
+    // 面板「新建角色卡 → 写卡 Agent」桥：marker + recompose 各一次，并写一对
+    // 占位 turn 摘除宿主 blank 复用资格（工作台无 driver，用户开口前没有
+    // turn/start 的话，宿主会把本会话当 blank 草稿复用，下一个工作台会话的
+    // connect 落回本会话并撞上换绑守卫——新建会话从此失败）。
+    expect(agent.session.events).toEqual([
+      { type: 'agent-preset/selected', data: { agentPreset: 'card-workbench' } },
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
+    ])
+    expect(agent.phase.lastTurn).toBe(1)
     expect(recomposeCalls).toContainEqual({ agent: agent.ctx, presetId: 'card-workbench' })
-    // 幂等：重复 workbench-open 不叠加 marker、不重复 recompose。
+    // 幂等：重复 workbench-open 不叠加 marker、不重复 recompose，也不叠加占位。
     const recomposeCount = recomposeCalls.length
     const again = await handler({ agent, rawInput: base64Url({ action: 'workbench-open' }) })
     expect(again.kind).toBe('success')
     expect(agent.session.events.filter((event) => event.type === 'agent-preset/selected')).toHaveLength(1)
+    expect(turnStarts(agent)).toHaveLength(1)
     expect(recomposeCalls).toHaveLength(recomposeCount)
   })
 
@@ -838,8 +847,47 @@ describe('internal Tavern session bridge occupation', () => {
     expect(recomposeCalls).toHaveLength(recomposeCount)
     expect((await store.getState()).sessionBindings['session-workbench-source']).toMatchObject({ sourceCharacter: CHARACTER, sourceChatId: chatId, createdCard: '已出卡' })
     // 已绑定会话拒绝换绑另一个来源（自由工作台身份也不行），绑定保持原身份。
-    await expect(handler({ agent, rawInput: base64Url({ action: 'workbench-open' }) })).rejects.toThrow('already bound to another chat')
+    // 首次打开已写占位 turn，换来源命令先撞「已启动」锁（同款 fail-closed）。
+    await expect(handler({ agent, rawInput: base64Url({ action: 'workbench-open' }) })).rejects.toThrow('already started')
     expect((await store.getState()).sessionBindings['session-workbench-source']).toMatchObject({ sourceCharacter: CHARACTER, sourceChatId: chatId })
+  })
+
+  it('re-sends workbench-open on an occupied session idempotently (client stock repair path)', async () => {
+    // 客户端存量修复对旧版本打开的 blank 工作台会话重发同来源 workbench-open，
+    // 服务端补占位 turn 对；会话已有真实轮次（用户聊过）时同来源重发同样必须
+    // 幂等成功，而不是把「已启动」错误塞进会话记录。
+    const agent = makeAgent('session-workbench-repair')
+    await handler({ agent, rawInput: base64Url({ action: 'workbench-open', sourceCharacter: CHARACTER, sourceChatId: chatId }) })
+    agent.session.append('turn/start', { turn: 2 })
+    agent.session.append('turn/end', { turn: 2, reason: { kind: 'completed' } })
+    const recomposeCount = recomposeCalls.length
+    const again = await handler({ agent, rawInput: base64Url({ action: 'workbench-open', sourceCharacter: CHARACTER, sourceChatId: chatId }) })
+    expect(again.kind).toBe('success')
+    expect(agent.session.events.filter((event) => event.type === 'agent-preset/selected')).toHaveLength(1)
+    expect(turnStarts(agent)).toHaveLength(2)
+    expect(recomposeCalls).toHaveLength(recomposeCount)
+    expect((await store.getState()).sessionBindings['session-workbench-repair']).toMatchObject({ sourceCharacter: CHARACTER, sourceChatId: chatId })
+  })
+
+  it('opens a workbench session without occupying when the host loop base cannot be advanced', async () => {
+    // 宿主换代：phase 不可推进时宁可不占位（仅失去防复用保护），不阻断激活。
+    const agent = makeAgent('session-workbench-nophase')
+    delete (agent as { phase?: unknown }).phase
+    const result = await handler({ agent, rawInput: base64Url({ action: 'workbench-open' }) })
+    expect(result.kind).toBe('success')
+    expect(turnStarts(agent)).toHaveLength(0)
+    expect((await store.getState()).sessionBindings['session-workbench-nophase']).toMatchObject({ architecture: 'card-workbench' })
+  })
+
+  it('still refuses rebinding a blank stock workbench session to another source', async () => {
+    // 旧版本存量形态：绑定已写、会话仍 blank（无占位 turn）。换来源命令必须
+    // 继续被换绑守卫 fail-closed 拦下（决策 2026-10-08），绑定身份不被改写。
+    const agent = makeAgent('session-workbench-stock')
+    delete (agent as { phase?: unknown }).phase
+    await handler({ agent, rawInput: base64Url({ action: 'workbench-open', sourceCharacter: CHARACTER, sourceChatId: chatId }) })
+    expect(turnStarts(agent)).toHaveLength(0)
+    await expect(handler({ agent, rawInput: base64Url({ action: 'workbench-open' }) })).rejects.toThrow('already bound to another chat')
+    expect((await store.getState()).sessionBindings['session-workbench-stock']).toMatchObject({ sourceCharacter: CHARACTER, sourceChatId: chatId })
   })
 
   it('refuses workbench-open on a session that already started real turns', async () => {

@@ -15508,11 +15508,12 @@ async function handleWorkbenchOpenCommand(ctx, agent, payload) {
     const source = event.type === "user/message" ? event.data?.source : event.data?.message?.source;
     return isTavernSessionMarker(source);
   });
-  if (sessionStarted) {
-    throw new TavernArchitectureConflictError("This host session already started; recomposing it with the CardWorkbench preset is locked.");
-  }
   const db = await store();
   const previous = (await db.getState()).sessionBindings[agent.id];
+  const sameWorkbenchSource = previous?.architecture === "card-workbench" && previous.sourceCharacter === payload.sourceCharacter && previous.sourceChatId === payload.sourceChatId;
+  if (sessionStarted && !sameWorkbenchSource) {
+    throw new TavernArchitectureConflictError("This host session already started; recomposing it with the CardWorkbench preset is locked.");
+  }
   if (previous?.architecture === "card-workbench" && (previous.sourceCharacter !== payload.sourceCharacter || previous.sourceChatId !== payload.sourceChatId)) {
     throw new TavernArchitectureConflictError("This CardWorkbench session is already bound to another chat.");
   }
@@ -15534,6 +15535,7 @@ async function handleWorkbenchOpenCommand(ctx, agent, payload) {
     const preset = await ctx.agentPresets.recompose(agent.ctx, CARD_WORKBENCH_PRESET_ID);
     agent.session.append("agent-preset/selected", { agentPreset: preset.id });
   }
+  occupyHostSession(agent);
   return { kind: "success", text: "CardWorkbench" };
 }
 async function ensureAgentPresetDeclared(ctx, presetId) {
@@ -16493,7 +16495,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.0".trim() : "";
-  const commit = true ? normalizeCommit("a7195fb") : void 0;
+  const commit = true ? normalizeCommit("ad51015") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

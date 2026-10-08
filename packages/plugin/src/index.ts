@@ -2181,10 +2181,13 @@ async function bindNovelSession(db: TavernStore, sessionId: string, novelId: str
 /**
  * Internal workbench-open command handler（提案 0013）：面板「新建角色卡 →
  * 写卡 Agent」与聊天侧「交给工作台」共用的会话启动桥。与 novel-open 同族的
- * 闸门——recompose 能力 fail-closed、preset 声明校验、已开始会话锁定；来源
+ * 闸门——recompose 能力 fail-closed、preset 声明校验、已开始会话锁定（同
+ * 来源身份幂等重发放行，客户端存量修复借本命令补占位 turn 对）；来源
  * 聊天身份写进绑定（每个聊天对应一个写卡工作会话），已绑定其他来源的会话
- * 拒绝换绑；绑定写 + 幂等 marker + recompose，无 driver 参与（工作台是纯
- * 对话式 preset）。
+ * 拒绝换绑；绑定写 + 幂等 marker + recompose + 占位 turn（无 driver 参与，
+ * 工作台是纯对话式 preset，用户开口前靠占位 turn 摘除宿主 blank 复用资格，
+ * 否则下一个工作台会话的 connect 会落回本会话并撞上换绑守卫——决策
+ * 2026-08-16 同款机制）。
  */
 async function handleWorkbenchOpenCommand(
   ctx: NovelPluginContext & { agentPresets?: { recompose?: (agentCtx: unknown, presetId: string) => Promise<{ id: string }> } },
@@ -2196,18 +2199,23 @@ async function handleWorkbenchOpenCommand(
   }
   await ensureAgentPresetDeclared(ctx, CARD_WORKBENCH_PRESET_ID)
   const activationEvents = sessionEvents(agent.session)
-  // 与 novel-open 同款锁定：已开始真实轮次的会话不能再原地换 preset。
+  // 与 novel-open 同款锁定：已开始真实轮次的会话不能再原地换 preset。例外与
+  // AgentTavern 的 sameTavernBinding 同因：同来源身份的幂等重发（客户端存量
+  // 修复借本命令补占位 turn 对）不能被自己的占位 turn 拦下。
   const sessionStarted = activationEvents.some((event) => event.type === 'turn/start')
     || activationEvents.some((event) => {
       if (event.type !== 'user/message' && event.type !== 'assistant/message') return false
       const source = event.type === 'user/message' ? event.data?.source : event.data?.message?.source
       return isTavernSessionMarker(source)
     })
-  if (sessionStarted) {
-    throw new TavernArchitectureConflictError('This host session already started; recomposing it with the CardWorkbench preset is locked.')
-  }
   const db: TavernStore = await store()
   const previous = (await db.getState()).sessionBindings[agent.id]
+  const sameWorkbenchSource = previous?.architecture === 'card-workbench'
+    && previous.sourceCharacter === payload.sourceCharacter
+    && previous.sourceChatId === payload.sourceChatId
+  if (sessionStarted && !sameWorkbenchSource) {
+    throw new TavernArchitectureConflictError('This host session already started; recomposing it with the CardWorkbench preset is locked.')
+  }
   if (previous?.architecture === 'card-workbench'
     && (previous.sourceCharacter !== payload.sourceCharacter || previous.sourceChatId !== payload.sourceChatId)) {
     // 必须在 marker 幂等检查之前拦截：否则不重复 recompose 但绑定被静默改写
@@ -2233,6 +2241,12 @@ async function handleWorkbenchOpenCommand(
     const preset = await ctx.agentPresets.recompose(agent.ctx, CARD_WORKBENCH_PRESET_ID)
     agent.session.append('agent-preset/selected', { agentPreset: preset.id })
   }
+  // 工作台是纯对话式 preset（无 driver kickoff），用户开口前会话没有 turn/start，
+  // 宿主会把它当 blank 草稿复用——下一个 openWorkbenchSession 的 connect 就会
+  // 落回本会话并撞上「已绑定其他来源」守卫，新建会话从此失败。写一对占位
+  // turn 摘除复用资格（与 ST 激活同款，决策 2026-08-16；幂等，宿主拒绝时仅
+  // 失去保护不阻断激活）。
+  occupyHostSession(agent)
   return { kind: 'success', text: 'CardWorkbench' }
 }
 

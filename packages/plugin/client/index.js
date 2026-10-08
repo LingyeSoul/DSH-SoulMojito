@@ -669,7 +669,7 @@ window.__ModuleLoader__.load({
       'nav.groups': 'Groups',
       'nav.workbench': 'Card Workbench',
       'nav.workbenchFree': 'Free workbench',
-      'nav.workbenchNew': 'Open a free workbench session',
+      'nav.workbenchNew': 'Create a new free workbench session',
       'nav.workbenchChat': 'Open this chat in the Card Workbench',
       'nav.noWorkbench': 'No workbench sessions',
       'nav.newChat': 'New chat with {name}',
@@ -1172,7 +1172,7 @@ window.__ModuleLoader__.load({
       'nav.groups': '群聊',
       'nav.workbench': '写卡工作台',
       'nav.workbenchFree': '自由写卡',
-      'nav.workbenchNew': '打开自由写卡工作台',
+      'nav.workbenchNew': '新建自由写卡工作台',
       'nav.workbenchChat': '把该聊天交给写卡工作台',
       'nav.noWorkbench': '暂无写卡工作会话',
       'nav.newChat': '与 {name} 开新聊天',
@@ -2037,7 +2037,8 @@ window.__ModuleLoader__.load({
     // 补齐 marker 和占位 turn 对即摘除。成功记入 repairedBindings，失败移除以待
     // 下次触发重试。AgentTavern 桥接命令对已初始化会话是一次性的，重发只会
     // 往会话记录里塞报错，摘除客户端 blank 镜像即可；仅 initializationPending
-    // 的绑定才需要重发以补完初始化。
+    // 的绑定才需要重发以补完初始化。CardWorkbench 的同来源重发是幂等安全路径
+    // （服务端不重复 recompose、只补占位），与 ST 同走命令重发。
     async function repairBinding(ctx, sessionId, binding) {
       if (!binding || repairedBindings.has(sessionId)) return
       repairedBindings.add(sessionId)
@@ -2046,6 +2047,30 @@ window.__ModuleLoader__.load({
       // new-chat reuse cannot hijack the session.
       if (binding.architecture === 'agent-novel') {
         reserveTavernSession(ctx, sessionId)
+        return
+      }
+      if (binding.architecture === 'card-workbench') {
+        // 旧版本打开的工作台会话宿主侧仍是 blank（无 turn/start），会劫持下一次
+        // openWorkbenchSession 的 connect 并撞上「已绑定其他来源」守卫。重发同
+        // 来源 workbench-open 让服务端补占位 turn 对（幂等：marker 已在则不
+        // recompose，同来源通过已启动锁，绑定重写保留 createdCard）。
+        const heldSession = DshBindClient.retainHostSession(ctx, sessionId, clientShapeTrace)
+        try {
+          const payload = base64Url(JSON.stringify({
+            action: 'workbench-open',
+            sourceCharacter: typeof binding.sourceCharacter === 'string' ? binding.sourceCharacter : '',
+            sourceChatId: typeof binding.sourceChatId === 'string' ? binding.sourceChatId : '',
+          }))
+          const bound = ctx?.sessions?.binding(sessionId)
+          if (!bound) throw new Error('session binding unavailable')
+          const result = await bound.session.command(`/dsh-tavern-session ${payload}`)
+          if (!result?.ok || !result.value?.matched) throw new Error('Tavern session bridge rejected')
+          reserveTavernSession(ctx, sessionId)
+        } catch {
+          repairedBindings.delete(sessionId)
+        } finally {
+          heldSession.release()
+        }
         return
       }
       if (bindingArchitecture(binding) !== 'st' && binding.initializationPending !== true) {
@@ -2246,28 +2271,34 @@ window.__ModuleLoader__.load({
     }
 
     // 每个聊天对应一个写卡工作会话：source 携带来源聊天身份时按身份幂等复用
-    // （聊天侧「交给工作台」）；source 为 null 时是面板拉起的自由工作台，同样
-    // 幂等复用。工作台会话落在专用内部工作区（Tavern Workbench (internal)）。
-    function workbenchSessionLabel(source) {
+    // （聊天侧「交给工作台」）；source 为 null 时是面板拉起的自由工作台，「+」
+    // 与新建角色卡向导走 fresh 每次新建（幂等复用会把新建短路成跳转旧会话，
+    // 决策 2026-10-08 workbench-blank-reuse 客户端补充）。工作台会话落在专用
+    // 内部工作区（Tavern Workbench (internal)）。
+    function workbenchSessionLabel(source, ordinal = 0) {
       return source
         ? translate('workbench.chatSessionLabel', {
           character: source.character,
           chat: String(source.chatId).replace(/\.jsonl$/i, ''),
         })
-        : translate('workbench.sessionLabel')
+        : ordinal > 1 ? `${translate('workbench.sessionLabel')} ${ordinal}` : translate('workbench.sessionLabel')
     }
 
-    async function openWorkbenchSession(ctx, source = null) {
+    async function openWorkbenchSession(ctx, source = null, { fresh = false } = {}) {
       update({ navigationStatus: translate('workbench.opening') })
       try {
-        // 幂等复用：同来源身份已绑定且会话仍存活的工作台会话直接回到主视图。
-        const sessions = ctx.sessions.list.getSnapshot()
-        const existing = Object.entries(snapshot.bootstrap.state.sessionBindings || {})
-          .find(([sessionId, binding]) => workbenchBindingMatches(binding, source) && sessions.byId[sessionId])
-        if (existing) {
-          reserveTavernSession(ctx, existing[0])
-          openSessionView(ctx, existing[0])
-          return existing[0]
+        // 幂等复用只服务「回到已有工作台」的入口（聊天侧「交给工作台」按来源
+        // 身份复用，一聊一会话）；fresh 入口（侧栏「+」、新建角色卡向导）必须
+        // 跳过——否则同来源会话存活期间点「新建」永远只是跳回旧会话。
+        if (!fresh) {
+          const sessions = ctx.sessions.list.getSnapshot()
+          const existing = Object.entries(snapshot.bootstrap.state.sessionBindings || {})
+            .find(([sessionId, binding]) => workbenchBindingMatches(binding, source) && sessions.byId[sessionId])
+          if (existing) {
+            reserveTavernSession(ctx, existing[0])
+            openSessionView(ctx, existing[0])
+            return existing[0]
+          }
         }
         const workspace = await ensureWorkbenchWorkspace(ctx)
         const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId)
@@ -2287,7 +2318,13 @@ window.__ModuleLoader__.load({
           reserveTavernSession(ctx, sessionId)
           const bound = await waitForWorkbenchBinding(sessionId, source)
           if (!bound) throw new Error(translate('workbench.bindTimeout'))
-          await binding.session.rename(workbenchSessionLabel(source)).catch(() => {})
+          // 多自由工作台并存时按现存数给宿主标题带序号（第 2 个起），面板列表
+          // WorkbenchList 用同款序号区分同名条目；聊天侧工作台按来源身份天然
+          // 唯一，出卡后统一改名为卡名。
+          const freeOrdinal = source ? 0 : 1 + Object.entries(snapshot.bootstrap.state.sessionBindings || {})
+            .filter(([sid, binding]) => sid !== sessionId && workbenchBindingMatches(binding, null) && ctx.sessions.list.getSnapshot().byId[sid])
+            .length
+          await binding.session.rename(workbenchSessionLabel(source, freeOrdinal)).catch(() => {})
           openSessionView(ctx, sessionId)
           return sessionId
         } finally {
@@ -4992,14 +5029,21 @@ window.__ModuleLoader__.load({
       const sessionIds = useSessions((value) => value.ids)
       const entries = Object.entries(state.bootstrap.state.sessionBindings || {})
         .filter(([sessionId, binding]) => binding?.architecture === 'card-workbench' && sessionIds.includes(sessionId))
+      // 多自由工作台并存时同名条目按枚举序号区分（第 2 个起带号，与创建时
+      // 宿主标题的计数序号同族；删会话后序号重排仅为显示层变化）。
+      const freeTotal = entries.filter(([, binding]) => !binding.sourceCharacter && !binding.sourceChatId).length
+      let freeOrdinal = 0
+      const labels = entries.map(([, binding]) => {
+        // 出卡后会话改名为卡名（提案 0013 补充）：createdCard 优先于来源
+        // 聊天/自由工作台标签，与服务端 sessionTitle.rename 固定的宿主标题一致。
+        if (binding.createdCard) return binding.createdCard
+        if (binding.sourceCharacter) return `${binding.sourceCharacter} · ${String(binding.sourceChatId).replace(/\.jsonl$/i, '')}`
+        freeOrdinal += 1
+        return freeTotal > 1 && freeOrdinal > 1 ? `${t('nav.workbenchFree')} ${freeOrdinal}` : t('nav.workbenchFree')
+      })
       return h('div', { className: 'dt-sidebar-chats' },
-        entries.map(([sessionId, binding]) => {
-          // 出卡后会话改名为卡名（提案 0013 补充）：createdCard 优先于来源
-          // 聊天/自由工作台标签，与服务端 sessionTitle.rename 固定的宿主标题一致。
-          const label = binding.createdCard
-            || (binding.sourceCharacter
-              ? `${binding.sourceCharacter} · ${String(binding.sourceChatId).replace(/\.jsonl$/i, '')}`
-              : t('nav.workbenchFree'))
+        entries.map(([sessionId, binding], index) => {
+          const label = labels[index]
           return h('div', {
             key: sessionId,
             className: `dt-sidebar-chat-row dt-sidebar-chat-single ${currentSession === sessionId ? 'dt-sidebar-chat-active' : ''}`,
@@ -5081,7 +5125,7 @@ window.__ModuleLoader__.load({
             title: t('nav.workbenchNew'),
             onClick: () => {
               setError('')
-              void openWorkbenchSession(ctx).catch((cause) => {
+              void openWorkbenchSession(ctx, null, { fresh: true }).catch((cause) => {
                 update({ navigationStatus: '' })
                 setError(sidebarErrorDetail(cause))
               })
@@ -5378,7 +5422,8 @@ window.__ModuleLoader__.load({
         if (launching) return
         setLaunching(true)
         setError('')
-        void openWorkbenchSession(ctx)
+        // 向导语义是「新建角色卡」：每次拉起都是新的写卡会话，不复用既有绑定。
+        void openWorkbenchSession(ctx, null, { fresh: true })
           .then(() => setGuideOpen(false))
           .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
           .finally(() => setLaunching(false))
