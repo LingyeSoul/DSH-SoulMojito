@@ -368,6 +368,11 @@ window.__ModuleLoader__.load({
       'panel.worlds.constant': 'Constant',
       'panel.worlds.selective': 'Selective',
       'panel.worlds.addEntry': 'Add entry',
+      'panel.worlds.new': 'New world book',
+      'panel.worlds.creating': 'New world book (unsaved)',
+      'panel.worlds.createEditorHint': 'Give the book a name and add entries; a book with no entries is still saved and can be filled in later.',
+      'panel.worlds.duplicate': 'World book "{name}" already exists; creating it again would overwrite that book. Pick another name or delete the existing book first.',
+      'panel.worlds.createFailed': 'Failed to create world book: {message}',
       'panel.presets.empty': 'No presets imported',
       'panel.presets.setActive': 'Set active',
       'panel.presets.scope': 'Preset projection',
@@ -390,6 +395,11 @@ window.__ModuleLoader__.load({
       'panel.presets.invalidJson': 'Advanced fields must be valid JSON.',
       'panel.presets.identifierInvalid': 'Prompt identifiers must be non-empty and unique.',
       'panel.presets.editHint': 'Prompt order and unknown sampler fields are preserved on save.',
+      'panel.presets.new': 'New preset',
+      'panel.presets.creating': 'New preset (unsaved)',
+      'panel.presets.createEditorHint': 'Starts as an empty chat completion preset: add prompts to the stack, then save.',
+      'panel.presets.duplicate': 'Preset "{name}" already exists; creating it again would overwrite that preset. Pick another name or delete the existing preset first.',
+      'panel.presets.createFailed': 'Failed to create preset: {message}',
       'panel.variables.globals': 'Global STscript variables',
       'panel.variables.globalsHint': 'Shared across every chat through the getvar/setvar macros.',
       'panel.variables.empty': 'No variables set',
@@ -903,6 +913,11 @@ window.__ModuleLoader__.load({
       'panel.worlds.constant': '常驻',
       'panel.worlds.selective': '选择性匹配',
       'panel.worlds.addEntry': '新增条目',
+      'panel.worlds.new': '新建世界书',
+      'panel.worlds.creating': '新建世界书（未保存）',
+      'panel.worlds.createEditorHint': '填好书名并添加条目即可；空书也会保存，之后可随时补充条目。',
+      'panel.worlds.duplicate': '已存在同名世界书「{name}」，再次创建会覆盖原书。请换个名字，或先删除已有世界书。',
+      'panel.worlds.createFailed': '新建世界书失败：{message}',
       'panel.presets.empty': '尚未导入预设',
       'panel.presets.setActive': '设为当前',
       'panel.presets.scope': '预设生效范围',
@@ -925,6 +940,11 @@ window.__ModuleLoader__.load({
       'panel.presets.invalidJson': '高级字段必须是有效 JSON。',
       'panel.presets.identifierInvalid': '提示词标识符不能为空且必须唯一。',
       'panel.presets.editHint': '保存时会保留提示词顺序与未知采样字段。',
+      'panel.presets.new': '新建预设',
+      'panel.presets.creating': '新建预设（未保存）',
+      'panel.presets.createEditorHint': '从空白聊天补全预设开始：往提示词堆栈添加条目后保存。',
+      'panel.presets.duplicate': '已存在同名预设「{name}」，再次创建会覆盖原预设。请换个名字，或先删除已有预设。',
+      'panel.presets.createFailed': '新建预设失败：{message}',
       'panel.variables.globals': '全局 STscript 变量',
       'panel.variables.globalsHint': '所有聊天通过 getvar/setvar 宏共享。',
       'panel.variables.empty': '暂无变量',
@@ -5418,6 +5438,14 @@ window.__ModuleLoader__.load({
       },
     }
 
+    // 手动新建的空白世界书模板：条目缺省值由 WorldBookEditor 的 addEntry 按
+    // normalizeEntry 口径补全（与 worldbook.ts 落库归一一致）。
+    const BLANK_WORLD_BOOK = { name: '', entries: [] }
+
+    // 手动新建的空白预设模板：空 prompts/prompt_order 即合法 chat-completion
+    // 形态（detectPresetKind 按这两个数组判定），采样字段留空袋由编辑器维护。
+    const BLANK_PRESET = { prompts: [], prompt_order: [] }
+
     function PanelCharacters({ ctx }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -5653,6 +5681,7 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('')
       const [browse, setBrowse] = useState('')
       const [editing, setEditing] = useState('')
+      const [creating, setCreating] = useState(false)
       const [books, setBooks] = useState({})
       const [filter, setFilter] = useState('')
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
@@ -5688,6 +5717,27 @@ window.__ModuleLoader__.load({
         setBrowse(next)
         setEditing('')
       })
+      // 手动新建走与编辑同一条 PUT world 路径（oldName === 新名，importWorldFile
+      // 落盘即建书）；重名覆盖语义与导入一致，面板侧先拦同名（大小写不敏感，
+      // 落盘 stem 在部分文件系统上不区分大小写），避免一键静默覆盖既有书。
+      const createWorld = (book) => {
+        const name = String(book?.name || '').trim()
+        if (name === '') return Promise.reject(new Error(t('panel.rename')))
+        const normalized = name.toLowerCase()
+        if (state.bootstrap.worlds.some((existing) => existing.toLowerCase() === normalized)) {
+          return Promise.reject(new Error(t('panel.worlds.duplicate', { name })))
+        }
+        return saveWorldBook(name, book)
+          .then((saved) => {
+            setBooks((current) => ({ ...current, [name]: saved }))
+            setCreating(false)
+            setBrowse(name)
+            return saved
+          })
+          .catch((cause) => {
+            throw new Error(t('panel.worlds.createFailed', { message: cause instanceof Error ? cause.message : String(cause) }))
+          })
+      }
       const worlds = state.bootstrap.worlds
       const book = browse !== '' ? books[browse] : undefined
       const entries = book?.entries
@@ -5697,7 +5747,8 @@ window.__ModuleLoader__.load({
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('settings.import')),
           h('div', { className: 'dt-imports' },
-            h(UploadButton, { kind: 'world', label: t('settings.importWorld'), accept: '.json,application/json' }))),
+            h(UploadButton, { kind: 'world', label: t('settings.importWorld'), accept: '.json,application/json' }),
+            h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setBrowse(''); setCreating(true) } }, `+ ${t('panel.worlds.new')}`))),
         h('section', { className: 'dt-settings-band' },
           h('label', { className: 'dt-toggle' },
             h('input', {
@@ -5706,7 +5757,7 @@ window.__ModuleLoader__.load({
               onChange: (event) => run(patchState({ worldFollowsCharacter: event.target.checked })),
             }),
             h('span', null, t('settings.worldFollowsCharacter'))),
-          worlds.length === 0
+          worlds.length === 0 && !creating
             ? h('p', { className: 'dt-muted' }, t('settings.worldsEmpty'))
             : h('div', { className: 'dt-world-list' }, worlds.map((name) => h('div', { key: name, className: 'dt-world-row' },
               h('label', { className: 'dt-toggle' },
@@ -5751,6 +5802,12 @@ window.__ModuleLoader__.load({
                        h('strong', null, entry.comment || `#${entry.uid ?? index + 1}`),
                        h('span', { className: 'dt-entry-keys' }, t('panel.worlds.keys', { keys: loreKeys(entry) }))),
                      h('div', { className: 'dt-entry-content' }, entry.content)))))) : null,
+         creating
+           ? h('section', { className: 'dt-settings-band' },
+               h('h3', null, t('panel.worlds.creating')),
+               h('p', { className: 'dt-hint' }, t('panel.worlds.createEditorHint')),
+               h(WorldBookEditor, { book: BLANK_WORLD_BOOK, onSave: createWorld, onCancel: () => setCreating(false) }))
+           : null,
          error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
 
@@ -5834,6 +5891,7 @@ window.__ModuleLoader__.load({
       const t = useTranslate()
       const [error, setError] = useState('')
       const [editing, setEditing] = useState('')
+      const [creating, setCreating] = useState(false)
       const [presets, setPresets] = useState({})
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
       const kinds = state.bootstrap.presetKinds || {}
@@ -5854,11 +5912,34 @@ window.__ModuleLoader__.load({
         })
         setEditing('')
       })
+      // 手动新建走与编辑同一条 PUT preset 路径（oldName === 新名，putPreset 落盘
+      // 即建预设）；重名覆盖语义与导入一致，面板侧先拦同名（大小写不敏感）。
+      // detectPresetKind 要求 prompts 与 prompt_order 同时为数组才认定为
+      // chat-completion，空白模板两者都带上。
+      const createPreset = (data, name) => {
+        const target = String(name || '').trim()
+        if (target === '') return Promise.reject(new Error(t('panel.rename')))
+        const normalized = target.toLowerCase()
+        if (state.bootstrap.presets.some((existing) => existing.toLowerCase() === normalized)) {
+          return Promise.reject(new Error(t('panel.presets.duplicate', { name: target })))
+        }
+        return savePreset(target, data, target)
+          .then((saved) => {
+            setPresets((current) => ({ ...current, [target]: saved }))
+            setCreating(false)
+            setEditing(target)
+            return saved
+          })
+          .catch((cause) => {
+            throw new Error(t('panel.presets.createFailed', { message: cause instanceof Error ? cause.message : String(cause) }))
+          })
+      }
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('settings.import')),
           h('div', { className: 'dt-imports' },
-            h(UploadButton, { kind: 'preset', label: t('settings.importPreset'), accept: '.json,application/json' }))),
+            h(UploadButton, { kind: 'preset', label: t('settings.importPreset'), accept: '.json,application/json' }),
+            h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setCreating(true) } }, `+ ${t('panel.presets.new')}`))),
         // 预设生效范围（preset-mount.ts）：AgentTavern 恒投影；工作台/小说按
         // 这两个开关接入（默认关），翻转经 state 路由写穿投影缓存。
         h('section', { className: 'dt-settings-band' },
@@ -5880,7 +5961,7 @@ window.__ModuleLoader__.load({
               }),
               h('span', null, t('panel.presets.novelToggle'))))),
         h('section', { className: 'dt-settings-band' },
-          state.bootstrap.presets.length === 0
+          state.bootstrap.presets.length === 0 && !creating
             ? h('p', { className: 'dt-muted' }, t('panel.presets.empty'))
             : h('div', { className: 'dt-preset-list' }, state.bootstrap.presets.map((name) => h('div', { key: name, className: 'dt-preset-row' },
               h('strong', { className: 'dt-preset-name' }, name),
@@ -5901,6 +5982,12 @@ window.__ModuleLoader__.load({
                 },
               }),
             editing === name ? h('div', { className: 'dt-preset-editor-wrap' }, presets[name] ? h(PresetEditor, { name, kind: kinds[name], data: presets[name], onSave: (data, nextName) => save(name, data, nextName), onCancel: () => setEditing('') }) : h('p', { className: 'dt-muted' }, t('nav.loading'))) : null)))),
+        creating
+          ? h('section', { className: 'dt-settings-band' },
+              h('h3', null, t('panel.presets.creating')),
+              h('p', { className: 'dt-hint' }, t('panel.presets.createEditorHint')),
+              h(PresetEditor, { name: '', kind: 'chat-completion', data: BLANK_PRESET, onSave: createPreset, onCancel: () => setCreating(false) }))
+          : null,
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
 

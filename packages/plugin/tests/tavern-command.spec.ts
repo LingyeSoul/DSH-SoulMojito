@@ -65,10 +65,10 @@ function makeV4SessionAgent(id: string) {
   return { ...agent, session: { ...agent.session, header: { version: 4 } } }
 }
 
-function makeRequest(body: unknown, url = '/api/dsh-tavern/generate') {
+function makeRequest(body: unknown, url = '/api/dsh-tavern/generate', method = 'POST') {
   const listeners = new Map<string, (value?: unknown) => void>()
   return {
-    method: 'POST',
+    method,
     url,
     on: (event: string, listener: (value?: unknown) => void) => {
       listeners.set(event, listener)
@@ -766,6 +766,49 @@ describe('internal Tavern session bridge occupation', () => {
     const book = await store.getWorld('Carrier Lore')
     expect(book?.entries).toHaveLength(1)
     expect(book?.entries[0]?.content).toBe('carrier constant lore')
+  })
+
+  // 面板「新建世界书」（参考「新建角色卡」手动路径）落库语义：与编辑共用
+  // PUT world/:name 路由，oldName === 新名时 importWorldFile 落盘即建书。
+  // 空白书（worldBookToFile({name, entries: []}) → {entries: {}}）必须合法。
+  it('creates a world book via the panel PUT route with a fresh name', async () => {
+    const res = makeResponse()
+    await apiHandler(makeRequest({ name: 'Blank Book', data: { entries: {} } }, `/api/dsh-tavern/world/${encodeURIComponent('Blank Book')}`, 'PUT'), res)
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.chunks.join(''))).toMatchObject({ ok: true, name: 'Blank Book', book: { name: 'Blank Book', entries: [] } })
+    expect(await store.listWorlds()).toContain('Blank Book')
+    expect((await store.getWorld('Blank Book'))?.entries).toEqual([])
+  })
+
+  it('creates a world book with entries through the same PUT route', async () => {
+    const res = makeResponse()
+    await apiHandler(makeRequest({
+      name: 'Manual Book',
+      data: {
+        entries: {
+          '0': {
+            uid: 0, key: ['龙', 'dragon'], keysecondary: [], comment: 'dragon lore', content: 'Dragons rule the skies.',
+            constant: true, selective: true, order: 100, position: 0, disable: false, depth: 4, probability: 100,
+          },
+        },
+      },
+    }, `/api/dsh-tavern/world/${encodeURIComponent('Manual Book')}`, 'PUT'), res)
+    expect(res.statusCode).toBe(200)
+    const book = await store.getWorld('Manual Book')
+    expect(book?.entries).toHaveLength(1)
+    expect(book?.entries[0]).toMatchObject({ uid: 0, key: ['龙', 'dragon'], comment: 'dragon lore', content: 'Dragons rule the skies.', constant: true })
+  })
+
+  // 面板「新建预设」落库语义：PUT preset/:name（oldName === 新名）putPreset 落盘
+  // 即建预设；空白 chat-completion 模板（prompts/prompt_order 均为空数组）必须
+  // 过 parsePresetOrThrow 校验并按 chat-completion 识别。
+  it('creates a blank chat-completion preset via the panel PUT route with a fresh name', async () => {
+    const res = makeResponse()
+    await apiHandler(makeRequest({ name: 'Fresh Preset', data: { prompts: [], prompt_order: [] } }, `/api/dsh-tavern/preset/${encodeURIComponent('Fresh Preset')}`, 'PUT'), res)
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.chunks.join(''))).toMatchObject({ ok: true, name: 'Fresh Preset', kind: 'chat-completion' })
+    expect(await store.listPresets()).toContain('Fresh Preset')
+    expect(await store.getPreset('Fresh Preset')).toEqual({ prompts: [], prompt_order: [] })
   })
 
   it('imports card-embedded regex scripts into the global script list', async () => {
