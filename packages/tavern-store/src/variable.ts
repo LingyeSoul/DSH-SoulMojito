@@ -30,7 +30,9 @@ export class VariableRevisionConflictError extends Error {
 }
 
 const SCOPES = new Set<VariableScope>(['turn', 'chat', 'character', 'agent', 'global'])
-const NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/
+// MVU 卡片惯用非 ASCII 变量名（`当前周期`、`basic.好感度` 等），名字集按 Unicode
+// 字母/数字放开；空白、`_.-` 外的标点与控制字符仍拒绝。
+const NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u
 const MAX_VALUE_BYTES = 32 * 1024
 const MAX_SCOPE_BYTES = 256 * 1024
 const MAX_LIST = 100

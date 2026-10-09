@@ -5734,6 +5734,14 @@ window.__ModuleLoader__.load({
         h('pre', null, JSON.stringify(variable.value, null, 2)))
     }
 
+    // 聊天局部变量的展示值：chat_metadata.variables 是任意 JSON 树（MVU 卡常为
+    // 嵌套对象），直接 String() 会渲染成 [object Object]——对象/数组序列化为
+    // 单行 JSON，完整文本挂 title 供悬停查看。
+    function formatChatVariableValue(value) {
+      if (value === null || typeof value !== 'object') return String(value)
+      try { return JSON.stringify(value) ?? String(value) } catch { return String(value) }
+    }
+
     function PanelVariables({ useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -5827,10 +5835,13 @@ window.__ModuleLoader__.load({
             ? h('p', { className: 'dt-muted' }, t('panel.variables.chatLocalEmpty'))
             : localVars && Object.keys(localVars).length > 0
               ? h('div', { className: 'dt-kv-list' },
-                Object.entries(localVars).map(([key, value]) => h('div', { key, className: 'dt-kv-row dt-kv-readonly' },
-                  h('span', { className: 'dt-kv-key' }, key),
-                  h('span', { className: 'dt-kv-value' }, String(value)),
-                  h('span'))))
+                Object.entries(localVars).map(([key, value]) => {
+                  const text = formatChatVariableValue(value)
+                  return h('div', { key, className: 'dt-kv-row dt-kv-readonly' },
+                    h('span', { className: 'dt-kv-key' }, key),
+                    h('span', { className: 'dt-kv-value', title: text }, text),
+                    h('span'))
+                }))
               : h('p', { className: 'dt-muted' }, t('panel.variables.empty'))),
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('panel.variables.agentAudit')),

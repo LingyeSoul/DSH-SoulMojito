@@ -206,6 +206,28 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     expect(await readMvuAudit(join(home, 'tavern'))).toHaveLength(3)
   })
 
+  it('settles non-ASCII (Chinese MVU) variable names instead of rejecting them', async () => {
+    // 回归：store 层名字校验曾为 ASCII-only，中文 MVU 变量名（`当前周期`、
+    // `status.服从指令`）整批落 failures。
+    const result = await settle([
+      { name: '当前周期', value: 2, reason: '周期推进' },
+      { name: 'status.服从指令', value: { 等级: 3 } },
+    ])
+    expect(result.applied).toEqual(['当前周期', 'status.服从指令'])
+    expect(result.failed).toEqual([])
+    expect(result.receipt).toMatchObject({
+      status: 'updated',
+      changes: [
+        { name: '当前周期', after: 2 },
+        { name: 'status.服从指令', after: { 等级: 3 } },
+      ],
+    })
+    const { store } = await boundChat()
+    const chatId = (await store.getState()).sessionBindings.native!.chatId
+    expect(await (await VariableStore.open(join(home, 'tavern'))).get('chat', chatId, '当前周期'))
+      .toMatchObject({ value: 2 })
+  })
+
   it('propagates chat CAS conflicts for the agent to retry', async () => {
     const { store, chat } = await boundChat()
     const receiptsBefore = readMvuReceipts(chat).length

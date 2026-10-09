@@ -461,7 +461,7 @@ function createTools(): ToolDefinition[] {
     }),
     tool('variable_set', 'Set a typed variable in the current chat, character, agent, global, or turn scope.', {
       scope: variableScopeParameter(true),
-      name: { type: 'string', required: true },
+      name: { type: 'string', required: true, description: 'Variable name, 1-64 characters; letters of any script (Chinese MVU names included), digits, dot, dash, underscore.' },
       value: { required: true },
       expectedRevision: { type: 'string' },
     }, variableSetOutput, async (args, exec) => {
@@ -654,7 +654,7 @@ function createTools(): ToolDefinition[] {
         items: {
           type: 'object',
           properties: {
-            name: { type: 'string', description: 'Variable name, 1-64 characters.' },
+            name: { type: 'string', description: 'Variable name, 1-64 characters; letters of any script (Chinese MVU names included), digits, dot, dash, underscore.' },
             value: {},
             reason: { type: 'string', description: 'Optional one-line settlement reason, capped at 200 characters.' },
           },

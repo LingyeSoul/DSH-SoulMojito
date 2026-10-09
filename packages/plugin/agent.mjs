@@ -2728,7 +2728,7 @@ var VariableRevisionConflictError = class extends Error {
   code = "VARIABLE_REVISION_CONFLICT";
 };
 var SCOPES2 = /* @__PURE__ */ new Set(["turn", "chat", "character", "agent", "global"]);
-var NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
+var NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
 var MAX_VALUE_BYTES = 32 * 1024;
 var MAX_SCOPE_BYTES = 256 * 1024;
 var MAX_LIST = 100;
@@ -5216,7 +5216,7 @@ function createTools() {
     }),
     tool("variable_set", "Set a typed variable in the current chat, character, agent, global, or turn scope.", {
       scope: variableScopeParameter(true),
-      name: { type: "string", required: true },
+      name: { type: "string", required: true, description: "Variable name, 1-64 characters; letters of any script (Chinese MVU names included), digits, dot, dash, underscore." },
       value: { required: true },
       expectedRevision: { type: "string" }
     }, variableSetOutput, async (args, exec) => {
@@ -5409,7 +5409,7 @@ function createTools() {
         items: {
           type: "object",
           properties: {
-            name: { type: "string", description: "Variable name, 1-64 characters." },
+            name: { type: "string", description: "Variable name, 1-64 characters; letters of any script (Chinese MVU names included), digits, dot, dash, underscore." },
             value: {},
             reason: { type: "string", description: "Optional one-line settlement reason, capped at 200 characters." }
           },

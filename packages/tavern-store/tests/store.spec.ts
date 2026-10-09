@@ -467,6 +467,20 @@ describe('TavernStore', () => {
     expect(await variables.get('character', 'chat-1', 'label')).toBeUndefined()
   }))
 
+  it('variables：非 ASCII（中文 MVU）变量名与点路径放行', withStore(async (_store, dir) => {
+    const variables = await VariableStore.open(path.join(dir, 'agent'))
+    await variables.set('chat', 'chat-1', '当前周期', 3)
+    await variables.set('chat', 'chat-1', 'basic.好感度', { 等级: 5 })
+    expect((await variables.get('chat', 'chat-1', '当前周期'))?.value).toBe(3)
+    expect((await variables.list('chat', 'chat-1')).map((item) => item.name).sort())
+      .toEqual(['basic.好感度', '当前周期'])
+    // 非法名仍拒：空白、数字开头、标点、超 64 字符。
+    await expect(variables.set('chat', 'chat-1', 'bad name', 1)).rejects.toThrow('invalid variable name')
+    await expect(variables.set('chat', 'chat-1', '1abc', 1)).rejects.toThrow('invalid variable name')
+    await expect(variables.set('chat', 'chat-1', '名字!', 1)).rejects.toThrow('invalid variable name')
+    await expect(variables.set('chat', 'chat-1', 'a'.repeat(65), 1)).rejects.toThrow('invalid variable name')
+  }))
+
   it('variables：turn 作用域整体 clear（turn 结束过期）', withStore(async (_store, dir) => {
     const variables = await VariableStore.open(path.join(dir, 'agent'))
     await variables.set('turn', 'session-1', 'step', 1)

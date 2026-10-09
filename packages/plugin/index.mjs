@@ -4965,7 +4965,7 @@ var VariableRevisionConflictError = class extends Error {
   code = "VARIABLE_REVISION_CONFLICT";
 };
 var SCOPES2 = /* @__PURE__ */ new Set(["turn", "chat", "character", "agent", "global"]);
-var NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
+var NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
 var MAX_VALUE_BYTES = 32 * 1024;
 var MAX_SCOPE_BYTES = 256 * 1024;
 var MAX_LIST = 100;
@@ -16605,7 +16605,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.1".trim() : "";
-  const commit = true ? normalizeCommit("0a3288a") : void 0;
+  const commit = true ? normalizeCommit("92709e2") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
