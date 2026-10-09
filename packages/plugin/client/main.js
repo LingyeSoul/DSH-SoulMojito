@@ -345,6 +345,10 @@ window.__ModuleLoader__.load({
       'panel.worlds.addEntry': 'Add entry',
       'panel.presets.empty': 'No presets imported',
       'panel.presets.setActive': 'Set active',
+      'panel.presets.scope': 'Preset projection',
+      'panel.presets.scopeHint': 'The active chat preset is always projected into AgentTavern sessions. These switches opt the Card Workbench and the novel author into the same prompt stack (off by default).',
+      'panel.presets.workbenchToggle': 'Card Workbench follows the active preset',
+      'panel.presets.novelToggle': 'Novel author follows the active preset',
       'panel.presets.delete': 'Delete {name}',
       'panel.presets.deleteConfirm': 'Delete preset "{name}"?',
       'panel.presets.edit': 'Edit preset',
@@ -851,6 +855,10 @@ window.__ModuleLoader__.load({
       'panel.worlds.addEntry': '新增条目',
       'panel.presets.empty': '尚未导入预设',
       'panel.presets.setActive': '设为当前',
+      'panel.presets.scope': '预设生效范围',
+      'panel.presets.scopeHint': 'AgentTavern 会话始终投影激活的聊天预设。这两个开关让写卡工作台与小说推演也接入同一份提示词堆栈（默认关闭）。',
+      'panel.presets.workbenchToggle': '写卡工作台跟随激活预设',
+      'panel.presets.novelToggle': '小说推演跟随激活预设',
       'panel.presets.delete': '删除 {name}',
       'panel.presets.deleteConfirm': '删除预设“{name}”？',
       'panel.presets.edit': '编辑预设',
@@ -5687,6 +5695,26 @@ window.__ModuleLoader__.load({
           h('h3', null, t('settings.import')),
           h('div', { className: 'dt-imports' },
             h(UploadButton, { kind: 'preset', label: t('settings.importPreset'), accept: '.json,application/json' }))),
+        // 预设生效范围（preset-mount.ts）：AgentTavern 恒投影；工作台/小说按
+        // 这两个开关接入（默认关），翻转经 state 路由写穿投影缓存。
+        h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('panel.presets.scope')),
+          h('p', { className: 'dt-hint' }, t('panel.presets.scopeHint')),
+          h('div', { className: 'dt-imports' },
+            h('label', { className: 'dt-toggle' },
+              h('input', {
+                type: 'checkbox',
+                checked: state.bootstrap.state.cardWorkbenchPresetEnabled === true,
+                onChange: (event) => run(patchState({ cardWorkbenchPresetEnabled: event.target.checked })),
+              }),
+              h('span', null, t('panel.presets.workbenchToggle'))),
+            h('label', { className: 'dt-toggle' },
+              h('input', {
+                type: 'checkbox',
+                checked: state.bootstrap.state.agentNovelPresetEnabled === true,
+                onChange: (event) => run(patchState({ agentNovelPresetEnabled: event.target.checked })),
+              }),
+              h('span', null, t('panel.presets.novelToggle'))))),
         h('section', { className: 'dt-settings-band' },
           state.bootstrap.presets.length === 0
             ? h('p', { className: 'dt-muted' }, t('panel.presets.empty'))

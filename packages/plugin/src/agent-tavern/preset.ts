@@ -75,11 +75,13 @@ export function effectiveAgentPresetPrompts(preset: PresetIR, card?: CharacterCa
   return effective
 }
 
-/** 渲染注入块：首行固定标注 + 各提示词内容按 prompt_order 顺序分段。无有效条目返回 undefined。 */
-export function renderAgentPresetBlock(preset: PresetIR, card?: CharacterCardIR): string | undefined {
+/** 渲染注入块：首行固定标注 + 各提示词内容按 prompt_order 顺序分段。无有效条目返回 undefined。
+ *  header 可覆写：写卡工作台/AgentNovel 的预设投影（preset-mount.ts）复用同一
+ *  渲染体但换语义框架（引用式 vs 跟随式），AgentTavern 默认沿用本文件头标注。 */
+export function renderAgentPresetBlock(preset: PresetIR, card?: CharacterCardIR, header: string = AGENT_PRESET_BLOCK_HEADER): string | undefined {
   const prompts = effectiveAgentPresetPrompts(preset, card)
   if (prompts.length === 0) return undefined
-  return [AGENT_PRESET_BLOCK_HEADER, ...prompts.map((prompt) => prompt.content)].join('\n\n')
+  return [header, ...prompts.map((prompt) => prompt.content)].join('\n\n')
 }
 
 /** 预设 temperature（唯一投影的采样参数，理由见文件头）。缺失/非法返回 undefined（透传宿主配置）。 */

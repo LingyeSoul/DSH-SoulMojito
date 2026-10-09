@@ -55,6 +55,8 @@ import { noteToolOutputBytes, recordProbeAgentId } from './usage.js'
 import { narrativeStage, unitTargetRange } from './outline.js'
 import { novelScopeId } from './scope.js'
 import { dshHomePath } from '../dsh-home.js'
+import { AGENT_PRESET_BLOCK_HEADER } from '../agent-tavern/preset.js'
+import { mountPresetProjection } from '../preset-mount.js'
 
 export const name = 'dsh-tavern/novel'
 export const inject = ['systemPrompt', 'tools']
@@ -85,6 +87,18 @@ let tavernStorePromise: Promise<TavernStore> | undefined
 let novelStorePromise: Promise<NovelStore> | undefined
 let memoryStorePromise: Promise<MemoryStore> | undefined
 
+// 激活预设投影（preset-mount.ts，决策 2026-10-09）：开关 agentNovelPresetEnabled
+// （默认关）。跟随式框架（与 AgentTavern 同一块头）：预设栈作为写作风格与格式
+// 约束生效；不投影 temperature、不做卡覆盖、无激活预设不回落内置 RP 预设。
+// 小说不绑角色卡，{{char}} 回落占位语义（'the character'）。
+const presetMount = mountPresetProjection({
+  sectionName: 'dsh-tavern:novel-preset',
+  architecture: 'agent-novel',
+  stateFlag: 'agentNovelPresetEnabled',
+  header: AGENT_PRESET_BLOCK_HEADER,
+  charOf: () => '',
+})
+
 export function apply(ctx: AgentContextLike): void {
   ctx.systemPrompt?.section?.({
     name: 'dsh-tavern:novel-kernel',
@@ -93,6 +107,8 @@ export function apply(ctx: AgentContextLike): void {
     // 过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
     text: hostPromptSafe(KERNEL),
   })
+  // 激活预设投影（order -75：kernel 之后）：开关关闭/未装载完成时为空串。
+  ctx.systemPrompt?.section?.(presetMount.section)
   const tools = createTools()
   for (const tool of tools) {
     if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool), `dsh-tavern:novel:${tool.name}`)
@@ -102,11 +118,25 @@ export function apply(ctx: AgentContextLike): void {
 
 export interface AgentContextLike {
   systemPrompt?: {
-    section?: (section: { name: string; order: number; text: string | (() => string) }) => unknown
-    context?: (context: { name: string; order: number; text: string | (() => string) }) => unknown
+    section?: (section: {
+      name: string
+      order: number
+      text: string | ((assembly?: AgentAssemblyLike) => string)
+    }) => unknown
+    context?: (context: {
+      name: string
+      order: number
+      text: string | ((assembly?: AgentAssemblyLike) => string)
+    }) => unknown
   }
   tools?: { register?: (tool: ToolDefinition) => unknown }
   effect?: (factory: () => unknown, label?: string) => unknown
+}
+
+/** 宿主 assemble() 的装配上下文（{ agent, scope, signal }）：预设投影的 agent
+ *  身份（缓存键）由此而来，与 agent-tavern/agent.ts 的身份通道一致。 */
+interface AgentAssemblyLike {
+  agent?: { id?: string }
 }
 
 interface ToolDefinition {

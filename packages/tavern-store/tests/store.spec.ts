@@ -325,6 +325,7 @@ describe('TavernStore', () => {
     expect(await store.getState()).toEqual({
       activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
       agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, worldFollowsCharacter: true,
+      cardWorkbenchPresetEnabled: false, agentNovelPresetEnabled: false,
       modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
     })
     await store.patchState({

@@ -1825,6 +1825,8 @@ var DEFAULT_STATE = {
   defaultContextMode: "dsh-native",
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  cardWorkbenchPresetEnabled: false,
+  agentNovelPresetEnabled: false,
   worldFollowsCharacter: true,
   modelSelections: {},
   chats: {},
@@ -2299,6 +2301,8 @@ var TavernStore = class _TavernStore {
       defaultContextMode: parsed.defaultContextMode === "agent-managed" ? "agent-managed" : "dsh-native",
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
+      agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
       worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
@@ -4988,15 +4992,15 @@ function createMacroEngine(init) {
     return coerceRead(storeOf(scope).get(name2));
   }
   function addToVar(scope, name2, value) {
-    const store = storeOf(scope);
-    const current = (coerceRead(store.get(name2)) ?? 0) || 0;
+    const store2 = storeOf(scope);
+    const current = (coerceRead(store2.get(name2)) ?? 0) || 0;
     if (typeof current === "string") {
       try {
         const parsed = JSON.parse(current);
         if (Array.isArray(parsed)) {
           parsed.push(value);
           const json = JSON.stringify(parsed);
-          store.set(name2, json);
+          store2.set(name2, json);
           return json;
         }
       } catch {
@@ -5006,14 +5010,14 @@ function createMacroEngine(init) {
     const currentNum = Number(current);
     if (Number.isNaN(inc) || Number.isNaN(currentNum)) {
       const concatenated = `${String(current || "")}${String(value)}`;
-      store.set(name2, concatenated);
+      store2.set(name2, concatenated);
       return concatenated;
     }
     const next = currentNum + inc;
     if (Number.isNaN(next)) {
       return "";
     }
-    store.set(name2, next);
+    store2.set(name2, next);
     return String(next);
   }
   regExact("char", () => init.char);
@@ -5132,13 +5136,13 @@ function createMacroEngine(init) {
     return String(evalRoll(spec, rng));
   });
   function registerVarMacros(scope, infix) {
-    const store = storeOf(scope);
+    const store2 = storeOf(scope);
     reg(`get${infix}var`, (ctx) => {
       const arg = colonArg(ctx);
       if (arg === null || arg === "") {
         return null;
       }
-      const v = coerceRead(store.get(arg.trim()));
+      const v = coerceRead(store2.get(arg.trim()));
       return v === void 0 ? "" : String(v);
     });
     reg(`set${infix}var`, (ctx) => {
@@ -5150,7 +5154,7 @@ function createMacroEngine(init) {
       if (m === null || m[1] === void 0 || m[1] === "") {
         return null;
       }
-      store.set(m[1].trim(), m[2] ?? "");
+      store2.set(m[1].trim(), m[2] ?? "");
       return "";
     });
     reg(`add${infix}var`, (ctx) => {
@@ -5194,14 +5198,14 @@ function createMacroEngine(init) {
       if (arg === null || arg === "") {
         return null;
       }
-      return store.has(arg.trim()) ? "true" : "false";
+      return store2.has(arg.trim()) ? "true" : "false";
     });
     reg(`delete${infix}var`, (ctx) => {
       const arg = colonArg(ctx);
       if (arg === null || arg === "") {
         return null;
       }
-      store.delete(arg.trim());
+      store2.delete(arg.trim());
       return "";
     });
   }
@@ -5598,10 +5602,10 @@ function effectiveAgentPresetPrompts(preset, card) {
   }
   return effective;
 }
-function renderAgentPresetBlock(preset, card) {
+function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
   const prompts = effectiveAgentPresetPrompts(preset, card);
   if (prompts.length === 0) return void 0;
-  return [AGENT_PRESET_BLOCK_HEADER, ...prompts.map((prompt) => prompt.content)].join("\n\n");
+  return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
 }
 function presetTemperature(preset) {
   const value = preset.sampler["temperature"];
@@ -6489,8 +6493,8 @@ async function draftUnitViaSubagent(deps, input) {
     });
   }
 }
-async function verifyDelegatedCommit(store, delegation) {
-  const snapshot = await store.getNovel(delegation.novelId);
+async function verifyDelegatedCommit(store2, delegation) {
+  const snapshot = await store2.getNovel(delegation.novelId);
   if (snapshot === void 0) return null;
   const unit = snapshot.units.find((candidate) => candidate.unitId === delegation.unitId);
   if (unit === void 0 || unit.state !== "committed") return null;
@@ -6551,6 +6555,82 @@ function novelScopeId(novelId) {
   return `novel:${novelId}`;
 }
 
+// packages/plugin/src/preset-mount.ts
+var DEFAULT_USER2 = "User";
+var CHAR_FALLBACK = "the character";
+var storePromise;
+function store() {
+  return storePromise ??= TavernStore.open(dshHomePath("tavern"));
+}
+function mountPresetProjection(options) {
+  const projection = /* @__PURE__ */ new Map();
+  const started = /* @__PURE__ */ new Set();
+  const tickets = /* @__PURE__ */ new Map();
+  const textOf2 = (agentId) => {
+    if (typeof agentId !== "string" || agentId.trim() === "") return "";
+    if (!started.has(agentId)) {
+      started.add(agentId);
+      void load(agentId);
+    }
+    return projection.get(agentId) ?? "";
+  };
+  async function load(agentId) {
+    const ticket = (tickets.get(agentId) ?? 0) + 1;
+    tickets.set(agentId, ticket);
+    try {
+      const db = await store();
+      const state = await db.getState();
+      const settle = (text) => {
+        if (tickets.get(agentId) === ticket) projection.set(agentId, text);
+      };
+      const binding = state.sessionBindings[agentId];
+      if (state[options.stateFlag] !== true || !binding || binding.architecture !== options.architecture) {
+        settle("");
+        return;
+      }
+      if (typeof state.activePreset !== "string" || state.activePreset === "") {
+        settle("");
+        return;
+      }
+      const raw = await db.getPreset(state.activePreset);
+      if (raw === void 0) {
+        settle("");
+        return;
+      }
+      const block = renderAgentPresetBlock(parsePreset(raw), void 0, options.header);
+      if (block === void 0) {
+        settle("");
+        return;
+      }
+      const expand = createHostPromptExpander(
+        charNameOf(options, binding),
+        state.activePersona ?? DEFAULT_USER2
+      );
+      settle(hostPromptSafe(block, expand));
+    } catch {
+    }
+  }
+  onAgentPresetChanged(async () => {
+    try {
+      const state = await (await store()).getState();
+      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+        if (binding.architecture !== options.architecture) continue;
+        started.add(agentId);
+        await load(agentId);
+      }
+    } catch {
+    }
+  });
+  return {
+    section: { name: options.sectionName, order: -75, text: (assembly) => textOf2(assembly?.agent?.id) },
+    textOf: textOf2
+  };
+}
+function charNameOf(options, binding) {
+  const name2 = options.charOf(binding).trim();
+  return name2 === "" ? CHAR_FALLBACK : name2;
+}
+
 // packages/plugin/src/agent-novel/agent.ts
 var name = "dsh-tavern/novel";
 var inject = ["systemPrompt", "tools"];
@@ -6578,6 +6658,13 @@ var KERNEL2 = [
 var tavernStorePromise2;
 var novelStorePromise;
 var memoryStorePromise;
+var presetMount = mountPresetProjection({
+  sectionName: "dsh-tavern:novel-preset",
+  architecture: "agent-novel",
+  stateFlag: "agentNovelPresetEnabled",
+  header: AGENT_PRESET_BLOCK_HEADER,
+  charOf: () => ""
+});
 function apply(ctx) {
   ctx.systemPrompt?.section?.({
     name: "dsh-tavern:novel-kernel",
@@ -6586,6 +6673,7 @@ function apply(ctx) {
     // 过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
     text: hostPromptSafe(KERNEL2)
   });
+  ctx.systemPrompt?.section?.(presetMount.section);
   const tools = createTools();
   for (const tool2 of tools) {
     if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool2), `dsh-tavern:novel:${tool2.name}`);
@@ -7206,7 +7294,7 @@ function createTools() {
         throw new Error("Unit superseding is author-only; a delegated writer never retires units (\xA76.2)");
       }
       const novelId = binding.novelId;
-      const store = await novelStore();
+      const store2 = await novelStore();
       const snapshot = await snapshotOf(novelId);
       const unitId = stringArg(args.unitId);
       const unit = snapshot.units.find((item) => item.unitId === unitId);
@@ -7228,7 +7316,7 @@ function createTools() {
         throw new Error(`scene '${unit.sceneId}' has no completed commit: unit '${unitId}' is unfinished work \u2014 claim and write it instead of superseding (\xA76.2)`);
       }
       const reason = stringArg(args.reason);
-      await store.supersedeUnit(novelId, { unitId, reason: `${reason} (duplicate of ${unit.sceneId}; completed by ${completedBy})` });
+      await store2.supersedeUnit(novelId, { unitId, reason: `${reason} (duplicate of ${unit.sceneId}; completed by ${completedBy})` });
       return { unitId, sceneId: unit.sceneId, state: "superseded", completedBy, source: { kind: "novel-supersede", id: unitId } };
     }),
     tool("novel_body_commit", 'Commit body prose for a claimed unit and end the writing turn (\xA710.4/\xA711). Paragraphs are plain text with no Markdown and no chapter headings; paragraphs carrying structural labels, unit ids or wrap-up notes (e.g. "chapter 6 scene 6-1 \u6536\u675F", "\u4E0B\u4E00\u7AE0 ch-007 \u2026") are rejected \u2014 completion status belongs in sceneCompletion, never in prose. Canon change sources may use commit-<n>#<index> or inline references into this candidate body; the server fills in the commit id (\xA710.4).', {
@@ -7289,8 +7377,8 @@ function createTools() {
           throw new Error(`writing unit '${candidate.unitId}' is '${candidate.state}', not claimed \u2014 claim it with novel_unit_claim before drafting (\xA76.2)`);
         }
       });
-      const store = await novelStore();
-      const input = await assembleWriterPackInput({ novelStore: store, snapshot, unit, mode: "full" });
+      const store2 = await novelStore();
+      const input = await assembleWriterPackInput({ novelStore: store2, snapshot, unit, mode: "full" });
       const drafted = await draftUnitViaSubagent({ runtime, parent, signal: exec.signal, novelId, unitId }, input);
       return {
         unitId,
@@ -7307,7 +7395,7 @@ function createTools() {
       executionToken: { type: "string", description: "Only for adopting a manual claim: the token returned by your novel_unit_claim. Omit it in the normal subagent flow \u2014 the tool claims internally." }
     }, writerDelegateOutput, async (args, exec) => {
       const { novelId, unitId, parent, runtime, snapshot, unit } = await requireWriterLaunchContext(exec, args, "5.2");
-      const store = await novelStore();
+      const store2 = await novelStore();
       let delegation;
       if (unit.state === "committed") {
         releaseWriterDelegation(novelId, unitId);
@@ -7325,7 +7413,7 @@ function createTools() {
         if (outlineRevision === void 0 || outlineRevision === null) {
           throw new Error("novel has no outline yet; a writing unit cannot be delegated without one (\xA76.3)");
         }
-        const claim = await store.claimUnit(novelId, {
+        const claim = await store2.claimUnit(novelId, {
           unitId,
           expectedOutlineRevision: outlineRevision,
           expectedRequirementSequence: requirementWatermark(snapshot.requirements),
@@ -7368,13 +7456,13 @@ function createTools() {
       releaseWriterDelegation(novelId, unitId);
       let receipt;
       try {
-        receipt = await runDelegatedWriter({ runtime, parent, signal: exec.signal, novelStore: store }, delegation);
+        receipt = await runDelegatedWriter({ runtime, parent, signal: exec.signal, novelStore: store2 }, delegation);
       } catch (cause) {
         retainWriterDelegation(delegation);
         throw cause;
       }
       try {
-        await store.noteWriterRun(novelId);
+        await store2.noteWriterRun(novelId);
       } catch {
       }
       return {
@@ -7423,8 +7511,8 @@ function createTools() {
     }, characterReadOutput, async (args, exec) => {
       const novelId = await novelBindingFor(exec);
       const snapshot = await snapshotOf(novelId);
-      const store = await novelStore();
-      return resolveCharacterPage({ novelId, snapshot, readAsset: (id, hash) => store.readAsset(id, hash) }, stringArg(args.characterId));
+      const store2 = await novelStore();
+      return resolveCharacterPage({ novelId, snapshot, readAsset: (id, hash) => store2.readAsset(id, hash) }, stringArg(args.characterId));
     }),
     tool("novel_lore_search", "Search only this project's fixed world book snapshots (\xA75) by entry keys and content keywords; entries return with their source content hash and never drift with global activeWorlds.", {
       query: { type: "string", required: true, description: "Keyword query; matches entry keys contained in the query or query words in entry content, capped at 2000 characters." },
@@ -7436,9 +7524,9 @@ function createTools() {
       if (tokens.length === 0) throw new Error("lore query requires at least one word");
       const limit = clampInt(args.limit, 1, 20, 10);
       const snapshot = await snapshotOf(novelId);
-      const store = await novelStore();
+      const store2 = await novelStore();
       const { matched, contentTruncated } = await matchWorldEntries(
-        { novelId, snapshot, readAsset: (id, hash) => store.readAsset(id, hash) },
+        { novelId, snapshot, readAsset: (id, hash) => store2.readAsset(id, hash) },
         query,
         tokens
       );
@@ -7555,8 +7643,8 @@ function createTools() {
       maxTokens: { type: "integer", description: "Approximate content token budget, capped at 2000. Default 1200." }
     }, memorySearchOutput2, async (args, exec) => {
       const novelId = await novelBindingFor(exec);
-      const store = await memoryStore();
-      const hits = await store.search({
+      const store2 = await memoryStore();
+      const hits = await store2.search({
         query: stringArg(args.query),
         scope: "chat",
         scopeId: novelScopeId(novelId),

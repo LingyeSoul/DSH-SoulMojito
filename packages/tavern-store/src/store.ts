@@ -110,6 +110,14 @@ export interface TavernState {
   /** 允许 AgentTavern 工具写入 global 作用域的记忆/变量；默认关闭。 */
   agentTavernAllowGlobalWrites: boolean
   /**
+   * 写卡工作台会话投影激活聊天预设（提示词堆栈，引用式；默认关闭）。RP 预设
+   * 的风格/越狱条目无条件注入会劫持编辑内核，因此显式开关（面板「预设」分区）。
+   * 采样参数与卡覆盖不投影，见 plugin src/preset-mount.ts。
+   */
+  cardWorkbenchPresetEnabled: boolean
+  /** AgentNovel 作者会话投影激活聊天预设（跟随式风格栈；默认关闭，同上）。 */
+  agentNovelPresetEnabled: boolean
+  /**
    * 世界书跟随角色卡激活（默认开启）：切换/导入/会话绑定角色时自动并入其绑定的
    * 世界书（extensions.world），生成时也始终注入该书与卡内嵌书兜底；关闭后角色
    * 绑定的世界书完全由 activeWorlds 显式控制，不再随角色注入。
@@ -180,6 +188,8 @@ const DEFAULT_STATE: TavernState = {
   defaultContextMode: 'dsh-native',
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  cardWorkbenchPresetEnabled: false,
+  agentNovelPresetEnabled: false,
   worldFollowsCharacter: true,
   modelSelections: {},
   chats: {},
@@ -742,6 +752,8 @@ export class TavernStore {
       defaultContextMode: parsed.defaultContextMode === 'agent-managed' ? 'agent-managed' : 'dsh-native',
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
+      agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
       worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},

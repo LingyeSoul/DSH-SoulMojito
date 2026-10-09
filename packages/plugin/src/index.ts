@@ -970,6 +970,14 @@ async function handleApi(ctx, req, res) {
       ...(typeof body.agentTavernAllowGlobalWrites === 'boolean'
         ? { agentTavernAllowGlobalWrites: body.agentTavernAllowGlobalWrites }
         : {}),
+      // 写卡工作台/AgentNovel 的预设投影开关（preset-mount.ts）：翻转即写穿
+      // 两个 bundle 的投影缓存，下一次装配即时生效。
+      ...(typeof body.cardWorkbenchPresetEnabled === 'boolean'
+        ? { cardWorkbenchPresetEnabled: body.cardWorkbenchPresetEnabled }
+        : {}),
+      ...(typeof body.agentNovelPresetEnabled === 'boolean'
+        ? { agentNovelPresetEnabled: body.agentNovelPresetEnabled }
+        : {}),
       ...(typeof body.worldFollowsCharacter === 'boolean'
         ? { worldFollowsCharacter: body.worldFollowsCharacter }
         : {}),
@@ -978,7 +986,9 @@ async function handleApi(ctx, req, res) {
     const state = await db.patchState(patch)
     // 激活预设/persona 是 AgentTavern 预设投影的输入（agent-tavern/preset.ts）：
     // {{user}} 宏与预设选择变化后写穿各会话的投影缓存，下一次装配即时生效。
-    if ('activePreset' in patch || 'activePersona' in patch) await emitAgentPresetChanged()
+    // 两个投影开关同批写穿（preset-mount.ts 的监听在同一注册表里）。
+    if ('activePreset' in patch || 'activePersona' in patch
+      || 'cardWorkbenchPresetEnabled' in patch || 'agentNovelPresetEnabled' in patch) await emitAgentPresetChanged()
     await refreshActivePrompt()
     return sendJson(res, 200, { ok: true, state })
   }

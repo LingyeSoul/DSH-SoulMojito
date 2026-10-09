@@ -1825,6 +1825,8 @@ var DEFAULT_STATE = {
   defaultContextMode: "dsh-native",
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  cardWorkbenchPresetEnabled: false,
+  agentNovelPresetEnabled: false,
   worldFollowsCharacter: true,
   modelSelections: {},
   chats: {},
@@ -2299,6 +2301,8 @@ var TavernStore = class _TavernStore {
       defaultContextMode: parsed.defaultContextMode === "agent-managed" ? "agent-managed" : "dsh-native",
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
+      agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
       worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
@@ -4040,10 +4044,10 @@ function effectiveAgentPresetPrompts(preset, card) {
   }
   return effective;
 }
-function renderAgentPresetBlock(preset, card) {
+function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
   const prompts = effectiveAgentPresetPrompts(preset, card);
   if (prompts.length === 0) return void 0;
-  return [AGENT_PRESET_BLOCK_HEADER, ...prompts.map((prompt) => prompt.content)].join("\n\n");
+  return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
 }
 function presetTemperature(preset) {
   const value = preset.sampler["temperature"];

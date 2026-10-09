@@ -80,6 +80,8 @@ import { hostPromptSafe } from '../prompt-safety.js'
 // 预设写路径的失效信号（agent-tavern/preset.ts）：preset_put 可能改到激活预设，
 // 落库后写穿 AgentTavern 会话的预设投影缓存（跨 bundle 共享监听表）。
 import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
+// 激活预设投影（决策 2026-10-09）：开关 cardWorkbenchPresetEnabled（默认关）。
+import { mountPresetProjection } from '../preset-mount.js'
 import { applyPlan, getPlan, proposeCardPlan, proposeWorldPlan, type CardPlan, type CardPlanValue, type WorldPlan, type WorldPlanValue } from './plans.js'
 
 export const name = 'dsh-tavern/card-workbench'
@@ -115,6 +117,20 @@ const KERNEL = [
 
 let tavernStorePromise: Promise<TavernStore> | undefined
 
+/** 工作台的预设注入块首行：引用式框架——预设塑造用户的游玩风格与对局提示词
+ *  环境，起草卡面/预设文本时对齐它、排错时以它为准；但它不是编辑指令。 */
+const WORKBENCH_PRESET_HEADER = 'Active chat completion preset (the user\'s prompt stack, echoed for reference: match its style when drafting card and preset text, and treat it as the play\'s prompt environment when debugging; it never overrides the workbench kernel):'
+
+// 激活预设投影（preset-mount.ts）：默认关闭，面板「预设」分区开关启用。{{char}}
+// 展开用来源聊天角色（排错对局），否则用本会话最近产出卡（起草其卡面）。
+const presetMount = mountPresetProjection({
+  sectionName: 'dsh-tavern:card-workbench-preset',
+  architecture: 'card-workbench',
+  stateFlag: 'cardWorkbenchPresetEnabled',
+  header: WORKBENCH_PRESET_HEADER,
+  charOf: (binding) => binding.architecture === 'card-workbench' ? (binding.sourceCharacter || binding.createdCard) : '',
+})
+
 export function apply(ctx: AgentContextLike): void {
   ctx.systemPrompt?.section?.({
     name: 'dsh-tavern:card-workbench-kernel',
@@ -123,6 +139,8 @@ export function apply(ctx: AgentContextLike): void {
     // 过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
     text: hostPromptSafe(KERNEL),
   })
+  // 激活预设投影（order -75：kernel 之后）：开关关闭/未装载完成时为空串。
+  ctx.systemPrompt?.section?.(presetMount.section)
   const tools = createTools()
   for (const tool of tools) {
     if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool), `dsh-tavern:card-workbench:${tool.name}`)
@@ -132,11 +150,25 @@ export function apply(ctx: AgentContextLike): void {
 
 export interface AgentContextLike {
   systemPrompt?: {
-    section?: (section: { name: string; order: number; text: string | (() => string) }) => unknown
-    context?: (context: { name: string; order: number; text: string | (() => string) }) => unknown
+    section?: (section: {
+      name: string
+      order: number
+      text: string | ((assembly?: AgentAssemblyLike) => string)
+    }) => unknown
+    context?: (context: {
+      name: string
+      order: number
+      text: string | ((assembly?: AgentAssemblyLike) => string)
+    }) => unknown
   }
   tools?: { register?: (tool: ToolDefinition) => unknown }
   effect?: (factory: () => unknown, label?: string) => unknown
+}
+
+/** 宿主 assemble() 的装配上下文（{ agent, scope, signal }）：预设投影的 agent
+ *  身份（缓存键）由此而来，与 agent-tavern/agent.ts 的身份通道一致。 */
+interface AgentAssemblyLike {
+  agent?: { id?: string }
 }
 
 interface ToolDefinition {

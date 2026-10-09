@@ -1187,8 +1187,8 @@ var dflt = function(dat, lvl, plvl, pre, post, st) {
   if (lvl) {
     if (pos)
       w[0] = st.r >> 3;
-    var opt = deo[lvl - 1];
-    var n = opt >> 13, c = opt & 8191;
+    var opt2 = deo[lvl - 1];
+    var n = opt2 >> 13, c = opt2 & 8191;
     var msk_1 = (1 << plvl) - 1;
     var prev = st.p || new u16(32768), head = st.h || new u16(msk_1 + 1);
     var bs1_1 = Math.ceil(plvl / 3), bs2_1 = 2 * bs1_1;
@@ -1303,11 +1303,11 @@ var crc = function() {
     }
   };
 };
-var dopt = function(dat, opt, pre, post, st) {
+var dopt = function(dat, opt2, pre, post, st) {
   if (!st) {
     st = { l: 1 };
-    if (opt.dictionary) {
-      var dict = opt.dictionary.subarray(-32768);
+    if (opt2.dictionary) {
+      var dict = opt2.dictionary.subarray(-32768);
       var newDat = new u8(dict.length + dat.length);
       newDat.set(dict);
       newDat.set(dat, dict.length);
@@ -1315,7 +1315,7 @@ var dopt = function(dat, opt, pre, post, st) {
       st.w = dict.length;
     }
   }
-  return dflt(dat, opt.level == null ? 6 : opt.level, opt.mem == null ? st.l ? Math.ceil(Math.max(8, Math.min(13, Math.log(dat.length))) * 1.5) : 20 : 12 + opt.mem, pre, post, st);
+  return dflt(dat, opt2.level == null ? 6 : opt2.level, opt2.mem == null ? st.l ? Math.ceil(Math.max(8, Math.min(13, Math.log(dat.length))) * 1.5) : 20 : 12 + opt2.mem, pre, post, st);
 };
 var mrg = function(a, b) {
   var o = {};
@@ -1825,6 +1825,8 @@ var DEFAULT_STATE = {
   defaultContextMode: "dsh-native",
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  cardWorkbenchPresetEnabled: false,
+  agentNovelPresetEnabled: false,
   worldFollowsCharacter: true,
   modelSelections: {},
   chats: {},
@@ -2299,6 +2301,8 @@ var TavernStore = class _TavernStore {
       defaultContextMode: parsed.defaultContextMode === "agent-managed" ? "agent-managed" : "dsh-native",
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
+      agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
       worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
@@ -2510,15 +2514,15 @@ async function moveOriginalSnapshot(root, fromName, toName) {
 async function restoreOriginal(root, characterName) {
   const original = await readOriginalSnapshot(root, characterName);
   if (original === void 0) return void 0;
-  const store = await TavernStore.open(root);
-  const current = await store.getCharacter(characterName);
+  const store2 = await TavernStore.open(root);
+  const current = await store2.getCharacter(characterName);
   if (current === void 0) {
-    await store.importCharacter(original);
+    await store2.importCharacter(original);
   } else {
-    await store.updateCharacter(characterName, encodeCharacterCardJson(original));
+    await store2.updateCharacter(characterName, encodeCharacterCardJson(original));
   }
   await moveOriginalSnapshot(root, characterName, original.data.name);
-  const restored = await store.getCharacter(original.data.name);
+  const restored = await store2.getCharacter(original.data.name);
   if (restored === void 0) throw new Error(`character '${original.data.name}' could not be reloaded after restore`);
   return restored;
 }
@@ -2715,6 +2719,34 @@ function strArray3(v) {
   return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
 }
 
+// packages/tavern-format/src/preset.ts
+var PresetFormatError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "PresetFormatError";
+  }
+};
+function parsePreset(obj) {
+  const promptsRaw = obj["prompts"];
+  if (!Array.isArray(promptsRaw)) throw new PresetFormatError("preset has no 'prompts' array");
+  const prompts = promptsRaw.map((p, i) => {
+    if (typeof p !== "object" || p === null) throw new PresetFormatError(`prompts[${i}] is not an object`);
+    return p;
+  });
+  const orderRaw = obj["prompt_order"];
+  const promptOrder = Array.isArray(orderRaw) ? orderRaw.map((o, i) => {
+    if (typeof o !== "object" || o === null || !Array.isArray(o.order)) {
+      throw new PresetFormatError(`prompt_order[${i}] is malformed`);
+    }
+    return o;
+  }) : [];
+  const sampler = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (k !== "prompts" && k !== "prompt_order") sampler[k] = v;
+  }
+  return { prompts, promptOrder, sampler };
+}
+
 // packages/plugin/src/dsh-home.ts
 import { homedir } from "node:os";
 import { join as join4, resolve } from "node:path";
@@ -2723,19 +2755,600 @@ function dshHomePath(...segments) {
   return join4(resolve(configured || join4(homedir(), ".dsh")), ...segments);
 }
 
+// packages/tavern-macros/src/random.ts
+function hash32(input) {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+var ESCAPED_COMMA = "\0";
+function splitMacroList(listString) {
+  if (listString.includes("::")) {
+    return listString.split("::");
+  }
+  return listString.replace(/\\,/g, ESCAPED_COMMA).split(",").map((item) => item.trim().replace(/\u0000/g, ","));
+}
+function parseRoll(formula) {
+  let f = formula.trim();
+  if (/^\d+$/.test(f)) {
+    f = `1d${f}`;
+  }
+  const m = /^(\d+)d(\d+)([+-]\d+)?$/.exec(f);
+  if (m === null) return null;
+  const count = Number(m[1]);
+  const sides = Number(m[2]);
+  const modifier = m[3] === void 0 ? 0 : Number(m[3]);
+  if (!Number.isInteger(count) || count < 1 || count > 999) return null;
+  if (!Number.isInteger(sides) || sides < 2 || sides > 999) return null;
+  if (!Number.isFinite(modifier)) return null;
+  return { count, sides, modifier };
+}
+function evalRoll(spec, rng) {
+  let total = spec.modifier;
+  for (let i = 0; i < spec.count; i++) {
+    const r = rng();
+    total += Math.floor(r < 0 ? 0 : r >= 1 ? spec.sides - 1 : r * spec.sides) + 1;
+  }
+  return total;
+}
+
+// packages/tavern-macros/src/time.ts
+var MONTHS_FULL = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December"
+];
+var WEEKDAYS_FULL = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday"
+];
+function pad2(n) {
+  return n < 10 ? `0${n}` : String(n);
+}
+function formatTime12(hours24, minutes) {
+  const h12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+  return `${h12}:${pad2(minutes)} ${hours24 < 12 ? "AM" : "PM"}`;
+}
+function formatLocalTime(d) {
+  return formatTime12(d.getHours(), d.getMinutes());
+}
+function formatTimeAtUtcOffset(d, offsetHours) {
+  const shifted = new Date(d.getTime() + offsetHours * 36e5);
+  return formatTime12(shifted.getUTCHours(), shifted.getUTCMinutes());
+}
+function formatLocalDateLong(d) {
+  return `${MONTHS_FULL[d.getMonth()] ?? ""} ${d.getDate()}, ${d.getFullYear()}`;
+}
+function formatWeekday(d) {
+  return WEEKDAYS_FULL[d.getDay()] ?? "";
+}
+function formatLocalIsoTime(d) {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+function formatLocalIsoDate(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+function formatWithTokens(d, fmt) {
+  let out = "";
+  let i = 0;
+  while (i < fmt.length) {
+    const four = fmt.slice(i, i + 4);
+    if (four === "yyyy" || four === "YYYY") {
+      out += String(d.getFullYear()).padStart(4, "0");
+      i += 4;
+      continue;
+    }
+    const two = fmt.slice(i, i + 2);
+    if (two === "MM") {
+      out += pad2(d.getMonth() + 1);
+      i += 2;
+      continue;
+    }
+    if (two === "dd" || two === "DD") {
+      out += pad2(d.getDate());
+      i += 2;
+      continue;
+    }
+    if (two === "HH") {
+      out += pad2(d.getHours());
+      i += 2;
+      continue;
+    }
+    if (two === "mm") {
+      out += pad2(d.getMinutes());
+      i += 2;
+      continue;
+    }
+    if (two === "ss") {
+      out += pad2(d.getSeconds());
+      i += 2;
+      continue;
+    }
+    out += fmt.charAt(i);
+    i += 1;
+  }
+  return out;
+}
+function humanizeDuration(totalSeconds) {
+  const s = totalSeconds < 0 ? 0 : totalSeconds;
+  if (s < 45) return "a few seconds";
+  if (s < 90) return "a minute";
+  const minutes = s / 60;
+  if (minutes < 45) return `${Math.round(minutes)} minutes`;
+  if (minutes < 90) return "an hour";
+  const hours = minutes / 60;
+  if (hours < 22) return `${Math.round(hours)} hours`;
+  if (hours < 36) return "a day";
+  const days = hours / 24;
+  if (days < 26) return `${Math.round(days)} days`;
+  if (days < 45) return "a month";
+  const months = days / 30;
+  if (months < 11) return `${Math.round(months)} months`;
+  if (months < 18) return "a year";
+  return `${Math.round(months / 12)} years`;
+}
+
 // packages/tavern-macros/src/engine.ts
 var TRIM = Symbol("trim");
+function opt(v) {
+  return v ?? "";
+}
+function coerceRead(v) {
+  if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) {
+    return Number(v);
+  }
+  return v;
+}
+function createMacroEngine(init) {
+  const card = init.card ?? {};
+  const localVars = new Map(Object.entries(init.local ?? {}));
+  const globalVars = new Map(Object.entries(init.global ?? {}));
+  const now = init.now ?? (() => /* @__PURE__ */ new Date());
+  const rng = init.rng ?? Math.random;
+  const groupValue = init.group ?? init.char;
+  const registry = /* @__PURE__ */ new Map();
+  function reg(name2, handler) {
+    registry.set(name2.toLowerCase(), handler);
+  }
+  function regExact(name2, getValue) {
+    reg(name2, (ctx) => ctx.rest === "" ? getValue() : null);
+  }
+  function colonArg(ctx) {
+    return ctx.rest.startsWith("::") ? ctx.rest.slice(2) : null;
+  }
+  function laxArg(ctx) {
+    const m = /^\s?::?/.exec(ctx.rest);
+    return m === null ? null : ctx.rest.slice(m[0].length);
+  }
+  function rollArg(ctx) {
+    const m = /^(?:\s?::?|\s)/.exec(ctx.rest);
+    return m === null ? null : ctx.rest.slice(m[0].length);
+  }
+  function storeOf(scope) {
+    return scope === "local" ? localVars : globalVars;
+  }
+  function readVar(scope, name2) {
+    return coerceRead(storeOf(scope).get(name2));
+  }
+  function addToVar(scope, name2, value) {
+    const store2 = storeOf(scope);
+    const current = (coerceRead(store2.get(name2)) ?? 0) || 0;
+    if (typeof current === "string") {
+      try {
+        const parsed = JSON.parse(current);
+        if (Array.isArray(parsed)) {
+          parsed.push(value);
+          const json = JSON.stringify(parsed);
+          store2.set(name2, json);
+          return json;
+        }
+      } catch {
+      }
+    }
+    const inc = Number(value);
+    const currentNum = Number(current);
+    if (Number.isNaN(inc) || Number.isNaN(currentNum)) {
+      const concatenated = `${String(current || "")}${String(value)}`;
+      store2.set(name2, concatenated);
+      return concatenated;
+    }
+    const next = currentNum + inc;
+    if (Number.isNaN(next)) {
+      return "";
+    }
+    store2.set(name2, next);
+    return String(next);
+  }
+  regExact("char", () => init.char);
+  regExact("user", () => init.user);
+  regExact("group", () => groupValue);
+  regExact("charIfNotGroup", () => groupValue);
+  regExact("groupNotMuted", () => groupValue);
+  regExact("notChar", () => init.user);
+  regExact("persona", () => opt(init.persona));
+  regExact("description", () => opt(card.description));
+  regExact("personality", () => opt(card.personality));
+  regExact("scenario", () => opt(card.scenario));
+  regExact("mesExamples", () => opt(card.mesExample));
+  regExact("mesExamplesRaw", () => opt(card.mesExample));
+  regExact("charPrompt", () => opt(card.systemPrompt));
+  regExact("charInstruction", () => opt(card.postHistoryInstructions));
+  regExact("charJailbreak", () => opt(card.postHistoryInstructions));
+  regExact("charDepthPrompt", () => opt(card.charDepthPrompt));
+  regExact("creatorNotes", () => opt(card.creatorNotes));
+  regExact("charCreatorNotes", () => opt(card.creatorNotes));
+  regExact("systemPrompt", () => opt(init.systemPrompt));
+  regExact("original", () => opt(init.original));
+  regExact("lastMessage", () => opt(init.lastMessage));
+  regExact("lastUserMessage", () => opt(init.lastUserMessage));
+  regExact("lastCharMessage", () => opt(init.lastCharMessage));
+  regExact(
+    "lastMessageId",
+    () => init.lastMessageId === void 0 ? "" : String(init.lastMessageId)
+  );
+  regExact("model", () => opt(init.model));
+  regExact(
+    "maxContextTokens",
+    () => init.maxContextTokens === void 0 ? "" : String(init.maxContextTokens)
+  );
+  regExact("maxPrompt", () => {
+    const n = init.maxPrompt ?? init.maxContextTokens;
+    return n === void 0 ? "" : String(n);
+  });
+  regExact(
+    "maxResponseTokens",
+    () => init.maxResponseTokens === void 0 ? "" : String(init.maxResponseTokens)
+  );
+  regExact("newline", () => "\n");
+  regExact("space", () => " ");
+  regExact("noop", () => "");
+  reg("trim", (ctx) => ctx.rest === "" ? TRIM : null);
+  reg("time", (ctx) => {
+    if (ctx.rest === "") {
+      return formatLocalTime(now());
+    }
+    const arg = laxArg(ctx);
+    if (arg === null) {
+      return null;
+    }
+    const m = /^UTC([+-]\d+)$/i.exec(arg.trim());
+    if (m === null) {
+      return null;
+    }
+    return formatTimeAtUtcOffset(now(), Number(m[1]));
+  });
+  reg("time_utc", (ctx) => {
+    const m = /^([+-]\d+)$/.exec(ctx.rest);
+    if (m === null) {
+      return null;
+    }
+    return formatTimeAtUtcOffset(now(), Number(m[1]));
+  });
+  regExact("date", () => formatLocalDateLong(now()));
+  regExact("weekday", () => formatWeekday(now()));
+  regExact("isotime", () => formatLocalIsoTime(now()));
+  regExact("isodate", () => formatLocalIsoDate(now()));
+  reg("datetimeformat", (ctx) => {
+    const m = /^(?:\s+|::?)/.exec(ctx.rest);
+    if (m === null) {
+      return null;
+    }
+    return formatWithTokens(now(), ctx.rest.slice(m[0].length));
+  });
+  regExact(
+    "idle_duration",
+    () => init.idleDurationSeconds === void 0 ? "just now" : humanizeDuration(init.idleDurationSeconds)
+  );
+  regExact(
+    "idleDuration",
+    () => init.idleDurationSeconds === void 0 ? "just now" : humanizeDuration(init.idleDurationSeconds)
+  );
+  reg("random", (ctx) => {
+    const arg = laxArg(ctx);
+    if (arg === null || arg === "") {
+      return null;
+    }
+    const list = splitMacroList(arg);
+    const idx = Math.floor(rng() * list.length);
+    const safe = idx < 0 ? 0 : idx >= list.length ? list.length - 1 : idx;
+    return list[safe] ?? "";
+  });
+  reg("pick", (ctx) => {
+    const arg = laxArg(ctx);
+    if (arg === null || arg === "") {
+      return null;
+    }
+    const list = splitMacroList(arg);
+    const chatHash = hash32(init.chatId ?? "");
+    const seed = hash32(`${chatHash}|${ctx.rawHash}|${ctx.offset}`);
+    return list[seed % list.length] ?? "";
+  });
+  reg("roll", (ctx) => {
+    const arg = rollArg(ctx);
+    if (arg === null) {
+      return null;
+    }
+    const spec = parseRoll(arg);
+    if (spec === null) {
+      return "";
+    }
+    return String(evalRoll(spec, rng));
+  });
+  function registerVarMacros(scope, infix) {
+    const store2 = storeOf(scope);
+    reg(`get${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
+      }
+      const v = coerceRead(store2.get(arg.trim()));
+      return v === void 0 ? "" : String(v);
+    });
+    reg(`set${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null) {
+        return null;
+      }
+      const m = /^([^:]+)::([\s\S]*)$/.exec(arg);
+      if (m === null || m[1] === void 0 || m[1] === "") {
+        return null;
+      }
+      store2.set(m[1].trim(), m[2] ?? "");
+      return "";
+    });
+    reg(`add${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null) {
+        return null;
+      }
+      const m = /^([^:]+)::([\s\S]+)$/.exec(arg);
+      if (m === null || m[1] === void 0 || m[1] === "") {
+        return null;
+      }
+      addToVar(scope, m[1].trim(), m[2] ?? "");
+      return "";
+    });
+    reg(`inc${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
+      }
+      const m = /^([^:]+?)(?:::([\s\S]*))?$/.exec(arg);
+      if (m === null || m[1] === void 0 || m[1] === "") {
+        return null;
+      }
+      const delta = m[2] === void 0 ? "1" : m[2];
+      return addToVar(scope, m[1].trim(), delta);
+    });
+    reg(`dec${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
+      }
+      const m = /^([^:]+?)(?:::([\s\S]*))?$/.exec(arg);
+      if (m === null || m[1] === void 0 || m[1] === "") {
+        return null;
+      }
+      const value = m[2] === void 0 ? -1 : Number.isNaN(Number(m[2])) ? `-${m[2]}` : -Number(m[2]);
+      return addToVar(scope, m[1].trim(), value);
+    });
+    reg(`has${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
+      }
+      return store2.has(arg.trim()) ? "true" : "false";
+    });
+    reg(`delete${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
+      }
+      store2.delete(arg.trim());
+      return "";
+    });
+  }
+  registerVarMacros("local", "");
+  registerVarMacros("global", "global");
+  const LEGACY_RE = /<CHARIFNOTGROUP>|<GROUP>|<CHAR>|<BOT>|<USER>|(?<!\{)\{char\}(?!\})|(?<!\{)\{user\}(?!\})/gi;
+  function applyLegacy(text) {
+    if (!text.includes("<") && !text.includes("{")) {
+      return text;
+    }
+    return text.replace(LEGACY_RE, (tag) => {
+      switch (tag.toLowerCase()) {
+        case "<bot>":
+        case "<char>":
+        case "{char}":
+          return init.char;
+        case "%USERNAME%":
+        case "{user}":
+          return init.user;
+        case "<group>":
+        case "<charifnotgroup>":
+          return groupValue;
+        default:
+          return tag;
+      }
+    });
+  }
+  function evalInside(inside, offset, rawHash) {
+    if (inside === "") {
+      return null;
+    }
+    if (inside.startsWith("//")) {
+      return "";
+    }
+    const m = /^([A-Za-z0-9_]+)/.exec(inside);
+    if (m === null) {
+      return null;
+    }
+    const macroName = m[1];
+    const rest = inside.slice(macroName.length);
+    if (rest.includes("}")) {
+      return null;
+    }
+    const handler = registry.get(macroName.toLowerCase());
+    if (handler === void 0) {
+      return null;
+    }
+    return handler({ rest, offset, rawHash });
+  }
+  function expand(rawText) {
+    if (!rawText) {
+      return "";
+    }
+    const text = applyLegacy(rawText);
+    const rawHash = hash32(rawText);
+    let out = "";
+    let pos = 0;
+    let skipNewlines = false;
+    const appendText = (chunk) => {
+      if (chunk === "") {
+        return;
+      }
+      let c = chunk;
+      if (skipNewlines) {
+        c = c.replace(/^(?:\r?\n)+/, "");
+        if (c !== "") {
+          skipNewlines = false;
+        }
+      }
+      out += c;
+    };
+    for (; ; ) {
+      const open = text.indexOf("{{", pos);
+      if (open === -1) {
+        appendText(text.slice(pos));
+        break;
+      }
+      appendText(text.slice(pos, open));
+      const close = text.indexOf("}}", open + 2);
+      if (close === -1) {
+        appendText(text.slice(open));
+        break;
+      }
+      const result = evalInside(text.slice(open + 2, close), open, rawHash);
+      if (result === null) {
+        appendText(text.slice(open, close + 2));
+      } else if (result === TRIM) {
+        out = out.replace(/(?:\r?\n)+$/, "");
+        skipNewlines = true;
+      } else {
+        skipNewlines = false;
+        out += result;
+      }
+      pos = close + 2;
+    }
+    return out;
+  }
+  function registerMacro(name2, fn) {
+    const key = name2.trim();
+    if (key === "") {
+      throw new TypeError("Macro key must not be empty or whitespace only");
+    }
+    if (key.startsWith("{{") || key.endsWith("}}")) {
+      throw new TypeError("Macro key must not include the surrounding braces");
+    }
+    reg(key, (ctx) => {
+      const stripped = ctx.rest.replace(/^(?:\s?::?|\s)/, "");
+      const args = stripped === "" ? [] : stripped.split("::");
+      try {
+        return fn(args, api);
+      } catch {
+        return null;
+      }
+    });
+  }
+  const api = {
+    expand,
+    getVar: (name2) => readVar("local", name2),
+    setVar: (name2, value) => {
+      localVars.set(name2, value);
+    },
+    hasVar: (name2) => localVars.has(name2),
+    deleteVar: (name2) => localVars.delete(name2),
+    getGlobalVar: (name2) => readVar("global", name2),
+    setGlobalVar: (name2, value) => {
+      globalVars.set(name2, value);
+    },
+    hasGlobalVar: (name2) => globalVars.has(name2),
+    deleteGlobalVar: (name2) => globalVars.delete(name2),
+    registerMacro,
+    snapshotVars: () => ({
+      local: Object.fromEntries(localVars),
+      global: Object.fromEntries(globalVars)
+    })
+  };
+  return api;
+}
 
 // packages/plugin/src/prompt-safety.ts
+function createHostPromptExpander(char, user) {
+  const macros = createMacroEngine({ char, user });
+  return (text) => macros.expand(text);
+}
 function hostPromptSafe(text, expand = (value) => value) {
   return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
 }
 
 // packages/plugin/src/agent-tavern/preset.ts
+var AGENT_PRESET_BLOCK_HEADER = "Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):";
+var GLOBAL_ORDER_DUMMY_ID = 100001;
+var LEGACY_ORDER_DUMMY_ID = 1e5;
+function effectiveAgentPresetPrompts(preset, card) {
+  const order = resolvePromptOrder(preset);
+  const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
+  const effective = [];
+  for (const slot of order) {
+    const prompt = byId.get(slot.identifier);
+    if (prompt === void 0 || prompt.marker === true) continue;
+    if (!entryEnabled(slot, prompt)) continue;
+    const content = applyCardOverride(prompt.identifier, promptContent(prompt), card);
+    const trimmed = content.trim();
+    if (trimmed === "") continue;
+    effective.push({
+      identifier: prompt.identifier,
+      name: typeof prompt.name === "string" ? prompt.name : prompt.identifier,
+      role: promptRole(prompt),
+      content: trimmed
+    });
+  }
+  return effective;
+}
+function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
+  const prompts = effectiveAgentPresetPrompts(preset, card);
+  if (prompts.length === 0) return void 0;
+  return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
+}
 var AGENT_PRESET_CHANGED_LISTENERS = Symbol.for("dsh-tavern:agent-preset-changed-listeners");
 function agentPresetChangedListeners() {
   const holder = globalThis;
   return holder[AGENT_PRESET_CHANGED_LISTENERS] ??= /* @__PURE__ */ new Set();
+}
+function onAgentPresetChanged(listener) {
+  const listeners = agentPresetChangedListeners();
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 async function emitAgentPresetChanged() {
   for (const listener of [...agentPresetChangedListeners()]) {
@@ -2744,6 +3357,104 @@ async function emitAgentPresetChanged() {
     } catch {
     }
   }
+}
+function resolvePromptOrder(preset) {
+  const set = preset.promptOrder.find((order) => Number(order.character_id) === GLOBAL_ORDER_DUMMY_ID) ?? preset.promptOrder.find((order) => Number(order.character_id) === LEGACY_ORDER_DUMMY_ID) ?? preset.promptOrder[0];
+  return Array.isArray(set?.order) ? set.order : [];
+}
+function entryEnabled(slot, prompt) {
+  if (typeof slot.enabled === "boolean") return slot.enabled;
+  const record = prompt;
+  return record["enabled"] !== false;
+}
+function promptContent(prompt) {
+  const content = prompt["content"];
+  return typeof content === "string" ? content : "";
+}
+function promptRole(prompt) {
+  const role = prompt["role"];
+  return role === "user" || role === "assistant" ? role : "system";
+}
+function applyCardOverride(identifier, content, card) {
+  const override = identifier === "main" ? card?.data.systemPrompt.trim() : identifier === "jailbreak" ? card?.data.postHistoryInstructions.trim() : "";
+  if (override === void 0 || override === "") return content;
+  return override.replace(/\{\{original\}\}/gi, content);
+}
+
+// packages/plugin/src/preset-mount.ts
+var DEFAULT_USER = "User";
+var CHAR_FALLBACK = "the character";
+var storePromise;
+function store() {
+  return storePromise ??= TavernStore.open(dshHomePath("tavern"));
+}
+function mountPresetProjection(options) {
+  const projection = /* @__PURE__ */ new Map();
+  const started = /* @__PURE__ */ new Set();
+  const tickets = /* @__PURE__ */ new Map();
+  const textOf = (agentId) => {
+    if (typeof agentId !== "string" || agentId.trim() === "") return "";
+    if (!started.has(agentId)) {
+      started.add(agentId);
+      void load(agentId);
+    }
+    return projection.get(agentId) ?? "";
+  };
+  async function load(agentId) {
+    const ticket = (tickets.get(agentId) ?? 0) + 1;
+    tickets.set(agentId, ticket);
+    try {
+      const db = await store();
+      const state = await db.getState();
+      const settle = (text) => {
+        if (tickets.get(agentId) === ticket) projection.set(agentId, text);
+      };
+      const binding = state.sessionBindings[agentId];
+      if (state[options.stateFlag] !== true || !binding || binding.architecture !== options.architecture) {
+        settle("");
+        return;
+      }
+      if (typeof state.activePreset !== "string" || state.activePreset === "") {
+        settle("");
+        return;
+      }
+      const raw = await db.getPreset(state.activePreset);
+      if (raw === void 0) {
+        settle("");
+        return;
+      }
+      const block = renderAgentPresetBlock(parsePreset(raw), void 0, options.header);
+      if (block === void 0) {
+        settle("");
+        return;
+      }
+      const expand = createHostPromptExpander(
+        charNameOf(options, binding),
+        state.activePersona ?? DEFAULT_USER
+      );
+      settle(hostPromptSafe(block, expand));
+    } catch {
+    }
+  }
+  onAgentPresetChanged(async () => {
+    try {
+      const state = await (await store()).getState();
+      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+        if (binding.architecture !== options.architecture) continue;
+        started.add(agentId);
+        await load(agentId);
+      }
+    } catch {
+    }
+  });
+  return {
+    section: { name: options.sectionName, order: -75, text: (assembly) => textOf(assembly?.agent?.id) },
+    textOf
+  };
+}
+function charNameOf(options, binding) {
+  const name2 = options.charOf(binding).trim();
+  return name2 === "" ? CHAR_FALLBACK : name2;
 }
 
 // packages/plugin/src/card-workbench/plans.ts
@@ -3018,6 +3729,14 @@ var KERNEL = [
   "- Tools take an explicit resource name from the conversation; when unsure which card, world or preset the user means, verify with the matching *_get tool or ask before proposing."
 ].join("\n");
 var tavernStorePromise;
+var WORKBENCH_PRESET_HEADER = "Active chat completion preset (the user's prompt stack, echoed for reference: match its style when drafting card and preset text, and treat it as the play's prompt environment when debugging; it never overrides the workbench kernel):";
+var presetMount = mountPresetProjection({
+  sectionName: "dsh-tavern:card-workbench-preset",
+  architecture: "card-workbench",
+  stateFlag: "cardWorkbenchPresetEnabled",
+  header: WORKBENCH_PRESET_HEADER,
+  charOf: (binding) => binding.architecture === "card-workbench" ? binding.sourceCharacter || binding.createdCard : ""
+});
 function apply(ctx) {
   ctx.systemPrompt?.section?.({
     name: "dsh-tavern:card-workbench-kernel",
@@ -3026,6 +3745,7 @@ function apply(ctx) {
     // 过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
     text: hostPromptSafe(KERNEL)
   });
+  ctx.systemPrompt?.section?.(presetMount.section);
   const tools = createTools();
   for (const tool2 of tools) {
     if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool2), `dsh-tavern:card-workbench:${tool2.name}`);

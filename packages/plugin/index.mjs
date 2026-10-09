@@ -2321,15 +2321,15 @@ function createMacroEngine(init) {
     return coerceRead(storeOf(scope).get(name2));
   }
   function addToVar(scope, name2, value) {
-    const store2 = storeOf(scope);
-    const current = (coerceRead(store2.get(name2)) ?? 0) || 0;
+    const store3 = storeOf(scope);
+    const current = (coerceRead(store3.get(name2)) ?? 0) || 0;
     if (typeof current === "string") {
       try {
         const parsed = JSON.parse(current);
         if (Array.isArray(parsed)) {
           parsed.push(value);
           const json = JSON.stringify(parsed);
-          store2.set(name2, json);
+          store3.set(name2, json);
           return json;
         }
       } catch {
@@ -2339,14 +2339,14 @@ function createMacroEngine(init) {
     const currentNum = Number(current);
     if (Number.isNaN(inc) || Number.isNaN(currentNum)) {
       const concatenated = `${String(current || "")}${String(value)}`;
-      store2.set(name2, concatenated);
+      store3.set(name2, concatenated);
       return concatenated;
     }
     const next = currentNum + inc;
     if (Number.isNaN(next)) {
       return "";
     }
-    store2.set(name2, next);
+    store3.set(name2, next);
     return String(next);
   }
   regExact("char", () => init.char);
@@ -2465,13 +2465,13 @@ function createMacroEngine(init) {
     return String(evalRoll(spec, rng));
   });
   function registerVarMacros(scope, infix) {
-    const store2 = storeOf(scope);
+    const store3 = storeOf(scope);
     reg(`get${infix}var`, (ctx) => {
       const arg = colonArg(ctx);
       if (arg === null || arg === "") {
         return null;
       }
-      const v = coerceRead(store2.get(arg.trim()));
+      const v = coerceRead(store3.get(arg.trim()));
       return v === void 0 ? "" : String(v);
     });
     reg(`set${infix}var`, (ctx) => {
@@ -2483,7 +2483,7 @@ function createMacroEngine(init) {
       if (m === null || m[1] === void 0 || m[1] === "") {
         return null;
       }
-      store2.set(m[1].trim(), m[2] ?? "");
+      store3.set(m[1].trim(), m[2] ?? "");
       return "";
     });
     reg(`add${infix}var`, (ctx) => {
@@ -2527,14 +2527,14 @@ function createMacroEngine(init) {
       if (arg === null || arg === "") {
         return null;
       }
-      return store2.has(arg.trim()) ? "true" : "false";
+      return store3.has(arg.trim()) ? "true" : "false";
     });
     reg(`delete${infix}var`, (ctx) => {
       const arg = colonArg(ctx);
       if (arg === null || arg === "") {
         return null;
       }
-      store2.delete(arg.trim());
+      store3.delete(arg.trim());
       return "";
     });
   }
@@ -4062,6 +4062,8 @@ var DEFAULT_STATE = {
   defaultContextMode: "dsh-native",
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  cardWorkbenchPresetEnabled: false,
+  agentNovelPresetEnabled: false,
   worldFollowsCharacter: true,
   modelSelections: {},
   chats: {},
@@ -4536,6 +4538,8 @@ var TavernStore = class _TavernStore {
       defaultContextMode: parsed.defaultContextMode === "agent-managed" ? "agent-managed" : "dsh-native",
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
+      agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
       worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
@@ -7521,8 +7525,8 @@ async function listScripts(dir) {
 async function getScript(dir, name2) {
   return readScriptRecord(path6.join(dir, "scripts", safeScriptName(name2), "script.json"));
 }
-async function applyScriptBinding(store2, characterName, scriptName) {
-  const file = await store2.getCharacter(characterName);
+async function applyScriptBinding(store3, characterName, scriptName) {
+  const file = await store3.getCharacter(characterName);
   if (file === void 0) throw new Error(`character '${characterName}' not found`);
   const extensions = { ...file.card.data.extensions };
   const agentTavern = extensions.agentTavern;
@@ -7535,7 +7539,7 @@ async function applyScriptBinding(store2, characterName, scriptName) {
     base.scriptId = scriptName;
     extensions.agentTavern = base;
   }
-  await store2.updateCharacter(characterName, {
+  await store3.updateCharacter(characterName, {
     spec: file.card.spec,
     specVersion: file.card.specVersion,
     data: { ...file.card.data, extensions }
@@ -8710,13 +8714,13 @@ function novelScopeId(novelId) {
 // packages/plugin/src/agent-novel/projector.ts
 var PARAGRAPH_SEPARATOR3 = "\n\n";
 var NovelProjector = class _NovelProjector {
-  constructor(tavernRoot, store2, memory) {
+  constructor(tavernRoot, store3, memory) {
     this.tavernRoot = tavernRoot;
-    this.store = store2;
+    this.store = store3;
     this.memory = memory;
   }
-  static async open(tavernRoot, store2, memory) {
-    return new _NovelProjector(tavernRoot, store2, memory);
+  static async open(tavernRoot, store3, memory) {
+    return new _NovelProjector(tavernRoot, store3, memory);
   }
   /* ----------------------------- memory index (§8.2) ----------------------------- */
   /**
@@ -9085,13 +9089,13 @@ function stableMessageKey(sessionId, messageKey) {
 function isNovelAuthorMessage(event) {
   return extractAuthorMessage(event) !== null;
 }
-async function receiveAuthorMessage(store2, novelId, sessionId, event) {
+async function receiveAuthorMessage(store3, novelId, sessionId, event) {
   const extracted = extractAuthorMessage(event);
   if (extracted === null) {
     return { accepted: false, duplicate: false, reason: "event is not a real user author message (user/message with user source and non-empty text)" };
   }
   try {
-    const received = await store2.receiveRequirement(novelId, {
+    const received = await store3.receiveRequirement(novelId, {
       hostMessageId: stableMessageKey(sessionId, extracted.messageId),
       text: extracted.text,
       sourceKind: extracted.sourceKind
@@ -10534,9 +10538,9 @@ var TemplateVariableSystem = class {
       if (scope === "global" || scope === "cache") {
         throw new TypeError("cannot replace the entire global/cache variable tree; use local or initial scope");
       }
-      const store2 = this.scopeStore(scope);
-      for (const k of Object.keys(store2)) delete store2[k];
-      if (isObjectLike(value)) deepMerge(store2, value);
+      const store3 = this.scopeStore(scope);
+      for (const k of Object.keys(store3)) delete store3[k];
+      if (isObjectLike(value)) deepMerge(store3, value);
       return;
     }
     if (scope === "global") {
@@ -10560,8 +10564,8 @@ var TemplateVariableSystem = class {
       results: "new",
       clone: false
     });
-    const store2 = key === null ? this.cache : this.scopeStore(opts.scope);
-    const value = key === null ? store2 : getPath(store2, key);
+    const store3 = key === null ? this.cache : this.scopeStore(opts.scope);
+    const value = key === null ? store3 : getPath(store3, key);
     if (value === void 0) return opts.defaults;
     return opts.clone ? deepClone(value) : value;
   }
@@ -11223,16 +11227,16 @@ import { createHash as createHash6, randomUUID as randomUUID3 } from "node:crypt
 import { promises as fs8 } from "node:fs";
 import { join as join9 } from "node:path";
 var AgentTavernProjector = class _AgentTavernProjector {
-  constructor(root, store2) {
+  constructor(root, store3) {
     this.root = root;
-    this.store = store2;
+    this.store = store3;
   }
   tails = /* @__PURE__ */ new Map();
   checkpoints = /* @__PURE__ */ new Map();
-  static async open(tavernRoot, store2) {
+  static async open(tavernRoot, store3) {
     const root = join9(tavernRoot, "projections");
     await fs8.mkdir(root, { recursive: true });
-    return new _AgentTavernProjector(root, store2);
+    return new _AgentTavernProjector(root, store3);
   }
   project(session, event) {
     const previous = this.tails.get(session.id) ?? Promise.resolve();
@@ -11544,7 +11548,34 @@ function isRuntime(candidate) {
 }
 
 // packages/plugin/src/agent-tavern/preset.ts
+var AGENT_PRESET_BLOCK_HEADER = "Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):";
 var GLOBAL_ORDER_DUMMY_ID2 = 100001;
+var LEGACY_ORDER_DUMMY_ID2 = 1e5;
+function effectiveAgentPresetPrompts(preset, card) {
+  const order = resolvePromptOrder2(preset);
+  const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
+  const effective = [];
+  for (const slot of order) {
+    const prompt = byId.get(slot.identifier);
+    if (prompt === void 0 || prompt.marker === true) continue;
+    if (!entryEnabled(slot, prompt)) continue;
+    const content = applyCardOverride(prompt.identifier, promptContent(prompt), card);
+    const trimmed = content.trim();
+    if (trimmed === "") continue;
+    effective.push({
+      identifier: prompt.identifier,
+      name: typeof prompt.name === "string" ? prompt.name : prompt.identifier,
+      role: promptRole(prompt),
+      content: trimmed
+    });
+  }
+  return effective;
+}
+function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
+  const prompts = effectiveAgentPresetPrompts(preset, card);
+  if (prompts.length === 0) return void 0;
+  return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
+}
 function defaultPreset() {
   const prompts = [
     { name: "Main Prompt", system_prompt: true, role: "system", content: "Write {{char}}'s next reply in a fictional roleplay chat between {{char}} and {{user}}. Stay in character and never write dialogue or actions for {{user}}.", identifier: "main" },
@@ -11574,6 +11605,13 @@ function agentPresetChangedListeners() {
   const holder = globalThis;
   return holder[AGENT_PRESET_CHANGED_LISTENERS] ??= /* @__PURE__ */ new Set();
 }
+function onAgentPresetChanged(listener) {
+  const listeners = agentPresetChangedListeners();
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
 async function emitAgentPresetChanged() {
   for (const listener of [...agentPresetChangedListeners()]) {
     try {
@@ -11581,6 +11619,28 @@ async function emitAgentPresetChanged() {
     } catch {
     }
   }
+}
+function resolvePromptOrder2(preset) {
+  const set = preset.promptOrder.find((order) => Number(order.character_id) === GLOBAL_ORDER_DUMMY_ID2) ?? preset.promptOrder.find((order) => Number(order.character_id) === LEGACY_ORDER_DUMMY_ID2) ?? preset.promptOrder[0];
+  return Array.isArray(set?.order) ? set.order : [];
+}
+function entryEnabled(slot, prompt) {
+  if (typeof slot.enabled === "boolean") return slot.enabled;
+  const record = prompt;
+  return record["enabled"] !== false;
+}
+function promptContent(prompt) {
+  const content = prompt["content"];
+  return typeof content === "string" ? content : "";
+}
+function promptRole(prompt) {
+  const role = prompt["role"];
+  return role === "user" || role === "assistant" ? role : "system";
+}
+function applyCardOverride(identifier, content, card) {
+  const override = identifier === "main" ? card?.data.systemPrompt.trim() : identifier === "jailbreak" ? card?.data.postHistoryInstructions.trim() : "";
+  if (override === void 0 || override === "") return content;
+  return override.replace(/\{\{original\}\}/gi, content);
 }
 
 // packages/plugin/src/template.ts
@@ -12119,6 +12179,10 @@ async function runCandidateGeneration(ctx, db, options) {
 }
 
 // packages/plugin/src/prompt-safety.ts
+function createHostPromptExpander(char, user) {
+  const macros = createMacroEngine({ char, user });
+  return (text) => macros.expand(text);
+}
 function hostPromptSafe(text, expand = (value) => value) {
   return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
 }
@@ -13359,6 +13423,82 @@ async function applyPlan(dir, planId) {
   return applied;
 }
 
+// packages/plugin/src/preset-mount.ts
+var DEFAULT_USER3 = "User";
+var CHAR_FALLBACK = "the character";
+var storePromise;
+function store() {
+  return storePromise ??= TavernStore.open(dshHomePath("tavern"));
+}
+function mountPresetProjection(options) {
+  const projection = /* @__PURE__ */ new Map();
+  const started = /* @__PURE__ */ new Set();
+  const tickets = /* @__PURE__ */ new Map();
+  const textOf = (agentId) => {
+    if (typeof agentId !== "string" || agentId.trim() === "") return "";
+    if (!started.has(agentId)) {
+      started.add(agentId);
+      void load(agentId);
+    }
+    return projection.get(agentId) ?? "";
+  };
+  async function load(agentId) {
+    const ticket = (tickets.get(agentId) ?? 0) + 1;
+    tickets.set(agentId, ticket);
+    try {
+      const db = await store();
+      const state = await db.getState();
+      const settle = (text) => {
+        if (tickets.get(agentId) === ticket) projection.set(agentId, text);
+      };
+      const binding = state.sessionBindings[agentId];
+      if (state[options.stateFlag] !== true || !binding || binding.architecture !== options.architecture) {
+        settle("");
+        return;
+      }
+      if (typeof state.activePreset !== "string" || state.activePreset === "") {
+        settle("");
+        return;
+      }
+      const raw = await db.getPreset(state.activePreset);
+      if (raw === void 0) {
+        settle("");
+        return;
+      }
+      const block = renderAgentPresetBlock(parsePreset(raw), void 0, options.header);
+      if (block === void 0) {
+        settle("");
+        return;
+      }
+      const expand = createHostPromptExpander(
+        charNameOf(options, binding),
+        state.activePersona ?? DEFAULT_USER3
+      );
+      settle(hostPromptSafe(block, expand));
+    } catch {
+    }
+  }
+  onAgentPresetChanged(async () => {
+    try {
+      const state = await (await store()).getState();
+      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+        if (binding.architecture !== options.architecture) continue;
+        started.add(agentId);
+        await load(agentId);
+      }
+    } catch {
+    }
+  });
+  return {
+    section: { name: options.sectionName, order: -75, text: (assembly) => textOf(assembly?.agent?.id) },
+    textOf
+  };
+}
+function charNameOf(options, binding) {
+  const name2 = options.charOf(binding).trim();
+  return name2 === "" ? CHAR_FALLBACK : name2;
+}
+
 // packages/plugin/src/card-workbench/agent.ts
 var KERNEL = [
   "You are the Card Workbench agent running inside the DSH native AgentLoop (proposal 0013).",
@@ -13388,6 +13528,14 @@ var KERNEL = [
   "- Tools take an explicit resource name from the conversation; when unsure which card, world or preset the user means, verify with the matching *_get tool or ask before proposing."
 ].join("\n");
 var tavernStorePromise;
+var WORKBENCH_PRESET_HEADER = "Active chat completion preset (the user's prompt stack, echoed for reference: match its style when drafting card and preset text, and treat it as the play's prompt environment when debugging; it never overrides the workbench kernel):";
+var presetMount = mountPresetProjection({
+  sectionName: "dsh-tavern:card-workbench-preset",
+  architecture: "card-workbench",
+  stateFlag: "cardWorkbenchPresetEnabled",
+  header: WORKBENCH_PRESET_HEADER,
+  charOf: (binding) => binding.architecture === "card-workbench" ? binding.sourceCharacter || binding.createdCard : ""
+});
 var CARD_FIELDS = {
   name: 120,
   nickname: 120,
@@ -13901,13 +14049,13 @@ function limitText(value, max2) {
 var name = "dsh-tavern";
 var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents", "agentPresets", "tools", "compaction"];
 var API = "/api/dsh-tavern";
-var DEFAULT_USER3 = "User";
+var DEFAULT_USER4 = "User";
 var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
 var TAVERN_WORKBENCH_WORKSPACE_TITLE = "Tavern Workbench (internal)";
 var CARD_WORKBENCH_PRESET_ID = "card-workbench";
 var BUILD_INFO = readBuildInfo();
 var TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit);
-var storePromise;
+var storePromise2;
 var memoryStorePromise;
 var variableStorePromise;
 var activeAgentPrompt = "";
@@ -13928,8 +14076,8 @@ var TavernArchitectureConflictError = class extends Error {
     this.name = "TavernArchitectureConflictError";
   }
 };
-function store() {
-  return storePromise ??= TavernStore.open(dshHomePath("tavern"));
+function store2() {
+  return storePromise2 ??= TavernStore.open(dshHomePath("tavern"));
 }
 function memories() {
   return memoryStorePromise ??= MemoryStore.open(dshHomePath("tavern"));
@@ -13974,10 +14122,10 @@ function apply(ctx, config = {}) {
   void agentTavernCapabilitiesPromise.then((value) => {
     agentTavernCapabilities = value;
   });
-  agentTavernProjectorPromise = store().then((db) => AgentTavernProjector.open(dshHomePath("tavern"), db));
+  agentTavernProjectorPromise = store2().then((db) => AgentTavernProjector.open(dshHomePath("tavern"), db));
   agentNovelCapabilities = inspectAgentNovelCapabilities(ctx);
-  novelProjectorPromise = Promise.all([novelStore(), memories()]).then(([store2, memory]) => NovelProjector.open(dshHomePath("tavern"), store2, memory));
-  novelDriverPromise = Promise.all([novelStore(), store(), novelProjectorPromise]).then(([novelDb, tavern, projector]) => {
+  novelProjectorPromise = Promise.all([novelStore(), memories()]).then(([store3, memory]) => NovelProjector.open(dshHomePath("tavern"), store3, memory));
+  novelDriverPromise = Promise.all([novelStore(), store2(), novelProjectorPromise]).then(([novelDb, tavern, projector]) => {
     const driver = NovelDriver.create(ctx, { store: novelDb, tavern, projector });
     try {
       ctx.effect?.(() => () => {
@@ -13993,7 +14141,7 @@ function apply(ctx, config = {}) {
   ctx.on?.("session/event", (session, event) => {
     void agentTavernProjectorPromise.then((projector) => projector.project(session, event)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection failed: ${error instanceof Error ? error.message : String(error)}`));
     if (event?.type === "turn/end" && typeof session?.id === "string") {
-      void variables().then((store2) => store2.clear("turn", session.id)).catch(() => {
+      void variables().then((store3) => store3.clear("turn", session.id)).catch(() => {
       });
     }
     void handleNovelSessionEvent(ctx, session, event);
@@ -14018,7 +14166,7 @@ function apply(ctx, config = {}) {
     handler: async ({ agent, rawInput }) => {
       const parsed = parseTavernSessionCommand(rawInput);
       if (!parsed) return { kind: "error", text: "Invalid Tavern activation payload." };
-      const db = await store();
+      const db = await store2();
       if (parsed.action === "close") {
         await db.updateState((state) => {
           const sessionBindings = { ...state.sessionBindings };
@@ -14179,7 +14327,7 @@ async function handleApi(ctx, req, res) {
   if (route === "update" || route.startsWith("update/")) {
     return handleUpdateApi(ctx, req, res, url, route, method);
   }
-  const db = await store();
+  const db = await store2();
   if (method === "GET" && route === "bootstrap") {
     await agentTavernCapabilitiesPromise;
     const internalWorkspace = await prepareInternalWorkspace();
@@ -14439,15 +14587,15 @@ async function handleApi(ctx, req, res) {
       { scope: "agent", scopeId: sessionId }
     ];
     const [memoryGroups, variableGroups, globalMemories, globalVariables, projector] = await Promise.all([
-      Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store2) => store2.search({
+      Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store3) => store3.search({
         scope,
         scopeId,
         includeDeleted: true,
         limit: 50
       })))),
-      Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store2) => store2.list(scope, scopeId, "", 100)))),
-      memories().then((store2) => store2.search({ scope: "global", includeDeleted: true, limit: 50 })),
-      variables().then((store2) => store2.list("global", "global", "", 100)),
+      Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store3) => store3.list(scope, scopeId, "", 100)))),
+      memories().then((store3) => store3.search({ scope: "global", includeDeleted: true, limit: 50 })),
+      variables().then((store3) => store3.list("global", "global", "", 100)),
       agentTavernProjectorPromise
     ]);
     return sendJson(res, 200, {
@@ -14589,11 +14737,15 @@ async function handleApi(ctx, req, res) {
       ...body.defaultContextMode === "dsh-native" || body.defaultContextMode === "agent-managed" ? { defaultContextMode: body.defaultContextMode } : {},
       ...typeof body.agentTavernPreloadAssets === "boolean" ? { agentTavernPreloadAssets: body.agentTavernPreloadAssets } : {},
       ...typeof body.agentTavernAllowGlobalWrites === "boolean" ? { agentTavernAllowGlobalWrites: body.agentTavernAllowGlobalWrites } : {},
+      // 写卡工作台/AgentNovel 的预设投影开关（preset-mount.ts）：翻转即写穿
+      // 两个 bundle 的投影缓存，下一次装配即时生效。
+      ...typeof body.cardWorkbenchPresetEnabled === "boolean" ? { cardWorkbenchPresetEnabled: body.cardWorkbenchPresetEnabled } : {},
+      ...typeof body.agentNovelPresetEnabled === "boolean" ? { agentNovelPresetEnabled: body.agentNovelPresetEnabled } : {},
       ...typeof body.worldFollowsCharacter === "boolean" ? { worldFollowsCharacter: body.worldFollowsCharacter } : {},
       ...body.compaction !== void 0 ? { compaction: compactionOverrideOf(body.compaction) } : {}
     };
     const state = await db.patchState(patch);
-    if ("activePreset" in patch || "activePersona" in patch) await emitAgentPresetChanged();
+    if ("activePreset" in patch || "activePersona" in patch || "cardWorkbenchPresetEnabled" in patch || "agentNovelPresetEnabled" in patch) await emitAgentPresetChanged();
     await refreshActivePrompt();
     return sendJson(res, 200, { ok: true, state });
   }
@@ -15315,7 +15467,7 @@ function novelDetail(snapshot2) {
 }
 async function discoverWriterProbeRuntime(ctx) {
   try {
-    const db = await store();
+    const db = await store2();
     const state = await db.getState();
     for (const [sessionId, binding] of Object.entries(state.sessionBindings)) {
       if (binding.architecture !== "agent-novel") continue;
@@ -15371,7 +15523,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
         });
       }
     }
-    const created = await novels.createNovel(await store(), config);
+    const created = await novels.createNovel(await store2(), config);
     const snapshot2 = await novels.getNovel(created.novelId);
     const summary = snapshot2 === void 0 ? void 0 : summarizeNovel(snapshot2);
     return sendJson(res, 200, {
@@ -15412,7 +15564,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
   if (method === "DELETE" && subpath === null) {
     await novels.pause(novelId, { reason: "user-request", detail: "deletion requested from the novels panel" }).catch(() => {
     });
-    const db = await store();
+    const db = await store2();
     await db.updateState((current) => ({
       sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.architecture === "agent-novel" && binding.novelId === novelId)))
     }));
@@ -15490,7 +15642,7 @@ async function recoverMountedNovels(ctx) {
   if (driver === void 0) return;
   await recoverNovels(driver);
   try {
-    const db = await store();
+    const db = await store2();
     const state = await db.getState();
     for (const binding of Object.values(state.sessionBindings)) {
       if (binding.architecture !== "agent-novel") continue;
@@ -15505,7 +15657,7 @@ async function handleNovelSessionEvent(ctx, session, event) {
   if (typeof sessionId !== "string") return;
   let novelId;
   try {
-    const db = await store();
+    const db = await store2();
     const state = await db.getState();
     const binding = state.sessionBindings[sessionId];
     if (binding === void 0 || binding.architecture !== "agent-novel") return;
@@ -15560,7 +15712,7 @@ function driverCompatibleAgent(agent) {
   return typeof candidate.id === "string" && typeof candidate.session === "object" && candidate.session !== null && typeof candidate.session.id === "string" && (candidate.status === "idle" || candidate.status === "running") && typeof candidate.followup === "function" && typeof candidate.whenIdle === "function";
 }
 async function handleNovelOpenCommand(ctx, agent, novelId) {
-  const db = await store();
+  const db = await store2();
   const novels = await novelStore();
   if (await novels.getNovel(novelId) === void 0) {
     return { kind: "error", text: `Novel '${novelId}' not found.` };
@@ -15614,7 +15766,7 @@ async function handleWorkbenchOpenCommand(ctx, agent, payload) {
     const source = event.type === "user/message" ? event.data?.source : event.data?.message?.source;
     return isTavernSessionMarker(source);
   });
-  const db = await store();
+  const db = await store2();
   const previous = (await db.getState()).sessionBindings[agent.id];
   const sameWorkbenchSource = previous?.architecture === "card-workbench" && previous.sourceCharacter === payload.sourceCharacter && previous.sourceChatId === payload.sourceChatId;
   if (sessionStarted && !sameWorkbenchSource) {
@@ -15719,7 +15871,7 @@ async function runGeneration(ctx, db, options) {
   const mvuVariablesBefore = snapshotChatVariables(chat);
   let revision = snapshot2.revision;
   let hostTrace;
-  const userName = state.activePersona ?? DEFAULT_USER3;
+  const userName = state.activePersona ?? DEFAULT_USER4;
   try {
     let speakerName = characterName;
     let groupDef = void 0;
@@ -16050,7 +16202,7 @@ async function runTavernScript(ctx, req, res, db) {
   const character = await db.getCharacter(characterName);
   const macros = createMacroEngine({
     char: character?.card.data.nickname || character?.card.data.name || characterName,
-    user: state.activePersona ?? DEFAULT_USER3,
+    user: state.activePersona ?? DEFAULT_USER4,
     persona: state.activePersona ? (await db.getPersona(state.activePersona))?.description : void 0,
     lastMessage: chat.messages[chat.messages.length - 1]?.mes,
     lastUserMessage: [...chat.messages].reverse().find((m) => m.is_user)?.mes,
@@ -16100,7 +16252,7 @@ async function runTavernScript(ctx, req, res, db) {
     send: async (text) => {
       const trimmed = text.trim();
       if (trimmed === "") return;
-      chat.messages.push({ name: state.activePersona ?? DEFAULT_USER3, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: trimmed });
+      chat.messages.push({ name: state.activePersona ?? DEFAULT_USER4, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: trimmed });
       await persist();
     },
     trigger: async (member) => {
@@ -16189,7 +16341,7 @@ async function isGroupChat(db, characterName, chatId) {
 function tavernMacroExpand(state, characterName, character) {
   const macros = createMacroEngine({
     char: character?.card.data.nickname || character?.card.data.name || characterName,
-    user: state.activePersona ?? DEFAULT_USER3
+    user: state.activePersona ?? DEFAULT_USER4
   });
   return (text) => macros.expand(text);
 }
@@ -16279,7 +16431,7 @@ async function buildModelCatalog(ctx) {
 }
 async function refreshActivePrompt() {
   try {
-    const db = await store();
+    const db = await store2();
     const state = await db.getState();
     if (!state.nativeAgentPersona || !state.activeCharacter) {
       activeAgentPrompt = "";
@@ -16605,7 +16757,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.1".trim() : "";
-  const commit = true ? normalizeCommit("92709e2") : void 0;
+  const commit = true ? normalizeCommit("459fa6f") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
