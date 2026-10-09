@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -695,6 +695,25 @@ describe('internal Tavern session bridge occupation', () => {
       path: join(home, 'tavern', 'workbench'),
       title: 'Tavern Workbench (internal)',
     })
+    // 条目数投影：面板列表不点开书也显示真实条目数；含禁用条目，与浏览视图口径一致。
+    expect(body.worldEntryCounts).toEqual({ 'Active Lore': 3, 'Linked Lore': 1 })
+  })
+
+  it('keeps bootstrap serving world entry counts when a world file is corrupt', async () => {
+    const corruptPath = join(home, 'tavern', 'worlds', 'Broken Lore.json')
+    writeFileSync(corruptPath, 'not json')
+    try {
+      const res = makeResponse()
+      await apiHandler(makeGetRequest('/api/dsh-tavern/bootstrap'), res)
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.chunks.join(''))
+      // 坏书按文件存在进名字列表，但只缺数不断路——bootstrap 不因单本损坏 500，
+      // 客户端对该书回退 0 显示，点开仍走既有 fetch 错误路径。
+      expect(body.worlds).toContain('Broken Lore')
+      expect(body.worldEntryCounts).toEqual({ 'Active Lore': 3, 'Linked Lore': 1 })
+    } finally {
+      rmSync(corruptPath, { force: true })
+    }
   })
 
   it('fails closed when AgentTavern managed context is unavailable', async () => {

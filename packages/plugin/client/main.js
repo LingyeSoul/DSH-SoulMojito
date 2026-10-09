@@ -5773,7 +5773,7 @@ window.__ModuleLoader__.load({
                 }),
                 h('span', null, name)),
               h(Button, { size: 'sm', variant: 'ghost', onClick: () => toggleBrowse(name) },
-                browse === name ? t('panel.characters.hideCard') : t('panel.worlds.entries', { count: books[name]?.entries?.length ?? 0 })),
+                browse === name ? t('panel.characters.hideCard') : t('panel.worlds.entries', { count: books[name]?.entries?.length ?? state.bootstrap.worldEntryCounts?.[name] ?? 0 })),
               h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editBook(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),
               h(Button, { size: 'sm', variant: 'ghost', icon: h(IconDownloadOutline16), 'aria-label': t('panel.exportJson'), title: t('panel.exportJson'), onClick: () => downloadAsset(`export/world/${encodeURIComponent(name)}`, `${name}.json`) }),
               h(Button, {

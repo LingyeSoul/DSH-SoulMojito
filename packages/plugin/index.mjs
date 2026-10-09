@@ -14434,12 +14434,21 @@ async function handleApi(ctx, req, res) {
       const preset = await db.getPreset(name2);
       if (preset) presetKinds[name2] = detectPresetKind(preset);
     }
+    const worldEntryCounts = {};
+    for (const name2 of await db.listWorlds()) {
+      try {
+        const book = await db.getWorld(name2);
+        if (book) worldEntryCounts[name2] = book.entries.length;
+      } catch {
+      }
+    }
     return sendJson(res, 200, {
       ok: true,
       storeRevision,
       state,
       characters: await db.listCharacters(),
       worlds: await db.listWorlds(),
+      worldEntryCounts,
       presets: await db.listPresets(),
       presetKinds,
       personas,
@@ -16841,7 +16850,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.1".trim() : "";
-  const commit = true ? normalizeCommit("0383231") : void 0;
+  const commit = true ? normalizeCommit("84e6e19") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

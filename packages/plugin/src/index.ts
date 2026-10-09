@@ -518,12 +518,23 @@ async function handleApi(ctx, req, res) {
       const preset = await db.getPreset(name)
       if (preset) presetKinds[name] = detectPresetKind(preset)
     }
+    // 世界书条目数投影：面板列表不点开书也显示真实条目数（书本内容仍按浏览/
+    // 编辑懒加载）。与 presetKinds 同款服务端轻量投影；单本损坏只缺数不断路，
+    // bootstrap 不因坏书 500，点开该书仍走既有 fetch 错误路径。
+    const worldEntryCounts = {}
+    for (const name of await db.listWorlds()) {
+      try {
+        const book = await db.getWorld(name)
+        if (book) worldEntryCounts[name] = book.entries.length
+      } catch { /* 坏文件按缺数处理，保持 bootstrap 可用 */ }
+    }
     return sendJson(res, 200, {
       ok: true,
       storeRevision,
       state,
       characters: await db.listCharacters(),
       worlds: await db.listWorlds(),
+      worldEntryCounts,
       presets: await db.listPresets(),
       presetKinds,
       personas,
