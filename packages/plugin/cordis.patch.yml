@@ -41,7 +41,7 @@
       config:
         id: card-workbench
         name: CardWorkbench
-        description: 卡片工作台（提案 0013）：对话式修改人物卡，先逐字段方案、用户确认后写入，原版快照可恢复。
+        description: 卡片工作台：对话式修改人物卡，先逐字段方案、用户确认后写入，原版快照可恢复。
         order: 12
         plugins:
           - id: dsh-card-workbench
