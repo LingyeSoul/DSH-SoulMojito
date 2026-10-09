@@ -402,11 +402,36 @@ window.__ModuleLoader__.load({
       'settings.groupToggleMember': 'Enable or disable {member}',
       'settings.groupRemoveMember': 'Remove {member}',
       'settings.regex': 'Regex scripts',
-      'settings.regexEmpty': 'No regex scripts imported',
+      'settings.regexEmpty': 'No regex scripts yet — import a JSON export or create one',
       'settings.importRegex': 'Regex scripts',
+      'settings.regexCreate': 'New script',
+      'settings.regexEdit': 'Edit {name}',
       'settings.regexDelete': 'Delete {name}',
       'settings.regexToggle': 'Enable or disable {name}',
       'settings.regexPlacements': 'Placements: {names}',
+      'settings.regexName': 'Name',
+      'settings.regexFind': 'Find regex',
+      'settings.regexFindHint': 'RegExp source without delimiters, e.g. \\d+',
+      'settings.regexReplace': 'Replace with',
+      'settings.regexReplaceHint': 'Supports $1, $& capture references',
+      'settings.regexTrim': 'Trim strings',
+      'settings.regexTrimHint': 'One per line; stripped from each match before replacement',
+      'settings.regexPlacement': 'Run on',
+      'settings.regexPlacementInput': 'User input',
+      'settings.regexPlacementOutput': 'AI output',
+      'settings.regexPlacementCommand': 'Slash command',
+      'settings.regexPlacementWorldInfo': 'World info',
+      'settings.regexPlacementReasoning': 'Reasoning',
+      'settings.regexMarkdownOnly': 'Display only (prompt untouched)',
+      'settings.regexPromptOnly': 'Prompt only (saved text untouched)',
+      'settings.regexRunOnEdit': 'Re-run when editing messages',
+      'settings.regexSubstitute': 'Expand macros before matching',
+      'settings.regexMinDepth': 'Min depth',
+      'settings.regexMaxDepth': 'Max depth',
+      'settings.regexDepthHint': 'Empty = no limit',
+      'settings.regexNameRequired': 'Script name is required.',
+      'settings.regexFindRequired': 'Find regex is required.',
+      'settings.regexBadPattern': 'Invalid regex: {message}',
       'panel.title': 'Tavern management',
       'panel.close': 'Close panel',
       'panel.open': 'Open Tavern panel',
@@ -912,11 +937,36 @@ window.__ModuleLoader__.load({
       'settings.groupToggleMember': '启用或停用{member}',
       'settings.groupRemoveMember': '移除{member}',
       'settings.regex': '正则脚本',
-      'settings.regexEmpty': '尚未导入正则脚本',
+      'settings.regexEmpty': '暂无正则脚本——可导入 JSON 导出，或直接新建',
       'settings.importRegex': '正则脚本',
+      'settings.regexCreate': '新建脚本',
+      'settings.regexEdit': '编辑{name}',
       'settings.regexDelete': '删除{name}',
       'settings.regexToggle': '启用或停用{name}',
       'settings.regexPlacements': '作用位置：{names}',
+      'settings.regexName': '名称',
+      'settings.regexFind': '查找正则',
+      'settings.regexFindHint': '正则主体（不含斜杠定界符），如 \\d+',
+      'settings.regexReplace': '替换为',
+      'settings.regexReplaceHint': '支持 $1、$& 等捕获引用',
+      'settings.regexTrim': '裁剪字符串',
+      'settings.regexTrimHint': '每行一个；替换前先从匹配文本中剔除',
+      'settings.regexPlacement': '作用位置',
+      'settings.regexPlacementInput': '用户输入',
+      'settings.regexPlacementOutput': 'AI 输出',
+      'settings.regexPlacementCommand': '斜杠命令',
+      'settings.regexPlacementWorldInfo': '世界书',
+      'settings.regexPlacementReasoning': '推理',
+      'settings.regexMarkdownOnly': '仅展示层（不改动发给模型的内容）',
+      'settings.regexPromptOnly': '仅提示词层（不改动保存的聊天文本）',
+      'settings.regexRunOnEdit': '编辑消息时重新运行',
+      'settings.regexSubstitute': '匹配前先展开宏',
+      'settings.regexMinDepth': '最小深度',
+      'settings.regexMaxDepth': '最大深度',
+      'settings.regexDepthHint': '留空表示不限',
+      'settings.regexNameRequired': '请填写脚本名称。',
+      'settings.regexFindRequired': '请填写查找正则。',
+      'settings.regexBadPattern': '正则无效：{message}',
       'panel.title': '酒馆管理面板',
       'panel.close': '关闭面板',
       'panel.open': '打开酒馆面板',
@@ -3121,34 +3171,148 @@ window.__ModuleLoader__.load({
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
-    const REGEX_PLACEMENT_NAMES = { 1: 'input', 2: 'output', 3: 'command', 5: 'world info', 6: 'reasoning' }
+    const REGEX_PLACEMENTS = [
+      { value: 1, labelKey: 'settings.regexPlacementInput' },
+      { value: 2, labelKey: 'settings.regexPlacementOutput' },
+      { value: 3, labelKey: 'settings.regexPlacementCommand' },
+      { value: 5, labelKey: 'settings.regexPlacementWorldInfo' },
+      { value: 6, labelKey: 'settings.regexPlacementReasoning' },
+    ]
+
+    function regexPlacementLabel(t, value) {
+      const option = REGEX_PLACEMENTS.find((item) => item.value === value)
+      return option ? t(option.labelKey) : String(value)
+    }
+
+    function newRegexScript() {
+      return {
+        id: `regex-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        scriptName: '', findRegex: '', replaceString: '', trimStrings: [],
+        placement: [2], disabled: false, markdownOnly: false, promptOnly: false,
+        runOnEdit: false, substituteRegex: false, minDepth: null, maxDepth: null,
+      }
+    }
+
+    function RegexScriptEditor({ script, onSave, onCancel }) {
+      const t = useTranslate()
+      const [draft, setDraft] = useState(() => cloneValue(script))
+      const [saving, setSaving] = useState(false)
+      const [error, setError] = useState('')
+      const dirty = JSON.stringify(draft) !== JSON.stringify(script)
+      const setField = (key, value) => setDraft((current) => ({ ...current, [key]: value }))
+      const setDepth = (key, value) => {
+        const parsed = value.trim() === '' ? null : Number(value)
+        setField(key, parsed !== null && Number.isFinite(parsed) ? parsed : null)
+      }
+      // placement 至少保留一项：ST 语义下无 placement 的脚本不会在任何层生效，
+      // 最后一项禁止取消（服务端 parseRegexScripts 也会把空集回落为 AI_OUTPUT）。
+      const togglePlacement = (value, checked) => setDraft((current) => {
+        const placement = checked
+          ? (current.placement.includes(value) ? current.placement : [...current.placement, value])
+          : current.placement.filter((item) => item !== value)
+        return placement.length > 0 ? { ...current, placement } : current
+      })
+      const cancel = () => { if (!dirty || window.confirm(`${t('panel.unsaved')}?`)) onCancel() }
+      const save = () => {
+        const scriptName = String(draft.scriptName || '').trim()
+        if (scriptName === '') { setError(t('settings.regexNameRequired')); return }
+        if (draft.findRegex.trim() === '') { setError(t('settings.regexFindRequired')); return }
+        try { new RegExp(draft.findRegex) } catch (cause) {
+          setError(t('settings.regexBadPattern', { message: cause instanceof Error ? cause.message : String(cause) }))
+          return
+        }
+        setSaving(true)
+        setError('')
+        void Promise.resolve(onSave({
+          ...draft,
+          scriptName,
+          trimStrings: (draft.trimStrings || []).map((item) => item.trim()).filter(Boolean),
+        }))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setSaving(false))
+      }
+      return h('div', { className: 'dt-editor' },
+        h('div', { className: 'dt-editor-toolbar' },
+          h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+          h('div', { className: 'dt-editor-actions' },
+            h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+            h(Button, { size: 'sm', variant: 'primary', disabled: saving, onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
+        h('div', { className: 'dt-editor-grid' },
+          h(EditorField, { label: t('settings.regexName'), value: draft.scriptName, onChange: (value) => setField('scriptName', value) }),
+          h('div', { className: 'dt-editor-field' },
+            h('span', { className: 'dt-label' }, t('settings.regexPlacement')),
+            h('div', { className: 'dt-editor-toggles' },
+              REGEX_PLACEMENTS.map(({ value, labelKey }) => h(ToggleField, {
+                key: value,
+                label: t(labelKey),
+                checked: draft.placement.includes(value),
+                onChange: (checked) => togglePlacement(value, checked),
+              })))),
+          h(EditorField, { label: t('settings.regexFind'), value: draft.findRegex, onChange: (value) => setField('findRegex', value), multiline: true, className: 'dt-editor-wide dt-editor-json', hint: t('settings.regexFindHint') }),
+          h(EditorField, { label: t('settings.regexReplace'), value: draft.replaceString, onChange: (value) => setField('replaceString', value), multiline: true, className: 'dt-editor-wide dt-editor-json', hint: t('settings.regexReplaceHint') }),
+          h(EditorField, { label: t('settings.regexTrim'), value: (draft.trimStrings || []).join('\n'), onChange: (value) => setField('trimStrings', value.split('\n')), multiline: true, className: 'dt-editor-wide', hint: t('settings.regexTrimHint') }),
+          h(EditorField, { label: t('settings.regexMinDepth'), value: draft.minDepth === null ? '' : String(draft.minDepth), type: 'number', min: 0, onChange: (value) => setDepth('minDepth', value), hint: t('settings.regexDepthHint') }),
+          h(EditorField, { label: t('settings.regexMaxDepth'), value: draft.maxDepth === null ? '' : String(draft.maxDepth), type: 'number', min: 0, onChange: (value) => setDepth('maxDepth', value), hint: t('settings.regexDepthHint') }),
+          h('div', { className: 'dt-editor-toggles dt-editor-wide' },
+            h(ToggleField, { label: t('settings.regexMarkdownOnly'), checked: draft.markdownOnly === true, onChange: (value) => setField('markdownOnly', value) }),
+            h(ToggleField, { label: t('settings.regexPromptOnly'), checked: draft.promptOnly === true, onChange: (value) => setField('promptOnly', value) }),
+            h(ToggleField, { label: t('settings.regexRunOnEdit'), checked: draft.runOnEdit === true, onChange: (value) => setField('runOnEdit', value) }),
+            h(ToggleField, { label: t('settings.regexSubstitute'), checked: draft.substituteRegex === true, onChange: (value) => setField('substituteRegex', value) }))),
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
 
     function RegexBand() {
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
+      const [editing, setEditing] = useState('')
       const scripts = state.bootstrap.state.regexScripts || []
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
+      const saveScript = (script) => {
+        const next = scripts.some((item) => item.id === script.id)
+          ? scripts.map((item) => (item.id === script.id ? script : item))
+          : [...scripts, script]
+        return saveRegexScripts(next).then(() => setEditing(''))
+      }
+      const closeEditor = () => setEditing('')
       return h('section', { className: 'dt-settings-band' },
         h('h3', null, t('settings.regex')),
         h('div', { className: 'dt-imports' },
-          h(UploadButton, { kind: 'regex', label: t('settings.importRegex'), accept: '.json,application/json' })),
-        scripts.length === 0 ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : h('div', { className: 'dt-regex-list' },
-          scripts.map((script) => h('div', { key: script.id, className: `dt-regex-row ${script.disabled ? 'dt-regex-off' : ''}` },
-            h('label', { className: 'dt-toggle', title: t('settings.regexToggle', { name: script.scriptName }) },
-              h('input', {
-                type: 'checkbox',
-                checked: !script.disabled,
-                onChange: () => run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, disabled: !item.disabled } : item))),
-              }),
-              h('span', null, script.scriptName)),
-            h('span', { className: 'dt-muted', title: t('settings.regexPlacements', { names: script.placement.map((p) => REGEX_PLACEMENT_NAMES[p] || p).join(', ') }) },
-              script.findRegex.slice(0, 60)),
-            h('button', {
-              type: 'button',
-              title: t('settings.regexDelete', { name: script.scriptName }),
-              onClick: () => run(saveRegexScripts(scripts.filter((item) => item.id !== script.id))),
-            }, h(IconTrashOutline16))))),
+          h(UploadButton, { kind: 'regex', label: t('settings.importRegex'), accept: '.json,application/json' }),
+          h(Button, { size: 'sm', variant: 'outline', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => setEditing('new') }, t('settings.regexCreate'))),
+        editing === 'new'
+          ? h('div', { key: 'new', className: 'dt-regex-editor-wrap' },
+            h(RegexScriptEditor, { script: newRegexScript(), onSave: saveScript, onCancel: closeEditor }))
+          : null,
+        scripts.length === 0 && editing !== 'new' ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : h('div', { className: 'dt-regex-list' },
+          scripts.map((script) => h('div', { key: script.id, className: 'dt-regex-item' },
+            h('div', { className: `dt-regex-row ${script.disabled ? 'dt-regex-off' : ''}` },
+              h('label', { className: 'dt-toggle', title: t('settings.regexToggle', { name: script.scriptName }) },
+                h('input', {
+                  type: 'checkbox',
+                  checked: !script.disabled,
+                  disabled: editing === script.id,
+                  onChange: () => run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, disabled: !item.disabled } : item))),
+                }),
+                h('span', null, script.scriptName)),
+              h('span', { className: 'dt-muted', title: t('settings.regexPlacements', { names: script.placement.map((p) => regexPlacementLabel(t, p)).join(', ') }) },
+                script.findRegex.slice(0, 60)),
+              h('button', {
+                type: 'button',
+                title: t('settings.regexEdit', { name: script.scriptName }),
+                disabled: editing !== '' && editing !== script.id,
+                onClick: () => setEditing(editing === script.id ? '' : script.id),
+              }, h(IconEditOutline16)),
+              h('button', {
+                type: 'button',
+                title: t('settings.regexDelete', { name: script.scriptName }),
+                disabled: editing === script.id,
+                onClick: () => run(saveRegexScripts(scripts.filter((item) => item.id !== script.id))),
+              }, h(IconTrashOutline16))),
+            editing === script.id
+              ? h('div', { className: 'dt-regex-editor-wrap' },
+                h(RegexScriptEditor, { script, onSave: saveScript, onCancel: closeEditor }))
+              : null))),
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
@@ -7683,7 +7847,7 @@ window.__ModuleLoader__.load({
         .dt-persona-list{display:flex;flex-direction:column;gap:6px}.dt-persona-row{display:flex;align-items:center;gap:10px;min-height:44px;padding:4px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}.dt-persona-avatar{width:34px;height:34px;border-radius:6px;object-fit:cover;flex:none}.dt-persona-copy{display:flex;flex-direction:column;min-width:0;flex:1;gap:2px}.dt-persona-copy span{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-persona-actions{display:flex;gap:2px}.dt-persona-actions button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-persona-actions button:hover{background:var(--dsw-alias-interactive-bg-hover)}
         .dt-group-create{display:flex;flex-direction:column;gap:8px;margin:10px 0;padding:10px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}.dt-group-list{display:flex;flex-direction:column;gap:12px}.dt-group-manage{display:flex;flex-direction:column;gap:6px}.dt-group-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.dt-group-title>span{color:var(--dsw-alias-label-tertiary);font-size:12px}.dt-group-title select{height:30px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:inherit;background:var(--dsw-alias-bg-base);padding:0 6px}.dt-group-title>button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-group-members{display:flex;flex-wrap:wrap;gap:6px}
         .dt-member-chip{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 8px 0 3px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:transparent;color:inherit;font-size:12px;cursor:pointer}.dt-member-chip>img{width:22px;height:22px;border-radius:50%;object-fit:cover}.dt-member-chip-off{opacity:.45}.dt-member-chip-off>span{text-decoration:line-through}.dt-member-chip-active{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}.dt-member-chip>button{color:inherit;background:transparent;border:0;cursor:pointer;padding:0 2px;font-size:11px}
-        .dt-regex-list{display:flex;flex-direction:column;gap:6px}.dt-regex-row{display:flex;align-items:center;gap:10px;min-height:36px;padding:2px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}.dt-regex-row.dt-regex-off{opacity:.5}.dt-regex-row>.dt-toggle{flex:1;min-width:0}.dt-regex-row>.dt-muted{font-family:monospace;font-size:11px;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-regex-row>button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}
+        .dt-regex-list{display:flex;flex-direction:column;gap:6px}.dt-regex-row{display:flex;align-items:center;gap:10px;min-height:36px;padding:2px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}.dt-regex-row.dt-regex-off{opacity:.5}.dt-regex-row>.dt-toggle{flex:1;min-width:0}.dt-regex-row>.dt-muted{font-family:monospace;font-size:11px;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-regex-row>button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-regex-row>button:disabled{opacity:.4;cursor:not-allowed}.dt-regex-item{display:flex;flex-direction:column;gap:4px}.dt-regex-editor-wrap{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:12px}
         .dt-field input[type=text],.dt-field input[type=password]{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 10px}.dt-upload:disabled{opacity:.5;cursor:not-allowed}
         .dt-backlink{display:flex;padding:2px 0}.dt-backlink>button{color:var(--dsw-alias-label-tertiary);background:transparent;border:0;cursor:pointer;font-size:12px;padding:4px 2px}.dt-backlink>button:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}
         .dt-member-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}.dt-member-row .dt-member-chip>button{display:none}.dt-script-glyph{font-weight:700;font-size:15px;line-height:1}.dt-sidebar-subheading{margin-top:10px}.dt-branch-btn{font-size:13px}
