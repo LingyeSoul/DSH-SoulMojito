@@ -6121,7 +6121,7 @@ var NovelStore = class _NovelStore {
       return { unitId };
     });
   }
-  /** Retires an unclaimed unit (§6.2); claimed units must finish or be stopped. */
+  /** Retires an unclaimed unit (§6.2); claimed units must finish, be released (releaseClaim) or be stopped. */
   async supersedeUnit(novelId, input) {
     if (typeof input.reason !== "string" || input.reason.trim() === "") throw new NovelConfigError({ message: "reason must be a non-empty string" });
     await this.mutate(novelId, async () => {
@@ -6184,6 +6184,43 @@ var NovelStore = class _NovelStore {
       };
       await this.publish(dir, current.revision, next, `claim-unit:${unit.unitId}:${attempt}`);
       return { unitId: unit.unitId, executionToken, attempt };
+    });
+  }
+  /**
+   * Releases a claimed unit back to prepared (§6.2): revokes the claim's
+   * execution token, increments the attempt and records the reason as the
+   * unit's lastError; the next claim mints a fresh token on the same unit id
+   * (0005 §6.2: retries reuse the unit id through a new execution token).
+   * Author-side counterpart of the §13 stop disposition for one unit — the
+   * recovery path when a claim's token was lost before the commit (a
+   * stale-token rejection leaves the unit latched in flight with no tool able
+   * to finish or retire it).
+   */
+  async releaseClaim(novelId, input) {
+    if (typeof input.reason !== "string" || input.reason.trim() === "") throw new NovelConfigError({ message: "reason must be a non-empty string" });
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId);
+      const unit = current.units.find((item) => item.unitId === input.unitId);
+      if (unit === void 0) throw new NovelPreconditionError({ rule: "unit-not-found", violations: [input.unitId] });
+      if (unit.state !== "claimed") throw new NovelPreconditionError({ rule: "unit-not-claimed", violations: [input.unitId] });
+      const attempt = unit.attempt + 1;
+      const next = {
+        ...current,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        units: current.units.map((item) => item.unitId === unit.unitId ? {
+          ...item,
+          state: "prepared",
+          attempt,
+          claimedRevision: null,
+          claimedRequirementSequence: null,
+          hostTurn: null,
+          executionTokenHash: null,
+          lastError: input.reason
+        } : item),
+        run: current.run.currentUnitId === unit.unitId ? { ...current.run, currentUnitId: null } : current.run
+      };
+      await this.publish(dir, current.revision, next, `release-claim:${unit.unitId}:${attempt}`);
+      return { unitId: unit.unitId, attempt };
     });
   }
   /**
@@ -8308,25 +8345,28 @@ var NovelDriver = class _NovelDriver {
     let briefSnapshot = snapshot2;
     if (work.kind === "write-unit" && work.chapterId !== null && work.sceneId !== null) {
       const claimedSibling = snapshot2.units.find((unit) => unit.chapterId === work.chapterId && unit.sceneId === work.sceneId && unit.state === "claimed");
-      if (claimedSibling !== void 0) return;
-      const scene = snapshot2.outline?.scenes.find((candidate) => candidate.sceneId === work.sceneId);
-      if (scene === void 0) {
-        this.logWarn("scene-missing", { novelId, sceneId: work.sceneId });
-        return;
-      }
-      try {
-        const prepared = await this.store.prepareUnit(novelId, {
-          chapterId: work.chapterId,
-          sceneId: scene.sceneId,
-          label: scene.goal.slice(0, 80),
-          goal: scene.goal,
-          continuationAnchor: anchorForScene(snapshot2, scene.sceneId)
-        });
-        unitId = prepared.unitId;
-        briefSnapshot = await this.store.getNovel(novelId) ?? snapshot2;
-      } catch (error) {
-        this.logWarn("prepare-unit-failed", { novelId, sceneId: work.sceneId, errorCode: errorCodeOf(error) });
-        return;
+      if (claimedSibling !== void 0) {
+        unitId = claimedSibling.unitId;
+      } else {
+        const scene = snapshot2.outline?.scenes.find((candidate) => candidate.sceneId === work.sceneId);
+        if (scene === void 0) {
+          this.logWarn("scene-missing", { novelId, sceneId: work.sceneId });
+          return;
+        }
+        try {
+          const prepared = await this.store.prepareUnit(novelId, {
+            chapterId: work.chapterId,
+            sceneId: scene.sceneId,
+            label: scene.goal.slice(0, 80),
+            goal: scene.goal,
+            continuationAnchor: anchorForScene(snapshot2, scene.sceneId)
+          });
+          unitId = prepared.unitId;
+          briefSnapshot = await this.store.getNovel(novelId) ?? snapshot2;
+        } catch (error) {
+          this.logWarn("prepare-unit-failed", { novelId, sceneId: work.sceneId, errorCode: errorCodeOf(error) });
+          return;
+        }
       }
     }
     const intent = await this.store.recordWorkIntent(novelId, {
@@ -8664,7 +8704,17 @@ function workInstruction(snapshot2, work, unitId) {
       return `Planning work (\xA76.3/\xA79.3): ${work.reason} Read the pending directives (novel_requirements_read) and the plan (novel_outline_read), then submit novel_outline_revise with the handled requirement results, or novel_requirement_block for directives conflicting with committed facts. The revise payload is an overlay across every layer: send only what changes \u2014 omitted layers (story, characters, scenes, foreshadowing, currentChapterId, chapters) are carried forward automatically, so do not page or re-echo the whole plan; a layer you send replaces wholesale, chapter entries upsert by chapterId (omitted keyEvents inherited), and removing a chapter requires its chapterId in droppedChapterIds. When advancing the current chapter, send the new chapter's scenes. End the turn afterwards.`;
     case "write-unit": {
       if ((snapshot2.config.writerMode ?? "inline") === "subagent") {
+        const claimed = unitId !== null && snapshot2.units.find((unit) => unit.unitId === unitId)?.state === "claimed";
+        if (claimed) {
+          return `Claimed writing unit ${unitId} (\xA76.2/\xA75.3, writerMode=subagent) is still in flight from an earlier turn: call novel_writer_delegate { unitId: '${unitId}' } again \u2014 it re-adopts the retained claim and re-dispatches the writer. If the delegation cannot be adopted (no writer delegation is registered \u2014 after a restart, or the \xA75.3 dispatch limit exhausted), call novel_unit_release { unitId: '${unitId}', reason: \u2026 } first and then novel_writer_delegate to start a fresh claim. Never write body text yourself in this mode. End the turn after the receipt or the release.`;
+        }
         return `Delegated writing unit ${unitId} (\xA76.2, writerMode=subagent): call novel_writer_delegate { unitId: '${unitId}' } directly \u2014 do NOT call novel_unit_claim first; the delegate tool claims the unit internally (a manual claim is only adopted when you pass its executionToken). The delegated writer subagent researches, writes and commits the prose itself: never write body text yourself in this mode. Check the returned receipt (commitId, effective characters, sceneCompletion \u2014 verified against the store, never model-reported) and end the turn immediately afterwards (\xA711). If the delegation fails, end the turn as well so the failure path can release the unit (\xA75.3).`;
+      }
+      {
+        const claimed = unitId !== null && snapshot2.units.find((unit) => unit.unitId === unitId)?.state === "claimed";
+        if (claimed) {
+          return `Claimed writing unit ${unitId} (\xA76.2) is still in flight from an earlier turn. If you still hold its execution token, write the scene prose and commit exactly once with novel_body_commit. If the token was lost or novel_body_commit rejected the unit as stale, do NOT retry the dead claim or guess a token: call novel_unit_release { unitId: '${unitId}', reason: \u2026 }, then re-claim with novel_unit_claim for a fresh token and write the scene under that claim. End the turn after committing or releasing (\xA711).`;
+        }
       }
       return `Writing unit ${unitId} (\xA76.2): claim it first with novel_unit_claim { unitId: '${unitId}', expectedOutlineRevision: '${outlineRevision}', expectedRequirementSequence: ${watermark} }, write the scene prose, then commit exactly once with novel_body_commit (plain-text paragraphs, the scene completion declaration and canon changes with paragraph sources). Paragraphs are pure narration: chapter/scene labels, headings, wrap-up notes ("\u6536\u675F", "\u5B8C\u7ED3") and next-unit previews never enter prose (\xA711). End the turn immediately after the commit (\xA711).`;
     }
@@ -16791,7 +16841,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.1".trim() : "";
-  const commit = true ? normalizeCommit("8629b65") : void 0;
+  const commit = true ? normalizeCommit("afa06db") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

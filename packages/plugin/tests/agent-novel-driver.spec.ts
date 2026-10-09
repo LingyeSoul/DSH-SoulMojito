@@ -332,7 +332,7 @@ describe('NovelDriver scheduling', () => {
     await driver.dispose()
   })
 
-  it('waits while the next scene has a claimed unit in flight: no duplicate prepare, no re-notice', async () => {
+  it('a claim surviving its turn end gets one resume notice per boundary: no duplicate prepare, no nag loop (2026-10-09 token-loss deadlock)', async () => {
     const { tavern, novels, novelId, revision } = await fixture()
     const agent = new FakeAgent(AGENT_ID)
     const { host } = harness(agent)
@@ -345,7 +345,11 @@ describe('NovelDriver scheduling', () => {
     const outlineRevision = (await novels.getNovel(novelId))!.outline!.outlineRevision
 
     // The author claims the unit, then its turn ends WITHOUT a commit (turn
-    // budget, interruption, ...). The claim legitimately survives the turn.
+    // budget, interruption, a stale-token rejection ...). The claim
+    // legitimately survives the turn (§12.1) — but its execution thread is
+    // gone, so the drive must now deliver a resume notice telling the author
+    // to either finish the claim or release it; silently waiting would
+    // deadlock a claim whose token was lost.
     await driver.handleSessionEvent({ id: SESSION_ID }, turnEnd(1))
     await vi.waitFor(async () => {
       if (agent.followups.length < 2) throw new Error('write-unit followup missing')
@@ -353,16 +357,25 @@ describe('NovelDriver scheduling', () => {
     const unitId = (await novels.getNovel(novelId))!.run.inFlightIntent!.unitId!
     const claim = await novels.claimUnit(novelId, { unitId, expectedOutlineRevision: outlineRevision, expectedRequirementSequence: 1, hostTurn: 2 })
 
-    // Regression: while the claim is open, a drive pass must neither prepare a
-    // duplicate unit for the same scene nor deliver another notice. (Before
-    // the fix this pass re-prepared the scene as a second unit and nagged the
-    // agent, who then hit unit-in-flight on every claim attempt.)
     await driver.handleSessionEvent({ id: SESSION_ID }, turnEnd(2))
+    await vi.waitFor(async () => {
+      if (agent.followups.length < 3) throw new Error('resume notice missing after the claimed turn ended')
+    })
+    const resume = textOf(noticeOf(agent, 2))
+    expect(resume).toContain(`Claimed writing unit ${unitId}`)
+    expect(resume).toContain('novel_unit_release')
+    expect(resume).toContain('novel_unit_claim')
+
+    // Regression guard (original 2026-09 fix): the resume pass must not
+    // prepare a duplicate unit for the same scene, and the intent machinery
+    // keeps it to one notice per turn boundary — no nag loop while the claim
+    // is pending within the same turn.
     await settle(120)
-    expect(agent.followups).toHaveLength(2)
     const mid = await novels.getNovel(novelId)
     expect(mid?.units).toHaveLength(1)
     expect(mid?.units[0]).toMatchObject({ unitId, state: 'claimed' })
+    expect((await novels.getNovel(novelId))?.run.inFlightIntent?.unitId).toBe(unitId)
+    expect(agent.followups).toHaveLength(3)
 
     // Once the claim commits, the drive unblocks on the next turn end.
     await novels.commitBody(novelId, {
@@ -374,9 +387,9 @@ describe('NovelDriver scheduling', () => {
     })
     await driver.handleSessionEvent({ id: SESSION_ID }, turnEnd(3))
     await vi.waitFor(async () => {
-      if (agent.followups.length < 3) throw new Error('expected the drive to unblock after the commit')
+      if (agent.followups.length < 4) throw new Error('expected the drive to unblock after the commit')
     })
-    expect(textOf(noticeOf(agent, 2))).toContain('novel_chapter_complete')
+    expect(textOf(noticeOf(agent, 3))).toContain('novel_chapter_complete')
     await driver.dispose()
   })
 
@@ -738,6 +751,25 @@ describe('NovelDriver writerMode notice branching (0007 §7/§8)', () => {
     expect(text).not.toContain('claim it first with novel_unit_claim')
     // The delegated mode never asks the author to commit prose itself.
     expect(text).not.toContain('commit exactly once with novel_body_commit')
+    await driver.dispose()
+  })
+
+  it('subagent mode: a claim surviving its turn end resumes through re-delegation with a release fallback', async () => {
+    const { novels, novelId, agent, driver } = await driveToWriteUnit({ writerMode: 'subagent' })
+    const outlineRevision = (await novels.getNovel(novelId))!.outline!.outlineRevision
+    const unitId = (await novels.getNovel(novelId))!.run.inFlightIntent!.unitId!
+    await novels.claimUnit(novelId, { unitId, expectedOutlineRevision: outlineRevision, expectedRequirementSequence: 1, hostTurn: 2 })
+    await driver.handleSessionEvent({ id: SESSION_ID }, turnEnd(2))
+    await vi.waitFor(async () => {
+      if (agent.followups.length < 3) throw new Error('resume notice missing')
+    })
+    const text = textOf(noticeOf(agent, 2))
+    expect(text).toContain(`Claimed writing unit ${unitId}`)
+    expect(text).toContain("novel_writer_delegate { unitId: 'unit-1' } again")
+    expect(text).toContain('re-adopts the retained claim')
+    expect(text).toContain('novel_unit_release')
+    // The delegated resume never asks the author to write prose itself.
+    expect(text).not.toContain('write the scene prose')
     await driver.dispose()
   })
 

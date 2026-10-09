@@ -207,6 +207,7 @@ describe('AgentNovel author tools', () => {
       'novel_outline_revise',
       'novel_requirement_block',
       'novel_unit_claim',
+      'novel_unit_release',
       'novel_unit_supersede',
       'novel_body_commit',
       'novel_writer_draft',
@@ -710,6 +711,87 @@ describe('AgentNovel author tools', () => {
       basis: 'duplicate retired, scenes committed',
     }, scopedExec)
     expect(typeof finished.totalCharacters).toBe('number')
+
+    // Restore the binding for the asset-snapshot tests.
+    await tavern.updateState((state) => ({
+      sessionBindings: { ...state.sessionBindings, novelist: { architecture: 'agent-novel', novelId, character: '', chatId: '' } },
+    }))
+  })
+
+  it('novel_unit_release recovers a token-lost claim: stale commit → release → fresh claim commits (2026-10-09 all-zero token incident)', async () => {
+    // Fresh novel mirroring the incident: unit-1 claimed, the execution token
+    // lost on the host→model channel (the model only ever saw a zero
+    // placeholder), the commit rejected stale and the claim latched in flight
+    // with no re-claim and no supersede possible.
+    const fresh = await novels.createNovel(tavern, novelConfig({
+      title: '令牌自救', characterNames: [], worldNames: [],
+      lengthBudget: { kind: 'unbounded' },
+    }))
+    await tavern.updateState((state) => ({
+      sessionBindings: { ...state.sessionBindings, novelist: { architecture: 'agent-novel', novelId: fresh.novelId, character: '', chatId: '' } },
+    }))
+    const scopedExec = { agent: { id: 'novelist' } }
+    const outlined = await novels.createOutline(fresh.novelId, {
+      expectedRevision: fresh.revision,
+      outline: {
+        story: { premise: 'p', theme: 't', mainConflict: 'c', endingDirection: 'e', taboos: [] },
+        characters: [],
+        chapters: [{
+          chapterId: 'ch-1', order: 1, title: '一', purpose: 'p', keyEvents: [], plannedCharacters: null,
+          entryCondition: 'x', exitCondition: 'y',
+        }],
+        currentChapterId: 'ch-1',
+        scenes: [{ sceneId: 'sc-1', order: 1, goal: 'g1', participants: [], timeLocation: 't1', causality: 'c1', conflict: 'f1', expectedChange: 'e1' }],
+        foreshadowing: [],
+      },
+      handledRequirements: [{ requirementId: 'req-1', result: 'applied', effectiveLocation: 'story.premise' }],
+    })
+    const prepared = await novels.prepareUnit(fresh.novelId, { chapterId: 'ch-1', sceneId: 'sc-1', label: 'l', goal: 'g1' })
+
+    // The tool-claimed unit carries a real token the model never echoes
+    // correctly — the stale rejection is the incident's exact signature.
+    const claim = await tools.get('novel_unit_claim')!.execute({
+      unitId: prepared.unitId, expectedOutlineRevision: outlined.outlineRevision, expectedRequirementSequence: 1,
+    }, scopedExec)
+    await expect(tools.get('novel_body_commit')!.execute({
+      unitId: prepared.unitId, executionToken: '0'.repeat(48), paragraphs: ['占位令牌的提交。'],
+      sceneCompletion: { completed: true, basis: 'b', outstandingGoals: [], nextAnchor: null },
+      canonChanges: [],
+    }, scopedExec)).rejects.toMatchObject({ code: 'NOVEL_STALE_UNIT' })
+
+    // Release: back to prepared with the reason on record.
+    const released = await tools.get('novel_unit_release')!.execute({
+      unitId: prepared.unitId, reason: 'execution token lost in transit (stale commit)',
+    }, scopedExec)
+    expect(released).toMatchObject({ unitId: prepared.unitId, attempt: 2, state: 'prepared' })
+    expectLossless(released)
+    let snapshot = await novels.getNovel(fresh.novelId)
+    expect(snapshot?.units.find((unit) => unit.unitId === prepared.unitId)).toMatchObject({
+      state: 'prepared',
+      executionTokenHash: null,
+      lastError: 'execution token lost in transit (stale commit)',
+    })
+
+    // The fresh claim mints a new token and the commit lands under it.
+    const reclaimed = await tools.get('novel_unit_claim')!.execute({
+      unitId: prepared.unitId, expectedOutlineRevision: outlined.outlineRevision, expectedRequirementSequence: 1,
+    }, scopedExec)
+    expect(reclaimed.executionToken).not.toBe(claim.executionToken)
+    const receipt = await tools.get('novel_body_commit')!.execute({
+      unitId: prepared.unitId, executionToken: reclaimed.executionToken, paragraphs: ['重领令牌后的提交。'],
+      sceneCompletion: { completed: true, basis: 'scene done', outstandingGoals: [], nextAnchor: null },
+      canonChanges: [],
+    }, scopedExec)
+    expect(receipt.duplicate).toBe(false)
+    snapshot = await novels.getNovel(fresh.novelId)
+    expect(snapshot?.units.find((unit) => unit.unitId === prepared.unitId)?.state).toBe('committed')
+
+    // Boundaries: committed units and unknown ids refuse; a delegated writer
+    // never releases (author-only backstop even without the host toolFilter).
+    await expect(tools.get('novel_unit_release')!.execute({ unitId: prepared.unitId, reason: 'x' }, scopedExec))
+      .rejects.toMatchObject({ code: 'NOVEL_PRECONDITION', rule: 'unit-not-claimed' })
+    await expect(tools.get('novel_unit_release')!.execute({ unitId: 'unit-404', reason: 'x' }, scopedExec))
+      .rejects.toMatchObject({ code: 'NOVEL_PRECONDITION', rule: 'unit-not-found' })
 
     // Restore the binding for the asset-snapshot tests.
     await tavern.updateState((state) => ({

@@ -722,6 +722,66 @@ describe('NovelStore 单元与提交（§6.2/§10.3/§10.4）', () => {
     expect(snapshot?.units).toHaveLength(2)
   }))
 
+  it('releaseClaim：令牌丢失的自救路径——claimed 回 prepared、attempt+1、旧令牌作废、可重领（§6.2，2026-10-09 unit-in-flight 死锁）', withStores(async (tavern, novels) => {
+    const { novelId, outlineRevision } = await startedNovel(tavern, novels)
+    const prepared = await novels.prepareUnit(novelId, { chapterId: 'ch-1', sceneId: 'sc-1', label: '开场', goal: '发现异象' })
+    const claim = await novels.claimUnit(novelId, { unitId: prepared.unitId, expectedOutlineRevision: outlineRevision, expectedRequirementSequence: 1, hostTurn: 1 })
+
+    // 事故形态：令牌在宿主→模型通道丢失（模型只拿到占位符），提交被判
+    // stale；死 claim 锁住 unit-in-flight，重领被拒——修复前无任何出路。
+    await expect(novels.commitBody(novelId, {
+      unitId: claim.unitId,
+      executionToken: '0'.repeat(48),
+      paragraphs: ['占位令牌提交。'],
+      sceneCompletion: { completed: true, basis: 'b', outstandingGoals: [], nextAnchor: null },
+      canonChanges: [],
+    })).rejects.toBeInstanceOf(NovelStaleUnitError)
+    await expect(novels.claimUnit(novelId, { unitId: prepared.unitId, expectedOutlineRevision: outlineRevision, expectedRequirementSequence: 1, hostTurn: 2 }))
+      .rejects.toMatchObject({ code: 'NOVEL_PRECONDITION', rule: 'unit-in-flight' })
+
+    // 释放：回 prepared、attempt+1、原因留痕、currentUnitId 清空。
+    const released = await novels.releaseClaim(novelId, { unitId: claim.unitId, reason: 'execution token lost in transit (stale commit)' })
+    expect(released).toEqual({ unitId: claim.unitId, attempt: 2 })
+    let snapshot = await novels.getNovel(novelId)
+    const unit = snapshot?.units.find((u) => u.unitId === claim.unitId)
+    expect(unit?.state).toBe('prepared')
+    expect(unit?.attempt).toBe(2)
+    expect(unit?.executionTokenHash).toBeNull()
+    expect(unit?.claimedRevision).toBeNull()
+    expect(unit?.lastError).toBe('execution token lost in transit (stale commit)')
+    expect(snapshot?.run.currentUnitId).toBeNull()
+
+    // 已撤销的旧令牌不能再提交；重领铸造新令牌后提交成功（同单元 ID）。
+    await expect(novels.commitBody(novelId, {
+      unitId: claim.unitId,
+      executionToken: claim.executionToken,
+      paragraphs: ['旧令牌提交。'],
+      sceneCompletion: { completed: true, basis: 'b', outstandingGoals: [], nextAnchor: null },
+      canonChanges: [],
+    })).rejects.toBeInstanceOf(NovelStaleUnitError)
+    const fresh = await novels.claimUnit(novelId, { unitId: prepared.unitId, expectedOutlineRevision: outlineRevision, expectedRequirementSequence: 1, hostTurn: 2 })
+    expect(fresh.attempt).toBe(3) // 处置 +1（对齐 stop 语义），重领再 +1（§6.2）
+    expect(fresh.executionToken).not.toBe(claim.executionToken)
+    await novels.commitBody(novelId, {
+      unitId: fresh.unitId,
+      executionToken: fresh.executionToken,
+      paragraphs: ['重领后提交。'],
+      sceneCompletion: { completed: true, basis: 'b', outstandingGoals: [], nextAnchor: null },
+      canonChanges: [],
+    })
+    snapshot = await novels.getNovel(novelId)
+    expect(snapshot?.units.find((u) => u.unitId === claim.unitId)?.state).toBe('committed')
+    expect(snapshot?.commits).toHaveLength(1)
+
+    // 边界：非 claimed 单元与未知 ID 拒绝；空 reason 是配置错误。
+    await expect(novels.releaseClaim(novelId, { unitId: claim.unitId, reason: 'x' }))
+      .rejects.toMatchObject({ code: 'NOVEL_PRECONDITION', rule: 'unit-not-claimed' })
+    await expect(novels.releaseClaim(novelId, { unitId: 'unit-404', reason: 'x' }))
+      .rejects.toMatchObject({ code: 'NOVEL_PRECONDITION', rule: 'unit-not-found' })
+    await expect(novels.releaseClaim(novelId, { unitId: claim.unitId, reason: ' ' }))
+      .rejects.toBeInstanceOf(NovelConfigError)
+  }))
+
   it('提交往返：令牌、计数、readBody 坐标、重复与令牌错误', withStores(async (tavern, novels, root) => {
     const { novelId, outlineRevision } = await startedNovel(tavern, novels)
     const prepared = await novels.prepareUnit(novelId, { chapterId: 'ch-1', sceneId: 'sc-1', label: '开场', goal: '发现异象' })

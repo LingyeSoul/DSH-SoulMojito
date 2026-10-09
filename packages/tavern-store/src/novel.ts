@@ -706,7 +706,7 @@ export class NovelStore {
     })
   }
 
-  /** Retires an unclaimed unit (§6.2); claimed units must finish or be stopped. */
+  /** Retires an unclaimed unit (§6.2); claimed units must finish, be released (releaseClaim) or be stopped. */
   async supersedeUnit(novelId: string, input: { unitId: string; reason: string }): Promise<void> {
     if (typeof input.reason !== 'string' || input.reason.trim() === '') throw new NovelConfigError({ message: 'reason must be a non-empty string' })
     await this.mutate(novelId, async () => {
@@ -779,6 +779,46 @@ export class NovelStore {
       }
       await this.publish(dir, current.revision, next, `claim-unit:${unit.unitId}:${attempt}`)
       return { unitId: unit.unitId, executionToken, attempt }
+    })
+  }
+
+  /**
+   * Releases a claimed unit back to prepared (§6.2): revokes the claim's
+   * execution token, increments the attempt and records the reason as the
+   * unit's lastError; the next claim mints a fresh token on the same unit id
+   * (0005 §6.2: retries reuse the unit id through a new execution token).
+   * Author-side counterpart of the §13 stop disposition for one unit — the
+   * recovery path when a claim's token was lost before the commit (a
+   * stale-token rejection leaves the unit latched in flight with no tool able
+   * to finish or retire it).
+   */
+  async releaseClaim(novelId: string, input: { unitId: string; reason: string }): Promise<{ unitId: string; attempt: number }> {
+    if (typeof input.reason !== 'string' || input.reason.trim() === '') throw new NovelConfigError({ message: 'reason must be a non-empty string' })
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId)
+      const unit = current.units.find((item) => item.unitId === input.unitId)
+      if (unit === undefined) throw new NovelPreconditionError({ rule: 'unit-not-found', violations: [input.unitId] })
+      if (unit.state !== 'claimed') throw new NovelPreconditionError({ rule: 'unit-not-claimed', violations: [input.unitId] })
+      const attempt = unit.attempt + 1
+      const next: NovelSnapshot = {
+        ...current,
+        updatedAt: new Date().toISOString(),
+        units: current.units.map((item) => item.unitId === unit.unitId
+          ? {
+              ...item,
+              state: 'prepared' as const,
+              attempt,
+              claimedRevision: null,
+              claimedRequirementSequence: null,
+              hostTurn: null,
+              executionTokenHash: null,
+              lastError: input.reason,
+            }
+          : item),
+        run: current.run.currentUnitId === unit.unitId ? { ...current.run, currentUnitId: null } : current.run,
+      }
+      await this.publish(dir, current.revision, next, `release-claim:${unit.unitId}:${attempt}`)
+      return { unitId: unit.unitId, attempt }
     })
   }
 

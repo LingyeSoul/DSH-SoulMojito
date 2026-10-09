@@ -366,34 +366,40 @@ export class NovelDriver {
     let unitId: string | null = null
     let briefSnapshot = snapshot
     if (work.kind === 'write-unit' && work.chapterId !== null && work.sceneId !== null) {
-      // A claimed unit for this scene is being written right now. Its commit —
-      // or its turn ending — re-arms the drive, so wait instead of preparing a
-      // duplicate unit or re-delivering the same brief (a claim legitimately
-      // survives its turn ending, §12.1; the nextWork scene check is
-      // commit-based and cannot see it). A merely prepared unit does not
-      // skip: the in-flight intent machinery may still owe it a delivery.
+      // A claimed unit for this scene survived its turn ending (§12.1: a
+      // claim legitimately outlives the turn). Silently waiting would
+      // deadlock when the claim's execution token was lost — the commit can
+      // never succeed and no re-claim is possible while the unit is latched.
+      // Instead the drive re-notifies every turn boundary: the author either
+      // finishes the claim, or releases it (novel_unit_release) so the next
+      // pass re-claims with a fresh token. The stall budget bounds the loop
+      // if neither happens. A merely prepared unit does not take this path:
+      // the in-flight intent machinery may still owe it a delivery.
       const claimedSibling = snapshot.units.find((unit) => unit.chapterId === work.chapterId && unit.sceneId === work.sceneId && unit.state === 'claimed')
-      if (claimedSibling !== undefined) return
-      const scene = snapshot.outline?.scenes.find((candidate) => candidate.sceneId === work.sceneId)
-      if (scene === undefined) {
-        this.logWarn('scene-missing', { novelId, sceneId: work.sceneId })
-        return
-      }
-      try {
-        // §6.3: the driver prepares the unit for the first unfinished scene;
-        // preparing the same scene is idempotent in the store.
-        const prepared = await this.store.prepareUnit(novelId, {
-          chapterId: work.chapterId,
-          sceneId: scene.sceneId,
-          label: scene.goal.slice(0, 80),
-          goal: scene.goal,
-          continuationAnchor: anchorForScene(snapshot, scene.sceneId),
-        })
-        unitId = prepared.unitId
-        briefSnapshot = (await this.store.getNovel(novelId)) ?? snapshot
-      } catch (error) {
-        this.logWarn('prepare-unit-failed', { novelId, sceneId: work.sceneId, errorCode: errorCodeOf(error) })
-        return
+      if (claimedSibling !== undefined) {
+        unitId = claimedSibling.unitId
+      } else {
+        const scene = snapshot.outline?.scenes.find((candidate) => candidate.sceneId === work.sceneId)
+        if (scene === undefined) {
+          this.logWarn('scene-missing', { novelId, sceneId: work.sceneId })
+          return
+        }
+        try {
+          // §6.3: the driver prepares the unit for the first unfinished scene;
+          // preparing the same scene is idempotent in the store.
+          const prepared = await this.store.prepareUnit(novelId, {
+            chapterId: work.chapterId,
+            sceneId: scene.sceneId,
+            label: scene.goal.slice(0, 80),
+            goal: scene.goal,
+            continuationAnchor: anchorForScene(snapshot, scene.sceneId),
+          })
+          unitId = prepared.unitId
+          briefSnapshot = (await this.store.getNovel(novelId)) ?? snapshot
+        } catch (error) {
+          this.logWarn('prepare-unit-failed', { novelId, sceneId: work.sceneId, errorCode: errorCodeOf(error) })
+          return
+        }
       }
     }
 
@@ -796,7 +802,17 @@ function workInstruction(snapshot: NovelSnapshot, work: NovelWork, unitId: strin
       // re-read after prepareUnit), so a mid-flight PATCH is honoured by the
       // next unit; legacy snapshots without the field read as inline.
       if ((snapshot.config.writerMode ?? 'inline') === 'subagent') {
+        const claimed = unitId !== null && snapshot.units.find((unit) => unit.unitId === unitId)?.state === 'claimed'
+        if (claimed) {
+          return `Claimed writing unit ${unitId} (§6.2/§5.3, writerMode=subagent) is still in flight from an earlier turn: call novel_writer_delegate { unitId: '${unitId}' } again — it re-adopts the retained claim and re-dispatches the writer. If the delegation cannot be adopted (no writer delegation is registered — after a restart, or the §5.3 dispatch limit exhausted), call novel_unit_release { unitId: '${unitId}', reason: … } first and then novel_writer_delegate to start a fresh claim. Never write body text yourself in this mode. End the turn after the receipt or the release.`
+        }
         return `Delegated writing unit ${unitId} (§6.2, writerMode=subagent): call novel_writer_delegate { unitId: '${unitId}' } directly — do NOT call novel_unit_claim first; the delegate tool claims the unit internally (a manual claim is only adopted when you pass its executionToken). The delegated writer subagent researches, writes and commits the prose itself: never write body text yourself in this mode. Check the returned receipt (commitId, effective characters, sceneCompletion — verified against the store, never model-reported) and end the turn immediately afterwards (§11). If the delegation fails, end the turn as well so the failure path can release the unit (§5.3).`
+      }
+      {
+        const claimed = unitId !== null && snapshot.units.find((unit) => unit.unitId === unitId)?.state === 'claimed'
+        if (claimed) {
+          return `Claimed writing unit ${unitId} (§6.2) is still in flight from an earlier turn. If you still hold its execution token, write the scene prose and commit exactly once with novel_body_commit. If the token was lost or novel_body_commit rejected the unit as stale, do NOT retry the dead claim or guess a token: call novel_unit_release { unitId: '${unitId}', reason: … }, then re-claim with novel_unit_claim for a fresh token and write the scene under that claim. End the turn after committing or releasing (§11).`
+        }
       }
       return `Writing unit ${unitId} (§6.2): claim it first with novel_unit_claim { unitId: '${unitId}', expectedOutlineRevision: '${outlineRevision}', expectedRequirementSequence: ${watermark} }, write the scene prose, then commit exactly once with novel_body_commit (plain-text paragraphs, the scene completion declaration and canon changes with paragraph sources). Paragraphs are pure narration: chapter/scene labels, headings, wrap-up notes ("收束", "完结") and next-unit previews never enter prose (§11). End the turn immediately after the commit (§11).`
     }
