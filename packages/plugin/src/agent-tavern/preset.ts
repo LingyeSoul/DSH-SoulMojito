@@ -8,11 +8,13 @@
  * - 内容型提示词（非 marker）：按 prompt_order 顺序、启用语义过滤后合成一个
  *   systemPrompt section（order -75，kernel 之后）；main / jailbreak 沿用角色卡
  *   system_prompt / post_history_instructions 覆盖（空串回落、支持 {{original}}）。
- * - 选集：优先 ST global dummy 集 100001（`openai.js`: strategy 'global',
- *   dummyId 100001；社区预设的单聊全量栈带在这一组），其次旧 dummy 100000，再回落
- *   首组——与 tavern-pipeline 同一语义。
- * - 启用语义：`prompt_order[].enabled` 为权威（`PromptManager.getPromptCollection`:
- *   allowedTrigger = entry.enabled）；仅当该组未给布尔值时回落 `prompt.enabled`。
+ * - 选集与启用语义：与 ST 生成路径（tavern-pipeline）共享同一实现——
+ *   resolvePromptOrder / entryEnabled 自 tavern-pipeline 导入（决策
+ *   2026-10-09-dedup-refactor）。选集优先 ST global dummy 集 100001（`openai.js`:
+ *   strategy 'global', dummyId 100001；社区预设的单聊全量栈带在这一组），其次旧
+ *   dummy 100000，再回落首组；启用时 `prompt_order[].enabled` 布尔为权威
+ *   （`PromptManager.getPromptCollection`: allowedTrigger = entry.enabled），仅当
+ *   该组未给布尔值时回落 `prompt.enabled`。
  *   `system_prompt` 只是「全局/预设提示词」的分类标记，不参与启用判定——社区
  *   预设常把写作风格、思考链与格式约束条目标成 system_prompt:false 且启用，若当
  *   禁用会整组丢失。
@@ -33,14 +35,10 @@
  * 默认预设（index.ts 的 ST 生成路径与 AgentTavern 装载共用同一份）。
  */
 
-import type { CharacterCardIR, PresetIR, PresetPrompt, PromptOrderSet } from '../../../tavern-format/src/index.js'
+import type { CharacterCardIR, PresetIR, PresetPrompt } from '../../../tavern-format/src/index.js'
+import { entryEnabled, GLOBAL_ORDER_DUMMY_ID, resolvePromptOrder } from '../../../tavern-pipeline/src/index.js'
 
 export const AGENT_PRESET_BLOCK_HEADER = 'Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):'
-
-/** ST global prompt order 的 dummy id（openai.js: strategy 'global', dummyId 100001）。 */
-const GLOBAL_ORDER_DUMMY_ID = 100001
-/** 旧常量/群聊残留 dummy：仅作 100001 缺失时的回落。 */
-const LEGACY_ORDER_DUMMY_ID = 100000
 
 export interface EffectivePresetPrompt {
   identifier: string
@@ -117,23 +115,21 @@ export function defaultPreset(): Record<string, unknown> {
 
 /* -------------------- 预设变更失效（跨 bundle 写穿） -------------------- */
 
+import { createGlobalListenerRegistry } from '../cross-bundle-events.js'
+
 export type AgentPresetChangedListener = () => void | Promise<void>
 
-const AGENT_PRESET_CHANGED_LISTENERS = Symbol.for('dsh-tavern:agent-preset-changed-listeners')
-
-function agentPresetChangedListeners(): Set<AgentPresetChangedListener> {
-  const holder = globalThis as Record<symbol, Set<AgentPresetChangedListener> | undefined>
-  return (holder[AGENT_PRESET_CHANGED_LISTENERS] ??= new Set())
-}
+// globalThis 锚定（同学科于 agent-novel/usage.ts）：emit 发生在 index.mjs /
+// card-workbench.mjs，监听在 agent.mjs——分离 bundle 各持一份模块级 Set 会互不
+// 可见，写穿必须共享同一注册表。key 逐字保留存量值。
+const agentPresetChanged = createGlobalListenerRegistry<AgentPresetChangedListener>('dsh-tavern:agent-preset-changed-listeners')
 
 /**
  * 注册预设变更回调（agent.ts 模块加载时调用：预设内容/激活选择/人设变化后
  * 重新装载各 AgentTavern 会话的投影缓存）。返回反注册函数。
  */
 export function onAgentPresetChanged(listener: AgentPresetChangedListener): () => void {
-  const listeners = agentPresetChangedListeners()
-  listeners.add(listener)
-  return () => { listeners.delete(listener) }
+  return agentPresetChanged.on(listener)
 }
 
 /**
@@ -141,32 +137,11 @@ export function onAgentPresetChanged(listener: AgentPresetChangedListener): () =
  * 预热）成功后触发缓存刷新。best-effort：落库已成功，任何回调失败都不允许反过来
  * 把成功的写变成错误响应，所以逐个静默吞掉。
  */
-export async function emitAgentPresetChanged(): Promise<void> {
-  for (const listener of [...agentPresetChangedListeners()]) {
-    try {
-      await listener()
-    } catch {
-      // 写穿失败只意味着下一次装载沿用旧缓存；装载路径自身会再读一次。
-    }
-  }
+export function emitAgentPresetChanged(): Promise<void> {
+  return agentPresetChanged.emit()
 }
 
 /* ------------------------------ 内部 ------------------------------ */
-
-function resolvePromptOrder(preset: PresetIR): Array<{ identifier: string; enabled?: unknown }> {
-  const set: PromptOrderSet | undefined =
-    preset.promptOrder.find((order) => Number(order.character_id) === GLOBAL_ORDER_DUMMY_ID)
-    ?? preset.promptOrder.find((order) => Number(order.character_id) === LEGACY_ORDER_DUMMY_ID)
-    ?? preset.promptOrder[0]
-  return Array.isArray(set?.order) ? set.order : []
-}
-
-/** 启用语义（文件头）：顺序表 slot.enabled 为权威，仅缺布尔值时回落 prompt.enabled。 */
-function entryEnabled(slot: { enabled?: unknown }, prompt: PresetPrompt): boolean {
-  if (typeof slot.enabled === 'boolean') return slot.enabled
-  const record = prompt as unknown as Record<string, unknown>
-  return record['enabled'] !== false
-}
 
 function promptContent(prompt: PresetPrompt): string {
   const content = (prompt as unknown as Record<string, unknown>)['content']

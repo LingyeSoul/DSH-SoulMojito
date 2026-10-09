@@ -33,6 +33,7 @@ import { parsePreset } from '../../tavern-format/src/index.js'
 import { TavernStore, type TavernSessionBinding, type TavernState } from '../../tavern-store/src/index.js'
 import { onAgentPresetChanged, renderAgentPresetBlock } from './agent-tavern/preset.js'
 import { dshHomePath } from './dsh-home.js'
+import { createLazyProjection } from './lazy-projection.js'
 import { createHostPromptExpander, hostPromptSafe, seededRandom } from './prompt-safety.js'
 
 /** 与 agent-tavern/agent.ts 的 DEFAULT_USER 同值：{{user}} 未设置人设时的回落。 */
@@ -79,10 +80,6 @@ function store(): Promise<TavernStore> {
  * 调用时注册。
  */
 export function mountPresetProjection(options: PresetMountOptions): PresetMount {
-  const projection = new Map<string, string>()
-  const started = new Set<string>()
-  /** 装载票号：与 AgentTavern 同款 last-write-wins，防在途过期装载覆盖新写入。 */
-  const tickets = new Map<string, number>()
   /**
    * 缓存冻结记录（与 agent-tavern/agent.ts 的 presetFreeze 同一纪律，决策
    * 2026-10-09-agent-preset-cache-stability）：绑定首次装载捕获时钟与 RNG
@@ -90,27 +87,14 @@ export function mountPresetProjection(options: PresetMountOptions): PresetMount 
    * {{random}} 不随重载换值烧掉 system 头前缀缓存。
    */
   const freeze = new Map<string, { frozenAt: number; seed: number }>()
-  let preheatDone = false
-
-  const textOf = (agentId: string | undefined): string => {
-    if (typeof agentId !== 'string' || agentId.trim() === '') return ''
-    if (!started.has(agentId)) {
-      started.add(agentId)
-      void load(agentId)
-    }
-    return projection.get(agentId) ?? ''
-  }
-
-  async function load(agentId: string): Promise<void> {
-    const ticket = (tickets.get(agentId) ?? 0) + 1
-    tickets.set(agentId, ticket)
-    try {
+  const projection = createLazyProjection<string>({
+    getState: async () => (await store()).getState(),
+    load: async (agentId, settle) => {
       const db = await store()
       const state = await db.getState()
-      const settle = (text: string) => {
-        if (tickets.get(agentId) === ticket) projection.set(agentId, text)
-      }
       const binding = state.sessionBindings[agentId]
+      // 门控失败一律写空串（区别于 AgentTavern 通道的留旧值）：开关关掉后
+      // section 必须立即消失，不能沿用旧投影。
       if (state[options.stateFlag] !== true || !binding || binding.architecture !== options.architecture) {
         settle('')
         return
@@ -132,43 +116,15 @@ export function mountPresetProjection(options: PresetMountOptions): PresetMount 
         { now: () => new Date(record.frozenAt), rng: seededRandom(record.seed) },
       )
       settle(hostPromptSafe(block, expand))
-    } catch {
-      // store 缺失/预设损坏不得阻止宿主 agent 启动：保持空投影，下一次写穿重试。
-    }
-  }
-
-  async function preheat(): Promise<void> {
-    if (preheatDone) return
-    preheatDone = true
-    try {
-      const state = await (await store()).getState()
-      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-        if (binding.architecture !== options.architecture) continue
-        started.add(agentId)
-        await load(agentId)
-      }
-    } catch {
-      // best-effort 预热：失败只意味着回到懒装载路径。
-    }
-  }
-
-  onAgentPresetChanged(async () => {
-    try {
-      const state = await (await store()).getState()
-      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-        if (binding.architecture !== options.architecture) continue
-        started.add(agentId)
-        await load(agentId)
-      }
-    } catch {
-      // best-effort 写穿：失败只意味着下一次装配沿用旧缓存。
-    }
+    },
   })
 
+  onAgentPresetChanged(() => projection.refreshWhere((binding) => binding.architecture === options.architecture))
+
   return {
-    section: { name: options.sectionName, order: -75, text: (assembly) => textOf(assembly?.agent?.id) },
-    textOf,
-    preheat,
+    section: { name: options.sectionName, order: -75, text: (assembly) => projection.valueOf(assembly?.agent?.id) ?? '' },
+    textOf: (agentId) => projection.valueOf(agentId) ?? '',
+    preheat: () => projection.preheatWhere((binding) => binding.architecture === options.architecture),
   }
 }
 

@@ -4,7 +4,8 @@
  * 对齐 ST `openai.js`/`PromptManager.js` 的装配行为：
  * - prompt_order 遍历：优先 global dummy 集（ST `openai.js` 的
  *   `promptOrder: { strategy: 'global', dummyId: 100001 }`；100000 为旧常量/其他
- *   残留，仅作回落），enabled 条目按序装配；
+ *   残留，仅作回落），启用条目按序装配（顺序表 enabled 布尔权威、缺布尔回落
+ *   条目自身 enabled，ST PromptManager 语义——见 entryEnabled）；
  * - marker 展开：worldInfoBefore/After、charDescription/charPersonality/scenario、
  *   personaDescription、dialogueExamples、chatHistory；
  * - 角色卡 system_prompt / post_history_instructions 分别覆盖 main / jailbreak
@@ -68,9 +69,32 @@ export interface AssembleResult {
 /** ST global prompt order 的 dummy id（`openai.js`: strategy 'global', dummyId 100001）。
  *  单聊（含 AgentTavern 的单角色会话）实际读取的就是这一组；社区预设普遍只带
  *  100001 组、或把自定义全量栈放在 100001、旧默认序放在 100000。 */
-const GLOBAL_ORDER_DUMMY_ID = 100001
+export const GLOBAL_ORDER_DUMMY_ID = 100001
 /** 旧常量/群聊残留的 dummy id：仅作 100001 缺失时的回落。 */
-const LEGACY_ORDER_DUMMY_ID = 100000
+export const LEGACY_ORDER_DUMMY_ID = 100000
+
+/* ---------- prompt_order 选集与启用语义（与 plugin 侧共享，决策 2026-10-09-dedup-refactor） ---------- */
+
+/** 解析 prompt_order 选集：优先 global dummy 100001，回落旧 dummy 100000，再回落首组。
+ *  order 字段非数组（手改数据的畸形形状）防御性返回空集。 */
+export function resolvePromptOrder(preset: PresetIR): Array<{ identifier: string; enabled?: unknown }> {
+  const set: PromptOrderSet | undefined =
+    preset.promptOrder.find((o) => Number(o.character_id) === GLOBAL_ORDER_DUMMY_ID)
+    ?? preset.promptOrder.find((o) => Number(o.character_id) === LEGACY_ORDER_DUMMY_ID)
+    ?? preset.promptOrder[0]
+  return Array.isArray(set?.order) ? set.order : []
+}
+
+/** 启用语义（ST `PromptManager.getPromptCollection`: allowedTrigger = entry.enabled）：
+ *  顺序表 slot.enabled 布尔为权威；仅当该组未给布尔值时回落 `prompt.enabled !== false`。
+ *  `system_prompt` 只是「全局/预设提示词」的分类标记，不参与启用判定——社区预设
+ *  常把写作风格、思考链与格式约束条目标成 system_prompt:false 且启用，若当禁用
+ *  会整组丢失。 */
+export function entryEnabled(slot: { enabled?: unknown }, prompt: PresetPrompt): boolean {
+  if (typeof slot.enabled === 'boolean') return slot.enabled
+  const record = prompt as unknown as Record<string, unknown>
+  return record['enabled'] !== false
+}
 
 export function assemblePrompt(input: AssembleInput, deps: AssembleDeps): AssembleResult {
   const { expand, countTokens } = deps
@@ -94,8 +118,9 @@ export function assemblePrompt(input: AssembleInput, deps: AssembleDeps): Assemb
     const prompt = byId.get(slot.identifier)
     if (prompt === undefined) continue
     // ST 只装配 prompt_order 中启用的条目（PromptManager.getPromptCollection:
-    // allowedTrigger = entry.enabled && shouldTrigger(...)）；禁用条目直接跳过。
-    if (slot.enabled === false) continue
+    // allowedTrigger = entry.enabled）；启用语义见 entryEnabled（顺序表权威、
+    // 缺布尔回落条目自身 enabled）。
+    if (!entryEnabled(slot, prompt)) continue
     // chatHistory 之后的位置（jailbreak/UJB 等）进 postHistory
     const target = historyInjected ? postHistory : preHistory
 
@@ -198,14 +223,6 @@ export function assemblePrompt(input: AssembleInput, deps: AssembleDeps): Assemb
 }
 
 /* ------------------------------ 内部 ------------------------------ */
-
-function resolvePromptOrder(preset: PresetIR): Array<{ identifier: string; enabled: boolean }> {
-  const set: PromptOrderSet | undefined =
-    preset.promptOrder.find((o) => Number(o.character_id) === GLOBAL_ORDER_DUMMY_ID)
-    ?? preset.promptOrder.find((o) => Number(o.character_id) === LEGACY_ORDER_DUMMY_ID)
-    ?? preset.promptOrder[0]
-  return set?.order ?? []
-}
 
 function wrapAll(wiFormat: string, texts: string[], expand: (t: string) => string): string {
   return texts

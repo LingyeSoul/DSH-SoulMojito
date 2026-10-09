@@ -1620,16 +1620,16 @@ function decodeCharx(bytes) {
   const assetPaths = Object.keys(files).filter((p) => p !== "card.json");
   return { card, assetPaths };
 }
-function decodeCharxAsset(bytes, path4) {
+function decodeCharxAsset(bytes, path5) {
   let files;
   try {
     files = unzipSync(bytes);
   } catch (cause) {
     throw new CharxFormatError(`not a valid zip: ${String(cause)}`);
   }
-  const asset = files[path4];
+  const asset = files[path5];
   if (asset === void 0)
-    throw new CharxFormatError(`CHARX has no asset '${path4}'`);
+    throw new CharxFormatError(`CHARX has no asset '${path5}'`);
   return asset;
 }
 function encodeCharx(ir, assets) {
@@ -2354,9 +2354,21 @@ var TavernStore = class _TavernStore {
   async writeAtomic(file, bytes) {
     const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
     await fs.writeFile(tmp, bytes);
-    await fs.rename(tmp, file);
+    await renameWithWindowsRetry(tmp, file);
   }
 };
+async function renameWithWindowsRetry(from, to, attempts = 5) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (cause) {
+      const code = cause.code;
+      if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
+      await new Promise((resolve2) => setTimeout(resolve2, 10 * attempt));
+    }
+  }
+}
 function normalizeTavernSessionBinding(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
   const candidate = value;
@@ -3160,11 +3172,11 @@ var NovelStorageCorruptionError = class extends Error {
   novelId;
   path;
   detail;
-  constructor({ novelId, path: path4, detail }) {
-    super(`Novel storage corruption in '${novelId}' at ${path4}: ${detail}`);
+  constructor({ novelId, path: path5, detail }) {
+    super(`Novel storage corruption in '${novelId}' at ${path5}: ${detail}`);
     this.name = "NovelStorageCorruptionError";
     this.novelId = novelId;
-    this.path = path4;
+    this.path = path5;
     this.detail = detail;
   }
 };
@@ -4836,6 +4848,58 @@ async function readDirectories2(root) {
   }
 }
 
+// packages/tavern-store/src/scripts.ts
+import { promises as fs4 } from "node:fs";
+import * as path4 from "node:path";
+function normalizeScriptProgress(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const { scriptName, chunkIndex, alignedAt, lastNote } = value;
+  if (typeof scriptName !== "string" || scriptName.trim() === "") return void 0;
+  if (!Number.isInteger(chunkIndex) || chunkIndex < 0) return void 0;
+  if (typeof alignedAt !== "string" || alignedAt === "") return void 0;
+  const note = typeof lastNote === "string" && lastNote.trim() !== "" ? lastNote.trim().slice(0, 200) : void 0;
+  return { scriptName, chunkIndex, alignedAt, ...note !== void 0 ? { lastNote: note } : {} };
+}
+function boundScriptOf(card) {
+  const extensions = card?.data?.extensions;
+  if (typeof extensions !== "object" || extensions === null) return void 0;
+  const agentTavern = extensions.agentTavern;
+  if (typeof agentTavern !== "object" || agentTavern === null || Array.isArray(agentTavern)) return void 0;
+  const scriptId = agentTavern.scriptId;
+  if (typeof scriptId !== "string" || scriptId.trim() === "") return void 0;
+  return scriptId;
+}
+async function getScript(dir, name2) {
+  return readScriptRecord(path4.join(dir, "scripts", safeScriptName(name2), "script.json"));
+}
+async function readScriptRecord(file) {
+  let bytes;
+  try {
+    bytes = await fs4.readFile(file);
+  } catch (cause) {
+    if (cause.code === "ENOENT") return void 0;
+    throw cause;
+  }
+  const parsed = JSON.parse(bytes.toString("utf8"));
+  if (typeof parsed.name !== "string" || parsed.name === "") throw new Error(`corrupted script record: ${file}`);
+  if (parsed.source === null || typeof parsed.source !== "object" || parsed.source.format !== "txt" && parsed.source.format !== "md" && parsed.source.format !== "epub" || typeof parsed.source.importedAt !== "string") {
+    throw new Error(`corrupted script record: ${file}`);
+  }
+  if (!Array.isArray(parsed.chunks)) throw new Error(`corrupted script record: ${file}`);
+  return {
+    name: parsed.name,
+    source: { format: parsed.source.format, importedAt: parsed.source.importedAt },
+    chunks: parsed.chunks.map((chunk, index) => ({
+      index: typeof chunk?.index === "number" ? chunk.index : index,
+      text: typeof chunk?.text === "string" ? chunk.text : ""
+    }))
+  };
+}
+function safeScriptName(name2) {
+  const cleaned = name2.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim();
+  return cleaned.length > 0 ? cleaned.slice(0, 120) : "_unnamed";
+}
+
 // packages/tavern-macros/src/random.ts
 function hash32(input) {
   let h = 2166136261;
@@ -5405,6 +5469,22 @@ function hostPromptSafe(text, expand = (value) => value) {
   return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
 }
 
+// packages/plugin/src/tool-args.ts
+function stringArg(value) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error("string argument is required");
+  return value;
+}
+function boundedStringArg(value, maxLength) {
+  return stringArg(value).slice(0, maxLength);
+}
+function clampInt(value, min, max2, fallback) {
+  if (!Number.isInteger(value)) return fallback;
+  return Math.max(min, Math.min(max2, value));
+}
+function limitText(value, max2) {
+  return typeof value === "string" ? value.slice(0, max2) : "";
+}
+
 // packages/plugin/src/agent-tavern/deduce.ts
 var DEDUCE_PROVIDER = "spawn";
 var DEDUCE_MAX_ROLES = 5;
@@ -5588,10 +5668,36 @@ function parsePreset(obj) {
 
 // packages/plugin/src/dsh-home.ts
 import { homedir } from "node:os";
-import { join as join4, resolve } from "node:path";
+import { join as join5, resolve } from "node:path";
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
-  return join4(resolve(configured || join4(homedir(), ".dsh")), ...segments);
+  return join5(resolve(configured || join5(homedir(), ".dsh")), ...segments);
+}
+
+// packages/plugin/src/cross-bundle-events.ts
+function createGlobalListenerRegistry(key) {
+  const symbol = Symbol.for(key);
+  function listeners() {
+    const holder = globalThis;
+    return holder[symbol] ??= /* @__PURE__ */ new Set();
+  }
+  return {
+    on(listener) {
+      const set = listeners();
+      set.add(listener);
+      return () => {
+        set.delete(listener);
+      };
+    },
+    async emit(...args) {
+      for (const listener of [...listeners()]) {
+        try {
+          await listener(...args);
+        } catch {
+        }
+      }
+    }
+  };
 }
 
 // packages/plugin/src/guides.ts
@@ -5617,23 +5723,26 @@ function formatGuidesBlock(guides) {
     ...[...normalized].sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((guide) => `- ${guide.text}`)
   ].join("\n");
 }
-var GUIDES_CHANGED_LISTENERS = Symbol.for("dsh-tavern:guides-changed-listeners");
-function guidesChangedListeners() {
-  const holder = globalThis;
-  return holder[GUIDES_CHANGED_LISTENERS] ??= /* @__PURE__ */ new Set();
-}
+var guidesChanged = createGlobalListenerRegistry("dsh-tavern:guides-changed-listeners");
 function onGuidesChanged(listener) {
-  const listeners = guidesChangedListeners();
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return guidesChanged.on(listener);
+}
+
+// packages/tavern-pipeline/src/pipeline.ts
+var GLOBAL_ORDER_DUMMY_ID = 100001;
+var LEGACY_ORDER_DUMMY_ID = 1e5;
+function resolvePromptOrder(preset) {
+  const set = preset.promptOrder.find((o) => Number(o.character_id) === GLOBAL_ORDER_DUMMY_ID) ?? preset.promptOrder.find((o) => Number(o.character_id) === LEGACY_ORDER_DUMMY_ID) ?? preset.promptOrder[0];
+  return Array.isArray(set?.order) ? set.order : [];
+}
+function entryEnabled(slot, prompt) {
+  if (typeof slot.enabled === "boolean") return slot.enabled;
+  const record = prompt;
+  return record["enabled"] !== false;
 }
 
 // packages/plugin/src/agent-tavern/preset.ts
 var AGENT_PRESET_BLOCK_HEADER = "Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):";
-var GLOBAL_ORDER_DUMMY_ID = 100001;
-var LEGACY_ORDER_DUMMY_ID = 1e5;
 function effectiveAgentPresetPrompts(preset, card) {
   const order = resolvePromptOrder(preset);
   const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
@@ -5687,26 +5796,9 @@ function defaultPreset() {
     prompt_order: [{ character_id: GLOBAL_ORDER_DUMMY_ID, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
   };
 }
-var AGENT_PRESET_CHANGED_LISTENERS = Symbol.for("dsh-tavern:agent-preset-changed-listeners");
-function agentPresetChangedListeners() {
-  const holder = globalThis;
-  return holder[AGENT_PRESET_CHANGED_LISTENERS] ??= /* @__PURE__ */ new Set();
-}
+var agentPresetChanged = createGlobalListenerRegistry("dsh-tavern:agent-preset-changed-listeners");
 function onAgentPresetChanged(listener) {
-  const listeners = agentPresetChangedListeners();
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-function resolvePromptOrder(preset) {
-  const set = preset.promptOrder.find((order) => Number(order.character_id) === GLOBAL_ORDER_DUMMY_ID) ?? preset.promptOrder.find((order) => Number(order.character_id) === LEGACY_ORDER_DUMMY_ID) ?? preset.promptOrder[0];
-  return Array.isArray(set?.order) ? set.order : [];
-}
-function entryEnabled(slot, prompt) {
-  if (typeof slot.enabled === "boolean") return slot.enabled;
-  const record = prompt;
-  return record["enabled"] !== false;
+  return agentPresetChanged.on(listener);
 }
 function promptContent(prompt) {
   const content = prompt["content"];
@@ -5747,6 +5839,52 @@ var JOINER2 = "\n" + MESSAGE_BOUNDARY2;
 
 // packages/plugin/src/agent-tavern/projector.ts
 var mvuAuditTail = Promise.resolve();
+
+// packages/plugin/src/lazy-projection.ts
+function createLazyProjection(options) {
+  const cache = /* @__PURE__ */ new Map();
+  const started = /* @__PURE__ */ new Set();
+  const tickets = /* @__PURE__ */ new Map();
+  let preheatDone = false;
+  async function load(agentId) {
+    const ticket = (tickets.get(agentId) ?? 0) + 1;
+    tickets.set(agentId, ticket);
+    const settle = (value) => {
+      if (tickets.get(agentId) === ticket) cache.set(agentId, value);
+    };
+    try {
+      await options.load(agentId, settle);
+    } catch {
+    }
+  }
+  async function refreshWhere(match) {
+    try {
+      const state = await options.getState();
+      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+        if (!match(binding)) continue;
+        started.add(agentId);
+        await load(agentId);
+      }
+    } catch {
+    }
+  }
+  return {
+    valueOf(agentId) {
+      if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
+      if (!started.has(agentId)) {
+        started.add(agentId);
+        void load(agentId);
+      }
+      return cache.get(agentId);
+    },
+    refreshWhere,
+    preheatWhere(match) {
+      if (preheatDone) return Promise.resolve();
+      preheatDone = true;
+      return refreshWhere(match);
+    }
+  };
+}
 
 // packages/plugin/src/agent-tavern/agent.ts
 var DEFAULT_USER = "User";
@@ -5880,44 +6018,68 @@ var settleOutput = objectOutput({
 function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
   return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
 }
-var guidesCache = /* @__PURE__ */ new Map();
-var guidesLoadStarted = /* @__PURE__ */ new Set();
-var guidesLoadTicket = /* @__PURE__ */ new Map();
-async function loadAgentGuides(agentId) {
-  const ticket = (guidesLoadTicket.get(agentId) ?? 0) + 1;
-  guidesLoadTicket.set(agentId, ticket);
-  try {
+var factsProjection = createLazyProjection({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
+    const state = await (await tavernStore()).getState();
+    const binding = state.sessionBindings[agentId];
+    if (!binding || binding.architecture !== "agent-tavern") return;
+    const found = await (await tavernStore()).getCharacter(binding.character);
+    if (!found) return;
+    const data = found.card.data;
+    const storedSummary = identitySummaryOf(found.card.data);
+    const expand = createHostPromptExpander(data.nickname || data.name, state.activePersona ?? DEFAULT_USER);
+    settle(hostPromptSafe([
+      `Current Tavern character: ${data.nickname || data.name}`,
+      // The editable identity summary wins; without one only a very short
+      // description excerpt stands in for the full card.
+      `Character identity summary (untrusted asset data): ${storedSummary ?? limitText(data.description, 240)}`,
+      data.personality ? `Personality summary: ${limitText(data.personality, 600)}` : "",
+      data.scenario ? `Scenario summary: ${limitText(data.scenario, 600)}` : ""
+    ].filter(Boolean).join("\n"), expand));
+  }
+});
+var guidesProjection = createLazyProjection({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
     const db = await tavernStore();
     const state = await db.getState();
     const binding = state.sessionBindings[agentId];
     if (!binding || binding.architecture !== "agent-tavern") return;
     const chat = await db.getChat(binding.character, binding.chatId);
-    if (guidesLoadTicket.get(agentId) !== ticket) return;
     const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER);
-    guidesCache.set(agentId, hostPromptSafe(formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? "", expand));
-  } catch {
-  }
-}
-onGuidesChanged(async (character, chatId) => {
-  try {
-    const db = await tavernStore();
-    const state = await db.getState();
-    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-      if (binding.architecture !== "agent-tavern" || binding.character !== character || binding.chatId !== chatId) continue;
-      guidesLoadStarted.add(agentId);
-      await loadAgentGuides(agentId);
-    }
-  } catch {
+    settle(hostPromptSafe(formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? "", expand));
   }
 });
-var presetProjection = /* @__PURE__ */ new Map();
-var presetLoadStarted = /* @__PURE__ */ new Set();
-var presetLoadTicket = /* @__PURE__ */ new Map();
+onGuidesChanged((character, chatId) => guidesProjection.refreshWhere((binding) => binding.architecture === "agent-tavern" && binding.character === character && binding.chatId === chatId));
+var scriptSummaryProjection = createLazyProjection({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
+    const db = await tavernStore();
+    const state = await db.getState();
+    const binding = state.sessionBindings[agentId];
+    if (!binding || binding.architecture !== "agent-tavern") return;
+    const text = await scriptSummaryForChat(db, binding.character, binding.chatId);
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER);
+    settle(hostPromptSafe(text, expand));
+  }
+});
+async function scriptSummaryForChat(db, character, chatId) {
+  const found = await db.getCharacter(character);
+  const scriptName = boundScriptOf(found?.card);
+  if (scriptName === void 0) return "";
+  const script = await getScript(dshHomePath("tavern"), scriptName);
+  if (script === void 0 || script.chunks.length === 0) return "";
+  const snapshot = await db.getChatSnapshot(character, chatId);
+  if (!snapshot) return "";
+  const progress = normalizeScriptProgress(snapshot.chat.header.chat_metadata?.scriptProgress);
+  const chunkIndex = progress !== void 0 && progress.scriptName === scriptName ? Math.min(progress.chunkIndex, script.chunks.length - 1) : 0;
+  return `Bound script: ${scriptName}, progress ${chunkIndex + 1}/${script.chunks.length}; call tavern_script_read for the current segment, tavern_script_advance when the scene has covered it`;
+}
 var presetFreeze = /* @__PURE__ */ new Map();
-async function loadAgentPreset(agentId) {
-  const ticket = (presetLoadTicket.get(agentId) ?? 0) + 1;
-  presetLoadTicket.set(agentId, ticket);
-  try {
+var presetProjection = createLazyProjection({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
     const db = await tavernStore();
     const state = await db.getState();
     const binding = state.sessionBindings[agentId];
@@ -5926,7 +6088,6 @@ async function loadAgentPreset(agentId) {
     const activePreset = state.activePreset ? await db.getPreset(state.activePreset) : void 0;
     const preset = parsePreset(activePreset ?? defaultPreset());
     const block = renderAgentPresetBlock(preset, character?.card);
-    if (presetLoadTicket.get(agentId) !== ticket) return;
     const freeze = presetFreeze.get(agentId) ?? { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
     presetFreeze.set(agentId, freeze);
     const expand = createHostPromptExpander(
@@ -5935,25 +6096,13 @@ async function loadAgentPreset(agentId) {
       { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) }
     );
     const temperature = presetTemperature(preset);
-    presetProjection.set(agentId, {
+    settle({
       text: block === void 0 ? "" : hostPromptSafe(block, expand),
       ...temperature === void 0 ? {} : { temperature }
     });
-  } catch {
-  }
-}
-onAgentPresetChanged(async () => {
-  try {
-    const db = await tavernStore();
-    const state = await db.getState();
-    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-      if (binding.architecture !== "agent-tavern") continue;
-      presetLoadStarted.add(agentId);
-      await loadAgentPreset(agentId);
-    }
-  } catch {
   }
 });
+onAgentPresetChanged(() => presetProjection.refreshWhere((binding) => binding.architecture === "agent-tavern"));
 function identitySummaryOf(data) {
   const agentTavern = data.extensions?.agentTavern;
   const summary = agentTavern?.identitySummary;
@@ -6071,9 +6220,6 @@ var WRITER_BODY_TAIL_LIMIT = 1600;
 var WRITER_FORESHADOWING_MAX = 12;
 var WRITER_CANON_MAX = 12;
 var WRITER_TRUNCATION_MARKER = "\u2026[truncated]";
-function limitText(value, max2) {
-  return typeof value === "string" ? value.slice(0, max2) : "";
-}
 function tokenizeQuery(value) {
   return [...new Set(value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])];
 }
@@ -6619,28 +6765,12 @@ function store() {
   return storePromise ??= TavernStore.open(dshHomePath("tavern"));
 }
 function mountPresetProjection(options) {
-  const projection = /* @__PURE__ */ new Map();
-  const started = /* @__PURE__ */ new Set();
-  const tickets = /* @__PURE__ */ new Map();
   const freeze = /* @__PURE__ */ new Map();
-  let preheatDone = false;
-  const textOf2 = (agentId) => {
-    if (typeof agentId !== "string" || agentId.trim() === "") return "";
-    if (!started.has(agentId)) {
-      started.add(agentId);
-      void load(agentId);
-    }
-    return projection.get(agentId) ?? "";
-  };
-  async function load(agentId) {
-    const ticket = (tickets.get(agentId) ?? 0) + 1;
-    tickets.set(agentId, ticket);
-    try {
+  const projection = createLazyProjection({
+    getState: async () => (await store()).getState(),
+    load: async (agentId, settle) => {
       const db = await store();
       const state = await db.getState();
-      const settle = (text) => {
-        if (tickets.get(agentId) === ticket) projection.set(agentId, text);
-      };
       const binding = state.sessionBindings[agentId];
       if (state[options.stateFlag] !== true || !binding || binding.architecture !== options.architecture) {
         settle("");
@@ -6668,37 +6798,13 @@ function mountPresetProjection(options) {
         { now: () => new Date(record.frozenAt), rng: seededRandom(record.seed) }
       );
       settle(hostPromptSafe(block, expand));
-    } catch {
-    }
-  }
-  async function preheat() {
-    if (preheatDone) return;
-    preheatDone = true;
-    try {
-      const state = await (await store()).getState();
-      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-        if (binding.architecture !== options.architecture) continue;
-        started.add(agentId);
-        await load(agentId);
-      }
-    } catch {
-    }
-  }
-  onAgentPresetChanged(async () => {
-    try {
-      const state = await (await store()).getState();
-      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-        if (binding.architecture !== options.architecture) continue;
-        started.add(agentId);
-        await load(agentId);
-      }
-    } catch {
     }
   });
+  onAgentPresetChanged(() => projection.refreshWhere((binding) => binding.architecture === options.architecture));
   return {
-    section: { name: options.sectionName, order: -75, text: (assembly) => textOf2(assembly?.agent?.id) },
-    textOf: textOf2,
-    preheat
+    section: { name: options.sectionName, order: -75, text: (assembly) => projection.valueOf(assembly?.agent?.id) ?? "" },
+    textOf: (agentId) => projection.valueOf(agentId) ?? "",
+    preheat: () => projection.preheatWhere((binding) => binding.architecture === options.architecture)
   };
 }
 function charNameOf(options, binding) {
@@ -7981,17 +8087,6 @@ function pageCursor(value) {
 function nonNegativeInt(value) {
   if (!Number.isInteger(value) || value < 0) throw new Error("expected a non-negative integer");
   return value;
-}
-function stringArg(value) {
-  if (typeof value !== "string" || value.trim() === "") throw new Error("string argument is required");
-  return value;
-}
-function boundedStringArg(value, maxLength) {
-  return stringArg(value).slice(0, maxLength);
-}
-function clampInt(value, min, max2, fallback) {
-  if (!Number.isInteger(value)) return fallback;
-  return Math.max(min, Math.min(max2, value));
 }
 function excerptAround(text, tokens, maxChars) {
   if (text.length <= maxChars) return text;

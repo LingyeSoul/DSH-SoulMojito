@@ -7,12 +7,16 @@
  * 「填入输入框」，用户可修改后发送）。
  *
  * Guides 读取遵循提案 0009 的存储形状
- * `chat.header.chat_metadata.guides: Array<{id,text,createdAt}>`；注入块
- * 格式在本模块内自带（与正文注入同格式），不依赖 guides.ts 实现。
+ * `chat.header.chat_metadata.guides: Array<{id,text,createdAt}>`；注入块首行
+ * 标注复用 guides.ts 的 GUIDES_BLOCK_HEADER 常量防漂移（决策
+ * 2026-10-09-dedup-refactor），但排序与形状容错在本模块内自带：CandidateGuide
+ * 的 createdAt 可选，guides.ts 的 normalizeGuides 会丢弃无 createdAt 的条目，
+ * 行为差异刻意保留。
  */
 
 import { ChatRevisionConflictError, type ChatSnapshot, type TavernModelSelection } from '../../tavern-store/src/index.js'
 import type { ChatLogIR } from '../../tavern-format/src/index.js'
+import { GUIDES_BLOCK_HEADER } from './guides.js'
 import { optionalFeedback } from './rewrite.js'
 
 const CANDIDATE_HISTORY_WINDOW = 10
@@ -87,7 +91,7 @@ function formatGuidesBlock(guides: CandidateGuide[]): string | undefined {
     .slice()
     .sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? ''))
     .map((guide) => `- ${guide.text}`)
-  return ['Conversation guides (persistent user directives; apply to every reply):', ...lines].join('\n')
+  return [GUIDES_BLOCK_HEADER, ...lines].join('\n')
 }
 
 /**

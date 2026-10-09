@@ -2354,9 +2354,21 @@ var TavernStore = class _TavernStore {
   async writeAtomic(file, bytes) {
     const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
     await fs.writeFile(tmp, bytes);
-    await fs.rename(tmp, file);
+    await renameWithWindowsRetry(tmp, file);
   }
 };
+async function renameWithWindowsRetry(from, to, attempts = 5) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (cause) {
+      const code = cause.code;
+      if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
+      await new Promise((resolve2) => setTimeout(resolve2, 10 * attempt));
+    }
+  }
+}
 function normalizeTavernSessionBinding(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
   const candidate = value;
@@ -3984,6 +3996,32 @@ function dshHomePath(...segments) {
   return join5(resolve(configured || join5(homedir(), ".dsh")), ...segments);
 }
 
+// packages/plugin/src/cross-bundle-events.ts
+function createGlobalListenerRegistry(key) {
+  const symbol = Symbol.for(key);
+  function listeners() {
+    const holder = globalThis;
+    return holder[symbol] ??= /* @__PURE__ */ new Set();
+  }
+  return {
+    on(listener) {
+      const set = listeners();
+      set.add(listener);
+      return () => {
+        set.delete(listener);
+      };
+    },
+    async emit(...args) {
+      for (const listener of [...listeners()]) {
+        try {
+          await listener(...args);
+        } catch {
+        }
+      }
+    }
+  };
+}
+
 // packages/plugin/src/guides.ts
 var GUIDES_BLOCK_HEADER = "Conversation guides (persistent user directives; apply to every reply):";
 function normalizeGuides(value) {
@@ -4007,23 +4045,26 @@ function formatGuidesBlock(guides) {
     ...[...normalized].sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((guide) => `- ${guide.text}`)
   ].join("\n");
 }
-var GUIDES_CHANGED_LISTENERS = Symbol.for("dsh-tavern:guides-changed-listeners");
-function guidesChangedListeners() {
-  const holder = globalThis;
-  return holder[GUIDES_CHANGED_LISTENERS] ??= /* @__PURE__ */ new Set();
-}
+var guidesChanged = createGlobalListenerRegistry("dsh-tavern:guides-changed-listeners");
 function onGuidesChanged(listener) {
-  const listeners = guidesChangedListeners();
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return guidesChanged.on(listener);
+}
+
+// packages/tavern-pipeline/src/pipeline.ts
+var GLOBAL_ORDER_DUMMY_ID = 100001;
+var LEGACY_ORDER_DUMMY_ID = 1e5;
+function resolvePromptOrder(preset) {
+  const set = preset.promptOrder.find((o) => Number(o.character_id) === GLOBAL_ORDER_DUMMY_ID) ?? preset.promptOrder.find((o) => Number(o.character_id) === LEGACY_ORDER_DUMMY_ID) ?? preset.promptOrder[0];
+  return Array.isArray(set?.order) ? set.order : [];
+}
+function entryEnabled(slot, prompt) {
+  if (typeof slot.enabled === "boolean") return slot.enabled;
+  const record = prompt;
+  return record["enabled"] !== false;
 }
 
 // packages/plugin/src/agent-tavern/preset.ts
 var AGENT_PRESET_BLOCK_HEADER = "Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):";
-var GLOBAL_ORDER_DUMMY_ID = 100001;
-var LEGACY_ORDER_DUMMY_ID = 1e5;
 function effectiveAgentPresetPrompts(preset, card) {
   const order = resolvePromptOrder(preset);
   const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
@@ -4077,26 +4118,9 @@ function defaultPreset() {
     prompt_order: [{ character_id: GLOBAL_ORDER_DUMMY_ID, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
   };
 }
-var AGENT_PRESET_CHANGED_LISTENERS = Symbol.for("dsh-tavern:agent-preset-changed-listeners");
-function agentPresetChangedListeners() {
-  const holder = globalThis;
-  return holder[AGENT_PRESET_CHANGED_LISTENERS] ??= /* @__PURE__ */ new Set();
-}
+var agentPresetChanged = createGlobalListenerRegistry("dsh-tavern:agent-preset-changed-listeners");
 function onAgentPresetChanged(listener) {
-  const listeners = agentPresetChangedListeners();
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-function resolvePromptOrder(preset) {
-  const set = preset.promptOrder.find((order) => Number(order.character_id) === GLOBAL_ORDER_DUMMY_ID) ?? preset.promptOrder.find((order) => Number(order.character_id) === LEGACY_ORDER_DUMMY_ID) ?? preset.promptOrder[0];
-  return Array.isArray(set?.order) ? set.order : [];
-}
-function entryEnabled(slot, prompt) {
-  if (typeof slot.enabled === "boolean") return slot.enabled;
-  const record = prompt;
-  return record["enabled"] !== false;
+  return agentPresetChanged.on(listener);
 }
 function promptContent(prompt) {
   const content = prompt["content"];
@@ -4898,6 +4922,68 @@ function hostPromptSafe(text, expand = (value) => value) {
   return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
 }
 
+// packages/plugin/src/tool-args.ts
+function stringArg(value) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error("string argument is required");
+  return value;
+}
+function boundedStringArg(value, maxLength) {
+  return stringArg(value).slice(0, maxLength);
+}
+function clampInt(value, min, max2, fallback) {
+  if (!Number.isInteger(value)) return fallback;
+  return Math.max(min, Math.min(max2, value));
+}
+function limitText(value, max2) {
+  return typeof value === "string" ? value.slice(0, max2) : "";
+}
+
+// packages/plugin/src/lazy-projection.ts
+function createLazyProjection(options) {
+  const cache = /* @__PURE__ */ new Map();
+  const started = /* @__PURE__ */ new Set();
+  const tickets = /* @__PURE__ */ new Map();
+  let preheatDone = false;
+  async function load(agentId) {
+    const ticket = (tickets.get(agentId) ?? 0) + 1;
+    tickets.set(agentId, ticket);
+    const settle = (value) => {
+      if (tickets.get(agentId) === ticket) cache.set(agentId, value);
+    };
+    try {
+      await options.load(agentId, settle);
+    } catch {
+    }
+  }
+  async function refreshWhere(match) {
+    try {
+      const state = await options.getState();
+      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+        if (!match(binding)) continue;
+        started.add(agentId);
+        await load(agentId);
+      }
+    } catch {
+    }
+  }
+  return {
+    valueOf(agentId) {
+      if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
+      if (!started.has(agentId)) {
+        started.add(agentId);
+        void load(agentId);
+      }
+      return cache.get(agentId);
+    },
+    refreshWhere,
+    preheatWhere(match) {
+      if (preheatDone) return Promise.resolve();
+      preheatDone = true;
+      return refreshWhere(match);
+    }
+  };
+}
+
 // packages/plugin/src/agent-tavern/agent.ts
 var name = "dsh-tavern/agent";
 var inject = ["systemPrompt", "tools"];
@@ -4920,7 +5006,6 @@ var KERNEL = [
   "",
   "Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge \u2014 the card details and world-info entries behind it are not in your context, so its proper nouns are NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search before replying."
 ].join("\n");
-var facts = /* @__PURE__ */ new Map();
 var tavernStorePromise;
 var memoryStorePromise;
 var variableStorePromise;
@@ -5727,17 +5812,9 @@ async function bindingFor(exec) {
   }
   return { agentId, character: binding.character, chatId: binding.chatId };
 }
-var factsLoadStarted = /* @__PURE__ */ new Set();
-function agentFactsText(agentId) {
-  if (typeof agentId !== "string" || agentId.trim() === "") return "";
-  if (!factsLoadStarted.has(agentId)) {
-    factsLoadStarted.add(agentId);
-    void loadAgentFacts(agentId);
-  }
-  return facts.get(agentId) ?? "";
-}
-async function loadAgentFacts(agentId) {
-  try {
+var factsProjection = createLazyProjection({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
     const state = await (await tavernStore()).getState();
     const binding = state.sessionBindings[agentId];
     if (!binding || binding.architecture !== "agent-tavern") return;
@@ -5746,7 +5823,7 @@ async function loadAgentFacts(agentId) {
     const data = found.card.data;
     const storedSummary = identitySummaryOf(found.card.data);
     const expand = createHostPromptExpander(data.nickname || data.name, state.activePersona ?? DEFAULT_USER);
-    facts.set(agentId, hostPromptSafe([
+    settle(hostPromptSafe([
       `Current Tavern character: ${data.nickname || data.name}`,
       // The editable identity summary wins; without one only a very short
       // description excerpt stands in for the full card.
@@ -5754,72 +5831,41 @@ async function loadAgentFacts(agentId) {
       data.personality ? `Personality summary: ${limitText(data.personality, 600)}` : "",
       data.scenario ? `Scenario summary: ${limitText(data.scenario, 600)}` : ""
     ].filter(Boolean).join("\n"), expand));
-  } catch {
   }
+});
+function agentFactsText(agentId) {
+  return factsProjection.valueOf(agentId) ?? "";
 }
-var guidesCache = /* @__PURE__ */ new Map();
-var guidesLoadStarted = /* @__PURE__ */ new Set();
-var guidesLoadTicket = /* @__PURE__ */ new Map();
-function agentGuidesText(agentId) {
-  if (typeof agentId !== "string" || agentId.trim() === "") return "";
-  if (!guidesLoadStarted.has(agentId)) {
-    guidesLoadStarted.add(agentId);
-    void loadAgentGuides(agentId);
-  }
-  return guidesCache.get(agentId) ?? "";
-}
-async function loadAgentGuides(agentId) {
-  const ticket = (guidesLoadTicket.get(agentId) ?? 0) + 1;
-  guidesLoadTicket.set(agentId, ticket);
-  try {
+var guidesProjection = createLazyProjection({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
     const db = await tavernStore();
     const state = await db.getState();
     const binding = state.sessionBindings[agentId];
     if (!binding || binding.architecture !== "agent-tavern") return;
     const chat = await db.getChat(binding.character, binding.chatId);
-    if (guidesLoadTicket.get(agentId) !== ticket) return;
     const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER);
-    guidesCache.set(agentId, hostPromptSafe(formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? "", expand));
-  } catch {
-  }
-}
-onGuidesChanged(async (character, chatId) => {
-  try {
-    const db = await tavernStore();
-    const state = await db.getState();
-    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-      if (binding.architecture !== "agent-tavern" || binding.character !== character || binding.chatId !== chatId) continue;
-      guidesLoadStarted.add(agentId);
-      await loadAgentGuides(agentId);
-    }
-  } catch {
+    settle(hostPromptSafe(formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? "", expand));
   }
 });
-var scriptSummaryCache = /* @__PURE__ */ new Map();
-var scriptSummaryLoadStarted = /* @__PURE__ */ new Set();
-var scriptSummaryLoadTicket = /* @__PURE__ */ new Map();
-function agentScriptText(agentId) {
-  if (typeof agentId !== "string" || agentId.trim() === "") return "";
-  if (!scriptSummaryLoadStarted.has(agentId)) {
-    scriptSummaryLoadStarted.add(agentId);
-    void loadAgentScriptSummary(agentId);
-  }
-  return scriptSummaryCache.get(agentId) ?? "";
+function agentGuidesText(agentId) {
+  return guidesProjection.valueOf(agentId) ?? "";
 }
-async function loadAgentScriptSummary(agentId) {
-  const ticket = (scriptSummaryLoadTicket.get(agentId) ?? 0) + 1;
-  scriptSummaryLoadTicket.set(agentId, ticket);
-  try {
+onGuidesChanged((character, chatId) => guidesProjection.refreshWhere((binding) => binding.architecture === "agent-tavern" && binding.character === character && binding.chatId === chatId));
+var scriptSummaryProjection = createLazyProjection({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
     const db = await tavernStore();
     const state = await db.getState();
     const binding = state.sessionBindings[agentId];
     if (!binding || binding.architecture !== "agent-tavern") return;
     const text = await scriptSummaryForChat(db, binding.character, binding.chatId);
-    if (scriptSummaryLoadTicket.get(agentId) !== ticket) return;
     const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER);
-    scriptSummaryCache.set(agentId, hostPromptSafe(text, expand));
-  } catch {
+    settle(hostPromptSafe(text, expand));
   }
+});
+function agentScriptText(agentId) {
+  return scriptSummaryProjection.valueOf(agentId) ?? "";
 }
 async function scriptSummaryForChat(db, character, chatId) {
   const found = await db.getCharacter(character);
@@ -5834,41 +5880,12 @@ async function scriptSummaryForChat(db, character, chatId) {
   return `Bound script: ${scriptName}, progress ${chunkIndex + 1}/${script.chunks.length}; call tavern_script_read for the current segment, tavern_script_advance when the scene has covered it`;
 }
 async function refreshAgentScriptSummaries(character, chatId) {
-  try {
-    const db = await tavernStore();
-    const state = await db.getState();
-    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-      if (binding.architecture !== "agent-tavern" || binding.character !== character || binding.chatId !== chatId) continue;
-      scriptSummaryLoadStarted.add(agentId);
-      await loadAgentScriptSummary(agentId);
-    }
-  } catch {
-  }
+  await scriptSummaryProjection.refreshWhere((binding) => binding.architecture === "agent-tavern" && binding.character === character && binding.chatId === chatId);
 }
-var presetProjection = /* @__PURE__ */ new Map();
-var presetLoadStarted = /* @__PURE__ */ new Set();
-var presetLoadTicket = /* @__PURE__ */ new Map();
 var presetFreeze = /* @__PURE__ */ new Map();
-function agentPresetText(agentId) {
-  if (typeof agentId !== "string" || agentId.trim() === "") return "";
-  if (!presetLoadStarted.has(agentId)) {
-    presetLoadStarted.add(agentId);
-    void loadAgentPreset(agentId);
-  }
-  return presetProjection.get(agentId)?.text ?? "";
-}
-function agentPresetTemperatureOf(agentId) {
-  if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
-  if (!presetLoadStarted.has(agentId)) {
-    presetLoadStarted.add(agentId);
-    void loadAgentPreset(agentId);
-  }
-  return presetProjection.get(agentId)?.temperature;
-}
-async function loadAgentPreset(agentId) {
-  const ticket = (presetLoadTicket.get(agentId) ?? 0) + 1;
-  presetLoadTicket.set(agentId, ticket);
-  try {
+var presetProjection = createLazyProjection({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
     const db = await tavernStore();
     const state = await db.getState();
     const binding = state.sessionBindings[agentId];
@@ -5877,7 +5894,6 @@ async function loadAgentPreset(agentId) {
     const activePreset = state.activePreset ? await db.getPreset(state.activePreset) : void 0;
     const preset = parsePreset(activePreset ?? defaultPreset());
     const block = renderAgentPresetBlock(preset, character?.card);
-    if (presetLoadTicket.get(agentId) !== ticket) return;
     const freeze = presetFreeze.get(agentId) ?? { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
     presetFreeze.set(agentId, freeze);
     const expand = createHostPromptExpander(
@@ -5886,38 +5902,21 @@ async function loadAgentPreset(agentId) {
       { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) }
     );
     const temperature = presetTemperature(preset);
-    presetProjection.set(agentId, {
+    settle({
       text: block === void 0 ? "" : hostPromptSafe(block, expand),
       ...temperature === void 0 ? {} : { temperature }
     });
-  } catch {
-  }
-}
-onAgentPresetChanged(async () => {
-  try {
-    const db = await tavernStore();
-    const state = await db.getState();
-    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-      if (binding.architecture !== "agent-tavern") continue;
-      presetLoadStarted.add(agentId);
-      await loadAgentPreset(agentId);
-    }
-  } catch {
   }
 });
-var presetPreheatDone = false;
-async function preheatAgentPresetProjections() {
-  if (presetPreheatDone) return;
-  presetPreheatDone = true;
-  try {
-    const state = await (await tavernStore()).getState();
-    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-      if (binding.architecture !== "agent-tavern") continue;
-      presetLoadStarted.add(agentId);
-      await loadAgentPreset(agentId);
-    }
-  } catch {
-  }
+function agentPresetText(agentId) {
+  return presetProjection.valueOf(agentId)?.text ?? "";
+}
+function agentPresetTemperatureOf(agentId) {
+  return presetProjection.valueOf(agentId)?.temperature;
+}
+onAgentPresetChanged(() => presetProjection.refreshWhere((binding) => binding.architecture === "agent-tavern"));
+function preheatAgentPresetProjections() {
+  return presetProjection.preheatWhere((binding) => binding.architecture === "agent-tavern");
 }
 function identitySummaryOf(data) {
   const agentTavern = data.extensions?.agentTavern;
@@ -5933,17 +5932,6 @@ function memoryStore() {
 function variableStore() {
   return variableStorePromise ??= VariableStore.open(dshHomePath("tavern"));
 }
-function stringArg(value) {
-  if (typeof value !== "string" || value.trim() === "") throw new Error("string argument is required");
-  return value;
-}
-function boundedStringArg(value, maxLength) {
-  return stringArg(value).slice(0, maxLength);
-}
-function clampInt(value, min, max2, fallback) {
-  if (!Number.isInteger(value)) return fallback;
-  return Math.max(min, Math.min(max2, value));
-}
 function clampScore(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return void 0;
   return Math.max(0, Math.min(1, value));
@@ -5952,9 +5940,6 @@ function optionalExpiry(value) {
   if (typeof value !== "string") return void 0;
   const trimmed = value.trim();
   return trimmed === "" ? void 0 : trimmed;
-}
-function limitText(value, max2) {
-  return typeof value === "string" ? value.slice(0, max2) : "";
 }
 function approximateTokens(value) {
   return Math.max(1, Math.ceil(value.length / 4));

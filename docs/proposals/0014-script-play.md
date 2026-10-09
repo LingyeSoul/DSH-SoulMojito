@@ -22,7 +22,7 @@
 | 剧本库 | `tavern-store` 新目录 `scripts/`：导入素材 → 分块（复用/抽取 outline 的分块算法）→ 存块索引与原文 |
 | 绑定 | 卡片 `extensions.agentTavern.scriptId`；一张卡同时最多绑一个剧本（flizzywine 语义一对一） |
 | 位置追踪 | 聊天级状态 `chat_metadata.scriptProgress: { chunkIndex, alignedAt }`；推进判定由生成链路写 |
-| ST 链路注入 | `runGeneration` 装配时按进度取当前±1 块，作为世界书式条目注入（预算受限）；对齐信号=本轮正文是否覆盖关键事件（P1 用启发式：用户前进/显式「推进」，P2 再评估 LLM 判定） |
+| ST 链路注入 | `runGeneration` 装配时按进度注入**当前块全文 + 下一块预览**（2026-10-09 修正记录：上一块由对话历史覆盖、预算受限下不注入，见 `decisions/2026-10-09-script-injection-window.md`），作为世界书式条目注入（预算受限）；对齐信号=本轮正文是否覆盖关键事件（P1 用启发式：用户前进/显式「推进」，P2 再评估 LLM 判定） |
 | AgentTavern 注入 | 工具 `tavern_script_read(chunkIndex?)` + facts 式进度摘要；对齐推进由 agent 显式调用 `tavern_script_advance` 记录 |
 | 进度面板 | 右侧剧本卡：进度条 + 当前片段预览（只读） |
 | 偏离语义 | 剧本块是**参考不是约束**（提示词措辞对齐 flizzywine「玩家仍可偏离原文行动」）；偏离不推进位置，直到正文覆盖关键事件 |

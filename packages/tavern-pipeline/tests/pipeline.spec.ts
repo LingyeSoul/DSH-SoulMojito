@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { assemblePrompt, type AssembleInput, type LlmMessage } from '../src/index.js'
-import { decodeCharacterCard, parsePreset, type CharacterCardIR, type PresetIR } from '@dsh-tavern/format'
+import { decodeCharacterCard, parsePreset, type CharacterCardIR, type PresetIR, type PromptOrderSet } from '@dsh-tavern/format'
 
 const fixturesDir = fileURLToPath(new URL('../../tavern-format/tests/fixtures', import.meta.url))
 const preset: PresetIR = parsePreset(JSON.parse(readFileSync(`${fixturesDir}/preset-Default.json`, 'utf8')))
@@ -167,5 +167,22 @@ describe('prompt_order 选集与启用语义（ST openai.js: global dummy 100001
     const text = result.messages.map((m) => m.content).join('\n')
     expect(text).toContain('LEGACY SET TEXT.')
     expect(text).not.toContain('GLOBAL SET TEXT.')
+  })
+
+  it('顺序表缺 enabled 布尔时回落条目自身 enabled（ST PromptManager 语义，决策 2026-10-09-dedup-refactor）', () => {
+    const selfDisabled = parsePreset({
+      prompts: [
+        { name: 'Global', identifier: 'globalOnly', role: 'system', content: 'GLOBAL SET TEXT.', system_prompt: true },
+        { name: 'SelfDisabled', identifier: 'selfDisabled', role: 'system', content: 'SELF DISABLED TEXT.', system_prompt: true, enabled: false },
+      ],
+      prompt_order: [
+        // 手改数据的畸形形状：slot 缺 enabled 布尔 → 回落条目自身 enabled
+        { character_id: 100001, order: [{ identifier: 'globalOnly' }, { identifier: 'selfDisabled' }] as PromptOrderSet['order'] },
+      ],
+    })
+    const result = assemblePrompt(baseInput({ preset: selfDisabled }), deps)
+    const text = result.messages.map((m) => m.content).join('\n')
+    expect(text).toContain('GLOBAL SET TEXT.')
+    expect(text).not.toContain('SELF DISABLED TEXT.')
   })
 })

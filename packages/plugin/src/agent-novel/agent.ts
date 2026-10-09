@@ -25,6 +25,7 @@ import {
   type WritingUnit,
 } from '../../../tavern-store/src/index.js'
 import { hostPromptSafe } from '../prompt-safety.js'
+import { boundedStringArg, clampInt, stringArg } from '../tool-args.js'
 import {
   DEDUCE_MAX_ROLES,
   DEDUCE_MAX_ROUNDS,
@@ -1478,22 +1479,10 @@ function nonNegativeInt(value: unknown): number {
   return value as number
 }
 
-function stringArg(value: unknown): string {
-  if (typeof value !== 'string' || value.trim() === '') throw new Error('string argument is required')
-  return value
-}
-
-function boundedStringArg(value: unknown, maxLength: number): string {
-  return stringArg(value).slice(0, maxLength)
-}
-
-function clampInt(value: unknown, min: number, max: number, fallback: number): number {
-  if (!Number.isInteger(value)) return fallback
-  return Math.max(min, Math.min(max, value as number))
-}
-
 // limitText / tokenizeQuery / matchesAllTokens 以及 character/lore 的解析匹配核心
-// 已搬家到 ./writer.js（0007 Task B），本模块 import 使用，行为逐字等价。
+// 已搬家到 ./writer.js（0007 Task B），本模块 import 使用，行为逐字等价；limitText
+// 的最终落点现为 ../tool-args.js（经 writer.js re-export，决策 2026-10-09-dedup-refactor）。
+// stringArg / boundedStringArg / clampInt 同决策统一于 ../tool-args.js。
 
 function excerptAround(text: string, tokens: string[], maxChars: number): string {
   if (text.length <= maxChars) return text

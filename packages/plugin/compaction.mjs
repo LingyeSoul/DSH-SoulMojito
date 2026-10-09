@@ -2410,9 +2410,21 @@ var TavernStore = class _TavernStore {
   async writeAtomic(file, bytes) {
     const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
     await fs.writeFile(tmp, bytes);
-    await fs.rename(tmp, file);
+    await renameWithWindowsRetry(tmp, file);
   }
 };
+async function renameWithWindowsRetry(from, to, attempts = 5) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (cause) {
+      const code = cause.code;
+      if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
+      await new Promise((resolve2) => setTimeout(resolve2, 10 * attempt));
+    }
+  }
+}
 function normalizeTavernSessionBinding(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
   const candidate = value;

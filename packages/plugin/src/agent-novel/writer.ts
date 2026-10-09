@@ -22,6 +22,7 @@ import type {
 import { identitySummaryOf } from '../agent-tavern/agent.js'
 import { allParticipantsOf, narrativeStage, unitTargetRange } from './outline.js'
 import { recordWriterRunUsage } from './usage.js'
+import { limitText } from '../tool-args.js'
 import type {
   Foreshadowing,
   NovelSnapshot,
@@ -92,9 +93,9 @@ export const WRITER_TRUNCATION_MARKER = '…[truncated]'
 /* ---------------------------- moved pure helpers ---------------------------- */
 /* 从 agent.ts 搬入的匹配纯函数（行为逐字等价）：agent.ts 反向 import 使用。 */
 
-export function limitText(value: string | undefined, max: number): string {
-  return typeof value === 'string' ? value.slice(0, max) : ''
-}
+// limitText 统一于 ../tool-args.js（决策 2026-10-09-dedup-refactor）：此处 re-export
+// 维持 agent.ts 的既有 import 面，本模块内部使用同一定义。
+export { limitText }
 
 export function tokenizeQuery(value: string): string[] {
   return [...new Set(value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])]

@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { promises as fsPromises } from 'node:fs'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -42,6 +43,24 @@ describe('TavernStore', () => {
     expect(JSON.parse(Buffer.from(exported).toString('utf8')).data.name).toBe('Test Char')
     expect(await store.deleteCharacter('Test Char')).toBe(true)
     expect(await store.listCharacters()).toEqual([])
+  }))
+
+  it('writeAtomic 对 Windows 瞬态 rename 占用（EPERM）做有界退避重试', withStore(async (store) => {
+    // 背景：getState 的 readFile 与 updateState 的 rename 不互斥，Windows 上
+    // rename 落到被打开的 state.json 上抛 EPERM（tavern-command 预热用例的
+    // 间歇红）。此处确定性模拟：首次 rename 抛 EPERM，重试应成功且状态落盘。
+    const rename = vi.spyOn(fsPromises, 'rename').mockImplementationOnce(async () => {
+      const error = new Error('operation not permitted') as NodeJS.ErrnoException
+      error.code = 'EPERM'
+      throw error
+    })
+    try {
+      await store.patchState({ activeCharacter: 'Retry Char' })
+      expect(rename).toHaveBeenCalledTimes(2)
+      expect((await store.getState()).activeCharacter).toBe('Retry Char')
+    } finally {
+      rename.mockRestore()
+    }
   }))
 
   it('变更水位：资产写入推进、无写入稳定、聊天写入不参与', withStore(async (store) => {

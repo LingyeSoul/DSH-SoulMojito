@@ -77,17 +77,14 @@ export function formatGuidesBlock(guides: unknown): string | undefined {
 
 /* ---------------- AgentTavern 缓存刷新（写穿回调） ---------------- */
 
+import { createGlobalListenerRegistry } from './cross-bundle-events.js'
+
 type GuidesChangedListener = (character: string, chatId: string) => void | Promise<void>
 
 // globalThis 锚定（同学科于 agent-novel/usage.ts 与 agent-tavern/preset.ts）：
 // emit 发生在 index.mjs 的 guides 路由，监听在 agent.mjs——分离 bundle 各持
-// 一份模块级 Set 会互不可见，写穿必须共享同一注册表。
-const GUIDES_CHANGED_LISTENERS = Symbol.for('dsh-tavern:guides-changed-listeners')
-
-function guidesChangedListeners(): Set<GuidesChangedListener> {
-  const holder = globalThis as Record<symbol, Set<GuidesChangedListener> | undefined>
-  return (holder[GUIDES_CHANGED_LISTENERS] ??= new Set())
-}
+// 一份模块级 Set 会互不可见，写穿必须共享同一注册表。key 逐字保留存量值。
+const guidesChanged = createGlobalListenerRegistry<GuidesChangedListener>('dsh-tavern:guides-changed-listeners')
 
 /**
  * 注册 guides 变更回调（agent.ts 模块加载时调用，按 character/chatId 反查
@@ -95,21 +92,13 @@ function guidesChangedListeners(): Set<GuidesChangedListener> {
  * 返回反注册函数。
  */
 export function onGuidesChanged(listener: GuidesChangedListener): () => void {
-  const listeners = guidesChangedListeners()
-  listeners.add(listener)
-  return () => { listeners.delete(listener) }
+  return guidesChanged.on(listener)
 }
 
 /**
  * guides 写路由（增/删）成功后触发缓存刷新。best-effort：聊天已落库，
  * 任何回调失败都不允许反过来把成功的写变成错误响应，所以逐个静默吞掉。
  */
-export async function emitGuidesChanged(character: string, chatId: string): Promise<void> {
-  for (const listener of [...guidesChangedListeners()]) {
-    try {
-      await listener(character, chatId)
-    } catch {
-      // 写穿失败只意味着该 agent 的下一次装配沿用旧缓存；装载路径自身会再读一次。
-    }
-  }
+export function emitGuidesChanged(character: string, chatId: string): Promise<void> {
+  return guidesChanged.emit(character, chatId)
 }

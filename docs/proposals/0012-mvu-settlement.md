@@ -34,6 +34,10 @@
 - 不复刻 flizzywine 的「后台模型结算」（用 LLM 结算变量）：本仓库用**确定性脚本结算**
   （卡内 MVU 规则本就是脚本语义），LLM 只在 card-to-mvu 转换时介入。理由：可重放、可单测、
   不产生每轮额外模型费用；与 flizzywine 的差异属于架构选择，需在用户文档标注。
+- 回执状态收窄为三态（2026-10-09 补记）：§1 的五态中，「过期」= CAS 冲突走 409 异常路径
+  不落回执（重试幂等纪律）、「中断」= abort 无回执、「部分成功」并入 `failed` 但
+  receiptChanges/failures 逐项隔离可区分；「原因」即 failures[].reason，「脚本联动」在单脚本
+  结算模型下无独立语义。见 `decisions/2026-10-09-mvu-receipt-tri-state.md`。
 - 姿势总结（posture-settlement 类 LLM 后台任务）不在本提案范围。
 
 ## 5. 实现补充（2026-10-08）：AgentTavern 显示面打通

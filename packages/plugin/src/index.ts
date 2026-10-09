@@ -640,154 +640,16 @@ async function handleApi(ctx, req, res) {
   // 持续指引（提案 0009）：guide 属于单局聊天，随 chat_metadata 持久化；
   // 读写走 getChatSnapshot + saveChat 的 revision CAS，与聊天写路径一致。
   // 路径段解码与 character/ 前缀路由同款 decodeURIComponent（角色名可含空格/中文）。
-  if ((method === 'GET' || method === 'POST') && route.startsWith('guides/')) {
-    const segments = route.slice('guides/'.length).split('/')
-    if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
-    const character = decodeURIComponent(segments[0])
-    const chatId = decodeURIComponent(segments[1])
-    const snapshot = await readGuidesSnapshot(db, character, chatId)
-    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
-    if (method === 'GET') {
-      return sendJson(res, 200, {
-        ok: true,
-        guides: normalizeGuides(snapshot.chat.header.chat_metadata?.guides),
-        revision: snapshot.revision,
-      })
-    }
-    const body = await readJson(req)
-    const added = addGuide(normalizeGuides(snapshot.chat.header.chat_metadata?.guides), body.text)
-    if (!added.ok) return sendJson(res, 400, { ok: false, message: added.error, code: 'TAVERN_GUIDES' })
-    const metadata = { ...snapshot.chat.header.chat_metadata, guides: added.guides }
-    const revision = await db.saveChat(character, chatId, {
-      ...snapshot.chat,
-      header: { ...snapshot.chat.header, chat_metadata: metadata },
-    }, snapshot.revision)
-    await emitGuidesChanged(character, chatId)
-    return sendJson(res, 200, { ok: true, guide: added.guide, guides: added.guides, revision })
-  }
-
-  if (method === 'DELETE' && route.startsWith('guides/')) {
-    const segments = route.slice('guides/'.length).split('/')
-    if (segments.length !== 3) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
-    const character = decodeURIComponent(segments[0])
-    const chatId = decodeURIComponent(segments[1])
-    const id = decodeURIComponent(segments[2])
-    const snapshot = await readGuidesSnapshot(db, character, chatId)
-    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
-    const removed = removeGuide(normalizeGuides(snapshot.chat.header.chat_metadata?.guides), id)
-    if (!removed.removed) return sendJson(res, 404, { ok: false, message: 'guide not found' })
-    const metadata = { ...snapshot.chat.header.chat_metadata }
-    // 清空即摘除键：与 chat_metadata.variables 的空置清理约定一致，导出不含空 guides。
-    if (removed.guides.length > 0) metadata.guides = removed.guides
-    else delete metadata.guides
-    const revision = await db.saveChat(character, chatId, {
-      ...snapshot.chat,
-      header: { ...snapshot.chat.header, chat_metadata: metadata },
-    }, snapshot.revision)
-    await emitGuidesChanged(character, chatId)
-    return sendJson(res, 200, { ok: true, guides: removed.guides, revision })
+  if ((method === 'GET' || method === 'POST' || method === 'DELETE') && route.startsWith('guides/')) {
+    return handleGuidesApi(req, res, route, method, db)
   }
 
   // ---- 剧本游玩（提案 0014 P1）----
   // 剧本库：TXT/MD 素材分块存 <tavern>/scripts/<name>/script.json；绑定在卡
   // data.extensions.agentTavern.scriptId（一对一）；进度在 chat_metadata.scriptProgress，
   // 由生成链路的对齐推进写。进度是展示不是跳章（§4）：没有写进度的路由。
-  if (method === 'POST' && route === 'script/import') {
-    const body = await readJson(req, 8 * 1024 * 1024)
-    let imported
-    try {
-      // EPUB（提案 0014 P2）：content 为 base64 编码的 zip 字节，解码后走
-      // importScript 的二进制分支（parseEpubText）；8MB 上限对 base64 文本照旧。
-      imported = await importScript(
-        dshHomePath('tavern'),
-        body.name,
-        body.format === 'epub'
-          ? Buffer.from(typeof body.content === 'string' ? body.content : '', 'base64')
-          : body.content,
-        body.format,
-      )
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      return sendJson(res, 400, { ok: false, message, code: 'TAVERN_SCRIPT' })
-    }
-    return sendJson(res, 200, {
-      ok: true,
-      script: {
-        name: imported.name,
-        source: imported.source,
-        chunkCount: imported.chunks.length,
-        chunks: imported.chunks,
-      },
-    })
-  }
-
-  if (method === 'GET' && route === 'scripts') {
-    const scripts = await listScripts(dshHomePath('tavern'))
-    const bindings: Record<string, string> = {}
-    for (const name of await db.listCharacters()) {
-      const file = await db.getCharacter(name)
-      const bound = file === undefined ? undefined : boundScriptOf(file.card)
-      if (bound !== undefined) bindings[name] = bound
-    }
-    return sendJson(res, 200, { ok: true, scripts, bindings })
-  }
-
-  // progress 路由必须先于通用 script/<name> 匹配（同为 script/ 前缀）
-  if (method === 'GET' && route.startsWith('script/progress/')) {
-    const segments = route.slice('script/progress/'.length).split('/')
-    if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
-    const character = decodeURIComponent(segments[0])
-    const chatId = decodeURIComponent(segments[1])
-    const file = await db.getCharacter(character)
-    if (!file) return sendJson(res, 404, { ok: false, message: 'character not found' })
-    const scriptName = boundScriptOf(file.card)
-    if (scriptName === undefined) return sendJson(res, 404, { ok: false, message: 'no script bound to this character' })
-    const script = await getScript(dshHomePath('tavern'), scriptName)
-    if (!script) return sendJson(res, 404, { ok: false, message: `script '${scriptName}' not found` })
-    const snapshot = await db.getChatSnapshot(character, chatId)
-    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
-    const progress = normalizeScriptProgress(snapshot.chat.header.chat_metadata?.scriptProgress)
-    const active = progress !== undefined && progress.scriptName === scriptName ? progress : undefined
-    const chunkIndex = active !== undefined ? Math.min(active.chunkIndex, script.chunks.length - 1) : 0
-    return sendJson(res, 200, {
-      ok: true,
-      scriptName,
-      chunkIndex,
-      chunkCount: script.chunks.length,
-      currentPreview: script.chunks[chunkIndex]?.text.slice(0, 400) ?? '',
-      nextPreview: script.chunks[chunkIndex + 1]?.text.slice(0, 400) ?? '',
-      alignedAt: active?.alignedAt ?? null,
-    })
-  }
-
-  if (method === 'GET' && route.startsWith('script/')) {
-    const name = decodeURIComponent(route.slice('script/'.length))
-    if (name === '' || name.includes('/')) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
-    const script = await getScript(dshHomePath('tavern'), name)
-    if (!script) return sendJson(res, 404, { ok: false, message: `script '${name}' not found` })
-    return sendJson(res, 200, { ok: true, script: { name: script.name, source: script.source, chunks: script.chunks } })
-  }
-
-  if (method === 'POST' && (route === 'script/bind' || route === 'script/unbind')) {
-    const body = await readJson(req)
-    const characterName = typeof body.character === 'string' ? body.character : ''
-    if (characterName === '') throw new Error('character is required')
-    const binding = route === 'script/bind' && typeof body.scriptName === 'string' ? body.scriptName.trim() : undefined
-    if (route === 'script/bind' && (binding === undefined || binding === '')) {
-      throw new Error('scriptName is required')
-    }
-    if (binding !== undefined) {
-      const script = await getScript(dshHomePath('tavern'), binding)
-      if (!script) return sendJson(res, 404, { ok: false, message: `script '${binding}' not found` })
-    }
-    try {
-      await applyScriptBinding(db, characterName, binding)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (message.includes('not found')) return sendJson(res, 404, { ok: false, message })
-      throw error
-    }
-    return sendJson(res, 200, { ok: true, character: characterName, scriptName: binding ?? null })
+  if ((method === 'GET' || method === 'POST') && (route === 'scripts' || route === 'script/import' || route === 'script/bind' || route === 'script/unbind' || route.startsWith('script/'))) {
+    return handleScriptApi(req, res, route, method, db)
   }
 
   if (method === 'GET' && route === 'agent-tavern/audit') {
@@ -1358,28 +1220,6 @@ async function handleApi(ctx, req, res) {
 
   // MVU 结算重试（提案 0012 P1）：只对最后一条助手楼层重跑模板输出渲染的变量
   // 写穿部分（不重跑 AI_OUTPUT regex——非幂等），正文不动；CAS 冲突走既有通道。
-  if (method === 'POST' && route === 'mvu/retry') {
-    const body = await readJson(req)
-    const state = await db.getState()
-    assertStGenerationBinding(state, body.sessionId)
-    const characterName = typeof body.character === 'string' ? body.character : state.activeCharacter
-    const chatId = body.chatId
-    if (!characterName || typeof chatId !== 'string') throw new Error('character and chatId are required')
-    if (typeof body.revision !== 'string') throw new Error('revision is required')
-    const snapshot = await db.getChatSnapshot(characterName, chatId)
-    if (!snapshot) throw new Error('character or chat not found')
-    const result = await retryMvuSettlement(db, {
-      state,
-      characterName,
-      chatId,
-      snapshot,
-      revision: body.revision,
-      sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
-      templatesActive: templatesEnabledFlag && templatesEnabled(),
-    })
-    return sendJson(res, 200, { ok: true, receipt: result.receipt, revision: result.revision, variables: result.variables })
-  }
-
   // MVU 状态（提案 0012 P1）：变量 + 回执快照；卡片约定字段
   // data.extensions.agentTavern.statusTemplate（0013 工作台产出）存在时附带
   // 模板化 renderedHtml（接线点）；渲染失败降级为不返回该字段，不 500。
@@ -1387,44 +1227,8 @@ async function handleApi(ctx, req, res) {
   // （variable_set/patch/delete 与 tavern_variable_settle 全族都写那里，从不写
   // chat_metadata.variables），扁平点分名覆盖回嵌套树后与 ST 共用同一份显示与
   // 模板语义；ST 绑定或未绑定的聊天不回读，避免架构切换后的残留值污染 ST 变量。
-  if (method === 'GET' && route.startsWith('mvu/status/')) {
-    const rest = route.slice('mvu/status/'.length)
-    const separator = rest.indexOf('/')
-    if (separator === -1) throw new Error('expected route mvu/status/<character>/<chatId>')
-    const characterName = decodeURIComponent(rest.slice(0, separator))
-    const chatId = decodeURIComponent(rest.slice(separator + 1))
-    const snapshot = await db.getChatSnapshot(characterName, chatId)
-    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'character or chat not found' })
-    const chat = snapshot.chat
-    const state = await db.getState()
-    const receipts = readMvuReceipts(chat)
-    const agentTavernBound = Object.values(state.sessionBindings).some((binding) =>
-      binding.architecture === 'agent-tavern' && binding.chatId === chatId && binding.character === characterName)
-    const scopedVariables = agentTavernBound ? await (await variables()).list('chat', chatId, '', 100) : []
-    const displayVariables = scopedVariables.length > 0
-      ? overlayScopedVariables(readChatVariables(chat), scopedVariables)
-      : readChatVariables(chat)
-    const character = await db.getCharacter(characterName)
-    const statusTemplate = character ? statusTemplateOf(character.card) : undefined
-    let renderedHtml: string | undefined
-    if (statusTemplate !== undefined) {
-      try {
-        renderedHtml = await renderMvuStatusTemplate({
-          db, state, characterName, character: character!, chat, chatId, template: statusTemplate,
-          localVariables: displayVariables,
-        })
-      } catch {
-        // 渲染失败降级：不返回 renderedHtml，状态接口本身不失败
-      }
-    }
-    return sendJson(res, 200, {
-      ok: true,
-      // 回执本身也是可展示内容：只有失败回执（全项失败、无变量落盘）时面板仍需可见可读。
-      available: Object.keys(displayVariables).length > 0 || receipts.length > 0,
-      variables: displayVariables,
-      receipts,
-      ...(renderedHtml !== undefined ? { renderedHtml } : {}),
-    })
+  if ((method === 'POST' && route === 'mvu/retry') || (method === 'GET' && route.startsWith('mvu/status/'))) {
+    return handleMvuApi(req, res, route, method, db)
   }
 
   // ---- 工作台方案确认协议（提案 0013 P2；世界书面板化同构扩展）----
@@ -1432,74 +1236,15 @@ async function handleApi(ctx, req, res) {
   // 绑定——它是侧边栏分组与复用判定的数据源，客户端改名成功后另经宿主
   // binding.session.rename 同步会话标题（best-effort）。只收 card-workbench
   // 绑定，空 title / 非 workbench 会话 fail-closed。错误码 TAVERN_WORKBENCH。
-  if (method === 'POST' && route === 'card-workbench/rename') {
-    const body = await readJson(req)
-    if (typeof body.sessionId !== 'string' || typeof body.title !== 'string') {
-      return sendJson(res, 400, { ok: false, message: 'expected { sessionId, title }', code: 'TAVERN_WORKBENCH' })
-    }
-    const title = body.title.trim().slice(0, 200)
-    if (title === '') {
-      return sendJson(res, 400, { ok: false, message: 'title must be a non-empty string', code: 'TAVERN_WORKBENCH' })
-    }
-    const binding = (await db.getState()).sessionBindings[body.sessionId]
-    if (binding?.architecture !== 'card-workbench') {
-      return sendJson(res, 404, { ok: false, message: `session '${body.sessionId}' is not a CardWorkbench session`, code: 'TAVERN_WORKBENCH' })
-    }
-    const state = await db.updateState((current) => ({
-      sessionBindings: {
-        ...current.sessionBindings,
-        [body.sessionId]: { ...binding, title },
-      },
-    }))
-    return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] })
-  }
-
   // 方案 = card_plan_propose / world_plan_propose 落库的 pending 计划
   // （<tavern>/card-workbench/plans/，见 card-workbench/plans.ts，kind 判别）。
   // 面板拉列表看 diff、给决定；approve=true 经执行核（executeCardPlan /
   // executeWorldPlan）按方案写入并标记 applied（执行不在存储层），false 只改
   // 状态。错误码 TAVERN_WORKBENCH。
-  if (method === 'GET' && route === 'card-workbench/plans') {
-    const statusParam = url.searchParams.get('status') ?? 'pending'
-    if (statusParam !== 'pending' && statusParam !== 'approved' && statusParam !== 'rejected' && statusParam !== 'applied' && statusParam !== 'all') {
-      return sendJson(res, 400, { ok: false, message: `unknown status filter '${statusParam}'`, code: 'TAVERN_WORKBENCH' })
-    }
-    const kindParam = url.searchParams.get('kind')
-    if (kindParam !== null && kindParam !== 'card' && kindParam !== 'world') {
-      return sendJson(res, 400, { ok: false, message: `unknown kind filter '${kindParam}'`, code: 'TAVERN_WORKBENCH' })
-    }
-    const character = url.searchParams.get('character') ?? undefined
-    const plans = await listPlans(dshHomePath('tavern'), {
-      ...(kindParam !== null ? { kind: kindParam } : {}),
-      ...(character !== undefined && character !== '' ? { character } : {}),
-      status: statusParam,
-    })
-    return sendJson(res, 200, { ok: true, plans })
-  }
-
-  if (method === 'POST' && route.startsWith('card-workbench/plans/') && route.endsWith('/decision')) {
-    const planId = decodeURIComponent(route.slice('card-workbench/plans/'.length, route.length - '/decision'.length))
-    const body = await readJson(req)
-    if (typeof body.approve !== 'boolean') {
-      return sendJson(res, 400, { ok: false, message: 'expected { approve: boolean }', code: 'TAVERN_WORKBENCH' })
-    }
-    const plan = await getPlan(dshHomePath('tavern'), planId)
-    if (plan === undefined) return sendJson(res, 404, { ok: false, message: `plan '${planId}' not found`, code: 'TAVERN_WORKBENCH' })
-    try {
-      if (body.approve) {
-        // 执行核：过期检测 → 白名单写入 → 标记 applied；失败不落 applied。
-        if (plan.kind === 'world') {
-          const executed = await executeWorldPlan(plan)
-          return sendJson(res, 200, { ok: true, plan: executed.plan, applied: { world: executed.world, entryCount: executed.entryCount, nextUid: executed.nextUid, entries: executed.touched } })
-        }
-        const executed = await executeCardPlan(plan)
-        return sendJson(res, 200, { ok: true, plan: executed.plan, applied: { character: executed.character, changes: executed.changes, fieldLengths: executed.fieldLengths } })
-      }
-      const decided = await decidePlan(dshHomePath('tavern'), planId, false)
-      return sendJson(res, 200, { ok: true, plan: decided })
-    } catch (error) {
-      return sendJson(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error), code: 'TAVERN_WORKBENCH' })
-    }
+  if ((method === 'POST' && route === 'card-workbench/rename')
+    || (method === 'GET' && route === 'card-workbench/plans')
+    || (method === 'POST' && route.startsWith('card-workbench/plans/') && route.endsWith('/decision'))) {
+    return handleWorkbenchApi(req, res, url, route, method, db)
   }
 
   if (method === 'GET' && route.startsWith('world/')) {
@@ -1682,6 +1427,346 @@ async function handleApi(ctx, req, res) {
 
   if (method === 'POST' && route === 'script') {
     return runTavernScript(ctx, req, res, db)
+  }
+
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+}
+
+/* ---------------- 域路由提取（guides / script / mvu / card-workbench） ---------------- */
+
+// 与 handleNovelsApi 同款同文件提取（决策 2026-10-09-dedup-refactor）：handleApi
+// 只留级联分派，域分支整体搬进各自处理器。分派条件是原分支条件的并集；处理器
+// 内部分支顺序与原级联一致（script/progress/ 先于通用 script/ 等顺序敏感点原样
+// 保留），尾部 404 与级联兜底同文案——方法/段数不匹配的请求拿到与拆分前完全
+// 相同的响应。路由字面量保持原样（gates 在 bundle 上逐字断言）。
+
+async function handleGuidesApi(
+  req: NovelApiRequest,
+  res: NovelApiResponse,
+  route: string,
+  method: string,
+  db: TavernStore,
+): Promise<void> {
+  if ((method === 'GET' || method === 'POST') && route.startsWith('guides/')) {
+    const segments = route.slice('guides/'.length).split('/')
+    if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    const character = decodeURIComponent(segments[0])
+    const chatId = decodeURIComponent(segments[1])
+    const snapshot = await readGuidesSnapshot(db, character, chatId)
+    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
+    if (method === 'GET') {
+      return sendJson(res, 200, {
+        ok: true,
+        guides: normalizeGuides(snapshot.chat.header.chat_metadata?.guides),
+        revision: snapshot.revision,
+      })
+    }
+    const body = await readJson(req)
+    const added = addGuide(normalizeGuides(snapshot.chat.header.chat_metadata?.guides), body.text)
+    if (!added.ok) return sendJson(res, 400, { ok: false, message: added.error, code: 'TAVERN_GUIDES' })
+    const metadata = { ...snapshot.chat.header.chat_metadata, guides: added.guides }
+    const revision = await db.saveChat(character, chatId, {
+      ...snapshot.chat,
+      header: { ...snapshot.chat.header, chat_metadata: metadata },
+    }, snapshot.revision)
+    await emitGuidesChanged(character, chatId)
+    return sendJson(res, 200, { ok: true, guide: added.guide, guides: added.guides, revision })
+  }
+
+  if (method === 'DELETE' && route.startsWith('guides/')) {
+    const segments = route.slice('guides/'.length).split('/')
+    if (segments.length !== 3) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    const character = decodeURIComponent(segments[0])
+    const chatId = decodeURIComponent(segments[1])
+    const id = decodeURIComponent(segments[2])
+    const snapshot = await readGuidesSnapshot(db, character, chatId)
+    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
+    const removed = removeGuide(normalizeGuides(snapshot.chat.header.chat_metadata?.guides), id)
+    if (!removed.removed) return sendJson(res, 404, { ok: false, message: 'guide not found' })
+    const metadata = { ...snapshot.chat.header.chat_metadata }
+    // 清空即摘除键：与 chat_metadata.variables 的空置清理约定一致，导出不含空 guides。
+    if (removed.guides.length > 0) metadata.guides = removed.guides
+    else delete metadata.guides
+    const revision = await db.saveChat(character, chatId, {
+      ...snapshot.chat,
+      header: { ...snapshot.chat.header, chat_metadata: metadata },
+    }, snapshot.revision)
+    await emitGuidesChanged(character, chatId)
+    return sendJson(res, 200, { ok: true, guides: removed.guides, revision })
+  }
+
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+}
+
+async function handleScriptApi(
+  req: NovelApiRequest,
+  res: NovelApiResponse,
+  route: string,
+  method: string,
+  db: TavernStore,
+): Promise<void> {
+  if (method === 'POST' && route === 'script/import') {
+    const body = await readJson(req, 8 * 1024 * 1024)
+    let imported
+    try {
+      // EPUB（提案 0014 P2）：content 为 base64 编码的 zip 字节，解码后走
+      // importScript 的二进制分支（parseEpubText）；8MB 上限对 base64 文本照旧。
+      imported = await importScript(
+        dshHomePath('tavern'),
+        body.name,
+        body.format === 'epub'
+          ? Buffer.from(typeof body.content === 'string' ? body.content : '', 'base64')
+          : body.content,
+        body.format,
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return sendJson(res, 400, { ok: false, message, code: 'TAVERN_SCRIPT' })
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      script: {
+        name: imported.name,
+        source: imported.source,
+        chunkCount: imported.chunks.length,
+        chunks: imported.chunks,
+      },
+    })
+  }
+
+  if (method === 'GET' && route === 'scripts') {
+    const scripts = await listScripts(dshHomePath('tavern'))
+    const bindings: Record<string, string> = {}
+    for (const name of await db.listCharacters()) {
+      const file = await db.getCharacter(name)
+      const bound = file === undefined ? undefined : boundScriptOf(file.card)
+      if (bound !== undefined) bindings[name] = bound
+    }
+    return sendJson(res, 200, { ok: true, scripts, bindings })
+  }
+
+  // progress 路由必须先于通用 script/<name> 匹配（同为 script/ 前缀）
+  if (method === 'GET' && route.startsWith('script/progress/')) {
+    const segments = route.slice('script/progress/'.length).split('/')
+    if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    const character = decodeURIComponent(segments[0])
+    const chatId = decodeURIComponent(segments[1])
+    const file = await db.getCharacter(character)
+    if (!file) return sendJson(res, 404, { ok: false, message: 'character not found' })
+    const scriptName = boundScriptOf(file.card)
+    if (scriptName === undefined) return sendJson(res, 404, { ok: false, message: 'no script bound to this character' })
+    const script = await getScript(dshHomePath('tavern'), scriptName)
+    if (!script) return sendJson(res, 404, { ok: false, message: `script '${scriptName}' not found` })
+    const snapshot = await db.getChatSnapshot(character, chatId)
+    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
+    const progress = normalizeScriptProgress(snapshot.chat.header.chat_metadata?.scriptProgress)
+    const active = progress !== undefined && progress.scriptName === scriptName ? progress : undefined
+    const chunkIndex = active !== undefined ? Math.min(active.chunkIndex, script.chunks.length - 1) : 0
+    return sendJson(res, 200, {
+      ok: true,
+      scriptName,
+      chunkIndex,
+      chunkCount: script.chunks.length,
+      currentPreview: script.chunks[chunkIndex]?.text.slice(0, 400) ?? '',
+      nextPreview: script.chunks[chunkIndex + 1]?.text.slice(0, 400) ?? '',
+      alignedAt: active?.alignedAt ?? null,
+    })
+  }
+
+  if (method === 'GET' && route.startsWith('script/')) {
+    const name = decodeURIComponent(route.slice('script/'.length))
+    if (name === '' || name.includes('/')) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    const script = await getScript(dshHomePath('tavern'), name)
+    if (!script) return sendJson(res, 404, { ok: false, message: `script '${name}' not found` })
+    return sendJson(res, 200, { ok: true, script: { name: script.name, source: script.source, chunks: script.chunks } })
+  }
+
+  if (method === 'POST' && (route === 'script/bind' || route === 'script/unbind')) {
+    const body = await readJson(req)
+    const characterName = typeof body.character === 'string' ? body.character : ''
+    if (characterName === '') throw new Error('character is required')
+    const binding = route === 'script/bind' && typeof body.scriptName === 'string' ? body.scriptName.trim() : undefined
+    if (route === 'script/bind' && (binding === undefined || binding === '')) {
+      throw new Error('scriptName is required')
+    }
+    if (binding !== undefined) {
+      const script = await getScript(dshHomePath('tavern'), binding)
+      if (!script) return sendJson(res, 404, { ok: false, message: `script '${binding}' not found` })
+    }
+    try {
+      await applyScriptBinding(db, characterName, binding)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (message.includes('not found')) return sendJson(res, 404, { ok: false, message })
+      throw error
+    }
+    return sendJson(res, 200, { ok: true, character: characterName, scriptName: binding ?? null })
+  }
+
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+}
+
+async function handleMvuApi(
+  req: NovelApiRequest,
+  res: NovelApiResponse,
+  route: string,
+  method: string,
+  db: TavernStore,
+): Promise<void> {
+  // MVU 结算重试（提案 0012 P1）：只对最后一条助手楼层重跑模板输出渲染的变量
+  // 写穿部分（不重跑 AI_OUTPUT regex——非幂等），正文不动；CAS 冲突走既有通道。
+  if (method === 'POST' && route === 'mvu/retry') {
+    const body = await readJson(req)
+    const state = await db.getState()
+    assertStGenerationBinding(state, body.sessionId)
+    const characterName = typeof body.character === 'string' ? body.character : state.activeCharacter
+    const chatId = body.chatId
+    if (!characterName || typeof chatId !== 'string') throw new Error('character and chatId are required')
+    if (typeof body.revision !== 'string') throw new Error('revision is required')
+    const snapshot = await db.getChatSnapshot(characterName, chatId)
+    if (!snapshot) throw new Error('character or chat not found')
+    const result = await retryMvuSettlement(db, {
+      state,
+      characterName,
+      chatId,
+      snapshot,
+      revision: body.revision,
+      sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
+      templatesActive: templatesEnabledFlag && templatesEnabled(),
+    })
+    return sendJson(res, 200, { ok: true, receipt: result.receipt, revision: result.revision, variables: result.variables })
+  }
+
+  // MVU 状态（提案 0012 P1）：变量 + 回执快照；卡片约定字段
+  // data.extensions.agentTavern.statusTemplate（0013 工作台产出）存在时附带
+  // 模板化 renderedHtml（接线点）；渲染失败降级为不返回该字段，不 500。
+  // 变量源按绑定架构取：AgentTavern 聊天的权威源是 chat 作用域 VariableStore
+  // （variable_set/patch/delete 与 tavern_variable_settle 全族都写那里，从不写
+  // chat_metadata.variables），扁平点分名覆盖回嵌套树后与 ST 共用同一份显示与
+  // 模板语义；ST 绑定或未绑定的聊天不回读，避免架构切换后的残留值污染 ST 变量。
+  if (method === 'GET' && route.startsWith('mvu/status/')) {
+    const rest = route.slice('mvu/status/'.length)
+    const separator = rest.indexOf('/')
+    if (separator === -1) throw new Error('expected route mvu/status/<character>/<chatId>')
+    const characterName = decodeURIComponent(rest.slice(0, separator))
+    const chatId = decodeURIComponent(rest.slice(separator + 1))
+    const snapshot = await db.getChatSnapshot(characterName, chatId)
+    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'character or chat not found' })
+    const chat = snapshot.chat
+    const state = await db.getState()
+    const receipts = readMvuReceipts(chat)
+    const agentTavernBound = Object.values(state.sessionBindings).some((binding) =>
+      binding.architecture === 'agent-tavern' && binding.chatId === chatId && binding.character === characterName)
+    const scopedVariables = agentTavernBound ? await (await variables()).list('chat', chatId, '', 100) : []
+    const displayVariables = scopedVariables.length > 0
+      ? overlayScopedVariables(readChatVariables(chat), scopedVariables)
+      : readChatVariables(chat)
+    const character = await db.getCharacter(characterName)
+    const statusTemplate = character ? statusTemplateOf(character.card) : undefined
+    let renderedHtml: string | undefined
+    if (statusTemplate !== undefined) {
+      try {
+        renderedHtml = await renderMvuStatusTemplate({
+          db, state, characterName, character: character!, chat, chatId, template: statusTemplate,
+          localVariables: displayVariables,
+        })
+      } catch {
+        // 渲染失败降级：不返回 renderedHtml，状态接口本身不失败
+      }
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      // 回执本身也是可展示内容：只有失败回执（全项失败、无变量落盘）时面板仍需可见可读。
+      available: Object.keys(displayVariables).length > 0 || receipts.length > 0,
+      variables: displayVariables,
+      receipts,
+      ...(renderedHtml !== undefined ? { renderedHtml } : {}),
+    })
+  }
+
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+}
+
+async function handleWorkbenchApi(
+  req: NovelApiRequest,
+  res: NovelApiResponse,
+  url: URL,
+  route: string,
+  method: string,
+  db: TavernStore,
+): Promise<void> {
+  // 写卡会话改名（对齐酒馆聊天的侧边栏改名能力）：title 写进 card-workbench
+  // 绑定——它是侧边栏分组与复用判定的数据源，客户端改名成功后另经宿主
+  // binding.session.rename 同步会话标题（best-effort）。只收 card-workbench
+  // 绑定，空 title / 非 workbench 会话 fail-closed。错误码 TAVERN_WORKBENCH。
+  if (method === 'POST' && route === 'card-workbench/rename') {
+    const body = await readJson(req)
+    if (typeof body.sessionId !== 'string' || typeof body.title !== 'string') {
+      return sendJson(res, 400, { ok: false, message: 'expected { sessionId, title }', code: 'TAVERN_WORKBENCH' })
+    }
+    const title = body.title.trim().slice(0, 200)
+    if (title === '') {
+      return sendJson(res, 400, { ok: false, message: 'title must be a non-empty string', code: 'TAVERN_WORKBENCH' })
+    }
+    const binding = (await db.getState()).sessionBindings[body.sessionId]
+    if (binding?.architecture !== 'card-workbench') {
+      return sendJson(res, 404, { ok: false, message: `session '${body.sessionId}' is not a CardWorkbench session`, code: 'TAVERN_WORKBENCH' })
+    }
+    const state = await db.updateState((current) => ({
+      sessionBindings: {
+        ...current.sessionBindings,
+        [body.sessionId]: { ...binding, title },
+      },
+    }))
+    return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] })
+  }
+
+  // 方案 = card_plan_propose / world_plan_propose 落库的 pending 计划
+  // （<tavern>/card-workbench/plans/，见 card-workbench/plans.ts，kind 判别）。
+  // 面板拉列表看 diff、给决定；approve=true 经执行核（executeCardPlan /
+  // executeWorldPlan）按方案写入并标记 applied（执行不在存储层），false 只改
+  // 状态。错误码 TAVERN_WORKBENCH。
+  if (method === 'GET' && route === 'card-workbench/plans') {
+    const statusParam = url.searchParams.get('status') ?? 'pending'
+    if (statusParam !== 'pending' && statusParam !== 'approved' && statusParam !== 'rejected' && statusParam !== 'applied' && statusParam !== 'all') {
+      return sendJson(res, 400, { ok: false, message: `unknown status filter '${statusParam}'`, code: 'TAVERN_WORKBENCH' })
+    }
+    const kindParam = url.searchParams.get('kind')
+    if (kindParam !== null && kindParam !== 'card' && kindParam !== 'world') {
+      return sendJson(res, 400, { ok: false, message: `unknown kind filter '${kindParam}'`, code: 'TAVERN_WORKBENCH' })
+    }
+    const character = url.searchParams.get('character') ?? undefined
+    const plans = await listPlans(dshHomePath('tavern'), {
+      ...(kindParam !== null ? { kind: kindParam } : {}),
+      ...(character !== undefined && character !== '' ? { character } : {}),
+      status: statusParam,
+    })
+    return sendJson(res, 200, { ok: true, plans })
+  }
+
+  if (method === 'POST' && route.startsWith('card-workbench/plans/') && route.endsWith('/decision')) {
+    const planId = decodeURIComponent(route.slice('card-workbench/plans/'.length, route.length - '/decision'.length))
+    const body = await readJson(req)
+    if (typeof body.approve !== 'boolean') {
+      return sendJson(res, 400, { ok: false, message: 'expected { approve: boolean }', code: 'TAVERN_WORKBENCH' })
+    }
+    const plan = await getPlan(dshHomePath('tavern'), planId)
+    if (plan === undefined) return sendJson(res, 404, { ok: false, message: `plan '${planId}' not found`, code: 'TAVERN_WORKBENCH' })
+    try {
+      if (body.approve) {
+        // 执行核：过期检测 → 白名单写入 → 标记 applied；失败不落 applied。
+        if (plan.kind === 'world') {
+          const executed = await executeWorldPlan(plan)
+          return sendJson(res, 200, { ok: true, plan: executed.plan, applied: { world: executed.world, entryCount: executed.entryCount, nextUid: executed.nextUid, entries: executed.touched } })
+        }
+        const executed = await executeCardPlan(plan)
+        return sendJson(res, 200, { ok: true, plan: executed.plan, applied: { character: executed.character, changes: executed.changes, fieldLengths: executed.fieldLengths } })
+      }
+      const decided = await decidePlan(dshHomePath('tavern'), planId, false)
+      return sendJson(res, 200, { ok: true, plan: decided })
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error), code: 'TAVERN_WORKBENCH' })
+    }
   }
 
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })

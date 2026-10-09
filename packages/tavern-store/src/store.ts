@@ -805,7 +805,26 @@ export class TavernStore {
   private async writeAtomic(file: string, bytes: Uint8Array): Promise<void> {
     const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
     await fs.writeFile(tmp, bytes)
-    await fs.rename(tmp, file)
+    await renameWithWindowsRetry(tmp, file)
+  }
+}
+
+/**
+ * Windows 下 rename 的目标被并发读取句柄短暂占用（本进程内 getState 的
+ * readFile 与 updateState 的 rename 不互斥）会抛 EPERM/EACCES/EBUSY——
+ * 短退避重试即可收敛，占用方是毫秒级的读句柄；非占用类错误原样上抛。
+ * Linux/macOS 的 rename 不受打开句柄影响，首次即成功，重试路径不生效。
+ */
+async function renameWithWindowsRetry(from: string, to: string, attempts = 5): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rename(from, to)
+      return
+    } catch (cause) {
+      const code = (cause as NodeJS.ErrnoException).code
+      if (attempt >= attempts || (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY' && code !== 'ENOTEMPTY')) throw cause
+      await new Promise((resolve) => setTimeout(resolve, 10 * attempt))
+    }
   }
 }
 

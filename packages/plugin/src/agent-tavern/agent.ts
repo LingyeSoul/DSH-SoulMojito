@@ -25,6 +25,8 @@ import {
 import { appendMvuReceipt, type MvuReceipt, type MvuVariableChange } from '../mvu.js'
 import { appendMvuAudit } from './projector.js'
 import { createHostPromptExpander, hostPromptSafe, seededRandom } from '../prompt-safety.js'
+import { boundedStringArg, clampInt, limitText, stringArg } from '../tool-args.js'
+import { createLazyProjection } from '../lazy-projection.js'
 import {
   boundScriptOf,
   getScript,
@@ -55,7 +57,6 @@ const KERNEL = [
   'Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge — the card details and world-info entries behind it are not in your context, so its proper nouns are NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search before replying.',
  ].join('\n')
 
-const facts = new Map<string, string>()
 let tavernStorePromise: Promise<TavernStore> | undefined
 let memoryStorePromise: Promise<MemoryStore> | undefined
 let variableStorePromise: Promise<VariableStore> | undefined
@@ -1004,19 +1005,9 @@ async function bindingFor(exec: ToolExecution): Promise<BindingContext> {
 /** facts 文本通道：首次为某 agent 装配时异步装载一次，装载完成前返回空串。
  *  与挂载期装载（apply 里同步取 ctx.agent）等价：best-effort、不阻塞装配、
  *  失败即静默留空；不同点只是身份从装配上下文来。 */
-const factsLoadStarted = new Set<string>()
-
-function agentFactsText(agentId: string | undefined): string {
-  if (typeof agentId !== 'string' || agentId.trim() === '') return ''
-  if (!factsLoadStarted.has(agentId)) {
-    factsLoadStarted.add(agentId)
-    void loadAgentFacts(agentId)
-  }
-  return facts.get(agentId) ?? ''
-}
-
-async function loadAgentFacts(agentId: string): Promise<void> {
-  try {
+const factsProjection = createLazyProjection<string>({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
     const state = await (await tavernStore()).getState()
     const binding = state.sessionBindings[agentId]
     if (!binding || binding.architecture !== 'agent-tavern') return
@@ -1028,7 +1019,7 @@ async function loadAgentFacts(agentId: string): Promise<void> {
     // 残留 {{...}} 当宿主变量渲染并抛错中止装配——先按 ST 语义展开，再中性化
     // 未知宏（prompt-safety.ts，0.4.1 unknown prompt variable 故障）。
     const expand = createHostPromptExpander(data.nickname || data.name, state.activePersona ?? DEFAULT_USER)
-    facts.set(agentId, hostPromptSafe([
+    settle(hostPromptSafe([
       `Current Tavern character: ${data.nickname || data.name}`,
       // The editable identity summary wins; without one only a very short
       // description excerpt stands in for the full card.
@@ -1036,99 +1027,62 @@ async function loadAgentFacts(agentId: string): Promise<void> {
       data.personality ? `Personality summary: ${limitText(data.personality, 600)}` : '',
       data.scenario ? `Scenario summary: ${limitText(data.scenario, 600)}` : '',
     ].filter(Boolean).join('\n'), expand))
-  } catch {
-    // A missing store must not prevent the host agent from starting.
-  }
+  },
+})
+
+function agentFactsText(agentId: string | undefined): string {
+  return factsProjection.valueOf(agentId) ?? ''
 }
 
 /** guides 文本通道（提案 0009）：与 facts 同款 best-effort 异步装载——首次为某
  *  agent 装配时异步读一次 chat 的 guides，装载完成前返回空串，失败静默留空，
  *  不阻塞装配。guide 写入（index.ts 的 guides 路由）经 emitGuidesChanged 按
  *  character/chatId 反查绑定的 agentId 写穿缓存，删除同理即时生效。 */
-const guidesCache = new Map<string, string>()
-const guidesLoadStarted = new Set<string>()
-/** 装载票号：首次装载与写穿刷新可能在途并存，只允许最后发起的那次写缓存，
- *  防止先发起、后完成的过期装载覆盖新写入的 guide（last-write-wins）。 */
-const guidesLoadTicket = new Map<string, number>()
-
-function agentGuidesText(agentId: string | undefined): string {
-  if (typeof agentId !== 'string' || agentId.trim() === '') return ''
-  if (!guidesLoadStarted.has(agentId)) {
-    guidesLoadStarted.add(agentId)
-    void loadAgentGuides(agentId)
-  }
-  return guidesCache.get(agentId) ?? ''
-}
-
-async function loadAgentGuides(agentId: string): Promise<void> {
-  const ticket = (guidesLoadTicket.get(agentId) ?? 0) + 1
-  guidesLoadTicket.set(agentId, ticket)
-  try {
+const guidesProjection = createLazyProjection<string>({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
     const db = await tavernStore()
     const state = await db.getState()
     const binding = state.sessionBindings[agentId]
     if (!binding || binding.architecture !== 'agent-tavern') return
     const chat = await db.getChat(binding.character, binding.chatId)
-    if (guidesLoadTicket.get(agentId) !== ticket) return
     // 指引是用户手写的持久数据，同样可能含 ST 宏或 {{...}} 残片——与 facts
     // 同款宏展开 + 宿主安全化（prompt-safety.ts）。
     const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER)
-    guidesCache.set(agentId, hostPromptSafe(formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? '', expand))
-  } catch {
-    // A missing store must not prevent the host agent from starting.
-  }
+    settle(hostPromptSafe(formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? '', expand))
+  },
+})
+
+function agentGuidesText(agentId: string | undefined): string {
+  return guidesProjection.valueOf(agentId) ?? ''
 }
 
 // 模块加载即注册写穿回调：guide 增/删路由成功落库后按 character/chatId 匹配
 // sessionBindings 里绑定的 agentId 刷新缓存（无匹配则是无人装配过的 chat，跳过）。
-onGuidesChanged(async (character, chatId) => {
-  try {
-    const db = await tavernStore()
-    const state = await db.getState()
-    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-      if (binding.architecture !== 'agent-tavern' || binding.character !== character || binding.chatId !== chatId) continue
-      guidesLoadStarted.add(agentId)
-      await loadAgentGuides(agentId)
-    }
-  } catch {
-    // best-effort 写穿：失败只意味着下一次装配沿用旧缓存。
-  }
-})
+onGuidesChanged((character, chatId) =>
+  guidesProjection.refreshWhere((binding) =>
+    binding.architecture === 'agent-tavern' && binding.character === character && binding.chatId === chatId))
 
 /** 剧本进度摘要文本通道（提案 0014 P2）：与 guides 同款 best-effort 异步装载
  *  ——首次为某 agent 装配时异步读一次绑定剧本与进度，装载完成前返回空串，
  *  失败静默留空，不阻塞装配。tavern_script_advance 落库后经
  *  refreshAgentScriptSummaries 写穿缓存，下一次装配即时生效。 */
-const scriptSummaryCache = new Map<string, string>()
-const scriptSummaryLoadStarted = new Set<string>()
-/** 装载票号：与 guides 同款 last-write-wins，防在途过期装载覆盖新进度。 */
-const scriptSummaryLoadTicket = new Map<string, number>()
-
-function agentScriptText(agentId: string | undefined): string {
-  if (typeof agentId !== 'string' || agentId.trim() === '') return ''
-  if (!scriptSummaryLoadStarted.has(agentId)) {
-    scriptSummaryLoadStarted.add(agentId)
-    void loadAgentScriptSummary(agentId)
-  }
-  return scriptSummaryCache.get(agentId) ?? ''
-}
-
-async function loadAgentScriptSummary(agentId: string): Promise<void> {
-  const ticket = (scriptSummaryLoadTicket.get(agentId) ?? 0) + 1
-  scriptSummaryLoadTicket.set(agentId, ticket)
-  try {
+const scriptSummaryProjection = createLazyProjection<string>({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
     const db = await tavernStore()
     const state = await db.getState()
     const binding = state.sessionBindings[agentId]
     if (!binding || binding.architecture !== 'agent-tavern') return
     const text = await scriptSummaryForChat(db, binding.character, binding.chatId)
-    if (scriptSummaryLoadTicket.get(agentId) !== ticket) return
     // 剧本名是用户资产数据，可能含 {{...}}——摘要过同款安全化（prompt-safety.ts）。
     const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER)
-    scriptSummaryCache.set(agentId, hostPromptSafe(text, expand))
-  } catch {
-    // A missing store must not prevent the host agent from starting.
-  }
+    settle(hostPromptSafe(text, expand))
+  },
+})
+
+function agentScriptText(agentId: string | undefined): string {
+  return scriptSummaryProjection.valueOf(agentId) ?? ''
 }
 
 /** 一行 facts 式进度摘要；未绑定剧本 / 剧本缺失 / chat 缺失返回空串（context 摘除）。 */
@@ -1154,17 +1108,8 @@ async function scriptSummaryForChat(
 /** 写穿：tavern_script_advance 落库后按 character/chatId 反查绑定的 agentId 刷新
  *  进度摘要缓存（无匹配则是无人装配过的 chat，跳过）。 */
 async function refreshAgentScriptSummaries(character: string, chatId: string): Promise<void> {
-  try {
-    const db = await tavernStore()
-    const state = await db.getState()
-    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-      if (binding.architecture !== 'agent-tavern' || binding.character !== character || binding.chatId !== chatId) continue
-      scriptSummaryLoadStarted.add(agentId)
-      await loadAgentScriptSummary(agentId)
-    }
-  } catch {
-    // best-effort 写穿：失败只意味着下一次装配沿用旧缓存。
-  }
+  await scriptSummaryProjection.refreshWhere((binding) =>
+    binding.architecture === 'agent-tavern' && binding.character === character && binding.chatId === chatId)
 }
 
 /** 激活预设投影文本通道（agent-tavern/preset.ts）：与 guides 同款 best-effort
@@ -1172,10 +1117,6 @@ async function refreshAgentScriptSummaries(character: string, chatId: string): P
  *  预设增删改（index.ts 路由、写卡工作台 preset_put）与激活预热经 preset.ts
  *  的跨 bundle 监听表写穿缓存，下一次装配即时生效。temperature 与提示词块
  *  共用同一份装载结果（agent/request 的覆盖值也从这里取）。 */
-const presetProjection = new Map<string, { text: string; temperature?: number }>()
-const presetLoadStarted = new Set<string>()
-/** 装载票号：与 guides 同款 last-write-wins，防在途过期装载覆盖新写入。 */
-const presetLoadTicket = new Map<string, number>()
 /**
  * 缓存冻结记录（决策 2026-10-09-agent-preset-cache-stability）：绑定首次装载
  * 捕获一次时钟与 RNG 种子，此后所有写穿重载都用同一求值上下文重渲染——相同
@@ -1186,29 +1127,9 @@ const presetLoadTicket = new Map<string, number>()
  * 在消息流尾部按 append-only 纪律提供。
  */
 const presetFreeze = new Map<string, { frozenAt: number; seed: number }>()
-
-function agentPresetText(agentId: string | undefined): string {
-  if (typeof agentId !== 'string' || agentId.trim() === '') return ''
-  if (!presetLoadStarted.has(agentId)) {
-    presetLoadStarted.add(agentId)
-    void loadAgentPreset(agentId)
-  }
-  return presetProjection.get(agentId)?.text ?? ''
-}
-
-function agentPresetTemperatureOf(agentId: string | undefined): number | undefined {
-  if (typeof agentId !== 'string' || agentId.trim() === '') return undefined
-  if (!presetLoadStarted.has(agentId)) {
-    presetLoadStarted.add(agentId)
-    void loadAgentPreset(agentId)
-  }
-  return presetProjection.get(agentId)?.temperature
-}
-
-async function loadAgentPreset(agentId: string): Promise<void> {
-  const ticket = (presetLoadTicket.get(agentId) ?? 0) + 1
-  presetLoadTicket.set(agentId, ticket)
-  try {
+const presetProjection = createLazyProjection<{ text: string; temperature?: number }>({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
     const db = await tavernStore()
     const state = await db.getState()
     const binding = state.sessionBindings[agentId]
@@ -1219,7 +1140,6 @@ async function loadAgentPreset(agentId: string): Promise<void> {
     // 「内置角色扮演预设」）。预设文件损坏（parse 抛错）由外层 catch 兜底。
     const preset = parsePreset(activePreset ?? defaultPreset())
     const block = renderAgentPresetBlock(preset, character?.card)
-    if (presetLoadTicket.get(agentId) !== ticket) return
     // 冻结求值上下文：首次装载建立、重载复用（见 presetFreeze 注释）——写穿重
     // 渲染对相同输入字节稳定，动态宏不再随重载换值烧掉 system 头前缀缓存。
     const freeze = presetFreeze.get(agentId) ?? { frozenAt: Date.now(), seed: (Math.random() * 0x1_0000_0000) >>> 0 }
@@ -1232,52 +1152,34 @@ async function loadAgentPreset(agentId: string): Promise<void> {
       { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) },
     )
     const temperature = presetTemperature(preset)
-    presetProjection.set(agentId, {
+    settle({
       text: block === undefined ? '' : hostPromptSafe(block, expand),
       ...(temperature === undefined ? {} : { temperature }),
     })
-  } catch {
-    // A missing store must not prevent the host agent from starting.
-  }
+  },
+})
+
+function agentPresetText(agentId: string | undefined): string {
+  return presetProjection.valueOf(agentId)?.text ?? ''
+}
+
+function agentPresetTemperatureOf(agentId: string | undefined): number | undefined {
+  return presetProjection.valueOf(agentId)?.temperature
 }
 
 // 模块加载即注册写穿回调：预设写路径（index.ts 的 settings/preset 路由、写卡
 // 工作台 preset_put、会话激活预热）成功后重新装载所有 AgentTavern 绑定；
 // 无绑定时是 no-op。
-onAgentPresetChanged(async () => {
-  try {
-    const db = await tavernStore()
-    const state = await db.getState()
-    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-      if (binding.architecture !== 'agent-tavern') continue
-      presetLoadStarted.add(agentId)
-      await loadAgentPreset(agentId)
-    }
-  } catch {
-    // best-effort 写穿：失败只意味着下一次装配沿用旧缓存。
-  }
-})
+onAgentPresetChanged(() => presetProjection.refreshWhere((binding) => binding.architecture === 'agent-tavern'))
 
-let presetPreheatDone = false
 /**
  * 启动预热（apply() 调用）：插件重启后 store 里既有绑定（持续中的会话）不再
  * 走 index.ts 的激活预热，懒装载竞态会让首轮装配拿到空串、装载完成后整块出现
  * ——system 头一次突变，其后全部前缀缓存作废。挂载时主动装载一遍全部
  * agent-tavern 绑定；模块级幂等（apply 可能被宿主重复调用），失败由懒装载兜底。
  */
-async function preheatAgentPresetProjections(): Promise<void> {
-  if (presetPreheatDone) return
-  presetPreheatDone = true
-  try {
-    const state = await (await tavernStore()).getState()
-    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-      if (binding.architecture !== 'agent-tavern') continue
-      presetLoadStarted.add(agentId)
-      await loadAgentPreset(agentId)
-    }
-  } catch {
-    // best-effort 预热：失败只意味着回到懒装载路径。
-  }
+function preheatAgentPresetProjections(): Promise<void> {
+  return presetProjection.preheatWhere((binding) => binding.architecture === 'agent-tavern')
 }
 
 export function identitySummaryOf(data: { extensions?: Record<string, unknown> }): string | undefined {
@@ -1298,20 +1200,6 @@ function variableStore(): Promise<VariableStore> {
   return (variableStorePromise ??= VariableStore.open(dshHomePath('tavern')))
 }
 
-function stringArg(value: unknown): string {
-  if (typeof value !== 'string' || value.trim() === '') throw new Error('string argument is required')
-  return value
-}
-
-function boundedStringArg(value: unknown, maxLength: number): string {
-  return stringArg(value).slice(0, maxLength)
-}
-
-function clampInt(value: unknown, min: number, max: number, fallback: number): number {
-  if (!Number.isInteger(value)) return fallback
-  return Math.max(min, Math.min(max, value as number))
-}
-
 function clampScore(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
   return Math.max(0, Math.min(1, value))
@@ -1321,10 +1209,6 @@ function optionalExpiry(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
   return trimmed === '' ? undefined : trimmed
-}
-
-function limitText(value: string | undefined, max: number): string {
-  return typeof value === 'string' ? value.slice(0, max) : ''
 }
 
 function approximateTokens(value: string): number {

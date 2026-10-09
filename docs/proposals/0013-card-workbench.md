@@ -21,7 +21,7 @@
 | 组件 | 决策 |
 |---|---|
 | preset | `card-workbench` preset：工具 + 提示词（讨论→方案→确认→写入），挂到独立工作台会话 |
-| 资产工具 | `card_get/card_put`（工作版）、`world_get/world_put`、`world_list/world_create`（本书库列举 + 新建世界书，2026-10-08 补齐）、`preset_get/preset_put`、`script_get/script_put`（剧本，读 0014）、`card_restore_original`（恢复原版）、`chat_log_read`（排错用，读真实游玩记录）。2026-10-08 完整扩展：世界书条目白名单放开到全量实用 ST LoreEntry 字段（声明式字段表驱动 schema/校验/写入/摘要）+ `remove` 删条目 + `uids` 全文读取；新增 `world_delete`（有卡链接先拒、清 activeWorlds）、`world_rename`（卡链接与 activeWorlds 随改）、`world_bind`（书↔卡挂载/解绑）、`world_copy`（整书无损分叉），见 `decisions/2026-10-08-worldbook-full-editing.md`。角色卡侧同构补全：字段白名单扩到 mesExample/systemPrompt/postHistoryInstructions/creator/characterVersion + tags/alternateGreetings 整组数组替换（方案协议值放宽 string\|string[]）、`card_get full` 全文读取、`card_create` 出厂快照、`card_delete` 双重闸门（有聊天先拒、`deleteChats` 二次确认；连带群组/绑定/原版快照清理），见 `decisions/2026-10-08-card-full-editing.md` |
+| 资产工具 | `card_get/card_put`（工作版）、`world_get/world_put`、`world_list/world_create`（本书库列举 + 新建世界书，2026-10-08 补齐）、`preset_get/preset_put`、`script_get/script_put`（剧本，读 0014；**已裁剪**——读面由 `material_list`/`material_read` 承担、写面不做，见 `decisions/2026-10-09-workbench-script-tools-cut.md`）、`card_restore_original`（恢复原版）、`chat_log_read`（排错用，读真实游玩记录）。2026-10-08 完整扩展：世界书条目白名单放开到全量实用 ST LoreEntry 字段（声明式字段表驱动 schema/校验/写入/摘要）+ `remove` 删条目 + `uids` 全文读取；新增 `world_delete`（有卡链接先拒、清 activeWorlds）、`world_rename`（卡链接与 activeWorlds 随改）、`world_bind`（书↔卡挂载/解绑）、`world_copy`（整书无损分叉），见 `decisions/2026-10-08-worldbook-full-editing.md`。角色卡侧同构补全：字段白名单扩到 mesExample/systemPrompt/postHistoryInstructions/creator/characterVersion + tags/alternateGreetings 整组数组替换（方案协议值放宽 string\|string[]）、`card_get full` 全文读取、`card_create` 出厂快照、`card_delete` 双重闸门（有聊天先拒、`deleteChats` 二次确认；连带群组/绑定/原版快照清理），见 `decisions/2026-10-08-card-full-editing.md` |
 | 确认协议 | 写入工具必须携带 `planId`；方案先经 `card_plan_propose` 落库，用户在面板或对话确认后 `card_put(planId)` 才生效——对齐 flizzywine「先给方案，确认后写入」。2026-10-08 面板化扩展：`world_plan_propose` 把世界书编辑/建书纳入同款协议（方案存储 kind 判别，`world_put`/`world_create` 接 planId 路径，面板 diff 按条目分组渲染），见 `decisions/2026-10-08-worldbook-plan-protocol.md` |
 | 原版/工作版 | `tavern-store` 卡目录增加 `.original` 快照（导入时写一次）；工作版即现有文件 |
 | 排错入口 | 面板「交给工作台调试」：引用指定聊天 +楼层范围，工作台会话注入对应记录 |
@@ -38,4 +38,7 @@
 
 - 不做 flizzywine 的内置 Skill 库分发（create-skill/create-writing-skill 等）：DSH 宿主已有原生
   skill 机制，工作台只产生内容不经营 Skill 商店。
+- `script_get/script_put` 裁剪（2026-10-09 补记）：读面由 `material_list`/`material_read` 承担，
+  写入面不做——剧本存储是整本导入覆盖语义，与工作台的字段级确认协议不匹配。见
+  `decisions/2026-10-09-workbench-script-tools-cut.md`。
 - 文生图、用户画像不在本提案（画像见独立调研结论，暂缓）。
