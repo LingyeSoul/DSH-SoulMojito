@@ -231,6 +231,42 @@ describe('workbench/novel preset projection mounts', () => {
     expect(text).not.toContain('{{')
   })
 
+  it('keeps the block byte-stable across write-through reloads (frozen clock and rng)', async () => {
+    // 前缀缓存纪律（与 agent-tavern 投影同款，决策 2026-10-09-agent-preset-cache-
+    // stability）：动态宏按绑定的冻结记录求值，无输入变化的写穿重载字节不变。
+    const CLOCKED = {
+      temperature: 0.8,
+      prompts: [
+        { name: 'Clock', identifier: 'clock', role: 'system', content: 'Scene time {{datetimeformat::HH:mm:ss}}; accent {{random:gold,silver}} for {{char}}.', system_prompt: true },
+      ],
+      prompt_order: [{ character_id: 100001, order: [{ identifier: 'clock', enabled: true }] }],
+    }
+    const put = makeResponse()
+    await apiHandler(makeRequest({ name: 'Mount Clock Preset', data: CLOCKED }, `/api/dsh-tavern/preset/${encodeURIComponent('Mount Clock Preset')}`, 'PUT'), put)
+    expect(put.statusCode).toBe(200)
+    const on = makeResponse()
+    await apiHandler(makeRequest({ activePreset: 'Mount Clock Preset' }, '/api/dsh-tavern/state'), on)
+    expect(on.statusCode).toBe(200)
+    await vi.waitFor(() => {
+      expect(workbenchTextOf(WORKBENCH_AGENT)).toContain('Scene time')
+    })
+    const first = workbenchTextOf(WORKBENCH_AGENT)
+    // 跨过秒边界再无输入变化写穿（同内容 PUT；路由内 await emit，返回即落定）：
+    // 若宏未按冻结记录求值，秒级时间戳必然换值——旧实现在此确定性变红。
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    const rewrite = makeResponse()
+    await apiHandler(makeRequest({ name: 'Mount Clock Preset', data: structuredClone(CLOCKED) }, `/api/dsh-tavern/preset/${encodeURIComponent('Mount Clock Preset')}`, 'PUT'), rewrite)
+    expect(rewrite.statusCode).toBe(200)
+    expect(workbenchTextOf(WORKBENCH_AGENT)).toBe(first)
+    // 收尾：恢复原激活预设，供后续回落/关断用例。
+    const back = makeResponse()
+    await apiHandler(makeRequest({ activePreset: 'Mount Preset' }, '/api/dsh-tavern/state'), back)
+    expect(back.statusCode).toBe(200)
+    await vi.waitFor(() => {
+      expect(workbenchTextOf(WORKBENCH_AGENT)).toContain('Terse prose only.')
+    })
+  })
+
   it('does not fall back to the built-in RP preset when no preset is active', async () => {
     const res = makeResponse()
     await apiHandler(makeRequest({ activePreset: null }, '/api/dsh-tavern/state'), res)

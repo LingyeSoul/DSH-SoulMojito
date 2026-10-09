@@ -14,6 +14,8 @@ import { TavernStore } from '../../tavern-store/src/index.js'
 
 const CHARACTER = 'Preset Character'
 const AGENT = 'preset-agent'
+/** apply() 之后才落库的绑定：用于验证懒装载回退路径（预热只覆盖启动时既有绑定）。 */
+const LATE_AGENT = 'late-bound-agent'
 
 const PRESET_A = {
   temperature: 0.35,
@@ -274,9 +276,10 @@ describe('AgentTavern preset projection', () => {
     expect(withCard.find((prompt) => prompt.identifier === 'jailbreak')?.content).toBe('Stay in character.')
   })
 
-  it('registers the -75 preset section and lazy-loads the active preset with macros expanded', async () => {
+  it('registers the -75 preset section and serves the preset block with macros expanded', async () => {
     expect(agentSections.get('dsh-tavern:agent-preset')?.order).toBe(-75)
-    expect(presetTextOf(AGENT)).toBe('')
+    // apply() 启动预热或首次装配的懒装载都会触发装载；waitFor 落定（预热消除
+    // 重启后首轮空串→整块出现的 system 头突变，见 preheatAgentPresetProjections）。
     await vi.waitFor(() => {
       expect(presetTextOf(AGENT)).toContain('Follow the preset main rule')
     })
@@ -290,6 +293,21 @@ describe('AgentTavern preset projection', () => {
     expect(presetTextOf('unbound-agent')).toBe('')
   })
 
+  it('lazy-loads agents bound after startup: empty until the fallback load lands', async () => {
+    // 预热只覆盖 apply() 时已存在的绑定；之后新绑定的 agent 走懒装载回退路径
+    // ——首次装配返回空串，装载完成后落定（与预热前的旧行为一致）。
+    await store.updateState((state) => ({
+      sessionBindings: {
+        ...state.sessionBindings,
+        [LATE_AGENT]: { architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER, chatId },
+      },
+    }))
+    expect(presetTextOf(LATE_AGENT)).toBe('')
+    await vi.waitFor(() => {
+      expect(presetTextOf(LATE_AGENT)).toContain('Follow the preset main rule')
+    })
+  })
+
   it('projects the preset temperature through agent/request and passes unbound agents through', async () => {
     const listener = eventListeners.get('agent/request')
     expect(listener).toBeDefined()
@@ -299,6 +317,59 @@ describe('AgentTavern preset projection', () => {
     // 非 AgentTavern 绑定原样透传（不叠加温度）
     const untouched = await listener!({ agent: { id: 'unbound-agent' } }, async () => base)
     expect(untouched).toEqual(base)
+  })
+
+  it('keeps the block byte-stable across write-through reloads (frozen clock and rng)', async () => {
+    // 前缀缓存纪律（决策 2026-10-09-agent-preset-cache-stability）：预设块住在
+    // 宿主受保护 system 头，字节一变其后全部历史/工具消息的缓存一并作废。
+    // 动态宏（{{time}}/{{date}}/{{random}}）按绑定的冻结记录求值——没有真实
+    // 输入变化的写穿重载必须复现同一字节。
+    const STABLE = {
+      temperature: 0.7,
+      prompts: [
+        { name: 'Clock', identifier: 'clock', role: 'system', content: 'Time is {{time}} on {{date}} at {{datetimeformat::HH:mm:ss}}; pick {{random:crimson,azure}} for {{char}}.', system_prompt: true },
+      ],
+      prompt_order: [{ character_id: 100001, order: [{ identifier: 'clock', enabled: true }] }],
+    }
+    const putRes = makeResponse()
+    await apiHandler(makeRequest({ name: 'Preset Stable', data: STABLE }, `/api/dsh-tavern/preset/${encodeURIComponent('Preset Stable')}`, 'PUT'), putRes)
+    expect(putRes.statusCode).toBe(200)
+    const switchRes = makeResponse()
+    await apiHandler(makeRequest({ activePreset: 'Preset Stable' }, '/api/dsh-tavern/state'), switchRes)
+    expect(switchRes.statusCode).toBe(200)
+    await vi.waitFor(() => {
+      expect(presetTextOf(AGENT)).toContain('Time is')
+    })
+    const first = presetTextOf(AGENT)
+    const token = /Time is (.+?) on (.+?) at (.+?); pick (.+?) for/.exec(first)
+    expect(token).not.toBeNull()
+
+    // 跨过秒边界再无输入变化写穿（同内容 PUT 触发重载；路由内 await emit，返回即
+    // 落定）：若宏未按冻结记录求值，秒级时间戳必然换值——旧实现在此确定性变红。
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    const rewriteRes = makeResponse()
+    await apiHandler(makeRequest({ name: 'Preset Stable', data: structuredClone(STABLE) }, `/api/dsh-tavern/preset/${encodeURIComponent('Preset Stable')}`, 'PUT'), rewriteRes)
+    expect(rewriteRes.statusCode).toBe(200)
+    expect(presetTextOf(AGENT)).toBe(first)
+
+    // 内容编辑仍即时生效（用户主动改预设，一次性重建缓存是可接受代价），
+    // 但冻结宏的取值不漂移——只有编辑的文本变，时钟/随机选择停在装载时刻。
+    const edited = structuredClone(STABLE)
+    edited.prompts[0]!.content = 'Time is {{time}} on {{date}} at {{datetimeformat::HH:mm:ss}}; pick {{random:crimson,azure}} — EDITED for {{char}}.'
+    const editRes = makeResponse()
+    await apiHandler(makeRequest({ name: 'Preset Stable', data: edited }, `/api/dsh-tavern/preset/${encodeURIComponent('Preset Stable')}`, 'PUT'), editRes)
+    expect(editRes.statusCode).toBe(200)
+    const second = presetTextOf(AGENT)
+    expect(second).not.toBe(first)
+    expect(second).toContain(`Time is ${token![1]} on ${token![2]} at ${token![3]}; pick ${token![4]} — EDITED for Preset Character.`)
+
+    // 收尾：恢复 Preset A，供后续路由用例的起始状态。
+    const backRes = makeResponse()
+    await apiHandler(makeRequest({ activePreset: 'Preset A' }, '/api/dsh-tavern/state'), backRes)
+    expect(backRes.statusCode).toBe(200)
+    await vi.waitFor(() => {
+      expect(presetTextOf(AGENT)).toContain('Follow the preset main rule')
+    })
   })
 
   it('refreshes the projection through the state, preset edit and delete routes', async () => {

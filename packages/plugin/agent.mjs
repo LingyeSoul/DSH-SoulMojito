@@ -4875,9 +4875,24 @@ function createMacroEngine(init) {
 }
 
 // packages/plugin/src/prompt-safety.ts
-function createHostPromptExpander(char, user) {
-  const macros = createMacroEngine({ char, user });
+function createHostPromptExpander(char, user, frozen) {
+  const macros = createMacroEngine({
+    char,
+    user,
+    ...frozen?.now === void 0 ? {} : { now: frozen.now },
+    ...frozen?.rng === void 0 ? {} : { rng: frozen.rng }
+  });
   return (text) => macros.expand(text);
+}
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = state + 1831565813 >>> 0;
+    let t = state;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
 }
 function hostPromptSafe(text, expand = (value) => value) {
   return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
@@ -4922,6 +4937,7 @@ function apply(ctx) {
     order: -75,
     text: (assembly) => agentPresetText(assembly?.agent?.id)
   });
+  void preheatAgentPresetProjections();
   ctx.systemPrompt?.context?.({
     name: "dsh-tavern:agent-facts",
     order: -70,
@@ -5832,6 +5848,7 @@ async function refreshAgentScriptSummaries(character, chatId) {
 var presetProjection = /* @__PURE__ */ new Map();
 var presetLoadStarted = /* @__PURE__ */ new Set();
 var presetLoadTicket = /* @__PURE__ */ new Map();
+var presetFreeze = /* @__PURE__ */ new Map();
 function agentPresetText(agentId) {
   if (typeof agentId !== "string" || agentId.trim() === "") return "";
   if (!presetLoadStarted.has(agentId)) {
@@ -5861,9 +5878,12 @@ async function loadAgentPreset(agentId) {
     const preset = parsePreset(activePreset ?? defaultPreset());
     const block = renderAgentPresetBlock(preset, character?.card);
     if (presetLoadTicket.get(agentId) !== ticket) return;
+    const freeze = presetFreeze.get(agentId) ?? { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
+    presetFreeze.set(agentId, freeze);
     const expand = createHostPromptExpander(
       character?.card.data.nickname || character?.card.data.name || binding.character,
-      state.activePersona ?? DEFAULT_USER
+      state.activePersona ?? DEFAULT_USER,
+      { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) }
     );
     const temperature = presetTemperature(preset);
     presetProjection.set(agentId, {
@@ -5885,6 +5905,20 @@ onAgentPresetChanged(async () => {
   } catch {
   }
 });
+var presetPreheatDone = false;
+async function preheatAgentPresetProjections() {
+  if (presetPreheatDone) return;
+  presetPreheatDone = true;
+  try {
+    const state = await (await tavernStore()).getState();
+    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+      if (binding.architecture !== "agent-tavern") continue;
+      presetLoadStarted.add(agentId);
+      await loadAgentPreset(agentId);
+    }
+  } catch {
+  }
+}
 function identitySummaryOf(data) {
   const agentTavern = data.extensions?.agentTavern;
   const summary = agentTavern?.identitySummary;

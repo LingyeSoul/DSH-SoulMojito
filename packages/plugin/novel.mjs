@@ -5345,9 +5345,24 @@ function createMacroEngine(init) {
 }
 
 // packages/plugin/src/prompt-safety.ts
-function createHostPromptExpander(char, user) {
-  const macros = createMacroEngine({ char, user });
+function createHostPromptExpander(char, user, frozen) {
+  const macros = createMacroEngine({
+    char,
+    user,
+    ...frozen?.now === void 0 ? {} : { now: frozen.now },
+    ...frozen?.rng === void 0 ? {} : { rng: frozen.rng }
+  });
   return (text) => macros.expand(text);
+}
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = state + 1831565813 >>> 0;
+    let t = state;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
 }
 function hostPromptSafe(text, expand = (value) => value) {
   return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
@@ -5861,6 +5876,7 @@ onGuidesChanged(async (character, chatId) => {
 var presetProjection = /* @__PURE__ */ new Map();
 var presetLoadStarted = /* @__PURE__ */ new Set();
 var presetLoadTicket = /* @__PURE__ */ new Map();
+var presetFreeze = /* @__PURE__ */ new Map();
 async function loadAgentPreset(agentId) {
   const ticket = (presetLoadTicket.get(agentId) ?? 0) + 1;
   presetLoadTicket.set(agentId, ticket);
@@ -5874,9 +5890,12 @@ async function loadAgentPreset(agentId) {
     const preset = parsePreset(activePreset ?? defaultPreset());
     const block = renderAgentPresetBlock(preset, character?.card);
     if (presetLoadTicket.get(agentId) !== ticket) return;
+    const freeze = presetFreeze.get(agentId) ?? { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
+    presetFreeze.set(agentId, freeze);
     const expand = createHostPromptExpander(
       character?.card.data.nickname || character?.card.data.name || binding.character,
-      state.activePersona ?? DEFAULT_USER
+      state.activePersona ?? DEFAULT_USER,
+      { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) }
     );
     const temperature = presetTemperature(preset);
     presetProjection.set(agentId, {
@@ -6566,6 +6585,8 @@ function mountPresetProjection(options) {
   const projection = /* @__PURE__ */ new Map();
   const started = /* @__PURE__ */ new Set();
   const tickets = /* @__PURE__ */ new Map();
+  const freeze = /* @__PURE__ */ new Map();
+  let preheatDone = false;
   const textOf2 = (agentId) => {
     if (typeof agentId !== "string" || agentId.trim() === "") return "";
     if (!started.has(agentId)) {
@@ -6602,11 +6623,27 @@ function mountPresetProjection(options) {
         settle("");
         return;
       }
+      const record = freeze.get(agentId) ?? { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
+      freeze.set(agentId, record);
       const expand = createHostPromptExpander(
         charNameOf(options, binding),
-        state.activePersona ?? DEFAULT_USER2
+        state.activePersona ?? DEFAULT_USER2,
+        { now: () => new Date(record.frozenAt), rng: seededRandom(record.seed) }
       );
       settle(hostPromptSafe(block, expand));
+    } catch {
+    }
+  }
+  async function preheat() {
+    if (preheatDone) return;
+    preheatDone = true;
+    try {
+      const state = await (await store()).getState();
+      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+        if (binding.architecture !== options.architecture) continue;
+        started.add(agentId);
+        await load(agentId);
+      }
     } catch {
     }
   }
@@ -6623,7 +6660,8 @@ function mountPresetProjection(options) {
   });
   return {
     section: { name: options.sectionName, order: -75, text: (assembly) => textOf2(assembly?.agent?.id) },
-    textOf: textOf2
+    textOf: textOf2,
+    preheat
   };
 }
 function charNameOf(options, binding) {
@@ -6674,6 +6712,7 @@ function apply(ctx) {
     text: hostPromptSafe(KERNEL2)
   });
   ctx.systemPrompt?.section?.(presetMount.section);
+  void presetMount.preheat();
   const tools = createTools();
   for (const tool2 of tools) {
     if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool2), `dsh-tavern:novel:${tool2.name}`);

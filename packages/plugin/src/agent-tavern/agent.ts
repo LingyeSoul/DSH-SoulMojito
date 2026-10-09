@@ -24,7 +24,7 @@ import {
 } from './deduce.js'
 import { appendMvuReceipt, type MvuReceipt, type MvuVariableChange } from '../mvu.js'
 import { appendMvuAudit } from './projector.js'
-import { createHostPromptExpander, hostPromptSafe } from '../prompt-safety.js'
+import { createHostPromptExpander, hostPromptSafe, seededRandom } from '../prompt-safety.js'
 import {
   boundScriptOf,
   getScript,
@@ -72,12 +72,17 @@ export function apply(ctx: AgentContextLike): void {
   // 内容型提示词按 prompt_order 注入，main/jailbreak 沿用卡覆盖语义；marker
   // （卡字段/世界书/示例/历史）仍走工具与原生历史（见 preset.ts 的映射说明）。
   // 装载与 facts/guides 同款 best-effort 异步；预设增删改与激活预热经 preset.ts
-  // 的跨 bundle 监听表写穿缓存，下一次装配即时生效。
+  // 的跨 bundle 监听表写穿缓存，下一次装配即时生效。字节稳定是本段的生命线：
+  // 动态宏按绑定的冻结记录求值（presetFreeze），重启经 preheat 预热——两条路
+  // 都是防 system 头突变烧掉前缀缓存（决策 2026-10-09-agent-preset-cache-stability）。
   ctx.systemPrompt?.section?.({
     name: 'dsh-tavern:agent-preset',
     order: -75,
     text: (assembly) => agentPresetText(assembly?.agent?.id),
   })
+  // 启动预热（见 preheatAgentPresetProjections 注释）：消除插件重启后既有绑定
+  // 的首轮空串竞态。fire-and-forget——装载完成前懒装载路径照常兜底。
+  void preheatAgentPresetProjections()
   // 当前 agent 身份只从装配上下文取：宿主 assemble() 的上下文携带
   // { agent, scope, signal }（@deepseek-ai/dsh-agent 的 assembleContextFor），
   // 与本插件 ctx 上没有任何 agent 服务这一事实无关。反之，未 inject 的属性
@@ -1171,6 +1176,16 @@ const presetProjection = new Map<string, { text: string; temperature?: number }>
 const presetLoadStarted = new Set<string>()
 /** 装载票号：与 guides 同款 last-write-wins，防在途过期装载覆盖新写入。 */
 const presetLoadTicket = new Map<string, number>()
+/**
+ * 缓存冻结记录（决策 2026-10-09-agent-preset-cache-stability）：绑定首次装载
+ * 捕获一次时钟与 RNG 种子，此后所有写穿重载都用同一求值上下文重渲染——相同
+ * 预设输入 ⇒ 相同字节。预设块住在宿主受保护 system 头（order -75 section），
+ * 字节一变其后全部历史/工具消息的前缀缓存一并作废；没有冻结记录时 {{time}}/
+ * {{random}} 会随每次重载（含每次会话激活的预热 emit）换值，是预设接入后缓存
+ * 命中率骤降的主因。冻结后这些宏停在装载时刻，当前时间由宿主 dsh-time-context
+ * 在消息流尾部按 append-only 纪律提供。
+ */
+const presetFreeze = new Map<string, { frozenAt: number; seed: number }>()
 
 function agentPresetText(agentId: string | undefined): string {
   if (typeof agentId !== 'string' || agentId.trim() === '') return ''
@@ -1205,11 +1220,16 @@ async function loadAgentPreset(agentId: string): Promise<void> {
     const preset = parsePreset(activePreset ?? defaultPreset())
     const block = renderAgentPresetBlock(preset, character?.card)
     if (presetLoadTicket.get(agentId) !== ticket) return
+    // 冻结求值上下文：首次装载建立、重载复用（见 presetFreeze 注释）——写穿重
+    // 渲染对相同输入字节稳定，动态宏不再随重载换值烧掉 system 头前缀缓存。
+    const freeze = presetFreeze.get(agentId) ?? { frozenAt: Date.now(), seed: (Math.random() * 0x1_0000_0000) >>> 0 }
+    presetFreeze.set(agentId, freeze)
     // 预设内容是 ST 宏（{{char}}/{{user}}）的高频来源：与 facts/guides 同款
     // 宏展开 + {{...}} 中性化（prompt-safety.ts，宿主 interpolate 会炸装配）。
     const expand = createHostPromptExpander(
       character?.card.data.nickname || character?.card.data.name || binding.character,
       state.activePersona ?? DEFAULT_USER,
+      { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) },
     )
     const temperature = presetTemperature(preset)
     presetProjection.set(agentId, {
@@ -1237,6 +1257,28 @@ onAgentPresetChanged(async () => {
     // best-effort 写穿：失败只意味着下一次装配沿用旧缓存。
   }
 })
+
+let presetPreheatDone = false
+/**
+ * 启动预热（apply() 调用）：插件重启后 store 里既有绑定（持续中的会话）不再
+ * 走 index.ts 的激活预热，懒装载竞态会让首轮装配拿到空串、装载完成后整块出现
+ * ——system 头一次突变，其后全部前缀缓存作废。挂载时主动装载一遍全部
+ * agent-tavern 绑定；模块级幂等（apply 可能被宿主重复调用），失败由懒装载兜底。
+ */
+async function preheatAgentPresetProjections(): Promise<void> {
+  if (presetPreheatDone) return
+  presetPreheatDone = true
+  try {
+    const state = await (await tavernStore()).getState()
+    for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+      if (binding.architecture !== 'agent-tavern') continue
+      presetLoadStarted.add(agentId)
+      await loadAgentPreset(agentId)
+    }
+  } catch {
+    // best-effort 预热：失败只意味着回到懒装载路径。
+  }
+}
 
 export function identitySummaryOf(data: { extensions?: Record<string, unknown> }): string | undefined {
   const agentTavern = data.extensions?.agentTavern as Record<string, unknown> | undefined

@@ -109,6 +109,9 @@ export function apply(ctx: AgentContextLike): void {
   })
   // 激活预设投影（order -75：kernel 之后）：开关关闭/未装载完成时为空串。
   ctx.systemPrompt?.section?.(presetMount.section)
+  // 启动预热（preset-mount.ts）：消除插件重启后既有小说绑定的首轮空串竞态
+  // （system 头突变会一次性作废全部前缀缓存）。fire-and-forget，懒装载兜底。
+  void presetMount.preheat()
   const tools = createTools()
   for (const tool of tools) {
     if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool), `dsh-tavern:novel:${tool.name}`)
