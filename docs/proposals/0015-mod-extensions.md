@@ -218,6 +218,9 @@ Mod 宿主只活在 index bundle（`apply` 内加载）。工具/section 要在 
 
 ## 5. 风险与开放问题
 
+- **pre-llm 改写 provider/model 的落盘口径（已定）**：P0 决策曾遗留「落盘 `swipe_info.extra`
+  仍取选择器原值」的已知问题；2026-10-10 审查修复为记录 hook 后实参（swipe_info[].extra、
+  消息 extra、宿主会话轨迹三处一致，见 decisions/2026-10-10-mod-review-fixes.md）。
 - **宿主工具可见性语义**（§3.6 双路线，P1 实测定案）。
 - **ESM 实例驻留**：热重载不回收模块级副作用；靠「注册必须走 api.*、宿主持全量 disposer」纪律
   缓解，文档明示。

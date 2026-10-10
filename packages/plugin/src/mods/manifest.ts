@@ -230,9 +230,10 @@ export function satisfiesVersionRange(version: string, range: string): VersionRa
   const invalid: string[] = []
   let matched = false
   for (const alternative of alternatives) {
+    if (alternative.trim() === '') continue
+    // 过滤后为空 = 该分支只由 `*`/空白构成 ⇒ 任意版本通配分支。
     const comparators = alternative.trim().split(/\s+/).filter((item) => item !== '' && item !== '*')
-    if (alternative.trim() === '' ) continue
-    if (alternative.trim() === '*' || comparators.every((item) => item === '*')) {
+    if (comparators.length === 0) {
       matched = true
       continue
     }

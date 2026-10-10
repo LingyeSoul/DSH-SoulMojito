@@ -324,6 +324,17 @@ describe('mod http path whitelist', () => {
     expect(table.find('GET', 'stats')).toBeUndefined()
   })
 
+  it('rejects POST enable/disable/reload as host-reserved management routes', () => {
+    const table = createModRouteTable()
+    for (const path of ['enable', 'disable', 'reload']) {
+      expect(() => table.register('POST', path, () => {})).toThrow('reserved by host management routes')
+      // 仅 POST 组合被管理路由截获（index.ts 先于子路由分发）；其余 method 可达，不拒
+      expect(() => table.register('GET', path, () => {})).not.toThrow()
+    }
+    // GET ui 是面板 iframe 表面的约定路径（mod-api.md §13），必须可注册
+    expect(() => table.register('GET', 'ui', () => {})).not.toThrow()
+  })
+
   it('injects the CSP meta into html documents (attribute-escaped)', () => {
     const injected = renderModHtmlDocument('<html><head><title>x</title></head><body>hi</body></html>', "default-src 'none'")
     expect(injected.startsWith('<html><head><meta http-equiv="Content-Security-Policy" content="default-src &#x27;none&#x27;"')).toBe(false)

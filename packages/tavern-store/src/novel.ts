@@ -2017,8 +2017,6 @@ async function replaceHead(head: string, bytes: Uint8Array): Promise<void> {
   }
 }
 
-/** rebuildable projections 的原子写统一走 fs-atomic（唯一 tmp + Windows rename 重试）。 */
-
 async function readDirectories(root: string): Promise<string[]> {
   try {
     const entries = await fs.readdir(root, { withFileTypes: true })

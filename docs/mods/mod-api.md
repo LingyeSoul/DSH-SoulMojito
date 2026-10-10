@@ -249,7 +249,9 @@ api.onDispose(async () => { await flushSomething() })   // 与 setup 返回的 d
 
 路由挂 `/api/dsh-tavern/mods/<id>/<path>`。**method**：`GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS`。
 **path**：非空相对路径，段 `[A-Za-z0-9][A-Za-z0-9._-]*` 以 `/` 连接，≤200 字符，拒绝 `\`、
-`%`、`.`/`..` 段（穿越在注册与分发两侧都拒）。同 method+path 重复注册抛错。
+`%`、`.`/`..` 段（穿越在注册与分发两侧都拒）。同 method+path 重复注册抛错。**保留段**：
+`POST` 的 `enable`/`disable`/`reload` 是宿主管理路由（先于子路由分发被截获），注册即抛错；
+`GET ui` 不在此列——那是面板 iframe 表面的约定路径（§13），由你的 Mod 自行注册。
 
 ```js
 api.http.route('GET', 'stats', async (req, reply) => {
@@ -287,6 +289,10 @@ waterfall**：按 `loadingOrder` 升序（平局按注册先后），前一 hook
 | `pre-llm` | llm.stream 之前 | `{messages, system?, params}` → 同形 | 最终请求改写（对齐宿主 agent/request 语义） |
 | `post-output` | AI_OUTPUT regex 与渲染之前 | `string`（模型原文）→ `string` | 输出观察/改写 |
 | `post-save` | saveChat 之后 | `{chat, revision, speaker, finalText}`（**返回值被丢弃**，只读观察） | 落盘后统计 |
+
+pre-llm 改写 `params.provider/model` 后，落盘元数据（`swipe_info[].extra`、消息 `extra`、
+宿主会话轨迹）记录**改写后的实参**——与实际发给 llm.stream 的请求一致，不记生成器选择器的
+原值。
 
 context（第二参数，只读）：`{phase, mode: 'send'|'regenerate'|'trigger', character, chatId, group}`。
 

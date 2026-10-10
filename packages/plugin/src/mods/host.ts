@@ -153,7 +153,7 @@ interface LoadedMod {
   /** P2 能力面（hooks/tools/macros/stscript/section）的反注册句柄；卸载统一执行。 */
   offRegistrations: Array<() => void>
   /** 本实例的实际注册面（启用确认/快照展示用；manifest 声明是另一来源）。 */
-  surfaces: { hooks: Set<string>; tools: Set<string>; http: Set<string>; macros: Set<string>; sections: Set<string> }
+  surfaces: { hooks: Set<string>; tools: Set<string>; http: Set<string> }
   /** 本实例的私有存储：卸载末尾 flush 排空在飞写（验收打回的竞态修复点）。 */
   storage: ModStorage
 }
@@ -461,7 +461,7 @@ export class ModHost {
       timers: new Set(),
       offEvents: [],
       offRegistrations: [],
-      surfaces: { hooks: new Set(), tools: new Set(), http: new Set(), macros: new Set(), sections: new Set() },
+        surfaces: { hooks: new Set(), tools: new Set(), http: new Set() },
       storage: new ModStorage(join(disc.directory, 'data', 'state.json'), {
         onQuota: (message) => { void this.audit.record(id, 'storage-quota', message) },
       }),
@@ -686,7 +686,6 @@ export class ModHost {
               return null
             }
           }
-          record.surfaces.macros.add(macroName)
           return tracked(registerHostMacro(macroName, wrapped, record.manifest.loadingOrder))
         },
       },
@@ -710,7 +709,6 @@ export class ModHost {
           }
           const fullSpec = { ...(spec as Record<string, unknown>), name: commandName } as never
           const off = registerStscriptCommand(fullSpec)
-          record.surfaces.macros.add(`/${commandName}`)
           return tracked(off)
         },
       },
@@ -726,7 +724,6 @@ export class ModHost {
           if (typeof text !== 'string' || text === '') throw new Error('prompt section text must be a non-empty string')
           if (text.length > 65_536) throw new Error('prompt section text exceeds the 64KB limit')
           const clampedOrder = clampModSectionOrder(order)
-          record.surfaces.sections.add(name)
           return tracked(registerModSection(id, { name, text, order: clampedOrder }, record.manifest.loadingOrder))
         },
       },

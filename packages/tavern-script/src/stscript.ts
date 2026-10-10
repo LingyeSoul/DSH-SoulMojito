@@ -144,7 +144,7 @@ export function parseCommand(part: string, expand: (text: string) => string): Sc
 
 /* ------------------------------ 执行 ------------------------------ */
 
-const NUMERIC_OPS: Record<string, (a: number, b: number) => boolean> = {  '=': (a, b) => a === b,
+const NUMERIC_OPS: Record<string, (a: number, b: number) => boolean> = { '=': (a, b) => a === b,
   '==': (a, b) => a === b,
   '!=': (a, b) => a !== b,
   '>': (a, b) => a > b,

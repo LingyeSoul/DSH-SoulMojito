@@ -6,7 +6,7 @@
 
 第一版主线已经可用：插件复用 DSH 的 LLM 路由、默认模型、密钥管理、Web 容器和插件安装机制，同时在 DSH 原生侧边栏和 conversation 区域提供 Tavern 角色扮演体验。管理入口是独立的 Tavern 面板；设置页保留当前配置的快速切换，不再承载全部资产管理表单。
 
-在此之上，交互面提供持续指引、行动候选与带意见重写；资产面提供 MVU 变量结算回执、卡片工作台（对话改卡 + 确认协议）与剧本游玩（提案 0009-0014，均已实现）。
+在此之上，交互面提供持续指引、行动候选与带意见重写；资产面提供 MVU 变量结算回执、卡片工作台（对话改卡 + 确认协议）与剧本游玩；扩展面提供 Mod 扩展接口与官方示例（提案 0009-0015，均已实现）。
 
 当前面向 DSH `0.2.0-rc.2` 验证。Fabric 不在第一版运行路径中。
 
@@ -35,6 +35,7 @@
 - 卡片工作台：`dsh-tavern/card-workbench` agent preset。用对话描述想改什么，Agent 先给出方案，经确认面板（diff 视图）确认后才写入——写入工具必须携带已确认方案的 `planId`。支持修改人物卡/世界书/预设、空白建卡、从素材或剧本提取人物制卡、card-to-mvu 转换（写入固定状态栏模板与新聊天初始变量），以及把指定聊天连同楼层范围交给工作台排错。导入资产时写一次原版快照，随时可恢复原版。写卡 Agent 落盘后面板自动吸收：打开面板即重取最新资产，页面可见期间按 store 变更水位（3s）轮询，写入到列表可见不需手动刷新页面。面板「预设」分区的「预设生效范围」可让工作台（引用式，供起草卡面对齐风格与排错还原对局提示词环境）与小说推演（跟随式风格栈）接入激活预设堆栈，两者默认关闭。详见 [`docs/proposals/0013-card-workbench.md`](docs/proposals/0013-card-workbench.md)、[`decisions/2026-10-09-workbench-novel-preset-projection.md`](decisions/2026-10-09-workbench-novel-preset-projection.md)。
 - 剧本游玩：TXT/Markdown/EPUB 小说、大纲或剧本导入为剧本资产，与人物卡一对一绑定，新开局自动按剧本推进；只按进度召回附近片段，不整本注入上下文。剧本块是参考不是约束：玩家随时可偏离，只有正文实际覆盖当前片段的关键事件才推进进度；右侧剧本卡实时显示进度（是进度展示，不是跳章按钮）。详见 [`docs/proposals/0014-script-play.md`](docs/proposals/0014-script-play.md)。
 - 美化前端：助手消息中的完整 HTML 文档或 `html` 代码块会在隔离 iframe 中运行，支持内联 CSS、JavaScript 和常用 CDN 资源；普通文本与不完整流式内容仍按文本显示。
+- Mod 扩展接口（提案 0015）：把带 `mod.json` 的目录放进 `$DSH_HOME/tavern/mods/`（或面板内 git 一键安装）即可被识别，默认禁用；首次启用弹确认层如实展示其声明的能力面（知情同意，含无沙箱告知）。启用后的 Mod 可注册：五相位生成 hook（user-input / pre-assemble / pre-llm / post-output / post-save，顺序 waterfall，抛错 / 超时 / 忘 return 统一降级、不中断生成）、Agent 工具（强制 `<modId>_` 前缀并与内置工具三层查重，冲突即拒）、宿主宏与 STscript 命令（确定性筛查，首错降级保原文）、prompt 分区（order 宿主钳制 -50..0 防冲核心位）、带配额的持久化存储（单值 256KB / 总量 1MB）、HTTP 子路由（`/api/dsh-tavern/mods/<id>/`，path 白名单拒穿越）与沙箱化面板 UI（`sandbox="allow-scripts"` iframe，无 same-origin，CSP `connect-src 'none'`，postMessage 数据桥）；llm 调用能力按 manifest 声明门控，用量进审计。坏 Mod 只记审计跳过、不拖垮本体；禁用 / 卸载全注册面回收，全部装载与调用行为落审计日志；`DSH_TAVERN_DISABLE_MODS` 可硬关整个 Mod 系统。开发者文档见 [`docs/mods/mod-api.md`](docs/mods/mod-api.md)，官方示例 asset-stats / mood-tracker / story-clock 覆盖 v1 全部能力面。
 
 ### 酒馆美化前端
 
@@ -98,6 +99,7 @@ iframe 高度由 `ResizeObserver` 回传，并限制在 80-1200px；超出部分
 - **小说**：AgentNovel 小说库，新建全自动写作的小说工程并查看既有工程。
 - **剧本**：导入 TXT/Markdown/EPUB 为剧本资产（自动分块），管理分块、与角色卡的绑定（一卡一剧本）和进度。
 - **工作台**：卡片工作台的方案确认入口——展开查看 Agent 提出方案的逐字段改动（当前 / 改为），「批准并应用」写入工作版或「拒绝」；方案带待确认/已批准/已拒绝/已应用状态。聊天排错按聊天粒度组织：侧边栏聊天行的写卡按钮为该聊天拉起/复用专属写卡工作会话（每个聊天一个，落在专用内部工作区，集中显示在侧边栏「写卡工作台」分组），也可拉起不绑定聊天的自由工作台；Agent 用 `chat_log_read` 引用指定聊天与楼层范围。
+- **Mods**：Mod 扩展的管理面——已识别 Mod 的清单、能力声明 Pill、错误位（含 engines 版本不满足的原因）与审计计数，全局 / 单 Mod 两层开关、git 安装与重载；首次启用弹确认层（知情同意，含无沙箱告知）。
 
 编辑器会显示未保存状态，取消离开时提示确认，页面关闭时提供浏览器级离开保护。角色卡、世界书和预设的保存都经过服务端格式校验，再写回 `$DSH_HOME/tavern/`。
 
@@ -114,7 +116,7 @@ iframe 高度由 `ResizeObserver` 回传，并限制在 80-1200px；超出部分
 | `shell.overlay` | Tavern 管理面板 Modal，以及侧栏聊天树 adapter 的生命周期承载 |
 | `sidebar.footer.action` | 常驻 Tavern 面板按钮，与原生 Settings 并列 |
 
-DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏因此使用一个集中、版本敏感但失败关闭的 DOM adapter：只匹配可见左侧 `[role="tree"]`，按 workspace 路径/ID 隐藏 `Tavern (internal)` 分组，并按 `state.sessionBindings` 过滤旧版 Tavern 会话行；同时插入具名 `data-dsh-tavern-sidebar-host`。宿主重绘或虚拟列表更新时会重新应用过滤，解绑或卸载时可逆恢复。面板入口本身走官方 `sidebar.footer.action`，不会替换 Settings，也不依赖 adapter 是否成功挂载。
+DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏因此使用一个集中、版本敏感但失败关闭的 DOM adapter：只匹配可见左侧 `[role="tree"]`，按 workspace 路径/ID 隐藏 `Tavern (internal)` 分组，并按 `state.sessionBindings` 过滤旧版 Tavern 会话行；同时插入具名 `data-dsh-tavern-sidebar-host`。宿主重绘或虚拟列表更新时会重新应用过滤，解绑或卸载时可逆恢复。面板入口本身走官方 `sidebar.footer.action`，不会替换 Settings，也不依赖 adapter 是否成功挂载。侧栏「酒馆」与「写卡工作台」分区标题行可点击整块折叠（chevron + `aria-expanded`，折叠时「新建自由写卡工作台」按钮仍可用）；docked 侧栏门户与管理面板聊天分区两个挂载点共享同一折叠态，页面重载恢复全展开。
 
 每个 Tavern chat 绑定一个正式 DSH session。绑定 API 通过插件内部桥接追加 plugin notice marker，使 session 进入 active 状态而不调用模型；Tavern view、composer 和标题栏 action 仅接管带有效 Tavern marker 的 session，普通 DSH 会话保持原生表面。酒馆标题栏会局部隐藏 DSH 自带的 agent preset 标签，并在切换回普通会话时恢复；Tavern 自建生成循环会把 turn/step、流式 chunk、assistant message 和 provider usage 镜像进同一 session，因此标题栏直接复用 DSH 的 `sessionStats` / `tokenUsage` projection。删除聊天时会追加 close marker 并归档对应 DSH session。
 
@@ -230,7 +232,7 @@ git spec 固定到安装时的提交，不跟随源码更新；`version.json` �
 
 插件自带从 GitHub 发现新版本与一键更新，桌面版不需要再手敲 `dsh plugin`。
 
-- **发现**：「设置 → dsh-tavern」标题下与管理面板「总览」分区显示当前构建（`已安装 v0.4.0 (8271f20)`）、GitHub 上的最新构建、待合入的 commit 列表与上次检查时间。启动后延迟 12s 首查、每 6h 复查，结果缓存在 `$DSH_HOME/tavern/update-state.json`；「检查更新」按钮穿透缓存立即查。
+- **发现**：「设置 → dsh-tavern」标题下与管理面板「总览」分区显示当前构建（`已安装 v0.4.5 (7a29db6)`）、GitHub 上的最新构建、待合入的 commit 列表与上次检查时间。启动后延迟 12s 首查、每 6h 复查，结果缓存在 `$DSH_HOME/tavern/update-state.json`；「检查更新」按钮穿透缓存立即查。
 - **判定**：仓库不发 release/tag，因此以 main 分支最新 commit + `packages/plugin/package.json` 的 version 为准（规则见 [`decisions/2026-10-05-desktop-plugin-self-update.md`](decisions/2026-10-05-desktop-plugin-self-update.md)）。
 - **更新**：「立即更新」按 `dsh plugin`（桌面版自带 CLI，直接改 profile 的 `package.json` + `pnpm-lock.yaml`）→ `plugin-manager` 服务 → GitHub checkout 覆写的顺序落地，进度日志实时显示在卡片里。三条路径都需要**重启 DeepSeek Harness**：包替换要新的 JS module generation，宿主 HMR 不监听 `node_modules`。
 - **来源降级**：`api.github.com` → `raw.githubusercontent.com` + `git ls-remote` → commits atom feed。企业 TLS 中间人会让 node 的 `fetch` 证书校验失败（`unable to verify the first certificate`），因此每个 HTTP 请求在 fetch 失败后自动用系统 `curl` 重试。
@@ -283,7 +285,7 @@ pnpm run check
 4. 在原生左侧 Tavern 分支展开角色并创建或打开单角色聊天：AgentTavern 使用 DSH 原生 conversation，ST 使用原生 `Tavern` tab。
 5. 在 ST 聊天中验证编辑、swipe、regenerate 和 STscript；在 AgentTavern 聊天中验证原生 composer、工具调用、Stop 和会话统计。
 
-插件 Node bundle 是单一 `packages/plugin/index.mjs`，五个纯库均已内联。无需用户额外安装公共 `@deepseek-ai/*` 运行时依赖；client closure 由 DSH profile 注入。
+插件 Node half 是五个自包含 bundle：`index.mjs` 主入口，加 `agent` / `compaction` / `novel` / `card-workbench` 四个子代理入口（见 `package.json` 的 `exports`）；`@dsh-tavern/*` 工作区库（format / lore / macros / pipeline / script / store / template / bind）全部内联，无运行时依赖。无需用户额外安装公共 `@deepseek-ai/*` 运行时依赖；client closure 由 DSH profile 注入。
 
 ## 测试基线
 
@@ -291,7 +293,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：68 个测试文件、974 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
+当前基线：68 个测试文件、976 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 
@@ -315,6 +317,7 @@ GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern �
 - [`docs/proposals/0012-mvu-settlement.md`](docs/proposals/0012-mvu-settlement.md)：MVU 后台变量结算、回执与固定状态栏。
 - [`docs/proposals/0013-card-workbench.md`](docs/proposals/0013-card-workbench.md)：卡片工作台（对话改卡 + 确认协议 + 制卡/排错）。
 - [`docs/proposals/0014-script-play.md`](docs/proposals/0014-script-play.md)：剧本游玩（剧本库、绑定、对齐推进）。
+- [`docs/proposals/0015-mod-extensions.md`](docs/proposals/0015-mod-extensions.md)：Mod 扩展接口与加载机制（清单校验、三层开关、五相位 hook 总线、能力面与信任边界；配套决策 2026-10-10-mod-p0/p1/p2 三篇）。
 - [`docs/plans/2026-08-16-agent-tavern-implementation.md`](docs/plans/2026-08-16-agent-tavern-implementation.md)：AgentTavern 的分阶段施工计划、宿主门禁、迁移规则与验证矩阵。
 - [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)：DSH `0.1.0-rc.6` 原生注入、compaction 与 Fabric fallback 审计。
 - [`decisions/2026-08-15-tavern-management-panel.md`](decisions/2026-08-15-tavern-management-panel.md)：面板入口、角色删除级联、变量与侧栏共存的落地决策。

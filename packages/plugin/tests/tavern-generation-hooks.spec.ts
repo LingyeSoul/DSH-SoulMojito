@@ -146,7 +146,7 @@ describe('generation hook wiring in runGeneration (five phases)', () => {
   let home: string
   let store: TavernStore
   let apiHandler: (req: unknown, res: unknown) => Promise<void>
-  let llmRequests: Array<{ messages?: Array<{ role?: string; content?: Array<{ text?: string }> }>; system?: string }>
+  let llmRequests: Array<{ messages?: Array<{ role?: string; content?: Array<{ text?: string }> }>; system?: string; provider?: string; model?: string }>
   let chatId: string
   const offs: Array<() => void> = []
 
@@ -176,7 +176,7 @@ describe('generation hook wiring in runGeneration (five phases)', () => {
       },
       tools: { register: () => {} },
       llm: {
-        stream: async function* (request: { messages?: Array<{ role?: string; content?: Array<{ text?: string }> }>; system?: string }) {
+        stream: async function* (request: { messages?: Array<{ role?: string; content?: Array<{ text?: string }> }>; system?: string; provider?: string; model?: string }) {
           llmRequests.push(request)
           yield { type: 'text-delta', text: 'reply' }
           yield { type: 'finish', reason: { kind: 'stop' } }
@@ -237,6 +237,25 @@ describe('generation hook wiring in runGeneration (five phases)', () => {
     await generate('system probe')
     const request = llmRequests.at(-1)!
     expect(request.system).toBe('hook-injected system')
+  })
+
+  it('persisted metadata records post-hook provider/model (not the selector choice)', async () => {
+    offs.push(generationHooks.register('pre-llm', (request) => ({
+      ...request,
+      params: { ...request.params, provider: 'mod-provider', model: 'mod-model' },
+    })))
+    await generate('metadata probe')
+    const request = llmRequests.at(-1)!
+    expect(request.provider).toBe('mod-provider')
+    expect(request.model).toBe('mod-model')
+    const saved = await store.getChatSnapshot(CHAR, chatId)
+    const last = saved!.chat.messages.at(-1) as {
+      swipe_info?: Array<{ extra?: { provider?: string; model?: string } }>
+      extra?: { api?: string; model?: string }
+    }
+    // swipe_info[].extra 与消息 extra 记 hook 后实参——不与实际请求分叉
+    expect(last.swipe_info!.at(-1)!.extra).toMatchObject({ provider: 'mod-provider', model: 'mod-model' })
+    expect(last.extra).toMatchObject({ api: 'mod-provider', model: 'mod-model' })
   })
 
   it('post-output hook rewrites the model output before AI_OUTPUT regex and save', async () => {

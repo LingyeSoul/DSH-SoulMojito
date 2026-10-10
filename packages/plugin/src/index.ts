@@ -2962,6 +2962,11 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     },
   }
   const hookedLlmRequest = await generationHooks.dispatch('pre-llm', llmRequest, { mode, character: speakerName, chatId, group })
+  // pre-llm 后的实参是落盘元数据的唯一权威：mod 改写 provider/model 时，
+  // swipe_info[].extra / 消息 extra / 宿主会话轨迹不得与实际请求分叉
+  // （P0 决策遗留的已知问题就此闭环，decisions/2026-10-10-mod-review-fixes.md）。
+  const usedProvider = hookedLlmRequest.params.provider
+  const usedModel = hookedLlmRequest.params.model
   for await (const chunk of ctx.llm.stream({
     provider: hookedLlmRequest.params.provider,
     model: hookedLlmRequest.params.model,
@@ -3009,10 +3014,10 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     is_user: false, is_system: false, send_date: now, mes: finalText,
     swipe_id: oldSwipes.length,
     swipes: [...oldSwipes, finalText],
-    swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider, model, reasoning: finalReasoning || undefined, ...(options.feedback ? { feedback: options.feedback } : {}) } }],
+    swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider: usedProvider, model: usedModel, reasoning: finalReasoning || undefined, ...(options.feedback ? { feedback: options.feedback } : {}) } }],
     extra: {
       ...(regenerated?.extra ?? {}),
-      api: provider, model, reasoning: finalReasoning || undefined,
+      api: usedProvider, model: usedModel, reasoning: finalReasoning || undefined,
       activatedLore: lore.allActivated.map((e) => e.entryId),
       ...(tpl && tpl.warnings.length > 0 ? { templateWarnings: tpl.warnings } : {}),
     },
@@ -3044,7 +3049,7 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   // post-save 相位（提案 0015 §3.4）：落盘后的只读观察，返回值丢弃；hook 失败/
   // 超时降级不改变任何已落盘状态。空总线恒等。
   await generationHooks.dispatch('post-save', { chat, revision, speaker: speakerName, finalText }, { mode, character: speakerName, chatId, group })
-  hostTrace = recordTavernSessionAssistant(hostTrace, finalText, finalReasoning, provider, model, hostUsage)
+  hostTrace = recordTavernSessionAssistant(hostTrace, finalText, finalReasoning, usedProvider, usedModel, hostUsage)
   return { chat, revision, speaker: speakerName }
   } finally {
     finishTavernSessionTrace(hostTrace)

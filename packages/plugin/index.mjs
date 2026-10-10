@@ -13128,19 +13128,19 @@ async function installViaCheckout(request) {
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
   const repository = repositorySlug(request.repository);
   const profile = resolveProfileName(request.ctx);
-  const checkout2 = mkdtempSync(join11(tmpdir(), "dsh-tavern-checkout-"));
+  const checkout = mkdtempSync(join11(tmpdir(), "dsh-tavern-checkout-"));
   try {
     request.log(`fallback: git clone --depth 1 https://github.com/${repository}.git`);
-    await mustRun("git", ["clone", "--depth", "1", "--branch", request.ref, `https://github.com/${repository}.git`, checkout2], request);
+    await mustRun("git", ["clone", "--depth", "1", "--branch", request.ref, `https://github.com/${repository}.git`, checkout], request);
     if (isCommit(request.commit)) {
-      const head = (await mustRun("git", ["-C", checkout2, "rev-parse", "HEAD"], request)).trim();
+      const head = (await mustRun("git", ["-C", checkout, "rev-parse", "HEAD"], request)).trim();
       if (!head.startsWith(shortCommit(request.commit))) {
         request.log(`checkout ${shortCommit(request.commit)}`);
-        await mustRun("git", ["-C", checkout2, "fetch", "--depth", "1", "origin", request.commit], request);
-        await mustRun("git", ["-C", checkout2, "checkout", "--quiet", request.commit], request);
+        await mustRun("git", ["-C", checkout, "fetch", "--depth", "1", "origin", request.commit], request);
+        await mustRun("git", ["-C", checkout, "checkout", "--quiet", request.commit], request);
       }
     }
-    const source = join11(checkout2, "packages", "plugin");
+    const source = join11(checkout, "packages", "plugin");
     if (!existsSync(source)) throw new Error("packages/plugin is missing from the checkout");
     const copied = copyShippedFiles(source, request.pluginDir);
     if (ensureVersionStamp(source, request.pluginDir, request.commit)) copied.push("version.json (synthesized)");
@@ -13165,7 +13165,7 @@ async function installViaCheckout(request) {
       installed: readInstalledStamp(request.pluginDir, spec)
     };
   } finally {
-    rmSync(checkout2, { recursive: true, force: true });
+    rmSync(checkout, { recursive: true, force: true });
   }
 }
 async function mustRun(command, args, request) {
@@ -13805,6 +13805,7 @@ function claimedToolNames() {
 
 // packages/plugin/src/mods/http.ts
 var MOD_HTTP_METHODS = /* @__PURE__ */ new Set(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]);
+var RESERVED_MOD_SUBROUTE_POST_PATHS = /* @__PURE__ */ new Set(["enable", "disable", "reload"]);
 var MOD_HTML_DEFAULT_CSP = [
   "default-src 'none'",
   "script-src 'unsafe-inline'",
@@ -13828,6 +13829,9 @@ function createModRouteTable() {
       }
       if (!isValidModHttpPath(path9)) {
         throw new Error(`invalid mod route path '${String(path9)}'`);
+      }
+      if (normalizedMethod === "POST" && RESERVED_MOD_SUBROUTE_POST_PATHS.has(path9)) {
+        throw new Error(`mod route POST ${path9} is reserved by host management routes`);
       }
       if (typeof handler !== "function") throw new Error("mod route handler must be a function");
       if (entries.some((entry) => entry.method === normalizedMethod && entry.path === path9)) {
@@ -14048,9 +14052,9 @@ function satisfiesVersionRange(version, range) {
   const invalid = [];
   let matched = false;
   for (const alternative of alternatives) {
-    const comparators = alternative.trim().split(/\s+/).filter((item) => item !== "" && item !== "*");
     if (alternative.trim() === "") continue;
-    if (alternative.trim() === "*" || comparators.every((item) => item === "*")) {
+    const comparators = alternative.trim().split(/\s+/).filter((item) => item !== "" && item !== "*");
+    if (comparators.length === 0) {
       matched = true;
       continue;
     }
@@ -14139,8 +14143,8 @@ var ModStorage = class {
     validateKey(key);
     const valueProblem = inspectValue(value);
     if (valueProblem !== void 0) {
-      if (valueProblem.includes("exceeds the size limit")) this.options.onQuota?.(valueProblem);
-      throw new Error(valueProblem);
+      if (valueProblem.quota) this.options.onQuota?.(valueProblem.message);
+      throw new Error(valueProblem.message);
     }
     return this.mutate(async () => {
       const file = await this.readFile() ?? { version: 1, values: {}, updatedAt: (/* @__PURE__ */ new Date(0)).toISOString() };
@@ -14217,15 +14221,15 @@ function validateKey(key) {
 function inspectValue(value) {
   if (value === void 0 || value === null) return void 0;
   if (typeof value === "function" || typeof value === "symbol") {
-    return "invalid mod storage value";
+    return { message: "invalid mod storage value", quota: false };
   }
   if (typeof value === "number" && !Number.isFinite(value)) {
-    return "mod storage numbers must be finite";
+    return { message: "mod storage numbers must be finite", quota: false };
   }
   const text = JSON.stringify(value);
-  if (text === void 0) return "invalid mod storage value";
+  if (text === void 0) return { message: "invalid mod storage value", quota: false };
   if (Buffer.byteLength(text, "utf8") > MOD_STORAGE_VALUE_LIMIT) {
-    return "mod storage value exceeds the size limit (256KB)";
+    return { message: "mod storage value exceeds the size limit (256KB)", quota: true };
   }
   return void 0;
 }
@@ -14275,6 +14279,9 @@ function gitClone(url, directory, ref, timeoutMs, exec = execFile3) {
   const args = ["clone", "--depth", "1", "--filter=blob:none", "--no-checkout"];
   if (ref !== void 0) args.push("--branch", ref);
   args.push(url, directory);
+  return runGit(args, exec, timeoutMs).then(() => runGit(["-C", directory, "checkout", "HEAD", "--", "."], exec, timeoutMs));
+}
+function runGit(args, exec, timeoutMs) {
   return new Promise((resolve5, reject) => {
     exec("git", args, {
       encoding: "utf8",
@@ -14286,24 +14293,6 @@ function gitClone(url, directory, ref, timeoutMs, exec = execFile3) {
       if (error) {
         const detail = String(stderr ?? "").trim().split(/\r?\n/).filter(Boolean).at(-1) ?? "";
         reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
-        return;
-      }
-      resolve5();
-    });
-  }).then(() => checkout(exec, directory, timeoutMs));
-}
-function checkout(exec, directory, timeoutMs) {
-  return new Promise((resolve5, reject) => {
-    exec("git", ["-C", directory, "checkout", "HEAD", "--", "."], {
-      encoding: "utf8",
-      timeout: timeoutMs,
-      windowsHide: true,
-      maxBuffer: 4 * 1024 * 1024,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
-    }, (error, _stdout, stderr) => {
-      if (error) {
-        const detail = String(stderr ?? "").trim().split(/\r?\n/).filter(Boolean).at(-1) ?? "";
-        reject(new Error(detail === "" ? error.message : detail));
         return;
       }
       resolve5();
@@ -14639,7 +14628,7 @@ var ModHost = class _ModHost {
       timers: /* @__PURE__ */ new Set(),
       offEvents: [],
       offRegistrations: [],
-      surfaces: { hooks: /* @__PURE__ */ new Set(), tools: /* @__PURE__ */ new Set(), http: /* @__PURE__ */ new Set(), macros: /* @__PURE__ */ new Set(), sections: /* @__PURE__ */ new Set() },
+      surfaces: { hooks: /* @__PURE__ */ new Set(), tools: /* @__PURE__ */ new Set(), http: /* @__PURE__ */ new Set() },
       storage: new ModStorage(join14(disc.directory, "data", "state.json"), {
         onQuota: (message) => {
           void this.audit.record(id, "storage-quota", message);
@@ -14855,7 +14844,6 @@ var ModHost = class _ModHost {
               return null;
             }
           };
-          record.surfaces.macros.add(macroName);
           return tracked(registerHostMacro(macroName, wrapped, record.manifest.loadingOrder));
         }
       },
@@ -14879,7 +14867,6 @@ var ModHost = class _ModHost {
           }
           const fullSpec = { ...spec, name: commandName };
           const off = registerStscriptCommand(fullSpec);
-          record.surfaces.macros.add(`/${commandName}`);
           return tracked(off);
         }
       },
@@ -14895,7 +14882,6 @@ var ModHost = class _ModHost {
           if (typeof text !== "string" || text === "") throw new Error("prompt section text must be a non-empty string");
           if (text.length > 65536) throw new Error("prompt section text exceeds the 64KB limit");
           const clampedOrder = clampModSectionOrder(order);
-          record.surfaces.sections.add(name2);
           return tracked(registerModSection(id, { name: name2, text, order: clampedOrder }, record.manifest.loadingOrder));
         }
       },
@@ -19384,6 +19370,8 @@ async function runGeneration(ctx, db, options) {
       }
     };
     const hookedLlmRequest = await generationHooks.dispatch("pre-llm", llmRequest, { mode, character: speakerName, chatId, group: group2 });
+    const usedProvider = hookedLlmRequest.params.provider;
+    const usedModel = hookedLlmRequest.params.model;
     for await (const chunk of ctx.llm.stream({
       provider: hookedLlmRequest.params.provider,
       model: hookedLlmRequest.params.model,
@@ -19424,11 +19412,11 @@ async function runGeneration(ctx, db, options) {
       mes: finalText,
       swipe_id: oldSwipes.length,
       swipes: [...oldSwipes, finalText],
-      swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider, model, reasoning: finalReasoning || void 0, ...options.feedback ? { feedback: options.feedback } : {} } }],
+      swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider: usedProvider, model: usedModel, reasoning: finalReasoning || void 0, ...options.feedback ? { feedback: options.feedback } : {} } }],
       extra: {
         ...regenerated?.extra ?? {},
-        api: provider,
-        model,
+        api: usedProvider,
+        model: usedModel,
         reasoning: finalReasoning || void 0,
         activatedLore: lore.allActivated.map((e) => e.entryId),
         ...tpl && tpl.warnings.length > 0 ? { templateWarnings: tpl.warnings } : {}
@@ -19452,7 +19440,7 @@ async function runGeneration(ctx, db, options) {
     revision = await db.saveChat(characterName, chatId, chat, revision);
     await emitChatSaved(characterName, chatId, revision);
     await generationHooks.dispatch("post-save", { chat, revision, speaker: speakerName, finalText }, { mode, character: speakerName, chatId, group: group2 });
-    hostTrace = recordTavernSessionAssistant(hostTrace, finalText, finalReasoning, provider, model, hostUsage);
+    hostTrace = recordTavernSessionAssistant(hostTrace, finalText, finalReasoning, usedProvider, usedModel, hostUsage);
     return { chat, revision, speaker: speakerName };
   } finally {
     finishTavernSessionTrace(hostTrace);
@@ -20041,7 +20029,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.5".trim() : "";
-  const commit = true ? normalizeCommit("8e252ca") : void 0;
+  const commit = true ? normalizeCommit("7a29db6") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

@@ -25,8 +25,6 @@ const KEY_PATTERN = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
-/** set 收 unknown、内部校验（mod 侧没有类型约束，非法值在这里 fail-closed）。 */
-
 interface StorageFile {
   version: 1
   values: Record<string, JsonValue>
@@ -36,6 +34,13 @@ interface StorageFile {
 export interface ModStorageOptions {
   /** 配额拒绝回调（审计线上报）。 */
   onQuota?: (message: string) => void
+}
+
+/** inspectValue 的校验结果：quota 区分配额类问题（转发 onQuota 审计线）
+ *  与非法值类问题——控制流不耦合在错误文案上。 */
+interface ValueProblem {
+  message: string
+  quota: boolean
 }
 
 /**
@@ -64,8 +69,8 @@ export class ModStorage {
     validateKey(key)
     const valueProblem = inspectValue(value)
     if (valueProblem !== undefined) {
-      if (valueProblem.includes('exceeds the size limit')) this.options.onQuota?.(valueProblem)
-      throw new Error(valueProblem)
+      if (valueProblem.quota) this.options.onQuota?.(valueProblem.message)
+      throw new Error(valueProblem.message)
     }
     return this.mutate(async () => {
       const file = await this.readFile() ?? { version: 1, values: {}, updatedAt: new Date(0).toISOString() }
@@ -141,18 +146,19 @@ function validateKey(key: string): void {
   }
 }
 
-function inspectValue(value: unknown): string | undefined {
+/** set accepts unknown, performs internal validation (mod side has no type constraints, invalid values fail-closed here). */
+function inspectValue(value: unknown): ValueProblem | undefined {
   if (value === undefined || value === null) return undefined
   if (typeof value === 'function' || typeof value === 'symbol') {
-    return 'invalid mod storage value'
+    return { message: 'invalid mod storage value', quota: false }
   }
   if (typeof value === 'number' && !Number.isFinite(value)) {
-    return 'mod storage numbers must be finite'
+    return { message: 'mod storage numbers must be finite', quota: false }
   }
   const text = JSON.stringify(value)
-  if (text === undefined) return 'invalid mod storage value'
+  if (text === undefined) return { message: 'invalid mod storage value', quota: false }
   if (Buffer.byteLength(text, 'utf8') > MOD_STORAGE_VALUE_LIMIT) {
-    return 'mod storage value exceeds the size limit (256KB)'
+    return { message: 'mod storage value exceeds the size limit (256KB)', quota: true }
   }
   return undefined
 }

@@ -73,14 +73,19 @@ export function parseGitSource(input: string): ParsedGitSource {
   throw new Error(`unsupported git url '${urlPart}' (expected https://github.com/<owner>/<repo> or a git URL)`)
 }
 
-/** execFile 包装（sources.ts 的 resolveRemoteCommit 同款纪律）。 */
-
 /** `git clone --depth 1 [--branch ref] <url> <dir>`；失败抛带 stderr 摘要的 Error。 */
 export function gitClone(url: string, directory: string, ref: string | undefined, timeoutMs: number, exec = execFile): Promise<void> {
   const args = ['clone', '--depth', '1', '--filter=blob:none', '--no-checkout']
   // --branch 对 commit sha 也适用（shallow 单点）；ref 缺省用远端 HEAD。
   if (ref !== undefined) args.push('--branch', ref)
   args.push(url, directory)
+  return runGit(args, exec, timeoutMs)
+    // --no-checkout + 显式 checkout：绕开 Windows 上 sparse 目录句柄滞留问题。
+    .then(() => runGit(['-C', directory, 'checkout', 'HEAD', '--', '.'], exec, timeoutMs))
+}
+
+/** execFile 包装（sources.ts 的 resolveRemoteCommit 同款纪律）：失败抛带 stderr 末行摘要的 Error。 */
+function runGit(args: string[], exec: typeof execFile, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     exec('git', args, {
       encoding: 'utf8',
@@ -92,26 +97,6 @@ export function gitClone(url: string, directory: string, ref: string | undefined
       if (error) {
         const detail = String(stderr ?? '').trim().split(/\r?\n/).filter(Boolean).at(-1) ?? ''
         reject(new Error(detail === '' ? error.message : `${error.message}: ${detail}`))
-        return
-      }
-      resolve()
-    })
-  }).then(() => checkout(exec, directory, timeoutMs))
-}
-
-/** --no-checkout + 显式 checkout：绕开 Windows 上 sparse 目录句柄滞留问题。 */
-function checkout(exec: typeof execFile, directory: string, timeoutMs: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    exec('git', ['-C', directory, 'checkout', 'HEAD', '--', '.'], {
-      encoding: 'utf8',
-      timeout: timeoutMs,
-      windowsHide: true,
-      maxBuffer: 4 * 1024 * 1024,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-    }, (error, _stdout, stderr) => {
-      if (error) {
-        const detail = String(stderr ?? '').trim().split(/\r?\n/).filter(Boolean).at(-1) ?? ''
-        reject(new Error(detail === '' ? error.message : detail))
         return
       }
       resolve()

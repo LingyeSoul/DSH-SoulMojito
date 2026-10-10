@@ -14,6 +14,12 @@
 
 export const MOD_HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])
 
+/** 管理保留子段：`POST mods/<id>/enable|disable|reload` 是宿主管理路由，先于
+ *  子路由分发被截获（index.ts handleModsApi）——这些组合注册了也永远不可达，
+ *  fail-fast 拒绝（P1 决策的文档义务落到注册面；`GET ui` 不在此列：那是面板
+ *  iframe 表面的约定路径，由 Mod 自行注册，见 mod-api.md §13）。 */
+const RESERVED_MOD_SUBROUTE_POST_PATHS = new Set(['enable', 'disable', 'reload'])
+
 /** Mod html 出口的默认 CSP（client/main.js FRONTEND_CSP 的服务端同构纪律）。 */
 export const MOD_HTML_DEFAULT_CSP = [
   "default-src 'none'",
@@ -69,6 +75,9 @@ export function createModRouteTable(): ModRouteTable {
       }
       if (!isValidModHttpPath(path)) {
         throw new Error(`invalid mod route path '${String(path)}'`)
+      }
+      if (normalizedMethod === 'POST' && RESERVED_MOD_SUBROUTE_POST_PATHS.has(path)) {
+        throw new Error(`mod route POST ${path} is reserved by host management routes`)
       }
       if (typeof handler !== 'function') throw new Error('mod route handler must be a function')
       if (entries.some((entry) => entry.method === normalizedMethod && entry.path === path)) {
