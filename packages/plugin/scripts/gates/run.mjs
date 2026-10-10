@@ -1326,7 +1326,7 @@ function runUpdateRouteProbe() {
  * mod-loader gate（提案 0015 §5 四不变量）：默认关（modsEnabled 与
  * enabled.<id> 双默认 false）、目录白名单（只扫 <tavern>/mods/ 且 path 校验拒
  * 穿越）、超时常量在 bundle、禁用时 mods 路由 404。真实 bundle 子进程探测 +
- * 静态 marker，update-routes gate 同款；示例 Mod（examples/mods/asset-stats）
+ * 静态 marker，update-routes gate 同款；示例 Mod（examples/mods/dsh-tavern.asset-stats）
  * 是夹具，另放一个坏 mod.json 证明坏 Mod 不断路。
  */
 const EXAMPLE_MOD_ID = 'dsh-tavern.asset-stats'
@@ -1556,8 +1556,8 @@ function runModLoaderProbe(script, extraEnv = {}) {
     // （三件套示例 mod + llm 能力键有无的对照双 mod）。
     const exampleDir = join(modsRoot, EXAMPLE_MOD_ID)
     mkdirSync(exampleDir, { recursive: true })
-    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'asset-stats', 'mod.json'), join(exampleDir, 'mod.json'))
-    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'asset-stats', 'index.mjs'), join(exampleDir, 'index.mjs'))
+    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'dsh-tavern.asset-stats', 'mod.json'), join(exampleDir, 'mod.json'))
+    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'dsh-tavern.asset-stats', 'index.mjs'), join(exampleDir, 'index.mjs'))
     const moodDir = join(modsRoot, 'dsh-tavern.mood-tracker')
     mkdirSync(moodDir, { recursive: true })
     copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'dsh-tavern.mood-tracker', 'mod.json'), join(moodDir, 'mod.json'))

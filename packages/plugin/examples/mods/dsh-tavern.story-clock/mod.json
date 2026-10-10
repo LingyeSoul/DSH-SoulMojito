@@ -1,0 +1,16 @@
+{
+  "id": "dsh-tavern.story-clock",
+  "name": "Story Clock",
+  "version": "1.0.0",
+  "author": "dsh-tavern",
+  "description": "Tracks in-fiction time in the chat variable `clock` (minutes since day 1, 08:00). Exposes {{clock}} macros, the /clock STscript command family (show / advance / set), an AgentTavern prompt section, a post-save observer, a user-input cleanup transform, periodic timers and an optional LLM-backed turn summarizer (requires the llm capability).",
+  "main": "index.mjs",
+  "engines": { "dsh-tavern": "^0.4.1" },
+  "loadingOrder": 120,
+  "capabilities": ["storage", "llm"],
+  "surfaces": {
+    "hooks": ["user-input", "post-save"],
+    "tools": [],
+    "http": ["GET status", "POST summarize"]
+  }
+}

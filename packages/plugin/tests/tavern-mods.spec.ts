@@ -30,12 +30,12 @@ import { TavernStore } from '../../tavern-store/src/index.js'
 // Mod 加载器（提案 0015 §3.2/§3.3 P1）：
 // - 单元：清单校验各失败形态、semver 匹配、storage 配额、http path 白名单、
 //   三层开关矩阵（假 state store）、reload dispose 链、坏 Mod 不断路、审计线。
-// - e2e：真实临时 DSH_HOME + apply() + 示例 Mod（examples/mods/asset-stats）走完
+// - e2e：真实临时 DSH_HOME + apply() + 示例 Mod（examples/mods/dsh-tavern.asset-stats）走完
 //   扫描 → 双默认关 → 两层启用 → setup 执行 → http 路由可访 → 禁用 404 →
 //   reload；坏 mod.json 跳过且本体路由正常；env 硬关实时生效。
 
 const EXAMPLE_MOD_ID = 'dsh-tavern.asset-stats'
-const repoExampleMod = join(import.meta.dirname, '..', 'examples', 'mods', 'asset-stats')
+const repoExampleMod = join(import.meta.dirname, '..', 'examples', 'mods', 'dsh-tavern.asset-stats')
 
 function tempHome(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix))
