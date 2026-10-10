@@ -1,6 +1,6 @@
 # 提案 0015：Mod 扩展接口与加载机制（设计）
 
-> 状态：P0-P2 已实现（见 decisions/2026-10-10-mod-p0-hook-buses.md、
+> 状态：P0-P2 已实现（c14c949；详见 decisions/2026-10-10-mod-p0-hook-buses.md、
 > 2026-10-10-mod-p1-loader.md、2026-10-10-mod-p2-capabilities.md；P3 分发另立提案）。日期：2026-10-10。
 > 参照物：SillyTavern 扩展双体系（UI 扩展 manifest.json + eventSource + generate_interceptor；
 > 服务端插件 `init(router)`/`exit()`/`info` 挂 `/api/plugins/{id}/`，官方明示**不沙箱**、需
