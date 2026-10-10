@@ -128,3 +128,45 @@ describe('STscript interpreter', () => {
     expect(result.output).toBe('1')
   })
 })
+
+describe('/regex command', () => {
+  it('passes the named script and trailing positional text to applyRegex', async () => {
+    const calls: Array<[string, string]> = []
+    const env = makeEnv({ applyRegex: (name, text) => { calls.push([name, text]); return `(${text})` } })
+    const result = await runScript('/regex name=Strip hello world', env)
+    expect(calls).toEqual([['Strip', 'hello world']])
+    expect(result.output).toBe('(hello world)')
+    expect(result.chatChanged).toBe(false)
+  })
+
+  it('accepts the script name as the first positional argument', async () => {
+    const calls: Array<[string, string]> = []
+    const env = makeEnv({ applyRegex: (name, text) => { calls.push([name, text]); return text } })
+    await runScript('/regex Strip foo bar', env)
+    expect(calls).toEqual([['Strip', 'foo bar']])
+  })
+
+  it('feeds piped output as the input text', async () => {
+    const calls: Array<[string, string]> = []
+    const env = makeEnv({ applyRegex: (name, text) => { calls.push([name, text]); return text.toUpperCase() } })
+    const result = await runScript('/echo hello | /regex name=Strip', env)
+    expect(calls).toEqual([['Strip', 'hello']])
+    expect(result.output).toBe('HELLO')
+  })
+
+  it('requires a script name', async () => {
+    const env = makeEnv({ applyRegex: () => 'unused' })
+    await expect(runScript('/regex', env)).rejects.toThrow('/regex requires a script name')
+  })
+
+  it('rejects /regex when the environment has no applyRegex', async () => {
+    const env = makeEnv({ applyRegex: undefined })
+    await expect(runScript('/regex name=Strip hi', env)).rejects.toThrow('/regex is not available')
+  })
+
+  it('awaits async applyRegex handlers', async () => {
+    const env = makeEnv({ applyRegex: async (name, text) => `${name}:${text}` })
+    const result = await runScript('/regex name=A b c', env)
+    expect(result.output).toBe('A:b c')
+  })
+})

@@ -38,7 +38,8 @@
 - 群聊存 `chats/<group>/*.jsonl`，`chat_metadata.group = {members, disabledMembers}`；
   创建时按 V3 `group_only_greetings` 逐成员落问候消息。
 - 回合装配：发言者本人的历史映射 assistant，其他成员/用户映射 user 并带 `Name: ` 前缀；
-  预设 `group_nudge_prompt` 追加为 user nudge；`{{group}}` 宏为启用成员列表。
+  预设 `group_nudge_prompt` 追加为 user nudge（2026-10-10 补接线：注入 pre-assemble
+  装配输入，决策 `decisions/2026-10-10-group-nudge-and-regex-slash.md`）；`{{group}}` 宏为启用成员列表。
 - 生成 API `triggerMember` 显式点名；regenerate 复用上一发言者。绑定加 `group: true` 标志。
 
 ## 5. STscript / regex
@@ -49,13 +50,15 @@
     placement 位 `USER_INPUT=1 | AI_OUTPUT=2 | SLASH_COMMAND=3 | WORLD_INFO=5 | REASONING=6`。
   - STscript：管道 `|` 分隔、引号参数、宏展开；命令子集
     `echo/comment/setvar/getvar/setglobalvar/getglobalvar/addvar/incvar/decvar/hasvar/delvar/
-    if(left/right/op/then/else)/random/roll/pick/send/trigger/regenerate/stop/cut`。
+    if(left/right/op/then/else)/random/roll/pick/send/trigger/regenerate/stop/cut/
+    regex(name=…)`（`/regex` 为 2026-10-10 补齐，决策 `decisions/2026-10-10-group-nudge-and-regex-slash.md`）。
 - 存储：全局 regex 在 `state.json`；卡级 `data.extensions.regex_scripts` 生成时合并；
   聊天局部变量在 `chat_metadata.variables`，全局在 `state.json` `scriptGlobals`。
 - 应用点：`USER_INPUT` 在落用户消息前；`AI_OUTPUT` 非 promptOnly 在保存前、promptOnly
   在装配历史时按 `minDepth/maxDepth` 逐消息应用；`WORLD_INFO` 在 lore 内容进 prompt 前；
-  `REASONING` 在保存 reasoning 前；`markdownOnly` 经 `GET chat` 的平行 `displays[]`
-  通道只在展示层生效（不落盘、不进 prompt、不参与 revision CAS 载荷）。
+  `REASONING` 在保存 reasoning 前；`SLASH_COMMAND` 由 STscript `/regex` 命令按名应用
+  （placement 位含 3 才生效，2026-10-10 补齐）；`markdownOnly` 经 `GET chat` 的平行
+  `displays[]` 通道只在展示层生效（不落盘、不进 prompt、不参与 revision CAS 载荷）。
 - 执行：`POST script` 服务端解释，`/send`+`/trigger`（trigger 模式：不追加用户消息、
   不弹出旧回复、lore 以 quiet 触发）复用生成内核（非流式，返回最终 chat）；
   composer `/` 前缀进入脚本模式。`automationId` 与 Quick Reply 联动不实现（文档声明）。

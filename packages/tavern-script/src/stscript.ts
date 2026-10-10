@@ -7,7 +7,7 @@
  * 命令集：echo / comment / setvar / getvar / setglobalvar / getglobalvar /
  * addvar / incvar / decvar / hasvar / hasglobalvar / delvar / delglobalvar /
  * if(left/right/op/then/else) / random / roll / pick / send / trigger /
- * regenerate / stop / cut。
+ * regenerate / stop / cut / regex(name=…)。
  */
 
 export type VariableValue = string | number | boolean
@@ -30,6 +30,11 @@ export interface ScriptEnv {
   stop?: () => void
   cut?: (from: number, to: number) => void | Promise<void>
   echo?: (text: string) => void
+  /**
+   * /regex：按名应用 SLASH_COMMAND placement 的正则脚本并返回替换后文本
+   * （ST /regex 命令语义：脚本名大小写不敏感；未找到/禁用/位不符原样返回输入）。
+   */
+  applyRegex?: (scriptName: string, text: string) => string | Promise<string>
 }
 
 export interface ScriptResult {
@@ -326,6 +331,15 @@ async function runCommand(command: ScriptCommand, env: ScriptEnv, piped: string 
       const to = range[2] === undefined ? from : Number(range[2])
       await action(Math.min(from, to), Math.max(from, to))
       return changed()
+    }
+    case 'regex': {
+      // ST /regex：`/regex name=<script> [text]`（脚本名也接受首位位置参数）；
+      // 输入串可由管道注入（{{pipe}} 或末位参数），缺省为空串。
+      const action = await requireAction(env.applyRegex, 'regex')
+      const name = cmd.named['name'] ?? cmd.args[0] ?? ''
+      if (name === '') throw new ScriptError('/regex requires a script name (name=…)')
+      const positional = cmd.named['name'] !== undefined ? cmd.args : cmd.args.slice(1)
+      return { output: await action(name, positional.join(' ')), chatChanged: false }
     }
     default:
       throw new ScriptError(`unknown command: /${cmd.name}`)

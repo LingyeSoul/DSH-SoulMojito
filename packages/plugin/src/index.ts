@@ -14,7 +14,7 @@ import {
 import { activateWorldInfo } from '../../tavern-lore/src/index.js'
 import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { assemblePrompt, buildGroupTurn, pickGroupMember } from '../../tavern-pipeline/src/index.js'
-import { applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
+import { applyRegexScript, applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
 import {
   ChatRevisionConflictError,
   MemoryStore,
@@ -2740,11 +2740,22 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     ? await Promise.all(depthInjectionsRaw.map(async (inj) => ({ ...inj, text: await tpl.renderText(inj.text, 'depth-injection') })))
     : depthInjectionsRaw
 
+  // ---- 群聊 nudge 进装配输入（提案 0002「追加为 user nudge」的接线）----
+  // buildGroupTurn 算出的 nudge 在此消费：合成一条只进 prompt 的 user 楼层接在
+  // 历史末尾（ST openai.js groupNudge 条目同位——insertAtEnd(chatHistory)、参与
+  // 历史预算裁剪且作为最新楼层永不先于历史被裁、位于 post-history 条目之前）；
+  // {{char}} 已在 buildGroupTurn 按发言者替换，其余宏在此展开（ST substituteParams
+  // 语义）。合成楼层不落 chat.messages。本注入点即提案 0015 的 pre-assemble hook
+  // 位：hook 落地后 mod 在 draft（装配输入）中可见并可改写这条 nudge。
+  const nudgeMessage = nudge !== undefined
+    ? { name: userName, is_user: true, is_system: false, send_date: '', mes: expand(nudge.content) }
+    : undefined
+
   const assembled = assemblePrompt({
     card: tpl ? await tpl.preRenderCard(character.card) : character.card,
     preset: tpl ? await tpl.preRenderPreset(preset) : preset,
     personaDescription,
-    messages: historyForPrompt,
+    messages: nudgeMessage ? [...historyForPrompt, nudgeMessage] : historyForPrompt,
     worldInfoBefore: loreBefore,
     worldInfoAfter: loreAfter,
     beforeExamples: tpl
@@ -3017,6 +3028,15 @@ async function runTavernScript(ctx, req, res, db) {
       await persist()
     },
     echo: () => {},
+    applyRegex: (scriptName, text) => {
+      // ST runRegexCallback 语义：脚本名大小写不敏感；未找到/禁用原样返回输入、
+      // 不中断脚本。差异（决策 2026-10-10-group-nudge-and-regex-slash）：仅
+      // SLASH_COMMAND placement 位命中的脚本生效——placement=3 的唯一应用点。
+      const script = collectRegexScripts(state, character)
+        .find((candidate) => candidate.scriptName.toLowerCase() === scriptName.toLowerCase())
+      if (!script) return text
+      return applyRegexScript(text, script, RegexPlacement.SLASH_COMMAND, { expand: (t) => macros.expand(t) }) ?? text
+    },
   })
 
   // 全局变量持久化

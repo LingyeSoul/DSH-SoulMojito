@@ -4019,6 +4019,13 @@ async function runCommand(command, env, piped) {
       await action(Math.min(from, to), Math.max(from, to));
       return changed();
     }
+    case "regex": {
+      const action = await requireAction(env.applyRegex, "regex");
+      const name2 = cmd.named["name"] ?? cmd.args[0] ?? "";
+      if (name2 === "") throw new ScriptError("/regex requires a script name (name=\u2026)");
+      const positional = cmd.named["name"] !== void 0 ? cmd.args : cmd.args.slice(1);
+      return { output: await action(name2, positional.join(" ")), chatChanged: false };
+    }
     default:
       throw new ScriptError(`unknown command: /${cmd.name}`);
   }
@@ -17548,11 +17555,12 @@ async function runGeneration(ctx, db, options) {
       ...personaInjections
     ];
     const depthInjections = tpl ? await Promise.all(depthInjectionsRaw.map(async (inj) => ({ ...inj, text: await tpl.renderText(inj.text, "depth-injection") }))) : depthInjectionsRaw;
+    const nudgeMessage = nudge !== void 0 ? { name: userName, is_user: true, is_system: false, send_date: "", mes: expand(nudge.content) } : void 0;
     const assembled = assemblePrompt({
       card: tpl ? await tpl.preRenderCard(character.card) : character.card,
       preset: tpl ? await tpl.preRenderPreset(preset) : preset,
       personaDescription,
-      messages: historyForPrompt,
+      messages: nudgeMessage ? [...historyForPrompt, nudgeMessage] : historyForPrompt,
       worldInfoBefore: loreBefore,
       worldInfoAfter: loreAfter,
       beforeExamples: tpl ? await Promise.all(tpl.partition.normalBeforeExamples.map((e, i) => tpl.renderText(e.content, `wi-em-before#${i}`))) : lore.beforeExamples.entries.map((e) => e.content),
@@ -17789,6 +17797,11 @@ async function runTavernScript(ctx, req, res, db) {
       await persist();
     },
     echo: () => {
+    },
+    applyRegex: (scriptName, text) => {
+      const script = collectRegexScripts(state, character).find((candidate) => candidate.scriptName.toLowerCase() === scriptName.toLowerCase());
+      if (!script) return text;
+      return applyRegexScript(text, script, RegexPlacement.SLASH_COMMAND, { expand: (t) => macros.expand(t) }) ?? text;
     }
   });
   const globals = macros.snapshotVars().global;
@@ -18260,7 +18273,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.1".trim() : "";
-  const commit = true ? normalizeCommit("2290eb0") : void 0;
+  const commit = true ? normalizeCommit("bcdc718") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
