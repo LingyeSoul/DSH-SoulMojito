@@ -203,8 +203,9 @@ async function getText(options: FetchRemoteOptions, url: string, accept: string)
  * fetch → curl 的两级抓取。两级都失败时把两边的原因一起抛出去，便于在快照的
  * `error` 里分辨「网络不通」「证书不受信」「HTTP 4xx」。
  * `DSH_TAVERN_DISABLE_CURL=1` 可关掉 curl 兜底（不装 curl 的宿主、离线测试）。
+ * P2 起导出：mod git 安装的元数据预读复用同一降级链（提案 0015 §4）。
  */
-async function httpGet(options: FetchRemoteOptions, url: string, accept: string): Promise<string> {
+export async function httpGet(options: FetchRemoteOptions, url: string, accept: string): Promise<string> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const failures: string[] = []
   const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike)

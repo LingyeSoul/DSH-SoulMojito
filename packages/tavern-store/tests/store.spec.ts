@@ -346,6 +346,8 @@ describe('TavernStore', () => {
       agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, worldFollowsCharacter: true,
       cardWorkbenchPresetEnabled: false, agentNovelPresetEnabled: false,
       modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
+      // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false。
+      modsEnabled: false, mods: { enabled: {} },
     })
     await store.patchState({
       activeCharacter: 'ExampleCard',
@@ -381,6 +383,21 @@ describe('TavernStore', () => {
       session_2: { provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high' },
     })
   }))
+
+  it('状态：Mod 开关双默认 false，旧 state 文件补默认、显式 true 保留、非 true 项过滤', withStore(async (store, dir) => {
+    // 旧版 state.json 没有 mods 字段：两层开关都补默认关
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({ activeWorlds: ['ExampleWorld'] }))
+    expect(await store.getState()).toMatchObject({ modsEnabled: false, mods: { enabled: {} } })
+    // 显式开启持久化保留；enabled 表里只保留显式 true 的项（手改容错）
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({
+      modsEnabled: true,
+      mods: { enabled: { 'dsh-tavern.asset-stats': true, 'ghost.mod': false, broken: 'yes' } },
+    }))
+    const state = await store.getState()
+    expect(state.modsEnabled).toBe(true)
+    expect(state.mods?.enabled).toEqual({ 'dsh-tavern.asset-stats': true })
+  }))
+
 
   it('状态：压缩总结模型覆盖成对存取，半空/空白形状视为未设置', withStore(async (store, dir) => {
     await store.patchState({ compaction: { curatorProvider: 'siliconflow', curatorModel: 'zai-org/GLM-5.2' } })

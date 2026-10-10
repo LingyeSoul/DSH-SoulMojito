@@ -25,6 +25,7 @@ import type {
   MacroFunction,
   VariableValue,
 } from './types.js';
+import { hostMacroSnapshot } from './host-registry.js';
 import { evalRoll, hash32, parseRoll, splitMacroList } from './random.js';
 import {
   formatLocalDateLong,
@@ -41,6 +42,17 @@ import {
 const TRIM: unique symbol = Symbol('trim');
 
 type MacroResult = string | typeof TRIM | null;
+
+/**
+ * 内置宏名快照（小写）。首个引擎实例化时填充（reg 是后写胜，吸收宿主宏之前
+ * 的 registry 键集即纯内置集）。宿主的 mod 宏注册面用它拒绝对 {{char}}/
+ * {{user}}/{{random}} 等核心宏的劫持（提案 0015 P2 api.macros.register）。
+ */
+const builtinMacroNameSet = new Set<string>();
+
+export function builtinMacroNames(): Set<string> {
+  return new Set(builtinMacroNameSet);
+}
 
 interface HandlerCtx {
   /** Raw text between the macro name and `}}` (separator included). */
@@ -500,6 +512,21 @@ export function createMacroEngine(init: MacroEngineInit): MacroEngine {
         return null;
       }
     });
+  }
+
+  // 宿主全局宏（提案 0015 P0）：实例化时吸收注册表快照，使宿主侧全部
+  // createMacroEngine 调用点（plugin 四处）共享同一批扩展宏。逐项 try/catch
+  // 降级——坏注册（registerMacro 契约外的名字）只跳过该项，不炸引擎实例；
+  // 未知/失败宏本就保持原文（ST evaluateMacros 语义）。P2：吸收前先把当前
+  // registry 键集记进内置名单快照（reg 是 Map.set 后写胜，mod 宏若撞内置名
+  // 会劫持 {{char}} 等核心宏——宿主注册面据此拒名）。
+  for (const key of registry.keys()) builtinMacroNameSet.add(key);
+  for (const entry of hostMacroSnapshot()) {
+    try {
+      registerMacro(entry.name, entry.fn);
+    } catch {
+      // skip malformed host macro registration
+    }
   }
 
   const api: MacroEngine = {

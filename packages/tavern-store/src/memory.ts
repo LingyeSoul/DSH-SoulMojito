@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
+import { writeAtomicText } from './fs-atomic.js'
 
 export type MemoryScope = 'turn' | 'chat' | 'character' | 'agent' | 'global'
 export type MemoryKind = 'semantic' | 'episodic'
@@ -231,7 +232,7 @@ export class MemoryStore {
   private async writeRecord(record: MemoryRecord): Promise<void> {
     const file = this.recordPath(record.id, record.scope, record.scopeId)
     await fs.mkdir(path.dirname(file), { recursive: true })
-    await writeAtomic(file, `${JSON.stringify(record)}\n`)
+    await writeAtomicText(file, `${JSON.stringify(record)}\n`)
   }
 
   private recordPath(id: string, scope: MemoryScope, scopeId: string): string {
@@ -349,10 +350,4 @@ async function readFiles(root: string): Promise<string[]> {
     if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw cause
   }
-}
-
-async function writeAtomic(file: string, text: string): Promise<void> {
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-  await fs.writeFile(tmp, text, 'utf8')
-  await fs.rename(tmp, file)
 }

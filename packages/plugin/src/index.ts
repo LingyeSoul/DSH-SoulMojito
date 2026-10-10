@@ -74,6 +74,9 @@ import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } 
 import { defaultPreset, emitAgentPresetChanged } from './agent-tavern/preset.js'
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts, collectWorldInfoBooks } from './tavern-assets.js'
 import { createGenerationTemplates, mergeTemplateLocalVars, type GenerationTemplates } from './template.js'
+// ST 生成管线 hook 总线（提案 0015 P0）：五个变换点的空总线，恒空 = 生成行为
+// 逐字节不变；P1 的 api.hooks.on 经 generationHooks.register 落注册。
+import { generationHooks } from './generation-hooks.js'
 import { runCandidateGeneration } from './candidates.js'
 import {
   applyScriptBinding,
@@ -90,6 +93,10 @@ import { hostPromptSafe } from './prompt-safety.js'
 import { deleteOriginalSnapshot, moveOriginalSnapshot, saveOriginalSnapshot } from '../../tavern-store/src/index.js'
 import { dshHomePath } from './dsh-home.js'
 import { TavernUpdateService, updateChangelog } from './update/service.js'
+// Mod 宿主（提案 0015 §3.2 P1）：扫描 <tavern>/mods/、三层开关裁决、装载与
+// 审计；api 适配层（logger/storage/assets/events/timers/http）在 mods/host.ts。
+import { ModHost, modsDisabledByEnv, type ModHostContext, type ModHostSnapshot } from './mods/host.js'
+import { emitAssetsSaved, emitChatSaved } from './mods/events.js'
 // 卡片工作台方案确认协议（提案 0013 P2；世界书面板化为同构扩展）：方案存储在
 // card-workbench/plans.ts（kind 判别：卡方案 / 世界书方案），执行核（写入 +
 // applied 标记）在 card-workbench/agent.ts，路由块在 mvu/status 之后。
@@ -136,6 +143,10 @@ let novelDriverPromise: Promise<NovelDriver | undefined> | undefined
 // 在这里记一次供路由与 bootstrap 复用。
 let updateServiceInstance: TavernUpdateService | undefined
 let updateChecksEnabledFlag = true
+// Mod 宿主（提案 0015 P1）：单进程单实例，storePromise 同款 memoization；ctx
+// 在 apply() 时绑定（logger/effect 经适配层注入，不透传给 Mod）。
+let modHostPromise: Promise<ModHost> | undefined
+let modHostContext: ModHostContext | undefined
 // Prompt Template（提案 0008）总开关：默认开启；profile 行 templateEnabled: false
 // 或 DSH_TAVERN_DISABLE_TEMPLATES=1 关闭。无模板标签时链路直通，无额外开销。
 let templatesEnabledFlag = true
@@ -158,6 +169,45 @@ function memories() {
 
 function variables() {
   return (variableStorePromise ??= VariableStore.open(dshHomePath('tavern')))
+}
+
+/**
+ * Mod 宿主访问器：首次调用时扫描 `<tavern>/mods/` 并按三层开关装载（默认全关，
+ * 扫描只读 mod.json 不执行代码）。坏 Mod 只记审计与状态错误位，不影响宿主。
+ */
+function modHost(): Promise<ModHost> {
+  return (modHostPromise ??= ModHost.open({
+    ctx: modHostContext ?? {},
+    root: dshHomePath('tavern'),
+    hostVersion: BUILD_INFO.version,
+    dbProvider: () => store(),
+  }))
+}
+
+/** bootstrap 的 mods 投影（提案 0015 §3.5）：宿主初始化失败时回空数组不 500。 */
+async function modHostProjection(ctx): Promise<unknown[]> {
+  try {
+    const snapshot: ModHostSnapshot = await modHost().then((host) => host.snapshot())
+    return snapshot.mods.map((mod) => ({
+      id: mod.id,
+      name: mod.name,
+      version: mod.version,
+      author: mod.author,
+      description: mod.description,
+      capabilities: mod.capabilities,
+      panel: mod.panel,
+      status: mod.status,
+      enabled: mod.status === 'loaded',
+      error: mod.error,
+      auditCount: mod.auditCount,
+      // P2（§3.5 启用确认弹层）：注册面——loaded 是实际注册名单，未装载回落
+      // manifest 声明（作者自查面）。
+      surfaces: mod.surfaces,
+    }))
+  } catch (cause) {
+    ctx?.logger?.warn?.(`dsh-tavern: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`)
+    return []
+  }
 }
 
 function novelStore(): Promise<NovelStore> {
@@ -432,6 +482,19 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
 
   ctx.effect(() => tavernUpdate(ctx).start(), 'dsh-tavern: update auto-check')
 
+  // Mod 宿主（提案 0015 §3.2 P1）：stores 就绪后扫描 <tavern>/mods/ 并按三层
+  // 开关装载（双默认 false + DSH_TAVERN_DISABLE_MODS 硬关）。装载是异步的，
+  // 不阻塞 apply 返回；坏 Mod 只记审计与错误位。宿主卸载时统一 dispose。
+  modHostContext = ctx
+  void modHost().catch((error: unknown) => {
+    ctx.logger?.warn?.(`dsh-tavern: mod host failed to start: ${error instanceof Error ? error.message : String(error)}`)
+  })
+  try {
+    ctx.effect?.(() => () => { void modHost().then((host) => host.disposeAll()).catch(() => {}) }, 'dsh-tavern: mods unload')
+  } catch {
+    // 拒绝晚注册 effect 的宿主只失去卸载兜底；装载本身不受影响。
+  }
+
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: API,
@@ -549,7 +612,14 @@ async function handleApi(ctx, req, res) {
       agentNovel: agentNovelCapabilities,
       // 自更新快照：只读缓存结论，检查/安装分别走 update/check 与 update/install，
       // 保证 bootstrap 永远不因网络失败而变慢或报错。
-      update: tavernUpdate(ctx).snapshot(),
+      // Mod 轻量投影（提案 0015 §3.5，P1 真实化）：与 worldEntryCounts 同款服务端
+    // 轻量投影，{id, name, version, author, description, capabilities, panel,
+    // status, enabled, error, auditCount} 清单；宿主失败/无 Mod 时为空数组，
+    // bootstrap 不因坏 Mod 500。旧客户端不读该键。
+    mods: await modHostProjection(ctx),
+    // env 硬关时客户端把管理面的开关锁死并展示原因（mods 投影另有 per-Mod 状态）。
+    modsAvailable: !modsDisabledByEnv(),
+    update: tavernUpdate(ctx).snapshot(),
     })
   }
 
@@ -688,6 +758,14 @@ async function handleApi(ctx, req, res) {
     return handleNovelsApi(ctx, req, res, url, route, method)
   }
 
+  // ---- Mod 管理面与子路由（提案 0015 §3.2/§3.3 P1）----
+  // 管理面（GET mods / POST mods/state / enable|disable|reload）在任一层关闭时
+  // 仍可用（否则用户无法再打开）；Mod 子路由（mods/<id>/<path>）在任一层关闭、
+  // 未装载或无此路由时一律 404，与未知路由不可区分。
+  if (route === 'mods' || route.startsWith('mods/')) {
+    return handleModsApi(ctx, req, res, url, route, method)
+  }
+
   if (method === 'PUT' && route.startsWith('character/')) {
     const oldName = decodeURIComponent(route.slice('character/'.length))
     const body = await readJson(req, 25 * 1024 * 1024)
@@ -697,6 +775,7 @@ async function handleApi(ctx, req, res) {
     clampIdentitySummary(body.card)
     const saved = await db.updateCharacter(oldName, body.card)
     const nextName = saved.card.data.name
+    await emitAssetsSaved('character', nextName)
     if (nextName !== oldName) {
       // 原版快照按卡名寻址、跟卡走；不迁移则新名 restore 断链、旧名留幽灵快照。
       await moveOriginalSnapshot(dshHomePath('tavern'), oldName, nextName)
@@ -874,6 +953,7 @@ async function handleApi(ctx, req, res) {
     else if (body.card && typeof body.card === 'object') source = body.card
     else throw new Error('expected { pngBase64 }, { charxBase64 } or { card }')
     const result = await db.importCharacter(source)
+    await emitAssetsSaved('character', result.card.data.name)
     // 原版快照（提案 0013 P1）：导入成功后 best-effort 一次性保留原版；已存在
     // 不覆盖，失败只记警告不阻断导入——导入语义优先，快照是增值保障。
     try {
@@ -898,6 +978,7 @@ async function handleApi(ctx, req, res) {
     const body = await readJson(req)
     if (typeof body.name !== 'string' || !body.data || typeof body.data !== 'object') throw new Error('expected { name, data }')
     const book = await db.importWorldFile(body.name, body.data)
+    await emitAssetsSaved('world', book.name)
     return sendJson(res, 200, { ok: true, name: book.name, entries: book.entries.length })
   }
 
@@ -906,6 +987,7 @@ async function handleApi(ctx, req, res) {
     if (typeof body.name !== 'string' || !body.data || typeof body.data !== 'object') throw new Error('expected { name, data }')
     parsePresetOrThrow(body.data)
     await db.putPreset(body.name, body.data)
+    await emitAssetsSaved('preset', body.name)
     // 同名的激活预设被覆盖时 AgentTavern 投影必须跟着变（写穿，best-effort）。
     await emitAgentPresetChanged()
     return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data) })
@@ -926,6 +1008,7 @@ async function handleApi(ctx, req, res) {
     }
     parsePresetOrThrow(body.data)
     await db.putPreset(body.name, body.data)
+    await emitAssetsSaved('preset', body.name)
     if (body.name !== oldName) await db.deletePreset(oldName)
     const state = await db.updateState((current) => ({
       activePreset: current.activePreset === oldName ? body.name : current.activePreset,
@@ -940,6 +1023,7 @@ async function handleApi(ctx, req, res) {
     const body = await readJson(req, 25 * 1024 * 1024)
     if (typeof body.pngBase64 === 'string' && typeof body.name === 'string') {
       const persona = await db.importPersonaPng(new Uint8Array(Buffer.from(body.pngBase64, 'base64')), body.name)
+      await emitAssetsSaved('persona', persona.name)
       return sendJson(res, 200, { ok: true, persona })
     }
     if (typeof body.name === 'string') {
@@ -952,6 +1036,7 @@ async function handleApi(ctx, req, res) {
         ...(body.hasAvatar === true ? { hasAvatar: true } : {}),
       }
       await db.putPersona(persona)
+      await emitAssetsSaved('persona', persona.name)
       return sendJson(res, 200, { ok: true, persona })
     }
     throw new Error('expected { pngBase64, name } or { name, description }')
@@ -970,6 +1055,7 @@ async function handleApi(ctx, req, res) {
       ...(typeof body.role === 'number' ? { role: body.role } : {}),
     }
     await db.putPersona(persona)
+    await emitAssetsSaved('persona', body.name)
     return sendJson(res, 200, { ok: true, persona })
   }
 
@@ -1029,6 +1115,7 @@ async function handleApi(ctx, req, res) {
       chats: [],
       autoModeDelay: 3,
     })
+    await emitAssetsSaved('group', body.name)
     const group = await db.getGroup(body.name)
     return sendJson(res, 200, { ok: true, group: publicGroup(group) })
   }
@@ -1049,6 +1136,7 @@ async function handleApi(ctx, req, res) {
       ...(typeof body.activationStrategy === 'number' ? { activationStrategy: body.activationStrategy === 2 ? 2 : 1 } : {}),
       ...(typeof body.allowSelfResponses === 'boolean' ? { allowSelfResponses: body.allowSelfResponses } : {}),
     })
+    await emitAssetsSaved('group', body.name)
     return sendJson(res, 200, { ok: true, group: publicGroup(await db.getGroup(body.name)) })
   }
 
@@ -1261,6 +1349,7 @@ async function handleApi(ctx, req, res) {
       throw new Error('expected { name, data }')
     }
     const book = await db.importWorldFile(body.name, body.data)
+    await emitAssetsSaved('world', book.name)
     if (body.name !== oldName) {
       await db.deleteWorld(oldName)
       await db.updateState((current) => ({ activeWorlds: current.activeWorlds.map((name) => name === oldName ? body.name : name) }))
@@ -1377,6 +1466,7 @@ async function handleApi(ctx, req, res) {
         throw new Error('expected { chat, revision }')
       }
       const revision = await db.saveChat(character, chatId, body.chat, body.revision)
+      await emitChatSaved(character, chatId, revision)
       return sendJson(res, 200, { ok: true, chat: body.chat, revision })
     }
     if (method === 'PATCH') {
@@ -1470,6 +1560,7 @@ async function handleGuidesApi(
       header: { ...snapshot.chat.header, chat_metadata: metadata },
     }, snapshot.revision)
     await emitGuidesChanged(character, chatId)
+    await emitChatSaved(character, chatId, revision)
     return sendJson(res, 200, { ok: true, guide: added.guide, guides: added.guides, revision })
   }
 
@@ -1492,6 +1583,7 @@ async function handleGuidesApi(
       header: { ...snapshot.chat.header, chat_metadata: metadata },
     }, snapshot.revision)
     await emitGuidesChanged(character, chatId)
+    await emitChatSaved(character, chatId, revision)
     return sendJson(res, 200, { ok: true, guides: removed.guides, revision })
   }
 
@@ -2584,7 +2676,10 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   let hostUserText = ''
   const scripts = collectRegexScripts(state, character)
   if (mode === 'send') {
-    const transformed = applyRegexScripts(options.userText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t })
+    // user-input 相位（提案 0015 §3.4）：regex 之前——mod 看到的是用户敲入的原文。
+    // 空总线恒等，行为不变。
+    const hookedUserText = await generationHooks.dispatch('user-input', options.userText, { mode, character: speakerName, chatId, group })
+    const transformed = applyRegexScripts(hookedUserText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t })
     hostUserText = transformed
     chat.messages.push({ name: userName, is_user: true, is_system: false, send_date: new Date().toISOString(), mes: transformed })
     if (group) {
@@ -2597,6 +2692,9 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
       turnMessages = turn.messages
     }
     revision = await db.saveChat(characterName, chatId, chat, revision)
+    // chat-saved（提案 0015 §3.3 P1 的 api.events）：用户消息落盘点。无监听时
+    // 是已 resolved 的 promise，零开销。
+    await emitChatSaved(characterName, chatId, revision)
   } else {
     const last = chat.messages[chat.messages.length - 1]
     if (last?.is_user === false && !last.is_system) {
@@ -2751,7 +2849,10 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     ? { name: userName, is_user: true, is_system: false, send_date: '', mes: expand(nudge.content) }
     : undefined
 
-  const assembled = assemblePrompt({
+  // pre-assemble 相位（提案 0015 §3.4）：装配输入 draft 的最后一站。mod 在
+  // draft 中可见并可改写 nudge 合成楼层（本 hook 的第一个既有受益者）。空总线
+  // 恒等；draft 字段与 assemblePrompt 入参同形。
+  const assembleDraft = {
     card: tpl ? await tpl.preRenderCard(character.card) : character.card,
     preset: tpl ? await tpl.preRenderPreset(preset) : preset,
     personaDescription,
@@ -2765,7 +2866,10 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
       ? await Promise.all(tpl.partition.normalAfterExamples.map((e, i) => tpl.renderText(e.content, `wi-em-after#${i}`)))
       : lore.afterExamples.entries.map((e) => e.content),
     depthInjections,
-  }, { expand, countTokens })
+  }
+  const hookedDraft = await generationHooks.dispatch('pre-assemble', assembleDraft, { mode, character: speakerName, chatId, group })
+
+  const assembled = assemblePrompt(hookedDraft, { expand, countTokens })
   const fallback = ctx.agentDefaultModel.currentSelection()
   const saved = options.sessionId ? state.modelSelections?.[options.sessionId] : undefined
   const explicit = options.provider !== undefined && options.model !== undefined
@@ -2845,12 +2949,27 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   // （guides 块之后）注入，不落任何楼层。
   const rewriteBlock = formatRewriteBlock(options.feedback)
   if (rewriteBlock) systemParts.push(rewriteBlock)
+  // pre-llm 相位（提案 0015 §3.4）：进 llm.stream 的最终请求。空总线恒等；
+  // system 保持「无内容则不带键」的条件展开语义（undefined 时不注入）。
+  const llmRequest = {
+    messages: llmMessages,
+    system: systemParts.length > 0 ? systemParts.join('\n\n') : undefined,
+    params: {
+      provider, model,
+      ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+      temperature: numberOr(preset.sampler.temperature, undefined),
+      maxTokens: numberOr(preset.sampler.openai_max_tokens, undefined),
+    },
+  }
+  const hookedLlmRequest = await generationHooks.dispatch('pre-llm', llmRequest, { mode, character: speakerName, chatId, group })
   for await (const chunk of ctx.llm.stream({
-    provider, model, messages: llmMessages,
-    ...(systemParts.length > 0 ? { system: systemParts.join('\n\n') } : {}),
-    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
-    temperature: numberOr(preset.sampler.temperature, undefined),
-    maxTokens: numberOr(preset.sampler.openai_max_tokens, undefined),
+    provider: hookedLlmRequest.params.provider,
+    model: hookedLlmRequest.params.model,
+    messages: hookedLlmRequest.messages,
+    ...(hookedLlmRequest.system !== undefined ? { system: hookedLlmRequest.system } : {}),
+    ...(hookedLlmRequest.params.reasoningEffort !== undefined ? { reasoningEffort: hookedLlmRequest.params.reasoningEffort } : {}),
+    temperature: hookedLlmRequest.params.temperature,
+    maxTokens: hookedLlmRequest.params.maxTokens,
     signal,
   })) {
     // 逐 chunk 事件不落宿主会话：`assistant/chunk` 是 v0 词汇，v4 宿主加载期
@@ -2866,9 +2985,13 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   }
   if (text.trim() === '') throw new Error('model returned no text')
 
+  // post-output 相位（提案 0015 §3.4）：AI_OUTPUT regex 与模板输出渲染之前——
+  // mod 看到的是模型原文。空总线恒等。
+  const outputText = await generationHooks.dispatch('post-output', text, { mode, character: speakerName, chatId, group })
+
   // ---- AI_OUTPUT regex（非 promptOnly）→ 模板输出渲染（RENDER + setvar）→ 保存 ----
   const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly)
-  let finalText = saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement.AI_OUTPUT, { expand }) : text
+  let finalText = saveScripts.length > 0 ? applyRegexScripts(outputText, saveScripts, RegexPlacement.AI_OUTPUT, { expand }) : outputText
   if (tpl) finalText = await tpl.renderOutput(finalText)
   const finalReasoning = reasoning
     ? applyRegexScripts(reasoning, scripts, RegexPlacement.REASONING, { expand })
@@ -2915,6 +3038,12 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     failures: tpl?.warnings ?? [],
   })
   revision = await db.saveChat(characterName, chatId, chat, revision)
+  // chat-saved（提案 0015 §3.3 P1）：助手回复落盘点（与 post-save hook 相邻但
+  // 语义不同——events 是观察面，hooks 是 P2 的变换面）。
+  await emitChatSaved(characterName, chatId, revision)
+  // post-save 相位（提案 0015 §3.4）：落盘后的只读观察，返回值丢弃；hook 失败/
+  // 超时降级不改变任何已落盘状态。空总线恒等。
+  await generationHooks.dispatch('post-save', { chat, revision, speaker: speakerName, finalText }, { mode, character: speakerName, chatId, group })
   hostTrace = recordTavernSessionAssistant(hostTrace, finalText, finalReasoning, provider, model, hostUsage)
   return { chat, revision, speaker: speakerName }
   } finally {
@@ -2965,6 +3094,7 @@ async function runTavernScript(ctx, req, res, db) {
     if (Object.keys(vars).length > 0) chat.header.chat_metadata.variables = vars
     else delete chat.header.chat_metadata.variables
     revision = await db.saveChat(characterName, chatId, chat, revision)
+    await emitChatSaved(characterName, chatId, revision)
   }
 
   const triggerGeneration = async (member) => {
@@ -3770,6 +3900,84 @@ async function handleUpdateApi(ctx, req, res, url, route, method) {
     return sendJson(res, 200, { ok: true, update: snapshot, changelog: updateChangelog(snapshot) })
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+}
+
+/**
+ * `/api/dsh-tavern/mods` 路由族（提案 0015 §3.2/§3.3 P1）：
+ * - `GET  mods`                → 管理快照（清单/状态/错误位/审计计数 + 两层开关）；
+ * - `POST mods/state`          → `{ globalEnabled }` 全局开关（三层第二层）；
+ * - `POST mods/<id>/enable`    → 逐 Mod 开关（第三层；启用即装载——两层同开才装）；
+ * - `POST mods/<id>/disable`   → 卸载（dispose 链 + 定时器/事件/路由清理）；
+ * - `POST mods/<id>/reload`    → 调旧 dispose → `?t=` cache-bust 重新 import；
+ * - `ANY  mods/<id>/<path>`    → Mod http 子路由（api.http.route 注册表）。
+ *
+ * 子路由在 env 硬关 / 全局关 / 逐 Mod 关 / 未装载 / 无此路由时统一按未知路由
+ * 404（不泄露 Mod 是否存在）。管理面在宿主初始化失败时 GET 回空快照、写路径
+ * 上抛（bootstrap 不 500 的教义只覆盖读面）。
+ */
+async function handleModsApi(ctx, req, res, url, route, method) {
+  const notFound = () => sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  const segments = route === 'mods' ? [] : route.slice('mods/'.length).split('/')
+  const modId = segments[0] ?? ''
+  const subpath = segments.length > 1 ? segments.slice(1).join('/') : ''
+
+  let host: ModHost | undefined
+  try {
+    host = await modHost()
+  } catch (cause) {
+    ctx.logger?.warn?.(`dsh-tavern: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`)
+    if (method === 'GET' && route === 'mods') {
+      return sendJson(res, 200, { ok: true, available: false, reason: 'mod host unavailable', globalEnabled: false, mods: [] })
+    }
+    // 子路由按不可用走 404；管理面写路径如实 500。
+    const isManagementWrite = route === 'mods/state'
+      || (segments.length === 2 && (subpath === 'enable' || subpath === 'disable' || subpath === 'reload'))
+    if (!isManagementWrite) return notFound()
+    throw new Error('mod host unavailable')
+  }
+
+  if (method === 'GET' && route === 'mods') {
+    return sendJson(res, 200, { ok: true, ...host.snapshot() })
+  }
+  // git 安装（提案 0015 §4 P2）：GitHub 源降级链预读 + git clone。管理路由，
+  // 任一层开关关闭时仍可用（与 mods/state 同理）。目录名 `install` 因此成为
+  // 管理保留段（mods/install 永远是安装路由，不是名为 install 的 mod 的路由）。
+  if (method === 'POST' && route === 'mods/install') {
+    const body = await readJson(req)
+    if (typeof body.url !== 'string' || body.url.trim() === '') throw new Error('expected { url }')
+    const result = await host.installFromGit(body.url, body.force === true)
+    return sendJson(res, 200, { ok: true, ...host.snapshot(), installed: result })
+  }
+  if (method === 'POST' && route === 'mods/state') {
+    const body = await readJson(req)
+    if (typeof body.globalEnabled !== 'boolean') throw new Error('expected { globalEnabled }')
+    await host.setGlobalEnabled(body.globalEnabled)
+    return sendJson(res, 200, { ok: true, ...host.snapshot() })
+  }
+  if (method === 'POST' && segments.length === 2 && (subpath === 'enable' || subpath === 'disable')) {
+    await host.setModEnabled(decodeURIComponent(modId), subpath === 'enable')
+    return sendJson(res, 200, { ok: true, ...host.snapshot() })
+  }
+  if (method === 'POST' && segments.length === 2 && subpath === 'reload') {
+    await host.reload(decodeURIComponent(modId))
+    return sendJson(res, 200, { ok: true, ...host.snapshot() })
+  }
+  if (segments.length >= 1 && modId !== '') {
+    // 子路由：decodeURIComponent 与既有资产路由同款（mod id 是 URL 段）；解码
+    // 失败或白名单不过都按 404 走，不进文件系统。
+    let id = modId
+    let path = subpath
+    try {
+      id = decodeURIComponent(modId)
+      path = subpath === '' ? '' : decodeURIComponent(subpath)
+    } catch {
+      return notFound()
+    }
+    const handled = await host.handleRoute(req, res, method, url, id, path)
+    if (handled) return
+    return notFound()
+  }
+  return notFound()
 }
 
 function sendJson(res, status, body) {

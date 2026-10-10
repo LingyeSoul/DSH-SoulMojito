@@ -3,9 +3,9 @@
 
 // packages/plugin/src/index.ts
 import { execFileSync } from "node:child_process";
-import { readFileSync as readFileSync3 } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { relative, resolve as resolve3 } from "node:path";
+import { readFileSync as readFileSync4 } from "node:fs";
+import { mkdir as mkdir4 } from "node:fs/promises";
+import { relative as relative2, resolve as resolve4 } from "node:path";
 
 // packages/tavern-format/src/png.ts
 var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -2128,6 +2128,25 @@ function assembleResult(allActivated, diagnostics, timedState) {
   };
 }
 
+// packages/tavern-macros/src/host-registry.ts
+var HOST_MACRO_REGISTRY_KEY = "dsh-tavern:host-macros";
+var registrySymbol = Symbol.for(HOST_MACRO_REGISTRY_KEY);
+function store() {
+  const holder = globalThis;
+  return holder[registrySymbol] ??= { nextSequence: 1, entries: /* @__PURE__ */ new Map() };
+}
+function registerHostMacro(name2, fn, order = 100) {
+  const shared = store();
+  const sequence = shared.nextSequence++;
+  shared.entries.set(sequence, { name: name2, fn, order, sequence });
+  return () => {
+    shared.entries.delete(sequence);
+  };
+}
+function hostMacroSnapshot() {
+  return [...store().entries.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ name: name2, fn, order }) => ({ name: name2, fn, order }));
+}
+
 // packages/tavern-macros/src/random.ts
 function hash32(input) {
   let h = 2166136261;
@@ -2280,6 +2299,10 @@ function humanizeDuration(totalSeconds) {
 
 // packages/tavern-macros/src/engine.ts
 var TRIM = Symbol("trim");
+var builtinMacroNameSet = /* @__PURE__ */ new Set();
+function builtinMacroNames() {
+  return new Set(builtinMacroNameSet);
+}
 function opt(v) {
   return v ?? "";
 }
@@ -2321,15 +2344,15 @@ function createMacroEngine(init) {
     return coerceRead(storeOf(scope).get(name2));
   }
   function addToVar(scope, name2, value) {
-    const store3 = storeOf(scope);
-    const current = (coerceRead(store3.get(name2)) ?? 0) || 0;
+    const store5 = storeOf(scope);
+    const current = (coerceRead(store5.get(name2)) ?? 0) || 0;
     if (typeof current === "string") {
       try {
         const parsed = JSON.parse(current);
         if (Array.isArray(parsed)) {
           parsed.push(value);
           const json = JSON.stringify(parsed);
-          store3.set(name2, json);
+          store5.set(name2, json);
           return json;
         }
       } catch {
@@ -2339,14 +2362,14 @@ function createMacroEngine(init) {
     const currentNum = Number(current);
     if (Number.isNaN(inc) || Number.isNaN(currentNum)) {
       const concatenated = `${String(current || "")}${String(value)}`;
-      store3.set(name2, concatenated);
+      store5.set(name2, concatenated);
       return concatenated;
     }
     const next = currentNum + inc;
     if (Number.isNaN(next)) {
       return "";
     }
-    store3.set(name2, next);
+    store5.set(name2, next);
     return String(next);
   }
   regExact("char", () => init.char);
@@ -2465,13 +2488,13 @@ function createMacroEngine(init) {
     return String(evalRoll(spec, rng));
   });
   function registerVarMacros(scope, infix) {
-    const store3 = storeOf(scope);
+    const store5 = storeOf(scope);
     reg(`get${infix}var`, (ctx) => {
       const arg = colonArg(ctx);
       if (arg === null || arg === "") {
         return null;
       }
-      const v = coerceRead(store3.get(arg.trim()));
+      const v = coerceRead(store5.get(arg.trim()));
       return v === void 0 ? "" : String(v);
     });
     reg(`set${infix}var`, (ctx) => {
@@ -2483,7 +2506,7 @@ function createMacroEngine(init) {
       if (m === null || m[1] === void 0 || m[1] === "") {
         return null;
       }
-      store3.set(m[1].trim(), m[2] ?? "");
+      store5.set(m[1].trim(), m[2] ?? "");
       return "";
     });
     reg(`add${infix}var`, (ctx) => {
@@ -2527,14 +2550,14 @@ function createMacroEngine(init) {
       if (arg === null || arg === "") {
         return null;
       }
-      return store3.has(arg.trim()) ? "true" : "false";
+      return store5.has(arg.trim()) ? "true" : "false";
     });
     reg(`delete${infix}var`, (ctx) => {
       const arg = colonArg(ctx);
       if (arg === null || arg === "") {
         return null;
       }
-      store3.delete(arg.trim());
+      store5.delete(arg.trim());
       return "";
     });
   }
@@ -2649,6 +2672,13 @@ function createMacroEngine(init) {
         return null;
       }
     });
+  }
+  for (const key of registry.keys()) builtinMacroNameSet.add(key);
+  for (const entry of hostMacroSnapshot()) {
+    try {
+      registerMacro(entry.name, entry.fn);
+    } catch {
+    }
   }
   const api = {
     expand,
@@ -3886,6 +3916,219 @@ async function requireAction(env, command) {
   if (env === void 0) throw new ScriptError(`/${command} is not available in this context`);
   return env;
 }
+var commandTable = /* @__PURE__ */ new Map();
+function registerStscriptCommand(spec) {
+  commandTable.set(spec.name, spec);
+  for (const alias of spec.aliases ?? []) commandTable.set(alias, spec);
+  return () => {
+    if (commandTable.get(spec.name) === spec) commandTable.delete(spec.name);
+    for (const alias of spec.aliases ?? []) {
+      if (commandTable.get(alias) === spec) commandTable.delete(alias);
+    }
+  };
+}
+function stscriptCommandNames() {
+  return [...commandTable.keys()];
+}
+var changedResult = () => ({ output: "", chatChanged: true });
+var echoCommand = {
+  name: "echo",
+  aliases: ["comment"],
+  run: (cmd, env) => {
+    const text = cmd.raw;
+    if (cmd.name === "echo") env.echo?.(text);
+    return { output: text, chatChanged: false };
+  }
+};
+var setvarCommand = {
+  name: "setvar",
+  aliases: ["setglobalvar"],
+  run: (cmd, env) => {
+    const setter = cmd.name === "setvar" ? env.setVar : env.setGlobalVar;
+    const target = varTarget(cmd);
+    if (target.name === "") throw new ScriptError(`/${cmd.name} requires a variable name`);
+    setter(target.name, target.value);
+    return changedResult();
+  }
+};
+var getvarCommand = {
+  name: "getvar",
+  aliases: ["getglobalvar"],
+  run: (cmd, env) => {
+    const getter = cmd.name === "getvar" ? env.getVar : env.getGlobalVar;
+    const name2 = cmd.args[0] ?? "";
+    if (name2 === "") throw new ScriptError(`/${cmd.name} requires a variable name`);
+    return { output: String(getter(name2) ?? ""), chatChanged: false };
+  }
+};
+var addvarCommand = {
+  name: "addvar",
+  run: (cmd, env) => {
+    const target = varTarget(cmd);
+    if (target.name === "") throw new ScriptError("/addvar requires a variable name");
+    const delta = target.value === "" ? "1" : target.value;
+    const current = env.getVar(target.name);
+    const currentNum = typeof current === "boolean" ? null : toNumber(String(current ?? ""));
+    const deltaNum = toNumber(delta);
+    if (current === void 0) {
+      env.setVar(target.name, delta);
+    } else if (currentNum !== null && deltaNum !== null) {
+      env.setVar(target.name, currentNum + deltaNum);
+    } else {
+      env.setVar(target.name, `${String(current)}${delta}`);
+    }
+    return changedResult();
+  }
+};
+var incvarCommand = {
+  name: "incvar",
+  aliases: ["decvar"],
+  run: (cmd, env) => {
+    const name2 = cmd.args[0] ?? "";
+    const current = toNumber(String(env.getVar(name2) ?? "0")) ?? 0;
+    env.setVar(name2, current + (cmd.name === "incvar" ? 1 : -1));
+    return changedResult();
+  }
+};
+var hasvarCommand = {
+  name: "hasvar",
+  aliases: ["hasglobalvar"],
+  run: (cmd, env) => {
+    const checker = cmd.name === "hasvar" ? env.getVar : env.getGlobalVar;
+    return { output: truthyString(String(checker(cmd.args[0] ?? "") !== void 0)), chatChanged: false };
+  }
+};
+var delvarCommand = {
+  name: "delvar",
+  aliases: ["delglobalvar"],
+  run: (cmd, env) => {
+    const remover = cmd.name === "delvar" ? env.deleteVar : env.deleteGlobalVar;
+    remover(cmd.args[0] ?? "");
+    return changedResult();
+  }
+};
+var ifCommand = {
+  name: "if",
+  run: async (cmd, env, tools) => {
+    const left = cmd.named["left"] ?? cmd.args[0] ?? "";
+    const right = cmd.named["right"] ?? cmd.args[1] ?? "";
+    const op = (cmd.named["op"] ?? cmd.args[2] ?? "=").trim();
+    let passes;
+    if (op === "contains" || op === "!contains") {
+      const contains = left.includes(right);
+      passes = op === "contains" ? contains : !contains;
+    } else {
+      const numericOp = NUMERIC_OPS[op];
+      if (numericOp === void 0) throw new ScriptError(`unsupported /if op: ${op}`);
+      const leftNum = toNumber(left);
+      const rightNum = toNumber(right);
+      if (leftNum !== null && rightNum !== null) passes = numericOp(leftNum, rightNum);
+      else if (op === "=" || op === "==") passes = left === right;
+      else if (op === "!=") passes = left !== right;
+      else passes = false;
+    }
+    const branch = passes ? cmd.named["then"] : cmd.named["else"] ?? "";
+    if (branch === void 0 || branch.trim() === "") return { output: "", chatChanged: false };
+    return tools.runNested(branch, env);
+  }
+};
+var randomCommand = {
+  name: "random",
+  run: (cmd, _env, tools) => {
+    const raw = cmd.raw.trim();
+    const range = /^(-?\d+)\s*-\s*(-?\d+)$/.exec(raw);
+    if (range !== null) {
+      const low = Number(range[1]);
+      const high = Number(range[2]);
+      const min = Math.min(low, high);
+      return { output: String(min + Math.floor(tools.rng() * (Math.max(low, high) - min + 1))), chatChanged: false };
+    }
+    return { output: pickRandom(splitChoices(raw), tools.rng), chatChanged: false };
+  }
+};
+var rollCommand = {
+  name: "roll",
+  run: (cmd, _env, tools) => ({ output: String(parseRoll2(cmd.raw.trim() || "1d6", tools.rng)), chatChanged: false })
+};
+var pickCommand = {
+  name: "pick",
+  run: (cmd, _env, tools) => ({ output: pickRandom(splitChoices(cmd.raw), tools.rng), chatChanged: false })
+};
+var sendCommand = {
+  name: "send",
+  run: async (cmd, env) => {
+    const action = await requireAction(env.send, "send");
+    await action(cmd.raw);
+    return changedResult();
+  }
+};
+var triggerCommand = {
+  name: "trigger",
+  run: async (cmd, env) => {
+    const action = await requireAction(env.trigger, "trigger");
+    await action(cmd.args[0]);
+    return changedResult();
+  }
+};
+var regenerateCommand = {
+  name: "regenerate",
+  run: async (_cmd, env) => {
+    const action = await requireAction(env.regenerate, "regenerate");
+    await action();
+    return changedResult();
+  }
+};
+var stopCommand = {
+  name: "stop",
+  run: async (_cmd, env) => {
+    const action = await requireAction(env.stop, "stop");
+    action();
+    return changedResult();
+  }
+};
+var cutCommand = {
+  name: "cut",
+  run: async (cmd, env) => {
+    const action = await requireAction(env.cut, "cut");
+    const range = /^(-?\d+)(?:\s*-\s*(-?\d+))?$/.exec(cmd.raw.trim());
+    if (range === null) throw new ScriptError(`/cut expects a range like 0-2, got: ${cmd.raw.trim()}`);
+    const from = Number(range[1]);
+    const to = range[2] === void 0 ? from : Number(range[2]);
+    await action(Math.min(from, to), Math.max(from, to));
+    return changedResult();
+  }
+};
+var regexCommand = {
+  name: "regex",
+  run: async (cmd, env) => {
+    const action = await requireAction(env.applyRegex, "regex");
+    const name2 = cmd.named["name"] ?? cmd.args[0] ?? "";
+    if (name2 === "") throw new ScriptError("/regex requires a script name (name=\u2026)");
+    const positional = cmd.named["name"] !== void 0 ? cmd.args : cmd.args.slice(1);
+    return { output: await action(name2, positional.join(" ")), chatChanged: false };
+  }
+};
+for (const spec of [
+  echoCommand,
+  setvarCommand,
+  getvarCommand,
+  addvarCommand,
+  incvarCommand,
+  hasvarCommand,
+  delvarCommand,
+  ifCommand,
+  randomCommand,
+  rollCommand,
+  pickCommand,
+  sendCommand,
+  triggerCommand,
+  regenerateCommand,
+  stopCommand,
+  cutCommand,
+  regexCommand
+]) {
+  registerStscriptCommand(spec);
+}
 async function runCommand(command, env, piped) {
   const withPipe = () => {
     if (piped === null || piped === "") return command;
@@ -3895,140 +4138,13 @@ async function runCommand(command, env, piped) {
     return { ...command, args: [...command.args, piped], raw: `${command.raw} ${piped}`.trim() };
   };
   const cmd = withPipe();
-  const rng = env.rng ?? Math.random;
-  const changed = () => ({ output: "", chatChanged: true });
-  switch (cmd.name) {
-    case "echo":
-    case "comment": {
-      const text = cmd.raw;
-      if (cmd.name === "echo") env.echo?.(text);
-      return { output: text, chatChanged: false };
-    }
-    case "setvar":
-    case "setglobalvar": {
-      const setter = cmd.name === "setvar" ? env.setVar : env.setGlobalVar;
-      const target = varTarget(cmd);
-      if (target.name === "") throw new ScriptError(`/${cmd.name} requires a variable name`);
-      setter(target.name, target.value);
-      return changed();
-    }
-    case "getvar":
-    case "getglobalvar": {
-      const getter = cmd.name === "getvar" ? env.getVar : env.getGlobalVar;
-      const name2 = cmd.args[0] ?? "";
-      if (name2 === "") throw new ScriptError(`/${cmd.name} requires a variable name`);
-      return { output: String(getter(name2) ?? ""), chatChanged: false };
-    }
-    case "addvar": {
-      const target = varTarget(cmd);
-      if (target.name === "") throw new ScriptError("/addvar requires a variable name");
-      const delta = target.value === "" ? "1" : target.value;
-      const current = env.getVar(target.name);
-      const currentNum = typeof current === "boolean" ? null : toNumber(String(current ?? ""));
-      const deltaNum = toNumber(delta);
-      if (current === void 0) {
-        env.setVar(target.name, delta);
-      } else if (currentNum !== null && deltaNum !== null) {
-        env.setVar(target.name, currentNum + deltaNum);
-      } else {
-        env.setVar(target.name, `${String(current)}${delta}`);
-      }
-      return changed();
-    }
-    case "incvar":
-    case "decvar": {
-      const name2 = cmd.args[0] ?? "";
-      const current = toNumber(String(env.getVar(name2) ?? "0")) ?? 0;
-      env.setVar(name2, current + (cmd.name === "incvar" ? 1 : -1));
-      return changed();
-    }
-    case "hasvar":
-    case "hasglobalvar": {
-      const checker = cmd.name === "hasvar" ? env.getVar : env.getGlobalVar;
-      return { output: truthyString(String(checker(cmd.args[0] ?? "") !== void 0)), chatChanged: false };
-    }
-    case "delvar":
-    case "delglobalvar": {
-      const remover = cmd.name === "delvar" ? env.deleteVar : env.deleteGlobalVar;
-      remover(cmd.args[0] ?? "");
-      return changed();
-    }
-    case "if": {
-      const left = cmd.named["left"] ?? cmd.args[0] ?? "";
-      const right = cmd.named["right"] ?? cmd.args[1] ?? "";
-      const op = (cmd.named["op"] ?? cmd.args[2] ?? "=").trim();
-      let passes;
-      if (op === "contains" || op === "!contains") {
-        const contains = left.includes(right);
-        passes = op === "contains" ? contains : !contains;
-      } else {
-        const numericOp = NUMERIC_OPS[op];
-        if (numericOp === void 0) throw new ScriptError(`unsupported /if op: ${op}`);
-        const leftNum = toNumber(left);
-        const rightNum = toNumber(right);
-        if (leftNum !== null && rightNum !== null) passes = numericOp(leftNum, rightNum);
-        else if (op === "=" || op === "==") passes = left === right;
-        else if (op === "!=") passes = left !== right;
-        else passes = false;
-      }
-      const branch = passes ? cmd.named["then"] : cmd.named["else"] ?? "";
-      if (branch === void 0 || branch.trim() === "") return { output: "", chatChanged: false };
-      return runNested(branch, env);
-    }
-    case "random": {
-      const raw = cmd.raw.trim();
-      const range = /^(-?\d+)\s*-\s*(-?\d+)$/.exec(raw);
-      if (range !== null) {
-        const low = Number(range[1]);
-        const high = Number(range[2]);
-        const min = Math.min(low, high);
-        return { output: String(min + Math.floor(rng() * (Math.max(low, high) - min + 1))), chatChanged: false };
-      }
-      return { output: pickRandom(splitChoices(raw), rng), chatChanged: false };
-    }
-    case "roll":
-      return { output: String(parseRoll2(cmd.raw.trim() || "1d6", rng)), chatChanged: false };
-    case "pick":
-      return { output: pickRandom(splitChoices(cmd.raw), rng), chatChanged: false };
-    case "send": {
-      const action = await requireAction(env.send, "send");
-      await action(cmd.raw);
-      return changed();
-    }
-    case "trigger": {
-      const action = await requireAction(env.trigger, "trigger");
-      await action(cmd.args[0]);
-      return changed();
-    }
-    case "regenerate": {
-      const action = await requireAction(env.regenerate, "regenerate");
-      await action();
-      return changed();
-    }
-    case "stop": {
-      const action = await requireAction(env.stop, "stop");
-      action();
-      return changed();
-    }
-    case "cut": {
-      const action = await requireAction(env.cut, "cut");
-      const range = /^(-?\d+)(?:\s*-\s*(-?\d+))?$/.exec(cmd.raw.trim());
-      if (range === null) throw new ScriptError(`/cut expects a range like 0-2, got: ${cmd.raw.trim()}`);
-      const from = Number(range[1]);
-      const to = range[2] === void 0 ? from : Number(range[2]);
-      await action(Math.min(from, to), Math.max(from, to));
-      return changed();
-    }
-    case "regex": {
-      const action = await requireAction(env.applyRegex, "regex");
-      const name2 = cmd.named["name"] ?? cmd.args[0] ?? "";
-      if (name2 === "") throw new ScriptError("/regex requires a script name (name=\u2026)");
-      const positional = cmd.named["name"] !== void 0 ? cmd.args : cmd.args.slice(1);
-      return { output: await action(name2, positional.join(" ")), chatChanged: false };
-    }
-    default:
-      throw new ScriptError(`unknown command: /${cmd.name}`);
-  }
+  const spec = commandTable.get(cmd.name);
+  if (spec === void 0) throw new ScriptError(`unknown command: /${cmd.name}`);
+  return spec.run(cmd, env, {
+    rng: env.rng ?? Math.random,
+    changed: changedResult,
+    runNested: (commandText, nestedEnv) => runNested(commandText, nestedEnv)
+  });
 }
 async function runNested(commandText, env) {
   const command = parseCommand(commandText, env.expand);
@@ -4056,8 +4172,34 @@ async function runScript(script, env) {
 
 // packages/tavern-store/src/store.ts
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { promises as fs2 } from "node:fs";
 import * as path from "node:path";
+
+// packages/tavern-store/src/fs-atomic.ts
+import { promises as fs } from "node:fs";
+var tmpCounter = 0;
+async function writeAtomicBytes(file, bytes) {
+  const tmp = `${file}.${process.pid}.${Date.now()}.${tmpCounter++}.tmp`;
+  await fs.writeFile(tmp, bytes);
+  await renameWithWindowsRetry(tmp, file);
+}
+async function writeAtomicText(file, text) {
+  await writeAtomicBytes(file, new Uint8Array(Buffer.from(text, "utf8")));
+}
+async function renameWithWindowsRetry(from, to, attempts = 5) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (cause) {
+      const code = cause.code;
+      if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
+      await new Promise((resolve5) => setTimeout(resolve5, 10 * attempt));
+    }
+  }
+}
+
+// packages/tavern-store/src/store.ts
 var ChatRevisionConflictError = class extends Error {
   constructor(expectedRevision, actualRevision) {
     super("Chat changed in another tab. Reloaded the latest version; review it before retrying.");
@@ -4080,8 +4222,20 @@ var DEFAULT_STATE = {
   modelSelections: {},
   chats: {},
   regexScripts: [],
-  scriptGlobals: {}
+  scriptGlobals: {},
+  modsEnabled: false,
+  mods: { enabled: {} }
 };
+function normalizeModEnables(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const enabled = value.enabled;
+  if (typeof enabled !== "object" || enabled === null || Array.isArray(enabled)) return {};
+  const result = {};
+  for (const [id, flag] of Object.entries(enabled)) {
+    if (flag === true) result[id] = true;
+  }
+  return result;
+}
 var TavernStore = class _TavernStore {
   constructor(root) {
     this.root = root;
@@ -4090,7 +4244,7 @@ var TavernStore = class _TavernStore {
   stateMutationTail = Promise.resolve();
   static async open(root) {
     for (const dir of ["characters", "worlds", "presets", "chats", "personas", "groups", "personas/avatars"]) {
-      await fs.mkdir(path.join(root, dir), { recursive: true });
+      await fs2.mkdir(path.join(root, dir), { recursive: true });
     }
     return new _TavernStore(root);
   }
@@ -4108,7 +4262,7 @@ var TavernStore = class _TavernStore {
       hash.update(`${dir}
 `);
       for (const name2 of (await this.listDir(dir)).sort()) {
-        const stat = await fs.stat(path.join(this.root, dir, name2)).catch(() => void 0);
+        const stat = await fs2.stat(path.join(this.root, dir, name2)).catch(() => void 0);
         hash.update(`${name2}\0${stat === void 0 ? "missing" : `${stat.size}\0${stat.mtimeMs}`}
 `);
       }
@@ -4153,7 +4307,7 @@ var TavernStore = class _TavernStore {
     const stem = safeFileName(card.data.name);
     const fileName = `${stem}.${kind}`;
     await this.writeAtomic(path.join(this.root, "characters", fileName), bytes);
-    await Promise.all(["png", "json", "charx"].filter((other) => other !== kind).map((other) => fs.rm(path.join(this.root, "characters", `${stem}.${other}`), { force: true })));
+    await Promise.all(["png", "json", "charx"].filter((other) => other !== kind).map((other) => fs2.rm(path.join(this.root, "characters", `${stem}.${other}`), { force: true })));
     return { fileName, card, importedWorld, importedRegex };
   }
   /**
@@ -4188,12 +4342,12 @@ var TavernStore = class _TavernStore {
     const file = await this.getCharacter(name2);
     if (file === void 0) throw new Error(`character '${name2}' not found`);
     if (file.kind === "png") {
-      const bytes = await fs.readFile(path.join(this.root, "characters", file.fileName));
+      const bytes = await fs2.readFile(path.join(this.root, "characters", file.fileName));
       if (template === void 0) return bytes;
       return encodeCharacterCardPng(file.card, bytes);
     }
     if (file.kind === "charx" && template === void 0) {
-      return new Uint8Array(await fs.readFile(path.join(this.root, "characters", file.fileName)));
+      return new Uint8Array(await fs2.readFile(path.join(this.root, "characters", file.fileName)));
     }
     if (template !== void 0) return encodeCharacterCardPng(file.card, template);
     return new Uint8Array(Buffer.from(JSON.stringify(encodeCharacterCardJson2(file.card), null, 2), "utf8"));
@@ -4224,7 +4378,7 @@ var TavernStore = class _TavernStore {
     }
     let bytes;
     let kind = current.kind;
-    const original = new Uint8Array(await fs.readFile(path.join(this.root, "characters", current.fileName)));
+    const original = new Uint8Array(await fs2.readFile(path.join(this.root, "characters", current.fileName)));
     if (current.kind === "png") {
       bytes = encodeCharacterCardPng(card, original);
     } else if (current.kind === "charx") {
@@ -4235,22 +4389,22 @@ var TavernStore = class _TavernStore {
     }
     await this.writeAtomic(path.join(this.root, "characters", `${nextStem}.${kind}`), bytes);
     if (currentStem !== nextStem || current.kind !== kind) {
-      await fs.rm(path.join(this.root, "characters", current.fileName), { force: true });
+      await fs2.rm(path.join(this.root, "characters", current.fileName), { force: true });
     }
     if (currentStem !== nextStem) {
       try {
-        await fs.access(path.join(this.root, "chats", nextStem));
+        await fs2.access(path.join(this.root, "chats", nextStem));
       } catch (cause) {
         if (cause.code !== "ENOENT") throw cause;
         try {
-          await fs.rename(path.join(this.root, "chats", currentStem), path.join(this.root, "chats", nextStem));
+          await fs2.rename(path.join(this.root, "chats", currentStem), path.join(this.root, "chats", nextStem));
         } catch (renameCause) {
           if (renameCause.code !== "ENOENT") throw renameCause;
         }
       }
     }
     for (const other of ["png", "json", "charx"].filter((other2) => other2 !== kind)) {
-      await fs.rm(path.join(this.root, "characters", `${nextStem}.${other}`), { force: true });
+      await fs2.rm(path.join(this.root, "characters", `${nextStem}.${other}`), { force: true });
     }
     const saved = await this.getCharacter(card.data.name);
     if (saved === void 0) throw new Error(`character '${card.data.name}' could not be reloaded`);
@@ -4264,7 +4418,7 @@ var TavernStore = class _TavernStore {
     for (const kind of ["png", "charx", "json"]) {
       const fileName = `${safeFileName(name2)}.${kind}`;
       try {
-        const bytes = new Uint8Array(await fs.readFile(path.join(this.root, "characters", fileName)));
+        const bytes = new Uint8Array(await fs2.readFile(path.join(this.root, "characters", fileName)));
         const card = kind === "png" ? decodeCharacterCard2(bytes) : kind === "charx" ? decodeCharx(bytes).card : decodeCharacterCard2(JSON.parse(Buffer.from(bytes).toString("utf8")));
         return { fileName, kind, card };
       } catch (cause) {
@@ -4278,14 +4432,14 @@ var TavernStore = class _TavernStore {
     for (const kind of ["png", "json", "charx"]) {
       const file = path.join(this.root, "characters", `${safeFileName(name2)}.${kind}`);
       try {
-        await fs.unlink(file);
+        await fs2.unlink(file);
         deleted = true;
       } catch (cause) {
         if (cause.code !== "ENOENT") throw cause;
       }
     }
     if (deleted) {
-      await fs.rm(path.join(this.root, "chats", safeFileName(name2)), { recursive: true, force: true });
+      await fs2.rm(path.join(this.root, "chats", safeFileName(name2)), { recursive: true, force: true });
     }
     return deleted;
   }
@@ -4317,13 +4471,13 @@ var TavernStore = class _TavernStore {
     return jsonBytes(serializeWorldInfoFile(book));
   }
   async deleteWorld(name2) {
-    await fs.rm(path.join(this.root, "worlds", `${safeFileName(name2)}.json`), { force: true });
+    await fs2.rm(path.join(this.root, "worlds", `${safeFileName(name2)}.json`), { force: true });
   }
   /* ------------------------------ 聊天 ------------------------------ */
   async createChat(characterName, header, messages = []) {
     return this.mutateChat(async () => {
       const dir = path.join(this.root, "chats", safeFileName(characterName));
-      await fs.mkdir(dir, { recursive: true });
+      await fs2.mkdir(dir, { recursive: true });
       const id = `${timestamp()}.jsonl`;
       await this.writeAtomic(path.join(dir, id), chatBytes({ header, messages }));
       return id;
@@ -4353,7 +4507,7 @@ var TavernStore = class _TavernStore {
   async listChats(characterName) {
     const dir = path.join(this.root, "chats", safeFileName(characterName));
     try {
-      const files = await fs.readdir(dir);
+      const files = await fs2.readdir(dir);
       return files.filter((f) => f.endsWith(".jsonl")).sort();
     } catch (cause) {
       if (cause.code === "ENOENT") return [];
@@ -4368,7 +4522,7 @@ var TavernStore = class _TavernStore {
       await this.assertChatRevision(source, expectedRevision);
       if (source === target) return;
       if (await this.tryRead(target)) throw new Error(`chat '${nextChatId}' already exists`);
-      await fs.rename(source, target);
+      await fs2.rename(source, target);
     });
   }
   async deleteChat(characterName, chatId, expectedRevision) {
@@ -4376,7 +4530,7 @@ var TavernStore = class _TavernStore {
       const file = path.join(this.root, "chats", safeFileName(characterName), safeChatFileName(chatId));
       try {
         await this.assertChatRevision(file, expectedRevision);
-        await fs.unlink(file);
+        await fs2.unlink(file);
         return true;
       } catch (cause) {
         if (cause.code === "ENOENT") return false;
@@ -4401,7 +4555,7 @@ var TavernStore = class _TavernStore {
     return files.filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort();
   }
   async deleteGroup(name2) {
-    await fs.rm(path.join(this.root, "groups", `${safeFileName(name2)}.json`), { force: true });
+    await fs2.rm(path.join(this.root, "groups", `${safeFileName(name2)}.json`), { force: true });
   }
   /* ------------------------------ 预设 ------------------------------ */
   /** 预设按原样 JSON 存取（含采样参数与 prompts/prompt_order 全量）。 */
@@ -4423,7 +4577,7 @@ var TavernStore = class _TavernStore {
     return files.filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort();
   }
   async deletePreset(name2) {
-    await fs.rm(path.join(this.root, "presets", `${safeFileName(name2)}.json`), { force: true });
+    await fs2.rm(path.join(this.root, "presets", `${safeFileName(name2)}.json`), { force: true });
   }
   /* ----------------------------- persona ----------------------------- */
   async putPersona(persona, avatar) {
@@ -4465,12 +4619,12 @@ var TavernStore = class _TavernStore {
     const json = path.join(this.root, "personas", `${safeFileName(name2)}.json`);
     const avatar = path.join(this.root, "personas", "avatars", `${safeFileName(name2)}.png`);
     try {
-      await fs.unlink(json);
+      await fs2.unlink(json);
       deleted = true;
     } catch (cause) {
       if (cause.code !== "ENOENT") throw cause;
     }
-    await fs.rm(avatar, { force: true });
+    await fs2.rm(avatar, { force: true });
     return deleted;
   }
   /* ------------------------------ 分支 ------------------------------ */
@@ -4557,7 +4711,10 @@ var TavernStore = class _TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
-      compaction: normalizeCompactionOverride(parsed.compaction)
+      compaction: normalizeCompactionOverride(parsed.compaction),
+      // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false，只有显式 true 才开。
+      modsEnabled: parsed.modsEnabled === true,
+      mods: { enabled: normalizeModEnables(parsed.mods) }
     };
   }
   async assertChatRevision(file, expectedRevision) {
@@ -4586,7 +4743,7 @@ var TavernStore = class _TavernStore {
   }
   async listDir(dir) {
     try {
-      return await fs.readdir(path.join(this.root, dir));
+      return await fs2.readdir(path.join(this.root, dir));
     } catch (cause) {
       if (cause.code === "ENOENT") return [];
       throw cause;
@@ -4594,30 +4751,16 @@ var TavernStore = class _TavernStore {
   }
   async tryRead(file) {
     try {
-      return new Uint8Array(await fs.readFile(file));
+      return new Uint8Array(await fs2.readFile(file));
     } catch (cause) {
       if (cause.code === "ENOENT") return void 0;
       throw cause;
     }
   }
   async writeAtomic(file, bytes) {
-    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(tmp, bytes);
-    await renameWithWindowsRetry(tmp, file);
+    await writeAtomicBytes(file, bytes);
   }
 };
-async function renameWithWindowsRetry(from, to, attempts = 5) {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await fs.rename(from, to);
-      return;
-    } catch (cause) {
-      const code = cause.code;
-      if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
-      await new Promise((resolve4) => setTimeout(resolve4, 10 * attempt));
-    }
-  }
-}
 function normalizeTavernSessionBinding(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
   const candidate = value;
@@ -4704,7 +4847,7 @@ function jsonBytes(obj) {
 
 // packages/tavern-store/src/memory.ts
 import { createHash as createHash2, randomUUID } from "node:crypto";
-import { promises as fs2 } from "node:fs";
+import { promises as fs3 } from "node:fs";
 import * as path2 from "node:path";
 var MemoryRevisionConflictError = class extends Error {
   constructor(id, expectedRevision, actualRevision) {
@@ -4728,8 +4871,8 @@ var MemoryStore = class _MemoryStore {
   }
   mutationTail = Promise.resolve();
   static async open(root) {
-    await fs2.mkdir(path2.join(root, "memories"), { recursive: true });
-    await fs2.mkdir(path2.join(root, "memory-audit"), { recursive: true });
+    await fs3.mkdir(path2.join(root, "memories"), { recursive: true });
+    await fs3.mkdir(path2.join(root, "memory-audit"), { recursive: true });
     return new _MemoryStore(root);
   }
   async search(query) {
@@ -4853,7 +4996,7 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
   }
   async readJson(file) {
     try {
-      const parsed = JSON.parse(await fs2.readFile(file, "utf8"));
+      const parsed = JSON.parse(await fs3.readFile(file, "utf8"));
       validateRecord(parsed);
       return parsed;
     } catch (cause) {
@@ -4866,8 +5009,8 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
   }
   async writeRecord(record) {
     const file = this.recordPath(record.id, record.scope, record.scopeId);
-    await fs2.mkdir(path2.dirname(file), { recursive: true });
-    await writeAtomic(file, `${JSON.stringify(record)}
+    await fs3.mkdir(path2.dirname(file), { recursive: true });
+    await writeAtomicText(file, `${JSON.stringify(record)}
 `);
   }
   recordPath(id, scope, scopeId) {
@@ -4876,7 +5019,7 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
   }
   async audit(action, record) {
     const line = JSON.stringify({ action, id: record.id, scope: record.scope, scopeId: record.scopeId, revision: record.revision, at: record.updatedAt });
-    await fs2.appendFile(path2.join(this.root, "memory-audit", `${record.scope}.jsonl`), `${line}
+    await fs3.appendFile(path2.join(this.root, "memory-audit", `${record.scope}.jsonl`), `${line}
 `, "utf8");
   }
   mutate(operation) {
@@ -4956,7 +5099,7 @@ function safeSegment(value) {
 }
 async function readDirectories(root) {
   try {
-    const entries = await fs2.readdir(root, { withFileTypes: true });
+    const entries = await fs3.readdir(root, { withFileTypes: true });
     return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   } catch (cause) {
     if (cause.code === "ENOENT") return [];
@@ -4965,22 +5108,17 @@ async function readDirectories(root) {
 }
 async function readFiles(root) {
   try {
-    const entries = await fs2.readdir(root, { withFileTypes: true });
+    const entries = await fs3.readdir(root, { withFileTypes: true });
     return entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
   } catch (cause) {
     if (cause.code === "ENOENT") return [];
     throw cause;
   }
 }
-async function writeAtomic(file, text) {
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await fs2.writeFile(tmp, text, "utf8");
-  await fs2.rename(tmp, file);
-}
 
 // packages/tavern-store/src/variable.ts
 import { createHash as createHash3 } from "node:crypto";
-import { promises as fs3 } from "node:fs";
+import { promises as fs4 } from "node:fs";
 import * as path3 from "node:path";
 var VariableRevisionConflictError = class extends Error {
   constructor(name2, expectedRevision, actualRevision) {
@@ -5003,7 +5141,7 @@ var VariableStore = class _VariableStore {
   }
   mutationTail = Promise.resolve();
   static async open(root) {
-    await fs3.mkdir(path3.join(root, "variables"), { recursive: true });
+    await fs4.mkdir(path3.join(root, "variables"), { recursive: true });
     return new _VariableStore(root);
   }
   async get(scope, scopeId, name2) {
@@ -5078,12 +5216,12 @@ var VariableStore = class _VariableStore {
   async clear(scope, scopeId) {
     validateScope2(scope, scopeId);
     await this.mutate(async () => {
-      await fs3.rm(this.filePath(scope, scopeId), { force: true });
+      await fs4.rm(this.filePath(scope, scopeId), { force: true });
     });
   }
   async readFile(scope, scopeId) {
     try {
-      const parsed = JSON.parse(await fs3.readFile(this.filePath(scope, scopeId), "utf8"));
+      const parsed = JSON.parse(await fs4.readFile(this.filePath(scope, scopeId), "utf8"));
       validateFile(parsed, scope, scopeId);
       return parsed;
     } catch (cause) {
@@ -5096,11 +5234,11 @@ var VariableStore = class _VariableStore {
   }
   async writeFile(file) {
     const target = this.filePath(file.scope, file.scopeId);
-    await fs3.mkdir(path3.dirname(target), { recursive: true });
+    await fs4.mkdir(path3.dirname(target), { recursive: true });
     const text = `${JSON.stringify(file)}
 `;
     if (Buffer.byteLength(text, "utf8") > MAX_SCOPE_BYTES) throw new Error("variable scope exceeds size limit");
-    await writeAtomic2(target, text);
+    await writeAtomicText(target, text);
   }
   filePath(scope, scopeId) {
     validateScope2(scope, scopeId);
@@ -5170,11 +5308,6 @@ function validateValue(value) {
 function safeSegment2(value) {
   if (value === "." || value === ".." || /[\\/\0]/.test(value)) throw new Error("invalid variable path segment");
   return encodeURIComponent(value);
-}
-async function writeAtomic2(file, text) {
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await fs3.writeFile(tmp, text, "utf8");
-  await fs3.rename(tmp, file);
 }
 
 // packages/tavern-store/src/novel-model.ts
@@ -5648,7 +5781,7 @@ var NovelPreconditionError = class extends Error {
 // packages/tavern-store/src/novel.ts
 import { createHash as createHash4, randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
-import { promises as fs4 } from "node:fs";
+import { promises as fs5 } from "node:fs";
 import * as path4 from "node:path";
 var SCHEMA_VERSION = 1;
 var REQUIREMENT_SOURCES = /* @__PURE__ */ new Set(["composer", "panel", "internal"]);
@@ -5660,15 +5793,15 @@ var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("he
 var DSH_HOST_COMMAND = /@deepseek-ai[\\/]dsh\b|(?:^|[\\/ \t"'])dsh(?:\.(?:cmd|js|ps1|exe|bat))?["']?[ \t]+web\b/;
 function commandLineOf(pid) {
   if (process.platform === "win32") {
-    return new Promise((resolve4) => {
+    return new Promise((resolve5) => {
       execFile("powershell.exe", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`], { timeout: 5e3, windowsHide: true }, (error, stdout) => {
-        if (error) resolve4(null);
-        else resolve4(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve5(null);
+        else resolve5(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
   if (process.platform === "linux") {
-    return fs4.readFile(`/proc/${pid}/cmdline`, "utf8").then(
+    return fs5.readFile(`/proc/${pid}/cmdline`, "utf8").then(
       (raw) => raw.split("\0").join(" ").trim() || void 0,
       (cause) => {
         const code = cause.code;
@@ -5677,10 +5810,10 @@ function commandLineOf(pid) {
     );
   }
   if (process.platform === "darwin") {
-    return new Promise((resolve4) => {
+    return new Promise((resolve5) => {
       execFile("ps", ["-p", String(pid), "-o", "command="], { timeout: 5e3 }, (error, stdout) => {
-        if (error) resolve4(Number(error.code) === 1 ? void 0 : null);
-        else resolve4(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve5(Number(error.code) === 1 ? void 0 : null);
+        else resolve5(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -5718,7 +5851,7 @@ var NovelStore = class _NovelStore {
     this.novelsRoot = path4.join(root, "novels");
   }
   static async open(tavernRoot) {
-    await fs4.mkdir(path4.join(tavernRoot, "novels"), { recursive: true });
+    await fs5.mkdir(path4.join(tavernRoot, "novels"), { recursive: true });
     return new _NovelStore(tavernRoot);
   }
   /* ------------------------------ projects ------------------------------ */
@@ -5757,7 +5890,7 @@ var NovelStore = class _NovelStore {
     return this.mutate(novelId, async () => {
       const dir = this.novelDir(novelId);
       for (const sub of ["revisions", "assets", "bodies", path4.join("projections", "chapters")]) {
-        await fs4.mkdir(path4.join(dir, sub), { recursive: true });
+        await fs5.mkdir(path4.join(dir, sub), { recursive: true });
       }
       await this.ensureOwnership(novelId, dir);
       const assets = [];
@@ -5925,7 +6058,7 @@ var NovelStore = class _NovelStore {
       await this.ensureOwnership(novelId, dir);
       await this.projectionTails.get(novelId)?.catch(() => {
       });
-      await fs4.rm(dir, { recursive: true, force: true });
+      await fs5.rm(dir, { recursive: true, force: true });
       return true;
     });
   }
@@ -6804,7 +6937,7 @@ var NovelStore = class _NovelStore {
    * is refused as a concurrent writer.
    */
   async ensureOwnership(novelId, dir) {
-    await fs4.mkdir(dir, { recursive: true });
+    await fs5.mkdir(dir, { recursive: true });
     const ownerPath = path4.join(dir, ".owner.json");
     for (let attempt = 0; ; attempt++) {
       const raw = await tryReadText(ownerPath);
@@ -6819,11 +6952,11 @@ var NovelStore = class _NovelStore {
             detail: "another writer holds the novel; single-writer ownership refuses concurrent writers (\xA710.2)"
           });
         }
-        await fs4.rm(ownerPath, { force: true });
+        await fs5.rm(ownerPath, { force: true });
       }
       const token = { pid: process.pid, bootId: BOOT_ID, acquiredAt: (/* @__PURE__ */ new Date()).toISOString() };
       try {
-        const fh = await fs4.open(ownerPath, "wx");
+        const fh = await fs5.open(ownerPath, "wx");
         try {
           await fh.writeFile(jsonBytes2(token));
           await fh.sync();
@@ -6917,7 +7050,7 @@ var NovelStore = class _NovelStore {
   async updateProjections(dir, snapshot2) {
     const projectionsDir = path4.join(dir, "projections");
     try {
-      await fs4.mkdir(path4.join(projectionsDir, "chapters"), { recursive: true });
+      await fs5.mkdir(path4.join(projectionsDir, "chapters"), { recursive: true });
       const summary = summarizeNovel(snapshot2);
       await writeAtomicText(path4.join(projectionsDir, "status.json"), JSON.stringify({
         novelId: snapshot2.novelId,
@@ -7230,7 +7363,7 @@ function textBytes(text) {
 }
 async function tryReadText(file) {
   try {
-    return await fs4.readFile(file, "utf8");
+    return await fs5.readFile(file, "utf8");
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -7238,24 +7371,24 @@ async function tryReadText(file) {
 }
 async function writeImmutableBytes(file, bytes) {
   try {
-    await fs4.access(file);
+    await fs5.access(file);
     return;
   } catch (cause) {
     if (cause.code !== "ENOENT") throw cause;
   }
   const tmp = `${file}.${process.pid}.${Date.now()}.${randomBytes(2).toString("hex")}.tmp`;
-  const fh = await fs4.open(tmp, "w");
+  const fh = await fs5.open(tmp, "w");
   try {
     await fh.writeFile(bytes);
     await fh.sync();
   } finally {
     await fh.close();
   }
-  await fs4.rename(tmp, file);
+  await fs5.rename(tmp, file);
 }
 async function replaceHead(head, bytes) {
   const tmp = `${head}.${process.pid}.${Date.now()}.${randomBytes(2).toString("hex")}.tmp`;
-  const fh = await fs4.open(tmp, "w");
+  const fh = await fs5.open(tmp, "w");
   try {
     await fh.writeFile(bytes);
     await fh.sync();
@@ -7263,28 +7396,23 @@ async function replaceHead(head, bytes) {
     await fh.close();
   }
   try {
-    await fs4.rename(tmp, head);
+    await fs5.rename(tmp, head);
   } catch (cause) {
     const code = cause.code;
     if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY") {
       try {
-        await fs4.rm(tmp, { force: true });
+        await fs5.rm(tmp, { force: true });
       } catch {
       }
       throw cause;
     }
-    await new Promise((resolve4) => setTimeout(resolve4, 25));
-    await fs4.rename(tmp, head);
+    await new Promise((resolve5) => setTimeout(resolve5, 25));
+    await fs5.rename(tmp, head);
   }
-}
-async function writeAtomicText(file, text) {
-  const tmp = `${file}.${process.pid}.${Date.now()}.${randomBytes(2).toString("hex")}.tmp`;
-  await fs4.writeFile(tmp, text, "utf8");
-  await fs4.rename(tmp, file);
 }
 async function readDirectories2(root) {
   try {
-    const entries = await fs4.readdir(root, { withFileTypes: true });
+    const entries = await fs5.readdir(root, { withFileTypes: true });
     return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   } catch (cause) {
     if (cause.code === "ENOENT") return [];
@@ -7293,36 +7421,31 @@ async function readDirectories2(root) {
 }
 
 // packages/tavern-store/src/originals.ts
-import { promises as fs5 } from "node:fs";
+import { promises as fs6 } from "node:fs";
 import * as path5 from "node:path";
 function originalSnapshotPath(root, characterName) {
   return path5.join(root, "characters", "originals", `${safeFileName(characterName)}.json`);
 }
 async function fileExists(file) {
   try {
-    await fs5.access(file);
+    await fs6.access(file);
     return true;
   } catch {
     return false;
   }
 }
-async function writeAtomicText2(file, text) {
-  const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-  await fs5.writeFile(tmp, text, "utf8");
-  await fs5.rename(tmp, file);
-}
 async function saveOriginalSnapshot(root, characterName, card) {
   const file = originalSnapshotPath(root, characterName);
-  await fs5.mkdir(path5.dirname(file), { recursive: true });
+  await fs6.mkdir(path5.dirname(file), { recursive: true });
   if (await fileExists(file)) return false;
-  await writeAtomicText2(file, `${JSON.stringify(encodeCharacterCardJson2(card), null, 2)}
+  await writeAtomicText(file, `${JSON.stringify(encodeCharacterCardJson2(card), null, 2)}
 `);
   return true;
 }
 async function readOriginalSnapshot(root, characterName) {
   let bytes;
   try {
-    bytes = await fs5.readFile(originalSnapshotPath(root, characterName));
+    bytes = await fs6.readFile(originalSnapshotPath(root, characterName));
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -7331,7 +7454,7 @@ async function readOriginalSnapshot(root, characterName) {
 }
 async function deleteOriginalSnapshot(root, characterName) {
   try {
-    await fs5.unlink(originalSnapshotPath(root, characterName));
+    await fs6.unlink(originalSnapshotPath(root, characterName));
     return true;
   } catch (cause) {
     if (cause.code === "ENOENT") return false;
@@ -7344,31 +7467,31 @@ async function moveOriginalSnapshot(root, fromName, toName) {
   if (from === to) return false;
   if (!await fileExists(from)) return false;
   try {
-    await fs5.unlink(to);
+    await fs6.unlink(to);
   } catch (cause) {
     if (cause.code !== "ENOENT") throw cause;
   }
-  await fs5.rename(from, to);
+  await fs6.rename(from, to);
   return true;
 }
 async function restoreOriginal(root, characterName) {
   const original = await readOriginalSnapshot(root, characterName);
   if (original === void 0) return void 0;
-  const store3 = await TavernStore.open(root);
-  const current = await store3.getCharacter(characterName);
+  const store5 = await TavernStore.open(root);
+  const current = await store5.getCharacter(characterName);
   if (current === void 0) {
-    await store3.importCharacter(original);
+    await store5.importCharacter(original);
   } else {
-    await store3.updateCharacter(characterName, encodeCharacterCardJson2(original));
+    await store5.updateCharacter(characterName, encodeCharacterCardJson2(original));
   }
   await moveOriginalSnapshot(root, characterName, original.data.name);
-  const restored = await store3.getCharacter(original.data.name);
+  const restored = await store5.getCharacter(original.data.name);
   if (restored === void 0) throw new Error(`character '${original.data.name}' could not be reloaded after restore`);
   return restored;
 }
 
 // packages/tavern-store/src/scripts.ts
-import { promises as fs6 } from "node:fs";
+import { promises as fs7 } from "node:fs";
 import * as path6 from "node:path";
 var SCRIPT_CHUNK_TARGET = 1200;
 var SCRIPT_CHUNK_HARD_MAX = 2e3;
@@ -7581,15 +7704,15 @@ async function importScript(dir, name2, content, format) {
     chunks: chunks.map((text2, index) => ({ index, text: text2 }))
   };
   const scriptDir = path6.join(dir, "scripts", safeScriptName(trimmedName));
-  await fs6.mkdir(scriptDir, { recursive: true });
-  await writeAtomic3(path6.join(scriptDir, "script.json"), jsonBytes3(record));
+  await fs7.mkdir(scriptDir, { recursive: true });
+  await writeAtomicBytes(path6.join(scriptDir, "script.json"), jsonBytes3(record));
   return record;
 }
 async function listScripts(dir) {
   const root = path6.join(dir, "scripts");
   let entries;
   try {
-    entries = await fs6.readdir(root);
+    entries = await fs7.readdir(root);
   } catch (cause) {
     if (cause.code === "ENOENT") return [];
     throw cause;
@@ -7611,8 +7734,8 @@ async function listScripts(dir) {
 async function getScript(dir, name2) {
   return readScriptRecord(path6.join(dir, "scripts", safeScriptName(name2), "script.json"));
 }
-async function applyScriptBinding(store3, characterName, scriptName) {
-  const file = await store3.getCharacter(characterName);
+async function applyScriptBinding(store5, characterName, scriptName) {
+  const file = await store5.getCharacter(characterName);
   if (file === void 0) throw new Error(`character '${characterName}' not found`);
   const extensions = { ...file.card.data.extensions };
   const agentTavern = extensions.agentTavern;
@@ -7625,7 +7748,7 @@ async function applyScriptBinding(store3, characterName, scriptName) {
     base.scriptId = scriptName;
     extensions.agentTavern = base;
   }
-  await store3.updateCharacter(characterName, {
+  await store5.updateCharacter(characterName, {
     spec: file.card.spec,
     specVersion: file.card.specVersion,
     data: { ...file.card.data, extensions }
@@ -7635,7 +7758,7 @@ async function applyScriptBinding(store3, characterName, scriptName) {
 async function readScriptRecord(file) {
   let bytes;
   try {
-    bytes = await fs6.readFile(file);
+    bytes = await fs7.readFile(file);
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -7658,10 +7781,6 @@ async function readScriptRecord(file) {
 function safeScriptName(name2) {
   const cleaned = name2.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim();
   return cleaned.length > 0 ? cleaned.slice(0, 120) : "_unnamed";
-}
-function writeAtomic3(file, bytes) {
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  return fs6.writeFile(tmp, bytes).then(() => fs6.rename(tmp, file));
 }
 function jsonBytes3(obj) {
   return new Uint8Array(Buffer.from(JSON.stringify(obj, null, 2), "utf8"));
@@ -8458,7 +8577,7 @@ var NovelDriver = class _NovelDriver {
       } catch (error) {
         lastError = error;
         this.logWarn("followup-attempt-failed", { novelId, sessionId: agent.session.id, intentId, errorCode: errorCodeOf(error), attempt });
-        if (attempt < retry.maxAttempts) await new Promise((resolve4) => setTimeout(resolve4, retry.backoffMs));
+        if (attempt < retry.maxAttempts) await new Promise((resolve5) => setTimeout(resolve5, retry.backoffMs));
       }
     }
     throw lastError;
@@ -8801,7 +8920,7 @@ function errorCodeOf(error) {
 }
 
 // packages/plugin/src/agent-novel/projector.ts
-import { promises as fs7 } from "node:fs";
+import { promises as fs8 } from "node:fs";
 import { crc32 as crc322 } from "node:zlib";
 import * as path7 from "node:path";
 
@@ -8813,13 +8932,13 @@ function novelScopeId(novelId) {
 // packages/plugin/src/agent-novel/projector.ts
 var PARAGRAPH_SEPARATOR3 = "\n\n";
 var NovelProjector = class _NovelProjector {
-  constructor(tavernRoot, store3, memory) {
+  constructor(tavernRoot, store5, memory) {
     this.tavernRoot = tavernRoot;
-    this.store = store3;
+    this.store = store5;
     this.memory = memory;
   }
-  static async open(tavernRoot, store3, memory) {
-    return new _NovelProjector(tavernRoot, store3, memory);
+  static async open(tavernRoot, store5, memory) {
+    return new _NovelProjector(tavernRoot, store5, memory);
   }
   /* ----------------------------- memory index (§8.2) ----------------------------- */
   /**
@@ -8871,7 +8990,7 @@ var NovelProjector = class _NovelProjector {
     const statusPath = path7.join(this.novelDir(novelId), "projections", "status.json");
     let raw;
     try {
-      raw = await fs7.readFile(statusPath, "utf8");
+      raw = await fs8.readFile(statusPath, "utf8");
     } catch (cause) {
       if (cause.code === "ENOENT") return false;
       throw cause;
@@ -8888,17 +9007,17 @@ var NovelProjector = class _NovelProjector {
     const snapshot2 = await this.requireSnapshot(novelId);
     const paragraphsByChapter = await this.readAllCommitParagraphs(novelId, snapshot2);
     const projectionsDir = path7.join(this.novelDir(novelId), "projections");
-    await fs7.rm(path7.join(projectionsDir, "chapters"), { recursive: true, force: true });
-    await fs7.mkdir(path7.join(projectionsDir, "chapters"), { recursive: true });
+    await fs8.rm(path7.join(projectionsDir, "chapters"), { recursive: true, force: true });
+    await fs8.mkdir(path7.join(projectionsDir, "chapters"), { recursive: true });
     const titleByChapter = new Map((snapshot2.outline?.chapters ?? []).map((chapter) => [chapter.chapterId, chapter.title]));
     for (const [chapterId, commitGroups] of paragraphsByChapter) {
       const parts = [`# ${titleByChapter.get(chapterId) ?? chapterId}`, ""];
       for (const paragraphs of commitGroups) parts.push(paragraphs.join(PARAGRAPH_SEPARATOR3), "");
-      await writeAtomicText3(path7.join(projectionsDir, "chapters", `${chapterId}.md`), `${parts.join(PARAGRAPH_SEPARATOR3).trimEnd()}
+      await writeAtomicText2(path7.join(projectionsDir, "chapters", `${chapterId}.md`), `${parts.join(PARAGRAPH_SEPARATOR3).trimEnd()}
 `);
     }
     const summary = summarizeNovel(snapshot2);
-    await writeAtomicText3(path7.join(projectionsDir, "status.json"), JSON.stringify({
+    await writeAtomicText2(path7.join(projectionsDir, "status.json"), JSON.stringify({
       novelId: snapshot2.novelId,
       revision: snapshot2.revision,
       contentRevision: snapshot2.contentRevision,
@@ -8972,7 +9091,7 @@ var NovelProjector = class _NovelProjector {
     const bodyPath = path7.join(this.novelDir(novelId), "bodies", `${commit.bodyHash}.txt`);
     let raw;
     try {
-      raw = await fs7.readFile(bodyPath, "utf8");
+      raw = await fs8.readFile(bodyPath, "utf8");
     } catch (cause) {
       if (cause.code === "ENOENT") {
         throw new NovelStorageCorruptionError({ novelId, path: bodyPath, detail: `committed body object of ${commit.commitId} is missing` });
@@ -9011,7 +9130,7 @@ var NovelProjector = class _NovelProjector {
     const dir = path7.join(this.tavernRoot, "memories", "chat", encodeURIComponent(novelScopeId(novelId)));
     let files;
     try {
-      files = await fs7.readdir(dir);
+      files = await fs8.readdir(dir);
     } catch (cause) {
       if (cause.code === "ENOENT") return [];
       throw cause;
@@ -9019,7 +9138,7 @@ var NovelProjector = class _NovelProjector {
     const records = [];
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
-      const parsed = JSON.parse(await fs7.readFile(path7.join(dir, file), "utf8"));
+      const parsed = JSON.parse(await fs8.readFile(path7.join(dir, file), "utf8"));
       if (typeof parsed.id === "string" && typeof parsed.revision === "string") {
         records.push({ id: parsed.id, revision: parsed.revision });
       }
@@ -9104,10 +9223,10 @@ function sanitizeFilename(value) {
 function textBytes2(text) {
   return new Uint8Array(Buffer.from(text, "utf8"));
 }
-async function writeAtomicText3(file, text) {
+async function writeAtomicText2(file, text) {
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await fs7.writeFile(tmp, text, "utf8");
-  await fs7.rename(tmp, file);
+  await fs8.writeFile(tmp, text, "utf8");
+  await fs8.rename(tmp, file);
 }
 var ZIP_UTF8_FLAG = 2048;
 var DOS_TIME = 0;
@@ -9188,13 +9307,13 @@ function stableMessageKey(sessionId, messageKey) {
 function isNovelAuthorMessage(event) {
   return extractAuthorMessage(event) !== null;
 }
-async function receiveAuthorMessage(store3, novelId, sessionId, event) {
+async function receiveAuthorMessage(store5, novelId, sessionId, event) {
   const extracted = extractAuthorMessage(event);
   if (extracted === null) {
     return { accepted: false, duplicate: false, reason: "event is not a real user author message (user/message with user source and non-empty text)" };
   }
   try {
-    const received = await store3.receiveRequirement(novelId, {
+    const received = await store5.receiveRequirement(novelId, {
       hostMessageId: stableMessageKey(sessionId, extracted.messageId),
       text: extracted.text,
       sourceKind: extracted.sourceKind
@@ -9312,6 +9431,9 @@ function formatGuidesBlock(guides) {
   ].join("\n");
 }
 var guidesChanged = createGlobalListenerRegistry("dsh-tavern:guides-changed-listeners");
+function onGuidesChanged(listener) {
+  return guidesChanged.on(listener);
+}
 function emitGuidesChanged(character, chatId) {
   return guidesChanged.emit(character, chatId);
 }
@@ -10654,9 +10776,9 @@ var TemplateVariableSystem = class {
       if (scope === "global" || scope === "cache") {
         throw new TypeError("cannot replace the entire global/cache variable tree; use local or initial scope");
       }
-      const store3 = this.scopeStore(scope);
-      for (const k of Object.keys(store3)) delete store3[k];
-      if (isObjectLike(value)) deepMerge(store3, value);
+      const store5 = this.scopeStore(scope);
+      for (const k of Object.keys(store5)) delete store5[k];
+      if (isObjectLike(value)) deepMerge(store5, value);
       return;
     }
     if (scope === "global") {
@@ -10680,8 +10802,8 @@ var TemplateVariableSystem = class {
       results: "new",
       clone: false
     });
-    const store3 = key === null ? this.cache : this.scopeStore(opts.scope);
-    const value = key === null ? store3 : getPath(store3, key);
+    const store5 = key === null ? this.cache : this.scopeStore(opts.scope);
+    const value = key === null ? store5 : getPath(store5, key);
     if (value === void 0) return opts.defaults;
     return opts.clone ? deepClone(value) : value;
   }
@@ -11340,19 +11462,19 @@ function registerAgentTavernAnchor(ctx, options = {}) {
 
 // packages/plugin/src/agent-tavern/projector.ts
 import { createHash as createHash6, randomUUID as randomUUID3 } from "node:crypto";
-import { promises as fs8 } from "node:fs";
+import { promises as fs9 } from "node:fs";
 import { join as join9 } from "node:path";
 var AgentTavernProjector = class _AgentTavernProjector {
-  constructor(root, store3) {
+  constructor(root, store5) {
     this.root = root;
-    this.store = store3;
+    this.store = store5;
   }
   tails = /* @__PURE__ */ new Map();
   checkpoints = /* @__PURE__ */ new Map();
-  static async open(tavernRoot, store3) {
+  static async open(tavernRoot, store5) {
     const root = join9(tavernRoot, "projections");
-    await fs8.mkdir(root, { recursive: true });
-    return new _AgentTavernProjector(root, store3);
+    await fs9.mkdir(root, { recursive: true });
+    return new _AgentTavernProjector(root, store5);
   }
   project(session, event) {
     const previous = this.tails.get(session.id) ?? Promise.resolve();
@@ -11423,7 +11545,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
     const cached = this.checkpoints.get(sessionId);
     if (cached) return cached;
     try {
-      const parsed = JSON.parse(await fs8.readFile(this.checkpointPath(sessionId), "utf8"));
+      const parsed = JSON.parse(await fs9.readFile(this.checkpointPath(sessionId), "utf8"));
       validateCheckpoint(parsed, sessionId);
       this.checkpoints.set(sessionId, parsed);
       return parsed;
@@ -11443,9 +11565,9 @@ var AgentTavernProjector = class _AgentTavernProjector {
   async writeCheckpoint(checkpoint) {
     const target = this.checkpointPath(checkpoint.sessionId);
     const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
-    await fs8.writeFile(temporary, `${JSON.stringify(checkpoint)}
+    await fs9.writeFile(temporary, `${JSON.stringify(checkpoint)}
 `, "utf8");
-    await fs8.rename(temporary, target);
+    await fs9.rename(temporary, target);
     this.checkpoints.set(checkpoint.sessionId, checkpoint);
   }
   checkpointPath(sessionId) {
@@ -12014,6 +12136,99 @@ function mergeTemplateLocalVars(chat, macroLocalSnapshot) {
   }
 }
 
+// packages/plugin/src/generation-hooks.ts
+var GENERATION_HOOK_TIMEOUT_MS = 1e4;
+function withTimeout(promise, ms) {
+  return new Promise((resolve5, reject) => {
+    const timer = setTimeout(() => {
+      const timeoutError = new Error(`generation hook timed out after ${ms}ms`);
+      timeoutError.hookTimeout = true;
+      reject(timeoutError);
+    }, ms);
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve5(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+function createGenerationHookBus(options = {}) {
+  const timeoutMs = options.timeoutMs ?? GENERATION_HOOK_TIMEOUT_MS;
+  const table = /* @__PURE__ */ new Map();
+  const degradationListeners = /* @__PURE__ */ new Set();
+  let nextId = 1;
+  let degradations = 0;
+  function register(phase, handler, order = 100, owner) {
+    const id = nextId++;
+    const list = table.get(phase) ?? [];
+    list.push({ id, order, handler, ...owner !== void 0 ? { owner } : {} });
+    list.sort((a, b) => a.order - b.order || a.id - b.id);
+    table.set(phase, list);
+    return () => {
+      const current = table.get(phase);
+      if (current === void 0) return;
+      table.set(phase, current.filter((registration) => registration.id !== id));
+    };
+  }
+  async function dispatch(phase, payload, context) {
+    const list = table.get(phase);
+    if (list === void 0 || list.length === 0) return payload;
+    const fullContext = { ...context, phase };
+    let current = payload;
+    for (const registration of [...list]) {
+      const degrade = (reason, detail) => {
+        degradations += 1;
+        const degradation = {
+          phase,
+          order: registration.order,
+          reason,
+          ...detail !== void 0 ? { detail } : {},
+          ...registration.owner !== void 0 ? { owner: registration.owner } : {}
+        };
+        options.onDegradation?.(degradation);
+        for (const listener of [...degradationListeners]) {
+          try {
+            listener(degradation);
+          } catch {
+          }
+        }
+      };
+      try {
+        const outcome = await withTimeout(
+          Promise.resolve(registration.handler(current, fullContext)),
+          timeoutMs
+        );
+        if (outcome === void 0) {
+          degrade("no-return");
+        } else {
+          current = outcome;
+        }
+      } catch (error) {
+        const timedOut = error instanceof Error && error.hookTimeout === true;
+        degrade(timedOut ? "timeout" : "error", error instanceof Error ? error.message : String(error));
+      }
+    }
+    return current;
+  }
+  return {
+    register,
+    dispatch,
+    degradationCount: () => degradations,
+    onDegradation(listener) {
+      degradationListeners.add(listener);
+      return () => {
+        degradationListeners.delete(listener);
+      };
+    }
+  };
+}
+var generationHooks = createGenerationHookBus();
+
 // packages/plugin/src/rewrite.ts
 var FEEDBACK_MAX_LENGTH = 1e3;
 function optionalFeedback(value) {
@@ -12561,7 +12776,7 @@ async function fetchFromAtom(options) {
   };
 }
 function resolveRemoteCommit(repository, ref, timeoutMs) {
-  return new Promise((resolve4) => {
+  return new Promise((resolve5) => {
     const url = /^https?:|^git@/i.test(repository) ? repository : `https://github.com/${repository.replace(/^\//, "")}.git`;
     execFile2("git", ["ls-remote", url, `refs/heads/${ref}`, ref], {
       encoding: "utf8",
@@ -12570,11 +12785,11 @@ function resolveRemoteCommit(repository, ref, timeoutMs) {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
     }, (error, stdout) => {
       if (error) {
-        resolve4("");
+        resolve5("");
         return;
       }
       const first = String(stdout ?? "").split("\n").map((line) => line.trim()).find(Boolean) ?? "";
-      resolve4(first.split(/\s+/)[0] ?? "");
+      resolve5(first.split(/\s+/)[0] ?? "");
     });
   });
 }
@@ -12626,7 +12841,7 @@ function describeError(error) {
 function curlGet(url, accept, timeoutMs, exec = execFile2) {
   const command = process.env.DSH_TAVERN_CURL?.trim() || (process.platform === "win32" ? "curl.exe" : "curl");
   const seconds = String(Math.max(1, Math.ceil(timeoutMs / 1e3)));
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     exec(command, [
       "--silent",
       "--show-error",
@@ -12650,7 +12865,7 @@ function curlGet(url, accept, timeoutMs, exec = execFile2) {
         reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
         return;
       }
-      resolve4(String(stdout ?? ""));
+      resolve5(String(stdout ?? ""));
     });
   });
 }
@@ -12913,19 +13128,19 @@ async function installViaCheckout(request) {
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
   const repository = repositorySlug(request.repository);
   const profile = resolveProfileName(request.ctx);
-  const checkout = mkdtempSync(join11(tmpdir(), "dsh-tavern-checkout-"));
+  const checkout2 = mkdtempSync(join11(tmpdir(), "dsh-tavern-checkout-"));
   try {
     request.log(`fallback: git clone --depth 1 https://github.com/${repository}.git`);
-    await mustRun("git", ["clone", "--depth", "1", "--branch", request.ref, `https://github.com/${repository}.git`, checkout], request);
+    await mustRun("git", ["clone", "--depth", "1", "--branch", request.ref, `https://github.com/${repository}.git`, checkout2], request);
     if (isCommit(request.commit)) {
-      const head = (await mustRun("git", ["-C", checkout, "rev-parse", "HEAD"], request)).trim();
+      const head = (await mustRun("git", ["-C", checkout2, "rev-parse", "HEAD"], request)).trim();
       if (!head.startsWith(shortCommit(request.commit))) {
         request.log(`checkout ${shortCommit(request.commit)}`);
-        await mustRun("git", ["-C", checkout, "fetch", "--depth", "1", "origin", request.commit], request);
-        await mustRun("git", ["-C", checkout, "checkout", "--quiet", request.commit], request);
+        await mustRun("git", ["-C", checkout2, "fetch", "--depth", "1", "origin", request.commit], request);
+        await mustRun("git", ["-C", checkout2, "checkout", "--quiet", request.commit], request);
       }
     }
-    const source = join11(checkout, "packages", "plugin");
+    const source = join11(checkout2, "packages", "plugin");
     if (!existsSync(source)) throw new Error("packages/plugin is missing from the checkout");
     const copied = copyShippedFiles(source, request.pluginDir);
     if (ensureVersionStamp(source, request.pluginDir, request.commit)) copied.push("version.json (synthesized)");
@@ -12950,7 +13165,7 @@ async function installViaCheckout(request) {
       installed: readInstalledStamp(request.pluginDir, spec)
     };
   } finally {
-    rmSync(checkout, { recursive: true, force: true });
+    rmSync(checkout2, { recursive: true, force: true });
   }
 }
 async function mustRun(command, args, request) {
@@ -12973,11 +13188,11 @@ function copyShippedFiles(sourceDir, targetDir) {
     const from = join11(sourceDir, dir);
     if (!existsSync(from)) continue;
     for (const file of listFiles(from)) {
-      const relative2 = file.slice(from.length + 1);
-      const to = join11(targetDir, dir, relative2);
+      const relative3 = file.slice(from.length + 1);
+      const to = join11(targetDir, dir, relative3);
       mkdirSync(dirname4(to), { recursive: true });
       writeFileAtomic(to, readFileSync(file));
-      copied.push(`${dir}/${relative2.replaceAll("\\", "/")}`);
+      copied.push(`${dir}/${relative3.replaceAll("\\", "/")}`);
     }
   }
   return copied;
@@ -13048,7 +13263,7 @@ function readInstalledStamp(pluginDir, spec = "") {
   return { version, commit };
 }
 function runCapture(command, args, options = {}) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const child = spawn(command, args, {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -13077,7 +13292,7 @@ function runCapture(command, args, options = {}) {
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      resolve4({ code: code ?? -1, output });
+      resolve5({ code: code ?? -1, output });
     });
   });
 }
@@ -13390,8 +13605,1472 @@ function updateChangelog(snapshot2, limit = 8) {
   return commits.slice(0, limit).map((commit) => commit.message === "" ? commit.short : `${commit.short} ${commit.message}`);
 }
 
+// packages/plugin/src/mods/host.ts
+import { promises as fs11 } from "node:fs";
+import { mkdir as mkdir3 } from "node:fs/promises";
+import { isAbsolute, join as join14, relative, resolve as resolve3 } from "node:path";
+import { pathToFileURL } from "node:url";
+
+// packages/plugin/src/mods/audit.ts
+import { appendFile, mkdir } from "node:fs/promises";
+import { dirname as dirname6 } from "node:path";
+var ModAuditLog = class {
+  constructor(file) {
+    this.file = file;
+  }
+  counts = /* @__PURE__ */ new Map();
+  warn;
+  tail = Promise.resolve();
+  /** 宿主 logger 可选注入；没有 logger 时审计写入失败完全静默。 */
+  setLogger(warn) {
+    this.warn = warn;
+  }
+  /** 追加一条审计记录（best-effort）；无论落盘与否都推进内存计数。 */
+  record(mod, event, detail = "") {
+    this.counts.set(mod, (this.counts.get(mod) ?? 0) + 1);
+    const line = `${JSON.stringify({ ts: (/* @__PURE__ */ new Date()).toISOString(), mod, event, ...detail === "" ? {} : { detail } })}
+`;
+    const written = this.tail.catch(() => {
+    }).then(async () => {
+      try {
+        await mkdir(dirname6(this.file), { recursive: true });
+        await appendFile(this.file, line, "utf8");
+      } catch (cause) {
+        this.warn?.(`dsh-tavern: mod audit append failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+    });
+    this.tail = written;
+    return written;
+  }
+  /** 本进程内某 Mod 的审计事件计数（面板「审计计数」数据源）。 */
+  count(mod) {
+    return this.counts.get(mod) ?? 0;
+  }
+};
+
+// packages/plugin/src/mods/events.ts
+var MOD_EVENT_KINDS = /* @__PURE__ */ new Set(["chat-saved", "assets-saved", "guides-changed"]);
+var ModEventBus = class {
+  listeners = /* @__PURE__ */ new Map();
+  isKind(value) {
+    return typeof value === "string" && MOD_EVENT_KINDS.has(value);
+  }
+  on(kind, handler) {
+    const set = this.listeners.get(kind) ?? /* @__PURE__ */ new Set();
+    set.add(handler);
+    this.listeners.set(kind, set);
+    return () => {
+      set.delete(handler);
+    };
+  }
+  async emit(kind, payload) {
+    const set = this.listeners.get(kind);
+    if (set === void 0 || set.size === 0) return;
+    for (const handler of [...set]) {
+      try {
+        await handler(payload);
+      } catch {
+      }
+    }
+  }
+};
+var modEvents = new ModEventBus();
+function emitChatSaved(character, chatId, revision) {
+  return modEvents.emit("chat-saved", { character, chatId, revision });
+}
+function emitAssetsSaved(kind, name2) {
+  return modEvents.emit("assets-saved", { kind, name: name2 });
+}
+
+// packages/plugin/src/mods/cross-bundle.ts
+var MOD_SECTION_ORDER_MIN = -50;
+var MOD_SECTION_ORDER_MAX = 0;
+function clampModSectionOrder(order) {
+  const value = typeof order === "number" && Number.isFinite(order) ? order : MOD_SECTION_ORDER_MIN;
+  return Math.max(MOD_SECTION_ORDER_MIN, Math.min(MOD_SECTION_ORDER_MAX, value));
+}
+var MOD_TOOL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
+  // agent-tavern（agent.ts createTools，18）
+  "tavern_character_get",
+  "tavern_lore_search",
+  "tavern_scene_get",
+  "tavern_history_search",
+  "memory_search",
+  "memory_read",
+  "memory_write",
+  "memory_update",
+  "memory_forget",
+  "variable_get",
+  "variable_set",
+  "variable_patch",
+  "variable_delete",
+  "variable_list",
+  "tavern_script_read",
+  "tavern_script_advance",
+  "tavern_deduce",
+  "tavern_variable_settle",
+  // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
+  "novel_status_read",
+  "novel_requirements_read",
+  "novel_outline_read",
+  "novel_outline_create",
+  "novel_outline_revise",
+  "novel_requirement_block",
+  "novel_facts_read",
+  "novel_lore_search",
+  "novel_character_read",
+  "novel_body_read",
+  "novel_body_search",
+  "novel_body_commit",
+  "novel_chapter_complete",
+  "novel_unit_claim",
+  "novel_unit_release",
+  "novel_unit_supersede",
+  "novel_writer_draft",
+  "novel_writer_delegate",
+  "novel_finish",
+  // card-workbench（card-workbench/tools-*.ts，22）
+  "card_get",
+  "card_put",
+  "card_create",
+  "card_delete",
+  "card_original_get",
+  "card_restore_original",
+  "card_plan_propose",
+  "card_apply_mvu",
+  "chat_log_read",
+  "world_get",
+  "world_put",
+  "world_create",
+  "world_delete",
+  "world_copy",
+  "world_rename",
+  "world_bind",
+  "world_list",
+  "world_plan_propose",
+  "preset_get",
+  "preset_put",
+  "material_list",
+  "material_read"
+]);
+var MOD_REGISTRY_KEY = "dsh-tavern:mod-registry";
+var registrySymbol2 = Symbol.for(MOD_REGISTRY_KEY);
+function store2() {
+  const holder = globalThis;
+  return holder[registrySymbol2] ??= {
+    tools: /* @__PURE__ */ new Map(),
+    sections: /* @__PURE__ */ new Map(),
+    builtinNames: new Set(BUILTIN_TOOL_NAMES_SEED),
+    nextSequence: 1
+  };
+}
+var modsChangedListeners = createGlobalListenerRegistry("dsh-tavern:mods-changed-listeners");
+function notifyChanged() {
+  void modsChangedListeners.emit();
+}
+function toolKey(modId, name2) {
+  return `${modId}\0${name2}`;
+}
+function registerModTool(modId, definition, order) {
+  const shared = store2();
+  const sequence = shared.nextSequence++;
+  const key = toolKey(modId, definition.name);
+  shared.tools.set(key, { modId, order, sequence, definition });
+  notifyChanged();
+  return () => {
+    if (shared.tools.get(key)?.sequence === sequence) shared.tools.delete(key);
+    notifyChanged();
+  };
+}
+function registerModSection(modId, definition, order) {
+  const shared = store2();
+  const sequence = shared.nextSequence++;
+  const key = `${modId}\0${definition.name}`;
+  shared.sections.set(key, { modId, order, sequence, definition });
+  notifyChanged();
+  return () => {
+    if (shared.sections.get(key)?.sequence === sequence) shared.sections.delete(key);
+    notifyChanged();
+  };
+}
+function modToolSnapshot() {
+  return [...store2().tools.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
+}
+function claimedToolNames() {
+  const names = new Set(store2().builtinNames);
+  for (const entry of store2().tools.values()) names.add(entry.definition.name);
+  return names;
+}
+
+// packages/plugin/src/mods/http.ts
+var MOD_HTTP_METHODS = /* @__PURE__ */ new Set(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]);
+var MOD_HTML_DEFAULT_CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline'",
+  "style-src 'unsafe-inline'",
+  "img-src data: blob:",
+  "font-src data:",
+  "media-src data: blob:",
+  "connect-src 'none'",
+  "frame-src 'none'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'"
+].join("; ");
+function createModRouteTable() {
+  const entries = [];
+  return {
+    register(method, path9, handler) {
+      const normalizedMethod = String(method ?? "").toUpperCase();
+      if (!MOD_HTTP_METHODS.has(normalizedMethod)) {
+        throw new Error(`unsupported mod route method '${String(method)}'`);
+      }
+      if (!isValidModHttpPath(path9)) {
+        throw new Error(`invalid mod route path '${String(path9)}'`);
+      }
+      if (typeof handler !== "function") throw new Error("mod route handler must be a function");
+      if (entries.some((entry) => entry.method === normalizedMethod && entry.path === path9)) {
+        throw new Error(`mod route ${normalizedMethod} ${path9} is already registered`);
+      }
+      entries.push({ method: normalizedMethod, path: path9, handler });
+      return () => {
+        const index = entries.findIndex((entry) => entry.method === normalizedMethod && entry.path === path9 && entry.handler === handler);
+        if (index >= 0) entries.splice(index, 1);
+      };
+    },
+    find(method, path9) {
+      const normalizedMethod = String(method ?? "").toUpperCase();
+      return entries.find((entry) => entry.method === normalizedMethod && entry.path === path9)?.handler;
+    },
+    size: () => entries.length
+  };
+}
+var SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+function isValidModHttpPath(path9) {
+  if (typeof path9 !== "string" || path9 === "") return false;
+  if (path9.length > 200) return false;
+  if (path9.includes("\\") || path9.includes("%")) return false;
+  if (path9.startsWith("/") || path9.endsWith("/")) return false;
+  const segments = path9.split("/");
+  if (segments.some((segment) => segment === "." || segment === ".." || !SEGMENT_PATTERN.test(segment))) return false;
+  return true;
+}
+function makeModReply(res) {
+  return {
+    json(body, status2 = 200) {
+      if (res.writableEnded) return;
+      res.statusCode = status2;
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      res.setHeader("cache-control", "no-store");
+      res.end(JSON.stringify(body));
+    },
+    html(document, csp) {
+      if (res.writableEnded) return;
+      res.statusCode = 200;
+      res.setHeader("content-type", "text/html; charset=utf-8");
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("x-content-type-options", "nosniff");
+      res.end(renderModHtmlDocument(String(document ?? ""), csp ?? MOD_HTML_DEFAULT_CSP));
+    }
+  };
+}
+function escapeHtmlAttribute(value) {
+  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+}
+function renderModHtmlDocument(document, csp) {
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${escapeHtmlAttribute(csp)}">`;
+  const headMatch = /<head(?:\s[^>]*)?>/i.exec(document);
+  if (headMatch !== null) {
+    const at = headMatch.index + headMatch[0].length;
+    return `${document.slice(0, at)}${meta}${document.slice(at)}`;
+  }
+  if (/<html(?:\s[^>]*)?>/i.test(document)) {
+    return document.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${meta}</head>`);
+  }
+  return `<!doctype html><html><head><meta charset="utf-8">${meta}</head><body>${document}</body></html>`;
+}
+function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
+  return new Promise((resolve5, reject) => {
+    let bytes = 0;
+    const chunks = [];
+    req.on("data", (chunk) => {
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        reject(new Error(`request exceeds ${maxBytes} bytes`));
+        req.destroy?.();
+      } else {
+        chunks.push(chunk);
+      }
+    });
+    req.on("end", () => {
+      try {
+        resolve5(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      } catch {
+        reject(new Error("invalid JSON body"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+// packages/plugin/src/mods/manifest.ts
+var MOD_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/;
+var MOD_ID_MAX_LENGTH = 100;
+var MOD_CAPABILITIES = ["llm", "network", "storage"];
+function checkModManifest(raw, options) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ok: false, errors: ["mod.json must be a JSON object"] };
+  }
+  const record = raw;
+  const errors = [];
+  const id = record.id;
+  if (typeof id !== "string" || id === "") errors.push("id is required");
+  else if (id.length > MOD_ID_MAX_LENGTH) errors.push(`id must be at most ${MOD_ID_MAX_LENGTH} characters`);
+  else if (!MOD_ID_PATTERN.test(id)) errors.push("id must be [a-z0-9-] labels or reverse-domain joined by '.'");
+  else if (id !== options.directory) errors.push(`id '${id}' must match the directory name '${options.directory}'`);
+  for (const field of ["name", "version", "author", "description", "main"]) {
+    const value = record[field];
+    if (typeof value !== "string" || value.trim() === "") errors.push(`${field} is required and must be a non-empty string`);
+    else if (value.length > 2e3) errors.push(`${field} must be at most 2000 characters`);
+  }
+  if (typeof record.main === "string") {
+    const mainError = checkMainPath(record.main);
+    if (mainError !== void 0) errors.push(mainError);
+  }
+  if (record.engines !== void 0) {
+    if (typeof record.engines !== "object" || record.engines === null || Array.isArray(record.engines)) {
+      errors.push("engines must be an object");
+    } else {
+      const range = record.engines["dsh-tavern"];
+      if (range !== void 0 && (typeof range !== "string" || range.trim() === "")) {
+        errors.push("engines['dsh-tavern'] must be a non-empty semver range string");
+      }
+    }
+  }
+  if (record.loadingOrder !== void 0) {
+    if (typeof record.loadingOrder !== "number" || !Number.isFinite(record.loadingOrder)) {
+      errors.push("loadingOrder must be a finite number");
+    }
+  }
+  if (record.capabilities !== void 0) {
+    if (!Array.isArray(record.capabilities)) {
+      errors.push("capabilities must be an array");
+    } else {
+      const known = new Set(MOD_CAPABILITIES);
+      for (const capability of record.capabilities) {
+        if (typeof capability !== "string" || !known.has(capability)) {
+          errors.push(`capabilities entries must be one of ${MOD_CAPABILITIES.join("|")}`);
+          break;
+        }
+      }
+    }
+  }
+  if (record.panel !== void 0 && record.panel !== null) {
+    if (typeof record.panel !== "object" || Array.isArray(record.panel)) {
+      errors.push("panel must be an object");
+    } else {
+      const panel2 = record.panel;
+      if (typeof panel2.title !== "string" || panel2.title.trim() === "") {
+        errors.push("panel.title is required when panel is declared");
+      }
+      if (panel2.icon !== void 0 && (typeof panel2.icon !== "string" || panel2.icon.trim() === "")) {
+        errors.push("panel.icon must be a non-empty string");
+      }
+    }
+  }
+  if (record.surfaces !== void 0 && record.surfaces !== null) {
+    if (typeof record.surfaces !== "object" || Array.isArray(record.surfaces)) {
+      errors.push("surfaces must be an object");
+    } else {
+      const surfaces2 = record.surfaces;
+      for (const field of ["hooks", "tools", "http"]) {
+        if (surfaces2[field] === void 0) continue;
+        const value = surfaces2[field];
+        if (!Array.isArray(value) || value.length > 32 || value.some((entry) => typeof entry !== "string" || entry === "" || entry.length > 200)) {
+          errors.push(`surfaces.${field} must be an array of non-empty strings (at most 32)`);
+          break;
+        }
+      }
+    }
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  const engines = record.engines;
+  const engineRange = engines?.["dsh-tavern"];
+  const panel = record.panel;
+  const surfaces = record.surfaces;
+  const pickStrings = (value) => Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
+  const manifest = {
+    id: record.id,
+    name: record.name,
+    version: record.version,
+    author: record.author,
+    description: record.description,
+    main: record.main.trim(),
+    ...engineRange !== void 0 ? { engines: { dshTavern: engineRange } } : {},
+    loadingOrder: typeof record.loadingOrder === "number" ? record.loadingOrder : 100,
+    capabilities: Array.isArray(record.capabilities) ? [...new Set(record.capabilities)] : [],
+    ...panel !== void 0 && typeof panel.title === "string" ? { panel: { title: panel.title, ...typeof panel.icon === "string" ? { icon: panel.icon } : {} } } : {},
+    surfaces: surfaces === void 0 || surfaces === null ? { hooks: [], tools: [], http: [] } : { hooks: pickStrings(surfaces.hooks), tools: pickStrings(surfaces.tools), http: pickStrings(surfaces.http) }
+  };
+  return { ok: true, manifest };
+}
+function checkMainPath(main) {
+  const text = main.trim();
+  if (text === "") return "main is required and must be a non-empty string";
+  if (text !== main) return "main must not have surrounding whitespace";
+  if (text.includes("\\")) return "main must use / path separators and stay inside the mod directory";
+  const segments = text.split("/");
+  if (segments.some((segment) => segment === "" || segment === "." || segment === ".." || segment.startsWith("."))) {
+    return "main must be a relative path inside the mod directory (no .. or absolute paths)";
+  }
+  if (!/\.[a-z0-9]+$/i.test(text)) return "main must point at an entry file (with extension)";
+  return void 0;
+}
+function parseSemver(input) {
+  const text = input.trim();
+  if (!/^\d+(?:\.\d+)?(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?$/.test(text)) return void 0;
+  const core = text.split(/[-+]/, 1)[0] ?? "";
+  const [major = "0", minor = "0", patch = "0"] = core.split(".");
+  return { major: Number(major), minor: Number(minor), patch: Number(patch) };
+}
+function compareSemver(left, right) {
+  if (left.major !== right.major) return left.major - right.major;
+  if (left.minor !== right.minor) return left.minor - right.minor;
+  return left.patch - right.patch;
+}
+function satisfiesVersionRange(version, range) {
+  const parsedVersion = parseSemver(version);
+  if (parsedVersion === void 0) {
+    return { ok: false, reason: `host version '${version}' is not a parseable semver` };
+  }
+  const alternatives = range.split("||");
+  const invalid = [];
+  let matched = false;
+  for (const alternative of alternatives) {
+    const comparators = alternative.trim().split(/\s+/).filter((item) => item !== "" && item !== "*");
+    if (alternative.trim() === "") continue;
+    if (alternative.trim() === "*" || comparators.every((item) => item === "*")) {
+      matched = true;
+      continue;
+    }
+    let satisfied = true;
+    for (const comparator of comparators) {
+      const verdict = satisfiesComparator(parsedVersion, comparator);
+      if (verdict === "invalid") {
+        invalid.push(comparator);
+        satisfied = false;
+        break;
+      }
+      if (!verdict) {
+        satisfied = false;
+        break;
+      }
+    }
+    if (satisfied && invalid.length === 0) matched = true;
+  }
+  if (invalid.length > 0) {
+    return { ok: false, reason: `range '${range}' has an invalid comparator '${invalid[0]}'` };
+  }
+  return matched ? { ok: true, reason: "" } : { ok: false, reason: `requires dsh-tavern ${range} (host ${version})` };
+}
+function satisfiesComparator(version, comparator) {
+  const match = /^(>=|<=|>|<|=|\^|~)?\s*(.+)$/.exec(comparator);
+  if (match === null) return "invalid";
+  const operator = match[1] ?? "=";
+  const literal = match[2].trim();
+  if (literal === "*") return true;
+  const parsed = parseSemver(literal);
+  if (parsed === void 0) return "invalid";
+  const specified = countSpecifiedSegments(literal);
+  switch (operator) {
+    case "=": {
+      return compareSemver(version, parsed) === 0;
+    }
+    case ">":
+      return compareSemver(version, parsed) > 0;
+    case "<":
+      return compareSemver(version, parsed) < 0;
+    case ">=":
+      return compareSemver(version, parsed) >= 0;
+    case "<=":
+      return compareSemver(version, parsed) <= 0;
+    case "^": {
+      const upper = caretUpperBound(parsed);
+      return compareSemver(version, parsed) >= 0 && compareSemver(version, upper) < 0;
+    }
+    case "~": {
+      const upper = specified >= 2 ? { major: parsed.major, minor: parsed.minor + 1, patch: 0 } : { major: parsed.major + 1, minor: 0, patch: 0 };
+      return compareSemver(version, parsed) >= 0 && compareSemver(version, upper) < 0;
+    }
+    default:
+      return "invalid";
+  }
+}
+function caretUpperBound(parsed) {
+  if (parsed.major > 0) return { major: parsed.major + 1, minor: 0, patch: 0 };
+  if (parsed.minor > 0) return { major: 0, minor: parsed.minor + 1, patch: 0 };
+  return { major: 0, minor: 0, patch: parsed.patch + 1 };
+}
+function countSpecifiedSegments(literal) {
+  return (literal.split(/[-+]/, 1)[0] ?? "").split(".").filter((part) => part !== "").length;
+}
+
+// packages/plugin/src/mods/storage.ts
+import { promises as fs10 } from "node:fs";
+import { mkdir as mkdir2 } from "node:fs/promises";
+import { dirname as dirname7 } from "node:path";
+var MOD_STORAGE_VALUE_LIMIT = 256 * 1024;
+var MOD_STORAGE_TOTAL_LIMIT = 1024 * 1024;
+var KEY_PATTERN = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
+var fileTails = /* @__PURE__ */ new Map();
+var ModStorage = class {
+  constructor(file, options = {}) {
+    this.file = file;
+    this.options = options;
+  }
+  async get(key) {
+    validateKey(key);
+    const file = await this.readFile();
+    if (file === void 0 || !Object.prototype.hasOwnProperty.call(file.values, key)) return void 0;
+    return structuredClone(file.values[key]);
+  }
+  async set(key, value) {
+    validateKey(key);
+    const valueProblem = inspectValue(value);
+    if (valueProblem !== void 0) {
+      if (valueProblem.includes("exceeds the size limit")) this.options.onQuota?.(valueProblem);
+      throw new Error(valueProblem);
+    }
+    return this.mutate(async () => {
+      const file = await this.readFile() ?? { version: 1, values: {}, updatedAt: (/* @__PURE__ */ new Date(0)).toISOString() };
+      const next = {
+        version: 1,
+        values: { ...file.values, [key]: structuredClone(value) },
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      await this.writeFile(next);
+    });
+  }
+  async delete(key) {
+    validateKey(key);
+    return this.mutate(async () => {
+      const file = await this.readFile();
+      if (file === void 0 || !Object.prototype.hasOwnProperty.call(file.values, key)) return false;
+      const next = {
+        version: 1,
+        values: { ...file.values },
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      delete next.values[key];
+      await this.writeFile(next);
+      return true;
+    });
+  }
+  async readFile() {
+    let text;
+    try {
+      text = await fs10.readFile(this.file, "utf8");
+    } catch (cause) {
+      if (cause.code === "ENOENT") return void 0;
+      throw cause;
+    }
+    const parsed = JSON.parse(text);
+    if (parsed.version !== 1 || typeof parsed.values !== "object" || parsed.values === null || Array.isArray(parsed.values)) {
+      throw new Error("mod storage file is corrupt (delete data/state.json to reset)");
+    }
+    return parsed;
+  }
+  async writeFile(file) {
+    const text = `${JSON.stringify(file)}
+`;
+    const total = Buffer.byteLength(text, "utf8");
+    if (total > MOD_STORAGE_TOTAL_LIMIT) {
+      const message = "mod storage exceeds the total size limit (1MB)";
+      this.options.onQuota?.(message);
+      throw new Error(message);
+    }
+    await mkdir2(dirname7(this.file), { recursive: true });
+    await writeAtomicText(this.file, text);
+  }
+  /** 排空在飞写（宿主卸载/reload 前调用）：返回时**该文件**队列上全部写
+   * （含其他实例入队的）已落定——卸载后新实例装载与外部 teardown 都安全。 */
+  flush() {
+    return (fileTails.get(this.file) ?? Promise.resolve()).catch(() => {
+    });
+  }
+  mutate(operation) {
+    const tail = fileTails.get(this.file) ?? Promise.resolve();
+    const result = tail.catch(() => {
+    }).then(operation);
+    fileTails.set(this.file, result.then(() => {
+    }, () => {
+    }));
+    return result;
+  }
+};
+function validateKey(key) {
+  if (typeof key !== "string" || !KEY_PATTERN.test(key)) {
+    throw new Error(`invalid mod storage key '${String(key)}'`);
+  }
+}
+function inspectValue(value) {
+  if (value === void 0 || value === null) return void 0;
+  if (typeof value === "function" || typeof value === "symbol") {
+    return "invalid mod storage value";
+  }
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    return "mod storage numbers must be finite";
+  }
+  const text = JSON.stringify(value);
+  if (text === void 0) return "invalid mod storage value";
+  if (Buffer.byteLength(text, "utf8") > MOD_STORAGE_VALUE_LIMIT) {
+    return "mod storage value exceeds the size limit (256KB)";
+  }
+  return void 0;
+}
+
+// packages/plugin/src/mods/install.ts
+import { execFile as execFile3 } from "node:child_process";
+import { cpSync, existsSync as existsSync2, mkdtempSync as mkdtempSync2, readFileSync as readFileSync3, rmSync as rmSync2 } from "node:fs";
+import { join as join13 } from "node:path";
+import { tmpdir as tmpdir2 } from "node:os";
+function parseGitSource(input) {
+  const text = typeof input === "string" ? input.trim() : "";
+  if (text === "" || text.length > 500 || /[\s"']/.test(text)) throw new Error("invalid git url");
+  const hashAt = text.indexOf("#");
+  const urlPart = hashAt >= 0 ? text.slice(0, hashAt) : text;
+  const ref = hashAt >= 0 ? text.slice(hashAt + 1) : void 0;
+  if (ref !== void 0 && !/^[A-Za-z0-9._-]+$/.test(ref)) throw new Error(`invalid ref '${ref}'`);
+  const github = /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?$/i.exec(urlPart) ?? /^github:([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?$/i.exec(urlPart);
+  if (github !== null) {
+    const repository = `${github[1]}/${github[2]}`.replace(/\.git$/i, "");
+    return {
+      kind: "github",
+      repository,
+      ...ref !== void 0 ? { ref } : {},
+      rawModJsonUrl: `https://raw.githubusercontent.com/${repository}/${ref ?? "HEAD"}/mod.json`,
+      cloneUrl: `https://github.com/${repository}.git`
+    };
+  }
+  if (/^https:\/\/github\.com\/(?:[A-Za-z0-9._-]+)?\/?$/i.test(urlPart)) {
+    throw new Error(`unsupported git url '${urlPart}' (expected https://github.com/<owner>/<repo> or a git URL)`);
+  }
+  if (/^https?:\/\/|^git@|^ssh:\/\//i.test(urlPart)) {
+    return { kind: "git", repository: urlPart, ...ref !== void 0 ? { ref } : {}, rawModJsonUrl: null, cloneUrl: urlPart };
+  }
+  if (/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(urlPart)) {
+    const repository = urlPart.replace(/\.git$/i, "");
+    return {
+      kind: "github",
+      repository,
+      ...ref !== void 0 ? { ref } : {},
+      rawModJsonUrl: `https://raw.githubusercontent.com/${repository}/${ref ?? "HEAD"}/mod.json`,
+      cloneUrl: `https://github.com/${repository}.git`
+    };
+  }
+  throw new Error(`unsupported git url '${urlPart}' (expected https://github.com/<owner>/<repo> or a git URL)`);
+}
+function gitClone(url, directory, ref, timeoutMs, exec = execFile3) {
+  const args = ["clone", "--depth", "1", "--filter=blob:none", "--no-checkout"];
+  if (ref !== void 0) args.push("--branch", ref);
+  args.push(url, directory);
+  return new Promise((resolve5, reject) => {
+    exec("git", args, {
+      encoding: "utf8",
+      timeout: timeoutMs,
+      windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
+    }, (error, _stdout, stderr) => {
+      if (error) {
+        const detail = String(stderr ?? "").trim().split(/\r?\n/).filter(Boolean).at(-1) ?? "";
+        reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
+        return;
+      }
+      resolve5();
+    });
+  }).then(() => checkout(exec, directory, timeoutMs));
+}
+function checkout(exec, directory, timeoutMs) {
+  return new Promise((resolve5, reject) => {
+    exec("git", ["-C", directory, "checkout", "HEAD", "--", "."], {
+      encoding: "utf8",
+      timeout: timeoutMs,
+      windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
+    }, (error, _stdout, stderr) => {
+      if (error) {
+        const detail = String(stderr ?? "").trim().split(/\r?\n/).filter(Boolean).at(-1) ?? "";
+        reject(new Error(detail === "" ? error.message : detail));
+        return;
+      }
+      resolve5();
+    });
+  });
+}
+async function installModFromGit(options) {
+  const timeoutMs = options.timeoutMs ?? 6e4;
+  const source = parseGitSource(options.url);
+  const fetchText = options.fetchText ?? ((url, accept, ms) => httpGet({ repository: source.repository, ref: source.ref ?? "HEAD", timeoutMs: ms }, url, accept));
+  if (source.rawModJsonUrl !== null) {
+    try {
+      const raw = await fetchText(source.rawModJsonUrl, "application/json", Math.min(timeoutMs, 15e3));
+      const parsed = JSON.parse(raw);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("mod.json must be a JSON object");
+    } catch (cause) {
+      throw new Error(`repository has no readable mod.json at its root (${source.repository}): ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  }
+  const workRoot = mkdtempSync2(join13(tmpdir2(), "dsh-tavern-modinstall-"));
+  try {
+    const cloneDir = join13(workRoot, "clone");
+    await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs);
+    let manifestRaw;
+    try {
+      manifestRaw = JSON.parse(readFileSync3(join13(cloneDir, "mod.json"), "utf8"));
+    } catch (cause) {
+      throw new Error(`repository has no readable mod.json at its root: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+    const idField = typeof manifestRaw?.["id"] === "string" ? manifestRaw["id"] : "";
+    const check = checkModManifest(manifestRaw, { directory: idField });
+    if (!check.ok) throw new Error(`invalid mod.json: ${check.errors.join("; ")}`);
+    const modId = check.manifest.id;
+    const target = join13(options.root, "mods", modId);
+    const replaced = existsSync2(target);
+    if (replaced && options.force !== true) {
+      throw new Error(`mod '${modId}' is already installed (POST again with force to replace it)`);
+    }
+    rmSync2(target, { recursive: true, force: true });
+    cpSync(cloneDir, target, { recursive: true, filter: (src) => !src.endsWith(".git") });
+    return { modId, replaced, directory: target };
+  } finally {
+    rmSync2(workRoot, { recursive: true, force: true });
+  }
+}
+
+// packages/plugin/src/mods/host.ts
+var MOD_API_VERSION = 1;
+function declaredSurfacesOf(manifest) {
+  return {
+    hooks: [...manifest.surfaces.hooks],
+    tools: [...manifest.surfaces.tools],
+    http: [...manifest.surfaces.http]
+  };
+}
+function modsDisabledByEnv() {
+  const disabled = process.env.DSH_TAVERN_DISABLE_MODS?.trim();
+  return disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false";
+}
+var ModHost = class _ModHost {
+  constructor(options) {
+    this.options = options;
+    this.modsRoot = join14(options.root, "mods");
+    this.audit = new ModAuditLog(join14(this.modsRoot, "audit.jsonl"));
+    this.logger = options.ctx?.logger;
+    this.audit.setLogger((message) => this.logger?.warn?.(message));
+  }
+  modsRoot;
+  audit;
+  logger;
+  discovered = /* @__PURE__ */ new Map();
+  broken = /* @__PURE__ */ new Map();
+  blocked = /* @__PURE__ */ new Map();
+  loaded = /* @__PURE__ */ new Map();
+  loadErrors = /* @__PURE__ */ new Map();
+  globalEnabled = false;
+  refreshTail = Promise.resolve();
+  offGuides;
+  offHookDegrations;
+  static async open(options) {
+    const host = new _ModHost(options);
+    await mkdir3(host.modsRoot, { recursive: true });
+    host.offGuides = onGuidesChanged((character, chatId) => modEvents.emit("guides-changed", { character, chatId }));
+    host.offHookDegrations = generationHooks.onDegradation((degradation) => {
+      const detail = `${degradation.phase} ${degradation.reason}${degradation.detail ? `: ${degradation.detail}` : ""}`;
+      host.logger?.warn?.(`dsh-tavern: generation hook degraded (${detail})`);
+      if (typeof degradation.owner === "string") {
+        void host.audit.record(degradation.owner, "hook-degradation", detail);
+      }
+    });
+    try {
+      options.ctx?.effect?.(() => () => {
+        host.clearAllTimers();
+      }, "dsh-tavern: mod timers");
+    } catch {
+    }
+    await host.refresh();
+    return host;
+  }
+  /** 重新扫描 + 按三层开关对账（该装载的装载、该卸载的卸载）。串行化执行。 */
+  refresh() {
+    const run = this.refreshTail.catch(() => {
+    }).then(() => this.refreshInternal());
+    this.refreshTail = run.then(() => {
+    }, () => {
+    });
+    return run;
+  }
+  async setGlobalEnabled(enabled) {
+    const db = await this.options.dbProvider();
+    await db.updateState(() => ({ modsEnabled: enabled === true }));
+    await this.audit.record("*", enabled ? "enable" : "disable", "global");
+    await this.refresh();
+  }
+  async setModEnabled(id, enabled) {
+    if (!MOD_ID_PATTERN.test(id)) throw new Error(`invalid mod id '${id}'`);
+    const known = this.discovered.has(id) || this.broken.has(id) || this.blocked.has(id);
+    if (!known) throw new Error(`mod '${id}' is not installed`);
+    const db = await this.options.dbProvider();
+    await db.updateState((state) => ({
+      mods: {
+        ...state.mods ?? {},
+        enabled: { ...state.mods?.enabled ?? {}, [id]: enabled === true }
+      }
+    }));
+    await this.audit.record(id, enabled ? "enable" : "disable");
+    await this.refresh();
+  }
+  /** 调旧 dispose 链（及 onDispose 合并队列）→ `?t=` cache-bust 重新 import。 */
+  async reload(id) {
+    if (!MOD_ID_PATTERN.test(id)) throw new Error(`invalid mod id '${id}'`);
+    const disc = this.discovered.get(id);
+    if (disc === void 0 || !this.loaded.has(id)) throw new Error(`mod '${id}' is not loaded`);
+    await this.unload(id, "reload");
+    const ok = await this.load(disc, true);
+    if (!ok) throw new Error(`mod '${id}' failed to reload: ${this.loadErrors.get(id) ?? "unknown error"}`);
+  }
+  /**
+   * 从 git URL 安装（提案 0015 §4 P2）：GitHub 源降级链预读 + `git clone --depth 1`
+   * + 本地清单校验 + 拷入 `mods/<id>/`；成功/失败都进审计线；落地后 refresh()
+   * 让扫描吸收新目录（装上不等于启用——三层开关语义不变）。impl 供测试注入
+   * （缺省真实 installModFromGit）。
+   */
+  async installFromGit(url, force, impl = installModFromGit) {
+    try {
+      const result = await impl({ url, root: this.options.root, force });
+      await this.audit.record(result.modId, "install", `${url}${result.replaced ? " (replaced)" : ""}`);
+      await this.refresh();
+      return result;
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      this.logger?.warn?.(`dsh-tavern: mod install from '${url}' failed: ${message}`);
+      await this.audit.record("*", "install-error", message);
+      throw cause;
+    }
+  }
+  snapshot() {
+    const available = !modsDisabledByEnv();
+    const mods = [];
+    for (const [id, info] of this.broken) {
+      mods.push({
+        id,
+        name: info.name ?? id,
+        version: info.version ?? "",
+        author: info.author ?? "",
+        description: info.description ?? "",
+        capabilities: info.capabilities ?? [],
+        loadingOrder: 100,
+        panel: null,
+        status: "error",
+        error: info.message,
+        auditCount: this.audit.count(id),
+        surfaces: { hooks: [], tools: [], http: [] }
+      });
+    }
+    for (const [id, item] of this.blocked) {
+      mods.push({ ...modInfoOf(item.manifest), status: "error", error: item.reason, auditCount: this.audit.count(id), surfaces: declaredSurfacesOf(item.manifest) });
+    }
+    for (const [id, disc] of this.discovered) {
+      const loadError = this.loadErrors.get(id);
+      const loaded = this.loaded.get(id);
+      mods.push({
+        ...modInfoOf(disc.manifest),
+        status: loadError !== void 0 ? "error" : loaded !== void 0 ? "loaded" : "disabled",
+        error: loadError ?? "",
+        auditCount: this.audit.count(id),
+        surfaces: loaded !== void 0 ? liveSurfacesOf(loaded) : declaredSurfacesOf(disc.manifest)
+      });
+    }
+    mods.sort((a, b) => a.loadingOrder - b.loadingOrder || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return { available, reason: available ? "" : "DSH_TAVERN_DISABLE_MODS is set", globalEnabled: this.globalEnabled, mods };
+  }
+  /**
+   * 分派 mod 子路由（`mods/<id>/<path>`）。返回 false = 不归我管（或任何一层
+   * 开关关闭 / 未装载 / 无此路由）——调用方一律按 404 兜底，与未知路由不可区分。
+   */
+  async handleRoute(req, res, method, url, id, subpath) {
+    if (modsDisabledByEnv() || !this.globalEnabled) return false;
+    if (!MOD_ID_PATTERN.test(id)) return false;
+    const record = this.loaded.get(id);
+    if (record === void 0) return false;
+    if (!isValidModHttpPath(subpath)) return false;
+    const handler = record.routeTable.find(method, subpath);
+    if (handler === void 0) return false;
+    const request = {
+      method,
+      path: subpath,
+      query: url.searchParams,
+      json: () => readModRequestBody(req)
+    };
+    const reply = makeModReply(res);
+    try {
+      await handler(request, reply);
+      if (!res.writableEnded) {
+        throw new Error("mod handler did not send a response");
+      }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      await this.audit.record(id, "http-error", message);
+      this.logger?.warn?.(`dsh-tavern: [mod:${id}] http route ${method} ${subpath} failed: ${message}`);
+      if (!res.writableEnded) {
+        res.statusCode = 500;
+        res.setHeader("content-type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({ ok: false, message: `mod route failed: ${message}` }));
+      }
+    }
+    return true;
+  }
+  /** 宿主卸载：卸下全部已装载 Mod（逆序 disposer + 定时器 + 事件反注册）。 */
+  async disposeAll() {
+    for (const id of [...this.loaded.keys()]) await this.unload(id, "disable");
+    this.offGuides?.();
+    this.offGuides = void 0;
+    this.offHookDegrations?.();
+    this.offHookDegrations = void 0;
+  }
+  /* ------------------------------ 内部 ------------------------------ */
+  async refreshInternal() {
+    if (modsDisabledByEnv()) {
+      for (const id of [...this.loaded.keys()]) await this.unload(id, "disable");
+      this.discovered.clear();
+      this.broken.clear();
+      this.blocked.clear();
+      this.loadErrors.clear();
+      this.globalEnabled = false;
+      return;
+    }
+    await this.scan();
+    const state = await (await this.options.dbProvider()).getState();
+    this.globalEnabled = state.modsEnabled === true;
+    const enabled = state.mods?.enabled ?? {};
+    for (const [id, disc] of this.discovered) {
+      const want = this.globalEnabled && enabled[id] === true;
+      if (want && !this.loaded.has(id)) await this.load(disc, false);
+      else if (!want && this.loaded.has(id)) await this.unload(id, "disable");
+    }
+    for (const id of [...this.loaded.keys()]) {
+      if (!this.discovered.has(id)) await this.unload(id, "remove");
+    }
+  }
+  /** 扫描 mods/ 直接子目录：只读 mod.json、过校验，不执行任何 Mod 代码。 */
+  async scan() {
+    const entries = await fs11.readdir(this.modsRoot, { withFileTypes: true }).catch((cause) => {
+      if (cause.code === "ENOENT") return [];
+      throw cause;
+    });
+    const nextDiscovered = /* @__PURE__ */ new Map();
+    const nextBroken = /* @__PURE__ */ new Map();
+    const nextBlocked = /* @__PURE__ */ new Map();
+    const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+    for (const directory of directories) {
+      const id = directory;
+      let raw;
+      try {
+        raw = JSON.parse(await fs11.readFile(join14(this.modsRoot, directory, "mod.json"), "utf8"));
+      } catch (cause) {
+        const message = `mod.json is missing or unreadable: ${cause instanceof Error ? cause.message : String(cause)}`;
+        nextBroken.set(id, { message, ...salvageManifestFields(void 0) });
+        await this.audit.record(id, "skip", message);
+        continue;
+      }
+      const check = checkModManifest(raw, { directory });
+      if (!check.ok) {
+        const message = check.errors.join("; ");
+        nextBroken.set(id, { message, ...salvageManifestFields(raw) });
+        await this.audit.record(id, "skip", message);
+        continue;
+      }
+      const manifest = check.manifest;
+      const engineRange = manifest.engines?.dshTavern;
+      if (engineRange !== void 0) {
+        const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange);
+        if (!verdict.ok) {
+          nextBlocked.set(id, { manifest, reason: verdict.reason });
+          await this.audit.record(id, "skip", verdict.reason);
+          continue;
+        }
+      }
+      const entryPath = resolve3(this.modsRoot, directory, manifest.main);
+      const containment = relative(resolve3(this.modsRoot, directory), entryPath);
+      if (containment === "" || containment.startsWith("..") || isAbsolute(containment)) {
+        const message = `main entry '${manifest.main}' escapes the mod directory`;
+        nextBlocked.set(id, { manifest, reason: message });
+        await this.audit.record(id, "skip", message);
+        continue;
+      }
+      const entryStat = await fs11.stat(entryPath).catch(() => void 0);
+      if (entryStat?.isFile() !== true) {
+        const message = `main entry '${manifest.main}' not found`;
+        nextBlocked.set(id, { manifest, reason: message });
+        await this.audit.record(id, "skip", message);
+        continue;
+      }
+      nextDiscovered.set(id, { manifest, directory: join14(this.modsRoot, directory), entryPath });
+    }
+    this.discovered.clear();
+    this.broken.clear();
+    this.blocked.clear();
+    for (const [id, disc] of nextDiscovered) this.discovered.set(id, disc);
+    for (const [id, broken] of nextBroken) this.broken.set(id, broken);
+    for (const [id, blocked] of nextBlocked) this.blocked.set(id, blocked);
+    for (const id of [...this.loadErrors.keys()]) {
+      if (!this.discovered.has(id)) this.loadErrors.delete(id);
+    }
+  }
+  async load(disc, cacheBust) {
+    const id = disc.manifest.id;
+    const record = {
+      manifest: disc.manifest,
+      directory: disc.directory,
+      routeTable: createModRouteTable(),
+      disposers: [],
+      timers: /* @__PURE__ */ new Set(),
+      offEvents: [],
+      offRegistrations: [],
+      surfaces: { hooks: /* @__PURE__ */ new Set(), tools: /* @__PURE__ */ new Set(), http: /* @__PURE__ */ new Set(), macros: /* @__PURE__ */ new Set(), sections: /* @__PURE__ */ new Set() },
+      storage: new ModStorage(join14(disc.directory, "data", "state.json"), {
+        onQuota: (message) => {
+          void this.audit.record(id, "storage-quota", message);
+        }
+      })
+    };
+    try {
+      await mkdir3(join14(disc.directory, "data"), { recursive: true });
+      const url = pathToFileURL(disc.entryPath).href + (cacheBust ? `?t=${Date.now()}` : "");
+      const module = await import(url);
+      if (typeof module?.setup !== "function") {
+        throw new Error("mod entry must export an async setup(api) function");
+      }
+      const returned = await module.setup(this.createApi(record));
+      if (typeof returned === "function") record.disposers.push(returned);
+      this.loaded.set(id, record);
+      this.loadErrors.delete(id);
+      await this.audit.record(id, "load");
+      return true;
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      await this.runDisposers(id, record);
+      this.loadErrors.set(id, message);
+      this.logger?.warn?.(`dsh-tavern: mod '${id}' failed to ${cacheBust ? "reload" : "load"}: ${message}`);
+      await this.audit.record(id, "load-error", message);
+      return false;
+    }
+  }
+  async unload(id, event) {
+    const record = this.loaded.get(id);
+    if (record === void 0) return;
+    this.loaded.delete(id);
+    await this.runDisposers(id, record);
+    await this.audit.record(id, event);
+  }
+  /** 逆序执行 disposer（后注册先清）、清定时器、反注册事件、反注册 P2 能力面、
+   * 排空在飞存储写；单项失败只记审计。末尾的 flush 是 reload/teardown 竞态的
+   * 修复点：unload 返回后该实例不再有任何在飞写，新实例装载与宿主外部的目录
+   * 删除都安全。 */
+  async runDisposers(id, record) {
+    for (const dispose of [...record.disposers].reverse()) {
+      try {
+        await dispose();
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        this.logger?.warn?.(`dsh-tavern: [mod:${id}] dispose failed: ${message}`);
+        await this.audit.record(id, "dispose-error", message);
+      }
+    }
+    for (const timer of record.timers) clearInterval(timer);
+    record.timers.clear();
+    for (const off of record.offEvents.splice(0)) off();
+    for (const off of record.offRegistrations.splice(0)) {
+      try {
+        off();
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        this.logger?.warn?.(`dsh-tavern: [mod:${id}] capability unregister failed: ${message}`);
+        await this.audit.record(id, "dispose-error", message);
+      }
+    }
+    await record.storage.flush();
+  }
+  clearAllTimers() {
+    for (const record of this.loaded.values()) {
+      for (const timer of record.timers) clearInterval(timer);
+      record.timers.clear();
+    }
+  }
+  /** P1+P2 适配层（提案 §3.3）：白名单对象，不透传 cordis ctx。
+   * P2 面：hooks（五相位总线）/tools（跨 bundle 注册表）/macros（宿主宏注册表）/
+   * stscript（命令表）/llm（能力键强制）/prompt（AgentTavern section）。 */
+  createApi(record) {
+    const id = record.manifest.id;
+    const logger = {
+      info: (...args) => this.logger?.info?.(`dsh-tavern: [mod:${id}]`, ...args),
+      warn: (...args) => this.logger?.warn?.(`dsh-tavern: [mod:${id}]`, ...args),
+      error: (...args) => this.logger?.error?.(`dsh-tavern: [mod:${id}]`, ...args)
+    };
+    const storage = record.storage;
+    const observed = (operation, label, event) => {
+      operation.catch((cause) => {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        this.logger?.warn?.(`dsh-tavern: [mod:${id}] ${label} failed: ${message}`);
+        void this.audit.record(id, event, message);
+      });
+      return operation;
+    };
+    const tracked = (off) => {
+      record.offRegistrations.push(off);
+      return off;
+    };
+    const api = {
+      version: MOD_API_VERSION,
+      logger,
+      storage: {
+        get: (key) => observed(storage.get(key), "storage get", "storage-error"),
+        set: (key, value) => observed(storage.set(key, value), "storage set", "storage-error"),
+        delete: (key) => observed(storage.delete(key), "storage delete", "storage-error")
+      },
+      assets: createModAssets(this.options.dbProvider),
+      events: {
+        on: (kind, handler) => {
+          if (!modEvents.isKind(kind)) throw new Error(`unknown mod event kind '${String(kind)}' (expected chat-saved | assets-saved | guides-changed)`);
+          if (typeof handler !== "function") throw new Error("mod event handler must be a function");
+          const off = modEvents.on(kind, async (payload) => {
+            try {
+              await handler(payload);
+            } catch (cause) {
+              const message = cause instanceof Error ? cause.message : String(cause);
+              this.logger?.warn?.(`dsh-tavern: [mod:${id}] ${kind} handler failed: ${message}`);
+              await this.audit.record(id, "event-error", message);
+            }
+          });
+          record.offEvents.push(off);
+          return off;
+        }
+      },
+      timers: {
+        setInterval: (handler, ms) => {
+          if (typeof handler !== "function") throw new Error("timer handler must be a function");
+          const interval = typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? Math.floor(ms) : 1;
+          const timer = setInterval(() => {
+            void (async () => {
+              try {
+                await handler();
+              } catch (cause) {
+                const message = cause instanceof Error ? cause.message : String(cause);
+                this.logger?.warn?.(`dsh-tavern: [mod:${id}] timer handler failed: ${message}`);
+                void this.audit.record(id, "timer-error", message);
+              }
+            })();
+          }, interval);
+          record.timers.add(timer);
+          return timer;
+        },
+        clearInterval: (timer) => {
+          clearInterval(timer);
+          record.timers.delete(timer);
+        }
+      },
+      http: {
+        route: (method, path9, handler) => {
+          const off = record.routeTable.register(method, path9, handler);
+          record.surfaces.http.add(`${String(method ?? "").toUpperCase()} ${String(path9 ?? "")}`);
+          return tracked(off);
+        }
+      },
+      hooks: {
+        // 提案 §3.4 五相位：接 P0 总线；顺序按 loadingOrder；owner 归因让降级
+        // 审计落到本 mod；失败/超时/忘 return 的降级不中断生成由总线保证。
+        on: (phase, handler) => {
+          if (typeof phase !== "string" || !GENERATION_HOOK_PHASES.has(phase)) {
+            throw new Error(`unknown generation hook phase '${String(phase)}' (expected ${[...GENERATION_HOOK_PHASES].join(" | ")})`);
+          }
+          if (typeof handler !== "function") throw new Error("generation hook handler must be a function");
+          record.surfaces.hooks.add(phase);
+          return tracked(generationHooks.register(phase, handler, record.manifest.loadingOrder, id));
+        }
+      },
+      tools: {
+        // 提案 §3.3：形状对齐 tool() 工厂；name 强制 <modId>_ 前缀；与内置及
+        // 其他 mod 工具查重，冲突即拒（setup 期抛错 → 状态错误位，不静默）。
+        register: (def) => {
+          const definition = checkModToolDefinition(def, id);
+          if (modToolSnapshot().some((entry) => entry.modId === id && entry.definition.name === definition.name)) {
+            throw new Error(`tool '${definition.name}' is already registered by this mod`);
+          }
+          const claimed = claimedToolNames();
+          if (claimed.has(definition.name)) {
+            throw new Error(`tool name '${definition.name}' is already taken by a builtin tool or another mod`);
+          }
+          record.surfaces.tools.add(definition.name);
+          return tracked(registerModTool(id, definition, record.manifest.loadingOrder));
+        }
+      },
+      macros: {
+        // 提案 §3.3/P0 决策注记：mod 宏进入 prompt-safety 冻结求值上下文的展开
+        // 面——必须确定性（无随机/时间）。注册期静态筛查 best-effort；运行期
+        // 抛错/非同步返回由包装降级保原文（引擎侧 catch 亦保原文，双保险）。
+        register: (name2, fn) => {
+          const macroName = typeof name2 === "string" ? name2.trim() : "";
+          if (macroName === "" || macroName.length > 64) throw new Error("macro name must be a non-empty string of at most 64 characters");
+          if (macroName.includes("{{") || macroName.includes("}}") || /\s/.test(macroName)) {
+            throw new Error("macro name must not include braces or whitespace");
+          }
+          if (typeof fn !== "function") throw new Error("macro handler must be a function");
+          const banned = screenMacroDeterminism(fn);
+          if (banned !== void 0) {
+            throw new Error(`macro handlers must be deterministic (no random or time sources); found '${banned}' in the handler source`);
+          }
+          const lowered = macroName.toLowerCase();
+          if (builtinMacroNames().has(lowered)) {
+            throw new Error(`macro name '${macroName}' collides with a builtin macro`);
+          }
+          for (const entry of hostMacroSnapshot()) {
+            if (entry.name.toLowerCase() === lowered) throw new Error(`macro name '${macroName}' is already registered`);
+          }
+          let failureAudited = false;
+          const wrapped = (args, engine) => {
+            try {
+              const result = fn(args, engine);
+              if (typeof result === "string" || result === null) return result;
+              if (typeof result === "number" || typeof result === "boolean") return String(result);
+              return null;
+            } catch (cause) {
+              if (!failureAudited) {
+                failureAudited = true;
+                const message = cause instanceof Error ? cause.message : String(cause);
+                this.logger?.warn?.(`dsh-tavern: [mod:${id}] macro '${macroName}' failed: ${message}`);
+                void this.audit.record(id, "macro-error", `${macroName}: ${message}`);
+              }
+              return null;
+            }
+          };
+          record.surfaces.macros.add(macroName);
+          return tracked(registerHostMacro(macroName, wrapped, record.manifest.loadingOrder));
+        }
+      },
+      stscript: {
+        // 提案 §3.3：命令名字符集校验（对齐内置命名律 [a-z0-9_]+）；禁覆盖内置
+        // 命令（冲突即拒）；disposer 反注册。
+        registerCommand: (name2, spec) => {
+          const commandName = typeof name2 === "string" ? name2.trim().toLowerCase() : "";
+          if (!/^[a-z0-9_]+$/.test(commandName) || commandName.length > 40) {
+            throw new Error(`stscript command name must match [a-z0-9_]+ (got '${String(name2)}')`);
+          }
+          if (typeof spec !== "object" || spec === null || Array.isArray(spec)) throw new Error("stscript command spec must be an object");
+          const handler = spec["run"];
+          if (typeof handler !== "function") throw new Error("stscript command spec.run must be a function");
+          if (stscriptCommandNames().includes(commandName)) {
+            throw new Error(`stscript command '/${commandName}' is already registered (builtin command names cannot be overridden)`);
+          }
+          const aliases = spec["aliases"];
+          if (aliases !== void 0 && (!Array.isArray(aliases) || aliases.some((alias) => typeof alias !== "string" || !/^[a-z0-9_]+$/.test(alias)))) {
+            throw new Error("stscript command aliases must be [a-z0-9_]+ strings");
+          }
+          const fullSpec = { ...spec, name: commandName };
+          const off = registerStscriptCommand(fullSpec);
+          record.surfaces.macros.add(`/${commandName}`);
+          return tracked(off);
+        }
+      },
+      prompt: {
+        // 提案 §3.4：AgentTavern 侧 prompt 分区。order 宿主钳制 -50..0（核心占
+        // -80..-64）；ST 循环 hook 与此面的不对称是刻意的（文档标注）。
+        section: (section) => {
+          if (typeof section !== "object" || section === null || Array.isArray(section)) throw new Error("prompt section must be an object");
+          const { name: name2, text, order } = section;
+          if (typeof name2 !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name2)) {
+            throw new Error(`prompt section name must match [A-Za-z0-9][A-Za-z0-9._-]* (got '${String(name2)}')`);
+          }
+          if (typeof text !== "string" || text === "") throw new Error("prompt section text must be a non-empty string");
+          if (text.length > 65536) throw new Error("prompt section text exceeds the 64KB limit");
+          const clampedOrder = clampModSectionOrder(order);
+          record.surfaces.sections.add(name2);
+          return tracked(registerModSection(id, { name: name2, text, order: clampedOrder }, record.manifest.loadingOrder));
+        }
+      },
+      onDispose: (fn) => {
+        if (typeof fn !== "function") throw new Error("onDispose expects a function");
+        record.disposers.push(fn);
+      }
+    };
+    if (record.manifest.capabilities.includes("llm")) {
+      api.llm = createModLlmFace(this.options.ctx?.llm, id, this.audit, this.logger, observed);
+    }
+    return api;
+  }
+};
+function modInfoOf(manifest) {
+  return {
+    id: manifest.id,
+    name: manifest.name,
+    version: manifest.version,
+    author: manifest.author,
+    description: manifest.description,
+    capabilities: manifest.capabilities,
+    loadingOrder: manifest.loadingOrder,
+    panel: manifest.panel ?? null
+  };
+}
+var GENERATION_HOOK_PHASES = /* @__PURE__ */ new Set(["user-input", "pre-assemble", "pre-llm", "post-output", "post-save"]);
+function liveSurfacesOf(record) {
+  return {
+    hooks: [...record.surfaces.hooks],
+    tools: [...record.surfaces.tools],
+    http: [...record.surfaces.http]
+  };
+}
+function checkModToolDefinition(def, modId) {
+  if (typeof def !== "object" || def === null || Array.isArray(def)) throw new Error("tool definition must be an object");
+  const record = def;
+  const name2 = record.name;
+  if (typeof name2 !== "string" || !MOD_TOOL_NAME_PATTERN.test(name2) || name2.length > 64) {
+    throw new Error(`tool name must match [A-Za-z0-9][A-Za-z0-9._-]* and be at most 64 characters (got '${String(name2)}')`);
+  }
+  const prefix = `${modId}_`;
+  if (!name2.startsWith(prefix)) {
+    throw new Error(`tool name must start with the mod id prefix '${prefix}' (got '${name2}')`);
+  }
+  const description = record.description;
+  if (typeof description !== "string" || description.trim() === "" || description.length > 4e3) {
+    throw new Error("tool description must be a non-empty string of at most 4000 characters");
+  }
+  if (typeof record.parameters !== "object" || record.parameters === null || Array.isArray(record.parameters)) {
+    throw new Error("tool parameters must be an object (JSON schema)");
+  }
+  const output = record.output;
+  if (typeof output !== "object" || output === null || Array.isArray(output) || typeof output["schema"] !== "object" || output["schema"] === null || typeof output["render"] !== "function") {
+    throw new Error("tool output must be { schema, render }");
+  }
+  if (typeof record.execute !== "function") throw new Error("tool execute must be a function");
+  return def;
+}
+var MACRO_NONDETERMINISM_PATTERN = /Math\.random|Date\.now|new\s+Date\b|performance\.now|hrtime|crypto\.|setTimeout|setInterval|process\.env/;
+function screenMacroDeterminism(fn) {
+  try {
+    const match = MACRO_NONDETERMINISM_PATTERN.exec(fn.toString());
+    return match === null ? void 0 : match[0];
+  } catch {
+    return "unserializable handler source";
+  }
+}
+function createModLlmFace(hostLlm, id, audit, logger, observed) {
+  const requireStream = () => {
+    const stream = hostLlm?.stream;
+    if (typeof stream !== "function") throw new Error("the host LLM service is unavailable on this deployment");
+    return stream;
+  };
+  const auditCall = (request, usage, error) => {
+    const model = `${String(request?.provider ?? "")}/${String(request?.model ?? "")}`;
+    const tokens = usage !== void 0 && typeof usage === "object" && usage !== null ? ` tokens=${JSON.stringify(usage)}` : "";
+    if (error !== void 0) {
+      void audit.record(id, "llm-error", `${model}${tokens ? ` ${tokens.trim()}` : ""}: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    void audit.record(id, "llm-call", `${model}${tokens}`);
+  };
+  async function* streamChunks(request) {
+    const chunks = requireStream()(request);
+    let usage;
+    try {
+      for await (const chunk of chunks) {
+        if (chunk !== null && typeof chunk === "object" && chunk["type"] === "usage") usage = chunk["usage"];
+        yield chunk;
+      }
+      auditCall(request, usage);
+    } catch (cause) {
+      auditCall(request, usage, cause);
+      throw cause;
+    }
+  }
+  return {
+    stream: (request) => {
+      if (typeof request !== "object" || request === null || Array.isArray(request)) throw new Error("llm request must be an object");
+      return streamChunks(request);
+    },
+    request: (request) => {
+      if (typeof request !== "object" || request === null || Array.isArray(request)) throw new Error("llm request must be an object");
+      const collected = (async () => {
+        let text = "";
+        let reasoning = "";
+        let usage;
+        let finish;
+        for await (const chunk of streamChunks(request)) {
+          if (chunk === null || typeof chunk !== "object") continue;
+          const kind = chunk["type"];
+          if (kind === "text-delta" && typeof chunk["text"] === "string") text += chunk["text"];
+          else if (kind === "reasoning-delta" && typeof chunk["text"] === "string") reasoning += chunk["text"];
+          else if (kind === "usage") usage = chunk["usage"];
+          else if (kind === "finish") finish = typeof chunk["reason"]?.["kind"] === "string" ? chunk["reason"]["kind"] : void 0;
+        }
+        return { text, reasoning, usage, finish };
+      })();
+      return observed(collected, "llm request", "llm-error");
+    }
+  };
+}
+function salvageManifestFields(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const record = raw;
+  const pick = (key) => typeof record[key] === "string" && record[key].trim() !== "" ? record[key] : void 0;
+  return {
+    name: pick("name"),
+    version: pick("version"),
+    author: pick("author"),
+    description: pick("description")
+  };
+}
+function createModAssets(dbProvider) {
+  const requireString = (value, label) => {
+    if (typeof value !== "string" || value === "") throw new Error(`${label} is required`);
+    return value;
+  };
+  return {
+    listCharacters: async () => structuredClone(await (await dbProvider()).listCharacters()),
+    getCharacter: async (name2) => {
+      const found = await (await dbProvider()).getCharacter(requireString(name2, "character name"));
+      return found === void 0 ? null : structuredClone({ kind: found.kind, card: { spec: found.card.spec, specVersion: found.card.specVersion, data: found.card.data } });
+    },
+    listWorlds: async () => structuredClone(await (await dbProvider()).listWorlds()),
+    getWorld: async (name2) => {
+      const book = await (await dbProvider()).getWorld(requireString(name2, "world name"));
+      return book === void 0 ? null : structuredClone(book);
+    },
+    listPresets: async () => structuredClone(await (await dbProvider()).listPresets()),
+    getPreset: async (name2) => {
+      const preset = await (await dbProvider()).getPreset(requireString(name2, "preset name"));
+      return preset === void 0 ? null : structuredClone(preset);
+    },
+    listPersonas: async () => structuredClone(await (await dbProvider()).listPersonas()),
+    getPersona: async (name2) => {
+      const persona = await (await dbProvider()).getPersona(requireString(name2, "persona name"));
+      return persona === void 0 ? null : structuredClone(persona);
+    },
+    listGroups: async () => structuredClone(await (await dbProvider()).listGroups()),
+    getGroup: async (name2) => {
+      const group2 = await (await dbProvider()).getGroup(requireString(name2, "group name"));
+      return group2 === void 0 ? null : structuredClone(group2);
+    },
+    listChats: async (character) => structuredClone(await (await dbProvider()).listChats(requireString(character, "character name"))),
+    getChat: async (character, chatId) => {
+      const chat = await (await dbProvider()).getChat(requireString(character, "character name"), requireString(chatId, "chat id"));
+      return chat === void 0 ? null : structuredClone(chat);
+    }
+  };
+}
+
 // packages/plugin/src/card-workbench/plans.ts
-import { promises as fs9 } from "node:fs";
+import { promises as fs12 } from "node:fs";
 import * as path8 from "node:path";
 var MAX_PLAN_CHANGES = 16;
 var MAX_PLAN_ENTRIES = 32;
@@ -13407,10 +15086,10 @@ function plansDir(dir) {
 function planFile(dir, planId) {
   return path8.join(plansDir(dir), `${planId}.json`);
 }
-async function writeAtomicText4(file, text) {
+async function writeAtomicText3(file, text) {
   const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-  await fs9.writeFile(tmp, text, "utf8");
-  await fs9.rename(tmp, file);
+  await fs12.writeFile(tmp, text, "utf8");
+  await fs12.rename(tmp, file);
 }
 function newPlanId() {
   return `plan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -13574,8 +15253,8 @@ async function proposeCardPlan(dir, character, input) {
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     status: "pending"
   };
-  await fs9.mkdir(plansDir(dir), { recursive: true });
-  await writeAtomicText4(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
+  await fs12.mkdir(plansDir(dir), { recursive: true });
+  await writeAtomicText3(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
 }
@@ -13604,8 +15283,8 @@ async function proposeWorldPlan(dir, world, input) {
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     status: "pending"
   };
-  await fs9.mkdir(plansDir(dir), { recursive: true });
-  await writeAtomicText4(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
+  await fs12.mkdir(plansDir(dir), { recursive: true });
+  await writeAtomicText3(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
 }
@@ -13613,7 +15292,7 @@ async function getPlan(dir, planId) {
   if (typeof planId !== "string" || !PLAN_ID_PATTERN.test(planId)) return void 0;
   let text;
   try {
-    text = (await fs9.readFile(planFile(dir, planId))).toString("utf8");
+    text = (await fs12.readFile(planFile(dir, planId))).toString("utf8");
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -13623,7 +15302,7 @@ async function getPlan(dir, planId) {
 async function listPlans(dir, filter = {}) {
   let files;
   try {
-    files = await fs9.readdir(plansDir(dir));
+    files = await fs12.readdir(plansDir(dir));
   } catch (cause) {
     if (cause.code === "ENOENT") return [];
     throw cause;
@@ -13632,7 +15311,7 @@ async function listPlans(dir, filter = {}) {
   for (const file of files) {
     if (!file.endsWith(".json")) continue;
     try {
-      const plan = normalizePlan(JSON.parse((await fs9.readFile(path8.join(plansDir(dir), file))).toString("utf8")));
+      const plan = normalizePlan(JSON.parse((await fs12.readFile(path8.join(plansDir(dir), file))).toString("utf8")));
       if (plan !== void 0) plans.push(plan);
     } catch {
     }
@@ -13645,7 +15324,7 @@ async function decidePlan(dir, planId, approve) {
   if (plan === void 0) throw new Error(`plan '${planId}' not found`);
   if (plan.status !== "pending") throw new Error(`plan '${planId}' is already ${plan.status}`);
   const decided = { ...plan, status: approve ? "approved" : "rejected", decidedAt: (/* @__PURE__ */ new Date()).toISOString() };
-  await writeAtomicText4(planFile(dir, plan.id), `${JSON.stringify(decided, null, 2)}
+  await writeAtomicText3(planFile(dir, plan.id), `${JSON.stringify(decided, null, 2)}
 `);
   return decided;
 }
@@ -13655,7 +15334,7 @@ async function applyPlan(dir, planId) {
   if (plan.status === "rejected") throw new Error(`plan '${planId}' was rejected and cannot be applied`);
   if (plan.status === "applied") throw new Error(`plan '${planId}' was already applied`);
   const applied = { ...plan, status: "applied", appliedAt: (/* @__PURE__ */ new Date()).toISOString() };
-  await writeAtomicText4(planFile(dir, plan.id), `${JSON.stringify(applied, null, 2)}
+  await writeAtomicText3(planFile(dir, plan.id), `${JSON.stringify(applied, null, 2)}
 `);
   return applied;
 }
@@ -13710,15 +15389,15 @@ function createLazyProjection(options) {
 var DEFAULT_USER3 = "User";
 var CHAR_FALLBACK = "the character";
 var storePromise;
-function store() {
+function store3() {
   return storePromise ??= TavernStore.open(dshHomePath("tavern"));
 }
 function mountPresetProjection(options) {
   const freeze = /* @__PURE__ */ new Map();
   const projection = createLazyProjection({
-    getState: async () => (await store()).getState(),
+    getState: async () => (await store3()).getState(),
     load: async (agentId, settle) => {
-      const db = await store();
+      const db = await store3();
       const state = await db.getState();
       const binding = state.sessionBindings[agentId];
       if (state[options.stateFlag] !== true || !binding || binding.architecture !== options.architecture) {
@@ -15545,6 +17224,8 @@ var novelProjectorPromise;
 var novelDriverPromise;
 var updateServiceInstance;
 var updateChecksEnabledFlag = true;
+var modHostPromise;
+var modHostContext;
 var templatesEnabledFlag = true;
 var TavernArchitectureConflictError = class extends Error {
   code = "TAVERN_ARCHITECTURE_CONFLICT";
@@ -15553,7 +17234,7 @@ var TavernArchitectureConflictError = class extends Error {
     this.name = "TavernArchitectureConflictError";
   }
 };
-function store2() {
+function store4() {
   return storePromise2 ??= TavernStore.open(dshHomePath("tavern"));
 }
 function memories() {
@@ -15561,6 +17242,38 @@ function memories() {
 }
 function variables() {
   return variableStorePromise ??= VariableStore.open(dshHomePath("tavern"));
+}
+function modHost() {
+  return modHostPromise ??= ModHost.open({
+    ctx: modHostContext ?? {},
+    root: dshHomePath("tavern"),
+    hostVersion: BUILD_INFO.version,
+    dbProvider: () => store4()
+  });
+}
+async function modHostProjection(ctx) {
+  try {
+    const snapshot2 = await modHost().then((host) => host.snapshot());
+    return snapshot2.mods.map((mod) => ({
+      id: mod.id,
+      name: mod.name,
+      version: mod.version,
+      author: mod.author,
+      description: mod.description,
+      capabilities: mod.capabilities,
+      panel: mod.panel,
+      status: mod.status,
+      enabled: mod.status === "loaded",
+      error: mod.error,
+      auditCount: mod.auditCount,
+      // P2（§3.5 启用确认弹层）：注册面——loaded 是实际注册名单，未装载回落
+      // manifest 声明（作者自查面）。
+      surfaces: mod.surfaces
+    }));
+  } catch (cause) {
+    ctx?.logger?.warn?.(`dsh-tavern: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
+    return [];
+  }
 }
 function novelStore() {
   return novelStorePromise ??= NovelStore.open(dshHomePath("tavern"));
@@ -15599,10 +17312,10 @@ function apply(ctx, config = {}) {
   void agentTavernCapabilitiesPromise.then((value) => {
     agentTavernCapabilities = value;
   });
-  agentTavernProjectorPromise = store2().then((db) => AgentTavernProjector.open(dshHomePath("tavern"), db));
+  agentTavernProjectorPromise = store4().then((db) => AgentTavernProjector.open(dshHomePath("tavern"), db));
   agentNovelCapabilities = inspectAgentNovelCapabilities(ctx);
-  novelProjectorPromise = Promise.all([novelStore(), memories()]).then(([store3, memory]) => NovelProjector.open(dshHomePath("tavern"), store3, memory));
-  novelDriverPromise = Promise.all([novelStore(), store2(), novelProjectorPromise]).then(([novelDb, tavern, projector]) => {
+  novelProjectorPromise = Promise.all([novelStore(), memories()]).then(([store5, memory]) => NovelProjector.open(dshHomePath("tavern"), store5, memory));
+  novelDriverPromise = Promise.all([novelStore(), store4(), novelProjectorPromise]).then(([novelDb, tavern, projector]) => {
     const driver = NovelDriver.create(ctx, { store: novelDb, tavern, projector });
     try {
       ctx.effect?.(() => () => {
@@ -15618,7 +17331,7 @@ function apply(ctx, config = {}) {
   ctx.on?.("session/event", (session, event) => {
     void agentTavernProjectorPromise.then((projector) => projector.project(session, event)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection failed: ${error instanceof Error ? error.message : String(error)}`));
     if (event?.type === "turn/end" && typeof session?.id === "string") {
-      void variables().then((store3) => store3.clear("turn", session.id)).catch(() => {
+      void variables().then((store5) => store5.clear("turn", session.id)).catch(() => {
       });
     }
     void handleNovelSessionEvent(ctx, session, event);
@@ -15643,7 +17356,7 @@ function apply(ctx, config = {}) {
     handler: async ({ agent, rawInput }) => {
       const parsed = parseTavernSessionCommand(rawInput);
       if (!parsed) return { kind: "error", text: "Invalid Tavern activation payload." };
-      const db = await store2();
+      const db = await store4();
       if (parsed.action === "close") {
         await db.updateState((state) => {
           const sessionBindings = { ...state.sessionBindings };
@@ -15763,6 +17476,17 @@ function apply(ctx, config = {}) {
     }
   });
   ctx.effect(() => tavernUpdate(ctx).start(), "dsh-tavern: update auto-check");
+  modHostContext = ctx;
+  void modHost().catch((error) => {
+    ctx.logger?.warn?.(`dsh-tavern: mod host failed to start: ${error instanceof Error ? error.message : String(error)}`);
+  });
+  try {
+    ctx.effect?.(() => () => {
+      void modHost().then((host) => host.disposeAll()).catch(() => {
+      });
+    }, "dsh-tavern: mods unload");
+  } catch {
+  }
   ctx.effect(() => ctx.webServer.register({
     kind: "prefix",
     path: API,
@@ -15804,7 +17528,7 @@ async function handleApi(ctx, req, res) {
   if (route === "update" || route.startsWith("update/")) {
     return handleUpdateApi(ctx, req, res, url, route, method);
   }
-  const db = await store2();
+  const db = await store4();
   if (method === "GET" && route === "bootstrap") {
     await agentTavernCapabilitiesPromise;
     const internalWorkspace = await prepareInternalWorkspace();
@@ -15856,6 +17580,13 @@ async function handleApi(ctx, req, res) {
       agentNovel: agentNovelCapabilities,
       // 自更新快照：只读缓存结论，检查/安装分别走 update/check 与 update/install，
       // 保证 bootstrap 永远不因网络失败而变慢或报错。
+      // Mod 轻量投影（提案 0015 §3.5，P1 真实化）：与 worldEntryCounts 同款服务端
+      // 轻量投影，{id, name, version, author, description, capabilities, panel,
+      // status, enabled, error, auditCount} 清单；宿主失败/无 Mod 时为空数组，
+      // bootstrap 不因坏 Mod 500。旧客户端不读该键。
+      mods: await modHostProjection(ctx),
+      // env 硬关时客户端把管理面的开关锁死并展示原因（mods 投影另有 per-Mod 状态）。
+      modsAvailable: !modsDisabledByEnv(),
       update: tavernUpdate(ctx).snapshot()
     });
   }
@@ -15946,15 +17677,15 @@ async function handleApi(ctx, req, res) {
       { scope: "agent", scopeId: sessionId }
     ];
     const [memoryGroups, variableGroups, globalMemories, globalVariables, projector] = await Promise.all([
-      Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store3) => store3.search({
+      Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store5) => store5.search({
         scope,
         scopeId,
         includeDeleted: true,
         limit: 50
       })))),
-      Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store3) => store3.list(scope, scopeId, "", 100)))),
-      memories().then((store3) => store3.search({ scope: "global", includeDeleted: true, limit: 50 })),
-      variables().then((store3) => store3.list("global", "global", "", 100)),
+      Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store5) => store5.list(scope, scopeId, "", 100)))),
+      memories().then((store5) => store5.search({ scope: "global", includeDeleted: true, limit: 50 })),
+      variables().then((store5) => store5.list("global", "global", "", 100)),
       agentTavernProjectorPromise
     ]);
     return sendJson(res, 200, {
@@ -15969,6 +17700,9 @@ async function handleApi(ctx, req, res) {
   if (route === "novels" || route.startsWith("novels/")) {
     return handleNovelsApi(ctx, req, res, url, route, method);
   }
+  if (route === "mods" || route.startsWith("mods/")) {
+    return handleModsApi(ctx, req, res, url, route, method);
+  }
   if (method === "PUT" && route.startsWith("character/")) {
     const oldName = decodeURIComponent(route.slice("character/".length));
     const body = await readJson(req, 25 * 1024 * 1024);
@@ -15978,6 +17712,7 @@ async function handleApi(ctx, req, res) {
     clampIdentitySummary(body.card);
     const saved = await db.updateCharacter(oldName, body.card);
     const nextName = saved.card.data.name;
+    await emitAssetsSaved("character", nextName);
     if (nextName !== oldName) {
       await moveOriginalSnapshot(dshHomePath("tavern"), oldName, nextName);
     }
@@ -16116,6 +17851,7 @@ async function handleApi(ctx, req, res) {
     else if (body.card && typeof body.card === "object") source = body.card;
     else throw new Error("expected { pngBase64 }, { charxBase64 } or { card }");
     const result = await db.importCharacter(source);
+    await emitAssetsSaved("character", result.card.data.name);
     try {
       await saveOriginalSnapshot(dshHomePath("tavern"), result.card.data.name, result.card);
     } catch (error) {
@@ -16136,6 +17872,7 @@ async function handleApi(ctx, req, res) {
     const body = await readJson(req);
     if (typeof body.name !== "string" || !body.data || typeof body.data !== "object") throw new Error("expected { name, data }");
     const book = await db.importWorldFile(body.name, body.data);
+    await emitAssetsSaved("world", book.name);
     return sendJson(res, 200, { ok: true, name: book.name, entries: book.entries.length });
   }
   if (method === "POST" && route === "import/preset") {
@@ -16143,6 +17880,7 @@ async function handleApi(ctx, req, res) {
     if (typeof body.name !== "string" || !body.data || typeof body.data !== "object") throw new Error("expected { name, data }");
     parsePresetOrThrow(body.data);
     await db.putPreset(body.name, body.data);
+    await emitAssetsSaved("preset", body.name);
     await emitAgentPresetChanged();
     return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data) });
   }
@@ -16160,6 +17898,7 @@ async function handleApi(ctx, req, res) {
     }
     parsePresetOrThrow(body.data);
     await db.putPreset(body.name, body.data);
+    await emitAssetsSaved("preset", body.name);
     if (body.name !== oldName) await db.deletePreset(oldName);
     const state = await db.updateState((current) => ({
       activePreset: current.activePreset === oldName ? body.name : current.activePreset
@@ -16172,6 +17911,7 @@ async function handleApi(ctx, req, res) {
     const body = await readJson(req, 25 * 1024 * 1024);
     if (typeof body.pngBase64 === "string" && typeof body.name === "string") {
       const persona = await db.importPersonaPng(new Uint8Array(Buffer.from(body.pngBase64, "base64")), body.name);
+      await emitAssetsSaved("persona", persona.name);
       return sendJson(res, 200, { ok: true, persona });
     }
     if (typeof body.name === "string") {
@@ -16184,6 +17924,7 @@ async function handleApi(ctx, req, res) {
         ...body.hasAvatar === true ? { hasAvatar: true } : {}
       };
       await db.putPersona(persona);
+      await emitAssetsSaved("persona", persona.name);
       return sendJson(res, 200, { ok: true, persona });
     }
     throw new Error("expected { pngBase64, name } or { name, description }");
@@ -16201,6 +17942,7 @@ async function handleApi(ctx, req, res) {
       ...typeof body.role === "number" ? { role: body.role } : {}
     };
     await db.putPersona(persona);
+    await emitAssetsSaved("persona", body.name);
     return sendJson(res, 200, { ok: true, persona });
   }
   if (method === "DELETE" && route === "persona") {
@@ -16254,6 +17996,7 @@ async function handleApi(ctx, req, res) {
       chats: [],
       autoModeDelay: 3
     });
+    await emitAssetsSaved("group", body.name);
     const group2 = await db.getGroup(body.name);
     return sendJson(res, 200, { ok: true, group: publicGroup(group2) });
   }
@@ -16273,6 +18016,7 @@ async function handleApi(ctx, req, res) {
       ...typeof body.activationStrategy === "number" ? { activationStrategy: body.activationStrategy === 2 ? 2 : 1 } : {},
       ...typeof body.allowSelfResponses === "boolean" ? { allowSelfResponses: body.allowSelfResponses } : {}
     });
+    await emitAssetsSaved("group", body.name);
     return sendJson(res, 200, { ok: true, group: publicGroup(await db.getGroup(body.name)) });
   }
   if (method === "DELETE" && route === "group") {
@@ -16450,6 +18194,7 @@ async function handleApi(ctx, req, res) {
       throw new Error("expected { name, data }");
     }
     const book = await db.importWorldFile(body.name, body.data);
+    await emitAssetsSaved("world", book.name);
     if (body.name !== oldName) {
       await db.deleteWorld(oldName);
       await db.updateState((current) => ({ activeWorlds: current.activeWorlds.map((name2) => name2 === oldName ? body.name : name2) }));
@@ -16553,6 +18298,7 @@ async function handleApi(ctx, req, res) {
         throw new Error("expected { chat, revision }");
       }
       const revision = await db.saveChat(character, chatId, body.chat, body.revision);
+      await emitChatSaved(character, chatId, revision);
       return sendJson(res, 200, { ok: true, chat: body.chat, revision });
     }
     if (method === "PATCH") {
@@ -16623,6 +18369,7 @@ async function handleGuidesApi(req, res, route, method, db) {
       header: { ...snapshot2.chat.header, chat_metadata: metadata }
     }, snapshot2.revision);
     await emitGuidesChanged(character, chatId);
+    await emitChatSaved(character, chatId, revision);
     return sendJson(res, 200, { ok: true, guide: added.guide, guides: added.guides, revision });
   }
   if (method === "DELETE" && route.startsWith("guides/")) {
@@ -16643,6 +18390,7 @@ async function handleGuidesApi(req, res, route, method, db) {
       header: { ...snapshot2.chat.header, chat_metadata: metadata }
     }, snapshot2.revision);
     await emitGuidesChanged(character, chatId);
+    await emitChatSaved(character, chatId, revision);
     return sendJson(res, 200, { ok: true, guides: removed.guides, revision });
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
@@ -16977,7 +18725,7 @@ function novelDetail(snapshot2) {
 }
 async function discoverWriterProbeRuntime(ctx) {
   try {
-    const db = await store2();
+    const db = await store4();
     const state = await db.getState();
     for (const [sessionId, binding] of Object.entries(state.sessionBindings)) {
       if (binding.architecture !== "agent-novel") continue;
@@ -17033,7 +18781,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
         });
       }
     }
-    const created = await novels.createNovel(await store2(), config);
+    const created = await novels.createNovel(await store4(), config);
     const snapshot2 = await novels.getNovel(created.novelId);
     const summary = snapshot2 === void 0 ? void 0 : summarizeNovel(snapshot2);
     return sendJson(res, 200, {
@@ -17074,7 +18822,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
   if (method === "DELETE" && subpath === null) {
     await novels.pause(novelId, { reason: "user-request", detail: "deletion requested from the novels panel" }).catch(() => {
     });
-    const db = await store2();
+    const db = await store4();
     await db.updateState((current) => ({
       sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.architecture === "agent-novel" && binding.novelId === novelId)))
     }));
@@ -17152,7 +18900,7 @@ async function recoverMountedNovels(ctx) {
   if (driver === void 0) return;
   await recoverNovels(driver);
   try {
-    const db = await store2();
+    const db = await store4();
     const state = await db.getState();
     for (const binding of Object.values(state.sessionBindings)) {
       if (binding.architecture !== "agent-novel") continue;
@@ -17167,7 +18915,7 @@ async function handleNovelSessionEvent(ctx, session, event) {
   if (typeof sessionId !== "string") return;
   let novelId;
   try {
-    const db = await store2();
+    const db = await store4();
     const state = await db.getState();
     const binding = state.sessionBindings[sessionId];
     if (binding === void 0 || binding.architecture !== "agent-novel") return;
@@ -17222,7 +18970,7 @@ function driverCompatibleAgent(agent) {
   return typeof candidate.id === "string" && typeof candidate.session === "object" && candidate.session !== null && typeof candidate.session.id === "string" && (candidate.status === "idle" || candidate.status === "running") && typeof candidate.followup === "function" && typeof candidate.whenIdle === "function";
 }
 async function handleNovelOpenCommand(ctx, agent, novelId) {
-  const db = await store2();
+  const db = await store4();
   const novels = await novelStore();
   if (await novels.getNovel(novelId) === void 0) {
     return { kind: "error", text: `Novel '${novelId}' not found.` };
@@ -17276,7 +19024,7 @@ async function handleWorkbenchOpenCommand(ctx, agent, payload) {
     const source = event.type === "user/message" ? event.data?.source : event.data?.message?.source;
     return isTavernSessionMarker(source);
   });
-  const db = await store2();
+  const db = await store4();
   const previous = (await db.getState()).sessionBindings[agent.id];
   const sameWorkbenchSource = previous?.architecture === "card-workbench" && previous.sourceCharacter === payload.sourceCharacter && previous.sourceChatId === payload.sourceChatId;
   if (sessionStarted && !sameWorkbenchSource) {
@@ -17426,7 +19174,8 @@ async function runGeneration(ctx, db, options) {
     let hostUserText = "";
     const scripts = collectRegexScripts(state, character);
     if (mode === "send") {
-      const transformed = applyRegexScripts(options.userText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t });
+      const hookedUserText = await generationHooks.dispatch("user-input", options.userText, { mode, character: speakerName, chatId, group: group2 });
+      const transformed = applyRegexScripts(hookedUserText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t });
       hostUserText = transformed;
       chat.messages.push({ name: userName, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: transformed });
       if (group2) {
@@ -17439,6 +19188,7 @@ async function runGeneration(ctx, db, options) {
         turnMessages = turn.messages;
       }
       revision = await db.saveChat(characterName, chatId, chat, revision);
+      await emitChatSaved(characterName, chatId, revision);
     } else {
       const last = chat.messages[chat.messages.length - 1];
       if (last?.is_user === false && !last.is_system) {
@@ -17556,7 +19306,7 @@ async function runGeneration(ctx, db, options) {
     ];
     const depthInjections = tpl ? await Promise.all(depthInjectionsRaw.map(async (inj) => ({ ...inj, text: await tpl.renderText(inj.text, "depth-injection") }))) : depthInjectionsRaw;
     const nudgeMessage = nudge !== void 0 ? { name: userName, is_user: true, is_system: false, send_date: "", mes: expand(nudge.content) } : void 0;
-    const assembled = assemblePrompt({
+    const assembleDraft = {
       card: tpl ? await tpl.preRenderCard(character.card) : character.card,
       preset: tpl ? await tpl.preRenderPreset(preset) : preset,
       personaDescription,
@@ -17566,7 +19316,9 @@ async function runGeneration(ctx, db, options) {
       beforeExamples: tpl ? await Promise.all(tpl.partition.normalBeforeExamples.map((e, i) => tpl.renderText(e.content, `wi-em-before#${i}`))) : lore.beforeExamples.entries.map((e) => e.content),
       afterExamples: tpl ? await Promise.all(tpl.partition.normalAfterExamples.map((e, i) => tpl.renderText(e.content, `wi-em-after#${i}`))) : lore.afterExamples.entries.map((e) => e.content),
       depthInjections
-    }, { expand, countTokens });
+    };
+    const hookedDraft = await generationHooks.dispatch("pre-assemble", assembleDraft, { mode, character: speakerName, chatId, group: group2 });
+    const assembled = assemblePrompt(hookedDraft, { expand, countTokens });
     const fallback = ctx.agentDefaultModel.currentSelection();
     const saved = options.sessionId ? state.modelSelections?.[options.sessionId] : void 0;
     const explicit = options.provider !== void 0 && options.model !== void 0 ? {
@@ -17620,14 +19372,26 @@ async function runGeneration(ctx, db, options) {
     }));
     const rewriteBlock = formatRewriteBlock(options.feedback);
     if (rewriteBlock) systemParts.push(rewriteBlock);
-    for await (const chunk of ctx.llm.stream({
-      provider,
-      model,
+    const llmRequest = {
       messages: llmMessages,
-      ...systemParts.length > 0 ? { system: systemParts.join("\n\n") } : {},
-      ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
-      temperature: numberOr(preset.sampler.temperature, void 0),
-      maxTokens: numberOr(preset.sampler.openai_max_tokens, void 0),
+      system: systemParts.length > 0 ? systemParts.join("\n\n") : void 0,
+      params: {
+        provider,
+        model,
+        ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
+        temperature: numberOr(preset.sampler.temperature, void 0),
+        maxTokens: numberOr(preset.sampler.openai_max_tokens, void 0)
+      }
+    };
+    const hookedLlmRequest = await generationHooks.dispatch("pre-llm", llmRequest, { mode, character: speakerName, chatId, group: group2 });
+    for await (const chunk of ctx.llm.stream({
+      provider: hookedLlmRequest.params.provider,
+      model: hookedLlmRequest.params.model,
+      messages: hookedLlmRequest.messages,
+      ...hookedLlmRequest.system !== void 0 ? { system: hookedLlmRequest.system } : {},
+      ...hookedLlmRequest.params.reasoningEffort !== void 0 ? { reasoningEffort: hookedLlmRequest.params.reasoningEffort } : {},
+      temperature: hookedLlmRequest.params.temperature,
+      maxTokens: hookedLlmRequest.params.maxTokens,
       signal
     })) {
       if (chunk.type === "usage") hostUsage = chunk.usage;
@@ -17643,8 +19407,9 @@ async function runGeneration(ctx, db, options) {
       }
     }
     if (text.trim() === "") throw new Error("model returned no text");
+    const outputText = await generationHooks.dispatch("post-output", text, { mode, character: speakerName, chatId, group: group2 });
     const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly);
-    let finalText = saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement.AI_OUTPUT, { expand }) : text;
+    let finalText = saveScripts.length > 0 ? applyRegexScripts(outputText, saveScripts, RegexPlacement.AI_OUTPUT, { expand }) : outputText;
     if (tpl) finalText = await tpl.renderOutput(finalText);
     const finalReasoning = reasoning ? applyRegexScripts(reasoning, scripts, RegexPlacement.REASONING, { expand }) : reasoning;
     const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -17685,6 +19450,8 @@ async function runGeneration(ctx, db, options) {
       failures: tpl?.warnings ?? []
     });
     revision = await db.saveChat(characterName, chatId, chat, revision);
+    await emitChatSaved(characterName, chatId, revision);
+    await generationHooks.dispatch("post-save", { chat, revision, speaker: speakerName, finalText }, { mode, character: speakerName, chatId, group: group2 });
     hostTrace = recordTavernSessionAssistant(hostTrace, finalText, finalReasoning, provider, model, hostUsage);
     return { chat, revision, speaker: speakerName };
   } finally {
@@ -17728,6 +19495,7 @@ async function runTavernScript(ctx, req, res, db) {
     if (Object.keys(vars).length > 0) chat.header.chat_metadata.variables = vars;
     else delete chat.header.chat_metadata.variables;
     revision = await db.saveChat(characterName, chatId, chat, revision);
+    await emitChatSaved(characterName, chatId, revision);
   };
   const triggerGeneration = async (member) => {
     const fresh = await db.getChatSnapshot(characterName, chatId);
@@ -17947,7 +19715,7 @@ async function buildModelCatalog(ctx) {
 }
 async function refreshActivePrompt() {
   try {
-    const db = await store2();
+    const db = await store4();
     const state = await db.getState();
     if (!state.nativeAgentPersona || !state.activeCharacter) {
       activeAgentPrompt = "";
@@ -18233,12 +20001,12 @@ function parseTavernSessionCommand(rawInput) {
 }
 async function prepareInternalWorkspace() {
   const path9 = dshHomePath("tavern", "workspace");
-  await mkdir(path9, { recursive: true });
+  await mkdir4(path9, { recursive: true });
   return { path: path9, title: TAVERN_WORKSPACE_TITLE };
 }
 async function prepareWorkbenchWorkspace() {
   const path9 = dshHomePath("tavern", "workbench");
-  await mkdir(path9, { recursive: true });
+  await mkdir4(path9, { recursive: true });
   return { path: path9, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
 }
 function readBuildInfo() {
@@ -18247,11 +20015,11 @@ function readBuildInfo() {
   const stamped = buildTimeStamp();
   if (stamped.commit !== "") commit = stamped.commit;
   for (const packagePath of [
-    resolve3(import.meta.dirname, "package.json"),
-    resolve3(import.meta.dirname, "..", "package.json")
+    resolve4(import.meta.dirname, "package.json"),
+    resolve4(import.meta.dirname, "..", "package.json")
   ]) {
     try {
-      const packageData = JSON.parse(readFileSync3(packagePath, "utf8"));
+      const packageData = JSON.parse(readFileSync4(packagePath, "utf8"));
       if (typeof packageData?.version === "string" && packageData.version.trim() !== "") {
         version = packageData.version.trim();
         break;
@@ -18260,7 +20028,7 @@ function readBuildInfo() {
     }
   }
   try {
-    const generated = JSON.parse(readFileSync3(resolve3(import.meta.dirname, "version.json"), "utf8"));
+    const generated = JSON.parse(readFileSync4(resolve4(import.meta.dirname, "version.json"), "utf8"));
     if (typeof generated?.version === "string" && generated.version.trim() !== "") {
       version = generated.version.trim();
     }
@@ -18273,13 +20041,13 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.1".trim() : "";
-  const commit = true ? normalizeCommit("bcdc718") : void 0;
+  const commit = true ? normalizeCommit("e2993cf") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
   const fallback = normalizeCommit(process.env.DSH_TAVERN_COMMIT ?? buildFallback) ?? "unknown";
-  const repositoryRoot = resolve3(import.meta.dirname, "..", "..");
-  const packagePath = relative(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
+  const repositoryRoot = resolve4(import.meta.dirname, "..", "..");
+  const packagePath = relative2(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
   if (packagePath !== "packages/plugin") return fallback;
   const git = (args) => execFileSync("git", args, {
     cwd: repositoryRoot,
@@ -18289,8 +20057,8 @@ function resolveTavernCommit(buildFallback) {
     windowsHide: true
   }).trim();
   try {
-    const gitRoot = resolve3(git(["rev-parse", "--show-toplevel"]));
-    if (relative(repositoryRoot, gitRoot) !== "") return fallback;
+    const gitRoot = resolve4(git(["rev-parse", "--show-toplevel"]));
+    if (relative2(repositoryRoot, gitRoot) !== "") return fallback;
     return normalizeCommit(git(["rev-parse", "--short=7", "HEAD"])) ?? fallback;
   } catch {
     return fallback;
@@ -18366,13 +20134,68 @@ async function handleUpdateApi(ctx, req, res, url, route, method) {
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
+async function handleModsApi(ctx, req, res, url, route, method) {
+  const notFound = () => sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  const segments = route === "mods" ? [] : route.slice("mods/".length).split("/");
+  const modId = segments[0] ?? "";
+  const subpath = segments.length > 1 ? segments.slice(1).join("/") : "";
+  let host;
+  try {
+    host = await modHost();
+  } catch (cause) {
+    ctx.logger?.warn?.(`dsh-tavern: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
+    if (method === "GET" && route === "mods") {
+      return sendJson(res, 200, { ok: true, available: false, reason: "mod host unavailable", globalEnabled: false, mods: [] });
+    }
+    const isManagementWrite = route === "mods/state" || segments.length === 2 && (subpath === "enable" || subpath === "disable" || subpath === "reload");
+    if (!isManagementWrite) return notFound();
+    throw new Error("mod host unavailable");
+  }
+  if (method === "GET" && route === "mods") {
+    return sendJson(res, 200, { ok: true, ...host.snapshot() });
+  }
+  if (method === "POST" && route === "mods/install") {
+    const body = await readJson(req);
+    if (typeof body.url !== "string" || body.url.trim() === "") throw new Error("expected { url }");
+    const result = await host.installFromGit(body.url, body.force === true);
+    return sendJson(res, 200, { ok: true, ...host.snapshot(), installed: result });
+  }
+  if (method === "POST" && route === "mods/state") {
+    const body = await readJson(req);
+    if (typeof body.globalEnabled !== "boolean") throw new Error("expected { globalEnabled }");
+    await host.setGlobalEnabled(body.globalEnabled);
+    return sendJson(res, 200, { ok: true, ...host.snapshot() });
+  }
+  if (method === "POST" && segments.length === 2 && (subpath === "enable" || subpath === "disable")) {
+    await host.setModEnabled(decodeURIComponent(modId), subpath === "enable");
+    return sendJson(res, 200, { ok: true, ...host.snapshot() });
+  }
+  if (method === "POST" && segments.length === 2 && subpath === "reload") {
+    await host.reload(decodeURIComponent(modId));
+    return sendJson(res, 200, { ok: true, ...host.snapshot() });
+  }
+  if (segments.length >= 1 && modId !== "") {
+    let id = modId;
+    let path9 = subpath;
+    try {
+      id = decodeURIComponent(modId);
+      path9 = subpath === "" ? "" : decodeURIComponent(subpath);
+    } catch {
+      return notFound();
+    }
+    const handled = await host.handleRoute(req, res, method, url, id, path9);
+    if (handled) return;
+    return notFound();
+  }
+  return notFound();
+}
 function sendJson(res, status2, body) {
   res.statusCode = status2;
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
 }
 function readJson(req, maxBytes = 2 * 1024 * 1024) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (chunk) => {
@@ -18384,7 +20207,7 @@ function readJson(req, maxBytes = 2 * 1024 * 1024) {
     });
     req.on("end", () => {
       try {
-        resolve4(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve5(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         reject(new Error("invalid JSON body"));
       }

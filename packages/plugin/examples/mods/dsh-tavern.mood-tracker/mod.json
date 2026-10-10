@@ -1,0 +1,16 @@
+{
+  "id": "dsh-tavern.mood-tracker",
+  "name": "Mood Tracker",
+  "version": "1.0.0",
+  "author": "dsh-tavern",
+  "description": "P2 example mod: a post-output generation hook that tallies reply lengths, an Agent tool pair to set/read the scene mood, and an iframe panel surface that fetches its data over the postMessage bridge.",
+  "main": "index.mjs",
+  "loadingOrder": 100,
+  "capabilities": ["storage"],
+  "panel": { "title": "Mood Tracker", "icon": "sparkle" },
+  "surfaces": {
+    "hooks": ["post-output"],
+    "tools": ["dsh-tavern.mood-tracker_get_mood", "dsh-tavern.mood-tracker_set_mood"],
+    "http": ["GET stats", "GET ui", "POST mood"]
+  }
+}

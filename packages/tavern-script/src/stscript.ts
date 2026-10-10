@@ -8,6 +8,9 @@
  * addvar / incvar / decvar / hasvar / hasglobalvar / delvar / delglobalvar /
  * if(left/right/op/then/else) / random / roll / pick / send / trigger /
  * regenerate / stop / cut / regex(name=…)。
+ *
+ * 命令以注册表承载（提案 0015 P0）：内置命令经 registerStscriptCommand 进表，
+ * runCommand 做表查找；P1 的 api.stscript.registerCommand 以同一入口落注册。
  */
 
 export type VariableValue = string | number | boolean
@@ -141,8 +144,7 @@ export function parseCommand(part: string, expand: (text: string) => string): Sc
 
 /* ------------------------------ 执行 ------------------------------ */
 
-const NUMERIC_OPS: Record<string, (a: number, b: number) => boolean> = {
-  '=': (a, b) => a === b,
+const NUMERIC_OPS: Record<string, (a: number, b: number) => boolean> = {  '=': (a, b) => a === b,
   '==': (a, b) => a === b,
   '!=': (a, b) => a !== b,
   '>': (a, b) => a > b,
@@ -197,8 +199,284 @@ async function requireAction<T>(env: T | undefined, command: string): Promise<T>
   return env
 }
 
+/* --------------------------- 命令表（registry） --------------------------- */
+
+/** 单条命令的执行结果：output 为管道输出，chatChanged 标记是否触发改聊天动作。 */
+export interface StscriptCommandResult {
+  output: string
+  chatChanged: boolean
+}
+
+/** 命令处理器可用的共享工具：随机源注入、chatChanged 快捷构造、递归执行入口。 */
+export interface StscriptCommandContext {
+  rng: () => number
+  changed: () => StscriptCommandResult
+  runNested: (commandText: string, env: ScriptEnv) => Promise<StscriptCommandResult>
+}
+
+export type StscriptCommandHandler = (
+  cmd: ScriptCommand,
+  env: ScriptEnv,
+  tools: StscriptCommandContext,
+) => StscriptCommandResult | Promise<StscriptCommandResult>
+
+export interface StscriptCommandSpec {
+  /** 主命令名（小写，不含斜杠）。 */
+  name: string
+  /** 别名（与主名落同一处理器；handler 内按 cmd.name 区分具体调用的名字）。 */
+  aliases?: string[]
+  run: StscriptCommandHandler
+}
+
+/**
+ * 命令表（提案 0015 P0：registry 化）。内置命令全部经 registerStscriptCommand
+ * 注册，行为与既有固定 switch 逐字一致；runCommand 只做表查找。P2 的
+ * api.stscript.registerCommand（含命令名字符集校验、禁覆盖内置命令）以本函数
+ * 为落点。返回反注册函数（移除主名与别名的表项）——内置注册方忽略返回值，
+ * 形状向后兼容；mod 宿主持反注册并入 dispose 链。
+ */
+const commandTable = new Map<string, StscriptCommandSpec>()
+
+export function registerStscriptCommand(spec: StscriptCommandSpec): () => void {
+  commandTable.set(spec.name, spec)
+  for (const alias of spec.aliases ?? []) commandTable.set(alias, spec)
+  return () => {
+    // 只摘自己那一次注册的表项：mod 重载后再卸载不得误删同名新注册。
+    if (commandTable.get(spec.name) === spec) commandTable.delete(spec.name)
+    for (const alias of spec.aliases ?? []) {
+      if (commandTable.get(alias) === spec) commandTable.delete(alias)
+    }
+  }
+}
+
+/** 当前命令表的只读名单（含别名），按注册序。命令表等价用例的断言面。 */
+export function stscriptCommandNames(): string[] {
+  return [...commandTable.keys()]
+}
+
+const changedResult = (): StscriptCommandResult => ({ output: '', chatChanged: true })
+
+const echoCommand: StscriptCommandSpec = {
+  name: 'echo',
+  aliases: ['comment'],
+  run: (cmd, env) => {
+    const text = cmd.raw
+    if (cmd.name === 'echo') env.echo?.(text)
+    return { output: text, chatChanged: false }
+  },
+}
+
+const setvarCommand: StscriptCommandSpec = {
+  name: 'setvar',
+  aliases: ['setglobalvar'],
+  run: (cmd, env) => {
+    const setter = cmd.name === 'setvar' ? env.setVar : env.setGlobalVar
+    const target = varTarget(cmd)
+    if (target.name === '') throw new ScriptError(`/${cmd.name} requires a variable name`)
+    setter(target.name, target.value)
+    return changedResult()
+  },
+}
+
+const getvarCommand: StscriptCommandSpec = {
+  name: 'getvar',
+  aliases: ['getglobalvar'],
+  run: (cmd, env) => {
+    const getter = cmd.name === 'getvar' ? env.getVar : env.getGlobalVar
+    const name = cmd.args[0] ?? ''
+    if (name === '') throw new ScriptError(`/${cmd.name} requires a variable name`)
+    return { output: String(getter(name) ?? ''), chatChanged: false }
+  },
+}
+
+const addvarCommand: StscriptCommandSpec = {
+  name: 'addvar',
+  run: (cmd, env) => {
+    const target = varTarget(cmd)
+    if (target.name === '') throw new ScriptError('/addvar requires a variable name')
+    const delta = target.value === '' ? '1' : target.value
+    const current = env.getVar(target.name)
+    const currentNum = typeof current === 'boolean' ? null : toNumber(String(current ?? ''))
+    const deltaNum = toNumber(delta)
+    if (current === undefined) {
+      env.setVar(target.name, delta)
+    } else if (currentNum !== null && deltaNum !== null) {
+      env.setVar(target.name, currentNum + deltaNum)
+    } else {
+      env.setVar(target.name, `${String(current)}${delta}`)
+    }
+    return changedResult()
+  },
+}
+
+const incvarCommand: StscriptCommandSpec = {
+  name: 'incvar',
+  aliases: ['decvar'],
+  run: (cmd, env) => {
+    const name = cmd.args[0] ?? ''
+    const current = toNumber(String(env.getVar(name) ?? '0')) ?? 0
+    env.setVar(name, current + (cmd.name === 'incvar' ? 1 : -1))
+    return changedResult()
+  },
+}
+
+const hasvarCommand: StscriptCommandSpec = {
+  name: 'hasvar',
+  aliases: ['hasglobalvar'],
+  run: (cmd, env) => {
+    const checker = cmd.name === 'hasvar' ? env.getVar : env.getGlobalVar
+    return { output: truthyString(String(checker(cmd.args[0] ?? '') !== undefined)), chatChanged: false }
+  },
+}
+
+const delvarCommand: StscriptCommandSpec = {
+  name: 'delvar',
+  aliases: ['delglobalvar'],
+  run: (cmd, env) => {
+    const remover = cmd.name === 'delvar' ? env.deleteVar : env.deleteGlobalVar
+    remover(cmd.args[0] ?? '')
+    return changedResult()
+  },
+}
+
+const ifCommand: StscriptCommandSpec = {
+  name: 'if',
+  run: async (cmd, env, tools) => {
+    const left = cmd.named['left'] ?? cmd.args[0] ?? ''
+    const right = cmd.named['right'] ?? cmd.args[1] ?? ''
+    const op = (cmd.named['op'] ?? cmd.args[2] ?? '=').trim()
+    let passes: boolean
+    if (op === 'contains' || op === '!contains') {
+      const contains = left.includes(right)
+      passes = op === 'contains' ? contains : !contains
+    } else {
+      const numericOp = NUMERIC_OPS[op]
+      if (numericOp === undefined) throw new ScriptError(`unsupported /if op: ${op}`)
+      const leftNum = toNumber(left)
+      const rightNum = toNumber(right)
+      if (leftNum !== null && rightNum !== null) passes = numericOp(leftNum, rightNum)
+      else if (op === '=' || op === '==') passes = left === right
+      else if (op === '!=') passes = left !== right
+      else passes = false // 关系运算需要数字
+    }
+    const branch = passes ? cmd.named['then'] : (cmd.named['else'] ?? '')
+    if (branch === undefined || branch.trim() === '') return { output: '', chatChanged: false }
+    return tools.runNested(branch, env)
+  },
+}
+
+const randomCommand: StscriptCommandSpec = {
+  name: 'random',
+  run: (cmd, _env, tools) => {
+    const raw = cmd.raw.trim()
+    const range = /^(-?\d+)\s*-\s*(-?\d+)$/.exec(raw)
+    if (range !== null) {
+      const low = Number(range[1])
+      const high = Number(range[2])
+      const min = Math.min(low, high)
+      return { output: String(min + Math.floor(tools.rng() * (Math.max(low, high) - min + 1))), chatChanged: false }
+    }
+    return { output: pickRandom(splitChoices(raw), tools.rng), chatChanged: false }
+  },
+}
+
+const rollCommand: StscriptCommandSpec = {
+  name: 'roll',
+  run: (cmd, _env, tools) =>
+    ({ output: String(parseRoll(cmd.raw.trim() || '1d6', tools.rng)), chatChanged: false }),
+}
+
+const pickCommand: StscriptCommandSpec = {
+  name: 'pick',
+  run: (cmd, _env, tools) => ({ output: pickRandom(splitChoices(cmd.raw), tools.rng), chatChanged: false }),
+}
+
+const sendCommand: StscriptCommandSpec = {
+  name: 'send',
+  run: async (cmd, env) => {
+    const action = await requireAction(env.send, 'send')
+    await action(cmd.raw)
+    return changedResult()
+  },
+}
+
+const triggerCommand: StscriptCommandSpec = {
+  name: 'trigger',
+  run: async (cmd, env) => {
+    const action = await requireAction(env.trigger, 'trigger')
+    await action(cmd.args[0])
+    return changedResult()
+  },
+}
+
+const regenerateCommand: StscriptCommandSpec = {
+  name: 'regenerate',
+  run: async (_cmd, env) => {
+    const action = await requireAction(env.regenerate, 'regenerate')
+    await action()
+    return changedResult()
+  },
+}
+
+const stopCommand: StscriptCommandSpec = {
+  name: 'stop',
+  run: async (_cmd, env) => {
+    const action = await requireAction(env.stop, 'stop')
+    action()
+    return changedResult()
+  },
+}
+
+const cutCommand: StscriptCommandSpec = {
+  name: 'cut',
+  run: async (cmd, env) => {
+    const action = await requireAction(env.cut, 'cut')
+    const range = /^(-?\d+)(?:\s*-\s*(-?\d+))?$/.exec(cmd.raw.trim())
+    if (range === null) throw new ScriptError(`/cut expects a range like 0-2, got: ${cmd.raw.trim()}`)
+    const from = Number(range[1])
+    const to = range[2] === undefined ? from : Number(range[2])
+    await action(Math.min(from, to), Math.max(from, to))
+    return changedResult()
+  },
+}
+
+const regexCommand: StscriptCommandSpec = {
+  name: 'regex',
+  run: async (cmd, env) => {
+    // ST /regex：`/regex name=<script> [text]`（脚本名也接受首位位置参数）；
+    // 输入串可由管道注入（{{pipe}} 或末位参数），缺省为空串。
+    const action = await requireAction(env.applyRegex, 'regex')
+    const name = cmd.named['name'] ?? cmd.args[0] ?? ''
+    if (name === '') throw new ScriptError('/regex requires a script name (name=…)')
+    const positional = cmd.named['name'] !== undefined ? cmd.args : cmd.args.slice(1)
+    return { output: await action(name, positional.join(' ')), chatChanged: false }
+  },
+}
+
+for (const spec of [
+  echoCommand,
+  setvarCommand,
+  getvarCommand,
+  addvarCommand,
+  incvarCommand,
+  hasvarCommand,
+  delvarCommand,
+  ifCommand,
+  randomCommand,
+  rollCommand,
+  pickCommand,
+  sendCommand,
+  triggerCommand,
+  regenerateCommand,
+  stopCommand,
+  cutCommand,
+  regexCommand,
+]) {
+  registerStscriptCommand(spec)
+}
+
 /** 执行一条命令；piped 是上一条命令的输出（注入 {{pipe}} 或末位参数）。 */
-async function runCommand(command: ScriptCommand, env: ScriptEnv, piped: string | null): Promise<{ output: string; chatChanged: boolean }> {
+async function runCommand(command: ScriptCommand, env: ScriptEnv, piped: string | null): Promise<StscriptCommandResult> {
   const withPipe = (): ScriptCommand => {
     if (piped === null || piped === '') return command
     if (command.raw.includes('{{pipe}}')) {
@@ -207,146 +485,16 @@ async function runCommand(command: ScriptCommand, env: ScriptEnv, piped: string 
     return { ...command, args: [...command.args, piped], raw: `${command.raw} ${piped}`.trim() }
   }
   const cmd = withPipe()
-  const rng = env.rng ?? Math.random
-  const changed = (): { output: string; chatChanged: boolean } => ({ output: '', chatChanged: true })
-
-  switch (cmd.name) {
-    case 'echo':
-    case 'comment': {
-      const text = cmd.raw
-      if (cmd.name === 'echo') env.echo?.(text)
-      return { output: text, chatChanged: false }
-    }
-    case 'setvar':
-    case 'setglobalvar': {
-      const setter = cmd.name === 'setvar' ? env.setVar : env.setGlobalVar
-      const target = varTarget(cmd)
-      if (target.name === '') throw new ScriptError(`/${cmd.name} requires a variable name`)
-      setter(target.name, target.value)
-      return changed()
-    }
-    case 'getvar':
-    case 'getglobalvar': {
-      const getter = cmd.name === 'getvar' ? env.getVar : env.getGlobalVar
-      const name = cmd.args[0] ?? ''
-      if (name === '') throw new ScriptError(`/${cmd.name} requires a variable name`)
-      return { output: String(getter(name) ?? ''), chatChanged: false }
-    }
-    case 'addvar': {
-      const target = varTarget(cmd)
-      if (target.name === '') throw new ScriptError('/addvar requires a variable name')
-      const delta = target.value === '' ? '1' : target.value
-      const current = env.getVar(target.name)
-      const currentNum = typeof current === 'boolean' ? null : toNumber(String(current ?? ''))
-      const deltaNum = toNumber(delta)
-      if (current === undefined) {
-        env.setVar(target.name, delta)
-      } else if (currentNum !== null && deltaNum !== null) {
-        env.setVar(target.name, currentNum + deltaNum)
-      } else {
-        env.setVar(target.name, `${String(current)}${delta}`)
-      }
-      return changed()
-    }
-    case 'incvar':
-    case 'decvar': {
-      const name = cmd.args[0] ?? ''
-      const current = toNumber(String(env.getVar(name) ?? '0')) ?? 0
-      env.setVar(name, current + (cmd.name === 'incvar' ? 1 : -1))
-      return changed()
-    }
-    case 'hasvar':
-    case 'hasglobalvar': {
-      const checker = cmd.name === 'hasvar' ? env.getVar : env.getGlobalVar
-      return { output: truthyString(String(checker(cmd.args[0] ?? '') !== undefined)), chatChanged: false }
-    }
-    case 'delvar':
-    case 'delglobalvar': {
-      const remover = cmd.name === 'delvar' ? env.deleteVar : env.deleteGlobalVar
-      remover(cmd.args[0] ?? '')
-      return changed()
-    }
-    case 'if': {
-      const left = cmd.named['left'] ?? cmd.args[0] ?? ''
-      const right = cmd.named['right'] ?? cmd.args[1] ?? ''
-      const op = (cmd.named['op'] ?? cmd.args[2] ?? '=').trim()
-      let passes: boolean
-      if (op === 'contains' || op === '!contains') {
-        const contains = left.includes(right)
-        passes = op === 'contains' ? contains : !contains
-      } else {
-        const numericOp = NUMERIC_OPS[op]
-        if (numericOp === undefined) throw new ScriptError(`unsupported /if op: ${op}`)
-        const leftNum = toNumber(left)
-        const rightNum = toNumber(right)
-        if (leftNum !== null && rightNum !== null) passes = numericOp(leftNum, rightNum)
-        else if (op === '=' || op === '==') passes = left === right
-        else if (op === '!=') passes = left !== right
-        else passes = false // 关系运算需要数字
-      }
-      const branch = passes ? cmd.named['then'] : (cmd.named['else'] ?? '')
-      if (branch === undefined || branch.trim() === '') return { output: '', chatChanged: false }
-      return runNested(branch, env)
-    }
-    case 'random': {
-      const raw = cmd.raw.trim()
-      const range = /^(-?\d+)\s*-\s*(-?\d+)$/.exec(raw)
-      if (range !== null) {
-        const low = Number(range[1])
-        const high = Number(range[2])
-        const min = Math.min(low, high)
-        return { output: String(min + Math.floor(rng() * (Math.max(low, high) - min + 1))), chatChanged: false }
-      }
-      return { output: pickRandom(splitChoices(raw), rng), chatChanged: false }
-    }
-    case 'roll':
-      return { output: String(parseRoll(cmd.raw.trim() || '1d6', rng)), chatChanged: false }
-    case 'pick':
-      return { output: pickRandom(splitChoices(cmd.raw), rng), chatChanged: false }
-    case 'send': {
-      const action = await requireAction(env.send, 'send')
-      await action(cmd.raw)
-      return changed()
-    }
-    case 'trigger': {
-      const action = await requireAction(env.trigger, 'trigger')
-      await action(cmd.args[0])
-      return changed()
-    }
-    case 'regenerate': {
-      const action = await requireAction(env.regenerate, 'regenerate')
-      await action()
-      return changed()
-    }
-    case 'stop': {
-      const action = await requireAction(env.stop, 'stop')
-      action()
-      return changed()
-    }
-    case 'cut': {
-      const action = await requireAction(env.cut, 'cut')
-      const range = /^(-?\d+)(?:\s*-\s*(-?\d+))?$/.exec(cmd.raw.trim())
-      if (range === null) throw new ScriptError(`/cut expects a range like 0-2, got: ${cmd.raw.trim()}`)
-      const from = Number(range[1])
-      const to = range[2] === undefined ? from : Number(range[2])
-      await action(Math.min(from, to), Math.max(from, to))
-      return changed()
-    }
-    case 'regex': {
-      // ST /regex：`/regex name=<script> [text]`（脚本名也接受首位位置参数）；
-      // 输入串可由管道注入（{{pipe}} 或末位参数），缺省为空串。
-      const action = await requireAction(env.applyRegex, 'regex')
-      const name = cmd.named['name'] ?? cmd.args[0] ?? ''
-      if (name === '') throw new ScriptError('/regex requires a script name (name=…)')
-      const positional = cmd.named['name'] !== undefined ? cmd.args : cmd.args.slice(1)
-      return { output: await action(name, positional.join(' ')), chatChanged: false }
-    }
-    default:
-      throw new ScriptError(`unknown command: /${cmd.name}`)
-  }
+  const spec = commandTable.get(cmd.name)
+  if (spec === undefined) throw new ScriptError(`unknown command: /${cmd.name}`)
+  return spec.run(cmd, env, {
+    rng: env.rng ?? Math.random,
+    changed: changedResult,
+    runNested: (commandText, nestedEnv) => runNested(commandText, nestedEnv),
+  })
 }
 
-async function runNested(commandText: string, env: ScriptEnv): Promise<{ output: string; chatChanged: boolean }> {
+async function runNested(commandText: string, env: ScriptEnv): Promise<StscriptCommandResult> {
   const command = parseCommand(commandText, env.expand)
   return runCommand(command, env, null)
 }

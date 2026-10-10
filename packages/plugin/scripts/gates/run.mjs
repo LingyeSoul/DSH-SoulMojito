@@ -77,6 +77,12 @@ const REQUIRED_SERVER_ROUTES = [
   'update',
   'update/check',
   'update/install',
+  // Mod 管理面与子路由（提案 0015 P1）：GET mods / POST mods/state /
+  // POST mods/<id>/{enable,disable,reload} 管理面 + mods/<id>/<path> 子路由。
+  'mods',
+  'mods/',
+  // Mod git 安装（提案 0015 P2）：GitHub 源降级链预读 + git clone。管理保留段。
+  'mods/install',
 ]
 
 // DSH client-web's platform module table, mirrored from the host web shell's
@@ -413,6 +419,12 @@ function checkFrontendRuntimeText(text) {
     "connect-src 'none'",
     'event.source !== frameRef.current?.contentWindow',
     'message.streaming',
+    // Mod UI 表面（提案 0015 §3.5 P2）：postMessage 数据桥 + 桥路径预校验 +
+    // ModSurface iframe（sandbox 同款纪律）。
+    'dsh-tavern:mod-request',
+    'dsh-tavern:mod-response',
+    'function isValidModBridgePath',
+    'function ModSurface({ mod })',
   ]) {
     if (!text.includes(marker)) problems.push(`frontend runtime is missing marker '${marker}'`)
   }
@@ -1310,6 +1322,299 @@ function runUpdateRouteProbe() {
   }
 }
 
+/**
+ * mod-loader gate（提案 0015 §5 四不变量）：默认关（modsEnabled 与
+ * enabled.<id> 双默认 false）、目录白名单（只扫 <tavern>/mods/ 且 path 校验拒
+ * 穿越）、超时常量在 bundle、禁用时 mods 路由 404。真实 bundle 子进程探测 +
+ * 静态 marker，update-routes gate 同款；示例 Mod（examples/mods/asset-stats）
+ * 是夹具，另放一个坏 mod.json 证明坏 Mod 不断路。
+ */
+const EXAMPLE_MOD_ID = 'dsh-tavern.asset-stats'
+
+const MOD_LOADER_SCRIPT = String.raw`
+const entry = process.env.DSH_TAVERN_GATE_ENTRY
+if (!entry) throw new Error('missing DSH_TAVERN_GATE_ENTRY')
+const modId = process.env.DSH_TAVERN_GATE_MOD_ID
+const mod = await import(entry)
+const registrations = []
+const ctx = {
+  commands: { register: () => () => {} },
+  systemPrompt: { section: () => {} },
+  webServer: { register: (value) => { registrations.push(value); return () => {} } },
+  effect: (callback) => callback(),
+  llm: { stream: async function* () {} },
+  agentDefaultModel: { currentSelection: () => ({ provider: 'stub', model: 'stub' }) },
+  agents: { get: () => undefined },
+}
+mod.apply(ctx)
+const route = registrations.find((value) => value.kind === 'prefix' && value.path === '/api/dsh-tavern')
+function callRoute(method, url, body) {
+  return new Promise((resolve, reject) => {
+    const chunks = body === undefined ? [] : [Buffer.from(JSON.stringify(body))]
+    const req = {
+      method,
+      url,
+      on: (event, handler) => { if (event === 'data') for (const chunk of chunks) handler(chunk); if (event === 'end') handler(); return req },
+    }
+    const res = {
+      statusCode: 0,
+      headersSent: false,
+      writableEnded: false,
+      setHeader: () => {},
+      write: () => {},
+      end: (payload) => {
+        res.writableEnded = true
+        if (payload === undefined) { resolve({ status: res.statusCode, body: null }); return }
+        // mod 的 ui 路由回 HTML：JSON.parse 失败时回退原文（P2 探测要断言 CSP）。
+        try { resolve({ status: res.statusCode, body: JSON.parse(payload) }) } catch { resolve({ status: res.statusCode, body: String(payload) }) }
+      },
+    }
+    Promise.resolve(route.handler(req, res)).catch(reject)
+  })
+}
+const probe = {}
+const boot = await callRoute('GET', '/api/dsh-tavern/bootstrap')
+probe.bootstrapMods = Array.isArray(boot.body?.mods) ? boot.body.mods.map((item) => item.id) : null
+probe.bootstrapAllDisabled = Array.isArray(boot.body?.mods) && boot.body.mods.length > 0 && boot.body.mods.every((item) => item.enabled === false)
+probe.management = await callRoute('GET', '/api/dsh-tavern/mods')
+probe.defaultOffStatus = (await callRoute('GET', '/api/dsh-tavern/mods/' + modId + '/stats')).status
+await callRoute('POST', '/api/dsh-tavern/mods/' + modId + '/enable', {})
+probe.perModOnlyGlobal = probe.management.body?.globalEnabled
+probe.perModOnlyStatus = (await callRoute('GET', '/api/dsh-tavern/mods/' + modId + '/stats')).status
+await callRoute('POST', '/api/dsh-tavern/mods/state', { globalEnabled: true })
+const loaded = await callRoute('GET', '/api/dsh-tavern/mods/' + modId + '/stats')
+probe.loadedStatus = loaded.status
+probe.loadedCounts = Boolean(loaded.body?.counts)
+probe.unknownRouteStatus = (await callRoute('GET', '/api/dsh-tavern/mods/' + modId + '/nope')).status
+probe.traversalStatus = (await callRoute('GET', '/api/dsh-tavern/mods/..%2F..%2Findex.mjs')).status
+probe.reloadStatus = (await callRoute('POST', '/api/dsh-tavern/mods/' + modId + '/reload', {})).status
+probe.statsAfterReload = (await callRoute('GET', '/api/dsh-tavern/mods/' + modId + '/stats')).status
+await callRoute('POST', '/api/dsh-tavern/mods/' + modId + '/disable', {})
+probe.disabledAgainStatus = (await callRoute('GET', '/api/dsh-tavern/mods/' + modId + '/stats')).status
+const afterBroken = await callRoute('GET', '/api/dsh-tavern/mods')
+probe.brokenStatus = Array.isArray(afterBroken.body?.mods) ? (afterBroken.body.mods.find((item) => item.id === 'broken-mod')?.status ?? null) : null
+probe.bootstrapAfterBrokenStatus = (await callRoute('GET', '/api/dsh-tavern/bootstrap')).status
+
+// ---- P2 能力面探测（提案 0015 §4）：llm 能力键、三件套示例 Mod、跨 bundle 吸收 ----
+await callRoute('POST', '/api/dsh-tavern/mods/dsh-tavern.mood-tracker/enable', {})
+await callRoute('POST', '/api/dsh-tavern/mods/p2-probe/enable', {})
+await callRoute('POST', '/api/dsh-tavern/mods/p2-plain/enable', {})
+const moodUi = await callRoute('GET', '/api/dsh-tavern/mods/dsh-tavern.mood-tracker/ui')
+probe.moodUiStatus = moodUi.status
+probe.moodUiCsp = typeof moodUi.body === 'string' ? moodUi.body : JSON.stringify(moodUi.body ?? '')
+const llmProbe = await callRoute('GET', '/api/dsh-tavern/mods/p2-probe/llm')
+probe.p2LlmKey = llmProbe.body?.hasLlm === true
+const plainProbe = await callRoute('GET', '/api/dsh-tavern/mods/p2-plain/llm')
+probe.p2PlainNoLlmKey = plainProbe.body?.hasLlm === false
+// 跨 bundle 实测（§3.6 定案的 gate 级验证）：同一进程里再挂 agent bundle，
+// 其注册表快照必须看到 index bundle 装载的 mod 工具（globalThis Symbol.for 互见）
+// 且 section order 被钳制在 [-50, 0]。
+const agentEntry = process.env.DSH_TAVERN_GATE_AGENT_ENTRY
+if (agentEntry) {
+  const agentTools = []
+  const agentSections = []
+  const agentModule = await import(agentEntry)
+  agentModule.apply({
+    systemPrompt: {
+      section: (section) => { agentSections.push({ name: section.name, order: section.order, text: typeof section.text === 'string' ? section.text : '' }); return () => {} },
+      context: () => {},
+    },
+    tools: { register: (tool) => { agentTools.push(tool.name); return () => {} } },
+    effect: (callback) => { callback(); return () => {} },
+  })
+  probe.agentHasMoodTool = agentTools.includes('dsh-tavern.mood-tracker_get_mood')
+  probe.agentHasBuiltin = agentTools.includes('tavern_character_get')
+  const probeSection = agentSections.find((section) => section.name === 'dsh-tavern:mod:p2-probe:probe')
+  probe.agentSectionPresent = probeSection !== undefined
+  probe.agentSectionTextNeutralized = probeSection !== undefined && !probeSection.text.includes('{{')
+  probe.agentSectionOrderClamped = probeSection !== undefined && probeSection.order >= -50 && probeSection.order <= 0
+}
+console.log('DSH_TAVERN_GATE_RESULT=' + JSON.stringify(probe))
+`
+
+const MOD_LOADER_ENV_SCRIPT = String.raw`
+const entry = process.env.DSH_TAVERN_GATE_ENTRY
+if (!entry) throw new Error('missing DSH_TAVERN_GATE_ENTRY')
+const modId = process.env.DSH_TAVERN_GATE_MOD_ID
+const mod = await import(entry)
+const registrations = []
+const ctx = {
+  commands: { register: () => () => {} },
+  systemPrompt: { section: () => {} },
+  webServer: { register: (value) => { registrations.push(value); return () => {} } },
+  effect: (callback) => callback(),
+  llm: { stream: async function* () {} },
+  agentDefaultModel: { currentSelection: () => ({ provider: 'stub', model: 'stub' }) },
+  agents: { get: () => undefined },
+}
+mod.apply(ctx)
+const route = registrations.find((value) => value.kind === 'prefix' && value.path === '/api/dsh-tavern')
+function callRoute(method, url, body) {
+  return new Promise((resolve, reject) => {
+    const chunks = body === undefined ? [] : [Buffer.from(JSON.stringify(body))]
+    const req = {
+      method,
+      url,
+      on: (event, handler) => { if (event === 'data') for (const chunk of chunks) handler(chunk); if (event === 'end') handler(); return req },
+    }
+    const res = {
+      statusCode: 0,
+      headersSent: false,
+      writableEnded: false,
+      setHeader: () => {},
+      write: () => {},
+      end: (payload) => {
+        res.writableEnded = true
+        try { resolve({ status: res.statusCode, body: payload === undefined ? null : JSON.parse(payload) }) } catch (error) { reject(error) }
+      },
+    }
+    Promise.resolve(route.handler(req, res)).catch(reject)
+  })
+}
+const probe = {}
+const boot = await callRoute('GET', '/api/dsh-tavern/bootstrap')
+probe.envBootstrapModsEmpty = Array.isArray(boot.body?.mods) && boot.body.mods.length === 0
+probe.envBootstrapAvailable = boot.body?.modsAvailable === false
+const management = await callRoute('GET', '/api/dsh-tavern/mods')
+probe.envAvailable = management.body?.available === false
+await callRoute('POST', '/api/dsh-tavern/mods/' + modId + '/enable', {})
+await callRoute('POST', '/api/dsh-tavern/mods/state', { globalEnabled: true })
+probe.envStatsAfterEnabling = (await callRoute('GET', '/api/dsh-tavern/mods/' + modId + '/stats')).status
+console.log('DSH_TAVERN_GATE_RESULT=' + JSON.stringify(probe))
+`
+
+/**
+ * 校验探测结果。requireEnvOff=false 用于第一段探测（主探测不含 env 硬关子
+ * 进程的字段）；合并 envOff 后的第二段用默认 true。
+ */
+function checkModLoaderResult(result, { requireEnvOff = true } = {}) {
+  const problems = []
+  if (!Array.isArray(result?.bootstrapMods) || !result.bootstrapMods.includes(EXAMPLE_MOD_ID)) {
+    problems.push('bootstrap must list the installed example mod')
+  }
+  if (result?.bootstrapAllDisabled !== true) {
+    problems.push('mods must default to disabled in the bootstrap projection (both state switches default false)')
+  }
+  if (result?.perModOnlyGlobal !== false || result?.defaultOffStatus !== 404 || result?.perModOnlyStatus !== 404) {
+    problems.push('mod routes must 404 until BOTH the global switch and the per-mod switch are on')
+  }
+  if (result?.loadedStatus !== 200 || result?.loadedCounts !== true) {
+    problems.push('both switches on must load the mod and serve its registered route')
+  }
+  if (result?.unknownRouteStatus !== 404) problems.push('unknown mod subroutes must 404')
+  if (result?.traversalStatus !== 404) problems.push('path traversal in mod subroutes must be rejected with 404')
+  if (result?.reloadStatus !== 200 || result?.statsAfterReload !== 200) {
+    problems.push('reload must dispose and re-import the mod entry (route serves again)')
+  }
+  if (result?.disabledAgainStatus !== 404) problems.push('a disabled mod must answer 404 again')
+  if (result?.brokenStatus !== 'error') problems.push('a broken mod.json must surface as status error, not crash the host')
+  if (result?.bootstrapAfterBrokenStatus !== 200) problems.push('bootstrap must stay 200 next to a broken mod')
+  // ---- P2 能力面（提案 0015 §4）----
+  if (result?.moodUiStatus !== 200 || !String(result?.moodUiCsp ?? '').includes('Content-Security-Policy')) {
+    problems.push('the panel-surface example mod must serve GET ui as HTML with the CSP meta injected')
+  }
+  if (result?.p2LlmKey !== true) problems.push('a mod declaring the llm capability must see api.llm injected')
+  if (result?.p2PlainNoLlmKey !== true) problems.push('a mod without the llm capability must NOT see the api.llm key')
+  if (result?.agentHasMoodTool !== true || result?.agentHasBuiltin !== true) {
+    problems.push('the agent bundle mount must absorb mod tools from the cross-bundle registry next to its builtin tools')
+  }
+  if (result?.agentSectionPresent !== true || result?.agentSectionOrderClamped !== true) {
+    problems.push('the agent bundle mount must absorb mod prompt sections with order clamped to [-50, 0]')
+  }
+  if (result?.agentSectionTextNeutralized !== true) {
+    problems.push('mod prompt section text must be neutralized (no raw {{...}} host-variable syntax)')
+  }
+  if (!requireEnvOff) return problems
+  const env = result?.envOff ?? {}
+  if (env.envAvailable !== true || env.envBootstrapAvailable !== true || env.envBootstrapModsEmpty !== true) {
+    problems.push('DSH_TAVERN_DISABLE_MODS=1 must hard-disable mods (management reports unavailable, projection empty)')
+  }
+  if (env.envStatsAfterEnabling !== 404) {
+    problems.push('with mods hard-disabled by env, enabling both state switches must still answer 404')
+  }
+  return problems
+}
+
+function runModLoaderProbe(script, extraEnv = {}) {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'dsh-tavern-mod-gate-'))
+  try {
+    let entryPath = SERVER_PATH
+    let dependencyRoot = null
+    if (!canResolveOfficialDependenciesFromRepo()) {
+      dependencyRoot = locateOfficialDependencyRoot()
+      if (dependencyRoot === null) {
+        return ['official @deepseek-ai dependencies are not resolvable from the repo, NODE_PATH, or global DSH install']
+      }
+      entryPath = join(tempRoot, 'index.mjs')
+      copyFileSync(SERVER_PATH, entryPath)
+      copyFileSync(VERSION_PATH, join(tempRoot, 'version.json'))
+      symlinkSync(dependencyRoot, join(tempRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
+    }
+    const dshHome = join(tempRoot, 'dsh-home')
+    const modsRoot = join(dshHome, 'tavern', 'mods')
+    // 夹具：示例 Mod（仓库交付物）+ 坏 mod.json（坏 Mod 不断路反样本）+ P2 探针
+    // （三件套示例 mod + llm 能力键有无的对照双 mod）。
+    const exampleDir = join(modsRoot, EXAMPLE_MOD_ID)
+    mkdirSync(exampleDir, { recursive: true })
+    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'asset-stats', 'mod.json'), join(exampleDir, 'mod.json'))
+    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'asset-stats', 'index.mjs'), join(exampleDir, 'index.mjs'))
+    const moodDir = join(modsRoot, 'dsh-tavern.mood-tracker')
+    mkdirSync(moodDir, { recursive: true })
+    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'dsh-tavern.mood-tracker', 'mod.json'), join(moodDir, 'mod.json'))
+    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'dsh-tavern.mood-tracker', 'index.mjs'), join(moodDir, 'index.mjs'))
+    const llmProbeDir = join(modsRoot, 'p2-probe')
+    mkdirSync(llmProbeDir, { recursive: true })
+    writeFileSync(join(llmProbeDir, 'mod.json'), JSON.stringify({
+      id: 'p2-probe', name: 'P2 Probe', version: '1.0.0', author: 'gate', description: 'llm capability + prompt section probe',
+      main: 'index.mjs', capabilities: ['llm'],
+    }), 'utf8')
+    writeFileSync(join(llmProbeDir, 'index.mjs'), [
+      'export async function setup(api) {',
+      "  api.http.route('GET', 'llm', (req, reply) => reply.json({ hasLlm: typeof api.llm !== 'undefined' }))",
+      "  api.prompt.section({ name: 'probe', text: 'p2 probe {{unclosed host variable}} section', order: -9999 })",
+      '}',
+    ].join('\n'), 'utf8')
+    const plainProbeDir = join(modsRoot, 'p2-plain')
+    mkdirSync(plainProbeDir, { recursive: true })
+    writeFileSync(join(plainProbeDir, 'mod.json'), JSON.stringify({
+      id: 'p2-plain', name: 'P2 Plain', version: '1.0.0', author: 'gate', description: 'no capability probe',
+      main: 'index.mjs',
+    }), 'utf8')
+    writeFileSync(join(plainProbeDir, 'index.mjs'), [
+      'export async function setup(api) {',
+      "  api.http.route('GET', 'llm', (req, reply) => reply.json({ hasLlm: typeof api.llm !== 'undefined' }))",
+      '}',
+    ].join('\n'), 'utf8')
+    mkdirSync(join(modsRoot, 'broken-mod'), { recursive: true })
+    writeFileSync(join(modsRoot, 'broken-mod', 'mod.json'), '{ "id": "broken-mod", oops', 'utf8')
+    const child = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ...extraEnv,
+        DSH_HOME: dshHome,
+        DSH_TAVERN_GATE_ENTRY: pathToFileURL(entryPath).href,
+        DSH_TAVERN_GATE_MOD_ID: EXAMPLE_MOD_ID,
+        DSH_TAVERN_GATE_AGENT_ENTRY: existsSync(AGENT_PATH) ? pathToFileURL(AGENT_PATH).href : '',
+        ...(dependencyRoot === null ? {} : { NODE_PATH: dependencyRoot }),
+      },
+      timeout: 40_000,
+      windowsHide: true,
+    })
+    if (child.error) return [`mod loader subprocess failed: ${child.error.message}`]
+    if (child.status !== 0) {
+      const detail = (child.stderr || child.stdout).trim().split(/\r?\n/).at(-1) ?? `exit ${child.status}`
+      return [`mod loader subprocess exited ${child.status}: ${detail}`]
+    }
+    const line = child.stdout.split(/\r?\n/).find((value) => value.startsWith('DSH_TAVERN_GATE_RESULT='))
+    if (line === undefined) return ['mod loader subprocess returned no result record']
+    return [null, JSON.parse(line.slice('DSH_TAVERN_GATE_RESULT='.length))]
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true })
+  }
+}
+
 const gates = [
   {
     name: 'update-routes',
@@ -1480,9 +1785,16 @@ const gates = [
         "connect-src 'none'",
         'event.source !== frameRef.current?.contentWindow',
         'message.streaming',
+        'dsh-tavern:mod-request',
+        'dsh-tavern:mod-response',
+        'function isValidModBridgePath() {}',
+        'function ModSurface({ mod }) {}',
       ].join('\n')
       const bad = good.replace("sandbox: 'allow-scripts'", "sandbox: 'allow-forms'")
-      return checkFrontendRuntimeText(good).length === 0 && checkFrontendRuntimeText(bad).length > 0
+      const badBridge = good.replace('dsh-tavern:mod-request', 'dsh-tavern:mod-bridge-removed')
+      return checkFrontendRuntimeText(good).length === 0
+        && checkFrontendRuntimeText(bad).length > 0
+        && checkFrontendRuntimeText(badBridge).length > 0
         ? []
         : ['frontend runtime marker self-test did not distinguish an unsafe sample']
     },
@@ -1843,6 +2155,111 @@ const gates = [
       ]
       problems.push(...admissionProblems('activation notice', noticeRows))
 
+      return problems
+    },
+  },
+  {
+    // 提案 0015 §5 四不变量（P1）：默认关、目录白名单、超时常量在 bundle、
+    // 禁用时 mods 路由 404。真实 bundle 子进程探测（示例 Mod 夹具 + 坏 mod.json
+    // 反样本 + env 硬关第二子进程）+ 产物静态 marker。
+    name: 'mod-loader',
+    selfTest: () => {
+      const good = {
+        bootstrapMods: [EXAMPLE_MOD_ID, 'broken-mod'],
+        bootstrapAllDisabled: true,
+        perModOnlyGlobal: false,
+        defaultOffStatus: 404,
+        perModOnlyStatus: 404,
+        loadedStatus: 200,
+        loadedCounts: true,
+        unknownRouteStatus: 404,
+        traversalStatus: 404,
+        reloadStatus: 200,
+        statsAfterReload: 200,
+        disabledAgainStatus: 404,
+        brokenStatus: 'error',
+        bootstrapAfterBrokenStatus: 200,
+        moodUiStatus: 200,
+        moodUiCsp: '<meta http-equiv="Content-Security-Policy" content="default-src',
+        p2LlmKey: true,
+        p2PlainNoLlmKey: true,
+        agentHasMoodTool: true,
+        agentHasBuiltin: true,
+        agentSectionPresent: true,
+        agentSectionOrderClamped: true,
+        agentSectionTextNeutralized: true,
+        envOff: {
+          envAvailable: true,
+          envBootstrapAvailable: true,
+          envBootstrapModsEmpty: true,
+          envStatsAfterEnabling: 404,
+        },
+      }
+      const badSamples = [
+        { ...good, bootstrapAllDisabled: false },
+        { ...good, defaultOffStatus: 200 },
+        { ...good, perModOnlyStatus: 200 },
+        { ...good, loadedStatus: 404 },
+        { ...good, loadedCounts: false },
+        { ...good, traversalStatus: 200 },
+        { ...good, reloadStatus: 500 },
+        { ...good, disabledAgainStatus: 200 },
+        { ...good, brokenStatus: 'loaded' },
+        { ...good, bootstrapAfterBrokenStatus: 500 },
+        { ...good, moodUiCsp: 'no csp here' },
+        { ...good, p2LlmKey: false },
+        { ...good, p2PlainNoLlmKey: false },
+        { ...good, agentHasMoodTool: false },
+        { ...good, agentSectionOrderClamped: false },
+        { ...good, agentSectionTextNeutralized: false },
+        { ...good, envOff: { ...good.envOff, envStatsAfterEnabling: 200 } },
+        { ...good, envOff: undefined },
+      ]
+      const rejected = badSamples.filter((sample) => checkModLoaderResult(sample).length > 0).length
+      return checkModLoaderResult(good).length === 0 && rejected === badSamples.length
+        ? []
+        : ['mod loader bad samples were not rejected']
+    },
+    check: () => {
+      if (!existsSync(SERVER_PATH)) return ['generated packages/plugin/index.mjs does not exist']
+      const problems = []
+      const server = readFileSync(SERVER_PATH, 'utf8')
+      // 不变量 2（目录白名单）：扫描锚点必须是 join(<tavern>, "mods")。
+      if (!/join\w*\([^)]*,\s*"mods"\)/.test(server)) {
+        problems.push('mod loader must anchor its scan at join(<tavern>, "mods") and nowhere else')
+      }
+      // 不变量 3（超时常量在 bundle）：hook 10s 超时的机制与常量必须打进产物。
+      if (!server.includes('generation hook timed out after')) {
+        problems.push('server bundle must embed the generation hook timeout mechanism (10s per-hook degradation)')
+      }
+      if (!/(?:10_000|10000|1e4)/.test(server)) {
+        problems.push('server bundle must carry the 10s hook timeout constant')
+      }
+      // P2：git 安装路由在 server bundle。
+      if (!server.includes('mods/install')) {
+        problems.push('server bundle must carry the mods/install git route (proposal 0015 P2)')
+      }
+      // P2：跨 bundle 注册表与 order 钳制常量在 agent bundle（§3.6/§3.4）。
+      if (existsSync(AGENT_PATH)) {
+        const agent = readFileSync(AGENT_PATH, 'utf8')
+        if (!agent.includes('dsh-tavern:mod-registry')) {
+          problems.push('agent bundle must consume the globalThis mod-registry (dsh-tavern:mod-registry)')
+        }
+        if (!agent.includes('dsh-tavern:mods-changed-listeners')) {
+          problems.push('agent bundle must subscribe to mods-changed write-through notifications')
+        }
+        if (!/-50/.test(agent) || !/\b0\b/.test(agent)) {
+          problems.push('agent bundle must carry the mod section order clamp constants (-50..0)')
+        }
+      } else {
+        problems.push('generated packages/plugin/agent.mjs does not exist')
+      }
+      const [setupProblems, result] = runModLoaderProbe(MOD_LOADER_SCRIPT)
+      if (setupProblems !== null) return [...problems, ...setupProblems]
+      problems.push(...checkModLoaderResult(result, { requireEnvOff: false }))
+      const [envProblems, envResult] = runModLoaderProbe(MOD_LOADER_ENV_SCRIPT, { DSH_TAVERN_DISABLE_MODS: '1' })
+      if (envProblems !== null) return [...problems, ...envProblems]
+      problems.push(...checkModLoaderResult({ ...(result ?? {}), envOff: envResult }))
       return problems
     },
   },

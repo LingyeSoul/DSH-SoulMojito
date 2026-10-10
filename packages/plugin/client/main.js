@@ -171,6 +171,116 @@ window.__ModuleLoader__.load({
       })
     }
 
+    // Mod UI 表面（提案 0015 §3.5 P2）：iframe 指向该 Mod 的 `GET mods/<id>/ui`
+    // 路由（服务端 mod.html 出口自带 CSP meta + connect-src 'none'）。iframe 纪律
+    // 完整继承 FrontendFrame：sandbox="allow-scripts" 无 same-origin、token 校验
+    // postMessage（token 经 iframe URL 查询段交给 mod UI，回投时对账 + 事件源
+    // 必须是该 frame 的 contentWindow）。取数不能 fetch（CSP）——postMessage
+    // 数据桥：iframe 发 {type:'dsh-tavern:mod-request', token, req} → 父页代理到
+    // 该 Mod 的 HTTP 路由 → 回投 {type:'dsh-tavern:mod-response', token, id}。
+    // 高度上报协议（FRONTEND_HEIGHT_MESSAGE）与 FrontendFrame 同款，由 mod UI
+    // 自带上报脚本（示例 Mod 的 ui 路由含同款 reporter）。
+    const MOD_REQUEST_MESSAGE = 'dsh-tavern:mod-request'
+    const MOD_RESPONSE_MESSAGE = 'dsh-tavern:mod-response'
+    const MOD_BRIDGE_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
+    const MOD_BRIDGE_PATH_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+    function isValidModBridgePath(path) {
+      if (typeof path !== 'string' || path === '' || path.length > 200 || path.includes('\\') || path.includes('%')) return false
+      const segments = path.split('/')
+      return segments.every((segment) => MOD_BRIDGE_PATH_SEGMENT.test(segment))
+    }
+
+    function ModSurface({ mod }) {
+      const frameRef = useRef(null)
+      const [height, setHeight] = useState(140)
+      // 每 mount 一个随机 token：URL 查询段交给 mod UI（回投时对账）+ 事件源
+      // 必须是该 frame 的 contentWindow，双对账缺一不受理。
+      const [token] = useState(() => `dsh-tavern-mod-${mod.id}-${Math.random().toString(36).slice(2)}`)
+      useEffect(() => {
+        let disposed = false
+        const post = (message) => {
+          if (disposed) return
+          try { frameRef.current?.contentWindow?.postMessage(message, '*') } catch {}
+        }
+        const onMessage = (event) => {
+          if (event.source !== frameRef.current?.contentWindow) return
+          const data = event.data
+          if (!data || typeof data !== 'object' || data.token !== token) return
+          if (data.type === FRONTEND_HEIGHT_MESSAGE) {
+            if (typeof data.height === 'number' && Number.isFinite(data.height)) {
+              setHeight(Math.max(80, Math.min(Math.ceil(data.height), 1200)))
+            }
+            return
+          }
+          if (data.type !== MOD_REQUEST_MESSAGE) return
+          const request = data.req || {}
+          const method = String(request.method || 'GET').toUpperCase()
+          const path = String(request.path || '')
+          if (!MOD_BRIDGE_METHODS.has(method) || !isValidModBridgePath(path)) {
+            post({ type: MOD_RESPONSE_MESSAGE, token, id: data.id, ok: false, status: 0, error: 'invalid bridge request' })
+            return
+          }
+          // 父页同源 fetch 代理（iframe 自身被 CSP 封网）：只到本 Mod 的子路由。
+          void fetch(`${API}/mods/${encodeURIComponent(mod.id)}/${path}`, {
+            method,
+            headers: request.body === undefined ? undefined : { 'content-type': 'application/json' },
+            body: request.body === undefined ? undefined : JSON.stringify(request.body),
+          })
+            .then(async (response) => {
+              const text = await response.text()
+              let body = text
+              try { body = text === '' ? null : JSON.parse(text) } catch {}
+              post({ type: MOD_RESPONSE_MESSAGE, token, id: data.id, ok: response.ok, status: response.status, body })
+            })
+            .catch((cause) => {
+              post({ type: MOD_RESPONSE_MESSAGE, token, id: data.id, ok: false, status: 0, error: cause instanceof Error ? cause.message : String(cause) })
+            })
+        }
+        addEventListener('message', onMessage)
+        return () => {
+          disposed = true
+          removeEventListener('message', onMessage)
+        }
+      }, [mod.id, token])
+      return h('iframe', {
+        ref: frameRef,
+        className: 'dt-frontend-frame dt-mod-surface',
+        sandbox: 'allow-scripts',
+        referrerPolicy: 'no-referrer',
+        title: mod.name,
+        src: `${API}/mods/${encodeURIComponent(mod.id)}/ui?token=${encodeURIComponent(token)}`,
+        style: { height },
+      })
+    }
+
+    // 启用 Mod 的声明分区追加进导航（§3.5）：bootstrap.mods 里 status==='loaded'
+    // 且声明 panel 的 mod 各得一个 `mod:<id>` 分区（P0 的 registerPanelSection
+    // 动态注册）。签名变化（增删/改标题）时整体重建；签名不变不动（避免每次
+    // 轮询重挂 iframe）。当前分区被移除时回落注册表首项（TavernPanel 兜底）。
+    let modPanelSignature = ''
+    const modPanelOffs = []
+
+    function syncModPanelSections(bootstrap) {
+      const mods = Array.isArray(bootstrap?.mods)
+        ? bootstrap.mods.filter((mod) => mod && mod.panel && mod.status === 'loaded')
+        : []
+      const signature = mods.map((mod) => `${mod.id}\u0000${mod.panel.title}\u0000${mod.panel.icon || ''}`).sort().join('\u0001')
+      if (signature === modPanelSignature) return
+      modPanelSignature = signature
+      for (const off of modPanelOffs.splice(0)) off()
+      for (const mod of mods) {
+        const title = mod.panel.title
+        modPanelOffs.push(registerPanelSection({
+          id: `mod:${mod.id}`,
+          icon: IconCordisPluginOutline14,
+          // mod 自带文案（非宿主 i18n key）——P0 决策的 thunk 形状即为此预留。
+          label: () => title,
+          component: () => h(ModSurface, { mod }),
+        }))
+      }
+    }
+
     const LOCALE_NS = 'dsh-tavern'
     const MESSAGES_EN = {
       'settings.subtitle': 'Roleplay assets and prompt configuration',
@@ -577,6 +687,42 @@ window.__ModuleLoader__.load({
       'update.status.localAhead': 'Local build is newer',
       'update.status.restartRequired': 'Restart required',
       'update.status.unknown': 'Update status unknown',
+      // Mod 管理面（提案 0015 §3.5 P1，第 14 个面板分区）。zh/en 键集与
+      // {param} 占位符镜像由 client-vm-mount gate 校验。
+      'panel.section.mods': 'Mods',
+      'mods.empty': 'No mods installed. Drop a folder with mod.json into {path} to install one.',
+      'mods.unavailable': 'Mods are hard-disabled by the DSH_TAVERN_DISABLE_MODS environment variable on this host.',
+      'mods.globalToggle': 'Allow mods to load',
+      'mods.globalHint': 'Off by default. Each mod still needs its own switch; both must be on before any mod code runs.',
+      'mods.enable': 'Enable',
+      'mods.disable': 'Disable',
+      'mods.reload': 'Reload',
+      'mods.busy': 'Working…',
+      'mods.status.loaded': 'Loaded',
+      'mods.status.disabled': 'Disabled',
+      'mods.status.error': 'Error',
+      'mods.auditCount': 'Audit events: {count}',
+      'mods.confirmTitle': 'Enable {name}?',
+      'mods.confirmBody': 'Mods run inside the dsh-tavern plugin process and are not sandboxed. Only enable mods from developers you trust.',
+      'mods.confirmCapabilities': 'Declared capabilities',
+      'mods.capability.llm': 'Calls the model (LLM)',
+      'mods.capability.network': 'Makes network requests',
+      'mods.capability.storage': 'Writes its own private storage',
+      'mods.capability.none': 'None declared',
+      'mods.confirmSurfacesHint': 'Registration surfaces below: for a not-yet-enabled mod these are the author\'s declarations; once loaded the list shows what is actually registered.',
+      'mods.confirmSurfacesNone': 'None',
+      'mods.confirmHooks': 'Generation hooks',
+      'mods.confirmTools': 'Agent tools',
+      'mods.confirmHttp': 'HTTP routes',
+      'mods.openPanel': 'Open panel',
+      'mods.install.title': 'Install from git',
+      'mods.install.hint': 'GitHub repository URL (or owner/repo, optional #ref) with a mod.json at its root. Cloned into tavern/mods/<id>/; enabling still needs both switches.',
+      'mods.install.placeholder': 'https://github.com/owner/mod-repo',
+      'mods.install.button': 'Install',
+      'mods.install.installing': 'Installing…',
+      'mods.install.done': 'Installed {id}',
+      'mods.install.failed': 'Install failed: {error}',
+      'mods.install.force': 'Replace an already installed mod',
       // AgentNovel surface (proposal 0005). zh/en keys must stay mirrored with
       // identical {param} placeholders; the client-vm-mount gate enforces it.
       'panel.section.novels': 'Novels',
@@ -1120,6 +1266,41 @@ window.__ModuleLoader__.load({
       'update.status.localAhead': '本地构建更新',
       'update.status.restartRequired': '需要重启',
       'update.status.unknown': '更新状态未知',
+      // Mod 管理面（提案 0015 §3.5 P1）：与 EN 键集逐键镜像。
+      'panel.section.mods': 'Mod',
+      'mods.empty': '还没有安装 Mod。把带 mod.json 的文件夹放进 {path} 即完成安装。',
+      'mods.unavailable': '宿主已通过 DSH_TAVERN_DISABLE_MODS 环境变量硬关 Mod。',
+      'mods.globalToggle': '允许加载 Mod',
+      'mods.globalHint': '默认关闭。每个 Mod 还需单独开启；两层同时开启后其代码才会运行。',
+      'mods.enable': '启用',
+      'mods.disable': '停用',
+      'mods.reload': '重载',
+      'mods.busy': '处理中…',
+      'mods.status.loaded': '已加载',
+      'mods.status.disabled': '已停用',
+      'mods.status.error': '错误',
+      'mods.auditCount': '审计事件：{count}',
+      'mods.confirmTitle': '启用 {name}？',
+      'mods.confirmBody': 'Mod 在 dsh-tavern 插件进程内运行，没有沙箱。只启用你信任的开发者的 Mod。',
+      'mods.confirmCapabilities': '声明的能力',
+      'mods.capability.llm': '调用模型（LLM）',
+      'mods.capability.network': '发起网络请求',
+      'mods.capability.storage': '写入私有存储',
+      'mods.capability.none': '未声明任何能力',
+      'mods.confirmSurfacesHint': '下面的注册面：未启用的 Mod 展示作者声明；加载后展示实际注册的名单。',
+      'mods.confirmSurfacesNone': '无',
+      'mods.confirmHooks': '生成管线 hook',
+      'mods.confirmTools': 'Agent 工具',
+      'mods.confirmHttp': 'HTTP 路由',
+      'mods.openPanel': '打开面板',
+      'mods.install.title': '从 git 安装',
+      'mods.install.hint': 'GitHub 仓库 URL（或 owner/repo，可带 #ref），根目录需有 mod.json。克隆到 tavern/mods/<id>/；启用仍需两层开关。',
+      'mods.install.placeholder': 'https://github.com/owner/mod-repo',
+      'mods.install.button': '安装',
+      'mods.install.installing': '安装中…',
+      'mods.install.done': '已安装 {id}',
+      'mods.install.failed': '安装失败：{error}',
+      'mods.install.force': '覆盖已安装的同名 Mod',
       'panel.section.novels': '小说',
       'view.architectureNovel': 'AgentNovel',
       'novel.empty': '还没有小说，创建一部开始全自动创作。',
@@ -1291,6 +1472,10 @@ window.__ModuleLoader__.load({
       activeCard: null,
       model: { provider: '', model: '' },
       internalWorkspace: null,
+      // Mod 轻量投影（提案 0015 §3.5 P1）：bootstrap.mods 是清单快照，actions
+      // 走 /mods 管理路由；modsAvailable=false 表示环境变量硬关。
+      mods: [],
+      modsAvailable: true,
       agentTavern: {
         native: { available: false, missing: [], reasons: [] },
         managed: { available: false, missing: [], reasons: [] },
@@ -1379,6 +1564,9 @@ window.__ModuleLoader__.load({
       try {
         const result = await api('bootstrap')
         update({ bootstrap: result, loading: false, error: '' })
+        // Mod 声明分区跟随 bootstrap（§3.5）：签名变化时重建注册（加载/停用/
+        // 标题改动都会反映到导航）。update 之后调用——组件读取的是新 snapshot。
+        syncModPanelSections(result)
         return result
       } catch (cause) {
         update({ loading: false, error: cause instanceof Error ? cause.message : String(cause) })
@@ -5252,21 +5440,42 @@ window.__ModuleLoader__.load({
         error ? h('span', { className: 'dt-sidebar-error' }, error) : null)
     }
 
-    const PANEL_SECTIONS = [
-      { id: 'overview', icon: IconSparkle16 },
-      { id: 'characters', icon: IconUserOutline16 },
-      { id: 'chats', icon: IconQueueOutline14 },
-      { id: 'guides', icon: IconListPenOutline16 },
-      { id: 'novels', icon: IconListPenOutline16 },
-      { id: 'groups', icon: IconPersonalizationOutline16 },
-      { id: 'personas', icon: IconDataOutline16 },
-      { id: 'worlds', icon: IconBrowseOutline16 },
-      { id: 'presets', icon: IconAgentPresetOutline16 },
-      { id: 'scripts', icon: IconListPenOutline16 },
-      { id: 'regex', icon: IconListPenOutline16 },
-      { id: 'variables', icon: IconCordisPluginOutline14 },
-      { id: 'workbench', icon: IconListPenOutline16 },
-    ]
+    // 面板分区注册表（提案 0015 §3.5 P0）：{id, icon, label, component}。
+    // label 是 locale thunk（渲染点传入当前 t，宿主 locale 切换跟随——MVU 侧栏
+    // tab 的 title thunk 先例）；component 收 {ctx, useSessions} 统一面板宿主
+    // 参数，各分区自取所需。registerPanelSection 追加在尾部：内置 13 分区的
+    // 顺序即注册顺序，行为与常量 + 三元链时代零变化；P1 的 Mod 面板分区
+    // （声明式清单 + 通用 ModSurface 渲染器）以同一入口追加。
+    const panelSections = []
+
+    function registerPanelSection(definition) {
+      panelSections.push(definition)
+      return () => {
+        const index = panelSections.indexOf(definition)
+        if (index >= 0) panelSections.splice(index, 1)
+      }
+    }
+
+    for (const definition of [
+      { id: 'overview', icon: IconSparkle16, label: (t) => t('panel.section.overview'), component: () => h(PanelOverview) },
+      { id: 'characters', icon: IconUserOutline16, label: (t) => t('panel.section.characters'), component: (host) => h(PanelCharacters, { ctx: host.ctx }) },
+      { id: 'chats', icon: IconQueueOutline14, label: (t) => t('panel.section.chats'), component: (host) => h(TavernSidebar, { ctx: host.ctx, useSessions: host.useSessions }) },
+      { id: 'guides', icon: IconListPenOutline16, label: (t) => t('panel.section.guides'), component: (host) => h(PanelGuides, { useSessions: host.useSessions }) },
+      { id: 'novels', icon: IconListPenOutline16, label: (t) => t('panel.section.novels'), component: (host) => h(PanelNovels, { ctx: host.ctx }) },
+      { id: 'groups', icon: IconPersonalizationOutline16, label: (t) => t('panel.section.groups'), component: () => h(GroupBand) },
+      { id: 'personas', icon: IconDataOutline16, label: (t) => t('panel.section.personas'), component: () => h(PersonaBand) },
+      { id: 'worlds', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: () => h(PanelWorlds) },
+      { id: 'presets', icon: IconAgentPresetOutline16, label: (t) => t('panel.section.presets'), component: () => h(PanelPresets) },
+      { id: 'scripts', icon: IconListPenOutline16, label: (t) => t('panel.section.scripts'), component: () => h(PanelScripts) },
+      { id: 'regex', icon: IconListPenOutline16, label: (t) => t('panel.section.regex'), component: () => h(RegexBand) },
+      { id: 'variables', icon: IconCordisPluginOutline14, label: (t) => t('panel.section.variables'), component: (host) => h(PanelVariables, { useSessions: host.useSessions }) },
+      { id: 'workbench', icon: IconListPenOutline16, label: (t) => t('panel.section.workbench'), component: () => h(PanelWorkbench) },
+      // 第 14 个分区「Mod」（提案 0015 §3.5 P1）：列表 + 两层开关 + 重载 + 启用
+      // 确认弹层（如实展示 capabilities，知情同意）。
+      { id: 'mods', icon: IconCordisPluginOutline14, label: (t) => t('panel.section.mods'), component: () => h(PanelMods) },
+    ]) {
+      registerPanelSection(definition)
+    }
 
     function PanelOverview() {
       const state = useTavernStore()
@@ -7618,6 +7827,173 @@ window.__ModuleLoader__.load({
         }) : null)
     }
 
+    // Mod 管理分区（提案 0015 §3.5 P1）：列表数据来自 bootstrap.mods 投影，
+    // 全局开关读 bootstrap.state.modsEnabled；写操作走 /mods 管理路由并重取
+    // bootstrap（patchState 同款动作-刷新闭环；state.json 不进 store-revision
+    // 水位，自动轮询不覆盖这条路径）。
+    function PanelMods() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const [error, setError] = useState('')
+      const [pending, setPending] = useState('')
+      const [confirming, setConfirming] = useState(null)
+      const [installUrl, setInstallUrl] = useState('')
+      const [installForce, setInstallForce] = useState(false)
+      const [installStatus, setInstallStatus] = useState('')
+      const run = (id, promise) => {
+        setPending(id)
+        setError('')
+        void promise.then(refreshBootstrap).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setPending(''))
+      }
+      const mods = state.bootstrap.mods || []
+      const available = state.bootstrap.modsAvailable !== false
+      const globalEnabled = state.bootstrap.state.modsEnabled === true
+      const setGlobalEnabled = (enabled) => run('global', api('mods/state', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ globalEnabled: enabled === true }),
+      }))
+      const enableMod = (mod) => run(mod.id, api(`mods/${encodeURIComponent(mod.id)}/enable`, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: '{}',
+      }))
+      const disableMod = (mod) => run(mod.id, api(`mods/${encodeURIComponent(mod.id)}/disable`, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: '{}',
+      }))
+      const reloadMod = (mod) => run(mod.id, api(`mods/${encodeURIComponent(mod.id)}/reload`, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: '{}',
+      }))
+      // git 安装（提案 0015 §4 P2）：GitHub URL / owner/repo，可选 #ref；进度与
+      // 结果就地反馈（安装是长操作——clone 可能几十秒，按钮锁死防重复提交）。
+      const installFromGit = () => {
+        const url = installUrl.trim()
+        if (url === '' || busy('install')) return
+        setInstallStatus(t('mods.install.installing'))
+        void api('mods/install', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ url, ...(installForce ? { force: true } : {}) }),
+        })
+          .then((result) => {
+            setInstallStatus(t('mods.install.done', { id: result.installed?.modId ?? '' }))
+            setInstallUrl('')
+            return refreshBootstrap()
+          })
+          .catch((cause) => setInstallStatus(t('mods.install.failed', { error: cause instanceof Error ? cause.message : String(cause) })))
+      }
+      const busy = (id) => pending === id
+      const surfaceRows = (mod) => [
+        { label: t('mods.confirmHooks'), entries: mod.surfaces?.hooks || [] },
+        { label: t('mods.confirmTools'), entries: mod.surfaces?.tools || [] },
+        { label: t('mods.confirmHttp'), entries: mod.surfaces?.http || [] },
+      ]
+      return h(React.Fragment, null,
+        h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('panel.section.mods')),
+          !available
+            ? h('p', { className: 'dt-hint' }, t('mods.unavailable'))
+            : h(React.Fragment, null,
+              h('p', { className: 'dt-hint' }, t('mods.globalHint')),
+              h('div', { className: 'dt-imports' },
+                h('label', { className: 'dt-toggle' },
+                  h('input', {
+                    type: 'checkbox',
+                    disabled: busy('global'),
+                    checked: globalEnabled,
+                    onChange: (event) => setGlobalEnabled(event.target.checked),
+                  }),
+                  h('span', null, t('mods.globalToggle')))))),
+        h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('mods.install.title')),
+          h('p', { className: 'dt-hint' }, t('mods.install.hint')),
+          h('div', { className: 'dt-mod-install' },
+            h('input', {
+              type: 'text',
+              value: installUrl,
+              placeholder: t('mods.install.placeholder'),
+              disabled: busy('install'),
+              onChange: (event) => setInstallUrl(event.target.value),
+              onKeyDown: (event) => { if (event.key === 'Enter') installFromGit() },
+            }),
+            h(Button, { size: 'sm', variant: 'outline', disabled: busy('install') || installUrl.trim() === '', onClick: installFromGit },
+              busy('install') ? t('mods.install.installing') : t('mods.install.button')),
+            h('label', { className: 'dt-toggle' },
+              h('input', {
+                type: 'checkbox',
+                checked: installForce,
+                onChange: (event) => setInstallForce(event.target.checked),
+              }),
+              h('span', null, t('mods.install.force')))),
+          installStatus ? h('p', { className: 'dt-hint' }, installStatus) : null),
+        h('section', { className: 'dt-settings-band' },
+          mods.length === 0
+            ? h('p', { className: 'dt-muted' }, t('mods.empty', { path: 'tavern/mods/' }))
+            : h('div', { className: 'dt-mod-list' }, mods.map((mod) => h('article', { key: mod.id, className: 'dt-mod-row' },
+              h('div', { className: 'dt-mod-row-head' },
+                h('strong', null, mod.name),
+                h('span', { className: 'dt-mod-meta' }, `v${mod.version} · ${mod.author}`),
+                h(Pill, { active: mod.status === 'loaded' }, t(`mods.status.${mod.status}`))),
+              h('p', { className: 'dt-mod-desc' }, mod.description),
+              h('div', { className: 'dt-mod-cap' },
+                h('span', { className: 'dt-mod-cap-label' }, t('mods.confirmCapabilities')),
+                (mod.capabilities || []).length === 0
+                  ? h('span', null, t('mods.capability.none'))
+                  : mod.capabilities.map((capability) => h(Pill, { key: capability }, t(`mods.capability.${capability}`)))),
+              mod.error ? h('p', { className: 'dt-error' }, mod.error) : null,
+              h('div', { className: 'dt-mod-actions' },
+                h('span', { className: 'dt-mod-meta' }, t('mods.auditCount', { count: mod.auditCount ?? 0 })),
+                mod.status === 'loaded'
+                  ? h(React.Fragment, null,
+                    mod.panel
+                      ? h(Button, { size: 'sm', variant: 'ghost', onClick: () => update({ panelSection: `mod:${mod.id}`, panelOpen: true }) }, t('mods.openPanel'))
+                      : null,
+                    h(Button, { size: 'sm', variant: 'outline', disabled: busy(mod.id), onClick: () => disableMod(mod) }, busy(mod.id) ? t('mods.busy') : t('mods.disable')),
+                    h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: busy(mod.id), onClick: () => reloadMod(mod) }, t('mods.reload')))
+                  : mod.status === 'disabled'
+                    ? h(Button, { size: 'sm', variant: 'outline', disabled: busy(mod.id) || !available, onClick: () => setConfirming(mod) }, busy(mod.id) ? t('mods.busy') : t('mods.enable'))
+                    : null)))),
+          error ? h('p', { className: 'dt-error' }, error) : null),
+        confirming
+          ? h(Modal, {
+            open: true,
+            onClose: () => setConfirming(null),
+            title: t('mods.confirmTitle', { name: confirming.name }),
+            closeLabel: t('panel.close'),
+          },
+            h('div', { className: 'dt-settings-band dt-mod-confirm' },
+              h('p', { className: 'dt-hint' }, t('mods.confirmBody')),
+              h('div', { className: 'dt-mod-cap' },
+                h('span', { className: 'dt-mod-cap-label' }, t('mods.confirmCapabilities')),
+                (confirming.capabilities || []).length === 0
+                  ? h('span', null, t('mods.capability.none'))
+                  : confirming.capabilities.map((capability) => h(Pill, { key: capability }, t(`mods.capability.${capability}`)))),
+              // §3.5：确认弹层展示声明的 hooks/tools/http 注册面。disabled mod
+              // 展示 manifest 声明（作者自查），loaded 展示实际注册名单。
+              h('p', { className: 'dt-hint' }, t('mods.confirmSurfacesHint')),
+              surfaceRows(confirming).map(({ label, entries }) => h('div', { key: label, className: 'dt-mod-cap' },
+                h('span', { className: 'dt-mod-cap-label' }, label),
+                entries.length === 0
+                  ? h('span', null, t('mods.confirmSurfacesNone'))
+                  : entries.map((entry, index) => h(Pill, { key: `${entry}:${index}` }, entry)))),
+              h('div', { className: 'dt-imports' },
+                h(Button, { variant: 'outline', onClick: () => setConfirming(null) }, t('panel.cancel')),
+                h(Button, {
+                  variant: 'primary',
+                  onClick: () => {
+                    const target = confirming
+                    setConfirming(null)
+                    enableMod(target)
+                  },
+                }, t('mods.enable')))))
+          : null)
+    }
+
     function TavernPanel({ ctx, useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -7628,20 +8004,10 @@ window.__ModuleLoader__.load({
       const stamp = state.bootstrap.version || state.bootstrap.commit
         ? `v${state.bootstrap.version || '?'}${state.bootstrap.commit ? ` (${state.bootstrap.commit})` : ''}`
         : ''
-      const body = section === 'overview' ? h(PanelOverview)
-        : section === 'characters' ? h(PanelCharacters, { ctx })
-        : section === 'chats' ? h(TavernSidebar, { ctx, useSessions })
-        : section === 'guides' ? h(PanelGuides, { useSessions })
-        : section === 'novels' ? h(PanelNovels, { ctx })
-        : section === 'groups' ? h(GroupBand)
-        : section === 'personas' ? h(PersonaBand)
-        : section === 'worlds' ? h(PanelWorlds)
-        : section === 'presets' ? h(PanelPresets)
-        : section === 'scripts' ? h(PanelScripts)
-        : section === 'regex' ? h(RegexBand)
-        : section === 'variables' ? h(PanelVariables, { useSessions })
-        : section === 'workbench' ? h(PanelWorkbench)
-        : h(PanelOverview)
+      // 分区经注册表解析：未知 section 回落到注册表首项（overview 必为首条
+      // 注册），与三元链时代 `: h(PanelOverview)` 的兜底等价。
+      const activeSection = panelSections.find((item) => item.id === section) ?? panelSections[0]
+      const body = activeSection.component({ ctx, useSessions })
       return h('div', { className: 'dt-panel' },
         h('nav', { className: 'dt-panel-nav', 'aria-label': t('panel.nav') },
           h('div', { className: 'dt-panel-brand' },
@@ -7649,16 +8015,16 @@ window.__ModuleLoader__.load({
             h('div', { className: 'dt-panel-brand-copy' },
               h('strong', null, 'Tavern'),
               stamp ? h('span', null, stamp) : null)),
-          PANEL_SECTIONS.map((item) => h('button', {
+          panelSections.map((item) => h('button', {
             key: item.id,
             type: 'button',
             className: `dt-panel-navcell ${section === item.id ? 'dt-panel-navcell-active' : ''}`,
             'aria-current': section === item.id ? 'page' : undefined,
             onClick: () => update({ panelSection: item.id }),
-          }, h(item.icon), h('span', null, t(`panel.section.${item.id}`))))),
+          }, h(item.icon), h('span', null, item.label(t))))),
         h('div', { className: 'dt-panel-main' },
           h('header', { className: 'dt-panel-header' },
-            h('h2', null, t(`panel.section.${PANEL_SECTIONS.some((item) => item.id === section) ? section : 'overview'}`)),
+            h('h2', null, activeSection.label(t)),
             h('button', {
               type: 'button',
               className: 'dt-panel-close',
@@ -8107,6 +8473,20 @@ window.__ModuleLoader__.load({
         .dt-workbench-old,.dt-workbench-new{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.55;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;padding:6px 8px;max-height:160px;overflow-y:auto;background:var(--dsw-alias-bg-sunken,var(--dsw-alias-bg-base))}
         .dt-workbench-old{color:var(--dsw-alias-label-secondary)}
         .dt-workbench-note{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+        .dt-mod-list{display:flex;flex-direction:column;gap:10px}
+        .dt-mod-row{display:flex;flex-direction:column;gap:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:10px}
+        .dt-mod-row-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+        .dt-mod-row-head>strong{min-width:0;overflow-wrap:anywhere}
+        .dt-mod-meta{color:var(--dsw-alias-label-tertiary);font-size:11px}
+        .dt-mod-desc{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.55}
+        .dt-mod-cap{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px}
+        .dt-mod-cap-label{color:var(--dsw-alias-label-tertiary)}
+        .dt-mod-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+        .dt-mod-actions>.dt-mod-meta{margin-right:auto}
+        .dt-mod-confirm{display:flex;flex-direction:column;gap:12px;max-width:420px}
+        .dt-mod-install{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+        .dt-mod-install>input[type=text]{flex:1;min-width:220px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:6px 9px;font:inherit;font-size:12px}
+        .dt-mod-surface{border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
       `
       document.head.appendChild(tag)
     }

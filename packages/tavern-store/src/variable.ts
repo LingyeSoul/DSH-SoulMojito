@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
+import { writeAtomicText } from './fs-atomic.js'
 
 export type VariableScope = 'turn' | 'chat' | 'character' | 'agent' | 'global'
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
@@ -157,7 +158,7 @@ export class VariableStore {
     await fs.mkdir(path.dirname(target), { recursive: true })
     const text = `${JSON.stringify(file)}\n`
     if (Buffer.byteLength(text, 'utf8') > MAX_SCOPE_BYTES) throw new Error('variable scope exceeds size limit')
-    await writeAtomic(target, text)
+    await writeAtomicText(target, text)
   }
 
   private filePath(scope: VariableScope, scopeId: string): string {
@@ -236,10 +237,4 @@ function validateValue(value: JsonValue): void {
 function safeSegment(value: string): string {
   if (value === '.' || value === '..' || /[\\/\0]/.test(value)) throw new Error('invalid variable path segment')
   return encodeURIComponent(value)
-}
-
-async function writeAtomic(file: string, text: string): Promise<void> {
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-  await fs.writeFile(tmp, text, 'utf8')
-  await fs.rename(tmp, file)
 }

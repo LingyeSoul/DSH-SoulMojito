@@ -58,6 +58,7 @@ import { novelScopeId } from './scope.js'
 import { dshHomePath } from '../dsh-home.js'
 import { AGENT_PRESET_BLOCK_HEADER } from '../agent-tavern/preset.js'
 import { mountPresetProjection } from '../preset-mount.js'
+import { mountModExtensions } from '../mods/agent-mount.js'
 
 export const name = 'dsh-tavern/novel'
 export const inject = ['systemPrompt', 'tools']
@@ -119,6 +120,9 @@ export function apply(ctx: AgentContextLike): void {
     if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool), `dsh-tavern:novel:${tool.name}`)
     else ctx.tools?.register?.(tool)
   }
+  // Mod 扩展面（提案 0015 §3.4「Mod 工具同理进入 AgentTavern/AgentNovel 工具
+  // 面」+ §3.6 P2）：与 agent.ts 同款吸收器，经本 bundle 的 ctx 注册。
+  mountModExtensions(ctx, { claimTools: tools.map((tool) => tool.name) })
 }
 
 export interface AgentContextLike {

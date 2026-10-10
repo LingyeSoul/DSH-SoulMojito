@@ -1,4 +1,5 @@
 export * from './store.js'
+export * from './fs-atomic.js'
 export * from './memory.js'
 export * from './variable.js'
 export * from './novel-model.js'

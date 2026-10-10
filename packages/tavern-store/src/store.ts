@@ -19,6 +19,9 @@
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
+// 原子写统一实现（fs-atomic.ts）：唯一 tmp 名 + Windows 瞬态 rename 重试
+// （2290eb0 的重试逻辑原样迁入，全包自建 writeAtomic 的收敛点）。
+import { writeAtomicBytes } from './fs-atomic.js'
 import {
   decodeCharacterCard,
   decodeCharx,
@@ -137,6 +140,13 @@ export interface TavernState {
    * （profile patch）> 会话路由。undefined 表示未覆盖。
    */
   compaction?: TavernCompactionOverride
+  /**
+   * Mod 全局开关（提案 0015 §3.2 三层开关的第二层）：默认 false。与逐 Mod 的
+   * mods.enabled.<id>（第三层 env 硬关之外的两层 state 开关）同时开启才会装载。
+   */
+  modsEnabled?: boolean
+  /** 逐 Mod 启用表（提案 0015 §3.2）：键是 mod id，值为 true 才算启用。 */
+  mods?: { enabled?: Record<string, boolean> }
 }
 
 /** 面板可写的压缩设置；provider/model 必须成对出现，空串视为未设置。 */
@@ -195,6 +205,20 @@ const DEFAULT_STATE: TavernState = {
   chats: {},
   regexScripts: [],
   scriptGlobals: {},
+  modsEnabled: false,
+  mods: { enabled: {} },
+}
+
+/** mods.enabled 只保留显式 true 的项（手改 state.json 的容错）。 */
+function normalizeModEnables(value: unknown): Record<string, boolean> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const enabled = (value as { enabled?: unknown }).enabled
+  if (typeof enabled !== 'object' || enabled === null || Array.isArray(enabled)) return {}
+  const result: Record<string, boolean> = {}
+  for (const [id, flag] of Object.entries(enabled)) {
+    if (flag === true) result[id] = true
+  }
+  return result
 }
 
 export class TavernStore {
@@ -760,6 +784,9 @@ export class TavernStore {
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
       compaction: normalizeCompactionOverride(parsed.compaction),
+      // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false，只有显式 true 才开。
+      modsEnabled: parsed.modsEnabled === true,
+      mods: { enabled: normalizeModEnables(parsed.mods) },
     }
   }
 
@@ -803,28 +830,7 @@ export class TavernStore {
   }
 
   private async writeAtomic(file: string, bytes: Uint8Array): Promise<void> {
-    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-    await fs.writeFile(tmp, bytes)
-    await renameWithWindowsRetry(tmp, file)
-  }
-}
-
-/**
- * Windows 下 rename 的目标被并发读取句柄短暂占用（本进程内 getState 的
- * readFile 与 updateState 的 rename 不互斥）会抛 EPERM/EACCES/EBUSY——
- * 短退避重试即可收敛，占用方是毫秒级的读句柄；非占用类错误原样上抛。
- * Linux/macOS 的 rename 不受打开句柄影响，首次即成功，重试路径不生效。
- */
-async function renameWithWindowsRetry(from: string, to: string, attempts = 5): Promise<void> {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await fs.rename(from, to)
-      return
-    } catch (cause) {
-      const code = (cause as NodeJS.ErrnoException).code
-      if (attempt >= attempts || (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY' && code !== 'ENOTEMPTY')) throw cause
-      await new Promise((resolve) => setTimeout(resolve, 10 * attempt))
-    }
+    await writeAtomicBytes(file, bytes)
   }
 }
 

@@ -1,0 +1,10 @@
+{
+  "id": "dsh-tavern.asset-stats",
+  "name": "Asset Stats",
+  "version": "1.0.0",
+  "author": "dsh-tavern",
+  "description": "Read-only inventory statistics over characters, worlds, presets, personas, groups and chats, exposed as JSON at GET /api/dsh-tavern/mods/dsh-tavern.asset-stats/stats.",
+  "main": "index.mjs",
+  "loadingOrder": 100,
+  "capabilities": ["storage"]
+}

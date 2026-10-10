@@ -59,8 +59,29 @@ function dshHomePath(...segments) {
 
 // packages/tavern-store/src/store.ts
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { promises as fs2 } from "node:fs";
 import * as path from "node:path";
+
+// packages/tavern-store/src/fs-atomic.ts
+import { promises as fs } from "node:fs";
+var tmpCounter = 0;
+async function writeAtomicBytes(file, bytes) {
+  const tmp = `${file}.${process.pid}.${Date.now()}.${tmpCounter++}.tmp`;
+  await fs.writeFile(tmp, bytes);
+  await renameWithWindowsRetry(tmp, file);
+}
+async function renameWithWindowsRetry(from, to, attempts = 5) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (cause) {
+      const code = cause.code;
+      if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
+      await new Promise((resolve2) => setTimeout(resolve2, 10 * attempt));
+    }
+  }
+}
 
 // packages/tavern-format/lib/png.js
 var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -1887,8 +1908,20 @@ var DEFAULT_STATE = {
   modelSelections: {},
   chats: {},
   regexScripts: [],
-  scriptGlobals: {}
+  scriptGlobals: {},
+  modsEnabled: false,
+  mods: { enabled: {} }
 };
+function normalizeModEnables(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const enabled = value.enabled;
+  if (typeof enabled !== "object" || enabled === null || Array.isArray(enabled)) return {};
+  const result = {};
+  for (const [id, flag] of Object.entries(enabled)) {
+    if (flag === true) result[id] = true;
+  }
+  return result;
+}
 var TavernStore = class _TavernStore {
   constructor(root) {
     this.root = root;
@@ -1897,7 +1930,7 @@ var TavernStore = class _TavernStore {
   stateMutationTail = Promise.resolve();
   static async open(root) {
     for (const dir of ["characters", "worlds", "presets", "chats", "personas", "groups", "personas/avatars"]) {
-      await fs.mkdir(path.join(root, dir), { recursive: true });
+      await fs2.mkdir(path.join(root, dir), { recursive: true });
     }
     return new _TavernStore(root);
   }
@@ -1915,7 +1948,7 @@ var TavernStore = class _TavernStore {
       hash.update(`${dir}
 `);
       for (const name2 of (await this.listDir(dir)).sort()) {
-        const stat = await fs.stat(path.join(this.root, dir, name2)).catch(() => void 0);
+        const stat = await fs2.stat(path.join(this.root, dir, name2)).catch(() => void 0);
         hash.update(`${name2}\0${stat === void 0 ? "missing" : `${stat.size}\0${stat.mtimeMs}`}
 `);
       }
@@ -1960,7 +1993,7 @@ var TavernStore = class _TavernStore {
     const stem = safeFileName(card.data.name);
     const fileName = `${stem}.${kind}`;
     await this.writeAtomic(path.join(this.root, "characters", fileName), bytes);
-    await Promise.all(["png", "json", "charx"].filter((other) => other !== kind).map((other) => fs.rm(path.join(this.root, "characters", `${stem}.${other}`), { force: true })));
+    await Promise.all(["png", "json", "charx"].filter((other) => other !== kind).map((other) => fs2.rm(path.join(this.root, "characters", `${stem}.${other}`), { force: true })));
     return { fileName, card, importedWorld, importedRegex };
   }
   /**
@@ -1995,12 +2028,12 @@ var TavernStore = class _TavernStore {
     const file = await this.getCharacter(name2);
     if (file === void 0) throw new Error(`character '${name2}' not found`);
     if (file.kind === "png") {
-      const bytes = await fs.readFile(path.join(this.root, "characters", file.fileName));
+      const bytes = await fs2.readFile(path.join(this.root, "characters", file.fileName));
       if (template === void 0) return bytes;
       return encodeCharacterCardPng(file.card, bytes);
     }
     if (file.kind === "charx" && template === void 0) {
-      return new Uint8Array(await fs.readFile(path.join(this.root, "characters", file.fileName)));
+      return new Uint8Array(await fs2.readFile(path.join(this.root, "characters", file.fileName)));
     }
     if (template !== void 0) return encodeCharacterCardPng(file.card, template);
     return new Uint8Array(Buffer.from(JSON.stringify(encodeCharacterCardJson(file.card), null, 2), "utf8"));
@@ -2031,7 +2064,7 @@ var TavernStore = class _TavernStore {
     }
     let bytes;
     let kind = current.kind;
-    const original = new Uint8Array(await fs.readFile(path.join(this.root, "characters", current.fileName)));
+    const original = new Uint8Array(await fs2.readFile(path.join(this.root, "characters", current.fileName)));
     if (current.kind === "png") {
       bytes = encodeCharacterCardPng(card, original);
     } else if (current.kind === "charx") {
@@ -2042,22 +2075,22 @@ var TavernStore = class _TavernStore {
     }
     await this.writeAtomic(path.join(this.root, "characters", `${nextStem}.${kind}`), bytes);
     if (currentStem !== nextStem || current.kind !== kind) {
-      await fs.rm(path.join(this.root, "characters", current.fileName), { force: true });
+      await fs2.rm(path.join(this.root, "characters", current.fileName), { force: true });
     }
     if (currentStem !== nextStem) {
       try {
-        await fs.access(path.join(this.root, "chats", nextStem));
+        await fs2.access(path.join(this.root, "chats", nextStem));
       } catch (cause) {
         if (cause.code !== "ENOENT") throw cause;
         try {
-          await fs.rename(path.join(this.root, "chats", currentStem), path.join(this.root, "chats", nextStem));
+          await fs2.rename(path.join(this.root, "chats", currentStem), path.join(this.root, "chats", nextStem));
         } catch (renameCause) {
           if (renameCause.code !== "ENOENT") throw renameCause;
         }
       }
     }
     for (const other of ["png", "json", "charx"].filter((other2) => other2 !== kind)) {
-      await fs.rm(path.join(this.root, "characters", `${nextStem}.${other}`), { force: true });
+      await fs2.rm(path.join(this.root, "characters", `${nextStem}.${other}`), { force: true });
     }
     const saved = await this.getCharacter(card.data.name);
     if (saved === void 0) throw new Error(`character '${card.data.name}' could not be reloaded`);
@@ -2071,7 +2104,7 @@ var TavernStore = class _TavernStore {
     for (const kind of ["png", "charx", "json"]) {
       const fileName = `${safeFileName(name2)}.${kind}`;
       try {
-        const bytes = new Uint8Array(await fs.readFile(path.join(this.root, "characters", fileName)));
+        const bytes = new Uint8Array(await fs2.readFile(path.join(this.root, "characters", fileName)));
         const card = kind === "png" ? decodeCharacterCard(bytes) : kind === "charx" ? decodeCharx(bytes).card : decodeCharacterCard(JSON.parse(Buffer.from(bytes).toString("utf8")));
         return { fileName, kind, card };
       } catch (cause) {
@@ -2085,14 +2118,14 @@ var TavernStore = class _TavernStore {
     for (const kind of ["png", "json", "charx"]) {
       const file = path.join(this.root, "characters", `${safeFileName(name2)}.${kind}`);
       try {
-        await fs.unlink(file);
+        await fs2.unlink(file);
         deleted = true;
       } catch (cause) {
         if (cause.code !== "ENOENT") throw cause;
       }
     }
     if (deleted) {
-      await fs.rm(path.join(this.root, "chats", safeFileName(name2)), { recursive: true, force: true });
+      await fs2.rm(path.join(this.root, "chats", safeFileName(name2)), { recursive: true, force: true });
     }
     return deleted;
   }
@@ -2124,13 +2157,13 @@ var TavernStore = class _TavernStore {
     return jsonBytes(serializeWorldInfoFile(book));
   }
   async deleteWorld(name2) {
-    await fs.rm(path.join(this.root, "worlds", `${safeFileName(name2)}.json`), { force: true });
+    await fs2.rm(path.join(this.root, "worlds", `${safeFileName(name2)}.json`), { force: true });
   }
   /* ------------------------------ 聊天 ------------------------------ */
   async createChat(characterName, header, messages = []) {
     return this.mutateChat(async () => {
       const dir = path.join(this.root, "chats", safeFileName(characterName));
-      await fs.mkdir(dir, { recursive: true });
+      await fs2.mkdir(dir, { recursive: true });
       const id = `${timestamp()}.jsonl`;
       await this.writeAtomic(path.join(dir, id), chatBytes({ header, messages }));
       return id;
@@ -2160,7 +2193,7 @@ var TavernStore = class _TavernStore {
   async listChats(characterName) {
     const dir = path.join(this.root, "chats", safeFileName(characterName));
     try {
-      const files = await fs.readdir(dir);
+      const files = await fs2.readdir(dir);
       return files.filter((f) => f.endsWith(".jsonl")).sort();
     } catch (cause) {
       if (cause.code === "ENOENT") return [];
@@ -2175,7 +2208,7 @@ var TavernStore = class _TavernStore {
       await this.assertChatRevision(source, expectedRevision);
       if (source === target) return;
       if (await this.tryRead(target)) throw new Error(`chat '${nextChatId}' already exists`);
-      await fs.rename(source, target);
+      await fs2.rename(source, target);
     });
   }
   async deleteChat(characterName, chatId, expectedRevision) {
@@ -2183,7 +2216,7 @@ var TavernStore = class _TavernStore {
       const file = path.join(this.root, "chats", safeFileName(characterName), safeChatFileName(chatId));
       try {
         await this.assertChatRevision(file, expectedRevision);
-        await fs.unlink(file);
+        await fs2.unlink(file);
         return true;
       } catch (cause) {
         if (cause.code === "ENOENT") return false;
@@ -2208,7 +2241,7 @@ var TavernStore = class _TavernStore {
     return files.filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort();
   }
   async deleteGroup(name2) {
-    await fs.rm(path.join(this.root, "groups", `${safeFileName(name2)}.json`), { force: true });
+    await fs2.rm(path.join(this.root, "groups", `${safeFileName(name2)}.json`), { force: true });
   }
   /* ------------------------------ 预设 ------------------------------ */
   /** 预设按原样 JSON 存取（含采样参数与 prompts/prompt_order 全量）。 */
@@ -2230,7 +2263,7 @@ var TavernStore = class _TavernStore {
     return files.filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort();
   }
   async deletePreset(name2) {
-    await fs.rm(path.join(this.root, "presets", `${safeFileName(name2)}.json`), { force: true });
+    await fs2.rm(path.join(this.root, "presets", `${safeFileName(name2)}.json`), { force: true });
   }
   /* ----------------------------- persona ----------------------------- */
   async putPersona(persona, avatar) {
@@ -2272,12 +2305,12 @@ var TavernStore = class _TavernStore {
     const json = path.join(this.root, "personas", `${safeFileName(name2)}.json`);
     const avatar = path.join(this.root, "personas", "avatars", `${safeFileName(name2)}.png`);
     try {
-      await fs.unlink(json);
+      await fs2.unlink(json);
       deleted = true;
     } catch (cause) {
       if (cause.code !== "ENOENT") throw cause;
     }
-    await fs.rm(avatar, { force: true });
+    await fs2.rm(avatar, { force: true });
     return deleted;
   }
   /* ------------------------------ 分支 ------------------------------ */
@@ -2364,7 +2397,10 @@ var TavernStore = class _TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
-      compaction: normalizeCompactionOverride(parsed.compaction)
+      compaction: normalizeCompactionOverride(parsed.compaction),
+      // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false，只有显式 true 才开。
+      modsEnabled: parsed.modsEnabled === true,
+      mods: { enabled: normalizeModEnables(parsed.mods) }
     };
   }
   async assertChatRevision(file, expectedRevision) {
@@ -2393,7 +2429,7 @@ var TavernStore = class _TavernStore {
   }
   async listDir(dir) {
     try {
-      return await fs.readdir(path.join(this.root, dir));
+      return await fs2.readdir(path.join(this.root, dir));
     } catch (cause) {
       if (cause.code === "ENOENT") return [];
       throw cause;
@@ -2401,30 +2437,16 @@ var TavernStore = class _TavernStore {
   }
   async tryRead(file) {
     try {
-      return new Uint8Array(await fs.readFile(file));
+      return new Uint8Array(await fs2.readFile(file));
     } catch (cause) {
       if (cause.code === "ENOENT") return void 0;
       throw cause;
     }
   }
   async writeAtomic(file, bytes) {
-    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(tmp, bytes);
-    await renameWithWindowsRetry(tmp, file);
+    await writeAtomicBytes(file, bytes);
   }
 };
-async function renameWithWindowsRetry(from, to, attempts = 5) {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await fs.rename(from, to);
-      return;
-    } catch (cause) {
-      const code = cause.code;
-      if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
-      await new Promise((resolve2) => setTimeout(resolve2, 10 * attempt));
-    }
-  }
-}
 function normalizeTavernSessionBinding(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
   const candidate = value;

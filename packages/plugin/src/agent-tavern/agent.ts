@@ -27,6 +27,7 @@ import { appendMvuAudit } from './projector.js'
 import { createHostPromptExpander, hostPromptSafe, seededRandom } from '../prompt-safety.js'
 import { boundedStringArg, clampInt, limitText, stringArg } from '../tool-args.js'
 import { createLazyProjection } from '../lazy-projection.js'
+import { mountModExtensions } from '../mods/agent-mount.js'
 import {
   boundScriptOf,
   getScript,
@@ -126,6 +127,12 @@ export function apply(ctx: AgentContextLike): void {
     if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool), `dsh-tavern:agent:${tool.name}`)
     else ctx.tools?.register?.(tool)
   }
+  // Mod 扩展面（提案 0015 §3.6 P2）：吸收跨 bundle 注册表快照（工具 + prompt
+  // section）并订阅 mods-changed 增量。经本 bundle 的 ctx 注册（挂载域语义下的
+  // 唯一正确路线，见 mods/agent-mount.ts 文档）；内置工具名运行时认领进查重
+  // 保留集。apply 可能被宿主重复调用（每次 recompose），每次挂载独立同步、
+  // effect 清理时反注册。
+  mountModExtensions(ctx, { claimTools: tools.map((tool) => tool.name) })
 }
 
 export interface AgentContextLike {

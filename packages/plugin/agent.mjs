@@ -3,8 +3,32 @@
 
 // packages/tavern-store/src/store.ts
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { promises as fs2 } from "node:fs";
 import * as path from "node:path";
+
+// packages/tavern-store/src/fs-atomic.ts
+import { promises as fs } from "node:fs";
+var tmpCounter = 0;
+async function writeAtomicBytes(file, bytes) {
+  const tmp = `${file}.${process.pid}.${Date.now()}.${tmpCounter++}.tmp`;
+  await fs.writeFile(tmp, bytes);
+  await renameWithWindowsRetry(tmp, file);
+}
+async function writeAtomicText(file, text) {
+  await writeAtomicBytes(file, new Uint8Array(Buffer.from(text, "utf8")));
+}
+async function renameWithWindowsRetry(from, to, attempts = 5) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (cause) {
+      const code = cause.code;
+      if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
+      await new Promise((resolve2) => setTimeout(resolve2, 10 * attempt));
+    }
+  }
+}
 
 // packages/tavern-format/lib/png.js
 var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -1831,8 +1855,20 @@ var DEFAULT_STATE = {
   modelSelections: {},
   chats: {},
   regexScripts: [],
-  scriptGlobals: {}
+  scriptGlobals: {},
+  modsEnabled: false,
+  mods: { enabled: {} }
 };
+function normalizeModEnables(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const enabled = value.enabled;
+  if (typeof enabled !== "object" || enabled === null || Array.isArray(enabled)) return {};
+  const result = {};
+  for (const [id, flag] of Object.entries(enabled)) {
+    if (flag === true) result[id] = true;
+  }
+  return result;
+}
 var TavernStore = class _TavernStore {
   constructor(root) {
     this.root = root;
@@ -1841,7 +1877,7 @@ var TavernStore = class _TavernStore {
   stateMutationTail = Promise.resolve();
   static async open(root) {
     for (const dir of ["characters", "worlds", "presets", "chats", "personas", "groups", "personas/avatars"]) {
-      await fs.mkdir(path.join(root, dir), { recursive: true });
+      await fs2.mkdir(path.join(root, dir), { recursive: true });
     }
     return new _TavernStore(root);
   }
@@ -1859,7 +1895,7 @@ var TavernStore = class _TavernStore {
       hash.update(`${dir}
 `);
       for (const name2 of (await this.listDir(dir)).sort()) {
-        const stat = await fs.stat(path.join(this.root, dir, name2)).catch(() => void 0);
+        const stat = await fs2.stat(path.join(this.root, dir, name2)).catch(() => void 0);
         hash.update(`${name2}\0${stat === void 0 ? "missing" : `${stat.size}\0${stat.mtimeMs}`}
 `);
       }
@@ -1904,7 +1940,7 @@ var TavernStore = class _TavernStore {
     const stem = safeFileName(card.data.name);
     const fileName = `${stem}.${kind}`;
     await this.writeAtomic(path.join(this.root, "characters", fileName), bytes);
-    await Promise.all(["png", "json", "charx"].filter((other) => other !== kind).map((other) => fs.rm(path.join(this.root, "characters", `${stem}.${other}`), { force: true })));
+    await Promise.all(["png", "json", "charx"].filter((other) => other !== kind).map((other) => fs2.rm(path.join(this.root, "characters", `${stem}.${other}`), { force: true })));
     return { fileName, card, importedWorld, importedRegex };
   }
   /**
@@ -1939,12 +1975,12 @@ var TavernStore = class _TavernStore {
     const file = await this.getCharacter(name2);
     if (file === void 0) throw new Error(`character '${name2}' not found`);
     if (file.kind === "png") {
-      const bytes = await fs.readFile(path.join(this.root, "characters", file.fileName));
+      const bytes = await fs2.readFile(path.join(this.root, "characters", file.fileName));
       if (template === void 0) return bytes;
       return encodeCharacterCardPng(file.card, bytes);
     }
     if (file.kind === "charx" && template === void 0) {
-      return new Uint8Array(await fs.readFile(path.join(this.root, "characters", file.fileName)));
+      return new Uint8Array(await fs2.readFile(path.join(this.root, "characters", file.fileName)));
     }
     if (template !== void 0) return encodeCharacterCardPng(file.card, template);
     return new Uint8Array(Buffer.from(JSON.stringify(encodeCharacterCardJson(file.card), null, 2), "utf8"));
@@ -1975,7 +2011,7 @@ var TavernStore = class _TavernStore {
     }
     let bytes;
     let kind = current.kind;
-    const original = new Uint8Array(await fs.readFile(path.join(this.root, "characters", current.fileName)));
+    const original = new Uint8Array(await fs2.readFile(path.join(this.root, "characters", current.fileName)));
     if (current.kind === "png") {
       bytes = encodeCharacterCardPng(card, original);
     } else if (current.kind === "charx") {
@@ -1986,22 +2022,22 @@ var TavernStore = class _TavernStore {
     }
     await this.writeAtomic(path.join(this.root, "characters", `${nextStem}.${kind}`), bytes);
     if (currentStem !== nextStem || current.kind !== kind) {
-      await fs.rm(path.join(this.root, "characters", current.fileName), { force: true });
+      await fs2.rm(path.join(this.root, "characters", current.fileName), { force: true });
     }
     if (currentStem !== nextStem) {
       try {
-        await fs.access(path.join(this.root, "chats", nextStem));
+        await fs2.access(path.join(this.root, "chats", nextStem));
       } catch (cause) {
         if (cause.code !== "ENOENT") throw cause;
         try {
-          await fs.rename(path.join(this.root, "chats", currentStem), path.join(this.root, "chats", nextStem));
+          await fs2.rename(path.join(this.root, "chats", currentStem), path.join(this.root, "chats", nextStem));
         } catch (renameCause) {
           if (renameCause.code !== "ENOENT") throw renameCause;
         }
       }
     }
     for (const other of ["png", "json", "charx"].filter((other2) => other2 !== kind)) {
-      await fs.rm(path.join(this.root, "characters", `${nextStem}.${other}`), { force: true });
+      await fs2.rm(path.join(this.root, "characters", `${nextStem}.${other}`), { force: true });
     }
     const saved = await this.getCharacter(card.data.name);
     if (saved === void 0) throw new Error(`character '${card.data.name}' could not be reloaded`);
@@ -2015,7 +2051,7 @@ var TavernStore = class _TavernStore {
     for (const kind of ["png", "charx", "json"]) {
       const fileName = `${safeFileName(name2)}.${kind}`;
       try {
-        const bytes = new Uint8Array(await fs.readFile(path.join(this.root, "characters", fileName)));
+        const bytes = new Uint8Array(await fs2.readFile(path.join(this.root, "characters", fileName)));
         const card = kind === "png" ? decodeCharacterCard(bytes) : kind === "charx" ? decodeCharx(bytes).card : decodeCharacterCard(JSON.parse(Buffer.from(bytes).toString("utf8")));
         return { fileName, kind, card };
       } catch (cause) {
@@ -2029,14 +2065,14 @@ var TavernStore = class _TavernStore {
     for (const kind of ["png", "json", "charx"]) {
       const file = path.join(this.root, "characters", `${safeFileName(name2)}.${kind}`);
       try {
-        await fs.unlink(file);
+        await fs2.unlink(file);
         deleted = true;
       } catch (cause) {
         if (cause.code !== "ENOENT") throw cause;
       }
     }
     if (deleted) {
-      await fs.rm(path.join(this.root, "chats", safeFileName(name2)), { recursive: true, force: true });
+      await fs2.rm(path.join(this.root, "chats", safeFileName(name2)), { recursive: true, force: true });
     }
     return deleted;
   }
@@ -2068,13 +2104,13 @@ var TavernStore = class _TavernStore {
     return jsonBytes(serializeWorldInfoFile(book));
   }
   async deleteWorld(name2) {
-    await fs.rm(path.join(this.root, "worlds", `${safeFileName(name2)}.json`), { force: true });
+    await fs2.rm(path.join(this.root, "worlds", `${safeFileName(name2)}.json`), { force: true });
   }
   /* ------------------------------ 聊天 ------------------------------ */
   async createChat(characterName, header, messages = []) {
     return this.mutateChat(async () => {
       const dir = path.join(this.root, "chats", safeFileName(characterName));
-      await fs.mkdir(dir, { recursive: true });
+      await fs2.mkdir(dir, { recursive: true });
       const id = `${timestamp()}.jsonl`;
       await this.writeAtomic(path.join(dir, id), chatBytes({ header, messages }));
       return id;
@@ -2104,7 +2140,7 @@ var TavernStore = class _TavernStore {
   async listChats(characterName) {
     const dir = path.join(this.root, "chats", safeFileName(characterName));
     try {
-      const files = await fs.readdir(dir);
+      const files = await fs2.readdir(dir);
       return files.filter((f) => f.endsWith(".jsonl")).sort();
     } catch (cause) {
       if (cause.code === "ENOENT") return [];
@@ -2119,7 +2155,7 @@ var TavernStore = class _TavernStore {
       await this.assertChatRevision(source, expectedRevision);
       if (source === target) return;
       if (await this.tryRead(target)) throw new Error(`chat '${nextChatId}' already exists`);
-      await fs.rename(source, target);
+      await fs2.rename(source, target);
     });
   }
   async deleteChat(characterName, chatId, expectedRevision) {
@@ -2127,7 +2163,7 @@ var TavernStore = class _TavernStore {
       const file = path.join(this.root, "chats", safeFileName(characterName), safeChatFileName(chatId));
       try {
         await this.assertChatRevision(file, expectedRevision);
-        await fs.unlink(file);
+        await fs2.unlink(file);
         return true;
       } catch (cause) {
         if (cause.code === "ENOENT") return false;
@@ -2152,7 +2188,7 @@ var TavernStore = class _TavernStore {
     return files.filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort();
   }
   async deleteGroup(name2) {
-    await fs.rm(path.join(this.root, "groups", `${safeFileName(name2)}.json`), { force: true });
+    await fs2.rm(path.join(this.root, "groups", `${safeFileName(name2)}.json`), { force: true });
   }
   /* ------------------------------ 预设 ------------------------------ */
   /** 预设按原样 JSON 存取（含采样参数与 prompts/prompt_order 全量）。 */
@@ -2174,7 +2210,7 @@ var TavernStore = class _TavernStore {
     return files.filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort();
   }
   async deletePreset(name2) {
-    await fs.rm(path.join(this.root, "presets", `${safeFileName(name2)}.json`), { force: true });
+    await fs2.rm(path.join(this.root, "presets", `${safeFileName(name2)}.json`), { force: true });
   }
   /* ----------------------------- persona ----------------------------- */
   async putPersona(persona, avatar) {
@@ -2216,12 +2252,12 @@ var TavernStore = class _TavernStore {
     const json = path.join(this.root, "personas", `${safeFileName(name2)}.json`);
     const avatar = path.join(this.root, "personas", "avatars", `${safeFileName(name2)}.png`);
     try {
-      await fs.unlink(json);
+      await fs2.unlink(json);
       deleted = true;
     } catch (cause) {
       if (cause.code !== "ENOENT") throw cause;
     }
-    await fs.rm(avatar, { force: true });
+    await fs2.rm(avatar, { force: true });
     return deleted;
   }
   /* ------------------------------ 分支 ------------------------------ */
@@ -2308,7 +2344,10 @@ var TavernStore = class _TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
-      compaction: normalizeCompactionOverride(parsed.compaction)
+      compaction: normalizeCompactionOverride(parsed.compaction),
+      // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false，只有显式 true 才开。
+      modsEnabled: parsed.modsEnabled === true,
+      mods: { enabled: normalizeModEnables(parsed.mods) }
     };
   }
   async assertChatRevision(file, expectedRevision) {
@@ -2337,7 +2376,7 @@ var TavernStore = class _TavernStore {
   }
   async listDir(dir) {
     try {
-      return await fs.readdir(path.join(this.root, dir));
+      return await fs2.readdir(path.join(this.root, dir));
     } catch (cause) {
       if (cause.code === "ENOENT") return [];
       throw cause;
@@ -2345,30 +2384,16 @@ var TavernStore = class _TavernStore {
   }
   async tryRead(file) {
     try {
-      return new Uint8Array(await fs.readFile(file));
+      return new Uint8Array(await fs2.readFile(file));
     } catch (cause) {
       if (cause.code === "ENOENT") return void 0;
       throw cause;
     }
   }
   async writeAtomic(file, bytes) {
-    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(tmp, bytes);
-    await renameWithWindowsRetry(tmp, file);
+    await writeAtomicBytes(file, bytes);
   }
 };
-async function renameWithWindowsRetry(from, to, attempts = 5) {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await fs.rename(from, to);
-      return;
-    } catch (cause) {
-      const code = cause.code;
-      if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
-      await new Promise((resolve2) => setTimeout(resolve2, 10 * attempt));
-    }
-  }
-}
 function normalizeTavernSessionBinding(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
   const candidate = value;
@@ -2455,7 +2480,7 @@ function jsonBytes(obj) {
 
 // packages/tavern-store/src/memory.ts
 import { createHash as createHash2, randomUUID } from "node:crypto";
-import { promises as fs2 } from "node:fs";
+import { promises as fs3 } from "node:fs";
 import * as path2 from "node:path";
 var MemoryRevisionConflictError = class extends Error {
   constructor(id, expectedRevision, actualRevision) {
@@ -2479,8 +2504,8 @@ var MemoryStore = class _MemoryStore {
   }
   mutationTail = Promise.resolve();
   static async open(root) {
-    await fs2.mkdir(path2.join(root, "memories"), { recursive: true });
-    await fs2.mkdir(path2.join(root, "memory-audit"), { recursive: true });
+    await fs3.mkdir(path2.join(root, "memories"), { recursive: true });
+    await fs3.mkdir(path2.join(root, "memory-audit"), { recursive: true });
     return new _MemoryStore(root);
   }
   async search(query) {
@@ -2604,7 +2629,7 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
   }
   async readJson(file) {
     try {
-      const parsed = JSON.parse(await fs2.readFile(file, "utf8"));
+      const parsed = JSON.parse(await fs3.readFile(file, "utf8"));
       validateRecord(parsed);
       return parsed;
     } catch (cause) {
@@ -2617,8 +2642,8 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
   }
   async writeRecord(record) {
     const file = this.recordPath(record.id, record.scope, record.scopeId);
-    await fs2.mkdir(path2.dirname(file), { recursive: true });
-    await writeAtomic(file, `${JSON.stringify(record)}
+    await fs3.mkdir(path2.dirname(file), { recursive: true });
+    await writeAtomicText(file, `${JSON.stringify(record)}
 `);
   }
   recordPath(id, scope, scopeId) {
@@ -2627,7 +2652,7 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
   }
   async audit(action, record) {
     const line = JSON.stringify({ action, id: record.id, scope: record.scope, scopeId: record.scopeId, revision: record.revision, at: record.updatedAt });
-    await fs2.appendFile(path2.join(this.root, "memory-audit", `${record.scope}.jsonl`), `${line}
+    await fs3.appendFile(path2.join(this.root, "memory-audit", `${record.scope}.jsonl`), `${line}
 `, "utf8");
   }
   mutate(operation) {
@@ -2707,7 +2732,7 @@ function safeSegment(value) {
 }
 async function readDirectories(root) {
   try {
-    const entries = await fs2.readdir(root, { withFileTypes: true });
+    const entries = await fs3.readdir(root, { withFileTypes: true });
     return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   } catch (cause) {
     if (cause.code === "ENOENT") return [];
@@ -2716,22 +2741,17 @@ async function readDirectories(root) {
 }
 async function readFiles(root) {
   try {
-    const entries = await fs2.readdir(root, { withFileTypes: true });
+    const entries = await fs3.readdir(root, { withFileTypes: true });
     return entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
   } catch (cause) {
     if (cause.code === "ENOENT") return [];
     throw cause;
   }
 }
-async function writeAtomic(file, text) {
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await fs2.writeFile(tmp, text, "utf8");
-  await fs2.rename(tmp, file);
-}
 
 // packages/tavern-store/src/variable.ts
 import { createHash as createHash3 } from "node:crypto";
-import { promises as fs3 } from "node:fs";
+import { promises as fs4 } from "node:fs";
 import * as path3 from "node:path";
 var VariableRevisionConflictError = class extends Error {
   constructor(name2, expectedRevision, actualRevision) {
@@ -2754,7 +2774,7 @@ var VariableStore = class _VariableStore {
   }
   mutationTail = Promise.resolve();
   static async open(root) {
-    await fs3.mkdir(path3.join(root, "variables"), { recursive: true });
+    await fs4.mkdir(path3.join(root, "variables"), { recursive: true });
     return new _VariableStore(root);
   }
   async get(scope, scopeId, name2) {
@@ -2829,12 +2849,12 @@ var VariableStore = class _VariableStore {
   async clear(scope, scopeId) {
     validateScope2(scope, scopeId);
     await this.mutate(async () => {
-      await fs3.rm(this.filePath(scope, scopeId), { force: true });
+      await fs4.rm(this.filePath(scope, scopeId), { force: true });
     });
   }
   async readFile(scope, scopeId) {
     try {
-      const parsed = JSON.parse(await fs3.readFile(this.filePath(scope, scopeId), "utf8"));
+      const parsed = JSON.parse(await fs4.readFile(this.filePath(scope, scopeId), "utf8"));
       validateFile(parsed, scope, scopeId);
       return parsed;
     } catch (cause) {
@@ -2847,11 +2867,11 @@ var VariableStore = class _VariableStore {
   }
   async writeFile(file) {
     const target = this.filePath(file.scope, file.scopeId);
-    await fs3.mkdir(path3.dirname(target), { recursive: true });
+    await fs4.mkdir(path3.dirname(target), { recursive: true });
     const text = `${JSON.stringify(file)}
 `;
     if (Buffer.byteLength(text, "utf8") > MAX_SCOPE_BYTES) throw new Error("variable scope exceeds size limit");
-    await writeAtomic2(target, text);
+    await writeAtomicText(target, text);
   }
   filePath(scope, scopeId) {
     validateScope2(scope, scopeId);
@@ -2922,18 +2942,13 @@ function safeSegment2(value) {
   if (value === "." || value === ".." || /[\\/\0]/.test(value)) throw new Error("invalid variable path segment");
   return encodeURIComponent(value);
 }
-async function writeAtomic2(file, text) {
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await fs3.writeFile(tmp, text, "utf8");
-  await fs3.rename(tmp, file);
-}
 
 // packages/tavern-store/src/novel.ts
 import { createHash as createHash4, randomBytes } from "node:crypto";
 var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("hex");
 
 // packages/tavern-store/src/scripts.ts
-import { promises as fs4 } from "node:fs";
+import { promises as fs5 } from "node:fs";
 import * as path4 from "node:path";
 function normalizeScriptProgress(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
@@ -2959,7 +2974,7 @@ async function getScript(dir, name2) {
 async function readScriptRecord(file) {
   let bytes;
   try {
-    bytes = await fs4.readFile(file);
+    bytes = await fs5.readFile(file);
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -4326,7 +4341,7 @@ function appendMvuReceipt(chat, receipt) {
 }
 
 // packages/plugin/src/agent-tavern/projector.ts
-import { promises as fs5 } from "node:fs";
+import { promises as fs6 } from "node:fs";
 import { join as join6 } from "node:path";
 
 // packages/tavern-lore/lib/types.js
@@ -4334,6 +4349,270 @@ var MESSAGE_BOUNDARY2 = "";
 
 // packages/tavern-lore/lib/buffer.js
 var JOINER2 = "\n" + MESSAGE_BOUNDARY2;
+
+// packages/tavern-script/src/stscript.ts
+var ScriptError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ScriptError";
+  }
+};
+var NUMERIC_OPS = {
+  "=": (a, b) => a === b,
+  "==": (a, b) => a === b,
+  "!=": (a, b) => a !== b,
+  ">": (a, b) => a > b,
+  "<": (a, b) => a < b,
+  ">=": (a, b) => a >= b,
+  "<=": (a, b) => a <= b
+};
+function truthyString(value) {
+  return value === "true" || value === "1" ? "true" : "false";
+}
+function toNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function parseRoll(spec, rng) {
+  const match = /^(\d*)d(\d+)$/i.exec(spec.trim());
+  if (match === null) {
+    const single = toNumber(spec.trim());
+    if (single !== null) return single;
+    throw new ScriptError(`invalid roll spec: ${spec}`);
+  }
+  const count = Math.min(Math.max(Number(match[1] || "1"), 1), 100);
+  const sides = Math.max(Number(match[2]), 1);
+  let total = 0;
+  for (let i = 0; i < count; i++) total += Math.floor(rng() * sides) + 1;
+  return total;
+}
+function pickRandom(list, rng) {
+  if (list.length === 0) return "";
+  return list[Math.floor(rng() * list.length)] ?? "";
+}
+function splitChoices(raw) {
+  if (raw.includes("::")) return raw.split("::").map((item) => item.trim()).filter((item) => item !== "");
+  return raw.split(",").map((item) => item.trim()).filter((item) => item !== "");
+}
+function varTarget(cmd) {
+  const first = Object.entries(cmd.named)[0];
+  if (first !== void 0 && cmd.args.length === 0) return { name: first[0], value: first[1] };
+  return { name: cmd.args[0] ?? "", value: cmd.args.length > 1 ? cmd.args.slice(1).join(" ") : "" };
+}
+async function requireAction(env, command) {
+  if (env === void 0) throw new ScriptError(`/${command} is not available in this context`);
+  return env;
+}
+var commandTable = /* @__PURE__ */ new Map();
+function registerStscriptCommand(spec) {
+  commandTable.set(spec.name, spec);
+  for (const alias of spec.aliases ?? []) commandTable.set(alias, spec);
+  return () => {
+    if (commandTable.get(spec.name) === spec) commandTable.delete(spec.name);
+    for (const alias of spec.aliases ?? []) {
+      if (commandTable.get(alias) === spec) commandTable.delete(alias);
+    }
+  };
+}
+var changedResult = () => ({ output: "", chatChanged: true });
+var echoCommand = {
+  name: "echo",
+  aliases: ["comment"],
+  run: (cmd, env) => {
+    const text = cmd.raw;
+    if (cmd.name === "echo") env.echo?.(text);
+    return { output: text, chatChanged: false };
+  }
+};
+var setvarCommand = {
+  name: "setvar",
+  aliases: ["setglobalvar"],
+  run: (cmd, env) => {
+    const setter = cmd.name === "setvar" ? env.setVar : env.setGlobalVar;
+    const target = varTarget(cmd);
+    if (target.name === "") throw new ScriptError(`/${cmd.name} requires a variable name`);
+    setter(target.name, target.value);
+    return changedResult();
+  }
+};
+var getvarCommand = {
+  name: "getvar",
+  aliases: ["getglobalvar"],
+  run: (cmd, env) => {
+    const getter = cmd.name === "getvar" ? env.getVar : env.getGlobalVar;
+    const name2 = cmd.args[0] ?? "";
+    if (name2 === "") throw new ScriptError(`/${cmd.name} requires a variable name`);
+    return { output: String(getter(name2) ?? ""), chatChanged: false };
+  }
+};
+var addvarCommand = {
+  name: "addvar",
+  run: (cmd, env) => {
+    const target = varTarget(cmd);
+    if (target.name === "") throw new ScriptError("/addvar requires a variable name");
+    const delta = target.value === "" ? "1" : target.value;
+    const current = env.getVar(target.name);
+    const currentNum = typeof current === "boolean" ? null : toNumber(String(current ?? ""));
+    const deltaNum = toNumber(delta);
+    if (current === void 0) {
+      env.setVar(target.name, delta);
+    } else if (currentNum !== null && deltaNum !== null) {
+      env.setVar(target.name, currentNum + deltaNum);
+    } else {
+      env.setVar(target.name, `${String(current)}${delta}`);
+    }
+    return changedResult();
+  }
+};
+var incvarCommand = {
+  name: "incvar",
+  aliases: ["decvar"],
+  run: (cmd, env) => {
+    const name2 = cmd.args[0] ?? "";
+    const current = toNumber(String(env.getVar(name2) ?? "0")) ?? 0;
+    env.setVar(name2, current + (cmd.name === "incvar" ? 1 : -1));
+    return changedResult();
+  }
+};
+var hasvarCommand = {
+  name: "hasvar",
+  aliases: ["hasglobalvar"],
+  run: (cmd, env) => {
+    const checker = cmd.name === "hasvar" ? env.getVar : env.getGlobalVar;
+    return { output: truthyString(String(checker(cmd.args[0] ?? "") !== void 0)), chatChanged: false };
+  }
+};
+var delvarCommand = {
+  name: "delvar",
+  aliases: ["delglobalvar"],
+  run: (cmd, env) => {
+    const remover = cmd.name === "delvar" ? env.deleteVar : env.deleteGlobalVar;
+    remover(cmd.args[0] ?? "");
+    return changedResult();
+  }
+};
+var ifCommand = {
+  name: "if",
+  run: async (cmd, env, tools) => {
+    const left = cmd.named["left"] ?? cmd.args[0] ?? "";
+    const right = cmd.named["right"] ?? cmd.args[1] ?? "";
+    const op = (cmd.named["op"] ?? cmd.args[2] ?? "=").trim();
+    let passes;
+    if (op === "contains" || op === "!contains") {
+      const contains = left.includes(right);
+      passes = op === "contains" ? contains : !contains;
+    } else {
+      const numericOp = NUMERIC_OPS[op];
+      if (numericOp === void 0) throw new ScriptError(`unsupported /if op: ${op}`);
+      const leftNum = toNumber(left);
+      const rightNum = toNumber(right);
+      if (leftNum !== null && rightNum !== null) passes = numericOp(leftNum, rightNum);
+      else if (op === "=" || op === "==") passes = left === right;
+      else if (op === "!=") passes = left !== right;
+      else passes = false;
+    }
+    const branch = passes ? cmd.named["then"] : cmd.named["else"] ?? "";
+    if (branch === void 0 || branch.trim() === "") return { output: "", chatChanged: false };
+    return tools.runNested(branch, env);
+  }
+};
+var randomCommand = {
+  name: "random",
+  run: (cmd, _env, tools) => {
+    const raw = cmd.raw.trim();
+    const range = /^(-?\d+)\s*-\s*(-?\d+)$/.exec(raw);
+    if (range !== null) {
+      const low = Number(range[1]);
+      const high = Number(range[2]);
+      const min = Math.min(low, high);
+      return { output: String(min + Math.floor(tools.rng() * (Math.max(low, high) - min + 1))), chatChanged: false };
+    }
+    return { output: pickRandom(splitChoices(raw), tools.rng), chatChanged: false };
+  }
+};
+var rollCommand = {
+  name: "roll",
+  run: (cmd, _env, tools) => ({ output: String(parseRoll(cmd.raw.trim() || "1d6", tools.rng)), chatChanged: false })
+};
+var pickCommand = {
+  name: "pick",
+  run: (cmd, _env, tools) => ({ output: pickRandom(splitChoices(cmd.raw), tools.rng), chatChanged: false })
+};
+var sendCommand = {
+  name: "send",
+  run: async (cmd, env) => {
+    const action = await requireAction(env.send, "send");
+    await action(cmd.raw);
+    return changedResult();
+  }
+};
+var triggerCommand = {
+  name: "trigger",
+  run: async (cmd, env) => {
+    const action = await requireAction(env.trigger, "trigger");
+    await action(cmd.args[0]);
+    return changedResult();
+  }
+};
+var regenerateCommand = {
+  name: "regenerate",
+  run: async (_cmd, env) => {
+    const action = await requireAction(env.regenerate, "regenerate");
+    await action();
+    return changedResult();
+  }
+};
+var stopCommand = {
+  name: "stop",
+  run: async (_cmd, env) => {
+    const action = await requireAction(env.stop, "stop");
+    action();
+    return changedResult();
+  }
+};
+var cutCommand = {
+  name: "cut",
+  run: async (cmd, env) => {
+    const action = await requireAction(env.cut, "cut");
+    const range = /^(-?\d+)(?:\s*-\s*(-?\d+))?$/.exec(cmd.raw.trim());
+    if (range === null) throw new ScriptError(`/cut expects a range like 0-2, got: ${cmd.raw.trim()}`);
+    const from = Number(range[1]);
+    const to = range[2] === void 0 ? from : Number(range[2]);
+    await action(Math.min(from, to), Math.max(from, to));
+    return changedResult();
+  }
+};
+var regexCommand = {
+  name: "regex",
+  run: async (cmd, env) => {
+    const action = await requireAction(env.applyRegex, "regex");
+    const name2 = cmd.named["name"] ?? cmd.args[0] ?? "";
+    if (name2 === "") throw new ScriptError("/regex requires a script name (name=\u2026)");
+    const positional = cmd.named["name"] !== void 0 ? cmd.args : cmd.args.slice(1);
+    return { output: await action(name2, positional.join(" ")), chatChanged: false };
+  }
+};
+for (const spec of [
+  echoCommand,
+  setvarCommand,
+  getvarCommand,
+  addvarCommand,
+  incvarCommand,
+  hasvarCommand,
+  delvarCommand,
+  ifCommand,
+  randomCommand,
+  rollCommand,
+  pickCommand,
+  sendCommand,
+  triggerCommand,
+  regenerateCommand,
+  stopCommand,
+  cutCommand,
+  regexCommand
+]) {
+  registerStscriptCommand(spec);
+}
 
 // packages/plugin/src/agent-tavern/projector.ts
 var mvuAuditTail = Promise.resolve();
@@ -4343,14 +4622,25 @@ function mvuAuditPath(tavernRoot) {
 async function appendMvuAudit(tavernRoot, record) {
   const write = mvuAuditTail.catch(() => {
   }).then(async () => {
-    await fs5.mkdir(join6(tavernRoot, "mvu"), { recursive: true });
-    await fs5.appendFile(mvuAuditPath(tavernRoot), `${JSON.stringify(record)}
+    await fs6.mkdir(join6(tavernRoot, "mvu"), { recursive: true });
+    await fs6.appendFile(mvuAuditPath(tavernRoot), `${JSON.stringify(record)}
 `, "utf8");
   });
   mvuAuditTail = write.then(() => {
   }, () => {
   });
   await write;
+}
+
+// packages/tavern-macros/src/host-registry.ts
+var HOST_MACRO_REGISTRY_KEY = "dsh-tavern:host-macros";
+var registrySymbol = Symbol.for(HOST_MACRO_REGISTRY_KEY);
+function store() {
+  const holder = globalThis;
+  return holder[registrySymbol] ??= { nextSequence: 1, entries: /* @__PURE__ */ new Map() };
+}
+function hostMacroSnapshot() {
+  return [...store().entries.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ name: name2, fn, order }) => ({ name: name2, fn, order }));
 }
 
 // packages/tavern-macros/src/random.ts
@@ -4369,7 +4659,7 @@ function splitMacroList(listString) {
   }
   return listString.replace(/\\,/g, ESCAPED_COMMA).split(",").map((item) => item.trim().replace(/\u0000/g, ","));
 }
-function parseRoll(formula) {
+function parseRoll2(formula) {
   let f = formula.trim();
   if (/^\d+$/.test(f)) {
     f = `1d${f}`;
@@ -4505,6 +4795,7 @@ function humanizeDuration(totalSeconds) {
 
 // packages/tavern-macros/src/engine.ts
 var TRIM = Symbol("trim");
+var builtinMacroNameSet = /* @__PURE__ */ new Set();
 function opt(v) {
   return v ?? "";
 }
@@ -4546,15 +4837,15 @@ function createMacroEngine(init) {
     return coerceRead(storeOf(scope).get(name2));
   }
   function addToVar(scope, name2, value) {
-    const store = storeOf(scope);
-    const current = (coerceRead(store.get(name2)) ?? 0) || 0;
+    const store3 = storeOf(scope);
+    const current = (coerceRead(store3.get(name2)) ?? 0) || 0;
     if (typeof current === "string") {
       try {
         const parsed = JSON.parse(current);
         if (Array.isArray(parsed)) {
           parsed.push(value);
           const json = JSON.stringify(parsed);
-          store.set(name2, json);
+          store3.set(name2, json);
           return json;
         }
       } catch {
@@ -4564,14 +4855,14 @@ function createMacroEngine(init) {
     const currentNum = Number(current);
     if (Number.isNaN(inc) || Number.isNaN(currentNum)) {
       const concatenated = `${String(current || "")}${String(value)}`;
-      store.set(name2, concatenated);
+      store3.set(name2, concatenated);
       return concatenated;
     }
     const next = currentNum + inc;
     if (Number.isNaN(next)) {
       return "";
     }
-    store.set(name2, next);
+    store3.set(name2, next);
     return String(next);
   }
   regExact("char", () => init.char);
@@ -4683,20 +4974,20 @@ function createMacroEngine(init) {
     if (arg === null) {
       return null;
     }
-    const spec = parseRoll(arg);
+    const spec = parseRoll2(arg);
     if (spec === null) {
       return "";
     }
     return String(evalRoll(spec, rng));
   });
   function registerVarMacros(scope, infix) {
-    const store = storeOf(scope);
+    const store3 = storeOf(scope);
     reg(`get${infix}var`, (ctx) => {
       const arg = colonArg(ctx);
       if (arg === null || arg === "") {
         return null;
       }
-      const v = coerceRead(store.get(arg.trim()));
+      const v = coerceRead(store3.get(arg.trim()));
       return v === void 0 ? "" : String(v);
     });
     reg(`set${infix}var`, (ctx) => {
@@ -4708,7 +4999,7 @@ function createMacroEngine(init) {
       if (m === null || m[1] === void 0 || m[1] === "") {
         return null;
       }
-      store.set(m[1].trim(), m[2] ?? "");
+      store3.set(m[1].trim(), m[2] ?? "");
       return "";
     });
     reg(`add${infix}var`, (ctx) => {
@@ -4752,14 +5043,14 @@ function createMacroEngine(init) {
       if (arg === null || arg === "") {
         return null;
       }
-      return store.has(arg.trim()) ? "true" : "false";
+      return store3.has(arg.trim()) ? "true" : "false";
     });
     reg(`delete${infix}var`, (ctx) => {
       const arg = colonArg(ctx);
       if (arg === null || arg === "") {
         return null;
       }
-      store.delete(arg.trim());
+      store3.delete(arg.trim());
       return "";
     });
   }
@@ -4875,6 +5166,13 @@ function createMacroEngine(init) {
       }
     });
   }
+  for (const key of registry.keys()) builtinMacroNameSet.add(key);
+  for (const entry of hostMacroSnapshot()) {
+    try {
+      registerMacro(entry.name, entry.fn);
+    } catch {
+    }
+  }
   const api = {
     expand,
     getVar: (name2) => readVar("local", name2),
@@ -4984,6 +5282,205 @@ function createLazyProjection(options) {
   };
 }
 
+// packages/plugin/src/mods/cross-bundle.ts
+var MOD_SECTION_ORDER_MIN = -50;
+var MOD_SECTION_ORDER_MAX = 0;
+function clampModSectionOrder(order) {
+  const value = typeof order === "number" && Number.isFinite(order) ? order : MOD_SECTION_ORDER_MIN;
+  return Math.max(MOD_SECTION_ORDER_MIN, Math.min(MOD_SECTION_ORDER_MAX, value));
+}
+var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
+  // agent-tavern（agent.ts createTools，18）
+  "tavern_character_get",
+  "tavern_lore_search",
+  "tavern_scene_get",
+  "tavern_history_search",
+  "memory_search",
+  "memory_read",
+  "memory_write",
+  "memory_update",
+  "memory_forget",
+  "variable_get",
+  "variable_set",
+  "variable_patch",
+  "variable_delete",
+  "variable_list",
+  "tavern_script_read",
+  "tavern_script_advance",
+  "tavern_deduce",
+  "tavern_variable_settle",
+  // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
+  "novel_status_read",
+  "novel_requirements_read",
+  "novel_outline_read",
+  "novel_outline_create",
+  "novel_outline_revise",
+  "novel_requirement_block",
+  "novel_facts_read",
+  "novel_lore_search",
+  "novel_character_read",
+  "novel_body_read",
+  "novel_body_search",
+  "novel_body_commit",
+  "novel_chapter_complete",
+  "novel_unit_claim",
+  "novel_unit_release",
+  "novel_unit_supersede",
+  "novel_writer_draft",
+  "novel_writer_delegate",
+  "novel_finish",
+  // card-workbench（card-workbench/tools-*.ts，22）
+  "card_get",
+  "card_put",
+  "card_create",
+  "card_delete",
+  "card_original_get",
+  "card_restore_original",
+  "card_plan_propose",
+  "card_apply_mvu",
+  "chat_log_read",
+  "world_get",
+  "world_put",
+  "world_create",
+  "world_delete",
+  "world_copy",
+  "world_rename",
+  "world_bind",
+  "world_list",
+  "world_plan_propose",
+  "preset_get",
+  "preset_put",
+  "material_list",
+  "material_read"
+]);
+var MOD_REGISTRY_KEY = "dsh-tavern:mod-registry";
+var registrySymbol2 = Symbol.for(MOD_REGISTRY_KEY);
+function store2() {
+  const holder = globalThis;
+  return holder[registrySymbol2] ??= {
+    tools: /* @__PURE__ */ new Map(),
+    sections: /* @__PURE__ */ new Map(),
+    builtinNames: new Set(BUILTIN_TOOL_NAMES_SEED),
+    nextSequence: 1
+  };
+}
+var modsChangedListeners = createGlobalListenerRegistry("dsh-tavern:mods-changed-listeners");
+function modToolSnapshot() {
+  return [...store2().tools.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
+}
+function modSectionSnapshot() {
+  return [...store2().sections.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
+}
+function claimHostToolNames(names) {
+  for (const name2 of names) store2().builtinNames.add(name2);
+}
+function onModsChanged(listener) {
+  return modsChangedListeners.on(listener);
+}
+
+// packages/plugin/src/mods/agent-mount.ts
+function toolFingerprint(entry) {
+  const { definition } = entry;
+  return JSON.stringify([entry.modId, definition.name, definition.description, definition.parameters, definition.output?.schema]);
+}
+function mountModExtensions(ctx, options) {
+  claimHostToolNames(options.claimTools);
+  const registeredTools = /* @__PURE__ */ new Map();
+  const registeredSections = /* @__PURE__ */ new Map();
+  const liveTool = (modId, name2) => modToolSnapshot().find((entry) => entry.modId === modId && entry.definition.name === name2)?.definition;
+  const asDispose = (handle) => typeof handle === "function" ? () => {
+    try {
+      handle();
+    } catch {
+    }
+  } : void 0;
+  function syncTools() {
+    const wanted = /* @__PURE__ */ new Map();
+    for (const entry of modToolSnapshot()) {
+      wanted.set(entry.definition.name, { modId: entry.modId, definition: entry.definition, fingerprint: toolFingerprint(entry) });
+    }
+    for (const [name2, current] of [...registeredTools]) {
+      const next = wanted.get(name2);
+      if (next === void 0 || next.fingerprint !== current.fingerprintNext) {
+        current.dispose?.();
+        registeredTools.delete(name2);
+      }
+    }
+    for (const [name2, next] of wanted) {
+      if (registeredTools.has(name2)) continue;
+      const wrapper = {
+        name: name2,
+        description: next.definition.description,
+        parameters: next.definition.parameters,
+        output: {
+          schema: next.definition.output.schema,
+          render: (args, value) => {
+            const live = liveTool(next.modId, name2);
+            if (live === void 0) return [{ type: "text", text: JSON.stringify(value) }];
+            return live.output.render(args, value);
+          }
+        },
+        execute: (args, exec) => {
+          const live = liveTool(next.modId, name2);
+          if (live === void 0) {
+            return Promise.reject(new Error(`mod tool '${name2}' is no longer available (its mod was disabled or unloaded)`));
+          }
+          return live.execute(args, exec);
+        }
+      };
+      try {
+        const handle = ctx.tools?.register?.(wrapper);
+        registeredTools.set(name2, { dispose: asDispose(handle), fingerprintNext: next.fingerprint });
+      } catch {
+      }
+    }
+  }
+  function syncSections() {
+    const wanted = /* @__PURE__ */ new Map();
+    for (const entry of modSectionSnapshot()) {
+      const fullName = `dsh-tavern:mod:${entry.modId}:${entry.definition.name}`;
+      wanted.set(fullName, { name: fullName, order: clampModSectionOrder(entry.definition.order), text: hostPromptSafe(entry.definition.text) });
+    }
+    for (const [fullName, current] of [...registeredSections]) {
+      const next = wanted.get(fullName);
+      if (next === void 0 || next.text !== current.textNext || next.order !== current.orderNext) {
+        current.dispose?.();
+        registeredSections.delete(fullName);
+      }
+    }
+    for (const [fullName, next] of wanted) {
+      if (registeredSections.has(fullName)) continue;
+      try {
+        const handle = ctx.systemPrompt?.section?.({ name: fullName, order: next.order, text: next.text });
+        registeredSections.set(fullName, { dispose: asDispose(handle), textNext: next.text, orderNext: next.order });
+      } catch {
+      }
+    }
+  }
+  const sync = () => {
+    syncTools();
+    syncSections();
+  };
+  sync();
+  const offListener = onModsChanged(sync);
+  const dispose = () => {
+    offListener();
+    for (const [, current] of [...registeredTools]) current.dispose?.();
+    registeredTools.clear();
+    for (const [, current] of [...registeredSections]) current.dispose?.();
+    registeredSections.clear();
+  };
+  if (ctx.effect) {
+    try {
+      ctx.effect(() => () => {
+        dispose();
+      }, "dsh-tavern: mod extensions");
+    } catch {
+    }
+  }
+  return dispose;
+}
+
 // packages/plugin/src/agent-tavern/agent.ts
 var name = "dsh-tavern/agent";
 var inject = ["systemPrompt", "tools"];
@@ -5049,6 +5546,7 @@ function apply(ctx) {
     if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool2), `dsh-tavern:agent:${tool2.name}`);
     else ctx.tools?.register?.(tool2);
   }
+  mountModExtensions(ctx, { claimTools: tools.map((tool2) => tool2.name) });
 }
 function createTools() {
   return [
@@ -5196,9 +5694,9 @@ function createTools() {
       maxTokens: { type: "integer", description: "Approximate content token budget." }
     }, memorySearchOutput, async (args, exec) => {
       const binding = await bindingFor(exec);
-      const store = await memoryStore();
+      const store3 = await memoryStore();
       const scopes = selectedMemoryScopes(args.scope, binding);
-      const hits = (await Promise.all(scopes.map(({ scope, scopeId }) => store.search({
+      const hits = (await Promise.all(scopes.map(({ scope, scopeId }) => store3.search({
         query: stringArg(args.query),
         scope,
         scopeId,
@@ -5225,10 +5723,10 @@ function createTools() {
       scope: memoryScopeParameter(false)
     }, memoryReadOutput, async (args, exec) => {
       const binding = await bindingFor(exec);
-      const store = await memoryStore();
+      const store3 = await memoryStore();
       const scopes = selectedMemoryScopes(args.scope, binding);
       for (const { scope, scopeId } of scopes) {
-        const record = await store.read(stringArg(args.id), scope, scopeId);
+        const record = await store3.read(stringArg(args.id), scope, scopeId);
         if (record !== void 0) return memoryView(record);
       }
       return { found: false, id: stringArg(args.id) };
@@ -5274,14 +5772,14 @@ function createTools() {
       const binding = await bindingFor(exec);
       const target = selectedMemoryScopes(args.scope, binding)[0];
       await assertWriteScopeAllowed(target.scope);
-      const store = await memoryStore();
+      const store3 = await memoryStore();
       const id = stringArg(args.id);
-      const previous = await store.read(id, target.scope, target.scopeId, true);
+      const previous = await store3.read(id, target.scope, target.scopeId, true);
       if (previous === void 0) throw new Error(`memory '${id}' not found in scope '${target.scope}'`);
       const importance = clampScore(args.importance) ?? previous.importance;
       const confidence = clampScore(args.confidence) ?? previous.confidence;
       const expiresAt = typeof args.expiresAt === "string" ? optionalExpiry(args.expiresAt) : previous.expiresAt;
-      const record = await store.put({
+      const record = await store3.put({
         id,
         scope: previous.scope,
         scopeId: previous.scopeId,
@@ -5303,11 +5801,11 @@ function createTools() {
       const binding = await bindingFor(exec);
       const target = selectedMemoryScopes(args.scope, binding)[0];
       await assertWriteScopeAllowed(target.scope);
-      const store = await memoryStore();
+      const store3 = await memoryStore();
       const id = stringArg(args.id);
-      const previous = await store.read(id, target.scope, target.scopeId, true);
+      const previous = await store3.read(id, target.scope, target.scopeId, true);
       if (previous === void 0) return { id, scope: target.scope, found: false };
-      await store.forget(id, target.scope, target.scopeId, stringArg(args.expectedRevision));
+      await store3.forget(id, target.scope, target.scopeId, stringArg(args.expectedRevision));
       return { id, scope: target.scope, found: true };
     }),
     tool("variable_get", "Read a typed variable from the current chat, character, agent, global, or turn scope.", {
@@ -5386,11 +5884,11 @@ function createTools() {
       const binding = await bindingFor(exec);
       const target = selectedVariableScope(args.scope, binding);
       await assertWriteScopeAllowed(target.scope);
-      const store = await variableStore();
+      const store3 = await variableStore();
       const name2 = stringArg(args.name);
-      const existing = await store.get(target.scope, target.scopeId, name2);
+      const existing = await store3.get(target.scope, target.scopeId, name2);
       if (existing === void 0) return { found: false, scope: target.scope, name: name2 };
-      await store.delete(target.scope, target.scopeId, name2, typeof args.expectedRevision === "string" ? args.expectedRevision : existing.revision);
+      await store3.delete(target.scope, target.scopeId, name2, typeof args.expectedRevision === "string" ? args.expectedRevision : existing.revision);
       return { found: true, scope: target.scope, name: name2 };
     }),
     tool("variable_list", "List variable names and value summaries in the given scope, filtered by prefix.", {
@@ -5543,15 +6041,15 @@ function createTools() {
       const snapshot2 = await db.getChatSnapshot(binding.character, binding.chatId);
       if (!snapshot2) throw new Error("bound Tavern chat not found");
       const chat = snapshot2.chat;
-      const store = await variableStore();
+      const store3 = await variableStore();
       const applied = [];
       const failed = [];
       const receiptChanges = [];
       const auditChanges = [];
       for (const request of requests) {
         try {
-          const existing = await store.get("chat", binding.chatId, request.name);
-          const written = await store.set("chat", binding.chatId, request.name, request.value, existing?.revision);
+          const existing = await store3.get("chat", binding.chatId, request.name);
+          const written = await store3.set("chat", binding.chatId, request.name, request.value, existing?.revision);
           applied.push(request.name);
           const change = {
             name: request.name,

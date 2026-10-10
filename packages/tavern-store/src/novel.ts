@@ -30,6 +30,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
+import { writeAtomicText } from './fs-atomic.js'
 import type { TavernStore } from './store.js'
 import type { CharacterCardIR } from '@dsh-tavern/format'
 import {
@@ -2016,12 +2017,7 @@ async function replaceHead(head: string, bytes: Uint8Array): Promise<void> {
   }
 }
 
-/** Simple atomic write for rebuildable projections (no fsync needed). */
-async function writeAtomicText(file: string, text: string): Promise<void> {
-  const tmp = `${file}.${process.pid}.${Date.now()}.${randomBytes(2).toString('hex')}.tmp`
-  await fs.writeFile(tmp, text, 'utf8')
-  await fs.rename(tmp, file)
-}
+/** rebuildable projections 的原子写统一走 fs-atomic（唯一 tmp + Windows rename 重试）。 */
 
 async function readDirectories(root: string): Promise<string[]> {
   try {

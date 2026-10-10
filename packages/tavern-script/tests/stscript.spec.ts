@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ScriptError, runScript, type ScriptEnv } from '../src/stscript.js'
+import { ScriptError, registerStscriptCommand, runScript, stscriptCommandNames, type ScriptEnv } from '../src/stscript.js'
 
 function makeEnv(overrides: Partial<ScriptEnv> = {}): ScriptEnv & { sent: string[]; triggered: (string | undefined)[]; cutCalls: [number, number][] } {
   const local = new Map<string, string | number | boolean>()
@@ -168,5 +168,96 @@ describe('/regex command', () => {
     const env = makeEnv({ applyRegex: async (name, text) => `${name}:${text}` })
     const result = await runScript('/regex name=A b c', env)
     expect(result.output).toBe('A:b c')
+  })
+})
+
+describe('STscript command registry (proposal 0015 P0)', () => {
+  it('carries the complete builtin command set in the table', () => {
+    // 头注释命令清单的机器对照：主名 + 别名全部在表（switch 时代的等价面）。
+    expect(stscriptCommandNames()).toEqual([
+      'echo', 'comment',
+      'setvar', 'setglobalvar',
+      'getvar', 'getglobalvar',
+      'addvar',
+      'incvar', 'decvar',
+      'hasvar', 'hasglobalvar',
+      'delvar', 'delglobalvar',
+      'if',
+      'random',
+      'roll',
+      'pick',
+      'send',
+      'trigger',
+      'regenerate',
+      'stop',
+      'cut',
+      'regex',
+    ])
+  })
+
+  it('keeps unknown-command errors verbatim through the table lookup', async () => {
+    const env = makeEnv()
+    await expect(runScript('/definitelynot', env)).rejects.toThrow('unknown command: /definitelynot')
+  })
+
+  it('runs commands registered through the registration entry', async () => {
+    registerStscriptCommand({
+      name: 'shout',
+      run: (cmd) => ({ output: cmd.raw.toUpperCase(), chatChanged: false }),
+    })
+    const env = makeEnv()
+    expect((await runScript('/echo soft | /shout', env)).output).toBe('SOFT')
+  })
+
+  it('supports aliases in registered commands', async () => {
+    registerStscriptCommand({
+      name: 'mark',
+      aliases: ['bookmark'],
+      run: (cmd) => ({ output: `marked:${cmd.name}`, chatChanged: false }),
+    })
+    const env = makeEnv()
+    expect((await runScript('/mark', env)).output).toBe('marked:mark')
+    expect((await runScript('/bookmark', env)).output).toBe('marked:bookmark')
+  })
+
+  it('passes the shared tools (rng/changed/runNested) to handlers', async () => {
+    registerStscriptCommand({
+      name: 'diceprobe',
+      run: (cmd, env, tools) => {
+        expect(typeof tools.rng).toBe('function')
+        return tools.changed()
+      },
+    })
+    const env = makeEnv()
+    const result = await runScript('/diceprobe', env)
+    expect(result.chatChanged).toBe(true)
+    expect(result.output).toBe('')
+  })
+
+  // P2（提案 0015 §3.3）：registerStscriptCommand 返回反注册——mod 宿主的
+  // dispose 链落点。只摘自己那一次注册：重载后的旧 disposer 不误删同名新注册。
+  it('returns an unregister that removes the command and its aliases', async () => {
+    const off = registerStscriptCommand({
+      name: 'tempcmd',
+      aliases: ['tempalias'],
+      run: (cmd) => ({ output: `t:${cmd.raw}`, chatChanged: false }),
+    })
+    const env = makeEnv()
+    expect((await runScript('/tempcmd x', env)).output).toBe('t:x')
+    expect((await runScript('/tempalias y', env)).output).toBe('t:y')
+    off()
+    await expect(runScript('/tempcmd x', makeEnv())).rejects.toThrow('unknown command: /tempcmd')
+    await expect(runScript('/tempalias y', makeEnv())).rejects.toThrow('unknown command: /tempalias')
+    // 幂等：重复 off 不炸、不误删后续同名注册。
+    expect(() => off()).not.toThrow()
+  })
+
+  it('a stale unregister never removes a newer same-name registration', async () => {
+    const first = registerStscriptCommand({ name: 'reused', run: () => ({ output: 'first', chatChanged: false }) })
+    first()
+    registerStscriptCommand({ name: 'reused', run: () => ({ output: 'second', chatChanged: false }) })
+    first() // 旧 disposer：不得摘掉新注册
+    const env = makeEnv()
+    expect((await runScript('/reused', env)).output).toBe('second')
   })
 })

@@ -18,6 +18,7 @@
 
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
+import { writeAtomicBytes } from './fs-atomic.js'
 import { unzipSync, strFromU8 } from 'fflate'
 import type { CharacterCardIR } from '@dsh-tavern/format'
 
@@ -381,7 +382,7 @@ export async function importScript(
   }
   const scriptDir = path.join(dir, 'scripts', safeScriptName(trimmedName))
   await fs.mkdir(scriptDir, { recursive: true })
-  await writeAtomic(path.join(scriptDir, 'script.json'), jsonBytes(record))
+  await writeAtomicBytes(path.join(scriptDir, 'script.json'), jsonBytes(record))
   return record
 }
 
@@ -479,11 +480,6 @@ async function readScriptRecord(file: string): Promise<ScriptRecord | undefined>
 function safeScriptName(name: string): string {
   const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim()
   return cleaned.length > 0 ? cleaned.slice(0, 120) : '_unnamed'
-}
-
-function writeAtomic(file: string, bytes: Uint8Array): Promise<void> {
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-  return fs.writeFile(tmp, bytes).then(() => fs.rename(tmp, file))
 }
 
 function jsonBytes(obj: unknown): Uint8Array {

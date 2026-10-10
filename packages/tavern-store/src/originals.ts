@@ -19,6 +19,7 @@
 
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
+import { writeAtomicText } from './fs-atomic.js'
 import { decodeCharacterCard, encodeCharacterCardJson, type CharacterCardIR } from '@dsh-tavern/format'
 import { TavernStore, safeFileName, type CharacterFile } from './store.js'
 
@@ -35,12 +36,7 @@ async function fileExists(file: string): Promise<boolean> {
   }
 }
 
-/** tmp+rename 原子写；tmp 名带 pid+随机后缀，并发导入互不踩踏。 */
-async function writeAtomicText(file: string, text: string): Promise<void> {
-  const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`
-  await fs.writeFile(tmp, text, 'utf8')
-  await fs.rename(tmp, file)
-}
+/** 原子写统一走 fs-atomic（唯一 tmp + Windows rename 重试；本文件旧自建实现的随机后缀语义被其覆盖）。 */
 
 /**
  * 保存原版快照：已存在则不覆盖（首个导入胜出），返回是否本次写入。
