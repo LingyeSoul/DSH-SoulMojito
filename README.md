@@ -180,7 +180,7 @@ ST 与 AgentTavern 新聊天共用 `$DSH_HOME/tavern/workspace/` 下的 `Tavern 
 | `@dsh-tavern/store` | `$DSH_HOME/tavern/` 原子文件存储、revision 和 session binding |
 | `@dsh-tavern/template` | EJS Prompt Template 引擎：`node:vm` 沙箱执行、作用域变量与内容注入（提案 0008） |
 | `@dsh-tavern/bind` | 跨 DSH 版本的宿主形状兼容层：会话事件探测、宿主包锚解析、client 连接双面回退与宿主形状诊断 |
-| `dsh-tavern` | 自包含 Node half（含 agent / compaction / novel / card-workbench 入口）、Web client half、安装元数据和 gates |
+| `dsh-tavern` | 自包含 Node half（含 agent / compaction / novel / card-workbench 入口，以及 Mod 加载器与能力面宿主 `src/mods/`，提案 0015）、Web client half（含 Mods 面板分区与 Mod iframe 桥）、随附示例 Mod（`examples/mods/`，三个示例覆盖 v1 全部能力面：asset-stats 资产只读统计、mood-tracker post-output hook + 情绪工具对 + iframe 面板、story-clock 剧情时钟——聊天变量 `clock` + `{{clock}}` 宏 + `/clock` 命令族 + `llm` 门控摘要）、安装元数据和 gates |
 
 ## 安装
 
