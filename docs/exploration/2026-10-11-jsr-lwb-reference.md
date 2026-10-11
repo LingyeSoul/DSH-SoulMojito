@@ -209,11 +209,11 @@ IndexedDB 事务原子替换（`docs/vector-cache-packages.md`）。
 | A-4 | iframe 运行时细节：vh→CSS 变量、身份 window.name 双保险、Blob URL 调试模式 | JSR §2.1 | FrontendFrame/ModSurface | P1 |
 | D-2 | confirmable save 读回验证（写宿主侧状态后必须成立的操作） | LWB | session binding/投影 | P1 |
 | C-2 | varevent 条件规则引擎（中文操作词别名 + 回合后排队执行） | LWB | Mod 示例或 MVU 扩展位 | P2 |
-| B-6 | undo 链（keyed-changes 差量）与向量缓存包（SHA-256 输入摘要） | LWB | memory/MVU 回执 | P2 |
+| B-6 | undo 链（keyed-changes 差量）与向量缓存包（SHA-256 输入摘要） | LWB | MVU 回执；**B-6a 回执撤销施工中**（回执已存每项前后值）；B-6b 向量缓存包**评估免施工**——LWB 需要它因向量在浏览器 IndexedDB 与聊天分离，dsh 记忆与向量同在 `$DSH_HOME/tavern/` 整体可移植，digest 防错配 B-2 已带 | P2 |
 | D-3 | after-ai-gate（稳定检测代替裸事件，防流式期重复结算） | LWB | ~~MVU 触发点~~ **评估免施工**（服务端 post-save 单点触发，无浏览器 DOM 竞态，见施工进度节） | ~~P2~~ |
 | D-4 | message-preview 式"生成不入楼"（卡片工作台试写预览） | LWB | workbench | P2 |
 | D-5 | 楼层驱动任务调度（每 N 楼执行 STscript + 冷却 + 防重放） | LWB scheduled-tasks | Mod v2；**已部分落地**：`chat-saved` 载荷补 `floorCount`，Mod 自行比对即可实现每 N 楼调度 | P2 |
-| D-6 | reply-progress（只观察宿主真实请求信号） | LWB | 生成进度 | P2 |
+| D-6 | reply-progress（只观察宿主真实请求信号） | LWB | ~~生成进度~~ **评估暂缓**——LWB 动机是召回预计算的等待空窗，dsh ST 路径无自动召回、AgentTavern 工具活动由宿主原生渲染，无对应空窗 | ~~P2~~ |
 | D-7 | 文档纪律：开工前八项表补"删除路径"栏 | LWB | 提案模板 | P2 |
 | A-5 | 精选 Mod 仓库（jsdelivr 一键导入）+ 本地热重载通道 | JSR 内置库/开发者页 | mod 生态 | P2 |
 | A-6 | 提示词查看器 + 世界书激活追踪（调试基建天花板，工程量大） | JSR wi_tracer | 面板 | P2 |
@@ -224,9 +224,11 @@ IndexedDB 事务原子替换（`docs/vector-cache-packages.md`）。
 `decisions/2026-10-11-retrieval-eval-matrix.md`、`decisions/2026-10-11-mod-stream-delta.md`、
 `decisions/2026-10-11-iframe-viewport.md`、`decisions/2026-10-11-confirmable-session-writes.md`、
 `decisions/2026-10-11-memory-maintenance.md`，提案 0016）。B-4 / D-3 经架构评估**无需施工**
-（见下表注），D-5 以 `chat-saved.floorCount` 载荷部分落地。**P1 至此收官**；P2 剩余：A-5 精选
-Mod 仓库、A-6 提示词查看器/世界书追踪、C-2 varevent 规则引擎、B-6 undo 链/向量缓存包、
-D-4 生成不入楼、D-6 reply-progress、D-7 文档八项表。
+（见下表注），D-5 以 `chat-saved.floorCount` 载荷部分落地。**P1 至此收官**。P2 第五批（2026-10-11）：
+D-7 文档八项表已落 CONTEXT.md「文档纪律」节，B-6b 向量缓存包/D-6 经评估免施工/暂缓（见表注），
+A-6 提示词查看器（决策 `decisions/2026-10-11-prompt-viewer.md`）与 B-6a MVU 回执撤销（决策
+`decisions/2026-10-11-mvu-receipt-undo.md`）已落地；P2 剩余候选：A-5 精选 Mod 仓库、C-2 varevent
+规则引擎、D-4 生成不入楼。
 
 **两项架构评估结论（2026-10-11）**：
 - **B-4（同轮复用 + 预取）无需施工**：LWB 的动机是 push-based 召回每次 swipe/重生成重算嵌入费；

@@ -61,8 +61,9 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
   const diagnostics: Record<string, EntryDiagnostics> = {}
   const timed = new TimedEffects(cloneTimedState(input.timedState), entries, messageCount)
   const activated = new Map<string, ScanEntry>()
-  const activatedMeta = new Map<string, { matchedKeys: string[]; reason: ActivationReason }>()
+  const activatedMeta = new Map<string, { matchedKeys: string[]; reason: ActivationReason; viaRecursion: boolean }>()
   const failedProbability = new Set<string>()
+  const passedProbabilityRolls = new Map<string, number>()
   const bookUsed = new Map<number, number>()
   let budgetUsed = 0
   let budgetExceeded = false
@@ -130,6 +131,9 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
           diag(entry, 'probability', { matchedKeys: match.matchedKeys, probabilityRoll: roll })
           continue
         }
+        // 掷值对成功路径也可见（diagnostics 的「参与掷骰时」语义含成功——
+        // A-6 激活追踪需要概率结果，只有失败掷值会让成功条目的概率不可审计）。
+        passedProbabilityRolls.set(entry.entryId, roll)
       }
       candidates.push(entry)
       matchById.set(entry.entryId, match)
@@ -172,8 +176,9 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
       if (!entry.ignoreBudget) bookUsed.set(entry.bookIndex, usedByBook + tokens)
       activated.set(entry.entryId, entry)
       const match = matchById.get(entry.entryId)!
-      activatedMeta.set(entry.entryId, { matchedKeys: match.matchedKeys, reason: match.reason as ActivationReason })
-      diag(entry, match.reason, { matchedKeys: match.matchedKeys })
+      activatedMeta.set(entry.entryId, { matchedKeys: match.matchedKeys, reason: match.reason as ActivationReason, viaRecursion: state === 'RECURSION' })
+      const rolled = passedProbabilityRolls.get(entry.entryId)
+      diag(entry, match.reason, { matchedKeys: match.matchedKeys, ...(rolled !== undefined ? { probabilityRoll: rolled } : {}) })
       accepted.push(entry)
     }
     return accepted
@@ -217,6 +222,7 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
       content: entry.content,
       matchedKeys: meta.matchedKeys,
       activationReason: meta.reason,
+      viaRecursion: meta.viaRecursion,
       entry: entry.raw,
     }
   })
