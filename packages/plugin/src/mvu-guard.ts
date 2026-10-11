@@ -171,6 +171,23 @@ export function stripMvuSchema<T extends Record<string, unknown>>(tree: T): Reco
   return out
 }
 
+/**
+ * 变量树根的**控制子树**剥离（C-1 `$schema` + C-2 `$rules`）：回执 diff / 状态栏
+ * 渲染 / 显示投影 / retry 响应共用——控制契约不是变量，不进任何结算投影面。
+ * 只特判这两个键（$schema 合法形状是普通对象、$rules 是数组；其余 `$` 开头键
+ * 不动，兼容既有卡——与 stripMvuSchema 同纪律）。
+ */
+export function stripMvuControl<T extends Record<string, unknown>>(tree: T): Record<string, unknown> {
+  if (!('$schema' in tree || '$rules' in tree)) return tree
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(tree)) {
+    if (key === '$schema' && isPlainObject(value)) continue
+    if (key === '$rules' && Array.isArray(value)) continue
+    out[key] = value
+  }
+  return out
+}
+
 const INITIAL_VARIABLES_KEY = 'initial_variables'
 
 function cardSchema(card: CharacterCardIR | undefined): unknown {

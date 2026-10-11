@@ -5926,6 +5926,54 @@ var DEFAULT_CHAR_DEFINE = [
   "<% } %>"
 ].join("\n");
 
+// packages/plugin/src/mvu-rules.ts
+var SAFE_MATH_KEYS = [
+  "E",
+  "LN2",
+  "LN10",
+  "LOG2E",
+  "LOG10E",
+  "PI",
+  "SQRT1_2",
+  "SQRT2",
+  "abs",
+  "acos",
+  "acosh",
+  "asin",
+  "asinh",
+  "atan",
+  "atan2",
+  "atanh",
+  "cbrt",
+  "ceil",
+  "cos",
+  "cosh",
+  "exp",
+  "expm1",
+  "floor",
+  "fround",
+  "hypot",
+  "imul",
+  "log",
+  "log1p",
+  "log2",
+  "log10",
+  "max",
+  "min",
+  "pow",
+  "round",
+  "sign",
+  "sin",
+  "sinh",
+  "sqrt",
+  "tan",
+  "tanh",
+  "trunc"
+];
+var SAFE_MATH = Object.freeze(
+  Object.fromEntries(SAFE_MATH_KEYS.map((key) => [key, Math[key]]))
+);
+
 // packages/tavern-lore/lib/types.js
 var MESSAGE_BOUNDARY2 = "";
 

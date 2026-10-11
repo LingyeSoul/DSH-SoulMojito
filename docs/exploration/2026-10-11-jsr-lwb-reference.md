@@ -224,11 +224,14 @@ IndexedDB 事务原子替换（`docs/vector-cache-packages.md`）。
 `decisions/2026-10-11-retrieval-eval-matrix.md`、`decisions/2026-10-11-mod-stream-delta.md`、
 `decisions/2026-10-11-iframe-viewport.md`、`decisions/2026-10-11-confirmable-session-writes.md`、
 `decisions/2026-10-11-memory-maintenance.md`，提案 0016）。B-4 / D-3 经架构评估**无需施工**
-（见下表注），D-5 以 `chat-saved.floorCount` 载荷部分落地。**P1 至此收官**。P2 第五批（2026-10-11）：
+（见下表注），D-5 以 `chat-saved.floorCount` 载荷部分落地。**P1 至此收官**。P2 收官批（2026-10-11）：
 D-7 文档八项表已落 CONTEXT.md「文档纪律」节，B-6b 向量缓存包/D-6 经评估免施工/暂缓（见表注），
-A-6 提示词查看器（决策 `decisions/2026-10-11-prompt-viewer.md`）与 B-6a MVU 回执撤销（决策
-`decisions/2026-10-11-mvu-receipt-undo.md`）已落地；P2 剩余候选：A-5 精选 Mod 仓库、C-2 varevent
-规则引擎、D-4 生成不入楼。
+A-6 提示词查看器（决策 `decisions/2026-10-11-prompt-viewer.md`）、B-6a MVU 回执撤销（决策
+`decisions/2026-10-11-mvu-receipt-undo.md`）、C-2 MVU 条件规则引擎（决策
+`decisions/2026-10-11-mvu-rules.md`）、D-4 生成不入楼/工作台试写（决策
+`decisions/2026-10-11-preview-generation.md`）均已落地；**A-5 精选 Mod 仓库经维护者决策不做**
+（等有第三方 Mod 生态再议）。**至此本参考清单全部处理完毕**：14 项落地、5 项架构评估免施工
+（B-4/B-6b/D-3/D-6 + A-5 维护者决策）、D-5 部分落地。
 
 **两项架构评估结论（2026-10-11）**：
 - **B-4（同轮复用 + 预取）无需施工**：LWB 的动机是 push-based 召回每次 swipe/重生成重算嵌入费；
