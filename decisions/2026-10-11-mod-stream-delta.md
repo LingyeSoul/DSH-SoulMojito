@@ -6,6 +6,19 @@
 > `packages/plugin/src/index.ts`（runGeneration 流式消费点）。开发者文档：
 > [mod-api.md](../docs/mods/mod-api.md) §5。
 
+## 开工前八项表（CONTEXT.md 纪律；规则晚于本文落地，补记于 2026-10-11 审查修复）
+
+| 项 | 答案 |
+|---|---|
+| 所有者 | `packages/plugin/src/mods/events.ts`（事件 kind、发射器、流代次计数）+ `mods/host.ts`（events.on 包装的首错审计）；发射点在 index.ts runGeneration 的 llm.stream 消费循环 |
+| 唯一事实来源 | 事件契约 = events.ts 的 payload 形状与发射纪律 + mod-api.md §5 文档 |
+| 持久态 | 无新增——事件是进程内观察位；首错 `event-error` 落既有 audit.jsonl（每代次每 Mod 至多一条） |
+| 临时态 | `streamDeltaTail` 单 promise 投递链与模块级 epoch 计数器，重启即失（事件本就是即时观察） |
+| 外部依赖 | 零新增——复用 mods 事件总线、audit 面向既有设施；AgentTavern 走宿主 AgentLoop 天然不可达（v1 如实标注） |
+| 注册入口 | 总线 kind `stream-delta`（Mod 经 `events.on` 订阅）；无 HTTP 路由/面板分区/iframe 下行 |
+| 删除路径 | 删 events.ts 的 kind/发射器/epoch 三段 + host.ts 首错包装回退 + index.ts 发射点 + tavern-mods-stream.spec.ts + mod-api.md §5 条目；未知 kind 注册期抛错会让残留订阅方直接暴露 |
+| 兼容对象 | 其余低频事件 kind 逐次审计行为不变；chat-saved inline await 纪律不动（高低频刻意分治）；SSE 下行时序不变（发射在 SSE write 之后、不背压） |
+
 ## 契约
 
 - **新事件 kind `stream-delta`**（events.ts）：payload

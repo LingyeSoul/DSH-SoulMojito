@@ -44,3 +44,40 @@ export function tokenizeQuery(value: string): string[] {
   }
   return [...tokens]
 }
+
+/* ---- 分级匹配与摘录（决策 2026-10-11-cjk-tokenization 的匹配语义单一来源；
+ * agent-tavern 词法检索 / 记忆维护 SearchSource / agent-novel 摘录共用） ---- */
+
+/** 分级匹配：≤3 token 保持严格 AND（专名精确查询语义）；>3 token 走阈值——
+ * 命中数 ≥ ceil(40%×总数) 才入选。bigram 展开后严格 AND 对自然语句过严
+ * （"雨欠"这类跨词界组合在改写句中必然缺失）；40% 而非规格草案的 60%：
+ * 自举示例"林小雨欠的赌债还了吗"×"林小雨在赌场欠下赌债"命中 3/7≈43%，
+ * 60% 会拒掉该目标场景。 */
+const STRICT_TOKEN_MAX = 3
+const TOKEN_MATCH_RATIO = 0.4
+
+export function tokenThreshold(total: number): number {
+  return total <= STRICT_TOKEN_MAX ? total : Math.ceil(total * TOKEN_MATCH_RATIO)
+}
+
+export function matchedTokenCount(text: string, tokens: readonly string[]): number {
+  const haystack = text.toLocaleLowerCase()
+  let matched = 0
+  for (const token of tokens) {
+    if (haystack.includes(token)) matched += 1
+  }
+  return matched
+}
+
+/** 摘录窗口：锚定最靠前的命中 token，向前留 80 字符上下文，超宽两端加省略号。 */
+export function excerptAround(text: string, tokens: readonly string[], maxChars: number): string {
+  if (text.length <= maxChars) return text
+  const haystack = text.toLocaleLowerCase()
+  let anchor = 0
+  for (const token of tokens) {
+    const at = haystack.indexOf(token)
+    if (at >= 0 && (anchor === 0 || at < anchor)) anchor = at
+  }
+  const start = Math.max(0, Math.min(anchor - 80, text.length - maxChars))
+  return `${start > 0 ? '…' : ''}${text.slice(start, start + maxChars)}${start + maxChars < text.length ? '…' : ''}`
+}

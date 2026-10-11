@@ -4,6 +4,19 @@
 建议表 B-3。参考语义：LittleWhiteBox `modules/story-summary/docs/memory-maintenance-target-design.md`
 （262 行规格书，Apache-2.0 只取机制设计不抄代码）。
 
+## 开工前八项表（CONTEXT.md 纪律；规则晚于本文落地，补记于 2026-10-11 审查修复）
+
+| 项 | 答案 |
+|---|---|
+| 所有者 | run 编排与私有工具面 `packages/plugin/src/memory-maintenance.ts`；状态 sidecar `packages/tavern-store/src/memory-maintenance.ts`；HTTP 面 index.ts 两路由；面板行 client/main.js「记忆检索」分区 |
+| 唯一事实来源 | 记录本体 = MemoryStore chat 作用域（revision CAS）；维护进度 = `<tavern>/memory-maintenance/<character>/<chatId>.json`（收据 + lastRun） |
+| 持久态 | 收据 `{runId, baseFloor, headFloor, floorSig, recordSnapshots}` 与 lastRun——可重建的进度元数据（损坏按空处理，最坏全楼面重维护一遍） |
+| 临时态 | 进程内 run 注册表（同 scope 409 单飞判据）与 run 开场的冻结证据快照，重启即失；重启发现 running 无在跑注册就地改标 error/interrupted 落盘 |
+| 外部依赖 | 宿主 `ctx.llm.stream`（部署默认模型、不带 purpose——封闭枚举不私加）；B-2 embed 三件套（编辑成功即重嵌，失败不阻塞走懒回填） |
+| 注册入口 | `POST/GET /api/dsh-tavern/memory/maintenance` + 面板「记忆检索」分区「记忆维护」行（1.5s 轮询）；工具面是 run 私有不进 ctx.tools |
+| 删除路径 | 删 plugin/tavern-store 两个 memory-maintenance.ts + index.ts 路由 + 面板行 + memory-maintenance.spec.ts + 数据目录 `<tavern>/memory-maintenance/`；MemoryStore.list 公开方法若无其他消费者一并删 |
+| 兼容对象 | 聊天原文零写路径（run 前后快照逐字节不变，测试钉死）；agent.ts 模型工具面零改动；memory-audit jsonl 审计照旧；收据让位 + 128 封顶只丢「已完成」标记不丢数据 |
+
 ## 1. 定位
 
 服务端维护 run（compaction curator 同族的宿主 `ctx.llm.stream` 辅助调用），**不是 Mod、

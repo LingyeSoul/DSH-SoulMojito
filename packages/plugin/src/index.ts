@@ -35,6 +35,8 @@ import {
   VariableRevisionConflictError,
   VariableStore,
   isValidNovelId,
+  MEMORY_EMBED_ENV_NAME,
+  normalizeEmbedBaseURL,
   normalizeMemoryEmbedding,
   summarizeNovel,
   totalEffectiveCharacters,
@@ -867,9 +869,9 @@ async function handleApi(ctx, req, res) {
       Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store) => store.search({
         scope, scopeId, includeDeleted: true, limit: 50,
       })))),
-      Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store) => store.list(scope, scopeId, '', 100)))),
+      Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store) => store.listAll(scope, scopeId)))),
       memories().then((store) => store.search({ scope: 'global', includeDeleted: true, limit: 50 })),
-      variables().then((store) => store.list('global', 'global', '', 100)),
+      variables().then((store) => store.listAll('global', 'global')),
       agentTavernProjectorPromise,
     ])
     return sendJson(res, 200, {
@@ -1967,7 +1969,7 @@ async function handleMvuApi(
     const receipts = readMvuReceipts(chat)
     const agentTavernBound = Object.values(state.sessionBindings).some((binding) =>
       binding.architecture === 'agent-tavern' && binding.chatId === chatId && binding.character === characterName)
-    const scopedVariables = agentTavernBound ? await (await variables()).list('chat', chatId, '', 100) : []
+    const scopedVariables = agentTavernBound ? await (await variables()).listAll('chat', chatId) : []
     // 显示树剥离根 $schema（C-1）/$rules（C-2）：守卫/规则契约不是变量，不进
     // 状态栏载荷/渲染。
     const displayVariables = stripMvuControl(scopedVariables.length > 0
@@ -2044,7 +2046,7 @@ async function handleMemoryEmbedApi(
   if (method === 'PUT' && route === 'memory/embed') {
     const body = await readJson(req)
     const raw: Record<string, unknown> = body === null || typeof body !== 'object' || Array.isArray(body) ? {} : body
-    const baseURL = typeof raw.baseURL === 'string' ? raw.baseURL.trim().replace(/\/+$/, '') : ''
+    const baseURL = typeof raw.baseURL === 'string' ? normalizeEmbedBaseURL(raw.baseURL) : ''
     const apiKeyEnv = typeof raw.apiKeyEnv === 'string' ? raw.apiKeyEnv.trim() : ''
     const model = typeof raw.model === 'string' ? raw.model.trim() : ''
     // 三件套全空 = 清除配置（混合检索整体回落纯词法）。
@@ -2053,8 +2055,9 @@ async function handleMemoryEmbedApi(
       await clearEmbedStatus(root)
       return sendJson(res, 200, { ok: true, config: null })
     }
-    // POSIX env 名前置校验（给出比 normalize 落空更可操作的报错文案）。
-    if (apiKeyEnv !== '' && !/^[A-Za-z_][A-Za-z0-9_]{0,255}$/.test(apiKeyEnv)) {
+    // POSIX env 名前置校验（给出比 normalize 落空更可操作的报错文案；模式与
+    // normalizeMemoryEmbedding 同源导出，两处不漂移）。
+    if (apiKeyEnv !== '' && !MEMORY_EMBED_ENV_NAME.test(apiKeyEnv)) {
       return sendJson(res, 400, {
         ok: false,
         message: `invalid apiKeyEnv '${apiKeyEnv.slice(0, 60)}': expected a POSIX environment variable name (letters, digits, underscore; not starting with a digit), or an empty string for a keyless endpoint`,

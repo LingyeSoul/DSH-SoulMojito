@@ -145,7 +145,6 @@ export interface EmbedTextsOptions {
   expectedDims?: number
   /** 测试注入口；缺省 global fetch。 */
   fetchImpl?: typeof fetch
-  now?: () => number
 }
 
 /**

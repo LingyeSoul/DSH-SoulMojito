@@ -6,6 +6,19 @@
 > `packages/plugin/src/mods/http.ts`、`packages/plugin/scripts/gates/run.mjs`。
 > 开发者文档：[mod-api.md §13](../docs/mods/mod-api.md)。
 
+## 开工前八项表（CONTEXT.md 纪律；规则晚于本文落地，补记于 2026-10-11 审查修复）
+
+| 项 | 答案 |
+|---|---|
+| 所有者 | client `packages/plugin/client/main.js`（buildFrontendDocument 改写、useViewportBridge、frontendHeightReporter）与 server `packages/plugin/src/mods/http.ts`（renderModHtmlDocument 改写、modViewportScript、modHeightReporterScript）；双份同步义务由 gates marker 锚定 |
+| 唯一事实来源 | 改写规则与注入脚本文本就是两份源码本体（client half 是拼接 IIFE 无 import 通道，共享消重是否决项）；跨侧契约 = `--dt-viewport-height` CSS 变量与 `dsh-tavern:viewport` 消息 |
+| 持久态 | 无——视口高度是运行时消息，不落任何 store/文件 |
+| 临时态 | iframe 内 CSS 变量与宿主 resize 监听，随挂载生灭 |
+| 外部依赖 | postMessage 单向下行 + ResizeObserver/rAF（浏览器标准面）；零 npm 新依赖 |
+| 注册入口 | 两个注入点（client buildFrontendDocument / server renderModHtmlDocument，改写先于 CSP 注入）+ gates frontend-runtime 两个 marker |
+| 删除路径 | 删两份改写/视口脚本/桥 + gates marker 与自测负样本 + tavern-mods-viewport.spec.ts + mod-api.md §13 条目 + 本决策；已分发前端里的 `var(--dt-viewport-height, 100vh)` 因 fallback 自然回退旧行为 |
+| 兼容对象 | 非 100 系列 vh、`%` 布局、CSS 注释/字符串零触碰；mood-tracker 手写上报器共存（宿主 setHeight 钳制幂等）；上行高度消息 token+contentWindow 双对账纪律不变 |
+
 ## 1. 问题：100vh 的循环依赖
 
 美化前端（`FrontendFrame`，srcDoc）与 Mod 面板（`ModSurface`，src 指向 `GET

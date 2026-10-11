@@ -17,9 +17,11 @@
  */
 
 import {
+  cosineSimilarity,
   decodeVector,
   encodeVector,
   memoryContentDigest,
+  rrfFuse,
   type MemoryEmbeddingSettings,
   type MemoryHit,
   type MemoryScope,
@@ -39,39 +41,13 @@ import {
   storeMemoizedQueryVector,
 } from './memory-embed.js'
 
-/** RRF 常数（标准 k=60，两通道等权）。 */
-export const RRF_K = 60
 /** 单次检索的懒回填上限。 */
 export const HYBRID_BACKFILL_LIMIT = 32
 /** 词法候选池：每 scope 取 MemoryStore 上限（MAX_RESULTS=50）。 */
 export const HYBRID_POOL_PER_SCOPE = 50
 
-/** 双通道 RRF：按各通道名次累加 1/(k+rank)，rank 从 1 起。 */
-export function rrfFuse(lexicalOrder: readonly string[], denseOrder: readonly string[], k = RRF_K): Map<string, number> {
-  const scores = new Map<string, number>()
-  const add = (id: string, rank: number) => {
-    scores.set(id, (scores.get(id) ?? 0) + 1 / (k + rank))
-  }
-  lexicalOrder.forEach((id, index) => add(id, index + 1))
-  denseOrder.forEach((id, index) => add(id, index + 1))
-  return scores
-}
-
-export function cosineSimilarity(left: readonly number[], right: readonly number[]): number {
-  if (left.length === 0 || left.length !== right.length) return 0
-  let dot = 0
-  let normLeft = 0
-  let normRight = 0
-  for (let index = 0; index < left.length; index += 1) {
-    const a = left[index]!
-    const b = right[index]!
-    dot += a * b
-    normLeft += a * a
-    normRight += b * b
-  }
-  if (normLeft === 0 || normRight === 0) return 0
-  return dot / (Math.sqrt(normLeft) * Math.sqrt(normRight))
-}
+// RRF_K / rrfFuse / cosineSimilarity 与离线评测（scripts/retrieval-eval）同源：
+// tavern-store/src/memory-vectors.ts（提案 0016 §5 融合原语单一来源）。
 
 export interface HybridScope {
   scope: MemoryScope

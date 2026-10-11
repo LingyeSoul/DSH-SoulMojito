@@ -14,6 +14,7 @@ import {
   NovelNotFoundError,
   NovelStore,
   TavernStore,
+  excerptAround,
   requirementWatermark,
   totalEffectiveCharacters,
   type CanonChange,
@@ -1485,20 +1486,9 @@ function nonNegativeInt(value: unknown): number {
 
 // limitText / tokenizeQuery / matchesAllTokens 以及 character/lore 的解析匹配核心
 // 已搬家到 ./writer.js（0007 Task B），本模块 import 使用，行为逐字等价；limitText
-// 的最终落点现为 ../tool-args.js（经 writer.js re-export，决策 2026-10-09-dedup-refactor）。
-// stringArg / boundedStringArg / clampInt 同决策统一于 ../tool-args.js。
-
-function excerptAround(text: string, tokens: string[], maxChars: number): string {
-  if (text.length <= maxChars) return text
-  const haystack = text.toLocaleLowerCase()
-  let anchor = 0
-  for (const token of tokens) {
-    const at = haystack.indexOf(token)
-    if (at >= 0 && (anchor === 0 || at < anchor)) anchor = at
-  }
-  const start = Math.max(0, Math.min(anchor - 80, text.length - maxChars))
-  return `${start > 0 ? '…' : ''}${text.slice(start, start + maxChars)}${start + maxChars < text.length ? '…' : ''}`
-}
+// 的最终落点现为 ../tool-args.js（经 writer.js re-export，决策 2026-09-09-dedup-refactor）。
+// stringArg / boundedStringArg / clampInt 同决策统一于 ../tool-args.js；
+// excerptAround 与 tavern 侧同源（tavern-store/src/tokenize.ts）。
 
 function tavernStore(): Promise<TavernStore> {
   return (tavernStorePromise ??= TavernStore.open(dshHomePath('tavern')))

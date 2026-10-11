@@ -4,6 +4,19 @@
 （LittleWhiteBox 教训，Apache-2.0 只抄语义：宿主保存 API 可能吞异常/等锁超时静默不保存
 ——「写完 marker 后从服务端**读回验证**在场才继续」）。
 
+## 开工前八项表（CONTEXT.md 纪律；规则晚于本文落地，补记于 2026-10-11 审查修复）
+
+| 项 | 答案 |
+|---|---|
+| 所有者 | 协议核 `packages/bind/src/confirmable-write.ts`（confirmSessionAppend / landedPlanAppends）；接入点为 index.ts §2.1 表所列五处「必须成立」写入位 |
+| 唯一事实来源 | 宿主会话日志本体（读回判在场 = readSessionEvents 对日志的直接观察）；插件侧绑定/状态事实仍在 tavern-store，不因协议改变 |
+| 持久态 | 无新增——协议不落自己的状态，产物是宿主日志里的 marker 本身与 logger warn/error 行 |
+| 临时态 | 验证过程内的读回与一次重试，进程内即弃 |
+| 外部依赖 | packages/bind 对宿主 session 形状的既有适配（0.1.x `events` / 0.1.2+ `snapshotEvents()` / 私有 `log`）；日志不可读宿主上协议如实失败不硬造确认 |
+| 注册入口 | 无路由/事件/面板——纯库函数，由导入批量/占位 turn 对/AgentTavern 预设 marker/ST 激活 marker/关闭 marker 五点调用 |
+| 删除路径 | 删 confirmable-write.ts + bind/index.ts 导出 + 五处调用回退直写 + confirmable-write.spec.ts 与 agent-tavern-confirmable-writes.spec.ts + 本决策；行为回到直写形态，无数据迁移 |
+| 兼容对象 | marker 幂等性前提由调用方保证（同 id selected、同 summary notice 重复无害）；ST 激活 marker 判据从绑定 diff 改日志在场（§4.1 自愈补写）；未知形状宿主从盲目信任改如实拒绝（§4.2）；tavern-command.spec 幂等断言已随改 |
+
 ## 1. 背景：本仓库的风险面在哪里
 
 对 DSH 0.2.0-rc.2 隔离 runtime 的实测读码（`.npm-cache/dsh-runtime`）：

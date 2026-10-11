@@ -4,6 +4,19 @@
 为 B-1 中文分词修复（`decisions/2026-10-11-cjk-tokenization.md`，commit 0bac59a）建立
 确定性质量基线与回归门槛，并为 B-2（dense 召回）提供可复用的 A/B 语料。
 
+## 开工前八项表（CONTEXT.md 纪律；规则晚于本文落地，补记于 2026-10-11 审查修复）
+
+| 项 | 答案 |
+|---|---|
+| 所有者 | `scripts/retrieval-eval/` 四件（corpus/metrics/seed/run）+ 门槛 spec `packages/tavern-store/tests/retrieval-matrix.spec.ts`；被测检索行为本体归 MemoryStore，本矩阵纯观察不改它 |
+| 唯一事实来源 | ground truth 与基线数字写死在门槛 spec（BASELINE 常量 + 语料规范哈希）；runner 控制台输出只是对账副本 |
+| 持久态 | 无——评测库每次 `mkdtemp` 临时目录播种，run 结束 `rm -rf` |
+| 临时态 | 进程内语料构建与指标计算（纯函数、零随机源，跨进程逐字节一致） |
+| 外部依赖 | 零新增 npm 依赖；runner 走 tavern-store 构建产物 `lib/`（先 `pnpm build`）；`--dense` 需真实 embed 端点（不入 CI） |
+| 注册入口 | vitest 自动收集门槛 spec；runner 手动 `node scripts/retrieval-eval/run.mjs`（无路由/面板面） |
+| 删除路径 | 删 `scripts/retrieval-eval/` 整目录 + retrieval-matrix.spec.ts + 本决策文档；无运行时与数据残留 |
+| 兼容对象 | MemoryStore.search 行为零接触；语料哈希冻结（改语料必先撞哈希红，逼出有意识重基线）；B-2 融合回归复用同一矩阵，仅更新 BASELINE 为融合实测值 |
+
 ## 交付物与用法
 
 | 文件 | 角色 |

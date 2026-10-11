@@ -1922,15 +1922,18 @@ function normalizeModEnables(value) {
   }
   return result;
 }
-var ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
+var MEMORY_EMBED_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
+function normalizeEmbedBaseURL(value) {
+  return value.trim().replace(/\/+$/, "");
+}
 function normalizeMemoryEmbedding(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
   const record = value;
-  const baseURL = typeof record.baseURL === "string" ? record.baseURL.trim().replace(/\/+$/, "") : "";
+  const baseURL = typeof record.baseURL === "string" ? normalizeEmbedBaseURL(record.baseURL) : "";
   const model = typeof record.model === "string" ? record.model.trim().slice(0, 200) : "";
   const apiKeyEnv = typeof record.apiKeyEnv === "string" ? record.apiKeyEnv.trim() : "";
   if (baseURL === "" || model === "" || !/^https?:\/\//.test(baseURL)) return void 0;
-  if (apiKeyEnv !== "" && !ENV_NAME.test(apiKeyEnv)) return void 0;
+  if (apiKeyEnv !== "" && !MEMORY_EMBED_ENV_NAME.test(apiKeyEnv)) return void 0;
   const dims = clampOptionalInt(record.dims, 1, 8192);
   const batchSize = clampOptionalInt(record.batchSize, 1, 64);
   const timeoutMs = clampOptionalInt(record.timeoutMs, 200, 12e4);
