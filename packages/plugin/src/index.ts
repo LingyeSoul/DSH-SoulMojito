@@ -1573,7 +1573,7 @@ async function handleApi(ctx, req, res) {
         throw new Error('expected { chat, revision }')
       }
       const revision = await db.saveChat(character, chatId, body.chat, body.revision)
-      await emitChatSaved(character, chatId, revision)
+      await emitChatSaved(character, chatId, revision, body.chat.messages.length)
       return sendJson(res, 200, { ok: true, chat: body.chat, revision })
     }
     if (method === 'PATCH') {
@@ -1667,7 +1667,7 @@ async function handleGuidesApi(
       header: { ...snapshot.chat.header, chat_metadata: metadata },
     }, snapshot.revision)
     await emitGuidesChanged(character, chatId)
-    await emitChatSaved(character, chatId, revision)
+    await emitChatSaved(character, chatId, revision, snapshot.chat.messages.length)
     return sendJson(res, 200, { ok: true, guide: added.guide, guides: added.guides, revision })
   }
 
@@ -1690,7 +1690,7 @@ async function handleGuidesApi(
       header: { ...snapshot.chat.header, chat_metadata: metadata },
     }, snapshot.revision)
     await emitGuidesChanged(character, chatId)
-    await emitChatSaved(character, chatId, revision)
+    await emitChatSaved(character, chatId, revision, snapshot.chat.messages.length)
     return sendJson(res, 200, { ok: true, guides: removed.guides, revision })
   }
 
@@ -2898,7 +2898,7 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     revision = await db.saveChat(characterName, chatId, chat, revision)
     // chat-saved（提案 0015 §3.3 P1 的 api.events）：用户消息落盘点。无监听时
     // 是已 resolved 的 promise，零开销。
-    await emitChatSaved(characterName, chatId, revision)
+    await emitChatSaved(characterName, chatId, revision, chat.messages.length)
   } else {
     const last = chat.messages[chat.messages.length - 1]
     if (last?.is_user === false && !last.is_system) {
@@ -3264,7 +3264,7 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   revision = await db.saveChat(characterName, chatId, chat, revision)
   // chat-saved（提案 0015 §3.3 P1）：助手回复落盘点（与 post-save hook 相邻但
   // 语义不同——events 是观察面，hooks 是 P2 的变换面）。
-  await emitChatSaved(characterName, chatId, revision)
+  await emitChatSaved(characterName, chatId, revision, chat.messages.length)
   // post-save 相位（提案 0015 §3.4）：落盘后的只读观察，返回值丢弃；hook 失败/
   // 超时降级不改变任何已落盘状态。空总线恒等。
   await generationHooks.dispatch('post-save', { chat, revision, speaker: speakerName, finalText }, { mode, character: speakerName, chatId, group })
@@ -3318,7 +3318,7 @@ async function runTavernScript(ctx, req, res, db) {
     if (Object.keys(vars).length > 0) chat.header.chat_metadata.variables = vars
     else delete chat.header.chat_metadata.variables
     revision = await db.saveChat(characterName, chatId, chat, revision)
-    await emitChatSaved(characterName, chatId, revision)
+    await emitChatSaved(characterName, chatId, revision, chat.messages.length)
   }
 
   const triggerGeneration = async (member) => {

@@ -220,7 +220,7 @@ await api.storage.delete('counter')          // boolean（是否存在）
 
 | kind | payload | 发射时机 |
 |---|---|---|
-| `chat-saved` | `{character, chatId, revision}` | 聊天落盘后（PUT chat / guides 写入 / 生成两段落盘 / STscript persist） |
+| `chat-saved` | `{character, chatId, revision, floorCount}` | 聊天落盘后（PUT chat / guides 写入 / 生成两段落盘 / STscript persist）。`floorCount` = 落盘后楼层总数（messages.length 原始计数）——「每 N 楼执行」类调度直接比对这个字段，不必整聊拉取 |
 | `assets-saved` | `{kind, name}` | 资产保存/导入后（character/world/preset/persona/group） |
 | `guides-changed` | `{character, chatId}` | 持续指引变更 |
 | `stream-delta` | `{mode, character, chatId, text, delta}` | ST 生成循环每收到一个正文 text-delta chunk（累积拼接之后）。`mode ∈ send/regenerate/trigger`；`text` = 当前累积全文（fully 通道），`delta` = 本次增量（incrementally 通道）——一个事件双字段，Mod 自选粒度做打字机进度 / 实时 UI |

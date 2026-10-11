@@ -296,8 +296,8 @@ describe('stream-delta audit flood control and lifecycle (api.events adapter)', 
         `)
       },
     )
-    await emitChatSaved('C', 'c1', 'r1')
-    await emitChatSaved('C', 'c1', 'r2')
+    await emitChatSaved('C', 'c1', 'r1', 2)
+    await emitChatSaved('C', 'c1', 'r2', 4)
     const errors = auditLines(home, 'event-error')
     expect(errors).toHaveLength(2) // 非 stream-delta：逐次审计，无静默
     for (const line of errors) expect(line).toContain('chat kaboom')

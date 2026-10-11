@@ -17,7 +17,13 @@ export type ModEventKind = 'chat-saved' | 'assets-saved' | 'guides-changed' | 's
 
 export interface ModEventPayloads {
   /** 聊天落盘后（PUT chat / guides 写入 / 生成两段落盘 / STscript persist）。 */
-  'chat-saved': { character: string; chatId: string; revision: string }
+  'chat-saved': {
+    character: string
+    chatId: string
+    revision: string
+    /** 落盘后的楼层总数（messages.length，原始计数）。供 Mod 实现「每 N 楼」类调度，免去整聊拉取。 */
+    floorCount: number
+  }
   /** 资产保存/导入后（character/world/preset/persona/group）。 */
   'assets-saved': { kind: string; name: string }
   /** guides 变更（guides.ts 既有总线的桥接）。 */
@@ -83,9 +89,9 @@ export const modEvents = new ModEventBus()
 
 /* ---------------- 宿主发射点用的薄封装（index.ts 调用） ---------------- */
 
-/** 聊天落盘点发射（best-effort，与 emitGuidesChanged 同纪律）。 */
-export function emitChatSaved(character: string, chatId: string, revision: string): Promise<void> {
-  return modEvents.emit('chat-saved', { character, chatId, revision })
+/** 聊天落盘点发射（best-effort，与 emitGuidesChanged 同纪律）。floorCount=落盘后楼层总数。 */
+export function emitChatSaved(character: string, chatId: string, revision: string, floorCount: number): Promise<void> {
+  return modEvents.emit('chat-saved', { character, chatId, revision, floorCount })
 }
 
 /** 资产保存/导入点发射。kind ∈ character|world|preset|persona|group。 */
