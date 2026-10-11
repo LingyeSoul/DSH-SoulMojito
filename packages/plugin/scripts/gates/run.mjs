@@ -437,6 +437,14 @@ function checkFrontendRuntimeText(text) {
     // CSS 变量）+ 宿主→iframe 视口投递（dsh-tavern:viewport）必须都在 client half。
     "'--dt-viewport-height'",
     "'dsh-tavern:viewport'",
+    // ST 思考+正文双通道流式（2026-10-11）：/generate SSE 的 reasoning 增量必须被
+    // 消费（event.type === 'reasoning'）进 run.streamReasoning，并以 dt-reasoning
+    // 思考块渲染（流式展开、保存后折叠），双 locale 标签键齐备。
+    'streamReasoning',
+    "event.type === 'reasoning'",
+    'dt-reasoning-body',
+    "'message.thinking'",
+    "'message.thoughts'",
   ]) {
     if (!text.includes(marker)) problems.push(`frontend runtime is missing marker '${marker}'`)
   }
@@ -1808,6 +1816,11 @@ const gates = [
         'function ModPanelSurface({ mod }) {}',
         "'--dt-viewport-height'",
         "'dsh-tavern:viewport'",
+        'streamReasoning',
+        "event.type === 'reasoning'",
+        'dt-reasoning-body',
+        "'message.thinking'",
+        "'message.thoughts'",
       ].join('\n')
       const bad = good.replace("sandbox: 'allow-scripts'", "sandbox: 'allow-forms'")
       const badBridge = good.replace('dsh-tavern:mod-request', 'dsh-tavern:mod-bridge-removed')
@@ -1816,12 +1829,16 @@ const gates = [
       // 匹配），否则负样本形同虚设（上一批的已知坑）。
       const badViewportVar = good.replace("'--dt-viewport-height'", "'--dt-vh-gone'")
       const badViewportMsg = good.replace("'dsh-tavern:viewport'", "'dsh-tavern:vp-gone'")
+      const badReasoningConsume = good.replace("event.type === 'reasoning'", "event.type === 'reason-gone'")
+      const badReasoningRender = good.replace('dt-reasoning-body', 'dt-reason-gone')
       return checkFrontendRuntimeText(good).length === 0
         && checkFrontendRuntimeText(bad).length > 0
         && checkFrontendRuntimeText(badBridge).length > 0
         && checkFrontendRuntimeText(badEvent).length > 0
         && checkFrontendRuntimeText(badViewportVar).length > 0
         && checkFrontendRuntimeText(badViewportMsg).length > 0
+        && checkFrontendRuntimeText(badReasoningConsume).length > 0
+        && checkFrontendRuntimeText(badReasoningRender).length > 0
         ? []
         : ['frontend runtime marker self-test did not distinguish an unsafe sample']
     },

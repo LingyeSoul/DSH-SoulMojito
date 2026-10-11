@@ -16,7 +16,7 @@
 - World Info / Lorebook：递归扫描、副键逻辑、概率、预算、inclusion group、sticky/cooldown/delay 和位置分发。
 - Chat Completion preset：`prompts[]`、`prompt_order[]`、marker 和采样参数。
 - SillyTavern chat JSONL：header、messages、`swipes`、`swipe_id`、`swipe_info`。
-- RP 交互：流式生成、Stop、消息编辑、swipe、regenerate、聊天创建、重命名和确认删除。
+- RP 交互：流式生成（思考与正文双通道：reasoning 增量实时流式显示、保存后可折叠回看，各 swipe 候选各自的思考随切换跟随）、Stop、消息编辑、swipe、regenerate、聊天创建、重命名和确认删除。ST 思考流式详见 [`decisions/2026-10-11-st-reasoning-stream.md`](decisions/2026-10-11-st-reasoning-stream.md)。
 - 消息分支 / bookmark：任意消息一键分支为新聊天，`chat_metadata.bookmark_link` 回链，视图可跳回父聊天。
 - 持续指引（Conversation Guides）：把长期生效的写作/节奏要求（如「多写心理活动」「好感度涨得慢一点」）保存为 Guide，本局正文、行动候选与带意见重写自动参考；上限 8 条、单条 ≤500 字符，面板增删、删除即时生效，正文中不回显。AgentTavern 会话以 systemPrompt context 段注入。详见 [`docs/proposals/0009-conversation-guides.md`](docs/proposals/0009-conversation-guides.md)。
 - 行动候选（ST 聊天）：一键生成 3-6 个「人物行动 / 场景变化」候选，点击填入输入框（可改再发），或携带反馈重新生成；候选是建议不是指令，没有自动执行路径。详见 [`docs/proposals/0010-turn-candidates.md`](docs/proposals/0010-turn-candidates.md)。
@@ -295,7 +295,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：86 个测试文件、1204 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
+当前基线：86 个测试文件、1205 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 

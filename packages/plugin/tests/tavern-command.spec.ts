@@ -121,6 +121,8 @@ describe('internal Tavern session bridge occupation', () => {
   let recomposeCalls: Array<{ agent: unknown; presetId: string }>
   let llmRequests: Array<{ system?: string }>
   let failGeneration = false
+  // ST 思考+正文双通道流式：打开后 llm.stream 桩先吐 reasoning-delta 再吐正文。
+  let reasoningGeneration = false
   let chatId: string
   let emptyChatId: string
 
@@ -214,6 +216,7 @@ describe('internal Tavern session bridge occupation', () => {
         stream: async function* (request: { system?: string }) {
           llmRequests.push(request)
           if (failGeneration) throw new Error('test generation failure')
+          if (reasoningGeneration) yield { type: 'reasoning-delta', text: '(inner reasoning)' }
           yield { type: 'text-delta', text: 'reply' }
           yield { type: 'usage', usage: { inputTokens: 11, outputTokens: 7, cacheReadTokens: 89, cacheWriteTokens: 0 } }
           yield { type: 'finish', reason: { kind: 'stop' } }
@@ -320,6 +323,39 @@ describe('internal Tavern session bridge occupation', () => {
     expect(assistant?.data).not.toHaveProperty('stream')
     expect((agent.session.events.at(-1)?.data as { reason?: unknown }).reason).toEqual({ kind: 'completed' })
     expect(res.chunks.some((chunk) => chunk.includes('"type":"saved"'))).toBe(true)
+  })
+
+  // ST 思考+正文双通道流式（2026-10-11）：reasoning-delta 必须逐 chunk 以
+  // {type:'reasoning'} SSE 下发（客户端 run.streamReasoning 通道消费的契约），
+  // 并在保存时落 extra.reasoning / swipe_info[].extra.reasoning（思考块的持久
+  // 数据源）。正文 delta 通道不受影响。
+  it('streams reasoning deltas over SSE and persists them on the saved message', async () => {
+    reasoningGeneration = true
+    try {
+      const agent = makeAgent('session-generate-reasoning')
+      agents.set(agent.id, agent)
+      const snapshot = await store.getChatSnapshot(CHARACTER, chatId)
+      const res = makeResponse()
+      await apiHandler(makeRequest({
+        character: CHARACTER,
+        chatId,
+        message: 'Think then reply',
+        revision: snapshot!.revision,
+        sessionId: agent.id,
+      }), res)
+      const reasoningChunks = res.chunks.filter((chunk) => chunk.includes('"type":"reasoning"'))
+      expect(reasoningChunks).toEqual(['{"type":"reasoning","text":"(inner reasoning)"}\n'])
+      const deltaChunks = res.chunks.filter((chunk) => chunk.includes('"type":"delta"'))
+      expect(deltaChunks).toEqual(['{"type":"delta","text":"reply"}\n'])
+      const savedChunk = res.chunks.find((chunk) => chunk.includes('"type":"saved"'))
+      expect(savedChunk).toBeDefined()
+      const saved = JSON.parse(savedChunk!) as { chat: { messages: Array<{ extra?: { reasoning?: string }, swipe_info?: Array<{ extra?: { reasoning?: string } }> }> } }
+      const savedMessage = saved.chat.messages.at(-1)!
+      expect(savedMessage.extra?.reasoning).toBe('(inner reasoning)')
+      expect(savedMessage.swipe_info?.[0]?.extra?.reasoning).toBe('(inner reasoning)')
+    } finally {
+      reasoningGeneration = false
+    }
   })
 
   it('writes v4 settlement fields on a format-v4 host session and drops assistant/chunk', async () => {
