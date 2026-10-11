@@ -4861,6 +4861,20 @@ function boundedText(value, max2, label) {
   return value.trim().slice(0, max2);
 }
 
+// packages/tavern-template/src/paths.ts
+function isObjectLike(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function deepClone(value) {
+  if (Array.isArray(value)) return value.map((item) => deepClone(item));
+  if (isObjectLike(value)) {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) out[key] = deepClone(item);
+    return out;
+  }
+  return value;
+}
+
 // packages/tavern-template/src/api.ts
 var DEFAULT_CHAR_DEFINE = [
   "<% if (name) { %>",
@@ -4877,6 +4891,17 @@ var DEFAULT_CHAR_DEFINE = [
   "</<%- name %>>",
   "<% } %>"
 ].join("\n");
+
+// packages/tavern-template/src/runtime.ts
+import vm from "node:vm";
+async function evalExpressionSandboxed(expression, env) {
+  const wrapper = `(async function (__env) { with (__env) { return await (${expression}); } })`;
+  const script = new vm.Script(wrapper, { filename: "tavern-template-expr.ejs" });
+  const sandboxEnv = /* @__PURE__ */ Object.create(null);
+  Object.assign(sandboxEnv, env);
+  const factory = script.runInNewContext(sandboxEnv);
+  return await factory(sandboxEnv);
+}
 
 // packages/plugin/src/mvu-guard.ts
 var DIRECTIVE_KEYS = ["$range", "$step", "$enum", "$ro", "$type"];
@@ -4946,6 +4971,16 @@ function resolveMvuSchema(raw) {
   const root = resolved !== void 0 && resolved.objectMode === "locked" ? { ...resolved, objectMode: "open" } : resolved;
   schemaCache.set(raw, root);
   return root;
+}
+function stripMvuControl(tree) {
+  if (!("$schema" in tree || "$rules" in tree)) return tree;
+  const out = {};
+  for (const [key, value] of Object.entries(tree)) {
+    if (key === "$schema" && isPlainObject(value)) continue;
+    if (key === "$rules" && Array.isArray(value)) continue;
+    out[key] = value;
+  }
+  return out;
 }
 var INITIAL_VARIABLES_KEY = "initial_variables";
 function cardSchema(card) {
@@ -5127,6 +5162,211 @@ function getMvuTreePath(tree, path7) {
   return cursor;
 }
 
+// packages/plugin/src/mvu-rules.ts
+var MVU_RULE_ROUNDS = 3;
+var MVU_RULES_LIMIT = 32;
+var MVU_RULE_THEN_LIMIT = 16;
+function isPlainObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+var INITIAL_VARIABLES_KEY2 = "initial_variables";
+function cardRules(card) {
+  const holder = card?.data?.extensions?.["agentTavern"];
+  if (!isPlainObject2(holder)) return void 0;
+  return holder.initialVariables?.$rules;
+}
+function treeRules(tree) {
+  return isPlainObject2(tree) ? tree.$rules : void 0;
+}
+function validateMvuRules(raw) {
+  if (!Array.isArray(raw)) throw new Error("$rules must be an array of rule objects");
+  if (raw.length === 0) return [];
+  if (raw.length > MVU_RULES_LIMIT) {
+    throw new Error(`$rules declares ${raw.length} rules, over the cap of ${MVU_RULES_LIMIT}`);
+  }
+  return raw.map((entry, index) => {
+    if (!isPlainObject2(entry)) throw new Error(`rule #${index} is not an object`);
+    const { name: name2, when, then } = entry;
+    if (typeof name2 !== "string" || name2.trim() === "" || name2.length > 64) {
+      throw new Error(`rule #${index} requires a non-empty name of at most 64 characters`);
+    }
+    if (typeof when !== "string" || when.trim() === "") {
+      throw new Error(`rule '${name2}' requires a non-empty when expression`);
+    }
+    if (!isPlainObject2(then) || Object.keys(then).length === 0) {
+      throw new Error(`rule '${name2}' requires a non-empty then map`);
+    }
+    if (Object.keys(then).length > MVU_RULE_THEN_LIMIT) {
+      throw new Error(`rule '${name2}' declares ${Object.keys(then).length} then writes, over the cap of ${MVU_RULE_THEN_LIMIT}`);
+    }
+    for (const [path7, value] of Object.entries(then)) {
+      if (path7.trim() === "") throw new Error(`rule '${name2}' has an empty then path`);
+      if (typeof value === "string") {
+        if (value.trim() === "") throw new Error(`rule '${name2}' has an empty then expression for '${path7}'`);
+      } else if (value === void 0 || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
+        throw new Error(`rule '${name2}' then value for '${path7}' is not a JSON literal`);
+      }
+    }
+    return { name: name2, when, then };
+  });
+}
+function readMvuRules(chat, card, variablesOverride) {
+  const candidates = [
+    treeRules(variablesOverride ?? chat?.header?.chat_metadata?.variables),
+    cardRules(card),
+    treeRules(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY2])
+  ];
+  for (const candidate of candidates) {
+    if (candidate === void 0) continue;
+    try {
+      const rules = validateMvuRules(candidate);
+      if (rules.length === 0) continue;
+      return { rules };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { invalid: `$rules: ${message}; all card rules are disabled for this settlement` };
+    }
+  }
+  return void 0;
+}
+var SAFE_MATH_KEYS = [
+  "E",
+  "LN2",
+  "LN10",
+  "LOG2E",
+  "LOG10E",
+  "PI",
+  "SQRT1_2",
+  "SQRT2",
+  "abs",
+  "acos",
+  "acosh",
+  "asin",
+  "asinh",
+  "atan",
+  "atan2",
+  "atanh",
+  "cbrt",
+  "ceil",
+  "cos",
+  "cosh",
+  "exp",
+  "expm1",
+  "floor",
+  "fround",
+  "hypot",
+  "imul",
+  "log",
+  "log1p",
+  "log2",
+  "log10",
+  "max",
+  "min",
+  "pow",
+  "round",
+  "sign",
+  "sin",
+  "sinh",
+  "sqrt",
+  "tan",
+  "tanh",
+  "trunc"
+];
+var SAFE_MATH = Object.freeze(
+  Object.fromEntries(SAFE_MATH_KEYS.map((key) => [key, Math[key]]))
+);
+var RULE_SANDBOX_SHADES = {
+  Math: SAFE_MATH,
+  Date: void 0,
+  setTimeout: void 0,
+  setInterval: void 0,
+  setImmediate: void 0,
+  queueMicrotask: void 0
+};
+function buildRuleEnv(tree) {
+  const vars = deepClone(stripMvuControl(tree));
+  return {
+    vars,
+    getvar: (path7) => typeof path7 === "string" ? getMvuTreePath(vars, path7) : void 0,
+    ...RULE_SANDBOX_SHADES
+  };
+}
+function errorText(error) {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+function setTreePath(tree, path7, value) {
+  const segments = path7.split(".");
+  const leaf = segments.pop();
+  let cursor = tree;
+  for (const segment of segments) {
+    const next = cursor[segment];
+    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+    cursor = cursor[segment];
+  }
+  cursor[leaf] = value;
+}
+async function runMvuRules(rules, options) {
+  const failures = /* @__PURE__ */ new Set();
+  const writes = [];
+  const noteParts = /* @__PURE__ */ new Map();
+  const tree = options.tree;
+  for (let round = 1; round <= MVU_RULE_ROUNDS; round++) {
+    let progressed = false;
+    for (const rule of rules) {
+      let active = false;
+      try {
+        active = Boolean(await evalExpressionSandboxed(rule.when, buildRuleEnv(tree)));
+      } catch (error) {
+        failures.add(`rule '${rule.name}': when evaluation failed: ${errorText(error)}`);
+        continue;
+      }
+      if (!active) continue;
+      const pending = [];
+      let failed = false;
+      for (const [path7, raw] of Object.entries(rule.then)) {
+        try {
+          const value = typeof raw === "string" ? await evalExpressionSandboxed(raw, buildRuleEnv(tree)) : deepClone(raw);
+          if (value === void 0) throw new Error("the expression evaluated to undefined");
+          pending.push({ path: path7, value });
+        } catch (error) {
+          failures.add(`rule '${rule.name}': then evaluation failed for '${path7}': ${errorText(error)}`);
+          failed = true;
+          break;
+        }
+      }
+      if (failed) continue;
+      for (const { path: path7, value } of pending) {
+        const head = path7.split(".")[0];
+        if (head === "$schema" || head === "$rules") {
+          failures.add(`${path7}: rule '${rule.name}': guard readonly: the ${head} subtree is card-declared and cannot be settled`);
+          continue;
+        }
+        const current = getMvuTreePath(tree, path7);
+        const guarded = options.schema === void 0 ? void 0 : guardMvuWrite(options.schema, path7, value, current);
+        if (guarded !== void 0 && !guarded.ok) {
+          failures.add(`${path7}: rule '${rule.name}': guard ${guarded.kind}: ${guarded.reason}`);
+          continue;
+        }
+        const finalValue = guarded === void 0 ? value : guarded.value;
+        if (mvuValuesEqual(finalValue, current)) continue;
+        setTreePath(tree, path7, deepClone(finalValue));
+        progressed = true;
+        const note = ["rule:" + rule.name, guarded?.note].filter((part) => part !== void 0).join("; ");
+        const parts = noteParts.get(path7) ?? [];
+        if (!parts.includes(note)) parts.push(note);
+        noteParts.set(path7, parts);
+        writes.push({ path: path7, value: deepClone(finalValue), rule: rule.name, ...guarded?.note !== void 0 ? { guardNote: guarded.note } : {} });
+      }
+    }
+    if (!progressed) break;
+    if (round === MVU_RULE_ROUNDS) {
+      failures.add(`$rules: fixed-point iteration hit the ${MVU_RULE_ROUNDS}-round cap; rules were still producing changes in the last round (narrow the when conditions or reorder the rules)`);
+    }
+  }
+  const notes = Object.fromEntries([...noteParts].map(([path7, parts]) => [path7, parts.join("; ")]));
+  return { failures: [...failures], writes, notes };
+}
+
 // packages/plugin/src/mvu.ts
 var MVU_RECEIPTS_LIMIT = 20;
 function plainObject(value) {
@@ -5135,6 +5375,21 @@ function plainObject(value) {
 }
 function readChatVariables(chat) {
   return plainObject(chat?.header?.chat_metadata?.variables) ?? {};
+}
+function overlayScopedVariables(base, entries) {
+  const tree = deepClone(base);
+  for (const entry of entries) {
+    const segments = entry.name.split(".");
+    const leaf = segments.pop();
+    let cursor = tree;
+    for (const segment of segments) {
+      const next = cursor[segment];
+      if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+      cursor = cursor[segment];
+    }
+    cursor[leaf] = entry.value;
+  }
+  return tree;
 }
 function readMvuReceipts(chat) {
   const raw = plainObject(chat?.header?.chat_metadata?.mvu)?.receipts;
@@ -6898,12 +7153,16 @@ function createTools() {
       const snapshot2 = await db.getChatSnapshot(binding.character, binding.chatId);
       if (!snapshot2) throw new Error("bound Tavern chat not found");
       const chat = snapshot2.chat;
-      const guardSchema = readMvuSchema(chat, (await db.getCharacter(binding.character))?.card);
+      const card = (await db.getCharacter(binding.character))?.card;
+      const guardSchema = readMvuSchema(chat, card);
+      const ruleSource = readMvuRules(chat, card);
       const seedTree = readChatVariables(chat);
       const store3 = await variableStore();
+      const preEntries = ruleSource !== void 0 ? await store3.list("chat", binding.chatId, "", 100) : [];
       const applied = [];
       const failed = [];
       const receiptChanges = [];
+      const writtenEntries = [];
       const auditChanges = [];
       for (const request of requests) {
         try {
@@ -6940,6 +7199,7 @@ function createTools() {
             existing?.revision
           );
           applied.push(request.name);
+          writtenEntries.push({ name: request.name, value: written.value });
           const guardNote = guarded !== void 0 && guarded.ok ? guarded.note : void 0;
           const auditReason = [request.reason, guardNote].filter((part) => part !== void 0).join("; ");
           const change = {
@@ -6966,12 +7226,51 @@ function createTools() {
           });
         }
       }
+      const ruleFailures = [];
+      if (ruleSource !== void 0) {
+        if ("invalid" in ruleSource) {
+          ruleFailures.push(ruleSource.invalid);
+        } else {
+          const preTree = overlayScopedVariables(seedTree, preEntries.map((entry) => ({ name: entry.name, value: entry.value })));
+          const workTree = overlayScopedVariables(preTree, writtenEntries);
+          const run = await runMvuRules(ruleSource.rules, { ...guardSchema !== void 0 ? { schema: guardSchema } : {}, tree: workTree });
+          ruleFailures.push(...run.failures);
+          for (const write of [...new Map(run.writes.map((write2) => [write2.path, write2])).values()]) {
+            try {
+              const existing = await store3.get("chat", binding.chatId, write.path);
+              const written = await store3.set("chat", binding.chatId, write.path, write.value, existing?.revision);
+              const before = getMvuTreePath(preTree, write.path);
+              const reason = run.notes[write.path] ?? `rule:${write.rule}`;
+              const change = receiptChanges.find((entry) => entry.name === write.path);
+              if (change !== void 0) {
+                change.after = written.value;
+                change.reason = change.reason !== void 0 ? `${change.reason}; ${reason}` : reason;
+              } else {
+                receiptChanges.push({
+                  name: write.path,
+                  ...before !== void 0 ? { before } : {},
+                  after: written.value,
+                  reason
+                });
+              }
+              auditChanges.push({
+                name: write.path,
+                reason,
+                ...before !== void 0 ? { before } : {},
+                after: written.value
+              });
+            } catch (error) {
+              ruleFailures.push(`${write.path}: rule '${write.rule}': ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
+        }
+      }
       const receipt = {
         at: (/* @__PURE__ */ new Date()).toISOString(),
         turnKey: String(chat.messages.length),
-        status: failed.length > 0 ? "failed" : receiptChanges.length > 0 ? "updated" : "unchanged",
+        status: failed.length > 0 || ruleFailures.length > 0 ? "failed" : receiptChanges.length > 0 ? "updated" : "unchanged",
         changes: receiptChanges,
-        failures: failed.map((failure) => `${failure.name}: ${failure.error}`)
+        failures: [...failed.map((failure) => `${failure.name}: ${failure.error}`), ...ruleFailures]
       };
       appendMvuReceipt(chat, receipt);
       await db.saveChat(binding.character, binding.chatId, chat, snapshot2.revision);

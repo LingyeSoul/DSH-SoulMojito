@@ -45,8 +45,9 @@ import {
   guardMvuWrite,
   mvuValuesEqual,
   readMvuSchema,
-  stripMvuSchema,
+  stripMvuControl,
 } from './mvu-guard.js'
+import { applyMvuSettlementRules, mergeMvuRuleNotes } from './mvu-rules.js'
 
 const DEFAULT_USER = 'User'
 const INITIAL_VARIABLES_KEY = 'initial_variables'
@@ -105,8 +106,8 @@ function valuesEqual(left: unknown, right: unknown): boolean {
 /**
  * 变量树叶子级 diff：两侧都是普通对象、或一侧缺失另一侧是普通对象时按 key
  * 递归（新增/删除子树展开到叶子路径）；数组与原语整体比较（数组按下标逐项
- * diff 噪音大，回执按「值变了」呈现即可）。根 `$schema` 子树是守卫契约不是
- * 变量（C-1），两侧剥离后再 diff。结果按 name 排序。
+ * diff 噪音大，回执按「值变了」呈现即可）。根 `$schema`（C-1）/`$rules`（C-2）
+ * 子树是守卫/规则契约不是变量，两侧剥离后再 diff。结果按 name 排序。
  */
 export function diffVariables(before: Record<string, unknown>, after: Record<string, unknown>): MvuVariableChange[] {
   const changes: MvuVariableChange[] = []
@@ -130,7 +131,7 @@ export function diffVariables(before: Record<string, unknown>, after: Record<str
       changes.push(change)
     }
   }
-  walk('', stripMvuSchema(before), stripMvuSchema(after))
+  walk('', stripMvuControl(before), stripMvuControl(after))
   return changes.sort((left, right) => left.name.localeCompare(right.name))
 }
 
@@ -451,8 +452,8 @@ export interface MvuStatusRenderInput {
 /**
  * 状态栏模板渲染（P1 接线点）：只读快照渲染——local/global/initial 都绑拷贝，
  * 模板内的 setvar 不会写穿聊天。渲染失败抛错，由路由降级为不返回 renderedHtml
- * （不 500）。根 `$schema` 是守卫契约不是变量（C-1），local/initial 绑定前剥离，
- * 不进状态栏渲染。
+ * （不 500）。根 `$schema`（C-1）/`$rules`（C-2）是契约不是变量，local/initial
+ * 绑定前剥离，不进状态栏渲染。
  */
 export async function renderMvuStatusTemplate(input: MvuStatusRenderInput): Promise<string> {
   const chat = input.chat
@@ -467,9 +468,9 @@ export async function renderMvuStatusTemplate(input: MvuStatusRenderInput): Prom
       books,
     },
     {
-      local: deepClone(stripMvuSchema(plainObject(input.localVariables ?? readChatVariables(chat)) ?? {}) as JsonObject),
+      local: deepClone(stripMvuControl(plainObject(input.localVariables ?? readChatVariables(chat)) ?? {}) as JsonObject),
       global: { ...input.state.scriptGlobals },
-      initial: deepClone(stripMvuSchema(plainObject(chat.header.chat_metadata[INITIAL_VARIABLES_KEY]) ?? {}) as JsonObject),
+      initial: deepClone(stripMvuControl(plainObject(chat.header.chat_metadata[INITIAL_VARIABLES_KEY]) ?? {}) as JsonObject),
     },
   )
   return await runtime.renderText(input.template, undefined, 'mvu-status')
@@ -570,12 +571,16 @@ export async function retryMvuSettlement(
   // $schema 写入守卫 pass（C-1，与 runGeneration 共用）：clamp 写回、reject 回滚，
   // 失败项并入回执 failures（重试仍不产生 'failed' 状态——既有约定，见上方注释）。
   const guard = applyMvuSettlementGuard(chat, character.card, before)
+  // $rules 条件规则 pass（C-2，与 runGeneration 共用）：守卫后二次计算，规则产出
+  // 再过一次守卫；失败/告警与规则 reason 同款并入回执（重试同样执行规则）。
+  const rulesPass = await applyMvuSettlementRules(chat, character.card, before)
   const after = readChatVariables(chat)
   const changes = diffVariables(before, after)
+  const notes = mergeMvuRuleNotes(guard.notes, rulesPass.notes)
   for (const change of changes) {
-    if (guard.notes[change.name] !== undefined) change.reason = guard.notes[change.name]
+    if (notes[change.name] !== undefined) change.reason = notes[change.name]
   }
-  const allFailures = [...failures, ...guard.failures]
+  const allFailures = [...failures, ...guard.failures, ...rulesPass.failures]
   const receipt: MvuReceipt = {
     at: new Date().toISOString(),
     turnKey: String(floorIndex),
@@ -585,7 +590,7 @@ export async function retryMvuSettlement(
   }
   appendMvuReceipt(chat, receipt)
   const revision = await db.saveChat(characterName, chatId, chat, snapshot.revision)
-  return { receipt, revision, variables: stripMvuSchema(after) as Record<string, unknown> }
+  return { receipt, revision, variables: stripMvuControl(after) as Record<string, unknown> }
 }
 
 /* --------------------- MVU 回执撤销（B-6a，2026-10-11） --------------------- */

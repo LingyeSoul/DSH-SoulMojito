@@ -81,3 +81,15 @@ reject 进失败项（type-mismatch / enum-violation / readonly / structure 四�
 共享纯函数核 + 两个薄挂接（C-1 模式）；HTTP `POST mvu/receipts/undo` 分类 400/409，面板
 「撤销最近结算」按钮与已撤销灰显。设计、否决项与偏差记录见
 `decisions/2026-10-11-mvu-receipt-undo.md`。
+
+## 8. `$rules` 条件规则（2026-10-11 延伸，竞品参考 C-2）
+
+变量树根可选 `$rules` 子树（规则数组，与 `$schema` 同链路读取、同剥离纪律）成为
+**确定性二次计算**层：守卫 pass 之后、回执 diff 之前，按声明序求值 `when` 表达式，
+命中则执行 `then` 的路径写（派生值/阈值触发/连锁修正），链式求值 + 3 轮有界不动点。
+表达式复用模板沙箱（node:vm，`Date`/timer 遮蔽、`Math` 去 random 的白名单视图——
+结算可复现）；规则产出再过一次守卫：clamp 进正常回执（reason 标 `rule:<name>` +
+guard note），reject 进失败项（标注来源规则名，可重试）。挂在两条结算路径（ST
+生成/retry 与 AgentTavern settle 的 flat 写后树快照）共享同一求值核；撤销恢复
+before 值即可，条件仍满足则下次结算重触发。无 `$rules` 的卡行为不变。完整语义、
+沙箱面清单与 LWB varevent 差异表见 `decisions/2026-10-11-mvu-rules.md`。

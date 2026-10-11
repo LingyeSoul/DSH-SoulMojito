@@ -29,8 +29,9 @@ import {
   runDeduction,
   subagentRuntimeOf,
 } from './deduce.js'
-import { appendMvuReceipt, readChatVariables, type MvuReceipt, type MvuVariableChange } from '../mvu.js'
+import { appendMvuReceipt, overlayScopedVariables, readChatVariables, type MvuReceipt, type MvuVariableChange } from '../mvu.js'
 import { getMvuTreePath, guardMvuWrite, readMvuSchema } from '../mvu-guard.js'
+import { readMvuRules, runMvuRules } from '../mvu-rules.js'
 import { appendMvuAudit } from './projector.js'
 import { createHostPromptExpander, hostPromptSafe, seededRandom } from '../prompt-safety.js'
 import { boundedStringArg, clampInt, limitText, stringArg } from '../tool-args.js'
@@ -745,20 +746,30 @@ function createTools(): ToolDefinition[] {
       if (!snapshot) throw new Error('bound Tavern chat not found')
       const chat = snapshot.chat
 
-      // MVU $schema 写入守卫（C-1）：与 ST 生成/重试共享同一守卫语义（mvu-guard.ts）。
-      // schema 来源：聊天变量树根 $schema → 卡 initialVariables.$schema → 世界书
-      // InitialVariables.$schema（readMvuSchema）。flat store 的名字校验不含 `$`，
-      // $schema 本体永不可结算（guardMvuWrite 对 $schema 路径直接 readonly 拒绝）。
-      // 种子树用于 ro/step 的「当前值」判定：flat store 未写过的路径回退聊天播种值。
-      const guardSchema = readMvuSchema(chat, (await db.getCharacter(binding.character))?.card)
+      // MVU $schema 写入守卫（C-1）+ $rules 条件规则（C-2）：与 ST 生成/重试共享
+      // 同一守卫/规则语义（mvu-guard.ts / mvu-rules.ts）。schema/rules 来源：聊天
+      // 变量树根 → 卡 initialVariables → 世界书 InitialVariables（readMvuSchema /
+      // readMvuRules 同链路）。flat store 的名字校验不含 `$`，$schema/$rules 本体
+      // 永不可结算。种子树用于 ro/step 的「当前值」判定与规则求值基线：flat store
+      // 未写过的路径回退聊天播种值。
+      const card = (await db.getCharacter(binding.character))?.card
+      const guardSchema = readMvuSchema(chat, card)
+      const ruleSource = readMvuRules(chat, card)
       const seedTree = readChatVariables(chat)
 
       // 逐项写 chat 作用域变量（variable_set 同款 store 语义）：单项失败（非法
       // 名、超限值等 store 层校验，或 guard 拒绝）只记入 failures，不影响其他项。
       const store = await variableStore()
+      // C-2 规则相的树基线：写前 flat 全量快照（与状态栏 overlay 同款读法）——
+      // 「flat 写后的树快照」由此叠加本轮成功写入构成；无 $rules 时零额外读。
+      const preEntries = ruleSource !== undefined
+        ? await store.list('chat', binding.chatId, '', 100)
+        : []
       const applied: string[] = []
       const failed: Array<{ name: string; error: string }> = []
       const receiptChanges: MvuVariableChange[] = []
+      // 本轮成功写入的 flat 条目（规则相构树快照用；值为守卫后落库值）。
+      const writtenEntries: Array<{ name: string; value: unknown }> = []
       // 审计项与请求一一对应（成功项带 before/after，失败项只有名字），不能事后
       // 按 receiptChanges 下标对账——失败项不入 receiptChanges，下标会错位。
       const auditChanges: Array<{ name: string; reason?: string; before?: unknown; after?: unknown }> = []
@@ -805,6 +816,7 @@ function createTools(): ToolDefinition[] {
             existing?.revision,
           )
           applied.push(request.name)
+          writtenEntries.push({ name: request.name, value: written.value })
           const guardNote = guarded !== undefined && guarded.ok ? guarded.note : undefined
           const auditReason = [request.reason, guardNote].filter((part): part is string => part !== undefined).join('; ')
           const change: MvuVariableChange = {
@@ -832,15 +844,62 @@ function createTools(): ToolDefinition[] {
         }
       }
 
+      // $rules 条件规则相（C-2，与 ST 共享 runMvuRules 纯函数核）：flat 写后的树
+      // 快照上跑——守卫后二次计算（派生值/阈值触发/连锁修正），规则产出再过一次
+      // 守卫；产物进同一回执管线（reason 标 rule:<name>，clamp 附 guard note），
+      // 写回 flat store（get→set 同款 CAS 习语，冲突落 failures 交下次结算重试）。
+      // 无 $rules 的卡恒等跳过，行为不变（golden）。
+      const ruleFailures: string[] = []
+      if (ruleSource !== undefined) {
+        if ('invalid' in ruleSource) {
+          ruleFailures.push(ruleSource.invalid)
+        } else {
+          const preTree = overlayScopedVariables(seedTree, preEntries.map((entry) => ({ name: entry.name, value: entry.value })))
+          const workTree = overlayScopedVariables(preTree, writtenEntries)
+          const run = await runMvuRules(ruleSource.rules, { ...(guardSchema !== undefined ? { schema: guardSchema } : {}), tree: workTree })
+          ruleFailures.push(...run.failures)
+          // 同路径多轮触发只持久化终值（Map 末值胜出）；回执 reason 用 notes 的
+          // 累计归因（rule:A; rule:B 如实呈现链路）。
+          for (const write of [...new Map(run.writes.map((write) => [write.path, write])).values()]) {
+            try {
+              const existing = await store.get('chat', binding.chatId, write.path)
+              const written = await store.set('chat', binding.chatId, write.path, write.value as never, existing?.revision)
+              const before = getMvuTreePath(preTree, write.path)
+              const reason = run.notes[write.path] ?? `rule:${write.rule}`
+              const change = receiptChanges.find((entry) => entry.name === write.path)
+              if (change !== undefined) {
+                change.after = written.value
+                change.reason = change.reason !== undefined ? `${change.reason}; ${reason}` : reason
+              } else {
+                receiptChanges.push({
+                  name: write.path,
+                  ...(before !== undefined ? { before } : {}),
+                  after: written.value,
+                  reason,
+                })
+              }
+              auditChanges.push({
+                name: write.path,
+                reason,
+                ...(before !== undefined ? { before } : {}),
+                after: written.value,
+              })
+            } catch (error) {
+              ruleFailures.push(`${write.path}: rule '${write.rule}': ${error instanceof Error ? error.message : String(error)}`)
+            }
+          }
+        }
+      }
+
       // 回执落 chat_metadata.mvu.receipts（P1 结构，环形 20 条）。工具形态的
       // turnKey 是「正在生成的楼层将占据的 messages 下标」：结算发生在楼层投影
       // 落库之前，同一楼层的多次结算共享同一 turnKey（P1 重试同楼层同理）。
       const receipt: MvuReceipt = {
         at: new Date().toISOString(),
         turnKey: String(chat.messages.length),
-        status: failed.length > 0 ? 'failed' : receiptChanges.length > 0 ? 'updated' : 'unchanged',
+        status: failed.length > 0 || ruleFailures.length > 0 ? 'failed' : receiptChanges.length > 0 ? 'updated' : 'unchanged',
         changes: receiptChanges,
-        failures: failed.map((failure) => `${failure.name}: ${failure.error}`),
+        failures: [...failed.map((failure) => `${failure.name}: ${failure.error}`), ...ruleFailures],
       }
       appendMvuReceipt(chat, receipt)
       // CAS 冲突抛 ChatRevisionConflictError：由 agent 重调工具重试（变量已写、

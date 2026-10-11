@@ -696,6 +696,20 @@ window.__ModuleLoader__.load({
       'settings.maintenanceError': 'Last run failed: {message}',
       'settings.maintenanceSummary': 'Edit groups {groups} · merged {merged} · corrected {corrected} · created {created} · deleted {deleted} · failed groups {failed} · receipts retired {retired} · LLM requests {requests}/{budget}',
       'workbench.hint': 'Modification plans proposed by the Card Workbench agent — per-field card diffs and per-entry world book diffs. Expand a plan to review the changes, then approve to apply it to the working copy, or reject it.',
+      'workbench.preview.title': 'Trial generation',
+      'workbench.preview.hint': 'Run a real generation against the selected chat without touching it: the exact prompt stack (preset, persona, world info, macros) is assembled and sent, but nothing is written — no new floors, no settlements, no events. For workbench debugging and dry runs.',
+      'workbench.preview.characterEmpty': 'Select a character',
+      'workbench.preview.chat': 'Chat',
+      'workbench.preview.chatPick': 'Select a chat',
+      'workbench.preview.chatEmpty': 'No chats for this character',
+      'workbench.preview.userText': 'Message to try',
+      'workbench.preview.placeholder': 'The user message to append for this trial only',
+      'workbench.preview.run': 'Generate',
+      'workbench.preview.running': 'Generating…',
+      'workbench.preview.cancel': 'Cancel',
+      'workbench.preview.cancelled': 'Trial cancelled; nothing was written.',
+      'workbench.preview.usage': '{provider}/{model} · input {input} / output {output} tokens',
+      'workbench.preview.modelLine': '{provider}/{model}',
       'workbench.empty': 'No workbench plans yet',
       'workbench.worldMeta': 'World · {world}',
       'workbench.world.newBook': 'new book',
@@ -1341,6 +1355,20 @@ window.__ModuleLoader__.load({
       'settings.maintenanceError': '上次运行失败：{message}',
       'settings.maintenanceSummary': '编辑组 {groups} · 合并 {merged} · 修正 {corrected} · 新建 {created} · 删除 {deleted} · 失败组 {failed} · 退役收据 {retired} · LLM 请求 {requests}/{budget}',
       'workbench.hint': '卡片工作台 Agent 提出的修改方案——角色卡逐字段、世界书逐条目。展开查看改动，批准即应用到工作版，也可直接拒绝。',
+      'workbench.preview.title': '试写',
+      'workbench.preview.hint': '对所选聊天跑一次真实生成但不落任何痕迹：按当前激活的预设、人设、世界书与宏完整装配后发送，聊天文件、楼层、变量与事件都不受影响。用于工作台排错与试写。',
+      'workbench.preview.characterEmpty': '选择角色',
+      'workbench.preview.chat': '聊天',
+      'workbench.preview.chatPick': '选择聊天',
+      'workbench.preview.chatEmpty': '该角色暂无聊天',
+      'workbench.preview.userText': '试写用户语',
+      'workbench.preview.placeholder': '仅本次试写临时追加的用户消息',
+      'workbench.preview.run': '生成',
+      'workbench.preview.running': '生成中…',
+      'workbench.preview.cancel': '取消',
+      'workbench.preview.cancelled': '试写已取消，未写入任何内容。',
+      'workbench.preview.usage': '{provider}/{model} · 输入 {input} / 输出 {output} tokens',
+      'workbench.preview.modelLine': '{provider}/{model}',
       'workbench.empty': '暂无工作台方案',
       'workbench.worldMeta': '世界书 · {world}',
       'workbench.world.newBook': '新建书',
@@ -8477,6 +8505,105 @@ window.__ModuleLoader__.load({
             : changes.map((change, index) => renderFieldChange(change, index))) : null)
     }
 
+    // 试写预览（D-4 生成不入楼，决策 2026-10-11-preview-generation.md）：POST
+    // preview——服务端以真实装配 + 单次 LLM 生成，但零副作用（不落楼/无 MVU 结算/
+    // 五相位 hook 不跑/无事件）。客户端单请求同步等待（30-60s 量级，fetch 不设短
+    // 超时），取消走 AbortController 断开 fetch（服务端透传 signal 给 llm.stream）。
+    function WorkbenchPreviewBand() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const [character, setCharacter] = useState('')
+      const [chatId, setChatId] = useState('')
+      const [userText, setUserText] = useState('')
+      const [running, setRunning] = useState(false)
+      const [result, setResult] = useState(null)
+      const [error, setError] = useState('')
+      const [cancelled, setCancelled] = useState(false)
+      const abortRef = useRef(null)
+      const chats = character ? (state.chatLists[character] || []) : []
+      useEffect(() => {
+        setChatId('')
+        if (character) void loadChatList(character).catch(() => {})
+      }, [character])
+      const cancel = () => { abortRef.current?.abort() }
+      const run = () => {
+        if (running || !character || !chatId || userText.trim() === '') return
+        setRunning(true)
+        setError('')
+        setResult(null)
+        setCancelled(false)
+        const controller = new AbortController()
+        abortRef.current = controller
+        void api('preview', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ character, chatId, userText }),
+          signal: controller.signal,
+        })
+          .then((outcome) => { setResult(outcome); return outcome })
+          .catch((cause) => {
+            if (controller.signal.aborted) setCancelled(true)
+            else setError(cause instanceof Error ? cause.message : String(cause))
+          })
+          .finally(() => { setRunning(false); abortRef.current = null })
+      }
+      const usageLine = result
+        ? (result.usage
+          ? t('workbench.preview.usage', {
+            provider: result.provider || '?',
+            model: result.model || '?',
+            input: result.usage.inputTokens ?? '?',
+            output: result.usage.outputTokens ?? '?',
+          })
+          : t('workbench.preview.modelLine', { provider: result.provider || '?', model: result.model || '?' }))
+        : ''
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('workbench.preview.title')),
+        h('p', { className: 'dt-hint' }, t('workbench.preview.hint')),
+        h('div', { className: 'dt-editor-actions' },
+          h(SettingSelect, {
+            label: t('settings.character'),
+            value: character,
+            options: state.bootstrap.characters || [],
+            empty: t('workbench.preview.characterEmpty'),
+            onChange: (value) => setCharacter(value || ''),
+          }),
+          h(SettingSelect, {
+            label: t('workbench.preview.chat'),
+            value: chatId,
+            options: chats,
+            empty: chats.length === 0 ? t('workbench.preview.chatEmpty') : t('workbench.preview.chatPick'),
+            onChange: (value) => setChatId(value || ''),
+          })),
+        h(EditorField, {
+          label: t('workbench.preview.userText'),
+          value: userText,
+          multiline: true,
+          placeholder: t('workbench.preview.placeholder'),
+          disabled: running,
+          onChange: setUserText,
+        }),
+        h('div', { className: 'dt-imports' },
+          h(Button, {
+            size: 'sm',
+            variant: 'primary',
+            icon: h(IconSendOutline16),
+            disabled: running || !character || !chatId || userText.trim() === '',
+            onClick: run,
+          }, running ? t('workbench.preview.running') : t('workbench.preview.run')),
+          running ? h(Button, {
+            size: 'sm',
+            variant: 'ghost',
+            icon: h(IconStopFill16),
+            onClick: cancel,
+          }, t('workbench.preview.cancel')) : null),
+        result ? h(React.Fragment, null,
+          h('p', { className: 'dt-hint' }, usageLine),
+          h('pre', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '4px 0 0', fontSize: '13px' } }, result.text)) : null,
+        cancelled ? h('p', { className: 'dt-hint' }, t('workbench.preview.cancelled')) : null,
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
     function PanelWorkbench() {
       const t = useTranslate()
       const [plans, setPlans] = useState(null)
@@ -8529,7 +8656,8 @@ window.__ModuleLoader__.load({
                   open: openId === plan.id,
                   onToggle: () => setOpenId(openId === plan.id ? '' : plan.id),
                   onDecide: decide,
-                })))))
+                })))),
+        h(WorkbenchPreviewBand))
     }
 
     function PanelNovels({ ctx }) {

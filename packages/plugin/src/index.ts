@@ -73,7 +73,8 @@ import {
   undoMvuAgentSettlement,
   undoMvuStSettlement,
 } from './mvu.js'
-import { stripMvuSchema } from './mvu-guard.js'
+import { stripMvuControl } from './mvu-guard.js'
+import { applyMvuSettlementRules, mergeMvuRuleNotes } from './mvu-rules.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
 import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type SessionImportAppend } from './agent-tavern/projector.js'
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from './agent-tavern/deduce.js'
@@ -1428,6 +1429,13 @@ async function handleApi(ctx, req, res) {
     return sendJson(res, 200, { ok: true, items: result.items, generatedAt: result.generatedAt, revision: result.revision })
   }
 
+  // 试写预览（D-4 生成不入楼，2026-10-11）：真实装配 + 单次 LLM 生成，但零副作用
+  // ——不落楼、无 MVU 结算/回执、无 chat-saved/stream-delta 事件、五相位 hook 全部
+  // 不跑、无 DSH session 镜像。卡片工作台排错/试写专用入口。
+  if (method === 'POST' && route === 'preview') {
+    return previewGeneration(ctx, req, res, db)
+  }
+
   // MVU 结算重试（提案 0012 P1）：只对最后一条助手楼层重跑模板输出渲染的变量
   // 写穿部分（不重跑 AI_OUTPUT regex——非幂等），正文不动；CAS 冲突走既有通道。
   // MVU 状态（提案 0012 P1）：变量 + 回执快照；卡片约定字段
@@ -1955,8 +1963,9 @@ async function handleMvuApi(
     const agentTavernBound = Object.values(state.sessionBindings).some((binding) =>
       binding.architecture === 'agent-tavern' && binding.chatId === chatId && binding.character === characterName)
     const scopedVariables = agentTavernBound ? await (await variables()).list('chat', chatId, '', 100) : []
-    // 显示树剥离根 $schema（C-1）：守卫契约不是变量，不进状态栏载荷/渲染。
-    const displayVariables = stripMvuSchema(scopedVariables.length > 0
+    // 显示树剥离根 $schema（C-1）/$rules（C-2）：守卫/规则契约不是变量，不进
+    // 状态栏载荷/渲染。
+    const displayVariables = stripMvuControl(scopedVariables.length > 0
       ? overlayScopedVariables(readChatVariables(chat), scopedVariables)
       : readChatVariables(chat))
     const character = await db.getCharacter(characterName)
@@ -2954,6 +2963,120 @@ async function generate(ctx, req, res, db) {
   }
 }
 
+/**
+ * 试写预览（D-4 生成不入楼，决策 2026-10-11-preview-generation.md）：以当前聊天
+ * 快照 + 临时拼接的 userText 走与 runGeneration 完全相同的装配路径（发言者
+ * 解析 / preset / persona / 世界书 / 模板 / 宏 / 模型选择推导，见
+ * resolveGenerationSpeaker + buildGenerationLlmRequest），同步收集一次 LLM 生成。
+ *
+ * 零副作用（逐项见决策文档与 preview-generation.spec.ts）：不 saveChat（装配期的
+ * timedWorldInfo / scriptProgress / 模板变量写全部落在 structuredClone 的工作副本
+ * 上）、无 MVU 结算/回执、无 swipe、不发 chat-saved / stream-delta、不记
+ * prompt-viewer、不写宿主 session、五相位 hook 全部不跑（onDraft/onLlmRequest 不
+ * 注入；user-input / post-output / post-save 在 runGeneration 体内，preview 不经
+ * 过）。preview 是只读快照——与同一聊天的真实生成可并存，preview 自身也不限并发。
+ *
+ * 模型：取绑定该聊天的 ST 会话的会话级模型选择（sessionBindings 命中
+ * character+chatId 且 architecture 'st'），未命中回落部署默认——与 composer
+ * 未选模型时同款。
+ */
+async function previewGeneration(ctx, req, res, db) {
+  const body = await readJson(req)
+  const state = await db.getState()
+  const characterName = typeof body.character === 'string' ? body.character : state.activeCharacter
+  const chatId = body.chatId
+  const userText = typeof body.userText === 'string' ? body.userText.trim() : ''
+  if (!characterName || typeof chatId !== 'string') {
+    return sendJson(res, 400, { ok: false, message: 'character and chatId are required' })
+  }
+  if (userText === '') return sendJson(res, 400, { ok: false, message: 'userText is empty' })
+  const snapshot = await db.getChatSnapshot(characterName, chatId)
+  if (!snapshot) return sendJson(res, 404, { ok: false, message: 'character or chat not found' })
+  const group = body.group === true || await isGroupChat(db, characterName, chatId)
+  // 中止透传（与 generate 同款）：客户端断开即 abort，llm.stream 及时停。
+  const ac = new AbortController()
+  req.on?.('aborted', () => ac.abort())
+  res.on?.('close', () => { if (!res.writableEnded) ac.abort() })
+
+  // 工作副本：装配会写 timedWorldInfo / scriptProgress / 模板变量，全落在这份
+  // 克隆上，永不 saveChat。
+  const chat = structuredClone(snapshot.chat)
+  const userName = state.activePersona ?? DEFAULT_USER
+  const { speakerName, groupDef, nudge, turnMessages: initialTurnMessages } = await resolveGenerationSpeaker(db, state, {
+    characterName,
+    chat,
+    mode: 'send',
+    group,
+  })
+  const character = await db.getCharacter(speakerName)
+  if (!character) throw new Error(`character '${speakerName}' not found`)
+  // 临时用户楼层：USER_INPUT regex 是装配的一部分（确定性本地变换）照走；user-input
+  // hook 是 mod 副作用面，跳过（与 runGeneration 的差异项，见决策文档）。
+  const scripts = collectRegexScripts(state, character)
+  const transformed = applyRegexScripts(userText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t })
+  chat.messages.push({ name: userName, is_user: true, is_system: false, send_date: new Date().toISOString(), mes: transformed })
+  const turnMessages = group ? rebuildGroupTurn(groupDef, speakerName, userName, chat.messages) : initialTurnMessages
+
+  // 会话级模型选择：绑定该聊天的 ST 会话（多会话绑同一聊天时取首个有选择的）。
+  const boundSessions = Object.entries(state.sessionBindings ?? {})
+    .filter(([, binding]) => binding?.architecture === 'st' && binding.character === characterName && binding.chatId === chatId)
+    .map(([id]) => id)
+  const sessionId = boundSessions.find((id) => state.modelSelections?.[id] !== undefined)
+
+  try {
+    const assembly = await buildGenerationLlmRequest(ctx, db, {
+      state,
+      speakerName,
+      character,
+      chatId,
+      chat,
+      turnMessages,
+      nudge,
+      group,
+      ...(groupDef !== undefined ? { groupDef } : {}),
+      phase: 'send',
+      scripts,
+      userName,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+    })
+    const request = assembly.request
+    let text = ''
+    let usage
+    let finish
+    for await (const chunk of ctx.llm.stream({
+      provider: request.params.provider,
+      model: request.params.model,
+      messages: request.messages,
+      ...(request.system !== undefined ? { system: request.system } : {}),
+      ...(request.params.reasoningEffort !== undefined ? { reasoningEffort: request.params.reasoningEffort } : {}),
+      temperature: request.params.temperature,
+      maxTokens: request.params.maxTokens,
+      signal: ac.signal,
+    })) {
+      if (chunk.type === 'usage') usage = chunk.usage
+      else if (chunk.type === 'text-delta') text += chunk.text
+      else if (chunk.type === 'finish') {
+        if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted') throw new Error(chunk.reason.failure.message)
+        finish = chunk.reason.kind
+      }
+    }
+    if (!res.writableEnded) {
+      return sendJson(res, 200, {
+        ok: true,
+        text,
+        provider: request.params.provider,
+        model: request.params.model,
+        ...(usage !== undefined ? { usage } : {}),
+        ...(finish !== undefined ? { finish } : {}),
+      })
+    }
+  } catch (error) {
+    if (!res.writableEnded) {
+      return sendJson(res, 500, { ok: false, message: error instanceof Error ? error.message : String(error) })
+    }
+  }
+}
+
 interface GenerationOptions {
   state
   characterName: string
@@ -2975,112 +3098,113 @@ interface GenerationOptions {
   hostAgent?: unknown
 }
 
+/* ------------- 装配共享助手（runGeneration 与 D-4 试写预览 preview 共用） ------------- */
+
 /**
- * 生成内核：send/regenerate 共用；群聊与文本补全在此分叉。
- * 结构：CAS 校验已在调用方完成（snapshot 即当前 revision）。
+ * 群聊发言者 / nudge 解析（原 runGeneration 首段提取；D-4 试写预览复用）。
+ * 纯读取：不写任何聊天/状态文件。turn/nudge 基于调用方传入的当前 messages
+ * （send 语义：本轮用户消息尚未 push）；调用方随后的 push/pop 自行重建回合视图
+ * （rebuildGroupTurn）。
  */
-async function runGeneration(ctx, db, options: GenerationOptions) {
-  const { state, characterName, chatId, snapshot, mode, group, write, signal } = options
-  const chat = snapshot.chat
-  // MVU 回执（提案 0012 P1）：深拷贝本轮结算前的变量基线，保存前 diff 出变更集落回执
-  const mvuVariablesBefore = snapshotChatVariables(chat)
-  let revision = snapshot.revision
-  let hostTrace
-  // {{user}} / 消息落库名：激活 persona 名称（ST name1 语义），未配置时回退默认
-  const userName = state.activePersona ?? DEFAULT_USER
-
-  try {
-
-  // ---- 发言者与成员解析 ----
-  let speakerName = characterName
-  let groupDef = undefined
-  let turnMessages = chat.messages
-  let nudge = undefined
-  if (group) {
-    groupDef = await db.getGroup(characterName)
-    if (!groupDef) throw new Error(`group '${characterName}' not found`)
-    const chatGroupMeta = chat.header.chat_metadata?.group
-    const members = Array.isArray(chatGroupMeta?.members) && chatGroupMeta.members.length > 0
-      ? chatGroupMeta.members.filter((x) => typeof x === 'string')
-      : groupDef.members
-    const disabled = Array.isArray(chatGroupMeta?.disabledMembers)
-      ? chatGroupMeta.disabledMembers.filter((x) => typeof x === 'string')
-      : groupDef.disabledMembers
-    const lastSpeaker = [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system)?.name
-    const talkativeness = new Map()
-    for (const member of members) {
-      const file = await db.getCharacter(member)
-      const raw = file?.card?.data?.extensions?.talkativeness
-      talkativeness.set(member, typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 0.5)
-    }
-    speakerName = options.triggerMember
-      ?? (mode === 'regenerate'
-        ? (members.includes(lastSpeaker) ? lastSpeaker : undefined)
-        : undefined)
-      ?? pickGroupMember({
-        strategy: groupDef.activationStrategy,
-        members,
-        disabled,
-        talkativeness: (member) => talkativeness.get(member) ?? 0.5,
-        lastSpeaker,
-        allowSelfResponses: groupDef.allowSelfResponses,
-      })
-    if (!speakerName || !members.includes(speakerName)) throw new Error('no eligible group member to reply')
-    const rawNudge = await presetSamplerValue(db, state, 'group_nudge_prompt')
-    const turn = buildGroupTurn({
-      speaker: speakerName,
+async function resolveGenerationSpeaker(db, state, options: {
+  characterName: string
+  chat
+  mode: 'send' | 'regenerate' | 'trigger'
+  group: boolean
+  triggerMember?: string
+}) {
+  const { characterName, chat, mode, group, triggerMember } = options
+  if (!group) {
+    return { speakerName: characterName, groupDef: undefined, turnMessages: chat.messages, nudge: undefined }
+  }
+  const groupDef = await db.getGroup(characterName)
+  if (!groupDef) throw new Error(`group '${characterName}' not found`)
+  const chatGroupMeta = chat.header.chat_metadata?.group
+  const members = Array.isArray(chatGroupMeta?.members) && chatGroupMeta.members.length > 0
+    ? chatGroupMeta.members.filter((x) => typeof x === 'string')
+    : groupDef.members
+  const disabled = Array.isArray(chatGroupMeta?.disabledMembers)
+    ? chatGroupMeta.disabledMembers.filter((x) => typeof x === 'string')
+    : groupDef.disabledMembers
+  const lastSpeaker = [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system)?.name
+  const talkativeness = new Map()
+  for (const member of members) {
+    const file = await db.getCharacter(member)
+    const raw = file?.card?.data?.extensions?.talkativeness
+    talkativeness.set(member, typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 0.5)
+  }
+  const speakerName = triggerMember
+    ?? (mode === 'regenerate'
+      ? (members.includes(lastSpeaker) ? lastSpeaker : undefined)
+      : undefined)
+    ?? pickGroupMember({
+      strategy: groupDef.activationStrategy,
       members,
-      userName,
-      messages: chat.messages,
-      ...(typeof rawNudge === 'string' && rawNudge.trim() !== '' ? { groupNudgePrompt: rawNudge } : {}),
+      disabled,
+      talkativeness: (member) => talkativeness.get(member) ?? 0.5,
+      lastSpeaker,
+      allowSelfResponses: groupDef.allowSelfResponses,
     })
-    turnMessages = turn.messages
-    nudge = turn.nudge
-  }
-  const character = await db.getCharacter(speakerName)
-  if (!character) throw new Error(`character '${speakerName}' not found`)
+  if (!speakerName || !members.includes(speakerName)) throw new Error('no eligible group member to reply')
+  const rawNudge = await presetSamplerValue(db, state, 'group_nudge_prompt')
+  const turn = buildGroupTurn({
+    speaker: speakerName,
+    members,
+    userName: state.activePersona ?? DEFAULT_USER,
+    messages: chat.messages,
+    ...(typeof rawNudge === 'string' && rawNudge.trim() !== '' ? { groupNudgePrompt: rawNudge } : {}),
+  })
+  return { speakerName, groupDef, turnMessages: turn.messages, nudge: turn.nudge }
+}
 
-  // ---- 发送模式：先落用户消息（regex USER_INPUT），regenerate 弹出旧回复 ----
-  let regenerated
-  let hostUserText = ''
-  const scripts = collectRegexScripts(state, character)
-  if (mode === 'send') {
-    // user-input 相位（提案 0015 §3.4）：regex 之前——mod 看到的是用户敲入的原文。
-    // 空总线恒等，行为不变。
-    const hookedUserText = await generationHooks.dispatch('user-input', options.userText, { mode, character: speakerName, chatId, group })
-    const transformed = applyRegexScripts(hookedUserText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t })
-    hostUserText = transformed
-    chat.messages.push({ name: userName, is_user: true, is_system: false, send_date: new Date().toISOString(), mes: transformed })
-    if (group) {
-      const turn = buildGroupTurn({
-        speaker: speakerName,
-        members: groupDef?.members ?? [speakerName],
-        userName,
-        messages: chat.messages,
-      })
-      turnMessages = turn.messages
-    }
-    revision = await db.saveChat(characterName, chatId, chat, revision)
-    // chat-saved（提案 0015 §3.3 P1 的 api.events）：用户消息落盘点。无监听时
-    // 是已 resolved 的 promise，零开销。
-    await emitChatSaved(characterName, chatId, revision, chat.messages.length)
-  } else {
-    const last = chat.messages[chat.messages.length - 1]
-    if (last?.is_user === false && !last.is_system) {
-      regenerated = chat.messages.pop()
-      if (group) {
-        const turn = buildGroupTurn({
-          speaker: speakerName,
-          members: groupDef?.members ?? [speakerName],
-          userName,
-          messages: chat.messages,
-        })
-        turnMessages = turn.messages
-      }
-    }
-  }
+/** send 落用户消息 / regenerate 弹出旧回复后，重建群聊回合视图（不带 nudge）。 */
+function rebuildGroupTurn(groupDef, speakerName, userName, messages) {
+  return buildGroupTurn({
+    speaker: speakerName,
+    members: groupDef?.members ?? [speakerName],
+    userName,
+    messages,
+  }).messages
+}
 
-  hostTrace = beginTavernSessionTurn(options.hostAgent, hostUserText)
+interface GenerationAssemblyOptions {
+  state
+  speakerName: string
+  character
+  chatId: string
+  /** 工作副本（装配会写 timedWorldInfo / scriptProgress / 模板变量；调用方决定是否落盘）。 */
+  chat
+  turnMessages
+  nudge
+  group: boolean
+  groupDef
+  /** 相位：lore 激活 trigger 与 hook 上下文的 mode。 */
+  phase: 'send' | 'regenerate' | 'trigger'
+  scripts
+  userName: string
+  feedback?: string
+  sessionId?: string
+  provider?: string
+  model?: string
+  reasoningEffort?: string
+  /** pre-assemble 相位 seam：runGeneration 注入 generationHooks.dispatch；试写预览不传（hook 全跳过）。 */
+  onDraft?: (draft) => unknown
+  /** pre-llm 相位 seam：同上。 */
+  onLlmRequest?: (request) => unknown
+}
+
+/**
+ * 装配 + LLM 请求构造（原 runGeneration 中段提取；D-4 试写预览复用）。
+ * preset/persona/世界书激活/模板/宏/persona 位置/示例块/@Depth 注入/群聊
+ * nudge/assemblePrompt/模型选择推导（explicit ?? saved ?? fallback，与
+ * candidates.ts 同语义）/剧本块/system 段提取（含 guides 与重写意见块）全部
+ * 在内，出口是进 llm.stream 的最终请求。副作用边界：只写传入的 chat 工作副本
+ * 与 tpl 内部状态，不 saveChat、不发事件、不记 prompt-viewer；pre-assemble /
+ * pre-llm 两相位 hook 经 seam 由调用方决定（runGeneration 注入总线，试写预览
+ * 不注入——mod 副作用不可控，v1 如实跳过）。
+ */
+async function buildGenerationLlmRequest(ctx, db, options: GenerationAssemblyOptions) {
+  const { state, speakerName, character, chatId, chat, turnMessages, nudge, groupDef, scripts, userName } = options
 
   // ---- 预设 / persona / 世界书 ----
   const presetName = state.activePreset
@@ -3095,7 +3219,7 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     books,
     chat: turnMessages.map((m) => ({ name: m.name, content: m.mes, isUser: m.is_user })),
     contextSize: Number(preset.sampler.openai_max_context ?? 4096),
-    trigger: mode === 'regenerate' ? 'regenerate' : mode === 'trigger' ? 'quiet' : 'normal',
+    trigger: options.phase === 'regenerate' ? 'regenerate' : options.phase === 'trigger' ? 'quiet' : 'normal',
     scanSources: {
       personaDescription: persona?.description,
       characterDescription: character.card.data.description,
@@ -3213,14 +3337,15 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   // 历史预算裁剪且作为最新楼层永不先于历史被裁、位于 post-history 条目之前）；
   // {{char}} 已在 buildGroupTurn 按发言者替换，其余宏在此展开（ST substituteParams
   // 语义）。合成楼层不落 chat.messages。本注入点即提案 0015 的 pre-assemble hook
-  // 位：hook 落地后 mod 在 draft（装配输入）中可见并可改写这条 nudge。
+  // 位：mod 在 draft（装配输入）中可见并可改写这条 nudge。
   const nudgeMessage = nudge !== undefined
     ? { name: userName, is_user: true, is_system: false, send_date: '', mes: expand(nudge.content) }
     : undefined
 
   // pre-assemble 相位（提案 0015 §3.4）：装配输入 draft 的最后一站。mod 在
-  // draft 中可见并可改写 nudge 合成楼层（本 hook 的第一个既有受益者）。空总线
-  // 恒等；draft 字段与 assemblePrompt 入参同形。
+  // draft 中可见并可改写 nudge 合成楼层（该 hook 的第一个既有受益者）。经 seam
+  // 注入（runGeneration 传 generationHooks.dispatch；试写预览不传 = 恒等跳过）。
+  // draft 字段与 assemblePrompt 入参同形。
   const assembleDraft = {
     card: tpl ? await tpl.preRenderCard(character.card) : character.card,
     preset: tpl ? await tpl.preRenderPreset(preset) : preset,
@@ -3236,7 +3361,9 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
       : lore.afterExamples.entries.map((e) => e.content),
     depthInjections,
   }
-  const hookedDraft = await generationHooks.dispatch('pre-assemble', assembleDraft, { mode, character: speakerName, chatId, group })
+  const hookedDraft = options.onDraft !== undefined
+    ? await options.onDraft(assembleDraft)
+    : assembleDraft
 
   const assembled = assemblePrompt(hookedDraft, { expand, countTokens })
   const fallback = ctx.agentDefaultModel.currentSelection()
@@ -3254,7 +3381,6 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   tpl?.setModel(model)
   const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort
     ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : undefined)
-  write({ type: 'start', provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: assembled.stats })
 
   // ---- 模板消息级注入（GENERATE → @INJECT，提案 0008）----
   // AFTER 条目位于 prompt 末尾：所有字段渲染完成后才预渲染（变量副作用次序）
@@ -3266,8 +3392,9 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   // chat.messages 末尾向前找 is_user=false 且非 system 的楼层两者得到同一条），
   // 词法覆盖 ≥0.35 判定对齐 → chunkIndex+1（一次至多 +1，不跳块，末块不再
   // 推进）；进度惰性初始化 chunkIndex=0 后写回 chat_metadata.scriptProgress
-  // （随本轮末尾的 saveChat 自然落盘）。然后把当前块 + 下一块预览作为世界书
-  // 式 system 条目 unshift 到消息头部——剧本块是参考不是约束（可偏离）。
+  // （真实生成随本轮末尾的 saveChat 自然落盘；试写预览只写工作副本，随弃）。
+  // 然后把当前块 + 下一块预览作为世界书式 system 条目 unshift 到消息头部——
+  // 剧本块是参考不是约束（可偏离）。
   const boundScriptId = boundScriptOf(character.card)
   if (boundScriptId !== undefined) {
     const scriptRecord = await getScript(dshHomePath('tavern'), boundScriptId)
@@ -3293,11 +3420,7 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   }
   const finalMessages = tpl ? await tpl.applyPromptInjections(assembled.messages) : assembled.messages
 
-  // ---- 流式生成 ----
-  let text = ''
-  let reasoning = ''
-  let hostUsage
-  hostTrace = startTavernSessionStep(hostTrace)
+  // ---- system 段提取 + 最终请求 ----
   const requestMessages = [...finalMessages]
   const systemParts = []
   while (requestMessages[0]?.role === 'system') systemParts.push(requestMessages.shift().content)
@@ -3310,15 +3433,16 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     role: m.role,
     content: [{ type: 'text', text: m.content }],
     // 仅进 ctx.llm.stream 的请求消息，不落会话日志（该调用不带 sessionId），
-    // dsh-llm 对 source 不校验；v0 形状在此保留——runGeneration 作用域内没有
-    // 会话对象可供格式探测。
+    // dsh-llm 对 source 不校验；v0 形状在此保留——装配作用域内没有会话对象
+    // 可供格式探测。
     source: m.role === 'assistant' ? { kind: 'model', provider, model } : m.role === 'user' ? { kind: 'user' } : { kind: 'plugin', plugin: 'dsh-tavern' },
   }))
   // 带意见重写（提案 0011）：意见是一次性生成指引，作为 system 段末尾块
   // （guides 块之后）注入，不落任何楼层。
   const rewriteBlock = formatRewriteBlock(options.feedback)
   if (rewriteBlock) systemParts.push(rewriteBlock)
-  // pre-llm 相位（提案 0015 §3.4）：进 llm.stream 的最终请求。空总线恒等；
+  // pre-llm 相位（提案 0015 §3.4）：进 llm.stream 的最终请求。经 seam 注入
+  //（runGeneration 传 generationHooks.dispatch；试写预览不传 = 恒等跳过）。
   // system 保持「无内容则不带键」的条件展开语义（undefined 时不注入）。
   const llmRequest = {
     messages: llmMessages,
@@ -3330,7 +3454,115 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
       maxTokens: numberOr(preset.sampler.openai_max_tokens, undefined),
     },
   }
-  const hookedLlmRequest = await generationHooks.dispatch('pre-llm', llmRequest, { mode, character: speakerName, chatId, group })
+  const hookedLlmRequest = options.onLlmRequest !== undefined
+    ? await options.onLlmRequest(llmRequest)
+    : llmRequest
+  return {
+    request: hookedLlmRequest,
+    lore,
+    tpl,
+    macros,
+    templateGlobalsBefore,
+    // SSE 'start' 事件的载荷（runGeneration 消费；试写预览忽略）。provider/model
+    // 是选择器结论（pre-hook）——hook 改写后的实参以 request.params 为准。
+    start: {
+      provider,
+      model,
+      speaker: speakerName,
+      lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })),
+      stats: assembled.stats,
+    },
+  }
+}
+
+/**
+ * 生成内核：send/regenerate 共用；群聊与文本补全在此分叉。
+ * 结构：CAS 校验已在调用方完成（snapshot 即当前 revision）。
+ */
+async function runGeneration(ctx, db, options: GenerationOptions) {
+  const { state, characterName, chatId, snapshot, mode, group, write, signal } = options
+  const chat = snapshot.chat
+  // MVU 回执（提案 0012 P1）：深拷贝本轮结算前的变量基线，保存前 diff 出变更集落回执
+  const mvuVariablesBefore = snapshotChatVariables(chat)
+  let revision = snapshot.revision
+  let hostTrace
+  // {{user}} / 消息落库名：激活 persona 名称（ST name1 语义），未配置时回退默认
+  const userName = state.activePersona ?? DEFAULT_USER
+
+  try {
+
+  // ---- 发言者与成员解析（共享助手 resolveGenerationSpeaker：D-4 试写预览
+  // 复用同一套发言者/nudge 解析；两边的差异只在后续副作用）----
+  const { speakerName, groupDef, nudge, turnMessages: initialTurnMessages } = await resolveGenerationSpeaker(db, state, {
+    characterName,
+    chat,
+    mode,
+    group,
+    ...(options.triggerMember !== undefined ? { triggerMember: options.triggerMember } : {}),
+  })
+  let turnMessages = initialTurnMessages
+  const character = await db.getCharacter(speakerName)
+  if (!character) throw new Error(`character '${speakerName}' not found`)
+
+  // ---- 发送模式：先落用户消息（regex USER_INPUT），regenerate 弹出旧回复 ----
+  let regenerated
+  let hostUserText = ''
+  const scripts = collectRegexScripts(state, character)
+  if (mode === 'send') {
+    // user-input 相位（提案 0015 §3.4）：regex 之前——mod 看到的是用户敲入的原文。
+    // 空总线恒等，行为不变。
+    const hookedUserText = await generationHooks.dispatch('user-input', options.userText, { mode, character: speakerName, chatId, group })
+    const transformed = applyRegexScripts(hookedUserText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t })
+    hostUserText = transformed
+    chat.messages.push({ name: userName, is_user: true, is_system: false, send_date: new Date().toISOString(), mes: transformed })
+    if (group) turnMessages = rebuildGroupTurn(groupDef, speakerName, userName, chat.messages)
+    revision = await db.saveChat(characterName, chatId, chat, revision)
+    // chat-saved（提案 0015 §3.3 P1 的 api.events）：用户消息落盘点。无监听时
+    // 是已 resolved 的 promise，零开销。
+    await emitChatSaved(characterName, chatId, revision, chat.messages.length)
+  } else {
+    const last = chat.messages[chat.messages.length - 1]
+    if (last?.is_user === false && !last.is_system) {
+      regenerated = chat.messages.pop()
+      if (group) turnMessages = rebuildGroupTurn(groupDef, speakerName, userName, chat.messages)
+    }
+  }
+
+  hostTrace = beginTavernSessionTurn(options.hostAgent, hostUserText)
+
+  // ---- 装配 + LLM 请求构造（共享助手 buildGenerationLlmRequest：D-4 试写
+  // 预览复用同一套 preset/persona/世界书/模板/宏装配与模型选择推导）----
+  // 五相位 hook 中 user-input 已在上文、post-output/post-save 在下文；装配区内的
+  // pre-assemble / pre-llm 经 seam 闭包注入（试写预览不传 = 整段跳过）。'start'
+  // 事件、prompt-viewer 记录与流代次仍由本函数在装配完成后处理。
+  const assembly = await buildGenerationLlmRequest(ctx, db, {
+    state,
+    speakerName,
+    character,
+    chatId,
+    chat,
+    turnMessages,
+    nudge,
+    group,
+    ...(groupDef !== undefined ? { groupDef } : {}),
+    phase: mode,
+    scripts,
+    userName,
+    ...(options.feedback !== undefined ? { feedback: options.feedback } : {}),
+    ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+    ...(options.provider !== undefined ? { provider: options.provider } : {}),
+    ...(options.model !== undefined ? { model: options.model } : {}),
+    ...(options.reasoningEffort !== undefined ? { reasoningEffort: options.reasoningEffort } : {}),
+    onDraft: (draft) => generationHooks.dispatch('pre-assemble', draft, { mode, character: speakerName, chatId, group }),
+    onLlmRequest: (request) => generationHooks.dispatch('pre-llm', request, { mode, character: speakerName, chatId, group }),
+  })
+  const lore = assembly.lore
+  const tpl = assembly.tpl
+  const macros = assembly.macros
+  const templateGlobalsBefore = assembly.templateGlobalsBefore
+  const hookedLlmRequest = assembly.request
+  const expand = (text) => macros.expand(text)
+  write({ type: 'start', ...assembly.start })
   // pre-llm 后的实参是落盘元数据的唯一权威：mod 改写 provider/model 时，
   // swipe_info[].extra / 消息 extra / 宿主会话轨迹不得与实际请求分叉
   // （P0 决策遗留的已知问题就此闭环，decisions/2026-10-10-mod-review-fixes.md）。
@@ -3349,6 +3581,10 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   }, ctx.logger)
   // stream-delta 代次（A-3）：本轮流式生成开始——mod 宿主据它做「每代次每 mod
   // 首错」的审计防洪（mods/events.ts）。
+  let text = ''
+  let reasoning = ''
+  let hostUsage
+  hostTrace = startTavernSessionStep(hostTrace)
   beginStreamEpoch()
   for await (const chunk of ctx.llm.stream({
     provider: hookedLlmRequest.params.provider,
@@ -3426,16 +3662,19 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   } else {
     delete chat.header.chat_metadata.variables
   }
-  // MVU 结算回执（提案 0012 P1）+ $schema 写入守卫（C-1，2026-10-11）：守卫 pass
-  // 在写穿完成后、回执 diff 之前——clamp 写回（回执 reason 标注 guard），reject
-  // 回滚到基线值并入回执 failures（可重试）；无 schema 的卡恒等，行为不变。
-  // failures 先收 templateWarnings 再收守卫失败项；无变量也无变更的局不写 mvu 键
-  // （与 guides 空置摘键约定一致）。
+  // MVU 结算回执（提案 0012 P1）+ $schema 写入守卫（C-1，2026-10-11）+ $rules
+  // 条件规则（C-2，2026-10-11）：守卫 pass 在写穿完成后、规则 pass 在守卫后、
+  // 回执 diff 之前——clamp 写回（回执 reason 标注 guard），reject 回滚到基线值并入
+  // 回执 failures（可重试）；规则做二次计算（派生值/阈值触发/连锁修正），规则产出
+  // 再过一次守卫，变更 reason 标 rule:<name>；无 schema/无 $rules 的卡恒等，行为
+  // 不变。failures 先收 templateWarnings 再收守卫/规则失败项；无变量也无变更的局
+  // 不写 mvu 键（与 guides 空置摘键约定一致）。
   const mvuGuard = applyMvuSettlementGuard(chat, character.card, mvuVariablesBefore)
+  const mvuRules = await applyMvuSettlementRules(chat, character.card, mvuVariablesBefore)
   recordMvuTurnReceipt(chat, mvuVariablesBefore, {
     turnKey: String(chat.messages.length - 1),
-    failures: [...(tpl?.warnings ?? []), ...mvuGuard.failures],
-    changeNotes: mvuGuard.notes,
+    failures: [...(tpl?.warnings ?? []), ...mvuGuard.failures, ...mvuRules.failures],
+    changeNotes: mergeMvuRuleNotes(mvuGuard.notes, mvuRules.notes),
   })
   revision = await db.saveChat(characterName, chatId, chat, revision)
   // chat-saved（提案 0015 §3.3 P1）：助手回复落盘点（与 post-save hook 相邻但

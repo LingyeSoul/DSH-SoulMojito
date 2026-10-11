@@ -11481,11 +11481,12 @@ function resolveMvuSchema(raw) {
   schemaCache.set(raw, root);
   return root;
 }
-function stripMvuSchema(tree) {
-  if (!("$schema" in tree) || !isPlainObject(tree.$schema)) return tree;
+function stripMvuControl(tree) {
+  if (!("$schema" in tree || "$rules" in tree)) return tree;
   const out = {};
   for (const [key, value] of Object.entries(tree)) {
-    if (key === "$schema") continue;
+    if (key === "$schema" && isPlainObject(value)) continue;
+    if (key === "$rules" && Array.isArray(value)) continue;
     out[key] = value;
   }
   return out;
@@ -11670,16 +11671,257 @@ function getMvuTreePath(tree, path12) {
   return cursor;
 }
 
-// packages/plugin/src/mvu.ts
-var DEFAULT_USER = "User";
+// packages/plugin/src/mvu-rules.ts
+var MVU_RULE_ROUNDS = 3;
+var MVU_RULES_LIMIT = 32;
+var MVU_RULE_THEN_LIMIT = 16;
+function isPlainObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 var INITIAL_VARIABLES_KEY2 = "initial_variables";
-var MVU_RECEIPTS_LIMIT = 20;
+function cardRules(card) {
+  const holder = card?.data?.extensions?.["agentTavern"];
+  if (!isPlainObject2(holder)) return void 0;
+  return holder.initialVariables?.$rules;
+}
+function treeRules(tree) {
+  return isPlainObject2(tree) ? tree.$rules : void 0;
+}
+function validateMvuRules(raw) {
+  if (!Array.isArray(raw)) throw new Error("$rules must be an array of rule objects");
+  if (raw.length === 0) return [];
+  if (raw.length > MVU_RULES_LIMIT) {
+    throw new Error(`$rules declares ${raw.length} rules, over the cap of ${MVU_RULES_LIMIT}`);
+  }
+  return raw.map((entry, index) => {
+    if (!isPlainObject2(entry)) throw new Error(`rule #${index} is not an object`);
+    const { name: name2, when, then } = entry;
+    if (typeof name2 !== "string" || name2.trim() === "" || name2.length > 64) {
+      throw new Error(`rule #${index} requires a non-empty name of at most 64 characters`);
+    }
+    if (typeof when !== "string" || when.trim() === "") {
+      throw new Error(`rule '${name2}' requires a non-empty when expression`);
+    }
+    if (!isPlainObject2(then) || Object.keys(then).length === 0) {
+      throw new Error(`rule '${name2}' requires a non-empty then map`);
+    }
+    if (Object.keys(then).length > MVU_RULE_THEN_LIMIT) {
+      throw new Error(`rule '${name2}' declares ${Object.keys(then).length} then writes, over the cap of ${MVU_RULE_THEN_LIMIT}`);
+    }
+    for (const [path12, value] of Object.entries(then)) {
+      if (path12.trim() === "") throw new Error(`rule '${name2}' has an empty then path`);
+      if (typeof value === "string") {
+        if (value.trim() === "") throw new Error(`rule '${name2}' has an empty then expression for '${path12}'`);
+      } else if (value === void 0 || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
+        throw new Error(`rule '${name2}' then value for '${path12}' is not a JSON literal`);
+      }
+    }
+    return { name: name2, when, then };
+  });
+}
+function readMvuRules(chat, card, variablesOverride) {
+  const candidates = [
+    treeRules(variablesOverride ?? chat?.header?.chat_metadata?.variables),
+    cardRules(card),
+    treeRules(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY2])
+  ];
+  for (const candidate of candidates) {
+    if (candidate === void 0) continue;
+    try {
+      const rules = validateMvuRules(candidate);
+      if (rules.length === 0) continue;
+      return { rules };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { invalid: `$rules: ${message}; all card rules are disabled for this settlement` };
+    }
+  }
+  return void 0;
+}
+var SAFE_MATH_KEYS = [
+  "E",
+  "LN2",
+  "LN10",
+  "LOG2E",
+  "LOG10E",
+  "PI",
+  "SQRT1_2",
+  "SQRT2",
+  "abs",
+  "acos",
+  "acosh",
+  "asin",
+  "asinh",
+  "atan",
+  "atan2",
+  "atanh",
+  "cbrt",
+  "ceil",
+  "cos",
+  "cosh",
+  "exp",
+  "expm1",
+  "floor",
+  "fround",
+  "hypot",
+  "imul",
+  "log",
+  "log1p",
+  "log2",
+  "log10",
+  "max",
+  "min",
+  "pow",
+  "round",
+  "sign",
+  "sin",
+  "sinh",
+  "sqrt",
+  "tan",
+  "tanh",
+  "trunc"
+];
+var SAFE_MATH = Object.freeze(
+  Object.fromEntries(SAFE_MATH_KEYS.map((key) => [key, Math[key]]))
+);
+var RULE_SANDBOX_SHADES = {
+  Math: SAFE_MATH,
+  Date: void 0,
+  setTimeout: void 0,
+  setInterval: void 0,
+  setImmediate: void 0,
+  queueMicrotask: void 0
+};
+function buildRuleEnv(tree) {
+  const vars = deepClone(stripMvuControl(tree));
+  return {
+    vars,
+    getvar: (path12) => typeof path12 === "string" ? getMvuTreePath(vars, path12) : void 0,
+    ...RULE_SANDBOX_SHADES
+  };
+}
+function errorText(error) {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+function setTreePath(tree, path12, value) {
+  const segments = path12.split(".");
+  const leaf = segments.pop();
+  let cursor = tree;
+  for (const segment of segments) {
+    const next = cursor[segment];
+    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+    cursor = cursor[segment];
+  }
+  cursor[leaf] = value;
+}
+async function runMvuRules(rules, options) {
+  const failures = /* @__PURE__ */ new Set();
+  const writes = [];
+  const noteParts = /* @__PURE__ */ new Map();
+  const tree = options.tree;
+  for (let round = 1; round <= MVU_RULE_ROUNDS; round++) {
+    let progressed = false;
+    for (const rule of rules) {
+      let active = false;
+      try {
+        active = Boolean(await evalExpressionSandboxed(rule.when, buildRuleEnv(tree)));
+      } catch (error) {
+        failures.add(`rule '${rule.name}': when evaluation failed: ${errorText(error)}`);
+        continue;
+      }
+      if (!active) continue;
+      const pending = [];
+      let failed = false;
+      for (const [path12, raw] of Object.entries(rule.then)) {
+        try {
+          const value = typeof raw === "string" ? await evalExpressionSandboxed(raw, buildRuleEnv(tree)) : deepClone(raw);
+          if (value === void 0) throw new Error("the expression evaluated to undefined");
+          pending.push({ path: path12, value });
+        } catch (error) {
+          failures.add(`rule '${rule.name}': then evaluation failed for '${path12}': ${errorText(error)}`);
+          failed = true;
+          break;
+        }
+      }
+      if (failed) continue;
+      for (const { path: path12, value } of pending) {
+        const head = path12.split(".")[0];
+        if (head === "$schema" || head === "$rules") {
+          failures.add(`${path12}: rule '${rule.name}': guard readonly: the ${head} subtree is card-declared and cannot be settled`);
+          continue;
+        }
+        const current = getMvuTreePath(tree, path12);
+        const guarded = options.schema === void 0 ? void 0 : guardMvuWrite(options.schema, path12, value, current);
+        if (guarded !== void 0 && !guarded.ok) {
+          failures.add(`${path12}: rule '${rule.name}': guard ${guarded.kind}: ${guarded.reason}`);
+          continue;
+        }
+        const finalValue = guarded === void 0 ? value : guarded.value;
+        if (mvuValuesEqual(finalValue, current)) continue;
+        setTreePath(tree, path12, deepClone(finalValue));
+        progressed = true;
+        const note = ["rule:" + rule.name, guarded?.note].filter((part) => part !== void 0).join("; ");
+        const parts = noteParts.get(path12) ?? [];
+        if (!parts.includes(note)) parts.push(note);
+        noteParts.set(path12, parts);
+        writes.push({ path: path12, value: deepClone(finalValue), rule: rule.name, ...guarded?.note !== void 0 ? { guardNote: guarded.note } : {} });
+      }
+    }
+    if (!progressed) break;
+    if (round === MVU_RULE_ROUNDS) {
+      failures.add(`$rules: fixed-point iteration hit the ${MVU_RULE_ROUNDS}-round cap; rules were still producing changes in the last round (narrow the when conditions or reorder the rules)`);
+    }
+  }
+  const notes = Object.fromEntries([...noteParts].map(([path12, parts]) => [path12, parts.join("; ")]));
+  return { failures: [...failures], writes, notes };
+}
 function plainObject(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
   return value;
 }
+async function applyMvuSettlementRules(chat, card, before) {
+  const metadata = chat.header.chat_metadata;
+  const live = plainObject(metadata.variables);
+  const source = readMvuRules(chat, card, before);
+  if (source === void 0 && before.$rules === void 0 && live?.$rules === void 0) {
+    return { failures: [], notes: {} };
+  }
+  const variables2 = live ?? {};
+  const failures = [];
+  if (!mvuValuesEqual(variables2.$rules, before.$rules)) {
+    if (before.$rules !== void 0) variables2.$rules = deepClone(before.$rules);
+    else delete variables2.$rules;
+    failures.push("$rules: guard readonly: the rules subtree is card-declared and cannot be settled");
+  }
+  if (source === void 0) {
+    if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
+    return { failures, notes: {} };
+  }
+  if ("invalid" in source) return { failures: [...failures, source.invalid], notes: {} };
+  const schema = readMvuSchema(chat, card, before);
+  const run = await runMvuRules(source.rules, { ...schema !== void 0 ? { schema } : {}, tree: variables2 });
+  if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
+  return { failures: [...failures, ...run.failures], notes: run.notes };
+}
+function mergeMvuRuleNotes(guardNotes, ruleNotes) {
+  const merged = {};
+  for (const [path12, note] of Object.entries(guardNotes)) merged[path12] = note;
+  for (const [path12, note] of Object.entries(ruleNotes)) {
+    merged[path12] = merged[path12] !== void 0 ? `${merged[path12]}; ${note}` : note;
+  }
+  return merged;
+}
+
+// packages/plugin/src/mvu.ts
+var DEFAULT_USER = "User";
+var INITIAL_VARIABLES_KEY3 = "initial_variables";
+var MVU_RECEIPTS_LIMIT = 20;
+function plainObject2(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
 function readChatVariables(chat) {
-  return plainObject(chat?.header?.chat_metadata?.variables) ?? {};
+  return plainObject2(chat?.header?.chat_metadata?.variables) ?? {};
 }
 function snapshotChatVariables(chat) {
   return deepClone(readChatVariables(chat));
@@ -11690,8 +11932,8 @@ function valuesEqual(left, right) {
 function diffVariables(before, after) {
   const changes = [];
   const walk = (path12, left, right) => {
-    const leftObject = plainObject(left);
-    const rightObject = plainObject(right);
+    const leftObject = plainObject2(left);
+    const rightObject = plainObject2(right);
     const recursible = leftObject !== void 0 && rightObject !== void 0 || left === void 0 && rightObject !== void 0 || right === void 0 && leftObject !== void 0;
     if (recursible) {
       const leftNext = leftObject ?? {};
@@ -11707,7 +11949,7 @@ function diffVariables(before, after) {
       changes.push(change);
     }
   };
-  walk("", stripMvuSchema(before), stripMvuSchema(after));
+  walk("", stripMvuControl(before), stripMvuControl(after));
   return changes.sort((left, right) => left.name.localeCompare(right.name));
 }
 function overlayScopedVariables(base, entries) {
@@ -11726,11 +11968,11 @@ function overlayScopedVariables(base, entries) {
   return tree;
 }
 function readMvuReceipts(chat) {
-  const raw = plainObject(chat?.header?.chat_metadata?.mvu)?.receipts;
+  const raw = plainObject2(chat?.header?.chat_metadata?.mvu)?.receipts;
   if (!Array.isArray(raw)) return [];
   const receipts = [];
   for (const entry of raw) {
-    const record = plainObject(entry);
+    const record = plainObject2(entry);
     if (record === void 0) continue;
     const { at, turnKey, status: status2, changes, failures } = record;
     if (typeof at !== "string" || typeof turnKey !== "string") continue;
@@ -11740,7 +11982,7 @@ function readMvuReceipts(chat) {
       turnKey,
       status: status2,
       changes: Array.isArray(changes) ? changes.flatMap((item) => {
-        const change = plainObject(item);
+        const change = plainObject2(item);
         if (change === void 0 || typeof change.name !== "string") return [];
         const out = { name: change.name };
         if ("before" in change) out.before = change.before;
@@ -11820,11 +12062,11 @@ function applyMvuSettlementGuard(chat, card, before) {
   const failures = [];
   const notes = {};
   const metadata = chat.header.chat_metadata;
-  const variables2 = plainObject(metadata.variables);
+  const variables2 = plainObject2(metadata.variables);
   const schema = readMvuSchema(chat, card, before);
   if (schema === void 0 || variables2 === void 0) return { failures, notes };
-  const schemaBefore = plainObject(before.$schema);
-  const schemaLive = plainObject(variables2.$schema);
+  const schemaBefore = plainObject2(before.$schema);
+  const schemaLive = plainObject2(variables2.$schema);
   if (!valuesEqual(schemaBefore, schemaLive)) {
     if (schemaBefore !== void 0) variables2.$schema = deepClone(schemaBefore);
     else delete variables2.$schema;
@@ -11916,7 +12158,7 @@ function createMvuRuntime(input, stores) {
   return runtime;
 }
 function statusTemplateOf(card) {
-  const agentTavern = plainObject(card?.data?.extensions?.["agentTavern"]);
+  const agentTavern = plainObject2(card?.data?.extensions?.["agentTavern"]);
   const template = agentTavern?.statusTemplate;
   return typeof template === "string" && template.trim() !== "" ? template : void 0;
 }
@@ -11933,9 +12175,9 @@ async function renderMvuStatusTemplate(input) {
       books
     },
     {
-      local: deepClone(stripMvuSchema(plainObject(input.localVariables ?? readChatVariables(chat)) ?? {})),
+      local: deepClone(stripMvuControl(plainObject2(input.localVariables ?? readChatVariables(chat)) ?? {})),
       global: { ...input.state.scriptGlobals },
-      initial: deepClone(stripMvuSchema(plainObject(chat.header.chat_metadata[INITIAL_VARIABLES_KEY2]) ?? {}))
+      initial: deepClone(stripMvuControl(plainObject2(chat.header.chat_metadata[INITIAL_VARIABLES_KEY3]) ?? {}))
     }
   );
   return await runtime.renderText(input.template, void 0, "mvu-status");
@@ -11967,7 +12209,7 @@ async function retryMvuSettlement(db, options) {
   const character = await db.getCharacter(characterName) ?? await db.getCharacter(floor.name);
   if (!character) throw new Error(`character '${characterName}' not found`);
   const failures = [];
-  const localVars = plainObject(metadata.variables) ?? {};
+  const localVars = plainObject2(metadata.variables) ?? {};
   metadata.variables = localVars;
   const globalsBefore = JSON.stringify(state.scriptGlobals);
   const books = await collectWorldInfoBooks(db, state, characterName, character);
@@ -11980,7 +12222,7 @@ async function retryMvuSettlement(db, options) {
       // 不持久化——initial 本就由每次生成的 InitialVariables 重算，非用户状态
       local: localVars,
       global: state.scriptGlobals,
-      initial: plainObject(metadata[INITIAL_VARIABLES_KEY2]) ?? {}
+      initial: plainObject2(metadata[INITIAL_VARIABLES_KEY3]) ?? {}
     }
   );
   try {
@@ -11993,12 +12235,14 @@ async function retryMvuSettlement(db, options) {
     await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }));
   }
   const guard = applyMvuSettlementGuard(chat, character.card, before);
+  const rulesPass = await applyMvuSettlementRules(chat, character.card, before);
   const after = readChatVariables(chat);
   const changes = diffVariables(before, after);
+  const notes = mergeMvuRuleNotes(guard.notes, rulesPass.notes);
   for (const change of changes) {
-    if (guard.notes[change.name] !== void 0) change.reason = guard.notes[change.name];
+    if (notes[change.name] !== void 0) change.reason = notes[change.name];
   }
-  const allFailures = [...failures, ...guard.failures];
+  const allFailures = [...failures, ...guard.failures, ...rulesPass.failures];
   const receipt = {
     at: (/* @__PURE__ */ new Date()).toISOString(),
     turnKey: String(floorIndex),
@@ -12008,7 +12252,7 @@ async function retryMvuSettlement(db, options) {
   };
   appendMvuReceipt(chat, receipt);
   const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
-  return { receipt, revision, variables: stripMvuSchema(after) };
+  return { receipt, revision, variables: stripMvuControl(after) };
 }
 var MvuUndoRefusalError = class extends Error {
   undoCode;
@@ -12093,7 +12337,7 @@ async function undoMvuStSettlement(db, options) {
   const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
   const restores = planMvuUndoRestores(target.receipt);
   const metadata = chat.header.chat_metadata;
-  const variables2 = plainObject(metadata.variables) ?? {};
+  const variables2 = plainObject2(metadata.variables) ?? {};
   screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables2), restores, (path12) => getMvuTreePath(variables2, path12));
   applyMvuUndoRestores(variables2, restores);
   if (Object.keys(variables2).length === 0) delete metadata.variables;
@@ -12665,7 +12909,7 @@ function applyCardOverride(identifier, content, card) {
 }
 
 // packages/plugin/src/template.ts
-var INITIAL_VARIABLES_KEY3 = "initial_variables";
+var INITIAL_VARIABLES_KEY4 = "initial_variables";
 function toSpecialEntry(kind, arg, content, ifCondition, source) {
   const entry = {
     kind,
@@ -12776,7 +13020,7 @@ async function createGenerationTemplates(options) {
   };
   const partition = partitionSpecialLore(lore, books);
   const localVars = ensureMetadataObject(chat.header.chat_metadata, "variables");
-  const initialVars = ensureMetadataObject(chat.header.chat_metadata, INITIAL_VARIABLES_KEY3);
+  const initialVars = ensureMetadataObject(chat.header.chat_metadata, INITIAL_VARIABLES_KEY4);
   const cardName = card.data.nickname || card.data.name;
   const lastUserIdx = (() => {
     for (let i = turnMessages.length - 1; i >= 0; i--) if (turnMessages[i].is_user) return i;
@@ -12938,8 +13182,8 @@ function mergeTemplateLocalVars(chat, macroLocalSnapshot) {
   for (const [key, value] of Object.entries(macroLocalSnapshot)) merged[key] = value;
   if (Object.keys(merged).length > 0) metadata["variables"] = merged;
   else delete metadata["variables"];
-  if (Object.keys(ensureMetadataObject(metadata, INITIAL_VARIABLES_KEY3)).length === 0) {
-    delete metadata[INITIAL_VARIABLES_KEY3];
+  if (Object.keys(ensureMetadataObject(metadata, INITIAL_VARIABLES_KEY4)).length === 0) {
+    delete metadata[INITIAL_VARIABLES_KEY4];
   }
 }
 
@@ -20461,6 +20705,9 @@ async function handleApi(ctx, req, res) {
     });
     return sendJson(res, 200, { ok: true, items: result.items, generatedAt: result.generatedAt, revision: result.revision });
   }
+  if (method === "POST" && route === "preview") {
+    return previewGeneration(ctx, req, res, db);
+  }
   if (method === "POST" && (route === "mvu/retry" || route === "mvu/receipts/undo") || method === "GET" && route.startsWith("mvu/status/")) {
     return handleMvuApi(req, res, route, method, db);
   }
@@ -20867,7 +21114,7 @@ async function handleMvuApi(req, res, route, method, db) {
     const receipts = readMvuReceipts(chat);
     const agentTavernBound = Object.values(state.sessionBindings).some((binding) => binding.architecture === "agent-tavern" && binding.chatId === chatId && binding.character === characterName);
     const scopedVariables = agentTavernBound ? await (await variables()).list("chat", chatId, "", 100) : [];
-    const displayVariables = stripMvuSchema(scopedVariables.length > 0 ? overlayScopedVariables(readChatVariables(chat), scopedVariables) : readChatVariables(chat));
+    const displayVariables = stripMvuControl(scopedVariables.length > 0 ? overlayScopedVariables(readChatVariables(chat), scopedVariables) : readChatVariables(chat));
     const character = await db.getCharacter(characterName);
     const statusTemplate = character ? statusTemplateOf(character.card) : void 0;
     let renderedHtml;
@@ -21582,6 +21829,330 @@ async function generate(ctx, req, res, db) {
     }
   }
 }
+async function previewGeneration(ctx, req, res, db) {
+  const body = await readJson(req);
+  const state = await db.getState();
+  const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
+  const chatId = body.chatId;
+  const userText = typeof body.userText === "string" ? body.userText.trim() : "";
+  if (!characterName || typeof chatId !== "string") {
+    return sendJson(res, 400, { ok: false, message: "character and chatId are required" });
+  }
+  if (userText === "") return sendJson(res, 400, { ok: false, message: "userText is empty" });
+  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
+  if (!snapshot2) return sendJson(res, 404, { ok: false, message: "character or chat not found" });
+  const group2 = body.group === true || await isGroupChat(db, characterName, chatId);
+  const ac = new AbortController();
+  req.on?.("aborted", () => ac.abort());
+  res.on?.("close", () => {
+    if (!res.writableEnded) ac.abort();
+  });
+  const chat = structuredClone(snapshot2.chat);
+  const userName = state.activePersona ?? DEFAULT_USER4;
+  const { speakerName, groupDef, nudge, turnMessages: initialTurnMessages } = await resolveGenerationSpeaker(db, state, {
+    characterName,
+    chat,
+    mode: "send",
+    group: group2
+  });
+  const character = await db.getCharacter(speakerName);
+  if (!character) throw new Error(`character '${speakerName}' not found`);
+  const scripts = collectRegexScripts(state, character);
+  const transformed = applyRegexScripts(userText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t });
+  chat.messages.push({ name: userName, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: transformed });
+  const turnMessages = group2 ? rebuildGroupTurn(groupDef, speakerName, userName, chat.messages) : initialTurnMessages;
+  const boundSessions = Object.entries(state.sessionBindings ?? {}).filter(([, binding]) => binding?.architecture === "st" && binding.character === characterName && binding.chatId === chatId).map(([id]) => id);
+  const sessionId = boundSessions.find((id) => state.modelSelections?.[id] !== void 0);
+  try {
+    const assembly = await buildGenerationLlmRequest(ctx, db, {
+      state,
+      speakerName,
+      character,
+      chatId,
+      chat,
+      turnMessages,
+      nudge,
+      group: group2,
+      ...groupDef !== void 0 ? { groupDef } : {},
+      phase: "send",
+      scripts,
+      userName,
+      ...sessionId !== void 0 ? { sessionId } : {}
+    });
+    const request = assembly.request;
+    let text = "";
+    let usage;
+    let finish;
+    for await (const chunk of ctx.llm.stream({
+      provider: request.params.provider,
+      model: request.params.model,
+      messages: request.messages,
+      ...request.system !== void 0 ? { system: request.system } : {},
+      ...request.params.reasoningEffort !== void 0 ? { reasoningEffort: request.params.reasoningEffort } : {},
+      temperature: request.params.temperature,
+      maxTokens: request.params.maxTokens,
+      signal: ac.signal
+    })) {
+      if (chunk.type === "usage") usage = chunk.usage;
+      else if (chunk.type === "text-delta") text += chunk.text;
+      else if (chunk.type === "finish") {
+        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
+        finish = chunk.reason.kind;
+      }
+    }
+    if (!res.writableEnded) {
+      return sendJson(res, 200, {
+        ok: true,
+        text,
+        provider: request.params.provider,
+        model: request.params.model,
+        ...usage !== void 0 ? { usage } : {},
+        ...finish !== void 0 ? { finish } : {}
+      });
+    }
+  } catch (error) {
+    if (!res.writableEnded) {
+      return sendJson(res, 500, { ok: false, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+}
+async function resolveGenerationSpeaker(db, state, options) {
+  const { characterName, chat, mode, group: group2, triggerMember } = options;
+  if (!group2) {
+    return { speakerName: characterName, groupDef: void 0, turnMessages: chat.messages, nudge: void 0 };
+  }
+  const groupDef = await db.getGroup(characterName);
+  if (!groupDef) throw new Error(`group '${characterName}' not found`);
+  const chatGroupMeta = chat.header.chat_metadata?.group;
+  const members = Array.isArray(chatGroupMeta?.members) && chatGroupMeta.members.length > 0 ? chatGroupMeta.members.filter((x) => typeof x === "string") : groupDef.members;
+  const disabled = Array.isArray(chatGroupMeta?.disabledMembers) ? chatGroupMeta.disabledMembers.filter((x) => typeof x === "string") : groupDef.disabledMembers;
+  const lastSpeaker = [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system)?.name;
+  const talkativeness = /* @__PURE__ */ new Map();
+  for (const member of members) {
+    const file = await db.getCharacter(member);
+    const raw = file?.card?.data?.extensions?.talkativeness;
+    talkativeness.set(member, typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0.5);
+  }
+  const speakerName = triggerMember ?? (mode === "regenerate" ? members.includes(lastSpeaker) ? lastSpeaker : void 0 : void 0) ?? pickGroupMember({
+    strategy: groupDef.activationStrategy,
+    members,
+    disabled,
+    talkativeness: (member) => talkativeness.get(member) ?? 0.5,
+    lastSpeaker,
+    allowSelfResponses: groupDef.allowSelfResponses
+  });
+  if (!speakerName || !members.includes(speakerName)) throw new Error("no eligible group member to reply");
+  const rawNudge = await presetSamplerValue(db, state, "group_nudge_prompt");
+  const turn = buildGroupTurn({
+    speaker: speakerName,
+    members,
+    userName: state.activePersona ?? DEFAULT_USER4,
+    messages: chat.messages,
+    ...typeof rawNudge === "string" && rawNudge.trim() !== "" ? { groupNudgePrompt: rawNudge } : {}
+  });
+  return { speakerName, groupDef, turnMessages: turn.messages, nudge: turn.nudge };
+}
+function rebuildGroupTurn(groupDef, speakerName, userName, messages) {
+  return buildGroupTurn({
+    speaker: speakerName,
+    members: groupDef?.members ?? [speakerName],
+    userName,
+    messages
+  }).messages;
+}
+async function buildGenerationLlmRequest(ctx, db, options) {
+  const { state, speakerName, character, chatId, chat, turnMessages, nudge, groupDef, scripts, userName } = options;
+  const presetName = state.activePreset;
+  let presetObject = presetName ? await db.getPreset(presetName) : void 0;
+  if (!presetObject) presetObject = defaultPreset();
+  const preset = parsePreset(presetObject);
+  const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
+  const books = await collectWorldInfoBooks(db, state, speakerName, character);
+  const lore = activateWorldInfo({
+    books,
+    chat: turnMessages.map((m) => ({ name: m.name, content: m.mes, isUser: m.is_user })),
+    contextSize: Number(preset.sampler.openai_max_context ?? 4096),
+    trigger: options.phase === "regenerate" ? "regenerate" : options.phase === "trigger" ? "quiet" : "normal",
+    scanSources: {
+      personaDescription: persona?.description,
+      characterDescription: character.card.data.description,
+      characterPersonality: character.card.data.personality,
+      scenario: character.card.data.scenario,
+      creatorNotes: character.card.data.creatorNotes
+    },
+    settings: { recursive: true, scanDepth: 2, budgetPercent: 25 },
+    timedState: typeof chat.header.chat_metadata?.timedWorldInfo === "object" && chat.header.chat_metadata.timedWorldInfo ? chat.header.chat_metadata.timedWorldInfo : void 0,
+    messageCount: turnMessages.length
+  });
+  chat.header.chat_metadata.timedWorldInfo = lore.timedState;
+  const templatesActive = templatesEnabledFlag && templatesEnabled();
+  const templateGlobalsBefore = templatesActive ? JSON.stringify(state.scriptGlobals) : void 0;
+  const tpl = templatesActive ? await createGenerationTemplates({
+    chat,
+    state,
+    books,
+    lore,
+    card: character.card,
+    preset,
+    turnMessages,
+    userName,
+    characterName: speakerName,
+    chatId
+  }) : null;
+  const wiDeps = { expand: (text) => text };
+  const loreBeforeBase = (tpl ? tpl.partition.normalBefore : lore.worldInfoBefore.entries).map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps));
+  const loreAfterBase = (tpl ? tpl.partition.normalAfter : lore.worldInfoAfter.entries).map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps));
+  const loreBefore = tpl ? await Promise.all(loreBeforeBase.map((t) => tpl.renderText(t, "wi-before"))) : loreBeforeBase;
+  const loreAfter = tpl ? await Promise.all(loreAfterBase.map((t) => tpl.renderText(t, "wi-after"))) : loreAfterBase;
+  const lastUser = [...turnMessages].reverse().find((m) => m.is_user);
+  const lastChar = [...turnMessages].reverse().find((m) => !m.is_user && !m.is_system);
+  const enabledMembers = groupDef ? groupDef.members.filter((member) => !groupDef.disabledMembers.includes(member)) : void 0;
+  const macros = createMacroEngine({
+    char: character.card.data.nickname || character.card.data.name,
+    user: userName,
+    ...enabledMembers ? { group: enabledMembers.join(", ") } : {},
+    persona: persona?.description,
+    card: {
+      description: character.card.data.description,
+      personality: character.card.data.personality,
+      scenario: character.card.data.scenario,
+      mesExample: character.card.data.mesExample,
+      systemPrompt: character.card.data.systemPrompt,
+      postHistoryInstructions: character.card.data.postHistoryInstructions,
+      creatorNotes: character.card.data.creatorNotes
+    },
+    lastMessage: turnMessages[turnMessages.length - 1]?.mes,
+    lastUserMessage: lastUser?.mes,
+    lastCharMessage: lastChar?.mes,
+    lastMessageId: turnMessages.length - 1,
+    chatId,
+    local: chatVariables(chat),
+    global: state.scriptGlobals
+  });
+  const expand = (text) => macros.expand(text);
+  const countTokens = (text) => Math.ceil(text.length / 3.5);
+  const personaInjections = [];
+  let personaDescription = persona?.description;
+  if (persona) {
+    const position = typeof persona.position === "number" ? persona.position : 0;
+    if (position === 4) {
+      personaInjections.push({ depth: persona.depth ?? 4, role: roleName(persona.role ?? 0), text: persona.description });
+      personaDescription = void 0;
+    } else if (position === 2 || position === 3) {
+      personaInjections.push({ depth: position === 2 ? 4 : 0, role: "system", text: persona.description });
+      personaDescription = void 0;
+    } else if (position === 9) {
+      personaDescription = void 0;
+    }
+  }
+  if (tpl && personaDescription) personaDescription = await tpl.renderText(personaDescription, "persona");
+  const promptOnlyScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly);
+  const historyRegexed = promptOnlyScripts.length > 0 ? turnMessages.map((m, index) => ({
+    ...m,
+    mes: applyRegexScripts(m.mes, promptOnlyScripts, RegexPlacement.AI_OUTPUT, {}, { depth: turnMessages.length - 1 - index })
+  })) : turnMessages;
+  const historyForPrompt = tpl ? await Promise.all(historyRegexed.map((m, index) => tpl.renderText(m.mes, `history#${index}`).then((mes) => ({ ...m, mes })))) : historyRegexed;
+  const atDepthSource = tpl ? tpl.partition.normalAtDepth : lore.atDepth.map((g) => ({ depth: g.depth, role: g.role, text: g.text }));
+  const anTopText = tpl && lore.topOfAuthorsNote.text ? await tpl.renderText(lore.topOfAuthorsNote.text, "an-top") : lore.topOfAuthorsNote.text;
+  const anBottomText = tpl && lore.bottomOfAuthorsNote.text ? await tpl.renderText(lore.bottomOfAuthorsNote.text, "an-bottom") : lore.bottomOfAuthorsNote.text;
+  const depthInjectionsRaw = [
+    ...atDepthSource.map((g) => ({ depth: g.depth, role: roleName(g.role), text: g.text })),
+    ...anTopText ? [{ depth: 4, role: "system", text: anTopText }] : [],
+    ...anBottomText ? [{ depth: 0, role: "system", text: anBottomText }] : [],
+    ...personaInjections
+  ];
+  const depthInjections = tpl ? await Promise.all(depthInjectionsRaw.map(async (inj) => ({ ...inj, text: await tpl.renderText(inj.text, "depth-injection") }))) : depthInjectionsRaw;
+  const nudgeMessage = nudge !== void 0 ? { name: userName, is_user: true, is_system: false, send_date: "", mes: expand(nudge.content) } : void 0;
+  const assembleDraft = {
+    card: tpl ? await tpl.preRenderCard(character.card) : character.card,
+    preset: tpl ? await tpl.preRenderPreset(preset) : preset,
+    personaDescription,
+    messages: nudgeMessage ? [...historyForPrompt, nudgeMessage] : historyForPrompt,
+    worldInfoBefore: loreBefore,
+    worldInfoAfter: loreAfter,
+    beforeExamples: tpl ? await Promise.all(tpl.partition.normalBeforeExamples.map((e, i) => tpl.renderText(e.content, `wi-em-before#${i}`))) : lore.beforeExamples.entries.map((e) => e.content),
+    afterExamples: tpl ? await Promise.all(tpl.partition.normalAfterExamples.map((e, i) => tpl.renderText(e.content, `wi-em-after#${i}`))) : lore.afterExamples.entries.map((e) => e.content),
+    depthInjections
+  };
+  const hookedDraft = options.onDraft !== void 0 ? await options.onDraft(assembleDraft) : assembleDraft;
+  const assembled = assemblePrompt(hookedDraft, { expand, countTokens });
+  const fallback = ctx.agentDefaultModel.currentSelection();
+  const saved = options.sessionId ? state.modelSelections?.[options.sessionId] : void 0;
+  const explicit = options.provider !== void 0 && options.model !== void 0 ? {
+    provider: options.provider,
+    model: options.model,
+    ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {}
+  } : void 0;
+  const choice = explicit ?? saved ?? fallback;
+  const provider = choice.provider;
+  const model = choice.model;
+  tpl?.setModel(model);
+  const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
+  if (tpl) await tpl.prerenderGenerateAfter();
+  const boundScriptId = boundScriptOf(character.card);
+  if (boundScriptId !== void 0) {
+    const scriptRecord = await getScript(dshHomePath("tavern"), boundScriptId);
+    if (scriptRecord !== void 0 && scriptRecord.chunks.length > 0) {
+      const prior = normalizeScriptProgress(chat.header.chat_metadata?.scriptProgress);
+      let chunkIndex = prior !== void 0 && prior.scriptName === boundScriptId ? Math.min(prior.chunkIndex, scriptRecord.chunks.length - 1) : 0;
+      const lastAssistantFloor = [...chat.messages].reverse().find((m) => m.is_user === false && !m.is_system);
+      const advanced = lastAssistantFloor !== void 0 && chunkIndex < scriptRecord.chunks.length - 1 && shouldAdvance(scriptRecord.chunks[chunkIndex].text, [...chat.messages].reverse().filter((m) => m.is_user === false && !m.is_system).slice(0, 3).map((m) => m.mes));
+      if (advanced) chunkIndex += 1;
+      if (advanced || prior === void 0 || prior.scriptName !== boundScriptId || prior.chunkIndex !== chunkIndex) {
+        chat.header.chat_metadata = {
+          ...chat.header.chat_metadata,
+          scriptProgress: { scriptName: boundScriptId, chunkIndex, alignedAt: (/* @__PURE__ */ new Date()).toISOString() }
+        };
+      }
+      const scriptBlock = formatScriptBlock(scriptRecord.chunks.map((chunk) => chunk.text), chunkIndex);
+      if (scriptBlock !== void 0) assembled.messages.unshift({ role: "system", content: scriptBlock });
+    }
+  }
+  const finalMessages = tpl ? await tpl.applyPromptInjections(assembled.messages) : assembled.messages;
+  const requestMessages = [...finalMessages];
+  const systemParts = [];
+  while (requestMessages[0]?.role === "system") systemParts.push(requestMessages.shift().content);
+  const guidesBlock = formatGuidesBlock(chat.header.chat_metadata?.guides);
+  if (guidesBlock !== void 0) systemParts.push(guidesBlock);
+  const llmMessages = requestMessages.map((m) => createMessage({
+    role: m.role,
+    content: [{ type: "text", text: m.content }],
+    // 仅进 ctx.llm.stream 的请求消息，不落会话日志（该调用不带 sessionId），
+    // dsh-llm 对 source 不校验；v0 形状在此保留——装配作用域内没有会话对象
+    // 可供格式探测。
+    source: m.role === "assistant" ? { kind: "model", provider, model } : m.role === "user" ? { kind: "user" } : { kind: "plugin", plugin: "dsh-tavern" }
+  }));
+  const rewriteBlock = formatRewriteBlock(options.feedback);
+  if (rewriteBlock) systemParts.push(rewriteBlock);
+  const llmRequest = {
+    messages: llmMessages,
+    system: systemParts.length > 0 ? systemParts.join("\n\n") : void 0,
+    params: {
+      provider,
+      model,
+      ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
+      temperature: numberOr(preset.sampler.temperature, void 0),
+      maxTokens: numberOr(preset.sampler.openai_max_tokens, void 0)
+    }
+  };
+  const hookedLlmRequest = options.onLlmRequest !== void 0 ? await options.onLlmRequest(llmRequest) : llmRequest;
+  return {
+    request: hookedLlmRequest,
+    lore,
+    tpl,
+    macros,
+    templateGlobalsBefore,
+    // SSE 'start' 事件的载荷（runGeneration 消费；试写预览忽略）。provider/model
+    // 是选择器结论（pre-hook）——hook 改写后的实参以 request.params 为准。
+    start: {
+      provider,
+      model,
+      speaker: speakerName,
+      lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })),
+      stats: assembled.stats
+    }
+  };
+}
 async function runGeneration(ctx, db, options) {
   const { state, characterName, chatId, snapshot: snapshot2, mode, group: group2, write, signal } = options;
   const chat = snapshot2.chat;
@@ -21590,43 +22161,14 @@ async function runGeneration(ctx, db, options) {
   let hostTrace;
   const userName = state.activePersona ?? DEFAULT_USER4;
   try {
-    let speakerName = characterName;
-    let groupDef = void 0;
-    let turnMessages = chat.messages;
-    let nudge = void 0;
-    if (group2) {
-      groupDef = await db.getGroup(characterName);
-      if (!groupDef) throw new Error(`group '${characterName}' not found`);
-      const chatGroupMeta = chat.header.chat_metadata?.group;
-      const members = Array.isArray(chatGroupMeta?.members) && chatGroupMeta.members.length > 0 ? chatGroupMeta.members.filter((x) => typeof x === "string") : groupDef.members;
-      const disabled = Array.isArray(chatGroupMeta?.disabledMembers) ? chatGroupMeta.disabledMembers.filter((x) => typeof x === "string") : groupDef.disabledMembers;
-      const lastSpeaker = [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system)?.name;
-      const talkativeness = /* @__PURE__ */ new Map();
-      for (const member of members) {
-        const file = await db.getCharacter(member);
-        const raw = file?.card?.data?.extensions?.talkativeness;
-        talkativeness.set(member, typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0.5);
-      }
-      speakerName = options.triggerMember ?? (mode === "regenerate" ? members.includes(lastSpeaker) ? lastSpeaker : void 0 : void 0) ?? pickGroupMember({
-        strategy: groupDef.activationStrategy,
-        members,
-        disabled,
-        talkativeness: (member) => talkativeness.get(member) ?? 0.5,
-        lastSpeaker,
-        allowSelfResponses: groupDef.allowSelfResponses
-      });
-      if (!speakerName || !members.includes(speakerName)) throw new Error("no eligible group member to reply");
-      const rawNudge = await presetSamplerValue(db, state, "group_nudge_prompt");
-      const turn = buildGroupTurn({
-        speaker: speakerName,
-        members,
-        userName,
-        messages: chat.messages,
-        ...typeof rawNudge === "string" && rawNudge.trim() !== "" ? { groupNudgePrompt: rawNudge } : {}
-      });
-      turnMessages = turn.messages;
-      nudge = turn.nudge;
-    }
+    const { speakerName, groupDef, nudge, turnMessages: initialTurnMessages } = await resolveGenerationSpeaker(db, state, {
+      characterName,
+      chat,
+      mode,
+      group: group2,
+      ...options.triggerMember !== void 0 ? { triggerMember: options.triggerMember } : {}
+    });
+    let turnMessages = initialTurnMessages;
     const character = await db.getCharacter(speakerName);
     if (!character) throw new Error(`character '${speakerName}' not found`);
     let regenerated;
@@ -21637,212 +22179,45 @@ async function runGeneration(ctx, db, options) {
       const transformed = applyRegexScripts(hookedUserText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t });
       hostUserText = transformed;
       chat.messages.push({ name: userName, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: transformed });
-      if (group2) {
-        const turn = buildGroupTurn({
-          speaker: speakerName,
-          members: groupDef?.members ?? [speakerName],
-          userName,
-          messages: chat.messages
-        });
-        turnMessages = turn.messages;
-      }
+      if (group2) turnMessages = rebuildGroupTurn(groupDef, speakerName, userName, chat.messages);
       revision = await db.saveChat(characterName, chatId, chat, revision);
       await emitChatSaved(characterName, chatId, revision, chat.messages.length);
     } else {
       const last = chat.messages[chat.messages.length - 1];
       if (last?.is_user === false && !last.is_system) {
         regenerated = chat.messages.pop();
-        if (group2) {
-          const turn = buildGroupTurn({
-            speaker: speakerName,
-            members: groupDef?.members ?? [speakerName],
-            userName,
-            messages: chat.messages
-          });
-          turnMessages = turn.messages;
-        }
+        if (group2) turnMessages = rebuildGroupTurn(groupDef, speakerName, userName, chat.messages);
       }
     }
     hostTrace = beginTavernSessionTurn(options.hostAgent, hostUserText);
-    const presetName = state.activePreset;
-    let presetObject = presetName ? await db.getPreset(presetName) : void 0;
-    if (!presetObject) presetObject = defaultPreset();
-    const preset = parsePreset(presetObject);
-    const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
-    const books = await collectWorldInfoBooks(db, state, speakerName, character);
-    const lore = activateWorldInfo({
-      books,
-      chat: turnMessages.map((m) => ({ name: m.name, content: m.mes, isUser: m.is_user })),
-      contextSize: Number(preset.sampler.openai_max_context ?? 4096),
-      trigger: mode === "regenerate" ? "regenerate" : mode === "trigger" ? "quiet" : "normal",
-      scanSources: {
-        personaDescription: persona?.description,
-        characterDescription: character.card.data.description,
-        characterPersonality: character.card.data.personality,
-        scenario: character.card.data.scenario,
-        creatorNotes: character.card.data.creatorNotes
-      },
-      settings: { recursive: true, scanDepth: 2, budgetPercent: 25 },
-      timedState: typeof chat.header.chat_metadata?.timedWorldInfo === "object" && chat.header.chat_metadata.timedWorldInfo ? chat.header.chat_metadata.timedWorldInfo : void 0,
-      messageCount: turnMessages.length
-    });
-    chat.header.chat_metadata.timedWorldInfo = lore.timedState;
-    const templatesActive = templatesEnabledFlag && templatesEnabled();
-    const templateGlobalsBefore = templatesActive ? JSON.stringify(state.scriptGlobals) : void 0;
-    const tpl = templatesActive ? await createGenerationTemplates({
-      chat,
+    const assembly = await buildGenerationLlmRequest(ctx, db, {
       state,
-      books,
-      lore,
-      card: character.card,
-      preset,
-      turnMessages,
-      userName,
-      characterName: speakerName,
-      chatId
-    }) : null;
-    const wiDeps = { expand: (text2) => text2 };
-    const loreBeforeBase = (tpl ? tpl.partition.normalBefore : lore.worldInfoBefore.entries).map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps));
-    const loreAfterBase = (tpl ? tpl.partition.normalAfter : lore.worldInfoAfter.entries).map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps));
-    const loreBefore = tpl ? await Promise.all(loreBeforeBase.map((t) => tpl.renderText(t, "wi-before"))) : loreBeforeBase;
-    const loreAfter = tpl ? await Promise.all(loreAfterBase.map((t) => tpl.renderText(t, "wi-after"))) : loreAfterBase;
-    const lastUser = [...turnMessages].reverse().find((m) => m.is_user);
-    const lastChar = [...turnMessages].reverse().find((m) => !m.is_user && !m.is_system);
-    const enabledMembers = groupDef ? groupDef.members.filter((member) => !groupDef.disabledMembers.includes(member)) : void 0;
-    const macros = createMacroEngine({
-      char: character.card.data.nickname || character.card.data.name,
-      user: userName,
-      ...enabledMembers ? { group: enabledMembers.join(", ") } : {},
-      persona: persona?.description,
-      card: {
-        description: character.card.data.description,
-        personality: character.card.data.personality,
-        scenario: character.card.data.scenario,
-        mesExample: character.card.data.mesExample,
-        systemPrompt: character.card.data.systemPrompt,
-        postHistoryInstructions: character.card.data.postHistoryInstructions,
-        creatorNotes: character.card.data.creatorNotes
-      },
-      lastMessage: turnMessages[turnMessages.length - 1]?.mes,
-      lastUserMessage: lastUser?.mes,
-      lastCharMessage: lastChar?.mes,
-      lastMessageId: turnMessages.length - 1,
+      speakerName,
+      character,
       chatId,
-      local: chatVariables(chat),
-      global: state.scriptGlobals
+      chat,
+      turnMessages,
+      nudge,
+      group: group2,
+      ...groupDef !== void 0 ? { groupDef } : {},
+      phase: mode,
+      scripts,
+      userName,
+      ...options.feedback !== void 0 ? { feedback: options.feedback } : {},
+      ...options.sessionId !== void 0 ? { sessionId: options.sessionId } : {},
+      ...options.provider !== void 0 ? { provider: options.provider } : {},
+      ...options.model !== void 0 ? { model: options.model } : {},
+      ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {},
+      onDraft: (draft) => generationHooks.dispatch("pre-assemble", draft, { mode, character: speakerName, chatId, group: group2 }),
+      onLlmRequest: (request) => generationHooks.dispatch("pre-llm", request, { mode, character: speakerName, chatId, group: group2 })
     });
+    const lore = assembly.lore;
+    const tpl = assembly.tpl;
+    const macros = assembly.macros;
+    const templateGlobalsBefore = assembly.templateGlobalsBefore;
+    const hookedLlmRequest = assembly.request;
     const expand = (text2) => macros.expand(text2);
-    const countTokens = (text2) => Math.ceil(text2.length / 3.5);
-    const personaInjections = [];
-    let personaDescription = persona?.description;
-    if (persona) {
-      const position = typeof persona.position === "number" ? persona.position : 0;
-      if (position === 4) {
-        personaInjections.push({ depth: persona.depth ?? 4, role: roleName(persona.role ?? 0), text: persona.description });
-        personaDescription = void 0;
-      } else if (position === 2 || position === 3) {
-        personaInjections.push({ depth: position === 2 ? 4 : 0, role: "system", text: persona.description });
-        personaDescription = void 0;
-      } else if (position === 9) {
-        personaDescription = void 0;
-      }
-    }
-    if (tpl && personaDescription) personaDescription = await tpl.renderText(personaDescription, "persona");
-    const promptOnlyScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly);
-    const historyRegexed = promptOnlyScripts.length > 0 ? turnMessages.map((m, index) => ({
-      ...m,
-      mes: applyRegexScripts(m.mes, promptOnlyScripts, RegexPlacement.AI_OUTPUT, {}, { depth: turnMessages.length - 1 - index })
-    })) : turnMessages;
-    const historyForPrompt = tpl ? await Promise.all(historyRegexed.map((m, index) => tpl.renderText(m.mes, `history#${index}`).then((mes) => ({ ...m, mes })))) : historyRegexed;
-    const atDepthSource = tpl ? tpl.partition.normalAtDepth : lore.atDepth.map((g) => ({ depth: g.depth, role: g.role, text: g.text }));
-    const anTopText = tpl && lore.topOfAuthorsNote.text ? await tpl.renderText(lore.topOfAuthorsNote.text, "an-top") : lore.topOfAuthorsNote.text;
-    const anBottomText = tpl && lore.bottomOfAuthorsNote.text ? await tpl.renderText(lore.bottomOfAuthorsNote.text, "an-bottom") : lore.bottomOfAuthorsNote.text;
-    const depthInjectionsRaw = [
-      ...atDepthSource.map((g) => ({ depth: g.depth, role: roleName(g.role), text: g.text })),
-      ...anTopText ? [{ depth: 4, role: "system", text: anTopText }] : [],
-      ...anBottomText ? [{ depth: 0, role: "system", text: anBottomText }] : [],
-      ...personaInjections
-    ];
-    const depthInjections = tpl ? await Promise.all(depthInjectionsRaw.map(async (inj) => ({ ...inj, text: await tpl.renderText(inj.text, "depth-injection") }))) : depthInjectionsRaw;
-    const nudgeMessage = nudge !== void 0 ? { name: userName, is_user: true, is_system: false, send_date: "", mes: expand(nudge.content) } : void 0;
-    const assembleDraft = {
-      card: tpl ? await tpl.preRenderCard(character.card) : character.card,
-      preset: tpl ? await tpl.preRenderPreset(preset) : preset,
-      personaDescription,
-      messages: nudgeMessage ? [...historyForPrompt, nudgeMessage] : historyForPrompt,
-      worldInfoBefore: loreBefore,
-      worldInfoAfter: loreAfter,
-      beforeExamples: tpl ? await Promise.all(tpl.partition.normalBeforeExamples.map((e, i) => tpl.renderText(e.content, `wi-em-before#${i}`))) : lore.beforeExamples.entries.map((e) => e.content),
-      afterExamples: tpl ? await Promise.all(tpl.partition.normalAfterExamples.map((e, i) => tpl.renderText(e.content, `wi-em-after#${i}`))) : lore.afterExamples.entries.map((e) => e.content),
-      depthInjections
-    };
-    const hookedDraft = await generationHooks.dispatch("pre-assemble", assembleDraft, { mode, character: speakerName, chatId, group: group2 });
-    const assembled = assemblePrompt(hookedDraft, { expand, countTokens });
-    const fallback = ctx.agentDefaultModel.currentSelection();
-    const saved = options.sessionId ? state.modelSelections?.[options.sessionId] : void 0;
-    const explicit = options.provider !== void 0 && options.model !== void 0 ? {
-      provider: options.provider,
-      model: options.model,
-      ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {}
-    } : void 0;
-    const choice = explicit ?? saved ?? fallback;
-    const provider = choice.provider;
-    const model = choice.model;
-    tpl?.setModel(model);
-    const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
-    write({ type: "start", provider, model, speaker: speakerName, lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })), stats: assembled.stats });
-    if (tpl) await tpl.prerenderGenerateAfter();
-    const boundScriptId = boundScriptOf(character.card);
-    if (boundScriptId !== void 0) {
-      const scriptRecord = await getScript(dshHomePath("tavern"), boundScriptId);
-      if (scriptRecord !== void 0 && scriptRecord.chunks.length > 0) {
-        const prior = normalizeScriptProgress(chat.header.chat_metadata?.scriptProgress);
-        let chunkIndex = prior !== void 0 && prior.scriptName === boundScriptId ? Math.min(prior.chunkIndex, scriptRecord.chunks.length - 1) : 0;
-        const lastAssistantFloor = [...chat.messages].reverse().find((m) => m.is_user === false && !m.is_system);
-        const advanced = lastAssistantFloor !== void 0 && chunkIndex < scriptRecord.chunks.length - 1 && shouldAdvance(scriptRecord.chunks[chunkIndex].text, [...chat.messages].reverse().filter((m) => m.is_user === false && !m.is_system).slice(0, 3).map((m) => m.mes));
-        if (advanced) chunkIndex += 1;
-        if (advanced || prior === void 0 || prior.scriptName !== boundScriptId || prior.chunkIndex !== chunkIndex) {
-          chat.header.chat_metadata = {
-            ...chat.header.chat_metadata,
-            scriptProgress: { scriptName: boundScriptId, chunkIndex, alignedAt: (/* @__PURE__ */ new Date()).toISOString() }
-          };
-        }
-        const scriptBlock = formatScriptBlock(scriptRecord.chunks.map((chunk) => chunk.text), chunkIndex);
-        if (scriptBlock !== void 0) assembled.messages.unshift({ role: "system", content: scriptBlock });
-      }
-    }
-    const finalMessages = tpl ? await tpl.applyPromptInjections(assembled.messages) : assembled.messages;
-    let text = "";
-    let reasoning = "";
-    let hostUsage;
-    hostTrace = startTavernSessionStep(hostTrace);
-    const requestMessages = [...finalMessages];
-    const systemParts = [];
-    while (requestMessages[0]?.role === "system") systemParts.push(requestMessages.shift().content);
-    const guidesBlock = formatGuidesBlock(chat.header.chat_metadata?.guides);
-    if (guidesBlock !== void 0) systemParts.push(guidesBlock);
-    const llmMessages = requestMessages.map((m) => createMessage({
-      role: m.role,
-      content: [{ type: "text", text: m.content }],
-      // 仅进 ctx.llm.stream 的请求消息，不落会话日志（该调用不带 sessionId），
-      // dsh-llm 对 source 不校验；v0 形状在此保留——runGeneration 作用域内没有
-      // 会话对象可供格式探测。
-      source: m.role === "assistant" ? { kind: "model", provider, model } : m.role === "user" ? { kind: "user" } : { kind: "plugin", plugin: "dsh-tavern" }
-    }));
-    const rewriteBlock = formatRewriteBlock(options.feedback);
-    if (rewriteBlock) systemParts.push(rewriteBlock);
-    const llmRequest = {
-      messages: llmMessages,
-      system: systemParts.length > 0 ? systemParts.join("\n\n") : void 0,
-      params: {
-        provider,
-        model,
-        ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
-        temperature: numberOr(preset.sampler.temperature, void 0),
-        maxTokens: numberOr(preset.sampler.openai_max_tokens, void 0)
-      }
-    };
-    const hookedLlmRequest = await generationHooks.dispatch("pre-llm", llmRequest, { mode, character: speakerName, chatId, group: group2 });
+    write({ type: "start", ...assembly.start });
     const usedProvider = hookedLlmRequest.params.provider;
     const usedModel = hookedLlmRequest.params.model;
     recordPromptView({
@@ -21852,6 +22227,10 @@ async function runGeneration(ctx, db, options) {
       request: hookedLlmRequest,
       lore
     }, ctx.logger);
+    let text = "";
+    let reasoning = "";
+    let hostUsage;
+    hostTrace = startTavernSessionStep(hostTrace);
     beginStreamEpoch();
     for await (const chunk of ctx.llm.stream({
       provider: hookedLlmRequest.params.provider,
@@ -21916,10 +22295,11 @@ async function runGeneration(ctx, db, options) {
       delete chat.header.chat_metadata.variables;
     }
     const mvuGuard = applyMvuSettlementGuard(chat, character.card, mvuVariablesBefore);
+    const mvuRules = await applyMvuSettlementRules(chat, character.card, mvuVariablesBefore);
     recordMvuTurnReceipt(chat, mvuVariablesBefore, {
       turnKey: String(chat.messages.length - 1),
-      failures: [...tpl?.warnings ?? [], ...mvuGuard.failures],
-      changeNotes: mvuGuard.notes
+      failures: [...tpl?.warnings ?? [], ...mvuGuard.failures, ...mvuRules.failures],
+      changeNotes: mergeMvuRuleNotes(mvuGuard.notes, mvuRules.notes)
     });
     revision = await db.saveChat(characterName, chatId, chat, revision);
     await emitChatSaved(characterName, chatId, revision, chat.messages.length);
@@ -22527,7 +22907,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.5".trim() : "";
-  const commit = true ? normalizeCommit("d5b7f84") : void 0;
+  const commit = true ? normalizeCommit("3a2b315") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
