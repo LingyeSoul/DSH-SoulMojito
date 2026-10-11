@@ -35,15 +35,23 @@ import {
   type TavernStore,
 } from '../../tavern-store/src/index.js'
 import { collectWorldInfoBooks } from './tavern-assets.js'
+import {
+  getMvuTreePath,
+  guardMvuWrite,
+  mvuValuesEqual,
+  readMvuSchema,
+  stripMvuSchema,
+} from './mvu-guard.js'
 
 const DEFAULT_USER = 'User'
 const INITIAL_VARIABLES_KEY = 'initial_variables'
 
-/** 单条变量变更：name 是点路径（如 `mvu.favor`）；before/after 缺侧即增/删。 */
+/** 单条变量变更：name 是点路径（如 `mvu.favor`）；before/after 缺侧即增/删；reason 是 guard 调整说明（clamp/step，C-1）。 */
 export interface MvuVariableChange {
   name: string
   before?: unknown
   after?: unknown
+  reason?: string
 }
 
 /**
@@ -83,25 +91,15 @@ export function snapshotChatVariables(chat: ChatLogIR): Record<string, unknown> 
 }
 
 function valuesEqual(left: unknown, right: unknown): boolean {
-  if (left === right) return true
-  const leftObject = plainObject(left)
-  const rightObject = plainObject(right)
-  if (leftObject !== undefined && rightObject !== undefined) {
-    for (const key of new Set([...Object.keys(leftObject), ...Object.keys(rightObject)])) {
-      if (!valuesEqual(leftObject[key], rightObject[key])) return false
-    }
-    return true
-  }
-  if (Array.isArray(left) && Array.isArray(right)) {
-    return left.length === right.length && left.every((item, index) => valuesEqual(item, right[index]))
-  }
-  return false
+  // 深比较统一走守卫模块的 mvuValuesEqual（C-1 起两处共用同一语义）
+  return mvuValuesEqual(left, right)
 }
 
 /**
  * 变量树叶子级 diff：两侧都是普通对象、或一侧缺失另一侧是普通对象时按 key
  * 递归（新增/删除子树展开到叶子路径）；数组与原语整体比较（数组按下标逐项
- * diff 噪音大，回执按「值变了」呈现即可）。结果按 name 排序。
+ * diff 噪音大，回执按「值变了」呈现即可）。根 `$schema` 子树是守卫契约不是
+ * 变量（C-1），两侧剥离后再 diff。结果按 name 排序。
  */
 export function diffVariables(before: Record<string, unknown>, after: Record<string, unknown>): MvuVariableChange[] {
   const changes: MvuVariableChange[] = []
@@ -125,7 +123,7 @@ export function diffVariables(before: Record<string, unknown>, after: Record<str
       changes.push(change)
     }
   }
-  walk('', before, after)
+  walk('', stripMvuSchema(before), stripMvuSchema(after))
   return changes.sort((left, right) => left.name.localeCompare(right.name))
 }
 
@@ -178,6 +176,7 @@ export function readMvuReceipts(chat: ChatLogIR): MvuReceipt[] {
             const out: MvuVariableChange = { name: change.name }
             if ('before' in change) out.before = change.before
             if ('after' in change) out.after = change.after
+            if (typeof change.reason === 'string') out.reason = change.reason
             return [out]
           })
         : [],
@@ -200,14 +199,19 @@ export function appendMvuReceipt(chat: ChatLogIR, receipt: MvuReceipt): void {
  * 已含模板输出渲染与宏的写穿结果），追加一条回执。
  * 无变量（前后皆空树）、无变更且无失败的局不写 mvu 键——与 guides 空置摘键
  * 约定一致；已有的历史回执保持不动。
+ * changeNotes（C-1）：守卫 clamp/step 调整说明按变更路径附到回执 reason。
  */
 export function recordMvuTurnReceipt(
   chat: ChatLogIR,
   before: Record<string, unknown>,
-  options: { turnKey: string; at?: string; failures?: string[] },
+  options: { turnKey: string; at?: string; failures?: string[]; changeNotes?: Record<string, string> },
 ): MvuReceipt | undefined {
   const after = readChatVariables(chat)
   const changes = diffVariables(before, after)
+  for (const change of changes) {
+    const note = options.changeNotes?.[change.name]
+    if (note !== undefined) change.reason = note
+  }
   const failures = options.failures ?? []
   if (changes.length === 0 && failures.length === 0
     && Object.keys(before).length === 0 && Object.keys(after).length === 0) {
@@ -223,6 +227,104 @@ export function recordMvuTurnReceipt(
   }
   appendMvuReceipt(chat, receipt)
   return receipt
+}
+
+/* ---------------------- $schema 写入守卫（C-1，ST 路径） ---------------------- */
+
+export interface MvuGuardPassResult {
+  /** reject 失败项（`${path}: guard ${kind}: ${reason}`），并入回执 failures 可重试。 */
+  failures: string[]
+  /** clamp/step 调整说明，按变更路径附到回执 change.reason。 */
+  notes: Record<string, string>
+}
+
+function setMvuTreePath(tree: Record<string, unknown>, path: string, value: unknown): void {
+  const segments = path.split('.')
+  const leaf = segments.pop()!
+  let cursor: Record<string, unknown> = tree
+  for (const segment of segments) {
+    const next = cursor[segment]
+    if (next === null || typeof next !== 'object' || Array.isArray(next)) cursor[segment] = {}
+    cursor = cursor[segment] as Record<string, unknown>
+  }
+  cursor[leaf] = value
+}
+
+/** 回滚一条被守卫拒绝的写：恢复基线值（新增键删除并修剪因此空掉的中间对象）。 */
+function revertMvuTreePath(tree: Record<string, unknown>, path: string, before: Record<string, unknown>): void {
+  const beforeValue = getMvuTreePath(before, path)
+  if (beforeValue !== undefined) {
+    setMvuTreePath(tree, path, beforeValue)
+    return
+  }
+  const segments = path.split('.')
+  const leaf = segments.pop()!
+  const parent = getMvuTreePath(tree, segments.join('.'))
+  if (parent !== null && typeof parent === 'object' && !Array.isArray(parent)) {
+    delete (parent as Record<string, unknown>)[leaf]
+  }
+  // 修剪因回滚而空掉、且基线里本不存在的中间对象
+  while (segments.length > 0) {
+    const pathSoFar = segments.join('.')
+    const node = getMvuTreePath(tree, pathSoFar)
+    if (node === null || typeof node !== 'object' || Array.isArray(node)) break
+    if (Object.keys(node as Record<string, unknown>).length > 0) break
+    if (getMvuTreePath(before, pathSoFar) !== undefined) break
+    const popped = segments.pop()!
+    const upper = getMvuTreePath(tree, segments.join('.'))
+    if (upper === null || typeof upper !== 'object' || Array.isArray(upper)) break
+    delete (upper as Record<string, unknown>)[popped]
+  }
+}
+
+/**
+ * ST 侧结算守卫 pass（runGeneration 与 retryMvuSettlement 共用）：模板写穿完成、
+ * 回执 diff 之前，对 `chat_metadata.variables` 做整树守卫——
+ *
+ * - schema 取自**基线**树根 `$schema`（卡 initialVariables / 世界书 InitialVariables
+ *   回退，见 mvu-guard.ts readMvuSchema），杜绝本轮写穿自改守卫；
+ * - diff 出叶子级变更逐路径 guardMvuWrite：clamp/step 调整值写回（进正常回执，
+ *   reason 标注 guard），reject（type-mismatch / enum-violation / readonly /
+ *   structure）把该路径回滚到基线值并记失败项（可重试）；
+ * - 模板写穿改了根 `$schema` 本身 → 回滚 + readonly 失败项（守卫不可自改）；
+ * - 无 schema（无 $schema 的卡）恒等返回，行为与 C-1 之前完全一致。
+ */
+export function applyMvuSettlementGuard(
+  chat: ChatLogIR,
+  card: CharacterCardIR | undefined,
+  before: Record<string, unknown>,
+): MvuGuardPassResult {
+  const failures: string[] = []
+  const notes: Record<string, string> = {}
+  const metadata = chat.header.chat_metadata
+  const variables = plainObject(metadata.variables)
+  // schema 第一来源取基线树的 $schema（基线没有则回退卡/世界书声明，见 readMvuSchema）
+  const schema = readMvuSchema(chat, card, before)
+  if (schema === undefined || variables === undefined) return { failures, notes }
+
+  const schemaBefore = plainObject(before.$schema)
+  const schemaLive = plainObject(variables.$schema)
+  if (!valuesEqual(schemaBefore, schemaLive)) {
+    if (schemaBefore !== undefined) variables.$schema = deepClone(schemaBefore) as Record<string, unknown>
+    else delete variables.$schema
+    failures.push(`$schema: guard readonly: the schema subtree is card-declared and cannot be settled`)
+  }
+
+  for (const change of diffVariables(before, variables)) {
+    const current = getMvuTreePath(before, change.name)
+    const value = 'after' in change ? change.after : undefined
+    const result = guardMvuWrite(schema, change.name, value, current)
+    if (!result.ok) {
+      revertMvuTreePath(variables, change.name, before)
+      failures.push(`${change.name}: guard ${result.kind}: ${result.reason}`)
+      continue
+    }
+    if (result.note !== undefined) notes[change.name] = result.note
+    if (value !== undefined && !valuesEqual(result.value, value)) setMvuTreePath(variables, change.name, result.value)
+  }
+  // 基线为空且全部新增被回滚：保持「空树摘键」约定
+  if (Object.keys(variables).length === 0 && Object.keys(before).length === 0) delete metadata.variables
+  return { failures, notes }
 }
 
 /* --------------------------- 模板运行时（共享） --------------------------- */
@@ -339,7 +441,8 @@ export interface MvuStatusRenderInput {
 /**
  * 状态栏模板渲染（P1 接线点）：只读快照渲染——local/global/initial 都绑拷贝，
  * 模板内的 setvar 不会写穿聊天。渲染失败抛错，由路由降级为不返回 renderedHtml
- * （不 500）。
+ * （不 500）。根 `$schema` 是守卫契约不是变量（C-1），local/initial 绑定前剥离，
+ * 不进状态栏渲染。
  */
 export async function renderMvuStatusTemplate(input: MvuStatusRenderInput): Promise<string> {
   const chat = input.chat
@@ -354,9 +457,9 @@ export async function renderMvuStatusTemplate(input: MvuStatusRenderInput): Prom
       books,
     },
     {
-      local: deepClone((input.localVariables ?? readChatVariables(chat)) as JsonObject),
+      local: deepClone(stripMvuSchema(plainObject(input.localVariables ?? readChatVariables(chat)) ?? {}) as JsonObject),
       global: { ...input.state.scriptGlobals },
-      initial: deepClone(plainObject(chat.header.chat_metadata[INITIAL_VARIABLES_KEY]) ?? {}) as JsonObject,
+      initial: deepClone(stripMvuSchema(plainObject(chat.header.chat_metadata[INITIAL_VARIABLES_KEY]) ?? {}) as JsonObject),
     },
   )
   return await runtime.renderText(input.template, undefined, 'mvu-status')
@@ -454,16 +557,23 @@ export async function retryMvuSettlement(
     await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }))
   }
 
+  // $schema 写入守卫 pass（C-1，与 runGeneration 共用）：clamp 写回、reject 回滚，
+  // 失败项并入回执 failures（重试仍不产生 'failed' 状态——既有约定，见上方注释）。
+  const guard = applyMvuSettlementGuard(chat, character.card, before)
   const after = readChatVariables(chat)
   const changes = diffVariables(before, after)
+  for (const change of changes) {
+    if (guard.notes[change.name] !== undefined) change.reason = guard.notes[change.name]
+  }
+  const allFailures = [...failures, ...guard.failures]
   const receipt: MvuReceipt = {
     at: new Date().toISOString(),
     turnKey: String(floorIndex),
     status: changes.length > 0 ? 'updated' : 'unchanged',
     changes,
-    failures,
+    failures: allFailures,
   }
   appendMvuReceipt(chat, receipt)
   const revision = await db.saveChat(characterName, chatId, chat, snapshot.revision)
-  return { receipt, revision, variables: after }
+  return { receipt, revision, variables: stripMvuSchema(after) as Record<string, unknown> }
 }

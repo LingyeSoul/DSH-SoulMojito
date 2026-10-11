@@ -424,7 +424,15 @@ function checkFrontendRuntimeText(text) {
     'dsh-tavern:mod-request',
     'dsh-tavern:mod-response',
     'function isValidModBridgePath',
-    'function ModSurface({ mod })',
+    'function ModSurface({ mod, onLog })',
+    // Mod 桥下行事件 + 声明式按钮 + 日志查看器（2026-10-11 A-1/A-2）：下行事件
+    // 只走 token 对账的 postMessage（无新网络面）；按钮行必须挂在 ST 聊天视图
+    // （TavernModButtons）并具备 mod-event 广播通道；mod-log 上行进环形缓冲。
+    'dsh-tavern:mod-event',
+    'dsh-tavern:mod-log',
+    'function broadcastModEvent',
+    'function TavernModButtons(',
+    'function ModPanelSurface({ mod })',
   ]) {
     if (!text.includes(marker)) problems.push(`frontend runtime is missing marker '${marker}'`)
   }
@@ -1788,13 +1796,20 @@ const gates = [
         'dsh-tavern:mod-request',
         'dsh-tavern:mod-response',
         'function isValidModBridgePath() {}',
-        'function ModSurface({ mod }) {}',
+        'function ModSurface({ mod, onLog }) {}',
+        'dsh-tavern:mod-event',
+        'dsh-tavern:mod-log',
+        'function broadcastModEvent() {}',
+        'function TavernModButtons() {}',
+        'function ModPanelSurface({ mod }) {}',
       ].join('\n')
       const bad = good.replace("sandbox: 'allow-scripts'", "sandbox: 'allow-forms'")
       const badBridge = good.replace('dsh-tavern:mod-request', 'dsh-tavern:mod-bridge-removed')
+      const badEvent = good.replace('dsh-tavern:mod-event', 'dsh-tavern:mod-gone')
       return checkFrontendRuntimeText(good).length === 0
         && checkFrontendRuntimeText(bad).length > 0
         && checkFrontendRuntimeText(badBridge).length > 0
+        && checkFrontendRuntimeText(badEvent).length > 0
         ? []
         : ['frontend runtime marker self-test did not distinguish an unsafe sample']
     },

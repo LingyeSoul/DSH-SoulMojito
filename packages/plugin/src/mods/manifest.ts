@@ -18,6 +18,29 @@ export const MOD_ID_MAX_LENGTH = 100
 export const MOD_CAPABILITIES = ['llm', 'network', 'storage'] as const
 export type ModCapability = (typeof MOD_CAPABILITIES)[number]
 
+/**
+ * 声明式按钮（2026-10-11 A-1，JSR §2.4 语义重实现）：manifest 静态声明 → 宿主
+ * 渲染 → 点击经 `POST mods/<id>/button/<name>` 回发。name 是**显示名**（允许
+ * CJK），不是路由标识；上限约束刷屏面（≤8 项、每项 ≤40 字符），重复即清单
+ * 校验失败（同名按钮无法区分点击来源）。
+ */
+export const MOD_BUTTONS_MAX_COUNT = 8
+export const MOD_BUTTON_NAME_MAX_LENGTH = 40
+
+/** 按钮显示名规则（manifest 校验与 POST 分发共用同一份白名单）。 */
+export function modButtonNameError(name: unknown): string | undefined {
+  if (typeof name !== 'string') return 'button names must be strings'
+  const text = name.trim()
+  if (text === '') return 'button names must be non-empty strings'
+  // 首尾空白拒绝：显示名进入 URL 与 onButton 注册的两端匹配，隐形空白会造成
+  // 「声明了却点不到」的错配。
+  if (text !== name) return 'button names must not have surrounding whitespace'
+  if (text.length > MOD_BUTTON_NAME_MAX_LENGTH) {
+    return `button names must be at most ${MOD_BUTTON_NAME_MAX_LENGTH} characters`
+  }
+  return undefined
+}
+
 export interface ModPanelDeclaration {
   title: string
   icon?: string
@@ -46,6 +69,8 @@ export interface ModManifest {
   capabilities: ModCapability[]
   panel?: ModPanelDeclaration
   surfaces: ModSurfacesDeclaration
+  /** 声明式按钮显示名（§A-1）；未声明为空数组。 */
+  buttons: string[]
 }
 
 export type ManifestCheck = { ok: true; manifest: ModManifest } | { ok: false; errors: string[] }
@@ -141,6 +166,29 @@ export function checkModManifest(raw: unknown, options: ManifestCheckOptions): M
     }
   }
 
+  if (record.buttons !== undefined) {
+    if (!Array.isArray(record.buttons)) {
+      errors.push('buttons must be an array of button names')
+    } else {
+      if (record.buttons.length > MOD_BUTTONS_MAX_COUNT) {
+        errors.push(`buttons must declare at most ${MOD_BUTTONS_MAX_COUNT} entries`)
+      }
+      const seen = new Set<string>()
+      for (const name of record.buttons) {
+        const nameError = modButtonNameError(name)
+        if (nameError !== undefined) {
+          errors.push(nameError)
+          break
+        }
+        if (seen.has(name as string)) {
+          errors.push(`button '${name as string}' is declared more than once`)
+          break
+        }
+        seen.add(name as string)
+      }
+    }
+  }
+
   if (errors.length > 0) return { ok: false, errors }
 
   const engines = record.engines as Record<string, unknown> | undefined
@@ -167,6 +215,7 @@ export function checkModManifest(raw: unknown, options: ManifestCheckOptions): M
     surfaces: surfaces === undefined || surfaces === null
       ? { hooks: [], tools: [], http: [] }
       : { hooks: pickStrings(surfaces.hooks), tools: pickStrings(surfaces.tools), http: pickStrings(surfaces.http) },
+    buttons: Array.isArray(record.buttons) ? [...record.buttons as string[]] : [],
   }
   return { ok: true, manifest }
 }

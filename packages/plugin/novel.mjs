@@ -2482,6 +2482,34 @@ function jsonBytes(obj) {
 import { createHash as createHash2, randomUUID } from "node:crypto";
 import { promises as fs3 } from "node:fs";
 import * as path2 from "node:path";
+
+// packages/tavern-store/src/tokenize.ts
+var CJK_STOP_BIGRAM_CHARS = /* @__PURE__ */ new Set([..."\u7684\u4E86\u662F\u5728\u5417\u5462\u5427\u554A\u5440\u4E48\u548C\u4E0E\u5C31\u90FD\u4E5F\u5F88\u88AB\u628A\u6CA1\u4E0D\u6709\u8FD8\u8FD9\u90A3\u4F60\u6211\u4ED6\u5979\u5B83\u4EEC\u4E2A"]);
+var CJK_RUN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
+var WORD = /[\p{L}\p{N}]+/gu;
+function tokenizeQuery(value) {
+  const lower = value.toLocaleLowerCase();
+  const tokens = /* @__PURE__ */ new Set();
+  for (const word of lower.replace(CJK_RUN, " ").match(WORD) ?? []) {
+    tokens.add(word);
+  }
+  for (const run of lower.match(CJK_RUN) ?? []) {
+    const chars = [...run];
+    if (chars.length === 1) {
+      tokens.add(chars[0]);
+      continue;
+    }
+    for (let index = 0; index + 1 < chars.length; index += 1) {
+      const left = chars[index];
+      const right = chars[index + 1];
+      if (CJK_STOP_BIGRAM_CHARS.has(left) && CJK_STOP_BIGRAM_CHARS.has(right)) continue;
+      tokens.add(left + right);
+    }
+  }
+  return [...tokens];
+}
+
+// packages/tavern-store/src/memory.ts
 var MemoryRevisionConflictError = class extends Error {
   constructor(id, expectedRevision, actualRevision) {
     super(`Memory '${id}' changed in another operation.`);
@@ -2511,7 +2539,7 @@ var MemoryStore = class _MemoryStore {
   async search(query) {
     const normalized = normalizeQuery(query);
     const records = await this.listRecords(normalized);
-    const tokens = tokenize(normalized.query);
+    const tokens = tokenizeQuery(normalized.query ?? "");
     const now = Date.now();
     const hits = records.map((record) => {
       const haystack = `${record.content}
@@ -2712,9 +2740,6 @@ function withRevision(record) {
 }
 function isInactive(record) {
   return record.deletedAt !== void 0 || record.expiresAt !== void 0 && Date.parse(record.expiresAt) <= Date.now();
-}
-function tokenize(value) {
-  return [...new Set((value ?? "").toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])];
 }
 function roughTokens(value) {
   return Math.max(1, Math.ceil(value.length / 4));
@@ -6717,7 +6742,7 @@ var WRITER_BODY_TAIL_LIMIT = 1600;
 var WRITER_FORESHADOWING_MAX = 12;
 var WRITER_CANON_MAX = 12;
 var WRITER_TRUNCATION_MARKER = "\u2026[truncated]";
-function tokenizeQuery(value) {
+function tokenizeQuery2(value) {
   return [...new Set(value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])];
 }
 function matchesAllTokens(text, tokens) {
@@ -7062,7 +7087,7 @@ async function assembleWriterPackInput(deps) {
   const lore = [];
   if (deps.mode === "full") {
     const loreQuery = [...scene.participants, scene.goal, scene.timeLocation].join(" ");
-    const tokens = tokenizeQuery(loreQuery);
+    const tokens = tokenizeQuery2(loreQuery);
     if (tokens.length > 0) {
       const { matched } = await matchWorldEntries({ novelId, snapshot, readAsset }, loreQuery, tokens);
       for (const hit of matched.slice(0, WRITER_LORE_ENTRIES_MAX)) {
@@ -8221,7 +8246,7 @@ function createTools() {
     }, loreSearchOutput2, async (args, exec) => {
       const novelId = await novelBindingFor(exec);
       const query = boundedStringArg(args.query, 2e3);
-      const tokens = tokenizeQuery(query);
+      const tokens = tokenizeQuery2(query);
       if (tokens.length === 0) throw new Error("lore query requires at least one word");
       const limit = clampInt(args.limit, 1, 20, 10);
       const snapshot = await snapshotOf(novelId);
@@ -8267,7 +8292,7 @@ function createTools() {
       limit: { type: "integer", description: "Maximum hits, capped at 20. Default 10." }
     }, bodySearchOutput, async (args, exec) => {
       const novelId = await novelBindingFor(exec);
-      const tokens = tokenizeQuery(boundedStringArg(args.query, 2e3));
+      const tokens = tokenizeQuery2(boundedStringArg(args.query, 2e3));
       if (tokens.length === 0) throw new Error("body search requires at least one word");
       const limit = clampInt(args.limit, 1, 20, 10);
       const snapshot = await snapshotOf(novelId);

@@ -7,9 +7,11 @@
  * - api.tools.register：Agent 工具对（get/set mood），name 带 `<modId>_` 前缀，
  *   形状对齐宿主 tool() 工厂（parameters/output/execute）；
  * - manifest panel 声明 + api.http.route('GET','ui')：面板分区的 iframe 表面
- *   ——自包含 HTML（服务端注入 CSP meta，connect-src 'none'），经 postMessage
- *   数据桥取数（dsh-tavern:mod-request → 父页代理 → mod-response），高度上报
- *   走 dsh-tavern:frontend-height 协议（与美化前端 main.js 同款）。
+ *   ——自包含 HTML（服务端注入 CSP meta 与 console reporter，connect-src
+ *   'none'），经 postMessage 数据桥取数（dsh-tavern:mod-request → 父页代理 →
+ *   mod-response），高度上报走 dsh-tavern:frontend-height 协议（与美化前端
+ *   main.js 同款）；订阅 dsh-tavern:mod-event 下行事件，事件到达即刷新
+ *   （拉取兜底保留），console 输出经 dsh-tavern:mod-log 回投宿主日志查看器。
  *
  * 它是 e2e（tavern-mods.spec）与 mod-loader gate 的夹具。
  */
@@ -103,10 +105,24 @@ const UI_PAGE = `<!doctype html>
     input.value = body.mood || '';
   }
   function refresh() {
-    errEl.textContent = '';
-    request('GET', 'stats').then(function (data) { render(data.body || {}); })
-      .catch(function (data) { errEl.textContent = 'failed: ' + (data && data.error ? data.error : 'unknown'); });
+    errEl.textContent = ''
+    request('GET', 'stats').then(function (data) {
+      // console 输出会被宿主注入的 reporter 回投父页（A-2 日志查看器）——面板
+      // 分区底部的「Mod 日志」折叠视图能看到这行。
+      console.log('[mood-tracker] stats refreshed', new Date().toISOString())
+      render(data.body || {})
+    })
+      .catch(function (data) { errEl.textContent = 'failed: ' + (data && data.error ? data.error : 'unknown'); })
   }
+  // 下行事件（A-1d）：宿主把本客户端发起的写入（聊天保存/资产保存/guides 写入/
+  // 按钮点击）推回挂载的 mod UI——事件到达即刷新。初始拉取保留作兜底：其他
+  // 标签页或服务端侧的写入不在推送范围（诚实边界，mod-api.md §13）。
+  addEventListener('message', function (event) {
+    var data = event.data
+    if (!data || data.type !== 'dsh-tavern:mod-event' || data.token !== token) return
+    console.log('[mood-tracker] mod-event:', data.kind)
+    refresh()
+  })
   button.addEventListener('click', function () {
     button.disabled = true;
     errEl.textContent = '';

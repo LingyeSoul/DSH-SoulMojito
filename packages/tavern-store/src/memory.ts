@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 import { writeAtomicText } from './fs-atomic.js'
+import { tokenizeQuery } from './tokenize.js'
 
 export type MemoryScope = 'turn' | 'chat' | 'character' | 'agent' | 'global'
 export type MemoryKind = 'semantic' | 'episodic'
@@ -91,7 +92,9 @@ export class MemoryStore {
   async search(query: MemoryQuery): Promise<MemoryHit[]> {
     const normalized = normalizeQuery(query)
     const records = await this.listRecords(normalized)
-    const tokens = tokenize(normalized.query)
+    // CJK bigram 分词（决策 2026-10-11-cjk-tokenization）：打分公式不变，
+    // lexical = matched/total 在展开后的 token 集上计算。
+    const tokens = tokenizeQuery(normalized.query ?? '')
     const now = Date.now()
     const hits = records.map((record) => {
       const haystack = `${record.content}\n${record.tags.join(' ')}`.toLocaleLowerCase()
@@ -308,10 +311,6 @@ function withRevision(record: Omit<MemoryRecord, 'revision'>): MemoryRecord {
 
 function isInactive(record: MemoryRecord): boolean {
   return record.deletedAt !== undefined || record.expiresAt !== undefined && Date.parse(record.expiresAt) <= Date.now()
-}
-
-function tokenize(value: string | undefined): string[] {
-  return [...new Set((value ?? '').toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])]
 }
 
 function roughTokens(value: string): number {

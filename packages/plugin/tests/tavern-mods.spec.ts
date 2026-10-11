@@ -176,6 +176,34 @@ describe('mod manifest validation', () => {
       expect(checkModManifest(validManifest(overrides), options).ok).toBe(false)
     }
   })
+
+  // 声明式按钮（A-1a）：上限/去重/非法名/类型矩阵 + 默认空数组。
+  it('accepts declared buttons (CJK display names) and defaults to an empty array', () => {
+    const check = checkModManifest(validManifest({ buttons: ['拨快 1 小时', 'Reset'] }), options)
+    expect(check.ok).toBe(true)
+    if (check.ok) expect(check.manifest.buttons).toEqual(['拨快 1 小时', 'Reset'])
+    const bare = checkModManifest(validManifest(), options)
+    expect(bare.ok).toBe(true)
+    if (bare.ok) expect(bare.manifest.buttons).toEqual([])
+  })
+
+  it('rejects button arrays over the limit, duplicates and malformed names', () => {
+    for (const overrides of [
+      { buttons: '拨快' },
+      { buttons: [42] },
+      { buttons: [''] },
+      { buttons: ['   '] },
+      { buttons: ['x'.repeat(41)] },
+      { buttons: ['ok', 'ok'] },
+      { buttons: ['  padded  '] },
+      { buttons: Array.from({ length: 9 }, (_, index) => `b${index}`) },
+    ]) {
+      const check = checkModManifest(validManifest(overrides), options)
+      expect(check.ok).toBe(false)
+      if (!check.ok) expect(check.errors.some((error) => error.includes('button'))).toBe(true)
+    }
+    expect(checkModManifest(validManifest({ buttons: Array.from({ length: 8 }, (_, index) => `b${index}`) }), options).ok).toBe(true)
+  })
 })
 
 /* ------------------------------ semver 匹配 ------------------------------ */
@@ -335,12 +363,42 @@ describe('mod http path whitelist', () => {
     expect(() => table.register('GET', 'ui', () => {})).not.toThrow()
   })
 
+  // A-1c：`POST button` 与 `POST button/<name>` 是宿主按钮分发路由，整段保留。
+  // （CJK 显示名本身过不了 path 白名单——按钮名走 URL 编码后的宿主分发路由，
+  // 不经 mod 路由表；这里只测 ASCII 可注册形态的保留段。）
+  it('rejects POST button subroutes as host-reserved button dispatch', () => {
+    const table = createModRouteTable()
+    for (const path of ['button', 'button/x', 'button/advance-1h']) {
+      expect(() => table.register('POST', path, () => {})).toThrow('reserved by host management routes')
+    }
+    // 仅 POST 被截获；GET button/… 仍是 mod 自己的可达路由
+    expect(() => table.register('GET', 'button/list', () => {})).not.toThrow()
+  })
+
   it('injects the CSP meta into html documents (attribute-escaped)', () => {
     const injected = renderModHtmlDocument('<html><head><title>x</title></head><body>hi</body></html>', "default-src 'none'")
     expect(injected.startsWith('<html><head><meta http-equiv="Content-Security-Policy" content="default-src &#x27;none&#x27;"')).toBe(false)
     expect(injected).toContain('<head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'">')
     expect(renderModHtmlDocument('bare fragment', 'a"b')).toContain('content="a&quot;b"')
     expect(renderModHtmlDocument('bare', 'csp')).toContain('<!doctype html><html><head><meta charset="utf-8">')
+  })
+
+  // A-2：console reporter 与 CSP meta 同机制注入到所有 mod HTML 出口。
+  it('injects the console reporter script next to the CSP meta in every html document', () => {
+    for (const document of [
+      '<html><head><title>x</title></head><body>hi</body></html>',
+      '<html lang="zh"><body>no head</body></html>',
+      'bare fragment',
+    ]) {
+      const injected = renderModHtmlDocument(document, "default-src 'none'")
+      expect(injected).toContain('<meta http-equiv="Content-Security-Policy"')
+      expect(injected).toContain("dsh-tavern:mod-log")
+      // token 从 URL 查询段自读，无 token 静默跳过（脚本内的守卫）
+      expect(injected).toContain("new URLSearchParams(location.search).get('token')")
+      expect(injected).toContain('unhandledrejection')
+      // reporter 是 wrap 不是替换：原 console 方法仍被调用
+      expect(injected).toContain('original.apply(null, arguments)')
+    }
   })
 })
 
@@ -644,6 +702,124 @@ describe('mod event bus', () => {
     offs.push(modEvents.on('assets-saved', (payload) => { seen.push(`ok:${payload.name}`) }))
     await emitAssetsSaved('preset', 'P')
     expect(seen).toEqual(['ok:P'])
+  })
+})
+
+/* ------------------------------ 声明式按钮（A-1b） ------------------------------ */
+
+describe('mod declarative buttons (api.onButton + dispatchButton)', () => {
+  const openedHosts: ModHost[] = []
+  let home: string
+
+  async function open(state: { modsEnabled?: boolean; enabled?: Record<string, boolean> } = {}) {
+    const fake = fakeStateStore(state)
+    const host = await ModHost.open({
+      ctx: { logger: { info: () => {}, warn: () => {}, error: () => {} } },
+      root: home,
+      hostVersion: '0.4.1',
+      dbProvider: async () => fake as never,
+    })
+    openedHosts.push(host)
+    return host
+  }
+
+  const buttonManifest = (overrides: Record<string, unknown> = {}) =>
+    validManifest({ id: 'button.mod', buttons: ['拨快 1 小时', '备用'], ...overrides })
+
+  beforeAll(() => {
+    home = tempHome('dsh-tavern-modbtn-')
+    writeMod(home, 'button.mod', buttonManifest(), `
+export async function setup(api) {
+  const off = api.onButton('拨快 1 小时', async (click, context) => {
+    await api.storage.set('lastClick', { name: click.name, character: context.character ?? null, chatId: context.chatId ?? null })
+  })
+  api.http.route('GET', 'off', async (req, reply) => { off(); reply.json({ ok: true }) })
+}
+`)
+  })
+  afterAll(() => { rmSync(home, { recursive: true, force: true }) })
+  afterEach(async () => {
+    for (const host of openedHosts.splice(0)) await host.disposeAll()
+  })
+
+  it('registers, dispatches with click context, and records into mod storage', async () => {
+    const host = await open({ modsEnabled: true, enabled: { 'button.mod': true } })
+    const mod = host.snapshot().mods.find((entry) => entry.id === 'button.mod')!
+    expect(mod.status).toBe('loaded')
+    expect(mod.buttons).toEqual(['拨快 1 小时', '备用'])
+    await expect(host.dispatchButton('button.mod', '拨快 1 小时', { character: 'Seraphina', chatId: 'chat-1' })).resolves.toBe('handled')
+    const stored = JSON.parse(readFileSync(join(home, 'mods', 'button.mod', 'data', 'state.json'), 'utf8')).values.lastClick
+    expect(stored).toEqual({ name: '拨快 1 小时', character: 'Seraphina', chatId: 'chat-1' })
+    // 无上下文（面板 chips）：字段缺省，handler 不得假设存在
+    await expect(host.dispatchButton('button.mod', '拨快 1 小时')).resolves.toBe('handled')
+    const bare = JSON.parse(readFileSync(join(home, 'mods', 'button.mod', 'data', 'state.json'), 'utf8')).values.lastClick
+    expect(bare).toEqual({ name: '拨快 1 小时', character: null, chatId: null })
+  })
+
+  it('answers no-handler for declared-but-unregistered buttons and not-found otherwise', async () => {
+    const host = await open({ modsEnabled: true, enabled: { 'button.mod': true } })
+    await expect(host.dispatchButton('button.mod', '备用')).resolves.toBe('no-handler')
+    // 未声明按钮 / 未知 mod / 非法名 → not-found（HTTP 层按 404 不可区分）
+    await expect(host.dispatchButton('button.mod', '不存在')).resolves.toBe('not-found')
+    await expect(host.dispatchButton('ghost.mod', '拨快 1 小时')).resolves.toBe('not-found')
+    await expect(host.dispatchButton('button.mod', '')).resolves.toBe('not-found')
+    await expect(host.dispatchButton('button.mod', 'x'.repeat(41))).resolves.toBe('not-found')
+  })
+
+  it('rejects undeclared names and duplicate registrations at setup time', async () => {
+    writeMod(home, 'dup-button', validManifest({ id: 'dup-button', buttons: ['唯一'] }), `
+export async function setup(api) {
+  api.onButton('唯一', async () => {})
+  api.onButton('唯一', async () => {})
+}
+`)
+    writeMod(home, 'undeclared-button', validManifest({ id: 'undeclared-button', buttons: ['声明过的'] }), `
+export async function setup(api) {
+  api.onButton('没声明过', async () => {})
+}
+`)
+    const host = await open({ modsEnabled: true, enabled: { 'dup-button': true, 'undeclared-button': true } })
+    const byId = new Map(host.snapshot().mods.map((mod) => [mod.id, mod]))
+    expect(byId.get('dup-button')!.status).toBe('error')
+    expect(byId.get('dup-button')!.error).toContain('already has a handler')
+    expect(byId.get('undeclared-button')!.status).toBe('error')
+    expect(byId.get('undeclared-button')!.error).toContain('not declared in the manifest buttons')
+  })
+
+  it('audits button-error and rejects when the handler throws (normal clicks are not audited)', async () => {
+    writeMod(home, 'boom-button', validManifest({ id: 'boom-button', buttons: ['炸'] }), `
+export async function setup(api) {
+  api.onButton('炸', async () => { throw new Error('button kaboom') })
+}
+`)
+    const host = await open({ modsEnabled: true, enabled: { 'boom-button': true } })
+    await expect(host.dispatchButton('boom-button', '炸')).rejects.toThrow('button kaboom')
+    await sleep(30) // 审计异步追加
+    const audit = readFileSync(join(home, 'mods', 'audit.jsonl'), 'utf8')
+    expect(audit).toContain('"event":"button-error"')
+    expect(audit).toContain('button kaboom')
+  })
+
+  it('unregisters handlers on disable (host-managed recovery) and honours manual off', async () => {
+    const host = await open({ modsEnabled: true, enabled: { 'button.mod': true } })
+    await expect(host.dispatchButton('button.mod', '拨快 1 小时')).resolves.toBe('handled')
+    // 手动 off（mood-tracker 路线）：撤后回落 no-handler
+    const res = fakeRes()
+    const url = new URL('http://x/api/dsh-tavern/mods/button.mod/off')
+    await host.handleRoute({ on: () => undefined }, res, 'GET', url, 'button.mod', 'off')
+    await expect(host.dispatchButton('button.mod', '拨快 1 小时')).resolves.toBe('no-handler')
+    // 停用（宿主托管回收）：回落 not-found（未装载）
+    await host.setModEnabled('button.mod', false)
+    await expect(host.dispatchButton('button.mod', '拨快 1 小时')).resolves.toBe('not-found')
+  })
+
+  it('returns not-found while any switch layer is off', async () => {
+    const globalOff = await open({ enabled: { 'button.mod': true } })
+    await expect(globalOff.dispatchButton('button.mod', '拨快 1 小时')).resolves.toBe('not-found')
+    process.env.DSH_TAVERN_DISABLE_MODS = '1'
+    const envOff = await open({ modsEnabled: true, enabled: { 'button.mod': true } })
+    await expect(envOff.dispatchButton('button.mod', '拨快 1 小时')).resolves.toBe('not-found')
+    delete process.env.DSH_TAVERN_DISABLE_MODS
   })
 })
 
