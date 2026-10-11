@@ -1,90 +1,95 @@
-# 写卡工作台读参考文件：reference_read 只读域工具
+# 写卡工作台读参考文件：挂宿主默认文件工具行（v2，替换当日 v1 自研 reference_read）
 
 > 日期：2026-10-11。Bug 报告：用户通过 DSH 对话框给写卡工作台上传参考文件
-> （文风/描写规则/词汇库/框架 JSON 等），agent 读不了。落点：
-> `packages/plugin/src/card-workbench/tools-reference.ts`（新域模块）、
-> `packages/plugin/src/card-workbench/agent.ts`（聚合 + KERNEL 指引）、
-> `packages/plugin/tests/card-workbench-reference.spec.ts`（新 spec）+
-> `card-workbench-tools.spec.ts`（全序断言加一）。
+> （文风/描写规则/词汇库/框架 JSON 等），agent 读不了。
+> **v2（当日复盘后重做）**：v1 自建受限只读工具 `reference_read`（提交
+> 3d96090）经维护者评审否决——「DSH 默认就提供了文件读取工具」，工作台
+> 作为对默认面的偏离应当回归宿主默认姿势，而不是发明模型要重新学的私有
+> 工具。v2 = preset 声明行挂 `@deepseek-ai/dsh-tool-fs`，v1 全量回滚
+> （tools-reference.ts / card-workbench-reference.spec.ts 删除，agent.ts
+> 与全序断言还原）。落点：`packages/plugin/cordis.patch.yml`（唯一代码
+> 改动——preset-card-workbench 的 plugins 加一行）。
 
 ## 开工前八项表（CONTEXT.md 纪律）
 
 | 项 | 答案 |
 |---|---|
-| 所有者 | `tools-reference.ts` 的 `referenceTools`（单工具 `reference_read`）；路径政策（允许根/解析基）同文件 `referenceRoots` / `workbenchWorkspaceRoot` |
-| 唯一事实来源 | 附件落盘本身就是事实源：DSH 0.2.0 原生存储 `$DSH_HOME/attachments/v1/`（内容寻址，dsh-attachment-local 写入）与 dsh-rider 暂存 `$DSH_HOME/tavern/workbench/.dsh/uploads/`（web profile 在装的 bundle 插件写入）。本工具零自有存储 |
-| 持久态 | **无**。纯只读，不写任何文件 |
-| 临时态 | 单次调用的 `fs.readFile` 缓冲（BOM 剥离 + 分块切片后即弃） |
-| 外部依赖 | 无新依赖。`node:fs` / `node:path` + 既有 `dshHomePath` / `tool-args` / `shared` 底座 |
-| 注册入口 | `createTools()` 聚合（materialTools 之后、cardApplyMvuTool 之前——与素材读取工具相邻的只读分组）；KERNEL「Working protocol」第二条指引附件清单行与 `[File …]` 句柄都走本工具 |
-| 删除路径 | 删 tools-reference.ts + agent.ts 的 import/聚合/KERNEL 条目 + reference spec + tools.spec 全序断言还原 + 本决策文档。无路由、无面板分区、无 locale 键 |
-| 兼容对象 | 工具全序断言（加一后冻结）；22→23 个工具；agent-tavern / agent-novel 面不动（见「同类风险」） |
+| 所有者 | `packages/plugin/cordis.patch.yml` 的 `preset-card-workbench` 行（config.plugins 列表）——工作台 preset 的组合声明 |
+| 唯一事实来源 | 宿主 `@deepseek-ai/dsh-tool-fs`（read/read_image/write/edit 的定义与读取上限）；附件落盘位置（原生 `$DSH_HOME/attachments/v1/` + dsh-rider `<工作区>/.dsh/uploads/`） |
+| 持久态 | **无**（本改动零代码零存储） |
+| 临时态 | 宿主 tool-fs 自己的读取缓冲（与本决策无关） |
+| 外部依赖 | 宿主包 `@deepseek-ai/dsh-tool-fs`（DSH 0.2.0 随包出货，standard preset 同款行）+ `ctx.fs` 后端（宿主面已挂，preset 只加工具层——standard 同构） |
+| 注册入口 | preset 声明的 plugins 子行（`- id: tool-fs, name: '@deepseek-ai/dsh-tool-fs'`）；无插件代码改动、无 KERNEL 改动（附件句柄/清单行已自带读取指引） |
+| 删除路径 | 删 cordis.patch.yml 的 tool-fs 子行 + 本决策文档 + 提案 0013 补记句。v1 的删除路径随回滚一并消失 |
+| 兼容对象 | preset id `card-workbench` 不变（旧会话 preset 恢复不受影响）；**声明修改只影响之后创建的 Agent**（dsh-agent-preset 语义）——存量绑定工作台会话保持 22 工具旧组合，新建工作台会话（侧栏「+」/新建向导 fresh 入口）起带文件工具；工具全序断言回到 22 项冻结 |
 
-## 根因（RCA）
+## 根因（RCA，v1/v2 共用）
 
-DSH 0.2.0 起 preset 的工具面按 `dsh-agent-preset` 声明行的 `plugins` 列表组合
-（`dsh-web-app/presets/standard.patch.yml`：`dsh-tool-fs` / `dsh-tool-fs-search`
-等文件工具是 **standard preset 的行**，不是全局默认）。`card-workbench` preset
-只挂 `dsh-tavern/card-workbench` 一个插件——22 个域工具，无任何文件读取能力。
-
-而在用的两条附件管线都把读取责任显式压给「file tools」：
+DSH 0.2.0 起 web 面把 agent 工具行整体下放给 preset（`dsh-web-app/cordis.patch.yml`
+显式 `disabled: true` 掉 tool-fs/tool-bash 等，注释「the Web surface disables
+them here and lets each session mount a preset instead」）；`agent-preset-registry`
+`default: standard`，**standard preset 的 plugins 挂着 `@deepseek-ai/dsh-tool-fs`
+等文件工具——这就是「DSH 默认提供文件读取工具」的机制本体**。而
+`card-workbench` preset 只挂 `dsh-tavern/card-workbench` 一个插件（22 个域工具），
+是对默认面的偏离。在用的两条附件管线都把读取责任显式压给「file tools」：
 
 1. **DSH 0.2.0 原生附件**（dsh-attachment）：非图片文件按字节存
-   `$DSH_HOME/attachments/v1/file-objects/<sha前2>/<sha>`；消息里的 FileBlock
+   `$DSH_HOME/attachments/v1/file-objects/<sha前2>/<sha>`；消息里 FileBlock
    在请求组装时投影为句柄文本（dsh-llm `fileHandleText`）：
    `[File "名" (字节数, sha256:xx): verbatim read-only copy saved at "路径".
    Read that path with your file tools …]`（本地 fs 宿主
-   `processPathFromHostPath` 恒等映射，模型看到的就是宿主绝对路径）。
-2. **dsh-rider 暂存**（web profile 在装）：拖入文件落会话工作区
+   `processPathFromHostPath` 恒等映射，模型看到宿主绝对路径）。
+2. **dsh-rider 暂存**（web profile 在装的 bundle 插件）：拖入文件落会话工作区
    `<cwd>/.dsh/uploads/<时间戳>-<名>`，发送时 `agent/pre-step` 注入清单行
    `📎 名（大小）→ .dsh/uploads/…` + 「需要时用文件工具按相对路径读取」。
-   工作台会话 cwd 是专用工作区 `$DSH_HOME/tavern/workbench`。
+   工作台会话 cwd 是专用工作区 `$DSH_HOME/tavern/workbench`（面板
+   `ensureWorkbenchWorkspace` 注册）。
 
-模型被两份指引都指向「文件工具」，工作台没有 → 参考文件不可读。
+模型被两份指引指向「文件工具」，工作台 preset 没挂 → 参考文件不可读。
 
-## 方案取舍
+## 方案
 
-- **否决：preset 挂宿主 `dsh-tool-fs`**。它无只读配置，整包带来 `write`/`edit`
-  ——工作台写入纪律是白名单 + 确认协议（提案 0013：写入必须过 card_put /
-  world_put 的方案确认门），任意路径写工具直接绕开该纪律；读写面也远超
-  「对话框附件」这个需求。
-- **否决：放宽为任意路径只读**。工作台定位是编辑器不是文件代理（KERNEL
-  Boundaries）；卡片/世界书/预设/剧本库各有专用读取工具（带 IR 投影与摘要），
-  tavern store 内部文件不应经旁路裸读。收紧到两条附件管线的落盘根，越界
-  明确报错并引导用户「改走对话框附件」。
-- **采纳：自建 `reference_read`**，读取面 = 附件两根，契约对齐 `material_read`
-  （chunkIndex/maxChars 分块、found:false、钳制回显），加二进制守卫与 BOM 剥离。
+**v2（采纳）**：`preset-card-workbench` 的 `config.plugins` 追加宿主默认行
+`- id: tool-fs, name: '@deepseek-ai/dsh-tool-fs'`（与 standard preset 逐字
+同款、零配置）。模型获得 `read`（带行号/分页/readMaxBytes 上限）、
+`read_image`（图片附件，走持久附件存储）、`write`/`edit`——附件句柄与
+dsh-rider 清单行的既有指引直接成立，无需 KERNEL 改动。
 
-## 行为面
+- 不带 `tool-fs-search`（glob/grep 发现面）：读取够了，工作台不需要文件
+  搜索；要扩再按同款加行。
+- `write`/`edit` 随包带出的纪律代价：与 DSH 默认会话（standard）完全一致
+  ——这是宿主的默认信任姿势，不是工作台新开的口子。卡片/世界书/预设的
+  **结构化写入**仍走 card_put/world_put 确认协议（KERNEL 纪律不变）；工具
+  层文件写受宿主 approval/权限面管（与 standard 会话同款）。
 
-- **路径政策**：相对路径以工作台专用工作区为基（dsh-rider 清单行语义）；
-  绝对路径原样解析（原生句柄语义）。包含性用 `path.relative` 幂等式（对齐
-  dsh-fs `contains`），win32 下大小写不敏感比对（模型可能小写回显盘符；
-  Node 的 win32 relative 本身对盘符大小写不敏感，双保险）。允许根：
-  `$DSH_HOME/attachments/v1`（objects/ 图片对象与 file-objects/ 文件对象都在
-  其下）与 `$DSH_HOME/tavern/workbench`（uploads 在其下，且该目录是专用内部
-  工作区，无其他内容）。越界抛错并列出允许根（模型可纠正的用法错误）。
-- **分块**：`maxChars` 默认 2400、上限 8000（与 material_read 同值）；`totalChunks`
-  按全文长度算；`chunkIndex` 钳入 `[0, totalChunks-1]` 且钳制发生时回显
-  `requestedChunkIndex`；`truncated` 判据是「窗口之后还有内容」（尾块恰好等于
-  预算不算截断——material_read 语义在这点上有假阳性，这里修正并写进测试）。
-- **守卫**：NUL 字节即拒（图片/压缩包给出可转述的拒绝，不进乱码）；
-  UTF-8 BOM 剥离；目录拒绝；缺失文件 `found: false`（对齐 material_read，
-  不抛）。
-- **KERNEL 指引**：Working protocol 第二条——附件清单行与 `[File …]` 句柄都
-  用 reference_read 读，二进制被拒时如实报告，「没读过就说没读过」。
+**v1（已回滚，提交 3d96090 后当日替换）**：自建 `tools-reference.ts` 单工具
+`reference_read`——受限只读（附件两根内）、分块对齐 material_read、二进制
+守卫、BOM 剥离。否决原因（维护者评审）：DSH 默认会话本来就有文件读取工具，
+为工作台单独造一套受限读取是过度设计——附件管线的指引文本、宿主的工具
+描述、模型已有的工具使用先验全都指向宿主默认工具；自研工具反而要求模型
+在清单行/句柄指引与私有工具之间多一次映射。v1 的合理遗产（已并入本决策
+认知）：两条附件管线的路径形态与落盘根、`processPathFromHostPath` 恒等
+映射、preset 组合语义的证据链。
 
-## 测试（card-workbench-reference.spec.ts，11 项）
+## 生效路径（部署注意）
 
-两种路径形态各读一遍；分块（钳制/回显/尾块/truncated 修正判据）；maxChars
-整预算；BOM；二进制拒绝；found:false；越界两类（相对逃逸 + 平台门控的外部
-绝对路径）；目录拒绝；参数类型校验。另有 tools.spec 全序断言加
-`reference_read`（material_read 之后、card_apply_mvu 之前）。
+- 本改动在插件 bundle 的 cordis.patch.yml 里，随 bundle 重装/更新进宿主
+  profile；重新 `dsh web` 后 Loader 重读声明。
+- **「声明会提前加载，修改只影响之后创建的 Agent」**：存量绑定的写卡工作台
+  会话保持旧组合（无文件工具），面板 fresh 入口新建的工作台会话起生效。
+  用户遇到旧会话读不了时，用侧栏「+」或新建角色卡向导开新工作台即可。
+
+## 测试
+
+v1 的 11 项 spec 随回滚删除（工具不存在了）；工具全序断言还原 22 项冻结。
+本改动是声明行变更，无插件代码路径——由 `pnpm run check` 的 tsc/vitest/
+patch-reference 等 15 道门禁兜底（基线 87 文件 1211 过 → 86 文件 1200 过
++1 跳）。真机验收：新开工作台会话 → 拖入参考文件 → agent 用 `read` 读出
+内容（相对路径 `.dsh/uploads/…` 与原生句柄绝对路径两条形态各验一次）。
 
 ## 同类风险（不在本次范围）
 
-`agent-tavern` 与 `agent-novel` preset 同样只挂自己的插件行——**同样没有文件
-读取工具**。agent-novel（作者上传参考资料写小说）是下一个真实受害者的概率
-最高；agent-tavern（RP 对局，用户贴设定文档/图）次之。两架构的工具面与
-KERNEL 各有纪律（confirmable-write / 写作循环），加同款受限只读工具需要
-各自的决策评估，不在本次「修工作台读不了参考文件」的范围内扩张。
+`agent-tavern` 与 `agent-novel` preset 同样只挂自己的插件行、无文件工具。
+若要对齐，同款加行即可（各自评估 KERNEL 是否需要相应指引）：
+agent-novel（作者上传参考资料）优先级最高。**注意同样的存量会话约束**：
+加行只对新会话生效。

@@ -46,6 +46,14 @@
         plugins:
           - id: dsh-card-workbench
             name: 'dsh-tavern/card-workbench'
+          # DSH 默认文件工具行（决策 2026-10-11-workbench-reference-read v2）：
+          # web 面把 agent 工具行整体下放给 preset（dsh-web-app cordis.patch.yml
+          # 禁 tool-fs 等，各 session 挂 preset 自带），standard preset 挂的就是
+          # 这行——对话框附件管线（原生 [File …] 句柄 + dsh-rider 📎 清单行）
+          # 都指引模型「用 file tools 按路径读取」。与 standard 同款行、同款
+          # 零配置；不带 fs-search（读取够了，发现面不进工作台）。
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
 
 # compaction curator：替换 dsh-base 的 compaction 后端（本 bundle 在
 # dsh-base/dsh-web-app 之后加载，patch 后写胜出）。宿主 patch 方言里覆写项

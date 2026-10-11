@@ -129,7 +129,7 @@ describe('Card Workbench tools and original snapshots', () => {
       'world_list', 'world_get', 'world_put', 'world_create',
       'world_delete', 'world_rename', 'world_bind', 'world_copy',
       'preset_get', 'preset_put', 'chat_log_read',
-      'card_create', 'material_list', 'material_read', 'reference_read', 'card_apply_mvu',
+      'card_create', 'material_list', 'material_read', 'card_apply_mvu',
     ])
     for (const name of ['card_get', 'card_put', 'card_original_get', 'card_restore_original', 'card_plan_propose', 'chat_log_read']) {
       expect(tools.get(name)!.parameters.properties).toHaveProperty('character')
