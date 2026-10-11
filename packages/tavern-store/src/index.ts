@@ -1,6 +1,7 @@
 export * from './store.js'
 export * from './fs-atomic.js'
 export * from './memory.js'
+export * from './memory-maintenance.js'
 export * from './memory-vectors.js'
 export * from './variable.js'
 export * from './novel-model.js'

@@ -18,6 +18,7 @@ import { applyRegexScript, applyRegexScripts, runScript } from '../../tavern-scr
 import {
   ChatRevisionConflictError,
   MemoryStore,
+  MemoryVectorStore,
   NovelCapabilityError,
   NovelConfigError,
   NovelDuplicateCommitError,
@@ -103,6 +104,13 @@ import {
   embedProbe,
   readEmbedStatus,
 } from './memory-embed.js'
+// B-3 记忆维护 run（LWB maintenance 的 dsh 化）：POST/GET memory/maintenance。
+import {
+  MaintenanceRunConflictError,
+  memoryMaintenanceStatus,
+  startMemoryMaintenance,
+  type MemoryMaintenanceDeps,
+} from './memory-maintenance.js'
 import { TavernUpdateService, updateChangelog } from './update/service.js'
 // Mod 宿主（提案 0015 §3.2 P1）：扫描 <tavern>/mods/、三层开关裁决、装载与
 // 审计；api 适配层（logger/storage/assets/events/timers/http）在 mods/host.ts。
@@ -180,6 +188,14 @@ function memories() {
 
 function variables() {
   return (variableStorePromise ??= VariableStore.open(dshHomePath('tavern')))
+}
+
+// 记忆向量缓存（提案 0016）：index.mjs 侧的 memoized 实例（维护 run 重嵌用；
+// agent.mjs bundle 各自持有同款 memo，实例隔离但 CAS + digest 保证一致）。
+let memoryVectorStorePromise: Promise<MemoryVectorStore> | undefined
+
+function memoryVectors() {
+  return (memoryVectorStorePromise ??= MemoryVectorStore.open(dshHomePath('tavern')))
 }
 
 /**
@@ -1442,6 +1458,11 @@ async function handleApi(ctx, req, res) {
     return handleMemoryEmbedApi(req, res, route, method, db)
   }
 
+  // B-3 记忆维护 run（wait:false 风格）：POST 启动（同 scope 单飞 409），GET 轮询。
+  if ((method === 'POST' || method === 'GET') && route === 'memory/maintenance') {
+    return handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db)
+  }
+
   if (method === 'GET' && route.startsWith('world/')) {
     const name = decodeURIComponent(route.slice('world/'.length))
     const book = await db.getWorld(name)
@@ -1981,6 +2002,73 @@ async function handleMemoryEmbedApi(
   }
 
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+}
+
+/* ---------- B-3 记忆维护 run 管理面（LWB maintenance 的 dsh 化） ---------- */
+
+/**
+ * `POST memory/maintenance {character, chatId}` → `{ok, runId}`（wait:false 风格，
+ * run 在本进程后台执行，不因浏览器断开中断）；同 scope 已有在跑 run 时 409。
+ * `GET memory/maintenance?character&chatId` → `{status: 'running'|'done'|'error',
+ * startedAt, finishedAt?, summary, pending, receipts}`（summary 含处理楼面范围、
+ * 编辑组数、合并/修正/删除计数、失败计数与退役结果；细粒度收尾 outcome 在
+ * summary 里——预算耗尽是纪律内收尾不是 error）。
+ */
+async function handleMemoryMaintenanceApi(
+  ctx,
+  req: NovelApiRequest,
+  res: NovelApiResponse,
+  url: URL,
+  route: string,
+  method: string,
+  db: TavernStore,
+): Promise<void> {
+  if (method === 'POST') {
+    const body = await readJson(req)
+    if (typeof body.character !== 'string' || typeof body.chatId !== 'string'
+      || body.character === '' || body.chatId === '') {
+      return sendJson(res, 400, { ok: false, message: 'expected { character, chatId }' })
+    }
+    // 与 guides 路由同款：store 的 chat 文件名校验错误按「聊天不存在」应答。
+    const snapshot = await readGuidesSnapshot(db, body.character, body.chatId)
+    if (snapshot === undefined) {
+      return sendJson(res, 404, { ok: false, message: `chat '${body.character}/${body.chatId}' not found` })
+    }
+    try {
+      const { runId } = await startMemoryMaintenance(ctx, maintenanceDeps(db), {
+        character: body.character,
+        chatId: body.chatId,
+      })
+      return sendJson(res, 200, { ok: true, runId })
+    } catch (cause) {
+      if (cause instanceof MaintenanceRunConflictError) {
+        return sendJson(res, 409, { ok: false, message: cause.message, code: cause.code, runId: cause.runId })
+      }
+      throw cause
+    }
+  }
+
+  if (method === 'GET') {
+    const character = url.searchParams.get('character')
+    const chatId = url.searchParams.get('chatId')
+    if (character === null || chatId === null || character === '' || chatId === '') {
+      return sendJson(res, 400, { ok: false, message: 'character and chatId query params are required' })
+    }
+    const view = await memoryMaintenanceStatus(maintenanceDeps(db), { character, chatId })
+    return sendJson(res, 200, { ok: true, ...view })
+  }
+
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+}
+
+/** 维护 run 依赖面：全部走 memoized 实例（单写者纪律）。 */
+function maintenanceDeps(db: TavernStore): MemoryMaintenanceDeps {
+  return {
+    root: dshHomePath('tavern'),
+    db,
+    memory: memories(),
+    vectors: memoryVectors(),
+  }
 }
 
 async function handleWorkbenchApi(
