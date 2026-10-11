@@ -142,6 +142,7 @@ AgentTavern 工具的身份来自真实 DSH agent binding，模型不能通过�
 | `memory_write` | 在选定作用域写入带来源、标签、置信度的记忆；global 写入需在设置中显式开启。 |
 | `memory_update` | 按 id + expected revision 条件更新记忆，未提供的字段保持原值。 |
 | `memory_forget` | 按 id + expected revision 软删除记忆，保留审计记录。 |
+| 记忆维护 | 记忆工具之外，管理面板「记忆检索」分区可对单个聊天手动发起记忆维护 run（服务端维护 LLM，非模型工具面）：按原文依据合并跨写入批次的重复事件、纠正冲突陈述、删除被证伪记录；完成收据记录楼面指纹与记录版本快照，原文或记忆再被改动即退役、对应范围下轮重扫（决策 2026-10-11-memory-maintenance）。 |
 | `variable_get` | 读取当前作用域中的 typed JSON 变量。 |
 | `variable_set` | 写入变量并支持 expected revision 的 CAS 冲突保护。 |
 | `variable_patch` | 在同一作用域原子写入多个变量，任一 revision 冲突则整批失败。 |
@@ -293,7 +294,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：80 个测试文件、1111 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
+当前基线：81 个测试文件、1127 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 

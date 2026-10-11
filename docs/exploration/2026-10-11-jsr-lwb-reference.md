@@ -218,12 +218,15 @@ IndexedDB 事务原子替换（`docs/vector-cache-packages.md`）。
 | A-5 | 精选 Mod 仓库（jsdelivr 一键导入）+ 本地热重载通道 | JSR 内置库/开发者页 | mod 生态 | P2 |
 | A-6 | 提示词查看器 + 世界书激活追踪（调试基建天花板，工程量大） | JSR wi_tracer | 面板 | P2 |
 
-**施工进度**：P0 四项（B-1 / C-1 / A-1 / A-2）与 P1 五项（B-5a / A-3 / A-4 / B-2 / D-2）已于 2026-10-11
-落地（决策文档 `decisions/2026-10-11-cjk-tokenization.md`、`decisions/2026-10-11-mvu-schema-guard.md`、
-`decisions/2026-10-11-mod-bridge-buttons-logs.md`、`decisions/2026-10-11-retrieval-eval-matrix.md`、
-`decisions/2026-10-11-mod-stream-delta.md`、`decisions/2026-10-11-iframe-viewport.md`、
-`decisions/2026-10-11-confirmable-session-writes.md`，提案 0016）。B-4 / D-3 经架构评估**无需施工**
-（见下表注），D-5 以 `chat-saved.floorCount` 载荷部分落地；B-3 记忆维护 Agent 单独批次施工中。
+**施工进度**：P0 四项（B-1 / C-1 / A-1 / A-2）与 P1 六项（B-5a / A-3 / A-4 / B-2 / D-2 / B-3）已于
+2026-10-11 全部落地（决策文档 `decisions/2026-10-11-cjk-tokenization.md`、
+`decisions/2026-10-11-mvu-schema-guard.md`、`decisions/2026-10-11-mod-bridge-buttons-logs.md`、
+`decisions/2026-10-11-retrieval-eval-matrix.md`、`decisions/2026-10-11-mod-stream-delta.md`、
+`decisions/2026-10-11-iframe-viewport.md`、`decisions/2026-10-11-confirmable-session-writes.md`、
+`decisions/2026-10-11-memory-maintenance.md`，提案 0016）。B-4 / D-3 经架构评估**无需施工**
+（见下表注），D-5 以 `chat-saved.floorCount` 载荷部分落地。**P1 至此收官**；P2 剩余：A-5 精选
+Mod 仓库、A-6 提示词查看器/世界书追踪、C-2 varevent 规则引擎、B-6 undo 链/向量缓存包、
+D-4 生成不入楼、D-6 reply-progress、D-7 文档八项表。
 
 **两项架构评估结论（2026-10-11）**：
 - **B-4（同轮复用 + 预取）无需施工**：LWB 的动机是 push-based 召回每次 swipe/重生成重算嵌入费；

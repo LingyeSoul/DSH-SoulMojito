@@ -1214,15 +1214,15 @@ var CharxFormatError = class extends Error {
     this.name = "CharxFormatError";
   }
 };
-function decodeCharxAsset(bytes, path10) {
+function decodeCharxAsset(bytes, path12) {
   let files;
   try {
     files = unzipSync(bytes);
   } catch (cause) {
     throw new CharxFormatError(`not a valid zip: ${String(cause)}`);
   }
-  const asset = files[path10];
-  if (asset === void 0) throw new CharxFormatError(`CHARX has no asset '${path10}'`);
+  const asset = files[path12];
+  if (asset === void 0) throw new CharxFormatError(`CHARX has no asset '${path12}'`);
   return asset;
 }
 
@@ -3567,16 +3567,16 @@ function decodeCharx(bytes) {
   const assetPaths = Object.keys(files).filter((p) => p !== "card.json");
   return { card, assetPaths };
 }
-function decodeCharxAsset2(bytes, path10) {
+function decodeCharxAsset2(bytes, path12) {
   let files;
   try {
     files = unzipSync(bytes);
   } catch (cause) {
     throw new CharxFormatError2(`not a valid zip: ${String(cause)}`);
   }
-  const asset = files[path10];
+  const asset = files[path12];
   if (asset === void 0)
-    throw new CharxFormatError2(`CHARX has no asset '${path10}'`);
+    throw new CharxFormatError2(`CHARX has no asset '${path12}'`);
   return asset;
 }
 function encodeCharx(ir, assets) {
@@ -4976,6 +4976,16 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
     if (record === void 0 || !includeDeleted && isInactive(record)) return void 0;
     return structuredClone(record);
   }
+  /**
+   * 无评分全量枚举（B-3 维护 run 的 ReadMemory 页读用）：search 的 limit 被
+   * MAX_RESULTS=50 封顶且按相关性排序，维护需要确定性顺序下的完整清单。
+   * 排序 createdAt → id（页码偏移在维护编辑（只改 revision/updatedAt）下稳定）。
+   */
+  async list(scope, scopeId, options = {}) {
+    const records = await this.listRecords({ scope, scopeId, includeDeleted: options.includeDeleted === true });
+    records.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+    return structuredClone(records);
+  }
   async put(input, expectedRevision) {
     validateWrite(input);
     return this.mutate(async () => {
@@ -5167,10 +5177,266 @@ async function readFiles(root) {
   }
 }
 
-// packages/tavern-store/src/variable.ts
+// packages/tavern-store/src/memory-maintenance.ts
 import { createHash as createHash3 } from "node:crypto";
 import { promises as fs4 } from "node:fs";
 import * as path3 from "node:path";
+var MAX_RECEIPTS = 128;
+function floorSignature(messages, baseFloor, headFloor) {
+  if (!Number.isInteger(baseFloor) || !Number.isInteger(headFloor) || baseFloor < 0 || headFloor < baseFloor || headFloor >= messages.length) return void 0;
+  const identity = messages.slice(baseFloor, headFloor + 1).map((message) => [message.name, message.is_user === true, message.is_system === true, message.mes]);
+  return createHash3("sha256").update(JSON.stringify(identity)).digest("hex");
+}
+function unionRanges(ranges) {
+  const sorted = ranges.filter((range) => range.headFloor >= range.baseFloor).map((range) => ({ baseFloor: range.baseFloor, headFloor: range.headFloor })).sort((left, right) => left.baseFloor - right.baseFloor);
+  const merged = [];
+  for (const range of sorted) {
+    const last = merged.at(-1);
+    if (last !== void 0 && range.baseFloor <= last.headFloor + 1) {
+      last.headFloor = Math.max(last.headFloor, range.headFloor);
+      continue;
+    }
+    merged.push(range);
+  }
+  return merged;
+}
+function pendingRanges(totalFloors, covered) {
+  if (!Number.isInteger(totalFloors) || totalFloors <= 0) return [];
+  const pending = [];
+  let cursor = 0;
+  for (const range of unionRanges(covered)) {
+    if (range.baseFloor > cursor) pending.push({ baseFloor: cursor, headFloor: Math.min(range.baseFloor - 1, totalFloors - 1) });
+    cursor = Math.max(cursor, range.headFloor + 1);
+    if (cursor >= totalFloors) return pending;
+  }
+  if (cursor < totalFloors) pending.push({ baseFloor: cursor, headFloor: totalFloors - 1 });
+  return pending;
+}
+function appendReceipt(receipts, receipt) {
+  const next = receipts.filter((existing) => !(existing.baseFloor >= receipt.baseFloor && existing.headFloor <= receipt.headFloor));
+  next.push(receipt);
+  if (next.length > MAX_RECEIPTS) {
+    next.sort((left, right) => left.at.localeCompare(right.at) || left.runId.localeCompare(right.runId));
+    return next.slice(next.length - MAX_RECEIPTS);
+  }
+  return next;
+}
+var MemoryMaintenanceStore = class _MemoryMaintenanceStore {
+  constructor(root) {
+    this.root = root;
+  }
+  static async open(root) {
+    await fs4.mkdir(path3.join(root, "memory-maintenance"), { recursive: true });
+    return new _MemoryMaintenanceStore(root);
+  }
+  /** 损坏/缺失按空状态处理（可重建的进度元数据，见文件头）。 */
+  async read(character, chatId) {
+    try {
+      const parsed = JSON.parse(await fs4.readFile(this.file(character, chatId), "utf8"));
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return emptyState();
+      return {
+        version: 1,
+        receipts: Array.isArray(parsed.receipts) ? parsed.receipts.filter(isReceipt) : [],
+        ...isRunRecord(parsed.lastRun) ? { lastRun: parsed.lastRun } : {}
+      };
+    } catch {
+      return emptyState();
+    }
+  }
+  async write(character, chatId, state) {
+    const file = this.file(character, chatId);
+    await fs4.mkdir(path3.dirname(file), { recursive: true });
+    await writeAtomicText(file, `${JSON.stringify(state)}
+`);
+  }
+  file(character, chatId) {
+    return path3.join(this.root, "memory-maintenance", safeSegment2(character), `${safeSegment2(chatId)}.json`);
+  }
+};
+function emptyState() {
+  return { version: 1, receipts: [] };
+}
+function isReceipt(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value;
+  return typeof record.runId === "string" && record.runId !== "" && Number.isInteger(record.baseFloor) && Number.isInteger(record.headFloor) && typeof record.at === "string" && typeof record.floorSig === "string" && record.floorSig !== "" && typeof record.recordSnapshots === "object" && record.recordSnapshots !== null && !Array.isArray(record.recordSnapshots) && Object.values(record.recordSnapshots).every((revision) => typeof revision === "string");
+}
+function isRunRecord(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value;
+  return typeof record.runId === "string" && record.runId !== "" && (record.status === "running" || record.status === "done" || record.status === "error") && typeof record.startedAt === "string" && typeof record.summary === "object" && record.summary !== null && !Array.isArray(record.summary);
+}
+function safeSegment2(value) {
+  if (typeof value !== "string" || value === "" || value === "." || value === ".." || /[\\/\0]/.test(value)) {
+    throw new Error("invalid memory maintenance path segment");
+  }
+  return encodeURIComponent(value);
+}
+
+// packages/tavern-store/src/memory-vectors.ts
+import { createHash as createHash4 } from "node:crypto";
+import { promises as fs5 } from "node:fs";
+import * as path4 from "node:path";
+function memoryContentDigest(model, content) {
+  return createHash4("sha256").update(JSON.stringify([model, content])).digest("hex");
+}
+function encodeVector(values) {
+  return Buffer.from(new Float32Array(values).buffer).toString("base64");
+}
+function decodeVector(base64) {
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length === 0 || bytes.length % 4 !== 0) return [];
+  return Array.from(new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4));
+}
+var SCOPES2 = /* @__PURE__ */ new Set(["turn", "chat", "character", "agent", "global"]);
+var MemoryVectorStore = class _MemoryVectorStore {
+  constructor(root) {
+    this.root = root;
+  }
+  mutationTail = Promise.resolve();
+  static async open(root) {
+    await fs5.mkdir(path4.join(root, "memory-vectors"), { recursive: true });
+    return new _MemoryVectorStore(root);
+  }
+  async get(id, scope, scopeId) {
+    const file = await this.readFile(scope, scopeId);
+    const entry = file?.entries[safeSegment3(id)];
+    if (file === void 0 || entry === void 0) return void 0;
+    return { id, scope, scopeId, ...structuredClone(entry) };
+  }
+  /** 批量写入（同 scope 聚合成单文件原子替换；跨 scope 顺序写）。 */
+  async put(entries) {
+    if (entries.length === 0) return;
+    const byFile = /* @__PURE__ */ new Map();
+    for (const entry of entries) {
+      validate(entry);
+      const key = vectorPathKey(entry.scope, entry.scopeId);
+      const bucket = byFile.get(key) ?? [];
+      bucket.push(entry);
+      byFile.set(key, bucket);
+    }
+    return this.mutate(async () => {
+      for (const [key, bucket] of byFile) {
+        const [scope, scopeId] = key.split("\0");
+        const file = await this.readFile(scope, scopeId) ?? emptyFile(scope, scopeId);
+        for (const entry of bucket) {
+          file.entries[safeSegment3(entry.id)] = { digest: entry.digest, model: entry.model, vector: entry.vector };
+        }
+        file.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+        await this.writeFile(file);
+      }
+    });
+  }
+  async delete(id, scope, scopeId) {
+    return this.mutate(async () => {
+      const file = await this.readFile(scope, scopeId);
+      if (file === void 0) return;
+      const key = safeSegment3(id);
+      if (!Object.prototype.hasOwnProperty.call(file.entries, key)) return;
+      delete file.entries[key];
+      file.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      await this.writeFile(file);
+    });
+  }
+  /** 列出条目；scope/scopeId 缺省时全量枚举（digest/model 供 stale 判定）。 */
+  async list(scope, scopeId) {
+    const result = [];
+    for (const file of await this.listFiles(scope, scopeId)) {
+      for (const [key, entry] of Object.entries(file.entries)) {
+        result.push({ id: decodeURIComponent(key), scope: file.scope, scopeId: file.scopeId, ...entry });
+      }
+    }
+    return result;
+  }
+  async listFiles(scope, scopeId) {
+    const scopes = scope === void 0 ? [...SCOPES2] : [scope];
+    const files = [];
+    for (const eachScope of scopes) {
+      if (scopeId !== void 0) {
+        const file = await this.readFile(eachScope, scopeId);
+        if (file !== void 0) files.push(file);
+        continue;
+      }
+      const scopeRoot = path4.join(this.root, "memory-vectors", eachScope);
+      for (const name2 of await readFiles2(scopeRoot)) {
+        if (!name2.endsWith(".json")) continue;
+        const file = await this.readFileByPath(path4.join(scopeRoot, name2));
+        if (file !== void 0) files.push(file);
+      }
+    }
+    return files;
+  }
+  /** 损坏文件按空缓存处理（可重建缓存，见文件头注释）。 */
+  async readFile(scope, scopeId) {
+    validateScope2(scope, scopeId);
+    return this.readFileByPath(this.filePath(scope, scopeId));
+  }
+  async readFileByPath(file) {
+    try {
+      const parsed = JSON.parse(await fs5.readFile(file, "utf8"));
+      if (parsed === null || typeof parsed !== "object" || typeof parsed.entries !== "object" || parsed.entries === null || Array.isArray(parsed.entries)) return void 0;
+      return parsed;
+    } catch {
+      return void 0;
+    }
+  }
+  async writeFile(file) {
+    const target = this.filePath(file.scope, file.scopeId);
+    await fs5.mkdir(path4.dirname(target), { recursive: true });
+    await writeAtomicText(target, `${JSON.stringify(file)}
+`);
+  }
+  filePath(scope, scopeId) {
+    return path4.join(this.root, "memory-vectors", scope, `${safeSegment3(scopeId)}.json`);
+  }
+  mutate(operation) {
+    const result = this.mutationTail.catch(() => {
+    }).then(operation);
+    this.mutationTail = result.then(() => {
+    }, () => {
+    });
+    return result;
+  }
+};
+function vectorPathKey(scope, scopeId) {
+  return `${scope}\0${scopeId}`;
+}
+function emptyFile(scope, scopeId) {
+  return { version: 1, scope, scopeId, entries: {}, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+}
+function validate(entry) {
+  validateScope2(entry.scope, entry.scopeId);
+  if (typeof entry.id !== "string" || entry.id === "") throw new Error("invalid memory vector id");
+  if (typeof entry.digest !== "string" || entry.digest === "" || typeof entry.model !== "string" || entry.model === "") {
+    throw new Error("invalid memory vector digest/model");
+  }
+  decodeVector(entry.vector);
+}
+function validateScope2(scope, scopeId) {
+  if (!SCOPES2.has(scope)) throw new Error(`invalid memory vector scope '${scope}'`);
+  if (typeof scopeId !== "string" || scopeId.trim() === "") throw new Error("memory vector scopeId is required");
+  safeSegment3(scopeId);
+}
+function safeSegment3(value) {
+  if (typeof value !== "string" || value === "" || value === "." || value === ".." || /[\\/\0]/.test(value)) {
+    throw new Error("invalid memory vector path segment");
+  }
+  return encodeURIComponent(value);
+}
+async function readFiles2(root) {
+  try {
+    const entries = await fs5.readdir(root, { withFileTypes: true });
+    return entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
+  } catch (cause) {
+    if (cause.code === "ENOENT") return [];
+    throw cause;
+  }
+}
+
+// packages/tavern-store/src/variable.ts
+import { createHash as createHash5 } from "node:crypto";
+import { promises as fs6 } from "node:fs";
+import * as path5 from "node:path";
 var VariableRevisionConflictError = class extends Error {
   constructor(name2, expectedRevision, actualRevision) {
     super(`Variable '${name2}' changed in another operation.`);
@@ -5181,7 +5447,7 @@ var VariableRevisionConflictError = class extends Error {
   }
   code = "VARIABLE_REVISION_CONFLICT";
 };
-var SCOPES2 = /* @__PURE__ */ new Set(["turn", "chat", "character", "agent", "global"]);
+var SCOPES3 = /* @__PURE__ */ new Set(["turn", "chat", "character", "agent", "global"]);
 var NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
 var MAX_VALUE_BYTES = 32 * 1024;
 var MAX_SCOPE_BYTES = 256 * 1024;
@@ -5192,22 +5458,22 @@ var VariableStore = class _VariableStore {
   }
   mutationTail = Promise.resolve();
   static async open(root) {
-    await fs4.mkdir(path3.join(root, "variables"), { recursive: true });
+    await fs6.mkdir(path5.join(root, "variables"), { recursive: true });
     return new _VariableStore(root);
   }
   async get(scope, scopeId, name2) {
-    validateScope2(scope, scopeId);
+    validateScope3(scope, scopeId);
     validateName(name2);
     const file = await this.readFile(scope, scopeId);
     if (file === void 0 || !Object.prototype.hasOwnProperty.call(file.values, name2)) return void 0;
     return snapshot(file, name2);
   }
   async set(scope, scopeId, name2, value, expectedRevision) {
-    validateScope2(scope, scopeId);
+    validateScope3(scope, scopeId);
     validateName(name2);
     validateValue(value);
     return this.mutate(async () => {
-      const file = await this.readFile(scope, scopeId) ?? emptyFile(scope, scopeId);
+      const file = await this.readFile(scope, scopeId) ?? emptyFile2(scope, scopeId);
       const actual = file.revisions[name2];
       if (actual !== expectedRevision) throw new VariableRevisionConflictError(name2, expectedRevision, actual);
       const next = applyChanges(file, [{ name: name2, value }]);
@@ -5216,7 +5482,7 @@ var VariableStore = class _VariableStore {
     });
   }
   async patch(scope, scopeId, changes, expectedRevision) {
-    validateScope2(scope, scopeId);
+    validateScope3(scope, scopeId);
     if (!Array.isArray(changes) || changes.length === 0) throw new Error("variable patch requires changes");
     const normalized = changes.map((change) => {
       validateName(change.name);
@@ -5224,7 +5490,7 @@ var VariableStore = class _VariableStore {
       return change;
     });
     return this.mutate(async () => {
-      const file = await this.readFile(scope, scopeId) ?? emptyFile(scope, scopeId);
+      const file = await this.readFile(scope, scopeId) ?? emptyFile2(scope, scopeId);
       const fileRevision = revisionOfFile(file);
       if (expectedRevision !== void 0 && expectedRevision !== fileRevision) {
         throw new VariableRevisionConflictError("*", expectedRevision, fileRevision);
@@ -5241,7 +5507,7 @@ var VariableStore = class _VariableStore {
     });
   }
   async delete(scope, scopeId, name2, expectedRevision) {
-    validateScope2(scope, scopeId);
+    validateScope3(scope, scopeId);
     validateName(name2);
     await this.mutate(async () => {
       const file = await this.readFile(scope, scopeId);
@@ -5256,7 +5522,7 @@ var VariableStore = class _VariableStore {
     });
   }
   async list(scope, scopeId, prefix = "", limit = MAX_LIST) {
-    validateScope2(scope, scopeId);
+    validateScope3(scope, scopeId);
     if (typeof prefix !== "string" || prefix.length > 64) throw new Error("invalid variable prefix");
     if (!Number.isInteger(limit) || limit < 1) throw new Error("variable limit must be a positive integer");
     const file = await this.readFile(scope, scopeId);
@@ -5265,14 +5531,14 @@ var VariableStore = class _VariableStore {
   }
   /** Drop the whole scope file; used for turn-scoped scratch state that expires at turn end. */
   async clear(scope, scopeId) {
-    validateScope2(scope, scopeId);
+    validateScope3(scope, scopeId);
     await this.mutate(async () => {
-      await fs4.rm(this.filePath(scope, scopeId), { force: true });
+      await fs6.rm(this.filePath(scope, scopeId), { force: true });
     });
   }
   async readFile(scope, scopeId) {
     try {
-      const parsed = JSON.parse(await fs4.readFile(this.filePath(scope, scopeId), "utf8"));
+      const parsed = JSON.parse(await fs6.readFile(this.filePath(scope, scopeId), "utf8"));
       validateFile(parsed, scope, scopeId);
       return parsed;
     } catch (cause) {
@@ -5285,15 +5551,15 @@ var VariableStore = class _VariableStore {
   }
   async writeFile(file) {
     const target = this.filePath(file.scope, file.scopeId);
-    await fs4.mkdir(path3.dirname(target), { recursive: true });
+    await fs6.mkdir(path5.dirname(target), { recursive: true });
     const text = `${JSON.stringify(file)}
 `;
     if (Buffer.byteLength(text, "utf8") > MAX_SCOPE_BYTES) throw new Error("variable scope exceeds size limit");
     await writeAtomicText(target, text);
   }
   filePath(scope, scopeId) {
-    validateScope2(scope, scopeId);
-    return path3.join(this.root, "variables", scope, `${safeSegment2(scopeId)}.json`);
+    validateScope3(scope, scopeId);
+    return path5.join(this.root, "variables", scope, `${safeSegment4(scopeId)}.json`);
   }
   mutate(operation) {
     const result = this.mutationTail.catch(() => {
@@ -5304,7 +5570,7 @@ var VariableStore = class _VariableStore {
     return result;
   }
 };
-function emptyFile(scope, scopeId) {
+function emptyFile2(scope, scopeId) {
   return { version: 1, scope, scopeId, values: {}, revisions: {}, updatedAt: (/* @__PURE__ */ new Date(0)).toISOString() };
 }
 function applyChanges(file, changes) {
@@ -5327,10 +5593,10 @@ function snapshot(file, name2) {
   };
 }
 function revisionOfValue(value) {
-  return createHash3("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+  return createHash5("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
 function revisionOfFile(file) {
-  return createHash3("sha256").update(JSON.stringify(file.values)).digest("hex").slice(0, 16);
+  return createHash5("sha256").update(JSON.stringify(file.values)).digest("hex").slice(0, 16);
 }
 function validateFile(file, scope, scopeId) {
   if (file.version !== 1 || file.scope !== scope || file.scopeId !== scopeId || typeof file.values !== "object" || file.values === null || typeof file.revisions !== "object" || file.revisions === null) throw new Error("invalid variable file");
@@ -5340,10 +5606,10 @@ function validateFile(file, scope, scopeId) {
     if (typeof file.revisions[name2] !== "string" || file.revisions[name2] === "") throw new Error("invalid variable revision");
   }
 }
-function validateScope2(scope, scopeId) {
-  if (!SCOPES2.has(scope)) throw new Error(`invalid variable scope '${scope}'`);
+function validateScope3(scope, scopeId) {
+  if (!SCOPES3.has(scope)) throw new Error(`invalid variable scope '${scope}'`);
   if (typeof scopeId !== "string" || scopeId.trim() === "") throw new Error("variable scopeId is required");
-  safeSegment2(scopeId);
+  safeSegment4(scopeId);
 }
 function validateName(name2) {
   if (typeof name2 !== "string" || !NAME.test(name2)) throw new Error(`invalid variable name '${String(name2)}'`);
@@ -5356,7 +5622,7 @@ function validateValue(value) {
   if (Array.isArray(value)) value.forEach(validateValue);
   else if (typeof value === "object" && value !== null) Object.values(value).forEach(validateValue);
 }
-function safeSegment2(value) {
+function safeSegment4(value) {
   if (value === "." || value === ".." || /[\\/\0]/.test(value)) throw new Error("invalid variable path segment");
   return encodeURIComponent(value);
 }
@@ -5800,11 +6066,11 @@ var NovelStorageCorruptionError = class extends Error {
   novelId;
   path;
   detail;
-  constructor({ novelId, path: path10, detail }) {
-    super(`Novel storage corruption in '${novelId}' at ${path10}: ${detail}`);
+  constructor({ novelId, path: path12, detail }) {
+    super(`Novel storage corruption in '${novelId}' at ${path12}: ${detail}`);
     this.name = "NovelStorageCorruptionError";
     this.novelId = novelId;
-    this.path = path10;
+    this.path = path12;
     this.detail = detail;
   }
 };
@@ -5830,10 +6096,10 @@ var NovelPreconditionError = class extends Error {
 };
 
 // packages/tavern-store/src/novel.ts
-import { createHash as createHash4, randomBytes } from "node:crypto";
+import { createHash as createHash6, randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
-import { promises as fs5 } from "node:fs";
-import * as path4 from "node:path";
+import { promises as fs7 } from "node:fs";
+import * as path6 from "node:path";
 var SCHEMA_VERSION = 1;
 var REQUIREMENT_SOURCES = /* @__PURE__ */ new Set(["composer", "panel", "internal"]);
 var CANON_KINDS = /* @__PURE__ */ new Set(["event", "character-state", "relation", "foreshadowing", "variable"]);
@@ -5852,7 +6118,7 @@ function commandLineOf(pid) {
     });
   }
   if (process.platform === "linux") {
-    return fs5.readFile(`/proc/${pid}/cmdline`, "utf8").then(
+    return fs7.readFile(`/proc/${pid}/cmdline`, "utf8").then(
       (raw) => raw.split("\0").join(" ").trim() || void 0,
       (cause) => {
         const code = cause.code;
@@ -5899,10 +6165,10 @@ var NovelStore = class _NovelStore {
   /** Serialized async projection updates per novel; deleteNovel drains them. */
   projectionTails = /* @__PURE__ */ new Map();
   constructor(root) {
-    this.novelsRoot = path4.join(root, "novels");
+    this.novelsRoot = path6.join(root, "novels");
   }
   static async open(tavernRoot) {
-    await fs5.mkdir(path4.join(tavernRoot, "novels"), { recursive: true });
+    await fs7.mkdir(path6.join(tavernRoot, "novels"), { recursive: true });
     return new _NovelStore(tavernRoot);
   }
   /* ------------------------------ projects ------------------------------ */
@@ -5940,14 +6206,14 @@ var NovelStore = class _NovelStore {
     const novelId = `nvl-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
     return this.mutate(novelId, async () => {
       const dir = this.novelDir(novelId);
-      for (const sub of ["revisions", "assets", "bodies", path4.join("projections", "chapters")]) {
-        await fs5.mkdir(path4.join(dir, sub), { recursive: true });
+      for (const sub of ["revisions", "assets", "bodies", path6.join("projections", "chapters")]) {
+        await fs7.mkdir(path6.join(dir, sub), { recursive: true });
       }
       await this.ensureOwnership(novelId, dir);
       const assets = [];
       for (const { name: name2, card } of characters) {
         const contentHash = sha256hex(stableStringify(card));
-        await writeImmutableBytes(path4.join(dir, "assets", `${contentHash}.json`), jsonBytes2(card));
+        await writeImmutableBytes(path6.join(dir, "assets", `${contentHash}.json`), jsonBytes2(card));
         assets.push({
           kind: "character",
           sourceId: name2,
@@ -5958,7 +6224,7 @@ var NovelStore = class _NovelStore {
       }
       for (const { name: name2, book } of worlds) {
         const contentHash = sha256hex(stableStringify(book));
-        await writeImmutableBytes(path4.join(dir, "assets", `${contentHash}.json`), jsonBytes2(book));
+        await writeImmutableBytes(path6.join(dir, "assets", `${contentHash}.json`), jsonBytes2(book));
         assets.push({ kind: "world", sourceId: name2, displayName: name2, contentHash, specVersion: null });
       }
       const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -6109,7 +6375,7 @@ var NovelStore = class _NovelStore {
       await this.ensureOwnership(novelId, dir);
       await this.projectionTails.get(novelId)?.catch(() => {
       });
-      await fs5.rm(dir, { recursive: true, force: true });
+      await fs7.rm(dir, { recursive: true, force: true });
       return true;
     });
   }
@@ -6490,7 +6756,7 @@ var NovelStore = class _NovelStore {
       }
       const upcomingCommitId = `commit-${current.commits.length + 1}`;
       validateCanonChanges(input.canonChanges, current.commits, upcomingCommitId, input.paragraphs.length);
-      await writeImmutableBytes(path4.join(dir, "bodies", `${businessHash}.txt`), textBytes(input.paragraphs.join(PARAGRAPH_SEPARATOR)));
+      await writeImmutableBytes(path6.join(dir, "bodies", `${businessHash}.txt`), textBytes(input.paragraphs.join(PARAGRAPH_SEPARATOR)));
       const commit = {
         commitId: upcomingCommitId,
         unitId: unit.unitId,
@@ -6940,7 +7206,7 @@ var NovelStore = class _NovelStore {
     if (!current.assets.some((asset) => asset.contentHash === contentHash)) {
       throw new NovelPreconditionError({ rule: "asset-not-referenced", violations: [contentHash] });
     }
-    const assetPath = path4.join(this.novelDir(novelId), "assets", `${contentHash}.json`);
+    const assetPath = path6.join(this.novelDir(novelId), "assets", `${contentHash}.json`);
     const raw = await tryReadText(assetPath);
     if (raw === void 0) {
       throw new NovelStorageCorruptionError({ novelId, path: assetPath, detail: "referenced asset object is missing" });
@@ -6954,7 +7220,7 @@ var NovelStore = class _NovelStore {
   /* ------------------------------- internal ------------------------------- */
   novelDir(novelId) {
     if (!isValidNovelId(novelId)) throw new Error(`invalid novel id '${novelId}'`);
-    return path4.join(this.novelsRoot, novelId);
+    return path6.join(this.novelsRoot, novelId);
   }
   mutate(novelId, operation) {
     const tail = this.mutationTails.get(novelId) ?? Promise.resolve();
@@ -6988,8 +7254,8 @@ var NovelStore = class _NovelStore {
    * is refused as a concurrent writer.
    */
   async ensureOwnership(novelId, dir) {
-    await fs5.mkdir(dir, { recursive: true });
-    const ownerPath = path4.join(dir, ".owner.json");
+    await fs7.mkdir(dir, { recursive: true });
+    const ownerPath = path6.join(dir, ".owner.json");
     for (let attempt = 0; ; attempt++) {
       const raw = await tryReadText(ownerPath);
       if (raw !== void 0) {
@@ -7003,11 +7269,11 @@ var NovelStore = class _NovelStore {
             detail: "another writer holds the novel; single-writer ownership refuses concurrent writers (\xA710.2)"
           });
         }
-        await fs5.rm(ownerPath, { force: true });
+        await fs7.rm(ownerPath, { force: true });
       }
       const token = { pid: process.pid, bootId: BOOT_ID, acquiredAt: (/* @__PURE__ */ new Date()).toISOString() };
       try {
-        const fh = await fs5.open(ownerPath, "wx");
+        const fh = await fs7.open(ownerPath, "wx");
         try {
           await fh.writeFile(jsonBytes2(token));
           await fh.sync();
@@ -7028,7 +7294,7 @@ var NovelStore = class _NovelStore {
    */
   async readSnapshot(novelId) {
     const dir = this.novelDir(novelId);
-    const headPath = path4.join(dir, "HEAD.json");
+    const headPath = path6.join(dir, "HEAD.json");
     const headRaw = await tryReadText(headPath);
     if (headRaw === void 0) return void 0;
     let head;
@@ -7040,7 +7306,7 @@ var NovelStore = class _NovelStore {
     if (typeof head !== "object" || head === null || head.novelId !== novelId || typeof head.revision !== "string" || !/^[0-9a-f]{16}$/.test(head.revision) || head.schemaVersion !== SCHEMA_VERSION) {
       throw new NovelStorageCorruptionError({ novelId, path: headPath, detail: "HEAD.json has an invalid shape" });
     }
-    const revisionPath = path4.join(dir, "revisions", `${head.revision}.json`);
+    const revisionPath = path6.join(dir, "revisions", `${head.revision}.json`);
     const revisionRaw = await tryReadText(revisionPath);
     if (revisionRaw === void 0) {
       throw new NovelStorageCorruptionError({ novelId, path: revisionPath, detail: "HEAD references a missing revision file" });
@@ -7058,7 +7324,7 @@ var NovelStore = class _NovelStore {
     return snapshot2;
   }
   async readBodyParagraphs(novelId, dir, bodyHash, paragraphCount) {
-    const bodyPath = path4.join(dir, "bodies", `${bodyHash}.txt`);
+    const bodyPath = path6.join(dir, "bodies", `${bodyHash}.txt`);
     const raw = await tryReadText(bodyPath);
     if (raw === void 0) {
       throw new NovelStorageCorruptionError({ novelId, path: bodyPath, detail: "committed body object is missing" });
@@ -7085,9 +7351,9 @@ var NovelStore = class _NovelStore {
       committedAt: (/* @__PURE__ */ new Date()).toISOString(),
       snapshot: withRevision2
     };
-    await writeImmutableBytes(path4.join(dir, "revisions", `${revision}.json`), jsonBytes2(file));
+    await writeImmutableBytes(path6.join(dir, "revisions", `${revision}.json`), jsonBytes2(file));
     const head = { novelId: snapshot2.novelId, revision, schemaVersion: SCHEMA_VERSION, updatedAt: snapshot2.updatedAt };
-    await replaceHead(path4.join(dir, "HEAD.json"), jsonBytes2(head));
+    await replaceHead(path6.join(dir, "HEAD.json"), jsonBytes2(head));
     const tail = this.projectionTails.get(snapshot2.novelId) ?? Promise.resolve();
     const projected = tail.catch(() => {
     }).then(() => this.updateProjections(dir, withRevision2));
@@ -7099,11 +7365,11 @@ var NovelStore = class _NovelStore {
     return revision;
   }
   async updateProjections(dir, snapshot2) {
-    const projectionsDir = path4.join(dir, "projections");
+    const projectionsDir = path6.join(dir, "projections");
     try {
-      await fs5.mkdir(path4.join(projectionsDir, "chapters"), { recursive: true });
+      await fs7.mkdir(path6.join(projectionsDir, "chapters"), { recursive: true });
       const summary = summarizeNovel(snapshot2);
-      await writeAtomicText(path4.join(projectionsDir, "status.json"), JSON.stringify({
+      await writeAtomicText(path6.join(projectionsDir, "status.json"), JSON.stringify({
         novelId: snapshot2.novelId,
         revision: snapshot2.revision,
         contentRevision: snapshot2.contentRevision,
@@ -7122,12 +7388,12 @@ var NovelStore = class _NovelStore {
           const paragraphs = await this.readBodyParagraphs(snapshot2.novelId, dir, commit.bodyHash, commit.paragraphCount);
           parts.push(paragraphs.join(PARAGRAPH_SEPARATOR), "");
         }
-        await writeAtomicText(path4.join(projectionsDir, "chapters", `${chapterId}.md`), `${parts.join(PARAGRAPH_SEPARATOR).trimEnd()}
+        await writeAtomicText(path6.join(projectionsDir, "chapters", `${chapterId}.md`), `${parts.join(PARAGRAPH_SEPARATOR).trimEnd()}
 `);
       }
     } catch (cause) {
       try {
-        await writeAtomicText(path4.join(projectionsDir, "status.json"), JSON.stringify({
+        await writeAtomicText(path6.join(projectionsDir, "status.json"), JSON.stringify({
           state: "projection-pending",
           novelId: snapshot2.novelId,
           revision: snapshot2.revision,
@@ -7401,7 +7667,7 @@ function contentRevisionOf(snapshot2) {
   });
 }
 function sha256hex(data) {
-  return createHash4("sha256").update(data).digest("hex");
+  return createHash6("sha256").update(data).digest("hex");
 }
 function hash16(value) {
   return sha256hex(stableStringify(value)).slice(0, 16);
@@ -7414,7 +7680,7 @@ function textBytes(text) {
 }
 async function tryReadText(file) {
   try {
-    return await fs5.readFile(file, "utf8");
+    return await fs7.readFile(file, "utf8");
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -7422,24 +7688,24 @@ async function tryReadText(file) {
 }
 async function writeImmutableBytes(file, bytes) {
   try {
-    await fs5.access(file);
+    await fs7.access(file);
     return;
   } catch (cause) {
     if (cause.code !== "ENOENT") throw cause;
   }
   const tmp = `${file}.${process.pid}.${Date.now()}.${randomBytes(2).toString("hex")}.tmp`;
-  const fh = await fs5.open(tmp, "w");
+  const fh = await fs7.open(tmp, "w");
   try {
     await fh.writeFile(bytes);
     await fh.sync();
   } finally {
     await fh.close();
   }
-  await fs5.rename(tmp, file);
+  await fs7.rename(tmp, file);
 }
 async function replaceHead(head, bytes) {
   const tmp = `${head}.${process.pid}.${Date.now()}.${randomBytes(2).toString("hex")}.tmp`;
-  const fh = await fs5.open(tmp, "w");
+  const fh = await fs7.open(tmp, "w");
   try {
     await fh.writeFile(bytes);
     await fh.sync();
@@ -7447,23 +7713,23 @@ async function replaceHead(head, bytes) {
     await fh.close();
   }
   try {
-    await fs5.rename(tmp, head);
+    await fs7.rename(tmp, head);
   } catch (cause) {
     const code = cause.code;
     if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY") {
       try {
-        await fs5.rm(tmp, { force: true });
+        await fs7.rm(tmp, { force: true });
       } catch {
       }
       throw cause;
     }
     await new Promise((resolve5) => setTimeout(resolve5, 25));
-    await fs5.rename(tmp, head);
+    await fs7.rename(tmp, head);
   }
 }
 async function readDirectories2(root) {
   try {
-    const entries = await fs5.readdir(root, { withFileTypes: true });
+    const entries = await fs7.readdir(root, { withFileTypes: true });
     return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   } catch (cause) {
     if (cause.code === "ENOENT") return [];
@@ -7472,14 +7738,14 @@ async function readDirectories2(root) {
 }
 
 // packages/tavern-store/src/originals.ts
-import { promises as fs6 } from "node:fs";
-import * as path5 from "node:path";
+import { promises as fs8 } from "node:fs";
+import * as path7 from "node:path";
 function originalSnapshotPath(root, characterName) {
-  return path5.join(root, "characters", "originals", `${safeFileName(characterName)}.json`);
+  return path7.join(root, "characters", "originals", `${safeFileName(characterName)}.json`);
 }
 async function fileExists(file) {
   try {
-    await fs6.access(file);
+    await fs8.access(file);
     return true;
   } catch {
     return false;
@@ -7487,7 +7753,7 @@ async function fileExists(file) {
 }
 async function saveOriginalSnapshot(root, characterName, card) {
   const file = originalSnapshotPath(root, characterName);
-  await fs6.mkdir(path5.dirname(file), { recursive: true });
+  await fs8.mkdir(path7.dirname(file), { recursive: true });
   if (await fileExists(file)) return false;
   await writeAtomicText(file, `${JSON.stringify(encodeCharacterCardJson2(card), null, 2)}
 `);
@@ -7496,7 +7762,7 @@ async function saveOriginalSnapshot(root, characterName, card) {
 async function readOriginalSnapshot(root, characterName) {
   let bytes;
   try {
-    bytes = await fs6.readFile(originalSnapshotPath(root, characterName));
+    bytes = await fs8.readFile(originalSnapshotPath(root, characterName));
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -7505,7 +7771,7 @@ async function readOriginalSnapshot(root, characterName) {
 }
 async function deleteOriginalSnapshot(root, characterName) {
   try {
-    await fs6.unlink(originalSnapshotPath(root, characterName));
+    await fs8.unlink(originalSnapshotPath(root, characterName));
     return true;
   } catch (cause) {
     if (cause.code === "ENOENT") return false;
@@ -7518,11 +7784,11 @@ async function moveOriginalSnapshot(root, fromName, toName) {
   if (from === to) return false;
   if (!await fileExists(from)) return false;
   try {
-    await fs6.unlink(to);
+    await fs8.unlink(to);
   } catch (cause) {
     if (cause.code !== "ENOENT") throw cause;
   }
-  await fs6.rename(from, to);
+  await fs8.rename(from, to);
   return true;
 }
 async function restoreOriginal(root, characterName) {
@@ -7542,8 +7808,8 @@ async function restoreOriginal(root, characterName) {
 }
 
 // packages/tavern-store/src/scripts.ts
-import { promises as fs7 } from "node:fs";
-import * as path6 from "node:path";
+import { promises as fs9 } from "node:fs";
+import * as path8 from "node:path";
 var SCRIPT_CHUNK_TARGET = 1200;
 var SCRIPT_CHUNK_HARD_MAX = 2e3;
 var SCRIPT_BLOCK_BUDGET = 2400;
@@ -7754,23 +8020,23 @@ async function importScript(dir, name2, content, format) {
     source: { format: resolvedFormat, importedAt: (/* @__PURE__ */ new Date()).toISOString() },
     chunks: chunks.map((text2, index) => ({ index, text: text2 }))
   };
-  const scriptDir = path6.join(dir, "scripts", safeScriptName(trimmedName));
-  await fs7.mkdir(scriptDir, { recursive: true });
-  await writeAtomicBytes(path6.join(scriptDir, "script.json"), jsonBytes3(record));
+  const scriptDir = path8.join(dir, "scripts", safeScriptName(trimmedName));
+  await fs9.mkdir(scriptDir, { recursive: true });
+  await writeAtomicBytes(path8.join(scriptDir, "script.json"), jsonBytes3(record));
   return record;
 }
 async function listScripts(dir) {
-  const root = path6.join(dir, "scripts");
+  const root = path8.join(dir, "scripts");
   let entries;
   try {
-    entries = await fs7.readdir(root);
+    entries = await fs9.readdir(root);
   } catch (cause) {
     if (cause.code === "ENOENT") return [];
     throw cause;
   }
   const summaries = [];
   for (const entry of entries) {
-    const record = await readScriptRecord(path6.join(root, entry, "script.json"));
+    const record = await readScriptRecord(path8.join(root, entry, "script.json"));
     if (record === void 0) continue;
     summaries.push({
       name: record.name,
@@ -7783,7 +8049,7 @@ async function listScripts(dir) {
   return summaries.sort((left, right) => left.name.localeCompare(right.name));
 }
 async function getScript(dir, name2) {
-  return readScriptRecord(path6.join(dir, "scripts", safeScriptName(name2), "script.json"));
+  return readScriptRecord(path8.join(dir, "scripts", safeScriptName(name2), "script.json"));
 }
 async function applyScriptBinding(store5, characterName, scriptName) {
   const file = await store5.getCharacter(characterName);
@@ -7809,7 +8075,7 @@ async function applyScriptBinding(store5, characterName, scriptName) {
 async function readScriptRecord(file) {
   let bytes;
   try {
-    bytes = await fs7.readFile(file);
+    bytes = await fs9.readFile(file);
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -9001,9 +9267,9 @@ function errorCodeOf(error) {
 }
 
 // packages/plugin/src/agent-novel/projector.ts
-import { promises as fs8 } from "node:fs";
+import { promises as fs10 } from "node:fs";
 import { crc32 as crc322 } from "node:zlib";
-import * as path7 from "node:path";
+import * as path9 from "node:path";
 
 // packages/plugin/src/agent-novel/scope.ts
 function novelScopeId(novelId) {
@@ -9068,10 +9334,10 @@ var NovelProjector = class _NovelProjector {
   /** Whether the store's reading projection carries a projection-pending marker (§13). */
   async projectionPending(novelId) {
     this.assertNovelId(novelId);
-    const statusPath = path7.join(this.novelDir(novelId), "projections", "status.json");
+    const statusPath = path9.join(this.novelDir(novelId), "projections", "status.json");
     let raw;
     try {
-      raw = await fs8.readFile(statusPath, "utf8");
+      raw = await fs10.readFile(statusPath, "utf8");
     } catch (cause) {
       if (cause.code === "ENOENT") return false;
       throw cause;
@@ -9087,18 +9353,18 @@ var NovelProjector = class _NovelProjector {
   async repairProjections(novelId) {
     const snapshot2 = await this.requireSnapshot(novelId);
     const paragraphsByChapter = await this.readAllCommitParagraphs(novelId, snapshot2);
-    const projectionsDir = path7.join(this.novelDir(novelId), "projections");
-    await fs8.rm(path7.join(projectionsDir, "chapters"), { recursive: true, force: true });
-    await fs8.mkdir(path7.join(projectionsDir, "chapters"), { recursive: true });
+    const projectionsDir = path9.join(this.novelDir(novelId), "projections");
+    await fs10.rm(path9.join(projectionsDir, "chapters"), { recursive: true, force: true });
+    await fs10.mkdir(path9.join(projectionsDir, "chapters"), { recursive: true });
     const titleByChapter = new Map((snapshot2.outline?.chapters ?? []).map((chapter) => [chapter.chapterId, chapter.title]));
     for (const [chapterId, commitGroups] of paragraphsByChapter) {
       const parts = [`# ${titleByChapter.get(chapterId) ?? chapterId}`, ""];
       for (const paragraphs of commitGroups) parts.push(paragraphs.join(PARAGRAPH_SEPARATOR3), "");
-      await writeAtomicText2(path7.join(projectionsDir, "chapters", `${chapterId}.md`), `${parts.join(PARAGRAPH_SEPARATOR3).trimEnd()}
+      await writeAtomicText2(path9.join(projectionsDir, "chapters", `${chapterId}.md`), `${parts.join(PARAGRAPH_SEPARATOR3).trimEnd()}
 `);
     }
     const summary = summarizeNovel(snapshot2);
-    await writeAtomicText2(path7.join(projectionsDir, "status.json"), JSON.stringify({
+    await writeAtomicText2(path9.join(projectionsDir, "status.json"), JSON.stringify({
       novelId: snapshot2.novelId,
       revision: snapshot2.revision,
       contentRevision: snapshot2.contentRevision,
@@ -9154,7 +9420,7 @@ var NovelProjector = class _NovelProjector {
   }
   novelDir(novelId) {
     this.assertNovelId(novelId);
-    return path7.join(this.tavernRoot, "novels", novelId);
+    return path9.join(this.tavernRoot, "novels", novelId);
   }
   async requireSnapshot(novelId) {
     this.assertNovelId(novelId);
@@ -9169,10 +9435,10 @@ var NovelProjector = class _NovelProjector {
    * must count exactly `effectiveCharacters`).
    */
   async readCommitParagraphs(novelId, commit) {
-    const bodyPath = path7.join(this.novelDir(novelId), "bodies", `${commit.bodyHash}.txt`);
+    const bodyPath = path9.join(this.novelDir(novelId), "bodies", `${commit.bodyHash}.txt`);
     let raw;
     try {
-      raw = await fs8.readFile(bodyPath, "utf8");
+      raw = await fs10.readFile(bodyPath, "utf8");
     } catch (cause) {
       if (cause.code === "ENOENT") {
         throw new NovelStorageCorruptionError({ novelId, path: bodyPath, detail: `committed body object of ${commit.commitId} is missing` });
@@ -9208,10 +9474,10 @@ var NovelProjector = class _NovelProjector {
   }
   /** Enumerates the raw memory records of the novel namespace (MemoryStore layout). */
   async existingMemoryRecords(novelId) {
-    const dir = path7.join(this.tavernRoot, "memories", "chat", encodeURIComponent(novelScopeId(novelId)));
+    const dir = path9.join(this.tavernRoot, "memories", "chat", encodeURIComponent(novelScopeId(novelId)));
     let files;
     try {
-      files = await fs8.readdir(dir);
+      files = await fs10.readdir(dir);
     } catch (cause) {
       if (cause.code === "ENOENT") return [];
       throw cause;
@@ -9219,7 +9485,7 @@ var NovelProjector = class _NovelProjector {
     const records = [];
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
-      const parsed = JSON.parse(await fs8.readFile(path7.join(dir, file), "utf8"));
+      const parsed = JSON.parse(await fs10.readFile(path9.join(dir, file), "utf8"));
       if (typeof parsed.id === "string" && typeof parsed.revision === "string") {
         records.push({ id: parsed.id, revision: parsed.revision });
       }
@@ -9306,8 +9572,8 @@ function textBytes2(text) {
 }
 async function writeAtomicText2(file, text) {
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await fs8.writeFile(tmp, text, "utf8");
-  await fs8.rename(tmp, file);
+  await fs10.writeFile(tmp, text, "utf8");
+  await fs10.rename(tmp, file);
 }
 var ZIP_UTF8_FLAG = 2048;
 var DOS_TIME = 0;
@@ -9381,9 +9647,9 @@ function buildStoredZip(entries) {
 }
 
 // packages/plugin/src/agent-novel/requirements.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 function stableMessageKey(sessionId, messageKey) {
-  return createHash5("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
+  return createHash7("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
 }
 function isNovelAuthorMessage(event) {
   return extractAuthorMessage(event) !== null;
@@ -9520,27 +9786,27 @@ function emitGuidesChanged(character, chatId) {
 }
 
 // packages/tavern-template/src/paths.ts
-function parsePath(path10) {
-  if (path10 === "") return [];
+function parsePath(path12) {
+  if (path12 === "") return [];
   const segments = [];
   let buf = "";
   let i = 0;
-  while (i < path10.length) {
-    const ch = path10[i];
+  while (i < path12.length) {
+    const ch = path12[i];
     if (ch === ".") {
       if (buf !== "") segments.push(buf);
       buf = "";
       i++;
     } else if (ch === "[") {
-      const close = path10.indexOf("]", i);
+      const close = path12.indexOf("]", i);
       if (close === -1) return [];
       if (buf !== "") segments.push(buf);
-      const inner = path10.slice(i + 1, close).trim();
+      const inner = path12.slice(i + 1, close).trim();
       if (!/^-?\d+$/.test(inner)) return [];
       segments.push(inner);
       buf = "";
       i = close + 1;
-      if (path10[i] === ".") i++;
+      if (path12[i] === ".") i++;
     } else {
       buf += ch;
       i++;
@@ -9561,8 +9827,8 @@ function deepClone(value) {
   }
   return value;
 }
-function getPath(root, path10) {
-  const segments = parsePath(path10);
+function getPath(root, path12) {
+  const segments = parsePath(path12);
   let cur = root;
   for (const seg of segments) {
     if (cur === null || cur === void 0) return void 0;
@@ -9578,8 +9844,8 @@ function getPath(root, path10) {
   }
   return cur;
 }
-function setPath(root, path10, value) {
-  const segments = parsePath(path10);
+function setPath(root, path12, value) {
+  const segments = parsePath(path12);
   if (segments.length === 0) return root;
   const last = segments[segments.length - 1];
   let cur = root;
@@ -9606,23 +9872,23 @@ function setPath(root, path10, value) {
   }
   return root;
 }
-function unsetPath(root, path10, index) {
+function unsetPath(root, path12, index) {
   if (index !== void 0) {
-    const target = getPath(root, path10);
+    const target = getPath(root, path12);
     if (Array.isArray(target)) {
       const idx = typeof index === "number" ? index : Number(index);
       if (Number.isInteger(idx) && idx >= 0 && idx < target.length) target.splice(idx, 1);
     } else if (typeof target === "string") {
       const idx = typeof index === "number" ? index : Number(index);
       if (Number.isInteger(idx) && idx >= 0 && idx < target.length) {
-        setPath(root, path10, target.slice(0, idx) + target.slice(idx + 1));
+        setPath(root, path12, target.slice(0, idx) + target.slice(idx + 1));
       }
     } else if (isObjectLike(target)) {
       delete target[String(index)];
     }
     return;
   }
-  const segments = parsePath(path10);
+  const segments = parsePath(path12);
   if (segments.length === 0) return;
   const last = segments[segments.length - 1];
   let cur = root;
@@ -9632,15 +9898,15 @@ function unsetPath(root, path10, index) {
   }
   if (isObjectLike(cur) || Array.isArray(cur)) delete cur[last];
 }
-function insertAtPath(root, path10, value, index) {
-  const target = getPath(root, path10);
+function insertAtPath(root, path12, value, index) {
+  const target = getPath(root, path12);
   if (Array.isArray(target)) {
     const idx = index === void 0 ? target.length : Number(index);
     if (Number.isInteger(idx) && idx >= 0 && idx <= target.length) target.splice(idx, 0, value);
   } else if (typeof target === "string") {
     const idx = index === void 0 ? target.length : Number(index);
     if (Number.isInteger(idx) && idx >= 0 && idx <= target.length) {
-      setPath(root, path10, target.slice(0, idx) + String(value) + target.slice(idx));
+      setPath(root, path12, target.slice(0, idx) + String(value) + target.slice(idx));
     }
   } else if (isObjectLike(target)) {
     target[index === void 0 ? String(target.length) : String(index)] = value;
@@ -10023,12 +10289,12 @@ function applyJsonPatch(dest, change) {
   return wrap[""];
 }
 var miniLodash = {
-  get: (obj, path10, defaults) => {
-    const value = getPath(obj, path10);
+  get: (obj, path12, defaults) => {
+    const value = getPath(obj, path12);
     return value === void 0 ? defaults : value;
   },
-  set: (obj, path10, value) => setPath(obj, path10, value),
-  has: (obj, path10) => getPath(obj, path10) !== void 0,
+  set: (obj, path12, value) => setPath(obj, path12, value),
+  has: (obj, path12) => getPath(obj, path12) !== void 0,
   merge: (dest, ...sources) => {
     for (const src of sources) deepMerge(dest, src);
     return dest;
@@ -10708,13 +10974,13 @@ function resolveIndex(idx, length) {
 }
 
 // packages/tavern-template/src/variables.ts
-var SCOPES3 = ["global", "local", "message", "cache", "initial"];
+var SCOPES4 = ["global", "local", "message", "cache", "initial"];
 var FLAGS = ["nx", "xx", "n", "nxs", "xxs"];
 var RESULTS = ["old", "new", "fullcache"];
 function normalizeOptions(input, base) {
   const out = { ...base };
   const apply2 = (key, _value) => {
-    if (SCOPES3.includes(key)) {
+    if (SCOPES4.includes(key)) {
       out.scope = key;
       return true;
     }
@@ -10897,17 +11163,17 @@ var TemplateVariableSystem = class {
       results: "new",
       clone: false
     });
-    const path10 = key ?? "";
-    const old = getPath(this.cache, path10);
-    if (!this.flagAllows(opts.flags, path10, opts.scope)) return void 0;
-    this.writeScope(opts.scope, path10, value);
-    if (path10 === "") {
+    const path12 = key ?? "";
+    const old = getPath(this.cache, path12);
+    if (!this.flagAllows(opts.flags, path12, opts.scope)) return void 0;
+    this.writeScope(opts.scope, path12, value);
+    if (path12 === "") {
       if (isObjectLike(value)) {
         for (const k of Object.keys(this.cache)) delete this.cache[k];
         deepMerge(this.cache, value);
       }
     } else {
-      setPath(this.cache, path10, deepClone(value));
+      setPath(this.cache, path12, deepClone(value));
     }
     switch (opts.results) {
       case "old":
@@ -11266,7 +11532,7 @@ function clampNumber(value, min, max2) {
   if (max2 !== void 0 && out > max2) out = max2;
   return out;
 }
-function validateValue2(node, value, current, path10, notes) {
+function validateValue2(node, value, current, path12, notes) {
   if (node.ro === true && !mvuValuesEqual(value, current)) {
     return { ok: false, kind: "readonly", reason: "read-only field" };
   }
@@ -11278,7 +11544,7 @@ function validateValue2(node, value, current, path10, notes) {
     const currentItems = Array.isArray(current) ? current : [];
     const out = [];
     for (let i = 0; i < value.length; i++) {
-      const result = validateValue2(node.item, value[i], currentItems[i], `${path10}[${i}]`, notes);
+      const result = validateValue2(node.item, value[i], currentItems[i], `${path12}[${i}]`, notes);
       if (!result.ok) return result;
       out.push(result.value);
     }
@@ -11296,7 +11562,7 @@ function validateValue2(node, value, current, path10, notes) {
       if (child === void 0) {
         return { ok: false, kind: "structure", reason: `key '${key}' is not in the schema template` };
       }
-      const result = validateValue2(child, value[key], currentObject[key], path10 === "" ? key : `${path10}.${key}`, notes);
+      const result = validateValue2(child, value[key], currentObject[key], path12 === "" ? key : `${path12}.${key}`, notes);
       if (!result.ok) return result;
       next[key] = result.value;
     }
@@ -11321,21 +11587,21 @@ function validateValue2(node, value, current, path10, notes) {
       const delta = out - current;
       const capped = Math.max(-node.step, Math.min(node.step, delta));
       if (capped !== delta) {
-        notes.push(`${path10}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
+        notes.push(`${path12}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
         out = current + capped;
       }
     }
     const clamped = clampNumber(out, node.min, node.max);
     if (clamped !== out) {
-      notes.push(`${path10}: guard clamp: ${out} -> ${clamped}`);
+      notes.push(`${path12}: guard clamp: ${out} -> ${clamped}`);
       out = clamped;
     }
     return { ok: true, value: out, notes };
   }
   return { ok: true, value, notes };
 }
-function guardMvuWrite(schema, path10, value, current) {
-  const segments = path10.split(".").filter((segment) => segment !== "");
+function guardMvuWrite(schema, path12, value, current) {
+  const segments = path12.split(".").filter((segment) => segment !== "");
   if (segments.length === 0) return { ok: true, value };
   if (segments[0] === "$schema") {
     return { ok: false, kind: "readonly", reason: "the $schema subtree is the declared guard contract and cannot be settled" };
@@ -11391,9 +11657,9 @@ function guardMvuWrite(schema, path10, value, current) {
   if (!result.ok) return result;
   return { ok: true, value: result.value, ...result.notes.length > 0 ? { note: result.notes.join("; ") } : {} };
 }
-function getMvuTreePath(tree, path10) {
+function getMvuTreePath(tree, path12) {
   let cursor = tree;
-  for (const segment of path10.split(".")) {
+  for (const segment of path12.split(".")) {
     if (!isPlainObject(cursor)) return void 0;
     cursor = cursor[segment];
   }
@@ -11419,7 +11685,7 @@ function valuesEqual(left, right) {
 }
 function diffVariables(before, after) {
   const changes = [];
-  const walk = (path10, left, right) => {
+  const walk = (path12, left, right) => {
     const leftObject = plainObject(left);
     const rightObject = plainObject(right);
     const recursible = leftObject !== void 0 && rightObject !== void 0 || left === void 0 && rightObject !== void 0 || right === void 0 && leftObject !== void 0;
@@ -11427,12 +11693,12 @@ function diffVariables(before, after) {
       const leftNext = leftObject ?? {};
       const rightNext = rightObject ?? {};
       for (const key of /* @__PURE__ */ new Set([...Object.keys(leftNext), ...Object.keys(rightNext)])) {
-        walk(path10 === "" ? key : `${path10}.${key}`, leftNext[key], rightNext[key]);
+        walk(path12 === "" ? key : `${path12}.${key}`, leftNext[key], rightNext[key]);
       }
       return;
     }
     if (!valuesEqual(left, right)) {
-      const change = { name: path10, ...left !== void 0 ? { before: left } : {} };
+      const change = { name: path12, ...left !== void 0 ? { before: left } : {} };
       if (right !== void 0) change.after = right;
       changes.push(change);
     }
@@ -11510,8 +11776,8 @@ function recordMvuTurnReceipt(chat, before, options) {
   appendMvuReceipt(chat, receipt);
   return receipt;
 }
-function setMvuTreePath(tree, path10, value) {
-  const segments = path10.split(".");
+function setMvuTreePath(tree, path12, value) {
+  const segments = path12.split(".");
   const leaf = segments.pop();
   let cursor = tree;
   for (const segment of segments) {
@@ -11521,13 +11787,13 @@ function setMvuTreePath(tree, path10, value) {
   }
   cursor[leaf] = value;
 }
-function revertMvuTreePath(tree, path10, before) {
-  const beforeValue = getMvuTreePath(before, path10);
+function revertMvuTreePath(tree, path12, before) {
+  const beforeValue = getMvuTreePath(before, path12);
   if (beforeValue !== void 0) {
-    setMvuTreePath(tree, path10, beforeValue);
+    setMvuTreePath(tree, path12, beforeValue);
     return;
   }
-  const segments = path10.split(".");
+  const segments = path12.split(".");
   const leaf = segments.pop();
   const parent = getMvuTreePath(tree, segments.join("."));
   if (parent !== null && typeof parent === "object" && !Array.isArray(parent)) {
@@ -11743,7 +12009,7 @@ async function retryMvuSettlement(db, options) {
 // packages/plugin/src/agent-tavern/anchor.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { homedir } from "node:os";
-import { join as join8, resolve } from "node:path";
+import { join as join10, resolve } from "node:path";
 var ANCHOR_EVERY_TURNS_DEFAULT = 5;
 var ANCHOR_TEXT = [
   "<tavern-anchor>",
@@ -11827,7 +12093,7 @@ function anchorTavernStore() {
 }
 function anchorDshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
-  return join8(resolve(configured || join8(homedir(), ".dsh")), ...segments);
+  return join10(resolve(configured || join10(homedir(), ".dsh")), ...segments);
 }
 async function isAgentTavernSession(sessionId) {
   try {
@@ -11862,9 +12128,9 @@ function registerAgentTavernAnchor(ctx, options = {}) {
 }
 
 // packages/plugin/src/agent-tavern/projector.ts
-import { createHash as createHash6, randomUUID as randomUUID3 } from "node:crypto";
-import { promises as fs9 } from "node:fs";
-import { join as join9 } from "node:path";
+import { createHash as createHash8, randomUUID as randomUUID3 } from "node:crypto";
+import { promises as fs11 } from "node:fs";
+import { join as join11 } from "node:path";
 var AgentTavernProjector = class _AgentTavernProjector {
   constructor(root, store5) {
     this.root = root;
@@ -11873,8 +12139,8 @@ var AgentTavernProjector = class _AgentTavernProjector {
   tails = /* @__PURE__ */ new Map();
   checkpoints = /* @__PURE__ */ new Map();
   static async open(tavernRoot, store5) {
-    const root = join9(tavernRoot, "projections");
-    await fs9.mkdir(root, { recursive: true });
+    const root = join11(tavernRoot, "projections");
+    await fs11.mkdir(root, { recursive: true });
     return new _AgentTavernProjector(root, store5);
   }
   project(session, event) {
@@ -11946,7 +12212,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
     const cached = this.checkpoints.get(sessionId);
     if (cached) return cached;
     try {
-      const parsed = JSON.parse(await fs9.readFile(this.checkpointPath(sessionId), "utf8"));
+      const parsed = JSON.parse(await fs11.readFile(this.checkpointPath(sessionId), "utf8"));
       validateCheckpoint(parsed, sessionId);
       this.checkpoints.set(sessionId, parsed);
       return parsed;
@@ -11966,14 +12232,14 @@ var AgentTavernProjector = class _AgentTavernProjector {
   async writeCheckpoint(checkpoint) {
     const target = this.checkpointPath(checkpoint.sessionId);
     const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
-    await fs9.writeFile(temporary, `${JSON.stringify(checkpoint)}
+    await fs11.writeFile(temporary, `${JSON.stringify(checkpoint)}
 `, "utf8");
-    await fs9.rename(temporary, target);
+    await fs11.rename(temporary, target);
     this.checkpoints.set(checkpoint.sessionId, checkpoint);
   }
   checkpointPath(sessionId) {
-    const name2 = createHash6("sha256").update(sessionId).digest("hex");
-    return join9(this.root, `${name2}.json`);
+    const name2 = createHash8("sha256").update(sessionId).digest("hex");
+    return join11(this.root, `${name2}.json`);
   }
 };
 function projectMessage(session, event, binding, scripts) {
@@ -12912,17 +13178,18 @@ function hostPromptSafe(text, expand = (value) => value) {
 
 // packages/plugin/src/dsh-home.ts
 import { homedir as homedir2 } from "node:os";
-import { join as join10, resolve as resolve2 } from "node:path";
+import { join as join12, resolve as resolve2 } from "node:path";
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
-  return join10(resolve2(configured || join10(homedir2(), ".dsh")), ...segments);
+  return join12(resolve2(configured || join12(homedir2(), ".dsh")), ...segments);
 }
 
 // packages/plugin/src/memory-embed.ts
-import { promises as fs10 } from "node:fs";
-import * as path8 from "node:path";
+import { promises as fs12 } from "node:fs";
+import * as path10 from "node:path";
 var EMBED_BREAKER_MS = 6e4;
 var EMBED_RETRY_BACKOFF_MS = 250;
+var EMBED_INPUT_MAX_CHARS = 6e3;
 var EMBED_PROBE_TEXT = "dsh-tavern embed probe";
 function emptyStatus() {
   return { version: 1, breakerUntil: 0 };
@@ -12937,11 +13204,11 @@ var EmbedHttpError = class extends Error {
   }
 };
 function embedStatusPath(root) {
-  return path8.join(root, "memory-vectors", "status.json");
+  return path10.join(root, "memory-vectors", "status.json");
 }
 async function readEmbedStatus(root) {
   try {
-    const parsed = JSON.parse(await fs10.readFile(embedStatusPath(root), "utf8"));
+    const parsed = JSON.parse(await fs12.readFile(embedStatusPath(root), "utf8"));
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return emptyStatus();
     return {
       version: 1,
@@ -12957,7 +13224,7 @@ async function readEmbedStatus(root) {
   }
 }
 async function writeEmbedStatus(root, status2) {
-  await fs10.mkdir(path8.dirname(embedStatusPath(root)), { recursive: true });
+  await fs12.mkdir(path10.dirname(embedStatusPath(root)), { recursive: true });
   await writeAtomicText(embedStatusPath(root), `${JSON.stringify(status2)}
 `);
 }
@@ -12984,7 +13251,7 @@ async function recordEmbedSuccess(root, info) {
   });
 }
 async function clearEmbedStatus(root) {
-  await fs10.rm(embedStatusPath(root), { force: true });
+  await fs12.rm(embedStatusPath(root), { force: true });
 }
 function resolveApiKey(config) {
   if (config.apiKeyEnv === "") return void 0;
@@ -13113,9 +13380,896 @@ async function embedProbe(root, config, options = {}) {
   }
 }
 
+// packages/plugin/src/memory-maintenance.ts
+import { randomUUID as randomUUID4 } from "node:crypto";
+
+// packages/plugin/src/memory-hybrid.ts
+async function embedMemoryRecord(input) {
+  const { root, config, vectorStore, record, fetchImpl } = input;
+  const status2 = await readEmbedStatus(root);
+  if (embedBreakerOpen(status2)) return false;
+  try {
+    const [vector] = await embedTexts(
+      config,
+      [record.content.slice(0, EMBED_INPUT_MAX_CHARS)],
+      { expectedDims: expectedDims(config, status2), fetchImpl }
+    );
+    if (vector === void 0) return false;
+    await recordEmbedSuccess(root, { model: config.model, dims: vector.length });
+    await vectorStore.put([{
+      id: record.id,
+      scope: record.scope,
+      scopeId: record.scopeId,
+      digest: memoryContentDigest(config.model, record.content),
+      model: config.model,
+      vector: encodeVector(vector)
+    }]);
+    return true;
+  } catch (cause) {
+    await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
+    return false;
+  }
+}
+
+// packages/plugin/src/memory-maintenance.ts
+var MAINTENANCE_MAX_LLM_REQUESTS = 24;
+var MAINTENANCE_OPENING_MAX_CHARS = 1e5;
+var MAINTENANCE_PAGE_RECORDS = 32;
+var MAINTENANCE_PAGE_CHARS = 16e3;
+var MAINTENANCE_SOURCE_CHARS = 24e3;
+var MAINTENANCE_SOURCE_SPAN = 400;
+var MAINTENANCE_MAX_TOKENS = 8192;
+var MAINTENANCE_CONVERSATION_MAX_CHARS = 6e5;
+var SEARCH_LIMIT = 20;
+var SEARCH_EXCERPT_CHARS = 400;
+var STRICT_TOKEN_MAX = 3;
+var TOKEN_MATCH_RATIO = 0.4;
+var MaintenanceRunConflictError = class extends Error {
+  constructor(character, chatId, runId) {
+    super(`a memory maintenance run is already active for ${character}/${chatId}`);
+    this.runId = runId;
+    this.name = "MaintenanceRunConflictError";
+  }
+  code = "MAINTENANCE_RUNNING";
+};
+var activeRuns = /* @__PURE__ */ new Map();
+function scopeKey(scope) {
+  return `${scope.character}\0${scope.chatId}`;
+}
+async function startMemoryMaintenance(ctx, deps, scope) {
+  const key = scopeKey(scope);
+  const existing = activeRuns.get(key);
+  if (existing !== void 0) throw new MaintenanceRunConflictError(scope.character, scope.chatId, existing.runId);
+  const active = {
+    runId: randomUUID4(),
+    character: scope.character,
+    chatId: scope.chatId,
+    startedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  activeRuns.set(key, active);
+  void (async () => {
+    try {
+      await executeRun(ctx, deps, scope, active);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.logger?.warn?.(`dsh-tavern: memory maintenance run crashed: ${message}`);
+      try {
+        const stateStore = await MemoryMaintenanceStore.open(deps.root);
+        const state = await stateStore.read(scope.character, scope.chatId);
+        await stateStore.write(scope.character, scope.chatId, {
+          ...state,
+          lastRun: {
+            runId: active.runId,
+            status: "error",
+            outcome: "error",
+            startedAt: active.startedAt,
+            finishedAt: (/* @__PURE__ */ new Date()).toISOString(),
+            summary: { ...state.lastRun?.summary ?? emptySummary(0), error: message }
+          }
+        });
+      } catch {
+      }
+    } finally {
+      activeRuns.delete(key);
+    }
+  })();
+  return { runId: active.runId };
+}
+async function memoryMaintenanceStatus(deps, scope) {
+  const stateStore = await MemoryMaintenanceStore.open(deps.root);
+  const state = await stateStore.read(scope.character, scope.chatId);
+  const active = activeRuns.get(scopeKey(scope));
+  if (active !== void 0) {
+    return {
+      status: "running",
+      runId: active.runId,
+      startedAt: active.startedAt,
+      pending: { ranges: [], floors: 0 },
+      receipts: state.receipts.length
+    };
+  }
+  let lastRun = state.lastRun;
+  if (lastRun?.status === "running") {
+    lastRun = {
+      ...lastRun,
+      status: "error",
+      outcome: "interrupted",
+      finishedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      summary: { ...lastRun.summary, error: "run interrupted (host process restarted); it did not complete" }
+    };
+    await stateStore.write(scope.character, scope.chatId, { ...state, lastRun });
+  }
+  const computation = await computePending(deps, scope, state.receipts);
+  const view = {
+    status: lastRun?.status ?? "done",
+    pending: { ranges: computation.pending, floors: pendingFloorCount(computation.pending) },
+    receipts: computation.validReceipts.length
+  };
+  if (lastRun !== void 0) {
+    view.runId = lastRun.runId;
+    view.startedAt = lastRun.startedAt;
+    if (lastRun.finishedAt !== void 0) view.finishedAt = lastRun.finishedAt;
+    view.summary = lastRun.summary;
+  }
+  return view;
+}
+function emptySummary(totalFloors) {
+  return {
+    totalFloors,
+    pendingRanges: [],
+    pendingFloors: 0,
+    editGroups: 0,
+    merged: 0,
+    corrected: 0,
+    created: 0,
+    deleted: 0,
+    failedGroups: 0,
+    retiredReceipts: 0,
+    retiredReasons: []
+  };
+}
+function pendingFloorCount(ranges) {
+  return ranges.reduce((total, range) => total + (range.headFloor - range.baseFloor + 1), 0);
+}
+async function computePending(deps, scope, receipts) {
+  let snapshot2;
+  try {
+    snapshot2 = await deps.db.getChatSnapshot(scope.character, scope.chatId);
+  } catch {
+    snapshot2 = void 0;
+  }
+  if (snapshot2 === void 0) {
+    return { pending: [], validReceipts: receipts, retiredReasons: ["chat snapshot unavailable; pending ranges unknown"], totalFloors: 0, chatMissing: true };
+  }
+  const floors = snapshot2.chat.messages;
+  const valid = [];
+  const retiredReasons = [];
+  for (const receipt of receipts) {
+    const sig = floorSignature(floors, receipt.baseFloor, receipt.headFloor);
+    if (sig === void 0 || sig !== receipt.floorSig) {
+      retiredReasons.push(`receipt ${receipt.runId} (floors ${receipt.baseFloor}-${receipt.headFloor}) retired: chat text changed`);
+      continue;
+    }
+    let retired;
+    for (const [id, revision] of Object.entries(receipt.recordSnapshots)) {
+      const current = await deps.memory.read(id, "chat", scope.chatId, true).catch(() => void 0);
+      if (current === void 0 || current.revision !== revision) {
+        retired = `receipt ${receipt.runId} retired: covered record '${id}' changed after maintenance`;
+        break;
+      }
+    }
+    if (retired !== void 0) {
+      retiredReasons.push(retired);
+      continue;
+    }
+    valid.push(receipt);
+  }
+  return {
+    pending: pendingRanges(floors.length, valid),
+    validReceipts: valid,
+    retiredReasons,
+    totalFloors: floors.length,
+    chatMissing: false
+  };
+}
+async function executeRun(ctx, deps, scope, active) {
+  const key = scopeKey(scope);
+  try {
+    const stateStore = await MemoryMaintenanceStore.open(deps.root);
+    const prior = await stateStore.read(scope.character, scope.chatId);
+    const computation = await computePending(deps, scope, prior.receipts);
+    const totalFloors = computation.totalFloors;
+    const summary = emptySummary(totalFloors);
+    summary.pendingRanges = computation.pending;
+    summary.pendingFloors = pendingFloorCount(computation.pending);
+    summary.retiredReceipts = computation.retiredReasons.length;
+    summary.retiredReasons = computation.retiredReasons;
+    let run;
+    await stateStore.write(scope.character, scope.chatId, {
+      receipts: computation.validReceipts,
+      lastRun: { runId: active.runId, status: "running", startedAt: active.startedAt, summary }
+    });
+    const finish = async (status2, outcome2, message) => {
+      summary.outcome = outcome2;
+      const record = {
+        runId: active.runId,
+        status: status2,
+        outcome: outcome2,
+        startedAt: active.startedAt,
+        finishedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        summary: { ...summary, llmRequests: run?.llmRequests ?? 0, budget: run?.budget ?? MAINTENANCE_MAX_LLM_REQUESTS }
+      };
+      if (message !== void 0) {
+        if (outcome2 === "error") record.summary.error = message;
+        else record.summary.report = message;
+      }
+      const latest = await stateStore.read(scope.character, scope.chatId);
+      if (latest.lastRun?.runId === active.runId || latest.lastRun === void 0) {
+        await stateStore.write(scope.character, scope.chatId, { ...latest, lastRun: record });
+      }
+    };
+    if (computation.chatMissing) {
+      await finish("error", "error", "chat snapshot unavailable; nothing maintained");
+      return;
+    }
+    if (summary.pendingFloors === 0) {
+      await finish("done", "completed", "nothing to maintain: valid receipts cover all floors");
+      return;
+    }
+    const snapshot2 = await deps.db.getChatSnapshot(scope.character, scope.chatId);
+    const selection = ctx.agentDefaultModel.currentSelection();
+    run = {
+      ctx,
+      deps,
+      scope,
+      runId: active.runId,
+      floors: snapshot2.chat.messages,
+      provider: selection.provider,
+      model: selection.model,
+      budget: MAINTENANCE_MAX_LLM_REQUESTS,
+      llmRequests: 0,
+      summary,
+      unresolvedEdits: /* @__PURE__ */ new Set(),
+      embedConfig: null
+    };
+    const records = await deps.memory.list("chat", scope.chatId);
+    let listing = renderMemoryListing(records, MAINTENANCE_OPENING_MAX_CHARS);
+    let opening = buildOpeningMessage(run, listing);
+    if (opening.length > MAINTENANCE_OPENING_MAX_CHARS) {
+      run.budget = Math.ceil(MAINTENANCE_MAX_LLM_REQUESTS / 2);
+      listing = renderMemoryListing(records, 2e4);
+      opening = buildOpeningMessage(run, listing);
+    }
+    const messages = [
+      { role: "user", id: randomUUID4(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
+    ];
+    let outcome = "completed";
+    let errorMessage2;
+    let report;
+    for (; ; ) {
+      if (run.llmRequests >= run.budget) {
+        outcome = "budget-exhausted";
+        errorMessage2 = `reached the run budget of ${run.budget} LLM requests; completed work is kept, unreported ranges stay pending`;
+        break;
+      }
+      const conversationChars = messages.reduce((total, message) => total + JSON.stringify(message.content).length, 0);
+      if (conversationChars > MAINTENANCE_CONVERSATION_MAX_CHARS) {
+        outcome = "budget-exhausted";
+        errorMessage2 = "maintenance conversation exceeded the run context guard; completed work is kept";
+        break;
+      }
+      run.llmRequests += 1;
+      const blocks = [];
+      let textBuffer = "";
+      let finishReason;
+      try {
+        for await (const chunk of ctx.llm.stream({
+          provider: run.provider,
+          model: run.model,
+          system: MAINTENANCE_SYSTEM_PROMPT,
+          messages: messages.map((message) => ({ ...message })),
+          tools: MAINTENANCE_TOOL_SCHEMAS,
+          maxTokens: MAINTENANCE_MAX_TOKENS
+        })) {
+          if (chunk.type === "block-end" && chunk.block !== null && typeof chunk.block === "object") {
+            blocks.push({ ...chunk.block });
+          } else if (chunk.type === "text-delta") {
+            textBuffer += chunk.text;
+          } else if (chunk.type === "finish") {
+            finishReason = chunk.reason;
+          }
+        }
+      } catch (error) {
+        outcome = "error";
+        errorMessage2 = `LLM request failed: ${error instanceof Error ? error.message : String(error)}`;
+        break;
+      }
+      if (finishReason === void 0) {
+        outcome = "error";
+        errorMessage2 = "LLM stream ended without a finish chunk";
+        break;
+      }
+      if (finishReason.kind === "error" || finishReason.kind === "aborted") {
+        outcome = "error";
+        errorMessage2 = `LLM stream failed (${finishReason.kind}): ${finishReason.failure?.message ?? "unknown failure"}`;
+        break;
+      }
+      if (!blocks.some((block) => block.type === "text") && textBuffer !== "") {
+        blocks.push({ type: "text", text: textBuffer });
+      }
+      const toolCalls = blocks.filter((block) => block.type === "tool-call");
+      messages.push({ role: "assistant", id: randomUUID4(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
+      if (toolCalls.length === 0) {
+        report = textBuffer !== "" ? textBuffer : blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("");
+        break;
+      }
+      if (finishReason.kind === "max-tokens") {
+        outcome = "error";
+        errorMessage2 = "maintenance response truncated at the token cap";
+        break;
+      }
+      for (const call of toolCalls) {
+        const result = await executeToolCall(run, call);
+        messages.push({
+          role: "tool",
+          id: randomUUID4(),
+          content: [{ type: "text", text: safeJson(result.payload) }],
+          source: { kind: "tool", callId: call.id },
+          toolCallId: call.id,
+          ...result.isError ? { isError: true } : {}
+        });
+      }
+    }
+    if (outcome === "error") {
+      await finish("error", outcome, errorMessage2);
+      return;
+    }
+    const closing = report !== void 0 ? report.slice(0, 2e3) : errorMessage2;
+    await finish("done", outcome, closing);
+  } finally {
+    activeRuns.delete(key);
+  }
+}
+function safeJson(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '{"error":"tool result is not serializable"}';
+  }
+}
+var MAINTENANCE_SYSTEM_PROMPT = [
+  "\u4F60\u662F\u8FD9\u4E2A\u89D2\u8272\u626E\u6F14\u804A\u5929\u7684\u8BB0\u5FC6\u7BA1\u7406\u5458\uFF08memory maintenance agent\uFF09\u3002\u4F60\u4E0D\u53C2\u4E0E\u5267\u60C5\uFF0C\u53EA\u7EF4\u62A4 chat \u4F5C\u7528\u57DF\u7684\u8BB0\u5FC6\u8BB0\u5F55\uFF1A\u7EA0\u6B63\u4E0E\u804A\u5929\u539F\u6587\u51B2\u7A81\u7684\u9648\u8FF0\u3001\u5408\u5E76\u8DE8\u5199\u5165\u6279\u6B21\u4EA7\u751F\u7684\u540C\u4E00\u4E8B\u4EF6\u91CD\u590D\u8BB0\u5F55\u3001\u5220\u9664\u88AB\u539F\u6587\u8BC1\u4F2A\u7684\u8BB0\u5FC6\u3002",
+  "\u7EAA\u5F8B\uFF1A",
+  "- \u6BCF\u4E00\u6B21\u6539\u5199\u90FD\u5FC5\u987B\u6709\u539F\u6587\u4F9D\u636E\uFF1A\u5148\u7528 SearchSource / ReadSource \u67E5\u8BC1\u76F8\u5173\u697C\u5C42\uFF0C\u4E0D\u8BB8\u51ED\u7A7A\u6539\u5199\u3002",
+  "- \u5408\u5E76\u8DE8\u6279\u6B21\u540C\u4E00\u4E8B\u4EF6\u65F6\u4FDD\u7559\u8F83\u65E9\u8BB0\u5F55\u7684\u8EAB\u4EFD\uFF08id \u4E0D\u53D8\uFF09\uFF0C\u628A\u540E\u7EED\u53D1\u5C55\u5E76\u5165\u5176\u5185\u5BB9\u5E76\u8865\u9F50\u6765\u6E90\u697C\u5C42\u8303\u56F4\uFF0C\u5220\u9664\u540E\u6765\u7684\u91CD\u590D\u5360\u4F4D\u8BB0\u5F55\u3002",
+  "- \u5206\u6E05\u5386\u53F2\u4E8B\u5B9E\u4E0E\u5F53\u524D\u72B6\u6001\uFF1B\u63A8\u6D4B\u4E0E\u4F20\u95FB\u4E0D\u5F97\u5347\u7EA7\u4E3A\u786E\u5B9A\u4E8B\u5B9E\uFF1B\u6B63\u5E38\u8BB0\u5F55\u53EF\u4EE5\u4E0D\u6539\uFF0C\u4E0D\u5F97\u4E3A\u4E86\u8868\u73B0\u5DE5\u4F5C\u91CF\u800C\u5236\u9020\u4FEE\u6539\u3002",
+  "- \u8BC1\u636E\u4E0D\u8DB3\u65F6\u4FDD\u7559\u539F\u8BB0\u5F55\uFF0C\u5E76\u5728\u6700\u7EC8\u6C47\u62A5\u4E2D\u8BF4\u660E\u672A\u89E3\u51B3\u7684\u95EE\u9898\u3002",
+  "- EditMemory \u6574\u7EC4\u539F\u5B50\u63D0\u4EA4\uFF1A\u4EFB\u4E00 expectedRevision \u51B2\u7A81\u5219\u6574\u7EC4\u5931\u8D25\uFF0C\u7528 ReadMemory \u91CD\u8BFB\u540E\u91CD\u4EA4\u6574\u7EC4\uFF1B\u653E\u5F03\u4FEE\u6B63\u7684\u6761\u76EE\u5728 CompleteMaintenance \u7684 abandonEdits \u91CC\u58F0\u660E\u3002",
+  "- \u804A\u5929\u539F\u6587\u53EA\u8BFB\uFF0C\u6C38\u4E0D\u6539\u5199\u3002",
+  "- \u5DE5\u4F5C\u5B8C\u6210\u540E\u8C03\u7528 CompleteMaintenance \u58F0\u660E\u672C\u6B21\u8986\u76D6\u7684\u697C\u9762\u8303\u56F4\uFF08\u6D88\u606F\u4E0B\u6807\uFF0C0 \u8D77\u3001headFloor \u542B\u7AEF\u70B9\uFF09\uFF0C\u518D\u7B80\u77ED\u6C47\u62A5\u6536\u5C3E\u3002"
+].join("\n");
+function buildOpeningMessage(run, listing) {
+  const ranges = run.summary.pendingRanges.map((range) => `${range.baseFloor}-${range.headFloor}`).join(", ");
+  return [
+    `\u804A\u5929 ${run.scope.character}/${run.scope.chatId} \u5171 ${run.summary.totalFloors} \u697C\uFF08\u4E0B\u6807 0-${Math.max(0, run.summary.totalFloors - 1)}\uFF09\u3002`,
+    `\u672C\u6B21\u5F85\u7EF4\u62A4\u697C\u9762\u8303\u56F4\uFF1A${ranges}\uFF08\u5171 ${run.summary.pendingFloors} \u697C\uFF09\u3002`,
+    run.summary.retiredReasons.length > 0 ? `\u4E0A\u6B21\u6536\u636E\u9000\u5F79\uFF1A${run.summary.retiredReasons.length} \u6761\uFF08\u539F\u6587/\u8BB0\u5FC6\u5728\u7EF4\u62A4\u540E\u88AB\u6539\u52A8\uFF0C\u5BF9\u5E94\u8303\u56F4\u91CD\u65B0\u5F85\u7EF4\u62A4\uFF09\u3002` : "",
+    "",
+    "\u5F53\u524D chat \u4F5C\u7528\u57DF\u8BB0\u5FC6\u6E05\u5355\uFF08\u6982\u8981\uFF0C\u53EF\u7528 ReadMemory \u7FFB\u9875/\u8FC7\u6EE4\u8BFB\u53D6\u5B8C\u6574\u5185\u5BB9\u4E0E revision\uFF09\uFF1A",
+    listing,
+    "",
+    "\u7EF4\u62A4\u6307\u4EE4\uFF1A\u5BF9\u7167\u539F\u6587\uFF08SearchSource \u5173\u952E\u8BCD\u68C0\u7D22\u3001ReadSource \u6309\u697C\u9762\u8303\u56F4\u9605\u8BFB\uFF09\u68C0\u67E5\u4E0A\u8FF0\u8BB0\u5FC6\u2014\u2014\u5408\u5E76\u8DE8\u6279\u6B21\u91CD\u590D\u4E8B\u4EF6\uFF08\u4FDD\u7559\u8F83\u65E9\u8BB0\u5F55 id\uFF09\u3001\u7EA0\u6B63\u4E0E\u539F\u6587\u51B2\u7A81\u7684\u9648\u8FF0\u3001\u5220\u9664\u88AB\u8BC1\u4F2A\u7684\u8BB0\u5F55\uFF1B\u6539\u5199\u5FC5\u987B\u6709\u539F\u6587\u4F9D\u636E\u3002\u5B8C\u6210\u540E CompleteMaintenance \u58F0\u660E\u8986\u76D6\u8303\u56F4\u5E76\u7B80\u77ED\u6C47\u62A5\u3002"
+  ].filter((part) => part !== "").join("\n");
+}
+function renderMemoryListing(records, maxChars) {
+  const lines = [];
+  let used = 0;
+  let truncated = false;
+  for (const record of records) {
+    const content = record.content.length > 400 ? `${record.content.slice(0, 400)}\u2026` : record.content;
+    const line = `- id=${record.id} kind=${record.kind} rev=${record.revision} imp=${record.importance} conf=${record.confidence}${record.tags.length > 0 ? ` tags=${record.tags.join(",")}` : ""} source=${record.source.kind}
+  ${content.replace(/\n/g, " ")}`;
+    if (used + line.length > maxChars) {
+      truncated = true;
+      break;
+    }
+    used += line.length;
+    lines.push(line);
+  }
+  if (records.length === 0) lines.push("\uFF08chat \u4F5C\u7528\u57DF\u5F53\u524D\u6CA1\u6709\u8BB0\u5FC6\u8BB0\u5F55\uFF09");
+  if (truncated) lines.push(`\u2026\uFF08\u6E05\u5355\u8FC7\u957F\u622A\u65AD\uFF0C\u5DF2\u5217 ${lines.length}/${records.length} \u6761\uFF1B\u7528 ReadMemory \u7FFB\u9875\u8BFB\u53D6\uFF09`);
+  return lines.join("\n");
+}
+var MAINTENANCE_TOOL_SCHEMAS = [
+  {
+    name: "ReadMemory",
+    description: "Page through the chat-scope memory records (32 per page, ~16k chars per page). Optional kind/query filters. Returns id/content/tags/kind/revision/importance/confidence/source for each record.",
+    parameters: {
+      type: "object",
+      properties: {
+        page: { type: "integer", description: "0-based page index" },
+        kind: { type: "string", enum: ["semantic", "episodic"] },
+        query: { type: "string", description: "Optional lexical filter over content and tags" }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "SearchSource",
+    description: "Lexical search over the chat source messages (read-only). Returns matching floor indexes with excerpts. Search misses do not prove absence \u2014 try the source floors directly with ReadSource.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Lexical query; up to 3 terms require all, longer queries require ~40% term coverage" },
+        limit: { type: "integer", description: "Maximum hits, capped at 20" }
+      },
+      required: ["query"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "ReadSource",
+    description: "Read chat source messages by floor range (read-only; the chat is never rewritten). Floors are 0-based message indexes; at most 400 floors and ~24k chars per call.",
+    parameters: {
+      type: "object",
+      properties: {
+        fromFloor: { type: "integer" },
+        toFloor: { type: "integer" }
+      },
+      required: ["fromFloor", "toFloor"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "EditMemory",
+    description: 'Atomically apply a group of memory edits. Items: {op:"update", id, expectedRevision, content?, tags?, importance?, confidence?, reason?("merge"|"correct")}, {op:"delete", id, expectedRevision}, {op:"create", content, kind, tags?, importance?, confidence?}. Any revision conflict rejects the whole group (nothing is applied); re-read and resubmit the full group.',
+    parameters: {
+      type: "object",
+      properties: {
+        edits: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            properties: {
+              op: { type: "string", enum: ["update", "delete", "create"] },
+              id: { type: "string" },
+              expectedRevision: { type: "string" },
+              content: { type: "string" },
+              kind: { type: "string", enum: ["semantic", "episodic"] },
+              tags: { type: "array", items: { type: "string" } },
+              importance: { type: "number" },
+              confidence: { type: "number" },
+              reason: { type: "string", enum: ["merge", "correct"] }
+            },
+            required: ["op"],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ["edits"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "CompleteMaintenance",
+    description: "Declare the maintained floor range (0-based, inclusive). Rejected while failed EditMemory items remain unresolved (resubmit them or list their ids in abandonEdits). Ends the run with your final report.",
+    parameters: {
+      type: "object",
+      properties: {
+        baseFloor: { type: "integer" },
+        headFloor: { type: "integer" },
+        abandonEdits: { type: "array", items: { type: "string" }, description: "Record ids (or create:content-prefix keys) you explicitly give up fixing" }
+      },
+      required: ["baseFloor", "headFloor"],
+      additionalProperties: false
+    }
+  }
+];
+async function executeToolCall(run, call) {
+  let args;
+  try {
+    args = JSON.parse(call.arguments === "" ? "{}" : call.arguments);
+  } catch {
+    return { payload: { error: `invalid JSON arguments for ${call.name}` }, isError: true };
+  }
+  try {
+    switch (call.name) {
+      case "ReadMemory":
+        return { payload: await toolReadMemory(run, args), isError: false };
+      case "SearchSource":
+        return { payload: toolSearchSource(run, args), isError: false };
+      case "ReadSource":
+        return { payload: toolReadSource(run, args), isError: false };
+      case "EditMemory":
+        return await toolEditMemory(run, args);
+      case "CompleteMaintenance":
+        return await toolCompleteMaintenance(run, args);
+      default:
+        return { payload: { error: `unknown tool '${call.name}'` }, isError: true };
+    }
+  } catch (error) {
+    return { payload: { error: error instanceof Error ? error.message : String(error) }, isError: true };
+  }
+}
+function integerArg(value) {
+  return typeof value === "number" && Number.isInteger(value) ? value : void 0;
+}
+async function toolReadMemory(run, args) {
+  const page = integerArg(args.page) ?? 0;
+  if (page < 0 || page > 1e5) throw new Error("page must be a non-negative integer");
+  const kind = args.kind === "semantic" || args.kind === "episodic" ? args.kind : void 0;
+  const query = typeof args.query === "string" ? args.query : "";
+  const tokens = query === "" ? [] : tokenizeQuery(query);
+  if (query !== "" && tokens.length === 0) throw new Error("query produced no searchable tokens");
+  const records = (await run.deps.memory.list("chat", run.scope.chatId)).filter((record) => kind === void 0 || record.kind === kind).filter((record) => tokens.length === 0 || matchedTokenCount(`${record.content}
+${record.tags.join(" ")}`, tokens) >= tokenThreshold(tokens.length));
+  const start = page * MAINTENANCE_PAGE_RECORDS;
+  const pageRecords = [];
+  let used = 0;
+  for (const record of records.slice(start)) {
+    if (pageRecords.length >= MAINTENANCE_PAGE_RECORDS) break;
+    const view = {
+      id: record.id,
+      kind: record.kind,
+      content: record.content,
+      tags: record.tags,
+      revision: record.revision,
+      importance: record.importance,
+      confidence: record.confidence,
+      source: record.source
+    };
+    const size = JSON.stringify(view).length;
+    if (pageRecords.length > 0 && used + size > MAINTENANCE_PAGE_CHARS) break;
+    if (size > MAINTENANCE_PAGE_CHARS && pageRecords.length === 0) {
+      pageRecords.push(view);
+      break;
+    }
+    used += size;
+    pageRecords.push(view);
+    if (used >= MAINTENANCE_PAGE_CHARS) break;
+  }
+  const consumed = start + pageRecords.length;
+  return {
+    total: records.length,
+    page,
+    pageSize: MAINTENANCE_PAGE_RECORDS,
+    more: consumed < records.length,
+    records: pageRecords
+  };
+}
+function tokenThreshold(total) {
+  return total <= STRICT_TOKEN_MAX ? total : Math.ceil(total * TOKEN_MATCH_RATIO);
+}
+function matchedTokenCount(text, tokens) {
+  const haystack = text.toLocaleLowerCase();
+  let matched = 0;
+  for (const token of tokens) {
+    if (haystack.includes(token)) matched += 1;
+  }
+  return matched;
+}
+function excerptAround(text, tokens, maxChars) {
+  if (text.length <= maxChars) return text;
+  const haystack = text.toLocaleLowerCase();
+  let anchor = 0;
+  for (const token of tokens) {
+    const at = haystack.indexOf(token);
+    if (at >= 0 && (anchor === 0 || at < anchor)) anchor = at;
+  }
+  const start = Math.max(0, Math.min(anchor - 80, text.length - maxChars));
+  return `${start > 0 ? "\u2026" : ""}${text.slice(start, start + maxChars)}${start + maxChars < text.length ? "\u2026" : ""}`;
+}
+function toolSearchSource(run, args) {
+  const query = typeof args.query === "string" ? args.query : "";
+  const tokens = tokenizeQuery(query.slice(0, 2e3));
+  if (tokens.length === 0) throw new Error("query requires at least one searchable token");
+  const limit = Math.min(Math.max(integerArg(args.limit) ?? 10, 1), SEARCH_LIMIT);
+  const required = tokenThreshold(tokens.length);
+  const qualified = [];
+  for (let index = run.floors.length - 1; index >= 0; index -= 1) {
+    const message = run.floors[index];
+    if (message.is_system === true || typeof message.mes !== "string") continue;
+    const matched = matchedTokenCount(message.mes, tokens);
+    if (matched < required) continue;
+    qualified.push({ floor: index, message, matched });
+  }
+  qualified.sort((left, right) => right.matched - left.matched || right.floor - left.floor);
+  const hits = qualified.slice(0, limit).map(({ floor, message }) => {
+    const excerpt2 = excerptAround(message.mes, tokens, SEARCH_EXCERPT_CHARS);
+    return {
+      floor,
+      name: message.name,
+      isUser: message.is_user === true,
+      excerpt: excerpt2,
+      truncated: excerpt2.length < message.mes.length
+    };
+  });
+  return { hits, hitCount: hits.length, truncated: qualified.length > hits.length, totalFloors: run.floors.length };
+}
+function toolReadSource(run, args) {
+  const from = integerArg(args.fromFloor);
+  const to = integerArg(args.toFloor);
+  if (from === void 0 || to === void 0) throw new Error("fromFloor and toFloor must be integers");
+  if (from < 0 || to < from) throw new Error("expected 0 <= fromFloor <= toFloor");
+  if (to >= run.floors.length) throw new Error(`toFloor ${to} is beyond the last floor ${run.floors.length - 1}`);
+  if (to - from + 1 > MAINTENANCE_SOURCE_SPAN) throw new Error(`floor span is capped at ${MAINTENANCE_SOURCE_SPAN} floors per call`);
+  const messages = [];
+  let used = 0;
+  let truncated = false;
+  for (let floor = from; floor <= to; floor += 1) {
+    const message = run.floors[floor];
+    const content = typeof message.mes === "string" ? message.mes : "";
+    const remaining = MAINTENANCE_SOURCE_CHARS - used;
+    const body = content.length <= remaining ? content : content.slice(0, Math.max(0, remaining));
+    messages.push({
+      floor,
+      name: message.name,
+      isUser: message.is_user === true,
+      isSystem: message.is_system === true,
+      content: body,
+      truncated: body.length < content.length
+    });
+    used += body.length;
+    if (body.length < content.length || used >= MAINTENANCE_SOURCE_CHARS) {
+      truncated = truncated || body.length < content.length || floor < to;
+      break;
+    }
+  }
+  return { messages, spanFrom: from, spanTo: to, truncated, totalFloors: run.floors.length };
+}
+function parseEdits(value) {
+  if (!Array.isArray(value) || value.length === 0) throw new Error("edits must be a non-empty array");
+  const parsed = [];
+  value.forEach((entry, index) => {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`edits[${index}] must be an object`);
+    const record = entry;
+    if (record.op === "update") {
+      if (typeof record.id !== "string" || record.id === "") throw new Error(`edits[${index}].id is required`);
+      if (typeof record.expectedRevision !== "string" || record.expectedRevision === "") throw new Error(`edits[${index}].expectedRevision is required`);
+      if (record.content !== void 0 && typeof record.content !== "string") throw new Error(`edits[${index}].content must be a string`);
+      if (record.tags !== void 0 && (!Array.isArray(record.tags) || record.tags.some((tag) => typeof tag !== "string"))) throw new Error(`edits[${index}].tags must be a string array`);
+      if (record.importance !== void 0 && (typeof record.importance !== "number" || !Number.isFinite(record.importance))) throw new Error(`edits[${index}].importance must be a number`);
+      if (record.confidence !== void 0 && (typeof record.confidence !== "number" || !Number.isFinite(record.confidence))) throw new Error(`edits[${index}].confidence must be a number`);
+      parsed.push({
+        op: "update",
+        id: record.id,
+        expectedRevision: record.expectedRevision,
+        ...record.content === void 0 ? {} : { content: record.content },
+        ...record.tags === void 0 ? {} : { tags: record.tags },
+        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, record.importance)) },
+        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, record.confidence)) },
+        ...record.reason === "merge" ? { reason: "merge" } : {}
+      });
+      return;
+    }
+    if (record.op === "delete") {
+      if (typeof record.id !== "string" || record.id === "") throw new Error(`edits[${index}].id is required`);
+      if (typeof record.expectedRevision !== "string" || record.expectedRevision === "") throw new Error(`edits[${index}].expectedRevision is required`);
+      parsed.push({ op: "delete", id: record.id, expectedRevision: record.expectedRevision });
+      return;
+    }
+    if (record.op === "create") {
+      if (typeof record.content !== "string" || record.content.trim() === "") throw new Error(`edits[${index}].content is required`);
+      if (record.kind !== "semantic" && record.kind !== "episodic") throw new Error(`edits[${index}].kind must be semantic or episodic`);
+      if (record.tags !== void 0 && (!Array.isArray(record.tags) || record.tags.some((tag) => typeof tag !== "string"))) throw new Error(`edits[${index}].tags must be a string array`);
+      parsed.push({
+        op: "create",
+        content: record.content,
+        kind: record.kind,
+        ...record.tags === void 0 ? {} : { tags: record.tags },
+        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, record.importance)) },
+        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, record.confidence)) }
+      });
+      return;
+    }
+    throw new Error(`edits[${index}].op must be update, delete or create`);
+  });
+  return parsed;
+}
+function editKey(edit) {
+  return edit.op === "create" ? `create:${edit.content.slice(0, 24)}` : edit.id;
+}
+async function toolEditMemory(run, args) {
+  let edits;
+  try {
+    edits = parseEdits(args.edits);
+  } catch (error) {
+    run.summary.failedGroups += 1;
+    return { payload: { error: error instanceof Error ? error.message : String(error), applied: false }, isError: true };
+  }
+  const digest = () => {
+    for (const edit of edits) run.unresolvedEdits.delete(editKey(edit));
+  };
+  const markUnresolved = () => {
+    for (const edit of edits) run.unresolvedEdits.add(editKey(edit));
+  };
+  const conflicts = [];
+  for (const [index, edit] of edits.entries()) {
+    if (edit.op === "create") continue;
+    const current = await run.deps.memory.read(edit.id, "chat", run.scope.chatId, true);
+    if (current === void 0) {
+      conflicts.push({ index, id: edit.id, problem: "record not found in chat scope" });
+      continue;
+    }
+    if (current.revision !== edit.expectedRevision) {
+      conflicts.push({ index, id: edit.id, problem: "revision conflict", expectedRevision: edit.expectedRevision, actualRevision: current.revision });
+    }
+  }
+  if (conflicts.length > 0) {
+    run.summary.failedGroups += 1;
+    markUnresolved();
+    return {
+      payload: {
+        error: "edit group rejected: revision conflicts found; nothing was applied",
+        conflicts,
+        hint: "re-read the records with ReadMemory and resubmit the whole group with fresh revisions"
+      },
+      isError: true
+    };
+  }
+  const rollback = [];
+  const results = [];
+  try {
+    for (const edit of edits) {
+      if (edit.op === "update") {
+        const previous = await run.deps.memory.read(edit.id, "chat", run.scope.chatId, true);
+        const record = await run.deps.memory.put({
+          id: previous.id,
+          scope: "chat",
+          scopeId: run.scope.chatId,
+          kind: previous.kind,
+          content: edit.content ?? previous.content,
+          tags: edit.tags ?? previous.tags,
+          importance: edit.importance ?? previous.importance,
+          confidence: edit.confidence ?? previous.confidence,
+          ...previous.expiresAt === void 0 ? {} : { expiresAt: previous.expiresAt },
+          // 更新保留原记录 source（出处不因维护丢失；维护归属由 revision + 收据快照证明）。
+          source: previous.source
+        }, edit.expectedRevision);
+        rollback.push(() => restoreRecord(run, previous));
+        if (edit.reason === "merge") run.summary.merged += 1;
+        else run.summary.corrected += 1;
+        results.push({ op: "update", id: record.id, revision: record.revision });
+      } else if (edit.op === "delete") {
+        const previous = await run.deps.memory.read(edit.id, "chat", run.scope.chatId, true);
+        await run.deps.memory.forget(edit.id, "chat", run.scope.chatId, edit.expectedRevision);
+        rollback.push(() => restoreRecord(run, previous));
+        run.summary.deleted += 1;
+        results.push({ op: "delete", id: edit.id });
+      } else {
+        const record = await run.deps.memory.put({
+          scope: "chat",
+          scopeId: run.scope.chatId,
+          kind: edit.kind,
+          content: edit.content,
+          ...edit.tags === void 0 ? {} : { tags: edit.tags },
+          ...edit.importance === void 0 ? {} : { importance: edit.importance },
+          ...edit.confidence === void 0 ? {} : { confidence: edit.confidence },
+          source: { kind: "maintenance", runId: run.runId, character: run.scope.character, chatId: run.scope.chatId }
+        });
+        rollback.push(async () => {
+          const current = await run.deps.memory.read(record.id, "chat", run.scope.chatId, true).catch(() => void 0);
+          if (current !== void 0) {
+            await run.deps.memory.forget(record.id, "chat", run.scope.chatId, current.revision).catch(() => {
+            });
+          }
+        });
+        run.summary.created += 1;
+        results.push({ op: "create", id: record.id, revision: record.revision });
+      }
+    }
+  } catch (error) {
+    for (const undo of rollback.reverse()) await undo().catch(() => {
+    });
+    run.summary.failedGroups += 1;
+    markUnresolved();
+    return {
+      payload: {
+        error: `edit group failed mid-apply and was rolled back: ${error instanceof Error ? error.message : String(error)}`,
+        applied: false
+      },
+      isError: true
+    };
+  }
+  digest();
+  run.summary.editGroups += 1;
+  for (const edit of edits) {
+    if (edit.op === "delete") {
+      await run.deps.vectors.delete(edit.id, "chat", run.scope.chatId).catch(() => {
+      });
+    }
+  }
+  for (const [index, edit] of edits.entries()) {
+    if (edit.op === "update") {
+      const record = await run.deps.memory.read(edit.id, "chat", run.scope.chatId);
+      if (record !== void 0) await embedEditedRecord(run, record);
+    } else if (edit.op === "create") {
+      const created = results[index];
+      const record = await run.deps.memory.read(created.id, "chat", run.scope.chatId);
+      if (record !== void 0) await embedEditedRecord(run, record);
+    }
+  }
+  return { payload: { ok: true, applied: edits.length, results }, isError: false };
+}
+async function restoreRecord(run, previous) {
+  const current = await run.deps.memory.read(previous.id, "chat", run.scope.chatId, true);
+  if (current === void 0) return;
+  await run.deps.memory.put({
+    id: previous.id,
+    scope: previous.scope,
+    scopeId: previous.scopeId,
+    kind: previous.kind,
+    content: previous.content,
+    tags: previous.tags,
+    importance: previous.importance,
+    confidence: previous.confidence,
+    ...previous.expiresAt === void 0 ? {} : { expiresAt: previous.expiresAt },
+    source: previous.source
+  }, current.revision);
+}
+async function embedEditedRecord(run, record) {
+  try {
+    if (run.embedConfig === null) {
+      const state = await run.deps.db.getState();
+      run.embedConfig = normalizeMemoryEmbedding(state.memoryEmbedding);
+    }
+    if (run.embedConfig === void 0) return;
+    await embedMemoryRecord({
+      root: run.deps.root,
+      config: run.embedConfig,
+      vectorStore: run.deps.vectors,
+      record
+    });
+  } catch {
+  }
+}
+async function toolCompleteMaintenance(run, args) {
+  const base = integerArg(args.baseFloor);
+  const head = integerArg(args.headFloor);
+  if (base === void 0 || head === void 0) throw new Error("baseFloor and headFloor must be integers");
+  if (run.floors.length === 0) throw new Error("the chat has no floors to declare");
+  if (base < 0 || head < base || head >= run.floors.length) {
+    throw new Error(`expected 0 <= baseFloor <= headFloor <= ${run.floors.length - 1}`);
+  }
+  if (Array.isArray(args.abandonEdits)) {
+    for (const key of args.abandonEdits) {
+      if (typeof key === "string") run.unresolvedEdits.delete(key);
+    }
+  }
+  if (run.unresolvedEdits.size > 0) {
+    return {
+      payload: {
+        error: "failed EditMemory items remain unresolved; the completion is not recorded",
+        unresolved: [...run.unresolvedEdits],
+        hint: "resubmit corrected EditMemory groups, or declare the ids you give up in abandonEdits"
+      },
+      isError: true
+    };
+  }
+  const sig = floorSignature(run.floors, base, head);
+  if (sig === void 0) throw new Error("floor range no longer resolvable against the run snapshot");
+  const records = await run.deps.memory.list("chat", run.scope.chatId);
+  const recordSnapshots = {};
+  for (const record of records) recordSnapshots[record.id] = record.revision;
+  const stateStore = await MemoryMaintenanceStore.open(run.deps.root);
+  const state = await stateStore.read(run.scope.character, run.scope.chatId);
+  const receipts = appendReceipt(state.receipts, {
+    runId: run.runId,
+    baseFloor: base,
+    headFloor: head,
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    floorSig: sig,
+    recordSnapshots
+  });
+  await stateStore.write(run.scope.character, run.scope.chatId, { ...state, receipts });
+  run.summary.completion = { baseFloor: base, headFloor: head };
+  return { payload: { ok: true, baseFloor: base, headFloor: head, coveredRecords: records.length }, isError: false };
+}
+
 // packages/plugin/src/update/service.ts
 import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname6, join as join13 } from "node:path";
+import { dirname as dirname8, join as join15 } from "node:path";
 
 // packages/plugin/src/update/github.ts
 var UPDATE_REPOSITORY = "LingyeSoul/dsh-tavern";
@@ -13470,7 +14624,7 @@ function curlGet(url, accept, timeoutMs, exec = execFile2) {
 import { spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname as dirname5, join as join12 } from "node:path";
+import { dirname as dirname7, join as join14 } from "node:path";
 var DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
 var SHIPPED_FILES = ["index.mjs", "agent.mjs", "compaction.mjs", "novel.mjs", "version.json", "cordis.patch.yml", "README.md", "package.json"];
 var SHIPPED_DIRS = ["client"];
@@ -13609,7 +14763,7 @@ function resolveDesktopCli(argv = process.argv, execPath = process.execPath, exi
   }
   const runtimeDir = typeof argv[2] === "string" ? argv[2].trim() : "";
   if (runtimeDir === "") return null;
-  const cli = join12(runtimeDir, "node_modules", "@deepseek-ai", "dsh-desktop-host", "lib", "cli.js");
+  const cli = join14(runtimeDir, "node_modules", "@deepseek-ai", "dsh-desktop-host", "lib", "cli.js");
   if (!exists(cli)) return null;
   return { command: execPath, args: ["--expose-internals", cli], env: { ELECTRON_RUN_AS_NODE: "1" } };
 }
@@ -13724,7 +14878,7 @@ async function installViaCheckout(request) {
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
   const repository = repositorySlug(request.repository);
   const profile = resolveProfileName(request.ctx);
-  const checkout = mkdtempSync(join12(tmpdir(), "dsh-tavern-checkout-"));
+  const checkout = mkdtempSync(join14(tmpdir(), "dsh-tavern-checkout-"));
   try {
     request.log(`fallback: git clone --depth 1 https://github.com/${repository}.git`);
     await mustRun("git", ["clone", "--depth", "1", "--branch", request.ref, `https://github.com/${repository}.git`, checkout], request);
@@ -13736,7 +14890,7 @@ async function installViaCheckout(request) {
         await mustRun("git", ["-C", checkout, "checkout", "--quiet", request.commit], request);
       }
     }
-    const source = join12(checkout, "packages", "plugin");
+    const source = join14(checkout, "packages", "plugin");
     if (!existsSync(source)) throw new Error("packages/plugin is missing from the checkout");
     const copied = copyShippedFiles(source, request.pluginDir);
     if (ensureVersionStamp(source, request.pluginDir, request.commit)) copied.push("version.json (synthesized)");
@@ -13775,18 +14929,18 @@ async function mustRun(command, args, request) {
 function copyShippedFiles(sourceDir, targetDir) {
   const copied = [];
   for (const file of SHIPPED_FILES) {
-    const from = join12(sourceDir, file);
+    const from = join14(sourceDir, file);
     if (!existsSync(from)) continue;
-    replaceFileAtomic(from, join12(targetDir, file));
+    replaceFileAtomic(from, join14(targetDir, file));
     copied.push(file);
   }
   for (const dir of SHIPPED_DIRS) {
-    const from = join12(sourceDir, dir);
+    const from = join14(sourceDir, dir);
     if (!existsSync(from)) continue;
     for (const file of listFiles(from)) {
       const relative3 = file.slice(from.length + 1);
-      const to = join12(targetDir, dir, relative3);
-      mkdirSync(dirname5(to), { recursive: true });
+      const to = join14(targetDir, dir, relative3);
+      mkdirSync(dirname7(to), { recursive: true });
       writeFileAtomic(to, readFileSync(file));
       copied.push(`${dir}/${relative3.replaceAll("\\", "/")}`);
     }
@@ -13794,13 +14948,13 @@ function copyShippedFiles(sourceDir, targetDir) {
   return copied;
 }
 function ensureVersionStamp(sourceDir, targetDir, commit) {
-  if (existsSync(join12(sourceDir, "version.json"))) return false;
+  if (existsSync(join14(sourceDir, "version.json"))) return false;
   try {
-    const version = JSON.parse(readFileSync(join12(targetDir, "package.json"), "utf8"))?.version;
+    const version = JSON.parse(readFileSync(join14(targetDir, "package.json"), "utf8"))?.version;
     if (typeof version !== "string" || version.trim() === "") return false;
     const stamp = { version: version.trim() };
     if (isCommit(commit)) stamp.commit = shortCommit(commit);
-    writeFileAtomic(join12(targetDir, "version.json"), `${JSON.stringify(stamp, null, 2)}
+    writeFileAtomic(join14(targetDir, "version.json"), `${JSON.stringify(stamp, null, 2)}
 `);
     return true;
   } catch {
@@ -13813,7 +14967,7 @@ function listFiles(root) {
   while (pending.length > 0) {
     const current = pending.pop();
     for (const entry of readdirSyncSafe(current)) {
-      const full = join12(current, entry);
+      const full = join14(current, entry);
       const stat = statSyncSafe(full);
       if (stat === null) continue;
       if (stat.isDirectory()) pending.push(full);
@@ -13822,16 +14976,16 @@ function listFiles(root) {
   }
   return found;
 }
-function readdirSyncSafe(path10) {
+function readdirSyncSafe(path12) {
   try {
-    return readdirSync(path10);
+    return readdirSync(path12);
   } catch {
     return [];
   }
 }
-function statSyncSafe(path10) {
+function statSyncSafe(path12) {
   try {
-    return statSync(path10);
+    return statSync(path12);
   } catch {
     return null;
   }
@@ -13840,14 +14994,14 @@ function readInstalledStamp(pluginDir, spec = "") {
   let version = UNKNOWN_FIELD;
   let commit = UNKNOWN_FIELD;
   try {
-    const generated = JSON.parse(readFileSync(join12(pluginDir, "version.json"), "utf8"));
+    const generated = JSON.parse(readFileSync(join14(pluginDir, "version.json"), "utf8"));
     if (typeof generated?.version === "string" && generated.version.trim() !== "") version = generated.version.trim();
     if (isCommit(generated?.commit)) commit = shortCommit(generated.commit);
   } catch {
   }
   if (version === UNKNOWN_FIELD) {
     try {
-      const manifest = JSON.parse(readFileSync(join12(pluginDir, "package.json"), "utf8"));
+      const manifest = JSON.parse(readFileSync(join14(pluginDir, "package.json"), "utf8"));
       if (typeof manifest?.version === "string" && manifest.version.trim() !== "") version = manifest.version.trim();
     } catch {
     }
@@ -14125,7 +15279,7 @@ var TavernUpdateService = class {
     }
   }
   cachePath() {
-    return join13(this.options.home, UPDATE_CACHE_FILE);
+    return join15(this.options.home, UPDATE_CACHE_FILE);
   }
   loadCache() {
     try {
@@ -14153,8 +15307,8 @@ var TavernUpdateService = class {
   }
   persistCache() {
     try {
-      const path10 = this.cachePath();
-      mkdirSync2(dirname6(path10), { recursive: true });
+      const path12 = this.cachePath();
+      mkdirSync2(dirname8(path12), { recursive: true });
       const payload = {
         schemaVersion: UPDATE_CACHE_SCHEMA,
         status: this.status,
@@ -14165,10 +15319,10 @@ var TavernUpdateService = class {
         remote: this.remote,
         pendingRestart: this.pendingRestart
       };
-      const temp = `${path10}.tmp`;
+      const temp = `${path12}.tmp`;
       writeFileSync2(temp, `${JSON.stringify(payload, null, 2)}
 `, "utf8");
-      renameSync2(temp, path10);
+      renameSync2(temp, path12);
     } catch {
     }
   }
@@ -14202,14 +15356,14 @@ function updateChangelog(snapshot2, limit = 8) {
 }
 
 // packages/plugin/src/mods/host.ts
-import { promises as fs12 } from "node:fs";
+import { promises as fs14 } from "node:fs";
 import { mkdir as mkdir3 } from "node:fs/promises";
-import { isAbsolute, join as join15, relative, resolve as resolve3 } from "node:path";
+import { isAbsolute, join as join17, relative, resolve as resolve3 } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // packages/plugin/src/mods/audit.ts
 import { appendFile, mkdir } from "node:fs/promises";
-import { dirname as dirname7 } from "node:path";
+import { dirname as dirname9 } from "node:path";
 var ModAuditLog = class {
   constructor(file) {
     this.file = file;
@@ -14229,7 +15383,7 @@ var ModAuditLog = class {
     const written = this.tail.catch(() => {
     }).then(async () => {
       try {
-        await mkdir(dirname7(this.file), { recursive: true });
+        await mkdir(dirname9(this.file), { recursive: true });
         await appendFile(this.file, line, "utf8");
       } catch (cause) {
         this.warn?.(`dsh-tavern: mod audit append failed: ${cause instanceof Error ? cause.message : String(cause)}`);
@@ -14275,8 +15429,8 @@ var ModEventBus = class {
   }
 };
 var modEvents = new ModEventBus();
-function emitChatSaved(character, chatId, revision) {
-  return modEvents.emit("chat-saved", { character, chatId, revision });
+function emitChatSaved(character, chatId, revision, floorCount) {
+  return modEvents.emit("chat-saved", { character, chatId, revision, floorCount });
 }
 function emitAssetsSaved(kind, name2) {
   return modEvents.emit("assets-saved", { kind, name: name2 });
@@ -14428,8 +15582,8 @@ function claimedToolNames() {
 // packages/plugin/src/mods/http.ts
 var MOD_HTTP_METHODS = /* @__PURE__ */ new Set(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]);
 var RESERVED_MOD_SUBROUTE_POST_PATHS = /* @__PURE__ */ new Set(["enable", "disable", "reload"]);
-function isReservedModSubroutePostPath(path10) {
-  return RESERVED_MOD_SUBROUTE_POST_PATHS.has(path10) || path10 === "button" || path10.startsWith("button/");
+function isReservedModSubroutePostPath(path12) {
+  return RESERVED_MOD_SUBROUTE_POST_PATHS.has(path12) || path12 === "button" || path12.startsWith("button/");
 }
 var MOD_HTML_DEFAULT_CSP = [
   "default-src 'none'",
@@ -14447,41 +15601,41 @@ var MOD_HTML_DEFAULT_CSP = [
 function createModRouteTable() {
   const entries = [];
   return {
-    register(method, path10, handler) {
+    register(method, path12, handler) {
       const normalizedMethod = String(method ?? "").toUpperCase();
       if (!MOD_HTTP_METHODS.has(normalizedMethod)) {
         throw new Error(`unsupported mod route method '${String(method)}'`);
       }
-      if (!isValidModHttpPath(path10)) {
-        throw new Error(`invalid mod route path '${String(path10)}'`);
+      if (!isValidModHttpPath(path12)) {
+        throw new Error(`invalid mod route path '${String(path12)}'`);
       }
-      if (normalizedMethod === "POST" && isReservedModSubroutePostPath(path10)) {
-        throw new Error(`mod route POST ${path10} is reserved by host management routes`);
+      if (normalizedMethod === "POST" && isReservedModSubroutePostPath(path12)) {
+        throw new Error(`mod route POST ${path12} is reserved by host management routes`);
       }
       if (typeof handler !== "function") throw new Error("mod route handler must be a function");
-      if (entries.some((entry) => entry.method === normalizedMethod && entry.path === path10)) {
-        throw new Error(`mod route ${normalizedMethod} ${path10} is already registered`);
+      if (entries.some((entry) => entry.method === normalizedMethod && entry.path === path12)) {
+        throw new Error(`mod route ${normalizedMethod} ${path12} is already registered`);
       }
-      entries.push({ method: normalizedMethod, path: path10, handler });
+      entries.push({ method: normalizedMethod, path: path12, handler });
       return () => {
-        const index = entries.findIndex((entry) => entry.method === normalizedMethod && entry.path === path10 && entry.handler === handler);
+        const index = entries.findIndex((entry) => entry.method === normalizedMethod && entry.path === path12 && entry.handler === handler);
         if (index >= 0) entries.splice(index, 1);
       };
     },
-    find(method, path10) {
+    find(method, path12) {
       const normalizedMethod = String(method ?? "").toUpperCase();
-      return entries.find((entry) => entry.method === normalizedMethod && entry.path === path10)?.handler;
+      return entries.find((entry) => entry.method === normalizedMethod && entry.path === path12)?.handler;
     },
     size: () => entries.length
   };
 }
 var SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-function isValidModHttpPath(path10) {
-  if (typeof path10 !== "string" || path10 === "") return false;
-  if (path10.length > 200) return false;
-  if (path10.includes("\\") || path10.includes("%")) return false;
-  if (path10.startsWith("/") || path10.endsWith("/")) return false;
-  const segments = path10.split("/");
+function isValidModHttpPath(path12) {
+  if (typeof path12 !== "string" || path12 === "") return false;
+  if (path12.length > 200) return false;
+  if (path12.includes("\\") || path12.includes("%")) return false;
+  if (path12.startsWith("/") || path12.endsWith("/")) return false;
+  const segments = path12.split("/");
   if (segments.some((segment) => segment === "." || segment === ".." || !SEGMENT_PATTERN.test(segment))) return false;
   return true;
 }
@@ -14896,9 +16050,9 @@ function countSpecifiedSegments(literal) {
 }
 
 // packages/plugin/src/mods/storage.ts
-import { promises as fs11 } from "node:fs";
+import { promises as fs13 } from "node:fs";
 import { mkdir as mkdir2 } from "node:fs/promises";
-import { dirname as dirname8 } from "node:path";
+import { dirname as dirname10 } from "node:path";
 var MOD_STORAGE_VALUE_LIMIT = 256 * 1024;
 var MOD_STORAGE_TOTAL_LIMIT = 1024 * 1024;
 var KEY_PATTERN = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
@@ -14949,7 +16103,7 @@ var ModStorage = class {
   async readFile() {
     let text;
     try {
-      text = await fs11.readFile(this.file, "utf8");
+      text = await fs13.readFile(this.file, "utf8");
     } catch (cause) {
       if (cause.code === "ENOENT") return void 0;
       throw cause;
@@ -14969,7 +16123,7 @@ var ModStorage = class {
       this.options.onQuota?.(message);
       throw new Error(message);
     }
-    await mkdir2(dirname8(this.file), { recursive: true });
+    await mkdir2(dirname10(this.file), { recursive: true });
     await writeAtomicText(this.file, text);
   }
   /** 排空在飞写（宿主卸载/reload 前调用）：返回时**该文件**队列上全部写
@@ -15012,7 +16166,7 @@ function inspectValue(value) {
 // packages/plugin/src/mods/install.ts
 import { execFile as execFile3 } from "node:child_process";
 import { cpSync, existsSync as existsSync2, mkdtempSync as mkdtempSync2, readFileSync as readFileSync3, rmSync as rmSync2 } from "node:fs";
-import { join as join14 } from "node:path";
+import { join as join16 } from "node:path";
 import { tmpdir as tmpdir2 } from "node:os";
 function parseGitSource(input) {
   const text = typeof input === "string" ? input.trim() : "";
@@ -15087,13 +16241,13 @@ async function installModFromGit(options) {
       throw new Error(`repository has no readable mod.json at its root (${source.repository}): ${cause instanceof Error ? cause.message : String(cause)}`);
     }
   }
-  const workRoot = mkdtempSync2(join14(tmpdir2(), "dsh-tavern-modinstall-"));
+  const workRoot = mkdtempSync2(join16(tmpdir2(), "dsh-tavern-modinstall-"));
   try {
-    const cloneDir = join14(workRoot, "clone");
+    const cloneDir = join16(workRoot, "clone");
     await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs);
     let manifestRaw;
     try {
-      manifestRaw = JSON.parse(readFileSync3(join14(cloneDir, "mod.json"), "utf8"));
+      manifestRaw = JSON.parse(readFileSync3(join16(cloneDir, "mod.json"), "utf8"));
     } catch (cause) {
       throw new Error(`repository has no readable mod.json at its root: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
@@ -15101,7 +16255,7 @@ async function installModFromGit(options) {
     const check = checkModManifest(manifestRaw, { directory: idField });
     if (!check.ok) throw new Error(`invalid mod.json: ${check.errors.join("; ")}`);
     const modId = check.manifest.id;
-    const target = join14(options.root, "mods", modId);
+    const target = join16(options.root, "mods", modId);
     const replaced = existsSync2(target);
     if (replaced && options.force !== true) {
       throw new Error(`mod '${modId}' is already installed (POST again with force to replace it)`);
@@ -15130,8 +16284,8 @@ function modsDisabledByEnv() {
 var ModHost = class _ModHost {
   constructor(options) {
     this.options = options;
-    this.modsRoot = join15(options.root, "mods");
-    this.audit = new ModAuditLog(join15(this.modsRoot, "audit.jsonl"));
+    this.modsRoot = join17(options.root, "mods");
+    this.audit = new ModAuditLog(join17(this.modsRoot, "audit.jsonl"));
     this.logger = options.ctx?.logger;
     this.audit.setLogger((message) => this.logger?.warn?.(message));
   }
@@ -15359,7 +16513,7 @@ var ModHost = class _ModHost {
   }
   /** 扫描 mods/ 直接子目录：只读 mod.json、过校验，不执行任何 Mod 代码。 */
   async scan() {
-    const entries = await fs12.readdir(this.modsRoot, { withFileTypes: true }).catch((cause) => {
+    const entries = await fs14.readdir(this.modsRoot, { withFileTypes: true }).catch((cause) => {
       if (cause.code === "ENOENT") return [];
       throw cause;
     });
@@ -15371,7 +16525,7 @@ var ModHost = class _ModHost {
       const id = directory;
       let raw;
       try {
-        raw = JSON.parse(await fs12.readFile(join15(this.modsRoot, directory, "mod.json"), "utf8"));
+        raw = JSON.parse(await fs14.readFile(join17(this.modsRoot, directory, "mod.json"), "utf8"));
       } catch (cause) {
         const message = `mod.json is missing or unreadable: ${cause instanceof Error ? cause.message : String(cause)}`;
         nextBroken.set(id, { message, ...salvageManifestFields(void 0) });
@@ -15403,14 +16557,14 @@ var ModHost = class _ModHost {
         await this.audit.record(id, "skip", message);
         continue;
       }
-      const entryStat = await fs12.stat(entryPath).catch(() => void 0);
+      const entryStat = await fs14.stat(entryPath).catch(() => void 0);
       if (entryStat?.isFile() !== true) {
         const message = `main entry '${manifest.main}' not found`;
         nextBlocked.set(id, { manifest, reason: message });
         await this.audit.record(id, "skip", message);
         continue;
       }
-      nextDiscovered.set(id, { manifest, directory: join15(this.modsRoot, directory), entryPath });
+      nextDiscovered.set(id, { manifest, directory: join17(this.modsRoot, directory), entryPath });
     }
     this.discovered.clear();
     this.broken.clear();
@@ -15434,14 +16588,14 @@ var ModHost = class _ModHost {
       offRegistrations: [],
       surfaces: { hooks: /* @__PURE__ */ new Set(), tools: /* @__PURE__ */ new Set(), http: /* @__PURE__ */ new Set() },
       buttons: /* @__PURE__ */ new Map(),
-      storage: new ModStorage(join15(disc.directory, "data", "state.json"), {
+      storage: new ModStorage(join17(disc.directory, "data", "state.json"), {
         onQuota: (message) => {
           void this.audit.record(id, "storage-quota", message);
         }
       })
     };
     try {
-      await mkdir3(join15(disc.directory, "data"), { recursive: true });
+      await mkdir3(join17(disc.directory, "data"), { recursive: true });
       const url = pathToFileURL(disc.entryPath).href + (cacheBust ? `?t=${Date.now()}` : "");
       const module = await import(url);
       if (typeof module?.setup !== "function") {
@@ -15596,9 +16750,9 @@ var ModHost = class _ModHost {
         }
       },
       http: {
-        route: (method, path10, handler) => {
-          const off = record.routeTable.register(method, path10, handler);
-          record.surfaces.http.add(`${String(method ?? "").toUpperCase()} ${String(path10 ?? "")}`);
+        route: (method, path12, handler) => {
+          const off = record.routeTable.register(method, path12, handler);
+          record.surfaces.http.add(`${String(method ?? "").toUpperCase()} ${String(path12 ?? "")}`);
           return tracked(off);
         }
       },
@@ -15882,8 +17036,8 @@ function createModAssets(dbProvider) {
 }
 
 // packages/plugin/src/card-workbench/plans.ts
-import { promises as fs13 } from "node:fs";
-import * as path9 from "node:path";
+import { promises as fs15 } from "node:fs";
+import * as path11 from "node:path";
 var MAX_PLAN_CHANGES = 16;
 var MAX_PLAN_ENTRIES = 32;
 var MAX_ENTRY_FIELDS = 64;
@@ -15893,15 +17047,15 @@ var MAX_NOTE_LENGTH = 500;
 var MAX_WORLD_NAME_LENGTH = 200;
 var PLAN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 function plansDir(dir) {
-  return path9.join(dir, "card-workbench", "plans");
+  return path11.join(dir, "card-workbench", "plans");
 }
 function planFile(dir, planId) {
-  return path9.join(plansDir(dir), `${planId}.json`);
+  return path11.join(plansDir(dir), `${planId}.json`);
 }
 async function writeAtomicText3(file, text) {
   const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-  await fs13.writeFile(tmp, text, "utf8");
-  await fs13.rename(tmp, file);
+  await fs15.writeFile(tmp, text, "utf8");
+  await fs15.rename(tmp, file);
 }
 function newPlanId() {
   return `plan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -16065,7 +17219,7 @@ async function proposeCardPlan(dir, character, input) {
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     status: "pending"
   };
-  await fs13.mkdir(plansDir(dir), { recursive: true });
+  await fs15.mkdir(plansDir(dir), { recursive: true });
   await writeAtomicText3(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
@@ -16095,7 +17249,7 @@ async function proposeWorldPlan(dir, world, input) {
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     status: "pending"
   };
-  await fs13.mkdir(plansDir(dir), { recursive: true });
+  await fs15.mkdir(plansDir(dir), { recursive: true });
   await writeAtomicText3(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
@@ -16104,7 +17258,7 @@ async function getPlan(dir, planId) {
   if (typeof planId !== "string" || !PLAN_ID_PATTERN.test(planId)) return void 0;
   let text;
   try {
-    text = (await fs13.readFile(planFile(dir, planId))).toString("utf8");
+    text = (await fs15.readFile(planFile(dir, planId))).toString("utf8");
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -16114,7 +17268,7 @@ async function getPlan(dir, planId) {
 async function listPlans(dir, filter = {}) {
   let files;
   try {
-    files = await fs13.readdir(plansDir(dir));
+    files = await fs15.readdir(plansDir(dir));
   } catch (cause) {
     if (cause.code === "ENOENT") return [];
     throw cause;
@@ -16123,7 +17277,7 @@ async function listPlans(dir, filter = {}) {
   for (const file of files) {
     if (!file.endsWith(".json")) continue;
     try {
-      const plan = normalizePlan(JSON.parse((await fs13.readFile(path9.join(plansDir(dir), file))).toString("utf8")));
+      const plan = normalizePlan(JSON.parse((await fs15.readFile(path11.join(plansDir(dir), file))).toString("utf8")));
       if (plan !== void 0) plans.push(plan);
     } catch {
     }
@@ -18055,6 +19209,10 @@ function memories() {
 function variables() {
   return variableStorePromise ??= VariableStore.open(dshHomePath("tavern"));
 }
+var memoryVectorStorePromise;
+function memoryVectors() {
+  return memoryVectorStorePromise ??= MemoryVectorStore.open(dshHomePath("tavern"));
+}
 function modHost() {
   return modHostPromise ??= ModHost.open({
     ctx: modHostContext ?? {},
@@ -19056,6 +20214,9 @@ async function handleApi(ctx, req, res) {
   if (method === "POST" && route === "memory/embed/test") {
     return handleMemoryEmbedApi(req, res, route, method, db);
   }
+  if ((method === "POST" || method === "GET") && route === "memory/maintenance") {
+    return handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db);
+  }
   if (method === "GET" && route.startsWith("world/")) {
     const name2 = decodeURIComponent(route.slice("world/".length));
     const book = await db.getWorld(name2);
@@ -19173,7 +20334,7 @@ async function handleApi(ctx, req, res) {
         throw new Error("expected { chat, revision }");
       }
       const revision = await db.saveChat(character, chatId, body.chat, body.revision);
-      await emitChatSaved(character, chatId, revision);
+      await emitChatSaved(character, chatId, revision, body.chat.messages.length);
       return sendJson(res, 200, { ok: true, chat: body.chat, revision });
     }
     if (method === "PATCH") {
@@ -19244,7 +20405,7 @@ async function handleGuidesApi(req, res, route, method, db) {
       header: { ...snapshot2.chat.header, chat_metadata: metadata }
     }, snapshot2.revision);
     await emitGuidesChanged(character, chatId);
-    await emitChatSaved(character, chatId, revision);
+    await emitChatSaved(character, chatId, revision, snapshot2.chat.messages.length);
     return sendJson(res, 200, { ok: true, guide: added.guide, guides: added.guides, revision });
   }
   if (method === "DELETE" && route.startsWith("guides/")) {
@@ -19265,7 +20426,7 @@ async function handleGuidesApi(req, res, route, method, db) {
       header: { ...snapshot2.chat.header, chat_metadata: metadata }
     }, snapshot2.revision);
     await emitGuidesChanged(character, chatId);
-    await emitChatSaved(character, chatId, revision);
+    await emitChatSaved(character, chatId, revision, snapshot2.chat.messages.length);
     return sendJson(res, 200, { ok: true, guides: removed.guides, revision });
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
@@ -19496,6 +20657,48 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
     }
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+}
+async function handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db) {
+  if (method === "POST") {
+    const body = await readJson(req);
+    if (typeof body.character !== "string" || typeof body.chatId !== "string" || body.character === "" || body.chatId === "") {
+      return sendJson(res, 400, { ok: false, message: "expected { character, chatId }" });
+    }
+    const snapshot2 = await readGuidesSnapshot(db, body.character, body.chatId);
+    if (snapshot2 === void 0) {
+      return sendJson(res, 404, { ok: false, message: `chat '${body.character}/${body.chatId}' not found` });
+    }
+    try {
+      const { runId } = await startMemoryMaintenance(ctx, maintenanceDeps(db), {
+        character: body.character,
+        chatId: body.chatId
+      });
+      return sendJson(res, 200, { ok: true, runId });
+    } catch (cause) {
+      if (cause instanceof MaintenanceRunConflictError) {
+        return sendJson(res, 409, { ok: false, message: cause.message, code: cause.code, runId: cause.runId });
+      }
+      throw cause;
+    }
+  }
+  if (method === "GET") {
+    const character = url.searchParams.get("character");
+    const chatId = url.searchParams.get("chatId");
+    if (character === null || chatId === null || character === "" || chatId === "") {
+      return sendJson(res, 400, { ok: false, message: "character and chatId query params are required" });
+    }
+    const view = await memoryMaintenanceStatus(maintenanceDeps(db), { character, chatId });
+    return sendJson(res, 200, { ok: true, ...view });
+  }
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+}
+function maintenanceDeps(db) {
+  return {
+    root: dshHomePath("tavern"),
+    db,
+    memory: memories(),
+    vectors: memoryVectors()
+  };
 }
 async function handleWorkbenchApi(req, res, url, route, method, db) {
   if (method === "POST" && route === "card-workbench/rename") {
@@ -20134,7 +21337,7 @@ async function runGeneration(ctx, db, options) {
         turnMessages = turn.messages;
       }
       revision = await db.saveChat(characterName, chatId, chat, revision);
-      await emitChatSaved(characterName, chatId, revision);
+      await emitChatSaved(characterName, chatId, revision, chat.messages.length);
     } else {
       const last = chat.messages[chat.messages.length - 1];
       if (last?.is_user === false && !last.is_system) {
@@ -20402,7 +21605,7 @@ async function runGeneration(ctx, db, options) {
       changeNotes: mvuGuard.notes
     });
     revision = await db.saveChat(characterName, chatId, chat, revision);
-    await emitChatSaved(characterName, chatId, revision);
+    await emitChatSaved(characterName, chatId, revision, chat.messages.length);
     await generationHooks.dispatch("post-save", { chat, revision, speaker: speakerName, finalText }, { mode, character: speakerName, chatId, group: group2 });
     hostTrace = recordTavernSessionAssistant(hostTrace, finalText, finalReasoning, usedProvider, usedModel, hostUsage);
     return { chat, revision, speaker: speakerName };
@@ -20447,7 +21650,7 @@ async function runTavernScript(ctx, req, res, db) {
     if (Object.keys(vars).length > 0) chat.header.chat_metadata.variables = vars;
     else delete chat.header.chat_metadata.variables;
     revision = await db.saveChat(characterName, chatId, chat, revision);
-    await emitChatSaved(characterName, chatId, revision);
+    await emitChatSaved(characterName, chatId, revision, chat.messages.length);
   };
   const triggerGeneration = async (member) => {
     const fresh = await db.getChatSnapshot(characterName, chatId);
@@ -20966,14 +22169,14 @@ function parseTavernSessionCommand(rawInput) {
   }
 }
 async function prepareInternalWorkspace() {
-  const path10 = dshHomePath("tavern", "workspace");
-  await mkdir4(path10, { recursive: true });
-  return { path: path10, title: TAVERN_WORKSPACE_TITLE };
+  const path12 = dshHomePath("tavern", "workspace");
+  await mkdir4(path12, { recursive: true });
+  return { path: path12, title: TAVERN_WORKSPACE_TITLE };
 }
 async function prepareWorkbenchWorkspace() {
-  const path10 = dshHomePath("tavern", "workbench");
-  await mkdir4(path10, { recursive: true });
-  return { path: path10, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
+  const path12 = dshHomePath("tavern", "workbench");
+  await mkdir4(path12, { recursive: true });
+  return { path: path12, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
 }
 function readBuildInfo() {
   let version = "unknown";
@@ -21007,7 +22210,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.5".trim() : "";
-  const commit = true ? normalizeCommit("6f7c683") : void 0;
+  const commit = true ? normalizeCommit("6f732fe") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -21163,14 +22366,14 @@ async function handleModsApi(ctx, req, res, url, route, method) {
   }
   if (segments.length >= 1 && modId !== "") {
     let id = modId;
-    let path10 = subpath;
+    let path12 = subpath;
     try {
       id = decodeURIComponent(modId);
-      path10 = subpath === "" ? "" : decodeURIComponent(subpath);
+      path12 = subpath === "" ? "" : decodeURIComponent(subpath);
     } catch {
       return notFound();
     }
-    const handled = await host.handleRoute(req, res, method, url, id, path10);
+    const handled = await host.handleRoute(req, res, method, url, id, path12);
     if (handled) return;
     return notFound();
   }

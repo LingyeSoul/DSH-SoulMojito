@@ -2609,6 +2609,16 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
     if (record === void 0 || !includeDeleted && isInactive(record)) return void 0;
     return structuredClone(record);
   }
+  /**
+   * 无评分全量枚举（B-3 维护 run 的 ReadMemory 页读用）：search 的 limit 被
+   * MAX_RESULTS=50 封顶且按相关性排序，维护需要确定性顺序下的完整清单。
+   * 排序 createdAt → id（页码偏移在维护编辑（只改 revision/updatedAt）下稳定）。
+   */
+  async list(scope, scopeId, options = {}) {
+    const records = await this.listRecords({ scope, scopeId, includeDeleted: options.includeDeleted === true });
+    records.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+    return structuredClone(records);
+  }
   async put(input, expectedRevision) {
     validateWrite(input);
     return this.mutate(async () => {

@@ -834,6 +834,20 @@ window.__ModuleLoader__.load({
       'settings.memoryClear': 'Clear config',
       'settings.memoryTest': 'Test endpoint',
       'settings.memoryTesting': 'Testing…',
+      // 记忆维护（B-3）：手动维护 run 的行内状态/摘要文案。
+      'settings.maintenanceTitle': 'Memory maintenance',
+      'settings.maintenanceHint': 'Runs a maintenance agent over the chat-scope memories of one chat: merges cross-batch duplicate events, corrects statements that conflict with the chat source, and deletes falsified records. Completed ranges are covered by receipts and skipped next time; edited floors or changed records retire the receipt.',
+      'settings.maintenanceChat': 'Chat',
+      'settings.maintenanceChatEmpty': 'Select a chat',
+      'settings.maintenanceStart': 'Run maintenance',
+      'settings.maintenanceStarting': 'Starting…',
+      'settings.maintenanceRunning': 'Maintenance run {runId} is running…',
+      'settings.maintenancePending': 'Floors pending maintenance: {floors}',
+      'settings.maintenanceNothingPending': 'Nothing pending — valid receipts cover all floors.',
+      'settings.maintenanceDone': 'Finished {at} · outcome {outcome} · covered floors {base}–{head}',
+      'settings.maintenanceDoneNoCompletion': 'Finished {at} · outcome {outcome} · no completion declared',
+      'settings.maintenanceError': 'Last run failed: {message}',
+      'settings.maintenanceSummary': 'Edit groups {groups} · merged {merged} · corrected {corrected} · created {created} · deleted {deleted} · failed groups {failed} · receipts retired {retired} · LLM requests {requests}/{budget}',
       'workbench.hint': 'Modification plans proposed by the Card Workbench agent — per-field card diffs and per-entry world book diffs. Expand a plan to review the changes, then approve to apply it to the working copy, or reject it.',
       'workbench.empty': 'No workbench plans yet',
       'workbench.worldMeta': 'World · {world}',
@@ -1441,6 +1455,20 @@ window.__ModuleLoader__.load({
       'settings.memoryClear': '清除配置',
       'settings.memoryTest': '测试端点',
       'settings.memoryTesting': '测试中…',
+      // 记忆维护（B-3）：手动维护 run 的行内状态/摘要文案。
+      'settings.maintenanceTitle': '记忆维护',
+      'settings.maintenanceHint': '对某个聊天的 chat 作用域记忆跑一次维护 Agent：合并跨写入批次的重复事件、纠正与聊天原文冲突的陈述、删除被证伪的记录。已完成的楼面范围有完成收据，下次自动跳过；原文被编辑或覆盖记录被改动会使收据退役、对应范围重新待维护。',
+      'settings.maintenanceChat': '聊天',
+      'settings.maintenanceChatEmpty': '选择聊天',
+      'settings.maintenanceStart': '运行维护',
+      'settings.maintenanceStarting': '启动中…',
+      'settings.maintenanceRunning': '维护 run {runId} 运行中…',
+      'settings.maintenancePending': '待维护楼层：{floors}',
+      'settings.maintenanceNothingPending': '暂无待维护——有效收据已覆盖全部楼层。',
+      'settings.maintenanceDone': '完成于 {at} · 收尾 {outcome} · 覆盖楼层 {base}–{head}',
+      'settings.maintenanceDoneNoCompletion': '完成于 {at} · 收尾 {outcome} · 未声明完成范围',
+      'settings.maintenanceError': '上次运行失败：{message}',
+      'settings.maintenanceSummary': '编辑组 {groups} · 合并 {merged} · 修正 {corrected} · 新建 {created} · 删除 {deleted} · 失败组 {failed} · 退役收据 {retired} · LLM 请求 {requests}/{budget}',
       'workbench.hint': '卡片工作台 Agent 提出的修改方案——角色卡逐字段、世界书逐条目。展开查看改动，批准即应用到工作版，也可直接拒绝。',
       'workbench.empty': '暂无工作台方案',
       'workbench.worldMeta': '世界书 · {world}',
@@ -3865,6 +3893,111 @@ window.__ModuleLoader__.load({
     // 探针。GET/PUT memory/embed 与 POST memory/embed/test；key 只经 env 名引用，
     // 状态接口（configured/envResolvable/lastError/lastSuccessAt/dims）永不回
     // 传 key 明文。
+    // 记忆维护（B-3，LWB maintenance 的 dsh 化）：「记忆检索」分区内的维护行——
+    // 角色/聊天选择 + 手动触发 + 上次运行状态/摘要 + 待维护范围提示。POST
+    // memory/maintenance（wait:false 风格）拿 runId 后按 1.5s 轮询 GET 状态
+    // （与自更新安装进度同款轮询策略，不引入 SSE）。
+    function MemoryMaintenanceRow() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const bootstrap = state.bootstrap
+      const characters = bootstrap.characters || []
+      const [character, setCharacter] = useState(bootstrap.state.activeCharacter || characters[0] || '')
+      const [chatId, setChatId] = useState('')
+      const [chats, setChats] = useState([])
+      const [view, setView] = useState(null)
+      const [starting, setStarting] = useState(false)
+      const [error, setError] = useState('')
+
+      useEffect(() => {
+        setChatId('')
+        setView(null)
+        if (!character) { setChats([]); return }
+        void loadChatList(character).then(setChats).catch(() => setChats([]))
+      }, [character])
+
+      const refresh = () => api(`memory/maintenance?character=${encodeURIComponent(character)}&chatId=${encodeURIComponent(chatId)}`)
+        .then((result) => { setView(result); return result })
+        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+      useEffect(() => { if (!character || !chatId) return; void refresh() }, [character, chatId])
+      // 运行中 1.5s 轮询；依赖只用 status 字符串（view 对象每轮换新引用）。
+      useEffect(() => {
+        if (!character || !chatId || !view || view.status !== 'running') return
+        const timer = setInterval(() => { void refresh() }, 1500)
+        return () => clearInterval(timer)
+      }, [character, chatId, view && view.status])
+
+      const start = () => {
+        setStarting(true); setError('')
+        api('memory/maintenance', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ character, chatId }) })
+          .then(() => refresh())
+          .catch((cause) => {
+            // 409 单飞：另一个 run 已在跑——立刻对齐状态而不是只报错。
+            if (cause.status === 409) void refresh()
+            setError(cause instanceof Error ? cause.message : String(cause))
+          })
+          .finally(() => setStarting(false))
+      }
+
+      const running = view !== null && view.status === 'running'
+      const summary = view && view.summary
+      const statusLine = view === null ? ''
+        : running ? t('settings.maintenanceRunning', { runId: (view.runId || '').slice(0, 8) })
+          : view.status === 'error'
+            ? t('settings.maintenanceError', { message: (summary && summary.error) || (view.finishedAt || '') })
+            : view.finishedAt
+              ? (summary && summary.completion
+                ? t('settings.maintenanceDone', {
+                  at: new Date(view.finishedAt).toLocaleString(),
+                  outcome: (summary && summary.outcome) || 'completed',
+                  base: summary.completion.baseFloor, head: summary.completion.headFloor,
+                })
+                : t('settings.maintenanceDoneNoCompletion', {
+                  at: new Date(view.finishedAt).toLocaleString(),
+                  outcome: (summary && summary.outcome) || 'completed',
+                }))
+              : ''
+      return h('div', { className: 'dt-settings-band' },
+        h('h3', null, t('settings.maintenanceTitle')),
+        h('p', { className: 'dt-hint' }, t('settings.maintenanceHint')),
+        h('div', { className: 'dt-editor-grid' },
+          h(SettingSelect, {
+            label: t('settings.character'),
+            value: character,
+            options: characters,
+            empty: t('settings.characterEmpty'),
+            onChange: (value) => setCharacter(value || ''),
+          }),
+          h(SettingSelect, {
+            label: t('settings.maintenanceChat'),
+            value: chatId,
+            options: chats,
+            empty: t('settings.maintenanceChatEmpty'),
+            onChange: (value) => setChatId(value || ''),
+          })),
+        statusLine !== '' ? h('p', { className: 'dt-hint' }, statusLine) : null,
+        !running && view !== null && !error
+          ? h('p', { className: 'dt-hint' },
+              view.pending && view.pending.floors > 0
+                ? t('settings.maintenancePending', { floors: view.pending.floors })
+                : t('settings.maintenanceNothingPending'))
+          : null,
+        summary && !running && (summary.editGroups > 0 || summary.failedGroups > 0 || (summary.retiredReceipts || 0) > 0)
+          ? h('p', { className: 'dt-hint' }, t('settings.maintenanceSummary', {
+              groups: summary.editGroups, merged: summary.merged, corrected: summary.corrected,
+              created: summary.created, deleted: summary.deleted, failed: summary.failedGroups,
+              retired: summary.retiredReceipts || 0, requests: summary.llmRequests ?? 0, budget: summary.budget ?? 0,
+            }))
+          : null,
+        h('div', { className: 'dt-editor-actions' },
+          h(Button, {
+            size: 'sm', variant: 'outline',
+            disabled: starting || running || !character || !chatId,
+            onClick: start,
+          }, starting ? t('settings.maintenanceStarting') : t('settings.maintenanceStart'))),
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
     function MemoryRetrievalBand() {
       const t = useTranslate()
       const [loaded, setLoaded] = useState(false)
@@ -3949,6 +4082,8 @@ window.__ModuleLoader__.load({
           h(Button, { size: 'sm', variant: 'primary', disabled: saving, onClick: () => save(false) }, t('settings.memorySave')),
           h(Button, { size: 'sm', variant: 'ghost', disabled: saving, onClick: () => save(true) }, t('settings.memoryClear')),
           h(Button, { size: 'sm', variant: 'outline', disabled: testing || (status !== null && !status.configured), onClick: test }, testing ? t('settings.memoryTesting') : t('settings.memoryTest'))),
+        // 记忆维护（B-3）：同分区内的维护行（角色/聊天选择 + 手动触发 + 轮询状态）。
+        h(MemoryMaintenanceRow),
         notice ? h('p', { className: 'dt-hint' }, notice) : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
