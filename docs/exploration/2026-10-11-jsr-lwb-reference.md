@@ -218,10 +218,22 @@ IndexedDB 事务原子替换（`docs/vector-cache-packages.md`）。
 | A-5 | 精选 Mod 仓库（jsdelivr 一键导入）+ 本地热重载通道 | JSR 内置库/开发者页 | mod 生态 | P2 |
 | A-6 | 提示词查看器 + 世界书激活追踪（调试基建天花板，工程量大） | JSR wi_tracer | 面板 | P2 |
 
-**本轮施工范围**：P0 四项（B-1 / C-1 / A-1 / A-2），已于 2026-10-11 落地（决策文档
-`decisions/2026-10-11-cjk-tokenization.md`、`decisions/2026-10-11-mvu-schema-guard.md`、
-`decisions/2026-10-11-mod-bridge-buttons-logs.md`）。P1/P2 留待后续提案（B-2 起的记忆升级建议单独立项，
-配套 B-5 评测基建先行）。
+**施工进度**：P0 四项（B-1 / C-1 / A-1 / A-2）与 P1 三项（B-5a / A-3 / A-4）已于 2026-10-11 落地
+（决策文档 `decisions/2026-10-11-cjk-tokenization.md`、`decisions/2026-10-11-mvu-schema-guard.md`、
+`decisions/2026-10-11-mod-bridge-buttons-logs.md`、`decisions/2026-10-11-retrieval-eval-matrix.md`、
+`decisions/2026-10-11-mod-stream-delta.md`、`decisions/2026-10-11-iframe-viewport.md`）。B-2 起的记忆
+升级单独立项，配套 B-5 评测基建已就位（`scripts/retrieval-eval/` + `retrieval-matrix.spec.ts` 质量门槛）。
+
+## 7. B-2 前置探路：DSH 宿主 embedding 能力审计（2026-10-11）
+
+对 DSH `0.2.0-rc.2` 隔离运行时（`.npm-cache/dsh-runtime`）的审计结论：**宿主没有 embedding/rerank seam**。
+dsh-llm 唯一调用面是 chat `stream`（`@deepseek-ai/dsh-llm/lib/types/index.d.ts:412`），`LlmAdapter`
+无 embed 钩子、`StreamChunk` 词汇表无数值向量、wire 协议层（pi-ai `PROTOCOLS`）全为 chat 家族、
+`text-embedding|/embeddings` 全包 grep 零命中。**B-2 必须自带 OpenAI 兼容 embed 端点配置**（LWB 同款
+路线），最小形状：插件设置级三件套 `{baseURL, apiKeyEnv（env 名引用而非明文）, model}` + 聊天级检索
+参数；rerank 先用 `api.llm` 做 LLM-based 重排或推迟。附带发现：`GenerateOptions.purpose` 封闭枚举
+（'compaction'|'session-title'）不可私加新值；pi-ai 目录里 openai 兼容系 provider 的 baseURL+key 天然
+能服务 `/embeddings`，可作 embed 配置的默认值提示但插件读不到宿主 settings 内部，仍需用户显式配置。
 
 ## 5. 不复刻清单（差异化边界）
 

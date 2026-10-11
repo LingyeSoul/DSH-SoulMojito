@@ -6,8 +6,9 @@
  *   且拒绝 `.`/`..`——路径穿越在注册与分发两侧都被拒。
  * - 两个出口：`reply.json(body, status?)` 与 `reply.html(doc, csp?)`。html 出口
  *   自动注入标准 CSP meta（对齐美化前端的 CSP 纪律：default-src 'none'、
- *   connect-src 'none'，脚本只允许内联；Mod 取数走服务端，不开放浏览器 fetch）。
- *   mod 可传自定义 csp 策略串（属性转义后注入）。
+ *   connect-src 'none'，脚本只允许内联；Mod 取数走服务端，不开放浏览器 fetch）
+ *   + console reporter（A-2）+ 视口变量脚本与高度上报器（A-4，见
+ *   renderModHtmlDocument）。mod 可传自定义 csp 策略串（属性转义后注入）。
  * - handler 抛错由分发方（host.ts）兜底成 500 JSON 错误体并记审计，不炸宿主。
  * - 请求体读取与宿主 readJson 同语义（2MB 上限），在适配请求对象上按需惰性读。
  */
@@ -193,19 +194,144 @@ export function modConsoleReporterScript(): string {
 })();`
 }
 
-/** 注入 CSP meta 与 console reporter：有 <head> 就插在最前，没有就补一个最小骨架。 */
+/**
+ * ── 视口正确性与高度上报（A-4，2026-10-11）──────────────────────────────
+ * 与 client/main.js 同构同款（该文件是独立拼接的 client half，无法共享模块——
+ * 与 FRONTEND_CSP / MOD_HTML_DEFAULT_CSP 的双份纪律一致）。
+ *
+ * 问题：面板 iframe 高度由内容 ResizeObserver 决定（宿主按上报高度调 iframe），
+ * mod UI 写 height:100vh 时 vh = 当前 iframe 高度 = 上次内容高度 → 循环依赖，
+ * 预期"可视区高度"的布局会塌。方案分两半：
+ * 1. renderModHtmlDocument 注入前把 100 系列视口高度单位改写成
+ *    var(--dt-viewport-height, 100vh)（rewriteViewportUnits）；
+ * 2. 注入 modViewportScript 把宿主可视区高度挂到该变量——宿主（ModSurface）在
+ *    load/resize 时经 `dsh-tavern:viewport` postMessage 投递 {height}（宿主→iframe
+ *    单向下行，与 mod-response 同向，不新增鉴权面：iframe 只读数值挂 CSS 变量，
+ *    不回传不取数，伪造消息最多扰动沙箱内自身布局，无 token 对账必要）。
+ *
+ * 改写边界（宁缺勿滥，漏掉的由 fallback 100vh 兜底=旧行为）：
+ * - 只改 <style> 块与内联 style="…" 两形态；<script> 块整体屏蔽（JS 字符串/
+ *   模板里的 style="…" 与 '100vh' 不是 CSS，正则无解析器，宁缺勿滥）；
+ * - 只改 100vh/100dvh/100svh/100lvh（含大小写）；非 100 数值不改（需 calc 乘法
+ *   形态，语义变更面大）；
+ * - 注释与字符串字面量里的 100vh 原样保留（content:"100vh" 是显示文本）。
+ */
+export const MOD_VIEWPORT_MESSAGE = 'dsh-tavern:viewport'
+const MOD_VIEWPORT_CSS_VAR = '--dt-viewport-height'
+const VIEWPORT_UNIT_PATTERN = /(?<![-\w])100(?:d|s|l)?vh(?![\w-])/gi
+const VIEWPORT_VAR_REFERENCE = `var(${MOD_VIEWPORT_CSS_VAR}, 100vh)`
+
+/** 单段 CSS 文本内的改写：跳过块注释与单/双引号字符串字面量里的出现。 */
+export function rewriteViewportUnitsInCssText(cssText: string): string {
+  const special = /\/\*|["']/g
+  let out = ''
+  let cursor = 0
+  let match: RegExpExecArray | null
+  while ((match = special.exec(cssText)) !== null) {
+    out += cssText.slice(cursor, match.index).replace(VIEWPORT_UNIT_PATTERN, VIEWPORT_VAR_REFERENCE)
+    const end = match[0] === '/*'
+      ? cssText.indexOf('*/', match.index + 2)
+      : cssText.indexOf(match[0], match.index + 1)
+    cursor = end === -1 ? cssText.length : end + (match[0] === '/*' ? 2 : 1)
+    out += cssText.slice(match.index, cursor)
+    special.lastIndex = cursor
+  }
+  return out + cssText.slice(cursor).replace(VIEWPORT_UNIT_PATTERN, VIEWPORT_VAR_REFERENCE)
+}
+
+/** vh 改写入口：<style> 块与内联 style 属性两形态（边界见上方块注释）。 */
+export function rewriteViewportUnits(document: string): string {
+  // 先屏蔽 <script> 块：JS 字符串/模板里的 style="…" 不是 HTML 属性，改写会动到
+  // JS 字面量；占位符不含引号与尖括号，不会被下面两条正则触碰。
+  const scripts: string[] = []
+  const shielded = String(document || '').replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, (whole) => {
+    scripts.push(whole)
+    return `\u0000dt-vh-script-${scripts.length - 1}\u0000`
+  })
+  const rewritten = shielded
+    .replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (_whole, open: string, css: string, close: string) => `${open}${rewriteViewportUnitsInCssText(css)}${close}`)
+    .replace(/(\bstyle\s*=\s*)(["'])([^"']*)\2/gi, (_whole, prefix: string, quote: string, css: string) => `${prefix}${quote}${rewriteViewportUnitsInCssText(css)}${quote}`)
+  return rewritten.replace(/\u0000dt-vh-script-(\d+)\u0000/g, (_whole, index: string) => scripts[Number(index)])
+}
+
+/** 视口变量脚本：初始化用 iframe 自身 innerHeight（宿主 load 投递后即刻纠正）。 */
+export function modViewportScript(): string {
+  return `(function () {
+  var root = document.documentElement;
+  var apply = function (height) {
+    if (typeof height !== 'number' || !isFinite(height) || height <= 0) return;
+    try { root.style.setProperty(${JSON.stringify(MOD_VIEWPORT_CSS_VAR)}, height + 'px'); } catch (_) {}
+  };
+  apply(window.innerHeight);
+  addEventListener('message', function (event) {
+    var data = event.data;
+    if (!data || data.type !== ${JSON.stringify(MOD_VIEWPORT_MESSAGE)}) return;
+    apply(data.height);
+  });
+})();`
+}
+
+/**
+ * 高度上报器（A-4，client frontendHeightReporter 的服务端同款）：rAF 单帧合并 +
+ * 高度去重 + 500ms 尾随重测兜底 + ResizeObserver 双观察（documentElement 与 body，
+ * head 期 body 未建，DOMContentLoaded 再补挂）+ 保留 load/resize 触发。token 从
+ * iframe URL 查询段自读（与 console reporter 同纪律），无 token 静默跳过——直接
+ * curl 该路由不产生消息。mod UI 自带上报脚本（mood-tracker 样板）照旧兼容：同
+ * token 同协议重复上报在宿主侧幂等（钳制后的 setHeight）。
+ */
+export function modHeightReporterScript(): string {
+  return `(function () {
+  var token = '';
+  try { token = new URLSearchParams(location.search).get('token') || ''; } catch (_) { return; }
+  if (token === '') return;
+  var last = -1;
+  var queued = false;
+  var measure = function () {
+    if (queued) return;
+    queued = true;
+    var flush = function () {
+      queued = false;
+      var root = document.documentElement;
+      var body = document.body;
+      var height = Math.max(root ? root.scrollHeight : 0, body ? body.scrollHeight : 0);
+      if (height <= 0 || height === last) return;
+      last = height;
+      try {
+        parent.postMessage({ type: 'dsh-tavern:frontend-height', token: token, height: height }, '*');
+      } catch (_) {}
+      setTimeout(measure, 500);
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush); else setTimeout(flush, 0);
+  };
+  var wire = function () {
+    if (typeof ResizeObserver !== 'function') return;
+    var observer = new ResizeObserver(measure);
+    if (document.documentElement) observer.observe(document.documentElement);
+    if (document.body) observer.observe(document.body);
+  };
+  wire();
+  addEventListener('DOMContentLoaded', wire);
+  addEventListener('load', measure);
+  addEventListener('resize', measure);
+  setTimeout(measure, 0);
+})();`
+}
+
+/** 注入 CSP meta、console reporter、视口脚本与高度上报器（vh 改写先行）：有 <head>
+ *  就插在最前，没有就补一个最小骨架。 */
 export function renderModHtmlDocument(document: string, csp: string): string {
+  const rewritten = rewriteViewportUnits(String(document ?? ''))
   const meta = `<meta http-equiv="Content-Security-Policy" content="${escapeHtmlAttribute(csp)}">`
-  const reporter = `<script>${modConsoleReporterScript()}</script>`
-  const headMatch = /<head(?:\s[^>]*)?>/i.exec(document)
+  const scripts = `<script>${modConsoleReporterScript()}</script><script>${modViewportScript()}</script><script>${modHeightReporterScript()}</script>`
+  const headMatch = /<head(?:\s[^>]*)?>/i.exec(rewritten)
   if (headMatch !== null) {
     const at = headMatch.index + headMatch[0].length
-    return `${document.slice(0, at)}${meta}${reporter}${document.slice(at)}`
+    return `${rewritten.slice(0, at)}${meta}${scripts}${rewritten.slice(at)}`
   }
-  if (/<html(?:\s[^>]*)?>/i.test(document)) {
-    return document.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${meta}${reporter}</head>`)
+  if (/<html(?:\s[^>]*)?>/i.test(rewritten)) {
+    return rewritten.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${meta}${scripts}</head>`)
   }
-  return `<!doctype html><html><head><meta charset="utf-8">${meta}${reporter}</head><body>${document}</body></html>`
+  return `<!doctype html><html><head><meta charset="utf-8">${meta}${scripts}</head><body>${rewritten}</body></html>`
 }
 
 /** 与 index.ts 的 readJson 同语义的请求体读取（模块独立副本，避免循环 import）。 */

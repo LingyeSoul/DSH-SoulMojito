@@ -29,7 +29,7 @@ import { hostMacroSnapshot, registerHostMacro } from '../../../tavern-macros/src
 import { registerStscriptCommand, stscriptCommandNames } from '../../../tavern-script/src/index.js'
 import type { TavernStore } from '../../../tavern-store/src/index.js'
 import { ModAuditLog, type ModAuditEvent } from './audit.js'
-import { modEvents } from './events.js'
+import { currentStreamEpoch, modEvents } from './events.js'
 import {
   claimedToolNames,
   clampModSectionOrder,
@@ -616,13 +616,27 @@ export class ModHost {
       assets: createModAssets(this.options.dbProvider),
       events: {
         on: (kind: string, handler: (payload: never) => unknown) => {
-          if (!modEvents.isKind(kind)) throw new Error(`unknown mod event kind '${String(kind)}' (expected chat-saved | assets-saved | guides-changed)`)
+          if (!modEvents.isKind(kind)) throw new Error(`unknown mod event kind '${String(kind)}' (expected chat-saved | assets-saved | guides-changed | stream-delta)`)
           if (typeof handler !== 'function') throw new Error('mod event handler must be a function')
+          // A-3 审计防洪：stream-delta 是逐 chunk 高频事件，handler 逐 chunk 抛错
+          // 会刷爆 audit.jsonl。对齐宏「首错降级」纪律：每流代次（每次生成）只记
+          // 第一条 event-error（detail 标注已静默后续），同代次后续静默吞掉；
+          // handler 失败本身不中断生成（总线吞错）。其余 kind 逐次审计（低频，
+          // 行为不变）。代次以投递时点为准（events.ts 投递链换入换出保证）。
+          let auditedStreamEpoch: number | undefined
           const off = modEvents.on(kind, async (payload) => {
+            const epoch = currentStreamEpoch()
             try {
               await handler(payload)
             } catch (cause) {
               const message = cause instanceof Error ? cause.message : String(cause)
+              if (kind === 'stream-delta' && auditedStreamEpoch === epoch) return
+              if (kind === 'stream-delta') {
+                auditedStreamEpoch = epoch
+                this.logger?.warn?.(`dsh-tavern: [mod:${id}] stream-delta handler failed: ${message} (further errors for this generation are silenced)`)
+                await this.audit.record(id, 'event-error', `stream-delta: ${message} (further stream-delta errors for this generation are silenced)`)
+                return
+              }
               this.logger?.warn?.(`dsh-tavern: [mod:${id}] ${kind} handler failed: ${message}`)
               await this.audit.record(id, 'event-error', message)
             }
