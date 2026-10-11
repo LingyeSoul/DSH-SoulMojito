@@ -98,7 +98,7 @@ import { TavernUpdateService, updateChangelog } from './update/service.js'
 // Mod 宿主（提案 0015 §3.2 P1）：扫描 <tavern>/mods/、三层开关裁决、装载与
 // 审计；api 适配层（logger/storage/assets/events/timers/http）在 mods/host.ts。
 import { ModHost, modsDisabledByEnv, type ModHostContext, type ModHostSnapshot } from './mods/host.js'
-import { emitAssetsSaved, emitChatSaved } from './mods/events.js'
+import { beginStreamEpoch, emitAssetsSaved, emitChatSaved, emitStreamDelta } from './mods/events.js'
 // 卡片工作台方案确认协议（提案 0013 P2；世界书面板化为同构扩展）：方案存储在
 // card-workbench/plans.ts（kind 判别：卡方案 / 世界书方案），执行核（写入 +
 // applied 标记）在 card-workbench/agent.ts，路由块在 mvu/status 之后。
@@ -2972,6 +2972,9 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   // （P0 决策遗留的已知问题就此闭环，decisions/2026-10-10-mod-review-fixes.md）。
   const usedProvider = hookedLlmRequest.params.provider
   const usedModel = hookedLlmRequest.params.model
+  // stream-delta 代次（A-3）：本轮流式生成开始——mod 宿主据它做「每代次每 mod
+  // 首错」的审计防洪（mods/events.ts）。
+  beginStreamEpoch()
   for await (const chunk of ctx.llm.stream({
     provider: hookedLlmRequest.params.provider,
     model: hookedLlmRequest.params.model,
@@ -2986,7 +2989,15 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
     // 直接整会话拒载（SessionFormatUnsupportedError）；流式反馈走 SSE write，
     // 持久轨迹由终态 assistant/message 的 stream/settlement 承载。
     if (chunk.type === 'usage') hostUsage = chunk.usage
-    if (chunk.type === 'text-delta') { text += chunk.text; write({ type: 'delta', text: chunk.text }) }
+    if (chunk.type === 'text-delta') {
+      text += chunk.text
+      write({ type: 'delta', text: chunk.text })
+      // stream-delta（A-3，JSR fully/incrementally 双通道的单事件形态）：纯观察
+      // 面——fire-and-forget 不背压生成（慢 handler 不节流流式消费），投递在
+      // events.ts 内串行保序；reasoning 增量不进事件（v1 只观察正文）。
+      // finish(error/aborted) 抛出后循环退出，天然停发。
+      emitStreamDelta({ mode, character: speakerName, chatId, text, delta: chunk.text })
+    }
     else if (chunk.type === 'reasoning-delta') { reasoning += chunk.text; write({ type: 'reasoning', text: chunk.text }) }
     else if (chunk.type === 'finish') {
       if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted') throw new Error(chunk.reason.failure.message)

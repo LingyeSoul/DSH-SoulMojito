@@ -159,7 +159,7 @@ export async function setup(api) {
 | `api.logger.{info,warn,error}` | 带 `[mod:<id>]` 前缀的宿主日志 | — |
 | `api.storage.{get,set,delete}` | 私有 JSON kv：`<tavern>/mods/<id>/data/state.json` | 单值 256KB / 总量 1MB；原子写 |
 | `api.assets.*` | 只读资产快照（12 个方法，deepClone） | 无任何写路径 |
-| `api.events.on(kind, handler)` | `chat-saved` / `assets-saved` / `guides-changed` | 逐个吞错，失败进审计 |
+| `api.events.on(kind, handler)` | `chat-saved` / `assets-saved` / `guides-changed` / `stream-delta` | 逐个吞错，失败进审计（`stream-delta` 高频，首错纪律见 §5/§15） |
 | `api.onButton(name, handler)` | 声明式按钮的点击 handler（name 必须在 manifest `buttons` 里声明） | 同名重复注册抛错；返回反注册；宿主托管卸载回收 |
 | `api.timers.{setInterval,clearInterval}` | 定时器 | 宿主绑定生命周期，卸载自动清 |
 | `api.http.route(method, path, handler)` | 挂 `/api/dsh-tavern/mods/<id>/<path>` | path 白名单；`reply.json/html` 两出口 |
@@ -223,12 +223,25 @@ await api.storage.delete('counter')          // boolean（是否存在）
 | `chat-saved` | `{character, chatId, revision}` | 聊天落盘后（PUT chat / guides 写入 / 生成两段落盘 / STscript persist） |
 | `assets-saved` | `{kind, name}` | 资产保存/导入后（character/world/preset/persona/group） |
 | `guides-changed` | `{character, chatId}` | 持续指引变更 |
+| `stream-delta` | `{mode, character, chatId, text, delta}` | ST 生成循环每收到一个正文 text-delta chunk（累积拼接之后）。`mode ∈ send/regenerate/trigger`；`text` = 当前累积全文（fully 通道），`delta` = 本次增量（incrementally 通道）——一个事件双字段，Mod 自选粒度做打字机进度 / 实时 UI |
 
 ```js
 const off = api.events.on('chat-saved', async (payload) => { ... })   // 返回反注册
 ```
 
 handler 抛错：吞掉 + `event-error` 审计，不影响其他监听方与宿主落盘。未知 kind 注册期抛错。
+
+`stream-delta` 的专用纪律（高频路径）：
+
+- **handler 要快、别做重活**：每 chunk 一次，一轮生成几十上百次。宿主**不等待**
+  handler（投递异步且串行保序，慢 handler 不会节流生成），但 handler 里的存储写、
+  LLM 调用等重活仍是自找的放大器——累积统计用节流/末次快照，别逐 chunk 落盘。
+- reasoning 增量**不进事件**（v1 只观察正文）；Stop/abort 后停发。
+- 覆盖范围（v1 如实）：只覆盖 **ST 生成循环**（runGeneration 的 llm.stream 消费点，
+  send/regenerate/trigger 三 mode）。AgentTavern 生成走宿主 AgentLoop，本事件**收不到**
+  ——流式观察对 AgentTavern 的可达性是 v1 范围外。
+- **不进 §13 的 iframe 下行**（`dsh-tavern:mod-event`）：流式高频广播到浏览器面
+  弊大于利，iframe UI 需要进度时走自己的 HTTP 子路由拉取。
 
 ### api.onButton（声明式按钮）
 
@@ -504,13 +517,41 @@ parent.postMessage({
 }, '*')
 // 收：{ type: 'dsh-tavern:mod-response', token, id, ok, status, body | error }
 
-// ② 高度自适应上报（ResizeObserver + load + resize 都报一次）：
+// ② 高度自适应上报：宿主已在所有 reply.html 出口自动注入上报器（见下），手写
+//    仅当你想完全接管高度协议时才需要：
 parent.postMessage({ type: 'dsh-tavern:frontend-height', token, height: document.body.scrollHeight }, '*')
 ```
 
 - 桥只到**本 Mod** 的子路由（父页代理时拼 `mods/<id>/<path>`）；method 白名单比注册面窄
   （无 HEAD/OPTIONS）；path 与 §6 同字符集。
 - 父页把高度钳制在 80..1200px。
+
+### 高度上报器（服务端自动注入，无需手写）
+
+服务端在**所有** `reply.html` 出口自动注入高度上报脚本（与 console reporter 同机制），
+token 从 iframe URL 查询段自读（无 token 静默跳过）。上报器纪律（A-4 升级）：
+
+- rAF 单帧合并（ResizeObserver 连发只测一次）+ 高度去重（数值未变零消息）；
+- ResizeObserver 同时观察 `documentElement` 与 `body`（head 期 body 未建，
+  `DOMContentLoaded` 补挂），保留 `load`/`resize` 触发；
+- 500ms 尾随重测兜底（字体晚到/图片解码/观察器偶发漏报的收尾，无变化不发消息）。
+
+自带上报脚本（mood-tracker 样板）照旧兼容：同 token 同协议重复上报在宿主侧幂等。
+
+### 视口高度：`--dt-viewport-height` 与 `100vh` 改写
+
+iframe 高度由内容决定（父页按上报高度调整 iframe），内容里写 `height:100vh` 会引用
+iframe 自身高度——循环依赖，"满屏"布局会塌。宿主对此的处理（A-4，无需你做任何事）：
+
+- 服务端注入前把 `<style>` 块与内联 `style="…"` 里的 `100vh`/`100dvh`/`100svh`/
+  `100lvh` 改写成 `var(--dt-viewport-height, 100vh)`；
+- 注入脚本把宿主**真实可视区高度**挂到 `--dt-viewport-height`（挂载时初始化 + 宿主
+  resize 时经 `dsh-tavern:viewport` 下行消息更新——消息只下行，iframe 不需要监听它）。
+
+对 Mod UI 作者的含义：**按"满可视区"意图放心写 `100vh`**（含 `calc(100vh - 24px)`
+这类组合），改写后即真实视口高度；若你的页面确实想要"iframe 内容高度"语义，直接
+用 `100%`（相对父元素，不经改写）。非 100 数值（如 `50vh`）不改写——需要半屏时写
+`calc(var(--dt-viewport-height, 100vh) * 0.5)`，或用 `50%`。
 
 ### 下行事件：`dsh-tavern:mod-event`
 
@@ -586,7 +627,7 @@ buttons}`。
 | `dispose-error` | dispose 链 / 反注册单项失败 |
 | `hook-degradation` | 管线 hook 抛错/超时/忘 return 被降级跳过 |
 | `http-error` | Mod 路由 handler 抛错（500 兜底） |
-| `event-error` / `timer-error` | 事件 / 定时器 handler 失败 |
+| `event-error` / `timer-error` | 事件 / 定时器 handler 失败。**首错纪律（`stream-delta`）**：每流代次（每次生成）每 Mod 只记第一条，detail 标注 `stream-delta: … (further … silenced)`，同代次后续静默吞掉（handler 仍逐个吞错不中断生成）；其余 kind 逐次审计 |
 | `button-error` | 声明式按钮 handler 点击分发失败（正常点击不审计） |
 | `storage-quota` / `storage-error` | 超配额 / 存储读写失败 |
 | `macro-error` | 宏运行期首错（降级保原文） |

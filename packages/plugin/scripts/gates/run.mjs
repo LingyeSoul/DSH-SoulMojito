@@ -433,6 +433,10 @@ function checkFrontendRuntimeText(text) {
     'function broadcastModEvent',
     'function TavernModButtons(',
     'function ModPanelSurface({ mod })',
+    // 视口正确性 + 高度上报健壮性（2026-10-11 A-4）：vh 改写（--dt-viewport-height
+    // CSS 变量）+ 宿主→iframe 视口投递（dsh-tavern:viewport）必须都在 client half。
+    "'--dt-viewport-height'",
+    "'dsh-tavern:viewport'",
   ]) {
     if (!text.includes(marker)) problems.push(`frontend runtime is missing marker '${marker}'`)
   }
@@ -1802,14 +1806,22 @@ const gates = [
         'function broadcastModEvent() {}',
         'function TavernModButtons() {}',
         'function ModPanelSurface({ mod }) {}',
+        "'--dt-viewport-height'",
+        "'dsh-tavern:viewport'",
       ].join('\n')
       const bad = good.replace("sandbox: 'allow-scripts'", "sandbox: 'allow-forms'")
       const badBridge = good.replace('dsh-tavern:mod-request', 'dsh-tavern:mod-bridge-removed')
       const badEvent = good.replace('dsh-tavern:mod-event', 'dsh-tavern:mod-gone')
+      // 负样本必须真移除 marker：替换文本不得以原 marker 为前缀/子串（含 includes
+      // 匹配），否则负样本形同虚设（上一批的已知坑）。
+      const badViewportVar = good.replace("'--dt-viewport-height'", "'--dt-vh-gone'")
+      const badViewportMsg = good.replace("'dsh-tavern:viewport'", "'dsh-tavern:vp-gone'")
       return checkFrontendRuntimeText(good).length === 0
         && checkFrontendRuntimeText(bad).length > 0
         && checkFrontendRuntimeText(badBridge).length > 0
         && checkFrontendRuntimeText(badEvent).length > 0
+        && checkFrontendRuntimeText(badViewportVar).length > 0
+        && checkFrontendRuntimeText(badViewportMsg).length > 0
         ? []
         : ['frontend runtime marker self-test did not distinguish an unsafe sample']
     },

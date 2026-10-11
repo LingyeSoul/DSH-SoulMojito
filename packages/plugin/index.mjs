@@ -13994,11 +13994,15 @@ var ModAuditLog = class {
 };
 
 // packages/plugin/src/mods/events.ts
-var MOD_EVENT_KINDS = /* @__PURE__ */ new Set(["chat-saved", "assets-saved", "guides-changed"]);
+var MOD_EVENT_KINDS = /* @__PURE__ */ new Set(["chat-saved", "assets-saved", "guides-changed", "stream-delta"]);
 var ModEventBus = class {
   listeners = /* @__PURE__ */ new Map();
   isKind(value) {
     return typeof value === "string" && MOD_EVENT_KINDS.has(value);
+  }
+  hasListeners(kind) {
+    const set = this.listeners.get(kind);
+    return set !== void 0 && set.size > 0;
   }
   on(kind, handler) {
     const set = this.listeners.get(kind) ?? /* @__PURE__ */ new Set();
@@ -14025,6 +14029,28 @@ function emitChatSaved(character, chatId, revision) {
 }
 function emitAssetsSaved(kind, name2) {
   return modEvents.emit("assets-saved", { kind, name: name2 });
+}
+var streamEpoch = 0;
+var dispatchEpoch = streamEpoch;
+function currentStreamEpoch() {
+  return dispatchEpoch;
+}
+function beginStreamEpoch() {
+  streamEpoch += 1;
+}
+var streamDeltaTail = Promise.resolve();
+function emitStreamDelta(payload) {
+  if (!modEvents.hasListeners("stream-delta")) return;
+  const epoch = streamEpoch;
+  streamDeltaTail = streamDeltaTail.then(async () => {
+    dispatchEpoch = epoch;
+    try {
+      await modEvents.emit("stream-delta", payload);
+    } finally {
+      dispatchEpoch = streamEpoch;
+    }
+  }).catch(() => {
+  });
 }
 
 // packages/plugin/src/mods/cross-bundle.ts
@@ -14264,18 +14290,98 @@ function modConsoleReporterScript() {
   });
 })();`;
 }
+var MOD_VIEWPORT_MESSAGE = "dsh-tavern:viewport";
+var MOD_VIEWPORT_CSS_VAR = "--dt-viewport-height";
+var VIEWPORT_UNIT_PATTERN = /(?<![-\w])100(?:d|s|l)?vh(?![\w-])/gi;
+var VIEWPORT_VAR_REFERENCE = `var(${MOD_VIEWPORT_CSS_VAR}, 100vh)`;
+function rewriteViewportUnitsInCssText(cssText) {
+  const special = /\/\*|["']/g;
+  let out = "";
+  let cursor = 0;
+  let match;
+  while ((match = special.exec(cssText)) !== null) {
+    out += cssText.slice(cursor, match.index).replace(VIEWPORT_UNIT_PATTERN, VIEWPORT_VAR_REFERENCE);
+    const end = match[0] === "/*" ? cssText.indexOf("*/", match.index + 2) : cssText.indexOf(match[0], match.index + 1);
+    cursor = end === -1 ? cssText.length : end + (match[0] === "/*" ? 2 : 1);
+    out += cssText.slice(match.index, cursor);
+    special.lastIndex = cursor;
+  }
+  return out + cssText.slice(cursor).replace(VIEWPORT_UNIT_PATTERN, VIEWPORT_VAR_REFERENCE);
+}
+function rewriteViewportUnits(document) {
+  const scripts = [];
+  const shielded = String(document || "").replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, (whole) => {
+    scripts.push(whole);
+    return `\0dt-vh-script-${scripts.length - 1}\0`;
+  });
+  const rewritten = shielded.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (_whole, open, css, close) => `${open}${rewriteViewportUnitsInCssText(css)}${close}`).replace(/(\bstyle\s*=\s*)(["'])([^"']*)\2/gi, (_whole, prefix, quote, css) => `${prefix}${quote}${rewriteViewportUnitsInCssText(css)}${quote}`);
+  return rewritten.replace(/\u0000dt-vh-script-(\d+)\u0000/g, (_whole, index) => scripts[Number(index)]);
+}
+function modViewportScript() {
+  return `(function () {
+  var root = document.documentElement;
+  var apply = function (height) {
+    if (typeof height !== 'number' || !isFinite(height) || height <= 0) return;
+    try { root.style.setProperty(${JSON.stringify(MOD_VIEWPORT_CSS_VAR)}, height + 'px'); } catch (_) {}
+  };
+  apply(window.innerHeight);
+  addEventListener('message', function (event) {
+    var data = event.data;
+    if (!data || data.type !== ${JSON.stringify(MOD_VIEWPORT_MESSAGE)}) return;
+    apply(data.height);
+  });
+})();`;
+}
+function modHeightReporterScript() {
+  return `(function () {
+  var token = '';
+  try { token = new URLSearchParams(location.search).get('token') || ''; } catch (_) { return; }
+  if (token === '') return;
+  var last = -1;
+  var queued = false;
+  var measure = function () {
+    if (queued) return;
+    queued = true;
+    var flush = function () {
+      queued = false;
+      var root = document.documentElement;
+      var body = document.body;
+      var height = Math.max(root ? root.scrollHeight : 0, body ? body.scrollHeight : 0);
+      if (height <= 0 || height === last) return;
+      last = height;
+      try {
+        parent.postMessage({ type: 'dsh-tavern:frontend-height', token: token, height: height }, '*');
+      } catch (_) {}
+      setTimeout(measure, 500);
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush); else setTimeout(flush, 0);
+  };
+  var wire = function () {
+    if (typeof ResizeObserver !== 'function') return;
+    var observer = new ResizeObserver(measure);
+    if (document.documentElement) observer.observe(document.documentElement);
+    if (document.body) observer.observe(document.body);
+  };
+  wire();
+  addEventListener('DOMContentLoaded', wire);
+  addEventListener('load', measure);
+  addEventListener('resize', measure);
+  setTimeout(measure, 0);
+})();`;
+}
 function renderModHtmlDocument(document, csp) {
+  const rewritten = rewriteViewportUnits(String(document ?? ""));
   const meta = `<meta http-equiv="Content-Security-Policy" content="${escapeHtmlAttribute(csp)}">`;
-  const reporter = `<script>${modConsoleReporterScript()}</script>`;
-  const headMatch = /<head(?:\s[^>]*)?>/i.exec(document);
+  const scripts = `<script>${modConsoleReporterScript()}</script><script>${modViewportScript()}</script><script>${modHeightReporterScript()}</script>`;
+  const headMatch = /<head(?:\s[^>]*)?>/i.exec(rewritten);
   if (headMatch !== null) {
     const at = headMatch.index + headMatch[0].length;
-    return `${document.slice(0, at)}${meta}${reporter}${document.slice(at)}`;
+    return `${rewritten.slice(0, at)}${meta}${scripts}${rewritten.slice(at)}`;
   }
-  if (/<html(?:\s[^>]*)?>/i.test(document)) {
-    return document.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${meta}${reporter}</head>`);
+  if (/<html(?:\s[^>]*)?>/i.test(rewritten)) {
+    return rewritten.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${meta}${scripts}</head>`);
   }
-  return `<!doctype html><html><head><meta charset="utf-8">${meta}${reporter}</head><body>${document}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8">${meta}${scripts}</head><body>${rewritten}</body></html>`;
 }
 function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
   return new Promise((resolve5, reject) => {
@@ -15180,13 +15286,22 @@ var ModHost = class _ModHost {
       assets: createModAssets(this.options.dbProvider),
       events: {
         on: (kind, handler) => {
-          if (!modEvents.isKind(kind)) throw new Error(`unknown mod event kind '${String(kind)}' (expected chat-saved | assets-saved | guides-changed)`);
+          if (!modEvents.isKind(kind)) throw new Error(`unknown mod event kind '${String(kind)}' (expected chat-saved | assets-saved | guides-changed | stream-delta)`);
           if (typeof handler !== "function") throw new Error("mod event handler must be a function");
+          let auditedStreamEpoch;
           const off = modEvents.on(kind, async (payload) => {
+            const epoch = currentStreamEpoch();
             try {
               await handler(payload);
             } catch (cause) {
               const message = cause instanceof Error ? cause.message : String(cause);
+              if (kind === "stream-delta" && auditedStreamEpoch === epoch) return;
+              if (kind === "stream-delta") {
+                auditedStreamEpoch = epoch;
+                this.logger?.warn?.(`dsh-tavern: [mod:${id}] stream-delta handler failed: ${message} (further errors for this generation are silenced)`);
+                await this.audit.record(id, "event-error", `stream-delta: ${message} (further stream-delta errors for this generation are silenced)`);
+                return;
+              }
               this.logger?.warn?.(`dsh-tavern: [mod:${id}] ${kind} handler failed: ${message}`);
               await this.audit.record(id, "event-error", message);
             }
@@ -19834,6 +19949,7 @@ async function runGeneration(ctx, db, options) {
     const hookedLlmRequest = await generationHooks.dispatch("pre-llm", llmRequest, { mode, character: speakerName, chatId, group: group2 });
     const usedProvider = hookedLlmRequest.params.provider;
     const usedModel = hookedLlmRequest.params.model;
+    beginStreamEpoch();
     for await (const chunk of ctx.llm.stream({
       provider: hookedLlmRequest.params.provider,
       model: hookedLlmRequest.params.model,
@@ -19848,6 +19964,7 @@ async function runGeneration(ctx, db, options) {
       if (chunk.type === "text-delta") {
         text += chunk.text;
         write({ type: "delta", text: chunk.text });
+        emitStreamDelta({ mode, character: speakerName, chatId, text, delta: chunk.text });
       } else if (chunk.type === "reasoning-delta") {
         reasoning += chunk.text;
         write({ type: "reasoning", text: chunk.text });
@@ -20493,7 +20610,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.5".trim() : "";
-  const commit = true ? normalizeCommit("145964b") : void 0;
+  const commit = true ? normalizeCommit("0bac59a") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
