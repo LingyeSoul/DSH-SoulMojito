@@ -814,6 +814,26 @@ window.__ModuleLoader__.load({
       // 记忆检索（提案 0016）：混合检索 embed 端点设置分区。zh/en 键集与
       // {param} 占位符镜像由 gates 的 locale 校验兜底。
       'panel.section.memory': 'Memory retrieval',
+      // 提示词查看器（A-6）：ST 循环实发请求 + 世界书激活追踪分区。
+      'panel.section.prompts': 'Prompt viewer',
+      'settings.promptsTitle': 'Prompt viewer — final requests & world info activation',
+      'settings.promptsHint': 'The final request actually sent to the LLM each ST generation turn (after pre-llm rewrites — what you see is what was sent) plus the world info activation trace. In-process ring buffer: last 10 records per chat, 50 total, lost on restart. AgentTavern runs on the host AgentLoop and is out of scope.',
+      'settings.promptsEmpty': 'No records yet — run an ST generation turn and refresh.',
+      'settings.promptsRefresh': 'Refresh',
+      'settings.promptsAll': 'All characters',
+      'settings.promptsSystem': 'System block',
+      'settings.promptsNoSystem': '(no system block this turn)',
+      'settings.promptsMessages': 'Messages ({count})',
+      'settings.promptsLore': 'World info activation ({count} entries · {rounds} recursion rounds · budget {used}/{limit} tok)',
+      'settings.promptsLoreEmpty': 'No world info entries activated this turn.',
+      'settings.promptsParams': 'Sampler params',
+      'settings.promptsWorld': 'World',
+      'settings.promptsEntry': 'Entry',
+      'settings.promptsKeys': 'Matched keys',
+      'settings.promptsPosition': 'Position',
+      'settings.promptsProbability': 'Probability',
+      'settings.promptsExpand': 'Expand',
+      'settings.promptsCollapse': 'Collapse',
       'settings.memoryTitle': 'Memory retrieval — hybrid search',
       'settings.memoryHint': 'Optional OpenAI-compatible /embeddings endpoint. When configured, memory_search fuses a semantic channel with lexical ranking (RRF); without a valid config retrieval stays lexical only.',
       'settings.memoryBaseURL': 'Embeddings base URL',
@@ -1033,6 +1053,9 @@ window.__ModuleLoader__.load({
       'mvu.failures': 'Failures',
       'mvu.retry': 'Retry settlement',
       'mvu.retrying': 'Retrying…',
+      'mvu.undo': 'Undo settlement',
+      'mvu.undoing': 'Undoing…',
+      'mvu.status.undone': 'undone',
       'mvu.unavailable': 'No variables or receipts in this chat',
       'mvu.guide.description': 'Variables and settlement receipts for this chat',
       'mvu.summary': '{variables} variables · {receipts} receipts',
@@ -1435,6 +1458,27 @@ window.__ModuleLoader__.load({
       'panel.section.variables': '变量',
       'panel.section.workbench': '工作台方案',
       'panel.section.memory': '记忆检索',
+      // 提示词查看器（A-6）：ST 循环实发请求 + 世界书激活追踪分区。zh/en 键集
+      // 与 {param} 占位符镜像由 gates 的 locale 校验兜底。
+      'panel.section.prompts': '提示词',
+      'settings.promptsTitle': '提示词查看器 — 实发请求与世界书激活',
+      'settings.promptsHint': 'ST 生成循环每轮实际发给 LLM 的最终请求（pre-llm 改写之后，看到即实发）与世界书激活轨迹。进程内环形缓冲：每聊天最近 10 条、总量 50 条，重启即失。AgentTavern 走宿主 AgentLoop，不在此面。',
+      'settings.promptsEmpty': '暂无记录——发一轮 ST 生成后刷新。',
+      'settings.promptsRefresh': '刷新',
+      'settings.promptsAll': '全部角色',
+      'settings.promptsSystem': 'System 段',
+      'settings.promptsNoSystem': '（本轮无 system 段）',
+      'settings.promptsMessages': '消息序列（{count} 条）',
+      'settings.promptsLore': '世界书激活（{count} 条 · 递归 {rounds} 轮 · 预算 {used}/{limit} tok）',
+      'settings.promptsLoreEmpty': '本轮无世界书条目激活。',
+      'settings.promptsParams': '采样参数',
+      'settings.promptsWorld': '世界',
+      'settings.promptsEntry': '条目',
+      'settings.promptsKeys': '命中键',
+      'settings.promptsPosition': '位置',
+      'settings.promptsProbability': '概率',
+      'settings.promptsExpand': '展开',
+      'settings.promptsCollapse': '折叠',
       'settings.memoryTitle': '记忆检索 — 混合检索',
       'settings.memoryHint': '可选的 OpenAI 兼容 /embeddings 端点。配置后 memory_search 在词法排序上融合语义通道（RRF）；未配置或配置无效时检索保持纯词法。',
       'settings.memoryBaseURL': 'Embeddings 端点 base URL',
@@ -1654,6 +1698,9 @@ window.__ModuleLoader__.load({
       'mvu.failures': '失败项',
       'mvu.retry': '重试结算',
       'mvu.retrying': '重试中…',
+      'mvu.undo': '撤销最近结算',
+      'mvu.undoing': '撤销中…',
+      'mvu.status.undone': '已撤销',
       'mvu.unavailable': '本聊暂无变量或回执',
       'mvu.guide.description': '本聊的变量与结算回执',
       'mvu.summary': '{variables} 个变量 · {receipts} 条回执',
@@ -2317,6 +2364,26 @@ window.__ModuleLoader__.load({
           character: binding.character,
           chatId: binding.chatId,
           revision: snapshot.revisions[key],
+        }),
+      })
+      syncChatRevision(binding.character, binding.chatId, result.revision)
+      return result
+    }
+
+    // 回执撤销（B-6a）：撤销最新一条有效回执。两架构都可撤销（服务端按绑定
+    // 架构改派执行核）；revision 是可选预检——本地有才带（AgentTavern 会话的
+    // 本地 revision 可能缺失，服务端以快照 CAS 兜底）。响应携带新 revision，
+    // 与 retry 同款同步 revisions[key] 并强刷本地聊天快照。
+    async function undoMvuSettlement(binding) {
+      const key = chatKey(binding.character, binding.chatId)
+      const revision = snapshot.revisions[key]
+      const result = await api('mvu/receipts/undo', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          character: binding.character,
+          chatId: binding.chatId,
+          ...(typeof revision === 'string' ? { revision } : {}),
         }),
       })
       syncChatRevision(binding.character, binding.chatId, result.revision)
@@ -4088,6 +4155,109 @@ window.__ModuleLoader__.load({
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
+    // 提示词查看器（A-6，2026-10-11）：ST 生成循环每轮**实发请求**（pre-llm
+    // hook 改写之后的最终形状）与世界书激活轨迹的只读面板。数据来自服务端
+    // prompt-viewer.ts 的进程内环形缓冲（每聊天最近 10 条 / 总量 50，重启即失）；
+    // v1 只覆盖 ST 循环——AgentTavern 走宿主 AgentLoop，插件看不到完整请求。
+    // 纯只读展示：无编辑无重放（preset 纯化重放留 v2，见 A-6 决策文档）。
+    const PROMPT_POSITION_LABELS = {
+      0: 'Before char', 1: 'After char', 2: 'AN top', 3: 'AN bottom',
+      4: '@Depth', 5: 'EM top', 6: 'EM bottom', 7: 'Outlet',
+    }
+    const PROMPT_MESSAGE_PREVIEW = 600
+
+    function promptPositionLabel(entry) {
+      const label = PROMPT_POSITION_LABELS[entry.position] || `#${entry.position}`
+      return entry.position === 4 ? `${label} ${entry.depth}` : label
+    }
+
+    function promptParamsLine(params) {
+      return Object.entries(params || {})
+        .map(([key, value]) => `${key}=${String(value)}`)
+        .join(' · ')
+    }
+
+    function PromptMessageView({ message, t }) {
+      const [expanded, setExpanded] = useState(false)
+      const long = message.content.length > PROMPT_MESSAGE_PREVIEW
+      const shown = long && !expanded
+        ? `${message.content.slice(0, PROMPT_MESSAGE_PREVIEW)}…`
+        : message.content
+      return h('div', null,
+        h('div', null,
+          h('span', { className: 'dt-label' }, message.role),
+          long ? h('button', {
+            type: 'button',
+            className: 'dt-prompt-toggle',
+            onClick: () => setExpanded(!expanded),
+          }, expanded ? t('settings.promptsCollapse') : t('settings.promptsExpand')) : null),
+        h('pre', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '2px 0 10px', fontSize: '12px' } }, shown))
+    }
+
+    function PromptRecordView({ record, t }) {
+      const lore = record.loreTrace
+      return h('details', { className: 'dt-settings-band' },
+        h('summary', null,
+          `${new Date(record.at).toLocaleString()} · ${record.character} · ${record.chatId} · ${record.mode} · ~${record.promptTokens} tok · ${record.messages.length} msg`),
+        record.system !== undefined
+          ? h('details', null,
+              h('summary', null, t('settings.promptsSystem')),
+              h('pre', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '4px 0 10px', fontSize: '12px' } }, record.system))
+          : h('p', { className: 'dt-hint' }, t('settings.promptsNoSystem')),
+        h('p', { className: 'dt-label' }, t('settings.promptsMessages', { count: record.messages.length })),
+        record.messages.map((message, index) => h(PromptMessageView, { key: index, message, t })),
+        lore && lore.entries.length > 0
+          ? h('div', null,
+              h('p', { className: 'dt-label' }, t('settings.promptsLore', {
+                count: lore.entries.length, rounds: lore.recursionRounds, used: lore.budgetUsed, limit: lore.budgetLimit })),
+              h('table', { style: { borderCollapse: 'collapse', fontSize: '12px', marginBottom: '10px' } },
+                h('thead', null, h('tr', null,
+                  ['settings.promptsWorld', 'settings.promptsEntry', 'settings.promptsKeys', 'settings.promptsPosition', 'settings.promptsProbability'].map((key) =>
+                    h('th', { key, style: { border: '1px solid var(--dsh-border, #ccc)', padding: '2px 6px', textAlign: 'left' } }, t(key))))),
+                h('tbody', null, lore.entries.map((entry, index) => h('tr', { key: index },
+                  h('td', { style: { border: '1px solid var(--dsh-border, #ccc)', padding: '2px 6px' } }, entry.world),
+                  h('td', { style: { border: '1px solid var(--dsh-border, #ccc)', padding: '2px 6px' } },
+                    `${entry.name || `#${entry.uid}`}`,
+                    entry.constant ? ' · 常驻' : '',
+                    entry.viaRecursion ? ' · 递归' : '',
+                    ` · ${entry.reason}`),
+                  h('td', { style: { border: '1px solid var(--dsh-border, #ccc)', padding: '2px 6px' } }, entry.matchedKeys.join(', ') || '—'),
+                  h('td', { style: { border: '1px solid var(--dsh-border, #ccc)', padding: '2px 6px' } }, promptPositionLabel(entry)),
+                  h('td', { style: { border: '1px solid var(--dsh-border, #ccc)', padding: '2px 6px' } },
+                    entry.probability === undefined ? '—' : `${entry.probability.roll !== undefined ? `${entry.probability.roll.toFixed(1)}/` : ''}${entry.probability.value}%`),
+                )))))
+          : h('p', { className: 'dt-hint' }, t('settings.promptsLoreEmpty')),
+        h('p', { className: 'dt-hint' }, `${t('settings.promptsParams')}: ${promptParamsLine(record.params) || '—'}`))
+    }
+
+    function PanelPrompts() {
+      const t = useTranslate()
+      const state = useTavernStore()
+      const [records, setRecords] = useState([])
+      const [loaded, setLoaded] = useState(false)
+      const [character, setCharacter] = useState('')
+      const [error, setError] = useState('')
+      const refresh = () => api(`prompts${character ? `?character=${encodeURIComponent(character)}` : ''}`)
+        .then((result) => { setRecords(result.records || []); setLoaded(true); return result })
+        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+      useEffect(() => { void refresh() }, [character])
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('settings.promptsTitle')),
+        h('p', { className: 'dt-hint' }, t('settings.promptsHint')),
+        h('div', { className: 'dt-editor-actions' },
+          h(SettingSelect, {
+            label: t('settings.character'),
+            value: character,
+            options: state.bootstrap.characters || [],
+            empty: t('settings.promptsAll'),
+            onChange: (value) => setCharacter(value || ''),
+          }),
+          h(Button, { size: 'sm', variant: 'outline', onClick: () => { setError(''); void refresh() } }, t('settings.promptsRefresh'))),
+        loaded && records.length === 0 && !error ? h('p', { className: 'dt-hint' }, t('settings.promptsEmpty')) : null,
+        records.map((record) => h(PromptRecordView, { key: record.seq, record, t })),
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
     function ActiveSetupBand() {
       const state = useTavernStore()
       const t = useTranslate()
@@ -4929,6 +5099,8 @@ window.__ModuleLoader__.load({
     // 重试按钮只对 ST 绑定暴露——POST mvu/retry 重跑的是 ST 生成链路的模板
     // 输出渲染（AgentTavern 会话服务端 409 TAVERN_ARCHITECTURE_CONFLICT）；群聊
     // 走 ST 链路，服务端按楼层发言人回落支持重试（src/mvu.ts），同样暴露。
+    // 撤销按钮（B-6a）对两架构开放：撤销的是回执记录的变量变更（服务端按绑定
+    // 架构改派执行核），与重跑渲染无关；已撤销回执灰显 + undone 徽标。
     function flattenMvuVariables(value, prefix = '') {
       if (value === null || typeof value !== 'object' || Array.isArray(value)) return []
       const rows = []
@@ -5052,10 +5224,20 @@ window.__ModuleLoader__.load({
       }, [key, status?.available])
       const receipts = Array.isArray(status?.receipts) ? status.receipts : []
       const latest = receipts[receipts.length - 1]
+      // 最新有效回执（newest-first 链头）：最后一个未标 undoneAt 的条目——撤销
+      // 服务端按同一判据选目标（B-6a）；全已撤销 / 无回执时按钮隐藏。
+      const latestValid = (() => {
+        for (let index = receipts.length - 1; index >= 0; index--) {
+          if (!receipts[index].undoneAt) return receipts[index]
+        }
+        return undefined
+      })()
       const canRetry = Boolean(binding)
         && bindingArchitecture(binding) === 'st'
         && latest !== undefined
         && (latest.status === 'failed' || (Array.isArray(latest.failures) && latest.failures.length > 0))
+      // 撤销对两架构开放（AgentTavern settle 回执同样可撤销）。
+      const canUndo = Boolean(binding) && latestValid !== undefined
       const retry = () => {
         if (!binding || busy) return
         setBusy(true)
@@ -5079,6 +5261,28 @@ window.__ModuleLoader__.load({
           }
         })()
       }
+      const undo = () => {
+        if (!binding || busy) return
+        setBusy(true)
+        setError('')
+        void (async () => {
+          try {
+            await loadChat(binding.character, binding.chatId)
+            await undoMvuSettlement(binding)
+            const next = await reload()
+            if (next) setStatus(next)
+          } catch (cause) {
+            setError(cause instanceof Error ? cause.message : String(cause))
+            if (cause?.status === 409 || cause?.code === REVISION_CONFLICT) {
+              await loadChat(binding.character, binding.chatId, true).catch(() => {})
+              const next = await reload()
+              if (next) setStatus(next)
+            }
+          } finally {
+            setBusy(false)
+          }
+        })()
+      }
       // 回执卡片与「展开全部」钮在三个变体（内联 / 弹层 / 侧栏）间共享，收进
       // 组件内闭包：状态（expandedReceipt / showAllReceipts）挂在同一实例上。
       const receiptCard = (receipt, index) => {
@@ -5087,9 +5291,12 @@ window.__ModuleLoader__.load({
         const failures = Array.isArray(receipt.failures) ? receipt.failures : []
         const expanded = expandedReceipt === rowKey
         const shownChanges = expanded ? changes : changes.slice(0, 3)
-        return h('div', { key: rowKey, className: 'dt-mvu-receipt' },
+        // 已撤销回执（B-6a）：灰显 + undone 徽标，与状态徽标并排呈现。
+        const undone = typeof receipt.undoneAt === 'string' && receipt.undoneAt !== ''
+        return h('div', { key: rowKey, className: undone ? 'dt-mvu-receipt dt-mvu-receipt-undone' : 'dt-mvu-receipt' },
           h('div', { className: 'dt-mvu-receipt-head' },
             h('span', { className: `dt-mvu-badge dt-mvu-badge-${receipt.status}` }, t(`mvu.status.${receipt.status}`)),
+            undone ? h('span', { className: 'dt-mvu-badge dt-mvu-badge-undone' }, t('mvu.status.undone')) : null,
             h('span', { className: 'dt-mvu-meta' }, `${t('mvu.turn', { turn: receipt.turnKey })} · ${formatNovelTime(receipt.at)}`)),
           shownChanges.map((change) => h('div', { key: change.name, className: 'dt-mvu-change' },
             t('mvu.change', {
@@ -5126,12 +5333,19 @@ window.__ModuleLoader__.load({
         return h('div', { className: 'dt-mvu-side', 'data-dsh-tavern-surface': 'mvu-sidebar' },
           h('div', { className: 'dt-mvu-side-head' },
             h('span', { className: 'dt-mvu-summary' }, t('mvu.summary', { variables: variables.length, receipts: receipts.length })),
-            canRetry ? h('button', {
-              type: 'button',
-              className: 'dt-mvu-side-retry',
-              disabled: busy,
-              onClick: retry,
-            }, busy ? t('mvu.retrying') : t('mvu.retry')) : null),
+            h('div', { className: 'dt-mvu-side-actions' },
+              canUndo ? h('button', {
+                type: 'button',
+                className: 'dt-mvu-side-retry',
+                disabled: busy,
+                onClick: undo,
+              }, busy ? t('mvu.undoing') : t('mvu.undo')) : null,
+              canRetry ? h('button', {
+                type: 'button',
+                className: 'dt-mvu-side-retry',
+                disabled: busy,
+                onClick: retry,
+              }, busy ? t('mvu.retrying') : t('mvu.retry')) : null)),
           busy ? h('p', { className: 'dt-muted' }, t('mvu.retrying')) : null,
           error ? h('p', { className: 'dt-error' }, error) : null,
           status.renderedHtml
@@ -5176,8 +5390,9 @@ window.__ModuleLoader__.load({
             h(IconChevronDownOutline14, { className: open ? 'dt-chevron-open' : undefined }),
             h('span', null, t('mvu.title')),
             receipts.length > 0 ? h('span', { className: 'dt-mvu-count' }, String(receipts.length)) : null),
-          canRetry ? h('div', { className: 'dt-mvu-actions' },
-            h('button', { type: 'button', disabled: busy, onClick: retry }, busy ? t('mvu.retrying') : t('mvu.retry'))) : null),
+          (canUndo || canRetry) ? h('div', { className: 'dt-mvu-actions' },
+            canUndo ? h('button', { type: 'button', disabled: busy, onClick: undo }, busy ? t('mvu.undoing') : t('mvu.undo')) : null,
+            canRetry ? h('button', { type: 'button', disabled: busy, onClick: retry }, busy ? t('mvu.retrying') : t('mvu.retry')) : null) : null),
         open ? h('div', { className: 'dt-mvu-body' },
           busy ? h('p', { className: 'dt-muted' }, t('mvu.retrying')) : null,
           error ? h('p', { className: 'dt-error' }, error) : null,
@@ -6210,6 +6425,9 @@ window.__ModuleLoader__.load({
       { id: 'mods', icon: IconCordisPluginOutline14, label: (t) => t('panel.section.mods'), component: () => h(PanelMods) },
       // 第 15 个分区「记忆检索」（提案 0016）：混合检索 embed 端点设置 + 探针。
       { id: 'memory', icon: IconDataOutline16, label: (t) => t('panel.section.memory'), component: () => h(MemoryRetrievalBand) },
+      // 第 16 个分区「提示词」（A-6，2026-10-11）：ST 循环实发请求 + 世界书激活
+      // 追踪的只读查看器（服务端 prompt-viewer.ts 环形缓冲）。
+      { id: 'prompts', icon: IconSearchOutline16, label: (t) => t('panel.section.prompts'), component: () => h(PanelPrompts) },
     ]) {
       registerPanelSection(definition)
     }
@@ -9135,10 +9353,15 @@ window.__ModuleLoader__.load({
         .dt-mvu-badge-updated{color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary));background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#3fb950) 12%,transparent)}
         .dt-mvu-badge-unchanged{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}
         .dt-mvu-badge-failed{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent)}
+        .dt-mvu-badge-undone{color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-interactive-bg-hover)}
+        .dt-mvu-receipt-undone{opacity:.55}
+        .dt-mvu-receipt-undone .dt-mvu-change{text-decoration:line-through;text-decoration-color:color-mix(in srgb,currentColor 45%,transparent)}
         .dt-mvu-meta{color:var(--dsw-alias-label-tertiary);font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .dt-mvu-change{font-family:monospace;font-size:11px;line-height:16px;overflow-wrap:anywhere;color:var(--dsw-alias-label-primary)}
         .dt-mvu-more{align-self:flex-start;border:0;padding:0;color:var(--dsw-alias-state-business-primary);background:transparent;cursor:pointer;font:inherit;font-size:11px}
         .dt-mvu-more:hover{text-decoration:underline}
+        .dt-prompt-toggle{border:0;padding:0 0 0 6px;color:var(--dsw-alias-state-business-primary);background:transparent;cursor:pointer;font:inherit;font-size:11px}
+        .dt-prompt-toggle:hover{text-decoration:underline}
         .dt-mvu-failures{display:flex;flex-direction:column;gap:2px}
         .dt-mvu-failures-title{color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:14px}
         .dt-mvu-failure{color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px;overflow-wrap:anywhere}
@@ -9146,6 +9369,7 @@ window.__ModuleLoader__.load({
         .dt-mvu-side-head{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;flex:none}
         .dt-mvu-summary{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .dt-mvu-side-retry{flex:none;height:28px;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer;font:inherit;font-size:12px}
+        .dt-mvu-side-actions{flex:none;display:flex;align-items:center;gap:6px}
         .dt-mvu-side-retry:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
         .dt-mvu-side-retry:disabled{cursor:not-allowed;opacity:.45}
         .dt-mvu-side-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-height:220px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:13px;line-height:20px}

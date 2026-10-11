@@ -32,6 +32,7 @@ import {
   NovelStorageCorruptionError,
   NovelStore,
   TavernStore,
+  VariableRevisionConflictError,
   VariableStore,
   isValidNovelId,
   normalizeMemoryEmbedding,
@@ -59,6 +60,7 @@ import { isNovelAuthorMessage, receiveAuthorMessage } from './agent-novel/requir
 import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
 import { addGuide, emitGuidesChanged, formatGuidesBlock, normalizeGuides, removeGuide } from './guides.js'
 import {
+  MvuUndoRefusalError,
   applyMvuSettlementGuard,
   overlayScopedVariables,
   readChatVariables,
@@ -68,6 +70,8 @@ import {
   retryMvuSettlement,
   snapshotChatVariables,
   statusTemplateOf,
+  undoMvuAgentSettlement,
+  undoMvuStSettlement,
 } from './mvu.js'
 import { stripMvuSchema } from './mvu-guard.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
@@ -81,6 +85,9 @@ import { createGenerationTemplates, mergeTemplateLocalVars, type GenerationTempl
 // ST 生成管线 hook 总线（提案 0015 P0）：五个变换点的空总线，恒空 = 生成行为
 // 逐字节不变；P1 的 api.hooks.on 经 generationHooks.register 落注册。
 import { generationHooks } from './generation-hooks.js'
+// 提示词查看器（A-6，2026-10-11）：pre-llm 之后的实发请求 + 世界书激活轨迹的
+// 进程内环形缓冲，管理面板「提示词」分区只读查看。纯观察面：记录失败不反噬生成。
+import { listPromptViews, recordPromptView } from './prompt-viewer.js'
 import { runCandidateGeneration } from './candidates.js'
 import {
   applyScriptBinding,
@@ -1430,7 +1437,7 @@ async function handleApi(ctx, req, res) {
   // （variable_set/patch/delete 与 tavern_variable_settle 全族都写那里，从不写
   // chat_metadata.variables），扁平点分名覆盖回嵌套树后与 ST 共用同一份显示与
   // 模板语义；ST 绑定或未绑定的聊天不回读，避免架构切换后的残留值污染 ST 变量。
-  if ((method === 'POST' && route === 'mvu/retry') || (method === 'GET' && route.startsWith('mvu/status/'))) {
+  if ((method === 'POST' && (route === 'mvu/retry' || route === 'mvu/receipts/undo')) || (method === 'GET' && route.startsWith('mvu/status/'))) {
     return handleMvuApi(req, res, route, method, db)
   }
 
@@ -1461,6 +1468,21 @@ async function handleApi(ctx, req, res) {
   // B-3 记忆维护 run（wait:false 风格）：POST 启动（同 scope 单飞 409），GET 轮询。
   if ((method === 'POST' || method === 'GET') && route === 'memory/maintenance') {
     return handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db)
+  }
+
+  // 提示词查看器（A-6）：ST 生成循环实发请求的只读查询。可选过滤（character /
+  // chatId 任一或组合），缺省全量按时间倒序；记录是进程内环形缓冲（每聊天 10
+  // 条 / 总量 50，重启即失），无记录时空数组——不因缓冲为空 500。
+  if (method === 'GET' && route === 'prompts') {
+    const filterCharacter = url.searchParams.get('character')
+    const filterChat = url.searchParams.get('chatId')
+    return sendJson(res, 200, {
+      ok: true,
+      records: listPromptViews({
+        ...(filterCharacter !== null ? { character: filterCharacter } : {}),
+        ...(filterChat !== null ? { chatId: filterChat } : {}),
+      }),
+    })
   }
 
   if (method === 'GET' && route.startsWith('world/')) {
@@ -1855,6 +1877,61 @@ async function handleMvuApi(
       templatesActive: templatesEnabledFlag && templatesEnabled(),
     })
     return sendJson(res, 200, { ok: true, receipt: result.receipt, revision: result.revision, variables: result.variables })
+  }
+
+  // MVU 回执撤销（B-6a，2026-10-11）：只能撤销该聊天最新一条有效回执
+  // （newest-first 链），把该轮每项变更恢复到回执记录的 before 值。变量源按
+  // 绑定架构取（与 GET mvu/status 同判据）：AgentTavern 绑定写 chat 作用域
+  // VariableStore，其余写 chat_metadata.variables——两个执行核共享 mvu.ts 的
+  // 纯函数核。语义性拒绝（无回执/全已撤销/数据不完整/守卫拒绝）→ 400 分类
+  // 报因；并发走聊天 revision CAS（与 retry 同款，body.revision 可选预检）。
+  // 成功后发 chat-saved（floorCount 传当前楼数——撤销不动楼层）。
+  if (method === 'POST' && route === 'mvu/receipts/undo') {
+    const body = await readJson(req)
+    const state = await db.getState()
+    const characterName = typeof body.character === 'string' ? body.character : state.activeCharacter
+    const chatId = body.chatId
+    if (!characterName || typeof chatId !== 'string') throw new Error('character and chatId are required')
+    let snapshot: Awaited<ReturnType<typeof db.getChatSnapshot>>
+    try {
+      snapshot = await db.getChatSnapshot(characterName, chatId)
+    } catch (cause) {
+      // store 的 safeChatFileName 对空/畸形 chatId 抛 'invalid chat id'（与 guides
+      // 路由同款）：HTTP 层统一按「聊天不存在」应答。
+      if (cause instanceof Error && cause.message === 'invalid chat id') snapshot = undefined
+      else throw cause
+    }
+    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'character or chat not found' })
+    if (typeof body.revision === 'string' && body.revision !== snapshot.revision) {
+      throw new ChatRevisionConflictError(body.revision, snapshot.revision)
+    }
+    const agentTavernBound = Object.values(state.sessionBindings).some((binding) =>
+      binding.architecture === 'agent-tavern' && binding.chatId === chatId && binding.character === characterName)
+    const options = { characterName, chatId, snapshot, at: new Date().toISOString() }
+    let result
+    try {
+      result = agentTavernBound
+        ? await undoMvuAgentSettlement(await variables(), db, options)
+        : await undoMvuStSettlement(db, options)
+    } catch (error) {
+      if (error instanceof MvuUndoRefusalError) {
+        return sendJson(res, 400, { ok: false, message: error.message, code: `MVU_UNDO_${error.undoCode}` })
+      }
+      // chat 作用域变量的 CAS 冲突（AgentTavern 撤销路径）：并发写已在变量层
+      // 被拦下，按既有 409 通道如实上抛，不部分落回执。
+      if (error instanceof VariableRevisionConflictError) {
+        return sendJson(res, 409, { ok: false, message: error.message, code: error.code })
+      }
+      throw error
+    }
+    await emitChatSaved(characterName, chatId, result.revision, snapshot.chat.messages.length)
+    return sendJson(res, 200, {
+      ok: true,
+      undoneTurnKey: result.receipt.turnKey,
+      restored: result.restores,
+      receipt: result.receipt,
+      revision: result.revision,
+    })
   }
 
   // MVU 状态（提案 0012 P1）：变量 + 回执快照；卡片约定字段
@@ -3259,6 +3336,17 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   // （P0 决策遗留的已知问题就此闭环，decisions/2026-10-10-mod-review-fixes.md）。
   const usedProvider = hookedLlmRequest.params.provider
   const usedModel = hookedLlmRequest.params.model
+  // 提示词查看器（A-6）：记录点在 pre-llm hook 全部跑完之后、llm.stream 之前——
+  // 看到即实发（mod 改写后的最终形状）。纯观察：记录失败（含 loreTrace 提取）
+  // 被 prompt-viewer.ts 整体吞掉 + 宿主日志一行，绝不影响生成。lore 与本轮请求
+  // 同轮对齐。
+  recordPromptView({
+    character: speakerName,
+    chatId,
+    mode,
+    request: hookedLlmRequest,
+    lore,
+  }, ctx.logger)
   // stream-delta 代次（A-3）：本轮流式生成开始——mod 宿主据它做「每代次每 mod
   // 首错」的审计防洪（mods/events.ts）。
   beginStreamEpoch()

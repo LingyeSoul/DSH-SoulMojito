@@ -1936,6 +1936,7 @@ function activateWorldInfo(input) {
   const activated = /* @__PURE__ */ new Map();
   const activatedMeta = /* @__PURE__ */ new Map();
   const failedProbability = /* @__PURE__ */ new Set();
+  const passedProbabilityRolls = /* @__PURE__ */ new Map();
   const bookUsed = /* @__PURE__ */ new Map();
   let budgetUsed = 0;
   let budgetExceeded = false;
@@ -1994,6 +1995,7 @@ function activateWorldInfo(input) {
           diag(entry, "probability", { matchedKeys: match.matchedKeys, probabilityRoll: roll });
           continue;
         }
+        passedProbabilityRolls.set(entry.entryId, roll);
       }
       candidates.push(entry);
       matchById.set(entry.entryId, match);
@@ -2033,8 +2035,9 @@ function activateWorldInfo(input) {
       if (!entry.ignoreBudget) bookUsed.set(entry.bookIndex, usedByBook + tokens);
       activated.set(entry.entryId, entry);
       const match = matchById.get(entry.entryId);
-      activatedMeta.set(entry.entryId, { matchedKeys: match.matchedKeys, reason: match.reason });
-      diag(entry, match.reason, { matchedKeys: match.matchedKeys });
+      activatedMeta.set(entry.entryId, { matchedKeys: match.matchedKeys, reason: match.reason, viaRecursion: state === "RECURSION" });
+      const rolled = passedProbabilityRolls.get(entry.entryId);
+      diag(entry, match.reason, { matchedKeys: match.matchedKeys, ...rolled !== void 0 ? { probabilityRoll: rolled } : {} });
       accepted.push(entry);
     }
     return accepted;
@@ -2073,6 +2076,7 @@ function activateWorldInfo(input) {
       content: entry.content,
       matchedKeys: meta.matchedKeys,
       activationReason: meta.reason,
+      viaRecursion: meta.viaRecursion,
       entry: entry.raw
     };
   });
@@ -4931,10 +4935,10 @@ var MemoryStore = class _MemoryStore {
   }
   async search(query) {
     const normalized = normalizeQuery(query);
-    const records = await this.listRecords(normalized);
+    const records2 = await this.listRecords(normalized);
     const tokens = tokenizeQuery(normalized.query ?? "");
     const now = Date.now();
-    const hits = records.map((record) => {
+    const hits = records2.map((record) => {
       const haystack = `${record.content}
 ${record.tags.join(" ")}`.toLocaleLowerCase();
       const matched = tokens.filter((token) => haystack.includes(token)).length;
@@ -4982,9 +4986,9 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
    * 排序 createdAt → id（页码偏移在维护编辑（只改 revision/updatedAt）下稳定）。
    */
   async list(scope, scopeId, options = {}) {
-    const records = await this.listRecords({ scope, scopeId, includeDeleted: options.includeDeleted === true });
-    records.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
-    return structuredClone(records);
+    const records2 = await this.listRecords({ scope, scopeId, includeDeleted: options.includeDeleted === true });
+    records2.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+    return structuredClone(records2);
   }
   async put(input, expectedRevision) {
     validateWrite(input);
@@ -5899,8 +5903,8 @@ function validateOutlineConsistency(chapters, currentChapterId) {
   }
   return errors;
 }
-function requirementWatermark(records) {
-  const ordered = [...records].sort((left, right) => left.sequence - right.sequence);
+function requirementWatermark(records2) {
+  const ordered = [...records2].sort((left, right) => left.sequence - right.sequence);
   let watermark = 0;
   for (const record of ordered) {
     if (record.status !== "applied" && record.status !== "superseded") break;
@@ -7548,9 +7552,9 @@ function outlinePayloadErrorMessage(errors) {
   };
   return `invalid outline payload: ${errors.map(render).join("; ")}`;
 }
-function applyHandledRequirements(records, handled, outlineRevision) {
+function applyHandledRequirements(records2, handled, outlineRevision) {
   const byId = new Map(handled.map((item) => [item.requirementId, item]));
-  return records.map((record) => {
+  return records2.map((record) => {
     const item = byId.get(record.requirementId);
     if (item === void 0) return record;
     if (item.result === "applied") {
@@ -9482,20 +9486,20 @@ var NovelProjector = class _NovelProjector {
       if (cause.code === "ENOENT") return [];
       throw cause;
     }
-    const records = [];
+    const records2 = [];
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
       const parsed = JSON.parse(await fs10.readFile(path9.join(dir, file), "utf8"));
       if (typeof parsed.id === "string" && typeof parsed.revision === "string") {
-        records.push({ id: parsed.id, revision: parsed.revision });
+        records2.push({ id: parsed.id, revision: parsed.revision });
       }
     }
-    return records;
+    return records2;
   }
 };
 function memoryRecordsFor(novelId, commit, paragraphs) {
   const scopeId = novelScopeId(novelId);
-  const records = commit.canonChanges.map((change, index) => ({
+  const records2 = commit.canonChanges.map((change, index) => ({
     id: `novel-${novelId}-${commit.commitId}-${index}`,
     scope: "chat",
     scopeId,
@@ -9506,7 +9510,7 @@ function memoryRecordsFor(novelId, commit, paragraphs) {
     confidence: 1,
     source: { kind: "novel-commit", novelId, commitId: commit.commitId, unitId: commit.unitId, chapterId: commit.chapterId }
   }));
-  records.push({
+  records2.push({
     id: `novel-${novelId}-${commit.commitId}-${commit.canonChanges.length}`,
     scope: "chat",
     scopeId,
@@ -9517,7 +9521,7 @@ function memoryRecordsFor(novelId, commit, paragraphs) {
     confidence: 1,
     source: { kind: "novel-commit", novelId, commitId: commit.commitId, unitId: commit.unitId, chapterId: commit.chapterId }
   });
-  return records;
+  return records2;
 }
 function orderedChapters(snapshot2) {
   return [...snapshot2.outline?.chapters ?? []].sort((left, right) => left.order - right.order);
@@ -11744,7 +11748,8 @@ function readMvuReceipts(chat) {
         if (typeof change.reason === "string") out.reason = change.reason;
         return [out];
       }) : [],
-      failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : []
+      failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : [],
+      ...typeof record.undoneAt === "string" ? { undoneAt: record.undoneAt } : {}
     });
   }
   return receipts;
@@ -11806,7 +11811,7 @@ function revertMvuTreePath(tree, path12, before) {
     if (Object.keys(node).length > 0) break;
     if (getMvuTreePath(before, pathSoFar) !== void 0) break;
     const popped = segments.pop();
-    const upper = getMvuTreePath(tree, segments.join("."));
+    const upper = segments.length > 0 ? getMvuTreePath(tree, segments.join(".")) : tree;
     if (upper === null || typeof upper !== "object" || Array.isArray(upper)) break;
     delete upper[popped];
   }
@@ -12004,6 +12009,141 @@ async function retryMvuSettlement(db, options) {
   appendMvuReceipt(chat, receipt);
   const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
   return { receipt, revision, variables: stripMvuSchema(after) };
+}
+var MvuUndoRefusalError = class extends Error {
+  undoCode;
+  constructor(undoCode, message) {
+    super(message);
+    this.name = "MvuUndoRefusalError";
+    this.undoCode = undoCode;
+  }
+};
+function latestValidMvuReceipt(receipts) {
+  for (let index = receipts.length - 1; index >= 0; index--) {
+    if (receipts[index].undoneAt === void 0) return { index, receipt: receipts[index] };
+  }
+  return void 0;
+}
+function refuseUndo(target, receipts) {
+  if (target !== void 0) return target;
+  if (receipts.length > 0) {
+    throw new MvuUndoRefusalError("ALREADY_UNDONE", `all ${receipts.length} settlement receipts in this chat have been undone; nothing valid is left to undo`);
+  }
+  throw new MvuUndoRefusalError("NO_VALID_RECEIPT", "no MVU settlement receipt in this chat to undo");
+}
+function planMvuUndoRestores(receipt) {
+  if (receipt.status === "updated" && receipt.changes.length === 0) {
+    throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt ${receipt.turnKey} claims status 'updated' but records no change data; the receipt data is incomplete and cannot be undone`);
+  }
+  const restores = [];
+  for (const change of receipt.changes) {
+    if (!("before" in change) && !("after" in change)) {
+      throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt change '${change.name}' records neither a before nor an after value; the receipt data is incomplete and cannot be undone`);
+    }
+    restores.push({ path: change.name, ..."before" in change ? { value: change.before } : {} });
+  }
+  return restores;
+}
+function formatRestoreValue(value) {
+  const text = (() => {
+    try {
+      return JSON.stringify(value) ?? String(value);
+    } catch {
+      return String(value);
+    }
+  })();
+  return text.length > 80 ? `${text.slice(0, 79)}\u2026` : text;
+}
+function screenMvuUndoRestores(schema, restores, currentOf) {
+  const failures = [];
+  for (const restore of restores) {
+    if (restore.path.split(".")[0] === "$schema") {
+      failures.push(`$schema: guard readonly: the schema subtree is the declared guard contract and cannot be undone into`);
+      continue;
+    }
+    if (schema === void 0) continue;
+    const value = "value" in restore ? restore.value : void 0;
+    const result = guardMvuWrite(schema, restore.path, value, currentOf(restore.path));
+    if (!result.ok) {
+      failures.push(`${restore.path}: guard ${result.kind}: ${result.reason}`);
+      continue;
+    }
+    if (!mvuValuesEqual(result.value, value)) {
+      failures.push(`${restore.path}: guard would adjust the restored value ${formatRestoreValue(value)} to ${formatRestoreValue(result.value)} ($schema changed since the settlement); refusing to undo with anything other than the recorded before value`);
+    }
+  }
+  if (failures.length > 0) throw new MvuUndoRefusalError("UNDO_REJECTED", failures.join("; "));
+}
+function applyMvuUndoRestores(tree, restores) {
+  const before = overlayScopedVariables({}, restores.flatMap((restore) => "value" in restore ? [{ name: restore.path, value: deepClone(restore.value) }] : []));
+  for (const restore of restores) revertMvuTreePath(tree, restore.path, before);
+}
+function markMvuReceiptUndone(chat, index, at) {
+  const receipts = readMvuReceipts(chat);
+  const marked = { ...receipts[index], undoneAt: at ?? (/* @__PURE__ */ new Date()).toISOString() };
+  const next = receipts.slice();
+  next[index] = marked;
+  chat.header.chat_metadata.mvu = { receipts: next };
+  return marked;
+}
+async function undoMvuStSettlement(db, options) {
+  const { characterName, chatId, snapshot: snapshot2 } = options;
+  const chat = snapshot2.chat;
+  const receipts = readMvuReceipts(chat);
+  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
+  const restores = planMvuUndoRestores(target.receipt);
+  const metadata = chat.header.chat_metadata;
+  const variables2 = plainObject(metadata.variables) ?? {};
+  screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables2), restores, (path12) => getMvuTreePath(variables2, path12));
+  applyMvuUndoRestores(variables2, restores);
+  if (Object.keys(variables2).length === 0) delete metadata.variables;
+  else metadata.variables = variables2;
+  const marked = markMvuReceiptUndone(chat, target.index, options.at);
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
+  return { receipt: marked, revision, restores };
+}
+async function undoMvuAgentSettlement(variables2, db, options) {
+  const { characterName, chatId, snapshot: snapshot2 } = options;
+  const chat = snapshot2.chat;
+  const receipts = readMvuReceipts(chat);
+  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
+  const restores = planMvuUndoRestores(target.receipt);
+  const seedTree = readChatVariables(chat);
+  const storeFailures = [];
+  const entries = /* @__PURE__ */ new Map();
+  for (const restore of restores) {
+    try {
+      entries.set(restore.path, await variables2.get("chat", chatId, restore.path));
+    } catch (error) {
+      storeFailures.push(`${restore.path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (storeFailures.length > 0) throw new MvuUndoRefusalError("UNDO_REJECTED", storeFailures.join("; "));
+  screenMvuUndoRestores(
+    readMvuSchema(chat, (await db.getCharacter(characterName))?.card),
+    restores,
+    (path12) => {
+      const entry = entries.get(path12);
+      return entry !== void 0 ? entry.value : getMvuTreePath(seedTree, path12);
+    }
+  );
+  for (const restore of restores) {
+    if ("value" in restore) continue;
+    const entry = entries.get(restore.path);
+    if (entry !== void 0) await variables2.delete("chat", chatId, restore.path, entry.revision);
+  }
+  const updates = [];
+  for (const restore of restores) {
+    if (!("value" in restore)) continue;
+    const entry = entries.get(restore.path);
+    const current = entry !== void 0 ? entry.value : getMvuTreePath(seedTree, restore.path);
+    if (current !== void 0 && mvuValuesEqual(current, restore.value)) continue;
+    updates.push({ name: restore.path, value: deepClone(restore.value), ...entry !== void 0 ? { expectedRevision: entry.revision } : {} });
+  }
+  if (updates.length > 0) await variables2.patch("chat", chatId, updates);
+  const marked = markMvuReceiptUndone(chat, target.index, options.at);
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
+  return { receipt: marked, revision, restores };
 }
 
 // packages/plugin/src/agent-tavern/anchor.ts
@@ -12896,6 +13036,125 @@ function createGenerationHookBus(options = {}) {
 }
 var generationHooks = createGenerationHookBus();
 
+// packages/plugin/src/prompt-viewer.ts
+var PROMPT_VIEWER_PER_CHAT = 10;
+var PROMPT_VIEWER_TOTAL = 50;
+var records = [];
+var nextSeq = 1;
+var faultInjector;
+function recordPromptView(input, logger) {
+  try {
+    faultInjector?.();
+    const messages = normalizeMessages(input.request?.messages);
+    const system = typeof input.request?.system === "string" ? input.request.system : void 0;
+    const record = {
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      seq: nextSeq++,
+      character: String(input.character),
+      chatId: String(input.chatId),
+      mode: String(input.mode),
+      system,
+      messages,
+      params: sanitizeParams(input.request?.params),
+      promptTokens: approximateTokens(system ?? "") + messages.reduce((sum, m) => sum + approximateTokens(m.content), 0),
+      // loreTrace 提取也在本 try 内：trace 构建抛错同样被吞掉，绝不反噬生成。
+      loreTrace: input.lore === void 0 ? void 0 : buildLoreTrace(input.lore)
+    };
+    records.push(record);
+    let perChat = 0;
+    for (let i = records.length - 1; i >= 0; i--) {
+      if (records[i].chatId === record.chatId) perChat++;
+      if (perChat > PROMPT_VIEWER_PER_CHAT) {
+        records.splice(i, 1);
+        perChat--;
+      }
+    }
+    if (records.length > PROMPT_VIEWER_TOTAL) records = records.slice(records.length - PROMPT_VIEWER_TOTAL);
+  } catch (error) {
+    logger?.warn?.(`dsh-tavern: prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+function listPromptViews(filter = {}) {
+  return records.filter((record) => (filter.character === void 0 || record.character === filter.character) && (filter.chatId === void 0 || record.chatId === filter.chatId)).slice().sort((a, b) => b.seq - a.seq);
+}
+function buildLoreTrace(lore) {
+  const diagnostics = lore.diagnostics?.entries ?? {};
+  const entries = lore.allActivated.map((entry) => {
+    const raw = entry.entry;
+    const diag = diagnostics[entry.entryId];
+    const useProbability = raw.useProbability === true;
+    const probabilityValue = typeof raw.probability === "number" ? raw.probability : 100;
+    return {
+      world: entry.book,
+      uid: entry.uid,
+      name: typeof entry.entry?.comment === "string" ? entry.entry.comment : "",
+      matchedKeys: [...entry.matchedKeys],
+      position: entry.position,
+      depth: entry.depth,
+      order: entry.order,
+      reason: entry.activationReason,
+      constant: raw.constant === true,
+      ...useProbability && probabilityValue < 100 ? { probability: { use: true, value: probabilityValue, ...diag?.probabilityRoll !== void 0 ? { roll: diag.probabilityRoll } : {} } } : {},
+      ...entry.viaRecursion !== void 0 ? { viaRecursion: entry.viaRecursion } : {}
+    };
+  });
+  return {
+    entries,
+    scanRounds: lore.diagnostics?.scanRounds ?? 0,
+    recursionRounds: lore.diagnostics?.recursionRounds ?? 0,
+    budgetUsed: lore.diagnostics?.budgetUsed ?? 0,
+    budgetLimit: lore.diagnostics?.budgetLimit ?? 0
+  };
+}
+function approximateTokens(value) {
+  return Math.max(1, Math.ceil(value.length / 4));
+}
+function normalizeMessages(messages) {
+  if (!Array.isArray(messages)) return [];
+  return messages.map((message) => {
+    const record = message ?? {};
+    return {
+      role: typeof record.role === "string" ? record.role : "unknown",
+      content: normalizeContent(record.content)
+    };
+  });
+}
+function normalizeContent(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((block) => {
+      if (block !== null && typeof block === "object" && typeof block.text === "string") {
+        return block.text;
+      }
+      const type = block !== null && typeof block === "object" ? String(block.type ?? "unknown") : "unknown";
+      return `[${type} block]`;
+    }).join("\n");
+  }
+  if (content !== null && typeof content === "object" && typeof content.text === "string") {
+    return content.text;
+  }
+  return "[non-text content]";
+}
+var SECRETISH_KEY = /secret|password|authorization|credential|apikey/i;
+function sanitizeParams(params) {
+  if (params === null || typeof params !== "object" || Array.isArray(params)) return {};
+  const out = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (SECRETISH_KEY.test(key)) continue;
+    if (value === void 0) continue;
+    if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out[key] = value;
+    } else {
+      try {
+        out[key] = JSON.stringify(value);
+      } catch {
+        out[key] = String(value);
+      }
+    }
+  }
+  return out;
+}
+
 // packages/plugin/src/rewrite.ts
 var FEEDBACK_MAX_LENGTH = 1e3;
 function optionalFeedback(value) {
@@ -13632,12 +13891,12 @@ async function executeRun(ctx, deps, scope, active) {
       unresolvedEdits: /* @__PURE__ */ new Set(),
       embedConfig: null
     };
-    const records = await deps.memory.list("chat", scope.chatId);
-    let listing = renderMemoryListing(records, MAINTENANCE_OPENING_MAX_CHARS);
+    const records2 = await deps.memory.list("chat", scope.chatId);
+    let listing = renderMemoryListing(records2, MAINTENANCE_OPENING_MAX_CHARS);
     let opening = buildOpeningMessage(run, listing);
     if (opening.length > MAINTENANCE_OPENING_MAX_CHARS) {
       run.budget = Math.ceil(MAINTENANCE_MAX_LLM_REQUESTS / 2);
-      listing = renderMemoryListing(records, 2e4);
+      listing = renderMemoryListing(records2, 2e4);
       opening = buildOpeningMessage(run, listing);
     }
     const messages = [
@@ -13761,11 +14020,11 @@ function buildOpeningMessage(run, listing) {
     "\u7EF4\u62A4\u6307\u4EE4\uFF1A\u5BF9\u7167\u539F\u6587\uFF08SearchSource \u5173\u952E\u8BCD\u68C0\u7D22\u3001ReadSource \u6309\u697C\u9762\u8303\u56F4\u9605\u8BFB\uFF09\u68C0\u67E5\u4E0A\u8FF0\u8BB0\u5FC6\u2014\u2014\u5408\u5E76\u8DE8\u6279\u6B21\u91CD\u590D\u4E8B\u4EF6\uFF08\u4FDD\u7559\u8F83\u65E9\u8BB0\u5F55 id\uFF09\u3001\u7EA0\u6B63\u4E0E\u539F\u6587\u51B2\u7A81\u7684\u9648\u8FF0\u3001\u5220\u9664\u88AB\u8BC1\u4F2A\u7684\u8BB0\u5F55\uFF1B\u6539\u5199\u5FC5\u987B\u6709\u539F\u6587\u4F9D\u636E\u3002\u5B8C\u6210\u540E CompleteMaintenance \u58F0\u660E\u8986\u76D6\u8303\u56F4\u5E76\u7B80\u77ED\u6C47\u62A5\u3002"
   ].filter((part) => part !== "").join("\n");
 }
-function renderMemoryListing(records, maxChars) {
+function renderMemoryListing(records2, maxChars) {
   const lines = [];
   let used = 0;
   let truncated = false;
-  for (const record of records) {
+  for (const record of records2) {
     const content = record.content.length > 400 ? `${record.content.slice(0, 400)}\u2026` : record.content;
     const line = `- id=${record.id} kind=${record.kind} rev=${record.revision} imp=${record.importance} conf=${record.confidence}${record.tags.length > 0 ? ` tags=${record.tags.join(",")}` : ""} source=${record.source.kind}
   ${content.replace(/\n/g, " ")}`;
@@ -13776,8 +14035,8 @@ function renderMemoryListing(records, maxChars) {
     used += line.length;
     lines.push(line);
   }
-  if (records.length === 0) lines.push("\uFF08chat \u4F5C\u7528\u57DF\u5F53\u524D\u6CA1\u6709\u8BB0\u5FC6\u8BB0\u5F55\uFF09");
-  if (truncated) lines.push(`\u2026\uFF08\u6E05\u5355\u8FC7\u957F\u622A\u65AD\uFF0C\u5DF2\u5217 ${lines.length}/${records.length} \u6761\uFF1B\u7528 ReadMemory \u7FFB\u9875\u8BFB\u53D6\uFF09`);
+  if (records2.length === 0) lines.push("\uFF08chat \u4F5C\u7528\u57DF\u5F53\u524D\u6CA1\u6709\u8BB0\u5FC6\u8BB0\u5F55\uFF09");
+  if (truncated) lines.push(`\u2026\uFF08\u6E05\u5355\u8FC7\u957F\u622A\u65AD\uFF0C\u5DF2\u5217 ${lines.length}/${records2.length} \u6761\uFF1B\u7528 ReadMemory \u7FFB\u9875\u8BFB\u53D6\uFF09`);
   return lines.join("\n");
 }
 var MAINTENANCE_TOOL_SCHEMAS = [
@@ -13902,12 +14161,12 @@ async function toolReadMemory(run, args) {
   const query = typeof args.query === "string" ? args.query : "";
   const tokens = query === "" ? [] : tokenizeQuery(query);
   if (query !== "" && tokens.length === 0) throw new Error("query produced no searchable tokens");
-  const records = (await run.deps.memory.list("chat", run.scope.chatId)).filter((record) => kind === void 0 || record.kind === kind).filter((record) => tokens.length === 0 || matchedTokenCount(`${record.content}
+  const records2 = (await run.deps.memory.list("chat", run.scope.chatId)).filter((record) => kind === void 0 || record.kind === kind).filter((record) => tokens.length === 0 || matchedTokenCount(`${record.content}
 ${record.tags.join(" ")}`, tokens) >= tokenThreshold(tokens.length));
   const start = page * MAINTENANCE_PAGE_RECORDS;
   const pageRecords = [];
   let used = 0;
-  for (const record of records.slice(start)) {
+  for (const record of records2.slice(start)) {
     if (pageRecords.length >= MAINTENANCE_PAGE_RECORDS) break;
     const view = {
       id: record.id,
@@ -13931,10 +14190,10 @@ ${record.tags.join(" ")}`, tokens) >= tokenThreshold(tokens.length));
   }
   const consumed = start + pageRecords.length;
   return {
-    total: records.length,
+    total: records2.length,
     page,
     pageSize: MAINTENANCE_PAGE_RECORDS,
-    more: consumed < records.length,
+    more: consumed < records2.length,
     records: pageRecords
   };
 }
@@ -14249,9 +14508,9 @@ async function toolCompleteMaintenance(run, args) {
   }
   const sig = floorSignature(run.floors, base, head);
   if (sig === void 0) throw new Error("floor range no longer resolvable against the run snapshot");
-  const records = await run.deps.memory.list("chat", run.scope.chatId);
+  const records2 = await run.deps.memory.list("chat", run.scope.chatId);
   const recordSnapshots = {};
-  for (const record of records) recordSnapshots[record.id] = record.revision;
+  for (const record of records2) recordSnapshots[record.id] = record.revision;
   const stateStore = await MemoryMaintenanceStore.open(run.deps.root);
   const state = await stateStore.read(run.scope.character, run.scope.chatId);
   const receipts = appendReceipt(state.receipts, {
@@ -14264,7 +14523,7 @@ async function toolCompleteMaintenance(run, args) {
   });
   await stateStore.write(run.scope.character, run.scope.chatId, { ...state, receipts });
   run.summary.completion = { baseFloor: base, headFloor: head };
-  return { payload: { ok: true, baseFloor: base, headFloor: head, coveredRecords: records.length }, isError: false };
+  return { payload: { ok: true, baseFloor: base, headFloor: head, coveredRecords: records2.length }, isError: false };
 }
 
 // packages/plugin/src/update/service.ts
@@ -20202,7 +20461,7 @@ async function handleApi(ctx, req, res) {
     });
     return sendJson(res, 200, { ok: true, items: result.items, generatedAt: result.generatedAt, revision: result.revision });
   }
-  if (method === "POST" && route === "mvu/retry" || method === "GET" && route.startsWith("mvu/status/")) {
+  if (method === "POST" && (route === "mvu/retry" || route === "mvu/receipts/undo") || method === "GET" && route.startsWith("mvu/status/")) {
     return handleMvuApi(req, res, route, method, db);
   }
   if (method === "POST" && route === "card-workbench/rename" || method === "GET" && route === "card-workbench/plans" || method === "POST" && route.startsWith("card-workbench/plans/") && route.endsWith("/decision")) {
@@ -20216,6 +20475,17 @@ async function handleApi(ctx, req, res) {
   }
   if ((method === "POST" || method === "GET") && route === "memory/maintenance") {
     return handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db);
+  }
+  if (method === "GET" && route === "prompts") {
+    const filterCharacter = url.searchParams.get("character");
+    const filterChat = url.searchParams.get("chatId");
+    return sendJson(res, 200, {
+      ok: true,
+      records: listPromptViews({
+        ...filterCharacter !== null ? { character: filterCharacter } : {},
+        ...filterChat !== null ? { chatId: filterChat } : {}
+      })
+    });
   }
   if (method === "GET" && route.startsWith("world/")) {
     const name2 = decodeURIComponent(route.slice("world/".length));
@@ -20543,6 +20813,46 @@ async function handleMvuApi(req, res, route, method, db) {
       templatesActive: templatesEnabledFlag && templatesEnabled()
     });
     return sendJson(res, 200, { ok: true, receipt: result.receipt, revision: result.revision, variables: result.variables });
+  }
+  if (method === "POST" && route === "mvu/receipts/undo") {
+    const body = await readJson(req);
+    const state = await db.getState();
+    const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
+    const chatId = body.chatId;
+    if (!characterName || typeof chatId !== "string") throw new Error("character and chatId are required");
+    let snapshot2;
+    try {
+      snapshot2 = await db.getChatSnapshot(characterName, chatId);
+    } catch (cause) {
+      if (cause instanceof Error && cause.message === "invalid chat id") snapshot2 = void 0;
+      else throw cause;
+    }
+    if (!snapshot2) return sendJson(res, 404, { ok: false, message: "character or chat not found" });
+    if (typeof body.revision === "string" && body.revision !== snapshot2.revision) {
+      throw new ChatRevisionConflictError(body.revision, snapshot2.revision);
+    }
+    const agentTavernBound = Object.values(state.sessionBindings).some((binding) => binding.architecture === "agent-tavern" && binding.chatId === chatId && binding.character === characterName);
+    const options = { characterName, chatId, snapshot: snapshot2, at: (/* @__PURE__ */ new Date()).toISOString() };
+    let result;
+    try {
+      result = agentTavernBound ? await undoMvuAgentSettlement(await variables(), db, options) : await undoMvuStSettlement(db, options);
+    } catch (error) {
+      if (error instanceof MvuUndoRefusalError) {
+        return sendJson(res, 400, { ok: false, message: error.message, code: `MVU_UNDO_${error.undoCode}` });
+      }
+      if (error instanceof VariableRevisionConflictError) {
+        return sendJson(res, 409, { ok: false, message: error.message, code: error.code });
+      }
+      throw error;
+    }
+    await emitChatSaved(characterName, chatId, result.revision, snapshot2.chat.messages.length);
+    return sendJson(res, 200, {
+      ok: true,
+      undoneTurnKey: result.receipt.turnKey,
+      restored: result.restores,
+      receipt: result.receipt,
+      revision: result.revision
+    });
   }
   if (method === "GET" && route.startsWith("mvu/status/")) {
     const rest = route.slice("mvu/status/".length);
@@ -21535,6 +21845,13 @@ async function runGeneration(ctx, db, options) {
     const hookedLlmRequest = await generationHooks.dispatch("pre-llm", llmRequest, { mode, character: speakerName, chatId, group: group2 });
     const usedProvider = hookedLlmRequest.params.provider;
     const usedModel = hookedLlmRequest.params.model;
+    recordPromptView({
+      character: speakerName,
+      chatId,
+      mode,
+      request: hookedLlmRequest,
+      lore
+    }, ctx.logger);
     beginStreamEpoch();
     for await (const chunk of ctx.llm.stream({
       provider: hookedLlmRequest.params.provider,
@@ -22210,7 +22527,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.5".trim() : "";
-  const commit = true ? normalizeCommit("6f732fe") : void 0;
+  const commit = true ? normalizeCommit("d5b7f84") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

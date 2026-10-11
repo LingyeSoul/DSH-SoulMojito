@@ -13,6 +13,9 @@
  * - POST mvu/retry：对最后一条助手楼层重跑模板输出渲染的**变量写穿部分**
  *   （见 retryMvuSettlement 注释）；CAS 冲突走 ChatRevisionConflictError
  *   既有通道。
+ * - POST mvu/receipts/undo（B-6a）：撤销最新一条有效回执——每项变更恢复到
+ *   before 值（见文件底部撤销执行核注释）；AgentTavern 绑定由路由改派
+ *   undoMvuAgentSettlement 写 chat 作用域变量存储。
  * - GET mvu/status/<character>/<chatId>：变量 + 回执快照；当卡片约定字段
  *   `data.extensions.agentTavern.statusTemplate`（0013 工作台将来产出）是
  *   字符串时，用 `@dsh-tavern/template` 的 createTemplateRuntime 渲染并返回
@@ -33,6 +36,8 @@ import {
   type ChatSnapshot,
   type TavernState,
   type TavernStore,
+  type VariableChange,
+  type VariableStore,
 } from '../../tavern-store/src/index.js'
 import { collectWorldInfoBooks } from './tavern-assets.js'
 import {
@@ -68,6 +73,8 @@ export interface MvuReceipt {
   status: MvuReceiptStatus
   changes: MvuVariableChange[]
   failures: string[]
+  /** B-6a 回执撤销：撤销时刻（ISO）；存在即该回执已撤销，不再是「最新有效」。 */
+  undoneAt?: string
 }
 
 /** 环形保留条数（提案 0012 P1）。 */
@@ -181,6 +188,7 @@ export function readMvuReceipts(chat: ChatLogIR): MvuReceipt[] {
           })
         : [],
       failures: Array.isArray(failures) ? failures.filter((item): item is string => typeof item === 'string') : [],
+      ...(typeof record.undoneAt === 'string' ? { undoneAt: record.undoneAt } : {}),
     })
   }
   return receipts
@@ -263,7 +271,9 @@ function revertMvuTreePath(tree: Record<string, unknown>, path: string, before: 
   if (parent !== null && typeof parent === 'object' && !Array.isArray(parent)) {
     delete (parent as Record<string, unknown>)[leaf]
   }
-  // 修剪因回滚而空掉、且基线里本不存在的中间对象
+  // 修剪因回滚而空掉、且基线里本不存在的中间对象；被修剪的是最顶层段时
+  // 宿主即树根本身（getMvuTreePath(tree, '') 不回根，需单独兜住——B-6a 撤销
+  // 整树摘键依赖这一层；守卫回滚新增顶层键同理不再留 `{}` 残壳）
   while (segments.length > 0) {
     const pathSoFar = segments.join('.')
     const node = getMvuTreePath(tree, pathSoFar)
@@ -271,7 +281,7 @@ function revertMvuTreePath(tree: Record<string, unknown>, path: string, before: 
     if (Object.keys(node as Record<string, unknown>).length > 0) break
     if (getMvuTreePath(before, pathSoFar) !== undefined) break
     const popped = segments.pop()!
-    const upper = getMvuTreePath(tree, segments.join('.'))
+    const upper: unknown = segments.length > 0 ? getMvuTreePath(tree, segments.join('.')) : tree
     if (upper === null || typeof upper !== 'object' || Array.isArray(upper)) break
     delete (upper as Record<string, unknown>)[popped]
   }
@@ -576,4 +586,234 @@ export async function retryMvuSettlement(
   appendMvuReceipt(chat, receipt)
   const revision = await db.saveChat(characterName, chatId, chat, snapshot.revision)
   return { receipt, revision, variables: stripMvuSchema(after) as Record<string, unknown> }
+}
+
+/* --------------------- MVU 回执撤销（B-6a，2026-10-11） --------------------- */
+
+/** 语义参考 LittleWhiteBox 的 keyed-changes undo 链（docs/exploration
+ * 2026-10-11-jsr-lwb-reference.md §3.1/§4 B-6）：回执已存每项变更的前后值，
+ * 撤销 = 把最新一条有效回执的每项变更恢复到 before 值。dsh 的 revision CAS
+ * 是并发防护不是语义撤销——本节补的正是语义撤销层。v1 从严：只能撤销最新
+ * 一条有效回执（newest-first 链），详见 decisions/2026-10-11-mvu-receipt-undo.md。 */
+
+/** 单项恢复计划：value 缺省 = 该路径结算前不存在，撤销即删除。 */
+export interface MvuUndoRestore {
+  path: string
+  value?: unknown
+}
+
+export type MvuUndoRefusalCode = 'NO_VALID_RECEIPT' | 'ALREADY_UNDONE' | 'INCOMPLETE_RECEIPT' | 'UNDO_REJECTED'
+
+/** 撤销的语义性拒绝（HTTP 400 分类；并发冲突仍走 ChatRevisionConflictError）。 */
+export class MvuUndoRefusalError extends Error {
+  readonly undoCode: MvuUndoRefusalCode
+  constructor(undoCode: MvuUndoRefusalCode, message: string) {
+    super(message)
+    this.name = 'MvuUndoRefusalError'
+    this.undoCode = undoCode
+  }
+}
+
+export interface MvuUndoTarget {
+  index: number
+  receipt: MvuReceipt
+}
+
+/**
+ * 最新有效回执（newest-first 链头）：最后一个未标 undoneAt 的条目。撤销后它
+ * 变为 undone，次新回执重新成为链头——撤销 N 轮 = 从最新往回逐次撤销，不会
+ * 跳轮乱序恢复。
+ */
+export function latestValidMvuReceipt(receipts: MvuReceipt[]): MvuUndoTarget | undefined {
+  for (let index = receipts.length - 1; index >= 0; index--) {
+    if (receipts[index]!.undoneAt === undefined) return { index, receipt: receipts[index]! }
+  }
+  return undefined
+}
+
+function refuseUndo(target: MvuUndoTarget | undefined, receipts: MvuReceipt[]): MvuUndoTarget {
+  if (target !== undefined) return target
+  if (receipts.length > 0) {
+    throw new MvuUndoRefusalError('ALREADY_UNDONE', `all ${receipts.length} settlement receipts in this chat have been undone; nothing valid is left to undo`)
+  }
+  throw new MvuUndoRefusalError('NO_VALID_RECEIPT', 'no MVU settlement receipt in this chat to undo')
+}
+
+/**
+ * 从回执导出恢复计划（纯函数）：每项变更 → 恢复到 before 值（缺 before 的新增
+ * 键 → 删除）。失败项从未落盘，天然不参与。数据完备性：change 既无 before 也无
+ * after（老版本/手改数据），或 status 'updated' 却无变更记录 → 明确报「数据不
+ * 完整」，不猜。
+ */
+export function planMvuUndoRestores(receipt: MvuReceipt): MvuUndoRestore[] {
+  if (receipt.status === 'updated' && receipt.changes.length === 0) {
+    throw new MvuUndoRefusalError('INCOMPLETE_RECEIPT', `receipt ${receipt.turnKey} claims status 'updated' but records no change data; the receipt data is incomplete and cannot be undone`)
+  }
+  const restores: MvuUndoRestore[] = []
+  for (const change of receipt.changes) {
+    if (!('before' in change) && !('after' in change)) {
+      throw new MvuUndoRefusalError('INCOMPLETE_RECEIPT', `receipt change '${change.name}' records neither a before nor an after value; the receipt data is incomplete and cannot be undone`)
+    }
+    restores.push({ path: change.name, ...('before' in change ? { value: change.before } : {}) })
+  }
+  return restores
+}
+
+function formatRestoreValue(value: unknown): string {
+  const text = (() => {
+    try { return JSON.stringify(value) ?? String(value) } catch { return String(value) }
+  })()
+  return text.length > 80 ? `${text.slice(0, 79)}…` : text
+}
+
+/**
+ * 撤销写入的守卫 pass（纯函数，与结算共用 guardMvuWrite 语义）：恢复值是历史
+ * 合法值，过守卫应天然通过；万一被拒（schema 后来改了：类型/枚举/只读/结构）→
+ * 整次撤销失败并如实报因，不动变量。守卫会调整值（clamp/step，同样是 schema
+ * 漂移的信号）同样拒绝——撤销承诺精确恢复 before 值，不写任何「被调整过的
+ * 恢复值」。$schema 路径无论有无 schema 恒拒（守卫契约不可经撤销写入）。
+ */
+export function screenMvuUndoRestores(
+  schema: Record<string, unknown> | undefined,
+  restores: MvuUndoRestore[],
+  currentOf: (path: string) => unknown,
+): void {
+  const failures: string[] = []
+  for (const restore of restores) {
+    if (restore.path.split('.')[0] === '$schema') {
+      failures.push(`$schema: guard readonly: the schema subtree is the declared guard contract and cannot be undone into`)
+      continue
+    }
+    if (schema === undefined) continue
+    const value = 'value' in restore ? restore.value : undefined
+    const result = guardMvuWrite(schema, restore.path, value, currentOf(restore.path))
+    if (!result.ok) {
+      failures.push(`${restore.path}: guard ${result.kind}: ${result.reason}`)
+      continue
+    }
+    if (!mvuValuesEqual(result.value, value)) {
+      failures.push(`${restore.path}: guard would adjust the restored value ${formatRestoreValue(value)} to ${formatRestoreValue(result.value)} ($schema changed since the settlement); refusing to undo with anything other than the recorded before value`)
+    }
+  }
+  if (failures.length > 0) throw new MvuUndoRefusalError('UNDO_REJECTED', failures.join('; '))
+}
+
+/**
+ * 把恢复计划写进变量树（纯函数，mutates tree）：有 before 值的路径整值恢复
+ * （深拷贝，不与回执数据共享引用），新增键删除并修剪因此空掉、且结算前本不
+ * 存在的中间对象（复用守卫的 revertMvuTreePath 语义）。
+ */
+export function applyMvuUndoRestores(tree: Record<string, unknown>, restores: MvuUndoRestore[]): void {
+  // 结算前伪树：全部 before 值按点分名还原，供删除路径判断中间对象是否本就存在
+  const before = overlayScopedVariables({}, restores.flatMap((restore): Array<{ name: string; value: unknown }> =>
+    'value' in restore ? [{ name: restore.path, value: deepClone(restore.value) }] : []))
+  for (const restore of restores) revertMvuTreePath(tree, restore.path, before)
+}
+
+/** 把回执标为 undone（幂等防重由 latestValidMvuReceipt 保证——已 undone 的不再是链头）。 */
+function markMvuReceiptUndone(chat: ChatLogIR, index: number, at?: string): MvuReceipt {
+  const receipts = readMvuReceipts(chat)
+  const marked: MvuReceipt = { ...receipts[index]!, undoneAt: at ?? new Date().toISOString() }
+  const next = receipts.slice()
+  next[index] = marked
+  chat.header.chat_metadata.mvu = { receipts: next }
+  return marked
+}
+
+export interface MvuUndoOptions {
+  characterName: string
+  chatId: string
+  snapshot: ChatSnapshot
+  at?: string
+}
+
+export interface MvuUndoResult {
+  /** 标记 undoneAt 后的回执（写回聊天的那份）。 */
+  receipt: MvuReceipt
+  revision: string
+  restores: MvuUndoRestore[]
+}
+
+/**
+ * ST 侧撤销执行核（POST mvu/receipts/undo 的薄挂接）：恢复值写回
+ * `chat_metadata.variables`，回执标 undoneAt，saveChat CAS 冲突抛
+ * ChatRevisionConflictError（语义性拒绝抛 MvuUndoRefusalError）。chat-saved
+ * 事件由路由侧发射（与 guides/retry 写路径同纪律）。
+ */
+export async function undoMvuStSettlement(
+  db: Pick<TavernStore, 'getCharacter' | 'saveChat'>,
+  options: MvuUndoOptions,
+): Promise<MvuUndoResult> {
+  const { characterName, chatId, snapshot } = options
+  const chat = snapshot.chat
+  const receipts = readMvuReceipts(chat)
+  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts)
+  const restores = planMvuUndoRestores(target.receipt)
+  const metadata = chat.header.chat_metadata
+  const variables = plainObject(metadata.variables) ?? {}
+  screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables), restores, (path) => getMvuTreePath(variables, path))
+  applyMvuUndoRestores(variables, restores)
+  // 空树摘键：与结算侧「无变量不写 mvu/variables 键」的导出约定一致
+  if (Object.keys(variables).length === 0) delete metadata.variables
+  else metadata.variables = variables
+  const marked = markMvuReceiptUndone(chat, target.index, options.at)
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot.revision)
+  return { receipt: marked, revision, restores }
+}
+
+/**
+ * AgentTavern 侧撤销执行核：settle 把变量写进 chat 作用域 VariableStore（扁平
+ * 点分名），撤销写回同一存储——有 before 值的路径恢复（flat 条目存在则 CAS 更
+ * 新，不存在且播种树也已同值则免写），新增键删除。「当前值」与 settle 的 before
+ * 同源（flat 既有值 ?? 聊天播种树）。回执与守卫的读写与 ST 共用同一纯函数核；
+ * 回执标记仍落 chat_metadata.mvu.receipts + saveChat CAS。
+ */
+export async function undoMvuAgentSettlement(
+  variables: Pick<VariableStore, 'get' | 'patch' | 'delete'>,
+  db: Pick<TavernStore, 'getCharacter' | 'saveChat'>,
+  options: MvuUndoOptions,
+): Promise<MvuUndoResult> {
+  const { characterName, chatId, snapshot } = options
+  const chat = snapshot.chat
+  const receipts = readMvuReceipts(chat)
+  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts)
+  const restores = planMvuUndoRestores(target.receipt)
+  const seedTree = readChatVariables(chat)
+  const storeFailures: string[] = []
+  const entries = new Map<string, Awaited<ReturnType<typeof variables.get>>>()
+  for (const restore of restores) {
+    try {
+      entries.set(restore.path, await variables.get('chat', chatId, restore.path))
+    } catch (error) {
+      storeFailures.push(`${restore.path}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  if (storeFailures.length > 0) throw new MvuUndoRefusalError('UNDO_REJECTED', storeFailures.join('; '))
+  screenMvuUndoRestores(
+    readMvuSchema(chat, (await db.getCharacter(characterName))?.card),
+    restores,
+    (path) => {
+      const entry = entries.get(path)
+      return entry !== undefined ? entry.value : getMvuTreePath(seedTree, path)
+    },
+  )
+  // 删除先行：任何一项 CAS 冲突都在写入恢复值之前抛出（patch 后续整体不执行）
+  for (const restore of restores) {
+    if ('value' in restore) continue
+    const entry = entries.get(restore.path)
+    if (entry !== undefined) await variables.delete('chat', chatId, restore.path, entry.revision)
+  }
+  // 恢复值单文件原子 patch（chat 作用域全量在一个 json）；有效值已同值的路径免写
+  const updates: VariableChange[] = []
+  for (const restore of restores) {
+    if (!('value' in restore)) continue
+    const entry = entries.get(restore.path)
+    const current = entry !== undefined ? entry.value : getMvuTreePath(seedTree, restore.path)
+    if (current !== undefined && mvuValuesEqual(current, restore.value)) continue
+    updates.push({ name: restore.path, value: deepClone(restore.value) as VariableChange['value'], ...(entry !== undefined ? { expectedRevision: entry.revision } : {}) })
+  }
+  if (updates.length > 0) await variables.patch('chat', chatId, updates)
+  const marked = markMvuReceiptUndone(chat, target.index, options.at)
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot.revision)
+  return { receipt: marked, revision, restores }
 }

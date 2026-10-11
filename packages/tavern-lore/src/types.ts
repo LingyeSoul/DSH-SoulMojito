@@ -280,6 +280,9 @@ export interface ActivatedEntry {
   /** 命中的主键 */
   matchedKeys: string[]
   activationReason: ActivationReason
+  /** 是否在 RECURSION 轮激活（INITIAL 轮为 false）。A-6 激活追踪补齐的维度：
+   *  记录的是「激活轮次」，不含触发它的上游条目链（引擎不追踪来源链）。 */
+  viaRecursion?: boolean
   /** 归一化条目（含未知字段透传） */
   entry: NormalizedEntry
 }

@@ -3788,6 +3788,7 @@ function activateWorldInfo(input) {
   const activated = /* @__PURE__ */ new Map();
   const activatedMeta = /* @__PURE__ */ new Map();
   const failedProbability = /* @__PURE__ */ new Set();
+  const passedProbabilityRolls = /* @__PURE__ */ new Map();
   const bookUsed = /* @__PURE__ */ new Map();
   let budgetUsed = 0;
   let budgetExceeded = false;
@@ -3846,6 +3847,7 @@ function activateWorldInfo(input) {
           diag(entry, "probability", { matchedKeys: match.matchedKeys, probabilityRoll: roll });
           continue;
         }
+        passedProbabilityRolls.set(entry.entryId, roll);
       }
       candidates.push(entry);
       matchById.set(entry.entryId, match);
@@ -3885,8 +3887,9 @@ function activateWorldInfo(input) {
       if (!entry.ignoreBudget) bookUsed.set(entry.bookIndex, usedByBook + tokens);
       activated.set(entry.entryId, entry);
       const match = matchById.get(entry.entryId);
-      activatedMeta.set(entry.entryId, { matchedKeys: match.matchedKeys, reason: match.reason });
-      diag(entry, match.reason, { matchedKeys: match.matchedKeys });
+      activatedMeta.set(entry.entryId, { matchedKeys: match.matchedKeys, reason: match.reason, viaRecursion: state === "RECURSION" });
+      const rolled = passedProbabilityRolls.get(entry.entryId);
+      diag(entry, match.reason, { matchedKeys: match.matchedKeys, ...rolled !== void 0 ? { probabilityRoll: rolled } : {} });
       accepted.push(entry);
     }
     return accepted;
@@ -3925,6 +3928,7 @@ function activateWorldInfo(input) {
       content: entry.content,
       matchedKeys: meta.matchedKeys,
       activationReason: meta.reason,
+      viaRecursion: meta.viaRecursion,
       entry: entry.raw
     };
   });
@@ -5155,7 +5159,8 @@ function readMvuReceipts(chat) {
         if (typeof change.reason === "string") out.reason = change.reason;
         return [out];
       }) : [],
-      failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : []
+      failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : [],
+      ...typeof record.undoneAt === "string" ? { undoneAt: record.undoneAt } : {}
     });
   }
   return receipts;

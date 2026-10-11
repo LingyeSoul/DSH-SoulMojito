@@ -71,3 +71,13 @@ reject 进失败项（type-mismatch / enum-violation / readonly / structure 四�
 （`mvu-guard.ts`）：ST 生成/retry 的写穿后整树 pass 与 AgentTavern
 `tavern_variable_settle` 的逐项预检。完整语义表、与 LWB state2 的差异及理由见
 `decisions/2026-10-11-mvu-schema-guard.md`。
+
+## 7. 回执撤销（2026-10-11 延伸，竞品参考 B-6a）
+
+回执里已有的每项变更前后值成为撤销能力：只能撤销该聊天最新一条有效回执（newest-first
+链，撤销后标 `undoneAt` 灰显，次新回执重新成为链头），每项变更恢复到回执记录的 before
+值（恢复值过 `$schema` 守卫，被拒或会被调整则整次不动、如实报因；老格式回执缺前后值明确
+报数据不完整）。ST 写回 `chat_metadata.variables`，AgentTavern 写回 chat 作用域变量存储——
+共享纯函数核 + 两个薄挂接（C-1 模式）；HTTP `POST mvu/receipts/undo` 分类 400/409，面板
+「撤销最近结算」按钮与已撤销灰显。设计、否决项与偏差记录见
+`decisions/2026-10-11-mvu-receipt-undo.md`。
