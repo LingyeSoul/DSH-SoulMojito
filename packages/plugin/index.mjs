@@ -22907,7 +22907,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.5".trim() : "";
-  const commit = true ? normalizeCommit("3a2b315") : void 0;
+  const commit = true ? normalizeCommit("021b975") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
