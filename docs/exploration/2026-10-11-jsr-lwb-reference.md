@@ -203,26 +203,35 @@ IndexedDB 事务原子替换（`docs/vector-cache-packages.md`）。
 | A-2 | **Mod 错误呈现三件套**：mod UI 自动注入 console 劫持上报 + 客户端环形缓冲 + 面板日志查看器 | JSR §2.5 | client + reply.html 注入 | **P0** |
 | B-2 | 多阶段召回管线（渐进：先 dense 单路 + 词法融合，再 dense-gate/RRF/must-keep） | LWB recall v9 | memory 检索 | P1 |
 | B-3 | 记忆维护 Agent + 完成收据（跨批次事件合并是必测样例） | LWB maintenance | memory + subagent | P1 |
-| B-4 | 同轮复用 + 召回预取（B-2 上线第一天就要带） | LWB | 检索层 | P1 |
+| B-4 | 同轮复用 + 召回预取 | LWB | ~~检索层~~ **评估免施工**（pull-based 模型 + 向量持久化 + 查询 memoize 已覆盖，见施工进度节） | ~~P1~~ |
 | B-5 | replay 对齐 + gold-eval 评测基建（compaction/AgentNovel 同样适用） | LWB gold-eval | 测试基建 | P1 |
 | A-3 | 流式 token 事件（fully/incrementally 双通道）暴露给 mod（只推 Node 侧，不动 iframe 渲染） | JSR responseGenerator | generation-hooks | P1 |
 | A-4 | iframe 运行时细节：vh→CSS 变量、身份 window.name 双保险、Blob URL 调试模式 | JSR §2.1 | FrontendFrame/ModSurface | P1 |
 | D-2 | confirmable save 读回验证（写宿主侧状态后必须成立的操作） | LWB | session binding/投影 | P1 |
 | C-2 | varevent 条件规则引擎（中文操作词别名 + 回合后排队执行） | LWB | Mod 示例或 MVU 扩展位 | P2 |
 | B-6 | undo 链（keyed-changes 差量）与向量缓存包（SHA-256 输入摘要） | LWB | memory/MVU 回执 | P2 |
-| D-3 | after-ai-gate（稳定检测代替裸事件，防流式期重复结算） | LWB | MVU 触发点 | P2 |
+| D-3 | after-ai-gate（稳定检测代替裸事件，防流式期重复结算） | LWB | ~~MVU 触发点~~ **评估免施工**（服务端 post-save 单点触发，无浏览器 DOM 竞态，见施工进度节） | ~~P2~~ |
 | D-4 | message-preview 式"生成不入楼"（卡片工作台试写预览） | LWB | workbench | P2 |
-| D-5 | 楼层驱动任务调度（每 N 楼执行 STscript + 冷却 + 防重放） | LWB scheduled-tasks | Mod v2 | P2 |
+| D-5 | 楼层驱动任务调度（每 N 楼执行 STscript + 冷却 + 防重放） | LWB scheduled-tasks | Mod v2；**已部分落地**：`chat-saved` 载荷补 `floorCount`，Mod 自行比对即可实现每 N 楼调度 | P2 |
 | D-6 | reply-progress（只观察宿主真实请求信号） | LWB | 生成进度 | P2 |
 | D-7 | 文档纪律：开工前八项表补"删除路径"栏 | LWB | 提案模板 | P2 |
 | A-5 | 精选 Mod 仓库（jsdelivr 一键导入）+ 本地热重载通道 | JSR 内置库/开发者页 | mod 生态 | P2 |
 | A-6 | 提示词查看器 + 世界书激活追踪（调试基建天花板，工程量大） | JSR wi_tracer | 面板 | P2 |
 
-**施工进度**：P0 四项（B-1 / C-1 / A-1 / A-2）与 P1 三项（B-5a / A-3 / A-4）已于 2026-10-11 落地
-（决策文档 `decisions/2026-10-11-cjk-tokenization.md`、`decisions/2026-10-11-mvu-schema-guard.md`、
+**施工进度**：P0 四项（B-1 / C-1 / A-1 / A-2）与 P1 五项（B-5a / A-3 / A-4 / B-2 / D-2）已于 2026-10-11
+落地（决策文档 `decisions/2026-10-11-cjk-tokenization.md`、`decisions/2026-10-11-mvu-schema-guard.md`、
 `decisions/2026-10-11-mod-bridge-buttons-logs.md`、`decisions/2026-10-11-retrieval-eval-matrix.md`、
-`decisions/2026-10-11-mod-stream-delta.md`、`decisions/2026-10-11-iframe-viewport.md`）。B-2 起的记忆
-升级单独立项，配套 B-5 评测基建已就位（`scripts/retrieval-eval/` + `retrieval-matrix.spec.ts` 质量门槛）。
+`decisions/2026-10-11-mod-stream-delta.md`、`decisions/2026-10-11-iframe-viewport.md`、
+`decisions/2026-10-11-confirmable-session-writes.md`，提案 0016）。B-4 / D-3 经架构评估**无需施工**
+（见下表注），D-5 以 `chat-saved.floorCount` 载荷部分落地；B-3 记忆维护 Agent 单独批次施工中。
+
+**两项架构评估结论（2026-10-11）**：
+- **B-4（同轮复用 + 预取）无需施工**：LWB 的动机是 push-based 召回每次 swipe/重生成重算嵌入费；
+  dsh 是 pull-based 工具模型（模型按需调 `memory_search`），向量按记录版本持久化、查询串进程内
+  memoize（B-2 已带）——LWB 要优化的重算成本结构在 dsh 不存在。
+- **D-3（after-ai-gate）无需施工**：LWB 的动机是浏览器侧结算观察 DOM/流式的竞态；dsh 的 MVU
+  结算是服务端 runGeneration post-save 单点触发（失败项重试是显式新一次结算），无 DOM 竞态与
+  重放暴露面。若未来出现浏览器侧结算触发再引入。
 
 ## 7. B-2 前置探路：DSH 宿主 embedding 能力审计（2026-10-11）
 

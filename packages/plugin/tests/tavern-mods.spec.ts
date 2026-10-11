@@ -676,11 +676,11 @@ describe('mod event bus', () => {
   })
 
   it('delivers chat-saved and assets-saved payloads', async () => {
-    offs.push(modEvents.on('chat-saved', (payload) => { seen.push(`chat:${payload.character}/${payload.chatId}`) }))
+    offs.push(modEvents.on('chat-saved', (payload) => { seen.push(`chat:${payload.character}/${payload.chatId}:${payload.floorCount}`) }))
     offs.push(modEvents.on('assets-saved', (payload) => { seen.push(`asset:${payload.kind}:${payload.name}`) }))
-    await emitChatSaved('Seraphina', 'chat1.jsonl', 'r1')
+    await emitChatSaved('Seraphina', 'chat1.jsonl', 'r1', 3)
     await emitAssetsSaved('world', 'Lore')
-    expect(seen).toEqual(['chat:Seraphina/chat1.jsonl', 'asset:world:Lore'])
+    expect(seen).toEqual(['chat:Seraphina/chat1.jsonl:3', 'asset:world:Lore'])
   })
 
   it('bridges the existing guides-changed bus once a host is open', async () => {
