@@ -1753,7 +1753,7 @@ async function renameWithWindowsRetry(from, to, attempts = 5) {
     } catch (cause) {
       const code = cause.code;
       if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
-      await new Promise((resolve3) => setTimeout(resolve3, 10 * attempt));
+      await new Promise((resolve2) => setTimeout(resolve2, 10 * attempt));
     }
   }
 }
@@ -2386,16 +2386,16 @@ function decodeCharx(bytes) {
   const assetPaths = Object.keys(files).filter((p) => p !== "card.json");
   return { card, assetPaths };
 }
-function decodeCharxAsset(bytes, path6) {
+function decodeCharxAsset(bytes, path5) {
   let files;
   try {
     files = unzipSync(bytes);
   } catch (cause) {
     throw new CharxFormatError(`not a valid zip: ${String(cause)}`);
   }
-  const asset = files[path6];
+  const asset = files[path5];
   if (asset === void 0)
-    throw new CharxFormatError(`CHARX has no asset '${path6}'`);
+    throw new CharxFormatError(`CHARX has no asset '${path5}'`);
   return asset;
 }
 function encodeCharx(ir, assets) {
@@ -5557,96 +5557,6 @@ var materialTools = [
   })
 ];
 
-// packages/plugin/src/card-workbench/tools-reference.ts
-import { promises as fs6 } from "node:fs";
-import * as path5 from "node:path";
-function referenceRoots() {
-  return [
-    dshHomePath("attachments", "v1"),
-    dshHomePath("tavern", "workbench")
-  ];
-}
-function workbenchWorkspaceRoot() {
-  return dshHomePath("tavern", "workbench");
-}
-function isUnder(parent, child) {
-  const rel = path5.relative(parent, child);
-  if (rel === "") return true;
-  if (process.platform === "win32") {
-    const lowered = rel.toLowerCase();
-    return !(lowered === ".." || lowered.startsWith(`..${path5.sep}`));
-  }
-  return !(rel === ".." || rel.startsWith(`..${path5.sep}`));
-}
-function resolveReferencePath(raw) {
-  const resolved = path5.resolve(workbenchWorkspaceRoot(), raw.trim());
-  const roots = referenceRoots();
-  if (!roots.some((root) => isUnder(root, resolved))) {
-    throw new Error(
-      `reference path must stay inside the dialog-attachment roots (${roots.join(" or ")}); got '${raw}'. Ask the user to attach reference files through the DSH dialog instead of pasting paths from elsewhere.`
-    );
-  }
-  return resolved;
-}
-var referenceReadOutput = objectOutput({
-  found: { type: "boolean" },
-  path: { type: "string" },
-  chunkIndex: { type: "number" },
-  requestedChunkIndex: { type: "number" },
-  totalChunks: { type: "number" },
-  length: { type: "number" },
-  truncated: { type: "boolean" },
-  text: { type: "string" }
-}, ["chunkIndex", "requestedChunkIndex", "totalChunks", "length", "truncated", "text"]);
-var referenceTools = [
-  tool("reference_read", 'Read one chunk of a reference file the user attached through the DSH dialog (decision 2026-10-11-workbench-reference-read). Attachment notes look like "\u{1F4CE} name\uFF08size\uFF09\u2192 .dsh/uploads/<file>" (relative to the workbench workspace) or "[File "name" (N bytes, sha256:xx): verbatim read-only copy saved at "<absolute path>"]" \u2014 pass that path here. Only those attachment roots are readable; images and other binary files are rejected. chunkIndex defaults to 0 and is clamped into [0, totalChunks-1]; maxChars defaults to 2400 and is capped at 8000. Unknown files return found: false instead of throwing. Read chunk by chunk \u2014 never assume the whole file fits in one call.', {
-    path: { type: "string", required: true, description: 'Path from the attachment note: ".dsh/uploads/\u2026" relative to the workbench workspace, or the absolute saved-copy path from a [File \u2026] handle.' },
-    chunkIndex: { type: "integer", minimum: 0, description: "Chunk to read (0-based); out-of-range values are clamped into range." },
-    maxChars: { type: "integer", minimum: 1, maximum: 8e3, description: "Character budget for the returned text (default 2400, max 8000); longer chunks come back truncated." }
-  }, referenceReadOutput, async (args, exec) => {
-    const rawPath = stringArg(args.path);
-    let maxChars = 2400;
-    if (args.maxChars !== void 0) {
-      if (typeof args.maxChars !== "number" || !Number.isInteger(args.maxChars)) throw new Error("maxChars must be an integer");
-      maxChars = Math.min(8e3, Math.max(1, args.maxChars));
-    }
-    let requested = 0;
-    if (args.chunkIndex !== void 0) {
-      if (typeof args.chunkIndex !== "number" || !Number.isInteger(args.chunkIndex)) throw new Error("chunkIndex must be an integer");
-      requested = args.chunkIndex;
-    }
-    exec?.signal?.throwIfAborted();
-    const resolved = resolveReferencePath(rawPath);
-    let info;
-    try {
-      info = await fs6.stat(resolved);
-    } catch {
-      return { found: false, path: rawPath };
-    }
-    if (!info.isFile()) throw new Error(`reference path is not a regular file: '${rawPath}'`);
-    const buffer = await fs6.readFile(resolved);
-    if (buffer.includes(0)) {
-      throw new Error(`reference file is binary (images and archives are not readable here): '${rawPath}'`);
-    }
-    let text = buffer.toString("utf8");
-    if (text.charCodeAt(0) === 65279) text = text.slice(1);
-    const totalChunks = Math.max(1, Math.ceil(text.length / maxChars));
-    const chunkIndex = Math.min(Math.max(requested, 0), totalChunks - 1);
-    const chunk = text.slice(chunkIndex * maxChars, (chunkIndex + 1) * maxChars);
-    return {
-      found: true,
-      path: rawPath,
-      chunkIndex,
-      ...requested !== chunkIndex ? { requestedChunkIndex: requested } : {},
-      totalChunks,
-      length: chunk.length,
-      // 尾块恰好等于预算时不是截断——判据用「窗口之后还有内容」。
-      truncated: (chunkIndex + 1) * maxChars < text.length,
-      text: chunk
-    };
-  })
-];
-
 // packages/plugin/src/card-workbench/agent.ts
 var name = "dsh-tavern/card-workbench";
 var inject = ["systemPrompt", "tools"];
@@ -5657,7 +5567,6 @@ var KERNEL = [
   "",
   "Working protocol for every modification request:",
   "- Read first: call card_get (cards), world_get (world books) or preset_get (presets) on the named resource to ground yourself in the current working copy before discussing any change. Previews truncate long values \u2014 card_get takes full: [fields] to fetch card fields in full and world_get takes uids to fetch entries in full; quote the exact text verbatim when rewriting or moving long content. world_list shows the whole world-book library (with the cards linking each book) when the user has not pinned an existing name.",
-  '- Attached reference files: files the user attaches through the DSH dialog show up as attachment notes \u2014 "\u{1F4CE} name\uFF08size\uFF09\u2192 .dsh/uploads/<file>" lines before their message, or [File "name" (N bytes, sha256:xx): verbatim read-only copy saved at "<path>"] handles inside it. When their content matters, read them with reference_read (pass the path from the note, chunk by chunk like material_read). Binary attachments are rejected there \u2014 report that instead of guessing at contents, and never claim to have read a file you did not.',
   "- Propose before writing: present a concrete plan \u2014 for every affected field or entry, show the current value (or an excerpt of it) and the full replacement value, plus why the change serves the user's intent. Quote exact text; never describe a change vaguely.",
   "- Record plans: for card edits call card_plan_propose, and for world book edits or creations call world_plan_propose (create: true for new books), after the user reacts positively to the idea. They record the plan (planId) with the live current values and show it in the workbench panel for review.",
   '- Wait for explicit confirmation: the user must clearly approve the plan (e.g. "confirm", "apply it", or an equivalent). Silence, a new question, or a partial remark is NOT approval. Never write on an assumed yes.',
@@ -5709,7 +5618,6 @@ function createTools() {
     ...presetTools,
     cardCreateTool,
     ...materialTools,
-    ...referenceTools,
     cardApplyMvuTool
   ];
 }
