@@ -6247,52 +6247,6 @@ for (const spec of [
 // packages/plugin/src/agent-tavern/projector.ts
 var mvuAuditTail = Promise.resolve();
 
-// packages/plugin/src/lazy-projection.ts
-function createLazyProjection(options) {
-  const cache = /* @__PURE__ */ new Map();
-  const started = /* @__PURE__ */ new Set();
-  const tickets = /* @__PURE__ */ new Map();
-  let preheatDone = false;
-  async function load(agentId) {
-    const ticket = (tickets.get(agentId) ?? 0) + 1;
-    tickets.set(agentId, ticket);
-    const settle = (value) => {
-      if (tickets.get(agentId) === ticket) cache.set(agentId, value);
-    };
-    try {
-      await options.load(agentId, settle);
-    } catch {
-    }
-  }
-  async function refreshWhere(match) {
-    try {
-      const state = await options.getState();
-      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-        if (!match(binding)) continue;
-        started.add(agentId);
-        await load(agentId);
-      }
-    } catch {
-    }
-  }
-  return {
-    valueOf(agentId) {
-      if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
-      if (!started.has(agentId)) {
-        started.add(agentId);
-        void load(agentId);
-      }
-      return cache.get(agentId);
-    },
-    refreshWhere,
-    preheatWhere(match) {
-      if (preheatDone) return Promise.resolve();
-      preheatDone = true;
-      return refreshWhere(match);
-    }
-  };
-}
-
 // packages/plugin/src/mods/cross-bundle.ts
 var MOD_SECTION_ORDER_MIN = -50;
 var MOD_SECTION_ORDER_MAX = 0;
@@ -6387,6 +6341,52 @@ function claimHostToolNames(names) {
 }
 function onModsChanged(listener) {
   return modsChangedListeners.on(listener);
+}
+
+// packages/plugin/src/lazy-projection.ts
+function createLazyProjection(options) {
+  const cache = /* @__PURE__ */ new Map();
+  const started = /* @__PURE__ */ new Set();
+  const tickets = /* @__PURE__ */ new Map();
+  let preheatDone = false;
+  async function load(agentId) {
+    const ticket = (tickets.get(agentId) ?? 0) + 1;
+    tickets.set(agentId, ticket);
+    const settle = (value) => {
+      if (tickets.get(agentId) === ticket) cache.set(agentId, value);
+    };
+    try {
+      await options.load(agentId, settle);
+    } catch {
+    }
+  }
+  async function refreshWhere(match) {
+    try {
+      const state = await options.getState();
+      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+        if (!match(binding)) continue;
+        started.add(agentId);
+        await load(agentId);
+      }
+    } catch {
+    }
+  }
+  return {
+    valueOf(agentId) {
+      if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
+      if (!started.has(agentId)) {
+        started.add(agentId);
+        void load(agentId);
+      }
+      return cache.get(agentId);
+    },
+    refreshWhere,
+    preheatWhere(match) {
+      if (preheatDone) return Promise.resolve();
+      preheatDone = true;
+      return refreshWhere(match);
+    }
+  };
 }
 
 // packages/plugin/src/mods/agent-mount.ts
@@ -6512,6 +6512,7 @@ var KERNEL = [
   "",
   "Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge \u2014 the card details and world-info entries behind it are not in your context, so its proper nouns are NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search before replying."
 ].join("\n");
+var AGENT_KERNEL_TEXT = hostPromptSafe(KERNEL);
 var tavernStorePromise;
 var characterOutput = objectOutput({
   character: { type: "string" },

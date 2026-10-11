@@ -10,8 +10,11 @@
  *   （stream-delta / Mod 日志缓冲同款「只观察不反噬」纪律）；
  * - **内存态**：进程内环形缓冲，每聊天保留最近 10 条、总量封顶 50（FIFO 淘汰），
  *   重启即失——与 Mod 日志查看器的客户端环形缓冲同款取舍，不落盘；
- * - **v1 范围**：只覆盖 ST 循环（runGeneration）。AgentTavern 生成走宿主
- *   AgentLoop，插件看不到完整请求，不在记录面（面板如实标注）。
+ * - **范围**：ST 循环记录完整实发请求；Agent 模式（mode='agent-tavern'，
+ *   决策 2026-10-11-agent-prompt-viewer）记录**插件预注入面**——LLM 请求由
+ *   宿主 AgentLoop 发出，宿主拼装的完整请求（system 头物化 + 历史 projection）
+ *   插件不可见，能看到并如实记录的是：systemPrompt section/context 装配文本、
+ *   pre-step 插件注入消息、agent/request 链尾实发调用配置（面板如实标注）。
  */
 
 import type { ActivationResult } from '../../tavern-lore/src/index.js'
@@ -84,17 +87,46 @@ export interface PromptViewerRecord {
   /** token 估算（system + 全部消息，approximateTokens 同公式）。 */
   promptTokens: number
   loreTrace: PromptViewerLoreTrace | undefined
+  /** Agent 模式补充面（ST 循环记录恒 undefined）。 */
+  agent: PromptViewerAgentFace | undefined
+}
+
+/** Agent 模式预注入面的单个 systemPrompt section/context 装配快照。 */
+export interface PromptViewerAgentSection {
+  /** section 名（内置五段 dsh-tavern:agent-* / mod 段 dsh-tavern:mod:*）。 */
+  name: string
+  /** 注册 order（宿主拼装序）。 */
+  order: number
+  /** 装配文本（空文本段已摘除——与宿主对空 context 的摘除语义一致）。 */
+  text: string
+}
+
+/** Agent 模式（mode='agent-tavern'）记录的补充面：宿主拼装的完整请求不可见
+ *  （上下文是宿主 projection），此处是插件预注入面的结构化明细——system 字段
+ *  是 sections 文本的 '\n\n' 拼接（供 token 估算与快速浏览），分面明细以本块为准。 */
+export interface PromptViewerAgentFace {
+  /** 宿主会话 id（= sessionBindings 绑定键）。 */
+  sessionId: string | undefined
+  /** 最近一次 agent/pre-step 的轮标记（宿主 payload 未携带时 undefined）。 */
+  turn: number | undefined
+  /** 最近一次 agent/pre-step 的步标记。 */
+  step: number | undefined
+  /** systemPrompt section/context 装配快照（按 order 升序，含 mod section）。 */
+  sections: PromptViewerAgentSection[]
 }
 
 /** 记录点输入：request 即 pre-llm dispatch 之后的实发请求对象；lore 为本轮
- * 激活结果（loreTrace 的构建也在 recordPromptView 的守护区内完成——记录路径
- * 的任何一环，包括 trace 提取，都不允许击穿生成）。 */
+ *  激活结果（loreTrace 的构建也在 recordPromptView 的守护区内完成——记录路径
+ *  的任何一环，包括 trace 提取，都不允许击穿生成）。Agent 模式记录由
+ *  agent-tavern 侧合成（agent.ts 的 recordAgentTavernPromptViewFor），request
+ *  三字段填预注入面内容，agent 块带结构化明细。 */
 export interface PromptViewerInput {
   character: string
   chatId: string
   mode: string
   request: { messages?: unknown; system?: unknown; params?: unknown }
   lore?: ActivationResult
+  agent?: PromptViewerAgentFace
 }
 
 type HostLogger = { warn?: (message: string) => unknown }
@@ -127,6 +159,8 @@ export function recordPromptView(input: PromptViewerInput, logger?: HostLogger):
       promptTokens: approximateTokens(system ?? '') + messages.reduce((sum, m) => sum + approximateTokens(m.content), 0),
       // loreTrace 提取也在本 try 内：trace 构建抛错同样被吞掉，绝不反噬生成。
       loreTrace: input.lore === undefined ? undefined : buildLoreTrace(input.lore),
+      // Agent 模式补充面浅拷贝入缓冲：与调用方后续持有对象隔离（纯防御）。
+      agent: input.agent === undefined ? undefined : { ...input.agent, sections: input.agent.sections.map((section) => ({ ...section })) },
     }
     records.push(record)
     // 每聊天保留最近 PER_CHAT 条（FIFO：淘汰同 chatId 最旧）。

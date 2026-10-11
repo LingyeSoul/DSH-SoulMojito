@@ -76,6 +76,7 @@ import {
 import { stripMvuControl } from './mvu-guard.js'
 import { applyMvuSettlementRules, mergeMvuRuleNotes } from './mvu-rules.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
+import { registerAgentTavernPromptCapture } from './agent-tavern/prompt-capture.js'
 import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type SessionImportAppend } from './agent-tavern/projector.js'
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from './agent-tavern/deduce.js'
 // 预设 → AgentTavern 投影（agent-tavern/preset.ts）：本半持内置默认预设与
@@ -295,6 +296,10 @@ function templatesEnabled(config: { templateEnabled?: unknown } = {}): boolean {
 
 export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates?: unknown, templateEnabled?: unknown } = {}) {
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns })
+  // 提示词查看器（Agent 模式）pre-step 捕获：必须在 anchor **之后** prepend
+  // 注册（后 prepend 者更外层），await next() 后才能看到含锚定/开场提醒的
+  // 最终进入批次（决策 2026-10-11-agent-prompt-viewer）。
+  registerAgentTavernPromptCapture(ctx)
   updateChecksEnabledFlag = updateChecksEnabled(config)
   templatesEnabledFlag = templatesEnabled(config)
   const adapter = createDshAgentTavernAdapter(ctx)

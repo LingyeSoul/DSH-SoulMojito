@@ -2564,10 +2564,10 @@ var MemoryStore = class _MemoryStore {
   }
   async search(query) {
     const normalized = normalizeQuery(query);
-    const records = await this.listRecords(normalized);
+    const records2 = await this.listRecords(normalized);
     const tokens = tokenizeQuery(normalized.query ?? "");
     const now = Date.now();
-    const hits = records.map((record) => {
+    const hits = records2.map((record) => {
       const haystack = `${record.content}
 ${record.tags.join(" ")}`.toLocaleLowerCase();
       const matched = tokens.filter((token) => haystack.includes(token)).length;
@@ -2615,9 +2615,9 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
    * 排序 createdAt → id（页码偏移在维护编辑（只改 revision/updatedAt）下稳定）。
    */
   async list(scope, scopeId, options = {}) {
-    const records = await this.listRecords({ scope, scopeId, includeDeleted: options.includeDeleted === true });
-    records.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
-    return structuredClone(records);
+    const records2 = await this.listRecords({ scope, scopeId, includeDeleted: options.includeDeleted === true });
+    records2.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+    return structuredClone(records2);
   }
   async put(input, expectedRevision) {
     validateWrite(input);
@@ -5718,15 +5718,236 @@ async function appendMvuAudit(tavernRoot, record) {
   await write;
 }
 
-// packages/tavern-macros/src/host-registry.ts
-var HOST_MACRO_REGISTRY_KEY = "dsh-tavern:host-macros";
-var registrySymbol = Symbol.for(HOST_MACRO_REGISTRY_KEY);
+// packages/plugin/src/agent-tavern/prompt-capture.ts
+var agentStepCaptures = /* @__PURE__ */ new Map();
+function agentStepCaptureOf(agentId) {
+  if (typeof agentId !== "string") return void 0;
+  return agentStepCaptures.get(agentId);
+}
+
+// packages/plugin/src/mods/cross-bundle.ts
+var MOD_SECTION_ORDER_MIN = -50;
+var MOD_SECTION_ORDER_MAX = 0;
+function clampModSectionOrder(order) {
+  const value = typeof order === "number" && Number.isFinite(order) ? order : MOD_SECTION_ORDER_MIN;
+  return Math.max(MOD_SECTION_ORDER_MIN, Math.min(MOD_SECTION_ORDER_MAX, value));
+}
+var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
+  // agent-tavern（agent.ts createTools，18）
+  "tavern_character_get",
+  "tavern_lore_search",
+  "tavern_scene_get",
+  "tavern_history_search",
+  "memory_search",
+  "memory_read",
+  "memory_write",
+  "memory_update",
+  "memory_forget",
+  "variable_get",
+  "variable_set",
+  "variable_patch",
+  "variable_delete",
+  "variable_list",
+  "tavern_script_read",
+  "tavern_script_advance",
+  "tavern_deduce",
+  "tavern_variable_settle",
+  // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
+  "novel_status_read",
+  "novel_requirements_read",
+  "novel_outline_read",
+  "novel_outline_create",
+  "novel_outline_revise",
+  "novel_requirement_block",
+  "novel_facts_read",
+  "novel_lore_search",
+  "novel_character_read",
+  "novel_body_read",
+  "novel_body_search",
+  "novel_body_commit",
+  "novel_chapter_complete",
+  "novel_unit_claim",
+  "novel_unit_release",
+  "novel_unit_supersede",
+  "novel_writer_draft",
+  "novel_writer_delegate",
+  "novel_finish",
+  // card-workbench（card-workbench/tools-*.ts，22）
+  "card_get",
+  "card_put",
+  "card_create",
+  "card_delete",
+  "card_original_get",
+  "card_restore_original",
+  "card_plan_propose",
+  "card_apply_mvu",
+  "chat_log_read",
+  "world_get",
+  "world_put",
+  "world_create",
+  "world_delete",
+  "world_copy",
+  "world_rename",
+  "world_bind",
+  "world_list",
+  "world_plan_propose",
+  "preset_get",
+  "preset_put",
+  "material_list",
+  "material_read"
+]);
+var MOD_REGISTRY_KEY = "dsh-tavern:mod-registry";
+var registrySymbol = Symbol.for(MOD_REGISTRY_KEY);
 function store() {
   const holder = globalThis;
-  return holder[registrySymbol] ??= { nextSequence: 1, entries: /* @__PURE__ */ new Map() };
+  return holder[registrySymbol] ??= {
+    tools: /* @__PURE__ */ new Map(),
+    sections: /* @__PURE__ */ new Map(),
+    builtinNames: new Set(BUILTIN_TOOL_NAMES_SEED),
+    nextSequence: 1
+  };
+}
+var modsChangedListeners = createGlobalListenerRegistry("dsh-tavern:mods-changed-listeners");
+function modToolSnapshot() {
+  return [...store().tools.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
+}
+function modSectionSnapshot() {
+  return [...store().sections.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
+}
+function claimHostToolNames(names) {
+  for (const name2 of names) store().builtinNames.add(name2);
+}
+function onModsChanged(listener) {
+  return modsChangedListeners.on(listener);
+}
+
+// packages/plugin/src/prompt-viewer.ts
+var PROMPT_VIEWER_PER_CHAT = 10;
+var PROMPT_VIEWER_TOTAL = 50;
+var records = [];
+var nextSeq = 1;
+var faultInjector;
+function recordPromptView(input, logger) {
+  try {
+    faultInjector?.();
+    const messages = normalizeMessages(input.request?.messages);
+    const system = typeof input.request?.system === "string" ? input.request.system : void 0;
+    const record = {
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      seq: nextSeq++,
+      character: String(input.character),
+      chatId: String(input.chatId),
+      mode: String(input.mode),
+      system,
+      messages,
+      params: sanitizeParams(input.request?.params),
+      promptTokens: approximateTokens(system ?? "") + messages.reduce((sum, m) => sum + approximateTokens(m.content), 0),
+      // loreTrace 提取也在本 try 内：trace 构建抛错同样被吞掉，绝不反噬生成。
+      loreTrace: input.lore === void 0 ? void 0 : buildLoreTrace(input.lore),
+      // Agent 模式补充面浅拷贝入缓冲：与调用方后续持有对象隔离（纯防御）。
+      agent: input.agent === void 0 ? void 0 : { ...input.agent, sections: input.agent.sections.map((section) => ({ ...section })) }
+    };
+    records.push(record);
+    let perChat = 0;
+    for (let i = records.length - 1; i >= 0; i--) {
+      if (records[i].chatId === record.chatId) perChat++;
+      if (perChat > PROMPT_VIEWER_PER_CHAT) {
+        records.splice(i, 1);
+        perChat--;
+      }
+    }
+    if (records.length > PROMPT_VIEWER_TOTAL) records = records.slice(records.length - PROMPT_VIEWER_TOTAL);
+  } catch (error) {
+    logger?.warn?.(`dsh-tavern: prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+function buildLoreTrace(lore) {
+  const diagnostics = lore.diagnostics?.entries ?? {};
+  const entries = lore.allActivated.map((entry) => {
+    const raw = entry.entry;
+    const diag = diagnostics[entry.entryId];
+    const useProbability = raw.useProbability === true;
+    const probabilityValue = typeof raw.probability === "number" ? raw.probability : 100;
+    return {
+      world: entry.book,
+      uid: entry.uid,
+      name: typeof entry.entry?.comment === "string" ? entry.entry.comment : "",
+      matchedKeys: [...entry.matchedKeys],
+      position: entry.position,
+      depth: entry.depth,
+      order: entry.order,
+      reason: entry.activationReason,
+      constant: raw.constant === true,
+      ...useProbability && probabilityValue < 100 ? { probability: { use: true, value: probabilityValue, ...diag?.probabilityRoll !== void 0 ? { roll: diag.probabilityRoll } : {} } } : {},
+      ...entry.viaRecursion !== void 0 ? { viaRecursion: entry.viaRecursion } : {}
+    };
+  });
+  return {
+    entries,
+    scanRounds: lore.diagnostics?.scanRounds ?? 0,
+    recursionRounds: lore.diagnostics?.recursionRounds ?? 0,
+    budgetUsed: lore.diagnostics?.budgetUsed ?? 0,
+    budgetLimit: lore.diagnostics?.budgetLimit ?? 0
+  };
+}
+function approximateTokens(value) {
+  return Math.max(1, Math.ceil(value.length / 4));
+}
+function normalizeMessages(messages) {
+  if (!Array.isArray(messages)) return [];
+  return messages.map((message) => {
+    const record = message ?? {};
+    return {
+      role: typeof record.role === "string" ? record.role : "unknown",
+      content: normalizeContent(record.content)
+    };
+  });
+}
+function normalizeContent(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((block) => {
+      if (block !== null && typeof block === "object" && typeof block.text === "string") {
+        return block.text;
+      }
+      const type = block !== null && typeof block === "object" ? String(block.type ?? "unknown") : "unknown";
+      return `[${type} block]`;
+    }).join("\n");
+  }
+  if (content !== null && typeof content === "object" && typeof content.text === "string") {
+    return content.text;
+  }
+  return "[non-text content]";
+}
+var SECRETISH_KEY = /secret|password|authorization|credential|apikey/i;
+function sanitizeParams(params) {
+  if (params === null || typeof params !== "object" || Array.isArray(params)) return {};
+  const out = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (SECRETISH_KEY.test(key)) continue;
+    if (value === void 0) continue;
+    if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out[key] = value;
+    } else {
+      try {
+        out[key] = JSON.stringify(value);
+      } catch {
+        out[key] = String(value);
+      }
+    }
+  }
+  return out;
+}
+
+// packages/tavern-macros/src/host-registry.ts
+var HOST_MACRO_REGISTRY_KEY = "dsh-tavern:host-macros";
+var registrySymbol2 = Symbol.for(HOST_MACRO_REGISTRY_KEY);
+function store2() {
+  const holder = globalThis;
+  return holder[registrySymbol2] ??= { nextSequence: 1, entries: /* @__PURE__ */ new Map() };
 }
 function hostMacroSnapshot() {
-  return [...store().entries.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ name: name2, fn, order }) => ({ name: name2, fn, order }));
+  return [...store2().entries.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ name: name2, fn, order }) => ({ name: name2, fn, order }));
 }
 
 // packages/tavern-macros/src/random.ts
@@ -6368,102 +6589,6 @@ function createLazyProjection(options) {
   };
 }
 
-// packages/plugin/src/mods/cross-bundle.ts
-var MOD_SECTION_ORDER_MIN = -50;
-var MOD_SECTION_ORDER_MAX = 0;
-function clampModSectionOrder(order) {
-  const value = typeof order === "number" && Number.isFinite(order) ? order : MOD_SECTION_ORDER_MIN;
-  return Math.max(MOD_SECTION_ORDER_MIN, Math.min(MOD_SECTION_ORDER_MAX, value));
-}
-var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
-  // agent-tavern（agent.ts createTools，18）
-  "tavern_character_get",
-  "tavern_lore_search",
-  "tavern_scene_get",
-  "tavern_history_search",
-  "memory_search",
-  "memory_read",
-  "memory_write",
-  "memory_update",
-  "memory_forget",
-  "variable_get",
-  "variable_set",
-  "variable_patch",
-  "variable_delete",
-  "variable_list",
-  "tavern_script_read",
-  "tavern_script_advance",
-  "tavern_deduce",
-  "tavern_variable_settle",
-  // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
-  "novel_status_read",
-  "novel_requirements_read",
-  "novel_outline_read",
-  "novel_outline_create",
-  "novel_outline_revise",
-  "novel_requirement_block",
-  "novel_facts_read",
-  "novel_lore_search",
-  "novel_character_read",
-  "novel_body_read",
-  "novel_body_search",
-  "novel_body_commit",
-  "novel_chapter_complete",
-  "novel_unit_claim",
-  "novel_unit_release",
-  "novel_unit_supersede",
-  "novel_writer_draft",
-  "novel_writer_delegate",
-  "novel_finish",
-  // card-workbench（card-workbench/tools-*.ts，22）
-  "card_get",
-  "card_put",
-  "card_create",
-  "card_delete",
-  "card_original_get",
-  "card_restore_original",
-  "card_plan_propose",
-  "card_apply_mvu",
-  "chat_log_read",
-  "world_get",
-  "world_put",
-  "world_create",
-  "world_delete",
-  "world_copy",
-  "world_rename",
-  "world_bind",
-  "world_list",
-  "world_plan_propose",
-  "preset_get",
-  "preset_put",
-  "material_list",
-  "material_read"
-]);
-var MOD_REGISTRY_KEY = "dsh-tavern:mod-registry";
-var registrySymbol2 = Symbol.for(MOD_REGISTRY_KEY);
-function store2() {
-  const holder = globalThis;
-  return holder[registrySymbol2] ??= {
-    tools: /* @__PURE__ */ new Map(),
-    sections: /* @__PURE__ */ new Map(),
-    builtinNames: new Set(BUILTIN_TOOL_NAMES_SEED),
-    nextSequence: 1
-  };
-}
-var modsChangedListeners = createGlobalListenerRegistry("dsh-tavern:mods-changed-listeners");
-function modToolSnapshot() {
-  return [...store2().tools.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
-}
-function modSectionSnapshot() {
-  return [...store2().sections.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
-}
-function claimHostToolNames(names) {
-  for (const name2 of names) store2().builtinNames.add(name2);
-}
-function onModsChanged(listener) {
-  return modsChangedListeners.on(listener);
-}
-
 // packages/plugin/src/mods/agent-mount.ts
 function toolFingerprint(entry) {
   const { definition } = entry;
@@ -6589,6 +6714,7 @@ var KERNEL = [
   "",
   "Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge \u2014 the card details and world-info entries behind it are not in your context, so its proper nouns are NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search before replying."
 ].join("\n");
+var AGENT_KERNEL_TEXT = hostPromptSafe(KERNEL);
 var tavernStorePromise;
 var memoryStorePromise;
 var memoryVectorStorePromise;
@@ -6599,7 +6725,7 @@ function apply(ctx) {
     order: -80,
     // 守卫：内核为静态文本，但一旦有人写入 {{...}}（宿主变量语法），装配
     // 会直接抛错中止运行——过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
-    text: hostPromptSafe(KERNEL)
+    text: AGENT_KERNEL_TEXT
   });
   ctx.systemPrompt?.section?.({
     name: "dsh-tavern:agent-preset",
@@ -6625,8 +6751,9 @@ function apply(ctx) {
   ctx.on?.("agent/request", async (payload, next) => {
     const config = await next();
     const temperature = agentPresetTemperatureOf(payload?.agent?.id);
-    if (temperature === void 0) return config;
-    return { ...config, temperature };
+    const resolved = temperature === void 0 ? config : { ...config, temperature };
+    void recordAgentTavernPromptViewFor(payload?.agent?.id, resolved, ctx.logger);
+    return resolved;
   });
   const tools = createTools();
   for (const tool2 of tools) {
@@ -6677,7 +6804,7 @@ function createTools() {
         chat: [{ content: query, isUser: true }],
         contextSize: maxTokens,
         settings: { scanDepth: 1, budgetPercent: 100, budgetCap: maxTokens, recursive: false, includeNames: false },
-        countTokens: (value) => Math.min(maxTokens, approximateTokens(value)),
+        countTokens: (value) => Math.min(maxTokens, approximateTokens2(value)),
         rng: () => 0
       }).allActivated;
       let remainingChars = maxTokens * 4;
@@ -6761,7 +6888,7 @@ function createTools() {
       for (const { label, index, message } of qualified) {
         if (hits.length >= limit || remainingTokens <= 0) break;
         const excerpt = excerptAround(message.mes, tokens, 400);
-        remainingTokens -= approximateTokens(excerpt);
+        remainingTokens -= approximateTokens2(excerpt);
         hits.push({
           chat: label,
           index,
@@ -7612,6 +7739,49 @@ function agentPresetText(agentId) {
 function agentPresetTemperatureOf(agentId) {
   return presetProjection.valueOf(agentId)?.temperature;
 }
+function agentPromptSectionsFor(agentId) {
+  const sections = [
+    { name: "dsh-tavern:agent-kernel", order: -80, text: AGENT_KERNEL_TEXT },
+    { name: "dsh-tavern:agent-preset", order: -75, text: agentPresetText(agentId) },
+    { name: "dsh-tavern:agent-facts", order: -70, text: agentFactsText(agentId) },
+    { name: "dsh-tavern:agent-guides", order: -65, text: agentGuidesText(agentId) },
+    { name: "dsh-tavern:agent-script", order: -64, text: agentScriptText(agentId) },
+    ...modSectionSnapshot().map((entry) => ({
+      name: `dsh-tavern:mod:${entry.modId}:${entry.definition.name}`,
+      order: clampModSectionOrder(entry.definition.order),
+      text: hostPromptSafe(entry.definition.text)
+    }))
+  ];
+  return sections.filter((section) => section.text !== "").sort((a, b) => a.order - b.order);
+}
+async function recordAgentTavernPromptViewFor(agentId, config, logger) {
+  try {
+    if (typeof agentId !== "string" || agentId.trim() === "") return;
+    const capture = agentStepCaptureOf(agentId);
+    const binding = (await (await tavernStore()).getState()).sessionBindings[agentId];
+    if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) return;
+    const sections = agentPromptSectionsFor(agentId);
+    const system = sections.map((section) => section.text).join("\n\n");
+    recordPromptView({
+      character: binding.character,
+      chatId: binding.chatId,
+      mode: "agent-tavern",
+      request: {
+        messages: capture?.injected ?? [],
+        ...system === "" ? {} : { system },
+        params: config ?? {}
+      },
+      agent: {
+        sessionId: agentId,
+        turn: capture?.turn,
+        step: capture?.step,
+        sections
+      }
+    }, logger);
+  } catch (error) {
+    logger?.warn?.(`dsh-tavern: agent prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 onAgentPresetChanged(() => presetProjection.refreshWhere((binding) => binding.architecture === "agent-tavern"));
 function preheatAgentPresetProjections() {
   return presetProjection.preheatWhere((binding) => binding.architecture === "agent-tavern");
@@ -7654,10 +7824,11 @@ function optionalExpiry(value) {
   const trimmed = value.trim();
   return trimmed === "" ? void 0 : trimmed;
 }
-function approximateTokens(value) {
+function approximateTokens2(value) {
   return Math.max(1, Math.ceil(value.length / 4));
 }
 export {
+  agentPromptSectionsFor,
   apply,
   identitySummaryOf,
   inject,

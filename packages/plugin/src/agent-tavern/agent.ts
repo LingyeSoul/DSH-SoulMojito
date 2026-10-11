@@ -33,6 +33,9 @@ import { appendMvuReceipt, overlayScopedVariables, readChatVariables, type MvuRe
 import { getMvuTreePath, guardMvuWrite, readMvuSchema } from '../mvu-guard.js'
 import { readMvuRules, runMvuRules } from '../mvu-rules.js'
 import { appendMvuAudit } from './projector.js'
+import { agentStepCaptureOf } from './prompt-capture.js'
+import { clampModSectionOrder, modSectionSnapshot } from '../mods/cross-bundle.js'
+import { recordPromptView } from '../prompt-viewer.js'
 import { createHostPromptExpander, hostPromptSafe, seededRandom } from '../prompt-safety.js'
 import { boundedStringArg, clampInt, limitText, stringArg } from '../tool-args.js'
 import { createLazyProjection } from '../lazy-projection.js'
@@ -67,6 +70,10 @@ const KERNEL = [
   'Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge — the card details and world-info entries behind it are not in your context, so its proper nouns are NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search before replying.',
  ].join('\n')
 
+/** 注册与提示词查看器记录面共用的内核装配文本（hostPromptSafe 是纯函数，
+ *  注册期与记录期取同一常量，字节恒同）。 */
+const AGENT_KERNEL_TEXT = hostPromptSafe(KERNEL)
+
 let tavernStorePromise: Promise<TavernStore> | undefined
 let memoryStorePromise: Promise<MemoryStore> | undefined
 let memoryVectorStorePromise: Promise<MemoryVectorStore> | undefined
@@ -78,7 +85,7 @@ export function apply(ctx: AgentContextLike): void {
     order: -80,
     // 守卫：内核为静态文本，但一旦有人写入 {{...}}（宿主变量语法），装配
     // 会直接抛错中止运行——过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
-    text: hostPromptSafe(KERNEL),
+    text: AGENT_KERNEL_TEXT,
   })
   // 激活预设（ST 聊天补全预设）投影（order -75：kernel 之后、facts 之前）：
   // 内容型提示词按 prompt_order 注入，main/jailbreak 沿用卡覆盖语义；marker
@@ -128,8 +135,11 @@ export function apply(ctx: AgentContextLike): void {
   ctx.on?.('agent/request', async (payload, next) => {
     const config = await next()
     const temperature = agentPresetTemperatureOf(payload?.agent?.id)
-    if (temperature === undefined) return config
-    return { ...config, temperature }
+    const resolved = temperature === undefined ? config : { ...config, temperature }
+    // 提示词查看器（Agent 模式）：链尾合成后的 resolved 即本插件可见的最终
+    // 调用配置。fire-and-forget——合成内部整体吞错，绝不反噬请求路径。
+    void recordAgentTavernPromptViewFor(payload?.agent?.id, resolved, ctx.logger)
+    return resolved
   })
 
   const tools = createTools()
@@ -172,6 +182,8 @@ export interface AgentContextLike {
     ) => Promise<LlmCallConfigLike>,
   ) => unknown
   effect?: (factory: () => unknown, label?: string) => unknown
+  /** 宿主日志面（Cordis 核心 API）：提示词查看器记录失败的吞错出口。 */
+  logger?: { warn?: (message: string) => unknown }
 }
 
 interface AgentAssemblyLike {
@@ -1341,6 +1353,75 @@ function agentPresetText(agentId: string | undefined): string {
 
 function agentPresetTemperatureOf(agentId: string | undefined): number | undefined {
   return presetProjection.valueOf(agentId)?.temperature
+}
+
+/**
+ * 预注入 section 装配快照（提示词查看器 Agent 模式）：内置五段（与 apply()
+ * 的注册一一对应——新增注册必须同步这里，测试用 apply 注册面锁覆盖）+ mod
+ * section 快照（cross-bundle 注册表，读时与 agent-mount 挂载面同式钳制 +
+ * hostPromptSafe）。空文本段摘除（宿主装配对空 context 同样摘除——装载中/
+ * 无资产通道返回空串），按 order 升序。
+ */
+export function agentPromptSectionsFor(agentId: string): Array<{ name: string; order: number; text: string }> {
+  const sections = [
+    { name: 'dsh-tavern:agent-kernel', order: -80, text: AGENT_KERNEL_TEXT },
+    { name: 'dsh-tavern:agent-preset', order: -75, text: agentPresetText(agentId) },
+    { name: 'dsh-tavern:agent-facts', order: -70, text: agentFactsText(agentId) },
+    { name: 'dsh-tavern:agent-guides', order: -65, text: agentGuidesText(agentId) },
+    { name: 'dsh-tavern:agent-script', order: -64, text: agentScriptText(agentId) },
+    ...modSectionSnapshot().map((entry) => ({
+      name: `dsh-tavern:mod:${entry.modId}:${entry.definition.name}`,
+      order: clampModSectionOrder(entry.definition.order),
+      text: hostPromptSafe(entry.definition.text),
+    })),
+  ]
+  return sections
+    .filter((section) => section.text !== '')
+    .sort((a, b) => a.order - b.order)
+}
+
+/**
+ * 提示词查看器（Agent 模式，决策 2026-10-11-agent-prompt-viewer）：agent/request
+ * 链尾合成后的记录。AgentTavern 的 LLM 请求由宿主 AgentLoop 发出，插件看不到
+ * 宿主拼装的完整请求（system 头由宿主 assemble 物化、历史是宿主 projection）——
+ * 记录面是插件自己的**预注入面**：① 五个 systemPrompt section/context 的装配
+ * 文本（agentPromptSectionsFor，与注册同源）；② 本 step pre-step 由插件注入的
+ * user 消息（prompt-capture 捕获）；③ waterfall 链尾最终调用配置（实发 params）。
+ * 未绑定 / 非 agent-tavern / group 会话（含 tavern_deduce 子代理）静默跳过。
+ * 整体吞错 + 宿主日志一行——记录面绝不反噬请求路径。
+ */
+async function recordAgentTavernPromptViewFor(
+  agentId: string | undefined,
+  config: unknown,
+  logger?: { warn?: (message: string) => unknown },
+): Promise<void> {
+  try {
+    if (typeof agentId !== 'string' || agentId.trim() === '') return
+    // 捕获先同步取快照：绑定查询是异步的，读盘期间会话可能已推进到下一 step。
+    const capture = agentStepCaptureOf(agentId)
+    const binding = (await (await tavernStore()).getState()).sessionBindings[agentId]
+    if (!binding || binding.architecture !== 'agent-tavern' || binding.group === true) return
+    const sections = agentPromptSectionsFor(agentId)
+    const system = sections.map((section) => section.text).join('\n\n')
+    recordPromptView({
+      character: binding.character,
+      chatId: binding.chatId,
+      mode: 'agent-tavern',
+      request: {
+        messages: capture?.injected ?? [],
+        ...(system === '' ? {} : { system }),
+        params: config ?? {},
+      },
+      agent: {
+        sessionId: agentId,
+        turn: capture?.turn,
+        step: capture?.step,
+        sections,
+      },
+    }, logger)
+  } catch (error) {
+    logger?.warn?.(`dsh-tavern: agent prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 // 模块加载即注册写穿回调：预设写路径（index.ts 的 settings/preset 路由、写卡
