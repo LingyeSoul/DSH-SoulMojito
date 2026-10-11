@@ -4240,15 +4240,18 @@ function normalizeModEnables(value) {
   }
   return result;
 }
-var ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
+var MEMORY_EMBED_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
+function normalizeEmbedBaseURL(value) {
+  return value.trim().replace(/\/+$/, "");
+}
 function normalizeMemoryEmbedding(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
   const record = value;
-  const baseURL = typeof record.baseURL === "string" ? record.baseURL.trim().replace(/\/+$/, "") : "";
+  const baseURL = typeof record.baseURL === "string" ? normalizeEmbedBaseURL(record.baseURL) : "";
   const model = typeof record.model === "string" ? record.model.trim().slice(0, 200) : "";
   const apiKeyEnv = typeof record.apiKeyEnv === "string" ? record.apiKeyEnv.trim() : "";
   if (baseURL === "" || model === "" || !/^https?:\/\//.test(baseURL)) return void 0;
-  if (apiKeyEnv !== "" && !ENV_NAME.test(apiKeyEnv)) return void 0;
+  if (apiKeyEnv !== "" && !MEMORY_EMBED_ENV_NAME.test(apiKeyEnv)) return void 0;
   const dims = clampOptionalInt(record.dims, 1, 8192);
   const batchSize = clampOptionalInt(record.batchSize, 1, 64);
   const timeoutMs = clampOptionalInt(record.timeoutMs, 200, 12e4);
@@ -4905,6 +4908,30 @@ function tokenizeQuery(value) {
   }
   return [...tokens];
 }
+var STRICT_TOKEN_MAX = 3;
+var TOKEN_MATCH_RATIO = 0.4;
+function tokenThreshold(total) {
+  return total <= STRICT_TOKEN_MAX ? total : Math.ceil(total * TOKEN_MATCH_RATIO);
+}
+function matchedTokenCount(text, tokens) {
+  const haystack = text.toLocaleLowerCase();
+  let matched = 0;
+  for (const token of tokens) {
+    if (haystack.includes(token)) matched += 1;
+  }
+  return matched;
+}
+function excerptAround(text, tokens, maxChars) {
+  if (text.length <= maxChars) return text;
+  const haystack = text.toLocaleLowerCase();
+  let anchor = 0;
+  for (const token of tokens) {
+    const at = haystack.indexOf(token);
+    if (at >= 0 && (anchor === 0 || at < anchor)) anchor = at;
+  }
+  const start = Math.max(0, Math.min(anchor - 80, text.length - maxChars));
+  return `${start > 0 ? "\u2026" : ""}${text.slice(start, start + maxChars)}${start + maxChars < text.length ? "\u2026" : ""}`;
+}
 
 // packages/tavern-store/src/memory.ts
 var MemoryRevisionConflictError = class extends Error {
@@ -5526,12 +5553,19 @@ var VariableStore = class _VariableStore {
     });
   }
   async list(scope, scopeId, prefix = "", limit = MAX_LIST) {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error("variable limit must be a positive integer");
+    const all = await this.listAll(scope, scopeId, prefix);
+    return all.slice(0, Math.min(limit, MAX_LIST));
+  }
+  /** 全量清单（name 升序）：供内部正确性路径（settle 规则相基线、状态栏/
+   * 审计显示树）使用——这些路径静默截断会算错或显示错。工具面（variable_list）
+   * 仍走 list 的 MAX_LIST 封顶；全量本身受 MAX_SCOPE_BYTES 文件上限约束。 */
+  async listAll(scope, scopeId, prefix = "") {
     validateScope3(scope, scopeId);
     if (typeof prefix !== "string" || prefix.length > 64) throw new Error("invalid variable prefix");
-    if (!Number.isInteger(limit) || limit < 1) throw new Error("variable limit must be a positive integer");
     const file = await this.readFile(scope, scopeId);
     if (file === void 0) return [];
-    return Object.keys(file.values).filter((name2) => name2.startsWith(prefix)).sort().slice(0, Math.min(limit, MAX_LIST)).map((name2) => snapshot(file, name2));
+    return Object.keys(file.values).filter((name2) => name2.startsWith(prefix)).sort().map((name2) => snapshot(file, name2));
   }
   /** Drop the whole scope file; used for turn-scoped scratch state that expires at turn end. */
   async clear(scope, scopeId) {
@@ -13957,8 +13991,6 @@ var MAINTENANCE_MAX_TOKENS = 8192;
 var MAINTENANCE_CONVERSATION_MAX_CHARS = 6e5;
 var SEARCH_LIMIT = 20;
 var SEARCH_EXCERPT_CHARS = 400;
-var STRICT_TOKEN_MAX = 3;
-var TOKEN_MATCH_RATIO = 0.4;
 var MaintenanceRunConflictError = class extends Error {
   constructor(character, chatId, runId) {
     super(`a memory maintenance run is already active for ${character}/${chatId}`);
@@ -14472,28 +14504,6 @@ ${record.tags.join(" ")}`, tokens) >= tokenThreshold(tokens.length));
     more: consumed < records2.length,
     records: pageRecords
   };
-}
-function tokenThreshold(total) {
-  return total <= STRICT_TOKEN_MAX ? total : Math.ceil(total * TOKEN_MATCH_RATIO);
-}
-function matchedTokenCount(text, tokens) {
-  const haystack = text.toLocaleLowerCase();
-  let matched = 0;
-  for (const token of tokens) {
-    if (haystack.includes(token)) matched += 1;
-  }
-  return matched;
-}
-function excerptAround(text, tokens, maxChars) {
-  if (text.length <= maxChars) return text;
-  const haystack = text.toLocaleLowerCase();
-  let anchor = 0;
-  for (const token of tokens) {
-    const at = haystack.indexOf(token);
-    if (at >= 0 && (anchor === 0 || at < anchor)) anchor = at;
-  }
-  const start = Math.max(0, Math.min(anchor - 80, text.length - maxChars));
-  return `${start > 0 ? "\u2026" : ""}${text.slice(start, start + maxChars)}${start + maxChars < text.length ? "\u2026" : ""}`;
 }
 function toolSearchSource(run, args) {
   const query = typeof args.query === "string" ? args.query : "";
@@ -20246,9 +20256,9 @@ async function handleApi(ctx, req, res) {
         includeDeleted: true,
         limit: 50
       })))),
-      Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store5) => store5.list(scope, scopeId, "", 100)))),
+      Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store5) => store5.listAll(scope, scopeId)))),
       memories().then((store5) => store5.search({ scope: "global", includeDeleted: true, limit: 50 })),
-      variables().then((store5) => store5.list("global", "global", "", 100)),
+      variables().then((store5) => store5.listAll("global", "global")),
       agentTavernProjectorPromise
     ]);
     return sendJson(res, 200, {
@@ -21146,7 +21156,7 @@ async function handleMvuApi(req, res, route, method, db) {
     const state = await db.getState();
     const receipts = readMvuReceipts(chat);
     const agentTavernBound = Object.values(state.sessionBindings).some((binding) => binding.architecture === "agent-tavern" && binding.chatId === chatId && binding.character === characterName);
-    const scopedVariables = agentTavernBound ? await (await variables()).list("chat", chatId, "", 100) : [];
+    const scopedVariables = agentTavernBound ? await (await variables()).listAll("chat", chatId) : [];
     const displayVariables = stripMvuControl(scopedVariables.length > 0 ? overlayScopedVariables(readChatVariables(chat), scopedVariables) : readChatVariables(chat));
     const character = await db.getCharacter(characterName);
     const statusTemplate = character ? statusTemplateOf(character.card) : void 0;
@@ -21204,7 +21214,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
   if (method === "PUT" && route === "memory/embed") {
     const body = await readJson(req);
     const raw = body === null || typeof body !== "object" || Array.isArray(body) ? {} : body;
-    const baseURL = typeof raw.baseURL === "string" ? raw.baseURL.trim().replace(/\/+$/, "") : "";
+    const baseURL = typeof raw.baseURL === "string" ? normalizeEmbedBaseURL(raw.baseURL) : "";
     const apiKeyEnv = typeof raw.apiKeyEnv === "string" ? raw.apiKeyEnv.trim() : "";
     const model = typeof raw.model === "string" ? raw.model.trim() : "";
     if (baseURL === "" && apiKeyEnv === "" && model === "") {
@@ -21212,7 +21222,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
       await clearEmbedStatus(root);
       return sendJson(res, 200, { ok: true, config: null });
     }
-    if (apiKeyEnv !== "" && !/^[A-Za-z_][A-Za-z0-9_]{0,255}$/.test(apiKeyEnv)) {
+    if (apiKeyEnv !== "" && !MEMORY_EMBED_ENV_NAME.test(apiKeyEnv)) {
       return sendJson(res, 400, {
         ok: false,
         message: `invalid apiKeyEnv '${apiKeyEnv.slice(0, 60)}': expected a POSIX environment variable name (letters, digits, underscore; not starting with a digit), or an empty string for a keyless endpoint`
@@ -22940,7 +22950,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.5.0".trim() : "";
-  const commit = true ? normalizeCommit("3d96090") : void 0;
+  const commit = true ? normalizeCommit("b4afb8a") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

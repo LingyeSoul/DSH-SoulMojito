@@ -245,8 +245,16 @@ function normalizeModEnables(value: unknown): Record<string, boolean> {
   return result
 }
 
-/** POSIX env 变量名（提案 0016，对齐宿主 dsh-credentials 的 CredentialRef 风格）。 */
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/
+/** POSIX env 变量名（提案 0016，对齐宿主 dsh-credentials 的 CredentialRef 风格）。
+ *  PUT memory/embed 的前置校验复用同一模式（给出比 normalize 落空更可操作的
+ *  报错文案），两处不得漂移。 */
+export const MEMORY_EMBED_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/
+
+/** 记忆 embed baseURL 规整：去首尾空白与尾部斜杠。normalizeMemoryEmbedding
+ *  与 PUT memory/embed 的「三件套全空=清除」判定共用同一形状。 */
+export function normalizeEmbedBaseURL(value: string): string {
+  return value.trim().replace(/\/+$/, '')
+}
 
 /**
  * 记忆 embed 设置读取容错（提案 0016）：baseURL 必须是 http(s) URL、model 非空、
@@ -256,11 +264,11 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/
 export function normalizeMemoryEmbedding(value: unknown): MemoryEmbeddingSettings | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
-  const baseURL = typeof record.baseURL === 'string' ? record.baseURL.trim().replace(/\/+$/, '') : ''
+  const baseURL = typeof record.baseURL === 'string' ? normalizeEmbedBaseURL(record.baseURL) : ''
   const model = typeof record.model === 'string' ? record.model.trim().slice(0, 200) : ''
   const apiKeyEnv = typeof record.apiKeyEnv === 'string' ? record.apiKeyEnv.trim() : ''
   if (baseURL === '' || model === '' || !/^https?:\/\//.test(baseURL)) return undefined
-  if (apiKeyEnv !== '' && !ENV_NAME.test(apiKeyEnv)) return undefined
+  if (apiKeyEnv !== '' && !MEMORY_EMBED_ENV_NAME.test(apiKeyEnv)) return undefined
   const dims = clampOptionalInt(record.dims, 1, 8192)
   const batchSize = clampOptionalInt(record.batchSize, 1, 64)
   const timeoutMs = clampOptionalInt(record.timeoutMs, 200, 120000)

@@ -29,10 +29,13 @@ import {
   MemoryStore,
   MemoryVectorStore,
   appendReceipt,
+  excerptAround,
   floorSignature,
+  matchedTokenCount,
   normalizeMemoryEmbedding,
   pendingRanges as subtractPending,
   tokenizeQuery,
+  tokenThreshold,
   type MemoryEmbeddingSettings,
   type MaintenanceFloorMessage,
   type MaintenanceFloorRange,
@@ -61,9 +64,6 @@ export const MAINTENANCE_CONVERSATION_MAX_CHARS = 600_000
 /** SearchSource 单次命中上限与摘录宽度。 */
 const SEARCH_LIMIT = 20
 const SEARCH_EXCERPT_CHARS = 400
-/** ≤3 token 严格 AND；>3 token 命中 ≥40% 入选（与 agent-tavern 词法检索同款语义）。 */
-const STRICT_TOKEN_MAX = 3
-const TOKEN_MATCH_RATIO = 0.4
 
 /** 同 scope 已有在跑 run（HTTP 层映射 409）。 */
 export class MaintenanceRunConflictError extends Error {
@@ -726,31 +726,8 @@ async function toolReadMemory(run: MaintenanceRunState, args: Record<string, unk
 }
 
 /* ---- SearchSource / ReadSource：对冻结证据快照的只读检索 ---- */
-
-function tokenThreshold(total: number): number {
-  return total <= STRICT_TOKEN_MAX ? total : Math.ceil(total * TOKEN_MATCH_RATIO)
-}
-
-function matchedTokenCount(text: string, tokens: readonly string[]): number {
-  const haystack = text.toLocaleLowerCase()
-  let matched = 0
-  for (const token of tokens) {
-    if (haystack.includes(token)) matched += 1
-  }
-  return matched
-}
-
-function excerptAround(text: string, tokens: readonly string[], maxChars: number): string {
-  if (text.length <= maxChars) return text
-  const haystack = text.toLocaleLowerCase()
-  let anchor = 0
-  for (const token of tokens) {
-    const at = haystack.indexOf(token)
-    if (at >= 0 && (anchor === 0 || at < anchor)) anchor = at
-  }
-  const start = Math.max(0, Math.min(anchor - 80, text.length - maxChars))
-  return `${start > 0 ? '…' : ''}${text.slice(start, start + maxChars)}${start + maxChars < text.length ? '…' : ''}`
-}
+/* 分级匹配/摘录（tokenThreshold / matchedTokenCount / excerptAround）与
+ * agent-tavern 词法检索同源：tavern-store/src/tokenize.ts。 */
 
 function toolSearchSource(run: MaintenanceRunState, args: Record<string, unknown>) {
   const query = typeof args.query === 'string' ? args.query : ''

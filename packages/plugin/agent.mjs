@@ -1869,15 +1869,18 @@ function normalizeModEnables(value) {
   }
   return result;
 }
-var ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
+var MEMORY_EMBED_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
+function normalizeEmbedBaseURL(value) {
+  return value.trim().replace(/\/+$/, "");
+}
 function normalizeMemoryEmbedding(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
   const record = value;
-  const baseURL = typeof record.baseURL === "string" ? record.baseURL.trim().replace(/\/+$/, "") : "";
+  const baseURL = typeof record.baseURL === "string" ? normalizeEmbedBaseURL(record.baseURL) : "";
   const model = typeof record.model === "string" ? record.model.trim().slice(0, 200) : "";
   const apiKeyEnv = typeof record.apiKeyEnv === "string" ? record.apiKeyEnv.trim() : "";
   if (baseURL === "" || model === "" || !/^https?:\/\//.test(baseURL)) return void 0;
-  if (apiKeyEnv !== "" && !ENV_NAME.test(apiKeyEnv)) return void 0;
+  if (apiKeyEnv !== "" && !MEMORY_EMBED_ENV_NAME.test(apiKeyEnv)) return void 0;
   const dims = clampOptionalInt(record.dims, 1, 8192);
   const batchSize = clampOptionalInt(record.batchSize, 1, 64);
   const timeoutMs = clampOptionalInt(record.timeoutMs, 200, 12e4);
@@ -2534,6 +2537,30 @@ function tokenizeQuery(value) {
   }
   return [...tokens];
 }
+var STRICT_TOKEN_MAX = 3;
+var TOKEN_MATCH_RATIO = 0.4;
+function tokenThreshold(total) {
+  return total <= STRICT_TOKEN_MAX ? total : Math.ceil(total * TOKEN_MATCH_RATIO);
+}
+function matchedTokenCount(text, tokens) {
+  const haystack = text.toLocaleLowerCase();
+  let matched = 0;
+  for (const token of tokens) {
+    if (haystack.includes(token)) matched += 1;
+  }
+  return matched;
+}
+function excerptAround(text, tokens, maxChars) {
+  if (text.length <= maxChars) return text;
+  const haystack = text.toLocaleLowerCase();
+  let anchor = 0;
+  for (const token of tokens) {
+    const at = haystack.indexOf(token);
+    if (at >= 0 && (anchor === 0 || at < anchor)) anchor = at;
+  }
+  const start = Math.max(0, Math.min(anchor - 80, text.length - maxChars));
+  return `${start > 0 ? "\u2026" : ""}${text.slice(start, start + maxChars)}${start + maxChars < text.length ? "\u2026" : ""}`;
+}
 
 // packages/tavern-store/src/memory.ts
 var MemoryRevisionConflictError = class extends Error {
@@ -2825,6 +2852,31 @@ function decodeVector(base64) {
   if (bytes.length === 0 || bytes.length % 4 !== 0) return [];
   return Array.from(new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4));
 }
+var RRF_K = 60;
+function rrfFuse(lexicalOrder, denseOrder, k = RRF_K) {
+  const scores = /* @__PURE__ */ new Map();
+  const add = (id, rank) => {
+    scores.set(id, (scores.get(id) ?? 0) + 1 / (k + rank));
+  };
+  lexicalOrder.forEach((id, index) => add(id, index + 1));
+  denseOrder.forEach((id, index) => add(id, index + 1));
+  return scores;
+}
+function cosineSimilarity(left, right) {
+  if (left.length === 0 || left.length !== right.length) return 0;
+  let dot = 0;
+  let normLeft = 0;
+  let normRight = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+    dot += a * b;
+    normLeft += a * a;
+    normRight += b * b;
+  }
+  if (normLeft === 0 || normRight === 0) return 0;
+  return dot / (Math.sqrt(normLeft) * Math.sqrt(normRight));
+}
 var SCOPES2 = /* @__PURE__ */ new Set(["turn", "chat", "character", "agent", "global"]);
 var MemoryVectorStore = class _MemoryVectorStore {
   constructor(root) {
@@ -3059,12 +3111,19 @@ var VariableStore = class _VariableStore {
     });
   }
   async list(scope, scopeId, prefix = "", limit = MAX_LIST) {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error("variable limit must be a positive integer");
+    const all = await this.listAll(scope, scopeId, prefix);
+    return all.slice(0, Math.min(limit, MAX_LIST));
+  }
+  /** 全量清单（name 升序）：供内部正确性路径（settle 规则相基线、状态栏/
+   * 审计显示树）使用——这些路径静默截断会算错或显示错。工具面（variable_list）
+   * 仍走 list 的 MAX_LIST 封顶；全量本身受 MAX_SCOPE_BYTES 文件上限约束。 */
+  async listAll(scope, scopeId, prefix = "") {
     validateScope3(scope, scopeId);
     if (typeof prefix !== "string" || prefix.length > 64) throw new Error("invalid variable prefix");
-    if (!Number.isInteger(limit) || limit < 1) throw new Error("variable limit must be a positive integer");
     const file = await this.readFile(scope, scopeId);
     if (file === void 0) return [];
-    return Object.keys(file.values).filter((name2) => name2.startsWith(prefix)).sort().slice(0, Math.min(limit, MAX_LIST)).map((name2) => snapshot(file, name2));
+    return Object.keys(file.values).filter((name2) => name2.startsWith(prefix)).sort().map((name2) => snapshot(file, name2));
   }
   /** Drop the whole scope file; used for turn-scoped scratch state that expires at turn end. */
   async clear(scope, scopeId) {
@@ -4489,33 +4548,8 @@ function storeMemoizedQueryVector(config, query, vector) {
 }
 
 // packages/plugin/src/memory-hybrid.ts
-var RRF_K = 60;
 var HYBRID_BACKFILL_LIMIT = 32;
 var HYBRID_POOL_PER_SCOPE = 50;
-function rrfFuse(lexicalOrder, denseOrder, k = RRF_K) {
-  const scores = /* @__PURE__ */ new Map();
-  const add = (id, rank) => {
-    scores.set(id, (scores.get(id) ?? 0) + 1 / (k + rank));
-  };
-  lexicalOrder.forEach((id, index) => add(id, index + 1));
-  denseOrder.forEach((id, index) => add(id, index + 1));
-  return scores;
-}
-function cosineSimilarity(left, right) {
-  if (left.length === 0 || left.length !== right.length) return 0;
-  let dot = 0;
-  let normLeft = 0;
-  let normRight = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    const a = left[index];
-    const b = right[index];
-    dot += a * b;
-    normLeft += a * a;
-    normRight += b * b;
-  }
-  if (normLeft === 0 || normRight === 0) return 0;
-  return dot / (Math.sqrt(normLeft) * Math.sqrt(normRight));
-}
 async function hybridMemorySearch(input) {
   const { root, config, store: store3, vectorStore, query, scopes, limit, maxTokens, fetchImpl } = input;
   const status = await readEmbedStatus(root);
@@ -7285,7 +7319,7 @@ function createTools() {
       const ruleSource = readMvuRules(chat, card);
       const seedTree = readChatVariables(chat);
       const store3 = await variableStore();
-      const preEntries = ruleSource !== void 0 ? await store3.list("chat", binding.chatId, "", 100) : [];
+      const preEntries = ruleSource !== void 0 ? await store3.listAll("chat", binding.chatId) : [];
       const applied = [];
       const failed = [];
       const receiptChanges = [];
@@ -7567,30 +7601,6 @@ function memoryView(record) {
 }
 function variableSummary(snapshot2) {
   return { name: snapshot2.name, value: snapshot2.value, revision: snapshot2.revision, updatedAt: snapshot2.updatedAt };
-}
-var STRICT_TOKEN_MAX = 3;
-var TOKEN_MATCH_RATIO = 0.4;
-function tokenThreshold(total) {
-  return total <= STRICT_TOKEN_MAX ? total : Math.ceil(total * TOKEN_MATCH_RATIO);
-}
-function matchedTokenCount(text, tokens) {
-  const haystack = text.toLocaleLowerCase();
-  let matched = 0;
-  for (const token of tokens) {
-    if (haystack.includes(token)) matched += 1;
-  }
-  return matched;
-}
-function excerptAround(text, tokens, maxChars) {
-  if (text.length <= maxChars) return text;
-  const haystack = text.toLocaleLowerCase();
-  let anchor = 0;
-  for (const token of tokens) {
-    const at = haystack.indexOf(token);
-    if (at >= 0 && (anchor === 0 || at < anchor)) anchor = at;
-  }
-  const start = Math.max(0, Math.min(anchor - 80, text.length - maxChars));
-  return `${start > 0 ? "\u2026" : ""}${text.slice(start, start + maxChars)}${start + maxChars < text.length ? "\u2026" : ""}`;
 }
 function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
   return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };

@@ -30,7 +30,7 @@ import {
   resolveApiKey,
   type EmbedRuntimeStatus,
 } from '../src/memory-embed.js'
-import { cosineSimilarity, rrfFuse } from '../src/memory-hybrid.js'
+import { cosineSimilarity, rrfFuse } from '../../tavern-store/src/index.js'
 
 const CHARACTER = 'Hybrid Memory Tester'
 const CONFIG = {

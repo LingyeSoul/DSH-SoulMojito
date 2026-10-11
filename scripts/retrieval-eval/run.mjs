@@ -14,8 +14,10 @@
  * --dense（提案 0016 §评测计划）：真实端点的离线 A/B——语料全量嵌入
  * MemoryVectorStore，逐用例嵌入查询串后按提案 0016 §5 的融合契约（词法池
  * limit=50、cosine 降序、双通道 RRF k=60、rrf→词法名次→id 排序）重排，输出
- * 词法/混合两张矩阵与逐维度 Δ。需要真实 embed 服务，不入 CI；融合逻辑是
- * plugin/src/memory-hybrid.ts 的忠实子集（无回填/熔断——离线一次性嵌入）。
+ * 词法/混合两张矩阵与逐维度 Δ。需要真实 embed 服务，不入 CI；融合原语
+ * （cosineSimilarity / rrfFuse / RRF_K）与生产同源——tavern-store 的
+ * memory-vectors.ts，本 runner 与 plugin/src/memory-hybrid.ts 同一导入；
+ * embed HTTP 客户端是有意简化（无回填/熔断/状态 sidecar——离线一次性嵌入）。
  */
 
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -40,7 +42,7 @@ const flag = (name) => {
 }
 
 const tavernStoreLib = await import(`file://${libEntry.replaceAll('\\', '/')}`)
-const { MemoryStore, MemoryVectorStore, memoryContentDigest, encodeVector, decodeVector } = tavernStoreLib
+const { MemoryStore, MemoryVectorStore, memoryContentDigest, encodeVector, decodeVector, cosineSimilarity, rrfFuse } = tavernStoreLib
 const { buildCorpus, corpusHash, corpusStats, DIMENSIONS } = await import('./corpus.mjs')
 const { runMatrix, aggregate } = await import('./metrics.mjs')
 const { seedStore } = await import('./seed.mjs')
@@ -70,7 +72,6 @@ try {
 
 const DENSE_BATCH = 16
 const DENSE_TIMEOUT_MS = 30_000
-const RRF_K = 60
 
 async function runDenseComparison({ corpus, store, root, lexicalAgg }) {
   const baseURL = (flag('base-url') ?? '').replace(/\/+$/, '')
@@ -142,25 +143,8 @@ async function runDenseComparison({ corpus, store, root, lexicalAgg }) {
   const entries = await vectors.list()
   const byId = new Map(entries.map((entry) => [entry.id, entry]))
 
-  const cosine = (a, b) => {
-    let dot = 0
-    let na = 0
-    let nb = 0
-    for (let i = 0; i < a.length; i += 1) {
-      dot += a[i] * b[i]
-      na += a[i] * a[i]
-      nb += b[i] * b[i]
-    }
-    return na === 0 || nb === 0 ? 0 : dot / (Math.sqrt(na) * Math.sqrt(nb))
-  }
-  const rrfFuse = (lexicalOrder, denseOrder) => {
-    const scores = new Map()
-    const add = (id, rank) => scores.set(id, (scores.get(id) ?? 0) + 1 / (RRF_K + rank))
-    lexicalOrder.forEach((id, index) => add(id, index + 1))
-    denseOrder.forEach((id, index) => add(id, index + 1))
-    return scores
-  }
-
+  // cosineSimilarity / rrfFuse 与生产（plugin/src/memory-hybrid.ts）同源导入
+  // （tavern-store/src/memory-vectors.ts）——评测与生产融合不漂移。
   const hybridSearch = async (query) => {
     const [queryVector] = await embedAll([query])
     const pool = await store.search({ query, limit: 50 })
@@ -171,7 +155,7 @@ async function runDenseComparison({ corpus, store, root, lexicalAgg }) {
         const entry = byId.get(hit.record.id)
         return entry !== undefined && entry.model === model && entry.digest === memoryContentDigest(model, hit.record.content)
       })
-      .map((hit) => ({ id: hit.record.id, similarity: cosine(queryVector, decodeVector(byId.get(hit.record.id).vector)) }))
+      .map((hit) => ({ id: hit.record.id, similarity: cosineSimilarity(queryVector, decodeVector(byId.get(hit.record.id).vector)) }))
       .sort((left, right) => right.similarity - left.similarity || left.id.localeCompare(right.id))
     const fused = rrfFuse(pool.map((hit) => hit.record.id), dense.map((item) => item.id))
     return pool

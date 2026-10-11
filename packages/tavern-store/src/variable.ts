@@ -122,12 +122,20 @@ export class VariableStore {
   }
 
   async list(scope: VariableScope, scopeId: string, prefix = '', limit = MAX_LIST): Promise<VariableSnapshot[]> {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error('variable limit must be a positive integer')
+    const all = await this.listAll(scope, scopeId, prefix)
+    return all.slice(0, Math.min(limit, MAX_LIST))
+  }
+
+  /** 全量清单（name 升序）：供内部正确性路径（settle 规则相基线、状态栏/
+   * 审计显示树）使用——这些路径静默截断会算错或显示错。工具面（variable_list）
+   * 仍走 list 的 MAX_LIST 封顶；全量本身受 MAX_SCOPE_BYTES 文件上限约束。 */
+  async listAll(scope: VariableScope, scopeId: string, prefix = ''): Promise<VariableSnapshot[]> {
     validateScope(scope, scopeId)
     if (typeof prefix !== 'string' || prefix.length > 64) throw new Error('invalid variable prefix')
-    if (!Number.isInteger(limit) || limit < 1) throw new Error('variable limit must be a positive integer')
     const file = await this.readFile(scope, scopeId)
     if (file === undefined) return []
-    return Object.keys(file.values).filter((name) => name.startsWith(prefix)).sort().slice(0, Math.min(limit, MAX_LIST))
+    return Object.keys(file.values).filter((name) => name.startsWith(prefix)).sort()
       .map((name) => snapshot(file, name))
   }
 

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { MemoryStore, tokenizeQuery } from '../src/index.js'
+import { MemoryStore, excerptAround, matchedTokenCount, tokenizeQuery, tokenThreshold } from '../src/index.js'
 
 describe('tokenizeQuery：CJK 感知分词（决策 2026-10-11-cjk-tokenization）', () => {
   it('英文整词与数字段行为与旧实现一致', () => {
@@ -34,6 +34,30 @@ describe('tokenizeQuery：CJK 感知分词（决策 2026-10-11-cjk-tokenization�
   it('假名与谚文段同样走 bigram 展开', () => {
     expect(tokenizeQuery('よろしく')).toEqual(['よろ', 'ろし', 'しく'])
     expect(tokenizeQuery('안녕하세요')).toEqual(['안녕', '녕하', '하세', '세요'])
+  })
+})
+
+describe('分级匹配与摘录（tokenize.ts 单一来源；agent-tavern / 记忆维护 / agent-novel 共用）', () => {
+  it('tokenThreshold：≤3 严格 AND，>3 走 40% 上取整阈值', () => {
+    expect(tokenThreshold(1)).toBe(1)
+    expect(tokenThreshold(3)).toBe(3)
+    expect(tokenThreshold(4)).toBe(2)
+    expect(tokenThreshold(7)).toBe(3)
+  })
+
+  it('matchedTokenCount：大小写不敏感的逐 token 子串计数', () => {
+    expect(matchedTokenCount('林小雨在赌场欠下赌债', ['林小', '赌债', '缺席'])).toBe(2)
+    expect(matchedTokenCount('Silver KEY', ['silver', 'key'])).toBe(2)
+  })
+
+  it('excerptAround：锚定最靠前命中 token，向前留 80 字符，超宽两端省略', () => {
+    const text = `${'前'.repeat(200)}林小雨欠债${'后'.repeat(200)}`
+    const excerpt = excerptAround(text, ['欠债', '林小'], 100)
+    expect(excerpt.startsWith('…')).toBe(true)
+    expect(excerpt.endsWith('…')).toBe(true)
+    expect(excerpt).toContain('林小雨欠债')
+    // 短文本整段返回，不加省略号。
+    expect(excerptAround('短文本', ['短'], 40)).toBe('短文本')
   })
 })
 

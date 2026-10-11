@@ -4,6 +4,19 @@
 B-5a 检索评测矩阵（6f7c683）、DSH 宿主 embedding 能力审计
 （docs/exploration/2026-10-11-jsr-lwb-reference.md §7）。
 
+## 开工前八项表（CONTEXT.md 纪律；规则晚于本文落地，补记于 2026-10-11 审查修复）
+
+| 项 | 答案 |
+|---|---|
+| 所有者 | embed 客户端 `packages/plugin/src/memory-embed.ts`；融合编排 `packages/plugin/src/memory-hybrid.ts`；向量持久化 `packages/tavern-store/src/memory-vectors.ts`（cosine/rrfFuse 融合原语亦在此，与离线评测同源）；配置读写 tavern-store state |
+| 唯一事实来源 | 配置 = `TavernState.memoryEmbedding`（state.json，normalizeMemoryEmbedding 容错读取）；向量 = `<tavern>/memory-vectors/<scope>/<scopeId>.json` sidecar（digest 检测 stale） |
+| 持久态 | 三件套配置（key 只存 env 名引用不存明文）、向量 sidecar、运行状态 sidecar（dims 基准/熔断窗口/lastError） |
+| 临时态 | 查询向量 memoize（32 条）与熔断窗口计时，进程内即失（重启熔断复位是可接受代价） |
+| 外部依赖 | OpenAI 兼容 `/embeddings` 端点（用户自配 baseURL/model/dims）；宿主无 embedding seam（审计结论 §7），网络面全在插件自带客户端 |
+| 注册入口 | HTTP `GET/PUT/POST memory/embed(/test)` 三路由 + 面板第 15 分区「记忆检索」；memory_search/write/update/forget 工具签名零改动（编排内挂接） |
+| 删除路径 | 删 memory-embed.ts / memory-hybrid.ts / memory-vectors.ts + 三路由 + 面板分区 + state 键 `memoryEmbedding`（置 undefined 即回落纯词法）+ 数据目录 `<tavern>/memory-vectors/`；记忆记录本体不动 |
+| 兼容对象 | v1 红线：缺配置/熔断/全 stale ⇒ `memory_search` 逐字节等于纯词法（golden 三路锁死）；score 字段保持词法分（模型侧输出语义不变）；retrieval-matrix 门槛原样绿；AgentNovel 投影不在 v1 挂接面（§8） |
+
 ## 0. 动机
 
 B-1 把中文自然语言查询的词法召回从趋近于零修到了可用水位（B-5a 基线：总体

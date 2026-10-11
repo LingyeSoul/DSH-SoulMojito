@@ -3,8 +3,11 @@ import {
   MemoryVectorStore,
   TavernStore,
   VariableStore,
+  excerptAround,
+  matchedTokenCount,
   normalizeMemoryEmbedding,
   tokenizeQuery,
+  tokenThreshold,
   type MemoryEmbeddingSettings,
   type MemoryHit,
   type MemoryRecord,
@@ -772,10 +775,11 @@ function createTools(): ToolDefinition[] {
       // 逐项写 chat 作用域变量（variable_set 同款 store 语义）：单项失败（非法
       // 名、超限值等 store 层校验，或 guard 拒绝）只记入 failures，不影响其他项。
       const store = await variableStore()
-      // C-2 规则相的树基线：写前 flat 全量快照（与状态栏 overlay 同款读法）——
-      // 「flat 写后的树快照」由此叠加本轮成功写入构成；无 $rules 时零额外读。
+      // C-2 规则相的树基线：写前 flat 全量快照（listAll 不设 MAX_LIST 封顶——
+      // 静默截断会让规则在缺项的基线上求值）——「flat 写后的树快照」由此叠加
+      // 本轮成功写入构成；无 $rules 时零额外读。
       const preEntries = ruleSource !== undefined
-        ? await store.list('chat', binding.chatId, '', 100)
+        ? await store.listAll('chat', binding.chatId)
         : []
       const applied: string[] = []
       const failed: Array<{ name: string; error: string }> = []
@@ -1091,41 +1095,9 @@ function variableSummary(snapshot: { name: string; value: unknown; revision: str
   return { name: snapshot.name, value: snapshot.value, revision: snapshot.revision, updatedAt: snapshot.updatedAt }
 }
 
-// CJK bigram 分词器单一来源在 tavern-store/src/tokenize.ts（决策
-// 2026-10-11-cjk-tokenization），memory 检索与本工具共用同一 token 语义。
-
-/** 分级匹配（决策 2026-10-11-cjk-tokenization）：≤3 token 保持严格 AND
- * （专名精确查询语义）；>3 token 走阈值——命中数 ≥ ceil(40%×总数) 才入选。
- * bigram 展开后严格 AND 对自然语句过严（"雨欠"这类跨词界组合在改写句中
- * 必然缺失）；40% 而非规格草案的 60%：自举示例"林小雨欠的赌债还了吗"×
- * "林小雨在赌场欠下赌债"命中 3/7≈43%，60% 会拒掉该目标场景。 */
-const STRICT_TOKEN_MAX = 3
-const TOKEN_MATCH_RATIO = 0.4
-
-function tokenThreshold(total: number): number {
-  return total <= STRICT_TOKEN_MAX ? total : Math.ceil(total * TOKEN_MATCH_RATIO)
-}
-
-function matchedTokenCount(text: string, tokens: readonly string[]): number {
-  const haystack = text.toLocaleLowerCase()
-  let matched = 0
-  for (const token of tokens) {
-    if (haystack.includes(token)) matched += 1
-  }
-  return matched
-}
-
-function excerptAround(text: string, tokens: string[], maxChars: number): string {
-  if (text.length <= maxChars) return text
-  const haystack = text.toLocaleLowerCase()
-  let anchor = 0
-  for (const token of tokens) {
-    const at = haystack.indexOf(token)
-    if (at >= 0 && (anchor === 0 || at < anchor)) anchor = at
-  }
-  const start = Math.max(0, Math.min(anchor - 80, text.length - maxChars))
-  return `${start > 0 ? '…' : ''}${text.slice(start, start + maxChars)}${start + maxChars < text.length ? '…' : ''}`
-}
+// CJK bigram 分词器与分级匹配/摘录（tokenThreshold / matchedTokenCount /
+// excerptAround）单一来源在 tavern-store/src/tokenize.ts（决策
+// 2026-10-11-cjk-tokenization），memory 检索、记忆维护与本工具共用同一语义。
 
 function objectOutput(properties: Record<string, unknown>, optionalKeys: readonly string[] = ['value', 'revision', 'updatedAt']): Record<string, unknown> {
   return { type: 'object', properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false }

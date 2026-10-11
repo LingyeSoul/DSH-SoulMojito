@@ -504,6 +504,24 @@ describe('TavernStore', () => {
     expect(await variables.get('character', 'chat-1', 'label')).toBeUndefined()
   }))
 
+  it('variables：list 工具面封顶 100，listAll 全量（settle 基线/显示树不静默截断）', withStore(async (_store, dir) => {
+    const variables = await VariableStore.open(path.join(dir, 'agent'))
+    for (let index = 0; index < 130; index += 1) {
+      await variables.set('chat', 'chat-cap', `var${String(index).padStart(3, '0')}`, index)
+    }
+    const listed = await variables.list('chat', 'chat-cap')
+    expect(listed).toHaveLength(100)
+    expect(listed[99]!.name).toBe('var099')
+    const all = await variables.listAll('chat', 'chat-cap')
+    expect(all).toHaveLength(130)
+    expect(all.map((item) => item.name)).toEqual([...all.map((item) => item.name)].sort())
+    expect(all[129]!.name).toBe('var129')
+    // prefix 语义与 list 同源；显式更大 limit 仍被 MAX_LIST 钳住（工具面契约不变）。
+    expect((await variables.listAll('chat', 'chat-cap', 'var12')).map((item) => item.name))
+      .toEqual(['var120', 'var121', 'var122', 'var123', 'var124', 'var125', 'var126', 'var127', 'var128', 'var129'])
+    expect(await variables.list('chat', 'chat-cap', '', 200)).toHaveLength(100)
+  }))
+
   it('variables：非 ASCII（中文 MVU）变量名与点路径放行', withStore(async (_store, dir) => {
     const variables = await VariableStore.open(path.join(dir, 'agent'))
     await variables.set('chat', 'chat-1', '当前周期', 3)
