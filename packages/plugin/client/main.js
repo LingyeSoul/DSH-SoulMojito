@@ -182,6 +182,17 @@ window.__ModuleLoader__.load({
     // 自带上报脚本（示例 Mod 的 ui 路由含同款 reporter）。
     const MOD_REQUEST_MESSAGE = 'dsh-tavern:mod-request'
     const MOD_RESPONSE_MESSAGE = 'dsh-tavern:mod-response'
+    // 下行事件（A-1d）：宿主把本客户端发起的写入（聊天保存/资产保存/guides 写入
+    // /按钮点击）推回挂载的 ModSurface iframe——Mod UI 据此事件刷新，轮询兜底
+    // 仍保留（其他标签页/服务端写入不在推送范围，mod-api.md §13 的诚实边界）。
+    const MOD_EVENT_MESSAGE = 'dsh-tavern:mod-event'
+    const MOD_EVENT_KINDS = new Set(['chat-saved', 'assets-saved', 'guides-changed', 'button-click'])
+    // Mod 日志上行（A-2）：reply.html 注入的 console reporter 把 mod UI 的
+    // console/error 输出回投父页；父页 per-mod 环形缓冲（≤200 条内存态）。
+    const MOD_LOG_MESSAGE = 'dsh-tavern:mod-log'
+    const MOD_LOG_LEVELS = new Set(['log', 'warn', 'error'])
+    const MOD_LOG_BUFFER_LIMIT = 200
+    const modLogBuffers = new Map()
     const MOD_BRIDGE_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
     const MOD_BRIDGE_PATH_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
@@ -191,7 +202,115 @@ window.__ModuleLoader__.load({
       return segments.every((segment) => MOD_BRIDGE_PATH_SEGMENT.test(segment))
     }
 
-    function ModSurface({ mod }) {
+    // mod-event 广播注册表：按挂载的 ModSurface 分组，unmount 即注销（JSR 按
+    // iframe 分组订阅 + pagehide 整组退订的同款纪律）。token 随注册表走，广播
+    // 时逐面 postMessage（每面 token 不同，不能一条消息群发）。
+    const modEventSurfaces = new Set()
+
+    function broadcastModEvent(kind, payload) {
+      if (!MOD_EVENT_KINDS.has(kind)) return
+      for (const surface of [...modEventSurfaces]) {
+        try { surface.frameRef.current?.contentWindow?.postMessage({ type: MOD_EVENT_MESSAGE, token: surface.token, kind, payload }, '*') } catch {}
+      }
+    }
+
+    // per-mod 日志环形缓冲：内存态，随页面生命周期（重载清空；mod 面板重挂不丢）。
+    function appendModLog(modId, level, text) {
+      const entries = modLogBuffers.get(modId) || []
+      entries.push({ at: new Date().toISOString(), level, text: String(text || '').slice(0, 512) })
+      if (entries.length > MOD_LOG_BUFFER_LIMIT) entries.splice(0, entries.length - MOD_LOG_BUFFER_LIMIT)
+      modLogBuffers.set(modId, entries)
+    }
+
+    // Mod 面板分区表面（A-1/A-2）：分区头按钮 chips + iframe + 日志折叠视图。
+    function ModPanelSurface({ mod }) {
+      const t = useTranslate()
+      const [logRevision, setLogRevision] = useState(0)
+      const [logOpen, setLogOpen] = useState(false)
+      const entries = modLogBuffers.get(mod.id) || []
+      // 日志在模块级缓冲（不经 store）：reporter 到达时经 onLog 即时推进计数
+      // 重渲染；打开期间另有 1s 兜底节拍吸收跨组件写入，关闭时停发。
+      useEffect(() => {
+        if (!logOpen) return undefined
+        const timer = setInterval(() => setLogRevision((value) => value + 1), 1000)
+        return () => clearInterval(timer)
+      }, [logOpen])
+      return h(React.Fragment, null,
+        h(ModButtonRow, { mod, t }),
+        h(ModSurface, { mod, onLog: (level, text) => { appendModLog(mod.id, level, text); setLogRevision((value) => value + 1) } }),
+        h('div', { className: 'dt-mod-log' },
+          h('button', {
+            type: 'button',
+            className: 'dt-mod-log-toggle',
+            'aria-expanded': logOpen ? 'true' : 'false',
+            onClick: () => setLogOpen(!logOpen),
+          }, t('mods.modLog.toggle', { count: entries.length })),
+          logOpen ? h('div', { className: 'dt-mod-log-body' },
+            entries.length === 0
+              ? h('p', { className: 'dt-muted' }, t('mods.modLog.empty'))
+              : entries.slice().reverse().map((entry, index) => h('div', {
+                key: `${entry.at}-${index}`,
+                className: `dt-mod-log-line dt-mod-log-${entry.level}`,
+              },
+                h('span', { className: 'dt-mod-log-time' }, formatNovelTime(entry.at)),
+                h('span', { className: 'dt-mod-log-level' }, entry.level),
+                h('span', { className: 'dt-mod-log-text' }, entry.text)))) : null))
+    }
+
+    // 分区头/聊天视图共用的按钮行（A-1d）：点击 → POST 按钮分发路由，请求中
+    // 禁用态，失败行内提示；成功后向挂载的 ModSurface 广播 button-click 事件。
+    function ModButtonRow({ mod, t, character, chatId }) {
+      const [pending, setPending] = useState('')
+      const [error, setError] = useState('')
+      const buttons = Array.isArray(mod.buttons) ? mod.buttons : []
+      if (buttons.length === 0) return null
+      const click = (name) => {
+        const key = `${mod.id}\u0000${name}`
+        if (pending !== '') return
+        setPending(key)
+        setError('')
+        void fetch(`${API}/mods/${encodeURIComponent(mod.id)}/button/${encodeURIComponent(name)}`, {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify(
+            typeof character === 'string' && character !== '' && typeof chatId === 'string' && chatId !== ''
+              ? { character, chatId }
+              : {},
+          ),
+        })
+          .then(async (response) => {
+            const body = await response.json().catch(() => ({}))
+            if (!response.ok || body.ok === false) throw new Error(body.message || `HTTP ${response.status}`)
+            broadcastModEvent('button-click', { mod: mod.id, name })
+          })
+          .catch((cause) => { setError(cause instanceof Error ? cause.message : String(cause)) })
+          .finally(() => setPending(''))
+      }
+      return h('div', { className: 'dt-mod-button-row' },
+        h('span', { className: 'dt-mod-button-owner' }, mod.name),
+        buttons.map((name) => h('button', {
+          key: name,
+          type: 'button',
+          className: 'dt-mod-button',
+          disabled: pending !== '',
+          onClick: () => click(name),
+        }, pending === `${mod.id}\u0000${name}` ? t('mods.buttonBusy') : name)),
+        error ? h('span', { className: 'dt-mod-button-error' }, error) : null)
+    }
+
+    // ST 聊天视图的紧凑按钮行（A-1d）：聚合所有已装载 mod 的声明按钮，点击携带
+    // 当前绑定的 { character, chatId } 作为按钮上下文；无声明按钮的 mod 不渲染，
+    // 全空时整行不占位（TavernMvuStatus 同款纪律）。
+    function TavernModButtons({ character, chatId }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const mods = (state.bootstrap.mods || []).filter((mod) => mod && mod.status === 'loaded' && Array.isArray(mod.buttons) && mod.buttons.length > 0)
+      if (mods.length === 0) return null
+      return h('div', { className: 'dt-mod-button-strip', 'data-dsh-tavern-surface': 'mod-buttons' },
+        mods.map((mod) => h(ModButtonRow, { key: mod.id, mod, t, character, chatId })))
+    }
+
+    function ModSurface({ mod, onLog }) {
       const frameRef = useRef(null)
       const [height, setHeight] = useState(140)
       // 每 mount 一个随机 token：URL 查询段交给 mod UI（回投时对账）+ 事件源
@@ -203,6 +322,9 @@ window.__ModuleLoader__.load({
           if (disposed) return
           try { frameRef.current?.contentWindow?.postMessage(message, '*') } catch {}
         }
+        // mod-event 下行广播面：本 surface 挂载期间接收宿主事件（unmount 即整组退订）。
+        const surface = { id: mod.id, token, frameRef }
+        modEventSurfaces.add(surface)
         const onMessage = (event) => {
           if (event.source !== frameRef.current?.contentWindow) return
           const data = event.data
@@ -210,6 +332,13 @@ window.__ModuleLoader__.load({
           if (data.type === FRONTEND_HEIGHT_MESSAGE) {
             if (typeof data.height === 'number' && Number.isFinite(data.height)) {
               setHeight(Math.max(80, Math.min(Math.ceil(data.height), 1200)))
+            }
+            return
+          }
+          // mod-log 上行（A-2）：reply.html 注入的 console reporter 输出 → 环形缓冲。
+          if (data.type === MOD_LOG_MESSAGE) {
+            if (typeof data.text === 'string' && MOD_LOG_LEVELS.has(data.level)) {
+              onLog?.(data.level, data.text)
             }
             return
           }
@@ -240,6 +369,7 @@ window.__ModuleLoader__.load({
         addEventListener('message', onMessage)
         return () => {
           disposed = true
+          modEventSurfaces.delete(surface)
           removeEventListener('message', onMessage)
         }
       }, [mod.id, token])
@@ -276,7 +406,8 @@ window.__ModuleLoader__.load({
           icon: IconCordisPluginOutline14,
           // mod 自带文案（非宿主 i18n key）——P0 决策的 thunk 形状即为此预留。
           label: () => title,
-          component: () => h(ModSurface, { mod }),
+          // 分区头按钮 chips + iframe 表面 + 日志折叠视图（A-1d/A-2）。
+          component: () => h(ModPanelSurface, { mod }),
         }))
       }
     }
@@ -723,6 +854,11 @@ window.__ModuleLoader__.load({
       'mods.install.done': 'Installed {id}',
       'mods.install.failed': 'Install failed: {error}',
       'mods.install.force': 'Replace an already installed mod',
+      'mods.buttonsPill': 'Buttons: {count}',
+      'mods.confirmButtons': 'Declared buttons',
+      'mods.buttonBusy': '…',
+      'mods.modLog.toggle': 'Mod logs ({count})',
+      'mods.modLog.empty': 'No mod UI console output captured yet (logs are in-memory and cleared on page reload).',
       // AgentNovel surface (proposal 0005). zh/en keys must stay mirrored with
       // identical {param} placeholders; the client-vm-mount gate enforces it.
       'panel.section.novels': 'Novels',
@@ -1301,6 +1437,11 @@ window.__ModuleLoader__.load({
       'mods.install.done': '已安装 {id}',
       'mods.install.failed': '安装失败：{error}',
       'mods.install.force': '覆盖已安装的同名 Mod',
+      'mods.buttonsPill': '{count} 个按钮',
+      'mods.confirmButtons': '声明按钮',
+      'mods.buttonBusy': '…',
+      'mods.modLog.toggle': 'Mod 日志（{count}）',
+      'mods.modLog.empty': '还没有收到 Mod UI 的控制台输出（日志为内存态，页面重载后清空）。',
       'panel.section.novels': '小说',
       'view.architectureNovel': 'AgentNovel',
       'novel.empty': '还没有小说，创建一部开始全自动创作。',
@@ -1698,6 +1839,9 @@ window.__ModuleLoader__.load({
           chats: { ...snapshot.chats, [key]: result.chat || chat },
           revisions: { ...snapshot.revisions, [key]: result.revision },
         })
+        // mod-event 下行（A-1d）：tap 本客户端成功的 PUT chat（消息编辑/swipe 切换
+        // 等都经此函数），推给挂载的 ModSurface。
+        broadcastModEvent('chat-saved', { character, chatId, revision: result.revision })
         return result.chat || chat
       } catch (cause) {
         if (cause.status === 409 || cause.code === REVISION_CONFLICT) await loadChat(character, chatId, true).catch(() => {})
@@ -1741,12 +1885,15 @@ window.__ModuleLoader__.load({
         body: JSON.stringify({ text }),
       })
       syncChatRevision(character, chatId, result.revision)
+      // mod-event 下行（A-1d）：guides 写入的 tap（与 Node 侧 guides 总线同款 payload）。
+      broadcastModEvent('guides-changed', { character, chatId })
       return result
     }
 
     async function removeChatGuide(character, chatId, id) {
       const result = await api(guidesPath(character, chatId, id), { method: 'DELETE' })
       syncChatRevision(character, chatId, result.revision)
+      broadcastModEvent('guides-changed', { character, chatId })
       return result
     }
 
@@ -1952,6 +2099,8 @@ window.__ModuleLoader__.load({
                 revisions: { ...snapshot.revisions, [key]: event.revision },
               })
               setRun(sessionId, { streamText: '', status: 'run.saved' })
+              // mod-event 下行（A-1d）：生成两段落盘的 tap（用户+助手消息一次写）。
+              broadcastModEvent('chat-saved', { character: binding.character, chatId: binding.chatId, revision: event.revision })
             }
           }
           if (part.done) break
@@ -2531,6 +2680,8 @@ window.__ModuleLoader__.load({
           chats: { ...snapshot.chats, [key]: result.chat },
           revisions: { ...snapshot.revisions, [key]: result.revision },
         })
+        // mod-event 下行（A-1d）：STscript persist 的 tap（/setvar 等命令落盘）。
+        broadcastModEvent('chat-saved', { character: binding.character, chatId: binding.chatId, revision: result.revision })
         setRun(sessionId, {
           streamText: '',
           status: result.output ? `↳ ${result.output.slice(0, 120)}` : 'run.saved',
@@ -2746,6 +2897,11 @@ window.__ModuleLoader__.load({
         })
       }
       await refreshBootstrap()
+      // mod-event 下行（A-1d）：资产导入的 tap。character/persona 的权威名以导入
+      // 结果为准（此处 fileStem 只是近似提示——Mod UI 事件到达后重拉即得真值）。
+      if (kind === 'character' || kind === 'world' || kind === 'preset' || kind === 'persona') {
+        broadcastModEvent('assets-saved', { kind, name: fileStem(file.name) })
+      }
     }
 
     async function createPersona(name, description) {
@@ -2755,6 +2911,7 @@ window.__ModuleLoader__.load({
         body: JSON.stringify({ name, description }),
       })
       await refreshBootstrap()
+      broadcastModEvent('assets-saved', { kind: 'persona', name })
       return result.persona
     }
 
@@ -2765,6 +2922,7 @@ window.__ModuleLoader__.load({
         body: JSON.stringify({ name, description }),
       })
       await refreshBootstrap()
+      broadcastModEvent('assets-saved', { kind: 'persona', name })
       return result.persona
     }
 
@@ -2780,6 +2938,7 @@ window.__ModuleLoader__.load({
         body: JSON.stringify({ name, members, activationStrategy }),
       })
       await refreshBootstrap()
+      broadcastModEvent('assets-saved', { kind: 'group', name })
       return result.group
     }
 
@@ -2790,6 +2949,7 @@ window.__ModuleLoader__.load({
         body: JSON.stringify(payload),
       })
       await refreshBootstrap()
+      broadcastModEvent('assets-saved', { kind: 'group', name: String(payload?.name ?? '') })
       return result.group
     }
 
@@ -2828,6 +2988,7 @@ window.__ModuleLoader__.load({
         body: JSON.stringify({ card }),
       })
       await refreshBootstrap()
+      broadcastModEvent('assets-saved', { kind: 'character', name: result.card?.data?.name || name })
       return result.card
     }
 
@@ -2848,6 +3009,7 @@ window.__ModuleLoader__.load({
         body: JSON.stringify({ name: book.name, data: worldBookToFile(book) }),
       })
       await refreshBootstrap()
+      broadcastModEvent('assets-saved', { kind: 'world', name: book.name || name })
       return result.book
     }
 
@@ -2874,6 +3036,7 @@ window.__ModuleLoader__.load({
         body: JSON.stringify({ name: nextName, data }),
       })
       await refreshBootstrap()
+      broadcastModEvent('assets-saved', { kind: 'preset', name: nextName })
       return result.data
     }
 
@@ -3805,6 +3968,8 @@ window.__ModuleLoader__.load({
         // 时组件自身返回 null，不占位
         h(TavernMvuStatus, { sessionId }),
         h(TavernScriptProgress, { sessionId }),
+        // Mod 声明按钮行（A-1d）：无声明按钮时自身返回 null，不占位
+        h(TavernModButtons, { character: binding.character, chatId: binding.chatId }),
         h('div', { className: 'dt-transcript' },
           messages.map((message, index) => h(MessageRow, {
             key: `${index}-${message.send_date || ''}-${message.streaming ? 'stream' : 'saved'}`,
@@ -7944,7 +8109,11 @@ window.__ModuleLoader__.load({
                 h('span', { className: 'dt-mod-cap-label' }, t('mods.confirmCapabilities')),
                 (mod.capabilities || []).length === 0
                   ? h('span', null, t('mods.capability.none'))
-                  : mod.capabilities.map((capability) => h(Pill, { key: capability }, t(`mods.capability.${capability}`)))),
+                  : mod.capabilities.map((capability) => h(Pill, { key: capability }, t(`mods.capability.${capability}`))),
+                // 声明式按钮（A-1a）：能力 Pill 区披露按钮数（按钮渲染进宿主 UI）。
+                (mod.buttons || []).length > 0
+                  ? h(Pill, { key: 'buttons' }, t('mods.buttonsPill', { count: mod.buttons.length }))
+                  : null),
               mod.error ? h('p', { className: 'dt-error' }, mod.error) : null,
               h('div', { className: 'dt-mod-actions' },
                 h('span', { className: 'dt-mod-meta' }, t('mods.auditCount', { count: mod.auditCount ?? 0 })),
@@ -7972,7 +8141,15 @@ window.__ModuleLoader__.load({
                 h('span', { className: 'dt-mod-cap-label' }, t('mods.confirmCapabilities')),
                 (confirming.capabilities || []).length === 0
                   ? h('span', null, t('mods.capability.none'))
-                  : confirming.capabilities.map((capability) => h(Pill, { key: capability }, t(`mods.capability.${capability}`)))),
+                  : confirming.capabilities.map((capability) => h(Pill, { key: capability }, t(`mods.capability.${capability}`))),
+                // 声明按钮（A-1a 知情同意面）：按钮渲染进宿主 UI（面板 chips + 聊天
+                // 按钮行），点击会执行该 Mod 的 handler——数量与名单在此披露。
+                (confirming.buttons || []).length > 0
+                  ? h(Pill, { key: 'buttons' }, t('mods.buttonsPill', { count: confirming.buttons.length }))
+                  : null),
+              (confirming.buttons || []).length > 0 ? h('div', { className: 'dt-mod-cap' },
+                h('span', { className: 'dt-mod-cap-label' }, t('mods.confirmButtons')),
+                confirming.buttons.map((name, index) => h(Pill, { key: `${name}:${index}` }, name))) : null,
               // §3.5：确认弹层展示声明的 hooks/tools/http 注册面。disabled mod
               // 展示 manifest 声明（作者自查），loaded 展示实际注册名单。
               h('p', { className: 'dt-hint' }, t('mods.confirmSurfacesHint')),
@@ -8487,6 +8664,25 @@ window.__ModuleLoader__.load({
         .dt-mod-install{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
         .dt-mod-install>input[type=text]{flex:1;min-width:220px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:6px 9px;font:inherit;font-size:12px}
         .dt-mod-surface{border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-mod-button-strip{display:flex;flex-direction:column;gap:4px;margin:0 0 6px}
+        .dt-mod-button-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+        .dt-mod-button-owner{color:var(--dsw-alias-label-tertiary);font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .dt-mod-button{border:1px solid var(--dsw-alias-border-l2);border-radius:999px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:11px;line-height:16px;padding:2px 10px;cursor:pointer}
+        .dt-mod-button:hover:not(:disabled){border-color:var(--dsw-alias-border-hi,var(--dsw-alias-border-l2))}
+        .dt-mod-button:disabled{opacity:.5;cursor:default}
+        .dt-mod-button-error{color:var(--dsw-alias-status-danger,#c0392b);font-size:11px;overflow-wrap:anywhere}
+        .dt-mod-log{margin-top:6px}
+        .dt-mod-log-toggle{border:none;background:none;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:11px;cursor:pointer;padding:2px 0}
+        .dt-mod-log-toggle:hover{color:var(--dsw-alias-label-secondary)}
+        .dt-mod-log-body{margin-top:4px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:var(--dsw-alias-bg-sunken,var(--dsw-alias-bg-base));max-height:220px;overflow-y:auto;padding:6px 8px;display:flex;flex-direction:column;gap:2px}
+        .dt-mod-log-line{display:flex;gap:8px;font-size:11px;line-height:1.5;align-items:baseline}
+        .dt-mod-log-time{flex:none;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+        .dt-mod-log-level{flex:none;text-transform:uppercase;font-size:10px;letter-spacing:.04em}
+        .dt-mod-log-text{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
+        .dt-mod-log-log .dt-mod-log-level{color:var(--dsw-alias-label-tertiary)}
+        .dt-mod-log-warn .dt-mod-log-level{color:var(--dsw-alias-status-warning,#b8860b)}
+        .dt-mod-log-error .dt-mod-log-level{color:var(--dsw-alias-status-danger,#c0392b)}
+        .dt-mod-log-error .dt-mod-log-text{color:var(--dsw-alias-status-danger,#c0392b)}
       `
       document.head.appendChild(tag)
     }

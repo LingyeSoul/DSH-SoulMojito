@@ -57,6 +57,7 @@ import { isNovelAuthorMessage, receiveAuthorMessage } from './agent-novel/requir
 import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
 import { addGuide, emitGuidesChanged, formatGuidesBlock, normalizeGuides, removeGuide } from './guides.js'
 import {
+  applyMvuSettlementGuard,
   overlayScopedVariables,
   readChatVariables,
   readMvuReceipts,
@@ -66,6 +67,7 @@ import {
   snapshotChatVariables,
   statusTemplateOf,
 } from './mvu.js'
+import { stripMvuSchema } from './mvu-guard.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
 import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type SessionImportAppend } from './agent-tavern/projector.js'
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from './agent-tavern/deduce.js'
@@ -200,6 +202,8 @@ async function modHostProjection(ctx): Promise<unknown[]> {
       enabled: mod.status === 'loaded',
       error: mod.error,
       auditCount: mod.auditCount,
+      // 声明式按钮（A-1）：清单声明面，客户端据此渲染面板 chips 与聊天按钮行。
+      buttons: mod.buttons,
       // P2（§3.5 启用确认弹层）：注册面——loaded 是实际注册名单，未装载回落
       // manifest 声明（作者自查面）。
       surfaces: mod.surfaces,
@@ -1750,9 +1754,10 @@ async function handleMvuApi(
     const agentTavernBound = Object.values(state.sessionBindings).some((binding) =>
       binding.architecture === 'agent-tavern' && binding.chatId === chatId && binding.character === characterName)
     const scopedVariables = agentTavernBound ? await (await variables()).list('chat', chatId, '', 100) : []
-    const displayVariables = scopedVariables.length > 0
+    // 显示树剥离根 $schema（C-1）：守卫契约不是变量，不进状态栏载荷/渲染。
+    const displayVariables = stripMvuSchema(scopedVariables.length > 0
       ? overlayScopedVariables(readChatVariables(chat), scopedVariables)
-      : readChatVariables(chat)
+      : readChatVariables(chat))
     const character = await db.getCharacter(characterName)
     const statusTemplate = character ? statusTemplateOf(character.card) : undefined
     let renderedHtml: string | undefined
@@ -3035,12 +3040,16 @@ async function runGeneration(ctx, db, options: GenerationOptions) {
   } else {
     delete chat.header.chat_metadata.variables
   }
-  // MVU 结算回执（提案 0012 P1）：diff 变量写穿前后（before 取自生成开始的基线），
-  // 把结算结果落成可见、可重试的回执（环形 20 条）；无变量也无变更的局不写 mvu 键
-  // （与 guides 空置摘键约定一致）。failures 收集本轮 templateWarnings。
+  // MVU 结算回执（提案 0012 P1）+ $schema 写入守卫（C-1，2026-10-11）：守卫 pass
+  // 在写穿完成后、回执 diff 之前——clamp 写回（回执 reason 标注 guard），reject
+  // 回滚到基线值并入回执 failures（可重试）；无 schema 的卡恒等，行为不变。
+  // failures 先收 templateWarnings 再收守卫失败项；无变量也无变更的局不写 mvu 键
+  // （与 guides 空置摘键约定一致）。
+  const mvuGuard = applyMvuSettlementGuard(chat, character.card, mvuVariablesBefore)
   recordMvuTurnReceipt(chat, mvuVariablesBefore, {
     turnKey: String(chat.messages.length - 1),
-    failures: tpl?.warnings ?? [],
+    failures: [...(tpl?.warnings ?? []), ...mvuGuard.failures],
+    changeNotes: mvuGuard.notes,
   })
   revision = await db.saveChat(characterName, chatId, chat, revision)
   // chat-saved（提案 0015 §3.3 P1）：助手回复落盘点（与 post-save hook 相邻但
@@ -3966,6 +3975,32 @@ async function handleModsApi(ctx, req, res, url, route, method) {
   if (method === 'POST' && segments.length === 2 && subpath === 'reload') {
     await host.reload(decodeURIComponent(modId))
     return sendJson(res, 200, { ok: true, ...host.snapshot() })
+  }
+  // 声明式按钮分发（A-1，2026-10-11）：`POST mods/<id>/button/<name>`。name 经
+  // URL 解码后匹配 manifest 声明的按钮（manifest 校验同款规则）；未装载 / 未知
+  // 按钮 / 任一层开关关闭 → 404 与未知路由不可区分（§6 纪律）。请求体可选携带
+  // { character, chatId }（点击时可得的聊天归因，客户端有绑定才带）。
+  if (method === 'POST' && segments.length === 3 && segments[1] === 'button') {
+    let id = modId
+    let name = segments[2] ?? ''
+    try {
+      id = decodeURIComponent(modId)
+      name = decodeURIComponent(segments[2] ?? '')
+    } catch {
+      return notFound()
+    }
+    const body = await readJson(req).catch(() => ({}) as Record<string, unknown>)
+    const context: { character?: string; chatId?: string } = {}
+    if (typeof body.character === 'string' && body.character !== '') context.character = body.character
+    if (typeof body.chatId === 'string' && body.chatId !== '') context.chatId = body.chatId
+    try {
+      const outcome = await host.dispatchButton(id, name, context)
+      if (outcome === 'not-found') return notFound()
+      return sendJson(res, 200, { ok: true, handled: outcome === 'handled' })
+    } catch (cause) {
+      // handler 抛错：button-error 审计已在 dispatchButton 落账，这里只兜 500。
+      return sendJson(res, 500, { ok: false, message: cause instanceof Error ? cause.message : String(cause) })
+    }
   }
   if (segments.length >= 1 && modId !== '') {
     // 子路由：decodeURIComponent 与既有资产路由同款（mod id 是 URL 段）；解码

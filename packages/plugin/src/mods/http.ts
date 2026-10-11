@@ -17,8 +17,16 @@ export const MOD_HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH'
 /** 管理保留子段：`POST mods/<id>/enable|disable|reload` 是宿主管理路由，先于
  *  子路由分发被截获（index.ts handleModsApi）——这些组合注册了也永远不可达，
  *  fail-fast 拒绝（P1 决策的文档义务落到注册面；`GET ui` 不在此列：那是面板
- *  iframe 表面的约定路径，由 Mod 自行注册，见 mod-api.md §13）。 */
+ *  iframe 表面的约定路径，由 Mod 自行注册，见 mod-api.md §13）。
+ *  A-1（2026-10-11）追加：`POST button` 与 `POST button/<name>` 是宿主按钮分发
+ *  路由（`POST mods/<id>/button/<name>`，name 为 URL 解码后的按钮显示名），
+ *  同样先于子路由分发被截获——整段保留，注册即抛。 */
 const RESERVED_MOD_SUBROUTE_POST_PATHS = new Set(['enable', 'disable', 'reload'])
+
+/** POST 保留段判定：精确管理名 + button 整段（`button` 与 `button/<name>` 前缀）。 */
+export function isReservedModSubroutePostPath(path: string): boolean {
+  return RESERVED_MOD_SUBROUTE_POST_PATHS.has(path) || path === 'button' || path.startsWith('button/')
+}
 
 /** Mod html 出口的默认 CSP（client/main.js FRONTEND_CSP 的服务端同构纪律）。 */
 export const MOD_HTML_DEFAULT_CSP = [
@@ -76,7 +84,7 @@ export function createModRouteTable(): ModRouteTable {
       if (!isValidModHttpPath(path)) {
         throw new Error(`invalid mod route path '${String(path)}'`)
       }
-      if (normalizedMethod === 'POST' && RESERVED_MOD_SUBROUTE_POST_PATHS.has(path)) {
+      if (normalizedMethod === 'POST' && isReservedModSubroutePostPath(path)) {
         throw new Error(`mod route POST ${path} is reserved by host management routes`)
       }
       if (typeof handler !== 'function') throw new Error('mod route handler must be a function')
@@ -139,18 +147,65 @@ function escapeHtmlAttribute(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;')
 }
 
-/** 注入 CSP meta：有 <head> 就插在最前，没有就补一个最小骨架。 */
+/**
+ * Console reporter（A-2，JSR §2.5 的错误呈现三件套之 iframe 侧）：注入所有
+ * mod HTML 出口，把 mod UI 的 console 输出与全局错误经 token 对账的
+ * postMessage 回投父页（`dsh-tavern:mod-log`）。约束：
+ * - token 从 iframe URL 查询段自读（服务端不掌握挂载期 token），无 token 静默
+ *   跳过（非 iframe 场景 / 直接 curl 该路由都不产生消息）；
+ * - 单条文本截断 ~2KB（防刷爆父页缓冲）；args 序列化失败退 String()；
+ * - 只 wrap 不改语义：原 console 方法照常调用（mod UI 在 iframe 控制台里仍
+ *   可见自己的输出）。
+ */
+export const MOD_LOG_MESSAGE = 'dsh-tavern:mod-log'
+const MOD_LOG_TEXT_LIMIT = 2048
+
+export function modConsoleReporterScript(): string {
+  return `(function () {
+  var token = '';
+  try { token = new URLSearchParams(location.search).get('token') || ''; } catch (_) { return; }
+  if (token === '') return;
+  var send = function (level, text) {
+    try {
+      parent.postMessage({ type: ${JSON.stringify(MOD_LOG_MESSAGE)}, token: token, level: level, text: String(text).slice(0, ${MOD_LOG_TEXT_LIMIT}) }, '*');
+    } catch (_) {}
+  };
+  var format = function (args) {
+    var parts = [];
+    for (var index = 0; index < args.length; index += 1) {
+      var value = args[index];
+      if (typeof value === 'string') parts.push(value);
+      else { try { parts.push(JSON.stringify(value)); } catch (_) { parts.push(String(value)); } }
+    }
+    return parts.join(' ');
+  };
+  ['log', 'warn', 'error'].forEach(function (level) {
+    var original = typeof console[level] === 'function' ? console[level].bind(console) : function () {};
+    console[level] = function () { original.apply(null, arguments); send(level, format(arguments)); };
+  });
+  addEventListener('error', function (event) {
+    var at = event.filename ? ' @ ' + event.filename + ':' + event.lineno : '';
+    send('error', (event.message || 'script error') + at);
+  });
+  addEventListener('unhandledrejection', function (event) {
+    send('error', 'unhandled rejection: ' + format([event.reason]));
+  });
+})();`
+}
+
+/** 注入 CSP meta 与 console reporter：有 <head> 就插在最前，没有就补一个最小骨架。 */
 export function renderModHtmlDocument(document: string, csp: string): string {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${escapeHtmlAttribute(csp)}">`
+  const reporter = `<script>${modConsoleReporterScript()}</script>`
   const headMatch = /<head(?:\s[^>]*)?>/i.exec(document)
   if (headMatch !== null) {
     const at = headMatch.index + headMatch[0].length
-    return `${document.slice(0, at)}${meta}${document.slice(at)}`
+    return `${document.slice(0, at)}${meta}${reporter}${document.slice(at)}`
   }
   if (/<html(?:\s[^>]*)?>/i.test(document)) {
-    return document.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${meta}</head>`)
+    return document.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${meta}${reporter}</head>`)
   }
-  return `<!doctype html><html><head><meta charset="utf-8">${meta}</head><body>${document}</body></html>`
+  return `<!doctype html><html><head><meta charset="utf-8">${meta}${reporter}</head><body>${document}</body></html>`
 }
 
 /** 与 index.ts 的 readJson 同语义的请求体读取（模块独立副本，避免循环 import）。 */

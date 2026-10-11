@@ -40,7 +40,7 @@ import {
   type ModToolDefinition,
 } from './cross-bundle.js'
 import { createModRouteTable, isValidModHttpPath, makeModReply, readModRequestBody, type ModHttpRequest, type ModReply, type ModRouteTable } from './http.js'
-import { checkModManifest, satisfiesVersionRange, MOD_ID_PATTERN, type ModCapability, type ModManifest } from './manifest.js'
+import { checkModManifest, modButtonNameError, satisfiesVersionRange, MOD_ID_PATTERN, type ModCapability, type ModManifest } from './manifest.js'
 import { ModStorage } from './storage.js'
 import { installModFromGit, type ModInstallResult } from './install.js'
 
@@ -66,6 +66,8 @@ export interface ModInfo {
   /** 注册面（启用确认弹层 §3.5）：已装载时是**实际注册**的名单；未装载时回落
    *  manifest 的 surfaces 声明（作者自查面，展示「声明」，loaded 展示「事实」）。 */
   surfaces: ModSurfacesView
+  /** 声明式按钮显示名（manifest 声明面；按钮是否有 handler 在 onButton 注册表）。 */
+  buttons: string[]
 }
 
 export interface ModSurfacesView {
@@ -154,6 +156,8 @@ interface LoadedMod {
   offRegistrations: Array<() => void>
   /** 本实例的实际注册面（启用确认/快照展示用；manifest 声明是另一来源）。 */
   surfaces: { hooks: Set<string>; tools: Set<string>; http: Set<string> }
+  /** 声明式按钮的 handler 注册表（name → handler）；随实例回收（卸载即整组注销）。 */
+  buttons: Map<string, ModButtonHandler>
   /** 本实例的私有存储：卸载末尾 flush 排空在飞写（验收打回的竞态修复点）。 */
   storage: ModStorage
 }
@@ -161,6 +165,15 @@ interface LoadedMod {
 interface ModEntryModule {
   setup?: (api: unknown) => Promise<(() => void | Promise<void>) | unknown> | (() => void | Promise<void>) | unknown
 }
+
+/** api.onButton 的 handler 形状：click={name}，context 携带点击时可得的聊天归因。 */
+export type ModButtonHandler = (
+  click: { name: string },
+  context: { character?: string; chatId?: string },
+) => void | Promise<void>
+
+/** dispatchButton 的三态：not-found 与未知路由不可区分（404 纪律）。 */
+export type ModButtonDispatch = 'not-found' | 'no-handler' | 'handled'
 
 type HostLogger = NonNullable<ModHostContext['logger']>
 
@@ -286,6 +299,7 @@ export class ModHost {
         error: info.message,
         auditCount: this.audit.count(id),
         surfaces: { hooks: [], tools: [], http: [] },
+        buttons: [],
       })
     }
     for (const [id, item] of this.blocked) {
@@ -348,6 +362,35 @@ export class ModHost {
       }
     }
     return true
+  }
+
+  /**
+   * 声明式按钮的点击分发（`POST mods/<id>/button/<name>`，A-1）：
+   * - 未装载 / 未知按钮 / 任一层开关关闭 → `not-found`（调用方按 404 兜底，与
+   *   未知路由不可区分——§6 纪律）；
+   * - 已声明但无 handler（mod 未注册 onButton）→ `no-handler`（200 + handled:false，
+   *   面板按钮的可选消费语义）；
+   * - handler 抛错：`button-error` 审计后原样上抛（HTTP 层兜 500）；
+   *   正常点击不审计（高频路径，对齐 event-error 纪律）。
+   */
+  async dispatchButton(id: string, name: string, context: { character?: string; chatId?: string } = {}): Promise<ModButtonDispatch> {
+    if (modsDisabledByEnv() || !this.globalEnabled) return 'not-found'
+    if (!MOD_ID_PATTERN.test(id)) return 'not-found'
+    if (modButtonNameError(name) !== undefined) return 'not-found'
+    const record = this.loaded.get(id)
+    if (record === undefined) return 'not-found'
+    if (!record.manifest.buttons.includes(name)) return 'not-found'
+    const handler = record.buttons.get(name)
+    if (handler === undefined) return 'no-handler'
+    try {
+      await handler({ name }, context)
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      this.logger?.warn?.(`dsh-tavern: [mod:${id}] button '${name}' handler failed: ${message}`)
+      await this.audit.record(id, 'button-error', `${name}: ${message}`)
+      throw cause
+    }
+    return 'handled'
   }
 
   /** 宿主卸载：卸下全部已装载 Mod（逆序 disposer + 定时器 + 事件反注册）。 */
@@ -462,6 +505,7 @@ export class ModHost {
       offEvents: [],
       offRegistrations: [],
         surfaces: { hooks: new Set(), tools: new Set(), http: new Set() },
+      buttons: new Map(),
       storage: new ModStorage(join(disc.directory, 'data', 'state.json'), {
         onQuota: (message) => { void this.audit.record(id, 'storage-quota', message) },
       }),
@@ -586,6 +630,18 @@ export class ModHost {
           record.offEvents.push(off)
           return off
         },
+      },
+      onButton: (name: unknown, handler: unknown) => {
+        if (typeof name !== 'string' || !record.manifest.buttons.includes(name)) {
+          throw new Error(`button '${String(name)}' is not declared in the manifest buttons [${record.manifest.buttons.join(', ')}]`)
+        }
+        if (typeof handler !== 'function') throw new Error('button handler must be a function')
+        if (record.buttons.has(name)) throw new Error(`button '${name}' already has a handler`)
+        record.buttons.set(name, handler as ModButtonHandler)
+        return () => {
+          // 反注册只撤销同一 handler 的占用：reload 后旧 off 触碰新实例是 no-op。
+          if (record.buttons.get(name) === handler) record.buttons.delete(name)
+        }
       },
       timers: {
         setInterval: (handler: () => void, ms: number) => {
@@ -751,6 +807,7 @@ function modInfoOf(manifest: ModManifest): Omit<ModInfo, 'status' | 'error' | 'a
     capabilities: manifest.capabilities,
     loadingOrder: manifest.loadingOrder,
     panel: manifest.panel ?? null,
+    buttons: [...manifest.buttons],
   }
 }
 

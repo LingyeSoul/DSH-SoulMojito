@@ -17,6 +17,8 @@
  *   POST summarize 用 api.llm.request 聚合流式输出（text/usage/finish）。
  * - api.timers.setInterval：宿主托管生命周期的定时器（心跳计数，dispose 时落盘）。
  * - api.events.on：assets-saved / guides-changed（chat-saved 已由 asset-stats 示范）。
+ * - api.onButton：声明式按钮「拨快 1 小时」（manifest buttons 声明 → 宿主渲染 →
+ *   点击经 POST button/<name> 分发；v1 无聊天写面，推进结果记私有存储）。
  *
  * 卸载纪律：注册一律走 api.*，宿主持全量反注册（offRegistrations/offEvents/
  * 定时器/路由表随实例回收）——本示例刻意不手动保存 off 句柄，演示「宿主托管」
@@ -72,6 +74,7 @@ export async function setup(api) {
   let timerTicks = 0
   let assetSaves = 0
   let guideChanges = 0
+  let buttonAdvances = Number((await api.storage.get('buttonAdvances')) ?? 0)
 
   // 宏：{{clock}}（参数空=完整，「day」/「time」=分面）。同步读聊天变量；
   // 未设置 → 0（第1天 08:00）。返回 null 可保原文不替换，本例恒有值。
@@ -171,6 +174,32 @@ export async function setup(api) {
     await api.storage.set('guideChanges', { count: guideChanges, last: `${payload.character}/${payload.chatId}` })
   })
 
+  // 声明式按钮（A-1）：manifest `buttons: ["拨快 1 小时"]` 声明 → 宿主在 Mod 面板
+  // 分区头与 ST 聊天视图渲染按钮 chip；点击经 `POST mods/<id>/button/<name>` 分发
+  // 到这里。click={name}；context 携带点击时可得的 { character, chatId }（面板
+  // chips 没有绑定上下文时缺省，代码不得假设它存在）。
+  //
+  // v1 边界（如实）：Mod 没有聊天写面——聊天变量写回一律走 hooks/STscript 由
+  // 核心落盘（mod-api.md §17）。按钮复用 /clock advance 的推进逻辑
+  // （parseDuration + formatClock）计算结果并记入私有存储；要把钟**真的**拨快，
+  // 仍然用 /clock advance 1h。
+  api.onButton('拨快 1 小时', async (click, context) => {
+    let from = 0
+    if (context.character && context.chatId) {
+      const chat = await api.assets.getChat(context.character, context.chatId)
+      const raw = chat?.header?.chat_metadata?.variables?.clock
+      if (typeof raw === 'number' && Number.isFinite(raw)) from = raw
+    }
+    const delta = parseDuration('1h') ?? 60
+    const key = context.character && context.chatId
+      ? `button-${storageSafeKey(context.character)}-${storageSafeKey(context.chatId)}`
+      : 'button-global'
+    buttonAdvances += 1
+    await api.storage.set(key, { from, to: from + delta, display: formatClock(from + delta).full })
+    await api.storage.set('buttonAdvances', buttonAdvances)
+    api.logger.info(`button '${click.name}': ${formatClock(from).full} → ${formatClock(from + delta).full} (recorded to mod storage; persist the chat variable with /clock advance 1h)`)
+  })
+
   // 定时器：宿主托管生命周期（卸载自动 clearInterval）；handler 内同步抛错与
   // 异步拒绝都由适配层包装进审计（timer-error），不会变成进程级崩溃。
   api.timers.setInterval(() => {
@@ -187,7 +216,7 @@ export async function setup(api) {
       macro: '{{clock}} reads chat variable "clock" (minutes since day 1, 08:00)',
       command: '/clock | /clock advance 30m | /clock set 14:30 | /clock set day=2 time=09:30',
       llm: typeof api.llm === 'object' ? 'available' : 'unavailable (declare the llm capability)',
-      counters: { commandRuns, timerTicks, assetSaves, guideChanges },
+      counters: { commandRuns, timerTicks, assetSaves, guideChanges, buttonAdvances },
     })
   })
   api.http.route('POST', 'summarize', async (req, reply) => {

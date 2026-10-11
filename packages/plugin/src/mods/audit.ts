@@ -8,6 +8,8 @@
  * P2 新增：`hook-degradation`（管线 hook 抛错/超时/忘 return 的降级计数）/
  * `llm-call`（api.llm 调用与用量）/ `llm-error` / `macro-error`（mod 宏首调异常）/
  * `install` / `install-error`（git 安装）。
+ * A-1（2026-10-11）新增：`button-error`（api.onButton handler 点击分发失败）。
+ * 正常点击不审计（高频路径），与 event-error 纪律对齐。
  *
  * 追加失败（磁盘满/权限）静默降级为仅内存计数——审计是观测面，不允许反噬宿主。
  * 计数是**本进程内**的（bootstrap 投影与面板展示用），完整历史在 jsonl 文件里。
@@ -35,6 +37,7 @@ export type ModAuditEvent =
   | 'macro-error'
   | 'install'
   | 'install-error'
+  | 'button-error'
 
 export class ModAuditLog {
   private readonly counts = new Map<string, number>()

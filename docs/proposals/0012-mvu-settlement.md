@@ -59,3 +59,15 @@ P1-P3 落地时面板只挂在 `TavernView`（ST 表面）：AgentTavern 的 nat
    点外关闭，与带意见重写同款弹出层模式），`TavernMvuStatus` 增 `embedded` 变体在无内容时
    给出空态提示；ST 仍走 `TavernView` 顶部内联面板。
 4. `mvu-surface` gate 锁住上述挂载标记，防止「数据源修好、界面又不挂载」的回归。
+
+## 6. `$schema` 写入守卫（2026-10-11 延伸，竞品参考 C-1）
+
+变量树根可选 `$schema` 子树（卡 `extensions.agentTavern.initialVariables` / 聊天变量树 /
+世界书 InitialVariables 携带）成为**写入守卫**而非提示词建议：结构/类型锁定、`"*"` 通配
+动态对象、空对象开放、数组项模板、`$range`+`$step` 越界 clamp、`$enum` 枚举拒绝、
+`$ro` 只读拒绝——全部确定性执行，无 LLM 参与。clamp 进正常回执（`reason` 标注 guard），
+reject 进失败项（type-mismatch / enum-violation / readonly / structure 四类）走既有重试
+路径；无 `$schema` 的卡行为完全不变。守卫挂在两条结算写入路径上共享同一纯函数核
+（`mvu-guard.ts`）：ST 生成/retry 的写穿后整树 pass 与 AgentTavern
+`tavern_variable_settle` 的逐项预检。完整语义表、与 LWB state2 的差异及理由见
+`decisions/2026-10-11-mvu-schema-guard.md`。

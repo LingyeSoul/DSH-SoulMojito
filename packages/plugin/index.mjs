@@ -4849,6 +4849,34 @@ function jsonBytes(obj) {
 import { createHash as createHash2, randomUUID } from "node:crypto";
 import { promises as fs3 } from "node:fs";
 import * as path2 from "node:path";
+
+// packages/tavern-store/src/tokenize.ts
+var CJK_STOP_BIGRAM_CHARS = /* @__PURE__ */ new Set([..."\u7684\u4E86\u662F\u5728\u5417\u5462\u5427\u554A\u5440\u4E48\u548C\u4E0E\u5C31\u90FD\u4E5F\u5F88\u88AB\u628A\u6CA1\u4E0D\u6709\u8FD8\u8FD9\u90A3\u4F60\u6211\u4ED6\u5979\u5B83\u4EEC\u4E2A"]);
+var CJK_RUN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
+var WORD = /[\p{L}\p{N}]+/gu;
+function tokenizeQuery(value) {
+  const lower = value.toLocaleLowerCase();
+  const tokens = /* @__PURE__ */ new Set();
+  for (const word of lower.replace(CJK_RUN, " ").match(WORD) ?? []) {
+    tokens.add(word);
+  }
+  for (const run of lower.match(CJK_RUN) ?? []) {
+    const chars = [...run];
+    if (chars.length === 1) {
+      tokens.add(chars[0]);
+      continue;
+    }
+    for (let index = 0; index + 1 < chars.length; index += 1) {
+      const left = chars[index];
+      const right = chars[index + 1];
+      if (CJK_STOP_BIGRAM_CHARS.has(left) && CJK_STOP_BIGRAM_CHARS.has(right)) continue;
+      tokens.add(left + right);
+    }
+  }
+  return [...tokens];
+}
+
+// packages/tavern-store/src/memory.ts
 var MemoryRevisionConflictError = class extends Error {
   constructor(id, expectedRevision, actualRevision) {
     super(`Memory '${id}' changed in another operation.`);
@@ -4878,7 +4906,7 @@ var MemoryStore = class _MemoryStore {
   async search(query) {
     const normalized = normalizeQuery(query);
     const records = await this.listRecords(normalized);
-    const tokens = tokenize(normalized.query);
+    const tokens = tokenizeQuery(normalized.query ?? "");
     const now = Date.now();
     const hits = records.map((record) => {
       const haystack = `${record.content}
@@ -5079,9 +5107,6 @@ function withRevision(record) {
 }
 function isInactive(record) {
   return record.deletedAt !== void 0 || record.expiresAt !== void 0 && Date.parse(record.expiresAt) <= Date.now();
-}
-function tokenize(value) {
-  return [...new Set((value ?? "").toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])];
 }
 function roughTokens(value) {
   return Math.max(1, Math.ceil(value.length / 4));
@@ -7553,12 +7578,12 @@ function splitOversizedParagraph(paragraph) {
   if (rest !== "") pieces.push(rest);
   return pieces;
 }
-function tokenize2(text) {
+function tokenize(text) {
   return text.toLowerCase().match(TOKEN_PATTERN) ?? [];
 }
 function distinctiveTokensOf(chunkText) {
   const counts = /* @__PURE__ */ new Map();
-  for (const token of tokenize2(chunkText)) {
+  for (const token of tokenize(chunkText)) {
     counts.set(token, (counts.get(token) ?? 0) + 1);
   }
   return [...counts.entries()].filter(([, count]) => count < HIGH_FREQUENCY_THRESHOLD).map(([token]) => token);
@@ -7568,7 +7593,7 @@ function shouldAdvance(chunkText, assistantMessages) {
   if (distinctive.length === 0) return false;
   const window = (typeof assistantMessages === "string" ? [assistantMessages] : Array.isArray(assistantMessages) ? [...assistantMessages] : []).filter((mes) => typeof mes === "string").slice(-SCRIPT_ADVANCE_WINDOW);
   return window.some((mes) => {
-    const mesTokens = new Set(tokenize2(mes));
+    const mesTokens = new Set(tokenize(mes));
     const covered = distinctive.filter((token) => mesTokens.has(token)).length;
     return covered / distinctive.length >= SCRIPT_ADVANCE_COVERAGE;
   });
@@ -9990,7 +10015,7 @@ var TemplateSyntaxError = class extends Error {
 };
 var OPEN = "<%";
 var CLOSE = "%>";
-function tokenize3(source) {
+function tokenize2(source) {
   const tokens = [];
   let buf = "";
   let i = 0;
@@ -10071,7 +10096,7 @@ function readTag(source, start) {
   throw new TemplateSyntaxError(`unclosed tag starting at offset ${start} (mode=${mode})`, source);
 }
 function compileTemplate(source) {
-  const tokens = tokenize3(source);
+  const tokens = tokenize2(source);
   const parts = [];
   for (const token of tokens) {
     if ("text" in token) {
@@ -11061,9 +11086,267 @@ ${bounded}`);
   }
 };
 
+// packages/plugin/src/mvu-guard.ts
+var DIRECTIVE_KEYS = ["$range", "$step", "$enum", "$ro", "$type"];
+var TYPE_LOCKS = ["number", "string", "boolean", "object", "array"];
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseRange(raw) {
+  if (!Array.isArray(raw) || raw.length < 2) return void 0;
+  const min = raw[0];
+  const max2 = raw[1];
+  if (typeof min !== "number" || !Number.isFinite(min) || typeof max2 !== "number" || !Number.isFinite(max2)) return void 0;
+  return { min: Math.min(min, max2), max: Math.max(min, max2) };
+}
+function resolveTemplateNode(raw) {
+  if (typeof raw === "number" && Number.isFinite(raw)) return { typeLock: "number" };
+  if (typeof raw === "string") return { typeLock: "string" };
+  if (typeof raw === "boolean") return { typeLock: "boolean" };
+  if (Array.isArray(raw)) {
+    return { typeLock: "array", ...raw.length > 0 ? { item: resolveTemplateNode(raw[0]) } : {} };
+  }
+  if (!isPlainObject(raw)) return void 0;
+  const range = parseRange(raw.$range);
+  const step = typeof raw.$step === "number" && Number.isFinite(raw.$step) && raw.$step > 0 ? raw.$step : void 0;
+  const enumValues = Array.isArray(raw.$enum) && raw.$enum.length > 0 ? raw.$enum : void 0;
+  const ro = raw.$ro === true ? true : void 0;
+  const typeLockDirect = typeof raw.$type === "string" && TYPE_LOCKS.includes(raw.$type) ? raw.$type : void 0;
+  const directives = {
+    ...range !== void 0 ? { min: range.min, max: range.max } : {},
+    ...step !== void 0 ? { step } : {},
+    ...enumValues !== void 0 ? { enumValues } : {},
+    ...ro !== void 0 ? { ro } : {}
+  };
+  const childKeys = Object.keys(raw).filter((key) => !DIRECTIVE_KEYS.includes(key));
+  if (childKeys.length === 0) {
+    const typeLock = typeLockDirect ?? (range !== void 0 || step !== void 0 ? "number" : enumValues !== void 0 ? "string" : void 0);
+    if (typeLock === void 0 && Object.keys(directives).length === 0) {
+      return { typeLock: "object", objectMode: "open" };
+    }
+    if (typeLock === "object") return { typeLock, objectMode: "open", ...directives };
+    if (typeLock === "array") return { typeLock, ...directives };
+    return { ...typeLock !== void 0 ? { typeLock } : {}, ...directives };
+  }
+  const wildcardRaw = childKeys.includes("*") ? raw["*"] : void 0;
+  const namedKeys = childKeys.filter((key) => key !== "*");
+  const children = /* @__PURE__ */ new Map();
+  for (const key of namedKeys) {
+    const child = resolveTemplateNode(raw[key]);
+    if (child !== void 0) children.set(key, child);
+  }
+  const objectMode = wildcardRaw !== void 0 ? "wildcard" : "locked";
+  const wildcard = wildcardRaw !== void 0 ? resolveTemplateNode(wildcardRaw) : void 0;
+  return {
+    typeLock: "object",
+    objectMode,
+    ...children.size > 0 ? { children } : {},
+    ...wildcard !== void 0 ? { wildcard } : {},
+    ...directives
+  };
+}
+var schemaCache = /* @__PURE__ */ new WeakMap();
+function resolveMvuSchema(raw) {
+  if (!isPlainObject(raw)) return void 0;
+  const cached = schemaCache.get(raw);
+  if (cached !== void 0 || schemaCache.has(raw)) return cached;
+  const resolved = resolveTemplateNode(raw);
+  const root = resolved !== void 0 && resolved.objectMode === "locked" ? { ...resolved, objectMode: "open" } : resolved;
+  schemaCache.set(raw, root);
+  return root;
+}
+function stripMvuSchema(tree) {
+  if (!("$schema" in tree) || !isPlainObject(tree.$schema)) return tree;
+  const out = {};
+  for (const [key, value] of Object.entries(tree)) {
+    if (key === "$schema") continue;
+    out[key] = value;
+  }
+  return out;
+}
+var INITIAL_VARIABLES_KEY = "initial_variables";
+function cardSchema(card) {
+  const holder = card?.data?.extensions?.["agentTavern"];
+  if (!isPlainObject(holder)) return void 0;
+  const initial = holder.initialVariables;
+  return isPlainObject(initial) ? initial.$schema : void 0;
+}
+function treeSchema(tree) {
+  return isPlainObject(tree) ? tree.$schema : void 0;
+}
+function readMvuSchema(chat, card, variablesOverride) {
+  const candidates = [
+    treeSchema(variablesOverride ?? chat?.header?.chat_metadata?.variables),
+    cardSchema(card),
+    treeSchema(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY])
+  ];
+  for (const candidate of candidates) {
+    if (isPlainObject(candidate) && Object.keys(candidate).length > 0) return candidate;
+  }
+  return void 0;
+}
+function typeName(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+function mvuValuesEqual(left, right) {
+  if (left === right) return true;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((item, index) => mvuValuesEqual(item, right[index]));
+  }
+  if (isPlainObject(left) && isPlainObject(right)) {
+    const keys = /* @__PURE__ */ new Set([...Object.keys(left), ...Object.keys(right)]);
+    for (const key of keys) {
+      if (!mvuValuesEqual(left[key], right[key])) return false;
+    }
+    return true;
+  }
+  return false;
+}
+function clampNumber(value, min, max2) {
+  let out = value;
+  if (min !== void 0 && out < min) out = min;
+  if (max2 !== void 0 && out > max2) out = max2;
+  return out;
+}
+function validateValue2(node, value, current, path9, notes) {
+  if (node.ro === true && !mvuValuesEqual(value, current)) {
+    return { ok: false, kind: "readonly", reason: "read-only field" };
+  }
+  if (Array.isArray(value)) {
+    if (node.typeLock !== void 0 && node.typeLock !== "array") {
+      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got array` };
+    }
+    if (node.item === void 0) return { ok: true, value, notes };
+    const currentItems = Array.isArray(current) ? current : [];
+    const out = [];
+    for (let i = 0; i < value.length; i++) {
+      const result = validateValue2(node.item, value[i], currentItems[i], `${path9}[${i}]`, notes);
+      if (!result.ok) return result;
+      out.push(result.value);
+    }
+    return { ok: true, value: out, notes };
+  }
+  if (isPlainObject(value)) {
+    if (node.typeLock !== void 0 && node.typeLock !== "object") {
+      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got object` };
+    }
+    if (node.objectMode !== "locked" && node.objectMode !== "wildcard") return { ok: true, value, notes };
+    const currentObject = isPlainObject(current) ? current : {};
+    const next = {};
+    for (const key of Object.keys(value)) {
+      const child = node.children?.get(key) ?? node.wildcard;
+      if (child === void 0) {
+        return { ok: false, kind: "structure", reason: `key '${key}' is not in the schema template` };
+      }
+      const result = validateValue2(child, value[key], currentObject[key], path9 === "" ? key : `${path9}.${key}`, notes);
+      if (!result.ok) return result;
+      next[key] = result.value;
+    }
+    if (node.objectMode === "locked") {
+      for (const key of node.children?.keys() ?? []) {
+        if (!(key in value) && key in currentObject) {
+          return { ok: false, kind: "structure", reason: `template field '${key}' would be deleted by this write` };
+        }
+      }
+    }
+    return { ok: true, value: next, notes };
+  }
+  if (node.typeLock !== void 0 && typeName(value) !== node.typeLock) {
+    return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got ${typeName(value)}` };
+  }
+  if (node.enumValues !== void 0 && !node.enumValues.some((allowed) => mvuValuesEqual(allowed, value))) {
+    return { ok: false, kind: "enum-violation", reason: `value ${JSON.stringify(value)} is not one of [${node.enumValues.map((entry) => JSON.stringify(entry)).join(", ")}]` };
+  }
+  if (typeof value === "number" && Number.isFinite(value) && (node.min !== void 0 || node.max !== void 0 || node.step !== void 0)) {
+    let out = value;
+    if (node.step !== void 0 && typeof current === "number" && Number.isFinite(current)) {
+      const delta = out - current;
+      const capped = Math.max(-node.step, Math.min(node.step, delta));
+      if (capped !== delta) {
+        notes.push(`${path9}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
+        out = current + capped;
+      }
+    }
+    const clamped = clampNumber(out, node.min, node.max);
+    if (clamped !== out) {
+      notes.push(`${path9}: guard clamp: ${out} -> ${clamped}`);
+      out = clamped;
+    }
+    return { ok: true, value: out, notes };
+  }
+  return { ok: true, value, notes };
+}
+function guardMvuWrite(schema, path9, value, current) {
+  const segments = path9.split(".").filter((segment) => segment !== "");
+  if (segments.length === 0) return { ok: true, value };
+  if (segments[0] === "$schema") {
+    return { ok: false, kind: "readonly", reason: "the $schema subtree is the declared guard contract and cannot be settled" };
+  }
+  const root = resolveMvuSchema(schema);
+  if (root === void 0) return { ok: true, value };
+  let cursor = root;
+  let parent;
+  let roChain = root.ro === true;
+  let violation;
+  for (let i = 0; i < segments.length && cursor !== void 0; i++) {
+    const segment = segments[i];
+    if (cursor.typeLock === "array") {
+      parent = cursor;
+      if (!/^\d+$/.test(segment)) {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects an array index, not '${segment}'`;
+        cursor = void 0;
+      } else {
+        cursor = cursor.item;
+      }
+    } else if (cursor.objectMode !== void 0) {
+      parent = cursor;
+      const named = cursor.children?.get(segment);
+      if (named !== void 0) cursor = named;
+      else if (cursor.objectMode === "wildcard" && cursor.wildcard !== void 0) cursor = cursor.wildcard;
+      else if (cursor.objectMode === "locked") {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' is not in the schema template`;
+        cursor = void 0;
+      } else cursor = void 0;
+    } else {
+      if (cursor.typeLock !== void 0 && cursor.objectMode === void 0) {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects ${cursor.typeLock}, not a nested path`;
+      }
+      parent = cursor;
+      cursor = void 0;
+    }
+    if (cursor !== void 0 && cursor.ro === true) roChain = true;
+  }
+  if (violation !== void 0) return { ok: false, kind: "structure", reason: violation };
+  const lastSegment = segments[segments.length - 1];
+  if (value === void 0) {
+    if (roChain) return { ok: false, kind: "readonly", reason: "read-only field" };
+    if (parent?.objectMode === "locked" && parent.children?.has(lastSegment)) {
+      return { ok: false, kind: "structure", reason: `template field '${lastSegment}' cannot be deleted` };
+    }
+    return { ok: true, value: void 0 };
+  }
+  if (roChain && !mvuValuesEqual(value, current)) {
+    return { ok: false, kind: "readonly", reason: "read-only field" };
+  }
+  if (cursor === void 0) return { ok: true, value };
+  const result = validateValue2(cursor, value, current, segments.join("."), []);
+  if (!result.ok) return result;
+  return { ok: true, value: result.value, ...result.notes.length > 0 ? { note: result.notes.join("; ") } : {} };
+}
+function getMvuTreePath(tree, path9) {
+  let cursor = tree;
+  for (const segment of path9.split(".")) {
+    if (!isPlainObject(cursor)) return void 0;
+    cursor = cursor[segment];
+  }
+  return cursor;
+}
+
 // packages/plugin/src/mvu.ts
 var DEFAULT_USER = "User";
-var INITIAL_VARIABLES_KEY = "initial_variables";
+var INITIAL_VARIABLES_KEY2 = "initial_variables";
 var MVU_RECEIPTS_LIMIT = 20;
 function plainObject(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
@@ -11076,19 +11359,7 @@ function snapshotChatVariables(chat) {
   return deepClone(readChatVariables(chat));
 }
 function valuesEqual(left, right) {
-  if (left === right) return true;
-  const leftObject = plainObject(left);
-  const rightObject = plainObject(right);
-  if (leftObject !== void 0 && rightObject !== void 0) {
-    for (const key of /* @__PURE__ */ new Set([...Object.keys(leftObject), ...Object.keys(rightObject)])) {
-      if (!valuesEqual(leftObject[key], rightObject[key])) return false;
-    }
-    return true;
-  }
-  if (Array.isArray(left) && Array.isArray(right)) {
-    return left.length === right.length && left.every((item, index) => valuesEqual(item, right[index]));
-  }
-  return false;
+  return mvuValuesEqual(left, right);
 }
 function diffVariables(before, after) {
   const changes = [];
@@ -11110,7 +11381,7 @@ function diffVariables(before, after) {
       changes.push(change);
     }
   };
-  walk("", before, after);
+  walk("", stripMvuSchema(before), stripMvuSchema(after));
   return changes.sort((left, right) => left.name.localeCompare(right.name));
 }
 function overlayScopedVariables(base, entries) {
@@ -11148,6 +11419,7 @@ function readMvuReceipts(chat) {
         const out = { name: change.name };
         if ("before" in change) out.before = change.before;
         if ("after" in change) out.after = change.after;
+        if (typeof change.reason === "string") out.reason = change.reason;
         return [out];
       }) : [],
       failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : []
@@ -11163,6 +11435,10 @@ function appendMvuReceipt(chat, receipt) {
 function recordMvuTurnReceipt(chat, before, options) {
   const after = readChatVariables(chat);
   const changes = diffVariables(before, after);
+  for (const change of changes) {
+    const note = options.changeNotes?.[change.name];
+    if (note !== void 0) change.reason = note;
+  }
   const failures = options.failures ?? [];
   if (changes.length === 0 && failures.length === 0 && Object.keys(before).length === 0 && Object.keys(after).length === 0) {
     return void 0;
@@ -11177,6 +11453,70 @@ function recordMvuTurnReceipt(chat, before, options) {
   };
   appendMvuReceipt(chat, receipt);
   return receipt;
+}
+function setMvuTreePath(tree, path9, value) {
+  const segments = path9.split(".");
+  const leaf = segments.pop();
+  let cursor = tree;
+  for (const segment of segments) {
+    const next = cursor[segment];
+    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+    cursor = cursor[segment];
+  }
+  cursor[leaf] = value;
+}
+function revertMvuTreePath(tree, path9, before) {
+  const beforeValue = getMvuTreePath(before, path9);
+  if (beforeValue !== void 0) {
+    setMvuTreePath(tree, path9, beforeValue);
+    return;
+  }
+  const segments = path9.split(".");
+  const leaf = segments.pop();
+  const parent = getMvuTreePath(tree, segments.join("."));
+  if (parent !== null && typeof parent === "object" && !Array.isArray(parent)) {
+    delete parent[leaf];
+  }
+  while (segments.length > 0) {
+    const pathSoFar = segments.join(".");
+    const node = getMvuTreePath(tree, pathSoFar);
+    if (node === null || typeof node !== "object" || Array.isArray(node)) break;
+    if (Object.keys(node).length > 0) break;
+    if (getMvuTreePath(before, pathSoFar) !== void 0) break;
+    const popped = segments.pop();
+    const upper = getMvuTreePath(tree, segments.join("."));
+    if (upper === null || typeof upper !== "object" || Array.isArray(upper)) break;
+    delete upper[popped];
+  }
+}
+function applyMvuSettlementGuard(chat, card, before) {
+  const failures = [];
+  const notes = {};
+  const metadata = chat.header.chat_metadata;
+  const variables2 = plainObject(metadata.variables);
+  const schema = readMvuSchema(chat, card, before);
+  if (schema === void 0 || variables2 === void 0) return { failures, notes };
+  const schemaBefore = plainObject(before.$schema);
+  const schemaLive = plainObject(variables2.$schema);
+  if (!valuesEqual(schemaBefore, schemaLive)) {
+    if (schemaBefore !== void 0) variables2.$schema = deepClone(schemaBefore);
+    else delete variables2.$schema;
+    failures.push(`$schema: guard readonly: the schema subtree is card-declared and cannot be settled`);
+  }
+  for (const change of diffVariables(before, variables2)) {
+    const current = getMvuTreePath(before, change.name);
+    const value = "after" in change ? change.after : void 0;
+    const result = guardMvuWrite(schema, change.name, value, current);
+    if (!result.ok) {
+      revertMvuTreePath(variables2, change.name, before);
+      failures.push(`${change.name}: guard ${result.kind}: ${result.reason}`);
+      continue;
+    }
+    if (result.note !== void 0) notes[change.name] = result.note;
+    if (value !== void 0 && !valuesEqual(result.value, value)) setMvuTreePath(variables2, change.name, result.value);
+  }
+  if (Object.keys(variables2).length === 0 && Object.keys(before).length === 0) delete metadata.variables;
+  return { failures, notes };
 }
 function createMvuRuntime(input, stores) {
   const { characterName, character, chat, books } = input;
@@ -11266,9 +11606,9 @@ async function renderMvuStatusTemplate(input) {
       books
     },
     {
-      local: deepClone(input.localVariables ?? readChatVariables(chat)),
+      local: deepClone(stripMvuSchema(plainObject(input.localVariables ?? readChatVariables(chat)) ?? {})),
       global: { ...input.state.scriptGlobals },
-      initial: deepClone(plainObject(chat.header.chat_metadata[INITIAL_VARIABLES_KEY]) ?? {})
+      initial: deepClone(stripMvuSchema(plainObject(chat.header.chat_metadata[INITIAL_VARIABLES_KEY2]) ?? {}))
     }
   );
   return await runtime.renderText(input.template, void 0, "mvu-status");
@@ -11313,7 +11653,7 @@ async function retryMvuSettlement(db, options) {
       // 不持久化——initial 本就由每次生成的 InitialVariables 重算，非用户状态
       local: localVars,
       global: state.scriptGlobals,
-      initial: plainObject(metadata[INITIAL_VARIABLES_KEY]) ?? {}
+      initial: plainObject(metadata[INITIAL_VARIABLES_KEY2]) ?? {}
     }
   );
   try {
@@ -11325,18 +11665,23 @@ async function retryMvuSettlement(db, options) {
   if (JSON.stringify(state.scriptGlobals) !== globalsBefore) {
     await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }));
   }
+  const guard = applyMvuSettlementGuard(chat, character.card, before);
   const after = readChatVariables(chat);
   const changes = diffVariables(before, after);
+  for (const change of changes) {
+    if (guard.notes[change.name] !== void 0) change.reason = guard.notes[change.name];
+  }
+  const allFailures = [...failures, ...guard.failures];
   const receipt = {
     at: (/* @__PURE__ */ new Date()).toISOString(),
     turnKey: String(floorIndex),
     status: changes.length > 0 ? "updated" : "unchanged",
     changes,
-    failures
+    failures: allFailures
   };
   appendMvuReceipt(chat, receipt);
   const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
-  return { receipt, revision, variables: after };
+  return { receipt, revision, variables: stripMvuSchema(after) };
 }
 
 // packages/plugin/src/agent-tavern/anchor.ts
@@ -11858,7 +12203,7 @@ function applyCardOverride(identifier, content, card) {
 }
 
 // packages/plugin/src/template.ts
-var INITIAL_VARIABLES_KEY2 = "initial_variables";
+var INITIAL_VARIABLES_KEY3 = "initial_variables";
 function toSpecialEntry(kind, arg, content, ifCondition, source) {
   const entry = {
     kind,
@@ -11969,7 +12314,7 @@ async function createGenerationTemplates(options) {
   };
   const partition = partitionSpecialLore(lore, books);
   const localVars = ensureMetadataObject(chat.header.chat_metadata, "variables");
-  const initialVars = ensureMetadataObject(chat.header.chat_metadata, INITIAL_VARIABLES_KEY2);
+  const initialVars = ensureMetadataObject(chat.header.chat_metadata, INITIAL_VARIABLES_KEY3);
   const cardName = card.data.nickname || card.data.name;
   const lastUserIdx = (() => {
     for (let i = turnMessages.length - 1; i >= 0; i--) if (turnMessages[i].is_user) return i;
@@ -12131,8 +12476,8 @@ function mergeTemplateLocalVars(chat, macroLocalSnapshot) {
   for (const [key, value] of Object.entries(macroLocalSnapshot)) merged[key] = value;
   if (Object.keys(merged).length > 0) metadata["variables"] = merged;
   else delete metadata["variables"];
-  if (Object.keys(ensureMetadataObject(metadata, INITIAL_VARIABLES_KEY2)).length === 0) {
-    delete metadata[INITIAL_VARIABLES_KEY2];
+  if (Object.keys(ensureMetadataObject(metadata, INITIAL_VARIABLES_KEY3)).length === 0) {
+    delete metadata[INITIAL_VARIABLES_KEY3];
   }
 }
 
@@ -13806,6 +14151,9 @@ function claimedToolNames() {
 // packages/plugin/src/mods/http.ts
 var MOD_HTTP_METHODS = /* @__PURE__ */ new Set(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]);
 var RESERVED_MOD_SUBROUTE_POST_PATHS = /* @__PURE__ */ new Set(["enable", "disable", "reload"]);
+function isReservedModSubroutePostPath(path9) {
+  return RESERVED_MOD_SUBROUTE_POST_PATHS.has(path9) || path9 === "button" || path9.startsWith("button/");
+}
 var MOD_HTML_DEFAULT_CSP = [
   "default-src 'none'",
   "script-src 'unsafe-inline'",
@@ -13830,7 +14178,7 @@ function createModRouteTable() {
       if (!isValidModHttpPath(path9)) {
         throw new Error(`invalid mod route path '${String(path9)}'`);
       }
-      if (normalizedMethod === "POST" && RESERVED_MOD_SUBROUTE_POST_PATHS.has(path9)) {
+      if (normalizedMethod === "POST" && isReservedModSubroutePostPath(path9)) {
         throw new Error(`mod route POST ${path9} is reserved by host management routes`);
       }
       if (typeof handler !== "function") throw new Error("mod route handler must be a function");
@@ -13882,17 +14230,52 @@ function makeModReply(res) {
 function escapeHtmlAttribute(value) {
   return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
 }
+var MOD_LOG_MESSAGE = "dsh-tavern:mod-log";
+var MOD_LOG_TEXT_LIMIT = 2048;
+function modConsoleReporterScript() {
+  return `(function () {
+  var token = '';
+  try { token = new URLSearchParams(location.search).get('token') || ''; } catch (_) { return; }
+  if (token === '') return;
+  var send = function (level, text) {
+    try {
+      parent.postMessage({ type: ${JSON.stringify(MOD_LOG_MESSAGE)}, token: token, level: level, text: String(text).slice(0, ${MOD_LOG_TEXT_LIMIT}) }, '*');
+    } catch (_) {}
+  };
+  var format = function (args) {
+    var parts = [];
+    for (var index = 0; index < args.length; index += 1) {
+      var value = args[index];
+      if (typeof value === 'string') parts.push(value);
+      else { try { parts.push(JSON.stringify(value)); } catch (_) { parts.push(String(value)); } }
+    }
+    return parts.join(' ');
+  };
+  ['log', 'warn', 'error'].forEach(function (level) {
+    var original = typeof console[level] === 'function' ? console[level].bind(console) : function () {};
+    console[level] = function () { original.apply(null, arguments); send(level, format(arguments)); };
+  });
+  addEventListener('error', function (event) {
+    var at = event.filename ? ' @ ' + event.filename + ':' + event.lineno : '';
+    send('error', (event.message || 'script error') + at);
+  });
+  addEventListener('unhandledrejection', function (event) {
+    send('error', 'unhandled rejection: ' + format([event.reason]));
+  });
+})();`;
+}
 function renderModHtmlDocument(document, csp) {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${escapeHtmlAttribute(csp)}">`;
+  const reporter = `<script>${modConsoleReporterScript()}</script>`;
   const headMatch = /<head(?:\s[^>]*)?>/i.exec(document);
   if (headMatch !== null) {
     const at = headMatch.index + headMatch[0].length;
-    return `${document.slice(0, at)}${meta}${document.slice(at)}`;
+    return `${document.slice(0, at)}${meta}${reporter}${document.slice(at)}`;
   }
   if (/<html(?:\s[^>]*)?>/i.test(document)) {
-    return document.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${meta}</head>`);
+    return document.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${meta}${reporter}</head>`);
   }
-  return `<!doctype html><html><head><meta charset="utf-8">${meta}</head><body>${document}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8">${meta}${reporter}</head><body>${document}</body></html>`;
 }
 function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
   return new Promise((resolve5, reject) => {
@@ -13922,6 +14305,18 @@ function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
 var MOD_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/;
 var MOD_ID_MAX_LENGTH = 100;
 var MOD_CAPABILITIES = ["llm", "network", "storage"];
+var MOD_BUTTONS_MAX_COUNT = 8;
+var MOD_BUTTON_NAME_MAX_LENGTH = 40;
+function modButtonNameError(name2) {
+  if (typeof name2 !== "string") return "button names must be strings";
+  const text = name2.trim();
+  if (text === "") return "button names must be non-empty strings";
+  if (text !== name2) return "button names must not have surrounding whitespace";
+  if (text.length > MOD_BUTTON_NAME_MAX_LENGTH) {
+    return `button names must be at most ${MOD_BUTTON_NAME_MAX_LENGTH} characters`;
+  }
+  return void 0;
+}
 function checkModManifest(raw, options) {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return { ok: false, errors: ["mod.json must be a JSON object"] };
@@ -13998,6 +14393,28 @@ function checkModManifest(raw, options) {
       }
     }
   }
+  if (record.buttons !== void 0) {
+    if (!Array.isArray(record.buttons)) {
+      errors.push("buttons must be an array of button names");
+    } else {
+      if (record.buttons.length > MOD_BUTTONS_MAX_COUNT) {
+        errors.push(`buttons must declare at most ${MOD_BUTTONS_MAX_COUNT} entries`);
+      }
+      const seen = /* @__PURE__ */ new Set();
+      for (const name2 of record.buttons) {
+        const nameError = modButtonNameError(name2);
+        if (nameError !== void 0) {
+          errors.push(nameError);
+          break;
+        }
+        if (seen.has(name2)) {
+          errors.push(`button '${name2}' is declared more than once`);
+          break;
+        }
+        seen.add(name2);
+      }
+    }
+  }
   if (errors.length > 0) return { ok: false, errors };
   const engines = record.engines;
   const engineRange = engines?.["dsh-tavern"];
@@ -14015,7 +14432,8 @@ function checkModManifest(raw, options) {
     loadingOrder: typeof record.loadingOrder === "number" ? record.loadingOrder : 100,
     capabilities: Array.isArray(record.capabilities) ? [...new Set(record.capabilities)] : [],
     ...panel !== void 0 && typeof panel.title === "string" ? { panel: { title: panel.title, ...typeof panel.icon === "string" ? { icon: panel.icon } : {} } } : {},
-    surfaces: surfaces === void 0 || surfaces === null ? { hooks: [], tools: [], http: [] } : { hooks: pickStrings(surfaces.hooks), tools: pickStrings(surfaces.tools), http: pickStrings(surfaces.http) }
+    surfaces: surfaces === void 0 || surfaces === null ? { hooks: [], tools: [], http: [] } : { hooks: pickStrings(surfaces.hooks), tools: pickStrings(surfaces.tools), http: pickStrings(surfaces.http) },
+    buttons: Array.isArray(record.buttons) ? [...record.buttons] : []
   };
   return { ok: true, manifest };
 }
@@ -14465,7 +14883,8 @@ var ModHost = class _ModHost {
         status: "error",
         error: info.message,
         auditCount: this.audit.count(id),
-        surfaces: { hooks: [], tools: [], http: [] }
+        surfaces: { hooks: [], tools: [], http: [] },
+        buttons: []
       });
     }
     for (const [id, item] of this.blocked) {
@@ -14520,6 +14939,34 @@ var ModHost = class _ModHost {
       }
     }
     return true;
+  }
+  /**
+   * 声明式按钮的点击分发（`POST mods/<id>/button/<name>`，A-1）：
+   * - 未装载 / 未知按钮 / 任一层开关关闭 → `not-found`（调用方按 404 兜底，与
+   *   未知路由不可区分——§6 纪律）；
+   * - 已声明但无 handler（mod 未注册 onButton）→ `no-handler`（200 + handled:false，
+   *   面板按钮的可选消费语义）；
+   * - handler 抛错：`button-error` 审计后原样上抛（HTTP 层兜 500）；
+   *   正常点击不审计（高频路径，对齐 event-error 纪律）。
+   */
+  async dispatchButton(id, name2, context = {}) {
+    if (modsDisabledByEnv() || !this.globalEnabled) return "not-found";
+    if (!MOD_ID_PATTERN.test(id)) return "not-found";
+    if (modButtonNameError(name2) !== void 0) return "not-found";
+    const record = this.loaded.get(id);
+    if (record === void 0) return "not-found";
+    if (!record.manifest.buttons.includes(name2)) return "not-found";
+    const handler = record.buttons.get(name2);
+    if (handler === void 0) return "no-handler";
+    try {
+      await handler({ name: name2 }, context);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      this.logger?.warn?.(`dsh-tavern: [mod:${id}] button '${name2}' handler failed: ${message}`);
+      await this.audit.record(id, "button-error", `${name2}: ${message}`);
+      throw cause;
+    }
+    return "handled";
   }
   /** 宿主卸载：卸下全部已装载 Mod（逆序 disposer + 定时器 + 事件反注册）。 */
   async disposeAll() {
@@ -14629,6 +15076,7 @@ var ModHost = class _ModHost {
       offEvents: [],
       offRegistrations: [],
       surfaces: { hooks: /* @__PURE__ */ new Set(), tools: /* @__PURE__ */ new Set(), http: /* @__PURE__ */ new Set() },
+      buttons: /* @__PURE__ */ new Map(),
       storage: new ModStorage(join14(disc.directory, "data", "state.json"), {
         onQuota: (message) => {
           void this.audit.record(id, "storage-quota", message);
@@ -14746,6 +15194,17 @@ var ModHost = class _ModHost {
           record.offEvents.push(off);
           return off;
         }
+      },
+      onButton: (name2, handler) => {
+        if (typeof name2 !== "string" || !record.manifest.buttons.includes(name2)) {
+          throw new Error(`button '${String(name2)}' is not declared in the manifest buttons [${record.manifest.buttons.join(", ")}]`);
+        }
+        if (typeof handler !== "function") throw new Error("button handler must be a function");
+        if (record.buttons.has(name2)) throw new Error(`button '${name2}' already has a handler`);
+        record.buttons.set(name2, handler);
+        return () => {
+          if (record.buttons.get(name2) === handler) record.buttons.delete(name2);
+        };
       },
       timers: {
         setInterval: (handler, ms) => {
@@ -14905,7 +15364,8 @@ function modInfoOf(manifest) {
     description: manifest.description,
     capabilities: manifest.capabilities,
     loadingOrder: manifest.loadingOrder,
-    panel: manifest.panel ?? null
+    panel: manifest.panel ?? null,
+    buttons: [...manifest.buttons]
   };
 }
 var GENERATION_HOOK_PHASES = /* @__PURE__ */ new Set(["user-input", "pre-assemble", "pre-llm", "post-output", "post-save"]);
@@ -17252,6 +17712,8 @@ async function modHostProjection(ctx) {
       enabled: mod.status === "loaded",
       error: mod.error,
       auditCount: mod.auditCount,
+      // 声明式按钮（A-1）：清单声明面，客户端据此渲染面板 chips 与聊天按钮行。
+      buttons: mod.buttons,
       // P2（§3.5 启用确认弹层）：注册面——loaded 是实际注册名单，未装载回落
       // manifest 声明（作者自查面）。
       surfaces: mod.surfaces
@@ -18507,7 +18969,7 @@ async function handleMvuApi(req, res, route, method, db) {
     const receipts = readMvuReceipts(chat);
     const agentTavernBound = Object.values(state.sessionBindings).some((binding) => binding.architecture === "agent-tavern" && binding.chatId === chatId && binding.character === characterName);
     const scopedVariables = agentTavernBound ? await (await variables()).list("chat", chatId, "", 100) : [];
-    const displayVariables = scopedVariables.length > 0 ? overlayScopedVariables(readChatVariables(chat), scopedVariables) : readChatVariables(chat);
+    const displayVariables = stripMvuSchema(scopedVariables.length > 0 ? overlayScopedVariables(readChatVariables(chat), scopedVariables) : readChatVariables(chat));
     const character = await db.getCharacter(characterName);
     const statusTemplate = character ? statusTemplateOf(character.card) : void 0;
     let renderedHtml;
@@ -19433,9 +19895,11 @@ async function runGeneration(ctx, db, options) {
     } else {
       delete chat.header.chat_metadata.variables;
     }
+    const mvuGuard = applyMvuSettlementGuard(chat, character.card, mvuVariablesBefore);
     recordMvuTurnReceipt(chat, mvuVariablesBefore, {
       turnKey: String(chat.messages.length - 1),
-      failures: tpl?.warnings ?? []
+      failures: [...tpl?.warnings ?? [], ...mvuGuard.failures],
+      changeNotes: mvuGuard.notes
     });
     revision = await db.saveChat(characterName, chatId, chat, revision);
     await emitChatSaved(characterName, chatId, revision);
@@ -20029,7 +20493,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.4.5".trim() : "";
-  const commit = true ? normalizeCommit("7a29db6") : void 0;
+  const commit = true ? normalizeCommit("145964b") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -20161,6 +20625,27 @@ async function handleModsApi(ctx, req, res, url, route, method) {
   if (method === "POST" && segments.length === 2 && subpath === "reload") {
     await host.reload(decodeURIComponent(modId));
     return sendJson(res, 200, { ok: true, ...host.snapshot() });
+  }
+  if (method === "POST" && segments.length === 3 && segments[1] === "button") {
+    let id = modId;
+    let name2 = segments[2] ?? "";
+    try {
+      id = decodeURIComponent(modId);
+      name2 = decodeURIComponent(segments[2] ?? "");
+    } catch {
+      return notFound();
+    }
+    const body = await readJson(req).catch(() => ({}));
+    const context = {};
+    if (typeof body.character === "string" && body.character !== "") context.character = body.character;
+    if (typeof body.chatId === "string" && body.chatId !== "") context.chatId = body.chatId;
+    try {
+      const outcome = await host.dispatchButton(id, name2, context);
+      if (outcome === "not-found") return notFound();
+      return sendJson(res, 200, { ok: true, handled: outcome === "handled" });
+    } catch (cause) {
+      return sendJson(res, 500, { ok: false, message: cause instanceof Error ? cause.message : String(cause) });
+    }
   }
   if (segments.length >= 1 && modId !== "") {
     let id = modId;

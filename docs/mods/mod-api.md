@@ -3,7 +3,8 @@
 > 面向 Mod 作者的开发者文档。设计文档见[提案 0015](../proposals/0015-mod-extensions.md)；
 > 落地决策见 [2026-10-10-mod-p0-hook-buses](../../decisions/2026-10-10-mod-p0-hook-buses.md)、
 > [2026-10-10-mod-p1-loader](../../decisions/2026-10-10-mod-p1-loader.md)、
-> [2026-10-10-mod-p2-capabilities](../../decisions/2026-10-10-mod-p2-capabilities.md)。
+> [2026-10-10-mod-p2-capabilities](../../decisions/2026-10-10-mod-p2-capabilities.md)、
+> [2026-10-11-mod-bridge-buttons-logs](../../decisions/2026-10-11-mod-bridge-buttons-logs.md)。
 > 本文以 `packages/plugin/src/mods/` 的实现为准；API 版本常量 `api.version === 1`。
 
 **Mod = 一个自包含 ESM 文件夹 + `mod.json` 清单，由服务端在进程内加载的受信任第三方代码。**
@@ -106,6 +107,7 @@ export async function setup(api) {
 | `loadingOrder` | — | 有限数字，默认 `100`；hook 顺序 / 工具与分区排序的决胜键（升序） |
 | `capabilities` | — | `llm` \| `network` \| `storage` 的子集（去重）；**知情同意标签**，不是隔离——唯一的技术强制是 `llm`：不声明就没有 `api.llm` 这个键 |
 | `panel` | — | `{ title: string, icon?: string }`；声明后面板出现该 Mod 的 iframe 分区（§13） |
+| `buttons` | — | `string[]`：声明式按钮的**显示名**（允许 CJK）；≤8 项、每项 trim 后非空 ≤40 字符、去重（重复 = 清单校验失败）。声明后宿主在 Mod 面板分区头与 ST 聊天视图渲染按钮 chip，点击经 `POST mods/<id>/button/<name>` 分发到 `api.onButton`（§5）；启用确认弹层披露按钮数量与名单 |
 | `surfaces` | — | `{ hooks: string[], tools: string[], http: string[] }`，各 ≤32 项、每项 ≤200 字符；**作者自查声明**，未装载时启用确认弹层展示它，已装载时展示**实际注册**的名单（事实优先于声明） |
 
 ### engines 范围语法（自写 semver 匹配器）
@@ -158,6 +160,7 @@ export async function setup(api) {
 | `api.storage.{get,set,delete}` | 私有 JSON kv：`<tavern>/mods/<id>/data/state.json` | 单值 256KB / 总量 1MB；原子写 |
 | `api.assets.*` | 只读资产快照（12 个方法，deepClone） | 无任何写路径 |
 | `api.events.on(kind, handler)` | `chat-saved` / `assets-saved` / `guides-changed` | 逐个吞错，失败进审计 |
+| `api.onButton(name, handler)` | 声明式按钮的点击 handler（name 必须在 manifest `buttons` 里声明） | 同名重复注册抛错；返回反注册；宿主托管卸载回收 |
 | `api.timers.{setInterval,clearInterval}` | 定时器 | 宿主绑定生命周期，卸载自动清 |
 | `api.http.route(method, path, handler)` | 挂 `/api/dsh-tavern/mods/<id>/<path>` | path 白名单；`reply.json/html` 两出口 |
 | `api.hooks.on(phase, handler)` | ST 生成管线五相位 | waterfall + 10s 超时降级不中断生成 |
@@ -227,6 +230,32 @@ const off = api.events.on('chat-saved', async (payload) => { ... })   // 返回�
 
 handler 抛错：吞掉 + `event-error` 审计，不影响其他监听方与宿主落盘。未知 kind 注册期抛错。
 
+### api.onButton（声明式按钮）
+
+manifest `buttons: ["显示名", …]` 声明按钮 → 宿主渲染（Mod 面板分区头 chips +
+ST 聊天视图的紧凑按钮行）→ 用户点击 → `POST /api/dsh-tavern/mods/<id>/button/<name>`
+→ 分发到你注册的 handler：
+
+```js
+const off = api.onButton('拨快 1 小时', async (click, context) => {
+  // click:   { name }            —— 被点击的按钮显示名
+  // context: { character?, chatId? } —— 点击时可得的聊天归因；面板 chips 没有
+  //           绑定上下文时字段缺省，代码不得假设它存在
+  await api.storage.set('lastClick', { name: click.name, ...context })
+})
+off()   // 可选：运行期撤销（不调用也行——卸载时宿主整组回收）
+```
+
+- name 必须是 manifest `buttons` 里声明过的显示名（注册期校验，未声明即抛错）；
+  同名重复注册抛错；返回反注册函数；卸载时宿主托管回收（对齐其他 `api.*` 面）。
+- 声明了但没注册 handler 的按钮：路由答 200 `{ ok: true, handled: false }`
+  （可选消费语义）；handler 正常执行答 `{ ok: true, handled: true }`。
+- handler 抛错：`button-error` 审计 + 路由 500；**正常点击不审计**（高频路径）。
+- 未装载 / 未知按钮 / 任一层开关关闭：404，与未知路由不可区分（§6 纪律）。
+- **写边界（v1 如实）**：按钮 handler 没有聊天/资产写面——要改动聊天变量或资产，
+  仍然走 hooks/STscript 由核心落盘（§17）。按钮适合触发 Mod 自有状态、外部
+  副作用（storage/llm/日志）与「提示用户下一步」的展示逻辑。
+
 ### api.timers
 
 ```js
@@ -250,8 +279,10 @@ api.onDispose(async () => { await flushSomething() })   // 与 setup 返回的 d
 路由挂 `/api/dsh-tavern/mods/<id>/<path>`。**method**：`GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS`。
 **path**：非空相对路径，段 `[A-Za-z0-9][A-Za-z0-9._-]*` 以 `/` 连接，≤200 字符，拒绝 `\`、
 `%`、`.`/`..` 段（穿越在注册与分发两侧都拒）。同 method+path 重复注册抛错。**保留段**：
-`POST` 的 `enable`/`disable`/`reload` 是宿主管理路由（先于子路由分发被截获），注册即抛错；
-`GET ui` 不在此列——那是面板 iframe 表面的约定路径（§13），由你的 Mod 自行注册。
+`POST` 的 `enable`/`disable`/`reload` 是宿主管理路由（先于子路由分发被截获），`POST` 的
+`button` 与 `button/<name>` 是宿主按钮分发路由（§5 onButton，先于子路由分发被截获）——
+这些组合注册即抛错；`GET ui` 不在此列——那是面板 iframe 表面的约定路径（§13），由你的
+Mod 自行注册。
 
 ```js
 api.http.route('GET', 'stats', async (req, reply) => {
@@ -481,6 +512,43 @@ parent.postMessage({ type: 'dsh-tavern:frontend-height', token, height: document
   （无 HEAD/OPTIONS）；path 与 §6 同字符集。
 - 父页把高度钳制在 80..1200px。
 
+### 下行事件：`dsh-tavern:mod-event`
+
+宿主把**本客户端发起的**写入推回挂载中的 mod iframe（每个挂载面各自收到带自己
+token 的消息）：
+
+```js
+addEventListener('message', (event) => {
+  const data = event.data
+  if (!data || data.type !== 'dsh-tavern:mod-event' || data.token !== token) return
+  // data.kind ∈ 'chat-saved' | 'assets-saved' | 'guides-changed' | 'button-click'
+  // data.payload 与 Node 侧 api.events 的 payload 同形；button-click 是
+  // { mod: <modId>, name: <按钮显示名> }
+  if (data.kind === 'chat-saved') refresh()
+})
+```
+
+**诚实边界（v1）**：下行事件只覆盖本客户端（本标签页）发起的成功写入——PUT chat、
+生成两段落盘、STscript persist、guides 写入、资产保存/导入、声明按钮点击。**其他
+标签页或服务端侧的写入不推送**：mod UI 应保留拉取/轮询兜底（事件当加速器，不当
+唯一事实源）。mood-tracker 示范「事件到达即刷新 + 初始拉取兜底」这一路。
+
+### 日志上报：console reporter 与 `dsh-tavern:mod-log`
+
+服务端在**所有** `reply.html` 出口（不只 `GET ui`）注入一段 console reporter 脚本
+（与 CSP meta 注入同机制）：
+
+- 从 iframe URL 查询段自读 `token`，**无 token 静默跳过**（直接 curl 该路由不产生消息）；
+- wrap `console.log/warn/error`（原方法照常调用，iframe 控制台里仍可见）+
+  `window.onerror` + `unhandledrejection`，经 postMessage 回投
+  `{ type: 'dsh-tavern:mod-log', token, level, text }`；
+- args 逐个序列化（字符串直出、其余 JSON.stringify，失败退 String）拼接，单条截断
+  ~2KB（防刷爆）。
+
+宿主页把回投日志收进 **per-mod 环形缓冲（≤200 条，内存态）**，Mod 面板该 mod 分区
+底部的「Mod 日志」折叠视图展示（时间 + level 着色 + 文本）。日志随页面重载清空，
+不落盘、不进审计线——它是排障面，不是取证面（取证走宿主日志与审计线）。
+
 ---
 
 ## 14. 管理 HTTP 端点
@@ -492,10 +560,12 @@ parent.postMessage({ type: 'dsh-tavern:frontend-height', token, height: document
 | `POST /api/dsh-tavern/mods/install` | `{url, force?}` git 安装（§1） |
 | `POST /api/dsh-tavern/mods/<id>/enable` \| `disable` | 逐 Mod 开关（enable = 装载） |
 | `POST /api/dsh-tavern/mods/<id>/reload` | dispose → cache-bust 重载 |
+| `POST /api/dsh-tavern/mods/<id>/button/<name>` | 声明式按钮点击分发（§5 onButton）；响应 `{ ok, handled }` |
 | `ANY /api/dsh-tavern/mods/<id>/<path>` | Mod http 子路由（§6） |
 
 `ModInfo`：`{id, name, version, author, description, capabilities, loadingOrder, panel,
-status: 'loaded'|'disabled'|'error', error, auditCount, surfaces: {hooks, tools, http}}`。
+status: 'loaded'|'disabled'|'error', error, auditCount, surfaces: {hooks, tools, http},
+buttons}`。
 管理面在任何一层关闭时仍可用（否则用户无法再打开）；`install` 是管理保留段（不能当 mod id）。
 `GET bootstrap` 的 `mods` 投影含同款字段 + `enabled`（= status==='loaded'）。
 
@@ -517,6 +587,7 @@ status: 'loaded'|'disabled'|'error', error, auditCount, surfaces: {hooks, tools,
 | `hook-degradation` | 管线 hook 抛错/超时/忘 return 被降级跳过 |
 | `http-error` | Mod 路由 handler 抛错（500 兜底） |
 | `event-error` / `timer-error` | 事件 / 定时器 handler 失败 |
+| `button-error` | 声明式按钮 handler 点击分发失败（正常点击不审计） |
 | `storage-quota` / `storage-error` | 超配额 / 存储读写失败 |
 | `macro-error` | 宏运行期首错（降级保原文） |
 | `llm-call` / `llm-error` | api.llm 调用与用量 / 失败 |
@@ -531,8 +602,8 @@ status: 'loaded'|'disabled'|'error', error, auditCount, surfaces: {hooks, tools,
 | 示例 | 演示的能力面 |
 |---|---|
 | `dsh-tavern.asset-stats` | assets 只读快照、http JSON 出口、storage 配额内持久化、chat-saved 事件、setup 返回 dispose |
-| `dsh-tavern.mood-tracker` | post-output hook（改写位+返回契约）、Agent 工具对（`<modId>_` 前缀）、panel 声明 + iframe UI + postMessage 桥 + 高度上报、`reply.html` |
-| `dsh-tavern.story-clock` | 宏（{{clock}} 读聊天变量，确定性模式）、STscript 命令族（位置/命名参数/别名/chatChanged）、user-input 变换位与 post-save 观察位 hook、prompt.section（order -40）、api.llm（capability 门 + request 收集出口 + 用量审计）、timers、assets-saved/guides-changed 事件、宿主托管卸载（不持 off 句柄） |
+| `dsh-tavern.mood-tracker` | post-output hook（改写位+返回契约）、Agent 工具对（`<modId>_` 前缀）、panel 声明 + iframe UI + postMessage 桥 + 高度上报、mod-event 下行订阅（事件到达即刷新，拉取兜底）、console 日志上报（宿主日志查看器）、`reply.html` |
+| `dsh-tavern.story-clock` | 宏（{{clock}} 读聊天变量，确定性模式）、STscript 命令族（位置/命名参数/别名/chatChanged）、声明式按钮（「拨快 1 小时」，onButton 复用 /clock advance 的推进逻辑）、user-input 变换位与 post-save 观察位 hook、prompt.section（order -40）、api.llm（capability 门 + request 收集出口 + 用量审计）、timers、assets-saved/guides-changed 事件、宿主托管卸载（不持 off 句柄） |
 
 三个示例合计覆盖 v1 全部能力面。新 Mod 建议从最接近的示例拷起。
 

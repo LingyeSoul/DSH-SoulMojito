@@ -142,6 +142,11 @@ describe('mod P2 e2e: generation hooks, panel surface and projections', () => {
     expect(ui.text).toContain('dsh-tavern:mod-request')
     expect(ui.text).toContain('dsh-tavern:frontend-height')
     expect(ui.text).toContain("new URLSearchParams(location.search).get('token')")
+    // A-1d/A-2：ui 页订阅下行事件（事件到达即刷新，拉取兜底保留）；服务端注入
+    // 的 console reporter 会把 mod UI 的 console 输出回投宿主日志查看器。
+    expect(ui.text).toContain("data.type !== 'dsh-tavern:mod-event'")
+    expect(ui.text).toContain('dsh-tavern:mod-log')
+    expect(ui.text).toContain('[mood-tracker]')
   })
 
   it('runs the post-output hook on a real generation and persists its observations', async () => {

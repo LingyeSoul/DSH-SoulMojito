@@ -3220,6 +3220,9 @@ function jsonBytes(obj) {
   return new Uint8Array(Buffer.from(JSON.stringify(obj, null, 2), "utf8"));
 }
 
+// packages/tavern-store/src/tokenize.ts
+var CJK_STOP_BIGRAM_CHARS = /* @__PURE__ */ new Set([..."\u7684\u4E86\u662F\u5728\u5417\u5462\u5427\u554A\u5440\u4E48\u548C\u4E0E\u5C31\u90FD\u4E5F\u5F88\u88AB\u628A\u6CA1\u4E0D\u6709\u8FD8\u8FD9\u90A3\u4F60\u6211\u4ED6\u5979\u5B83\u4EEC\u4E2A"]);
+
 // packages/tavern-store/src/memory.ts
 var MAX_CONTENT = 64 * 1024;
 

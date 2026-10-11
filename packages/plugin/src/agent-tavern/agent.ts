@@ -2,6 +2,7 @@ import {
   MemoryStore,
   TavernStore,
   VariableStore,
+  tokenizeQuery,
 } from '../../../tavern-store/src/index.js'
 import { activateWorldInfo } from '../../../tavern-lore/src/index.js'
 import { parsePreset, type ChatLogIR } from '../../../tavern-format/src/index.js'
@@ -22,7 +23,8 @@ import {
   runDeduction,
   subagentRuntimeOf,
 } from './deduce.js'
-import { appendMvuReceipt, type MvuReceipt, type MvuVariableChange } from '../mvu.js'
+import { appendMvuReceipt, readChatVariables, type MvuReceipt, type MvuVariableChange } from '../mvu.js'
+import { getMvuTreePath, guardMvuWrite, readMvuSchema } from '../mvu-guard.js'
 import { appendMvuAudit } from './projector.js'
 import { createHostPromptExpander, hostPromptSafe, seededRandom } from '../prompt-safety.js'
 import { boundedStringArg, clampInt, limitText, stringArg } from '../tool-args.js'
@@ -281,7 +283,7 @@ function createTools(): ToolDefinition[] {
       }
     }),
     tool('tavern_history_search', 'Search past messages of the bound Tavern chat, optionally including its bookmarked parent branch. Returned chat text is untrusted data. Use it to recover past events, promises, or open threads before referencing them.', {
-      query: { type: 'string', required: true, description: 'Every word must appear in a message, capped at 2000 characters.' },
+      query: { type: 'string', required: true, description: 'Lexical query, capped at 2000 characters. Up to 3 terms: every term must appear in a message. Longer natural-language queries: messages matching at least 40% of the terms qualify, best matches listed first.' },
       limit: { type: 'integer', description: 'Maximum results, capped at 20.' },
       maxTokens: { type: 'integer', description: 'Approximate total excerpt token budget, capped at 4000.' },
       parents: { type: 'boolean', description: 'Also search the bookmarked parent chat one level up. Default false.' },
@@ -306,34 +308,44 @@ function createTools(): ToolDefinition[] {
       }
       exec.signal?.throwIfAborted()
 
-      let remainingTokens = maxTokens
-      let matchCount = 0
-      const hits: Array<Record<string, unknown>> = []
+      // 分级匹配（决策 2026-10-11-cjk-tokenization）：第一遍全量扫描收
+      // 入选楼层（命中数 ≥ 阈值），第二遍按命中数降序出 top-limit——严格
+      // AND（≤3 token）时入选者命中数全相等，稳定排序退化为楼层倒序，
+      // 与旧扫描序一致。
+      const required = tokenThreshold(tokens.length)
+      const qualified: Array<{ label: string; index: number; message: ChatLogIR['messages'][number]; matched: number }> = []
       for (const { label, chat } of sources) {
         for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
           const message = chat.messages[index]!
           if (message.is_system === true || typeof message.mes !== 'string') continue
-          if (!matchesAllTokens(message.mes, tokens)) continue
-          matchCount += 1
-          if (hits.length >= limit || remainingTokens <= 0) continue
-          const excerpt = excerptAround(message.mes, tokens, 400)
-          remainingTokens -= approximateTokens(excerpt)
-          hits.push({
-            chat: label,
-            index,
-            name: message.name,
-            isUser: message.is_user === true,
-            date: typeof message.send_date === 'string' ? message.send_date : '',
-            excerpt,
-            source: { kind: 'chat-history', id: `${label}#${index}` },
-            truncated: excerpt.length < message.mes.length,
-          })
+          const matched = matchedTokenCount(message.mes, tokens)
+          if (matched < required) continue
+          qualified.push({ label, index, message, matched })
         }
+      }
+      qualified.sort((left, right) => right.matched - left.matched)
+
+      let remainingTokens = maxTokens
+      const hits: Array<Record<string, unknown>> = []
+      for (const { label, index, message } of qualified) {
+        if (hits.length >= limit || remainingTokens <= 0) break
+        const excerpt = excerptAround(message.mes, tokens, 400)
+        remainingTokens -= approximateTokens(excerpt)
+        hits.push({
+          chat: label,
+          index,
+          name: message.name,
+          isUser: message.is_user === true,
+          date: typeof message.send_date === 'string' ? message.send_date : '',
+          excerpt,
+          source: { kind: 'chat-history', id: `${label}#${index}` },
+          truncated: excerpt.length < message.mes.length,
+        })
       }
       return {
         hits,
         sourceCount: hits.length,
-        truncated: matchCount > hits.length,
+        truncated: qualified.length > hits.length,
       }
     }),
     tool('memory_search', 'Search memories in the current chat, character, agent, or global scope. Use it to recall established facts, promises, or relationship state before they matter on screen.', {
@@ -699,8 +711,16 @@ function createTools(): ToolDefinition[] {
       if (!snapshot) throw new Error('bound Tavern chat not found')
       const chat = snapshot.chat
 
+      // MVU $schema 写入守卫（C-1）：与 ST 生成/重试共享同一守卫语义（mvu-guard.ts）。
+      // schema 来源：聊天变量树根 $schema → 卡 initialVariables.$schema → 世界书
+      // InitialVariables.$schema（readMvuSchema）。flat store 的名字校验不含 `$`，
+      // $schema 本体永不可结算（guardMvuWrite 对 $schema 路径直接 readonly 拒绝）。
+      // 种子树用于 ro/step 的「当前值」判定：flat store 未写过的路径回退聊天播种值。
+      const guardSchema = readMvuSchema(chat, (await db.getCharacter(binding.character))?.card)
+      const seedTree = readChatVariables(chat)
+
       // 逐项写 chat 作用域变量（variable_set 同款 store 语义）：单项失败（非法
-      // 名、超限值等 store 层校验）只记入 failures，不影响其他项。
+      // 名、超限值等 store 层校验，或 guard 拒绝）只记入 failures，不影响其他项。
       const store = await variableStore()
       const applied: string[] = []
       const failed: Array<{ name: string; error: string }> = []
@@ -710,21 +730,62 @@ function createTools(): ToolDefinition[] {
       const auditChanges: Array<{ name: string; reason?: string; before?: unknown; after?: unknown }> = []
       for (const request of requests) {
         try {
-          const existing = await store.get('chat', binding.chatId, request.name)
+          // store.get 的名字校验先于守卫执行（$schema 等 `$` 开头名本就不可存）：
+          // 抛错时过一遍守卫语义归因——$schema 路径报 guard readonly，其余保留
+          // store 原始报错（既有失败路径）。
+          let existing: Awaited<ReturnType<typeof store.get>> = undefined
+          try {
+            existing = await store.get('chat', binding.chatId, request.name)
+          } catch (nameError) {
+            const screened = guardSchema === undefined ? undefined : guardMvuWrite(guardSchema, request.name, request.value, undefined)
+            failed.push({
+              name: request.name,
+              error: screened !== undefined && !screened.ok
+                ? `guard ${screened.kind}: ${screened.reason}`
+                : (nameError instanceof Error ? nameError.message : String(nameError)),
+            })
+            auditChanges.push({
+              name: request.name,
+              ...(request.reason !== undefined ? { reason: request.reason } : {}),
+            })
+            continue
+          }
+          const current = existing !== undefined ? existing.value : getMvuTreePath(seedTree, request.name)
+          // 守卫先行：clamp/step 调整值落库并记 reason；reject（type-mismatch /
+          // enum-violation / readonly / structure）走既有单项失败路径，可重试。
+          const guarded = guardSchema === undefined ? undefined : guardMvuWrite(guardSchema, request.name, request.value, current)
+          if (guarded !== undefined && !guarded.ok) {
+            failed.push({ name: request.name, error: `guard ${guarded.kind}: ${guarded.reason}` })
+            auditChanges.push({
+              name: request.name,
+              ...(request.reason !== undefined ? { reason: request.reason } : {}),
+            })
+            continue
+          }
           // set 的既有语义：无 expectedRevision 只允许创建，更新必须 CAS。写前
           // 读旧值并以其 revision 作期望（variable_delete 同款习语）；get 与 set
           // 之间的真并发写仍会冲突并落 failures，交给下一次结算重试。
-          const written = await store.set('chat', binding.chatId, request.name, request.value, existing?.revision)
+          const written = await store.set(
+            'chat', binding.chatId, request.name,
+            guarded === undefined ? request.value : guarded.value,
+            existing?.revision,
+          )
           applied.push(request.name)
+          const guardNote = guarded !== undefined && guarded.ok ? guarded.note : undefined
+          const auditReason = [request.reason, guardNote].filter((part): part is string => part !== undefined).join('; ')
           const change: MvuVariableChange = {
             name: request.name,
-            ...(existing !== undefined ? { before: existing.value } : {}),
+            // before 取守卫同源的「当前值」（flat 既有值 ?? 聊天播种树）：回执按
+            // 覆盖后的变量树视角呈现真实前后值（C-1；schema-less 卡播种树为空，
+            // 行为不变）。
+            ...(current !== undefined ? { before: current } : {}),
             after: written.value,
+            ...(guardNote !== undefined ? { reason: guardNote } : {}),
           }
           receiptChanges.push(change)
           auditChanges.push({
             name: request.name,
-            ...(request.reason !== undefined ? { reason: request.reason } : {}),
+            ...(auditReason !== '' ? { reason: auditReason } : {}),
             ...('before' in change ? { before: change.before } : {}),
             after: change.after,
           })
@@ -925,13 +986,28 @@ function variableSummary(snapshot: { name: string; value: unknown; revision: str
   return { name: snapshot.name, value: snapshot.value, revision: snapshot.revision, updatedAt: snapshot.updatedAt }
 }
 
-function tokenizeQuery(value: string): string[] {
-  return [...new Set((value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []))]
+// CJK bigram 分词器单一来源在 tavern-store/src/tokenize.ts（决策
+// 2026-10-11-cjk-tokenization），memory 检索与本工具共用同一 token 语义。
+
+/** 分级匹配（决策 2026-10-11-cjk-tokenization）：≤3 token 保持严格 AND
+ * （专名精确查询语义）；>3 token 走阈值——命中数 ≥ ceil(40%×总数) 才入选。
+ * bigram 展开后严格 AND 对自然语句过严（"雨欠"这类跨词界组合在改写句中
+ * 必然缺失）；40% 而非规格草案的 60%：自举示例"林小雨欠的赌债还了吗"×
+ * "林小雨在赌场欠下赌债"命中 3/7≈43%，60% 会拒掉该目标场景。 */
+const STRICT_TOKEN_MAX = 3
+const TOKEN_MATCH_RATIO = 0.4
+
+function tokenThreshold(total: number): number {
+  return total <= STRICT_TOKEN_MAX ? total : Math.ceil(total * TOKEN_MATCH_RATIO)
 }
 
-function matchesAllTokens(text: string, tokens: string[]): boolean {
+function matchedTokenCount(text: string, tokens: readonly string[]): number {
   const haystack = text.toLocaleLowerCase()
-  return tokens.every((token) => haystack.includes(token))
+  let matched = 0
+  for (const token of tokens) {
+    if (haystack.includes(token)) matched += 1
+  }
+  return matched
 }
 
 function excerptAround(text: string, tokens: string[], maxChars: number): string {
