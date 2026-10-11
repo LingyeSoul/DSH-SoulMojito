@@ -1644,16 +1644,16 @@ function decodeCharx(bytes) {
   const assetPaths = Object.keys(files).filter((p) => p !== "card.json");
   return { card, assetPaths };
 }
-function decodeCharxAsset(bytes, path5) {
+function decodeCharxAsset(bytes, path7) {
   let files;
   try {
     files = unzipSync(bytes);
   } catch (cause) {
     throw new CharxFormatError(`not a valid zip: ${String(cause)}`);
   }
-  const asset = files[path5];
+  const asset = files[path7];
   if (asset === void 0)
-    throw new CharxFormatError(`CHARX has no asset '${path5}'`);
+    throw new CharxFormatError(`CHARX has no asset '${path7}'`);
   return asset;
 }
 function encodeCharx(ir, assets) {
@@ -1868,6 +1868,31 @@ function normalizeModEnables(value) {
     if (flag === true) result[id] = true;
   }
   return result;
+}
+var ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
+function normalizeMemoryEmbedding(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  const record = value;
+  const baseURL = typeof record.baseURL === "string" ? record.baseURL.trim().replace(/\/+$/, "") : "";
+  const model = typeof record.model === "string" ? record.model.trim().slice(0, 200) : "";
+  const apiKeyEnv = typeof record.apiKeyEnv === "string" ? record.apiKeyEnv.trim() : "";
+  if (baseURL === "" || model === "" || !/^https?:\/\//.test(baseURL)) return void 0;
+  if (apiKeyEnv !== "" && !ENV_NAME.test(apiKeyEnv)) return void 0;
+  const dims = clampOptionalInt(record.dims, 1, 8192);
+  const batchSize = clampOptionalInt(record.batchSize, 1, 64);
+  const timeoutMs = clampOptionalInt(record.timeoutMs, 200, 12e4);
+  return {
+    baseURL,
+    apiKeyEnv,
+    model,
+    ...dims !== void 0 ? { dims } : {},
+    ...batchSize !== void 0 ? { batchSize } : {},
+    ...timeoutMs !== void 0 ? { timeoutMs } : {}
+  };
+}
+function clampOptionalInt(value, min, max2) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return void 0;
+  return Math.max(min, Math.min(max2, Math.round(value)));
 }
 var TavernStore = class _TavernStore {
   constructor(root) {
@@ -2347,7 +2372,8 @@ var TavernStore = class _TavernStore {
       compaction: normalizeCompactionOverride(parsed.compaction),
       // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false，只有显式 true 才开。
       modsEnabled: parsed.modsEnabled === true,
-      mods: { enabled: normalizeModEnables(parsed.mods) }
+      mods: { enabled: normalizeModEnables(parsed.mods) },
+      memoryEmbedding: normalizeMemoryEmbedding(parsed.memoryEmbedding)
     };
   }
   async assertChatRevision(file, expectedRevision) {
@@ -2774,10 +2800,170 @@ async function readFiles(root) {
   }
 }
 
-// packages/tavern-store/src/variable.ts
+// packages/tavern-store/src/memory-vectors.ts
 import { createHash as createHash3 } from "node:crypto";
 import { promises as fs4 } from "node:fs";
 import * as path3 from "node:path";
+function memoryContentDigest(model, content) {
+  return createHash3("sha256").update(JSON.stringify([model, content])).digest("hex");
+}
+function encodeVector(values) {
+  return Buffer.from(new Float32Array(values).buffer).toString("base64");
+}
+function decodeVector(base64) {
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length === 0 || bytes.length % 4 !== 0) return [];
+  return Array.from(new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4));
+}
+var SCOPES2 = /* @__PURE__ */ new Set(["turn", "chat", "character", "agent", "global"]);
+var MemoryVectorStore = class _MemoryVectorStore {
+  constructor(root) {
+    this.root = root;
+  }
+  mutationTail = Promise.resolve();
+  static async open(root) {
+    await fs4.mkdir(path3.join(root, "memory-vectors"), { recursive: true });
+    return new _MemoryVectorStore(root);
+  }
+  async get(id, scope, scopeId) {
+    const file = await this.readFile(scope, scopeId);
+    const entry = file?.entries[safeSegment2(id)];
+    if (file === void 0 || entry === void 0) return void 0;
+    return { id, scope, scopeId, ...structuredClone(entry) };
+  }
+  /** 批量写入（同 scope 聚合成单文件原子替换；跨 scope 顺序写）。 */
+  async put(entries) {
+    if (entries.length === 0) return;
+    const byFile = /* @__PURE__ */ new Map();
+    for (const entry of entries) {
+      validate(entry);
+      const key = vectorPathKey(entry.scope, entry.scopeId);
+      const bucket = byFile.get(key) ?? [];
+      bucket.push(entry);
+      byFile.set(key, bucket);
+    }
+    return this.mutate(async () => {
+      for (const [key, bucket] of byFile) {
+        const [scope, scopeId] = key.split("\0");
+        const file = await this.readFile(scope, scopeId) ?? emptyFile(scope, scopeId);
+        for (const entry of bucket) {
+          file.entries[safeSegment2(entry.id)] = { digest: entry.digest, model: entry.model, vector: entry.vector };
+        }
+        file.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+        await this.writeFile(file);
+      }
+    });
+  }
+  async delete(id, scope, scopeId) {
+    return this.mutate(async () => {
+      const file = await this.readFile(scope, scopeId);
+      if (file === void 0) return;
+      const key = safeSegment2(id);
+      if (!Object.prototype.hasOwnProperty.call(file.entries, key)) return;
+      delete file.entries[key];
+      file.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      await this.writeFile(file);
+    });
+  }
+  /** 列出条目；scope/scopeId 缺省时全量枚举（digest/model 供 stale 判定）。 */
+  async list(scope, scopeId) {
+    const result = [];
+    for (const file of await this.listFiles(scope, scopeId)) {
+      for (const [key, entry] of Object.entries(file.entries)) {
+        result.push({ id: decodeURIComponent(key), scope: file.scope, scopeId: file.scopeId, ...entry });
+      }
+    }
+    return result;
+  }
+  async listFiles(scope, scopeId) {
+    const scopes = scope === void 0 ? [...SCOPES2] : [scope];
+    const files = [];
+    for (const eachScope of scopes) {
+      if (scopeId !== void 0) {
+        const file = await this.readFile(eachScope, scopeId);
+        if (file !== void 0) files.push(file);
+        continue;
+      }
+      const scopeRoot = path3.join(this.root, "memory-vectors", eachScope);
+      for (const name2 of await readFiles2(scopeRoot)) {
+        if (!name2.endsWith(".json")) continue;
+        const file = await this.readFileByPath(path3.join(scopeRoot, name2));
+        if (file !== void 0) files.push(file);
+      }
+    }
+    return files;
+  }
+  /** 损坏文件按空缓存处理（可重建缓存，见文件头注释）。 */
+  async readFile(scope, scopeId) {
+    validateScope2(scope, scopeId);
+    return this.readFileByPath(this.filePath(scope, scopeId));
+  }
+  async readFileByPath(file) {
+    try {
+      const parsed = JSON.parse(await fs4.readFile(file, "utf8"));
+      if (parsed === null || typeof parsed !== "object" || typeof parsed.entries !== "object" || parsed.entries === null || Array.isArray(parsed.entries)) return void 0;
+      return parsed;
+    } catch {
+      return void 0;
+    }
+  }
+  async writeFile(file) {
+    const target = this.filePath(file.scope, file.scopeId);
+    await fs4.mkdir(path3.dirname(target), { recursive: true });
+    await writeAtomicText(target, `${JSON.stringify(file)}
+`);
+  }
+  filePath(scope, scopeId) {
+    return path3.join(this.root, "memory-vectors", scope, `${safeSegment2(scopeId)}.json`);
+  }
+  mutate(operation) {
+    const result = this.mutationTail.catch(() => {
+    }).then(operation);
+    this.mutationTail = result.then(() => {
+    }, () => {
+    });
+    return result;
+  }
+};
+function vectorPathKey(scope, scopeId) {
+  return `${scope}\0${scopeId}`;
+}
+function emptyFile(scope, scopeId) {
+  return { version: 1, scope, scopeId, entries: {}, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+}
+function validate(entry) {
+  validateScope2(entry.scope, entry.scopeId);
+  if (typeof entry.id !== "string" || entry.id === "") throw new Error("invalid memory vector id");
+  if (typeof entry.digest !== "string" || entry.digest === "" || typeof entry.model !== "string" || entry.model === "") {
+    throw new Error("invalid memory vector digest/model");
+  }
+  decodeVector(entry.vector);
+}
+function validateScope2(scope, scopeId) {
+  if (!SCOPES2.has(scope)) throw new Error(`invalid memory vector scope '${scope}'`);
+  if (typeof scopeId !== "string" || scopeId.trim() === "") throw new Error("memory vector scopeId is required");
+  safeSegment2(scopeId);
+}
+function safeSegment2(value) {
+  if (typeof value !== "string" || value === "" || value === "." || value === ".." || /[\\/\0]/.test(value)) {
+    throw new Error("invalid memory vector path segment");
+  }
+  return encodeURIComponent(value);
+}
+async function readFiles2(root) {
+  try {
+    const entries = await fs4.readdir(root, { withFileTypes: true });
+    return entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
+  } catch (cause) {
+    if (cause.code === "ENOENT") return [];
+    throw cause;
+  }
+}
+
+// packages/tavern-store/src/variable.ts
+import { createHash as createHash4 } from "node:crypto";
+import { promises as fs5 } from "node:fs";
+import * as path4 from "node:path";
 var VariableRevisionConflictError = class extends Error {
   constructor(name2, expectedRevision, actualRevision) {
     super(`Variable '${name2}' changed in another operation.`);
@@ -2788,7 +2974,7 @@ var VariableRevisionConflictError = class extends Error {
   }
   code = "VARIABLE_REVISION_CONFLICT";
 };
-var SCOPES2 = /* @__PURE__ */ new Set(["turn", "chat", "character", "agent", "global"]);
+var SCOPES3 = /* @__PURE__ */ new Set(["turn", "chat", "character", "agent", "global"]);
 var NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
 var MAX_VALUE_BYTES = 32 * 1024;
 var MAX_SCOPE_BYTES = 256 * 1024;
@@ -2799,22 +2985,22 @@ var VariableStore = class _VariableStore {
   }
   mutationTail = Promise.resolve();
   static async open(root) {
-    await fs4.mkdir(path3.join(root, "variables"), { recursive: true });
+    await fs5.mkdir(path4.join(root, "variables"), { recursive: true });
     return new _VariableStore(root);
   }
   async get(scope, scopeId, name2) {
-    validateScope2(scope, scopeId);
+    validateScope3(scope, scopeId);
     validateName(name2);
     const file = await this.readFile(scope, scopeId);
     if (file === void 0 || !Object.prototype.hasOwnProperty.call(file.values, name2)) return void 0;
     return snapshot(file, name2);
   }
   async set(scope, scopeId, name2, value, expectedRevision) {
-    validateScope2(scope, scopeId);
+    validateScope3(scope, scopeId);
     validateName(name2);
     validateValue(value);
     return this.mutate(async () => {
-      const file = await this.readFile(scope, scopeId) ?? emptyFile(scope, scopeId);
+      const file = await this.readFile(scope, scopeId) ?? emptyFile2(scope, scopeId);
       const actual = file.revisions[name2];
       if (actual !== expectedRevision) throw new VariableRevisionConflictError(name2, expectedRevision, actual);
       const next = applyChanges(file, [{ name: name2, value }]);
@@ -2823,7 +3009,7 @@ var VariableStore = class _VariableStore {
     });
   }
   async patch(scope, scopeId, changes, expectedRevision) {
-    validateScope2(scope, scopeId);
+    validateScope3(scope, scopeId);
     if (!Array.isArray(changes) || changes.length === 0) throw new Error("variable patch requires changes");
     const normalized = changes.map((change) => {
       validateName(change.name);
@@ -2831,7 +3017,7 @@ var VariableStore = class _VariableStore {
       return change;
     });
     return this.mutate(async () => {
-      const file = await this.readFile(scope, scopeId) ?? emptyFile(scope, scopeId);
+      const file = await this.readFile(scope, scopeId) ?? emptyFile2(scope, scopeId);
       const fileRevision = revisionOfFile(file);
       if (expectedRevision !== void 0 && expectedRevision !== fileRevision) {
         throw new VariableRevisionConflictError("*", expectedRevision, fileRevision);
@@ -2848,7 +3034,7 @@ var VariableStore = class _VariableStore {
     });
   }
   async delete(scope, scopeId, name2, expectedRevision) {
-    validateScope2(scope, scopeId);
+    validateScope3(scope, scopeId);
     validateName(name2);
     await this.mutate(async () => {
       const file = await this.readFile(scope, scopeId);
@@ -2863,7 +3049,7 @@ var VariableStore = class _VariableStore {
     });
   }
   async list(scope, scopeId, prefix = "", limit = MAX_LIST) {
-    validateScope2(scope, scopeId);
+    validateScope3(scope, scopeId);
     if (typeof prefix !== "string" || prefix.length > 64) throw new Error("invalid variable prefix");
     if (!Number.isInteger(limit) || limit < 1) throw new Error("variable limit must be a positive integer");
     const file = await this.readFile(scope, scopeId);
@@ -2872,14 +3058,14 @@ var VariableStore = class _VariableStore {
   }
   /** Drop the whole scope file; used for turn-scoped scratch state that expires at turn end. */
   async clear(scope, scopeId) {
-    validateScope2(scope, scopeId);
+    validateScope3(scope, scopeId);
     await this.mutate(async () => {
-      await fs4.rm(this.filePath(scope, scopeId), { force: true });
+      await fs5.rm(this.filePath(scope, scopeId), { force: true });
     });
   }
   async readFile(scope, scopeId) {
     try {
-      const parsed = JSON.parse(await fs4.readFile(this.filePath(scope, scopeId), "utf8"));
+      const parsed = JSON.parse(await fs5.readFile(this.filePath(scope, scopeId), "utf8"));
       validateFile(parsed, scope, scopeId);
       return parsed;
     } catch (cause) {
@@ -2892,15 +3078,15 @@ var VariableStore = class _VariableStore {
   }
   async writeFile(file) {
     const target = this.filePath(file.scope, file.scopeId);
-    await fs4.mkdir(path3.dirname(target), { recursive: true });
+    await fs5.mkdir(path4.dirname(target), { recursive: true });
     const text = `${JSON.stringify(file)}
 `;
     if (Buffer.byteLength(text, "utf8") > MAX_SCOPE_BYTES) throw new Error("variable scope exceeds size limit");
     await writeAtomicText(target, text);
   }
   filePath(scope, scopeId) {
-    validateScope2(scope, scopeId);
-    return path3.join(this.root, "variables", scope, `${safeSegment2(scopeId)}.json`);
+    validateScope3(scope, scopeId);
+    return path4.join(this.root, "variables", scope, `${safeSegment3(scopeId)}.json`);
   }
   mutate(operation) {
     const result = this.mutationTail.catch(() => {
@@ -2911,7 +3097,7 @@ var VariableStore = class _VariableStore {
     return result;
   }
 };
-function emptyFile(scope, scopeId) {
+function emptyFile2(scope, scopeId) {
   return { version: 1, scope, scopeId, values: {}, revisions: {}, updatedAt: (/* @__PURE__ */ new Date(0)).toISOString() };
 }
 function applyChanges(file, changes) {
@@ -2934,10 +3120,10 @@ function snapshot(file, name2) {
   };
 }
 function revisionOfValue(value) {
-  return createHash3("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+  return createHash4("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
 function revisionOfFile(file) {
-  return createHash3("sha256").update(JSON.stringify(file.values)).digest("hex").slice(0, 16);
+  return createHash4("sha256").update(JSON.stringify(file.values)).digest("hex").slice(0, 16);
 }
 function validateFile(file, scope, scopeId) {
   if (file.version !== 1 || file.scope !== scope || file.scopeId !== scopeId || typeof file.values !== "object" || file.values === null || typeof file.revisions !== "object" || file.revisions === null) throw new Error("invalid variable file");
@@ -2947,10 +3133,10 @@ function validateFile(file, scope, scopeId) {
     if (typeof file.revisions[name2] !== "string" || file.revisions[name2] === "") throw new Error("invalid variable revision");
   }
 }
-function validateScope2(scope, scopeId) {
-  if (!SCOPES2.has(scope)) throw new Error(`invalid variable scope '${scope}'`);
+function validateScope3(scope, scopeId) {
+  if (!SCOPES3.has(scope)) throw new Error(`invalid variable scope '${scope}'`);
   if (typeof scopeId !== "string" || scopeId.trim() === "") throw new Error("variable scopeId is required");
-  safeSegment2(scopeId);
+  safeSegment3(scopeId);
 }
 function validateName(name2) {
   if (typeof name2 !== "string" || !NAME.test(name2)) throw new Error(`invalid variable name '${String(name2)}'`);
@@ -2963,18 +3149,18 @@ function validateValue(value) {
   if (Array.isArray(value)) value.forEach(validateValue);
   else if (typeof value === "object" && value !== null) Object.values(value).forEach(validateValue);
 }
-function safeSegment2(value) {
+function safeSegment3(value) {
   if (value === "." || value === ".." || /[\\/\0]/.test(value)) throw new Error("invalid variable path segment");
   return encodeURIComponent(value);
 }
 
 // packages/tavern-store/src/novel.ts
-import { createHash as createHash4, randomBytes } from "node:crypto";
+import { createHash as createHash5, randomBytes } from "node:crypto";
 var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("hex");
 
 // packages/tavern-store/src/scripts.ts
-import { promises as fs5 } from "node:fs";
-import * as path4 from "node:path";
+import { promises as fs6 } from "node:fs";
+import * as path5 from "node:path";
 function normalizeScriptProgress(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
   const { scriptName, chunkIndex, alignedAt, lastNote } = value;
@@ -2994,12 +3180,12 @@ function boundScriptOf(card) {
   return scriptId;
 }
 async function getScript(dir, name2) {
-  return readScriptRecord(path4.join(dir, "scripts", safeScriptName(name2), "script.json"));
+  return readScriptRecord(path5.join(dir, "scripts", safeScriptName(name2), "script.json"));
 }
 async function readScriptRecord(file) {
   let bytes;
   try {
-    bytes = await fs5.readFile(file);
+    bytes = await fs6.readFile(file);
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -4030,10 +4216,10 @@ async function collectWorldInfoBooks(db, state, characterName, character) {
 
 // packages/plugin/src/dsh-home.ts
 import { homedir } from "node:os";
-import { join as join5, resolve } from "node:path";
+import { join as join6, resolve } from "node:path";
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
-  return join5(resolve(configured || join5(homedir(), ".dsh")), ...segments);
+  return join6(resolve(configured || join6(homedir(), ".dsh")), ...segments);
 }
 
 // packages/plugin/src/cross-bundle-events.ts
@@ -4088,6 +4274,358 @@ function formatGuidesBlock(guides) {
 var guidesChanged = createGlobalListenerRegistry("dsh-tavern:guides-changed-listeners");
 function onGuidesChanged(listener) {
   return guidesChanged.on(listener);
+}
+
+// packages/plugin/src/memory-embed.ts
+import { promises as fs7 } from "node:fs";
+import * as path6 from "node:path";
+var EMBED_BREAKER_MS = 6e4;
+var EMBED_RETRY_BACKOFF_MS = 250;
+var EMBED_INPUT_MAX_CHARS = 6e3;
+var QUERY_MEMO_LIMIT = 32;
+function emptyStatus() {
+  return { version: 1, breakerUntil: 0 };
+}
+var EmbedHttpError = class extends Error {
+  constructor(kind, message, status, retriable = false) {
+    super(message);
+    this.kind = kind;
+    this.status = status;
+    this.retriable = retriable;
+    this.name = "EmbedHttpError";
+  }
+};
+function embedStatusPath(root) {
+  return path6.join(root, "memory-vectors", "status.json");
+}
+async function readEmbedStatus(root) {
+  try {
+    const parsed = JSON.parse(await fs7.readFile(embedStatusPath(root), "utf8"));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return emptyStatus();
+    return {
+      version: 1,
+      ...typeof parsed.model === "string" && parsed.model !== "" ? { model: parsed.model } : {},
+      ...typeof parsed.dims === "number" && Number.isFinite(parsed.dims) && parsed.dims > 0 ? { dims: parsed.dims } : {},
+      ...typeof parsed.lastError === "string" && parsed.lastError !== "" ? { lastError: parsed.lastError } : {},
+      ...typeof parsed.lastErrorAt === "string" ? { lastErrorAt: parsed.lastErrorAt } : {},
+      ...typeof parsed.lastSuccessAt === "string" ? { lastSuccessAt: parsed.lastSuccessAt } : {},
+      breakerUntil: typeof parsed.breakerUntil === "number" && Number.isFinite(parsed.breakerUntil) ? parsed.breakerUntil : 0
+    };
+  } catch {
+    return emptyStatus();
+  }
+}
+async function writeEmbedStatus(root, status) {
+  await fs7.mkdir(path6.dirname(embedStatusPath(root)), { recursive: true });
+  await writeAtomicText(embedStatusPath(root), `${JSON.stringify(status)}
+`);
+}
+function embedBreakerOpen(status, now = Date.now()) {
+  return now < status.breakerUntil;
+}
+async function recordEmbedFailure(root, message) {
+  const status = await readEmbedStatus(root);
+  await writeEmbedStatus(root, {
+    ...status,
+    lastError: message.slice(0, 300),
+    lastErrorAt: (/* @__PURE__ */ new Date()).toISOString(),
+    breakerUntil: Date.now() + EMBED_BREAKER_MS
+  });
+}
+async function recordEmbedSuccess(root, info) {
+  const status = await readEmbedStatus(root);
+  await writeEmbedStatus(root, {
+    ...status,
+    model: info.model,
+    dims: info.dims,
+    lastSuccessAt: (/* @__PURE__ */ new Date()).toISOString(),
+    breakerUntil: 0
+  });
+}
+function resolveApiKey(config) {
+  if (config.apiKeyEnv === "") return void 0;
+  const value = process.env[config.apiKeyEnv];
+  if (value === void 0) return void 0;
+  const trimmed = value.trim();
+  return trimmed === "" ? void 0 : trimmed;
+}
+function expectedDims(config, status) {
+  return config.dims ?? status.dims;
+}
+async function embedTexts(config, texts, options = {}) {
+  if (texts.length === 0) return [];
+  const batchSize = config.batchSize ?? 16;
+  const timeoutMs = config.timeoutMs ?? 1e4;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const vectors = [];
+  for (let start = 0; start < texts.length; start += batchSize) {
+    const batch = texts.slice(start, start + batchSize);
+    vectors.push(...await embedBatchWithRetry(config, batch, { ...options, timeoutMs, fetchImpl }));
+  }
+  return vectors;
+}
+async function embedBatchWithRetry(config, batch, options) {
+  let lastError;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await embedBatchOnce(config, batch, options);
+    } catch (cause) {
+      const error = cause instanceof EmbedHttpError ? cause : new EmbedHttpError("network", cause instanceof Error ? cause.message : String(cause), void 0, true);
+      lastError = error;
+      if (!error.retriable || attempt >= 2) throw lastError;
+      await delay(EMBED_RETRY_BACKOFF_MS);
+    }
+  }
+}
+async function embedBatchOnce(config, batch, options) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+  let response;
+  try {
+    response = await options.fetchImpl(`${config.baseURL}/embeddings`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        // 免密反代：无 key 时不带 Authorization 头（不是带空串）。
+        ...resolveApiKey(config) !== void 0 ? { authorization: `Bearer ${resolveApiKey(config)}` } : {}
+      },
+      body: JSON.stringify({ model: config.model, input: batch }),
+      signal: controller.signal
+    });
+  } catch (cause) {
+    if (controller.signal.aborted) {
+      throw new EmbedHttpError("timeout", `embed request timed out after ${options.timeoutMs}ms`, void 0, true);
+    }
+    throw new EmbedHttpError("network", cause instanceof Error ? cause.message : String(cause), void 0, true);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!response.ok) {
+    const retriable = response.status === 429 || response.status >= 500;
+    const detail = await response.text().then((text) => text.slice(0, 200)).catch(() => "");
+    throw new EmbedHttpError(
+      "http",
+      `embed endpoint returned ${response.status}${detail === "" ? "" : `: ${detail}`}`,
+      response.status,
+      retriable
+    );
+  }
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (cause) {
+    throw new EmbedHttpError("payload", `embed response is not JSON: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+  return parseEmbeddings(payload, batch.length, options.expectedDims);
+}
+function parseEmbeddings(payload, count, expectedDims2) {
+  if (payload === null || typeof payload !== "object" || !Array.isArray(payload.data)) {
+    throw new EmbedHttpError("payload", "embed response has no data array");
+  }
+  const data = payload.data;
+  if (data.length !== count) {
+    throw new EmbedHttpError("payload", `embed response count mismatch: sent ${count}, received ${data.length}`);
+  }
+  const items = data.map((item) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      throw new EmbedHttpError("payload", "embed response item is not an object");
+    }
+    return item;
+  });
+  const ordered = items.every((item) => typeof item.index === "number") ? items.slice().sort((left, right) => left.index - right.index) : items;
+  const vectors = ordered.map((item) => {
+    if (!Array.isArray(item.embedding) || item.embedding.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+      throw new EmbedHttpError("payload", "embed response embedding is not a finite number array");
+    }
+    return item.embedding;
+  });
+  const dims = vectors[0]?.length ?? 0;
+  if (dims === 0 || vectors.some((vector) => vector.length !== dims)) {
+    throw new EmbedHttpError("dims", `embed response dimensions inconsistent (batch dims: ${vectors.map((vector) => vector.length).join(",")})`);
+  }
+  if (expectedDims2 !== void 0 && dims !== expectedDims2) {
+    throw new EmbedHttpError("dims", `embed response has ${dims} dims, expected ${expectedDims2}`);
+  }
+  return vectors;
+}
+function delay(ms) {
+  return new Promise((resolve2) => setTimeout(resolve2, ms));
+}
+var queryVectorMemo = /* @__PURE__ */ new Map();
+function memoKey(config, query) {
+  return `${config.baseURL}\0${config.model}\0${query}`;
+}
+function memoizedQueryVector(config, query) {
+  const key = memoKey(config, query);
+  const vector = queryVectorMemo.get(key);
+  if (vector === void 0) return void 0;
+  queryVectorMemo.delete(key);
+  queryVectorMemo.set(key, vector);
+  return vector;
+}
+function storeMemoizedQueryVector(config, query, vector) {
+  const key = memoKey(config, query);
+  queryVectorMemo.delete(key);
+  queryVectorMemo.set(key, vector);
+  while (queryVectorMemo.size > QUERY_MEMO_LIMIT) {
+    const oldest = queryVectorMemo.keys().next().value;
+    if (oldest === void 0) break;
+    queryVectorMemo.delete(oldest);
+  }
+}
+
+// packages/plugin/src/memory-hybrid.ts
+var RRF_K = 60;
+var HYBRID_BACKFILL_LIMIT = 32;
+var HYBRID_POOL_PER_SCOPE = 50;
+function rrfFuse(lexicalOrder, denseOrder, k = RRF_K) {
+  const scores = /* @__PURE__ */ new Map();
+  const add = (id, rank) => {
+    scores.set(id, (scores.get(id) ?? 0) + 1 / (k + rank));
+  };
+  lexicalOrder.forEach((id, index) => add(id, index + 1));
+  denseOrder.forEach((id, index) => add(id, index + 1));
+  return scores;
+}
+function cosineSimilarity(left, right) {
+  if (left.length === 0 || left.length !== right.length) return 0;
+  let dot = 0;
+  let normLeft = 0;
+  let normRight = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+    dot += a * b;
+    normLeft += a * a;
+    normRight += b * b;
+  }
+  if (normLeft === 0 || normRight === 0) return 0;
+  return dot / (Math.sqrt(normLeft) * Math.sqrt(normRight));
+}
+async function hybridMemorySearch(input) {
+  const { root, config, store: store3, vectorStore, query, scopes, limit, maxTokens, fetchImpl } = input;
+  const status = await readEmbedStatus(root);
+  if (embedBreakerOpen(status)) return void 0;
+  let queryVector = memoizedQueryVector(config, query);
+  if (queryVector === void 0) {
+    try {
+      const [vector] = await embedTexts(config, [query], { expectedDims: expectedDims(config, status), fetchImpl });
+      if (vector === void 0) return void 0;
+      queryVector = vector;
+      storeMemoizedQueryVector(config, query, vector);
+      await recordEmbedSuccess(root, { model: config.model, dims: vector.length });
+    } catch (cause) {
+      await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
+      return void 0;
+    }
+  }
+  const pool = (await Promise.all(scopes.map(
+    ({ scope, scopeId }) => store3.search({ query, scope, scopeId, limit: HYBRID_POOL_PER_SCOPE })
+  ))).flat();
+  pool.sort((left, right) => right.score - left.score || left.record.id.localeCompare(right.record.id));
+  const lexicalRank = new Map(pool.map((hit, index) => [hit.record.id, index]));
+  const entries = /* @__PURE__ */ new Map();
+  for (const { scope, scopeId } of scopes) {
+    for (const entry of await vectorStore.list(scope, scopeId)) {
+      entries.set(vectorKey(entry.scope, entry.scopeId, entry.id), entry);
+    }
+  }
+  const fresh = /* @__PURE__ */ new Map();
+  const stale = [];
+  for (const hit of pool) {
+    const entry = entries.get(vectorKey(hit.record.scope, hit.record.scopeId, hit.record.id));
+    if (entry !== void 0 && entry.model === config.model && entry.digest === memoryContentDigest(config.model, hit.record.content)) {
+      fresh.set(hit.record.id, entry.vector);
+    } else {
+      stale.push(hit);
+    }
+  }
+  if (stale.length > 0) {
+    const targets = stale.slice(0, HYBRID_BACKFILL_LIMIT);
+    try {
+      const vectors = await embedTexts(
+        config,
+        targets.map((hit) => hit.record.content.slice(0, EMBED_INPUT_MAX_CHARS)),
+        { expectedDims: queryVector?.length, fetchImpl }
+      );
+      await vectorStore.put(targets.map((hit, index) => ({
+        id: hit.record.id,
+        scope: hit.record.scope,
+        scopeId: hit.record.scopeId,
+        digest: memoryContentDigest(config.model, hit.record.content),
+        model: config.model,
+        vector: encodeVector(vectors[index] ?? [])
+      })));
+      targets.forEach((hit, index) => {
+        if (vectors[index] !== void 0) fresh.set(hit.record.id, encodeVector(vectors[index]));
+      });
+    } catch (cause) {
+      await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+  if (fresh.size === 0) return void 0;
+  const denseOrder = [...fresh.entries()].map(([id, base64]) => ({ id, similarity: cosineSimilarity(queryVector, decodeVector(base64)) })).sort((left, right) => right.similarity - left.similarity || left.id.localeCompare(right.id));
+  const rrf = rrfFuse(
+    pool.map((hit) => hit.record.id),
+    denseOrder.map((item) => item.id)
+  );
+  const ordered = pool.slice().sort((left, right) => {
+    const rrfLeft = rrf.get(left.record.id) ?? 0;
+    const rrfRight = rrf.get(right.record.id) ?? 0;
+    if (rrfLeft !== rrfRight) return rrfRight - rrfLeft;
+    return (lexicalRank.get(left.record.id) ?? 0) - (lexicalRank.get(right.record.id) ?? 0) || left.record.id.localeCompare(right.record.id);
+  }).slice(0, limit);
+  return applyTokenBudget(ordered, maxTokens);
+}
+async function embedMemoryRecord(input) {
+  const { root, config, vectorStore, record, fetchImpl } = input;
+  const status = await readEmbedStatus(root);
+  if (embedBreakerOpen(status)) return false;
+  try {
+    const [vector] = await embedTexts(
+      config,
+      [record.content.slice(0, EMBED_INPUT_MAX_CHARS)],
+      { expectedDims: expectedDims(config, status), fetchImpl }
+    );
+    if (vector === void 0) return false;
+    await recordEmbedSuccess(root, { model: config.model, dims: vector.length });
+    await vectorStore.put([{
+      id: record.id,
+      scope: record.scope,
+      scopeId: record.scopeId,
+      digest: memoryContentDigest(config.model, record.content),
+      model: config.model,
+      vector: encodeVector(vector)
+    }]);
+    return true;
+  } catch (cause) {
+    await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
+    return false;
+  }
+}
+function vectorKey(scope, scopeId, id) {
+  return `${scope}\0${scopeId}\0${id}`;
+}
+function applyTokenBudget(hits, maxTokens) {
+  const result = [];
+  let used = 0;
+  for (const hit of hits) {
+    const words = Math.max(1, Math.ceil(hit.record.content.length / 4));
+    if (used + words <= maxTokens) {
+      used += words;
+      result.push(hit);
+      continue;
+    }
+    const remaining = Math.max(0, maxTokens - used);
+    if (remaining === 0) break;
+    result.push({
+      ...hit,
+      record: { ...hit.record, content: hit.record.content.slice(0, Math.max(1, remaining * 4)).trimEnd() },
+      truncated: true
+    });
+    break;
+  }
+  return result;
 }
 
 // packages/tavern-pipeline/src/pipeline.ts
@@ -4441,7 +4979,7 @@ function clampNumber(value, min, max2) {
   if (max2 !== void 0 && out > max2) out = max2;
   return out;
 }
-function validateValue2(node, value, current, path5, notes) {
+function validateValue2(node, value, current, path7, notes) {
   if (node.ro === true && !mvuValuesEqual(value, current)) {
     return { ok: false, kind: "readonly", reason: "read-only field" };
   }
@@ -4453,7 +4991,7 @@ function validateValue2(node, value, current, path5, notes) {
     const currentItems = Array.isArray(current) ? current : [];
     const out = [];
     for (let i = 0; i < value.length; i++) {
-      const result = validateValue2(node.item, value[i], currentItems[i], `${path5}[${i}]`, notes);
+      const result = validateValue2(node.item, value[i], currentItems[i], `${path7}[${i}]`, notes);
       if (!result.ok) return result;
       out.push(result.value);
     }
@@ -4471,7 +5009,7 @@ function validateValue2(node, value, current, path5, notes) {
       if (child === void 0) {
         return { ok: false, kind: "structure", reason: `key '${key}' is not in the schema template` };
       }
-      const result = validateValue2(child, value[key], currentObject[key], path5 === "" ? key : `${path5}.${key}`, notes);
+      const result = validateValue2(child, value[key], currentObject[key], path7 === "" ? key : `${path7}.${key}`, notes);
       if (!result.ok) return result;
       next[key] = result.value;
     }
@@ -4496,21 +5034,21 @@ function validateValue2(node, value, current, path5, notes) {
       const delta = out - current;
       const capped = Math.max(-node.step, Math.min(node.step, delta));
       if (capped !== delta) {
-        notes.push(`${path5}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
+        notes.push(`${path7}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
         out = current + capped;
       }
     }
     const clamped = clampNumber(out, node.min, node.max);
     if (clamped !== out) {
-      notes.push(`${path5}: guard clamp: ${out} -> ${clamped}`);
+      notes.push(`${path7}: guard clamp: ${out} -> ${clamped}`);
       out = clamped;
     }
     return { ok: true, value: out, notes };
   }
   return { ok: true, value, notes };
 }
-function guardMvuWrite(schema, path5, value, current) {
-  const segments = path5.split(".").filter((segment) => segment !== "");
+function guardMvuWrite(schema, path7, value, current) {
+  const segments = path7.split(".").filter((segment) => segment !== "");
   if (segments.length === 0) return { ok: true, value };
   if (segments[0] === "$schema") {
     return { ok: false, kind: "readonly", reason: "the $schema subtree is the declared guard contract and cannot be settled" };
@@ -4566,9 +5104,9 @@ function guardMvuWrite(schema, path5, value, current) {
   if (!result.ok) return result;
   return { ok: true, value: result.value, ...result.notes.length > 0 ? { note: result.notes.join("; ") } : {} };
 }
-function getMvuTreePath(tree, path5) {
+function getMvuTreePath(tree, path7) {
   let cursor = tree;
-  for (const segment of path5.split(".")) {
+  for (const segment of path7.split(".")) {
     if (!isPlainObject(cursor)) return void 0;
     cursor = cursor[segment];
   }
@@ -4619,8 +5157,8 @@ function appendMvuReceipt(chat, receipt) {
 }
 
 // packages/plugin/src/agent-tavern/projector.ts
-import { promises as fs6 } from "node:fs";
-import { join as join6 } from "node:path";
+import { promises as fs8 } from "node:fs";
+import { join as join8 } from "node:path";
 
 // packages/tavern-lore/lib/types.js
 var MESSAGE_BOUNDARY2 = "";
@@ -4895,13 +5433,13 @@ for (const spec of [
 // packages/plugin/src/agent-tavern/projector.ts
 var mvuAuditTail = Promise.resolve();
 function mvuAuditPath(tavernRoot) {
-  return join6(tavernRoot, "mvu", "audit.jsonl");
+  return join8(tavernRoot, "mvu", "audit.jsonl");
 }
 async function appendMvuAudit(tavernRoot, record) {
   const write = mvuAuditTail.catch(() => {
   }).then(async () => {
-    await fs6.mkdir(join6(tavernRoot, "mvu"), { recursive: true });
-    await fs6.appendFile(mvuAuditPath(tavernRoot), `${JSON.stringify(record)}
+    await fs8.mkdir(join8(tavernRoot, "mvu"), { recursive: true });
+    await fs8.appendFile(mvuAuditPath(tavernRoot), `${JSON.stringify(record)}
 `, "utf8");
   });
   mvuAuditTail = write.then(() => {
@@ -5783,6 +6321,7 @@ var KERNEL = [
 ].join("\n");
 var tavernStorePromise;
 var memoryStorePromise;
+var memoryVectorStorePromise;
 var variableStorePromise;
 function apply(ctx) {
   ctx.systemPrompt?.section?.({
@@ -5970,7 +6509,7 @@ function createTools() {
         truncated: qualified.length > hits.length
       };
     }),
-    tool("memory_search", "Search memories in the current chat, character, agent, or global scope. Use it to recall established facts, promises, or relationship state before they matter on screen.", {
+    tool("memory_search", "Search memories in the current chat, character, agent, or global scope with hybrid lexical and semantic retrieval (semantic requires an embedding endpoint; without one it is lexical only). Use it to recall established facts, promises, or relationship state before they matter on screen.", {
       query: { type: "string", required: true, description: "Lexical search query." },
       scope: memoryScopeParameter(false),
       limit: { type: "integer", description: "Maximum results, capped at 20." },
@@ -5979,13 +6518,27 @@ function createTools() {
       const binding = await bindingFor(exec);
       const store3 = await memoryStore();
       const scopes = selectedMemoryScopes(args.scope, binding);
-      const hits = (await Promise.all(scopes.map(({ scope, scopeId }) => store3.search({
-        query: stringArg(args.query),
+      const limit = clampInt(args.limit, 1, 20, 10);
+      const maxTokens = clampInt(args.maxTokens, 1, 2e3, 1200);
+      const query = stringArg(args.query);
+      const lexicalHits = async () => (await Promise.all(scopes.map(({ scope, scopeId }) => store3.search({
+        query,
         scope,
         scopeId,
-        limit: clampInt(args.limit, 1, 20, 10),
-        maxTokens: clampInt(args.maxTokens, 1, 2e3, 1200)
-      })))).flat().sort((left, right) => right.score - left.score || left.record.id.localeCompare(right.record.id)).slice(0, clampInt(args.limit, 1, 20, 10));
+        limit,
+        maxTokens
+      })))).flat().sort((left, right) => right.score - left.score || left.record.id.localeCompare(right.record.id)).slice(0, limit);
+      const config = await memoryEmbeddingConfig();
+      const hits = config === void 0 ? await lexicalHits() : await hybridMemorySearch({
+        root: dshHomePath("tavern"),
+        config,
+        store: store3,
+        vectorStore: await memoryVectorStore(),
+        query,
+        scopes,
+        limit,
+        maxTokens
+      }) ?? await lexicalHits();
       return {
         hits: hits.map((hit) => ({
           id: hit.record.id,
@@ -6040,6 +6593,7 @@ function createTools() {
         ...expiresAt === void 0 ? {} : { expiresAt },
         source: { kind: "agent-tool", sessionId: binding.agentId, chatId: binding.chatId, character: binding.character }
       });
+      await embedWrittenMemory(record);
       return { id: record.id, scope: record.scope, revision: record.revision, source: record.source };
     }),
     tool("memory_update", "Update an existing memory by id and expected revision; omitted fields keep their current value.", {
@@ -6074,6 +6628,7 @@ function createTools() {
         ...expiresAt === void 0 ? {} : { expiresAt },
         source: { kind: "agent-tool", sessionId: binding.agentId, chatId: binding.chatId, character: binding.character }
       }, stringArg(args.expectedRevision));
+      await embedWrittenMemory(record);
       return { id: record.id, scope: record.scope, revision: record.revision, source: record.source };
     }),
     tool("memory_forget", "Soft-delete an existing memory by id and expected revision; the audit trail is kept.", {
@@ -6089,6 +6644,10 @@ function createTools() {
       const previous = await store3.read(id, target.scope, target.scopeId, true);
       if (previous === void 0) return { id, scope: target.scope, found: false };
       await store3.forget(id, target.scope, target.scopeId, stringArg(args.expectedRevision));
+      try {
+        await (await memoryVectorStore()).delete(id, target.scope, target.scopeId);
+      } catch {
+      }
       return { id, scope: target.scope, found: true };
     }),
     tool("variable_get", "Read a typed variable from the current chat, character, agent, global, or turn scope.", {
@@ -6753,6 +7312,21 @@ function tavernStore() {
 }
 function memoryStore() {
   return memoryStorePromise ??= MemoryStore.open(dshHomePath("tavern"));
+}
+function memoryVectorStore() {
+  return memoryVectorStorePromise ??= MemoryVectorStore.open(dshHomePath("tavern"));
+}
+async function memoryEmbeddingConfig() {
+  const state = await (await tavernStore()).getState();
+  return normalizeMemoryEmbedding(state.memoryEmbedding);
+}
+async function embedWrittenMemory(record) {
+  try {
+    const config = await memoryEmbeddingConfig();
+    if (config === void 0) return;
+    await embedMemoryRecord({ root: dshHomePath("tavern"), config, vectorStore: await memoryVectorStore(), record });
+  } catch {
+  }
 }
 function variableStore() {
   return variableStorePromise ??= VariableStore.open(dshHomePath("tavern"));

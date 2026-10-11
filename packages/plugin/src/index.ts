@@ -33,6 +33,7 @@ import {
   TavernStore,
   VariableStore,
   isValidNovelId,
+  normalizeMemoryEmbedding,
   summarizeNovel,
   totalEffectiveCharacters,
   validateCreateConfig,
@@ -42,7 +43,7 @@ import {
   type TavernModelSelection,
   type WriterMode,
 } from '../../tavern-store/src/index.js'
-import { describeHostShape, hostPluginMessageSource, hostSessionFormatVersion, readSessionEvents, sessionEvents, type HostSessionLog } from '../../bind/src/index.js'
+import { confirmSessionAppend, describeHostShape, hostPluginMessageSource, hostSessionFormatVersion, landedPlanAppends, readSessionEvents, sessionEvents, type HostSessionLog } from '../../bind/src/index.js'
 import {
   AGENT_TAVERN_PRESET_ID,
   bootstrapAgentTavernCapabilities,
@@ -94,6 +95,14 @@ import { formatRewriteBlock, optionalFeedback } from './rewrite.js'
 import { hostPromptSafe } from './prompt-safety.js'
 import { deleteOriginalSnapshot, moveOriginalSnapshot, saveOriginalSnapshot } from '../../tavern-store/src/index.js'
 import { dshHomePath } from './dsh-home.js'
+// 记忆语义检索 embed 运行时（提案 0016）：探针与状态 sidecar 读写；HTTP 编排
+// 与熔断语义见 memory-embed.ts 文件头（跨 bundle 状态走文件）。
+import {
+  clearEmbedStatus,
+  embedBreakerOpen,
+  embedProbe,
+  readEmbedStatus,
+} from './memory-embed.js'
 import { TavernUpdateService, updateChangelog } from './update/service.js'
 // Mod 宿主（提案 0015 §3.2 P1）：扫描 <tavern>/mods/、三层开关裁决、装载与
 // 审计；api 适配层（logger/storage/assets/events/timers/http）在 mods/host.ts。
@@ -340,14 +349,29 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
           delete sessionBindings[agent.id]
           return { sessionBindings }
         })
-        agent.session.append('user/message', createMessage({
-          role: 'user',
-          content: [{ type: 'text', text: 'Tavern roleplay mode closed.' }],
-          source: hostPluginMessageSource(agent.session, {
-            form: 'notice',
-            summary: 'Tavern closed',
-          }),
-        }), { surfaceOp: 'append' })
+        // D-2 confirmable write（决策 2026-10-11-confirmable-session-writes）：关闭
+        // marker 是「必须成立」写入——会话归档后客户端对 Tavern composer 的释放
+        // 与日志里的关闭痕迹都以它在场为准。读回验证 + 一次重写；仍不在场即如实
+        // 抛错（绑定删除已提交，但静默丢失关闭痕迹的会话更难诊断：宿主日志有据）。
+        const closed = confirmSessionAppend({
+          session: agent.session,
+          logger: ctx.logger,
+          label: `Tavern close marker (${agent.id})`,
+          append: () => agent.session.append('user/message', createMessage({
+            role: 'user',
+            content: [{ type: 'text', text: 'Tavern roleplay mode closed.' }],
+            source: hostPluginMessageSource(agent.session, {
+              form: 'notice',
+              summary: 'Tavern closed',
+            }),
+          }), { surfaceOp: 'append' }),
+          present: (events) => events.some((event) => event.type === 'user/message'
+            && isTavernSessionMarker(event.data?.source)
+            && (event.data?.source as { summary?: unknown } | undefined)?.summary === 'Tavern closed'),
+        })
+        if (!closed) {
+          throw new Error(`dsh-tavern: the Tavern close marker could not be confirmed in session '${agent.id}' after a rewrite; the host accepted the append but the read-back found no trace`)
+        }
         return { kind: 'success', text: 'Tavern closed' }
       }
       if (parsed.action === 'novel-open') {
@@ -415,7 +439,21 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
         // 幂等：重复激活不重复 recompose，也不叠加预设 marker。
         if (!activationEvents.some((event) => event.type === 'agent-preset/selected' && event.data?.agentPreset === AGENT_TAVERN_PRESET_ID)) {
           const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_TAVERN_PRESET_ID)
-          agent.session.append('agent-preset/selected', { agentPreset: preset.id })
+          // D-2 confirmable write：预设 marker 驱动宿主的 agentPreset 投影
+          // （dsh-agent-preset-registry：init 于 header、只认日志里的
+          // agent-preset/selected）——丢失即会话在重载后失去 AgentTavern 身份。
+          // 同 id 的重复 selected 事件无害（投影取最后一条），重写安全。
+          const selected = confirmSessionAppend({
+            session: agent.session,
+            logger: ctx.logger,
+            label: `AgentTavern preset marker (${agent.id})`,
+            append: () => agent.session.append('agent-preset/selected', { agentPreset: preset.id }),
+            present: (events) => events.some((event) => event.type === 'agent-preset/selected'
+              && event.data?.agentPreset === preset.id),
+          })
+          if (!selected) {
+            throw new Error(`dsh-tavern: the AgentTavern preset marker could not be confirmed in session '${agent.id}' after a rewrite; the session would silently lose its preset identity on reload`)
+          }
         }
       }
       await bindSession(
@@ -452,33 +490,90 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
           // 保留一个合法会话，也不要一个锁死却损坏的会话。
           ctx.logger?.warn?.('AgentTavern history import skipped: the host session exposes no advanceable turn base, so imported turn boundaries would desynchronise the live loop.')
         } else {
-          let written
+          // D-2 confirmable save（决策 2026-10-11-confirmable-session-writes）：宿主
+          // append 可能吞写——返回成功而日志无痕迹（LWB saveChatConditional 教训）。
+          // 此时按旧逻辑把基线推进到计划轮号，live 首轮会撞号，v4 准入判整个会话
+          // 损坏。协议：写入后按「计划前缀连续落在日志尾部」读回对齐；不齐且日志
+          // 尾部恰为干净前缀（无计划外残渣）时，补写缺失后缀重试一次——后缀接续
+          // 密集轮号，不产生重复轮号；尾部有残渣时任何重放都会重复边界事件，禁止
+          // 重试。两次尝试后仍不齐：一行 error 如实报告两次结果，兜底关闭半个
+          // 导入，激活继续（既有导入失败降级：历史留在 JSONL 可重放，绑定不阻断）。
+          // 轮次基线只推进到读回确认的轮号——以日志为准，不以计划为准。
+          const total = historyImport.length
+          const baseLength = sessionEvents(agent.session).length
+          const appendItem = (item: SessionImportAppend) => {
+            agent.session.append(item.type, item.data, item.surfaceOp === undefined ? undefined : { surfaceOp: item.surfaceOp })
+          }
+          let attemptError: unknown
           try {
-            for (const item of historyImport) {
-              agent.session.append(item.type, item.data, item.surfaceOp === undefined ? undefined : { surfaceOp: item.surfaceOp })
-            }
-            written = importedTurn
+            for (const item of historyImport) appendItem(item)
           } catch (error) {
+            attemptError = error
+          }
+          let landed = landedPlanAppends(agent.session, historyImport, baseLength)
+          const firstLanded = landed
+          let retryRefused = false
+          if (landed < total && attemptError === undefined
+            && sessionEvents(agent.session).length === baseLength + landed) {
+            try {
+              for (const item of historyImport.slice(landed)) appendItem(item)
+            } catch (error) {
+              attemptError = error
+            }
+            landed = Math.max(landed, landedPlanAppends(agent.session, historyImport, baseLength))
+          } else if (landed < total && attemptError === undefined) {
+            retryRefused = true
+          }
+          if (attemptError !== undefined) {
             // 导入失败不阻断绑定；用户仍可直接对话，缺失的历史留在 JSONL 可重放。
+            ctx.logger?.warn?.(`AgentTavern history import failed: ${attemptError instanceof Error ? attemptError.message : String(attemptError)}`)
+          } else if (landed < total) {
+            const attempts = retryRefused
+              ? `attempt 1: ${firstLanded}/${total} appends visible; suffix retry refused — the log tail holds unplanned events, replaying would duplicate turn boundaries`
+              : `attempt 1: ${firstLanded}/${total} appends visible, attempt 2: ${landed}/${total}`
+            ctx.logger?.error?.(`AgentTavern history import could not be confirmed by read-back (${attempts}); degrading to the verified prefix — the missing history stays in the Tavern JSONL and remains replayable`)
+          }
+          if (landed < total) {
             // 半个导入必须兜底关闭已打开的 step/turn，否则损坏的是整个会话。
-            written = closeImportBracket(agent, {
+            closeImportBracket(agent, {
               kind: 'error',
               error: { message: 'AgentTavern history import failed', code: 'TAVERN_IMPORT' },
             })
-            ctx.logger?.warn?.(`AgentTavern history import failed: ${error instanceof Error ? error.message : String(error)}`)
-          } finally {
-            if (written !== undefined) advanceHostTurnBase(agent, written)
           }
+          const verifiedTurn = lastLoggedTurn(agent)
+          if (verifiedTurn !== undefined) advanceHostTurnBase(agent, verifiedTurn)
         }
       }
       await refreshActivePrompt()
-      if (parsed.architecture === 'st') occupyHostSession(agent)
-      if (parsed.architecture === 'st' && (previous?.character !== parsed.character || previous.chatId !== parsed.chatId)) {
-        agent.session.append('user/message', createMessage({
-          role: 'user',
-          content: [{ type: 'text', text: `Tavern roleplay chat for ${parsed.character}.` }],
-          source: hostPluginMessageSource(agent.session, { form: 'notice', summary: `Tavern: ${parsed.character}` }),
-        }), { surfaceOp: 'append' })
+      if (parsed.architecture === 'st') {
+        occupyHostSession(agent, ctx)
+        // D-2 confirmable write：激活 marker 是客户端 view/composer 接管的判据
+        // （client isTavernSession 扫 session surface 里的 plugin notice marker）。
+        // 绑定换目标，或日志里缺同角色 marker（此前被吞写/丢失）时追加——后者是
+        // 自愈：旧逻辑按插件库绑定 diff 判重，marker 一旦丢失就永远补不回来，
+        // composer 从此不接管。读回验证 + 一次重写；仍不在场如实抛错——比
+        // 「绑定成功但 composer 永不接管」可诊断。
+        const markerSummary = `Tavern: ${parsed.character}`
+        const markerPresent = (events: readonly { type?: unknown; data?: any }[]) => events.some((event) => event.type === 'user/message'
+          && isTavernSessionMarker(event.data?.source)
+          && (event.data?.source as { summary?: unknown } | undefined)?.summary === markerSummary)
+        const bindingChanged = previous?.character !== parsed.character || previous.chatId !== parsed.chatId
+        if (bindingChanged || !markerPresent(sessionEvents(agent.session))) {
+          const activated = confirmSessionAppend({
+            session: agent.session,
+            logger: ctx.logger,
+            label: `Tavern activation marker (${parsed.character})`,
+            append: () => agent.session.append('user/message', createMessage({
+              role: 'user',
+              content: [{ type: 'text', text: `Tavern roleplay chat for ${parsed.character}.` }],
+              source: hostPluginMessageSource(agent.session, { form: 'notice', summary: markerSummary }),
+            }), { surfaceOp: 'append' }),
+            present: markerPresent,
+          })
+          if (!activated) {
+            throw new Error(`dsh-tavern: the Tavern activation marker could not be confirmed in session '${agent.id}' after a rewrite; the client composer would never take over an unmarked session`)
+          }
+        }
       }
       return { kind: 'success', text: `Tavern: ${parsed.character}` }
     },
@@ -1339,6 +1434,14 @@ async function handleApi(ctx, req, res) {
     return handleWorkbenchApi(req, res, url, route, method, db)
   }
 
+  // 记忆语义检索 embed 端点管理面（提案 0016）：GET/PUT 设置 + 连通性探针。
+  if ((method === 'GET' || method === 'PUT') && route === 'memory/embed') {
+    return handleMemoryEmbedApi(req, res, route, method, db)
+  }
+  if (method === 'POST' && route === 'memory/embed/test') {
+    return handleMemoryEmbedApi(req, res, route, method, db)
+  }
+
   if (method === 'GET' && route.startsWith('world/')) {
     const name = decodeURIComponent(route.slice('world/'.length))
     const book = await db.getWorld(name)
@@ -1779,6 +1882,102 @@ async function handleMvuApi(
       receipts,
       ...(renderedHtml !== undefined ? { renderedHtml } : {}),
     })
+  }
+
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+}
+
+/* ---------- 记忆语义检索 embed 管理面（提案 0016 §配置面） ---------- */
+
+/**
+ * GET/PUT memory/embed + POST memory/embed/test。状态响应只带脱敏运行时信息
+ * （configured/envResolvable/lastError/lastSuccessAt/dims/熔断窗），配置里的
+ * apiKeyEnv 只是 env 变量名引用——key 明文既不落库也永不回传（解析只发生在
+ * 请求发出的瞬间，且仅进 Authorization 头）。
+ */
+async function handleMemoryEmbedApi(
+  req: NovelApiRequest,
+  res: NovelApiResponse,
+  route: string,
+  method: string,
+  db: TavernStore,
+): Promise<void> {
+  const root = dshHomePath('tavern')
+
+  if (method === 'GET' && route === 'memory/embed') {
+    const config = normalizeMemoryEmbedding((await db.getState()).memoryEmbedding)
+    const status = await readEmbedStatus(root)
+    const envValue = config !== undefined && config.apiKeyEnv !== '' ? process.env[config.apiKeyEnv] : undefined
+    return sendJson(res, 200, {
+      ok: true,
+      config: config ?? null,
+      status: {
+        configured: config !== undefined,
+        // 免密（apiKeyEnv 空串）是显式合法形态：envResolvable 视为满足。
+        keyless: config !== undefined && config.apiKeyEnv === '',
+        envResolvable: config === undefined
+          ? false
+          : config.apiKeyEnv === '' || (typeof envValue === 'string' && envValue.trim() !== ''),
+        breakerOpen: embedBreakerOpen(status),
+        ...(status.breakerUntil > 0 ? { breakerUntil: new Date(status.breakerUntil).toISOString() } : {}),
+        ...(status.model !== undefined ? { model: status.model } : {}),
+        ...(status.dims !== undefined ? { dims: status.dims } : {}),
+        ...(status.lastError !== undefined ? { lastError: status.lastError } : {}),
+        ...(status.lastErrorAt !== undefined ? { lastErrorAt: status.lastErrorAt } : {}),
+        ...(status.lastSuccessAt !== undefined ? { lastSuccessAt: status.lastSuccessAt } : {}),
+      },
+    })
+  }
+
+  if (method === 'PUT' && route === 'memory/embed') {
+    const body = await readJson(req)
+    const raw: Record<string, unknown> = body === null || typeof body !== 'object' || Array.isArray(body) ? {} : body
+    const baseURL = typeof raw.baseURL === 'string' ? raw.baseURL.trim().replace(/\/+$/, '') : ''
+    const apiKeyEnv = typeof raw.apiKeyEnv === 'string' ? raw.apiKeyEnv.trim() : ''
+    const model = typeof raw.model === 'string' ? raw.model.trim() : ''
+    // 三件套全空 = 清除配置（混合检索整体回落纯词法）。
+    if (baseURL === '' && apiKeyEnv === '' && model === '') {
+      await db.patchState({ memoryEmbedding: undefined })
+      await clearEmbedStatus(root)
+      return sendJson(res, 200, { ok: true, config: null })
+    }
+    // POSIX env 名前置校验（给出比 normalize 落空更可操作的报错文案）。
+    if (apiKeyEnv !== '' && !/^[A-Za-z_][A-Za-z0-9_]{0,255}$/.test(apiKeyEnv)) {
+      return sendJson(res, 400, {
+        ok: false,
+        message: `invalid apiKeyEnv '${apiKeyEnv.slice(0, 60)}': expected a POSIX environment variable name (letters, digits, underscore; not starting with a digit), or an empty string for a keyless endpoint`,
+      })
+    }
+    const config = normalizeMemoryEmbedding({
+      baseURL,
+      apiKeyEnv,
+      model,
+      ...(raw.dims !== undefined && raw.dims !== null ? { dims: raw.dims } : {}),
+      ...(raw.batchSize !== undefined && raw.batchSize !== null ? { batchSize: raw.batchSize } : {}),
+      ...(raw.timeoutMs !== undefined && raw.timeoutMs !== null ? { timeoutMs: raw.timeoutMs } : {}),
+    })
+    if (config === undefined) {
+      return sendJson(res, 400, {
+        ok: false,
+        message: 'expected { baseURL (http/https URL), model, apiKeyEnv? (env var name or empty), dims?, batchSize? (1-64), timeoutMs? (200-120000) }',
+      })
+    }
+    await db.patchState({ memoryEmbedding: config })
+    // 配置变更 ⇒ 旧端点观察到的 dims 基准、熔断窗口与错误记录全部作废。
+    await clearEmbedStatus(root)
+    return sendJson(res, 200, { ok: true, config })
+  }
+
+  if (method === 'POST' && route === 'memory/embed/test') {
+    const config = normalizeMemoryEmbedding((await db.getState()).memoryEmbedding)
+    if (config === undefined) return sendJson(res, 400, { ok: false, message: 'embed endpoint is not configured' })
+    try {
+      // 探针是显式用户动作：无视熔断直接尝试；成功/失败都在 embedProbe 内落账。
+      const result = await embedProbe(root, config)
+      return sendJson(res, 200, { ok: true, ...result })
+    } catch (cause) {
+      return sendJson(res, 400, { ok: false, message: cause instanceof Error ? cause.message : String(cause) })
+    }
   }
 
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
@@ -2499,9 +2698,9 @@ async function handleWorkbenchOpenCommand(
   // 工作台是纯对话式 preset（无 driver kickoff），用户开口前会话没有 turn/start，
   // 宿主会把它当 blank 草稿复用——下一个 openWorkbenchSession 的 connect 就会
   // 落回本会话并撞上「已绑定其他来源」守卫，新建会话从此失败。写一对占位
-  // turn 摘除复用资格（与 ST 激活同款，决策 2026-08-16；幂等，宿主拒绝时仅
-  // 失去保护不阻断激活）。
-  occupyHostSession(agent)
+  // turn 摘除复用资格（与 ST 激活同款，决策 2026-08-16；幂等，读回验证失败时
+  // 仅失去保护不阻断激活）。
+  occupyHostSession(agent, ctx)
   return { kind: 'success', text: 'CardWorkbench' }
 }
 
@@ -3483,12 +3682,31 @@ function assertStGenerationBinding(state, sessionId) {
  * 会再写一次 `turn/start { turn: 1 }`，v4 关系准入（turn/start 必须等于 nextTurn）
  * 直接判会话损坏。基线不可推进（宿主换代）时宁可不占位，也不写坏会话。
  */
-function occupyHostSession(agent) {
+function occupyHostSession(agent, ctx?) {
   try {
     if (sessionEvents(agent.session).some((event) => event.type === 'turn/start')) return
     if (!canAdvanceHostTurnBase(agent)) return
-    agent.session.append('turn/start', { turn: 1 })
-    agent.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    // D-2 confirmable write（决策 2026-10-11-confirmable-session-writes，逐条确
+    // 认）：占位 turn 对是「必须成立」写入——基线推进依赖它在场，静默丢失会让
+    // live 首轮重复/跳号，v4 准入判整个会话损坏。逐条读回验证 + 一次重写（缺席
+    // 才重写，在场即停，append-only 日志不会重复轮号）；确认失败沿用既有降级：
+    // 不推进基线、不阻断激活，宿主日志一行 error 可观测。
+    const started = confirmSessionAppend({
+      session: agent.session,
+      logger: ctx?.logger,
+      label: `session occupation turn/start (${agent.id})`,
+      append: () => agent.session.append('turn/start', { turn: 1 }),
+      present: (events) => events.some((event) => event.type === 'turn/start' && event.data?.turn === 1),
+    })
+    if (!started) return
+    const ended = confirmSessionAppend({
+      session: agent.session,
+      logger: ctx?.logger,
+      label: `session occupation turn/end (${agent.id})`,
+      append: () => agent.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } }),
+      present: (events) => events.some((event) => event.type === 'turn/end' && event.data?.turn === 1),
+    })
+    if (!ended) return
     advanceHostTurnBase(agent, 1)
   } catch {
     // 宿主拒绝插件追加 turn 事件时仅失去防复用保护，不阻断激活本身。

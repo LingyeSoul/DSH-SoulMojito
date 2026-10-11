@@ -1,14 +1,20 @@
 import {
   MemoryStore,
+  MemoryVectorStore,
   TavernStore,
   VariableStore,
+  normalizeMemoryEmbedding,
   tokenizeQuery,
+  type MemoryEmbeddingSettings,
+  type MemoryHit,
+  type MemoryRecord,
 } from '../../../tavern-store/src/index.js'
 import { activateWorldInfo } from '../../../tavern-lore/src/index.js'
 import { parsePreset, type ChatLogIR } from '../../../tavern-format/src/index.js'
 import { collectWorldInfoBooks } from '../tavern-assets.js'
 import { dshHomePath } from '../dsh-home.js'
 import { formatGuidesBlock, onGuidesChanged } from '../guides.js'
+import { embedMemoryRecord, hybridMemorySearch } from '../memory-hybrid.js'
 import {
   defaultPreset,
   onAgentPresetChanged,
@@ -62,6 +68,7 @@ const KERNEL = [
 
 let tavernStorePromise: Promise<TavernStore> | undefined
 let memoryStorePromise: Promise<MemoryStore> | undefined
+let memoryVectorStorePromise: Promise<MemoryVectorStore> | undefined
 let variableStorePromise: Promise<VariableStore> | undefined
 
 export function apply(ctx: AgentContextLike): void {
@@ -348,7 +355,7 @@ function createTools(): ToolDefinition[] {
         truncated: qualified.length > hits.length,
       }
     }),
-    tool('memory_search', 'Search memories in the current chat, character, agent, or global scope. Use it to recall established facts, promises, or relationship state before they matter on screen.', {
+    tool('memory_search', 'Search memories in the current chat, character, agent, or global scope with hybrid lexical and semantic retrieval (semantic requires an embedding endpoint; without one it is lexical only). Use it to recall established facts, promises, or relationship state before they matter on screen.', {
       query: { type: 'string', required: true, description: 'Lexical search query.' },
       scope: memoryScopeParameter(false),
       limit: { type: 'integer', description: 'Maximum results, capped at 20.' },
@@ -357,15 +364,33 @@ function createTools(): ToolDefinition[] {
       const binding = await bindingFor(exec)
       const store = await memoryStore()
       const scopes = selectedMemoryScopes(args.scope, binding)
-      const hits = (await Promise.all(scopes.map(({ scope, scopeId }) => store.search({
-        query: stringArg(args.query),
+      const limit = clampInt(args.limit, 1, 20, 10)
+      const maxTokens = clampInt(args.maxTokens, 1, 2000, 1200)
+      const query = stringArg(args.query)
+      // 词法通道（现状路径，提案 0016 golden）：无 embed 配置 / 熔断 / 查询嵌入
+      // 失败 / 候选全部 stale 时逐字节保持本路径的行为。
+      const lexicalHits = async (): Promise<MemoryHit[]> => (await Promise.all(scopes.map(({ scope, scopeId }) => store.search({
+        query,
         scope,
         scopeId,
-        limit: clampInt(args.limit, 1, 20, 10),
-        maxTokens: clampInt(args.maxTokens, 1, 2000, 1200),
+        limit,
+        maxTokens,
       })))).flat()
         .sort((left, right) => right.score - left.score || left.record.id.localeCompare(right.record.id))
-        .slice(0, clampInt(args.limit, 1, 20, 10))
+        .slice(0, limit)
+      // 混合通道（提案 0016）：dense + 词法 RRF 融合；undefined = 降级回落词法。
+      const config = await memoryEmbeddingConfig()
+      const hits = config === undefined ? await lexicalHits()
+        : await hybridMemorySearch({
+          root: dshHomePath('tavern'),
+          config,
+          store,
+          vectorStore: await memoryVectorStore(),
+          query,
+          scopes,
+          limit,
+          maxTokens,
+        }) ?? await lexicalHits()
       return {
         hits: hits.map((hit) => ({
           id: hit.record.id,
@@ -420,6 +445,9 @@ function createTools(): ToolDefinition[] {
         ...(expiresAt === undefined ? {} : { expiresAt }),
         source: { kind: 'agent-tool', sessionId: binding.agentId, chatId: binding.chatId, character: binding.character },
       })
+      // 写路径嵌入（提案 0016）：同步嵌入受 timeoutMs 约束；任何失败只进
+      // lastError/熔断，不阻塞工具返回（向量 stale，检索时懒补）。
+      await embedWrittenMemory(record)
       return { id: record.id, scope: record.scope, revision: record.revision, source: record.source }
     }),
     tool('memory_update', 'Update an existing memory by id and expected revision; omitted fields keep their current value.', {
@@ -456,6 +484,8 @@ function createTools(): ToolDefinition[] {
         ...(expiresAt === undefined ? {} : { expiresAt }),
         source: { kind: 'agent-tool', sessionId: binding.agentId, chatId: binding.chatId, character: binding.character },
       }, stringArg(args.expectedRevision))
+      // 内容可能变更 ⇒ 旧向量按 digest 失效，重嵌（同 memory_write 的失败纪律）。
+      await embedWrittenMemory(record)
       return { id: record.id, scope: record.scope, revision: record.revision, source: record.source }
     }),
     tool('memory_forget', 'Soft-delete an existing memory by id and expected revision; the audit trail is kept.', {
@@ -471,6 +501,10 @@ function createTools(): ToolDefinition[] {
       const previous = await store.read(id, target.scope, target.scopeId, true)
       if (previous === undefined) return { id, scope: target.scope, found: false }
       await store.forget(id, target.scope, target.scopeId, stringArg(args.expectedRevision))
+      // 向量缓存随记录一并清理（best-effort：记录已软删，残留向量只占空间）。
+      try {
+        await (await memoryVectorStore()).delete(id, target.scope, target.scopeId)
+      } catch { /* 缓存清理失败不影响 forget 结果 */ }
       return { id, scope: target.scope, found: true }
     }),
     tool('variable_get', 'Read a typed variable from the current chat, character, agent, global, or turn scope.', {
@@ -1277,6 +1311,28 @@ function tavernStore(): Promise<TavernStore> {
 
 function memoryStore(): Promise<MemoryStore> {
   return (memoryStorePromise ??= MemoryStore.open(dshHomePath('tavern')))
+}
+
+function memoryVectorStore(): Promise<MemoryVectorStore> {
+  return (memoryVectorStorePromise ??= MemoryVectorStore.open(dshHomePath('tavern')))
+}
+
+/** 混合检索配置（提案 0016）：state.memoryEmbedding 经 normalize 后有效才算开启；
+ *  缺省/非法 ⇒ undefined ⇒ 全链路纯词法（golden 行为）。 */
+async function memoryEmbeddingConfig(): Promise<MemoryEmbeddingSettings | undefined> {
+  const state = await (await tavernStore()).getState()
+  return normalizeMemoryEmbedding(state.memoryEmbedding)
+}
+
+/** 写路径嵌入（提案 0016）：memory_write / memory_update 落盘成功后同步嵌入并
+ *  落向量；embedMemoryRecord 内部已把失败落进 lastError/熔断，这里再兜一层
+ *  catch 保证任何嵌入路径异常都不阻塞工具返回。 */
+async function embedWrittenMemory(record: MemoryRecord): Promise<void> {
+  try {
+    const config = await memoryEmbeddingConfig()
+    if (config === undefined) return
+    await embedMemoryRecord({ root: dshHomePath('tavern'), config, vectorStore: await memoryVectorStore(), record })
+  } catch { /* 嵌入失败不阻塞记忆写入 */ }
 }
 
 function variableStore(): Promise<VariableStore> {
