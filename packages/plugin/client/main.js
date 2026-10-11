@@ -638,6 +638,29 @@ window.__ModuleLoader__.load({
       'panel.section.regex': 'Regex scripts',
       'panel.section.variables': 'Variables',
       'panel.section.workbench': 'Workbench plans',
+      // 记忆检索（提案 0016）：混合检索 embed 端点设置分区。zh/en 键集与
+      // {param} 占位符镜像由 gates 的 locale 校验兜底。
+      'panel.section.memory': 'Memory retrieval',
+      'settings.memoryTitle': 'Memory retrieval — hybrid search',
+      'settings.memoryHint': 'Optional OpenAI-compatible /embeddings endpoint. When configured, memory_search fuses a semantic channel with lexical ranking (RRF); without a valid config retrieval stays lexical only.',
+      'settings.memoryBaseURL': 'Embeddings base URL',
+      'settings.memoryApiKeyEnv': 'API key env var name',
+      'settings.memoryApiKeyEnvHint': 'Environment variable holding the key (the name only — the key itself is never stored). Leave empty for keyless endpoints.',
+      'settings.memoryModel': 'Embedding model',
+      'settings.memoryDims': 'Dimensions (optional)',
+      'settings.memoryBatchSize': 'Batch size (optional)',
+      'settings.memoryTimeout': 'Timeout ms (optional)',
+      'settings.memoryOff': 'Hybrid retrieval off — memory_search stays lexical only.',
+      'settings.memoryKeyless': 'Keyless endpoint (no Authorization header).',
+      'settings.memoryEnvMissing': 'Env var {name} is not set on the host; requests go keyless until it is.',
+      'settings.memoryBreaker': 'endpoint failing — semantic channel paused until {until}',
+      'settings.memoryLastError': 'Last error: {error}',
+      'settings.memoryLastSuccess': 'Last success: {at} · {dims} dims · {model}',
+      'settings.memoryTestOk': 'OK: {dims} dims in {ms} ms ({model})',
+      'settings.memorySave': 'Save',
+      'settings.memoryClear': 'Clear config',
+      'settings.memoryTest': 'Test endpoint',
+      'settings.memoryTesting': 'Testing…',
       'workbench.hint': 'Modification plans proposed by the Card Workbench agent — per-field card diffs and per-entry world book diffs. Expand a plan to review the changes, then approve to apply it to the working copy, or reject it.',
       'workbench.empty': 'No workbench plans yet',
       'workbench.worldMeta': 'World · {world}',
@@ -1224,6 +1247,27 @@ window.__ModuleLoader__.load({
       'panel.section.regex': '正则脚本',
       'panel.section.variables': '变量',
       'panel.section.workbench': '工作台方案',
+      'panel.section.memory': '记忆检索',
+      'settings.memoryTitle': '记忆检索 — 混合检索',
+      'settings.memoryHint': '可选的 OpenAI 兼容 /embeddings 端点。配置后 memory_search 在词法排序上融合语义通道（RRF）；未配置或配置无效时检索保持纯词法。',
+      'settings.memoryBaseURL': 'Embeddings 端点 base URL',
+      'settings.memoryApiKeyEnv': 'API key 环境变量名',
+      'settings.memoryApiKeyEnvHint': '存放 key 的环境变量名（只填名字，key 本身永不入库）。免密端点留空。',
+      'settings.memoryModel': '嵌入模型',
+      'settings.memoryDims': '维度（可选）',
+      'settings.memoryBatchSize': '批量大小（可选）',
+      'settings.memoryTimeout': '超时毫秒（可选）',
+      'settings.memoryOff': '混合检索未开启 — memory_search 保持纯词法。',
+      'settings.memoryKeyless': '免密端点（不发送 Authorization 头）。',
+      'settings.memoryEnvMissing': '宿主上未设置环境变量 {name}；设置前请求按免密发出。',
+      'settings.memoryBreaker': '端点连续失败 — 语义通道暂停至 {until}',
+      'settings.memoryLastError': '最近错误：{error}',
+      'settings.memoryLastSuccess': '最近成功：{at} · {dims} 维 · {model}',
+      'settings.memoryTestOk': '连通：{dims} 维，{ms} 毫秒（{model}）',
+      'settings.memorySave': '保存',
+      'settings.memoryClear': '清除配置',
+      'settings.memoryTest': '测试端点',
+      'settings.memoryTesting': '测试中…',
       'workbench.hint': '卡片工作台 Agent 提出的修改方案——角色卡逐字段、世界书逐条目。展开查看改动，批准即应用到工作版，也可直接拒绝。',
       'workbench.empty': '暂无工作台方案',
       'workbench.worldMeta': '世界书 · {world}',
@@ -2934,7 +2978,11 @@ window.__ModuleLoader__.load({
         const isTavernSource = source?.kind === 'plugin:dsh-tavern'
           || (source?.kind === 'plugin' && source.plugin === 'dsh-tavern')
         if (isTavernSource && source.form === 'notice') {
-          match = source.tavernState === 'closed' ? null : { marker: node.key }
+          // 关闭判据双轨：v0 会话的关闭 marker 带 tavernState 成员；disposition
+          // 收敛后服务端只写 summary: 'Tavern closed'（见 confirmable-session-writes
+          // 决策 §5）——只认旧成员会把已关闭会话重新判活，composer 重新接管。
+          const closed = source.tavernState === 'closed' || source.summary === 'Tavern closed'
+          match = closed ? null : { marker: node.key }
         }
       }
       return match
@@ -3637,6 +3685,98 @@ window.__ModuleLoader__.load({
               ? h('div', { className: 'dt-regex-editor-wrap' },
                 h(RegexScriptEditor, { script, onSave: saveScript, onCancel: closeEditor }))
               : null))),
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
+    // 记忆检索（提案 0016）：混合检索 embed 端点设置 + 脱敏运行状态 + 连通性
+    // 探针。GET/PUT memory/embed 与 POST memory/embed/test；key 只经 env 名引用，
+    // 状态接口（configured/envResolvable/lastError/lastSuccessAt/dims）永不回
+    // 传 key 明文。
+    function MemoryRetrievalBand() {
+      const t = useTranslate()
+      const [loaded, setLoaded] = useState(false)
+      const [draft, setDraft] = useState({ baseURL: '', apiKeyEnv: '', model: '', dims: '', batchSize: '', timeoutMs: '' })
+      const [status, setStatus] = useState(null)
+      const [saving, setSaving] = useState(false)
+      const [testing, setTesting] = useState(false)
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      const refresh = () => api('memory/embed')
+        .then((result) => {
+          setStatus(result.status || null)
+          setDraft({
+            baseURL: result.config?.baseURL || '',
+            apiKeyEnv: result.config?.apiKeyEnv || '',
+            model: result.config?.model || '',
+            dims: result.config?.dims === undefined ? '' : String(result.config.dims),
+            batchSize: result.config?.batchSize === undefined ? '' : String(result.config.batchSize),
+            timeoutMs: result.config?.timeoutMs === undefined ? '' : String(result.config.timeoutMs),
+          })
+          setLoaded(true)
+          return result
+        })
+        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+      useEffect(() => { void refresh() }, [])
+      const setField = (name, value) => setDraft((current) => ({ ...current, [name]: value }))
+      const optionalInt = (value) => {
+        const trimmed = String(value ?? '').trim()
+        if (trimmed === '') return undefined
+        const parsed = Number(trimmed)
+        return Number.isFinite(parsed) ? parsed : Number.NaN
+      }
+      const save = (clear) => {
+        setSaving(true); setError(''); setNotice('')
+        const body = clear === true
+          ? { baseURL: '', apiKeyEnv: '', model: '' }
+          : {
+              baseURL: draft.baseURL,
+              apiKeyEnv: draft.apiKeyEnv,
+              model: draft.model,
+              ...(optionalInt(draft.dims) !== undefined ? { dims: optionalInt(draft.dims) } : {}),
+              ...(optionalInt(draft.batchSize) !== undefined ? { batchSize: optionalInt(draft.batchSize) } : {}),
+              ...(optionalInt(draft.timeoutMs) !== undefined ? { timeoutMs: optionalInt(draft.timeoutMs) } : {}),
+            }
+        return api('memory/embed', { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify(body) })
+          .then(() => refresh())
+          .then(() => { setNotice(t('panel.saved')) })
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setSaving(false))
+      }
+      const test = () => {
+        setTesting(true); setError(''); setNotice('')
+        return api('memory/embed/test', { method: 'POST', headers: jsonHeaders(), body: '{}' })
+          .then((result) => {
+            setNotice(t('settings.memoryTestOk', { dims: result.dims ?? '?', ms: result.latencyMs ?? '?', model: result.model || '?' }))
+            return refresh()
+          })
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setTesting(false))
+      }
+      const statusBits = []
+      if (status !== null) {
+        if (!status.configured) statusBits.push(t('settings.memoryOff'))
+        else if (status.keyless) statusBits.push(t('settings.memoryKeyless'))
+        else if (!status.envResolvable) statusBits.push(t('settings.memoryEnvMissing', { name: draft.apiKeyEnv }))
+        if (status.breakerOpen) statusBits.push(t('settings.memoryBreaker', { until: status.breakerUntil ? new Date(status.breakerUntil).toLocaleTimeString() : '?' }))
+        if (status.lastSuccessAt) statusBits.push(t('settings.memoryLastSuccess', { at: new Date(status.lastSuccessAt).toLocaleString(), dims: status.dims ?? '?', model: status.model || '?' }))
+        if (status.lastError) statusBits.push(t('settings.memoryLastError', { error: status.lastError }))
+      }
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('settings.memoryTitle')),
+        h('p', { className: 'dt-hint' }, t('settings.memoryHint')),
+        loaded ? h('div', { className: 'dt-editor-grid' },
+          h(EditorField, { label: t('settings.memoryBaseURL'), value: draft.baseURL, onChange: (value) => setField('baseURL', value), className: 'dt-editor-wide', placeholder: 'https://api.example.com/v1' }),
+          h(EditorField, { label: t('settings.memoryModel'), value: draft.model, onChange: (value) => setField('model', value), placeholder: 'text-embedding-3-small' }),
+          h(EditorField, { label: t('settings.memoryApiKeyEnv'), value: draft.apiKeyEnv, onChange: (value) => setField('apiKeyEnv', value), hint: t('settings.memoryApiKeyEnvHint'), placeholder: 'MY_EMBED_API_KEY' }),
+          h(EditorField, { label: t('settings.memoryDims'), value: draft.dims, type: 'number', min: 1, onChange: (value) => setField('dims', value) }),
+          h(EditorField, { label: t('settings.memoryBatchSize'), value: draft.batchSize, type: 'number', min: 1, max: 64, onChange: (value) => setField('batchSize', value) }),
+          h(EditorField, { label: t('settings.memoryTimeout'), value: draft.timeoutMs, type: 'number', min: 200, onChange: (value) => setField('timeoutMs', value) })) : null,
+        statusBits.length > 0 ? h('p', { className: 'dt-hint' }, statusBits.join(' · ')) : null,
+        h('div', { className: 'dt-editor-actions' },
+          h(Button, { size: 'sm', variant: 'primary', disabled: saving, onClick: () => save(false) }, t('settings.memorySave')),
+          h(Button, { size: 'sm', variant: 'ghost', disabled: saving, onClick: () => save(true) }, t('settings.memoryClear')),
+          h(Button, { size: 'sm', variant: 'outline', disabled: testing || (status !== null && !status.configured), onClick: test }, testing ? t('settings.memoryTesting') : t('settings.memoryTest'))),
+        notice ? h('p', { className: 'dt-hint' }, notice) : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
@@ -5760,6 +5900,8 @@ window.__ModuleLoader__.load({
       // 第 14 个分区「Mod」（提案 0015 §3.5 P1）：列表 + 两层开关 + 重载 + 启用
       // 确认弹层（如实展示 capabilities，知情同意）。
       { id: 'mods', icon: IconCordisPluginOutline14, label: (t) => t('panel.section.mods'), component: () => h(PanelMods) },
+      // 第 15 个分区「记忆检索」（提案 0016）：混合检索 embed 端点设置 + 探针。
+      { id: 'memory', icon: IconDataOutline16, label: (t) => t('panel.section.memory'), component: () => h(MemoryRetrievalBand) },
     ]) {
       registerPanelSection(definition)
     }

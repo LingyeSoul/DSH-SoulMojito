@@ -264,7 +264,16 @@ describe('internal Tavern session bridge occupation', () => {
     const agent = makeAgent('session-a')
     await handler({ agent, rawInput: base64Url({ character: CHARACTER, chatId }) })
     expect(turnStarts(agent)).toHaveLength(1)
-    expect(agent.session.events.filter((event) => event.type === 'user/message')).toHaveLength(0)
+    // D-2（决策 2026-10-11-confirmable-session-writes）：激活 marker 的追加分派
+    // 从「插件库绑定 diff」改为「会话日志在场判定」——本用例的新 agent 日志里
+    // 没有同角色 marker（旧断言为 0），自愈补写恰好一次；turn 占对仍幂等。
+    const markers = agent.session.events.filter((event) => event.type === 'user/message')
+    expect(markers).toHaveLength(1)
+    expect((markers[0]!.data as { source?: { summary?: string } }).source?.summary).toBe(`Tavern: ${CHARACTER}`)
+    // marker 已在场时，重复激活不再叠加。
+    await handler({ agent, rawInput: base64Url({ character: CHARACTER, chatId }) })
+    expect(agent.session.events.filter((event) => event.type === 'user/message')).toHaveLength(1)
+    expect(turnStarts(agent)).toHaveLength(1)
   })
 
   it('occupies a DSH 0.1.2 session whose event log rides snapshotEvents()', async () => {

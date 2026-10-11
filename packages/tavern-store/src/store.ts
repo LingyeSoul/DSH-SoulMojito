@@ -147,6 +147,30 @@ export interface TavernState {
   modsEnabled?: boolean
   /** 逐 Mod 启用表（提案 0015 §3.2）：键是 mod id，值为 true 才算启用。 */
   mods?: { enabled?: Record<string, boolean> }
+  /**
+   * 记忆语义检索 embed 端点（提案 0016）：OpenAI 兼容 /embeddings 三件套。
+   * 缺省 = 混合检索整体关闭，memory_search 保持纯词法（golden 行为）。
+   * key 只存 env 变量名引用（对齐宿主 dsh-credentials 的 CredentialRef 风格），
+   * 明文永不入库。
+   */
+  memoryEmbedding?: MemoryEmbeddingSettings
+}
+
+/**
+ * 记忆 embed 端点设置（提案 0016 §配置面）。baseURL/model/apiKeyEnv 三者齐备
+ * 才算已配置；apiKeyEnv 为空串表示免密反代（不发送 Authorization 头）。
+ */
+export interface MemoryEmbeddingSettings {
+  /** OpenAI 兼容端点前缀，实际请求 POST {baseURL}/embeddings。 */
+  baseURL: string
+  /** 解析 API key 的 POSIX 环境变量名；空串 = 免密。不存明文 key。 */
+  apiKeyEnv: string
+  model: string
+  dims?: number
+  /** 单请求批量上限，默认 16。 */
+  batchSize?: number
+  /** 单次请求超时毫秒，默认 10000。 */
+  timeoutMs?: number
 }
 
 /** 面板可写的压缩设置；provider/model 必须成对出现，空串视为未设置。 */
@@ -219,6 +243,40 @@ function normalizeModEnables(value: unknown): Record<string, boolean> {
     if (flag === true) result[id] = true
   }
   return result
+}
+
+/** POSIX env 变量名（提案 0016，对齐宿主 dsh-credentials 的 CredentialRef 风格）。 */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/
+
+/**
+ * 记忆 embed 设置读取容错（提案 0016）：baseURL 必须是 http(s) URL、model 非空、
+ * apiKeyEnv 是合法 POSIX env 名或空串（免密）；数值字段夹取到合法区间。任何
+ * 硬性字段缺失/非法 ⇒ 整体 undefined（手改 state.json 时功能安全回落纯词法）。
+ */
+export function normalizeMemoryEmbedding(value: unknown): MemoryEmbeddingSettings | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const baseURL = typeof record.baseURL === 'string' ? record.baseURL.trim().replace(/\/+$/, '') : ''
+  const model = typeof record.model === 'string' ? record.model.trim().slice(0, 200) : ''
+  const apiKeyEnv = typeof record.apiKeyEnv === 'string' ? record.apiKeyEnv.trim() : ''
+  if (baseURL === '' || model === '' || !/^https?:\/\//.test(baseURL)) return undefined
+  if (apiKeyEnv !== '' && !ENV_NAME.test(apiKeyEnv)) return undefined
+  const dims = clampOptionalInt(record.dims, 1, 8192)
+  const batchSize = clampOptionalInt(record.batchSize, 1, 64)
+  const timeoutMs = clampOptionalInt(record.timeoutMs, 200, 120000)
+  return {
+    baseURL,
+    apiKeyEnv,
+    model,
+    ...(dims !== undefined ? { dims } : {}),
+    ...(batchSize !== undefined ? { batchSize } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  }
+}
+
+function clampOptionalInt(value: unknown, min: number, max: number): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  return Math.max(min, Math.min(max, Math.round(value)))
 }
 
 export class TavernStore {
@@ -787,6 +845,7 @@ export class TavernStore {
       // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false，只有显式 true 才开。
       modsEnabled: parsed.modsEnabled === true,
       mods: { enabled: normalizeModEnables(parsed.mods) },
+      memoryEmbedding: normalizeMemoryEmbedding(parsed.memoryEmbedding),
     }
   }
 

@@ -1922,6 +1922,31 @@ function normalizeModEnables(value) {
   }
   return result;
 }
+var ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
+function normalizeMemoryEmbedding(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  const record = value;
+  const baseURL = typeof record.baseURL === "string" ? record.baseURL.trim().replace(/\/+$/, "") : "";
+  const model = typeof record.model === "string" ? record.model.trim().slice(0, 200) : "";
+  const apiKeyEnv = typeof record.apiKeyEnv === "string" ? record.apiKeyEnv.trim() : "";
+  if (baseURL === "" || model === "" || !/^https?:\/\//.test(baseURL)) return void 0;
+  if (apiKeyEnv !== "" && !ENV_NAME.test(apiKeyEnv)) return void 0;
+  const dims = clampOptionalInt(record.dims, 1, 8192);
+  const batchSize = clampOptionalInt(record.batchSize, 1, 64);
+  const timeoutMs = clampOptionalInt(record.timeoutMs, 200, 12e4);
+  return {
+    baseURL,
+    apiKeyEnv,
+    model,
+    ...dims !== void 0 ? { dims } : {},
+    ...batchSize !== void 0 ? { batchSize } : {},
+    ...timeoutMs !== void 0 ? { timeoutMs } : {}
+  };
+}
+function clampOptionalInt(value, min, max2) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return void 0;
+  return Math.max(min, Math.min(max2, Math.round(value)));
+}
 var TavernStore = class _TavernStore {
   constructor(root) {
     this.root = root;
@@ -2400,7 +2425,8 @@ var TavernStore = class _TavernStore {
       compaction: normalizeCompactionOverride(parsed.compaction),
       // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false，只有显式 true 才开。
       modsEnabled: parsed.modsEnabled === true,
-      mods: { enabled: normalizeModEnables(parsed.mods) }
+      mods: { enabled: normalizeModEnables(parsed.mods) },
+      memoryEmbedding: normalizeMemoryEmbedding(parsed.memoryEmbedding)
     };
   }
   async assertChatRevision(file, expectedRevision) {
