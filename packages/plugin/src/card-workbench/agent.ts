@@ -62,10 +62,12 @@
  * disk. Non-workbench sessions are left untouched.
  *
  * 域拆分（决策 2026-10-09-dedup-refactor）：本文件仍是唯一 bundle 入口
- * （KERNEL、预设投影挂载、apply 注册），但 22 个工具按域拆进四个模块——
- * tools-card（卡读改删/制卡/转 MVU + 写入核与卡方案执行核）、tools-world
- * （世界书九件 + 世界书方案执行核）、tools-preset（预设 + 排错日志）、
- * tools-material（素材库只读）；跨域底座（store 懒单例、工具工厂、确认
+ * （KERNEL、预设投影挂载、apply 注册），但工具按域拆进五个模块——tools-card
+ * （卡读改删/制卡/转 MVU + 写入核与卡方案执行核）、tools-world（世界书九件 +
+ * 世界书方案执行核）、tools-preset（预设 + 排错日志）、tools-material（素材库
+ * 只读）、tools-reference（对话框附件只读，决策 2026-10-11-workbench-
+ * reference-read：修「DSH 0.2.0 preset 工具面无文件工具、两条附件管线都指向
+ * file tools」的读不了参考文件缺口）；跨域底座（store 懒单例、工具工厂、确认
  * 协议文案）在 shared.ts。createTools 按拆分前的工具顺序逐一拼装——
  * tools.spec.ts 对工具名做全序断言，聚合顺序是冻结契约。执行核
  * executeCardPlan / executeWorldPlan 经本文件 re-export，index.ts 的
@@ -79,6 +81,7 @@ import { cardApplyMvuTool, cardCoreTools, cardCreateTool, type CardPlanExecution
 import { executeWorldPlan, worldTools, type WorldPlanExecution } from './tools-world.js'
 import { presetTools } from './tools-preset.js'
 import { materialTools } from './tools-material.js'
+import { referenceTools } from './tools-reference.js'
 import type { ToolDefinition } from './shared.js'
 
 export { executeCardPlan, type CardPlanExecution } from './tools-card.js'
@@ -94,6 +97,7 @@ const KERNEL = [
   '',
   'Working protocol for every modification request:',
   '- Read first: call card_get (cards), world_get (world books) or preset_get (presets) on the named resource to ground yourself in the current working copy before discussing any change. Previews truncate long values — card_get takes full: [fields] to fetch card fields in full and world_get takes uids to fetch entries in full; quote the exact text verbatim when rewriting or moving long content. world_list shows the whole world-book library (with the cards linking each book) when the user has not pinned an existing name.',
+  '- Attached reference files: files the user attaches through the DSH dialog show up as attachment notes — "📎 name（size）→ .dsh/uploads/<file>" lines before their message, or [File "name" (N bytes, sha256:xx): verbatim read-only copy saved at "<path>"] handles inside it. When their content matters, read them with reference_read (pass the path from the note, chunk by chunk like material_read). Binary attachments are rejected there — report that instead of guessing at contents, and never claim to have read a file you did not.',
   '- Propose before writing: present a concrete plan — for every affected field or entry, show the current value (or an excerpt of it) and the full replacement value, plus why the change serves the user\'s intent. Quote exact text; never describe a change vaguely.',
   '- Record plans: for card edits call card_plan_propose, and for world book edits or creations call world_plan_propose (create: true for new books), after the user reacts positively to the idea. They record the plan (planId) with the live current values and show it in the workbench panel for review.',
   '- Wait for explicit confirmation: the user must clearly approve the plan (e.g. "confirm", "apply it", or an equivalent). Silence, a new question, or a partial remark is NOT approval. Never write on an assumed yes.',
@@ -185,6 +189,7 @@ function createTools(): ToolDefinition[] {
     ...presetTools,
     cardCreateTool,
     ...materialTools,
+    ...referenceTools,
     cardApplyMvuTool,
   ]
 }

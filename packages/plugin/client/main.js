@@ -644,13 +644,15 @@ window.__ModuleLoader__.load({
       // 提示词查看器（A-6）：ST 循环实发请求 + 世界书激活追踪分区。
       'panel.section.prompts': 'Prompt viewer',
       'settings.promptsTitle': 'Prompt viewer — final requests & world info activation',
-      'settings.promptsHint': 'The final request actually sent to the LLM each ST generation turn (after pre-llm rewrites — what you see is what was sent) plus the world info activation trace. In-process ring buffer: last 10 records per chat, 50 total, lost on restart. AgentTavern runs on the host AgentLoop and is out of scope.',
+      'settings.promptsHint': 'The final request actually sent to the LLM each ST generation turn (after pre-llm rewrites — what you see is what was sent) plus the world info activation trace. Agent-mode turns record the plugin pre-injection face: injected system sections, messages injected this step, and the final call params — the host-assembled history/tool context is not visible. In-process ring buffer: last 10 records per chat, 50 total, lost on restart.',
       'settings.promptsEmpty': 'No records yet — run an ST generation turn and refresh.',
       'settings.promptsRefresh': 'Refresh',
       'settings.promptsAll': 'All characters',
       'settings.promptsSystem': 'System block',
       'settings.promptsNoSystem': '(no system block this turn)',
       'settings.promptsMessages': 'Messages ({count})',
+      'settings.promptsAgentSections': 'Injected system sections ({count})',
+      'settings.promptsAgentMessages': 'Messages injected this step ({count})',
       'settings.promptsLore': 'World info activation ({count} entries · {rounds} recursion rounds · budget {used}/{limit} tok)',
       'settings.promptsLoreEmpty': 'No world info entries activated this turn.',
       'settings.promptsParams': 'Sampler params',
@@ -1303,13 +1305,15 @@ window.__ModuleLoader__.load({
       // 与 {param} 占位符镜像由 gates 的 locale 校验兜底。
       'panel.section.prompts': '提示词',
       'settings.promptsTitle': '提示词查看器 — 实发请求与世界书激活',
-      'settings.promptsHint': 'ST 生成循环每轮实际发给 LLM 的最终请求（pre-llm 改写之后，看到即实发）与世界书激活轨迹。进程内环形缓冲：每聊天最近 10 条、总量 50 条，重启即失。AgentTavern 走宿主 AgentLoop，不在此面。',
+      'settings.promptsHint': 'ST 生成循环每轮实际发给 LLM 的最终请求（pre-llm 改写之后，看到即实发）与世界书激活轨迹。Agent 模式回合记录插件预注入面：预注入 system 片段、本步注入消息与实发调用参数——宿主拼装的历史/工具上下文不可见。进程内环形缓冲：每聊天最近 10 条、总量 50 条，重启即失。',
       'settings.promptsEmpty': '暂无记录——发一轮 ST 生成后刷新。',
       'settings.promptsRefresh': '刷新',
       'settings.promptsAll': '全部角色',
       'settings.promptsSystem': 'System 段',
       'settings.promptsNoSystem': '（本轮无 system 段）',
       'settings.promptsMessages': '消息序列（{count} 条）',
+      'settings.promptsAgentSections': '预注入 system 片段（{count} 段）',
+      'settings.promptsAgentMessages': '本步注入消息（{count} 条）',
       'settings.promptsLore': '世界书激活（{count} 条 · 递归 {rounds} 轮 · 预算 {used}/{limit} tok）',
       'settings.promptsLoreEmpty': '本轮无世界书条目激活。',
       'settings.promptsParams': '采样参数',
@@ -4011,9 +4015,11 @@ window.__ModuleLoader__.load({
     }
 
     // 提示词查看器（A-6，2026-10-11）：ST 生成循环每轮**实发请求**（pre-llm
-    // hook 改写之后的最终形状）与世界书激活轨迹的只读面板。数据来自服务端
-    // prompt-viewer.ts 的进程内环形缓冲（每聊天最近 10 条 / 总量 50，重启即失）；
-    // v1 只覆盖 ST 循环——AgentTavern 走宿主 AgentLoop，插件看不到完整请求。
+    // hook 改写之后的最终形状）与世界书激活轨迹的只读面板。Agent 模式
+    // （mode='agent-tavern'，决策 2026-10-11-agent-prompt-viewer）记录**插件
+    // 预注入面**：systemPrompt 片段（agent.sections 分面展示）+ 本步注入消息
+    // + 实发调用参数——宿主拼装的历史/工具上下文不可见。数据来自服务端
+    // prompt-viewer.ts 的进程内环形缓冲（每聊天最近 10 条 / 总量 50，重启即失）。
     // 纯只读展示：无编辑无重放（preset 纯化重放留 v2，见 A-6 决策文档）。
     const PROMPT_POSITION_LABELS = {
       0: 'Before char', 1: 'After char', 2: 'AN top', 3: 'AN bottom',
@@ -4051,17 +4057,31 @@ window.__ModuleLoader__.load({
 
     function PromptRecordView({ record, t }) {
       const lore = record.loreTrace
+      // Agent 模式记录：分面展示预注入 section（复用 PromptMessageView 的
+      // 长文折叠）；消息面是「本步插件注入」而非完整消息序列；无 loreTrace。
+      const agent = record.agent
+      const stepSuffix = agent && (agent.turn !== undefined || agent.step !== undefined)
+        ? ` · T${agent.turn ?? '?'} / S${agent.step ?? '?'}`
+        : ''
       return h('details', { className: 'dt-settings-band' },
         h('summary', null,
-          `${new Date(record.at).toLocaleString()} · ${record.character} · ${record.chatId} · ${record.mode} · ~${record.promptTokens} tok · ${record.messages.length} msg`),
-        record.system !== undefined
-          ? h('details', null,
-              h('summary', null, t('settings.promptsSystem')),
-              h('pre', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '4px 0 10px', fontSize: '12px' } }, record.system))
-          : h('p', { className: 'dt-hint' }, t('settings.promptsNoSystem')),
-        h('p', { className: 'dt-label' }, t('settings.promptsMessages', { count: record.messages.length })),
+          `${new Date(record.at).toLocaleString()} · ${record.character} · ${record.chatId} · ${record.mode}${stepSuffix} · ~${record.promptTokens} tok · ${record.messages.length} msg`),
+        agent && agent.sections.length > 0
+          ? h('div', null,
+              h('p', { className: 'dt-label' }, t('settings.promptsAgentSections', { count: agent.sections.length })),
+              agent.sections.map((section, index) => h(PromptMessageView, {
+                key: index,
+                message: { role: `${section.name} · ${section.order}`, content: section.text },
+                t,
+              })))
+          : record.system !== undefined
+            ? h('details', null,
+                h('summary', null, t('settings.promptsSystem')),
+                h('pre', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '4px 0 10px', fontSize: '12px' } }, record.system))
+            : h('p', { className: 'dt-hint' }, t('settings.promptsNoSystem')),
+        h('p', { className: 'dt-label' }, t(agent ? 'settings.promptsAgentMessages' : 'settings.promptsMessages', { count: record.messages.length })),
         record.messages.map((message, index) => h(PromptMessageView, { key: index, message, t })),
-        lore && lore.entries.length > 0
+        !agent && (lore && lore.entries.length > 0
           ? h('div', null,
               h('p', { className: 'dt-label' }, t('settings.promptsLore', {
                 count: lore.entries.length, rounds: lore.recursionRounds, used: lore.budgetUsed, limit: lore.budgetLimit })),
@@ -4081,7 +4101,7 @@ window.__ModuleLoader__.load({
                   h('td', { style: { border: '1px solid var(--dsh-border, #ccc)', padding: '2px 6px' } },
                     entry.probability === undefined ? '—' : `${entry.probability.roll !== undefined ? `${entry.probability.roll.toFixed(1)}/` : ''}${entry.probability.value}%`),
                 )))))
-          : h('p', { className: 'dt-hint' }, t('settings.promptsLoreEmpty')),
+            : h('p', { className: 'dt-hint' }, t('settings.promptsLoreEmpty'))),
         h('p', { className: 'dt-hint' }, `${t('settings.promptsParams')}: ${promptParamsLine(record.params) || '—'}`))
     }
 

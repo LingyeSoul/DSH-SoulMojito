@@ -5,7 +5,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync as readFileSync4 } from "node:fs";
 import { mkdir as mkdir4 } from "node:fs/promises";
-import { relative as relative2, resolve as resolve4 } from "node:path";
+import { relative as relative3, resolve as resolve5 } from "node:path";
 
 // packages/tavern-format/src/png.ts
 var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -1214,15 +1214,15 @@ var CharxFormatError = class extends Error {
     this.name = "CharxFormatError";
   }
 };
-function decodeCharxAsset(bytes, path12) {
+function decodeCharxAsset(bytes, path13) {
   let files;
   try {
     files = unzipSync(bytes);
   } catch (cause) {
     throw new CharxFormatError(`not a valid zip: ${String(cause)}`);
   }
-  const asset = files[path12];
-  if (asset === void 0) throw new CharxFormatError(`CHARX has no asset '${path12}'`);
+  const asset = files[path13];
+  if (asset === void 0) throw new CharxFormatError(`CHARX has no asset '${path13}'`);
   return asset;
 }
 
@@ -3571,16 +3571,16 @@ function decodeCharx(bytes) {
   const assetPaths = Object.keys(files).filter((p) => p !== "card.json");
   return { card, assetPaths };
 }
-function decodeCharxAsset2(bytes, path12) {
+function decodeCharxAsset2(bytes, path13) {
   let files;
   try {
     files = unzipSync(bytes);
   } catch (cause) {
     throw new CharxFormatError2(`not a valid zip: ${String(cause)}`);
   }
-  const asset = files[path12];
+  const asset = files[path13];
   if (asset === void 0)
-    throw new CharxFormatError2(`CHARX has no asset '${path12}'`);
+    throw new CharxFormatError2(`CHARX has no asset '${path13}'`);
   return asset;
 }
 function encodeCharx(ir, assets) {
@@ -4198,7 +4198,7 @@ async function renameWithWindowsRetry(from, to, attempts = 5) {
     } catch (cause) {
       const code = cause.code;
       if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
-      await new Promise((resolve5) => setTimeout(resolve5, 10 * attempt));
+      await new Promise((resolve6) => setTimeout(resolve6, 10 * attempt));
     }
   }
 }
@@ -6070,11 +6070,11 @@ var NovelStorageCorruptionError = class extends Error {
   novelId;
   path;
   detail;
-  constructor({ novelId, path: path12, detail }) {
-    super(`Novel storage corruption in '${novelId}' at ${path12}: ${detail}`);
+  constructor({ novelId, path: path13, detail }) {
+    super(`Novel storage corruption in '${novelId}' at ${path13}: ${detail}`);
     this.name = "NovelStorageCorruptionError";
     this.novelId = novelId;
-    this.path = path12;
+    this.path = path13;
     this.detail = detail;
   }
 };
@@ -6114,10 +6114,10 @@ var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("he
 var DSH_HOST_COMMAND = /@deepseek-ai[\\/]dsh\b|(?:^|[\\/ \t"'])dsh(?:\.(?:cmd|js|ps1|exe|bat))?["']?[ \t]+web\b/;
 function commandLineOf(pid) {
   if (process.platform === "win32") {
-    return new Promise((resolve5) => {
+    return new Promise((resolve6) => {
       execFile("powershell.exe", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`], { timeout: 5e3, windowsHide: true }, (error, stdout) => {
-        if (error) resolve5(null);
-        else resolve5(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve6(null);
+        else resolve6(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -6131,10 +6131,10 @@ function commandLineOf(pid) {
     );
   }
   if (process.platform === "darwin") {
-    return new Promise((resolve5) => {
+    return new Promise((resolve6) => {
       execFile("ps", ["-p", String(pid), "-o", "command="], { timeout: 5e3 }, (error, stdout) => {
-        if (error) resolve5(Number(error.code) === 1 ? void 0 : null);
-        else resolve5(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve6(Number(error.code) === 1 ? void 0 : null);
+        else resolve6(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -7727,7 +7727,7 @@ async function replaceHead(head, bytes) {
       }
       throw cause;
     }
-    await new Promise((resolve5) => setTimeout(resolve5, 25));
+    await new Promise((resolve6) => setTimeout(resolve6, 25));
     await fs7.rename(tmp, head);
   }
 }
@@ -8928,7 +8928,7 @@ var NovelDriver = class _NovelDriver {
       } catch (error) {
         lastError = error;
         this.logWarn("followup-attempt-failed", { novelId, sessionId: agent.session.id, intentId, errorCode: errorCodeOf(error), attempt });
-        if (attempt < retry.maxAttempts) await new Promise((resolve5) => setTimeout(resolve5, retry.backoffMs));
+        if (attempt < retry.maxAttempts) await new Promise((resolve6) => setTimeout(resolve6, retry.backoffMs));
       }
     }
     throw lastError;
@@ -9790,27 +9790,27 @@ function emitGuidesChanged(character, chatId) {
 }
 
 // packages/tavern-template/src/paths.ts
-function parsePath(path12) {
-  if (path12 === "") return [];
+function parsePath(path13) {
+  if (path13 === "") return [];
   const segments = [];
   let buf = "";
   let i = 0;
-  while (i < path12.length) {
-    const ch = path12[i];
+  while (i < path13.length) {
+    const ch = path13[i];
     if (ch === ".") {
       if (buf !== "") segments.push(buf);
       buf = "";
       i++;
     } else if (ch === "[") {
-      const close = path12.indexOf("]", i);
+      const close = path13.indexOf("]", i);
       if (close === -1) return [];
       if (buf !== "") segments.push(buf);
-      const inner = path12.slice(i + 1, close).trim();
+      const inner = path13.slice(i + 1, close).trim();
       if (!/^-?\d+$/.test(inner)) return [];
       segments.push(inner);
       buf = "";
       i = close + 1;
-      if (path12[i] === ".") i++;
+      if (path13[i] === ".") i++;
     } else {
       buf += ch;
       i++;
@@ -9831,8 +9831,8 @@ function deepClone(value) {
   }
   return value;
 }
-function getPath(root, path12) {
-  const segments = parsePath(path12);
+function getPath(root, path13) {
+  const segments = parsePath(path13);
   let cur = root;
   for (const seg of segments) {
     if (cur === null || cur === void 0) return void 0;
@@ -9848,8 +9848,8 @@ function getPath(root, path12) {
   }
   return cur;
 }
-function setPath(root, path12, value) {
-  const segments = parsePath(path12);
+function setPath(root, path13, value) {
+  const segments = parsePath(path13);
   if (segments.length === 0) return root;
   const last = segments[segments.length - 1];
   let cur = root;
@@ -9876,23 +9876,23 @@ function setPath(root, path12, value) {
   }
   return root;
 }
-function unsetPath(root, path12, index) {
+function unsetPath(root, path13, index) {
   if (index !== void 0) {
-    const target = getPath(root, path12);
+    const target = getPath(root, path13);
     if (Array.isArray(target)) {
       const idx = typeof index === "number" ? index : Number(index);
       if (Number.isInteger(idx) && idx >= 0 && idx < target.length) target.splice(idx, 1);
     } else if (typeof target === "string") {
       const idx = typeof index === "number" ? index : Number(index);
       if (Number.isInteger(idx) && idx >= 0 && idx < target.length) {
-        setPath(root, path12, target.slice(0, idx) + target.slice(idx + 1));
+        setPath(root, path13, target.slice(0, idx) + target.slice(idx + 1));
       }
     } else if (isObjectLike(target)) {
       delete target[String(index)];
     }
     return;
   }
-  const segments = parsePath(path12);
+  const segments = parsePath(path13);
   if (segments.length === 0) return;
   const last = segments[segments.length - 1];
   let cur = root;
@@ -9902,15 +9902,15 @@ function unsetPath(root, path12, index) {
   }
   if (isObjectLike(cur) || Array.isArray(cur)) delete cur[last];
 }
-function insertAtPath(root, path12, value, index) {
-  const target = getPath(root, path12);
+function insertAtPath(root, path13, value, index) {
+  const target = getPath(root, path13);
   if (Array.isArray(target)) {
     const idx = index === void 0 ? target.length : Number(index);
     if (Number.isInteger(idx) && idx >= 0 && idx <= target.length) target.splice(idx, 0, value);
   } else if (typeof target === "string") {
     const idx = index === void 0 ? target.length : Number(index);
     if (Number.isInteger(idx) && idx >= 0 && idx <= target.length) {
-      setPath(root, path12, target.slice(0, idx) + String(value) + target.slice(idx));
+      setPath(root, path13, target.slice(0, idx) + String(value) + target.slice(idx));
     }
   } else if (isObjectLike(target)) {
     target[index === void 0 ? String(target.length) : String(index)] = value;
@@ -10293,12 +10293,12 @@ function applyJsonPatch(dest, change) {
   return wrap[""];
 }
 var miniLodash = {
-  get: (obj, path12, defaults) => {
-    const value = getPath(obj, path12);
+  get: (obj, path13, defaults) => {
+    const value = getPath(obj, path13);
     return value === void 0 ? defaults : value;
   },
-  set: (obj, path12, value) => setPath(obj, path12, value),
-  has: (obj, path12) => getPath(obj, path12) !== void 0,
+  set: (obj, path13, value) => setPath(obj, path13, value),
+  has: (obj, path13) => getPath(obj, path13) !== void 0,
   merge: (dest, ...sources) => {
     for (const src of sources) deepMerge(dest, src);
     return dest;
@@ -11167,17 +11167,17 @@ var TemplateVariableSystem = class {
       results: "new",
       clone: false
     });
-    const path12 = key ?? "";
-    const old = getPath(this.cache, path12);
-    if (!this.flagAllows(opts.flags, path12, opts.scope)) return void 0;
-    this.writeScope(opts.scope, path12, value);
-    if (path12 === "") {
+    const path13 = key ?? "";
+    const old = getPath(this.cache, path13);
+    if (!this.flagAllows(opts.flags, path13, opts.scope)) return void 0;
+    this.writeScope(opts.scope, path13, value);
+    if (path13 === "") {
       if (isObjectLike(value)) {
         for (const k of Object.keys(this.cache)) delete this.cache[k];
         deepMerge(this.cache, value);
       }
     } else {
-      setPath(this.cache, path12, deepClone(value));
+      setPath(this.cache, path13, deepClone(value));
     }
     switch (opts.results) {
       case "old":
@@ -11537,7 +11537,7 @@ function clampNumber(value, min, max2) {
   if (max2 !== void 0 && out > max2) out = max2;
   return out;
 }
-function validateValue2(node, value, current, path12, notes) {
+function validateValue2(node, value, current, path13, notes) {
   if (node.ro === true && !mvuValuesEqual(value, current)) {
     return { ok: false, kind: "readonly", reason: "read-only field" };
   }
@@ -11549,7 +11549,7 @@ function validateValue2(node, value, current, path12, notes) {
     const currentItems = Array.isArray(current) ? current : [];
     const out = [];
     for (let i = 0; i < value.length; i++) {
-      const result = validateValue2(node.item, value[i], currentItems[i], `${path12}[${i}]`, notes);
+      const result = validateValue2(node.item, value[i], currentItems[i], `${path13}[${i}]`, notes);
       if (!result.ok) return result;
       out.push(result.value);
     }
@@ -11567,7 +11567,7 @@ function validateValue2(node, value, current, path12, notes) {
       if (child === void 0) {
         return { ok: false, kind: "structure", reason: `key '${key}' is not in the schema template` };
       }
-      const result = validateValue2(child, value[key], currentObject[key], path12 === "" ? key : `${path12}.${key}`, notes);
+      const result = validateValue2(child, value[key], currentObject[key], path13 === "" ? key : `${path13}.${key}`, notes);
       if (!result.ok) return result;
       next[key] = result.value;
     }
@@ -11592,21 +11592,21 @@ function validateValue2(node, value, current, path12, notes) {
       const delta = out - current;
       const capped = Math.max(-node.step, Math.min(node.step, delta));
       if (capped !== delta) {
-        notes.push(`${path12}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
+        notes.push(`${path13}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
         out = current + capped;
       }
     }
     const clamped = clampNumber(out, node.min, node.max);
     if (clamped !== out) {
-      notes.push(`${path12}: guard clamp: ${out} -> ${clamped}`);
+      notes.push(`${path13}: guard clamp: ${out} -> ${clamped}`);
       out = clamped;
     }
     return { ok: true, value: out, notes };
   }
   return { ok: true, value, notes };
 }
-function guardMvuWrite(schema, path12, value, current) {
-  const segments = path12.split(".").filter((segment) => segment !== "");
+function guardMvuWrite(schema, path13, value, current) {
+  const segments = path13.split(".").filter((segment) => segment !== "");
   if (segments.length === 0) return { ok: true, value };
   if (segments[0] === "$schema") {
     return { ok: false, kind: "readonly", reason: "the $schema subtree is the declared guard contract and cannot be settled" };
@@ -11662,9 +11662,9 @@ function guardMvuWrite(schema, path12, value, current) {
   if (!result.ok) return result;
   return { ok: true, value: result.value, ...result.notes.length > 0 ? { note: result.notes.join("; ") } : {} };
 }
-function getMvuTreePath(tree, path12) {
+function getMvuTreePath(tree, path13) {
   let cursor = tree;
-  for (const segment of path12.split(".")) {
+  for (const segment of path13.split(".")) {
     if (!isPlainObject(cursor)) return void 0;
     cursor = cursor[segment];
   }
@@ -11708,12 +11708,12 @@ function validateMvuRules(raw) {
     if (Object.keys(then).length > MVU_RULE_THEN_LIMIT) {
       throw new Error(`rule '${name2}' declares ${Object.keys(then).length} then writes, over the cap of ${MVU_RULE_THEN_LIMIT}`);
     }
-    for (const [path12, value] of Object.entries(then)) {
-      if (path12.trim() === "") throw new Error(`rule '${name2}' has an empty then path`);
+    for (const [path13, value] of Object.entries(then)) {
+      if (path13.trim() === "") throw new Error(`rule '${name2}' has an empty then path`);
       if (typeof value === "string") {
-        if (value.trim() === "") throw new Error(`rule '${name2}' has an empty then expression for '${path12}'`);
+        if (value.trim() === "") throw new Error(`rule '${name2}' has an empty then expression for '${path13}'`);
       } else if (value === void 0 || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
-        throw new Error(`rule '${name2}' then value for '${path12}' is not a JSON literal`);
+        throw new Error(`rule '${name2}' then value for '${path13}' is not a JSON literal`);
       }
     }
     return { name: name2, when, then };
@@ -11796,15 +11796,15 @@ function buildRuleEnv(tree) {
   const vars = deepClone(stripMvuControl(tree));
   return {
     vars,
-    getvar: (path12) => typeof path12 === "string" ? getMvuTreePath(vars, path12) : void 0,
+    getvar: (path13) => typeof path13 === "string" ? getMvuTreePath(vars, path13) : void 0,
     ...RULE_SANDBOX_SHADES
   };
 }
 function errorText(error) {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
-function setTreePath(tree, path12, value) {
-  const segments = path12.split(".");
+function setTreePath(tree, path13, value) {
+  const segments = path13.split(".");
   const leaf = segments.pop();
   let cursor = tree;
   for (const segment of segments) {
@@ -11832,39 +11832,39 @@ async function runMvuRules(rules, options) {
       if (!active) continue;
       const pending = [];
       let failed = false;
-      for (const [path12, raw] of Object.entries(rule.then)) {
+      for (const [path13, raw] of Object.entries(rule.then)) {
         try {
           const value = typeof raw === "string" ? await evalExpressionSandboxed(raw, buildRuleEnv(tree)) : deepClone(raw);
           if (value === void 0) throw new Error("the expression evaluated to undefined");
-          pending.push({ path: path12, value });
+          pending.push({ path: path13, value });
         } catch (error) {
-          failures.add(`rule '${rule.name}': then evaluation failed for '${path12}': ${errorText(error)}`);
+          failures.add(`rule '${rule.name}': then evaluation failed for '${path13}': ${errorText(error)}`);
           failed = true;
           break;
         }
       }
       if (failed) continue;
-      for (const { path: path12, value } of pending) {
-        const head = path12.split(".")[0];
+      for (const { path: path13, value } of pending) {
+        const head = path13.split(".")[0];
         if (head === "$schema" || head === "$rules") {
-          failures.add(`${path12}: rule '${rule.name}': guard readonly: the ${head} subtree is card-declared and cannot be settled`);
+          failures.add(`${path13}: rule '${rule.name}': guard readonly: the ${head} subtree is card-declared and cannot be settled`);
           continue;
         }
-        const current = getMvuTreePath(tree, path12);
-        const guarded = options.schema === void 0 ? void 0 : guardMvuWrite(options.schema, path12, value, current);
+        const current = getMvuTreePath(tree, path13);
+        const guarded = options.schema === void 0 ? void 0 : guardMvuWrite(options.schema, path13, value, current);
         if (guarded !== void 0 && !guarded.ok) {
-          failures.add(`${path12}: rule '${rule.name}': guard ${guarded.kind}: ${guarded.reason}`);
+          failures.add(`${path13}: rule '${rule.name}': guard ${guarded.kind}: ${guarded.reason}`);
           continue;
         }
         const finalValue = guarded === void 0 ? value : guarded.value;
         if (mvuValuesEqual(finalValue, current)) continue;
-        setTreePath(tree, path12, deepClone(finalValue));
+        setTreePath(tree, path13, deepClone(finalValue));
         progressed = true;
         const note = ["rule:" + rule.name, guarded?.note].filter((part) => part !== void 0).join("; ");
-        const parts = noteParts.get(path12) ?? [];
+        const parts = noteParts.get(path13) ?? [];
         if (!parts.includes(note)) parts.push(note);
-        noteParts.set(path12, parts);
-        writes.push({ path: path12, value: deepClone(finalValue), rule: rule.name, ...guarded?.note !== void 0 ? { guardNote: guarded.note } : {} });
+        noteParts.set(path13, parts);
+        writes.push({ path: path13, value: deepClone(finalValue), rule: rule.name, ...guarded?.note !== void 0 ? { guardNote: guarded.note } : {} });
       }
     }
     if (!progressed) break;
@@ -11872,7 +11872,7 @@ async function runMvuRules(rules, options) {
       failures.add(`$rules: fixed-point iteration hit the ${MVU_RULE_ROUNDS}-round cap; rules were still producing changes in the last round (narrow the when conditions or reorder the rules)`);
     }
   }
-  const notes = Object.fromEntries([...noteParts].map(([path12, parts]) => [path12, parts.join("; ")]));
+  const notes = Object.fromEntries([...noteParts].map(([path13, parts]) => [path13, parts.join("; ")]));
   return { failures: [...failures], writes, notes };
 }
 function plainObject(value) {
@@ -11905,9 +11905,9 @@ async function applyMvuSettlementRules(chat, card, before) {
 }
 function mergeMvuRuleNotes(guardNotes, ruleNotes) {
   const merged = {};
-  for (const [path12, note] of Object.entries(guardNotes)) merged[path12] = note;
-  for (const [path12, note] of Object.entries(ruleNotes)) {
-    merged[path12] = merged[path12] !== void 0 ? `${merged[path12]}; ${note}` : note;
+  for (const [path13, note] of Object.entries(guardNotes)) merged[path13] = note;
+  for (const [path13, note] of Object.entries(ruleNotes)) {
+    merged[path13] = merged[path13] !== void 0 ? `${merged[path13]}; ${note}` : note;
   }
   return merged;
 }
@@ -11931,7 +11931,7 @@ function valuesEqual(left, right) {
 }
 function diffVariables(before, after) {
   const changes = [];
-  const walk = (path12, left, right) => {
+  const walk = (path13, left, right) => {
     const leftObject = plainObject2(left);
     const rightObject = plainObject2(right);
     const recursible = leftObject !== void 0 && rightObject !== void 0 || left === void 0 && rightObject !== void 0 || right === void 0 && leftObject !== void 0;
@@ -11939,12 +11939,12 @@ function diffVariables(before, after) {
       const leftNext = leftObject ?? {};
       const rightNext = rightObject ?? {};
       for (const key of /* @__PURE__ */ new Set([...Object.keys(leftNext), ...Object.keys(rightNext)])) {
-        walk(path12 === "" ? key : `${path12}.${key}`, leftNext[key], rightNext[key]);
+        walk(path13 === "" ? key : `${path13}.${key}`, leftNext[key], rightNext[key]);
       }
       return;
     }
     if (!valuesEqual(left, right)) {
-      const change = { name: path12, ...left !== void 0 ? { before: left } : {} };
+      const change = { name: path13, ...left !== void 0 ? { before: left } : {} };
       if (right !== void 0) change.after = right;
       changes.push(change);
     }
@@ -12023,8 +12023,8 @@ function recordMvuTurnReceipt(chat, before, options) {
   appendMvuReceipt(chat, receipt);
   return receipt;
 }
-function setMvuTreePath(tree, path12, value) {
-  const segments = path12.split(".");
+function setMvuTreePath(tree, path13, value) {
+  const segments = path13.split(".");
   const leaf = segments.pop();
   let cursor = tree;
   for (const segment of segments) {
@@ -12034,13 +12034,13 @@ function setMvuTreePath(tree, path12, value) {
   }
   cursor[leaf] = value;
 }
-function revertMvuTreePath(tree, path12, before) {
-  const beforeValue = getMvuTreePath(before, path12);
+function revertMvuTreePath(tree, path13, before) {
+  const beforeValue = getMvuTreePath(before, path13);
   if (beforeValue !== void 0) {
-    setMvuTreePath(tree, path12, beforeValue);
+    setMvuTreePath(tree, path13, beforeValue);
     return;
   }
-  const segments = path12.split(".");
+  const segments = path13.split(".");
   const leaf = segments.pop();
   const parent = getMvuTreePath(tree, segments.join("."));
   if (parent !== null && typeof parent === "object" && !Array.isArray(parent)) {
@@ -12338,7 +12338,7 @@ async function undoMvuStSettlement(db, options) {
   const restores = planMvuUndoRestores(target.receipt);
   const metadata = chat.header.chat_metadata;
   const variables2 = plainObject2(metadata.variables) ?? {};
-  screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables2), restores, (path12) => getMvuTreePath(variables2, path12));
+  screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables2), restores, (path13) => getMvuTreePath(variables2, path13));
   applyMvuUndoRestores(variables2, restores);
   if (Object.keys(variables2).length === 0) delete metadata.variables;
   else metadata.variables = variables2;
@@ -12366,9 +12366,9 @@ async function undoMvuAgentSettlement(variables2, db, options) {
   screenMvuUndoRestores(
     readMvuSchema(chat, (await db.getCharacter(characterName))?.card),
     restores,
-    (path12) => {
-      const entry = entries.get(path12);
-      return entry !== void 0 ? entry.value : getMvuTreePath(seedTree, path12);
+    (path13) => {
+      const entry = entries.get(path13);
+      return entry !== void 0 ? entry.value : getMvuTreePath(seedTree, path13);
     }
   );
   for (const restore of restores) {
@@ -12509,6 +12509,36 @@ function registerAgentTavernAnchor(ctx, options = {}) {
       messages: [...decision.messages ?? [], kind === "opening" ? createOpeningMessage(payload.agent?.session) : createAnchorMessage(payload.agent?.session)]
     };
   }, { prepend: true });
+}
+
+// packages/plugin/src/agent-tavern/prompt-capture.ts
+var agentStepCaptures = /* @__PURE__ */ new Map();
+var AGENT_STEP_CAPTURE_LIMIT = 16;
+function registerAgentTavernPromptCapture(ctx) {
+  ctx.on?.("agent/pre-step", async (payload, next) => {
+    const decision = await next();
+    try {
+      if (decision?.kind === "enter") agentViewerCaptureStep(payload, decision);
+    } catch {
+    }
+    return decision;
+  }, { prepend: true });
+}
+function agentViewerCaptureStep(payload, decision) {
+  const agentId = payload.agent?.session?.id;
+  if (typeof agentId !== "string" || agentId.trim() === "") return;
+  const injected = (Array.isArray(decision.messages) ? decision.messages : []).filter((message) => isHostPluginMessageSource(message?.source));
+  agentStepCaptures.delete(agentId);
+  agentStepCaptures.set(agentId, {
+    turn: typeof payload.turn === "number" ? payload.turn : void 0,
+    step: typeof payload.step === "number" ? payload.step : void 0,
+    injected
+  });
+  while (agentStepCaptures.size > AGENT_STEP_CAPTURE_LIMIT) {
+    const oldest = agentStepCaptures.keys().next().value;
+    if (oldest === void 0) break;
+    agentStepCaptures.delete(oldest);
+  }
 }
 
 // packages/plugin/src/agent-tavern/projector.ts
@@ -13190,7 +13220,7 @@ function mergeTemplateLocalVars(chat, macroLocalSnapshot) {
 // packages/plugin/src/generation-hooks.ts
 var GENERATION_HOOK_TIMEOUT_MS = 1e4;
 function withTimeout(promise, ms) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const timer = setTimeout(() => {
       const timeoutError = new Error(`generation hook timed out after ${ms}ms`);
       timeoutError.hookTimeout = true;
@@ -13199,7 +13229,7 @@ function withTimeout(promise, ms) {
     Promise.resolve(promise).then(
       (value) => {
         clearTimeout(timer);
-        resolve5(value);
+        resolve6(value);
       },
       (error) => {
         clearTimeout(timer);
@@ -13302,7 +13332,9 @@ function recordPromptView(input, logger) {
       params: sanitizeParams(input.request?.params),
       promptTokens: approximateTokens(system ?? "") + messages.reduce((sum, m) => sum + approximateTokens(m.content), 0),
       // loreTrace 提取也在本 try 内：trace 构建抛错同样被吞掉，绝不反噬生成。
-      loreTrace: input.lore === void 0 ? void 0 : buildLoreTrace(input.lore)
+      loreTrace: input.lore === void 0 ? void 0 : buildLoreTrace(input.lore),
+      // Agent 模式补充面浅拷贝入缓冲：与调用方后续持有对象隔离（纯防御）。
+      agent: input.agent === void 0 ? void 0 : { ...input.agent, sections: input.agent.sections.map((section) => ({ ...section })) }
     };
     records.push(record);
     let perChat = 0;
@@ -13863,7 +13895,7 @@ function parseEmbeddings(payload, count, expectedDims2) {
   return vectors;
 }
 function delay(ms) {
-  return new Promise((resolve5) => setTimeout(resolve5, ms));
+  return new Promise((resolve6) => setTimeout(resolve6, ms));
 }
 async function embedProbe(root, config, options = {}) {
   const status2 = await readEmbedStatus(root);
@@ -15029,7 +15061,7 @@ async function fetchFromAtom(options) {
   };
 }
 function resolveRemoteCommit(repository, ref, timeoutMs) {
-  return new Promise((resolve5) => {
+  return new Promise((resolve6) => {
     const url = /^https?:|^git@/i.test(repository) ? repository : `https://github.com/${repository.replace(/^\//, "")}.git`;
     execFile2("git", ["ls-remote", url, `refs/heads/${ref}`, ref], {
       encoding: "utf8",
@@ -15038,11 +15070,11 @@ function resolveRemoteCommit(repository, ref, timeoutMs) {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
     }, (error, stdout) => {
       if (error) {
-        resolve5("");
+        resolve6("");
         return;
       }
       const first = String(stdout ?? "").split("\n").map((line) => line.trim()).find(Boolean) ?? "";
-      resolve5(first.split(/\s+/)[0] ?? "");
+      resolve6(first.split(/\s+/)[0] ?? "");
     });
   });
 }
@@ -15094,7 +15126,7 @@ function describeError(error) {
 function curlGet(url, accept, timeoutMs, exec = execFile2) {
   const command = process.env.DSH_TAVERN_CURL?.trim() || (process.platform === "win32" ? "curl.exe" : "curl");
   const seconds = String(Math.max(1, Math.ceil(timeoutMs / 1e3)));
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     exec(command, [
       "--silent",
       "--show-error",
@@ -15118,7 +15150,7 @@ function curlGet(url, accept, timeoutMs, exec = execFile2) {
         reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
         return;
       }
-      resolve5(String(stdout ?? ""));
+      resolve6(String(stdout ?? ""));
     });
   });
 }
@@ -15441,11 +15473,11 @@ function copyShippedFiles(sourceDir, targetDir) {
     const from = join14(sourceDir, dir);
     if (!existsSync(from)) continue;
     for (const file of listFiles(from)) {
-      const relative3 = file.slice(from.length + 1);
-      const to = join14(targetDir, dir, relative3);
+      const relative4 = file.slice(from.length + 1);
+      const to = join14(targetDir, dir, relative4);
       mkdirSync(dirname7(to), { recursive: true });
       writeFileAtomic(to, readFileSync(file));
-      copied.push(`${dir}/${relative3.replaceAll("\\", "/")}`);
+      copied.push(`${dir}/${relative4.replaceAll("\\", "/")}`);
     }
   }
   return copied;
@@ -15479,16 +15511,16 @@ function listFiles(root) {
   }
   return found;
 }
-function readdirSyncSafe(path12) {
+function readdirSyncSafe(path13) {
   try {
-    return readdirSync(path12);
+    return readdirSync(path13);
   } catch {
     return [];
   }
 }
-function statSyncSafe(path12) {
+function statSyncSafe(path13) {
   try {
-    return statSync(path12);
+    return statSync(path13);
   } catch {
     return null;
   }
@@ -15516,7 +15548,7 @@ function readInstalledStamp(pluginDir, spec = "") {
   return { version, commit };
 }
 function runCapture(command, args, options = {}) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const child = spawn(command, args, {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -15545,7 +15577,7 @@ function runCapture(command, args, options = {}) {
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      resolve5({ code: code ?? -1, output });
+      resolve6({ code: code ?? -1, output });
     });
   });
 }
@@ -15810,8 +15842,8 @@ var TavernUpdateService = class {
   }
   persistCache() {
     try {
-      const path12 = this.cachePath();
-      mkdirSync2(dirname8(path12), { recursive: true });
+      const path13 = this.cachePath();
+      mkdirSync2(dirname8(path13), { recursive: true });
       const payload = {
         schemaVersion: UPDATE_CACHE_SCHEMA,
         status: this.status,
@@ -15822,10 +15854,10 @@ var TavernUpdateService = class {
         remote: this.remote,
         pendingRestart: this.pendingRestart
       };
-      const temp = `${path12}.tmp`;
+      const temp = `${path13}.tmp`;
       writeFileSync2(temp, `${JSON.stringify(payload, null, 2)}
 `, "utf8");
-      renameSync2(temp, path12);
+      renameSync2(temp, path13);
     } catch {
     }
   }
@@ -16085,8 +16117,8 @@ function claimedToolNames() {
 // packages/plugin/src/mods/http.ts
 var MOD_HTTP_METHODS = /* @__PURE__ */ new Set(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]);
 var RESERVED_MOD_SUBROUTE_POST_PATHS = /* @__PURE__ */ new Set(["enable", "disable", "reload"]);
-function isReservedModSubroutePostPath(path12) {
-  return RESERVED_MOD_SUBROUTE_POST_PATHS.has(path12) || path12 === "button" || path12.startsWith("button/");
+function isReservedModSubroutePostPath(path13) {
+  return RESERVED_MOD_SUBROUTE_POST_PATHS.has(path13) || path13 === "button" || path13.startsWith("button/");
 }
 var MOD_HTML_DEFAULT_CSP = [
   "default-src 'none'",
@@ -16104,41 +16136,41 @@ var MOD_HTML_DEFAULT_CSP = [
 function createModRouteTable() {
   const entries = [];
   return {
-    register(method, path12, handler) {
+    register(method, path13, handler) {
       const normalizedMethod = String(method ?? "").toUpperCase();
       if (!MOD_HTTP_METHODS.has(normalizedMethod)) {
         throw new Error(`unsupported mod route method '${String(method)}'`);
       }
-      if (!isValidModHttpPath(path12)) {
-        throw new Error(`invalid mod route path '${String(path12)}'`);
+      if (!isValidModHttpPath(path13)) {
+        throw new Error(`invalid mod route path '${String(path13)}'`);
       }
-      if (normalizedMethod === "POST" && isReservedModSubroutePostPath(path12)) {
-        throw new Error(`mod route POST ${path12} is reserved by host management routes`);
+      if (normalizedMethod === "POST" && isReservedModSubroutePostPath(path13)) {
+        throw new Error(`mod route POST ${path13} is reserved by host management routes`);
       }
       if (typeof handler !== "function") throw new Error("mod route handler must be a function");
-      if (entries.some((entry) => entry.method === normalizedMethod && entry.path === path12)) {
-        throw new Error(`mod route ${normalizedMethod} ${path12} is already registered`);
+      if (entries.some((entry) => entry.method === normalizedMethod && entry.path === path13)) {
+        throw new Error(`mod route ${normalizedMethod} ${path13} is already registered`);
       }
-      entries.push({ method: normalizedMethod, path: path12, handler });
+      entries.push({ method: normalizedMethod, path: path13, handler });
       return () => {
-        const index = entries.findIndex((entry) => entry.method === normalizedMethod && entry.path === path12 && entry.handler === handler);
+        const index = entries.findIndex((entry) => entry.method === normalizedMethod && entry.path === path13 && entry.handler === handler);
         if (index >= 0) entries.splice(index, 1);
       };
     },
-    find(method, path12) {
+    find(method, path13) {
       const normalizedMethod = String(method ?? "").toUpperCase();
-      return entries.find((entry) => entry.method === normalizedMethod && entry.path === path12)?.handler;
+      return entries.find((entry) => entry.method === normalizedMethod && entry.path === path13)?.handler;
     },
     size: () => entries.length
   };
 }
 var SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-function isValidModHttpPath(path12) {
-  if (typeof path12 !== "string" || path12 === "") return false;
-  if (path12.length > 200) return false;
-  if (path12.includes("\\") || path12.includes("%")) return false;
-  if (path12.startsWith("/") || path12.endsWith("/")) return false;
-  const segments = path12.split("/");
+function isValidModHttpPath(path13) {
+  if (typeof path13 !== "string" || path13 === "") return false;
+  if (path13.length > 200) return false;
+  if (path13.includes("\\") || path13.includes("%")) return false;
+  if (path13.startsWith("/") || path13.endsWith("/")) return false;
+  const segments = path13.split("/");
   if (segments.some((segment) => segment === "." || segment === ".." || !SEGMENT_PATTERN.test(segment))) return false;
   return true;
 }
@@ -16292,7 +16324,7 @@ function renderModHtmlDocument(document, csp) {
   return `<!doctype html><html><head><meta charset="utf-8">${meta}${scripts}</head><body>${rewritten}</body></html>`;
 }
 function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (chunk) => {
@@ -16306,7 +16338,7 @@ function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
     });
     req.on("end", () => {
       try {
-        resolve5(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve6(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         reject(new Error("invalid JSON body"));
       }
@@ -16714,7 +16746,7 @@ function gitClone(url, directory, ref, timeoutMs, exec = execFile3) {
   return runGit(args, exec, timeoutMs).then(() => runGit(["-C", directory, "checkout", "HEAD", "--", "."], exec, timeoutMs));
 }
 function runGit(args, exec, timeoutMs) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     exec("git", args, {
       encoding: "utf8",
       timeout: timeoutMs,
@@ -16727,7 +16759,7 @@ function runGit(args, exec, timeoutMs) {
         reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
         return;
       }
-      resolve5();
+      resolve6();
     });
   });
 }
@@ -17253,9 +17285,9 @@ var ModHost = class _ModHost {
         }
       },
       http: {
-        route: (method, path12, handler) => {
-          const off = record.routeTable.register(method, path12, handler);
-          record.surfaces.http.add(`${String(method ?? "").toUpperCase()} ${String(path12 ?? "")}`);
+        route: (method, path13, handler) => {
+          const off = record.routeTable.register(method, path13, handler);
+          record.surfaces.http.add(`${String(method ?? "").toUpperCase()} ${String(path13 ?? "")}`);
           return tracked(off);
         }
       },
@@ -19633,6 +19665,96 @@ var materialTools = [
   })
 ];
 
+// packages/plugin/src/card-workbench/tools-reference.ts
+import { promises as fs16 } from "node:fs";
+import * as path12 from "node:path";
+function referenceRoots() {
+  return [
+    dshHomePath("attachments", "v1"),
+    dshHomePath("tavern", "workbench")
+  ];
+}
+function workbenchWorkspaceRoot() {
+  return dshHomePath("tavern", "workbench");
+}
+function isUnder(parent, child) {
+  const rel = path12.relative(parent, child);
+  if (rel === "") return true;
+  if (process.platform === "win32") {
+    const lowered = rel.toLowerCase();
+    return !(lowered === ".." || lowered.startsWith(`..${path12.sep}`));
+  }
+  return !(rel === ".." || rel.startsWith(`..${path12.sep}`));
+}
+function resolveReferencePath(raw) {
+  const resolved = path12.resolve(workbenchWorkspaceRoot(), raw.trim());
+  const roots = referenceRoots();
+  if (!roots.some((root) => isUnder(root, resolved))) {
+    throw new Error(
+      `reference path must stay inside the dialog-attachment roots (${roots.join(" or ")}); got '${raw}'. Ask the user to attach reference files through the DSH dialog instead of pasting paths from elsewhere.`
+    );
+  }
+  return resolved;
+}
+var referenceReadOutput = objectOutput({
+  found: { type: "boolean" },
+  path: { type: "string" },
+  chunkIndex: { type: "number" },
+  requestedChunkIndex: { type: "number" },
+  totalChunks: { type: "number" },
+  length: { type: "number" },
+  truncated: { type: "boolean" },
+  text: { type: "string" }
+}, ["chunkIndex", "requestedChunkIndex", "totalChunks", "length", "truncated", "text"]);
+var referenceTools = [
+  tool("reference_read", 'Read one chunk of a reference file the user attached through the DSH dialog (decision 2026-10-11-workbench-reference-read). Attachment notes look like "\u{1F4CE} name\uFF08size\uFF09\u2192 .dsh/uploads/<file>" (relative to the workbench workspace) or "[File "name" (N bytes, sha256:xx): verbatim read-only copy saved at "<absolute path>"]" \u2014 pass that path here. Only those attachment roots are readable; images and other binary files are rejected. chunkIndex defaults to 0 and is clamped into [0, totalChunks-1]; maxChars defaults to 2400 and is capped at 8000. Unknown files return found: false instead of throwing. Read chunk by chunk \u2014 never assume the whole file fits in one call.', {
+    path: { type: "string", required: true, description: 'Path from the attachment note: ".dsh/uploads/\u2026" relative to the workbench workspace, or the absolute saved-copy path from a [File \u2026] handle.' },
+    chunkIndex: { type: "integer", minimum: 0, description: "Chunk to read (0-based); out-of-range values are clamped into range." },
+    maxChars: { type: "integer", minimum: 1, maximum: 8e3, description: "Character budget for the returned text (default 2400, max 8000); longer chunks come back truncated." }
+  }, referenceReadOutput, async (args, exec) => {
+    const rawPath = stringArg(args.path);
+    let maxChars = 2400;
+    if (args.maxChars !== void 0) {
+      if (typeof args.maxChars !== "number" || !Number.isInteger(args.maxChars)) throw new Error("maxChars must be an integer");
+      maxChars = Math.min(8e3, Math.max(1, args.maxChars));
+    }
+    let requested = 0;
+    if (args.chunkIndex !== void 0) {
+      if (typeof args.chunkIndex !== "number" || !Number.isInteger(args.chunkIndex)) throw new Error("chunkIndex must be an integer");
+      requested = args.chunkIndex;
+    }
+    exec?.signal?.throwIfAborted();
+    const resolved = resolveReferencePath(rawPath);
+    let info;
+    try {
+      info = await fs16.stat(resolved);
+    } catch {
+      return { found: false, path: rawPath };
+    }
+    if (!info.isFile()) throw new Error(`reference path is not a regular file: '${rawPath}'`);
+    const buffer = await fs16.readFile(resolved);
+    if (buffer.includes(0)) {
+      throw new Error(`reference file is binary (images and archives are not readable here): '${rawPath}'`);
+    }
+    let text = buffer.toString("utf8");
+    if (text.charCodeAt(0) === 65279) text = text.slice(1);
+    const totalChunks = Math.max(1, Math.ceil(text.length / maxChars));
+    const chunkIndex = Math.min(Math.max(requested, 0), totalChunks - 1);
+    const chunk = text.slice(chunkIndex * maxChars, (chunkIndex + 1) * maxChars);
+    return {
+      found: true,
+      path: rawPath,
+      chunkIndex,
+      ...requested !== chunkIndex ? { requestedChunkIndex: requested } : {},
+      totalChunks,
+      length: chunk.length,
+      // 尾块恰好等于预算时不是截断——判据用「窗口之后还有内容」。
+      truncated: (chunkIndex + 1) * maxChars < text.length,
+      text: chunk
+    };
+  })
+];
+
 // packages/plugin/src/card-workbench/agent.ts
 var KERNEL = [
   "You are the Card Workbench agent running inside the DSH native AgentLoop (proposal 0013).",
@@ -19641,6 +19763,7 @@ var KERNEL = [
   "",
   "Working protocol for every modification request:",
   "- Read first: call card_get (cards), world_get (world books) or preset_get (presets) on the named resource to ground yourself in the current working copy before discussing any change. Previews truncate long values \u2014 card_get takes full: [fields] to fetch card fields in full and world_get takes uids to fetch entries in full; quote the exact text verbatim when rewriting or moving long content. world_list shows the whole world-book library (with the cards linking each book) when the user has not pinned an existing name.",
+  '- Attached reference files: files the user attaches through the DSH dialog show up as attachment notes \u2014 "\u{1F4CE} name\uFF08size\uFF09\u2192 .dsh/uploads/<file>" lines before their message, or [File "name" (N bytes, sha256:xx): verbatim read-only copy saved at "<path>"] handles inside it. When their content matters, read them with reference_read (pass the path from the note, chunk by chunk like material_read). Binary attachments are rejected there \u2014 report that instead of guessing at contents, and never claim to have read a file you did not.',
   "- Propose before writing: present a concrete plan \u2014 for every affected field or entry, show the current value (or an excerpt of it) and the full replacement value, plus why the change serves the user's intent. Quote exact text; never describe a change vaguely.",
   "- Record plans: for card edits call card_plan_propose, and for world book edits or creations call world_plan_propose (create: true for new books), after the user reacts positively to the idea. They record the plan (planId) with the live current values and show it in the workbench panel for review.",
   '- Wait for explicit confirmation: the user must clearly approve the plan (e.g. "confirm", "apply it", or an equivalent). Silence, a new question, or a partial remark is NOT approval. Never write on an assumed yes.',
@@ -19776,6 +19899,7 @@ function templatesEnabled(config = {}) {
 }
 function apply(ctx, config = {}) {
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns });
+  registerAgentTavernPromptCapture(ctx);
   updateChecksEnabledFlag = updateChecksEnabled(config);
   templatesEnabledFlag = templatesEnabled(config);
   const adapter = createDshAgentTavernAdapter(ctx);
@@ -22866,14 +22990,14 @@ function parseTavernSessionCommand(rawInput) {
   }
 }
 async function prepareInternalWorkspace() {
-  const path12 = dshHomePath("tavern", "workspace");
-  await mkdir4(path12, { recursive: true });
-  return { path: path12, title: TAVERN_WORKSPACE_TITLE };
+  const path13 = dshHomePath("tavern", "workspace");
+  await mkdir4(path13, { recursive: true });
+  return { path: path13, title: TAVERN_WORKSPACE_TITLE };
 }
 async function prepareWorkbenchWorkspace() {
-  const path12 = dshHomePath("tavern", "workbench");
-  await mkdir4(path12, { recursive: true });
-  return { path: path12, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
+  const path13 = dshHomePath("tavern", "workbench");
+  await mkdir4(path13, { recursive: true });
+  return { path: path13, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
 }
 function readBuildInfo() {
   let version = "unknown";
@@ -22881,8 +23005,8 @@ function readBuildInfo() {
   const stamped = buildTimeStamp();
   if (stamped.commit !== "") commit = stamped.commit;
   for (const packagePath of [
-    resolve4(import.meta.dirname, "package.json"),
-    resolve4(import.meta.dirname, "..", "package.json")
+    resolve5(import.meta.dirname, "package.json"),
+    resolve5(import.meta.dirname, "..", "package.json")
   ]) {
     try {
       const packageData = JSON.parse(readFileSync4(packagePath, "utf8"));
@@ -22894,7 +23018,7 @@ function readBuildInfo() {
     }
   }
   try {
-    const generated = JSON.parse(readFileSync4(resolve4(import.meta.dirname, "version.json"), "utf8"));
+    const generated = JSON.parse(readFileSync4(resolve5(import.meta.dirname, "version.json"), "utf8"));
     if (typeof generated?.version === "string" && generated.version.trim() !== "") {
       version = generated.version.trim();
     }
@@ -22907,13 +23031,13 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.5.0".trim() : "";
-  const commit = true ? normalizeCommit("5f7dc17") : void 0;
+  const commit = true ? normalizeCommit("e585324") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
   const fallback = normalizeCommit(process.env.DSH_TAVERN_COMMIT ?? buildFallback) ?? "unknown";
-  const repositoryRoot = resolve4(import.meta.dirname, "..", "..");
-  const packagePath = relative2(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
+  const repositoryRoot = resolve5(import.meta.dirname, "..", "..");
+  const packagePath = relative3(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
   if (packagePath !== "packages/plugin") return fallback;
   const git = (args) => execFileSync("git", args, {
     cwd: repositoryRoot,
@@ -22923,8 +23047,8 @@ function resolveTavernCommit(buildFallback) {
     windowsHide: true
   }).trim();
   try {
-    const gitRoot = resolve4(git(["rev-parse", "--show-toplevel"]));
-    if (relative2(repositoryRoot, gitRoot) !== "") return fallback;
+    const gitRoot = resolve5(git(["rev-parse", "--show-toplevel"]));
+    if (relative3(repositoryRoot, gitRoot) !== "") return fallback;
     return normalizeCommit(git(["rev-parse", "--short=7", "HEAD"])) ?? fallback;
   } catch {
     return fallback;
@@ -23063,14 +23187,14 @@ async function handleModsApi(ctx, req, res, url, route, method) {
   }
   if (segments.length >= 1 && modId !== "") {
     let id = modId;
-    let path12 = subpath;
+    let path13 = subpath;
     try {
       id = decodeURIComponent(modId);
-      path12 = subpath === "" ? "" : decodeURIComponent(subpath);
+      path13 = subpath === "" ? "" : decodeURIComponent(subpath);
     } catch {
       return notFound();
     }
-    const handled = await host.handleRoute(req, res, method, url, id, path12);
+    const handled = await host.handleRoute(req, res, method, url, id, path13);
     if (handled) return;
     return notFound();
   }
@@ -23082,7 +23206,7 @@ function sendJson(res, status2, body) {
   res.end(JSON.stringify(body));
 }
 function readJson(req, maxBytes = 2 * 1024 * 1024) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (chunk) => {
@@ -23094,7 +23218,7 @@ function readJson(req, maxBytes = 2 * 1024 * 1024) {
     });
     req.on("end", () => {
       try {
-        resolve5(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve6(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         reject(new Error("invalid JSON body"));
       }
