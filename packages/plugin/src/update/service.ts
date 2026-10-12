@@ -10,10 +10,11 @@
  *   profile 走；写入失败静默降级为内存态。
  * - 安装只允许一个在飞任务，进度以环形日志暴露给轮询端点。
  * - 包替换必须重启进程（宿主 plugin-manager 的既有语义），因此安装成功后
- *   状态进入 `restart-required`，在本地构建 stamp 追上已安装 commit 之前
- *   不再重复提示更新。
+ *   状态进入 `restart-required`，直到「模块加载时磁盘上的旁车 stamp」追上
+ *   安装结果（安装器统一落 version.json 戳，见 apply.ts 的 stampInstalledBuild）
+ *   才解除——不再依赖烤进 bundle 的构建期字面量（dist 随源入库时恒为父提交）。
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
   UNKNOWN_FIELD,
@@ -30,6 +31,7 @@ import { fetchRemoteBuild, type FetchLike } from './sources.js'
 import {
   installUpdate,
   watchPluginManager,
+  writeFileAtomic,
   type TavernInstallOutcome,
   type TavernInstallRequest,
   type TavernInstallStrategy,
@@ -169,8 +171,12 @@ export class TavernUpdateService {
     }
     if (this.pendingRestart !== null) {
       if (sameCommit(this.local.commit, this.pendingRestart.commit)) {
-        // 重启后本地构建已追上安装结果：回到常规判定。
+        // 重启后本地构建已追上安装结果：作废旧结论并立即重查——否则 TTL 窗口
+        // 内会带着刚清空的过渡态复读上一个 status。
         this.pendingRestart = null
+        this.status = 'unknown'
+        this.reason = 'the running build has caught up with the installed update'
+        this.checkedAt = null
       } else {
         this.status = 'restart-required'
         this.reason = `installed ${this.pendingRestart.version} (${this.pendingRestart.commit}); restart DSH to load it`
@@ -214,11 +220,12 @@ export class TavernUpdateService {
 
   /**
    * 一键更新。默认只在发现新版本时执行；`force` 允许把当前 ref 重装一遍
-   * （例如本地构建 stamp 损坏时手工修复）。
+   * （例如本地构建 stamp 损坏、或过渡态本身出了岔子时手工修复——force 可以
+   * 穿透 pendingRestart 短路，否则死循环的过渡态会让更新按钮永久失效）。
    */
   async install(input: { force?: boolean } = {}): Promise<TavernUpdateSnapshot> {
     if (this.installState.running) return this.snapshot()
-    if (this.pendingRestart !== null) {
+    if (this.pendingRestart !== null && input.force !== true) {
       this.installState = {
         ...emptyInstallState(),
         phase: 'done',
@@ -337,15 +344,22 @@ export class TavernUpdateService {
     // 语义）：即使宿主在 HMR 下回报 application:'applied'，运行中的内存 stamp
     // 仍是旧的。只要磁盘安装结果还没被本地构建追上（commit 不同），一律进入
     // 过渡态——否则 status 落回 up-to-date，下一个 TTL 周期又会对同一版本报
-    // update-available（徽标回弹）。
-    if (outcome.restartRequired || !sameCommit(this.local.commit, outcome.installed.commit)) {
+    // update-available（徽标回弹）。目标 commit 不可知（远端 commit 读不到、
+    // spec 退到分支 ref）时除外：没有可判定收敛的锚点，硬造 restart-required
+    // 只会得到永远解除不了的过渡态（按钮跟着短路失效）。
+    const target = outcome.installed.commit
+    if (isCommitText(target) && (outcome.restartRequired || !sameCommit(this.local.commit, target))) {
       this.pendingRestart = outcome.installed
       this.status = 'restart-required'
-      this.reason = `installed ${outcome.installed.version} (${outcome.installed.commit}) via ${outcome.strategy}; restart DSH to load it`
-    } else {
+      this.reason = `installed ${outcome.installed.version} (${target}); restart DSH to load it`
+    } else if (sameCommit(this.local.commit, target)) {
       this.pendingRestart = null
       this.status = 'up-to-date'
-      this.reason = `installed ${outcome.installed.version} (${outcome.installed.commit}) via ${outcome.strategy}`
+      this.reason = `installed ${outcome.installed.version} (${target}) via ${outcome.strategy}`
+    } else {
+      this.pendingRestart = null
+      this.status = 'unknown'
+      this.reason = `installed ${outcome.installed.version} via ${outcome.strategy}; restart DSH to make sure — the installed commit could not be verified`
     }
   }
 
@@ -362,17 +376,34 @@ export class TavernUpdateService {
       if (typeof cached.checkedAt === 'string') this.checkedAt = cached.checkedAt
       if (typeof cached.source === 'string') this.source = cached.source
       if (cached.remote !== null && typeof cached.remote === 'object') this.remote = cached.remote as TavernRemoteBuild
-      if (cached.pendingRestart !== null && typeof cached.pendingRestart === 'object'
+      // 过渡态只在「同一个已安装目录」里有效：update-state.json 在 $DSH_HOME/tavern
+      // 下被多个 profile 共享（desktop/web 同一用户），A profile 装出的
+      // pendingRestart 对 B profile 是幽灵——它的插件目录根本没被那次安装写过，
+      // stamp 永远追不上，restart-required 就永远解除不了。旧缓存没有来源字段，
+      // 一律不恢复（顺带把历史遗留的卡死幽灵一次性清干净）。
+      const pendingOrigin = typeof cached.pendingRestartPluginDir === 'string' ? cached.pendingRestartPluginDir : ''
+      if (pendingOrigin === this.options.pluginDir
+        && cached.pendingRestart !== null && typeof cached.pendingRestart === 'object'
         && typeof cached.pendingRestart?.version === 'string') {
         this.pendingRestart = {
           version: cached.pendingRestart.version,
           commit: isCommitText(cached.pendingRestart.commit) ? shortCommit(cached.pendingRestart.commit) : UNKNOWN_FIELD,
         }
       }
-      // 缓存只用于「首屏立刻有徽标」：本地 stamp 变了（刚升级/刚重启）时旧结论作废。
+      // 过渡态没被恢复（来源不符 / 旧缓存没有来源字段）时，缓存里的
+      // restart-required 只是上一代或别的安装目录的遗物：首屏不该继续亮
+      // 「需要重启」，交给下一次检查重新落锤。
+      if (this.pendingRestart === null && this.status === 'restart-required') {
+        this.status = 'unknown'
+        this.reason = 'the cached restart transition does not apply to this install directory'
+      }
+      // 缓存只用于「首屏立刻有徽标」：本地 stamp 变了（刚升级/刚重启，新模块
+      // 代已加载）时旧结论作废——过渡态也随之结束，交给接下来的常规检查重新
+      // 落锤，而不是让上一代安装记录继续以 restart-required 压住新代。
       if (cached.local !== undefined && !sameLocal(cached.local, this.local)) {
         this.remote = null
         this.checkedAt = null
+        this.pendingRestart = null
         this.status = 'unknown'
         this.reason = 'local build changed since the cached check'
       }
@@ -393,10 +424,10 @@ export class TavernUpdateService {
         local: this.local,
         remote: this.remote,
         pendingRestart: this.pendingRestart,
+        // 过渡态来源（loadCache 的幽灵防线读它）；null = 无过渡态。
+        pendingRestartPluginDir: this.pendingRestart === null ? null : this.options.pluginDir,
       }
-      const temp = `${path}.tmp`
-      writeFileSync(temp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
-      renameSync(temp, path)
+      writeFileAtomic(path, `${JSON.stringify(payload, null, 2)}\n`)
     } catch {
     }
   }

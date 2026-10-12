@@ -236,7 +236,7 @@ git spec 固定到安装时的提交，不跟随源码更新；`version.json` �
 
 - **发现**：「设置 → dsh-tavern」标题下与管理面板「总览」分区显示当前构建（`已安装 v0.4.5 (7a29db6)`）、GitHub 上的最新构建、待合入的 commit 列表与上次检查时间。启动后延迟 12s 首查、每 6h 复查，结果缓存在 `$DSH_HOME/tavern/update-state.json`；「检查更新」按钮穿透缓存立即查。
 - **判定**：仓库不发 release/tag，因此以 main 分支最新 commit + `packages/plugin/package.json` 的 version 为准（规则见 [`decisions/2026-10-05-desktop-plugin-self-update.md`](decisions/2026-10-05-desktop-plugin-self-update.md)）。
-- **更新**：「立即更新」按 `dsh plugin`（桌面版自带 CLI，直接改 profile 的 `package.json` + `pnpm-lock.yaml`）→ `plugin-manager` 服务 → GitHub checkout 覆写的顺序落地，进度日志实时显示在卡片里。三条路径都需要**重启 DeepSeek Harness**：包替换要新的 JS module generation，宿主 HMR 不监听 `node_modules`。
+- **更新**：「立即更新」按 `dsh plugin`（桌面版自带 CLI，直接改 profile 的 `package.json` + `pnpm-lock.yaml`）→ `plugin-manager` 服务 → GitHub checkout 覆写的顺序落地，进度日志实时显示在卡片里。三条路径都需要**重启 DeepSeek Harness**：包替换要新的 JS module generation，宿主 HMR 不监听 `node_modules`。安装成功后安装器会把目标 commit 统一落进已安装目录的 `version.json` 旁车——运行中构建的身份以「模块加载时磁盘上的旁车」为准（烤进 bundle 的构建期字面量对随源入库的 dist 恒为父提交，只做旁车缺席时的兜底），重启加载新安装后「需要重启」即解除；过渡态缓存按安装目录隔离（`update-state.json` 在多 profile 间共享，别处装出的 pendingRestart 不会压到本目录），`force` 可穿透卡住的过渡态重装（收敛机制见 [`decisions/2026-10-12-update-restart-required-stuck.md`](decisions/2026-10-12-update-restart-required-stuck.md)）。
 - **来源降级**：`api.github.com` → `raw.githubusercontent.com` + `git ls-remote` → commits atom feed。企业 TLS 中间人会让 node 的 `fetch` 证书校验失败（`unable to verify the first certificate`），因此每个 HTTP 请求在 fetch 失败后自动用系统 `curl` 重试。
 - **开关**：profile 的 `dsh-tavern` 行写 `checkForUpdates: false`，或设 `DSH_TAVERN_DISABLE_UPDATE_CHECK=1` 关闭自动发现；`DSH_TAVERN_DISABLE_CURL=1` 关闭 curl 兜底；`GITHUB_TOKEN`/`GH_TOKEN` 可提高 GitHub 限流配额。
 - **HTTP 端点**：`GET /api/dsh-tavern/update`（缓存快照，`?refresh=1` 穿透 TTL）、`POST /api/dsh-tavern/update/check`、`POST /api/dsh-tavern/update/install`（`{ "wait": false }` 立刻返回，进度轮询 `GET update`）。
@@ -295,7 +295,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：87 个测试文件、1220 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
+当前基线：87 个测试文件、1226 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 
@@ -326,6 +326,7 @@ GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern �
 - [`docs/exploration/2026-10-11-jsr-lwb-reference.md`](docs/exploration/2026-10-11-jsr-lwb-reference.md)：JS-Slash-Runner（酒馆助手）与 LittleWhiteBox（小白盒）竞品参考——Mod 生命周期基础设施、$schema 变量写入守卫、多阶段记忆召回、评测基建与不复刻清单；P0 施工项：中文分词修复、MVU 守卫、Mod 桥下行事件与按钮、Mod 日志查看器。
 - [`decisions/2026-08-15-tavern-management-panel.md`](decisions/2026-08-15-tavern-management-panel.md)：面板入口、角色删除级联、变量与侧栏共存的落地决策。
 - [`decisions/2026-10-05-desktop-plugin-self-update.md`](decisions/2026-10-05-desktop-plugin-self-update.md)：桌面版内置自更新（GitHub 版本发现、落地路径顺序、curl 兜底、构建期 stamp）。
+- [`decisions/2026-10-12-update-restart-required-stuck.md`](decisions/2026-10-12-update-restart-required-stuck.md)：自更新「需要重启」永不解除的修复——运行身份改以安装器落戳的 version.json 旁车为准（烤入字面量对随源入库 dist 恒为父提交）、过渡态缓存按安装目录隔离 + force 逃生门、persist 原子写重试。
 - [`docs/mods/mod-api.md`](docs/mods/mod-api.md)：Mod 扩展接口的开发者文档（清单、生命周期、全部能力面、面板 UI 表面协议、管理端点与审计），配套官方示例在 [`packages/plugin/examples/mods/`](packages/plugin/examples/mods/)（asset-stats / mood-tracker / story-clock，覆盖 v1 全部能力面）。
 
 ## 插件管理

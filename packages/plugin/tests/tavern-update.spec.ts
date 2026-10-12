@@ -16,13 +16,14 @@ import { fetchRemoteBuild } from '../src/update/sources.js'
 import { TavernUpdateService, updateChangelog } from '../src/update/service.js'
 import {
   copyShippedFiles,
-  ensureVersionStamp,
+  installUpdate,
   installViaCli,
   installViaPluginManager,
   readInstalledStamp,
   resolveDesktopCli,
   resolveProfileName,
   runInstallChain,
+  stampInstalledBuild,
   watchPluginManager,
 } from '../src/update/apply.js'
 
@@ -629,16 +630,39 @@ describe('update flow hardening (0.2.0-rc.2 audit)', () => {
     disposeB()
   })
 
-  it('ensureVersionStamp synthesizes the build sidecar for git checkouts', () => {
-    const source = tempDir('stamp-source-')
+  it('stampInstalledBuild 把目标 commit 戳进旁车，陈旧旁车也被覆盖', () => {
     const target = tempDir('stamp-target-')
-    writeFileSync(join(target, 'package.json'), JSON.stringify({ name: 'dsh-tavern', version: '0.4.0' }))
-    expect(ensureVersionStamp(source, target, REMOTE_SHA)).toBe(true)
-    expect(JSON.parse(readFileSync(join(target, 'version.json'), 'utf8'))).toEqual({ version: '0.4.0', commit: 'a1b2c3d' })
-    // checkout 自带 version.json 时以 checkout 为准，不做合成覆盖。
-    writeFileSync(join(source, 'version.json'), JSON.stringify({ version: '0.4.1', commit: 'deadbee' }))
-    expect(ensureVersionStamp(source, target, REMOTE_SHA)).toBe(false)
-    expect(JSON.parse(readFileSync(join(target, 'version.json'), 'utf8')).version).toBe('0.4.0')
+    writeFileSync(join(target, 'package.json'), JSON.stringify({ name: 'dsh-tavern', version: '0.5.0' }))
+    // 陈旧旁车（老 checkout 残留 / link: 开发仓库的上次构建）必须被目标 commit 覆盖，
+    // 否则 readInstalledStamp 读回旧值、restart-required 永远差一拍。
+    writeFileSync(join(target, 'version.json'), JSON.stringify({ version: '0.4.0', commit: 'deadbee' }))
+    expect(stampInstalledBuild(target, '0.5.0', REMOTE_SHA)).toBe(true)
+    expect(JSON.parse(readFileSync(join(target, 'version.json'), 'utf8'))).toEqual({ version: '0.5.0', commit: 'a1b2c3d' })
+    // 版本未知或目标不是 commit 时不动磁盘（没有可信任的值可写）。
+    expect(stampInstalledBuild(target, 'unknown', REMOTE_SHA)).toBe(false)
+    expect(stampInstalledBuild(target, '0.5.0', 'main')).toBe(false)
+    expect(JSON.parse(readFileSync(join(target, 'version.json'), 'utf8'))).toEqual({ version: '0.5.0', commit: 'a1b2c3d' })
+  })
+
+  it('installUpdate 成功后统一落戳：version.json 追上安装目标，installed 读回一致', async () => {
+    const pluginDir = tempDir('stamp-install-')
+    writeFileSync(join(pluginDir, 'package.json'), JSON.stringify({ name: 'dsh-tavern', version: '0.5.0' }))
+    const ctx = {
+      logger: { info: () => {} },
+      on: () => () => {},
+      get: (name: string) => (name === 'pluginManager' ? {
+        installBundle: async () => ({ application: 'restart-required', changed: true, bundle: 'dsh-tavern' }),
+      } : undefined),
+    }
+    const logs: string[] = []
+    const outcome = await installUpdate({
+      ctx, repository: 'LingyeSoul/dsh-tavern', ref: 'main', commit: REMOTE_SHA,
+      local: { version: '0.4.0', commit: LOCAL_SHA }, pluginDir, log: (line) => logs.push(line),
+    })
+    expect(outcome.ok).toBe(true)
+    expect(outcome.installed).toEqual({ version: '0.5.0', commit: 'a1b2c3d' })
+    expect(JSON.parse(readFileSync(join(pluginDir, 'version.json'), 'utf8'))).toEqual({ version: '0.5.0', commit: 'a1b2c3d' })
+    expect(logs.some((line) => line.includes('stamped version.json'))).toBe(true)
   })
 
   it('watchPluginManager disposes the returned cordis Fiber, not a phantom function', () => {
@@ -667,5 +691,129 @@ describe('update flow hardening (0.2.0-rc.2 audit)', () => {
       delete process.env.DSH_PROFILE
     }
     expect(resolveProfileName({})).toBe('desktop')
+  })
+})
+
+describe('restart-required 收敛与幽灵防线（决策 2026-10-12）', () => {
+  const local = { version: '0.3.8', commit: LOCAL_SHA }
+
+  function writeCache(home: string, payload: Record<string, unknown>): void {
+    writeFileSync(join(home, 'update-state.json'), JSON.stringify({ schemaVersion: 1, ...payload }, null, 2))
+  }
+
+  function make(home: string, options: Record<string, unknown> = {}) {
+    return new TavernUpdateService({ home, pluginDir: home, local, fetchImpl: stubOfRemote(), ...options })
+  }
+
+  it('旧缓存（无来源字段）的 pendingRestart 不恢复——历史卡死态自愈', async () => {
+    const home = tempDir('ghost-legacy-')
+    writeCache(home, {
+      status: 'restart-required',
+      reason: 'installed 0.3.9 (a1b2c3d) via cli; restart DSH to load it',
+      checkedAt: new Date().toISOString(),
+      source: 'api',
+      local,
+      remote: null,
+      pendingRestart: { version: '0.3.9', commit: 'a1b2c3d' },
+    })
+    const instance = make(home, {
+      installerImpl: async () => ({
+        ok: false, strategy: 'cli', application: 'failed',
+        message: 'offline', restartRequired: false,
+        installed: { version: 'unknown', commit: 'unknown' },
+      }),
+    })
+    await instance.check({ force: true })
+    expect(instance.snapshot().status).toBe('update-available')
+    // 更新按钮不再被「already installed」短路。
+    const snapshot = await instance.install()
+    expect(snapshot.install.message).not.toContain('already installed')
+  })
+
+  it('pendingRestart 来源是别的插件目录（共享 home 的其他 profile）时不恢复', async () => {
+    const home = tempDir('ghost-cross-')
+    writeCache(home, {
+      status: 'restart-required',
+      reason: 'installed 0.3.9 (a1b2c3d); restart DSH to load it',
+      checkedAt: new Date().toISOString(),
+      source: 'api',
+      local,
+      remote: null,
+      pendingRestart: { version: '0.3.9', commit: 'a1b2c3d' },
+      pendingRestartPluginDir: 'C:\\other\\profile\\node_modules\\dsh-tavern',
+    })
+    const instance = make(home)
+    await instance.check({ force: true })
+    expect(instance.snapshot().status).toBe('update-available')
+  })
+
+  it('来源匹配且 stamp 未追上时恢复过渡态（防徽标回弹），force 可穿透重装', async () => {
+    const home = tempDir('ghost-same-')
+    writeCache(home, {
+      status: 'restart-required',
+      reason: 'installed 0.3.9 (a1b2c3d); restart DSH to load it',
+      checkedAt: new Date().toISOString(),
+      source: 'api',
+      local,
+      remote: null,
+      pendingRestart: { version: '0.3.9', commit: 'a1b2c3d' },
+      pendingRestartPluginDir: home,
+    })
+    let installs = 0
+    const instance = make(home, {
+      installerImpl: async () => {
+        installs += 1
+        return {
+          ok: true, strategy: 'checkout', application: 'restart-required',
+          message: 'reinstalled', restartRequired: true,
+          installed: { version: '0.3.9', commit: 'a1b2c3d' },
+        }
+      },
+    })
+    // 恢复的过渡态：check 短路、非 force 安装被拒。
+    await instance.check({ force: true })
+    expect(instance.snapshot().status).toBe('restart-required')
+    expect((await instance.install()).install.message).toContain('already installed')
+    expect(installs).toBe(0)
+    // force 穿透短路：死循环的过渡态有逃生门。
+    await instance.install({ force: true })
+    expect(installs).toBe(1)
+  })
+
+  it('本地 stamp 变化（重启加载新代）时丢弃过渡态并重新判定', async () => {
+    const home = tempDir('ghost-caught-up-')
+    writeCache(home, {
+      status: 'restart-required',
+      reason: 'installed 0.3.9 (a1b2c3d); restart DSH to load it',
+      checkedAt: new Date().toISOString(),
+      source: 'api',
+      local,
+      remote: null,
+      pendingRestart: { version: '0.3.9', commit: 'a1b2c3d' },
+      pendingRestartPluginDir: home,
+    })
+    const restarted = new TavernUpdateService({
+      home, pluginDir: home, local: { version: '0.3.9', commit: REMOTE_SHA }, fetchImpl: stubOfRemote(),
+    })
+    const after = await restarted.check({ force: true })
+    expect(after.status).toBe('up-to-date')
+  })
+
+  it('安装结果 commit 不可知时不进入 restart-required（造不出收敛锚点）', async () => {
+    const home = tempDir('ghost-unknown-')
+    const instance = make(home, {
+      installerImpl: async () => ({
+        ok: true, strategy: 'cli', application: 'restart-required',
+        message: 'branch install', restartRequired: true,
+        installed: { version: '0.3.9', commit: 'unknown' },
+      }),
+    })
+    await instance.check({ force: true })
+    await instance.install()
+    expect(instance.snapshot().status).toBe('unknown')
+    expect(instance.snapshot().install.restartRequired).toBe(true)
+    // 不落过渡态：非 force 安装不会被「already installed」短路。
+    const again = await instance.install()
+    expect(again.install.message).not.toContain('already installed')
   })
 })

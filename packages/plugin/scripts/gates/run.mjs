@@ -1262,7 +1262,7 @@ if (route !== undefined && typeof route.handler === 'function') {
   probe.installPhase = installState.phase || null
   probe.installStrategy = installState.strategy || null
   probe.installRestartRequired = installState.restartRequired === true
-  probe.installLogTail = log.length > 0 ? log[log.length - 1] : ''
+  probe.installLogTail = log.slice(-5).join(' | ')
   probe.installedSpecs = installedSpecs
   probe.installRequestId = typeof installBundleOptions[0]?.requestId === 'string'
 }
