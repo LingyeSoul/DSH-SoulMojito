@@ -118,9 +118,14 @@ export async function setup(api) {
   `>=0.5.1 <0.6.0`；`~0.5` ⇒ `>=0.5.0 <0.6.0`；`~1` ⇒ `<2.0.0`）。
 - 缺段补 0（`0.5` == `0.5.0`）；prerelease 后缀解析后忽略。
 - 版本或范围不可解析 → **fail-closed**（不满足，面板展示原因）。
+- **0.x 陷阱**：`^0.4.1` ⇒ `>=0.4.1 <0.5.0`——主版本为 0 时 caret 锁的是**次段**，
+  宿主升次版本（0.4.x → 0.5.0）即越界：Mod 在扫描阶段被拦进 blocked，面板报
+  「错误」并展示 `requires dsh-tavern … (host …)` 原因。要跨次版本兼容写 `||`
+  分支（`^0.4.1 || ^0.5.0`）；只声明实际验证过的版本
+  （踩坑实录：[decisions/2026-10-12-story-clock-engines-drift.md](../../decisions/2026-10-12-story-clock-engines-drift.md)）。
 
 ```jsonc
-"engines": { "dsh-tavern": "^0.4.1" }   // 宿主 0.4.x 且 ≥0.4.1
+"engines": { "dsh-tavern": "^0.5.0" }   // 宿主 0.5.x 且 ≥0.5.0
 ```
 
 ---

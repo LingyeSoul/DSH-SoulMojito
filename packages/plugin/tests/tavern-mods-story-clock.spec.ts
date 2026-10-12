@@ -7,7 +7,7 @@ import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { generationHooks } from '../src/generation-hooks.js'
 import { emitGuidesChanged } from '../src/guides.js'
 import { ModHost } from '../src/mods/host.js'
-import { checkModManifest } from '../src/mods/manifest.js'
+import { checkModManifest, satisfiesVersionRange } from '../src/mods/manifest.js'
 import { emitAssetsSaved } from '../src/mods/events.js'
 import { clearModRegistryForTest, modSectionSnapshot } from '../src/mods/cross-bundle.js'
 
@@ -19,6 +19,11 @@ import { clearModRegistryForTest, modSectionSnapshot } from '../src/mods/cross-b
 
 const MOD_ID = 'dsh-tavern.story-clock'
 const repoExampleMod = join(import.meta.dirname, '..', 'examples', 'mods', MOD_ID)
+
+// 宿主版本取本包真实发布版本（index.ts 的 BUILD_INFO.version 同源语义）——
+// 示例 Mod 的 engines 必须对「随仓库发布的宿主」成立，硬编码旧版本会把
+// engines 漂移掩盖成绿灯（2026-10-12 story-clock ^0.4.1 卡死 0.5.0 宿主的事故）。
+const PLUGIN_VERSION = (JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')) as { version: string }).version
 
 function tempHome(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -90,7 +95,7 @@ describe('story-clock example mod', () => {
     cpSync(repoExampleMod, join(home, 'tavern', 'mods', MOD_ID), { recursive: true })
     host = await ModHost.open({
       root: join(home, 'tavern'),
-      hostVersion: '0.4.1',
+      hostVersion: PLUGIN_VERSION,
       dbProvider: (async () => fakeStateStore({ modsEnabled: true, enabled: { [MOD_ID]: true } })) as never,
       ctx: {
         logger: { info: () => {}, warn: () => {}, error: () => {} },
@@ -118,7 +123,10 @@ describe('story-clock example mod', () => {
     expect(check.ok).toBe(true)
     if (check.ok) {
       expect(check.manifest.capabilities).toEqual(['storage', 'llm'])
-      expect(check.manifest.engines?.dshTavern).toBe('^0.4.1')
+      // engines 声明当前宿主次版本（^0.5.0 = >=0.5.0 <0.6.0）；升次版本时本断言
+      // 与 drift guard（tavern-mods-examples.spec.ts）一起逼着同步示例清单。
+      expect(check.manifest.engines?.dshTavern).toBe('^0.5.0')
+      expect(satisfiesVersionRange(PLUGIN_VERSION, check.manifest.engines!.dshTavern!).ok).toBe(true)
       expect(check.manifest.surfaces.hooks).toEqual(['user-input', 'post-save'])
       // 声明式按钮（A-1a）：CJK 显示名可声明
       expect(check.manifest.buttons).toEqual(['拨快 1 小时'])
