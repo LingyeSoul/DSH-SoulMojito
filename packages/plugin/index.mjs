@@ -4695,6 +4695,45 @@ var TavernStore = class _TavernStore {
       return { chatId: nextId, chat: branchLog };
     });
   }
+  /**
+   * 宿主原生会话分叉的收养物化（decisions/2026-10-11-agent-tavern-host-fork）：
+   * 克隆父聊天 header（guides / MVU 回执环随行），messages 置空——楼层由
+   * AgentTavern 投影器从子会话事件回放回填，不复制父 JSONL（身份幂等键是
+   * (子 sessionId, eventSeq)，复制会引入第二份身份语义）。chat_metadata 写
+   * `agentTavernFork` 谱系标记（收养崩溃恢复的复用判据）与 `bookmark_link`
+   * 回链（复用消息分支的元数据形状，client「↩ linked from」行同款消费）。
+   * 命名 `${stem} - fork N.jsonl`（branchChat 同款字符集安全与递增规则）。
+   */
+  async forkChat(characterName, parentChatId, fork) {
+    if (typeof fork.sessionId !== "string" || fork.sessionId === "" || typeof fork.parentSessionId !== "string" || fork.parentSessionId === "") {
+      throw new Error("forkChat requires sessionId and parentSessionId");
+    }
+    return this.mutateChat(async () => {
+      const dir = path.join(this.root, "chats", safeFileName(characterName));
+      const source = path.join(dir, safeChatFileName(parentChatId));
+      const bytes = await this.tryRead(source);
+      if (bytes === void 0) throw new Error(`chat '${parentChatId}' not found`);
+      const log = parseChatLog(Buffer.from(bytes).toString("utf8"));
+      const header = structuredClone(log.header);
+      const messageId = typeof fork.bookmarkMessageId === "number" && Number.isSafeInteger(fork.bookmarkMessageId) && fork.bookmarkMessageId >= 0 && fork.bookmarkMessageId < log.messages.length ? fork.bookmarkMessageId : Math.max(0, log.messages.length - 1);
+      header.chat_metadata = {
+        ...header.chat_metadata ?? {},
+        bookmark_link: { character: characterName, chatId: parentChatId, messageId },
+        agentTavernFork: { sessionId: fork.sessionId, parentSessionId: fork.parentSessionId }
+      };
+      const stem = parentChatId.replace(/\.jsonl$/i, "").replace(/\.jsonl$/i, "");
+      const safeStem = stem.replace(/[^A-Za-z0-9@ _.-]/g, "_").slice(0, 80) || "chat";
+      let nextId = `${safeStem} - fork 1.jsonl`;
+      let counter = 1;
+      while (await this.tryRead(path.join(dir, nextId)) !== void 0) {
+        counter += 1;
+        nextId = `${safeStem} - fork ${counter}.jsonl`;
+      }
+      const forkLog = { header, messages: [] };
+      await this.writeAtomic(path.join(dir, nextId), chatBytes(forkLog));
+      return { chatId: nextId, chat: forkLog };
+    });
+  }
   /* ------------------------------ 状态 ------------------------------ */
   async getState() {
     await this.stateMutationTail.catch(() => {
@@ -8159,6 +8198,19 @@ var TAVERN_PLUGIN_SOURCE_KIND = "plugin:dsh-tavern";
 function hostSessionFormatVersion(session) {
   const version = session?.header?.version;
   return typeof version === "number" && Number.isSafeInteger(version) ? version : void 0;
+}
+function hostSessionForkInfo(session) {
+  const header = session?.header;
+  if (typeof header !== "object" || header === null) return void 0;
+  if (header.origin === "subagent") return void 0;
+  if (typeof header.delegationDepth === "number" && Number.isSafeInteger(header.delegationDepth) && header.delegationDepth > 0) return void 0;
+  const parentSession = header.parentSession;
+  if (header.isSeeded !== true || typeof parentSession !== "string" || parentSession === "") return void 0;
+  const inherited = session.inheritedEventCount;
+  return {
+    parentSession,
+    ...typeof inherited === "number" && Number.isSafeInteger(inherited) && inherited >= 0 ? { inheritedEventCount: inherited } : {}
+  };
 }
 function hostPluginMessageSource(session, members) {
   const version = hostSessionFormatVersion(session);
@@ -12879,6 +12931,118 @@ function validateCheckpoint(value, sessionId) {
   }
 }
 var mvuAuditTail = Promise.resolve();
+
+// packages/plugin/src/agent-tavern/fork.ts
+var forkAdoptionTails = /* @__PURE__ */ new Map();
+function adoptAgentTavernFork(session, deps) {
+  const sessionId = typeof session?.id === "string" ? session.id : void 0;
+  if (sessionId === void 0 || sessionId === "") return Promise.resolve("skipped");
+  const previous = forkAdoptionTails.get(sessionId);
+  if (previous) return previous;
+  const current = adoptOne(sessionId, session, deps).finally(() => {
+    if (forkAdoptionTails.get(sessionId) === current) forkAdoptionTails.delete(sessionId);
+  });
+  forkAdoptionTails.set(sessionId, current);
+  return current;
+}
+async function adoptOne(sessionId, session, deps) {
+  const info = hostSessionForkInfo(session);
+  if (info === void 0) return "skipped";
+  const state = await deps.store.getState();
+  if (state.sessionBindings[sessionId] !== void 0) return "bound";
+  const parent = state.sessionBindings[info.parentSession];
+  if (parent === void 0 || parent.architecture !== "agent-tavern" || parent.group === true) {
+    deps.logger?.info?.(`dsh-tavern: host session fork '${sessionId}' skipped (parent '${info.parentSession}' is not an AgentTavern binding)`);
+    return "skipped";
+  }
+  const character = parent.character;
+  const parentSnapshot = await deps.store.getChatSnapshot(character, parent.chatId);
+  if (parentSnapshot === void 0) {
+    deps.logger?.warn?.(`dsh-tavern: host session fork '${sessionId}' not adopted (parent chat '${character}/${parent.chatId}' is missing)`);
+    return "skipped";
+  }
+  let chatId = await findExistingForkChat(deps.store, character, sessionId);
+  if (chatId === void 0) {
+    const boundarySeq = info.inheritedEventCount === void 0 ? void 0 : info.inheritedEventCount - 1;
+    chatId = (await deps.store.forkChat(character, parent.chatId, {
+      sessionId,
+      parentSessionId: info.parentSession,
+      bookmarkMessageId: forkBookmarkMessageId(parentSnapshot.chat, info.parentSession, boundarySeq)
+    })).chatId;
+  }
+  await copyChatVariables(deps.variables, parent.chatId, chatId);
+  await copyChatMemories(deps, parent.chatId, chatId);
+  await deps.bind(sessionId, character, chatId, parent.contextMode);
+  deps.logger?.info?.(`dsh-tavern: adopted host session fork '${sessionId}' from '${info.parentSession}' into chat '${character}/${chatId}'`);
+  return "adopted";
+}
+var FORK_CHAT_SUFFIX = / - fork \d+\.jsonl$/;
+async function findExistingForkChat(store5, character, sessionId) {
+  let candidates;
+  try {
+    candidates = (await store5.listChats(character)).filter((chatId) => FORK_CHAT_SUFFIX.test(chatId));
+  } catch {
+    return void 0;
+  }
+  for (const chatId of candidates) {
+    const snapshot2 = await store5.getChatSnapshot(character, chatId).catch(() => void 0);
+    const fork = snapshot2?.chat.header?.chat_metadata?.agentTavernFork;
+    if (fork?.sessionId === sessionId) return chatId;
+  }
+  return void 0;
+}
+function forkBookmarkMessageId(chat, parentSessionId, boundarySeq) {
+  const messages = chat.messages;
+  if (messages.length === 0) return void 0;
+  if (boundarySeq === void 0) return messages.length - 1;
+  let last = -1;
+  for (const [index, message] of messages.entries()) {
+    const origin = message.extra?.agentTavern;
+    if (origin?.sessionId !== parentSessionId) continue;
+    const seq = origin.eventSeq;
+    if (typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0 && seq <= boundarySeq) last = index;
+  }
+  return last === -1 ? void 0 : last;
+}
+async function copyChatVariables(variables2, parentChatId, chatId) {
+  const snapshots = await variables2.listAll("chat", parentChatId);
+  if (snapshots.length === 0) return;
+  await variables2.patch("chat", chatId, snapshots.map((snapshot2) => ({ name: snapshot2.name, value: snapshot2.value })));
+}
+async function copyChatMemories(deps, parentChatId, chatId) {
+  if (deps.memories === void 0) return;
+  let records2;
+  try {
+    records2 = await deps.memories.list("chat", parentChatId);
+  } catch (error) {
+    deps.logger?.warn?.(`dsh-tavern: fork memory copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  for (const record of records2) {
+    if (await deps.memories.read(record.id, "chat", chatId, true) !== void 0) continue;
+    await deps.memories.put({
+      id: record.id,
+      scope: "chat",
+      scopeId: chatId,
+      kind: record.kind,
+      content: record.content,
+      tags: record.tags,
+      importance: record.importance,
+      confidence: record.confidence,
+      source: record.source,
+      ...record.expiresAt === void 0 ? {} : { expiresAt: record.expiresAt }
+    });
+  }
+  if (deps.vectors === void 0) return;
+  try {
+    const entries = await deps.vectors.list("chat", parentChatId);
+    if (entries.length > 0) {
+      await deps.vectors.put(entries.map((entry) => ({ ...entry, scopeId: chatId })));
+    }
+  } catch (error) {
+    deps.logger?.warn?.(`dsh-tavern: fork vector copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`);
+  }
+}
 
 // packages/plugin/src/agent-tavern/deduce.ts
 function subagentRuntimeOf(parent) {
@@ -19854,7 +20018,25 @@ function apply(ctx, config = {}) {
     }
     void handleNovelSessionEvent(ctx, session, event);
   });
-  ctx.on?.("agent/created", ({ agent }) => {
+  ctx.on?.("agent/created", async ({ agent }) => {
+    let adopted = "skipped";
+    try {
+      const db = await store4();
+      adopted = await adoptAgentTavernFork(agent?.session, {
+        store: db,
+        bind: (sessionId, character, chatId, contextMode) => bindSession(db, sessionId, character, chatId, false, "agent-tavern", contextMode),
+        variables: await variables(),
+        memories: await memories(),
+        vectors: await memoryVectors(),
+        logger: ctx.logger
+      });
+    } catch (error) {
+      ctx.logger?.warn?.(`AgentTavern fork adoption failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (adopted === "adopted") {
+      void emitAgentPresetChanged().then(() => refreshActivePrompt()).catch(() => {
+      });
+    }
     void agentTavernProjectorPromise.then((projector) => projector.replay(agent.session)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`));
   });
   void refreshActivePrompt();
@@ -22950,7 +23132,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.5.0".trim() : "";
-  const commit = true ? normalizeCommit("93fbc68") : void 0;
+  const commit = true ? normalizeCommit("84f204e") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

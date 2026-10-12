@@ -51,6 +51,38 @@ export function hostSessionFormatVersion(session: HostSessionLog | null | undefi
 }
 
 /**
+ * 宿主原生会话分叉的谱系信息（decisions/2026-10-11-agent-tavern-host-fork）。
+ * DSH `sessions.fork(source, boundary?)` 的子会话在 header 上携带
+ * `parentSession`（seed lineage）与 `isSeeded: true`；`inheritedEventCount`
+ * 是 Session 的公开字段——精确 fork 继承前缀长度（事件 seq 连续 0..N-1，
+ * 边界 seq = N-1）。字段缺失/形状不可读时返回 undefined：调用方按「非 fork
+ * 会话」处理，行为与老宿主一致。
+ *
+ * subagent 子会话（dsh-subagent-fork-in-process）同样以 fork 种子实现，靠
+ * `header.origin === 'subagent'` 或 `delegationDepth > 0` 区分——不排除会把
+ * tavern_deduce 子代理收养成第二个主角会话，必须显式挡掉。
+ */
+export interface HostSessionForkInfo {
+  parentSession: string
+  /** fork 继承前缀长度（边界 seq = inheritedEventCount - 1）；不可读时缺省。 */
+  inheritedEventCount?: number
+}
+
+export function hostSessionForkInfo(session: HostSessionLog | null | undefined): HostSessionForkInfo | undefined {
+  const header = (session as { header?: Record<string, unknown> } | undefined)?.header
+  if (typeof header !== 'object' || header === null) return undefined
+  if (header.origin === 'subagent') return undefined
+  if (typeof header.delegationDepth === 'number' && Number.isSafeInteger(header.delegationDepth) && header.delegationDepth > 0) return undefined
+  const parentSession = header.parentSession
+  if (header.isSeeded !== true || typeof parentSession !== 'string' || parentSession === '') return undefined
+  const inherited = (session as { inheritedEventCount?: unknown }).inheritedEventCount
+  return {
+    parentSession,
+    ...(typeof inherited === 'number' && Number.isSafeInteger(inherited) && inherited >= 0 ? { inheritedEventCount: inherited } : {}),
+  }
+}
+
+/**
  * 会话消息的插件 source 形状，按宿主 session format 版本分支：
  *
  * - v4+（DSH 0.2.0-rc.2 起）：持久化校验显式拒绝 `kind === 'plugin'`
