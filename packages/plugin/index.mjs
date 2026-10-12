@@ -3,7 +3,7 @@
 
 // packages/plugin/src/index.ts
 import { execFileSync } from "node:child_process";
-import { readFileSync as readFileSync4 } from "node:fs";
+import { readFileSync as readFileSync5 } from "node:fs";
 import { mkdir as mkdir4 } from "node:fs/promises";
 import { relative as relative2, resolve as resolve4 } from "node:path";
 
@@ -4247,6 +4247,8 @@ function normalizeEmbedBaseURL(value) {
 function normalizeMemoryEmbedding(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
   const record = value;
+  if (record.provider === "local") return normalizeLocalMemoryEmbedding(record);
+  if (record.provider !== void 0 && record.provider !== "" && record.provider !== "openai") return void 0;
   const baseURL = typeof record.baseURL === "string" ? normalizeEmbedBaseURL(record.baseURL) : "";
   const model = typeof record.model === "string" ? record.model.trim().slice(0, 200) : "";
   const apiKeyEnv = typeof record.apiKeyEnv === "string" ? record.apiKeyEnv.trim() : "";
@@ -4262,6 +4264,19 @@ function normalizeMemoryEmbedding(value) {
     ...dims !== void 0 ? { dims } : {},
     ...batchSize !== void 0 ? { batchSize } : {},
     ...timeoutMs !== void 0 ? { timeoutMs } : {}
+  };
+}
+function normalizeLocalMemoryEmbedding(record) {
+  const modelDir = typeof record.modelDir === "string" ? record.modelDir.trim() : "";
+  if (modelDir === "" || modelDir.length > 1024 || modelDir.includes("\0")) return void 0;
+  const dims = clampOptionalInt(record.dims, 1, 8192);
+  const batchSize = clampOptionalInt(record.batchSize, 1, 64);
+  return {
+    provider: "local",
+    modelDir,
+    ...record.pooling === "cls" || record.pooling === "mean" ? { pooling: record.pooling } : {},
+    ...dims !== void 0 ? { dims } : {},
+    ...batchSize !== void 0 ? { batchSize } : {}
   };
 }
 function clampOptionalInt(value, min, max2) {
@@ -8228,6 +8243,38 @@ function isHostPluginMessageSource(source) {
   return record.kind === "plugin" && record.plugin === "dsh-tavern";
 }
 
+// packages/bind/src/host-package.ts
+import { realpathSync } from "node:fs";
+import { createRequire as createRequire2 } from "node:module";
+import { pathToFileURL } from "node:url";
+async function importHostPackage(name2, anchor = process.argv[1]) {
+  for (const candidate of anchorCandidates(anchor)) {
+    try {
+      const hostRequire = createRequire2(candidate);
+      return await import(pathToFileURL(hostRequire.resolve(name2)).href);
+    } catch {
+    }
+  }
+  return await import(name2);
+}
+function anchorCandidates(anchor) {
+  const candidates = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (value) => {
+    if (typeof value !== "string" || value === "" || seen.has(value)) return;
+    seen.add(value);
+    candidates.push(value);
+  };
+  push(anchor);
+  if (typeof anchor === "string" && anchor !== "") {
+    try {
+      push(realpathSync(anchor));
+    } catch {
+    }
+  }
+  return candidates;
+}
+
 // packages/bind/src/host-shape.ts
 function probeSessionShape(session) {
   if (!session) return "absent";
@@ -8448,21 +8495,21 @@ async function probeSpawn(deps, label, prompt, allow) {
 }
 async function probeIdentityCorrelation(deps) {
   takeProbeAgentId();
-  const spawn2 = await probeSpawn(
+  const spawn3 = await probeSpawn(
     deps,
     "dsh-tavern writer-probe \xB7 p1-identity",
     `Host capability probe. Call the tool ${PROBE_TOOL} exactly once, then reply with exactly: ok. The tool may return an error about a missing novel binding \u2014 that is expected and fine; still reply ok after the single call.`,
     [PROBE_TOOL]
   );
-  if (!spawn2.ok) return { item: { status: "fail", detail: `P1 spawn did not complete: ${spawn2.error}` }, spawnOk: false };
+  if (!spawn3.ok) return { item: { status: "fail", detail: `P1 spawn did not complete: ${spawn3.error}` }, spawnOk: false };
   const recorded = takeProbeAgentId();
-  if (recorded === spawn2.runId) {
+  if (recorded === spawn3.runId) {
     return {
       item: { status: "pass", detail: `subagent tool execution carried exec.agent.id '${recorded}' equal to the spawn run id; the delegation registry key (0007 \xA76.2) is derivable` },
       spawnOk: true
     };
   }
-  const detail = recorded === null ? `${PROBE_TOOL} never executed inside the probe subagent (stopReason ${spawn2.result.stopReason}; ${outputExcerptOf(spawn2.result.output)}) \u2014 the model may have skipped the call; re-run the probe before treating this as a host gap` : `exec.agent.id '${recorded}' does not match the spawn run id '${spawn2.runId}' (stopReason ${spawn2.result.stopReason}) \u2014 subagent tool executions are not attributable to their run`;
+  const detail = recorded === null ? `${PROBE_TOOL} never executed inside the probe subagent (stopReason ${spawn3.result.stopReason}; ${outputExcerptOf(spawn3.result.output)}) \u2014 the model may have skipped the call; re-run the probe before treating this as a host gap` : `exec.agent.id '${recorded}' does not match the spawn run id '${spawn3.runId}' (stopReason ${spawn3.result.stopReason}) \u2014 subagent tool executions are not attributable to their run`;
   return { item: { status: "fail", detail }, spawnOk: true };
 }
 async function probeAllowList(deps, p1, spawnOk) {
@@ -8471,24 +8518,24 @@ async function probeAllowList(deps, p1, spawnOk) {
     return { status: "inconclusive", detail: `allow-reachable half unproven because P1 did not confirm a tool execution inside an allow-listed subagent (${p1.detail})` };
   }
   takeProbeAgentId();
-  const spawn2 = await probeSpawn(
+  const spawn3 = await probeSpawn(
     deps,
     "dsh-tavern writer-probe \xB7 p2-allowlist",
     `Host capability probe. Try calling the tool ${PROBE_TOOL} once. If the tool is available to you, reply with exactly: tool-ran. If the tool is not available to you, reply with exactly: unavailable.`,
     []
   );
-  if (!spawn2.ok) return { status: "fail", detail: `P2 spawn did not complete: ${spawn2.error}` };
+  if (!spawn3.ok) return { status: "fail", detail: `P2 spawn did not complete: ${spawn3.error}` };
   const recorded = takeProbeAgentId();
   if (recorded !== null) {
     return { status: "fail", detail: `${PROBE_TOOL} executed inside a subagent spawned with an empty allow list (exec.agent.id '${recorded}') \u2014 the host toolFilter does not enforce allow lists` };
   }
-  const text = spawn2.result.output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => (block.text ?? "").trim().toLocaleLowerCase()).join("\n");
+  const text = spawn3.result.output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => (block.text ?? "").trim().toLocaleLowerCase()).join("\n");
   if (text.includes("unavailable")) {
     return { status: "pass", detail: `allow-reachable proven by the P1 execution; the empty-allow subagent reported the tool unavailable (observational \u2014 model-reported, not a host-side denial proof)` };
   }
   return {
     status: "inconclusive",
-    detail: `allow-reachable proven by the P1 execution; the empty-allow subagent neither executed the tool nor clearly reported it unavailable (stopReason ${spawn2.result.stopReason}; ${outputExcerptOf(spawn2.result.output)}) \u2014 model compliance limits the probe; re-run or verify on a real E2E delegation`
+    detail: `allow-reachable proven by the P1 execution; the empty-allow subagent neither executed the tool nor clearly reported it unavailable (stopReason ${spawn3.result.stopReason}; ${outputExcerptOf(spawn3.result.output)}) \u2014 model compliance limits the probe; re-run or verify on a real E2E delegation`
   };
 }
 async function inspectWriterSubagentCapabilities(deps = {}) {
@@ -13920,6 +13967,284 @@ function dshHomePath(...segments) {
 // packages/plugin/src/memory-embed.ts
 import { promises as fs12 } from "node:fs";
 import * as path10 from "node:path";
+
+// packages/plugin/src/memory-embed-local.ts
+import { createHash as createHash9 } from "node:crypto";
+import { spawn } from "node:child_process";
+import { readdirSync, readFileSync, realpathSync as realpathSync2, statSync } from "node:fs";
+import { createRequire as createRequire3 } from "node:module";
+import { basename as basename2, dirname as dirname6, join as join13 } from "node:path";
+import { fileURLToPath, pathToFileURL as pathToFileURL2 } from "node:url";
+var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
+var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-tavern, NOT the dsh-tavern source repository), then restart DSH`;
+var SESSION_CACHE_LIMIT = 2;
+function localModelFingerprint(modelDir) {
+  try {
+    const parts = [];
+    for (const entry of readdirSync(modelDir).sort()) {
+      const full = join13(modelDir, entry);
+      const info = statSync(full);
+      if (info.isFile()) {
+        parts.push(`${entry}:${info.size}:${Math.round(info.mtimeMs)}`);
+      } else if (info.isDirectory()) {
+        for (const child of readdirSync(full).sort()) {
+          const childInfo = statSync(join13(full, child));
+          if (childInfo.isFile()) parts.push(`${entry}/${child}:${childInfo.size}:${Math.round(childInfo.mtimeMs)}`);
+        }
+      }
+    }
+    if (parts.length === 0) return "unreadable";
+    return createHash9("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
+  } catch {
+    return "unreadable";
+  }
+}
+function localModelIdentity(config) {
+  return `local-onnx:${basename2(config.modelDir)}@${localModelFingerprint(config.modelDir)}:${config.pooling ?? "cls"}`;
+}
+function readJsonFile(file) {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return void 0;
+  }
+}
+function inferLocalModelSettings(modelDir) {
+  const result = { sources: {} };
+  const config = readJsonFile(join13(modelDir, "config.json"));
+  const configRecord = config !== null && typeof config === "object" && !Array.isArray(config) ? config : void 0;
+  const hiddenSize = configRecord?.hidden_size;
+  if (typeof hiddenSize === "number" && Number.isFinite(hiddenSize)) {
+    result.dims = Math.max(1, Math.min(8192, Math.round(hiddenSize)));
+    result.sources.dims = "config.json hidden_size";
+  }
+  const modules = readJsonFile(join13(modelDir, "modules.json"));
+  if (Array.isArray(modules)) {
+    for (const entry of modules) {
+      if (!Array.isArray(entry) || entry[0] !== "sentence-transformers" || entry[1] !== "Pooling") continue;
+      const flags = entry[2];
+      if (flags !== null && typeof flags === "object" && !Array.isArray(flags)) {
+        const record = flags;
+        if (record.pooling_mode_cls === true) {
+          result.pooling = "cls";
+          result.sources.pooling = "modules.json";
+        } else if (record.pooling_mode_mean === true) {
+          result.pooling = "mean";
+          result.sources.pooling = "modules.json";
+        }
+      }
+      break;
+    }
+  }
+  if (result.pooling === void 0 && (configRecord?.pooling === "cls" || configRecord?.pooling === "mean")) {
+    result.pooling = configRecord.pooling;
+    result.sources.pooling = "config.json pooling";
+  }
+  if (result.pooling === void 0) {
+    const haystack = `${basename2(modelDir)} ${typeof configRecord?._name_or_path === "string" ? configRecord._name_or_path : ""}`.toLowerCase();
+    if (/(^|[^a-z])(bge|bert)/.test(haystack)) {
+      result.pooling = "cls";
+      result.sources.pooling = "model family (bge/bert \u2192 cls)";
+    } else if (/(minilm|mpnet|e5|gte|gtr|sentence-t5)/.test(haystack)) {
+      result.pooling = "mean";
+      result.sources.pooling = "model family (mean-pooled)";
+    }
+  }
+  return result;
+}
+function validateLocalModelDir(modelDir) {
+  let info;
+  try {
+    info = statSync(modelDir);
+  } catch {
+    return `modelDir '${modelDir}' does not exist`;
+  }
+  if (!info.isDirectory()) return `modelDir '${modelDir}' is not a directory`;
+  const names = readdirSync(modelDir);
+  if (!names.includes("tokenizer.json")) {
+    return `modelDir '${modelDir}' has no tokenizer.json (expected a Hugging Face ONNX layout: tokenizer.json + config.json + onnx/model.onnx)`;
+  }
+  const hasOnnx = names.some((name2) => name2.endsWith(".onnx")) || names.includes("onnx") && statSync(join13(modelDir, "onnx")).isDirectory() && readdirSync(join13(modelDir, "onnx")).some((name2) => name2.endsWith(".onnx"));
+  if (!hasOnnx) {
+    return `modelDir '${modelDir}' has no .onnx weights (expected onnx/model_fp16.onnx, onnx/model_quantized.onnx or onnx/model.onnx)`;
+  }
+  return null;
+}
+function resolutionAnchors() {
+  const candidates = [];
+  const push = (value) => {
+    if (typeof value !== "string" || value === "" || candidates.includes(value)) return;
+    candidates.push(value);
+  };
+  if (import.meta.url.startsWith("file:")) {
+    try {
+      push(fileURLToPath(import.meta.url));
+    } catch {
+    }
+  }
+  if (typeof process.argv[1] === "string" && process.argv[1] !== "") {
+    push(process.argv[1]);
+    try {
+      push(realpathSync2(process.argv[1]));
+    } catch {
+    }
+  }
+  return candidates;
+}
+function isLocalEmbedRuntimeInstalled() {
+  for (const anchor of resolutionAnchors()) {
+    try {
+      createRequire3(anchor).resolve(TRANSFORMERS_PACKAGE);
+      return true;
+    } catch {
+    }
+  }
+  return false;
+}
+async function importTransformers() {
+  for (const anchor of resolutionAnchors()) {
+    try {
+      const resolved = createRequire3(anchor).resolve(TRANSFORMERS_PACKAGE);
+      return await import(pathToFileURL2(resolved).href);
+    } catch {
+    }
+  }
+  return await importHostPackage(TRANSFORMERS_PACKAGE);
+}
+var defaultLocalEmbedRuntime = {
+  async load(modelDir, options = {}) {
+    let transformers;
+    try {
+      transformers = await importTransformers();
+    } catch (cause) {
+      throw new Error(`${TRANSFORMERS_INSTALL_HINT} (resolution failed: ${cause instanceof Error ? cause.message : String(cause)})`);
+    }
+    transformers.env.allowRemoteModels = false;
+    transformers.env.allowLocalModels = true;
+    const chain = ["fp16", "q8", "fp32"];
+    let pipeline;
+    let lastError;
+    for (const dtype of chain) {
+      try {
+        pipeline = await transformers.pipeline("feature-extraction", modelDir, { dtype });
+        break;
+      } catch (cause) {
+        lastError = cause;
+      }
+    }
+    if (pipeline === void 0) {
+      throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    }
+    return {
+      async embed(texts) {
+        const output = await pipeline([...texts], {
+          pooling: options.pooling ?? "cls",
+          normalize: true
+        });
+        return output.tolist();
+      }
+    };
+  }
+};
+var LOCAL_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
+var INSTALL_OUTPUT_TAIL = 8e3;
+function localRuntimeProfileRoot(pluginDir) {
+  const parent = dirname6(pluginDir);
+  if (basename2(parent) !== "node_modules") return void 0;
+  return dirname6(parent);
+}
+function defaultSpawnRunner(command, args, options) {
+  return new Promise((resolve5, reject) => {
+    const child = spawn(command, [...args], {
+      cwd: options.cwd,
+      shell: process.platform === "win32",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env
+    });
+    let output = "";
+    const feed = (chunk) => {
+      output += chunk.toString("utf8");
+      if (output.length > 1e6) output = output.slice(-1e6);
+    };
+    child.stdout?.on("data", feed);
+    child.stderr?.on("data", feed);
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`pnpm timed out after ${options.timeoutMs}ms`));
+    }, options.timeoutMs);
+    timer.unref?.();
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      resolve5({ code: code ?? -1, output });
+    });
+  });
+}
+async function installLocalEmbedRuntime(input) {
+  if (isLocalEmbedRuntimeInstalled()) {
+    return { ok: true, alreadyInstalled: true, outputTail: "" };
+  }
+  const profileRoot = localRuntimeProfileRoot(input.pluginDir);
+  if (profileRoot === void 0) {
+    return {
+      ok: false,
+      alreadyInstalled: false,
+      message: `auto-install is unavailable for link:/source mounts (plugin directory '${input.pluginDir}' is not under a node_modules install): run "pnpm add ${TRANSFORMERS_PACKAGE}" manually in the DSH profile root`,
+      outputTail: ""
+    };
+  }
+  const run = input.spawnRunner ?? defaultSpawnRunner;
+  try {
+    const result = await run("pnpm", ["add", TRANSFORMERS_PACKAGE], {
+      cwd: profileRoot,
+      timeoutMs: input.timeoutMs ?? LOCAL_RUNTIME_INSTALL_TIMEOUT_MS
+    });
+    const outputTail = result.output.slice(-INSTALL_OUTPUT_TAIL);
+    if (result.code !== 0) {
+      return { ok: false, alreadyInstalled: false, message: `pnpm exited with ${result.code}`, outputTail };
+    }
+    if (!isLocalEmbedRuntimeInstalled()) {
+      return { ok: false, alreadyInstalled: false, message: "pnpm succeeded but the runtime is still not resolvable (restart DSH and retry the probe)", outputTail };
+    }
+    return { ok: true, alreadyInstalled: false, outputTail };
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    return {
+      ok: false,
+      alreadyInstalled: false,
+      message: `pnpm add failed: ${detail}${/ENOENT|not found|not recognized/i.test(detail) ? ` (is pnpm on PATH?)` : ""}`,
+      outputTail: ""
+    };
+  }
+}
+var sessionCache = /* @__PURE__ */ new Map();
+function sessionKey(config, options) {
+  return `${config.modelDir}|${localModelFingerprint(config.modelDir)}|${options.pooling ?? "cls"}`;
+}
+function loadLocalEmbedModel(config, runtime = defaultLocalEmbedRuntime) {
+  const options = {};
+  if (config.pooling !== void 0) options.pooling = config.pooling;
+  const key = sessionKey(config, options);
+  const cached = sessionCache.get(key);
+  if (cached !== void 0) return cached;
+  const promise = runtime.load(config.modelDir, options).catch((cause) => {
+    sessionCache.delete(key);
+    throw cause;
+  });
+  sessionCache.set(key, promise);
+  while (sessionCache.size > SESSION_CACHE_LIMIT) {
+    const oldest = sessionCache.keys().next().value;
+    if (oldest === void 0) break;
+    sessionCache.delete(oldest);
+  }
+  return promise;
+}
+
+// packages/plugin/src/memory-embed.ts
 var EMBED_BREAKER_MS = 6e4;
 var EMBED_RETRY_BACKOFF_MS = 250;
 var EMBED_INPUT_MAX_CHARS = 6e3;
@@ -13987,17 +14312,23 @@ async function clearEmbedStatus(root) {
   await fs12.rm(embedStatusPath(root), { force: true });
 }
 function resolveApiKey(config) {
+  if (config.provider === "local") return void 0;
   if (config.apiKeyEnv === "") return void 0;
   const value = process.env[config.apiKeyEnv];
   if (value === void 0) return void 0;
   const trimmed = value.trim();
   return trimmed === "" ? void 0 : trimmed;
 }
+function embedModelIdentity(config) {
+  if (config.provider === "local") return localModelIdentity(config);
+  return config.model;
+}
 function expectedDims(config, status2) {
   return config.dims ?? status2.dims;
 }
 async function embedTexts(config, texts, options = {}) {
   if (texts.length === 0) return [];
+  if (config.provider === "local") return embedTextsLocal(config, texts, options);
   const batchSize = config.batchSize ?? 16;
   const timeoutMs = config.timeoutMs ?? 1e4;
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -14007,6 +14338,68 @@ async function embedTexts(config, texts, options = {}) {
     vectors.push(...await embedBatchWithRetry(config, batch, { ...options, timeoutMs, fetchImpl }));
   }
   return vectors;
+}
+async function embedTextsLocal(config, texts, options) {
+  let model;
+  try {
+    model = await loadLocalEmbedModel(config, options.localRuntime ?? defaultLocalEmbedRuntime);
+  } catch (cause) {
+    throw new EmbedHttpError(
+      "runtime",
+      cause instanceof Error ? cause.message : String(cause),
+      void 0,
+      false
+    );
+  }
+  const batchSize = config.batchSize ?? 16;
+  const vectors = [];
+  for (let start = 0; start < texts.length; start += batchSize) {
+    const batch = texts.slice(start, start + batchSize);
+    let embedded;
+    try {
+      embedded = await model.embed(batch);
+    } catch (cause) {
+      throw new EmbedHttpError(
+        "runtime",
+        cause instanceof Error ? cause.message : String(cause),
+        void 0,
+        false
+      );
+    }
+    if (embedded.length !== batch.length) {
+      throw new EmbedHttpError(
+        "payload",
+        `local embed returned ${embedded.length} vectors for ${batch.length} inputs`,
+        void 0,
+        false
+      );
+    }
+    vectors.push(...validateLocalVectors(embedded, options.expectedDims));
+  }
+  return vectors;
+}
+function validateLocalVectors(embedded, expectedDims2) {
+  if (embedded.length === 0) {
+    throw new EmbedHttpError("payload", "local embed returned no vectors", void 0, false);
+  }
+  const dims = embedded[0]?.length ?? 0;
+  if (dims === 0 || embedded.some((vector) => vector.length !== dims)) {
+    throw new EmbedHttpError(
+      "dims",
+      `local embed dimensions inconsistent (batch dims: ${embedded.map((vector) => vector.length).join(",")})`,
+      void 0,
+      false
+    );
+  }
+  for (const vector of embedded) {
+    if (vector.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+      throw new EmbedHttpError("payload", "local embed vector is not a finite number array", void 0, false);
+    }
+  }
+  if (expectedDims2 !== void 0 && dims !== expectedDims2) {
+    throw new EmbedHttpError("dims", `local embed has ${dims} dims, expected ${expectedDims2}`, void 0, false);
+  }
+  return [...embedded];
 }
 async function embedBatchWithRetry(config, batch, options) {
   let lastError;
@@ -14098,14 +14491,15 @@ function delay(ms) {
 async function embedProbe(root, config, options = {}) {
   const status2 = await readEmbedStatus(root);
   const startedAt = Date.now();
+  const model = embedModelIdentity(config);
   try {
     const [vector] = await embedTexts(config, [EMBED_PROBE_TEXT], {
       ...options,
       expectedDims: expectedDims(config, status2)
     });
     const dims = vector?.length ?? 0;
-    const result = { dims, latencyMs: Date.now() - startedAt, model: config.model };
-    await recordEmbedSuccess(root, { model: config.model, dims });
+    const result = { dims, latencyMs: Date.now() - startedAt, model };
+    await recordEmbedSuccess(root, { model, dims });
     return result;
   } catch (cause) {
     await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
@@ -14118,23 +14512,24 @@ import { randomUUID as randomUUID4 } from "node:crypto";
 
 // packages/plugin/src/memory-hybrid.ts
 async function embedMemoryRecord(input) {
-  const { root, config, vectorStore, record, fetchImpl } = input;
+  const { root, config, vectorStore, record, fetchImpl, localRuntime } = input;
   const status2 = await readEmbedStatus(root);
   if (embedBreakerOpen(status2)) return false;
+  const modelId = embedModelIdentity(config);
   try {
     const [vector] = await embedTexts(
       config,
       [record.content.slice(0, EMBED_INPUT_MAX_CHARS)],
-      { expectedDims: expectedDims(config, status2), fetchImpl }
+      { expectedDims: expectedDims(config, status2), fetchImpl, localRuntime }
     );
     if (vector === void 0) return false;
-    await recordEmbedSuccess(root, { model: config.model, dims: vector.length });
+    await recordEmbedSuccess(root, { model: modelId, dims: vector.length });
     await vectorStore.put([{
       id: record.id,
       scope: record.scope,
       scopeId: record.scopeId,
-      digest: memoryContentDigest(config.model, record.content),
-      model: config.model,
+      digest: memoryContentDigest(modelId, record.content),
+      model: modelId,
       vector: encodeVector(vector)
     }]);
     return true;
@@ -14977,8 +15372,8 @@ async function toolCompleteMaintenance(run, args) {
 }
 
 // packages/plugin/src/update/service.ts
-import { mkdirSync as mkdirSync2, readFileSync as readFileSync2 } from "node:fs";
-import { dirname as dirname8, join as join15 } from "node:path";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync3 } from "node:fs";
+import { dirname as dirname9, join as join16 } from "node:path";
 
 // packages/plugin/src/update/github.ts
 var UPDATE_REPOSITORY = "LingyeSoul/dsh-tavern";
@@ -15330,10 +15725,10 @@ function curlGet(url, accept, timeoutMs, exec = execFile2) {
 }
 
 // packages/plugin/src/update/apply.ts
-import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawn as spawn2 } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync as readdirSync2, readFileSync as readFileSync2, renameSync, rmSync, statSync as statSync2, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname as dirname7, join as join14 } from "node:path";
+import { dirname as dirname8, join as join15 } from "node:path";
 var DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
 var SHIPPED_FILES = ["index.mjs", "agent.mjs", "compaction.mjs", "novel.mjs", "version.json", "cordis.patch.yml", "README.md", "package.json"];
 var SHIPPED_DIRS = ["client"];
@@ -15477,7 +15872,7 @@ function resolveDesktopCli(argv = process.argv, execPath = process.execPath, exi
   }
   const runtimeDir = typeof argv[2] === "string" ? argv[2].trim() : "";
   if (runtimeDir === "") return null;
-  const cli = join14(runtimeDir, "node_modules", "@deepseek-ai", "dsh-desktop-host", "lib", "cli.js");
+  const cli = join15(runtimeDir, "node_modules", "@deepseek-ai", "dsh-desktop-host", "lib", "cli.js");
   if (!exists(cli)) return null;
   return { command: execPath, args: ["--expose-internals", cli], env: { ELECTRON_RUN_AS_NODE: "1" } };
 }
@@ -15592,7 +15987,7 @@ async function installViaCheckout(request) {
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
   const repository = repositorySlug(request.repository);
   const profile = resolveProfileName(request.ctx);
-  const checkout = mkdtempSync(join14(tmpdir(), "dsh-tavern-checkout-"));
+  const checkout = mkdtempSync(join15(tmpdir(), "dsh-tavern-checkout-"));
   try {
     request.log(`fallback: git clone --depth 1 https://github.com/${repository}.git`);
     await mustRun("git", ["clone", "--depth", "1", "--branch", request.ref, `https://github.com/${repository}.git`, checkout], request);
@@ -15604,7 +15999,7 @@ async function installViaCheckout(request) {
         await mustRun("git", ["-C", checkout, "checkout", "--quiet", request.commit], request);
       }
     }
-    const source = join14(checkout, "packages", "plugin");
+    const source = join15(checkout, "packages", "plugin");
     if (!existsSync(source)) throw new Error("packages/plugin is missing from the checkout");
     const copied = copyShippedFiles(source, request.pluginDir);
     request.log(`copied ${copied.length} shipped entries into ${request.pluginDir}`);
@@ -15642,19 +16037,19 @@ async function mustRun(command, args, request) {
 function copyShippedFiles(sourceDir, targetDir) {
   const copied = [];
   for (const file of SHIPPED_FILES) {
-    const from = join14(sourceDir, file);
+    const from = join15(sourceDir, file);
     if (!existsSync(from)) continue;
-    replaceFileAtomic(from, join14(targetDir, file));
+    replaceFileAtomic(from, join15(targetDir, file));
     copied.push(file);
   }
   for (const dir of SHIPPED_DIRS) {
-    const from = join14(sourceDir, dir);
+    const from = join15(sourceDir, dir);
     if (!existsSync(from)) continue;
     for (const file of listFiles(from)) {
       const relative3 = file.slice(from.length + 1);
-      const to = join14(targetDir, dir, relative3);
-      mkdirSync(dirname7(to), { recursive: true });
-      writeFileAtomic(to, readFileSync(file));
+      const to = join15(targetDir, dir, relative3);
+      mkdirSync(dirname8(to), { recursive: true });
+      writeFileAtomic(to, readFileSync2(file));
       copied.push(`${dir}/${relative3.replaceAll("\\", "/")}`);
     }
   }
@@ -15663,7 +16058,7 @@ function copyShippedFiles(sourceDir, targetDir) {
 function stampInstalledBuild(pluginDir, version, commit) {
   if (!isKnownVersion(version) || !isCommit(commit)) return false;
   try {
-    writeFileAtomic(join14(pluginDir, "version.json"), `${JSON.stringify({ version: version.trim(), commit: shortCommit(commit) }, null, 2)}
+    writeFileAtomic(join15(pluginDir, "version.json"), `${JSON.stringify({ version: version.trim(), commit: shortCommit(commit) }, null, 2)}
 `);
     return true;
   } catch {
@@ -15676,7 +16071,7 @@ function listFiles(root) {
   while (pending.length > 0) {
     const current = pending.pop();
     for (const entry of readdirSyncSafe(current)) {
-      const full = join14(current, entry);
+      const full = join15(current, entry);
       const stat = statSyncSafe(full);
       if (stat === null) continue;
       if (stat.isDirectory()) pending.push(full);
@@ -15687,14 +16082,14 @@ function listFiles(root) {
 }
 function readdirSyncSafe(path12) {
   try {
-    return readdirSync(path12);
+    return readdirSync2(path12);
   } catch {
     return [];
   }
 }
 function statSyncSafe(path12) {
   try {
-    return statSync(path12);
+    return statSync2(path12);
   } catch {
     return null;
   }
@@ -15703,14 +16098,14 @@ function readInstalledStamp(pluginDir, spec = "") {
   let version = UNKNOWN_FIELD;
   let commit = UNKNOWN_FIELD;
   try {
-    const generated = JSON.parse(readFileSync(join14(pluginDir, "version.json"), "utf8"));
+    const generated = JSON.parse(readFileSync2(join15(pluginDir, "version.json"), "utf8"));
     if (typeof generated?.version === "string" && generated.version.trim() !== "") version = generated.version.trim();
     if (isCommit(generated?.commit)) commit = shortCommit(generated.commit);
   } catch {
   }
   if (version === UNKNOWN_FIELD) {
     try {
-      const manifest = JSON.parse(readFileSync(join14(pluginDir, "package.json"), "utf8"));
+      const manifest = JSON.parse(readFileSync2(join15(pluginDir, "package.json"), "utf8"));
       if (typeof manifest?.version === "string" && manifest.version.trim() !== "") version = manifest.version.trim();
     } catch {
     }
@@ -15723,7 +16118,7 @@ function readInstalledStamp(pluginDir, spec = "") {
 }
 function runCapture(command, args, options = {}) {
   return new Promise((resolve5, reject) => {
-    const child = spawn(command, args, {
+    const child = spawn2(command, args, {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, ...options.env ?? {} }
@@ -15997,11 +16392,11 @@ var TavernUpdateService = class {
     }
   }
   cachePath() {
-    return join15(this.options.home, UPDATE_CACHE_FILE);
+    return join16(this.options.home, UPDATE_CACHE_FILE);
   }
   loadCache() {
     try {
-      const cached = JSON.parse(readFileSync2(this.cachePath(), "utf8"));
+      const cached = JSON.parse(readFileSync3(this.cachePath(), "utf8"));
       if (cached?.schemaVersion !== UPDATE_CACHE_SCHEMA) return;
       if (typeof cached.status === "string") this.status = cached.status;
       if (typeof cached.reason === "string") this.reason = cached.reason;
@@ -16032,7 +16427,7 @@ var TavernUpdateService = class {
   persistCache() {
     try {
       const path12 = this.cachePath();
-      mkdirSync2(dirname8(path12), { recursive: true });
+      mkdirSync2(dirname9(path12), { recursive: true });
       const payload = {
         schemaVersion: UPDATE_CACHE_SCHEMA,
         status: this.status,
@@ -16082,12 +16477,12 @@ function updateChangelog(snapshot2, limit = 8) {
 // packages/plugin/src/mods/host.ts
 import { promises as fs14 } from "node:fs";
 import { mkdir as mkdir3 } from "node:fs/promises";
-import { isAbsolute, join as join17, relative, resolve as resolve3 } from "node:path";
-import { pathToFileURL } from "node:url";
+import { isAbsolute, join as join18, relative, resolve as resolve3 } from "node:path";
+import { pathToFileURL as pathToFileURL3 } from "node:url";
 
 // packages/plugin/src/mods/audit.ts
 import { appendFile, mkdir } from "node:fs/promises";
-import { dirname as dirname9 } from "node:path";
+import { dirname as dirname10 } from "node:path";
 var ModAuditLog = class {
   constructor(file) {
     this.file = file;
@@ -16107,7 +16502,7 @@ var ModAuditLog = class {
     const written = this.tail.catch(() => {
     }).then(async () => {
       try {
-        await mkdir(dirname9(this.file), { recursive: true });
+        await mkdir(dirname10(this.file), { recursive: true });
         await appendFile(this.file, line, "utf8");
       } catch (cause) {
         this.warn?.(`dsh-tavern: mod audit append failed: ${cause instanceof Error ? cause.message : String(cause)}`);
@@ -16776,7 +17171,7 @@ function countSpecifiedSegments(literal) {
 // packages/plugin/src/mods/storage.ts
 import { promises as fs13 } from "node:fs";
 import { mkdir as mkdir2 } from "node:fs/promises";
-import { dirname as dirname10 } from "node:path";
+import { dirname as dirname11 } from "node:path";
 var MOD_STORAGE_VALUE_LIMIT = 256 * 1024;
 var MOD_STORAGE_TOTAL_LIMIT = 1024 * 1024;
 var KEY_PATTERN = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
@@ -16847,7 +17242,7 @@ var ModStorage = class {
       this.options.onQuota?.(message);
       throw new Error(message);
     }
-    await mkdir2(dirname10(this.file), { recursive: true });
+    await mkdir2(dirname11(this.file), { recursive: true });
     await writeAtomicText(this.file, text);
   }
   /** 排空在飞写（宿主卸载/reload 前调用）：返回时**该文件**队列上全部写
@@ -16889,8 +17284,8 @@ function inspectValue(value) {
 
 // packages/plugin/src/mods/install.ts
 import { execFile as execFile3 } from "node:child_process";
-import { cpSync, existsSync as existsSync2, mkdtempSync as mkdtempSync2, readFileSync as readFileSync3, rmSync as rmSync2 } from "node:fs";
-import { join as join16 } from "node:path";
+import { cpSync, existsSync as existsSync2, mkdtempSync as mkdtempSync2, readFileSync as readFileSync4, rmSync as rmSync2 } from "node:fs";
+import { join as join17 } from "node:path";
 import { tmpdir as tmpdir2 } from "node:os";
 function parseGitSource(input) {
   const text = typeof input === "string" ? input.trim() : "";
@@ -16965,13 +17360,13 @@ async function installModFromGit(options) {
       throw new Error(`repository has no readable mod.json at its root (${source.repository}): ${cause instanceof Error ? cause.message : String(cause)}`);
     }
   }
-  const workRoot = mkdtempSync2(join16(tmpdir2(), "dsh-tavern-modinstall-"));
+  const workRoot = mkdtempSync2(join17(tmpdir2(), "dsh-tavern-modinstall-"));
   try {
-    const cloneDir = join16(workRoot, "clone");
+    const cloneDir = join17(workRoot, "clone");
     await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs);
     let manifestRaw;
     try {
-      manifestRaw = JSON.parse(readFileSync3(join16(cloneDir, "mod.json"), "utf8"));
+      manifestRaw = JSON.parse(readFileSync4(join17(cloneDir, "mod.json"), "utf8"));
     } catch (cause) {
       throw new Error(`repository has no readable mod.json at its root: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
@@ -16979,7 +17374,7 @@ async function installModFromGit(options) {
     const check = checkModManifest(manifestRaw, { directory: idField });
     if (!check.ok) throw new Error(`invalid mod.json: ${check.errors.join("; ")}`);
     const modId = check.manifest.id;
-    const target = join16(options.root, "mods", modId);
+    const target = join17(options.root, "mods", modId);
     const replaced = existsSync2(target);
     if (replaced && options.force !== true) {
       throw new Error(`mod '${modId}' is already installed (POST again with force to replace it)`);
@@ -17008,8 +17403,8 @@ function modsDisabledByEnv() {
 var ModHost = class _ModHost {
   constructor(options) {
     this.options = options;
-    this.modsRoot = join17(options.root, "mods");
-    this.audit = new ModAuditLog(join17(this.modsRoot, "audit.jsonl"));
+    this.modsRoot = join18(options.root, "mods");
+    this.audit = new ModAuditLog(join18(this.modsRoot, "audit.jsonl"));
     this.logger = options.ctx?.logger;
     this.audit.setLogger((message) => this.logger?.warn?.(message));
   }
@@ -17249,7 +17644,7 @@ var ModHost = class _ModHost {
       const id = directory;
       let raw;
       try {
-        raw = JSON.parse(await fs14.readFile(join17(this.modsRoot, directory, "mod.json"), "utf8"));
+        raw = JSON.parse(await fs14.readFile(join18(this.modsRoot, directory, "mod.json"), "utf8"));
       } catch (cause) {
         const message = `mod.json is missing or unreadable: ${cause instanceof Error ? cause.message : String(cause)}`;
         nextBroken.set(id, { message, ...salvageManifestFields(void 0) });
@@ -17288,7 +17683,7 @@ var ModHost = class _ModHost {
         await this.audit.record(id, "skip", message);
         continue;
       }
-      nextDiscovered.set(id, { manifest, directory: join17(this.modsRoot, directory), entryPath });
+      nextDiscovered.set(id, { manifest, directory: join18(this.modsRoot, directory), entryPath });
     }
     this.discovered.clear();
     this.broken.clear();
@@ -17312,15 +17707,15 @@ var ModHost = class _ModHost {
       offRegistrations: [],
       surfaces: { hooks: /* @__PURE__ */ new Set(), tools: /* @__PURE__ */ new Set(), http: /* @__PURE__ */ new Set() },
       buttons: /* @__PURE__ */ new Map(),
-      storage: new ModStorage(join17(disc.directory, "data", "state.json"), {
+      storage: new ModStorage(join18(disc.directory, "data", "state.json"), {
         onQuota: (message) => {
           void this.audit.record(id, "storage-quota", message);
         }
       })
     };
     try {
-      await mkdir3(join17(disc.directory, "data"), { recursive: true });
-      const url = pathToFileURL(disc.entryPath).href + (cacheBust ? `?t=${Date.now()}` : "");
+      await mkdir3(join18(disc.directory, "data"), { recursive: true });
+      const url = pathToFileURL3(disc.entryPath).href + (cacheBust ? `?t=${Date.now()}` : "");
       const module = await import(url);
       if (typeof module?.setup !== "function") {
         throw new Error("mod entry must export an async setup(api) function");
@@ -20960,6 +21355,9 @@ async function handleApi(ctx, req, res) {
   if (method === "POST" && route === "memory/embed/test") {
     return handleMemoryEmbedApi(req, res, route, method, db);
   }
+  if (method === "POST" && route === "memory/embed/local/install") {
+    return handleMemoryEmbedApi(req, res, route, method, db);
+  }
   if ((method === "POST" || method === "GET") && route === "memory/maintenance") {
     return handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db);
   }
@@ -21384,20 +21782,26 @@ async function handleMvuApi(req, res, route, method, db) {
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
+var localRuntimeInstallInFlight;
 async function handleMemoryEmbedApi(req, res, route, method, db) {
   const root = dshHomePath("tavern");
   if (method === "GET" && route === "memory/embed") {
     const config = normalizeMemoryEmbedding((await db.getState()).memoryEmbedding);
     const status2 = await readEmbedStatus(root);
-    const envValue = config !== void 0 && config.apiKeyEnv !== "" ? process.env[config.apiKeyEnv] : void 0;
+    const isLocal = config?.provider === "local";
+    const endpoint = config !== void 0 && config.provider !== "local" ? config : void 0;
+    const envValue = endpoint !== void 0 && endpoint.apiKeyEnv !== "" ? process.env[endpoint.apiKeyEnv] : void 0;
     return sendJson(res, 200, {
       ok: true,
       config: config ?? null,
       status: {
         configured: config !== void 0,
-        // 免密（apiKeyEnv 空串）是显式合法形态：envResolvable 视为满足。
-        keyless: config !== void 0 && config.apiKeyEnv === "",
-        envResolvable: config === void 0 ? false : config.apiKeyEnv === "" || typeof envValue === "string" && envValue.trim() !== "",
+        provider: isLocal ? "local" : "openai",
+        // 免密（apiKeyEnv 空串）是显式合法形态：envResolvable 视为满足；本地
+        // provider 无 key 概念，keyless/envResolvable 恒真。
+        keyless: isLocal === true || endpoint !== void 0 && endpoint.apiKeyEnv === "",
+        envResolvable: isLocal === true || endpoint !== void 0 && (endpoint.apiKeyEnv === "" || typeof envValue === "string" && envValue.trim() !== ""),
+        ...isLocal === true ? { runtimeInstalled: isLocalEmbedRuntimeInstalled() } : {},
         breakerOpen: embedBreakerOpen(status2),
         ...status2.breakerUntil > 0 ? { breakerUntil: new Date(status2.breakerUntil).toISOString() } : {},
         ...status2.model !== void 0 ? { model: status2.model } : {},
@@ -21411,6 +21815,55 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
   if (method === "PUT" && route === "memory/embed") {
     const body = await readJson(req);
     const raw = body === null || typeof body !== "object" || Array.isArray(body) ? {} : body;
+    if (raw.provider === "local") {
+      const modelDirRaw = typeof raw.modelDir === "string" ? raw.modelDir.trim() : "";
+      if (modelDirRaw === "") {
+        await db.patchState({ memoryEmbedding: void 0 });
+        await clearEmbedStatus(root);
+        return sendJson(res, 200, { ok: true, config: null });
+      }
+      const modelDir = resolve4(modelDirRaw);
+      const dirProblem = validateLocalModelDir(modelDir);
+      if (dirProblem !== null) {
+        return sendJson(res, 400, { ok: false, message: dirProblem });
+      }
+      if (raw.pooling !== void 0 && raw.pooling !== null && raw.pooling !== "cls" && raw.pooling !== "mean") {
+        return sendJson(res, 400, {
+          ok: false,
+          message: `invalid pooling '${String(raw.pooling).slice(0, 30)}': expected 'cls' or 'mean' (cls is the BERT/bge default; sentence-embedding models like MiniLM need 'mean')`
+        });
+      }
+      const inferred = inferLocalModelSettings(modelDir);
+      const explicitPooling = raw.pooling === "cls" || raw.pooling === "mean";
+      const explicitDims = typeof raw.dims === "number" && Number.isFinite(raw.dims);
+      const config2 = normalizeMemoryEmbedding({
+        provider: "local",
+        modelDir,
+        ...(explicitPooling ? raw.pooling : inferred.pooling) !== void 0 ? { pooling: explicitPooling ? raw.pooling : inferred.pooling } : {},
+        ...(explicitDims ? raw.dims : inferred.dims) !== void 0 ? { dims: explicitDims ? raw.dims : inferred.dims } : {},
+        ...raw.batchSize !== void 0 && raw.batchSize !== null ? { batchSize: raw.batchSize } : {}
+      });
+      if (config2 === void 0) {
+        return sendJson(res, 400, {
+          ok: false,
+          message: "expected { provider: 'local', modelDir, pooling? ('cls'|'mean'), dims?, batchSize? (1-64) }"
+        });
+      }
+      const autoFilled = {};
+      if (!explicitPooling && config2.pooling !== void 0) {
+        autoFilled.pooling = { value: config2.pooling, source: inferred.sources.pooling ?? "default (cls)" };
+      }
+      if (!explicitDims && config2.dims !== void 0) {
+        autoFilled.dims = { value: config2.dims, source: inferred.sources.dims ?? "" };
+      }
+      await db.patchState({ memoryEmbedding: config2 });
+      await clearEmbedStatus(root);
+      return sendJson(res, 200, {
+        ok: true,
+        config: config2,
+        ...Object.keys(autoFilled).length > 0 ? { inferred: autoFilled } : {}
+      });
+    }
     const baseURL = typeof raw.baseURL === "string" ? normalizeEmbedBaseURL(raw.baseURL) : "";
     const apiKeyEnv = typeof raw.apiKeyEnv === "string" ? raw.apiKeyEnv.trim() : "";
     const model = typeof raw.model === "string" ? raw.model.trim() : "";
@@ -21442,6 +21895,31 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
     await db.patchState({ memoryEmbedding: config });
     await clearEmbedStatus(root);
     return sendJson(res, 200, { ok: true, config });
+  }
+  if (method === "POST" && route === "memory/embed/local/install") {
+    if (localRuntimeInstallInFlight !== void 0) {
+      return sendJson(res, 409, { ok: false, message: "a local runtime install is already in progress" });
+    }
+    const installPromise = installLocalEmbedRuntime({ pluginDir: import.meta.dirname });
+    localRuntimeInstallInFlight = installPromise;
+    try {
+      const outcome = await installPromise;
+      if (!outcome.ok) {
+        return sendJson(res, 400, {
+          ok: false,
+          message: outcome.message ?? "install failed",
+          ...outcome.outputTail !== "" ? { outputTail: outcome.outputTail } : {}
+        });
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        alreadyInstalled: outcome.alreadyInstalled,
+        ...outcome.message !== void 0 ? { message: outcome.message } : {},
+        ...outcome.outputTail !== "" ? { outputTail: outcome.outputTail } : {}
+      });
+    } finally {
+      localRuntimeInstallInFlight = void 0;
+    }
   }
   if (method === "POST" && route === "memory/embed/test") {
     const config = normalizeMemoryEmbedding((await db.getState()).memoryEmbedding);
@@ -23125,7 +23603,7 @@ function readBuildInfo() {
     resolve4(import.meta.dirname, "..", "package.json")
   ]) {
     try {
-      const packageData = JSON.parse(readFileSync4(packagePath, "utf8"));
+      const packageData = JSON.parse(readFileSync5(packagePath, "utf8"));
       if (typeof packageData?.version === "string" && packageData.version.trim() !== "") {
         version = packageData.version.trim();
         break;
@@ -23134,7 +23612,7 @@ function readBuildInfo() {
     }
   }
   try {
-    const generated = JSON.parse(readFileSync4(resolve4(import.meta.dirname, "version.json"), "utf8"));
+    const generated = JSON.parse(readFileSync5(resolve4(import.meta.dirname, "version.json"), "utf8"));
     if (typeof generated?.version === "string" && generated.version.trim() !== "") {
       version = generated.version.trim();
     }
@@ -23146,7 +23624,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.5.0".trim() : "";
-  const commit = true ? normalizeCommit("a7a6171") : void 0;
+  const commit = true ? normalizeCommit("1d89583") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

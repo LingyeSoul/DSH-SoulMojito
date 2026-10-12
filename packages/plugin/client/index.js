@@ -849,9 +849,24 @@ window.__ModuleLoader__.load({
       'settings.memoryApiKeyEnv': 'API key env var name',
       'settings.memoryApiKeyEnvHint': 'Environment variable holding the key (the name only — the key itself is never stored). Leave empty for keyless endpoints.',
       'settings.memoryModel': 'Embedding model',
-      'settings.memoryDims': 'Dimensions (optional)',
+      'settings.memoryDims': 'Dimensions (auto if empty)',
       'settings.memoryBatchSize': 'Batch size (optional)',
       'settings.memoryTimeout': 'Timeout ms (optional)',
+      'settings.memoryProvider': 'Embedding source',
+      'settings.memoryProviderOpenAI': 'Remote endpoint (OpenAI-compatible)',
+      'settings.memoryProviderLocal': 'Local ONNX model',
+      'settings.memoryModelDir': 'Local model directory',
+      'settings.memoryModelDirHint': 'Absolute path to a Hugging Face ONNX model dir (tokenizer.json + config.json + onnx/model.onnx), e.g. a locally downloaded Xenova/bge-small-zh-v1.5. Relative paths are resolved against the server CWD when saving.',
+      'settings.memoryPooling': 'Pooling (auto if empty)',
+      'settings.memoryPoolingDefault': 'auto (inferred from the model dir)',
+      'settings.memoryPoolingCls': 'cls (BERT/bge)',
+      'settings.memoryPoolingMean': 'mean (MiniLM-style)',
+      'settings.memoryAutoFilled': 'auto-filled from the model dir: {items}',
+      'settings.memoryLocalRuntimeMissing': 'Local ONNX runtime not installed: run "pnpm add @huggingface/transformers" in the DSH profile root (the directory whose node_modules contains the installed dsh-tavern — NOT the plugin source repository), then restart DSH.',
+      'settings.memoryLocalInstall': 'Install runtime',
+      'settings.memoryLocalInstalling': 'Installing… (native package, can take minutes)',
+      'settings.memoryLocalInstallOk': 'Runtime installed — no restart needed, press Test to verify.',
+      'settings.memoryLocalInstallAlready': 'Runtime already installed.',
       'settings.memoryOff': 'Hybrid retrieval off — memory_search stays lexical only.',
       'settings.memoryKeyless': 'Keyless endpoint (no Authorization header).',
       'settings.memoryEnvMissing': 'Env var {name} is not set on the host; requests go keyless until it is.',
@@ -1519,9 +1534,24 @@ window.__ModuleLoader__.load({
       'settings.memoryApiKeyEnv': 'API key 环境变量名',
       'settings.memoryApiKeyEnvHint': '存放 key 的环境变量名（只填名字，key 本身永不入库）。免密端点留空。',
       'settings.memoryModel': '嵌入模型',
-      'settings.memoryDims': '维度（可选）',
+      'settings.memoryDims': '维度（留空自动）',
       'settings.memoryBatchSize': '批量大小（可选）',
       'settings.memoryTimeout': '超时毫秒（可选）',
+      'settings.memoryProvider': '嵌入来源',
+      'settings.memoryProviderOpenAI': '远程端点（OpenAI 兼容）',
+      'settings.memoryProviderLocal': '本地 ONNX 模型',
+      'settings.memoryModelDir': '本地模型目录',
+      'settings.memoryModelDirHint': 'Hugging Face ONNX 模型目录的绝对路径（tokenizer.json + config.json + onnx/model.onnx），例如本地下载的 Xenova/bge-small-zh-v1.5。相对路径在保存时按服务端工作目录解析。',
+      'settings.memoryPooling': '池化策略（留空自动）',
+      'settings.memoryPoolingDefault': '自动（按模型目录推断）',
+      'settings.memoryPoolingCls': 'cls（BERT/bge 家族）',
+      'settings.memoryPoolingMean': 'mean（MiniLM 类模型）',
+      'settings.memoryAutoFilled': '已按模型目录自动填充：{items}',
+      'settings.memoryLocalRuntimeMissing': '本地 ONNX 运行时未安装：在 DSH profile 根目录（node_modules 里包含已安装 dsh-tavern 的那个目录，不是本插件的源码仓库）执行 "pnpm add @huggingface/transformers"，然后重启 DSH。',
+      'settings.memoryLocalInstall': '安装运行时',
+      'settings.memoryLocalInstalling': '安装中…（原生包较大，可达数分钟）',
+      'settings.memoryLocalInstallOk': '运行时已安装——无需重启，点「测试」验证。',
+      'settings.memoryLocalInstallAlready': '运行时已在位。',
       'settings.memoryOff': '混合检索未开启 — memory_search 保持纯词法。',
       'settings.memoryKeyless': '免密端点（不发送 Authorization 头）。',
       'settings.memoryEnvMissing': '宿主上未设置环境变量 {name}；设置前请求按免密发出。',
@@ -3694,7 +3724,11 @@ window.__ModuleLoader__.load({
         h('span', { className: 'dt-label' }, label),
         h('select', { value: value || '', onChange: (event) => onChange(event.target.value || null) },
           ...(empty === undefined ? [] : [h('option', { key: '', value: '' }, empty)]),
-          options.map((option) => h('option', { key: option, value: option }, option))))
+          options.map((option) => typeof option === 'string'
+            ? h('option', { key: option, value: option }, option)
+            // {value,label} 形态：记忆检索 provider/pooling 这类「值稳定、文案要
+            // 走 i18n」的下拉（字符串形态不受影响，既有调用面零改动）。
+            : h('option', { key: option.value, value: option.value }, option.label))))
     }
 
     function UploadButton({ kind, label, accept }) {
@@ -4127,23 +4161,28 @@ window.__ModuleLoader__.load({
     function MemoryRetrievalBand() {
       const t = useTranslate()
       const [loaded, setLoaded] = useState(false)
-      const [draft, setDraft] = useState({ baseURL: '', apiKeyEnv: '', model: '', dims: '', batchSize: '', timeoutMs: '' })
+      const [draft, setDraft] = useState({ provider: 'openai', baseURL: '', apiKeyEnv: '', model: '', modelDir: '', pooling: '', dims: '', batchSize: '', timeoutMs: '' })
       const [status, setStatus] = useState(null)
       const [saving, setSaving] = useState(false)
       const [testing, setTesting] = useState(false)
+      const [installing, setInstalling] = useState(false)
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
       const refresh = () => api('memory/embed')
         .then((result) => {
           setStatus(result.status || null)
-          setDraft({
+          setDraft((current) => ({
+            ...current,
+            provider: result.config?.provider === 'local' ? 'local' : 'openai',
             baseURL: result.config?.baseURL || '',
             apiKeyEnv: result.config?.apiKeyEnv || '',
             model: result.config?.model || '',
+            modelDir: result.config?.modelDir || '',
+            pooling: result.config?.pooling || '',
             dims: result.config?.dims === undefined ? '' : String(result.config.dims),
             batchSize: result.config?.batchSize === undefined ? '' : String(result.config.batchSize),
             timeoutMs: result.config?.timeoutMs === undefined ? '' : String(result.config.timeoutMs),
-          })
+          }))
           setLoaded(true)
           return result
         })
@@ -4160,17 +4199,32 @@ window.__ModuleLoader__.load({
         setSaving(true); setError(''); setNotice('')
         const body = clear === true
           ? { baseURL: '', apiKeyEnv: '', model: '' }
-          : {
-              baseURL: draft.baseURL,
-              apiKeyEnv: draft.apiKeyEnv,
-              model: draft.model,
-              ...(optionalInt(draft.dims) !== undefined ? { dims: optionalInt(draft.dims) } : {}),
-              ...(optionalInt(draft.batchSize) !== undefined ? { batchSize: optionalInt(draft.batchSize) } : {}),
-              ...(optionalInt(draft.timeoutMs) !== undefined ? { timeoutMs: optionalInt(draft.timeoutMs) } : {}),
-            }
+          : draft.provider === 'local'
+            ? {
+                provider: 'local',
+                modelDir: draft.modelDir,
+                ...(draft.pooling !== '' ? { pooling: draft.pooling } : {}),
+                ...(optionalInt(draft.dims) !== undefined ? { dims: optionalInt(draft.dims) } : {}),
+                ...(optionalInt(draft.batchSize) !== undefined ? { batchSize: optionalInt(draft.batchSize) } : {}),
+              }
+            : {
+                baseURL: draft.baseURL,
+                apiKeyEnv: draft.apiKeyEnv,
+                model: draft.model,
+                ...(optionalInt(draft.dims) !== undefined ? { dims: optionalInt(draft.dims) } : {}),
+                ...(optionalInt(draft.batchSize) !== undefined ? { batchSize: optionalInt(draft.batchSize) } : {}),
+                ...(optionalInt(draft.timeoutMs) !== undefined ? { timeoutMs: optionalInt(draft.timeoutMs) } : {}),
+              }
         return api('memory/embed', { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify(body) })
-          .then(() => refresh())
-          .then(() => { setNotice(t('panel.saved')) })
+          .then((result) => refresh().then(() => result))
+          .then((result) => {
+            // 小白项自动补全回显（提案 0017）：PUT 对缺省 pooling/dims 按模型目录
+            // 推断并回报来源，这里拼成一行提示让用户看到「已自动填了什么」。
+            const filled = result && result.inferred
+              ? Object.entries(result.inferred).map(([key, info]) => `${key}=${info.value} (${info.source})`).join(' · ')
+              : ''
+            setNotice(filled === '' ? t('panel.saved') : `${t('panel.saved')} · ${t('settings.memoryAutoFilled', { items: filled })}`)
+          })
           .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
           .finally(() => setSaving(false))
       }
@@ -4184,10 +4238,25 @@ window.__ModuleLoader__.load({
           .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
           .finally(() => setTesting(false))
       }
+      const install = () => {
+        setInstalling(true); setError(''); setNotice('')
+        return api('memory/embed/local/install', { method: 'POST', headers: jsonHeaders(), body: '{}' })
+          .then((result) => {
+            setNotice(result.alreadyInstalled === true
+              ? t('settings.memoryLocalInstallAlready')
+              : t('settings.memoryLocalInstallOk'))
+            return refresh()
+          })
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setInstalling(false))
+      }
+      const isLocal = status !== null && status.provider === 'local'
       const statusBits = []
       if (status !== null) {
         if (!status.configured) statusBits.push(t('settings.memoryOff'))
-        else if (status.keyless) statusBits.push(t('settings.memoryKeyless'))
+        else if (isLocal) {
+          if (status.runtimeInstalled === false) statusBits.push(t('settings.memoryLocalRuntimeMissing'))
+        } else if (status.keyless) statusBits.push(t('settings.memoryKeyless'))
         else if (!status.envResolvable) statusBits.push(t('settings.memoryEnvMissing', { name: draft.apiKeyEnv }))
         if (status.breakerOpen) statusBits.push(t('settings.memoryBreaker', { until: status.breakerUntil ? new Date(status.breakerUntil).toLocaleTimeString() : '?' }))
         if (status.lastSuccessAt) statusBits.push(t('settings.memoryLastSuccess', { at: new Date(status.lastSuccessAt).toLocaleString(), dims: status.dims ?? '?', model: status.model || '?' }))
@@ -4197,14 +4266,42 @@ window.__ModuleLoader__.load({
         h('h3', null, t('settings.memoryTitle')),
         h('p', { className: 'dt-hint' }, t('settings.memoryHint')),
         loaded ? h('div', { className: 'dt-editor-grid' },
-          h(EditorField, { label: t('settings.memoryBaseURL'), value: draft.baseURL, onChange: (value) => setField('baseURL', value), className: 'dt-editor-wide', placeholder: 'https://api.example.com/v1' }),
-          h(EditorField, { label: t('settings.memoryModel'), value: draft.model, onChange: (value) => setField('model', value), placeholder: 'text-embedding-3-small' }),
-          h(EditorField, { label: t('settings.memoryApiKeyEnv'), value: draft.apiKeyEnv, onChange: (value) => setField('apiKeyEnv', value), hint: t('settings.memoryApiKeyEnvHint'), placeholder: 'MY_EMBED_API_KEY' }),
+          h(SettingSelect, {
+            label: t('settings.memoryProvider'),
+            value: draft.provider === 'local' ? 'local' : 'openai',
+            options: [
+              { value: 'openai', label: t('settings.memoryProviderOpenAI') },
+              { value: 'local', label: t('settings.memoryProviderLocal') },
+            ],
+            onChange: (value) => setField('provider', value || 'openai'),
+          }),
+          draft.provider === 'local' ? h(EditorField, {
+            label: t('settings.memoryModelDir'), value: draft.modelDir, onChange: (value) => setField('modelDir', value),
+            className: 'dt-editor-wide', hint: t('settings.memoryModelDirHint'), placeholder: 'D:\\models\\bge-small-zh-v1.5',
+          }) : null,
+          draft.provider === 'local' ? h(SettingSelect, {
+            label: t('settings.memoryPooling'),
+            value: draft.pooling,
+            options: [
+              { value: 'cls', label: t('settings.memoryPoolingCls') },
+              { value: 'mean', label: t('settings.memoryPoolingMean') },
+            ],
+            empty: t('settings.memoryPoolingDefault'),
+            onChange: (value) => setField('pooling', value || ''),
+          }) : null,
+          draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryBaseURL'), value: draft.baseURL, onChange: (value) => setField('baseURL', value), className: 'dt-editor-wide', placeholder: 'https://api.example.com/v1' }),
+          draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryModel'), value: draft.model, onChange: (value) => setField('model', value), placeholder: 'text-embedding-3-small' }),
+          draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryApiKeyEnv'), value: draft.apiKeyEnv, onChange: (value) => setField('apiKeyEnv', value), hint: t('settings.memoryApiKeyEnvHint'), placeholder: 'MY_EMBED_API_KEY' }),
           h(EditorField, { label: t('settings.memoryDims'), value: draft.dims, type: 'number', min: 1, onChange: (value) => setField('dims', value) }),
           h(EditorField, { label: t('settings.memoryBatchSize'), value: draft.batchSize, type: 'number', min: 1, max: 64, onChange: (value) => setField('batchSize', value) }),
-          h(EditorField, { label: t('settings.memoryTimeout'), value: draft.timeoutMs, type: 'number', min: 200, onChange: (value) => setField('timeoutMs', value) })) : null,
+          draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryTimeout'), value: draft.timeoutMs, type: 'number', min: 200, onChange: (value) => setField('timeoutMs', value) })) : null,
         statusBits.length > 0 ? h('p', { className: 'dt-hint' }, statusBits.join(' · ')) : null,
         h('div', { className: 'dt-editor-actions' },
+          isLocal && status.runtimeInstalled === false
+            ? h(Button, {
+                size: 'sm', variant: 'outline', disabled: installing || saving, onClick: install,
+              }, installing ? t('settings.memoryLocalInstalling') : t('settings.memoryLocalInstall'))
+            : null,
           h(Button, { size: 'sm', variant: 'primary', disabled: saving, onClick: () => save(false) }, t('settings.memorySave')),
           h(Button, { size: 'sm', variant: 'ghost', disabled: saving, onClick: () => save(true) }, t('settings.memoryClear')),
           h(Button, { size: 'sm', variant: 'outline', disabled: testing || (status !== null && !status.configured), onClick: test }, testing ? t('settings.memoryTesting') : t('settings.memoryTest'))),

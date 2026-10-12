@@ -316,6 +316,26 @@ function checkServerText(text) {
   if (!text.includes('assertStGenerationBinding')) {
     problems.push('server bundle must guard the ST generation route by architecture')
   }
+  // 本地 ONNX embed（提案 0017）：身份锚 / 运行时包名 / installed 状态面三者缺一
+  // 即可判定打包丢失。
+  if (!text.includes('local-onnx:')) {
+    problems.push('server bundle must carry the local-onnx identity anchor for local embed vectors')
+  }
+  if (!text.includes('@huggingface/transformers')) {
+    problems.push('server bundle must reference the local ONNX embed runtime package')
+  }
+  if (!text.includes('runtimeInstalled')) {
+    problems.push('server bundle must expose the local embed runtimeInstalled status')
+  }
+  // 自动填充（提案 0017 §自动填充）：PUT 缺省 pooling/dims 按模型目录推断——
+  // 推断函数丢失即判定打包缺失。
+  if (!text.includes('inferLocalModelSettings')) {
+    problems.push('server bundle must infer pooling/dims defaults from the local model dir')
+  }
+  // 面板一键安装路由（提案 0017 §安装面）：路由 marker 必须在 bundle 里。
+  if (!text.includes('memory/embed/local/install')) {
+    problems.push('server bundle must expose the local runtime install route')
+  }
   return problems
 }
 
@@ -445,6 +465,15 @@ function checkFrontendRuntimeText(text) {
     'dt-reasoning-body',
     "'message.thinking'",
     "'message.thoughts'",
+    // 本地 ONNX embed 配置面（提案 0017）：provider 切换（远程端点/本地模型）、
+    // 本地表单分发（provider === 'local'）与运行时未安装的双语提示键。
+    "'settings.memoryProviderLocal'",
+    "provider === 'local'",
+    "'settings.memoryLocalRuntimeMissing'",
+    // 自动填充回显（提案 0017 §自动填充）：保存后提示「已自动填了什么」。
+    "'settings.memoryAutoFilled'",
+    // 一键安装运行时按钮（提案 0017 §安装面）：本地 provider 且未装时出现。
+    "'settings.memoryLocalInstall'",
   ]) {
     if (!text.includes(marker)) problems.push(`frontend runtime is missing marker '${marker}'`)
   }
@@ -1748,14 +1777,21 @@ const gates = [
       const routeMarkers = REQUIRED_SERVER_ROUTES.map((route) => `"${route}"`).join('\n')
       const versionReader = 'readFileSync("version.json", "utf8"); var BUILD_INFO = { version: "0.0.0", commit: "stub" };'
       const commitResolver = 'function resolveCommit() { execFileSync("git", ["rev-parse", "--show-toplevel"]); return "stub"; } var TAVERN_COMMIT = resolveCommit();'
-      const good = `var name = "dsh-tavern"; var inject = []; function apply() {} function assertStGenerationBinding() {}\n${routeMarkers}\n"${API_PREFIX}"\n${versionReader}\n${commitResolver}\nvar bootstrap = { ok: true, version: BUILD_INFO.version, commit: TAVERN_COMMIT };\nexport { name, inject, apply };`
+      const localEmbed = '"local-onnx:"\n\'@huggingface/transformers\'\nvar localStatus = { runtimeInstalled: true };\nfunction inferLocalModelSettings() {}\n"memory/embed/local/install"'
+      const good = `var name = "dsh-tavern"; var inject = []; function apply() {} function assertStGenerationBinding() {}\n${routeMarkers}\n"${API_PREFIX}"\n${versionReader}\n${commitResolver}\n${localEmbed}\nvar bootstrap = { ok: true, version: BUILD_INFO.version, commit: TAVERN_COMMIT };\nexport { name, inject, apply };`
       const badRoute = good.replace('"generate"', '"missing"')
       const badStamp = good.replace('version: BUILD_INFO.version, ', '')
       const hardcodedCommit = good.replace('commit: TAVERN_COMMIT', 'commit: "stub"')
+      const badLocalEmbed = good.replace("'@huggingface/transformers'", "'embed-runtime-gone'")
+      const badLocalInfer = good.replace('function inferLocalModelSettings() {}', 'function inferNothing() {}')
+      const badLocalInstallRoute = good.replace('"memory/embed/local/install"', '"memory/embed/local/gone"')
       return checkServerText(good).length === 0
         && checkServerText(badRoute).length > 0
         && checkServerText(badStamp).length > 0
         && checkServerText(hardcodedCommit).length > 0
+        && checkServerText(badLocalEmbed).length > 0
+        && checkServerText(badLocalInfer).length > 0
+        && checkServerText(badLocalInstallRoute).length > 0
         && checkServerFreshness(10, 10).length === 0
         && checkBuildStamps('var built = { version: "0.0.0", commit: "abc1234" };', '0.0.0', 'abc1234').length === 0
         && checkBuildStamps('var built = { version: __TAVERN_VERSION__, commit: __TAVERN_COMMIT__ };', '0.0.0', 'abc1234').length > 0
@@ -1821,6 +1857,11 @@ const gates = [
         'dt-reasoning-body',
         "'message.thinking'",
         "'message.thoughts'",
+        "'settings.memoryProviderLocal'",
+        "provider === 'local'",
+        "'settings.memoryLocalRuntimeMissing'",
+        "'settings.memoryAutoFilled'",
+        "'settings.memoryLocalInstall'",
       ].join('\n')
       const bad = good.replace("sandbox: 'allow-scripts'", "sandbox: 'allow-forms'")
       const badBridge = good.replace('dsh-tavern:mod-request', 'dsh-tavern:mod-bridge-removed')
@@ -1831,6 +1872,11 @@ const gates = [
       const badViewportMsg = good.replace("'dsh-tavern:viewport'", "'dsh-tavern:vp-gone'")
       const badReasoningConsume = good.replace("event.type === 'reasoning'", "event.type === 'reason-gone'")
       const badReasoningRender = good.replace('dt-reasoning-body', 'dt-reason-gone')
+      const badLocalProviderSelect = good.replace("'settings.memoryProviderLocal'", "'settings.memoryProviderGone'")
+      const badLocalDispatch = good.replace("provider === 'local'", "provider === 'vanished'")
+      const badLocalRuntimeHint = good.replace("'settings.memoryLocalRuntimeMissing'", "'settings.memoryRuntimeGone'")
+      const badAutoFilled = good.replace("'settings.memoryAutoFilled'", "'settings.memoryAutoGone'")
+      const badLocalInstall = good.replace("'settings.memoryLocalInstall'", "'settings.memoryInstallGone'")
       return checkFrontendRuntimeText(good).length === 0
         && checkFrontendRuntimeText(bad).length > 0
         && checkFrontendRuntimeText(badBridge).length > 0
@@ -1839,6 +1885,11 @@ const gates = [
         && checkFrontendRuntimeText(badViewportMsg).length > 0
         && checkFrontendRuntimeText(badReasoningConsume).length > 0
         && checkFrontendRuntimeText(badReasoningRender).length > 0
+        && checkFrontendRuntimeText(badLocalProviderSelect).length > 0
+        && checkFrontendRuntimeText(badLocalDispatch).length > 0
+        && checkFrontendRuntimeText(badLocalRuntimeHint).length > 0
+        && checkFrontendRuntimeText(badAutoFilled).length > 0
+        && checkFrontendRuntimeText(badLocalInstall).length > 0
         ? []
         : ['frontend runtime marker self-test did not distinguish an unsafe sample']
     },

@@ -11,12 +11,12 @@
  */
 
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { apply, type AgentContextLike } from '../src/agent-tavern/agent.js'
-import { MemoryStore, MemoryVectorStore, TavernStore, memoryContentDigest } from '../../tavern-store/src/index.js'
+import { MemoryStore, MemoryVectorStore, TavernStore, memoryContentDigest, normalizeMemoryEmbedding } from '../../tavern-store/src/index.js'
 import {
   EMBED_BREAKER_MS,
   EMBED_PROBE_TEXT,
@@ -31,6 +31,8 @@ import {
   type EmbedRuntimeStatus,
 } from '../src/memory-embed.js'
 import { cosineSimilarity, rrfFuse } from '../../tavern-store/src/index.js'
+import { hybridMemorySearch } from '../src/memory-hybrid.js'
+import { localModelIdentity, resetLocalEmbedSessionCache, type LocalEmbedRuntime } from '../src/memory-embed-local.js'
 
 const CHARACTER = 'Hybrid Memory Tester'
 const CONFIG = {
@@ -457,5 +459,135 @@ describe('memory_search 混合检索（提案 0016 全链路）', () => {
     const fresh = (await (await MemoryVectorStore.open(root)).list('chat', chatId))
       .filter((entry) => entry.model === 'test-embed')
     expect(fresh.length).toBe(32 + 4) // 40 新记录回填 32 + 前序 4 条（L/M/S + 静海灯塔）
+  })
+})
+
+/* ---------------- 本地 ONNX provider（提案 0017）：身份锚 + 回填收敛 ---------------- */
+
+describe('hybridMemorySearch 本地 provider（零网络，假运行时注入）', () => {
+  let localRoot: string
+  let localModelDir: string
+
+  beforeEach(() => {
+    localRoot = mkdtempSync(join(tmpdir(), 'hybrid-local-'))
+    localModelDir = join(localRoot, 'model', 'bge-small-zh-v1.5')
+    mkdirSync(join(localModelDir, 'onnx'), { recursive: true })
+    writeFileSync(join(localModelDir, 'tokenizer.json'), '{}')
+    writeFileSync(join(localModelDir, 'onnx', 'model_quantized.onnx'), 'weights-v1')
+    resetLocalEmbedSessionCache()
+  })
+
+  afterEach(() => {
+    rmSync(localRoot, { recursive: true, force: true })
+    resetLocalEmbedSessionCache()
+  })
+
+  /** 假运行时：query 与含「alpha」的记录同向（dense 命中），其余固定旁向。 */
+  function fakeRuntime(): { runtime: LocalEmbedRuntime; embeds: string[] } {
+    const embeds: string[] = []
+    return {
+      embeds,
+      runtime: {
+        load: async () => ({
+          embed: async (texts) => {
+            embeds.push(...texts)
+            return texts.map((text) => (text.includes('alpha') ? [1, 0, 0, 0] : [0, 1, 0, 0]))
+          },
+        }),
+      },
+    }
+  }
+
+  async function seedMemories(store: MemoryStore): Promise<void> {
+    for (const [content, id] of [
+      ['alpha raid cleared the debt', 'm-alpha'],
+      ['beta baked bread at dawn', 'm-beta'],
+    ] as const) {
+      await store.put({
+        id, scope: 'chat', scopeId: 'chat-1', kind: 'semantic', content,
+        tags: [], importance: 0.8, confidence: 0.9, source: { kind: 'test' },
+      })
+    }
+  }
+
+  it('本地身份锚：向量以 local-onnx:<basename>@<指纹> 落库，检索走融合', async () => {
+    const store = await MemoryStore.open(localRoot)
+    const vectors = await MemoryVectorStore.open(localRoot)
+    await seedMemories(store)
+    const config = normalizeMemoryEmbedding({ provider: 'local', modelDir: localModelDir, dims: 4 })!
+    const { runtime, embeds } = fakeRuntime()
+
+    const hits = await hybridMemorySearch({
+      root: localRoot, config, store, vectorStore: vectors,
+      query: 'alpha', scopes: [{ scope: 'chat', scopeId: 'chat-1' }], limit: 5, maxTokens: 500,
+      localRuntime: runtime,
+    })
+
+    expect(hits).toBeDefined()
+    expect(hits![0]!.record.id).toBe('m-alpha')
+    const identity = localModelIdentity({ modelDir: localModelDir })
+    const entries = await vectors.list('chat', 'chat-1')
+    expect(entries.map((entry) => entry.model)).toEqual([identity, identity])
+    expect(entries.map((entry) => entry.digest))
+      .toEqual(entries.map((entry) => memoryContentDigest(identity, entry.id === 'm-alpha' ? 'alpha raid cleared the debt' : 'beta baked bread at dawn')))
+    // 回填发生：两条记录内容都过了假运行时
+    expect(embeds.filter((text) => text.includes('alpha raid'))).toHaveLength(1)
+  })
+
+  it('换权重文件 ⇒ 指纹变化 ⇒ 旧向量 stale ⇒ 懒回填收敛到新身份', async () => {
+    const store = await MemoryStore.open(localRoot)
+    const vectors = await MemoryVectorStore.open(localRoot)
+    await seedMemories(store)
+    const config = normalizeMemoryEmbedding({ provider: 'local', modelDir: localModelDir, dims: 4 })!
+    const { runtime } = fakeRuntime()
+
+    await hybridMemorySearch({
+      root: localRoot, config, store, vectorStore: vectors,
+      query: 'alpha', scopes: [{ scope: 'chat', scopeId: 'chat-1' }], limit: 5, maxTokens: 500,
+      localRuntime: runtime,
+    })
+    const firstIdentity = localModelIdentity({ modelDir: localModelDir })
+
+    // 替换权重（目录指纹变化 ⇒ 身份变化 ⇒ 已存向量全 stale）
+    writeFileSync(join(localModelDir, 'onnx', 'model_quantized.onnx'), 'weights-v2-replaced')
+    const hits = await hybridMemorySearch({
+      root: localRoot, config, store, vectorStore: vectors,
+      query: 'alpha', scopes: [{ scope: 'chat', scopeId: 'chat-1' }], limit: 5, maxTokens: 500,
+      localRuntime: runtime,
+    })
+
+    expect(hits).toBeDefined()
+    const secondIdentity = localModelIdentity({ modelDir: localModelDir })
+    expect(secondIdentity).not.toBe(firstIdentity)
+    const entries = await vectors.list('chat', 'chat-1')
+    expect(entries.map((entry) => entry.model)).toEqual([secondIdentity, secondIdentity])
+  })
+
+  it('本地运行失败 ⇒ 熔断开窗，后续检索逐字节回落纯词法（golden 纪律）', async () => {
+    const store = await MemoryStore.open(localRoot)
+    const vectors = await MemoryVectorStore.open(localRoot)
+    await seedMemories(store)
+    const config = normalizeMemoryEmbedding({ provider: 'local', modelDir: localModelDir, dims: 4 })!
+    const broken: LocalEmbedRuntime = {
+      load: async () => { throw new Error('model load exploded') },
+    }
+
+    const first = await hybridMemorySearch({
+      root: localRoot, config, store, vectorStore: vectors,
+      query: 'alpha', scopes: [{ scope: 'chat', scopeId: 'chat-1' }], limit: 5, maxTokens: 500,
+      localRuntime: broken,
+    })
+    expect(first).toBeUndefined()
+    const status = await readEmbedStatus(localRoot)
+    expect(embedBreakerOpen(status)).toBe(true)
+    expect(status.lastError).toContain('model load exploded')
+
+    // 熔断窗内：不再尝试嵌入，直接词法回落
+    const second = await hybridMemorySearch({
+      root: localRoot, config, store, vectorStore: vectors,
+      query: 'alpha', scopes: [{ scope: 'chat', scopeId: 'chat-1' }], limit: 5, maxTokens: 500,
+      localRuntime: broken,
+    })
+    expect(second).toBeUndefined()
   })
 })

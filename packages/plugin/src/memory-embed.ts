@@ -1,23 +1,27 @@
 /**
- * 记忆语义检索 embed 运行时（提案 0016）：OpenAI 兼容 /embeddings 客户端 +
- * 熔断 + 运行状态 sidecar。零新增依赖（global fetch）。
+ * 记忆语义检索 embed 运行时（提案 0016；提案 0017 扩本地 ONNX provider）：
+ * 远程 OpenAI 兼容 /embeddings 客户端 + 本地 transformers.js 分发 + 熔断 +
+ * 运行状态 sidecar。零新增打包依赖（global fetch + 运行时动态 import）。
  *
  * 跨 bundle 注意：index.mjs（HTTP 管理路由）与 agent.mjs（记忆工具）是两个
- * 独立 esbuild bundle，本模块会被内联两份——模块级内存（查询 memo）只在各自
- * bundle 内生效，可共享的运行时状态（lastError/lastSuccessAt/dims/熔断窗口）
- * 一律走 `<tavern>/memory-vectors/status.json` 文件 sidecar，原子写，最后写者
- * 胜（对熔断语义最坏影响是另一 bundle 多做一次注定失败的尝试）。
+ * 独立 esbuild bundle，本模块会被内联两份——模块级内存（查询 memo/本地模型
+ * 会话）只在各自 bundle 内生效，可共享的运行时状态（lastError/lastSuccessAt/
+ * dims/熔断窗口）一律走 `<tavern>/memory-vectors/status.json` 文件 sidecar，
+ * 原子写，最后写者胜（对熔断语义最坏影响是另一 bundle 多做一次注定失败的尝试）。
  *
  * key 纪律：配置只存 env 变量名（apiKeyEnv），解析时读 process.env；空值/未设
  * ⇒ 免密反代（不发送 Authorization 头）。key 永不写入日志、审计或接口响应。
  *
  * 失败纪律（LWB 参考语义，不抄代码）：429/5xx/网络错误/超时 → 短退避后重试
  * 一次；整体失败 → lastError + 熔断 60s（期间检索自动纯词法）；成功即复位。
+ * 本地 provider 失败（运行时未装/模型不可加载/推理异常）同走熔断与 lastError，
+ * 不重试（失败是确定性的，重试只白费模型加载时间）。
  */
 
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
-import { writeAtomicText, type MemoryEmbeddingSettings } from '../../tavern-store/src/index.js'
+import { writeAtomicText, type MemoryEmbeddingLocalSettings, type MemoryEmbeddingSettings } from '../../tavern-store/src/index.js'
+import { defaultLocalEmbedRuntime, loadLocalEmbedModel, localModelFingerprint, localModelIdentity, type LocalEmbedRuntime } from './memory-embed-local.js'
 
 /** 熔断窗口：一次整体失败后 60s 内不再尝试任何 embed 请求。 */
 export const EMBED_BREAKER_MS = 60_000
@@ -44,7 +48,7 @@ export interface EmbedRuntimeStatus {
   breakerUntil: number
 }
 
-export type EmbedFailureKind = 'timeout' | 'network' | 'http' | 'payload' | 'dims'
+export type EmbedFailureKind = 'timeout' | 'network' | 'http' | 'payload' | 'dims' | 'runtime'
 
 function emptyStatus(): EmbedRuntimeStatus {
   return { version: 1, breakerUntil: 0 }
@@ -126,13 +130,22 @@ export async function clearEmbedStatus(root: string): Promise<void> {
   await fs.rm(embedStatusPath(root), { force: true })
 }
 
-/** 免密语义：apiKeyEnv 为空、未设或 env 值为空/空白 ⇒ 不发送 Authorization。 */
+/** 免密语义：apiKeyEnv 为空、未设或 env 值为空/空白 ⇒ 不发送 Authorization。
+ *  本地 provider 无 key 概念，恒 undefined。 */
 export function resolveApiKey(config: MemoryEmbeddingSettings): string | undefined {
+  if (config.provider === 'local') return undefined
   if (config.apiKeyEnv === '') return undefined
   const value = process.env[config.apiKeyEnv]
   if (value === undefined) return undefined
   const trimmed = value.trim()
   return trimmed === '' ? undefined : trimmed
+}
+
+/** 向量空间身份：远程形态 = 配置 model；本地形态 = `local-onnx:<basename>@<指纹>`
+ *  （提案 0017——目录内容变化 ⇒ 身份变化 ⇒ 向量 stale ⇒ 懒重嵌）。 */
+export function embedModelIdentity(config: MemoryEmbeddingSettings): string {
+  if (config.provider === 'local') return localModelIdentity(config)
+  return config.model
 }
 
 /** 维度一致性基准：配置 dims 优先，缺省回落首次成功记录的 dims。 */
@@ -143,14 +156,18 @@ export function expectedDims(config: MemoryEmbeddingSettings, status: EmbedRunti
 export interface EmbedTextsOptions {
   /** 与响应比对的一致性维度（缺省不比对，仅要求批内一致）。 */
   expectedDims?: number
-  /** 测试注入口；缺省 global fetch。 */
+  /** 测试注入口；缺省 global fetch（仅远程 provider 使用）。 */
   fetchImpl?: typeof fetch
+  /** 测试注入口；缺省懒解析 transformers.js（仅本地 provider 使用）。 */
+  localRuntime?: LocalEmbedRuntime
 }
 
 /**
- * 批量嵌入：按 batchSize 分批顺序请求；每批超时 timeoutMs、429/5xx/网络错/
- * 超时重试一次（短退避）；响应校验 data[].embedding 维度一致且等于期望维度。
- * 任何一批最终失败即整体抛 EmbedHttpError（调用方负责熔断落账）。
+ * 批量嵌入（provider 分发）：远程形态按 batchSize 分批顺序请求，每批超时
+ * timeoutMs、429/5xx/网络错/超时重试一次（短退避），响应校验 data[].embedding
+ * 维度一致且等于期望维度；本地形态按 batchSize 分批顺序推理（无网络语义：
+ * 不重试不超时），输出校验与远程同款。任何一批最终失败即整体抛 EmbedHttpError
+ * （调用方负责熔断落账）。
  */
 export async function embedTexts(
   config: MemoryEmbeddingSettings,
@@ -158,6 +175,7 @@ export async function embedTexts(
   options: EmbedTextsOptions = {},
 ): Promise<number[][]> {
   if (texts.length === 0) return []
+  if (config.provider === 'local') return embedTextsLocal(config, texts, options)
   const batchSize = config.batchSize ?? 16
   const timeoutMs = config.timeoutMs ?? 10_000
   const fetchImpl = options.fetchImpl ?? fetch
@@ -167,6 +185,76 @@ export async function embedTexts(
     vectors.push(...await embedBatchWithRetry(config, batch, { ...options, timeoutMs, fetchImpl }))
   }
   return vectors
+}
+
+/** 本地形态嵌入：失败不重试（确定性失败），dims 校验与远程同语义。 */
+async function embedTextsLocal(
+  config: MemoryEmbeddingLocalSettings,
+  texts: readonly string[],
+  options: EmbedTextsOptions,
+): Promise<number[][]> {
+  let model
+  try {
+    model = await loadLocalEmbedModel(config, options.localRuntime ?? defaultLocalEmbedRuntime)
+  } catch (cause) {
+    throw new EmbedHttpError(
+      'runtime',
+      cause instanceof Error ? cause.message : String(cause),
+      undefined,
+      false,
+    )
+  }
+  const batchSize = config.batchSize ?? 16
+  const vectors: number[][] = []
+  for (let start = 0; start < texts.length; start += batchSize) {
+    const batch = texts.slice(start, start + batchSize)
+    let embedded: number[][]
+    try {
+      embedded = await model.embed(batch)
+    } catch (cause) {
+      throw new EmbedHttpError(
+        'runtime',
+        cause instanceof Error ? cause.message : String(cause),
+        undefined,
+        false,
+      )
+    }
+    if (embedded.length !== batch.length) {
+      throw new EmbedHttpError(
+        'payload',
+        `local embed returned ${embedded.length} vectors for ${batch.length} inputs`,
+        undefined,
+        false,
+      )
+    }
+    vectors.push(...validateLocalVectors(embedded, options.expectedDims))
+  }
+  return vectors
+}
+
+/** 批内有限数值 + 维度一致 + 期望维度比对（parseEmbeddings 的本地同款纪律）。 */
+function validateLocalVectors(embedded: readonly number[][], expectedDims: number | undefined): number[][] {
+  if (embedded.length === 0) {
+    throw new EmbedHttpError('payload', 'local embed returned no vectors', undefined, false)
+  }
+  const dims = embedded[0]?.length ?? 0
+  if (dims === 0 || embedded.some((vector) => vector.length !== dims)) {
+    throw new EmbedHttpError(
+      'dims',
+      `local embed dimensions inconsistent (batch dims: ${embedded.map((vector) => vector.length).join(',')})`,
+      undefined,
+      false,
+    )
+  }
+  for (const vector of embedded) {
+    if (vector.some((value) => typeof value !== 'number' || !Number.isFinite(value))) {
+      throw new EmbedHttpError('payload', 'local embed vector is not a finite number array', undefined, false)
+    }
+  }
+  if (expectedDims !== undefined && dims !== expectedDims) {
+    throw new EmbedHttpError('dims', `local embed has ${dims} dims, expected ${expectedDims}`, undefined, false)
+  }
+  return [...embedded]
 }
 
 async function embedBatchWithRetry(
@@ -277,6 +365,12 @@ function delay(ms: number): Promise<void> {
 const queryVectorMemo = new Map<string, number[]>()
 
 function memoKey(config: MemoryEmbeddingSettings, query: string): string {
+  // 本地形态以 目录|指纹|池化 做 memo 锚：换模型文件（指纹变化）或换池化
+  // （不同向量空间）后旧查询向量自动失效，不会把旧空间的 memo 喂进新空间的
+  // cosine 排序。
+  if (config.provider === 'local') {
+    return `local\u0000${config.modelDir}\u0000${localModelFingerprint(config.modelDir)}\u0000${config.pooling ?? 'cls'}\u0000${query}`
+  }
   return `${config.baseURL}\u0000${config.model}\u0000${query}`
 }
 
@@ -310,8 +404,9 @@ export interface EmbedProbeResult {
 }
 
 /**
- * 连通性探针（POST …/memory/embed/test）：固定串嵌入。显式用户动作——无视熔断
- * 直接尝试；成功即复位熔断，失败照常开窗（lastError 可供状态接口回显）。
+ * 连通性探针（POST …/memory/embed/test）：固定串嵌入（本地形态走本地推理，
+ * 首次探针含模型加载耗时）。显式用户动作——无视熔断直接尝试；成功即复位熔断，
+ * 失败照常开窗（lastError 可供状态接口回显）。
  */
 export async function embedProbe(
   root: string,
@@ -320,14 +415,15 @@ export async function embedProbe(
 ): Promise<EmbedProbeResult> {
   const status = await readEmbedStatus(root)
   const startedAt = Date.now()
+  const model = embedModelIdentity(config)
   try {
     const [vector] = await embedTexts(config, [EMBED_PROBE_TEXT], {
       ...options,
       expectedDims: expectedDims(config, status),
     })
     const dims = vector?.length ?? 0
-    const result: EmbedProbeResult = { dims, latencyMs: Date.now() - startedAt, model: config.model }
-    await recordEmbedSuccess(root, { model: config.model, dims })
+    const result: EmbedProbeResult = { dims, latencyMs: Date.now() - startedAt, model }
+    await recordEmbedSuccess(root, { model, dims })
     return result
   } catch (cause) {
     // 探针失败照常开窗落账（任何调用方都看得到 lastError/熔断状态）。
