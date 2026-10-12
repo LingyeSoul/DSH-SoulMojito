@@ -80,6 +80,7 @@ import { applyMvuSettlementRules, mergeMvuRuleNotes } from './mvu-rules.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
 import { registerAgentTavernPromptCapture } from './agent-tavern/prompt-capture.js'
 import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type SessionImportAppend } from './agent-tavern/projector.js'
+import { adoptAgentTavernFork, type ForkAdoptionOutcome } from './agent-tavern/fork.js'
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from './agent-tavern/deduce.js'
 // 预设 → AgentTavern 投影（agent-tavern/preset.ts）：本半持内置默认预设与
 // 写路径失效信号（预设 CRUD/激活后触发 agent.mjs 的投影缓存写穿）。
@@ -350,7 +351,31 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
     // accounting ride the SAME listener; no second session/event subscription.
     void handleNovelSessionEvent(ctx, session, event)
   })
-  ctx.on?.('agent/created', ({ agent }) => {
+  ctx.on?.('agent/created', async ({ agent }) => {
+    // 宿主原生会话分叉收养（决策 2026-10-11-agent-tavern-host-fork）：宿主把
+    // agent/created 做成串行事件（announce 在 loop start 前被 await），这里
+    // await 收养可保证分叉子会话首轮装配与工具面看到完整绑定。串行 listener
+    // 的 rejection 会炸掉宿主 agent 创建——整体吞错，失败降级为普通 DSH 会话。
+    let adopted: ForkAdoptionOutcome = 'skipped'
+    try {
+      const db = await store()
+      adopted = await adoptAgentTavernFork(agent?.session, {
+        store: db,
+        bind: (sessionId, character, chatId, contextMode) =>
+          bindSession(db, sessionId, character, chatId, false, 'agent-tavern', contextMode),
+        variables: await variables(),
+        memories: await memories(),
+        vectors: await memoryVectors(),
+        logger: ctx.logger,
+      })
+    } catch (error) {
+      ctx.logger?.warn?.(`AgentTavern fork adoption failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (adopted === 'adopted') {
+      // 与正常激活路径同款的投影预热尾步（决策 §2 第 8 步）：fire-and-forget，
+      // 不拖串行 dispatch；首轮懒装载路径照常兜底。
+      void emitAgentPresetChanged().then(() => refreshActivePrompt()).catch(() => {})
+    }
     void agentTavernProjectorPromise!.then((projector) => projector.replay(agent.session))
       .catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`))
   })

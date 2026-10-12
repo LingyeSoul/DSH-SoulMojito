@@ -2377,6 +2377,45 @@ var TavernStore = class _TavernStore {
       return { chatId: nextId, chat: branchLog };
     });
   }
+  /**
+   * 宿主原生会话分叉的收养物化（decisions/2026-10-11-agent-tavern-host-fork）：
+   * 克隆父聊天 header（guides / MVU 回执环随行），messages 置空——楼层由
+   * AgentTavern 投影器从子会话事件回放回填，不复制父 JSONL（身份幂等键是
+   * (子 sessionId, eventSeq)，复制会引入第二份身份语义）。chat_metadata 写
+   * `agentTavernFork` 谱系标记（收养崩溃恢复的复用判据）与 `bookmark_link`
+   * 回链（复用消息分支的元数据形状，client「↩ linked from」行同款消费）。
+   * 命名 `${stem} - fork N.jsonl`（branchChat 同款字符集安全与递增规则）。
+   */
+  async forkChat(characterName, parentChatId, fork) {
+    if (typeof fork.sessionId !== "string" || fork.sessionId === "" || typeof fork.parentSessionId !== "string" || fork.parentSessionId === "") {
+      throw new Error("forkChat requires sessionId and parentSessionId");
+    }
+    return this.mutateChat(async () => {
+      const dir = path.join(this.root, "chats", safeFileName(characterName));
+      const source = path.join(dir, safeChatFileName(parentChatId));
+      const bytes = await this.tryRead(source);
+      if (bytes === void 0) throw new Error(`chat '${parentChatId}' not found`);
+      const log = parseChatLog(Buffer.from(bytes).toString("utf8"));
+      const header = structuredClone(log.header);
+      const messageId = typeof fork.bookmarkMessageId === "number" && Number.isSafeInteger(fork.bookmarkMessageId) && fork.bookmarkMessageId >= 0 && fork.bookmarkMessageId < log.messages.length ? fork.bookmarkMessageId : Math.max(0, log.messages.length - 1);
+      header.chat_metadata = {
+        ...header.chat_metadata ?? {},
+        bookmark_link: { character: characterName, chatId: parentChatId, messageId },
+        agentTavernFork: { sessionId: fork.sessionId, parentSessionId: fork.parentSessionId }
+      };
+      const stem = parentChatId.replace(/\.jsonl$/i, "").replace(/\.jsonl$/i, "");
+      const safeStem = stem.replace(/[^A-Za-z0-9@ _.-]/g, "_").slice(0, 80) || "chat";
+      let nextId = `${safeStem} - fork 1.jsonl`;
+      let counter = 1;
+      while (await this.tryRead(path.join(dir, nextId)) !== void 0) {
+        counter += 1;
+        nextId = `${safeStem} - fork ${counter}.jsonl`;
+      }
+      const forkLog = { header, messages: [] };
+      await this.writeAtomic(path.join(dir, nextId), chatBytes(forkLog));
+      return { chatId: nextId, chat: forkLog };
+    });
+  }
   /* ------------------------------ 状态 ------------------------------ */
   async getState() {
     await this.stateMutationTail.catch(() => {
