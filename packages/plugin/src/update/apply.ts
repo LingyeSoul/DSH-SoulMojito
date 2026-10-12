@@ -30,6 +30,7 @@ import { dirname, join } from 'node:path'
 import {
   UNKNOWN_FIELD,
   isCommit,
+  isKnownVersion,
   pluginInstallSpec,
   repositorySlug,
   shortCommit,
@@ -104,8 +105,8 @@ function replaceFileAtomic(source: string, target: string): void {
   }
 }
 
-/** 同 {@link replaceFileAtomic}，但内容来自内存（client 目录逐文件覆盖用）。 */
-function writeFileAtomic(target: string, data: string | NodeJS.ArrayBufferView): void {
+/** 同 {@link replaceFileAtomic}，但内容来自内存（client 目录逐文件覆盖、update 缓存落盘共用）。 */
+export function writeFileAtomic(target: string, data: string | NodeJS.ArrayBufferView): void {
   const temp = `${target}.dsh-tavern-partial`
   writeFileSync(temp, data)
   for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
@@ -125,7 +126,7 @@ function writeFileAtomic(target: string, data: string | NodeJS.ArrayBufferView):
 
 export async function installUpdate(request: TavernInstallRequest): Promise<TavernInstallOutcome> {
   let pluginManager: any = request.pluginManager ?? null
-  return runInstallChain(request, [
+  const outcome = await runInstallChain(request, [
     { name: 'cli', run: () => installViaCli(request) },
     {
       name: 'plugin-manager',
@@ -138,6 +139,17 @@ export async function installUpdate(request: TavernInstallRequest): Promise<Tave
     },
     { name: 'checkout', run: () => installViaCheckout(request) },
   ])
+  // 安装成功后把目标 commit 戳进已安装目录的 version.json。这是 restart-required
+  // 能否解除的锚点：运行中构建的身份取「模块加载时磁盘上的旁车」（readBuildInfo
+  // 旁车优先），而烤进 bundle 的构建期字面量在 dist 随源入库的仓库里恒为父提交
+  // ——commit 不可能包含自身 hash。git 源又不携带旁车（仓库 .gitignore 排除），
+  // 三条落地路径统一在这里补戳，重启后的 local stamp 才与安装结果对齐。
+  if (outcome.ok && isCommit(request.commit)
+    && stampInstalledBuild(request.pluginDir, outcome.installed.version, request.commit)) {
+    request.log(`stamped version.json (${outcome.installed.version} ${shortCommit(request.commit)})`)
+    outcome.installed = readInstalledStamp(request.pluginDir)
+  }
+  return outcome
 }
 
 export interface TavernInstallStrategyEntry {
@@ -417,7 +429,6 @@ export async function installViaCheckout(request: TavernInstallRequest): Promise
     const source = join(checkout, 'packages', 'plugin')
     if (!existsSync(source)) throw new Error('packages/plugin is missing from the checkout')
     const copied = copyShippedFiles(source, request.pluginDir)
-    if (ensureVersionStamp(source, request.pluginDir, request.commit)) copied.push('version.json (synthesized)')
     request.log(`copied ${copied.length} shipped entries into ${request.pluginDir}`)
     return {
       ok: true,
@@ -481,21 +492,16 @@ export function copyShippedFiles(sourceDir: string, targetDir: string): string[]
 }
 
 /**
- * checkout 兜底的 version.json 保障：仓库把 version.json 排除在 git 之外
- * （构建旁车），git 源里读不到它。不补写的话，registry 安装（tarball 带
- * version.json）走 checkout 更新后旧 stamp 残留——readInstalledStamp 会把
- * 已安装版本读回旧值，pendingRestart 被立即解除，更新徽标反复回弹。
- * checkout 提供了就用 checkout 的；否则从刚拷贝的 package.json 版本和目标
- * commit 现写一份。
+ * 安装成功后把目标 commit 写进已安装目录的 version.json 旁车（见 installUpdate
+ * 的落戳说明）。取代旧 checkout 专属的 ensureVersionStamp：那个版本只在旁车
+ * 缺失时从拷贝来的 package.json 现写，装到已有陈旧旁车的目录（link: 开发仓库、
+ * 老版本 checkout 残留）时不会覆盖——陈旧 stamp 让 readInstalledStamp 读回旧
+ * commit，restart-required 要么立即误解除（徽标回弹）要么永远差一拍。
  */
-export function ensureVersionStamp(sourceDir: string, targetDir: string, commit: string): boolean {
-  if (existsSync(join(sourceDir, 'version.json'))) return false
+export function stampInstalledBuild(pluginDir: string, version: string, commit: string): boolean {
+  if (!isKnownVersion(version) || !isCommit(commit)) return false
   try {
-    const version = JSON.parse(readFileSync(join(targetDir, 'package.json'), 'utf8'))?.version
-    if (typeof version !== 'string' || version.trim() === '') return false
-    const stamp: Record<string, string> = { version: version.trim() }
-    if (isCommit(commit)) stamp.commit = shortCommit(commit)
-    writeFileAtomic(join(targetDir, 'version.json'), `${JSON.stringify(stamp, null, 2)}\n`)
+    writeFileAtomic(join(pluginDir, 'version.json'), `${JSON.stringify({ version: version.trim(), commit: shortCommit(commit) }, null, 2)}\n`)
     return true
   } catch {
     return false

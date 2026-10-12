@@ -14977,7 +14977,7 @@ async function toolCompleteMaintenance(run, args) {
 }
 
 // packages/plugin/src/update/service.ts
-import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2 } from "node:fs";
 import { dirname as dirname8, join as join15 } from "node:path";
 
 // packages/plugin/src/update/github.ts
@@ -15381,7 +15381,7 @@ function writeFileAtomic(target, data) {
 }
 async function installUpdate(request) {
   let pluginManager = request.pluginManager ?? null;
-  return runInstallChain(request, [
+  const outcome = await runInstallChain(request, [
     { name: "cli", run: () => installViaCli(request) },
     {
       name: "plugin-manager",
@@ -15392,6 +15392,11 @@ async function installUpdate(request) {
     },
     { name: "checkout", run: () => installViaCheckout(request) }
   ]);
+  if (outcome.ok && isCommit(request.commit) && stampInstalledBuild(request.pluginDir, outcome.installed.version, request.commit)) {
+    request.log(`stamped version.json (${outcome.installed.version} ${shortCommit(request.commit)})`);
+    outcome.installed = readInstalledStamp(request.pluginDir);
+  }
+  return outcome;
 }
 async function runInstallChain(request, entries) {
   const attempts = [];
@@ -15602,7 +15607,6 @@ async function installViaCheckout(request) {
     const source = join14(checkout, "packages", "plugin");
     if (!existsSync(source)) throw new Error("packages/plugin is missing from the checkout");
     const copied = copyShippedFiles(source, request.pluginDir);
-    if (ensureVersionStamp(source, request.pluginDir, request.commit)) copied.push("version.json (synthesized)");
     request.log(`copied ${copied.length} shipped entries into ${request.pluginDir}`);
     return {
       ok: true,
@@ -15656,14 +15660,10 @@ function copyShippedFiles(sourceDir, targetDir) {
   }
   return copied;
 }
-function ensureVersionStamp(sourceDir, targetDir, commit) {
-  if (existsSync(join14(sourceDir, "version.json"))) return false;
+function stampInstalledBuild(pluginDir, version, commit) {
+  if (!isKnownVersion(version) || !isCommit(commit)) return false;
   try {
-    const version = JSON.parse(readFileSync(join14(targetDir, "package.json"), "utf8"))?.version;
-    if (typeof version !== "string" || version.trim() === "") return false;
-    const stamp = { version: version.trim() };
-    if (isCommit(commit)) stamp.commit = shortCommit(commit);
-    writeFileAtomic(join14(targetDir, "version.json"), `${JSON.stringify(stamp, null, 2)}
+    writeFileAtomic(join14(pluginDir, "version.json"), `${JSON.stringify({ version: version.trim(), commit: shortCommit(commit) }, null, 2)}
 `);
     return true;
   } catch {
@@ -15825,6 +15825,9 @@ var TavernUpdateService = class {
     if (this.pendingRestart !== null) {
       if (sameCommit(this.local.commit, this.pendingRestart.commit)) {
         this.pendingRestart = null;
+        this.status = "unknown";
+        this.reason = "the running build has caught up with the installed update";
+        this.checkedAt = null;
       } else {
         this.status = "restart-required";
         this.reason = `installed ${this.pendingRestart.version} (${this.pendingRestart.commit}); restart DSH to load it`;
@@ -15864,11 +15867,12 @@ var TavernUpdateService = class {
   }
   /**
    * 一键更新。默认只在发现新版本时执行；`force` 允许把当前 ref 重装一遍
-   * （例如本地构建 stamp 损坏时手工修复）。
+   * （例如本地构建 stamp 损坏、或过渡态本身出了岔子时手工修复——force 可以
+   * 穿透 pendingRestart 短路，否则死循环的过渡态会让更新按钮永久失效）。
    */
   async install(input = {}) {
     if (this.installState.running) return this.snapshot();
-    if (this.pendingRestart !== null) {
+    if (this.pendingRestart !== null && input.force !== true) {
       this.installState = {
         ...emptyInstallState(),
         phase: "done",
@@ -15977,14 +15981,19 @@ var TavernUpdateService = class {
     };
     if (!outcome.ok) return;
     this.checkedAt = this.nowIso();
-    if (outcome.restartRequired || !sameCommit(this.local.commit, outcome.installed.commit)) {
+    const target = outcome.installed.commit;
+    if (isCommitText(target) && (outcome.restartRequired || !sameCommit(this.local.commit, target))) {
       this.pendingRestart = outcome.installed;
       this.status = "restart-required";
-      this.reason = `installed ${outcome.installed.version} (${outcome.installed.commit}) via ${outcome.strategy}; restart DSH to load it`;
-    } else {
+      this.reason = `installed ${outcome.installed.version} (${target}); restart DSH to load it`;
+    } else if (sameCommit(this.local.commit, target)) {
       this.pendingRestart = null;
       this.status = "up-to-date";
-      this.reason = `installed ${outcome.installed.version} (${outcome.installed.commit}) via ${outcome.strategy}`;
+      this.reason = `installed ${outcome.installed.version} (${target}) via ${outcome.strategy}`;
+    } else {
+      this.pendingRestart = null;
+      this.status = "unknown";
+      this.reason = `installed ${outcome.installed.version} via ${outcome.strategy}; restart DSH to make sure \u2014 the installed commit could not be verified`;
     }
   }
   cachePath() {
@@ -15999,15 +16008,21 @@ var TavernUpdateService = class {
       if (typeof cached.checkedAt === "string") this.checkedAt = cached.checkedAt;
       if (typeof cached.source === "string") this.source = cached.source;
       if (cached.remote !== null && typeof cached.remote === "object") this.remote = cached.remote;
-      if (cached.pendingRestart !== null && typeof cached.pendingRestart === "object" && typeof cached.pendingRestart?.version === "string") {
+      const pendingOrigin = typeof cached.pendingRestartPluginDir === "string" ? cached.pendingRestartPluginDir : "";
+      if (pendingOrigin === this.options.pluginDir && cached.pendingRestart !== null && typeof cached.pendingRestart === "object" && typeof cached.pendingRestart?.version === "string") {
         this.pendingRestart = {
           version: cached.pendingRestart.version,
           commit: isCommitText(cached.pendingRestart.commit) ? shortCommit(cached.pendingRestart.commit) : UNKNOWN_FIELD
         };
       }
+      if (this.pendingRestart === null && this.status === "restart-required") {
+        this.status = "unknown";
+        this.reason = "the cached restart transition does not apply to this install directory";
+      }
       if (cached.local !== void 0 && !sameLocal(cached.local, this.local)) {
         this.remote = null;
         this.checkedAt = null;
+        this.pendingRestart = null;
         this.status = "unknown";
         this.reason = "local build changed since the cached check";
       }
@@ -16026,12 +16041,12 @@ var TavernUpdateService = class {
         source: this.source,
         local: this.local,
         remote: this.remote,
-        pendingRestart: this.pendingRestart
+        pendingRestart: this.pendingRestart,
+        // 过渡态来源（loadCache 的幽灵防线读它）；null = 无过渡态。
+        pendingRestartPluginDir: this.pendingRestart === null ? null : this.options.pluginDir
       };
-      const temp = `${path12}.tmp`;
-      writeFileSync2(temp, `${JSON.stringify(payload, null, 2)}
-`, "utf8");
-      renameSync2(temp, path12);
+      writeFileAtomic(path12, `${JSON.stringify(payload, null, 2)}
+`);
     } catch {
     }
   }
@@ -23123,16 +23138,15 @@ function readBuildInfo() {
     if (typeof generated?.version === "string" && generated.version.trim() !== "") {
       version = generated.version.trim();
     }
-    if (commit === "unknown" && typeof generated?.commit === "string") {
-      commit = normalizeCommit(generated.commit) ?? "unknown";
-    }
+    const sidecarCommit = typeof generated?.commit === "string" ? normalizeCommit(generated.commit) : void 0;
+    if (sidecarCommit !== void 0) commit = sidecarCommit;
   } catch {
   }
   return { version, commit };
 }
 function buildTimeStamp() {
   const version = true ? "0.5.0".trim() : "";
-  const commit = true ? normalizeCommit("77a1319") : void 0;
+  const commit = true ? normalizeCommit("a7a6171") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
