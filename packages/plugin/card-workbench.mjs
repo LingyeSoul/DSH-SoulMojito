@@ -2618,6 +2618,8 @@ function normalizeEmbedBaseURL(value) {
 function normalizeMemoryEmbedding(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
   const record = value;
+  if (record.provider === "local") return normalizeLocalMemoryEmbedding(record);
+  if (record.provider !== void 0 && record.provider !== "" && record.provider !== "openai") return void 0;
   const baseURL = typeof record.baseURL === "string" ? normalizeEmbedBaseURL(record.baseURL) : "";
   const model = typeof record.model === "string" ? record.model.trim().slice(0, 200) : "";
   const apiKeyEnv = typeof record.apiKeyEnv === "string" ? record.apiKeyEnv.trim() : "";
@@ -2633,6 +2635,19 @@ function normalizeMemoryEmbedding(value) {
     ...dims !== void 0 ? { dims } : {},
     ...batchSize !== void 0 ? { batchSize } : {},
     ...timeoutMs !== void 0 ? { timeoutMs } : {}
+  };
+}
+function normalizeLocalMemoryEmbedding(record) {
+  const modelDir = typeof record.modelDir === "string" ? record.modelDir.trim() : "";
+  if (modelDir === "" || modelDir.length > 1024 || modelDir.includes("\0")) return void 0;
+  const dims = clampOptionalInt(record.dims, 1, 8192);
+  const batchSize = clampOptionalInt(record.batchSize, 1, 64);
+  return {
+    provider: "local",
+    modelDir,
+    ...record.pooling === "cls" || record.pooling === "mean" ? { pooling: record.pooling } : {},
+    ...dims !== void 0 ? { dims } : {},
+    ...batchSize !== void 0 ? { batchSize } : {}
   };
 }
 function clampOptionalInt(value, min, max2) {

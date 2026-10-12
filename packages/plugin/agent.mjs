@@ -1876,6 +1876,8 @@ function normalizeEmbedBaseURL(value) {
 function normalizeMemoryEmbedding(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
   const record = value;
+  if (record.provider === "local") return normalizeLocalMemoryEmbedding(record);
+  if (record.provider !== void 0 && record.provider !== "" && record.provider !== "openai") return void 0;
   const baseURL = typeof record.baseURL === "string" ? normalizeEmbedBaseURL(record.baseURL) : "";
   const model = typeof record.model === "string" ? record.model.trim().slice(0, 200) : "";
   const apiKeyEnv = typeof record.apiKeyEnv === "string" ? record.apiKeyEnv.trim() : "";
@@ -1891,6 +1893,19 @@ function normalizeMemoryEmbedding(value) {
     ...dims !== void 0 ? { dims } : {},
     ...batchSize !== void 0 ? { batchSize } : {},
     ...timeoutMs !== void 0 ? { timeoutMs } : {}
+  };
+}
+function normalizeLocalMemoryEmbedding(record) {
+  const modelDir = typeof record.modelDir === "string" ? record.modelDir.trim() : "";
+  if (modelDir === "" || modelDir.length > 1024 || modelDir.includes("\0")) return void 0;
+  const dims = clampOptionalInt(record.dims, 1, 8192);
+  const batchSize = clampOptionalInt(record.batchSize, 1, 64);
+  return {
+    provider: "local",
+    modelDir,
+    ...record.pooling === "cls" || record.pooling === "mean" ? { pooling: record.pooling } : {},
+    ...dims !== void 0 ? { dims } : {},
+    ...batchSize !== void 0 ? { batchSize } : {}
   };
 }
 function clampOptionalInt(value, min, max2) {
@@ -4391,6 +4406,165 @@ function onGuidesChanged(listener) {
 // packages/plugin/src/memory-embed.ts
 import { promises as fs7 } from "node:fs";
 import * as path6 from "node:path";
+
+// packages/plugin/src/memory-embed-local.ts
+import { createHash as createHash6 } from "node:crypto";
+import { readdirSync, readFileSync, realpathSync as realpathSync2, statSync } from "node:fs";
+import { createRequire as createRequire3 } from "node:module";
+import { basename as basename2, dirname as dirname4, join as join7 } from "node:path";
+import { fileURLToPath, pathToFileURL as pathToFileURL2 } from "node:url";
+
+// packages/bind/src/host-package.ts
+import { realpathSync } from "node:fs";
+import { createRequire as createRequire2 } from "node:module";
+import { pathToFileURL } from "node:url";
+async function importHostPackage(name2, anchor = process.argv[1]) {
+  for (const candidate of anchorCandidates(anchor)) {
+    try {
+      const hostRequire = createRequire2(candidate);
+      return await import(pathToFileURL(hostRequire.resolve(name2)).href);
+    } catch {
+    }
+  }
+  return await import(name2);
+}
+function anchorCandidates(anchor) {
+  const candidates = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (value) => {
+    if (typeof value !== "string" || value === "" || seen.has(value)) return;
+    seen.add(value);
+    candidates.push(value);
+  };
+  push(anchor);
+  if (typeof anchor === "string" && anchor !== "") {
+    try {
+      push(realpathSync(anchor));
+    } catch {
+    }
+  }
+  return candidates;
+}
+
+// packages/plugin/src/memory-embed-local.ts
+var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
+var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-tavern, NOT the dsh-tavern source repository), then restart DSH`;
+var SESSION_CACHE_LIMIT = 2;
+function localModelFingerprint(modelDir) {
+  try {
+    const parts = [];
+    for (const entry of readdirSync(modelDir).sort()) {
+      const full = join7(modelDir, entry);
+      const info = statSync(full);
+      if (info.isFile()) {
+        parts.push(`${entry}:${info.size}:${Math.round(info.mtimeMs)}`);
+      } else if (info.isDirectory()) {
+        for (const child of readdirSync(full).sort()) {
+          const childInfo = statSync(join7(full, child));
+          if (childInfo.isFile()) parts.push(`${entry}/${child}:${childInfo.size}:${Math.round(childInfo.mtimeMs)}`);
+        }
+      }
+    }
+    if (parts.length === 0) return "unreadable";
+    return createHash6("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
+  } catch {
+    return "unreadable";
+  }
+}
+function localModelIdentity(config) {
+  return `local-onnx:${basename2(config.modelDir)}@${localModelFingerprint(config.modelDir)}:${config.pooling ?? "cls"}`;
+}
+function resolutionAnchors() {
+  const candidates = [];
+  const push = (value) => {
+    if (typeof value !== "string" || value === "" || candidates.includes(value)) return;
+    candidates.push(value);
+  };
+  if (import.meta.url.startsWith("file:")) {
+    try {
+      push(fileURLToPath(import.meta.url));
+    } catch {
+    }
+  }
+  if (typeof process.argv[1] === "string" && process.argv[1] !== "") {
+    push(process.argv[1]);
+    try {
+      push(realpathSync2(process.argv[1]));
+    } catch {
+    }
+  }
+  return candidates;
+}
+async function importTransformers() {
+  for (const anchor of resolutionAnchors()) {
+    try {
+      const resolved = createRequire3(anchor).resolve(TRANSFORMERS_PACKAGE);
+      return await import(pathToFileURL2(resolved).href);
+    } catch {
+    }
+  }
+  return await importHostPackage(TRANSFORMERS_PACKAGE);
+}
+var defaultLocalEmbedRuntime = {
+  async load(modelDir, options = {}) {
+    let transformers;
+    try {
+      transformers = await importTransformers();
+    } catch (cause) {
+      throw new Error(`${TRANSFORMERS_INSTALL_HINT} (resolution failed: ${cause instanceof Error ? cause.message : String(cause)})`);
+    }
+    transformers.env.allowRemoteModels = false;
+    transformers.env.allowLocalModels = true;
+    const chain = ["fp16", "q8", "fp32"];
+    let pipeline;
+    let lastError;
+    for (const dtype of chain) {
+      try {
+        pipeline = await transformers.pipeline("feature-extraction", modelDir, { dtype });
+        break;
+      } catch (cause) {
+        lastError = cause;
+      }
+    }
+    if (pipeline === void 0) {
+      throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    }
+    return {
+      async embed(texts) {
+        const output = await pipeline([...texts], {
+          pooling: options.pooling ?? "cls",
+          normalize: true
+        });
+        return output.tolist();
+      }
+    };
+  }
+};
+var LOCAL_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
+var sessionCache = /* @__PURE__ */ new Map();
+function sessionKey(config, options) {
+  return `${config.modelDir}|${localModelFingerprint(config.modelDir)}|${options.pooling ?? "cls"}`;
+}
+function loadLocalEmbedModel(config, runtime = defaultLocalEmbedRuntime) {
+  const options = {};
+  if (config.pooling !== void 0) options.pooling = config.pooling;
+  const key = sessionKey(config, options);
+  const cached = sessionCache.get(key);
+  if (cached !== void 0) return cached;
+  const promise = runtime.load(config.modelDir, options).catch((cause) => {
+    sessionCache.delete(key);
+    throw cause;
+  });
+  sessionCache.set(key, promise);
+  while (sessionCache.size > SESSION_CACHE_LIMIT) {
+    const oldest = sessionCache.keys().next().value;
+    if (oldest === void 0) break;
+    sessionCache.delete(oldest);
+  }
+  return promise;
+}
+
+// packages/plugin/src/memory-embed.ts
 var EMBED_BREAKER_MS = 6e4;
 var EMBED_RETRY_BACKOFF_MS = 250;
 var EMBED_INPUT_MAX_CHARS = 6e3;
@@ -4455,17 +4629,23 @@ async function recordEmbedSuccess(root, info) {
   });
 }
 function resolveApiKey(config) {
+  if (config.provider === "local") return void 0;
   if (config.apiKeyEnv === "") return void 0;
   const value = process.env[config.apiKeyEnv];
   if (value === void 0) return void 0;
   const trimmed = value.trim();
   return trimmed === "" ? void 0 : trimmed;
 }
+function embedModelIdentity(config) {
+  if (config.provider === "local") return localModelIdentity(config);
+  return config.model;
+}
 function expectedDims(config, status) {
   return config.dims ?? status.dims;
 }
 async function embedTexts(config, texts, options = {}) {
   if (texts.length === 0) return [];
+  if (config.provider === "local") return embedTextsLocal(config, texts, options);
   const batchSize = config.batchSize ?? 16;
   const timeoutMs = config.timeoutMs ?? 1e4;
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -4475,6 +4655,68 @@ async function embedTexts(config, texts, options = {}) {
     vectors.push(...await embedBatchWithRetry(config, batch, { ...options, timeoutMs, fetchImpl }));
   }
   return vectors;
+}
+async function embedTextsLocal(config, texts, options) {
+  let model;
+  try {
+    model = await loadLocalEmbedModel(config, options.localRuntime ?? defaultLocalEmbedRuntime);
+  } catch (cause) {
+    throw new EmbedHttpError(
+      "runtime",
+      cause instanceof Error ? cause.message : String(cause),
+      void 0,
+      false
+    );
+  }
+  const batchSize = config.batchSize ?? 16;
+  const vectors = [];
+  for (let start = 0; start < texts.length; start += batchSize) {
+    const batch = texts.slice(start, start + batchSize);
+    let embedded;
+    try {
+      embedded = await model.embed(batch);
+    } catch (cause) {
+      throw new EmbedHttpError(
+        "runtime",
+        cause instanceof Error ? cause.message : String(cause),
+        void 0,
+        false
+      );
+    }
+    if (embedded.length !== batch.length) {
+      throw new EmbedHttpError(
+        "payload",
+        `local embed returned ${embedded.length} vectors for ${batch.length} inputs`,
+        void 0,
+        false
+      );
+    }
+    vectors.push(...validateLocalVectors(embedded, options.expectedDims));
+  }
+  return vectors;
+}
+function validateLocalVectors(embedded, expectedDims2) {
+  if (embedded.length === 0) {
+    throw new EmbedHttpError("payload", "local embed returned no vectors", void 0, false);
+  }
+  const dims = embedded[0]?.length ?? 0;
+  if (dims === 0 || embedded.some((vector) => vector.length !== dims)) {
+    throw new EmbedHttpError(
+      "dims",
+      `local embed dimensions inconsistent (batch dims: ${embedded.map((vector) => vector.length).join(",")})`,
+      void 0,
+      false
+    );
+  }
+  for (const vector of embedded) {
+    if (vector.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+      throw new EmbedHttpError("payload", "local embed vector is not a finite number array", void 0, false);
+    }
+  }
+  if (expectedDims2 !== void 0 && dims !== expectedDims2) {
+    throw new EmbedHttpError("dims", `local embed has ${dims} dims, expected ${expectedDims2}`, void 0, false);
+  }
+  return [...embedded];
 }
 async function embedBatchWithRetry(config, batch, options) {
   let lastError;
@@ -4565,6 +4807,9 @@ function delay(ms) {
 }
 var queryVectorMemo = /* @__PURE__ */ new Map();
 function memoKey(config, query) {
+  if (config.provider === "local") {
+    return `local\0${config.modelDir}\0${localModelFingerprint(config.modelDir)}\0${config.pooling ?? "cls"}\0${query}`;
+  }
   return `${config.baseURL}\0${config.model}\0${query}`;
 }
 function memoizedQueryVector(config, query) {
@@ -4590,17 +4835,18 @@ function storeMemoizedQueryVector(config, query, vector) {
 var HYBRID_BACKFILL_LIMIT = 32;
 var HYBRID_POOL_PER_SCOPE = 50;
 async function hybridMemorySearch(input) {
-  const { root, config, store: store3, vectorStore, query, scopes, limit, maxTokens, fetchImpl } = input;
+  const { root, config, store: store3, vectorStore, query, scopes, limit, maxTokens, fetchImpl, localRuntime } = input;
   const status = await readEmbedStatus(root);
   if (embedBreakerOpen(status)) return void 0;
+  const modelId = embedModelIdentity(config);
   let queryVector = memoizedQueryVector(config, query);
   if (queryVector === void 0) {
     try {
-      const [vector] = await embedTexts(config, [query], { expectedDims: expectedDims(config, status), fetchImpl });
+      const [vector] = await embedTexts(config, [query], { expectedDims: expectedDims(config, status), fetchImpl, localRuntime });
       if (vector === void 0) return void 0;
       queryVector = vector;
       storeMemoizedQueryVector(config, query, vector);
-      await recordEmbedSuccess(root, { model: config.model, dims: vector.length });
+      await recordEmbedSuccess(root, { model: modelId, dims: vector.length });
     } catch (cause) {
       await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
       return void 0;
@@ -4621,7 +4867,7 @@ async function hybridMemorySearch(input) {
   const stale = [];
   for (const hit of pool) {
     const entry = entries.get(vectorKey(hit.record.scope, hit.record.scopeId, hit.record.id));
-    if (entry !== void 0 && entry.model === config.model && entry.digest === memoryContentDigest(config.model, hit.record.content)) {
+    if (entry !== void 0 && entry.model === modelId && entry.digest === memoryContentDigest(modelId, hit.record.content)) {
       fresh.set(hit.record.id, entry.vector);
     } else {
       stale.push(hit);
@@ -4633,14 +4879,14 @@ async function hybridMemorySearch(input) {
       const vectors = await embedTexts(
         config,
         targets.map((hit) => hit.record.content.slice(0, EMBED_INPUT_MAX_CHARS)),
-        { expectedDims: queryVector?.length, fetchImpl }
+        { expectedDims: queryVector?.length, fetchImpl, localRuntime }
       );
       await vectorStore.put(targets.map((hit, index) => ({
         id: hit.record.id,
         scope: hit.record.scope,
         scopeId: hit.record.scopeId,
-        digest: memoryContentDigest(config.model, hit.record.content),
-        model: config.model,
+        digest: memoryContentDigest(modelId, hit.record.content),
+        model: modelId,
         vector: encodeVector(vectors[index] ?? [])
       })));
       targets.forEach((hit, index) => {
@@ -4665,23 +4911,24 @@ async function hybridMemorySearch(input) {
   return applyTokenBudget(ordered, maxTokens);
 }
 async function embedMemoryRecord(input) {
-  const { root, config, vectorStore, record, fetchImpl } = input;
+  const { root, config, vectorStore, record, fetchImpl, localRuntime } = input;
   const status = await readEmbedStatus(root);
   if (embedBreakerOpen(status)) return false;
+  const modelId = embedModelIdentity(config);
   try {
     const [vector] = await embedTexts(
       config,
       [record.content.slice(0, EMBED_INPUT_MAX_CHARS)],
-      { expectedDims: expectedDims(config, status), fetchImpl }
+      { expectedDims: expectedDims(config, status), fetchImpl, localRuntime }
     );
     if (vector === void 0) return false;
-    await recordEmbedSuccess(root, { model: config.model, dims: vector.length });
+    await recordEmbedSuccess(root, { model: modelId, dims: vector.length });
     await vectorStore.put([{
       id: record.id,
       scope: record.scope,
       scopeId: record.scopeId,
-      digest: memoryContentDigest(config.model, record.content),
-      model: config.model,
+      digest: memoryContentDigest(modelId, record.content),
+      model: modelId,
       vector: encodeVector(vector)
     }]);
     return true;
@@ -5501,7 +5748,7 @@ function appendMvuReceipt(chat, receipt) {
 
 // packages/plugin/src/agent-tavern/projector.ts
 import { promises as fs8 } from "node:fs";
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 
 // packages/tavern-lore/lib/types.js
 var MESSAGE_BOUNDARY2 = "";
@@ -5776,12 +6023,12 @@ for (const spec of [
 // packages/plugin/src/agent-tavern/projector.ts
 var mvuAuditTail = Promise.resolve();
 function mvuAuditPath(tavernRoot) {
-  return join8(tavernRoot, "mvu", "audit.jsonl");
+  return join9(tavernRoot, "mvu", "audit.jsonl");
 }
 async function appendMvuAudit(tavernRoot, record) {
   const write = mvuAuditTail.catch(() => {
   }).then(async () => {
-    await fs8.mkdir(join8(tavernRoot, "mvu"), { recursive: true });
+    await fs8.mkdir(join9(tavernRoot, "mvu"), { recursive: true });
     await fs8.appendFile(mvuAuditPath(tavernRoot), `${JSON.stringify(record)}
 `, "utf8");
   });

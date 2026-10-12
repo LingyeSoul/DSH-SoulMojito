@@ -5,7 +5,7 @@ import { promises as fsPromises } from 'node:fs'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { MemoryStore, TavernStore, VariableStore } from '../src/index.js'
+import { MemoryStore, TavernStore, VariableStore, normalizeMemoryEmbedding } from '../src/index.js'
 import { decodeCharacterCard, encodeCharx, encodeCharacterCardPng, stableDeepEqual } from '@dsh-tavern/format'
 
 const fixturesDir = fileURLToPath(new URL('../../tavern-format/tests/fixtures', import.meta.url))
@@ -640,4 +640,56 @@ describe('TavernStore', () => {
     expect((state as Record<string, unknown>).textCompletion).toBeUndefined()
     expect(state.scriptGlobals['mood']).toBe('calm')
   }))
+})
+
+/* ------------- memoryEmbedding 判别联合（提案 0017 本地 ONNX 形态） ------------- */
+
+describe('normalizeMemoryEmbedding provider union', () => {
+  it('legacy endpoint shape stays valid without provider field', () => {
+    const config = normalizeMemoryEmbedding({
+      baseURL: 'https://api.example.com/v1/',
+      apiKeyEnv: 'MY_KEY',
+      model: 'text-embedding-3-small',
+    })
+    expect(config).toEqual({
+      baseURL: 'https://api.example.com/v1',
+      apiKeyEnv: 'MY_KEY',
+      model: 'text-embedding-3-small',
+    })
+  })
+
+  it("provider 'openai' is accepted as explicit endpoint form", () => {
+    const config = normalizeMemoryEmbedding({ provider: 'openai', baseURL: 'http://x/v1', apiKeyEnv: '', model: 'm' })
+    expect(config?.provider).toBeUndefined()
+    expect(config?.baseURL).toBe('http://x/v1')
+  })
+
+  it("provider 'local' requires non-empty modelDir", () => {
+    expect(normalizeMemoryEmbedding({ provider: 'local', modelDir: '' })).toBeUndefined()
+    expect(normalizeMemoryEmbedding({ provider: 'local' })).toBeUndefined()
+    expect(normalizeMemoryEmbedding({ provider: 'local', modelDir: 'a\0b' })).toBeUndefined()
+    expect(normalizeMemoryEmbedding({ provider: 'local', modelDir: 'x'.repeat(1025) })).toBeUndefined()
+  })
+
+  it("provider 'local' keeps pooling/dims/batchSize and drops unknown pooling", () => {
+    const config = normalizeMemoryEmbedding({
+      provider: 'local', modelDir: 'D:\models\bge', pooling: 'mean', dims: 512, batchSize: 8,
+    })
+    expect(config).toEqual({ provider: 'local', modelDir: 'D:\models\bge', pooling: 'mean', dims: 512, batchSize: 8 })
+    const defaulted = normalizeMemoryEmbedding({ provider: 'local', modelDir: 'D:\models\bge', pooling: 'max' })
+    expect(defaulted).toEqual({ provider: 'local', modelDir: 'D:\models\bge' })
+  })
+
+  it('unknown provider is rejected (safely falls back to lexical)', () => {
+    expect(normalizeMemoryEmbedding({ provider: 'ollama', modelDir: 'x' })).toBeUndefined()
+    expect(normalizeMemoryEmbedding({ provider: 42 })).toBeUndefined()
+  })
+
+  it('endpoint fields are ignored on the local form and vice versa', () => {
+    const local = normalizeMemoryEmbedding({ provider: 'local', modelDir: '/m', baseURL: 'http://ignored/v1', model: 'ignored' })
+    expect(local).toEqual({ provider: 'local', modelDir: '/m' })
+    // endpoint 形态下混入 modelDir 不影响其自身合法性
+    const endpoint = normalizeMemoryEmbedding({ baseURL: 'http://x/v1', apiKeyEnv: '', model: 'm', modelDir: '/m' })
+    expect(endpoint?.model).toBe('m')
+  })
 })

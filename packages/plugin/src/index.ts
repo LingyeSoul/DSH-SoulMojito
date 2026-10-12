@@ -116,6 +116,7 @@ import {
   embedProbe,
   readEmbedStatus,
 } from './memory-embed.js'
+import { inferLocalModelSettings, installLocalEmbedRuntime, isLocalEmbedRuntimeInstalled, validateLocalModelDir } from './memory-embed-local.js'
 // B-3 记忆维护 run（LWB maintenance 的 dsh 化）：POST/GET memory/maintenance。
 import {
   MaintenanceRunConflictError,
@@ -1506,6 +1507,10 @@ async function handleApi(ctx, req, res) {
     return handleMemoryEmbedApi(req, res, route, method, db)
   }
 
+  if (method === 'POST' && route === 'memory/embed/local/install') {
+    return handleMemoryEmbedApi(req, res, route, method, db)
+  }
+
   // B-3 记忆维护 run（wait:false 风格）：POST 启动（同 scope 单飞 409），GET 轮询。
   if ((method === 'POST' || method === 'GET') && route === 'memory/maintenance') {
     return handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db)
@@ -2035,6 +2040,9 @@ async function handleMvuApi(
  * apiKeyEnv 只是 env 变量名引用——key 明文既不落库也永不回传（解析只发生在
  * 请求发出的瞬间，且仅进 Authorization 头）。
  */
+/** 面板一键安装的单飞守卫（进程内；安装是唯一写方，无需跨 bundle 共享）。 */
+let localRuntimeInstallInFlight: Promise<unknown> | undefined
+
 async function handleMemoryEmbedApi(
   req: NovelApiRequest,
   res: NovelApiResponse,
@@ -2047,17 +2055,22 @@ async function handleMemoryEmbedApi(
   if (method === 'GET' && route === 'memory/embed') {
     const config = normalizeMemoryEmbedding((await db.getState()).memoryEmbedding)
     const status = await readEmbedStatus(root)
-    const envValue = config !== undefined && config.apiKeyEnv !== '' ? process.env[config.apiKeyEnv] : undefined
+    const isLocal = config?.provider === 'local'
+    const endpoint = config !== undefined && config.provider !== 'local' ? config : undefined
+    const envValue = endpoint !== undefined && endpoint.apiKeyEnv !== '' ? process.env[endpoint.apiKeyEnv] : undefined
     return sendJson(res, 200, {
       ok: true,
       config: config ?? null,
       status: {
         configured: config !== undefined,
-        // 免密（apiKeyEnv 空串）是显式合法形态：envResolvable 视为满足。
-        keyless: config !== undefined && config.apiKeyEnv === '',
-        envResolvable: config === undefined
-          ? false
-          : config.apiKeyEnv === '' || (typeof envValue === 'string' && envValue.trim() !== ''),
+        provider: isLocal ? 'local' : 'openai',
+        // 免密（apiKeyEnv 空串）是显式合法形态：envResolvable 视为满足；本地
+        // provider 无 key 概念，keyless/envResolvable 恒真。
+        keyless: isLocal === true || (endpoint !== undefined && endpoint.apiKeyEnv === ''),
+        envResolvable: isLocal === true
+          || (endpoint !== undefined
+            && (endpoint.apiKeyEnv === '' || (typeof envValue === 'string' && envValue.trim() !== ''))),
+        ...(isLocal === true ? { runtimeInstalled: isLocalEmbedRuntimeInstalled() } : {}),
         breakerOpen: embedBreakerOpen(status),
         ...(status.breakerUntil > 0 ? { breakerUntil: new Date(status.breakerUntil).toISOString() } : {}),
         ...(status.model !== undefined ? { model: status.model } : {}),
@@ -2072,6 +2085,69 @@ async function handleMemoryEmbedApi(
   if (method === 'PUT' && route === 'memory/embed') {
     const body = await readJson(req)
     const raw: Record<string, unknown> = body === null || typeof body !== 'object' || Array.isArray(body) ? {} : body
+
+    // 本地 ONNX 形态（提案 0017）：modelDir 实存校验 + resolve 成绝对路径存储
+    // （嵌入发生在未来的任意 CWD 下，相对路径必须在此刻钉死）。空 modelDir 与
+    // 三件套全空同义 = 清除配置。
+    if (raw.provider === 'local') {
+      const modelDirRaw = typeof raw.modelDir === 'string' ? raw.modelDir.trim() : ''
+      if (modelDirRaw === '') {
+        await db.patchState({ memoryEmbedding: undefined })
+        await clearEmbedStatus(root)
+        return sendJson(res, 200, { ok: true, config: null })
+      }
+      const modelDir = resolve(modelDirRaw)
+      const dirProblem = validateLocalModelDir(modelDir)
+      if (dirProblem !== null) {
+        return sendJson(res, 400, { ok: false, message: dirProblem })
+      }
+      // pooling 非法值 fail-fast：normalize 会静默丢弃，用户会误以为已生效。
+      if (raw.pooling !== undefined && raw.pooling !== null && raw.pooling !== 'cls' && raw.pooling !== 'mean') {
+        return sendJson(res, 400, {
+          ok: false,
+          message: `invalid pooling '${String(raw.pooling).slice(0, 30)}': expected 'cls' or 'mean' (cls is the BERT/bge default; sentence-embedding models like MiniLM need 'mean')`,
+        })
+      }
+      // 小白项自动补全（提案 0017 §自动填充）：pooling/dims 缺省时按模型目录
+      // 推断（modules.json → config.json → 模型族启发），响应回报每项来源供
+      // 面板提示；显式提供的值永远优先。
+      const inferred = inferLocalModelSettings(modelDir)
+      const explicitPooling = raw.pooling === 'cls' || raw.pooling === 'mean'
+      const explicitDims = typeof raw.dims === 'number' && Number.isFinite(raw.dims)
+      const config = normalizeMemoryEmbedding({
+        provider: 'local',
+        modelDir,
+        ...((explicitPooling ? raw.pooling : inferred.pooling) !== undefined
+          ? { pooling: (explicitPooling ? raw.pooling : inferred.pooling) as 'cls' | 'mean' }
+          : {}),
+        ...((explicitDims ? raw.dims : inferred.dims) !== undefined
+          ? { dims: (explicitDims ? raw.dims : inferred.dims) as number }
+          : {}),
+        ...(raw.batchSize !== undefined && raw.batchSize !== null ? { batchSize: raw.batchSize } : {}),
+      })
+      if (config === undefined) {
+        return sendJson(res, 400, {
+          ok: false,
+          message: 'expected { provider: \'local\', modelDir, pooling? (\'cls\'|\'mean\'), dims?, batchSize? (1-64) }',
+        })
+      }
+      const autoFilled: Record<string, { value: number | 'cls' | 'mean'; source: string }> = {}
+      if (!explicitPooling && config.pooling !== undefined) {
+        autoFilled.pooling = { value: config.pooling, source: inferred.sources.pooling ?? 'default (cls)' }
+      }
+      if (!explicitDims && config.dims !== undefined) {
+        autoFilled.dims = { value: config.dims, source: inferred.sources.dims ?? '' }
+      }
+      await db.patchState({ memoryEmbedding: config })
+      // 配置变更 ⇒ 旧端点观察到的 dims 基准、熔断窗口与错误记录全部作废。
+      await clearEmbedStatus(root)
+      return sendJson(res, 200, {
+        ok: true,
+        config,
+        ...(Object.keys(autoFilled).length > 0 ? { inferred: autoFilled } : {}),
+      })
+    }
+
     const baseURL = typeof raw.baseURL === 'string' ? normalizeEmbedBaseURL(raw.baseURL) : ''
     const apiKeyEnv = typeof raw.apiKeyEnv === 'string' ? raw.apiKeyEnv.trim() : ''
     const model = typeof raw.model === 'string' ? raw.model.trim() : ''
@@ -2082,7 +2158,7 @@ async function handleMemoryEmbedApi(
       return sendJson(res, 200, { ok: true, config: null })
     }
     // POSIX env 名前置校验（给出比 normalize 落空更可操作的报错文案；模式与
-    // normalizeMemoryEmbedding 同源导出，两处不漂移）。
+    // normalizeMemoryEmbedding 同源导出，两处不得漂移）。
     if (apiKeyEnv !== '' && !MEMORY_EMBED_ENV_NAME.test(apiKeyEnv)) {
       return sendJson(res, 400, {
         ok: false,
@@ -2107,6 +2183,36 @@ async function handleMemoryEmbedApi(
     // 配置变更 ⇒ 旧端点观察到的 dims 基准、熔断窗口与错误记录全部作废。
     await clearEmbedStatus(root)
     return sendJson(res, 200, { ok: true, config })
+  }
+
+  if (method === 'POST' && route === 'memory/embed/local/install') {
+    // 面板一键安装运行时（提案 0017 §安装面；2026-10-12 用户决策）：在 profile
+    // 根跑 pnpm add（执行纪律镜像自更新 apply.ts 的 runCapture——流式输出、超时
+    // kill）。link:/源码挂载拒绝（profile 根与插件目录分离，自动装会写错地方）。
+    // 成功即同进程生效（运行时按 URL 动态 import，无需重启），探针可立即验证。
+    if (localRuntimeInstallInFlight !== undefined) {
+      return sendJson(res, 409, { ok: false, message: 'a local runtime install is already in progress' })
+    }
+    const installPromise = installLocalEmbedRuntime({ pluginDir: import.meta.dirname })
+    localRuntimeInstallInFlight = installPromise
+    try {
+      const outcome = await installPromise
+      if (!outcome.ok) {
+        return sendJson(res, 400, {
+          ok: false,
+          message: outcome.message ?? 'install failed',
+          ...(outcome.outputTail !== '' ? { outputTail: outcome.outputTail } : {}),
+        })
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        alreadyInstalled: outcome.alreadyInstalled,
+        ...(outcome.message !== undefined ? { message: outcome.message } : {}),
+        ...(outcome.outputTail !== '' ? { outputTail: outcome.outputTail } : {}),
+      })
+    } finally {
+      localRuntimeInstallInFlight = undefined
+    }
   }
 
   if (method === 'POST' && route === 'memory/embed/test') {

@@ -148,8 +148,9 @@ export interface TavernState {
   /** 逐 Mod 启用表（提案 0015 §3.2）：键是 mod id，值为 true 才算启用。 */
   mods?: { enabled?: Record<string, boolean> }
   /**
-   * 记忆语义检索 embed 端点（提案 0016）：OpenAI 兼容 /embeddings 三件套。
-   * 缺省 = 混合检索整体关闭，memory_search 保持纯词法（golden 行为）。
+   * 记忆语义检索 embed 配置（提案 0016；提案 0017 扩为 provider 判别联合）：
+   * 缺省 = 远程 OpenAI 兼容端点（三件套），provider='local' = 本地 ONNX 模型
+   * 目录。缺省/非法 ⇒ 混合检索整体关闭，memory_search 保持纯词法（golden 行为）。
    * key 只存 env 变量名引用（对齐宿主 dsh-credentials 的 CredentialRef 风格），
    * 明文永不入库。
    */
@@ -157,10 +158,20 @@ export interface TavernState {
 }
 
 /**
- * 记忆 embed 端点设置（提案 0016 §配置面）。baseURL/model/apiKeyEnv 三者齐备
- * 才算已配置；apiKeyEnv 为空串表示免密反代（不发送 Authorization 头）。
+ * 记忆 embed 端点设置（提案 0016 §配置面；提案 0017 扩为 provider 判别联合）。
+ * provider 缺省 = 远程端点形态（历史配置无该字段，行为不变）；'local' = 本地
+ * ONNX 形态（提案 0017）。两种形态都要求核心字段齐备才算已配置。
  */
-export interface MemoryEmbeddingSettings {
+export type MemoryEmbeddingSettings = MemoryEmbeddingEndpointSettings | MemoryEmbeddingLocalSettings
+
+/**
+ * 远程端点形态（提案 0016 原状）：baseURL/model/apiKeyEnv 三者齐备才算已配置；
+ * apiKeyEnv 为空串表示免密反代（不发送 Authorization 头）。key 只存 env 变量名
+ * 引用（对齐宿主 dsh-credentials 的 CredentialRef 风格），明文永不入库。
+ */
+export interface MemoryEmbeddingEndpointSettings {
+  /** 形态判别；缺省（undefined）等价 'openai'（历史配置兼容）。 */
+  provider?: 'openai'
   /** OpenAI 兼容端点前缀，实际请求 POST {baseURL}/embeddings。 */
   baseURL: string
   /** 解析 API key 的 POSIX 环境变量名；空串 = 免密。不存明文 key。 */
@@ -171,6 +182,23 @@ export interface MemoryEmbeddingSettings {
   batchSize?: number
   /** 单次请求超时毫秒，默认 10000。 */
   timeoutMs?: number
+}
+
+/**
+ * 本地 ONNX 形态（提案 0017）：transformers.js（@huggingface/transformers）
+ * 运行时加载用户自备的本地模型目录（HF onnx 布局：tokenizer.json + onnx/*.onnx
+ * + config.json）。零网络（模型只从磁盘加载）；运行时不随插件打包，按需解析
+ * （见 plugin/src/memory-embed-local.ts）。modelDir 存绝对路径（PUT 时 resolve）。
+ */
+export interface MemoryEmbeddingLocalSettings {
+  provider: 'local'
+  /** 本地模型目录绝对路径（含 tokenizer.json 与 onnx/*.onnx）。 */
+  modelDir: string
+  /** 池化策略；缺省 cls（BERT/bge 家族标准；MiniLM 等 mean 池化模型需显式配置）。 */
+  pooling?: 'cls' | 'mean'
+  dims?: number
+  /** 单次嵌入批量上限（分批顺序嵌入），默认 16。 */
+  batchSize?: number
 }
 
 /** 面板可写的压缩设置；provider/model 必须成对出现，空串视为未设置。 */
@@ -257,13 +285,18 @@ export function normalizeEmbedBaseURL(value: string): string {
 }
 
 /**
- * 记忆 embed 设置读取容错（提案 0016）：baseURL 必须是 http(s) URL、model 非空、
- * apiKeyEnv 是合法 POSIX env 名或空串（免密）；数值字段夹取到合法区间。任何
- * 硬性字段缺失/非法 ⇒ 整体 undefined（手改 state.json 时功能安全回落纯词法）。
+ * 记忆 embed 设置读取容错（提案 0016 §配置面；提案 0017 扩 provider 判别）：
+ * provider='local' 走本地形态（modelDir 非空、无 NUL、≤1024 字符）；缺省/
+ * 'openai' 走远程形态——baseURL 必须是 http(s) URL、model 非空、apiKeyEnv 是
+ * 合法 POSIX env 名或空串（免密）；数值字段夹取到合法区间。任何硬性字段缺失/
+ * 非法 ⇒ 整体 undefined（手改 state.json 时功能安全回落纯词法）。本地形态只做
+ * 形状校验不做磁盘校验（state 读取保持纯函数；目录实存校验在 PUT 路由做）。
  */
 export function normalizeMemoryEmbedding(value: unknown): MemoryEmbeddingSettings | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
+  if (record.provider === 'local') return normalizeLocalMemoryEmbedding(record)
+  if (record.provider !== undefined && record.provider !== '' && record.provider !== 'openai') return undefined
   const baseURL = typeof record.baseURL === 'string' ? normalizeEmbedBaseURL(record.baseURL) : ''
   const model = typeof record.model === 'string' ? record.model.trim().slice(0, 200) : ''
   const apiKeyEnv = typeof record.apiKeyEnv === 'string' ? record.apiKeyEnv.trim() : ''
@@ -279,6 +312,20 @@ export function normalizeMemoryEmbedding(value: unknown): MemoryEmbeddingSetting
     ...(dims !== undefined ? { dims } : {}),
     ...(batchSize !== undefined ? { batchSize } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  }
+}
+
+function normalizeLocalMemoryEmbedding(record: Record<string, unknown>): MemoryEmbeddingLocalSettings | undefined {
+  const modelDir = typeof record.modelDir === 'string' ? record.modelDir.trim() : ''
+  if (modelDir === '' || modelDir.length > 1024 || modelDir.includes('\0')) return undefined
+  const dims = clampOptionalInt(record.dims, 1, 8192)
+  const batchSize = clampOptionalInt(record.batchSize, 1, 64)
+  return {
+    provider: 'local',
+    modelDir,
+    ...(record.pooling === 'cls' || record.pooling === 'mean' ? { pooling: record.pooling } : {}),
+    ...(dims !== undefined ? { dims } : {}),
+    ...(batchSize !== undefined ? { batchSize } : {}),
   }
 }
 

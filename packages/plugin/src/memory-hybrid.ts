@@ -32,6 +32,7 @@ import {
 import {
   EMBED_INPUT_MAX_CHARS,
   embedBreakerOpen,
+  embedModelIdentity,
   embedTexts,
   expectedDims,
   memoizedQueryVector,
@@ -40,6 +41,7 @@ import {
   recordEmbedSuccess,
   storeMemoizedQueryVector,
 } from './memory-embed.js'
+import type { LocalEmbedRuntime } from './memory-embed-local.js'
 
 /** 单次检索的懒回填上限。 */
 export const HYBRID_BACKFILL_LIMIT = 32
@@ -66,6 +68,8 @@ export interface HybridSearchInput {
   maxTokens: number
   /** 测试注入口。 */
   fetchImpl?: typeof fetch
+  /** 测试注入口（provider='local' 时的假运行时）。 */
+  localRuntime?: LocalEmbedRuntime
 }
 
 /**
@@ -73,20 +77,22 @@ export interface HybridSearchInput {
  * 命中的 score 字段保持词法分（输出语义不变），排序由 RRF 接管。
  */
 export async function hybridMemorySearch(input: HybridSearchInput): Promise<MemoryHit[] | undefined> {
-  const { root, config, store, vectorStore, query, scopes, limit, maxTokens, fetchImpl } = input
+  const { root, config, store, vectorStore, query, scopes, limit, maxTokens, fetchImpl, localRuntime } = input
   const status = await readEmbedStatus(root)
   if (embedBreakerOpen(status)) return undefined
+  // 向量空间身份（本地形态 = local-onnx:<basename>@<指纹>，提案 0017）。
+  const modelId = embedModelIdentity(config)
 
   // 查询向量（进程内 memoize）。失败 ⇒ 熔断开窗 + 本次纯词法。
   let queryVector = memoizedQueryVector(config, query)
   if (queryVector === undefined) {
     try {
-      const [vector] = await embedTexts(config, [query], { expectedDims: expectedDims(config, status), fetchImpl })
+      const [vector] = await embedTexts(config, [query], { expectedDims: expectedDims(config, status), fetchImpl, localRuntime })
       if (vector === undefined) return undefined
       queryVector = vector
       storeMemoizedQueryVector(config, query, vector)
       // 成功即复位（breakerUntil=0）并记录 lastSuccessAt/dims 基准。
-      await recordEmbedSuccess(root, { model: config.model, dims: vector.length })
+      await recordEmbedSuccess(root, { model: modelId, dims: vector.length })
     } catch (cause) {
       await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause))
       return undefined
@@ -100,7 +106,7 @@ export async function hybridMemorySearch(input: HybridSearchInput): Promise<Memo
   pool.sort((left, right) => right.score - left.score || left.record.id.localeCompare(right.record.id))
   const lexicalRank = new Map(pool.map((hit, index) => [hit.record.id, index]))
 
-  // 向量新鲜度：entry.model + digest 与当前配置及全文 content 一致才算新鲜。
+  // 向量新鲜度：entry.model + digest 与当前身份及全文 content 一致才算新鲜。
   const entries = new Map<string, MemoryVectorEntry>()
   for (const { scope, scopeId } of scopes) {
     for (const entry of await vectorStore.list(scope, scopeId)) {
@@ -111,8 +117,8 @@ export async function hybridMemorySearch(input: HybridSearchInput): Promise<Memo
   const stale: typeof pool = []
   for (const hit of pool) {
     const entry = entries.get(vectorKey(hit.record.scope, hit.record.scopeId, hit.record.id))
-    if (entry !== undefined && entry.model === config.model
-      && entry.digest === memoryContentDigest(config.model, hit.record.content)) {
+    if (entry !== undefined && entry.model === modelId
+      && entry.digest === memoryContentDigest(modelId, hit.record.content)) {
       fresh.set(hit.record.id, entry.vector)
     } else {
       stale.push(hit)
@@ -126,14 +132,14 @@ export async function hybridMemorySearch(input: HybridSearchInput): Promise<Memo
       const vectors = await embedTexts(
         config,
         targets.map((hit) => hit.record.content.slice(0, EMBED_INPUT_MAX_CHARS)),
-        { expectedDims: queryVector?.length, fetchImpl },
+        { expectedDims: queryVector?.length, fetchImpl, localRuntime },
       )
       await vectorStore.put(targets.map((hit, index) => ({
         id: hit.record.id,
         scope: hit.record.scope,
         scopeId: hit.record.scopeId,
-        digest: memoryContentDigest(config.model, hit.record.content),
-        model: config.model,
+        digest: memoryContentDigest(modelId, hit.record.content),
+        model: modelId,
         vector: encodeVector(vectors[index] ?? []),
       })))
       targets.forEach((hit, index) => {
@@ -176,24 +182,26 @@ export async function embedMemoryRecord(input: {
   vectorStore: MemoryVectorStore
   record: { id: string; scope: MemoryScope; scopeId: string; content: string }
   fetchImpl?: typeof fetch
+  localRuntime?: LocalEmbedRuntime
 }): Promise<boolean> {
-  const { root, config, vectorStore, record, fetchImpl } = input
+  const { root, config, vectorStore, record, fetchImpl, localRuntime } = input
   const status = await readEmbedStatus(root)
   if (embedBreakerOpen(status)) return false
+  const modelId = embedModelIdentity(config)
   try {
     const [vector] = await embedTexts(
       config,
       [record.content.slice(0, EMBED_INPUT_MAX_CHARS)],
-      { expectedDims: expectedDims(config, status), fetchImpl },
+      { expectedDims: expectedDims(config, status), fetchImpl, localRuntime },
     )
     if (vector === undefined) return false
-    await recordEmbedSuccess(root, { model: config.model, dims: vector.length })
+    await recordEmbedSuccess(root, { model: modelId, dims: vector.length })
     await vectorStore.put([{
       id: record.id,
       scope: record.scope,
       scopeId: record.scopeId,
-      digest: memoryContentDigest(config.model, record.content),
-      model: config.model,
+      digest: memoryContentDigest(modelId, record.content),
+      model: modelId,
       vector: encodeVector(vector),
     }])
     return true
