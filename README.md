@@ -295,7 +295,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：88 个测试文件、1265 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
+当前基线：89 个测试文件、1267 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。示例 Mod 的 engines 与随仓库发布的宿主版本由 `packages/plugin/tests/tavern-mods-examples.spec.ts` 防漂移守卫锁定（2026-10-12 story-clock `^0.4.1` 卡死 0.5.0 宿主的事后修复，见 [decisions/2026-10-12-story-clock-engines-drift.md](decisions/2026-10-12-story-clock-engines-drift.md)）。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 
