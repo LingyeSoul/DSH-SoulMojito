@@ -816,6 +816,13 @@ window.__ModuleLoader__.load({
       'panel.section.memory': 'Memory retrieval',
       // 提示词查看器（A-6）：ST 循环实发请求 + 世界书激活追踪分区。
       'panel.section.prompts': 'Prompt viewer',
+      // 关于分区（面板尾部）：插件版本、官网与作者外链。zh/en 键集镜像由
+      // gates 的 locale 校验兜底。
+      'panel.section.about': 'About',
+      'panel.about.tagline': 'SillyTavern-compatible roleplay workspace for DSH.',
+      'panel.about.website': 'Official website',
+      'panel.about.author': 'Author',
+      'panel.about.repo': 'Source repository',
       'settings.promptsTitle': 'Prompt viewer — final requests & world info activation',
       'settings.promptsHint': 'The final request actually sent to the LLM each ST generation turn (after pre-llm rewrites — what you see is what was sent) plus the world info activation trace. Agent-mode turns record the plugin pre-injection face: injected system sections, messages injected this step, and the final call params — the host-assembled history/tool context is not visible. In-process ring buffer: last 10 records per chat, 50 total, lost on restart.',
       'settings.promptsEmpty': 'No records yet — run an ST generation turn and refresh.',
@@ -1479,6 +1486,13 @@ window.__ModuleLoader__.load({
       // 提示词查看器（A-6）：ST 循环实发请求 + 世界书激活追踪分区。zh/en 键集
       // 与 {param} 占位符镜像由 gates 的 locale 校验兜底。
       'panel.section.prompts': '提示词',
+      // 关于分区（面板尾部）：插件版本、官网与作者外链。zh/en 键集镜像由
+      // gates 的 locale 校验兜底。
+      'panel.section.about': '关于',
+      'panel.about.tagline': '面向 DSH 的 SillyTavern 兼容角色扮演工作台。',
+      'panel.about.website': '官网',
+      'panel.about.author': '作者',
+      'panel.about.repo': '源码仓库',
       'settings.promptsTitle': '提示词查看器 — 实发请求与世界书激活',
       'settings.promptsHint': 'ST 生成循环每轮实际发给 LLM 的最终请求（pre-llm 改写之后，看到即实发）与世界书激活轨迹。Agent 模式回合记录插件预注入面：预注入 system 片段、本步注入消息与实发调用参数——宿主拼装的历史/工具上下文不可见。进程内环形缓冲：每聊天最近 10 条、总量 50 条，重启即失。',
       'settings.promptsEmpty': '暂无记录——发一轮 ST 生成后刷新。',
@@ -6518,6 +6532,9 @@ window.__ModuleLoader__.load({
       // 第 16 个分区「提示词」（A-6，2026-10-11）：ST 循环实发请求 + 世界书激活
       // 追踪的只读查看器（服务端 prompt-viewer.ts 环形缓冲）。
       { id: 'prompts', icon: IconSearchOutline16, label: (t) => t('panel.section.prompts'), component: () => h(PanelPrompts) },
+      // 第 17 个分区「关于」（2026-10-12）：插件版本 stamp + 官网/作者/源码
+      // 仓库外链，纯静态信息面。
+      { id: 'about', icon: IconBrowseOutline16, label: (t) => t('panel.section.about'), component: () => h(PanelAbout) },
     ]) {
       registerPanelSection(definition)
     }
@@ -9151,6 +9168,30 @@ window.__ModuleLoader__.load({
           : null)
     }
 
+    // 关于分区：纯静态信息面——版本 stamp 与面板品牌区同源（bootstrap.version/
+    // commit），官网/作者/源码仓库三行外链。无状态、无 API 调用。
+    function PanelAbout() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const bootstrap = state.bootstrap
+      const stamp = bootstrap.version || bootstrap.commit
+        ? `v${bootstrap.version || '?'}${bootstrap.commit ? ` (${bootstrap.commit})` : ''}`
+        : ''
+      const links = [
+        { key: 'website', href: 'https://tavern.lingyesoul.top', text: 'tavern.lingyesoul.top' },
+        { key: 'author', href: 'https://space.bilibili.com/298721157', text: '泠夜Soul' },
+        { key: 'repo', href: 'https://github.com/LingyeSoul/dsh-tavern', text: 'github.com/LingyeSoul/dsh-tavern' },
+      ]
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, 'dsh-tavern'),
+        stamp ? h('p', { className: 'dt-update-stamp' }, stamp) : null,
+        h('p', { className: 'dt-hint' }, t('panel.about.tagline')),
+        h('div', { className: 'dt-about-links' },
+          links.map((link) => h('div', { key: link.key, className: 'dt-about-row' },
+            h('span', { className: 'dt-about-label' }, t(`panel.about.${link.key}`)),
+            h('a', { href: link.href, target: '_blank', rel: 'noreferrer noopener' }, link.text)))))
+    }
+
     function TavernPanel({ ctx, useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -9341,6 +9382,11 @@ window.__ModuleLoader__.load({
         .dt-panel-close:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
         .dt-panel-body{flex:1;min-height:0;overflow-y:auto}
         .dt-panel-body .dt-sidebar{padding:0 4px}
+        .dt-about-links{display:flex;flex-direction:column;gap:10px;margin-top:4px}
+        .dt-about-row{display:flex;align-items:baseline;gap:10px;min-width:0;flex-wrap:wrap}
+        .dt-about-label{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;min-width:96px;flex:none}
+        .dt-about-row a{color:var(--dsw-alias-state-business-primary);font-size:13px;line-height:18px;text-decoration:none;overflow-wrap:anywhere}
+        .dt-about-row a:hover,.dt-about-row a:focus-visible{text-decoration:underline}
         .dt-card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
         .dt-card{display:flex;flex-direction:column;gap:9px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px}
         .dt-card-editing{grid-column:1 / -1;border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 1px color-mix(in srgb,var(--dsw-alias-state-business-primary) 22%,transparent)}
