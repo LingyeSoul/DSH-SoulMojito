@@ -35,6 +35,7 @@ import {
   VariableRevisionConflictError,
   VariableStore,
   isValidNovelId,
+  LOCAL_EMBED_PRECISIONS,
   MEMORY_EMBED_ENV_NAME,
   normalizeEmbedBaseURL,
   normalizeMemoryEmbedding,
@@ -116,7 +117,7 @@ import {
   embedProbe,
   readEmbedStatus,
 } from './memory-embed.js'
-import { inferLocalModelSettings, installLocalEmbedRuntime, isLocalEmbedRuntimeInstalled, validateLocalModelDir } from './memory-embed-local.js'
+import { detectLocalQuantizations, inferLocalModelSettings, installLocalEmbedRuntime, isLocalEmbedRuntimeInstalled, validateLocalModelDir } from './memory-embed-local.js'
 // B-3 记忆维护 run（LWB maintenance 的 dsh 化）：POST/GET memory/maintenance。
 import {
   MaintenanceRunConflictError,
@@ -1511,6 +1512,12 @@ async function handleApi(ctx, req, res) {
     return handleMemoryEmbedApi(req, res, route, method, db)
   }
 
+  // 本地模型量化精度识别（2026-10-13）：面板在 modelDir 输入后调用，返回目录里
+  // 实际可加载的精度档位（含文件与大小）与 auto 推荐档，供下拉框选项。
+  if (method === 'POST' && route === 'memory/embed/local/quantizations') {
+    return handleMemoryEmbedApi(req, res, route, method, db)
+  }
+
   // B-3 记忆维护 run（wait:false 风格）：POST 启动（同 scope 单飞 409），GET 轮询。
   if ((method === 'POST' || method === 'GET') && route === 'memory/maintenance') {
     return handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db)
@@ -2108,18 +2115,28 @@ async function handleMemoryEmbedApi(
           message: `invalid pooling '${String(raw.pooling).slice(0, 30)}': expected 'cls' or 'mean' (cls is the BERT/bge default; sentence-embedding models like MiniLM need 'mean')`,
         })
       }
+      // precision 非法值同款 fail-fast（'auto' 或缺省 = 按目录识别优先链）。
+      if (raw.precision !== undefined && raw.precision !== null && raw.precision !== ''
+        && !(LOCAL_EMBED_PRECISIONS as readonly unknown[]).includes(raw.precision)) {
+        return sendJson(res, 400, {
+          ok: false,
+          message: `invalid precision '${String(raw.precision).slice(0, 30)}': expected 'auto' or one of ${LOCAL_EMBED_PRECISIONS.filter((value) => value !== 'auto').join(', ')}`,
+        })
+      }
       // 小白项自动补全（提案 0017 §自动填充）：pooling/dims 缺省时按模型目录
       // 推断（modules.json → config.json → 模型族启发），响应回报每项来源供
       // 面板提示；显式提供的值永远优先。
       const inferred = inferLocalModelSettings(modelDir)
       const explicitPooling = raw.pooling === 'cls' || raw.pooling === 'mean'
       const explicitDims = typeof raw.dims === 'number' && Number.isFinite(raw.dims)
+      const explicitPrecision = raw.precision !== undefined && raw.precision !== null && raw.precision !== ''
       const config = normalizeMemoryEmbedding({
         provider: 'local',
         modelDir,
         ...((explicitPooling ? raw.pooling : inferred.pooling) !== undefined
           ? { pooling: (explicitPooling ? raw.pooling : inferred.pooling) as 'cls' | 'mean' }
           : {}),
+        ...(explicitPrecision ? { precision: raw.precision } : {}),
         ...((explicitDims ? raw.dims : inferred.dims) !== undefined
           ? { dims: (explicitDims ? raw.dims : inferred.dims) as number }
           : {}),
@@ -2128,7 +2145,7 @@ async function handleMemoryEmbedApi(
       if (config === undefined) {
         return sendJson(res, 400, {
           ok: false,
-          message: 'expected { provider: \'local\', modelDir, pooling? (\'cls\'|\'mean\'), dims?, batchSize? (1-64) }',
+          message: 'expected { provider: \'local\', modelDir, pooling? (\'cls\'|\'mean\'), precision? (\'auto\'|\'fp32\'|\'fp16\'|\'q8\'|…), dims?, batchSize? (1-64) }',
         })
       }
       const autoFilled: Record<string, { value: number | 'cls' | 'mean'; source: string }> = {}
@@ -2213,6 +2230,34 @@ async function handleMemoryEmbedApi(
     } finally {
       localRuntimeInstallInFlight = undefined
     }
+  }
+
+  if (method === 'POST' && route === 'memory/embed/local/quantizations') {
+    // 量化精度识别（2026-10-13，只读端点）：扫描模型目录的 onnx/ 子目录，回报
+    // 可加载的精度档位（transformers.js 的 model${后缀}.onnx 布局，含文件大小）
+    // 与 auto 推荐档。目录不存在/布局不对按 400 报可操作错误（与 PUT 同款文案）。
+    const body = await readJson(req)
+    const modelDirRaw = body !== null && typeof body === 'object' && !Array.isArray(body)
+      && typeof (body as Record<string, unknown>).modelDir === 'string'
+      ? ((body as Record<string, unknown>).modelDir as string).trim()
+      : ''
+    if (modelDirRaw === '') {
+      return sendJson(res, 400, { ok: false, message: 'expected { modelDir }' })
+    }
+    const modelDir = resolve(modelDirRaw)
+    const dirProblem = validateLocalModelDir(modelDir)
+    if (dirProblem !== null) {
+      return sendJson(res, 400, { ok: false, message: dirProblem })
+    }
+    const quantizations = detectLocalQuantizations(modelDir)
+    return sendJson(res, 200, {
+      ok: true,
+      modelDir,
+      quantizations,
+      // auto 档会实际加载的档位（优先链最高档；目录检不出时缺省——运行时走
+      // 旧 try 链兜底，面板如实显示「自动」不带推荐）。
+      ...(quantizations[0] !== undefined ? { recommended: quantizations[0].precision } : {}),
+    })
   }
 
   if (method === 'POST' && route === 'memory/embed/test') {

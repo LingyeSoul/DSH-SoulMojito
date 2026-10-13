@@ -203,3 +203,57 @@ build-script 策略拦死。修复=还原 manifests 后 `pnpm install` 剔除 no
   build script 不影响运行（预编译绑定随包分发）。自动填充同日对真实目录
   实证：`inferLocalModelSettings` → dims 512（config.json hidden_size）+
   pooling cls（模型族启发），来源标注正确；identity 带 `:cls`/`:mean` 后缀。
+
+## 8. 2026-10-13 补记：量化精度可选（目录智能识别 + 面板下拉）
+
+需求（2026-10-13 用户，含中途澄清「提供给用户一个下拉框选择精度」）：本地
+模型的量化精度从固定优先链升级为**可配置**——面板提供精度下拉框，选项按模型
+目录**智能识别**（只列目录里实际可加载的档位）。
+
+**dtype→文件名映射的权威源**：用户实装的 transformers 4.3.1
+`src/utils/dtypes.js` `DEFAULT_DTYPE_SUFFIX_MAPPING`——fp32 无后缀、fp16
+`_fp16`、q8 `_quantized`（注意不是 `_q8`）、int8/uint8 `_int8`/`_uint8`、
+q4/q4f16 `_q4`/`_q4f16`、q2/q1 系同理；bnb4 排除（bitsandbytes JIT 量化不是
+文件加载路径）。文件名 = `model${后缀}.onnx`，且 `from_pretrained` 恒从
+`onnx/` 子目录读（modeling_utils.js `subfolder='onnx'`，无顶层回退）。
+
+落法：
+
+- **目录识别（detectLocalQuantizations）**：扫描 `<modelDir>/onnx/` 下的
+  `model${后缀}.onnx`，返回档位+文件+大小，按 auto 优先链排序。只认 onnx/
+  子目录——运行时从不读顶层散装 .onnx（源码级核对）。
+- **解析（resolveLocalDtype）**：显式精度原样返回（钉档不猜，文件缺失留给
+  加载期如实报错、不静默降档）；'auto'/缺省取识别结果的最高档；目录检不出
+  档位返回 undefined，运行时保留 v1 的 fp16→q8→fp32 try 链兜底（覆盖扫描面
+  之外的非标准布局）。auto 优先链定为 fp16 > q8 > q4 > q4f16 > int8 >
+  uint8 > q2/q2f16/q1/q1f16 > fp32（2026-10-12「默认 FP16」决策的延伸）。
+- **配置面**：`MemoryEmbeddingLocalSettings.precision?: LocalEmbedPrecision`
+  （'auto' + 11 个具体档）；normalize 静默丢弃废值（手改 state.json 容错，
+  与 pooling 同款）；PUT 对非法值 fail-fast 400（与 pooling 同款）。
+- **检测端点**：`POST memory/embed/local/quantizations {modelDir}`（只读）→
+  `{quantizations: [{precision, file, sizeBytes}], recommended}`；目录非法按
+  PUT 同款文案 400。
+- **面板**：①检索模式改**三态下拉**（关闭/远程端点/本地 ONNX）——「关闭」
+  吸收原「清除配置」按钮的语义（保存即清除，检索回落纯词法）；②本地形态新增
+  **量化精度下拉**——modelDir 输入防抖 500ms 调检测端点，「自动 · 识别为
+  FP16」带出推荐档，其余选项按检出档位 + 文件大小展示；目录未检出当前选中档
+  时保留该选项并标注「目录中未检出」（防 select 值悬空）。i18n zh/en 镜像。
+- **身份扩展（必要，非顺带）**：`local-onnx:<basename>@<指纹>:<池化>:<精度>`
+  ——不同量化档是不同向量空间（权重数值不同、嵌入随之偏移），与池化进身份
+  同理；auto 段落的是**解析后的具体档**（与实际加载一致），检不出时为
+  'auto'。查询 memo 键同步改用身份（单一事实来源）。**升级影响**：身份格式
+  变化 ⇒ 存量本地向量一次性转 stale ⇒ 懒回填（v1 发布次日，影响面即作者
+  本机，可接受；语义与换模型文件相同）。
+- **validateLocalModelDir 收紧（修 latent bug）**：v1 放行「顶层散装 .onnx」
+  但 transformers.js 只从 onnx/ 读权重——该布局通过 PUT 校验后必然在加载期
+  炸出难懂报错。现直接拒绝并给出「把权重挪进 onnx/ 子目录」指引，测试同步
+  翻转（放行→拒绝）。
+
+测试：`memory-embed-local.spec` 新增 detectLocalQuantizations 三路（Xenova
+三件套映射与排序/exotic 后缀/无关文件与缺目录）、resolveLocalDtype 三路
+（auto 优先链/显式钉档/检不出 undefined）、会话缓存精度换 key + dtype 透传、
+memo 精度隔离；身份格式断言更新为四段式；validate 顶层布局断言翻转。
+`store.spec` 新增 precision normalize（12 合法值逐个/bnb4·int4·数值丢弃）。
+gates：server-bundle 增 detectLocalQuantizations/检测路由/resolveLocalDtype
+marker + 负样本；frontend-runtime 增模式下拉 off 键/精度键/检测端点调用
+marker + 负样本。基线 89 文件 1267 过 +1 跳 → 89 文件 1276 过 +1 跳（净增 9）。

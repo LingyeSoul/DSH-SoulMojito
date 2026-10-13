@@ -852,7 +852,8 @@ window.__ModuleLoader__.load({
       'settings.memoryDims': 'Dimensions (auto if empty)',
       'settings.memoryBatchSize': 'Batch size (optional)',
       'settings.memoryTimeout': 'Timeout ms (optional)',
-      'settings.memoryProvider': 'Embedding source',
+      'settings.memoryProvider': 'Retrieval mode',
+      'settings.memoryProviderOff': 'Off (lexical only)',
       'settings.memoryProviderOpenAI': 'Remote endpoint (OpenAI-compatible)',
       'settings.memoryProviderLocal': 'Local ONNX model',
       'settings.memoryModelDir': 'Local model directory',
@@ -861,6 +862,10 @@ window.__ModuleLoader__.load({
       'settings.memoryPoolingDefault': 'auto (inferred from the model dir)',
       'settings.memoryPoolingCls': 'cls (BERT/bge)',
       'settings.memoryPoolingMean': 'mean (MiniLM-style)',
+      'settings.memoryPrecision': 'Quantization (local)',
+      'settings.memoryPrecisionAuto': 'auto (detected from the model dir)',
+      'settings.memoryPrecisionAutoPick': 'auto · resolves to {dtype}',
+      'settings.memoryPrecisionNotDetected': 'not found in the model dir',
       'settings.memoryAutoFilled': 'auto-filled from the model dir: {items}',
       'settings.memoryLocalRuntimeMissing': 'Local ONNX runtime not installed: run "pnpm add @huggingface/transformers" in the DSH profile root (the directory whose node_modules contains the installed dsh-tavern — NOT the plugin source repository), then restart DSH.',
       'settings.memoryLocalInstall': 'Install runtime',
@@ -875,7 +880,6 @@ window.__ModuleLoader__.load({
       'settings.memoryLastSuccess': 'Last success: {at} · {dims} dims · {model}',
       'settings.memoryTestOk': 'OK: {dims} dims in {ms} ms ({model})',
       'settings.memorySave': 'Save',
-      'settings.memoryClear': 'Clear config',
       'settings.memoryTest': 'Test endpoint',
       'settings.memoryTesting': 'Testing…',
       // 记忆维护（B-3）：手动维护 run 的行内状态/摘要文案。
@@ -1537,7 +1541,8 @@ window.__ModuleLoader__.load({
       'settings.memoryDims': '维度（留空自动）',
       'settings.memoryBatchSize': '批量大小（可选）',
       'settings.memoryTimeout': '超时毫秒（可选）',
-      'settings.memoryProvider': '嵌入来源',
+      'settings.memoryProvider': '检索模式',
+      'settings.memoryProviderOff': '关闭（纯词法检索）',
       'settings.memoryProviderOpenAI': '远程端点（OpenAI 兼容）',
       'settings.memoryProviderLocal': '本地 ONNX 模型',
       'settings.memoryModelDir': '本地模型目录',
@@ -1546,6 +1551,10 @@ window.__ModuleLoader__.load({
       'settings.memoryPoolingDefault': '自动（按模型目录推断）',
       'settings.memoryPoolingCls': 'cls（BERT/bge 家族）',
       'settings.memoryPoolingMean': 'mean（MiniLM 类模型）',
+      'settings.memoryPrecision': '量化精度（本地）',
+      'settings.memoryPrecisionAuto': '自动（按模型目录识别）',
+      'settings.memoryPrecisionAutoPick': '自动 · 识别为 {dtype}',
+      'settings.memoryPrecisionNotDetected': '目录中未检出',
       'settings.memoryAutoFilled': '已按模型目录自动填充：{items}',
       'settings.memoryLocalRuntimeMissing': '本地 ONNX 运行时未安装：在 DSH profile 根目录（node_modules 里包含已安装 dsh-tavern 的那个目录，不是本插件的源码仓库）执行 "pnpm add @huggingface/transformers"，然后重启 DSH。',
       'settings.memoryLocalInstall': '安装运行时',
@@ -1560,7 +1569,6 @@ window.__ModuleLoader__.load({
       'settings.memoryLastSuccess': '最近成功：{at} · {dims} 维 · {model}',
       'settings.memoryTestOk': '连通：{dims} 维，{ms} 毫秒（{model}）',
       'settings.memorySave': '保存',
-      'settings.memoryClear': '清除配置',
       'settings.memoryTest': '测试端点',
       'settings.memoryTesting': '测试中…',
       // 记忆维护（B-3）：手动维护 run 的行内状态/摘要文案。
@@ -4161,24 +4169,29 @@ window.__ModuleLoader__.load({
     function MemoryRetrievalBand() {
       const t = useTranslate()
       const [loaded, setLoaded] = useState(false)
-      const [draft, setDraft] = useState({ provider: 'openai', baseURL: '', apiKeyEnv: '', model: '', modelDir: '', pooling: '', dims: '', batchSize: '', timeoutMs: '' })
+      const [draft, setDraft] = useState({ provider: 'off', baseURL: '', apiKeyEnv: '', model: '', modelDir: '', pooling: '', precision: '', dims: '', batchSize: '', timeoutMs: '' })
       const [status, setStatus] = useState(null)
       const [saving, setSaving] = useState(false)
       const [testing, setTesting] = useState(false)
       const [installing, setInstalling] = useState(false)
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
+      // 量化精度识别（2026-10-13）：modelDir 变化后向服务端查询目录里实际可加载
+      // 的精度档位（防抖），供精度下拉框选项；null = 未检出/查询失败（下拉只留
+      // 「自动」，报错面交给保存/测试按钮）。
+      const [quant, setQuant] = useState(null)
       const refresh = () => api('memory/embed')
         .then((result) => {
           setStatus(result.status || null)
           setDraft((current) => ({
             ...current,
-            provider: result.config?.provider === 'local' ? 'local' : 'openai',
+            provider: result.config?.provider === 'local' ? 'local' : result.config ? 'openai' : 'off',
             baseURL: result.config?.baseURL || '',
             apiKeyEnv: result.config?.apiKeyEnv || '',
             model: result.config?.model || '',
             modelDir: result.config?.modelDir || '',
             pooling: result.config?.pooling || '',
+            precision: result.config?.provider === 'local' ? (result.config.precision ?? '') : '',
             dims: result.config?.dims === undefined ? '' : String(result.config.dims),
             batchSize: result.config?.batchSize === undefined ? '' : String(result.config.batchSize),
             timeoutMs: result.config?.timeoutMs === undefined ? '' : String(result.config.timeoutMs),
@@ -4188,6 +4201,17 @@ window.__ModuleLoader__.load({
         })
         .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
       useEffect(() => { void refresh() }, [])
+      // 精度识别的防抖拉取：仅本地 provider 且 modelDir 非空时查询；保存成功后
+      // refresh 会把 modelDir 钉成绝对路径再次触发。
+      useEffect(() => {
+        if (draft.provider !== 'local' || draft.modelDir.trim() === '') { setQuant(null); return undefined }
+        const timer = setTimeout(() => {
+          api('memory/embed/local/quantizations', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ modelDir: draft.modelDir }) })
+            .then((result) => setQuant({ list: result.quantizations || [], recommended: result.recommended || '' }))
+            .catch(() => setQuant(null))
+        }, 500)
+        return () => clearTimeout(timer)
+      }, [draft.provider, draft.modelDir])
       const setField = (name, value) => setDraft((current) => ({ ...current, [name]: value }))
       const optionalInt = (value) => {
         const trimmed = String(value ?? '').trim()
@@ -4195,18 +4219,21 @@ window.__ModuleLoader__.load({
         const parsed = Number(trimmed)
         return Number.isFinite(parsed) ? parsed : Number.NaN
       }
-      const save = (clear) => {
+      const save = () => {
         setSaving(true); setError(''); setNotice('')
-        const body = clear === true
-          ? { baseURL: '', apiKeyEnv: '', model: '' }
-          : draft.provider === 'local'
-            ? {
-                provider: 'local',
-                modelDir: draft.modelDir,
-                ...(draft.pooling !== '' ? { pooling: draft.pooling } : {}),
-                ...(optionalInt(draft.dims) !== undefined ? { dims: optionalInt(draft.dims) } : {}),
-                ...(optionalInt(draft.batchSize) !== undefined ? { batchSize: optionalInt(draft.batchSize) } : {}),
-              }
+        const body = draft.provider === 'local'
+          ? {
+              provider: 'local',
+              modelDir: draft.modelDir,
+              ...(draft.pooling !== '' ? { pooling: draft.pooling } : {}),
+              ...(draft.precision !== '' ? { precision: draft.precision } : {}),
+              ...(optionalInt(draft.dims) !== undefined ? { dims: optionalInt(draft.dims) } : {}),
+              ...(optionalInt(draft.batchSize) !== undefined ? { batchSize: optionalInt(draft.batchSize) } : {}),
+            }
+          : draft.provider === 'off'
+            // 模式切到「关闭」= 清除配置（混合检索整体回落纯词法）；旧「清除」
+            // 按钮的语义收进模式下拉（2026-10-13）。
+            ? { baseURL: '', apiKeyEnv: '', model: '' }
             : {
                 baseURL: draft.baseURL,
                 apiKeyEnv: draft.apiKeyEnv,
@@ -4266,14 +4293,17 @@ window.__ModuleLoader__.load({
         h('h3', null, t('settings.memoryTitle')),
         h('p', { className: 'dt-hint' }, t('settings.memoryHint')),
         loaded ? h('div', { className: 'dt-editor-grid' },
+          // 模式切换下拉（2026-10-13）：关闭 / 远程端点 / 本地 ONNX 三态；「关闭」
+          // 吸收了原「清除配置」按钮的语义（保存即清除，检索回落纯词法）。
           h(SettingSelect, {
             label: t('settings.memoryProvider'),
-            value: draft.provider === 'local' ? 'local' : 'openai',
+            value: draft.provider,
             options: [
+              { value: 'off', label: t('settings.memoryProviderOff') },
               { value: 'openai', label: t('settings.memoryProviderOpenAI') },
               { value: 'local', label: t('settings.memoryProviderLocal') },
             ],
-            onChange: (value) => setField('provider', value || 'openai'),
+            onChange: (value) => setField('provider', value === 'local' || value === 'openai' ? value : 'off'),
           }),
           draft.provider === 'local' ? h(EditorField, {
             label: t('settings.memoryModelDir'), value: draft.modelDir, onChange: (value) => setField('modelDir', value),
@@ -4289,6 +4319,26 @@ window.__ModuleLoader__.load({
             empty: t('settings.memoryPoolingDefault'),
             onChange: (value) => setField('pooling', value || ''),
           }) : null,
+          // 量化精度下拉（2026-10-13）：选项按模型目录智能识别（onnx/ 下的
+          // model*_*.onnx 档位 + 文件大小）；「自动」带出识别出的推荐档。目录
+          // 未检出当前选中档时保留该选项并标注，防 select 值悬空。
+          draft.provider === 'local' ? h(SettingSelect, {
+            label: t('settings.memoryPrecision'),
+            value: draft.precision,
+            options: [
+              { value: '', label: quant !== null && quant.recommended !== ''
+                ? t('settings.memoryPrecisionAutoPick', { dtype: quant.recommended.toUpperCase() })
+                : t('settings.memoryPrecisionAuto') },
+              ...(quant?.list || []).map((entry) => ({
+                value: entry.precision,
+                label: `${entry.precision.toUpperCase()} · ${(entry.sizeBytes / (1024 * 1024)).toFixed(1)} MB`,
+              })),
+              ...(draft.precision !== '' && !(quant?.list || []).some((entry) => entry.precision === draft.precision)
+                ? [{ value: draft.precision, label: `${draft.precision.toUpperCase()} · ${t('settings.memoryPrecisionNotDetected')}` }]
+                : []),
+            ],
+            onChange: (value) => setField('precision', value || ''),
+          }) : null,
           draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryBaseURL'), value: draft.baseURL, onChange: (value) => setField('baseURL', value), className: 'dt-editor-wide', placeholder: 'https://api.example.com/v1' }),
           draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryModel'), value: draft.model, onChange: (value) => setField('model', value), placeholder: 'text-embedding-3-small' }),
           draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryApiKeyEnv'), value: draft.apiKeyEnv, onChange: (value) => setField('apiKeyEnv', value), hint: t('settings.memoryApiKeyEnvHint'), placeholder: 'MY_EMBED_API_KEY' }),
@@ -4303,7 +4353,6 @@ window.__ModuleLoader__.load({
               }, installing ? t('settings.memoryLocalInstalling') : t('settings.memoryLocalInstall'))
             : null,
           h(Button, { size: 'sm', variant: 'primary', disabled: saving, onClick: () => save(false) }, t('settings.memorySave')),
-          h(Button, { size: 'sm', variant: 'ghost', disabled: saving, onClick: () => save(true) }, t('settings.memoryClear')),
           h(Button, { size: 'sm', variant: 'outline', disabled: testing || (status !== null && !status.configured), onClick: test }, testing ? t('settings.memoryTesting') : t('settings.memoryTest'))),
         // 记忆维护（B-3）：同分区内的维护行（角色/聊天选择 + 手动触发 + 轮询状态）。
         h(MemoryMaintenanceRow),

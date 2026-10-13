@@ -21,7 +21,7 @@
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 import { writeAtomicText, type MemoryEmbeddingLocalSettings, type MemoryEmbeddingSettings } from '../../tavern-store/src/index.js'
-import { defaultLocalEmbedRuntime, loadLocalEmbedModel, localModelFingerprint, localModelIdentity, type LocalEmbedRuntime } from './memory-embed-local.js'
+import { defaultLocalEmbedRuntime, loadLocalEmbedModel, localModelIdentity, type LocalEmbedRuntime } from './memory-embed-local.js'
 
 /** 熔断窗口：一次整体失败后 60s 内不再尝试任何 embed 请求。 */
 export const EMBED_BREAKER_MS = 60_000
@@ -365,11 +365,12 @@ function delay(ms: number): Promise<void> {
 const queryVectorMemo = new Map<string, number[]>()
 
 function memoKey(config: MemoryEmbeddingSettings, query: string): string {
-  // 本地形态以 目录|指纹|池化 做 memo 锚：换模型文件（指纹变化）或换池化
-  // （不同向量空间）后旧查询向量自动失效，不会把旧空间的 memo 喂进新空间的
-  // cosine 排序。
+  // 本地形态直接以向量空间身份（目录|指纹|池化|量化精度）做 memo 锚：换模型
+  // 文件（指纹变化）、换池化或换精度档（不同向量空间）后旧查询向量自动失效，
+  // 不会把旧空间的 memo 喂进新空间的 cosine 排序。身份与落库 digest/model 同源
+  // （localModelIdentity），单一事实来源。
   if (config.provider === 'local') {
-    return `local\u0000${config.modelDir}\u0000${localModelFingerprint(config.modelDir)}\u0000${config.pooling ?? 'cls'}\u0000${query}`
+    return `local\u0000${localModelIdentity(config)}\u0000${query}`
   }
   return `${config.baseURL}\u0000${config.model}\u0000${query}`
 }

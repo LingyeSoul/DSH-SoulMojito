@@ -336,6 +336,17 @@ function checkServerText(text) {
   if (!text.includes('memory/embed/local/install')) {
     problems.push('server bundle must expose the local runtime install route')
   }
+  // 量化精度识别（2026-10-13）：目录扫描函数 + 检测路由 + 精度配置面三者丢失
+  // 即判定打包缺失。
+  if (!text.includes('detectLocalQuantizations')) {
+    problems.push('server bundle must scan the local model dir for available quantizations')
+  }
+  if (!text.includes('memory/embed/local/quantizations')) {
+    problems.push('server bundle must expose the local quantizations detection route')
+  }
+  if (!text.includes('resolveLocalDtype')) {
+    problems.push('server bundle must resolve the configured local embed precision to a concrete dtype')
+  }
   return problems
 }
 
@@ -474,6 +485,11 @@ function checkFrontendRuntimeText(text) {
     "'settings.memoryAutoFilled'",
     // 一键安装运行时按钮（提案 0017 §安装面）：本地 provider 且未装时出现。
     "'settings.memoryLocalInstall'",
+    // 模式下拉含「关闭」（2026-10-13）：三态切换（关闭/远程/本地）。
+    "'settings.memoryProviderOff'",
+    // 量化精度下拉（2026-10-13）：标签键 + 按目录识别的检测端点调用。
+    "'settings.memoryPrecision'",
+    'memory/embed/local/quantizations',
   ]) {
     if (!text.includes(marker)) problems.push(`frontend runtime is missing marker '${marker}'`)
   }
@@ -1777,7 +1793,7 @@ const gates = [
       const routeMarkers = REQUIRED_SERVER_ROUTES.map((route) => `"${route}"`).join('\n')
       const versionReader = 'readFileSync("version.json", "utf8"); var BUILD_INFO = { version: "0.0.0", commit: "stub" };'
       const commitResolver = 'function resolveCommit() { execFileSync("git", ["rev-parse", "--show-toplevel"]); return "stub"; } var TAVERN_COMMIT = resolveCommit();'
-      const localEmbed = '"local-onnx:"\n\'@huggingface/transformers\'\nvar localStatus = { runtimeInstalled: true };\nfunction inferLocalModelSettings() {}\n"memory/embed/local/install"'
+      const localEmbed = '"local-onnx:"\n\'@huggingface/transformers\'\nvar localStatus = { runtimeInstalled: true };\nfunction inferLocalModelSettings() {}\n"memory/embed/local/install"\nfunction detectLocalQuantizations() {}\n"memory/embed/local/quantizations"\nfunction resolveLocalDtype() {}'
       const good = `var name = "dsh-tavern"; var inject = []; function apply() {} function assertStGenerationBinding() {}\n${routeMarkers}\n"${API_PREFIX}"\n${versionReader}\n${commitResolver}\n${localEmbed}\nvar bootstrap = { ok: true, version: BUILD_INFO.version, commit: TAVERN_COMMIT };\nexport { name, inject, apply };`
       const badRoute = good.replace('"generate"', '"missing"')
       const badStamp = good.replace('version: BUILD_INFO.version, ', '')
@@ -1785,6 +1801,9 @@ const gates = [
       const badLocalEmbed = good.replace("'@huggingface/transformers'", "'embed-runtime-gone'")
       const badLocalInfer = good.replace('function inferLocalModelSettings() {}', 'function inferNothing() {}')
       const badLocalInstallRoute = good.replace('"memory/embed/local/install"', '"memory/embed/local/gone"')
+      const badLocalQuantScan = good.replace('function detectLocalQuantizations() {}', 'function detectNothing() {}')
+      const badLocalQuantRoute = good.replace('"memory/embed/local/quantizations"', '"memory/embed/local/gone"')
+      const badLocalDtypeResolve = good.replace('function resolveLocalDtype() {}', 'function resolveNothing() {}')
       return checkServerText(good).length === 0
         && checkServerText(badRoute).length > 0
         && checkServerText(badStamp).length > 0
@@ -1792,6 +1811,9 @@ const gates = [
         && checkServerText(badLocalEmbed).length > 0
         && checkServerText(badLocalInfer).length > 0
         && checkServerText(badLocalInstallRoute).length > 0
+        && checkServerText(badLocalQuantScan).length > 0
+        && checkServerText(badLocalQuantRoute).length > 0
+        && checkServerText(badLocalDtypeResolve).length > 0
         && checkServerFreshness(10, 10).length === 0
         && checkBuildStamps('var built = { version: "0.0.0", commit: "abc1234" };', '0.0.0', 'abc1234').length === 0
         && checkBuildStamps('var built = { version: __TAVERN_VERSION__, commit: __TAVERN_COMMIT__ };', '0.0.0', 'abc1234').length > 0
@@ -1862,6 +1884,11 @@ const gates = [
         "'settings.memoryLocalRuntimeMissing'",
         "'settings.memoryAutoFilled'",
         "'settings.memoryLocalInstall'",
+        // 模式下拉含「关闭」（2026-10-13）：三态切换的 off 选项标签键。
+        "'settings.memoryProviderOff'",
+        // 量化精度下拉（2026-10-13）：标签键 + 目录识别端点调用。
+        "'settings.memoryPrecision'",
+        'memory/embed/local/quantizations',
       ].join('\n')
       const bad = good.replace("sandbox: 'allow-scripts'", "sandbox: 'allow-forms'")
       const badBridge = good.replace('dsh-tavern:mod-request', 'dsh-tavern:mod-bridge-removed')
@@ -1877,6 +1904,9 @@ const gates = [
       const badLocalRuntimeHint = good.replace("'settings.memoryLocalRuntimeMissing'", "'settings.memoryRuntimeGone'")
       const badAutoFilled = good.replace("'settings.memoryAutoFilled'", "'settings.memoryAutoGone'")
       const badLocalInstall = good.replace("'settings.memoryLocalInstall'", "'settings.memoryInstallGone'")
+      const badModeOff = good.replace("'settings.memoryProviderOff'", "'settings.memoryModeGone'")
+      const badPrecisionSelect = good.replace("'settings.memoryPrecision'", "'settings.memoryQuantGone'")
+      const badQuantRoute = good.replace('memory/embed/local/quantizations', 'memory/embed/local/gone')
       return checkFrontendRuntimeText(good).length === 0
         && checkFrontendRuntimeText(bad).length > 0
         && checkFrontendRuntimeText(badBridge).length > 0
@@ -1890,6 +1920,9 @@ const gates = [
         && checkFrontendRuntimeText(badLocalRuntimeHint).length > 0
         && checkFrontendRuntimeText(badAutoFilled).length > 0
         && checkFrontendRuntimeText(badLocalInstall).length > 0
+        && checkFrontendRuntimeText(badModeOff).length > 0
+        && checkFrontendRuntimeText(badPrecisionSelect).length > 0
+        && checkFrontendRuntimeText(badQuantRoute).length > 0
         ? []
         : ['frontend runtime marker self-test did not distinguish an unsafe sample']
     },
