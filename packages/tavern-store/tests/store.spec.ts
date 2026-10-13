@@ -680,6 +680,17 @@ describe('normalizeMemoryEmbedding provider union', () => {
     expect(defaulted).toEqual({ provider: 'local', modelDir: 'D:\models\bge' })
   })
 
+  it("provider 'local' keeps valid precision and drops unknown values（2026-10-13 量化精度）", () => {
+    for (const precision of ['auto', 'fp32', 'fp16', 'q8', 'int8', 'uint8', 'q4', 'q4f16', 'q2', 'q2f16', 'q1', 'q1f16'] as const) {
+      expect(normalizeMemoryEmbedding({ provider: 'local', modelDir: '/m', precision })).toEqual({ provider: 'local', modelDir: '/m', precision })
+    }
+    // 手改 state.json 的废值静默丢弃（回落 auto），bnb4 不在可选面（bitsandbytes
+    // JIT 量化不是文件加载路径）。
+    expect(normalizeMemoryEmbedding({ provider: 'local', modelDir: '/m', precision: 'bnb4' })).toEqual({ provider: 'local', modelDir: '/m' })
+    expect(normalizeMemoryEmbedding({ provider: 'local', modelDir: '/m', precision: 'int4' })).toEqual({ provider: 'local', modelDir: '/m' })
+    expect(normalizeMemoryEmbedding({ provider: 'local', modelDir: '/m', precision: 7 })).toEqual({ provider: 'local', modelDir: '/m' })
+  })
+
   it('unknown provider is rejected (safely falls back to lexical)', () => {
     expect(normalizeMemoryEmbedding({ provider: 'ollama', modelDir: 'x' })).toBeUndefined()
     expect(normalizeMemoryEmbedding({ provider: 42 })).toBeUndefined()

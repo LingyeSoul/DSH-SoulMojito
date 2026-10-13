@@ -2575,6 +2575,20 @@ function numOrNull(value) {
 }
 
 // packages/tavern-store/src/store.ts
+var LOCAL_EMBED_PRECISIONS = [
+  "auto",
+  "fp32",
+  "fp16",
+  "q8",
+  "int8",
+  "uint8",
+  "q4",
+  "q4f16",
+  "q2",
+  "q2f16",
+  "q1",
+  "q1f16"
+];
 var ChatRevisionConflictError = class extends Error {
   constructor(expectedRevision, actualRevision) {
     super("Chat changed in another tab. Reloaded the latest version; review it before retrying.");
@@ -2642,10 +2656,12 @@ function normalizeLocalMemoryEmbedding(record) {
   if (modelDir === "" || modelDir.length > 1024 || modelDir.includes("\0")) return void 0;
   const dims = clampOptionalInt(record.dims, 1, 8192);
   const batchSize = clampOptionalInt(record.batchSize, 1, 64);
+  const precision = LOCAL_EMBED_PRECISIONS.includes(record.precision) ? record.precision : void 0;
   return {
     provider: "local",
     modelDir,
     ...record.pooling === "cls" || record.pooling === "mean" ? { pooling: record.pooling } : {},
+    ...precision !== void 0 ? { precision } : {},
     ...dims !== void 0 ? { dims } : {},
     ...batchSize !== void 0 ? { batchSize } : {}
   };

@@ -138,7 +138,7 @@ AgentTavern 工具的身份来自真实 DSH agent binding，模型不能通过�
 | `tavern_lore_search` | 按查询词和预算检索全局启用、角色关联及卡内嵌世界书。 |
 | `tavern_history_search` | 在当前绑定聊天（可选回溯 bookmark 父分支）按词法检索历史消息。 |
 | `tavern_scene_get` | 读取当前绑定聊天的场景、消息数量和聊天元数据。 |
-| `memory_search` | 在当前 chat、character、agent 或 global 作用域做有来源的词法记忆检索；配置 embed 来源后升级为词法 + 语义的混合检索（RRF 融合，可选配置、默认关闭）。来源两种：OpenAI 兼容远程端点（提案 0016），或本地 ONNX 模型目录（提案 0017——管理面板一键安装运行时（profile 根执行 pnpm add，装完即生效免重启），经 onnxruntime-node 进程内推理，FP16 优先、离线零网络；池化/维度留空时按模型目录自动推断，推荐 `Xenova/bge-small-zh-v1.5`，ModelScope 有镜像）。 |
+| `memory_search` | 在当前 chat、character、agent 或 global 作用域做有来源的词法记忆检索；配置 embed 来源后升级为词法 + 语义的混合检索（RRF 融合，可选配置、默认关闭）。来源两种（面板「检索模式」三态下拉切换：关闭/远程/本地）：OpenAI 兼容远程端点（提案 0016），或本地 ONNX 模型目录（提案 0017——管理面板一键安装运行时（profile 根执行 pnpm add，装完即生效免重启），经 onnxruntime-node 进程内推理，离线零网络；池化/维度留空时按模型目录自动推断；量化精度下拉按目录智能识别可选档位、默认自动取 FP16 优先链（2026-10-13 补记），推荐 `Xenova/bge-small-zh-v1.5`，ModelScope 有镜像）。 |
 | `memory_read` | 按稳定 id 读取一条记忆及其来源。 |
 | `memory_write` | 在选定作用域写入带来源、标签、置信度的记忆；global 写入需在设置中显式开启。 |
 | `memory_update` | 按 id + expected revision 条件更新记忆，未提供的字段保持原值。 |
@@ -295,7 +295,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：89 个测试文件、1267 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。示例 Mod 的 engines 与随仓库发布的宿主版本由 `packages/plugin/tests/tavern-mods-examples.spec.ts` 防漂移守卫锁定（2026-10-12 story-clock `^0.4.1` 卡死 0.5.0 宿主的事后修复，见 [decisions/2026-10-12-story-clock-engines-drift.md](decisions/2026-10-12-story-clock-engines-drift.md)）。
+当前基线：89 个测试文件、1276 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。示例 Mod 的 engines 与随仓库发布的宿主版本由 `packages/plugin/tests/tavern-mods-examples.spec.ts` 防漂移守卫锁定（2026-10-12 story-clock `^0.4.1` 卡死 0.5.0 宿主的事后修复，见 [decisions/2026-10-12-story-clock-engines-drift.md](decisions/2026-10-12-story-clock-engines-drift.md)）。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 
@@ -321,7 +321,7 @@ GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern �
 - [`docs/proposals/0014-script-play.md`](docs/proposals/0014-script-play.md)：剧本游玩（剧本库、绑定、对齐推进）。
 - [`docs/proposals/0015-mod-extensions.md`](docs/proposals/0015-mod-extensions.md)：Mod 扩展接口与加载机制（清单校验、三层开关、五相位 hook 总线、能力面与信任边界；配套决策 2026-10-10-mod-p0/p1/p2 三篇）。
 - [`docs/proposals/0016-hybrid-memory-retrieval.md`](docs/proposals/0016-hybrid-memory-retrieval.md)：混合记忆检索（OpenAI 兼容 embed 配置、向量 sidecar 与输入摘要、双通道 RRF 融合、熔断/回填/降级矩阵；配套决策 2026-10-11-retrieval-eval-matrix 检索评测矩阵与质量门槛）。
-- [`docs/proposals/0017-local-onnx-embed.md`](docs/proposals/0017-local-onnx-embed.md)：本地 ONNX embed（provider 判别联合配置、transformers.js 运行时多锚解析、目录指纹向量身份、dtype FP16 优先链、onnxruntime-web 评估否决留档；真模型冒烟含生产拓扑端到端）。
+- [`docs/proposals/0017-local-onnx-embed.md`](docs/proposals/0017-local-onnx-embed.md)：本地 ONNX embed（provider 判别联合配置、transformers.js 运行时多锚解析、目录指纹向量身份、dtype FP16 优先链、onnxruntime-web 评估否决留档；真模型冒烟含生产拓扑端到端；2026-10-13 补记：量化精度可选——目录智能识别 + 面板下拉、身份进精度段、validate 收紧 onnx/ 布局）。
 - [`docs/plans/2026-08-16-agent-tavern-implementation.md`](docs/plans/2026-08-16-agent-tavern-implementation.md)：AgentTavern 的分阶段施工计划、宿主门禁、迁移规则与验证矩阵。
 - [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)：DSH `0.1.0-rc.6` 原生注入、compaction 与 Fabric fallback 审计。
 - [`docs/exploration/2026-10-11-jsr-lwb-reference.md`](docs/exploration/2026-10-11-jsr-lwb-reference.md)：JS-Slash-Runner（酒馆助手）与 LittleWhiteBox（小白盒）竞品参考——Mod 生命周期基础设施、$schema 变量写入守卫、多阶段记忆召回、评测基建与不复刻清单；P0 施工项：中文分词修复、MVU 守卫、Mod 桥下行事件与按钮、Mod 日志查看器。

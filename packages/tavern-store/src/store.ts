@@ -190,12 +190,30 @@ export interface MemoryEmbeddingEndpointSettings {
  * + config.json）。零网络（模型只从磁盘加载）；运行时不随插件打包，按需解析
  * （见 plugin/src/memory-embed-local.ts）。modelDir 存绝对路径（PUT 时 resolve）。
  */
+/**
+ * 本地 embed 量化精度（2026-10-13）：'auto' = 按模型目录识别可用权重档位后取
+ * 优先链最高档（fp16 → q8 → q4 → … → fp32，目录缺哪档跳哪档）；其余值与
+ * transformers.js 4.x 的 DATA_TYPES 对齐（q8 对应 Xenova 布局的
+ * model_quantized.onnx；bnb4 排除——bitsandbytes JIT 量化不是文件加载路径，
+ * node CPU EP 装不了）。显式值钉死单档：加载失败不回退（确定性失败如实报错）。
+ */
+export type LocalEmbedPrecision =
+  | 'auto' | 'fp32' | 'fp16' | 'q8' | 'int8' | 'uint8'
+  | 'q4' | 'q4f16' | 'q2' | 'q2f16' | 'q1' | 'q1f16'
+
+/** LocalEmbedPrecision 的合法值集合（normalize 静默过滤手改 state.json 的废值）。 */
+export const LOCAL_EMBED_PRECISIONS: readonly LocalEmbedPrecision[] = [
+  'auto', 'fp32', 'fp16', 'q8', 'int8', 'uint8', 'q4', 'q4f16', 'q2', 'q2f16', 'q1', 'q1f16',
+]
+
 export interface MemoryEmbeddingLocalSettings {
   provider: 'local'
   /** 本地模型目录绝对路径（含 tokenizer.json 与 onnx/*.onnx）。 */
   modelDir: string
   /** 池化策略；缺省 cls（BERT/bge 家族标准；MiniLM 等 mean 池化模型需显式配置）。 */
   pooling?: 'cls' | 'mean'
+  /** 量化精度；缺省等价 'auto'（按目录识别优先链）。显式值钉死单档不回退。 */
+  precision?: LocalEmbedPrecision
   dims?: number
   /** 单次嵌入批量上限（分批顺序嵌入），默认 16。 */
   batchSize?: number
@@ -320,10 +338,14 @@ function normalizeLocalMemoryEmbedding(record: Record<string, unknown>): MemoryE
   if (modelDir === '' || modelDir.length > 1024 || modelDir.includes('\0')) return undefined
   const dims = clampOptionalInt(record.dims, 1, 8192)
   const batchSize = clampOptionalInt(record.batchSize, 1, 64)
+  const precision = LOCAL_EMBED_PRECISIONS.includes(record.precision as LocalEmbedPrecision)
+    ? record.precision as LocalEmbedPrecision
+    : undefined
   return {
     provider: 'local',
     modelDir,
     ...(record.pooling === 'cls' || record.pooling === 'mean' ? { pooling: record.pooling } : {}),
+    ...(precision !== undefined ? { precision } : {}),
     ...(dims !== undefined ? { dims } : {}),
     ...(batchSize !== undefined ? { batchSize } : {}),
   }

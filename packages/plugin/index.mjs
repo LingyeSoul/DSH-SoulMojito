@@ -4204,6 +4204,20 @@ async function renameWithWindowsRetry(from, to, attempts = 5) {
 }
 
 // packages/tavern-store/src/store.ts
+var LOCAL_EMBED_PRECISIONS = [
+  "auto",
+  "fp32",
+  "fp16",
+  "q8",
+  "int8",
+  "uint8",
+  "q4",
+  "q4f16",
+  "q2",
+  "q2f16",
+  "q1",
+  "q1f16"
+];
 var ChatRevisionConflictError = class extends Error {
   constructor(expectedRevision, actualRevision) {
     super("Chat changed in another tab. Reloaded the latest version; review it before retrying.");
@@ -4271,10 +4285,12 @@ function normalizeLocalMemoryEmbedding(record) {
   if (modelDir === "" || modelDir.length > 1024 || modelDir.includes("\0")) return void 0;
   const dims = clampOptionalInt(record.dims, 1, 8192);
   const batchSize = clampOptionalInt(record.batchSize, 1, 64);
+  const precision = LOCAL_EMBED_PRECISIONS.includes(record.precision) ? record.precision : void 0;
   return {
     provider: "local",
     modelDir,
     ...record.pooling === "cls" || record.pooling === "mean" ? { pooling: record.pooling } : {},
+    ...precision !== void 0 ? { precision } : {},
     ...dims !== void 0 ? { dims } : {},
     ...batchSize !== void 0 ? { batchSize } : {}
   };
@@ -14000,7 +14016,43 @@ function localModelFingerprint(modelDir) {
   }
 }
 function localModelIdentity(config) {
-  return `local-onnx:${basename2(config.modelDir)}@${localModelFingerprint(config.modelDir)}:${config.pooling ?? "cls"}`;
+  return `local-onnx:${basename2(config.modelDir)}@${localModelFingerprint(config.modelDir)}:${config.pooling ?? "cls"}:${resolveLocalDtype(config) ?? "auto"}`;
+}
+var DTYPE_FILE_SUFFIXES = [
+  ["fp32", ""],
+  ["fp16", "_fp16"],
+  ["q8", "_quantized"],
+  ["int8", "_int8"],
+  ["uint8", "_uint8"],
+  ["q4", "_q4"],
+  ["q4f16", "_q4f16"],
+  ["q2", "_q2"],
+  ["q2f16", "_q2f16"],
+  ["q1", "_q1"],
+  ["q1f16", "_q1f16"]
+];
+var AUTO_DTYPE_PRIORITY = ["fp16", "q8", "q4", "q4f16", "int8", "uint8", "q2", "q2f16", "q1", "q1f16", "fp32"];
+function detectLocalQuantizations(modelDir) {
+  let names;
+  try {
+    names = readdirSync(join13(modelDir, "onnx"));
+  } catch {
+    return [];
+  }
+  const found = [];
+  for (const [dtype, suffix] of DTYPE_FILE_SUFFIXES) {
+    const file = `onnx/model${suffix}.onnx`;
+    try {
+      const info = statSync(join13(modelDir, file));
+      if (info.isFile()) found.push({ precision: dtype, file, sizeBytes: info.size });
+    } catch {
+    }
+  }
+  return found.sort((a, b) => AUTO_DTYPE_PRIORITY.indexOf(a.precision) - AUTO_DTYPE_PRIORITY.indexOf(b.precision));
+}
+function resolveLocalDtype(config) {
+  if (config.precision !== void 0 && config.precision !== "auto") return config.precision;
+  return detectLocalQuantizations(config.modelDir)[0]?.precision;
 }
 function readJsonFile(file) {
   try {
@@ -14064,9 +14116,14 @@ function validateLocalModelDir(modelDir) {
   if (!names.includes("tokenizer.json")) {
     return `modelDir '${modelDir}' has no tokenizer.json (expected a Hugging Face ONNX layout: tokenizer.json + config.json + onnx/model.onnx)`;
   }
-  const hasOnnx = names.some((name2) => name2.endsWith(".onnx")) || names.includes("onnx") && statSync(join13(modelDir, "onnx")).isDirectory() && readdirSync(join13(modelDir, "onnx")).some((name2) => name2.endsWith(".onnx"));
+  let onnxNames = [];
+  try {
+    onnxNames = statSync(join13(modelDir, "onnx")).isDirectory() ? readdirSync(join13(modelDir, "onnx")) : [];
+  } catch {
+  }
+  const hasOnnx = onnxNames.some((name2) => name2.endsWith(".onnx"));
   if (!hasOnnx) {
-    return `modelDir '${modelDir}' has no .onnx weights (expected onnx/model_fp16.onnx, onnx/model_quantized.onnx or onnx/model.onnx)`;
+    return names.some((name2) => name2.endsWith(".onnx")) ? `modelDir '${modelDir}' has .onnx files at the top level but no onnx/ subdirectory: transformers.js only loads weights from 'onnx/' (e.g. onnx/model_fp16.onnx) \u2014 move the weights into an onnx/ subdirectory` : `modelDir '${modelDir}' has no .onnx weights (expected onnx/model_fp16.onnx, onnx/model_quantized.onnx or onnx/model.onnx)`;
   }
   return null;
 }
@@ -14121,19 +14178,23 @@ var defaultLocalEmbedRuntime = {
     }
     transformers.env.allowRemoteModels = false;
     transformers.env.allowLocalModels = true;
-    const chain = ["fp16", "q8", "fp32"];
     let pipeline;
-    let lastError;
-    for (const dtype of chain) {
-      try {
-        pipeline = await transformers.pipeline("feature-extraction", modelDir, { dtype });
-        break;
-      } catch (cause) {
-        lastError = cause;
+    if (options.dtype !== void 0) {
+      pipeline = await transformers.pipeline("feature-extraction", modelDir, { dtype: options.dtype });
+    } else {
+      const chain = ["fp16", "q8", "fp32"];
+      let lastError;
+      for (const dtype of chain) {
+        try {
+          pipeline = await transformers.pipeline("feature-extraction", modelDir, { dtype });
+          break;
+        } catch (cause) {
+          lastError = cause;
+        }
       }
-    }
-    if (pipeline === void 0) {
-      throw lastError instanceof Error ? lastError : new Error(String(lastError));
+      if (pipeline === void 0) {
+        throw lastError instanceof Error ? lastError : new Error(String(lastError));
+      }
     }
     return {
       async embed(texts) {
@@ -14223,11 +14284,13 @@ async function installLocalEmbedRuntime(input) {
 }
 var sessionCache = /* @__PURE__ */ new Map();
 function sessionKey(config, options) {
-  return `${config.modelDir}|${localModelFingerprint(config.modelDir)}|${options.pooling ?? "cls"}`;
+  return `${config.modelDir}|${localModelFingerprint(config.modelDir)}|${options.pooling ?? "cls"}|${resolveLocalDtype(config) ?? "auto"}`;
 }
 function loadLocalEmbedModel(config, runtime = defaultLocalEmbedRuntime) {
   const options = {};
   if (config.pooling !== void 0) options.pooling = config.pooling;
+  const dtype = resolveLocalDtype(config);
+  if (dtype !== void 0) options.dtype = dtype;
   const key = sessionKey(config, options);
   const cached = sessionCache.get(key);
   if (cached !== void 0) return cached;
@@ -21358,6 +21421,9 @@ async function handleApi(ctx, req, res) {
   if (method === "POST" && route === "memory/embed/local/install") {
     return handleMemoryEmbedApi(req, res, route, method, db);
   }
+  if (method === "POST" && route === "memory/embed/local/quantizations") {
+    return handleMemoryEmbedApi(req, res, route, method, db);
+  }
   if ((method === "POST" || method === "GET") && route === "memory/maintenance") {
     return handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db);
   }
@@ -21833,20 +21899,28 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
           message: `invalid pooling '${String(raw.pooling).slice(0, 30)}': expected 'cls' or 'mean' (cls is the BERT/bge default; sentence-embedding models like MiniLM need 'mean')`
         });
       }
+      if (raw.precision !== void 0 && raw.precision !== null && raw.precision !== "" && !LOCAL_EMBED_PRECISIONS.includes(raw.precision)) {
+        return sendJson(res, 400, {
+          ok: false,
+          message: `invalid precision '${String(raw.precision).slice(0, 30)}': expected 'auto' or one of ${LOCAL_EMBED_PRECISIONS.filter((value) => value !== "auto").join(", ")}`
+        });
+      }
       const inferred = inferLocalModelSettings(modelDir);
       const explicitPooling = raw.pooling === "cls" || raw.pooling === "mean";
       const explicitDims = typeof raw.dims === "number" && Number.isFinite(raw.dims);
+      const explicitPrecision = raw.precision !== void 0 && raw.precision !== null && raw.precision !== "";
       const config2 = normalizeMemoryEmbedding({
         provider: "local",
         modelDir,
         ...(explicitPooling ? raw.pooling : inferred.pooling) !== void 0 ? { pooling: explicitPooling ? raw.pooling : inferred.pooling } : {},
+        ...explicitPrecision ? { precision: raw.precision } : {},
         ...(explicitDims ? raw.dims : inferred.dims) !== void 0 ? { dims: explicitDims ? raw.dims : inferred.dims } : {},
         ...raw.batchSize !== void 0 && raw.batchSize !== null ? { batchSize: raw.batchSize } : {}
       });
       if (config2 === void 0) {
         return sendJson(res, 400, {
           ok: false,
-          message: "expected { provider: 'local', modelDir, pooling? ('cls'|'mean'), dims?, batchSize? (1-64) }"
+          message: "expected { provider: 'local', modelDir, pooling? ('cls'|'mean'), precision? ('auto'|'fp32'|'fp16'|'q8'|\u2026), dims?, batchSize? (1-64) }"
         });
       }
       const autoFilled = {};
@@ -21920,6 +21994,27 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
     } finally {
       localRuntimeInstallInFlight = void 0;
     }
+  }
+  if (method === "POST" && route === "memory/embed/local/quantizations") {
+    const body = await readJson(req);
+    const modelDirRaw = body !== null && typeof body === "object" && !Array.isArray(body) && typeof body.modelDir === "string" ? body.modelDir.trim() : "";
+    if (modelDirRaw === "") {
+      return sendJson(res, 400, { ok: false, message: "expected { modelDir }" });
+    }
+    const modelDir = resolve4(modelDirRaw);
+    const dirProblem = validateLocalModelDir(modelDir);
+    if (dirProblem !== null) {
+      return sendJson(res, 400, { ok: false, message: dirProblem });
+    }
+    const quantizations = detectLocalQuantizations(modelDir);
+    return sendJson(res, 200, {
+      ok: true,
+      modelDir,
+      quantizations,
+      // auto 档会实际加载的档位（优先链最高档；目录检不出时缺省——运行时走
+      // 旧 try 链兜底，面板如实显示「自动」不带推荐）。
+      ...quantizations[0] !== void 0 ? { recommended: quantizations[0].precision } : {}
+    });
   }
   if (method === "POST" && route === "memory/embed/test") {
     const config = normalizeMemoryEmbedding((await db.getState()).memoryEmbedding);
@@ -23623,8 +23718,8 @@ function readBuildInfo() {
   return { version, commit };
 }
 function buildTimeStamp() {
-  const version = true ? "0.5.0".trim() : "";
-  const commit = true ? normalizeCommit("812e462") : void 0;
+  const version = true ? "0.5.1".trim() : "";
+  const commit = true ? normalizeCommit("ea8826b") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

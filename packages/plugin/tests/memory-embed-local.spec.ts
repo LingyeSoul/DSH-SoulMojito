@@ -1,10 +1,12 @@
 /**
  * 本地 ONNX embed（提案 0017）——零网络、零真模型测试面。
  *
- * 覆盖：目录指纹（稳定/文件替换失效/不可读目录）、身份格式、PUT 前置目录
- * 校验、会话缓存（在飞去重/失败摘除/指纹换 key）、embedTexts 本地分发
- * （分批/dims 校验/计数校验/失败映射 EmbedHttpError('runtime')）、查询 memo
- * 的 provider 键隔离、运行时未安装的可操作报错（skipIf：装了就真跑不了）。
+ * 覆盖：目录指纹（稳定/文件替换失效/不可读目录）、身份格式（含量化精度段）、
+ * 量化精度识别与解析（2026-10-13：目录档位扫描/auto 优先链/显式钉档）、PUT
+ * 前置目录校验（onnx/ 布局收紧）、会话缓存（在飞去重/失败摘除/指纹与精度换
+ * key）、embedTexts 本地分发（分批/dims 校验/计数校验/失败映射
+ * EmbedHttpError('runtime')）、查询 memo 的 provider/池化/精度键隔离、运行时
+ * 未安装的可操作报错（skipIf：装了就真跑不了）。
  */
 
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
@@ -20,6 +22,7 @@ import {
 } from '../src/memory-embed.js'
 import {
   TRANSFORMERS_INSTALL_HINT,
+  detectLocalQuantizations,
   inferLocalModelSettings,
   installLocalEmbedRuntime,
   isLocalEmbedRuntimeInstalled,
@@ -28,6 +31,7 @@ import {
   localModelFingerprint,
   localModelIdentity,
   resetLocalEmbedSessionCache,
+  resolveLocalDtype,
   validateLocalModelDir,
   type LocalEmbedRuntime,
 } from '../src/memory-embed-local.js'
@@ -86,11 +90,68 @@ describe('localModelFingerprint / localModelIdentity', () => {
     expect(localModelFingerprint(join(dir, 'missing'))).toBe('unreadable')
   })
 
-  it('身份格式 local-onnx:<basename>@<指纹>:<池化>，pooling 进身份（换池化=换空间）', () => {
+  it('身份格式 local-onnx:<basename>@<指纹>:<池化>:<精度>，pooling/精度都进身份（换池化/换档=换空间）', () => {
     const modelDir = makeModelDir()
-    expect(localModelIdentity({ modelDir })).toMatch(/^local-onnx:bge-small-zh-v1\.5@[0-9a-f]{16}:cls$/)
-    expect(localModelIdentity({ modelDir, pooling: 'mean' })).toMatch(/:mean$/)
+    // 默认目录只有 onnx/model_quantized.onnx ⇒ auto 解析为 q8。
+    expect(localModelIdentity({ modelDir })).toMatch(/^local-onnx:bge-small-zh-v1\.5@[0-9a-f]{16}:cls:q8$/)
+    expect(localModelIdentity({ modelDir, pooling: 'mean' })).toMatch(/:mean:q8$/)
     expect(localModelIdentity({ modelDir, pooling: 'mean' })).not.toBe(localModelIdentity({ modelDir }))
+    // 显式精度原样进身份（与文件是否实存无关——钉档是用户意图）。
+    expect(localModelIdentity({ modelDir, precision: 'fp16' })).toMatch(/:cls:fp16$/)
+    expect(localModelIdentity({ modelDir, precision: 'q4' })).not.toBe(localModelIdentity({ modelDir }))
+    // 目录检不出档位（无 onnx/ 子目录）⇒ auto 段为 'auto'（运行时走 try 链兜底）。
+    const chainDir = makeModelDir({ 'tokenizer.json': '{}', 'model_fp16.onnx': 'w' })
+    expect(localModelIdentity({ modelDir: chainDir })).toMatch(/:cls:auto$/)
+  })
+})
+
+/* ---------------- 量化精度识别与解析（2026-10-13） ---------------- */
+
+describe('detectLocalQuantizations（目录档位扫描）', () => {
+  it('Xenova 三件套 → fp16/q8/fp32 按优先链排序，带文件路径与大小', () => {
+    const modelDir = makeModelDir({
+      'tokenizer.json': '{}',
+      'onnx/model.onnx': 'fp32-weights',
+      'onnx/model_fp16.onnx': 'fp16-weights',
+      'onnx/model_quantized.onnx': 'q8-weights',
+    })
+    const found = detectLocalQuantizations(modelDir)
+    expect(found.map((entry) => entry.precision)).toEqual(['fp16', 'q8', 'fp32'])
+    expect(found[0]).toMatchObject({ file: 'onnx/model_fp16.onnx', sizeBytes: 'fp16-weights'.length })
+  })
+
+  it('exotic 后缀映射：_q4/_q4f16/_int8/_uint8（与 transformers.js 4.x 对齐）', () => {
+    const modelDir = makeModelDir({
+      'tokenizer.json': '{}',
+      'onnx/model_q4.onnx': 'w', 'onnx/model_q4f16.onnx': 'w', 'onnx/model_int8.onnx': 'w', 'onnx/model_uint8.onnx': 'w',
+    })
+    expect(detectLocalQuantizations(modelDir).map((entry) => entry.precision)).toEqual(['q4', 'q4f16', 'int8', 'uint8'])
+  })
+
+  it('非 model 前缀/非映射文件被忽略；空 onnx/、缺 onnx/、目录不存在 ⇒ []', () => {
+    const modelDir = makeModelDir({ 'tokenizer.json': '{}', 'onnx/custom-encoder.onnx': 'w', 'onnx/notes.txt': 'x' })
+    expect(detectLocalQuantizations(modelDir)).toEqual([])
+    expect(detectLocalQuantizations(makeModelDir({ 'tokenizer.json': '{}' }))).toEqual([])
+    expect(detectLocalQuantizations(join(dir, 'missing'))).toEqual([])
+  })
+})
+
+describe('resolveLocalDtype（精度解析）', () => {
+  it('auto/缺省按识别结果取优先链最高档（fp16 > q8 > fp32）', () => {
+    const modelDir = makeModelDir({
+      'tokenizer.json': '{}', 'onnx/model.onnx': 'w', 'onnx/model_quantized.onnx': 'w',
+    })
+    expect(resolveLocalDtype({ modelDir })).toBe('q8')
+    expect(resolveLocalDtype({ modelDir, precision: 'auto' })).toBe('q8')
+  })
+
+  it('显式精度原样返回（钉档不猜——文件缺失留给加载期如实报错）', () => {
+    const modelDir = makeModelDir()
+    expect(resolveLocalDtype({ modelDir, precision: 'q4' })).toBe('q4')
+  })
+
+  it('目录检不出档位 ⇒ undefined（调用方保留 try 链兜底）', () => {
+    expect(resolveLocalDtype({ modelDir: join(dir, 'missing') })).toBeUndefined()
   })
 })
 
@@ -99,8 +160,10 @@ describe('validateLocalModelDir（PUT fail-fast 校验）', () => {
     expect(validateLocalModelDir(makeModelDir())).toBeNull()
   })
 
-  it('顶层散装 .onnx 也通过', () => {
-    expect(validateLocalModelDir(makeModelDir({ 'tokenizer.json': '{}', 'model.onnx': 'w' }))).toBeNull()
+  it('顶层散装 .onnx 被拒并给出挪目录指引（2026-10-13 收紧：transformers.js 只从 onnx/ 读权重，放行顶层会在加载期才炸）', () => {
+    const problem = validateLocalModelDir(makeModelDir({ 'tokenizer.json': '{}', 'model.onnx': 'w' }))
+    expect(problem).toContain('top level')
+    expect(problem).toContain('onnx/')
   })
 
   it('缺 tokenizer.json / 缺 onnx 权重 / 不存在 / 非目录 各自给可操作报错', () => {
@@ -160,6 +223,21 @@ describe('会话缓存（loadLocalEmbedModel）', () => {
     writeFileSync(join(modelDir, 'onnx', 'model_quantized.onnx'), 'swapped-weights')
     await loadLocalEmbedModel({ modelDir }, runtime)
     expect(loads).toBe(2)
+  })
+
+  it('换精度档 ⇒ 新 key ⇒ 重新加载，并把解析后的单档 dtype 传给运行时（auto 不传链）', async () => {
+    const modelDir = makeModelDir({ 'tokenizer.json': '{}', 'onnx/model_fp16.onnx': 'w', 'onnx/model_quantized.onnx': 'w' })
+    const dtypes: Array<string | undefined> = []
+    const runtime: LocalEmbedRuntime = {
+      load: async (_modelDir, options) => {
+        dtypes.push(options?.dtype)
+        return { embed: async (texts) => texts.map(() => [1]) }
+      },
+    }
+    await loadLocalEmbedModel({ modelDir }, runtime)
+    await loadLocalEmbedModel({ modelDir }, runtime) // 同 key 命中缓存，不重载
+    await loadLocalEmbedModel({ modelDir, precision: 'q8' }, runtime)
+    expect(dtypes).toEqual(['fp16', 'q8'])
   })
 })
 
@@ -264,6 +342,15 @@ describe('查询 memo 的 provider 键隔离', () => {
     storeMemoizedQueryVector(cls, 'q', [1, 1])
     expect(memoizedQueryVector(cls, 'q')).toEqual([1, 1])
     expect(memoizedQueryVector(mean, 'q')).toBeUndefined()
+  })
+
+  it('换精度档后旧 memo 失效（fp16/q8 的嵌入数值不同，混空间会污染排序）', () => {
+    const modelDir = makeModelDir({ 'tokenizer.json': '{}', 'onnx/model_fp16.onnx': 'w', 'onnx/model_quantized.onnx': 'w' })
+    const fp16 = normalizeMemoryEmbedding({ provider: 'local', modelDir, precision: 'fp16' })!
+    const q8 = normalizeMemoryEmbedding({ provider: 'local', modelDir, precision: 'q8' })!
+    storeMemoizedQueryVector(fp16, 'q', [1, 1])
+    expect(memoizedQueryVector(fp16, 'q')).toEqual([1, 1])
+    expect(memoizedQueryVector(q8, 'q')).toBeUndefined()
   })
 })
 

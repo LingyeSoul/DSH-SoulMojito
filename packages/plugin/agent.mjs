@@ -1833,6 +1833,20 @@ function numOrNull(value) {
 }
 
 // packages/tavern-store/src/store.ts
+var LOCAL_EMBED_PRECISIONS = [
+  "auto",
+  "fp32",
+  "fp16",
+  "q8",
+  "int8",
+  "uint8",
+  "q4",
+  "q4f16",
+  "q2",
+  "q2f16",
+  "q1",
+  "q1f16"
+];
 var ChatRevisionConflictError = class extends Error {
   constructor(expectedRevision, actualRevision) {
     super("Chat changed in another tab. Reloaded the latest version; review it before retrying.");
@@ -1900,10 +1914,12 @@ function normalizeLocalMemoryEmbedding(record) {
   if (modelDir === "" || modelDir.length > 1024 || modelDir.includes("\0")) return void 0;
   const dims = clampOptionalInt(record.dims, 1, 8192);
   const batchSize = clampOptionalInt(record.batchSize, 1, 64);
+  const precision = LOCAL_EMBED_PRECISIONS.includes(record.precision) ? record.precision : void 0;
   return {
     provider: "local",
     modelDir,
     ...record.pooling === "cls" || record.pooling === "mean" ? { pooling: record.pooling } : {},
+    ...precision !== void 0 ? { precision } : {},
     ...dims !== void 0 ? { dims } : {},
     ...batchSize !== void 0 ? { batchSize } : {}
   };
@@ -4472,7 +4488,43 @@ function localModelFingerprint(modelDir) {
   }
 }
 function localModelIdentity(config) {
-  return `local-onnx:${basename2(config.modelDir)}@${localModelFingerprint(config.modelDir)}:${config.pooling ?? "cls"}`;
+  return `local-onnx:${basename2(config.modelDir)}@${localModelFingerprint(config.modelDir)}:${config.pooling ?? "cls"}:${resolveLocalDtype(config) ?? "auto"}`;
+}
+var DTYPE_FILE_SUFFIXES = [
+  ["fp32", ""],
+  ["fp16", "_fp16"],
+  ["q8", "_quantized"],
+  ["int8", "_int8"],
+  ["uint8", "_uint8"],
+  ["q4", "_q4"],
+  ["q4f16", "_q4f16"],
+  ["q2", "_q2"],
+  ["q2f16", "_q2f16"],
+  ["q1", "_q1"],
+  ["q1f16", "_q1f16"]
+];
+var AUTO_DTYPE_PRIORITY = ["fp16", "q8", "q4", "q4f16", "int8", "uint8", "q2", "q2f16", "q1", "q1f16", "fp32"];
+function detectLocalQuantizations(modelDir) {
+  let names;
+  try {
+    names = readdirSync(join7(modelDir, "onnx"));
+  } catch {
+    return [];
+  }
+  const found = [];
+  for (const [dtype, suffix] of DTYPE_FILE_SUFFIXES) {
+    const file = `onnx/model${suffix}.onnx`;
+    try {
+      const info = statSync(join7(modelDir, file));
+      if (info.isFile()) found.push({ precision: dtype, file, sizeBytes: info.size });
+    } catch {
+    }
+  }
+  return found.sort((a, b) => AUTO_DTYPE_PRIORITY.indexOf(a.precision) - AUTO_DTYPE_PRIORITY.indexOf(b.precision));
+}
+function resolveLocalDtype(config) {
+  if (config.precision !== void 0 && config.precision !== "auto") return config.precision;
+  return detectLocalQuantizations(config.modelDir)[0]?.precision;
 }
 function resolutionAnchors() {
   const candidates = [];
@@ -4515,19 +4567,23 @@ var defaultLocalEmbedRuntime = {
     }
     transformers.env.allowRemoteModels = false;
     transformers.env.allowLocalModels = true;
-    const chain = ["fp16", "q8", "fp32"];
     let pipeline;
-    let lastError;
-    for (const dtype of chain) {
-      try {
-        pipeline = await transformers.pipeline("feature-extraction", modelDir, { dtype });
-        break;
-      } catch (cause) {
-        lastError = cause;
+    if (options.dtype !== void 0) {
+      pipeline = await transformers.pipeline("feature-extraction", modelDir, { dtype: options.dtype });
+    } else {
+      const chain = ["fp16", "q8", "fp32"];
+      let lastError;
+      for (const dtype of chain) {
+        try {
+          pipeline = await transformers.pipeline("feature-extraction", modelDir, { dtype });
+          break;
+        } catch (cause) {
+          lastError = cause;
+        }
       }
-    }
-    if (pipeline === void 0) {
-      throw lastError instanceof Error ? lastError : new Error(String(lastError));
+      if (pipeline === void 0) {
+        throw lastError instanceof Error ? lastError : new Error(String(lastError));
+      }
     }
     return {
       async embed(texts) {
@@ -4543,11 +4599,13 @@ var defaultLocalEmbedRuntime = {
 var LOCAL_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
 var sessionCache = /* @__PURE__ */ new Map();
 function sessionKey(config, options) {
-  return `${config.modelDir}|${localModelFingerprint(config.modelDir)}|${options.pooling ?? "cls"}`;
+  return `${config.modelDir}|${localModelFingerprint(config.modelDir)}|${options.pooling ?? "cls"}|${resolveLocalDtype(config) ?? "auto"}`;
 }
 function loadLocalEmbedModel(config, runtime = defaultLocalEmbedRuntime) {
   const options = {};
   if (config.pooling !== void 0) options.pooling = config.pooling;
+  const dtype = resolveLocalDtype(config);
+  if (dtype !== void 0) options.dtype = dtype;
   const key = sessionKey(config, options);
   const cached = sessionCache.get(key);
   if (cached !== void 0) return cached;
@@ -4808,7 +4866,7 @@ function delay(ms) {
 var queryVectorMemo = /* @__PURE__ */ new Map();
 function memoKey(config, query) {
   if (config.provider === "local") {
-    return `local\0${config.modelDir}\0${localModelFingerprint(config.modelDir)}\0${config.pooling ?? "cls"}\0${query}`;
+    return `local\0${localModelIdentity(config)}\0${query}`;
   }
   return `${config.baseURL}\0${config.model}\0${query}`;
 }
