@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { gomokuEngine, manifest as gomokuManifest, viewHtml as gomokuViewHtml } from '../src/games/builtin/gomoku.js'
+import { junqiEngine } from '../src/games/builtin/junqi.js'
 import { ticTacToeEngine as ticTacToe, manifest, viewHtml } from '../src/games/builtin/tic-tac-toe.js'
 import { renderGameViewDocument } from '../src/games/view.js'
 import { GameRegistry } from '../src/games/registry.js'
@@ -493,6 +494,12 @@ describe('烟测 smokeTestGameEngine（§4.6）', () => {
     expect(result.reasons).toEqual([])
   })
 
+  it('军棋引擎通过同一套五关（标准面前人人平等）', () => {
+    const result = smokeTestGameEngine(junqiEngine)
+    expect(result.ok).toBe(true)
+    expect(result.reasons).toEqual([])
+  })
+
   it('非确定引擎（applyAction 用 Math.random）必翻红', () => {
     const broken: GameEngine = {
       ...ticTacToe,
@@ -562,7 +569,7 @@ describe('registry 内置源（§4.1）', () => {
     const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.0' })
     const summaries = registry.summaries()
     expect(summaries.filter((summary) => summary.source === 'builtin').map((summary) => summary.id))
-      .toEqual(['dsh-tavern.gomoku', 'dsh-tavern.tic-tac-toe', 'dsh-tavern.xiangqi'])
+      .toEqual(['dsh-tavern.blackjack', 'dsh-tavern.gomoku', 'dsh-tavern.junqi', 'dsh-tavern.tic-tac-toe', 'dsh-tavern.xiangqi'])
     const gomokuSummary = summaries.find((summary) => summary.id === 'dsh-tavern.gomoku')!
     expect(gomokuSummary.name).toBe('五子棋')
     expect(gomokuSummary.status).toBe('ok')
