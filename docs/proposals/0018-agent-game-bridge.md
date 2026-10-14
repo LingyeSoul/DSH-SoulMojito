@@ -418,3 +418,17 @@ mod-api.md 的 engines 值同步（参照包 engines 维持 `^0.6.0`——0.6.x 
 遮蔽语义、视图四态真机验收与边界见
 [decisions/2026-10-14-gomoku-builtin.md](../../decisions/2026-10-14-gomoku-builtin.md)。
 
+## 12. 2026-10-14 补记：游戏图标手柄化（§4.3 四处游戏面）
+
+用户反馈「游戏的图标换成游戏相关的如手柄图标」：§4.3 原案里「游戏」分区沿用
+`IconSparkle16`（与「总览」同款），看不出游戏语义。宿主 `ui-primitives@0.2.0-rc.2`
+的图标清单**没有手柄类图形**（`IconPlayOutline*` 是「播放」、`IconGoalOutline*` 是
+「目标」），而请求宿主不存在的图标名会被 bind 记进 `synthesized`、被
+`client-vm-mount` 门禁拦下——故按宿主图标几何纪律（16 网格 / `fill:none` /
+`stroke:currentColor` / 1px Regular 档描边）本地自绘 `IconGamepadOutline16`，
+形态经 16px 真光栅候选比选（带握把机型在该尺寸糊掉，取「胶囊机身 + 十字键 +
+两颗按钮」），并在**四处游戏面**同款落地：面板分区注册表、右栏 tab guide、
+AgentTavern 标题栏入口、右栏空态卡。「总览」继续用 sparkle（两分区不再共用图标）。
+决定全文、量测证据与边界见
+[decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md](../../decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md)。
+

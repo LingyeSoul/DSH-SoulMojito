@@ -151,6 +151,28 @@ describe('client games panel (main.js source check)', () => {
     expect(source).not.toContain('发送任意消息唤起')
   })
 
+  it('marks every game surface with the hand-drawn gamepad icon (2026-10-14 user request)', () => {
+    // 需求源：用户实况——游戏分区沿用「总览」的 sparkle，看不出游戏语义；宿主
+    // primitives 0.2.0-rc.2 没有游戏语义的图标（IconPlay/IconGoal 都不是手柄），
+    // 故自绘 IconGamepadOutline16。四处游戏面必须同款：面板分区 + 右栏 tab guide
+    // + 标题栏入口 + 空态卡；计数锁 1 处定义 + 4 处使用，新增游戏面漏换时翻红。
+    expect(source.split('IconGamepadOutline16').length - 1).toBe(5)
+    for (const marker of [
+      'function IconGamepadOutline16({ size = 16, className })',
+      "{ id: 'games', icon: IconGamepadOutline16,",
+      'icon: IconGamepadOutline16,',
+      '}, h(IconGamepadOutline16)),',
+      "h('div', { className: 'dt-game-board-empty-icon' }, h(IconGamepadOutline16, { size: 22 })),",
+    ]) {
+      expect(source).toContain(marker)
+    }
+    // 总览继续用 sparkle：两个分区不能共用同一图标（游戏图标的意义就是不与总览混）。
+    expect(source).toContain("{ id: 'overview', icon: IconSparkle16,")
+    // 负样本：近邻名字不得命中组件标记。
+    expect('function IconGamepadOutline15('.includes('function IconGamepadOutline16(')).toBe(false)
+    expect("h(IconGamepadOutline16X, { size: 22 })".includes('h(IconGamepadOutline16, { size: 22 })')).toBe(false)
+  })
+
   it('downlink payload carries {type, token, session, view} verbatim for the injected bridge script', () => {
     expect(source).toContain('{ type: GAME_STATE_MESSAGE, token, session: payload.session, view: payload.view }')
   })

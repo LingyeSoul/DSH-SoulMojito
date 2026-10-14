@@ -88,7 +88,7 @@ iframe 高度由 `ResizeObserver` 回传，并限制在 80-1200px；超出部分
 
 ### Tavern 管理面板
 
-点击 DSH 原生侧栏底部的 Tavern 按钮即可打开管理面板。面板采用与 DSH Settings 接近的两栏布局，左侧切换分区，右侧集中处理资产和行为配置；窄屏会自动将分区导航折叠为横向滚动栏。
+点击 DSH 原生侧栏底部的 Tavern 按钮即可打开管理面板。面板采用与 DSH Settings 接近的两栏布局，左侧切换分区，右侧集中处理资产和行为配置；窄屏会自动将分区导航折叠为横向滚动栏。导航列里「Tavern + 版本号」品牌块**常驻不滚**，只有分区清单自己滚动（分区数会随 Mod 追加而增长，滚动余量不该吃掉面板的身份信息）；右侧分区标题栏同理固定，只有内容区滚动。分区图标按语义取形——「游戏」是手柄图标（与「总览」的 sparkle 区分，「游戏」的四种入口：面板分区、右侧栏 tab、标题栏按钮、空态卡同款）。
 
 面板包含以下分区：
 
@@ -300,7 +300,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：96 个测试文件、1417 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。示例 Mod 的 engines 与随仓库发布的宿主版本由 `packages/plugin/tests/tavern-mods-examples.spec.ts` 防漂移守卫锁定（2026-10-12 story-clock `^0.4.1` 卡死 0.5.0 宿主的事后修复，见 [decisions/2026-10-12-story-clock-engines-drift.md](decisions/2026-10-12-story-clock-engines-drift.md)）。
+当前基线：97 个测试文件、1422 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。示例 Mod 的 engines 与随仓库发布的宿主版本由 `packages/plugin/tests/tavern-mods-examples.spec.ts` 防漂移守卫锁定（2026-10-12 story-clock `^0.4.1` 卡死 0.5.0 宿主的事后修复，见 [decisions/2026-10-12-story-clock-engines-drift.md](decisions/2026-10-12-story-clock-engines-drift.md)）。管理面板导航列「品牌块常驻 + 清单独占滚动」与游戏手柄图标由 `packages/plugin/tests/tavern-panel-layout.spec.ts` 和 `games-client.spec.ts` 锁定（2026-10-14 用户反馈，见 [decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md](decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md)）。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 
@@ -335,6 +335,7 @@ GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern �
 - [`decisions/2026-10-05-desktop-plugin-self-update.md`](decisions/2026-10-05-desktop-plugin-self-update.md)：桌面版内置自更新（GitHub 版本发现、落地路径顺序、curl 兜底、构建期 stamp）。
 - [`decisions/2026-10-12-update-restart-required-stuck.md`](decisions/2026-10-12-update-restart-required-stuck.md)：自更新「需要重启」永不解除的修复——运行身份改以安装器落戳的 version.json 旁车为准（烤入字面量对随源入库 dist 恒为父提交）、过渡态缓存按安装目录隔离 + force 逃生门、persist 原子写重试。
 - [`decisions/2026-10-14-gomoku-builtin.md`](decisions/2026-10-14-gomoku-builtin.md)：内置五子棋回归（提案 0018 §4.1 双内置裁定重审）——开箱可玩面 vs 参照包分工、同 id 遮蔽语义（导入副本为准 + warning）、版本 0.6.1 与示例 engines 连带、视图四态真机验收与边界。
+- [`decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md`](decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md)：管理面板外壳两处修订（2026-10-14 用户反馈）——导航列品牌块常驻 + 清单独占滚动（headless Chrome 量测证据）、游戏图标自绘手柄（宿主图标集无手柄类，四处游戏面同款）。
 - [`docs/mods/mod-api.md`](docs/mods/mod-api.md)：Mod 扩展接口的开发者文档（清单、生命周期、全部能力面、面板 UI 表面协议、管理端点与审计），配套官方示例在 [`packages/plugin/examples/mods/`](packages/plugin/examples/mods/)（asset-stats / mood-tracker / story-clock / rps，覆盖 v1 全部能力面）。
 - [`packages/plugin/examples/games/dsh-tavern.gomoku/`](packages/plugin/examples/games/dsh-tavern.gomoku/)：[提案 0018](docs/proposals/0018-agent-game-bridge.md) 游戏桥标准（dsh-tavern Game Bridge）的第一个参照实现——五子棋标准游戏包（`game.json` 清单 + `engine.mjs` 零依赖纯函数引擎 + `view.html` 自包含视图），可直接放入 `$DSH_HOME/tavern/games/installed/` 或经 `POST games/install {path}` 导入对弈（清单 engines `^0.6.0` 对宿主版本的门控——0.6.x 全系含当前宿主 0.6.1 均满足）。规则按自由五子棋裁剪（任意方向 ≥5 连即胜、长连也算胜，连珠禁手不实现），保留动作 `resign` 由运行时统一处理。2026-10-14 起五子棋另有**内置实现**（开箱可玩，见 [decisions/2026-10-14-gomoku-builtin.md](decisions/2026-10-14-gomoku-builtin.md)）——本包保留为导入路径参照与可分发标准样本，与内置同 id，导入时以磁盘副本接管槽位（装载期 warning）。游戏桥运行时（`src/games/`：三源注册表 / 会话落盘 / HTTP 面 / `game_*` 五工具含 `game_wait` 阻塞等待 / MVU 同位对局面 + 面板「游戏」分区）已随 [decisions/2026-10-13-agent-game-bridge.md](decisions/2026-10-13-agent-game-bridge.md) 落地并经 2026-10-14 修订（wait 循环 + 自动展示）。
 
