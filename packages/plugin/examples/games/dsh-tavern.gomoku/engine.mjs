@@ -73,6 +73,21 @@ function isOnBoard(x, y) {
   )
 }
 
+/**
+ * 整数坐标解析（决策 2026-10-14-quoted-coordinate-tolerance）：数字原样；
+ * 整数的字符串形态（"1"、"1.0"——模型桥把工具参数数字写成引号串的实弹习惯）
+ * 归一为数字；其余（小数、空串、非数文本）返回 null。界内/规则合法性仍由
+ * applyAction 终审（本函数只管「是不是一个整数」）。
+ */
+function parseCoord(value) {
+  if (typeof value === 'number') return Number.isInteger(value) ? value : null
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  if (!/^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(text)) return null
+  const parsed = Number(text)
+  return Number.isInteger(parsed) ? parsed : null
+}
+
 /** 深拷贝 state（board 逐行、lastMove/winLine 逐点），绝不共享可变结构。 */
 function cloneState(state) {
   return {
@@ -189,9 +204,10 @@ export default {
     if (actor !== state.turn) {
       throw new Error(`现在轮到${sideName(state.turn)}，${String(actor)} 不能落子`)
     }
-    const { x, y } = action
-    if (!isOnBoard(x, y)) {
-      throw new Error(`落子坐标必须是 0-${SIZE - 1} 的整数，收到 x=${String(x)}、y=${String(y)}`)
+    const x = parseCoord(action.x)
+    const y = parseCoord(action.y)
+    if (x === null || y === null || !isOnBoard(x, y)) {
+      throw new Error(`落子坐标必须是 0-${SIZE - 1} 的整数，收到 x=${String(action.x)}、y=${String(action.y)}`)
     }
     if (state.board[y][x] !== EMPTY) {
       throw new Error(`${coordName(x, y)} 已有棋子，不能落在已占点上`)
@@ -226,11 +242,12 @@ export default {
 
   /** 人类可读的一手棋描述（Agent 在对话里角色化叙述用），含棋谱坐标（列 A-O + 行 1-15）。 */
   describe(_state, actor, action) {
-    if (
-      action !== null && typeof action === 'object' && !Array.isArray(action) &&
-      action.type === 'place' && isOnBoard(action.x, action.y)
-    ) {
-      return `${stoneName(actor)}落于 ${coordName(action.x, action.y)}`
+    if (action !== null && typeof action === 'object' && !Array.isArray(action) && action.type === 'place') {
+      const x = parseCoord(action.x)
+      const y = parseCoord(action.y)
+      if (x !== null && y !== null && isOnBoard(x, y)) {
+        return `${stoneName(actor)}落于 ${coordName(x, y)}`
+      }
     }
     return `${stoneName(actor)}的动作未被本引擎识别`
   },

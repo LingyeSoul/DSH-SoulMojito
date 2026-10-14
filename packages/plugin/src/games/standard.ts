@@ -226,6 +226,22 @@ export function currentRoleOf(state: unknown, roles?: readonly string[]): string
   return turn
 }
 
+/**
+ * 棋盘坐标整数解析（决策 2026-10-14-quoted-coordinate-tolerance）：数字原样；
+ * 整数的字符串形态（"1"、"1.0"、" 7 "——模型桥把工具参数数字写成引号串的
+ * 实弹习惯）归一为数字；其余（小数、空串、非数文本、非安全整数）返回 null。
+ * 坐标语义唯一——"1" 与 1 是同一交叉点，归一不改动作含义；界内/规则合法性
+ * 仍由各引擎终审（本函数只管「是不是一个整数」）。
+ */
+export function parseBoardCoord(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isInteger(value) ? value : null
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  if (!/^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(text)) return null
+  const parsed = Number(text)
+  return Number.isInteger(parsed) ? parsed : null
+}
+
 export interface GameSmokeResult {
   ok: boolean
   /** 失败原因（逐项，面向游戏包作者的可读中文）。 */

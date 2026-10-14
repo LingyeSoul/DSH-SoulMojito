@@ -318,10 +318,21 @@ describe('非法动作全家族（中文抛错）', () => {
     expect(() => apply(fresh(), { type: 'move', to: { x: 0, y: 5 } })).toThrow('from 必须是 {x, y} 坐标对象')
     expect(() => apply(fresh(), { type: 'move', from: { x: 0, y: 6 } })).toThrow('to 必须是 {x, y} 坐标对象')
     expect(() => apply(fresh(), { type: 'move', from: { x: 0.5, y: 6 }, to: { x: 0, y: 5 } })).toThrow('from 坐标必须是整数')
-    expect(() => apply(fresh(), { type: 'move', from: { x: '0', y: 6 }, to: { x: 0, y: 5 } })).toThrow('from 坐标必须是整数')
+    expect(() => apply(fresh(), { type: 'move', from: { x: '1.5', y: 6 }, to: { x: 0, y: 5 } })).toThrow('from 坐标必须是整数')
+    expect(() => apply(fresh(), { type: 'move', from: { x: 'abc', y: 6 }, to: { x: 0, y: 5 } })).toThrow('from 坐标必须是整数')
     expect(() => apply(fresh(), { type: 'move', from: { x: 0, y: 6 }, to: { x: 9, y: 5 } })).toThrow('to 坐标超出棋盘')
     expect(() => apply(fresh(), { type: 'move', from: { x: 0, y: 10 }, to: { x: 0, y: 5 } })).toThrow('from 坐标超出棋盘')
     expect(() => apply(fresh(), mv([0, 6], [0, 6]))).toThrow('起点与终点相同')
+  })
+
+  it('坐标容错（2026-10-14 实弹，决策 quoted-coordinate-tolerance）：整数的字符串形态归一执行', () => {
+    // 实弹形状：模型桥把工具参数数字写成引号串（x="6"），语义与数字同点。
+    const result = apply(fresh(), { type: 'move', from: { x: '6', y: '6.0' }, to: { x: '6', y: '5' } })
+    expect(result.summary).toBe('红方 兵三进一')
+    expect(result.state.ply).toBe(1)
+    // describe 与 applyAction 同一套解析：本手叙述不缺记谱（不是兜底文案）。
+    expect(xiangqiEngine.describe(fresh(), 'red', { type: 'move', from: { x: '6', y: '6' }, to: { x: '6', y: '5' } }))
+      .toBe('红方 兵三进一')
   })
 
   it('起点：空点无子 / 对方的棋子 / 终局后不能再走子', () => {
@@ -933,6 +944,26 @@ describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
       expect(agent.session.summary).toBe('黑方 马8进7')
       expect(agent.view.turn).toBe('red')
       expect((agent.view.state as XiangqiState).ply).toBe(2)
+    } finally {
+      service.dispose()
+    }
+  })
+
+  it('实弹回归（g-54e612c8 形状）：Agent 桥把坐标写成引号串时照常落子，规则仍全量终审', async () => {
+    const service = await openGamesService({ root: join(home, 'tavern'), hostVersion: '0.6.2' })
+    try {
+      const { session } = await service.start({ gameId: 'dsh-tavern.xiangqi', character: 'ExampleCard', chatId: 'xq-quoted' })
+      await service.humanAction(session.id, mv([6, 6], [6, 5])) // 人类 兵三进一
+      // 引号串坐标（实弹日志形状：{"x":"1"}）归一执行；describe/summary 走同一解析。
+      const cannon = await service.agentMove(session.id, { type: 'move', from: { x: '1', y: '2' }, to: { x: '4', y: '2' } })
+      expect(cannon.describe).toBe('黑方 炮2平5')
+      await service.humanAction(session.id, mv([7, 9], [6, 7])) // 人类 马二进三
+      // 容错不越规则终审：错误目标点仍报全量规则错误（实弹 seq 233 的行为）。
+      await expect(service.agentMove(session.id, { type: 'move', from: { x: '1', y: '0' }, to: { x: '3', y: '2' } }))
+        .rejects.toThrow('马从 (1,0) 不能走到 (3,2)')
+      const horse = await service.agentMove(session.id, { type: 'move', from: { x: '1', y: '0' }, to: { x: '2', y: '2' } })
+      expect(horse.describe).toBe('黑方 马2进3')
+      expect(horse.session.moveCount).toBe(4)
     } finally {
       service.dispose()
     }

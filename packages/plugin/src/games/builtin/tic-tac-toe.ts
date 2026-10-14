@@ -16,7 +16,7 @@
  * dsh-tavern:game-state 下行、上行 dsh-tavern:game-action（§3.3 两条消息协议）。
  */
 
-import type { GameEngine, GameManifest } from '../standard.js'
+import { parseBoardCoord, type GameEngine, type GameManifest } from '../standard.js'
 
 const SIZE = 3
 const EMPTY = 0
@@ -165,11 +165,11 @@ const engine: GameEngine = {
     if (actor !== state.turn) {
       throw new Error(`现在轮到${sideName(state.turn)}，${String(actor)} 不能落子`)
     }
-    if (!isOnBoard(typed.x, typed.y)) {
+    const x = parseBoardCoord(typed.x)
+    const y = parseBoardCoord(typed.y)
+    if (x === null || y === null || !isOnBoard(x, y)) {
       throw new Error(`落子坐标必须是 0-${SIZE - 1} 的整数，收到 x=${String(typed.x)}、y=${String(typed.y)}`)
     }
-    const x = typed.x as number
-    const y = typed.y as number
     if (state.board[y]![x] !== EMPTY) {
       throw new Error(`${coordName(x, y)} 已有棋子，不能落在已占格上`)
     }
@@ -206,11 +206,12 @@ const engine: GameEngine = {
     if (
       action !== null && typeof action === 'object' && !Array.isArray(action)
       && (action as { type?: unknown }).type === 'place'
-      && isOnBoard((action as { x?: unknown }).x, (action as { y?: unknown }).y)
     ) {
-      const x = (action as { x: number }).x
-      const y = (action as { y: number }).y
-      return `${markName(actor === 'o' ? 'o' : 'x')}落于 ${coordName(x, y)}`
+      const x = parseBoardCoord((action as { x?: unknown }).x)
+      const y = parseBoardCoord((action as { y?: unknown }).y)
+      if (x !== null && y !== null && isOnBoard(x, y)) {
+        return `${markName(actor === 'o' ? 'o' : 'x')}落于 ${coordName(x, y)}`
+      }
     }
     return `${String(actor)}的动作未被本引擎识别`
   },

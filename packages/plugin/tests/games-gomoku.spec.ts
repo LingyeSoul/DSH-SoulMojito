@@ -230,9 +230,9 @@ describe('applyAction 契约（§3.2 纯函数 + 合法性终审）', () => {
     expect(() => engine.applyAction(fresh, { type: 'place', x: 15, y: 7 }, 'black')).toThrow(Error)
     expect(() => engine.applyAction(fresh, { type: 'place', x: 7, y: -1 }, 'black')).toThrow(Error)
     expect(() => engine.applyAction(fresh, { type: 'place', x: 7, y: 15 }, 'black')).toThrow(Error)
-    // 非整数
+    // 非整数（数字与数字小数字符串一律拒；整数字符串容错见下一条用例）
     expect(() => engine.applyAction(fresh, { type: 'place', x: 7.5, y: 7 }, 'black')).toThrow(Error)
-    expect(() => engine.applyAction(fresh, { type: 'place', x: '7', y: 7 }, 'black')).toThrow(Error)
+    expect(() => engine.applyAction(fresh, { type: 'place', x: '7.5', y: 7 }, 'black')).toThrow(Error)
     // 错误 actor：黑先时传 white
     expect(() => engine.applyAction(fresh, { type: 'place', x: 7, y: 7 }, 'white')).toThrow(Error)
     // 缺 type 字段
@@ -246,6 +246,15 @@ describe('applyAction 契约（§3.2 纯函数 + 合法性终审）', () => {
     const finished = play([[3, 7], [0, 0], [4, 7], [0, 1], [5, 7], [0, 2], [6, 7], [0, 3], [7, 7]]).state
     expect(finished.finished).toBe(true)
     expect(() => engine.applyAction(finished, { type: 'place', x: 14, y: 14 }, finished.turn)).toThrow(Error)
+  })
+
+  it('坐标容错（2026-10-14 实弹，决策 quoted-coordinate-tolerance）：整数的字符串形态归一执行', () => {
+    const fresh = engine.createGame().state
+    // 实弹形状：模型桥把工具参数数字写成引号串；归一是同点同义，不改动作语义。
+    const result = engine.applyAction(fresh, { type: 'place', x: '7', y: '7.0' }, 'black')
+    expect(result.summary).toContain('H8')
+    // describe 与 applyAction 同一套解析：历史叙述不缺坐标。
+    expect(engine.describe(fresh, 'black', { type: 'place', x: '7', y: '7' })).toContain('H8')
   })
 })
 
