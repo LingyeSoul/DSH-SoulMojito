@@ -15795,8 +15795,15 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync as readdi
 import { tmpdir } from "node:os";
 import { dirname as dirname8, join as join15 } from "node:path";
 var DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
-var SHIPPED_FILES = ["index.mjs", "agent.mjs", "compaction.mjs", "novel.mjs", "version.json", "cordis.patch.yml", "README.md", "package.json"];
-var SHIPPED_DIRS = ["client"];
+function shippedEntries(sourceDir) {
+  const manifest4 = join15(sourceDir, "package.json");
+  if (!existsSync(manifest4)) throw new Error("packages/plugin/package.json is missing from the checkout");
+  const files = JSON.parse(readFileSync2(manifest4, "utf8"))?.files;
+  if (!Array.isArray(files) || files.length === 0 || !files.every((entry) => typeof entry === "string")) {
+    throw new Error("packages/plugin/package.json has no usable 'files' array");
+  }
+  return [.../* @__PURE__ */ new Set(["package.json", ...files.map((entry) => entry.replace(/^\.\//, ""))])];
+}
 var FILE_LOCK_RETRY_DELAYS_MS = [20, 50, 100, 200];
 function isTransientLockError(error) {
   const code = error?.code;
@@ -16101,21 +16108,22 @@ async function mustRun(command, args, request) {
 }
 function copyShippedFiles(sourceDir, targetDir) {
   const copied = [];
-  for (const file of SHIPPED_FILES) {
-    const from = join15(sourceDir, file);
+  for (const entry of shippedEntries(sourceDir)) {
+    const from = join15(sourceDir, entry);
     if (!existsSync(from)) continue;
-    replaceFileAtomic(from, join15(targetDir, file));
-    copied.push(file);
-  }
-  for (const dir of SHIPPED_DIRS) {
-    const from = join15(sourceDir, dir);
-    if (!existsSync(from)) continue;
+    const stat = statSyncSafe(from);
+    if (stat === null) continue;
+    if (!stat.isDirectory()) {
+      replaceFileAtomic(from, join15(targetDir, entry));
+      copied.push(entry);
+      continue;
+    }
     for (const file of listFiles(from)) {
       const relative3 = file.slice(from.length + 1);
-      const to = join15(targetDir, dir, relative3);
+      const to = join15(targetDir, entry, relative3);
       mkdirSync(dirname8(to), { recursive: true });
       writeFileAtomic(to, readFileSync2(file));
-      copied.push(`${dir}/${relative3.replaceAll("\\", "/")}`);
+      copied.push(`${entry}/${relative3.replaceAll("\\", "/")}`);
     }
   }
   return copied;
@@ -26721,7 +26729,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.3".trim() : "";
-  const commit = true ? normalizeCommit("2b1f915") : void 0;
+  const commit = true ? normalizeCommit("cdd7474") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

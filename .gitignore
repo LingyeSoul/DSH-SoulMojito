@@ -6,8 +6,11 @@ lib/
 dist/
 *.tsbuildinfo
 /.playwright-mcp
+# packages/plugin 根的发布产物（index/agent/compaction/novel/card-workbench.mjs 与
+# client/index.js）是有意入库的：仓库无 release/tag，git spec 安装与自更新 checkout
+# 兜底都以分支头为发布通道，产物不入库即装完即坏。唯一例外 version.json——它带
+# 本地 commit 戳、每次构建不同，不入库（等价常量已烤入 bundle）。
 /packages/plugin/version.json
-/packages/plugin/client/index.js
 /.npm-cache
 /.pnpm-store
 /.zcode
