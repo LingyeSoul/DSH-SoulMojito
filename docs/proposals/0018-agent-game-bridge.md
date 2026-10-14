@@ -404,3 +404,17 @@ marker）逐条留档于决策文档 2026-10-13-agent-game-bridge.md；测试基
 useChatGameSessions/TavernGamesSidebarTab/'tavern-games'/openTab）与四个负样本。
 版本 0.5.1→0.6.0（对齐五子棋示例 engines `^0.6.0` 的门控预期）。测试基线对账见
 决策文档补记。
+
+## 11. 2026-10-14 补记：内置五子棋回归（§4.1 双内置）
+
+用户需求「帮我新建一个五子棋游戏」按产品实况重新裁定 §4.1 原案：**五子棋以内置
+回归**——开箱可玩（npm 包 files 不含 examples/，此前只有能访问仓库的人才能拿到
+五子棋；实况：对局环境只有内置井字棋，§9 参照包从未被导入）。落法：
+`src/games/builtin/gomoku.ts`（引擎与参照包逐条同款的自由规则；内联视图人类回合
+才启用点击与建议点提示、无 token 静态预览局面）；同 id（`dsh-tavern.gomoku`）遮蔽
+以磁盘导入副本为准并记 warning；版本 0.6.0→0.6.1 连带 story-clock 示例与
+mod-api.md 的 engines 值同步（参照包 engines 维持 `^0.6.0`——0.6.x 全系含 0.6.1，
+是更准也更宽的声明；games-import 的宿主版本改从 package.json 推导）。决策全文、
+遮蔽语义、视图四态真机验收与边界见
+[decisions/2026-10-14-gomoku-builtin.md](../../decisions/2026-10-14-gomoku-builtin.md)。
+

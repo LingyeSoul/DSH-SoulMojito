@@ -152,7 +152,7 @@ AgentTavern 工具的身份来自真实 DSH agent binding，模型不能通过�
 | `tavern_variable_settle` | 单轮批量结算受追踪变量：写 chat 作用域变量并记录 MVU 回执（每项变更前后值、失败项）与审计行；失败项重试是新的一次结算，正文不受影响。 |
 | `tavern_script_read` | 读取当前绑定剧本在进度位置（或指定 `chunkIndex`）的片段；未绑定剧本时返回 `found:false` 可优雅跳过。 |
 | `tavern_script_advance` | 最新正文实际覆盖当前片段后推进一格进度（玩家偏离不推进），记录 `alignedAt` 与可选备注；最后一段返回 `done:true`。 |
-| `game_list` | 列出已安装游戏（内置/导入/Mod 三源，含人数与动作词汇表）与当前绑定聊天的活跃对局。 |
+| `game_list` | 列出已安装游戏（内置井字棋/五子棋、导入、Mod 三源，含人数与动作词汇表）与当前绑定聊天的活跃对局。 |
 | `game_start` | 用指定游戏在当前绑定聊天开一局（可选 `role` 选 Agent 执方，缺省后手）；返回初始局面与建议集。人类执先时开局后立即 `game_wait`。 |
 | `game_state` | 读取对局快照（缺省取本聊天最近活跃对局）：局面、轮到谁、建议集、终局态。 |
 | `game_move` | Agent 落子（与人类玩家共用同一动作语言与引擎合法性终审）；返回新局面与 `describe` 叙述文案，可直接用于对话。落到人类回合后接 `game_wait`。 |
@@ -300,7 +300,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：96 个测试文件、1394 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。示例 Mod 的 engines 与随仓库发布的宿主版本由 `packages/plugin/tests/tavern-mods-examples.spec.ts` 防漂移守卫锁定（2026-10-12 story-clock `^0.4.1` 卡死 0.5.0 宿主的事后修复，见 [decisions/2026-10-12-story-clock-engines-drift.md](decisions/2026-10-12-story-clock-engines-drift.md)）。
+当前基线：96 个测试文件、1417 项测试通过（1 项跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。示例 Mod 的 engines 与随仓库发布的宿主版本由 `packages/plugin/tests/tavern-mods-examples.spec.ts` 防漂移守卫锁定（2026-10-12 story-clock `^0.4.1` 卡死 0.5.0 宿主的事后修复，见 [decisions/2026-10-12-story-clock-engines-drift.md](decisions/2026-10-12-story-clock-engines-drift.md)）。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 
@@ -327,15 +327,16 @@ GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern �
 - [`docs/proposals/0015-mod-extensions.md`](docs/proposals/0015-mod-extensions.md)：Mod 扩展接口与加载机制（清单校验、三层开关、五相位 hook 总线、能力面与信任边界；配套决策 2026-10-10-mod-p0/p1/p2 三篇）。
 - [`docs/proposals/0016-hybrid-memory-retrieval.md`](docs/proposals/0016-hybrid-memory-retrieval.md)：混合记忆检索（OpenAI 兼容 embed 配置、向量 sidecar 与输入摘要、双通道 RRF 融合、熔断/回填/降级矩阵；配套决策 2026-10-11-retrieval-eval-matrix 检索评测矩阵与质量门槛）。
 - [`docs/proposals/0017-local-onnx-embed.md`](docs/proposals/0017-local-onnx-embed.md)：本地 ONNX embed（provider 判别联合配置、transformers.js 运行时多锚解析、目录指纹向量身份、dtype FP16 优先链、onnxruntime-web 评估否决留档；真模型冒烟含生产拓扑端到端；2026-10-13 补记：量化精度可选——目录智能识别 + 面板下拉、身份进精度段、validate 收紧 onnx/ 布局）。
-- [`docs/proposals/0018-agent-game-bridge.md`](docs/proposals/0018-agent-game-bridge.md)：Agent 游戏桥（标准游戏引擎契约 + 侧边栏对局面 + Mod/导入扩展；权威状态在 Node 的第一性论证、WS 否决留档、五子棋参照实现补记与标准修订）。实施决策见 [decisions/2026-10-13-agent-game-bridge.md](decisions/2026-10-13-agent-game-bridge.md)。
+- [`docs/proposals/0018-agent-game-bridge.md`](docs/proposals/0018-agent-game-bridge.md)：Agent 游戏桥（标准游戏引擎契约 + 侧边栏对局面 + Mod/导入扩展；权威状态在 Node 的第一性论证、WS 否决留档、五子棋参照实现补记与标准修订；2026-10-14 补记：game_wait 阻塞等待 + 内置五子棋回归）。实施决策见 [decisions/2026-10-13-agent-game-bridge.md](decisions/2026-10-13-agent-game-bridge.md) 与 [decisions/2026-10-14-gomoku-builtin.md](decisions/2026-10-14-gomoku-builtin.md)。
 - [`docs/plans/2026-08-16-agent-tavern-implementation.md`](docs/plans/2026-08-16-agent-tavern-implementation.md)：AgentTavern 的分阶段施工计划、宿主门禁、迁移规则与验证矩阵。
 - [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)：DSH `0.1.0-rc.6` 原生注入、compaction 与 Fabric fallback 审计。
 - [`docs/exploration/2026-10-11-jsr-lwb-reference.md`](docs/exploration/2026-10-11-jsr-lwb-reference.md)：JS-Slash-Runner（酒馆助手）与 LittleWhiteBox（小白盒）竞品参考——Mod 生命周期基础设施、$schema 变量写入守卫、多阶段记忆召回、评测基建与不复刻清单；P0 施工项：中文分词修复、MVU 守卫、Mod 桥下行事件与按钮、Mod 日志查看器。
 - [`decisions/2026-08-15-tavern-management-panel.md`](decisions/2026-08-15-tavern-management-panel.md)：面板入口、角色删除级联、变量与侧栏共存的落地决策。
 - [`decisions/2026-10-05-desktop-plugin-self-update.md`](decisions/2026-10-05-desktop-plugin-self-update.md)：桌面版内置自更新（GitHub 版本发现、落地路径顺序、curl 兜底、构建期 stamp）。
 - [`decisions/2026-10-12-update-restart-required-stuck.md`](decisions/2026-10-12-update-restart-required-stuck.md)：自更新「需要重启」永不解除的修复——运行身份改以安装器落戳的 version.json 旁车为准（烤入字面量对随源入库 dist 恒为父提交）、过渡态缓存按安装目录隔离 + force 逃生门、persist 原子写重试。
+- [`decisions/2026-10-14-gomoku-builtin.md`](decisions/2026-10-14-gomoku-builtin.md)：内置五子棋回归（提案 0018 §4.1 双内置裁定重审）——开箱可玩面 vs 参照包分工、同 id 遮蔽语义（导入副本为准 + warning）、版本 0.6.1 与示例 engines 连带、视图四态真机验收与边界。
 - [`docs/mods/mod-api.md`](docs/mods/mod-api.md)：Mod 扩展接口的开发者文档（清单、生命周期、全部能力面、面板 UI 表面协议、管理端点与审计），配套官方示例在 [`packages/plugin/examples/mods/`](packages/plugin/examples/mods/)（asset-stats / mood-tracker / story-clock / rps，覆盖 v1 全部能力面）。
-- [`packages/plugin/examples/games/dsh-tavern.gomoku/`](packages/plugin/examples/games/dsh-tavern.gomoku/)：[提案 0018](docs/proposals/0018-agent-game-bridge.md) 游戏桥标准（dsh-tavern Game Bridge）的第一个参照实现——五子棋标准游戏包（`game.json` 清单 + `engine.mjs` 零依赖纯函数引擎 + `view.html` 自包含视图），可直接放入 `$DSH_HOME/tavern/games/installed/` 或经 `POST games/install {path}` 导入对弈（清单 engines `^0.6.0` 对宿主版本的门控，插件已随本特性升至 0.6.0）。规则按自由五子棋裁剪（任意方向 ≥5 连即胜、长连也算胜，连珠禁手不实现），保留动作 `resign` 由运行时统一处理。游戏桥运行时（`src/games/`：三源注册表 / 会话落盘 / HTTP 面 / `game_*` 五工具含 `game_wait` 阻塞等待 / MVU 同位对局面 + 面板「游戏」分区）已随 [decisions/2026-10-13-agent-game-bridge.md](decisions/2026-10-13-agent-game-bridge.md) 落地并经 2026-10-14 修订（wait 循环 + 自动展示）。
+- [`packages/plugin/examples/games/dsh-tavern.gomoku/`](packages/plugin/examples/games/dsh-tavern.gomoku/)：[提案 0018](docs/proposals/0018-agent-game-bridge.md) 游戏桥标准（dsh-tavern Game Bridge）的第一个参照实现——五子棋标准游戏包（`game.json` 清单 + `engine.mjs` 零依赖纯函数引擎 + `view.html` 自包含视图），可直接放入 `$DSH_HOME/tavern/games/installed/` 或经 `POST games/install {path}` 导入对弈（清单 engines `^0.6.0` 对宿主版本的门控——0.6.x 全系含当前宿主 0.6.1 均满足）。规则按自由五子棋裁剪（任意方向 ≥5 连即胜、长连也算胜，连珠禁手不实现），保留动作 `resign` 由运行时统一处理。2026-10-14 起五子棋另有**内置实现**（开箱可玩，见 [decisions/2026-10-14-gomoku-builtin.md](decisions/2026-10-14-gomoku-builtin.md)）——本包保留为导入路径参照与可分发标准样本，与内置同 id，导入时以磁盘副本接管槽位（装载期 warning）。游戏桥运行时（`src/games/`：三源注册表 / 会话落盘 / HTTP 面 / `game_*` 五工具含 `game_wait` 阻塞等待 / MVU 同位对局面 + 面板「游戏」分区）已随 [decisions/2026-10-13-agent-game-bridge.md](decisions/2026-10-13-agent-game-bridge.md) 落地并经 2026-10-14 修订（wait 循环 + 自动展示）。
 
 ## 插件管理
 

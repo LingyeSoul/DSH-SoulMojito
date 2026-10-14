@@ -16,8 +16,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { openGamesService, type GamesService } from '../src/games/service.js'
 
 const EXAMPLE_GAME = join(import.meta.dirname, '..', 'examples', 'games', 'dsh-tavern.gomoku')
-// 宿主版本按五子棋清单的 engines ^0.6.0 取满足值（engines 门控是装载期硬关卡）。
-const HOST_VERSION = '0.6.0'
+// 宿主版本取插件真实版本（与宿主 BUILD_INFO.version 同源语义）——示例清单的
+// engines（^0.6.0 ⇒ 0.6.x 全系）必须覆盖当前宿主，漂移在这里翻红（镜像
+// tavern-mods-examples.spec 的守卫；0.6.1 升版即由本行发现示例仍声明 ^0.6.0
+// 且依然成立，0.7.0 起将逼同步示例清单）。
+const PLUGIN_VERSION = (JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')) as { version: string }).version
+const HOST_VERSION = PLUGIN_VERSION
 
 const home = mkdtempSync(join(tmpdir(), 'games-import-'))
 const root = join(home, 'tavern')
@@ -163,7 +167,7 @@ describe('负样本：坏包 broken 入册不崩（§4.6 烟测 + 清单/engines
     expect(broken.reason).toContain('确定性')
   })
 
-  it('engines 不满足（^9.0.0 vs 宿主 0.6.0）→ status broken + reason 含版本', async () => {
+  it('engines 不满足（^9.0.0 vs 当前宿主）→ status broken + reason 含版本', async () => {
     placeGameDir('future.engine', gomokuVariant({
       manifest: { id: 'future.engine', engines: { 'dsh-tavern': '^9.0.0' } },
     }))
