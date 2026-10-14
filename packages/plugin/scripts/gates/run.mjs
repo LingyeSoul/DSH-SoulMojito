@@ -548,6 +548,14 @@ function checkFrontendRuntimeText(text) {
     ".then(() => api(`games/list${query}`))",
 
     "'panel.section.games'",
+    // 游戏图标=手柄 + 管理面板导航「标题区固定」（2026-10-14 用户反馈）：自绘手柄
+    // 图标组件在场、导航分两段（品牌块常驻 + 清单滚动）的 DOM 结构与三条让它成立的
+    // CSS 规则——nav 不再自滚（overflow:hidden）、清单独占滚动、header 不参与伸缩。
+    'function IconGamepadOutline16(',
+    "className: 'dt-panel-navlist'",
+    '.dt-panel-nav{display:flex;flex-direction:column;gap:2px;width:198px;flex:none;padding:10px 8px;border-right:1px solid var(--dsw-alias-border-l2);overflow:hidden}',
+    '.dt-panel-navlist{display:flex;flex-direction:column;gap:2px;flex:1;min-height:0;overflow-y:auto}',
+    '.dt-panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}',
   ]) {
     if (!text.includes(marker)) problems.push(`frontend runtime is missing marker '${marker}'`)
   }
@@ -1986,6 +1994,16 @@ const gates = [
         '.then(() => api(`games/list${query}`))',
 
         "'panel.section.games'",
+        // 游戏图标=手柄 + 管理面板导航「标题区固定」（2026-10-14 用户反馈：红框的
+        // Tavern 标题区要钉住、游戏图标换成手柄）。三类 marker 分别锁：自绘图标
+        // 组件在场、导航分两段（品牌块常驻 + 清单滚动）的 DOM 结构、以及让
+        // 「只有清单滚动」成立的那三条 CSS 规则（nav 不再自滚 / header 不参与
+        // 伸缩 / body 独占滚动）。任何一条回退都会让面板退回「整列/整页滚动」。
+        'function IconGamepadOutline16({ size = 16, className }) {}',
+        "className: 'dt-panel-navlist'",
+        '.dt-panel-nav{display:flex;flex-direction:column;gap:2px;width:198px;flex:none;padding:10px 8px;border-right:1px solid var(--dsw-alias-border-l2);overflow:hidden}',
+        '.dt-panel-navlist{display:flex;flex-direction:column;gap:2px;flex:1;min-height:0;overflow-y:auto}',
+        '.dt-panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}',
       ].join('\n')
       const bad = good.replace("sandbox: 'allow-scripts'", "sandbox: 'allow-forms'")
       const badBridge = good.replace('dsh-tavern:mod-request', 'dsh-tavern:mod-bridge-removed')
@@ -2028,6 +2046,14 @@ const gates = [
       const badGameBaseline = good.replace('.then(() => api(`games/list${query}`))', '.then(() => api(`games/gone-list`))')
 
       const badGamesSectionKey = good.replace("'panel.section.games'", "'panel.section.gone'")
+      // 手柄图标 + 导航标题区固定（2026-10-14 用户反馈）负样本：图标组件改名、
+      // 清单容器去掉、三条 CSS 规则各自回退（nav 重新自滚 / 清单不再滚 /
+      // header 重新参与伸缩）都必须翻红。替换文本逐一核对过不含原 marker。
+      const badGamepadIcon = good.replace('function IconGamepadOutline16(', 'function IconGamepadGone(')
+      const badNavlistStructure = good.replace("className: 'dt-panel-navlist'", "className: 'dt-panel-navlist-gone'")
+      const badPanelNavRule = good.replace(';border-right:1px solid var(--dsw-alias-border-l2);overflow:hidden}', ';border-right:1px solid var(--dsw-alias-border-l2);overflow-y:auto}')
+      const badNavlistRule = good.replace('.dt-panel-navlist{display:flex;flex-direction:column;gap:2px;flex:1;min-height:0;overflow-y:auto}', '.dt-panel-navlist{display:flex;flex-direction:column;gap:2px;flex:1;min-height:0;overflow:visible}')
+      const badPanelHeaderRule = good.replace('justify-content:space-between;gap:12px;flex:none;min-height:52px', 'justify-content:space-between;gap:12px;min-height:52px')
       return checkFrontendRuntimeText(good).length === 0
         && checkFrontendRuntimeText(bad).length > 0
         && checkFrontendRuntimeText(badBridge).length > 0
@@ -2060,6 +2086,11 @@ const gates = [
         && checkFrontendRuntimeText(badGameEmptyCard).length > 0
         && checkFrontendRuntimeText(badGameBaseline).length > 0
         && checkFrontendRuntimeText(badGamesSectionKey).length > 0
+        && checkFrontendRuntimeText(badGamepadIcon).length > 0
+        && checkFrontendRuntimeText(badNavlistStructure).length > 0
+        && checkFrontendRuntimeText(badPanelNavRule).length > 0
+        && checkFrontendRuntimeText(badNavlistRule).length > 0
+        && checkFrontendRuntimeText(badPanelHeaderRule).length > 0
         ? []
         : ['frontend runtime marker self-test did not distinguish an unsafe sample']
     },

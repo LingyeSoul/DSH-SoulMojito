@@ -243,3 +243,17 @@ Mod 宿主只活在 index bundle（`apply` 内加载）。工具/section 要在 
 | 透传宿主 cordis ctx | 违反适配层注入纪律（TemplateHost 模式）；宿主内部面不是稳定契约。 |
 | ST 扩展兼容（TavernHelper / eventSource / UI 扩展与服务端插件形态） | **永久非目标**，非延期：兼容层意味着长期追随 ST 内部 API 演进并承接其全部表面积，与仓库「只实现公开规范与可观察行为语义、clean-room」的既定边界（README 许可节）冲突；dsh-tavern 的 Mod API 是自有契约，不为任何外部插件格式做垫层。注意区分：ST **资产格式**（卡/世界书/预设/正则/chat JSONL）兼容是插件本体的既有职责，不受影响——裁的是扩展面，不是数据面。 |
 | Mod 市场/自动更新 | 分发另立提案；v1 手动/git clone 放目录，P2 复用 update 源做 git 安装。 |
+
+## 7. 2026-10-14 补记：导航列「标题区固定」（§3.5 面板 P0 的用户反馈修订）
+
+用户实况（截图红框）：「Tavern + 版本号」品牌块要固定不动，其余部分才滚动。§3.5
+的 P0 把 `overflow-y:auto` 挂在整条 `nav` 上——那时只有 13 个分区、装得下；此后
+分区数一路涨（Mod 管理 / 游戏 / 记忆检索 / 提示词 / 关于，且 `registerPanelSection`
+允许 Mod 继续追加），溢出后滚整列会把品牌块一起卷走：面板最重要的定位信息（这是
+酒馆面板、哪个版本）反而最先消失。落法：`nav` 拆两段——品牌块常驻 + 分区清单进
+`.dt-panel-navlist` 独占滚动（`nav` 自身 `overflow:hidden`）；主区 header 补
+`flex:none` 明确不参与伸缩（原本靠 `.dt-panel-body` 的 `min-height:0` 兜底）。
+结构与规则文本由新增 `tavern-panel-layout.spec.ts` 与 gates `frontend-runtime`
+的 marker（含负样本）双向锁定；真实滚动行为在 headless Chrome 里用宿主 Modal 真实
+CSS 量过（品牌块 top 恒定、只有清单在滚）。决定全文与边界见
+[decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md](../../decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md)。

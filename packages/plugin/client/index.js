@@ -717,6 +717,33 @@ window.__ModuleLoader__.load({
     const GAME_ACTION_MESSAGE = 'dsh-tavern:game-action'
     const GAMES_REVISION_POLL_MS = 1000
 
+    // 游戏图标=手柄（2026-10-14）：宿主 primitives 0.2.0-rc.2 的图标清单里没有
+    // 游戏语义的图形（IconPlay 是「播放」、IconGoal 是「目标」，点开都不是游戏），
+    // 游戏面自绘一个。几何纪律对齐宿主图标：16 网格、fill:none、
+    // stroke=currentColor、1px 描边（IconXxx16 经 bind 别名解析进的 Regular 档
+    // 观感），尺寸走同一套 size 属性。小尺寸可辨性按 16px 真光栅逐候选比过：
+    // 带握把的机型（Lucide gamepad-2 等比缩编）在 16px 糊成一团，只剩「胶囊机身
+    // + 十字键 + 两颗按钮」三个特征还立得住，故取此形。
+    function IconGamepadOutline16({ size = 16, className }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        strokeWidth: 1,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      h('rect', { x: 1.5, y: 4.5, width: 13, height: 7, rx: 3.5, stroke: 'currentColor' }),
+      h('path', { d: 'M4.75 8h2.5', stroke: 'currentColor' }),
+      h('path', { d: 'M6 6.75v2.5', stroke: 'currentColor' }),
+      h('circle', { cx: 10.6, cy: 7.1, r: 0.7, fill: 'currentColor', stroke: 'none' }),
+      h('circle', { cx: 12, cy: 8.9, r: 0.7, fill: 'currentColor', stroke: 'none' }))
+    }
+
     // 对局表面（ModSurface 范式）：持久 iframe 指向 GET games/:gid/view/:sid，
     // per-mount token 经 URL 查询段交给视图（桥脚本自读，回投时对账）+ 事件源
     // 必须是本 frame 的 contentWindow，双对账缺一不受理。人类落子经宿主同源
@@ -953,7 +980,7 @@ window.__ModuleLoader__.load({
         // ——用户主动打开的 tab 不给纯空白；内联变体维持无对局不占位。
         return sidebar
           ? h('div', { className: 'dt-game-board-empty', 'data-dsh-tavern-surface': 'game-board' },
-            h('div', { className: 'dt-game-board-empty-icon' }, h(IconSparkle16, { size: 22 })),
+            h('div', { className: 'dt-game-board-empty-icon' }, h(IconGamepadOutline16, { size: 22 })),
             h('strong', null, t('games.tabTitle')),
             h('p', { className: 'dt-hint' }, t('games.boardEmpty')),
             h(Button, { size: 'sm', variant: 'outline', onClick: () => openPanel('games') }, t('games.openPanel')))
@@ -6623,13 +6650,13 @@ window.__ModuleLoader__.load({
                 }, h(IconDataOutline16)),
                 mvuOpen ? h('div', { className: 'dt-mvu-pop' }, h(TavernMvuStatus, { sessionId, embedded: true })) : null)),
               // 游戏入口与 MVU 相邻（AgentTavern 标题栏）；ST 走 TavernView 内联
-              // 对局面，不占标题栏。
+              // 对局面，不占标题栏。图标是手柄（与面板分区、侧栏 tab guide 同款）。
               h('button', {
                 type: 'button',
                 title: t('games.tabTitle'),
                 'aria-label': t('games.tabTitle'),
                 onClick: openGamesSurface,
-              }, h(IconSparkle16)),
+              }, h(IconGamepadOutline16)),
           h('button', {
             type: 'button',
             title: t('view.openGuides'),
@@ -7207,8 +7234,8 @@ window.__ModuleLoader__.load({
       { id: 'workbench', icon: IconListPenOutline16, label: (t) => t('panel.section.workbench'), component: () => h(PanelWorkbench) },
       // 第 14 个分区「游戏」（提案 0018 §4.3，P1）：清单 + 开局 + 本聊天对局面
       // （GameSurface 持久 iframe；games/revision 1s 轮询仅在存在未终局会话时
-      // 进行，页面不可见停发）。
-      { id: 'games', icon: IconSparkle16, label: (t) => t('panel.section.games'), component: (host) => h(GamesPanel, { useSessions: host.useSessions }) },
+      // 进行，页面不可见停发）。图标是手柄（2026-10-14），与总览的 sparkle 区分。
+      { id: 'games', icon: IconGamepadOutline16, label: (t) => t('panel.section.games'), component: (host) => h(GamesPanel, { useSessions: host.useSessions }) },
       // 第 15 个分区「Mod」（提案 0015 §3.5 P1）：列表 + 两层开关 + 重载 + 启用
       // 确认弹层（如实展示 capabilities，知情同意）。
       { id: 'mods', icon: IconCordisPluginOutline14, label: (t) => t('panel.section.mods'), component: () => h(PanelMods) },
@@ -9892,19 +9919,23 @@ window.__ModuleLoader__.load({
       const activeSection = panelSections.find((item) => item.id === section) ?? panelSections[0]
       const body = activeSection.component({ ctx, useSessions })
       return h('div', { className: 'dt-panel' },
+        // 导航列分两段（2026-10-14 用户反馈：红框的 Tavern 标题区要钉住）：
+        // 品牌块常驻不滚，只滚分区清单——分区数会随 Mod 面板注册增长，长到
+        // 溢出时原来整列滚动会把「这是酒馆面板」的标题一起卷走。
         h('nav', { className: 'dt-panel-nav', 'aria-label': t('panel.nav') },
           h('div', { className: 'dt-panel-brand' },
             h(IconSparkle16),
             h('div', { className: 'dt-panel-brand-copy' },
               h('strong', null, 'Tavern'),
               stamp ? h('span', null, stamp) : null)),
-          panelSections.map((item) => h('button', {
-            key: item.id,
-            type: 'button',
-            className: `dt-panel-navcell ${section === item.id ? 'dt-panel-navcell-active' : ''}`,
-            'aria-current': section === item.id ? 'page' : undefined,
-            onClick: () => update({ panelSection: item.id }),
-          }, h(item.icon), h('span', null, item.label(t))))),
+          h('div', { className: 'dt-panel-navlist' },
+            panelSections.map((item) => h('button', {
+              key: item.id,
+              type: 'button',
+              className: `dt-panel-navcell ${section === item.id ? 'dt-panel-navcell-active' : ''}`,
+              'aria-current': section === item.id ? 'page' : undefined,
+              onClick: () => update({ panelSection: item.id }),
+            }, h(item.icon), h('span', null, item.label(t)))))),
         h('div', { className: 'dt-panel-main' },
           h('header', { className: 'dt-panel-header' },
             h('h2', null, activeSection.label(t)),
@@ -10050,7 +10081,8 @@ window.__ModuleLoader__.load({
         .dt-update-log{margin:0 0 12px;padding:8px 10px;max-height:132px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-sunken,var(--dsw-alias-bg-base));color:var(--dsw-alias-label-tertiary);font-family:monospace;font-size:11px;line-height:16px;white-space:pre-wrap}
         .dt-panel-modal{pointer-events:auto;width:min(1080px,calc(100vw - 48px));height:min(700px,calc(100vh - 64px));max-width:100%;max-height:100%;padding:0;gap:0;border-color:var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
         .dt-panel{display:flex;width:100%;height:100%;min-height:0;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0;background:var(--dsw-alias-bg-base);border-radius:12px;overflow:hidden}
-        .dt-panel-nav{display:flex;flex-direction:column;gap:2px;width:198px;flex:none;padding:10px 8px;border-right:1px solid var(--dsw-alias-border-l2);overflow-y:auto}
+        .dt-panel-nav{display:flex;flex-direction:column;gap:2px;width:198px;flex:none;padding:10px 8px;border-right:1px solid var(--dsw-alias-border-l2);overflow:hidden}
+        .dt-panel-navlist{display:flex;flex-direction:column;gap:2px;flex:1;min-height:0;overflow-y:auto}
         .dt-panel-brand{display:flex;align-items:center;gap:9px;padding:4px 8px 12px;color:var(--dsw-alias-label-primary)}
         .dt-panel-brand>svg{color:var(--dsw-alias-brand-primary,var(--dsw-alias-state-business-primary));flex:none}
         .dt-panel-brand-copy{display:flex;flex-direction:column;min-width:0}
@@ -10061,7 +10093,7 @@ window.__ModuleLoader__.load({
         .dt-panel-navcell:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
         .dt-panel-navcell-active{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary);font-weight:600}
         .dt-panel-main{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
-        .dt-panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}
+        .dt-panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}
         .dt-panel-header h2{margin:0;font-size:16px;line-height:22px;font-weight:600}
         .dt-panel-close{width:28px;height:28px;display:grid;place-items:center;border:0;border-radius:6px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer}
         .dt-panel-close:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
@@ -10495,7 +10527,7 @@ window.__ModuleLoader__.load({
               order: 41,
               title: () => translate('games.tabTitle'),
               description: () => translate('games.guide.description'),
-              icon: IconSparkle16,
+              icon: IconGamepadOutline16,
             }],
           }), 'dsh-tavern: sidebar-right games tab type')
           scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
