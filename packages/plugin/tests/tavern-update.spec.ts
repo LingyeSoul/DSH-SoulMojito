@@ -550,23 +550,41 @@ describe('落地路径选择', () => {
 })
 
 describe('落地工具', () => {
-  it('copyShippedFiles 覆盖发布产物并保留其它文件', () => {
+  it('copyShippedFiles 按 package.json files 派生清单，覆盖全部入口 bundle（含 card-workbench 混装回归）', () => {
     const source = tempDir('tavern-src-')
     const target = tempDir('tavern-dst-')
     mkdirSync(join(source, 'client'), { recursive: true })
-    writeFileSync(join(source, 'index.mjs'), 'new-index')
-    writeFileSync(join(source, 'package.json'), '{"version":"0.3.9"}')
+    writeFileSync(join(source, 'package.json'), JSON.stringify({
+      files: ['index.mjs', 'agent.mjs', 'compaction.mjs', 'novel.mjs', 'card-workbench.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md'],
+    }))
+    for (const file of ['index.mjs', 'agent.mjs', 'compaction.mjs', 'novel.mjs', 'card-workbench.mjs', 'cordis.patch.yml', 'README.md']) {
+      writeFileSync(join(source, file), `new-${file}`)
+    }
     writeFileSync(join(source, 'client', 'index.js'), 'new-client')
     writeFileSync(join(source, 'src.ts'), 'ignored')
     writeFileSync(join(target, 'index.mjs'), 'old-index')
+    writeFileSync(join(target, 'card-workbench.mjs'), 'old-card-workbench')
     writeFileSync(join(target, 'extra.txt'), 'keep')
+    writeFileSync(join(target, 'version.json'), '{"version":"0.6.3","commit":"8271f20"}')
     const copied = copyShippedFiles(source, target)
     expect(copied).toContain('index.mjs')
+    expect(copied).toContain('card-workbench.mjs')
     expect(copied).toContain('client/index.js')
     expect(copied).not.toContain('src.ts')
-    expect(readFileSync(join(target, 'index.mjs'), 'utf8')).toBe('new-index')
+    expect(copied).not.toContain('version.json')
+    expect(readFileSync(join(target, 'index.mjs'), 'utf8')).toBe('new-index.mjs')
+    expect(readFileSync(join(target, 'card-workbench.mjs'), 'utf8')).toBe('new-card-workbench.mjs')
     expect(readFileSync(join(target, 'client', 'index.js'), 'utf8')).toBe('new-client')
     expect(readFileSync(join(target, 'extra.txt'), 'utf8')).toBe('keep')
+    expect(readFileSync(join(target, 'version.json'), 'utf8')).toContain('8271f20')
+  })
+
+  it('copyShippedFiles 缺 manifest 或 files 数组不可用时上抛而不是静默空拷', () => {
+    const source = tempDir('tavern-src-')
+    const target = tempDir('tavern-dst-')
+    expect(() => copyShippedFiles(source, target)).toThrow(/package\.json is missing/)
+    writeFileSync(join(source, 'package.json'), '{"files":"index.mjs"}')
+    expect(() => copyShippedFiles(source, target)).toThrow(/no usable 'files'/)
   })
 
   it('readInstalledStamp 读 version.json，缺失时退回 package.json 与 spec', () => {

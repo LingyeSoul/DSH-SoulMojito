@@ -138,13 +138,22 @@ function checkPackageObject(pkg, checkFiles = false) {
   if (pkg.exports?.['./novel'] !== './novel.mjs') {
     problems.push("exports['./novel'] must be './novel.mjs'")
   }
+  if (pkg.exports?.['./agent'] !== './agent.mjs') {
+    problems.push("exports['./agent'] must be './agent.mjs'")
+  }
+  if (pkg.exports?.['./compaction'] !== './compaction.mjs') {
+    problems.push("exports['./compaction'] must be './compaction.mjs'")
+  }
+  if (pkg.exports?.['./card-workbench'] !== './card-workbench.mjs') {
+    problems.push("exports['./card-workbench'] must be './card-workbench.mjs'")
+  }
   if (pkg.exports?.['./package.json'] !== './package.json') {
     problems.push("exports['./package.json'] must be './package.json'")
   }
   if (!Array.isArray(pkg.files)) {
     problems.push('files must be an array')
   } else {
-    for (const entry of ['index.mjs', 'novel.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md']) {
+    for (const entry of ['index.mjs', 'agent.mjs', 'compaction.mjs', 'novel.mjs', 'card-workbench.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md']) {
       if (!pkg.files.includes(entry)) problems.push(`files must include '${entry}'`)
     }
   }
@@ -171,6 +180,9 @@ function checkPackageObject(pkg, checkFiles = false) {
       ["exports['./client']", pkg.exports?.['./client']],
       ["exports['./cordis.patch.yml']", pkg.exports?.['./cordis.patch.yml']],
       ["exports['./novel']", pkg.exports?.['./novel']],
+      ["exports['./agent']", pkg.exports?.['./agent']],
+      ["exports['./compaction']", pkg.exports?.['./compaction']],
+      ["exports['./card-workbench']", pkg.exports?.['./card-workbench']],
       ["exports['./package.json']", pkg.exports?.['./package.json']],
       ['dsh.bundle.patch', pkg.dsh?.bundle?.patch],
     ]) {
@@ -1842,12 +1854,15 @@ const gates = [
         main: './index.mjs',
         exports: {
           '.': './index.mjs',
+          './agent': './agent.mjs',
+          './compaction': './compaction.mjs',
+          './novel': './novel.mjs',
+          './card-workbench': './card-workbench.mjs',
           './client': './client/index.js',
           './cordis.patch.yml': './cordis.patch.yml',
-          './novel': './novel.mjs',
           './package.json': './package.json',
         },
-        files: ['index.mjs', 'novel.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md'],
+        files: ['index.mjs', 'agent.mjs', 'compaction.mjs', 'novel.mjs', 'card-workbench.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md'],
         dsh: {
           manifestVersion: 1,
           bundle: { patch: './cordis.patch.yml' },

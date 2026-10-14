@@ -66,9 +66,22 @@ export interface TavernInstallRequest {
 }
 
 const DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
-/** 插件包的发布文件（package.json 的 `files`）。checkout 兜底只覆盖这些。 */
-const SHIPPED_FILES = ['index.mjs', 'agent.mjs', 'compaction.mjs', 'novel.mjs', 'version.json', 'cordis.patch.yml', 'README.md', 'package.json']
-const SHIPPED_DIRS = ['client']
+/**
+ * checkout 兜底覆盖的发布文件清单：以源目录 package.json 的 `files` 数组为单一
+ * 事实来源（外加 package.json 自身——stamp 与版本读取需要）。这里曾是硬编码
+ * 清单，提案 0013 新增 card-workbench.mjs 时漏同步，checkout 更新只换四个
+ * bundle、把旧 card-workbench.mjs 留在安装目录造成混装；运行时派生后清单
+ * 与发布面不再有第二份可漂移的拷贝。
+ */
+function shippedEntries(sourceDir: string): string[] {
+  const manifest = join(sourceDir, 'package.json')
+  if (!existsSync(manifest)) throw new Error('packages/plugin/package.json is missing from the checkout')
+  const files = JSON.parse(readFileSync(manifest, 'utf8'))?.files
+  if (!Array.isArray(files) || files.length === 0 || !files.every((entry) => typeof entry === 'string')) {
+    throw new Error("packages/plugin/package.json has no usable 'files' array")
+  }
+  return [...new Set(['package.json', ...files.map((entry: string) => entry.replace(/^\.\//, ''))])]
+}
 /** Windows 上杀毒/索引器对刚落盘文件的瞬时锁：有界重试，仍失败才上抛。 */
 const FILE_LOCK_RETRY_DELAYS_MS = [20, 50, 100, 200]
 
@@ -465,27 +478,30 @@ async function mustRun(command: string, args: string[], request: TavernInstallRe
 }
 
 /**
- * 覆盖已安装目录里的发布产物。pnpm 的 hoisted 布局里的文件可能是 store 的
- * 硬链接，直接 copyFile 会改写共享 inode——原子替换只动目标目录项，store
- * 里的旧内容不受影响。逐文件原子化：任何一步失败，已完成的文件保持完整。
+ * 覆盖已安装目录里的发布产物（清单见 shippedEntries）。pnpm 的 hoisted 布局里
+ * 的文件可能是 store 的硬链接，直接 copyFile 会改写共享 inode——原子替换只动
+ * 目标目录项，store 里的旧内容不受影响。逐文件原子化：任何一步失败，已完成
+ * 的文件保持完整。源里缺席的条目（gitignored 的 version.json）跳过，不动
+ * 安装目录里安装器落戳的旁车。
  */
 export function copyShippedFiles(sourceDir: string, targetDir: string): string[] {
   const copied: string[] = []
-  for (const file of SHIPPED_FILES) {
-    const from = join(sourceDir, file)
+  for (const entry of shippedEntries(sourceDir)) {
+    const from = join(sourceDir, entry)
     if (!existsSync(from)) continue
-    replaceFileAtomic(from, join(targetDir, file))
-    copied.push(file)
-  }
-  for (const dir of SHIPPED_DIRS) {
-    const from = join(sourceDir, dir)
-    if (!existsSync(from)) continue
+    const stat = statSyncSafe(from)
+    if (stat === null) continue
+    if (!stat.isDirectory()) {
+      replaceFileAtomic(from, join(targetDir, entry))
+      copied.push(entry)
+      continue
+    }
     for (const file of listFiles(from)) {
       const relative = file.slice(from.length + 1)
-      const to = join(targetDir, dir, relative)
+      const to = join(targetDir, entry, relative)
       mkdirSync(dirname(to), { recursive: true })
       writeFileAtomic(to, readFileSync(file))
-      copied.push(`${dir}/${relative.replaceAll('\\', '/')}`)
+      copied.push(`${entry}/${relative.replaceAll('\\', '/')}`)
     }
   }
   return copied
