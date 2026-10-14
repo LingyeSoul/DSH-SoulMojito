@@ -2,14 +2,16 @@
  * 游戏桥服务层全流程（提案 0018 §4.1，P0）：temp root 开真实服务——
  * start / 人类与 Agent 交替落子 / resign / 重启续局（重开服务读回）/ revision
  * 变化 / actor 规则（人类回合 agentMove 报错、反向亦然）/ 孤儿会话（卸载
- * 游戏后 orphaned 且拒绝落子）/ 井字棋全流程到终局。
+ * 游戏后 orphaned 且拒绝落子）/ 井字棋全流程到终局 / history 动作日志窗口
+ * （2026-10-14 增量修订：快照头只留 moveCount，日志经 history() 有界读取——
+ * 缺省尾窗 20、上限 200、from 夹紧；长日志经会话文件注入构造）。
  *
  * HTTP 面：follow tavern-mods.spec.ts 的 fakeReq/fakeRes 范式直接打
  * handleGamesApi（不 boot index.ts）：list/revision/start/state/action 的
  * 409/400/404 状态码纪律、view 的 CSP 与桥标记、reload。
  */
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -125,7 +127,9 @@ describe('resign 保留动作（§3.2：运行时统一处理）', () => {
     expect(outcome.session.finished).toBe(true)
     expect(outcome.session.winner).toBe('o')
     expect(outcome.session.summary).toBe('x 认输')
-    expect(outcome.session.moves.at(-1)!.describe).toBe('x 认输')
+    expect(outcome.session.moveCount).toBe(1)
+    const { moves } = await service.history(sessionId)
+    expect(moves.at(-1)!.describe).toBe('x 认输')
     // state 不变（引擎未参与）。
     expect((outcome.view.state as { ply: number }).ply).toBe(0)
   })
@@ -159,10 +163,10 @@ describe('重启续局（重开服务读回）', () => {
       const { session, view } = await reopened.state(firstSession)
       expect(session.id).toBe(firstSession)
       expect((view.state as { ply: number }).ply).toBe(1)
-      expect(session.moves).toHaveLength(1)
+      expect(session.moveCount).toBe(1)
       // 续局：Agent 落子照常（引擎纯函数，重启零损失）。
       const outcome = await reopened.agentMove(firstSession, { type: 'place', x: 1, y: 1 })
-      expect(outcome.session.moves).toHaveLength(2)
+      expect(outcome.session.moveCount).toBe(2)
     } finally {
       reopened.dispose()
     }
@@ -192,8 +196,69 @@ describe('井字棋全流程到终局（P0 验收：无头完成一整局，动�
     expect(last!.session.winner).toBe('o')
     expect(last!.session.summary).toContain('O三连')
     const { session } = await service.state(sessionId)
-    expect(session.moves.map((move) => move.actor)).toEqual(['x', 'o', 'x', 'o', 'x', 'o'])
-    expect(session.moves.every((move) => move.at !== '' && move.summary !== '')).toBe(true)
+    expect(session.moveCount).toBe(6)
+    // 动作日志完整可重放（增量修订后经 history() 窗口读取，不在快照里）。
+    const { moves } = await service.history(sessionId, { from: 0 })
+    expect(moves.map((move) => move.actor)).toEqual(['x', 'o', 'x', 'o', 'x', 'o'])
+    expect(moves.every((move) => move.at !== '' && move.summary !== '')).toBe(true)
+  })
+})
+
+describe('history 动作日志窗口（2026-10-14 增量修订）', () => {
+  it('缺省尾窗 / from+limit 分页 / 钳制（limit 非整数回落 20、越界夹紧、from 负值与越界）', async () => {
+    const sessionId = await startTicTacToe()
+    await service.humanAction(sessionId, { type: 'place', x: 0, y: 0 })
+    await service.agentMove(sessionId, { type: 'place', x: 0, y: 1 })
+    await service.humanAction(sessionId, { type: 'place', x: 1, y: 0 })
+    // 缺省：moveCount 3 < 20 → 尾窗即全量。
+    const all = await service.history(sessionId)
+    expect(all.session.moveCount).toBe(3)
+    expect(all.from).toBe(0)
+    expect(all.moves.map((move) => move.actor)).toEqual(['x', 'o', 'x'])
+    // from+limit 分页。
+    const page = await service.history(sessionId, { from: 1, limit: 1 })
+    expect(page.from).toBe(1)
+    expect(page.moves).toHaveLength(1)
+    expect(page.moves[0]!.actor).toBe('o')
+    // from 越界 → 夹到 moveCount（空窗）；from 负值 → 0。
+    const beyond = await service.history(sessionId, { from: 99 })
+    expect(beyond.from).toBe(3)
+    expect(beyond.moves).toEqual([])
+    const negative = await service.history(sessionId, { from: -5 })
+    expect(negative.from).toBe(0)
+    // limit 非整数回落缺省 20；limit 0 夹到 1。
+    const fallback = await service.history(sessionId, { limit: Number.NaN })
+    expect(fallback.moves).toHaveLength(3)
+    const floored = await service.history(sessionId, { limit: 0 })
+    expect(floored.from).toBe(2)
+    expect(floored.moves).toHaveLength(1)
+    await service.agentMove(sessionId, { type: 'resign' })
+  })
+
+  it('长日志：缺省只回最近 20 手（from= moveCount-20）、limit 上界 200、窗口条目可复读', async () => {
+    const sessionId = await startTicTacToe()
+    // 井字棋九手即终局，长日志用会话文件注入构造（store 读取路径照常）。
+    const file = join(root, 'games', 'sessions', `${sessionId}.json`)
+    const record = JSON.parse(readFileSync(file, 'utf8')) as { moves: unknown[] }
+    for (let index = 0; index < 25; index += 1) {
+      record.moves.push({
+        actor: 'x', action: { type: 'place', x: 0, y: 0 }, at: new Date().toISOString(),
+        summary: `第${index}手`, describe: `第${index}手`,
+      })
+    }
+    writeFileSync(file, JSON.stringify(record))
+    const tail = await service.history(sessionId)
+    expect(tail.session.moveCount).toBe(25)
+    expect(tail.from).toBe(5)
+    expect(tail.moves).toHaveLength(20)
+    expect(tail.moves[0]!.summary).toBe('第5手')
+    expect(tail.moves.at(-1)!.summary).toBe('第24手')
+    // 上界钳制：limit 9999 → 200（≥25 即全量）；from=0 从头读。
+    const head = await service.history(sessionId, { from: 0, limit: 9999 })
+    expect(head.from).toBe(0)
+    expect(head.moves).toHaveLength(25)
+    // 未知会话：与 state 同款 404 语义。
+    await expect(service.history('g-00000000')).rejects.toThrow('不存在')
   })
 })
 
@@ -364,5 +429,113 @@ describe('孤儿会话（gameId 不在注册表：可查看不可落子）', () 
     expect(view.legal).toEqual([])
     await expect(service.humanAction('g-deadbeef', { type: 'place', x: 0, y: 0 })).rejects.toThrow('orphaned')
     await expect(service.agentMove('g-deadbeef', { type: 'resign' })).rejects.toThrow('orphaned')
+  })
+})
+
+describe('投降门与出回合投降（2026-10-14 用户需求）', () => {
+  it('人类可在任意时刻投降（含 AI 回合）：actor/winner/describe 锚在人类角色', async () => {
+    const sessionId = await startTicTacToe()
+    // 人类落一手后轮到 Agent o——此刻人类入口的「落子」仍被拒，但「投降」放行
+    // （认输是会话级终止，不是行棋动作）。
+    await service.humanAction(sessionId, { type: 'place', x: 0, y: 0 })
+    await expect(service.humanAction(sessionId, { type: 'place', x: 1, y: 1 })).rejects.toThrow('现在轮到 o（Agent），请等待 AI 落子')
+    const outcome = await service.humanAction(sessionId, { type: 'resign' })
+    expect(outcome.session.finished).toBe(true)
+    expect(outcome.session.winner).toBe('o')
+    expect(outcome.session.summary).toBe('x 认输')
+    // actor 重锚为人类角色：日志与 describe 一致。
+    const { moves } = await service.history(sessionId, { from: 0 })
+    expect(moves.at(-1)!.actor).toBe('x')
+    expect(moves.at(-1)!.describe).toBe('x 认输')
+  })
+
+  it('Agent 的 resign 仍受回合纪律约束（人类回合拒、自己回合允）', async () => {
+    const sessionId = await startTicTacToe()
+    await expect(service.agentMove(sessionId, { type: 'resign' })).rejects.toThrow('现在轮到 x（人类玩家），不是 Agent 的回合')
+    await service.humanAction(sessionId, { type: 'place', x: 0, y: 0 })
+    const outcome = await service.agentMove(sessionId, { type: 'resign' })
+    expect(outcome.session.winner).toBe('x')
+    expect(outcome.session.summary).toBe('o 认输')
+  })
+
+  it('禁用投降：两个入口一致拒绝，普通动作不受影响；开关翻转即时生效（逐次读策略）', async () => {
+    let disabled = true
+    const gated = await openGamesService({
+      root,
+      hostVersion: '0.6.0',
+      resignAllowed: () => !disabled,
+    })
+    try {
+      const { session } = await gated.start({ gameId: 'dsh-tavern.tic-tac-toe', character: CHARACTER, chatId: 'resign-chat' })
+      await expect(gated.humanAction(session.id, { type: 'resign' })).rejects.toThrow('投降已被禁用')
+      await expect(gated.agentMove(session.id, { type: 'resign' })).rejects.toThrow('投降已被禁用')
+      // 普通动作不受门控影响。
+      const moved = await gated.humanAction(session.id, { type: 'place', x: 0, y: 0 })
+      expect(moved.session.moveCount).toBe(1)
+      // 面板翻转开关 → 投降恢复（策略逐次读取，无缓存写穿）。
+      disabled = false
+      const resigned = await gated.agentMove(session.id, { type: 'resign' })
+      expect(resigned.session.finished).toBe(true)
+      expect(resigned.session.summary).toBe('o 认输')
+    } finally {
+      gated.dispose()
+    }
+  })
+
+  it('形状校验前移：出回合的畸形动作报 invalid（而不是回合错误）', async () => {
+    const sessionId = await startTicTacToe()
+    await expect(service.agentMove(sessionId, { x: 1 })).rejects.toThrow('动作缺少 type 字段')
+    await expect(service.humanAction(sessionId, 'nope' as unknown as { type: string })).rejects.toThrow('动作必须是 JSON 对象')
+  })
+})
+
+describe('onHumanAction 自动续弈回调（2026-10-14 用户需求）', () => {
+  // 说明：本 describe 排在文件最后——两个 ad-hoc 服务 open/dispose 会改写
+  // globalThis 句柄（openGamesService 发布 / dispose 摘除），放在末尾避免
+  // 影响前面的用例（与「重启续局」describe 的句柄恢复纪律同一考虑）。
+  it('人类落子/认输成功后回调收到会话摘要；被拒动作与 Agent 落子不回调；回调抛错不回退落子', async () => {
+    const calls: Array<{ id: string; moveCount: number; finished: boolean }> = []
+    const hooked = await openGamesService({
+      root,
+      hostVersion: '0.6.0',
+      onHumanAction: async (session) => {
+        calls.push({ id: session.id, moveCount: session.moveCount, finished: session.finished })
+      },
+    })
+    try {
+      const { session } = await hooked.start({ gameId: 'dsh-tavern.tic-tac-toe', character: CHARACTER, chatId: 'wake-chat' })
+      await hooked.humanAction(session.id, { type: 'place', x: 0, y: 0 })
+      expect(calls).toEqual([{ id: session.id, moveCount: 1, finished: false }])
+      // 非人类回合的人类入口被拒（409 面）：回调不触发——被拒的动作从未发生。
+      await expect(hooked.humanAction(session.id, { type: 'place', x: 2, y: 2 })).rejects.toThrow()
+      expect(calls).toHaveLength(1)
+      // Agent 落子不经人类回调：自动续弈只挂人类棋盘入口。
+      await hooked.agentMove(session.id, { type: 'place', x: 1, y: 1 })
+      expect(calls).toHaveLength(1)
+      // 人类认输（终局路径）同样回调，带 finished 摘要。
+      await hooked.humanAction(session.id, { type: 'resign' })
+      expect(calls).toHaveLength(2)
+      expect(calls[1]).toMatchObject({ id: session.id, finished: true })
+    } finally {
+      hooked.dispose()
+    }
+    // 回调抛错：落子回执照常送达（错误降级为日志）。
+    const warnings: string[] = []
+    const throwing = await openGamesService({
+      root,
+      hostVersion: '0.6.0',
+      logger: { warn: (message: string) => { warnings.push(message); return undefined } },
+      onHumanAction: async () => {
+        throw new Error('wake boom')
+      },
+    })
+    try {
+      const { session } = await throwing.start({ gameId: 'dsh-tavern.tic-tac-toe', character: CHARACTER, chatId: 'wake-chat-2' })
+      const outcome = await throwing.humanAction(session.id, { type: 'place', x: 0, y: 0 })
+      expect(outcome.session.moveCount).toBe(1)
+      expect(warnings.some((line) => line.includes('wake failed') && line.includes('wake boom'))).toBe(true)
+    } finally {
+      throwing.dispose()
+    }
   })
 })

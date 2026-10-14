@@ -135,6 +135,7 @@ import { beginStreamEpoch, emitAssetsSaved, emitChatSaved, emitStreamDelta } fro
 // HTTP 面挂本前缀下 games/*（src/games/http.ts）。
 import { openGamesService, type GamesService } from './games/service.js'
 import { handleGamesApi, isGamesRoute } from './games/http.js'
+import { wakeAgentOnHumanMove } from './games/wake.js'
 // 卡片工作台方案确认协议（提案 0013 P2；世界书面板化为同构扩展）：方案存储在
 // card-workbench/plans.ts（kind 判别：卡方案 / 世界书方案），执行核（写入 +
 // applied 标记）在 card-workbench/agent.ts，路由块在 mvu/status 之后。
@@ -657,6 +658,29 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
     root: dshHomePath('tavern'),
     hostVersion: BUILD_INFO.version,
     logger: { warn: (message) => ctx.logger?.warn?.(message) },
+    // 投降门（2026-10-14 用户需求「禁用投降」）：逐次读 state（TavernStore 的
+    // getState 是内存态，零文件 IO）——面板翻转即时生效，无需写穿。
+    resignAllowed: async () => (await (await store()).getState()).gamesDisableResign !== true,
+    // 人类落子自动续弈（2026-10-14 用户需求）：Agent 没调 game_wait 就结束
+    // 回合时，用户落子经这里 followup 唤起绑定会话（src/games/wake.ts 负责
+    // 通知文本/来源形状/等待中与冷会话的静默跳过）。绑定反查扫 sessionBindings
+    // ——只认 agent-tavern 且非群聊（与懒段/bindingFor 同一可见面；群聊无游戏
+    // 段，唤醒了也没局面上下文）。同一聊天多绑定时取首个（v1 边界：一个聊天
+    // 一个对局一个会话，与工具面寻址假设一致）。
+    onHumanAction: async (session) => {
+      await wakeAgentOnHumanMove({
+        agents: ctx.agents,
+        bindingOf: async (character, chatId) => {
+          const state = await (await store()).getState()
+          for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+            if (binding.architecture !== 'agent-tavern' || binding.group === true) continue
+            if (binding.character === character && binding.chatId === chatId) return agentId
+          }
+          return undefined
+        },
+        logger: { warn: (message) => ctx.logger?.warn?.(message) },
+      }, session)
+    },
   })
   gamesServicePromise.catch((error: unknown) => {
     ctx.logger?.warn?.(`dsh-tavern: games service failed to start: ${error instanceof Error ? error.message : String(error)}`)
@@ -1126,6 +1150,11 @@ async function handleApi(ctx, req, res) {
         : {}),
       ...(typeof body.agentTavernAllowGlobalWrites === 'boolean'
         ? { agentTavernAllowGlobalWrites: body.agentTavernAllowGlobalWrites }
+        : {}),
+      // 禁用游戏投降（2026-10-14 用户需求）：翻转即时生效——服务层在两个动作
+      // 入口（人类棋盘 / Agent game_move）逐次读取判定，无缓存需写穿。
+      ...(typeof body.gamesDisableResign === 'boolean'
+        ? { gamesDisableResign: body.gamesDisableResign }
         : {}),
       // 写卡工作台/AgentNovel 的预设投影开关（preset-mount.ts）：翻转即写穿
       // 两个 bundle 的投影缓存，下一次装配即时生效。

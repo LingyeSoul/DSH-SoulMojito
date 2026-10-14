@@ -167,6 +167,20 @@ describe('清单与引擎形状（§3.1/§3.2）', () => {
     expect(document).toContain('dsh-tavern:game-action')
   })
 
+  it('将军提示层（2026-10-14 用户需求「象棋应该提供提示：如将军提示」）：警报横幅/光晕/行动指引均在视图里', () => {
+    // 警报横幅：check 态独用样式与闪烁动画（优先于回合底色）。
+    expect(xiangqiViewHtml).toContain('#banner.check')
+    expect(xiangqiViewHtml).toContain('dt-check-flash')
+    // 被将帅光晕（脉冲圈之外新增的底光晕）。
+    expect(xiangqiViewHtml).toContain('check-halo')
+    // 分语境文案：「你被将」与「AI 被将」两路。
+    expect(xiangqiViewHtml).toContain('将军！你（')
+    expect(xiangqiViewHtml).toContain('被将军了——必须解将')
+    expect(xiangqiViewHtml).toContain('AI 正在解将')
+    // 人类被将时的可执行指引（footer）。
+    expect(xiangqiViewHtml).toContain('必须解将：移动帅/仕')
+  })
+
   it('引擎源码不含 Math.random / Date.now（确定性是导入烟测硬约束）', () => {
     expect(ENGINE_SOURCE).not.toContain('Math.random')
     expect(ENGINE_SOURCE).not.toContain('Date.now')

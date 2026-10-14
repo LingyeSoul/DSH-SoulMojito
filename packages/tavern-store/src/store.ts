@@ -112,6 +112,10 @@ export interface TavernState {
   agentTavernPreloadAssets: boolean
   /** 允许 AgentTavern 工具写入 global 作用域的记忆/变量；默认关闭。 */
   agentTavernAllowGlobalWrites: boolean
+  /** 禁用游戏投降（2026-10-14 用户需求；面板「游戏」分区开关）：开启后两个
+   *  动作入口（人类棋盘/Agent game_move）对 {type:'resign'} 一律拒绝；默认关闭
+   *  （投降可用，与既有行为一致）。 */
+  gamesDisableResign: boolean
   /**
    * 写卡工作台会话投影激活聊天预设（提示词堆栈，引用式；默认关闭）。RP 预设
    * 的风格/越狱条目无条件注入会劫持编辑内核，因此显式开关（面板「预设」分区）。
@@ -268,6 +272,7 @@ const DEFAULT_STATE: TavernState = {
   defaultContextMode: 'dsh-native',
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  gamesDisableResign: false,
   cardWorkbenchPresetEnabled: false,
   agentNovelPresetEnabled: false,
   worldFollowsCharacter: true,
@@ -959,6 +964,7 @@ export class TavernStore {
       defaultContextMode: parsed.defaultContextMode === 'agent-managed' ? 'agent-managed' : 'dsh-native',
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      gamesDisableResign: parsed.gamesDisableResign === true,
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
       agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
       worldFollowsCharacter: parsed.worldFollowsCharacter !== false,

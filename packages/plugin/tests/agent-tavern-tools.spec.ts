@@ -115,15 +115,17 @@ describe('AgentTavern native tools', () => {
     'tavern_script_advance',
     'tavern_deduce',
     'tavern_variable_settle',
-    // 游戏桥五件（提案 0018 §4.2，P0；game_wait 为 2026-10-14 修订新增）。
+    // 游戏桥六件（提案 0018 §4.2，P0；game_wait 为 2026-10-14 修订新增，
+    // game_history 为同日增量修订新增）。
     'game_list',
     'game_start',
     'game_state',
+    'game_history',
     'game_move',
     'game_wait',
   ])
     for (const tool of tools.values()) {
-      // 游戏桥五件（提案 0018 §4.2）豁免 sessionId 面：其 sessionId 是**会话
+      // 游戏桥六件（提案 0018 §4.2）豁免 sessionId 面：其 sessionId 是**会话
       // 对象寻址**（缺省取本聊天最近活跃会话，候选集由 binding 过滤——提案
       // §6「多开对局」的精确寻址面），不是身份参数；其余身份/作用域参数
       //（character/chatId/scopeId）对全部工具仍然禁止。

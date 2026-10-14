@@ -46,7 +46,10 @@ import { mountModExtensions } from '../mods/agent-mount.js'
 // 游戏桥（提案 0018 §4.2）：工具经 globalThis 句柄逐调用解析服务（agent bundle
 // 与 index bundle 无共享模块态，镜像 mods/cross-bundle.ts 纪律——handle.ts 刻意
 // 只带类型与小 seam，不拖进整个游戏运行时图）。
-import { onGamesChanged, resolveGamesService } from '../games/handle.js'
+import { beginGameWait, onGamesChanged, resolveGamesService } from '../games/handle.js'
+// 类型面 only（打包期擦除，不把游戏运行时拖进 agent bundle）——回合载荷投影
+// 助手与 wait 循环的签名锚定在会话类型上。
+import type { GameMoveRecord, GameSessionSummary } from '../games/sessions.js'
 import {
   boundScriptOf,
   getScript,
@@ -948,10 +951,15 @@ function createTools(): ToolDefinition[] {
       return { applied, failed, receipt }
     }),
 
-    // ---- 游戏桥四件（提案 0018 §4.2，P0 无头可玩）----
+    // ---- 游戏桥六件（提案 0018 §4.2，P0；2026-10-14 增量修订）----
     // 服务经 globalThis 句柄逐调用解析（src/games/handle.ts）；句柄缺失（index
     // bundle 未装载游戏运行时）时返回明确错误，不影响其余工具。
-    tool('game_list', "List installed dsh-tavern games (id, display name, players, action vocabulary) and this chat's game sessions (with session ids, whose turn, finished state). Call it before game_start to pick a game or to resume an ongoing session.", {}, gameListOutput, async (_args, exec) => {
+    // **token 经济纪律（2026-10-14 用户裁定「尽可能考虑 token 经济性」）**：
+    // 工具载荷全部扁平、字段最小——身份面（players/动作词汇表）只在
+    // game_list/game_start 出现一次；回合载荷只带「下一步动作与叙述」所需，
+    // 会话时钟/聊天绑定/审计字段（move.at/summary）不进载荷。棋盘与日志分别
+    // 只经 game_state / game_history 读取。
+    tool('game_list', "List installed games (id, name, players, action vocabulary) and this chat's sessions (sessionId, gameName, whose turn, finished, moveCount). Call it before game_start to pick a game (pass its id) or to resume an ongoing session.", {}, gameListOutput, async (_args, exec) => {
       const service = requireGamesService()
       // 无绑定的宿主（子代理等）也能看游戏清单——按任务语义「无 binding 只带
       // games」：不带任何聊天会话。
@@ -961,13 +969,28 @@ function createTools(): ToolDefinition[] {
       } catch {
         binding = null
       }
-      if (binding === null) {
-        const { games } = await service.list({})
-        return { games, sessions: [] }
+      const { games, sessions } = binding === null
+        ? { games: (await service.list({})).games, sessions: [] as GameSessionSummary[] }
+        : await service.list({ character: binding.character, chatId: binding.chatId })
+      return {
+        games: games.map((game) => ({
+          id: game.id,
+          name: game.name,
+          players: game.players,
+          actionVocabulary: game.actionVocabulary,
+          status: game.status,
+          ...(game.status === 'ok' ? {} : { reason: game.reason }),
+        })),
+        sessions: sessions.map((session) => ({
+          sessionId: session.id,
+          gameName: session.gameName,
+          ...turnBrief(session),
+          finished: session.finished,
+          moveCount: session.moveCount,
+        })),
       }
-      return await service.list({ character: binding.character, chatId: binding.chatId })
     }),
-    tool('game_start', 'Start a game session with the user, bound to this chat. The human plays one role and you (the Agent) play the other; role selects your side (default: the second role, so the human moves first). Returns the initial position, whose turn it is, and the suggested actions. If the human moves first (the default), call game_wait right away to wait for their opening move.', {
+    tool('game_start', 'Start a game session with the user, bound to this chat. The human plays one role and you (the Agent) play the other; role selects your side (default: the second role, so the human moves first). Returns the session identity (sessionId, gameName, players mapping role to owner, whose turn first) — the board is not included: read it with game_state when it is your turn to move. If the human moves first (the default), call game_wait right away to wait for their opening move.', {
       gameId: { type: 'string', required: true, description: 'Game id from game_list.' },
       role: { type: 'string', description: 'Role the Agent plays; defaults to the second role (human moves first).' },
     }, gameStartOutput, async (args, exec) => {
@@ -984,16 +1007,23 @@ function createTools(): ToolDefinition[] {
         }
         humanRole = manifest.players.roles.find((role) => role !== agentRole)!
       }
-      const { session, view } = await service.start({
+      const { session } = await service.start({
         gameId,
         character: binding.character,
         chatId: binding.chatId,
         humanRole,
       })
       await refreshAgentGamesSummaries(binding.character, binding.chatId)
-      return { session, view }
+      // 开局只回身份面：默认路径（人类先手）下一手是 game_wait，棋盘此刻没人
+      // 需要——开局即回整盘棋盘是纯浪费（人类落子后经 game_state 读）。
+      return {
+        sessionId: session.id,
+        gameName: session.gameName,
+        players: session.players,
+        ...turnBrief(session),
+      }
     }),
-    tool('game_state', 'Read a game session snapshot: current position, whose turn (and whether it is yours), suggested actions, finished state with outcome. sessionId defaults to this chat\'s most recent active session.', {
+    tool('game_state', 'Read the current position of a game session: state (the board), legal (suggested actions), whose turn (and whether it is yours), moveCount, finished with winner/summary. The move log is not included — read it with game_history. sessionId defaults to this chat\'s most recent active session.', {
       sessionId: { type: 'string', description: 'Session id; defaults to the most recent active session of this chat.' },
     }, gameStateOutput, async (args, exec) => {
       const service = requireGamesService()
@@ -1001,9 +1031,47 @@ function createTools(): ToolDefinition[] {
       const sessionId = args.sessionId === undefined
         ? await resolveActiveSession(service, binding)
         : stringArg(args.sessionId)
-      return await service.state(sessionId)
+      const { session, view } = await service.state(sessionId)
+      return {
+        sessionId: session.id,
+        gameName: session.gameName,
+        ...turnBrief(session),
+        moveCount: session.moveCount,
+        finished: session.finished,
+        ...terminalBrief(session),
+        ...(session.orphaned ? { orphaned: true } : {}),
+        state: view.state,
+        legal: view.legal,
+      }
     }),
-    tool('game_move', 'Make your move in a game session. The actor is always the role to move and must be Agent-owned (otherwise the call fails and reports whose turn it is). action is the game action JSON (e.g. {type:"place",x:7,y:7}); {type:"resign"} resigns. Returns the new position, a human-readable describe line you can weave into the narrative, and whose turn is next. When the new position is the human turn, call game_wait to block until they move (do not end your turn or ask them to send a chat message).', {
+    // game_history（2026-10-14 增量修订）：动作日志的唯一直读面。日志完整住在
+    // 会话文件（可审计重放），这里只给窗口——from/limit 的钳制权威在会话端
+    // （sessions.ts history()：limit 缺省 20、上限 200），工具只做整数形态检查。
+    tool('game_history', 'Read the move log (interaction history) of a game session: each move as actor, action, describe (the narration text of that move). Returns the most recent `limit` moves by default; page with from (0-based index of the first returned move) and limit; moveCount is the total. The current position comes from game_state. sessionId defaults to this chat\'s most recent active session.', {
+      sessionId: { type: 'string', description: 'Session id; defaults to the most recent active session of this chat.' },
+      from: { type: 'integer', description: '0-based index of the first returned move; defaults to the start of the most recent limit moves.' },
+      limit: { type: 'integer', description: 'Maximum number of moves to return, clamped to 1..200; default 20.' },
+    }, gameHistoryOutput, async (args, exec) => {
+      const service = requireGamesService()
+      const binding = await bindingFor(exec)
+      const sessionId = args.sessionId === undefined
+        ? await resolveActiveSession(service, binding)
+        : stringArg(args.sessionId)
+      const window = await service.history(sessionId, {
+        ...(Number.isInteger(args.from) ? { from: args.from as number } : {}),
+        ...(Number.isInteger(args.limit) ? { limit: args.limit as number } : {}),
+      })
+      return {
+        sessionId: window.session.id,
+        gameName: window.session.gameName,
+        moveCount: window.session.moveCount,
+        from: window.from,
+        finished: window.session.finished,
+        ...terminalBrief(window.session),
+        moves: window.moves.map(moveBrief),
+      }
+    }),
+    tool('game_move', 'Make your move in a game session. The actor is always the role to move and must be Agent-owned (otherwise the call fails and reports whose turn it is). action is the game action JSON (e.g. {type:"place",x:7,y:7}); {type:"resign"} resigns. Returns describe (the narration line to weave into your reply), whose turn is next, and finished with winner/summary when the game ended — the board is not echoed back; read it with game_state when you need the position. When it is the human turn next, call game_wait to block until they move (do not end your turn or ask them to send a chat message).', {
       sessionId: { type: 'string', description: 'Session id; defaults to the most recent active session of this chat.' },
       action: { type: 'object', required: true, description: 'Game action JSON with a type field, e.g. {type:"place",x:7,y:7}; {type:"resign"} resigns.' },
     }, gameMoveOutput, async (args, exec) => {
@@ -1019,14 +1087,24 @@ function createTools(): ToolDefinition[] {
         : stringArg(args.sessionId)
       const outcome = await service.agentMove(sessionId, action as Record<string, unknown>)
       await refreshAgentGamesSummaries(binding.character, binding.chatId)
-      return outcome
+      // 增量面（2026-10-14 增量修订）：describe + 轮次 + 终局态——服务端
+      // GameActionResult 的 view 保留给 HTTP 面，工具面「读归读、写归写」。
+      return {
+        sessionId: outcome.session.id,
+        describe: outcome.describe,
+        finished: outcome.session.finished,
+        ...turnBrief(outcome.session),
+        ...terminalBrief(outcome.session),
+      }
     }),
-    // game_wait（2026-10-14 修订，提案 0018 §4.2）：AgentLoop 的工具 Promise 即
+    // game_wait（2026-10-14 修订；同日增量修订）：AgentLoop 的工具 Promise 即
     // 挂起面——本工具在自己回合内阻塞等人类在棋盘上落子，人类动作经
     // dsh-tavern:games-changed-listeners（跨 bundle）唤醒，Agent 同回合自动续弈，
     // 无需用户发消息触发。宿主无「游戏事件唤醒 agent」seam 的旧约束由此绕开：
     // 不是宿主推事件进来，而是 agent 自己挂起等事件。
-    tool('game_wait', 'Block until the human player moves in a game session (they play on the game board shown in their UI — no chat message from them is needed), until the game ends, or until the wait times out. Call it immediately whenever it becomes the human turn: right after game_start when the human moves first, and right after each of your own game_move calls. Returns the position after their move, their move (lastMove with describe/summary you can narrate), and whose turn is next. status "timeout" means they have not moved yet — call game_wait again to keep waiting.', {
+    // 返回面只给**等待期增量**（newMoves + 轮次/终局态）：棋盘/日志按需经
+    // game_state/game_history 读取——旧形态每手回吐全量日志，随对局线性膨胀。
+    tool('game_wait', 'Block until the human player moves in a game session (they play on the on-screen board — no chat message from them is needed), until the game ends, or until the wait times out. Call it immediately whenever it becomes the human turn: right after game_start when the human moves first, and right after each of your own game_move calls. Returns only what changed while waiting: status (your-turn | finished | orphaned | timeout), newMoves (the moves that arrived during the wait — normally the human\'s move, with describe to narrate) and whose turn it is now; when the game ended, winner/summary. Read the position with game_state and the move log with game_history. status "timeout" means they have not moved yet — call game_wait again to keep waiting.', {
       sessionId: { type: 'string', description: 'Session id; defaults to the most recent active session of this chat.' },
       timeoutMs: { type: 'integer', description: 'Maximum wait in milliseconds, clamped to 1000..900000; default 300000 (5 minutes).' },
     }, gameWaitOutput, async (args, exec) => {
@@ -1162,32 +1240,73 @@ const settleOutput = objectOutput({
   failed: { type: 'array', items: { type: 'object', additionalProperties: true } },
   receipt: { type: 'object', additionalProperties: true },
 })
-// 游戏桥四件的输出面（提案 0018 §4.2）：session/view 都是开放对象（引擎 state
-// 对运行时不透明，schema 不锁字段）。
+// 游戏桥六件的输出面（提案 0018 §4.2；2026-10-14 增量修订的 token 经济裁定）：
+// 全部扁平、字段最小——身份面只在 game_start/game_list，回合载荷只带下一步
+// 动作与叙述所需；state 对运行时不透明（引擎自定义，schema 不锁字段）。
 const gameListOutput = objectOutput({
   games: { type: 'array', items: { type: 'object', additionalProperties: true } },
   sessions: { type: 'array', items: { type: 'object', additionalProperties: true } },
 })
 const gameStartOutput = objectOutput({
-  session: { type: 'object', additionalProperties: true },
-  view: { type: 'object', additionalProperties: true },
-})
-const gameStateOutput = objectOutput({
-  session: { type: 'object', additionalProperties: true },
-  view: { type: 'object', additionalProperties: true },
-})
-const gameMoveOutput = objectOutput({
-  session: { type: 'object', additionalProperties: true },
-  view: { type: 'object', additionalProperties: true },
-  describe: { type: 'string' },
-})
-const gameWaitOutput = objectOutput({
-  status: { type: 'string', description: 'your-turn | finished | orphaned | timeout' },
   sessionId: { type: 'string' },
-  session: { type: 'object', additionalProperties: true },
-  view: { type: 'object', additionalProperties: true },
-  lastMove: { type: 'object', additionalProperties: true, description: 'Latest move record (null before the first move); on wake-up it is the human move to narrate.' },
+  gameName: { type: 'string' },
+  players: { type: 'array', items: { type: 'object', additionalProperties: true } },
+  turn: { type: 'string' },
+  turnOwner: { type: 'string' },
 })
+const gameStateOutput = objectOutput(
+  {
+    sessionId: { type: 'string' },
+    gameName: { type: 'string' },
+    turn: { type: 'string' },
+    turnOwner: { type: 'string' },
+    moveCount: { type: 'integer' },
+    finished: { type: 'boolean' },
+    winner: {},
+    summary: { type: 'string' },
+    orphaned: { type: 'boolean' },
+    state: {},
+    legal: { type: 'array', items: { type: 'object', additionalProperties: true } },
+  },
+  ['turn', 'turnOwner', 'winner', 'summary', 'orphaned'],
+)
+const gameHistoryOutput = objectOutput(
+  {
+    sessionId: { type: 'string' },
+    gameName: { type: 'string' },
+    moveCount: { type: 'integer' },
+    from: { type: 'integer', description: '0-based index of the first returned move within the full log.' },
+    finished: { type: 'boolean' },
+    winner: {},
+    summary: { type: 'string' },
+    moves: { type: 'array', items: { type: 'object', additionalProperties: true } },
+  },
+  ['winner', 'summary'],
+)
+const gameMoveOutput = objectOutput(
+  {
+    sessionId: { type: 'string' },
+    describe: { type: 'string', description: 'Narration line for the move you just made.' },
+    finished: { type: 'boolean' },
+    turn: { type: 'string' },
+    turnOwner: { type: 'string' },
+    winner: {},
+    summary: { type: 'string' },
+  },
+  ['turn', 'turnOwner', 'winner', 'summary'],
+)
+const gameWaitOutput = objectOutput(
+  {
+    status: { type: 'string', description: 'your-turn | finished | orphaned | timeout' },
+    sessionId: { type: 'string' },
+    newMoves: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Moves that arrived while waiting (normally the human move to narrate); empty on timeout or when it was already your turn.' },
+    turn: { type: 'string' },
+    turnOwner: { type: 'string' },
+    winner: {},
+    summary: { type: 'string' },
+  },
+  ['turn', 'turnOwner', 'winner', 'summary'],
+)
 
 function memoryView(record: {
   id: string
@@ -1303,7 +1422,7 @@ function requireGamesService() {
   return service
 }
 
-/** game_state/game_move/game_wait 的缺省寻址：本聊天最近活跃会话；无会话时明确报文。 */
+/** game_state/game_history/game_move/game_wait 的缺省寻址：本聊天最近活跃会话；无会话时明确报文。 */
 async function resolveActiveSession(
   service: ReturnType<typeof requireGamesService>,
   binding: BindingContext,
@@ -1319,6 +1438,11 @@ async function resolveActiveSession(
  *  （覆盖不经 emit 的外部改动，如手改会话文件）；二者都只是「可能变了」信号，
  *  循环每拍重读会话快照判定真伪。 */
 const GAME_WAIT_TICK_MS = 1000
+
+/** game_wait 增量窗口的条数：等待期真实增量恒 ≤1 手（任何一手都翻转回合、
+ *  循环首读即返回），取会话端单窗口上限 200（sessions.ts 的权威 clamp）只作
+ *  恒等上界——增量面不为任何情形静默截断。 */
+const GAME_WAIT_DELTA_LIMIT = 200
 
 /** 等「游戏可能变更」信号（事件/tick/中止），三路唤醒任何一路即返回。 */
 function waitForGameSignal(signal: AbortSignal | undefined, ms: number): Promise<void> {
@@ -1361,10 +1485,38 @@ function waitForGameSignal(signal: AbortSignal | undefined, ms: number): Promise
 }
 
 /**
- * game_wait 主体（2026-10-14 修订）：阻塞直到轮到 Agent / 对局终局 / 孤儿 /
- * 超时。每拍快照判定（state() 只读，无副作用）；醒来返回最新局面 + 最后一手
- * （唤醒场景即人类刚落的那手，describe/summary 供叙述）。用户停止生成时
- * exec.signal 中止——与其它工具的 throwIfAborted 同语义（宿主结束本次运行）。
+ * 工具面回合载荷的投影助手（2026-10-14 用户裁定「游戏系统尽可能考虑 token
+ * 经济性」）：回合载荷只带「下一步动作与叙述」所需——轮次（角色 + 归属）、
+ * 终局结果、动作记录的精简形态；身份面（players/动作词汇表）只在
+ * game_start/game_list 出现一次，会话时钟/聊天绑定/审计字段（move.at/summary）
+ * 不进载荷（盘上记录原样完整）。
+ */
+function turnBrief(session: Pick<GameSessionSummary, 'turn' | 'players' | 'finished' | 'orphaned'>): Record<string, unknown> {
+  // 终局/孤儿没有「轮到谁」——引擎 state.turn 停在最后一手，别把它读成下一手；
+  // 模型以 finished/status/winner 判定局面（缺 owner 同理不给）。
+  if (session.finished || session.orphaned || session.turn === '') return {}
+  const owner = session.players.find((player) => player.role === session.turn)?.owner
+  if (owner === undefined) return {}
+  return { turn: session.turn, turnOwner: owner }
+}
+
+function terminalBrief(session: Pick<GameSessionSummary, 'finished' | 'winner' | 'summary'>): Record<string, unknown> {
+  return session.finished ? { winner: session.winner, summary: session.summary } : {}
+}
+
+/** 动作记录的工具面投影：actor + action + describe 够叙述与复盘（at/summary 留在盘上）。 */
+function moveBrief(move: GameMoveRecord): Record<string, unknown> {
+  return { actor: move.actor, action: move.action, describe: move.describe }
+}
+
+/**
+ * game_wait 主体（2026-10-14 修订；同日增量修订）：阻塞直到轮到 Agent /
+ * 对局终局 / 孤儿 / 超时。每拍经 history() 读会话头 + 增量（只读，无副作用；
+ * 首读只取会话头立 moveCount 基线——增量语义 =「等待期间到达的手」）。
+ * 醒来返回**等待期增量**：newMoves（唤醒场景即人类刚落的那手，describe 供
+ * 叙述；已在 agent 回合时恒空——落子前的局面经 game_state 读取）+ 轮次/终局态。
+ * 用户停止生成时 exec.signal 中止——与其它工具的 throwIfAborted 同语义
+ * （宿主结束本次运行）。
  */
 async function waitForHumanMove(
   service: ReturnType<typeof requireGamesService>,
@@ -1373,17 +1525,39 @@ async function waitForHumanMove(
   signal: AbortSignal | undefined,
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs
-  for (;;) {
-    signal?.throwIfAborted()
-    const { session, view } = await service.state(sessionId)
-    const lastMove = session.moves.length > 0 ? session.moves[session.moves.length - 1]! : null
-    if (session.finished) return { status: 'finished', sessionId, session, view, lastMove }
-    if (session.orphaned) return { status: 'orphaned', sessionId, session, view, lastMove }
-    const turnOwner = session.players.find((player) => player.role === session.turn)?.owner
-    if (turnOwner === 'agent') return { status: 'your-turn', sessionId, session, view, lastMove }
-    const remaining = deadline - Date.now()
-    if (remaining <= 0) return { status: 'timeout', sessionId, session, view, lastMove }
-    await waitForGameSignal(signal, Math.min(GAME_WAIT_TICK_MS, remaining))
+  let baseline: number | undefined
+  const payload = (status: string, session: GameSessionSummary, newMoves: GameMoveRecord[]): Record<string, unknown> => ({
+    status,
+    sessionId,
+    newMoves: newMoves.map(moveBrief),
+    ...turnBrief(session),
+    ...terminalBrief(session),
+  })
+  // 等待登记（2026-10-14 自动续弈修订）：index bundle 的人类落子入口据此判定
+  // 「该手已由工具内唤醒覆盖」——挂起期间绝不重复 followup 唤起；返回/中止/
+  // 抛错都必须注销（finally），否则后续人类落子会被误判为「有人在等」而静默
+  // 不唤起。
+  const releaseWait = beginGameWait(sessionId)
+  try {
+    for (;;) {
+      signal?.throwIfAborted()
+      const snapshot = await service.history(sessionId, baseline === undefined
+        // 首读：只为会话头（moveCount 基线）——limit 1 的窗口内容不用。
+        ? { limit: 1 }
+        : { from: baseline, limit: GAME_WAIT_DELTA_LIMIT })
+      const { session } = snapshot
+      const newMoves = baseline === undefined ? [] : snapshot.moves
+      if (baseline === undefined) baseline = session.moveCount
+      if (session.finished) return payload('finished', session, newMoves)
+      if (session.orphaned) return payload('orphaned', session, newMoves)
+      const turnOwner = session.players.find((player) => player.role === session.turn)?.owner
+      if (turnOwner === 'agent') return payload('your-turn', session, newMoves)
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) return payload('timeout', session, newMoves)
+      await waitForGameSignal(signal, Math.min(GAME_WAIT_TICK_MS, remaining))
+    }
+  } finally {
+    releaseWait()
   }
 }
 
@@ -1530,12 +1704,15 @@ const gamesSummaryProjection = createLazyProjection<string>({
     const lines = active.map((session) => {
       const turnOwner = session.players.find((player) => player.role === session.turn)?.owner
       const whose = turnOwner === 'agent' ? '你（Agent）' : '人类玩家'
-      return `- ${session.gameName}（sessionId ${session.id}）：轮到 ${session.turn}（${whose}）；动作词汇表：${session.actionVocabulary}`
+      // 「你执 <角色>」在段里常驻（token 经济裁定下 players 映射不进回合载荷，
+      // 角色归属由段携带——压缩/换上下文后不需工具补读）。
+      const agentRole = session.players.find((player) => player.owner === 'agent')?.role
+      return `- ${session.gameName}（sessionId ${session.id}）：${agentRole === undefined ? '' : `你执 ${agentRole}，`}轮到 ${session.turn}（${whose}）；动作词汇表：${session.actionVocabulary}`
     })
     const text = [
       '本聊天有进行中的游戏对局：',
       ...lines,
-      '轮到你时用 game_move 落子；落到人类回合立即调用 game_wait 阻塞等待对方在棋盘上落子（对方无需发送聊天消息），工具返回后自动继续；describe/summary 文案可直接用于对话中叙述这一手。',
+      '轮到你时先 game_state 读局面、再用 game_move 落子；落到人类回合立即调用 game_wait 阻塞等待对方在棋盘上落子（对方无需发送聊天消息；wait 只返回等待期增量——该手与轮次），工具返回后自动继续；describe/summary 文案可直接用于对话叙述这一手，往手用 game_history 查询。',
     ].join('\n')
     // 会话快照里的游戏名/词汇表是用户资产数据，可能含 {{...}}——与 facts/guides
     // 同款宏展开 + 宿主安全化（prompt-safety.ts）。

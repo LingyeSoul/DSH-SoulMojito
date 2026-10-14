@@ -385,6 +385,30 @@ function checkServerText(text) {
   if (!text.includes('dsh-tavern.xiangqi')) {
     problems.push('server bundle must ship the builtin xiangqi game (dsh-tavern.xiangqi)')
   }
+  // 将军提示层（2026-10-14 用户需求「象棋应该提供提示：如将军提示」）：警报
+  // 横幅样式与光晕类名丢失即判定提示层未随视图分发（与 id 字面量同款纪律）。
+  if (!text.includes('#banner.check')) {
+    problems.push('server bundle must ship the xiangqi check banner style (#banner.check)')
+  }
+  if (!text.includes('check-halo')) {
+    problems.push('server bundle must ship the xiangqi checked-general halo (check-halo)')
+  }
+  // 人类落子自动续弈（2026-10-14 用户需求）：等待登记的跨 bundle key（wake 的
+  // 防重判据根）+ 通知消息 id 前缀（投递形状契约）须在 index bundle 里。
+  if (!text.includes('dsh-tavern:games-waiters')) {
+    problems.push("server bundle must carry the games waiters registry key 'dsh-tavern:games-waiters'")
+  }
+  if (!text.includes('game-notice-')) {
+    problems.push('server bundle must carry the game wake notice id prefix (game-notice-)')
+  }
+  // 投降门（2026-10-14 用户需求「禁用投降」）：状态键 + 服务层拒绝闸须在
+  // index bundle 里（键在 store 归一化与面板补丁路由两处、闸在 games service）。
+  if (!text.includes('gamesDisableResign')) {
+    problems.push('server bundle must carry the games resign policy key (gamesDisableResign)')
+  }
+  if (!text.includes('assertResignAllowed')) {
+    problems.push('server bundle must gate the resign action (assertResignAllowed)')
+  }
   return problems
 }
 
@@ -551,6 +575,14 @@ function checkFrontendRuntimeText(text) {
     'const openGamesSurface = () => {',
     'dt-game-board-empty',
     ".then(() => api(`games/list${query}`))",
+    // 2026-10-14 用户需求（投降按钮 + 终局保留盘面）：投降上行路径引用、
+    // 「禁用投降」设置键、终局盘面补拉的见证集判据与投降按钮样式类——任一
+    // 缺失即翻红（末条含终局「不只剩一行结果文案」的回归位）。
+    'postActionRef.current({ type',
+    'dt-game-actions',
+    'dt-game-resign-armed',
+    'gamesDisableResign',
+    'witnessed[session.id] !== undefined',
 
     "'panel.section.games'",
     // 游戏图标=手柄 + 管理面板导航「标题区固定」（2026-10-14 用户反馈）：自绘手柄
@@ -691,12 +723,12 @@ function checkAgentTavernIsolation(sourceFiles, serverText, agentText) {
   for (const marker of ['agent-tavern/audit', 'assertStGenerationBinding(state, body.sessionId)']) {
     if (!serverText.includes(marker)) problems.push(`server architecture isolation is missing marker '${marker}'`)
   }
-  // 游戏桥五工具 + 懒段（提案 0018 §4.2；game_wait 为 2026-10-14 修订）：
-  // 工具名、order -63 段名与句柄解析 seam 必须在 agent bundle 产物里
-  // （agent.mjs 是独立 esbuild 产物，源文件在场不等于打包在场；中文报文被
-  // esbuild 转义为 \uXXXX，故锚 resolveGamesService）。
+  // 游戏桥六工具 + 懒段（提案 0018 §4.2；game_wait 为 2026-10-14 修订，
+  // game_history 为同日增量修订）：工具名、order -63 段名与句柄解析 seam
+  // 必须在 agent bundle 产物里（agent.mjs 是独立 esbuild 产物，源文件在场
+  // 不等于打包在场；中文报文被 esbuild 转义为 \uXXXX，故锚 resolveGamesService）。
   if (agentText !== undefined) {
-    for (const marker of ['game_list', 'game_start', 'game_state', 'game_move', 'game_wait', 'dsh-tavern:agent-games', 'resolveGamesService']) {
+    for (const marker of ['game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait', 'dsh-tavern:agent-games', 'resolveGamesService']) {
       if (!agentText.includes(marker)) problems.push(`agent bundle is missing the games bridge marker '${marker}'`)
     }
   }
@@ -1874,7 +1906,7 @@ const gates = [
       const versionReader = 'readFileSync("version.json", "utf8"); var BUILD_INFO = { version: "0.0.0", commit: "stub" };'
       const commitResolver = 'function resolveCommit() { execFileSync("git", ["rev-parse", "--show-toplevel"]); return "stub"; } var TAVERN_COMMIT = resolveCommit();'
       const localEmbed = '"local-onnx:"\n\'@huggingface/transformers\'\nvar localStatus = { runtimeInstalled: true };\nfunction inferLocalModelSettings() {}\n"memory/embed/local/install"\nfunction detectLocalQuantizations() {}\n"memory/embed/local/quantizations"\nfunction resolveLocalDtype() {}'
-      const gamesBridge = '"dsh-tavern:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';\nvar builtinGomoku = "dsh-tavern.gomoku";\nvar builtinXiangqi = "dsh-tavern.xiangqi";'
+      const gamesBridge = '"dsh-tavern:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';\nvar builtinGomoku = "dsh-tavern.gomoku";\nvar builtinXiangqi = "dsh-tavern.xiangqi";\nvar xiangqiCheckBanner = "#banner.check";\nvar xiangqiCheckHalo = "check-halo";\nvar waitersKey = "dsh-tavern:games-waiters";\nvar noticeId = "game-notice-" + sessionId;\nvar resignKey = "gamesDisableResign";\nfunction assertResignAllowed(action) {}'
       const good = `var name = "dsh-tavern"; var inject = []; function apply() {} function assertStGenerationBinding() {}\n${routeMarkers}\n"${API_PREFIX}"\n${versionReader}\n${commitResolver}\n${localEmbed}\n${gamesBridge}\nvar bootstrap = { ok: true, version: BUILD_INFO.version, commit: TAVERN_COMMIT };\nexport { name, inject, apply };`
       const badRoute = good.replace('"generate"', '"missing"')
       const badStamp = good.replace('version: BUILD_INFO.version, ', '')
@@ -1891,6 +1923,16 @@ const gates = [
       const badGamesView = good.replace("=== 'view'", "=== 'gone'").replace("=== \"view\"", "=== \"gone\"")
       const badGamesGomoku = good.replace('"dsh-tavern.gomoku"', '"gomoku-removed"')
       const badGamesXiangqi = good.replace('"dsh-tavern.xiangqi"', '"xiangqi-removed"')
+      // 自动续弈与投降门（2026-10-14 用户需求）负样本：替换文本逐一核对过不含
+      // 原 marker（前缀/子串救活防护）。
+      const badGamesWaiters = good.replace('"dsh-tavern:games-waiters"', '"games-waiters-gone"')
+      const badGameNotice = good.replace('"game-notice-"', '"notice-gone-"')
+      const badGamesResignKey = good.replace('"gamesDisableResign"', '"gamesResignGone"')
+      const badGamesResignGate = good.replace('function assertResignAllowed(action) {}', 'function assertNothing(action) {}')
+      // 将军提示层（2026-10-14 用户需求）负样本：同款核对——替换值 'banner-style-gone'
+      // / 'halo-gone' 均不含原 marker 子串。
+      const badXiangqiCheckBanner = good.replace('"#banner.check"', '"banner-style-gone"')
+      const badXiangqiCheckHalo = good.replace('"check-halo"', '"halo-gone"')
       return checkServerText(good).length === 0
         && checkServerText(badRoute).length > 0
         && checkServerText(badStamp).length > 0
@@ -1907,6 +1949,12 @@ const gates = [
         && checkServerText(badGamesView).length > 0
         && checkServerText(badGamesGomoku).length > 0
         && checkServerText(badGamesXiangqi).length > 0
+        && checkServerText(badGamesWaiters).length > 0
+        && checkServerText(badGameNotice).length > 0
+        && checkServerText(badGamesResignKey).length > 0
+        && checkServerText(badGamesResignGate).length > 0
+        && checkServerText(badXiangqiCheckBanner).length > 0
+        && checkServerText(badXiangqiCheckHalo).length > 0
         && checkServerFreshness(10, 10).length === 0
         && checkBuildStamps('var built = { version: "0.0.0", commit: "abc1234" };', '0.0.0', 'abc1234').length === 0
         && checkBuildStamps('var built = { version: __TAVERN_VERSION__, commit: __TAVERN_COMMIT__ };', '0.0.0', 'abc1234').length > 0
@@ -1999,6 +2047,13 @@ const gates = [
         'const openGamesSurface = () => {}',
         'dt-game-board-empty',
         '.then(() => api(`games/list${query}`))',
+        // 投降按钮 + 终局保留盘面（2026-10-14 用户需求）：与 checker 的必需
+        // marker 列表逐条对齐——self-test 的 good 串缺一即自检自红。
+        'postActionRef.current({ type',
+        'dt-game-actions',
+        'dt-game-resign-armed',
+        'gamesDisableResign',
+        'witnessed[session.id] !== undefined',
 
         "'panel.section.games'",
         // 游戏图标=手柄 + 管理面板导航「标题区固定」（2026-10-14 用户反馈：红框的
@@ -2051,6 +2106,13 @@ const gates = [
       const badGameHeaderEntry = good.replace('const openGamesSurface = () => {}', 'const openGamesGone = () => {}')
       const badGameEmptyCard = good.replace('dt-game-board-empty', 'dt-game-empty-gone')
       const badGameBaseline = good.replace('.then(() => api(`games/list${query}`))', '.then(() => api(`games/gone-list`))')
+      // 投降按钮 + 终局盘面（2026-10-14 用户需求）负样本：替换文本不含原
+      // marker 的前缀/子串。
+      const badGameResignAction = good.replace('postActionRef.current({ type', 'postActionGone.current({ type')
+      const badGameResignBar = good.replace('dt-game-actions', 'dt-game-act-gone')
+      const badGameResignArmed = good.replace('dt-game-resign-armed', 'dt-game-resign-gone')
+      const badGameResignKey = good.replace('gamesDisableResign', 'gamesResignGone')
+      const badGameWitnessed = good.replace('witnessed[session.id] !== undefined', 'witnessedGone[session.id] !== undefined')
 
       const badGamesSectionKey = good.replace("'panel.section.games'", "'panel.section.gone'")
       // 手柄图标 + 导航标题区固定（2026-10-14 用户反馈）负样本：图标组件改名、
@@ -2092,6 +2154,11 @@ const gates = [
         && checkFrontendRuntimeText(badGameHeaderEntry).length > 0
         && checkFrontendRuntimeText(badGameEmptyCard).length > 0
         && checkFrontendRuntimeText(badGameBaseline).length > 0
+        && checkFrontendRuntimeText(badGameResignAction).length > 0
+        && checkFrontendRuntimeText(badGameResignBar).length > 0
+        && checkFrontendRuntimeText(badGameResignArmed).length > 0
+        && checkFrontendRuntimeText(badGameResignKey).length > 0
+        && checkFrontendRuntimeText(badGameWitnessed).length > 0
         && checkFrontendRuntimeText(badGamesSectionKey).length > 0
         && checkFrontendRuntimeText(badGamepadIcon).length > 0
         && checkFrontendRuntimeText(badNavlistStructure).length > 0
@@ -2239,7 +2306,7 @@ const gates = [
   {
     name: 'agent-tavern-isolation',
     selfTest: () => {
-      const goodAgent = "var games = ['game_list', 'game_start', 'game_state', 'game_move', 'game_wait']; registerSection('dsh-tavern:agent-games'); function resolveGamesService() {}"
+      const goodAgent = "var games = ['game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait']; registerSection('dsh-tavern:agent-games'); function resolveGamesService() {}"
       const good = checkAgentTavernIsolation([
         ['runtime.ts', 'export function runAgentLoop() {}'],
         ['tools.ts', 'export function tool() {}'],
@@ -2247,9 +2314,10 @@ const gates = [
       const bad = checkAgentTavernIsolation([
         ['runtime.ts', 'ctx.llm.stream()'],
       ], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent)
-      // games 桥负样本：五工具名/段名/报文任一缺失都必须翻红（game_wait 单独
-      // 摘除 = 2026-10-14 修订的专属回归位）。
-      const badGamesTool = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace("'game_state', 'game_move'", "'game_state'"))
+      // games 桥负样本：六工具名/段名/报文任一缺失都必须翻红（game_wait 单独
+      // 摘除 = 2026-10-14 修订的专属回归位；game_history 单独摘除 = 同日增量
+      // 修订的专属回归位）。
+      const badGamesTool = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace("'game_state', 'game_history', 'game_move'", "'game_state', 'game_move'"))
       const badGamesWait = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace("'game_move', 'game_wait'", "'game_move'"))
       const badGamesSection = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace('dsh-tavern:agent-games', 'dsh-tavern:gone'))
       const badGamesError = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace('function resolveGamesService() {}', 'function resolveNothing() {}'))

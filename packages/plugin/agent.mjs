@@ -1863,6 +1863,7 @@ var DEFAULT_STATE = {
   defaultContextMode: "dsh-native",
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  gamesDisableResign: false,
   cardWorkbenchPresetEnabled: false,
   agentNovelPresetEnabled: false,
   worldFollowsCharacter: true,
@@ -2435,6 +2436,7 @@ var TavernStore = class _TavernStore {
       defaultContextMode: parsed.defaultContextMode === "agent-managed" ? "agent-managed" : "dsh-native",
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      gamesDisableResign: parsed.gamesDisableResign === true,
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
       agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
       worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
@@ -6111,8 +6113,8 @@ function clampModSectionOrder(order) {
   return Math.max(MOD_SECTION_ORDER_MIN, Math.min(MOD_SECTION_ORDER_MAX, value));
 }
 var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
-  // agent-tavern（agent.ts createTools，23：18 原有 + 游戏桥五件，提案 0018 §4.2；
-  // game_wait 为 2026-10-14 修订新增）
+  // agent-tavern（agent.ts createTools，24：18 原有 + 游戏桥六件，提案 0018 §4.2；
+  // game_wait 为 2026-10-14 修订新增，game_history 为同日增量修订新增）
   "tavern_character_get",
   "tavern_lore_search",
   "tavern_scene_get",
@@ -6134,6 +6136,7 @@ var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
   "game_list",
   "game_start",
   "game_state",
+  "game_history",
   "game_move",
   "game_wait",
   // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
@@ -7093,6 +7096,30 @@ var gamesChangedListeners = createGlobalListenerRegistry("dsh-tavern:games-chang
 function onGamesChanged(listener) {
   return gamesChangedListeners.on(listener);
 }
+var GAMES_WAITERS_KEY = "dsh-tavern:games-waiters";
+function waiterRegistry() {
+  const holder = globalThis;
+  const key = Symbol.for(GAMES_WAITERS_KEY);
+  let registry = holder[key];
+  if (registry === void 0) {
+    registry = /* @__PURE__ */ new Map();
+    holder[key] = registry;
+  }
+  return registry;
+}
+function beginGameWait(sessionId) {
+  const registry = waiterRegistry();
+  const token = Symbol("dsh-tavern:game-wait");
+  const tokens = registry.get(sessionId) ?? /* @__PURE__ */ new Set();
+  tokens.add(token);
+  registry.set(sessionId, tokens);
+  return () => {
+    const current = registry.get(sessionId);
+    if (current === void 0) return;
+    current.delete(token);
+    if (current.size === 0) registry.delete(sessionId);
+  };
+}
 
 // packages/plugin/src/agent-tavern/agent.ts
 var name = "dsh-tavern/agent";
@@ -7820,10 +7847,15 @@ function createTools() {
       });
       return { applied, failed, receipt };
     }),
-    // ---- 游戏桥四件（提案 0018 §4.2，P0 无头可玩）----
+    // ---- 游戏桥六件（提案 0018 §4.2，P0；2026-10-14 增量修订）----
     // 服务经 globalThis 句柄逐调用解析（src/games/handle.ts）；句柄缺失（index
     // bundle 未装载游戏运行时）时返回明确错误，不影响其余工具。
-    tool("game_list", "List installed dsh-tavern games (id, display name, players, action vocabulary) and this chat's game sessions (with session ids, whose turn, finished state). Call it before game_start to pick a game or to resume an ongoing session.", {}, gameListOutput, async (_args, exec) => {
+    // **token 经济纪律（2026-10-14 用户裁定「尽可能考虑 token 经济性」）**：
+    // 工具载荷全部扁平、字段最小——身份面（players/动作词汇表）只在
+    // game_list/game_start 出现一次；回合载荷只带「下一步动作与叙述」所需，
+    // 会话时钟/聊天绑定/审计字段（move.at/summary）不进载荷。棋盘与日志分别
+    // 只经 game_state / game_history 读取。
+    tool("game_list", "List installed games (id, name, players, action vocabulary) and this chat's sessions (sessionId, gameName, whose turn, finished, moveCount). Call it before game_start to pick a game (pass its id) or to resume an ongoing session.", {}, gameListOutput, async (_args, exec) => {
       const service = requireGamesService();
       let binding = null;
       try {
@@ -7831,13 +7863,26 @@ function createTools() {
       } catch {
         binding = null;
       }
-      if (binding === null) {
-        const { games } = await service.list({});
-        return { games, sessions: [] };
-      }
-      return await service.list({ character: binding.character, chatId: binding.chatId });
+      const { games, sessions } = binding === null ? { games: (await service.list({})).games, sessions: [] } : await service.list({ character: binding.character, chatId: binding.chatId });
+      return {
+        games: games.map((game) => ({
+          id: game.id,
+          name: game.name,
+          players: game.players,
+          actionVocabulary: game.actionVocabulary,
+          status: game.status,
+          ...game.status === "ok" ? {} : { reason: game.reason }
+        })),
+        sessions: sessions.map((session) => ({
+          sessionId: session.id,
+          gameName: session.gameName,
+          ...turnBrief(session),
+          finished: session.finished,
+          moveCount: session.moveCount
+        }))
+      };
     }),
-    tool("game_start", "Start a game session with the user, bound to this chat. The human plays one role and you (the Agent) play the other; role selects your side (default: the second role, so the human moves first). Returns the initial position, whose turn it is, and the suggested actions. If the human moves first (the default), call game_wait right away to wait for their opening move.", {
+    tool("game_start", "Start a game session with the user, bound to this chat. The human plays one role and you (the Agent) play the other; role selects your side (default: the second role, so the human moves first). Returns the session identity (sessionId, gameName, players mapping role to owner, whose turn first) \u2014 the board is not included: read it with game_state when it is your turn to move. If the human moves first (the default), call game_wait right away to wait for their opening move.", {
       gameId: { type: "string", required: true, description: "Game id from game_list." },
       role: { type: "string", description: "Role the Agent plays; defaults to the second role (human moves first)." }
     }, gameStartOutput, async (args, exec) => {
@@ -7853,24 +7898,65 @@ function createTools() {
         }
         humanRole = manifest.players.roles.find((role) => role !== agentRole);
       }
-      const { session, view } = await service.start({
+      const { session } = await service.start({
         gameId,
         character: binding.character,
         chatId: binding.chatId,
         humanRole
       });
       await refreshAgentGamesSummaries(binding.character, binding.chatId);
-      return { session, view };
+      return {
+        sessionId: session.id,
+        gameName: session.gameName,
+        players: session.players,
+        ...turnBrief(session)
+      };
     }),
-    tool("game_state", "Read a game session snapshot: current position, whose turn (and whether it is yours), suggested actions, finished state with outcome. sessionId defaults to this chat's most recent active session.", {
+    tool("game_state", "Read the current position of a game session: state (the board), legal (suggested actions), whose turn (and whether it is yours), moveCount, finished with winner/summary. The move log is not included \u2014 read it with game_history. sessionId defaults to this chat's most recent active session.", {
       sessionId: { type: "string", description: "Session id; defaults to the most recent active session of this chat." }
     }, gameStateOutput, async (args, exec) => {
       const service = requireGamesService();
       const binding = await bindingFor(exec);
       const sessionId = args.sessionId === void 0 ? await resolveActiveSession(service, binding) : stringArg(args.sessionId);
-      return await service.state(sessionId);
+      const { session, view } = await service.state(sessionId);
+      return {
+        sessionId: session.id,
+        gameName: session.gameName,
+        ...turnBrief(session),
+        moveCount: session.moveCount,
+        finished: session.finished,
+        ...terminalBrief(session),
+        ...session.orphaned ? { orphaned: true } : {},
+        state: view.state,
+        legal: view.legal
+      };
     }),
-    tool("game_move", 'Make your move in a game session. The actor is always the role to move and must be Agent-owned (otherwise the call fails and reports whose turn it is). action is the game action JSON (e.g. {type:"place",x:7,y:7}); {type:"resign"} resigns. Returns the new position, a human-readable describe line you can weave into the narrative, and whose turn is next. When the new position is the human turn, call game_wait to block until they move (do not end your turn or ask them to send a chat message).', {
+    // game_history（2026-10-14 增量修订）：动作日志的唯一直读面。日志完整住在
+    // 会话文件（可审计重放），这里只给窗口——from/limit 的钳制权威在会话端
+    // （sessions.ts history()：limit 缺省 20、上限 200），工具只做整数形态检查。
+    tool("game_history", "Read the move log (interaction history) of a game session: each move as actor, action, describe (the narration text of that move). Returns the most recent `limit` moves by default; page with from (0-based index of the first returned move) and limit; moveCount is the total. The current position comes from game_state. sessionId defaults to this chat's most recent active session.", {
+      sessionId: { type: "string", description: "Session id; defaults to the most recent active session of this chat." },
+      from: { type: "integer", description: "0-based index of the first returned move; defaults to the start of the most recent limit moves." },
+      limit: { type: "integer", description: "Maximum number of moves to return, clamped to 1..200; default 20." }
+    }, gameHistoryOutput, async (args, exec) => {
+      const service = requireGamesService();
+      const binding = await bindingFor(exec);
+      const sessionId = args.sessionId === void 0 ? await resolveActiveSession(service, binding) : stringArg(args.sessionId);
+      const window = await service.history(sessionId, {
+        ...Number.isInteger(args.from) ? { from: args.from } : {},
+        ...Number.isInteger(args.limit) ? { limit: args.limit } : {}
+      });
+      return {
+        sessionId: window.session.id,
+        gameName: window.session.gameName,
+        moveCount: window.session.moveCount,
+        from: window.from,
+        finished: window.session.finished,
+        ...terminalBrief(window.session),
+        moves: window.moves.map(moveBrief)
+      };
+    }),
+    tool("game_move", 'Make your move in a game session. The actor is always the role to move and must be Agent-owned (otherwise the call fails and reports whose turn it is). action is the game action JSON (e.g. {type:"place",x:7,y:7}); {type:"resign"} resigns. Returns describe (the narration line to weave into your reply), whose turn is next, and finished with winner/summary when the game ended \u2014 the board is not echoed back; read it with game_state when you need the position. When it is the human turn next, call game_wait to block until they move (do not end your turn or ask them to send a chat message).', {
       sessionId: { type: "string", description: "Session id; defaults to the most recent active session of this chat." },
       action: { type: "object", required: true, description: 'Game action JSON with a type field, e.g. {type:"place",x:7,y:7}; {type:"resign"} resigns.' }
     }, gameMoveOutput, async (args, exec) => {
@@ -7884,14 +7970,22 @@ function createTools() {
       const sessionId = args.sessionId === void 0 ? await resolveActiveSession(service, binding) : stringArg(args.sessionId);
       const outcome = await service.agentMove(sessionId, action);
       await refreshAgentGamesSummaries(binding.character, binding.chatId);
-      return outcome;
+      return {
+        sessionId: outcome.session.id,
+        describe: outcome.describe,
+        finished: outcome.session.finished,
+        ...turnBrief(outcome.session),
+        ...terminalBrief(outcome.session)
+      };
     }),
-    // game_wait（2026-10-14 修订，提案 0018 §4.2）：AgentLoop 的工具 Promise 即
+    // game_wait（2026-10-14 修订；同日增量修订）：AgentLoop 的工具 Promise 即
     // 挂起面——本工具在自己回合内阻塞等人类在棋盘上落子，人类动作经
     // dsh-tavern:games-changed-listeners（跨 bundle）唤醒，Agent 同回合自动续弈，
     // 无需用户发消息触发。宿主无「游戏事件唤醒 agent」seam 的旧约束由此绕开：
     // 不是宿主推事件进来，而是 agent 自己挂起等事件。
-    tool("game_wait", 'Block until the human player moves in a game session (they play on the game board shown in their UI \u2014 no chat message from them is needed), until the game ends, or until the wait times out. Call it immediately whenever it becomes the human turn: right after game_start when the human moves first, and right after each of your own game_move calls. Returns the position after their move, their move (lastMove with describe/summary you can narrate), and whose turn is next. status "timeout" means they have not moved yet \u2014 call game_wait again to keep waiting.', {
+    // 返回面只给**等待期增量**（newMoves + 轮次/终局态）：棋盘/日志按需经
+    // game_state/game_history 读取——旧形态每手回吐全量日志，随对局线性膨胀。
+    tool("game_wait", `Block until the human player moves in a game session (they play on the on-screen board \u2014 no chat message from them is needed), until the game ends, or until the wait times out. Call it immediately whenever it becomes the human turn: right after game_start when the human moves first, and right after each of your own game_move calls. Returns only what changed while waiting: status (your-turn | finished | orphaned | timeout), newMoves (the moves that arrived during the wait \u2014 normally the human's move, with describe to narrate) and whose turn it is now; when the game ended, winner/summary. Read the position with game_state and the move log with game_history. status "timeout" means they have not moved yet \u2014 call game_wait again to keep waiting.`, {
       sessionId: { type: "string", description: "Session id; defaults to the most recent active session of this chat." },
       timeoutMs: { type: "integer", description: "Maximum wait in milliseconds, clamped to 1000..900000; default 300000 (5 minutes)." }
     }, gameWaitOutput, async (args, exec) => {
@@ -8041,25 +8135,65 @@ var gameListOutput = objectOutput({
   sessions: { type: "array", items: { type: "object", additionalProperties: true } }
 });
 var gameStartOutput = objectOutput({
-  session: { type: "object", additionalProperties: true },
-  view: { type: "object", additionalProperties: true }
-});
-var gameStateOutput = objectOutput({
-  session: { type: "object", additionalProperties: true },
-  view: { type: "object", additionalProperties: true }
-});
-var gameMoveOutput = objectOutput({
-  session: { type: "object", additionalProperties: true },
-  view: { type: "object", additionalProperties: true },
-  describe: { type: "string" }
-});
-var gameWaitOutput = objectOutput({
-  status: { type: "string", description: "your-turn | finished | orphaned | timeout" },
   sessionId: { type: "string" },
-  session: { type: "object", additionalProperties: true },
-  view: { type: "object", additionalProperties: true },
-  lastMove: { type: "object", additionalProperties: true, description: "Latest move record (null before the first move); on wake-up it is the human move to narrate." }
+  gameName: { type: "string" },
+  players: { type: "array", items: { type: "object", additionalProperties: true } },
+  turn: { type: "string" },
+  turnOwner: { type: "string" }
 });
+var gameStateOutput = objectOutput(
+  {
+    sessionId: { type: "string" },
+    gameName: { type: "string" },
+    turn: { type: "string" },
+    turnOwner: { type: "string" },
+    moveCount: { type: "integer" },
+    finished: { type: "boolean" },
+    winner: {},
+    summary: { type: "string" },
+    orphaned: { type: "boolean" },
+    state: {},
+    legal: { type: "array", items: { type: "object", additionalProperties: true } }
+  },
+  ["turn", "turnOwner", "winner", "summary", "orphaned"]
+);
+var gameHistoryOutput = objectOutput(
+  {
+    sessionId: { type: "string" },
+    gameName: { type: "string" },
+    moveCount: { type: "integer" },
+    from: { type: "integer", description: "0-based index of the first returned move within the full log." },
+    finished: { type: "boolean" },
+    winner: {},
+    summary: { type: "string" },
+    moves: { type: "array", items: { type: "object", additionalProperties: true } }
+  },
+  ["winner", "summary"]
+);
+var gameMoveOutput = objectOutput(
+  {
+    sessionId: { type: "string" },
+    describe: { type: "string", description: "Narration line for the move you just made." },
+    finished: { type: "boolean" },
+    turn: { type: "string" },
+    turnOwner: { type: "string" },
+    winner: {},
+    summary: { type: "string" }
+  },
+  ["turn", "turnOwner", "winner", "summary"]
+);
+var gameWaitOutput = objectOutput(
+  {
+    status: { type: "string", description: "your-turn | finished | orphaned | timeout" },
+    sessionId: { type: "string" },
+    newMoves: { type: "array", items: { type: "object", additionalProperties: true }, description: "Moves that arrived while waiting (normally the human move to narrate); empty on timeout or when it was already your turn." },
+    turn: { type: "string" },
+    turnOwner: { type: "string" },
+    winner: {},
+    summary: { type: "string" }
+  },
+  ["turn", "turnOwner", "winner", "summary"]
+);
 function memoryView(record) {
   return {
     found: true,
@@ -8138,6 +8272,7 @@ async function resolveActiveSession(service, binding) {
   return sessionId;
 }
 var GAME_WAIT_TICK_MS = 1e3;
+var GAME_WAIT_DELTA_LIMIT = 200;
 function waitForGameSignal(signal, ms) {
   return new Promise((resolve2, reject) => {
     if (signal?.aborted) {
@@ -8178,19 +8313,46 @@ function waitForGameSignal(signal, ms) {
     signal?.addEventListener("abort", onAbort);
   });
 }
+function turnBrief(session) {
+  if (session.finished || session.orphaned || session.turn === "") return {};
+  const owner = session.players.find((player) => player.role === session.turn)?.owner;
+  if (owner === void 0) return {};
+  return { turn: session.turn, turnOwner: owner };
+}
+function terminalBrief(session) {
+  return session.finished ? { winner: session.winner, summary: session.summary } : {};
+}
+function moveBrief(move) {
+  return { actor: move.actor, action: move.action, describe: move.describe };
+}
 async function waitForHumanMove(service, sessionId, timeoutMs, signal) {
   const deadline = Date.now() + timeoutMs;
-  for (; ; ) {
-    signal?.throwIfAborted();
-    const { session, view } = await service.state(sessionId);
-    const lastMove = session.moves.length > 0 ? session.moves[session.moves.length - 1] : null;
-    if (session.finished) return { status: "finished", sessionId, session, view, lastMove };
-    if (session.orphaned) return { status: "orphaned", sessionId, session, view, lastMove };
-    const turnOwner = session.players.find((player) => player.role === session.turn)?.owner;
-    if (turnOwner === "agent") return { status: "your-turn", sessionId, session, view, lastMove };
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) return { status: "timeout", sessionId, session, view, lastMove };
-    await waitForGameSignal(signal, Math.min(GAME_WAIT_TICK_MS, remaining));
+  let baseline;
+  const payload = (status, session, newMoves) => ({
+    status,
+    sessionId,
+    newMoves: newMoves.map(moveBrief),
+    ...turnBrief(session),
+    ...terminalBrief(session)
+  });
+  const releaseWait = beginGameWait(sessionId);
+  try {
+    for (; ; ) {
+      signal?.throwIfAborted();
+      const snapshot2 = await service.history(sessionId, baseline === void 0 ? { limit: 1 } : { from: baseline, limit: GAME_WAIT_DELTA_LIMIT });
+      const { session } = snapshot2;
+      const newMoves = baseline === void 0 ? [] : snapshot2.moves;
+      if (baseline === void 0) baseline = session.moveCount;
+      if (session.finished) return payload("finished", session, newMoves);
+      if (session.orphaned) return payload("orphaned", session, newMoves);
+      const turnOwner = session.players.find((player) => player.role === session.turn)?.owner;
+      if (turnOwner === "agent") return payload("your-turn", session, newMoves);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return payload("timeout", session, newMoves);
+      await waitForGameSignal(signal, Math.min(GAME_WAIT_TICK_MS, remaining));
+    }
+  } finally {
+    releaseWait();
   }
 }
 var factsProjection = createLazyProjection({
@@ -8284,12 +8446,13 @@ var gamesSummaryProjection = createLazyProjection({
     const lines = active.map((session) => {
       const turnOwner = session.players.find((player) => player.role === session.turn)?.owner;
       const whose = turnOwner === "agent" ? "\u4F60\uFF08Agent\uFF09" : "\u4EBA\u7C7B\u73A9\u5BB6";
-      return `- ${session.gameName}\uFF08sessionId ${session.id}\uFF09\uFF1A\u8F6E\u5230 ${session.turn}\uFF08${whose}\uFF09\uFF1B\u52A8\u4F5C\u8BCD\u6C47\u8868\uFF1A${session.actionVocabulary}`;
+      const agentRole = session.players.find((player) => player.owner === "agent")?.role;
+      return `- ${session.gameName}\uFF08sessionId ${session.id}\uFF09\uFF1A${agentRole === void 0 ? "" : `\u4F60\u6267 ${agentRole}\uFF0C`}\u8F6E\u5230 ${session.turn}\uFF08${whose}\uFF09\uFF1B\u52A8\u4F5C\u8BCD\u6C47\u8868\uFF1A${session.actionVocabulary}`;
     });
     const text = [
       "\u672C\u804A\u5929\u6709\u8FDB\u884C\u4E2D\u7684\u6E38\u620F\u5BF9\u5C40\uFF1A",
       ...lines,
-      "\u8F6E\u5230\u4F60\u65F6\u7528 game_move \u843D\u5B50\uFF1B\u843D\u5230\u4EBA\u7C7B\u56DE\u5408\u7ACB\u5373\u8C03\u7528 game_wait \u963B\u585E\u7B49\u5F85\u5BF9\u65B9\u5728\u68CB\u76D8\u4E0A\u843D\u5B50\uFF08\u5BF9\u65B9\u65E0\u9700\u53D1\u9001\u804A\u5929\u6D88\u606F\uFF09\uFF0C\u5DE5\u5177\u8FD4\u56DE\u540E\u81EA\u52A8\u7EE7\u7EED\uFF1Bdescribe/summary \u6587\u6848\u53EF\u76F4\u63A5\u7528\u4E8E\u5BF9\u8BDD\u4E2D\u53D9\u8FF0\u8FD9\u4E00\u624B\u3002"
+      "\u8F6E\u5230\u4F60\u65F6\u5148 game_state \u8BFB\u5C40\u9762\u3001\u518D\u7528 game_move \u843D\u5B50\uFF1B\u843D\u5230\u4EBA\u7C7B\u56DE\u5408\u7ACB\u5373\u8C03\u7528 game_wait \u963B\u585E\u7B49\u5F85\u5BF9\u65B9\u5728\u68CB\u76D8\u4E0A\u843D\u5B50\uFF08\u5BF9\u65B9\u65E0\u9700\u53D1\u9001\u804A\u5929\u6D88\u606F\uFF1Bwait \u53EA\u8FD4\u56DE\u7B49\u5F85\u671F\u589E\u91CF\u2014\u2014\u8BE5\u624B\u4E0E\u8F6E\u6B21\uFF09\uFF0C\u5DE5\u5177\u8FD4\u56DE\u540E\u81EA\u52A8\u7EE7\u7EED\uFF1Bdescribe/summary \u6587\u6848\u53EF\u76F4\u63A5\u7528\u4E8E\u5BF9\u8BDD\u53D9\u8FF0\u8FD9\u4E00\u624B\uFF0C\u5F80\u624B\u7528 game_history \u67E5\u8BE2\u3002"
     ].join("\n");
     const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER);
     settle(hostPromptSafe(text, expand));

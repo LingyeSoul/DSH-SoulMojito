@@ -127,7 +127,7 @@ export async function setup(api) {
   （踩坑实录：[decisions/2026-10-12-story-clock-engines-drift.md](../../decisions/2026-10-12-story-clock-engines-drift.md)）。
 
 ```jsonc
-"engines": { "dsh-tavern": "^0.6.2" }   // 宿主 0.6.x 且 ≥0.6.2
+"engines": { "dsh-tavern": "^0.6.3" }   // 宿主 0.6.x 且 ≥0.6.3
 ```
 
 ---
@@ -692,9 +692,10 @@ buttons}`。
 
 注册一个**标准游戏**进入游戏桥（[提案 0018](../proposals/0018-agent-game-bridge.md)）——游戏
 出现在面板「游戏」分区（可开局可对弈），Agent 经 `game_list` / `game_start` / `game_state` /
-`game_move` 四个内置工具与你的人类玩家对局。这是游戏三条来源（内置 / 导入包 / **Mod**）中
-Mod 专属的一条：引擎以**进程内对象**注册（不需要 `engine.mjs` 文件），视图是**内联 HTML
-字符串**（维持 Mod 无静态文件服务的纪律）。
+`game_history` / `game_move` / `game_wait` 六个内置工具与你的人类玩家对局（2026-10-14 增量
+修订：wait/move 只回增量，局面与日志分别经 `game_state` / `game_history` 读取）。这是游戏
+三条来源（内置 / 导入包 / **Mod**）中 Mod 专属的一条：引擎以**进程内对象**注册（不需要
+`engine.mjs` 文件），视图是**内联 HTML 字符串**（维持 Mod 无静态文件服务的纪律）。
 
 ```js
 // mod.json 先声明：  "games": ["<你的modId>.gesture"]

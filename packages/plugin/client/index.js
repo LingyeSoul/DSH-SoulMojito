@@ -761,11 +761,49 @@ window.__ModuleLoader__.load({
       // load 前的投递会丢，不能只靠 mount 即发）。
       const payloadRef = useRef(null)
       const [token] = useState(() => `dsh-tavern-game-${session.id}-${Math.random().toString(36).slice(2)}`)
+      // 投降（2026-10-14 用户需求）：两步点击确认（4s 窗口自动复位）防误触；
+      // 「禁用投降」设置开启时不渲染（服务端另有权威门——按钮只是入口，见
+      // 面板「游戏」分区开关）。投降是会话级终止，人类任意时刻可投（含 AI 回合）。
+      const [resignArmed, setResignArmed] = useState(false)
+      useEffect(() => {
+        if (!resignArmed) return undefined
+        const timer = setTimeout(() => setResignArmed(false), 4000)
+        return () => clearTimeout(timer)
+      }, [resignArmed])
+      const store = useTavernStore()
+      const resignAvailable = session.finished !== true && session.orphaned !== true
+        && store.bootstrap.state.gamesDisableResign !== true
       const push = useCallback(() => {
         const payload = payloadRef.current
         if (payload === null) return
         try { frameRef.current?.contentWindow?.postMessage({ type: GAME_STATE_MESSAGE, token, session: payload.session, view: payload.view }, '*') } catch {}
       }, [token])
+      // 人类动作上行（棋盘 iframe 与投降按钮共用一条路径；合法性由 Node 侧引擎
+      // 终审）。ref 持有最新闭包：message 效应按 [session.id, token] 订阅，直接
+      // 内联会因闭包陈旧拿到旧的 onOutcome/会话态——与 loadListRef 同款纪律。
+      const postAction = (action) => {
+        void fetch(`${API}/games/action/${encodeURIComponent(session.id)}`, {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ action }),
+        })
+          .then(async (response) => {
+            const body = await response.json().catch(() => ({}))
+            if (!response.ok || body.ok === false) {
+              setNotice(response.status === 409 ? t('games.turnAiNow') : String(body.message || `HTTP ${response.status}`))
+              return
+            }
+            setNotice('')
+            onOutcome(session.id, body.session, body.view)
+            // 即时下行（不等父级重渲染链路）——人类落子的最快反馈路径；轮询
+            // 只兜 Agent 侧落子（§4.3）。
+            payloadRef.current = { session: body.session, view: body.view }
+            push()
+          })
+          .catch((cause) => { setNotice(cause instanceof Error ? cause.message : String(cause)) })
+      }
+      const postActionRef = useRef(postAction)
+      useEffect(() => { postActionRef.current = postAction })
       useEffect(() => {
         payloadRef.current = view === undefined ? null : { session, view }
         push()
@@ -790,25 +828,7 @@ window.__ModuleLoader__.load({
           if (data.type !== GAME_ACTION_MESSAGE) return
           const action = data.action
           if (action === null || typeof action !== 'object' || Array.isArray(action)) return
-          void fetch(`${API}/games/action/${encodeURIComponent(session.id)}`, {
-            method: 'POST',
-            headers: jsonHeaders(),
-            body: JSON.stringify({ action }),
-          })
-            .then(async (response) => {
-              const body = await response.json().catch(() => ({}))
-              if (!response.ok || body.ok === false) {
-                setNotice(response.status === 409 ? t('games.turnAiNow') : String(body.message || `HTTP ${response.status}`))
-                return
-              }
-              setNotice('')
-              onOutcome(session.id, body.session, body.view)
-              // 即时下行（不等父级重渲染链路）——人类落子的最快反馈路径；轮询
-              // 只兜 Agent 侧落子（§4.3）。
-              payloadRef.current = { session: body.session, view: body.view }
-              push()
-            })
-            .catch((cause) => { setNotice(cause instanceof Error ? cause.message : String(cause)) })
+          postActionRef.current(action)
         }
         addEventListener('message', onMessage)
         return () => removeEventListener('message', onMessage)
@@ -824,7 +844,23 @@ window.__ModuleLoader__.load({
           src: `${API}/games/${encodeURIComponent(session.gameId)}/view/${encodeURIComponent(session.id)}?token=${encodeURIComponent(token)}`,
           onLoad: onFrameLoad,
           style: { height },
-        }))
+        }),
+        resignAvailable
+          ? h('div', { className: 'dt-game-actions' },
+              h(Button, {
+                size: 'sm',
+                variant: 'outline',
+                className: resignArmed ? 'dt-game-resign dt-game-resign-armed' : 'dt-game-resign',
+                onClick: () => {
+                  if (!resignArmed) {
+                    setResignArmed(true)
+                    return
+                  }
+                  setResignArmed(false)
+                  postActionRef.current({ type: 'resign' })
+                },
+              }, resignArmed ? t('games.resignConfirm') : t('games.resign')))
+          : null)
     }
 
     // 本聊天对局数据面（提案 0018 §4.3；2026-10-14 修订抽出共用）：GamesPanel
@@ -840,6 +876,9 @@ window.__ModuleLoader__.load({
       // 未终局会话的最新 {session, view}：list 只带 summary，view 由 games/
       // state/:id 或 start/action 响应补齐——GameSurface 的下行载荷来源。
       const [sessionStates, setSessionStates] = useState({})
+      // 「见证过」判据的实时镜像（loadList 是长生命周期回调，直接闭包读
+      // sessionStates 会锁死在旧渲染——与 loadListRef 同款 ref 纪律）。
+      const sessionStatesRef = useRef({})
       const mergeSession = useCallback((session, view) => {
         if (!session || typeof session.id !== 'string') return
         setSessionStates((current) => ({ ...current, [session.id]: { session, view } }))
@@ -864,11 +903,15 @@ window.__ModuleLoader__.load({
             setGames(Array.isArray(result.games) ? result.games : [])
             setSessions(list)
             setListError('')
-            // 未终局且非孤儿的会话补拉快照（list 响应不含 view；终局卡只需要
-            // summary/winner，孤儿卡只读不渲染 iframe）。快照的 session 一并
-            // 合入——list 项的 turn/finished 随之保鲜。
+            // 未终局且非孤儿的会话补拉快照（list 响应不含 view；孤儿卡只读不
+            // 渲染 iframe）。快照的 session 一并合入——list 项的 turn/finished
+            // 随之保鲜。2026-10-14 用户反馈修订：**本次挂载见证过的**已终局会话
+            // 同样补拉——终局要显示最终盘面（最后一手若由对方走出，旧逻辑的
+            // 过滤会把它停在倒数第二手）；见证集 = 已有 sessionStates 条目的 id，
+            // 挂载时已终局的旧对局不拉（「不翻旧账」纪律不变）。
+            const witnessed = sessionStatesRef.current
             await Promise.all(list
-              .filter((session) => !session.finished && !session.orphaned)
+              .filter((session) => !session.orphaned && (!session.finished || witnessed[session.id] !== undefined))
               .map((session) => api(`games/state/${encodeURIComponent(session.id)}`)
                 .then((snapshot) => {
                   setSessions((current) => current.map((item) => item.id === snapshot.session.id ? snapshot.session : item))
@@ -896,6 +939,7 @@ window.__ModuleLoader__.load({
       // GamesPanel，早期版本把挂载加载留在面板组件里，导致 TavernGameBoard
       // 从未拉取、恒渲染 null。
       useEffect(() => { void loadList() }, [loadList])
+      useEffect(() => { sessionStatesRef.current = sessionStates })
       // games/revision 两档水位轮询（§4.3，2026-10-14 修订）：存在未终局会话时
       // 1s（对局进行中，AI 落子 ≤1s 可见）；无活跃会话时 5s 低频守望（等
       // 「Agent 在对话里开局」出现——tab 已开时 openTab 是 no-op 不触发重挂载，
@@ -1001,6 +1045,7 @@ window.__ModuleLoader__.load({
             h(GameSurface, { key: session.id, session, view: live?.view, onOutcome: handleOutcome }))
         }),
         finished.map((session) => {
+          const live = sessionStates[session.id]
           const winner = Array.isArray(session.players)
             ? session.players.find((item) => item && item.role === session.winner)
             : null
@@ -1008,6 +1053,9 @@ window.__ModuleLoader__.load({
             h('div', { className: 'dt-mod-row-head' },
               h('strong', null, session.gameName || session.gameId),
               h(Pill, null, t('games.finished'))),
+            // 2026-10-14 用户反馈（「结束很突兀」）：终局不能只剩一行结果文案——
+            // 保留最终盘面（视图自带终局覆盖层，点击已禁用），结果行在盘面之下。
+            h(GameSurface, { key: session.id, session: live?.session || session, view: live?.view, onOutcome: handleOutcome }),
             h('p', { className: 'dt-hint' }, session.summary || ''),
             session.winner ? h('p', { className: 'dt-hint' }, t('games.winner', {
               role: session.winner,
@@ -1053,6 +1101,19 @@ window.__ModuleLoader__.load({
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('panel.section.games')),
           h('p', { className: 'dt-hint' }, t('games.hint')),
+          // 禁用投降（2026-10-14 用户需求）：全局开关，服务端在两个动作入口
+          // （人类棋盘 / Agent game_move）逐次读取判定——翻转即时生效。
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: state.bootstrap.state.gamesDisableResign === true,
+              onChange: (event) => {
+                // 失败进既有错误行（与开局错误同一位），不静默吞掉。
+                void patchState({ gamesDisableResign: event.target.checked })
+                  .catch((cause) => { setStartError(cause instanceof Error ? cause.message : String(cause)) })
+              },
+            }),
+            h('span', null, t('settings.gamesDisableResign'))),
           !hasBinding ? h('p', { className: 'dt-muted' }, t('games.needBinding')) : null,
           games === null
             ? h('p', { className: 'dt-muted' }, t('nav.loading'))
@@ -1095,6 +1156,8 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'dt-mod-row-head' },
                   h('strong', null, session.gameName || session.gameId),
                   h(Pill, null, t('games.finished'))),
+                // 终局保留最终盘面（2026-10-14 用户反馈，TavernGameBoard 同款）。
+                h(GameSurface, { key: session.id, session: live?.session || session, view: live?.view, onOutcome: handleOutcome }),
                 h('p', { className: 'dt-hint' }, session.summary || ''),
                 session.winner ? h('p', { className: 'dt-hint' }, t('games.winner', {
                   role: session.winner,
@@ -1144,6 +1207,7 @@ window.__ModuleLoader__.load({
       'settings.contextManagedUnavailable': 'Agent memory is unavailable: {reason}',
       'settings.preloadAssets': 'Preload character and constant World Info when a new AgentTavern session starts',
       'settings.allowGlobalWrites': 'Allow AgentTavern tools to write memories and variables in the global scope',
+      'settings.gamesDisableResign': 'Disable resign in games (hides the resign button; the AI cannot resign either)',
       'settings.worldFollowsCharacter': 'World books follow character card activation',
       'settings.worldsEmpty': 'No world books imported',
       'settings.import': 'Import',
@@ -1701,6 +1765,8 @@ window.__ModuleLoader__.load({
       'games.ownerAgent': 'AI',
       'games.orphaned': 'Orphaned',
       'games.orphanedHint': 'This game is no longer in the registry (uninstalled or broken); the session is read-only.',
+      'games.resign': 'Resign',
+      'games.resignConfirm': 'Confirm resign?',
       // AgentNovel surface (proposal 0005). zh/en keys must stay mirrored with
       // identical {param} placeholders; the client-vm-mount gate enforces it.
       'panel.section.novels': 'Novels',
@@ -1864,6 +1930,7 @@ window.__ModuleLoader__.load({
       'settings.contextManagedUnavailable': 'Agent 记忆不可用：{reason}',
       'settings.preloadAssets': '新 AgentTavern 会话开始时预载角色信息和常驻世界书条目',
       'settings.allowGlobalWrites': '允许 AgentTavern 工具写入 global 作用域的记忆和变量',
+      'settings.gamesDisableResign': '禁用投降（隐藏投降按钮，AI 也不能认输）',
       'settings.worldFollowsCharacter': '世界书跟随角色卡激活',
       'settings.worldsEmpty': '尚未导入世界书',
       'settings.import': '导入',
@@ -2415,6 +2482,8 @@ window.__ModuleLoader__.load({
       'games.ownerAgent': 'AI',
       'games.orphaned': '孤儿',
       'games.orphanedHint': '该游戏已不在注册表（卸载或损坏），对局只读不可落子。',
+      'games.resign': '投降',
+      'games.resignConfirm': '确认投降？',
       'panel.section.novels': '小说',
       'view.architectureNovel': 'AgentNovel',
       'novel.empty': '还没有小说，创建一部开始全自动创作。',
@@ -10414,6 +10483,8 @@ window.__ModuleLoader__.load({
         .dt-mod-install>input[type=text]{flex:1;min-width:220px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:6px 9px;font:inherit;font-size:12px}
         .dt-mod-surface{border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
         .dt-game-row-broken{opacity:.55}
+        .dt-game-actions{display:flex;justify-content:flex-end;margin-top:6px}
+        .dt-game-resign-armed{color:var(--dsw-alias-state-error-primary);border-color:currentColor}
         .dt-game-board-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:26px 16px;text-align:center;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}
         .dt-game-board-empty>strong{font-size:13px}
         .dt-game-board-empty>p{margin:0;max-width:300px}

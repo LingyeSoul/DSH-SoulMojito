@@ -11,7 +11,9 @@
  * POST games/action/:id 要求当前回合 owner==='human' 否则 409；工具 game_move
  * 要求 owner==='agent' 否则结构化报错（含轮到谁/owner）。v1 会话恒为
  * 「一人类一 Agent」（提案 §6 开放问题 ① 的裁剪）：players.max !== 2 的游戏
- * start 时拒绝并说明。
+ * start 时拒绝并说明。**resign 例外（2026-10-14 用户需求「用户投降按钮」）**：
+ * 认输是会话级终止而非行棋动作——人类可在任意时刻投降（含 AI 回合），actor
+ * 重锚为人类的角色；Agent 的 resign 仍受回合纪律约束。
  *
  * resign 保留动作由运行时处理（引擎不实现，提案 §3.2）：action {type:'resign'}
  * → finished、winner=对方、summary「<角色> 认输」。
@@ -77,7 +79,14 @@ export interface GameViewPayload {
   summary: string
 }
 
-/** 会话快照（list/state/action 响应里的 session 字段）。 */
+/**
+ * 会话快照（list/state/action 响应里的 session 字段；2026-10-14 增量修订）。
+ *
+ * 刻意**不含动作日志**：完整日志只住在会话文件（GameSession.moves，可审计
+ * 重放的事实来源），读取走 history() 的窗口面（game_history 工具 / game_wait
+ * 增量）。旧形态把 moves 挂在每个快照上，于是 game_wait/game_move 每手都回吐
+ * 全量日志（随对局线性膨胀）；摘要只留 moveCount 作总量锚点。
+ */
 export interface GameSessionSummary {
   id: string
   gameId: string
@@ -93,7 +102,20 @@ export interface GameSessionSummary {
   chat: { character: string; chatId: string }
   createdAt: string
   updatedAt: string
-  /** 动作日志（提案开工前八项表：完整保留，可审计重放）。 */
+  /** 动作日志总条数（日志本体经 history() 读取）。 */
+  moveCount: number
+}
+
+/** game_history 窗口缺省条数（最近 N 手）。 */
+export const GAME_HISTORY_DEFAULT_LIMIT = 20
+/** 单次窗口条数上限（有界纪律：日志完整落盘，读取永远有界）。 */
+export const GAME_HISTORY_MAX_LIMIT = 200
+
+/** 动作日志窗口（history() 的返回面）。 */
+export interface GameHistoryWindow {
+  session: GameSessionSummary
+  /** 窗口首条在完整日志里的 0 基下标（>0 即前方还有历史）。 */
+  from: number
   moves: GameMoveRecord[]
 }
 
@@ -122,6 +144,12 @@ export interface GameSessionStoreOptions {
 }
 
 const OWNER_LABEL: Record<GameOwner, string> = { human: '人类玩家', agent: 'Agent' }
+
+/** 窗口条数钳制：非整数回落缺省（20），否则夹进 [1, 200]。 */
+function clampWindowLimit(value: number | undefined): number {
+  if (!Number.isInteger(value)) return GAME_HISTORY_DEFAULT_LIMIT
+  return Math.max(1, Math.min(GAME_HISTORY_MAX_LIMIT, value as number))
+}
 
 export class GameSessionStore {
   private tail: Promise<unknown> = Promise.resolve()
@@ -164,6 +192,26 @@ export class GameSessionStore {
   async get(sessionId: string): Promise<{ session: GameSessionSummary; view: GameViewPayload }> {
     const session = await this.load(sessionId)
     return { session: this.summarize(session), view: this.viewOf(session) }
+  }
+
+  /**
+   * 动作日志窗口（2026-10-14 增量修订）：完整日志只在会话文件里，读取永远
+   * 有界——`limit` 夹进 [1, GAME_HISTORY_MAX_LIMIT]（缺省最近 20 手）；`from`
+   * 是窗口首条的 0 基下标，夹进 [0, moveCount]（缺省 = 最近 limit 手的起点）。
+   * game_history 工具与 game_wait 的增量判定（from=基线）共用这一读法。
+   */
+  async history(sessionId: string, params: { from?: number; limit?: number } = {}): Promise<GameHistoryWindow> {
+    const session = await this.load(sessionId)
+    const moveCount = session.moves.length
+    const limit = clampWindowLimit(params.limit)
+    const from = params.from === undefined
+      ? Math.max(0, moveCount - limit)
+      : Math.max(0, Math.min(moveCount, params.from))
+    return {
+      session: this.summarize(session),
+      from,
+      moves: session.moves.slice(from, from + limit).map((move) => ({ ...move, action: { ...move.action } })),
+    }
   }
 
   /** 本聊天最近活跃（未终局）会话 id；无则 undefined（game_state/game_move 缺省寻址）。 */
@@ -263,21 +311,9 @@ export class GameSessionStore {
     if (session.finished) {
       throw new GameBridgeError('turn', `对局已结束（${session.summary}），不能再落子`)
     }
-    const actor = currentRoleOf(session.state, roles)
-    const player = session.players.find((candidate) => candidate.role === actor)
-    if (player === undefined) {
-      throw new GameBridgeError('unavailable', `会话角色表 [${session.players.map((p) => p.role).join(', ')}] 与 state.turn「${actor}」不一致`)
-    }
-    if (player.owner !== owner) {
-      throw new GameBridgeError(
-        'turn',
-        owner === 'agent'
-          ? `现在轮到 ${actor}（${OWNER_LABEL[player.owner]}），不是 Agent 的回合`
-          : `现在轮到 ${actor}（${OWNER_LABEL[player.owner]}），请等待 AI 落子`,
-      )
-    }
-
-    // 动作形状（§3.4）：JSON 对象、type 字符串、≤4KB。
+    // 动作形状（§3.4）：JSON 对象、type 字符串、≤4KB。形状校验先于回合判定
+    // （2026-10-14：投降例外要先知道 action.type；且对畸形动作报 invalid 比
+    // 报 turn 更准确）。
     if (action === null || typeof action !== 'object' || Array.isArray(action)) {
       throw new GameBridgeError('invalid', '动作必须是 JSON 对象')
     }
@@ -286,6 +322,32 @@ export class GameSessionStore {
     }
     if (jsonSizeOf(action) > GAME_ACTION_MAX_BYTES) {
       throw new GameBridgeError('invalid', `动作序列化超过 ${GAME_ACTION_MAX_BYTES} 字节上限`)
+    }
+
+    let actor = currentRoleOf(session.state, roles)
+    const player = session.players.find((candidate) => candidate.role === actor)
+    if (player === undefined) {
+      throw new GameBridgeError('unavailable', `会话角色表 [${session.players.map((p) => p.role).join(', ')}] 与 state.turn「${actor}」不一致`)
+    }
+    if (player.owner !== owner) {
+      // resign 例外（2026-10-14 用户需求「用户投降按钮」）：认输是会话级终止、
+      // 不是行棋动作——人类可在任意时刻投降（含 AI 回合，棋盘上的投降按钮随时
+      // 可用）；actor 重锚为人类的角色，describe/winner 随之一致。Agent 的
+      // resign 仍受回合纪律约束（它只在自己回合动作）。
+      const humanResign = action.type === 'resign' && owner === 'human'
+      if (!humanResign) {
+        throw new GameBridgeError(
+          'turn',
+          owner === 'agent'
+            ? `现在轮到 ${actor}（${OWNER_LABEL[player.owner]}），不是 Agent 的回合`
+            : `现在轮到 ${actor}（${OWNER_LABEL[player.owner]}），请等待 AI 落子`,
+        )
+      }
+      const human = session.players.find((candidate) => candidate.owner === 'human')
+      if (human === undefined) {
+        throw new GameBridgeError('unavailable', '会话没有人类玩家，无法认输')
+      }
+      actor = human.role
     }
 
     let describe: string
@@ -401,7 +463,7 @@ export class GameSessionStore {
       chat: { ...session.chat },
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
-      moves: session.moves.map((move) => ({ ...move, action: { ...move.action } })),
+      moveCount: session.moves.length,
     }
   }
 
