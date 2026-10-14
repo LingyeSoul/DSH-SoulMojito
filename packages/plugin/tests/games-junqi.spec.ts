@@ -249,6 +249,18 @@ describe('非法动作全家族（中文抛错）', () => {
     expect(() => junqiEngine.applyAction(fresh, { type: 'move', from: { x: 0.5, y: 6 }, to: { x: 0, y: 5 } }, 'red')).toThrow(Error)
     expect(() => junqiEngine.applyAction(fresh, mv([1, 7], [1, 7]), 'red')).toThrow(/相同/)
     expect(() => junqiEngine.applyAction(fresh, mv([1, 7], [1, 8]), 'red')).toThrow(/没有棋子/)
+    // 非整数文本仍拒（0.5 数字形态在上一条；此处钉字符串形态的同一闸门）。
+    expect(() => junqiEngine.applyAction(fresh, { type: 'move', from: { x: '0.5', y: 6 }, to: { x: 0, y: 5 } }, 'red')).toThrow(/坐标必须是整数/)
+  })
+
+  it('坐标容错（2026-10-14 实弹，决策 quoted-coordinate-tolerance）：整数的字符串形态归一执行', () => {
+    const fresh = junqiEngine.createGame().state as JunqiState
+    // 实弹形状：模型桥把工具参数数字写成引号串；归一是同点同义，不改动作语义。
+    const stringCoord = junqiEngine.applyAction(fresh, { type: 'move', from: { x: '2', y: '7.0' }, to: { x: '2', y: '8' } }, 'red')
+    expect(stringCoord.summary).toContain('营长')
+    // describe 与 applyAction 同一套解析：历史叙述不缺坐标叙述。
+    expect(junqiEngine.describe(fresh, 'red', { type: 'move', from: { x: '2', y: '7' }, to: { x: '2', y: '8' } }))
+      .toBe('红方 营长 (2,7)→(2,8)')
   })
 
   it('冻结面：地雷/军旗永不可动、大本营棋子（初始就位）不能再动', () => {

@@ -18986,6 +18986,211 @@ render()
 `;
 var blackjack = { manifest, engine, viewHtml };
 
+// packages/plugin/src/games/standard.ts
+var GAME_STATE_MAX_BYTES = 65536;
+var GAME_ACTION_MAX_BYTES = 4096;
+var GAME_LEGAL_ACTIONS_MAX = 64;
+var GAME_SESSION_ID_PATTERN = /^g-[0-9a-f]{8}$/;
+function checkGameManifest(raw, options = {}) {
+  const errors = [];
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, errors: ["game.json must be a JSON object"] };
+  }
+  const value = raw;
+  if (typeof value.id !== "string" || value.id === "") errors.push("id must be a non-empty string");
+  else if (!MOD_ID_PATTERN.test(value.id)) errors.push("id must be [a-z0-9-] labels or reverse-domain joined by '.'");
+  else if (options.directory !== void 0 && value.id !== options.directory) {
+    errors.push(`id '${value.id}' must equal the directory name '${options.directory}'`);
+  }
+  if (typeof value.name !== "string" || value.name.trim() === "") errors.push("name must be a non-empty string");
+  if (typeof value.version !== "string" || value.version.trim() === "") errors.push("version must be a non-empty string");
+  if (value.engines !== void 0) {
+    if (value.engines === null || typeof value.engines !== "object" || Array.isArray(value.engines)) {
+      errors.push("engines must be an object");
+    } else if (value.engines["dsh-tavern"] !== void 0 && typeof value.engines["dsh-tavern"] !== "string") {
+      errors.push("engines.dsh-tavern must be a version range string");
+    }
+  }
+  const players = value.players;
+  if (players === null || typeof players !== "object" || Array.isArray(players)) {
+    errors.push("players must be an object { min, max, roles }");
+  } else {
+    const spec = players;
+    const min = spec.min;
+    const max2 = spec.max;
+    if (!Number.isInteger(min) || !Number.isInteger(max2) || min < 1 || max2 < min) {
+      errors.push("players.min/max must be integers with 1 <= min <= max");
+    }
+    if (!Array.isArray(spec.roles) || spec.roles.length === 0 || !spec.roles.every((role) => typeof role === "string" && role !== "")) {
+      errors.push("players.roles must be a non-empty array of non-empty strings");
+    } else if (Number.isInteger(max2) && spec.roles.length !== max2) {
+      errors.push(`players.roles length (${spec.roles.length}) must equal players.max (${String(max2)})`);
+    }
+    if (Array.isArray(spec.roles) && new Set(spec.roles.map(String)).size !== spec.roles.length) {
+      errors.push("players.roles must not contain duplicates");
+    }
+  }
+  if (value.turnBased !== true) errors.push("turnBased must be true (real-time games are out of scope for bridge v1)");
+  if (typeof value.actionVocabulary !== "string" || value.actionVocabulary.trim() === "") {
+    errors.push("actionVocabulary must be a non-empty string");
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  return {
+    ok: true,
+    errors,
+    manifest: {
+      id: value.id,
+      name: value.name,
+      version: value.version,
+      ...value.engines === void 0 ? {} : { engines: value.engines },
+      players: { min: players.min, max: players.max, roles: [...players.roles] },
+      turnBased: true,
+      actionVocabulary: value.actionVocabulary
+    }
+  };
+}
+function checkGameEngine(candidate) {
+  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return { ok: false, errors: ["engine.mjs must default-export an object"] };
+  }
+  const value = candidate;
+  const metaCheck = checkGameManifest(value.meta);
+  const errors = [];
+  if (!metaCheck.ok) errors.push(`engine.meta invalid: ${metaCheck.errors.join("; ")}`);
+  for (const member of ["createGame", "legalActions", "applyAction", "describe"]) {
+    if (typeof value[member] !== "function") errors.push(`engine.${member} must be a function`);
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, engine: candidate };
+}
+function isJsonSafe(value) {
+  try {
+    const text = JSON.stringify(value);
+    if (typeof text !== "string") return false;
+    return deepEqual(JSON.parse(text), value);
+  } catch {
+    return false;
+  }
+}
+function deepEqual(left, right) {
+  if (Object.is(left, right)) return true;
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    if (left.length !== right.length) return false;
+    return left.every((item, index) => deepEqual(item, right[index]));
+  }
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  if (leftKeys.length !== rightKeys.length || leftKeys.some((key, index) => key !== rightKeys[index])) return false;
+  return leftKeys.every((key) => deepEqual(left[key], right[key]));
+}
+function jsonSizeOf(value) {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), "utf8");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+function currentRoleOf(state, roles) {
+  if (state === null || typeof state !== "object" || Array.isArray(state)) {
+    throw new Error("\u5F15\u64CE state \u5FC5\u987B\u662F JSON \u5BF9\u8C61\uFF08\u5F53\u524D\u56DE\u5408\u5B57\u6BB5 turn \u65E0\u6CD5\u8BFB\u53D6\uFF09");
+  }
+  const turn = state.turn;
+  if (typeof turn !== "string" || turn === "") {
+    throw new Error("\u5F15\u64CE state \u7F3A\u5C11\u5B57\u7B26\u4E32\u5B57\u6BB5 turn\uFF08\u5F53\u524D\u56DE\u5408\u89D2\u8272\uFF09\uFF0C\u65E0\u6CD5\u63A8\u5BFC\u884C\u68CB\u65B9");
+  }
+  if (roles !== void 0 && !roles.includes(turn)) {
+    throw new Error(`state.turn\u300C${turn}\u300D\u4E0D\u5728\u89D2\u8272\u8868 [${roles.join(", ")}] \u5185`);
+  }
+  return turn;
+}
+function parseBoardCoord(value) {
+  if (typeof value === "number") return Number.isInteger(value) ? value : null;
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!/^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(text)) return null;
+  const parsed = Number(text);
+  return Number.isInteger(parsed) ? parsed : null;
+}
+function smokeTestGameEngine(engine6) {
+  const reasons = [];
+  const roles = engine6.meta.players.roles;
+  let created;
+  try {
+    created = engine6.createGame({ seed: 1 });
+  } catch (cause) {
+    return { ok: false, reasons: [`createGame \u629B\u9519: ${errorMessage2(cause)}`] };
+  }
+  if (created === null || typeof created !== "object" || !("state" in created)) {
+    return { ok: false, reasons: ["createGame \u5FC5\u987B\u8FD4\u56DE { state } \u5F62\u6001"] };
+  }
+  const state = created.state;
+  if (!isJsonSafe(state)) reasons.push("\u521D\u59CB state \u4E0D\u662F deep-JSON-safe");
+  if (jsonSizeOf(state) > GAME_STATE_MAX_BYTES) reasons.push(`\u521D\u59CB state \u5E8F\u5217\u5316\u8D85\u8FC7 ${GAME_STATE_MAX_BYTES} \u5B57\u8282\u4E0A\u9650`);
+  let turn;
+  try {
+    turn = currentRoleOf(state, roles);
+  } catch (cause) {
+    reasons.push(errorMessage2(cause));
+    return { ok: false, reasons };
+  }
+  let suggestions;
+  try {
+    suggestions = engine6.legalActions(state);
+  } catch (cause) {
+    reasons.push(`legalActions \u629B\u9519: ${errorMessage2(cause)}`);
+    return { ok: false, reasons };
+  }
+  if (!Array.isArray(suggestions)) return { ok: false, reasons: ["legalActions \u5FC5\u987B\u8FD4\u56DE\u6570\u7EC4"] };
+  if (suggestions.length > GAME_LEGAL_ACTIONS_MAX) {
+    reasons.push(`legalActions \u5EFA\u8BAE\u96C6\u8D85\u8FC7 ${GAME_LEGAL_ACTIONS_MAX} \u4E0A\u9650\uFF08\u6536\u5230 ${suggestions.length}\uFF09`);
+  }
+  for (const action of suggestions) {
+    if (action === null || typeof action !== "object" || Array.isArray(action) || typeof action.type !== "string" || action.type === "") {
+      reasons.push("legalActions \u4E2D\u5B58\u5728\u7F3A\u5C11 type \u5B57\u7B26\u4E32\u5B57\u6BB5\u7684\u5EFA\u8BAE\u52A8\u4F5C\uFF08\xA73.4\uFF1A\u52A8\u4F5C\u5FC5\u987B\u6709 type\uFF09");
+      break;
+    }
+  }
+  if (suggestions.length === 0) {
+    reasons.push("\u521D\u59CB\u5C40\u9762\u7684\u5EFA\u8BAE\u96C6\u4E3A\u7A7A\uFF0C\u65E0\u6CD5\u8FDB\u884C\u786E\u5B9A\u6027\u70DF\u6D4B\uFF08\u4E5F\u610F\u5473\u7740\u6E38\u620F\u65E0\u6CD5\u5F00\u59CB\uFF09");
+    return { ok: false, reasons };
+  }
+  const first = suggestions[0];
+  const snapshot2 = structuredClone(state);
+  let firstResult;
+  let secondResult;
+  try {
+    firstResult = engine6.applyAction(state, first, turn);
+    secondResult = engine6.applyAction(state, first, turn);
+  } catch (cause) {
+    reasons.push(`applyAction \u5BF9\u5EFA\u8BAE\u96C6\u9996\u4E2A\u52A8\u4F5C\u629B\u9519: ${errorMessage2(cause)}`);
+    return { ok: false, reasons };
+  }
+  if (!deepEqual(firstResult, secondResult)) reasons.push("applyAction \u540C\u8F93\u5165\u4E24\u6B21\u8C03\u7528\u7ED3\u679C\u4E0D\u4E00\u81F4\uFF08\u786E\u5B9A\u6027\u786C\u7EA6\u675F\u4E0D\u8FC7\uFF09");
+  if (!deepEqual(state, snapshot2)) reasons.push("applyAction \u4FEE\u6539\u4E86\u5165\u53C2 state\uFF08\u5FC5\u987B\u6DF1\u62F7\u8D1D\u51FA\u65B0\u6001\uFF09");
+  const shape = firstResult;
+  if (shape.state === void 0 || !Array.isArray(shape.events) || typeof shape.finished !== "boolean") {
+    reasons.push("applyAction \u5FC5\u987B\u8FD4\u56DE { state, events, finished, winner, summary }");
+  } else {
+    if (!isJsonSafe(shape.state)) reasons.push("applyAction \u4EA7\u51FA\u7684\u65B0 state \u4E0D\u662F deep-JSON-safe");
+    if (jsonSizeOf(shape.state) > GAME_STATE_MAX_BYTES) reasons.push(`applyAction \u4EA7\u51FA\u7684 state \u8D85\u8FC7 ${GAME_STATE_MAX_BYTES} \u5B57\u8282\u4E0A\u9650`);
+    if (shape.winner !== null && typeof shape.winner !== "string") reasons.push("applyAction \u7684 winner \u5FC5\u987B\u662F\u89D2\u8272\u5B57\u7B26\u4E32\u6216 null");
+    if (typeof shape.summary !== "string") reasons.push("applyAction \u7684 summary \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
+  }
+  for (const probe of [{ type: "resign" }, { type: "__dsh_tavern_smoke_unknown__" }]) {
+    try {
+      engine6.applyAction(state, probe, turn);
+      reasons.push(`applyAction \u5BF9\u975E\u6CD5\u52A8\u4F5C {type:'${probe.type}'} \u672A\u629B\u9519\uFF08\u5FC5\u987B\u62D2\u7EDD\u800C\u975E\u9759\u9ED8\uFF09`);
+    } catch {
+    }
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+function errorMessage2(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 // packages/plugin/src/games/builtin/gomoku.ts
 var SIZE = 15;
 var EMPTY = 0;
@@ -19135,11 +19340,11 @@ var engine2 = {
     if (actor !== state.turn) {
       throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName2(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u843D\u5B50`);
     }
-    if (!isOnBoard(typed.x, typed.y)) {
+    const x = parseBoardCoord(typed.x);
+    const y = parseBoardCoord(typed.y);
+    if (x === null || y === null || !isOnBoard(x, y)) {
       throw new Error(`\u843D\u5B50\u5750\u6807\u5FC5\u987B\u662F 0-${SIZE - 1} \u7684\u6574\u6570\uFF0C\u6536\u5230 x=${String(typed.x)}\u3001y=${String(typed.y)}`);
     }
-    const x = typed.x;
-    const y = typed.y;
     if (state.board[y][x] !== EMPTY) {
       throw new Error(`${coordName(x, y)} \u5DF2\u6709\u68CB\u5B50\uFF0C\u4E0D\u80FD\u843D\u5728\u5DF2\u5360\u70B9\u4E0A`);
     }
@@ -19170,10 +19375,12 @@ var engine2 = {
   },
   /** 人类可读的一手棋描述（Agent 在对话里角色化叙述用），含棋谱坐标（列 A-O + 行 1-15）。 */
   describe(_state, actor, action) {
-    if (action !== null && typeof action === "object" && !Array.isArray(action) && action.type === "place" && isOnBoard(action.x, action.y)) {
-      const x = action.x;
-      const y = action.y;
-      return `${stoneName(actor === "white" ? "white" : "black")}\u843D\u4E8E ${coordName(x, y)}`;
+    if (action !== null && typeof action === "object" && !Array.isArray(action) && action.type === "place") {
+      const x = parseBoardCoord(action.x);
+      const y = parseBoardCoord(action.y);
+      if (x !== null && y !== null && isOnBoard(x, y)) {
+        return `${stoneName(actor === "white" ? "white" : "black")}\u843D\u4E8E ${coordName(x, y)}`;
+      }
     }
     return `${stoneName(actor === "white" ? "white" : "black")}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
@@ -19825,10 +20032,12 @@ function readPoint(raw, label) {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error(`${label} \u5FC5\u987B\u662F {x, y} \u5750\u6807\u5BF9\u8C61`);
   }
-  const x = raw.x;
-  const y = raw.y;
-  if (!Number.isInteger(x) || !Number.isInteger(y)) {
-    throw new Error(`${label} \u5750\u6807\u5FC5\u987B\u662F\u6574\u6570\uFF0C\u6536\u5230 x=${JSON.stringify(x)}\u3001y=${JSON.stringify(y)}`);
+  const rawX = raw.x;
+  const rawY = raw.y;
+  const x = parseBoardCoord(rawX);
+  const y = parseBoardCoord(rawY);
+  if (x === null || y === null) {
+    throw new Error(`${label} \u5750\u6807\u5FC5\u987B\u662F\u6574\u6570\uFF0C\u6536\u5230 x=${JSON.stringify(rawX)}\u3001y=${JSON.stringify(rawY)}`);
   }
   if (!isOnBoard2(x, y)) {
     throw new Error(`${label} \u5750\u6807\u8D85\u51FA\u68CB\u76D8\uFF1Ax \u4E3A 0-${WIDTH - 1}\uFF08\u5217\uFF09\u3001y \u4E3A 0-${HEIGHT - 1}\uFF08\u884C\uFF09\uFF0C\u6536\u5230 ${coordText(x, y)}`);
@@ -20613,11 +20822,11 @@ var engine4 = {
     if (actor !== state.turn) {
       throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName4(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u843D\u5B50`);
     }
-    if (!isOnBoard3(typed.x, typed.y)) {
+    const x = parseBoardCoord(typed.x);
+    const y = parseBoardCoord(typed.y);
+    if (x === null || y === null || !isOnBoard3(x, y)) {
       throw new Error(`\u843D\u5B50\u5750\u6807\u5FC5\u987B\u662F 0-${SIZE2 - 1} \u7684\u6574\u6570\uFF0C\u6536\u5230 x=${String(typed.x)}\u3001y=${String(typed.y)}`);
     }
-    const x = typed.x;
-    const y = typed.y;
     if (state.board[y][x] !== EMPTY2) {
       throw new Error(`${coordName2(x, y)} \u5DF2\u6709\u68CB\u5B50\uFF0C\u4E0D\u80FD\u843D\u5728\u5DF2\u5360\u683C\u4E0A`);
     }
@@ -20648,10 +20857,12 @@ var engine4 = {
   },
   /** 人类可读的一手棋描述（含列 A-C + 行 1-3 坐标）。 */
   describe(_state, actor, action) {
-    if (action !== null && typeof action === "object" && !Array.isArray(action) && action.type === "place" && isOnBoard3(action.x, action.y)) {
-      const x = action.x;
-      const y = action.y;
-      return `${markName(actor === "o" ? "o" : "x")}\u843D\u4E8E ${coordName2(x, y)}`;
+    if (action !== null && typeof action === "object" && !Array.isArray(action) && action.type === "place") {
+      const x = parseBoardCoord(action.x);
+      const y = parseBoardCoord(action.y);
+      if (x !== null && y !== null && isOnBoard3(x, y)) {
+        return `${markName(actor === "o" ? "o" : "x")}\u843D\u4E8E ${coordName2(x, y)}`;
+      }
     }
     return `${String(actor)}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
@@ -21043,10 +21254,12 @@ function readPoint2(raw, label) {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error(`${label} \u5FC5\u987B\u662F {x, y} \u5750\u6807\u5BF9\u8C61`);
   }
-  const x = raw.x;
-  const y = raw.y;
-  if (!Number.isInteger(x) || !Number.isInteger(y)) {
-    throw new Error(`${label} \u5750\u6807\u5FC5\u987B\u662F\u6574\u6570\uFF0C\u6536\u5230 x=${JSON.stringify(x)}\u3001y=${JSON.stringify(y)}`);
+  const rawX = raw.x;
+  const rawY = raw.y;
+  const x = parseBoardCoord(rawX);
+  const y = parseBoardCoord(rawY);
+  if (x === null || y === null) {
+    throw new Error(`${label} \u5750\u6807\u5FC5\u987B\u662F\u6574\u6570\uFF0C\u6536\u5230 x=${JSON.stringify(rawX)}\u3001y=${JSON.stringify(rawY)}`);
   }
   if (!isOnBoard4(x, y)) {
     throw new Error(`${label} \u5750\u6807\u8D85\u51FA\u68CB\u76D8\uFF1Ax \u4E3A 0-${WIDTH2 - 1}\uFF08\u5217\uFF09\u3001y \u4E3A 0-${HEIGHT2 - 1}\uFF08\u884C\uFF09\uFF0C\u6536\u5230 ${coordText2(x, y)}`);
@@ -21690,203 +21903,6 @@ render()
 </html>
 `;
 var xiangqi = { manifest: manifest5, engine: engine5, viewHtml: viewHtml5 };
-
-// packages/plugin/src/games/standard.ts
-var GAME_STATE_MAX_BYTES = 65536;
-var GAME_ACTION_MAX_BYTES = 4096;
-var GAME_LEGAL_ACTIONS_MAX = 64;
-var GAME_SESSION_ID_PATTERN = /^g-[0-9a-f]{8}$/;
-function checkGameManifest(raw, options = {}) {
-  const errors = [];
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    return { ok: false, errors: ["game.json must be a JSON object"] };
-  }
-  const value = raw;
-  if (typeof value.id !== "string" || value.id === "") errors.push("id must be a non-empty string");
-  else if (!MOD_ID_PATTERN.test(value.id)) errors.push("id must be [a-z0-9-] labels or reverse-domain joined by '.'");
-  else if (options.directory !== void 0 && value.id !== options.directory) {
-    errors.push(`id '${value.id}' must equal the directory name '${options.directory}'`);
-  }
-  if (typeof value.name !== "string" || value.name.trim() === "") errors.push("name must be a non-empty string");
-  if (typeof value.version !== "string" || value.version.trim() === "") errors.push("version must be a non-empty string");
-  if (value.engines !== void 0) {
-    if (value.engines === null || typeof value.engines !== "object" || Array.isArray(value.engines)) {
-      errors.push("engines must be an object");
-    } else if (value.engines["dsh-tavern"] !== void 0 && typeof value.engines["dsh-tavern"] !== "string") {
-      errors.push("engines.dsh-tavern must be a version range string");
-    }
-  }
-  const players = value.players;
-  if (players === null || typeof players !== "object" || Array.isArray(players)) {
-    errors.push("players must be an object { min, max, roles }");
-  } else {
-    const spec = players;
-    const min = spec.min;
-    const max2 = spec.max;
-    if (!Number.isInteger(min) || !Number.isInteger(max2) || min < 1 || max2 < min) {
-      errors.push("players.min/max must be integers with 1 <= min <= max");
-    }
-    if (!Array.isArray(spec.roles) || spec.roles.length === 0 || !spec.roles.every((role) => typeof role === "string" && role !== "")) {
-      errors.push("players.roles must be a non-empty array of non-empty strings");
-    } else if (Number.isInteger(max2) && spec.roles.length !== max2) {
-      errors.push(`players.roles length (${spec.roles.length}) must equal players.max (${String(max2)})`);
-    }
-    if (Array.isArray(spec.roles) && new Set(spec.roles.map(String)).size !== spec.roles.length) {
-      errors.push("players.roles must not contain duplicates");
-    }
-  }
-  if (value.turnBased !== true) errors.push("turnBased must be true (real-time games are out of scope for bridge v1)");
-  if (typeof value.actionVocabulary !== "string" || value.actionVocabulary.trim() === "") {
-    errors.push("actionVocabulary must be a non-empty string");
-  }
-  if (errors.length > 0) return { ok: false, errors };
-  return {
-    ok: true,
-    errors,
-    manifest: {
-      id: value.id,
-      name: value.name,
-      version: value.version,
-      ...value.engines === void 0 ? {} : { engines: value.engines },
-      players: { min: players.min, max: players.max, roles: [...players.roles] },
-      turnBased: true,
-      actionVocabulary: value.actionVocabulary
-    }
-  };
-}
-function checkGameEngine(candidate) {
-  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
-    return { ok: false, errors: ["engine.mjs must default-export an object"] };
-  }
-  const value = candidate;
-  const metaCheck = checkGameManifest(value.meta);
-  const errors = [];
-  if (!metaCheck.ok) errors.push(`engine.meta invalid: ${metaCheck.errors.join("; ")}`);
-  for (const member of ["createGame", "legalActions", "applyAction", "describe"]) {
-    if (typeof value[member] !== "function") errors.push(`engine.${member} must be a function`);
-  }
-  if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, engine: candidate };
-}
-function isJsonSafe(value) {
-  try {
-    const text = JSON.stringify(value);
-    if (typeof text !== "string") return false;
-    return deepEqual(JSON.parse(text), value);
-  } catch {
-    return false;
-  }
-}
-function deepEqual(left, right) {
-  if (Object.is(left, right)) return true;
-  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
-  if (Array.isArray(left) !== Array.isArray(right)) return false;
-  if (Array.isArray(left) && Array.isArray(right)) {
-    if (left.length !== right.length) return false;
-    return left.every((item, index) => deepEqual(item, right[index]));
-  }
-  const leftKeys = Object.keys(left).sort();
-  const rightKeys = Object.keys(right).sort();
-  if (leftKeys.length !== rightKeys.length || leftKeys.some((key, index) => key !== rightKeys[index])) return false;
-  return leftKeys.every((key) => deepEqual(left[key], right[key]));
-}
-function jsonSizeOf(value) {
-  try {
-    return Buffer.byteLength(JSON.stringify(value), "utf8");
-  } catch {
-    return Number.POSITIVE_INFINITY;
-  }
-}
-function currentRoleOf(state, roles) {
-  if (state === null || typeof state !== "object" || Array.isArray(state)) {
-    throw new Error("\u5F15\u64CE state \u5FC5\u987B\u662F JSON \u5BF9\u8C61\uFF08\u5F53\u524D\u56DE\u5408\u5B57\u6BB5 turn \u65E0\u6CD5\u8BFB\u53D6\uFF09");
-  }
-  const turn = state.turn;
-  if (typeof turn !== "string" || turn === "") {
-    throw new Error("\u5F15\u64CE state \u7F3A\u5C11\u5B57\u7B26\u4E32\u5B57\u6BB5 turn\uFF08\u5F53\u524D\u56DE\u5408\u89D2\u8272\uFF09\uFF0C\u65E0\u6CD5\u63A8\u5BFC\u884C\u68CB\u65B9");
-  }
-  if (roles !== void 0 && !roles.includes(turn)) {
-    throw new Error(`state.turn\u300C${turn}\u300D\u4E0D\u5728\u89D2\u8272\u8868 [${roles.join(", ")}] \u5185`);
-  }
-  return turn;
-}
-function smokeTestGameEngine(engine6) {
-  const reasons = [];
-  const roles = engine6.meta.players.roles;
-  let created;
-  try {
-    created = engine6.createGame({ seed: 1 });
-  } catch (cause) {
-    return { ok: false, reasons: [`createGame \u629B\u9519: ${errorMessage2(cause)}`] };
-  }
-  if (created === null || typeof created !== "object" || !("state" in created)) {
-    return { ok: false, reasons: ["createGame \u5FC5\u987B\u8FD4\u56DE { state } \u5F62\u6001"] };
-  }
-  const state = created.state;
-  if (!isJsonSafe(state)) reasons.push("\u521D\u59CB state \u4E0D\u662F deep-JSON-safe");
-  if (jsonSizeOf(state) > GAME_STATE_MAX_BYTES) reasons.push(`\u521D\u59CB state \u5E8F\u5217\u5316\u8D85\u8FC7 ${GAME_STATE_MAX_BYTES} \u5B57\u8282\u4E0A\u9650`);
-  let turn;
-  try {
-    turn = currentRoleOf(state, roles);
-  } catch (cause) {
-    reasons.push(errorMessage2(cause));
-    return { ok: false, reasons };
-  }
-  let suggestions;
-  try {
-    suggestions = engine6.legalActions(state);
-  } catch (cause) {
-    reasons.push(`legalActions \u629B\u9519: ${errorMessage2(cause)}`);
-    return { ok: false, reasons };
-  }
-  if (!Array.isArray(suggestions)) return { ok: false, reasons: ["legalActions \u5FC5\u987B\u8FD4\u56DE\u6570\u7EC4"] };
-  if (suggestions.length > GAME_LEGAL_ACTIONS_MAX) {
-    reasons.push(`legalActions \u5EFA\u8BAE\u96C6\u8D85\u8FC7 ${GAME_LEGAL_ACTIONS_MAX} \u4E0A\u9650\uFF08\u6536\u5230 ${suggestions.length}\uFF09`);
-  }
-  for (const action of suggestions) {
-    if (action === null || typeof action !== "object" || Array.isArray(action) || typeof action.type !== "string" || action.type === "") {
-      reasons.push("legalActions \u4E2D\u5B58\u5728\u7F3A\u5C11 type \u5B57\u7B26\u4E32\u5B57\u6BB5\u7684\u5EFA\u8BAE\u52A8\u4F5C\uFF08\xA73.4\uFF1A\u52A8\u4F5C\u5FC5\u987B\u6709 type\uFF09");
-      break;
-    }
-  }
-  if (suggestions.length === 0) {
-    reasons.push("\u521D\u59CB\u5C40\u9762\u7684\u5EFA\u8BAE\u96C6\u4E3A\u7A7A\uFF0C\u65E0\u6CD5\u8FDB\u884C\u786E\u5B9A\u6027\u70DF\u6D4B\uFF08\u4E5F\u610F\u5473\u7740\u6E38\u620F\u65E0\u6CD5\u5F00\u59CB\uFF09");
-    return { ok: false, reasons };
-  }
-  const first = suggestions[0];
-  const snapshot2 = structuredClone(state);
-  let firstResult;
-  let secondResult;
-  try {
-    firstResult = engine6.applyAction(state, first, turn);
-    secondResult = engine6.applyAction(state, first, turn);
-  } catch (cause) {
-    reasons.push(`applyAction \u5BF9\u5EFA\u8BAE\u96C6\u9996\u4E2A\u52A8\u4F5C\u629B\u9519: ${errorMessage2(cause)}`);
-    return { ok: false, reasons };
-  }
-  if (!deepEqual(firstResult, secondResult)) reasons.push("applyAction \u540C\u8F93\u5165\u4E24\u6B21\u8C03\u7528\u7ED3\u679C\u4E0D\u4E00\u81F4\uFF08\u786E\u5B9A\u6027\u786C\u7EA6\u675F\u4E0D\u8FC7\uFF09");
-  if (!deepEqual(state, snapshot2)) reasons.push("applyAction \u4FEE\u6539\u4E86\u5165\u53C2 state\uFF08\u5FC5\u987B\u6DF1\u62F7\u8D1D\u51FA\u65B0\u6001\uFF09");
-  const shape = firstResult;
-  if (shape.state === void 0 || !Array.isArray(shape.events) || typeof shape.finished !== "boolean") {
-    reasons.push("applyAction \u5FC5\u987B\u8FD4\u56DE { state, events, finished, winner, summary }");
-  } else {
-    if (!isJsonSafe(shape.state)) reasons.push("applyAction \u4EA7\u51FA\u7684\u65B0 state \u4E0D\u662F deep-JSON-safe");
-    if (jsonSizeOf(shape.state) > GAME_STATE_MAX_BYTES) reasons.push(`applyAction \u4EA7\u51FA\u7684 state \u8D85\u8FC7 ${GAME_STATE_MAX_BYTES} \u5B57\u8282\u4E0A\u9650`);
-    if (shape.winner !== null && typeof shape.winner !== "string") reasons.push("applyAction \u7684 winner \u5FC5\u987B\u662F\u89D2\u8272\u5B57\u7B26\u4E32\u6216 null");
-    if (typeof shape.summary !== "string") reasons.push("applyAction \u7684 summary \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
-  }
-  for (const probe of [{ type: "resign" }, { type: "__dsh_tavern_smoke_unknown__" }]) {
-    try {
-      engine6.applyAction(state, probe, turn);
-      reasons.push(`applyAction \u5BF9\u975E\u6CD5\u52A8\u4F5C {type:'${probe.type}'} \u672A\u629B\u9519\uFF08\u5FC5\u987B\u62D2\u7EDD\u800C\u975E\u9759\u9ED8\uFF09`);
-    } catch {
-    }
-  }
-  return { ok: reasons.length === 0, reasons };
-}
-function errorMessage2(cause) {
-  return cause instanceof Error ? cause.message : String(cause);
-}
 
 // packages/plugin/src/games/registry.ts
 var GameRegistry = class _GameRegistry {
@@ -28336,7 +28352,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.4".trim() : "";
-  const commit = true ? normalizeCommit("345fdec") : void 0;
+  const commit = true ? normalizeCommit("4067ea7") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

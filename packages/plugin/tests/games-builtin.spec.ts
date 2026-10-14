@@ -22,7 +22,7 @@ import { junqiEngine } from '../src/games/builtin/junqi.js'
 import { ticTacToeEngine as ticTacToe, manifest, viewHtml } from '../src/games/builtin/tic-tac-toe.js'
 import { renderGameViewDocument } from '../src/games/view.js'
 import { GameRegistry } from '../src/games/registry.js'
-import { checkGameEngine, checkGameManifest, currentRoleOf, smokeTestGameEngine, type GameEngine } from '../src/games/standard.js'
+import { checkGameEngine, checkGameManifest, currentRoleOf, parseBoardCoord, smokeTestGameEngine, type GameEngine } from '../src/games/standard.js'
 
 interface TicState {
   board: number[][]
@@ -98,13 +98,21 @@ describe('createGame / applyAction 契约（§3.2）', () => {
     expect(() => ticTacToe.applyAction(fresh, { type: 'place', x: -1, y: 0 }, 'x')).toThrow(Error)
     expect(() => ticTacToe.applyAction(fresh, { type: 'place', x: 3, y: 0 }, 'x')).toThrow(Error)
     expect(() => ticTacToe.applyAction(fresh, { type: 'place', x: 0.5, y: 0 }, 'x')).toThrow(Error)
-    expect(() => ticTacToe.applyAction(fresh, { type: 'place', x: '0', y: 0 }, 'x')).toThrow(Error)
+    expect(() => ticTacToe.applyAction(fresh, { type: 'place', x: '0.5', y: 0 }, 'x')).toThrow(Error)
     expect(() => ticTacToe.applyAction(fresh, { type: 'place', x: 0, y: 0 }, 'o')).toThrow(Error)
     expect(() => ticTacToe.applyAction(fresh, { x: 0, y: 0 }, 'x')).toThrow(Error)
     // resign 是保留动作（运行时统一处理），引擎必须拒绝而非静默。
     expect(() => ticTacToe.applyAction(fresh, { type: 'resign' }, 'x')).toThrow(Error)
     const afterX = ticTacToe.applyAction(fresh, { type: 'place', x: 0, y: 0 }, 'x').state as TicState
     expect(() => ticTacToe.applyAction(afterX, { type: 'place', x: 0, y: 0 }, 'o')).toThrow(Error)
+  })
+
+  it('坐标容错（2026-10-14 实弹）：整数的字符串形态归一执行（模型桥引号习惯）', () => {
+    const fresh = ticTacToe.createGame().state as TicState
+    const result = ticTacToe.applyAction(fresh, { type: 'place', x: '1', y: '1.0' }, 'x')
+    expect((result.state as TicState).board[1]![1]).toBe(1)
+    expect(result.summary).toContain('B2')
+    expect(ticTacToe.describe(fresh, 'x', { type: 'place', x: '1', y: '1' })).toContain('B2')
   })
 })
 
@@ -344,7 +352,7 @@ describe('内置五子棋：开局与落子契约（§3.2）', () => {
     expect(() => gomokuEngine.applyAction(fresh, { type: 'place', x: -1, y: 0 }, 'black')).toThrow(Error)
     expect(() => gomokuEngine.applyAction(fresh, { type: 'place', x: 15, y: 0 }, 'black')).toThrow(Error)
     expect(() => gomokuEngine.applyAction(fresh, { type: 'place', x: 0.5, y: 0 }, 'black')).toThrow(Error)
-    expect(() => gomokuEngine.applyAction(fresh, { type: 'place', x: '0', y: 0 }, 'black')).toThrow(Error)
+    expect(() => gomokuEngine.applyAction(fresh, { type: 'place', x: '0x', y: 0 }, 'black')).toThrow(Error)
     expect(() => gomokuEngine.applyAction(fresh, { type: 'place', x: 0, y: 0 }, 'purple')).toThrow(Error)
     expect(() => gomokuEngine.applyAction(fresh, { type: 'place', x: 0, y: 0 }, 'white')).toThrow(Error)
     expect(() => gomokuEngine.applyAction(fresh, { x: 0, y: 0 }, 'black')).toThrow(Error)
@@ -353,6 +361,14 @@ describe('内置五子棋：开局与落子契约（§3.2）', () => {
     expect(() => gomokuEngine.applyAction(fresh, { type: 'jump' }, 'black')).toThrow(Error)
     const afterBlack = gomokuEngine.applyAction(fresh, { type: 'place', x: 0, y: 0 }, 'black').state as GomokuState
     expect(() => gomokuEngine.applyAction(afterBlack, { type: 'place', x: 0, y: 0 }, 'white')).toThrow(Error)
+  })
+
+  it('坐标容错（2026-10-14 实弹）：整数的字符串形态归一执行（模型桥引号习惯）', () => {
+    const fresh = gomokuEngine.createGame().state as GomokuState
+    const result = gomokuEngine.applyAction(fresh, { type: 'place', x: '7', y: '7.0' }, 'black')
+    expect((result.state as GomokuState).board[7]![7]).toBe(1)
+    expect(result.summary).toContain('H8')
+    expect(gomokuEngine.describe(fresh, 'black', { type: 'place', x: '7', y: '7' })).toContain('H8')
   })
 })
 
@@ -616,5 +632,29 @@ describe('内置五子棋：导入同 id 遮蔽内置（registry 单一遮蔽规
     expect(warnings.some((message) => message.includes('与内置游戏同 id'))).toBe(true)
     // 坏游戏不断路：其余内置照常在册。
     expect(registry.summaries().some((summary) => summary.id === 'dsh-tavern.tic-tac-toe' && summary.status === 'ok')).toBe(true)
+  })
+})
+
+describe('parseBoardCoord：整数/整数字符串归一（2026-10-14 实弹，决策 quoted-coordinate-tolerance）', () => {
+  it('数字原样、整数的字符串形态归一、其余 null', () => {
+    expect(parseBoardCoord(7)).toBe(7)
+    expect(parseBoardCoord('7')).toBe(7)
+    expect(parseBoardCoord(' 7 ')).toBe(7)
+    expect(parseBoardCoord('+7')).toBe(7)
+    expect(parseBoardCoord('07')).toBe(7)
+    expect(parseBoardCoord('7.0')).toBe(7)
+    expect(parseBoardCoord('7e0')).toBe(7)
+    // 非整数/非数一律 null（引擎层沿用原有中文报错，不放行歧义输入）。
+    expect(parseBoardCoord(7.5)).toBeNull()
+    expect(parseBoardCoord('7.5')).toBeNull()
+    expect(parseBoardCoord('abc')).toBeNull()
+    expect(parseBoardCoord('')).toBeNull()
+    expect(parseBoardCoord('   ')).toBeNull()
+    expect(parseBoardCoord('0x7')).toBeNull()
+    expect(parseBoardCoord(null)).toBeNull()
+    expect(parseBoardCoord(undefined)).toBeNull()
+    expect(parseBoardCoord(true)).toBeNull()
+    expect(parseBoardCoord(NaN)).toBeNull()
+    expect(parseBoardCoord(Infinity)).toBeNull()
   })
 })

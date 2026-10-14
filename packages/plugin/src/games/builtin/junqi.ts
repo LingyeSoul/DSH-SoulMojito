@@ -55,7 +55,7 @@
  * 军棋的合法性是几何的（铁路拐弯/行营免攻/穿越占子），放开点击会大量撞 400。
  */
 
-import type { GameEngine, GameManifest } from '../standard.js'
+import { parseBoardCoord, type GameEngine, type GameManifest } from '../standard.js'
 
 const WIDTH = 5
 const HEIGHT = 12
@@ -390,20 +390,24 @@ function combatText(outcome: CombatOutcome, defender: string): string {
   }
 }
 
-/** from/to 坐标解析（形状/类型/界内的分档中文报错）。 */
+/** from/to 坐标解析（形状/类型/界内的分档中文报错）。整数的字符串形态
+ *  （"1"、"1.0"——模型桥把工具参数数字写成引号串的实弹习惯）经 parseBoardCoord
+ *  归一后与数字同路处理（决策 2026-10-14-quoted-coordinate-tolerance）。 */
 function readPoint(raw: unknown, label: string): Point {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error(`${label} 必须是 {x, y} 坐标对象`)
   }
-  const x = (raw as { x?: unknown }).x
-  const y = (raw as { y?: unknown }).y
-  if (!Number.isInteger(x) || !Number.isInteger(y)) {
-    throw new Error(`${label} 坐标必须是整数，收到 x=${JSON.stringify(x)}、y=${JSON.stringify(y)}`)
+  const rawX = (raw as { x?: unknown }).x
+  const rawY = (raw as { y?: unknown }).y
+  const x = parseBoardCoord(rawX)
+  const y = parseBoardCoord(rawY)
+  if (x === null || y === null) {
+    throw new Error(`${label} 坐标必须是整数，收到 x=${JSON.stringify(rawX)}、y=${JSON.stringify(rawY)}`)
   }
   if (!isOnBoard(x, y)) {
-    throw new Error(`${label} 坐标超出棋盘：x 为 0-${WIDTH - 1}（列）、y 为 0-${HEIGHT - 1}（行），收到 ${coordText(x as number, y as number)}`)
+    throw new Error(`${label} 坐标超出棋盘：x 为 0-${WIDTH - 1}（列）、y 为 0-${HEIGHT - 1}（行），收到 ${coordText(x, y)}`)
   }
-  return { x: x as number, y: y as number }
+  return { x, y }
 }
 
 const engine: GameEngine = {
