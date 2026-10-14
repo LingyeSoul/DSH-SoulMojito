@@ -35,6 +35,7 @@ import { satisfiesVersionRange } from '../mods/manifest.js'
 import { gitClone, parseGitSource } from '../mods/install.js'
 import { gomoku } from './builtin/gomoku.js'
 import { ticTacToe } from './builtin/tic-tac-toe.js'
+import { xiangqi } from './builtin/xiangqi.js'
 import {
   checkGameEngine,
   checkGameManifest,
@@ -135,7 +136,7 @@ export class GameRegistry {
   }
 
   private loadBuiltins(): void {
-    for (const builtin of [ticTacToe, gomoku]) {
+    for (const builtin of [ticTacToe, gomoku, xiangqi]) {
       const smoke = smokeTestGameEngine(builtin.engine)
       if (!smoke.ok) {
         // 内置引擎烟测失败是编程错误：如实 broken 入册（仍不崩启动），测试会抓。
