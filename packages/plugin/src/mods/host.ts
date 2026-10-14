@@ -23,6 +23,7 @@ import { mkdir } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { onGuidesChanged } from '../guides.js'
+import { resolveGamesService } from '../games/handle.js'
 import { generationHooks, type GenerationHookPhase } from '../generation-hooks.js'
 import { builtinMacroNames } from '../../../tavern-macros/src/index.js'
 import { hostMacroSnapshot, registerHostMacro } from '../../../tavern-macros/src/index.js'
@@ -581,7 +582,8 @@ export class ModHost {
 
   /** P1+P2 适配层（提案 §3.3）：白名单对象，不透传 cordis ctx。
    * P2 面：hooks（五相位总线）/tools（跨 bundle 注册表）/macros（宿主宏注册表）/
-   * stscript（命令表）/llm（能力键强制）/prompt（AgentTavern section）。 */
+   * stscript（命令表）/llm（能力键强制）/prompt（AgentTavern section）。
+   * P3 面：games（提案 0018 §4.5——游戏桥注册，id 前缀 + manifest 声明双纪律）。 */
   private createApi(record: LoadedMod): Record<string, unknown> {
     const id = record.manifest.id
     const logger = {
@@ -715,6 +717,40 @@ export class ModHost {
           }
           record.surfaces.tools.add(definition.name)
           return tracked(registerModTool(id, definition, record.manifest.loadingOrder))
+        },
+      },
+      games: {
+        // 提案 0018 §4.5 第 3 源（P3）：把游戏注册进游戏桥运行时。id 纪律 =
+        // onButton 的「未声明即拒」+ 工具注册的前缀律：id 必须以 `<modId>.` 开头
+        // 且在 manifest games 名单内。引擎 duck 校验/烟测/view 静态检查/跨源查重
+        // 都在 games service（fail-fast，抛错 = 本 Mod setup 失败进错误位，镜像
+        // 工具注册）。mods host 与 games service 同在 index bundle，经既有
+        // globalThis 句柄直调（handle.ts，无新跨 bundle 面）；反注册入
+        // offRegistrations（卸载自动摘除，其活跃会话由 sessions 孤儿判定接管）。
+        register: (def: unknown) => {
+          if (typeof def !== 'object' || def === null || Array.isArray(def)) {
+            throw new Error('game registration must be an object')
+          }
+          const gameId = (def as Record<string, unknown>).id
+          if (typeof gameId !== 'string' || gameId === '') {
+            throw new Error(`game registration requires a non-empty id string (got '${String(gameId)}')`)
+          }
+          const prefix = `${id}.`
+          if (!gameId.startsWith(prefix)) {
+            throw new Error(`game id must start with the mod id prefix '${prefix}' (got '${gameId}')`)
+          }
+          if (!record.manifest.games.includes(gameId)) {
+            throw new Error(`game '${gameId}' is not declared in the manifest games [${record.manifest.games.join(', ')}]`)
+          }
+          const engine = (def as Record<string, unknown>).engine
+          const service = resolveGamesService()
+          if (service === undefined) {
+            throw new Error('the games runtime is not available in this process (game registration requires the games service)')
+          }
+          service.registerModGame(def)
+          // 反注册带引擎身份对账：reload 后旧实例的 off 触碰新实例是 no-op
+          //（onButton 的「反注册只撤销同一 handler」同款纪律）。
+          return tracked(() => { service.unregisterModGame(gameId, engine) })
         },
       },
       macros: {

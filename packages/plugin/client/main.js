@@ -534,6 +534,392 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // ── 游戏对局面（提案 0018 §4.3，P1）──────────────────────────────────
+    // 桥协议两条消息（§3.3）：下行 dsh-tavern:game-state（全量 {token, session,
+    // view}，view 含 {state, turn, legal, finished, summary}——与 src/games/
+    // view.ts 注入的桥脚本逐字段对齐）+ 上行 dsh-tavern:game-action。刷新走
+    // games/revision 1s 轮询（镜像 store-revision 的便宜纪律：仅游戏分区挂载
+    // 且存在未终局会话时轮询，页面不可见停发；不引入 SSE、不动全局水位）。
+    const GAME_STATE_MESSAGE = 'dsh-tavern:game-state'
+    const GAME_ACTION_MESSAGE = 'dsh-tavern:game-action'
+    const GAMES_REVISION_POLL_MS = 1000
+
+    // 对局表面（ModSurface 范式）：持久 iframe 指向 GET games/:gid/view/:sid，
+    // per-mount token 经 URL 查询段交给视图（桥脚本自读，回投时对账）+ 事件源
+    // 必须是本 frame 的 contentWindow，双对账缺一不受理。人类落子经宿主同源
+    // fetch 代理 POST games/action/:id——合法性由 Node 侧引擎终审（iframe 说了
+    // 不算）。409=非人类回合/终局 → 横幅提示唤起 AI；400=非法动作（引擎中文
+    // 报错透传）；503=孤儿会话/运行时不可用。
+    function GameSurface({ session, view, onOutcome }) {
+      const t = useTranslate()
+      const frameRef = useRef(null)
+      const [height, setHeight] = useState(140)
+      const postViewport = useViewportBridge(frameRef)
+      const [notice, setNotice] = useState('')
+      // 最新下行载荷 ref：props 变化即记录；iframe load 事件补发（桥脚本在
+      // <head> 同步执行，load 时监听器必已就绪——useViewportBridge 的同款论证；
+      // load 前的投递会丢，不能只靠 mount 即发）。
+      const payloadRef = useRef(null)
+      const [token] = useState(() => `dsh-tavern-game-${session.id}-${Math.random().toString(36).slice(2)}`)
+      const push = useCallback(() => {
+        const payload = payloadRef.current
+        if (payload === null) return
+        try { frameRef.current?.contentWindow?.postMessage({ type: GAME_STATE_MESSAGE, token, session: payload.session, view: payload.view }, '*') } catch {}
+      }, [token])
+      useEffect(() => {
+        payloadRef.current = view === undefined ? null : { session, view }
+        push()
+      }, [session, view, push])
+      // 新一手到达（自己落子成功或轮询追平 AI 落子）即清横幅。
+      useEffect(() => { setNotice('') }, [session?.updatedAt])
+      const onFrameLoad = () => {
+        postViewport()
+        push()
+      }
+      useEffect(() => {
+        const onMessage = (event) => {
+          if (event.source !== frameRef.current?.contentWindow) return
+          const data = event.data
+          if (!data || typeof data !== 'object' || data.token !== token) return
+          if (data.type === FRONTEND_HEIGHT_MESSAGE) {
+            if (typeof data.height === 'number' && Number.isFinite(data.height)) {
+              setHeight(Math.max(80, Math.min(Math.ceil(data.height), 1200)))
+            }
+            return
+          }
+          if (data.type !== GAME_ACTION_MESSAGE) return
+          const action = data.action
+          if (action === null || typeof action !== 'object' || Array.isArray(action)) return
+          void fetch(`${API}/games/action/${encodeURIComponent(session.id)}`, {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ action }),
+          })
+            .then(async (response) => {
+              const body = await response.json().catch(() => ({}))
+              if (!response.ok || body.ok === false) {
+                setNotice(response.status === 409 ? t('games.turnAiNow') : String(body.message || `HTTP ${response.status}`))
+                return
+              }
+              setNotice('')
+              onOutcome(session.id, body.session, body.view)
+              // 即时下行（不等父级重渲染链路）——人类落子的最快反馈路径；轮询
+              // 只兜 Agent 侧落子（§4.3）。
+              payloadRef.current = { session: body.session, view: body.view }
+              push()
+            })
+            .catch((cause) => { setNotice(cause instanceof Error ? cause.message : String(cause)) })
+        }
+        addEventListener('message', onMessage)
+        return () => removeEventListener('message', onMessage)
+      }, [session.id, token])
+      return h(React.Fragment, null,
+        notice ? h('p', { className: 'dt-hint' }, notice) : null,
+        h('iframe', {
+          ref: frameRef,
+          className: 'dt-frontend-frame dt-mod-surface',
+          sandbox: 'allow-scripts',
+          referrerPolicy: 'no-referrer',
+          title: session.gameName || session.gameId,
+          src: `${API}/games/${encodeURIComponent(session.gameId)}/view/${encodeURIComponent(session.id)}?token=${encodeURIComponent(token)}`,
+          onLoad: onFrameLoad,
+          style: { height },
+        }))
+    }
+
+    // 本聊天对局数据面（提案 0018 §4.3；2026-10-14 修订抽出共用）：GamesPanel
+    // （设置面板「游戏」分区，管理面）与 TavernGameBoard（MVU 同位对局面，展示
+    // 面）共用同一份「list 过滤 + 未终局快照补拉 + games/revision 1s 轮询 + 落子
+    // 回填」。轮询纪律不变：仅存在未终局会话时进行，页面不可见停发、回前台补拍、
+    // 首拍只立基线；水位变化即重拉（props 变化驱动 GameSurface 下行）。
+    function useChatGameSessions(character, chatId) {
+      const hasBinding = character !== '' && chatId !== ''
+      const [games, setGames] = useState(null)
+      const [sessions, setSessions] = useState([])
+      const [listError, setListError] = useState('')
+      // 未终局会话的最新 {session, view}：list 只带 summary，view 由 games/
+      // state/:id 或 start/action 响应补齐——GameSurface 的下行载荷来源。
+      const [sessionStates, setSessionStates] = useState({})
+      const mergeSession = useCallback((session, view) => {
+        if (!session || typeof session.id !== 'string') return
+        setSessionStates((current) => ({ ...current, [session.id]: { session, view } }))
+      }, [])
+      const loadList = useCallback(() => {
+        // character+chatId 双全才过滤会话（games 面板同款纪律：无绑定时全量
+        // 清单、不展示会话区，避免跨聊天串台）。
+        const query = hasBinding ? `?character=${encodeURIComponent(character)}&chatId=${encodeURIComponent(chatId)}` : ''
+        // 先读水位基线、**await 之后再**拉数据（2026-10-14 二次修订，侧边栏自动
+        // 刷新 RCA）：基线严格早于数据读取，任何「本次渲染之后」发生的落子都
+        // 必然改变水位、必被轮询发现；并发发起两个请求时响应序不保证「基线先
+        // 于数据」，基线可能反映到比已渲染数据更新的状态而吞掉那一手（AI 在
+        // 棋盘打开瞬间落子就停在上一个局面直到下一手）。失败静默——基线保持
+        // 旧值只会多拉一次，不会漏。
+        return api('games/revision')
+          .then((rev) => {
+            if (typeof rev.revision === 'string' && rev.revision !== '') revisionRef.current = rev.revision
+          }, () => undefined)
+          .then(() => api(`games/list${query}`))
+          .then(async (result) => {
+            const list = Array.isArray(result.sessions) ? result.sessions : []
+            setGames(Array.isArray(result.games) ? result.games : [])
+            setSessions(list)
+            setListError('')
+            // 未终局且非孤儿的会话补拉快照（list 响应不含 view；终局卡只需要
+            // summary/winner，孤儿卡只读不渲染 iframe）。快照的 session 一并
+            // 合入——list 项的 turn/finished 随之保鲜。
+            await Promise.all(list
+              .filter((session) => !session.finished && !session.orphaned)
+              .map((session) => api(`games/state/${encodeURIComponent(session.id)}`)
+                .then((snapshot) => {
+                  setSessions((current) => current.map((item) => item.id === snapshot.session.id ? snapshot.session : item))
+                  mergeSession(snapshot.session, snapshot.view)
+                })
+                .catch(() => {})))
+            return { games: Array.isArray(result.games) ? result.games : [], sessions: list }
+          })
+          .catch((cause) => {
+            // 不拒绝：错误落 listError（面板渲染），挂载效应/轮询/开局回填
+            // 无需逐处 catch（2026-10-14 之前的 GamesPanel 原语义）。
+            setListError(cause instanceof Error ? cause.message : String(cause))
+            return undefined
+          })
+      }, [character, chatId, hasBinding, mergeSession])
+      // 落子结果回填：sessionStates 驱动 GameSurface 下行，sessions 列表项同步
+      // 替换（终局后结果卡立即切换）。
+      const handleOutcome = useCallback((sessionId, session, view) => {
+        if (!session || typeof session.id !== 'string') return
+        setSessionStates((current) => ({ ...current, [sessionId]: { session, view } }))
+        setSessions((current) => current.map((item) => item.id === sessionId ? session : item))
+      }, [])
+      // 挂载/绑定变化（切换会话/聊天）无条件加载一次——**加载必须由 hook 自持**
+      // （2026-10-14 侧边栏空渲染修复）：对局面（右栏 tab/ST 内联）不经
+      // GamesPanel，早期版本把挂载加载留在面板组件里，导致 TavernGameBoard
+      // 从未拉取、恒渲染 null。
+      useEffect(() => { void loadList() }, [loadList])
+      // games/revision 两档水位轮询（§4.3，2026-10-14 修订）：存在未终局会话时
+      // 1s（对局进行中，AI 落子 ≤1s 可见）；无活跃会话时 5s 低频守望（等
+      // 「Agent 在对话里开局」出现——tab 已开时 openTab 是 no-op 不触发重挂载，
+      // 原先「无活跃不轮询」会让空面板饿死）。水位变化即重拉 list + 逐会话
+      // 快照；页面不可见停发、回前台立即补一拍；首拍只立基线不触发重拉，
+      // 基线跨档位保留（终局后降档不丢变更）。
+      const activeKey = sessions
+        .filter((session) => !session.finished && !session.orphaned)
+        .map((session) => session.id)
+        .join('\u0000')
+      const loadListRef = useRef(loadList)
+      useEffect(() => { loadListRef.current = loadList })
+      const revisionRef = useRef('')
+      useEffect(() => {
+        let cancelled = false
+        let inFlight = false
+        const check = () => {
+          if (cancelled || inFlight || document.visibilityState === 'hidden') return
+          inFlight = true
+          void api('games/revision')
+            .then((result) => {
+              if (cancelled || typeof result.revision !== 'string' || result.revision === '') return
+              if (revisionRef.current === '') {
+                revisionRef.current = result.revision
+                return
+              }
+              if (result.revision === revisionRef.current) return
+              revisionRef.current = result.revision
+              return loadListRef.current()
+            })
+            .catch(() => {})
+            .finally(() => { inFlight = false })
+        }
+        const timer = setInterval(check, activeKey === '' ? SESSION_PANEL_POLL_MS : GAMES_REVISION_POLL_MS)
+        const onVisibility = () => { if (document.visibilityState === 'visible') check() }
+        document.addEventListener('visibilitychange', onVisibility)
+        return () => {
+          cancelled = true
+          clearInterval(timer)
+          document.removeEventListener('visibilitychange', onVisibility)
+        }
+      }, [activeKey])
+      const turnOwner = (session) => {
+        const player = Array.isArray(session.players)
+          ? session.players.find((item) => item && item.role === session.turn)
+          : null
+        return player ? player.owner : ''
+      }
+      return { hasBinding, games, sessions, sessionStates, listError, loadList, handleOutcome, turnOwner }
+    }
+
+    // 对局面（2026-10-14 修订，提案 0018 §4.3）：与 MVU 状态同位的自动展示面。
+    // ST 架构内联在 TavernView 的 MVU 状态卡之后；AgentTavern 架构由宿主原生
+    // 右侧栏 games tab 承载（MVU tab 同款注册，见 TavernGamesSidebarTab），标题栏
+    // watcher 在对局开始时自动展开 tab。内容 = 本聊天未终局会话的棋盘
+    // （GameSurface）+ 终局结果卡——结果卡只展示本挂载期间见证过的对局（挂载时
+    // 已终局的旧会话不占位，MVU「无内容不占位」同款纪律）。
+    function TavernGameBoard({ sessionId, sidebar = false }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const binding = state.bootstrap.state.sessionBindings?.[sessionId]
+      const character = typeof binding?.character === 'string' ? binding.character : ''
+      const chatId = typeof binding?.chatId === 'string' ? binding.chatId : ''
+      const { sessions, sessionStates, handleOutcome, turnOwner } = useChatGameSessions(character, chatId)
+      const [seenActive, setSeenActive] = useState(() => new Set())
+      useEffect(() => {
+        const ids = sessions.filter((session) => !session.finished && !session.orphaned).map((session) => session.id)
+        if (ids.every((id) => seenActive.has(id))) return
+        setSeenActive((current) => {
+          const next = new Set(current)
+          for (const id of ids) next.add(id)
+          return next
+        })
+      }, [sessions])
+      const active = sessions.filter((session) => !session.finished && !session.orphaned)
+      const finished = sessions.filter((session) => session.finished && seenActive.has(session.id))
+      if (!binding) return null
+      // 无对局：内联变体不占位（MVU 同款纪律）；侧边栏变体是用户主动打开的
+      // tab，给指引而不是空白（2026-10-14 侧边栏空渲染修复的伴生体验项）。
+      if (active.length === 0 && finished.length === 0) {
+        // 空态卡（2026-10-14 二次修订）：图标 + 标题 + 指引 + 打开游戏面板按钮
+        // ——用户主动打开的 tab 不给纯空白；内联变体维持无对局不占位。
+        return sidebar
+          ? h('div', { className: 'dt-game-board-empty', 'data-dsh-tavern-surface': 'game-board' },
+            h('div', { className: 'dt-game-board-empty-icon' }, h(IconSparkle16, { size: 22 })),
+            h('strong', null, t('games.tabTitle')),
+            h('p', { className: 'dt-hint' }, t('games.boardEmpty')),
+            h(Button, { size: 'sm', variant: 'outline', onClick: () => openPanel('games') }, t('games.openPanel')))
+          : null
+      }
+      return h('div', { className: 'dt-game-board', 'data-dsh-tavern-surface': 'game-board' },
+        active.map((summary) => {
+          const live = sessionStates[summary.id]
+          const session = live?.session || summary
+          const owner = turnOwner(session)
+          return h('article', { key: session.id, className: 'dt-mod-row' },
+            h('div', { className: 'dt-mod-row-head' },
+              h('strong', null, session.gameName || session.gameId),
+              owner === 'agent'
+                ? h('span', { className: 'dt-mod-meta' }, t('games.waitAi'))
+                : h('span', { className: 'dt-mod-meta' }, t('games.turnYou'))),
+            owner !== 'agent' ? h('p', { className: 'dt-hint' }, t('games.turnYouHint')) : null,
+            h(GameSurface, { key: session.id, session, view: live?.view, onOutcome: handleOutcome }))
+        }),
+        finished.map((session) => {
+          const winner = Array.isArray(session.players)
+            ? session.players.find((item) => item && item.role === session.winner)
+            : null
+          return h('article', { key: session.id, className: 'dt-mod-row' },
+            h('div', { className: 'dt-mod-row-head' },
+              h('strong', null, session.gameName || session.gameId),
+              h(Pill, null, t('games.finished'))),
+            h('p', { className: 'dt-hint' }, session.summary || ''),
+            session.winner ? h('p', { className: 'dt-hint' }, t('games.winner', {
+              role: session.winner,
+              owner: winner?.owner === 'human' ? t('games.ownerHuman') : t('games.ownerAgent'),
+            })) : null)
+        }))
+    }
+
+    // 「游戏」分区主体（提案 0018 §4.3）：游戏清单（status ok 可开局 / broken
+    // 灰显 + reason tooltip）+ 本聊天会话卡（未终局渲染 GameSurface、终局只出
+    // 结果卡不再渲染 iframe、孤儿只读说明）。聊天绑定跟随当前会话（MVU/指引
+    // 面板同源：sessionBindings[currentSession] 的 character/chatId）；拿不到
+    // 绑定时清单仍展示，开局按钮禁用并提示。数据面共用 useChatGameSessions
+    // （对局面 TavernGameBoard 同源，2026-10-14 修订）。
+    function GamesPanel({ useSessions }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const currentSession = useSessions ? useCurrentSessionId(useSessions) : null
+      const binding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
+      const character = typeof binding?.character === 'string' ? binding.character : ''
+      const chatId = typeof binding?.chatId === 'string' ? binding.chatId : ''
+      const { hasBinding, games, sessions, sessionStates, listError, handleOutcome, turnOwner } = useChatGameSessions(character, chatId)
+      const [startPending, setStartPending] = useState('')
+      const [startError, setStartError] = useState('')
+      const start = (game) => {
+        if (!hasBinding || startPending !== '') return
+        setStartPending(game.id)
+        setStartError('')
+        // humanRole 缺省 roles[0]（服务端纪律：人类执先，Agent 执另一方）。
+        void api('games/start', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ gameId: game.id, character, chatId }),
+        })
+          .then((result) => {
+            handleOutcome(result.session.id, result.session, result.view)
+            return loadList()
+          })
+          .catch((cause) => { setStartError(cause instanceof Error ? cause.message : String(cause)) })
+          .finally(() => setStartPending(''))
+      }
+      return h(React.Fragment, null,
+        h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('panel.section.games')),
+          h('p', { className: 'dt-hint' }, t('games.hint')),
+          !hasBinding ? h('p', { className: 'dt-muted' }, t('games.needBinding')) : null,
+          games === null
+            ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+            : h(React.Fragment, null,
+              games.length === 0 ? h('p', { className: 'dt-muted' }, t('games.empty')) : null,
+              h('div', { className: 'dt-mod-list' }, games.map((game) => h('article', {
+                key: game.id,
+                className: `dt-mod-row${game.status === 'ok' ? '' : ' dt-game-row-broken'}`,
+                title: game.status === 'ok' ? undefined : String(game.reason || ''),
+              },
+                h('div', { className: 'dt-mod-row-head' },
+                  h('strong', null, game.name),
+                  h('span', { className: 'dt-mod-meta' }, `v${game.version}`),
+                  h(Pill, null, t(`games.source.${game.source}`)),
+                  game.status === 'ok'
+                    ? h(Button, {
+                        size: 'sm',
+                        variant: 'outline',
+                        disabled: !hasBinding || startPending !== '',
+                        onClick: () => start(game),
+                      }, startPending === game.id ? t('games.starting') : t('games.start'))
+                    : h(Pill, null, t('games.broken'))),
+                game.status !== 'ok'
+                  ? h('p', { className: 'dt-hint' }, String(game.reason || t('games.broken')))
+                  : (typeof game.actionVocabulary === 'string' && game.actionVocabulary !== ''
+                      ? h('p', { className: 'dt-hint' }, game.actionVocabulary)
+                      : null))))),
+          startError ? h('p', { className: 'dt-error' }, startError) : null),
+        hasBinding ? h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('games.sessionsTitle')),
+          sessions.length === 0 ? h('p', { className: 'dt-muted' }, t('games.sessionsEmpty')) : null,
+          h('div', { className: 'dt-mod-list' }, sessions.map((summary) => {
+            const live = sessionStates[summary.id]
+            const session = live?.session || summary
+            if (session.finished) {
+              const winner = Array.isArray(session.players)
+                ? session.players.find((item) => item && item.role === session.winner)
+                : null
+              return h('article', { key: session.id, className: 'dt-mod-row' },
+                h('div', { className: 'dt-mod-row-head' },
+                  h('strong', null, session.gameName || session.gameId),
+                  h(Pill, null, t('games.finished'))),
+                h('p', { className: 'dt-hint' }, session.summary || ''),
+                session.winner ? h('p', { className: 'dt-hint' }, t('games.winner', {
+                  role: session.winner,
+                  owner: winner?.owner === 'human' ? t('games.ownerHuman') : t('games.ownerAgent'),
+                })) : null)
+            }
+            if (session.orphaned) {
+              return h('article', { key: session.id, className: 'dt-mod-row dt-game-row-broken' },
+                h('div', { className: 'dt-mod-row-head' },
+                  h('strong', null, session.gameName || session.gameId),
+                  h(Pill, null, t('games.orphaned'))),
+                h('p', { className: 'dt-hint' }, t('games.orphanedHint')))
+            }
+            const owner = turnOwner(session)
+            return h('article', { key: session.id, className: 'dt-mod-row' },
+              h('div', { className: 'dt-mod-row-head' },
+                h('strong', null, session.gameName || session.gameId),
+                owner === 'agent'
+                  ? h('span', { className: 'dt-mod-meta' }, t('games.waitAi'))
+                  : h('span', { className: 'dt-mod-meta' }, t('games.turnYou'))),
+              h(GameSurface, { key: session.id, session, view: live?.view, onOutcome: handleOutcome }))
+          }))) : null,
+        listError ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, listError)) : null)
+    }
+
     const LOCALE_NS = 'dsh-tavern'
     const MESSAGES_EN = {
       'settings.subtitle': 'Roleplay assets and prompt configuration',
@@ -1085,6 +1471,36 @@ window.__ModuleLoader__.load({
       'mods.buttonBusy': '…',
       'mods.modLog.toggle': 'Mod logs ({count})',
       'mods.modLog.empty': 'No mod UI console output captured yet (logs are in-memory and cleared on page reload).',
+      // Games panel (proposal 0018 §4.3, P1; game_wait revision 2026-10-14 —
+      // the AI now blocks on game_wait instead of needing a chat message).
+      // zh/en keys must stay mirrored with identical {param} placeholders; the
+      // client-vm-mount gate enforces it.
+      'panel.section.games': 'Games',
+      'games.hint': 'Play a board game against the Agent in this chat. You move on the board; after your move the AI continues automatically — no chat message needed.',
+      'games.needBinding': 'Open a chat first — games start from the chat you are currently in.',
+      'games.empty': 'No games available yet.',
+      'games.start': 'Start game',
+      'games.starting': 'Starting…',
+      'games.broken': 'Unavailable',
+      'games.source.builtin': 'Built-in',
+      'games.source.imported': 'Imported',
+      'games.source.mod': 'Mod',
+      'games.tabTitle': 'Game board',
+      'games.boardEmpty': 'No game in this chat yet — ask the AI to start one, e.g. "Fancy a game of tic-tac-toe?".',
+      'games.openPanel': 'Open games panel',
+      'games.guide.description': 'The board-game surface playing against the Agent; it opens automatically when a game starts in this chat.',
+      'games.sessionsTitle': 'Sessions in this chat',
+      'games.sessionsEmpty': 'No game sessions in this chat yet. Start one above.',
+      'games.turnYou': 'Your move',
+      'games.turnYouHint': 'Move on the board — the AI continues automatically after your move.',
+      'games.waitAi': 'AI is moving…',
+      'games.turnAiNow': 'It is the AI turn now — wait for its move',
+      'games.finished': 'Finished',
+      'games.winner': 'Winner: {role} ({owner})',
+      'games.ownerHuman': 'you',
+      'games.ownerAgent': 'AI',
+      'games.orphaned': 'Orphaned',
+      'games.orphanedHint': 'This game is no longer in the registry (uninstalled or broken); the session is read-only.',
       // AgentNovel surface (proposal 0005). zh/en keys must stay mirrored with
       // identical {param} placeholders; the client-vm-mount gate enforces it.
       'panel.section.novels': 'Novels',
@@ -1771,6 +2187,34 @@ window.__ModuleLoader__.load({
       'mods.buttonBusy': '…',
       'mods.modLog.toggle': 'Mod 日志（{count}）',
       'mods.modLog.empty': '还没有收到 Mod UI 的控制台输出（日志为内存态，页面重载后清空）。',
+      // 游戏分区（提案 0018 §4.3，P1；2026-10-14 修订——AI 改为 game_wait
+      // 阻塞等待，不再需要用户发消息唤起）：与 EN 键集逐键镜像。
+      'panel.section.games': '游戏',
+      'games.hint': '在本聊天与 Agent 对局。你在棋盘上落子；落子后 AI 自动继续，无需发送消息。',
+      'games.needBinding': '先打开一个聊天会话——游戏开局绑定当前所在聊天。',
+      'games.empty': '还没有可用的游戏。',
+      'games.start': '开局',
+      'games.starting': '开局中…',
+      'games.broken': '不可用',
+      'games.source.builtin': '内置',
+      'games.source.imported': '导入',
+      'games.source.mod': 'Mod',
+      'games.tabTitle': '游戏对局',
+      'games.boardEmpty': '本聊天还没有对局——让 AI 开一局（例如「来局井字棋？」）。',
+      'games.openPanel': '打开游戏面板',
+      'games.guide.description': '与 Agent 对局的游戏棋盘；本聊天开局时自动打开。',
+      'games.sessionsTitle': '本聊天的对局',
+      'games.sessionsEmpty': '本聊天还没有对局，从上面开一局。',
+      'games.turnYou': '轮到你落子',
+      'games.turnYouHint': '在棋盘上落子——落子后 AI 自动继续。',
+      'games.waitAi': 'AI 落子中…',
+      'games.turnAiNow': '现在轮到 AI——请等待它落子',
+      'games.finished': '已终局',
+      'games.winner': '胜方：{role}（{owner}）',
+      'games.ownerHuman': '你',
+      'games.ownerAgent': 'AI',
+      'games.orphaned': '孤儿',
+      'games.orphanedHint': '该游戏已不在注册表（卸载或损坏），对局只读不可落子。',
       'panel.section.novels': '小说',
       'view.architectureNovel': 'AgentNovel',
       'novel.empty': '还没有小说，创建一部开始全自动创作。',
@@ -4784,6 +5228,9 @@ window.__ModuleLoader__.load({
         // MVU 状态与回执（0012）/ 剧本进度卡（0014）：available=false / 未绑定剧本
         // 时组件自身返回 null，不占位
         h(TavernMvuStatus, { sessionId }),
+        // 对局面（2026-10-14 修订）：与 MVU 状态同位的自动展示——本聊天存在
+        // 未终局对局即占位渲染棋盘，无对局返回 null 不占位。
+        h(TavernGameBoard, { sessionId }),
         h(TavernScriptProgress, { sessionId }),
         // Mod 声明按钮行（A-1d）：无声明按钮时自身返回 null，不占位
         h(TavernModButtons, { character: binding.character, chatId: binding.chatId }),
@@ -5504,6 +5951,16 @@ window.__ModuleLoader__.load({
       return h(TavernMvuStatus, { sessionId, sidebar: true })
     }
 
+    // 对局面的 DSH 原生右侧栏 tab（2026-10-14 修订，MVU tab 同款姿势）：id 是
+    // keyed slot 的派发键，kind 是 openTab 的页面名。body 渲染 TavernGameBoard
+    // ——tab chip 标题、关闭、分栏由宿主右栏 kit 拥有，本组件只管内容。
+    const GAMES_TAB_ID = 'dsh-tavern/games'
+    const GAMES_TAB_KIND = 'tavern-games'
+
+    function TavernGamesSidebarTab({ sessionId }) {
+      return h(TavernGameBoard, { sessionId, sidebar: true })
+    }
+
     // 剧本进度卡（提案 0014 P1）：卡绑定剧本时在聊天视图顶部展示进度。进度是
     // 展示不是跳章——只读渲染 chunkIndex+1/chunkCount 与当前片段预览（服务端
     // 已截到 ≤400 字符），没有任何改写进度的入口；解绑（404）后隐藏。
@@ -5816,6 +6273,76 @@ window.__ModuleLoader__.load({
         }
         setMvuOpen(!mvuOpen)
       }
+      // 游戏对局面入口（2026-10-14 二次修订，与 MVU 同位同款）：右栏可用时开
+      // 「游戏对局」tab；旧宿主或 openTab 失败（无在屏会话）回落设置面板的
+      // 游戏分区（那里有手动开局与导入入口）。
+      const openGamesSurface = () => {
+        const sidebarRight = PanelHost.context?.get?.('sidebarRight')
+        if (sidebarRight && typeof sidebarRight.openTab === 'function') {
+          try {
+            sidebarRight.openTab(GAMES_TAB_KIND)
+            return
+          } catch {
+            // 落回设置面板
+          }
+        }
+        openPanel('games')
+      }
+      // 对局面自动展示（2026-10-14 修订）：AgentTavern 的对局棋盘住在右栏 games
+      // tab（MVU tab 同位）；本 watcher 盯 games/revision 水位（stat-only 的便宜
+      // 端点，1s 节奏、页面不可见停发），本聊天出现未终局对局即自动展开 tab——
+      // 每个会话只自动展开一次，用户关掉后不抢焦点（TavernMvuStatus autoOpenedFor
+      // 同款纪律）。挂载时已存在的活跃对局也展开一次（重开会话回到棋盘）。ST
+      // 架构不参与：TavernView 内联对局面常驻可见。
+      const autoOpenedGamesRef = useRef(new Set())
+      useEffect(() => {
+        if (!binding || architecture !== 'agent-tavern' || binding.group === true) return undefined
+        let cancelled = false
+        let revision = ''
+        let bootstrapped = false
+        const scan = () => {
+          const query = `?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`
+          return api(`games/list${query}`)
+            .then((list) => {
+              if (cancelled) return
+              const activeSessions = (Array.isArray(list.sessions) ? list.sessions : [])
+                .filter((session) => session && !session.finished && !session.orphaned)
+              const sidebarRight = PanelHost.context?.get?.('sidebarRight')
+              if (typeof sidebarRight?.openTab !== 'function') return
+              for (const session of activeSessions) {
+                if (autoOpenedGamesRef.current.has(session.id)) continue
+                autoOpenedGamesRef.current.add(session.id)
+                try { sidebarRight.openTab(GAMES_TAB_KIND) } catch {}
+                break
+              }
+            })
+            .catch(() => {})
+        }
+        const check = () => {
+          if (cancelled || document.visibilityState === 'hidden') return
+          void api('games/revision')
+            .then((result) => {
+              if (cancelled || typeof result.revision !== 'string' || result.revision === '') return
+              if (!bootstrapped) {
+                bootstrapped = true
+                revision = result.revision
+                return scan()
+              }
+              if (result.revision === revision) return
+              revision = result.revision
+              return scan()
+            })
+            .catch(() => {})
+        }
+        const timer = setInterval(check, GAMES_REVISION_POLL_MS)
+        const onVisibility = () => { if (document.visibilityState === 'visible') check() }
+        document.addEventListener('visibilitychange', onVisibility)
+        return () => {
+          cancelled = true
+          clearInterval(timer)
+          document.removeEventListener('visibilitychange', onVisibility)
+        }
+      }, [binding?.character, binding?.chatId, architecture, binding?.group])
       if (!active || !binding) return null
       if (novelId !== null) {
         const novel = novelSummary || { title: novelId, status: 'active' }
@@ -5922,6 +6449,14 @@ window.__ModuleLoader__.load({
                   onClick: openMvuSurface,
                 }, h(IconDataOutline16)),
                 mvuOpen ? h('div', { className: 'dt-mvu-pop' }, h(TavernMvuStatus, { sessionId, embedded: true })) : null)),
+              // 游戏入口与 MVU 相邻（AgentTavern 标题栏）；ST 走 TavernView 内联
+              // 对局面，不占标题栏。
+              h('button', {
+                type: 'button',
+                title: t('games.tabTitle'),
+                'aria-label': t('games.tabTitle'),
+                onClick: openGamesSurface,
+              }, h(IconSparkle16)),
           h('button', {
             type: 'button',
             title: t('view.openGuides'),
@@ -6497,15 +7032,19 @@ window.__ModuleLoader__.load({
       { id: 'regex', icon: IconListPenOutline16, label: (t) => t('panel.section.regex'), component: () => h(RegexBand) },
       { id: 'variables', icon: IconCordisPluginOutline14, label: (t) => t('panel.section.variables'), component: (host) => h(PanelVariables, { useSessions: host.useSessions }) },
       { id: 'workbench', icon: IconListPenOutline16, label: (t) => t('panel.section.workbench'), component: () => h(PanelWorkbench) },
-      // 第 14 个分区「Mod」（提案 0015 §3.5 P1）：列表 + 两层开关 + 重载 + 启用
+      // 第 14 个分区「游戏」（提案 0018 §4.3，P1）：清单 + 开局 + 本聊天对局面
+      // （GameSurface 持久 iframe；games/revision 1s 轮询仅在存在未终局会话时
+      // 进行，页面不可见停发）。
+      { id: 'games', icon: IconSparkle16, label: (t) => t('panel.section.games'), component: (host) => h(GamesPanel, { useSessions: host.useSessions }) },
+      // 第 15 个分区「Mod」（提案 0015 §3.5 P1）：列表 + 两层开关 + 重载 + 启用
       // 确认弹层（如实展示 capabilities，知情同意）。
       { id: 'mods', icon: IconCordisPluginOutline14, label: (t) => t('panel.section.mods'), component: () => h(PanelMods) },
-      // 第 15 个分区「记忆检索」（提案 0016）：混合检索 embed 端点设置 + 探针。
+      // 第 16 个分区「记忆检索」（提案 0016）：混合检索 embed 端点设置 + 探针。
       { id: 'memory', icon: IconDataOutline16, label: (t) => t('panel.section.memory'), component: () => h(MemoryRetrievalBand) },
-      // 第 16 个分区「提示词」（A-6，2026-10-11）：ST 循环实发请求 + 世界书激活
+      // 第 17 个分区「提示词」（A-6，2026-10-11）：ST 循环实发请求 + 世界书激活
       // 追踪的只读查看器（服务端 prompt-viewer.ts 环形缓冲）。
       { id: 'prompts', icon: IconSearchOutline16, label: (t) => t('panel.section.prompts'), component: () => h(PanelPrompts) },
-      // 第 17 个分区「关于」（2026-10-12）：插件版本 stamp + 官网/作者/源码
+      // 第 18 个分区「关于」（2026-10-12）：插件版本 stamp + 官网/作者/源码
       // 仓库外链，纯静态信息面。
       { id: 'about', icon: IconBrowseOutline16, label: (t) => t('panel.section.about'), component: () => h(PanelAbout) },
     ]) {
@@ -9669,6 +10208,11 @@ window.__ModuleLoader__.load({
         .dt-mod-install{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
         .dt-mod-install>input[type=text]{flex:1;min-width:220px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:6px 9px;font:inherit;font-size:12px}
         .dt-mod-surface{border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-game-row-broken{opacity:.55}
+        .dt-game-board-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:26px 16px;text-align:center;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-game-board-empty>strong{font-size:13px}
+        .dt-game-board-empty>p{margin:0;max-width:300px}
+        .dt-game-board-empty-icon{display:grid;place-items:center;width:40px;height:40px;border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 8%,var(--dsw-alias-bg-base));color:var(--dsw-alias-label-tertiary)}
         .dt-mod-button-strip{display:flex;flex-direction:column;gap:4px;margin:0 0 6px}
         .dt-mod-button-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
         .dt-mod-button-owner{color:var(--dsw-alias-label-tertiary);font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -9764,6 +10308,28 @@ window.__ModuleLoader__.load({
             key: MVU_TAB_ID,
             inject: (sessionId) => ({ sessionId }),
           }, TavernMvuSidebarTab)), 'dsh-tavern: sidebar-right mvu tab body')
+          // 对局面 tab（2026-10-14 修订）：与 MVU tab 同位——AgentTavern 的原生
+          // 会话没有 TavernView 正文 slot，对局棋盘以右栏 tab 展示；对局开始时
+          // 由 TavernHeaderAction 的 watcher 自动展开（openTab），也可从右栏
+          // 「+」guide 手动进入。
+          scope.effect(() => scope.sidebarRightTabs.register({
+            id: GAMES_TAB_ID,
+            kind: GAMES_TAB_KIND,
+            priority: 'extension',
+            title: () => translate('games.tabTitle'),
+            guide: [{
+              id: 'games',
+              order: 41,
+              title: () => translate('games.tabTitle'),
+              description: () => translate('games.guide.description'),
+              icon: IconSparkle16,
+            }],
+          }), 'dsh-tavern: sidebar-right games tab type')
+          scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+            name: 'sidebar.right.pane.tab',
+            key: GAMES_TAB_ID,
+            inject: (sessionId) => ({ sessionId }),
+          }, TavernGamesSidebarTab)), 'dsh-tavern: sidebar-right games tab body')
         })
       }
     }

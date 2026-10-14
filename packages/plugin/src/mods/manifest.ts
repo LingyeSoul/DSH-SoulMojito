@@ -27,6 +27,16 @@ export type ModCapability = (typeof MOD_CAPABILITIES)[number]
 export const MOD_BUTTONS_MAX_COUNT = 8
 export const MOD_BUTTON_NAME_MAX_LENGTH = 40
 
+/**
+ * 游戏注册声明（提案 0018 §4.5 第 3 源 / P3，2026-10-13）：manifest `games`
+ * 声明本 Mod 将经 `api.games.register` 注册的游戏 id（自查面，镜像 buttons 的
+ * 「未声明即拒」纪律——注册时 id 必须在此名单内）。id 须过游戏桥的
+ * MOD_ID_PATTERN 且以 `<modId>.` 为前缀（注册期在 host 层强制）；上限 ≤8 项、
+ * 每项非空 ≤80 字符，重复即清单校验失败。
+ */
+export const MOD_GAMES_MAX_COUNT = 8
+export const MOD_GAME_ID_MAX_LENGTH = 80
+
 /** 按钮显示名规则（manifest 校验与 POST 分发共用同一份白名单）。 */
 export function modButtonNameError(name: unknown): string | undefined {
   if (typeof name !== 'string') return 'button names must be strings'
@@ -71,6 +81,8 @@ export interface ModManifest {
   surfaces: ModSurfacesDeclaration
   /** 声明式按钮显示名（§A-1）；未声明为空数组。 */
   buttons: string[]
+  /** 游戏注册声明（提案 0018 §4.5 第 3 源）：本 Mod 注册的游戏 id 名单；未声明为空数组。 */
+  games: string[]
 }
 
 export type ManifestCheck = { ok: true; manifest: ModManifest } | { ok: false; errors: string[] }
@@ -189,6 +201,38 @@ export function checkModManifest(raw: unknown, options: ManifestCheckOptions): M
     }
   }
 
+  // 游戏注册声明（提案 0018 §4.5 第 3 源，P3）：校验纪律镜像 buttons——形状/
+  // 上限/字符集/去重逐条报错，非法形态在 scan 阶段被拒（坏 Mod 不断路）。
+  if (record.games !== undefined) {
+    if (!Array.isArray(record.games)) {
+      errors.push('games must be an array of game ids')
+    } else {
+      if (record.games.length > MOD_GAMES_MAX_COUNT) {
+        errors.push(`games must declare at most ${MOD_GAMES_MAX_COUNT} entries`)
+      }
+      const seenGames = new Set<string>()
+      for (const gameId of record.games) {
+        if (typeof gameId !== 'string' || gameId.trim() === '') {
+          errors.push('games entries must be non-empty strings')
+          break
+        }
+        if (gameId.length > MOD_GAME_ID_MAX_LENGTH) {
+          errors.push(`game id '${gameId}' must be at most ${MOD_GAME_ID_MAX_LENGTH} characters`)
+          break
+        }
+        if (!MOD_ID_PATTERN.test(gameId)) {
+          errors.push(`game id '${gameId}' must be [a-z0-9-] labels or reverse-domain joined by '.'`)
+          break
+        }
+        if (seenGames.has(gameId)) {
+          errors.push(`game '${gameId}' is declared more than once`)
+          break
+        }
+        seenGames.add(gameId)
+      }
+    }
+  }
+
   if (errors.length > 0) return { ok: false, errors }
 
   const engines = record.engines as Record<string, unknown> | undefined
@@ -216,6 +260,7 @@ export function checkModManifest(raw: unknown, options: ManifestCheckOptions): M
       ? { hooks: [], tools: [], http: [] }
       : { hooks: pickStrings(surfaces.hooks), tools: pickStrings(surfaces.tools), http: pickStrings(surfaces.http) },
     buttons: Array.isArray(record.buttons) ? [...record.buttons as string[]] : [],
+    games: Array.isArray(record.games) ? [...record.games as string[]] : [],
   }
   return { ok: true, manifest }
 }

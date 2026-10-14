@@ -282,6 +282,7 @@ describe('agentPromptSectionsFor coverage lock', () => {
       { name: 'dsh-tavern:agent-facts', order: -70, kind: 'context' },
       { name: 'dsh-tavern:agent-guides', order: -65, kind: 'context' },
       { name: 'dsh-tavern:agent-script', order: -64, kind: 'context' },
+      { name: 'dsh-tavern:agent-games', order: -63, kind: 'context' },
     ]
     expect(registered).toEqual(builtin)
     // 读面方向：unbound agent 懒装载恒空，只验证「读面不产生注册面之外的段」；

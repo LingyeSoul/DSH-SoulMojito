@@ -6344,7 +6344,8 @@ function clampModSectionOrder(order) {
   return Math.max(MOD_SECTION_ORDER_MIN, Math.min(MOD_SECTION_ORDER_MAX, value));
 }
 var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
-  // agent-tavern（agent.ts createTools，18）
+  // agent-tavern（agent.ts createTools，23：18 原有 + 游戏桥五件，提案 0018 §4.2；
+  // game_wait 为 2026-10-14 修订新增）
   "tavern_character_get",
   "tavern_lore_search",
   "tavern_scene_get",
@@ -6363,6 +6364,11 @@ var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
   "tavern_script_advance",
   "tavern_deduce",
   "tavern_variable_settle",
+  "game_list",
+  "game_start",
+  "game_state",
+  "game_move",
+  "game_wait",
   // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
   "novel_status_read",
   "novel_requirements_read",
@@ -6455,17 +6461,23 @@ function createLazyProjection(options) {
       for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
         if (!match(binding)) continue;
         started.add(agentId);
-        await load(agentId);
+        await enqueueLoad(agentId);
       }
     } catch {
     }
+  }
+  const loadChains = /* @__PURE__ */ new Map();
+  function enqueueLoad(agentId) {
+    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId), () => load(agentId));
+    loadChains.set(agentId, next.catch(() => void 0));
+    return next;
   }
   return {
     valueOf(agentId) {
       if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
       if (!started.has(agentId)) {
         started.add(agentId);
-        void load(agentId);
+        void enqueueLoad(agentId);
       }
       return cache.get(agentId);
     },
@@ -6579,6 +6591,18 @@ function mountModExtensions(ctx, options) {
     }
   }
   return dispose;
+}
+
+// packages/plugin/src/games/handle.ts
+var GAMES_SERVICE_KEY = "dsh-tavern:games-service";
+var serviceSymbol = Symbol.for(GAMES_SERVICE_KEY);
+function resolveGamesService() {
+  const holder = globalThis;
+  return holder[serviceSymbol]?.service;
+}
+var gamesChangedListeners = createGlobalListenerRegistry("dsh-tavern:games-changed-listeners");
+function onGamesChanged(listener) {
+  return gamesChangedListeners.on(listener);
 }
 
 // packages/plugin/src/agent-tavern/agent.ts
@@ -6711,6 +6735,30 @@ var settleOutput = objectOutput({
   failed: { type: "array", items: { type: "object", additionalProperties: true } },
   receipt: { type: "object", additionalProperties: true }
 });
+var gameListOutput = objectOutput({
+  games: { type: "array", items: { type: "object", additionalProperties: true } },
+  sessions: { type: "array", items: { type: "object", additionalProperties: true } }
+});
+var gameStartOutput = objectOutput({
+  session: { type: "object", additionalProperties: true },
+  view: { type: "object", additionalProperties: true }
+});
+var gameStateOutput = objectOutput({
+  session: { type: "object", additionalProperties: true },
+  view: { type: "object", additionalProperties: true }
+});
+var gameMoveOutput = objectOutput({
+  session: { type: "object", additionalProperties: true },
+  view: { type: "object", additionalProperties: true },
+  describe: { type: "string" }
+});
+var gameWaitOutput = objectOutput({
+  status: { type: "string", description: "your-turn | finished | orphaned | timeout" },
+  sessionId: { type: "string" },
+  session: { type: "object", additionalProperties: true },
+  view: { type: "object", additionalProperties: true },
+  lastMove: { type: "object", additionalProperties: true, description: "Latest move record (null before the first move); on wake-up it is the human move to narrate." }
+});
 function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
   return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
 }
@@ -6748,6 +6796,9 @@ var guidesProjection = createLazyProjection({
   }
 });
 onGuidesChanged((character, chatId) => guidesProjection.refreshWhere((binding) => binding.architecture === "agent-tavern" && binding.character === character && binding.chatId === chatId));
+onGamesChanged(() => {
+  void gamesSummaryProjection.refreshWhere((binding) => binding.architecture === "agent-tavern");
+});
 var scriptSummaryProjection = createLazyProjection({
   getState: async () => (await tavernStore()).getState(),
   load: async (agentId, settle) => {
@@ -6772,6 +6823,35 @@ async function scriptSummaryForChat(db, character, chatId) {
   const chunkIndex = progress !== void 0 && progress.scriptName === scriptName ? Math.min(progress.chunkIndex, script.chunks.length - 1) : 0;
   return `Bound script: ${scriptName}, progress ${chunkIndex + 1}/${script.chunks.length}; call tavern_script_read for the current segment, tavern_script_advance when the scene has covered it`;
 }
+var gamesSummaryProjection = createLazyProjection({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
+    const db = await tavernStore();
+    const state = await db.getState();
+    const binding = state.sessionBindings[agentId];
+    if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) return;
+    const service = resolveGamesService();
+    if (service === void 0) return;
+    const { sessions } = await service.list({ character: binding.character, chatId: binding.chatId });
+    const active = sessions.filter((session) => session.finished !== true && session.orphaned !== true);
+    if (active.length === 0) {
+      settle("");
+      return;
+    }
+    const lines = active.map((session) => {
+      const turnOwner = session.players.find((player) => player.role === session.turn)?.owner;
+      const whose = turnOwner === "agent" ? "\u4F60\uFF08Agent\uFF09" : "\u4EBA\u7C7B\u73A9\u5BB6";
+      return `- ${session.gameName}\uFF08sessionId ${session.id}\uFF09\uFF1A\u8F6E\u5230 ${session.turn}\uFF08${whose}\uFF09\uFF1B\u52A8\u4F5C\u8BCD\u6C47\u8868\uFF1A${session.actionVocabulary}`;
+    });
+    const text = [
+      "\u672C\u804A\u5929\u6709\u8FDB\u884C\u4E2D\u7684\u6E38\u620F\u5BF9\u5C40\uFF1A",
+      ...lines,
+      "\u8F6E\u5230\u4F60\u65F6\u7528 game_move \u843D\u5B50\uFF1B\u843D\u5230\u4EBA\u7C7B\u56DE\u5408\u7ACB\u5373\u8C03\u7528 game_wait \u963B\u585E\u7B49\u5F85\u5BF9\u65B9\u5728\u68CB\u76D8\u4E0A\u843D\u5B50\uFF08\u5BF9\u65B9\u65E0\u9700\u53D1\u9001\u804A\u5929\u6D88\u606F\uFF09\uFF0C\u5DE5\u5177\u8FD4\u56DE\u540E\u81EA\u52A8\u7EE7\u7EED\uFF1Bdescribe/summary \u6587\u6848\u53EF\u76F4\u63A5\u7528\u4E8E\u5BF9\u8BDD\u4E2D\u53D9\u8FF0\u8FD9\u4E00\u624B\u3002"
+    ].join("\n");
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER);
+    settle(hostPromptSafe(text, expand));
+  }
+});
 var presetFreeze = /* @__PURE__ */ new Map();
 var presetProjection = createLazyProjection({
   getState: async () => (await tavernStore()).getState(),

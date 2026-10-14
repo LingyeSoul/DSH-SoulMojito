@@ -100,7 +100,8 @@ describe('AgentTavern native module mount', () => {
     expect(sections.map((section) => section.name)).toContain('dsh-tavern:agent-preset')
     expect(contexts.map((context) => context.name)).toContain('dsh-tavern:agent-facts')
     expect([...tools.keys()]).toContain('tavern_character_get')
-    expect(tools.size).toBe(18)
+    // 18 原有 + 游戏桥五件（提案 0018 §4.2；game_wait 为 2026-10-14 修订）。
+    expect(tools.size).toBe(23)
   })
 
   it('resolves the per-agent facts from the assembly context instead of the mount context', async () => {

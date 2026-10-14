@@ -130,6 +130,11 @@ import { TavernUpdateService, updateChangelog } from './update/service.js'
 // 审计；api 适配层（logger/storage/assets/events/timers/http）在 mods/host.ts。
 import { ModHost, modsDisabledByEnv, type ModHostContext, type ModHostSnapshot } from './mods/host.js'
 import { beginStreamEpoch, emitAssetsSaved, emitChatSaved, emitStreamDelta } from './mods/events.js'
+// 游戏桥（提案 0018 §4.1，P0 无头可玩 + P2 导入路径）：运行时住在 index bundle，
+// 经 globalThis 句柄发布给 agent bundle 的 game_* 工具（src/games/handle.ts）；
+// HTTP 面挂本前缀下 games/*（src/games/http.ts）。
+import { openGamesService, type GamesService } from './games/service.js'
+import { handleGamesApi, isGamesRoute } from './games/http.js'
 // 卡片工作台方案确认协议（提案 0013 P2；世界书面板化为同构扩展）：方案存储在
 // card-workbench/plans.ts（kind 判别：卡方案 / 世界书方案），执行核（写入 +
 // applied 标记）在 card-workbench/agent.ts，路由块在 mvu/status 之后。
@@ -180,6 +185,10 @@ let updateChecksEnabledFlag = true
 // 在 apply() 时绑定（logger/effect 经适配层注入，不透传给 Mod）。
 let modHostPromise: Promise<ModHost> | undefined
 let modHostContext: ModHostContext | undefined
+// 游戏桥运行时（提案 0018 P0+P2）：registry + sessions 组装后经 globalThis
+// 句柄发布（agent bundle 的 game_* 工具逐调用解析，见 src/games/handle.ts）。
+// 单进程单实例；apply 打开、effect 清理时 dispose 摘句柄。
+let gamesServicePromise: Promise<GamesService> | undefined
 // Prompt Template（提案 0008）总开关：默认开启；profile 行 templateEnabled: false
 // 或 DSH_TAVERN_DISABLE_TEMPLATES=1 关闭。无模板标签时链路直通，无额外开销。
 let templatesEnabledFlag = true
@@ -640,11 +649,36 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
 
   ctx.effect(() => tavernUpdate(ctx).start(), 'dsh-tavern: update auto-check')
 
-  // Mod 宿主（提案 0015 §3.2 P1）：stores 就绪后扫描 <tavern>/mods/ 并按三层
+  // 游戏桥运行时（提案 0018 P0+P2）：扫描注册表（内置 + installed 目录）并
+  // 发布 globalThis 句柄。装载是异步的，不阻塞 apply 返回；坏游戏 broken 入
+  // 册不影响宿主。失败只记日志——工具面与 HTTP 面在句柄缺失时报
+  // 「游戏运行时不可用」，插件其余表面照常。
+  gamesServicePromise = openGamesService({
+    root: dshHomePath('tavern'),
+    hostVersion: BUILD_INFO.version,
+    logger: { warn: (message) => ctx.logger?.warn?.(message) },
+  })
+  gamesServicePromise.catch((error: unknown) => {
+    ctx.logger?.warn?.(`dsh-tavern: games service failed to start: ${error instanceof Error ? error.message : String(error)}`)
+  })
+  try {
+    ctx.effect?.(() => () => {
+      void gamesServicePromise?.then((service) => service.dispose()).catch(() => {})
+      gamesServicePromise = undefined
+    }, 'dsh-tavern: games unload')
+  } catch {
+    // 拒绝晚注册 effect 的宿主只失去摘句柄兜底；句柄本身不受影响。
+  }
+
+  // Mod 宿主（提案 0015 P3）：stores 就绪后扫描 <tavern>/mods/ 并按三层
   // 开关装载（双默认 false + DSH_TAVERN_DISABLE_MODS 硬关）。装载是异步的，
   // 不阻塞 apply 返回；坏 Mod 只记审计与错误位。宿主卸载时统一 dispose。
+  // P3 起装载在游戏服务**落定之后**串行开始：api.games.register 在 setup 期
+  // 经 globalThis 句柄直调注册表，句柄未发布会 fail-fast 把注册游戏的 Mod 打
+  // 成错误位——先开游戏服务再装 Mod 消除这个竞态。游戏服务打开失败不阻断
+  // Mod 装载（catch 后继续；注册游戏的 Mod 会如实报 games runtime 不可用）。
   modHostContext = ctx
-  void modHost().catch((error: unknown) => {
+  void gamesServicePromise.catch(() => {}).then(() => modHost()).catch((error: unknown) => {
     ctx.logger?.warn?.(`dsh-tavern: mod host failed to start: ${error instanceof Error ? error.message : String(error)}`)
   })
   try {
@@ -711,6 +745,19 @@ async function handleApi(ctx, req, res) {
   // 「有新版本吗」——升级本身正是修数据/兼容问题的入口。
   if (route === 'update' || route.startsWith('update/')) {
     return handleUpdateApi(ctx, req, res, url, route, method)
+  }
+
+  // 游戏桥路由（提案 0018 §4.1 http.ts）：同样不依赖 Tavern store（自带
+  // games/ 目录与会话存储），结构化错误（409/400/404/503）在面内应答。
+  if (isGamesRoute(route)) {
+    return handleGamesApi({
+      resolveService: () => gamesServicePromise,
+      req,
+      res,
+      url,
+      route,
+      method,
+    })
   }
 
   const db = await store()
