@@ -17,6 +17,9 @@
  *   重复实例化未变更的引擎）。
  * - **运行时以 engine.meta 为准**（提案 §6）：清单与 meta 冗余字段不一致时只
  *   记 warning 日志，注册表条目采用 meta 的值（单一事实来源纪律）。
+ * - **同 id 遮蔽**（2026-10-14）：导入目录与内置同 id（内置五子棋 vs 导入参照包）
+ *   时以磁盘上的导入副本为准并记 warning（见 scanInstalled 注释）——不引入内置
+ *   保护特例，保持 get() 的「builtin/imported 优先于 mod」单一遮蔽规则。
  * - **mod 源独立成册**：mod 注册活在本进程内存（引擎对象不落盘），reload/
  *   scan 重扫只清 builtin+imported 册——Mod 注册不随 installed 目录重扫丢失；
  *   Mod 卸载（disable/目录消失/reload）经宿主 offRegistrations 反注册。
@@ -30,6 +33,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { satisfiesVersionRange } from '../mods/manifest.js'
 import { gitClone, parseGitSource } from '../mods/install.js'
+import { gomoku } from './builtin/gomoku.js'
 import { ticTacToe } from './builtin/tic-tac-toe.js'
 import {
   checkGameEngine,
@@ -131,7 +135,7 @@ export class GameRegistry {
   }
 
   private loadBuiltins(): void {
-    for (const builtin of [ticTacToe]) {
+    for (const builtin of [ticTacToe, gomoku]) {
       const smoke = smokeTestGameEngine(builtin.engine)
       if (!smoke.ok) {
         // 内置引擎烟测失败是编程错误：如实 broken 入册（仍不崩启动），测试会抓。
@@ -160,6 +164,16 @@ export class GameRegistry {
         const message = cause instanceof Error ? cause.message : String(cause)
         return { source: 'imported' as const, manifest: brokenFallbackManifest(directory), engine: null, viewHtml: null, status: 'broken' as const, reason: message, directory: join(this.installedRoot, directory) }
       })
+      const shadowed = this.games.get(entry.manifest.id)
+      if (shadowed?.source === 'builtin') {
+        // 同 id 遮蔽（内置五子棋与导入参照包同 id，2026-10-14）：以磁盘上可审计
+        // 的导入副本为准（与 get() 的 builtin/imported 优先于 mod 同一纪律）。
+        // 不静默——来源目录与装载结果进日志；坏导入同样遮蔽（broken 条目可见，
+        // 删目录即恢复内置），不引入内置保护特例。
+        this.options.logger?.warn?.(
+          `dsh-tavern: 导入游戏 '${entry.manifest.id}'（目录 ${directory}）与内置游戏同 id，以导入副本为准（status: ${entry.status}）`,
+        )
+      }
       this.games.set(entry.manifest.id, entry)
     }
   }

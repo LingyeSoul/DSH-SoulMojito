@@ -375,6 +375,11 @@ function checkServerText(text) {
   if (!text.includes("'view'") && !text.includes('"view"')) {
     problems.push("server bundle must serve game views under games/:gid/view/:sid")
   }
+  // 内置五子棋（2026-10-14 回归）：id 字面量须在 bundle 里（引擎 MANIFEST 与
+  // 视图 data-game 标记双处都有）——丢失即判定内置游戏未随包分发。
+  if (!text.includes('dsh-tavern.gomoku')) {
+    problems.push('server bundle must ship the builtin gomoku game (dsh-tavern.gomoku)')
+  }
   return problems
 }
 
@@ -1856,7 +1861,7 @@ const gates = [
       const versionReader = 'readFileSync("version.json", "utf8"); var BUILD_INFO = { version: "0.0.0", commit: "stub" };'
       const commitResolver = 'function resolveCommit() { execFileSync("git", ["rev-parse", "--show-toplevel"]); return "stub"; } var TAVERN_COMMIT = resolveCommit();'
       const localEmbed = '"local-onnx:"\n\'@huggingface/transformers\'\nvar localStatus = { runtimeInstalled: true };\nfunction inferLocalModelSettings() {}\n"memory/embed/local/install"\nfunction detectLocalQuantizations() {}\n"memory/embed/local/quantizations"\nfunction resolveLocalDtype() {}'
-      const gamesBridge = '"dsh-tavern:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';'
+      const gamesBridge = '"dsh-tavern:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';\nvar builtinGomoku = "dsh-tavern.gomoku";'
       const good = `var name = "dsh-tavern"; var inject = []; function apply() {} function assertStGenerationBinding() {}\n${routeMarkers}\n"${API_PREFIX}"\n${versionReader}\n${commitResolver}\n${localEmbed}\n${gamesBridge}\nvar bootstrap = { ok: true, version: BUILD_INFO.version, commit: TAVERN_COMMIT };\nexport { name, inject, apply };`
       const badRoute = good.replace('"generate"', '"missing"')
       const badStamp = good.replace('version: BUILD_INFO.version, ', '')
@@ -1871,6 +1876,7 @@ const gates = [
       const badGamesSmoke = good.replace('function smokeTestGameEngine() {}', 'function smokeNothing() {}')
       const badGamesOrphan = good.replace('orphaned: true', 'gone: true')
       const badGamesView = good.replace("=== 'view'", "=== 'gone'").replace("=== \"view\"", "=== \"gone\"")
+      const badGamesGomoku = good.replace('"dsh-tavern.gomoku"', '"gomoku-removed"')
       return checkServerText(good).length === 0
         && checkServerText(badRoute).length > 0
         && checkServerText(badStamp).length > 0
@@ -1885,6 +1891,7 @@ const gates = [
         && checkServerText(badGamesSmoke).length > 0
         && checkServerText(badGamesOrphan).length > 0
         && checkServerText(badGamesView).length > 0
+        && checkServerText(badGamesGomoku).length > 0
         && checkServerFreshness(10, 10).length === 0
         && checkBuildStamps('var built = { version: "0.0.0", commit: "abc1234" };', '0.0.0', 'abc1234').length === 0
         && checkBuildStamps('var built = { version: __TAVERN_VERSION__, commit: __TAVERN_COMMIT__ };', '0.0.0', 'abc1234').length > 0

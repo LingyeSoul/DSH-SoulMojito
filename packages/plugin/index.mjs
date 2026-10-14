@@ -4370,7 +4370,7 @@ var TavernStore = class _TavernStore {
     const stem = safeFileName(card.data.name);
     const fileName = `${stem}.${kind}`;
     await this.writeAtomic(path.join(this.root, "characters", fileName), bytes);
-    await Promise.all(["png", "json", "charx"].filter((other2) => other2 !== kind).map((other2) => fs2.rm(path.join(this.root, "characters", `${stem}.${other2}`), { force: true })));
+    await Promise.all(["png", "json", "charx"].filter((other3) => other3 !== kind).map((other3) => fs2.rm(path.join(this.root, "characters", `${stem}.${other3}`), { force: true })));
     return { fileName, card, importedWorld, importedRegex };
   }
   /**
@@ -4466,8 +4466,8 @@ var TavernStore = class _TavernStore {
         }
       }
     }
-    for (const other2 of ["png", "json", "charx"].filter((other3) => other3 !== kind)) {
-      await fs2.rm(path.join(this.root, "characters", `${nextStem}.${other2}`), { force: true });
+    for (const other3 of ["png", "json", "charx"].filter((other4) => other4 !== kind)) {
+      await fs2.rm(path.join(this.root, "characters", `${nextStem}.${other3}`), { force: true });
     }
     const saved = await this.getCharacter(card.data.name);
     if (saved === void 0) throw new Error(`character '${card.data.name}' could not be reloaded`);
@@ -8056,7 +8056,7 @@ function parseEpubText(buffer) {
   if (opfBytes === void 0) throw new Error(`not a valid EPUB: package document '${opfPath}' not found in zip`);
   const opfText = strFromU8(opfBytes);
   const opfDir = opfPath.includes("/") ? opfPath.slice(0, opfPath.lastIndexOf("/")) : "";
-  const manifest2 = /* @__PURE__ */ new Map();
+  const manifest3 = /* @__PURE__ */ new Map();
   for (const match of opfText.matchAll(/<item\b[^>]*>/gi)) {
     const tag = match[0];
     const id = /(?:\b|xml:)id\s*=\s*"([^"]*)"/i.exec(tag)?.[1];
@@ -8064,11 +8064,11 @@ function parseEpubText(buffer) {
     if (id === void 0 || id === "" || href === void 0) continue;
     const mediaType = /\bmedia-type\s*=\s*"([^"]*)"/i.exec(tag)?.[1];
     const isXhtml = mediaType === "application/xhtml+xml" || mediaType === "text/html" || mediaType === void 0 && /\.(xhtml|html|htm)$/i.test(href);
-    if (isXhtml) manifest2.set(id, { href, isXhtml: true });
+    if (isXhtml) manifest3.set(id, { href, isXhtml: true });
   }
   const spineBlock = /<spine\b[^>]*>([\s\S]*?)<\/spine>/i.exec(opfText)?.[1] ?? "";
   const idrefs = [...spineBlock.matchAll(/<itemref\b[^>]*>/gi)].map((match) => /\bidref\s*=\s*"([^"]*)"/i.exec(match[0])?.[1]).filter((idref) => idref !== void 0 && idref !== "");
-  const orderedHrefs = (idrefs.length > 0 ? idrefs : [...manifest2.keys()]).map((idref) => manifest2.get(idref)).filter((item) => item !== void 0).map((item) => resolveZipPath(opfDir, item.href));
+  const orderedHrefs = (idrefs.length > 0 ? idrefs : [...manifest3.keys()]).map((idref) => manifest3.get(idref)).filter((item) => item !== void 0).map((item) => resolveZipPath(opfDir, item.href));
   const chapters = [];
   for (const href of orderedHrefs) {
     const doc = files[href];
@@ -16168,8 +16168,8 @@ function readInstalledStamp(pluginDir, spec = "") {
   }
   if (version === UNKNOWN_FIELD) {
     try {
-      const manifest2 = JSON.parse(readFileSync2(join15(pluginDir, "package.json"), "utf8"));
-      if (typeof manifest2?.version === "string" && manifest2.version.trim() !== "") version = manifest2.version.trim();
+      const manifest3 = JSON.parse(readFileSync2(join15(pluginDir, "package.json"), "utf8"));
+      if (typeof manifest3?.version === "string" && manifest3.version.trim() !== "") version = manifest3.version.trim();
     } catch {
     }
   }
@@ -17172,7 +17172,7 @@ function checkModManifest(raw, options) {
   const panel = record.panel;
   const surfaces = record.surfaces;
   const pickStrings = (value) => Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
-  const manifest2 = {
+  const manifest3 = {
     id: record.id,
     name: record.name,
     version: record.version,
@@ -17187,7 +17187,7 @@ function checkModManifest(raw, options) {
     buttons: Array.isArray(record.buttons) ? [...record.buttons] : [],
     games: Array.isArray(record.games) ? [...record.games] : []
   };
-  return { ok: true, manifest: manifest2 };
+  return { ok: true, manifest: manifest3 };
 }
 function checkMainPath(main) {
   const text = main.trim();
@@ -17511,11 +17511,11 @@ async function installModFromGit(options) {
 
 // packages/plugin/src/mods/host.ts
 var MOD_API_VERSION = 1;
-function declaredSurfacesOf(manifest2) {
+function declaredSurfacesOf(manifest3) {
   return {
-    hooks: [...manifest2.surfaces.hooks],
-    tools: [...manifest2.surfaces.tools],
-    http: [...manifest2.surfaces.http]
+    hooks: [...manifest3.surfaces.hooks],
+    tools: [...manifest3.surfaces.tools],
+    http: [...manifest3.surfaces.http]
   };
 }
 function modsDisabledByEnv() {
@@ -17780,32 +17780,32 @@ var ModHost = class _ModHost {
         await this.audit.record(id, "skip", message);
         continue;
       }
-      const manifest2 = check.manifest;
-      const engineRange = manifest2.engines?.dshTavern;
+      const manifest3 = check.manifest;
+      const engineRange = manifest3.engines?.dshTavern;
       if (engineRange !== void 0) {
         const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange);
         if (!verdict.ok) {
-          nextBlocked.set(id, { manifest: manifest2, reason: verdict.reason });
+          nextBlocked.set(id, { manifest: manifest3, reason: verdict.reason });
           await this.audit.record(id, "skip", verdict.reason);
           continue;
         }
       }
-      const entryPath = resolve3(this.modsRoot, directory, manifest2.main);
+      const entryPath = resolve3(this.modsRoot, directory, manifest3.main);
       const containment = relative(resolve3(this.modsRoot, directory), entryPath);
       if (containment === "" || containment.startsWith("..") || isAbsolute(containment)) {
-        const message = `main entry '${manifest2.main}' escapes the mod directory`;
-        nextBlocked.set(id, { manifest: manifest2, reason: message });
+        const message = `main entry '${manifest3.main}' escapes the mod directory`;
+        nextBlocked.set(id, { manifest: manifest3, reason: message });
         await this.audit.record(id, "skip", message);
         continue;
       }
       const entryStat = await fs14.stat(entryPath).catch(() => void 0);
       if (entryStat?.isFile() !== true) {
-        const message = `main entry '${manifest2.main}' not found`;
-        nextBlocked.set(id, { manifest: manifest2, reason: message });
+        const message = `main entry '${manifest3.main}' not found`;
+        nextBlocked.set(id, { manifest: manifest3, reason: message });
         await this.audit.record(id, "skip", message);
         continue;
       }
-      nextDiscovered.set(id, { manifest: manifest2, directory: join18(this.modsRoot, directory), entryPath });
+      nextDiscovered.set(id, { manifest: manifest3, directory: join18(this.modsRoot, directory), entryPath });
     }
     this.discovered.clear();
     this.broken.clear();
@@ -18049,14 +18049,14 @@ var ModHost = class _ModHost {
           if (!record.manifest.games.includes(gameId)) {
             throw new Error(`game '${gameId}' is not declared in the manifest games [${record.manifest.games.join(", ")}]`);
           }
-          const engine2 = def.engine;
+          const engine3 = def.engine;
           const service = resolveGamesService();
           if (service === void 0) {
             throw new Error("the games runtime is not available in this process (game registration requires the games service)");
           }
           service.registerModGame(def);
           return tracked(() => {
-            service.unregisterModGame(gameId, engine2);
+            service.unregisterModGame(gameId, engine3);
           });
         }
       },
@@ -18083,9 +18083,9 @@ var ModHost = class _ModHost {
             if (entry.name.toLowerCase() === lowered) throw new Error(`macro name '${macroName}' is already registered`);
           }
           let failureAudited = false;
-          const wrapped = (args, engine2) => {
+          const wrapped = (args, engine3) => {
             try {
-              const result = fn(args, engine2);
+              const result = fn(args, engine3);
               if (typeof result === "string" || result === null) return result;
               if (typeof result === "number" || typeof result === "boolean") return String(result);
               return null;
@@ -18151,17 +18151,17 @@ var ModHost = class _ModHost {
     return api;
   }
 };
-function modInfoOf(manifest2) {
+function modInfoOf(manifest3) {
   return {
-    id: manifest2.id,
-    name: manifest2.name,
-    version: manifest2.version,
-    author: manifest2.author,
-    description: manifest2.description,
-    capabilities: manifest2.capabilities,
-    loadingOrder: manifest2.loadingOrder,
-    panel: manifest2.panel ?? null,
-    buttons: [...manifest2.buttons]
+    id: manifest3.id,
+    name: manifest3.name,
+    version: manifest3.version,
+    author: manifest3.author,
+    description: manifest3.description,
+    capabilities: manifest3.capabilities,
+    loadingOrder: manifest3.loadingOrder,
+    panel: manifest3.panel ?? null,
+    buttons: [...manifest3.buttons]
   };
 }
 var GENERATION_HOOK_PHASES = /* @__PURE__ */ new Set(["user-input", "pre-assemble", "pre-llm", "post-output", "post-save"]);
@@ -18318,35 +18318,49 @@ import { tmpdir as tmpdir3 } from "node:os";
 import { join as join19, resolve as resolve4 } from "node:path";
 import { pathToFileURL as pathToFileURL4 } from "node:url";
 
-// packages/plugin/src/games/builtin/tic-tac-toe.ts
-var SIZE = 3;
+// packages/plugin/src/games/builtin/gomoku.ts
+var SIZE = 15;
 var EMPTY = 0;
-var CROSS = 1;
-var NOUGHT = 2;
-var COLUMNS = "ABC";
+var BLACK = 1;
+var WHITE = 2;
+var MAX_CANDIDATES = 64;
+var COLUMNS = "ABCDEFGHIJKLMNO";
+var CN_NUMERALS = {
+  5: "\u4E94",
+  6: "\u516D",
+  7: "\u4E03",
+  8: "\u516B",
+  9: "\u4E5D",
+  10: "\u5341",
+  11: "\u5341\u4E00",
+  12: "\u5341\u4E8C",
+  13: "\u5341\u4E09",
+  14: "\u5341\u56DB",
+  15: "\u5341\u4E94"
+};
 var DIRECTIONS = [[1, 0], [0, 1], [1, 1], [1, -1]];
 var MANIFEST = {
-  id: "dsh-tavern.tic-tac-toe",
-  name: "\u4E95\u5B57\u68CB",
+  id: "dsh-tavern.gomoku",
+  name: "\u4E94\u5B50\u68CB",
   version: "1.0.0",
-  players: { min: 2, max: 2, roles: ["x", "o"] },
+  players: { min: 2, max: 2, roles: ["black", "white"] },
   turnBased: true,
-  actionVocabulary: "\u843D\u5B50 {type:'place', x, y}\uFF0Cx/y \u4E3A 0-2 \u6574\u6570\u5750\u6807\uFF08\u5217 A-C\u3001\u884C 1-3\uFF09\uFF1B\u8BA4\u8F93 {type:'resign'} \u7531\u8FD0\u884C\u65F6\u7EDF\u4E00\u5904\u7406"
+  actionVocabulary: "\u843D\u5B50 {type:'place', x, y}\uFF0Cx/y \u4E3A 0-14 \u6574\u6570\u5750\u6807\uFF08\u5217 A-O\u3001\u884C 1-15\uFF09\uFF1B\u8BA4\u8F93 {type:'resign'} \u7531\u8FD0\u884C\u65F6\u7EDF\u4E00\u5904\u7406"
 };
-function markName(role) {
-  return role === "x" ? "X" : "O";
+function coordName(x, y) {
+  return COLUMNS[x] + String(y + 1);
+}
+function stoneName(role) {
+  return role === "black" ? "\u9ED1\u68CB" : "\u767D\u68CB";
 }
 function sideName(role) {
-  return role === "x" ? "X \u65B9" : "O \u65B9";
+  return role === "black" ? "\u9ED1\u65B9" : "\u767D\u65B9";
 }
 function other(role) {
-  return role === "x" ? "o" : "x";
+  return role === "black" ? "white" : "black";
 }
 function isOnBoard(x, y) {
   return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && x < SIZE && y >= 0 && y < SIZE;
-}
-function coordName(x, y) {
-  return COLUMNS[x] + String(y + 1);
 }
 function cloneState(state) {
   return {
@@ -18360,20 +18374,20 @@ function cloneState(state) {
   };
 }
 function findWinLine(board, x, y) {
-  const mark = board[y][x];
-  if (mark === EMPTY) return null;
+  const stone = board[y][x];
+  if (stone === EMPTY) return null;
   for (const [dx, dy] of DIRECTIONS) {
     const cells = [{ x, y }];
     for (const sign of [1, -1]) {
       let cx = x + dx * sign;
       let cy = y + dy * sign;
-      while (isOnBoard(cx, cy) && board[cy][cx] === mark) {
+      while (isOnBoard(cx, cy) && board[cy][cx] === stone) {
         cells.push({ x: cx, y: cy });
         cx += dx * sign;
         cy += dy * sign;
       }
     }
-    if (cells.length >= SIZE) {
+    if (cells.length >= 5) {
       cells.sort((a, b) => a.x - b.x || a.y - b.y);
       return cells;
     }
@@ -18382,11 +18396,550 @@ function findWinLine(board, x, y) {
 }
 var engine = {
   meta: MANIFEST,
-  /** 开局：空盘 X 先。options（含 seed）接受但忽略——井字棋无随机性。 */
+  /** 开局：空盘黑先。options（含 seed）接受但忽略——五子棋无随机性。 */
   createGame(_options) {
     return {
       state: {
         board: Array.from({ length: SIZE }, () => Array.from({ length: SIZE }, () => EMPTY)),
+        turn: "black",
+        ply: 0,
+        lastMove: null,
+        finished: false,
+        winner: null,
+        winLine: null
+      }
+    };
+  },
+  /**
+   * 当前行棋方的建议落点（有界建议集，非全量合法点）：已终局 → []；空盘 →
+   * 只有天元 (7,7)；否则 → 与既有棋子切比雪夫距离 ≤2 的空点，按邻居加权
+   * 计数打分（距离 1 记 2 分、距离 2 记 1 分）降序、(y, x) 字典序 tiebreak，
+   * 截断至 64。全部确定性：无随机、无时间依赖。
+   */
+  legalActions(state) {
+    if (state.finished) return [];
+    if (state.ply === 0) return [{ type: "place", x: 7, y: 7 }];
+    const candidates = [];
+    for (let y = 0; y < SIZE; y += 1) {
+      for (let x = 0; x < SIZE; x += 1) {
+        if (state.board[y][x] !== EMPTY) continue;
+        let score = 0;
+        let nearStone = false;
+        for (let dy = -2; dy <= 2; dy += 1) {
+          for (let dx = -2; dx <= 2; dx += 1) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || nx >= SIZE || ny < 0 || ny >= SIZE) continue;
+            if (state.board[ny][nx] === EMPTY) continue;
+            nearStone = true;
+            score += Math.max(Math.abs(dx), Math.abs(dy)) === 1 ? 2 : 1;
+          }
+        }
+        if (nearStone) candidates.push({ x, y, score });
+      }
+    }
+    candidates.sort((a, b) => b.score - a.score || a.y - b.y || a.x - b.x);
+    return candidates.slice(0, MAX_CANDIDATES).map(({ x, y }) => ({ type: "place", x, y }));
+  },
+  /**
+   * 落子并推进局面。校验顺序：动作形状 → type → 未终局 → 行棋方 → 坐标 →
+   * 空点；任一不过抛 Error（中文报错）。绝不改入参 state——深拷贝出新态。
+   * 返回 { state, events, finished, winner, summary }；胜时新态附 winLine。
+   */
+  applyAction(state, action, actor) {
+    if (action === null || typeof action !== "object" || Array.isArray(action)) {
+      throw new Error("\u52A8\u4F5C\u5FC5\u987B\u662F JSON \u5BF9\u8C61");
+    }
+    const typed = action;
+    if (typeof typed.type !== "string" || typed.type === "") {
+      throw new Error("\u52A8\u4F5C\u7F3A\u5C11 type \u5B57\u6BB5");
+    }
+    if (typed.type !== "place") {
+      throw new Error(`\u4E0D\u652F\u6301\u7684\u52A8\u4F5C\u7C7B\u578B\u300C${typed.type}\u300D\uFF1A\u672C\u5F15\u64CE\u53EA\u5B9E\u73B0 place\uFF08resign \u7531\u8FD0\u884C\u65F6\u7EDF\u4E00\u5904\u7406\uFF09`);
+    }
+    if (state.finished) {
+      throw new Error("\u5BF9\u5C40\u5DF2\u7ED3\u675F\uFF0C\u4E0D\u80FD\u518D\u843D\u5B50");
+    }
+    if (actor !== "black" && actor !== "white") {
+      throw new Error(`\u672A\u77E5\u89D2\u8272\u300C${String(actor)}\u300D\uFF1A\u672C\u6E38\u620F\u89D2\u8272\u4E3A black/white`);
+    }
+    if (actor !== state.turn) {
+      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u843D\u5B50`);
+    }
+    if (!isOnBoard(typed.x, typed.y)) {
+      throw new Error(`\u843D\u5B50\u5750\u6807\u5FC5\u987B\u662F 0-${SIZE - 1} \u7684\u6574\u6570\uFF0C\u6536\u5230 x=${String(typed.x)}\u3001y=${String(typed.y)}`);
+    }
+    const x = typed.x;
+    const y = typed.y;
+    if (state.board[y][x] !== EMPTY) {
+      throw new Error(`${coordName(x, y)} \u5DF2\u6709\u68CB\u5B50\uFF0C\u4E0D\u80FD\u843D\u5728\u5DF2\u5360\u70B9\u4E0A`);
+    }
+    const next = cloneState(state);
+    next.board[y][x] = actor === "black" ? BLACK : WHITE;
+    next.ply = state.ply + 1;
+    next.lastMove = { x, y };
+    next.turn = other(actor);
+    const move = `${stoneName(actor)}\u843D\u4E8E ${coordName(x, y)}`;
+    const events = [move];
+    let summary = move;
+    const winLine = findWinLine(next.board, x, y);
+    if (winLine !== null) {
+      next.finished = true;
+      next.winner = actor;
+      next.winLine = winLine;
+      const ending = `${stoneName(actor)}${CN_NUMERALS[winLine.length] ?? String(winLine.length)}\u8FDE\uFF0C${actor === "black" ? "\u9ED1" : "\u767D"}\u80DC`;
+      events.push(ending);
+      summary = `${move}\uFF0C${ending}`;
+    } else if (next.ply === SIZE * SIZE) {
+      next.finished = true;
+      next.winner = null;
+      next.winLine = null;
+      events.push("\u68CB\u76D8\u5DF2\u6EE1\uFF0C\u548C\u68CB");
+      summary = `${move}\uFF0C\u68CB\u76D8\u5DF2\u6EE1\uFF0C\u548C\u68CB`;
+    }
+    return { state: next, events, finished: next.finished, winner: next.winner, summary };
+  },
+  /** 人类可读的一手棋描述（Agent 在对话里角色化叙述用），含棋谱坐标（列 A-O + 行 1-15）。 */
+  describe(_state, actor, action) {
+    if (action !== null && typeof action === "object" && !Array.isArray(action) && action.type === "place" && isOnBoard(action.x, action.y)) {
+      const x = action.x;
+      const y = action.y;
+      return `${stoneName(actor === "white" ? "white" : "black")}\u843D\u4E8E ${coordName(x, y)}`;
+    }
+    return `${stoneName(actor === "white" ? "white" : "black")}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
+  }
+};
+var manifest = MANIFEST;
+var viewHtml = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>\u4E94\u5B50\u68CB \xB7 dsh-tavern \u6E38\u620F\u6865</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #171a20; color: #e8e4da;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 10px 10px 14px;
+  }
+  header {
+    width: 100%; max-width: 560px;
+    display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+    padding: 4px 2px 8px;
+  }
+  .game-name { font-size: 16px; font-weight: 600; letter-spacing: 1px; }
+  .meta {
+    font-size: 12px; color: #9a948a; font-variant-numeric: tabular-nums;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #banner {
+    width: 100%; max-width: 560px;
+    border-radius: 8px; padding: 8px 12px; font-size: 13px; text-align: center;
+    margin-bottom: 10px; border: 1px solid #3a3f4a; background: #22262e;
+    transition: background .2s;
+  }
+  #banner.turn-black { background: #101216; border-color: #454b57; }
+  #banner.turn-white { background: #e9e5da; border-color: #c9c2b2; color: #26282d; }
+  #banner.finished  { background: #2a2416; border-color: #8a6d2f; color: #e7cf96; }
+  #banner.preview   { background: #20242c; border-color: #4a5568; color: #b9c4d8; }
+  .board-wrap { position: relative; width: 100%; max-width: 560px; }
+  svg#board { display: block; width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 18px rgba(0,0,0,.45); }
+  svg#board.interactive .hit { cursor: pointer; }
+  .overlay {
+    position: absolute; inset: 0; border-radius: 8px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+    background: rgba(14, 15, 18, .72);
+  }
+  .overlay.hidden { display: none; }
+  .overlay .result { font-size: 22px; font-weight: 700; color: #f0e6c8; letter-spacing: 2px; }
+  .overlay .sub { font-size: 13px; color: #c9c0a8; padding: 0 14px; text-align: center; }
+  footer {
+    width: 100%; max-width: 560px; margin-top: 10px;
+    font-size: 12px; color: #8d887e; text-align: center; line-height: 1.6;
+  }
+</style>
+</head>
+<body data-game="dsh-tavern.gomoku">
+<header>
+  <span class="game-name">\u4E94\u5B50\u68CB</span>
+  <span class="meta" id="meta"></span>
+</header>
+<div id="banner" class="preview">\u7B49\u5F85\u5BF9\u5C40\u2026</div>
+<div class="board-wrap">
+  <svg id="board" viewBox="0 0 688 688" role="img" aria-label="\u4E94\u5B50\u68CB\u68CB\u76D8 15 \u8DEF"></svg>
+  <div class="overlay hidden" id="overlay">
+    <div class="result" id="overlay-result"></div>
+    <div class="sub" id="overlay-sub">\u5BF9\u5C40\u7ED3\u675F</div>
+  </div>
+</div>
+<footer id="hint"></footer>
+<script>
+'use strict'
+/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-tavern:game-state\uFF08token \u5BF9\u8D26\u3001\u5168\u91CF\u91CD\u6E32\u67D3\uFF09\u3001
+   \u4E0A\u884C dsh-tavern:game-action\uFF08\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF09\u3002token \u4ECE location.search
+   \u81EA\u8BFB\uFF1B\u65E0 token\uFF08\u6D4F\u89C8\u5668\u76F4\u63A5\u6253\u5F00\uFF09\u6E32\u67D3\u9759\u6001\u9884\u89C8\u5C40\u9762\u3002\u4EBA\u7C7B\u56DE\u5408\u624D\u542F\u7528\u70B9\u51FB\u4E0E\u5EFA\u8BAE\u70B9
+   \u63D0\u793A\u2014\u2014AI \u56DE\u5408\u7684\u843D\u5B50\u7ECF\u4E0B\u884C\u81EA\u52A8\u51FA\u73B0\u5728\u68CB\u76D8\u4E0A\u3002 */
+var N = 15
+var PAD = 36
+var CELL = 44
+var STONE_R = 19
+var HIT_R = 21.5
+var COLUMNS = 'ABCDEFGHIJKLMNO'
+var STAR_POINTS = [[3, 3], [3, 11], [11, 3], [11, 11], [7, 7]]
+var LINE_COLOR = '#7a5a33'
+
+var params = new URLSearchParams(window.location.search)
+var TOKEN = params.get('token')
+var current = null /* \u6700\u8FD1\u4E00\u6761 game-state\uFF1A{ state, legal, finished, summary, session } */
+
+var boardEl = document.getElementById('board')
+var bannerEl = document.getElementById('banner')
+var overlayEl = document.getElementById('overlay')
+var overlayResultEl = document.getElementById('overlay-result')
+var overlaySubEl = document.getElementById('overlay-sub')
+var metaEl = document.getElementById('meta')
+var hintEl = document.getElementById('hint')
+
+/* \u65E0 token \u7684\u9759\u6001\u6F14\u793A\u5C40\u9762\uFF1A\u9ED1\u767D\u5404\u82E5\u5E72\u5B50\uFF08\u9ED1\u56DB\u5B50\u659C\u7EBF\u547C\u5E94\uFF09\uFF0C\u8F6E\u767D\u3002 */
+var PREVIEW_STATE = buildBoard([
+  [[7, 7], 1], [[8, 8], 1], [[6, 6], 1], [[7, 5], 1],
+  [[7, 8], 2], [[8, 6], 2], [[6, 8], 2],
+], 'white', 7, { x: 7, y: 5 })
+var PREVIEW_SESSION = {
+  id: '',
+  gameId: 'dsh-tavern.gomoku',
+  players: [
+    { role: 'black', owner: 'human' },
+    { role: 'white', owner: 'agent' },
+  ],
+}
+
+function buildBoard(stones, turn, ply, lastMove) {
+  var board = []
+  for (var y = 0; y < N; y++) {
+    var row = []
+    for (var x = 0; x < N; x++) row.push(0)
+    board.push(row)
+  }
+  for (var i = 0; i < stones.length; i++) board[stones[i][0][1]][stones[i][0][0]] = stones[i][1]
+  return {
+    board: board, turn: turn, ply: ply, lastMove: lastMove,
+    finished: false, winner: null, winLine: null,
+  }
+}
+
+function coord(i) { return PAD + i * CELL }
+
+function svgEl(name, attrs) {
+  var el = document.createElementNS('http://www.w3.org/2000/svg', name)
+  for (var key in attrs) el.setAttribute(key, String(attrs[key]))
+  return el
+}
+
+function radialGradient(id, innerColor, outerColor) {
+  var gradient = svgEl('radialGradient', { id: id, cx: '35%', cy: '30%', r: '75%' })
+  gradient.appendChild(svgEl('stop', { offset: '0%', 'stop-color': innerColor }))
+  gradient.appendChild(svgEl('stop', { offset: '100%', 'stop-color': outerColor }))
+  return gradient
+}
+
+window.addEventListener('message', function (event) {
+  var data = event.data
+  if (!data || typeof data !== 'object') return
+  if (data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+  var view = data.view && typeof data.view === 'object' ? data.view : {}
+  current = {
+    state: view.state || null,
+    legal: Array.isArray(view.legal) ? view.legal : [],
+    finished: view.finished === true,
+    summary: typeof view.summary === 'string' ? view.summary : '',
+    session: data.session && typeof data.session === 'object' ? data.session : null,
+  }
+  render()
+})
+
+function active() {
+  if (current) return current
+  if (TOKEN !== null) {
+    /* \u5DF2\u7531\u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u4F46\u9996\u6761 game-state \u672A\u5230\uFF1A\u7A7A\u76D8\u7B49\u5F85\uFF0C\u4E0D\u501F\u9884\u89C8\u5C40\u9762\u3002 */
+    return { state: null, legal: [], finished: false, summary: '', session: null }
+  }
+  return { state: PREVIEW_STATE, legal: [], finished: false, summary: '', session: PREVIEW_SESSION }
+}
+
+function ownerOf(session, role) {
+  if (!session || !Array.isArray(session.players)) return null
+  for (var i = 0; i < session.players.length; i++) {
+    if (session.players[i] && session.players[i].role === role) return session.players[i].owner
+  }
+  return null
+}
+
+function sideName(role) { return role === 'black' ? '\u9ED1\u65B9' : '\u767D\u65B9' }
+
+function endText(state) {
+  if (state.winner === 'black') return '\u9ED1\u68CB\u83B7\u80DC'
+  if (state.winner === 'white') return '\u767D\u68CB\u83B7\u80DC'
+  return '\u548C\u68CB'
+}
+
+function humanTurn(act) {
+  if (!act.state || act.state.finished) return false
+  return ownerOf(act.session, act.state.turn) !== 'agent'
+}
+
+function render() {
+  var act = active()
+  var state = act.state
+  var live = current !== null || TOKEN !== null
+
+  renderBoard(act)
+
+  if (!live) metaEl.textContent = '\u9884\u89C8\u6A21\u5F0F'
+  else if (!state) metaEl.textContent = '\u7B49\u5F85\u4F1A\u8BDD\u2026'
+  else metaEl.textContent = (act.session && act.session.id ? '\u5BF9\u5C40 ' + act.session.id : '\u5BF9\u5C40\u4E2D') + ' \xB7 \u624B\u6570 ' + state.ply
+
+  var cls = 'preview'
+  var text = '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u4EA4\u4E92'
+  if (live) {
+    if (!state) {
+      text = '\u7B49\u5F85\u5BF9\u5C40\u72B6\u6001\u2026'
+    } else if (state.finished) {
+      cls = 'finished'
+      text = act.summary ? '\u5BF9\u5C40\u7ED3\u675F \xB7 ' + act.summary : '\u5BF9\u5C40\u7ED3\u675F\uFF1A' + endText(state)
+    } else {
+      cls = state.turn === 'black' ? 'turn-black' : 'turn-white'
+      var owner = ownerOf(act.session, state.turn)
+      text = sideName(state.turn) + (owner === 'agent' ? ' \xB7 AI \u601D\u8003\u4E2D\u2026' : owner === 'human' ? ' \xB7 \u8F6E\u5230\u4F60\u843D\u5B50' : '\u884C\u52A8\u4E2D')
+      if (act.summary) text += ' \xB7 ' + act.summary
+    }
+  }
+  bannerEl.className = cls
+  bannerEl.textContent = text
+
+  var finished = !!(live && state && state.finished)
+  overlayEl.className = finished ? 'overlay' : 'overlay hidden'
+  if (finished) {
+    overlayResultEl.textContent = endText(state)
+    overlaySubEl.textContent = act.summary || '\u5BF9\u5C40\u7ED3\u675F'
+  }
+
+  if (!live) {
+    hintEl.textContent = '\u8FD9\u662F\u9759\u6001\u6F14\u793A\u5C40\u9762\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\uFF0C\u68CB\u76D8\u5C06\u63A5\u6536\u5B9E\u65F6\u72B6\u6001\u5E76\u542F\u7528\u70B9\u51FB\u843D\u5B50\u3002'
+  } else if (!state) {
+    hintEl.textContent = '\u6B63\u5728\u8FDE\u63A5 dsh-tavern \u6E38\u620F\u670D\u52A1\u2026'
+  } else if (state.finished) {
+    hintEl.textContent = '\u5BF9\u5C40\u5DF2\u7ED3\u675F\u3002\u53EF\u5728\u5BF9\u5C40\u9762\u677F\u4E2D\u5F00\u65B0\u4E00\u5C40\uFF0C\u6216\u8BA9 AI \u518D\u6765\u4E00\u76D8\u3002'
+  } else if (humanTurn(act)) {
+    hintEl.textContent = '\u70B9\u51FB\u4EA4\u53C9\u70B9\u843D\u5B50\uFF08\u4EFB\u610F\u7A7A\u70B9\u5747\u53EF\u70B9\uFF0C\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF09\uFF1B\u5750\u6807\u4E3A\u5217 A-O\u3001\u884C 1-15\u3002'
+  } else {
+    hintEl.textContent = 'AI \u601D\u8003\u4E2D\uFF0C\u843D\u5B50\u5C06\u81EA\u52A8\u51FA\u73B0\u5728\u68CB\u76D8\u4E0A\u3002'
+  }
+}
+
+function renderBoard(act) {
+  var state = act.state
+  while (boardEl.firstChild) boardEl.removeChild(boardEl.firstChild)
+
+  var defs = svgEl('defs', {})
+  defs.appendChild(radialGradient('grad-black', '#4a4a4a', '#000000'))
+  defs.appendChild(radialGradient('grad-white', '#ffffff', '#b9b9b9'))
+  boardEl.appendChild(defs)
+
+  boardEl.appendChild(svgEl('rect', { x: 0, y: 0, width: 688, height: 688, rx: 8, fill: '#d6a45f' }))
+
+  for (var i = 0; i < N; i++) {
+    var edge = i === 0 || i === N - 1
+    boardEl.appendChild(svgEl('line', {
+      x1: coord(0), y1: coord(i), x2: coord(N - 1), y2: coord(i),
+      stroke: LINE_COLOR, 'stroke-width': edge ? 2 : 1,
+    }))
+    boardEl.appendChild(svgEl('line', {
+      x1: coord(i), y1: coord(0), x2: coord(i), y2: coord(N - 1),
+      stroke: LINE_COLOR, 'stroke-width': edge ? 2 : 1,
+    }))
+  }
+
+  for (var s = 0; s < STAR_POINTS.length; s++) {
+    boardEl.appendChild(svgEl('circle', {
+      cx: coord(STAR_POINTS[s][0]), cy: coord(STAR_POINTS[s][1]), r: 4.5, fill: LINE_COLOR,
+    }))
+  }
+
+  for (var c = 0; c < N; c++) {
+    var colLabel = svgEl('text', {
+      x: coord(c), y: PAD - 14, 'text-anchor': 'middle', 'font-size': 12, fill: LINE_COLOR,
+    })
+    colLabel.textContent = COLUMNS[c]
+    boardEl.appendChild(colLabel)
+    var rowLabel = svgEl('text', {
+      x: PAD - 16, y: coord(c) + 4, 'text-anchor': 'middle', 'font-size': 12, fill: LINE_COLOR,
+    })
+    rowLabel.textContent = String(c + 1)
+    boardEl.appendChild(rowLabel)
+  }
+
+  if (!state) {
+    boardEl.setAttribute('class', '')
+    return
+  }
+
+  var winCells = {}
+  if (state.winLine) {
+    for (var w = 0; w < state.winLine.length; w++) {
+      winCells[state.winLine[w].x + ',' + state.winLine[w].y] = true
+    }
+  }
+
+  for (var y = 0; y < N; y++) {
+    for (var x = 0; x < N; x++) {
+      var stone = state.board[y][x]
+      if (stone === 0) continue
+      boardEl.appendChild(svgEl('circle', {
+        cx: coord(x), cy: coord(y), r: STONE_R,
+        fill: stone === 1 ? 'url(#grad-black)' : 'url(#grad-white)',
+        stroke: stone === 1 ? '#000' : '#b0b0b0', 'stroke-width': 0.5,
+      }))
+      if (winCells[x + ',' + y]) {
+        boardEl.appendChild(svgEl('circle', {
+          cx: coord(x), cy: coord(y), r: STONE_R + 2,
+          fill: 'none', stroke: '#e05252', 'stroke-width': 3,
+        }))
+      }
+    }
+  }
+
+  if (state.lastMove) {
+    boardEl.appendChild(svgEl('circle', {
+      cx: coord(state.lastMove.x), cy: coord(state.lastMove.y),
+      r: 6.5, fill: 'none', stroke: '#e05252', 'stroke-width': 3,
+    }))
+  }
+
+  var ownTurn = humanTurn(act)
+
+  if (ownTurn) {
+    for (var l = 0; l < act.legal.length; l++) {
+      var point = act.legal[l]
+      if (!point || typeof point.x !== 'number' || typeof point.y !== 'number') continue
+      if (state.board[point.y][point.x] !== 0) continue
+      boardEl.appendChild(svgEl('circle', {
+        cx: coord(point.x), cy: coord(point.y), r: 3, fill: 'rgba(60, 40, 10, 0.35)',
+      }))
+    }
+  }
+
+  boardEl.setAttribute('class', ownTurn ? 'interactive' : '')
+  if (ownTurn) {
+    for (var yy = 0; yy < N; yy++) {
+      for (var xx = 0; xx < N; xx++) {
+        if (state.board[yy][xx] !== 0) continue
+        boardEl.appendChild(svgEl('circle', {
+          cx: coord(xx), cy: coord(yy), r: HIT_R,
+          fill: 'transparent', 'data-x': xx, 'data-y': yy, 'class': 'hit',
+        }))
+      }
+    }
+  }
+}
+
+/* \u70B9\u51FB\u7A7A\u70B9\uFF08\u4EBA\u7C7B\u56DE\u5408\u3001\u672A\u7EC8\u5C40\uFF09\uFF1A\u4E0A\u884C dsh-tavern:game-action\u3002\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF
+   \u5F15\u64CE\u7EC8\u5BA1\u2014\u2014\u8FD9\u91CC\u4E0D\u505A\u672C\u5730\u89C4\u5219\u88C1\u51B3\uFF0C\u4EBA\u7C7B\u53EF\u70B9\u4EFB\u610F\u7A7A\u70B9\u3002 */
+boardEl.addEventListener('click', function (event) {
+  if (!TOKEN) return
+  var act = active()
+  if (!act.state || act.state.finished || !humanTurn(act)) return
+  var target = event.target
+  if (!target || target.getAttribute('data-x') === null) return
+  var x = Number(target.getAttribute('data-x'))
+  var y = Number(target.getAttribute('data-y'))
+  if (act.state.board[y][x] !== 0) return
+  window.parent.postMessage(
+    { type: 'dsh-tavern:game-action', token: TOKEN, action: { type: 'place', x: x, y: y } },
+    '*',
+  )
+})
+
+render()
+</script>
+</body>
+</html>
+`;
+var gomoku = { manifest, engine, viewHtml };
+
+// packages/plugin/src/games/builtin/tic-tac-toe.ts
+var SIZE2 = 3;
+var EMPTY2 = 0;
+var CROSS = 1;
+var NOUGHT = 2;
+var COLUMNS2 = "ABC";
+var DIRECTIONS2 = [[1, 0], [0, 1], [1, 1], [1, -1]];
+var MANIFEST2 = {
+  id: "dsh-tavern.tic-tac-toe",
+  name: "\u4E95\u5B57\u68CB",
+  version: "1.0.0",
+  players: { min: 2, max: 2, roles: ["x", "o"] },
+  turnBased: true,
+  actionVocabulary: "\u843D\u5B50 {type:'place', x, y}\uFF0Cx/y \u4E3A 0-2 \u6574\u6570\u5750\u6807\uFF08\u5217 A-C\u3001\u884C 1-3\uFF09\uFF1B\u8BA4\u8F93 {type:'resign'} \u7531\u8FD0\u884C\u65F6\u7EDF\u4E00\u5904\u7406"
+};
+function markName(role) {
+  return role === "x" ? "X" : "O";
+}
+function sideName2(role) {
+  return role === "x" ? "X \u65B9" : "O \u65B9";
+}
+function other2(role) {
+  return role === "x" ? "o" : "x";
+}
+function isOnBoard2(x, y) {
+  return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && x < SIZE2 && y >= 0 && y < SIZE2;
+}
+function coordName2(x, y) {
+  return COLUMNS2[x] + String(y + 1);
+}
+function cloneState2(state) {
+  return {
+    board: state.board.map((row) => row.slice()),
+    turn: state.turn,
+    ply: state.ply,
+    lastMove: state.lastMove === null ? null : { ...state.lastMove },
+    finished: state.finished,
+    winner: state.winner,
+    winLine: state.winLine === null ? null : state.winLine.map((cell) => ({ ...cell }))
+  };
+}
+function findWinLine2(board, x, y) {
+  const mark = board[y][x];
+  if (mark === EMPTY2) return null;
+  for (const [dx, dy] of DIRECTIONS2) {
+    const cells = [{ x, y }];
+    for (const sign of [1, -1]) {
+      let cx = x + dx * sign;
+      let cy = y + dy * sign;
+      while (isOnBoard2(cx, cy) && board[cy][cx] === mark) {
+        cells.push({ x: cx, y: cy });
+        cx += dx * sign;
+        cy += dy * sign;
+      }
+    }
+    if (cells.length >= SIZE2) {
+      cells.sort((a, b) => a.x - b.x || a.y - b.y);
+      return cells;
+    }
+  }
+  return null;
+}
+var engine2 = {
+  meta: MANIFEST2,
+  /** 开局：空盘 X 先。options（含 seed）接受但忽略——井字棋无随机性。 */
+  createGame(_options) {
+    return {
+      state: {
+        board: Array.from({ length: SIZE2 }, () => Array.from({ length: SIZE2 }, () => EMPTY2)),
         turn: "x",
         ply: 0,
         lastMove: null,
@@ -18400,9 +18953,9 @@ var engine = {
   legalActions(state) {
     if (state.finished) return [];
     const actions = [];
-    for (let y = 0; y < SIZE; y += 1) {
-      for (let x = 0; x < SIZE; x += 1) {
-        if (state.board[y][x] === EMPTY) actions.push({ type: "place", x, y });
+    for (let y = 0; y < SIZE2; y += 1) {
+      for (let x = 0; x < SIZE2; x += 1) {
+        if (state.board[y][x] === EMPTY2) actions.push({ type: "place", x, y });
       }
     }
     return actions;
@@ -18426,25 +18979,25 @@ var engine = {
       throw new Error(`\u672A\u77E5\u89D2\u8272\u300C${String(actor)}\u300D\uFF1A\u672C\u6E38\u620F\u89D2\u8272\u4E3A x/o`);
     }
     if (actor !== state.turn) {
-      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u843D\u5B50`);
+      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName2(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u843D\u5B50`);
     }
-    if (!isOnBoard(typed.x, typed.y)) {
-      throw new Error(`\u843D\u5B50\u5750\u6807\u5FC5\u987B\u662F 0-${SIZE - 1} \u7684\u6574\u6570\uFF0C\u6536\u5230 x=${String(typed.x)}\u3001y=${String(typed.y)}`);
+    if (!isOnBoard2(typed.x, typed.y)) {
+      throw new Error(`\u843D\u5B50\u5750\u6807\u5FC5\u987B\u662F 0-${SIZE2 - 1} \u7684\u6574\u6570\uFF0C\u6536\u5230 x=${String(typed.x)}\u3001y=${String(typed.y)}`);
     }
     const x = typed.x;
     const y = typed.y;
-    if (state.board[y][x] !== EMPTY) {
-      throw new Error(`${coordName(x, y)} \u5DF2\u6709\u68CB\u5B50\uFF0C\u4E0D\u80FD\u843D\u5728\u5DF2\u5360\u683C\u4E0A`);
+    if (state.board[y][x] !== EMPTY2) {
+      throw new Error(`${coordName2(x, y)} \u5DF2\u6709\u68CB\u5B50\uFF0C\u4E0D\u80FD\u843D\u5728\u5DF2\u5360\u683C\u4E0A`);
     }
-    const next = cloneState(state);
+    const next = cloneState2(state);
     next.board[y][x] = actor === "x" ? CROSS : NOUGHT;
     next.ply = state.ply + 1;
     next.lastMove = { x, y };
-    next.turn = other(actor);
-    const move = `${markName(actor)}\u843D\u4E8E ${coordName(x, y)}`;
+    next.turn = other2(actor);
+    const move = `${markName(actor)}\u843D\u4E8E ${coordName2(x, y)}`;
     const events = [move];
     let summary = move;
-    const winLine = findWinLine(next.board, x, y);
+    const winLine = findWinLine2(next.board, x, y);
     if (winLine !== null) {
       next.finished = true;
       next.winner = actor;
@@ -18452,7 +19005,7 @@ var engine = {
       const ending = `${markName(actor)}\u4E09\u8FDE\uFF0C${actor === "x" ? "X" : "O"}\u80DC`;
       events.push(ending);
       summary = `${move}\uFF0C${ending}`;
-    } else if (next.ply === SIZE * SIZE) {
+    } else if (next.ply === SIZE2 * SIZE2) {
       next.finished = true;
       next.winner = null;
       next.winLine = null;
@@ -18463,16 +19016,16 @@ var engine = {
   },
   /** 人类可读的一手棋描述（含列 A-C + 行 1-3 坐标）。 */
   describe(_state, actor, action) {
-    if (action !== null && typeof action === "object" && !Array.isArray(action) && action.type === "place" && isOnBoard(action.x, action.y)) {
+    if (action !== null && typeof action === "object" && !Array.isArray(action) && action.type === "place" && isOnBoard2(action.x, action.y)) {
       const x = action.x;
       const y = action.y;
-      return `${markName(actor === "o" ? "o" : "x")}\u843D\u4E8E ${coordName(x, y)}`;
+      return `${markName(actor === "o" ? "o" : "x")}\u843D\u4E8E ${coordName2(x, y)}`;
     }
     return `${String(actor)}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
 };
-var manifest = MANIFEST;
-var viewHtml = `<!doctype html>
+var manifest2 = MANIFEST2;
+var viewHtml2 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -18567,7 +19120,7 @@ if (!TOKEN) {
 </body>
 </html>
 `;
-var ticTacToe = { manifest, engine, viewHtml };
+var ticTacToe = { manifest: manifest2, engine: engine2, viewHtml: viewHtml2 };
 
 // packages/plugin/src/games/standard.ts
 var GAME_STATE_MAX_BYTES = 65536;
@@ -18688,12 +19241,12 @@ function currentRoleOf(state, roles) {
   }
   return turn;
 }
-function smokeTestGameEngine(engine2) {
+function smokeTestGameEngine(engine3) {
   const reasons = [];
-  const roles = engine2.meta.players.roles;
+  const roles = engine3.meta.players.roles;
   let created;
   try {
-    created = engine2.createGame({ seed: 1 });
+    created = engine3.createGame({ seed: 1 });
   } catch (cause) {
     return { ok: false, reasons: [`createGame \u629B\u9519: ${errorMessage2(cause)}`] };
   }
@@ -18712,7 +19265,7 @@ function smokeTestGameEngine(engine2) {
   }
   let suggestions;
   try {
-    suggestions = engine2.legalActions(state);
+    suggestions = engine3.legalActions(state);
   } catch (cause) {
     reasons.push(`legalActions \u629B\u9519: ${errorMessage2(cause)}`);
     return { ok: false, reasons };
@@ -18736,8 +19289,8 @@ function smokeTestGameEngine(engine2) {
   let firstResult;
   let secondResult;
   try {
-    firstResult = engine2.applyAction(state, first, turn);
-    secondResult = engine2.applyAction(state, first, turn);
+    firstResult = engine3.applyAction(state, first, turn);
+    secondResult = engine3.applyAction(state, first, turn);
   } catch (cause) {
     reasons.push(`applyAction \u5BF9\u5EFA\u8BAE\u96C6\u9996\u4E2A\u52A8\u4F5C\u629B\u9519: ${errorMessage2(cause)}`);
     return { ok: false, reasons };
@@ -18755,7 +19308,7 @@ function smokeTestGameEngine(engine2) {
   }
   for (const probe of [{ type: "resign" }, { type: "__dsh_tavern_smoke_unknown__" }]) {
     try {
-      engine2.applyAction(state, probe, turn);
+      engine3.applyAction(state, probe, turn);
       reasons.push(`applyAction \u5BF9\u975E\u6CD5\u52A8\u4F5C {type:'${probe.type}'} \u672A\u629B\u9519\uFF08\u5FC5\u987B\u62D2\u7EDD\u800C\u975E\u9759\u9ED8\uFF09`);
     } catch {
     }
@@ -18811,7 +19364,7 @@ var GameRegistry = class _GameRegistry {
     await this.scanInstalled();
   }
   loadBuiltins() {
-    for (const builtin of [ticTacToe]) {
+    for (const builtin of [ticTacToe, gomoku]) {
       const smoke = smokeTestGameEngine(builtin.engine);
       if (!smoke.ok) {
         this.games.set(builtin.manifest.id, {
@@ -18845,12 +19398,18 @@ var GameRegistry = class _GameRegistry {
         const message = cause instanceof Error ? cause.message : String(cause);
         return { source: "imported", manifest: brokenFallbackManifest(directory), engine: null, viewHtml: null, status: "broken", reason: message, directory: join19(this.installedRoot, directory) };
       });
+      const shadowed = this.games.get(entry.manifest.id);
+      if (shadowed?.source === "builtin") {
+        this.options.logger?.warn?.(
+          `dsh-tavern: \u5BFC\u5165\u6E38\u620F '${entry.manifest.id}'\uFF08\u76EE\u5F55 ${directory}\uFF09\u4E0E\u5185\u7F6E\u6E38\u620F\u540C id\uFF0C\u4EE5\u5BFC\u5165\u526F\u672C\u4E3A\u51C6\uFF08status: ${entry.status}\uFF09`
+        );
+      }
       this.games.set(entry.manifest.id, entry);
     }
   }
   /** 装载一个导入目录：清单校验 → engines 门控 → view 静态检查 → 动态 import → duck 校验 → 烟测。 */
   async loadInstalled(directory) {
-    const broken = (manifest2, reason) => ({ source: "imported", manifest: manifest2, engine: null, viewHtml: null, status: "broken", reason, directory });
+    const broken = (manifest3, reason) => ({ source: "imported", manifest: manifest3, engine: null, viewHtml: null, status: "broken", reason, directory });
     let raw;
     try {
       raw = JSON.parse(await fs15.readFile(join19(directory, "game.json"), "utf8"));
@@ -18865,13 +19424,13 @@ var GameRegistry = class _GameRegistry {
       const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange);
       if (!verdict.ok) return broken(check.manifest, `\u7248\u672C\u4E0D\u6EE1\u8DB3: ${verdict.reason}`);
     }
-    let viewHtml2;
+    let viewHtml3;
     try {
-      viewHtml2 = await fs15.readFile(join19(directory, "view.html"), "utf8");
+      viewHtml3 = await fs15.readFile(join19(directory, "view.html"), "utf8");
     } catch {
       return broken(check.manifest, "view.html \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
     }
-    const viewProblem = staticViewCheck(viewHtml2);
+    const viewProblem = staticViewCheck(viewHtml3);
     if (viewProblem !== void 0) return broken(check.manifest, `view.html ${viewProblem}`);
     const enginePath = join19(directory, "engine.mjs");
     const stat = await fs15.stat(enginePath).catch(() => void 0);
@@ -18891,7 +19450,7 @@ var GameRegistry = class _GameRegistry {
     }
     const smoke = smokeTestGameEngine(engineCheck.engine);
     if (!smoke.ok) return broken(check.manifest, `\u70DF\u6D4B\u5931\u8D25: ${smoke.reasons.join("; ")}`);
-    return { source: "imported", manifest: engineCheck.engine.meta, engine: engineCheck.engine, viewHtml: viewHtml2, status: "ok", reason: "", directory };
+    return { source: "imported", manifest: engineCheck.engine.meta, engine: engineCheck.engine, viewHtml: viewHtml3, status: "ok", reason: "", directory };
   }
   /**
    * 从本地目录安装（POST games/install {path}）：校验源目录 → 拷入
@@ -18957,8 +19516,8 @@ var GameRegistry = class _GameRegistry {
     const record = definition;
     const engineCheck = checkGameEngine(record.engine);
     if (!engineCheck.ok) throw new Error(`\u6E38\u620F\u5F15\u64CE\u6821\u9A8C\u5931\u8D25: ${engineCheck.errors.join("; ")}`);
-    const engine2 = engineCheck.engine;
-    const manifest2 = engine2.meta;
+    const engine3 = engineCheck.engine;
+    const manifest3 = engine3.meta;
     const redundant = [
       ["id", record.id],
       ["name", record.name],
@@ -18968,29 +19527,29 @@ var GameRegistry = class _GameRegistry {
       ["actionVocabulary", record.actionVocabulary]
     ];
     for (const [key, value] of redundant) {
-      if (JSON.stringify(value) !== JSON.stringify(manifest2[key])) {
+      if (JSON.stringify(value) !== JSON.stringify(manifest3[key])) {
         throw new Error(`\u6CE8\u518C\u5B57\u6BB5 ${key} \u4E0E engine.meta.${key} \u4E0D\u4E00\u81F4\uFF08\u8FD0\u884C\u65F6\u4EE5 meta \u4E3A\u51C6\uFF0C\u4E24\u4FA7\u5FC5\u987B\u76F8\u7B49\uFF09`);
       }
     }
-    const smoke = smokeTestGameEngine(engine2);
+    const smoke = smokeTestGameEngine(engine3);
     if (!smoke.ok) throw new Error(`\u5F15\u64CE\u70DF\u6D4B\u5931\u8D25: ${smoke.reasons.join("; ")}`);
     if (typeof record.view !== "string" || record.view.trim() === "") {
       throw new Error("view \u5FC5\u987B\u662F\u975E\u7A7A HTML \u5B57\u7B26\u4E32\uFF08Mod \u6E38\u620F\u89C6\u56FE\u8D70\u5185\u8054\u7EAA\u5F8B\uFF0C\u65E0\u9759\u6001\u6587\u4EF6\u670D\u52A1\uFF09");
     }
     const viewProblem = staticViewCheck(record.view);
     if (viewProblem !== void 0) throw new Error(`view ${viewProblem}`);
-    if (this.get(manifest2.id) !== void 0) {
-      throw new Error(`game '${manifest2.id}' is already registered (builtin, imported or another mod holds this id)`);
+    if (this.get(manifest3.id) !== void 0) {
+      throw new Error(`game '${manifest3.id}' is already registered (builtin, imported or another mod holds this id)`);
     }
-    this.modGames.set(manifest2.id, {
+    this.modGames.set(manifest3.id, {
       source: "mod",
-      manifest: manifest2,
-      engine: engine2,
+      manifest: manifest3,
+      engine: engine3,
       viewHtml: record.view,
       status: "ok",
       reason: ""
     });
-    return this.summaries().find((summary) => summary.id === manifest2.id);
+    return this.summaries().find((summary) => summary.id === manifest3.id);
   }
   /**
    * Mod 游戏反注册（Mod 卸载经宿主 offRegistrations 调用）。engine 传入时做
@@ -18999,10 +19558,10 @@ var GameRegistry = class _GameRegistry {
    * 源不受本方法影响。摘除后其活跃会话由 sessions 的孤儿判定（按 gameId 动态
    * 查注册表）自然接管——可查看不可落子。
    */
-  unregisterModGame(id, engine2) {
+  unregisterModGame(id, engine3) {
     const entry = this.modGames.get(id);
     if (entry === void 0) return false;
-    if (engine2 !== void 0 && entry.engine !== engine2) return false;
+    if (engine3 !== void 0 && entry.engine !== engine3) return false;
     this.modGames.delete(id);
     return true;
   }
@@ -19022,10 +19581,10 @@ function directoryNameOf(directory) {
   const parts = directory.split(/[\\/]/).filter(Boolean);
   return parts.at(-1) ?? directory;
 }
-function staticViewCheck(viewHtml2) {
-  if (/src\s*=\s*["']https?:/i.test(viewHtml2)) return "\u5305\u542B\u5916\u94FE script/\u8D44\u6E90\uFF08\u5FC5\u987B\u81EA\u5305\u542B\uFF09";
-  if (/href\s*=\s*["']https?:/i.test(viewHtml2)) return "\u5305\u542B\u5916\u94FE\u6837\u5F0F/\u94FE\u63A5\uFF08\u5FC5\u987B\u81EA\u5305\u542B\uFF09";
-  if (viewHtml2.includes("fetch(")) return "\u5305\u542B fetch \u7F51\u7EDC\u8C03\u7528\uFF08connect-src 'none' \u7EAA\u5F8B\uFF09";
+function staticViewCheck(viewHtml3) {
+  if (/src\s*=\s*["']https?:/i.test(viewHtml3)) return "\u5305\u542B\u5916\u94FE script/\u8D44\u6E90\uFF08\u5FC5\u987B\u81EA\u5305\u542B\uFF09";
+  if (/href\s*=\s*["']https?:/i.test(viewHtml3)) return "\u5305\u542B\u5916\u94FE\u6837\u5F0F/\u94FE\u63A5\uFF08\u5FC5\u987B\u81EA\u5305\u542B\uFF09";
+  if (viewHtml3.includes("fetch(")) return "\u5305\u542B fetch \u7F51\u7EDC\u8C03\u7528\uFF08connect-src 'none' \u7EAA\u5F8B\uFF09";
   return void 0;
 }
 
@@ -19150,7 +19709,7 @@ var GameSessionStore = class _GameSessionStore {
     if (entry === void 0 || entry.status !== "ok" || entry.engine === null) {
       throw new GameBridgeError("unavailable", `\u4F1A\u8BDD\u7684\u6E38\u620F '${session.gameId}' \u5DF2\u4E0D\u5728\u6CE8\u518C\u8868\uFF08orphaned\uFF09\uFF0C\u5BF9\u5C40\u53EA\u8BFB\u4E0D\u53EF\u843D\u5B50`);
     }
-    const engine2 = entry.engine;
+    const engine3 = entry.engine;
     const roles = entry.manifest.players.roles;
     if (session.finished) {
       throw new GameBridgeError("turn", `\u5BF9\u5C40\u5DF2\u7ED3\u675F\uFF08${session.summary}\uFF09\uFF0C\u4E0D\u80FD\u518D\u843D\u5B50`);
@@ -19187,13 +19746,13 @@ var GameSessionStore = class _GameSessionStore {
       summary = describe;
     } else {
       try {
-        describe = engine2.describe(session.state, actor, action);
+        describe = engine3.describe(session.state, actor, action);
       } catch {
         describe = `${actor} \u7684\u52A8\u4F5C ${action.type}`;
       }
       let result;
       try {
-        result = engine2.applyAction(session.state, action, actor);
+        result = engine3.applyAction(session.state, action, actor);
       } catch (cause) {
         throw new GameBridgeError("illegal", cause instanceof Error ? cause.message : String(cause));
       }
@@ -19336,9 +19895,9 @@ function gameBridgeScript() {
   });
 })();`;
 }
-function renderGameViewDocument(viewHtml2) {
+function renderGameViewDocument(viewHtml3) {
   const bridge = `<script>${gameBridgeScript()}</script>`;
-  const document = String(viewHtml2 ?? "");
+  const document = String(viewHtml3 ?? "");
   const headMatch = /<head(?:\s[^>]*)?>/i.exec(document);
   if (headMatch !== null) {
     const at = headMatch.index + headMatch[0].length;
@@ -19419,8 +19978,8 @@ async function openGamesService(options) {
       emitGamesChanged();
       return { game };
     },
-    unregisterModGame(id, engine2) {
-      const removed = registry.unregisterModGame(id, engine2);
+    unregisterModGame(id, engine3) {
+      const removed = registry.unregisterModGame(id, engine3);
       if (removed) emitGamesChanged();
       return removed;
     },
@@ -25080,8 +25639,8 @@ function readBuildInfo() {
   return { version, commit };
 }
 function buildTimeStamp() {
-  const version = true ? "0.6.0".trim() : "";
-  const commit = true ? normalizeCommit("ddf9991") : void 0;
+  const version = true ? "0.6.1".trim() : "";
+  const commit = true ? normalizeCommit("f28b2a9") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

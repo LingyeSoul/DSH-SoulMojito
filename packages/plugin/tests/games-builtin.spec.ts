@@ -1,19 +1,25 @@
 /**
- * 内置井字棋引擎契约 + registry 内置源（提案 0018 §3.2/§4.1，P0）。
+ * 内置游戏引擎契约 + registry 内置源（提案 0018 §3.2/§4.1，P0；五子棋内置
+ * 2026-10-14 回归，见 decisions/2026-10-14-gomoku-builtin.md）。
  *
  * 与 games-gomoku.spec.ts 同款契约测试风格（标准即测试）：确定性 / JSON-safe /
  * 非法动作中文抛错 / 胜负 / 和棋 / legalActions 有界 / describe 带坐标——
- * 井字棋和棋构造容易（满盘 9 手），测试自带数据。另覆盖：
+ * 井字棋和棋构造容易（满盘 9 手），测试自带数据；内置五子棋复用参照包的
+ * 113/112 满盘和棋数据（(x + 2y) mod 5 < 3 基底，测试内先独立自校验）。
+ * 另覆盖：
  * - 烟测（smokeTestGameEngine）对合法引擎通过、对确定性破坏与非法动作静默
  *   两个负样本必须翻红；
- * - GameRegistry 列出 builtin 源、状态 ok。
+ * - GameRegistry 列出两个 builtin 源、状态 ok；
+ * - 导入目录与内置同 id 的遮蔽语义（以导入副本为准 + warning 不静默）。
  */
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
+import { gomokuEngine, manifest as gomokuManifest, viewHtml as gomokuViewHtml } from '../src/games/builtin/gomoku.js'
 import { ticTacToeEngine as ticTacToe, manifest, viewHtml } from '../src/games/builtin/tic-tac-toe.js'
+import { renderGameViewDocument } from '../src/games/view.js'
 import { GameRegistry } from '../src/games/registry.js'
 import { checkGameEngine, checkGameManifest, currentRoleOf, smokeTestGameEngine, type GameEngine } from '../src/games/standard.js'
 
@@ -28,7 +34,12 @@ interface TicState {
 }
 
 const home = mkdtempSync(join(tmpdir(), 'games-builtin-'))
-afterAll(() => rmSync(home, { recursive: true, force: true }))
+/** 遮蔽用例独占的根：放进同 id 的坏导入目录，避免污染其他用例的干净 root。 */
+const shadowHome = mkdtempSync(join(tmpdir(), 'games-builtin-shadow-'))
+afterAll(() => {
+  rmSync(home, { recursive: true, force: true })
+  rmSync(shadowHome, { recursive: true, force: true })
+})
 
 describe('清单与引擎形状（§3.1/§3.2）', () => {
   it('manifest 通过清单校验，id 反域名', () => {
@@ -171,9 +182,313 @@ describe('legalActions / describe（§3.2）', () => {
   })
 })
 
+/* ---------------------------- 内置五子棋（2026-10-14） ---------------------------- */
+
+interface GomokuState {
+  board: number[][]
+  turn: 'black' | 'white'
+  ply: number
+  lastMove: { x: number; y: number } | null
+  finished: boolean
+  winner: 'black' | 'white' | null
+  winLine: Array<{ x: number; y: number }> | null
+}
+
+/** 交错走子（黑先自动轮转），终局即停；返回最后一次 applyAction 结果。 */
+function playGomoku(moves: Array<[number, number]>) {
+  let state = gomokuEngine.createGame().state as GomokuState
+  let last: ReturnType<GameEngine['applyAction']> | null = null
+  for (const [x, y] of moves) {
+    last = gomokuEngine.applyAction(state, { type: 'place', x, y }, state.turn)
+    state = last.state as GomokuState
+    if (state.finished) break
+  }
+  if (last === null) throw new Error('playGomoku() 至少需要一手棋')
+  return last
+}
+
+/**
+ * 113 黑 / 112 白、四方向无五连的满盘局——数据来源 games-gomoku.spec.ts 的
+ * (x + 2y) mod 5 < 3 基底翻 22 子方案（同一份冻结测试数据，两实现的规则
+ * 一致性由各自的和棋用例独立钉死）。'1' 黑 '2' 白。
+ */
+const DRAW_PATTERN = [
+  '111221122212122',
+  '122111221112212',
+  '211222211221112',
+  '122212122121221',
+  '221112211122111',
+  '122221212211222',
+  '222112221112211',
+  '212122111221112',
+  '112211122111221',
+  '221112211122111',
+  '211221112211122',
+  '122112222112212',
+  '211122111222112',
+  '112212122111221',
+  '221112221122111',
+]
+
+function drawMoves(): Array<[number, number]> {
+  const grid = DRAW_PATTERN.map((row) => row.split('').map(Number))
+  const blacks: Array<[number, number]> = []
+  const whites: Array<[number, number]> = []
+  for (let y = 0; y < 15; y++) {
+    for (let x = 0; x < 15; x++) {
+      if (grid[y]![x] === 1) blacks.push([x, y])
+      else whites.push([x, y])
+    }
+  }
+  const moves: Array<[number, number]> = []
+  for (let i = 0; i < blacks.length; i++) {
+    moves.push(blacks[i]!)
+    if (whites[i]) moves.push(whites[i]!)
+  }
+  return moves
+}
+
+/** 独立于引擎的五连检查（4 方向任意 5 连同色即真）——用于校验测试数据。 */
+function hasFiveInARow(grid: number[][]): boolean {
+  const dirs = [[1, 0], [0, 1], [1, 1], [1, -1]]
+  for (let y = 0; y < 15; y++) {
+    for (let x = 0; x < 15; x++) {
+      const color = grid[y]![x]
+      if (color === 0) continue
+      for (const [dx, dy] of dirs) {
+        let run = 1
+        for (let k = 1; k < 5; k++) {
+          const nx = x + dx! * k
+          const ny = y + dy! * k
+          if (nx < 0 || nx >= 15 || ny < 0 || ny >= 15 || grid[ny]![nx] !== color) break
+          run++
+        }
+        if (run === 5) return true
+      }
+    }
+  }
+  return false
+}
+
+describe('内置五子棋：清单与引擎形状（§3.1/§3.2）', () => {
+  it('manifest 通过清单校验，id 反域名、engines 缺席（内置自我门控无意义）', () => {
+    const check = checkGameManifest(gomokuManifest)
+    expect(check.ok).toBe(true)
+    expect(check.errors).toEqual([])
+    expect(gomokuManifest.id).toBe('dsh-tavern.gomoku')
+    expect(gomokuManifest.name).toBe('五子棋')
+    expect(gomokuManifest.players).toEqual({ min: 2, max: 2, roles: ['black', 'white'] })
+    expect(gomokuManifest.engines).toBeUndefined()
+    expect(gomokuManifest.actionVocabulary).toContain('place')
+  })
+
+  it('引擎 duck 校验通过，meta 与 manifest 同源', () => {
+    const check = checkGameEngine(gomokuEngine)
+    expect(check.ok).toBe(true)
+    expect(check.engine!.meta).toEqual(gomokuManifest)
+  })
+
+  it('viewHtml 自包含（无外链/无 fetch）且含桥消息类型与 data-game 标记', () => {
+    expect(gomokuViewHtml).not.toMatch(/src\s*=\s*["']https?:/i)
+    expect(gomokuViewHtml).not.toMatch(/href\s*=\s*["']https?:/i)
+    expect(gomokuViewHtml).not.toContain('fetch(')
+    expect(gomokuViewHtml).toContain('dsh-tavern:game-state')
+    expect(gomokuViewHtml).toContain('dsh-tavern:game-action')
+    expect(gomokuViewHtml).toContain('data-game="dsh-tavern.gomoku"')
+  })
+
+  it('视图过 view 服务管线（CSP + 桥脚本注入 + 文档包装）后原内容完整', () => {
+    const document = renderGameViewDocument(gomokuViewHtml)
+    expect(document).toContain('data-game="dsh-tavern.gomoku"')
+    expect(document).toContain('dshTavernGame')
+    expect(document).toContain('Content-Security-Policy')
+    expect(document).toContain("connect-src 'none'")
+    expect(document).toContain('dsh-tavern:game-action')
+  })
+})
+
+describe('内置五子棋：开局与落子契约（§3.2）', () => {
+  it('初始态：15×15 空盘、黑先、ply 0、未终局、JSON-safe 往返', () => {
+    const { state } = gomokuEngine.createGame()
+    const g = state as GomokuState
+    expect(g.board).toHaveLength(15)
+    for (const row of g.board) expect(row).toEqual(Array.from({ length: 15 }, () => 0))
+    expect(g.turn).toBe('black')
+    expect(g.ply).toBe(0)
+    expect(g.lastMove).toBeNull()
+    expect(g.finished).toBe(false)
+    expect(g.winner).toBeNull()
+    expect(g.winLine).toBeNull()
+    expect(JSON.parse(JSON.stringify(g))).toEqual(g)
+    expect(currentRoleOf(g, gomokuManifest.players.roles)).toBe('black')
+  })
+
+  it('普通一手：返回五字段、深拷贝不改入参、轮转白方、summary 带棋谱坐标', () => {
+    const state = gomokuEngine.createGame().state as GomokuState
+    const snapshot = structuredClone(state)
+    const result = gomokuEngine.applyAction(state, { type: 'place', x: 7, y: 7 }, 'black')
+    expect(Object.keys(result).sort()).toEqual(['events', 'finished', 'state', 'summary', 'winner'])
+    const next = result.state as GomokuState
+    expect(next.board[7]![7]).toBe(1)
+    expect(next.turn).toBe('white')
+    expect(next.ply).toBe(1)
+    expect(next.lastMove).toEqual({ x: 7, y: 7 })
+    expect(result.finished).toBe(false)
+    expect(result.summary).toContain('H8')
+    expect(state).toEqual(snapshot)
+  })
+
+  it('非法动作全部抛 Error：越界/非整数/已占/未知角色/错误 actor/终局后/缺 type/未知 type（resign 含）', () => {
+    const fresh = gomokuEngine.createGame().state as GomokuState
+    expect(() => gomokuEngine.applyAction(fresh, { type: 'place', x: -1, y: 0 }, 'black')).toThrow(Error)
+    expect(() => gomokuEngine.applyAction(fresh, { type: 'place', x: 15, y: 0 }, 'black')).toThrow(Error)
+    expect(() => gomokuEngine.applyAction(fresh, { type: 'place', x: 0.5, y: 0 }, 'black')).toThrow(Error)
+    expect(() => gomokuEngine.applyAction(fresh, { type: 'place', x: '0', y: 0 }, 'black')).toThrow(Error)
+    expect(() => gomokuEngine.applyAction(fresh, { type: 'place', x: 0, y: 0 }, 'purple')).toThrow(Error)
+    expect(() => gomokuEngine.applyAction(fresh, { type: 'place', x: 0, y: 0 }, 'white')).toThrow(Error)
+    expect(() => gomokuEngine.applyAction(fresh, { x: 0, y: 0 }, 'black')).toThrow(Error)
+    // resign 是保留动作（运行时统一处理），引擎必须拒绝而非静默。
+    expect(() => gomokuEngine.applyAction(fresh, { type: 'resign' }, 'black')).toThrow(Error)
+    expect(() => gomokuEngine.applyAction(fresh, { type: 'jump' }, 'black')).toThrow(Error)
+    const afterBlack = gomokuEngine.applyAction(fresh, { type: 'place', x: 0, y: 0 }, 'black').state as GomokuState
+    expect(() => gomokuEngine.applyAction(afterBlack, { type: 'place', x: 0, y: 0 }, 'white')).toThrow(Error)
+  })
+})
+
+describe('内置五子棋：胜负（自由规则 ≥5 连即胜含长连）', () => {
+  it('横向五连终局：winner/winLine/中文 summary', () => {
+    // 黑 (3..7,7) 成行；白 (0,0..3) 四子不成五。
+    const result = playGomoku([[3, 7], [0, 0], [4, 7], [0, 1], [5, 7], [0, 2], [6, 7], [0, 3], [7, 7]])
+    expect(result.state.finished).toBe(true)
+    expect(result.winner).toBe('black')
+    expect((result.state as GomokuState).winLine).toEqual([
+      { x: 3, y: 7 }, { x: 4, y: 7 }, { x: 5, y: 7 }, { x: 6, y: 7 }, { x: 7, y: 7 },
+    ])
+    expect(result.summary).toContain('五连')
+    expect(result.summary).toContain('黑胜')
+  })
+
+  it('竖向五连终局', () => {
+    const result = playGomoku([[7, 3], [0, 0], [7, 4], [1, 0], [7, 5], [2, 0], [7, 6], [3, 0], [7, 7]])
+    expect(result.winner).toBe('black')
+    expect((result.state as GomokuState).winLine).toEqual([
+      { x: 7, y: 3 }, { x: 7, y: 4 }, { x: 7, y: 5 }, { x: 7, y: 6 }, { x: 7, y: 7 },
+    ])
+  })
+
+  it('主对角（↘）五连终局', () => {
+    const result = playGomoku([[3, 3], [0, 0], [4, 4], [1, 0], [5, 5], [2, 0], [6, 6], [0, 1], [7, 7]])
+    expect(result.winner).toBe('black')
+    expect((result.state as GomokuState).winLine).toEqual([
+      { x: 3, y: 3 }, { x: 4, y: 4 }, { x: 5, y: 5 }, { x: 6, y: 6 }, { x: 7, y: 7 },
+    ])
+  })
+
+  it('副对角（↗）五连终局', () => {
+    const result = playGomoku([[3, 11], [0, 0], [4, 10], [1, 0], [5, 9], [2, 0], [6, 8], [0, 1], [7, 7]])
+    expect(result.winner).toBe('black')
+    expect((result.state as GomokuState).winLine).toEqual([
+      { x: 3, y: 11 }, { x: 4, y: 10 }, { x: 5, y: 9 }, { x: 6, y: 8 }, { x: 7, y: 7 },
+    ])
+  })
+
+  it('长连也算胜：补中间一子连成六连，summary 用「六连」', () => {
+    // 黑 (0..2,0) 与 (4..5,0) 分离、补 (3,0) 成六连——自由规则长连算胜。
+    const result = playGomoku([[0, 0], [0, 1], [1, 0], [1, 1], [2, 0], [0, 2], [4, 0], [1, 2], [5, 0], [0, 3], [3, 0]])
+    expect(result.winner).toBe('black')
+    expect((result.state as GomokuState).winLine).toHaveLength(6)
+    expect(result.summary).toContain('六连')
+  })
+
+  it('边界角落五连（棋盘边缘不算越界）', () => {
+    const result = playGomoku([[0, 0], [0, 5], [1, 0], [1, 5], [2, 0], [2, 5], [3, 0], [3, 5], [4, 0]])
+    expect(result.winner).toBe('black')
+    expect((result.state as GomokuState).winLine).toEqual([
+      { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }, { x: 3, y: 0 }, { x: 4, y: 0 },
+    ])
+  })
+})
+
+describe('内置五子棋：和棋（225 手满盘无五连）', () => {
+  it('测试数据自校验：113 黑 / 112 白且四方向无五连', () => {
+    const grid = DRAW_PATTERN.map((row) => row.split('').map(Number))
+    let blacks = 0
+    let whites = 0
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell === 1) blacks++
+        else whites++
+      }
+    }
+    expect(blacks).toBe(113)
+    expect(whites).toBe(112)
+    expect(hasFiveInARow(grid)).toBe(false)
+  })
+
+  it('225 手填满：finished 且 winner null、summary 含和棋', () => {
+    const result = playGomoku(drawMoves())
+    const state = result.state as GomokuState
+    expect(state.finished).toBe(true)
+    expect(state.winner).toBeNull()
+    expect(state.ply).toBe(225)
+    expect(result.summary).toContain('和棋')
+  })
+
+  it('满盘和棋局重放两次，最终结果 deep-equal', () => {
+    expect(playGomoku(drawMoves())).toEqual(playGomoku(drawMoves()))
+  })
+})
+
+describe('内置五子棋：确定性（§3.2 硬约束）', () => {
+  it('同一动作从同一状态 apply 两次 deep-equal 且入参不变', () => {
+    const base = playGomoku([[7, 7], [7, 8], [8, 8]]).state as GomokuState
+    const snapshot = structuredClone(base)
+    const first = gomokuEngine.applyAction(base, { type: 'place', x: 6, y: 6 }, base.turn)
+    const second = gomokuEngine.applyAction(base, { type: 'place', x: 6, y: 6 }, base.turn)
+    expect(first).toEqual(second)
+    expect(base).toEqual(snapshot)
+  })
+})
+
+describe('内置五子棋：legalActions / describe（§3.2）', () => {
+  it('空盘只有天元；中局建议集有界且落在空点；终局空数组', () => {
+    const fresh = gomokuEngine.createGame().state as GomokuState
+    expect(gomokuEngine.legalActions(fresh)).toEqual([{ type: 'place', x: 7, y: 7 }])
+    const mid = playGomoku([[0, 0], [1, 0], [0, 1], [1, 1]]).state as GomokuState
+    const suggestions = gomokuEngine.legalActions(mid)
+    expect(suggestions.length).toBeGreaterThan(0)
+    expect(suggestions.length).toBeLessThanOrEqual(64)
+    for (const action of suggestions) expect(mid.board[action.y]![action.x]).toBe(0)
+    const finished = playGomoku([[3, 7], [0, 0], [4, 7], [0, 1], [5, 7], [0, 2], [6, 7], [0, 3], [7, 7]]).state as GomokuState
+    expect(gomokuEngine.legalActions(finished)).toEqual([])
+  })
+
+  it('建议集不是合法性依据：远离棋子的空点不在建议集但仍可落', () => {
+    const mid = playGomoku([[0, 0], [1, 0], [0, 1], [1, 1]]).state as GomokuState
+    const suggestions = gomokuEngine.legalActions(mid)
+    expect(suggestions.some((action) => action.x === 14 && action.y === 14)).toBe(false)
+    const result = gomokuEngine.applyAction(mid, { type: 'place', x: 14, y: 14 }, mid.turn)
+    expect(result.finished).toBe(false)
+    expect((result.state as GomokuState).board[14]![14]).not.toBe(0)
+  })
+
+  it('describe 含棋子与棋谱坐标（列 A-O + 行 1-15）', () => {
+    const state = gomokuEngine.createGame().state as GomokuState
+    expect(gomokuEngine.describe(state, 'black', { type: 'place', x: 7, y: 7 })).toContain('H8')
+    expect(gomokuEngine.describe(state, 'white', { type: 'place', x: 14, y: 14 })).toContain('O15')
+    expect(gomokuEngine.describe(state, 'black', { type: 'resign' })).toContain('未被本引擎识别')
+  })
+})
+
 describe('烟测 smokeTestGameEngine（§4.6）', () => {
   it('井字棋引擎通过五关', () => {
     const result = smokeTestGameEngine(ticTacToe)
+    expect(result.ok).toBe(true)
+    expect(result.reasons).toEqual([])
+  })
+
+  it('五子棋引擎通过同一套五关（标准面前人人平等）', () => {
+    const result = smokeTestGameEngine(gomokuEngine)
     expect(result.ok).toBe(true)
     expect(result.reasons).toEqual([])
   })
@@ -243,6 +558,21 @@ describe('registry 内置源（§4.1）', () => {
     expect(entry.viewHtml).toContain('<!doctype html>')
   })
 
+  it('列出 builtin 五子棋：source builtin、status ok、engine/view 可用', async () => {
+    const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.0' })
+    const summaries = registry.summaries()
+    expect(summaries.filter((summary) => summary.source === 'builtin').map((summary) => summary.id))
+      .toEqual(['dsh-tavern.gomoku', 'dsh-tavern.tic-tac-toe'])
+    const gomokuSummary = summaries.find((summary) => summary.id === 'dsh-tavern.gomoku')!
+    expect(gomokuSummary.name).toBe('五子棋')
+    expect(gomokuSummary.status).toBe('ok')
+    expect(gomokuSummary.players).toEqual({ min: 2, max: 2, roles: ['black', 'white'] })
+    expect(gomokuSummary.actionVocabulary).toContain('place')
+    const entry = registry.get('dsh-tavern.gomoku')!
+    expect(entry.engine).not.toBeNull()
+    expect(entry.viewHtml).toContain('data-game="dsh-tavern.gomoku"')
+  })
+
   it('players.max !== 2 的游戏在 start 时被拒（v1 一人类一 Agent 裁剪）——校验面先验', async () => {
     // 清单校验层：roles 数与 max 不一致即拒（三人对局进不了注册表）。
     const check = checkGameManifest({
@@ -260,5 +590,24 @@ describe('registry 内置源（§4.1）', () => {
     expect(checkGameManifest({ id: 'a.b', name: 'n', version: '1', players: { min: 2, max: 2, roles: ['a'] }, turnBased: true, actionVocabulary: 'x' }).ok).toBe(false)
     expect(checkGameManifest({ id: 'Bad Id', name: 'n', version: '1', players: { min: 2, max: 2, roles: ['a', 'b'] }, turnBased: true, actionVocabulary: 'x' }).ok).toBe(false)
     expect(checkGameManifest({ id: 'a.b', name: 'n', version: '1', players: { min: 2, max: 2, roles: ['a', 'b'] }, turnBased: true, actionVocabulary: '' }).ok).toBe(false)
+  })
+})
+
+describe('内置五子棋：导入同 id 遮蔽内置（registry 单一遮蔽规则）', () => {
+  it('导入目录与内置同 id → 以导入副本为准（broken 也遮蔽、可见）+ warning 不静默', async () => {
+    mkdirSync(join(shadowHome, 'tavern', 'games', 'installed', 'dsh-tavern.gomoku'), { recursive: true })
+    const warnings: string[] = []
+    const registry = await GameRegistry.open({
+      root: join(shadowHome, 'tavern'),
+      hostVersion: '0.6.0',
+      logger: { warn: (message: string) => { warnings.push(message) } },
+    })
+    const shadowed = registry.summaries().find((summary) => summary.id === 'dsh-tavern.gomoku')!
+    expect(shadowed.source).toBe('imported')
+    expect(shadowed.status).toBe('broken')
+    expect(shadowed.reason).toContain('game.json 缺失或不可读')
+    expect(warnings.some((message) => message.includes('与内置游戏同 id'))).toBe(true)
+    // 坏游戏不断路：其余内置照常在册。
+    expect(registry.summaries().some((summary) => summary.id === 'dsh-tavern.tic-tac-toe' && summary.status === 'ok')).toBe(true)
   })
 })
