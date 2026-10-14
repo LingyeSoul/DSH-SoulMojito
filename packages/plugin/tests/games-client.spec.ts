@@ -41,6 +41,8 @@ const GAMES_I18N_KEYS = [
   'games.ownerAgent',
   'games.orphaned',
   'games.orphanedHint',
+  'games.resign',
+  'games.resignConfirm',
 ]
 
 describe('client games panel (main.js source check)', () => {
@@ -175,6 +177,33 @@ describe('client games panel (main.js source check)', () => {
 
   it('downlink payload carries {type, token, session, view} verbatim for the injected bridge script', () => {
     expect(source).toContain('{ type: GAME_STATE_MESSAGE, token, session: payload.session, view: payload.view }')
+  })
+
+  it('renders the resign control on the game surface and keeps the final board on finished games (2026-10-14 user requests)', () => {
+    for (const marker of [
+      // 投降按钮：走与棋子同一条上行路径（postActionPost→POST games/action），
+      // 两步点击确认（armed 样式类 + 4s 复位）、「禁用投降」时整体不渲染。
+      'dt-game-actions',
+      'dt-game-resign-armed',
+      "postActionRef.current({ type: 'resign' })",
+      "t('games.resignConfirm')",
+      "t('games.resign')",
+      'store.bootstrap.state.gamesDisableResign !== true',
+      // 面板「游戏」分区开关（补丁路由即时生效）。
+      'patchState({ gamesDisableResign: event.target.checked })',
+      // 终局保留盘面：见证集判据（本挂载见证过的已终局会话也补拉快照）。
+      'witnessed[session.id] !== undefined',
+    ]) {
+      expect(source).toContain(marker)
+    }
+    // 终局盘面两处同款：内联对局面（TavernGameBoard）与面板会话卡（GamesPanel）。
+    expect(source.split('h(GameSurface, { key: session.id, session: live?.session || session, view: live?.view, onOutcome: handleOutcome })').length - 1).toBe(2)
+    // 「禁用投降」开关的 zh/en 双表（占位符无关，键齐备即可）。
+    expect(source.split("'settings.gamesDisableResign':").length - 1).toBe(2)
+    // 负样本：近邻名字不得命中组件标记。
+    expect('dt-game-act'.includes('dt-game-actions')).toBe(false)
+    expect("postActionRef.current({ kind: 'resign' })".includes("postActionRef.current({ type: 'resign' })")).toBe(false)
+    expect('witnessedGone[session.id] !== undefined'.includes('witnessed[session.id] !== undefined')).toBe(false)
   })
 
   it('polls the games revision watermark at the 1s cadence', () => {

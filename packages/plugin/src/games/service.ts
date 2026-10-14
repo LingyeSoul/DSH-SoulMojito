@@ -10,7 +10,14 @@
 
 import { emitGamesChanged, publishGamesService } from './handle.js'
 import { GameRegistry, type GameCloneImpl, type GameSummary } from './registry.js'
-import { GameBridgeError, GameSessionStore, type GameActionResult, type GameSessionSummary, type GameViewPayload } from './sessions.js'
+import {
+  GameBridgeError,
+  GameSessionStore,
+  type GameActionResult,
+  type GameHistoryWindow,
+  type GameSessionSummary,
+  type GameViewPayload,
+} from './sessions.js'
 import type { GameAction, GameEngine, GameManifest } from './standard.js'
 import { renderGameViewDocument } from './view.js'
 
@@ -22,6 +29,19 @@ export interface GamesServiceOptions {
   logger?: { warn?: (message: string) => unknown }
   /** git 安装注入面（测试用：cloneImpl 替身 + 超时）。 */
   gameInstall?: { timeoutMs?: number; cloneImpl?: GameCloneImpl }
+  /**
+   * 人类落子/认输成功后的自动续弈回调（2026-10-14 用户需求：Agent 没调
+   * game_wait 就结束回合时由插件自动唤起）。实现是 src/games/wake.ts 的
+   * wakeAgentOnHumanMove（index.ts 接线绑定反查与宿主 agents）；等待中/冷会话/
+   * 无绑定由实现内部判定并静默跳过。回调抛错只记日志——落子本身不受影响。
+   */
+  onHumanAction?: (session: GameSessionSummary) => Promise<unknown> | unknown
+  /**
+   * 投降门（2026-10-14 用户需求「禁用投降」，面板「游戏」分区开关）：返回 false
+   * 时两个动作入口（人类棋盘 / Agent game_move）对 {type:'resign'} 一律拒绝。
+   * 逐次调用（index.ts 读 TavernStore 内存态）——面板翻转即时生效，无缓存。
+   */
+  resignAllowed?: () => Promise<boolean> | boolean
 }
 
 export interface GamesService {
@@ -31,6 +51,8 @@ export interface GamesService {
   revision(): Promise<string>
   start(params: { gameId: string; character: string; chatId: string; humanRole?: string }): Promise<{ session: GameSessionSummary; view: GameViewPayload }>
   state(sessionId: string): Promise<{ session: GameSessionSummary; view: GameViewPayload }>
+  /** 动作日志窗口（2026-10-14 增量修订）：game_history 工具面 + game_wait 增量判定面。 */
+  history(sessionId: string, params?: { from?: number; limit?: number }): Promise<GameHistoryWindow>
   /** 人类落子（HTTP 面）：当前回合 owner 必须 human。 */
   humanAction(sessionId: string, action: GameAction): Promise<GameActionResult>
   /** Agent 落子（工具面）：当前回合 owner 必须 agent。 */
@@ -64,6 +86,17 @@ export async function openGamesService(options: GamesServiceOptions): Promise<Ga
   const registry = await GameRegistry.open({ root: options.root, hostVersion: options.hostVersion, logger: options.logger })
   const sessions = await GameSessionStore.open({ root: options.root, registry: () => registry })
 
+  /**
+   * 投降门（2026-10-14 用户需求「禁用投降」）：人类棋盘入口与 Agent game_move
+   * 一致拒绝——按钮隐藏只是 UI 面，服务端门才是权威（旧客户端/工具面都不能绕过）。
+   */
+  const assertResignAllowed = async (action: GameAction): Promise<void> => {
+    if (action === null || typeof action !== 'object' || Array.isArray(action) || action.type !== 'resign') return
+    if (options.resignAllowed === undefined) return
+    const allowed = await options.resignAllowed()
+    if (!allowed) throw new GameBridgeError('invalid', '投降已被禁用（设置面板「游戏」分区可重新启用）')
+  }
+
   const service: GamesService = {
     async list(params) {
       const games = registry.summaries()
@@ -77,14 +110,27 @@ export async function openGamesService(options: GamesServiceOptions): Promise<Ga
       return outcome
     },
     state: (sessionId) => sessions.get(sessionId),
+    history: (sessionId, params) => sessions.history(sessionId, params),
     async humanAction(sessionId, action) {
+      await assertResignAllowed(action)
       // 人类落子经 HTTP（index bundle）发生——写穿通知让 agent bundle 的懒提示
       // 段（order -63）刷新「轮到谁」。
       const outcome = await sessions.humanAction(sessionId, action)
       emitGamesChanged()
+      // 人类落子自动续弈（2026-10-14）：Agent 未 wait 就结束回合时由回调侧
+      // followup 唤起（等待中/冷会话/无绑定在实现内部静默跳过）。回调故障不
+      // 外溢——落子回执必须原样送达，记日志即可。
+      if (options.onHumanAction !== undefined) {
+        try {
+          await options.onHumanAction(outcome.session)
+        } catch (cause) {
+          options.logger?.warn?.(`dsh-tavern: game human-action wake failed: ${cause instanceof Error ? cause.message : String(cause)}`)
+        }
+      }
       return outcome
     },
     async agentMove(sessionId, action) {
+      await assertResignAllowed(action)
       const outcome = await sessions.agentMove(sessionId, action)
       emitGamesChanged()
       return outcome

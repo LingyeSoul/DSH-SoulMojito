@@ -75,13 +75,13 @@ export const MOD_TOOL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
  * bundle mount——两层并集，静态份的漂移由 vitest 对账测试锁定）。
  */
 const BUILTIN_TOOL_NAMES_SEED = new Set<string>([
-  // agent-tavern（agent.ts createTools，23：18 原有 + 游戏桥五件，提案 0018 §4.2；
-  // game_wait 为 2026-10-14 修订新增）
+  // agent-tavern（agent.ts createTools，24：18 原有 + 游戏桥六件，提案 0018 §4.2；
+  // game_wait 为 2026-10-14 修订新增，game_history 为同日增量修订新增）
   'tavern_character_get', 'tavern_lore_search', 'tavern_scene_get', 'tavern_history_search',
   'memory_search', 'memory_read', 'memory_write', 'memory_update', 'memory_forget',
   'variable_get', 'variable_set', 'variable_patch', 'variable_delete', 'variable_list',
   'tavern_script_read', 'tavern_script_advance', 'tavern_deduce', 'tavern_variable_settle',
-  'game_list', 'game_start', 'game_state', 'game_move', 'game_wait',
+  'game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait',
   // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
   'novel_status_read', 'novel_requirements_read', 'novel_outline_read', 'novel_outline_create',
   'novel_outline_revise', 'novel_requirement_block', 'novel_facts_read', 'novel_lore_search',

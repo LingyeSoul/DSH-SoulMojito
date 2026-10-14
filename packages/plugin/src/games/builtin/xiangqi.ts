@@ -629,6 +629,12 @@ export const viewHtml = `<!doctype html>
   #banner.turn-black { background: #101216; border-color: #454b57; color: #d8dbe2; }
   #banner.finished   { background: #2a2416; border-color: #8a6d2f; color: #e7cf96; }
   #banner.preview    { background: #20242c; border-color: #4a5568; color: #b9c4d8; }
+  /* 将军警报态（2026-10-14 用户需求「象棋应该提供提示：如将军提示」）：深红
+     闪烁盖过回合底色——提示必须比「轮到谁」抢眼；文案与行动指引见 render()。 */
+  #banner.check      { background: #571210; border-color: #e05252; color: #ffe7e3; font-weight: 600;
+                       animation: dt-check-flash 1.1s ease-in-out infinite; }
+  @keyframes dt-check-flash { 0%, 100% { box-shadow: 0 0 0 0 rgba(224, 82, 82, 0); }
+                              50% { box-shadow: 0 0 16px 2px rgba(224, 82, 82, .6); } }
   .board-wrap { position: relative; width: 100%; max-width: 560px; }
   svg#board { display: block; width: 100%; height: auto; border-radius: 10px; box-shadow: 0 4px 18px rgba(0,0,0,.45); }
   svg#board.interactive .hit { cursor: pointer; }
@@ -841,11 +847,23 @@ function render() {
     } else if (act.finished) {
       cls = 'finished'
       text = act.summary ? '对局结束 · ' + act.summary : '对局结束：' + endText(state)
+    } else if (state.check) {
+      /* 将军提示（2026-10-14 用户需求「象棋应该提供提示：如将军提示」）：
+         警报优先于回合底色与往手摘要——check 态独用闪烁横幅；文案分
+         「你被将 / AI 被将」两语境（归属经 ownerOf 反查，人类未必执红）。 */
+      cls = 'check'
+      var checkedOwner = ownerOf(act.session, state.turn)
+      if (checkedOwner === 'human') {
+        text = '将军！你（' + sideName(state.turn) + '）被将军了——必须解将'
+      } else if (checkedOwner === 'agent') {
+        text = '将军！' + sideName(state.turn) + '被将军——AI 正在解将…'
+      } else {
+        text = '将军！' + sideName(state.turn) + '被将军'
+      }
     } else {
       cls = state.turn === 'red' ? 'turn-red' : 'turn-black'
       var owner = ownerOf(act.session, state.turn)
       text = sideName(state.turn) + (owner === 'agent' ? ' · AI 思考中…' : owner === 'human' ? ' · 轮到你走子' : '行动中')
-      if (state.check) text += ' · 将军！'
       if (act.summary) text += ' · ' + act.summary
     }
   }
@@ -872,7 +890,11 @@ function render() {
   } else if (act.finished) {
     hintEl.textContent = '对局已结束。可在对局面板中开新一局，或让 AI 再来一盘。'
   } else if (humanTurn(act)) {
-    hintEl.textContent = '点击己方棋子选中，再点高亮目标走子；走法合法性（含将军与将帅照面）由服务端引擎终审。'
+    hintEl.textContent = state.check
+      ? '你被将军了——必须解将：移动帅/仕、垫子到将军线路上、或吃掉正在将军的棋子；点击己方棋子可看高亮走法。'
+      : '点击己方棋子选中，再点高亮目标走子；走法合法性（含将军与将帅照面）由服务端引擎终审。'
+  } else if (state.check) {
+    hintEl.textContent = sideName(state.turn) + '被将军，AI 正在解将；走子将自动出现在棋盘上。'
   } else {
     hintEl.textContent = 'AI 思考中，走子将自动出现在棋盘上。'
   }
@@ -971,10 +993,15 @@ function renderBoard(act) {
     }))
   }
 
-  /* 将军标记：行棋方的将/帅红圈脉冲 */
+  /* 将军标记：行棋方的将/帅红圈脉冲 + 底光晕（2026-10-14 提示增强——光晕让
+     被将的子在小尺寸面板里也一眼可见，脉冲圈保持原样）。 */
   if (state.check && !act.finished) {
     var general = findGeneral(state.board, state.turn)
     if (general) {
+      boardEl.appendChild(svgEl('circle', {
+        cx: px(general.x), cy: py(general.y), r: 31,
+        fill: 'rgba(224, 82, 82, .18)', class: 'check-halo',
+      }))
       boardEl.appendChild(svgEl('circle', {
         cx: px(general.x), cy: py(general.y), r: 27.5,
         fill: 'none', stroke: '#e05252', 'stroke-width': 3, class: 'check-ring',

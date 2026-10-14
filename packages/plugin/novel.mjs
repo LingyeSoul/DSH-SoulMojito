@@ -1863,6 +1863,7 @@ var DEFAULT_STATE = {
   defaultContextMode: "dsh-native",
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  gamesDisableResign: false,
   cardWorkbenchPresetEnabled: false,
   agentNovelPresetEnabled: false,
   worldFollowsCharacter: true,
@@ -2435,6 +2436,7 @@ var TavernStore = class _TavernStore {
       defaultContextMode: parsed.defaultContextMode === "agent-managed" ? "agent-managed" : "dsh-native",
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      gamesDisableResign: parsed.gamesDisableResign === true,
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
       agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
       worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
@@ -6344,8 +6346,8 @@ function clampModSectionOrder(order) {
   return Math.max(MOD_SECTION_ORDER_MIN, Math.min(MOD_SECTION_ORDER_MAX, value));
 }
 var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
-  // agent-tavern（agent.ts createTools，23：18 原有 + 游戏桥五件，提案 0018 §4.2；
-  // game_wait 为 2026-10-14 修订新增）
+  // agent-tavern（agent.ts createTools，24：18 原有 + 游戏桥六件，提案 0018 §4.2；
+  // game_wait 为 2026-10-14 修订新增，game_history 为同日增量修订新增）
   "tavern_character_get",
   "tavern_lore_search",
   "tavern_scene_get",
@@ -6367,6 +6369,7 @@ var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
   "game_list",
   "game_start",
   "game_state",
+  "game_history",
   "game_move",
   "game_wait",
   // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
@@ -6740,25 +6743,65 @@ var gameListOutput = objectOutput({
   sessions: { type: "array", items: { type: "object", additionalProperties: true } }
 });
 var gameStartOutput = objectOutput({
-  session: { type: "object", additionalProperties: true },
-  view: { type: "object", additionalProperties: true }
-});
-var gameStateOutput = objectOutput({
-  session: { type: "object", additionalProperties: true },
-  view: { type: "object", additionalProperties: true }
-});
-var gameMoveOutput = objectOutput({
-  session: { type: "object", additionalProperties: true },
-  view: { type: "object", additionalProperties: true },
-  describe: { type: "string" }
-});
-var gameWaitOutput = objectOutput({
-  status: { type: "string", description: "your-turn | finished | orphaned | timeout" },
   sessionId: { type: "string" },
-  session: { type: "object", additionalProperties: true },
-  view: { type: "object", additionalProperties: true },
-  lastMove: { type: "object", additionalProperties: true, description: "Latest move record (null before the first move); on wake-up it is the human move to narrate." }
+  gameName: { type: "string" },
+  players: { type: "array", items: { type: "object", additionalProperties: true } },
+  turn: { type: "string" },
+  turnOwner: { type: "string" }
 });
+var gameStateOutput = objectOutput(
+  {
+    sessionId: { type: "string" },
+    gameName: { type: "string" },
+    turn: { type: "string" },
+    turnOwner: { type: "string" },
+    moveCount: { type: "integer" },
+    finished: { type: "boolean" },
+    winner: {},
+    summary: { type: "string" },
+    orphaned: { type: "boolean" },
+    state: {},
+    legal: { type: "array", items: { type: "object", additionalProperties: true } }
+  },
+  ["turn", "turnOwner", "winner", "summary", "orphaned"]
+);
+var gameHistoryOutput = objectOutput(
+  {
+    sessionId: { type: "string" },
+    gameName: { type: "string" },
+    moveCount: { type: "integer" },
+    from: { type: "integer", description: "0-based index of the first returned move within the full log." },
+    finished: { type: "boolean" },
+    winner: {},
+    summary: { type: "string" },
+    moves: { type: "array", items: { type: "object", additionalProperties: true } }
+  },
+  ["winner", "summary"]
+);
+var gameMoveOutput = objectOutput(
+  {
+    sessionId: { type: "string" },
+    describe: { type: "string", description: "Narration line for the move you just made." },
+    finished: { type: "boolean" },
+    turn: { type: "string" },
+    turnOwner: { type: "string" },
+    winner: {},
+    summary: { type: "string" }
+  },
+  ["turn", "turnOwner", "winner", "summary"]
+);
+var gameWaitOutput = objectOutput(
+  {
+    status: { type: "string", description: "your-turn | finished | orphaned | timeout" },
+    sessionId: { type: "string" },
+    newMoves: { type: "array", items: { type: "object", additionalProperties: true }, description: "Moves that arrived while waiting (normally the human move to narrate); empty on timeout or when it was already your turn." },
+    turn: { type: "string" },
+    turnOwner: { type: "string" },
+    winner: {},
+    summary: { type: "string" }
+  },
+  ["turn", "turnOwner", "winner", "summary"]
+);
 function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
   return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
 }
@@ -6841,12 +6884,13 @@ var gamesSummaryProjection = createLazyProjection({
     const lines = active.map((session) => {
       const turnOwner = session.players.find((player) => player.role === session.turn)?.owner;
       const whose = turnOwner === "agent" ? "\u4F60\uFF08Agent\uFF09" : "\u4EBA\u7C7B\u73A9\u5BB6";
-      return `- ${session.gameName}\uFF08sessionId ${session.id}\uFF09\uFF1A\u8F6E\u5230 ${session.turn}\uFF08${whose}\uFF09\uFF1B\u52A8\u4F5C\u8BCD\u6C47\u8868\uFF1A${session.actionVocabulary}`;
+      const agentRole = session.players.find((player) => player.owner === "agent")?.role;
+      return `- ${session.gameName}\uFF08sessionId ${session.id}\uFF09\uFF1A${agentRole === void 0 ? "" : `\u4F60\u6267 ${agentRole}\uFF0C`}\u8F6E\u5230 ${session.turn}\uFF08${whose}\uFF09\uFF1B\u52A8\u4F5C\u8BCD\u6C47\u8868\uFF1A${session.actionVocabulary}`;
     });
     const text = [
       "\u672C\u804A\u5929\u6709\u8FDB\u884C\u4E2D\u7684\u6E38\u620F\u5BF9\u5C40\uFF1A",
       ...lines,
-      "\u8F6E\u5230\u4F60\u65F6\u7528 game_move \u843D\u5B50\uFF1B\u843D\u5230\u4EBA\u7C7B\u56DE\u5408\u7ACB\u5373\u8C03\u7528 game_wait \u963B\u585E\u7B49\u5F85\u5BF9\u65B9\u5728\u68CB\u76D8\u4E0A\u843D\u5B50\uFF08\u5BF9\u65B9\u65E0\u9700\u53D1\u9001\u804A\u5929\u6D88\u606F\uFF09\uFF0C\u5DE5\u5177\u8FD4\u56DE\u540E\u81EA\u52A8\u7EE7\u7EED\uFF1Bdescribe/summary \u6587\u6848\u53EF\u76F4\u63A5\u7528\u4E8E\u5BF9\u8BDD\u4E2D\u53D9\u8FF0\u8FD9\u4E00\u624B\u3002"
+      "\u8F6E\u5230\u4F60\u65F6\u5148 game_state \u8BFB\u5C40\u9762\u3001\u518D\u7528 game_move \u843D\u5B50\uFF1B\u843D\u5230\u4EBA\u7C7B\u56DE\u5408\u7ACB\u5373\u8C03\u7528 game_wait \u963B\u585E\u7B49\u5F85\u5BF9\u65B9\u5728\u68CB\u76D8\u4E0A\u843D\u5B50\uFF08\u5BF9\u65B9\u65E0\u9700\u53D1\u9001\u804A\u5929\u6D88\u606F\uFF1Bwait \u53EA\u8FD4\u56DE\u7B49\u5F85\u671F\u589E\u91CF\u2014\u2014\u8BE5\u624B\u4E0E\u8F6E\u6B21\uFF09\uFF0C\u5DE5\u5177\u8FD4\u56DE\u540E\u81EA\u52A8\u7EE7\u7EED\uFF1Bdescribe/summary \u6587\u6848\u53EF\u76F4\u63A5\u7528\u4E8E\u5BF9\u8BDD\u53D9\u8FF0\u8FD9\u4E00\u624B\uFF0C\u5F80\u624B\u7528 game_history \u67E5\u8BE2\u3002"
     ].join("\n");
     const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER);
     settle(hostPromptSafe(text, expand));

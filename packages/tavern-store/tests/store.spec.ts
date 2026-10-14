@@ -345,6 +345,8 @@ describe('TavernStore', () => {
       activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
       agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, worldFollowsCharacter: true,
       cardWorkbenchPresetEnabled: false, agentNovelPresetEnabled: false,
+      // 禁用投降（2026-10-14 用户需求；面板「游戏」分区开关）默认关闭。
+      gamesDisableResign: false,
       modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
       // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false。
       modsEnabled: false, mods: { enabled: {} },

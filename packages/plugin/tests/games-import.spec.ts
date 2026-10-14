@@ -102,7 +102,10 @@ describe('path 安装 → status ok → 整局 → revision → 视图', () => {
     expect(final.session.finished).toBe(true)
     expect(final.session.winner).toBe('black')
     expect(final.session.summary).toContain('五连')
-    expect(final.session.moves).toHaveLength(9)
+    // 增量修订（2026-10-14）：日志不在快照里，总量锚 moveCount + history 窗口。
+    expect(final.session.moveCount).toBe(9)
+    const { moves } = await service.history(session.id, { from: 0 })
+    expect(moves).toHaveLength(9)
     // revision 推进。
     expect(await service.revision()).not.toBe(before)
   })

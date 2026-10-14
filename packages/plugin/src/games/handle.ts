@@ -66,3 +66,49 @@ export function onGamesChanged(listener: () => void): () => void {
 export function emitGamesChanged(): void {
   void gamesChangedListeners.emit()
 }
+
+/** 等待登记表（会话 id → 挂起中的 game_wait 计数）。bundle 间互见契约 key。 */
+export const GAMES_WAITERS_KEY = 'dsh-tavern:games-waiters'
+
+type GamesWaiterRegistry = Map<string, Set<symbol>>
+
+function waiterRegistry(): GamesWaiterRegistry {
+  const holder = globalThis as Record<symbol, GamesWaiterRegistry | undefined>
+  const key = Symbol.for(GAMES_WAITERS_KEY)
+  let registry = holder[key]
+  if (registry === undefined) {
+    registry = new Map()
+    holder[key] = registry
+  }
+  return registry
+}
+
+/**
+ * 写侧（agent bundle 的 game_wait）：登记「本会话有人正在等人类落子」，返回
+ * 注销器（工具返回/中止/抛错时释放）。2026-10-14 自动续弈修订：index bundle
+ * 的人类落子入口据此判定——有等待者时该手已由工具内唤醒覆盖，**绝不再**
+ * followup 唤起（否则等待中的回合结束后会多出一个陈旧通知回合）。
+ */
+export function beginGameWait(sessionId: string): () => void {
+  const registry = waiterRegistry()
+  const token = Symbol('dsh-tavern:game-wait')
+  const tokens = registry.get(sessionId) ?? new Set<symbol>()
+  tokens.add(token)
+  registry.set(sessionId, tokens)
+  return () => {
+    const current = registry.get(sessionId)
+    if (current === undefined) return
+    current.delete(token)
+    if (current.size === 0) registry.delete(sessionId)
+  }
+}
+
+/** 读侧（index bundle 的人类落子入口）：挂起中的等待者数量。 */
+export function gameWaiters(sessionId: string): number {
+  return waiterRegistry().get(sessionId)?.size ?? 0
+}
+
+/** 测试隔离用：清空登记表（globalThis 状态在测试文件间共享）。 */
+export function clearGameWaitersForTest(): void {
+  delete (globalThis as Record<symbol, GamesWaiterRegistry | undefined>)[Symbol.for(GAMES_WAITERS_KEY)]
+}

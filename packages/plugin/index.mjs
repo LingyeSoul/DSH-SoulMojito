@@ -4234,6 +4234,7 @@ var DEFAULT_STATE = {
   defaultContextMode: "dsh-native",
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  gamesDisableResign: false,
   cardWorkbenchPresetEnabled: false,
   agentNovelPresetEnabled: false,
   worldFollowsCharacter: true,
@@ -4806,6 +4807,7 @@ var TavernStore = class _TavernStore {
       defaultContextMode: parsed.defaultContextMode === "agent-managed" ? "agent-managed" : "dsh-native",
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      gamesDisableResign: parsed.gamesDisableResign === true,
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
       agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
       worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
@@ -16563,6 +16565,20 @@ var gamesChangedListeners = createGlobalListenerRegistry("dsh-tavern:games-chang
 function emitGamesChanged() {
   void gamesChangedListeners.emit();
 }
+var GAMES_WAITERS_KEY = "dsh-tavern:games-waiters";
+function waiterRegistry() {
+  const holder = globalThis;
+  const key = Symbol.for(GAMES_WAITERS_KEY);
+  let registry = holder[key];
+  if (registry === void 0) {
+    registry = /* @__PURE__ */ new Map();
+    holder[key] = registry;
+  }
+  return registry;
+}
+function gameWaiters(sessionId) {
+  return waiterRegistry().get(sessionId)?.size ?? 0;
+}
 
 // packages/plugin/src/mods/audit.ts
 import { appendFile, mkdir } from "node:fs/promises";
@@ -16670,8 +16686,8 @@ function clampModSectionOrder(order) {
 }
 var MOD_TOOL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
-  // agent-tavern（agent.ts createTools，23：18 原有 + 游戏桥五件，提案 0018 §4.2；
-  // game_wait 为 2026-10-14 修订新增）
+  // agent-tavern（agent.ts createTools，24：18 原有 + 游戏桥六件，提案 0018 §4.2；
+  // game_wait 为 2026-10-14 修订新增，game_history 为同日增量修订新增）
   "tavern_character_get",
   "tavern_lore_search",
   "tavern_scene_get",
@@ -16693,6 +16709,7 @@ var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
   "game_list",
   "game_start",
   "game_state",
+  "game_history",
   "game_move",
   "game_wait",
   // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
@@ -19568,6 +19585,12 @@ var viewHtml3 = `<!doctype html>
   #banner.turn-black { background: #101216; border-color: #454b57; color: #d8dbe2; }
   #banner.finished   { background: #2a2416; border-color: #8a6d2f; color: #e7cf96; }
   #banner.preview    { background: #20242c; border-color: #4a5568; color: #b9c4d8; }
+  /* \u5C06\u519B\u8B66\u62A5\u6001\uFF082026-10-14 \u7528\u6237\u9700\u6C42\u300C\u8C61\u68CB\u5E94\u8BE5\u63D0\u4F9B\u63D0\u793A\uFF1A\u5982\u5C06\u519B\u63D0\u793A\u300D\uFF09\uFF1A\u6DF1\u7EA2
+     \u95EA\u70C1\u76D6\u8FC7\u56DE\u5408\u5E95\u8272\u2014\u2014\u63D0\u793A\u5FC5\u987B\u6BD4\u300C\u8F6E\u5230\u8C01\u300D\u62A2\u773C\uFF1B\u6587\u6848\u4E0E\u884C\u52A8\u6307\u5F15\u89C1 render()\u3002 */
+  #banner.check      { background: #571210; border-color: #e05252; color: #ffe7e3; font-weight: 600;
+                       animation: dt-check-flash 1.1s ease-in-out infinite; }
+  @keyframes dt-check-flash { 0%, 100% { box-shadow: 0 0 0 0 rgba(224, 82, 82, 0); }
+                              50% { box-shadow: 0 0 16px 2px rgba(224, 82, 82, .6); } }
   .board-wrap { position: relative; width: 100%; max-width: 560px; }
   svg#board { display: block; width: 100%; height: auto; border-radius: 10px; box-shadow: 0 4px 18px rgba(0,0,0,.45); }
   svg#board.interactive .hit { cursor: pointer; }
@@ -19780,11 +19803,23 @@ function render() {
     } else if (act.finished) {
       cls = 'finished'
       text = act.summary ? '\u5BF9\u5C40\u7ED3\u675F \xB7 ' + act.summary : '\u5BF9\u5C40\u7ED3\u675F\uFF1A' + endText(state)
+    } else if (state.check) {
+      /* \u5C06\u519B\u63D0\u793A\uFF082026-10-14 \u7528\u6237\u9700\u6C42\u300C\u8C61\u68CB\u5E94\u8BE5\u63D0\u4F9B\u63D0\u793A\uFF1A\u5982\u5C06\u519B\u63D0\u793A\u300D\uFF09\uFF1A
+         \u8B66\u62A5\u4F18\u5148\u4E8E\u56DE\u5408\u5E95\u8272\u4E0E\u5F80\u624B\u6458\u8981\u2014\u2014check \u6001\u72EC\u7528\u95EA\u70C1\u6A2A\u5E45\uFF1B\u6587\u6848\u5206
+         \u300C\u4F60\u88AB\u5C06 / AI \u88AB\u5C06\u300D\u4E24\u8BED\u5883\uFF08\u5F52\u5C5E\u7ECF ownerOf \u53CD\u67E5\uFF0C\u4EBA\u7C7B\u672A\u5FC5\u6267\u7EA2\uFF09\u3002 */
+      cls = 'check'
+      var checkedOwner = ownerOf(act.session, state.turn)
+      if (checkedOwner === 'human') {
+        text = '\u5C06\u519B\uFF01\u4F60\uFF08' + sideName(state.turn) + '\uFF09\u88AB\u5C06\u519B\u4E86\u2014\u2014\u5FC5\u987B\u89E3\u5C06'
+      } else if (checkedOwner === 'agent') {
+        text = '\u5C06\u519B\uFF01' + sideName(state.turn) + '\u88AB\u5C06\u519B\u2014\u2014AI \u6B63\u5728\u89E3\u5C06\u2026'
+      } else {
+        text = '\u5C06\u519B\uFF01' + sideName(state.turn) + '\u88AB\u5C06\u519B'
+      }
     } else {
       cls = state.turn === 'red' ? 'turn-red' : 'turn-black'
       var owner = ownerOf(act.session, state.turn)
       text = sideName(state.turn) + (owner === 'agent' ? ' \xB7 AI \u601D\u8003\u4E2D\u2026' : owner === 'human' ? ' \xB7 \u8F6E\u5230\u4F60\u8D70\u5B50' : '\u884C\u52A8\u4E2D')
-      if (state.check) text += ' \xB7 \u5C06\u519B\uFF01'
       if (act.summary) text += ' \xB7 ' + act.summary
     }
   }
@@ -19811,7 +19846,11 @@ function render() {
   } else if (act.finished) {
     hintEl.textContent = '\u5BF9\u5C40\u5DF2\u7ED3\u675F\u3002\u53EF\u5728\u5BF9\u5C40\u9762\u677F\u4E2D\u5F00\u65B0\u4E00\u5C40\uFF0C\u6216\u8BA9 AI \u518D\u6765\u4E00\u76D8\u3002'
   } else if (humanTurn(act)) {
-    hintEl.textContent = '\u70B9\u51FB\u5DF1\u65B9\u68CB\u5B50\u9009\u4E2D\uFF0C\u518D\u70B9\u9AD8\u4EAE\u76EE\u6807\u8D70\u5B50\uFF1B\u8D70\u6CD5\u5408\u6CD5\u6027\uFF08\u542B\u5C06\u519B\u4E0E\u5C06\u5E05\u7167\u9762\uFF09\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\u3002'
+    hintEl.textContent = state.check
+      ? '\u4F60\u88AB\u5C06\u519B\u4E86\u2014\u2014\u5FC5\u987B\u89E3\u5C06\uFF1A\u79FB\u52A8\u5E05/\u4ED5\u3001\u57AB\u5B50\u5230\u5C06\u519B\u7EBF\u8DEF\u4E0A\u3001\u6216\u5403\u6389\u6B63\u5728\u5C06\u519B\u7684\u68CB\u5B50\uFF1B\u70B9\u51FB\u5DF1\u65B9\u68CB\u5B50\u53EF\u770B\u9AD8\u4EAE\u8D70\u6CD5\u3002'
+      : '\u70B9\u51FB\u5DF1\u65B9\u68CB\u5B50\u9009\u4E2D\uFF0C\u518D\u70B9\u9AD8\u4EAE\u76EE\u6807\u8D70\u5B50\uFF1B\u8D70\u6CD5\u5408\u6CD5\u6027\uFF08\u542B\u5C06\u519B\u4E0E\u5C06\u5E05\u7167\u9762\uFF09\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\u3002'
+  } else if (state.check) {
+    hintEl.textContent = sideName(state.turn) + '\u88AB\u5C06\u519B\uFF0CAI \u6B63\u5728\u89E3\u5C06\uFF1B\u8D70\u5B50\u5C06\u81EA\u52A8\u51FA\u73B0\u5728\u68CB\u76D8\u4E0A\u3002'
   } else {
     hintEl.textContent = 'AI \u601D\u8003\u4E2D\uFF0C\u8D70\u5B50\u5C06\u81EA\u52A8\u51FA\u73B0\u5728\u68CB\u76D8\u4E0A\u3002'
   }
@@ -19910,10 +19949,15 @@ function renderBoard(act) {
     }))
   }
 
-  /* \u5C06\u519B\u6807\u8BB0\uFF1A\u884C\u68CB\u65B9\u7684\u5C06/\u5E05\u7EA2\u5708\u8109\u51B2 */
+  /* \u5C06\u519B\u6807\u8BB0\uFF1A\u884C\u68CB\u65B9\u7684\u5C06/\u5E05\u7EA2\u5708\u8109\u51B2 + \u5E95\u5149\u6655\uFF082026-10-14 \u63D0\u793A\u589E\u5F3A\u2014\u2014\u5149\u6655\u8BA9
+     \u88AB\u5C06\u7684\u5B50\u5728\u5C0F\u5C3A\u5BF8\u9762\u677F\u91CC\u4E5F\u4E00\u773C\u53EF\u89C1\uFF0C\u8109\u51B2\u5708\u4FDD\u6301\u539F\u6837\uFF09\u3002 */
   if (state.check && !act.finished) {
     var general = findGeneral(state.board, state.turn)
     if (general) {
+      boardEl.appendChild(svgEl('circle', {
+        cx: px(general.x), cy: py(general.y), r: 31,
+        fill: 'rgba(224, 82, 82, .18)', class: 'check-halo',
+      }))
       boardEl.appendChild(svgEl('circle', {
         cx: px(general.x), cy: py(general.y), r: 27.5,
         fill: 'none', stroke: '#e05252', 'stroke-width': 3, class: 'check-ring',
@@ -20502,6 +20546,8 @@ function staticViewCheck(viewHtml4) {
 import { createHash as createHash10, randomBytes as randomBytes2 } from "node:crypto";
 import { promises as fs16 } from "node:fs";
 import { join as join20 } from "node:path";
+var GAME_HISTORY_DEFAULT_LIMIT = 20;
+var GAME_HISTORY_MAX_LIMIT = 200;
 var GameBridgeError = class extends Error {
   constructor(code, message) {
     super(message);
@@ -20509,6 +20555,10 @@ var GameBridgeError = class extends Error {
   }
 };
 var OWNER_LABEL = { human: "\u4EBA\u7C7B\u73A9\u5BB6", agent: "Agent" };
+function clampWindowLimit(value) {
+  if (!Number.isInteger(value)) return GAME_HISTORY_DEFAULT_LIMIT;
+  return Math.max(1, Math.min(GAME_HISTORY_MAX_LIMIT, value));
+}
 var GameSessionStore = class _GameSessionStore {
   constructor(options) {
     this.options = options;
@@ -20546,6 +20596,23 @@ var GameSessionStore = class _GameSessionStore {
   async get(sessionId) {
     const session = await this.load(sessionId);
     return { session: this.summarize(session), view: this.viewOf(session) };
+  }
+  /**
+   * 动作日志窗口（2026-10-14 增量修订）：完整日志只在会话文件里，读取永远
+   * 有界——`limit` 夹进 [1, GAME_HISTORY_MAX_LIMIT]（缺省最近 20 手）；`from`
+   * 是窗口首条的 0 基下标，夹进 [0, moveCount]（缺省 = 最近 limit 手的起点）。
+   * game_history 工具与 game_wait 的增量判定（from=基线）共用这一读法。
+   */
+  async history(sessionId, params = {}) {
+    const session = await this.load(sessionId);
+    const moveCount = session.moves.length;
+    const limit = clampWindowLimit(params.limit);
+    const from = params.from === void 0 ? Math.max(0, moveCount - limit) : Math.max(0, Math.min(moveCount, params.from));
+    return {
+      session: this.summarize(session),
+      from,
+      moves: session.moves.slice(from, from + limit).map((move) => ({ ...move, action: { ...move.action } }))
+    };
   }
   /** 本聊天最近活跃（未终局）会话 id；无则 undefined（game_state/game_move 缺省寻址）。 */
   async latestActive(character, chatId) {
@@ -20624,17 +20691,6 @@ var GameSessionStore = class _GameSessionStore {
     if (session.finished) {
       throw new GameBridgeError("turn", `\u5BF9\u5C40\u5DF2\u7ED3\u675F\uFF08${session.summary}\uFF09\uFF0C\u4E0D\u80FD\u518D\u843D\u5B50`);
     }
-    const actor = currentRoleOf(session.state, roles);
-    const player = session.players.find((candidate) => candidate.role === actor);
-    if (player === void 0) {
-      throw new GameBridgeError("unavailable", `\u4F1A\u8BDD\u89D2\u8272\u8868 [${session.players.map((p) => p.role).join(", ")}] \u4E0E state.turn\u300C${actor}\u300D\u4E0D\u4E00\u81F4`);
-    }
-    if (player.owner !== owner) {
-      throw new GameBridgeError(
-        "turn",
-        owner === "agent" ? `\u73B0\u5728\u8F6E\u5230 ${actor}\uFF08${OWNER_LABEL[player.owner]}\uFF09\uFF0C\u4E0D\u662F Agent \u7684\u56DE\u5408` : `\u73B0\u5728\u8F6E\u5230 ${actor}\uFF08${OWNER_LABEL[player.owner]}\uFF09\uFF0C\u8BF7\u7B49\u5F85 AI \u843D\u5B50`
-      );
-    }
     if (action === null || typeof action !== "object" || Array.isArray(action)) {
       throw new GameBridgeError("invalid", "\u52A8\u4F5C\u5FC5\u987B\u662F JSON \u5BF9\u8C61");
     }
@@ -20643,6 +20699,25 @@ var GameSessionStore = class _GameSessionStore {
     }
     if (jsonSizeOf(action) > GAME_ACTION_MAX_BYTES) {
       throw new GameBridgeError("invalid", `\u52A8\u4F5C\u5E8F\u5217\u5316\u8D85\u8FC7 ${GAME_ACTION_MAX_BYTES} \u5B57\u8282\u4E0A\u9650`);
+    }
+    let actor = currentRoleOf(session.state, roles);
+    const player = session.players.find((candidate) => candidate.role === actor);
+    if (player === void 0) {
+      throw new GameBridgeError("unavailable", `\u4F1A\u8BDD\u89D2\u8272\u8868 [${session.players.map((p) => p.role).join(", ")}] \u4E0E state.turn\u300C${actor}\u300D\u4E0D\u4E00\u81F4`);
+    }
+    if (player.owner !== owner) {
+      const humanResign = action.type === "resign" && owner === "human";
+      if (!humanResign) {
+        throw new GameBridgeError(
+          "turn",
+          owner === "agent" ? `\u73B0\u5728\u8F6E\u5230 ${actor}\uFF08${OWNER_LABEL[player.owner]}\uFF09\uFF0C\u4E0D\u662F Agent \u7684\u56DE\u5408` : `\u73B0\u5728\u8F6E\u5230 ${actor}\uFF08${OWNER_LABEL[player.owner]}\uFF09\uFF0C\u8BF7\u7B49\u5F85 AI \u843D\u5B50`
+        );
+      }
+      const human = session.players.find((candidate) => candidate.owner === "human");
+      if (human === void 0) {
+        throw new GameBridgeError("unavailable", "\u4F1A\u8BDD\u6CA1\u6709\u4EBA\u7C7B\u73A9\u5BB6\uFF0C\u65E0\u6CD5\u8BA4\u8F93");
+      }
+      actor = human.role;
     }
     let describe;
     let summary;
@@ -20747,7 +20822,7 @@ var GameSessionStore = class _GameSessionStore {
       chat: { ...session.chat },
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
-      moves: session.moves.map((move) => ({ ...move, action: { ...move.action } }))
+      moveCount: session.moves.length
     };
   }
   viewOf(session) {
@@ -20823,6 +20898,12 @@ function renderGameViewDocument(viewHtml4) {
 async function openGamesService(options) {
   const registry = await GameRegistry.open({ root: options.root, hostVersion: options.hostVersion, logger: options.logger });
   const sessions = await GameSessionStore.open({ root: options.root, registry: () => registry });
+  const assertResignAllowed = async (action) => {
+    if (action === null || typeof action !== "object" || Array.isArray(action) || action.type !== "resign") return;
+    if (options.resignAllowed === void 0) return;
+    const allowed = await options.resignAllowed();
+    if (!allowed) throw new GameBridgeError("invalid", "\u6295\u964D\u5DF2\u88AB\u7981\u7528\uFF08\u8BBE\u7F6E\u9762\u677F\u300C\u6E38\u620F\u300D\u5206\u533A\u53EF\u91CD\u65B0\u542F\u7528\uFF09");
+  };
   const service = {
     async list(params) {
       const games = registry.summaries();
@@ -20836,12 +20917,22 @@ async function openGamesService(options) {
       return outcome;
     },
     state: (sessionId) => sessions.get(sessionId),
+    history: (sessionId, params) => sessions.history(sessionId, params),
     async humanAction(sessionId, action) {
+      await assertResignAllowed(action);
       const outcome = await sessions.humanAction(sessionId, action);
       emitGamesChanged();
+      if (options.onHumanAction !== void 0) {
+        try {
+          await options.onHumanAction(outcome.session);
+        } catch (cause) {
+          options.logger?.warn?.(`dsh-tavern: game human-action wake failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+        }
+      }
       return outcome;
     },
     async agentMove(sessionId, action) {
+      await assertResignAllowed(action);
       const outcome = await sessions.agentMove(sessionId, action);
       emitGamesChanged();
       return outcome;
@@ -21011,6 +21102,60 @@ async function handleGamesApi(options) {
     return notFound();
   } catch (cause) {
     sendError(res, cause);
+  }
+}
+
+// packages/plugin/src/games/wake.ts
+function agentOf2(agents, id) {
+  try {
+    const candidate = agents?.get?.(id);
+    if (typeof candidate !== "object" || candidate === null) return void 0;
+    const agent = candidate;
+    if (typeof agent.followup !== "function" || typeof agent.session !== "object" || agent.session === null) return void 0;
+    return candidate;
+  } catch {
+    return void 0;
+  }
+}
+function noticeText(session) {
+  return session.finished ? `\u81EA\u52A8\u6E38\u620F\u901A\u77E5\uFF08\u975E\u7528\u6237\u6D88\u606F\uFF09\uFF1A\u5BF9\u5C40\u300C${session.gameName}\u300D\u5DF2\u7ED3\u675F\u2014\u2014${session.summary}\u3002\u8BF7\u6536\u5C3E\u53D9\u8FF0\u3002sessionId: ${session.id}` : `\u81EA\u52A8\u6E38\u620F\u901A\u77E5\uFF08\u975E\u7528\u6237\u6D88\u606F\uFF09\uFF1A\u5BF9\u624B\u5DF2\u5728\u300C${session.gameName}\u300D\u68CB\u76D8\u843D\u5B50\uFF0C\u7EE7\u7EED\u5BF9\u5C40\u3002sessionId: ${session.id}`;
+}
+function messageOf3(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+async function wakeAgentOnHumanMove(host, session) {
+  const warn = (message2) => {
+    try {
+      host.logger?.warn?.(message2);
+    } catch {
+    }
+  };
+  if (gameWaiters(session.id) > 0) return false;
+  let agentId;
+  try {
+    agentId = await host.bindingOf?.(session.chat.character, session.chat.chatId);
+  } catch (error) {
+    warn(`dsh-tavern: game wake binding lookup failed (${messageOf3(error)})`);
+    return false;
+  }
+  if (agentId === void 0) return false;
+  const agent = agentOf2(host.agents, agentId);
+  if (agent === void 0) return false;
+  const message = {
+    id: `game-notice-${session.id}-${session.moveCount}`,
+    role: "user",
+    content: [{ type: "text", text: noticeText(session) }],
+    source: hostPluginMessageSource(agent.session, {
+      form: "notice",
+      summary: `Game move notice (${session.gameId} ${session.id}, move ${session.moveCount})`
+    })
+  };
+  try {
+    await agent.followup(message);
+    return true;
+  } catch (error) {
+    warn(`dsh-tavern: game wake followup failed (${messageOf3(error)})`);
+    return false;
   }
 }
 
@@ -23511,7 +23656,30 @@ function apply(ctx, config = {}) {
   gamesServicePromise = openGamesService({
     root: dshHomePath("tavern"),
     hostVersion: BUILD_INFO.version,
-    logger: { warn: (message) => ctx.logger?.warn?.(message) }
+    logger: { warn: (message) => ctx.logger?.warn?.(message) },
+    // 投降门（2026-10-14 用户需求「禁用投降」）：逐次读 state（TavernStore 的
+    // getState 是内存态，零文件 IO）——面板翻转即时生效，无需写穿。
+    resignAllowed: async () => (await (await store4()).getState()).gamesDisableResign !== true,
+    // 人类落子自动续弈（2026-10-14 用户需求）：Agent 没调 game_wait 就结束
+    // 回合时，用户落子经这里 followup 唤起绑定会话（src/games/wake.ts 负责
+    // 通知文本/来源形状/等待中与冷会话的静默跳过）。绑定反查扫 sessionBindings
+    // ——只认 agent-tavern 且非群聊（与懒段/bindingFor 同一可见面；群聊无游戏
+    // 段，唤醒了也没局面上下文）。同一聊天多绑定时取首个（v1 边界：一个聊天
+    // 一个对局一个会话，与工具面寻址假设一致）。
+    onHumanAction: async (session) => {
+      await wakeAgentOnHumanMove({
+        agents: ctx.agents,
+        bindingOf: async (character, chatId) => {
+          const state = await (await store4()).getState();
+          for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+            if (binding.architecture !== "agent-tavern" || binding.group === true) continue;
+            if (binding.character === character && binding.chatId === chatId) return agentId;
+          }
+          return void 0;
+        },
+        logger: { warn: (message) => ctx.logger?.warn?.(message) }
+      }, session);
+    }
   });
   gamesServicePromise.catch((error) => {
     ctx.logger?.warn?.(`dsh-tavern: games service failed to start: ${error instanceof Error ? error.message : String(error)}`);
@@ -23890,6 +24058,9 @@ async function handleApi(ctx, req, res) {
       ...body.defaultContextMode === "dsh-native" || body.defaultContextMode === "agent-managed" ? { defaultContextMode: body.defaultContextMode } : {},
       ...typeof body.agentTavernPreloadAssets === "boolean" ? { agentTavernPreloadAssets: body.agentTavernPreloadAssets } : {},
       ...typeof body.agentTavernAllowGlobalWrites === "boolean" ? { agentTavernAllowGlobalWrites: body.agentTavernAllowGlobalWrites } : {},
+      // 禁用游戏投降（2026-10-14 用户需求）：翻转即时生效——服务层在两个动作
+      // 入口（人类棋盘 / Agent game_move）逐次读取判定，无缓存需写穿。
+      ...typeof body.gamesDisableResign === "boolean" ? { gamesDisableResign: body.gamesDisableResign } : {},
       // 写卡工作台/AgentNovel 的预设投影开关（preset-mount.ts）：翻转即写穿
       // 两个 bundle 的投影缓存，下一次装配即时生效。
       ...typeof body.cardWorkbenchPresetEnabled === "boolean" ? { cardWorkbenchPresetEnabled: body.cardWorkbenchPresetEnabled } : {},
@@ -26549,8 +26720,8 @@ function readBuildInfo() {
   return { version, commit };
 }
 function buildTimeStamp() {
-  const version = true ? "0.6.2".trim() : "";
-  const commit = true ? normalizeCommit("6613a75") : void 0;
+  const version = true ? "0.6.3".trim() : "";
+  const commit = true ? normalizeCommit("2b1f915") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

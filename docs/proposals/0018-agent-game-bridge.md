@@ -161,20 +161,28 @@ Agent 和人类玩家走完全相同的动作语言、相同的引擎合法性�
   内置引擎随 bundle 静态 import，view 以字符串常量内联（mood-tracker `UI_PAGE` 先例），
   因此内置游戏零文件依赖、随插件分发。
 
-### 4.2 Agent 工具面（agent-tavern `createTools()` 五件 + 懒提示段）
+### 4.2 Agent 工具面（agent-tavern `createTools()` 六件 + 懒提示段）
+
+**token 经济纪律（2026-10-14 用户裁定「游戏系统尽可能考虑 token 经济性」，§14）**：
+所有工具载荷扁平、字段最小——身份面（players/动作词汇表）只在 `game_list`/
+`game_start` 出现一次；回合载荷只带「下一步动作与叙述」所需；棋盘与动作日志分别
+只经 `game_state` / `game_history` 读取；审计字段（move.at/summary）与时钟/聊天
+绑定不进载荷（盘上记录原样完整）。
 
 | 工具 | 语义 |
 |---|---|
-| `game_list` | 已安装游戏（id/名称/人数/动作词汇表）+ 本聊天活跃会话一览 |
-| `game_start` | `gameId, role?, options?`——开局并绑定本聊天；返回初始局面 + 合法动作 |
-| `game_state` | `sessionId?`（缺省取本聊天最近活跃会话）——快照 + 轮到谁 + 合法动作 + 终局态 |
-| `game_move` | `sessionId, action`——Agent 落子；返回新局面、`describe` 文案、是否轮到人类；非本方回合报错并告知轮到谁 |
-| `game_wait` | `sessionId?, timeoutMs?`（限 1000..900000，缺省 300000）——**在自己回合内阻塞等人类落子**（2026-10-14 修订，§10）：人类动作经 `dsh-tavern:games-changed-listeners` 跨 bundle 写穿唤醒（1s tick 兜底），返回 `{status: your-turn/finished/orphaned/timeout, session, view, lastMove}`——`lastMove` 即人类刚落的那手（describe/summary 供叙述）；超时不报错（模型可再 wait）；用户停止生成时随 `exec.signal` 中止 |
+| `game_list` | 游戏（id/名称/人数/动作词汇表）+ 本聊天会话（sessionId/游戏名/轮到谁/终局态/手数） |
+| `game_start` | `gameId, role?`——开局并绑定本聊天；返回会话身份（sessionId/游戏名/players 角色归属/先手方）——**不含棋盘**（局面需要时经 game_state 读） |
+| `game_state` | `sessionId?`（缺省取本聊天最近活跃会话）——扁平局面面：`state` 棋盘、`legal` 建议集、`turn/turnOwner`、`moveCount`、`finished/winner/summary`；不含日志 |
+| `game_history` | `sessionId?, from?, limit?`——动作日志窗口（**2026-10-14 新增，§14**）：`limit` 夹 1..200（缺省 20），`from` 为 0 基窗口起点；每条 `{actor, action, describe}` |
+| `game_move` | `sessionId, action`——Agent 落子；返回 `describe` 叙述文案 + 轮次/终局态（`finished/winner/summary`）——不回吐棋盘与日志；非本方回合报错并告知轮到谁 |
+| `game_wait` | `sessionId?, timeoutMs?`（限 1000..900000，缺省 300000）——**在自己回合内阻塞等人类落子**（2026-10-14 修订，§10；同日 token 经济修订 §14）：人类动作经 `dsh-tavern:games-changed-listeners` 跨 bundle 写穿唤醒（1s tick 兜底），返回 `{status, sessionId, newMoves, turn?, turnOwner?, winner?, summary?}`——只给**等待期增量**（`newMoves` 即等待期间到达的手，通常是人类刚落那手）；超时不报错（模型可再 wait）；用户停止生成时随 `exec.signal` 中止 |
 
-全部走 `tool()` 工厂 + `tool-args.ts` 校验助手；五个名字进 `BUILTIN_TOOL_NAMES_SEED`。
+全部走 `tool()` 工厂 + `tool-args.ts` 校验助手；六个名字进 `BUILTIN_TOOL_NAMES_SEED`。
 提示段：`apply()` 新增 order `-63` 懒段——**仅当本聊天存在活跃会话时注入**（无对局零 token
-消耗）：一句话局面摘要（局面 id、轮到谁、动作词汇表）+「轮到你时用 game_move 落子；落到
-人类回合立即调用 game_wait 阻塞等待（对方无需发消息），返回后自动继续」；文本过
+消耗）：一句话局面摘要（局面 id、轮到谁、动作词汇表）+「轮到你时先 game_state 读局面、再
+用 game_move 落子；落到人类回合立即调用 game_wait 阻塞等待（对方无需发消息；wait 只返回
+等待期增量），返回后自动继续；往手用 game_history 查询」（2026-10-14 增量修订，§14）；文本过
 `hostPromptSafe`（`agent.ts:76-92` 纪律）。
 
 **与聊天回合的交织（2026-10-14 修订后）**：AgentTavern 会话由宿主原生 AgentLoop 驱动，
@@ -447,3 +455,161 @@ TS 引擎 + 内联 viewHtml，零文件依赖）。规则面 v1 明示：全部�
 设计、视图四态真机验收（含截图驱动修的两处图像缺陷）与边界见
 [decisions/2026-10-14-xiangqi-builtin.md](../../decisions/2026-10-14-xiangqi-builtin.md)。
 
+
+## 14. 2026-10-14 二次补记：工具面 token 经济修订——wait/move 只回更新，读取面独立（用户反馈）
+
+需求源：2026-10-14 用户——「改进 game_wait 让它不再返回全部信息，而是返回更新的信息，
+单独提供工具给 agent 读取游戏交互历史和当前游戏状态」；随后对首版修订的实弹输出追加
+「还是复杂了」「game_move 也要改进」，并把总要求写死：**「game 系统应该尽可能考虑
+token 经济性」**。诊断（§4.2 初版形态的实况）：会话快照在每个读写面都挂 `moves` 全量
+动作日志 + 整盘 view——`game_wait`/`game_move` 每手回吐全量日志与棋盘，token 随对局
+线性膨胀（用户实弹 4 手五子棋局面 ≈600 token，日志与棋盘占九成；30 手推算 ~2k+）；
+且载荷里混着大量「模型已知/永不使用」的字段（players、动作词汇表、会话时钟、聊天
+绑定、`orphaned:false`、`finished:false`、`winner:null`、move.at）——同一局面中间版
+仍 526 字符（≈164 token），最终扁平版 99 字符（≈31 token），行动信息不足 15 token。
+
+落法（契约层 + 服务层 + 工具投影层；client 零改动——前端从不消费 `moves`）：
+
+- **快照头去日志**：`GameSessionSummary` 移除 `moves`，换 `moveCount`（总量锚）。日志
+  本体仍完整落会话文件（可审计重放是八项表承诺，不变），读取只经新的有界窗口面
+  `GameSessionStore.history(sessionId, {from?, limit?})`——`limit` 夹 [1, 200]（缺省 20），
+  `from` 为窗口首条 0 基下标（缺省最近 limit 手起点、夹进 [0, moveCount]）。钳制权威在
+  store；tool 层只做整数形态检查（agent bundle 不 import 会话运行时，见 handle.ts 纪律）。
+- **工具载荷全部扁平最小化**（token 经济裁定的核心落点）：身份面只在 `game_list`/
+  `game_start` 出现一次；回合载荷只带「下一步动作与叙述」所需；无嵌套 session/view 块、
+  无 `orphaned:false`/`finished:false`/`winner:null` 之类零信息字段（缺席即默认）。
+  - `game_start` → `{sessionId, gameName, players, turn, turnOwner}`——**不再回初始棋盘**
+    （默认路径人类先手，下一手是 game_wait，棋盘此刻没人需要；需要时经 game_state 读）。
+  - `game_state` → `{sessionId, gameName, turn, turnOwner, moveCount, finished,
+    winner?, summary?, orphaned?, state, legal}`——局面面保留（落子决策的最小工作面）。
+  - `game_history`（新工具）→ `{sessionId, gameName, moveCount, from, finished,
+    winner?, summary?, moves:[{actor, action, describe}]}`——记录投影三字段，
+    move.at/summary 留在盘上。
+  - `game_move` → `{sessionId, describe, finished, turn?, turnOwner?, winner?, summary?}`
+    ——只有叙述文案与「下一步给谁」；棋盘不回声。
+  - `game_wait` → `{status, sessionId, newMoves, turn?, turnOwner?, winner?, summary?}`
+    ——`newMoves` 是**等待期间到达的手**（唤醒场景即人类刚落那手；立即 your-turn（人类手
+    在 wait 之前落地）时恒空——局面经 game_state、往手经 game_history 补齐）。等待循环
+    改经 `history()` 读快照 + 增量（首读 limit 1 只立 moveCount 基线），顺带不再每拍
+    重算 legalActions。终局/孤儿时轮次字段缺席（引擎 state.turn 停在最后一手，不读成
+    下一手——模型以 finished/status 判定）。
+- **角色归属随懒段常驻**：回合载荷不再带 players，懒段每会话行改为「你执 <agent 角色>，
+  轮到 <角色>（归属）」——压缩/换上下文后不需工具补读。
+- 教学三处同步（game_start/game_move/game_wait 描述、order -63 懒段）：「轮到你时先
+  game_state 读局面、再 game_move 落子」「wait 只返回增量」「往手走 game_history」。
+
+代价如实标注：常见回合从 2 次工具调用（game_move → game_wait）变为 3 次（+1 次 game_state
+读局面；进程内文件读、非网络往返），换取每手载荷**不随对局长度增长**且身份/审计噪声清零
+（开局省一张整盘棋盘、每手省 players/词汇表/时钟/日志，move 载荷从 ~180 token 降到
+~25 token）。
+
+测试与 gates：games-tools.spec 五工具→六工具 + 扁平载荷断言（move 无 view/无 session/
+无日志、wait newMoves 三字段投影与四路状态、history 窗口/钳制/寻址、state 扁平面、
+懒段「你执 <role>」）；games-service.spec 增 history 窗口 describe（缺省尾窗/分页/钳制/
+越界；长日志 25 手经会话文件注入构造）；agent-tavern-tools/mount 名单 23→24；gates
+agent-tavern-isolation marker 六名 + game_history 专属负样本。版本 0.6.2→0.6.3（补丁位）
+连带 story-clock 示例与 mod-api.md 的 engines 值同步。决策全文见
+[decisions/2026-10-14-games-delta-tools.md](../../decisions/2026-10-14-games-delta-tools.md)。
+
+## 15. 2026-10-14 三次补记：人类落子自动续弈——Agent 没 wait 时的插件侧唤起（用户需求）
+
+需求源：2026-10-14 用户——「当 agent 没有调用 wait 而是停止运行后，用户操作完游戏
+由插件自动触发 agent 继续」。此前该场景的兜底是「懒段 order -63 常驻局面摘要 + 用户
+发任意消息唤起」——用户要的是零消息自动续弈。§7-4 的原始论断（「宿主无游戏事件触发
+agent 回合的 seam」）在 §10 被 wait 挂起面绕开（agent 自己等事件）；本次补上另一半：
+**插件侧主动唤起**——宿主有 `ctx.agents.get(id)` + `Agent.followup(message)` 面
+（agent-novel 调度驱动已全量使用），不需要新宿主能力。
+
+落法（四层）：
+
+- **等待登记（跨 bundle，src/games/handle.ts）**：`beginGameWait(sessionId)` /
+  `gameWaiters(sessionId)`——game_wait（agent bundle）挂起时登记、finally 注销；
+  index bundle 的人类落子入口据此判定「该手已由工具内唤醒覆盖」。没有它，等待中的
+  回合结束后会多出一个陈旧通知回合（重复唤醒，token 与经济双重浪费）。
+- **投递（src/games/wake.ts）**：`wakeAgentOnHumanMove`——反查该聊天的 AgentTavern
+  绑定（index.ts 注入的 bindingOf 扫 sessionBindings，只认 agent-tavern 且非群聊）→
+  `ctx.agents.get(agentId)` 取 live agent → `agent.followup(notice)`。通知是**插件
+  来源**消息（`hostPluginMessageSource`：v4 宿主 producer-owned kind / v0-v3 分支；
+  form 'notice'），绝不伪装用户消息——与 agent-novel 驱动通知同一机制与形状纪律。
+  幂等 id `game-notice-<sessionId>-<moveCount>`；文本 token 经济：「自动游戏通知
+  （非用户消息）：对手已在「<游戏>」棋盘落子，继续对局。sessionId: <id>」（终局
+  变体带上结果与收尾指引）。
+- **触发（src/games/service.ts）**：`humanAction` 成功出口回调 `onHumanAction`
+  （index.ts 接线）；被拒动作（409）不回调；回调抛错只记日志（落子回执不受影响）。
+- **降级（不投递即静默兜底）**：等待中 / 无绑定 / 群聊 / 非 agent-tavern / 冷会话
+  （agent 不在注册表）/ followup 抛错——全部落回既有懒段 + 下次消息唤起路径，
+  不重试（事件语义而非调度语义：一次人类动作一条通知，错过由兜底覆盖）。
+
+边界如实标注：宿主对排队输入的处理（如用户停止生成时的 cancel 清队）可能丢弃已排队
+的通知回合——下次人类落子/消息仍会补上；同一聊天多 AgentTavern 会话绑定时只唤起首个
+（v1 边界：一个聊天一个对局一个会话，与工具面寻址假设一致）。
+
+测试与 gates：新增 `games-autowake.spec.ts` 8 例（投递形状/等待中不重复/会话隔离/
+逐级降级/抛错不外溢/终局文本/旧宿主 source 形状）；games-service.spec 增 onHumanAction
+回调 describe；games-tools.spec 增等待登记的挂起/注销断言；gates server-bundle 增
+`dsh-tavern:games-waiters` 与 `game-notice-` marker + 负样本。
+
+## 16. 2026-10-14 四次补记：禁用投降 + 用户投降按钮 + 终局保留盘面（用户需求）
+
+需求源（同日三条用户反馈）：①「添加禁用投降（显示在管理面板中）和用户投降按钮，
+渲染到游戏显示区」；②「游戏结束时……应该显示游戏盘面，结束游戏很突兀」。
+
+落法（四层）：
+
+- **策略层（tavern-store state + service 门）**：新增 `gamesDisableResign`（默认
+  false；面板「游戏」分区开关，state 路由接受、归一化容错）。服务层
+  `assertResignAllowed` 在**两个动作入口**（人类棋盘 humanAction / Agent game_move）
+  对 `{type:'resign'}` 一致拒绝（400 + 中文报文）——按钮隐藏只是 UI 面，服务端门
+  才是权威（旧客户端/工具面都不能绕过）；策略逐次读 TavernStore 内存态，翻转即时
+  生效、无缓存写穿。
+- **语义层（人类出回合投降）**：`resign` 是会话级终止而非行棋动作——人类可在任意
+  时刻投降（含 AI 回合，棋盘上的按钮随时可用），actor 重锚为人类角色、
+  describe/winner 随之一致；Agent 的 resign 仍受回合纪律约束。形状校验（JSON 对象/
+  type/尺寸）前移到回合判定之前（例外判定需要先知道 action.type，且畸形动作报
+  invalid 比报 turn 更准确）。
+- **UI 层（client，零新网络面）**：`GameSurface` 棋盘 iframe 之下新增投降按钮——
+  两步点击确认（armed 态 4s 自动复位，防误触）、「禁用投降」开启时整体不渲染；
+  上行复用与棋子同一条 `postAction` 路径（ref 持有最新闭包，message 效应不锁旧
+  session 态）。按钮出现在全部三个对局面（ST 内联 / 面板会话卡 / 右栏 tab）——
+  它们共用 GameSurface。
+- **终局盘面（用户反馈 ② 的修正）**：终局不再只剩一行结果文案——`TavernGameBoard`
+  与 `GamesPanel` 的 finished 分支同样渲染 GameSurface（视图自带终局覆盖层、点击已
+  禁用），结果行在盘面之下。数据面配套：`useChatGameSessions` 的补拉过滤从「未终局」
+  放宽为「未终局 **或本次挂载见证过的已终局**」（`sessionStatesRef` 见证集）——最后
+  一手若由对方走出，旧的过滤会把它停在倒数第二手；挂载时已终局的旧对局不补拉
+  （「不翻旧账」纪律不变）。
+
+测试与 gates：games-service.spec 增「投降门与出回合投降」describe（四例：出回合投降
+锚定/human 与 agent 的规则差异/门控两入口 + 翻转即时生效 + 普通动作不受影响/形状
+校验前移）；`games-client.spec` 增投降与终局盘面 marker/双表 i18n/两处 GameSurface
+同款断言 + 负样本；store.spec 默认值对账加 `gamesDisableResign`；gates server-bundle
+增 `gamesDisableResign` + `assertResignAllowed` marker、frontend-runtime 增
+`dt-game-actions`/`dt-game-resign-armed`/`gamesDisableResign`/见证集判据 marker 与
+各自负样本。
+
+## 17. 2026-10-14 五次补记：象棋将军提示层（用户需求）
+
+需求源：2026-10-14 用户「象棋应该提供提示：如将军提示」（同日象棋实弹对局 g-f0249982
+后的即时反馈）。诊断：v0.6.2 视图已有轻量将军标记（横幅后缀「· 将军！」+ 被将帅脉冲
+圈），但后缀埋在「轮到你走子 · <往手摘要>」长行里、与摘要自带的「将军！」重复，人类
+被将时也没有「怎么解」的指引——实弹对局中红方全程无被将提示（唯一的将军信号是终局
+覆盖层）。
+
+落法（纯视图层，单文件 `builtin/xiangqi.ts` 的 viewHtml；引擎 / 桥协议 / 工具面 /
+client 零改动）：
+
+- **警报横幅 `#banner.check`**：深红底 + 呼吸光晕动画（`dt-check-flash`），优先级
+  `finished > check > 回合底色`；文案三语境（owner 反查——人类未必执红）——人类被将
+  「将军！你（红方）被将军了——必须解将」、AI 被将「将军！黑方被将军——AI 正在解将…」、
+  归属未知回落「将军！红方被将军」。check 态不拼往手摘要（避免双「将军！」），旧后缀
+  式提示删除。
+- **被将帅高亮**：既有脉冲圈之外加半透明红底晕 `.check-halo`（小尺寸面板可辨）。
+- **底部行动指引**：人类被将给出可执行解将指路（移帅/仕、垫子、吃掉将军的子）；AI
+  被将标注「正在解将」。
+
+边界：不做棋力分析（不提示「有杀/最佳着法」，另立需求）；check 是瞬态呈现、解将即
+消失；终局由覆盖层承担。测试与 gates：games-xiangqi.spec +1 用例（横幅/动画/光晕/
+两语境/指引）；gates server-bundle 增 `#banner.check`/`check-halo` marker + 负样本；
+headless Chrome 三态真机验收（人类被将 / AI 被将 / 对照）DOM 断言 + 截图。版本保持
+0.6.3（并入在飞批次）。决策全文见
+[decisions/2026-10-14-xiangqi-check-prompts.md](../../decisions/2026-10-14-xiangqi-check-prompts.md)。
