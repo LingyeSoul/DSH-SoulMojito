@@ -6111,7 +6111,8 @@ function clampModSectionOrder(order) {
   return Math.max(MOD_SECTION_ORDER_MIN, Math.min(MOD_SECTION_ORDER_MAX, value));
 }
 var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
-  // agent-tavern（agent.ts createTools，18）
+  // agent-tavern（agent.ts createTools，23：18 原有 + 游戏桥五件，提案 0018 §4.2；
+  // game_wait 为 2026-10-14 修订新增）
   "tavern_character_get",
   "tavern_lore_search",
   "tavern_scene_get",
@@ -6130,6 +6131,11 @@ var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
   "tavern_script_advance",
   "tavern_deduce",
   "tavern_variable_settle",
+  "game_list",
+  "game_start",
+  "game_state",
+  "game_move",
+  "game_wait",
   // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
   "novel_status_read",
   "novel_requirements_read",
@@ -6944,17 +6950,23 @@ function createLazyProjection(options) {
       for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
         if (!match(binding)) continue;
         started.add(agentId);
-        await load(agentId);
+        await enqueueLoad(agentId);
       }
     } catch {
     }
+  }
+  const loadChains = /* @__PURE__ */ new Map();
+  function enqueueLoad(agentId) {
+    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId), () => load(agentId));
+    loadChains.set(agentId, next.catch(() => void 0));
+    return next;
   }
   return {
     valueOf(agentId) {
       if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
       if (!started.has(agentId)) {
         started.add(agentId);
-        void load(agentId);
+        void enqueueLoad(agentId);
       }
       return cache.get(agentId);
     },
@@ -7070,6 +7082,18 @@ function mountModExtensions(ctx, options) {
   return dispose;
 }
 
+// packages/plugin/src/games/handle.ts
+var GAMES_SERVICE_KEY = "dsh-tavern:games-service";
+var serviceSymbol = Symbol.for(GAMES_SERVICE_KEY);
+function resolveGamesService() {
+  const holder = globalThis;
+  return holder[serviceSymbol]?.service;
+}
+var gamesChangedListeners = createGlobalListenerRegistry("dsh-tavern:games-changed-listeners");
+function onGamesChanged(listener) {
+  return gamesChangedListeners.on(listener);
+}
+
 // packages/plugin/src/agent-tavern/agent.ts
 var name = "dsh-tavern/agent";
 var inject = ["systemPrompt", "tools"];
@@ -7125,6 +7149,11 @@ function apply(ctx) {
     name: "dsh-tavern:agent-script",
     order: -64,
     text: (assembly) => agentScriptText(assembly?.agent?.id)
+  });
+  ctx.systemPrompt?.context?.({
+    name: "dsh-tavern:agent-games",
+    order: -63,
+    text: (assembly) => agentGamesText(assembly?.agent?.id)
   });
   ctx.on?.("agent/request", async (payload, next) => {
     const config = await next();
@@ -7790,6 +7819,87 @@ function createTools() {
         failures: receipt.failures
       });
       return { applied, failed, receipt };
+    }),
+    // ---- 游戏桥四件（提案 0018 §4.2，P0 无头可玩）----
+    // 服务经 globalThis 句柄逐调用解析（src/games/handle.ts）；句柄缺失（index
+    // bundle 未装载游戏运行时）时返回明确错误，不影响其余工具。
+    tool("game_list", "List installed dsh-tavern games (id, display name, players, action vocabulary) and this chat's game sessions (with session ids, whose turn, finished state). Call it before game_start to pick a game or to resume an ongoing session.", {}, gameListOutput, async (_args, exec) => {
+      const service = requireGamesService();
+      let binding = null;
+      try {
+        binding = await bindingFor(exec);
+      } catch {
+        binding = null;
+      }
+      if (binding === null) {
+        const { games } = await service.list({});
+        return { games, sessions: [] };
+      }
+      return await service.list({ character: binding.character, chatId: binding.chatId });
+    }),
+    tool("game_start", "Start a game session with the user, bound to this chat. The human plays one role and you (the Agent) play the other; role selects your side (default: the second role, so the human moves first). Returns the initial position, whose turn it is, and the suggested actions. If the human moves first (the default), call game_wait right away to wait for their opening move.", {
+      gameId: { type: "string", required: true, description: "Game id from game_list." },
+      role: { type: "string", description: "Role the Agent plays; defaults to the second role (human moves first)." }
+    }, gameStartOutput, async (args, exec) => {
+      const service = requireGamesService();
+      const binding = await bindingFor(exec);
+      const gameId = stringArg(args.gameId);
+      const manifest = await service.manifestOf(gameId);
+      let humanRole;
+      if (manifest.players.roles.length === 2) {
+        const agentRole = args.role === void 0 ? manifest.players.roles[1] : stringArg(args.role);
+        if (!manifest.players.roles.includes(agentRole)) {
+          throw new Error(`game '${gameId}' roles are [${manifest.players.roles.join(", ")}]; cannot play '${agentRole}'`);
+        }
+        humanRole = manifest.players.roles.find((role) => role !== agentRole);
+      }
+      const { session, view } = await service.start({
+        gameId,
+        character: binding.character,
+        chatId: binding.chatId,
+        humanRole
+      });
+      await refreshAgentGamesSummaries(binding.character, binding.chatId);
+      return { session, view };
+    }),
+    tool("game_state", "Read a game session snapshot: current position, whose turn (and whether it is yours), suggested actions, finished state with outcome. sessionId defaults to this chat's most recent active session.", {
+      sessionId: { type: "string", description: "Session id; defaults to the most recent active session of this chat." }
+    }, gameStateOutput, async (args, exec) => {
+      const service = requireGamesService();
+      const binding = await bindingFor(exec);
+      const sessionId = args.sessionId === void 0 ? await resolveActiveSession(service, binding) : stringArg(args.sessionId);
+      return await service.state(sessionId);
+    }),
+    tool("game_move", 'Make your move in a game session. The actor is always the role to move and must be Agent-owned (otherwise the call fails and reports whose turn it is). action is the game action JSON (e.g. {type:"place",x:7,y:7}); {type:"resign"} resigns. Returns the new position, a human-readable describe line you can weave into the narrative, and whose turn is next. When the new position is the human turn, call game_wait to block until they move (do not end your turn or ask them to send a chat message).', {
+      sessionId: { type: "string", description: "Session id; defaults to the most recent active session of this chat." },
+      action: { type: "object", required: true, description: 'Game action JSON with a type field, e.g. {type:"place",x:7,y:7}; {type:"resign"} resigns.' }
+    }, gameMoveOutput, async (args, exec) => {
+      const service = requireGamesService();
+      const binding = await bindingFor(exec);
+      const action = args.action;
+      if (action === null || typeof action !== "object" || Array.isArray(action)) throw new Error("action must be a JSON object");
+      if (typeof action.type !== "string" || action.type === "") {
+        throw new Error("action requires a non-empty type field");
+      }
+      const sessionId = args.sessionId === void 0 ? await resolveActiveSession(service, binding) : stringArg(args.sessionId);
+      const outcome = await service.agentMove(sessionId, action);
+      await refreshAgentGamesSummaries(binding.character, binding.chatId);
+      return outcome;
+    }),
+    // game_wait（2026-10-14 修订，提案 0018 §4.2）：AgentLoop 的工具 Promise 即
+    // 挂起面——本工具在自己回合内阻塞等人类在棋盘上落子，人类动作经
+    // dsh-tavern:games-changed-listeners（跨 bundle）唤醒，Agent 同回合自动续弈，
+    // 无需用户发消息触发。宿主无「游戏事件唤醒 agent」seam 的旧约束由此绕开：
+    // 不是宿主推事件进来，而是 agent 自己挂起等事件。
+    tool("game_wait", 'Block until the human player moves in a game session (they play on the game board shown in their UI \u2014 no chat message from them is needed), until the game ends, or until the wait times out. Call it immediately whenever it becomes the human turn: right after game_start when the human moves first, and right after each of your own game_move calls. Returns the position after their move, their move (lastMove with describe/summary you can narrate), and whose turn is next. status "timeout" means they have not moved yet \u2014 call game_wait again to keep waiting.', {
+      sessionId: { type: "string", description: "Session id; defaults to the most recent active session of this chat." },
+      timeoutMs: { type: "integer", description: "Maximum wait in milliseconds, clamped to 1000..900000; default 300000 (5 minutes)." }
+    }, gameWaitOutput, async (args, exec) => {
+      const service = requireGamesService();
+      const binding = await bindingFor(exec);
+      const sessionId = args.sessionId === void 0 ? await resolveActiveSession(service, binding) : stringArg(args.sessionId);
+      const timeoutMs = clampInt(args.timeoutMs, 1e3, 9e5, 3e5);
+      return await waitForHumanMove(service, sessionId, timeoutMs, exec.signal);
     })
   ];
 }
@@ -7926,6 +8036,30 @@ var settleOutput = objectOutput({
   failed: { type: "array", items: { type: "object", additionalProperties: true } },
   receipt: { type: "object", additionalProperties: true }
 });
+var gameListOutput = objectOutput({
+  games: { type: "array", items: { type: "object", additionalProperties: true } },
+  sessions: { type: "array", items: { type: "object", additionalProperties: true } }
+});
+var gameStartOutput = objectOutput({
+  session: { type: "object", additionalProperties: true },
+  view: { type: "object", additionalProperties: true }
+});
+var gameStateOutput = objectOutput({
+  session: { type: "object", additionalProperties: true },
+  view: { type: "object", additionalProperties: true }
+});
+var gameMoveOutput = objectOutput({
+  session: { type: "object", additionalProperties: true },
+  view: { type: "object", additionalProperties: true },
+  describe: { type: "string" }
+});
+var gameWaitOutput = objectOutput({
+  status: { type: "string", description: "your-turn | finished | orphaned | timeout" },
+  sessionId: { type: "string" },
+  session: { type: "object", additionalProperties: true },
+  view: { type: "object", additionalProperties: true },
+  lastMove: { type: "object", additionalProperties: true, description: "Latest move record (null before the first move); on wake-up it is the human move to narrate." }
+});
 function memoryView(record) {
   return {
     found: true,
@@ -7991,6 +8125,74 @@ async function bindingFor(exec) {
   }
   return { agentId, character: binding.character, chatId: binding.chatId };
 }
+function requireGamesService() {
+  const service = resolveGamesService();
+  if (service === void 0) throw new Error("\u6E38\u620F\u8FD0\u884C\u65F6\u4E0D\u53EF\u7528\uFF08index bundle \u672A\u88C5\u8F7D\u6E38\u620F\u670D\u52A1\uFF09");
+  return service;
+}
+async function resolveActiveSession(service, binding) {
+  const sessionId = await service.latestActive(binding.character, binding.chatId);
+  if (sessionId === void 0) {
+    throw new Error("\u672C\u804A\u5929\u6CA1\u6709\u8FDB\u884C\u4E2D\u7684\u6E38\u620F\u5BF9\u5C40\uFF1A\u5148\u7528 game_list \u67E5\u770B\u53EF\u7528\u6E38\u620F\uFF0C\u518D game_start \u5F00\u5C40");
+  }
+  return sessionId;
+}
+var GAME_WAIT_TICK_MS = 1e3;
+function waitForGameSignal(signal, ms) {
+  return new Promise((resolve2, reject) => {
+    if (signal?.aborted) {
+      try {
+        signal.throwIfAborted();
+        resolve2();
+      } catch (cause) {
+        reject(cause);
+      }
+      return;
+    }
+    let settled = false;
+    let off = () => {
+    };
+    let timer;
+    let onAbort = () => {
+    };
+    const finish = (aborted) => {
+      if (settled) return;
+      settled = true;
+      off();
+      if (timer !== void 0) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      if (!aborted) {
+        resolve2();
+        return;
+      }
+      try {
+        signal?.throwIfAborted();
+        resolve2();
+      } catch (cause) {
+        reject(cause);
+      }
+    };
+    off = onGamesChanged(() => finish(false));
+    timer = setTimeout(() => finish(false), ms);
+    onAbort = () => finish(true);
+    signal?.addEventListener("abort", onAbort);
+  });
+}
+async function waitForHumanMove(service, sessionId, timeoutMs, signal) {
+  const deadline = Date.now() + timeoutMs;
+  for (; ; ) {
+    signal?.throwIfAborted();
+    const { session, view } = await service.state(sessionId);
+    const lastMove = session.moves.length > 0 ? session.moves[session.moves.length - 1] : null;
+    if (session.finished) return { status: "finished", sessionId, session, view, lastMove };
+    if (session.orphaned) return { status: "orphaned", sessionId, session, view, lastMove };
+    const turnOwner = session.players.find((player) => player.role === session.turn)?.owner;
+    if (turnOwner === "agent") return { status: "your-turn", sessionId, session, view, lastMove };
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return { status: "timeout", sessionId, session, view, lastMove };
+    await waitForGameSignal(signal, Math.min(GAME_WAIT_TICK_MS, remaining));
+  }
+}
 var factsProjection = createLazyProjection({
   getState: async () => (await tavernStore()).getState(),
   load: async (agentId, settle) => {
@@ -8031,6 +8233,9 @@ function agentGuidesText(agentId) {
   return guidesProjection.valueOf(agentId) ?? "";
 }
 onGuidesChanged((character, chatId) => guidesProjection.refreshWhere((binding) => binding.architecture === "agent-tavern" && binding.character === character && binding.chatId === chatId));
+onGamesChanged(() => {
+  void gamesSummaryProjection.refreshWhere((binding) => binding.architecture === "agent-tavern");
+});
 var scriptSummaryProjection = createLazyProjection({
   getState: async () => (await tavernStore()).getState(),
   load: async (agentId, settle) => {
@@ -8060,6 +8265,41 @@ async function scriptSummaryForChat(db, character, chatId) {
 }
 async function refreshAgentScriptSummaries(character, chatId) {
   await scriptSummaryProjection.refreshWhere((binding) => binding.architecture === "agent-tavern" && binding.character === character && binding.chatId === chatId);
+}
+var gamesSummaryProjection = createLazyProjection({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
+    const db = await tavernStore();
+    const state = await db.getState();
+    const binding = state.sessionBindings[agentId];
+    if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) return;
+    const service = resolveGamesService();
+    if (service === void 0) return;
+    const { sessions } = await service.list({ character: binding.character, chatId: binding.chatId });
+    const active = sessions.filter((session) => session.finished !== true && session.orphaned !== true);
+    if (active.length === 0) {
+      settle("");
+      return;
+    }
+    const lines = active.map((session) => {
+      const turnOwner = session.players.find((player) => player.role === session.turn)?.owner;
+      const whose = turnOwner === "agent" ? "\u4F60\uFF08Agent\uFF09" : "\u4EBA\u7C7B\u73A9\u5BB6";
+      return `- ${session.gameName}\uFF08sessionId ${session.id}\uFF09\uFF1A\u8F6E\u5230 ${session.turn}\uFF08${whose}\uFF09\uFF1B\u52A8\u4F5C\u8BCD\u6C47\u8868\uFF1A${session.actionVocabulary}`;
+    });
+    const text = [
+      "\u672C\u804A\u5929\u6709\u8FDB\u884C\u4E2D\u7684\u6E38\u620F\u5BF9\u5C40\uFF1A",
+      ...lines,
+      "\u8F6E\u5230\u4F60\u65F6\u7528 game_move \u843D\u5B50\uFF1B\u843D\u5230\u4EBA\u7C7B\u56DE\u5408\u7ACB\u5373\u8C03\u7528 game_wait \u963B\u585E\u7B49\u5F85\u5BF9\u65B9\u5728\u68CB\u76D8\u4E0A\u843D\u5B50\uFF08\u5BF9\u65B9\u65E0\u9700\u53D1\u9001\u804A\u5929\u6D88\u606F\uFF09\uFF0C\u5DE5\u5177\u8FD4\u56DE\u540E\u81EA\u52A8\u7EE7\u7EED\uFF1Bdescribe/summary \u6587\u6848\u53EF\u76F4\u63A5\u7528\u4E8E\u5BF9\u8BDD\u4E2D\u53D9\u8FF0\u8FD9\u4E00\u624B\u3002"
+    ].join("\n");
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER);
+    settle(hostPromptSafe(text, expand));
+  }
+});
+function agentGamesText(agentId) {
+  return gamesSummaryProjection.valueOf(agentId) ?? "";
+}
+async function refreshAgentGamesSummaries(character, chatId) {
+  await gamesSummaryProjection.refreshWhere((binding) => binding.architecture === "agent-tavern" && binding.character === character && binding.chatId === chatId);
 }
 var presetFreeze = /* @__PURE__ */ new Map();
 var presetProjection = createLazyProjection({
@@ -8100,6 +8340,7 @@ function agentPromptSectionsFor(agentId) {
     { name: "dsh-tavern:agent-facts", order: -70, text: agentFactsText(agentId) },
     { name: "dsh-tavern:agent-guides", order: -65, text: agentGuidesText(agentId) },
     { name: "dsh-tavern:agent-script", order: -64, text: agentScriptText(agentId) },
+    { name: "dsh-tavern:agent-games", order: -63, text: agentGamesText(agentId) },
     ...modSectionSnapshot().map((entry) => ({
       name: `dsh-tavern:mod:${entry.modId}:${entry.definition.name}`,
       order: clampModSectionOrder(entry.definition.order),

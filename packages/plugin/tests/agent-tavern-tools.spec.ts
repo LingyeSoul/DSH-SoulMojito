@@ -110,14 +110,26 @@ describe('AgentTavern native tools', () => {
       'variable_patch',
       'variable_delete',
       'variable_list',
-      // tavern_script_*（提案 0014 P2）由 scripts 侧并行接入，与本套共库注册。
-      'tavern_script_read',
-      'tavern_script_advance',
-      'tavern_deduce',
-      'tavern_variable_settle',
-    ])
+    // tavern_script_*（提案 0014 P2）由 scripts 侧并行接入，与本套共库注册。
+    'tavern_script_read',
+    'tavern_script_advance',
+    'tavern_deduce',
+    'tavern_variable_settle',
+    // 游戏桥五件（提案 0018 §4.2，P0；game_wait 为 2026-10-14 修订新增）。
+    'game_list',
+    'game_start',
+    'game_state',
+    'game_move',
+    'game_wait',
+  ])
     for (const tool of tools.values()) {
-      expect(tool.parameters.properties).not.toHaveProperty('sessionId')
+      // 游戏桥五件（提案 0018 §4.2）豁免 sessionId 面：其 sessionId 是**会话
+      // 对象寻址**（缺省取本聊天最近活跃会话，候选集由 binding 过滤——提案
+      // §6「多开对局」的精确寻址面），不是身份参数；其余身份/作用域参数
+      //（character/chatId/scopeId）对全部工具仍然禁止。
+      if (!tool.name.startsWith('game_')) {
+        expect(tool.parameters.properties).not.toHaveProperty('sessionId')
+      }
       expect(tool.parameters.properties).not.toHaveProperty('scopeId')
       expect(tool.parameters.properties).not.toHaveProperty('character')
       expect(tool.parameters.properties).not.toHaveProperty('chatId')

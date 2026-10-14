@@ -3587,17 +3587,23 @@ function createLazyProjection(options) {
       for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
         if (!match(binding)) continue;
         started.add(agentId);
-        await load(agentId);
+        await enqueueLoad(agentId);
       }
     } catch {
     }
+  }
+  const loadChains = /* @__PURE__ */ new Map();
+  function enqueueLoad(agentId) {
+    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId), () => load(agentId));
+    loadChains.set(agentId, next.catch(() => void 0));
+    return next;
   }
   return {
     valueOf(agentId) {
       if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
       if (!started.has(agentId)) {
         started.add(agentId);
-        void load(agentId);
+        void enqueueLoad(agentId);
       }
       return cache.get(agentId);
     },

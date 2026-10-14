@@ -37,6 +37,7 @@ iframe 出现、HTTP 路由挂在 `/api/dsh-tavern/mods/<id>/` 下。全程不�
 15. [审计事件](#15-审计事件)
 16. [示例索引](#16-示例索引)
 17. [纪律与限制：什么时候不该写 Mod](#17-纪律与限制什么时候不该写-mod)
+18. [游戏注册：api.games.register](#18-游戏注册apigamesregister)
 
 ---
 
@@ -108,6 +109,7 @@ export async function setup(api) {
 | `capabilities` | — | `llm` \| `network` \| `storage` 的子集（去重）；**知情同意标签**，不是隔离——唯一的技术强制是 `llm`：不声明就没有 `api.llm` 这个键 |
 | `panel` | — | `{ title: string, icon?: string }`；声明后面板出现该 Mod 的 iframe 分区（§13） |
 | `buttons` | — | `string[]`：声明式按钮的**显示名**（允许 CJK）；≤8 项、每项 trim 后非空 ≤40 字符、去重（重复 = 清单校验失败）。声明后宿主在 Mod 面板分区头与 ST 聊天视图渲染按钮 chip，点击经 `POST mods/<id>/button/<name>` 分发到 `api.onButton`（§5）；启用确认弹层披露按钮数量与名单 |
+| `games` | — | `string[]`：声明本 Mod 将经 `api.games.register` 注册的游戏 id（§18）；≤8 项、每项非空 ≤80 字符、`[a-z0-9-]` 标签或 `.` 连接的反域名形态、去重。注册时 id 必须以 `<modId>.` 为前缀**且**在名单内，否则 setup 抛错进错误位（镜像 `buttons` 的「未声明即拒」） |
 | `surfaces` | — | `{ hooks: string[], tools: string[], http: string[] }`，各 ≤32 项、每项 ≤200 字符；**作者自查声明**，未装载时启用确认弹层展示它，已装载时展示**实际注册**的名单（事实优先于声明） |
 
 ### engines 范围语法（自写 semver 匹配器）
@@ -125,7 +127,7 @@ export async function setup(api) {
   （踩坑实录：[decisions/2026-10-12-story-clock-engines-drift.md](../../decisions/2026-10-12-story-clock-engines-drift.md)）。
 
 ```jsonc
-"engines": { "dsh-tavern": "^0.5.0" }   // 宿主 0.5.x 且 ≥0.5.0
+"engines": { "dsh-tavern": "^0.6.0" }   // 宿主 0.6.x 且 ≥0.6.0
 ```
 
 ---
@@ -173,6 +175,7 @@ export async function setup(api) {
 | `api.macros.register(name, fn)` | 全局宏（四个引擎实例化点全部生效） | 确定性强制（静态筛查 + 运行期降级） |
 | `api.stscript.registerCommand(name, spec)` | STscript 命令 | `[a-z0-9_]+`；禁覆盖内置 |
 | `api.prompt.section({name, text, order})` | AgentTavern system prompt 分区 | order 钳制 -50..0；文本过 prompt-safety |
+| `api.games.register(def)` | 注册标准游戏（提案 0018 游戏桥第 3 源），进入「游戏」面板与 Agent `game_*` 工具面 | id 强制 `<modId>.` 前缀且须在 manifest `games` 声明；engine 过契约烟测（§18） |
 | `api.llm.{request,stream}` | 宿主 LLM 代理（流收集出口） | **仅 `capabilities` 含 `llm` 时该键存在** |
 | `api.onDispose(fn)` | 追加清理 | 与 setup 返回的 dispose 合并（逆序） |
 
@@ -643,15 +646,16 @@ buttons}`。
 
 ## 16. 示例索引
 
-三个官方示例都在 `packages/plugin/examples/mods/`，同时是 e2e 测试与 gate 的夹具：
+四个官方示例都在 `packages/plugin/examples/mods/`，同时是 e2e 测试与 gate 的夹具：
 
 | 示例 | 演示的能力面 |
 |---|---|
 | `dsh-tavern.asset-stats` | assets 只读快照、http JSON 出口、storage 配额内持久化、chat-saved 事件、setup 返回 dispose |
 | `dsh-tavern.mood-tracker` | post-output hook（改写位+返回契约）、Agent 工具对（`<modId>_` 前缀）、panel 声明 + iframe UI + postMessage 桥 + 高度上报、mod-event 下行订阅（事件到达即刷新，拉取兜底）、console 日志上报（宿主日志查看器）、`reply.html` |
 | `dsh-tavern.story-clock` | 宏（{{clock}} 读聊天变量，确定性模式）、STscript 命令族（位置/命名参数/别名/chatChanged）、声明式按钮（「拨快 1 小时」，onButton 复用 /clock advance 的推进逻辑）、user-input 变换位与 post-save 观察位 hook、prompt.section（order -40）、api.llm（capability 门 + request 收集出口 + 用量审计）、timers、assets-saved/guides-changed 事件、宿主托管卸载（不持 off 句柄） |
+| `dsh-tavern.rps` | 游戏注册（§18）：manifest `games` 声明 + `api.games.register`（进程内引擎对象 + 内联 view 字符串）、三局两胜回合制建模、无自有面板（游戏出现在「游戏」分区） |
 
-三个示例合计覆盖 v1 全部能力面。新 Mod 建议从最接近的示例拷起。
+四个示例合计覆盖 v1 全部能力面。新 Mod 建议从最接近的示例拷起。
 
 ---
 
@@ -681,3 +685,52 @@ buttons}`。
 - **ST 扩展不兼容**（永久非目标）：本 API 是自有契约，不为 ST 扩展格式做垫层；ST 资产格式
   兼容不受影响。
 - **生成不被拖垮**：五相位全部 10s 单 hook 超时 + 降级；审计计数面板可见，玩家可定位卸载。
+
+---
+
+## 18. 游戏注册：api.games.register
+
+注册一个**标准游戏**进入游戏桥（[提案 0018](../proposals/0018-agent-game-bridge.md)）——游戏
+出现在面板「游戏」分区（可开局可对弈），Agent 经 `game_list` / `game_start` / `game_state` /
+`game_move` 四个内置工具与你的人类玩家对局。这是游戏三条来源（内置 / 导入包 / **Mod**）中
+Mod 专属的一条：引擎以**进程内对象**注册（不需要 `engine.mjs` 文件），视图是**内联 HTML
+字符串**（维持 Mod 无静态文件服务的纪律）。
+
+```js
+// mod.json 先声明：  "games": ["<你的modId>.gesture"]
+api.games.register({
+  id: 'dsh-tavern.rps.gesture',        // 强制 `<modId>.` 前缀 + 必须在 manifest games 名单内
+  name: '猜拳', version: '1.0.0',
+  players: { min: 2, max: 2, roles: ['first', 'second'] },   // v1 会话恒「一人类一 Agent」，max 必须 2
+  turnBased: true,
+  actionVocabulary: '出拳 {type:\'throw\', gesture:\'rock\'|\'paper\'|\'scissors\'}；认输 resign 由运行时处理',
+  engine: {                            // 提案 0018 §3.2 引擎契约（与导入包 engine.mjs 同形）
+    meta: { /* 与顶层冗余字段逐字段相等，运行时以 meta 为准 */ },
+    createGame(options) { return { state } },        // state 恒 deep-JSON-safe（≤64KB）
+    legalActions(state) { return [action] },          // 有界建议集 ≤64（非合法性依据）
+    applyAction(state, action, actor) { /* 纯且确定；非法动作必须抛错 */ },
+    describe(state, actor, action) { return '甲方出石头' },   // Agent 对话叙述用文案
+  },
+  view: '<!doctype html><html>…</html>',  // 自包含渲染页：token 自读 + game-state 监听 + game-action 上行
+})
+```
+
+纪律（全部 fail-fast：抛错 = 本 Mod setup 失败进错误位，不带病入册）：
+
+- **id 双重门**：`<modId>.` 前缀 + manifest `games` 名单声明（镜像 `buttons` 的「未声明即拒」）；
+  与内置/导入/其他 Mod 的游戏三源统一查重，撞 id 即拒。
+- **引擎烟测**：注册期跑提案 §4.6 五关——初始态 JSON-safe、建议集有界、首个合法动作连打两次
+  deep-equal（确定性——需要随机的游戏用 `options.seed` 自行派生确定性 RNG）、非法动作与保留
+  动作 `{type:'resign'}` 必须抛错（resign 由运行时统一处理，引擎静默接受会被烟测拒绝）。
+- **双子段对账**：顶层冗余字段（id/name/version/players/turnBased/actionVocabulary）与
+  `engine.meta` 逐字段相等，漂移即拒。
+- **view 静态检查**：无外链 script/样式、无 `fetch(`（CSP 在服务期兜底，这里提前给可读报错）；
+  桥协议见提案 §3.3——服务端注入 token/高度/视口桥脚本，你的页面只管监听
+  `dsh-tavern:game-state`（带 token 校验）与上行 `dsh-tavern:game-action`。照抄
+  `examples/games/dsh-tavern.gomoku/view.html` 的桥写法即可。
+
+生命周期：返回反注册函数（宿主托管）；Mod 卸载/禁用 → 游戏摘册，其活跃会话**孤儿化**（可查看
+不可落子，面板如实展示）；重新装载后孤儿判定按 gameId 动态查表，旧会话自动恢复可玩。反注册带
+引擎实例身份对账——reload 后旧实例的反注册触碰新注册是 no-op（`onButton` 同款纪律）。
+
+最小可抄实现：`examples/mods/dsh-tavern.rps/`（三局两胜猜拳，回合制建模 + 比分板 view）。

@@ -43,6 +43,10 @@ import { createHostPromptExpander, hostPromptSafe, seededRandom } from '../promp
 import { boundedStringArg, clampInt, limitText, stringArg } from '../tool-args.js'
 import { createLazyProjection } from '../lazy-projection.js'
 import { mountModExtensions } from '../mods/agent-mount.js'
+// 游戏桥（提案 0018 §4.2）：工具经 globalThis 句柄逐调用解析服务（agent bundle
+// 与 index bundle 无共享模块态，镜像 mods/cross-bundle.ts 纪律——handle.ts 刻意
+// 只带类型与小 seam，不拖进整个游戏运行时图）。
+import { onGamesChanged, resolveGamesService } from '../games/handle.js'
 import {
   boundScriptOf,
   getScript,
@@ -129,6 +133,14 @@ export function apply(ctx: AgentContextLike): void {
     name: 'dsh-tavern:agent-script',
     order: -64,
     text: (assembly) => agentScriptText(assembly?.agent?.id),
+  })
+  // 游戏对局懒提示段（提案 0018 §4.2，order -63）：仅当 binding 存在未终局
+  // 会话时注入——每会话一行（游戏名/sessionId/轮到谁/动作词汇表/落子指引），
+  // 无对局零 token 消耗；文本过 hostPromptSafe（与 facts/guides 同纪律）。
+  ctx.systemPrompt?.context?.({
+    name: 'dsh-tavern:agent-games',
+    order: -63,
+    text: (assembly) => agentGamesText(assembly?.agent?.id),
   })
 
   // 预设采样投影：宿主 model seat 不暴露温度，预设是用户唯一的调温入口；
@@ -935,6 +947,97 @@ function createTools(): ToolDefinition[] {
       })
       return { applied, failed, receipt }
     }),
+
+    // ---- 游戏桥四件（提案 0018 §4.2，P0 无头可玩）----
+    // 服务经 globalThis 句柄逐调用解析（src/games/handle.ts）；句柄缺失（index
+    // bundle 未装载游戏运行时）时返回明确错误，不影响其余工具。
+    tool('game_list', "List installed dsh-tavern games (id, display name, players, action vocabulary) and this chat's game sessions (with session ids, whose turn, finished state). Call it before game_start to pick a game or to resume an ongoing session.", {}, gameListOutput, async (_args, exec) => {
+      const service = requireGamesService()
+      // 无绑定的宿主（子代理等）也能看游戏清单——按任务语义「无 binding 只带
+      // games」：不带任何聊天会话。
+      let binding: BindingContext | null = null
+      try {
+        binding = await bindingFor(exec)
+      } catch {
+        binding = null
+      }
+      if (binding === null) {
+        const { games } = await service.list({})
+        return { games, sessions: [] }
+      }
+      return await service.list({ character: binding.character, chatId: binding.chatId })
+    }),
+    tool('game_start', 'Start a game session with the user, bound to this chat. The human plays one role and you (the Agent) play the other; role selects your side (default: the second role, so the human moves first). Returns the initial position, whose turn it is, and the suggested actions. If the human moves first (the default), call game_wait right away to wait for their opening move.', {
+      gameId: { type: 'string', required: true, description: 'Game id from game_list.' },
+      role: { type: 'string', description: 'Role the Agent plays; defaults to the second role (human moves first).' },
+    }, gameStartOutput, async (args, exec) => {
+      const service = requireGamesService()
+      const binding = await bindingFor(exec)
+      const gameId = stringArg(args.gameId)
+      const manifest = await service.manifestOf(gameId)
+      // 缺省 Agent 执 roles[1]（人类先手 roles[0]）；显式 role 时人类执另一方。
+      let humanRole: string | undefined
+      if (manifest.players.roles.length === 2) {
+        const agentRole = args.role === undefined ? manifest.players.roles[1]! : stringArg(args.role)
+        if (!manifest.players.roles.includes(agentRole)) {
+          throw new Error(`game '${gameId}' roles are [${manifest.players.roles.join(', ')}]; cannot play '${agentRole}'`)
+        }
+        humanRole = manifest.players.roles.find((role) => role !== agentRole)!
+      }
+      const { session, view } = await service.start({
+        gameId,
+        character: binding.character,
+        chatId: binding.chatId,
+        humanRole,
+      })
+      await refreshAgentGamesSummaries(binding.character, binding.chatId)
+      return { session, view }
+    }),
+    tool('game_state', 'Read a game session snapshot: current position, whose turn (and whether it is yours), suggested actions, finished state with outcome. sessionId defaults to this chat\'s most recent active session.', {
+      sessionId: { type: 'string', description: 'Session id; defaults to the most recent active session of this chat.' },
+    }, gameStateOutput, async (args, exec) => {
+      const service = requireGamesService()
+      const binding = await bindingFor(exec)
+      const sessionId = args.sessionId === undefined
+        ? await resolveActiveSession(service, binding)
+        : stringArg(args.sessionId)
+      return await service.state(sessionId)
+    }),
+    tool('game_move', 'Make your move in a game session. The actor is always the role to move and must be Agent-owned (otherwise the call fails and reports whose turn it is). action is the game action JSON (e.g. {type:"place",x:7,y:7}); {type:"resign"} resigns. Returns the new position, a human-readable describe line you can weave into the narrative, and whose turn is next. When the new position is the human turn, call game_wait to block until they move (do not end your turn or ask them to send a chat message).', {
+      sessionId: { type: 'string', description: 'Session id; defaults to the most recent active session of this chat.' },
+      action: { type: 'object', required: true, description: 'Game action JSON with a type field, e.g. {type:"place",x:7,y:7}; {type:"resign"} resigns.' },
+    }, gameMoveOutput, async (args, exec) => {
+      const service = requireGamesService()
+      const binding = await bindingFor(exec)
+      const action = args.action
+      if (action === null || typeof action !== 'object' || Array.isArray(action)) throw new Error('action must be a JSON object')
+      if (typeof (action as Record<string, unknown>).type !== 'string' || (action as Record<string, unknown>).type === '') {
+        throw new Error('action requires a non-empty type field')
+      }
+      const sessionId = args.sessionId === undefined
+        ? await resolveActiveSession(service, binding)
+        : stringArg(args.sessionId)
+      const outcome = await service.agentMove(sessionId, action as Record<string, unknown>)
+      await refreshAgentGamesSummaries(binding.character, binding.chatId)
+      return outcome
+    }),
+    // game_wait（2026-10-14 修订，提案 0018 §4.2）：AgentLoop 的工具 Promise 即
+    // 挂起面——本工具在自己回合内阻塞等人类在棋盘上落子，人类动作经
+    // dsh-tavern:games-changed-listeners（跨 bundle）唤醒，Agent 同回合自动续弈，
+    // 无需用户发消息触发。宿主无「游戏事件唤醒 agent」seam 的旧约束由此绕开：
+    // 不是宿主推事件进来，而是 agent 自己挂起等事件。
+    tool('game_wait', 'Block until the human player moves in a game session (they play on the game board shown in their UI — no chat message from them is needed), until the game ends, or until the wait times out. Call it immediately whenever it becomes the human turn: right after game_start when the human moves first, and right after each of your own game_move calls. Returns the position after their move, their move (lastMove with describe/summary you can narrate), and whose turn is next. status "timeout" means they have not moved yet — call game_wait again to keep waiting.', {
+      sessionId: { type: 'string', description: 'Session id; defaults to the most recent active session of this chat.' },
+      timeoutMs: { type: 'integer', description: 'Maximum wait in milliseconds, clamped to 1000..900000; default 300000 (5 minutes).' },
+    }, gameWaitOutput, async (args, exec) => {
+      const service = requireGamesService()
+      const binding = await bindingFor(exec)
+      const sessionId = args.sessionId === undefined
+        ? await resolveActiveSession(service, binding)
+        : stringArg(args.sessionId)
+      const timeoutMs = clampInt(args.timeoutMs, 1000, 900000, 300000)
+      return await waitForHumanMove(service, sessionId, timeoutMs, exec.signal)
+    }),
   ]
 }
 
@@ -1059,6 +1162,32 @@ const settleOutput = objectOutput({
   failed: { type: 'array', items: { type: 'object', additionalProperties: true } },
   receipt: { type: 'object', additionalProperties: true },
 })
+// 游戏桥四件的输出面（提案 0018 §4.2）：session/view 都是开放对象（引擎 state
+// 对运行时不透明，schema 不锁字段）。
+const gameListOutput = objectOutput({
+  games: { type: 'array', items: { type: 'object', additionalProperties: true } },
+  sessions: { type: 'array', items: { type: 'object', additionalProperties: true } },
+})
+const gameStartOutput = objectOutput({
+  session: { type: 'object', additionalProperties: true },
+  view: { type: 'object', additionalProperties: true },
+})
+const gameStateOutput = objectOutput({
+  session: { type: 'object', additionalProperties: true },
+  view: { type: 'object', additionalProperties: true },
+})
+const gameMoveOutput = objectOutput({
+  session: { type: 'object', additionalProperties: true },
+  view: { type: 'object', additionalProperties: true },
+  describe: { type: 'string' },
+})
+const gameWaitOutput = objectOutput({
+  status: { type: 'string', description: 'your-turn | finished | orphaned | timeout' },
+  sessionId: { type: 'string' },
+  session: { type: 'object', additionalProperties: true },
+  view: { type: 'object', additionalProperties: true },
+  lastMove: { type: 'object', additionalProperties: true, description: 'Latest move record (null before the first move); on wake-up it is the human move to narrate.' },
+})
 
 function memoryView(record: {
   id: string
@@ -1162,6 +1291,102 @@ async function bindingFor(exec: ToolExecution): Promise<BindingContext> {
   return { agentId, character: binding.character, chatId: binding.chatId }
 }
 
+/**
+ * 游戏服务句柄解析 seam（提案 0018 §4.2）：agent bundle 与 index bundle 无共享
+ * 模块态，逐调用经 globalThis 句柄解析（src/games/handle.ts）。句柄缺失 = 
+ * index bundle 未装载游戏运行时——明确报错而非静默空结果。测试经同一
+ * globalThis 注册表注入假服务（publishGamesService）。
+ */
+function requireGamesService() {
+  const service = resolveGamesService()
+  if (service === undefined) throw new Error('游戏运行时不可用（index bundle 未装载游戏服务）')
+  return service
+}
+
+/** game_state/game_move/game_wait 的缺省寻址：本聊天最近活跃会话；无会话时明确报文。 */
+async function resolveActiveSession(
+  service: ReturnType<typeof requireGamesService>,
+  binding: BindingContext,
+): Promise<string> {
+  const sessionId = await service.latestActive(binding.character, binding.chatId)
+  if (sessionId === undefined) {
+    throw new Error('本聊天没有进行中的游戏对局：先用 game_list 查看可用游戏，再 game_start 开局')
+  }
+  return sessionId
+}
+
+/** game_wait 的唤醒节拍（毫秒）：onGamesChanged 事件驱动为主，1s tick 兜底
+ *  （覆盖不经 emit 的外部改动，如手改会话文件）；二者都只是「可能变了」信号，
+ *  循环每拍重读会话快照判定真伪。 */
+const GAME_WAIT_TICK_MS = 1000
+
+/** 等「游戏可能变更」信号（事件/tick/中止），三路唤醒任何一路即返回。 */
+function waitForGameSignal(signal: AbortSignal | undefined, ms: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      try {
+        signal.throwIfAborted()
+        resolve()
+      } catch (cause) {
+        reject(cause)
+      }
+      return
+    }
+    let settled = false
+    let off: () => void = () => {}
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let onAbort: () => void = () => {}
+    const finish = (aborted: boolean) => {
+      if (settled) return
+      settled = true
+      off()
+      if (timer !== undefined) clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      if (!aborted) {
+        resolve()
+        return
+      }
+      try {
+        signal?.throwIfAborted()
+        resolve()
+      } catch (cause) {
+        reject(cause)
+      }
+    }
+    off = onGamesChanged(() => finish(false))
+    timer = setTimeout(() => finish(false), ms)
+    onAbort = () => finish(true)
+    signal?.addEventListener('abort', onAbort)
+  })
+}
+
+/**
+ * game_wait 主体（2026-10-14 修订）：阻塞直到轮到 Agent / 对局终局 / 孤儿 /
+ * 超时。每拍快照判定（state() 只读，无副作用）；醒来返回最新局面 + 最后一手
+ * （唤醒场景即人类刚落的那手，describe/summary 供叙述）。用户停止生成时
+ * exec.signal 中止——与其它工具的 throwIfAborted 同语义（宿主结束本次运行）。
+ */
+async function waitForHumanMove(
+  service: ReturnType<typeof requireGamesService>,
+  sessionId: string,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    signal?.throwIfAborted()
+    const { session, view } = await service.state(sessionId)
+    const lastMove = session.moves.length > 0 ? session.moves[session.moves.length - 1]! : null
+    if (session.finished) return { status: 'finished', sessionId, session, view, lastMove }
+    if (session.orphaned) return { status: 'orphaned', sessionId, session, view, lastMove }
+    const turnOwner = session.players.find((player) => player.role === session.turn)?.owner
+    if (turnOwner === 'agent') return { status: 'your-turn', sessionId, session, view, lastMove }
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) return { status: 'timeout', sessionId, session, view, lastMove }
+    await waitForGameSignal(signal, Math.min(GAME_WAIT_TICK_MS, remaining))
+  }
+}
+
 /** facts 文本通道：首次为某 agent 装配时异步装载一次，装载完成前返回空串。
  *  与挂载期装载（apply 里同步取 ctx.agent）等价：best-effort、不阻塞装配、
  *  失败即静默留空；不同点只是身份从装配上下文来。 */
@@ -1223,6 +1448,13 @@ onGuidesChanged((character, chatId) =>
   guidesProjection.refreshWhere((binding) =>
     binding.architecture === 'agent-tavern' && binding.character === character && binding.chatId === chatId))
 
+// 模块加载即订阅游戏变更写穿（提案 0018 §4.2）：index bundle 的 HTTP 人类落子/
+// 开局/安装经 dsh-tavern:games-changed-listeners（globalThis 监听表，跨 bundle
+// 互见）通知到这里，重载全部 agent-tavern 绑定的对局摘要——「轮到谁」不失真。
+onGamesChanged(() => {
+  void gamesSummaryProjection.refreshWhere((binding) => binding.architecture === 'agent-tavern')
+})
+
 /** 剧本进度摘要文本通道（提案 0014 P2）：与 guides 同款 best-effort 异步装载
  *  ——首次为某 agent 装配时异步读一次绑定剧本与进度，装载完成前返回空串，
  *  失败静默留空，不阻塞装配。tavern_script_advance 落库后经
@@ -1269,6 +1501,56 @@ async function scriptSummaryForChat(
  *  进度摘要缓存（无匹配则是无人装配过的 chat，跳过）。 */
 async function refreshAgentScriptSummaries(character: string, chatId: string): Promise<void> {
   await scriptSummaryProjection.refreshWhere((binding) =>
+    binding.architecture === 'agent-tavern' && binding.character === character && binding.chatId === chatId)
+}
+
+/** 游戏对局摘要文本通道（提案 0018 §4.2 懒段，order -63）：与 guides/script
+ *  同款 best-effort 异步装载——首次为某 agent 装配时异步读一次本聊天的活跃
+ *  会话，装载完成前返回空串（段摘除，无对局零 token 消耗），失败静默留空。
+ *  写穿两条：本 bundle 的 game_start/game_move 落子后即时刷新；index bundle
+ *  的 HTTP 人类落子经 dsh-tavern:games-changed-listeners 跨 bundle 通知刷新
+ *  （见文件底部的 onGamesChanged 订阅）。 */
+const gamesSummaryProjection = createLazyProjection<string>({
+  getState: async () => (await tavernStore()).getState(),
+  load: async (agentId, settle) => {
+    const db = await tavernStore()
+    const state = await db.getState()
+    const binding = state.sessionBindings[agentId]
+    if (!binding || binding.architecture !== 'agent-tavern' || binding.group === true) return
+    const service = resolveGamesService()
+    if (service === undefined) return
+    const { sessions } = await service.list({ character: binding.character, chatId: binding.chatId })
+    const active = sessions.filter((session) => session.finished !== true && session.orphaned !== true)
+    if (active.length === 0) {
+      // 空串 settle（非留旧值）：终局/认输后的写穿刷新要把段**摘除**——懒段
+      // 语义是「仅活跃会话时注入」，否则缓存会让已结束的对局一直占着 token。
+      settle('')
+      return
+    }
+    const lines = active.map((session) => {
+      const turnOwner = session.players.find((player) => player.role === session.turn)?.owner
+      const whose = turnOwner === 'agent' ? '你（Agent）' : '人类玩家'
+      return `- ${session.gameName}（sessionId ${session.id}）：轮到 ${session.turn}（${whose}）；动作词汇表：${session.actionVocabulary}`
+    })
+    const text = [
+      '本聊天有进行中的游戏对局：',
+      ...lines,
+      '轮到你时用 game_move 落子；落到人类回合立即调用 game_wait 阻塞等待对方在棋盘上落子（对方无需发送聊天消息），工具返回后自动继续；describe/summary 文案可直接用于对话中叙述这一手。',
+    ].join('\n')
+    // 会话快照里的游戏名/词汇表是用户资产数据，可能含 {{...}}——与 facts/guides
+    // 同款宏展开 + 宿主安全化（prompt-safety.ts）。
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER)
+    settle(hostPromptSafe(text, expand))
+  },
+})
+
+function agentGamesText(agentId: string | undefined): string {
+  return gamesSummaryProjection.valueOf(agentId) ?? ''
+}
+
+/** 写穿：本 bundle 的 game_start/game_move 成功后按 character/chatId 刷新对局摘要。 */
+async function refreshAgentGamesSummaries(character: string, chatId: string): Promise<void> {
+  await gamesSummaryProjection.refreshWhere((binding) =>
     binding.architecture === 'agent-tavern' && binding.character === character && binding.chatId === chatId)
 }
 
@@ -1328,7 +1610,7 @@ function agentPresetTemperatureOf(agentId: string | undefined): number | undefin
 }
 
 /**
- * 预注入 section 装配快照（提示词查看器 Agent 模式）：内置五段（与 apply()
+ * 预注入 section 装配快照（提示词查看器 Agent 模式）：内置六段（与 apply()
  * 的注册一一对应——新增注册必须同步这里，测试用 apply 注册面锁覆盖）+ mod
  * section 快照（cross-bundle 注册表，读时与 agent-mount 挂载面同式钳制 +
  * hostPromptSafe）。空文本段摘除（宿主装配对空 context 同样摘除——装载中/
@@ -1341,6 +1623,7 @@ export function agentPromptSectionsFor(agentId: string): Array<{ name: string; o
     { name: 'dsh-tavern:agent-facts', order: -70, text: agentFactsText(agentId) },
     { name: 'dsh-tavern:agent-guides', order: -65, text: agentGuidesText(agentId) },
     { name: 'dsh-tavern:agent-script', order: -64, text: agentScriptText(agentId) },
+    { name: 'dsh-tavern:agent-games', order: -63, text: agentGamesText(agentId) },
     ...modSectionSnapshot().map((entry) => ({
       name: `dsh-tavern:mod:${entry.modId}:${entry.definition.name}`,
       order: clampModSectionOrder(entry.definition.order),

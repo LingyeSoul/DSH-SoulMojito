@@ -13,6 +13,8 @@
  * - 读取不阻塞装配：未装载过则触发一次异步装载（void），返回当前缓存值；
  * - 装载失败静默（A missing store must not prevent the host agent from starting）；
  * - 写穿/预热 best-effort：失败只意味着下一次装配沿用旧缓存；
+ * - 同一 agent 的装载按到达序串行（enqueueLoad，2026-10-14 加固）：并发刷新
+ *   不再互相压制 settle，`await refreshWhere` 返回即最新装载已落缓存；
  * - 冻结求值上下文（决策 2026-10-09-agent-preset-cache-stability）等通道特有
  *   状态留在调用方闭包，工厂不感知。
  */
@@ -63,11 +65,25 @@ export function createLazyProjection<V>(options: LazyProjectionOptions<V>): Lazy
       for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
         if (!match(binding)) continue
         started.add(agentId)
-        await load(agentId)
+        await enqueueLoad(agentId)
       }
     } catch {
       // best-effort 写穿：失败只意味着下一次装配沿用旧缓存。
     }
+  }
+
+  // 按 agentId 串行化装载链（2026-10-14，游戏桥 game_wait 修订的连带加固）：
+  // 同一 agent 的并发刷新（写穿 emit 的 fire-and-forget 监听刷新 + 工具内
+  // await 的显式刷新，gamesSummary 的双路径是实弹案例）会在票号护栏下互相
+  // 压制——在途新票使旧票的 settle 被丢弃，`await refreshWhere` 返回时缓存
+  // 可能仍停留在旧值（games-tools.spec -63 段 1/3 复现的根因）。串行化后
+  // 排在最后的装载必然最后落值且重读最新状态，await 的语义恢复为真。
+  const loadChains = new Map<string, Promise<void>>()
+
+  function enqueueLoad(agentId: string): Promise<void> {
+    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId), () => load(agentId))
+    loadChains.set(agentId, next.catch(() => undefined))
+    return next
   }
 
   return {
@@ -75,7 +91,7 @@ export function createLazyProjection<V>(options: LazyProjectionOptions<V>): Lazy
       if (typeof agentId !== 'string' || agentId.trim() === '') return undefined
       if (!started.has(agentId)) {
         started.add(agentId)
-        void load(agentId)
+        void enqueueLoad(agentId)
       }
       return cache.get(agentId)
     },

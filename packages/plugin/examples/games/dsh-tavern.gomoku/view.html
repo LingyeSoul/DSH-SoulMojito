@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>五子棋 · dsh-tavern 游戏桥</title>
+<style>
+  /* 自包含视图（提案 0018 §3.3）：零外部资源——无外链 script/样式/字体，无网络请求，
+     与 mod CSP 纪律同款（connect-src 'none'）。桥协议只有两条消息：
+     下行 dsh-tavern:game-state / 上行 dsh-tavern:game-action。 */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #171a20;
+    color: #e8e4da;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 10px 10px 14px;
+  }
+  header {
+    width: 100%;
+    max-width: 560px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 2px 8px;
+  }
+  .game-name { font-size: 16px; font-weight: 600; letter-spacing: 1px; }
+  .session-id { font-size: 12px; color: #9a948a; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #banner {
+    width: 100%;
+    max-width: 560px;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    text-align: center;
+    margin-bottom: 10px;
+    border: 1px solid #3a3f4a;
+    background: #22262e;
+    transition: background .2s;
+  }
+  #banner.turn-black { background: #101216; border-color: #454b57; }
+  #banner.turn-white { background: #e9e5da; border-color: #c9c2b2; color: #26282d; }
+  #banner.finished  { background: #2a2416; border-color: #8a6d2f; color: #e7cf96; }
+  #banner.preview   { background: #20242c; border-color: #4a5568; color: #b9c4d8; }
+  .board-wrap { position: relative; width: 100%; max-width: 560px; }
+  svg#board { display: block; width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 18px rgba(0,0,0,.45); }
+  svg#board.interactive .hit { cursor: pointer; }
+  .overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 8px;
+    background: rgba(14, 15, 18, .72);
+    border-radius: 8px;
+  }
+  .overlay.hidden { display: none; }
+  .overlay .result { font-size: 22px; font-weight: 700; color: #f0e6c8; letter-spacing: 2px; }
+  .overlay .sub { font-size: 13px; color: #c9c0a8; }
+  footer {
+    width: 100%;
+    max-width: 560px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: #8d887e;
+    text-align: center;
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+<header>
+  <span class="game-name">五子棋</span>
+  <span class="session-id" id="session-id"></span>
+</header>
+<div id="banner" class="preview"></div>
+<div class="board-wrap">
+  <svg id="board" viewBox="0 0 688 688" role="img" aria-label="五子棋棋盘"></svg>
+  <div class="overlay hidden" id="overlay">
+    <div class="result" id="overlay-result"></div>
+    <div class="sub">对局结束</div>
+  </div>
+</div>
+<footer id="hint"></footer>
+
+<script>
+  'use strict'
+  /* eslint-disable */
+
+  // ===== 常量 =====
+  var N = 15                 // 15×15
+  var PAD = 36               // 边距（容纳列/行坐标标注）
+  var CELL = 44              // 格距
+  var STONE_R = 19
+  var HIT_R = 21.5
+  var COLUMNS = 'ABCDEFGHIJKLMNO'
+  var STAR_POINTS = [[3, 3], [3, 11], [11, 3], [11, 11], [7, 7]] // 5 个星位点
+  var LINE_COLOR = '#7a5a33'
+
+  function coord(i) { return PAD + i * CELL }
+
+  // ===== 桥协议（提案 0018 §3.3 原文）=====
+  // 从 location.search 读 token/session；监听 message 事件，
+  // data.type === 'dsh-tavern:game-state' 且 data.token === TOKEN 时，
+  // 以 data.view（{state, turn, legal, finished}）与 data.session 全量重渲染。
+  var params = new URLSearchParams(window.location.search)
+  var TOKEN = params.get('token')
+  var sessionId = params.get('session') || params.get('sid') || ''
+
+  var current = null // 最近一次 game-state：{ state, legal, session }
+
+  // 无 token（浏览器直接打开）时的静态演示局面：黑四连（6,6)-(9,9)，轮白。
+  var PREVIEW_VIEW = {
+    state: {
+      board: buildBoard([
+        [[7, 7], 1], [[8, 8], 1], [[9, 9], 1], [[6, 6], 1],
+        [[5, 5], 2], [[7, 8], 2], [[8, 6], 2],
+      ]),
+      turn: 'white',
+      ply: 7,
+      lastMove: { x: 9, y: 9 },
+      finished: false,
+      winner: null,
+      winLine: null,
+    },
+    legal: [],
+    finished: false,
+  }
+  var PREVIEW_SESSION = {
+    id: '',
+    gameId: 'dsh-tavern.gomoku',
+    players: [
+      { role: 'black', owner: 'human' },
+      { role: 'white', owner: 'agent' },
+    ],
+  }
+
+  function buildBoard(stones) {
+    var board = []
+    for (var y = 0; y < N; y++) {
+      var row = []
+      for (var x = 0; x < N; x++) row.push(0)
+      board.push(row)
+    }
+    for (var i = 0; i < stones.length; i++) board[stones[i][0][1]][stones[i][0][0]] = stones[i][1]
+    return board
+  }
+
+  window.addEventListener('message', function (event) {
+    var data = event.data
+    if (!data || typeof data !== 'object') return
+    if (data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+    var view = data.view && typeof data.view === 'object' ? data.view : {}
+    var session = data.session && typeof data.session === 'object' ? data.session : null
+    current = {
+      state: view.state || null,
+      legal: Array.isArray(view.legal) ? view.legal : [],
+      session: session,
+    }
+    if (session && session.id) sessionId = session.id
+    render()
+  })
+
+  // ===== 渲染（全量重渲染，v1 无增量）=====
+  var boardEl = document.getElementById('board')
+  var bannerEl = document.getElementById('banner')
+  var overlayEl = document.getElementById('overlay')
+  var overlayResultEl = document.getElementById('overlay-result')
+  var sessionIdEl = document.getElementById('session-id')
+  var hintEl = document.getElementById('hint')
+
+  function active() {
+    if (current && current.state) return { view: current, session: current.session || PREVIEW_SESSION, live: true }
+    // 有 token（由游戏服务装载）但还没收到首条 game-state：空盘等待，不借预览局面
+    if (TOKEN !== null) return { view: { state: null, legal: [] }, session: PREVIEW_SESSION, live: true }
+    return { view: PREVIEW_VIEW, session: PREVIEW_SESSION, live: false }
+  }
+
+  function ownerOf(session, role) {
+    if (!session || !Array.isArray(session.players)) return null
+    for (var i = 0; i < session.players.length; i++) {
+      if (session.players[i] && session.players[i].role === role) return session.players[i].owner
+    }
+    return null
+  }
+
+  function endText(state) {
+    if (state.winner === 'black') return '黑棋获胜'
+    if (state.winner === 'white') return '白棋获胜'
+    return '和棋'
+  }
+
+  function sideName(role) { return role === 'black' ? '黑方' : '白方' }
+
+  function render() {
+    var act = active()
+    var state = act.view.state
+
+    renderBoard(state, act)
+    sessionIdEl.textContent = act.live && sessionId ? '对局 ' + sessionId : (act.live ? '等待会话…' : '预览模式')
+
+    var cls = 'preview'
+    var text = '预览模式：由 dsh-tavern 游戏服务装载后启用交互'
+    if (act.live) {
+      if (!state) {
+        text = '等待对局状态…'
+      } else if (state.finished) {
+        cls = 'finished'
+        // §3.3 下行载荷只有 {state, turn, legal, finished}，终局文案由 winner 派生
+        text = '对局结束：' + endText(state)
+      } else {
+        cls = state.turn === 'black' ? 'turn-black' : 'turn-white'
+        var owner = ownerOf(act.session, state.turn)
+        text = sideName(state.turn) + '行动中' + (owner === 'agent' ? ' · 等待 AI 落子…' : '')
+      }
+    }
+    bannerEl.className = cls
+    bannerEl.textContent = text
+
+    var finished = !!(act.live && state && state.finished)
+    overlayEl.className = finished ? 'overlay' : 'overlay hidden'
+    if (finished) overlayResultEl.textContent = endText(state)
+
+    hintEl.textContent = !act.live
+      ? '这是静态演示局面：由 dsh-tavern 游戏服务装载后，棋盘将接收实时状态并启用点击落子。'
+      : (!state
+        ? '正在连接 dsh-tavern 游戏服务…'
+        : (finished
+          ? '对局已结束。可关闭本面板或在对局列表中开新一局。'
+          : '点击棋盘交叉点落子（任意空点均可点，落子合法性由服务端引擎终审）。'))
+  }
+
+  function svgEl(name, attrs) {
+    var el = document.createElementNS('http://www.w3.org/2000/svg', name)
+    for (var key in attrs) el.setAttribute(key, String(attrs[key]))
+    return el
+  }
+
+  function renderBoard(state, act) {
+    while (boardEl.firstChild) boardEl.removeChild(boardEl.firstChild)
+
+    var defs = svgEl('defs', {})
+    defs.appendChild(radialGradient('grad-black', '#4a4a4a', '#000000'))
+    defs.appendChild(radialGradient('grad-white', '#ffffff', '#b9b9b9'))
+    boardEl.appendChild(defs)
+
+    // 木纹底
+    boardEl.appendChild(svgEl('rect', {
+      x: 0, y: 0, width: 688, height: 688, rx: 8,
+      fill: '#d6a45f',
+    }))
+
+    // 网格线（外框稍粗）
+    for (var i = 0; i < N; i++) {
+      var edge = i === 0 || i === N - 1
+      boardEl.appendChild(svgEl('line', {
+        x1: coord(0), y1: coord(i), x2: coord(N - 1), y2: coord(i),
+        stroke: LINE_COLOR, 'stroke-width': edge ? 2 : 1,
+      }))
+      boardEl.appendChild(svgEl('line', {
+        x1: coord(i), y1: coord(0), x2: coord(i), y2: coord(N - 1),
+        stroke: LINE_COLOR, 'stroke-width': edge ? 2 : 1,
+      }))
+    }
+
+    // 星位点
+    for (var s = 0; s < STAR_POINTS.length; s++) {
+      boardEl.appendChild(svgEl('circle', {
+        cx: coord(STAR_POINTS[s][0]), cy: coord(STAR_POINTS[s][1]),
+        r: 4.5, fill: LINE_COLOR,
+      }))
+    }
+
+    // 坐标标注：列 A-O（上）、行 1-15（左）
+    for (var c = 0; c < N; c++) {
+      var colLabel = svgEl('text', {
+        x: coord(c), y: PAD - 14, 'text-anchor': 'middle',
+        'font-size': 12, fill: LINE_COLOR,
+      })
+      colLabel.textContent = COLUMNS[c]
+      boardEl.appendChild(colLabel)
+      var rowLabel = svgEl('text', {
+        x: PAD - 16, y: coord(c) + 4, 'text-anchor': 'middle',
+        'font-size': 12, fill: LINE_COLOR,
+      })
+      rowLabel.textContent = String(c + 1)
+      boardEl.appendChild(rowLabel)
+    }
+
+    if (!state) {
+      boardEl.setAttribute('class', '')
+      return
+    }
+
+    var winCells = {}
+    if (state.winLine) {
+      for (var w = 0; w < state.winLine.length; w++) {
+        winCells[state.winLine[w].x + ',' + state.winLine[w].y] = true
+      }
+    }
+    var legalCells = legalCellSet(act)
+
+    // 棋子
+    for (var y = 0; y < N; y++) {
+      for (var x = 0; x < N; x++) {
+        var stone = state.board[y][x]
+        if (stone === 0) continue
+        boardEl.appendChild(svgEl('circle', {
+          cx: coord(x), cy: coord(y), r: STONE_R,
+          fill: stone === 1 ? 'url(#grad-black)' : 'url(#grad-white)',
+          stroke: stone === 1 ? '#000' : '#b0b0b0', 'stroke-width': 0.5,
+        }))
+        if (winCells[x + ',' + y]) {
+          boardEl.appendChild(svgEl('circle', {
+            cx: coord(x), cy: coord(y), r: STONE_R + 2,
+            fill: 'none', stroke: '#e05252', 'stroke-width': 3,
+          }))
+        }
+      }
+    }
+
+    // 最后一手标记
+    if (state.lastMove) {
+      boardEl.appendChild(svgEl('circle', {
+        cx: coord(state.lastMove.x), cy: coord(state.lastMove.y),
+        r: 6.5, fill: 'none', stroke: '#e05252', 'stroke-width': 3,
+      }))
+    }
+
+    // 可落子点提示（legal 建议集；人类仍可点击任意空点）
+    if (legalCells) {
+      for (var key in legalCells) {
+        var parts = key.split(',')
+        boardEl.appendChild(svgEl('circle', {
+          cx: coord(Number(parts[0])), cy: coord(Number(parts[1])),
+          r: 3, fill: 'rgba(60, 40, 10, 0.35)',
+        }))
+      }
+    }
+
+    // 点击层：空点热区（未终局时启用）
+    var interactive = act.live && !state.finished
+    boardEl.setAttribute('class', interactive ? 'interactive' : '')
+    if (interactive) {
+      for (var yy = 0; yy < N; yy++) {
+        for (var xx = 0; xx < N; xx++) {
+          if (state.board[yy][xx] !== 0) continue
+          var hit = svgEl('circle', {
+            cx: coord(xx), cy: coord(yy), r: HIT_R,
+            fill: 'transparent', 'data-x': xx, 'data-y': yy, 'class': 'hit',
+          })
+          boardEl.appendChild(hit)
+        }
+      }
+    }
+  }
+
+  function radialGradient(id, innerColor, outerColor) {
+    var g = svgEl('radialGradient', { id: id, cx: '35%', cy: '30%', r: '75%' })
+    g.appendChild(svgEl('stop', { offset: '0%', 'stop-color': innerColor }))
+    g.appendChild(svgEl('stop', { offset: '100%', 'stop-color': outerColor }))
+    return g
+  }
+
+  function legalCellSet(act) {
+    if (!act.live) return null
+    var state = act.view.state
+    if (!state || state.finished) return null
+    if (ownerOf(act.session, state.turn) === 'agent') return null
+    var set = {}
+    var legal = act.view.legal || []
+    for (var i = 0; i < legal.length; i++) {
+      if (legal[i] && typeof legal[i].x === 'number' && typeof legal[i].y === 'number') {
+        set[legal[i].x + ',' + legal[i].y] = true
+      }
+    }
+    return set
+  }
+
+  // 点击空点（未终局时）：上行 dsh-tavern:game-action。
+  // 合法性由服务端引擎终审——这里不做本地规则裁决，人类可点任意空点。
+  boardEl.addEventListener('click', function (event) {
+    var target = event.target
+    if (!current || !current.state || current.state.finished) return
+    if (!TOKEN) return
+    if (!target || target.getAttribute('data-x') === null) return
+    var x = Number(target.getAttribute('data-x'))
+    var y = Number(target.getAttribute('data-y'))
+    if (current.state.board[y][x] !== 0) return
+    window.parent.postMessage(
+      { type: 'dsh-tavern:game-action', token: TOKEN, action: { type: 'place', x: x, y: y } },
+      '*'
+    )
+  })
+
+  render()
+</script>
+</body>
+</html>

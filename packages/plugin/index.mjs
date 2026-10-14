@@ -5,7 +5,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync as readFileSync5 } from "node:fs";
 import { mkdir as mkdir4 } from "node:fs/promises";
-import { relative as relative2, resolve as resolve4 } from "node:path";
+import { relative as relative2, resolve as resolve5 } from "node:path";
 
 // packages/tavern-format/src/png.ts
 var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -4198,7 +4198,7 @@ async function renameWithWindowsRetry(from, to, attempts = 5) {
     } catch (cause) {
       const code = cause.code;
       if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
-      await new Promise((resolve5) => setTimeout(resolve5, 10 * attempt));
+      await new Promise((resolve6) => setTimeout(resolve6, 10 * attempt));
     }
   }
 }
@@ -4370,7 +4370,7 @@ var TavernStore = class _TavernStore {
     const stem = safeFileName(card.data.name);
     const fileName = `${stem}.${kind}`;
     await this.writeAtomic(path.join(this.root, "characters", fileName), bytes);
-    await Promise.all(["png", "json", "charx"].filter((other) => other !== kind).map((other) => fs2.rm(path.join(this.root, "characters", `${stem}.${other}`), { force: true })));
+    await Promise.all(["png", "json", "charx"].filter((other2) => other2 !== kind).map((other2) => fs2.rm(path.join(this.root, "characters", `${stem}.${other2}`), { force: true })));
     return { fileName, card, importedWorld, importedRegex };
   }
   /**
@@ -4466,8 +4466,8 @@ var TavernStore = class _TavernStore {
         }
       }
     }
-    for (const other of ["png", "json", "charx"].filter((other2) => other2 !== kind)) {
-      await fs2.rm(path.join(this.root, "characters", `${nextStem}.${other}`), { force: true });
+    for (const other2 of ["png", "json", "charx"].filter((other3) => other3 !== kind)) {
+      await fs2.rm(path.join(this.root, "characters", `${nextStem}.${other2}`), { force: true });
     }
     const saved = await this.getCharacter(card.data.name);
     if (saved === void 0) throw new Error(`character '${card.data.name}' could not be reloaded`);
@@ -6218,10 +6218,10 @@ var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("he
 var DSH_HOST_COMMAND = /@deepseek-ai[\\/]dsh\b|(?:^|[\\/ \t"'])dsh(?:\.(?:cmd|js|ps1|exe|bat))?["']?[ \t]+web\b/;
 function commandLineOf(pid) {
   if (process.platform === "win32") {
-    return new Promise((resolve5) => {
+    return new Promise((resolve6) => {
       execFile("powershell.exe", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`], { timeout: 5e3, windowsHide: true }, (error, stdout) => {
-        if (error) resolve5(null);
-        else resolve5(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve6(null);
+        else resolve6(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -6235,10 +6235,10 @@ function commandLineOf(pid) {
     );
   }
   if (process.platform === "darwin") {
-    return new Promise((resolve5) => {
+    return new Promise((resolve6) => {
       execFile("ps", ["-p", String(pid), "-o", "command="], { timeout: 5e3 }, (error, stdout) => {
-        if (error) resolve5(Number(error.code) === 1 ? void 0 : null);
-        else resolve5(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve6(Number(error.code) === 1 ? void 0 : null);
+        else resolve6(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -7831,7 +7831,7 @@ async function replaceHead(head, bytes) {
       }
       throw cause;
     }
-    await new Promise((resolve5) => setTimeout(resolve5, 25));
+    await new Promise((resolve6) => setTimeout(resolve6, 25));
     await fs7.rename(tmp, head);
   }
 }
@@ -8056,7 +8056,7 @@ function parseEpubText(buffer) {
   if (opfBytes === void 0) throw new Error(`not a valid EPUB: package document '${opfPath}' not found in zip`);
   const opfText = strFromU8(opfBytes);
   const opfDir = opfPath.includes("/") ? opfPath.slice(0, opfPath.lastIndexOf("/")) : "";
-  const manifest = /* @__PURE__ */ new Map();
+  const manifest2 = /* @__PURE__ */ new Map();
   for (const match of opfText.matchAll(/<item\b[^>]*>/gi)) {
     const tag = match[0];
     const id = /(?:\b|xml:)id\s*=\s*"([^"]*)"/i.exec(tag)?.[1];
@@ -8064,11 +8064,11 @@ function parseEpubText(buffer) {
     if (id === void 0 || id === "" || href === void 0) continue;
     const mediaType = /\bmedia-type\s*=\s*"([^"]*)"/i.exec(tag)?.[1];
     const isXhtml = mediaType === "application/xhtml+xml" || mediaType === "text/html" || mediaType === void 0 && /\.(xhtml|html|htm)$/i.test(href);
-    if (isXhtml) manifest.set(id, { href, isXhtml: true });
+    if (isXhtml) manifest2.set(id, { href, isXhtml: true });
   }
   const spineBlock = /<spine\b[^>]*>([\s\S]*?)<\/spine>/i.exec(opfText)?.[1] ?? "";
   const idrefs = [...spineBlock.matchAll(/<itemref\b[^>]*>/gi)].map((match) => /\bidref\s*=\s*"([^"]*)"/i.exec(match[0])?.[1]).filter((idref) => idref !== void 0 && idref !== "");
-  const orderedHrefs = (idrefs.length > 0 ? idrefs : [...manifest.keys()]).map((idref) => manifest.get(idref)).filter((item) => item !== void 0).map((item) => resolveZipPath(opfDir, item.href));
+  const orderedHrefs = (idrefs.length > 0 ? idrefs : [...manifest2.keys()]).map((idref) => manifest2.get(idref)).filter((item) => item !== void 0).map((item) => resolveZipPath(opfDir, item.href));
   const chapters = [];
   for (const href of orderedHrefs) {
     const doc = files[href];
@@ -9077,7 +9077,7 @@ var NovelDriver = class _NovelDriver {
       } catch (error) {
         lastError = error;
         this.logWarn("followup-attempt-failed", { novelId, sessionId: agent.session.id, intentId, errorCode: errorCodeOf(error), attempt });
-        if (attempt < retry.maxAttempts) await new Promise((resolve5) => setTimeout(resolve5, retry.backoffMs));
+        if (attempt < retry.maxAttempts) await new Promise((resolve6) => setTimeout(resolve6, retry.backoffMs));
       }
     }
     throw lastError;
@@ -13481,7 +13481,7 @@ function mergeTemplateLocalVars(chat, macroLocalSnapshot) {
 // packages/plugin/src/generation-hooks.ts
 var GENERATION_HOOK_TIMEOUT_MS = 1e4;
 function withTimeout(promise, ms) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const timer = setTimeout(() => {
       const timeoutError = new Error(`generation hook timed out after ${ms}ms`);
       timeoutError.hookTimeout = true;
@@ -13490,7 +13490,7 @@ function withTimeout(promise, ms) {
     Promise.resolve(promise).then(
       (value) => {
         clearTimeout(timer);
-        resolve5(value);
+        resolve6(value);
       },
       (error) => {
         clearTimeout(timer);
@@ -14215,7 +14215,7 @@ function localRuntimeProfileRoot(pluginDir) {
   return dirname6(parent);
 }
 function defaultSpawnRunner(command, args, options) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const child = spawn(command, [...args], {
       cwd: options.cwd,
       shell: process.platform === "win32",
@@ -14241,7 +14241,7 @@ function defaultSpawnRunner(command, args, options) {
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      resolve5({ code: code ?? -1, output });
+      resolve6({ code: code ?? -1, output });
     });
   });
 }
@@ -14549,7 +14549,7 @@ function parseEmbeddings(payload, count, expectedDims2) {
   return vectors;
 }
 function delay(ms) {
-  return new Promise((resolve5) => setTimeout(resolve5, ms));
+  return new Promise((resolve6) => setTimeout(resolve6, ms));
 }
 async function embedProbe(root, config, options = {}) {
   const status2 = await readEmbedStatus(root);
@@ -14833,18 +14833,18 @@ async function executeRun(ctx, deps, scope, active) {
       { role: "user", id: randomUUID4(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
     ];
     let outcome = "completed";
-    let errorMessage2;
+    let errorMessage3;
     let report;
     for (; ; ) {
       if (run.llmRequests >= run.budget) {
         outcome = "budget-exhausted";
-        errorMessage2 = `reached the run budget of ${run.budget} LLM requests; completed work is kept, unreported ranges stay pending`;
+        errorMessage3 = `reached the run budget of ${run.budget} LLM requests; completed work is kept, unreported ranges stay pending`;
         break;
       }
       const conversationChars = messages.reduce((total, message) => total + JSON.stringify(message.content).length, 0);
       if (conversationChars > MAINTENANCE_CONVERSATION_MAX_CHARS) {
         outcome = "budget-exhausted";
-        errorMessage2 = "maintenance conversation exceeded the run context guard; completed work is kept";
+        errorMessage3 = "maintenance conversation exceeded the run context guard; completed work is kept";
         break;
       }
       run.llmRequests += 1;
@@ -14870,17 +14870,17 @@ async function executeRun(ctx, deps, scope, active) {
         }
       } catch (error) {
         outcome = "error";
-        errorMessage2 = `LLM request failed: ${error instanceof Error ? error.message : String(error)}`;
+        errorMessage3 = `LLM request failed: ${error instanceof Error ? error.message : String(error)}`;
         break;
       }
       if (finishReason === void 0) {
         outcome = "error";
-        errorMessage2 = "LLM stream ended without a finish chunk";
+        errorMessage3 = "LLM stream ended without a finish chunk";
         break;
       }
       if (finishReason.kind === "error" || finishReason.kind === "aborted") {
         outcome = "error";
-        errorMessage2 = `LLM stream failed (${finishReason.kind}): ${finishReason.failure?.message ?? "unknown failure"}`;
+        errorMessage3 = `LLM stream failed (${finishReason.kind}): ${finishReason.failure?.message ?? "unknown failure"}`;
         break;
       }
       if (!blocks.some((block) => block.type === "text") && textBuffer !== "") {
@@ -14894,7 +14894,7 @@ async function executeRun(ctx, deps, scope, active) {
       }
       if (finishReason.kind === "max-tokens") {
         outcome = "error";
-        errorMessage2 = "maintenance response truncated at the token cap";
+        errorMessage3 = "maintenance response truncated at the token cap";
         break;
       }
       for (const call of toolCalls) {
@@ -14910,10 +14910,10 @@ async function executeRun(ctx, deps, scope, active) {
       }
     }
     if (outcome === "error") {
-      await finish("error", outcome, errorMessage2);
+      await finish("error", outcome, errorMessage3);
       return;
     }
-    const closing = report !== void 0 ? report.slice(0, 2e3) : errorMessage2;
+    const closing = report !== void 0 ? report.slice(0, 2e3) : errorMessage3;
     await finish("done", outcome, closing);
   } finally {
     activeRuns.delete(key);
@@ -15693,7 +15693,7 @@ async function fetchFromAtom(options) {
   };
 }
 function resolveRemoteCommit(repository, ref, timeoutMs) {
-  return new Promise((resolve5) => {
+  return new Promise((resolve6) => {
     const url = /^https?:|^git@/i.test(repository) ? repository : `https://github.com/${repository.replace(/^\//, "")}.git`;
     execFile2("git", ["ls-remote", url, `refs/heads/${ref}`, ref], {
       encoding: "utf8",
@@ -15702,11 +15702,11 @@ function resolveRemoteCommit(repository, ref, timeoutMs) {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
     }, (error, stdout) => {
       if (error) {
-        resolve5("");
+        resolve6("");
         return;
       }
       const first = String(stdout ?? "").split("\n").map((line) => line.trim()).find(Boolean) ?? "";
-      resolve5(first.split(/\s+/)[0] ?? "");
+      resolve6(first.split(/\s+/)[0] ?? "");
     });
   });
 }
@@ -15758,7 +15758,7 @@ function describeError(error) {
 function curlGet(url, accept, timeoutMs, exec = execFile2) {
   const command = process.env.DSH_TAVERN_CURL?.trim() || (process.platform === "win32" ? "curl.exe" : "curl");
   const seconds = String(Math.max(1, Math.ceil(timeoutMs / 1e3)));
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     exec(command, [
       "--silent",
       "--show-error",
@@ -15782,7 +15782,7 @@ function curlGet(url, accept, timeoutMs, exec = execFile2) {
         reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
         return;
       }
-      resolve5(String(stdout ?? ""));
+      resolve6(String(stdout ?? ""));
     });
   });
 }
@@ -16168,8 +16168,8 @@ function readInstalledStamp(pluginDir, spec = "") {
   }
   if (version === UNKNOWN_FIELD) {
     try {
-      const manifest = JSON.parse(readFileSync2(join15(pluginDir, "package.json"), "utf8"));
-      if (typeof manifest?.version === "string" && manifest.version.trim() !== "") version = manifest.version.trim();
+      const manifest2 = JSON.parse(readFileSync2(join15(pluginDir, "package.json"), "utf8"));
+      if (typeof manifest2?.version === "string" && manifest2.version.trim() !== "") version = manifest2.version.trim();
     } catch {
     }
   }
@@ -16180,7 +16180,7 @@ function readInstalledStamp(pluginDir, spec = "") {
   return { version, commit };
 }
 function runCapture(command, args, options = {}) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const child = spawn2(command, args, {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -16209,7 +16209,7 @@ function runCapture(command, args, options = {}) {
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      resolve5({ code: code ?? -1, output });
+      resolve6({ code: code ?? -1, output });
     });
   });
 }
@@ -16543,6 +16543,27 @@ import { mkdir as mkdir3 } from "node:fs/promises";
 import { isAbsolute, join as join18, relative, resolve as resolve3 } from "node:path";
 import { pathToFileURL as pathToFileURL3 } from "node:url";
 
+// packages/plugin/src/games/handle.ts
+var GAMES_SERVICE_KEY = "dsh-tavern:games-service";
+var serviceSymbol = Symbol.for(GAMES_SERVICE_KEY);
+var nextToken = 1;
+function publishGamesService(service) {
+  const holder = globalThis;
+  const token = nextToken++;
+  holder[serviceSymbol] = { service, token };
+  return () => {
+    if (holder[serviceSymbol]?.token === token) delete holder[serviceSymbol];
+  };
+}
+function resolveGamesService() {
+  const holder = globalThis;
+  return holder[serviceSymbol]?.service;
+}
+var gamesChangedListeners = createGlobalListenerRegistry("dsh-tavern:games-changed-listeners");
+function emitGamesChanged() {
+  void gamesChangedListeners.emit();
+}
+
 // packages/plugin/src/mods/audit.ts
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname as dirname10 } from "node:path";
@@ -16649,7 +16670,8 @@ function clampModSectionOrder(order) {
 }
 var MOD_TOOL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
-  // agent-tavern（agent.ts createTools，18）
+  // agent-tavern（agent.ts createTools，23：18 原有 + 游戏桥五件，提案 0018 §4.2；
+  // game_wait 为 2026-10-14 修订新增）
   "tavern_character_get",
   "tavern_lore_search",
   "tavern_scene_get",
@@ -16668,6 +16690,11 @@ var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
   "tavern_script_advance",
   "tavern_deduce",
   "tavern_variable_settle",
+  "game_list",
+  "game_start",
+  "game_state",
+  "game_move",
+  "game_wait",
   // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
   "novel_status_read",
   "novel_requirements_read",
@@ -16971,7 +16998,7 @@ function renderModHtmlDocument(document, csp) {
   return `<!doctype html><html><head><meta charset="utf-8">${meta}${scripts}</head><body>${rewritten}</body></html>`;
 }
 function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (chunk) => {
@@ -16985,7 +17012,7 @@ function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
     });
     req.on("end", () => {
       try {
-        resolve5(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve6(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         reject(new Error("invalid JSON body"));
       }
@@ -17000,6 +17027,8 @@ var MOD_ID_MAX_LENGTH = 100;
 var MOD_CAPABILITIES = ["llm", "network", "storage"];
 var MOD_BUTTONS_MAX_COUNT = 8;
 var MOD_BUTTON_NAME_MAX_LENGTH = 40;
+var MOD_GAMES_MAX_COUNT = 8;
+var MOD_GAME_ID_MAX_LENGTH = 80;
 function modButtonNameError(name2) {
   if (typeof name2 !== "string") return "button names must be strings";
   const text = name2.trim();
@@ -17108,13 +17137,42 @@ function checkModManifest(raw, options) {
       }
     }
   }
+  if (record.games !== void 0) {
+    if (!Array.isArray(record.games)) {
+      errors.push("games must be an array of game ids");
+    } else {
+      if (record.games.length > MOD_GAMES_MAX_COUNT) {
+        errors.push(`games must declare at most ${MOD_GAMES_MAX_COUNT} entries`);
+      }
+      const seenGames = /* @__PURE__ */ new Set();
+      for (const gameId of record.games) {
+        if (typeof gameId !== "string" || gameId.trim() === "") {
+          errors.push("games entries must be non-empty strings");
+          break;
+        }
+        if (gameId.length > MOD_GAME_ID_MAX_LENGTH) {
+          errors.push(`game id '${gameId}' must be at most ${MOD_GAME_ID_MAX_LENGTH} characters`);
+          break;
+        }
+        if (!MOD_ID_PATTERN.test(gameId)) {
+          errors.push(`game id '${gameId}' must be [a-z0-9-] labels or reverse-domain joined by '.'`);
+          break;
+        }
+        if (seenGames.has(gameId)) {
+          errors.push(`game '${gameId}' is declared more than once`);
+          break;
+        }
+        seenGames.add(gameId);
+      }
+    }
+  }
   if (errors.length > 0) return { ok: false, errors };
   const engines = record.engines;
   const engineRange = engines?.["dsh-tavern"];
   const panel = record.panel;
   const surfaces = record.surfaces;
   const pickStrings = (value) => Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
-  const manifest = {
+  const manifest2 = {
     id: record.id,
     name: record.name,
     version: record.version,
@@ -17126,9 +17184,10 @@ function checkModManifest(raw, options) {
     capabilities: Array.isArray(record.capabilities) ? [...new Set(record.capabilities)] : [],
     ...panel !== void 0 && typeof panel.title === "string" ? { panel: { title: panel.title, ...typeof panel.icon === "string" ? { icon: panel.icon } : {} } } : {},
     surfaces: surfaces === void 0 || surfaces === null ? { hooks: [], tools: [], http: [] } : { hooks: pickStrings(surfaces.hooks), tools: pickStrings(surfaces.tools), http: pickStrings(surfaces.http) },
-    buttons: Array.isArray(record.buttons) ? [...record.buttons] : []
+    buttons: Array.isArray(record.buttons) ? [...record.buttons] : [],
+    games: Array.isArray(record.games) ? [...record.games] : []
   };
-  return { ok: true, manifest };
+  return { ok: true, manifest: manifest2 };
 }
 function checkMainPath(main) {
   const text = main.trim();
@@ -17393,7 +17452,7 @@ function gitClone(url, directory, ref, timeoutMs, exec = execFile3) {
   return runGit(args, exec, timeoutMs).then(() => runGit(["-C", directory, "checkout", "HEAD", "--", "."], exec, timeoutMs));
 }
 function runGit(args, exec, timeoutMs) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     exec("git", args, {
       encoding: "utf8",
       timeout: timeoutMs,
@@ -17406,7 +17465,7 @@ function runGit(args, exec, timeoutMs) {
         reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
         return;
       }
-      resolve5();
+      resolve6();
     });
   });
 }
@@ -17452,11 +17511,11 @@ async function installModFromGit(options) {
 
 // packages/plugin/src/mods/host.ts
 var MOD_API_VERSION = 1;
-function declaredSurfacesOf(manifest) {
+function declaredSurfacesOf(manifest2) {
   return {
-    hooks: [...manifest.surfaces.hooks],
-    tools: [...manifest.surfaces.tools],
-    http: [...manifest.surfaces.http]
+    hooks: [...manifest2.surfaces.hooks],
+    tools: [...manifest2.surfaces.tools],
+    http: [...manifest2.surfaces.http]
   };
 }
 function modsDisabledByEnv() {
@@ -17721,32 +17780,32 @@ var ModHost = class _ModHost {
         await this.audit.record(id, "skip", message);
         continue;
       }
-      const manifest = check.manifest;
-      const engineRange = manifest.engines?.dshTavern;
+      const manifest2 = check.manifest;
+      const engineRange = manifest2.engines?.dshTavern;
       if (engineRange !== void 0) {
         const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange);
         if (!verdict.ok) {
-          nextBlocked.set(id, { manifest, reason: verdict.reason });
+          nextBlocked.set(id, { manifest: manifest2, reason: verdict.reason });
           await this.audit.record(id, "skip", verdict.reason);
           continue;
         }
       }
-      const entryPath = resolve3(this.modsRoot, directory, manifest.main);
+      const entryPath = resolve3(this.modsRoot, directory, manifest2.main);
       const containment = relative(resolve3(this.modsRoot, directory), entryPath);
       if (containment === "" || containment.startsWith("..") || isAbsolute(containment)) {
-        const message = `main entry '${manifest.main}' escapes the mod directory`;
-        nextBlocked.set(id, { manifest, reason: message });
+        const message = `main entry '${manifest2.main}' escapes the mod directory`;
+        nextBlocked.set(id, { manifest: manifest2, reason: message });
         await this.audit.record(id, "skip", message);
         continue;
       }
       const entryStat = await fs14.stat(entryPath).catch(() => void 0);
       if (entryStat?.isFile() !== true) {
-        const message = `main entry '${manifest.main}' not found`;
-        nextBlocked.set(id, { manifest, reason: message });
+        const message = `main entry '${manifest2.main}' not found`;
+        nextBlocked.set(id, { manifest: manifest2, reason: message });
         await this.audit.record(id, "skip", message);
         continue;
       }
-      nextDiscovered.set(id, { manifest, directory: join18(this.modsRoot, directory), entryPath });
+      nextDiscovered.set(id, { manifest: manifest2, directory: join18(this.modsRoot, directory), entryPath });
     }
     this.discovered.clear();
     this.broken.clear();
@@ -17841,7 +17900,8 @@ var ModHost = class _ModHost {
   }
   /** P1+P2 适配层（提案 §3.3）：白名单对象，不透传 cordis ctx。
    * P2 面：hooks（五相位总线）/tools（跨 bundle 注册表）/macros（宿主宏注册表）/
-   * stscript（命令表）/llm（能力键强制）/prompt（AgentTavern section）。 */
+   * stscript（命令表）/llm（能力键强制）/prompt（AgentTavern section）。
+   * P3 面：games（提案 0018 §4.5——游戏桥注册，id 前缀 + manifest 声明双纪律）。 */
   createApi(record) {
     const id = record.manifest.id;
     const logger = {
@@ -17966,6 +18026,40 @@ var ModHost = class _ModHost {
           return tracked(registerModTool(id, definition, record.manifest.loadingOrder));
         }
       },
+      games: {
+        // 提案 0018 §4.5 第 3 源（P3）：把游戏注册进游戏桥运行时。id 纪律 =
+        // onButton 的「未声明即拒」+ 工具注册的前缀律：id 必须以 `<modId>.` 开头
+        // 且在 manifest games 名单内。引擎 duck 校验/烟测/view 静态检查/跨源查重
+        // 都在 games service（fail-fast，抛错 = 本 Mod setup 失败进错误位，镜像
+        // 工具注册）。mods host 与 games service 同在 index bundle，经既有
+        // globalThis 句柄直调（handle.ts，无新跨 bundle 面）；反注册入
+        // offRegistrations（卸载自动摘除，其活跃会话由 sessions 孤儿判定接管）。
+        register: (def) => {
+          if (typeof def !== "object" || def === null || Array.isArray(def)) {
+            throw new Error("game registration must be an object");
+          }
+          const gameId = def.id;
+          if (typeof gameId !== "string" || gameId === "") {
+            throw new Error(`game registration requires a non-empty id string (got '${String(gameId)}')`);
+          }
+          const prefix = `${id}.`;
+          if (!gameId.startsWith(prefix)) {
+            throw new Error(`game id must start with the mod id prefix '${prefix}' (got '${gameId}')`);
+          }
+          if (!record.manifest.games.includes(gameId)) {
+            throw new Error(`game '${gameId}' is not declared in the manifest games [${record.manifest.games.join(", ")}]`);
+          }
+          const engine2 = def.engine;
+          const service = resolveGamesService();
+          if (service === void 0) {
+            throw new Error("the games runtime is not available in this process (game registration requires the games service)");
+          }
+          service.registerModGame(def);
+          return tracked(() => {
+            service.unregisterModGame(gameId, engine2);
+          });
+        }
+      },
       macros: {
         // 提案 §3.3/P0 决策注记：mod 宏进入 prompt-safety 冻结求值上下文的展开
         // 面——必须确定性（无随机/时间）。注册期静态筛查 best-effort；运行期
@@ -17989,9 +18083,9 @@ var ModHost = class _ModHost {
             if (entry.name.toLowerCase() === lowered) throw new Error(`macro name '${macroName}' is already registered`);
           }
           let failureAudited = false;
-          const wrapped = (args, engine) => {
+          const wrapped = (args, engine2) => {
             try {
-              const result = fn(args, engine);
+              const result = fn(args, engine2);
               if (typeof result === "string" || result === null) return result;
               if (typeof result === "number" || typeof result === "boolean") return String(result);
               return null;
@@ -18057,17 +18151,17 @@ var ModHost = class _ModHost {
     return api;
   }
 };
-function modInfoOf(manifest) {
+function modInfoOf(manifest2) {
   return {
-    id: manifest.id,
-    name: manifest.name,
-    version: manifest.version,
-    author: manifest.author,
-    description: manifest.description,
-    capabilities: manifest.capabilities,
-    loadingOrder: manifest.loadingOrder,
-    panel: manifest.panel ?? null,
-    buttons: [...manifest.buttons]
+    id: manifest2.id,
+    name: manifest2.name,
+    version: manifest2.version,
+    author: manifest2.author,
+    description: manifest2.description,
+    capabilities: manifest2.capabilities,
+    loadingOrder: manifest2.loadingOrder,
+    panel: manifest2.panel ?? null,
+    buttons: [...manifest2.buttons]
   };
 }
 var GENERATION_HOOK_PHASES = /* @__PURE__ */ new Set(["user-input", "pre-assemble", "pre-llm", "post-output", "post-save"]);
@@ -18217,8 +18311,1242 @@ function createModAssets(dbProvider) {
   };
 }
 
-// packages/plugin/src/card-workbench/plans.ts
+// packages/plugin/src/games/registry.ts
 import { promises as fs15 } from "node:fs";
+import { cpSync as cpSync2, existsSync as existsSync3, mkdtempSync as mkdtempSync3, rmSync as rmSync3 } from "node:fs";
+import { tmpdir as tmpdir3 } from "node:os";
+import { join as join19, resolve as resolve4 } from "node:path";
+import { pathToFileURL as pathToFileURL4 } from "node:url";
+
+// packages/plugin/src/games/builtin/tic-tac-toe.ts
+var SIZE = 3;
+var EMPTY = 0;
+var CROSS = 1;
+var NOUGHT = 2;
+var COLUMNS = "ABC";
+var DIRECTIONS = [[1, 0], [0, 1], [1, 1], [1, -1]];
+var MANIFEST = {
+  id: "dsh-tavern.tic-tac-toe",
+  name: "\u4E95\u5B57\u68CB",
+  version: "1.0.0",
+  players: { min: 2, max: 2, roles: ["x", "o"] },
+  turnBased: true,
+  actionVocabulary: "\u843D\u5B50 {type:'place', x, y}\uFF0Cx/y \u4E3A 0-2 \u6574\u6570\u5750\u6807\uFF08\u5217 A-C\u3001\u884C 1-3\uFF09\uFF1B\u8BA4\u8F93 {type:'resign'} \u7531\u8FD0\u884C\u65F6\u7EDF\u4E00\u5904\u7406"
+};
+function markName(role) {
+  return role === "x" ? "X" : "O";
+}
+function sideName(role) {
+  return role === "x" ? "X \u65B9" : "O \u65B9";
+}
+function other(role) {
+  return role === "x" ? "o" : "x";
+}
+function isOnBoard(x, y) {
+  return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && x < SIZE && y >= 0 && y < SIZE;
+}
+function coordName(x, y) {
+  return COLUMNS[x] + String(y + 1);
+}
+function cloneState(state) {
+  return {
+    board: state.board.map((row) => row.slice()),
+    turn: state.turn,
+    ply: state.ply,
+    lastMove: state.lastMove === null ? null : { ...state.lastMove },
+    finished: state.finished,
+    winner: state.winner,
+    winLine: state.winLine === null ? null : state.winLine.map((cell) => ({ ...cell }))
+  };
+}
+function findWinLine(board, x, y) {
+  const mark = board[y][x];
+  if (mark === EMPTY) return null;
+  for (const [dx, dy] of DIRECTIONS) {
+    const cells = [{ x, y }];
+    for (const sign of [1, -1]) {
+      let cx = x + dx * sign;
+      let cy = y + dy * sign;
+      while (isOnBoard(cx, cy) && board[cy][cx] === mark) {
+        cells.push({ x: cx, y: cy });
+        cx += dx * sign;
+        cy += dy * sign;
+      }
+    }
+    if (cells.length >= SIZE) {
+      cells.sort((a, b) => a.x - b.x || a.y - b.y);
+      return cells;
+    }
+  }
+  return null;
+}
+var engine = {
+  meta: MANIFEST,
+  /** 开局：空盘 X 先。options（含 seed）接受但忽略——井字棋无随机性。 */
+  createGame(_options) {
+    return {
+      state: {
+        board: Array.from({ length: SIZE }, () => Array.from({ length: SIZE }, () => EMPTY)),
+        turn: "x",
+        ply: 0,
+        lastMove: null,
+        finished: false,
+        winner: null,
+        winLine: null
+      }
+    };
+  },
+  /** 建议集 = 全部空点（3×3 棋盘 ≤9 < 64，天然有界）；终局返回空数组。 */
+  legalActions(state) {
+    if (state.finished) return [];
+    const actions = [];
+    for (let y = 0; y < SIZE; y += 1) {
+      for (let x = 0; x < SIZE; x += 1) {
+        if (state.board[y][x] === EMPTY) actions.push({ type: "place", x, y });
+      }
+    }
+    return actions;
+  },
+  /** 落子并推进局面；校验顺序与报错纪律逐条对齐五子棋引擎。 */
+  applyAction(state, action, actor) {
+    if (action === null || typeof action !== "object" || Array.isArray(action)) {
+      throw new Error("\u52A8\u4F5C\u5FC5\u987B\u662F JSON \u5BF9\u8C61");
+    }
+    const typed = action;
+    if (typeof typed.type !== "string" || typed.type === "") {
+      throw new Error("\u52A8\u4F5C\u7F3A\u5C11 type \u5B57\u6BB5");
+    }
+    if (typed.type !== "place") {
+      throw new Error(`\u4E0D\u652F\u6301\u7684\u52A8\u4F5C\u7C7B\u578B\u300C${typed.type}\u300D\uFF1A\u672C\u5F15\u64CE\u53EA\u5B9E\u73B0 place\uFF08resign \u7531\u8FD0\u884C\u65F6\u7EDF\u4E00\u5904\u7406\uFF09`);
+    }
+    if (state.finished) {
+      throw new Error("\u5BF9\u5C40\u5DF2\u7ED3\u675F\uFF0C\u4E0D\u80FD\u518D\u843D\u5B50");
+    }
+    if (actor !== "x" && actor !== "o") {
+      throw new Error(`\u672A\u77E5\u89D2\u8272\u300C${String(actor)}\u300D\uFF1A\u672C\u6E38\u620F\u89D2\u8272\u4E3A x/o`);
+    }
+    if (actor !== state.turn) {
+      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u843D\u5B50`);
+    }
+    if (!isOnBoard(typed.x, typed.y)) {
+      throw new Error(`\u843D\u5B50\u5750\u6807\u5FC5\u987B\u662F 0-${SIZE - 1} \u7684\u6574\u6570\uFF0C\u6536\u5230 x=${String(typed.x)}\u3001y=${String(typed.y)}`);
+    }
+    const x = typed.x;
+    const y = typed.y;
+    if (state.board[y][x] !== EMPTY) {
+      throw new Error(`${coordName(x, y)} \u5DF2\u6709\u68CB\u5B50\uFF0C\u4E0D\u80FD\u843D\u5728\u5DF2\u5360\u683C\u4E0A`);
+    }
+    const next = cloneState(state);
+    next.board[y][x] = actor === "x" ? CROSS : NOUGHT;
+    next.ply = state.ply + 1;
+    next.lastMove = { x, y };
+    next.turn = other(actor);
+    const move = `${markName(actor)}\u843D\u4E8E ${coordName(x, y)}`;
+    const events = [move];
+    let summary = move;
+    const winLine = findWinLine(next.board, x, y);
+    if (winLine !== null) {
+      next.finished = true;
+      next.winner = actor;
+      next.winLine = winLine;
+      const ending = `${markName(actor)}\u4E09\u8FDE\uFF0C${actor === "x" ? "X" : "O"}\u80DC`;
+      events.push(ending);
+      summary = `${move}\uFF0C${ending}`;
+    } else if (next.ply === SIZE * SIZE) {
+      next.finished = true;
+      next.winner = null;
+      next.winLine = null;
+      events.push("\u68CB\u76D8\u5DF2\u6EE1\uFF0C\u548C\u68CB");
+      summary = `${move}\uFF0C\u68CB\u76D8\u5DF2\u6EE1\uFF0C\u548C\u68CB`;
+    }
+    return { state: next, events, finished: next.finished, winner: next.winner, summary };
+  },
+  /** 人类可读的一手棋描述（含列 A-C + 行 1-3 坐标）。 */
+  describe(_state, actor, action) {
+    if (action !== null && typeof action === "object" && !Array.isArray(action) && action.type === "place" && isOnBoard(action.x, action.y)) {
+      const x = action.x;
+      const y = action.y;
+      return `${markName(actor === "o" ? "o" : "x")}\u843D\u4E8E ${coordName(x, y)}`;
+    }
+    return `${String(actor)}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
+  }
+};
+var manifest = MANIFEST;
+var viewHtml = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>\u4E95\u5B57\u68CB \xB7 dsh-tavern \u6E38\u620F\u6865</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 12px;
+    background: #171a20; color: #e8e4da;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  header { width: 100%; max-width: 320px; display: flex; justify-content: space-between; font-size: 14px; padding-bottom: 8px; }
+  .session-id { color: #9a948a; font-size: 11px; font-variant-numeric: tabular-nums; }
+  #banner { width: 100%; max-width: 320px; border: 1px solid #3a3f4a; background: #22262e; border-radius: 6px;
+    padding: 6px 10px; font-size: 13px; text-align: center; margin-bottom: 10px; }
+  #board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; width: 100%; max-width: 320px; }
+  .cell {
+    aspect-ratio: 1; border-radius: 8px; background: #20242c; border: 1px solid #333945;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 34px; font-weight: 700; user-select: none;
+  }
+  .cell.x { color: #7fb2ff; }
+  .cell.o { color: #ffb27f; }
+  .cell.playable { cursor: pointer; }
+  .cell.playable:hover { background: #2a3140; }
+  .cell.last { outline: 2px solid #8a6d2f; }
+  footer { margin-top: 10px; font-size: 11px; color: #8d887e; text-align: center; width: 100%; max-width: 320px; }
+</style>
+</head>
+<body>
+<header><span>\u4E95\u5B57\u68CB</span><span class="session-id" id="session-id"></span></header>
+<div id="banner">\u7B49\u5F85\u5BF9\u5C40\u2026</div>
+<div id="board"></div>
+<footer>\u8F6E\u5230\u4F60\u65F6\u70B9\u51FB\u7A7A\u683C\u843D\u5B50\uFF1B\u5750\u6807\u4E3A\u5217 A-C\u3001\u884C 1-3\u3002</footer>
+<script>
+'use strict'
+/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-tavern:game-state\uFF08token \u5BF9\u8D26\uFF09\u3001
+   \u4E0A\u884C dsh-tavern:game-action\u3002token \u4ECE location.search \u81EA\u8BFB\uFF08\u670D\u52A1\u7AEF\u6CE8\u5165\u7684
+   \u6865\u811A\u672C\u4E0E\u5BBF\u4E3B GameSurface \u90FD\u6309\u540C\u4E00\u7EAA\u5F8B\uFF09\u3002\u65E0 token \u65F6\u6E32\u67D3\u9759\u6001\u9884\u89C8\u3002 */
+var params = new URLSearchParams(window.location.search)
+var TOKEN = params.get('token')
+var board = document.getElementById('board')
+var banner = document.getElementById('banner')
+var current = null
+
+function render(view, session) {
+  current = view
+  document.getElementById('session-id').textContent = session ? session.id : ''
+  var state = view.state
+  var legal = {}
+  for (var i = 0; i < (view.legal || []).length; i += 1) {
+    var a = view.legal[i]
+    legal[a.x + ',' + a.y] = true
+  }
+  board.innerHTML = ''
+  for (var y = 0; y < 3; y += 1) {
+    for (var x = 0; x < 3; x += 1) {
+      var cell = document.createElement('div')
+      var mark = state.board[y][x]
+      cell.className = 'cell' + (mark === 1 ? ' x' : mark === 2 ? ' o' : '')
+      cell.textContent = mark === 1 ? 'X' : mark === 2 ? 'O' : ''
+      if (state.lastMove && state.lastMove.x === x && state.lastMove.y === y) cell.className += ' last'
+      if (!view.finished && legal[x + ',' + y]) {
+        cell.className += ' playable'
+        ;(function (cx, cy) {
+          cell.addEventListener('click', function () {
+            parent.postMessage({ type: 'dsh-tavern:game-action', token: TOKEN, action: { type: 'place', x: cx, y: cy } }, '*')
+          })
+        })(x, y)
+      }
+      board.appendChild(cell)
+    }
+  }
+  banner.textContent = view.finished
+    ? (view.summary || '\u5BF9\u5C40\u7ED3\u675F')
+    : (view.turn === 'x' ? '\u8F6E\u5230 X' : '\u8F6E\u5230 O') + (view.summary ? ' \xB7 ' + view.summary : '')
+}
+
+addEventListener('message', function (event) {
+  var data = event.data
+  if (!data || data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+  render(data.view, data.session)
+})
+
+if (!TOKEN) {
+  render({ state: { board: [[1, 2, 0], [2, 1, 0], [0, 0, 0]], turn: 'o', lastMove: null },
+    legal: [{ type: 'place', x: 2, y: 0 }], finished: false, summary: '\u9759\u6001\u9884\u89C8\uFF08\u65E0 token\uFF09' }, null)
+}
+</script>
+</body>
+</html>
+`;
+var ticTacToe = { manifest, engine, viewHtml };
+
+// packages/plugin/src/games/standard.ts
+var GAME_STATE_MAX_BYTES = 65536;
+var GAME_ACTION_MAX_BYTES = 4096;
+var GAME_LEGAL_ACTIONS_MAX = 64;
+var GAME_SESSION_ID_PATTERN = /^g-[0-9a-f]{8}$/;
+function checkGameManifest(raw, options = {}) {
+  const errors = [];
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, errors: ["game.json must be a JSON object"] };
+  }
+  const value = raw;
+  if (typeof value.id !== "string" || value.id === "") errors.push("id must be a non-empty string");
+  else if (!MOD_ID_PATTERN.test(value.id)) errors.push("id must be [a-z0-9-] labels or reverse-domain joined by '.'");
+  else if (options.directory !== void 0 && value.id !== options.directory) {
+    errors.push(`id '${value.id}' must equal the directory name '${options.directory}'`);
+  }
+  if (typeof value.name !== "string" || value.name.trim() === "") errors.push("name must be a non-empty string");
+  if (typeof value.version !== "string" || value.version.trim() === "") errors.push("version must be a non-empty string");
+  if (value.engines !== void 0) {
+    if (value.engines === null || typeof value.engines !== "object" || Array.isArray(value.engines)) {
+      errors.push("engines must be an object");
+    } else if (value.engines["dsh-tavern"] !== void 0 && typeof value.engines["dsh-tavern"] !== "string") {
+      errors.push("engines.dsh-tavern must be a version range string");
+    }
+  }
+  const players = value.players;
+  if (players === null || typeof players !== "object" || Array.isArray(players)) {
+    errors.push("players must be an object { min, max, roles }");
+  } else {
+    const spec = players;
+    const min = spec.min;
+    const max2 = spec.max;
+    if (!Number.isInteger(min) || !Number.isInteger(max2) || min < 1 || max2 < min) {
+      errors.push("players.min/max must be integers with 1 <= min <= max");
+    }
+    if (!Array.isArray(spec.roles) || spec.roles.length === 0 || !spec.roles.every((role) => typeof role === "string" && role !== "")) {
+      errors.push("players.roles must be a non-empty array of non-empty strings");
+    } else if (Number.isInteger(max2) && spec.roles.length !== max2) {
+      errors.push(`players.roles length (${spec.roles.length}) must equal players.max (${String(max2)})`);
+    }
+    if (Array.isArray(spec.roles) && new Set(spec.roles.map(String)).size !== spec.roles.length) {
+      errors.push("players.roles must not contain duplicates");
+    }
+  }
+  if (value.turnBased !== true) errors.push("turnBased must be true (real-time games are out of scope for bridge v1)");
+  if (typeof value.actionVocabulary !== "string" || value.actionVocabulary.trim() === "") {
+    errors.push("actionVocabulary must be a non-empty string");
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  return {
+    ok: true,
+    errors,
+    manifest: {
+      id: value.id,
+      name: value.name,
+      version: value.version,
+      ...value.engines === void 0 ? {} : { engines: value.engines },
+      players: { min: players.min, max: players.max, roles: [...players.roles] },
+      turnBased: true,
+      actionVocabulary: value.actionVocabulary
+    }
+  };
+}
+function checkGameEngine(candidate) {
+  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return { ok: false, errors: ["engine.mjs must default-export an object"] };
+  }
+  const value = candidate;
+  const metaCheck = checkGameManifest(value.meta);
+  const errors = [];
+  if (!metaCheck.ok) errors.push(`engine.meta invalid: ${metaCheck.errors.join("; ")}`);
+  for (const member of ["createGame", "legalActions", "applyAction", "describe"]) {
+    if (typeof value[member] !== "function") errors.push(`engine.${member} must be a function`);
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, engine: candidate };
+}
+function isJsonSafe(value) {
+  try {
+    const text = JSON.stringify(value);
+    if (typeof text !== "string") return false;
+    return deepEqual(JSON.parse(text), value);
+  } catch {
+    return false;
+  }
+}
+function deepEqual(left, right) {
+  if (Object.is(left, right)) return true;
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    if (left.length !== right.length) return false;
+    return left.every((item, index) => deepEqual(item, right[index]));
+  }
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  if (leftKeys.length !== rightKeys.length || leftKeys.some((key, index) => key !== rightKeys[index])) return false;
+  return leftKeys.every((key) => deepEqual(left[key], right[key]));
+}
+function jsonSizeOf(value) {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), "utf8");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+function currentRoleOf(state, roles) {
+  if (state === null || typeof state !== "object" || Array.isArray(state)) {
+    throw new Error("\u5F15\u64CE state \u5FC5\u987B\u662F JSON \u5BF9\u8C61\uFF08\u5F53\u524D\u56DE\u5408\u5B57\u6BB5 turn \u65E0\u6CD5\u8BFB\u53D6\uFF09");
+  }
+  const turn = state.turn;
+  if (typeof turn !== "string" || turn === "") {
+    throw new Error("\u5F15\u64CE state \u7F3A\u5C11\u5B57\u7B26\u4E32\u5B57\u6BB5 turn\uFF08\u5F53\u524D\u56DE\u5408\u89D2\u8272\uFF09\uFF0C\u65E0\u6CD5\u63A8\u5BFC\u884C\u68CB\u65B9");
+  }
+  if (roles !== void 0 && !roles.includes(turn)) {
+    throw new Error(`state.turn\u300C${turn}\u300D\u4E0D\u5728\u89D2\u8272\u8868 [${roles.join(", ")}] \u5185`);
+  }
+  return turn;
+}
+function smokeTestGameEngine(engine2) {
+  const reasons = [];
+  const roles = engine2.meta.players.roles;
+  let created;
+  try {
+    created = engine2.createGame({ seed: 1 });
+  } catch (cause) {
+    return { ok: false, reasons: [`createGame \u629B\u9519: ${errorMessage2(cause)}`] };
+  }
+  if (created === null || typeof created !== "object" || !("state" in created)) {
+    return { ok: false, reasons: ["createGame \u5FC5\u987B\u8FD4\u56DE { state } \u5F62\u6001"] };
+  }
+  const state = created.state;
+  if (!isJsonSafe(state)) reasons.push("\u521D\u59CB state \u4E0D\u662F deep-JSON-safe");
+  if (jsonSizeOf(state) > GAME_STATE_MAX_BYTES) reasons.push(`\u521D\u59CB state \u5E8F\u5217\u5316\u8D85\u8FC7 ${GAME_STATE_MAX_BYTES} \u5B57\u8282\u4E0A\u9650`);
+  let turn;
+  try {
+    turn = currentRoleOf(state, roles);
+  } catch (cause) {
+    reasons.push(errorMessage2(cause));
+    return { ok: false, reasons };
+  }
+  let suggestions;
+  try {
+    suggestions = engine2.legalActions(state);
+  } catch (cause) {
+    reasons.push(`legalActions \u629B\u9519: ${errorMessage2(cause)}`);
+    return { ok: false, reasons };
+  }
+  if (!Array.isArray(suggestions)) return { ok: false, reasons: ["legalActions \u5FC5\u987B\u8FD4\u56DE\u6570\u7EC4"] };
+  if (suggestions.length > GAME_LEGAL_ACTIONS_MAX) {
+    reasons.push(`legalActions \u5EFA\u8BAE\u96C6\u8D85\u8FC7 ${GAME_LEGAL_ACTIONS_MAX} \u4E0A\u9650\uFF08\u6536\u5230 ${suggestions.length}\uFF09`);
+  }
+  for (const action of suggestions) {
+    if (action === null || typeof action !== "object" || Array.isArray(action) || typeof action.type !== "string" || action.type === "") {
+      reasons.push("legalActions \u4E2D\u5B58\u5728\u7F3A\u5C11 type \u5B57\u7B26\u4E32\u5B57\u6BB5\u7684\u5EFA\u8BAE\u52A8\u4F5C\uFF08\xA73.4\uFF1A\u52A8\u4F5C\u5FC5\u987B\u6709 type\uFF09");
+      break;
+    }
+  }
+  if (suggestions.length === 0) {
+    reasons.push("\u521D\u59CB\u5C40\u9762\u7684\u5EFA\u8BAE\u96C6\u4E3A\u7A7A\uFF0C\u65E0\u6CD5\u8FDB\u884C\u786E\u5B9A\u6027\u70DF\u6D4B\uFF08\u4E5F\u610F\u5473\u7740\u6E38\u620F\u65E0\u6CD5\u5F00\u59CB\uFF09");
+    return { ok: false, reasons };
+  }
+  const first = suggestions[0];
+  const snapshot2 = structuredClone(state);
+  let firstResult;
+  let secondResult;
+  try {
+    firstResult = engine2.applyAction(state, first, turn);
+    secondResult = engine2.applyAction(state, first, turn);
+  } catch (cause) {
+    reasons.push(`applyAction \u5BF9\u5EFA\u8BAE\u96C6\u9996\u4E2A\u52A8\u4F5C\u629B\u9519: ${errorMessage2(cause)}`);
+    return { ok: false, reasons };
+  }
+  if (!deepEqual(firstResult, secondResult)) reasons.push("applyAction \u540C\u8F93\u5165\u4E24\u6B21\u8C03\u7528\u7ED3\u679C\u4E0D\u4E00\u81F4\uFF08\u786E\u5B9A\u6027\u786C\u7EA6\u675F\u4E0D\u8FC7\uFF09");
+  if (!deepEqual(state, snapshot2)) reasons.push("applyAction \u4FEE\u6539\u4E86\u5165\u53C2 state\uFF08\u5FC5\u987B\u6DF1\u62F7\u8D1D\u51FA\u65B0\u6001\uFF09");
+  const shape = firstResult;
+  if (shape.state === void 0 || !Array.isArray(shape.events) || typeof shape.finished !== "boolean") {
+    reasons.push("applyAction \u5FC5\u987B\u8FD4\u56DE { state, events, finished, winner, summary }");
+  } else {
+    if (!isJsonSafe(shape.state)) reasons.push("applyAction \u4EA7\u51FA\u7684\u65B0 state \u4E0D\u662F deep-JSON-safe");
+    if (jsonSizeOf(shape.state) > GAME_STATE_MAX_BYTES) reasons.push(`applyAction \u4EA7\u51FA\u7684 state \u8D85\u8FC7 ${GAME_STATE_MAX_BYTES} \u5B57\u8282\u4E0A\u9650`);
+    if (shape.winner !== null && typeof shape.winner !== "string") reasons.push("applyAction \u7684 winner \u5FC5\u987B\u662F\u89D2\u8272\u5B57\u7B26\u4E32\u6216 null");
+    if (typeof shape.summary !== "string") reasons.push("applyAction \u7684 summary \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
+  }
+  for (const probe of [{ type: "resign" }, { type: "__dsh_tavern_smoke_unknown__" }]) {
+    try {
+      engine2.applyAction(state, probe, turn);
+      reasons.push(`applyAction \u5BF9\u975E\u6CD5\u52A8\u4F5C {type:'${probe.type}'} \u672A\u629B\u9519\uFF08\u5FC5\u987B\u62D2\u7EDD\u800C\u975E\u9759\u9ED8\uFF09`);
+    } catch {
+    }
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+function errorMessage2(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+// packages/plugin/src/games/registry.ts
+var GameRegistry = class _GameRegistry {
+  constructor(options) {
+    this.options = options;
+  }
+  games = /* @__PURE__ */ new Map();
+  /** mod 源独立成册（文件头纪律）：reload/scan 只清 games，mod 注册驻留本进程。 */
+  modGames = /* @__PURE__ */ new Map();
+  static async open(options) {
+    const registry = new _GameRegistry(options);
+    await registry.scan();
+    return registry;
+  }
+  get installedRoot() {
+    return join19(this.options.root, "games", "installed");
+  }
+  /** 注册表快照（按 id 稳定排序；三源合一——builtin/imported/mod）。 */
+  summaries() {
+    return [...this.games.values(), ...this.modGames.values()].sort((a, b) => a.manifest.id < b.manifest.id ? -1 : a.manifest.id > b.manifest.id ? 1 : 0).map((entry) => ({
+      id: entry.manifest.id,
+      name: entry.manifest.name,
+      version: entry.manifest.version,
+      source: entry.source,
+      players: entry.manifest.players,
+      turnBased: entry.manifest.turnBased,
+      actionVocabulary: entry.manifest.actionVocabulary,
+      status: entry.status,
+      ...entry.status === "broken" ? { reason: entry.reason } : {}
+    }));
+  }
+  get(id) {
+    return this.games.get(id) ?? this.modGames.get(id);
+  }
+  /** 重扫（POST games/reload）：清空后重建——builtins 重跑烟测，导入目录重读。 */
+  async reload() {
+    this.games.clear();
+    await this.scan();
+    return this.summaries();
+  }
+  /** 启动扫描：内置源 + imported 目录，坏游戏 broken 入册。 */
+  async scan() {
+    this.loadBuiltins();
+    await this.scanInstalled();
+  }
+  loadBuiltins() {
+    for (const builtin of [ticTacToe]) {
+      const smoke = smokeTestGameEngine(builtin.engine);
+      if (!smoke.ok) {
+        this.games.set(builtin.manifest.id, {
+          source: "builtin",
+          manifest: builtin.manifest,
+          engine: null,
+          viewHtml: null,
+          status: "broken",
+          reason: `\u5185\u7F6E\u5F15\u64CE\u70DF\u6D4B\u5931\u8D25: ${smoke.reasons.join("; ")}`
+        });
+        continue;
+      }
+      this.games.set(builtin.manifest.id, {
+        source: "builtin",
+        manifest: builtin.engine.meta,
+        engine: builtin.engine,
+        viewHtml: builtin.viewHtml,
+        status: "ok",
+        reason: ""
+      });
+    }
+  }
+  async scanInstalled() {
+    const entries = await fs15.readdir(this.installedRoot, { withFileTypes: true }).catch((cause) => {
+      if (cause.code === "ENOENT") return [];
+      throw cause;
+    });
+    const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+    for (const directory of directories) {
+      const entry = await this.loadInstalled(join19(this.installedRoot, directory)).catch((cause) => {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        return { source: "imported", manifest: brokenFallbackManifest(directory), engine: null, viewHtml: null, status: "broken", reason: message, directory: join19(this.installedRoot, directory) };
+      });
+      this.games.set(entry.manifest.id, entry);
+    }
+  }
+  /** 装载一个导入目录：清单校验 → engines 门控 → view 静态检查 → 动态 import → duck 校验 → 烟测。 */
+  async loadInstalled(directory) {
+    const broken = (manifest2, reason) => ({ source: "imported", manifest: manifest2, engine: null, viewHtml: null, status: "broken", reason, directory });
+    let raw;
+    try {
+      raw = JSON.parse(await fs15.readFile(join19(directory, "game.json"), "utf8"));
+    } catch (cause) {
+      return broken(brokenFallbackManifest(directoryNameOf(directory)), `game.json \u7F3A\u5931\u6216\u4E0D\u53EF\u8BFB: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+    const directoryName = directoryNameOf(directory);
+    const check = checkGameManifest(raw, { directory: directoryName });
+    if (!check.ok) return broken(brokenFallbackManifest(directoryName, raw), `\u6E05\u5355\u6821\u9A8C\u5931\u8D25: ${check.errors.join("; ")}`);
+    const engineRange = check.manifest.engines?.["dsh-tavern"];
+    if (engineRange !== void 0) {
+      const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange);
+      if (!verdict.ok) return broken(check.manifest, `\u7248\u672C\u4E0D\u6EE1\u8DB3: ${verdict.reason}`);
+    }
+    let viewHtml2;
+    try {
+      viewHtml2 = await fs15.readFile(join19(directory, "view.html"), "utf8");
+    } catch {
+      return broken(check.manifest, "view.html \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
+    }
+    const viewProblem = staticViewCheck(viewHtml2);
+    if (viewProblem !== void 0) return broken(check.manifest, `view.html ${viewProblem}`);
+    const enginePath = join19(directory, "engine.mjs");
+    const stat = await fs15.stat(enginePath).catch(() => void 0);
+    if (stat?.isFile() !== true) return broken(check.manifest, "engine.mjs \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
+    let imported;
+    try {
+      imported = await import(`${pathToFileURL4(enginePath).href}?v=${stat.mtimeMs}`);
+    } catch (cause) {
+      return broken(check.manifest, `engine.mjs \u5BFC\u5165\u5931\u8D25: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+    const engineCheck = checkGameEngine(imported.default);
+    if (!engineCheck.ok) return broken(check.manifest, `\u5F15\u64CE\u6821\u9A8C\u5931\u8D25: ${engineCheck.errors.join("; ")}`);
+    for (const key of ["id", "name", "version", "players", "turnBased", "actionVocabulary"]) {
+      if (JSON.stringify(check.manifest[key]) !== JSON.stringify(engineCheck.engine.meta[key])) {
+        this.options.logger?.warn?.(`dsh-tavern: game '${check.manifest.id}' \u6E05\u5355\u4E0E engine.meta \u7684 ${key} \u4E0D\u4E00\u81F4\uFF0C\u8FD0\u884C\u65F6\u4EE5 meta \u4E3A\u51C6`);
+      }
+    }
+    const smoke = smokeTestGameEngine(engineCheck.engine);
+    if (!smoke.ok) return broken(check.manifest, `\u70DF\u6D4B\u5931\u8D25: ${smoke.reasons.join("; ")}`);
+    return { source: "imported", manifest: engineCheck.engine.meta, engine: engineCheck.engine, viewHtml: viewHtml2, status: "ok", reason: "", directory };
+  }
+  /**
+   * 从本地目录安装（POST games/install {path}）：校验源目录 → 拷入
+   * installed/<id>/（排除 .git）→ 装载该目录 → 返回该游戏的 status 快照。
+   * 已存在目录拒绝（force=true 先删后装）——镜像 mods/install.ts 落地纪律。
+   */
+  async installFromPath(sourcePath, force = false) {
+    const source = resolve4(sourcePath);
+    if (!existsSync3(source)) throw new Error(`\u6E38\u620F\u5305\u76EE\u5F55\u4E0D\u5B58\u5728: ${sourcePath}`);
+    const stat = await fs15.stat(source);
+    if (!stat.isDirectory()) throw new Error(`\u6E38\u620F\u5305\u8DEF\u5F84\u5FC5\u987B\u662F\u76EE\u5F55: ${sourcePath}`);
+    let raw;
+    try {
+      raw = JSON.parse(await fs15.readFile(join19(source, "game.json"), "utf8"));
+    } catch (cause) {
+      throw new Error(`\u6E90\u76EE\u5F55\u7F3A\u5C11\u53EF\u8BFB\u7684 game.json: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+    const id = typeof raw?.["id"] === "string" ? raw["id"] : "";
+    const check = checkGameManifest(raw, { directory: id || void 0 });
+    if (!check.ok || !check.manifest) throw new Error(`\u6E38\u620F\u6E05\u5355\u6821\u9A8C\u5931\u8D25: ${check.errors.join("; ")}`);
+    const target = join19(this.installedRoot, check.manifest.id);
+    await fs15.mkdir(this.installedRoot, { recursive: true });
+    if (existsSync3(target)) {
+      if (force !== true) throw new Error(`\u6E38\u620F '${check.manifest.id}' \u5DF2\u5B89\u88C5\uFF08force=true \u53EF\u8986\u76D6\uFF09`);
+      rmSync3(target, { recursive: true, force: true });
+    }
+    cpSync2(source, target, { recursive: true, filter: (src) => !src.endsWith(".git") });
+    const entry = await this.loadInstalled(target);
+    this.games.set(entry.manifest.id, entry);
+    return this.summaries().find((summary) => summary.id === entry.manifest.id);
+  }
+  /**
+   * 从 git URL 安装（POST games/install {url}）：镜像 mods/install.ts 的 git
+   * 流程——parseGitSource 复用（GitHub slug/完整 git URL/#ref 语法同一份），
+   * `git clone --depth 1` 到临时目录，本地 game.json 定 id 后拷入 installed/。
+   * 与 mods 的差异（如实）：无 raw 预读（游戏包无配额敏感的元数据预读需求），
+   * 校验全部发生在本地克隆之后。cloneImpl 供测试注入。
+   */
+  async installFromGit(url, force = false, options = {}) {
+    const timeoutMs = options.timeoutMs ?? 6e4;
+    const source = parseGitSource(url);
+    const workRoot = mkdtempSync3(join19(tmpdir3(), "dsh-tavern-gameinstall-"));
+    try {
+      const cloneDir = join19(workRoot, "clone");
+      await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs);
+      return await this.installFromPath(cloneDir, force);
+    } finally {
+      rmSync3(workRoot, { recursive: true, force: true });
+    }
+  }
+  /* ------------------------- Mod 源（提案 §4.5 第 3 源，P3） ------------------------- */
+  /**
+   * Mod 游戏注册（`api.games.register` 的接线终点）：engine 是进程内对象
+   * （duck 校验 + 烟测 fail-fast——失败抛错 = Mod setup 失败，镜像工具注册），
+   * view 是 HTML 字符串（Mod 无静态文件服务，维持内联纪律；过 §4.6 同款静态
+   * 检查）。定义顶层冗余字段（id/name/version/players/turnBased/actionVocabulary）
+   * 必须与 engine.meta 一致——运行时以 meta 为准（§6 双子段纪律的注册期收口）。
+   */
+  registerModGame(definition) {
+    if (typeof definition !== "object" || definition === null || Array.isArray(definition)) {
+      throw new Error("game registration must be an object");
+    }
+    const record = definition;
+    const engineCheck = checkGameEngine(record.engine);
+    if (!engineCheck.ok) throw new Error(`\u6E38\u620F\u5F15\u64CE\u6821\u9A8C\u5931\u8D25: ${engineCheck.errors.join("; ")}`);
+    const engine2 = engineCheck.engine;
+    const manifest2 = engine2.meta;
+    const redundant = [
+      ["id", record.id],
+      ["name", record.name],
+      ["version", record.version],
+      ["players", record.players],
+      ["turnBased", record.turnBased],
+      ["actionVocabulary", record.actionVocabulary]
+    ];
+    for (const [key, value] of redundant) {
+      if (JSON.stringify(value) !== JSON.stringify(manifest2[key])) {
+        throw new Error(`\u6CE8\u518C\u5B57\u6BB5 ${key} \u4E0E engine.meta.${key} \u4E0D\u4E00\u81F4\uFF08\u8FD0\u884C\u65F6\u4EE5 meta \u4E3A\u51C6\uFF0C\u4E24\u4FA7\u5FC5\u987B\u76F8\u7B49\uFF09`);
+      }
+    }
+    const smoke = smokeTestGameEngine(engine2);
+    if (!smoke.ok) throw new Error(`\u5F15\u64CE\u70DF\u6D4B\u5931\u8D25: ${smoke.reasons.join("; ")}`);
+    if (typeof record.view !== "string" || record.view.trim() === "") {
+      throw new Error("view \u5FC5\u987B\u662F\u975E\u7A7A HTML \u5B57\u7B26\u4E32\uFF08Mod \u6E38\u620F\u89C6\u56FE\u8D70\u5185\u8054\u7EAA\u5F8B\uFF0C\u65E0\u9759\u6001\u6587\u4EF6\u670D\u52A1\uFF09");
+    }
+    const viewProblem = staticViewCheck(record.view);
+    if (viewProblem !== void 0) throw new Error(`view ${viewProblem}`);
+    if (this.get(manifest2.id) !== void 0) {
+      throw new Error(`game '${manifest2.id}' is already registered (builtin, imported or another mod holds this id)`);
+    }
+    this.modGames.set(manifest2.id, {
+      source: "mod",
+      manifest: manifest2,
+      engine: engine2,
+      viewHtml: record.view,
+      status: "ok",
+      reason: ""
+    });
+    return this.summaries().find((summary) => summary.id === manifest2.id);
+  }
+  /**
+   * Mod 游戏反注册（Mod 卸载经宿主 offRegistrations 调用）。engine 传入时做
+   * 身份对账：只摘除同一引擎实例的注册（reload 后旧实例的 off 触碰新实例是
+   * no-op，镜像 onButton 的「反注册只撤销同一 handler」纪律）。builtin/imported
+   * 源不受本方法影响。摘除后其活跃会话由 sessions 的孤儿判定（按 gameId 动态
+   * 查注册表）自然接管——可查看不可落子。
+   */
+  unregisterModGame(id, engine2) {
+    const entry = this.modGames.get(id);
+    if (entry === void 0) return false;
+    if (engine2 !== void 0 && entry.engine !== engine2) return false;
+    this.modGames.delete(id);
+    return true;
+  }
+};
+function brokenFallbackManifest(directory, raw) {
+  const value = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  return {
+    id: typeof value.id === "string" && value.id !== "" ? value.id : directory,
+    name: typeof value.name === "string" && value.name !== "" ? value.name : directory,
+    version: typeof value.version === "string" ? value.version : "",
+    players: { min: 2, max: 2, roles: [] },
+    turnBased: true,
+    actionVocabulary: ""
+  };
+}
+function directoryNameOf(directory) {
+  const parts = directory.split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) ?? directory;
+}
+function staticViewCheck(viewHtml2) {
+  if (/src\s*=\s*["']https?:/i.test(viewHtml2)) return "\u5305\u542B\u5916\u94FE script/\u8D44\u6E90\uFF08\u5FC5\u987B\u81EA\u5305\u542B\uFF09";
+  if (/href\s*=\s*["']https?:/i.test(viewHtml2)) return "\u5305\u542B\u5916\u94FE\u6837\u5F0F/\u94FE\u63A5\uFF08\u5FC5\u987B\u81EA\u5305\u542B\uFF09";
+  if (viewHtml2.includes("fetch(")) return "\u5305\u542B fetch \u7F51\u7EDC\u8C03\u7528\uFF08connect-src 'none' \u7EAA\u5F8B\uFF09";
+  return void 0;
+}
+
+// packages/plugin/src/games/sessions.ts
+import { createHash as createHash10, randomBytes as randomBytes2 } from "node:crypto";
+import { promises as fs16 } from "node:fs";
+import { join as join20 } from "node:path";
+var GameBridgeError = class extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+};
+var OWNER_LABEL = { human: "\u4EBA\u7C7B\u73A9\u5BB6", agent: "Agent" };
+var GameSessionStore = class _GameSessionStore {
+  constructor(options) {
+    this.options = options;
+  }
+  tail = Promise.resolve();
+  static async open(options) {
+    await fs16.mkdir(join20(options.root, "games", "sessions"), { recursive: true });
+    return new _GameSessionStore(options);
+  }
+  get sessionsRoot() {
+    return join20(this.options.root, "games", "sessions");
+  }
+  /* ------------------------------ 查询面 ------------------------------ */
+  /** 会话目录 name+size+mtimeMs 的 sha256（镜像 tavern-store storeRevision 的便宜纪律：只 stat 不读内容）。 */
+  async revision() {
+    const hash = createHash10("sha256");
+    const names = (await fs16.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
+    for (const name2 of names) {
+      const stat = await fs16.stat(join20(this.sessionsRoot, name2)).catch(() => void 0);
+      hash.update(`${name2}\0${stat === void 0 ? "missing" : `${stat.size}\0${stat.mtimeMs}`}
+`);
+    }
+    return hash.digest("base64url");
+  }
+  /** 全部会话快照（updatedAt 降序）；character+chatId 双全时按聊天过滤。 */
+  async list(filter = {}) {
+    const sessions = await this.loadAll();
+    const summaries = sessions.map((session) => this.summarize(session));
+    if (filter.character !== void 0 && filter.chatId !== void 0 && filter.character !== "" && filter.chatId !== "") {
+      return summaries.filter((summary) => summary.chat.character === filter.character && summary.chat.chatId === filter.chatId);
+    }
+    return summaries;
+  }
+  /** 会话视图快照（含孤儿标记）。 */
+  async get(sessionId) {
+    const session = await this.load(sessionId);
+    return { session: this.summarize(session), view: this.viewOf(session) };
+  }
+  /** 本聊天最近活跃（未终局）会话 id；无则 undefined（game_state/game_move 缺省寻址）。 */
+  async latestActive(character, chatId) {
+    const sessions = await this.loadAll();
+    const active = sessions.filter((session) => !session.finished && session.chat.character === character && session.chat.chatId === chatId).sort((a, b) => a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : a.id < b.id ? 1 : -1);
+    return active[0]?.id;
+  }
+  /* ------------------------------ 生命周期 ------------------------------ */
+  /** 开局（POST games/start 与工具 game_start 共用）。 */
+  async start(params) {
+    if (typeof params.character !== "string" || params.character.trim() === "" || typeof params.chatId !== "string" || params.chatId.trim() === "") {
+      throw new GameBridgeError("invalid", "character \u4E0E chatId \u4E0D\u80FD\u4E3A\u7A7A\uFF08\u4F1A\u8BDD\u5FC5\u987B\u7ED1\u5B9A\u804A\u5929\uFF09");
+    }
+    const entry = this.options.registry().get(params.gameId);
+    if (entry === void 0) throw new GameBridgeError("not-found", `\u6E38\u620F '${params.gameId}' \u4E0D\u5728\u6CE8\u518C\u8868`);
+    if (entry.status !== "ok" || entry.engine === null) {
+      throw new GameBridgeError("unavailable", `\u6E38\u620F '${params.gameId}' \u4E0D\u53EF\u7528: ${entry.reason}`);
+    }
+    const roles = entry.manifest.players.roles;
+    if (entry.manifest.players.max !== 2 || roles.length !== 2) {
+      throw new GameBridgeError("invalid", `\u300C${entry.manifest.name}\u300D\u58F0\u660E ${entry.manifest.players.max} \u540D\u73A9\u5BB6\uFF1B\u6E38\u620F\u6865 v1 \u53EA\u652F\u6301\u4E00\u4EBA\u7C7B\u4E00 Agent \u7684\u53CC\u4EBA\u5BF9\u5C40`);
+    }
+    const humanRole = params.humanRole ?? roles[0];
+    if (!roles.includes(humanRole)) {
+      throw new GameBridgeError("invalid", `humanRole\u300C${humanRole}\u300D\u4E0D\u5728\u89D2\u8272\u8868 [${roles.join(", ")}] \u5185`);
+    }
+    const created = entry.engine.createGame();
+    const state = created.state;
+    if (!isJsonSafe(state) || jsonSizeOf(state) > GAME_STATE_MAX_BYTES) {
+      throw new GameBridgeError("invalid", "\u5F15\u64CE createGame \u4EA7\u51FA\u7684\u521D\u59CB state \u8FDD\u53CD JSON-safe/\u5C3A\u5BF8\u5951\u7EA6");
+    }
+    currentRoleOf(state, roles);
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const session = {
+      id: `g-${randomBytes2(4).toString("hex")}`,
+      gameId: entry.manifest.id,
+      // 玩家按 manifest roles 的规范序排列（展示与 turn 推导都以角色表为锚）。
+      players: roles.map((role) => ({ role, owner: role === humanRole ? "human" : "agent" })),
+      state,
+      moves: [],
+      createdAt: now,
+      updatedAt: now,
+      chat: { character: params.character, chatId: params.chatId },
+      finished: false,
+      winner: null,
+      summary: ""
+    };
+    await this.persist(session);
+    return { session: this.summarize(session), view: this.viewOf(session) };
+  }
+  /** 人类落子（HTTP POST games/action/:id）：当前回合 owner 必须是 human。 */
+  humanAction(sessionId, action) {
+    return this.enqueue(() => this.act(sessionId, action, "human"));
+  }
+  /** Agent 落子（工具 game_move）：当前回合 owner 必须是 agent。 */
+  agentMove(sessionId, action) {
+    return this.enqueue(() => this.act(sessionId, action, "agent"));
+  }
+  /** 串行化读-改-写（镜像 tavern-store chatMutationTail：防止并发落子丢手）。 */
+  enqueue(operation) {
+    const next = this.tail.then(operation, operation);
+    this.tail = next.catch(() => void 0);
+    return next;
+  }
+  async act(sessionId, action, owner) {
+    if (typeof sessionId !== "string" || !GAME_SESSION_ID_PATTERN.test(sessionId)) {
+      throw new GameBridgeError("not-found", `\u4F1A\u8BDD id\u300C${String(sessionId)}\u300D\u4E0D\u5408\u6CD5`);
+    }
+    const session = await this.load(sessionId);
+    const entry = this.options.registry().get(session.gameId);
+    if (entry === void 0 || entry.status !== "ok" || entry.engine === null) {
+      throw new GameBridgeError("unavailable", `\u4F1A\u8BDD\u7684\u6E38\u620F '${session.gameId}' \u5DF2\u4E0D\u5728\u6CE8\u518C\u8868\uFF08orphaned\uFF09\uFF0C\u5BF9\u5C40\u53EA\u8BFB\u4E0D\u53EF\u843D\u5B50`);
+    }
+    const engine2 = entry.engine;
+    const roles = entry.manifest.players.roles;
+    if (session.finished) {
+      throw new GameBridgeError("turn", `\u5BF9\u5C40\u5DF2\u7ED3\u675F\uFF08${session.summary}\uFF09\uFF0C\u4E0D\u80FD\u518D\u843D\u5B50`);
+    }
+    const actor = currentRoleOf(session.state, roles);
+    const player = session.players.find((candidate) => candidate.role === actor);
+    if (player === void 0) {
+      throw new GameBridgeError("unavailable", `\u4F1A\u8BDD\u89D2\u8272\u8868 [${session.players.map((p) => p.role).join(", ")}] \u4E0E state.turn\u300C${actor}\u300D\u4E0D\u4E00\u81F4`);
+    }
+    if (player.owner !== owner) {
+      throw new GameBridgeError(
+        "turn",
+        owner === "agent" ? `\u73B0\u5728\u8F6E\u5230 ${actor}\uFF08${OWNER_LABEL[player.owner]}\uFF09\uFF0C\u4E0D\u662F Agent \u7684\u56DE\u5408` : `\u73B0\u5728\u8F6E\u5230 ${actor}\uFF08${OWNER_LABEL[player.owner]}\uFF09\uFF0C\u8BF7\u7B49\u5F85 AI \u843D\u5B50`
+      );
+    }
+    if (action === null || typeof action !== "object" || Array.isArray(action)) {
+      throw new GameBridgeError("invalid", "\u52A8\u4F5C\u5FC5\u987B\u662F JSON \u5BF9\u8C61");
+    }
+    if (typeof action.type !== "string" || action.type === "") {
+      throw new GameBridgeError("invalid", "\u52A8\u4F5C\u7F3A\u5C11 type \u5B57\u6BB5");
+    }
+    if (jsonSizeOf(action) > GAME_ACTION_MAX_BYTES) {
+      throw new GameBridgeError("invalid", `\u52A8\u4F5C\u5E8F\u5217\u5316\u8D85\u8FC7 ${GAME_ACTION_MAX_BYTES} \u5B57\u8282\u4E0A\u9650`);
+    }
+    let describe;
+    let summary;
+    let winner;
+    let finished;
+    let nextState = session.state;
+    if (action.type === "resign") {
+      winner = session.players.find((candidate) => candidate.role !== actor).role;
+      finished = true;
+      describe = `${actor} \u8BA4\u8F93`;
+      summary = describe;
+    } else {
+      try {
+        describe = engine2.describe(session.state, actor, action);
+      } catch {
+        describe = `${actor} \u7684\u52A8\u4F5C ${action.type}`;
+      }
+      let result;
+      try {
+        result = engine2.applyAction(session.state, action, actor);
+      } catch (cause) {
+        throw new GameBridgeError("illegal", cause instanceof Error ? cause.message : String(cause));
+      }
+      nextState = result.state;
+      if (!isJsonSafe(nextState) || jsonSizeOf(nextState) > GAME_STATE_MAX_BYTES) {
+        throw new GameBridgeError("invalid", "\u5F15\u64CE applyAction \u4EA7\u51FA\u7684\u65B0 state \u8FDD\u53CD JSON-safe/\u5C3A\u5BF8\u5951\u7EA6");
+      }
+      summary = result.summary;
+      winner = result.winner;
+      finished = result.finished === true;
+    }
+    session.moves.push({ actor, action, at: (/* @__PURE__ */ new Date()).toISOString(), summary, describe });
+    session.state = nextState;
+    session.finished = finished;
+    session.winner = finished ? winner : session.winner;
+    session.summary = summary;
+    session.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    await this.persist(session);
+    return { session: this.summarize(session), view: this.viewOf(session), describe };
+  }
+  /* ------------------------------ 内部 ------------------------------ */
+  async persist(session) {
+    await fs16.mkdir(this.sessionsRoot, { recursive: true });
+    writeFileAtomic(join20(this.sessionsRoot, `${session.id}.json`), `${JSON.stringify(session, null, 2)}
+`);
+  }
+  async load(sessionId) {
+    if (!GAME_SESSION_ID_PATTERN.test(sessionId)) {
+      throw new GameBridgeError("not-found", `\u4F1A\u8BDD '${sessionId}' \u4E0D\u5B58\u5728`);
+    }
+    let raw;
+    try {
+      raw = await fs16.readFile(join20(this.sessionsRoot, `${sessionId}.json`), "utf8");
+    } catch {
+      throw new GameBridgeError("not-found", `\u4F1A\u8BDD '${sessionId}' \u4E0D\u5B58\u5728`);
+    }
+    try {
+      const session = JSON.parse(raw);
+      if (session === null || typeof session !== "object" || session.id !== sessionId) {
+        throw new Error("shape mismatch");
+      }
+      return session;
+    } catch (cause) {
+      throw new GameBridgeError("unavailable", `\u4F1A\u8BDD '${sessionId}' \u6587\u4EF6\u635F\u574F: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  }
+  async loadAll() {
+    const names = (await fs16.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
+    const sessions = [];
+    for (const name2 of names) {
+      try {
+        sessions.push(await this.load(name2.slice(0, -".json".length)));
+      } catch {
+      }
+    }
+    return sessions;
+  }
+  /** 孤儿判定：gameId 不在注册表或 broken。 */
+  orphaned(session) {
+    const entry = this.options.registry().get(session.gameId);
+    return entry === void 0 || entry.status !== "ok" || entry.engine === null;
+  }
+  summarize(session) {
+    const entry = this.options.registry().get(session.gameId);
+    let turn = "";
+    try {
+      turn = currentRoleOf(session.state, entry?.manifest.players.roles);
+    } catch {
+      turn = "";
+    }
+    return {
+      id: session.id,
+      gameId: session.gameId,
+      gameName: entry?.manifest.name ?? session.gameId,
+      actionVocabulary: entry?.manifest.actionVocabulary ?? "",
+      players: session.players.map((player) => ({ ...player })),
+      turn,
+      finished: session.finished,
+      winner: session.winner,
+      summary: session.summary,
+      orphaned: this.orphaned(session),
+      chat: { ...session.chat },
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      moves: session.moves.map((move) => ({ ...move, action: { ...move.action } }))
+    };
+  }
+  viewOf(session) {
+    const entry = this.options.registry().get(session.gameId);
+    let turn = "";
+    try {
+      turn = currentRoleOf(session.state, entry?.manifest.players.roles);
+    } catch {
+      turn = "";
+    }
+    let legal = [];
+    if (!session.finished && entry?.engine != null) {
+      try {
+        legal = entry.engine.legalActions(session.state);
+      } catch {
+        legal = [];
+      }
+    }
+    return { state: session.state, turn, legal, finished: session.finished, summary: session.summary };
+  }
+};
+
+// packages/plugin/src/games/view.ts
+var GAME_STATE_MESSAGE = "dsh-tavern:game-state";
+var GAME_ACTION_MESSAGE = "dsh-tavern:game-action";
+function gameBridgeScript() {
+  return `(function () {
+  var token = '';
+  try { token = new URLSearchParams(location.search).get('token') || ''; } catch (_) { return; }
+  if (token === '') return;
+  var latest = null;
+  var subs = [];
+  var notify = function (payload) {
+    for (var index = 0; index < subs.length; index += 1) { try { subs[index](payload); } catch (_) {} }
+  };
+  window.dshTavernGame = {
+    onState: function (callback) {
+      subs.push(callback);
+      if (latest !== null) { try { callback(latest); } catch (_) {} }
+      return function () {
+        var index = subs.indexOf(callback);
+        if (index >= 0) subs.splice(index, 1);
+      };
+    },
+    state: function () { return latest; },
+    send: function (action) {
+      try { parent.postMessage({ type: ${JSON.stringify(GAME_ACTION_MESSAGE)}, token: token, action: action }, '*'); } catch (_) {}
+    },
+  };
+  addEventListener('message', function (event) {
+    var data = event.data;
+    if (!data || data.type !== ${JSON.stringify(GAME_STATE_MESSAGE)} || data.token !== token) return;
+    latest = data;
+    notify(data);
+  });
+})();`;
+}
+function renderGameViewDocument(viewHtml2) {
+  const bridge = `<script>${gameBridgeScript()}</script>`;
+  const document = String(viewHtml2 ?? "");
+  const headMatch = /<head(?:\s[^>]*)?>/i.exec(document);
+  if (headMatch !== null) {
+    const at = headMatch.index + headMatch[0].length;
+    return renderModHtmlDocument(`${document.slice(0, at)}${bridge}${document.slice(at)}`, MOD_HTML_DEFAULT_CSP);
+  }
+  if (/<html(?:\s[^>]*)?>/i.test(document)) {
+    return renderModHtmlDocument(document.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${bridge}</head>`), MOD_HTML_DEFAULT_CSP);
+  }
+  return renderModHtmlDocument(`<!doctype html><html><head>${bridge}</head><body>${document}</body></html>`, MOD_HTML_DEFAULT_CSP);
+}
+
+// packages/plugin/src/games/service.ts
+async function openGamesService(options) {
+  const registry = await GameRegistry.open({ root: options.root, hostVersion: options.hostVersion, logger: options.logger });
+  const sessions = await GameSessionStore.open({ root: options.root, registry: () => registry });
+  const service = {
+    async list(params) {
+      const games = registry.summaries();
+      const sessionList = await sessions.list(params);
+      return { games, sessions: sessionList };
+    },
+    revision: () => sessions.revision(),
+    async start(params) {
+      const outcome = await sessions.start(params);
+      emitGamesChanged();
+      return outcome;
+    },
+    state: (sessionId) => sessions.get(sessionId),
+    async humanAction(sessionId, action) {
+      const outcome = await sessions.humanAction(sessionId, action);
+      emitGamesChanged();
+      return outcome;
+    },
+    async agentMove(sessionId, action) {
+      const outcome = await sessions.agentMove(sessionId, action);
+      emitGamesChanged();
+      return outcome;
+    },
+    async manifestOf(gameId) {
+      const entry = registry.get(gameId);
+      if (entry === void 0) throw new GameBridgeError("not-found", `\u6E38\u620F '${gameId}' \u4E0D\u5728\u6CE8\u518C\u8868`);
+      if (entry.status !== "ok") throw new GameBridgeError("unavailable", `\u6E38\u620F '${gameId}' \u4E0D\u53EF\u7528: ${entry.reason}`);
+      return entry.manifest;
+    },
+    latestActive: (character, chatId) => sessions.latestActive(character, chatId),
+    async view(gameId, sessionId) {
+      const entry = registry.get(gameId);
+      if (entry === void 0) throw new GameBridgeError("not-found", `\u6E38\u620F '${gameId}' \u4E0D\u5728\u6CE8\u518C\u8868`);
+      if (entry.status !== "ok" || entry.viewHtml === null) {
+        throw new GameBridgeError("unavailable", `\u6E38\u620F '${gameId}' \u4E0D\u53EF\u7528: ${entry.reason}`);
+      }
+      const { session } = await sessions.get(sessionId);
+      if (session.gameId !== entry.manifest.id) {
+        throw new GameBridgeError("not-found", `\u4F1A\u8BDD '${sessionId}' \u4E0D\u5C5E\u4E8E\u6E38\u620F '${gameId}'`);
+      }
+      return renderGameViewDocument(entry.viewHtml);
+    },
+    async install(source, force = false) {
+      if (typeof source.path === "string" && source.path.trim() !== "") {
+        const game = await registry.installFromPath(source.path, force);
+        emitGamesChanged();
+        return { game };
+      }
+      if (typeof source.url === "string" && source.url.trim() !== "") {
+        const game = await registry.installFromGit(source.url, force, options.gameInstall ?? {});
+        emitGamesChanged();
+        return { game };
+      }
+      throw new GameBridgeError("invalid", "expected { path } or { url }");
+    },
+    async reload() {
+      const games = await registry.reload();
+      emitGamesChanged();
+      return { games };
+    },
+    registerModGame(definition) {
+      const game = registry.registerModGame(definition);
+      emitGamesChanged();
+      return { game };
+    },
+    unregisterModGame(id, engine2) {
+      const removed = registry.unregisterModGame(id, engine2);
+      if (removed) emitGamesChanged();
+      return removed;
+    },
+    dispose() {
+      unpublish();
+    }
+  };
+  const unpublish = publishGamesService(service);
+  return service;
+}
+
+// packages/plugin/src/games/http.ts
+function isGamesRoute(route) {
+  return route === "games" || route.startsWith("games/");
+}
+function statusOf(code) {
+  if (code === "not-found") return 404;
+  if (code === "turn") return 409;
+  if (code === "unavailable") return 503;
+  return 400;
+}
+function sendJson(res, status2, body) {
+  if (res.writableEnded) return;
+  res.statusCode = status2;
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.setHeader("cache-control", "no-store");
+  res.end(JSON.stringify(body));
+}
+function sendHtml(res, document) {
+  if (res.writableEnded) return;
+  res.statusCode = 200;
+  res.setHeader("content-type", "text/html; charset=utf-8");
+  res.setHeader("cache-control", "no-store");
+  res.setHeader("x-content-type-options", "nosniff");
+  res.end(document);
+}
+function sendError(res, cause) {
+  if (cause instanceof GameBridgeError) {
+    sendJson(res, statusOf(cause.code), { ok: false, message: cause.message, code: cause.code });
+    return;
+  }
+  throw cause;
+}
+async function handleGamesApi(options) {
+  const { req, res, url, route, method } = options;
+  const notFound = () => sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  const service = await Promise.resolve(options.resolveService()).catch((cause) => {
+    throw new Error(`\u6E38\u620F\u8FD0\u884C\u65F6\u4E0D\u53EF\u7528: ${cause instanceof Error ? cause.message : String(cause)}`);
+  });
+  if (service === void 0) {
+    sendJson(res, 503, { ok: false, message: "\u6E38\u620F\u8FD0\u884C\u65F6\u4E0D\u53EF\u7528\uFF08\u63D2\u4EF6\u672A\u88C5\u8F7D\u6E38\u620F\u670D\u52A1\uFF09", code: "unavailable" });
+    return;
+  }
+  try {
+    if (method === "GET" && route === "games/list") {
+      const character = url.searchParams.get("character") ?? "";
+      const chatId = url.searchParams.get("chatId") ?? "";
+      const filter = character !== "" && chatId !== "" ? { character, chatId } : {};
+      const { games, sessions } = await service.list(filter);
+      return sendJson(res, 200, { ok: true, games, sessions });
+    }
+    if (method === "GET" && route === "games/revision") {
+      return sendJson(res, 200, { ok: true, revision: await service.revision() });
+    }
+    if (method === "POST" && route === "games/start") {
+      const body = await readModRequestBody(req);
+      if (typeof body.gameId !== "string" || body.gameId.trim() === "") throw new GameBridgeError("invalid", "expected { gameId }");
+      if (typeof body.character !== "string" || body.character.trim() === "" || typeof body.chatId !== "string" || body.chatId.trim() === "") {
+        throw new GameBridgeError("invalid", "expected non-empty { character, chatId }");
+      }
+      const humanRole = typeof body.humanRole === "string" && body.humanRole !== "" ? body.humanRole : void 0;
+      const { session, view } = await service.start({ gameId: body.gameId, character: body.character, chatId: body.chatId, humanRole });
+      return sendJson(res, 200, { ok: true, session, view });
+    }
+    if (method === "GET" && route.startsWith("games/state/")) {
+      const sessionId = decodeURIComponent(route.slice("games/state/".length));
+      const { session, view } = await service.state(sessionId);
+      return sendJson(res, 200, { ok: true, session, view });
+    }
+    if (method === "POST" && route.startsWith("games/action/")) {
+      const sessionId = decodeURIComponent(route.slice("games/action/".length));
+      const body = await readModRequestBody(req);
+      const action = body.action;
+      if (action === null || typeof action !== "object" || Array.isArray(action)) {
+        throw new GameBridgeError("invalid", "expected { action }");
+      }
+      const { session, view } = await service.humanAction(sessionId, action);
+      return sendJson(res, 200, { ok: true, session, view });
+    }
+    if (method === "GET" && route.startsWith("games/") && route.includes("/view/")) {
+      const segments = route.split("/");
+      if (segments.length === 4 && segments[2] === "view") {
+        let gameId = segments[1];
+        let sessionId = segments[3];
+        try {
+          gameId = decodeURIComponent(gameId);
+          sessionId = decodeURIComponent(sessionId);
+        } catch {
+          return notFound();
+        }
+        const html = await service.view(gameId, sessionId);
+        return sendHtml(res, html);
+      }
+      return notFound();
+    }
+    if (method === "POST" && route === "games/install") {
+      const body = await readModRequestBody(req);
+      const source = {};
+      if (typeof body.path === "string" && body.path.trim() !== "") source.path = body.path;
+      else if (typeof body.url === "string" && body.url.trim() !== "") source.url = body.url;
+      else throw new GameBridgeError("invalid", "expected { path }\uFF08\u672C\u5730\u6E38\u620F\u5305\u76EE\u5F55\uFF09\u6216 { url }\uFF08git \u6E90\uFF09");
+      const { game } = await service.install(source, body.force === true);
+      return sendJson(res, 200, { ok: true, game });
+    }
+    if (method === "POST" && route === "games/reload") {
+      const { games } = await service.reload();
+      return sendJson(res, 200, { ok: true, games });
+    }
+    return notFound();
+  } catch (cause) {
+    sendError(res, cause);
+  }
+}
+
+// packages/plugin/src/card-workbench/plans.ts
+import { promises as fs17 } from "node:fs";
 import * as path11 from "node:path";
 var MAX_PLAN_CHANGES = 16;
 var MAX_PLAN_ENTRIES = 32;
@@ -18236,8 +19564,8 @@ function planFile(dir, planId) {
 }
 async function writeAtomicText3(file, text) {
   const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-  await fs15.writeFile(tmp, text, "utf8");
-  await fs15.rename(tmp, file);
+  await fs17.writeFile(tmp, text, "utf8");
+  await fs17.rename(tmp, file);
 }
 function newPlanId() {
   return `plan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -18401,7 +19729,7 @@ async function proposeCardPlan(dir, character, input) {
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     status: "pending"
   };
-  await fs15.mkdir(plansDir(dir), { recursive: true });
+  await fs17.mkdir(plansDir(dir), { recursive: true });
   await writeAtomicText3(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
@@ -18431,7 +19759,7 @@ async function proposeWorldPlan(dir, world, input) {
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     status: "pending"
   };
-  await fs15.mkdir(plansDir(dir), { recursive: true });
+  await fs17.mkdir(plansDir(dir), { recursive: true });
   await writeAtomicText3(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
@@ -18440,7 +19768,7 @@ async function getPlan(dir, planId) {
   if (typeof planId !== "string" || !PLAN_ID_PATTERN.test(planId)) return void 0;
   let text;
   try {
-    text = (await fs15.readFile(planFile(dir, planId))).toString("utf8");
+    text = (await fs17.readFile(planFile(dir, planId))).toString("utf8");
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -18450,7 +19778,7 @@ async function getPlan(dir, planId) {
 async function listPlans(dir, filter = {}) {
   let files;
   try {
-    files = await fs15.readdir(plansDir(dir));
+    files = await fs17.readdir(plansDir(dir));
   } catch (cause) {
     if (cause.code === "ENOENT") return [];
     throw cause;
@@ -18459,7 +19787,7 @@ async function listPlans(dir, filter = {}) {
   for (const file of files) {
     if (!file.endsWith(".json")) continue;
     try {
-      const plan = normalizePlan(JSON.parse((await fs15.readFile(path11.join(plansDir(dir), file))).toString("utf8")));
+      const plan = normalizePlan(JSON.parse((await fs17.readFile(path11.join(plansDir(dir), file))).toString("utf8")));
       if (plan !== void 0) plans.push(plan);
     } catch {
     }
@@ -18510,17 +19838,23 @@ function createLazyProjection(options) {
       for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
         if (!match(binding)) continue;
         started.add(agentId);
-        await load(agentId);
+        await enqueueLoad(agentId);
       }
     } catch {
     }
+  }
+  const loadChains = /* @__PURE__ */ new Map();
+  function enqueueLoad(agentId) {
+    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId), () => load(agentId));
+    loadChains.set(agentId, next.catch(() => void 0));
+    return next;
   }
   return {
     valueOf(agentId) {
       if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
       if (!started.has(agentId)) {
         started.add(agentId);
-        void load(agentId);
+        void enqueueLoad(agentId);
       }
       return cache.get(agentId);
     },
@@ -20374,6 +21708,7 @@ var updateServiceInstance;
 var updateChecksEnabledFlag = true;
 var modHostPromise;
 var modHostContext;
+var gamesServicePromise;
 var templatesEnabledFlag = true;
 var TavernArchitectureConflictError = class extends Error {
   code = "TAVERN_ARCHITECTURE_CONFLICT";
@@ -20704,8 +22039,25 @@ function apply(ctx, config = {}) {
     }
   });
   ctx.effect(() => tavernUpdate(ctx).start(), "dsh-tavern: update auto-check");
+  gamesServicePromise = openGamesService({
+    root: dshHomePath("tavern"),
+    hostVersion: BUILD_INFO.version,
+    logger: { warn: (message) => ctx.logger?.warn?.(message) }
+  });
+  gamesServicePromise.catch((error) => {
+    ctx.logger?.warn?.(`dsh-tavern: games service failed to start: ${error instanceof Error ? error.message : String(error)}`);
+  });
+  try {
+    ctx.effect?.(() => () => {
+      void gamesServicePromise?.then((service) => service.dispose()).catch(() => {
+      });
+      gamesServicePromise = void 0;
+    }, "dsh-tavern: games unload");
+  } catch {
+  }
   modHostContext = ctx;
-  void modHost().catch((error) => {
+  void gamesServicePromise.catch(() => {
+  }).then(() => modHost()).catch((error) => {
     ctx.logger?.warn?.(`dsh-tavern: mod host failed to start: ${error instanceof Error ? error.message : String(error)}`);
   });
   try {
@@ -20734,7 +22086,7 @@ function apply(ctx, config = {}) {
             res.end();
           } else {
             const status2 = error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError ? 409 : novelFailure?.status ?? 500;
-            sendJson(res, status2, { ok: false, message, code, ...novelFailure?.extra ?? {} });
+            sendJson2(res, status2, { ok: false, message, code, ...novelFailure?.extra ?? {} });
           }
         }
       }
@@ -20755,6 +22107,16 @@ async function handleApi(ctx, req, res) {
   const method = req.method ?? "GET";
   if (route === "update" || route.startsWith("update/")) {
     return handleUpdateApi(ctx, req, res, url, route, method);
+  }
+  if (isGamesRoute(route)) {
+    return handleGamesApi({
+      resolveService: () => gamesServicePromise,
+      req,
+      res,
+      url,
+      route,
+      method
+    });
   }
   const db = await store4();
   if (method === "GET" && route === "bootstrap") {
@@ -20787,7 +22149,7 @@ async function handleApi(ctx, req, res) {
       } catch {
       }
     }
-    return sendJson(res, 200, {
+    return sendJson2(res, 200, {
       ok: true,
       storeRevision,
       state,
@@ -20819,7 +22181,7 @@ async function handleApi(ctx, req, res) {
     });
   }
   if (method === "GET" && route === "store-revision") {
-    return sendJson(res, 200, { ok: true, revision: await db.storeRevision() });
+    return sendJson2(res, 200, { ok: true, revision: await db.storeRevision() });
   }
   if (method === "GET" && route.startsWith("avatar/")) {
     const name2 = decodeURIComponent(route.slice("avatar/".length));
@@ -20836,20 +22198,20 @@ async function handleApi(ctx, req, res) {
       }
       return sendAvatarFallback(res, name2);
     }
-    return sendJson(res, 404, { ok: false, message: "character avatar not found" });
+    return sendJson2(res, 404, { ok: false, message: "character avatar not found" });
   }
   if (method === "GET" && route.startsWith("character/")) {
     const name2 = decodeURIComponent(route.slice("character/".length));
     const found = await db.getCharacter(name2);
-    if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
-    return sendJson(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) });
+    if (!found) return sendJson2(res, 404, { ok: false, message: "character not found" });
+    return sendJson2(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) });
   }
   if (method === "GET" && route === "projection") {
     const sessionId = url.searchParams.get("sessionId");
     if (!sessionId) throw new Error("sessionId query is required");
     const projector = await agentTavernProjectorPromise;
     if (!projector) throw new Error("AgentTavern projector is unavailable");
-    return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
+    return sendJson2(res, 200, { ok: true, projection: await projector.status(sessionId) });
   }
   if (method === "POST" && route === "projection/replay") {
     const body = await readJson(req).catch(() => ({}));
@@ -20868,7 +22230,7 @@ async function handleApi(ctx, req, res) {
     const projector = await agentTavernProjectorPromise;
     if (!projector) throw new Error("AgentTavern projector is unavailable");
     await projector.replay(session);
-    return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
+    return sendJson2(res, 200, { ok: true, projection: await projector.status(sessionId) });
   }
   if (method === "POST" && route === "compact") {
     const body = await readJson(req).catch(() => ({}));
@@ -20883,7 +22245,7 @@ async function handleApi(ctx, req, res) {
       throw new Error("compaction service is unavailable in this host process");
     }
     const result = await compaction.compactNow(agent, new AbortController().signal);
-    return sendJson(res, 200, { ok: true, result: result ?? null });
+    return sendJson2(res, 200, { ok: true, result: result ?? null });
   }
   if ((method === "GET" || method === "POST" || method === "DELETE") && route.startsWith("guides/")) {
     return handleGuidesApi(req, res, route, method, db);
@@ -20916,7 +22278,7 @@ async function handleApi(ctx, req, res) {
       variables().then((store5) => store5.listAll("global", "global")),
       agentTavernProjectorPromise
     ]);
-    return sendJson(res, 200, {
+    return sendJson2(res, 200, {
       ok: true,
       architecture: binding.architecture,
       contextMode: binding.contextMode,
@@ -20970,13 +22332,13 @@ async function handleApi(ctx, req, res) {
       }
     }
     await refreshActivePrompt();
-    return sendJson(res, 200, { ok: true, kind: saved.kind, card: publicCard(saved.card), state });
+    return sendJson2(res, 200, { ok: true, kind: saved.kind, card: publicCard(saved.card), state });
   }
   if (method === "DELETE" && route === "character") {
     const name2 = url.searchParams.get("name");
     if (!name2) throw new Error("name query is required");
     const found = await db.getCharacter(name2);
-    if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
+    if (!found) return sendJson2(res, 404, { ok: false, message: "character not found" });
     await db.deleteCharacter(name2);
     for (const groupName of await db.listGroups()) {
       const group2 = await db.getGroup(groupName);
@@ -20994,12 +22356,12 @@ async function handleApi(ctx, req, res) {
     }));
     await deleteOriginalSnapshot(dshHomePath("tavern"), name2);
     await refreshActivePrompt();
-    return sendJson(res, 200, { ok: true, state });
+    return sendJson2(res, 200, { ok: true, state });
   }
   if (method === "GET" && route.startsWith("export/character/")) {
     const name2 = decodeURIComponent(route.slice("export/character/".length));
     const found = await db.getCharacter(name2);
-    if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
+    if (!found) return sendJson2(res, 404, { ok: false, message: "character not found" });
     const bytes = await db.exportCharacter(name2);
     const media = found.kind === "charx" ? "application/zip" : found.kind === "json" ? "application/json" : "image/png";
     res.statusCode = 200;
@@ -21010,7 +22372,7 @@ async function handleApi(ctx, req, res) {
     return;
   }
   if (method === "GET" && route === "models") {
-    return sendJson(res, 200, { ok: true, ...await buildModelCatalog(ctx) });
+    return sendJson2(res, 200, { ok: true, ...await buildModelCatalog(ctx) });
   }
   if (method === "POST" && route === "model") {
     const body = await readJson(req);
@@ -21029,7 +22391,7 @@ async function handleApi(ctx, req, res) {
     const state = await db.updateState((current) => ({
       modelSelections: selection === null ? Object.fromEntries(Object.entries(current.modelSelections ?? {}).filter(([id]) => id !== body.sessionId)) : { ...current.modelSelections ?? {}, [body.sessionId]: selection }
     }));
-    return sendJson(res, 200, { ok: true, state });
+    return sendJson2(res, 200, { ok: true, state });
   }
   if (method === "POST" && route === "state") {
     const body = await readJson(req);
@@ -21069,7 +22431,7 @@ async function handleApi(ctx, req, res) {
     const state = await db.patchState(patch);
     if ("activePreset" in patch || "activePersona" in patch || "cardWorkbenchPresetEnabled" in patch || "agentNovelPresetEnabled" in patch) await emitAgentPresetChanged();
     await refreshActivePrompt();
-    return sendJson(res, 200, { ok: true, state });
+    return sendJson2(res, 200, { ok: true, state });
   }
   if (method === "POST" && route === "import/character") {
     const body = await readJson(req, 25 * 1024 * 1024);
@@ -21094,14 +22456,14 @@ async function handleApi(ctx, req, res) {
       });
     }
     await refreshActivePrompt();
-    return sendJson(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card), world: result.importedWorld ?? null, importedRegex: result.importedRegex });
+    return sendJson2(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card), world: result.importedWorld ?? null, importedRegex: result.importedRegex });
   }
   if (method === "POST" && route === "import/world") {
     const body = await readJson(req);
     if (typeof body.name !== "string" || !body.data || typeof body.data !== "object") throw new Error("expected { name, data }");
     const book = await db.importWorldFile(body.name, body.data);
     await emitAssetsSaved("world", book.name);
-    return sendJson(res, 200, { ok: true, name: book.name, entries: book.entries.length });
+    return sendJson2(res, 200, { ok: true, name: book.name, entries: book.entries.length });
   }
   if (method === "POST" && route === "import/preset") {
     const body = await readJson(req);
@@ -21110,13 +22472,13 @@ async function handleApi(ctx, req, res) {
     await db.putPreset(body.name, body.data);
     await emitAssetsSaved("preset", body.name);
     await emitAgentPresetChanged();
-    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data) });
+    return sendJson2(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data) });
   }
   if (method === "GET" && route.startsWith("preset/")) {
     const name2 = decodeURIComponent(route.slice("preset/".length));
     const data = await db.getPreset(name2);
-    if (!data) return sendJson(res, 404, { ok: false, message: "preset not found" });
-    return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data });
+    if (!data) return sendJson2(res, 404, { ok: false, message: "preset not found" });
+    return sendJson2(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data });
   }
   if (method === "PUT" && route.startsWith("preset/")) {
     const oldName = decodeURIComponent(route.slice("preset/".length));
@@ -21133,14 +22495,14 @@ async function handleApi(ctx, req, res) {
     }));
     await emitAgentPresetChanged();
     await refreshActivePrompt();
-    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data), data: body.data, state });
+    return sendJson2(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data), data: body.data, state });
   }
   if (method === "POST" && route === "import/persona") {
     const body = await readJson(req, 25 * 1024 * 1024);
     if (typeof body.pngBase64 === "string" && typeof body.name === "string") {
       const persona = await db.importPersonaPng(new Uint8Array(Buffer.from(body.pngBase64, "base64")), body.name);
       await emitAssetsSaved("persona", persona.name);
-      return sendJson(res, 200, { ok: true, persona });
+      return sendJson2(res, 200, { ok: true, persona });
     }
     if (typeof body.name === "string") {
       const persona = {
@@ -21153,7 +22515,7 @@ async function handleApi(ctx, req, res) {
       };
       await db.putPersona(persona);
       await emitAssetsSaved("persona", persona.name);
-      return sendJson(res, 200, { ok: true, persona });
+      return sendJson2(res, 200, { ok: true, persona });
     }
     throw new Error("expected { pngBase64, name } or { name, description }");
   }
@@ -21171,7 +22533,7 @@ async function handleApi(ctx, req, res) {
     };
     await db.putPersona(persona);
     await emitAssetsSaved("persona", body.name);
-    return sendJson(res, 200, { ok: true, persona });
+    return sendJson2(res, 200, { ok: true, persona });
   }
   if (method === "DELETE" && route === "persona") {
     const name2 = url.searchParams.get("name");
@@ -21180,8 +22542,8 @@ async function handleApi(ctx, req, res) {
     const state = await db.updateState((current) => ({
       activePersona: current.activePersona === name2 ? void 0 : current.activePersona
     }));
-    if (!deleted) return sendJson(res, 404, { ok: false, message: "persona not found" });
-    return sendJson(res, 200, { ok: true, state });
+    if (!deleted) return sendJson2(res, 404, { ok: false, message: "persona not found" });
+    return sendJson2(res, 200, { ok: true, state });
   }
   if (method === "GET" && route.startsWith("persona-avatar/")) {
     const name2 = decodeURIComponent(route.slice("persona-avatar/".length));
@@ -21189,7 +22551,7 @@ async function handleApi(ctx, req, res) {
     if (avatar === void 0) {
       const persona = await db.getPersona(name2);
       if (persona) return sendAvatarFallback(res, name2);
-      return sendJson(res, 404, { ok: false, message: "persona avatar not found" });
+      return sendJson2(res, 404, { ok: false, message: "persona avatar not found" });
     }
     res.statusCode = 200;
     res.setHeader("content-type", "image/png");
@@ -21203,7 +22565,7 @@ async function handleApi(ctx, req, res) {
       const group2 = await db.getGroup(name2);
       if (group2) groups.push(publicGroup(group2));
     }
-    return sendJson(res, 200, { ok: true, groups });
+    return sendJson2(res, 200, { ok: true, groups });
   }
   if (method === "POST" && route === "groups") {
     const body = await readJson(req);
@@ -21226,7 +22588,7 @@ async function handleApi(ctx, req, res) {
     });
     await emitAssetsSaved("group", body.name);
     const group2 = await db.getGroup(body.name);
-    return sendJson(res, 200, { ok: true, group: publicGroup(group2) });
+    return sendJson2(res, 200, { ok: true, group: publicGroup(group2) });
   }
   if (method === "PUT" && route === "group") {
     const body = await readJson(req);
@@ -21245,18 +22607,18 @@ async function handleApi(ctx, req, res) {
       ...typeof body.allowSelfResponses === "boolean" ? { allowSelfResponses: body.allowSelfResponses } : {}
     });
     await emitAssetsSaved("group", body.name);
-    return sendJson(res, 200, { ok: true, group: publicGroup(await db.getGroup(body.name)) });
+    return sendJson2(res, 200, { ok: true, group: publicGroup(await db.getGroup(body.name)) });
   }
   if (method === "DELETE" && route === "group") {
     const name2 = url.searchParams.get("name");
     if (!name2) throw new Error("name query is required");
     const group2 = await db.getGroup(name2);
-    if (!group2) return sendJson(res, 404, { ok: false, message: "group not found" });
+    if (!group2) return sendJson2(res, 404, { ok: false, message: "group not found" });
     await db.deleteGroup(name2);
     const state = await db.updateState((current) => ({
       sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.character === name2 && binding.group === true)))
     }));
-    return sendJson(res, 200, { ok: true, state });
+    return sendJson2(res, 200, { ok: true, state });
   }
   if (method === "POST" && route === "binding") {
     const body = await readJson(req);
@@ -21271,7 +22633,7 @@ async function handleApi(ctx, req, res) {
     await assertAgentTavernAvailable(architecture, contextMode);
     const state = await bindSession(db, body.sessionId, body.character, body.chatId, group2, architecture, contextMode, true);
     await refreshActivePrompt();
-    return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] });
+    return sendJson2(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] });
   }
   if (method === "DELETE" && route === "binding") {
     const body = await readJson(req);
@@ -21281,7 +22643,7 @@ async function handleApi(ctx, req, res) {
       delete sessionBindings[body.sessionId];
       return { sessionBindings };
     });
-    return sendJson(res, 200, { ok: true, state: next });
+    return sendJson2(res, 200, { ok: true, state: next });
   }
   if (method === "POST" && route === "bindings/prune") {
     const body = await readJson(req);
@@ -21297,12 +22659,12 @@ async function handleApi(ctx, req, res) {
         Object.entries(current.modelSelections ?? {}).filter(([sessionId]) => live.has(sessionId))
       )
     }));
-    return sendJson(res, 200, { ok: true, state });
+    return sendJson2(res, 200, { ok: true, state });
   }
   if (method === "GET" && route === "chats") {
     const character = url.searchParams.get("character");
     if (!character) throw new Error("character query is required");
-    return sendJson(res, 200, { ok: true, chats: await db.listChats(character) });
+    return sendJson2(res, 200, { ok: true, chats: await db.listChats(character) });
   }
   if (method === "POST" && route === "chats") {
     const body = await readJson(req);
@@ -21330,7 +22692,7 @@ async function handleApi(ctx, req, res) {
         }
       }, greetings);
       const snapshot3 = await db.getChatSnapshot(body.group, id2);
-      return sendJson(res, 200, { ok: true, id: id2, group: body.group, chat: snapshot3?.chat, revision: snapshot3?.revision });
+      return sendJson2(res, 200, { ok: true, id: id2, group: body.group, chat: snapshot3?.chat, revision: snapshot3?.revision });
     }
     const character = typeof body.character === "string" ? body.character : (await db.getState()).activeCharacter;
     if (!character) throw new Error("no active character");
@@ -21358,7 +22720,7 @@ async function handleApi(ctx, req, res) {
       swipe_info: [{ send_date: now }, ...found.card.data.alternateGreetings.map(() => ({ send_date: now }))]
     }]);
     const snapshot2 = await db.getChatSnapshot(character, id);
-    return sendJson(res, 200, { ok: true, id, chat: snapshot2?.chat, revision: snapshot2?.revision });
+    return sendJson2(res, 200, { ok: true, id, chat: snapshot2?.chat, revision: snapshot2?.revision });
   }
   if (method === "POST" && route === "branch") {
     const body = await readJson(req);
@@ -21376,7 +22738,7 @@ async function handleApi(ctx, req, res) {
       }
     });
     const snapshot2 = await db.getChatSnapshot(body.character, result.chatId);
-    return sendJson(res, 200, { ok: true, id: result.chatId, chat: snapshot2?.chat ?? result.chat, revision: snapshot2?.revision });
+    return sendJson2(res, 200, { ok: true, id: result.chatId, chat: snapshot2?.chat ?? result.chat, revision: snapshot2?.revision });
   }
   if (method === "POST" && route === "candidates") {
     const body = await readJson(req);
@@ -21401,7 +22763,7 @@ async function handleApi(ctx, req, res) {
       model: typeof body.model === "string" ? body.model : void 0,
       reasoningEffort: typeof body.reasoningEffort === "string" ? body.reasoningEffort : void 0
     });
-    return sendJson(res, 200, { ok: true, items: result.items, generatedAt: result.generatedAt, revision: result.revision });
+    return sendJson2(res, 200, { ok: true, items: result.items, generatedAt: result.generatedAt, revision: result.revision });
   }
   if (method === "POST" && route === "preview") {
     return previewGeneration(ctx, req, res, db);
@@ -21430,7 +22792,7 @@ async function handleApi(ctx, req, res) {
   if (method === "GET" && route === "prompts") {
     const filterCharacter = url.searchParams.get("character");
     const filterChat = url.searchParams.get("chatId");
-    return sendJson(res, 200, {
+    return sendJson2(res, 200, {
       ok: true,
       records: listPromptViews({
         ...filterCharacter !== null ? { character: filterCharacter } : {},
@@ -21441,8 +22803,8 @@ async function handleApi(ctx, req, res) {
   if (method === "GET" && route.startsWith("world/")) {
     const name2 = decodeURIComponent(route.slice("world/".length));
     const book = await db.getWorld(name2);
-    if (!book) return sendJson(res, 404, { ok: false, message: "world not found" });
-    return sendJson(res, 200, { ok: true, book });
+    if (!book) return sendJson2(res, 404, { ok: false, message: "world not found" });
+    return sendJson2(res, 200, { ok: true, book });
   }
   if (method === "PUT" && route.startsWith("world/")) {
     const oldName = decodeURIComponent(route.slice("world/".length));
@@ -21456,12 +22818,12 @@ async function handleApi(ctx, req, res) {
       await db.deleteWorld(oldName);
       await db.updateState((current) => ({ activeWorlds: current.activeWorlds.map((name2) => name2 === oldName ? body.name : name2) }));
     }
-    return sendJson(res, 200, { ok: true, name: book.name, book });
+    return sendJson2(res, 200, { ok: true, name: book.name, book });
   }
   if (method === "GET" && route.startsWith("export/world/")) {
     const name2 = decodeURIComponent(route.slice("export/world/".length));
     const book = await db.getWorld(name2);
-    if (!book) return sendJson(res, 404, { ok: false, message: "world not found" });
+    if (!book) return sendJson2(res, 404, { ok: false, message: "world not found" });
     const bytes = await db.exportWorld(name2);
     res.statusCode = 200;
     res.setHeader("content-type", "application/json; charset=utf-8");
@@ -21473,29 +22835,29 @@ async function handleApi(ctx, req, res) {
     const name2 = url.searchParams.get("name");
     if (!name2) throw new Error("name query is required");
     const book = await db.getWorld(name2);
-    if (!book) return sendJson(res, 404, { ok: false, message: "world not found" });
+    if (!book) return sendJson2(res, 404, { ok: false, message: "world not found" });
     await db.deleteWorld(name2);
     const state = await db.updateState((current) => ({
       activeWorlds: current.activeWorlds.filter((world) => world !== name2)
     }));
-    return sendJson(res, 200, { ok: true, state });
+    return sendJson2(res, 200, { ok: true, state });
   }
   if (method === "DELETE" && route === "preset") {
     const name2 = url.searchParams.get("name");
     if (!name2) throw new Error("name query is required");
     const preset = await db.getPreset(name2);
-    if (!preset) return sendJson(res, 404, { ok: false, message: "preset not found" });
+    if (!preset) return sendJson2(res, 404, { ok: false, message: "preset not found" });
     await db.deletePreset(name2);
     const state = await db.updateState((current) => ({
       activePreset: current.activePreset === name2 ? void 0 : current.activePreset
     }));
     await emitAgentPresetChanged();
-    return sendJson(res, 200, { ok: true, state });
+    return sendJson2(res, 200, { ok: true, state });
   }
   if (method === "GET" && route.startsWith("export/preset/")) {
     const name2 = decodeURIComponent(route.slice("export/preset/".length));
     const preset = await db.getPreset(name2);
-    if (!preset) return sendJson(res, 404, { ok: false, message: "preset not found" });
+    if (!preset) return sendJson2(res, 404, { ok: false, message: "preset not found" });
     const bytes = await db.exportPreset(name2);
     res.statusCode = 200;
     res.setHeader("content-type", "application/json; charset=utf-8");
@@ -21505,7 +22867,7 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "GET" && route === "variables") {
     const state = await db.getState();
-    return sendJson(res, 200, { ok: true, globals: state.scriptGlobals });
+    return sendJson2(res, 200, { ok: true, globals: state.scriptGlobals });
   }
   if (method === "PUT" && route === "variables") {
     const body = await readJson(req);
@@ -21520,25 +22882,25 @@ async function handleApi(ctx, req, res) {
       globals[key] = value;
     }
     const state = await db.updateState(() => ({ scriptGlobals: globals }));
-    return sendJson(res, 200, { ok: true, globals: state.scriptGlobals });
+    return sendJson2(res, 200, { ok: true, globals: state.scriptGlobals });
   }
   if (method === "GET" && route === "regex") {
     const state = await db.getState();
-    return sendJson(res, 200, { ok: true, scripts: state.regexScripts });
+    return sendJson2(res, 200, { ok: true, scripts: state.regexScripts });
   }
   if (method === "PUT" && route === "regex") {
     const body = await readJson(req);
     const scripts = Array.isArray(body.scripts) ? parseRegexScripts(body.scripts) : void 0;
     if (scripts === void 0) throw new Error("expected { scripts }");
     const state = await db.patchState({ regexScripts: scripts });
-    return sendJson(res, 200, { ok: true, scripts: state.regexScripts });
+    return sendJson2(res, 200, { ok: true, scripts: state.regexScripts });
   }
   if (method === "POST" && route === "import/regex") {
     const body = await readJson(req);
     if (!Array.isArray(body.data) && typeof body.data !== "object") throw new Error("expected { data }");
     const imported = await db.importRegexScripts(body.data);
     const state = await db.getState();
-    return sendJson(res, 200, { ok: true, imported, scripts: state.regexScripts });
+    return sendJson2(res, 200, { ok: true, imported, scripts: state.regexScripts });
   }
   if (route.startsWith("chat/")) {
     const chatId = decodeURIComponent(route.slice("chat/".length));
@@ -21547,7 +22909,7 @@ async function handleApi(ctx, req, res) {
     if (!character) throw new Error("no active character");
     if (method === "GET") {
       const snapshot2 = await db.getChatSnapshot(character, chatId);
-      return snapshot2 ? sendJson(res, 200, { ok: true, chat: snapshot2.chat, revision: snapshot2.revision, displays: await displayTexts(db, state, character, snapshot2.chat) }) : sendJson(res, 404, { ok: false, message: "chat not found" });
+      return snapshot2 ? sendJson2(res, 200, { ok: true, chat: snapshot2.chat, revision: snapshot2.revision, displays: await displayTexts(db, state, character, snapshot2.chat) }) : sendJson2(res, 404, { ok: false, message: "chat not found" });
     }
     if (method === "PUT") {
       const body = await readJson(req);
@@ -21556,7 +22918,7 @@ async function handleApi(ctx, req, res) {
       }
       const revision = await db.saveChat(character, chatId, body.chat, body.revision);
       await emitChatSaved(character, chatId, revision, body.chat.messages.length);
-      return sendJson(res, 200, { ok: true, chat: body.chat, revision });
+      return sendJson2(res, 200, { ok: true, chat: body.chat, revision });
     }
     if (method === "PATCH") {
       const body = await readJson(req);
@@ -21572,7 +22934,7 @@ async function handleApi(ctx, req, res) {
         ]))
       }));
       const snapshot2 = await db.getChatSnapshot(character, nextChatId);
-      return sendJson(res, 200, {
+      return sendJson2(res, 200, {
         ok: true,
         id: nextChatId,
         chat: snapshot2?.chat,
@@ -21591,7 +22953,7 @@ async function handleApi(ctx, req, res) {
           )
         }));
       }
-      return sendJson(res, deleted ? 200 : 404, deleted ? { ok: true } : { ok: false, message: "chat not found" });
+      return sendJson2(res, deleted ? 200 : 404, deleted ? { ok: true } : { ok: false, message: "chat not found" });
     }
   }
   if (method === "POST" && route === "generate") {
@@ -21600,18 +22962,18 @@ async function handleApi(ctx, req, res) {
   if (method === "POST" && route === "script") {
     return runTavernScript(ctx, req, res, db);
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 async function handleGuidesApi(req, res, route, method, db) {
   if ((method === "GET" || method === "POST") && route.startsWith("guides/")) {
     const segments = route.slice("guides/".length).split("/");
-    if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+    if (segments.length !== 2) return sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
     const character = decodeURIComponent(segments[0]);
     const chatId = decodeURIComponent(segments[1]);
     const snapshot2 = await readGuidesSnapshot(db, character, chatId);
-    if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
+    if (!snapshot2) return sendJson2(res, 404, { ok: false, message: "chat not found" });
     if (method === "GET") {
-      return sendJson(res, 200, {
+      return sendJson2(res, 200, {
         ok: true,
         guides: normalizeGuides(snapshot2.chat.header.chat_metadata?.guides),
         revision: snapshot2.revision
@@ -21619,7 +22981,7 @@ async function handleGuidesApi(req, res, route, method, db) {
     }
     const body = await readJson(req);
     const added = addGuide(normalizeGuides(snapshot2.chat.header.chat_metadata?.guides), body.text);
-    if (!added.ok) return sendJson(res, 400, { ok: false, message: added.error, code: "TAVERN_GUIDES" });
+    if (!added.ok) return sendJson2(res, 400, { ok: false, message: added.error, code: "TAVERN_GUIDES" });
     const metadata = { ...snapshot2.chat.header.chat_metadata, guides: added.guides };
     const revision = await db.saveChat(character, chatId, {
       ...snapshot2.chat,
@@ -21627,18 +22989,18 @@ async function handleGuidesApi(req, res, route, method, db) {
     }, snapshot2.revision);
     await emitGuidesChanged(character, chatId);
     await emitChatSaved(character, chatId, revision, snapshot2.chat.messages.length);
-    return sendJson(res, 200, { ok: true, guide: added.guide, guides: added.guides, revision });
+    return sendJson2(res, 200, { ok: true, guide: added.guide, guides: added.guides, revision });
   }
   if (method === "DELETE" && route.startsWith("guides/")) {
     const segments = route.slice("guides/".length).split("/");
-    if (segments.length !== 3) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+    if (segments.length !== 3) return sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
     const character = decodeURIComponent(segments[0]);
     const chatId = decodeURIComponent(segments[1]);
     const id = decodeURIComponent(segments[2]);
     const snapshot2 = await readGuidesSnapshot(db, character, chatId);
-    if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
+    if (!snapshot2) return sendJson2(res, 404, { ok: false, message: "chat not found" });
     const removed = removeGuide(normalizeGuides(snapshot2.chat.header.chat_metadata?.guides), id);
-    if (!removed.removed) return sendJson(res, 404, { ok: false, message: "guide not found" });
+    if (!removed.removed) return sendJson2(res, 404, { ok: false, message: "guide not found" });
     const metadata = { ...snapshot2.chat.header.chat_metadata };
     if (removed.guides.length > 0) metadata.guides = removed.guides;
     else delete metadata.guides;
@@ -21648,9 +23010,9 @@ async function handleGuidesApi(req, res, route, method, db) {
     }, snapshot2.revision);
     await emitGuidesChanged(character, chatId);
     await emitChatSaved(character, chatId, revision, snapshot2.chat.messages.length);
-    return sendJson(res, 200, { ok: true, guides: removed.guides, revision });
+    return sendJson2(res, 200, { ok: true, guides: removed.guides, revision });
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 async function handleScriptApi(req, res, route, method, db) {
   if (method === "POST" && route === "script/import") {
@@ -21665,9 +23027,9 @@ async function handleScriptApi(req, res, route, method, db) {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return sendJson(res, 400, { ok: false, message, code: "TAVERN_SCRIPT" });
+      return sendJson2(res, 400, { ok: false, message, code: "TAVERN_SCRIPT" });
     }
-    return sendJson(res, 200, {
+    return sendJson2(res, 200, {
       ok: true,
       script: {
         name: imported.name,
@@ -21685,25 +23047,25 @@ async function handleScriptApi(req, res, route, method, db) {
       const bound = file === void 0 ? void 0 : boundScriptOf(file.card);
       if (bound !== void 0) bindings[name2] = bound;
     }
-    return sendJson(res, 200, { ok: true, scripts, bindings });
+    return sendJson2(res, 200, { ok: true, scripts, bindings });
   }
   if (method === "GET" && route.startsWith("script/progress/")) {
     const segments = route.slice("script/progress/".length).split("/");
-    if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+    if (segments.length !== 2) return sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
     const character = decodeURIComponent(segments[0]);
     const chatId = decodeURIComponent(segments[1]);
     const file = await db.getCharacter(character);
-    if (!file) return sendJson(res, 404, { ok: false, message: "character not found" });
+    if (!file) return sendJson2(res, 404, { ok: false, message: "character not found" });
     const scriptName = boundScriptOf(file.card);
-    if (scriptName === void 0) return sendJson(res, 404, { ok: false, message: "no script bound to this character" });
+    if (scriptName === void 0) return sendJson2(res, 404, { ok: false, message: "no script bound to this character" });
     const script = await getScript(dshHomePath("tavern"), scriptName);
-    if (!script) return sendJson(res, 404, { ok: false, message: `script '${scriptName}' not found` });
+    if (!script) return sendJson2(res, 404, { ok: false, message: `script '${scriptName}' not found` });
     const snapshot2 = await db.getChatSnapshot(character, chatId);
-    if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
+    if (!snapshot2) return sendJson2(res, 404, { ok: false, message: "chat not found" });
     const progress = normalizeScriptProgress(snapshot2.chat.header.chat_metadata?.scriptProgress);
     const active = progress !== void 0 && progress.scriptName === scriptName ? progress : void 0;
     const chunkIndex = active !== void 0 ? Math.min(active.chunkIndex, script.chunks.length - 1) : 0;
-    return sendJson(res, 200, {
+    return sendJson2(res, 200, {
       ok: true,
       scriptName,
       chunkIndex,
@@ -21715,10 +23077,10 @@ async function handleScriptApi(req, res, route, method, db) {
   }
   if (method === "GET" && route.startsWith("script/")) {
     const name2 = decodeURIComponent(route.slice("script/".length));
-    if (name2 === "" || name2.includes("/")) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+    if (name2 === "" || name2.includes("/")) return sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
     const script = await getScript(dshHomePath("tavern"), name2);
-    if (!script) return sendJson(res, 404, { ok: false, message: `script '${name2}' not found` });
-    return sendJson(res, 200, { ok: true, script: { name: script.name, source: script.source, chunks: script.chunks } });
+    if (!script) return sendJson2(res, 404, { ok: false, message: `script '${name2}' not found` });
+    return sendJson2(res, 200, { ok: true, script: { name: script.name, source: script.source, chunks: script.chunks } });
   }
   if (method === "POST" && (route === "script/bind" || route === "script/unbind")) {
     const body = await readJson(req);
@@ -21730,18 +23092,18 @@ async function handleScriptApi(req, res, route, method, db) {
     }
     if (binding !== void 0) {
       const script = await getScript(dshHomePath("tavern"), binding);
-      if (!script) return sendJson(res, 404, { ok: false, message: `script '${binding}' not found` });
+      if (!script) return sendJson2(res, 404, { ok: false, message: `script '${binding}' not found` });
     }
     try {
       await applyScriptBinding(db, characterName, binding);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("not found")) return sendJson(res, 404, { ok: false, message });
+      if (message.includes("not found")) return sendJson2(res, 404, { ok: false, message });
       throw error;
     }
-    return sendJson(res, 200, { ok: true, character: characterName, scriptName: binding ?? null });
+    return sendJson2(res, 200, { ok: true, character: characterName, scriptName: binding ?? null });
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 async function handleMvuApi(req, res, route, method, db) {
   if (method === "POST" && route === "mvu/retry") {
@@ -21763,7 +23125,7 @@ async function handleMvuApi(req, res, route, method, db) {
       sessionId: typeof body.sessionId === "string" ? body.sessionId : void 0,
       templatesActive: templatesEnabledFlag && templatesEnabled()
     });
-    return sendJson(res, 200, { ok: true, receipt: result.receipt, revision: result.revision, variables: result.variables });
+    return sendJson2(res, 200, { ok: true, receipt: result.receipt, revision: result.revision, variables: result.variables });
   }
   if (method === "POST" && route === "mvu/receipts/undo") {
     const body = await readJson(req);
@@ -21778,7 +23140,7 @@ async function handleMvuApi(req, res, route, method, db) {
       if (cause instanceof Error && cause.message === "invalid chat id") snapshot2 = void 0;
       else throw cause;
     }
-    if (!snapshot2) return sendJson(res, 404, { ok: false, message: "character or chat not found" });
+    if (!snapshot2) return sendJson2(res, 404, { ok: false, message: "character or chat not found" });
     if (typeof body.revision === "string" && body.revision !== snapshot2.revision) {
       throw new ChatRevisionConflictError(body.revision, snapshot2.revision);
     }
@@ -21789,15 +23151,15 @@ async function handleMvuApi(req, res, route, method, db) {
       result = agentTavernBound ? await undoMvuAgentSettlement(await variables(), db, options) : await undoMvuStSettlement(db, options);
     } catch (error) {
       if (error instanceof MvuUndoRefusalError) {
-        return sendJson(res, 400, { ok: false, message: error.message, code: `MVU_UNDO_${error.undoCode}` });
+        return sendJson2(res, 400, { ok: false, message: error.message, code: `MVU_UNDO_${error.undoCode}` });
       }
       if (error instanceof VariableRevisionConflictError) {
-        return sendJson(res, 409, { ok: false, message: error.message, code: error.code });
+        return sendJson2(res, 409, { ok: false, message: error.message, code: error.code });
       }
       throw error;
     }
     await emitChatSaved(characterName, chatId, result.revision, snapshot2.chat.messages.length);
-    return sendJson(res, 200, {
+    return sendJson2(res, 200, {
       ok: true,
       undoneTurnKey: result.receipt.turnKey,
       restored: result.restores,
@@ -21812,7 +23174,7 @@ async function handleMvuApi(req, res, route, method, db) {
     const characterName = decodeURIComponent(rest.slice(0, separator));
     const chatId = decodeURIComponent(rest.slice(separator + 1));
     const snapshot2 = await db.getChatSnapshot(characterName, chatId);
-    if (!snapshot2) return sendJson(res, 404, { ok: false, message: "character or chat not found" });
+    if (!snapshot2) return sendJson2(res, 404, { ok: false, message: "character or chat not found" });
     const chat = snapshot2.chat;
     const state = await db.getState();
     const receipts = readMvuReceipts(chat);
@@ -21837,7 +23199,7 @@ async function handleMvuApi(req, res, route, method, db) {
       } catch {
       }
     }
-    return sendJson(res, 200, {
+    return sendJson2(res, 200, {
       ok: true,
       // 回执本身也是可展示内容：只有失败回执（全项失败、无变量落盘）时面板仍需可见可读。
       available: Object.keys(displayVariables).length > 0 || receipts.length > 0,
@@ -21846,7 +23208,7 @@ async function handleMvuApi(req, res, route, method, db) {
       ...renderedHtml !== void 0 ? { renderedHtml } : {}
     });
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 var localRuntimeInstallInFlight;
 async function handleMemoryEmbedApi(req, res, route, method, db) {
@@ -21857,7 +23219,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
     const isLocal = config?.provider === "local";
     const endpoint = config !== void 0 && config.provider !== "local" ? config : void 0;
     const envValue = endpoint !== void 0 && endpoint.apiKeyEnv !== "" ? process.env[endpoint.apiKeyEnv] : void 0;
-    return sendJson(res, 200, {
+    return sendJson2(res, 200, {
       ok: true,
       config: config ?? null,
       status: {
@@ -21886,21 +23248,21 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
       if (modelDirRaw === "") {
         await db.patchState({ memoryEmbedding: void 0 });
         await clearEmbedStatus(root);
-        return sendJson(res, 200, { ok: true, config: null });
+        return sendJson2(res, 200, { ok: true, config: null });
       }
-      const modelDir = resolve4(modelDirRaw);
+      const modelDir = resolve5(modelDirRaw);
       const dirProblem = validateLocalModelDir(modelDir);
       if (dirProblem !== null) {
-        return sendJson(res, 400, { ok: false, message: dirProblem });
+        return sendJson2(res, 400, { ok: false, message: dirProblem });
       }
       if (raw.pooling !== void 0 && raw.pooling !== null && raw.pooling !== "cls" && raw.pooling !== "mean") {
-        return sendJson(res, 400, {
+        return sendJson2(res, 400, {
           ok: false,
           message: `invalid pooling '${String(raw.pooling).slice(0, 30)}': expected 'cls' or 'mean' (cls is the BERT/bge default; sentence-embedding models like MiniLM need 'mean')`
         });
       }
       if (raw.precision !== void 0 && raw.precision !== null && raw.precision !== "" && !LOCAL_EMBED_PRECISIONS.includes(raw.precision)) {
-        return sendJson(res, 400, {
+        return sendJson2(res, 400, {
           ok: false,
           message: `invalid precision '${String(raw.precision).slice(0, 30)}': expected 'auto' or one of ${LOCAL_EMBED_PRECISIONS.filter((value) => value !== "auto").join(", ")}`
         });
@@ -21918,7 +23280,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
         ...raw.batchSize !== void 0 && raw.batchSize !== null ? { batchSize: raw.batchSize } : {}
       });
       if (config2 === void 0) {
-        return sendJson(res, 400, {
+        return sendJson2(res, 400, {
           ok: false,
           message: "expected { provider: 'local', modelDir, pooling? ('cls'|'mean'), precision? ('auto'|'fp32'|'fp16'|'q8'|\u2026), dims?, batchSize? (1-64) }"
         });
@@ -21932,7 +23294,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
       }
       await db.patchState({ memoryEmbedding: config2 });
       await clearEmbedStatus(root);
-      return sendJson(res, 200, {
+      return sendJson2(res, 200, {
         ok: true,
         config: config2,
         ...Object.keys(autoFilled).length > 0 ? { inferred: autoFilled } : {}
@@ -21944,10 +23306,10 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
     if (baseURL === "" && apiKeyEnv === "" && model === "") {
       await db.patchState({ memoryEmbedding: void 0 });
       await clearEmbedStatus(root);
-      return sendJson(res, 200, { ok: true, config: null });
+      return sendJson2(res, 200, { ok: true, config: null });
     }
     if (apiKeyEnv !== "" && !MEMORY_EMBED_ENV_NAME.test(apiKeyEnv)) {
-      return sendJson(res, 400, {
+      return sendJson2(res, 400, {
         ok: false,
         message: `invalid apiKeyEnv '${apiKeyEnv.slice(0, 60)}': expected a POSIX environment variable name (letters, digits, underscore; not starting with a digit), or an empty string for a keyless endpoint`
       });
@@ -21961,31 +23323,31 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
       ...raw.timeoutMs !== void 0 && raw.timeoutMs !== null ? { timeoutMs: raw.timeoutMs } : {}
     });
     if (config === void 0) {
-      return sendJson(res, 400, {
+      return sendJson2(res, 400, {
         ok: false,
         message: "expected { baseURL (http/https URL), model, apiKeyEnv? (env var name or empty), dims?, batchSize? (1-64), timeoutMs? (200-120000) }"
       });
     }
     await db.patchState({ memoryEmbedding: config });
     await clearEmbedStatus(root);
-    return sendJson(res, 200, { ok: true, config });
+    return sendJson2(res, 200, { ok: true, config });
   }
   if (method === "POST" && route === "memory/embed/local/install") {
     if (localRuntimeInstallInFlight !== void 0) {
-      return sendJson(res, 409, { ok: false, message: "a local runtime install is already in progress" });
+      return sendJson2(res, 409, { ok: false, message: "a local runtime install is already in progress" });
     }
     const installPromise = installLocalEmbedRuntime({ pluginDir: import.meta.dirname });
     localRuntimeInstallInFlight = installPromise;
     try {
       const outcome = await installPromise;
       if (!outcome.ok) {
-        return sendJson(res, 400, {
+        return sendJson2(res, 400, {
           ok: false,
           message: outcome.message ?? "install failed",
           ...outcome.outputTail !== "" ? { outputTail: outcome.outputTail } : {}
         });
       }
-      return sendJson(res, 200, {
+      return sendJson2(res, 200, {
         ok: true,
         alreadyInstalled: outcome.alreadyInstalled,
         ...outcome.message !== void 0 ? { message: outcome.message } : {},
@@ -21999,15 +23361,15 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
     const body = await readJson(req);
     const modelDirRaw = body !== null && typeof body === "object" && !Array.isArray(body) && typeof body.modelDir === "string" ? body.modelDir.trim() : "";
     if (modelDirRaw === "") {
-      return sendJson(res, 400, { ok: false, message: "expected { modelDir }" });
+      return sendJson2(res, 400, { ok: false, message: "expected { modelDir }" });
     }
-    const modelDir = resolve4(modelDirRaw);
+    const modelDir = resolve5(modelDirRaw);
     const dirProblem = validateLocalModelDir(modelDir);
     if (dirProblem !== null) {
-      return sendJson(res, 400, { ok: false, message: dirProblem });
+      return sendJson2(res, 400, { ok: false, message: dirProblem });
     }
     const quantizations = detectLocalQuantizations(modelDir);
-    return sendJson(res, 200, {
+    return sendJson2(res, 200, {
       ok: true,
       modelDir,
       quantizations,
@@ -22018,35 +23380,35 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
   }
   if (method === "POST" && route === "memory/embed/test") {
     const config = normalizeMemoryEmbedding((await db.getState()).memoryEmbedding);
-    if (config === void 0) return sendJson(res, 400, { ok: false, message: "embed endpoint is not configured" });
+    if (config === void 0) return sendJson2(res, 400, { ok: false, message: "embed endpoint is not configured" });
     try {
       const result = await embedProbe(root, config);
-      return sendJson(res, 200, { ok: true, ...result });
+      return sendJson2(res, 200, { ok: true, ...result });
     } catch (cause) {
-      return sendJson(res, 400, { ok: false, message: cause instanceof Error ? cause.message : String(cause) });
+      return sendJson2(res, 400, { ok: false, message: cause instanceof Error ? cause.message : String(cause) });
     }
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 async function handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db) {
   if (method === "POST") {
     const body = await readJson(req);
     if (typeof body.character !== "string" || typeof body.chatId !== "string" || body.character === "" || body.chatId === "") {
-      return sendJson(res, 400, { ok: false, message: "expected { character, chatId }" });
+      return sendJson2(res, 400, { ok: false, message: "expected { character, chatId }" });
     }
     const snapshot2 = await readGuidesSnapshot(db, body.character, body.chatId);
     if (snapshot2 === void 0) {
-      return sendJson(res, 404, { ok: false, message: `chat '${body.character}/${body.chatId}' not found` });
+      return sendJson2(res, 404, { ok: false, message: `chat '${body.character}/${body.chatId}' not found` });
     }
     try {
       const { runId } = await startMemoryMaintenance(ctx, maintenanceDeps(db), {
         character: body.character,
         chatId: body.chatId
       });
-      return sendJson(res, 200, { ok: true, runId });
+      return sendJson2(res, 200, { ok: true, runId });
     } catch (cause) {
       if (cause instanceof MaintenanceRunConflictError) {
-        return sendJson(res, 409, { ok: false, message: cause.message, code: cause.code, runId: cause.runId });
+        return sendJson2(res, 409, { ok: false, message: cause.message, code: cause.code, runId: cause.runId });
       }
       throw cause;
     }
@@ -22055,12 +23417,12 @@ async function handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db)
     const character = url.searchParams.get("character");
     const chatId = url.searchParams.get("chatId");
     if (character === null || chatId === null || character === "" || chatId === "") {
-      return sendJson(res, 400, { ok: false, message: "character and chatId query params are required" });
+      return sendJson2(res, 400, { ok: false, message: "character and chatId query params are required" });
     }
     const view = await memoryMaintenanceStatus(maintenanceDeps(db), { character, chatId });
-    return sendJson(res, 200, { ok: true, ...view });
+    return sendJson2(res, 200, { ok: true, ...view });
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 function maintenanceDeps(db) {
   return {
@@ -22074,15 +23436,15 @@ async function handleWorkbenchApi(req, res, url, route, method, db) {
   if (method === "POST" && route === "card-workbench/rename") {
     const body = await readJson(req);
     if (typeof body.sessionId !== "string" || typeof body.title !== "string") {
-      return sendJson(res, 400, { ok: false, message: "expected { sessionId, title }", code: "TAVERN_WORKBENCH" });
+      return sendJson2(res, 400, { ok: false, message: "expected { sessionId, title }", code: "TAVERN_WORKBENCH" });
     }
     const title = body.title.trim().slice(0, 200);
     if (title === "") {
-      return sendJson(res, 400, { ok: false, message: "title must be a non-empty string", code: "TAVERN_WORKBENCH" });
+      return sendJson2(res, 400, { ok: false, message: "title must be a non-empty string", code: "TAVERN_WORKBENCH" });
     }
     const binding = (await db.getState()).sessionBindings[body.sessionId];
     if (binding?.architecture !== "card-workbench") {
-      return sendJson(res, 404, { ok: false, message: `session '${body.sessionId}' is not a CardWorkbench session`, code: "TAVERN_WORKBENCH" });
+      return sendJson2(res, 404, { ok: false, message: `session '${body.sessionId}' is not a CardWorkbench session`, code: "TAVERN_WORKBENCH" });
     }
     const state = await db.updateState((current) => ({
       sessionBindings: {
@@ -22090,16 +23452,16 @@ async function handleWorkbenchApi(req, res, url, route, method, db) {
         [body.sessionId]: { ...binding, title }
       }
     }));
-    return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] });
+    return sendJson2(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] });
   }
   if (method === "GET" && route === "card-workbench/plans") {
     const statusParam = url.searchParams.get("status") ?? "pending";
     if (statusParam !== "pending" && statusParam !== "approved" && statusParam !== "rejected" && statusParam !== "applied" && statusParam !== "all") {
-      return sendJson(res, 400, { ok: false, message: `unknown status filter '${statusParam}'`, code: "TAVERN_WORKBENCH" });
+      return sendJson2(res, 400, { ok: false, message: `unknown status filter '${statusParam}'`, code: "TAVERN_WORKBENCH" });
     }
     const kindParam = url.searchParams.get("kind");
     if (kindParam !== null && kindParam !== "card" && kindParam !== "world") {
-      return sendJson(res, 400, { ok: false, message: `unknown kind filter '${kindParam}'`, code: "TAVERN_WORKBENCH" });
+      return sendJson2(res, 400, { ok: false, message: `unknown kind filter '${kindParam}'`, code: "TAVERN_WORKBENCH" });
     }
     const character = url.searchParams.get("character") ?? void 0;
     const plans = await listPlans(dshHomePath("tavern"), {
@@ -22107,32 +23469,32 @@ async function handleWorkbenchApi(req, res, url, route, method, db) {
       ...character !== void 0 && character !== "" ? { character } : {},
       status: statusParam
     });
-    return sendJson(res, 200, { ok: true, plans });
+    return sendJson2(res, 200, { ok: true, plans });
   }
   if (method === "POST" && route.startsWith("card-workbench/plans/") && route.endsWith("/decision")) {
     const planId = decodeURIComponent(route.slice("card-workbench/plans/".length, route.length - "/decision".length));
     const body = await readJson(req);
     if (typeof body.approve !== "boolean") {
-      return sendJson(res, 400, { ok: false, message: "expected { approve: boolean }", code: "TAVERN_WORKBENCH" });
+      return sendJson2(res, 400, { ok: false, message: "expected { approve: boolean }", code: "TAVERN_WORKBENCH" });
     }
     const plan = await getPlan(dshHomePath("tavern"), planId);
-    if (plan === void 0) return sendJson(res, 404, { ok: false, message: `plan '${planId}' not found`, code: "TAVERN_WORKBENCH" });
+    if (plan === void 0) return sendJson2(res, 404, { ok: false, message: `plan '${planId}' not found`, code: "TAVERN_WORKBENCH" });
     try {
       if (body.approve) {
         if (plan.kind === "world") {
           const executed2 = await executeWorldPlan(plan);
-          return sendJson(res, 200, { ok: true, plan: executed2.plan, applied: { world: executed2.world, entryCount: executed2.entryCount, nextUid: executed2.nextUid, entries: executed2.touched } });
+          return sendJson2(res, 200, { ok: true, plan: executed2.plan, applied: { world: executed2.world, entryCount: executed2.entryCount, nextUid: executed2.nextUid, entries: executed2.touched } });
         }
         const executed = await executeCardPlan(plan);
-        return sendJson(res, 200, { ok: true, plan: executed.plan, applied: { character: executed.character, changes: executed.changes, fieldLengths: executed.fieldLengths } });
+        return sendJson2(res, 200, { ok: true, plan: executed.plan, applied: { character: executed.character, changes: executed.changes, fieldLengths: executed.fieldLengths } });
       }
       const decided = await decidePlan(dshHomePath("tavern"), planId, false);
-      return sendJson(res, 200, { ok: true, plan: decided });
+      return sendJson2(res, 200, { ok: true, plan: decided });
     } catch (error) {
-      return sendJson(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error), code: "TAVERN_WORKBENCH" });
+      return sendJson2(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error), code: "TAVERN_WORKBENCH" });
     }
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 var NOVEL_SUBPATHS = ["novels/outline", "novels/body", "novels/export", "novels/pause", "novels/resume", "novels/stop", "novels/update-outline", "novels/approve-outline"];
 function novelHttpFailure(error) {
@@ -22265,13 +23627,13 @@ async function discoverWriterProbeRuntime(ctx) {
 async function handleNovelsApi(ctx, req, res, url, route, method) {
   const novels = await novelStore();
   if (method === "GET" && route === "novels") {
-    return sendJson(res, 200, { ok: true, novels: await novels.listNovels() });
+    return sendJson2(res, 200, { ok: true, novels: await novels.listNovels() });
   }
   if (method === "POST" && route === "novels") {
     const body = await readJson(req);
     const capabilities = inspectAgentNovelCapabilities(ctx);
     if (!capabilities.available) {
-      return sendJson(res, 503, {
+      return sendJson2(res, 503, {
         ok: false,
         message: `AgentNovel is unavailable on this host: ${capabilities.reasons.join(" ")}`,
         code: "NOVEL_CAPABILITY",
@@ -22281,7 +23643,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
     const config = body;
     const violations = validateCreateConfig(config);
     if (violations.length > 0) {
-      return sendJson(res, 400, {
+      return sendJson2(res, 400, {
         ok: false,
         message: "invalid novel config",
         code: "NOVEL_CONFIG",
@@ -22292,7 +23654,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
       const channel = await discoverWriterProbeRuntime(ctx);
       const probe = await inspectWriterSubagentCapabilities(channel);
       if (!probe.spawnOk || probe.p1.status === "fail") {
-        return sendJson(res, 400, {
+        return sendJson2(res, 400, {
           ok: false,
           message: `writer subagent mode is unavailable on this host (${probe.p1.detail}); create the novel with writerMode 'inline' instead (0007 \xA79)`,
           code: "NOVEL_WRITER_PROBE",
@@ -22303,7 +23665,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
     const created = await novels.createNovel(await store4(), config);
     const snapshot2 = await novels.getNovel(created.novelId);
     const summary = snapshot2 === void 0 ? void 0 : summarizeNovel(snapshot2);
-    return sendJson(res, 200, {
+    return sendJson2(res, 200, {
       ok: true,
       novel: {
         novelId: created.novelId,
@@ -22317,14 +23679,14 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
   if (method === "GET" && route === "novels/writer-probe") {
     const channel = await discoverWriterProbeRuntime(ctx);
     const probe = await inspectWriterSubagentCapabilities(channel);
-    return sendJson(res, 200, { ok: true, probe, channel: channel?.channel ?? "none" });
+    return sendJson2(res, 200, { ok: true, probe, channel: channel?.channel ?? "none" });
   }
   const parts = parseNovelRoute(route);
-  if (parts === null) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  if (parts === null) return sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
   const { novelId, subpath } = parts;
   if (method === "GET" && subpath === null) {
     const snapshot2 = await requireNovel(novels, novelId);
-    return sendJson(res, 200, { ok: true, novel: novelDetail(snapshot2) });
+    return sendJson2(res, 200, { ok: true, novel: novelDetail(snapshot2) });
   }
   if (method === "PATCH" && subpath === null) {
     const body = await readJson(req);
@@ -22336,7 +23698,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
       patch: body.patch,
       cause: typeof body.cause === "string" && body.cause.trim() !== "" ? body.cause : "panel-edit"
     });
-    return sendJson(res, 200, { ok: true, revision: result.revision });
+    return sendJson2(res, 200, { ok: true, revision: result.revision });
   }
   if (method === "DELETE" && subpath === null) {
     await novels.pause(novelId, { reason: "user-request", detail: "deletion requested from the novels panel" }).catch(() => {
@@ -22346,7 +23708,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
       sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.architecture === "agent-novel" && binding.novelId === novelId)))
     }));
     await novels.deleteNovel(novelId);
-    return sendJson(res, 200, { ok: true });
+    return sendJson2(res, 200, { ok: true });
   }
   if (method === "POST" && subpath === "novels/pause") {
     const result = await novels.pause(novelId, {
@@ -22354,21 +23716,21 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
       detail: "paused from the novels panel",
       resumeHint: "resume explicitly to authorize further work (proposal 0005 \xA713)"
     });
-    return sendJson(res, 200, { ok: true, revision: result.revision });
+    return sendJson2(res, 200, { ok: true, revision: result.revision });
   }
   if (method === "POST" && subpath === "novels/resume") {
     const result = await novels.resume(novelId);
     (await novelDriverPromise)?.kick(novelId);
-    return sendJson(res, 200, { ok: true, revision: result.revision });
+    return sendJson2(res, 200, { ok: true, revision: result.revision });
   }
   if (method === "POST" && subpath === "novels/stop") {
     const result = await novels.stop(novelId);
-    return sendJson(res, 200, { ok: true, revision: result.revision });
+    return sendJson2(res, 200, { ok: true, revision: result.revision });
   }
   if (method === "POST" && subpath === "novels/update-outline") {
     const result = await novels.requestRevision(novelId);
     (await novelDriverPromise)?.kick(novelId);
-    return sendJson(res, 200, { ok: true, revision: result.revision });
+    return sendJson2(res, 200, { ok: true, revision: result.revision });
   }
   if (method === "POST" && subpath === "novels/approve-outline") {
     const body = await readJson(req).catch(() => void 0);
@@ -22377,11 +23739,11 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
     if (expected === null || expected === void 0 || expected.trim() === "") throw new Error("expected { expectedOutlineRevision }");
     const result = await novels.approveOutline(novelId, { expectedOutlineRevision: expected });
     (await novelDriverPromise)?.kick(novelId);
-    return sendJson(res, 200, { ok: true, revision: result.revision });
+    return sendJson2(res, 200, { ok: true, revision: result.revision });
   }
   if (method === "GET" && subpath === "novels/outline") {
     const snapshot2 = await requireNovel(novels, novelId);
-    return sendJson(res, 200, { ok: true, outline: snapshot2.outline });
+    return sendJson2(res, 200, { ok: true, outline: snapshot2.outline });
   }
   if (method === "GET" && subpath === "novels/body") {
     const chapterId = url.searchParams.get("chapterId");
@@ -22392,7 +23754,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
       ...cursor !== null && cursor !== "" ? { cursor } : {},
       ...limitRaw !== null && limitRaw !== "" ? { limit: Number(limitRaw) } : {}
     });
-    return sendJson(res, 200, { ok: true, paragraphs: [...page.paragraphs], nextCursor: page.nextCursor });
+    return sendJson2(res, 200, { ok: true, paragraphs: [...page.paragraphs], nextCursor: page.nextCursor });
   }
   if (method === "GET" && subpath === "novels/export") {
     const projector = await novelProjectorPromise;
@@ -22405,7 +23767,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
     res.end(Buffer.from(exported.bytes));
     return;
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 function errorCodeText(error) {
   if (typeof error === "object" && error !== null && "code" in error) {
@@ -22649,11 +24011,11 @@ async function previewGeneration(ctx, req, res, db) {
   const chatId = body.chatId;
   const userText = typeof body.userText === "string" ? body.userText.trim() : "";
   if (!characterName || typeof chatId !== "string") {
-    return sendJson(res, 400, { ok: false, message: "character and chatId are required" });
+    return sendJson2(res, 400, { ok: false, message: "character and chatId are required" });
   }
-  if (userText === "") return sendJson(res, 400, { ok: false, message: "userText is empty" });
+  if (userText === "") return sendJson2(res, 400, { ok: false, message: "userText is empty" });
   const snapshot2 = await db.getChatSnapshot(characterName, chatId);
-  if (!snapshot2) return sendJson(res, 404, { ok: false, message: "character or chat not found" });
+  if (!snapshot2) return sendJson2(res, 404, { ok: false, message: "character or chat not found" });
   const group2 = body.group === true || await isGroupChat(db, characterName, chatId);
   const ac = new AbortController();
   req.on?.("aborted", () => ac.abort());
@@ -22714,7 +24076,7 @@ async function previewGeneration(ctx, req, res, db) {
       }
     }
     if (!res.writableEnded) {
-      return sendJson(res, 200, {
+      return sendJson2(res, 200, {
         ok: true,
         text,
         provider: request.params.provider,
@@ -22725,7 +24087,7 @@ async function previewGeneration(ctx, req, res, db) {
     }
   } catch (error) {
     if (!res.writableEnded) {
-      return sendJson(res, 500, { ok: false, message: error instanceof Error ? error.message : String(error) });
+      return sendJson2(res, 500, { ok: false, message: error instanceof Error ? error.message : String(error) });
     }
   }
 }
@@ -23240,7 +24602,7 @@ async function runTavernScript(ctx, req, res, db) {
   const globals = macros.snapshotVars().global;
   await db.updateState(() => ({ scriptGlobals: globals }));
   const freshSnapshot = await db.getChatSnapshot(characterName, chatId);
-  return sendJson(res, 200, {
+  return sendJson2(res, 200, {
     ok: true,
     output: result.output,
     chatChanged: result.chatChanged,
@@ -23694,8 +25056,8 @@ function readBuildInfo() {
   const stamped = buildTimeStamp();
   if (stamped.commit !== "") commit = stamped.commit;
   for (const packagePath of [
-    resolve4(import.meta.dirname, "package.json"),
-    resolve4(import.meta.dirname, "..", "package.json")
+    resolve5(import.meta.dirname, "package.json"),
+    resolve5(import.meta.dirname, "..", "package.json")
   ]) {
     try {
       const packageData = JSON.parse(readFileSync5(packagePath, "utf8"));
@@ -23707,7 +25069,7 @@ function readBuildInfo() {
     }
   }
   try {
-    const generated = JSON.parse(readFileSync5(resolve4(import.meta.dirname, "version.json"), "utf8"));
+    const generated = JSON.parse(readFileSync5(resolve5(import.meta.dirname, "version.json"), "utf8"));
     if (typeof generated?.version === "string" && generated.version.trim() !== "") {
       version = generated.version.trim();
     }
@@ -23718,13 +25080,13 @@ function readBuildInfo() {
   return { version, commit };
 }
 function buildTimeStamp() {
-  const version = true ? "0.5.1".trim() : "";
-  const commit = true ? normalizeCommit("ea8826b") : void 0;
+  const version = true ? "0.6.0".trim() : "";
+  const commit = true ? normalizeCommit("ddf9991") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
   const fallback = normalizeCommit(process.env.DSH_TAVERN_COMMIT ?? buildFallback) ?? "unknown";
-  const repositoryRoot = resolve4(import.meta.dirname, "..", "..");
+  const repositoryRoot = resolve5(import.meta.dirname, "..", "..");
   const packagePath = relative2(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
   if (packagePath !== "packages/plugin") return fallback;
   const git = (args) => execFileSync("git", args, {
@@ -23735,7 +25097,7 @@ function resolveTavernCommit(buildFallback) {
     windowsHide: true
   }).trim();
   try {
-    const gitRoot = resolve4(git(["rev-parse", "--show-toplevel"]));
+    const gitRoot = resolve5(git(["rev-parse", "--show-toplevel"]));
     if (relative2(repositoryRoot, gitRoot) !== "") return fallback;
     return normalizeCommit(git(["rev-parse", "--short=7", "HEAD"])) ?? fallback;
   } catch {
@@ -23792,11 +25154,11 @@ async function handleUpdateApi(ctx, req, res, url, route, method) {
     const refresh = url.searchParams.get("refresh");
     const fresh = refresh === "1" || refresh === "true";
     const snapshot2 = fresh ? await service.check({ force: true }) : service.snapshot();
-    return sendJson(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
+    return sendJson2(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
   }
   if (method === "POST" && route === "update/check") {
     const snapshot2 = await service.check({ force: true });
-    return sendJson(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
+    return sendJson2(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
   }
   if (method === "POST" && route === "update/install") {
     const body = await readJson(req).catch(() => ({}));
@@ -23805,15 +25167,15 @@ async function handleUpdateApi(ctx, req, res, url, route, method) {
       void service.install({ force }).catch(() => {
       });
       const snapshot3 = service.snapshot();
-      return sendJson(res, 200, { ok: true, started: true, update: snapshot3, changelog: updateChangelog(snapshot3) });
+      return sendJson2(res, 200, { ok: true, started: true, update: snapshot3, changelog: updateChangelog(snapshot3) });
     }
     const snapshot2 = await service.install({ force });
-    return sendJson(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
+    return sendJson2(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 async function handleModsApi(ctx, req, res, url, route, method) {
-  const notFound = () => sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  const notFound = () => sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
   const segments = route === "mods" ? [] : route.slice("mods/".length).split("/");
   const modId = segments[0] ?? "";
   const subpath = segments.length > 1 ? segments.slice(1).join("/") : "";
@@ -23823,34 +25185,34 @@ async function handleModsApi(ctx, req, res, url, route, method) {
   } catch (cause) {
     ctx.logger?.warn?.(`dsh-tavern: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
     if (method === "GET" && route === "mods") {
-      return sendJson(res, 200, { ok: true, available: false, reason: "mod host unavailable", globalEnabled: false, mods: [] });
+      return sendJson2(res, 200, { ok: true, available: false, reason: "mod host unavailable", globalEnabled: false, mods: [] });
     }
     const isManagementWrite = route === "mods/state" || segments.length === 2 && (subpath === "enable" || subpath === "disable" || subpath === "reload");
     if (!isManagementWrite) return notFound();
     throw new Error("mod host unavailable");
   }
   if (method === "GET" && route === "mods") {
-    return sendJson(res, 200, { ok: true, ...host.snapshot() });
+    return sendJson2(res, 200, { ok: true, ...host.snapshot() });
   }
   if (method === "POST" && route === "mods/install") {
     const body = await readJson(req);
     if (typeof body.url !== "string" || body.url.trim() === "") throw new Error("expected { url }");
     const result = await host.installFromGit(body.url, body.force === true);
-    return sendJson(res, 200, { ok: true, ...host.snapshot(), installed: result });
+    return sendJson2(res, 200, { ok: true, ...host.snapshot(), installed: result });
   }
   if (method === "POST" && route === "mods/state") {
     const body = await readJson(req);
     if (typeof body.globalEnabled !== "boolean") throw new Error("expected { globalEnabled }");
     await host.setGlobalEnabled(body.globalEnabled);
-    return sendJson(res, 200, { ok: true, ...host.snapshot() });
+    return sendJson2(res, 200, { ok: true, ...host.snapshot() });
   }
   if (method === "POST" && segments.length === 2 && (subpath === "enable" || subpath === "disable")) {
     await host.setModEnabled(decodeURIComponent(modId), subpath === "enable");
-    return sendJson(res, 200, { ok: true, ...host.snapshot() });
+    return sendJson2(res, 200, { ok: true, ...host.snapshot() });
   }
   if (method === "POST" && segments.length === 2 && subpath === "reload") {
     await host.reload(decodeURIComponent(modId));
-    return sendJson(res, 200, { ok: true, ...host.snapshot() });
+    return sendJson2(res, 200, { ok: true, ...host.snapshot() });
   }
   if (method === "POST" && segments.length === 3 && segments[1] === "button") {
     let id = modId;
@@ -23868,9 +25230,9 @@ async function handleModsApi(ctx, req, res, url, route, method) {
     try {
       const outcome = await host.dispatchButton(id, name2, context);
       if (outcome === "not-found") return notFound();
-      return sendJson(res, 200, { ok: true, handled: outcome === "handled" });
+      return sendJson2(res, 200, { ok: true, handled: outcome === "handled" });
     } catch (cause) {
-      return sendJson(res, 500, { ok: false, message: cause instanceof Error ? cause.message : String(cause) });
+      return sendJson2(res, 500, { ok: false, message: cause instanceof Error ? cause.message : String(cause) });
     }
   }
   if (segments.length >= 1 && modId !== "") {
@@ -23888,13 +25250,13 @@ async function handleModsApi(ctx, req, res, url, route, method) {
   }
   return notFound();
 }
-function sendJson(res, status2, body) {
+function sendJson2(res, status2, body) {
   res.statusCode = status2;
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
 }
 function readJson(req, maxBytes = 2 * 1024 * 1024) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (chunk) => {
@@ -23906,7 +25268,7 @@ function readJson(req, maxBytes = 2 * 1024 * 1024) {
     });
     req.on("end", () => {
       try {
-        resolve5(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve6(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         reject(new Error("invalid JSON body"));
       }

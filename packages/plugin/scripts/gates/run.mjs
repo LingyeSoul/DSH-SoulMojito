@@ -83,6 +83,17 @@ const REQUIRED_SERVER_ROUTES = [
   'mods/',
   // Mod git 安装（提案 0015 P2）：GitHub 源降级链预读 + git clone。管理保留段。
   'mods/install',
+  // 游戏桥 HTTP 面（提案 0018 §4.1，P0+P2）：list/revision/start/state/action/
+  // install/reload 七路 + 前缀分派段（视图路由 games/:gid/view/:sid 的动态段
+  // 不可作字面量，由 checkServerText 的 games 标记块另行覆盖）。
+  'games/',
+  'games/list',
+  'games/revision',
+  'games/start',
+  'games/state/',
+  'games/action/',
+  'games/install',
+  'games/reload',
 ]
 
 // DSH client-web's platform module table, mirrored from the host web shell's
@@ -347,6 +358,23 @@ function checkServerText(text) {
   if (!text.includes('resolveLocalDtype')) {
     problems.push('server bundle must resolve the configured local embed precision to a concrete dtype')
   }
+  // 游戏桥（提案 0018 P0+P2）：跨 bundle 服务句柄锚（agent bundle 经同一
+  // Symbol.for 解析）+ 导入期烟测函数 + 孤儿会话语义。games/revision 路由由
+  // REQUIRED_SERVER_ROUTES 锁定；视图路由的 'view' 段在此一并锁。
+  if (!text.includes('dsh-tavern:games-service')) {
+    problems.push("server bundle must publish the games service handle 'dsh-tavern:games-service'")
+  }
+  if (!text.includes('smokeTestGameEngine')) {
+    problems.push('server bundle must run the game engine import smoke test (smokeTestGameEngine)')
+  }
+  if (!text.includes('orphaned')) {
+    problems.push('server bundle must carry the orphaned-session semantics marker')
+  }
+  // 视图路由 games/:gid/view/:sid 的动态段字面量（esbuild 输出统一双引号，
+  // 两种引号形态都收）。
+  if (!text.includes("'view'") && !text.includes('"view"')) {
+    problems.push("server bundle must serve game views under games/:gid/view/:sid")
+  }
   return problems
 }
 
@@ -490,6 +518,31 @@ function checkFrontendRuntimeText(text) {
     // 量化精度下拉（2026-10-13）：标签键 + 按目录识别的检测端点调用。
     "'settings.memoryPrecision'",
     'memory/embed/local/quantizations',
+    // 游戏对局面（提案 0018 §4.3，P1；2026-10-14 修订补对局面三面）：桥协议
+    // 两条消息（与 src/games/view.ts 注入的桥脚本逐字段对齐）+ 清单/水位/开局/
+    // 落子调用字面量 + 分区组件与 i18n 键 + MVU 同位对局面（ST 内联组件/共用
+    // 数据 hook/右栏 tab 注册与开局自动展开；内联挂载顺序由 games-client.spec
+    // 的源顺序断言锁定）。marker 全 ASCII（esbuild 中文转义不确定性是上一段
+    // 的实测坑）。
+    'dsh-tavern:game-state',
+    'dsh-tavern:game-action',
+    'games/list',
+    'games/revision',
+    'games/start',
+    'games/action/',
+    'function GameSurface({ session',
+    'function GamesPanel({ useSessions })',
+    'function TavernGameBoard({ sessionId, sidebar = false })',
+    'function useChatGameSessions(character, chatId)',
+    'function TavernGamesSidebarTab({ sessionId })',
+    "'tavern-games'",
+    'sidebarRight.openTab(GAMES_TAB_KIND)',
+    // 2026-10-14 second revision: header games entry (MVU sibling), empty-state card, baseline-first.
+    'const openGamesSurface = () => {',
+    'dt-game-board-empty',
+    ".then(() => api(`games/list${query}`))",
+
+    "'panel.section.games'",
   ]) {
     if (!text.includes(marker)) problems.push(`frontend runtime is missing marker '${marker}'`)
   }
@@ -606,7 +659,7 @@ function checkInternalWorkspaceText(serverText, clientText) {
   return problems
 }
 
-function checkAgentTavernIsolation(sourceFiles, serverText) {
+function checkAgentTavernIsolation(sourceFiles, serverText, agentText) {
   const problems = []
   for (const [name, text] of sourceFiles) {
     for (const [label, pattern] of [
@@ -619,6 +672,15 @@ function checkAgentTavernIsolation(sourceFiles, serverText) {
   }
   for (const marker of ['agent-tavern/audit', 'assertStGenerationBinding(state, body.sessionId)']) {
     if (!serverText.includes(marker)) problems.push(`server architecture isolation is missing marker '${marker}'`)
+  }
+  // 游戏桥五工具 + 懒段（提案 0018 §4.2；game_wait 为 2026-10-14 修订）：
+  // 工具名、order -63 段名与句柄解析 seam 必须在 agent bundle 产物里
+  // （agent.mjs 是独立 esbuild 产物，源文件在场不等于打包在场；中文报文被
+  // esbuild 转义为 \uXXXX，故锚 resolveGamesService）。
+  if (agentText !== undefined) {
+    for (const marker of ['game_list', 'game_start', 'game_state', 'game_move', 'game_wait', 'dsh-tavern:agent-games', 'resolveGamesService']) {
+      if (!agentText.includes(marker)) problems.push(`agent bundle is missing the games bridge marker '${marker}'`)
+    }
   }
   return problems
 }
@@ -1794,7 +1856,8 @@ const gates = [
       const versionReader = 'readFileSync("version.json", "utf8"); var BUILD_INFO = { version: "0.0.0", commit: "stub" };'
       const commitResolver = 'function resolveCommit() { execFileSync("git", ["rev-parse", "--show-toplevel"]); return "stub"; } var TAVERN_COMMIT = resolveCommit();'
       const localEmbed = '"local-onnx:"\n\'@huggingface/transformers\'\nvar localStatus = { runtimeInstalled: true };\nfunction inferLocalModelSettings() {}\n"memory/embed/local/install"\nfunction detectLocalQuantizations() {}\n"memory/embed/local/quantizations"\nfunction resolveLocalDtype() {}'
-      const good = `var name = "dsh-tavern"; var inject = []; function apply() {} function assertStGenerationBinding() {}\n${routeMarkers}\n"${API_PREFIX}"\n${versionReader}\n${commitResolver}\n${localEmbed}\nvar bootstrap = { ok: true, version: BUILD_INFO.version, commit: TAVERN_COMMIT };\nexport { name, inject, apply };`
+      const gamesBridge = '"dsh-tavern:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';'
+      const good = `var name = "dsh-tavern"; var inject = []; function apply() {} function assertStGenerationBinding() {}\n${routeMarkers}\n"${API_PREFIX}"\n${versionReader}\n${commitResolver}\n${localEmbed}\n${gamesBridge}\nvar bootstrap = { ok: true, version: BUILD_INFO.version, commit: TAVERN_COMMIT };\nexport { name, inject, apply };`
       const badRoute = good.replace('"generate"', '"missing"')
       const badStamp = good.replace('version: BUILD_INFO.version, ', '')
       const hardcodedCommit = good.replace('commit: TAVERN_COMMIT', 'commit: "stub"')
@@ -1804,6 +1867,10 @@ const gates = [
       const badLocalQuantScan = good.replace('function detectLocalQuantizations() {}', 'function detectNothing() {}')
       const badLocalQuantRoute = good.replace('"memory/embed/local/quantizations"', '"memory/embed/local/gone"')
       const badLocalDtypeResolve = good.replace('function resolveLocalDtype() {}', 'function resolveNothing() {}')
+      const badGamesHandle = good.replace('"dsh-tavern:games-service"', '"games-service-gone"')
+      const badGamesSmoke = good.replace('function smokeTestGameEngine() {}', 'function smokeNothing() {}')
+      const badGamesOrphan = good.replace('orphaned: true', 'gone: true')
+      const badGamesView = good.replace("=== 'view'", "=== 'gone'").replace("=== \"view\"", "=== \"gone\"")
       return checkServerText(good).length === 0
         && checkServerText(badRoute).length > 0
         && checkServerText(badStamp).length > 0
@@ -1814,6 +1881,10 @@ const gates = [
         && checkServerText(badLocalQuantScan).length > 0
         && checkServerText(badLocalQuantRoute).length > 0
         && checkServerText(badLocalDtypeResolve).length > 0
+        && checkServerText(badGamesHandle).length > 0
+        && checkServerText(badGamesSmoke).length > 0
+        && checkServerText(badGamesOrphan).length > 0
+        && checkServerText(badGamesView).length > 0
         && checkServerFreshness(10, 10).length === 0
         && checkBuildStamps('var built = { version: "0.0.0", commit: "abc1234" };', '0.0.0', 'abc1234').length === 0
         && checkBuildStamps('var built = { version: __TAVERN_VERSION__, commit: __TAVERN_COMMIT__ };', '0.0.0', 'abc1234').length > 0
@@ -1889,6 +1960,25 @@ const gates = [
         // 量化精度下拉（2026-10-13）：标签键 + 目录识别端点调用。
         "'settings.memoryPrecision'",
         'memory/embed/local/quantizations',
+        // 游戏对局面（提案 0018 §4.3，P1）：桥消息 + 调用字面量 + 组件 + i18n 键。
+        'dsh-tavern:game-state',
+        'dsh-tavern:game-action',
+        'games/list',
+        'games/revision',
+        'games/start',
+        'games/action/',
+        'function GameSurface({ session, view, onOutcome }) {}',
+        'function GamesPanel({ useSessions }) {}',
+        'function TavernGameBoard({ sessionId, sidebar = false }) {}',
+        'function useChatGameSessions(character, chatId) {}',
+        'function TavernGamesSidebarTab({ sessionId }) {}',
+        "'tavern-games'",
+        'sidebarRight.openTab(GAMES_TAB_KIND)',
+        'const openGamesSurface = () => {}',
+        'dt-game-board-empty',
+        '.then(() => api(`games/list${query}`))',
+
+        "'panel.section.games'",
       ].join('\n')
       const bad = good.replace("sandbox: 'allow-scripts'", "sandbox: 'allow-forms'")
       const badBridge = good.replace('dsh-tavern:mod-request', 'dsh-tavern:mod-bridge-removed')
@@ -1907,6 +1997,30 @@ const gates = [
       const badModeOff = good.replace("'settings.memoryProviderOff'", "'settings.memoryModeGone'")
       const badPrecisionSelect = good.replace("'settings.memoryPrecision'", "'settings.memoryQuantGone'")
       const badQuantRoute = good.replace('memory/embed/local/quantizations', 'memory/embed/local/gone')
+      // 游戏面负样本（提案 0018 §4.3）：替换文本不得以原 marker 为前缀/子串——
+      // 'games/list-gone' 会包含 'games/list' 这类坑逐个排过。
+      const badGameState = good.replace('dsh-tavern:game-state', 'dsh-tavern:game-stale')
+      const badGameAction = good.replace('dsh-tavern:game-action', 'dsh-tavern:game-act-gone')
+      // games/list 子串在基线链 marker（.then(() => api(`games/list${query}`))）里
+      // 也出现——单次 replace 只换第一处会让 marker 幸存不翻红（2026-10-14 实测坑），
+      // 全量替换。
+      const badGamesList = good.split('games/list').join('games/gone-list')
+      const badGamesRevision = good.replace('games/revision', 'games/rev-gone')
+      const badGamesStart = good.replace('games/start', 'games/gone-start')
+      const badGamesAction = good.replace('games/action/', 'games/act-gone/')
+      const badGameSurface = good.replace('function GameSurface({ session', 'function GameStale({ session')
+      const badGamesPanel = good.replace('function GamesPanel({ useSessions })', 'function GamesPane({ useSessions })')
+      // 对局面三面（2026-10-14 修订）：内联组件/右栏 tab kind/开局自动展开
+      // 任一缺失都必须翻红——替换文本不得以原 marker 为前缀/子串。
+      const badGameBoard = good.replace('function TavernGameBoard({ sessionId, sidebar = false })', 'function TavernGameStale({ sessionId, sidebar = false })')
+      const badGameHook = good.replace('function useChatGameSessions(character, chatId)', 'function useChatGameSessionsGone(character, chatId)')
+      const badGameTabKind = good.replace("'tavern-games'", "'tavern-gamesX'")
+      const badGameAutoOpen = good.replace('sidebarRight.openTab(GAMES_TAB_KIND)', 'sidebarRight.openTab(GAMES_TAB_GONE)')
+      const badGameHeaderEntry = good.replace('const openGamesSurface = () => {}', 'const openGamesGone = () => {}')
+      const badGameEmptyCard = good.replace('dt-game-board-empty', 'dt-game-empty-gone')
+      const badGameBaseline = good.replace('.then(() => api(`games/list${query}`))', '.then(() => api(`games/gone-list`))')
+
+      const badGamesSectionKey = good.replace("'panel.section.games'", "'panel.section.gone'")
       return checkFrontendRuntimeText(good).length === 0
         && checkFrontendRuntimeText(bad).length > 0
         && checkFrontendRuntimeText(badBridge).length > 0
@@ -1923,6 +2037,22 @@ const gates = [
         && checkFrontendRuntimeText(badModeOff).length > 0
         && checkFrontendRuntimeText(badPrecisionSelect).length > 0
         && checkFrontendRuntimeText(badQuantRoute).length > 0
+        && checkFrontendRuntimeText(badGameState).length > 0
+        && checkFrontendRuntimeText(badGameAction).length > 0
+        && checkFrontendRuntimeText(badGamesList).length > 0
+        && checkFrontendRuntimeText(badGamesRevision).length > 0
+        && checkFrontendRuntimeText(badGamesStart).length > 0
+        && checkFrontendRuntimeText(badGamesAction).length > 0
+        && checkFrontendRuntimeText(badGameSurface).length > 0
+        && checkFrontendRuntimeText(badGamesPanel).length > 0
+        && checkFrontendRuntimeText(badGameBoard).length > 0
+        && checkFrontendRuntimeText(badGameHook).length > 0
+        && checkFrontendRuntimeText(badGameTabKind).length > 0
+        && checkFrontendRuntimeText(badGameAutoOpen).length > 0
+        && checkFrontendRuntimeText(badGameHeaderEntry).length > 0
+        && checkFrontendRuntimeText(badGameEmptyCard).length > 0
+        && checkFrontendRuntimeText(badGameBaseline).length > 0
+        && checkFrontendRuntimeText(badGamesSectionKey).length > 0
         ? []
         : ['frontend runtime marker self-test did not distinguish an unsafe sample']
     },
@@ -2064,20 +2194,29 @@ const gates = [
   {
     name: 'agent-tavern-isolation',
     selfTest: () => {
+      const goodAgent = "var games = ['game_list', 'game_start', 'game_state', 'game_move', 'game_wait']; registerSection('dsh-tavern:agent-games'); function resolveGamesService() {}"
       const good = checkAgentTavernIsolation([
         ['runtime.ts', 'export function runAgentLoop() {}'],
         ['tools.ts', 'export function tool() {}'],
-      ], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)')
+      ], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent)
       const bad = checkAgentTavernIsolation([
         ['runtime.ts', 'ctx.llm.stream()'],
-      ], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)')
+      ], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent)
+      // games 桥负样本：五工具名/段名/报文任一缺失都必须翻红（game_wait 单独
+      // 摘除 = 2026-10-14 修订的专属回归位）。
+      const badGamesTool = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace("'game_state', 'game_move'", "'game_state'"))
+      const badGamesWait = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace("'game_move', 'game_wait'", "'game_move'"))
+      const badGamesSection = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace('dsh-tavern:agent-games', 'dsh-tavern:gone'))
+      const badGamesError = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace('function resolveGamesService() {}', 'function resolveNothing() {}'))
       return good.length === 0 && bad.length > 0
+        && badGamesTool.length > 0 && badGamesWait.length > 0 && badGamesSection.length > 0 && badGamesError.length > 0
         ? []
         : ['AgentTavern isolation self-test did not reject ST generation calls']
     },
     check: () => {
       if (!existsSync(SERVER_PATH)) return ['generated packages/plugin/index.mjs does not exist']
-      return checkAgentTavernIsolation(agentTavernSourceFiles(), readFileSync(SERVER_PATH, 'utf8'))
+      if (!existsSync(AGENT_PATH)) return ['generated packages/plugin/agent.mjs does not exist']
+      return checkAgentTavernIsolation(agentTavernSourceFiles(), readFileSync(SERVER_PATH, 'utf8'), readFileSync(AGENT_PATH, 'utf8'))
     },
   },
   {

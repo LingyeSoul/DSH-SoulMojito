@@ -123,9 +123,11 @@ describe('story-clock example mod', () => {
     expect(check.ok).toBe(true)
     if (check.ok) {
       expect(check.manifest.capabilities).toEqual(['storage', 'llm'])
-      // engines 声明当前宿主次版本（^0.5.0 = >=0.5.0 <0.6.0）；升次版本时本断言
-      // 与 drift guard（tavern-mods-examples.spec.ts）一起逼着同步示例清单。
-      expect(check.manifest.engines?.dshTavern).toBe('^0.5.0')
+      // engines 声明当前宿主次版本（0.x 下 caret 锁次段）；断言从 PLUGIN_VERSION
+      // 推导而非硬编码字面量——升次版本时仍与 drift guard
+      // （tavern-mods-examples.spec.ts）一起逼着同步示例清单（0.6.0 同步实践：
+      // 2026-10-14 游戏桥发布）。
+      expect(check.manifest.engines?.dshTavern).toBe(`^${PLUGIN_VERSION}`)
       expect(satisfiesVersionRange(PLUGIN_VERSION, check.manifest.engines!.dshTavern!).ok).toBe(true)
       expect(check.manifest.surfaces.hooks).toEqual(['user-input', 'post-save'])
       // 声明式按钮（A-1a）：CJK 显示名可声明
