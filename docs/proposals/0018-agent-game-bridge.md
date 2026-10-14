@@ -432,3 +432,18 @@ AgentTavern 标题栏入口、右栏空态卡。「总览」继续用 sparkle（
 决定全文、量测证据与边界见
 [decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md](../../decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md)。
 
+## 13. 2026-10-14 补记：内置中国象棋（§4.1 内置序列第三款）
+
+用户需求「新建内置游戏 中国象棋」：按「内置 = 开箱可玩面」的既定裁定（§11）以内置
+落地，装载形态与井字棋/五子棋同款——`src/games/builtin/xiangqi.ts`（静态 import 的
+TS 引擎 + 内联 viewHtml，零文件依赖）。规则面 v1 明示：全部常规着法（蹩马腿/塞象眼/
+炮架/九宫/过河）与将军检测（含将帅照面「白脸将」）、送将禁令、将死与困毙（双终局
+判负——象棋困毙是胜负不是和棋）完整实现；长将/长捉/循环裁决与限着不实现（v1 无自动
+和棋）。describe/events/summary 统一用**中文象棋记谱**（红汉字黑阿拉伯、进退平、
+前/中/后消歧——Agent 叙述的自然语言面）。legalActions 语义与五子棋建议集不同：
+完整性优先返回**全部合法着法**（初始 44 步，>64 时吃子优先截断——实战不可达），
+视图据此只放行建议集内目标（象棋合法性是局部的，放开点击会大量撞 400）。版本
+0.6.1→0.6.2 连带 story-clock 示例与 mod-api.md 的 engines 值同步。决策全文、记谱
+设计、视图四态真机验收（含截图驱动修的两处图像缺陷）与边界见
+[decisions/2026-10-14-xiangqi-builtin.md](../../decisions/2026-10-14-xiangqi-builtin.md)。
+

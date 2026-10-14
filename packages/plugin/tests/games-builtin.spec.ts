@@ -562,7 +562,7 @@ describe('registry 内置源（§4.1）', () => {
     const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.0' })
     const summaries = registry.summaries()
     expect(summaries.filter((summary) => summary.source === 'builtin').map((summary) => summary.id))
-      .toEqual(['dsh-tavern.gomoku', 'dsh-tavern.tic-tac-toe'])
+      .toEqual(['dsh-tavern.gomoku', 'dsh-tavern.tic-tac-toe', 'dsh-tavern.xiangqi'])
     const gomokuSummary = summaries.find((summary) => summary.id === 'dsh-tavern.gomoku')!
     expect(gomokuSummary.name).toBe('五子棋')
     expect(gomokuSummary.status).toBe('ok')
