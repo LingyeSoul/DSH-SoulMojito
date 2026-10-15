@@ -13,6 +13,11 @@
  * 宿主 Modal 的真实 CSS + 本工程同一份插件 CSS 量过（清单 scrollTop 变化时
  * 品牌 top 恒定、内容滚动时 header top 恒定）；这里锁结构与规则文本，产物层面
  * 由 gates frontend-runtime 的对应 marker（含负样本自证）对账。
+ *
+ * 2026-10-14 移动端回归补记：700px 断点里 .dt-panel-navlist 必须退场
+ * （display:contents）——它是「品牌块常驻」新增的桌面滚动容器，留着会在横向
+ * 按钮条里竖排堆叠分区按钮、把主区挤没（真实量测见
+ * decisions/2026-10-14-panel-mobile-navlist-strip-regression.md）。
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -65,10 +70,31 @@ describe('tavern panel navigation shell layout', () => {
     expect(source).toContain('.dt-panel-body{flex:1;min-height:0;overflow-y:auto}')
   })
 
+  it('retires the section-list wrapper inside the mobile chip strip', () => {
+    // 700px 断点自 §3.5 起就是「面板转纵向 + 导航列变横向滑动按钮条」；6613a75
+    // 新增的 .dt-panel-navlist 带着桌面列向规则（display:flex;flex-direction:column;
+    // flex:1）进了横条——按钮改在横条里竖排堆叠，nav 从 55px 涨到 667px、主区只剩
+    // 33px、正文不可见（2026-10-14 移动端实况，headless Chrome 390×844 实测）。
+    // 修复：清单容器在移动端退场（display:contents），按钮回到横条的 flex 流。
+    const baseListAt = source.indexOf('.dt-panel-navlist{display:flex;flex-direction:column;gap:2px;flex:1;min-height:0;overflow-y:auto}')
+    const mobileAt = source.indexOf('@media(max-width:700px){.dt-panel{flex-direction:column}')
+    expect(baseListAt).toBeGreaterThanOrEqual(0)
+    // display:contents 靠 cascade 覆盖基础规则：媒体查询必须排在基础规则之后。
+    expect(mobileAt).toBeGreaterThan(baseListAt)
+    // 该媒体查询在源文件里是独立一行（逐条规则一行排布），整行取出来锁。
+    const mobileLine = source.slice(mobileAt, source.indexOf('\n', mobileAt))
+    expect(mobileLine).toContain('.dt-panel-nav{width:100%;flex-direction:row;align-items:center;overflow-x:auto;overflow-y:hidden;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}')
+    expect(mobileLine).toContain('.dt-panel-navlist{display:contents}')
+    expect(mobileLine).toContain('.dt-panel-navcell{flex:none}')
+    // 回归形态：横条里再现清单的桌面列向规则（带或不带后续属性）就是这次移动端回归。
+    expect(mobileLine).not.toContain('.dt-panel-navlist{display:flex;flex-direction:column')
+  })
+
   it('marker does not match near-miss samples (negative sample)', () => {
     expect('.dt-panel-navlistX{display:flex'.includes('.dt-panel-navlist{display:flex')).toBe(false)
     expect('.dt-panel-navX{display:flex'.includes('.dt-panel-nav{display:flex')).toBe(false)
     expect("h('div', { className: 'dt-panel-navlistX' },".includes("h('div', { className: 'dt-panel-navlist' },")).toBe(false)
     expect('justify-content:space-between;gap:12px;min-height:52px'.includes('justify-content:space-between;gap:12px;flex:none;min-height:52px')).toBe(false)
+    expect('.dt-panel-navlist{display:contentsX}'.includes('.dt-panel-navlist{display:contents}')).toBe(false)
   })
 })

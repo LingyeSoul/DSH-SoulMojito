@@ -615,6 +615,10 @@ function checkFrontendRuntimeText(text) {
     '.dt-panel-nav{display:flex;flex-direction:column;gap:2px;width:198px;flex:none;padding:10px 8px;border-right:1px solid var(--dsw-alias-border-l2);overflow:hidden}',
     '.dt-panel-navlist{display:flex;flex-direction:column;gap:2px;flex:1;min-height:0;overflow-y:auto}',
     '.dt-panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}',
+    // 移动端横条（同日移动端实况回归）：700px 断点里清单容器必须退场
+    // （display:contents）——留着它，18 个分区按钮会在横向按钮条里竖排堆叠、
+    // 把主区挤没（headless Chrome 390×844 实测：nav 667px / 主区 33px）。
+    '.dt-panel-navlist{display:contents}',
   ]) {
     if (!text.includes(marker)) problems.push(`frontend runtime is missing marker '${marker}'`)
   }
@@ -2095,6 +2099,8 @@ const gates = [
         '.dt-panel-nav{display:flex;flex-direction:column;gap:2px;width:198px;flex:none;padding:10px 8px;border-right:1px solid var(--dsw-alias-border-l2);overflow:hidden}',
         '.dt-panel-navlist{display:flex;flex-direction:column;gap:2px;flex:1;min-height:0;overflow-y:auto}',
         '.dt-panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}',
+        // 移动端横条复位（2026-10-14 移动端实况回归）：媒体查询里清单容器退场。
+        '.dt-panel-navlist{display:contents}',
       ].join('\n')
       const bad = good.replace("sandbox: 'allow-scripts'", "sandbox: 'allow-forms'")
       const badBridge = good.replace('dsh-tavern:mod-request', 'dsh-tavern:mod-bridge-removed')
@@ -2152,6 +2158,9 @@ const gates = [
       const badPanelNavRule = good.replace(';border-right:1px solid var(--dsw-alias-border-l2);overflow:hidden}', ';border-right:1px solid var(--dsw-alias-border-l2);overflow-y:auto}')
       const badNavlistRule = good.replace('.dt-panel-navlist{display:flex;flex-direction:column;gap:2px;flex:1;min-height:0;overflow-y:auto}', '.dt-panel-navlist{display:flex;flex-direction:column;gap:2px;flex:1;min-height:0;overflow:visible}')
       const badPanelHeaderRule = good.replace('justify-content:space-between;gap:12px;flex:none;min-height:52px', 'justify-content:space-between;gap:12px;min-height:52px')
+      // 移动端横条复位（2026-10-14 移动端实况回归）：清单一层不退了（display:contents
+      // 被拆）必须翻红——替换文本 'display:contents-gone' 不含原 marker 的子串。
+      const badMobileNavlist = good.replace('.dt-panel-navlist{display:contents}', '.dt-panel-navlist{display:contents-gone}')
       return checkFrontendRuntimeText(good).length === 0
         && checkFrontendRuntimeText(bad).length > 0
         && checkFrontendRuntimeText(badBridge).length > 0
@@ -2194,6 +2203,7 @@ const gates = [
         && checkFrontendRuntimeText(badPanelNavRule).length > 0
         && checkFrontendRuntimeText(badNavlistRule).length > 0
         && checkFrontendRuntimeText(badPanelHeaderRule).length > 0
+        && checkFrontendRuntimeText(badMobileNavlist).length > 0
         ? []
         : ['frontend runtime marker self-test did not distinguish an unsafe sample']
     },
