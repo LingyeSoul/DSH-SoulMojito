@@ -24361,6 +24361,14 @@ function noticeText(session) {
 function messageOf3(error) {
   return error instanceof Error ? error.message : String(error);
 }
+function turnReachedAgent(session) {
+  if (session.finished) return true;
+  if (session.turn === "") return false;
+  return session.players.find((player) => player.role === session.turn)?.owner === "agent";
+}
+function agentTurnRunning(agent) {
+  return agent.status === "running";
+}
 async function wakeAgentOnHumanMove(host, session) {
   const warn = (message2) => {
     try {
@@ -24369,6 +24377,7 @@ async function wakeAgentOnHumanMove(host, session) {
     }
   };
   if (gameWaiters(session.id) > 0) return false;
+  if (!turnReachedAgent(session)) return false;
   let agentId;
   try {
     agentId = await host.bindingOf?.(session.chat.character, session.chat.chatId);
@@ -24379,6 +24388,7 @@ async function wakeAgentOnHumanMove(host, session) {
   if (agentId === void 0) return false;
   const agent = agentOf2(host.agents, agentId);
   if (agent === void 0) return false;
+  if (agentTurnRunning(agent)) return false;
   const message = {
     id: `game-notice-${session.id}-${session.moveCount}`,
     role: "user",
@@ -29959,7 +29969,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.5".trim() : "";
-  const commit = true ? normalizeCommit("96c7e6c") : void 0;
+  const commit = true ? normalizeCommit("d3a4b19") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

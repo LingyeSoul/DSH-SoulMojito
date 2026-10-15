@@ -5,6 +5,11 @@
  * 等待中不重复唤起（跨 bundle 等待登记）、绑定/冷会话/宿主的逐级降级、
  * 投递失败不外溢。
  *
+ * 2026-10-15 竞态修订（真机 g-60bfb716「通知在 agent 循环输出中异常触发」）：
+ * 投递还须过两道闸——回合判定（该手交出回合或终局；大富翁决定窗 roll 等
+ * 中途动作不投递）与运行中判定（agent status === 'running' 不投递，运行中
+ * 回合经自己的 game_wait/game_state 读面吸收该手）。
+ *
  * 假宿主：结构性替身（agents.get + bindingOf + logger）——与 agent-novel
  * driver 的宿主纪律同款；不 boot index.ts。
  */
@@ -47,6 +52,8 @@ interface FakeAgent {
   id: string
   session: { id: string; header?: { version: number } }
   followup: ReturnType<typeof vi.fn>
+  /** 宿主回合状态；缺省 undefined = 旧宿主形态（测试逐例显式覆盖）。 */
+  status?: string
 }
 
 function fakeAgent(header: { version: number } | null = { version: 4 }): FakeAgent {
@@ -58,9 +65,14 @@ function fakeAgent(header: { version: number } | null = { version: 4 }): FakeAge
   }
 }
 
-function fakeHost(options: { agent?: FakeAgent | undefined; bind?: boolean; throwGet?: boolean; throwBind?: boolean } = {}): GamesWakeHost & { followup: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn>; agent: FakeAgent } {
+function fakeHost(options: { agent?: FakeAgent | undefined; bind?: boolean; throwGet?: boolean; throwBind?: boolean } = {}): GamesWakeHost & { followup: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn>; binding: ReturnType<typeof vi.fn>; agent: FakeAgent } {
   const agent = options.agent === undefined ? fakeAgent() : options.agent
   const warn = vi.fn()
+  const binding = vi.fn(async (character: string, chatId: string) => {
+    if (options.throwBind === true) throw new Error('store offline')
+    if (options.bind === false) return undefined
+    return character === CHARACTER && chatId === CHAT ? AGENT_ID : undefined
+  })
   const host: GamesWakeHost = {
     agents: agent === undefined
       ? undefined
@@ -70,14 +82,10 @@ function fakeHost(options: { agent?: FakeAgent | undefined; bind?: boolean; thro
             return id === AGENT_ID ? agent : undefined
           },
         },
-    bindingOf: async (character: string, chatId: string) => {
-      if (options.throwBind === true) throw new Error('store offline')
-      if (options.bind === false) return undefined
-      return character === CHARACTER && chatId === CHAT ? AGENT_ID : undefined
-    },
+    bindingOf: binding,
     logger: { warn },
   }
-  return Object.assign(host, { warn, agent: agent as FakeAgent, followup: (agent as FakeAgent).followup })
+  return Object.assign(host, { warn, agent: agent as FakeAgent, binding, followup: (agent as FakeAgent).followup })
 }
 
 afterEach(() => {
@@ -127,6 +135,57 @@ describe('wakeAgentOnHumanMove（人类落子 → 自动唤起）', () => {
     } finally {
       release()
     }
+  })
+
+  it('回合未交出（大富翁式决定窗：roll 后 turn 仍在人类）→ 不投递且零成本短路（不查绑定）；同回合收尾动作交出回合后照常投递', async () => {
+    const host = fakeHost()
+    // 2026-10-15 真机 g-60bfb716：人类 roll 命中「可购买或跳过」决定窗——turn 仍在
+    // 人类手上，Agent 此刻不可行动（引擎 actor===turn 必拒），「对手已落子」是假陈述。
+    const midTurn = summary({ gameId: 'dsh-tavern.monopoly', gameName: '大富翁', turn: 'black', moveCount: 6 })
+    expect(await wakeAgentOnHumanMove(host, midTurn)).toBe(false)
+    expect(host.followup).not.toHaveBeenCalled()
+    expect(host.binding).not.toHaveBeenCalled()
+    expect(host.warn).not.toHaveBeenCalled()
+    // 同一人类回合的收尾动作（buy/build/pass）交出回合 → 幂等 id 取那一刻的 moveCount。
+    const handedOver = summary({ gameId: 'dsh-tavern.monopoly', gameName: '大富翁', turn: 'white', moveCount: 7 })
+    expect(await wakeAgentOnHumanMove(host, handedOver)).toBe(true)
+    expect(host.followup).toHaveBeenCalledTimes(1)
+    expect((host.followup.mock.calls[0]![0] as { id: string }).id).toBe(`game-notice-${SESSION_ID}-7`)
+  })
+
+  it('终局不受回合闸限制：人类投降/人类动作终局（turn 停在人类）→ 仍投递收尾叙述', async () => {
+    const host = fakeHost()
+    const ended = summary({ finished: true, winner: 'white', summary: '黑方认输', turn: 'black' })
+    expect(await wakeAgentOnHumanMove(host, ended)).toBe(true)
+    const text = (host.followup.mock.calls[0]![0] as { content: Array<{ text: string }> }).content[0]!.text
+    expect(text).toContain('已结束')
+    expect(text).toContain('收尾')
+  })
+
+  it('turn 不可判定（空串且未终局）→ 不投递（无法证明轮到 Agent，走懒段兜底）', async () => {
+    const host = fakeHost()
+    expect(await wakeAgentOnHumanMove(host, summary({ turn: '' }))).toBe(false)
+    expect(host.followup).not.toHaveBeenCalled()
+    expect(host.binding).not.toHaveBeenCalled()
+  })
+
+  it('agent 运行中（status running）→ 不投递（运行中的回合自行吸收该手）；回到 idle 恢复投递', async () => {
+    const agent = fakeAgent()
+    agent.status = 'running'
+    const host = fakeHost({ agent })
+    expect(await wakeAgentOnHumanMove(host, summary())).toBe(false)
+    expect(host.followup).not.toHaveBeenCalled()
+    expect(host.warn).not.toHaveBeenCalled()
+    agent.status = 'idle'
+    expect(await wakeAgentOnHumanMove(host, summary())).toBe(true)
+    expect(host.followup).toHaveBeenCalledTimes(1)
+  })
+
+  it('旧宿主句柄无 status / status 为未知值 → 不拦（逐属性降级不误杀）', async () => {
+    const legacy = fakeHost()
+    expect(await wakeAgentOnHumanMove(legacy, summary())).toBe(true)
+    const weird = fakeHost({ agent: Object.assign(fakeAgent(), { status: 'paused' }) })
+    expect(await wakeAgentOnHumanMove(weird, summary())).toBe(true)
   })
 
   it('无绑定（非 agent-tavern / 群聊 / 未绑定）→ 静默跳过，无日志噪声', async () => {
