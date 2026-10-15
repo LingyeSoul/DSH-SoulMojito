@@ -36,6 +36,7 @@ import { gitClone, parseGitSource } from '../mods/install.js'
 import { blackjack } from './builtin/blackjack.js'
 import { gomoku } from './builtin/gomoku.js'
 import { junqi } from './builtin/junqi.js'
+import { memoryMatch } from './builtin/memory.js'
 import { ticTacToe } from './builtin/tic-tac-toe.js'
 import { xiangqi } from './builtin/xiangqi.js'
 import {
@@ -138,7 +139,7 @@ export class GameRegistry {
   }
 
   private loadBuiltins(): void {
-    for (const builtin of [ticTacToe, gomoku, xiangqi, junqi, blackjack]) {
+    for (const builtin of [ticTacToe, gomoku, xiangqi, junqi, blackjack, memoryMatch]) {
       const smoke = smokeTestGameEngine(builtin.engine)
       if (!smoke.ok) {
         // 内置引擎烟测失败是编程错误：如实 broken 入册（仍不崩启动），测试会抓。

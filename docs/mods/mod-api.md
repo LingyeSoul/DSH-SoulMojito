@@ -127,7 +127,7 @@ export async function setup(api) {
   （踩坑实录：[decisions/2026-10-12-story-clock-engines-drift.md](../../decisions/2026-10-12-story-clock-engines-drift.md)）。
 
 ```jsonc
-"engines": { "dsh-tavern": "^0.6.4" }   // 宿主 0.6.x 且 ≥0.6.4
+"engines": { "dsh-tavern": "^0.6.5" }   // 宿主 0.6.x 且 ≥0.6.5
 ```
 
 ---

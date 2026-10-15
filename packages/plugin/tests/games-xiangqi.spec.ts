@@ -908,10 +908,10 @@ describe('registry 内置源（§4.1）', () => {
     expect(entry.viewHtml).toContain('data-game="dsh-tavern.xiangqi"')
   })
 
-  it('内置同册（按 id 稳定排序；军棋/21 点随后加入同册）', async () => {
+  it('内置同册（按 id 稳定排序；军棋/21 点/记忆翻牌随后加入同册）', async () => {
     const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.2' })
     expect(registry.summaries().filter((summary) => summary.source === 'builtin').map((summary) => summary.id))
-      .toEqual(['dsh-tavern.blackjack', 'dsh-tavern.gomoku', 'dsh-tavern.junqi', 'dsh-tavern.tic-tac-toe', 'dsh-tavern.xiangqi'])
+      .toEqual(['dsh-tavern.blackjack', 'dsh-tavern.gomoku', 'dsh-tavern.junqi', 'dsh-tavern.memory-match', 'dsh-tavern.tic-tac-toe', 'dsh-tavern.xiangqi'])
   })
 })
 
