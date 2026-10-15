@@ -257,3 +257,17 @@ Mod 宿主只活在 index bundle（`apply` 内加载）。工具/section 要在 
 的 marker（含负样本）双向锁定；真实滚动行为在 headless Chrome 里用宿主 Modal 真实
 CSS 量过（品牌块 top 恒定、只有清单在滚）。决定全文与边界见
 [decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md](../../decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md)。
+
+## 8. 2026-10-14 补记二：移动端横条回归修复（§7 的连带修订）
+
+§7 为「品牌块常驻」把分区按钮包进 `.dt-panel-navlist`（桌面列向 + 独占滚动），但
+700px 断点的移动端分支（`.dt-panel` 转列向、`.dt-panel-nav` 变横向滑动按钮条、
+`.dt-panel-navcell{flex:none}`）没有覆盖这个新容器：18 个分区按钮改在横条里竖排
+堆叠，nav 从 55px 涨到 667px、主区被挤到 33px——移动端「按钮占据了整个面板」
+（2026-10-14 用户实况，因果点名 §7 的改动，RCA 证实）。修复：媒体查询里
+`.dt-panel-navlist{display:contents}`，清单一层在移动端不生成盒，按钮回到横条的
+flex 流（与 §3.5 原始形态逐像素一致）；桌面契约（品牌块常驻 + 清单独占滚动）不动。
+结构与规则文本由 `tavern-panel-layout.spec.ts`（新增移动端分支用例）与 gates
+`frontend-runtime` marker（含负样本）双向锁定；真实几何在 headless Chromium
+390×844 / 360×740 / 700 / 701 / 1280 五档量测。决定全文与边界见
+[decisions/2026-10-14-panel-mobile-navlist-strip-regression.md](../../decisions/2026-10-14-panel-mobile-navlist-strip-regression.md)。
