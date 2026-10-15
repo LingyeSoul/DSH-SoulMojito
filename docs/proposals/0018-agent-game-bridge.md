@@ -772,3 +772,53 @@ marker + `monopoly-removed` 负样本。视图另经 headless Chromium（CDP、�
 顶开（board 370×452 失去正方形），修复为 `.tile` 显式 `min-height:0` + 480px
 窄屏收敛，复测 370×370。决策全文见
 [decisions/2026-10-15-monopoly-builtin.md](../../decisions/2026-10-15-monopoly-builtin.md)。
+
+## 21. 2026-10-15 九次补记：自动续弈两道防重闸——回合判定与运行中判定（竞态修复）
+
+需求源：2026-10-15 用户——「修复大富翁游戏下 自动游戏通知（非用户消息）：对手已在
+「大富翁」棋盘落子，继续对局。sessionId: g-60bfb716 异常触发的问题，agent 明明还在
+循环输出中」。§15 的投递实现只带「game_wait 挂起中不投递」一条防重判据。
+
+**真机对账（g-60bfb716，宿主会话 2026-10-15 07:51–08:00，事件级逐帧）**：
+
+- 人类（红）回合几乎全部是「roll → 决定窗 → buy/build/pass」两次动作（会话 moves
+  逐条可查：07:53:22 roll 出「故宫」可购买 → 07:53:41 buy；07:58:31 roll 出可加盖
+  → 07:58:36 build；……）。
+- 该段共发出 9 条通知（id 尾号 6/13/20/21/26/29/32/35/44 = 投递时的 moveCount），
+  其中 **5 条（-6/-13/-20/-32/-35）对应 roll 命中决定窗的动作**——该手落地时
+  `state.turn` 仍是人类（`phase='decide'`），「对手已落子，继续对局」是假陈述
+  （引擎 actor===turn 闸必拒 Agent 落子；同一日志里 Agent 收到这类通知后的下一步
+  只能是 game_state/game_wait，无法行动）。其余 4 条为该手真正交出回合的合法通知。
+- 9 条通知**全部**以宿主 `agent/inbox/spliced`（`target:"next-turn"`）splice 进
+  **尚未结束的 turn 3**（07:51:19 起、71 个 step，直至会话片段末尾未 end）——第一
+  条 -6 距人类 roll 仅 9ms（07:53:22.996）。这正是用户观察到的「agent 还在循环输出
+  中，通知异常触发」；被 game_wait 挂起吸收的手（如 07:53:41 的 buy）天然不投递，
+  与 §15 防重完全一致。
+
+**根因（RCA）**：§15 的语义锚是「Agent 没调 game_wait 就**结束回合**后」——实现只
+检查了「是否正在 wait」，从未检查 ①该手是否真的把回合交到 Agent 手上；②Agent 是否
+已经结束回合。于是「单回合多动作」玩法（大富翁决定窗 / 21 点连续 hit / 记忆翻牌配对
+成功保留回合）的中途动作会提前唤醒，运行中的回合也会被 splice 成回合结束后的陈旧
+通知回合。
+
+**落法（src/games/wake.ts 单文件两点；service/index/工具面/client 零改动）**：
+
+- `turnReachedAgent(session)`：终局恒真（收尾叙述，含人类投降与人类动作终结对局）；
+  否则按 `players` 反查 `turn` 的 owner === 'agent'；`turn === ''`（不可判定）按不
+  投递降级。不满足即在查绑定前短路（零 store 读）。
+- `agentTurnRunning(agent)`：live agent `status === 'running'` 不投递——运行中的回合
+  经自己的 game_wait/game_state 读面吸收该手；**刻意不做** whenIdle 等待投递（本
+  函数在人类落子 HTTP 回执路径上被 await，等待会卡住棋盘回执；「等空闲再投递」也
+  会回到陈旧回合问题——与 agent-novel 驱动的 whenIdle 等待刻意不同，那边是调度
+  语义、不在回执路径上）。status 缺失/未知（旧宿主形状）逐属性降级为不拦。
+- 通知 id 语义更新为「一次**交出回合的**人类动作恰一条」。
+
+**边界（如实标注）**：Agent 正在运行的回合若恰逢人类极快交回合（该手未被吸收），
+本闸不投递——由该回合自身的读面吸收；未吸收即回落既有兜底（懒段 order -63 常驻
+摘要 + 下次任一消息唤起），不重试（事件语义不变）。
+
+测试与 gates：games-autowake.spec +5 例（回合未交出与交回两态 / 终局不受回合闸限制 /
+turn 不可判定 / 运行中与回 idle / status 缺失与未知不误杀）；gates server-bundle 增
+`function turnReachedAgent(` 与 `function agentTurnRunning(` 两 marker + 各自负样本
+自证。决策全文见
+[decisions/2026-10-15-games-wake-turn-gates.md](../../decisions/2026-10-15-games-wake-turn-gates.md)。

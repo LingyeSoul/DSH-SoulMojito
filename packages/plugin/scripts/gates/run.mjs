@@ -433,6 +433,16 @@ function checkServerText(text) {
   if (!text.includes('game-notice-')) {
     problems.push('server bundle must carry the game wake notice id prefix (game-notice-)')
   }
+  // 自动续弈的两道防重闸（2026-10-15 竞态修订，真机 g-60bfb716）：回合判定
+  // （该手交出回合或终局）与运行中判定（agent status === 'running'）的函数声明名
+  // 须在 bundle 里——丢失即判定防线被拆（大富翁决定窗 roll 的提前唤醒 / 运行中
+  // 回合被 splice 成陈旧通知回合的回归）。
+  if (!text.includes('function turnReachedAgent(')) {
+    problems.push('server bundle must gate the game wake on the turn reaching the agent (turnReachedAgent)')
+  }
+  if (!text.includes('function agentTurnRunning(')) {
+    problems.push('server bundle must gate the game wake on the agent turn being over (agentTurnRunning)')
+  }
   // 投降门（2026-10-14 用户需求「禁用投降」）：状态键 + 服务层拒绝闸须在
   // index bundle 里（键在 store 归一化与面板补丁路由两处、闸在 games service）。
   if (!text.includes('gamesDisableResign')) {
@@ -1945,7 +1955,7 @@ const gates = [
       const versionReader = 'readFileSync("version.json", "utf8"); var BUILD_INFO = { version: "0.0.0", commit: "stub" };'
       const commitResolver = 'function resolveCommit() { execFileSync("git", ["rev-parse", "--show-toplevel"]); return "stub"; } var TAVERN_COMMIT = resolveCommit();'
       const localEmbed = '"local-onnx:"\n\'@huggingface/transformers\'\nvar localStatus = { runtimeInstalled: true };\nfunction inferLocalModelSettings() {}\n"memory/embed/local/install"\nfunction detectLocalQuantizations() {}\n"memory/embed/local/quantizations"\nfunction resolveLocalDtype() {}'
-      const gamesBridge = '"dsh-tavern:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';\nvar builtinGomoku = "dsh-tavern.gomoku";\nvar builtinXiangqi = "dsh-tavern.xiangqi";\nvar builtinJunqi = "dsh-tavern.junqi";\nvar builtinBlackjack = "dsh-tavern.blackjack";\nvar builtinMemory = "dsh-tavern.memory-match";\nvar builtinMonopoly = "dsh-tavern.monopoly";\nvar xiangqiCheckBanner = "#banner.check";\nvar xiangqiCheckHalo = "check-halo";\nvar waitersKey = "dsh-tavern:games-waiters";\nvar noticeId = "game-notice-" + sessionId;\nvar resignKey = "gamesDisableResign";\nfunction assertResignAllowed(action) {}'
+      const gamesBridge = '"dsh-tavern:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';\nvar builtinGomoku = "dsh-tavern.gomoku";\nvar builtinXiangqi = "dsh-tavern.xiangqi";\nvar builtinJunqi = "dsh-tavern.junqi";\nvar builtinBlackjack = "dsh-tavern.blackjack";\nvar builtinMemory = "dsh-tavern.memory-match";\nvar builtinMonopoly = "dsh-tavern.monopoly";\nvar xiangqiCheckBanner = "#banner.check";\nvar xiangqiCheckHalo = "check-halo";\nvar waitersKey = "dsh-tavern:games-waiters";\nvar noticeId = "game-notice-" + sessionId;\nvar resignKey = "gamesDisableResign";\nfunction assertResignAllowed(action) {}\nfunction turnReachedAgent(session) {}\nfunction agentTurnRunning(agent) {}'
       const good = `var name = "dsh-tavern"; var inject = []; function apply() {} function assertStGenerationBinding() {}\n${routeMarkers}\n"${API_PREFIX}"\n${versionReader}\n${commitResolver}\n${localEmbed}\n${gamesBridge}\nvar bootstrap = { ok: true, version: BUILD_INFO.version, commit: TAVERN_COMMIT };\nexport { name, inject, apply };`
       const badRoute = good.replace('"generate"', '"missing"')
       const badStamp = good.replace('version: BUILD_INFO.version, ', '')
@@ -1970,6 +1980,10 @@ const gates = [
       // 原 marker（前缀/子串救活防护）。
       const badGamesWaiters = good.replace('"dsh-tavern:games-waiters"', '"games-waiters-gone"')
       const badGameNotice = good.replace('"game-notice-"', '"notice-gone-"')
+      // 自动续弈两道防重闸（2026-10-15 竞态修订）负样本同款核对：替换名不含原
+      // 函数名子串。
+      const badWakeTurnGate = good.replace('function turnReachedAgent(session) {}', 'function turnGateGone(session) {}')
+      const badWakeRunningGate = good.replace('function agentTurnRunning(agent) {}', 'function runningGateGone(agent) {}')
       const badGamesResignKey = good.replace('"gamesDisableResign"', '"gamesResignGone"')
       const badGamesResignGate = good.replace('function assertResignAllowed(action) {}', 'function assertNothing(action) {}')
       // 将军提示层（2026-10-14 用户需求）负样本：同款核对——替换值 'banner-style-gone'
@@ -1998,6 +2012,8 @@ const gates = [
         && checkServerText(badGamesMonopoly).length > 0
         && checkServerText(badGamesWaiters).length > 0
         && checkServerText(badGameNotice).length > 0
+        && checkServerText(badWakeTurnGate).length > 0
+        && checkServerText(badWakeRunningGate).length > 0
         && checkServerText(badGamesResignKey).length > 0
         && checkServerText(badGamesResignGate).length > 0
         && checkServerText(badXiangqiCheckBanner).length > 0
