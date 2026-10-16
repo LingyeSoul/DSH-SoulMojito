@@ -67,8 +67,8 @@ describe('client games panel (main.js source check)', () => {
 
   it('speaks the bridge protocol and calls the games HTTP routes', () => {
     for (const marker of [
-      'dsh-tavern:game-state',
-      'dsh-tavern:game-action',
+      'dsh-soulmojito:game-state',
+      'dsh-soulmojito:game-action',
       'games/list',
       'games/state/',
       'games/revision',
@@ -136,7 +136,7 @@ describe('client games panel (main.js source check)', () => {
 
   it('registers the game board as a right-sidebar tab (AgentTavern, MVU tab sibling) with auto-open', () => {
     for (const marker of [
-      "const GAMES_TAB_ID = 'dsh-tavern/games'",
+      "const GAMES_TAB_ID = 'dsh-soulmojito/games'",
       "const GAMES_TAB_KIND = 'tavern-games'",
       'function TavernGamesSidebarTab({ sessionId })',
       'sidebarRight.openTab(GAMES_TAB_KIND)',

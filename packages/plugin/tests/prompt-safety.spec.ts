@@ -128,7 +128,7 @@ describe('systemPrompt channels stay host-safe with macro-laden assets (integrat
   }
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-prompt-safety-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-prompt-safety-'))
     process.env.DSH_HOME = home
     const tavernRoot = join(home, 'tavern')
     store = await TavernStore.open(tavernRoot)
@@ -221,43 +221,43 @@ describe('systemPrompt channels stay host-safe with macro-laden assets (integrat
   })
 
   it('agent-facts: card macros expand to persona/character names, leftovers are neutralized', async () => {
-    expect(contextText('dsh-tavern:agent-facts', AGENT_FACTS)).toBe('')
+    expect(contextText('dsh-soulmojito:agent-facts', AGENT_FACTS)).toBe('')
     await vi.waitFor(() => {
-      expect(contextText('dsh-tavern:agent-facts', AGENT_FACTS)).toContain(PERSONA)
+      expect(contextText('dsh-soulmojito:agent-facts', AGENT_FACTS)).toContain(PERSONA)
     })
-    const text = contextText('dsh-tavern:agent-facts', AGENT_FACTS)
+    const text = contextText('dsh-soulmojito:agent-facts', AGENT_FACTS)
     expect(text).toContain(`Current Tavern character: ${CHARACTER}`)
     expect(text).toContain(`Devoted to ${PERSONA}; wary of ${CHARACTER} cult`)
     expect(text).toContain('marks { {mystery-rune}} doors')
     expect(text).toContain(`Personality summary: Keeps ${PERSONA}'s secrets`)
     expectHostSafe(text)
     // 未绑定 agent 仍为空串（既有语义不回归）
-    expect(contextText('dsh-tavern:agent-facts', 'unbound-agent')).toBe('')
+    expect(contextText('dsh-soulmojito:agent-facts', 'unbound-agent')).toBe('')
   })
 
   it('agent-guides: user-authored guides survive the host engine too', async () => {
     await vi.waitFor(() => {
-      expect(contextText('dsh-tavern:agent-guides', AGENT_GUIDES)).toContain(GUIDES_BLOCK_HEADER)
+      expect(contextText('dsh-soulmojito:agent-guides', AGENT_GUIDES)).toContain(GUIDES_BLOCK_HEADER)
     })
-    const text = contextText('dsh-tavern:agent-guides', AGENT_GUIDES)
+    const text = contextText('dsh-soulmojito:agent-guides', AGENT_GUIDES)
     expect(text).toContain(`Remember ${PERSONA} hates { {mystery}} sigils`)
     expectHostSafe(text)
   })
 
   it('agent-script: script names with {{...}} cannot abort assembly', async () => {
     await vi.waitFor(() => {
-      expect(contextText('dsh-tavern:agent-script', AGENT_SCRIPT)).toContain('Bound script:')
+      expect(contextText('dsh-soulmojito:agent-script', AGENT_SCRIPT)).toContain('Bound script:')
     })
-    const text = contextText('dsh-tavern:agent-script', AGENT_SCRIPT)
+    const text = contextText('dsh-soulmojito:agent-script', AGENT_SCRIPT)
     expect(text).toContain('Bound script: Rite of { {Dawn}}')
     expectHostSafe(text)
   })
 
   it('active-character section: the legacy native-mode channel gets the same protection', async () => {
     await vi.waitFor(() => {
-      expect(sectionText('dsh-tavern:active-character')).toContain(PERSONA)
+      expect(sectionText('dsh-soulmojito:active-character')).toContain(PERSONA)
     })
-    const text = sectionText('dsh-tavern:active-character')
+    const text = sectionText('dsh-soulmojito:active-character')
     expect(text).toContain(`Active roleplay character: ${CHARACTER}`)
     expect(text).toContain('marks { {mystery-rune}} doors')
     expect(text).toContain(`Personality: Keeps ${PERSONA}'s secrets`)
@@ -265,7 +265,7 @@ describe('systemPrompt channels stay host-safe with macro-laden assets (integrat
   })
 
   it('kernels pass through the guard unchanged (no braces today, no corruption by the wrap)', () => {
-    const kernel = contexts.get('dsh-tavern:agent-kernel')?.text as string
+    const kernel = contexts.get('dsh-soulmojito:agent-kernel')?.text as string
     expect(kernel).toContain('AgentTavern running inside the DSH native AgentLoop')
     expectHostSafe(kernel)
   })

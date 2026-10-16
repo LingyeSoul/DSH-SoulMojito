@@ -32,7 +32,7 @@ import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 import { writeAtomicText } from './fs-atomic.js'
 import type { TavernStore } from './store.js'
-import type { CharacterCardIR } from '@dsh-tavern/format'
+import type { CharacterCardIR } from '@dsh-soulmojito/format'
 import {
   NovelCapabilityError,
   NovelConfigError,
@@ -102,7 +102,7 @@ const USAGE_SAMPLE_LIMIT = 50
  *  same writer that may re-enter each other's ownership (§10.2). A constant
  *  local to one copy would make the bundles reject each other under the same
  *  pid, so the identity lives on globalThis. */
-const BOOT_ID: string = (globalThis as { __dshTavernNovelBootId?: string }).__dshTavernNovelBootId ??= randomBytes(16).toString('hex')
+const BOOT_ID: string = (globalThis as { __dshSoulMojitoNovelBootId?: string }).__dshSoulMojitoNovelBootId ??= randomBytes(16).toString('hex')
 
 /** Command-line shapes of a live dsh host: the global install path
  *  (`node …@deepseek-ai/dsh/lib/bin.js web`) or a bare `dsh web` invocation.

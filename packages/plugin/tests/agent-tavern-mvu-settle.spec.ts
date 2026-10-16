@@ -105,7 +105,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     const changes = tool.parameters.properties.changes as { type: string; items: { required: string[] } }
     expect(changes.type).toBe('array')
     expect(changes.items.required).toEqual(['name', 'value'])
-    const kernel = sections.find((section) => section.name === 'dsh-tavern:agent-kernel')!
+    const kernel = sections.find((section) => section.name === 'dsh-soulmojito:agent-kernel')!
     expect(kernel.text).toContain('tavern_variable_settle')
     expect(kernel.text).toContain('Standing duties')
   })

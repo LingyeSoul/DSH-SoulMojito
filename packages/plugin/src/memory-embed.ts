@@ -31,7 +31,7 @@ export const EMBED_RETRY_BACKOFF_MS = 250
  * token；截断只影响向量输入，digest 仍按全文计算（stale 判定不受影响）。 */
 export const EMBED_INPUT_MAX_CHARS = 6000
 /** 探针固定串（POST …/memory/embed/test）。 */
-export const EMBED_PROBE_TEXT = 'dsh-tavern embed probe'
+export const EMBED_PROBE_TEXT = 'dsh-soulmojito embed probe'
 /** 查询向量进程内 memo 上限（LRU 式 FIFO 淘汰）。 */
 const QUERY_MEMO_LIMIT = 32
 

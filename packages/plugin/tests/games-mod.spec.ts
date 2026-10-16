@@ -21,8 +21,8 @@ import { openGamesService, type GamesService } from '../src/games/service.js'
 import { clearGamesServiceForTest, publishGamesService } from '../src/games/handle.js'
 import { GameBridgeError } from '../src/games/sessions.js'
 
-const RPS_EXAMPLE = join(import.meta.dirname, '..', 'examples', 'mods', 'dsh-tavern.rps')
-const RPS_GAME = 'dsh-tavern.rps.gesture'
+const RPS_EXAMPLE = join(import.meta.dirname, '..', 'examples', 'mods', 'dsh-soulmojito.rps')
+const RPS_GAME = 'dsh-soulmojito.rps.gesture'
 const CHARACTER = 'ExampleCard'
 const CHAT = 'chat-rps'
 
@@ -81,8 +81,8 @@ beforeAll(async () => {
   const root = join(home, 'tavern')
   service = await openGamesService({ root, hostVersion: '0.6.0' })
   unpublishGames = publishGamesService(service)
-  cpSync(RPS_EXAMPLE, join(root, 'mods', 'dsh-tavern.rps'), { recursive: true })
-  host = await openHostOver(root, ['dsh-tavern.rps'])
+  cpSync(RPS_EXAMPLE, join(root, 'mods', 'dsh-soulmojito.rps'), { recursive: true })
+  host = await openHostOver(root, ['dsh-soulmojito.rps'])
 })
 
 afterAll(async () => {
@@ -96,7 +96,7 @@ afterAll(async () => {
 
 describe('rps 示例 Mod：注册与对局', () => {
   it('Mod 装载成功且游戏以 source "mod" 入册', async () => {
-    const entry = host.snapshot().mods.find((item) => item.id === 'dsh-tavern.rps')
+    const entry = host.snapshot().mods.find((item) => item.id === 'dsh-soulmojito.rps')
     expect(entry?.status, entry?.error).toBe('loaded')
     const { games } = await service.list({ character: '', chatId: '' })
     const game = games.find((item) => item.id === RPS_GAME)
@@ -132,9 +132,9 @@ describe('注册纪律负样本（scan / setup fail-fast）', () => {
   it('未在 manifest games 声明的 id：setup 抛错进错误位', async () => {
     // 前缀校验先于声明校验（host.ts 顺序），id 必须带本 Mod 前缀但不在名单内。
     const root = join(home, 'bad-undeclared')
-    writeBadMod(root, 'dsh-tavern.bad.undeclared',
-      '', '  await api.games.register({ id: "dsh-tavern.bad.undeclared.sneaky", engine: {} })')
-    const bad = await openHostOver(root, ['dsh-tavern.bad.undeclared'])
+    writeBadMod(root, 'dsh-soulmojito.bad.undeclared',
+      '', '  await api.games.register({ id: "dsh-soulmojito.bad.undeclared.sneaky", engine: {} })')
+    const bad = await openHostOver(root, ['dsh-soulmojito.bad.undeclared'])
     const entry = bad.snapshot().mods[0]
     expect(entry.status).toBe('error')
     expect(entry.error).toContain('not declared in the manifest games')
@@ -143,22 +143,22 @@ describe('注册纪律负样本（scan / setup fail-fast）', () => {
 
   it('id 前缀不符 mod id：setup 抛错进错误位', async () => {
     const root = join(home, 'bad-prefix')
-    writeBadMod(root, 'dsh-tavern.bad.prefix',
+    writeBadMod(root, 'dsh-soulmojito.bad.prefix',
       ',\n  "games": ["other.game"]',
       '  await api.games.register({ id: "other.game", engine: {} })')
-    const bad = await openHostOver(root, ['dsh-tavern.bad.prefix'])
+    const bad = await openHostOver(root, ['dsh-soulmojito.bad.prefix'])
     const entry = bad.snapshot().mods[0]
     expect(entry.status).toBe('error')
-    expect(entry.error).toContain("must start with the mod id prefix 'dsh-tavern.bad.prefix.'")
+    expect(entry.error).toContain("must start with the mod id prefix 'dsh-soulmojito.bad.prefix.'")
     await bad.disposeAll()
   })
 
   it('引擎烟测失败（Math.random 破确定性）：setup 抛错进错误位', async () => {
     const root = join(home, 'bad-smoke')
-    writeBadMod(root, 'dsh-tavern.bad.smoke',
-      ',\n  "games": ["dsh-tavern.bad.smoke.rand"]',
+    writeBadMod(root, 'dsh-soulmojito.bad.smoke',
+      ',\n  "games": ["dsh-soulmojito.bad.smoke.rand"]',
       `  const engine = {
-    meta: { id: 'dsh-tavern.bad.smoke.rand', name: '坏引擎', version: '1.0.0',
+    meta: { id: 'dsh-soulmojito.bad.smoke.rand', name: '坏引擎', version: '1.0.0',
       players: { min: 2, max: 2, roles: ['a', 'b'] }, turnBased: true, actionVocabulary: 'noop {type:\\'go\\'}' },
     createGame() { return { state: { board: 1, turn: 'a', ply: 0, lastMove: null, finished: false, winner: null, winLine: null } } },
     legalActions(state) { return [{ type: 'go' }] },
@@ -168,16 +168,16 @@ describe('注册纪律负样本（scan / setup fail-fast）', () => {
     },
     describe() { return 'a 走了一手' },
   }
-  await api.games.register({ id: 'dsh-tavern.bad.smoke.rand', name: '坏引擎', version: '1.0.0',
+  await api.games.register({ id: 'dsh-soulmojito.bad.smoke.rand', name: '坏引擎', version: '1.0.0',
     players: { min: 2, max: 2, roles: ['a', 'b'] }, turnBased: true, actionVocabulary: 'noop {type:\\'go\\'}',
     engine, view: '<!doctype html><html><body>bad</body></html>' })`)
-    const bad = await openHostOver(root, ['dsh-tavern.bad.smoke'])
+    const bad = await openHostOver(root, ['dsh-soulmojito.bad.smoke'])
     const entry = bad.snapshot().mods[0]
     expect(entry.status).toBe('error')
     expect(entry.error).toContain('引擎烟测失败')
     // 坏引擎不带病入册：全局注册表查无此游戏。
     const { games } = await service.list({ character: '', chatId: '' })
-    expect(games.find((item) => item.id === 'dsh-tavern.bad.smoke.rand')).toBeUndefined()
+    expect(games.find((item) => item.id === 'dsh-soulmojito.bad.smoke.rand')).toBeUndefined()
     await bad.disposeAll()
   })
 
@@ -186,10 +186,10 @@ describe('注册纪律负样本（scan / setup fail-fast）', () => {
     // 「already registered」守卫用同 Mod 二次注册等价触达——registry.registerModGame
     // 对 builtin/imported/mod 三源统一查重，同一分支。
     const root = join(home, 'bad-duplicate')
-    writeBadMod(root, 'dsh-tavern.bad.dup',
-      ',\n  "games": ["dsh-tavern.bad.dup.g"]',
+    writeBadMod(root, 'dsh-soulmojito.bad.dup',
+      ',\n  "games": ["dsh-soulmojito.bad.dup.g"]',
       `  const engine = {
-    meta: { id: 'dsh-tavern.bad.dup.g', name: 'dup', version: '1.0.0',
+    meta: { id: 'dsh-soulmojito.bad.dup.g', name: 'dup', version: '1.0.0',
       players: { min: 2, max: 2, roles: ['a', 'b'] }, turnBased: true, actionVocabulary: 'noop {type:\\'go\\'}' },
     createGame() { return { state: { board: 1, turn: 'a', ply: 0, lastMove: null, finished: false, winner: null, winLine: null } } },
     legalActions(state) { return [{ type: 'go' }] },
@@ -199,31 +199,31 @@ describe('注册纪律负样本（scan / setup fail-fast）', () => {
     },
     describe() { return 'a 走了一手' },
   }
-  const def = { id: 'dsh-tavern.bad.dup.g', name: 'dup', version: '1.0.0',
+  const def = { id: 'dsh-soulmojito.bad.dup.g', name: 'dup', version: '1.0.0',
     players: { min: 2, max: 2, roles: ['a', 'b'] }, turnBased: true, actionVocabulary: 'noop {type:\\'go\\'}',
     engine, view: '<!doctype html><html><body>dup</body></html>' }
   await api.games.register(def)
   await api.games.register(def)`)
-    const bad = await openHostOver(root, ['dsh-tavern.bad.dup'])
+    const bad = await openHostOver(root, ['dsh-soulmojito.bad.dup'])
     const entry = bad.snapshot().mods[0]
     expect(entry.status).toBe('error')
     expect(entry.error).toContain('already registered')
     // 第一次注册随 setup 失败被 tracked 反注册回滚，不带病入册。
     const { games } = await service.list({ character: '', chatId: '' })
-    expect(games.find((item) => item.id === 'dsh-tavern.bad.dup.g')).toBeUndefined()
+    expect(games.find((item) => item.id === 'dsh-soulmojito.bad.dup.g')).toBeUndefined()
     await bad.disposeAll()
   })
 
   it('manifest games 字段非法（非字符串数组）：scan 阶段被拒', async () => {
     const root = join(home, 'bad-manifest')
-    const dir = join(root, 'mods', 'dsh-tavern.bad.manifest')
+    const dir = join(root, 'mods', 'dsh-soulmojito.bad.manifest')
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'mod.json'), JSON.stringify({
-      id: 'dsh-tavern.bad.manifest', name: 'bad manifest', version: '1.0.0',
+      id: 'dsh-soulmojito.bad.manifest', name: 'bad manifest', version: '1.0.0',
       author: 'gate', description: 'x', main: 'index.mjs', games: [123],
     }))
     writeFileSync(join(dir, 'index.mjs'), 'export async function setup() {}\n')
-    const bad = await openHostOver(root, ['dsh-tavern.bad.manifest'])
+    const bad = await openHostOver(root, ['dsh-soulmojito.bad.manifest'])
     const entry = bad.snapshot().mods[0]
     expect(entry.status).toBe('error')
     expect(entry.error).toContain('games entries must be non-empty strings')
@@ -247,7 +247,7 @@ describe('卸载孤儿语义与重装载恢复', () => {
       .rejects.toMatchObject({ code: 'not-found' })
 
     // 重装载（reload 后新引擎实例）：孤儿判定按 gameId 动态查表，旧会话复活。
-    host = await openHostOver(join(home, 'tavern'), ['dsh-tavern.rps'])
+    host = await openHostOver(join(home, 'tavern'), ['dsh-soulmojito.rps'])
     const revived = await service.state(session.id)
     expect(revived.session.orphaned).toBe(false)
     // 复活时处于第 1 局的 Agent 手（人类已出 rock）；人类回合探针只剩 turn 纪律。

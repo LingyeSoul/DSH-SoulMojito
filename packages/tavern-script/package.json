@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-tavern/script",
+  "name": "@dsh-soulmojito/script",
   "version": "0.1.0",
   "description": "SillyTavern-compatible regex script execution engine and STscript interpreter (command subset with pipes, variables, conditionals, chat actions).",
   "license": "GPL-3.0",
@@ -18,7 +18,7 @@
     "test": "vitest run --root ../.."
   },
   "dependencies": {
-    "@dsh-tavern/format": "workspace:*",
-    "@dsh-tavern/lore": "workspace:*"
+    "@dsh-soulmojito/format": "workspace:*",
+    "@dsh-soulmojito/lore": "workspace:*"
   }
 }

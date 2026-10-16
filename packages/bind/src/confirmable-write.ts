@@ -55,12 +55,12 @@ export function confirmSessionAppend(options: ConfirmSessionAppendOptions): bool
   options.append()
   if (options.present(sessionEvents(options.session))) {
     options.logger?.warn?.(
-      `dsh-tavern: session write '${options.label}' was accepted but invisible on first read-back; the rewrite made it visible (degraded host append suspected)`,
+      `dsh-soulmojito: session write '${options.label}' was accepted but invisible on first read-back; the rewrite made it visible (degraded host append suspected)`,
     )
     return true
   }
   options.logger?.error?.(
-    `dsh-tavern: session write '${options.label}' could not be confirmed by read-back (attempt 1: absent, attempt 2: absent after one rewrite); failing honestly instead of continuing on unconfirmed host state`,
+    `dsh-soulmojito: session write '${options.label}' could not be confirmed by read-back (attempt 1: absent, attempt 2: absent after one rewrite); failing honestly instead of continuing on unconfirmed host state`,
   )
   return false
 }

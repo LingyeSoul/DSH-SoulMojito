@@ -115,7 +115,7 @@ export function mountModExtensions(ctx: ModAgentMountContext, options: { claimTo
   function syncSections(): void {
     const wanted = new Map<string, { name: string; order: number; text: string }>()
     for (const entry of modSectionSnapshot()) {
-      const fullName = `dsh-tavern:mod:${entry.modId}:${entry.definition.name}`
+      const fullName = `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`
       // 消费侧防御性钳制（写侧 host.ts 已钳制；纵深防御确保任何写入路径都
       // 冲不掉核心 -80..-64 头），文本过 hostPromptSafe：mod 文本与内核静态
       // 文本同款纪律——残留 {{...}} 会被宿主 interpolate 当变量渲染并抛错中止
@@ -155,7 +155,7 @@ export function mountModExtensions(ctx: ModAgentMountContext, options: { claimTo
   }
   if (ctx.effect) {
     try {
-      ctx.effect(() => () => { dispose() }, 'dsh-tavern: mod extensions')
+      ctx.effect(() => () => { dispose() }, 'dsh-soulmojito: mod extensions')
     } catch {
       // 宿主拒绝晚注册 effect：失去自动清理，注册面继续工作。
     }

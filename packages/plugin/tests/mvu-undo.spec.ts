@@ -162,7 +162,7 @@ describe('MVU receipt undo (integration)', () => {
   const eventOffs: Array<() => void> = []
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-mvu-undo-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-mvu-undo-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
 
@@ -246,7 +246,7 @@ describe('MVU receipt undo (integration)', () => {
 
   async function undoCall(character: string, chatId: string, revision?: string) {
     const res = makeResponse()
-    await apiHandler(makeRequest({ character, chatId, ...(revision !== undefined ? { revision } : {}) }, '/api/dsh-tavern/mvu/receipts/undo'), res)
+    await apiHandler(makeRequest({ character, chatId, ...(revision !== undefined ? { revision } : {}) }, '/api/dsh-soulmojito/mvu/receipts/undo'), res)
     expect(res.writableEnded).toBe(true)
     const text = res.chunks.join('')
     return { status: res.statusCode, body: text === '' ? undefined : JSON.parse(text) }
@@ -254,7 +254,7 @@ describe('MVU receipt undo (integration)', () => {
 
   async function statusCall(character: string, chatId: string) {
     const res = makeResponse()
-    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/mvu/status/${encodeURIComponent(character)}/${chatId}`), res)
+    await apiHandler(makeRequest(undefined, `/api/dsh-soulmojito/mvu/status/${encodeURIComponent(character)}/${chatId}`), res)
     expect(res.statusCode).toBe(200)
     return JSON.parse(res.chunks.join(''))
   }

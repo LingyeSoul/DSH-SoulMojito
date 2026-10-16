@@ -148,7 +148,7 @@ export function retainHostSession(
   const sessions = ctx?.sessions
   if (typeof sessions?.retain === 'function') {
     try {
-      const reference = sessions.retain(sessionId, { source: 'dsh-tavern' })
+      const reference = sessions.retain(sessionId, { source: 'dsh-soulmojito' })
       // 必须绑定宿主实例再存：宿主的 ClientSessionReference.release() 读
       // this.sessionId，解构后裸调用 this === undefined，会以
       // "Cannot read properties of undefined (reading 'sessionId')" 炸掉整个

@@ -2,7 +2,10 @@
 
 
 // packages/bind/src/host-session.ts
-var TAVERN_PLUGIN_SOURCE_KIND = "plugin:dsh-tavern";
+var PLUGIN_NAME = "dsh-soulmojito";
+var LEGACY_PLUGIN_NAME = "dsh-tavern";
+var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
+var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
 function hostSessionFormatVersion(session) {
   const version = session?.header?.version;
   return typeof version === "number" && Number.isSafeInteger(version) ? version : void 0;
@@ -11,7 +14,7 @@ function hostPluginMessageSource(session, members) {
   const version = hostSessionFormatVersion(session);
   const kind = version !== void 0 && version >= 4 ? TAVERN_PLUGIN_SOURCE_KIND : "plugin";
   return {
-    ...kind === "plugin" ? { plugin: "dsh-tavern" } : {},
+    ...kind === "plugin" ? { plugin: PLUGIN_NAME } : {},
     ...members,
     kind
   };
@@ -2644,7 +2647,7 @@ var MAX_SCOPE_BYTES = 256 * 1024;
 
 // packages/tavern-store/src/novel.ts
 import { createHash as createHash2, randomBytes } from "node:crypto";
-var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("hex");
+var BOOT_ID = globalThis.__dshSoulMojitoNovelBootId ??= randomBytes(16).toString("hex");
 
 // packages/plugin/src/compaction/shared.ts
 var SUMMARY_OPEN_TAG = "<compacted-summary>";
@@ -2730,7 +2733,7 @@ function mergeSummarizerTarget(layers) {
 }
 
 // packages/plugin/src/compaction/curator.ts
-var name = "dsh-tavern/compaction";
+var name = "dsh-soulmojito/compaction";
 var BASIC_CONFIG_KEYS = /* @__PURE__ */ new Set([
   "thresholdRatio",
   "retainRatio",
@@ -2756,7 +2759,7 @@ var TavernCompactionCurator = class extends BasicCompactionEngine {
     super(ctx, basicConfigOnly(config));
     this.curator = readCuratorOptions(config);
     this.usageThresholdRatio = this.curator.usageThresholdRatio ?? DEFAULT_USAGE_THRESHOLD_RATIO;
-    info(ctx, `dsh-tavern/compaction curator loaded: usageThresholdRatio=${this.usageThresholdRatio} curatorTarget=${this.curator.curatorProvider ?? ""}/${this.curator.curatorModel ?? "(route)"} summarization=${JSON.stringify(this.config.summarizationProvider ?? "")}`);
+    info(ctx, `dsh-soulmojito/compaction curator loaded: usageThresholdRatio=${this.usageThresholdRatio} curatorTarget=${this.curator.curatorProvider ?? ""}/${this.curator.curatorModel ?? "(route)"} summarization=${JSON.stringify(this.config.summarizationProvider ?? "")}`);
   }
   /**
    * 真实用量闸门（提案 0006 §4.2）：pressure 触发先按 contextPressure 投影决策——

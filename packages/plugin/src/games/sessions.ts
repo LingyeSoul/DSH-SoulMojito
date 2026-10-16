@@ -70,7 +70,7 @@ export interface GameSession {
   summary: string
 }
 
-/** 视图载荷（§3.3 下行 dsh-tavern:game-state 的 view 字段，全量无增量）。 */
+/** 视图载荷（§3.3 下行 dsh-soulmojito:game-state 的 view 字段，全量无增量）。 */
 export interface GameViewPayload {
   state: unknown
   turn: string

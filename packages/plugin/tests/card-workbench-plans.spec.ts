@@ -460,7 +460,7 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
     const card = (await store.getCharacter('Route Snapshot Card'))!.card
     expect(await saveOriginalSnapshot(tavern, 'Route Snapshot Card', card)).toBe(true)
     const res = makeResponse()
-    await apiHandler({ method: 'DELETE', url: '/api/dsh-tavern/character?name=Route%20Snapshot%20Card', on: () => undefined, destroy: () => {} }, res)
+    await apiHandler({ method: 'DELETE', url: '/api/dsh-soulmojito/character?name=Route%20Snapshot%20Card', on: () => undefined, destroy: () => {} }, res)
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.chunks[0]!).ok).toBe(true)
     expect(await store.getCharacter('Route Snapshot Card')).toBeUndefined()
@@ -476,7 +476,7 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
     await saveOriginalSnapshot(tavern, 'Snapshot Rename Card', card)
     // 面板 PUT 改名 → 快照跟卡走，旧名不留幽灵
     const put = makeResponse()
-    await apiHandler(makeRequest({ card: { ...card, data: { ...card.data, name: 'Renamed Once' } } }, '/api/dsh-tavern/character/Snapshot%20Rename%20Card', 'PUT'), put)
+    await apiHandler(makeRequest({ card: { ...card, data: { ...card.data, name: 'Renamed Once' } } }, '/api/dsh-soulmojito/character/Snapshot%20Rename%20Card', 'PUT'), put)
     expect(put.statusCode).toBe(200)
     expect(JSON.parse(put.chunks[0]!).card.data.name).toBe('Renamed Once')
     expect(await readOriginalSnapshot(tavern, 'Snapshot Rename Card')).toBeUndefined()
@@ -503,7 +503,7 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
       changes: [{ field: 'firstMes', newValue: 'Panel-approved opening.' }],
     })
     const pending = makeResponse()
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/card-workbench/plans?character=${encodeURIComponent(CHARACTER)}`), pending)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/card-workbench/plans?character=${encodeURIComponent(CHARACTER)}`), pending)
     expect(pending.statusCode).toBe(200)
     const body = JSON.parse(pending.chunks[0]!)
     expect(body.ok).toBe(true)
@@ -516,7 +516,7 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
       newValue: 'Panel-approved opening.',
     })
     const badStatus = makeResponse()
-    await apiHandler(makeGetRequest('/api/dsh-tavern/card-workbench/plans?status=nope'), badStatus)
+    await apiHandler(makeGetRequest('/api/dsh-soulmojito/card-workbench/plans?status=nope'), badStatus)
     expect(badStatus.statusCode).toBe(400)
     expect(JSON.parse(badStatus.chunks[0]!)).toMatchObject({ ok: false, code: 'TAVERN_WORKBENCH' })
   })
@@ -528,7 +528,7 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
       changes: [{ field: 'personality', newValue: 'Approved via panel.' }],
     })
     const approved = makeResponse()
-    await apiHandler(makeRequest({ approve: true }, `/api/dsh-tavern/card-workbench/plans/${toApply.planId}/decision`), approved)
+    await apiHandler(makeRequest({ approve: true }, `/api/dsh-soulmojito/card-workbench/plans/${toApply.planId}/decision`), approved)
     expect(approved.statusCode).toBe(200)
     const body = JSON.parse(approved.chunks[0]!)
     expect(body.ok).toBe(true)
@@ -545,22 +545,22 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
       changes: [{ field: 'personality', newValue: 'Never applied.' }],
     })
     const rejected = makeResponse()
-    await apiHandler(makeRequest({ approve: false }, `/api/dsh-tavern/card-workbench/plans/${toReject.planId}/decision`), rejected)
+    await apiHandler(makeRequest({ approve: false }, `/api/dsh-soulmojito/card-workbench/plans/${toReject.planId}/decision`), rejected)
     expect(rejected.statusCode).toBe(200)
     expect(JSON.parse(rejected.chunks[0]!).plan).toMatchObject({ status: 'rejected' })
     expect((await store.getCharacter(OTHER_CHARACTER))!.card.data.personality).toBe('Approved via panel.')
 
     // 非pending再决定/未知方案/坏请求 → TAVERN_WORKBENCH 错误码
     const decidedAgain = makeResponse()
-    await apiHandler(makeRequest({ approve: true }, `/api/dsh-tavern/card-workbench/plans/${toReject.planId}/decision`), decidedAgain)
+    await apiHandler(makeRequest({ approve: true }, `/api/dsh-soulmojito/card-workbench/plans/${toReject.planId}/decision`), decidedAgain)
     expect(decidedAgain.statusCode).toBe(400)
     expect(JSON.parse(decidedAgain.chunks[0]!)).toMatchObject({ ok: false, code: 'TAVERN_WORKBENCH' })
     const missing = makeResponse()
-    await apiHandler(makeRequest({ approve: true }, '/api/dsh-tavern/card-workbench/plans/plan-none/decision'), missing)
+    await apiHandler(makeRequest({ approve: true }, '/api/dsh-soulmojito/card-workbench/plans/plan-none/decision'), missing)
     expect(missing.statusCode).toBe(404)
     expect(JSON.parse(missing.chunks[0]!)).toMatchObject({ ok: false, code: 'TAVERN_WORKBENCH' })
     const badBody = makeResponse()
-    await apiHandler(makeRequest({}, '/api/dsh-tavern/card-workbench/plans/whatever/decision'), badBody)
+    await apiHandler(makeRequest({}, '/api/dsh-soulmojito/card-workbench/plans/whatever/decision'), badBody)
     expect(badBody.statusCode).toBe(400)
     expect(JSON.parse(badBody.chunks[0]!)).toMatchObject({ ok: false, code: 'TAVERN_WORKBENCH' })
     // 面板批准路径与对话路径一样做过期检测
@@ -572,7 +572,7 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
     const current = await store.getCharacter(OTHER_CHARACTER)
     await store.updateCharacter(OTHER_CHARACTER, { data: { ...current!.card.data, personality: 'drifted' } })
     const staleDecision = makeResponse()
-    await apiHandler(makeRequest({ approve: true }, `/api/dsh-tavern/card-workbench/plans/${stalePlan.planId}/decision`), staleDecision)
+    await apiHandler(makeRequest({ approve: true }, `/api/dsh-soulmojito/card-workbench/plans/${stalePlan.planId}/decision`), staleDecision)
     expect(staleDecision.statusCode).toBe(400)
     expect(JSON.parse(staleDecision.chunks[0]!).message).toContain('stale')
     expect((await getPlan(tavern, stalePlan.planId))!.status).toBe('pending')
@@ -1013,12 +1013,12 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
       entries: [{ uid: 1, comment: 'Set by panel.' }],
     })
     const list = makeResponse()
-    await apiHandler(makeGetRequest('/api/dsh-tavern/card-workbench/plans?status=all'), list)
+    await apiHandler(makeGetRequest('/api/dsh-soulmojito/card-workbench/plans?status=all'), list)
     const plans = JSON.parse(list.chunks[0]!).plans
     expect(plans.some((plan: { id: string; kind: string; op: string }) => plan.id === proposed.planId && plan.kind === 'world' && plan.op === 'edit')).toBe(true)
 
     const approved = makeResponse()
-    await apiHandler(makeRequest({ approve: true }, `/api/dsh-tavern/card-workbench/plans/${proposed.planId}/decision`), approved)
+    await apiHandler(makeRequest({ approve: true }, `/api/dsh-soulmojito/card-workbench/plans/${proposed.planId}/decision`), approved)
     expect(approved.statusCode).toBe(200)
     const body = JSON.parse(approved.chunks[0]!)
     expect(body.plan).toMatchObject({ id: proposed.planId, kind: 'world', status: 'applied' })
@@ -1030,18 +1030,18 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
       entries: [{ uid: 1, comment: 'Never.' }],
     })
     const rejected = makeResponse()
-    await apiHandler(makeRequest({ approve: false }, `/api/dsh-tavern/card-workbench/plans/${toReject.planId}/decision`), rejected)
+    await apiHandler(makeRequest({ approve: false }, `/api/dsh-soulmojito/card-workbench/plans/${toReject.planId}/decision`), rejected)
     expect(JSON.parse(rejected.chunks[0]!).plan).toMatchObject({ status: 'rejected' })
     expect((await store.getWorld('Plan Lore'))!.entries.find((entry) => entry.uid === 1)!.comment).toBe('Set by panel.')
 
     // kind 过滤：只列世界书方案；非法 kind 拒绝
     const worldOnly = makeResponse()
-    await apiHandler(makeGetRequest('/api/dsh-tavern/card-workbench/plans?status=all&kind=world'), worldOnly)
+    await apiHandler(makeGetRequest('/api/dsh-soulmojito/card-workbench/plans?status=all&kind=world'), worldOnly)
     const filtered = JSON.parse(worldOnly.chunks[0]!).plans
     expect(filtered.length).toBeGreaterThan(0)
     expect(filtered.every((plan: { kind: string }) => plan.kind === 'world')).toBe(true)
     const badKind = makeResponse()
-    await apiHandler(makeGetRequest('/api/dsh-tavern/card-workbench/plans?kind=nope'), badKind)
+    await apiHandler(makeGetRequest('/api/dsh-soulmojito/card-workbench/plans?kind=nope'), badKind)
     expect(badKind.statusCode).toBe(400)
   })
 

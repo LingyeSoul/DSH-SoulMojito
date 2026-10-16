@@ -184,7 +184,7 @@ describe('MVU settlement receipts (integration)', () => {
   let statusChatId: string
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-mvu-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-mvu-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
 
@@ -260,7 +260,7 @@ describe('MVU settlement receipts (integration)', () => {
   async function generate(character: string, id: string, message: string) {
     const snapshot = await store.getChatSnapshot(character, id)
     const res = makeResponse()
-    await apiHandler(makeRequest({ character, chatId: id, message, revision: snapshot!.revision }, '/api/dsh-tavern/generate'), res)
+    await apiHandler(makeRequest({ character, chatId: id, message, revision: snapshot!.revision }, '/api/dsh-soulmojito/generate'), res)
     expect(res.writableEnded).toBe(true)
     const events = res.chunks.join('').trim().split('\n').map((line) => JSON.parse(line))
     return events.find((event) => event.type === 'saved')
@@ -311,7 +311,7 @@ describe('MVU settlement receipts (integration)', () => {
 
   it('serves variables and receipts over GET mvu/status without a status template', async () => {
     const res = makeResponse()
-    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/mvu/status/${encodeURIComponent(CHARACTER)}/${chatId}`), res)
+    await apiHandler(makeRequest(undefined, `/api/dsh-soulmojito/mvu/status/${encodeURIComponent(CHARACTER)}/${chatId}`), res)
     expect(res.statusCode).toBe(200)
     const payload = JSON.parse(res.chunks.join(''))
     expect(payload.ok).toBe(true)
@@ -323,7 +323,7 @@ describe('MVU settlement receipts (integration)', () => {
 
   it('returns available=false and empty receipts for a variable-less chat; 404 for unknown chat', async () => {
     const res = makeResponse()
-    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/mvu/status/${encodeURIComponent(PLAIN_CHARACTER)}/${plainChatId}`), res)
+    await apiHandler(makeRequest(undefined, `/api/dsh-soulmojito/mvu/status/${encodeURIComponent(PLAIN_CHARACTER)}/${plainChatId}`), res)
     expect(res.statusCode).toBe(200)
     const payload = JSON.parse(res.chunks.join(''))
     expect(payload.available).toBe(false)
@@ -331,13 +331,13 @@ describe('MVU settlement receipts (integration)', () => {
     expect(payload.receipts).toEqual([])
 
     const missing = makeResponse()
-    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/mvu/status/${encodeURIComponent(CHARACTER)}/20990101000000000.jsonl`), missing)
+    await apiHandler(makeRequest(undefined, `/api/dsh-soulmojito/mvu/status/${encodeURIComponent(CHARACTER)}/20990101000000000.jsonl`), missing)
     expect(missing.statusCode).toBe(404)
   })
 
   it('renders the agentTavern statusTemplate into renderedHtml', async () => {
     const res = makeResponse()
-    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/mvu/status/${encodeURIComponent(STATUS_CHARACTER)}/${statusChatId}`), res)
+    await apiHandler(makeRequest(undefined, `/api/dsh-soulmojito/mvu/status/${encodeURIComponent(STATUS_CHARACTER)}/${statusChatId}`), res)
     expect(res.statusCode).toBe(200)
     const payload = JSON.parse(res.chunks.join(''))
     expect(payload.available).toBe(true)
@@ -362,7 +362,7 @@ describe('MVU settlement receipts (integration)', () => {
     }])
     const snapshot = await store.getChatSnapshot(CHARACTER, crafted)
     const res = makeResponse()
-    await apiHandler(makeRequest({ character: CHARACTER, chatId: crafted, revision: snapshot!.revision }, '/api/dsh-tavern/mvu/retry'), res)
+    await apiHandler(makeRequest({ character: CHARACTER, chatId: crafted, revision: snapshot!.revision }, '/api/dsh-soulmojito/mvu/retry'), res)
     expect(res.statusCode).toBe(200)
     const payload = JSON.parse(res.chunks.join(''))
     expect(payload.ok).toBe(true)
@@ -383,7 +383,7 @@ describe('MVU settlement receipts (integration)', () => {
   it('appends an unchanged receipt when the retried floor has no residual tags', async () => {
     const before = await store.getChatSnapshot(CHARACTER, chatId)
     const res = makeResponse()
-    await apiHandler(makeRequest({ character: CHARACTER, chatId, revision: before!.revision }, '/api/dsh-tavern/mvu/retry'), res)
+    await apiHandler(makeRequest({ character: CHARACTER, chatId, revision: before!.revision }, '/api/dsh-soulmojito/mvu/retry'), res)
     expect(res.statusCode).toBe(200)
     const payload = JSON.parse(res.chunks.join(''))
     expect(payload.receipt.status).toBe('unchanged')
@@ -397,7 +397,7 @@ describe('MVU settlement receipts (integration)', () => {
   it('rejects a stale revision with a CAS conflict', async () => {
     const snapshot = await store.getChatSnapshot(CHARACTER, chatId)
     const res = makeResponse()
-    await apiHandler(makeRequest({ character: CHARACTER, chatId, revision: 'stale' }, '/api/dsh-tavern/mvu/retry'), res)
+    await apiHandler(makeRequest({ character: CHARACTER, chatId, revision: 'stale' }, '/api/dsh-soulmojito/mvu/retry'), res)
     expect(res.statusCode).toBe(409)
     expect(res.chunks.join('')).toContain('CHAT_REVISION_CONFLICT')
     const after = await store.getChatSnapshot(CHARACTER, chatId)
@@ -412,7 +412,7 @@ describe('MVU settlement receipts (integration)', () => {
     }, [{ name: 'User', is_user: true, is_system: false, send_date: now, mes: '只有用户层' }])
     const snapshot = await store.getChatSnapshot(PLAIN_CHARACTER, userOnly)
     const res = makeResponse()
-    await apiHandler(makeRequest({ character: PLAIN_CHARACTER, chatId: userOnly, revision: snapshot!.revision }, '/api/dsh-tavern/mvu/retry'), res)
+    await apiHandler(makeRequest({ character: PLAIN_CHARACTER, chatId: userOnly, revision: snapshot!.revision }, '/api/dsh-soulmojito/mvu/retry'), res)
     expect(res.statusCode).toBe(500)
     expect(res.chunks.join('')).toContain('no assistant floor to settle')
   })
@@ -426,7 +426,7 @@ describe('MVU settlement receipts (integration)', () => {
     }))
     const snapshot = await store.getChatSnapshot(CHARACTER, chatId)
     const res = makeResponse()
-    await apiHandler(makeRequest({ character: CHARACTER, chatId, revision: snapshot!.revision, sessionId: 'session-native-mvu' }, '/api/dsh-tavern/mvu/retry'), res)
+    await apiHandler(makeRequest({ character: CHARACTER, chatId, revision: snapshot!.revision, sessionId: 'session-native-mvu' }, '/api/dsh-soulmojito/mvu/retry'), res)
     expect(res.statusCode).toBe(409)
     expect(res.chunks.join('')).toContain('TAVERN_ARCHITECTURE_CONFLICT')
   })
@@ -441,7 +441,7 @@ describe('MVU settlement receipts (integration)', () => {
       },
     }, [])
     const res = makeResponse()
-    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/mvu/status/${encodeURIComponent(PLAIN_CHARACTER)}/${receiptOnly}`), res)
+    await apiHandler(makeRequest(undefined, `/api/dsh-soulmojito/mvu/status/${encodeURIComponent(PLAIN_CHARACTER)}/${receiptOnly}`), res)
     expect(res.statusCode).toBe(200)
     const payload = JSON.parse(res.chunks.join(''))
     expect(payload.available).toBe(true)
@@ -460,7 +460,7 @@ describe('MVU settlement receipts (integration)', () => {
       },
     }))
     const res = makeResponse()
-    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/mvu/status/${encodeURIComponent(STATUS_CHARACTER)}/${statusChatId}`), res)
+    await apiHandler(makeRequest(undefined, `/api/dsh-soulmojito/mvu/status/${encodeURIComponent(STATUS_CHARACTER)}/${statusChatId}`), res)
     expect(res.statusCode).toBe(200)
     const payload = JSON.parse(res.chunks.join(''))
     expect(payload.available).toBe(true)
@@ -482,7 +482,7 @@ describe('MVU settlement receipts (integration)', () => {
       },
     }))
     const res = makeResponse()
-    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/mvu/status/${encodeURIComponent(PLAIN_CHARACTER)}/${plainChatId}`), res)
+    await apiHandler(makeRequest(undefined, `/api/dsh-soulmojito/mvu/status/${encodeURIComponent(PLAIN_CHARACTER)}/${plainChatId}`), res)
     expect(res.statusCode).toBe(200)
     const payload = JSON.parse(res.chunks.join(''))
     expect(payload.available).toBe(false)

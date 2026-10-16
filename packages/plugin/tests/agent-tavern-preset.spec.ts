@@ -129,14 +129,14 @@ describe('AgentTavern preset projection', () => {
   let chatId: string
 
   const presetTextOf = (agentId: string | undefined): string => {
-    const def = agentSections.get('dsh-tavern:agent-preset') as
+    const def = agentSections.get('dsh-soulmojito:agent-preset') as
       | { text: (assembly?: { agent?: { id?: string } }) => string }
       | undefined
     return def!.text(agentId === undefined ? undefined : { agent: { id: agentId } })
   }
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-agent-preset-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-agent-preset-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.importCharacter({
@@ -277,7 +277,7 @@ describe('AgentTavern preset projection', () => {
   })
 
   it('registers the -75 preset section and serves the preset block with macros expanded', async () => {
-    expect(agentSections.get('dsh-tavern:agent-preset')?.order).toBe(-75)
+    expect(agentSections.get('dsh-soulmojito:agent-preset')?.order).toBe(-75)
     // apply() 启动预热或首次装配的懒装载都会触发装载；waitFor 落定（预热消除
     // 重启后首轮空串→整块出现的 system 头突变，见 preheatAgentPresetProjections）。
     await vi.waitFor(() => {
@@ -332,10 +332,10 @@ describe('AgentTavern preset projection', () => {
       prompt_order: [{ character_id: 100001, order: [{ identifier: 'clock', enabled: true }] }],
     }
     const putRes = makeResponse()
-    await apiHandler(makeRequest({ name: 'Preset Stable', data: STABLE }, `/api/dsh-tavern/preset/${encodeURIComponent('Preset Stable')}`, 'PUT'), putRes)
+    await apiHandler(makeRequest({ name: 'Preset Stable', data: STABLE }, `/api/dsh-soulmojito/preset/${encodeURIComponent('Preset Stable')}`, 'PUT'), putRes)
     expect(putRes.statusCode).toBe(200)
     const switchRes = makeResponse()
-    await apiHandler(makeRequest({ activePreset: 'Preset Stable' }, '/api/dsh-tavern/state'), switchRes)
+    await apiHandler(makeRequest({ activePreset: 'Preset Stable' }, '/api/dsh-soulmojito/state'), switchRes)
     expect(switchRes.statusCode).toBe(200)
     await vi.waitFor(() => {
       expect(presetTextOf(AGENT)).toContain('Time is')
@@ -348,7 +348,7 @@ describe('AgentTavern preset projection', () => {
     // 落定）：若宏未按冻结记录求值，秒级时间戳必然换值——旧实现在此确定性变红。
     await new Promise((resolve) => setTimeout(resolve, 1200))
     const rewriteRes = makeResponse()
-    await apiHandler(makeRequest({ name: 'Preset Stable', data: structuredClone(STABLE) }, `/api/dsh-tavern/preset/${encodeURIComponent('Preset Stable')}`, 'PUT'), rewriteRes)
+    await apiHandler(makeRequest({ name: 'Preset Stable', data: structuredClone(STABLE) }, `/api/dsh-soulmojito/preset/${encodeURIComponent('Preset Stable')}`, 'PUT'), rewriteRes)
     expect(rewriteRes.statusCode).toBe(200)
     expect(presetTextOf(AGENT)).toBe(first)
 
@@ -357,7 +357,7 @@ describe('AgentTavern preset projection', () => {
     const edited = structuredClone(STABLE)
     edited.prompts[0]!.content = 'Time is {{time}} on {{date}} at {{datetimeformat::HH:mm:ss}}; pick {{random:crimson,azure}} — EDITED for {{char}}.'
     const editRes = makeResponse()
-    await apiHandler(makeRequest({ name: 'Preset Stable', data: edited }, `/api/dsh-tavern/preset/${encodeURIComponent('Preset Stable')}`, 'PUT'), editRes)
+    await apiHandler(makeRequest({ name: 'Preset Stable', data: edited }, `/api/dsh-soulmojito/preset/${encodeURIComponent('Preset Stable')}`, 'PUT'), editRes)
     expect(editRes.statusCode).toBe(200)
     const second = presetTextOf(AGENT)
     expect(second).not.toBe(first)
@@ -365,7 +365,7 @@ describe('AgentTavern preset projection', () => {
 
     // 收尾：恢复 Preset A，供后续路由用例的起始状态。
     const backRes = makeResponse()
-    await apiHandler(makeRequest({ activePreset: 'Preset A' }, '/api/dsh-tavern/state'), backRes)
+    await apiHandler(makeRequest({ activePreset: 'Preset A' }, '/api/dsh-soulmojito/state'), backRes)
     expect(backRes.statusCode).toBe(200)
     await vi.waitFor(() => {
       expect(presetTextOf(AGENT)).toContain('Follow the preset main rule')
@@ -374,7 +374,7 @@ describe('AgentTavern preset projection', () => {
 
   it('refreshes the projection through the state, preset edit and delete routes', async () => {
     const switchRes = makeResponse()
-    await apiHandler(makeRequest({ activePreset: 'Preset B' }, '/api/dsh-tavern/state'), switchRes)
+    await apiHandler(makeRequest({ activePreset: 'Preset B' }, '/api/dsh-soulmojito/state'), switchRes)
     expect(switchRes.statusCode).toBe(200)
     await vi.waitFor(() => {
       expect(presetTextOf(AGENT)).toContain('PRESET B ONLY TEXT for Preset Character.')
@@ -388,14 +388,14 @@ describe('AgentTavern preset projection', () => {
     const edited = structuredClone(PRESET_B)
     edited.prompts[0]!.content = 'PRESET B EDITED TEXT for {{char}}.'
     const editRes = makeResponse()
-    await apiHandler(makeRequest({ name: 'Preset B', data: edited }, `/api/dsh-tavern/preset/${encodeURIComponent('Preset B')}`, 'PUT'), editRes)
+    await apiHandler(makeRequest({ name: 'Preset B', data: edited }, `/api/dsh-soulmojito/preset/${encodeURIComponent('Preset B')}`, 'PUT'), editRes)
     expect(editRes.statusCode).toBe(200)
     await vi.waitFor(() => {
       expect(presetTextOf(AGENT)).toContain('PRESET B EDITED TEXT for Preset Character.')
     })
 
     const deleteRes = makeResponse()
-    await apiHandler(makeRequest({}, `/api/dsh-tavern/preset?name=${encodeURIComponent('Preset B')}`, 'DELETE'), deleteRes)
+    await apiHandler(makeRequest({}, `/api/dsh-soulmojito/preset?name=${encodeURIComponent('Preset B')}`, 'DELETE'), deleteRes)
     expect(deleteRes.statusCode).toBe(200)
     // 删除激活预设 → 回落内置默认预设（面板「内置角色扮演预设」的同一份语义）
     await vi.waitFor(() => {

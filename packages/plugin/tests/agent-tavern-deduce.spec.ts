@@ -82,7 +82,7 @@ describe('tavern_deduce runDeduction', () => {
     const result = await runDeduction({ subagents: fake.runtime, parent: { id: 'parent-1' } }, REQUEST)
     expect(fake.calls).toHaveLength(2)
     expect(fake.calls.every((call) => call.provider === 'spawn')).toBe(true)
-    expect(fake.calls.every((call) => call.label === `dsh-tavern deduce · ${call.role}`)).toBe(true)
+    expect(fake.calls.every((call) => call.label === `dsh-soulmojito deduce · ${call.role}`)).toBe(true)
     expect(fake.calls[0]!.prompt).toEqual([{ type: 'text', text: expect.stringContaining(REQUEST.scenario) }])
     expect(fake.calls[0]!.prompt[0]!.text).toContain('Role brief: Holds the gate, fears a feint.')
     expect(fake.calls[0]!.prompt[0]!.text).not.toContain('[round')

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MemoryStore, TavernStore, VariableStore, normalizeMemoryEmbedding } from '../src/index.js'
-import { decodeCharacterCard, encodeCharx, encodeCharacterCardPng, stableDeepEqual } from '@dsh-tavern/format'
+import { decodeCharacterCard, encodeCharx, encodeCharacterCardPng, stableDeepEqual } from '@dsh-soulmojito/format'
 
 const fixturesDir = fileURLToPath(new URL('../../tavern-format/tests/fixtures', import.meta.url))
 
@@ -393,11 +393,11 @@ describe('TavernStore', () => {
     // 显式开启持久化保留；enabled 表里只保留显式 true 的项（手改容错）
     await writeFile(path.join(dir, 'state.json'), JSON.stringify({
       modsEnabled: true,
-      mods: { enabled: { 'dsh-tavern.asset-stats': true, 'ghost.mod': false, broken: 'yes' } },
+      mods: { enabled: { 'dsh-soulmojito.asset-stats': true, 'ghost.mod': false, broken: 'yes' } },
     }))
     const state = await store.getState()
     expect(state.modsEnabled).toBe(true)
-    expect(state.mods?.enabled).toEqual({ 'dsh-tavern.asset-stats': true })
+    expect(state.mods?.enabled).toEqual({ 'dsh-soulmojito.asset-stats': true })
   }))
 
 

@@ -116,7 +116,7 @@ describe('AgentTavern native event projector', () => {
     expect(await projector.status(sessionId)).toMatchObject({ lastCursor: 4, status: 'ok' })
   })
 
-  it('does not project dsh-tavern mirrored imports back into the chat', async () => {
+  it('does not project dsh-soulmojito mirrored imports back into the chat', async () => {
     const { root, store, chatId, sessionId } = await fixture('import-session')
     const native: NativeSession = {
       id: sessionId,
@@ -130,7 +130,7 @@ describe('AgentTavern native event projector', () => {
             message: {
               id: 'imported-greeting', role: 'assistant',
               content: [{ type: 'text', text: 'Hello, traveler.' }],
-              source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' },
+              source: { kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-import' },
             },
           },
         },
@@ -138,7 +138,7 @@ describe('AgentTavern native event projector', () => {
         { type: 'turn/end', seq: 4, time: 1120, data: { turn: 1, reason: { kind: 'completed' } } },
         {
           type: 'user/message', seq: 5, time: 1200,
-          data: { id: 'imported-user', role: 'user', content: [{ type: 'text', text: 'Imported turn.' }], source: { kind: 'plugin', plugin: 'dsh-tavern' } },
+          data: { id: 'imported-user', role: 'user', content: [{ type: 'text', text: 'Imported turn.' }], source: { kind: 'plugin', plugin: 'dsh-soulmojito' } },
         },
         {
           type: 'user/message', seq: 6, time: 1300,
@@ -300,7 +300,7 @@ describe('AgentTavern native event projector', () => {
     // the synthetic provider/model pair is the mirror marker.
     for (const event of appends.filter((item) => item.type === 'assistant/message')) {
       expect((event.data.message as { source: Record<string, unknown> }).source).toEqual({
-        kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import',
+        kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-import',
       })
       // token-meter 的 usageOf() 在 usage/stream 双缺时抛 TypeError；导入消息必须
       // 带一个诚实的空流，否则该会话的所有投影读取都会失败。
@@ -308,7 +308,7 @@ describe('AgentTavern native event projector', () => {
     }
     for (const event of appends.filter((item) => item.type === 'user/message')) {
       expect((event.data as { source: Record<string, unknown> }).source).toEqual({
-        kind: 'plugin:dsh-tavern',
+        kind: 'plugin:dsh-soulmojito',
       })
     }
     expect(chat).toEqual(original)
@@ -322,7 +322,7 @@ describe('AgentTavern native event projector', () => {
     const appends = historyImportAppends(chat, 'session-1', [], undefined, { header: { version: 4 } })
     for (const event of appends.filter((item) => item.type === 'user/message')) {
       expect((event.data as { source: Record<string, unknown> }).source).toEqual({
-        kind: 'plugin:dsh-tavern',
+        kind: 'plugin:dsh-soulmojito',
       })
     }
   })
@@ -380,16 +380,20 @@ describe('AgentTavern native event projector', () => {
   })
 
   it('recognizes both plugin-source shapes as Tavern session markers', () => {
-    // v4（0.2.0-rc.2+）：宿主迁移产物与新写入同为 'plugin:dsh-tavern'。
-    expect(isTavernSessionMarker({ kind: 'plugin:dsh-tavern' })).toBe(true)
-    expect(isTavernSessionMarker({ kind: 'plugin:dsh-tavern', form: 'notice', summary: 'Tavern closed' })).toBe(true)
+    // v4（0.2.0-rc.2+）：宿主迁移产物与新写入同为 'plugin:dsh-soulmojito'。
+    expect(isTavernSessionMarker({ kind: 'plugin:dsh-soulmojito' })).toBe(true)
+    expect(isTavernSessionMarker({ kind: 'plugin:dsh-soulmojito', form: 'notice', summary: 'Tavern closed' })).toBe(true)
     // v0-v3：{ kind: 'plugin', plugin } 老形状（防御直读未迁移日志）。
-    expect(isTavernSessionMarker({ kind: 'plugin', plugin: 'dsh-tavern' })).toBe(true)
+    expect(isTavernSessionMarker({ kind: 'plugin', plugin: 'dsh-soulmojito' })).toBe(true)
     // 预加载通知不构成「会话已启动」。
-    expect(isTavernSessionMarker({ kind: 'plugin:dsh-tavern', summary: 'AgentTavern preload: 山河风雨' })).toBe(false)
-    expect(isTavernSessionMarker({ kind: 'plugin', plugin: 'dsh-tavern', summary: 'AgentTavern preload: 山河风雨' })).toBe(false)
+    expect(isTavernSessionMarker({ kind: 'plugin:dsh-soulmojito', summary: 'AgentTavern preload: 山河风雨' })).toBe(false)
+    expect(isTavernSessionMarker({ kind: 'plugin', plugin: 'dsh-soulmojito', summary: 'AgentTavern preload: 山河风雨' })).toBe(false)
     // model 镜像标记与无关 source。
+    expect(isTavernSessionMarker({ kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-import' })).toBe(true)
+    // 改名兼容（2026-10-16）：旧名 dsh-tavern 的持久化戳双认（存量会话不丢标记）。
     expect(isTavernSessionMarker({ kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' })).toBe(true)
+    expect(isTavernSessionMarker({ kind: 'plugin:dsh-tavern' })).toBe(true)
+    expect(isTavernSessionMarker({ kind: 'plugin', plugin: 'dsh-tavern' })).toBe(true)
     expect(isTavernSessionMarker({ kind: 'model', provider: 'other', model: 'm' })).toBe(false)
     expect(isTavernSessionMarker({ kind: 'plugin', plugin: 'someone-else' })).toBe(false)
     expect(isTavernSessionMarker({ kind: 'user' })).toBe(false)

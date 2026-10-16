@@ -142,14 +142,14 @@ describe('Card Workbench tools and original snapshots', () => {
 
   it('saves the original snapshot once on the import route', async () => {
     const first = makeResponse()
-    await apiHandler(makeRequest({ card: cardPayload(CHARACTER, ORIGINAL_DESCRIPTION) }, '/api/dsh-tavern/import/character'), first)
+    await apiHandler(makeRequest({ card: cardPayload(CHARACTER, ORIGINAL_DESCRIPTION) }, '/api/dsh-soulmojito/import/character'), first)
     expect(first.statusCode).toBe(200)
     expect(JSON.parse(first.chunks[0]!)).toMatchObject({ ok: true, name: CHARACTER })
     const snapshotFile = join(home, 'tavern', 'characters', 'originals', `${CHARACTER}.json`)
     expect(existsSync(snapshotFile)).toBe(true)
     // 重复导入（工作版覆盖）不得覆盖既有快照：首个导入胜出。
     const second = makeResponse()
-    await apiHandler(makeRequest({ card: cardPayload(CHARACTER, WORKING_DESCRIPTION) }, '/api/dsh-tavern/import/character'), second)
+    await apiHandler(makeRequest({ card: cardPayload(CHARACTER, WORKING_DESCRIPTION) }, '/api/dsh-soulmojito/import/character'), second)
     expect(second.statusCode).toBe(200)
     const snapshot = await readOriginalSnapshot(join(home, 'tavern'), CHARACTER)
     expect(snapshot).toBeDefined()

@@ -62,7 +62,7 @@ export class ModAuditLog {
           await mkdir(dirname(this.file), { recursive: true })
           await appendFile(this.file, line, 'utf8')
         } catch (cause) {
-          this.warn?.(`dsh-tavern: mod audit append failed: ${cause instanceof Error ? cause.message : String(cause)}`)
+          this.warn?.(`dsh-soulmojito: mod audit append failed: ${cause instanceof Error ? cause.message : String(cause)}`)
         }
       })
     this.tail = written

@@ -88,7 +88,7 @@ interface Tile {
  *  缺席：内置游戏随插件同进程分发，宿主版本即插件版本，自我门控无意义
  *  （对照：导入包的 engines 范围在 registry 装载期校验）。 */
 const MANIFEST: GameManifest = {
-  id: 'dsh-tavern.monopoly',
+  id: 'dsh-soulmojito.monopoly',
   name: '大富翁',
   version: '1.0.0',
   players: { min: 2, max: 2, roles: ['red', 'blue'] },
@@ -672,7 +672,7 @@ export const viewHtml = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>大富翁 · dsh-tavern 游戏桥</title>
+<title>大富翁 · dsh-soulmojito 游戏桥</title>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -800,7 +800,7 @@ export const viewHtml = `<!doctype html>
   }
 </style>
 </head>
-<body data-game="dsh-tavern.monopoly">
+<body data-game="dsh-soulmojito.monopoly">
 <header>
   <span class="game-name">大富翁</span>
   <span class="meta" id="meta"></span>
@@ -837,8 +837,8 @@ export const viewHtml = `<!doctype html>
 <footer id="hint"></footer>
 <script>
 'use strict'
-/* 桥协议（提案 0018 §3.3）：下行 dsh-tavern:game-state（token 对账、全量重渲染）、
-   上行 dsh-tavern:game-action（合法性由服务端引擎终审）。token 从 location.search
+/* 桥协议（提案 0018 §3.3）：下行 dsh-soulmojito:game-state（token 对账、全量重渲染）、
+   上行 dsh-soulmojito:game-action（合法性由服务端引擎终审）。token 从 location.search
    自读；无 token（浏览器直接打开）渲染静态预览局面（引擎 createGame({seed:1})
    的开局态，spec 与引擎逐字段对账防漂移）。坐席纪律：一切「谁是谁」的表述按
    session.players 的 owner 反查落笔，不把缺省坐席写死；四颗按钮随 view.legal
@@ -942,7 +942,7 @@ var PREVIEW_STATE = {
 }
 var PREVIEW_SESSION = {
   id: '',
-  gameId: 'dsh-tavern.monopoly',
+  gameId: 'dsh-soulmojito.monopoly',
   players: [
     { role: 'red', owner: 'human' },
     { role: 'blue', owner: 'agent' }
@@ -952,7 +952,7 @@ var PREVIEW_SESSION = {
 window.addEventListener('message', function (event) {
   var data = event.data
   if (!data || typeof data !== 'object') return
-  if (data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+  if (data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
   var view = data.view && typeof data.view === 'object' ? data.view : {}
   current = {
     state: view.state || null,
@@ -1089,10 +1089,10 @@ function render() {
   else if (!state) metaEl.textContent = '等待会话…'
   else metaEl.textContent = (act.session && act.session.id ? '对局 ' + act.session.id : '对局中') + ' · 回合 红 ' + state.turns.red + ' / 蓝 ' + state.turns.blue
   diceEl.textContent = state && state.lastRoll !== null ? '骰点 ' + state.lastRoll : '骰点 —'
-  logEl.textContent = act.summary || (live ? '' : '预览模式：由 dsh-tavern 游戏服务装载后启用交互。')
+  logEl.textContent = act.summary || (live ? '' : '预览模式：由 dsh-soulmojito 游戏服务装载后启用交互。')
 
   var cls = 'preview'
-  var text = '预览模式：由 dsh-tavern 游戏服务装载后启用交互'
+  var text = '预览模式：由 dsh-soulmojito 游戏服务装载后启用交互'
   if (live) {
     if (!state) {
       text = '等待对局状态…'
@@ -1131,9 +1131,9 @@ function render() {
   passBtn.disabled = !(canAct && (!constrain || allows.pass))
 
   if (!live) {
-    hintEl.textContent = '这是静态演示局面（开局）：由 dsh-tavern 游戏服务装载后，棋盘将接收实时状态并启用掷骰/购买/加盖/跳过按钮。'
+    hintEl.textContent = '这是静态演示局面（开局）：由 dsh-soulmojito 游戏服务装载后，棋盘将接收实时状态并启用掷骰/购买/加盖/跳过按钮。'
   } else if (!state) {
-    hintEl.textContent = '正在连接 dsh-tavern 游戏服务…'
+    hintEl.textContent = '正在连接 dsh-soulmojito 游戏服务…'
   } else if (state.finished) {
     hintEl.textContent = '对局已结束。可在对局面板中开新一局，或让 AI 再来一盘。'
   } else if (humanTurn(act)) {
@@ -1151,14 +1151,14 @@ function render() {
   }
 }
 
-/* 上行 dsh-tavern:game-action：人类回合（未终局、owner 非 agent）才发。
+/* 上行 dsh-soulmojito:game-action：人类回合（未终局、owner 非 agent）才发。
    合法性由服务端引擎终审——按钮只提供 roll/buy/build/pass 四个固定动作。 */
 function send(action) {
   if (!TOKEN) return
   var act = active()
   if (!act.state || act.state.finished || !humanTurn(act)) return
   window.parent.postMessage(
-    { type: 'dsh-tavern:game-action', token: TOKEN, action: action },
+    { type: 'dsh-soulmojito:game-action', token: TOKEN, action: action },
     '*'
   )
 }

@@ -1,5 +1,5 @@
 /**
- * 内置大富翁（dsh-tavern.monopoly，双人环线经营）——引擎契约与规则面测试。
+ * 内置大富翁（dsh-soulmojito.monopoly，双人环线经营）——引擎契约与规则面测试。
  *
  * 【蓝军声明】本套件断言严格落在契约面上，不发明契约外断言；租金/净值等
  * 派生数值一律用本文件自带的独立计算函数对账（不复用被测代码）。骰子与洗牌
@@ -8,7 +8,7 @@
  * 与 seed 1 的牌序，其余用例据此构造受控局面），不镜像 PRNG 实现。
  *
  * 契约面（v1）：
- * - 清单：id 'dsh-tavern.monopoly'、name '大富翁'、version '1.0.0'、
+ * - 清单：id 'dsh-soulmojito.monopoly'、name '大富翁'、version '1.0.0'、
  *   players {min:2,max:2,roles:['red','blue']}、turnBased、engines 缺席；
  * - 棋盘：24 格环线——起点 1、地产 14（地价升序）、机会 4、税局 2、派出所 1、
  *   免费停车 1、年度分红 1；
@@ -200,7 +200,7 @@ describe('清单与引擎形状（§3.1/§3.2）', () => {
     const check = checkGameManifest(manifest)
     expect(check.ok).toBe(true)
     expect(check.errors).toEqual([])
-    expect(manifest.id).toBe('dsh-tavern.monopoly')
+    expect(manifest.id).toBe('dsh-soulmojito.monopoly')
     expect(manifest.name).toBe('大富翁')
     expect(manifest.version).toBe('1.0.0')
     expect(manifest.players).toEqual({ min: 2, max: 2, roles: ['red', 'blue'] })
@@ -222,9 +222,9 @@ describe('清单与引擎形状（§3.1/§3.2）', () => {
     expect(viewHtml).not.toMatch(/src\s*=\s*["']https?:/i)
     expect(viewHtml).not.toMatch(/href\s*=\s*["']https?:/i)
     expect(viewHtml).not.toContain('fetch(')
-    expect(viewHtml).toContain('dsh-tavern:game-state')
-    expect(viewHtml).toContain('dsh-tavern:game-action')
-    expect(viewHtml).toContain('data-game="dsh-tavern.monopoly"')
+    expect(viewHtml).toContain('dsh-soulmojito:game-state')
+    expect(viewHtml).toContain('dsh-soulmojito:game-action')
+    expect(viewHtml).toContain('data-game="dsh-soulmojito.monopoly"')
     expect(viewHtml).toContain('id="roll-btn"')
     expect(viewHtml).toContain('id="buy-btn"')
     expect(viewHtml).toContain('id="build-btn"')
@@ -237,11 +237,11 @@ describe('清单与引擎形状（§3.1/§3.2）', () => {
 
   it('视图过 view 服务管线（CSP + 桥脚本注入 + 文档包装）后原内容完整', () => {
     const document = renderGameViewDocument(viewHtml)
-    expect(document).toContain('data-game="dsh-tavern.monopoly"')
-    expect(document).toContain('dshTavernGame')
+    expect(document).toContain('data-game="dsh-soulmojito.monopoly"')
+    expect(document).toContain('dshSoulMojitoGame')
     expect(document).toContain('Content-Security-Policy')
     expect(document).toContain("connect-src 'none'")
-    expect(document).toContain('dsh-tavern:game-action')
+    expect(document).toContain('dsh-soulmojito:game-action')
   })
 
   it('终局呈 in-flow 结果条（盘面保留、零叠压），含 7×7 环线棋盘与中央面板', () => {
@@ -972,16 +972,16 @@ function openMonopolyView(search: string): ViewHarness {
   }
 }
 
-/** 下行 dsh-tavern:game-state 载荷（token 与视图 URL 的 token 对账）。 */
+/** 下行 dsh-soulmojito:game-state 载荷（token 与视图 URL 的 token 对账）。 */
 function gameState(session: unknown, view: unknown): unknown {
-  return { type: 'dsh-tavern:game-state', token: 't', session, view }
+  return { type: 'dsh-soulmojito:game-state', token: 't', session, view }
 }
 
 /** 会话快照（玩家表按 manifest roles 规范序：red 前、blue 后）。 */
 function sessionFixture(blueOwner: 'human' | 'agent'): Record<string, unknown> {
   return {
     id: 'g-a1b2c3d4',
-    gameId: 'dsh-tavern.monopoly',
+    gameId: 'dsh-soulmojito.monopoly',
     gameName: '大富翁',
     players: [
       { role: 'red', owner: blueOwner === 'human' ? 'agent' : 'human' },
@@ -1108,8 +1108,8 @@ describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
   it('开局 → 人类与 Agent 交替落子到终局：视图/叙述/终审全链路', async () => {
     const service = await openGamesService({ root: join(home, 'tavern'), hostVersion: '0.6.5' })
     try {
-      const { session, view } = await service.start({ gameId: 'dsh-tavern.monopoly', character: 'ExampleCard', chatId: 'mp-chat' })
-      expect(session.gameId).toBe('dsh-tavern.monopoly')
+      const { session, view } = await service.start({ gameId: 'dsh-soulmojito.monopoly', character: 'ExampleCard', chatId: 'mp-chat' })
+      expect(session.gameId).toBe('dsh-soulmojito.monopoly')
       expect(session.players).toEqual([
         { role: 'red', owner: 'human' },
         { role: 'blue', owner: 'agent' },
@@ -1166,14 +1166,14 @@ describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
 
   it('registry 列出 builtin 大富翁：source builtin、status ok、engine/view 可用', async () => {
     const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.5' })
-    const summary = registry.summaries().find((candidate) => candidate.id === 'dsh-tavern.monopoly')
+    const summary = registry.summaries().find((candidate) => candidate.id === 'dsh-soulmojito.monopoly')
     expect(summary).toBeDefined()
     expect(summary!.source).toBe('builtin')
     expect(summary!.status).toBe('ok')
     expect(summary!.name).toBe('大富翁')
     expect(summary!.players).toEqual({ min: 2, max: 2, roles: ['red', 'blue'] })
-    const entry = registry.get('dsh-tavern.monopoly')!
+    const entry = registry.get('dsh-soulmojito.monopoly')!
     expect(entry.engine).not.toBeNull()
-    expect(entry.viewHtml).toContain('data-game="dsh-tavern.monopoly"')
+    expect(entry.viewHtml).toContain('data-game="dsh-soulmojito.monopoly"')
   })
 })

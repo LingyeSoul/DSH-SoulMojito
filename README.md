@@ -1,4 +1,4 @@
-<h1 align="center">dsh-tavern</h1>
+<h1 align="center">DSH-SoulMojito</h1>
 
 <p align="center">把 DSH（deepseek-harness）扩展成兼容 SillyTavern 生态的原生角色扮演工作区。</p>
 
@@ -32,10 +32,10 @@
 - AgentTavern 原生模式：单角色新聊天默认复用 DSH AgentLoop、原生 composer、Stop、错误处理和统计；角色、世界书、场景、记忆和变量通过会话级工具按需读取，原生事件幂等投影回 Tavern JSONL。宿主原生会话分叉自动收养：用 DSH 会话菜单的 fork、conversation 的任意轮尾分叉或 `sessions.fork` API 分叉一个 AgentTavern 会话，子会话首次运行时插件为其物化新 Tavern 聊天（` - fork N` 命名、`bookmark_link` 回链父聊天切点、guides 与 MVU 回执随 header 继承），拷贝 chat 作用域变量/记忆/向量，按父 contextMode 落绑定，并把继承前缀投影回填为新聊天楼层——工具面、上下文装配与锚定 cadence 从首轮起完整可用；subagent 子会话与 ST/AgentNovel/工作台会话的分叉不在收养面。激活预设同样生效：启用的内容型提示词按 `prompt_order` 顺序注入会话 system prompt（`main`/`jailbreak` 保留角色卡 `system_prompt`/`post_history_instructions` 覆盖语义），采样只投影 `temperature`；资产类 marker（角色卡字段、世界书、示例对话、历史）不重复固定注入，仍由工具、原生历史与可选预载承接。可选开关会在新 AgentTavern 会话初始化时一次性预载角色信息和常驻世界书条目，默认关闭且不追溯修改已有会话。现有 ST 兼容架构继续保留。分叉收养详见 [`decisions/2026-10-11-agent-tavern-host-fork.md`](decisions/2026-10-11-agent-tavern-host-fork.md)。
 - AgentTavern managed 模式：保持关闭。该门禁的宿主能力审计基于 DSH `0.1.0-rc.6`（宿主尚未提供 `agent/context` 历史投影和 projection-aware compaction）；`0.2.0-rc.2` 已确认仍未提供该 seam。插件不会把普通 compaction 冒充为主动遗忘，也不会静默回退到伪 managed 模式。详见 [`docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`](docs/exploration/2026-08-16-dsh-agentloop-native-audit.md)。
 - MVU 变量结算：变量由后台按卡内规则做**确定性脚本结算**（与 flizzywine 的后台 LLM 结算是不同的架构选择，日常结算零额外模型开销），正文不再夹带状态栏。每轮产出变量回执（每项变更的前后值、原因、失败项），失败项可单独重试而不动正文；固定状态栏模板由变量渲染，不随流式生成掉格式。面板与状态栏在两个架构表面都可达：ST 挂在聊天视图顶部，AgentTavern 从会话标题栏按钮弹出；变量源按绑定架构取（ST 读 `chat_metadata.variables`，AgentTavern 聊天读 chat 作用域变量存储并覆盖回同一棵嵌套树），只有回执、没有变量落盘的失败轮同样可见。AgentTavern 侧提供 `tavern_variable_settle` 工具，ST 侧走同一结算语义与回执投影。变量树根可选 `$schema` 子树是**写入守卫**（结构/类型锁定、`$range`/`$step` 越界 clamp、`$enum` 枚举拒绝、`$ro` 只读、`"*"` 通配与数组项模板）：clamp 进正常回执（reason 标注 guard），违规进失败项可重试，无 `$schema` 的卡行为不变。变量树根还可选 `$rules` 子树声明**条件规则**（`when`/`then` 表达式，求值走模板沙箱、Date/random 等不确定性源遮蔽）：结算守卫之后做确定性二次计算（阈值触发、派生值、连锁修正，链式求值有 3 轮上限），变更 reason 标 `rule:<名字>` 进同一回执——v1 无编辑 UI，规则在卡 JSON 里手写。回执可**撤销**（newest-first 链，只能撤最新一条有效回执）：每项变更恢复到回执记录的 before 值（恢复值过守卫，被拒整次不动），已撤销回执灰显，两架构与面板按钮同权。详见 [`docs/proposals/0012-mvu-settlement.md`](docs/proposals/0012-mvu-settlement.md) 与 [`decisions/2026-10-11-mvu-schema-guard.md`](decisions/2026-10-11-mvu-schema-guard.md)、[`decisions/2026-10-11-mvu-receipt-undo.md`](decisions/2026-10-11-mvu-receipt-undo.md)、[`decisions/2026-10-11-mvu-rules.md`](decisions/2026-10-11-mvu-rules.md)。
-- 卡片工作台：`dsh-tavern/card-workbench` agent preset。用对话描述想改什么，Agent 先给出方案，经确认面板（diff 视图）确认后才写入——写入工具必须携带已确认方案的 `planId`。支持修改人物卡/世界书/预设、空白建卡、从素材或剧本提取人物制卡、card-to-mvu 转换（写入固定状态栏模板与新聊天初始变量），以及把指定聊天连同楼层范围交给工作台排错。导入资产时写一次原版快照，随时可恢复原版。写卡 Agent 落盘后面板自动吸收：打开面板即重取最新资产，页面可见期间按 store 变更水位（3s）轮询，写入到列表可见不需手动刷新页面。面板「预设」分区的「预设生效范围」可让工作台（引用式，供起草卡面对齐风格与排错还原对局提示词环境）与小说推演（跟随式风格栈）接入激活预设堆栈，两者默认关闭。详见 [`docs/proposals/0013-card-workbench.md`](docs/proposals/0013-card-workbench.md)、[`decisions/2026-10-09-workbench-novel-preset-projection.md`](decisions/2026-10-09-workbench-novel-preset-projection.md)。
+- 卡片工作台：`dsh-soulmojito/card-workbench` agent preset。用对话描述想改什么，Agent 先给出方案，经确认面板（diff 视图）确认后才写入——写入工具必须携带已确认方案的 `planId`。支持修改人物卡/世界书/预设、空白建卡、从素材或剧本提取人物制卡、card-to-mvu 转换（写入固定状态栏模板与新聊天初始变量），以及把指定聊天连同楼层范围交给工作台排错。导入资产时写一次原版快照，随时可恢复原版。写卡 Agent 落盘后面板自动吸收：打开面板即重取最新资产，页面可见期间按 store 变更水位（3s）轮询，写入到列表可见不需手动刷新页面。面板「预设」分区的「预设生效范围」可让工作台（引用式，供起草卡面对齐风格与排错还原对局提示词环境）与小说推演（跟随式风格栈）接入激活预设堆栈，两者默认关闭。详见 [`docs/proposals/0013-card-workbench.md`](docs/proposals/0013-card-workbench.md)、[`decisions/2026-10-09-workbench-novel-preset-projection.md`](decisions/2026-10-09-workbench-novel-preset-projection.md)。
 - 剧本游玩：TXT/Markdown/EPUB 小说、大纲或剧本导入为剧本资产，与人物卡一对一绑定，新开局自动按剧本推进；只按进度召回附近片段，不整本注入上下文。剧本块是参考不是约束：玩家随时可偏离，只有正文实际覆盖当前片段的关键事件才推进进度；右侧剧本卡实时显示进度（是进度展示，不是跳章按钮）。详见 [`docs/proposals/0014-script-play.md`](docs/proposals/0014-script-play.md)。
 - 美化前端：助手消息中的完整 HTML 文档或 `html` 代码块会在隔离 iframe 中运行，支持内联 CSS、JavaScript 和常用 CDN 资源；普通文本与不完整流式内容仍按文本显示。
-- Mod 扩展接口（提案 0015）：把带 `mod.json` 的目录放进 `$DSH_HOME/tavern/mods/`（或面板内 git 一键安装）即可被识别，默认禁用；首次启用弹确认层如实展示其声明的能力面（知情同意，含无沙箱告知）。启用后的 Mod 可注册：五相位生成 hook（user-input / pre-assemble / pre-llm / post-output / post-save，顺序 waterfall，抛错 / 超时 / 忘 return 统一降级、不中断生成）、Agent 工具（强制 `<modId>_` 前缀并与内置工具三层查重，冲突即拒）、宿主宏与 STscript 命令（确定性筛查，首错降级保原文）、prompt 分区（order 宿主钳制 -50..0 防冲核心位）、带配额的持久化存储（单值 256KB / 总量 1MB）、HTTP 子路由（`/api/dsh-tavern/mods/<id>/`，path 白名单拒穿越）与沙箱化面板 UI（`sandbox="allow-scripts"` iframe，无 same-origin，CSP `connect-src 'none'`，postMessage 数据桥）；llm 调用能力按 manifest 声明门控，用量进审计。坏 Mod 只记审计跳过、不拖垮本体；禁用 / 卸载全注册面回收，全部装载与调用行为落审计日志；`DSH_TAVERN_DISABLE_MODS` 可硬关整个 Mod 系统。开发者文档见 [`docs/mods/mod-api.md`](docs/mods/mod-api.md)，官方示例 asset-stats / mood-tracker / story-clock 覆盖 v1 全部能力面；Mod 还可声明按钮（manifest `buttons` → 面板与 ST 聊天视图渲染 chip，点击分发到 `api.onButton` handler）、接收本客户端写入的下行事件推送（聊天保存/资产保存/guides/按钮点击，`dsh-tavern:mod-event`），Mod UI 的 console 输出自动回投宿主的 per-mod 日志查看器（内存环形缓冲，`dsh-tavern:mod-log`）。
+- Mod 扩展接口（提案 0015）：把带 `mod.json` 的目录放进 `$DSH_HOME/tavern/mods/`（或面板内 git 一键安装）即可被识别，默认禁用；首次启用弹确认层如实展示其声明的能力面（知情同意，含无沙箱告知）。启用后的 Mod 可注册：五相位生成 hook（user-input / pre-assemble / pre-llm / post-output / post-save，顺序 waterfall，抛错 / 超时 / 忘 return 统一降级、不中断生成）、Agent 工具（强制 `<modId>_` 前缀并与内置工具三层查重，冲突即拒）、宿主宏与 STscript 命令（确定性筛查，首错降级保原文）、prompt 分区（order 宿主钳制 -50..0 防冲核心位）、带配额的持久化存储（单值 256KB / 总量 1MB）、HTTP 子路由（`/api/dsh-soulmojito/mods/<id>/`，path 白名单拒穿越）与沙箱化面板 UI（`sandbox="allow-scripts"` iframe，无 same-origin，CSP `connect-src 'none'`，postMessage 数据桥）；llm 调用能力按 manifest 声明门控，用量进审计。坏 Mod 只记审计跳过、不拖垮本体；禁用 / 卸载全注册面回收，全部装载与调用行为落审计日志；`DSH_SOULMOJITO_DISABLE_MODS` 可硬关整个 Mod 系统。开发者文档见 [`docs/mods/mod-api.md`](docs/mods/mod-api.md)，官方示例 asset-stats / mood-tracker / story-clock 覆盖 v1 全部能力面；Mod 还可声明按钮（manifest `buttons` → 面板与 ST 聊天视图渲染 chip，点击分发到 `api.onButton` handler）、接收本客户端写入的下行事件推送（聊天保存/资产保存/guides/按钮点击，`dsh-soulmojito:mod-event`），Mod UI 的 console 输出自动回投宿主的 per-mod 日志查看器（内存环形缓冲，`dsh-soulmojito:mod-log`）。
 - 提示词查看器（A-6）：管理面板「提示词」分区查看 ST 生成循环每轮**实发给 LLM 的最终请求**（pre-llm 改写之后，看到即实发；system 段 / 消息序列 / 采样参数）与世界书激活轨迹（条目、命中键、位置、概率掷值、常驻/递归）；Agent 模式（AgentTavern）回合记录**插件预注入面**——systemPrompt 片段（kernel/preset/facts/guides/script + mod 段，分面展示）、本步注入消息（锚定/开场提醒）与 agent/request 链尾实发调用参数（宿主拼装的历史/工具上下文不可见，面板如实标注）；进程内环形缓冲（每聊天最近 10 条、总量 50，重启即失），记录失败绝不影响生成。详见 [`decisions/2026-10-11-prompt-viewer.md`](decisions/2026-10-11-prompt-viewer.md) 与 [`decisions/2026-10-11-agent-prompt-viewer.md`](decisions/2026-10-11-agent-prompt-viewer.md)。
 
 ### 酒馆美化前端
@@ -117,7 +117,7 @@ iframe 高度由 `ResizeObserver` 回传，并限制在 80-1200px；超出部分
 | `shell.overlay` | Tavern 管理面板 Modal，以及侧栏聊天树 adapter 的生命周期承载 |
 | `sidebar.footer.action` | 常驻 Tavern 面板按钮，与原生 Settings 并列 |
 
-DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏因此使用一个集中、版本敏感但失败关闭的 DOM adapter：只匹配可见左侧 `[role="tree"]`，按 workspace 路径/ID 隐藏 `Tavern (internal)` 分组，并按 `state.sessionBindings` 过滤旧版 Tavern 会话行；同时插入具名 `data-dsh-tavern-sidebar-host`。宿主重绘或虚拟列表更新时会重新应用过滤，解绑或卸载时可逆恢复。面板入口本身走官方 `sidebar.footer.action`，不会替换 Settings，也不依赖 adapter 是否成功挂载。侧栏「酒馆」与「写卡工作台」分区标题行可点击整块折叠（chevron + `aria-expanded`，折叠时「新建自由写卡工作台」按钮仍可用）；docked 侧栏门户与管理面板聊天分区两个挂载点共享同一折叠态，页面重载恢复全展开。
+DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏因此使用一个集中、版本敏感但失败关闭的 DOM adapter：只匹配可见左侧 `[role="tree"]`，按 workspace 路径/ID 隐藏 `Tavern (internal)` 分组，并按 `state.sessionBindings` 过滤旧版 Tavern 会话行；同时插入具名 `data-dsh-soulmojito-sidebar-host`。宿主重绘或虚拟列表更新时会重新应用过滤，解绑或卸载时可逆恢复。面板入口本身走官方 `sidebar.footer.action`，不会替换 Settings，也不依赖 adapter 是否成功挂载。侧栏「酒馆」与「写卡工作台」分区标题行可点击整块折叠（chevron + `aria-expanded`，折叠时「新建自由写卡工作台」按钮仍可用）；docked 侧栏门户与管理面板聊天分区两个挂载点共享同一折叠态，页面重载恢复全展开。
 
 每个 Tavern chat 绑定一个正式 DSH session。绑定 API 通过插件内部桥接追加 plugin notice marker，使 session 进入 active 状态而不调用模型；Tavern view、composer 和标题栏 action 仅接管带有效 Tavern marker 的 session，普通 DSH 会话保持原生表面。酒馆标题栏会局部隐藏 DSH 自带的 agent preset 标签，并在切换回普通会话时恢复；Tavern 自建生成循环会把 turn/step、流式 chunk、assistant message 和 provider usage 镜像进同一 session，因此标题栏直接复用 DSH 的 `sessionStats` / `tokenUsage` projection。删除聊天时会追加 close marker 并归档对应 DSH session。
 
@@ -125,7 +125,7 @@ DSH `rc.6` 没有可追加到原生 session tree 的正式 list slot。侧边栏
 
 | 架构 / 模式 | 状态 | 实际行为 |
 |---|---|---|
-| `agent-tavern` + `dsh-native` | rc.6 可用，单角色新聊天默认启用 | 使用 DSH 原生 AgentLoop 和 composer；模型、工具调用、Stop、错误与统计都由宿主处理，原生 user/final assistant 事件投影到 Tavern JSONL。激活预设以 `dsh-tavern:agent-preset` systemPrompt section 注入（内容提示词 + `temperature`；资产 marker 由工具与可选预载承接）。 |
+| `agent-tavern` + `dsh-native` | rc.6 可用，单角色新聊天默认启用 | 使用 DSH 原生 AgentLoop 和 composer；模型、工具调用、Stop、错误与统计都由宿主处理，原生 user/final assistant 事件投影到 Tavern JSONL。激活预设以 `dsh-soulmojito:agent-preset` systemPrompt section 注入（内容提示词 + `temperature`；资产 marker 由工具与可选预载承接）。 |
 | `agent-tavern` + `agent-managed` | rc.6 不可用 | 设置页显示宿主缺少 `agent/context` 与 projection-aware compaction 的原因并禁用选项；服务端也会拒绝该模式。 |
 | `st` | 保留并兼容 | 使用 Tavern 自有 `/generate`、流式生成、swipe、regenerate 和 STscript 路径。 |
 | 群聊 | 固定使用 `st` | 宿主尚未提供可靠的 actor 元数据前，不创建群聊 AgentTavern 会话。 |
@@ -180,15 +180,15 @@ ST 与 AgentTavern 新聊天共用 `$DSH_HOME/tavern/workspace/` 下的 `Tavern 
 
 | Package | 说明 |
 |---|---|
-| `@dsh-tavern/format` | 卡、PNG/CHARX、世界书、preset（chat completion / context / instruct / textgen）、群组文件、regex 脚本和 chat JSONL 的解析与无损往返 |
-| `@dsh-tavern/lore` | World Info 激活和 timed effects 引擎 |
-| `@dsh-tavern/macros` | 角色、时间、随机、变量等宏引擎 |
-| `@dsh-tavern/pipeline` | preset 顺序、lore、persona、历史和 token budget 的 prompt 装配（chat completion + 群聊回合） |
-| `@dsh-tavern/script` | ST regex 脚本执行器与 STscript 解释器 |
-| `@dsh-tavern/store` | `$DSH_HOME/tavern/` 原子文件存储、revision 和 session binding |
-| `@dsh-tavern/template` | EJS Prompt Template 引擎：`node:vm` 沙箱执行、作用域变量与内容注入（提案 0008） |
-| `@dsh-tavern/bind` | 跨 DSH 版本的宿主形状兼容层：会话事件探测、宿主包锚解析、client 连接双面回退与宿主形状诊断 |
-| `dsh-tavern` | 自包含 Node half（含 agent / compaction / novel / card-workbench 入口，以及 Mod 加载器与能力面宿主 `src/mods/`，提案 0015）、Web client half（含 Mods 面板分区与 Mod iframe 桥）、随附示例 Mod（`examples/mods/`，三个示例覆盖 v1 全部能力面：asset-stats 资产只读统计、mood-tracker post-output hook + 情绪工具对 + iframe 面板、story-clock 剧情时钟——聊天变量 `clock` + `{{clock}}` 宏 + `/clock` 命令族 + `llm` 门控摘要）、安装元数据和 gates |
+| `@dsh-soulmojito/format` | 卡、PNG/CHARX、世界书、preset（chat completion / context / instruct / textgen）、群组文件、regex 脚本和 chat JSONL 的解析与无损往返 |
+| `@dsh-soulmojito/lore` | World Info 激活和 timed effects 引擎 |
+| `@dsh-soulmojito/macros` | 角色、时间、随机、变量等宏引擎 |
+| `@dsh-soulmojito/pipeline` | preset 顺序、lore、persona、历史和 token budget 的 prompt 装配（chat completion + 群聊回合） |
+| `@dsh-soulmojito/script` | ST regex 脚本执行器与 STscript 解释器 |
+| `@dsh-soulmojito/store` | `$DSH_HOME/tavern/` 原子文件存储、revision 和 session binding |
+| `@dsh-soulmojito/template` | EJS Prompt Template 引擎：`node:vm` 沙箱执行、作用域变量与内容注入（提案 0008） |
+| `@dsh-soulmojito/bind` | 跨 DSH 版本的宿主形状兼容层：会话事件探测、宿主包锚解析、client 连接双面回退与宿主形状诊断 |
+| `dsh-soulmojito` | 自包含 Node half（含 agent / compaction / novel / card-workbench 入口，以及 Mod 加载器与能力面宿主 `src/mods/`，提案 0015）、Web client half（含 Mods 面板分区与 Mod iframe 桥）、随附示例 Mod（`examples/mods/`，三个示例覆盖 v1 全部能力面：asset-stats 资产只读统计、mood-tracker post-output hook + 情绪工具对 + iframe 面板、story-clock 剧情时钟——聊天变量 `clock` + `{{clock}}` 宏 + `/clock` 命令族 + `llm` 门控摘要）、安装元数据和 gates |
 
 ## 安装
 
@@ -197,13 +197,26 @@ ST 与 AgentTavern 新聊天共用 `$DSH_HOME/tavern/workspace/` 下的 `Tavern 
 ### 首次安装
 
 ```sh
-git clone https://github.com/LingyeSoul/dsh-tavern.git
-cd dsh-tavern
+git clone https://github.com/LingyeSoul/DSH-SoulMojito.git
+cd DSH-SoulMojito
 pnpm install
 pnpm run build:plugin
 dsh plugin --profile web add ./packages/plugin
 dsh --profile web
 ```
+
+### 从旧名迁移（dsh-tavern → DSH-SoulMojito，2026-10-16）
+
+项目改名（包名 `dsh-tavern` → `dsh-soulmojito`、工作区 `@dsh-tavern/*` → `@dsh-soulmojito/*`、插件挂载名与 API 前缀同步更名）。存量安装与数据**读取端兼容**，一次性动作只有「换包名重装」：
+
+```sh
+dsh plugin --profile web remove dsh-tavern   # 移除旧包名的安装
+dsh plugin --profile web add ./packages/plugin   # 或在桌面版安装框重填新的 Git spec
+```
+
+- GitHub 旧地址会自动重定向到新仓库 `LingyeSoul/DSH-SoulMojito`，存量安装的自更新链路不断。
+- 数据目录（`$DSH_HOME/tavern/`）与既有资产零迁移；旧会话里的写入标记（`dsh-tavern` / `plugin:dsh-tavern`）、旧环境变量（`DSH_TAVERN_*`）、旧游戏命名空间 id（`dsh-tavern.*` 对局）与新名双认——老会话、老对局、老配置行为不断。
+- 新写入与新文档一律用新名；旧名只作读取兼容存在。完整映射、兼容层设计与边界见 [decisions/2026-10-16-project-rename-dsh-soulmojito.md](decisions/2026-10-16-project-rename-dsh-soulmojito.md)。
 
 ### 桌面版（desktop profile）
 
@@ -212,19 +225,19 @@ DSH 桌面版的插件安装框等价于在 profile 目录执行 `pnpm add <spec
 桌面版「设置 → 插件 → Git 仓库」填子目录 spec：
 
 ```sh
-github:LingyeSoul/dsh-tavern#path:/packages/plugin
+github:LingyeSoul/DSH-SoulMojito#path:/packages/plugin
 ```
 
 等价的 HTTPS 写法（`#path:` 参数相同）：
 
 ```sh
-https://github.com/LingyeSoul/dsh-tavern#path:/packages/plugin
+https://github.com/LingyeSoul/DSH-SoulMojito#path:/packages/plugin
 ```
 
 命令行安装到 desktop profile（`dsh plugin` 把参数原样转发给 pnpm）：
 
 ```sh
-dsh plugin --profile desktop add github:LingyeSoul/dsh-tavern#path:/packages/plugin
+dsh plugin --profile desktop add github:LingyeSoul/DSH-SoulMojito#path:/packages/plugin
 dsh --profile desktop
 ```
 
@@ -240,12 +253,12 @@ git spec 固定到安装时的提交，不跟随源码更新；`version.json` �
 
 插件自带从 GitHub 发现新版本与一键更新，桌面版不需要再手敲 `dsh plugin`。
 
-- **发现**：「设置 → dsh-tavern」标题下与管理面板「总览」分区显示当前构建（`已安装 v0.4.5 (7a29db6)`）、GitHub 上的最新构建、待合入的 commit 列表与上次检查时间。启动后延迟 12s 首查、每 6h 复查，结果缓存在 `$DSH_HOME/tavern/update-state.json`；「检查更新」按钮穿透缓存立即查。
+- **发现**：「设置 → DSH-SoulMojito」标题下与管理面板「总览」分区显示当前构建（`已安装 v0.4.5 (7a29db6)`）、GitHub 上的最新构建、待合入的 commit 列表与上次检查时间。启动后延迟 12s 首查、每 6h 复查，结果缓存在 `$DSH_HOME/tavern/update-state.json`；「检查更新」按钮穿透缓存立即查。
 - **判定**：仓库不发 release/tag，因此以 main 分支最新 commit + `packages/plugin/package.json` 的 version 为准（规则见 [`decisions/2026-10-05-desktop-plugin-self-update.md`](decisions/2026-10-05-desktop-plugin-self-update.md)）。
 - **更新**：「立即更新」按 `dsh plugin`（桌面版自带 CLI，直接改 profile 的 `package.json` + `pnpm-lock.yaml`）→ `plugin-manager` 服务 → GitHub checkout 覆写的顺序落地，进度日志实时显示在卡片里。三条路径都需要**重启 DeepSeek Harness**：包替换要新的 JS module generation，宿主 HMR 不监听 `node_modules`。安装成功后安装器会把目标 commit 统一落进已安装目录的 `version.json` 旁车——运行中构建的身份以「模块加载时磁盘上的旁车」为准（烤进 bundle 的构建期字面量对随源入库的 dist 恒为父提交，只做旁车缺席时的兜底），重启加载新安装后「需要重启」即解除；过渡态缓存按安装目录隔离（`update-state.json` 在多 profile 间共享，别处装出的 pendingRestart 不会压到本目录），`force` 可穿透卡住的过渡态重装（收敛机制见 [`decisions/2026-10-12-update-restart-required-stuck.md`](decisions/2026-10-12-update-restart-required-stuck.md)）。
 - **来源降级**：`api.github.com` → `raw.githubusercontent.com` + `git ls-remote` → commits atom feed。企业 TLS 中间人会让 node 的 `fetch` 证书校验失败（`unable to verify the first certificate`），因此每个 HTTP 请求在 fetch 失败后自动用系统 `curl` 重试。
-- **开关**：profile 的 `dsh-tavern` 行写 `checkForUpdates: false`，或设 `DSH_TAVERN_DISABLE_UPDATE_CHECK=1` 关闭自动发现；`DSH_TAVERN_DISABLE_CURL=1` 关闭 curl 兜底；`GITHUB_TOKEN`/`GH_TOKEN` 可提高 GitHub 限流配额。
-- **HTTP 端点**：`GET /api/dsh-tavern/update`（缓存快照，`?refresh=1` 穿透 TTL）、`POST /api/dsh-tavern/update/check`、`POST /api/dsh-tavern/update/install`（`{ "wait": false }` 立刻返回，进度轮询 `GET update`）。
+- **开关**：profile 的 `dsh-soulmojito` 行写 `checkForUpdates: false`，或设 `DSH_SOULMOJITO_DISABLE_UPDATE_CHECK=1` 关闭自动发现；`DSH_SOULMOJITO_DISABLE_CURL=1` 关闭 curl 兜底；`GITHUB_TOKEN`/`GH_TOKEN` 可提高 GitHub 限流配额。（改名兼容：旧前缀 `DSH_TAVERN_*` 同样生效，读取端双认；文档与新写入只认 `DSH_SOULMOJITO_*`。）
+- **HTTP 端点**：`GET /api/dsh-soulmojito/update`（缓存快照，`?refresh=1` 穿透 TTL）、`POST /api/dsh-soulmojito/update/check`、`POST /api/dsh-soulmojito/update/install`（`{ "wait": false }` 立刻返回，进度轮询 `GET update`）。
 
 ### 更新
 
@@ -254,7 +267,7 @@ git spec 固定到安装时的提交，不跟随源码更新；`version.json` �
 `dsh plugin add` 以本地 link 方式挂载插件，因此代码更新后只需重新构建并重启 DSH：
 
 ```sh
-cd dsh-tavern
+cd DSH-SoulMojito
 git pull
 pnpm install
 pnpm run build:plugin
@@ -264,7 +277,7 @@ dsh --profile web
 若遇到依赖残留或版本不一致，可先移除再重新添加：
 
 ```sh
-dsh plugin --profile web remove dsh-tavern
+dsh plugin --profile web remove dsh-soulmojito
 dsh plugin --profile web add ./packages/plugin
 ```
 
@@ -272,11 +285,11 @@ dsh plugin --profile web add ./packages/plugin
 
 跨 DSH 版本的宿主形状兼容层（会话事件日志探测、宿主包锚解析、client 工作区
 连接双面回退、client UI 原子解析、宿主形状诊断）集中在 `packages/bind`
-（`@dsh-tavern/bind`），更新版本适配时先改这里。client half 的源文件是
+（`@dsh-soulmojito/bind`），更新版本适配时先改这里。client half 的源文件是
 `packages/plugin/client/main.js`；
 `client/index.js` 是 `pnpm run build:plugin` 的拼接产物（把 bind 的 client
 探测模块注入 `__DSH_BIND_CLIENT_SLOT__` 标记处），不要直接手改，改了会被下次
-构建覆盖。插件激活时会输出一行 `dsh-tavern host shape: {...}` 日志，报告命中的
+构建覆盖。插件激活时会输出一行 `dsh-soulmojito host shape: {...}` 日志，报告命中的
 宿主形状绑定路径，排查宿主版本差异从它读起。
 
 ### 验证
@@ -287,13 +300,13 @@ pnpm run check
 
 打开 DSH 后：
 
-1. 点击侧栏底部的 Tavern 按钮，或从“设置 -> dsh-tavern”打开 Tavern 面板。
+1. 点击侧栏底部的 Tavern 按钮，或从“设置 -> DSH-SoulMojito”打开 Tavern 面板。
 2. 在“角色卡 / 世界书 / 预设”分区导入资产；导入后可以直接编辑、保存、搜索、设为当前或导出。
 3. 在设置中选择新聊天架构（单角色新聊天默认 AgentTavern/native，群聊始终使用 ST）。
 4. 在原生左侧 Tavern 分支展开角色并创建或打开单角色聊天：AgentTavern 使用 DSH 原生 conversation，ST 使用原生 `Tavern` tab。
 5. 在 ST 聊天中验证编辑、swipe、regenerate 和 STscript；在 AgentTavern 聊天中验证原生 composer、工具调用、Stop 和会话统计。
 
-插件 Node half 是五个自包含 bundle：`index.mjs` 主入口，加 `agent` / `compaction` / `novel` / `card-workbench` 四个子代理入口（见 `package.json` 的 `exports`）；`@dsh-tavern/*` 工作区库（format / lore / macros / pipeline / script / store / template / bind）全部内联，无运行时依赖。无需用户额外安装公共 `@deepseek-ai/*` 运行时依赖；client closure 由 DSH profile 注入。
+插件 Node half 是五个自包含 bundle：`index.mjs` 主入口，加 `agent` / `compaction` / `novel` / `card-workbench` 四个子代理入口（见 `package.json` 的 `exports`）；`@dsh-soulmojito/*` 工作区库（format / lore / macros / pipeline / script / store / template / bind）全部内联，无运行时依赖。无需用户额外安装公共 `@deepseek-ai/*` 运行时依赖；client closure 由 DSH profile 注入。
 
 ## 测试基线
 
@@ -301,7 +314,7 @@ pnpm run check
 pnpm run check
 ```
 
-当前基线：103 个测试文件、1681 项测试通过（`skipIf` 环境条件项按本机实际状态计，全量实测 0 跳过）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。示例 Mod 的 engines 与随仓库发布的宿主版本由 `packages/plugin/tests/tavern-mods-examples.spec.ts` 防漂移守卫锁定（2026-10-12 story-clock `^0.4.1` 卡死 0.5.0 宿主的事后修复，见 [decisions/2026-10-12-story-clock-engines-drift.md](decisions/2026-10-12-story-clock-engines-drift.md)）。管理面板导航列「品牌块常驻 + 清单独占滚动」与游戏手柄图标由 `packages/plugin/tests/tavern-panel-layout.spec.ts` 和 `games-client.spec.ts` 锁定（2026-10-14 用户反馈，见 [decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md](decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md)）。移动端 700px 断点里清单容器退场（`.dt-panel-navlist{display:contents}`——修复「品牌块常驻」的包装器在横向按钮条里竖排堆叠分区按钮、主区被挤没的回归）由 `tavern-panel-layout.spec.ts` 新增用例与 gates `frontend-runtime` 的 marker（含负样本）锁定（2026-10-14 移动端实况，见 [decisions/2026-10-14-panel-mobile-navlist-strip-regression.md](decisions/2026-10-14-panel-mobile-navlist-strip-regression.md)）。七款内置游戏（井字棋/五子棋/中国象棋/军棋/21 点/记忆翻牌对战/大富翁）的引擎契约与规则面由 `packages/plugin/tests/games-builtin.spec.ts` 与 `games-xiangqi.spec.ts`/`games-junqi.spec.ts`/`games-blackjack.spec.ts`/`games-memory.spec.ts`/`games-monopoly.spec.ts` 锁定（中国象棋、军棋与大富翁均含视图内联预览局面与引擎真实开局的一致性防漂移，见 [decisions/2026-10-14-xiangqi-builtin.md](decisions/2026-10-14-xiangqi-builtin.md)、[decisions/2026-10-14-junqi-builtin.md](decisions/2026-10-14-junqi-builtin.md) 与 [decisions/2026-10-14-blackjack-builtin.md](decisions/2026-10-14-blackjack-builtin.md)；记忆翻牌对战的「未翻开牌面不进 state」防偷看不变式、记忆机器人端到端与单字汉字牌面（emoji 真机 tofu 实证后修订）见 [decisions/2026-10-15-memory-match-builtin.md](decisions/2026-10-15-memory-match-builtin.md)；大富翁的 seed 派生双流确定性（骰子流 + 机会牌洗序）与窄屏棋盘正方形契约（`.tile` 显式 `min-height:0` + 480px 窄屏收敛——headless 真机 390×844 下 grid 行被格子 min-content 顶开、棋盘失去正方形的回归）见 [decisions/2026-10-15-monopoly-builtin.md](decisions/2026-10-15-monopoly-builtin.md)）。21 点视图的坐席归属（人类可坐庄——提示/按钮/终局结果条一律按 owner 反查落笔，杜绝「庄家（AI）」式默认坐席文案；按钮随 `view.legal` 收缩）由 `games-blackjack.spec.ts` 的 DOM 垫片行为用例（真跑内联脚本 + 真实下行载荷）锁定（2026-10-14 用户实况「庄家和玩家的显示反了」，见 [decisions/2026-10-14-blackjack-seat-ownership-view.md](decisions/2026-10-14-blackjack-seat-ownership-view.md)）。中国象棋的对局提示层（将军警报横幅三语境、被将帅脉冲圈 + 光晕、解将行动指引）由 `games-xiangqi.spec.ts` 锁定（2026-10-14 用户反馈，见 [decisions/2026-10-14-xiangqi-check-prompts.md](decisions/2026-10-14-xiangqi-check-prompts.md)）。游戏工具面的 token 经济契约（扁平最小载荷：`game_wait` 只回等待期增量 `newMoves`、`game_move` 只回 `describe`+轮次、`game_history` 窗口缺省 20 手/上限 200/`from` 分页、会话快照去 `moves` 换 `moveCount`、身份面只在 `game_list`/`game_start` 出现一次）由 `games-tools.spec.ts` 与 `games-service.spec.ts` 锁定（2026-10-14 用户反馈，见 [decisions/2026-10-14-games-delta-tools.md](decisions/2026-10-14-games-delta-tools.md)）。人类落子自动续弈（等待登记防重、插件来源通知形状、逐级降级）由 `games-autowake.spec.ts` 锁定（见 [decisions/2026-10-14-games-autowake.md](decisions/2026-10-14-games-autowake.md)）；投降策略（出回合投降语义、两入口拒绝闸、按钮与终局盘面）由 `games-service.spec.ts` 与 `games-client.spec.ts` 锁定（见 [decisions/2026-10-14-games-resign-policy.md](decisions/2026-10-14-games-resign-policy.md)）。自更新 checkout 兜底的发布清单单一事实来源（`copyShippedFiles` 从 package.json `files` 运行时派生，杜绝 SHIPPED 硬编码漂移；含 card-workbench 混装回归与上抛负样本，package-contract gate 同步补齐五 bundle 的 files/exports 契约面）由 `tavern-update.spec.ts` 锁定（见 [decisions/2026-10-14-update-checkout-shipped-files-drift.md](decisions/2026-10-14-update-checkout-shipped-files-drift.md)）。游戏工具面坐标容错（整数的字符串形态归一为数字——模型桥把工具参数数字写成引号串的实弹停摆修复）由 `parseBoardCoord` 单元（games-builtin.spec.ts）+ 四内置/参照包容错用例 + `games-xiangqi.spec.ts` 实弹形状端到端锁定（2026-10-14 实弹对局 g-54e612c8，见 [decisions/2026-10-14-quoted-coordinate-tolerance.md](decisions/2026-10-14-quoted-coordinate-tolerance.md)）。自动续弈的两道防重闸（回合判定——该手交出回合或终局才投递；运行中判定——agent 回合未结束不投递）由 `games-autowake.spec.ts` 新增用例与 gates `server-bundle` 两枚函数名 marker（`turnReachedAgent`/`agentTurnRunning`，含负样本）锁定（2026-10-15 真机对局 g-60bfb716「通知在 agent 循环输出中异常触发」的竞态修复，见 [decisions/2026-10-15-games-wake-turn-gates.md](decisions/2026-10-15-games-wake-turn-gates.md)）。
+当前基线：104 个测试文件、1690 项测试通过（`skipIf` 环境条件项按本机实际状态计：Windows 检出实测 1 跳过——`host-package.spec.ts` 的 POSIX-only 用例；2026-10-16 项目改名轮全量实测，见 [decisions/2026-10-16-project-rename-dsh-soulmojito.md](decisions/2026-10-16-project-rename-dsh-soulmojito.md)）；15 个插件 gates（含 update-routes、package-contract、AgentTavern 隔离、native header adapter、MVU 挂载面、内部工作区、client VM mount、V4 session admission 和 mod-loader）全部通过。完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用 DSH `0.2.0-rc.2` 的隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。示例 Mod 的 engines 与随仓库发布的宿主版本由 `packages/plugin/tests/tavern-mods-examples.spec.ts` 防漂移守卫锁定（2026-10-12 story-clock `^0.4.1` 卡死 0.5.0 宿主的事后修复，见 [decisions/2026-10-12-story-clock-engines-drift.md](decisions/2026-10-12-story-clock-engines-drift.md)）。管理面板导航列「品牌块常驻 + 清单独占滚动」与游戏手柄图标由 `packages/plugin/tests/tavern-panel-layout.spec.ts` 和 `games-client.spec.ts` 锁定（2026-10-14 用户反馈，见 [decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md](decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md)）。移动端 700px 断点里清单容器退场（`.dt-panel-navlist{display:contents}`——修复「品牌块常驻」的包装器在横向按钮条里竖排堆叠分区按钮、主区被挤没的回归）由 `tavern-panel-layout.spec.ts` 新增用例与 gates `frontend-runtime` 的 marker（含负样本）锁定（2026-10-14 移动端实况，见 [decisions/2026-10-14-panel-mobile-navlist-strip-regression.md](decisions/2026-10-14-panel-mobile-navlist-strip-regression.md)）。七款内置游戏（井字棋/五子棋/中国象棋/军棋/21 点/记忆翻牌对战/大富翁）的引擎契约与规则面由 `packages/plugin/tests/games-builtin.spec.ts` 与 `games-xiangqi.spec.ts`/`games-junqi.spec.ts`/`games-blackjack.spec.ts`/`games-memory.spec.ts`/`games-monopoly.spec.ts` 锁定（中国象棋、军棋与大富翁均含视图内联预览局面与引擎真实开局的一致性防漂移，见 [decisions/2026-10-14-xiangqi-builtin.md](decisions/2026-10-14-xiangqi-builtin.md)、[decisions/2026-10-14-junqi-builtin.md](decisions/2026-10-14-junqi-builtin.md) 与 [decisions/2026-10-14-blackjack-builtin.md](decisions/2026-10-14-blackjack-builtin.md)；记忆翻牌对战的「未翻开牌面不进 state」防偷看不变式、记忆机器人端到端与单字汉字牌面（emoji 真机 tofu 实证后修订）见 [decisions/2026-10-15-memory-match-builtin.md](decisions/2026-10-15-memory-match-builtin.md)；大富翁的 seed 派生双流确定性（骰子流 + 机会牌洗序）与窄屏棋盘正方形契约（`.tile` 显式 `min-height:0` + 480px 窄屏收敛——headless 真机 390×844 下 grid 行被格子 min-content 顶开、棋盘失去正方形的回归）见 [decisions/2026-10-15-monopoly-builtin.md](decisions/2026-10-15-monopoly-builtin.md)）。21 点视图的坐席归属（人类可坐庄——提示/按钮/终局结果条一律按 owner 反查落笔，杜绝「庄家（AI）」式默认坐席文案；按钮随 `view.legal` 收缩）由 `games-blackjack.spec.ts` 的 DOM 垫片行为用例（真跑内联脚本 + 真实下行载荷）锁定（2026-10-14 用户实况「庄家和玩家的显示反了」，见 [decisions/2026-10-14-blackjack-seat-ownership-view.md](decisions/2026-10-14-blackjack-seat-ownership-view.md)）。中国象棋的对局提示层（将军警报横幅三语境、被将帅脉冲圈 + 光晕、解将行动指引）由 `games-xiangqi.spec.ts` 锁定（2026-10-14 用户反馈，见 [decisions/2026-10-14-xiangqi-check-prompts.md](decisions/2026-10-14-xiangqi-check-prompts.md)）。游戏工具面的 token 经济契约（扁平最小载荷：`game_wait` 只回等待期增量 `newMoves`、`game_move` 只回 `describe`+轮次、`game_history` 窗口缺省 20 手/上限 200/`from` 分页、会话快照去 `moves` 换 `moveCount`、身份面只在 `game_list`/`game_start` 出现一次）由 `games-tools.spec.ts` 与 `games-service.spec.ts` 锁定（2026-10-14 用户反馈，见 [decisions/2026-10-14-games-delta-tools.md](decisions/2026-10-14-games-delta-tools.md)）。人类落子自动续弈（等待登记防重、插件来源通知形状、逐级降级）由 `games-autowake.spec.ts` 锁定（见 [decisions/2026-10-14-games-autowake.md](decisions/2026-10-14-games-autowake.md)）；投降策略（出回合投降语义、两入口拒绝闸、按钮与终局盘面）由 `games-service.spec.ts` 与 `games-client.spec.ts` 锁定（见 [decisions/2026-10-14-games-resign-policy.md](decisions/2026-10-14-games-resign-policy.md)）。自更新 checkout 兜底的发布清单单一事实来源（`copyShippedFiles` 从 package.json `files` 运行时派生，杜绝 SHIPPED 硬编码漂移；含 card-workbench 混装回归与上抛负样本，package-contract gate 同步补齐五 bundle 的 files/exports 契约面）由 `tavern-update.spec.ts` 锁定（见 [decisions/2026-10-14-update-checkout-shipped-files-drift.md](decisions/2026-10-14-update-checkout-shipped-files-drift.md)）。游戏工具面坐标容错（整数的字符串形态归一为数字——模型桥把工具参数数字写成引号串的实弹停摆修复）由 `parseBoardCoord` 单元（games-builtin.spec.ts）+ 四内置/参照包容错用例 + `games-xiangqi.spec.ts` 实弹形状端到端锁定（2026-10-14 实弹对局 g-54e612c8，见 [decisions/2026-10-14-quoted-coordinate-tolerance.md](decisions/2026-10-14-quoted-coordinate-tolerance.md)）。自动续弈的两道防重闸（回合判定——该手交出回合或终局才投递；运行中判定——agent 回合未结束不投递）由 `games-autowake.spec.ts` 新增用例与 gates `server-bundle` 两枚函数名 marker（`turnReachedAgent`/`agentTurnRunning`，含负样本）锁定（2026-10-15 真机对局 g-60bfb716「通知在 agent 循环输出中异常触发」的竞态修复，见 [decisions/2026-10-15-games-wake-turn-gates.md](decisions/2026-10-15-games-wake-turn-gates.md)）。
 
 GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern 管理面板、角色卡/世界书/预设编辑器、conversation view/composer、流式生成、Stop、edit、swipe、regenerate、rename/delete 和 revision 冲突。
 
@@ -346,8 +359,9 @@ GUI 已在桌面和 390x844 移动视口验证，包括原生 sidebar、Tavern �
 - [`decisions/2026-10-15-memory-match-builtin.md`](decisions/2026-10-15-memory-match-builtin.md)：内置记忆翻牌对战（提案 0018 §4.1 内置序列第六款，§19 补记）——形态/规则面/「未翻开牌面不进 state」防偷看不变式与验收证据见该文档。
 - [`decisions/2026-10-15-monopoly-builtin.md`](decisions/2026-10-15-monopoly-builtin.md)：内置大富翁（提案 0018 §4.1 内置序列第七款，§20 补记）——双人环线经营（24 格：14 地产/4 机会/2 税局/派出所/停车/分红/起点）、规则面 v1 裁剪（无抵押变卖/多骰连击/保释）、seed 派生确定性（骰子流 + 机会牌洗序）、平衡盲测调参（300 局×3 策略：破产率 44%/30%/14%）、机会→机会连锁封顶与「机会移动不发薪水」可达性自纠、headless 真机六态验收（截图驱动修窄屏棋盘正方形回归）、版本 0.6.5 连带与边界。
 - [`decisions/2026-10-15-games-wake-turn-gates.md`](decisions/2026-10-15-games-wake-turn-gates.md)：自动续弈两道防重闸（提案 0018 §21，2026-10-15 真机对局 g-60bfb716「通知在 agent 循环输出中异常触发」竞态修复）——回合判定（该手交出回合或终局才投递；大富翁决定窗 roll / 21 点连续 hit / 记忆翻牌保留回合的中途动作不提前唤醒）与运行中判定（agent 回合未结束不投递，由运行中回合经自己的 game_wait/game_state 吸收；刻意不做 whenIdle 等待——回执路径不可阻塞，与 agent-novel 驱动的调度语义辨析）；9 条真机通知里 5 条假陈述（决定窗 roll 后 9ms 即投递）且 9 条全部落在未结束 turn 3 的证据链、旧宿主 status 缺失降级与边界。
+- [`decisions/2026-10-16-project-rename-dsh-soulmojito.md`](decisions/2026-10-16-project-rename-dsh-soulmojito.md)：项目改名（dsh-tavern → DSH-SoulMojito）——全仓标识符映射（包名/工作区/mod specifier/API 前缀/全局 key/游戏 id/mod 命名空间/自更新仓库）、旧数据读取双认兼容层（持久化 source 标记 / 环境变量 / 游戏 id 别名 / engines 旧键 / producer kind）、残留白名单（decisions 历史归档与原样保留项）与全量验证证据链。
 - [`docs/mods/mod-api.md`](docs/mods/mod-api.md)：Mod 扩展接口的开发者文档（清单、生命周期、全部能力面、面板 UI 表面协议、管理端点与审计），配套官方示例在 [`packages/plugin/examples/mods/`](packages/plugin/examples/mods/)（asset-stats / mood-tracker / story-clock / rps，覆盖 v1 全部能力面）。
-- [`packages/plugin/examples/games/dsh-tavern.gomoku/`](packages/plugin/examples/games/dsh-tavern.gomoku/)：[提案 0018](docs/proposals/0018-agent-game-bridge.md) 游戏桥标准（dsh-tavern Game Bridge）的第一个参照实现——五子棋标准游戏包（`game.json` 清单 + `engine.mjs` 零依赖纯函数引擎 + `view.html` 自包含视图），可直接放入 `$DSH_HOME/tavern/games/installed/` 或经 `POST games/install {path}` 导入对弈（清单 engines `^0.6.0` 对宿主版本的门控——0.6.x 全系含当前宿主 0.6.5 均满足）。规则按自由五子棋裁剪（任意方向 ≥5 连即胜、长连也算胜，连珠禁手不实现），保留动作 `resign` 由运行时统一处理。2026-10-14 起五子棋另有**内置实现**（开箱可玩，见 [decisions/2026-10-14-gomoku-builtin.md](decisions/2026-10-14-gomoku-builtin.md)）——本包保留为导入路径参照与可分发标准样本，与内置同 id，导入时以磁盘副本接管槽位（装载期 warning）。游戏桥运行时（`src/games/`：三源注册表 / 会话落盘 / HTTP 面 / `game_*` 六工具——`game_wait` 阻塞等待 + `game_history` 日志窗口，wait/move 只回增量 / MVU 同位对局面 + 面板「游戏」分区）已随 [decisions/2026-10-13-agent-game-bridge.md](decisions/2026-10-13-agent-game-bridge.md) 落地并经 2026-10-14 修订（wait 循环 + 自动展示 + 增量工具面 + 人类落子自动续弈 + 投降门/投降按钮/终局保留盘面）。对局面（棋盘 iframe）之下有**投降按钮**（两步确认防误触），面板「游戏」分区有「禁用投降」开关（开启后按钮隐藏、人类与 Agent 的认输都被服务端拒绝）；终局不再只剩一行结果文案——最终盘面与结果并列展示。
+- [`packages/plugin/examples/games/dsh-soulmojito.gomoku/`](packages/plugin/examples/games/dsh-soulmojito.gomoku/)：[提案 0018](docs/proposals/0018-agent-game-bridge.md) 游戏桥标准（dsh-soulmojito Game Bridge）的第一个参照实现——五子棋标准游戏包（`game.json` 清单 + `engine.mjs` 零依赖纯函数引擎 + `view.html` 自包含视图），可直接放入 `$DSH_HOME/tavern/games/installed/` 或经 `POST games/install {path}` 导入对弈（清单 engines `^0.6.0` 对宿主版本的门控——0.6.x 全系含当前宿主 0.6.5 均满足）。规则按自由五子棋裁剪（任意方向 ≥5 连即胜、长连也算胜，连珠禁手不实现），保留动作 `resign` 由运行时统一处理。2026-10-14 起五子棋另有**内置实现**（开箱可玩，见 [decisions/2026-10-14-gomoku-builtin.md](decisions/2026-10-14-gomoku-builtin.md)）——本包保留为导入路径参照与可分发标准样本，与内置同 id，导入时以磁盘副本接管槽位（装载期 warning）。游戏桥运行时（`src/games/`：三源注册表 / 会话落盘 / HTTP 面 / `game_*` 六工具——`game_wait` 阻塞等待 + `game_history` 日志窗口，wait/move 只回增量 / MVU 同位对局面 + 面板「游戏」分区）已随 [decisions/2026-10-13-agent-game-bridge.md](decisions/2026-10-13-agent-game-bridge.md) 落地并经 2026-10-14 修订（wait 循环 + 自动展示 + 增量工具面 + 人类落子自动续弈 + 投降门/投降按钮/终局保留盘面）。对局面（棋盘 iframe）之下有**投降按钮**（两步确认防误触），面板「游戏」分区有「禁用投降」开关（开启后按钮隐藏、人类与 Agent 的认输都被服务端拒绝）；终局不再只剩一行结果文案——最终盘面与结果并列展示。
 
 ## 插件管理
 

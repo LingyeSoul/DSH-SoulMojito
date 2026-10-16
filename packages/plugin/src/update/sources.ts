@@ -32,6 +32,7 @@ import {
   type TavernRemoteBuild,
   type TavernUpdateCommit,
 } from './github.js'
+import { envCompat } from '../env-compat.js'
 
 export interface FetchLike {
   (url: string, init?: Record<string, unknown>): Promise<{
@@ -202,7 +203,7 @@ async function getText(options: FetchRemoteOptions, url: string, accept: string)
 /**
  * fetch → curl 的两级抓取。两级都失败时把两边的原因一起抛出去，便于在快照的
  * `error` 里分辨「网络不通」「证书不受信」「HTTP 4xx」。
- * `DSH_TAVERN_DISABLE_CURL=1` 可关掉 curl 兜底（不装 curl 的宿主、离线测试）。
+ * `DSH_SOULMOJITO_DISABLE_CURL=1` 可关掉 curl 兜底（不装 curl 的宿主、离线测试）。
  * P2 起导出：mod git 安装的元数据预读复用同一降级链（提案 0015 §4）。
  */
 export async function httpGet(options: FetchRemoteOptions, url: string, accept: string): Promise<string> {
@@ -215,7 +216,7 @@ export async function httpGet(options: FetchRemoteOptions, url: string, accept: 
       const response = await fetchImpl(url, {
         headers: {
           accept,
-          'user-agent': 'dsh-tavern-update-check',
+          'user-agent': 'dsh-soulmojito-update-check',
           ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         signal: AbortSignal.timeout(timeoutMs),
@@ -226,7 +227,7 @@ export async function httpGet(options: FetchRemoteOptions, url: string, accept: 
       failures.push(`fetch: ${describeError(error)}`)
     }
   }
-  const curlDisabled = (process.env.DSH_TAVERN_DISABLE_CURL ?? '').trim() !== ''
+  const curlDisabled = (envCompat('DISABLE_CURL') ?? '').trim() !== ''
   if (!curlDisabled) {
     try {
       return await (options.curlImpl ?? curlGet)(url, accept, timeoutMs)
@@ -249,10 +250,10 @@ function describeError(error: unknown): string {
 /**
  * 用系统 curl 抓取：Windows 自带 `curl.exe`（Schannel，走 Windows 根证书库，
  * 能过企业 TLS 中间人），其他平台用 `curl`。`--fail` 让 HTTP 4xx/5xx 变成
- * 非零退出码，`--max-time` 与 fetch 的超时对齐。`DSH_TAVERN_CURL` 可覆盖路径。
+ * 非零退出码，`--max-time` 与 fetch 的超时对齐。`DSH_SOULMOJITO_CURL` 可覆盖路径。
  */
 export function curlGet(url: string, accept: string, timeoutMs: number, exec = execFile): Promise<string> {
-  const command = process.env.DSH_TAVERN_CURL?.trim() || (process.platform === 'win32' ? 'curl.exe' : 'curl')
+  const command = envCompat('CURL')?.trim() || (process.platform === 'win32' ? 'curl.exe' : 'curl')
   const seconds = String(Math.max(1, Math.ceil(timeoutMs / 1000)))
   return new Promise((resolve, reject) => {
     exec(command, [
@@ -262,7 +263,7 @@ export function curlGet(url: string, accept: string, timeoutMs: number, exec = e
       '--location',
       '--max-time', seconds,
       '-H', `accept: ${accept}`,
-      '-H', 'user-agent: dsh-tavern-update-check',
+      '-H', 'user-agent: dsh-soulmojito-update-check',
       url,
     ], {
       encoding: 'utf8',

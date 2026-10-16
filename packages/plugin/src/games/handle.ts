@@ -4,14 +4,14 @@
  * 为什么必须锚 globalThis：游戏运行时（registry + sessions）只活在 index bundle
  * （apply 内打开），而 game_* 工具活在 agent bundle（agent.mjs，独立 esbuild
  * 产物，无共享模块态）。注册动作（index bundle 写）与消费动作（agent bundle
- * 每次工具调用读）必须经 `globalThis[Symbol.for('dsh-tavern:games-service')]`
+ * 每次工具调用读）必须经 `globalThis[Symbol.for('dsh-soulmojito:games-service')]`
  * 互见。key 字符串是 bundle 间互见契约，不得变更。
  *
  * 本模块刻意只依赖 cross-bundle-events（无 fs/引擎图）：agent bundle 内联这份
  * 小 seam 时不会拖进整个游戏运行时——句柄解析失败时工具返回明确错误
  * 「游戏运行时不可用」。
  *
- * 变更通知走 `dsh-tavern:games-changed-listeners`（createGlobalListenerRegistry，
+ * 变更通知走 `dsh-soulmojito:games-changed-listeners`（createGlobalListenerRegistry，
  * guides/preset/mods 同款写穿语义）：index bundle 的落子/安装/重扫 emit 后，
  * agent bundle 已挂载的懒提示段（order -63）增量重载。
  */
@@ -20,7 +20,7 @@ import { createGlobalListenerRegistry } from '../cross-bundle-events.js'
 import type { GamesService } from './service.js'
 
 /** bundle 间互见契约 key（不得变更）。 */
-export const GAMES_SERVICE_KEY = 'dsh-tavern:games-service'
+export const GAMES_SERVICE_KEY = 'dsh-soulmojito:games-service'
 
 const serviceSymbol = Symbol.for(GAMES_SERVICE_KEY)
 
@@ -55,7 +55,7 @@ export function clearGamesServiceForTest(): void {
   delete (globalThis as Record<symbol, ServiceHolder | undefined>)[serviceSymbol]
 }
 
-const gamesChangedListeners = createGlobalListenerRegistry<() => void>('dsh-tavern:games-changed-listeners')
+const gamesChangedListeners = createGlobalListenerRegistry<() => void>('dsh-soulmojito:games-changed-listeners')
 
 /** 读侧订阅：任何游戏变更（落子/开局/安装/重扫）后的写穿通知。返回反订阅。 */
 export function onGamesChanged(listener: () => void): () => void {
@@ -68,7 +68,7 @@ export function emitGamesChanged(): void {
 }
 
 /** 等待登记表（会话 id → 挂起中的 game_wait 计数）。bundle 间互见契约 key。 */
-export const GAMES_WAITERS_KEY = 'dsh-tavern:games-waiters'
+export const GAMES_WAITERS_KEY = 'dsh-soulmojito:games-waiters'
 
 type GamesWaiterRegistry = Map<string, Set<symbol>>
 
@@ -91,7 +91,7 @@ function waiterRegistry(): GamesWaiterRegistry {
  */
 export function beginGameWait(sessionId: string): () => void {
   const registry = waiterRegistry()
-  const token = Symbol('dsh-tavern:game-wait')
+  const token = Symbol('dsh-soulmojito:game-wait')
   const tokens = registry.get(sessionId) ?? new Set<symbol>()
   tokens.add(token)
   registry.set(sessionId, tokens)

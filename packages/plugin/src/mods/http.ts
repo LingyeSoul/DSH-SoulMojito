@@ -1,6 +1,6 @@
 /**
  * Mod HTTP 面（提案 0015 §3.3 P1 的 api.http.route）：路由挂在
- * `/api/dsh-tavern/mods/<id>/<path>` 下。
+ * `/api/dsh-soulmojito/mods/<id>/<path>` 下。
  *
  * - path 字符集白名单：`segment(/segment)*`，段为 `[A-Za-z0-9][A-Za-z0-9._-]*`
  *   且拒绝 `.`/`..`——路径穿越在注册与分发两侧都被拒。
@@ -151,14 +151,14 @@ function escapeHtmlAttribute(value: string): string {
 /**
  * Console reporter（A-2，JSR §2.5 的错误呈现三件套之 iframe 侧）：注入所有
  * mod HTML 出口，把 mod UI 的 console 输出与全局错误经 token 对账的
- * postMessage 回投父页（`dsh-tavern:mod-log`）。约束：
+ * postMessage 回投父页（`dsh-soulmojito:mod-log`）。约束：
  * - token 从 iframe URL 查询段自读（服务端不掌握挂载期 token），无 token 静默
  *   跳过（非 iframe 场景 / 直接 curl 该路由都不产生消息）；
  * - 单条文本截断 ~2KB（防刷爆父页缓冲）；args 序列化失败退 String()；
  * - 只 wrap 不改语义：原 console 方法照常调用（mod UI 在 iframe 控制台里仍
  *   可见自己的输出）。
  */
-export const MOD_LOG_MESSAGE = 'dsh-tavern:mod-log'
+export const MOD_LOG_MESSAGE = 'dsh-soulmojito:mod-log'
 const MOD_LOG_TEXT_LIMIT = 2048
 
 export function modConsoleReporterScript(): string {
@@ -205,7 +205,7 @@ export function modConsoleReporterScript(): string {
  * 1. renderModHtmlDocument 注入前把 100 系列视口高度单位改写成
  *    var(--dt-viewport-height, 100vh)（rewriteViewportUnits）；
  * 2. 注入 modViewportScript 把宿主可视区高度挂到该变量——宿主（ModSurface）在
- *    load/resize 时经 `dsh-tavern:viewport` postMessage 投递 {height}（宿主→iframe
+ *    load/resize 时经 `dsh-soulmojito:viewport` postMessage 投递 {height}（宿主→iframe
  *    单向下行，与 mod-response 同向，不新增鉴权面：iframe 只读数值挂 CSS 变量，
  *    不回传不取数，伪造消息最多扰动沙箱内自身布局，无 token 对账必要）。
  *
@@ -216,7 +216,7 @@ export function modConsoleReporterScript(): string {
  *   形态，语义变更面大）；
  * - 注释与字符串字面量里的 100vh 原样保留（content:"100vh" 是显示文本）。
  */
-export const MOD_VIEWPORT_MESSAGE = 'dsh-tavern:viewport'
+export const MOD_VIEWPORT_MESSAGE = 'dsh-soulmojito:viewport'
 const MOD_VIEWPORT_CSS_VAR = '--dt-viewport-height'
 const VIEWPORT_UNIT_PATTERN = /(?<![-\w])100(?:d|s|l)?vh(?![\w-])/gi
 const VIEWPORT_VAR_REFERENCE = `var(${MOD_VIEWPORT_CSS_VAR}, 100vh)`
@@ -297,7 +297,7 @@ export function modHeightReporterScript(): string {
       if (height <= 0 || height === last) return;
       last = height;
       try {
-        parent.postMessage({ type: 'dsh-tavern:frontend-height', token: token, height: height }, '*');
+        parent.postMessage({ type: 'dsh-soulmojito:frontend-height', token: token, height: height }, '*');
       } catch (_) {}
       setTimeout(measure, 500);
     };

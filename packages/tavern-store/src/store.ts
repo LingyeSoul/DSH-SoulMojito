@@ -42,7 +42,7 @@ import {
   type GroupIR,
   type RegexScriptIR,
   type WorldBookIR,
-} from '@dsh-tavern/format'
+} from '@dsh-soulmojito/format'
 
 export type TavernArchitecture = 'agent-tavern' | 'st' | 'agent-novel'
 export type TavernContextMode = 'dsh-native' | 'agent-managed'

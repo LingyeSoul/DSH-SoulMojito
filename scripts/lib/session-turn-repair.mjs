@@ -2,7 +2,7 @@
  * v0 会话工件的统一 turn 坐标修复引擎（纯函数，无 I/O）。
  *
  * 背景（2026-10 历史加载失败族）：0.2.0-rc.2 的 observe 走完整代际迁移链
- * v0→v1→v2→v3→v4。dsh-tavern ≤0.3.9 写入的 v0 工件带两类 turn 毒：
+ * v0→v1→v2→v3→v4。dsh-soulmojito（旧名 dsh-tavern）≤0.3.9 写入的 v0 工件带两类 turn 毒：
  *
  * 1. 孤儿导入：历史导入的 assistant/message 带 `{ turn: 0 }` 且没有
  *    turn/start 包裹；v2→v3 迁移以 "turn must be positive" 拒绝整份工件。
@@ -47,7 +47,10 @@ function expandedStart(row) {
 
 function isTavernPluginSource(source) {
   if (source === null || typeof source !== 'object') return false
-  return (source.kind === 'plugin' && source.plugin === 'dsh-tavern') || source.kind === 'plugin:dsh-tavern'
+  // 改名兼容（2026-10-16）：v0 工件由改名前的插件写入，旧名 dsh-tavern 的
+  // kind/plugin 值双认；新写入恒为新名。
+  return (source.kind === 'plugin' && (source.plugin === 'dsh-soulmojito' || source.plugin === 'dsh-tavern'))
+    || source.kind === 'plugin:dsh-soulmojito' || source.kind === 'plugin:dsh-tavern'
 }
 
 function hasTurn(row, turn) {

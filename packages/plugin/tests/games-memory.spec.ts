@@ -1,5 +1,5 @@
 /**
- * 内置记忆翻牌对战（dsh-tavern.memory-match，提案 0018 §4.1 内置序列第六款）
+ * 内置记忆翻牌对战（dsh-soulmojito.memory-match，提案 0018 §4.1 内置序列第六款）
  * ——引擎契约与规则面测试。
  *
  * 【蓝军声明】断言严格落在契约面上，不发明契约外断言；**布局派生不复刻洗牌
@@ -10,7 +10,7 @@
  * 尺寸/烟测五关/真实 service 端到端（记忆机器人只用观察到的牌面决策）。
  *
  * 契约面（v1）：
- * - 清单：id 'dsh-tavern.memory-match'、name '记忆翻牌对战'、version '1.0.0'、
+ * - 清单：id 'dsh-soulmojito.memory-match'、name '记忆翻牌对战'、version '1.0.0'、
  *   players {min:2,max:2,roles:['red','blue']}、turnBased、engines 缺席；
  * - state（JSON-safe、顶层 turn）：{ turn, seed, board: (null|图案)[16]、
  *   scores{red,blue}、ply、lastFlip{cards,faces,match}|null、finished, winner }；
@@ -159,7 +159,7 @@ describe('清单与引擎形状（§3.1/§3.2）', () => {
     const check = checkGameManifest(manifest)
     expect(check.ok).toBe(true)
     expect(check.errors).toEqual([])
-    expect(manifest.id).toBe('dsh-tavern.memory-match')
+    expect(manifest.id).toBe('dsh-soulmojito.memory-match')
     expect(manifest.name).toBe('记忆翻牌对战')
     expect(manifest.players).toEqual({ min: 2, max: 2, roles: ['red', 'blue'] })
     expect(manifest.engines).toBeUndefined()
@@ -176,18 +176,18 @@ describe('清单与引擎形状（§3.1/§3.2）', () => {
     expect(viewHtml).not.toMatch(/src\s*=\s*["']https?:/i)
     expect(viewHtml).not.toMatch(/href\s*=\s*["']https?:/i)
     expect(viewHtml).not.toContain('fetch(')
-    expect(viewHtml).toContain('dsh-tavern:game-state')
-    expect(viewHtml).toContain('dsh-tavern:game-action')
-    expect(viewHtml).toContain('data-game="dsh-tavern.memory-match"')
+    expect(viewHtml).toContain('dsh-soulmojito:game-state')
+    expect(viewHtml).toContain('dsh-soulmojito:game-action')
+    expect(viewHtml).toContain('data-game="dsh-soulmojito.memory-match"')
   })
 
   it('视图过 view 服务管线（CSP + 桥脚本注入 + 文档包装）后原内容完整', () => {
     const document = renderGameViewDocument(viewHtml)
-    expect(document).toContain('data-game="dsh-tavern.memory-match"')
-    expect(document).toContain('dshTavernGame')
+    expect(document).toContain('data-game="dsh-soulmojito.memory-match"')
+    expect(document).toContain('dshSoulMojitoGame')
     expect(document).toContain('Content-Security-Policy')
     expect(document).toContain("connect-src 'none'")
-    expect(document).toContain('dsh-tavern:game-action')
+    expect(document).toContain('dsh-soulmojito:game-action')
   })
 
   it('视图静态锚点：翻回预览/配对定格/两段点击/比分板/结果条/静态预览局面', () => {
@@ -620,8 +620,8 @@ describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
   it('记忆机器人驱动人机双路径翻完全盘：叙述/记分/终局全链路对账', async () => {
     const service = await openGamesService({ root: join(home, 'tavern'), hostVersion: '0.6.5' })
     try {
-      const { session, view } = await service.start({ gameId: 'dsh-tavern.memory-match', character: 'ExampleCard', chatId: 'mem-chat' })
-      expect(session.gameId).toBe('dsh-tavern.memory-match')
+      const { session, view } = await service.start({ gameId: 'dsh-soulmojito.memory-match', character: 'ExampleCard', chatId: 'mem-chat' })
+      expect(session.gameId).toBe('dsh-soulmojito.memory-match')
       expect(session.players).toEqual([
         { role: 'red', owner: 'human' },
         { role: 'blue', owner: 'agent' },

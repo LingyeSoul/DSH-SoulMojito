@@ -29,7 +29,7 @@ interface ToolLike {
  * 忠于宿主 Context 注入门的形状（@deepseek-ai/cordis）：属性既不在 target
  * 上，也不是当前 fiber 能解析的服务时同步抛 `cannot get property "<name>"
  * without inject`。0.2.0-rc.2 的真实故障正是 apply() 直读 ctx.agent 撞上这层
- * 门，让 dsh-tavern/agent 整个 preset 模块挂载失败——所以挂载契约必须在这个
+ * 门，让 dsh-soulmojito/agent 整个 preset 模块挂载失败——所以挂载契约必须在这个
  * 形状下验证：只许触达声明过的服务，身份从别处（装配上下文 / exec.agent）取。
  */
 function gatedHostContext(target: Record<string, unknown>): AgentContextLike {
@@ -96,9 +96,9 @@ describe('AgentTavern native module mount', () => {
   })
 
   it('mounts on a host context that refuses undeclared property access', () => {
-    expect(sections.map((section) => section.name)).toContain('dsh-tavern:agent-kernel')
-    expect(sections.map((section) => section.name)).toContain('dsh-tavern:agent-preset')
-    expect(contexts.map((context) => context.name)).toContain('dsh-tavern:agent-facts')
+    expect(sections.map((section) => section.name)).toContain('dsh-soulmojito:agent-kernel')
+    expect(sections.map((section) => section.name)).toContain('dsh-soulmojito:agent-preset')
+    expect(contexts.map((context) => context.name)).toContain('dsh-soulmojito:agent-facts')
     expect([...tools.keys()]).toContain('tavern_character_get')
     // 18 原有 + 游戏桥六件（提案 0018 §4.2；game_wait 为 2026-10-14 修订，
     // game_history 为同日增量修订）。
@@ -106,7 +106,7 @@ describe('AgentTavern native module mount', () => {
   })
 
   it('resolves the per-agent facts from the assembly context instead of the mount context', async () => {
-    const facts = contexts.find((context) => context.name === 'dsh-tavern:agent-facts')!
+    const facts = contexts.find((context) => context.name === 'dsh-soulmojito:agent-facts')!
     expect(facts.text()).toBe('')
     expect(facts.text({ agent: { id: AGENT } })).toBe('')
     await vi.waitFor(() => {

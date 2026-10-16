@@ -1,10 +1,10 @@
-# 提案 0001：dsh-tavern 原生角色扮演层
+# 提案 0001：dsh-soulmojito 原生角色扮演层
 
 > 状态：第一版已实现并验证。日期：2026-08-14。
 
 ## 1. 目标
 
-dsh-tavern 让 DSH 用户直接使用 SillyTavern 的角色扮演资产和交互语义，同时继续复用 DSH 的模型路由、密钥管理、Web 容器和插件分发。
+dsh-soulmojito 让 DSH 用户直接使用 SillyTavern 的角色扮演资产和交互语义，同时继续复用 DSH 的模型路由、密钥管理、Web 容器和插件分发。
 
 目标不是在 DSH 设置页里嵌入另一个聊天应用，而是让 Tavern 角色和聊天进入原生侧边栏，让 transcript、composer、swipe、编辑和 regenerate 进入原生 conversation 区域。设置页只保留资产和行为配置。
 
@@ -47,7 +47,7 @@ $DSH_HOME/tavern/state.json -> sessionBindings
 1. 连接当前 workspace 的 blank DSH session。
 2. 调用插件内部 session bridge command（不暴露 Tavern 激活斜杠命令）。
 3. Node half 校验 chat 并原子保存 binding。
-4. 向 session 追加 `plugin:dsh-tavern` 的 `user/message` notice marker。
+4. 向 session 追加 `plugin:dsh-soulmojito` 的 `user/message` notice marker。
 5. marker 让 blank session 进入 active 状态，但不触发模型调用。
 6. client 重命名并打开 DSH session，然后切到 `Tavern` tab。
 
@@ -59,7 +59,7 @@ DSH `0.1.0-rc.6` 的 `sidebar.workspaces` 是完整 single/root 接管点，没�
 
 - 由 `shell.overlay` 提供生命周期锚点。
 - 只寻找可见、位于左侧、尺寸合理的 `[role="tree"]`。
-- 在原生 tree 前插入 `data-dsh-tavern-sidebar-host`，通过 React portal 渲染。
+- 在原生 tree 前插入 `data-dsh-soulmojito-sidebar-host`，通过 React portal 渲染。
 - `MutationObserver` 与 resize 只负责重新匹配，使用 animation frame 合并。
 - teardown 时断开 observer、取消 frame、删除 host。
 - 不依赖 DSH CSS module hash；绑定的 Tavern session 行由同一 adapter 隐藏，普通
@@ -72,7 +72,7 @@ DSH `0.1.0-rc.6` 的 `sidebar.workspaces` 是完整 single/root 接管点，没�
 
 ```text
 Tavern composer
-  -> POST /api/dsh-tavern/generate
+  -> POST /api/dsh-soulmojito/generate
   -> load Character Card + preset + persona + World Info + chat JSONL
   -> activate lore
   -> expand macros

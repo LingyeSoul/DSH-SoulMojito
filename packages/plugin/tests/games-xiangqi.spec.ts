@@ -134,7 +134,7 @@ describe('清单与引擎形状（§3.1/§3.2）', () => {
     const check = checkGameManifest(xiangqiManifest)
     expect(check.ok).toBe(true)
     expect(check.errors).toEqual([])
-    expect(xiangqiManifest.id).toBe('dsh-tavern.xiangqi')
+    expect(xiangqiManifest.id).toBe('dsh-soulmojito.xiangqi')
     expect(xiangqiManifest.name).toBe('中国象棋')
     expect(xiangqiManifest.players).toEqual({ min: 2, max: 2, roles: ['red', 'black'] })
     expect(xiangqiManifest.engines).toBeUndefined()
@@ -153,18 +153,18 @@ describe('清单与引擎形状（§3.1/§3.2）', () => {
     expect(xiangqiViewHtml).not.toMatch(/src\s*=\s*["']https?:/i)
     expect(xiangqiViewHtml).not.toMatch(/href\s*=\s*["']https?:/i)
     expect(xiangqiViewHtml).not.toContain('fetch(')
-    expect(xiangqiViewHtml).toContain('dsh-tavern:game-state')
-    expect(xiangqiViewHtml).toContain('dsh-tavern:game-action')
-    expect(xiangqiViewHtml).toContain('data-game="dsh-tavern.xiangqi"')
+    expect(xiangqiViewHtml).toContain('dsh-soulmojito:game-state')
+    expect(xiangqiViewHtml).toContain('dsh-soulmojito:game-action')
+    expect(xiangqiViewHtml).toContain('data-game="dsh-soulmojito.xiangqi"')
   })
 
   it('视图过 view 服务管线（CSP + 桥脚本注入 + 文档包装）后原内容完整', () => {
     const document = renderGameViewDocument(xiangqiViewHtml)
-    expect(document).toContain('data-game="dsh-tavern.xiangqi"')
-    expect(document).toContain('dshTavernGame')
+    expect(document).toContain('data-game="dsh-soulmojito.xiangqi"')
+    expect(document).toContain('dshSoulMojitoGame')
     expect(document).toContain('Content-Security-Policy')
     expect(document).toContain("connect-src 'none'")
-    expect(document).toContain('dsh-tavern:game-action')
+    expect(document).toContain('dsh-soulmojito:game-action')
   })
 
   it('将军提示层（2026-10-14 用户需求「象棋应该提供提示：如将军提示」）：警报横幅/光晕/行动指引均在视图里', () => {
@@ -896,22 +896,22 @@ describe('确定性与尺寸（§3.2 硬约束）', () => {
 describe('registry 内置源（§4.1）', () => {
   it('列出 builtin 中国象棋：source builtin、status ok、engine/view 可用', async () => {
     const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.2' })
-    const summary = registry.summaries().find((candidate) => candidate.id === 'dsh-tavern.xiangqi')!
+    const summary = registry.summaries().find((candidate) => candidate.id === 'dsh-soulmojito.xiangqi')!
     expect(summary).toBeDefined()
     expect(summary.source).toBe('builtin')
     expect(summary.status).toBe('ok')
     expect(summary.name).toBe('中国象棋')
     expect(summary.players).toEqual({ min: 2, max: 2, roles: ['red', 'black'] })
     expect(summary.actionVocabulary).toContain('move')
-    const entry = registry.get('dsh-tavern.xiangqi')!
+    const entry = registry.get('dsh-soulmojito.xiangqi')!
     expect(entry.engine).not.toBeNull()
-    expect(entry.viewHtml).toContain('data-game="dsh-tavern.xiangqi"')
+    expect(entry.viewHtml).toContain('data-game="dsh-soulmojito.xiangqi"')
   })
 
   it('内置同册（按 id 稳定排序；军棋/21 点/记忆翻牌随后加入同册）', async () => {
     const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.2' })
     expect(registry.summaries().filter((summary) => summary.source === 'builtin').map((summary) => summary.id))
-      .toEqual(['dsh-tavern.blackjack', 'dsh-tavern.gomoku', 'dsh-tavern.junqi', 'dsh-tavern.memory-match', 'dsh-tavern.monopoly', 'dsh-tavern.tic-tac-toe', 'dsh-tavern.xiangqi'])
+      .toEqual(['dsh-soulmojito.blackjack', 'dsh-soulmojito.gomoku', 'dsh-soulmojito.junqi', 'dsh-soulmojito.memory-match', 'dsh-soulmojito.monopoly', 'dsh-soulmojito.tic-tac-toe', 'dsh-soulmojito.xiangqi'])
   })
 })
 
@@ -919,8 +919,8 @@ describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
   it('开局 → 人类炮二平五 → Agent 马8进7：视图/叙述/轮次/终审全链路', async () => {
     const service = await openGamesService({ root: join(home, 'tavern'), hostVersion: '0.6.2' })
     try {
-      const { session, view } = await service.start({ gameId: 'dsh-tavern.xiangqi', character: 'ExampleCard', chatId: 'xq-chat' })
-      expect(session.gameId).toBe('dsh-tavern.xiangqi')
+      const { session, view } = await service.start({ gameId: 'dsh-soulmojito.xiangqi', character: 'ExampleCard', chatId: 'xq-chat' })
+      expect(session.gameId).toBe('dsh-soulmojito.xiangqi')
       expect(session.players).toEqual([
         { role: 'red', owner: 'human' },
         { role: 'black', owner: 'agent' },
@@ -952,7 +952,7 @@ describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
   it('实弹回归（g-54e612c8 形状）：Agent 桥把坐标写成引号串时照常落子，规则仍全量终审', async () => {
     const service = await openGamesService({ root: join(home, 'tavern'), hostVersion: '0.6.2' })
     try {
-      const { session } = await service.start({ gameId: 'dsh-tavern.xiangqi', character: 'ExampleCard', chatId: 'xq-quoted' })
+      const { session } = await service.start({ gameId: 'dsh-soulmojito.xiangqi', character: 'ExampleCard', chatId: 'xq-quoted' })
       await service.humanAction(session.id, mv([6, 6], [6, 5])) // 人类 兵三进一
       // 引号串坐标（实弹日志形状：{"x":"1"}）归一执行；describe/summary 走同一解析。
       const cannon = await service.agentMove(session.id, { type: 'move', from: { x: '1', y: '2' }, to: { x: '4', y: '2' } })

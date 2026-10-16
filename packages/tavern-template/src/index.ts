@@ -1,5 +1,5 @@
 /**
- * `@dsh-tavern/template`：ST-Prompt-Template 兼容的 EJS 模板运行时（clean-room 复刻，
+ * `@dsh-soulmojito/template`：ST-Prompt-Template 兼容的 EJS 模板运行时（clean-room 复刻，
  * 见 docs/proposals/0008-prompt-template.md）。
  */
 

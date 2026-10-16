@@ -1,5 +1,5 @@
 /**
- * @dsh-tavern/lore — World Info (lorebook) activation engine with SillyTavern semantics.
+ * @dsh-soulmojito/lore — World Info (lorebook) activation engine with SillyTavern semantics.
  *
  * 类型层。算法语义对照 SillyTavern `public/scripts/world-info.js`（release 分支）：
  * - 世界书条目字段/默认值 ← `newWorldInfoEntryDefinition`

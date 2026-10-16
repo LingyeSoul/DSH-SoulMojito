@@ -13,7 +13,7 @@
  * - 导入目录与内置同 id 的遮蔽语义（以导入副本为准 + warning 不静默）。
  */
 
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -23,6 +23,7 @@ import { monopolyEngine } from '../src/games/builtin/monopoly.js'
 import { ticTacToeEngine as ticTacToe, manifest, viewHtml } from '../src/games/builtin/tic-tac-toe.js'
 import { renderGameViewDocument } from '../src/games/view.js'
 import { GameRegistry } from '../src/games/registry.js'
+import { GameSessionStore } from '../src/games/sessions.js'
 import { checkGameEngine, checkGameManifest, currentRoleOf, parseBoardCoord, smokeTestGameEngine, type GameEngine } from '../src/games/standard.js'
 
 interface TicState {
@@ -38,9 +39,12 @@ interface TicState {
 const home = mkdtempSync(join(tmpdir(), 'games-builtin-'))
 /** 遮蔽用例独占的根：放进同 id 的坏导入目录，避免污染其他用例的干净 root。 */
 const shadowHome = mkdtempSync(join(tmpdir(), 'games-builtin-shadow-'))
+/** 改名兼容用例独占的根：旧命名空间对局文件写这里，不污染共享 root。 */
+const legacyHome = mkdtempSync(join(tmpdir(), 'games-builtin-legacy-'))
 afterAll(() => {
   rmSync(home, { recursive: true, force: true })
   rmSync(shadowHome, { recursive: true, force: true })
+  rmSync(legacyHome, { recursive: true, force: true })
 })
 
 describe('清单与引擎形状（§3.1/§3.2）', () => {
@@ -48,7 +52,7 @@ describe('清单与引擎形状（§3.1/§3.2）', () => {
     const check = checkGameManifest(manifest)
     expect(check.ok).toBe(true)
     expect(check.errors).toEqual([])
-    expect(manifest.id).toBe('dsh-tavern.tic-tac-toe')
+    expect(manifest.id).toBe('dsh-soulmojito.tic-tac-toe')
   })
 
   it('引擎 duck 校验通过，meta 与 manifest 同源', () => {
@@ -61,8 +65,8 @@ describe('清单与引擎形状（§3.1/§3.2）', () => {
     expect(viewHtml).not.toMatch(/src\s*=\s*["']https?:/i)
     expect(viewHtml).not.toMatch(/href\s*=\s*["']https?:/i)
     expect(viewHtml).not.toContain('fetch(')
-    expect(viewHtml).toContain('dsh-tavern:game-state')
-    expect(viewHtml).toContain('dsh-tavern:game-action')
+    expect(viewHtml).toContain('dsh-soulmojito:game-state')
+    expect(viewHtml).toContain('dsh-soulmojito:game-action')
   })
 })
 
@@ -285,7 +289,7 @@ describe('内置五子棋：清单与引擎形状（§3.1/§3.2）', () => {
     const check = checkGameManifest(gomokuManifest)
     expect(check.ok).toBe(true)
     expect(check.errors).toEqual([])
-    expect(gomokuManifest.id).toBe('dsh-tavern.gomoku')
+    expect(gomokuManifest.id).toBe('dsh-soulmojito.gomoku')
     expect(gomokuManifest.name).toBe('五子棋')
     expect(gomokuManifest.players).toEqual({ min: 2, max: 2, roles: ['black', 'white'] })
     expect(gomokuManifest.engines).toBeUndefined()
@@ -302,18 +306,18 @@ describe('内置五子棋：清单与引擎形状（§3.1/§3.2）', () => {
     expect(gomokuViewHtml).not.toMatch(/src\s*=\s*["']https?:/i)
     expect(gomokuViewHtml).not.toMatch(/href\s*=\s*["']https?:/i)
     expect(gomokuViewHtml).not.toContain('fetch(')
-    expect(gomokuViewHtml).toContain('dsh-tavern:game-state')
-    expect(gomokuViewHtml).toContain('dsh-tavern:game-action')
-    expect(gomokuViewHtml).toContain('data-game="dsh-tavern.gomoku"')
+    expect(gomokuViewHtml).toContain('dsh-soulmojito:game-state')
+    expect(gomokuViewHtml).toContain('dsh-soulmojito:game-action')
+    expect(gomokuViewHtml).toContain('data-game="dsh-soulmojito.gomoku"')
   })
 
   it('视图过 view 服务管线（CSP + 桥脚本注入 + 文档包装）后原内容完整', () => {
     const document = renderGameViewDocument(gomokuViewHtml)
-    expect(document).toContain('data-game="dsh-tavern.gomoku"')
-    expect(document).toContain('dshTavernGame')
+    expect(document).toContain('data-game="dsh-soulmojito.gomoku"')
+    expect(document).toContain('dshSoulMojitoGame')
     expect(document).toContain('Content-Security-Policy')
     expect(document).toContain("connect-src 'none'")
-    expect(document).toContain('dsh-tavern:game-action')
+    expect(document).toContain('dsh-soulmojito:game-action')
   })
 })
 
@@ -577,13 +581,13 @@ describe('registry 内置源（§4.1）', () => {
   it('列出 builtin 井字棋：source builtin、status ok、engine 可用', async () => {
     const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.0' })
     const summaries = registry.summaries()
-    expect(summaries.map((summary) => summary.id)).toContain('dsh-tavern.tic-tac-toe')
-    const builtin = summaries.find((summary) => summary.id === 'dsh-tavern.tic-tac-toe')!
+    expect(summaries.map((summary) => summary.id)).toContain('dsh-soulmojito.tic-tac-toe')
+    const builtin = summaries.find((summary) => summary.id === 'dsh-soulmojito.tic-tac-toe')!
     expect(builtin.source).toBe('builtin')
     expect(builtin.status).toBe('ok')
     expect(builtin.players).toEqual({ min: 2, max: 2, roles: ['x', 'o'] })
     expect(builtin.actionVocabulary).toContain('place')
-    const entry = registry.get('dsh-tavern.tic-tac-toe')!
+    const entry = registry.get('dsh-soulmojito.tic-tac-toe')!
     expect(entry.engine).not.toBeNull()
     expect(entry.viewHtml).toContain('<!doctype html>')
   })
@@ -592,15 +596,15 @@ describe('registry 内置源（§4.1）', () => {
     const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.0' })
     const summaries = registry.summaries()
     expect(summaries.filter((summary) => summary.source === 'builtin').map((summary) => summary.id))
-      .toEqual(['dsh-tavern.blackjack', 'dsh-tavern.gomoku', 'dsh-tavern.junqi', 'dsh-tavern.memory-match', 'dsh-tavern.monopoly', 'dsh-tavern.tic-tac-toe', 'dsh-tavern.xiangqi'])
-    const gomokuSummary = summaries.find((summary) => summary.id === 'dsh-tavern.gomoku')!
+      .toEqual(['dsh-soulmojito.blackjack', 'dsh-soulmojito.gomoku', 'dsh-soulmojito.junqi', 'dsh-soulmojito.memory-match', 'dsh-soulmojito.monopoly', 'dsh-soulmojito.tic-tac-toe', 'dsh-soulmojito.xiangqi'])
+    const gomokuSummary = summaries.find((summary) => summary.id === 'dsh-soulmojito.gomoku')!
     expect(gomokuSummary.name).toBe('五子棋')
     expect(gomokuSummary.status).toBe('ok')
     expect(gomokuSummary.players).toEqual({ min: 2, max: 2, roles: ['black', 'white'] })
     expect(gomokuSummary.actionVocabulary).toContain('place')
-    const entry = registry.get('dsh-tavern.gomoku')!
+    const entry = registry.get('dsh-soulmojito.gomoku')!
     expect(entry.engine).not.toBeNull()
-    expect(entry.viewHtml).toContain('data-game="dsh-tavern.gomoku"')
+    expect(entry.viewHtml).toContain('data-game="dsh-soulmojito.gomoku"')
   })
 
   it('players.max !== 2 的游戏在 start 时被拒（v1 一人类一 Agent 裁剪）——校验面先验', async () => {
@@ -625,20 +629,56 @@ describe('registry 内置源（§4.1）', () => {
 
 describe('内置五子棋：导入同 id 遮蔽内置（registry 单一遮蔽规则）', () => {
   it('导入目录与内置同 id → 以导入副本为准（broken 也遮蔽、可见）+ warning 不静默', async () => {
-    mkdirSync(join(shadowHome, 'tavern', 'games', 'installed', 'dsh-tavern.gomoku'), { recursive: true })
+    mkdirSync(join(shadowHome, 'tavern', 'games', 'installed', 'dsh-soulmojito.gomoku'), { recursive: true })
     const warnings: string[] = []
     const registry = await GameRegistry.open({
       root: join(shadowHome, 'tavern'),
       hostVersion: '0.6.0',
       logger: { warn: (message: string) => { warnings.push(message) } },
     })
-    const shadowed = registry.summaries().find((summary) => summary.id === 'dsh-tavern.gomoku')!
+    const shadowed = registry.summaries().find((summary) => summary.id === 'dsh-soulmojito.gomoku')!
     expect(shadowed.source).toBe('imported')
     expect(shadowed.status).toBe('broken')
     expect(shadowed.reason).toContain('game.json 缺失或不可读')
     expect(warnings.some((message) => message.includes('与内置游戏同 id'))).toBe(true)
     // 坏游戏不断路：其余内置照常在册。
-    expect(registry.summaries().some((summary) => summary.id === 'dsh-tavern.tic-tac-toe' && summary.status === 'ok')).toBe(true)
+    expect(registry.summaries().some((summary) => summary.id === 'dsh-soulmojito.tic-tac-toe' && summary.status === 'ok')).toBe(true)
+  })
+})
+
+describe('改名兼容：旧命名空间对局（2026-10-16 项目改名 dsh-tavern → dsh-soulmojito）', () => {
+  it('registry.get 别名：旧名落空时映射到新名内置，无关旧名 id 不误配', async () => {
+    const registry = await GameRegistry.open({ root: join(legacyHome, 'tavern'), hostVersion: '0.6.0' })
+    expect(registry.get('dsh-tavern.gomoku')?.manifest.id).toBe('dsh-soulmojito.gomoku')
+    expect(registry.get('dsh-tavern.not-installed')).toBeUndefined()
+    // 直接命中路径不受影响（新名条目自身解析不变）。
+    expect(registry.get('dsh-soulmojito.gomoku')?.manifest.id).toBe('dsh-soulmojito.gomoku')
+  })
+
+  it('存量对局文件 gameId 为旧名时不被判孤儿（可查看、可续弈）', async () => {
+    const registry = await GameRegistry.open({ root: join(legacyHome, 'tavern'), hostVersion: '0.6.0' })
+    const store = await GameSessionStore.open({ root: join(legacyHome, 'tavern'), registry: () => registry })
+    const id = 'g-aaaabbbb'
+    const now = new Date().toISOString()
+    mkdirSync(join(legacyHome, 'tavern', 'games', 'sessions'), { recursive: true })
+    writeFileSync(join(legacyHome, 'tavern', 'games', 'sessions', `${id}.json`), JSON.stringify({
+      id,
+      gameId: 'dsh-tavern.gomoku',
+      players: [{ role: 'black', owner: 'human' }, { role: 'white', owner: 'agent' }],
+      state: { turn: 'black' },
+      moves: [],
+      createdAt: now,
+      updatedAt: now,
+      chat: { character: 'ExampleCard', chatId: 'legacy-chat' },
+      finished: false,
+      winner: null,
+      summary: '',
+    }), 'utf8')
+    const { session } = await store.get(id)
+    expect(session.orphaned).toBe(false)
+    expect(session.gameId).toBe('dsh-tavern.gomoku')
+    expect(session.gameName).toBe('五子棋')
+    expect(session.turn).toBe('black')
   })
 })
 

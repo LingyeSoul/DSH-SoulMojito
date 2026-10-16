@@ -77,9 +77,9 @@ describe('example mods vs shipping host version (engines drift guard)', () => {
 
   it('ships at least the three documented example mods', () => {
     expect(modIds).toEqual(expect.arrayContaining([
-      'dsh-tavern.asset-stats',
-      'dsh-tavern.mood-tracker',
-      'dsh-tavern.story-clock',
+      'dsh-soulmojito.asset-stats',
+      'dsh-soulmojito.mood-tracker',
+      'dsh-soulmojito.story-clock',
     ]))
   })
 

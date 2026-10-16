@@ -82,7 +82,7 @@ PUT local 分支对缺省的 pooling/dims 按模型目录推断后落库（显�
 
 **解析链**：`@huggingface/transformers` 不入 bundle 图。候选锚 =
 ①本 bundle 真实位置（`import.meta.url`；profile 物理安装下位于
-`<profile>/node_modules/dsh-tavern/*.mjs`，parent 解析可达用户装在 profile 根
+`<profile>/node_modules/dsh-soulmojito/*.mjs`，parent 解析可达用户装在 profile 根
 的包）→ ②宿主锚（`process.argv[1]` + realpath；覆盖 link: 挂载下宿主自带包）
 → ③`importHostPackage` 兜底（bind/src/host-package.ts 既有纪律）。命中即按
 `pathToFileURL` 动态 import（与宿主同实例）。
@@ -122,7 +122,7 @@ mtime 粒度噪声的代价仅一次多余重嵌）。查询 memo 的 key 含指
 ## 4. 安装面（面板一键安装，2026-10-12 用户决策升级）
 
 `POST memory/embed/local/install`：在 **profile 根**（插件物理安装在
-`<profile>/node_modules/dsh-tavern` 时取其上两级）执行
+`<profile>/node_modules/dsh-soulmojito` 时取其上两级）执行
 `pnpm add @huggingface/transformers`，执行纪律镜像自更新链路 apply.ts 的
 runCapture（windowsHide、流式逐行收集、10 分钟超时 kill+unref、win32 下
 shell 化仅为本体为常量的 pnpm 调用——参数写死包名、路径走 cwd，无注入面）。
@@ -197,7 +197,7 @@ build-script 策略拦死。修复=还原 manifests 后 `pnpm install` 剔除 no
   onnxruntime-node 1.30.0，模型取 ModelScope 镜像 fp16 权重）：直连 pipeline
   ——fp16 装载 274ms、3 条 14ms、dims 512、语义对 cos 0.6602 vs 无关对
   0.3549、L2 归一 ✔；**生产拓扑端到端**——真实 embedTexts 链路经 esbuild
-  打进 scratch（模拟 `<profile>/node_modules/dsh-tavern/index.mjs` 位置），
+  打进 scratch（模拟 `<profile>/node_modules/dsh-soulmojito/index.mjs` 位置），
   解析链命中 scratch node_modules，normalize→identity→embedTexts 全通，
   cosine 与直连参考逐位一致（0.3549）；pnpm 10 默认拦截 onnxruntime-node
   build script 不影响运行（预编译绑定随包分发）。自动填充同日对真实目录

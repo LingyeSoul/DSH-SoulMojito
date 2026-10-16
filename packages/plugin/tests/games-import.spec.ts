@@ -1,5 +1,5 @@
 /**
- * P2 导入路径（提案 0018 §4.5/§4.6）：从 examples/games/dsh-tavern.gomoku
+ * P2 导入路径（提案 0018 §4.5/§4.6）：从 examples/games/dsh-soulmojito.gomoku
  * 的 path 安装 → status ok → 服务层下完一整局（脚本化落子到五连）→
  * revision 推进 → 视图 HTML 含桥标记与 CSP。
  *
@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { openGamesService, type GamesService } from '../src/games/service.js'
 
-const EXAMPLE_GAME = join(import.meta.dirname, '..', 'examples', 'games', 'dsh-tavern.gomoku')
+const EXAMPLE_GAME = join(import.meta.dirname, '..', 'examples', 'games', 'dsh-soulmojito.gomoku')
 // 宿主版本取插件真实版本（与宿主 BUILD_INFO.version 同源语义）——示例清单的
 // engines（^0.6.0 ⇒ 0.6.x 全系）必须覆盖当前宿主，漂移在这里翻红（镜像
 // tavern-mods-examples.spec 的守卫；0.6.1 升版即由本行发现示例仍声明 ^0.6.0
@@ -49,7 +49,11 @@ function placeGameDir(id: string, files: Record<string, string>): string {
   return directory
 }
 
-const GOMOKU_ENGINE = readFileSync(join(EXAMPLE_GAME, 'engine.mjs'), 'utf8')
+// 行尾归一（2026-10-16 真机实况）：变体合成用 LF 锚对源码做多行替换，而
+// core.autocrlf 的 Windows 检出工作区是 CRLF——不归一会让多行锚静默失配
+// （boom.engine 用例曾在本机漏打补丁、以 meta id 遮蔽内置而翻红）。
+// 归一后本文件在 LF/CRLF 两种检出世界输出一致。
+const GOMOKU_ENGINE = readFileSync(join(EXAMPLE_GAME, 'engine.mjs'), 'utf8').replaceAll('\r\n', '\n')
 const GOMOKU_VIEW = readFileSync(join(EXAMPLE_GAME, 'view.html'), 'utf8')
 const GOMOKU_MANIFEST = JSON.parse(readFileSync(join(EXAMPLE_GAME, 'game.json'), 'utf8')) as Record<string, unknown>
 
@@ -67,12 +71,12 @@ function gomokuVariant(overrides: { manifest?: Record<string, unknown>; manifest
 describe('path 安装 → status ok → 整局 → revision → 视图', () => {
   it('从 examples 路径安装：返回该游戏 status ok、source imported', async () => {
     const { game } = await service.install({ path: EXAMPLE_GAME })
-    expect(game.id).toBe('dsh-tavern.gomoku')
+    expect(game.id).toBe('dsh-soulmojito.gomoku')
     expect(game.status).toBe('ok')
     expect(game.source).toBe('imported')
     expect(game.name).toBe('五子棋')
     // 落盘核对：installed/<id>/ 三件套。
-    expect(readFileSync(join(root, 'games', 'installed', 'dsh-tavern.gomoku', 'game.json'), 'utf8')).toContain('gomoku')
+    expect(readFileSync(join(root, 'games', 'installed', 'dsh-soulmojito.gomoku', 'game.json'), 'utf8')).toContain('gomoku')
   })
 
   it('重复安装被拒（force 默认 false）', async () => {
@@ -80,7 +84,7 @@ describe('path 安装 → status ok → 整局 → revision → 视图', () => {
   })
 
   it('服务层下完一整局：脚本化落子到黑方五连，describe 透传引擎文案', async () => {
-    const { session } = await service.start({ gameId: 'dsh-tavern.gomoku', character: CHARACTER, chatId: CHAT })
+    const { session } = await service.start({ gameId: 'dsh-soulmojito.gomoku', character: CHARACTER, chatId: CHAT })
     expect(session.players).toEqual([
       { role: 'black', owner: 'human' },
       { role: 'white', owner: 'agent' },
@@ -113,9 +117,9 @@ describe('path 安装 → status ok → 整局 → revision → 视图', () => {
   it('视图 HTML：含桥标记（game-state/game-action）与 CSP meta（mod 面同款）', async () => {
     const { sessions } = await service.list({ character: CHARACTER, chatId: CHAT })
     const finished = sessions.find((session) => session.finished)!
-    const html = await service.view('dsh-tavern.gomoku', finished.id)
-    expect(html).toContain('dsh-tavern:game-state')
-    expect(html).toContain('dsh-tavern:game-action')
+    const html = await service.view('dsh-soulmojito.gomoku', finished.id)
+    expect(html).toContain('dsh-soulmojito:game-state')
+    expect(html).toContain('dsh-soulmojito:game-action')
     expect(html).toContain('Content-Security-Policy')
     expect(html).toContain("script-src 'unsafe-inline'")
     expect(html).toContain("connect-src 'none'")
@@ -134,8 +138,8 @@ describe('负样本：坏包 broken 入册不崩（§4.6 烟测 + 清单/engines
     expect(broken.status).toBe('broken')
     expect(broken.reason).toContain('清单校验失败')
     // 不崩启动：内置 + 好游戏照常在册。
-    expect(games.some((game) => game.id === 'dsh-tavern.gomoku' && game.status === 'ok')).toBe(true)
-    expect(games.some((game) => game.id === 'dsh-tavern.tic-tac-toe' && game.status === 'ok')).toBe(true)
+    expect(games.some((game) => game.id === 'dsh-soulmojito.gomoku' && game.status === 'ok')).toBe(true)
+    expect(games.some((game) => game.id === 'dsh-soulmojito.tic-tac-toe' && game.status === 'ok')).toBe(true)
   })
 
   it('引擎抛错（applyAction 直接 throw）→ status broken + reason 含烟测', async () => {
@@ -172,12 +176,25 @@ describe('负样本：坏包 broken 入册不崩（§4.6 烟测 + 清单/engines
 
   it('engines 不满足（^9.0.0 vs 当前宿主）→ status broken + reason 含版本', async () => {
     placeGameDir('future.engine', gomokuVariant({
-      manifest: { id: 'future.engine', engines: { 'dsh-tavern': '^9.0.0' } },
+      manifest: { id: 'future.engine', engines: { 'dsh-soulmojito': '^9.0.0' } },
     }))
     const { games } = await service.reload()
     const broken = games.find((game) => game.id === 'future.engine')!
     expect(broken.status).toBe('broken')
     expect(broken.reason).toContain('版本不满足')
+  })
+
+  it('改名兼容（2026-10-16）：旧键 engines[\'dsh-tavern\'] 双读——范围满足即装载 ok', async () => {
+    placeGameDir('legacy.engines', {
+      'game.json': JSON.stringify({ ...GOMOKU_MANIFEST, id: 'legacy.engines', engines: { 'dsh-tavern': '^0.6.0' } }),
+      // meta id 与目录名对齐（registry 成功路径以 meta 为权威）。
+      'engine.mjs': GOMOKU_ENGINE.replace("id: 'dsh-soulmojito.gomoku'", "id: 'legacy.engines'"),
+      'view.html': GOMOKU_VIEW,
+    })
+    const { games } = await service.reload()
+    const found = games.find((game) => game.id === 'legacy.engines')!
+    expect(found.status).toBe('ok')
+    expect(found.source).toBe('imported')
   })
 
   it('broken 游戏不可开局（unavailable）', async () => {
@@ -195,7 +212,7 @@ describe('reload 拾取手工放入的目录（启动扫描之外的进入路径
     writeFileSync(manifestPath, JSON.stringify({ ...manifest, id: 'manual.gomoku' }, null, 2), 'utf8')
     // 也得改 engine.meta 的 id（运行时以 meta 为准；不一致只 warning，id 取 meta）。
     const enginePath = join(manual, 'engine.mjs')
-    writeFileSync(enginePath, readFileSync(enginePath, 'utf8').replace("id: 'dsh-tavern.gomoku'", "id: 'manual.gomoku'"), 'utf8')
+    writeFileSync(enginePath, readFileSync(enginePath, 'utf8').replace("id: 'dsh-soulmojito.gomoku'", "id: 'manual.gomoku'"), 'utf8')
     const before = (await service.list({})).games.find((game) => game.id === 'manual.gomoku')
     expect(before).toBeUndefined()
     const { games } = await service.reload()
@@ -234,8 +251,8 @@ describe('install {url}（git 流程镜像 mods/install.ts，如实断言）', (
       },
     })
     try {
-      const { game } = await fakeService.install({ url: 'https://github.com/owner/dsh-tavern-gomoku' })
-      expect(game.id).toBe('dsh-tavern.gomoku')
+      const { game } = await fakeService.install({ url: 'https://github.com/owner/dsh-soulmojito-gomoku' })
+      expect(game.id).toBe('dsh-soulmojito.gomoku')
       expect(game.status).toBe('ok')
       expect(game.source).toBe('imported')
     } finally {

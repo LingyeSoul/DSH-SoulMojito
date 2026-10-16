@@ -3379,7 +3379,7 @@ var CANON_KINDS = /* @__PURE__ */ new Set(["event", "character-state", "relation
 var SOURCE_REF_PATTERN = /^(commit-\d+)(?:#(\d+))?$/;
 var PARAGRAPH_SEPARATOR = "\n\n";
 var USAGE_SAMPLE_LIMIT = 50;
-var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("hex");
+var BOOT_ID = globalThis.__dshSoulMojitoNovelBootId ??= randomBytes(16).toString("hex");
 var DSH_HOST_COMMAND = /@deepseek-ai[\\/]dsh\b|(?:^|[\\/ \t"'])dsh(?:\.(?:cmd|js|ps1|exe|bat))?["']?[ \t]+web\b/;
 function commandLineOf(pid) {
   if (process.platform === "win32") {
@@ -5063,7 +5063,7 @@ function safeScriptName(name2) {
 }
 
 // packages/tavern-macros/src/host-registry.ts
-var HOST_MACRO_REGISTRY_KEY = "dsh-tavern:host-macros";
+var HOST_MACRO_REGISTRY_KEY = "dsh-soulmojito:host-macros";
 var registrySymbol = Symbol.for(HOST_MACRO_REGISTRY_KEY);
 function store() {
   const holder = globalThis;
@@ -5725,7 +5725,7 @@ async function runDeduction(deps, request) {
       let run;
       try {
         run = await subagents.start(DEDUCE_PROVIDER, {
-          label: `dsh-tavern deduce \xB7 ${role.name}`,
+          label: `dsh-soulmojito deduce \xB7 ${role.name}`,
           prompt: [{ type: "text", text: roleRoundPrompt({ role, scenario: request.scenario, round, transcript }) }],
           parent,
           signal,
@@ -5904,14 +5904,20 @@ function formatGuidesBlock(guides) {
     ...[...normalized].sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((guide) => `- ${guide.text}`)
   ].join("\n");
 }
-var guidesChanged = createGlobalListenerRegistry("dsh-tavern:guides-changed-listeners");
+var guidesChanged = createGlobalListenerRegistry("dsh-soulmojito:guides-changed-listeners");
 function onGuidesChanged(listener) {
   return guidesChanged.on(listener);
 }
 
+// packages/bind/src/host-session.ts
+var PLUGIN_NAME = "dsh-soulmojito";
+var LEGACY_PLUGIN_NAME = "dsh-tavern";
+var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
+var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
+
 // packages/plugin/src/memory-embed-local.ts
 var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
-var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-tavern, NOT the dsh-tavern source repository), then restart DSH`;
+var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-soulmojito, NOT the dsh-soulmojito source repository), then restart DSH`;
 var LOCAL_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
 
 // packages/tavern-pipeline/src/pipeline.ts
@@ -5982,7 +5988,7 @@ function defaultPreset() {
     prompt_order: [{ character_id: GLOBAL_ORDER_DUMMY_ID, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
   };
 }
-var agentPresetChanged = createGlobalListenerRegistry("dsh-tavern:agent-preset-changed-listeners");
+var agentPresetChanged = createGlobalListenerRegistry("dsh-soulmojito:agent-preset-changed-listeners");
 function onAgentPresetChanged(listener) {
   return agentPresetChanged.on(listener);
 }
@@ -6416,7 +6422,7 @@ var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
   "material_list",
   "material_read"
 ]);
-var MOD_REGISTRY_KEY = "dsh-tavern:mod-registry";
+var MOD_REGISTRY_KEY = "dsh-soulmojito:mod-registry";
 var registrySymbol2 = Symbol.for(MOD_REGISTRY_KEY);
 function store2() {
   const holder = globalThis;
@@ -6427,7 +6433,7 @@ function store2() {
     nextSequence: 1
   };
 }
-var modsChangedListeners = createGlobalListenerRegistry("dsh-tavern:mods-changed-listeners");
+var modsChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:mods-changed-listeners");
 function modToolSnapshot() {
   return [...store2().tools.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
 }
@@ -6553,7 +6559,7 @@ function mountModExtensions(ctx, options) {
   function syncSections() {
     const wanted = /* @__PURE__ */ new Map();
     for (const entry of modSectionSnapshot()) {
-      const fullName = `dsh-tavern:mod:${entry.modId}:${entry.definition.name}`;
+      const fullName = `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`;
       wanted.set(fullName, { name: fullName, order: clampModSectionOrder(entry.definition.order), text: hostPromptSafe(entry.definition.text) });
     }
     for (const [fullName, current] of [...registeredSections]) {
@@ -6589,7 +6595,7 @@ function mountModExtensions(ctx, options) {
     try {
       ctx.effect(() => () => {
         dispose();
-      }, "dsh-tavern: mod extensions");
+      }, "dsh-soulmojito: mod extensions");
     } catch {
     }
   }
@@ -6597,13 +6603,13 @@ function mountModExtensions(ctx, options) {
 }
 
 // packages/plugin/src/games/handle.ts
-var GAMES_SERVICE_KEY = "dsh-tavern:games-service";
+var GAMES_SERVICE_KEY = "dsh-soulmojito:games-service";
 var serviceSymbol = Symbol.for(GAMES_SERVICE_KEY);
 function resolveGamesService() {
   const holder = globalThis;
   return holder[serviceSymbol]?.service;
 }
-var gamesChangedListeners = createGlobalListenerRegistry("dsh-tavern:games-changed-listeners");
+var gamesChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:games-changed-listeners");
 function onGamesChanged(listener) {
   return gamesChangedListeners.on(listener);
 }
@@ -6960,14 +6966,14 @@ function allParticipantsOf(outline) {
 }
 
 // packages/plugin/src/agent-novel/usage.ts
-var USAGE_SAMPLER_KEY = Symbol.for("dsh-tavern:novel-usage-sampler");
+var USAGE_SAMPLER_KEY = Symbol.for("dsh-soulmojito:novel-usage-sampler");
 var samplerTable = globalThis[USAGE_SAMPLER_KEY] ??= /* @__PURE__ */ new Map();
 function noteToolOutputBytes(toolName, bytes) {
   if (typeof toolName !== "string" || toolName === "") return;
   if (!Number.isFinite(bytes) || bytes < 0) return;
   samplerTable.set(toolName, (samplerTable.get(toolName) ?? 0) + bytes);
 }
-var PROBE_AGENT_ID_KEY = Symbol.for("dsh-tavern:novel-writer-probe-agent-id");
+var PROBE_AGENT_ID_KEY = Symbol.for("dsh-soulmojito:novel-writer-probe-agent-id");
 var probeAgentSlot = globalThis[PROBE_AGENT_ID_KEY] ??= {};
 function recordProbeAgentId(id) {
   try {
@@ -6976,7 +6982,7 @@ function recordProbeAgentId(id) {
   } catch {
   }
 }
-var WRITER_RUN_USAGE_KEY = Symbol.for("dsh-tavern:novel-writer-run-usage");
+var WRITER_RUN_USAGE_KEY = Symbol.for("dsh-soulmojito:novel-writer-run-usage");
 var writerRunUsageSlot = globalThis[WRITER_RUN_USAGE_KEY] ??= { outputChars: null, usage: null };
 function recordWriterRunUsage(entry) {
   try {
@@ -7314,7 +7320,7 @@ function parseWriterCandidate(text) {
   }
   return { paragraphs: record.paragraphs, sceneCompletion: record.sceneCompletion, canonChanges: record.canonChanges };
 }
-var WRITER_DELEGATIONS_KEY = Symbol.for("dsh-tavern:novel-writer-delegations");
+var WRITER_DELEGATIONS_KEY = Symbol.for("dsh-soulmojito:novel-writer-delegations");
 var writerDelegations = globalThis[WRITER_DELEGATIONS_KEY] ??= /* @__PURE__ */ new Map();
 function copyDelegation(delegation) {
   return { ...delegation };
@@ -7478,7 +7484,7 @@ async function draftUnitViaSubagent(deps, input) {
   let run;
   try {
     run = await deps.runtime.start(WRITER_PROVIDER, {
-      label: `dsh-tavern novel-writer \xB7 ${deps.unitId}`,
+      label: `dsh-soulmojito novel-writer \xB7 ${deps.unitId}`,
       prompt: [{ type: "text", text: pack }],
       parent: deps.parent,
       signal,
@@ -7544,7 +7550,7 @@ async function runDelegatedWriter(deps, delegation) {
   let run;
   try {
     run = await deps.runtime.start(WRITER_PROVIDER, {
-      label: `dsh-tavern novel-writer \xB7 ${delegation.unitId}`,
+      label: `dsh-soulmojito novel-writer \xB7 ${delegation.unitId}`,
       prompt: [{ type: "text", text: pack }],
       parent: deps.parent,
       signal,
@@ -7633,7 +7639,7 @@ function charNameOf(options, binding) {
 }
 
 // packages/plugin/src/agent-novel/agent.ts
-var name = "dsh-tavern/novel";
+var name = "dsh-soulmojito/novel";
 var inject = ["systemPrompt", "tools"];
 var KERNEL2 = [
   "You are AgentNovel, the author agent of a DSH AgentLoop novel project.",
@@ -7661,7 +7667,7 @@ var tavernStorePromise2;
 var novelStorePromise;
 var memoryStorePromise;
 var presetMount = mountPresetProjection({
-  sectionName: "dsh-tavern:novel-preset",
+  sectionName: "dsh-soulmojito:novel-preset",
   architecture: "agent-novel",
   stateFlag: "agentNovelPresetEnabled",
   header: AGENT_PRESET_BLOCK_HEADER,
@@ -7669,7 +7675,7 @@ var presetMount = mountPresetProjection({
 });
 function apply(ctx) {
   ctx.systemPrompt?.section?.({
-    name: "dsh-tavern:novel-kernel",
+    name: "dsh-soulmojito:novel-kernel",
     order: -80,
     // 守卫：内核为静态文本，但写入 {{...}}（宿主变量语法）会让装配抛错——
     // 过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
@@ -7679,7 +7685,7 @@ function apply(ctx) {
   void presetMount.preheat();
   const tools = createTools();
   for (const tool2 of tools) {
-    if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool2), `dsh-tavern:novel:${tool2.name}`);
+    if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool2), `dsh-soulmojito:novel:${tool2.name}`);
     else ctx.tools?.register?.(tool2);
   }
   mountModExtensions(ctx, { claimTools: tools.map((tool2) => tool2.name) });

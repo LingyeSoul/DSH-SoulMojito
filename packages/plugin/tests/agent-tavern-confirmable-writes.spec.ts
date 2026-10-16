@@ -86,7 +86,7 @@ describe('confirmable session writes against a swallowing host', () => {
   let greetingChatId: string
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-confirmable-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-confirmable-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.importCharacter({

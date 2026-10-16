@@ -10,7 +10,7 @@
  * 零打包依赖：@huggingface/transformers 不随插件 bundle、也不静态 import，
  * 运行时从「本 bundle 真实位置 → 宿主安装锚」链解析后按 URL 动态 import
  * （compaction curator 的 importHostPackage 同款纪律；这里多了更优先的锚：
- * profile 物理安装下 bundle 位于 `<profile>/node_modules/dsh-tavern/*.mjs`，
+ * profile 物理安装下 bundle 位于 `<profile>/node_modules/dsh-soulmojito/*.mjs`，
  * 从它 parent 解析才能命中用户装在 profile 根 node_modules 里的运行时——
  * 宿主锚 process.argv[1] 只覆盖宿主自带包）。运行时未安装 ⇒ 明确报错（含
  * 安装指引），熔断/降级矩阵照常兜底。
@@ -48,8 +48,8 @@ export const TRANSFORMERS_PACKAGE = '@huggingface/transformers'
 export const TRANSFORMERS_INSTALL_HINT =
   `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin):`
   + ` run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root`
-  + ` (the directory whose node_modules contains the installed dsh-tavern,`
-  + ` NOT the dsh-tavern source repository), then restart DSH`
+  + ` (the directory whose node_modules contains the installed dsh-soulmojito,`
+  + ` NOT the dsh-soulmojito source repository), then restart DSH`
 
 /** 模型会话缓存上限（同进程常驻一个模型是常态；第二个容忍并发切换窗口）。 */
 const SESSION_CACHE_LIMIT = 2
@@ -409,7 +409,7 @@ export const LOCAL_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
 /** 安装输出回传上限（pnpm 进度可控，超长截尾）。 */
 const INSTALL_OUTPUT_TAIL = 8000
 
-/** profile 根解析：插件物理安装在 `<profile>/node_modules/dsh-tavern` 时返回
+/** profile 根解析：插件物理安装在 `<profile>/node_modules/dsh-soulmojito` 时返回
  *  `<profile>`；link: 挂载（插件目录不在 node_modules 里）返回 undefined——
  *  此时「profile 根」与插件目录分离，自动安装会写错地方（2026-10-12 实况：
  *  在源码仓库根执行 pnpm add 污染 lockfile 并触发 allowBuilds 改写）。 */

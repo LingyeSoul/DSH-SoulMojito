@@ -181,7 +181,7 @@ async function probeIdentityCorrelation(deps: WriterProbeDeps): Promise<{ item: 
   takeProbeAgentId() // clear leftovers from unrelated novel_status_read calls
   const spawn = await probeSpawn(
     deps,
-    'dsh-tavern writer-probe · p1-identity',
+    'dsh-soulmojito writer-probe · p1-identity',
     `Host capability probe. Call the tool ${PROBE_TOOL} exactly once, then reply with exactly: ok. The tool may return an error about a missing novel binding — that is expected and fine; still reply ok after the single call.`,
     [PROBE_TOOL],
   )
@@ -216,7 +216,7 @@ async function probeAllowList(deps: WriterProbeDeps, p1: WriterProbeItem, spawnO
   takeProbeAgentId()
   const spawn = await probeSpawn(
     deps,
-    'dsh-tavern writer-probe · p2-allowlist',
+    'dsh-soulmojito writer-probe · p2-allowlist',
     `Host capability probe. Try calling the tool ${PROBE_TOOL} once. If the tool is available to you, reply with exactly: tool-ran. If the tool is not available to you, reply with exactly: unavailable.`,
     [],
   )

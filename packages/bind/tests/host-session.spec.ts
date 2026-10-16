@@ -86,24 +86,24 @@ describe('hostPluginMessageSource', () => {
   })
 
   it('keeps the v0 shape for format versions 0-3, missing headers and stub sessions', () => {
-    expect(hostPluginMessageSource({ header: { version: 0 } })).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
-    expect(hostPluginMessageSource({ header: { version: 3 } })).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
-    expect(hostPluginMessageSource(undefined)).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
-    expect(hostPluginMessageSource(null)).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
-    expect(hostPluginMessageSource(makeHostSessionAgent())).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
+    expect(hostPluginMessageSource({ header: { version: 0 } })).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
+    expect(hostPluginMessageSource({ header: { version: 3 } })).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
+    expect(hostPluginMessageSource(undefined)).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
+    expect(hostPluginMessageSource(null)).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
+    expect(hostPluginMessageSource(makeHostSessionAgent())).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
   })
 
   it('ignores non-safe-integer header versions (fail-safe to the v0 shape)', () => {
-    expect(hostPluginMessageSource({ header: { version: '4' } })).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
-    expect(hostPluginMessageSource({ header: { version: 4.5 } })).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
-    expect(hostPluginMessageSource({ header: { version: Number.NaN } })).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
+    expect(hostPluginMessageSource({ header: { version: '4' } })).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
+    expect(hostPluginMessageSource({ header: { version: 4.5 } })).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
+    expect(hostPluginMessageSource({ header: { version: Number.NaN } })).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
   })
 })
 
 describe('isHostPluginMessageSource', () => {
   it('matches the v4 producer-owned kind and the legacy v0-v3 shape', () => {
     expect(isHostPluginMessageSource({ kind: TAVERN_PLUGIN_SOURCE_KIND })).toBe(true)
-    expect(isHostPluginMessageSource({ kind: 'plugin', plugin: 'dsh-tavern' })).toBe(true)
+    expect(isHostPluginMessageSource({ kind: 'plugin', plugin: 'dsh-soulmojito' })).toBe(true)
     expect(isHostPluginMessageSource({ kind: TAVERN_PLUGIN_SOURCE_KIND, form: 'notice', summary: 'x' })).toBe(true)
   })
 
@@ -112,7 +112,25 @@ describe('isHostPluginMessageSource', () => {
     expect(isHostPluginMessageSource({ kind: 'user' })).toBe(false)
     expect(isHostPluginMessageSource({ kind: 'model', provider: 'p', model: 'm' })).toBe(false)
     expect(isHostPluginMessageSource({})).toBe(false)
-    expect(isHostPluginMessageSource('plugin:dsh-tavern')).toBe(false)
+    expect(isHostPluginMessageSource('plugin:dsh-soulmojito')).toBe(false)
     expect(isHostPluginMessageSource(null)).toBe(false)
+  })
+})
+
+describe('改名兼容（2026-10-16 dsh-tavern → DSH-SoulMojito）', () => {
+  it('读取端双认旧名：v4 producer kind 与 v0-v3 plugin 成员的 dsh-tavern 值', () => {
+    expect(isHostPluginMessageSource({ kind: 'plugin:dsh-tavern' })).toBe(true)
+    expect(isHostPluginMessageSource({ kind: 'plugin:dsh-tavern', form: 'notice', summary: 'Tavern closed' })).toBe(true)
+    expect(isHostPluginMessageSource({ kind: 'plugin', plugin: 'dsh-tavern' })).toBe(true)
+  })
+
+  it('写入端恒用新名（不产生新的旧名痕迹）', () => {
+    expect(hostPluginMessageSource({ header: { version: 4 } })).toEqual({ kind: 'plugin:dsh-soulmojito' })
+    expect(hostPluginMessageSource({ header: { version: 0 } })).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
+  })
+
+  it('陌生生产者在两个命名空间下都不误收', () => {
+    expect(isHostPluginMessageSource({ kind: 'plugin:dsh-tavernish' })).toBe(false)
+    expect(isHostPluginMessageSource({ kind: 'plugin', plugin: 'dsh-tavernish' })).toBe(false)
   })
 })

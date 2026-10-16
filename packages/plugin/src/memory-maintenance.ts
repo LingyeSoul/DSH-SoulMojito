@@ -159,7 +159,7 @@ export async function startMemoryMaintenance(
     } catch (error) {
       // executeRun 内部已兜底；这里是最后一层防线——状态文件如实记 error。
       const message = error instanceof Error ? error.message : String(error)
-      ctx.logger?.warn?.(`dsh-tavern: memory maintenance run crashed: ${message}`)
+      ctx.logger?.warn?.(`dsh-soulmojito: memory maintenance run crashed: ${message}`)
       try {
         const stateStore = await MemoryMaintenanceStore.open(deps.root)
         const state = await stateStore.read(scope.character, scope.chatId)

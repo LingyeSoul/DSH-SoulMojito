@@ -8,8 +8,8 @@
  * - minDepth/maxDepth：仅当提供消息深度时过滤（AI_OUTPUT 按消息应用）。
  */
 
-import { parseRegexFromString } from '@dsh-tavern/lore'
-import { hasPlacement, type RegexScriptIR } from '@dsh-tavern/format'
+import { parseRegexFromString } from '@dsh-soulmojito/lore'
+import { hasPlacement, type RegexScriptIR } from '@dsh-soulmojito/format'
 
 export interface RegexApplyDeps {
   /** substituteRegex 脚本的宏展开通道。 */

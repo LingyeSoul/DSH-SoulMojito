@@ -20,11 +20,11 @@ function turnStart(turn: number) {
 }
 
 function anchorEvent() {
-  return { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern' }, content: [{ type: 'text', text: ANCHOR_TEXT }] } }
+  return { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-soulmojito' }, content: [{ type: 'text', text: ANCHOR_TEXT }] } }
 }
 
 function openingEvent() {
-  return { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern' }, content: [{ type: 'text', text: OPENING_TEXT }] } }
+  return { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-soulmojito' }, content: [{ type: 'text', text: OPENING_TEXT }] } }
 }
 
 function realUserEvent() {
@@ -111,7 +111,7 @@ describe('AgentTavern reminder log scans', () => {
   })
 
   it('ignores plugin messages whose content is not a reminder text', () => {
-    const impostor = { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern' }, content: [{ type: 'text', text: 'AgentTavern preload: 山河风雨' }] } }
+    const impostor = { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-soulmojito' }, content: [{ type: 'text', text: 'AgentTavern preload: 山河风雨' }] } }
     expect(latestReminderTurn([turnStart(5), impostor])).toBe(0)
     expect(hasRealUserTurn([turnStart(5), impostor])).toBe(false)
   })
@@ -119,11 +119,11 @@ describe('AgentTavern reminder log scans', () => {
   it('detects real user turns and ignores imported or plugin-sourced messages', () => {
     expect(hasRealUserTurn([realUserEvent()])).toBe(true)
     expect(hasRealUserTurn([
-      { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern' } } },
+      { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-soulmojito' } } },
       realUserEvent(),
     ])).toBe(true)
     expect(hasRealUserTurn([
-      { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern' } } },
+      { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-soulmojito' } } },
       anchorEvent(),
       { type: 'assistant/message', data: {} },
     ])).toBe(false)
@@ -136,7 +136,7 @@ describe('AgentTavern reminder message contracts', () => {
     const message = createAnchorMessage()
     expect(message.role).toBe('user')
     expect(message.id).toEqual(expect.any(String))
-    expect(message.source).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
+    expect(message.source).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
     expect(message.content).toEqual([{ type: 'text', text: ANCHOR_TEXT }])
   })
 
@@ -153,7 +153,7 @@ describe('AgentTavern reminder message contracts', () => {
   it('carries the opening brief with the same legal plugin source', () => {
     const message = createOpeningMessage()
     expect(message.role).toBe('user')
-    expect(message.source).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
+    expect(message.source).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
     expect(message.content).toEqual([{ type: 'text', text: OPENING_TEXT }])
   })
 
@@ -175,25 +175,25 @@ describe('AgentTavern anchor pre-step wiring', () => {
     const { run, ctx } = setupListener({ everyTurns: 5 })
     expect(ctx.on).toHaveBeenCalledWith('agent/pre-step', expect.any(Function), { prepend: true })
     const decision = await run({
-      agent: { session: { id: 's1', events: [{ type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern' } } }] } },
+      agent: { session: { id: 's1', events: [{ type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-soulmojito' } } }] } },
       turn: 2,
       step: 1,
       signal: { aborted: false },
     }) as { kind: string; messages: Array<{ source?: { kind?: string }; content?: Array<{ text?: string }> }> }
     expect(decision.kind).toBe('enter')
     expect(decision.messages).toHaveLength(2)
-    expect(decision.messages[1]).toMatchObject({ source: { kind: 'plugin', plugin: 'dsh-tavern' }, role: 'user', content: [{ type: 'text', text: OPENING_TEXT }] })
+    expect(decision.messages[1]).toMatchObject({ source: { kind: 'plugin', plugin: 'dsh-soulmojito' }, role: 'user', content: [{ type: 'text', text: OPENING_TEXT }] })
   })
 
   it('carries the producer-owned source kind on v4 sessions (0.2.0-rc.2 format)', async () => {
     const { run } = setupListener({ everyTurns: 5 })
     const decision = await run({
-      agent: { session: { id: 's1', header: { version: 4 }, events: [{ type: 'user/message', data: { source: { kind: 'plugin:dsh-tavern' } } }] } },
+      agent: { session: { id: 's1', header: { version: 4 }, events: [{ type: 'user/message', data: { source: { kind: 'plugin:dsh-soulmojito' } } }] } },
       turn: 2,
       step: 1,
       signal: { aborted: false },
     }) as { messages: Array<{ source?: { kind?: string }; content?: Array<{ text?: string }> }> }
-    expect(decision.messages[1]).toMatchObject({ source: { kind: 'plugin:dsh-tavern' }, content: [{ type: 'text', text: OPENING_TEXT }] })
+    expect(decision.messages[1]).toMatchObject({ source: { kind: 'plugin:dsh-soulmojito' }, content: [{ type: 'text', text: OPENING_TEXT }] })
   })
 
   it('subsumes the periodic anchor when the opening turn is also a multiple', async () => {
@@ -217,7 +217,7 @@ describe('AgentTavern anchor pre-step wiring', () => {
       signal: { aborted: false },
     }) as { messages: Array<{ content?: Array<{ text?: string }> }> }
     expect(lateDecision.messages).toHaveLength(2)
-    expect(lateDecision.messages[1]).toMatchObject({ source: { kind: 'plugin', plugin: 'dsh-tavern' }, content: [{ type: 'text', text: ANCHOR_TEXT }] })
+    expect(lateDecision.messages[1]).toMatchObject({ source: { kind: 'plugin', plugin: 'dsh-soulmojito' }, content: [{ type: 'text', text: ANCHOR_TEXT }] })
   })
 
   it('passes through on non-due steps, repeats, rejects, aborts, empty batches, and non-tavern sessions', async () => {
@@ -232,7 +232,7 @@ describe('AgentTavern anchor pre-step wiring', () => {
       step,
       signal: { aborted: false },
     })
-    const importedHistory = [{ type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-tavern' } } }]
+    const importedHistory = [{ type: 'user/message', data: { source: { kind: 'plugin', plugin: 'dsh-soulmojito' } } }]
 
     // 已有真实用户消息后，非周期点的 turn 透传。
     await passthrough({ everyTurns: 5 }, payload(4, [realUserEvent(), turnStart(5), anchorEvent()]))

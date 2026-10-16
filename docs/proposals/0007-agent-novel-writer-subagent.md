@@ -134,7 +134,7 @@ interface WriterDelegation {
   intentId: string
   grantedAt: string
 }
-// globalThis 锚定：Symbol 键 'dsh-tavern:novel-writer-delegations'
+// globalThis 锚定：Symbol 键 'dsh-soulmojito:novel-writer-delegations'
 ```
 
 - **必须挂 globalThis**：AgentNovel 实施期已踩过双 bundle 模块级常量分裂的坑（BOOT_ID 拒写事件），插件可能被多个 bundle 各自实例化，进程内注册表若不锚定全局会静默失效。

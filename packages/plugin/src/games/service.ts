@@ -24,7 +24,7 @@ import { renderGameViewDocument } from './view.js'
 export interface GamesServiceOptions {
   /** tavern 数据根（`$DSH_HOME/tavern`）。 */
   root: string
-  /** 宿主版本（engines.dsh-tavern 门控左值）。 */
+  /** 宿主版本（engines.dsh-soulmojito 门控左值）。 */
   hostVersion: string
   logger?: { warn?: (message: string) => unknown }
   /** git 安装注入面（测试用：cloneImpl 替身 + 超时）。 */
@@ -124,7 +124,7 @@ export async function openGamesService(options: GamesServiceOptions): Promise<Ga
         try {
           await options.onHumanAction(outcome.session)
         } catch (cause) {
-          options.logger?.warn?.(`dsh-tavern: game human-action wake failed: ${cause instanceof Error ? cause.message : String(cause)}`)
+          options.logger?.warn?.(`dsh-soulmojito: game human-action wake failed: ${cause instanceof Error ? cause.message : String(cause)}`)
         }
       }
       return outcome

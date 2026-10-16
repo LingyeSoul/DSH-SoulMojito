@@ -20,7 +20,7 @@
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 import { writeAtomicText } from './fs-atomic.js'
-import { decodeCharacterCard, encodeCharacterCardJson, type CharacterCardIR } from '@dsh-tavern/format'
+import { decodeCharacterCard, encodeCharacterCardJson, type CharacterCardIR } from '@dsh-soulmojito/format'
 import { TavernStore, safeFileName, type CharacterFile } from './store.js'
 
 function originalSnapshotPath(root: string, characterName: string): string {

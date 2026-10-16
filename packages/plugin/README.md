@@ -1,4 +1,4 @@
-# dsh-tavern 插件包
+# DSH-SoulMojito 插件包
 
 该目录是可安装的 DSH 官方 Web bundle。仓库根的 `pnpm run build:plugin` 会把五个 workspace 纯库和 Node half 打入单一 `index.mjs`。client closure 由 DSH profile 注入，不要求用户另行安装公共 `@deepseek-ai/*` 依赖。
 
@@ -13,17 +13,19 @@ dsh --profile web
 桌面版（`desktop` profile）用 Git 子目录 spec 安装，「设置 → 插件 → Git 仓库」或命令行填入下面的值。spec 必须指向本目录：仓库根是 monorepo 容器，没有 `dsh.bundle` 声明，会被插件管理器以「这个包没有声明组合包，不能作为插件管理」拒绝。
 
 ```sh
-github:LingyeSoul/dsh-tavern#path:/packages/plugin
+github:LingyeSoul/DSH-SoulMojito#path:/packages/plugin
 ```
 
 ```sh
-dsh plugin --profile desktop add github:LingyeSoul/dsh-tavern#path:/packages/plugin
+dsh plugin --profile desktop add github:LingyeSoul/DSH-SoulMojito#path:/packages/plugin
 ```
+
+从旧名迁移（2026-10-16）：profile 里若装的是旧包名 `dsh-tavern`，先 `dsh plugin --profile <p> remove dsh-tavern` 再按上方命令安装。数据（`$DSH_HOME/tavern/`）、既有会话与对局的持久化标记、旧环境变量（`DSH_TAVERN_*`）与旧游戏命名空间 id 均被读取端兼容，无需迁移。全量映射见根 README「从旧名迁移」与 [`decisions/2026-10-16-project-rename-dsh-soulmojito.md`](../../decisions/2026-10-16-project-rename-dsh-soulmojito.md)。
 
 安装后：
 
 - 侧边栏底部、紧挨设置按钮的 **Tavern 按钮**（rail 模式为圆形图标钮）打开「Tavern 管理面板」——与原生设置同构的模态面板（左侧导航 + 右侧内容），复用 DSH 的 Modal/Button/Input/Pill 原语与 `--dsw-alias-*` 设计 token。面板九个分区：总览（活跃配置 + 资产计数）、角色（卡片网格、完整卡查看、设为活跃、导出、删除）、聊天（按角色/群组浏览、新建/重命名/删除/打开）、群组、用户人设、世界书（激活开关 + 条目浏览器 + 搜索）、预设（kind 标签、设为活跃、删除）、正则脚本、变量（全局 STscript 变量编辑 + 当前会话局部变量查看）。
-- “设置 -> dsh-tavern”保留快速切换（角色/预设/persona）与「打开酒馆面板」入口，世界书激活开关在管理面板「世界书」分区管理；设置页标题下显示插件版本号与 commit 号。构建会生成不纳入 Git 的 `version.json` 旁车文件；源码检出运行时优先读取 Git HEAD，脱离 `.git` 的发布包读取该文件中的 commit，必要时可用 `DSH_TAVERN_COMMIT` 兜底。
+- “设置 -> DSH-SoulMojito”保留快速切换（角色/预设/persona）与「打开酒馆面板」入口，世界书激活开关在管理面板「世界书」分区管理；设置页标题下显示插件版本号与 commit 号。构建会生成不纳入 Git 的 `version.json` 旁车文件；源码检出运行时优先读取 Git HEAD，脱离 `.git` 的发布包读取该文件中的 commit，必要时可用 `DSH_SOULMOJITO_COMMIT` 兜底（旧名 `DSH_TAVERN_COMMIT` 读取兼容）。
 - ST 聊天在原生 `Tavern` tab 使用 Tavern transcript、composer、Stop、edit、swipe 和 regenerate；AgentTavern/native 聊天使用 DSH 原生 conversation、composer、Stop、错误处理和统计。
 - 设置页可选择在新 AgentTavern 会话初始化时一次性预载角色信息和常驻世界书条目。开关默认关闭，只影响之后新建的 AgentTavern 会话，不会在每次模型请求时重复注入，也不追溯修改已有会话。
 - 助手消息中的完整 HTML 文档、`<head>`/`<body>` 片段，或 `html` Markdown 代码块会在 `sandbox="allow-scripts"` iframe 中运行；源码不会直接插入宿主页面。
@@ -79,7 +81,7 @@ AgentTavern 的原生 user/final assistant 事件会幂等投影到 Tavern JSONL
 
 ## Compaction curator
 
-`dsh-native` 模式下历史容量由宿主 `dsh-compaction-basic` 决定，而它的自动摘要是编码助手导向的（Files and Code / Pending Jobs 等段落），会把剧情状态、人物关系和记忆维护习惯摘要掉。本插件的 bundle patch 因此把 `compaction-basic` 一行覆写为 `dsh-tavern/compaction`：该引擎继承宿主 basic 实现，触发时机、保留预算、overflow recovery 与工具结果修剪全部复用宿主，仅覆写摘要指令——
+`dsh-native` 模式下历史容量由宿主 `dsh-compaction-basic` 决定，而它的自动摘要是编码助手导向的（Files and Code / Pending Jobs 等段落），会把剧情状态、人物关系和记忆维护习惯摘要掉。本插件的 bundle patch 因此把 `compaction-basic` 一行覆写为 `dsh-soulmojito/compaction`：该引擎继承宿主 basic 实现，触发时机、保留预算、overflow recovery 与工具结果修剪全部复用宿主，仅覆写摘要指令——
 
 - **AgentTavern 绑定的会话**使用 RP 检查点模板（Story So Far / Characters / World Canon / Open Threads / Current Scene / Memory Maintenance / Critical Context），其中 Memory Maintenance 段显式记录记忆工具的维护状态，使 KERNEL 的记忆职责跨 compaction 延续；摘要语言跟随对话。
 - **其余会话**（编码等）原样透传宿主默认摘要，零影响。
@@ -98,12 +100,12 @@ AgentTavern 的原生 user/final assistant 事件会幂等投影到 Tavern JSONL
 
 - **触发**：仅 step 1；去重（同 turn 不重复，开场与周期共用去重账本）、空批次/拒绝/中止/非 AgentTavern 会话全部原样透传；存储读取只发生在注入点，非注入 step 零开销。
 - **缓存安全契约**（不可破坏）：提醒 append-only 且 write-once——只追加到当前批次末尾、写入 durable log 后永不改写，因此对 KV 前缀缓存完全透明；内容不含易变计数器。
-- **投影安全**：消息带 `dsh-tavern` plugin source，投影器按 `source.kind !== 'user'` 过滤，不会写进 Tavern JSONL 剧情记录。
-- **配置**：`dsh-tavern` 行 config 的 `anchorEveryTurns`（整数；`0` 同时关闭开场引导与周期锚定，缺省 5，非法值回退默认）。
+- **投影安全**：消息带 `dsh-soulmojito` plugin source，投影器按 `source.kind !== 'user'` 过滤，不会写进 Tavern JSONL 剧情记录。
+- **配置**：`dsh-soulmojito` 行 config 的 `anchorEveryTurns`（整数；`0` 同时关闭开场引导与周期锚定，缺省 5，非法值回退默认）。
 
 ## 语言
 
-插件 UI 跟随 DSH 的语言设置（`@deepseek-ai/dsh-client-locale`，zh/en）：client half 声明 `inject: [..., 'locale']`，向 locale 服务注册 `dsh-tavern` 命名空间字典并经 `useSyncExternalStore` 订阅快照，在“通用设置 -> 语言”切换后无需刷新即时生效。字典 zh/en 键集与 `{param}` 占位符的对称性由 `client-vm-mount` gate 校验。
+插件 UI 跟随 DSH 的语言设置（`@deepseek-ai/dsh-client-locale`，zh/en）：client half 声明 `inject: [..., 'locale']`，向 locale 服务注册 `dsh-soulmojito` 命名空间字典并经 `useSyncExternalStore` 订阅快照，在“通用设置 -> 语言”切换后无需刷新即时生效。字典 zh/en 键集与 `{param}` 占位符的对称性由 `client-vm-mount` gate 校验。
 
 ## 验证
 
@@ -118,13 +120,13 @@ node packages/plugin/scripts/gates/run.mjs
 
 ### 内置自更新
 
-插件自带「从 GitHub 发现新版本 + 一键更新」：设置页「dsh-tavern」标题下与管理面板「总览」分区显示当前构建与 GitHub 最新构建，并提供「检查更新 / 立即更新」。
+插件自带「从 GitHub 发现新版本 + 一键更新」：设置页「dsh-soulmojito」标题下与管理面板「总览」分区显示当前构建与 GitHub 最新构建，并提供「检查更新 / 立即更新」。
 
 - 发现：仓库不发 release/tag，新版本以 main 分支最新 commit + `packages/plugin/package.json` 的 version 判定；启动后延迟首查、每 6h 复查，缓存 `$DSH_HOME/tavern/update-state.json`。
 - 落地顺序：`dsh plugin --profile <p> add <spec>`（桌面版自带 CLI）→ 宿主 `plugin-manager` 服务 → GitHub checkout 覆写。前两条会同步 `package.json` / `pnpm-lock.yaml`，第三条只覆盖文件并在结果里提示补一条 CLI 命令。
 - 装完必须重启 DSH：包替换需要新的 JS module generation，宿主 HMR 不监听 `node_modules`。
 - 来源降级：`api.github.com` → `raw.githubusercontent.com` + `git ls-remote` → commits atom feed；HTTP 请求在 `fetch` 失败后自动用系统 `curl` 重试（企业 TLS 中间人下 node 的 CA bundle 不认本机根证书）。
-- 关闭与调优：profile 的 `dsh-tavern` 行 `checkForUpdates: false`、环境变量 `DSH_TAVERN_DISABLE_UPDATE_CHECK`、`DSH_TAVERN_DISABLE_CURL`、`DSH_TAVERN_CURL`、`GITHUB_TOKEN`/`GH_TOKEN`。
+- 关闭与调优：profile 的 `dsh-soulmojito` 行 `checkForUpdates: false`、环境变量 `DSH_SOULMOJITO_DISABLE_UPDATE_CHECK`、`DSH_SOULMOJITO_DISABLE_CURL`、`DSH_SOULMOJITO_CURL`、`GITHUB_TOKEN`/`GH_TOKEN`。
 - HTTP 端点：`GET update`（`?refresh=1` 穿透 TTL）、`POST update/check`、`POST update/install`（`{ "wait": false }` 立刻返回，客户端轮询 `GET update` 读进度）。
 
 完整决策与实测证据见 [`decisions/2026-10-05-desktop-plugin-self-update.md`](../../decisions/2026-10-05-desktop-plugin-self-update.md)。

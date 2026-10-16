@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-tavern/template",
+  "name": "@dsh-soulmojito/template",
   "version": "0.1.0",
   "description": "SillyTavern Prompt-Template-compatible EJS engine: sandboxed template rendering, scoped variables, GENERATE/RENDER/@INJECT/InitialVariables prompt injection.",
   "license": "GPL-3.0",

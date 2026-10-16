@@ -78,7 +78,7 @@ export interface GameEntry {
 export interface GameRegistryOptions {
   /** tavern 数据根（`$DSH_HOME/tavern`）。导入目录是 `<root>/games/installed/`。 */
   root: string
-  /** 宿主版本（engines.dsh-tavern 范围校验的左值）。 */
+  /** 宿主版本（engines.dsh-soulmojito 范围校验的左值）。 */
   hostVersion: string
   logger?: { warn?: (message: string) => unknown }
 }
@@ -123,7 +123,17 @@ export class GameRegistry {
   get(id: string): GameEntry | undefined {
     // builtin/imported 优先于 mod：目录导入（installed/<id>/）与 Mod 注册撞 id 时
     // 以磁盘上可审计的导入副本为准（注册期反查双侧拒绝，正常路径撞不上）。
-    return this.games.get(id) ?? this.modGames.get(id)
+    return this.games.get(id) ?? this.modGames.get(id) ?? this.resolveLegacyId(id)
+  }
+
+  /** 改名兼容（2026-10-16 项目改名）：存量对局文件里持久化的 gameId 是旧命名
+   * 空间 `dsh-tavern.<name>`——直接命中（仍在册的旧名条目，如用户装过的旧示例
+   * 包目录）永远优先；落空时按命名空间重映射查新名，旧对局不断。 */
+  private resolveLegacyId(id: string): GameEntry | undefined {
+    const prefix = 'dsh-tavern.'
+    if (!id.startsWith(prefix)) return undefined
+    const mapped = `dsh-soulmojito.${id.slice(prefix.length)}`
+    return this.games.get(mapped) ?? this.modGames.get(mapped)
   }
 
   /** 重扫（POST games/reload）：清空后重建——builtins 重跑烟测，导入目录重读。 */
@@ -176,7 +186,7 @@ export class GameRegistry {
         // 不静默——来源目录与装载结果进日志；坏导入同样遮蔽（broken 条目可见，
         // 删目录即恢复内置），不引入内置保护特例。
         this.options.logger?.warn?.(
-          `dsh-tavern: 导入游戏 '${entry.manifest.id}'（目录 ${directory}）与内置游戏同 id，以导入副本为准（status: ${entry.status}）`,
+          `dsh-soulmojito: 导入游戏 '${entry.manifest.id}'（目录 ${directory}）与内置游戏同 id，以导入副本为准（status: ${entry.status}）`,
         )
       }
       this.games.set(entry.manifest.id, entry)
@@ -198,7 +208,9 @@ export class GameRegistry {
     const check = checkGameManifest(raw, { directory: directoryName })
     if (!check.ok) return broken(brokenFallbackManifest(directoryName, raw), `清单校验失败: ${check.errors.join('; ')}`)
 
-    const engineRange = check.manifest!.engines?.['dsh-tavern']
+    // 改名兼容（2026-10-16）：旧键 engines['dsh-tavern'] 双读（存量示例/三方
+    // 游戏包不改也能加载）；新写入恒用新键。
+    const engineRange = check.manifest!.engines?.['dsh-soulmojito'] ?? check.manifest!.engines?.['dsh-tavern']
     if (engineRange !== undefined) {
       const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange)
       if (!verdict.ok) return broken(check.manifest!, `版本不满足: ${verdict.reason}`)
@@ -230,7 +242,7 @@ export class GameRegistry {
     // 清单/meta 冗余不一致：运行时以 meta 为准，只记 warning（提案 §6）。
     for (const key of ['id', 'name', 'version', 'players', 'turnBased', 'actionVocabulary'] as const) {
       if (JSON.stringify(check.manifest![key]) !== JSON.stringify(engineCheck.engine!.meta[key])) {
-        this.options.logger?.warn?.(`dsh-tavern: game '${check.manifest!.id}' 清单与 engine.meta 的 ${key} 不一致，运行时以 meta 为准`)
+        this.options.logger?.warn?.(`dsh-soulmojito: game '${check.manifest!.id}' 清单与 engine.meta 的 ${key} 不一致，运行时以 meta 为准`)
       }
     }
 
@@ -282,7 +294,7 @@ export class GameRegistry {
   async installFromGit(url: string, force = false, options: { timeoutMs?: number; cloneImpl?: GameCloneImpl } = {}): Promise<GameSummary> {
     const timeoutMs = options.timeoutMs ?? 60_000
     const source = parseGitSource(url)
-    const workRoot = mkdtempSync(join(tmpdir(), 'dsh-tavern-gameinstall-'))
+    const workRoot = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-gameinstall-'))
     try {
       const cloneDir = join(workRoot, 'clone')
       await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs)

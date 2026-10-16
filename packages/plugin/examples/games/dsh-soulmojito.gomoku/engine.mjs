@@ -1,5 +1,5 @@
 /**
- * dsh-tavern.gomoku —— 五子棋引擎（dsh-tavern 游戏桥标准 v1 的第一个参照实现）。
+ * dsh-soulmojito.gomoku —— 五子棋引擎（dsh-soulmojito 游戏桥标准 v1 的第一个参照实现）。
  *
  * 契约来源：docs/proposals/0018-agent-game-bridge.md §3.2「引擎契约」——Node 侧权威的
  * 无状态纯函数对象：createGame / legalActions / applyAction / describe。零依赖纯 ESM；
@@ -38,10 +38,10 @@ const DIRECTIONS = [[1, 0], [0, 1], [1, 1], [1, -1]]
 
 /** 与 game.json 完全一致的冗余字段（提案 §6：运行时以 engine.meta 为准，清单不符时安装期警告）。 */
 const META = {
-  id: 'dsh-tavern.gomoku',
+  id: 'dsh-soulmojito.gomoku',
   name: '五子棋',
   version: '1.0.0',
-  engines: { 'dsh-tavern': '^0.6.0' },
+  engines: { 'dsh-soulmojito': '^0.6.0' },
   players: { min: 2, max: 2, roles: ['black', 'white'] },
   turnBased: true,
   actionVocabulary:

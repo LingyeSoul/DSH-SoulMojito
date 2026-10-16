@@ -143,7 +143,7 @@ export async function installModFromGit(options: ModInstallOptions): Promise<Mod
       throw new Error(`repository has no readable mod.json at its root (${source.repository}): ${cause instanceof Error ? cause.message : String(cause)}`)
     }
   }
-  const workRoot = mkdtempSync(join(tmpdir(), 'dsh-tavern-modinstall-'))
+  const workRoot = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-modinstall-'))
   try {
     const cloneDir = join(workRoot, 'clone')
     await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs)

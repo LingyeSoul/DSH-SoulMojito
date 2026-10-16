@@ -1,6 +1,6 @@
-# 提案 0011：Rewrite with Feedback（带意见重写）— dsh-tavern 功能复刻
+# 提案 0011：Rewrite with Feedback（带意见重写）— dsh-soulmojito 功能复刻
 
-> 状态：已实现。日期：2026-10-07。参照物：`flizzywine/dsh-tavern`（AGPL-3.0）的**公开功能文档**
+> 状态：已实现。日期：2026-10-07。参照物：`flizzywine/dsh-soulmojito`（AGPL-3.0）的**公开功能文档**
 > （README「带意见重写」、`docs/feature-inventory.md` B07：写上哪里要改，只重写这一轮，比反复
 > 抽卡可控；意见可留空=直接重写），按本仓库 clean-room 教义从行为规格重实现，不复制其源码。
 > 实施期间禁止阅读该仓库源码。

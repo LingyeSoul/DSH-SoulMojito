@@ -2,7 +2,7 @@
  * 内置游戏：3×3 井字棋（提案 0018 §4.1，P0）。
  *
  * 契约来源：docs/proposals/0018-agent-game-bridge.md §3.2 引擎契约 + §3.3 视图
- * 契约——与五子棋参照包（examples/games/dsh-tavern.gomoku）逐条同款：JSON-safe
+ * 契约——与五子棋参照包（examples/games/dsh-soulmojito.gomoku）逐条同款：JSON-safe
  * state、深拷贝、确定性（全文无随机/时间源）、非法动作中文报错、describe 带坐标、
  * 三连即胜、满盘和棋。保留动作 resign 由运行时统一处理，本引擎只实现 place。
  *
@@ -13,7 +13,7 @@
  * （mood-tracker UI_PAGE 先例）、零文件依赖、随插件分发」的装载形态。
  *
  * view.html 为内联字符串常量：自包含（无外链、无 fetch）、监听
- * dsh-tavern:game-state 下行、上行 dsh-tavern:game-action（§3.3 两条消息协议）。
+ * dsh-soulmojito:game-state 下行、上行 dsh-soulmojito:game-action（§3.3 两条消息协议）。
  */
 
 import { parseBoardCoord, type GameEngine, type GameManifest } from '../standard.js'
@@ -31,7 +31,7 @@ const DIRECTIONS = [[1, 0], [0, 1], [1, 1], [1, -1]]
  *  缺席：内置游戏随插件同进程分发，宿主版本即插件版本，自我门控无意义
  *  （对照：导入包的 engines 范围在 registry 装载期校验）。 */
 const MANIFEST: GameManifest = {
-  id: 'dsh-tavern.tic-tac-toe',
+  id: 'dsh-soulmojito.tic-tac-toe',
   name: '井字棋',
   version: '1.0.0',
   players: { min: 2, max: 2, roles: ['x', 'o'] },
@@ -226,7 +226,7 @@ export const viewHtml = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>井字棋 · dsh-tavern 游戏桥</title>
+<title>井字棋 · dsh-soulmojito 游戏桥</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -260,8 +260,8 @@ export const viewHtml = `<!doctype html>
 <footer>轮到你时点击空格落子；坐标为列 A-C、行 1-3。</footer>
 <script>
 'use strict'
-/* 桥协议（提案 0018 §3.3）：下行 dsh-tavern:game-state（token 对账）、
-   上行 dsh-tavern:game-action。token 从 location.search 自读（服务端注入的
+/* 桥协议（提案 0018 §3.3）：下行 dsh-soulmojito:game-state（token 对账）、
+   上行 dsh-soulmojito:game-action。token 从 location.search 自读（服务端注入的
    桥脚本与宿主 GameSurface 都按同一纪律）。无 token 时渲染静态预览。 */
 var params = new URLSearchParams(window.location.search)
 var TOKEN = params.get('token')
@@ -290,7 +290,7 @@ function render(view, session) {
         cell.className += ' playable'
         ;(function (cx, cy) {
           cell.addEventListener('click', function () {
-            parent.postMessage({ type: 'dsh-tavern:game-action', token: TOKEN, action: { type: 'place', x: cx, y: cy } }, '*')
+            parent.postMessage({ type: 'dsh-soulmojito:game-action', token: TOKEN, action: { type: 'place', x: cx, y: cy } }, '*')
           })
         })(x, y)
       }
@@ -304,7 +304,7 @@ function render(view, session) {
 
 addEventListener('message', function (event) {
   var data = event.data
-  if (!data || data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+  if (!data || data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
   render(data.view, data.session)
 })
 

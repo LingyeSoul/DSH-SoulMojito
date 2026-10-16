@@ -1,7 +1,7 @@
 /**
  * 游戏桥 HTTP 面（提案 0018 §4.1 http.ts，P0；任务书 B 节的路由形状）。
  *
- * 全部挂现有 `/api/dsh-tavern` 前缀下，由 index.ts 的 handleApi 分派
+ * 全部挂现有 `/api/dsh-soulmojito` 前缀下，由 index.ts 的 handleApi 分派
  * （follow handleModsApi 的既有 dispatch 风格）。JSON 响应风格对齐 sendJson；
  * 请求体读取复用 mods/http.ts 的 readModRequestBody（与宿主 readJson 同语义）。
  *

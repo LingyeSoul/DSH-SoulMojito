@@ -8,10 +8,10 @@
  *   形状对齐宿主 tool() 工厂（parameters/output/execute）；
  * - manifest panel 声明 + api.http.route('GET','ui')：面板分区的 iframe 表面
  *   ——自包含 HTML（服务端注入 CSP meta 与 console reporter，connect-src
- *   'none'），经 postMessage 数据桥取数（dsh-tavern:mod-request → 父页代理 →
- *   mod-response），高度上报走 dsh-tavern:frontend-height 协议（与美化前端
- *   main.js 同款）；订阅 dsh-tavern:mod-event 下行事件，事件到达即刷新
- *   （拉取兜底保留），console 输出经 dsh-tavern:mod-log 回投宿主日志查看器。
+ *   'none'），经 postMessage 数据桥取数（dsh-soulmojito:mod-request → 父页代理 →
+ *   mod-response），高度上报走 dsh-soulmojito:frontend-height 协议（与美化前端
+ *   main.js 同款）；订阅 dsh-soulmojito:mod-event 下行事件，事件到达即刷新
+ *   （拉取兜底保留），console 输出经 dsh-soulmojito:mod-log 回投宿主日志查看器。
  *
  * 它是 e2e（tavern-mods.spec）与 mod-loader gate 的夹具。
  */
@@ -52,7 +52,7 @@ const UI_PAGE = `<!doctype html>
       var root = document.documentElement;
       var body = document.body;
       var height = Math.max(root ? root.scrollHeight : 0, body ? body.scrollHeight : 0);
-      parent.postMessage({ type: 'dsh-tavern:frontend-height', token: token, height: height }, '*');
+      parent.postMessage({ type: 'dsh-soulmojito:frontend-height', token: token, height: height }, '*');
     } catch (_) {}
   };
   if (typeof ResizeObserver === 'function') new ResizeObserver(report).observe(document.documentElement);
@@ -65,7 +65,7 @@ const UI_PAGE = `<!doctype html>
   var pending = new Map();
   addEventListener('message', function (event) {
     var data = event.data;
-    if (!data || data.type !== 'dsh-tavern:mod-response' || data.token !== token) return;
+    if (!data || data.type !== 'dsh-soulmojito:mod-response' || data.token !== token) return;
     var waiter = pending.get(data.id);
     if (!waiter) return;
     pending.delete(data.id);
@@ -75,7 +75,7 @@ const UI_PAGE = `<!doctype html>
     return new Promise(function (resolve, reject) {
       var id = 'req-' + nextId++;
       pending.set(id, { resolve: resolve, reject: reject });
-      parent.postMessage({ type: 'dsh-tavern:mod-request', token: token, id: id, req: { method: method, path: path, body: body } }, '*');
+      parent.postMessage({ type: 'dsh-soulmojito:mod-request', token: token, id: id, req: { method: method, path: path, body: body } }, '*');
       setTimeout(function () {
         if (pending.delete(id)) reject({ error: 'bridge timeout' });
       }, 10000);
@@ -119,7 +119,7 @@ const UI_PAGE = `<!doctype html>
   // 标签页或服务端侧的写入不在推送范围（诚实边界，mod-api.md §13）。
   addEventListener('message', function (event) {
     var data = event.data
-    if (!data || data.type !== 'dsh-tavern:mod-event' || data.token !== token) return
+    if (!data || data.type !== 'dsh-soulmojito:mod-event' || data.token !== token) return
     console.log('[mood-tracker] mod-event:', data.kind)
     refresh()
   })
@@ -164,7 +164,7 @@ export async function setup(api) {
     totalCharacters,
   })
   const offGetTool = api.tools.register({
-    name: 'dsh-tavern.mood-tracker_get_mood',
+    name: 'dsh-soulmojito.mood-tracker_get_mood',
     description: 'Read the tracked scene mood and reply statistics recorded by the mood-tracker mod for this deployment.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     output: {
@@ -174,7 +174,7 @@ export async function setup(api) {
     execute: async () => readMood(),
   })
   const offSetTool = api.tools.register({
-    name: 'dsh-tavern.mood-tracker_set_mood',
+    name: 'dsh-soulmojito.mood-tracker_set_mood',
     description: 'Set the scene mood tracked by the mood-tracker mod (a short phrase such as "tense" or "relieved").',
     parameters: {
       type: 'object',

@@ -13,7 +13,7 @@ import { TavernStore } from '../../tavern-store/src/index.js'
 // - 抛错 hook 的 mod 不断路：生成照常成功 + hook-degradation 审计；
 // - bootstrap 投影带 surfaces（loaded 展示实际注册名单，disabled 展示声明）；
 // - POST mods/install 的路由形状校验（无网络路径）。
-const MOOD_ID = 'dsh-tavern.mood-tracker'
+const MOOD_ID = 'dsh-soulmojito.mood-tracker'
 const repoExampleMod = join(import.meta.dirname, '..', 'examples', 'mods')
 const CHAR = 'Mood Character'
 
@@ -68,14 +68,14 @@ describe('mod P2 e2e: generation hooks, panel surface and projections', () => {
   async function generate(message: string, character: string, chatId: string) {
     const snapshot = await store.getChatSnapshot(character, chatId)
     const res = makeResponse()
-    await apiHandler(makeRequest({ character, chatId, message, revision: snapshot!.revision }, '/api/dsh-tavern/generate'), res)
+    await apiHandler(makeRequest({ character, chatId, message, revision: snapshot!.revision }, '/api/dsh-soulmojito/generate'), res)
     return { status: res.statusCode, chunks: res.chunks }
   }
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-modp2e2e-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-modp2e2e-'))
     process.env.DSH_HOME = home
-    cpSync(join(repoExampleMod, 'dsh-tavern.mood-tracker'), join(home, 'tavern', 'mods', MOOD_ID), { recursive: true })
+    cpSync(join(repoExampleMod, 'dsh-soulmojito.mood-tracker'), join(home, 'tavern', 'mods', MOOD_ID), { recursive: true })
     const throwingDir = join(home, 'tavern', 'mods', 'throwing-hook')
     mkdirSync(throwingDir, { recursive: true })
     writeFileSync(join(throwingDir, 'mod.json'), JSON.stringify({
@@ -120,10 +120,10 @@ describe('mod P2 e2e: generation hooks, panel surface and projections', () => {
     } as never)
     expect(apiHandler).toBeDefined()
     // 两层开关全开（mood-tracker + throwing-hook）。
-    expect((await call('POST', `/api/dsh-tavern/mods/${MOOD_ID}/enable`, {})).status).toBe(200)
-    expect((await call('POST', '/api/dsh-tavern/mods/throwing-hook/enable', {})).status).toBe(200)
-    expect((await call('POST', '/api/dsh-tavern/mods/state', { globalEnabled: true })).status).toBe(200)
-    const management = await call('GET', '/api/dsh-tavern/mods')
+    expect((await call('POST', `/api/dsh-soulmojito/mods/${MOOD_ID}/enable`, {})).status).toBe(200)
+    expect((await call('POST', '/api/dsh-soulmojito/mods/throwing-hook/enable', {})).status).toBe(200)
+    expect((await call('POST', '/api/dsh-soulmojito/mods/state', { globalEnabled: true })).status).toBe(200)
+    const management = await call('GET', '/api/dsh-soulmojito/mods')
     const statuses = new Map((management.body!.mods as Array<{ id: string; status: string }>).map((mod) => [mod.id, mod.status]))
     expect(statuses.get(MOOD_ID)).toBe('loaded')
     expect(statuses.get('throwing-hook')).toBe('loaded')
@@ -135,17 +135,17 @@ describe('mod P2 e2e: generation hooks, panel surface and projections', () => {
   })
 
   it('serves the panel ui as self-contained HTML with the CSP meta and the bridge protocol', async () => {
-    const ui = await call('GET', `/api/dsh-tavern/mods/${MOOD_ID}/ui`)
+    const ui = await call('GET', `/api/dsh-soulmojito/mods/${MOOD_ID}/ui`)
     expect(ui.status).toBe(200)
     expect(ui.text).toContain('<meta http-equiv="Content-Security-Policy"')
     expect(ui.text).toContain("connect-src 'none'")
-    expect(ui.text).toContain('dsh-tavern:mod-request')
-    expect(ui.text).toContain('dsh-tavern:frontend-height')
+    expect(ui.text).toContain('dsh-soulmojito:mod-request')
+    expect(ui.text).toContain('dsh-soulmojito:frontend-height')
     expect(ui.text).toContain("new URLSearchParams(location.search).get('token')")
     // A-1d/A-2：ui 页订阅下行事件（事件到达即刷新，拉取兜底保留）；服务端注入
     // 的 console reporter 会把 mod UI 的 console 输出回投宿主日志查看器。
-    expect(ui.text).toContain("data.type !== 'dsh-tavern:mod-event'")
-    expect(ui.text).toContain('dsh-tavern:mod-log')
+    expect(ui.text).toContain("data.type !== 'dsh-soulmojito:mod-event'")
+    expect(ui.text).toContain('dsh-soulmojito:mod-log')
     expect(ui.text).toContain('[mood-tracker]')
   })
 
@@ -155,7 +155,7 @@ describe('mod P2 e2e: generation hooks, panel surface and projections', () => {
     }, [])
     const result = await generate('hello mood', CHAR, chatId)
     expect(result.chunks.some((chunk) => chunk.includes('"type":"saved"'))).toBe(true)
-    const stats = await call('GET', `/api/dsh-tavern/mods/${MOOD_ID}/stats`)
+    const stats = await call('GET', `/api/dsh-soulmojito/mods/${MOOD_ID}/stats`)
     expect(stats.status).toBe(200)
     expect(stats.body!.replyCount).toBe(1)
     expect(stats.body!.lastReplyLength).toBe('mood reply'.length)
@@ -169,11 +169,11 @@ describe('mod P2 e2e: generation hooks, panel surface and projections', () => {
     const chatId = await store.createChat(CHAR, {
       user_name: 'Alice', character_name: CHAR, chat_metadata: { createdAt: new Date().toISOString() },
     }, [])
-    const before = (await call('GET', '/api/dsh-tavern/mods')).body!.mods as Array<{ id: string; auditCount: number }>
+    const before = (await call('GET', '/api/dsh-soulmojito/mods')).body!.mods as Array<{ id: string; auditCount: number }>
     const throwingBefore = before.find((mod) => mod.id === 'throwing-hook')!.auditCount
     const result = await generate('survive the boom', CHAR, chatId)
     expect(result.chunks.some((chunk) => chunk.includes('"type":"saved"'))).toBe(true)
-    const after = (await call('GET', '/api/dsh-tavern/mods')).body!.mods as Array<{ id: string; auditCount: number }>
+    const after = (await call('GET', '/api/dsh-soulmojito/mods')).body!.mods as Array<{ id: string; auditCount: number }>
     expect(after.find((mod) => mod.id === 'throwing-hook')!.auditCount).toBeGreaterThan(throwingBefore)
     const audit = readFileSync(join(home, 'tavern', 'mods', 'audit.jsonl'), 'utf8')
     expect(audit).toContain('"event":"hook-degradation"')
@@ -181,24 +181,24 @@ describe('mod P2 e2e: generation hooks, panel surface and projections', () => {
   })
 
   it('projects surfaces: loaded mods show live registrations, disabled mods show declarations', async () => {
-    const boot = await call('GET', '/api/dsh-tavern/bootstrap')
+    const boot = await call('GET', '/api/dsh-soulmojito/bootstrap')
     const mods = boot.body!.mods as Array<{ id: string; status: string; surfaces: { hooks: string[]; tools: string[]; http: string[] } }>
     const mood = mods.find((mod) => mod.id === MOOD_ID)!
     expect(mood.status).toBe('loaded')
     expect(mood.surfaces.hooks).toEqual(['post-output'])
-    expect(mood.surfaces.tools).toEqual(['dsh-tavern.mood-tracker_get_mood', 'dsh-tavern.mood-tracker_set_mood'])
+    expect(mood.surfaces.tools).toEqual(['dsh-soulmojito.mood-tracker_get_mood', 'dsh-soulmojito.mood-tracker_set_mood'])
     expect(mood.surfaces.http).toEqual(['GET stats', 'POST mood', 'GET ui'])
     // 停用后回落 manifest 声明（作者自查面）
-    expect((await call('POST', `/api/dsh-tavern/mods/${MOOD_ID}/disable`, {})).status).toBe(200)
-    const disabled = (await call('GET', '/api/dsh-tavern/bootstrap')).body!.mods as Array<{ id: string; status: string; surfaces: { hooks: string[] } }>
+    expect((await call('POST', `/api/dsh-soulmojito/mods/${MOOD_ID}/disable`, {})).status).toBe(200)
+    const disabled = (await call('GET', '/api/dsh-soulmojito/bootstrap')).body!.mods as Array<{ id: string; status: string; surfaces: { hooks: string[] } }>
     const moodDisabled = disabled.find((mod) => mod.id === MOOD_ID)!
     expect(moodDisabled.status).toBe('disabled')
     expect(moodDisabled.surfaces.hooks).toEqual(['post-output'])
-    expect((await call('POST', `/api/dsh-tavern/mods/${MOOD_ID}/enable`, {})).status).toBe(200)
+    expect((await call('POST', `/api/dsh-soulmojito/mods/${MOOD_ID}/enable`, {})).status).toBe(200)
   })
 
   it('POST mods/install validates its payload through the real route', async () => {
-    const bad = await call('POST', '/api/dsh-tavern/mods/install', { url: '' })
+    const bad = await call('POST', '/api/dsh-soulmojito/mods/install', { url: '' })
     expect(bad.status).toBe(500)
     expect(bad.body!.message).toContain('expected { url }')
   })

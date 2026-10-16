@@ -1,5 +1,5 @@
 /**
- * 内置 21 点（dsh-tavern.blackjack，v2：玩家对 AI 庄家）——引擎契约与规则面测试。
+ * 内置 21 点（dsh-soulmojito.blackjack，v2：玩家对 AI 庄家）——引擎契约与规则面测试。
  *
  * 【蓝军声明】本套件由独立于实现者的测试角色按 v2 契约重写（v1 双人对赌形态已随
  * 改版作废，全部行为断言重写）：所有断言严格落在契约面上，不发明契约外断言；点数
@@ -7,7 +7,7 @@
  * 不为跑绿迁就实现。
  *
  * 契约面（v2）：
- * - 清单：id 'dsh-tavern.blackjack'、name '21点'、version '1.0.0'、
+ * - 清单：id 'dsh-soulmojito.blackjack'、name '21点'、version '1.0.0'、
  *   players {min:2,max:2,roles:['player','dealer']}、turnBased、engines 缺席；
  * - state（JSON-safe、顶层 turn）：{ turn:'player'|'dealer', seed, dealt,
  *   hands{player,dealer}, totals{player,dealer}, finished, winner }，
@@ -236,7 +236,7 @@ describe('清单与引擎形状（§3.1/§3.2）', () => {
     const check = checkGameManifest(manifest)
     expect(check.ok).toBe(true)
     expect(check.errors).toEqual([])
-    expect(manifest.id).toBe('dsh-tavern.blackjack')
+    expect(manifest.id).toBe('dsh-soulmojito.blackjack')
     expect(manifest.name).toBe('21点')
     expect(manifest.version).toBe('1.0.0')
     expect(manifest.players).toEqual({ min: 2, max: 2, roles: ['player', 'dealer'] })
@@ -254,18 +254,18 @@ describe('清单与引擎形状（§3.1/§3.2）', () => {
     expect(viewHtml).not.toMatch(/src\s*=\s*["']https?:/i)
     expect(viewHtml).not.toMatch(/href\s*=\s*["']https?:/i)
     expect(viewHtml).not.toContain('fetch(')
-    expect(viewHtml).toContain('dsh-tavern:game-state')
-    expect(viewHtml).toContain('dsh-tavern:game-action')
-    expect(viewHtml).toContain('data-game="dsh-tavern.blackjack"')
+    expect(viewHtml).toContain('dsh-soulmojito:game-state')
+    expect(viewHtml).toContain('dsh-soulmojito:game-action')
+    expect(viewHtml).toContain('data-game="dsh-soulmojito.blackjack"')
   })
 
   it('视图过 view 服务管线（CSP + 桥脚本注入 + 文档包装）后原内容完整', () => {
     const document = renderGameViewDocument(viewHtml)
-    expect(document).toContain('data-game="dsh-tavern.blackjack"')
-    expect(document).toContain('dshTavernGame')
+    expect(document).toContain('data-game="dsh-soulmojito.blackjack"')
+    expect(document).toContain('dshSoulMojitoGame')
     expect(document).toContain('Content-Security-Policy')
     expect(document).toContain("connect-src 'none'")
-    expect(document).toContain('dsh-tavern:game-action')
+    expect(document).toContain('dsh-soulmojito:game-action')
   })
 
   it('终局呈结果条：含 result-strip/描边/底色锚点，含玩家与庄家 zone 标签，不含旧覆盖层', () => {
@@ -378,16 +378,16 @@ function openBlackjackView(search: string): ViewHarness {
   }
 }
 
-/** 下行 dsh-tavern:game-state 载荷（token 与视图 URL 的 token 对账）。 */
+/** 下行 dsh-soulmojito:game-state 载荷（token 与视图 URL 的 token 对账）。 */
 function gameState(session: unknown, view: unknown): unknown {
-  return { type: 'dsh-tavern:game-state', token: 't', session, view }
+  return { type: 'dsh-soulmojito:game-state', token: 't', session, view }
 }
 
 /** 会话快照（玩家表按 manifest roles 规范序：player 前、dealer 后）。 */
 function sessionFixture(dealerOwner: 'human' | 'agent'): Record<string, unknown> {
   return {
     id: 'g-9136e61b',
-    gameId: 'dsh-tavern.blackjack',
+    gameId: 'dsh-soulmojito.blackjack',
     gameName: '21点',
     players: [
       { role: 'player', owner: dealerOwner === 'human' ? 'agent' : 'human' },
@@ -911,8 +911,8 @@ describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
   it('开局 → 人类停牌 → Agent 按家规补/停到结算：视图/叙述/终审全链路', async () => {
     const service = await openGamesService({ root: join(home, 'tavern'), hostVersion: '0.6.4' })
     try {
-      const { session, view } = await service.start({ gameId: 'dsh-tavern.blackjack', character: 'ExampleCard', chatId: 'bj-chat' })
-      expect(session.gameId).toBe('dsh-tavern.blackjack')
+      const { session, view } = await service.start({ gameId: 'dsh-soulmojito.blackjack', character: 'ExampleCard', chatId: 'bj-chat' })
+      expect(session.gameId).toBe('dsh-soulmojito.blackjack')
       expect(session.players).toEqual([
         { role: 'player', owner: 'human' },
         { role: 'dealer', owner: 'agent' },

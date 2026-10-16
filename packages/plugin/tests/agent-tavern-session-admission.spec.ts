@@ -178,7 +178,7 @@ describe.skipIf(!runtimeAvailable)('AgentTavern history import against the real 
             ...(event as { data: Record<string, unknown> }).data,
             message: {
               ...((event as { data: { message: Record<string, unknown> } }).data.message),
-              source: { kind: 'plugin:dsh-tavern' },
+              source: { kind: 'plugin:dsh-soulmojito' },
             },
           },
         }
@@ -219,7 +219,7 @@ describe.skipIf(!runtimeAvailable)('AgentTavern history import against the real 
           id: 'a1',
           role: 'assistant',
           content: [{ type: 'text', text: '开场白。' }],
-          source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' },
+          source: { kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-import' },
         },
       },
     }

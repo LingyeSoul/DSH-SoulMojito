@@ -22,7 +22,7 @@
  *       }
  *     ]
  *
- * - 表达式求值复用 `@dsh-tavern/template` 的沙箱设施（`evalExpressionSandboxed`：
+ * - 表达式求值复用 `@dsh-soulmojito/template` 的沙箱设施（`evalExpressionSandboxed`：
  *   node:vm 全新 context、同步纯构造、无 require/process/timer/网络）；变量访问
  *   以嵌套树语义暴露 `vars`（嵌套对象）与 `getvar('<dotted.path>')` 两个入口，
  *   每次求值深拷贝工作树——表达式无法借 `vars` 引用绕过守卫直写。

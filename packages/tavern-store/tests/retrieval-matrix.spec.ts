@@ -20,8 +20,10 @@ import { ANCHOR_TIME, DIMENSIONS, buildCorpus, corpusHash, corpusStats } from '.
 import { seedStore } from '../../../scripts/retrieval-eval/seed.mjs'
 import { aggregate, runMatrix } from '../../../scripts/retrieval-eval/metrics.mjs'
 
-/** 语料规范哈希（冻结）。改动语料 = 有意重基线：重跑 run.mjs，更新此值与 BASELINE。 */
-const CORPUS_HASH = '3419b1badafe343fd6d9959b1c81675529a399a94887d302d6c1d9897f1ffa7f'
+/** 语料规范哈希（冻结）。改动语料 = 有意重基线：重跑 run.mjs，更新此值与 BASELINE。
+ *  2026-10-16 项目改名重基线：SEED 更名 dsh-soulmojito-retrieval-eval-v1 →
+ *  record revision 派生变化，哈希随更新；内容/维度/期望零改动（指标基线不受影响）。 */
+const CORPUS_HASH = 'c9399a9ce804b37728b0b08d30d859a2352b74d9d9886c49c6a39a6ac7382d2e'
 
 /**
  * 基线（生成于 2026-10-11，B-1 CJK 分词 @ commit 0bac59a，node scripts/retrieval-eval/run.mjs）。

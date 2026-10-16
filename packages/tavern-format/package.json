@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-tavern/format",
+  "name": "@dsh-soulmojito/format",
   "version": "0.1.0",
   "description": "SillyTavern interoperability formats: character cards (PNG/CHARX/JSON, V2/V3), world info files, chat completion presets, chat logs. Zero-host, zero-dependency (except fflate for CHARX).",
   "license": "GPL-3.0",

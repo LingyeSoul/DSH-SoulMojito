@@ -131,7 +131,7 @@ const stateAfterBind = () => ({ ...BOOTSTRAP.state, sessionBindings: { ...BOOTST
 
 async function routeFetch(url, options = {}) {
   const target = new URL(url, 'http://localhost')
-  const path = target.pathname.replace(/^\/api\/dsh-tavern\/?/, '')
+  const path = target.pathname.replace(/^\/api\/dsh-soulmojito\/?/, '')
   const method = options.method ?? 'GET'
   log({ kind: 'fetch', method, path })
   const json = (value, status = 200) => ({ ok: status < 400, status, json: async () => value })

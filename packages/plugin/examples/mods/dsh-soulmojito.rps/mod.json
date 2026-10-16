@@ -1,11 +1,11 @@
 {
-  "id": "dsh-tavern.rps",
+  "id": "dsh-soulmojito.rps",
   "name": "猜拳",
   "version": "1.0.0",
-  "author": "dsh-tavern",
+  "author": "dsh-soulmojito",
   "description": "P3 example mod: registers a best-of-three rock-paper-scissors game through api.games.register (in-process engine object + inline view string). The game appears in the games panel section with source 'mod'; this mod ships no panel of its own.",
   "main": "index.mjs",
   "loadingOrder": 100,
   "capabilities": [],
-  "games": ["dsh-tavern.rps.gesture"]
+  "games": ["dsh-soulmojito.rps.gesture"]
 }

@@ -189,7 +189,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
   let novelTools: Map<string, CapturedTool>
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-novel-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-novel-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     novels = await NovelStore.open(join(home, 'tavern'))
@@ -263,7 +263,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
       effect: (fn: () => unknown) => { fn(); return () => {} },
     })
     expect(definitions).toHaveLength(1)
-    expect((definitions[0] as { name?: string }).name).toBe('dsh-tavern-session')
+    expect((definitions[0] as { name?: string }).name).toBe('dsh-soulmojito-session')
     handler = definitions[0]!.handler
     apiHandler = apiHandlers.at(-1)!
     expect(apiHandler).not.toBe(degradedApiHandler)
@@ -276,7 +276,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
 
   it('fails closed with reasons when the host lacks the AgentNovel capability contract', async () => {
     const res = makeResponse()
-    await degradedApiHandler(makeRequest(novelConfig(), '/api/dsh-tavern/novels'), res)
+    await degradedApiHandler(makeRequest(novelConfig(), '/api/dsh-soulmojito/novels'), res)
     expect(res.statusCode).toBe(503)
     const body = jsonBody(res)
     expect(body).toMatchObject({ ok: false, code: 'NOVEL_CAPABILITY' })
@@ -287,7 +287,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
 
   it('reports the agentNovel capability block on bootstrap', async () => {
     const res = makeResponse()
-    await apiHandler(makeGetRequest('/api/dsh-tavern/bootstrap'), res)
+    await apiHandler(makeGetRequest('/api/dsh-soulmojito/bootstrap'), res)
     expect(res.statusCode).toBe(200)
     const agentNovel = jsonBody(res).agentNovel
     expect(agentNovel).toMatchObject({ available: true, missing: [], reasons: [] })
@@ -296,7 +296,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
 
   it('rejects an invalid create config with field violations', async () => {
     const res = makeResponse()
-    await apiHandler(makeRequest(novelConfig({ title: ' ' }), '/api/dsh-tavern/novels'), res)
+    await apiHandler(makeRequest(novelConfig({ title: ' ' }), '/api/dsh-soulmojito/novels'), res)
     expect(res.statusCode).toBe(400)
     const body = jsonBody(res)
     expect(body).toMatchObject({ ok: false, code: 'NOVEL_CONFIG' })
@@ -305,7 +305,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
 
   it('creates, lists and reads an automatic novel end to end', async () => {
     const create = makeResponse()
-    await apiHandler(makeRequest(novelConfig(), '/api/dsh-tavern/novels'), create)
+    await apiHandler(makeRequest(novelConfig(), '/api/dsh-soulmojito/novels'), create)
     expect(create.statusCode).toBe(200)
     const { novel } = jsonBody(create)
     expect(novel).toMatchObject({ title: '灯下酒馆', status: 'active', phase: 'outlining' })
@@ -313,14 +313,14 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     expect(typeof novel.revision).toBe('string')
 
     const list = makeResponse()
-    await apiHandler(makeGetRequest('/api/dsh-tavern/novels'), list)
+    await apiHandler(makeGetRequest('/api/dsh-soulmojito/novels'), list)
     expect(list.statusCode).toBe(200)
     const listed = jsonBody(list).novels
     expect(Array.isArray(listed)).toBe(true)
     expect(listed).toContainEqual(expect.objectContaining({ novelId: novel.novelId, status: 'active' }))
 
     const detail = makeResponse()
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${novel.novelId}`), detail)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${novel.novelId}`), detail)
     expect(detail.statusCode).toBe(200)
     const full = jsonBody(detail).novel
     expect(full).toMatchObject({
@@ -346,7 +346,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
 
   it('returns 404 for an unknown novel detail', async () => {
     const res = makeResponse()
-    await apiHandler(makeGetRequest('/api/dsh-tavern/novels/missing-one'), res)
+    await apiHandler(makeGetRequest('/api/dsh-soulmojito/novels/missing-one'), res)
     expect(res.statusCode).toBe(404)
     expect(jsonBody(res)).toMatchObject({ ok: false, code: 'NOVEL_NOT_FOUND' })
   })
@@ -361,7 +361,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
       writerOutputChars: 1200,
     })
     const res = makeResponse()
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${created.novelId}`), res)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${created.novelId}`), res)
     expect(res.statusCode).toBe(200)
     const budget = jsonBody(res).novel.budget
     // deduceRuns convention: writerRuns sits beside the budget edges and
@@ -376,7 +376,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
   it('blocks writerMode=subagent creation with probe evidence when no subagent runtime exists (0007 §9 fail-closed)', async () => {
     const before = (await novels.listNovels()).length
     const res = makeResponse()
-    await apiHandler(makeRequest(novelConfig({ title: '被闸门拦下的写手小说', writerMode: 'subagent' }), '/api/dsh-tavern/novels'), res)
+    await apiHandler(makeRequest(novelConfig({ title: '被闸门拦下的写手小说', writerMode: 'subagent' }), '/api/dsh-soulmojito/novels'), res)
     expect(res.statusCode).toBe(400)
     const body = jsonBody(res)
     expect(body).toMatchObject({ ok: false, code: 'NOVEL_WRITER_PROBE' })
@@ -389,7 +389,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
 
   it('serves the writer probe report on GET novels/writer-probe (0007 §9)', async () => {
     const res = makeResponse()
-    await apiHandler(makeGetRequest('/api/dsh-tavern/novels/writer-probe'), res)
+    await apiHandler(makeGetRequest('/api/dsh-soulmojito/novels/writer-probe'), res)
     expect(res.statusCode).toBe(200)
     const body = jsonBody(res)
     expect(body.ok).toBe(true)
@@ -402,7 +402,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
   it('serves a null outline before the plan exists', async () => {
     const created = await novels.createNovel(store, novelConfig() as never)
     const res = makeResponse()
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${created.novelId}/outline`), res)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${created.novelId}/outline`), res)
     expect(res.statusCode).toBe(200)
     expect(jsonBody(res)).toEqual({ ok: true, outline: null })
   })
@@ -411,7 +411,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     // Novel A: approve the pinned outline revision (manual creation rides the
     // same HTTP POST roundtrip; it must come back paused).
     const createA = makeResponse()
-    await apiHandler(makeRequest(novelConfig({ title: '手动A', approvalMode: 'manual' }), '/api/dsh-tavern/novels'), createA)
+    await apiHandler(makeRequest(novelConfig({ title: '手动A', approvalMode: 'manual' }), '/api/dsh-soulmojito/novels'), createA)
     expect(createA.statusCode).toBe(200)
     expect(jsonBody(createA).novel).toMatchObject({ status: 'paused', phase: 'outlining' })
     const createdA = { novelId: jsonBody(createA).novel.novelId as string }
@@ -425,18 +425,18 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     const outlineRevision = snapshot!.outline!.outlineRevision
 
     const wrong = makeResponse()
-    await apiHandler(makeRequest({ expectedOutlineRevision: 'deadbeefdeadbeef' }, `/api/dsh-tavern/novels/${createdA.novelId}/approve-outline`), wrong)
+    await apiHandler(makeRequest({ expectedOutlineRevision: 'deadbeefdeadbeef' }, `/api/dsh-soulmojito/novels/${createdA.novelId}/approve-outline`), wrong)
     expect(wrong.statusCode).toBe(409)
     const conflict = jsonBody(wrong)
     expect(conflict).toMatchObject({ ok: false, code: 'NOVEL_REVISION_CONFLICT', actualRevision: outlineRevision })
 
     const approve = makeResponse()
-    await apiHandler(makeRequest({ expectedOutlineRevision: outlineRevision }, `/api/dsh-tavern/novels/${createdA.novelId}/approve-outline`), approve)
+    await apiHandler(makeRequest({ expectedOutlineRevision: outlineRevision }, `/api/dsh-soulmojito/novels/${createdA.novelId}/approve-outline`), approve)
     expect(approve.statusCode).toBe(200)
     expect(jsonBody(approve)).toEqual({ ok: true, revision: (await novels.getNovel(createdA.novelId))!.revision })
 
     const detailA = makeResponse()
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${createdA.novelId}`), detailA)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${createdA.novelId}`), detailA)
     expect(jsonBody(detailA).novel).toMatchObject({ status: 'active', phase: 'writing' })
 
     // Novel B: "update outline" authorizes exactly one revising pass.
@@ -448,11 +448,11 @@ describe('AgentNovel command bridge and HTTP contract', () => {
       handledRequirements: [{ requirementId: 'req-1', result: 'applied', effectiveLocation: 'ch-1' }],
     })
     const revise = makeResponse()
-    await apiHandler(makeRequest({}, `/api/dsh-tavern/novels/${createdB.novelId}/update-outline`), revise)
+    await apiHandler(makeRequest({}, `/api/dsh-soulmojito/novels/${createdB.novelId}/update-outline`), revise)
     expect(revise.statusCode).toBe(200)
     expect(jsonBody(revise).ok).toBe(true)
     const detailB = makeResponse()
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${createdB.novelId}`), detailB)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${createdB.novelId}`), detailB)
     expect(jsonBody(detailB).novel).toMatchObject({ status: 'active', phase: 'revising' })
   })
 
@@ -480,7 +480,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     // §12.1 driver kick: the outline-create notice reaches the live agent.
     expect(await until(() => agent.followups.length > 0)).toBe(true)
     const notice = agent.followups[0] as { content?: Array<{ text?: string }>; source?: { form?: string; summary?: string } }
-    expect(notice.source).toMatchObject({ kind: 'plugin', plugin: 'dsh-tavern', form: 'notice' })
+    expect(notice.source).toMatchObject({ kind: 'plugin', plugin: 'dsh-soulmojito', form: 'notice' })
     expect(notice.source?.summary).toContain('AgentNovel work notice')
     expect(notice.content?.[0]?.text).toContain('Novel work brief')
 
@@ -530,7 +530,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     const requirementCount = async () => {
       const detail = makeResponse()
       const bound = (await store.getState()).sessionBindings['novel-session-a'] as { novelId: string }
-      await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${bound.novelId}`), detail)
+      await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${bound.novelId}`), detail)
       return jsonBody(detail).novel.requirements.length
     }
 
@@ -541,14 +541,14 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     // Host retries of the same message id dedupe to one ledger record.
     dispatch({ type: 'user/message', data: { id: 'msg-real-1', content: [{ type: 'text', text: '让常客在第三章回来' }], source: { kind: 'user' } } })
     // Driver notices (plugin source) are never directives.
-    dispatch({ type: 'user/message', data: { id: 'msg-notice-1', content: [{ type: 'text', text: 'scheduled work' }], source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: 'AgentNovel work notice (novel nvl-x, intent wi-x)' } } })
-    dispatch({ type: 'user/message', data: { id: 'msg-notice-2', content: [{ type: 'text', text: 'closed' }], source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice' } } })
+    dispatch({ type: 'user/message', data: { id: 'msg-notice-1', content: [{ type: 'text', text: 'scheduled work' }], source: { kind: 'plugin', plugin: 'dsh-soulmojito', form: 'notice', summary: 'AgentNovel work notice (novel nvl-x, intent wi-x)' } } })
+    dispatch({ type: 'user/message', data: { id: 'msg-notice-2', content: [{ type: 'text', text: 'closed' }], source: { kind: 'plugin', plugin: 'dsh-soulmojito', form: 'notice' } } })
     await new Promise((resolve) => setTimeout(resolve, 150))
     expect(await requirementCount()).toBe(2)
 
     const detail = makeResponse()
     const bound = (await store.getState()).sessionBindings['novel-session-a'] as { novelId: string }
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${bound.novelId}`), detail)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${bound.novelId}`), detail)
     const requirement = jsonBody(detail).novel.requirements.find((item: { sequence?: number }) => item.sequence === 2)
     expect(requirement).toMatchObject({ status: 'pending', text: '让常客在第三章回来' })
   })
@@ -578,7 +578,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     })
 
     const detail = makeResponse()
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${created.novelId}`), detail)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${created.novelId}`), detail)
     const full = jsonBody(detail).novel
     expect(full.chapters).toEqual([
       { chapterId: 'ch-1', order: 1, title: '第一章 打烊之前', state: 'writing', committedCharacters: 10 },
@@ -591,13 +591,13 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     expect(full.budget.remainingCharacters).toBeNull()
 
     const outline = makeResponse()
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${created.novelId}/outline`), outline)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${created.novelId}/outline`), outline)
     const plan = jsonBody(outline).outline
     expect(plan.outlineRevision).toBe(outlineRevision)
     expect(plan.chapters[0]).toMatchObject({ chapterId: 'ch-1', title: '第一章 打烊之前' })
 
     const bodyPage = makeResponse()
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${created.novelId}/body?chapterId=ch-1`), bodyPage)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${created.novelId}/body?chapterId=ch-1`), bodyPage)
     expect(jsonBody(bodyPage)).toEqual({
       ok: true,
       paragraphs: [
@@ -608,16 +608,16 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     })
 
     const pageOne = makeResponse()
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${created.novelId}/body?chapterId=ch-1&limit=1`), pageOne)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${created.novelId}/body?chapterId=ch-1&limit=1`), pageOne)
     expect(jsonBody(pageOne).paragraphs).toHaveLength(1)
     expect(jsonBody(pageOne).nextCursor).toBe('1')
     const pageTwo = makeResponse()
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${created.novelId}/body?chapterId=ch-1&limit=1&cursor=1`), pageTwo)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${created.novelId}/body?chapterId=ch-1&limit=1&cursor=1`), pageTwo)
     expect(jsonBody(pageTwo)).toMatchObject({ ok: true, nextCursor: null })
     expect(jsonBody(pageTwo).paragraphs[0]).toMatchObject({ text: '第二段正文。' })
 
     const md = makeResponse()
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${created.novelId}/export?format=md`), md)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${created.novelId}/export?format=md`), md)
     expect(md.statusCode).toBe(200)
     expect(md.headers['content-type']).toBe('text/markdown; charset=utf-8')
     expect(md.headers['content-disposition']).toContain('attachment; filename=')
@@ -627,7 +627,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     expect(mdBytes.toString('utf8')).toContain('第一段正文。')
 
     const zip = makeResponse()
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${created.novelId}/export?format=zip`), zip)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${created.novelId}/export?format=zip`), zip)
     expect(zip.statusCode).toBe(200)
     expect(zip.headers['content-type']).toBe('application/zip')
     const zipBytes = Buffer.concat(zip.chunks)
@@ -638,18 +638,18 @@ describe('AgentNovel command bridge and HTTP contract', () => {
   it('pause, resume and stop surface the new revision', async () => {
     const created = await novels.createNovel(store, novelConfig({ title: '控制测试' }) as never)
     const pause = makeResponse()
-    await apiHandler(makeRequest({}, `/api/dsh-tavern/novels/${created.novelId}/pause`), pause)
+    await apiHandler(makeRequest({}, `/api/dsh-soulmojito/novels/${created.novelId}/pause`), pause)
     expect(pause.statusCode).toBe(200)
     expect(jsonBody(pause).ok).toBe(true)
     expect((await novels.getNovel(created.novelId))!.run.pauseReason).toBe('user-request')
 
     const stop = makeResponse()
-    await apiHandler(makeRequest({}, `/api/dsh-tavern/novels/${created.novelId}/stop`), stop)
+    await apiHandler(makeRequest({}, `/api/dsh-soulmojito/novels/${created.novelId}/stop`), stop)
     expect(stop.statusCode).toBe(200)
     expect((await novels.getNovel(created.novelId))!.run.pauseReason).toBe('stopped')
 
     const resume = makeResponse()
-    await apiHandler(makeRequest({}, `/api/dsh-tavern/novels/${created.novelId}/resume`), resume)
+    await apiHandler(makeRequest({}, `/api/dsh-soulmojito/novels/${created.novelId}/resume`), resume)
     expect(resume.statusCode).toBe(200)
     expect(jsonBody(resume).revision).toBe((await novels.getNovel(created.novelId))!.revision)
     expect((await novels.getNovel(created.novelId))!.run.status).toBe('active')
@@ -664,7 +664,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
       expectedRevision: 'deadbeefdeadbeef',
       patch: { title: '新标题' },
       cause: 'panel-edit',
-    }, `/api/dsh-tavern/novels/${created.novelId}`, 'PATCH'), stale)
+    }, `/api/dsh-soulmojito/novels/${created.novelId}`, 'PATCH'), stale)
     expect(stale.statusCode).toBe(409)
     expect(jsonBody(stale)).toMatchObject({ ok: false, code: 'NOVEL_REVISION_CONFLICT', actualRevision: current })
 
@@ -673,7 +673,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
       expectedRevision: current,
       patch: { title: '补丁后的标题', genre: '悬疑' },
       cause: 'panel-edit',
-    }, `/api/dsh-tavern/novels/${created.novelId}`, 'PATCH'), patch)
+    }, `/api/dsh-soulmojito/novels/${created.novelId}`, 'PATCH'), patch)
     expect(patch.statusCode).toBe(200)
     const next = (await novels.getNovel(created.novelId))!
     expect(jsonBody(patch)).toEqual({ ok: true, revision: next.revision })
@@ -685,7 +685,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
       expectedRevision: next.revision,
       patch: { budgets: { ...next.config.budgets, maxTurns: 321 } },
       cause: 'panel-edit',
-    }, `/api/dsh-tavern/novels/${created.novelId}`, 'PATCH'), budgetPatch)
+    }, `/api/dsh-soulmojito/novels/${created.novelId}`, 'PATCH'), budgetPatch)
     expect(budgetPatch.statusCode).toBe(200)
     const budgeted = (await novels.getNovel(created.novelId))!
     expect(jsonBody(budgetPatch)).toEqual({ ok: true, revision: budgeted.revision })
@@ -697,7 +697,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
       expectedRevision: budgeted.revision,
       patch: { budgets: { ...budgeted.config.budgets, maxTurns: 0 } },
       cause: 'panel-edit',
-    }, `/api/dsh-tavern/novels/${created.novelId}`, 'PATCH'), badBudget)
+    }, `/api/dsh-soulmojito/novels/${created.novelId}`, 'PATCH'), badBudget)
     expect(badBudget.statusCode).toBe(400)
     expect(jsonBody(badBudget)).toMatchObject({ ok: false, code: 'NOVEL_CONFIG' })
   })
@@ -746,7 +746,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     }))
 
     const res = makeResponse()
-    await apiHandler(makeRequest(novelConfig({ title: '写手子代理小说', writerMode: 'subagent' }), '/api/dsh-tavern/novels'), res)
+    await apiHandler(makeRequest(novelConfig({ title: '写手子代理小说', writerMode: 'subagent' }), '/api/dsh-soulmojito/novels'), res)
     expect(res.statusCode).toBe(200)
     const body = jsonBody(res)
     expect(body).toMatchObject({ ok: true, novel: { title: '写手子代理小说', status: 'active', phase: 'outlining' } })
@@ -757,7 +757,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     // normalization is the store layer's contract (novel.ts) and is asserted
     // in the novel-store spec, not re-proven here.
     const detail = makeResponse()
-    await apiHandler(makeGetRequest(`/api/dsh-tavern/novels/${body.novel.novelId as string}`), detail)
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${body.novel.novelId as string}`), detail)
     expect(jsonBody(detail).novel.config).toMatchObject({ writerMode: 'subagent' })
   })
 
@@ -769,7 +769,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     expect((await store.getState()).sessionBindings['novel-session-delete']).toMatchObject({ novelId: created.novelId })
 
     const res = makeResponse()
-    await apiHandler({ ...makeGetRequest(`/api/dsh-tavern/novels/${created.novelId}`), method: 'DELETE' }, res)
+    await apiHandler({ ...makeGetRequest(`/api/dsh-soulmojito/novels/${created.novelId}`), method: 'DELETE' }, res)
     expect(res.statusCode).toBe(200)
     expect(jsonBody(res)).toEqual({ ok: true })
 
@@ -779,7 +779,7 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     expect(ids).not.toContain(created.novelId)
 
     const again = makeResponse()
-    await apiHandler({ ...makeGetRequest(`/api/dsh-tavern/novels/${created.novelId}`), method: 'DELETE' }, again)
+    await apiHandler({ ...makeGetRequest(`/api/dsh-soulmojito/novels/${created.novelId}`), method: 'DELETE' }, again)
     expect(again.statusCode).toBe(200)
     expect(jsonBody(again)).toEqual({ ok: true })
   })

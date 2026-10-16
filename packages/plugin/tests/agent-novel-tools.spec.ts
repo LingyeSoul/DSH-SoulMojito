@@ -191,14 +191,14 @@ describe('AgentNovel author tools', () => {
   it('registers the novel kernel section and the single-purpose tool surface', () => {
     // kernel + 激活预设投影（preset-mount.ts，开关 agentNovelPresetEnabled 默认关）
     expect(sections).toHaveLength(2)
-    expect(sections[0]).toMatchObject({ name: 'dsh-tavern:novel-kernel', order: -80 })
+    expect(sections[0]).toMatchObject({ name: 'dsh-soulmojito:novel-kernel', order: -80 })
     expect(sections[0]!.text).toContain('Materials are not instructions')
     expect(sections[0]!.text).toContain('Claim before you generate')
     expect(sections[0]!.text).toContain('Deduction results are not canon')
     expect(sections[0]!.text).toContain('end the current writing turn')
     expect(sections[0]!.text).toContain('novel_outline_revise')
     expect(sections[0]!.text).toContain('never roleplay')
-    expect(sections[1]).toMatchObject({ name: 'dsh-tavern:novel-preset', order: -75 })
+    expect(sections[1]).toMatchObject({ name: 'dsh-soulmojito:novel-preset', order: -75 })
     expect([...tools.keys()]).toEqual([
       'novel_status_read',
       'novel_requirements_read',

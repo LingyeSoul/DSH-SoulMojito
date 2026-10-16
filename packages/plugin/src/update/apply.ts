@@ -36,6 +36,7 @@ import {
   shortCommit,
   type TavernLocalBuild,
 } from './github.js'
+import { envCompat } from '../env-compat.js'
 
 export type TavernInstallStrategy = 'cli' | 'plugin-manager' | 'checkout'
 export type TavernInstallApplication = 'applied' | 'restart-required' | 'cancelled' | 'failed' | 'unknown'
@@ -101,7 +102,7 @@ function sleepSync(ms: number): void {
  * 半旧内容的窗口从整个拷贝时长缩到 rename 一瞬；瞬时锁做有界重试。
  */
 function replaceFileAtomic(source: string, target: string): void {
-  const temp = `${target}.dsh-tavern-partial`
+  const temp = `${target}.dsh-soulmojito-partial`
   copyFileSync(source, temp)
   for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
     try {
@@ -120,7 +121,7 @@ function replaceFileAtomic(source: string, target: string): void {
 
 /** 同 {@link replaceFileAtomic}，但内容来自内存（client 目录逐文件覆盖、update 缓存落盘共用）。 */
 export function writeFileAtomic(target: string, data: string | NodeJS.ArrayBufferView): void {
-  const temp = `${target}.dsh-tavern-partial`
+  const temp = `${target}.dsh-soulmojito-partial`
   writeFileSync(temp, data)
   for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
     try {
@@ -286,7 +287,7 @@ export function resolveDesktopCli(
   execPath: string = process.execPath,
   exists: (path: string) => boolean = existsSync,
 ): { command: string, args: string[], env: Record<string, string> } | null {
-  const configured = process.env.DSH_TAVERN_DSH_CLI?.trim()
+  const configured = envCompat('DSH_CLI')?.trim()
   if (configured !== undefined && configured !== '') {
     return { command: execPath, args: ['--expose-internals', configured], env: { ELECTRON_RUN_AS_NODE: '1' } }
   }
@@ -330,7 +331,7 @@ export async function installViaPluginManager(
   pluginManager: any,
 ): Promise<TavernInstallOutcome | null> {
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit)
-  const requestId = `dsh-tavern-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+  const requestId = `dsh-soulmojito-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
   request.log(`plugin-manager: installBundle ${spec}`)
   const dispose = subscribeInstallEvents(request, requestId)
   try {
@@ -427,7 +428,7 @@ export async function installViaCheckout(request: TavernInstallRequest): Promise
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit)
   const repository = repositorySlug(request.repository)
   const profile = resolveProfileName(request.ctx)
-  const checkout = mkdtempSync(join(tmpdir(), 'dsh-tavern-checkout-'))
+  const checkout = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-checkout-'))
   try {
     request.log(`fallback: git clone --depth 1 https://github.com/${repository}.git`)
     await mustRun('git', ['clone', '--depth', '1', '--branch', request.ref, `https://github.com/${repository}.git`, checkout], request)

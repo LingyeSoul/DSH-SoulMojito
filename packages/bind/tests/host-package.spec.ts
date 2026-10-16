@@ -29,7 +29,7 @@ describe('importHostPackage', () => {
   // 2026-10-08 真机故障：nvm 的全局 bin 是软链（`dsh -> ../lib/node_modules/
   // @deepseek-ai/dsh/lib/bin.js`），process.argv[1] 因此指向软链而不是真实
   // bin.js，锚解析落空、bare import 又因 link: 挂载点在宿主 profile 之外而
-  // 失败，`dsh-tavern/compaction` 整体 import 失败（宿主 compaction 服务同时
+  // 失败，`dsh-soulmojito/compaction` 整体 import 失败（宿主 compaction 服务同时
   // 消失、主插件永久 pending）。锚必须解引用软链后重试。
   it.skipIf(process.platform === 'win32')(
     'resolves through a symlinked launcher anchor, like an nvm or pnpm global bin shim',
@@ -38,13 +38,13 @@ describe('importHostPackage', () => {
       try {
         // 宿主安装树：真实 bin.js 的同级与上级 node_modules 是解析面。
         const hostLib = join(root, 'host', 'lib')
-        const hostPackage = join(root, 'host', 'node_modules', '@dsh-tavern-test', 'hostpkg')
+        const hostPackage = join(root, 'host', 'node_modules', '@dsh-soulmojito-test', 'hostpkg')
         mkdirSync(hostLib, { recursive: true })
         mkdirSync(hostPackage, { recursive: true })
         writeFileSync(join(hostLib, 'bin.js'), 'export {}\n')
         writeFileSync(
           join(hostPackage, 'package.json'),
-          JSON.stringify({ name: '@dsh-tavern-test/hostpkg', type: 'module', main: 'index.js' }),
+          JSON.stringify({ name: '@dsh-soulmojito-test/hostpkg', type: 'module', main: 'index.js' }),
         )
         writeFileSync(join(hostPackage, 'index.js'), "export const marker = 'host-package-reached'\n")
 
@@ -52,7 +52,7 @@ describe('importHostPackage', () => {
         mkdirSync(shimDir)
         symlinkSync(join(hostLib, 'bin.js'), join(shimDir, 'dsh'))
 
-        const mod = await importHostPackage<{ marker?: string }>('@dsh-tavern-test/hostpkg', join(shimDir, 'dsh'))
+        const mod = await importHostPackage<{ marker?: string }>('@dsh-soulmojito-test/hostpkg', join(shimDir, 'dsh'))
         expect(mod.marker).toBe('host-package-reached')
       } finally {
         rmSync(root, { recursive: true, force: true })

@@ -106,7 +106,7 @@ describe('workbench/novel preset projection mounts', () => {
     novelSection!.text(agentId === undefined ? undefined : { agent: { id: agentId } })
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-preset-mount-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-preset-mount-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.putPreset('Mount Preset', structuredClone(PRESET))
@@ -148,7 +148,7 @@ describe('workbench/novel preset projection mounts', () => {
     applyWorkbench({
       systemPrompt: {
         section: (def: { name: string; order: number; text: unknown }) => {
-          if (def.name === 'dsh-tavern:card-workbench-preset') {
+          if (def.name === 'dsh-soulmojito:card-workbench-preset') {
             workbenchSection = def as typeof workbenchSection
           }
         },
@@ -159,7 +159,7 @@ describe('workbench/novel preset projection mounts', () => {
     applyNovel({
       systemPrompt: {
         section: (def: { name: string; order: number; text: unknown }) => {
-          if (def.name === 'dsh-tavern:novel-preset') {
+          if (def.name === 'dsh-soulmojito:novel-preset') {
             novelSection = def as typeof novelSection
           }
         },
@@ -198,7 +198,7 @@ describe('workbench/novel preset projection mounts', () => {
 
   it('projects the active preset once the workbench switch is on, with macros expanded', async () => {
     const res = makeResponse()
-    await apiHandler(makeRequest({ cardWorkbenchPresetEnabled: true }, '/api/dsh-tavern/state'), res)
+    await apiHandler(makeRequest({ cardWorkbenchPresetEnabled: true }, '/api/dsh-soulmojito/state'), res)
     expect(res.statusCode).toBe(200)
     await vi.waitFor(() => {
       expect(workbenchTextOf(WORKBENCH_AGENT)).toContain('Write Mount Character\'s next reply addressing Rin.')
@@ -219,7 +219,7 @@ describe('workbench/novel preset projection mounts', () => {
 
   it('projects the active preset for the novel author under the follow header', async () => {
     const res = makeResponse()
-    await apiHandler(makeRequest({ agentNovelPresetEnabled: true }, '/api/dsh-tavern/state'), res)
+    await apiHandler(makeRequest({ agentNovelPresetEnabled: true }, '/api/dsh-soulmojito/state'), res)
     expect(res.statusCode).toBe(200)
     await vi.waitFor(() => {
       expect(novelTextOf(NOVEL_AGENT)).toContain('next reply addressing Rin.')
@@ -242,10 +242,10 @@ describe('workbench/novel preset projection mounts', () => {
       prompt_order: [{ character_id: 100001, order: [{ identifier: 'clock', enabled: true }] }],
     }
     const put = makeResponse()
-    await apiHandler(makeRequest({ name: 'Mount Clock Preset', data: CLOCKED }, `/api/dsh-tavern/preset/${encodeURIComponent('Mount Clock Preset')}`, 'PUT'), put)
+    await apiHandler(makeRequest({ name: 'Mount Clock Preset', data: CLOCKED }, `/api/dsh-soulmojito/preset/${encodeURIComponent('Mount Clock Preset')}`, 'PUT'), put)
     expect(put.statusCode).toBe(200)
     const on = makeResponse()
-    await apiHandler(makeRequest({ activePreset: 'Mount Clock Preset' }, '/api/dsh-tavern/state'), on)
+    await apiHandler(makeRequest({ activePreset: 'Mount Clock Preset' }, '/api/dsh-soulmojito/state'), on)
     expect(on.statusCode).toBe(200)
     await vi.waitFor(() => {
       expect(workbenchTextOf(WORKBENCH_AGENT)).toContain('Scene time')
@@ -255,12 +255,12 @@ describe('workbench/novel preset projection mounts', () => {
     // 若宏未按冻结记录求值，秒级时间戳必然换值——旧实现在此确定性变红。
     await new Promise((resolve) => setTimeout(resolve, 1200))
     const rewrite = makeResponse()
-    await apiHandler(makeRequest({ name: 'Mount Clock Preset', data: structuredClone(CLOCKED) }, `/api/dsh-tavern/preset/${encodeURIComponent('Mount Clock Preset')}`, 'PUT'), rewrite)
+    await apiHandler(makeRequest({ name: 'Mount Clock Preset', data: structuredClone(CLOCKED) }, `/api/dsh-soulmojito/preset/${encodeURIComponent('Mount Clock Preset')}`, 'PUT'), rewrite)
     expect(rewrite.statusCode).toBe(200)
     expect(workbenchTextOf(WORKBENCH_AGENT)).toBe(first)
     // 收尾：恢复原激活预设，供后续回落/关断用例。
     const back = makeResponse()
-    await apiHandler(makeRequest({ activePreset: 'Mount Preset' }, '/api/dsh-tavern/state'), back)
+    await apiHandler(makeRequest({ activePreset: 'Mount Preset' }, '/api/dsh-soulmojito/state'), back)
     expect(back.statusCode).toBe(200)
     await vi.waitFor(() => {
       expect(workbenchTextOf(WORKBENCH_AGENT)).toContain('Terse prose only.')
@@ -269,7 +269,7 @@ describe('workbench/novel preset projection mounts', () => {
 
   it('does not fall back to the built-in RP preset when no preset is active', async () => {
     const res = makeResponse()
-    await apiHandler(makeRequest({ activePreset: null }, '/api/dsh-tavern/state'), res)
+    await apiHandler(makeRequest({ activePreset: null }, '/api/dsh-soulmojito/state'), res)
     expect(res.statusCode).toBe(200)
     await vi.waitFor(() => {
       expect(novelTextOf(NOVEL_AGENT)).toBe('')
@@ -277,7 +277,7 @@ describe('workbench/novel preset projection mounts', () => {
     })
     // 恢复激活预设供后续用例
     const back = makeResponse()
-    await apiHandler(makeRequest({ activePreset: 'Mount Preset' }, '/api/dsh-tavern/state'), back)
+    await apiHandler(makeRequest({ activePreset: 'Mount Preset' }, '/api/dsh-soulmojito/state'), back)
     expect(back.statusCode).toBe(200)
     await vi.waitFor(() => {
       expect(novelTextOf(NOVEL_AGENT)).toContain('Terse prose only.')
@@ -286,7 +286,7 @@ describe('workbench/novel preset projection mounts', () => {
 
   it('clears the projection through the switch-off write-through', async () => {
     const res = makeResponse()
-    await apiHandler(makeRequest({ cardWorkbenchPresetEnabled: false, agentNovelPresetEnabled: false }, '/api/dsh-tavern/state'), res)
+    await apiHandler(makeRequest({ cardWorkbenchPresetEnabled: false, agentNovelPresetEnabled: false }, '/api/dsh-soulmojito/state'), res)
     expect(res.statusCode).toBe(200)
     await vi.waitFor(() => {
       expect(workbenchTextOf(WORKBENCH_AGENT)).toBe('')

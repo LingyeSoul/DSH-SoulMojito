@@ -340,7 +340,7 @@ describe('fork chat projection replay', () => {
           data: {
             id: 'marker', role: 'user',
             content: [{ type: 'text', text: `Tavern roleplay chat for ${CHARACTER}.` }],
-            source: { kind: 'plugin:dsh-tavern', form: 'notice', summary: `Tavern: ${CHARACTER}` },
+            source: { kind: 'plugin:dsh-soulmojito', form: 'notice', summary: `Tavern: ${CHARACTER}` },
           },
         },
         {

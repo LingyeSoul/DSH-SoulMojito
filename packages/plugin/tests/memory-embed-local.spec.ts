@@ -423,8 +423,8 @@ describe('inferLocalModelSettings', () => {
 // 整组依赖「仓库未装运行时」的实况（装了会走 alreadyInstalled 快速路径）。
 describe.skipIf(isLocalEmbedRuntimeInstalled())('installLocalEmbedRuntime（面板一键安装）', () => {
   it('localRuntimeProfileRoot：node_modules 安装形态识别 profile 根；link:/源码挂载返回 undefined', () => {
-    expect(localRuntimeProfileRoot('C:/dsh/profiles/web/node_modules/dsh-tavern')).toBe('C:/dsh/profiles/web')
-    expect(localRuntimeProfileRoot('E:/WorkProject/dsh-tavern/packages/plugin')).toBeUndefined()
+    expect(localRuntimeProfileRoot('C:/dsh/profiles/web/node_modules/dsh-soulmojito')).toBe('C:/dsh/profiles/web')
+    expect(localRuntimeProfileRoot('E:/WorkProject/dsh-soulmojito/packages/plugin')).toBeUndefined()
   })
 
   it('link:/源码挂载拒绝自动安装（防写错目录——2026-10-12 实况用户在源码仓库跑过 pnpm add）', async () => {
@@ -440,7 +440,7 @@ describe.skipIf(isLocalEmbedRuntimeInstalled())('installLocalEmbedRuntime（面�
   it('pnpm 在 profile 根执行、常量参数；非零退出码时报退出码并回传输出尾段（8000 截尾）', async () => {
     const runs: Array<{ command: string; args: readonly string[]; options: { cwd: string; timeoutMs: number } }> = []
     const outcome = await installLocalEmbedRuntime({
-      pluginDir: 'C:/dsh/profiles/web/node_modules/dsh-tavern',
+      pluginDir: 'C:/dsh/profiles/web/node_modules/dsh-soulmojito',
       spawnRunner: async (command, args, options) => {
         runs.push({ command, args, options })
         return { code: 1, output: 'x'.repeat(9000) }
@@ -457,7 +457,7 @@ describe.skipIf(isLocalEmbedRuntimeInstalled())('installLocalEmbedRuntime（面�
 
   it('spawn ENOENT：报错附 PATH 提示', async () => {
     const outcome = await installLocalEmbedRuntime({
-      pluginDir: 'C:/dsh/profiles/web/node_modules/dsh-tavern',
+      pluginDir: 'C:/dsh/profiles/web/node_modules/dsh-soulmojito',
       spawnRunner: async () => { throw new Error('spawn pnpm ENOENT') },
     })
     expect(outcome.ok).toBe(false)
@@ -466,7 +466,7 @@ describe.skipIf(isLocalEmbedRuntimeInstalled())('installLocalEmbedRuntime（面�
 
   it('pnpm 成功但运行时仍不可解析：如实报「重启后重试探针」而不是假成功', async () => {
     const outcome = await installLocalEmbedRuntime({
-      pluginDir: 'C:/dsh/profiles/web/node_modules/dsh-tavern',
+      pluginDir: 'C:/dsh/profiles/web/node_modules/dsh-soulmojito',
       spawnRunner: async () => ({ code: 0, output: 'done' }),
     })
     expect(outcome.ok).toBe(false)

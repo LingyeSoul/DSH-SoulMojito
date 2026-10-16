@@ -1,7 +1,7 @@
 /**
  * Prompt Template 生成链路接线（提案 0008，ST-Prompt-Template 功能复刻）。
  *
- * 职责：把 `@dsh-tavern/template` 运行时挂进 ST 兼容生成（runGeneration）——
+ * 职责：把 `@dsh-soulmojito/template` 运行时挂进 ST 兼容生成（runGeneration）——
  * 激活结果分区（特殊条目剔除）、InitialVariables、装配前文本预渲染（EJS → 宏）、
  * 装配后 GENERATE/@INJECT 消息注入、输出渲染与变量持久化。
  * 开关关闭时调用方跳过本模块（直通链路不变）。

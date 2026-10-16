@@ -7,8 +7,8 @@
  *   记审计 + 状态错误位、跳过；宿主与其余 Mod 照常（坏世界书 JSON 不 500
  *   bootstrap 同教义）。
  * - **默认关**：state.json `modsEnabled`（全局）与 `mods.enabled.<id>`（逐 Mod）
- *   双默认 false，两层同开才装载；`DSH_TAVERN_DISABLE_MODS` 环境变量是第三层
- *   硬关（每次 refresh/分派实时读取，对齐 DSH_TAVERN_DISABLE_UPDATE_CHECK）。
+ *   双默认 false，两层同开才装载；`DSH_SOULMOJITO_DISABLE_MODS` 环境变量是第三层
+ *   硬关（每次 refresh/分派实时读取，对齐 DSH_SOULMOJITO_DISABLE_UPDATE_CHECK）。
  * - **目录白名单**：只扫 `<tavern>/mods/` 的直接子目录；mod id 必须等于目录名，
  *   HTTP 子路由的 id/path 过 manifest/http 两层白名单后才进文件系统或路由表。
  * - **适配层注入**（TemplateHost 模式）：mod 拿到的 api 是白名单对象，不透传
@@ -24,6 +24,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { onGuidesChanged } from '../guides.js'
 import { resolveGamesService } from '../games/handle.js'
+import { envCompat } from '../env-compat.js'
 import { generationHooks, type GenerationHookPhase } from '../generation-hooks.js'
 import { builtinMacroNames } from '../../../tavern-macros/src/index.js'
 import { hostMacroSnapshot, registerHostMacro } from '../../../tavern-macros/src/index.js'
@@ -87,7 +88,7 @@ function declaredSurfacesOf(manifest: ModManifest): ModSurfacesView {
 }
 
 export interface ModHostSnapshot {
-  /** false = 环境变量硬关（DSH_TAVERN_DISABLE_MODS）。 */
+  /** false = 环境变量硬关（DSH_SOULMOJITO_DISABLE_MODS）。 */
   available: boolean
   reason: string
   globalEnabled: boolean
@@ -111,15 +112,16 @@ export interface ModHostOptions {
   ctx?: ModHostContext
   /** tavern 数据根（`$DSH_HOME/tavern`）。Mod 目录是 `<root>/mods/`。 */
   root: string
-  /** 宿主版本（engines.dsh-tavern 范围校验的左值）。 */
+  /** 宿主版本（engines.dsh-soulmojito 范围校验的左值）。 */
   hostVersion: string
   /** TavernStore 访问器（state.json 开关读写与资产快照）。 */
   dbProvider: () => Promise<TavernStore>
 }
 
-/** 第三层开关：DSH_TAVERN_DISABLE_MODS 非空（非 0/false）即硬关。 */
+/** 第三层开关：DSH_SOULMOJITO_DISABLE_MODS 非空（非 0/false）即硬关；
+ * 旧前缀 DSH_TAVERN_DISABLE_MODS 双读（2026-10-16 改名兼容）。 */
 export function modsDisabledByEnv(): boolean {
-  const disabled = process.env.DSH_TAVERN_DISABLE_MODS?.trim()
+  const disabled = envCompat('DISABLE_MODS')?.trim()
   return disabled !== undefined && disabled !== '' && disabled !== '0' && disabled !== 'false'
 }
 
@@ -208,7 +210,7 @@ export class ModHost {
     // api.hooks.on 注册时传入（mod id 字符串）；非 mod 注册方只记日志。
     host.offHookDegrations = generationHooks.onDegradation((degradation) => {
       const detail = `${degradation.phase} ${degradation.reason}${degradation.detail ? `: ${degradation.detail}` : ''}`
-      host.logger?.warn?.(`dsh-tavern: generation hook degraded (${detail})`)
+      host.logger?.warn?.(`dsh-soulmojito: generation hook degraded (${detail})`)
       if (typeof degradation.owner === 'string') {
         void host.audit.record(degradation.owner, 'hook-degradation', detail)
       }
@@ -216,7 +218,7 @@ export class ModHost {
     // 宿主卸载时清掉所有 mod 定时器（ctx.effect 同构；拒绝 effect 的宿主只失去
     // 这一层兜底，disposeAll 仍然可用）。
     try {
-      options.ctx?.effect?.(() => () => { host.clearAllTimers() }, 'dsh-tavern: mod timers')
+      options.ctx?.effect?.(() => () => { host.clearAllTimers() }, 'dsh-soulmojito: mod timers')
     } catch {
       // 宿主拒绝晚注册的 effect：不影响装载。
     }
@@ -277,7 +279,7 @@ export class ModHost {
       return result
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause)
-      this.logger?.warn?.(`dsh-tavern: mod install from '${url}' failed: ${message}`)
+      this.logger?.warn?.(`dsh-soulmojito: mod install from '${url}' failed: ${message}`)
       await this.audit.record('*', 'install-error', message)
       throw cause
     }
@@ -318,7 +320,7 @@ export class ModHost {
       })
     }
     mods.sort((a, b) => a.loadingOrder - b.loadingOrder || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    return { available, reason: available ? '' : 'DSH_TAVERN_DISABLE_MODS is set', globalEnabled: this.globalEnabled, mods }
+    return { available, reason: available ? '' : 'DSH_SOULMOJITO_DISABLE_MODS is set', globalEnabled: this.globalEnabled, mods }
   }
 
   /**
@@ -355,7 +357,7 @@ export class ModHost {
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause)
       await this.audit.record(id, 'http-error', message)
-      this.logger?.warn?.(`dsh-tavern: [mod:${id}] http route ${method} ${subpath} failed: ${message}`)
+      this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] http route ${method} ${subpath} failed: ${message}`)
       if (!res.writableEnded) {
         res.statusCode = 500
         res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -387,7 +389,7 @@ export class ModHost {
       await handler({ name }, context)
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause)
-      this.logger?.warn?.(`dsh-tavern: [mod:${id}] button '${name}' handler failed: ${message}`)
+      this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] button '${name}' handler failed: ${message}`)
       await this.audit.record(id, 'button-error', `${name}: ${message}`)
       throw cause
     }
@@ -458,7 +460,7 @@ export class ModHost {
         continue
       }
       const manifest = check.manifest
-      const engineRange = manifest.engines?.dshTavern
+      const engineRange = manifest.engines?.dshSoulMojito
       if (engineRange !== undefined) {
         const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange)
         if (!verdict.ok) {
@@ -530,7 +532,7 @@ export class ModHost {
       const message = cause instanceof Error ? cause.message : String(cause)
       await this.runDisposers(id, record)
       this.loadErrors.set(id, message)
-      this.logger?.warn?.(`dsh-tavern: mod '${id}' failed to ${cacheBust ? 'reload' : 'load'}: ${message}`)
+      this.logger?.warn?.(`dsh-soulmojito: mod '${id}' failed to ${cacheBust ? 'reload' : 'load'}: ${message}`)
       await this.audit.record(id, 'load-error', message)
       return false
     }
@@ -554,7 +556,7 @@ export class ModHost {
         await dispose()
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause)
-        this.logger?.warn?.(`dsh-tavern: [mod:${id}] dispose failed: ${message}`)
+        this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] dispose failed: ${message}`)
         await this.audit.record(id, 'dispose-error', message)
       }
     }
@@ -566,7 +568,7 @@ export class ModHost {
         off()
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause)
-        this.logger?.warn?.(`dsh-tavern: [mod:${id}] capability unregister failed: ${message}`)
+        this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] capability unregister failed: ${message}`)
         await this.audit.record(id, 'dispose-error', message)
       }
     }
@@ -587,9 +589,9 @@ export class ModHost {
   private createApi(record: LoadedMod): Record<string, unknown> {
     const id = record.manifest.id
     const logger = {
-      info: (...args: unknown[]) => this.logger?.info?.(`dsh-tavern: [mod:${id}]`, ...args),
-      warn: (...args: unknown[]) => this.logger?.warn?.(`dsh-tavern: [mod:${id}]`, ...args),
-      error: (...args: unknown[]) => this.logger?.error?.(`dsh-tavern: [mod:${id}]`, ...args),
+      info: (...args: unknown[]) => this.logger?.info?.(`dsh-soulmojito: [mod:${id}]`, ...args),
+      warn: (...args: unknown[]) => this.logger?.warn?.(`dsh-soulmojito: [mod:${id}]`, ...args),
+      error: (...args: unknown[]) => this.logger?.error?.(`dsh-soulmojito: [mod:${id}]`, ...args),
     }
     const storage = record.storage
     // 观察分支：mod 侧 `void api.storage.set(...)` 丢弃 promise 时，写失败也不
@@ -597,7 +599,7 @@ export class ModHost {
     const observed = <T>(operation: Promise<T>, label: string, event: ModAuditEvent): Promise<T> => {
       operation.catch((cause) => {
         const message = cause instanceof Error ? cause.message : String(cause)
-        this.logger?.warn?.(`dsh-tavern: [mod:${id}] ${label} failed: ${message}`)
+        this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] ${label} failed: ${message}`)
         void this.audit.record(id, event, message)
       })
       return operation
@@ -635,11 +637,11 @@ export class ModHost {
               if (kind === 'stream-delta' && auditedStreamEpoch === epoch) return
               if (kind === 'stream-delta') {
                 auditedStreamEpoch = epoch
-                this.logger?.warn?.(`dsh-tavern: [mod:${id}] stream-delta handler failed: ${message} (further errors for this generation are silenced)`)
+                this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] stream-delta handler failed: ${message} (further errors for this generation are silenced)`)
                 await this.audit.record(id, 'event-error', `stream-delta: ${message} (further stream-delta errors for this generation are silenced)`)
                 return
               }
-              this.logger?.warn?.(`dsh-tavern: [mod:${id}] ${kind} handler failed: ${message}`)
+              this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] ${kind} handler failed: ${message}`)
               await this.audit.record(id, 'event-error', message)
             }
           })
@@ -671,7 +673,7 @@ export class ModHost {
                 await handler()
               } catch (cause) {
                 const message = cause instanceof Error ? cause.message : String(cause)
-                this.logger?.warn?.(`dsh-tavern: [mod:${id}] timer handler failed: ${message}`)
+                this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] timer handler failed: ${message}`)
                 void this.audit.record(id, 'timer-error', message)
               }
             })()
@@ -786,7 +788,7 @@ export class ModHost {
               if (!failureAudited) {
                 failureAudited = true
                 const message = cause instanceof Error ? cause.message : String(cause)
-                this.logger?.warn?.(`dsh-tavern: [mod:${id}] macro '${macroName}' failed: ${message}`)
+                this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] macro '${macroName}' failed: ${message}`)
                 void this.audit.record(id, 'macro-error', `${macroName}: ${message}`)
               }
               return null

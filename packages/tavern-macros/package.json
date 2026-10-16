@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-tavern/macros",
+  "name": "@dsh-soulmojito/macros",
   "version": "0.1.0",
   "description": "SillyTavern-compatible macro engine: {{char}}, {{user}}, {{random}}, {{pick}}, {{roll}}, time/date, getvar/setvar family, extensible registry.",
   "license": "GPL-3.0",

@@ -14,7 +14,7 @@ import {
 // 脚本 + 注入升级版高度上报器（rAF 合帧 / 双观察 / 尾随兜底）。
 // client/main.js 的 buildFrontendDocument 是同构同款，但 client half 是独立拼接的
 // IIFE、无模块出口可 import——client 侧由 gates frontend-runtime 的
-// '--dt-viewport-height' / 'dsh-tavern:viewport' marker 对账（scripts/gates/run.mjs）。
+// '--dt-viewport-height' / 'dsh-soulmojito:viewport' marker 对账（scripts/gates/run.mjs）。
 
 const VAR_REF = 'var(--dt-viewport-height, 100vh)'
 
@@ -71,8 +71,8 @@ describe('renderModHtmlDocument viewport integration', () => {
     expect(out).toContain('<head><meta http-equiv="Content-Security-Policy"')
     expect(out).toContain('--dt-viewport-height')
     expect(out).toContain(MOD_VIEWPORT_MESSAGE)
-    expect(out).toContain('dsh-tavern:frontend-height')
-    expect(out).toContain('dsh-tavern:mod-log')
+    expect(out).toContain('dsh-soulmojito:frontend-height')
+    expect(out).toContain('dsh-soulmojito:mod-log')
   })
 
   it('rewrites in the headless and bare-fragment skeletons too', () => {
@@ -83,7 +83,7 @@ describe('renderModHtmlDocument viewport integration', () => {
       const out = renderModHtmlDocument(doc, "default-src 'none'")
       expect(out).toContain(`a{height:${VAR_REF}}`)
       expect(out).toContain('--dt-viewport-height')
-      expect(out).toContain('dsh-tavern:frontend-height')
+      expect(out).toContain('dsh-soulmojito:frontend-height')
     }
   })
 })
@@ -124,6 +124,6 @@ describe('modHeightReporterScript (robustness upgrade)', () => {
     expect(script).toContain("addEventListener('resize', measure)")
     expect(script).toContain("new URLSearchParams(location.search).get('token')")
     expect(script).toContain("if (token === '') return;")
-    expect(script).toContain("'dsh-tavern:frontend-height'")
+    expect(script).toContain("'dsh-soulmojito:frontend-height'")
   })
 })

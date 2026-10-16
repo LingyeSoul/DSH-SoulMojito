@@ -1,8 +1,8 @@
 /**
  * GitHub 版本发现的纯逻辑层：URL 构造、响应解析、本地与远端构建的比较。
  *
- * 为什么不用 GitHub Releases：LingyeSoul/dsh-tavern 不发 release、不打 tag，
- * 桌面版 profile 的依赖是 git spec（`git+https://github.com/LingyeSoul/dsh-tavern.git`，
+ * 为什么不用 GitHub Releases：LingyeSoul/DSH-SoulMojito 不发 release、不打 tag，
+ * 桌面版 profile 的依赖是 git spec（`git+https://github.com/LingyeSoul/DSH-SoulMojito.git`，
  * lockfile 把它解析成 `<commit>&path:/packages/plugin`）。所以「新版本」只能以
  * main 分支最新 commit + `packages/plugin/package.json` 的 version 为准。
  *
@@ -10,7 +10,7 @@
  * 比较规则、压缩字段和降级来源。
  */
 
-export const UPDATE_REPOSITORY = 'LingyeSoul/dsh-tavern'
+export const UPDATE_REPOSITORY = 'LingyeSoul/DSH-SoulMojito'
 export const UPDATE_REF = 'main'
 /** 插件包在 monorepo 中的子目录（pnpm git spec 的 `path:` 段）。 */
 export const UPDATE_PLUGIN_PATH = '/packages/plugin'

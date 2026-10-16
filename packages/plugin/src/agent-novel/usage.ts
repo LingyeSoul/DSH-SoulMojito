@@ -12,7 +12,7 @@
 // 被多个 bundle 各自实例化，模块级常量会分裂成多份累计器；Symbol.for 跨副本
 // 取同一 symbol，所有 bundle 共享同一底层 Map。
 
-const USAGE_SAMPLER_KEY = Symbol.for('dsh-tavern:novel-usage-sampler')
+const USAGE_SAMPLER_KEY = Symbol.for('dsh-soulmojito:novel-usage-sampler')
 type UsageSamplerTable = Map<string, number>
 const samplerTable: UsageSamplerTable = (globalThis as Record<symbol, UsageSamplerTable | undefined>)[USAGE_SAMPLER_KEY] ??= new Map()
 
@@ -41,7 +41,7 @@ export function drainToolOutputBytes(): Record<string, number> {
 // （0007 §6.2/§9 P1）。不污染正常路径：覆盖写 + drain 后即空，正常工具调用
 // 只是多一次属性赋值，没有任何行为分支读取它。globalThis 锚定同学科于上方
 // 累计器：双 bundle 共享同一槽，否则探针 spawn 与工具体可能各持一份。
-const PROBE_AGENT_ID_KEY = Symbol.for('dsh-tavern:novel-writer-probe-agent-id')
+const PROBE_AGENT_ID_KEY = Symbol.for('dsh-soulmojito:novel-writer-probe-agent-id')
 interface ProbeAgentSlot { id?: string }
 const probeAgentSlot: ProbeAgentSlot = (globalThis as Record<symbol, ProbeAgentSlot | undefined>)[PROBE_AGENT_ID_KEY] ??= {}
 
@@ -76,7 +76,7 @@ export function takeProbeAgentId(): string | null {
 // 合并：一个 turn 多次委托时保留最后一次成功委托的 outputChars 与最新
 // usage——审计性质，与上方按工具名累计器同款局限（flush 时归属当前小说）。
 // globalThis 锚定同学科于上方累计器：双 bundle 必须共享同一槽。
-const WRITER_RUN_USAGE_KEY = Symbol.for('dsh-tavern:novel-writer-run-usage')
+const WRITER_RUN_USAGE_KEY = Symbol.for('dsh-soulmojito:novel-writer-run-usage')
 interface WriterRunUsageSlot { outputChars: number | null; usage: Record<string, number> | null }
 const writerRunUsageSlot: WriterRunUsageSlot = (globalThis as Record<symbol, WriterRunUsageSlot | undefined>)[WRITER_RUN_USAGE_KEY] ??= { outputChars: null, usage: null }
 

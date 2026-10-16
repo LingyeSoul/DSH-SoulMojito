@@ -56,7 +56,7 @@ import {
   normalizeScriptProgress,
 } from '../../../tavern-store/src/index.js'
 
-export const name = 'dsh-tavern/agent'
+export const name = 'dsh-soulmojito/agent'
 export const inject = ['systemPrompt', 'tools']
 
 const DEFAULT_USER = 'User'
@@ -91,7 +91,7 @@ let variableStorePromise: Promise<VariableStore> | undefined
 
 export function apply(ctx: AgentContextLike): void {
   ctx.systemPrompt?.section?.({
-    name: 'dsh-tavern:agent-kernel',
+    name: 'dsh-soulmojito:agent-kernel',
     order: -80,
     // 守卫：内核为静态文本，但一旦有人写入 {{...}}（宿主变量语法），装配
     // 会直接抛错中止运行——过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
@@ -105,7 +105,7 @@ export function apply(ctx: AgentContextLike): void {
   // 动态宏按绑定的冻结记录求值（presetFreeze），重启经 preheat 预热——两条路
   // 都是防 system 头突变烧掉前缀缓存（决策 2026-10-09-agent-preset-cache-stability）。
   ctx.systemPrompt?.section?.({
-    name: 'dsh-tavern:agent-preset',
+    name: 'dsh-soulmojito:agent-preset',
     order: -75,
     text: (assembly) => agentPresetText(assembly?.agent?.id),
   })
@@ -119,21 +119,21 @@ export function apply(ctx: AgentContextLike): void {
   // apply() 期直接让整个模块挂载失败（0.2.0-rc.2 实测），所以这里不做任何
   // ctx.agent 探测——身份通道与 dsh-user-approval / dsh-sandbox-policy 一致。
   ctx.systemPrompt?.context?.({
-    name: 'dsh-tavern:agent-facts',
+    name: 'dsh-soulmojito:agent-facts',
     order: -70,
     text: (assembly) => agentFactsText(assembly?.agent?.id),
   })
   // 持续指引（提案 0009）：与 facts 同款 best-effort 异步装载；guide 写入经
   // guides.ts 的 emitGuidesChanged 写穿缓存，下一次装配即时生效（见文件底部）。
   ctx.systemPrompt?.context?.({
-    name: 'dsh-tavern:agent-guides',
+    name: 'dsh-soulmojito:agent-guides',
     order: -65,
     text: (assembly) => agentGuidesText(assembly?.agent?.id),
   })
   // 剧本进度摘要（提案 0014 P2）：facts 式一行摘要 + 工具指引；与 guides 同款
   // best-effort 异步装载，tavern_script_advance 落库后即时写穿（见文件底部）。
   ctx.systemPrompt?.context?.({
-    name: 'dsh-tavern:agent-script',
+    name: 'dsh-soulmojito:agent-script',
     order: -64,
     text: (assembly) => agentScriptText(assembly?.agent?.id),
   })
@@ -141,7 +141,7 @@ export function apply(ctx: AgentContextLike): void {
   // 会话时注入——每会话一行（游戏名/sessionId/轮到谁/动作词汇表/落子指引），
   // 无对局零 token 消耗；文本过 hostPromptSafe（与 facts/guides 同纪律）。
   ctx.systemPrompt?.context?.({
-    name: 'dsh-tavern:agent-games',
+    name: 'dsh-soulmojito:agent-games',
     order: -63,
     text: (assembly) => agentGamesText(assembly?.agent?.id),
   })
@@ -162,7 +162,7 @@ export function apply(ctx: AgentContextLike): void {
 
   const tools = createTools()
   for (const tool of tools) {
-    if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool), `dsh-tavern:agent:${tool.name}`)
+    if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool), `dsh-soulmojito:agent:${tool.name}`)
     else ctx.tools?.register?.(tool)
   }
   // Mod 扩展面（提案 0015 §3.6 P2）：吸收跨 bundle 注册表快照（工具 + prompt
@@ -1099,7 +1099,7 @@ function createTools(): ToolDefinition[] {
     }),
     // game_wait（2026-10-14 修订；同日增量修订）：AgentLoop 的工具 Promise 即
     // 挂起面——本工具在自己回合内阻塞等人类在棋盘上落子，人类动作经
-    // dsh-tavern:games-changed-listeners（跨 bundle）唤醒，Agent 同回合自动续弈，
+    // dsh-soulmojito:games-changed-listeners（跨 bundle）唤醒，Agent 同回合自动续弈，
     // 无需用户发消息触发。宿主无「游戏事件唤醒 agent」seam 的旧约束由此绕开：
     // 不是宿主推事件进来，而是 agent 自己挂起等事件。
     // 返回面只给**等待期增量**（newMoves + 轮次/终局态）：棋盘/日志按需经
@@ -1623,7 +1623,7 @@ onGuidesChanged((character, chatId) =>
     binding.architecture === 'agent-tavern' && binding.character === character && binding.chatId === chatId))
 
 // 模块加载即订阅游戏变更写穿（提案 0018 §4.2）：index bundle 的 HTTP 人类落子/
-// 开局/安装经 dsh-tavern:games-changed-listeners（globalThis 监听表，跨 bundle
+// 开局/安装经 dsh-soulmojito:games-changed-listeners（globalThis 监听表，跨 bundle
 // 互见）通知到这里，重载全部 agent-tavern 绑定的对局摘要——「轮到谁」不失真。
 onGamesChanged(() => {
   void gamesSummaryProjection.refreshWhere((binding) => binding.architecture === 'agent-tavern')
@@ -1682,7 +1682,7 @@ async function refreshAgentScriptSummaries(character: string, chatId: string): P
  *  同款 best-effort 异步装载——首次为某 agent 装配时异步读一次本聊天的活跃
  *  会话，装载完成前返回空串（段摘除，无对局零 token 消耗），失败静默留空。
  *  写穿两条：本 bundle 的 game_start/game_move 落子后即时刷新；index bundle
- *  的 HTTP 人类落子经 dsh-tavern:games-changed-listeners 跨 bundle 通知刷新
+ *  的 HTTP 人类落子经 dsh-soulmojito:games-changed-listeners 跨 bundle 通知刷新
  *  （见文件底部的 onGamesChanged 订阅）。 */
 const gamesSummaryProjection = createLazyProjection<string>({
   getState: async () => (await tavernStore()).getState(),
@@ -1795,14 +1795,14 @@ function agentPresetTemperatureOf(agentId: string | undefined): number | undefin
  */
 export function agentPromptSectionsFor(agentId: string): Array<{ name: string; order: number; text: string }> {
   const sections = [
-    { name: 'dsh-tavern:agent-kernel', order: -80, text: AGENT_KERNEL_TEXT },
-    { name: 'dsh-tavern:agent-preset', order: -75, text: agentPresetText(agentId) },
-    { name: 'dsh-tavern:agent-facts', order: -70, text: agentFactsText(agentId) },
-    { name: 'dsh-tavern:agent-guides', order: -65, text: agentGuidesText(agentId) },
-    { name: 'dsh-tavern:agent-script', order: -64, text: agentScriptText(agentId) },
-    { name: 'dsh-tavern:agent-games', order: -63, text: agentGamesText(agentId) },
+    { name: 'dsh-soulmojito:agent-kernel', order: -80, text: AGENT_KERNEL_TEXT },
+    { name: 'dsh-soulmojito:agent-preset', order: -75, text: agentPresetText(agentId) },
+    { name: 'dsh-soulmojito:agent-facts', order: -70, text: agentFactsText(agentId) },
+    { name: 'dsh-soulmojito:agent-guides', order: -65, text: agentGuidesText(agentId) },
+    { name: 'dsh-soulmojito:agent-script', order: -64, text: agentScriptText(agentId) },
+    { name: 'dsh-soulmojito:agent-games', order: -63, text: agentGamesText(agentId) },
     ...modSectionSnapshot().map((entry) => ({
-      name: `dsh-tavern:mod:${entry.modId}:${entry.definition.name}`,
+      name: `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`,
       order: clampModSectionOrder(entry.definition.order),
       text: hostPromptSafe(entry.definition.text),
     })),
@@ -1852,7 +1852,7 @@ async function recordAgentTavernPromptViewFor(
       },
     }, logger)
   } catch (error) {
-    logger?.warn?.(`dsh-tavern: agent prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`)
+    logger?.warn?.(`dsh-soulmojito: agent prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
