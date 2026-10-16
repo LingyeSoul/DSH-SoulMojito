@@ -35,8 +35,9 @@ export interface GameManifest {
   id: string
   name: string
   version: string
-  /** 宿主版本门控（复用 satisfiesVersionRange 的范围语法）。 */
-  engines?: { 'dsh-tavern'?: string }
+  /** 宿主版本门控（复用 satisfiesVersionRange 的范围语法）。改名兼容
+   * （2026-10-16）：旧键 `dsh-tavern` 双读，新写入恒用新键。 */
+  engines?: { 'dsh-soulmojito'?: string; 'dsh-tavern'?: string }
   players: { min: number; max: number; roles: string[] }
   /** v1 恒真（实时游戏明确裁剪，提案 §3.1/§7-3）。 */
   turnBased: boolean
@@ -104,8 +105,13 @@ export function checkGameManifest(raw: unknown, options: { directory?: string } 
   if (value.engines !== undefined) {
     if (value.engines === null || typeof value.engines !== 'object' || Array.isArray(value.engines)) {
       errors.push('engines must be an object')
-    } else if (value.engines['dsh-tavern'] !== undefined && typeof value.engines['dsh-tavern'] !== 'string') {
-      errors.push('engines.dsh-tavern must be a version range string')
+    } else {
+      for (const key of ['dsh-soulmojito', 'dsh-tavern'] as const) {
+        const range = (value.engines as Record<string, unknown>)[key]
+        if (range !== undefined && typeof range !== 'string') {
+          errors.push(`engines.${key} must be a version range string`)
+        }
+      }
     }
   }
   const players = value.players
@@ -336,7 +342,7 @@ export function smokeTestGameEngine(engine: GameEngine): GameSmokeResult {
 
   // 第 4 关：非法动作必须抛错——保留动作 resign（运行时统一处理，引擎必须拒）
   // 与未知 type 双探针（镜像五子棋契约测试的非法动作面）。
-  for (const probe of [{ type: 'resign' }, { type: '__dsh_tavern_smoke_unknown__' }]) {
+  for (const probe of [{ type: 'resign' }, { type: '__dsh_soulmojito_smoke_unknown__' }]) {
     try {
       engine.applyAction(state, probe, turn)
       reasons.push(`applyAction 对非法动作 {type:'${probe.type}'} 未抛错（必须拒绝而非静默）`)

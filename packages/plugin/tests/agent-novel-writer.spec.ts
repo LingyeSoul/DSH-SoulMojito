@@ -348,7 +348,7 @@ function packErrorOf(render: () => string): NovelWriterPackError {
 const flush = (): Promise<void> => new Promise((resolve) => { setTimeout(resolve, 0) })
 
 const delegationTable = (): Map<string, WriterDelegation> =>
-  (globalThis as Record<symbol, Map<string, WriterDelegation>>)[Symbol.for('dsh-tavern:novel-writer-delegations')]!
+  (globalThis as Record<symbol, Map<string, WriterDelegation>>)[Symbol.for('dsh-soulmojito:novel-writer-delegations')]!
 
 const CANDIDATE_JSON = JSON.stringify({
   paragraphs: ['风暴抵达了塔顶。', '他握紧栏杆。'],
@@ -682,7 +682,7 @@ describe('agent-novel writer W1 draftUnitViaSubagent', () => {
     )
     expect(fake.calls).toHaveLength(1)
     expect(fake.calls[0]!.provider).toBe('spawn')
-    expect(fake.calls[0]!.label).toBe('dsh-tavern novel-writer · unit-1')
+    expect(fake.calls[0]!.label).toBe('dsh-soulmojito novel-writer · unit-1')
     expect(fake.calls[0]!.toolFilter).toEqual({ allow: [] })
     expect(fake.calls[0]!.promptText.startsWith(WRITER_PROTOCOL_FULL)).toBe(true)
     expect(fake.calls[0]!.promptText).toContain('## Story')

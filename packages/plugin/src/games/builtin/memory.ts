@@ -89,7 +89,7 @@ const COLUMN_LETTERS = 'ABCD'
  *  缺席：内置游戏随插件同进程分发，宿主版本即插件版本，自我门控无意义
  *  （对照：导入包的 engines 范围在 registry 装载期校验）。 */
 const MANIFEST: GameManifest = {
-  id: 'dsh-tavern.memory-match',
+  id: 'dsh-soulmojito.memory-match',
   name: '记忆翻牌对战',
   version: '1.0.0',
   players: { min: 2, max: 2, roles: ['red', 'blue'] },
@@ -376,7 +376,7 @@ export const viewHtml = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>记忆翻牌对战 · dsh-tavern 游戏桥</title>
+<title>记忆翻牌对战 · dsh-soulmojito 游戏桥</title>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -474,7 +474,7 @@ export const viewHtml = `<!doctype html>
   }
 </style>
 </head>
-<body data-game="dsh-tavern.memory-match">
+<body data-game="dsh-soulmojito.memory-match">
 <header>
   <span class="game-name">记忆翻牌对战</span>
   <span class="meta" id="meta"></span>
@@ -498,8 +498,8 @@ export const viewHtml = `<!doctype html>
 <footer id="hint"></footer>
 <script>
 'use strict'
-/* 桥协议（提案 0018 §3.3）：下行 dsh-tavern:game-state（token 对账、全量重渲染）、
-   上行 dsh-tavern:game-action（合法性由服务端引擎终审）。token 从 location.search
+/* 桥协议（提案 0018 §3.3）：下行 dsh-soulmojito:game-state（token 对账、全量重渲染）、
+   上行 dsh-soulmojito:game-action（合法性由服务端引擎终审）。token 从 location.search
    自读；无 token（浏览器直接打开）渲染静态预览局面。人类回合才启用翻牌：点第一张
    高亮待选（再点同张取消）、点第二张即提交 {type:'flip',a,b}；失配时做 ~1.4s
    「翻回预览」（纯视图动画——牌面来自 state.lastFlip，双方都看见过、零泄漏，
@@ -544,7 +544,7 @@ var PREVIEW_STATE = {
 }
 var PREVIEW_SESSION = {
   id: '',
-  gameId: 'dsh-tavern.memory-match',
+  gameId: 'dsh-soulmojito.memory-match',
   players: [
     { role: 'red', owner: 'human' },
     { role: 'blue', owner: 'agent' },
@@ -554,7 +554,7 @@ var PREVIEW_SESSION = {
 window.addEventListener('message', function (event) {
   var data = event.data
   if (!data || typeof data !== 'object') return
-  if (data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+  if (data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
   var view = data.view && typeof data.view === 'object' ? data.view : {}
   var state = view.state || null
   current = {
@@ -629,12 +629,12 @@ function canAct() {
   return ownerOf(current.session, current.state.turn) === 'human'
 }
 
-/* 上行 dsh-tavern:game-action；合法性由服务端引擎终审（视图只会提交两张
+/* 上行 dsh-soulmojito:game-action；合法性由服务端引擎终审（视图只会提交两张
    背面牌，且选中集在提交后被发送锁冻结，直到局面更新或 4s 解锁兜底）。 */
 function send(action) {
   if (!TOKEN) return
   window.parent.postMessage(
-    { type: 'dsh-tavern:game-action', token: TOKEN, action: action },
+    { type: 'dsh-soulmojito:game-action', token: TOKEN, action: action },
     '*',
   )
 }
@@ -748,7 +748,7 @@ function render() {
     + ' · 已翻 ' + state.ply + ' 手 · 已配对 ' + (matched / 2) + '/' + PAIRS
 
   var cls = 'preview'
-  var text = '预览模式：由 dsh-tavern 游戏服务装载后启用交互'
+  var text = '预览模式：由 dsh-soulmojito 游戏服务装载后启用交互'
   if (live) {
     if (!state) {
       text = '等待对局状态…'
@@ -774,9 +774,9 @@ function render() {
   }
 
   if (!live) {
-    hintEl.textContent = '这是静态预览局面：由 dsh-tavern 游戏服务装载后，牌桌将接收实时状态并启用翻牌。'
+    hintEl.textContent = '这是静态预览局面：由 dsh-soulmojito 游戏服务装载后，牌桌将接收实时状态并启用翻牌。'
   } else if (!state) {
-    hintEl.textContent = '正在连接 dsh-tavern 游戏服务…'
+    hintEl.textContent = '正在连接 dsh-soulmojito 游戏服务…'
   } else if (state.finished) {
     hintEl.textContent = '对局已结束。可在对局面板中开新一局，或让 AI 再来一盘。'
   } else if (sending) {

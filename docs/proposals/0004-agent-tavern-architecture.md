@@ -4,7 +4,7 @@
 
 ## 1. 结论先行
 
-`AgentTavern` 作为 dsh-tavern 的默认架构，直接运行在 DSH 原生 AgentLoop 上，并以 `dsh-agent-presets` 的 `agent-tavern` preset 组合 prompt、工具和可选的 context projection adapter；当前 ST 兼容架构保留为可选的 `st` profile。
+`AgentTavern` 作为 dsh-soulmojito 的默认架构，直接运行在 DSH 原生 AgentLoop 上，并以 `dsh-agent-presets` 的 `agent-tavern` preset 组合 prompt、工具和可选的 context projection adapter；当前 ST 兼容架构保留为可选的 `st` profile。
 
 两种架构共享角色卡、世界书、persona、preset、聊天文件和管理面板，但只有 ST profile 拥有插件自己的 prompt 装配和 LLM 调用路径。AgentTavern 不新增第二个生成循环，不在 `/generate` 中再次调用 `ctx.llm.stream`，也不靠镜像事件伪装成原生 AgentLoop。
 
@@ -18,7 +18,7 @@
         -> Tavern 聊天投影与记忆索引
 
 ST profile 仍走：
-用户消息 -> dsh-tavern /generate -> ST pipeline -> ctx.llm.stream -> JSONL
+用户消息 -> dsh-soulmojito /generate -> ST pipeline -> ctx.llm.stream -> JSONL
 ```
 
 ## 2. 为什么要改成 profile，而不是再加一条循环
@@ -62,7 +62,7 @@ type TavernSessionBinding =
 ### 3.2 Composer 与 view 的选择
 
 - `agent-tavern`：交还 `conversation.composer` 给 DSH 原生 composer，发送后进入原生 AgentLoop；`conversation.view` 使用原生事件投影，Tavern 面板只负责资产和会话管理。
-- `st`：继续由当前 Tavern composer 接管，使用 `/api/dsh-tavern/generate`、swipe、regenerate 和 ST JSONL 语义。
+- `st`：继续由当前 Tavern composer 接管，使用 `/api/dsh-soulmojito/generate`、swipe、regenerate 和 ST JSONL 语义。
 - 两种架构都使用同一个 session binding marker，因此普通 DSH 会话不会被接管。
 
 当前 `activeAgentPrompt` 全局 `systemPrompt.section` 不能作为 AgentTavern 的角色注入点，因为它会污染不相关的原生会话。它只保留给明确开启的 ST/普通 Agent 兼容行为；AgentTavern 角色提示必须由 session profile 提供。
@@ -204,7 +204,7 @@ AgentTavern 默认只允许当前 `chat`、`character` 和 `agent` 作用域写�
 
 ## 7. 记忆存储框架
 
-在 `@dsh-tavern/store` 增加一个深模块 `MemoryStore`，外部只暴露检索、条件写入和软删除：
+在 `@dsh-soulmojito/store` 增加一个深模块 `MemoryStore`，外部只暴露检索、条件写入和软删除：
 
 ```ts
 interface MemoryStore {
@@ -336,7 +336,7 @@ turn/end
 
 ## 13. 不做的事
 
-- 不在 dsh-tavern 内再实现 AgentLoop。
+- 不在 dsh-soulmojito 内再实现 AgentLoop。
 - 不把完整角色卡、世界书和整段聊天固定塞进每一次请求。
 - 不把遗忘实现成删除聊天或不可恢复的物理删除。
 - 不默认启用向量数据库、后台自动总结或全局记忆写入。

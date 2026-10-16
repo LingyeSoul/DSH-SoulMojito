@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { ChatRevisionConflictError, type TavernSessionBinding, type TavernState } from '../../../tavern-store/src/index.js'
 import { RegexPlacement, type CharacterCardIR, type ChatLogIR, type ChatMessage, type RegexScriptIR } from '../../../tavern-format/src/index.js'
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
-import { hostPluginMessageSource, hostSessionFormatVersion, isHostPluginMessageSource, sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
+import { hostPluginMessageSource, hostSessionFormatVersion, isHostPluginMessageSource, sessionEvents, LEGACY_PLUGIN_NAME, PLUGIN_NAME, type HostSessionLog } from '../../../bind/src/index.js'
 import { collectRegexScripts } from '../tavern-assets.js'
 
 export interface NativeSessionEvent {
@@ -238,7 +238,7 @@ function projectionIdentity(message: ChatMessage, sessionId: string, eventSeq: n
 }
 
 /**
- * 会话事件是否带 dsh-tavern 写入标记（导入镜像、锚定提醒、插件通知）。
+ * 会话事件是否带 dsh-soulmojito 写入标记（导入镜像、锚定提醒、插件通知）。
  * 预加载通知（summary 以 "AgentTavern preload: " 开头）除外：它不构成
  * "会话已启动"，客户端修复路径的重复激活不能被它锁死。model 镜像靠合成
  * provider/model 对识别——released v0 Session disposition 禁止 model
@@ -247,7 +247,12 @@ function projectionIdentity(message: ChatMessage, sessionId: string, eventSeq: n
 export function isTavernSessionMarker(source: unknown): boolean {
   if (typeof source !== 'object' || source === null) return false
   const record = source as Record<string, unknown>
-  if (record.kind === 'model') return record.provider === 'dsh-tavern' && record.model === 'agent-tavern-import'
+  if (record.kind === 'model') {
+    // 改名兼容（2026-10-16）：存量镜像记录的合成 provider 是旧名 dsh-tavern，
+    // 双认；新写入恒为新名（TAVERN_MIRROR_MODEL_SOURCE）。
+    const provider = record.provider
+    return (provider === PLUGIN_NAME || provider === LEGACY_PLUGIN_NAME) && record.model === 'agent-tavern-import'
+  }
   if (!isHostPluginMessageSource(record)) return false
   return !(typeof record.summary === 'string' && record.summary.startsWith('AgentTavern preload: '))
 }
@@ -258,7 +263,7 @@ function isTavernMirrorSource(source: unknown): boolean {
 
 /** 宿主会话要求 assistant 消息的 source 必须是 model 来源且带 provider/model； */
 /** 导入的镜像消息用合成 provider/model 补足校验，合成 provider/model 对即镜像标记。 */
-const TAVERN_MIRROR_MODEL_SOURCE = { provider: 'dsh-tavern', model: 'agent-tavern-import' } as const
+const TAVERN_MIRROR_MODEL_SOURCE = { provider: PLUGIN_NAME, model: 'agent-tavern-import' } as const
 
 /**
  * Import saved messages as real turn boundaries. The native AgentLoop then

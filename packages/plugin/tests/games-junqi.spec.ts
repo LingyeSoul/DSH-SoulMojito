@@ -96,7 +96,7 @@ describe('清单与引擎形状（§3.1/§3.2）', () => {
     const check = checkGameManifest(junqiManifest)
     expect(check.ok).toBe(true)
     expect(check.errors).toEqual([])
-    expect(junqiManifest.id).toBe('dsh-tavern.junqi')
+    expect(junqiManifest.id).toBe('dsh-soulmojito.junqi')
     expect(junqiManifest.name).toBe('军棋')
     expect(junqiManifest.players).toEqual({ min: 2, max: 2, roles: ['red', 'blue'] })
     expect(junqiManifest.engines).toBeUndefined()
@@ -116,18 +116,18 @@ describe('清单与引擎形状（§3.1/§3.2）', () => {
     expect(junqiViewHtml).not.toMatch(/src\s*=\s*["']https?:/i)
     expect(junqiViewHtml).not.toMatch(/href\s*=\s*["']https?:/i)
     expect(junqiViewHtml).not.toContain('fetch(')
-    expect(junqiViewHtml).toContain('dsh-tavern:game-state')
-    expect(junqiViewHtml).toContain('dsh-tavern:game-action')
-    expect(junqiViewHtml).toContain('data-game="dsh-tavern.junqi"')
+    expect(junqiViewHtml).toContain('dsh-soulmojito:game-state')
+    expect(junqiViewHtml).toContain('dsh-soulmojito:game-action')
+    expect(junqiViewHtml).toContain('data-game="dsh-soulmojito.junqi"')
   })
 
   it('视图过 view 服务管线（CSP + 桥脚本注入 + 文档包装）后原内容完整', () => {
     const document = renderGameViewDocument(junqiViewHtml)
-    expect(document).toContain('data-game="dsh-tavern.junqi"')
-    expect(document).toContain('dshTavernGame')
+    expect(document).toContain('data-game="dsh-soulmojito.junqi"')
+    expect(document).toContain('dshSoulMojitoGame')
     expect(document).toContain('Content-Security-Policy')
     expect(document).toContain("connect-src 'none'")
-    expect(document).toContain('dsh-tavern:game-action')
+    expect(document).toContain('dsh-soulmojito:game-action')
   })
 })
 
@@ -549,16 +549,16 @@ describe('预览局面防漂移（视图内联 vs 引擎真实四手）', () => 
 describe('registry 内置源（§4.1）', () => {
   it('列出 builtin 军棋：source builtin、status ok、engine/view 可用', async () => {
     const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.4' })
-    const summary = registry.summaries().find((candidate) => candidate.id === 'dsh-tavern.junqi')!
+    const summary = registry.summaries().find((candidate) => candidate.id === 'dsh-soulmojito.junqi')!
     expect(summary).toBeDefined()
     expect(summary.source).toBe('builtin')
     expect(summary.status).toBe('ok')
     expect(summary.name).toBe('军棋')
     expect(summary.players).toEqual({ min: 2, max: 2, roles: ['red', 'blue'] })
     expect(summary.actionVocabulary).toContain('move')
-    const entry = registry.get('dsh-tavern.junqi')!
+    const entry = registry.get('dsh-soulmojito.junqi')!
     expect(entry.engine).not.toBeNull()
-    expect(entry.viewHtml).toContain('data-game="dsh-tavern.junqi"')
+    expect(entry.viewHtml).toContain('data-game="dsh-soulmojito.junqi"')
   })
 })
 
@@ -566,8 +566,8 @@ describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
   it('开局 → 人类营长进营 → Agent 营长进营：视图/叙述/轮次/终审全链路', async () => {
     const service = await openGamesService({ root: join(home, 'tavern'), hostVersion: '0.6.4' })
     try {
-      const { session, view } = await service.start({ gameId: 'dsh-tavern.junqi', character: 'Seraphina', chatId: 'jq-chat' })
-      expect(session.gameId).toBe('dsh-tavern.junqi')
+      const { session, view } = await service.start({ gameId: 'dsh-soulmojito.junqi', character: 'Seraphina', chatId: 'jq-chat' })
+      expect(session.gameId).toBe('dsh-soulmojito.junqi')
       expect(session.players).toEqual([
         { role: 'red', owner: 'human' },
         { role: 'blue', owner: 'agent' },

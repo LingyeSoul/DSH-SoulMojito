@@ -74,7 +74,7 @@ export interface ModManifest {
   author: string
   description: string
   main: string
-  engines?: { dshTavern?: string }
+  engines?: { dshSoulMojito?: string }
   loadingOrder: number
   capabilities: ModCapability[]
   panel?: ModPanelDeclaration
@@ -121,9 +121,13 @@ export function checkModManifest(raw: unknown, options: ManifestCheckOptions): M
     if (typeof record.engines !== 'object' || record.engines === null || Array.isArray(record.engines)) {
       errors.push('engines must be an object')
     } else {
-      const range = (record.engines as Record<string, unknown>)['dsh-tavern']
-      if (range !== undefined && (typeof range !== 'string' || range.trim() === '')) {
-        errors.push("engines['dsh-tavern'] must be a non-empty semver range string")
+      // 改名兼容（2026-10-16）：旧键 engines['dsh-tavern'] 双读——存量已装 Mod
+      // 不改也能装载；新写入恒用新键。
+      for (const key of ['dsh-soulmojito', 'dsh-tavern'] as const) {
+        const range = (record.engines as Record<string, unknown>)[key]
+        if (range !== undefined && (typeof range !== 'string' || range.trim() === '')) {
+          errors.push(`engines['${key}'] must be a non-empty semver range string`)
+        }
       }
     }
   }
@@ -236,7 +240,8 @@ export function checkModManifest(raw: unknown, options: ManifestCheckOptions): M
   if (errors.length > 0) return { ok: false, errors }
 
   const engines = record.engines as Record<string, unknown> | undefined
-  const engineRange = engines?.['dsh-tavern']
+  // 改名兼容（2026-10-16）：旧键 engines['dsh-tavern'] 双读，新键优先。
+  const engineRange = (engines?.['dsh-soulmojito'] ?? engines?.['dsh-tavern']) as string | undefined
   const panel = record.panel as Record<string, unknown> | undefined
   const surfaces = record.surfaces as Record<string, unknown> | undefined
   const pickStrings = (value: unknown): string[] =>
@@ -248,7 +253,7 @@ export function checkModManifest(raw: unknown, options: ManifestCheckOptions): M
     author: record.author as string,
     description: record.description as string,
     main: (record.main as string).trim(),
-    ...(engineRange !== undefined ? { engines: { dshTavern: engineRange as string } } : {}),
+    ...(engineRange !== undefined ? { engines: { dshSoulMojito: engineRange as string } } : {}),
     loadingOrder: typeof record.loadingOrder === 'number' ? record.loadingOrder : 100,
     capabilities: Array.isArray(record.capabilities)
       ? [...new Set(record.capabilities as ModCapability[])]
@@ -351,7 +356,7 @@ export function satisfiesVersionRange(version: string, range: string): VersionRa
   }
   return matched
     ? { ok: true, reason: '' }
-    : { ok: false, reason: `requires dsh-tavern ${range} (host ${version})` }
+    : { ok: false, reason: `requires dsh-soulmojito ${range} (host ${version})` }
 }
 
 function satisfiesComparator(version: ParsedVersion, comparator: string): boolean | 'invalid' {

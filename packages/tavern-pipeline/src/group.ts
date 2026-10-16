@@ -6,7 +6,7 @@
  * - 预设 `group_nudge_prompt` 作为回合末 user nudge（{{char}} = 发言者）。
  */
 
-import type { ChatMessage } from '@dsh-tavern/format'
+import type { ChatMessage } from '@dsh-soulmojito/format'
 
 export interface GroupTurnInput {
   /** 当前发言者（成员角色名） */

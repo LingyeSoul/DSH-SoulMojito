@@ -216,7 +216,7 @@ describe('NovelDriver scheduling', () => {
     const kickoffIntentId = kickoff.id.slice('novel-notice-'.length)
     expect(kickoff.source).toEqual({
       kind: 'plugin',
-      plugin: 'dsh-tavern',
+      plugin: 'dsh-soulmojito',
       form: 'notice',
       summary: `AgentNovel work notice (novel ${novelId}, intent ${kickoffIntentId})`,
     })
@@ -234,7 +234,7 @@ describe('NovelDriver scheduling', () => {
     })
 
     const writeUnit = noticeOf(agent, 1)
-    expect(writeUnit.source).toMatchObject({ kind: 'plugin', plugin: 'dsh-tavern', form: 'notice' })
+    expect(writeUnit.source).toMatchObject({ kind: 'plugin', plugin: 'dsh-soulmojito', form: 'notice' })
     expect(textOf(writeUnit)).toContain('novel_unit_claim')
     expect(textOf(writeUnit)).toContain('unit-1')
     const after = await novels.getNovel(novelId)

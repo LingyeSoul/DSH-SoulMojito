@@ -25,7 +25,7 @@ const CHARACTER = '灯守'
 const USER_TEXT = '风暴灯还亮着吗？'
 const LORE_CONTENT = '灯塔的风暴灯由三位守夜人轮值看守。'
 
-function makeRequest(body: unknown, url = '/api/dsh-tavern/preview') {
+function makeRequest(body: unknown, url = '/api/dsh-soulmojito/preview') {
   const listeners = new Map<string, Array<(value?: unknown) => void>>()
   return {
     method: 'POST',
@@ -87,7 +87,7 @@ describe('preview generation (D-4)', () => {
   const modEventSpies: string[] = []
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-preview-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-preview-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.importCharacter({

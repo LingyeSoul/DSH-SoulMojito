@@ -1,11 +1,11 @@
-// 修复被 dsh-tavern 历史导入写坏的 DSH 会话日志。
+// 修复被 dsh-soulmojito 历史导入写坏的 DSH 会话日志。
 //
 // 根因：historyImportAppends 曾给 assistant/message 写
-// `{ kind: 'plugin', plugin: 'dsh-tavern', form }` 来源；宿主在会话加载时
+// `{ kind: 'plugin', plugin: 'dsh-soulmojito', form }` 来源；宿主在会话加载时
 // （dsh-session 的 adoptSessionEvent → assertMessageEventShape）要求
 // assistant 消息必须是 model 来源且带非空 provider/model，否则整个会话以
 // SessionPersistenceCorruptionError 拒载。写入侧已改（projector.ts），本脚本
-// 只修存量数据：把镜像来源升级为带 dsh-tavern 标记的 model 来源，与插件
+// 只修存量数据：把镜像来源升级为带 dsh-soulmojito 标记的 model 来源，与插件
 // 现在写入的形态一致，投影器仍凭 plugin 标记跳过镜像消息。
 //
 // 用法：node scripts/repair-tavern-mirror-source.mjs [--root <sessions-dir>] [--dry-run]
@@ -85,14 +85,15 @@ function repairLine(line) {
   const record = JSON.parse(line)
   if (record.type !== 'assistant/message') return { line, changed: false }
   const source = record.data?.message?.source
-  if (source?.kind !== 'plugin' || source?.plugin !== 'dsh-tavern' || typeof source?.form !== 'string') {
+  // 改名兼容（2026-10-16）：待修工件由改名前的插件写入，旧名 dsh-tavern 双认。
+  if (source?.kind !== 'plugin' || (source?.plugin !== 'dsh-soulmojito' && source?.plugin !== 'dsh-tavern') || typeof source?.form !== 'string') {
     return { line, changed: false }
   }
   record.data.message.source = {
     kind: 'model',
-    provider: 'dsh-tavern',
+    provider: 'dsh-soulmojito',
     model: 'agent-tavern-import',
-    plugin: 'dsh-tavern',
+    plugin: 'dsh-soulmojito',
     form: source.form,
   }
   return { line: JSON.stringify(record), changed: true }

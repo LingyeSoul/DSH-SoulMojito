@@ -28,7 +28,7 @@ const SESSION_ID = 'g-8bb76697'
 function summary(overrides: Partial<GameSessionSummary> = {}): GameSessionSummary {
   return {
     id: SESSION_ID,
-    gameId: 'dsh-tavern.gomoku',
+    gameId: 'dsh-soulmojito.gomoku',
     gameName: '五子棋',
     actionVocabulary: '落子 {type:\'place\', x, y}',
     players: [
@@ -109,7 +109,7 @@ describe('wakeAgentOnHumanMove（人类落子 → 自动唤起）', () => {
     expect(text).toContain(SESSION_ID)
     expect(text).toContain('落子')
     // 插件来源（v4 宿主 producer-owned kind）+ form notice；不含 user 身份。
-    expect(message.source).toMatchObject({ kind: 'plugin:dsh-tavern', form: 'notice' })
+    expect(message.source).toMatchObject({ kind: 'plugin:dsh-soulmojito', form: 'notice' })
     expect(String(message.source.summary)).toContain(SESSION_ID)
     expect(host.warn).not.toHaveBeenCalled()
   })
@@ -141,13 +141,13 @@ describe('wakeAgentOnHumanMove（人类落子 → 自动唤起）', () => {
     const host = fakeHost()
     // 2026-10-15 真机 g-60bfb716：人类 roll 命中「可购买或跳过」决定窗——turn 仍在
     // 人类手上，Agent 此刻不可行动（引擎 actor===turn 必拒），「对手已落子」是假陈述。
-    const midTurn = summary({ gameId: 'dsh-tavern.monopoly', gameName: '大富翁', turn: 'black', moveCount: 6 })
+    const midTurn = summary({ gameId: 'dsh-soulmojito.monopoly', gameName: '大富翁', turn: 'black', moveCount: 6 })
     expect(await wakeAgentOnHumanMove(host, midTurn)).toBe(false)
     expect(host.followup).not.toHaveBeenCalled()
     expect(host.binding).not.toHaveBeenCalled()
     expect(host.warn).not.toHaveBeenCalled()
     // 同一人类回合的收尾动作（buy/build/pass）交出回合 → 幂等 id 取那一刻的 moveCount。
-    const handedOver = summary({ gameId: 'dsh-tavern.monopoly', gameName: '大富翁', turn: 'white', moveCount: 7 })
+    const handedOver = summary({ gameId: 'dsh-soulmojito.monopoly', gameName: '大富翁', turn: 'white', moveCount: 7 })
     expect(await wakeAgentOnHumanMove(host, handedOver)).toBe(true)
     expect(host.followup).toHaveBeenCalledTimes(1)
     expect((host.followup.mock.calls[0]![0] as { id: string }).id).toBe(`game-notice-${SESSION_ID}-7`)
@@ -236,6 +236,6 @@ describe('wakeAgentOnHumanMove（人类落子 → 自动唤起）', () => {
     const host = fakeHost({ agent: fakeAgent(null) })
     await wakeAgentOnHumanMove(host, summary())
     const source = (host.followup.mock.calls[0]![0] as { source: Record<string, unknown> }).source
-    expect(source).toMatchObject({ kind: 'plugin', plugin: 'dsh-tavern', form: 'notice' })
+    expect(source).toMatchObject({ kind: 'plugin', plugin: 'dsh-soulmojito', form: 'notice' })
   })
 })

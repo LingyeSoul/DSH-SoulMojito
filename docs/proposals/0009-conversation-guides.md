@@ -1,6 +1,6 @@
-# 提案 0009：Conversation Guides（持续指引）— dsh-tavern 功能复刻
+# 提案 0009：Conversation Guides（持续指引）— dsh-soulmojito 功能复刻
 
-> 状态：已实现。日期：2026-10-07。参照物：`flizzywine/dsh-tavern`（AGPL-3.0）的**公开功能文档**
+> 状态：已实现。日期：2026-10-07。参照物：`flizzywine/dsh-soulmojito`（AGPL-3.0）的**公开功能文档**
 > （README「Guide：给这一局注入上下文指引」、`docs/feature-inventory.md` B09），按本仓库 clean-room
 > 教义从行为规格重实现，不复制其源码，也不引入新依赖。实施期间禁止阅读该仓库源码。
 
@@ -13,7 +13,7 @@
 |---|---|
 | Guide 存储（添加/列出/删除，随聊天持久化） | `chat.header.chat_metadata.guides: Array<{id, text, createdAt}>` |
 | ST 链路注入（正文生成时持续生效） | `runGeneration` 装配后 system 段追加 guides 块 |
-| AgentTavern 注入（原生 AgentLoop 侧持续生效） | `agent.ts` 新增 `dsh-tavern:agent-guides` systemPrompt context 段（facts 同款异步装载 + 写穿缓存） |
+| AgentTavern 注入（原生 AgentLoop 侧持续生效） | `agent.ts` 新增 `dsh-soulmojito:agent-guides` systemPrompt context 段（facts 同款异步装载 + 写穿缓存） |
 | 管理 API | `GET/POST guides/:character/:chatId`、`DELETE guides/:character/:chatId/:id`（沿用现有路由段风格） |
 | 面板入口 | 右侧 Guide 面板：列出 / 添加 / 删除（提案 0010/0011 的 UI 一并接线） |
 
@@ -24,7 +24,7 @@
 
 **已文档化的适配偏差**：
 1. 上限 8 条、单条 ≤500 字符（flizzywine 未公开限制；防注入面失控的本地决策）。
-2. AgentTavern 侧装载是 best-effort 异步（对齐 `dsh-tavern:agent-facts` 的 facts 模式）：首次装配
+2. AgentTavern 侧装载是 best-effort 异步（对齐 `dsh-soulmojito:agent-facts` 的 facts 模式）：首次装配
    可能拿到空串，写穿缓存在 guide 写入时即时更新，无需等待重载。
 3. ST 链路注入位置是 system 段末尾（所有已装配 system 块之后），而非深度消息注入——Guide 是
    会话级持续要求，不是楼层内容。
@@ -44,7 +44,7 @@ packages/plugin/tests/tavern-guides.spec.ts  存储往返 / 注入格式 / 上�
    收集 systemParts 之后，若有激活 guides 则 `systemParts.push(formatGuidesBlock(guides))`，
    再进入 `ctx.llm.stream`。块格式：首行 `Conversation guides (persistent user directives; apply to every reply):`
    + 每条一行 `- text`（按创建时间升序，新指南在后）。
-2. **AgentTavern**（`agent.ts` `apply()`）：`ctx.systemPrompt?.context?.({ name: 'dsh-tavern:agent-guides',
+2. **AgentTavern**（`agent.ts` `apply()`）：`ctx.systemPrompt?.context?.({ name: 'dsh-soulmojito:agent-guides',
    order: -65, text: (assembly) => agentGuidesText(assembly?.agent?.id) })`；`agentGuidesText` 通过
    binding（`sessionBindings[agentId]` → character/chatId）读 guides，写穿缓存由 guides.ts 的写入路径
    失效/更新，读取失败静默返回空串（不阻塞装配）。

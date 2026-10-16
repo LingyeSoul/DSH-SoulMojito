@@ -47,7 +47,7 @@ describe('formatRewriteBlock', () => {
 
 /* ---------------------------- 端到端：generate 参数组合 ---------------------------- */
 
-function makeRequest(body: unknown, url = '/api/dsh-tavern/generate') {
+function makeRequest(body: unknown, url = '/api/dsh-soulmojito/generate') {
   const listeners = new Map<string, (value?: unknown) => void>()
   return {
     method: 'POST',
@@ -89,7 +89,7 @@ describe('rewrite with feedback (integration)', () => {
   let chatId: string
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-rewrite-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-rewrite-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.importCharacter({

@@ -14,7 +14,7 @@
 | 持久态及理由 | 会话 JSON（跨重启续局、可审计重放——动作日志完整保留）；`installed/<id>/` 游戏目录（导入即落盘，镜像 `mods/install.ts` 纪律） |
 | 临时态 | 引擎是无状态纯函数（状态全在会话 JSON，重启重建零损失）；view iframe 的 per-mount token；面板轮询节奏。均可接受 |
 | 外部依赖 | 全部现有 seam：DSH `webServer` 前缀路由、`tools.register`、`systemPrompt.section`；**零新网络面**（视图自包含 HTML，CSP `connect-src 'none'`） |
-| 注册入口 | HTTP `/api/dsh-tavern/games/*`（list/revision/start/state/action/view/install）；agent.ts `createTools()` + `BUILTIN_TOOL_NAMES_SEED` 四名；client `registerPanelSection`；mods `api.games.register` + cross-bundle globalThis 注册表 |
+| 注册入口 | HTTP `/api/dsh-soulmojito/games/*`（list/revision/start/state/action/view/install）；agent.ts `createTools()` + `BUILTIN_TOOL_NAMES_SEED` 四名；client `registerPanelSection`；mods `api.games.register` + cross-bundle globalThis 注册表 |
 | 删除路径 | 工具/提示段经 `ctx.effect` 反注册；分区 unregister；路由随插件卸载；`games/` 目录整体可删无迁移（state.json 不动——games 独立文件）；Mod 卸载自动摘除其注册的游戏；测试/gates 按新增清单删 |
 | 兼容对象 | 现有 62 内置工具名不冲突（`game_*` 前缀全新，查重面 `cross-bundle.ts` 种子）；Mod API v1 只增不改（`api.games` 为可选新增面）；`state.json`/storeRevision 语义不动 |
 
@@ -50,7 +50,7 @@
    **刻意不含 state.json/chats**（`tavern-store/src/store.ts:374-387` 注释原文「chats/ 有各自的
    CAS revision、state.json 由面板写路径自行刷新，都不参与」）——游戏落子骑这个水位会逼全
    面板重取 bootstrap，且污染既有语义。
-3. **iframe 桥只有「iframe→宿主→Node HTTP」正向代理**（`dsh-tavern:mod-request`，
+3. **iframe 桥只有「iframe→宿主→Node HTTP」正向代理**（`dsh-soulmojito:mod-request`，
    `main.js:466-488`）和有限下行广播，没有任何「工具→客户端→iframe→回结果」的同步回路。
 
 因此：**游戏逻辑（规则、合法性判定、终局判定）以引擎模块形式跑在 Node 进程内，
@@ -77,7 +77,7 @@
 - 安装先例：`mods/install.ts` git 拷贝 + `POST /mods/install {url}`，`engines` 半开区间门控
   （`satisfiesVersionRange`，0.x 陷阱见 decisions/2026-10-12-story-clock-engines-drift.md）。
 
-## 3. 游戏桥标准 v1（dsh-tavern Game Bridge，对外的公共契约）
+## 3. 游戏桥标准 v1（dsh-soulmojito Game Bridge，对外的公共契约）
 
 一个「标准游戏」= 一个目录：`game.json`（清单）+ `engine.mjs`（纯逻辑 ESM）+ `view.html`
 （自包含渲染页）。三份文件构成可独立分发、可被任何工具/视图消费的游戏包。
@@ -87,7 +87,7 @@
 ```json
 {
   "id": "com.example.gomoku", "name": "五子棋", "version": "1.0.0",
-  "engines": { "dsh-tavern": "^0.6.0" },
+  "engines": { "dsh-soulmojito": "^0.6.0" },
   "players": { "min": 2, "max": 2, "roles": ["black", "white"] },
   "turnBased": true,
   "actionVocabulary": "落子 {type:'place', x, y}；认输 {type:'resign'}"
@@ -127,10 +127,10 @@ export default {
 `view.html` 自包含（mod CSP 同款：仅内联脚本、`connect-src 'none'`、无外链），运行时由视图
 服务注入桥脚本（token + 高度上报 + viewport 桥，复用 `mods/http.ts` 管线）。协议只有两条消息：
 
-- 下行 `dsh-tavern:game-state {token, session, view:{state, turn, legal, finished, summary}}`
+- 下行 `dsh-soulmojito:game-state {token, session, view:{state, turn, legal, finished, summary}}`
   ——全量
   状态投递（v1 不做增量），iframe 负责渲染并高亮可落子点。
-- 上行 `dsh-tavern:game-action {token, action}`——人类落子；宿主校验 token 与
+- 上行 `dsh-soulmojito:game-action {token, action}`——人类落子；宿主校验 token 与
   `event.source`（同 `main.js:450-456` 纪律）后代理 `POST /games/<sid>/action`，**合法性由
   Node 侧引擎终审**，iframe 说什么不算。
 
@@ -146,14 +146,14 @@ Agent 和人类玩家走完全相同的动作语言、相同的引擎合法性�
 ### 4.1 会话运行时（`src/games/`）
 
 - `registry.ts`：三源注册表（内置 / 导入目录 / Mod 注册），统一 `{source, manifest, engine, view}` 形态；
-  导入目录与 Mod 注册的游戏经 `globalThis[Symbol.for('dsh-tavern:game-registry')]` 跨 bundle
+  导入目录与 Mod 注册的游戏经 `globalThis[Symbol.for('dsh-soulmojito:game-registry')]` 跨 bundle
   可见（镜像 `mods/cross-bundle.ts` 纪律——agent bundle 与 index bundle 无共享模块态）。
 - `sessions.ts`：会话生命周期。会话 = `{id, gameId, players:[{role, owner:'human'|'agent'}],
   state, moves:[{actor, action, at, summary}], createdAt, updatedAt, chat:{character, chatId}}`，
   按聊天绑定（与 MVU/记忆同款作用域），存 `games/sessions/<hash>.json`，写路径用
   `writeFileAtomic`（apply.ts 同款）。开局默认人类执先、Agent 执后（面板开局）/Agent 自选
   （`game_start` 可传 role）。
-- `http.ts`：前缀路由 `/api/dsh-tavern/games/*`——`GET list`（游戏 + 本聊天活跃会话）、
+- `http.ts`：前缀路由 `/api/dsh-soulmojito/games/*`——`GET list`（游戏 + 本聊天活跃会话）、
   `GET revision`（sessions 目录元数据摘要，镜像 `storeRevision` 的便宜性——**只 stat 不读内容**，
   游戏分区专用 1s 轮询，不动全局水位）、`POST start`、`GET state/:sid`、`POST action/:sid`、
   `GET :gid/view/:sid`（视图服务，§4.4）、`POST install`（§4.5）。
@@ -176,7 +176,7 @@ Agent 和人类玩家走完全相同的动作语言、相同的引擎合法性�
 | `game_state` | `sessionId?`（缺省取本聊天最近活跃会话）——扁平局面面：`state` 棋盘、`legal` 建议集、`turn/turnOwner`、`moveCount`、`finished/winner/summary`；不含日志 |
 | `game_history` | `sessionId?, from?, limit?`——动作日志窗口（**2026-10-14 新增，§14**）：`limit` 夹 1..200（缺省 20），`from` 为 0 基窗口起点；每条 `{actor, action, describe}` |
 | `game_move` | `sessionId, action`——Agent 落子；返回 `describe` 叙述文案 + 轮次/终局态（`finished/winner/summary`）——不回吐棋盘与日志；非本方回合报错并告知轮到谁 |
-| `game_wait` | `sessionId?, timeoutMs?`（限 1000..900000，缺省 300000）——**在自己回合内阻塞等人类落子**（2026-10-14 修订，§10；同日 token 经济修订 §14）：人类动作经 `dsh-tavern:games-changed-listeners` 跨 bundle 写穿唤醒（1s tick 兜底），返回 `{status, sessionId, newMoves, turn?, turnOwner?, winner?, summary?}`——只给**等待期增量**（`newMoves` 即等待期间到达的手，通常是人类刚落那手）；超时不报错（模型可再 wait）；用户停止生成时随 `exec.signal` 中止 |
+| `game_wait` | `sessionId?, timeoutMs?`（限 1000..900000，缺省 300000）——**在自己回合内阻塞等人类落子**（2026-10-14 修订，§10；同日 token 经济修订 §14）：人类动作经 `dsh-soulmojito:games-changed-listeners` 跨 bundle 写穿唤醒（1s tick 兜底），返回 `{status, sessionId, newMoves, turn?, turnOwner?, winner?, summary?}`——只给**等待期增量**（`newMoves` 即等待期间到达的手，通常是人类刚落那手）；超时不报错（模型可再 wait）；用户停止生成时随 `exec.signal` 中止 |
 
 全部走 `tool()` 工厂 + `tool-args.ts` 校验助手；六个名字进 `BUILTIN_TOOL_NAMES_SEED`。
 提示段：`apply()` 新增 order `-63` 懒段——**仅当本聊天存在活跃会话时注入**（无对局零 token
@@ -273,7 +273,7 @@ JSON-safe 初始态 → `legalActions` 有界 → 取首个合法动作 `applyAc
    决策），工具延迟 ≥3s 且侧边栏关闭即瘫痪，Agent 无法无头对局；且 DOM 自动化对规则零
    保证（作弊/误触无合法性终审）。这是「权威状态在 Node」结论的反面。
 2. **任意 HTML 游戏原样导入 + 点击注入**——否决，同上；改为定义公共标准让游戏**为标准而写**，
-   「直接导入」的语义是「符合 dsh-tavern 游戏桥标准的游戏包直接导入」（与用户需求原文一致）。
+   「直接导入」的语义是「符合 dsh-soulmojito 游戏桥标准的游戏包直接导入」（与用户需求原文一致）。
 3. **实时游戏**——v1 裁剪（`turnBased: true` 恒真）；实时需要推送通道与帧同步，与本插件
    「无 SSE」基线冲突。
 4. **人类落子自动唤醒 AgentLoop**——初版延后（宿主无「游戏事件触发 agent 回合」seam，
@@ -311,7 +311,7 @@ JSON-safe 初始态 → `legalActions` 有界 → 取首个合法动作 `applyAc
 
 ## 9. 2026-10-13 补记：五子棋参照实现与标准修订（实弹检验）
 
-首个标准游戏包落地：`packages/plugin/examples/games/dsh-tavern.gomoku/`
+首个标准游戏包落地：`packages/plugin/examples/games/dsh-soulmojito.gomoku/`
 （`game.json` + `engine.mjs` 237 行 + `view.html` 402 行 + README），配套
 `packages/plugin/tests/games-gomoku.spec.ts` 29 用例。**运行时（`src/games/`）尚未实现**，
 本包不注册不装载，当前价值 = 标准的第一次可执行检验。测试基线 89 文件 1276 过 +1 跳 →
@@ -419,7 +419,7 @@ useChatGameSessions/TavernGamesSidebarTab/'tavern-games'/openTab）与四个负�
 回归**——开箱可玩（npm 包 files 不含 examples/，此前只有能访问仓库的人才能拿到
 五子棋；实况：对局环境只有内置井字棋，§9 参照包从未被导入）。落法：
 `src/games/builtin/gomoku.ts`（引擎与参照包逐条同款的自由规则；内联视图人类回合
-才启用点击与建议点提示、无 token 静态预览局面）；同 id（`dsh-tavern.gomoku`）遮蔽
+才启用点击与建议点提示、无 token 静态预览局面）；同 id（`dsh-soulmojito.gomoku`）遮蔽
 以磁盘导入副本为准并记 warning；版本 0.6.0→0.6.1 连带 story-clock 示例与
 mod-api.md 的 engines 值同步（参照包 engines 维持 `^0.6.0`——0.6.x 全系含 0.6.1，
 是更准也更宽的声明；games-import 的宿主版本改从 package.json 推导）。决策全文、
@@ -547,7 +547,7 @@ agent 回合的 seam」）在 §10 被 wait 挂起面绕开（agent 自己等事
 测试与 gates：新增 `games-autowake.spec.ts` 8 例（投递形状/等待中不重复/会话隔离/
 逐级降级/抛错不外溢/终局文本/旧宿主 source 形状）；games-service.spec 增 onHumanAction
 回调 describe；games-tools.spec 增等待登记的挂起/注销断言；gates server-bundle 增
-`dsh-tavern:games-waiters` 与 `game-notice-` marker + 负样本。
+`dsh-soulmojito:games-waiters` 与 `game-notice-` marker + 负样本。
 
 ## 16. 2026-10-14 四次补记：禁用投降 + 用户投降按钮 + 终局保留盘面（用户需求）
 
@@ -664,7 +664,7 @@ games-builtin.spec 内置数组断言、gates server-bundle 标记块三处共�
 21 自动停牌、爆牌即结算）/庄家回合语义（家规建议集、补牌、爆牌结算、三态裁决）/
 终局不变量（暗牌必亮）/家规非法动作/非法动作全家族/确定性/建议集/describe/
 源码扫描/尺寸/烟测五关/真实 service 端到端）；games-builtin.spec 内置数组断言
-扩至五内置；gates server-bundle 增 `dsh-tavern.blackjack` marker +
+扩至五内置；gates server-bundle 增 `dsh-soulmojito.blackjack` marker +
 `blackjack-removed` 负样本。视图另经 headless Chrome 四态截图验收（预览/玩家
 回合/庄家回合/终局）——**截图驱动两级修订**：终局呈现从「覆盖层压暗」（.74
 渗色 → 压 .92 仍有残影）改为**盘面之下的 in-flow 结果条**（盘面完整保留——
@@ -714,7 +714,7 @@ view 管线/静态锚点/createGame/布局不定式（8 图案各恰两张，只
 describe（含坐标引号串容错）/源码扫描/尺寸/烟测五关/真实 service 端到端「记忆
 机器人」——只用 describe 观察到的牌面决策、人机双路径交替翻完全盘并与终局
 盘面逐张对账）；games-builtin.spec 与 games-xiangqi.spec 内置数组断言扩至六
-内置；gates server-bundle 增 `dsh-tavern.memory-match` marker + `memory-removed`
+内置；gates server-bundle 增 `dsh-soulmojito.memory-match` marker + `memory-removed`
 负样本。真机验收 28 项断言（预览/人类回合两段点击上行捕获与发送锁/翻回预览
 动画 1.4s 退场/终局结果条与全盘定格/人类执蓝坐席反查）+ 截图 ×4。版本
 0.6.4→0.6.5（补丁位）连带 story-clock 示例与 mod-api.md 的 engines 值同步。
@@ -766,7 +766,7 @@ Agent 缺省执 blue。棋盘 24 格（7×7 外圈）：起点 1 / 地产 14（�
 （破产与净值两途）/建议集/describe/确定性整局重放/尺寸/非法动作全家族/DOM 垫片
 视图行为（按钮随 legal 收缩、棋盘归属渲染、终局结果条、坐席 owner 反查）/真实
 service 端到端）；games-builtin.spec 内置数组断言扩至七内置 + 大富翁烟测；
-games-xiangqi.spec 同款数组断言同步；gates server-bundle 增 `dsh-tavern.monopoly`
+games-xiangqi.spec 同款数组断言同步；gates server-bundle 增 `dsh-soulmojito.monopoly`
 marker + `monopoly-removed` 负样本。视图另经 headless Chromium（CDP、生产消息
 路径）六态验收——**截图驱动修订一处**：390×844 下 grid 行被格子 min-content
 顶开（board 370×452 失去正方形），修复为 `.tile` 显式 `min-height:0` + 480px

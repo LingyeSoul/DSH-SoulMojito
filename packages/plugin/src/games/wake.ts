@@ -5,7 +5,7 @@
  * 触发链：人类在棋盘上落子（HTTP `POST games/action/:id`）→ service.humanAction
  * 成功后回调本模块 → 过回合/运行中两道闸（见下防重，2026-10-15 竞态修订）→
  * 反查该聊天的 AgentTavern 绑定 → 经宿主 `agent.followup`
- * 投递一条**插件来源**的通知消息（`plugin:dsh-tavern` + form 'notice'，绝不伪装
+ * 投递一条**插件来源**的通知消息（`plugin:dsh-soulmojito` + form 'notice'，绝不伪装
  * 成用户消息；v0-v3 宿主形状由 hostPluginMessageSource 分支）→ Agent 新回合按
  * 懒段指引读局面续弈——**用户无需发送聊天消息**。
  *
@@ -131,7 +131,7 @@ export async function wakeAgentOnHumanMove(host: GamesWakeHost, session: GameSes
   try {
     agentId = await host.bindingOf?.(session.chat.character, session.chat.chatId)
   } catch (error) {
-    warn(`dsh-tavern: game wake binding lookup failed (${messageOf(error)})`)
+    warn(`dsh-soulmojito: game wake binding lookup failed (${messageOf(error)})`)
     return false
   }
   if (agentId === undefined) return false
@@ -154,7 +154,7 @@ export async function wakeAgentOnHumanMove(host: GamesWakeHost, session: GameSes
     await agent.followup(message)
     return true
   } catch (error) {
-    warn(`dsh-tavern: game wake followup failed (${messageOf(error)})`)
+    warn(`dsh-soulmojito: game wake followup failed (${messageOf(error)})`)
     return false
   }
 }

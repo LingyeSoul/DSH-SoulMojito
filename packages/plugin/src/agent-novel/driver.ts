@@ -133,7 +133,7 @@ export class NovelDriver {
     const effect = this.host.effect
     if (typeof effect === 'function') {
       try {
-        effect(subscribe, 'dsh-tavern:novel-driver')
+        effect(subscribe, 'dsh-soulmojito:novel-driver')
         return
       } catch {
         // Degrade to a bare subscription when the effect hook is gated.

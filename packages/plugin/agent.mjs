@@ -3297,7 +3297,7 @@ function safeSegment3(value) {
 
 // packages/tavern-store/src/novel.ts
 import { createHash as createHash5, randomBytes } from "node:crypto";
-var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("hex");
+var BOOT_ID = globalThis.__dshSoulMojitoNovelBootId ??= randomBytes(16).toString("hex");
 
 // packages/tavern-store/src/scripts.ts
 import { promises as fs6 } from "node:fs";
@@ -4416,7 +4416,7 @@ function formatGuidesBlock(guides) {
     ...[...normalized].sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((guide) => `- ${guide.text}`)
   ].join("\n");
 }
-var guidesChanged = createGlobalListenerRegistry("dsh-tavern:guides-changed-listeners");
+var guidesChanged = createGlobalListenerRegistry("dsh-soulmojito:guides-changed-listeners");
 function onGuidesChanged(listener) {
   return guidesChanged.on(listener);
 }
@@ -4431,6 +4431,12 @@ import { readdirSync, readFileSync, realpathSync as realpathSync2, statSync } fr
 import { createRequire as createRequire3 } from "node:module";
 import { basename as basename2, dirname as dirname4, join as join7 } from "node:path";
 import { fileURLToPath, pathToFileURL as pathToFileURL2 } from "node:url";
+
+// packages/bind/src/host-session.ts
+var PLUGIN_NAME = "dsh-soulmojito";
+var LEGACY_PLUGIN_NAME = "dsh-tavern";
+var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
+var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
 
 // packages/bind/src/host-package.ts
 import { realpathSync } from "node:fs";
@@ -4466,7 +4472,7 @@ function anchorCandidates(anchor) {
 
 // packages/plugin/src/memory-embed-local.ts
 var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
-var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-tavern, NOT the dsh-tavern source repository), then restart DSH`;
+var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-soulmojito, NOT the dsh-soulmojito source repository), then restart DSH`;
 var SESSION_CACHE_LIMIT = 2;
 function localModelFingerprint(modelDir) {
   try {
@@ -5090,7 +5096,7 @@ function defaultPreset() {
     prompt_order: [{ character_id: GLOBAL_ORDER_DUMMY_ID, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
   };
 }
-var agentPresetChanged = createGlobalListenerRegistry("dsh-tavern:agent-preset-changed-listeners");
+var agentPresetChanged = createGlobalListenerRegistry("dsh-soulmojito:agent-preset-changed-listeners");
 function onAgentPresetChanged(listener) {
   return agentPresetChanged.on(listener);
 }
@@ -5167,7 +5173,7 @@ async function runDeduction(deps, request) {
       let run;
       try {
         run = await subagents.start(DEDUCE_PROVIDER, {
-          label: `dsh-tavern deduce \xB7 ${role.name}`,
+          label: `dsh-soulmojito deduce \xB7 ${role.name}`,
           prompt: [{ type: "text", text: roleRoundPrompt({ role, scenario: request.scenario, round, transcript }) }],
           parent,
           signal,
@@ -6183,7 +6189,7 @@ var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
   "material_list",
   "material_read"
 ]);
-var MOD_REGISTRY_KEY = "dsh-tavern:mod-registry";
+var MOD_REGISTRY_KEY = "dsh-soulmojito:mod-registry";
 var registrySymbol = Symbol.for(MOD_REGISTRY_KEY);
 function store() {
   const holder = globalThis;
@@ -6194,7 +6200,7 @@ function store() {
     nextSequence: 1
   };
 }
-var modsChangedListeners = createGlobalListenerRegistry("dsh-tavern:mods-changed-listeners");
+var modsChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:mods-changed-listeners");
 function modToolSnapshot() {
   return [...store().tools.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
 }
@@ -6245,7 +6251,7 @@ function recordPromptView(input, logger) {
     }
     if (records.length > PROMPT_VIEWER_TOTAL) records = records.slice(records.length - PROMPT_VIEWER_TOTAL);
   } catch (error) {
-    logger?.warn?.(`dsh-tavern: prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`);
+    logger?.warn?.(`dsh-soulmojito: prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 function buildLoreTrace(lore) {
@@ -6327,7 +6333,7 @@ function sanitizeParams(params) {
 }
 
 // packages/tavern-macros/src/host-registry.ts
-var HOST_MACRO_REGISTRY_KEY = "dsh-tavern:host-macros";
+var HOST_MACRO_REGISTRY_KEY = "dsh-soulmojito:host-macros";
 var registrySymbol2 = Symbol.for(HOST_MACRO_REGISTRY_KEY);
 function store2() {
   const holder = globalThis;
@@ -7042,7 +7048,7 @@ function mountModExtensions(ctx, options) {
   function syncSections() {
     const wanted = /* @__PURE__ */ new Map();
     for (const entry of modSectionSnapshot()) {
-      const fullName = `dsh-tavern:mod:${entry.modId}:${entry.definition.name}`;
+      const fullName = `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`;
       wanted.set(fullName, { name: fullName, order: clampModSectionOrder(entry.definition.order), text: hostPromptSafe(entry.definition.text) });
     }
     for (const [fullName, current] of [...registeredSections]) {
@@ -7078,7 +7084,7 @@ function mountModExtensions(ctx, options) {
     try {
       ctx.effect(() => () => {
         dispose();
-      }, "dsh-tavern: mod extensions");
+      }, "dsh-soulmojito: mod extensions");
     } catch {
     }
   }
@@ -7086,17 +7092,17 @@ function mountModExtensions(ctx, options) {
 }
 
 // packages/plugin/src/games/handle.ts
-var GAMES_SERVICE_KEY = "dsh-tavern:games-service";
+var GAMES_SERVICE_KEY = "dsh-soulmojito:games-service";
 var serviceSymbol = Symbol.for(GAMES_SERVICE_KEY);
 function resolveGamesService() {
   const holder = globalThis;
   return holder[serviceSymbol]?.service;
 }
-var gamesChangedListeners = createGlobalListenerRegistry("dsh-tavern:games-changed-listeners");
+var gamesChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:games-changed-listeners");
 function onGamesChanged(listener) {
   return gamesChangedListeners.on(listener);
 }
-var GAMES_WAITERS_KEY = "dsh-tavern:games-waiters";
+var GAMES_WAITERS_KEY = "dsh-soulmojito:games-waiters";
 function waiterRegistry() {
   const holder = globalThis;
   const key = Symbol.for(GAMES_WAITERS_KEY);
@@ -7109,7 +7115,7 @@ function waiterRegistry() {
 }
 function beginGameWait(sessionId) {
   const registry = waiterRegistry();
-  const token = Symbol("dsh-tavern:game-wait");
+  const token = Symbol("dsh-soulmojito:game-wait");
   const tokens = registry.get(sessionId) ?? /* @__PURE__ */ new Set();
   tokens.add(token);
   registry.set(sessionId, tokens);
@@ -7122,7 +7128,7 @@ function beginGameWait(sessionId) {
 }
 
 // packages/plugin/src/agent-tavern/agent.ts
-var name = "dsh-tavern/agent";
+var name = "dsh-soulmojito/agent";
 var inject = ["systemPrompt", "tools"];
 var DEFAULT_USER = "User";
 var KERNEL = [
@@ -7150,35 +7156,35 @@ var memoryVectorStorePromise;
 var variableStorePromise;
 function apply(ctx) {
   ctx.systemPrompt?.section?.({
-    name: "dsh-tavern:agent-kernel",
+    name: "dsh-soulmojito:agent-kernel",
     order: -80,
     // 守卫：内核为静态文本，但一旦有人写入 {{...}}（宿主变量语法），装配
     // 会直接抛错中止运行——过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
     text: AGENT_KERNEL_TEXT
   });
   ctx.systemPrompt?.section?.({
-    name: "dsh-tavern:agent-preset",
+    name: "dsh-soulmojito:agent-preset",
     order: -75,
     text: (assembly) => agentPresetText(assembly?.agent?.id)
   });
   void preheatAgentPresetProjections();
   ctx.systemPrompt?.context?.({
-    name: "dsh-tavern:agent-facts",
+    name: "dsh-soulmojito:agent-facts",
     order: -70,
     text: (assembly) => agentFactsText(assembly?.agent?.id)
   });
   ctx.systemPrompt?.context?.({
-    name: "dsh-tavern:agent-guides",
+    name: "dsh-soulmojito:agent-guides",
     order: -65,
     text: (assembly) => agentGuidesText(assembly?.agent?.id)
   });
   ctx.systemPrompt?.context?.({
-    name: "dsh-tavern:agent-script",
+    name: "dsh-soulmojito:agent-script",
     order: -64,
     text: (assembly) => agentScriptText(assembly?.agent?.id)
   });
   ctx.systemPrompt?.context?.({
-    name: "dsh-tavern:agent-games",
+    name: "dsh-soulmojito:agent-games",
     order: -63,
     text: (assembly) => agentGamesText(assembly?.agent?.id)
   });
@@ -7191,7 +7197,7 @@ function apply(ctx) {
   });
   const tools = createTools();
   for (const tool2 of tools) {
-    if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool2), `dsh-tavern:agent:${tool2.name}`);
+    if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool2), `dsh-soulmojito:agent:${tool2.name}`);
     else ctx.tools?.register?.(tool2);
   }
   mountModExtensions(ctx, { claimTools: tools.map((tool2) => tool2.name) });
@@ -7980,7 +7986,7 @@ function createTools() {
     }),
     // game_wait（2026-10-14 修订；同日增量修订）：AgentLoop 的工具 Promise 即
     // 挂起面——本工具在自己回合内阻塞等人类在棋盘上落子，人类动作经
-    // dsh-tavern:games-changed-listeners（跨 bundle）唤醒，Agent 同回合自动续弈，
+    // dsh-soulmojito:games-changed-listeners（跨 bundle）唤醒，Agent 同回合自动续弈，
     // 无需用户发消息触发。宿主无「游戏事件唤醒 agent」seam 的旧约束由此绕开：
     // 不是宿主推事件进来，而是 agent 自己挂起等事件。
     // 返回面只给**等待期增量**（newMoves + 轮次/终局态）：棋盘/日志按需经
@@ -8498,14 +8504,14 @@ function agentPresetTemperatureOf(agentId) {
 }
 function agentPromptSectionsFor(agentId) {
   const sections = [
-    { name: "dsh-tavern:agent-kernel", order: -80, text: AGENT_KERNEL_TEXT },
-    { name: "dsh-tavern:agent-preset", order: -75, text: agentPresetText(agentId) },
-    { name: "dsh-tavern:agent-facts", order: -70, text: agentFactsText(agentId) },
-    { name: "dsh-tavern:agent-guides", order: -65, text: agentGuidesText(agentId) },
-    { name: "dsh-tavern:agent-script", order: -64, text: agentScriptText(agentId) },
-    { name: "dsh-tavern:agent-games", order: -63, text: agentGamesText(agentId) },
+    { name: "dsh-soulmojito:agent-kernel", order: -80, text: AGENT_KERNEL_TEXT },
+    { name: "dsh-soulmojito:agent-preset", order: -75, text: agentPresetText(agentId) },
+    { name: "dsh-soulmojito:agent-facts", order: -70, text: agentFactsText(agentId) },
+    { name: "dsh-soulmojito:agent-guides", order: -65, text: agentGuidesText(agentId) },
+    { name: "dsh-soulmojito:agent-script", order: -64, text: agentScriptText(agentId) },
+    { name: "dsh-soulmojito:agent-games", order: -63, text: agentGamesText(agentId) },
     ...modSectionSnapshot().map((entry) => ({
-      name: `dsh-tavern:mod:${entry.modId}:${entry.definition.name}`,
+      name: `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`,
       order: clampModSectionOrder(entry.definition.order),
       text: hostPromptSafe(entry.definition.text)
     }))
@@ -8537,7 +8543,7 @@ async function recordAgentTavernPromptViewFor(agentId, config, logger) {
       }
     }, logger);
   } catch (error) {
-    logger?.warn?.(`dsh-tavern: agent prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`);
+    logger?.warn?.(`dsh-soulmojito: agent prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 onAgentPresetChanged(() => presetProjection.refreshWhere((binding) => binding.architecture === "agent-tavern"));

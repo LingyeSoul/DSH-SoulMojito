@@ -84,7 +84,7 @@ import type { ToolDefinition } from './shared.js'
 export { executeCardPlan, type CardPlanExecution } from './tools-card.js'
 export { executeWorldPlan, type WorldPlanExecution } from './tools-world.js'
 
-export const name = 'dsh-tavern/card-workbench'
+export const name = 'dsh-soulmojito/card-workbench'
 export const inject = ['systemPrompt', 'tools']
 
 const KERNEL = [
@@ -122,7 +122,7 @@ const WORKBENCH_PRESET_HEADER = 'Active chat completion preset (the user\'s prom
 // 激活预设投影（preset-mount.ts）：默认关闭，面板「预设」分区开关启用。{{char}}
 // 展开用来源聊天角色（排错对局），否则用本会话最近产出卡（起草其卡面）。
 const presetMount = mountPresetProjection({
-  sectionName: 'dsh-tavern:card-workbench-preset',
+  sectionName: 'dsh-soulmojito:card-workbench-preset',
   architecture: 'card-workbench',
   stateFlag: 'cardWorkbenchPresetEnabled',
   header: WORKBENCH_PRESET_HEADER,
@@ -131,7 +131,7 @@ const presetMount = mountPresetProjection({
 
 export function apply(ctx: AgentContextLike): void {
   ctx.systemPrompt?.section?.({
-    name: 'dsh-tavern:card-workbench-kernel',
+    name: 'dsh-soulmojito:card-workbench-kernel',
     order: -80,
     // 守卫：内核为静态文本，但写入 {{...}}（宿主变量语法）会让装配抛错——
     // 过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
@@ -144,7 +144,7 @@ export function apply(ctx: AgentContextLike): void {
   void presetMount.preheat()
   const tools = createTools()
   for (const tool of tools) {
-    if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool), `dsh-tavern:card-workbench:${tool.name}`)
+    if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool), `dsh-soulmojito:card-workbench:${tool.name}`)
     else ctx.tools?.register?.(tool)
   }
 }

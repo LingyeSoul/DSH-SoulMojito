@@ -157,7 +157,7 @@ export async function runDeduction(deps: {
       let run: SubagentRunLike | undefined
       try {
         run = await subagents.start(DEDUCE_PROVIDER, {
-          label: `dsh-tavern deduce · ${role.name}`,
+          label: `dsh-soulmojito deduce · ${role.name}`,
           prompt: [{ type: 'text', text: roleRoundPrompt({ role, scenario: request.scenario, round, transcript }) }],
           parent,
           signal,

@@ -18,7 +18,7 @@
  *   undoMvuAgentSettlement 写 chat 作用域变量存储。
  * - GET mvu/status/<character>/<chatId>：变量 + 回执快照；当卡片约定字段
  *   `data.extensions.agentTavern.statusTemplate`（0013 工作台将来产出）是
- *   字符串时，用 `@dsh-tavern/template` 的 createTemplateRuntime 渲染并返回
+ *   字符串时，用 `@dsh-soulmojito/template` 的 createTemplateRuntime 渲染并返回
  *   renderedHtml——这是 P1 的接线点；模板化 MVU display 语义不在 P1 范围。
  */
 

@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>五子棋 · dsh-tavern 游戏桥</title>
+<title>五子棋 · dsh-soulmojito 游戏桥</title>
 <style>
   /* 自包含视图（提案 0018 §3.3）：零外部资源——无外链 script/样式/字体，无网络请求，
      与 mod CSP 纪律同款（connect-src 'none'）。桥协议只有两条消息：
-     下行 dsh-tavern:game-state / 上行 dsh-tavern:game-action。 */
+     下行 dsh-soulmojito:game-state / 上行 dsh-soulmojito:game-action。 */
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
@@ -104,7 +104,7 @@
 
   // ===== 桥协议（提案 0018 §3.3 原文）=====
   // 从 location.search 读 token/session；监听 message 事件，
-  // data.type === 'dsh-tavern:game-state' 且 data.token === TOKEN 时，
+  // data.type === 'dsh-soulmojito:game-state' 且 data.token === TOKEN 时，
   // 以 data.view（{state, turn, legal, finished}）与 data.session 全量重渲染。
   var params = new URLSearchParams(window.location.search)
   var TOKEN = params.get('token')
@@ -131,7 +131,7 @@
   }
   var PREVIEW_SESSION = {
     id: '',
-    gameId: 'dsh-tavern.gomoku',
+    gameId: 'dsh-soulmojito.gomoku',
     players: [
       { role: 'black', owner: 'human' },
       { role: 'white', owner: 'agent' },
@@ -152,7 +152,7 @@
   window.addEventListener('message', function (event) {
     var data = event.data
     if (!data || typeof data !== 'object') return
-    if (data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+    if (data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
     var view = data.view && typeof data.view === 'object' ? data.view : {}
     var session = data.session && typeof data.session === 'object' ? data.session : null
     current = {
@@ -203,7 +203,7 @@
     sessionIdEl.textContent = act.live && sessionId ? '对局 ' + sessionId : (act.live ? '等待会话…' : '预览模式')
 
     var cls = 'preview'
-    var text = '预览模式：由 dsh-tavern 游戏服务装载后启用交互'
+    var text = '预览模式：由 dsh-soulmojito 游戏服务装载后启用交互'
     if (act.live) {
       if (!state) {
         text = '等待对局状态…'
@@ -225,9 +225,9 @@
     if (finished) overlayResultEl.textContent = endText(state)
 
     hintEl.textContent = !act.live
-      ? '这是静态演示局面：由 dsh-tavern 游戏服务装载后，棋盘将接收实时状态并启用点击落子。'
+      ? '这是静态演示局面：由 dsh-soulmojito 游戏服务装载后，棋盘将接收实时状态并启用点击落子。'
       : (!state
-        ? '正在连接 dsh-tavern 游戏服务…'
+        ? '正在连接 dsh-soulmojito 游戏服务…'
         : (finished
           ? '对局已结束。可关闭本面板或在对局列表中开新一局。'
           : '点击棋盘交叉点落子（任意空点均可点，落子合法性由服务端引擎终审）。'))
@@ -380,7 +380,7 @@
     return set
   }
 
-  // 点击空点（未终局时）：上行 dsh-tavern:game-action。
+  // 点击空点（未终局时）：上行 dsh-soulmojito:game-action。
   // 合法性由服务端引擎终审——这里不做本地规则裁决，人类可点任意空点。
   boardEl.addEventListener('click', function (event) {
     var target = event.target
@@ -391,7 +391,7 @@
     var y = Number(target.getAttribute('data-y'))
     if (current.state.board[y][x] !== 0) return
     window.parent.postMessage(
-      { type: 'dsh-tavern:game-action', token: TOKEN, action: { type: 'place', x: x, y: y } },
+      { type: 'dsh-soulmojito:game-action', token: TOKEN, action: { type: 'place', x: x, y: y } },
       '*'
     )
   })

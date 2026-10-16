@@ -7,10 +7,10 @@
  * 同学科）。Mod 宿主只活在 index bundle（apply 内装载），而工具/section 要在
  * agent bundle（agent.mjs，AgentTavern preset）与 novel bundle（novel.mjs）的
  * apply 里生效——注册动作（index bundle 写）与消费动作（agent bundle 读）必须
- * 经 `globalThis[Symbol.for('dsh-tavern:mod-registry')]` 互见。key 字符串是
+ * 经 `globalThis[Symbol.for('dsh-soulmojito:mod-registry')]` 互见。key 字符串是
  * bundle 间互见契约，不得变更。
  *
- * 变更通知走 `dsh-tavern:mods-changed-listeners`（createGlobalListenerRegistry，
+ * 变更通知走 `dsh-soulmojito:mods-changed-listeners`（createGlobalListenerRegistry，
  * 写穿语义与 guides/preset 总线一致）：写侧（mod 宿主）emit 后读侧（已 mount
  * 的 agent ctx）可以增量补注册——新会话必然可见（recompose 时吸收快照），
  * 既有会话经此通知尽力补齐（提案 §3.6 的既定承诺边界）。
@@ -103,7 +103,7 @@ interface ModRegistryStore {
   nextSequence: number
 }
 
-const MOD_REGISTRY_KEY = 'dsh-tavern:mod-registry'
+const MOD_REGISTRY_KEY = 'dsh-soulmojito:mod-registry'
 const registrySymbol = Symbol.for(MOD_REGISTRY_KEY)
 
 function store(): ModRegistryStore {
@@ -116,7 +116,7 @@ function store(): ModRegistryStore {
   })
 }
 
-const modsChangedListeners = createGlobalListenerRegistry<() => void>('dsh-tavern:mods-changed-listeners')
+const modsChangedListeners = createGlobalListenerRegistry<() => void>('dsh-soulmojito:mods-changed-listeners')
 
 function notifyChanged(): void {
   // 写穿通知：读侧自行重读快照做差分。fire-and-forget（吞错在 registry 内）。

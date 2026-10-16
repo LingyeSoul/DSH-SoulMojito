@@ -119,7 +119,7 @@ describe('stream-delta wiring in runGeneration (A-3)', () => {
   const offs: Array<() => void> = []
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-stream-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-stream-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.importCharacter(importBody(CHAR))
@@ -172,7 +172,7 @@ describe('stream-delta wiring in runGeneration (A-3)', () => {
   async function generate(body: Record<string, unknown>) {
     const snapshot = await store.getChatSnapshot(CHAR, chatId)
     const res = makeResponse()
-    await apiHandler(makeRequest({ character: CHAR, chatId, revision: snapshot!.revision, ...body }, '/api/dsh-tavern/generate'), res)
+    await apiHandler(makeRequest({ character: CHAR, chatId, revision: snapshot!.revision, ...body }, '/api/dsh-soulmojito/generate'), res)
     expect(res.chunks.some((chunk) => chunk.includes('"type":"saved"'))).toBe(true)
     await drainStreamDeltas() // stream-delta 投递是 fire-and-forget，先排空再断言
   }
@@ -226,7 +226,7 @@ describe('stream-delta audit flood control and lifecycle (api.events adapter)', 
     state: { modsEnabled?: boolean; enabled?: Record<string, boolean> } = {},
     write?: (home: string) => void,
   ) {
-    const home = mkdtempSync(join(tmpdir(), 'dsh-tavern-streammod-'))
+    const home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-streammod-'))
     homes.push(home)
     write?.(home)
     const fake = fakeStateStore(state)

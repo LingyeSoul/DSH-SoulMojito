@@ -122,11 +122,11 @@ describe('Script Play EPUB import (proposal 0014 P2)', () => {
     await apiHandler(req, res)
     return { status: res.statusCode, body: JSON.parse(res.chunks.join('') || '{}') as Record<string, any> }
   }
-  const post = async (route: string, body: unknown) => call(makeRequest(body, `/api/dsh-tavern/${route}`))
+  const post = async (route: string, body: unknown) => call(makeRequest(body, `/api/dsh-soulmojito/${route}`))
   const get = async (url: string) => call(makeGetRequest(url))
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-epub-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-epub-'))
     process.env.DSH_HOME = home
     tavernRoot = join(home, 'tavern')
     store = await TavernStore.open(tavernRoot)
@@ -254,7 +254,7 @@ describe('Script Play EPUB import (proposal 0014 P2)', () => {
     expect(imported.body.script.chunks.length).toBeGreaterThanOrEqual(1)
     expect(imported.body.script.chunks[0].text).toContain('Chapter One')
 
-    const listed = await get('/api/dsh-tavern/scripts')
+    const listed = await get('/api/dsh-soulmojito/scripts')
     const mine = listed.body.scripts.find((summary: { name: string }) => summary.name === 'Route EPUB')
     expect(mine).toMatchObject({ format: 'epub' })
 

@@ -15,10 +15,10 @@ const REPO_ROOT = resolve(import.meta.dirname, '../../..')
 const RUNTIME = join(REPO_ROOT, '.npm-cache', 'dsh-runtime', 'node_modules')
 // v4 与 v0 用独立沙箱（两组都要求宿主可见布局 <root>/<workspace>/<session>；
 // workspace 目录名由 header.cwd 编码而来，分开便于各自校准）。
-const SANDBOX = join(tmpdir(), `dsh-tavern-repair-v4-${process.pid}`)
+const SANDBOX = join(tmpdir(), `dsh-soulmojito-repair-v4-${process.pid}`)
 // 受保护头用例的独立根：两种 surface 形态放同一根，目录模式一次处理。
-const SANDBOX_HEAD = join(tmpdir(), `dsh-tavern-repair-v4-head-${process.pid}`)
-const SANDBOX_V0 = join(tmpdir(), `dsh-tavern-repair-v0-${process.pid}`)
+const SANDBOX_HEAD = join(tmpdir(), `dsh-soulmojito-repair-v4-head-${process.pid}`)
+const SANDBOX_V0 = join(tmpdir(), `dsh-soulmojito-repair-v0-${process.pid}`)
 
 function run(args: string[]) {
   return execFileSync(process.execPath, [join(REPO_ROOT, 'scripts', 'repair-v4-sessions.mjs'), ...args], {
@@ -55,8 +55,8 @@ describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3
     mkdirSync(join(SANDBOX, '--root-.dsh-tavern-workspace--', 'session-poisoned'), { recursive: true })
     const rows = [
       { type: 'session', version: 4, id: 'session-poisoned', createdAt: 1700000000000, cwd: '/root/.dsh/tavern/workspace', isSeeded: false, delegationDepth: 0 },
-      { type: 'assistant/message', seq: 1, time: 1700000000001, data: { turn: 0, step: 1, message: { id: 'm1', role: 'assistant', content: [{ type: 'text', text: 'Greeting.' }], source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' } } }, surfaceOp: 'append' },
-      { type: 'user/message', seq: 2, time: 1700000000002, data: { id: 'u1', role: 'user', content: [{ type: 'text', text: 'Hello.' }], source: { kind: 'plugin', plugin: 'dsh-tavern' } }, surfaceOp: 'append' },
+      { type: 'assistant/message', seq: 1, time: 1700000000001, data: { turn: 0, step: 1, message: { id: 'm1', role: 'assistant', content: [{ type: 'text', text: 'Greeting.' }], source: { kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-import' } } }, surfaceOp: 'append' },
+      { type: 'user/message', seq: 2, time: 1700000000002, data: { id: 'u1', role: 'user', content: [{ type: 'text', text: 'Hello.' }], source: { kind: 'plugin', plugin: 'dsh-soulmojito' } }, surfaceOp: 'append' },
       { type: 'turn/start', seq: 3, time: 1700000000003, data: { turn: 1 } },
       { type: 'step/start', seq: 4, time: 1700000000004, data: { turn: 1, step: 1 } },
       { type: 'assistant/chunk', seq: 5, time: 1700000000005, data: { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'Re' } } },
@@ -88,7 +88,7 @@ describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3
       'user/message', 'turn/end',
       'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
     ])
-    expect(repaired[5]?.data?.source).toEqual({ kind: 'plugin:dsh-tavern' })
+    expect(repaired[5]?.data?.source).toEqual({ kind: 'plugin:dsh-soulmojito' })
     for (const row of repaired) {
       if (row.type === 'assistant/message') expect(Array.isArray(row.data.stream)).toBe(true)
     }
@@ -106,7 +106,7 @@ describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3
       { type: 'session', version: 4, id: 'session-head-step', createdAt: 1700000000000, cwd: '/root/.dsh/tavern/workspace', isSeeded: false, delegationDepth: 0 },
       { type: 'turn/start', seq: 1, time: 1700000000001, data: { turn: 1 } },
       { type: 'step/start', seq: 2, time: 1700000000002, data: { turn: 1, step: 1 } },
-      { type: 'assistant/message', seq: 3, time: 1700000000003, surfaceOp: 'append', data: { turn: 1, step: 1, stream: [], message: { id: 'm1', role: 'assistant', content: [{ type: 'text', text: 'Greeting.' }], source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' } } } },
+      { type: 'assistant/message', seq: 3, time: 1700000000003, surfaceOp: 'append', data: { turn: 1, step: 1, stream: [], message: { id: 'm1', role: 'assistant', content: [{ type: 'text', text: 'Greeting.' }], source: { kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-import' } } } },
       { type: 'step/end', seq: 4, time: 1700000000004, data: { turn: 1, step: 1 } },
       { type: 'turn/end', seq: 5, time: 1700000000005, data: { turn: 1, reason: { kind: 'completed' } } },
       { type: 'turn/start', seq: 6, time: 1700000000006, data: { turn: 2 } },
@@ -130,9 +130,9 @@ describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3
     const userFirstRows = [
       { type: 'session', version: 4, id: 'session-head-userfirst', createdAt: 1700000000000, cwd: '/root/.dsh/tavern/workspace', isSeeded: false, delegationDepth: 0 },
       { type: 'turn/start', seq: 1, time: 1700000000001, data: { turn: 1 } },
-      { type: 'user/message', seq: 2, time: 1700000000002, surfaceOp: 'append', data: { id: 'u0', role: 'user', content: [{ type: 'text', text: 'old' }], source: { kind: 'plugin:dsh-tavern' } } },
+      { type: 'user/message', seq: 2, time: 1700000000002, surfaceOp: 'append', data: { id: 'u0', role: 'user', content: [{ type: 'text', text: 'old' }], source: { kind: 'plugin:dsh-soulmojito' } } },
       { type: 'step/start', seq: 3, time: 1700000000003, data: { turn: 1, step: 1 } },
-      { type: 'assistant/message', seq: 4, time: 1700000000004, surfaceOp: 'append', data: { turn: 1, step: 1, stream: [], message: { id: 'm0', role: 'assistant', content: [{ type: 'text', text: 'old reply' }], source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' } } } },
+      { type: 'assistant/message', seq: 4, time: 1700000000004, surfaceOp: 'append', data: { turn: 1, step: 1, stream: [], message: { id: 'm0', role: 'assistant', content: [{ type: 'text', text: 'old reply' }], source: { kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-import' } } } },
       { type: 'step/end', seq: 5, time: 1700000000005, data: { turn: 1, step: 1 } },
       { type: 'turn/end', seq: 6, time: 1700000000006, data: { turn: 1, reason: { kind: 'completed' } } },
       { type: 'turn/start', seq: 7, time: 1700000000007, data: { turn: 2 } },
@@ -211,7 +211,7 @@ describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3
       { type: 'permission/preset', seq: 0, time: t, data: { preset: 'workspace-write' } },
       { type: 'sandbox/mode', seq: 1, time: t, data: { mode: 'workspace-write' } },
       { type: 'approval/policy', seq: 2, time: t, data: { policy: 'ask' } },
-      { type: 'command/run', seq: 3, time: t, data: { commandId: 'cmd-test-1', name: 'dsh-tavern-session', source: { kind: 'user' } } },
+      { type: 'command/run', seq: 3, time: t, data: { commandId: 'cmd-test-1', name: 'dsh-soulmojito-session', source: { kind: 'user' } } },
       { type: 'agent-preset/selected', seq: 4, time: t, data: { agentPreset: 'agent-tavern' } },
       { type: 'agent/inbox/spliced', seq: 5, time: t, data: { target: 'next-step', start: 0, inserted: [{ id: 'init-1', role: 'user', content: [{ type: 'text', text: 'init context' }], source: { kind: 'user' } }] } },
     ]
@@ -219,14 +219,14 @@ describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3
       // 0.3.x stamp-turn-0 形状：无 turn/start 包裹，载荷 turn: 0。
       rows.push({
         type: 'assistant/message', seq: 6, time: t + 1, surfaceOp: 'append',
-        data: { turn: 0, step: 1, message: { id: 'import-1', role: 'assistant', content: [{ type: 'text', text: 'Greeting.' }], source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' } } },
+        data: { turn: 0, step: 1, message: { id: 'import-1', role: 'assistant', content: [{ type: 'text', text: 'Greeting.' }], source: { kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-import' } } },
       })
     } else {
       // 健康模板：完整开/关的导入 turn 1。
       rows.push(
         { type: 'turn/start', seq: 6, time: t + 1, data: { turn: 1 } },
         { type: 'step/start', seq: 7, time: t + 1, data: { turn: 1, step: 1 } },
-        { type: 'assistant/message', seq: 8, time: t + 1, surfaceOp: 'append', data: { turn: 1, step: 1, message: { id: 'import-1', role: 'assistant', content: [{ type: 'text', text: 'Greeting.' }], source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' } } } },
+        { type: 'assistant/message', seq: 8, time: t + 1, surfaceOp: 'append', data: { turn: 1, step: 1, message: { id: 'import-1', role: 'assistant', content: [{ type: 'text', text: 'Greeting.' }], source: { kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-import' } } } },
         { type: 'step/end', seq: 9, time: t + 1, data: { turn: 1, step: 1 } },
         { type: 'turn/end', seq: 10, time: t + 1, data: { turn: 1, reason: { kind: 'completed' } } },
       )

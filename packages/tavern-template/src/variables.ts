@@ -1,7 +1,7 @@
 /**
  * 模板变量系统（对照 ST-Prompt-Template `setvar/getvar` 家族的公开语义）。
  *
- * 作用域（dsh-tavern 适配，见提案 0008 §1 偏差表）：
+ * 作用域（dsh-soulmojito 适配，见提案 0008 §1 偏差表）：
  * - `local`：聊天局部变量（`chat_metadata.variables`，任意 JSON）；
  * - `global`：`state.scriptGlobals`（既有类型约束：仅标量）；
  * - `message`：无楼层变量面，映射到 local；
@@ -87,7 +87,7 @@ function normalizeOptions(input: unknown, base: NormalizedOptions): NormalizedOp
         case 'min': out.min = value as number | null; break
         case 'max': out.max = value as number | null; break
         case 'clone': out.clone = value === true; break
-        case 'dryRun': break // dsh-tavern 单遍计算，无准备期（文档化偏差）
+        case 'dryRun': break // dsh-soulmojito 单遍计算，无准备期（文档化偏差）
         case 'noCache': break // 我们的 cache 写穿透，无需该开关
         case 'index': break // 楼层变量索引，无楼层面
         case 'withMsg': break
@@ -188,7 +188,7 @@ export class TemplateVariableSystem {
     if (scope === 'global') {
       if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
         throw new TypeError(
-          `global scope only accepts string|number|boolean in dsh-tavern (scriptGlobals constraint); got ${typeof value}. Use local scope for object trees.`)
+          `global scope only accepts string|number|boolean in dsh-soulmojito (scriptGlobals constraint); got ${typeof value}. Use local scope for object trees.`)
       }
       this.global[key] = value
       return

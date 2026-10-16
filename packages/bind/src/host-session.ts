@@ -35,10 +35,22 @@ export function sessionEvents(session: HostSessionLog | null | undefined): reado
   return (readSessionEvents(session) ?? []) as readonly HostSessionEvent[]
 }
 
+/** 本插件的持久化身份名（2026-10-16 项目改名 dsh-tavern → DSH-SoulMojito）。
+ * 新写入恒用本名；旧名（LEGACY_PLUGIN_NAME）只保留读取兼容。 */
+export const PLUGIN_NAME = 'dsh-soulmojito'
+
+/** 改名前的持久化身份名：存量会话工件里的 source 戳（v0-v3 的 `plugin` 成员、
+ * v4 的 producer kind）读取端必须继续识别，否则旧会话失去插件身份。 */
+export const LEGACY_PLUGIN_NAME = 'dsh-tavern'
+
 /** v4 起本插件消息的 producer-owned source kind。宿主 v3→v4 迁移对不在同名
- * 生产者名单里的插件名按 `plugin:<name>` 重写，dsh-tavern 两侧（迁移产物与
- * 新写入）因此收敛到同一 kind，读取端只认这一个 v4 值即可。 */
-export const TAVERN_PLUGIN_SOURCE_KIND = 'plugin:dsh-tavern'
+ * 生产者名单里的插件名按 `plugin:<name>` 重写，本插件两侧（迁移产物与新写入）
+ * 因此收敛到同一 kind。改名前的历史值 `plugin:dsh-tavern` 由读取端双认
+ * （LEGACY_TAVERN_PLUGIN_SOURCE_KIND），新写入恒为新名。 */
+export const TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`
+
+/** 改名前的 producer-owned kind（只读兼容通道，不用于新写入）。 */
+export const LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`
 
 /**
  * 会话持久化格式版本（`session.header.version`，宿主 Session 公开字段，创建时即定）。
@@ -106,18 +118,19 @@ export function hostPluginMessageSource(
     ? TAVERN_PLUGIN_SOURCE_KIND
     : 'plugin'
   return {
-    ...(kind === 'plugin' ? { plugin: 'dsh-tavern' } : {}),
+    ...(kind === 'plugin' ? { plugin: PLUGIN_NAME } : {}),
     ...members,
     kind,
   }
 }
 
 /** 会话事件里的 source 是否本插件写入（v4 producer-owned kind 或 v0-v3 的
- * `{ kind: 'plugin', plugin: 'dsh-tavern' }`）。宿主把 v3 工件读出时已迁移为
- * v4 kind；老形状匹配只为防御直读未迁移日志的路径。 */
+ * `{ kind: 'plugin', plugin }`）。宿主把 v3 工件读出时已迁移为 v4 kind；老形状
+ * 匹配只为防御直读未迁移日志的路径。改名兼容（2026-10-16）：旧名 dsh-tavern 的
+ * kind 与 plugin 值双认——存量会话的 marker 识别不断。 */
 export function isHostPluginMessageSource(source: unknown): boolean {
   if (typeof source !== 'object' || source === null) return false
   const record = source as Record<string, unknown>
-  if (record.kind === TAVERN_PLUGIN_SOURCE_KIND) return true
-  return record.kind === 'plugin' && record.plugin === 'dsh-tavern'
+  if (record.kind === TAVERN_PLUGIN_SOURCE_KIND || record.kind === LEGACY_TAVERN_PLUGIN_SOURCE_KIND) return true
+  return record.kind === 'plugin' && (record.plugin === PLUGIN_NAME || record.plugin === LEGACY_PLUGIN_NAME)
 }

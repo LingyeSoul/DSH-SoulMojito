@@ -249,7 +249,7 @@ describe('MVU $schema guard on the ST settlement path (integration)', () => {
   }
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-mvu-guard-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-mvu-guard-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     const cardData = (name: string, extensions: Record<string, unknown> = {}) => ({
@@ -298,7 +298,7 @@ describe('MVU $schema guard on the ST settlement path (integration)', () => {
   async function generate(character: string, id: string, message: string) {
     const snapshot = await store.getChatSnapshot(character, id)
     const res = makeResponse()
-    await apiHandler(makeRequest({ character, chatId: id, message, revision: snapshot!.revision }, '/api/dsh-tavern/generate'), res)
+    await apiHandler(makeRequest({ character, chatId: id, message, revision: snapshot!.revision }, '/api/dsh-soulmojito/generate'), res)
     expect(res.writableEnded).toBe(true)
     const events = res.chunks.join('').trim().split('\n').map((line) => JSON.parse(line))
     return events.find((event) => event.type === 'saved')
@@ -373,7 +373,7 @@ describe('MVU $schema guard on the ST settlement path (integration)', () => {
 
   it('hides $schema from the status payload and the rendered status bar, including the AgentTavern overlay', async () => {
     const res = makeResponse()
-    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/mvu/status/${encodeURIComponent(GUARD_CHARACTER)}/${schemaChatId}`), res)
+    await apiHandler(makeRequest(undefined, `/api/dsh-soulmojito/mvu/status/${encodeURIComponent(GUARD_CHARACTER)}/${schemaChatId}`), res)
     expect(res.statusCode).toBe(200)
     const payload = JSON.parse(res.chunks.join(''))
     expect(payload.ok).toBe(true)
@@ -392,7 +392,7 @@ describe('MVU $schema guard on the ST settlement path (integration)', () => {
       },
     }))
     const overlay = makeResponse()
-    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/mvu/status/${encodeURIComponent(GUARD_CHARACTER)}/${schemaChatId}`), overlay)
+    await apiHandler(makeRequest(undefined, `/api/dsh-soulmojito/mvu/status/${encodeURIComponent(GUARD_CHARACTER)}/${schemaChatId}`), overlay)
     const overlayPayload = JSON.parse(overlay.chunks.join(''))
     expect(overlayPayload.variables).toEqual({ mvu: { favor: 77, mood: 'calm', name: '艾琳', stats: { hp: 5, mp: 5 } } })
     expect(overlayPayload.renderedHtml).toContain('好感：77|calm')
@@ -406,7 +406,7 @@ describe('MVU $schema guard on the ST settlement path (integration)', () => {
     ])
     const retrySnapshot = await store.getChatSnapshot(GUARD_CHARACTER, crafted)
     const res = makeResponse()
-    await apiHandler(makeRequest({ character: GUARD_CHARACTER, chatId: crafted, revision: retrySnapshot!.revision }, '/api/dsh-tavern/mvu/retry'), res)
+    await apiHandler(makeRequest({ character: GUARD_CHARACTER, chatId: crafted, revision: retrySnapshot!.revision }, '/api/dsh-soulmojito/mvu/retry'), res)
     expect(res.statusCode).toBe(200)
     const payload = JSON.parse(res.chunks.join(''))
     expect(payload.receipt.changes).toEqual([
@@ -428,7 +428,7 @@ describe('MVU $schema guard on the ST settlement path (integration)', () => {
     ])
     const first = await store.getChatSnapshot(GUARD_CHARACTER, crafted)
     const rejected = makeResponse()
-    await apiHandler(makeRequest({ character: GUARD_CHARACTER, chatId: crafted, revision: first!.revision }, '/api/dsh-tavern/mvu/retry'), rejected)
+    await apiHandler(makeRequest({ character: GUARD_CHARACTER, chatId: crafted, revision: first!.revision }, '/api/dsh-soulmojito/mvu/retry'), rejected)
     const rejectedPayload = JSON.parse(rejected.chunks.join(''))
     expect(rejectedPayload.receipt.status).toBe('unchanged')
     expect(rejectedPayload.receipt.failures[0]).toContain('guard enum-violation')
@@ -441,7 +441,7 @@ describe('MVU $schema guard on the ST settlement path (integration)', () => {
     }, fixed!.revision)
     const retrySnapshot = await store.getChatSnapshot(GUARD_CHARACTER, crafted)
     const retried = makeResponse()
-    await apiHandler(makeRequest({ character: GUARD_CHARACTER, chatId: crafted, revision: retrySnapshot!.revision }, '/api/dsh-tavern/mvu/retry'), retried)
+    await apiHandler(makeRequest({ character: GUARD_CHARACTER, chatId: crafted, revision: retrySnapshot!.revision }, '/api/dsh-soulmojito/mvu/retry'), retried)
     const retriedPayload = JSON.parse(retried.chunks.join(''))
     expect(retriedPayload.receipt.status).toBe('updated')
     expect(retriedPayload.receipt.changes).toEqual([{ name: 'mvu.mood', before: 'calm', after: 'tense' }])

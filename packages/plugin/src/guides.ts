@@ -84,7 +84,7 @@ type GuidesChangedListener = (character: string, chatId: string) => void | Promi
 // globalThis 锚定（同学科于 agent-novel/usage.ts 与 agent-tavern/preset.ts）：
 // emit 发生在 index.mjs 的 guides 路由，监听在 agent.mjs——分离 bundle 各持
 // 一份模块级 Set 会互不可见，写穿必须共享同一注册表。key 逐字保留存量值。
-const guidesChanged = createGlobalListenerRegistry<GuidesChangedListener>('dsh-tavern:guides-changed-listeners')
+const guidesChanged = createGlobalListenerRegistry<GuidesChangedListener>('dsh-soulmojito:guides-changed-listeners')
 
 /**
  * 注册 guides 变更回调（agent.ts 模块加载时调用，按 character/chatId 反查

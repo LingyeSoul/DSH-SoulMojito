@@ -66,7 +66,7 @@ describe('group chat nudge injection', () => {
   let chatId: string
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-nudge-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-nudge-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.importCharacter(importBody(ALICE))
@@ -126,7 +126,7 @@ describe('group chat nudge injection', () => {
     const res = makeResponse()
     await apiHandler(makeRequest({
       character: GROUP, chatId, message: 'hello group', revision: snapshot!.revision, group: true,
-    }, '/api/dsh-tavern/generate'), res)
+    }, '/api/dsh-soulmojito/generate'), res)
     expect(res.chunks.some((chunk) => chunk.includes('"type":"saved"'))).toBe(true)
 
     const messages = llmRequests.at(-1)!.messages!
@@ -152,7 +152,7 @@ describe('group chat nudge injection', () => {
     const res = makeResponse()
     await apiHandler(makeRequest({
       character: GROUP, chatId, mode: 'regenerate', message: '', revision: snapshot!.revision, group: true,
-    }, '/api/dsh-tavern/generate'), res)
+    }, '/api/dsh-soulmojito/generate'), res)
     expect(res.chunks.some((chunk) => chunk.includes('"type":"saved"'))).toBe(true)
 
     const messages = llmRequests.at(-1)!.messages!

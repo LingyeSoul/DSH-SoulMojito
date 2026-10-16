@@ -53,7 +53,7 @@ describe('avatar fallback', () => {
   }
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-avatar-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-avatar-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     apply({
@@ -82,17 +82,17 @@ describe('avatar fallback', () => {
 
   it('json 角色卡（无头像）：200 + image/svg+xml + 名字首字母；同名稳定、异名异色', async () => {
     await importJsonCard('Json Card')
-    const first = await getBody('/api/dsh-tavern/avatar/Json%20Card')
+    const first = await getBody('/api/dsh-soulmojito/avatar/Json%20Card')
     expect(first.status).toBe(200)
     expect(first.headers['content-type']).toBe('image/svg+xml')
     expect(first.body).toContain('<svg')
     expect(first.body).toContain('>J</text>')
 
-    const again = await getBody('/api/dsh-tavern/avatar/Json%20Card')
+    const again = await getBody('/api/dsh-soulmojito/avatar/Json%20Card')
     expect(again.body).toBe(first.body)
 
     await importJsonCard('Bob')
-    const other = await getBody('/api/dsh-tavern/avatar/Bob')
+    const other = await getBody('/api/dsh-soulmojito/avatar/Bob')
     expect(other.status).toBe(200)
     expect(other.body).toContain('>B</text>')
     expect(other.body).not.toBe(first.body)
@@ -100,13 +100,13 @@ describe('avatar fallback', () => {
 
   it('CJK 名取首个码点（不是半个代理对）：首字母为原字符', async () => {
     await importJsonCard('阿尔托莉雅')
-    const cjk = await getBody('/api/dsh-tavern/avatar/%E9%98%BF%E5%B0%94%E6%89%98%E8%8E%89%E9%9B%85')
+    const cjk = await getBody('/api/dsh-soulmojito/avatar/%E9%98%BF%E5%B0%94%E6%89%98%E8%8E%89%E9%9B%85')
     expect(cjk.status).toBe(200)
     expect(cjk.body).toContain('>阿</text>')
   })
 
   it('不存在的角色仍然 404：实体缺失是错误，不是缺图', async () => {
-    const missing = await getBody('/api/dsh-tavern/avatar/Nobody')
+    const missing = await getBody('/api/dsh-soulmojito/avatar/Nobody')
     expect(missing.status).toBe(404)
     expect(JSON.parse(missing.body).ok).toBe(false)
   })
@@ -116,7 +116,7 @@ describe('avatar fallback', () => {
       id: 'group-party', name: 'Party', members: ['Json Card'], allowSelfResponses: false,
       activationStrategy: 1, disabledMembers: [], chatId: '', chats: [], autoModeDelay: 3,
     })
-    const viaMember = await getBody('/api/dsh-tavern/avatar/Party')
+    const viaMember = await getBody('/api/dsh-soulmojito/avatar/Party')
     expect(viaMember.status).toBe(200)
     expect(viaMember.body).toContain('>J</text>')
 
@@ -124,19 +124,19 @@ describe('avatar fallback', () => {
       id: 'group-empty', name: 'Empty Group', members: [], allowSelfResponses: false,
       activationStrategy: 1, disabledMembers: [], chatId: '', chats: [], autoModeDelay: 3,
     })
-    const groupTile = await getBody('/api/dsh-tavern/avatar/Empty%20Group')
+    const groupTile = await getBody('/api/dsh-soulmojito/avatar/Empty%20Group')
     expect(groupTile.status).toBe(200)
     expect(groupTile.body).toContain('>E</text>')
   })
 
   it('persona 无头像 PNG：存在即给替代头像；不存在 404', async () => {
     await store.putPersona({ name: 'Tester', description: '', position: 0 })
-    const persona = await getBody('/api/dsh-tavern/persona-avatar/Tester')
+    const persona = await getBody('/api/dsh-soulmojito/persona-avatar/Tester')
     expect(persona.status).toBe(200)
     expect(persona.headers['content-type']).toBe('image/svg+xml')
     expect(persona.body).toContain('>T</text>')
 
-    const missing = await getBody('/api/dsh-tavern/persona-avatar/Ghost')
+    const missing = await getBody('/api/dsh-soulmojito/persona-avatar/Ghost')
     expect(missing.status).toBe(404)
   })
 })

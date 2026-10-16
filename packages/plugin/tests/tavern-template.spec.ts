@@ -10,7 +10,7 @@ const CHARACTER = '小樱'
 const LLM_REPLY = `<% setvar('hakimi.affection', getvar('hakimi.affection') + 10) -%>
 好感度现在是<%- getvar('hakimi.affection') %>。`
 
-function makeRequest(body: unknown, url = '/api/dsh-tavern/generate') {
+function makeRequest(body: unknown, url = '/api/dsh-soulmojito/generate') {
   const listeners = new Map<string, (value?: unknown) => void>()
   return {
     method: 'POST',
@@ -55,7 +55,7 @@ describe('Prompt Template generation wiring (proposal 0008)', () => {
   let chatId: string
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-template-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-template-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
 
@@ -185,7 +185,7 @@ describe('Prompt Template generation wiring (proposal 0008)', () => {
   })
 
   it('keeps the plain path unchanged when templates are disabled via env', async () => {
-    process.env.DSH_TAVERN_DISABLE_TEMPLATES = '1'
+    process.env.DSH_SOULMOJITO_DISABLE_TEMPLATES = '1'
     try {
       const fresh = await store.createChat(CHARACTER, {
         user_name: 'User', character_name: CHARACTER,
@@ -209,7 +209,7 @@ describe('Prompt Template generation wiring (proposal 0008)', () => {
       const finalMessage = saved.chat.messages[saved.chat.messages.length - 1]
       expect(finalMessage.mes).toContain(LLM_REPLY.trim().split('\n')[1]!)
     } finally {
-      delete process.env.DSH_TAVERN_DISABLE_TEMPLATES
+      delete process.env.DSH_SOULMOJITO_DISABLE_TEMPLATES
     }
   })
 })

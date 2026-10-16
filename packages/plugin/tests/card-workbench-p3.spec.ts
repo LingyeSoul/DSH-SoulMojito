@@ -468,7 +468,7 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
 
   it('seeds new chats with a deep copy of initialVariables', async () => {
     const response = makeResponse()
-    await apiHandler(makeRequest({ character: LEGACY }, '/api/dsh-tavern/chats'), response)
+    await apiHandler(makeRequest({ character: LEGACY }, '/api/dsh-soulmojito/chats'), response)
     expect(response.statusCode).toBe(200)
     const body = JSON.parse(response.chunks[0]!)
     expect(body.ok).toBe(true)
@@ -490,7 +490,7 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
   it('writes no variables key for cards without (or with empty) initialVariables', async () => {
     for (const character of [PLAIN, EMPTY_SEED]) {
       const response = makeResponse()
-      await apiHandler(makeRequest({ character }, '/api/dsh-tavern/chats'), response)
+      await apiHandler(makeRequest({ character }, '/api/dsh-soulmojito/chats'), response)
       expect(response.statusCode).toBe(200)
       const body = JSON.parse(response.chunks[0]!)
       expect(body.ok).toBe(true)
@@ -513,7 +513,7 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
       },
     }))
     const response = makeResponse()
-    await apiHandler(makeRequest({ sessionId: 'wb-api', title: '  Draft v2  ' }, '/api/dsh-tavern/card-workbench/rename'), response)
+    await apiHandler(makeRequest({ sessionId: 'wb-api', title: '  Draft v2  ' }, '/api/dsh-soulmojito/card-workbench/rename'), response)
     expect(response.statusCode).toBe(200)
     const body = JSON.parse(response.chunks[0]!)
     expect(body.ok).toBe(true)
@@ -528,7 +528,7 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
       [{ sessionId: 'wb-api', title: '   ' }, 400],
     ] as Array<[Record<string, unknown>, number]>) {
       const rejected = makeResponse()
-      await apiHandler(makeRequest(payload, '/api/dsh-tavern/card-workbench/rename'), rejected)
+      await apiHandler(makeRequest(payload, '/api/dsh-soulmojito/card-workbench/rename'), rejected)
       expect(rejected.statusCode).toBe(status)
       expect(JSON.parse(rejected.chunks[0]!).ok).toBe(false)
     }

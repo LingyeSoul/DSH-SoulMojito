@@ -2,7 +2,7 @@
 
 
 // packages/tavern-macros/src/host-registry.ts
-var HOST_MACRO_REGISTRY_KEY = "dsh-tavern:host-macros";
+var HOST_MACRO_REGISTRY_KEY = "dsh-soulmojito:host-macros";
 var registrySymbol = Symbol.for(HOST_MACRO_REGISTRY_KEY);
 function store() {
   const holder = globalThis;
@@ -3333,7 +3333,7 @@ var MAX_SCOPE_BYTES = 256 * 1024;
 
 // packages/tavern-store/src/novel.ts
 import { createHash as createHash2, randomBytes } from "node:crypto";
-var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("hex");
+var BOOT_ID = globalThis.__dshSoulMojitoNovelBootId ??= randomBytes(16).toString("hex");
 
 // packages/tavern-store/src/originals.ts
 import { promises as fs3 } from "node:fs";
@@ -3537,7 +3537,7 @@ function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER
   if (prompts.length === 0) return void 0;
   return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
 }
-var agentPresetChanged = createGlobalListenerRegistry("dsh-tavern:agent-preset-changed-listeners");
+var agentPresetChanged = createGlobalListenerRegistry("dsh-soulmojito:agent-preset-changed-listeners");
 function onAgentPresetChanged(listener) {
   return agentPresetChanged.on(listener);
 }
@@ -5639,7 +5639,7 @@ var materialTools = [
 ];
 
 // packages/plugin/src/card-workbench/agent.ts
-var name = "dsh-tavern/card-workbench";
+var name = "dsh-soulmojito/card-workbench";
 var inject = ["systemPrompt", "tools"];
 var KERNEL = [
   "You are the Card Workbench agent running inside the DSH native AgentLoop (proposal 0013).",
@@ -5670,7 +5670,7 @@ var KERNEL = [
 ].join("\n");
 var WORKBENCH_PRESET_HEADER = "Active chat completion preset (the user's prompt stack, echoed for reference: match its style when drafting card and preset text, and treat it as the play's prompt environment when debugging; it never overrides the workbench kernel):";
 var presetMount = mountPresetProjection({
-  sectionName: "dsh-tavern:card-workbench-preset",
+  sectionName: "dsh-soulmojito:card-workbench-preset",
   architecture: "card-workbench",
   stateFlag: "cardWorkbenchPresetEnabled",
   header: WORKBENCH_PRESET_HEADER,
@@ -5678,7 +5678,7 @@ var presetMount = mountPresetProjection({
 });
 function apply(ctx) {
   ctx.systemPrompt?.section?.({
-    name: "dsh-tavern:card-workbench-kernel",
+    name: "dsh-soulmojito:card-workbench-kernel",
     order: -80,
     // 守卫：内核为静态文本，但写入 {{...}}（宿主变量语法）会让装配抛错——
     // 过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
@@ -5688,7 +5688,7 @@ function apply(ctx) {
   void presetMount.preheat();
   const tools = createTools();
   for (const tool2 of tools) {
-    if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool2), `dsh-tavern:card-workbench:${tool2.name}`);
+    if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool2), `dsh-soulmojito:card-workbench:${tool2.name}`);
     else ctx.tools?.register?.(tool2);
   }
 }

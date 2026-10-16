@@ -99,7 +99,7 @@ export interface CharacterBookEntry {
 
 /**
  * SillyTavern 世界书原生条目形态（worlds/*.json 的 entries 值）。
- * 与 @dsh-tavern/lore 引擎的输入形态对齐（包间无依赖、字段面对齐）。
+ * 与 @dsh-soulmojito/lore 引擎的输入形态对齐（包间无依赖、字段面对齐）。
  */
 export interface LoreEntry {
   uid: number

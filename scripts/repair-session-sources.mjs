@@ -1,5 +1,5 @@
 /**
- * Repair DSH session artifacts poisoned by dsh-tavern's pre-0.3.9 message
+ * Repair DSH session artifacts poisoned by dsh-soulmojito's pre-0.3.9 message
  * sources (the class behind the 2026-09-20 history-load outage:
  * "@deepseek-ai/dsh-session-format-v0-to-v1 refuses this format v0 Session:
  * agent/inbox/spliced N inserted message source has unexpected member
@@ -96,7 +96,7 @@ function repairPluginSource(source, report) {
   if (next.form === 'novel-notice') {
     next = {
       kind: 'plugin',
-      plugin: 'dsh-tavern',
+      plugin: 'dsh-soulmojito',
       form: 'notice',
       summary: `AgentNovel work notice (novel ${typeof next.novelId === 'string' ? next.novelId : 'unknown'}, intent ${typeof next.intentId === 'string' ? next.intentId : 'unknown'})`,
     }
@@ -129,7 +129,8 @@ function repairMessage(message, report) {
   if (message === null || typeof message !== 'object' || message.source === null || typeof message.source !== 'object') return message
   const source = message.source
   let next = source
-  if (source.kind === 'plugin' && source.plugin === 'dsh-tavern') next = repairPluginSource(source, report)
+  // 改名兼容（2026-10-16）：待修工件由改名前的插件写入，旧名 dsh-tavern 双认。
+  if (source.kind === 'plugin' && (source.plugin === 'dsh-soulmojito' || source.plugin === 'dsh-tavern')) next = repairPluginSource(source, report)
   else if (source.kind === 'model') next = repairModelSource(source, report)
   return next === source ? message : { ...message, source: next }
 }

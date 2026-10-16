@@ -61,10 +61,10 @@ describe('mod button route e2e through the real HTTP surface', () => {
     return { status: res.statusCode, body: res.chunks.length > 0 ? JSON.parse(res.chunks.join('')) as Record<string, unknown> : null }
   }
 
-  const buttonUrl = (name: string) => `/api/dsh-tavern/mods/${MOD_ID}/button/${encodeURIComponent(name)}`
+  const buttonUrl = (name: string) => `/api/dsh-soulmojito/mods/${MOD_ID}/button/${encodeURIComponent(name)}`
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-modbtn-e2e-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-modbtn-e2e-'))
     process.env.DSH_HOME = home
     const directory = join(home, 'tavern', 'mods', MOD_ID)
     mkdirSync(directory, { recursive: true })
@@ -100,30 +100,30 @@ describe('mod button route e2e through the real HTTP surface', () => {
 
   afterAll(() => {
     delete process.env.DSH_HOME
-    delete process.env.DSH_TAVERN_DISABLE_MODS
+    delete process.env.DSH_SOULMOJITO_DISABLE_MODS
     rmSync(home, { recursive: true, force: true })
   })
 
   it('projects declared buttons through bootstrap for both disabled and loaded mods', async () => {
-    const disabled = await call('GET', '/api/dsh-tavern/bootstrap')
+    const disabled = await call('GET', '/api/dsh-soulmojito/bootstrap')
     const asDisabled = (disabled.body!.mods as Array<{ id: string; buttons: string[] }>).find((mod) => mod.id === MOD_ID)
     expect(asDisabled?.buttons).toEqual([BUTTON_NAME, '闲置'])
     // 未启用时点击同一 URL：先取一份 404 基准（后面与停用态比对不可区分性）。
     const beforeEnable = await call('POST', buttonUrl(BUTTON_NAME), {})
     expect(beforeEnable.status).toBe(404)
     expect((beforeEnable.body!.message as string).startsWith('route not found: POST mods/')).toBe(true)
-    expect((await call('POST', `/api/dsh-tavern/mods/${MOD_ID}/enable`, {})).status).toBe(200)
-    expect((await call('POST', '/api/dsh-tavern/mods/state', { globalEnabled: true })).status).toBe(200)
-    const loaded = await call('GET', '/api/dsh-tavern/bootstrap')
+    expect((await call('POST', `/api/dsh-soulmojito/mods/${MOD_ID}/enable`, {})).status).toBe(200)
+    expect((await call('POST', '/api/dsh-soulmojito/mods/state', { globalEnabled: true })).status).toBe(200)
+    const loaded = await call('GET', '/api/dsh-soulmojito/bootstrap')
     const asLoaded = (loaded.body!.mods as Array<{ id: string; status: string; buttons: string[] }>).find((mod) => mod.id === MOD_ID)
     expect(asLoaded?.status).toBe('loaded')
     expect(asLoaded?.buttons).toEqual([BUTTON_NAME, '闲置'])
     // 停用后同一 URL 回到与未启用时逐字节相同的 404（不可区分）。
-    expect((await call('POST', `/api/dsh-tavern/mods/${MOD_ID}/disable`, {})).status).toBe(200)
+    expect((await call('POST', `/api/dsh-soulmojito/mods/${MOD_ID}/disable`, {})).status).toBe(200)
     const disabledClick = await call('POST', buttonUrl(BUTTON_NAME), {})
     expect(disabledClick.status).toBe(404)
     expect(disabledClick.body).toEqual(beforeEnable.body)
-    expect((await call('POST', `/api/dsh-tavern/mods/${MOD_ID}/enable`, {})).status).toBe(200)
+    expect((await call('POST', `/api/dsh-soulmojito/mods/${MOD_ID}/enable`, {})).status).toBe(200)
   })
 
   it('dispatches button clicks with URL-encoded CJK names and context passthrough', async () => {
@@ -153,7 +153,7 @@ describe('mod button route e2e through the real HTTP surface', () => {
     expect(unknownButton.status).toBe(404)
     expect(unknownButton.body!.ok).toBe(false)
     expect((unknownButton.body!.message as string)).toBe(`route not found: POST mods/${MOD_ID}/button/${encodeURIComponent('不存在的按钮')}`)
-    const unknownMod = await call('POST', `/api/dsh-tavern/mods/ghost.mod/button/${encodeURIComponent(BUTTON_NAME)}`)
+    const unknownMod = await call('POST', `/api/dsh-soulmojito/mods/ghost.mod/button/${encodeURIComponent(BUTTON_NAME)}`)
     expect(unknownMod.status).toBe(404)
     expect((unknownMod.body!.message as string)).toContain('route not found: POST mods/ghost.mod')
   })
@@ -170,9 +170,9 @@ describe('mod button route e2e through the real HTTP surface', () => {
       export async function setup(api) { api.onButton('炸', async () => { throw new Error('e2e button kaboom') }) }
     `, 'utf8')
     // refresh 吸收新目录（幂等重设全局开关的副作用即 rescan）
-    expect((await call('POST', '/api/dsh-tavern/mods/state', { globalEnabled: true })).status).toBe(200)
-    expect((await call('POST', `/api/dsh-tavern/mods/${boomId}/enable`, {})).status).toBe(200)
-    const failed = await call('POST', `/api/dsh-tavern/mods/${boomId}/button/${encodeURIComponent('炸')}`)
+    expect((await call('POST', '/api/dsh-soulmojito/mods/state', { globalEnabled: true })).status).toBe(200)
+    expect((await call('POST', `/api/dsh-soulmojito/mods/${boomId}/enable`, {})).status).toBe(200)
+    const failed = await call('POST', `/api/dsh-soulmojito/mods/${boomId}/button/${encodeURIComponent('炸')}`)
     expect(failed.status).toBe(500)
     expect(failed.body).toMatchObject({ ok: false })
     expect((failed.body!.message as string)).toContain('e2e button kaboom')

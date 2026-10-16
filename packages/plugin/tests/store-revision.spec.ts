@@ -38,7 +38,7 @@ describe('store change watermark', () => {
   }
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-watermark-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-watermark-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     apply({
@@ -66,9 +66,9 @@ describe('store change watermark', () => {
   })
 
   it('bootstrap 与 store-revision 水位一致；资产写入推进、无写入稳定', async () => {
-    const boot = await getJson('/api/dsh-tavern/bootstrap')
+    const boot = await getJson('/api/dsh-soulmojito/bootstrap')
     expect(boot.status).toBe(200)
-    const watermark = await getJson('/api/dsh-tavern/store-revision')
+    const watermark = await getJson('/api/dsh-soulmojito/store-revision')
     expect(watermark.status).toBe(200)
     expect(typeof boot.body.storeRevision).toBe('string')
     expect(boot.body.storeRevision).not.toBe('')
@@ -87,14 +87,14 @@ describe('store change watermark', () => {
     })
     expect(written.card.data.name).toBe('Agent Card')
 
-    const after = await getJson('/api/dsh-tavern/store-revision')
+    const after = await getJson('/api/dsh-soulmojito/store-revision')
     expect(after.body.revision).not.toBe(boot.body.storeRevision)
-    const afterBoot = await getJson('/api/dsh-tavern/bootstrap')
+    const afterBoot = await getJson('/api/dsh-soulmojito/bootstrap')
     expect(afterBoot.body.storeRevision).toBe(after.body.revision)
     expect(afterBoot.body.characters).toContain('Agent Card')
 
     // 无新写入时水位稳定：客户端轮询到相同水位不会空转重取。
-    const steady = await getJson('/api/dsh-tavern/store-revision')
+    const steady = await getJson('/api/dsh-soulmojito/store-revision')
     expect(steady.body.revision).toBe(after.body.revision)
   })
 })

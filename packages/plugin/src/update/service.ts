@@ -322,7 +322,7 @@ export class TavernUpdateService {
     const stamped = `${this.nowIso().slice(11, 19)} ${line}`
     this.installState.log = [...this.installState.log, stamped].slice(-INSTALL_LOG_LIMIT)
     try {
-      this.options.ctx?.logger?.info?.(`dsh-tavern update: ${line}`)
+      this.options.ctx?.logger?.info?.(`dsh-soulmojito update: ${line}`)
     } catch {
     }
   }

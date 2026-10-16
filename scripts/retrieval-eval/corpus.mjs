@@ -24,7 +24,7 @@ import { createHash } from 'node:crypto'
 
 export const CORPUS_VERSION = 1
 /** 语料版本种子：参与 revision 哈希。v1 语料无随机源，种子用于把版本钉进每条记录。 */
-export const SEED = 'dsh-tavern-retrieval-eval-v1'
+export const SEED = 'dsh-soulmojito-retrieval-eval-v1'
 /** 全部记录共用的固定时间戳（freshness 抵消，见文件头说明）。 */
 export const ANCHOR_TIME = '2026-10-01T00:00:00.000Z'
 

@@ -1,5 +1,5 @@
 /**
- * Public types for @dsh-tavern/macros.
+ * Public types for @dsh-soulmojito/macros.
  *
  * Semantics are modeled on SillyTavern's macro pipeline
  * (public/scripts/macros.js + public/scripts/variables.js + substituteParams in script.js),
@@ -14,7 +14,7 @@ export type VariableMap = Record<string, VariableValue>;
 
 /**
  * Character-card fields the engine can substitute.
- * Field names follow the @dsh-tavern/format `CardDataIR` naming.
+ * Field names follow the @dsh-soulmojito/format `CardDataIR` naming.
  */
 export interface MacroCardFields {
   description?: string;

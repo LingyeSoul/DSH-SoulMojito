@@ -184,7 +184,7 @@ describe('candidate storage round trip', () => {
 
 /* ------------------------- 端到端：路由与执行内核 ------------------------- */
 
-function makeRequest(body: unknown, url = '/api/dsh-tavern/candidates') {
+function makeRequest(body: unknown, url = '/api/dsh-soulmojito/candidates') {
   const listeners = new Map<string, (value?: unknown) => void>()
   return {
     method: 'POST',
@@ -233,7 +233,7 @@ describe('candidate generation (integration)', () => {
   let chatId: string
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-candidates-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-candidates-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.importCharacter({

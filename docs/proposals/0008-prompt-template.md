@@ -7,11 +7,11 @@
 ## 1. 范围
 
 ST-Prompt-Template 的核心价值是在提示词中执行 JavaScript（EJS 语法）并管理带作用域的变量。
-本提案把该能力适配进 dsh-tavern 的 ST 兼容生成链路（`runGeneration`）：
+本提案把该能力适配进 dsh-soulmojito 的 ST 兼容生成链路（`runGeneration`）：
 
 | 能力 | 去向 |
 |---|---|
-| EJS 语法（`<% %>` / `<%= %>` / `<%- %>` / `<%# %>` / `<%_ _%>` / `-%>` / `<%%` 字面量） | 新包 `@dsh-tavern/template`，`node:vm` 沙箱执行 |
+| EJS 语法（`<% %>` / `<%= %>` / `<%- %>` / `<%# %>` / `<%_ _%>` / `-%>` / `<%%` 字面量） | 新包 `@dsh-soulmojito/template`，`node:vm` 沙箱执行 |
 | 生成前模板处理（预设 / 世界书 / 角色卡字段 / 消息） | `runGeneration` 装配前预渲染（不动 `assemblePrompt` 同步 API） |
 | 生成后模板处理（LLM 输出中的 `<% setvar() -%>` 等） | AI_OUTPUT regex 之后、落盘之前渲染 |
 | 变量 API（`getvar`/`setvar`/`incvar`/`decvar`/`delvar`/`insvar` + flags/defaults/路径） | `chat_metadata.variables`（local，任意 JSON）/ `state.scriptGlobals`（global，标量）/ `chat_metadata.initial_variables`（initial） |
@@ -25,7 +25,7 @@ ST-Prompt-Template 的核心价值是在提示词中执行 JavaScript（EJS 语�
 faker / jQuery / toastr / dayjs / Monaco 代码编辑器 / iframe 渲染（`@@iframe`、`@@message_formatting`）/ web worker 后台编译 / 缓存策略开关 / `activateRegex` / `activewi` / Quick Reply（`getqr`）/ `execute`（STscript 桥）/ zod `setVariableSchema` / swipe 与 message 作用域变量（无楼层渲染面）/ token 计数全局变量（`LAST_SEND_TOKENS` 由宿主 usage 事件承载）。
 
 **已文档化的适配偏差**：
-1. `scope='message'` 映射到 local（dsh-tavern 无楼层变量）。
+1. `scope='message'` 映射到 local（dsh-soulmojito 无楼层变量）。
 2. global 作用域仅接受标量（`scriptGlobals` 既有类型约束）；对象树应写 local。
 3. `[GENERATE:BEFORE]` 对绿灯激活条目同样生效（ST 文档标注 🔵 only，属实现顺序产物）。
 4. 模板渲染发生在宏展开**之前**（EJS 输出中的 `{{macro}}` 会被继续展开；ST 是先宏后模板）。
@@ -60,7 +60,7 @@ packages/plugin/src/template.ts   宿主接线：lore 分区、预渲染、消�
 5. LLM 流式输出 → AI_OUTPUT regex → 输出模板渲染（runType='render'）→ `[RENDER:*]` 前后缀
    → 落盘（模板写穿的 local/initial 变量随 chat 持久化；global 写穿 `state.scriptGlobals`）。
 
-开关：profile 的 dsh-tavern 行 `templateEnabled: false` 或环境变量 `DSH_TAVERN_DISABLE_TEMPLATES=1`
+开关：profile 的 dsh-soulmojito 行 `templateEnabled: false` 或环境变量 `DSH_SOULMOJITO_DISABLE_TEMPLATES=1`
 （默认开启；无模板标签/`<%` 时整条链路为直通，不产生额外开销）。
 
 ## 4. 语义对照要点

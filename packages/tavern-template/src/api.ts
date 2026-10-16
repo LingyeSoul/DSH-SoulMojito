@@ -1,6 +1,6 @@
 /**
  * 模板环境 API（对照 ST-Prompt-Template reference 文档的函数/常量清单，
- * 适配到 dsh-tavern 的资产面；裁剪项见提案 0008 §1）。
+ * 适配到 dsh-soulmojito 的资产面；裁剪项见提案 0008 §1）。
  */
 
 import { deepClone, deepMerge, getPath, isObjectLike, setPath, type JsonObject } from './paths.js'

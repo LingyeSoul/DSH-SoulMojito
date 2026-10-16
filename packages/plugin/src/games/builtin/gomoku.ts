@@ -7,11 +7,11 @@
  * 契约来源：§3.2 引擎契约 + §3.3 视图契约——与 builtin/tic-tac-toe.ts 同款
  * 形态：静态 import 的 TS 引擎 + viewHtml 字符串常量内联（mood-tracker
  * UI_PAGE 先例），零文件依赖、随插件分发。规则与参照包
- * （examples/games/dsh-tavern.gomoku）逐条同款：自由五子棋（任意方向 ≥5 连
+ * （examples/games/dsh-soulmojito.gomoku）逐条同款：自由五子棋（任意方向 ≥5 连
  * 即胜，长连也算胜；连珠禁手不实现）、15×15、黑先；保留动作 resign 由运行时
  * 统一处理（引擎收到一律抛错）。
  *
- * 同 id 语义：本内置 id 与参照包相同（'dsh-tavern.gomoku'）——导入参照包会
+ * 同 id 语义：本内置 id 与参照包相同（'dsh-soulmojito.gomoku'）——导入参照包会
  * 以磁盘副本接管同 id 槽位（registry「以磁盘上可审计的导入副本为准」纪律），
  * 装载期由 registry 记 warning 提示遮蔽。
  *
@@ -47,7 +47,7 @@ const DIRECTIONS = [[1, 0], [0, 1], [1, 1], [1, -1]]
  *  缺席：内置游戏随插件同进程分发，宿主版本即插件版本，自我门控无意义
  *  （对照：导入包的 engines 范围在 registry 装载期校验）。 */
 const MANIFEST: GameManifest = {
-  id: 'dsh-tavern.gomoku',
+  id: 'dsh-soulmojito.gomoku',
   name: '五子棋',
   version: '1.0.0',
   players: { min: 2, max: 2, roles: ['black', 'white'] },
@@ -281,7 +281,7 @@ export const viewHtml = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>五子棋 · dsh-tavern 游戏桥</title>
+<title>五子棋 · dsh-soulmojito 游戏桥</title>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -328,7 +328,7 @@ export const viewHtml = `<!doctype html>
   }
 </style>
 </head>
-<body data-game="dsh-tavern.gomoku">
+<body data-game="dsh-soulmojito.gomoku">
 <header>
   <span class="game-name">五子棋</span>
   <span class="meta" id="meta"></span>
@@ -344,8 +344,8 @@ export const viewHtml = `<!doctype html>
 <footer id="hint"></footer>
 <script>
 'use strict'
-/* 桥协议（提案 0018 §3.3）：下行 dsh-tavern:game-state（token 对账、全量重渲染）、
-   上行 dsh-tavern:game-action（合法性由服务端引擎终审）。token 从 location.search
+/* 桥协议（提案 0018 §3.3）：下行 dsh-soulmojito:game-state（token 对账、全量重渲染）、
+   上行 dsh-soulmojito:game-action（合法性由服务端引擎终审）。token 从 location.search
    自读；无 token（浏览器直接打开）渲染静态预览局面。人类回合才启用点击与建议点
    提示——AI 回合的落子经下行自动出现在棋盘上。 */
 var N = 15
@@ -376,7 +376,7 @@ var PREVIEW_STATE = buildBoard([
 ], 'white', 7, { x: 7, y: 5 })
 var PREVIEW_SESSION = {
   id: '',
-  gameId: 'dsh-tavern.gomoku',
+  gameId: 'dsh-soulmojito.gomoku',
   players: [
     { role: 'black', owner: 'human' },
     { role: 'white', owner: 'agent' },
@@ -415,7 +415,7 @@ function radialGradient(id, innerColor, outerColor) {
 window.addEventListener('message', function (event) {
   var data = event.data
   if (!data || typeof data !== 'object') return
-  if (data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+  if (data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
   var view = data.view && typeof data.view === 'object' ? data.view : {}
   current = {
     state: view.state || null,
@@ -469,7 +469,7 @@ function render() {
   else metaEl.textContent = (act.session && act.session.id ? '对局 ' + act.session.id : '对局中') + ' · 手数 ' + state.ply
 
   var cls = 'preview'
-  var text = '预览模式：由 dsh-tavern 游戏服务装载后启用交互'
+  var text = '预览模式：由 dsh-soulmojito 游戏服务装载后启用交互'
   if (live) {
     if (!state) {
       text = '等待对局状态…'
@@ -494,9 +494,9 @@ function render() {
   }
 
   if (!live) {
-    hintEl.textContent = '这是静态演示局面：由 dsh-tavern 游戏服务装载后，棋盘将接收实时状态并启用点击落子。'
+    hintEl.textContent = '这是静态演示局面：由 dsh-soulmojito 游戏服务装载后，棋盘将接收实时状态并启用点击落子。'
   } else if (!state) {
-    hintEl.textContent = '正在连接 dsh-tavern 游戏服务…'
+    hintEl.textContent = '正在连接 dsh-soulmojito 游戏服务…'
   } else if (state.finished) {
     hintEl.textContent = '对局已结束。可在对局面板中开新一局，或让 AI 再来一盘。'
   } else if (humanTurn(act)) {
@@ -612,7 +612,7 @@ function renderBoard(act) {
   }
 }
 
-/* 点击空点（人类回合、未终局）：上行 dsh-tavern:game-action。合法性由服务端
+/* 点击空点（人类回合、未终局）：上行 dsh-soulmojito:game-action。合法性由服务端
    引擎终审——这里不做本地规则裁决，人类可点任意空点。 */
 boardEl.addEventListener('click', function (event) {
   if (!TOKEN) return
@@ -624,7 +624,7 @@ boardEl.addEventListener('click', function (event) {
   var y = Number(target.getAttribute('data-y'))
   if (act.state.board[y][x] !== 0) return
   window.parent.postMessage(
-    { type: 'dsh-tavern:game-action', token: TOKEN, action: { type: 'place', x: x, y: y } },
+    { type: 'dsh-soulmojito:game-action', token: TOKEN, action: { type: 'place', x: x, y: y } },
     '*',
   )
 })

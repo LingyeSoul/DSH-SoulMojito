@@ -1,6 +1,6 @@
 /**
  * 提案 0018（Agent 游戏桥）§3 标准契约的一致性测试——第一个参照实现
- * packages/plugin/examples/games/dsh-tavern.gomoku（五子棋标准游戏包）。
+ * packages/plugin/examples/games/dsh-soulmojito.gomoku（五子棋标准游戏包）。
  *
  * 本套件是提案 §8「标准即测试」的先例：不依赖尚未实现的 src/games/ 运行时，
  * 用 pathToFileURL 直接动态导入游戏包引擎、readFileSync 读取清单与视图，对
@@ -24,7 +24,7 @@ import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-const GAME_DIR = join(import.meta.dirname, '..', 'examples', 'games', 'dsh-tavern.gomoku')
+const GAME_DIR = join(import.meta.dirname, '..', 'examples', 'games', 'dsh-soulmojito.gomoku')
 const manifest = JSON.parse(readFileSync(join(GAME_DIR, 'game.json'), 'utf8')) as Record<string, unknown>
 const viewHtml = readFileSync(join(GAME_DIR, 'view.html'), 'utf8')
 const engineSource = readFileSync(join(GAME_DIR, 'engine.mjs'), 'utf8')
@@ -143,8 +143,8 @@ function drawMoves(): Array<[number, number]> {
 }
 
 describe('清单 game.json（提案 0018 §3.1）', () => {
-  it('可解析、id 与目录名一致（dsh-tavern.xxx 反域名纪律）', () => {
-    expect(manifest.id).toBe('dsh-tavern.gomoku')
+  it('可解析、id 与目录名一致（dsh-soulmojito.xxx 反域名纪律）', () => {
+    expect(manifest.id).toBe('dsh-soulmojito.gomoku')
     // 目录名即包名：装载目录名与清单 id 必须一致（镜像 mod.json 纪律）
     expect(basename(GAME_DIR)).toBe(manifest.id)
   })
@@ -152,7 +152,7 @@ describe('清单 game.json（提案 0018 §3.1）', () => {
   it('必填字段齐全且形状正确', () => {
     expect(manifest.name).toBe('五子棋')
     expect(manifest.version).toBe('1.0.0')
-    expect(manifest.engines).toEqual({ 'dsh-tavern': '^0.6.0' })
+    expect(manifest.engines).toEqual({ 'dsh-soulmojito': '^0.6.0' })
     expect(typeof manifest.actionVocabulary).toBe('string')
     expect((manifest.actionVocabulary as string).length).toBeGreaterThan(0)
     expect((manifest.actionVocabulary as string)).toContain('place')
@@ -463,8 +463,8 @@ describe('view.html 静态检查（§3.3 自包含 / §4.6 导入烟测）', () 
     expect(viewHtml).not.toContain('fetch(')
   })
 
-  it('包含 dsh-tavern:game-state 与 dsh-tavern:game-action 桥消息类型', () => {
-    expect(viewHtml).toContain('dsh-tavern:game-state')
-    expect(viewHtml).toContain('dsh-tavern:game-action')
+  it('包含 dsh-soulmojito:game-state 与 dsh-soulmojito:game-action 桥消息类型', () => {
+    expect(viewHtml).toContain('dsh-soulmojito:game-state')
+    expect(viewHtml).toContain('dsh-soulmojito:game-action')
   })
 })

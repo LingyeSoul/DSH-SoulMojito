@@ -107,14 +107,14 @@ async function adoptOne(
   if (parent === undefined || parent.architecture !== 'agent-tavern' || parent.group === true) {
     // ST/AgentNovel/CardWorkbench 的宿主 fork 与 subagent 一样不在收养面
     // （决策 §4）：一行 info 留诊断痕迹，行为与收养能力落地前一致。
-    deps.logger?.info?.(`dsh-tavern: host session fork '${sessionId}' skipped (parent '${info.parentSession}' is not an AgentTavern binding)`)
+    deps.logger?.info?.(`dsh-soulmojito: host session fork '${sessionId}' skipped (parent '${info.parentSession}' is not an AgentTavern binding)`)
     return 'skipped'
   }
 
   const character = parent.character
   const parentSnapshot = await deps.store.getChatSnapshot(character, parent.chatId)
   if (parentSnapshot === undefined) {
-    deps.logger?.warn?.(`dsh-tavern: host session fork '${sessionId}' not adopted (parent chat '${character}/${parent.chatId}' is missing)`)
+    deps.logger?.warn?.(`dsh-soulmojito: host session fork '${sessionId}' not adopted (parent chat '${character}/${parent.chatId}' is missing)`)
     return 'skipped'
   }
 
@@ -134,7 +134,7 @@ async function adoptOne(
   await copyChatMemories(deps, parent.chatId, chatId)
 
   await deps.bind(sessionId, character, chatId, parent.contextMode)
-  deps.logger?.info?.(`dsh-tavern: adopted host session fork '${sessionId}' from '${info.parentSession}' into chat '${character}/${chatId}'`)
+  deps.logger?.info?.(`dsh-soulmojito: adopted host session fork '${sessionId}' from '${info.parentSession}' into chat '${character}/${chatId}'`)
   return 'adopted'
 }
 
@@ -194,7 +194,7 @@ async function copyChatMemories(deps: ForkAdoptionDependencies, parentChatId: st
   try {
     records = await deps.memories.list('chat', parentChatId)
   } catch (error) {
-    deps.logger?.warn?.(`dsh-tavern: fork memory copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`)
+    deps.logger?.warn?.(`dsh-soulmojito: fork memory copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`)
     return
   }
   for (const record of records) {
@@ -221,6 +221,6 @@ async function copyChatMemories(deps: ForkAdoptionDependencies, parentChatId: st
       await deps.vectors.put(entries.map((entry) => ({ ...entry, scopeId: chatId })))
     }
   } catch (error) {
-    deps.logger?.warn?.(`dsh-tavern: fork vector copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`)
+    deps.logger?.warn?.(`dsh-soulmojito: fork vector copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`)
   }
 }

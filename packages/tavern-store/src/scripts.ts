@@ -20,7 +20,7 @@ import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 import { writeAtomicBytes } from './fs-atomic.js'
 import { unzipSync, strFromU8 } from 'fflate'
-import type { CharacterCardIR } from '@dsh-tavern/format'
+import type { CharacterCardIR } from '@dsh-soulmojito/format'
 
 export type ScriptFormat = 'txt' | 'md' | 'epub'
 

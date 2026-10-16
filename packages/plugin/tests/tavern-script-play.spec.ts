@@ -97,16 +97,16 @@ describe('Script Play (proposal 0014 P1)', () => {
   let llmRequests: Array<{ system?: string }>
   let llmReplyText: string
 
-  const scriptUrl = (name: string) => `/api/dsh-tavern/script/${encodeURIComponent(name)}`
+  const scriptUrl = (name: string) => `/api/dsh-soulmojito/script/${encodeURIComponent(name)}`
   const progressUrl = (character: string, chatId: string) =>
-    `/api/dsh-tavern/script/progress/${encodeURIComponent(character)}/${encodeURIComponent(chatId)}`
+    `/api/dsh-soulmojito/script/progress/${encodeURIComponent(character)}/${encodeURIComponent(chatId)}`
 
   const call = async (req: unknown) => {
     const res = makeResponse()
     await apiHandler(req, res)
     return { status: res.statusCode, body: JSON.parse(res.chunks.join('') || '{}') as Record<string, any> }
   }
-  const post = async (route: string, body: unknown) => call(makeRequest(body, `/api/dsh-tavern/${route}`))
+  const post = async (route: string, body: unknown) => call(makeRequest(body, `/api/dsh-soulmojito/${route}`))
   const get = async (url: string) => call(makeGetRequest(url))
 
   const generate = async (chatId: string, message: string, sessionId: string) => {
@@ -114,12 +114,12 @@ describe('Script Play (proposal 0014 P1)', () => {
     const res = makeResponse()
     await apiHandler(makeRequest({
       character: CHARACTER, chatId, message, revision: snapshot!.revision, sessionId,
-    }, '/api/dsh-tavern/generate'), res)
+    }, '/api/dsh-soulmojito/generate'), res)
     expect(res.chunks.join('')).toContain('"type":"saved"')
   }
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-script-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-script-'))
     process.env.DSH_HOME = home
     tavernRoot = join(home, 'tavern')
     store = await TavernStore.open(tavernRoot)
@@ -287,7 +287,7 @@ describe('Script Play (proposal 0014 P1)', () => {
     expect(imported.body.script.source.format).toBe('txt')
     expect(imported.body.script.chunks.map((chunk: { index: number }) => chunk.index)).toEqual([0, 1, 2])
 
-    const listed = await get('/api/dsh-tavern/scripts')
+    const listed = await get('/api/dsh-soulmojito/scripts')
     expect(listed.status).toBe(200)
     const route = listed.body.scripts.find((summary: { name: string }) => summary.name === 'Route Script')
     expect(route).toMatchObject({ chunkCount: 3, format: 'txt' })
@@ -321,7 +321,7 @@ describe('Script Play (proposal 0014 P1)', () => {
     expect(boundScriptOf(card)).toBe('Route Script')
     expect((card.data.extensions.agentTavern as Record<string, unknown>).scriptId).toBe('Route Script')
 
-    const listed = await get('/api/dsh-tavern/scripts')
+    const listed = await get('/api/dsh-soulmojito/scripts')
     expect(listed.body.bindings[CHARACTER]).toBe('Route Script')
 
     // 解绑：scriptId 摘除，agentTavern 变空连键一并清理
@@ -331,7 +331,7 @@ describe('Script Play (proposal 0014 P1)', () => {
     const fresh = (await store.getCharacter(CHARACTER))!.card
     expect(boundScriptOf(fresh)).toBeUndefined()
     expect(fresh.data.extensions.agentTavern).toBeUndefined()
-    expect((await get('/api/dsh-tavern/scripts')).body.bindings).toEqual({})
+    expect((await get('/api/dsh-soulmojito/scripts')).body.bindings).toEqual({})
     // 重复解绑幂等；未知角色 404
     expect((await post('script/unbind', { character: CHARACTER })).status).toBe(200)
     expect((await post('script/unbind', { character: 'Nobody' })).status).toBe(404)
@@ -461,7 +461,7 @@ describe('Script Play (proposal 0014 P2)', () => {
   let looseChatId: string
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-script-p2-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-script-p2-'))
     process.env.DSH_HOME = home
     tavernRoot = join(home, 'tavern')
     store = await TavernStore.open(tavernRoot)
@@ -602,7 +602,7 @@ describe('Script Play (proposal 0014 P2)', () => {
   /* ---------------- 进度摘要 context：注册 + 写穿 ---------------- */
 
   it('registers the agent-script summary context and refreshes it after advances', async () => {
-    const context = contexts.find((registered) => registered.name === 'dsh-tavern:agent-script')
+    const context = contexts.find((registered) => registered.name === 'dsh-soulmojito:agent-script')
     expect(context).toBeDefined()
     expect(context!.order).toBe(-64)
     // context 文案引导工具面（与 tavern_script_advance 的写穿缓存同步）

@@ -42,7 +42,7 @@ DSH 侧边栏底部、紧挨 Settings 按钮的位置，常驻一个 Tavern 按�
 
 现有 `SidebarFooterAction` 从"侧栏挂载失败的回落开关"转正为**常驻主入口**，与保留的 Tavern 侧栏聊天树并列：
 
-- 点击行为：打开管理面板（`dsh-tavern:toggle-panel` window 事件 + store 状态，
+- 点击行为：打开管理面板（`dsh-soulmojito:toggle-panel` window 事件 + store 状态，
   对齐现有 `toggle-sidebar` 模式），不再 toggle 浮动 shell。
 - wide 形态直接对齐原生 Settings trigger：`width:calc(100% + 8px)`、34px 高、
   14px 字体/22px 行高、12px 圆角与相同 margin/padding；rail 形态同为 36px
@@ -134,9 +134,9 @@ state-error|success|warn-*`、`--dsw-shadow-lv3`、`--dsw-specific-menu`（浮�
   persona/世界书四个选择器）+ "打开 Tavern 面板"按钮（共享面板 open state）。
   重管理全部移入面板。肌肉记忆不破坏，设置页不再无限纵向堆叠。
 - **侧栏聊天树保留，与面板共存**：保留 `useSidebarHost`（MutationObserver + 几何
-  启发式）和 `[data-dsh-tavern-sidebar-host]` 注入，维持角色/聊天的日常快速选择；
+  启发式）和 `[data-dsh-soulmojito-sidebar-host]` 注入，维持角色/聊天的日常快速选择；
   同一 TavernSidebar/ChatList 也在面板"聊天"分区复用。只删除旧的
-  `dt-floating-shell`、`dsh-tavern:toggle-sidebar` 与 `sidebarAttached` fallback 状态。
+  `dt-floating-shell`、`dsh-soulmojito:toggle-sidebar` 与 `sidebarAttached` fallback 状态。
 - **不动**：`conversation.view` / `conversation.composer` /
   `conversation.session.header.actions` / locale 注册 / API 面。
 

@@ -2133,7 +2133,7 @@ function assembleResult(allActivated, diagnostics, timedState) {
 }
 
 // packages/tavern-macros/src/host-registry.ts
-var HOST_MACRO_REGISTRY_KEY = "dsh-tavern:host-macros";
+var HOST_MACRO_REGISTRY_KEY = "dsh-soulmojito:host-macros";
 var registrySymbol = Symbol.for(HOST_MACRO_REGISTRY_KEY);
 function store() {
   const holder = globalThis;
@@ -6216,7 +6216,7 @@ var CANON_KINDS = /* @__PURE__ */ new Set(["event", "character-state", "relation
 var SOURCE_REF_PATTERN = /^(commit-\d+)(?:#(\d+))?$/;
 var PARAGRAPH_SEPARATOR = "\n\n";
 var USAGE_SAMPLE_LIMIT = 50;
-var BOOT_ID = globalThis.__dshTavernNovelBootId ??= randomBytes(16).toString("hex");
+var BOOT_ID = globalThis.__dshSoulMojitoNovelBootId ??= randomBytes(16).toString("hex");
 var DSH_HOST_COMMAND = /@deepseek-ai[\\/]dsh\b|(?:^|[\\/ \t"'])dsh(?:\.(?:cmd|js|ps1|exe|bat))?["']?[ \t]+web\b/;
 function commandLineOf(pid) {
   if (process.platform === "win32") {
@@ -8227,7 +8227,10 @@ function readSessionEvents(session) {
 function sessionEvents(session) {
   return readSessionEvents(session) ?? [];
 }
-var TAVERN_PLUGIN_SOURCE_KIND = "plugin:dsh-tavern";
+var PLUGIN_NAME = "dsh-soulmojito";
+var LEGACY_PLUGIN_NAME = "dsh-tavern";
+var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
+var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
 function hostSessionFormatVersion(session) {
   const version = session?.header?.version;
   return typeof version === "number" && Number.isSafeInteger(version) ? version : void 0;
@@ -8249,7 +8252,7 @@ function hostPluginMessageSource(session, members) {
   const version = hostSessionFormatVersion(session);
   const kind = version !== void 0 && version >= 4 ? TAVERN_PLUGIN_SOURCE_KIND : "plugin";
   return {
-    ...kind === "plugin" ? { plugin: "dsh-tavern" } : {},
+    ...kind === "plugin" ? { plugin: PLUGIN_NAME } : {},
     ...members,
     kind
   };
@@ -8257,8 +8260,8 @@ function hostPluginMessageSource(session, members) {
 function isHostPluginMessageSource(source) {
   if (typeof source !== "object" || source === null) return false;
   const record = source;
-  if (record.kind === TAVERN_PLUGIN_SOURCE_KIND) return true;
-  return record.kind === "plugin" && record.plugin === "dsh-tavern";
+  if (record.kind === TAVERN_PLUGIN_SOURCE_KIND || record.kind === LEGACY_TAVERN_PLUGIN_SOURCE_KIND) return true;
+  return record.kind === "plugin" && (record.plugin === PLUGIN_NAME || record.plugin === LEGACY_PLUGIN_NAME);
 }
 
 // packages/bind/src/host-package.ts
@@ -8321,12 +8324,12 @@ function confirmSessionAppend(options) {
   options.append();
   if (options.present(sessionEvents(options.session))) {
     options.logger?.warn?.(
-      `dsh-tavern: session write '${options.label}' was accepted but invisible on first read-back; the rewrite made it visible (degraded host append suspected)`
+      `dsh-soulmojito: session write '${options.label}' was accepted but invisible on first read-back; the rewrite made it visible (degraded host append suspected)`
     );
     return true;
   }
   options.logger?.error?.(
-    `dsh-tavern: session write '${options.label}' could not be confirmed by read-back (attempt 1: absent, attempt 2: absent after one rewrite); failing honestly instead of continuing on unconfirmed host state`
+    `dsh-soulmojito: session write '${options.label}' could not be confirmed by read-back (attempt 1: absent, attempt 2: absent after one rewrite); failing honestly instead of continuing on unconfirmed host state`
   );
   return false;
 }
@@ -8342,6 +8345,11 @@ function landedPlanAppends(session, plan, baseLength) {
     landed += 1;
   }
   return landed;
+}
+
+// packages/plugin/src/env-compat.ts
+function envCompat(suffix) {
+  return process.env[`DSH_SOULMOJITO_${suffix}`] ?? process.env[`DSH_TAVERN_${suffix}`];
 }
 
 // packages/plugin/src/agent-tavern/capabilities.ts
@@ -8399,7 +8407,7 @@ function unavailableWithReason(current, name2, detail) {
 }
 
 // packages/plugin/src/agent-novel/usage.ts
-var USAGE_SAMPLER_KEY = Symbol.for("dsh-tavern:novel-usage-sampler");
+var USAGE_SAMPLER_KEY = Symbol.for("dsh-soulmojito:novel-usage-sampler");
 var samplerTable = globalThis[USAGE_SAMPLER_KEY] ??= /* @__PURE__ */ new Map();
 function drainToolOutputBytes() {
   const drained = {};
@@ -8409,7 +8417,7 @@ function drainToolOutputBytes() {
   samplerTable.clear();
   return drained;
 }
-var PROBE_AGENT_ID_KEY = Symbol.for("dsh-tavern:novel-writer-probe-agent-id");
+var PROBE_AGENT_ID_KEY = Symbol.for("dsh-soulmojito:novel-writer-probe-agent-id");
 var probeAgentSlot = globalThis[PROBE_AGENT_ID_KEY] ??= {};
 function takeProbeAgentId() {
   try {
@@ -8420,7 +8428,7 @@ function takeProbeAgentId() {
     return null;
   }
 }
-var WRITER_RUN_USAGE_KEY = Symbol.for("dsh-tavern:novel-writer-run-usage");
+var WRITER_RUN_USAGE_KEY = Symbol.for("dsh-soulmojito:novel-writer-run-usage");
 var writerRunUsageSlot = globalThis[WRITER_RUN_USAGE_KEY] ??= { outputChars: null, usage: null };
 function drainWriterRunUsage() {
   try {
@@ -8515,7 +8523,7 @@ async function probeIdentityCorrelation(deps) {
   takeProbeAgentId();
   const spawn3 = await probeSpawn(
     deps,
-    "dsh-tavern writer-probe \xB7 p1-identity",
+    "dsh-soulmojito writer-probe \xB7 p1-identity",
     `Host capability probe. Call the tool ${PROBE_TOOL} exactly once, then reply with exactly: ok. The tool may return an error about a missing novel binding \u2014 that is expected and fine; still reply ok after the single call.`,
     [PROBE_TOOL]
   );
@@ -8538,7 +8546,7 @@ async function probeAllowList(deps, p1, spawnOk) {
   takeProbeAgentId();
   const spawn3 = await probeSpawn(
     deps,
-    "dsh-tavern writer-probe \xB7 p2-allowlist",
+    "dsh-soulmojito writer-probe \xB7 p2-allowlist",
     `Host capability probe. Try calling the tool ${PROBE_TOOL} once. If the tool is available to you, reply with exactly: tool-ran. If the tool is not available to you, reply with exactly: unavailable.`,
     []
   );
@@ -8806,7 +8814,7 @@ var NovelDriver = class _NovelDriver {
     const effect = this.host.effect;
     if (typeof effect === "function") {
       try {
-        effect(subscribe, "dsh-tavern:novel-driver");
+        effect(subscribe, "dsh-soulmojito:novel-driver");
         return;
       } catch {
       }
@@ -9932,7 +9940,7 @@ function formatGuidesBlock(guides) {
     ...[...normalized].sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((guide) => `- ${guide.text}`)
   ].join("\n");
 }
-var guidesChanged = createGlobalListenerRegistry("dsh-tavern:guides-changed-listeners");
+var guidesChanged = createGlobalListenerRegistry("dsh-soulmojito:guides-changed-listeners");
 function onGuidesChanged(listener) {
   return guidesChanged.on(listener);
 }
@@ -11186,7 +11194,7 @@ function normalizeOptions(input, base) {
           break;
         case "dryRun":
           break;
-        // dsh-tavern 单遍计算，无准备期（文档化偏差）
+        // dsh-soulmojito 单遍计算，无准备期（文档化偏差）
         case "noCache":
           break;
         // 我们的 cache 写穿透，无需该开关
@@ -11286,7 +11294,7 @@ var TemplateVariableSystem = class {
     if (scope === "global") {
       if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
         throw new TypeError(
-          `global scope only accepts string|number|boolean in dsh-tavern (scriptGlobals constraint); got ${typeof value}. Use local scope for object trees.`
+          `global scope only accepts string|number|boolean in dsh-soulmojito (scriptGlobals constraint); got ${typeof value}. Use local scope for object trees.`
         );
       }
       this.global[key] = value;
@@ -12858,14 +12866,17 @@ function projectionIdentity(message, sessionId, eventSeq) {
 function isTavernSessionMarker(source) {
   if (typeof source !== "object" || source === null) return false;
   const record = source;
-  if (record.kind === "model") return record.provider === "dsh-tavern" && record.model === "agent-tavern-import";
+  if (record.kind === "model") {
+    const provider = record.provider;
+    return (provider === PLUGIN_NAME || provider === LEGACY_PLUGIN_NAME) && record.model === "agent-tavern-import";
+  }
   if (!isHostPluginMessageSource(record)) return false;
   return !(typeof record.summary === "string" && record.summary.startsWith("AgentTavern preload: "));
 }
 function isTavernMirrorSource(source) {
   return isTavernSessionMarker(source);
 }
-var TAVERN_MIRROR_MODEL_SOURCE = { provider: "dsh-tavern", model: "agent-tavern-import" };
+var TAVERN_MIRROR_MODEL_SOURCE = { provider: PLUGIN_NAME, model: "agent-tavern-import" };
 function historyImportAppends(chat, sessionId, scripts, expand, session) {
   const promptScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly);
   const promptView = (message, index) => {
@@ -13017,13 +13028,13 @@ async function adoptOne(sessionId, session, deps) {
   if (state.sessionBindings[sessionId] !== void 0) return "bound";
   const parent = state.sessionBindings[info.parentSession];
   if (parent === void 0 || parent.architecture !== "agent-tavern" || parent.group === true) {
-    deps.logger?.info?.(`dsh-tavern: host session fork '${sessionId}' skipped (parent '${info.parentSession}' is not an AgentTavern binding)`);
+    deps.logger?.info?.(`dsh-soulmojito: host session fork '${sessionId}' skipped (parent '${info.parentSession}' is not an AgentTavern binding)`);
     return "skipped";
   }
   const character = parent.character;
   const parentSnapshot = await deps.store.getChatSnapshot(character, parent.chatId);
   if (parentSnapshot === void 0) {
-    deps.logger?.warn?.(`dsh-tavern: host session fork '${sessionId}' not adopted (parent chat '${character}/${parent.chatId}' is missing)`);
+    deps.logger?.warn?.(`dsh-soulmojito: host session fork '${sessionId}' not adopted (parent chat '${character}/${parent.chatId}' is missing)`);
     return "skipped";
   }
   let chatId = await findExistingForkChat(deps.store, character, sessionId);
@@ -13038,7 +13049,7 @@ async function adoptOne(sessionId, session, deps) {
   await copyChatVariables(deps.variables, parent.chatId, chatId);
   await copyChatMemories(deps, parent.chatId, chatId);
   await deps.bind(sessionId, character, chatId, parent.contextMode);
-  deps.logger?.info?.(`dsh-tavern: adopted host session fork '${sessionId}' from '${info.parentSession}' into chat '${character}/${chatId}'`);
+  deps.logger?.info?.(`dsh-soulmojito: adopted host session fork '${sessionId}' from '${info.parentSession}' into chat '${character}/${chatId}'`);
   return "adopted";
 }
 var FORK_CHAT_SUFFIX = / - fork \d+\.jsonl$/;
@@ -13080,7 +13091,7 @@ async function copyChatMemories(deps, parentChatId, chatId) {
   try {
     records2 = await deps.memories.list("chat", parentChatId);
   } catch (error) {
-    deps.logger?.warn?.(`dsh-tavern: fork memory copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`);
+    deps.logger?.warn?.(`dsh-soulmojito: fork memory copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`);
     return;
   }
   for (const record of records2) {
@@ -13105,7 +13116,7 @@ async function copyChatMemories(deps, parentChatId, chatId) {
       await deps.vectors.put(entries.map((entry) => ({ ...entry, scopeId: chatId })));
     }
   } catch (error) {
-    deps.logger?.warn?.(`dsh-tavern: fork vector copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`);
+    deps.logger?.warn?.(`dsh-soulmojito: fork vector copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`);
   }
 }
 
@@ -13180,7 +13191,7 @@ function defaultPreset() {
     prompt_order: [{ character_id: GLOBAL_ORDER_DUMMY_ID, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
   };
 }
-var agentPresetChanged = createGlobalListenerRegistry("dsh-tavern:agent-preset-changed-listeners");
+var agentPresetChanged = createGlobalListenerRegistry("dsh-soulmojito:agent-preset-changed-listeners");
 function onAgentPresetChanged(listener) {
   return agentPresetChanged.on(listener);
 }
@@ -13610,7 +13621,7 @@ function recordPromptView(input, logger) {
     }
     if (records.length > PROMPT_VIEWER_TOTAL) records = records.slice(records.length - PROMPT_VIEWER_TOTAL);
   } catch (error) {
-    logger?.warn?.(`dsh-tavern: prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`);
+    logger?.warn?.(`dsh-soulmojito: prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 function listPromptViews(filter = {}) {
@@ -13994,7 +14005,7 @@ import { createRequire as createRequire3 } from "node:module";
 import { basename as basename2, dirname as dirname6, join as join13 } from "node:path";
 import { fileURLToPath, pathToFileURL as pathToFileURL2 } from "node:url";
 var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
-var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-tavern, NOT the dsh-tavern source repository), then restart DSH`;
+var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-soulmojito, NOT the dsh-soulmojito source repository), then restart DSH`;
 var SESSION_CACHE_LIMIT = 2;
 function localModelFingerprint(modelDir) {
   try {
@@ -14313,7 +14324,7 @@ function loadLocalEmbedModel(config, runtime = defaultLocalEmbedRuntime) {
 var EMBED_BREAKER_MS = 6e4;
 var EMBED_RETRY_BACKOFF_MS = 250;
 var EMBED_INPUT_MAX_CHARS = 6e3;
-var EMBED_PROBE_TEXT = "dsh-tavern embed probe";
+var EMBED_PROBE_TEXT = "dsh-soulmojito embed probe";
 function emptyStatus() {
   return { version: 1, breakerUntil: 0 };
 }
@@ -14643,7 +14654,7 @@ async function startMemoryMaintenance(ctx, deps, scope) {
       await executeRun(ctx, deps, scope, active);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      ctx.logger?.warn?.(`dsh-tavern: memory maintenance run crashed: ${message}`);
+      ctx.logger?.warn?.(`dsh-soulmojito: memory maintenance run crashed: ${message}`);
       try {
         const stateStore = await MemoryMaintenanceStore.open(deps.root);
         const state = await stateStore.read(scope.character, scope.chatId);
@@ -15441,7 +15452,7 @@ import { mkdirSync as mkdirSync2, readFileSync as readFileSync3 } from "node:fs"
 import { dirname as dirname9, join as join16 } from "node:path";
 
 // packages/plugin/src/update/github.ts
-var UPDATE_REPOSITORY = "LingyeSoul/dsh-tavern";
+var UPDATE_REPOSITORY = "LingyeSoul/DSH-SoulMojito";
 var UPDATE_REF = "main";
 var UPDATE_PLUGIN_PATH = "/packages/plugin";
 var UNKNOWN_FIELD = "unknown";
@@ -15728,7 +15739,7 @@ async function httpGet(options, url, accept) {
       const response = await fetchImpl(url, {
         headers: {
           accept,
-          "user-agent": "dsh-tavern-update-check",
+          "user-agent": "dsh-soulmojito-update-check",
           ...token ? { authorization: `Bearer ${token}` } : {}
         },
         signal: AbortSignal.timeout(timeoutMs)
@@ -15739,7 +15750,7 @@ async function httpGet(options, url, accept) {
       failures.push(`fetch: ${describeError(error)}`);
     }
   }
-  const curlDisabled = (process.env.DSH_TAVERN_DISABLE_CURL ?? "").trim() !== "";
+  const curlDisabled = (envCompat("DISABLE_CURL") ?? "").trim() !== "";
   if (!curlDisabled) {
     try {
       return await (options.curlImpl ?? curlGet)(url, accept, timeoutMs);
@@ -15758,7 +15769,7 @@ function describeError(error) {
   return String(error);
 }
 function curlGet(url, accept, timeoutMs, exec = execFile2) {
-  const command = process.env.DSH_TAVERN_CURL?.trim() || (process.platform === "win32" ? "curl.exe" : "curl");
+  const command = envCompat("CURL")?.trim() || (process.platform === "win32" ? "curl.exe" : "curl");
   const seconds = String(Math.max(1, Math.ceil(timeoutMs / 1e3)));
   return new Promise((resolve6, reject) => {
     exec(command, [
@@ -15771,7 +15782,7 @@ function curlGet(url, accept, timeoutMs, exec = execFile2) {
       "-H",
       `accept: ${accept}`,
       "-H",
-      "user-agent: dsh-tavern-update-check",
+      "user-agent: dsh-soulmojito-update-check",
       url
     ], {
       encoding: "utf8",
@@ -15813,7 +15824,7 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 function replaceFileAtomic(source, target) {
-  const temp = `${target}.dsh-tavern-partial`;
+  const temp = `${target}.dsh-soulmojito-partial`;
   copyFileSync(source, temp);
   for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
     try {
@@ -15830,7 +15841,7 @@ function replaceFileAtomic(source, target) {
   }
 }
 function writeFileAtomic(target, data) {
-  const temp = `${target}.dsh-tavern-partial`;
+  const temp = `${target}.dsh-soulmojito-partial`;
   writeFileSync(temp, data);
   for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
     try {
@@ -15938,7 +15949,7 @@ function resolveProfileName(ctx) {
   return "desktop";
 }
 function resolveDesktopCli(argv = process.argv, execPath = process.execPath, exists = existsSync) {
-  const configured = process.env.DSH_TAVERN_DSH_CLI?.trim();
+  const configured = envCompat("DSH_CLI")?.trim();
   if (configured !== void 0 && configured !== "") {
     return { command: execPath, args: ["--expose-internals", configured], env: { ELECTRON_RUN_AS_NODE: "1" } };
   }
@@ -15977,7 +15988,7 @@ async function installViaCli(request) {
 }
 async function installViaPluginManager(request, pluginManager) {
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
-  const requestId = `dsh-tavern-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const requestId = `dsh-soulmojito-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   request.log(`plugin-manager: installBundle ${spec}`);
   const dispose = subscribeInstallEvents(request, requestId);
   try {
@@ -16059,7 +16070,7 @@ async function installViaCheckout(request) {
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
   const repository = repositorySlug(request.repository);
   const profile = resolveProfileName(request.ctx);
-  const checkout = mkdtempSync(join15(tmpdir(), "dsh-tavern-checkout-"));
+  const checkout = mkdtempSync(join15(tmpdir(), "dsh-soulmojito-checkout-"));
   try {
     request.log(`fallback: git clone --depth 1 https://github.com/${repository}.git`);
     await mustRun("git", ["clone", "--depth", "1", "--branch", request.ref, `https://github.com/${repository}.git`, checkout], request);
@@ -16432,7 +16443,7 @@ var TavernUpdateService = class {
     const stamped = `${this.nowIso().slice(11, 19)} ${line}`;
     this.installState.log = [...this.installState.log, stamped].slice(-INSTALL_LOG_LIMIT);
     try {
-      this.options.ctx?.logger?.info?.(`dsh-tavern update: ${line}`);
+      this.options.ctx?.logger?.info?.(`dsh-soulmojito update: ${line}`);
     } catch {
     }
   }
@@ -16554,7 +16565,7 @@ import { isAbsolute, join as join18, relative, resolve as resolve3 } from "node:
 import { pathToFileURL as pathToFileURL3 } from "node:url";
 
 // packages/plugin/src/games/handle.ts
-var GAMES_SERVICE_KEY = "dsh-tavern:games-service";
+var GAMES_SERVICE_KEY = "dsh-soulmojito:games-service";
 var serviceSymbol = Symbol.for(GAMES_SERVICE_KEY);
 var nextToken = 1;
 function publishGamesService(service) {
@@ -16569,11 +16580,11 @@ function resolveGamesService() {
   const holder = globalThis;
   return holder[serviceSymbol]?.service;
 }
-var gamesChangedListeners = createGlobalListenerRegistry("dsh-tavern:games-changed-listeners");
+var gamesChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:games-changed-listeners");
 function emitGamesChanged() {
   void gamesChangedListeners.emit();
 }
-var GAMES_WAITERS_KEY = "dsh-tavern:games-waiters";
+var GAMES_WAITERS_KEY = "dsh-soulmojito:games-waiters";
 function waiterRegistry() {
   const holder = globalThis;
   const key = Symbol.for(GAMES_WAITERS_KEY);
@@ -16613,7 +16624,7 @@ var ModAuditLog = class {
         await mkdir(dirname10(this.file), { recursive: true });
         await appendFile(this.file, line, "utf8");
       } catch (cause) {
-        this.warn?.(`dsh-tavern: mod audit append failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+        this.warn?.(`dsh-soulmojito: mod audit append failed: ${cause instanceof Error ? cause.message : String(cause)}`);
       }
     });
     this.tail = written;
@@ -16764,7 +16775,7 @@ var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
   "material_list",
   "material_read"
 ]);
-var MOD_REGISTRY_KEY = "dsh-tavern:mod-registry";
+var MOD_REGISTRY_KEY = "dsh-soulmojito:mod-registry";
 var registrySymbol2 = Symbol.for(MOD_REGISTRY_KEY);
 function store2() {
   const holder = globalThis;
@@ -16775,7 +16786,7 @@ function store2() {
     nextSequence: 1
   };
 }
-var modsChangedListeners = createGlobalListenerRegistry("dsh-tavern:mods-changed-listeners");
+var modsChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:mods-changed-listeners");
 function notifyChanged() {
   void modsChangedListeners.emit();
 }
@@ -16895,7 +16906,7 @@ function makeModReply(res) {
 function escapeHtmlAttribute(value) {
   return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
 }
-var MOD_LOG_MESSAGE = "dsh-tavern:mod-log";
+var MOD_LOG_MESSAGE = "dsh-soulmojito:mod-log";
 var MOD_LOG_TEXT_LIMIT = 2048;
 function modConsoleReporterScript() {
   return `(function () {
@@ -16929,7 +16940,7 @@ function modConsoleReporterScript() {
   });
 })();`;
 }
-var MOD_VIEWPORT_MESSAGE = "dsh-tavern:viewport";
+var MOD_VIEWPORT_MESSAGE = "dsh-soulmojito:viewport";
 var MOD_VIEWPORT_CSS_VAR = "--dt-viewport-height";
 var VIEWPORT_UNIT_PATTERN = /(?<![-\w])100(?:d|s|l)?vh(?![\w-])/gi;
 var VIEWPORT_VAR_REFERENCE = `var(${MOD_VIEWPORT_CSS_VAR}, 100vh)`;
@@ -16989,7 +17000,7 @@ function modHeightReporterScript() {
       if (height <= 0 || height === last) return;
       last = height;
       try {
-        parent.postMessage({ type: 'dsh-tavern:frontend-height', token: token, height: height }, '*');
+        parent.postMessage({ type: 'dsh-soulmojito:frontend-height', token: token, height: height }, '*');
       } catch (_) {}
       setTimeout(measure, 500);
     };
@@ -17088,9 +17099,11 @@ function checkModManifest(raw, options) {
     if (typeof record.engines !== "object" || record.engines === null || Array.isArray(record.engines)) {
       errors.push("engines must be an object");
     } else {
-      const range = record.engines["dsh-tavern"];
-      if (range !== void 0 && (typeof range !== "string" || range.trim() === "")) {
-        errors.push("engines['dsh-tavern'] must be a non-empty semver range string");
+      for (const key of ["dsh-soulmojito", "dsh-tavern"]) {
+        const range = record.engines[key];
+        if (range !== void 0 && (typeof range !== "string" || range.trim() === "")) {
+          errors.push(`engines['${key}'] must be a non-empty semver range string`);
+        }
       }
     }
   }
@@ -17193,7 +17206,7 @@ function checkModManifest(raw, options) {
   }
   if (errors.length > 0) return { ok: false, errors };
   const engines = record.engines;
-  const engineRange = engines?.["dsh-tavern"];
+  const engineRange = engines?.["dsh-soulmojito"] ?? engines?.["dsh-tavern"];
   const panel = record.panel;
   const surfaces = record.surfaces;
   const pickStrings = (value) => Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
@@ -17204,7 +17217,7 @@ function checkModManifest(raw, options) {
     author: record.author,
     description: record.description,
     main: record.main.trim(),
-    ...engineRange !== void 0 ? { engines: { dshTavern: engineRange } } : {},
+    ...engineRange !== void 0 ? { engines: { dshSoulMojito: engineRange } } : {},
     loadingOrder: typeof record.loadingOrder === "number" ? record.loadingOrder : 100,
     capabilities: Array.isArray(record.capabilities) ? [...new Set(record.capabilities)] : [],
     ...panel !== void 0 && typeof panel.title === "string" ? { panel: { title: panel.title, ...typeof panel.icon === "string" ? { icon: panel.icon } : {} } } : {},
@@ -17271,7 +17284,7 @@ function satisfiesVersionRange(version, range) {
   if (invalid.length > 0) {
     return { ok: false, reason: `range '${range}' has an invalid comparator '${invalid[0]}'` };
   }
-  return matched ? { ok: true, reason: "" } : { ok: false, reason: `requires dsh-tavern ${range} (host ${version})` };
+  return matched ? { ok: true, reason: "" } : { ok: false, reason: `requires dsh-soulmojito ${range} (host ${version})` };
 }
 function satisfiesComparator(version, comparator) {
   const match = /^(>=|<=|>|<|=|\^|~)?\s*(.+)$/.exec(comparator);
@@ -17507,7 +17520,7 @@ async function installModFromGit(options) {
       throw new Error(`repository has no readable mod.json at its root (${source.repository}): ${cause instanceof Error ? cause.message : String(cause)}`);
     }
   }
-  const workRoot = mkdtempSync2(join17(tmpdir2(), "dsh-tavern-modinstall-"));
+  const workRoot = mkdtempSync2(join17(tmpdir2(), "dsh-soulmojito-modinstall-"));
   try {
     const cloneDir = join17(workRoot, "clone");
     await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs);
@@ -17544,7 +17557,7 @@ function declaredSurfacesOf(manifest8) {
   };
 }
 function modsDisabledByEnv() {
-  const disabled = process.env.DSH_TAVERN_DISABLE_MODS?.trim();
+  const disabled = envCompat("DISABLE_MODS")?.trim();
   return disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false";
 }
 var ModHost = class _ModHost {
@@ -17573,7 +17586,7 @@ var ModHost = class _ModHost {
     host.offGuides = onGuidesChanged((character, chatId) => modEvents.emit("guides-changed", { character, chatId }));
     host.offHookDegrations = generationHooks.onDegradation((degradation) => {
       const detail = `${degradation.phase} ${degradation.reason}${degradation.detail ? `: ${degradation.detail}` : ""}`;
-      host.logger?.warn?.(`dsh-tavern: generation hook degraded (${detail})`);
+      host.logger?.warn?.(`dsh-soulmojito: generation hook degraded (${detail})`);
       if (typeof degradation.owner === "string") {
         void host.audit.record(degradation.owner, "hook-degradation", detail);
       }
@@ -17581,7 +17594,7 @@ var ModHost = class _ModHost {
     try {
       options.ctx?.effect?.(() => () => {
         host.clearAllTimers();
-      }, "dsh-tavern: mod timers");
+      }, "dsh-soulmojito: mod timers");
     } catch {
     }
     await host.refresh();
@@ -17639,7 +17652,7 @@ var ModHost = class _ModHost {
       return result;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      this.logger?.warn?.(`dsh-tavern: mod install from '${url}' failed: ${message}`);
+      this.logger?.warn?.(`dsh-soulmojito: mod install from '${url}' failed: ${message}`);
       await this.audit.record("*", "install-error", message);
       throw cause;
     }
@@ -17679,7 +17692,7 @@ var ModHost = class _ModHost {
       });
     }
     mods.sort((a, b) => a.loadingOrder - b.loadingOrder || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-    return { available, reason: available ? "" : "DSH_TAVERN_DISABLE_MODS is set", globalEnabled: this.globalEnabled, mods };
+    return { available, reason: available ? "" : "DSH_SOULMOJITO_DISABLE_MODS is set", globalEnabled: this.globalEnabled, mods };
   }
   /**
    * 分派 mod 子路由（`mods/<id>/<path>`）。返回 false = 不归我管（或任何一层
@@ -17708,7 +17721,7 @@ var ModHost = class _ModHost {
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       await this.audit.record(id, "http-error", message);
-      this.logger?.warn?.(`dsh-tavern: [mod:${id}] http route ${method} ${subpath} failed: ${message}`);
+      this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] http route ${method} ${subpath} failed: ${message}`);
       if (!res.writableEnded) {
         res.statusCode = 500;
         res.setHeader("content-type", "application/json; charset=utf-8");
@@ -17739,7 +17752,7 @@ var ModHost = class _ModHost {
       await handler({ name: name2 }, context);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      this.logger?.warn?.(`dsh-tavern: [mod:${id}] button '${name2}' handler failed: ${message}`);
+      this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] button '${name2}' handler failed: ${message}`);
       await this.audit.record(id, "button-error", `${name2}: ${message}`);
       throw cause;
     }
@@ -17806,7 +17819,7 @@ var ModHost = class _ModHost {
         continue;
       }
       const manifest8 = check.manifest;
-      const engineRange = manifest8.engines?.dshTavern;
+      const engineRange = manifest8.engines?.dshSoulMojito;
       if (engineRange !== void 0) {
         const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange);
         if (!verdict.ok) {
@@ -17877,7 +17890,7 @@ var ModHost = class _ModHost {
       const message = cause instanceof Error ? cause.message : String(cause);
       await this.runDisposers(id, record);
       this.loadErrors.set(id, message);
-      this.logger?.warn?.(`dsh-tavern: mod '${id}' failed to ${cacheBust ? "reload" : "load"}: ${message}`);
+      this.logger?.warn?.(`dsh-soulmojito: mod '${id}' failed to ${cacheBust ? "reload" : "load"}: ${message}`);
       await this.audit.record(id, "load-error", message);
       return false;
     }
@@ -17899,7 +17912,7 @@ var ModHost = class _ModHost {
         await dispose();
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
-        this.logger?.warn?.(`dsh-tavern: [mod:${id}] dispose failed: ${message}`);
+        this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] dispose failed: ${message}`);
         await this.audit.record(id, "dispose-error", message);
       }
     }
@@ -17911,7 +17924,7 @@ var ModHost = class _ModHost {
         off();
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
-        this.logger?.warn?.(`dsh-tavern: [mod:${id}] capability unregister failed: ${message}`);
+        this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] capability unregister failed: ${message}`);
         await this.audit.record(id, "dispose-error", message);
       }
     }
@@ -17930,15 +17943,15 @@ var ModHost = class _ModHost {
   createApi(record) {
     const id = record.manifest.id;
     const logger = {
-      info: (...args) => this.logger?.info?.(`dsh-tavern: [mod:${id}]`, ...args),
-      warn: (...args) => this.logger?.warn?.(`dsh-tavern: [mod:${id}]`, ...args),
-      error: (...args) => this.logger?.error?.(`dsh-tavern: [mod:${id}]`, ...args)
+      info: (...args) => this.logger?.info?.(`dsh-soulmojito: [mod:${id}]`, ...args),
+      warn: (...args) => this.logger?.warn?.(`dsh-soulmojito: [mod:${id}]`, ...args),
+      error: (...args) => this.logger?.error?.(`dsh-soulmojito: [mod:${id}]`, ...args)
     };
     const storage = record.storage;
     const observed = (operation, label, event) => {
       operation.catch((cause) => {
         const message = cause instanceof Error ? cause.message : String(cause);
-        this.logger?.warn?.(`dsh-tavern: [mod:${id}] ${label} failed: ${message}`);
+        this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] ${label} failed: ${message}`);
         void this.audit.record(id, event, message);
       });
       return operation;
@@ -17970,11 +17983,11 @@ var ModHost = class _ModHost {
               if (kind === "stream-delta" && auditedStreamEpoch === epoch) return;
               if (kind === "stream-delta") {
                 auditedStreamEpoch = epoch;
-                this.logger?.warn?.(`dsh-tavern: [mod:${id}] stream-delta handler failed: ${message} (further errors for this generation are silenced)`);
+                this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] stream-delta handler failed: ${message} (further errors for this generation are silenced)`);
                 await this.audit.record(id, "event-error", `stream-delta: ${message} (further stream-delta errors for this generation are silenced)`);
                 return;
               }
-              this.logger?.warn?.(`dsh-tavern: [mod:${id}] ${kind} handler failed: ${message}`);
+              this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] ${kind} handler failed: ${message}`);
               await this.audit.record(id, "event-error", message);
             }
           });
@@ -18003,7 +18016,7 @@ var ModHost = class _ModHost {
                 await handler();
               } catch (cause) {
                 const message = cause instanceof Error ? cause.message : String(cause);
-                this.logger?.warn?.(`dsh-tavern: [mod:${id}] timer handler failed: ${message}`);
+                this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] timer handler failed: ${message}`);
                 void this.audit.record(id, "timer-error", message);
               }
             })();
@@ -18118,7 +18131,7 @@ var ModHost = class _ModHost {
               if (!failureAudited) {
                 failureAudited = true;
                 const message = cause instanceof Error ? cause.message : String(cause);
-                this.logger?.warn?.(`dsh-tavern: [mod:${id}] macro '${macroName}' failed: ${message}`);
+                this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] macro '${macroName}' failed: ${message}`);
                 void this.audit.record(id, "macro-error", `${macroName}: ${message}`);
               }
               return null;
@@ -18349,7 +18362,7 @@ var RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
 var SUITS = ["\u2660", "\u2665", "\u2666", "\u2663"];
 var SHOE_CHUNK = 52;
 var MANIFEST = {
-  id: "dsh-tavern.blackjack",
+  id: "dsh-soulmojito.blackjack",
   name: "21\u70B9",
   version: "1.0.0",
   players: { min: 2, max: 2, roles: ["player", "dealer"] },
@@ -18578,7 +18591,7 @@ var viewHtml = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>21\u70B9 \xB7 dsh-tavern \u6E38\u620F\u6865</title>
+<title>21\u70B9 \xB7 dsh-soulmojito \u6E38\u620F\u6865</title>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -18671,7 +18684,7 @@ var viewHtml = `<!doctype html>
   }
 </style>
 </head>
-<body data-game="dsh-tavern.blackjack">
+<body data-game="dsh-soulmojito.blackjack">
 <header>
   <span class="game-name">21\u70B9</span>
   <span class="meta" id="meta"></span>
@@ -18704,8 +18717,8 @@ var viewHtml = `<!doctype html>
 <footer id="hint"></footer>
 <script>
 'use strict'
-/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-tavern:game-state\uFF08token \u5BF9\u8D26\u3001\u5168\u91CF\u91CD\u6E32\u67D3\uFF09\u3001
-   \u4E0A\u884C dsh-tavern:game-action\uFF08\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF09\u3002token \u4ECE location.search
+/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-soulmojito:game-state\uFF08token \u5BF9\u8D26\u3001\u5168\u91CF\u91CD\u6E32\u67D3\uFF09\u3001
+   \u4E0A\u884C dsh-soulmojito:game-action\uFF08\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF09\u3002token \u4ECE location.search
    \u81EA\u8BFB\uFF1B\u65E0 token\uFF08\u6D4F\u89C8\u5668\u76F4\u63A5\u6253\u5F00\uFF09\u6E32\u67D3\u9759\u6001\u9884\u89C8\u5C40\u9762\u3002\u4EBA\u7C7B\u56DE\u5408\u624D\u542F\u7528\u300C\u8981\u724C/\u505C\u724C\u300D
    \u6309\u94AE\u2014\u2014AI \u56DE\u5408\u7684\u52A8\u4F5C\u7ECF\u4E0B\u884C\u81EA\u52A8\u51FA\u73B0\u5728\u8D4C\u684C\u4E0A\u3002\u5750\u5E2D\u7EAA\u5F8B\uFF082026-10-14 \u4FEE\u8BA2\uFF09\uFF1A\u4EBA
    \u7C7B\u672A\u5FC5\u6267 player\uFF08\u53EF\u5750\u5E84\uFF09\uFF0C\u6587\u6848\u4E00\u5F8B\u6309 owner \u53CD\u67E5\u751F\u6210\u3001\u6309\u94AE\u968F view.legal \u6536\u7F29\uFF0C
@@ -18753,7 +18766,7 @@ var PREVIEW_STATE = {
 }
 var PREVIEW_SESSION = {
   id: '',
-  gameId: 'dsh-tavern.blackjack',
+  gameId: 'dsh-soulmojito.blackjack',
   players: [
     { role: 'player', owner: 'human' },
     { role: 'dealer', owner: 'agent' },
@@ -18763,7 +18776,7 @@ var PREVIEW_SESSION = {
 window.addEventListener('message', function (event) {
   var data = event.data
   if (!data || typeof data !== 'object') return
-  if (data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+  if (data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
   var view = data.view && typeof data.view === 'object' ? data.view : {}
   current = {
     state: view.state || null,
@@ -18908,7 +18921,7 @@ function render() {
   else metaEl.textContent = (act.session && act.session.id ? '\u5BF9\u5C40 ' + act.session.id : '\u5BF9\u5C40\u4E2D') + ' \xB7 \u5DF2\u53D1 ' + state.dealt + ' \u5F20'
 
   var cls = 'preview'
-  var text = '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u4EA4\u4E92'
+  var text = '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u4EA4\u4E92'
   if (live) {
     if (!state) {
       text = '\u7B49\u5F85\u5BF9\u5C40\u72B6\u6001\u2026'
@@ -18946,9 +18959,9 @@ function render() {
   standBtn.disabled = !(canAct && (!constrain || allows.stand))
 
   if (!live) {
-    hintEl.textContent = '\u8FD9\u662F\u9759\u6001\u6F14\u793A\u5C40\u9762\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\uFF0C\u8D4C\u684C\u5C06\u63A5\u6536\u5B9E\u65F6\u72B6\u6001\u5E76\u542F\u7528\u8981\u724C/\u505C\u724C\u6309\u94AE\u3002'
+    hintEl.textContent = '\u8FD9\u662F\u9759\u6001\u6F14\u793A\u5C40\u9762\uFF1A\u7531 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\uFF0C\u8D4C\u684C\u5C06\u63A5\u6536\u5B9E\u65F6\u72B6\u6001\u5E76\u542F\u7528\u8981\u724C/\u505C\u724C\u6309\u94AE\u3002'
   } else if (!state) {
-    hintEl.textContent = '\u6B63\u5728\u8FDE\u63A5 dsh-tavern \u6E38\u620F\u670D\u52A1\u2026'
+    hintEl.textContent = '\u6B63\u5728\u8FDE\u63A5 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u2026'
   } else if (state.finished) {
     hintEl.textContent = '\u5BF9\u5C40\u5DF2\u7ED3\u675F\u3002\u53EF\u5728\u5BF9\u5C40\u9762\u677F\u4E2D\u5F00\u65B0\u4E00\u5C40\uFF0C\u6216\u8BA9 AI \u518D\u6765\u4E00\u76D8\u3002'
   } else if (humanTurn(act)) {
@@ -18965,14 +18978,14 @@ function render() {
   }
 }
 
-/* \u4E0A\u884C dsh-tavern:game-action\uFF1A\u4EBA\u7C7B\u56DE\u5408\uFF08\u672A\u7EC8\u5C40\u3001owner \u975E agent\uFF09\u624D\u53D1\u3002
+/* \u4E0A\u884C dsh-soulmojito:game-action\uFF1A\u4EBA\u7C7B\u56DE\u5408\uFF08\u672A\u7EC8\u5C40\u3001owner \u975E agent\uFF09\u624D\u53D1\u3002
    \u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\u2014\u2014\u6309\u94AE\u53EA\u63D0\u4F9B hit/stand \u4E24\u4E2A\u56FA\u5B9A\u52A8\u4F5C\u3002 */
 function send(action) {
   if (!TOKEN) return
   var act = active()
   if (!act.state || act.state.finished || !humanTurn(act)) return
   window.parent.postMessage(
-    { type: 'dsh-tavern:game-action', token: TOKEN, action: action },
+    { type: 'dsh-soulmojito:game-action', token: TOKEN, action: action },
     '*',
   )
 }
@@ -19007,8 +19020,13 @@ function checkGameManifest(raw, options = {}) {
   if (value.engines !== void 0) {
     if (value.engines === null || typeof value.engines !== "object" || Array.isArray(value.engines)) {
       errors.push("engines must be an object");
-    } else if (value.engines["dsh-tavern"] !== void 0 && typeof value.engines["dsh-tavern"] !== "string") {
-      errors.push("engines.dsh-tavern must be a version range string");
+    } else {
+      for (const key of ["dsh-soulmojito", "dsh-tavern"]) {
+        const range = value.engines[key];
+        if (range !== void 0 && typeof range !== "string") {
+          errors.push(`engines.${key} must be a version range string`);
+        }
+      }
     }
   }
   const players = value.players;
@@ -19178,7 +19196,7 @@ function smokeTestGameEngine(engine8) {
     if (shape.winner !== null && typeof shape.winner !== "string") reasons.push("applyAction \u7684 winner \u5FC5\u987B\u662F\u89D2\u8272\u5B57\u7B26\u4E32\u6216 null");
     if (typeof shape.summary !== "string") reasons.push("applyAction \u7684 summary \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
   }
-  for (const probe of [{ type: "resign" }, { type: "__dsh_tavern_smoke_unknown__" }]) {
+  for (const probe of [{ type: "resign" }, { type: "__dsh_soulmojito_smoke_unknown__" }]) {
     try {
       engine8.applyAction(state, probe, turn);
       reasons.push(`applyAction \u5BF9\u975E\u6CD5\u52A8\u4F5C {type:'${probe.type}'} \u672A\u629B\u9519\uFF08\u5FC5\u987B\u62D2\u7EDD\u800C\u975E\u9759\u9ED8\uFF09`);
@@ -19213,7 +19231,7 @@ var CN_NUMERALS = {
 };
 var DIRECTIONS = [[1, 0], [0, 1], [1, 1], [1, -1]];
 var MANIFEST2 = {
-  id: "dsh-tavern.gomoku",
+  id: "dsh-soulmojito.gomoku",
   name: "\u4E94\u5B50\u68CB",
   version: "1.0.0",
   players: { min: 2, max: 2, roles: ["black", "white"] },
@@ -19391,7 +19409,7 @@ var viewHtml2 = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>\u4E94\u5B50\u68CB \xB7 dsh-tavern \u6E38\u620F\u6865</title>
+<title>\u4E94\u5B50\u68CB \xB7 dsh-soulmojito \u6E38\u620F\u6865</title>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -19438,7 +19456,7 @@ var viewHtml2 = `<!doctype html>
   }
 </style>
 </head>
-<body data-game="dsh-tavern.gomoku">
+<body data-game="dsh-soulmojito.gomoku">
 <header>
   <span class="game-name">\u4E94\u5B50\u68CB</span>
   <span class="meta" id="meta"></span>
@@ -19454,8 +19472,8 @@ var viewHtml2 = `<!doctype html>
 <footer id="hint"></footer>
 <script>
 'use strict'
-/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-tavern:game-state\uFF08token \u5BF9\u8D26\u3001\u5168\u91CF\u91CD\u6E32\u67D3\uFF09\u3001
-   \u4E0A\u884C dsh-tavern:game-action\uFF08\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF09\u3002token \u4ECE location.search
+/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-soulmojito:game-state\uFF08token \u5BF9\u8D26\u3001\u5168\u91CF\u91CD\u6E32\u67D3\uFF09\u3001
+   \u4E0A\u884C dsh-soulmojito:game-action\uFF08\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF09\u3002token \u4ECE location.search
    \u81EA\u8BFB\uFF1B\u65E0 token\uFF08\u6D4F\u89C8\u5668\u76F4\u63A5\u6253\u5F00\uFF09\u6E32\u67D3\u9759\u6001\u9884\u89C8\u5C40\u9762\u3002\u4EBA\u7C7B\u56DE\u5408\u624D\u542F\u7528\u70B9\u51FB\u4E0E\u5EFA\u8BAE\u70B9
    \u63D0\u793A\u2014\u2014AI \u56DE\u5408\u7684\u843D\u5B50\u7ECF\u4E0B\u884C\u81EA\u52A8\u51FA\u73B0\u5728\u68CB\u76D8\u4E0A\u3002 */
 var N = 15
@@ -19486,7 +19504,7 @@ var PREVIEW_STATE = buildBoard([
 ], 'white', 7, { x: 7, y: 5 })
 var PREVIEW_SESSION = {
   id: '',
-  gameId: 'dsh-tavern.gomoku',
+  gameId: 'dsh-soulmojito.gomoku',
   players: [
     { role: 'black', owner: 'human' },
     { role: 'white', owner: 'agent' },
@@ -19525,7 +19543,7 @@ function radialGradient(id, innerColor, outerColor) {
 window.addEventListener('message', function (event) {
   var data = event.data
   if (!data || typeof data !== 'object') return
-  if (data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+  if (data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
   var view = data.view && typeof data.view === 'object' ? data.view : {}
   current = {
     state: view.state || null,
@@ -19579,7 +19597,7 @@ function render() {
   else metaEl.textContent = (act.session && act.session.id ? '\u5BF9\u5C40 ' + act.session.id : '\u5BF9\u5C40\u4E2D') + ' \xB7 \u624B\u6570 ' + state.ply
 
   var cls = 'preview'
-  var text = '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u4EA4\u4E92'
+  var text = '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u4EA4\u4E92'
   if (live) {
     if (!state) {
       text = '\u7B49\u5F85\u5BF9\u5C40\u72B6\u6001\u2026'
@@ -19604,9 +19622,9 @@ function render() {
   }
 
   if (!live) {
-    hintEl.textContent = '\u8FD9\u662F\u9759\u6001\u6F14\u793A\u5C40\u9762\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\uFF0C\u68CB\u76D8\u5C06\u63A5\u6536\u5B9E\u65F6\u72B6\u6001\u5E76\u542F\u7528\u70B9\u51FB\u843D\u5B50\u3002'
+    hintEl.textContent = '\u8FD9\u662F\u9759\u6001\u6F14\u793A\u5C40\u9762\uFF1A\u7531 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\uFF0C\u68CB\u76D8\u5C06\u63A5\u6536\u5B9E\u65F6\u72B6\u6001\u5E76\u542F\u7528\u70B9\u51FB\u843D\u5B50\u3002'
   } else if (!state) {
-    hintEl.textContent = '\u6B63\u5728\u8FDE\u63A5 dsh-tavern \u6E38\u620F\u670D\u52A1\u2026'
+    hintEl.textContent = '\u6B63\u5728\u8FDE\u63A5 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u2026'
   } else if (state.finished) {
     hintEl.textContent = '\u5BF9\u5C40\u5DF2\u7ED3\u675F\u3002\u53EF\u5728\u5BF9\u5C40\u9762\u677F\u4E2D\u5F00\u65B0\u4E00\u5C40\uFF0C\u6216\u8BA9 AI \u518D\u6765\u4E00\u76D8\u3002'
   } else if (humanTurn(act)) {
@@ -19722,7 +19740,7 @@ function renderBoard(act) {
   }
 }
 
-/* \u70B9\u51FB\u7A7A\u70B9\uFF08\u4EBA\u7C7B\u56DE\u5408\u3001\u672A\u7EC8\u5C40\uFF09\uFF1A\u4E0A\u884C dsh-tavern:game-action\u3002\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF
+/* \u70B9\u51FB\u7A7A\u70B9\uFF08\u4EBA\u7C7B\u56DE\u5408\u3001\u672A\u7EC8\u5C40\uFF09\uFF1A\u4E0A\u884C dsh-soulmojito:game-action\u3002\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF
    \u5F15\u64CE\u7EC8\u5BA1\u2014\u2014\u8FD9\u91CC\u4E0D\u505A\u672C\u5730\u89C4\u5219\u88C1\u51B3\uFF0C\u4EBA\u7C7B\u53EF\u70B9\u4EFB\u610F\u7A7A\u70B9\u3002 */
 boardEl.addEventListener('click', function (event) {
   if (!TOKEN) return
@@ -19734,7 +19752,7 @@ boardEl.addEventListener('click', function (event) {
   var y = Number(target.getAttribute('data-y'))
   if (act.state.board[y][x] !== 0) return
   window.parent.postMessage(
-    { type: 'dsh-tavern:game-action', token: TOKEN, action: { type: 'place', x: x, y: y } },
+    { type: 'dsh-soulmojito:game-action', token: TOKEN, action: { type: 'place', x: x, y: y } },
     '*',
   )
 })
@@ -19751,7 +19769,7 @@ var WIDTH = 5;
 var HEIGHT = 12;
 var MAX_SUGGESTIONS = 64;
 var MANIFEST3 = {
-  id: "dsh-tavern.junqi",
+  id: "dsh-soulmojito.junqi",
   name: "\u519B\u68CB",
   version: "1.0.0",
   players: { min: 2, max: 2, roles: ["red", "blue"] },
@@ -20173,7 +20191,7 @@ var viewHtml3 = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>\u519B\u68CB \xB7 dsh-tavern \u6E38\u620F\u6865</title>
+<title>\u519B\u68CB \xB7 dsh-soulmojito \u6E38\u620F\u6865</title>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -20220,7 +20238,7 @@ var viewHtml3 = `<!doctype html>
   }
 </style>
 </head>
-<body data-game="dsh-tavern.junqi">
+<body data-game="dsh-soulmojito.junqi">
 <header>
   <span class="game-name">\u519B\u68CB</span>
   <span class="meta" id="meta"></span>
@@ -20236,8 +20254,8 @@ var viewHtml3 = `<!doctype html>
 <footer id="hint"></footer>
 <script>
 'use strict'
-/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-tavern:game-state\uFF08token \u5BF9\u8D26\u3001\u5168\u91CF\u91CD\u6E32\u67D3\uFF09\u3001
-   \u4E0A\u884C dsh-tavern:game-action\uFF08\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF09\u3002token \u4ECE location.search
+/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-soulmojito:game-state\uFF08token \u5BF9\u8D26\u3001\u5168\u91CF\u91CD\u6E32\u67D3\uFF09\u3001
+   \u4E0A\u884C dsh-soulmojito:game-action\uFF08\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF09\u3002token \u4ECE location.search
    \u81EA\u8BFB\uFF1B\u65E0 token\uFF08\u6D4F\u89C8\u5668\u76F4\u63A5\u6253\u5F00\uFF09\u6E32\u67D3\u9759\u6001\u9884\u89C8\u5C40\u9762\u3002\u4EBA\u7C7B\u56DE\u5408\u624D\u542F\u7528\u9009\u5B50\u4EA4\u4E92\uFF1A
    \u5148\u70B9\u5DF1\u65B9\uFF08\u884C\u68CB\u65B9\uFF09\u68CB\u5B50\u9009\u4E2D\uFF0C\u518D\u70B9\u5EFA\u8BAE\u96C6\u5185\u9AD8\u4EAE\u76EE\u6807\u8D70\u5B50\uFF1BAI \u56DE\u5408\u843D\u5B50\u7ECF\u4E0B\u884C\u81EA\u52A8
    \u51FA\u73B0\u5728\u68CB\u76D8\u4E0A\u3002 */
@@ -20332,7 +20350,7 @@ var PREVIEW_STATE = {
 }
 var PREVIEW_SESSION = {
   id: '',
-  gameId: 'dsh-tavern.junqi',
+  gameId: 'dsh-soulmojito.junqi',
   players: [
     { role: 'red', owner: 'human' },
     { role: 'blue', owner: 'agent' },
@@ -20342,7 +20360,7 @@ var PREVIEW_SESSION = {
 window.addEventListener('message', function (event) {
   var data = event.data
   if (!data || typeof data !== 'object') return
-  if (data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+  if (data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
   var view = data.view && typeof data.view === 'object' ? data.view : {}
   current = {
     state: view.state || null,
@@ -20406,7 +20424,7 @@ function render() {
   else metaEl.textContent = (act.session && act.session.id ? '\u5BF9\u5C40 ' + act.session.id : '\u5BF9\u5C40\u4E2D') + ' \xB7 \u5DF2\u8D70 ' + state.ply + ' \u624B'
 
   var cls = 'preview'
-  var text = '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u5BF9\u5F08'
+  var text = '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u5BF9\u5F08'
   if (live) {
     if (!state) {
       text = '\u7B49\u5F85\u5BF9\u5C40\u72B6\u6001\u2026'
@@ -20437,9 +20455,9 @@ function render() {
   }
 
   if (!live) {
-    hintEl.textContent = '\u8FD9\u662F\u9759\u6001\u6F14\u793A\u5C40\u9762\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\uFF0C\u68CB\u76D8\u5C06\u63A5\u6536\u5B9E\u65F6\u72B6\u6001\u5E76\u542F\u7528\u9009\u5B50\u8D70\u5B50\u3002'
+    hintEl.textContent = '\u8FD9\u662F\u9759\u6001\u6F14\u793A\u5C40\u9762\uFF1A\u7531 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\uFF0C\u68CB\u76D8\u5C06\u63A5\u6536\u5B9E\u65F6\u72B6\u6001\u5E76\u542F\u7528\u9009\u5B50\u8D70\u5B50\u3002'
   } else if (!state) {
-    hintEl.textContent = '\u6B63\u5728\u8FDE\u63A5 dsh-tavern \u6E38\u620F\u670D\u52A1\u2026'
+    hintEl.textContent = '\u6B63\u5728\u8FDE\u63A5 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u2026'
   } else if (act.finished) {
     hintEl.textContent = '\u5BF9\u5C40\u5DF2\u7ED3\u675F\u3002\u53EF\u5728\u5BF9\u5C40\u9762\u677F\u4E2D\u5F00\u65B0\u4E00\u5C40\uFF0C\u6216\u8BA9 AI \u518D\u6765\u4E00\u76D8\u3002'
   } else if (humanTurn(act)) {
@@ -20683,7 +20701,7 @@ boardEl.addEventListener('click', function (event) {
     for (var i = 0; i < targets.length; i++) {
       if (targets[i].to.x === x && targets[i].to.y === y) {
         window.parent.postMessage(
-          { type: 'dsh-tavern:game-action', token: TOKEN, action: { type: 'move', from: { x: selected.x, y: selected.y }, to: { x: x, y: y } } },
+          { type: 'dsh-soulmojito:game-action', token: TOKEN, action: { type: 'move', from: { x: selected.x, y: selected.y }, to: { x: x, y: y } } },
           '*',
         )
         selected = null
@@ -20722,7 +20740,7 @@ var PAIRS = FACES.length;
 var MAX_SUGGESTIONS2 = 64;
 var COLUMN_LETTERS = "ABCD";
 var MANIFEST4 = {
-  id: "dsh-tavern.memory-match",
+  id: "dsh-soulmojito.memory-match",
   name: "\u8BB0\u5FC6\u7FFB\u724C\u5BF9\u6218",
   version: "1.0.0",
   players: { min: 2, max: 2, roles: ["red", "blue"] },
@@ -20938,7 +20956,7 @@ var viewHtml4 = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>\u8BB0\u5FC6\u7FFB\u724C\u5BF9\u6218 \xB7 dsh-tavern \u6E38\u620F\u6865</title>
+<title>\u8BB0\u5FC6\u7FFB\u724C\u5BF9\u6218 \xB7 dsh-soulmojito \u6E38\u620F\u6865</title>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -21036,7 +21054,7 @@ var viewHtml4 = `<!doctype html>
   }
 </style>
 </head>
-<body data-game="dsh-tavern.memory-match">
+<body data-game="dsh-soulmojito.memory-match">
 <header>
   <span class="game-name">\u8BB0\u5FC6\u7FFB\u724C\u5BF9\u6218</span>
   <span class="meta" id="meta"></span>
@@ -21060,8 +21078,8 @@ var viewHtml4 = `<!doctype html>
 <footer id="hint"></footer>
 <script>
 'use strict'
-/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-tavern:game-state\uFF08token \u5BF9\u8D26\u3001\u5168\u91CF\u91CD\u6E32\u67D3\uFF09\u3001
-   \u4E0A\u884C dsh-tavern:game-action\uFF08\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF09\u3002token \u4ECE location.search
+/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-soulmojito:game-state\uFF08token \u5BF9\u8D26\u3001\u5168\u91CF\u91CD\u6E32\u67D3\uFF09\u3001
+   \u4E0A\u884C dsh-soulmojito:game-action\uFF08\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF09\u3002token \u4ECE location.search
    \u81EA\u8BFB\uFF1B\u65E0 token\uFF08\u6D4F\u89C8\u5668\u76F4\u63A5\u6253\u5F00\uFF09\u6E32\u67D3\u9759\u6001\u9884\u89C8\u5C40\u9762\u3002\u4EBA\u7C7B\u56DE\u5408\u624D\u542F\u7528\u7FFB\u724C\uFF1A\u70B9\u7B2C\u4E00\u5F20
    \u9AD8\u4EAE\u5F85\u9009\uFF08\u518D\u70B9\u540C\u5F20\u53D6\u6D88\uFF09\u3001\u70B9\u7B2C\u4E8C\u5F20\u5373\u63D0\u4EA4 {type:'flip',a,b}\uFF1B\u5931\u914D\u65F6\u505A ~1.4s
    \u300C\u7FFB\u56DE\u9884\u89C8\u300D\uFF08\u7EAF\u89C6\u56FE\u52A8\u753B\u2014\u2014\u724C\u9762\u6765\u81EA state.lastFlip\uFF0C\u53CC\u65B9\u90FD\u770B\u89C1\u8FC7\u3001\u96F6\u6CC4\u6F0F\uFF0C
@@ -21106,7 +21124,7 @@ var PREVIEW_STATE = {
 }
 var PREVIEW_SESSION = {
   id: '',
-  gameId: 'dsh-tavern.memory-match',
+  gameId: 'dsh-soulmojito.memory-match',
   players: [
     { role: 'red', owner: 'human' },
     { role: 'blue', owner: 'agent' },
@@ -21116,7 +21134,7 @@ var PREVIEW_SESSION = {
 window.addEventListener('message', function (event) {
   var data = event.data
   if (!data || typeof data !== 'object') return
-  if (data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+  if (data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
   var view = data.view && typeof data.view === 'object' ? data.view : {}
   var state = view.state || null
   current = {
@@ -21191,12 +21209,12 @@ function canAct() {
   return ownerOf(current.session, current.state.turn) === 'human'
 }
 
-/* \u4E0A\u884C dsh-tavern:game-action\uFF1B\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF08\u89C6\u56FE\u53EA\u4F1A\u63D0\u4EA4\u4E24\u5F20
+/* \u4E0A\u884C dsh-soulmojito:game-action\uFF1B\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF08\u89C6\u56FE\u53EA\u4F1A\u63D0\u4EA4\u4E24\u5F20
    \u80CC\u9762\u724C\uFF0C\u4E14\u9009\u4E2D\u96C6\u5728\u63D0\u4EA4\u540E\u88AB\u53D1\u9001\u9501\u51BB\u7ED3\uFF0C\u76F4\u5230\u5C40\u9762\u66F4\u65B0\u6216 4s \u89E3\u9501\u515C\u5E95\uFF09\u3002 */
 function send(action) {
   if (!TOKEN) return
   window.parent.postMessage(
-    { type: 'dsh-tavern:game-action', token: TOKEN, action: action },
+    { type: 'dsh-soulmojito:game-action', token: TOKEN, action: action },
     '*',
   )
 }
@@ -21310,7 +21328,7 @@ function render() {
     + ' \xB7 \u5DF2\u7FFB ' + state.ply + ' \u624B \xB7 \u5DF2\u914D\u5BF9 ' + (matched / 2) + '/' + PAIRS
 
   var cls = 'preview'
-  var text = '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u4EA4\u4E92'
+  var text = '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u4EA4\u4E92'
   if (live) {
     if (!state) {
       text = '\u7B49\u5F85\u5BF9\u5C40\u72B6\u6001\u2026'
@@ -21336,9 +21354,9 @@ function render() {
   }
 
   if (!live) {
-    hintEl.textContent = '\u8FD9\u662F\u9759\u6001\u9884\u89C8\u5C40\u9762\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\uFF0C\u724C\u684C\u5C06\u63A5\u6536\u5B9E\u65F6\u72B6\u6001\u5E76\u542F\u7528\u7FFB\u724C\u3002'
+    hintEl.textContent = '\u8FD9\u662F\u9759\u6001\u9884\u89C8\u5C40\u9762\uFF1A\u7531 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\uFF0C\u724C\u684C\u5C06\u63A5\u6536\u5B9E\u65F6\u72B6\u6001\u5E76\u542F\u7528\u7FFB\u724C\u3002'
   } else if (!state) {
-    hintEl.textContent = '\u6B63\u5728\u8FDE\u63A5 dsh-tavern \u6E38\u620F\u670D\u52A1\u2026'
+    hintEl.textContent = '\u6B63\u5728\u8FDE\u63A5 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u2026'
   } else if (state.finished) {
     hintEl.textContent = '\u5BF9\u5C40\u5DF2\u7ED3\u675F\u3002\u53EF\u5728\u5BF9\u5C40\u9762\u677F\u4E2D\u5F00\u65B0\u4E00\u5C40\uFF0C\u6216\u8BA9 AI \u518D\u6765\u4E00\u76D8\u3002'
   } else if (sending) {
@@ -21360,7 +21378,7 @@ var memoryMatch = { manifest: manifest4, engine: engine4, viewHtml: viewHtml4 };
 // packages/plugin/src/games/builtin/monopoly.ts
 import { randomInt as randomInt3 } from "node:crypto";
 var MANIFEST5 = {
-  id: "dsh-tavern.monopoly",
+  id: "dsh-soulmojito.monopoly",
   name: "\u5927\u5BCC\u7FC1",
   version: "1.0.0",
   players: { min: 2, max: 2, roles: ["red", "blue"] },
@@ -21816,7 +21834,7 @@ var viewHtml5 = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>\u5927\u5BCC\u7FC1 \xB7 dsh-tavern \u6E38\u620F\u6865</title>
+<title>\u5927\u5BCC\u7FC1 \xB7 dsh-soulmojito \u6E38\u620F\u6865</title>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -21944,7 +21962,7 @@ var viewHtml5 = `<!doctype html>
   }
 </style>
 </head>
-<body data-game="dsh-tavern.monopoly">
+<body data-game="dsh-soulmojito.monopoly">
 <header>
   <span class="game-name">\u5927\u5BCC\u7FC1</span>
   <span class="meta" id="meta"></span>
@@ -21981,8 +21999,8 @@ var viewHtml5 = `<!doctype html>
 <footer id="hint"></footer>
 <script>
 'use strict'
-/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-tavern:game-state\uFF08token \u5BF9\u8D26\u3001\u5168\u91CF\u91CD\u6E32\u67D3\uFF09\u3001
-   \u4E0A\u884C dsh-tavern:game-action\uFF08\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF09\u3002token \u4ECE location.search
+/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-soulmojito:game-state\uFF08token \u5BF9\u8D26\u3001\u5168\u91CF\u91CD\u6E32\u67D3\uFF09\u3001
+   \u4E0A\u884C dsh-soulmojito:game-action\uFF08\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF09\u3002token \u4ECE location.search
    \u81EA\u8BFB\uFF1B\u65E0 token\uFF08\u6D4F\u89C8\u5668\u76F4\u63A5\u6253\u5F00\uFF09\u6E32\u67D3\u9759\u6001\u9884\u89C8\u5C40\u9762\uFF08\u5F15\u64CE createGame({seed:1})
    \u7684\u5F00\u5C40\u6001\uFF0Cspec \u4E0E\u5F15\u64CE\u9010\u5B57\u6BB5\u5BF9\u8D26\u9632\u6F02\u79FB\uFF09\u3002\u5750\u5E2D\u7EAA\u5F8B\uFF1A\u4E00\u5207\u300C\u8C01\u662F\u8C01\u300D\u7684\u8868\u8FF0\u6309
    session.players \u7684 owner \u53CD\u67E5\u843D\u7B14\uFF0C\u4E0D\u628A\u7F3A\u7701\u5750\u5E2D\u5199\u6B7B\uFF1B\u56DB\u9897\u6309\u94AE\u968F view.legal
@@ -22086,7 +22104,7 @@ var PREVIEW_STATE = {
 }
 var PREVIEW_SESSION = {
   id: '',
-  gameId: 'dsh-tavern.monopoly',
+  gameId: 'dsh-soulmojito.monopoly',
   players: [
     { role: 'red', owner: 'human' },
     { role: 'blue', owner: 'agent' }
@@ -22096,7 +22114,7 @@ var PREVIEW_SESSION = {
 window.addEventListener('message', function (event) {
   var data = event.data
   if (!data || typeof data !== 'object') return
-  if (data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+  if (data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
   var view = data.view && typeof data.view === 'object' ? data.view : {}
   current = {
     state: view.state || null,
@@ -22233,10 +22251,10 @@ function render() {
   else if (!state) metaEl.textContent = '\u7B49\u5F85\u4F1A\u8BDD\u2026'
   else metaEl.textContent = (act.session && act.session.id ? '\u5BF9\u5C40 ' + act.session.id : '\u5BF9\u5C40\u4E2D') + ' \xB7 \u56DE\u5408 \u7EA2 ' + state.turns.red + ' / \u84DD ' + state.turns.blue
   diceEl.textContent = state && state.lastRoll !== null ? '\u9AB0\u70B9 ' + state.lastRoll : '\u9AB0\u70B9 \u2014'
-  logEl.textContent = act.summary || (live ? '' : '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u4EA4\u4E92\u3002')
+  logEl.textContent = act.summary || (live ? '' : '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u4EA4\u4E92\u3002')
 
   var cls = 'preview'
-  var text = '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u4EA4\u4E92'
+  var text = '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u4EA4\u4E92'
   if (live) {
     if (!state) {
       text = '\u7B49\u5F85\u5BF9\u5C40\u72B6\u6001\u2026'
@@ -22275,9 +22293,9 @@ function render() {
   passBtn.disabled = !(canAct && (!constrain || allows.pass))
 
   if (!live) {
-    hintEl.textContent = '\u8FD9\u662F\u9759\u6001\u6F14\u793A\u5C40\u9762\uFF08\u5F00\u5C40\uFF09\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\uFF0C\u68CB\u76D8\u5C06\u63A5\u6536\u5B9E\u65F6\u72B6\u6001\u5E76\u542F\u7528\u63B7\u9AB0/\u8D2D\u4E70/\u52A0\u76D6/\u8DF3\u8FC7\u6309\u94AE\u3002'
+    hintEl.textContent = '\u8FD9\u662F\u9759\u6001\u6F14\u793A\u5C40\u9762\uFF08\u5F00\u5C40\uFF09\uFF1A\u7531 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\uFF0C\u68CB\u76D8\u5C06\u63A5\u6536\u5B9E\u65F6\u72B6\u6001\u5E76\u542F\u7528\u63B7\u9AB0/\u8D2D\u4E70/\u52A0\u76D6/\u8DF3\u8FC7\u6309\u94AE\u3002'
   } else if (!state) {
-    hintEl.textContent = '\u6B63\u5728\u8FDE\u63A5 dsh-tavern \u6E38\u620F\u670D\u52A1\u2026'
+    hintEl.textContent = '\u6B63\u5728\u8FDE\u63A5 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u2026'
   } else if (state.finished) {
     hintEl.textContent = '\u5BF9\u5C40\u5DF2\u7ED3\u675F\u3002\u53EF\u5728\u5BF9\u5C40\u9762\u677F\u4E2D\u5F00\u65B0\u4E00\u5C40\uFF0C\u6216\u8BA9 AI \u518D\u6765\u4E00\u76D8\u3002'
   } else if (humanTurn(act)) {
@@ -22295,14 +22313,14 @@ function render() {
   }
 }
 
-/* \u4E0A\u884C dsh-tavern:game-action\uFF1A\u4EBA\u7C7B\u56DE\u5408\uFF08\u672A\u7EC8\u5C40\u3001owner \u975E agent\uFF09\u624D\u53D1\u3002
+/* \u4E0A\u884C dsh-soulmojito:game-action\uFF1A\u4EBA\u7C7B\u56DE\u5408\uFF08\u672A\u7EC8\u5C40\u3001owner \u975E agent\uFF09\u624D\u53D1\u3002
    \u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\u2014\u2014\u6309\u94AE\u53EA\u63D0\u4F9B roll/buy/build/pass \u56DB\u4E2A\u56FA\u5B9A\u52A8\u4F5C\u3002 */
 function send(action) {
   if (!TOKEN) return
   var act = active()
   if (!act.state || act.state.finished || !humanTurn(act)) return
   window.parent.postMessage(
-    { type: 'dsh-tavern:game-action', token: TOKEN, action: action },
+    { type: 'dsh-soulmojito:game-action', token: TOKEN, action: action },
     '*'
   )
 }
@@ -22327,7 +22345,7 @@ var NOUGHT = 2;
 var COLUMNS2 = "ABC";
 var DIRECTIONS2 = [[1, 0], [0, 1], [1, 1], [1, -1]];
 var MANIFEST6 = {
-  id: "dsh-tavern.tic-tac-toe",
+  id: "dsh-soulmojito.tic-tac-toe",
   name: "\u4E95\u5B57\u68CB",
   version: "1.0.0",
   players: { min: 2, max: 2, roles: ["x", "o"] },
@@ -22480,7 +22498,7 @@ var viewHtml6 = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>\u4E95\u5B57\u68CB \xB7 dsh-tavern \u6E38\u620F\u6865</title>
+<title>\u4E95\u5B57\u68CB \xB7 dsh-soulmojito \u6E38\u620F\u6865</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -22514,8 +22532,8 @@ var viewHtml6 = `<!doctype html>
 <footer>\u8F6E\u5230\u4F60\u65F6\u70B9\u51FB\u7A7A\u683C\u843D\u5B50\uFF1B\u5750\u6807\u4E3A\u5217 A-C\u3001\u884C 1-3\u3002</footer>
 <script>
 'use strict'
-/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-tavern:game-state\uFF08token \u5BF9\u8D26\uFF09\u3001
-   \u4E0A\u884C dsh-tavern:game-action\u3002token \u4ECE location.search \u81EA\u8BFB\uFF08\u670D\u52A1\u7AEF\u6CE8\u5165\u7684
+/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-soulmojito:game-state\uFF08token \u5BF9\u8D26\uFF09\u3001
+   \u4E0A\u884C dsh-soulmojito:game-action\u3002token \u4ECE location.search \u81EA\u8BFB\uFF08\u670D\u52A1\u7AEF\u6CE8\u5165\u7684
    \u6865\u811A\u672C\u4E0E\u5BBF\u4E3B GameSurface \u90FD\u6309\u540C\u4E00\u7EAA\u5F8B\uFF09\u3002\u65E0 token \u65F6\u6E32\u67D3\u9759\u6001\u9884\u89C8\u3002 */
 var params = new URLSearchParams(window.location.search)
 var TOKEN = params.get('token')
@@ -22544,7 +22562,7 @@ function render(view, session) {
         cell.className += ' playable'
         ;(function (cx, cy) {
           cell.addEventListener('click', function () {
-            parent.postMessage({ type: 'dsh-tavern:game-action', token: TOKEN, action: { type: 'place', x: cx, y: cy } }, '*')
+            parent.postMessage({ type: 'dsh-soulmojito:game-action', token: TOKEN, action: { type: 'place', x: cx, y: cy } }, '*')
           })
         })(x, y)
       }
@@ -22558,7 +22576,7 @@ function render(view, session) {
 
 addEventListener('message', function (event) {
   var data = event.data
-  if (!data || data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+  if (!data || data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
   render(data.view, data.session)
 })
 
@@ -22577,7 +22595,7 @@ var WIDTH2 = 9;
 var HEIGHT2 = 10;
 var MAX_SUGGESTIONS3 = 64;
 var MANIFEST7 = {
-  id: "dsh-tavern.xiangqi",
+  id: "dsh-soulmojito.xiangqi",
   name: "\u4E2D\u56FD\u8C61\u68CB",
   version: "1.0.0",
   players: { min: 2, max: 2, roles: ["red", "black"] },
@@ -22990,7 +23008,7 @@ var viewHtml7 = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>\u4E2D\u56FD\u8C61\u68CB \xB7 dsh-tavern \u6E38\u620F\u6865</title>
+<title>\u4E2D\u56FD\u8C61\u68CB \xB7 dsh-soulmojito \u6E38\u620F\u6865</title>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -23045,7 +23063,7 @@ var viewHtml7 = `<!doctype html>
   }
 </style>
 </head>
-<body data-game="dsh-tavern.xiangqi">
+<body data-game="dsh-soulmojito.xiangqi">
 <header>
   <span class="game-name">\u4E2D\u56FD\u8C61\u68CB</span>
   <span class="meta" id="meta"></span>
@@ -23061,8 +23079,8 @@ var viewHtml7 = `<!doctype html>
 <footer id="hint"></footer>
 <script>
 'use strict'
-/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-tavern:game-state\uFF08token \u5BF9\u8D26\u3001\u5168\u91CF\u91CD\u6E32\u67D3\uFF09\u3001
-   \u4E0A\u884C dsh-tavern:game-action\uFF08\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF09\u3002token \u4ECE location.search
+/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-soulmojito:game-state\uFF08token \u5BF9\u8D26\u3001\u5168\u91CF\u91CD\u6E32\u67D3\uFF09\u3001
+   \u4E0A\u884C dsh-soulmojito:game-action\uFF08\u5408\u6CD5\u6027\u7531\u670D\u52A1\u7AEF\u5F15\u64CE\u7EC8\u5BA1\uFF09\u3002token \u4ECE location.search
    \u81EA\u8BFB\uFF1B\u65E0 token\uFF08\u6D4F\u89C8\u5668\u76F4\u63A5\u6253\u5F00\uFF09\u6E32\u67D3\u9759\u6001\u9884\u89C8\u5C40\u9762\u3002\u4EBA\u7C7B\u56DE\u5408\u624D\u542F\u7528\u9009\u5B50\u4EA4\u4E92\uFF1A
    \u5148\u70B9\u5DF1\u65B9\uFF08\u884C\u68CB\u65B9\uFF09\u68CB\u5B50\u9009\u4E2D\uFF0C\u518D\u70B9\u5EFA\u8BAE\u96C6\u5185\u9AD8\u4EAE\u76EE\u6807\u8D70\u5B50\uFF1BAI \u56DE\u5408\u843D\u5B50\u7ECF\u4E0B\u884C\u81EA\u52A8
    \u51FA\u73B0\u5728\u68CB\u76D8\u4E0A\u3002 */
@@ -23147,7 +23165,7 @@ var PREVIEW_STATE = {
 }
 var PREVIEW_SESSION = {
   id: '',
-  gameId: 'dsh-tavern.xiangqi',
+  gameId: 'dsh-soulmojito.xiangqi',
   players: [
     { role: 'red', owner: 'human' },
     { role: 'black', owner: 'agent' },
@@ -23157,7 +23175,7 @@ var PREVIEW_SESSION = {
 window.addEventListener('message', function (event) {
   var data = event.data
   if (!data || typeof data !== 'object') return
-  if (data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+  if (data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
   var view = data.view && typeof data.view === 'object' ? data.view : {}
   current = {
     state: view.state || null,
@@ -23231,7 +23249,7 @@ function render() {
   else metaEl.textContent = (act.session && act.session.id ? '\u5BF9\u5C40 ' + act.session.id : '\u5BF9\u5C40\u4E2D') + ' \xB7 \u5DF2\u8D70 ' + state.ply + ' \u624B'
 
   var cls = 'preview'
-  var text = '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u5BF9\u5F08'
+  var text = '\u9884\u89C8\u6A21\u5F0F\uFF1A\u7531 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\u542F\u7528\u5BF9\u5F08'
   if (live) {
     if (!state) {
       text = '\u7B49\u5F85\u5BF9\u5C40\u72B6\u6001\u2026'
@@ -23275,9 +23293,9 @@ function render() {
   }
 
   if (!live) {
-    hintEl.textContent = '\u8FD9\u662F\u9759\u6001\u6F14\u793A\u5C40\u9762\uFF1A\u7531 dsh-tavern \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\uFF0C\u68CB\u76D8\u5C06\u63A5\u6536\u5B9E\u65F6\u72B6\u6001\u5E76\u542F\u7528\u9009\u5B50\u8D70\u5B50\u3002'
+    hintEl.textContent = '\u8FD9\u662F\u9759\u6001\u6F14\u793A\u5C40\u9762\uFF1A\u7531 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u88C5\u8F7D\u540E\uFF0C\u68CB\u76D8\u5C06\u63A5\u6536\u5B9E\u65F6\u72B6\u6001\u5E76\u542F\u7528\u9009\u5B50\u8D70\u5B50\u3002'
   } else if (!state) {
-    hintEl.textContent = '\u6B63\u5728\u8FDE\u63A5 dsh-tavern \u6E38\u620F\u670D\u52A1\u2026'
+    hintEl.textContent = '\u6B63\u5728\u8FDE\u63A5 dsh-soulmojito \u6E38\u620F\u670D\u52A1\u2026'
   } else if (act.finished) {
     hintEl.textContent = '\u5BF9\u5C40\u5DF2\u7ED3\u675F\u3002\u53EF\u5728\u5BF9\u5C40\u9762\u677F\u4E2D\u5F00\u65B0\u4E00\u5C40\uFF0C\u6216\u8BA9 AI \u518D\u6765\u4E00\u76D8\u3002'
   } else if (humanTurn(act)) {
@@ -23482,7 +23500,7 @@ boardEl.addEventListener('click', function (event) {
     for (var i = 0; i < targets.length; i++) {
       if (targets[i].to.x === x && targets[i].to.y === y) {
         window.parent.postMessage(
-          { type: 'dsh-tavern:game-action', token: TOKEN, action: { type: 'move', from: { x: selected.x, y: selected.y }, to: { x: x, y: y } } },
+          { type: 'dsh-soulmojito:game-action', token: TOKEN, action: { type: 'move', from: { x: selected.x, y: selected.y }, to: { x: x, y: y } } },
           '*',
         )
         selected = null
@@ -23542,7 +23560,16 @@ var GameRegistry = class _GameRegistry {
     }));
   }
   get(id) {
-    return this.games.get(id) ?? this.modGames.get(id);
+    return this.games.get(id) ?? this.modGames.get(id) ?? this.resolveLegacyId(id);
+  }
+  /** 改名兼容（2026-10-16 项目改名）：存量对局文件里持久化的 gameId 是旧命名
+   * 空间 `dsh-tavern.<name>`——直接命中（仍在册的旧名条目，如用户装过的旧示例
+   * 包目录）永远优先；落空时按命名空间重映射查新名，旧对局不断。 */
+  resolveLegacyId(id) {
+    const prefix = "dsh-tavern.";
+    if (!id.startsWith(prefix)) return void 0;
+    const mapped = `dsh-soulmojito.${id.slice(prefix.length)}`;
+    return this.games.get(mapped) ?? this.modGames.get(mapped);
   }
   /** 重扫（POST games/reload）：清空后重建——builtins 重跑烟测，导入目录重读。 */
   async reload() {
@@ -23593,7 +23620,7 @@ var GameRegistry = class _GameRegistry {
       const shadowed = this.games.get(entry.manifest.id);
       if (shadowed?.source === "builtin") {
         this.options.logger?.warn?.(
-          `dsh-tavern: \u5BFC\u5165\u6E38\u620F '${entry.manifest.id}'\uFF08\u76EE\u5F55 ${directory}\uFF09\u4E0E\u5185\u7F6E\u6E38\u620F\u540C id\uFF0C\u4EE5\u5BFC\u5165\u526F\u672C\u4E3A\u51C6\uFF08status: ${entry.status}\uFF09`
+          `dsh-soulmojito: \u5BFC\u5165\u6E38\u620F '${entry.manifest.id}'\uFF08\u76EE\u5F55 ${directory}\uFF09\u4E0E\u5185\u7F6E\u6E38\u620F\u540C id\uFF0C\u4EE5\u5BFC\u5165\u526F\u672C\u4E3A\u51C6\uFF08status: ${entry.status}\uFF09`
         );
       }
       this.games.set(entry.manifest.id, entry);
@@ -23611,7 +23638,7 @@ var GameRegistry = class _GameRegistry {
     const directoryName = directoryNameOf(directory);
     const check = checkGameManifest(raw, { directory: directoryName });
     if (!check.ok) return broken(brokenFallbackManifest(directoryName, raw), `\u6E05\u5355\u6821\u9A8C\u5931\u8D25: ${check.errors.join("; ")}`);
-    const engineRange = check.manifest.engines?.["dsh-tavern"];
+    const engineRange = check.manifest.engines?.["dsh-soulmojito"] ?? check.manifest.engines?.["dsh-tavern"];
     if (engineRange !== void 0) {
       const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange);
       if (!verdict.ok) return broken(check.manifest, `\u7248\u672C\u4E0D\u6EE1\u8DB3: ${verdict.reason}`);
@@ -23637,7 +23664,7 @@ var GameRegistry = class _GameRegistry {
     if (!engineCheck.ok) return broken(check.manifest, `\u5F15\u64CE\u6821\u9A8C\u5931\u8D25: ${engineCheck.errors.join("; ")}`);
     for (const key of ["id", "name", "version", "players", "turnBased", "actionVocabulary"]) {
       if (JSON.stringify(check.manifest[key]) !== JSON.stringify(engineCheck.engine.meta[key])) {
-        this.options.logger?.warn?.(`dsh-tavern: game '${check.manifest.id}' \u6E05\u5355\u4E0E engine.meta \u7684 ${key} \u4E0D\u4E00\u81F4\uFF0C\u8FD0\u884C\u65F6\u4EE5 meta \u4E3A\u51C6`);
+        this.options.logger?.warn?.(`dsh-soulmojito: game '${check.manifest.id}' \u6E05\u5355\u4E0E engine.meta \u7684 ${key} \u4E0D\u4E00\u81F4\uFF0C\u8FD0\u884C\u65F6\u4EE5 meta \u4E3A\u51C6`);
       }
     }
     const smoke = smokeTestGameEngine(engineCheck.engine);
@@ -23684,7 +23711,7 @@ var GameRegistry = class _GameRegistry {
   async installFromGit(url, force = false, options = {}) {
     const timeoutMs = options.timeoutMs ?? 6e4;
     const source = parseGitSource(url);
-    const workRoot = mkdtempSync3(join19(tmpdir3(), "dsh-tavern-gameinstall-"));
+    const workRoot = mkdtempSync3(join19(tmpdir3(), "dsh-soulmojito-gameinstall-"));
     try {
       const cloneDir = join19(workRoot, "clone");
       await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs);
@@ -24084,8 +24111,8 @@ var GameSessionStore = class _GameSessionStore {
 };
 
 // packages/plugin/src/games/view.ts
-var GAME_STATE_MESSAGE = "dsh-tavern:game-state";
-var GAME_ACTION_MESSAGE = "dsh-tavern:game-action";
+var GAME_STATE_MESSAGE = "dsh-soulmojito:game-state";
+var GAME_ACTION_MESSAGE = "dsh-soulmojito:game-action";
 function gameBridgeScript() {
   return `(function () {
   var token = '';
@@ -24096,7 +24123,7 @@ function gameBridgeScript() {
   var notify = function (payload) {
     for (var index = 0; index < subs.length; index += 1) { try { subs[index](payload); } catch (_) {} }
   };
-  window.dshTavernGame = {
+  window.dshSoulMojitoGame = {
     onState: function (callback) {
       subs.push(callback);
       if (latest !== null) { try { callback(latest); } catch (_) {} }
@@ -24164,7 +24191,7 @@ async function openGamesService(options) {
         try {
           await options.onHumanAction(outcome.session);
         } catch (cause) {
-          options.logger?.warn?.(`dsh-tavern: game human-action wake failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+          options.logger?.warn?.(`dsh-soulmojito: game human-action wake failed: ${cause instanceof Error ? cause.message : String(cause)}`);
         }
       }
       return outcome;
@@ -24382,7 +24409,7 @@ async function wakeAgentOnHumanMove(host, session) {
   try {
     agentId = await host.bindingOf?.(session.chat.character, session.chat.chatId);
   } catch (error) {
-    warn(`dsh-tavern: game wake binding lookup failed (${messageOf3(error)})`);
+    warn(`dsh-soulmojito: game wake binding lookup failed (${messageOf3(error)})`);
     return false;
   }
   if (agentId === void 0) return false;
@@ -24402,7 +24429,7 @@ async function wakeAgentOnHumanMove(host, session) {
     await agent.followup(message);
     return true;
   } catch (error) {
-    warn(`dsh-tavern: game wake followup failed (${messageOf3(error)})`);
+    warn(`dsh-soulmojito: game wake followup failed (${messageOf3(error)})`);
     return false;
   }
 }
@@ -26538,7 +26565,7 @@ var KERNEL = [
 ].join("\n");
 var WORKBENCH_PRESET_HEADER = "Active chat completion preset (the user's prompt stack, echoed for reference: match its style when drafting card and preset text, and treat it as the play's prompt environment when debugging; it never overrides the workbench kernel):";
 var presetMount = mountPresetProjection({
-  sectionName: "dsh-tavern:card-workbench-preset",
+  sectionName: "dsh-soulmojito:card-workbench-preset",
   architecture: "card-workbench",
   stateFlag: "cardWorkbenchPresetEnabled",
   header: WORKBENCH_PRESET_HEADER,
@@ -26546,9 +26573,9 @@ var presetMount = mountPresetProjection({
 });
 
 // packages/plugin/src/index.ts
-var name = "dsh-tavern";
+var name = "dsh-soulmojito";
 var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents", "agentPresets", "tools", "compaction"];
-var API = "/api/dsh-tavern";
+var API = "/api/dsh-soulmojito";
 var DEFAULT_USER4 = "User";
 var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
 var TAVERN_WORKBENCH_WORKSPACE_TITLE = "Tavern Workbench (internal)";
@@ -26622,7 +26649,7 @@ async function modHostProjection(ctx) {
       surfaces: mod.surfaces
     }));
   } catch (cause) {
-    ctx?.logger?.warn?.(`dsh-tavern: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
+    ctx?.logger?.warn?.(`dsh-soulmojito: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
     return [];
   }
 }
@@ -26642,12 +26669,12 @@ function tavernUpdate(ctx) {
 }
 function updateChecksEnabled(config = {}) {
   if (config.checkForUpdates === false) return false;
-  const disabled = process.env.DSH_TAVERN_DISABLE_UPDATE_CHECK?.trim();
+  const disabled = envCompat("DISABLE_UPDATE_CHECK")?.trim();
   return !(disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false");
 }
 function templatesEnabled(config = {}) {
   if (config.templateEnabled === false) return false;
-  const disabled = process.env.DSH_TAVERN_DISABLE_TEMPLATES?.trim();
+  const disabled = envCompat("DISABLE_TEMPLATES")?.trim();
   return !(disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false");
 }
 function apply(ctx, config = {}) {
@@ -26656,7 +26683,7 @@ function apply(ctx, config = {}) {
   updateChecksEnabledFlag = updateChecksEnabled(config);
   templatesEnabledFlag = templatesEnabled(config);
   const adapter = createDshAgentTavernAdapter(ctx);
-  ctx.logger?.info?.(`dsh-tavern host shape: ${JSON.stringify(describeHostShape(ctx))}`);
+  ctx.logger?.info?.(`dsh-soulmojito host shape: ${JSON.stringify(describeHostShape(ctx))}`);
   agentTavernCapabilitiesPromise = bootstrapAgentTavernCapabilities(adapter, {
     presetId: AGENT_TAVERN_PRESET_ID,
     ensurePreset: () => ensureAgentPresetDeclared(ctx, AGENT_TAVERN_PRESET_ID)
@@ -26672,12 +26699,12 @@ function apply(ctx, config = {}) {
     try {
       ctx.effect?.(() => () => {
         void driver.dispose();
-      }, "dsh-tavern:novel-driver-dispose");
+      }, "dsh-soulmojito:novel-driver-dispose");
     } catch {
     }
     return driver;
   }).catch((error) => {
-    ctx.logger?.warn?.(`dsh-tavern: AgentNovel driver unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    ctx.logger?.warn?.(`dsh-soulmojito: AgentNovel driver unavailable: ${error instanceof Error ? error.message : String(error)}`);
     return void 0;
   });
   ctx.on?.("session/event", (session, event) => {
@@ -26712,15 +26739,15 @@ function apply(ctx, config = {}) {
   void refreshActivePrompt();
   void recoverMountedNovels(ctx);
   ctx.systemPrompt.section({
-    name: "dsh-tavern:active-character",
+    name: "dsh-soulmojito:active-character",
     order: 25,
     text: () => activeAgentPrompt
   });
   ctx.commands.register({
     // Internal bridge for the client binding API. It is intentionally separate
     // from the public slash-command surface.
-    name: "dsh-tavern-session",
-    description: "internal dsh-tavern session bridge",
+    name: "dsh-soulmojito-session",
+    description: "internal dsh-soulmojito session bridge",
     input: { hint: "<character> <chat-id>" },
     recordInput: false,
     handler: async ({ agent, rawInput }) => {
@@ -26748,7 +26775,7 @@ function apply(ctx, config = {}) {
           present: (events) => events.some((event) => event.type === "user/message" && isTavernSessionMarker(event.data?.source) && event.data?.source?.summary === "Tavern closed")
         });
         if (!closed) {
-          throw new Error(`dsh-tavern: the Tavern close marker could not be confirmed in session '${agent.id}' after a rewrite; the host accepted the append but the read-back found no trace`);
+          throw new Error(`dsh-soulmojito: the Tavern close marker could not be confirmed in session '${agent.id}' after a rewrite; the host accepted the append but the read-back found no trace`);
         }
         return { kind: "success", text: "Tavern closed" };
       }
@@ -26803,7 +26830,7 @@ function apply(ctx, config = {}) {
             present: (events) => events.some((event) => event.type === "agent-preset/selected" && event.data?.agentPreset === preset.id)
           });
           if (!selected) {
-            throw new Error(`dsh-tavern: the AgentTavern preset marker could not be confirmed in session '${agent.id}' after a rewrite; the session would silently lose its preset identity on reload`);
+            throw new Error(`dsh-soulmojito: the AgentTavern preset marker could not be confirmed in session '${agent.id}' after a rewrite; the session would silently lose its preset identity on reload`);
           }
         }
       }
@@ -26893,14 +26920,14 @@ function apply(ctx, config = {}) {
             present: markerPresent
           });
           if (!activated) {
-            throw new Error(`dsh-tavern: the Tavern activation marker could not be confirmed in session '${agent.id}' after a rewrite; the client composer would never take over an unmarked session`);
+            throw new Error(`dsh-soulmojito: the Tavern activation marker could not be confirmed in session '${agent.id}' after a rewrite; the client composer would never take over an unmarked session`);
           }
         }
       }
       return { kind: "success", text: `Tavern: ${parsed.character}` };
     }
   });
-  ctx.effect(() => tavernUpdate(ctx).start(), "dsh-tavern: update auto-check");
+  ctx.effect(() => tavernUpdate(ctx).start(), "dsh-soulmojito: update auto-check");
   gamesServicePromise = openGamesService({
     root: dshHomePath("tavern"),
     hostVersion: BUILD_INFO.version,
@@ -26930,26 +26957,26 @@ function apply(ctx, config = {}) {
     }
   });
   gamesServicePromise.catch((error) => {
-    ctx.logger?.warn?.(`dsh-tavern: games service failed to start: ${error instanceof Error ? error.message : String(error)}`);
+    ctx.logger?.warn?.(`dsh-soulmojito: games service failed to start: ${error instanceof Error ? error.message : String(error)}`);
   });
   try {
     ctx.effect?.(() => () => {
       void gamesServicePromise?.then((service) => service.dispose()).catch(() => {
       });
       gamesServicePromise = void 0;
-    }, "dsh-tavern: games unload");
+    }, "dsh-soulmojito: games unload");
   } catch {
   }
   modHostContext = ctx;
   void gamesServicePromise.catch(() => {
   }).then(() => modHost()).catch((error) => {
-    ctx.logger?.warn?.(`dsh-tavern: mod host failed to start: ${error instanceof Error ? error.message : String(error)}`);
+    ctx.logger?.warn?.(`dsh-soulmojito: mod host failed to start: ${error instanceof Error ? error.message : String(error)}`);
   });
   try {
     ctx.effect?.(() => () => {
       void modHost().then((host) => host.disposeAll()).catch(() => {
       });
-    }, "dsh-tavern: mods unload");
+    }, "dsh-soulmojito: mods unload");
   } catch {
   }
   ctx.effect(() => ctx.webServer.register({
@@ -26962,7 +26989,7 @@ function apply(ctx, config = {}) {
         if (!res.writableEnded) {
           const novelFailure = novelHttpFailure(error);
           if (novelFailure !== void 0) {
-            ctx.logger?.warn?.(`dsh-tavern: novel route failed (${novelFailure.code}): ${error instanceof Error ? error.message : String(error)}`, { operation: "novels-api", errorCode: novelFailure.code });
+            ctx.logger?.warn?.(`dsh-soulmojito: novel route failed (${novelFailure.code}): ${error instanceof Error ? error.message : String(error)}`, { operation: "novels-api", errorCode: novelFailure.code });
           }
           const message = novelFailure?.sanitized === true ? `Novel failure '${novelFailure.code}'; see the server log for details.` : error instanceof Error ? error.message : String(error);
           const code = error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError ? error.code : novelFailure?.code;
@@ -26976,7 +27003,7 @@ function apply(ctx, config = {}) {
         }
       }
     }
-  }), "dsh-tavern: API");
+  }), "dsh-soulmojito: API");
 }
 async function readGuidesSnapshot(db, character, chatId) {
   try {
@@ -27333,7 +27360,7 @@ async function handleApi(ctx, req, res) {
     try {
       await saveOriginalSnapshot(dshHomePath("tavern"), result.card.data.name, result.card);
     } catch (error) {
-      console.warn(`dsh-tavern: original snapshot for '${result.card.data.name}' failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`dsh-soulmojito: original snapshot for '${result.card.data.name}' failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     const current = await db.getState();
     if (!current.activeCharacter) {
@@ -28676,7 +28703,7 @@ async function recoverMountedNovels(ctx) {
       await indexPendingCommits(ctx, binding.novelId);
     }
   } catch (error) {
-    ctx.logger?.warn?.("dsh-tavern: AgentNovel recovery indexing failed", { operation: "recover", errorCode: errorCodeText(error) });
+    ctx.logger?.warn?.("dsh-soulmojito: AgentNovel recovery indexing failed", { operation: "recover", errorCode: errorCodeText(error) });
   }
 }
 async function handleNovelSessionEvent(ctx, session, event) {
@@ -28690,7 +28717,7 @@ async function handleNovelSessionEvent(ctx, session, event) {
     if (binding === void 0 || binding.architecture !== "agent-novel") return;
     novelId = binding.novelId;
   } catch (error) {
-    ctx.logger?.warn?.("dsh-tavern: AgentNovel binding read failed", { sessionId, operation: "novel-event", errorCode: errorCodeText(error) });
+    ctx.logger?.warn?.("dsh-soulmojito: AgentNovel binding read failed", { sessionId, operation: "novel-event", errorCode: errorCodeText(error) });
     return;
   }
   const record = event;
@@ -28704,7 +28731,7 @@ async function handleNovelSessionEvent(ctx, session, event) {
     if (isNovelAuthorMessage(event)) {
       const outcome = await receiveAuthorMessage(await novelStore(), novelId, sessionId, event);
       if (!outcome.accepted && !outcome.duplicate) {
-        ctx.logger?.warn?.("dsh-tavern: AgentNovel receive barrier rejected a message", {
+        ctx.logger?.warn?.("dsh-soulmojito: AgentNovel receive barrier rejected a message", {
           novelId,
           sessionId,
           operation: "receive-requirement",
@@ -28713,7 +28740,7 @@ async function handleNovelSessionEvent(ctx, session, event) {
       }
     }
   } catch (error) {
-    ctx.logger?.warn?.("dsh-tavern: AgentNovel session event handling failed", { novelId, sessionId, operation: "novel-event", errorCode: errorCodeText(error) });
+    ctx.logger?.warn?.("dsh-soulmojito: AgentNovel session event handling failed", { novelId, sessionId, operation: "novel-event", errorCode: errorCodeText(error) });
   }
 }
 async function indexPendingCommits(ctx, novelId) {
@@ -28729,7 +28756,7 @@ async function indexPendingCommits(ctx, novelId) {
     try {
       await projector.indexCommit(novelId, commit.commitId);
     } catch (error) {
-      ctx.logger?.warn?.("dsh-tavern: AgentNovel memory index write failed", { novelId, commitId: commit.commitId, operation: "index-commit", errorCode: errorCodeText(error) });
+      ctx.logger?.warn?.("dsh-soulmojito: AgentNovel memory index write failed", { novelId, commitId: commit.commitId, operation: "index-commit", errorCode: errorCodeText(error) });
     }
   }
 }
@@ -28829,7 +28856,7 @@ async function ensureAgentPresetDeclared(ctx, presetId) {
   const inventory = typeof ctx.agentPresets?.compositionInventory === "function" ? await ctx.agentPresets.compositionInventory() : void 0;
   if (!Array.isArray(inventory) || !inventory.some((entry) => entry?.id === presetId)) {
     throw new Error(
-      `preset '${presetId}' is not declared on this host; reinstall the dsh-tavern bundle so its cordis.patch.yml preset rows mount (DSH 0.2.0-rc.2+ preset delivery)`
+      `preset '${presetId}' is not declared on this host; reinstall the dsh-soulmojito bundle so its cordis.patch.yml preset rows mount (DSH 0.2.0-rc.2+ preset delivery)`
     );
   }
 }
@@ -29183,7 +29210,7 @@ async function buildGenerationLlmRequest(ctx, db, options) {
     // 仅进 ctx.llm.stream 的请求消息，不落会话日志（该调用不带 sessionId），
     // dsh-llm 对 source 不校验；v0 形状在此保留——装配作用域内没有会话对象
     // 可供格式探测。
-    source: m.role === "assistant" ? { kind: "model", provider, model } : m.role === "user" ? { kind: "user" } : { kind: "plugin", plugin: "dsh-tavern" }
+    source: m.role === "assistant" ? { kind: "model", provider, model } : m.role === "user" ? { kind: "user" } : { kind: "plugin", plugin: "dsh-soulmojito" }
   }));
   const rewriteBlock = formatRewriteBlock(options.feedback);
   if (rewriteBlock) systemParts.push(rewriteBlock);
@@ -29969,11 +29996,11 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.5".trim() : "";
-  const commit = true ? normalizeCommit("d3a4b19") : void 0;
+  const commit = true ? normalizeCommit("bb94491") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
-  const fallback = normalizeCommit(process.env.DSH_TAVERN_COMMIT ?? buildFallback) ?? "unknown";
+  const fallback = normalizeCommit(envCompat("COMMIT") ?? buildFallback) ?? "unknown";
   const repositoryRoot = resolve5(import.meta.dirname, "..", "..");
   const packagePath = relative2(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
   if (packagePath !== "packages/plugin") return fallback;
@@ -30071,7 +30098,7 @@ async function handleModsApi(ctx, req, res, url, route, method) {
   try {
     host = await modHost();
   } catch (cause) {
-    ctx.logger?.warn?.(`dsh-tavern: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
+    ctx.logger?.warn?.(`dsh-soulmojito: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
     if (method === "GET" && route === "mods") {
       return sendJson2(res, 200, { ok: true, available: false, reason: "mod host unavailable", globalEnabled: false, mods: [] });
     }

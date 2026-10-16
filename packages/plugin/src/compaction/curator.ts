@@ -1,5 +1,5 @@
 /**
- * AgentTavern compaction curator（`dsh-tavern/compaction`）。
+ * AgentTavern compaction curator（`dsh-soulmojito/compaction`）。
  *
  * 宿主 dsh-compaction-basic 的摘要模板是编码助手导向的，对角色扮演会话会把
  * 剧情状态、人物关系和记忆维护习惯摘要掉。本模块继承 basic 引擎，覆写两点：
@@ -34,7 +34,7 @@ import {
   type UsagePressureState,
 } from './shared.js'
 
-export const name = 'dsh-tavern/compaction'
+export const name = 'dsh-soulmojito/compaction'
 
 /** curator 依赖的最小宿主类型面；运行时实例来自宿主安装。 */
 interface HostCompactionSummary {
@@ -112,7 +112,7 @@ export class TavernCompactionCurator extends BasicCompactionEngine {
     super(ctx, basicConfigOnly(config))
     this.curator = readCuratorOptions(config)
     this.usageThresholdRatio = this.curator.usageThresholdRatio ?? DEFAULT_USAGE_THRESHOLD_RATIO
-    info(ctx, `dsh-tavern/compaction curator loaded: usageThresholdRatio=${this.usageThresholdRatio} curatorTarget=${this.curator.curatorProvider ?? ''}/${this.curator.curatorModel ?? '(route)'} summarization=${JSON.stringify((this.config as Record<string, unknown>).summarizationProvider ?? '')}`)
+    info(ctx, `dsh-soulmojito/compaction curator loaded: usageThresholdRatio=${this.usageThresholdRatio} curatorTarget=${this.curator.curatorProvider ?? ''}/${this.curator.curatorModel ?? '(route)'} summarization=${JSON.stringify((this.config as Record<string, unknown>).summarizationProvider ?? '')}`)
   }
 
   /**

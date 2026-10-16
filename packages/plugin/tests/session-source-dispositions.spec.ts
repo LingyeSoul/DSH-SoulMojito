@@ -16,7 +16,7 @@
  * 另以封闭 kind 集合拒绝未知 kind，v4 形状写入 v0-v3 工件会在升级时死于
  * "cannot safely transform unclassified message source"——因此写入形状必须
  * 按会话 header.version 分支（bind hostPluginMessageSource），v4 kind 与
- * 宿主迁移产物收敛为 'plugin:dsh-tavern'。
+ * 宿主迁移产物收敛为 'plugin:dsh-soulmojito'。
  *
  * 本插件落会话日志的每个消息 source 都必须落在其中一张表内；身份数据只进
  * 消息 id、summary 文本或 content，绝不进新的 source 成员。
@@ -35,7 +35,7 @@ function expectV0LegalSource(source: unknown): void {
   expect(typeof source).toBe('object')
   const record = source as Record<string, unknown>
   if (record.kind === 'plugin') {
-    expect(record.plugin).toBe('dsh-tavern')
+    expect(record.plugin).toBe('dsh-soulmojito')
     for (const member of Object.keys(record)) {
       expect(['kind', 'plugin', 'form', 'sections', 'summary']).toContain(member)
     }
@@ -105,8 +105,8 @@ describe('session-log source dispositions (v0 hosts)', () => {
 
 describe('session-log source dispositions (v4 hosts)', () => {
   it('anchor and opening reminders carry the producer-owned plugin kind', () => {
-    expect(createAnchorMessage(v4Session).source).toEqual({ kind: 'plugin:dsh-tavern' })
-    expect(createOpeningMessage(v4Session).source).toEqual({ kind: 'plugin:dsh-tavern' })
+    expect(createAnchorMessage(v4Session).source).toEqual({ kind: 'plugin:dsh-soulmojito' })
+    expect(createOpeningMessage(v4Session).source).toEqual({ kind: 'plugin:dsh-soulmojito' })
     expectV4LegalSource(createAnchorMessage(v4Session).source)
     expectV4LegalSource(createOpeningMessage(v4Session).source)
   })
@@ -119,7 +119,7 @@ describe('session-log source dispositions (v4 hosts)', () => {
     const appends = historyImportAppends(chat, 'session-1', [], undefined, v4Session)
     const userAppend = appends.find((append) => append.type === 'user/message')
     expect(userAppend).toBeDefined()
-    expect((userAppend!.data as { source: unknown }).source).toEqual({ kind: 'plugin:dsh-tavern' })
+    expect((userAppend!.data as { source: unknown }).source).toEqual({ kind: 'plugin:dsh-soulmojito' })
     // 受保护 system 头（surface 首节点）的 source 必须是宿主恢复校验唯一放行的
     // system-prompt 形状；这层校验不查 plugin 成员以外还禁任何额外成员。
     const headAppend = appends.find((append) => append.type === 'system/message')
@@ -134,10 +134,10 @@ describe('session-log source dispositions (v4 hosts)', () => {
   })
 
   it('falls back to the v0 shape when the session header is unreadable', () => {
-    expect(createAnchorMessage().source).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
-    expect(createAnchorMessage({}).source).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
-    expect(createAnchorMessage({ header: {} }).source).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
-    expect(createAnchorMessage({ header: { version: 'four' } }).source).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
-    expect(createAnchorMessage({ header: { version: 3 } }).source).toEqual({ kind: 'plugin', plugin: 'dsh-tavern' })
+    expect(createAnchorMessage().source).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
+    expect(createAnchorMessage({}).source).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
+    expect(createAnchorMessage({ header: {} }).source).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
+    expect(createAnchorMessage({ header: { version: 'four' } }).source).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
+    expect(createAnchorMessage({ header: { version: 3 } }).source).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito' })
   })
 })

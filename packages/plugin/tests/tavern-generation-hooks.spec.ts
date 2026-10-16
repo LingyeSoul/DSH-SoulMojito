@@ -151,7 +151,7 @@ describe('generation hook wiring in runGeneration (five phases)', () => {
   const offs: Array<() => void> = []
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-hooks-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-hooks-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.importCharacter(importBody(CHAR))
@@ -202,7 +202,7 @@ describe('generation hook wiring in runGeneration (five phases)', () => {
     const res = makeResponse()
     await apiHandler(makeRequest({
       character: CHAR, chatId, message, revision: snapshot!.revision,
-    }, '/api/dsh-tavern/generate'), res)
+    }, '/api/dsh-soulmojito/generate'), res)
     expect(res.chunks.some((chunk) => chunk.includes('"type":"saved"'))).toBe(true)
   }
 
@@ -297,7 +297,7 @@ describe('generation hook wiring in runGeneration (five phases)', () => {
 
   it('bootstrap carries the mods projection placeholder as an empty array', async () => {
     const res = makeResponse()
-    await apiHandler(makeRequest(undefined, '/api/dsh-tavern/bootstrap', 'GET'), res)
+    await apiHandler(makeRequest(undefined, '/api/dsh-soulmojito/bootstrap', 'GET'), res)
     const body = JSON.parse(res.chunks.join('')) as { mods?: unknown }
     expect(Array.isArray(body.mods)).toBe(true)
     expect(body.mods).toEqual([])

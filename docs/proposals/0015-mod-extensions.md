@@ -12,7 +12,7 @@
 **PR**：Mod 开发者把一个带 `mod.json` 的文件夹放进 `$DSH_HOME/tavern/mods/`，在 Tavern 管理面板
 「Mod」分区看到它（默认禁用），点启用后：他注册的 Agent 工具出现在模型工具面、他的文本变换挂进
 ST 生成管线、他的宏/STscript 命令即刻可用、他的面板分区以隔离 iframe 形态出现在管理面板里、他的
-HTTP 路由挂在 `/api/dsh-tavern/mods/<id>/` 下。全程不改 dsh-tavern 一行源码、不需要重新安装插件、
+HTTP 路由挂在 `/api/dsh-soulmojito/mods/<id>/` 下。全程不改 dsh-soulmojito 一行源码、不需要重新安装插件、
 一个坏 Mod 不会拖垮酒馆本体。
 
 **客户与验收**：
@@ -28,7 +28,7 @@ HTTP 路由挂在 `/api/dsh-tavern/mods/<id>/` 下。全程不改 dsh-tavern 一
 
 | 挂载点 | 位置 | 现状 |
 |---|---|---|
-| HTTP 路由 | `ctx.webServer.register({kind:'prefix', path:'/api/dsh-tavern'})`，`src/index.ts:435-468` 级联分派 | 加子路由零宿主成本；44 条路由被 `server-bundle` gate 逐字锁定 |
+| HTTP 路由 | `ctx.webServer.register({kind:'prefix', path:'/api/dsh-soulmojito'})`，`src/index.ts:435-468` 级联分派 | 加子路由零宿主成本；44 条路由被 `server-bundle` gate 逐字锁定 |
 | Agent 工具 | `tool()` 工厂 + `ctx.tools.register`，`src/agent-tavern/agent.ts:171-177, 124-128` | 无统一 registry，三组 preset 各自 `createTools()` |
 | prompt 分区 | `ctx.systemPrompt.section/context({name, order, text})`，`agent.ts:65-111` | 核心占用 order -80..-64（kernel/-80、preset/-75、facts/-70、guides/-65、script/-64） |
 | 事件 | 宿主 `session/event`/`agent/created`/`agent/request`/`agent/pre-step` + 跨 bundle `createGlobalListenerRegistry`（`src/cross-bundle-events.ts:23-46`，globalThis Symbol.for） | guides-changed / agent-preset-changed 两条内部总线在用 |
@@ -92,7 +92,7 @@ $DSH_HOME/tavern/mods/<mod-id>/
   "author": "…",
   "description": "…",
   "main": "index.mjs",
-  "engines": { "dsh-tavern": ">=0.5.0 <0.6" },  // semver 范围，装载时校验
+  "engines": { "dsh-soulmojito": ">=0.5.0 <0.6" },  // semver 范围，装载时校验
   "loadingOrder": 100,                     // 多 Mod 顺序（ST loading_order 先例）
   "capabilities": ["llm"],                 // 知情同意标签：llm | network | storage
   "panel": { "title": "心情追踪", "icon": "sparkle" }  // 可选：声明面板分区
@@ -114,11 +114,11 @@ export async function setup(api) {   // 返回可选 dispose()（ctx.effect 同�
   `src/index.ts:521-530`）。
 - 方式：`import(pathToFileURL(entry).href)`——复用 `importHostPackage` 已验证的 URL 动态 import
   模式；bare specifier 走 Node 标准解析，Mod 自带 `node_modules/` 可达、宿主内部包不可达。
-- **重载**：`POST /api/dsh-tavern/mods/<id>/reload` → 调旧 `dispose()` → 带 `?t=` 户 timeStamp 的
+- **重载**：`POST /api/dsh-soulmojito/mods/<id>/reload` → 调旧 `dispose()` → 带 `?t=` 户 timeStamp 的
   cache-bust 重新 import。**ESM 实例驻留是已知限制**：模块级副作用无法回收（globalThis 监听表因此
   要求 Mod 一律经 `api.*` 注册、宿主持有 off/disposer 全量反注册；与 ST 服务端插件同等承诺）。
 - 禁用：state.json `mods.enabled.<id>` 默认 false + 全局 `modsEnabled` 默认 false + 环境变量
-  `DSH_TAVERN_DISABLE_MODS=1` 硬关（三层，对齐 `DSH_TAVERN_DISABLE_UPDATE_CHECK` 先例）。
+  `DSH_SOULMOJITO_DISABLE_MODS=1` 硬关（三层，对齐 `DSH_SOULMOJITO_DISABLE_UPDATE_CHECK` 先例）。
 
 ### 3.3 API 面（v1，`modApiVersion: 1`）
 
@@ -134,7 +134,7 @@ export async function setup(api) {   // 返回可选 dispose()（ctx.effect 同�
 | `api.tools.register(def)` | Agent 工具，形状对齐 `tool()` 工厂（name/description/parameters/output/execute） | name 必须 `<modId>_` 前缀；与 60 个内置工具查重，冲突即拒 |
 | `api.macros.register(name, fn)` | 接线到三处引擎实例化点 | 对齐既有 `registerMacro` 契约（engine.ts:485） |
 | `api.stscript.registerCommand(name, spec)` | 命令表 registry 化后开放 | 命令名字符集校验，禁覆盖内置命令 |
-| `api.http.route(method, path, handler)` | 挂 `/api/dsh-tavern/mods/<id>/<path>` | path 字符集白名单；`reply.json()/html(doc, csp?)` 两个出口；html 出口自动注入标准 CSP meta |
+| `api.http.route(method, path, handler)` | 挂 `/api/dsh-soulmojito/mods/<id>/<path>` | path 字符集白名单；`reply.json()/html(doc, csp?)` 两个出口；html 出口自动注入标准 CSP meta |
 | `api.events.on(kind, handler)` | `chat-saved`/`assets-saved`/`guides-changed` | 复用/补齐既有内部事件发射点 |
 | `api.llm.{request,stream}` | 代理 `ctx.llm` | 仅 `capabilities` 含 `llm` 时注入该键；用量记入审计线 |
 | `api.timers.{setInterval,clearInterval}` | 经 `ctx.effect` 绑定生命周期 | 宿主卸载自动清 |
@@ -180,16 +180,16 @@ AgentLoop），Mod 文档如实标注各自覆盖面。
 - **iframe 纪律完整继承美化前端先例**（`client/main.js:149-172` + `decisions/2026-08-16-frontend-html-
   runtime.md`）：`sandbox="allow-scripts"` 无 same-origin、服务端注入 CSP meta、token 校验的
   postMessage。Mod UI 取数不能 fetch（CSP `connect-src 'none'` 延续），走**postMessage 数据桥**：
-  iframe 发 `{type:'dsh-tavern:mod-request', token, req}` → 父页代理到该 Mod 的 HTTP 路由 → 回投
-  `{type:'dsh-tavern:mod-response', token, …}`。高度上报协议（main.js:104-158）原样复用。
+  iframe 发 `{type:'dsh-soulmojito:mod-request', token, req}` → 父页代理到该 Mod 的 HTTP 路由 → 回投
+  `{type:'dsh-soulmojito:mod-response', token, …}`。高度上报协议（main.js:104-158）原样复用。
 - **核心新增「Mod」管理分区**（第 14 个）：列表（清单信息、能力声明、加载/错误状态、审计计数）、
   启用/禁用、重载、打开 Mod 面板分区；启用确认弹层展示 capabilities 与 hooks/tools/http 声明。
 
 ### 3.6 跨 bundle 接线（globalThis 注册表）
 
 Mod 宿主只活在 index bundle（`apply` 内加载）。工具/section 要在 agent bundle（agent.mjs）生效，
-沿用**已验证的跨 bundle 模式**：注册表锚定 `globalThis[Symbol.for('dsh-tavern:mod-registry')]`
-（`cross-bundle-events.ts:23-46` 同构），变更经 `dsh-tavern:mods-changed-listeners` 写穿通知。
+沿用**已验证的跨 bundle 模式**：注册表锚定 `globalThis[Symbol.for('dsh-soulmojito:mod-registry')]`
+（`cross-bundle-events.ts:23-46` 同构），变更经 `dsh-soulmojito:mods-changed-listeners` 写穿通知。
 
 接线细节有一个**P1 必须实测的宿主语义**：`ctx.tools` 注册是 host 全局还是 preset 域。两条路线都
 已备好且 **`api.tools.register` 对 Mod 作者的形状不变**：(a) 若全局——mod 宿主直接在 index bundle
@@ -199,7 +199,7 @@ Mod 宿主只活在 index bundle（`apply` 内加载）。工具/section 要在 
 
 ### 3.7 版本与兼容
 
-- `engines.dsh-tavern` semver 范围装载时校验，不满足=跳过并在面板报原因（不 crash）。
+- `engines.dsh-soulmojito` semver 范围装载时校验，不满足=跳过并在面板报原因（不 crash）。
 - `modApiVersion: 1` 常量由 `api.version` 暴露；未来破坏性变更升 2 并在 Mod 面板标不兼容。
 - 多 profile 共享同一 `<tavern>/mods/`（与数据层无 per-profile 的现状一致，§5 记风险）。
 
@@ -241,7 +241,7 @@ Mod 宿主只活在 index bundle（`apply` 内加载）。工具/section 要在 
 | 热卸载/热禁用的完全保证 | ESM 实例驻留（上文）；禁用=停止注册与效果，残留上限=模块闭包。 |
 | Mod 直写聊天/资产 | 聊天写入牵动 CAS、投影、v4 会话准入三重纪律；v1 一律走 hooks 变换由核心落盘。 |
 | 透传宿主 cordis ctx | 违反适配层注入纪律（TemplateHost 模式）；宿主内部面不是稳定契约。 |
-| ST 扩展兼容（TavernHelper / eventSource / UI 扩展与服务端插件形态） | **永久非目标**，非延期：兼容层意味着长期追随 ST 内部 API 演进并承接其全部表面积，与仓库「只实现公开规范与可观察行为语义、clean-room」的既定边界（README 许可节）冲突；dsh-tavern 的 Mod API 是自有契约，不为任何外部插件格式做垫层。注意区分：ST **资产格式**（卡/世界书/预设/正则/chat JSONL）兼容是插件本体的既有职责，不受影响——裁的是扩展面，不是数据面。 |
+| ST 扩展兼容（TavernHelper / eventSource / UI 扩展与服务端插件形态） | **永久非目标**，非延期：兼容层意味着长期追随 ST 内部 API 演进并承接其全部表面积，与仓库「只实现公开规范与可观察行为语义、clean-room」的既定边界（README 许可节）冲突；dsh-soulmojito 的 Mod API 是自有契约，不为任何外部插件格式做垫层。注意区分：ST **资产格式**（卡/世界书/预设/正则/chat JSONL）兼容是插件本体的既有职责，不受影响——裁的是扩展面，不是数据面。 |
 | Mod 市场/自动更新 | 分发另立提案；v1 手动/git clone 放目录，P2 复用 update 源做 git 安装。 |
 
 ## 7. 2026-10-14 补记：导航列「标题区固定」（§3.5 面板 P0 的用户反馈修订）

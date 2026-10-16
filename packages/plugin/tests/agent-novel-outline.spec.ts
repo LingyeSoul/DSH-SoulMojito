@@ -515,7 +515,7 @@ describe('requirements receive adapter (§9.1)', () => {
       data: { id: 'm-1', role: 'user', content: [{ type: 'text', text: '让主角早点登场' }], source: { kind: 'user' } },
     }
     expect(isNovelAuthorMessage(message)).toBe(true)
-    expect(isNovelAuthorMessage({ type: 'user/message', data: { ...message.data, source: { kind: 'plugin', plugin: 'dsh-tavern' } } })).toBe(false)
+    expect(isNovelAuthorMessage({ type: 'user/message', data: { ...message.data, source: { kind: 'plugin', plugin: 'dsh-soulmojito' } } })).toBe(false)
     expect(isNovelAuthorMessage({ type: 'assistant/message', data: message.data })).toBe(false)
     expect(isNovelAuthorMessage({ type: 'user/message', data: { ...message.data, content: [] } })).toBe(false)
     expect(isNovelAuthorMessage({ type: 'user/message' })).toBe(false)

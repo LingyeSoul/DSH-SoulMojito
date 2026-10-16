@@ -186,7 +186,7 @@ describe('retainHostSession', () => {
     hold.release()
     expect(ctx.sessions.binding('s-1')).toBeUndefined()
     hold.release()
-    expect(calls).toEqual(['retain:s-1:dsh-tavern', 'release:s-1'])
+    expect(calls).toEqual(['retain:s-1:dsh-soulmojito', 'release:s-1'])
     expect(trace.retainPath).toBe('retain')
     expect(trace.retainCalls).toBe(1)
   })

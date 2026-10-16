@@ -30,8 +30,8 @@ const SERVER_PATH = join(PLUGIN_ROOT, 'index.mjs')
 const AGENT_PATH = join(PLUGIN_ROOT, 'agent.mjs')
 const NOVEL_PATH = join(PLUGIN_ROOT, 'novel.mjs')
 const CLIENT_PATH = join(PLUGIN_ROOT, 'client', 'index.js')
-const PLUGIN_NAME = 'dsh-tavern'
-const API_PREFIX = '/api/dsh-tavern'
+const PLUGIN_NAME = 'dsh-soulmojito'
+const API_PREFIX = '/api/dsh-soulmojito'
 
 const REQUIRED_SERVER_ROUTES = [
   'bootstrap',
@@ -313,7 +313,7 @@ function checkServerText(text) {
   for (const name of ['name', 'inject', 'apply']) {
     if (!exports.has(name)) problems.push(`server bundle does not export ${name}`)
   }
-  if (!/\b(?:const|var)\s+name\s*=\s*['"]dsh-tavern['"]/.test(text)) {
+  if (!/\b(?:const|var)\s+name\s*=\s*['"]dsh-soulmojito['"]/.test(text)) {
     problems.push(`server bundle name is not '${PLUGIN_NAME}'`)
   }
   if (!/\bfunction\s+apply\s*\(/.test(text)) problems.push('server bundle has no apply function')
@@ -373,8 +373,8 @@ function checkServerText(text) {
   // 游戏桥（提案 0018 P0+P2）：跨 bundle 服务句柄锚（agent bundle 经同一
   // Symbol.for 解析）+ 导入期烟测函数 + 孤儿会话语义。games/revision 路由由
   // REQUIRED_SERVER_ROUTES 锁定；视图路由的 'view' 段在此一并锁。
-  if (!text.includes('dsh-tavern:games-service')) {
-    problems.push("server bundle must publish the games service handle 'dsh-tavern:games-service'")
+  if (!text.includes('dsh-soulmojito:games-service')) {
+    problems.push("server bundle must publish the games service handle 'dsh-soulmojito:games-service'")
   }
   if (!text.includes('smokeTestGameEngine')) {
     problems.push('server bundle must run the game engine import smoke test (smokeTestGameEngine)')
@@ -389,33 +389,33 @@ function checkServerText(text) {
   }
   // 内置五子棋（2026-10-14 回归）：id 字面量须在 bundle 里（引擎 MANIFEST 与
   // 视图 data-game 标记双处都有）——丢失即判定内置游戏未随包分发。
-  if (!text.includes('dsh-tavern.gomoku')) {
-    problems.push('server bundle must ship the builtin gomoku game (dsh-tavern.gomoku)')
+  if (!text.includes('dsh-soulmojito.gomoku')) {
+    problems.push('server bundle must ship the builtin gomoku game (dsh-soulmojito.gomoku)')
   }
   // 内置中国象棋（2026-10-14）：同五子棋纪律——id 字面量须在 bundle 里
   // （引擎 MANIFEST 与视图 data-game 标记双处）。
-  if (!text.includes('dsh-tavern.xiangqi')) {
-    problems.push('server bundle must ship the builtin xiangqi game (dsh-tavern.xiangqi)')
+  if (!text.includes('dsh-soulmojito.xiangqi')) {
+    problems.push('server bundle must ship the builtin xiangqi game (dsh-soulmojito.xiangqi)')
   }
   // 内置军棋（2026-10-14）：同款纪律——id 字面量须在 bundle 里（引擎 MANIFEST
   // 与视图 data-game 标记双处都有）——丢失即判定内置游戏未随包分发。
-  if (!text.includes('dsh-tavern.junqi')) {
-    problems.push('server bundle must ship the builtin junqi game (dsh-tavern.junqi)')
+  if (!text.includes('dsh-soulmojito.junqi')) {
+    problems.push('server bundle must ship the builtin junqi game (dsh-soulmojito.junqi)')
   }
   // 内置21点（2026-10-14）：同款纪律——id 字面量须在 bundle 里（引擎 MANIFEST
   // 与视图 data-game 标记双处都有）——丢失即判定内置游戏未随包分发。
-  if (!text.includes('dsh-tavern.blackjack')) {
-    problems.push('server bundle must ship the builtin blackjack game (dsh-tavern.blackjack)')
+  if (!text.includes('dsh-soulmojito.blackjack')) {
+    problems.push('server bundle must ship the builtin blackjack game (dsh-soulmojito.blackjack)')
   }
   // 内置记忆翻牌对战（2026-10-15）：同款纪律——id 字面量须在 bundle 里（引擎
   // MANIFEST 与视图 data-game 标记双处都有）——丢失即判定内置游戏未随包分发。
-  if (!text.includes('dsh-tavern.memory-match')) {
-    problems.push('server bundle must ship the builtin memory-match game (dsh-tavern.memory-match)')
+  if (!text.includes('dsh-soulmojito.memory-match')) {
+    problems.push('server bundle must ship the builtin memory-match game (dsh-soulmojito.memory-match)')
   }
   // 内置大富翁（2026-10-15）：同款纪律——id 字面量须在 bundle 里（引擎 MANIFEST
   // 与视图 data-game 标记双处都有）——丢失即判定内置游戏未随包分发。
-  if (!text.includes('dsh-tavern.monopoly')) {
-    problems.push('server bundle must ship the builtin monopoly game (dsh-tavern.monopoly)')
+  if (!text.includes('dsh-soulmojito.monopoly')) {
+    problems.push('server bundle must ship the builtin monopoly game (dsh-soulmojito.monopoly)')
   }
   // 将军提示层（2026-10-14 用户需求「象棋应该提供提示：如将军提示」）：警报
   // 横幅样式与光晕类名丢失即判定提示层未随视图分发（与 id 字面量同款纪律）。
@@ -427,8 +427,8 @@ function checkServerText(text) {
   }
   // 人类落子自动续弈（2026-10-14 用户需求）：等待登记的跨 bundle key（wake 的
   // 防重判据根）+ 通知消息 id 前缀（投递形状契约）须在 index bundle 里。
-  if (!text.includes('dsh-tavern:games-waiters')) {
-    problems.push("server bundle must carry the games waiters registry key 'dsh-tavern:games-waiters'")
+  if (!text.includes('dsh-soulmojito:games-waiters')) {
+    problems.push("server bundle must carry the games waiters registry key 'dsh-soulmojito:games-waiters'")
   }
   if (!text.includes('game-notice-')) {
     problems.push('server bundle must carry the game wake notice id prefix (game-notice-)')
@@ -450,6 +450,19 @@ function checkServerText(text) {
   }
   if (!text.includes('assertResignAllowed')) {
     problems.push('server bundle must gate the resign action (assertResignAllowed)')
+  }
+  // 改名兼容（2026-10-16 项目改名 dsh-tavern → DSH-SoulMojito；决策
+  // decisions/2026-10-16-project-rename-dsh-soulmojito.md）：存量数据的读取
+  // 通道必须在产物里——旧持久化名常量、旧 env 前缀、旧游戏命名空间别名前缀
+  // 三者任一缺失即翻红（负样本自证见 server-bundle selfTest 的 renameCompat 段）。
+  if (!text.includes('"dsh-tavern"') && !text.includes("'dsh-tavern'")) {
+    problems.push('server bundle must ship the legacy persisted name (dsh-tavern) for rename-compat reads')
+  }
+  if (!text.includes('DSH_TAVERN_')) {
+    problems.push('server bundle must ship the legacy env prefix (DSH_TAVERN_) for rename-compat reads')
+  }
+  if (!text.includes('"dsh-tavern."') && !text.includes("'dsh-tavern.'")) {
+    problems.push('server bundle must ship the legacy game namespace alias prefix (dsh-tavern.) for rename-compat reads')
   }
   return problems
 }
@@ -530,13 +543,18 @@ function checkClientText(text) {
     }
   }
 
-  if (!/exports\.name\s*=\s*['"]dsh-tavern['"]/.test(text)) {
+  if (!/exports\.name\s*=\s*['"]dsh-soulmojito['"]/.test(text)) {
     problems.push(`client bundle must export name '${PLUGIN_NAME}'`)
   }
   if (!/exports\.inject\s*=/.test(text)) problems.push('client bundle must export inject')
   if (!/exports\.apply\s*=/.test(text)) problems.push('client bundle must export apply')
   for (const marker of ['revision', 'CHAT_REVISION_CONFLICT', 'bindings/prune', 'store-revision']) {
     if (!text.includes(marker)) problems.push(`client bundle is missing state-safety marker '${marker}'`)
+  }
+  // 改名兼容（2026-10-16 项目改名）：旧 producer kind 的客户端双读字面量须在
+  // client half 里（存量会话的 marker 识别；负样本自证见 client-bundle selfTest）。
+  if (!text.includes("'plugin:dsh-tavern'") && !text.includes('"plugin:dsh-tavern"')) {
+    problems.push('client bundle must ship the legacy producer kind (plugin:dsh-tavern) for rename-compat reads')
   }
   if (text.includes('data-conversation-composer-overlay')) {
     problems.push('Tavern composer must use the native scroll layout, not composer overlay mode')
@@ -549,29 +567,29 @@ function checkFrontendRuntimeText(text) {
   for (const marker of [
     'function extractFrontendDocuments',
     'function buildFrontendDocument',
-    'dsh-tavern:frontend-height',
+    'dsh-soulmojito:frontend-height',
     "sandbox: 'allow-scripts'",
     "connect-src 'none'",
     'event.source !== frameRef.current?.contentWindow',
     'message.streaming',
     // Mod UI 表面（提案 0015 §3.5 P2）：postMessage 数据桥 + 桥路径预校验 +
     // ModSurface iframe（sandbox 同款纪律）。
-    'dsh-tavern:mod-request',
-    'dsh-tavern:mod-response',
+    'dsh-soulmojito:mod-request',
+    'dsh-soulmojito:mod-response',
     'function isValidModBridgePath',
     'function ModSurface({ mod, onLog })',
     // Mod 桥下行事件 + 声明式按钮 + 日志查看器（2026-10-11 A-1/A-2）：下行事件
     // 只走 token 对账的 postMessage（无新网络面）；按钮行必须挂在 ST 聊天视图
     // （TavernModButtons）并具备 mod-event 广播通道；mod-log 上行进环形缓冲。
-    'dsh-tavern:mod-event',
-    'dsh-tavern:mod-log',
+    'dsh-soulmojito:mod-event',
+    'dsh-soulmojito:mod-log',
     'function broadcastModEvent',
     'function TavernModButtons(',
     'function ModPanelSurface({ mod })',
     // 视口正确性 + 高度上报健壮性（2026-10-11 A-4）：vh 改写（--dt-viewport-height
-    // CSS 变量）+ 宿主→iframe 视口投递（dsh-tavern:viewport）必须都在 client half。
+    // CSS 变量）+ 宿主→iframe 视口投递（dsh-soulmojito:viewport）必须都在 client half。
     "'--dt-viewport-height'",
-    "'dsh-tavern:viewport'",
+    "'dsh-soulmojito:viewport'",
     // ST 思考+正文双通道流式（2026-10-11）：/generate SSE 的 reasoning 增量必须被
     // 消费（event.type === 'reasoning'）进 run.streamReasoning，并以 dt-reasoning
     // 思考块渲染（流式展开、保存后折叠），双 locale 标签键齐备。
@@ -600,8 +618,8 @@ function checkFrontendRuntimeText(text) {
     // 数据 hook/右栏 tab 注册与开局自动展开；内联挂载顺序由 games-client.spec
     // 的源顺序断言锁定）。marker 全 ASCII（esbuild 中文转义不确定性是上一段
     // 的实测坑）。
-    'dsh-tavern:game-state',
-    'dsh-tavern:game-action',
+    'dsh-soulmojito:game-state',
+    'dsh-soulmojito:game-action',
     'games/list',
     'games/revision',
     'games/start',
@@ -650,8 +668,8 @@ function checkNativeHeaderAdapterText(text) {
   for (const marker of [
     'AgentPresetLabel.module.css',
     'function useNativeAgentPresetLabelFilter',
-    'dshTavernAgentPresetHiddenState',
-    'data-dsh-tavern-agent-preset-hidden',
+    'dshSoulMojitoAgentPresetHiddenState',
+    'data-dsh-soulmojito-agent-preset-hidden',
     'useNativeAgentPresetLabelFilter(Boolean(active && binding && architecture === \'st\'))',
   ]) {
     if (!text.includes(marker)) problems.push(`native Tavern header adapter is missing marker '${marker}'`)
@@ -669,23 +687,23 @@ function checkNativeHeaderAdapterText(text) {
  * ctx.inject(['sidebarRightTabs','sidebarRight']) 动态注册——服务缺失的旧宿主
  * 上回调不生效，插件其余表面照常工作，所以这两个服务名绝不能进 exports.inject
  * （会让旧宿主 apply 永久挂起）；body 挂 keyed slot sidebar.right.pane.tab
- * （key dsh-tavern/mvu），sessionId 由 keyed 注入回调显式传入。
+ * （key dsh-soulmojito/mvu），sessionId 由 keyed 注入回调显式传入。
  */
 function checkMvuSurfaceText(text) {
   const problems = []
   for (const marker of [
     'function TavernMvuStatus(',
-    "'data-dsh-tavern-surface': 'mvu'",
+    "'data-dsh-soulmojito-surface': 'mvu'",
     'dt-mvu-slot',
     'dt-mvu-pop',
     'TavernMvuStatus, { sessionId, embedded: true',
     "'mvu.unavailable'",
-    "const MVU_TAB_ID = 'dsh-tavern/mvu'",
+    "const MVU_TAB_ID = 'dsh-soulmojito/mvu'",
     "const MVU_TAB_KIND = 'tavern-mvu'",
     "ctx.inject(['sidebarRightTabs', 'sidebarRight']",
     "'sidebar.right.pane.tab'",
     'sidebar: true',
-    "'data-dsh-tavern-surface': 'mvu-sidebar'",
+    "'data-dsh-soulmojito-surface': 'mvu-sidebar'",
   ]) {
     if (!text.includes(marker)) problems.push(`MVU surface is missing marker '${marker}'`)
   }
@@ -774,7 +792,7 @@ function checkAgentTavernIsolation(sourceFiles, serverText, agentText) {
   // 必须在 agent bundle 产物里（agent.mjs 是独立 esbuild 产物，源文件在场
   // 不等于打包在场；中文报文被 esbuild 转义为 \uXXXX，故锚 resolveGamesService）。
   if (agentText !== undefined) {
-    for (const marker of ['game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait', 'dsh-tavern:agent-games', 'resolveGamesService']) {
+    for (const marker of ['game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait', 'dsh-soulmojito:agent-games', 'resolveGamesService']) {
       if (!agentText.includes(marker)) problems.push(`agent bundle is missing the games bridge marker '${marker}'`)
     }
   }
@@ -947,7 +965,7 @@ function iterableEntries(value) {
 }
 
 /**
- * The client half resolves host UI atoms through @dsh-tavern/bind, which records
+ * The client half resolves host UI atoms through @dsh-soulmojito/bind, which records
  * what it could actually serve. Anything the host cannot serve is either an icon
  * degraded to a null renderer (invisible button glyph) or a missing layout atom
  * (slot crashes on render) — both must fail the gate, which is what keeps a host
@@ -956,7 +974,7 @@ function iterableEntries(value) {
 function checkPrimitiveParity(trace) {
   const shape = trace?.uiPrimitives
   if (shape === undefined) {
-    return ['client bundle must report host UI primitive resolution (window.__DSH_TAVERN_BIND__.uiPrimitives)']
+    return ['client bundle must report host UI primitive resolution (window.__DSH_SOULMOJITO_BIND__.uiPrimitives)']
   }
   if (!Array.isArray(shape.synthesized) || !Array.isArray(shape.missing)) {
     return ['client shape trace must expose synthesized/missing UI primitive lists']
@@ -1073,8 +1091,8 @@ async function checkClientExecution(code, options = {}) {
     ['conversation.view', 'tavern'],
     ['conversation.composer', undefined],
     ['conversation.session.header.actions', PLUGIN_NAME],
-    ['shell.overlay', 'dsh-tavern-panel'],
-    ['sidebar.footer.action', 'dsh-tavern-panel'],
+    ['shell.overlay', 'dsh-soulmojito-panel'],
+    ['sidebar.footer.action', 'dsh-soulmojito-panel'],
   ]
   for (const [name, id] of requiredSlots) {
     if (!injections.includes(name)) problems.push(`client apply did not inject the '${name}' slot`)
@@ -1086,7 +1104,7 @@ async function checkClientExecution(code, options = {}) {
   }
   // 原生右侧栏接入（宿主 ≥0.2.0-rc.2）：sidebarRightTabs/sidebarRight 服务在场
   // 时，apply 必须注册页面型 tab（kind tavern-mvu）并把 body 挂进 keyed slot
-  // sidebar.right.pane.tab（key dsh-tavern/mvu）——guide 入口与标题栏按钮都靠它。
+  // sidebar.right.pane.tab（key dsh-soulmojito/mvu）——guide 入口与标题栏按钮都靠它。
   if (!serviceInjects.some((names) => names.includes('sidebarRightTabs') && names.includes('sidebarRight'))) {
     problems.push('client apply did not request the sidebarRightTabs/sidebarRight services via ctx.inject')
   } else {
@@ -1094,16 +1112,16 @@ async function checkClientExecution(code, options = {}) {
     if (mvuType === undefined) {
       problems.push("client apply must register the sidebar-right MVU tab type (kind 'tavern-mvu')")
     } else {
-      if (mvuType.id !== 'dsh-tavern/mvu') problems.push("MVU sidebar tab type id must be 'dsh-tavern/mvu'")
+      if (mvuType.id !== 'dsh-soulmojito/mvu') problems.push("MVU sidebar tab type id must be 'dsh-soulmojito/mvu'")
       if (typeof mvuType.title !== 'function') problems.push('MVU sidebar tab type must thunk its title for locale switches')
       if (!Array.isArray(mvuType.guide) || mvuType.guide.length === 0) problems.push('MVU sidebar tab type must contribute a guide entry')
       else if (typeof mvuType.guide[0]?.title !== 'function') problems.push('MVU sidebar guide entry must thunk its title')
     }
     const mvuBody = registrations.find((candidate) => {
       const options = candidate?.options ?? candidate?.opts
-      return options?.name === 'sidebar.right.pane.tab' && options?.key === 'dsh-tavern/mvu'
+      return options?.name === 'sidebar.right.pane.tab' && options?.key === 'dsh-soulmojito/mvu'
     })
-    if (mvuBody === undefined) problems.push("client apply must register the MVU sidebar body under keyed slot 'sidebar.right.pane.tab' (key 'dsh-tavern/mvu')")
+    if (mvuBody === undefined) problems.push("client apply must register the MVU sidebar body under keyed slot 'sidebar.right.pane.tab' (key 'dsh-soulmojito/mvu')")
     else if (typeof mvuBody.options?.inject !== 'function') problems.push('MVU sidebar body must pass sessionId through its keyed inject callback')
   }
   const localeRegistration = localeRegistrations.find((entry) => entry?.ns === PLUGIN_NAME)
@@ -1155,12 +1173,12 @@ async function checkClientExecution(code, options = {}) {
     const stMarker = {
       key: 'marker',
       kind: 'context',
-      data: { source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', tavernState: 'open' } },
+      data: { source: { kind: 'plugin', plugin: 'dsh-soulmojito', form: 'notice', tavernState: 'open' } },
     }
     const agentPreload = {
       key: 'preload',
       kind: 'context',
-      data: { source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'context' } },
+      data: { source: { kind: 'plugin', plugin: 'dsh-soulmojito', form: 'context' } },
     }
     const stSelected = selectComposer({ session: { chat: { order: ['marker'], nodes: new Map([['marker', stMarker]]) } } })
     const agentSelected = selectComposer({ session: { chat: { order: ['preload'], nodes: new Map([['preload', agentPreload]]) } } })
@@ -1170,7 +1188,7 @@ async function checkClientExecution(code, options = {}) {
     if (nativeSelected !== null) problems.push('native session must keep the native composer')
   }
   if (options.requirePrimitiveParity === true) {
-    problems.push(...checkPrimitiveParity(sandbox.window?.__DSH_TAVERN_BIND__))
+    problems.push(...checkPrimitiveParity(sandbox.window?.__DSH_SOULMOJITO_BIND__))
   }
   return problems
 }
@@ -1250,14 +1268,14 @@ function hostPrimitiveExports() {
 }
 
 const NODE_MOUNT_SCRIPT = String.raw`
-const entry = process.env.DSH_TAVERN_GATE_ENTRY
-if (!entry) throw new Error('missing DSH_TAVERN_GATE_ENTRY')
+const entry = process.env.DSH_SOULMOJITO_GATE_ENTRY
+if (!entry) throw new Error('missing DSH_SOULMOJITO_GATE_ENTRY')
 const mod = await import(entry)
 const sections = []
 const registrations = []
 const effects = []
 const ctx = {
-  commands: { register: (value) => { registrations.push({ kind: 'command', name: value.name, handlerType: typeof value.handler }); if (value.name === 'dsh-tavern-session') commandHandler = value.handler; return () => {} } },
+  commands: { register: (value) => { registrations.push({ kind: 'command', name: value.name, handlerType: typeof value.handler }); if (value.name === 'dsh-soulmojito-session') commandHandler = value.handler; return () => {} } },
   systemPrompt: { section: (value) => { sections.push(value) } },
   webServer: { register: (value) => { registrations.push(value); return () => {} } },
   effect: (callback, label) => { effects.push(label); return callback() },
@@ -1288,7 +1306,7 @@ if (typeof commandHandler === 'function') {
     novelOpen = { kind: 'threw', invalidPayload: true, message: String(error?.message ?? error) }
   }
 }
-console.log('DSH_TAVERN_GATE_RESULT=' + JSON.stringify({
+console.log('DSH_SOULMOJITO_GATE_RESULT=' + JSON.stringify({
   name: mod.name,
   inject: mod.inject,
   applyType: typeof mod.apply,
@@ -1312,15 +1330,15 @@ function checkNodeMountResult(result) {
       if (!result.inject.includes(service)) problems.push(`Node module inject must include '${service}'`)
     }
   }
-  const section = result.sections?.find((value) => value.name === 'dsh-tavern:active-character')
-  if (section === undefined) problems.push('Node apply did not register the dsh-tavern systemPrompt section')
+  const section = result.sections?.find((value) => value.name === 'dsh-soulmojito:active-character')
+  if (section === undefined) problems.push('Node apply did not register the dsh-soulmojito systemPrompt section')
   else if (section.textType !== 'function' && section.textType !== 'string') {
     problems.push('Node systemPrompt section text must be a function or string')
   }
   const route = result.registrations?.find((value) => value.kind === 'prefix' && value.path === API_PREFIX)
   if (route === undefined) problems.push(`Node apply did not register webServer prefix ${API_PREFIX}`)
   else if (route.handlerType !== 'function') problems.push('Node webServer prefix has no handler function')
-  const command = result.registrations?.find((value) => value.kind === 'command' && value.name === 'dsh-tavern-session')
+  const command = result.registrations?.find((value) => value.kind === 'command' && value.name === 'dsh-soulmojito-session')
   if (command === undefined) problems.push("Node apply did not register the internal Tavern session bridge")
   else if (command.handlerType !== 'function') problems.push('Node Tavern session bridge has no handler function')
   if (result.registrations?.some((value) => value.kind === 'command' && value.name === 'tavern')) {
@@ -1333,7 +1351,7 @@ function checkNodeMountResult(result) {
 }
 
 function runNodeMount() {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'dsh-tavern-gate-'))
+  const tempRoot = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-gate-'))
   try {
     let entryPath = SERVER_PATH
     let dependencyRoot = null
@@ -1356,7 +1374,7 @@ function runNodeMount() {
       env: {
         ...process.env,
         DSH_HOME: dshHome,
-        DSH_TAVERN_GATE_ENTRY: pathToFileURL(entryPath).href,
+        DSH_SOULMOJITO_GATE_ENTRY: pathToFileURL(entryPath).href,
         ...(dependencyRoot === null ? {} : { NODE_PATH: dependencyRoot }),
       },
       timeout: 20_000,
@@ -1367,9 +1385,9 @@ function runNodeMount() {
       const detail = (child.stderr || child.stdout).trim().split(/\r?\n/).at(-1) ?? `exit ${child.status}`
       return [`Node mount subprocess exited ${child.status}: ${detail}`]
     }
-    const line = child.stdout.split(/\r?\n/).find((value) => value.startsWith('DSH_TAVERN_GATE_RESULT='))
+    const line = child.stdout.split(/\r?\n/).find((value) => value.startsWith('DSH_SOULMOJITO_GATE_RESULT='))
     if (line === undefined) return ['Node mount subprocess returned no result record']
-    return checkNodeMountResult(JSON.parse(line.slice('DSH_TAVERN_GATE_RESULT='.length)))
+    return checkNodeMountResult(JSON.parse(line.slice('DSH_SOULMOJITO_GATE_RESULT='.length)))
   } finally {
     rmSync(tempRoot, { recursive: true, force: true })
   }
@@ -1377,8 +1395,8 @@ function runNodeMount() {
 
 
 const UPDATE_ROUTE_SCRIPT = String.raw`
-const entry = process.env.DSH_TAVERN_GATE_ENTRY
-if (!entry) throw new Error('missing DSH_TAVERN_GATE_ENTRY')
+const entry = process.env.DSH_SOULMOJITO_GATE_ENTRY
+if (!entry) throw new Error('missing DSH_SOULMOJITO_GATE_ENTRY')
 const mod = await import(entry)
 const registrations = []
 const installedSpecs = []
@@ -1391,7 +1409,7 @@ const pluginManagerStub = {
     if (typeof installLogHandler === 'function') {
       installLogHandler({ requestId: options?.requestId, jobId: 'gate', argv: ['pnpm', 'add', spec], cwd: process.cwd(), stream: 'stdout', text: 'Progress: resolved 1, added 1' })
     }
-    return Promise.resolve({ changed: true, application: 'restart-required', stage: 'install', target: spec, bundle: 'dsh-tavern' })
+    return Promise.resolve({ changed: true, application: 'restart-required', stage: 'install', target: spec, bundle: 'dsh-soulmojito' })
   },
 }
 const ctx = {
@@ -1414,7 +1432,7 @@ globalThis.fetch = async (url) => {
   if (target.includes('raw.githubusercontent.com')) return reply({ version: '9.9.9' })
   return { ok: false, status: 404, json: async () => ({}), text: async () => '' }
 }
-const route = registrations.find((value) => value.kind === 'prefix' && value.path === '/api/dsh-tavern')
+const route = registrations.find((value) => value.kind === 'prefix' && value.path === '/api/dsh-soulmojito')
 function callRoute(method, url, body) {
   return new Promise((resolve, reject) => {
     const chunks = body === undefined ? [] : [Buffer.from(JSON.stringify(body))]
@@ -1439,16 +1457,16 @@ function callRoute(method, url, body) {
 }
 const probe = { reachable: false }
 if (route !== undefined && typeof route.handler === 'function') {
-  const checked = await callRoute('GET', '/api/dsh-tavern/update?refresh=1')
+  const checked = await callRoute('GET', '/api/dsh-soulmojito/update?refresh=1')
   const checkedUpdate = checked.body && checked.body.update ? checked.body.update : {}
   const changelog = checked.body && Array.isArray(checked.body.changelog) ? checked.body.changelog : []
-  const missing = await callRoute('GET', '/api/dsh-tavern/update/nope')
-  const installed = await callRoute('POST', '/api/dsh-tavern/update/install', { wait: false })
+  const missing = await callRoute('GET', '/api/dsh-soulmojito/update/nope')
+  const installed = await callRoute('POST', '/api/dsh-soulmojito/update/install', { wait: false })
   const startedFlag = installed.body ? installed.body.started === true : false
   let afterInstall = installed.body && installed.body.update ? installed.body.update : {}
   for (let attempt = 0; attempt < 40 && afterInstall.install && afterInstall.install.running === true; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 25))
-    const polled = await callRoute('GET', '/api/dsh-tavern/update')
+    const polled = await callRoute('GET', '/api/dsh-soulmojito/update')
     afterInstall = polled.body && polled.body.update ? polled.body.update : afterInstall
   }
   const installState = afterInstall.install || {}
@@ -1469,7 +1487,7 @@ if (route !== undefined && typeof route.handler === 'function') {
   probe.installedSpecs = installedSpecs
   probe.installRequestId = typeof installBundleOptions[0]?.requestId === 'string'
 }
-console.log('DSH_TAVERN_GATE_RESULT=' + JSON.stringify(probe))
+console.log('DSH_SOULMOJITO_GATE_RESULT=' + JSON.stringify(probe))
 `
 
 function checkUpdateRouteResult(result) {
@@ -1482,7 +1500,7 @@ function checkUpdateRouteResult(result) {
   if (result.checkCommit !== 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678') problems.push('update check must carry the remote commit')
   if (result.checkVersion !== '9.9.9') problems.push('update check must read the remote package.json version')
   if (typeof result.localVersion !== 'string' || result.localVersion === '') problems.push('update check must report the local build version')
-  if (result.spec !== 'github:LingyeSoul/dsh-tavern#a1b2c3d4e5f60718293a4b5c6d7e8f9012345678&path:/packages/plugin') {
+  if (result.spec !== 'github:LingyeSoul/DSH-SoulMojito#a1b2c3d4e5f60718293a4b5c6d7e8f9012345678&path:/packages/plugin') {
     problems.push('update snapshot must expose a pinned pnpm git spec')
   }
   if (!Array.isArray(result.changelog) || result.changelog.length === 0) problems.push('update check must return a changelog')
@@ -1501,7 +1519,7 @@ function checkUpdateRouteResult(result) {
 }
 
 function runUpdateRouteProbe() {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'dsh-tavern-update-gate-'))
+  const tempRoot = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-update-gate-'))
   try {
     let entryPath = SERVER_PATH
     let dependencyRoot = null
@@ -1525,8 +1543,8 @@ function runUpdateRouteProbe() {
         DSH_HOME: dshHome,
         DSH_PROFILE: 'desktop',
         // 让 CLI 落地路径确定性失败（文件不存在），把安装逼到 plugin-manager 替身上。
-        DSH_TAVERN_DSH_CLI: join(tempRoot, 'missing-cli.js'),
-        DSH_TAVERN_GATE_ENTRY: pathToFileURL(entryPath).href,
+        DSH_SOULMOJITO_DSH_CLI: join(tempRoot, 'missing-cli.js'),
+        DSH_SOULMOJITO_GATE_ENTRY: pathToFileURL(entryPath).href,
         ...(dependencyRoot === null ? {} : { NODE_PATH: dependencyRoot }),
       },
       timeout: 30_000,
@@ -1537,9 +1555,9 @@ function runUpdateRouteProbe() {
       const detail = (child.stderr || child.stdout).trim().split(/\r?\n/).at(-1) ?? 'exit ' + child.status
       return ['update route subprocess exited ' + child.status + ': ' + detail]
     }
-    const line = child.stdout.split(/\r?\n/).find((value) => value.startsWith('DSH_TAVERN_GATE_RESULT='))
+    const line = child.stdout.split(/\r?\n/).find((value) => value.startsWith('DSH_SOULMOJITO_GATE_RESULT='))
     if (line === undefined) return ['update route subprocess returned no result record']
-    return checkUpdateRouteResult(JSON.parse(line.slice('DSH_TAVERN_GATE_RESULT='.length)))
+    return checkUpdateRouteResult(JSON.parse(line.slice('DSH_SOULMOJITO_GATE_RESULT='.length)))
   } finally {
     rmSync(tempRoot, { recursive: true, force: true })
   }
@@ -1549,15 +1567,15 @@ function runUpdateRouteProbe() {
  * mod-loader gate（提案 0015 §5 四不变量）：默认关（modsEnabled 与
  * enabled.<id> 双默认 false）、目录白名单（只扫 <tavern>/mods/ 且 path 校验拒
  * 穿越）、超时常量在 bundle、禁用时 mods 路由 404。真实 bundle 子进程探测 +
- * 静态 marker，update-routes gate 同款；示例 Mod（examples/mods/dsh-tavern.asset-stats）
+ * 静态 marker，update-routes gate 同款；示例 Mod（examples/mods/dsh-soulmojito.asset-stats）
  * 是夹具，另放一个坏 mod.json 证明坏 Mod 不断路。
  */
-const EXAMPLE_MOD_ID = 'dsh-tavern.asset-stats'
+const EXAMPLE_MOD_ID = 'dsh-soulmojito.asset-stats'
 
 const MOD_LOADER_SCRIPT = String.raw`
-const entry = process.env.DSH_TAVERN_GATE_ENTRY
-if (!entry) throw new Error('missing DSH_TAVERN_GATE_ENTRY')
-const modId = process.env.DSH_TAVERN_GATE_MOD_ID
+const entry = process.env.DSH_SOULMOJITO_GATE_ENTRY
+if (!entry) throw new Error('missing DSH_SOULMOJITO_GATE_ENTRY')
+const modId = process.env.DSH_SOULMOJITO_GATE_MOD_ID
 const mod = await import(entry)
 const registrations = []
 const ctx = {
@@ -1570,7 +1588,7 @@ const ctx = {
   agents: { get: () => undefined },
 }
 mod.apply(ctx)
-const route = registrations.find((value) => value.kind === 'prefix' && value.path === '/api/dsh-tavern')
+const route = registrations.find((value) => value.kind === 'prefix' && value.path === '/api/dsh-soulmojito')
 function callRoute(method, url, body) {
   return new Promise((resolve, reject) => {
     const chunks = body === undefined ? [] : [Buffer.from(JSON.stringify(body))]
@@ -1596,43 +1614,43 @@ function callRoute(method, url, body) {
   })
 }
 const probe = {}
-const boot = await callRoute('GET', '/api/dsh-tavern/bootstrap')
+const boot = await callRoute('GET', '/api/dsh-soulmojito/bootstrap')
 probe.bootstrapMods = Array.isArray(boot.body?.mods) ? boot.body.mods.map((item) => item.id) : null
 probe.bootstrapAllDisabled = Array.isArray(boot.body?.mods) && boot.body.mods.length > 0 && boot.body.mods.every((item) => item.enabled === false)
-probe.management = await callRoute('GET', '/api/dsh-tavern/mods')
-probe.defaultOffStatus = (await callRoute('GET', '/api/dsh-tavern/mods/' + modId + '/stats')).status
-await callRoute('POST', '/api/dsh-tavern/mods/' + modId + '/enable', {})
+probe.management = await callRoute('GET', '/api/dsh-soulmojito/mods')
+probe.defaultOffStatus = (await callRoute('GET', '/api/dsh-soulmojito/mods/' + modId + '/stats')).status
+await callRoute('POST', '/api/dsh-soulmojito/mods/' + modId + '/enable', {})
 probe.perModOnlyGlobal = probe.management.body?.globalEnabled
-probe.perModOnlyStatus = (await callRoute('GET', '/api/dsh-tavern/mods/' + modId + '/stats')).status
-await callRoute('POST', '/api/dsh-tavern/mods/state', { globalEnabled: true })
-const loaded = await callRoute('GET', '/api/dsh-tavern/mods/' + modId + '/stats')
+probe.perModOnlyStatus = (await callRoute('GET', '/api/dsh-soulmojito/mods/' + modId + '/stats')).status
+await callRoute('POST', '/api/dsh-soulmojito/mods/state', { globalEnabled: true })
+const loaded = await callRoute('GET', '/api/dsh-soulmojito/mods/' + modId + '/stats')
 probe.loadedStatus = loaded.status
 probe.loadedCounts = Boolean(loaded.body?.counts)
-probe.unknownRouteStatus = (await callRoute('GET', '/api/dsh-tavern/mods/' + modId + '/nope')).status
-probe.traversalStatus = (await callRoute('GET', '/api/dsh-tavern/mods/..%2F..%2Findex.mjs')).status
-probe.reloadStatus = (await callRoute('POST', '/api/dsh-tavern/mods/' + modId + '/reload', {})).status
-probe.statsAfterReload = (await callRoute('GET', '/api/dsh-tavern/mods/' + modId + '/stats')).status
-await callRoute('POST', '/api/dsh-tavern/mods/' + modId + '/disable', {})
-probe.disabledAgainStatus = (await callRoute('GET', '/api/dsh-tavern/mods/' + modId + '/stats')).status
-const afterBroken = await callRoute('GET', '/api/dsh-tavern/mods')
+probe.unknownRouteStatus = (await callRoute('GET', '/api/dsh-soulmojito/mods/' + modId + '/nope')).status
+probe.traversalStatus = (await callRoute('GET', '/api/dsh-soulmojito/mods/..%2F..%2Findex.mjs')).status
+probe.reloadStatus = (await callRoute('POST', '/api/dsh-soulmojito/mods/' + modId + '/reload', {})).status
+probe.statsAfterReload = (await callRoute('GET', '/api/dsh-soulmojito/mods/' + modId + '/stats')).status
+await callRoute('POST', '/api/dsh-soulmojito/mods/' + modId + '/disable', {})
+probe.disabledAgainStatus = (await callRoute('GET', '/api/dsh-soulmojito/mods/' + modId + '/stats')).status
+const afterBroken = await callRoute('GET', '/api/dsh-soulmojito/mods')
 probe.brokenStatus = Array.isArray(afterBroken.body?.mods) ? (afterBroken.body.mods.find((item) => item.id === 'broken-mod')?.status ?? null) : null
-probe.bootstrapAfterBrokenStatus = (await callRoute('GET', '/api/dsh-tavern/bootstrap')).status
+probe.bootstrapAfterBrokenStatus = (await callRoute('GET', '/api/dsh-soulmojito/bootstrap')).status
 
 // ---- P2 能力面探测（提案 0015 §4）：llm 能力键、三件套示例 Mod、跨 bundle 吸收 ----
-await callRoute('POST', '/api/dsh-tavern/mods/dsh-tavern.mood-tracker/enable', {})
-await callRoute('POST', '/api/dsh-tavern/mods/p2-probe/enable', {})
-await callRoute('POST', '/api/dsh-tavern/mods/p2-plain/enable', {})
-const moodUi = await callRoute('GET', '/api/dsh-tavern/mods/dsh-tavern.mood-tracker/ui')
+await callRoute('POST', '/api/dsh-soulmojito/mods/dsh-soulmojito.mood-tracker/enable', {})
+await callRoute('POST', '/api/dsh-soulmojito/mods/p2-probe/enable', {})
+await callRoute('POST', '/api/dsh-soulmojito/mods/p2-plain/enable', {})
+const moodUi = await callRoute('GET', '/api/dsh-soulmojito/mods/dsh-soulmojito.mood-tracker/ui')
 probe.moodUiStatus = moodUi.status
 probe.moodUiCsp = typeof moodUi.body === 'string' ? moodUi.body : JSON.stringify(moodUi.body ?? '')
-const llmProbe = await callRoute('GET', '/api/dsh-tavern/mods/p2-probe/llm')
+const llmProbe = await callRoute('GET', '/api/dsh-soulmojito/mods/p2-probe/llm')
 probe.p2LlmKey = llmProbe.body?.hasLlm === true
-const plainProbe = await callRoute('GET', '/api/dsh-tavern/mods/p2-plain/llm')
+const plainProbe = await callRoute('GET', '/api/dsh-soulmojito/mods/p2-plain/llm')
 probe.p2PlainNoLlmKey = plainProbe.body?.hasLlm === false
 // 跨 bundle 实测（§3.6 定案的 gate 级验证）：同一进程里再挂 agent bundle，
 // 其注册表快照必须看到 index bundle 装载的 mod 工具（globalThis Symbol.for 互见）
 // 且 section order 被钳制在 [-50, 0]。
-const agentEntry = process.env.DSH_TAVERN_GATE_AGENT_ENTRY
+const agentEntry = process.env.DSH_SOULMOJITO_GATE_AGENT_ENTRY
 if (agentEntry) {
   const agentTools = []
   const agentSections = []
@@ -1645,20 +1663,20 @@ if (agentEntry) {
     tools: { register: (tool) => { agentTools.push(tool.name); return () => {} } },
     effect: (callback) => { callback(); return () => {} },
   })
-  probe.agentHasMoodTool = agentTools.includes('dsh-tavern.mood-tracker_get_mood')
+  probe.agentHasMoodTool = agentTools.includes('dsh-soulmojito.mood-tracker_get_mood')
   probe.agentHasBuiltin = agentTools.includes('tavern_character_get')
-  const probeSection = agentSections.find((section) => section.name === 'dsh-tavern:mod:p2-probe:probe')
+  const probeSection = agentSections.find((section) => section.name === 'dsh-soulmojito:mod:p2-probe:probe')
   probe.agentSectionPresent = probeSection !== undefined
   probe.agentSectionTextNeutralized = probeSection !== undefined && !probeSection.text.includes('{{')
   probe.agentSectionOrderClamped = probeSection !== undefined && probeSection.order >= -50 && probeSection.order <= 0
 }
-console.log('DSH_TAVERN_GATE_RESULT=' + JSON.stringify(probe))
+console.log('DSH_SOULMOJITO_GATE_RESULT=' + JSON.stringify(probe))
 `
 
 const MOD_LOADER_ENV_SCRIPT = String.raw`
-const entry = process.env.DSH_TAVERN_GATE_ENTRY
-if (!entry) throw new Error('missing DSH_TAVERN_GATE_ENTRY')
-const modId = process.env.DSH_TAVERN_GATE_MOD_ID
+const entry = process.env.DSH_SOULMOJITO_GATE_ENTRY
+if (!entry) throw new Error('missing DSH_SOULMOJITO_GATE_ENTRY')
+const modId = process.env.DSH_SOULMOJITO_GATE_MOD_ID
 const mod = await import(entry)
 const registrations = []
 const ctx = {
@@ -1671,7 +1689,7 @@ const ctx = {
   agents: { get: () => undefined },
 }
 mod.apply(ctx)
-const route = registrations.find((value) => value.kind === 'prefix' && value.path === '/api/dsh-tavern')
+const route = registrations.find((value) => value.kind === 'prefix' && value.path === '/api/dsh-soulmojito')
 function callRoute(method, url, body) {
   return new Promise((resolve, reject) => {
     const chunks = body === undefined ? [] : [Buffer.from(JSON.stringify(body))]
@@ -1695,15 +1713,15 @@ function callRoute(method, url, body) {
   })
 }
 const probe = {}
-const boot = await callRoute('GET', '/api/dsh-tavern/bootstrap')
+const boot = await callRoute('GET', '/api/dsh-soulmojito/bootstrap')
 probe.envBootstrapModsEmpty = Array.isArray(boot.body?.mods) && boot.body.mods.length === 0
 probe.envBootstrapAvailable = boot.body?.modsAvailable === false
-const management = await callRoute('GET', '/api/dsh-tavern/mods')
+const management = await callRoute('GET', '/api/dsh-soulmojito/mods')
 probe.envAvailable = management.body?.available === false
-await callRoute('POST', '/api/dsh-tavern/mods/' + modId + '/enable', {})
-await callRoute('POST', '/api/dsh-tavern/mods/state', { globalEnabled: true })
-probe.envStatsAfterEnabling = (await callRoute('GET', '/api/dsh-tavern/mods/' + modId + '/stats')).status
-console.log('DSH_TAVERN_GATE_RESULT=' + JSON.stringify(probe))
+await callRoute('POST', '/api/dsh-soulmojito/mods/' + modId + '/enable', {})
+await callRoute('POST', '/api/dsh-soulmojito/mods/state', { globalEnabled: true })
+probe.envStatsAfterEnabling = (await callRoute('GET', '/api/dsh-soulmojito/mods/' + modId + '/stats')).status
+console.log('DSH_SOULMOJITO_GATE_RESULT=' + JSON.stringify(probe))
 `
 
 /**
@@ -1750,7 +1768,7 @@ function checkModLoaderResult(result, { requireEnvOff = true } = {}) {
   if (!requireEnvOff) return problems
   const env = result?.envOff ?? {}
   if (env.envAvailable !== true || env.envBootstrapAvailable !== true || env.envBootstrapModsEmpty !== true) {
-    problems.push('DSH_TAVERN_DISABLE_MODS=1 must hard-disable mods (management reports unavailable, projection empty)')
+    problems.push('DSH_SOULMOJITO_DISABLE_MODS=1 must hard-disable mods (management reports unavailable, projection empty)')
   }
   if (env.envStatsAfterEnabling !== 404) {
     problems.push('with mods hard-disabled by env, enabling both state switches must still answer 404')
@@ -1759,7 +1777,7 @@ function checkModLoaderResult(result, { requireEnvOff = true } = {}) {
 }
 
 function runModLoaderProbe(script, extraEnv = {}) {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'dsh-tavern-mod-gate-'))
+  const tempRoot = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-mod-gate-'))
   try {
     let entryPath = SERVER_PATH
     let dependencyRoot = null
@@ -1779,12 +1797,12 @@ function runModLoaderProbe(script, extraEnv = {}) {
     // （三件套示例 mod + llm 能力键有无的对照双 mod）。
     const exampleDir = join(modsRoot, EXAMPLE_MOD_ID)
     mkdirSync(exampleDir, { recursive: true })
-    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'dsh-tavern.asset-stats', 'mod.json'), join(exampleDir, 'mod.json'))
-    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'dsh-tavern.asset-stats', 'index.mjs'), join(exampleDir, 'index.mjs'))
-    const moodDir = join(modsRoot, 'dsh-tavern.mood-tracker')
+    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'dsh-soulmojito.asset-stats', 'mod.json'), join(exampleDir, 'mod.json'))
+    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'dsh-soulmojito.asset-stats', 'index.mjs'), join(exampleDir, 'index.mjs'))
+    const moodDir = join(modsRoot, 'dsh-soulmojito.mood-tracker')
     mkdirSync(moodDir, { recursive: true })
-    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'dsh-tavern.mood-tracker', 'mod.json'), join(moodDir, 'mod.json'))
-    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'dsh-tavern.mood-tracker', 'index.mjs'), join(moodDir, 'index.mjs'))
+    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'dsh-soulmojito.mood-tracker', 'mod.json'), join(moodDir, 'mod.json'))
+    copyFileSync(join(PLUGIN_ROOT, 'examples', 'mods', 'dsh-soulmojito.mood-tracker', 'index.mjs'), join(moodDir, 'index.mjs'))
     const llmProbeDir = join(modsRoot, 'p2-probe')
     mkdirSync(llmProbeDir, { recursive: true })
     writeFileSync(join(llmProbeDir, 'mod.json'), JSON.stringify({
@@ -1817,9 +1835,9 @@ function runModLoaderProbe(script, extraEnv = {}) {
         ...process.env,
         ...extraEnv,
         DSH_HOME: dshHome,
-        DSH_TAVERN_GATE_ENTRY: pathToFileURL(entryPath).href,
-        DSH_TAVERN_GATE_MOD_ID: EXAMPLE_MOD_ID,
-        DSH_TAVERN_GATE_AGENT_ENTRY: existsSync(AGENT_PATH) ? pathToFileURL(AGENT_PATH).href : '',
+        DSH_SOULMOJITO_GATE_ENTRY: pathToFileURL(entryPath).href,
+        DSH_SOULMOJITO_GATE_MOD_ID: EXAMPLE_MOD_ID,
+        DSH_SOULMOJITO_GATE_AGENT_ENTRY: existsSync(AGENT_PATH) ? pathToFileURL(AGENT_PATH).href : '',
         ...(dependencyRoot === null ? {} : { NODE_PATH: dependencyRoot }),
       },
       timeout: 40_000,
@@ -1830,9 +1848,9 @@ function runModLoaderProbe(script, extraEnv = {}) {
       const detail = (child.stderr || child.stdout).trim().split(/\r?\n/).at(-1) ?? `exit ${child.status}`
       return [`mod loader subprocess exited ${child.status}: ${detail}`]
     }
-    const line = child.stdout.split(/\r?\n/).find((value) => value.startsWith('DSH_TAVERN_GATE_RESULT='))
+    const line = child.stdout.split(/\r?\n/).find((value) => value.startsWith('DSH_SOULMOJITO_GATE_RESULT='))
     if (line === undefined) return ['mod loader subprocess returned no result record']
-    return [null, JSON.parse(line.slice('DSH_TAVERN_GATE_RESULT='.length))]
+    return [null, JSON.parse(line.slice('DSH_SOULMOJITO_GATE_RESULT='.length))]
   } finally {
     rmSync(tempRoot, { recursive: true, force: true })
   }
@@ -1848,7 +1866,7 @@ const gates = [
         checkCommit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
         checkVersion: '9.9.9',
         localVersion: '0.3.8',
-        spec: 'github:LingyeSoul/dsh-tavern#a1b2c3d4e5f60718293a4b5c6d7e8f9012345678&path:/packages/plugin',
+        spec: 'github:LingyeSoul/DSH-SoulMojito#a1b2c3d4e5f60718293a4b5c6d7e8f9012345678&path:/packages/plugin',
         changelog: ['a1b2c3d feat: update'],
         missingRouteStatus: 404,
         installStarted: true,
@@ -1856,13 +1874,13 @@ const gates = [
         installStrategy: 'plugin-manager',
         installRestartRequired: true,
         installLogTail: '12:00:00 pnpm stdout: Progress: resolved 1, added 1',
-        installedSpecs: ['github:LingyeSoul/dsh-tavern#a1b2c3d4e5f60718293a4b5c6d7e8f9012345678&path:/packages/plugin'],
+        installedSpecs: ['github:LingyeSoul/DSH-SoulMojito#a1b2c3d4e5f60718293a4b5c6d7e8f9012345678&path:/packages/plugin'],
         installRequestId: true,
       }
       const badSamples = [
         { ...good, reachable: false },
         { ...good, checkStatus: 'up-to-date' },
-        { ...good, spec: 'github:LingyeSoul/dsh-tavern#main&path:/packages/plugin' },
+        { ...good, spec: 'github:LingyeSoul/DSH-SoulMojito#main&path:/packages/plugin' },
         { ...good, installPhase: 'failed' },
         { ...good, installStrategy: 'checkout' },
         { ...good, installRestartRequired: false },
@@ -1920,7 +1938,7 @@ const gates = [
     name: 'patch-reference',
     selfTest: () => {
       const good = '- insert:\n'
-        + '    - id: dsh-tavern\n      name: \'dsh-tavern\'\n'
+        + '    - id: dsh-soulmojito\n      name: \'dsh-soulmojito\'\n'
         + '    - id: preset-agent-tavern\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-tavern\n'
         + '    - id: preset-agent-novel\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-novel\n'
       const bad = "- insert:\n    - id: other\n      name: 'other'\n"
@@ -1955,8 +1973,11 @@ const gates = [
       const versionReader = 'readFileSync("version.json", "utf8"); var BUILD_INFO = { version: "0.0.0", commit: "stub" };'
       const commitResolver = 'function resolveCommit() { execFileSync("git", ["rev-parse", "--show-toplevel"]); return "stub"; } var TAVERN_COMMIT = resolveCommit();'
       const localEmbed = '"local-onnx:"\n\'@huggingface/transformers\'\nvar localStatus = { runtimeInstalled: true };\nfunction inferLocalModelSettings() {}\n"memory/embed/local/install"\nfunction detectLocalQuantizations() {}\n"memory/embed/local/quantizations"\nfunction resolveLocalDtype() {}'
-      const gamesBridge = '"dsh-tavern:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';\nvar builtinGomoku = "dsh-tavern.gomoku";\nvar builtinXiangqi = "dsh-tavern.xiangqi";\nvar builtinJunqi = "dsh-tavern.junqi";\nvar builtinBlackjack = "dsh-tavern.blackjack";\nvar builtinMemory = "dsh-tavern.memory-match";\nvar builtinMonopoly = "dsh-tavern.monopoly";\nvar xiangqiCheckBanner = "#banner.check";\nvar xiangqiCheckHalo = "check-halo";\nvar waitersKey = "dsh-tavern:games-waiters";\nvar noticeId = "game-notice-" + sessionId;\nvar resignKey = "gamesDisableResign";\nfunction assertResignAllowed(action) {}\nfunction turnReachedAgent(session) {}\nfunction agentTurnRunning(agent) {}'
-      const good = `var name = "dsh-tavern"; var inject = []; function apply() {} function assertStGenerationBinding() {}\n${routeMarkers}\n"${API_PREFIX}"\n${versionReader}\n${commitResolver}\n${localEmbed}\n${gamesBridge}\nvar bootstrap = { ok: true, version: BUILD_INFO.version, commit: TAVERN_COMMIT };\nexport { name, inject, apply };`
+      const gamesBridge = '"dsh-soulmojito:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';\nvar builtinGomoku = "dsh-soulmojito.gomoku";\nvar builtinXiangqi = "dsh-soulmojito.xiangqi";\nvar builtinJunqi = "dsh-soulmojito.junqi";\nvar builtinBlackjack = "dsh-soulmojito.blackjack";\nvar builtinMemory = "dsh-soulmojito.memory-match";\nvar builtinMonopoly = "dsh-soulmojito.monopoly";\nvar xiangqiCheckBanner = "#banner.check";\nvar xiangqiCheckHalo = "check-halo";\nvar waitersKey = "dsh-soulmojito:games-waiters";\nvar noticeId = "game-notice-" + sessionId;\nvar resignKey = "gamesDisableResign";\nfunction assertResignAllowed(action) {}\nfunction turnReachedAgent(session) {}\nfunction agentTurnRunning(agent) {}'
+      // 改名兼容（2026-10-16）fixture 段：旧持久化名 / 旧 env 前缀 / 旧游戏
+      // 命名空间别名前缀各恰好出现一次（负样本替换唯一命中）。
+      const renameCompat = 'var legacyName = "dsh-tavern";\nvar legacyEnvPrefix = "DSH_TAVERN_DISABLE_UPDATE_CHECK";\nvar legacyGamePrefix = "dsh-tavern.";'
+      const good = `var name = "dsh-soulmojito"; var inject = []; function apply() {} function assertStGenerationBinding() {}\n${routeMarkers}\n"${API_PREFIX}"\n${versionReader}\n${commitResolver}\n${localEmbed}\n${gamesBridge}\n${renameCompat}\nvar bootstrap = { ok: true, version: BUILD_INFO.version, commit: TAVERN_COMMIT };\nexport { name, inject, apply };`
       const badRoute = good.replace('"generate"', '"missing"')
       const badStamp = good.replace('version: BUILD_INFO.version, ', '')
       const hardcodedCommit = good.replace('commit: TAVERN_COMMIT', 'commit: "stub"')
@@ -1966,19 +1987,19 @@ const gates = [
       const badLocalQuantScan = good.replace('function detectLocalQuantizations() {}', 'function detectNothing() {}')
       const badLocalQuantRoute = good.replace('"memory/embed/local/quantizations"', '"memory/embed/local/gone"')
       const badLocalDtypeResolve = good.replace('function resolveLocalDtype() {}', 'function resolveNothing() {}')
-      const badGamesHandle = good.replace('"dsh-tavern:games-service"', '"games-service-gone"')
+      const badGamesHandle = good.replace('"dsh-soulmojito:games-service"', '"games-service-gone"')
       const badGamesSmoke = good.replace('function smokeTestGameEngine() {}', 'function smokeNothing() {}')
       const badGamesOrphan = good.replace('orphaned: true', 'gone: true')
       const badGamesView = good.replace("=== 'view'", "=== 'gone'").replace("=== \"view\"", "=== \"gone\"")
-      const badGamesGomoku = good.replace('"dsh-tavern.gomoku"', '"gomoku-removed"')
-      const badGamesXiangqi = good.replace('"dsh-tavern.xiangqi"', '"xiangqi-removed"')
-      const badGamesJunqi = good.replace('"dsh-tavern.junqi"', '"junqi-removed"')
-      const badGamesBlackjack = good.replace('"dsh-tavern.blackjack"', '"blackjack-removed"')
-      const badGamesMemory = good.replace('"dsh-tavern.memory-match"', '"memory-removed"')
-      const badGamesMonopoly = good.replace('"dsh-tavern.monopoly"', '"monopoly-removed"')
+      const badGamesGomoku = good.replace('"dsh-soulmojito.gomoku"', '"gomoku-removed"')
+      const badGamesXiangqi = good.replace('"dsh-soulmojito.xiangqi"', '"xiangqi-removed"')
+      const badGamesJunqi = good.replace('"dsh-soulmojito.junqi"', '"junqi-removed"')
+      const badGamesBlackjack = good.replace('"dsh-soulmojito.blackjack"', '"blackjack-removed"')
+      const badGamesMemory = good.replace('"dsh-soulmojito.memory-match"', '"memory-removed"')
+      const badGamesMonopoly = good.replace('"dsh-soulmojito.monopoly"', '"monopoly-removed"')
       // 自动续弈与投降门（2026-10-14 用户需求）负样本：替换文本逐一核对过不含
       // 原 marker（前缀/子串救活防护）。
-      const badGamesWaiters = good.replace('"dsh-tavern:games-waiters"', '"games-waiters-gone"')
+      const badGamesWaiters = good.replace('"dsh-soulmojito:games-waiters"', '"games-waiters-gone"')
       const badGameNotice = good.replace('"game-notice-"', '"notice-gone-"')
       // 自动续弈两道防重闸（2026-10-15 竞态修订）负样本同款核对：替换名不含原
       // 函数名子串。
@@ -1990,6 +2011,11 @@ const gates = [
       // / 'halo-gone' 均不含原 marker 子串。
       const badXiangqiCheckBanner = good.replace('"#banner.check"', '"banner-style-gone"')
       const badXiangqiCheckHalo = good.replace('"check-halo"', '"halo-gone"')
+      // 改名兼容（2026-10-16）负样本：替换值不含原 marker 子串
+      // （'tavern-removed' / 'TAVERN_ENV_GONE_' / 'tavern-removed.' 均不救活原文）。
+      const badLegacyName = good.replace('"dsh-tavern"', '"tavern-removed"')
+      const badLegacyEnv = good.replace('DSH_TAVERN_', 'TAVERN_ENV_GONE_')
+      const badLegacyGamePrefix = good.replace('"dsh-tavern."', '"tavern-removed."')
       return checkServerText(good).length === 0
         && checkServerText(badRoute).length > 0
         && checkServerText(badStamp).length > 0
@@ -2018,6 +2044,9 @@ const gates = [
         && checkServerText(badGamesResignGate).length > 0
         && checkServerText(badXiangqiCheckBanner).length > 0
         && checkServerText(badXiangqiCheckHalo).length > 0
+        && checkServerText(badLegacyName).length > 0
+        && checkServerText(badLegacyEnv).length > 0
+        && checkServerText(badLegacyGamePrefix).length > 0
         && checkServerFreshness(10, 10).length === 0
         && checkBuildStamps('var built = { version: "0.0.0", commit: "abc1234" };', '0.0.0', 'abc1234').length === 0
         && checkBuildStamps('var built = { version: __TAVERN_VERSION__, commit: __TAVERN_COMMIT__ };', '0.0.0', 'abc1234').length > 0
@@ -2046,9 +2075,11 @@ const gates = [
   {
     name: 'client-bundle',
     selfTest: () => {
-      const good = "window.__ModuleLoader__.load({ id: 'dsh-tavern', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); require('@deepseek-ai/dsh-client-ui-primitives'); const markers = ['revision', 'CHAT_REVISION_CONFLICT', 'bindings/prune', 'store-revision']; exports.name = 'dsh-tavern'; exports.inject = ['slots']; exports.apply = () => markers; return module.exports; } });"
+      const good = "window.__ModuleLoader__.load({ id: 'dsh-soulmojito', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); require('@deepseek-ai/dsh-client-ui-primitives'); const markers = ['revision', 'CHAT_REVISION_CONFLICT', 'bindings/prune', 'store-revision', 'plugin:dsh-tavern']; exports.name = 'dsh-soulmojito'; exports.inject = ['slots']; exports.apply = () => markers; return module.exports; } });"
       const bad = good.replace("require('react')", "require('@deepseek-ai/not-platform')")
-      return checkClientText(good).length === 0 && checkClientText(bad).length > 0
+      // 改名兼容（2026-10-16）负样本：替换值不含原 marker 子串。
+      const badLegacyKind = good.replace("'plugin:dsh-tavern'", "'legacy-kind-gone'")
+      return checkClientText(good).length === 0 && checkClientText(bad).length > 0 && checkClientText(badLegacyKind).length > 0
         ? []
         : ['client static bad sample was not rejected']
     },
@@ -2062,22 +2093,22 @@ const gates = [
       const good = [
         'function extractFrontendDocuments() {}',
         'function buildFrontendDocument() {}',
-        'dsh-tavern:frontend-height',
+        'dsh-soulmojito:frontend-height',
         "sandbox: 'allow-scripts'",
         "connect-src 'none'",
         'event.source !== frameRef.current?.contentWindow',
         'message.streaming',
-        'dsh-tavern:mod-request',
-        'dsh-tavern:mod-response',
+        'dsh-soulmojito:mod-request',
+        'dsh-soulmojito:mod-response',
         'function isValidModBridgePath() {}',
         'function ModSurface({ mod, onLog }) {}',
-        'dsh-tavern:mod-event',
-        'dsh-tavern:mod-log',
+        'dsh-soulmojito:mod-event',
+        'dsh-soulmojito:mod-log',
         'function broadcastModEvent() {}',
         'function TavernModButtons() {}',
         'function ModPanelSurface({ mod }) {}',
         "'--dt-viewport-height'",
-        "'dsh-tavern:viewport'",
+        "'dsh-soulmojito:viewport'",
         'streamReasoning',
         "event.type === 'reasoning'",
         'dt-reasoning-body',
@@ -2094,8 +2125,8 @@ const gates = [
         "'settings.memoryPrecision'",
         'memory/embed/local/quantizations',
         // 游戏对局面（提案 0018 §4.3，P1）：桥消息 + 调用字面量 + 组件 + i18n 键。
-        'dsh-tavern:game-state',
-        'dsh-tavern:game-action',
+        'dsh-soulmojito:game-state',
+        'dsh-soulmojito:game-action',
         'games/list',
         'games/revision',
         'games/start',
@@ -2133,12 +2164,12 @@ const gates = [
         '.dt-panel-navlist{display:contents}',
       ].join('\n')
       const bad = good.replace("sandbox: 'allow-scripts'", "sandbox: 'allow-forms'")
-      const badBridge = good.replace('dsh-tavern:mod-request', 'dsh-tavern:mod-bridge-removed')
-      const badEvent = good.replace('dsh-tavern:mod-event', 'dsh-tavern:mod-gone')
+      const badBridge = good.replace('dsh-soulmojito:mod-request', 'dsh-soulmojito:mod-bridge-removed')
+      const badEvent = good.replace('dsh-soulmojito:mod-event', 'dsh-soulmojito:mod-gone')
       // 负样本必须真移除 marker：替换文本不得以原 marker 为前缀/子串（含 includes
       // 匹配），否则负样本形同虚设（上一批的已知坑）。
       const badViewportVar = good.replace("'--dt-viewport-height'", "'--dt-vh-gone'")
-      const badViewportMsg = good.replace("'dsh-tavern:viewport'", "'dsh-tavern:vp-gone'")
+      const badViewportMsg = good.replace("'dsh-soulmojito:viewport'", "'dsh-soulmojito:vp-gone'")
       const badReasoningConsume = good.replace("event.type === 'reasoning'", "event.type === 'reason-gone'")
       const badReasoningRender = good.replace('dt-reasoning-body', 'dt-reason-gone')
       const badLocalProviderSelect = good.replace("'settings.memoryProviderLocal'", "'settings.memoryProviderGone'")
@@ -2151,8 +2182,8 @@ const gates = [
       const badQuantRoute = good.replace('memory/embed/local/quantizations', 'memory/embed/local/gone')
       // 游戏面负样本（提案 0018 §4.3）：替换文本不得以原 marker 为前缀/子串——
       // 'games/list-gone' 会包含 'games/list' 这类坑逐个排过。
-      const badGameState = good.replace('dsh-tavern:game-state', 'dsh-tavern:game-stale')
-      const badGameAction = good.replace('dsh-tavern:game-action', 'dsh-tavern:game-act-gone')
+      const badGameState = good.replace('dsh-soulmojito:game-state', 'dsh-soulmojito:game-stale')
+      const badGameAction = good.replace('dsh-soulmojito:game-action', 'dsh-soulmojito:game-act-gone')
       // games/list 子串在基线链 marker（.then(() => api(`games/list${query}`))）里
       // 也出现——单次 replace 只换第一处会让 marker 幸存不翻红（2026-10-14 实测坑），
       // 全量替换。
@@ -2247,8 +2278,8 @@ const gates = [
       const good = [
         'AgentPresetLabel.module.css',
         'function useNativeAgentPresetLabelFilter() {}',
-        'dshTavernAgentPresetHiddenState',
-        'data-dsh-tavern-agent-preset-hidden',
+        'dshSoulMojitoAgentPresetHiddenState',
+        'data-dsh-soulmojito-agent-preset-hidden',
         "useNativeAgentPresetLabelFilter(Boolean(active && binding && architecture === 'st'))",
       ].join('\n')
       const bad = good.replace("Boolean(active && binding && architecture === 'st')", 'true')
@@ -2266,17 +2297,17 @@ const gates = [
     selfTest: () => {
       const good = [
         'function TavernMvuStatus({ sessionId, embedded = false, sidebar = false }) {',
-        "h('div', { className: 'dt-mvu', 'data-dsh-tavern-surface': 'mvu' },",
+        "h('div', { className: 'dt-mvu', 'data-dsh-soulmojito-surface': 'mvu' },",
         '.dt-mvu-slot{position:relative;display:inline-flex}',
         '.dt-mvu-pop{z-index:20;position:absolute}',
         "mvuOpen ? h('div', { className: 'dt-mvu-pop' }, h(TavernMvuStatus, { sessionId, embedded: true })) : null",
         "'mvu.unavailable': 'No variables or receipts in this chat',",
-        "const MVU_TAB_ID = 'dsh-tavern/mvu'",
+        "const MVU_TAB_ID = 'dsh-soulmojito/mvu'",
         "const MVU_TAB_KIND = 'tavern-mvu'",
         "ctx.inject(['sidebarRightTabs', 'sidebarRight'], (scope) => {",
         "scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({",
         "h(TavernMvuStatus, { sessionId, sidebar: true })",
-        "'data-dsh-tavern-surface': 'mvu-sidebar'",
+        "'data-dsh-soulmojito-surface': 'mvu-sidebar'",
         "exports.inject = ['slots', 'sessions', 'workspaces', 'locale']",
       ].join('\n')
       const unmounted = good.replace('TavernMvuStatus, { sessionId, embedded: true', 'TavernMvuStatus, { sessionId')
@@ -2375,7 +2406,7 @@ const gates = [
   {
     name: 'agent-tavern-isolation',
     selfTest: () => {
-      const goodAgent = "var games = ['game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait']; registerSection('dsh-tavern:agent-games'); function resolveGamesService() {}"
+      const goodAgent = "var games = ['game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait']; registerSection('dsh-soulmojito:agent-games'); function resolveGamesService() {}"
       const good = checkAgentTavernIsolation([
         ['runtime.ts', 'export function runAgentLoop() {}'],
         ['tools.ts', 'export function tool() {}'],
@@ -2388,7 +2419,7 @@ const gates = [
       // 修订的专属回归位）。
       const badGamesTool = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace("'game_state', 'game_history', 'game_move'", "'game_state', 'game_move'"))
       const badGamesWait = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace("'game_move', 'game_wait'", "'game_move'"))
-      const badGamesSection = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace('dsh-tavern:agent-games', 'dsh-tavern:gone'))
+      const badGamesSection = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace('dsh-soulmojito:agent-games', 'dsh-soulmojito:gone'))
       const badGamesError = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace('function resolveGamesService() {}', 'function resolveNothing() {}'))
       return good.length === 0 && bad.length > 0
         && badGamesTool.length > 0 && badGamesWait.length > 0 && badGamesSection.length > 0 && badGamesError.length > 0
@@ -2404,9 +2435,9 @@ const gates = [
   {
     name: 'client-vm-mount',
     selfTest: async () => {
-      const localeWiring = "ctx.effect(() => ctx.locale.register('dsh-tavern', { zh: { 'nav.title': '酒馆' }, en: { 'nav.title': 'Tavern' } })); ctx.locale.bind('dsh-tavern');"
-      const sidebarWiring = "ctx.inject(['sidebarRightTabs', 'sidebarRight'], (scope) => { scope.effect(() => scope.sidebarRightTabs.register({ id: 'dsh-tavern/mvu', kind: 'tavern-mvu', priority: 'extension', title: () => 'MVU', guide: [{ id: 'mvu', order: 40, title: () => 'MVU', description: () => 'MVU' }] })); scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({ name: 'sidebar.right.pane.tab', key: 'dsh-tavern/mvu', inject: (sessionId) => ({ sessionId }) }, () => null))); });"
-      const good = `window.__ModuleLoader__.load({ id: 'dsh-tavern', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); exports.name = 'dsh-tavern'; exports.inject = ['slots', 'locale']; exports.apply = (ctx) => { ${localeWiring} ${sidebarWiring} const entries = [['settings.section','dsh-tavern'],['conversation.view','tavern'],['conversation.composer',null],['conversation.session.header.actions','dsh-tavern'],['shell.overlay','dsh-tavern-panel'],['sidebar.footer.action','dsh-tavern-panel']]; for (const [name,id] of entries) ctx.slots.inject(name, () => ctx.slots.register({ name, ...(id ? { id } : {}), ...(name === 'conversation.composer' ? { select: (owner) => owner?.session?.chat?.order?.some((key) => owner.session.chat.nodes.get(key)?.data?.source?.form === 'notice') ? {} : null } : {}) }, () => null)); }; return module.exports; } });`
+      const localeWiring = "ctx.effect(() => ctx.locale.register('dsh-soulmojito', { zh: { 'nav.title': '酒馆' }, en: { 'nav.title': 'Tavern' } })); ctx.locale.bind('dsh-soulmojito');"
+      const sidebarWiring = "ctx.inject(['sidebarRightTabs', 'sidebarRight'], (scope) => { scope.effect(() => scope.sidebarRightTabs.register({ id: 'dsh-soulmojito/mvu', kind: 'tavern-mvu', priority: 'extension', title: () => 'MVU', guide: [{ id: 'mvu', order: 40, title: () => 'MVU', description: () => 'MVU' }] })); scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({ name: 'sidebar.right.pane.tab', key: 'dsh-soulmojito/mvu', inject: (sessionId) => ({ sessionId }) }, () => null))); });"
+      const good = `window.__ModuleLoader__.load({ id: 'dsh-soulmojito', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); exports.name = 'dsh-soulmojito'; exports.inject = ['slots', 'locale']; exports.apply = (ctx) => { ${localeWiring} ${sidebarWiring} const entries = [['settings.section','dsh-soulmojito'],['conversation.view','tavern'],['conversation.composer',null],['conversation.session.header.actions','dsh-soulmojito'],['shell.overlay','dsh-soulmojito-panel'],['sidebar.footer.action','dsh-soulmojito-panel']]; for (const [name,id] of entries) ctx.slots.inject(name, () => ctx.slots.register({ name, ...(id ? { id } : {}), ...(name === 'conversation.composer' ? { select: (owner) => owner?.session?.chat?.order?.some((key) => owner.session.chat.nodes.get(key)?.data?.source?.form === 'notice') ? {} : null } : {}) }, () => null)); }; return module.exports; } });`
       const badSlot = good.replace("['conversation.view','tavern'],", '')
       const badLocale = good.replace("exports.inject = ['slots', 'locale']", "exports.inject = ['slots']")
       const badParity = good.replace("en: { 'nav.title': 'Tavern' }", "en: {}")
@@ -2425,7 +2456,7 @@ const gates = [
       const parityRejected = parityBad.filter((sample) => checkPrimitiveParity(sample).length > 0).length
       const traced = good.replace(
         'exports.apply = (ctx) => {',
-        `window.__DSH_TAVERN_BIND__ = ${JSON.stringify(parityShape)}; exports.apply = (ctx) => {`,
+        `window.__DSH_SOULMOJITO_BIND__ = ${JSON.stringify(parityShape)}; exports.apply = (ctx) => {`,
       )
       const wiringOk = (await checkClientExecution(traced, { requirePrimitiveParity: true })).length === 0
       const wiringRejectsUntraced = (await checkClientExecution(good, { requirePrimitiveParity: true })).length > 0
@@ -2470,10 +2501,10 @@ const gates = [
         name: PLUGIN_NAME,
         inject: ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools', 'compaction'],
         applyType: 'function',
-        sections: [{ name: 'dsh-tavern:active-character', textType: 'function' }],
+        sections: [{ name: 'dsh-soulmojito:active-character', textType: 'function' }],
         registrations: [
           { kind: 'prefix', path: API_PREFIX, handlerType: 'function' },
-          { kind: 'command', name: 'dsh-tavern-session', handlerType: 'function' },
+          { kind: 'command', name: 'dsh-soulmojito-session', handlerType: 'function' },
         ],
         novelOpen: { kind: 'error', invalidPayload: false },
       }
@@ -2542,7 +2573,7 @@ const gates = [
       }
 
       // 1) 历史导入序列：真实 historyImportAppends 输出（现有闭合 turn 1 的 v4 会话）。
-      const tempRoot = mkdtempSync(join(tmpdir(), 'dsh-tavern-gate-v4-'))
+      const tempRoot = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-gate-v4-'))
       try {
         const bundle = await esbuildBuild({
           entryPoints: [join(PLUGIN_ROOT, 'src', 'agent-tavern', 'projector.ts')],
@@ -2600,7 +2631,7 @@ const gates = [
 
       // 3) notice（插件 producer-owned source 的 user/message）。
       const noticeRows = [
-        { type: 'user/message', data: { id: 'gate-notice', role: 'user', content: [{ type: 'text', text: 'Tavern roleplay chat.' }], source: { kind: 'plugin:dsh-tavern', form: 'notice', summary: 'Tavern' } }, surfaceOp: 'append' },
+        { type: 'user/message', data: { id: 'gate-notice', role: 'user', content: [{ type: 'text', text: 'Tavern roleplay chat.' }], source: { kind: 'plugin:dsh-soulmojito', form: 'notice', summary: 'Tavern' } }, surfaceOp: 'append' },
       ]
       problems.push(...admissionProblems('activation notice', noticeRows))
 
@@ -2691,10 +2722,10 @@ const gates = [
       // P2：跨 bundle 注册表与 order 钳制常量在 agent bundle（§3.6/§3.4）。
       if (existsSync(AGENT_PATH)) {
         const agent = readFileSync(AGENT_PATH, 'utf8')
-        if (!agent.includes('dsh-tavern:mod-registry')) {
-          problems.push('agent bundle must consume the globalThis mod-registry (dsh-tavern:mod-registry)')
+        if (!agent.includes('dsh-soulmojito:mod-registry')) {
+          problems.push('agent bundle must consume the globalThis mod-registry (dsh-soulmojito:mod-registry)')
         }
-        if (!agent.includes('dsh-tavern:mods-changed-listeners')) {
+        if (!agent.includes('dsh-soulmojito:mods-changed-listeners')) {
           problems.push('agent bundle must subscribe to mods-changed write-through notifications')
         }
         if (!/-50/.test(agent) || !/\b0\b/.test(agent)) {
@@ -2706,7 +2737,7 @@ const gates = [
       const [setupProblems, result] = runModLoaderProbe(MOD_LOADER_SCRIPT)
       if (setupProblems !== null) return [...problems, ...setupProblems]
       problems.push(...checkModLoaderResult(result, { requireEnvOff: false }))
-      const [envProblems, envResult] = runModLoaderProbe(MOD_LOADER_ENV_SCRIPT, { DSH_TAVERN_DISABLE_MODS: '1' })
+      const [envProblems, envResult] = runModLoaderProbe(MOD_LOADER_ENV_SCRIPT, { DSH_SOULMOJITO_DISABLE_MODS: '1' })
       if (envProblems !== null) return [...problems, ...envProblems]
       problems.push(...checkModLoaderResult({ ...(result ?? {}), envOff: envResult }))
       return problems

@@ -37,15 +37,15 @@ afterAll(() => {
 
 /** 井字棋（builtin）开局；humanRole 缺省 x（人类先手），Agent 执 o。 */
 async function startTicTacToe(): Promise<string> {
-  const { session } = await service.start({ gameId: 'dsh-tavern.tic-tac-toe', character: CHARACTER, chatId: CHAT })
+  const { session } = await service.start({ gameId: 'dsh-soulmojito.tic-tac-toe', character: CHARACTER, chatId: CHAT })
   return session.id
 }
 
 describe('开局与绑定', () => {
   it('start 返回 session + view：roles 归属（人类先手 x、Agent 后手 o）、初始建议集', async () => {
-    const { session, view } = await service.start({ gameId: 'dsh-tavern.tic-tac-toe', character: CHARACTER, chatId: CHAT })
+    const { session, view } = await service.start({ gameId: 'dsh-soulmojito.tic-tac-toe', character: CHARACTER, chatId: CHAT })
     expect(session.id).toMatch(/^g-[0-9a-f]{8}$/)
-    expect(session.gameId).toBe('dsh-tavern.tic-tac-toe')
+    expect(session.gameId).toBe('dsh-soulmojito.tic-tac-toe')
     expect(session.gameName).toBe('井字棋')
     expect(session.players).toEqual([
       { role: 'x', owner: 'human' },
@@ -60,7 +60,7 @@ describe('开局与绑定', () => {
   })
 
   it('humanRole 显式 o 时归属对调', async () => {
-    const { session } = await service.start({ gameId: 'dsh-tavern.tic-tac-toe', character: CHARACTER, chatId: CHAT, humanRole: 'o' })
+    const { session } = await service.start({ gameId: 'dsh-soulmojito.tic-tac-toe', character: CHARACTER, chatId: CHAT, humanRole: 'o' })
     expect(session.players).toEqual([
       { role: 'x', owner: 'agent' },
       { role: 'o', owner: 'human' },
@@ -68,10 +68,10 @@ describe('开局与绑定', () => {
   })
 
   it('character/chatId 空（400 面）、未知游戏（404 面）、非法 humanRole（400 面）', async () => {
-    await expect(service.start({ gameId: 'dsh-tavern.tic-tac-toe', character: '', chatId: CHAT })).rejects.toThrow(GameBridgeError)
-    await expect(service.start({ gameId: 'dsh-tavern.tic-tac-toe', character: '', chatId: CHAT })).rejects.toThrow('不能为空')
+    await expect(service.start({ gameId: 'dsh-soulmojito.tic-tac-toe', character: '', chatId: CHAT })).rejects.toThrow(GameBridgeError)
+    await expect(service.start({ gameId: 'dsh-soulmojito.tic-tac-toe', character: '', chatId: CHAT })).rejects.toThrow('不能为空')
     await expect(service.start({ gameId: 'no.such.game', character: CHARACTER, chatId: CHAT })).rejects.toThrow('不在注册表')
-    await expect(service.start({ gameId: 'dsh-tavern.tic-tac-toe', character: CHARACTER, chatId: CHAT, humanRole: 'black' })).rejects.toThrow('不在角色表')
+    await expect(service.start({ gameId: 'dsh-soulmojito.tic-tac-toe', character: CHARACTER, chatId: CHAT, humanRole: 'black' })).rejects.toThrow('不在角色表')
   })
 
   it('list 按聊天过滤会话；revision 是会话目录水位', async () => {
@@ -302,7 +302,7 @@ async function call(method: string, pathname: string, body?: unknown) {
     url,
     // route 只取 path 段（query 留在 url.searchParams），与 index.ts 的
     // handleApi 切法一致。
-    route: url.pathname.replace('/api/dsh-tavern/', ''),
+    route: url.pathname.replace('/api/dsh-soulmojito/', ''),
     method,
   })
   const text = res.body ?? ''
@@ -313,79 +313,79 @@ async function call(method: string, pathname: string, body?: unknown) {
 
 describe('HTTP 路由（handleGamesApi 直打，fakeReq/fakeRes 范式）', () => {
   it('GET games/list：ok + games + sessions；双全参数过滤', async () => {
-    const result = await call('GET', '/api/dsh-tavern/games/list?character=x&chatId=y')
+    const result = await call('GET', '/api/dsh-soulmojito/games/list?character=x&chatId=y')
     expect(result.status).toBe(200)
     expect((result.body as { ok: boolean }).ok).toBe(true)
-    expect((result.body as { games: unknown[] }).games.map((game) => (game as { id: string }).id)).toContain('dsh-tavern.tic-tac-toe')
+    expect((result.body as { games: unknown[] }).games.map((game) => (game as { id: string }).id)).toContain('dsh-soulmojito.tic-tac-toe')
     expect((result.body as { sessions: unknown[] }).sessions).toEqual([])
   })
 
   it('GET games/revision：ok + revision 字符串', async () => {
-    const result = await call('GET', '/api/dsh-tavern/games/revision')
+    const result = await call('GET', '/api/dsh-soulmojito/games/revision')
     expect(result.status).toBe(200)
     expect(typeof (result.body as { revision: string }).revision).toBe('string')
   })
 
   it('POST games/start：缺参数 400；成功 200 带 session/view', async () => {
-    const missing = await call('POST', '/api/dsh-tavern/games/start', { gameId: 'dsh-tavern.tic-tac-toe', character: '', chatId: 'c' })
+    const missing = await call('POST', '/api/dsh-soulmojito/games/start', { gameId: 'dsh-soulmojito.tic-tac-toe', character: '', chatId: 'c' })
     expect(missing.status).toBe(400)
     expect((missing.body as { message: string }).message).toContain('character')
-    const ok = await call('POST', '/api/dsh-tavern/games/start', { gameId: 'dsh-tavern.tic-tac-toe', character: CHARACTER, chatId: 'http-chat' })
+    const ok = await call('POST', '/api/dsh-soulmojito/games/start', { gameId: 'dsh-soulmojito.tic-tac-toe', character: CHARACTER, chatId: 'http-chat' })
     expect(ok.status).toBe(200)
     expect((ok.body as { session: { id: string } }).session.id).toMatch(/^g-/)
   })
 
   it('POST games/action/:id：非人类回合 409、非法动作 400（引擎中文透传）、成功 200', async () => {
-    const start = await call('POST', '/api/dsh-tavern/games/start', { gameId: 'dsh-tavern.tic-tac-toe', character: CHARACTER, chatId: 'http-chat-2' })
+    const start = await call('POST', '/api/dsh-soulmojito/games/start', { gameId: 'dsh-soulmojito.tic-tac-toe', character: CHARACTER, chatId: 'http-chat-2' })
     const sessionId = (start.body as { session: { id: string } }).session.id
     // 初始轮人类：动作体形状非法 → 400。
-    const badShape = await call('POST', `/api/dsh-tavern/games/action/${sessionId}`, { action: 'place' })
+    const badShape = await call('POST', `/api/dsh-soulmojito/games/action/${sessionId}`, { action: 'place' })
     expect(badShape.status).toBe(400)
     // 越界动作 → 引擎报错透传 400。
-    const illegal = await call('POST', `/api/dsh-tavern/games/action/${sessionId}`, { action: { type: 'place', x: 5, y: 5 } })
+    const illegal = await call('POST', `/api/dsh-soulmojito/games/action/${sessionId}`, { action: { type: 'place', x: 5, y: 5 } })
     expect(illegal.status).toBe(400)
     expect((illegal.body as { message: string }).message).toContain('0-2 的整数')
     // 合法人类落子 → 200；再落（已轮 Agent）→ 409。
-    const ok = await call('POST', `/api/dsh-tavern/games/action/${sessionId}`, { action: { type: 'place', x: 0, y: 0 } })
+    const ok = await call('POST', `/api/dsh-soulmojito/games/action/${sessionId}`, { action: { type: 'place', x: 0, y: 0 } })
     expect(ok.status).toBe(200)
-    const wrongTurn = await call('POST', `/api/dsh-tavern/games/action/${sessionId}`, { action: { type: 'place', x: 1, y: 0 } })
+    const wrongTurn = await call('POST', `/api/dsh-soulmojito/games/action/${sessionId}`, { action: { type: 'place', x: 1, y: 0 } })
     expect(wrongTurn.status).toBe(409)
     expect((wrongTurn.body as { message: string }).message).toContain('现在轮到 o')
     // 未知会话 → 404。
-    const missing = await call('POST', '/api/dsh-tavern/games/action/g-00000000', { action: { type: 'resign' } })
+    const missing = await call('POST', '/api/dsh-soulmojito/games/action/g-00000000', { action: { type: 'resign' } })
     expect(missing.status).toBe(404)
   })
 
   it('GET games/state/:id：200；GET games/:gid/view/:sid：HTML + CSP + 桥标记', async () => {
-    const start = await call('POST', '/api/dsh-tavern/games/start', { gameId: 'dsh-tavern.tic-tac-toe', character: CHARACTER, chatId: 'http-chat-3' })
+    const start = await call('POST', '/api/dsh-soulmojito/games/start', { gameId: 'dsh-soulmojito.tic-tac-toe', character: CHARACTER, chatId: 'http-chat-3' })
     const sessionId = (start.body as { session: { id: string } }).session.id
-    const state = await call('GET', `/api/dsh-tavern/games/state/${sessionId}`)
+    const state = await call('GET', `/api/dsh-soulmojito/games/state/${sessionId}`)
     expect(state.status).toBe(200)
     expect((state.body as { view: { turn: string } }).view.turn).toBe('x')
 
-    const view = await call('GET', `/api/dsh-tavern/games/dsh-tavern.tic-tac-toe/view/${sessionId}`)
+    const view = await call('GET', `/api/dsh-soulmojito/games/dsh-soulmojito.tic-tac-toe/view/${sessionId}`)
     expect(view.status).toBe(200)
     expect(view.headers['content-type']).toContain('text/html')
     expect(view.text).toContain('Content-Security-Policy')
     expect(view.text).toContain("script-src 'unsafe-inline'")
     expect(view.text).toContain("connect-src 'none'")
-    expect(view.text).toContain('dsh-tavern:game-state')
-    expect(view.text).toContain('dsh-tavern:game-action')
+    expect(view.text).toContain('dsh-soulmojito:game-state')
+    expect(view.text).toContain('dsh-soulmojito:game-action')
     expect(view.text).toContain('井字棋')
     // 会话不属于该游戏 → 404。
-    const mismatch = await call('GET', `/api/dsh-tavern/games/no.such.game/view/${sessionId}`)
+    const mismatch = await call('GET', `/api/dsh-soulmojito/games/no.such.game/view/${sessionId}`)
     expect(mismatch.status).toBe(404)
   })
 
   it('未知 games 子路由 404；resolveService 缺失 503「游戏运行时不可用」', async () => {
-    const missing = await call('GET', '/api/dsh-tavern/games/nope')
+    const missing = await call('GET', '/api/dsh-soulmojito/games/nope')
     expect(missing.status).toBe(404)
     const res = fakeRes()
     await handleGamesApi({
       resolveService: () => undefined,
-      req: fakeReq('GET', '/api/dsh-tavern/games/list'),
+      req: fakeReq('GET', '/api/dsh-soulmojito/games/list'),
       res,
-      url: new URL('http://localhost/api/dsh-tavern/games/list'),
+      url: new URL('http://localhost/api/dsh-soulmojito/games/list'),
       route: 'games/list',
       method: 'GET',
     })
@@ -394,7 +394,7 @@ describe('HTTP 路由（handleGamesApi 直打，fakeReq/fakeRes 范式）', () =
   })
 
   it('POST games/reload：200 + games 快照', async () => {
-    const result = await call('POST', '/api/dsh-tavern/games/reload', {})
+    const result = await call('POST', '/api/dsh-soulmojito/games/reload', {})
     expect(result.status).toBe(200)
     expect((result.body as { games: unknown[] }).games.length).toBeGreaterThanOrEqual(1)
   })
@@ -466,7 +466,7 @@ describe('投降门与出回合投降（2026-10-14 用户需求）', () => {
       resignAllowed: () => !disabled,
     })
     try {
-      const { session } = await gated.start({ gameId: 'dsh-tavern.tic-tac-toe', character: CHARACTER, chatId: 'resign-chat' })
+      const { session } = await gated.start({ gameId: 'dsh-soulmojito.tic-tac-toe', character: CHARACTER, chatId: 'resign-chat' })
       await expect(gated.humanAction(session.id, { type: 'resign' })).rejects.toThrow('投降已被禁用')
       await expect(gated.agentMove(session.id, { type: 'resign' })).rejects.toThrow('投降已被禁用')
       // 普通动作不受门控影响。
@@ -503,7 +503,7 @@ describe('onHumanAction 自动续弈回调（2026-10-14 用户需求）', () => 
       },
     })
     try {
-      const { session } = await hooked.start({ gameId: 'dsh-tavern.tic-tac-toe', character: CHARACTER, chatId: 'wake-chat' })
+      const { session } = await hooked.start({ gameId: 'dsh-soulmojito.tic-tac-toe', character: CHARACTER, chatId: 'wake-chat' })
       await hooked.humanAction(session.id, { type: 'place', x: 0, y: 0 })
       expect(calls).toEqual([{ id: session.id, moveCount: 1, finished: false }])
       // 非人类回合的人类入口被拒（409 面）：回调不触发——被拒的动作从未发生。
@@ -530,7 +530,7 @@ describe('onHumanAction 自动续弈回调（2026-10-14 用户需求）', () => 
       },
     })
     try {
-      const { session } = await throwing.start({ gameId: 'dsh-tavern.tic-tac-toe', character: CHARACTER, chatId: 'wake-chat-2' })
+      const { session } = await throwing.start({ gameId: 'dsh-soulmojito.tic-tac-toe', character: CHARACTER, chatId: 'wake-chat-2' })
       const outcome = await throwing.humanAction(session.id, { type: 'place', x: 0, y: 0 })
       expect(outcome.session.moveCount).toBe(1)
       expect(warnings.some((line) => line.includes('wake failed') && line.includes('wake boom'))).toBe(true)

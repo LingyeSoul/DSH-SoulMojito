@@ -2,15 +2,15 @@
  * 示例 Mod（提案 0018 P3 交付物）：Mod 游戏注册——三局两胜猜拳。
  *
  * 演示的 api.games.register 面（docs/mods/mod-api.md「游戏注册」节）：
- * - manifest `games: ["dsh-tavern.rps.gesture"]` 声明（未声明即拒）+ id 带
+ * - manifest `games: ["dsh-soulmojito.rps.gesture"]` 声明（未声明即拒）+ id 带
  *   `<modId>.` 前缀——宿主注册期双纪律（onButton + 工具注册的同款收口）；
  * - engine 是进程内纯函数对象（提案 §3.2 引擎契约：JSON-safe state、确定性、
  *   非法动作中文抛错、legalActions 有界建议集）——与导入包的 engine.mjs 同形，
  *   差别只在「随 Mod 代码直接持有」而非动态 import；
  * - view 是内联 HTML 字符串（Mod 无静态文件服务，UI_PAGE 常量内联纪律，
- *   mood-tracker 同款）；桥协议两条消息（dsh-tavern:game-state 下行 /
- *   dsh-tavern:game-action 上行）与 src/games/view.ts 注入脚本对齐
- *   （桥写法照抄 examples/games/dsh-tavern.gomoku/view.html）；
+ *   mood-tracker 同款）；桥协议两条消息（dsh-soulmojito:game-state 下行 /
+ *   dsh-soulmojito:game-action 上行）与 src/games/view.ts 注入脚本对齐
+ *   （桥写法照抄 examples/games/dsh-soulmojito.gomoku/view.html）；
  * - 不声明 panel：游戏不出现在 Mod 分区，而是在面板「游戏」分区出现
  *   （source 徽标 mod）。
  *
@@ -27,7 +27,7 @@ const WINS_NEEDED = 2
 
 /** 与 mod.json/games 及注册参数完全一致的冗余清单（运行时以 meta 为准）。 */
 const META = {
-  id: 'dsh-tavern.rps.gesture',
+  id: 'dsh-soulmojito.rps.gesture',
   name: '猜拳',
   version: '1.0.0',
   players: { min: 2, max: 2, roles: ['first', 'second'] },
@@ -159,10 +159,10 @@ const UI_PAGE = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>猜拳 · dsh-tavern 游戏桥</title>
+<title>猜拳 · dsh-soulmojito 游戏桥</title>
 <style>
   /* 自包含视图（提案 0018 §3.3）：零外部资源，CSP connect-src 'none' 纪律。
-     桥协议只有两条消息：下行 dsh-tavern:game-state / 上行 dsh-tavern:game-action。 */
+     桥协议只有两条消息：下行 dsh-soulmojito:game-state / 上行 dsh-soulmojito:game-action。 */
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
@@ -229,8 +229,8 @@ const UI_PAGE = `<!doctype html>
 <script>
   'use strict'
   // ===== 桥协议（提案 0018 §3.3，照抄 gomoku view.html 的桥写法）=====
-  // token 从 location.search 自读；监听下行 dsh-tavern:game-state（token 对账），
-  // 人类回合点击拳钮上行 dsh-tavern:game-action——合法性由 Node 侧引擎终审。
+  // token 从 location.search 自读；监听下行 dsh-soulmojito:game-state（token 对账），
+  // 人类回合点击拳钮上行 dsh-soulmojito:game-action——合法性由 Node 侧引擎终审。
   var GESTURE_NAMES = { rock: '石头', paper: '布', scissors: '剪刀' }
   var ROLE_NAMES = { first: '甲方', second: '乙方' }
   var params = new URLSearchParams(window.location.search)
@@ -241,7 +241,7 @@ const UI_PAGE = `<!doctype html>
   window.addEventListener('message', function (event) {
     var data = event.data
     if (!data || typeof data !== 'object') return
-    if (data.type !== 'dsh-tavern:game-state' || data.token !== TOKEN) return
+    if (data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
     current = { view: data.view && typeof data.view === 'object' ? data.view : {}, session: data.session || null }
     if (data.session && data.session.id) sessionId = data.session.id
     render()
@@ -349,9 +349,9 @@ const UI_PAGE = `<!doctype html>
     if (finished) document.getElementById('overlay-result').textContent = endText(state)
 
     hintEl.textContent = !act.live
-      ? '这是静态演示局面：由 dsh-tavern 游戏服务装载后，拳钮将启用实时交互。'
+      ? '这是静态演示局面：由 dsh-soulmojito 游戏服务装载后，拳钮将启用实时交互。'
       : (!state
-        ? '正在连接 dsh-tavern 游戏服务…'
+        ? '正在连接 dsh-soulmojito 游戏服务…'
         : (finished
           ? '对局已结束。可关闭本面板或在对局列表中开新一局。'
           : (humanTurn ? '轮到你了：点一个拳钮出拳（合法性由服务端引擎终审）。' : '等待 AI 出拳——发送任意消息让 Agent 落拳。')))
@@ -364,7 +364,7 @@ const UI_PAGE = `<!doctype html>
     if (!TOKEN || !target) return
     if (ownerOf(current.session, current.view.state.turn) !== 'human') return
     window.parent.postMessage(
-      { type: 'dsh-tavern:game-action', token: TOKEN, action: { type: 'throw', gesture: target.getAttribute('data-gesture') } },
+      { type: 'dsh-soulmojito:game-action', token: TOKEN, action: { type: 'throw', gesture: target.getAttribute('data-gesture') } },
       '*'
     )
   })
@@ -382,7 +382,7 @@ export async function setup(api) {
   // 返回的反注册函数可以忽略（宿主卸载时整组回收）——这里示范保存并在
   // dispose 里显式调用（mood-tracker 的主动撤销一路；二次调用幂等无害）。
   const offGame = api.games.register({
-    id: 'dsh-tavern.rps.gesture',
+    id: 'dsh-soulmojito.rps.gesture',
     name: '猜拳',
     version: '1.0.0',
     players: { min: 2, max: 2, roles: ['first', 'second'] },

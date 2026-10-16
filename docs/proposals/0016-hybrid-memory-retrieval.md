@@ -64,7 +64,7 @@ interface MemoryEmbeddingSettings {
 |---|---|
 | `GET /memory/embed` | 返回 `{config, status}`：config 为脱敏三件套（apiKeyEnv 只是名字）；status 含 `configured/keyless/envResolvable/breakerOpen/breakerUntil/model/dims/lastError/lastErrorAt/lastSuccessAt` |
 | `PUT /memory/embed` | 校验（apiKeyEnv POSIX 名给专属 400 文案；整体不合法给形状 400）→ `patchState` → **清空运行状态 sidecar**（旧端点的 dims 基准/熔断窗/错误记录作废）。三件套全空 = 清除配置 |
-| `POST /memory/embed/test` | 探针：embed 固定串 `dsh-tavern embed probe`，返回 `{ok, dims, latencyMs, model}` 或 400+错误。探针是显式用户动作，**无视熔断**直接尝试；成功即复位、失败照常开窗 |
+| `POST /memory/embed/test` | 探针：embed 固定串 `dsh-soulmojito embed probe`，返回 `{ok, dims, latencyMs, model}` 或 400+错误。探针是显式用户动作，**无视熔断**直接尝试；成功即复位、失败照常开窗 |
 
 客户端：管理面板第 15 个分区「记忆检索」（`registerPanelSection`，client/main.js
 `MemoryRetrievalBand`）——三件套 + 可选数值字段表单、状态行（含熔断/最近错误）、

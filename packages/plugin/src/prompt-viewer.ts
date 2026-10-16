@@ -3,7 +3,7 @@
  *
  * 记录每轮**实际发给 LLM 的最终请求**（pre-llm hook 全部跑完之后、llm.stream
  * 之前——mod 改写后的实发形状，看到即实发）与世界书激活轨迹（loreTrace），
- * 管理面板「提示词」分区经 `GET /api/dsh-tavern/prompts` 只读查看。
+ * 管理面板「提示词」分区经 `GET /api/dsh-soulmojito/prompts` 只读查看。
  *
  * 纪律（decisions/2026-10-11-prompt-viewer.md）：
  * - **纯观察**：记录失败被整体吞掉 + 宿主日志一行，绝不影响生成路径
@@ -93,7 +93,7 @@ export interface PromptViewerRecord {
 
 /** Agent 模式预注入面的单个 systemPrompt section/context 装配快照。 */
 export interface PromptViewerAgentSection {
-  /** section 名（内置五段 dsh-tavern:agent-* / mod 段 dsh-tavern:mod:*）。 */
+  /** section 名（内置五段 dsh-soulmojito:agent-* / mod 段 dsh-soulmojito:mod:*）。 */
   name: string
   /** 注册 order（宿主拼装序）。 */
   order: number
@@ -175,7 +175,7 @@ export function recordPromptView(input: PromptViewerInput, logger?: HostLogger):
     // 总量封顶 TOTAL（FIFO：淘汰全局最旧）。
     if (records.length > PROMPT_VIEWER_TOTAL) records = records.slice(records.length - PROMPT_VIEWER_TOTAL)
   } catch (error) {
-    logger?.warn?.(`dsh-tavern: prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`)
+    logger?.warn?.(`dsh-soulmojito: prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 

@@ -131,7 +131,7 @@ curator 的行配置走 **loader 条目配置**，即 profile patch 层（`~/.ds
     summarizationModel: zai-org/GLM-5.2
 ```
 
-验证组合结果：`node <dsh>/lib/bin.js --profile web --dump-config`（确认 `tavern-compaction` 条目带 config）。`/compact` 命令在 web profile 被 dsh-web-app 禁用，手动止血走插件端点 `POST /api/dsh-tavern/compact`（body `{sessionId}`，要求 agent idle）。Node half 变更需重启 `dsh web`；Linux 盒子（独立 profile）同步。
+验证组合结果：`node <dsh>/lib/bin.js --profile web --dump-config`（确认 `tavern-compaction` 条目带 config）。`/compact` 命令在 web profile 被 dsh-web-app 禁用，手动止血走插件端点 `POST /api/dsh-soulmojito/compact`（body `{sessionId}`，要求 agent idle）。Node half 变更需重启 `dsh web`；Linux 盒子（独立 profile）同步。
 
 ## 8. 备选与否决
 

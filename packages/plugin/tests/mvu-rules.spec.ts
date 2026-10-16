@@ -234,7 +234,7 @@ describe('MVU $rules settlement (integration)', () => {
   let tools: Map<string, RegisteredTool>
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-mvu-rules-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-mvu-rules-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.importCharacter({
@@ -341,7 +341,7 @@ describe('MVU $rules settlement (integration)', () => {
   async function generate(character: string, chatId: string) {
     const snapshot = await store.getChatSnapshot(character, chatId)
     const res = makeResponse()
-    await apiHandler(makeRequest({ character, chatId, message: 'hello', revision: snapshot!.revision }, '/api/dsh-tavern/generate'), res)
+    await apiHandler(makeRequest({ character, chatId, message: 'hello', revision: snapshot!.revision }, '/api/dsh-soulmojito/generate'), res)
     expect(res.writableEnded).toBe(true)
     const events = res.chunks.join('').trim().split('\n').map((line) => JSON.parse(line))
     return events.find((event) => event.type === 'saved')
@@ -352,7 +352,7 @@ describe('MVU $rules settlement (integration)', () => {
 
   async function undoCall(character: string, chatId: string) {
     const res = makeResponse()
-    await apiHandler(makeRequest({ character, chatId }, '/api/dsh-tavern/mvu/receipts/undo'), res)
+    await apiHandler(makeRequest({ character, chatId }, '/api/dsh-soulmojito/mvu/receipts/undo'), res)
     expect(res.writableEnded).toBe(true)
     const text = res.chunks.join('')
     return { status: res.statusCode, body: text === '' ? undefined : JSON.parse(text) }
@@ -360,7 +360,7 @@ describe('MVU $rules settlement (integration)', () => {
 
   async function statusCall(character: string, chatId: string) {
     const res = makeResponse()
-    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/mvu/status/${encodeURIComponent(character)}/${chatId}`), res)
+    await apiHandler(makeRequest(undefined, `/api/dsh-soulmojito/mvu/status/${encodeURIComponent(character)}/${chatId}`), res)
     expect(res.statusCode).toBe(200)
     return JSON.parse(res.chunks.join(''))
   }
@@ -510,7 +510,7 @@ describe('MVU $rules settlement (integration)', () => {
     }])
     const snapshot = await store.getChatSnapshot(RULES_CHARACTER, chatId)
     const res = makeResponse()
-    await apiHandler(makeRequest({ character: RULES_CHARACTER, chatId, revision: snapshot!.revision }, '/api/dsh-tavern/mvu/retry'), res)
+    await apiHandler(makeRequest({ character: RULES_CHARACTER, chatId, revision: snapshot!.revision }, '/api/dsh-soulmojito/mvu/retry'), res)
     expect(res.statusCode).toBe(200)
     const payload = JSON.parse(res.chunks.join(''))
     expect(payload.receipt).toMatchObject({ turnKey: '0', status: 'updated' })

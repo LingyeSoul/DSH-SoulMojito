@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: 'dsh-tavern',
+  id: 'dsh-soulmojito',
   factory: (require) => {
     "use strict";
     var DshBindClient = (() => {
@@ -140,7 +140,7 @@ window.__ModuleLoader__.load({
         const sessions = ctx?.sessions;
         if (typeof sessions?.retain === "function") {
           try {
-            const reference = sessions.retain(sessionId, { source: "dsh-tavern" });
+            const reference = sessions.retain(sessionId, { source: "dsh-soulmojito" });
             const releaseReference = typeof reference?.release === "function" ? reference.release.bind(reference) : void 0;
             if (releaseReference !== void 0) {
               if (trace) {
@@ -174,7 +174,7 @@ window.__ModuleLoader__.load({
       return __toCommonJS(host_probe_exports);
     })();
     const clientShapeTrace = DshBindClient.createClientShapeTrace()
-    window.__DSH_TAVERN_BIND__ = clientShapeTrace
+    window.__DSH_SOULMOJITO_BIND__ = clientShapeTrace
     var module = { exports: {} }
     var exports = module.exports
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
@@ -212,18 +212,18 @@ window.__ModuleLoader__.load({
       Tooltip,
     } = DshBindClient.resolveUiPrimitives(require('@deepseek-ai/dsh-client-ui-primitives'), {
       // 宿主图标在 0.2.0-rc.2 换成描边后缀命名（IconSparkleRegular/Medium），
-      // 旧尺寸后缀名不再导出；解析与降级见 @dsh-tavern/bind 的 ui-primitives。
+      // 旧尺寸后缀名不再导出；解析与降级见 @dsh-soulmojito/bind 的 ui-primitives。
       createElement: React.createElement,
       trace: clientShapeTrace,
     })
     if (clientShapeTrace.uiPrimitives?.synthesized?.length > 0 || clientShapeTrace.uiPrimitives?.missing?.length > 0) {
-      console.warn('dsh-tavern: host UI primitives diverge from this build', clientShapeTrace.uiPrimitives)
+      console.warn('dsh-soulmojito: host UI primitives diverge from this build', clientShapeTrace.uiPrimitives)
     }
     const { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } = React
     const h = React.createElement.bind(React)
 
-    const API = '/api/dsh-tavern'
-    const FRONTEND_HEIGHT_MESSAGE = 'dsh-tavern:frontend-height'
+    const API = '/api/dsh-soulmojito'
+    const FRONTEND_HEIGHT_MESSAGE = 'dsh-soulmojito:frontend-height'
     const FRONTEND_RESOURCE_SOURCES = [
       'https://cdn.jsdelivr.net',
       'https://testingcf.jsdelivr.net',
@@ -266,7 +266,7 @@ window.__ModuleLoader__.load({
     //   ——改写它们需 calc(var(...) * 0.5) 乘法形态，语义变更面大；
     // - 注释与字符串字面量里的 100vh 原样保留（content:"100vh" 是显示文本）。
     // 服务端 mod HTML 出口（src/mods/http.ts renderModHtmlDocument）同构同款。
-    const VIEWPORT_MESSAGE = 'dsh-tavern:viewport'
+    const VIEWPORT_MESSAGE = 'dsh-soulmojito:viewport'
     const VIEWPORT_CSS_VAR = '--dt-viewport-height'
     const VIEWPORT_UNIT_PATTERN = /(?<![-\w])100(?:d|s|l)?vh(?![\w-])/gi
     const VIEWPORT_VAR_REFERENCE = `var(${VIEWPORT_CSS_VAR}, 100vh)`
@@ -469,20 +469,20 @@ window.__ModuleLoader__.load({
     // 完整继承 FrontendFrame：sandbox="allow-scripts" 无 same-origin、token 校验
     // postMessage（token 经 iframe URL 查询段交给 mod UI，回投时对账 + 事件源
     // 必须是该 frame 的 contentWindow）。取数不能 fetch（CSP）——postMessage
-    // 数据桥：iframe 发 {type:'dsh-tavern:mod-request', token, req} → 父页代理到
-    // 该 Mod 的 HTTP 路由 → 回投 {type:'dsh-tavern:mod-response', token, id}。
+    // 数据桥：iframe 发 {type:'dsh-soulmojito:mod-request', token, req} → 父页代理到
+    // 该 Mod 的 HTTP 路由 → 回投 {type:'dsh-soulmojito:mod-response', token, id}。
     // 高度上报协议（FRONTEND_HEIGHT_MESSAGE）与 FrontendFrame 同款，由 mod UI
     // 自带上报脚本（示例 Mod 的 ui 路由含同款 reporter）。
-    const MOD_REQUEST_MESSAGE = 'dsh-tavern:mod-request'
-    const MOD_RESPONSE_MESSAGE = 'dsh-tavern:mod-response'
+    const MOD_REQUEST_MESSAGE = 'dsh-soulmojito:mod-request'
+    const MOD_RESPONSE_MESSAGE = 'dsh-soulmojito:mod-response'
     // 下行事件（A-1d）：宿主把本客户端发起的写入（聊天保存/资产保存/guides 写入
     // /按钮点击）推回挂载的 ModSurface iframe——Mod UI 据此事件刷新，轮询兜底
     // 仍保留（其他标签页/服务端写入不在推送范围，mod-api.md §13 的诚实边界）。
-    const MOD_EVENT_MESSAGE = 'dsh-tavern:mod-event'
+    const MOD_EVENT_MESSAGE = 'dsh-soulmojito:mod-event'
     const MOD_EVENT_KINDS = new Set(['chat-saved', 'assets-saved', 'guides-changed', 'button-click'])
     // Mod 日志上行（A-2）：reply.html 注入的 console reporter 把 mod UI 的
     // console/error 输出回投父页；父页 per-mod 环形缓冲（≤200 条内存态）。
-    const MOD_LOG_MESSAGE = 'dsh-tavern:mod-log'
+    const MOD_LOG_MESSAGE = 'dsh-soulmojito:mod-log'
     const MOD_LOG_LEVELS = new Set(['log', 'warn', 'error'])
     const MOD_LOG_BUFFER_LIMIT = 200
     const modLogBuffers = new Map()
@@ -599,7 +599,7 @@ window.__ModuleLoader__.load({
       const t = useTranslate()
       const mods = (state.bootstrap.mods || []).filter((mod) => mod && mod.status === 'loaded' && Array.isArray(mod.buttons) && mod.buttons.length > 0)
       if (mods.length === 0) return null
-      return h('div', { className: 'dt-mod-button-strip', 'data-dsh-tavern-surface': 'mod-buttons' },
+      return h('div', { className: 'dt-mod-button-strip', 'data-dsh-soulmojito-surface': 'mod-buttons' },
         mods.map((mod) => h(ModButtonRow, { key: mod.id, mod, t, character, chatId })))
     }
 
@@ -609,7 +609,7 @@ window.__ModuleLoader__.load({
       const postViewport = useViewportBridge(frameRef)
       // 每 mount 一个随机 token：URL 查询段交给 mod UI（回投时对账）+ 事件源
       // 必须是该 frame 的 contentWindow，双对账缺一不受理。
-      const [token] = useState(() => `dsh-tavern-mod-${mod.id}-${Math.random().toString(36).slice(2)}`)
+      const [token] = useState(() => `dsh-soulmojito-mod-${mod.id}-${Math.random().toString(36).slice(2)}`)
       useEffect(() => {
         let disposed = false
         const post = (message) => {
@@ -708,13 +708,13 @@ window.__ModuleLoader__.load({
     }
 
     // ── 游戏对局面（提案 0018 §4.3，P1）──────────────────────────────────
-    // 桥协议两条消息（§3.3）：下行 dsh-tavern:game-state（全量 {token, session,
+    // 桥协议两条消息（§3.3）：下行 dsh-soulmojito:game-state（全量 {token, session,
     // view}，view 含 {state, turn, legal, finished, summary}——与 src/games/
-    // view.ts 注入的桥脚本逐字段对齐）+ 上行 dsh-tavern:game-action。刷新走
+    // view.ts 注入的桥脚本逐字段对齐）+ 上行 dsh-soulmojito:game-action。刷新走
     // games/revision 1s 轮询（镜像 store-revision 的便宜纪律：仅游戏分区挂载
     // 且存在未终局会话时轮询，页面不可见停发；不引入 SSE、不动全局水位）。
-    const GAME_STATE_MESSAGE = 'dsh-tavern:game-state'
-    const GAME_ACTION_MESSAGE = 'dsh-tavern:game-action'
+    const GAME_STATE_MESSAGE = 'dsh-soulmojito:game-state'
+    const GAME_ACTION_MESSAGE = 'dsh-soulmojito:game-action'
     const GAMES_REVISION_POLL_MS = 1000
 
     // 游戏图标=手柄（2026-10-14）：宿主 primitives 0.2.0-rc.2 的图标清单里没有
@@ -760,7 +760,7 @@ window.__ModuleLoader__.load({
       // <head> 同步执行，load 时监听器必已就绪——useViewportBridge 的同款论证；
       // load 前的投递会丢，不能只靠 mount 即发）。
       const payloadRef = useRef(null)
-      const [token] = useState(() => `dsh-tavern-game-${session.id}-${Math.random().toString(36).slice(2)}`)
+      const [token] = useState(() => `dsh-soulmojito-game-${session.id}-${Math.random().toString(36).slice(2)}`)
       // 投降（2026-10-14 用户需求）：两步点击确认（4s 窗口自动复位）防误触；
       // 「禁用投降」设置开启时不渲染（服务端另有权威门——按钮只是入口，见
       // 面板「游戏」分区开关）。投降是会话级终止，人类任意时刻可投（含 AI 回合）。
@@ -1023,14 +1023,14 @@ window.__ModuleLoader__.load({
         // 空态卡（2026-10-14 二次修订）：图标 + 标题 + 指引 + 打开游戏面板按钮
         // ——用户主动打开的 tab 不给纯空白；内联变体维持无对局不占位。
         return sidebar
-          ? h('div', { className: 'dt-game-board-empty', 'data-dsh-tavern-surface': 'game-board' },
+          ? h('div', { className: 'dt-game-board-empty', 'data-dsh-soulmojito-surface': 'game-board' },
             h('div', { className: 'dt-game-board-empty-icon' }, h(IconGamepadOutline16, { size: 22 })),
             h('strong', null, t('games.tabTitle')),
             h('p', { className: 'dt-hint' }, t('games.boardEmpty')),
             h(Button, { size: 'sm', variant: 'outline', onClick: () => openPanel('games') }, t('games.openPanel')))
           : null
       }
-      return h('div', { className: 'dt-game-board', 'data-dsh-tavern-surface': 'game-board' },
+      return h('div', { className: 'dt-game-board', 'data-dsh-soulmojito-surface': 'game-board' },
         active.map((summary) => {
           const live = sessionStates[summary.id]
           const session = live?.session || summary
@@ -1183,7 +1183,7 @@ window.__ModuleLoader__.load({
         listError ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, listError)) : null)
     }
 
-    const LOCALE_NS = 'dsh-tavern'
+    const LOCALE_NS = 'dsh-soulmojito'
     const MESSAGES_EN = {
       'settings.subtitle': 'Roleplay assets and prompt configuration',
       'settings.activeSetup': 'Active setup',
@@ -1344,7 +1344,7 @@ window.__ModuleLoader__.load({
       'settings.memoryPrecisionAutoPick': 'auto · resolves to {dtype}',
       'settings.memoryPrecisionNotDetected': 'not found in the model dir',
       'settings.memoryAutoFilled': 'auto-filled from the model dir: {items}',
-      'settings.memoryLocalRuntimeMissing': 'Local ONNX runtime not installed: run "pnpm add @huggingface/transformers" in the DSH profile root (the directory whose node_modules contains the installed dsh-tavern — NOT the plugin source repository), then restart DSH.',
+      'settings.memoryLocalRuntimeMissing': 'Local ONNX runtime not installed: run "pnpm add @huggingface/transformers" in the DSH profile root (the directory whose node_modules contains the installed dsh-soulmojito — NOT the plugin source repository), then restart DSH.',
       'settings.memoryLocalInstall': 'Install runtime',
       'settings.memoryLocalInstalling': 'Installing… (native package, can take minutes)',
       'settings.memoryLocalInstallOk': 'Runtime installed — no restart needed, press Test to verify.',
@@ -1698,7 +1698,7 @@ window.__ModuleLoader__.load({
       // {param} 占位符镜像由 client-vm-mount gate 校验。
       'panel.section.mods': 'Mods',
       'mods.empty': 'No mods installed. Drop a folder with mod.json into {path} to install one.',
-      'mods.unavailable': 'Mods are hard-disabled by the DSH_TAVERN_DISABLE_MODS environment variable on this host.',
+      'mods.unavailable': 'Mods are hard-disabled by the DSH_SOULMOJITO_DISABLE_MODS environment variable on this host.',
       'mods.globalToggle': 'Allow mods to load',
       'mods.globalHint': 'Off by default. Each mod still needs its own switch; both must be on before any mod code runs.',
       'mods.enable': 'Enable',
@@ -1710,7 +1710,7 @@ window.__ModuleLoader__.load({
       'mods.status.error': 'Error',
       'mods.auditCount': 'Audit events: {count}',
       'mods.confirmTitle': 'Enable {name}?',
-      'mods.confirmBody': 'Mods run inside the dsh-tavern plugin process and are not sandboxed. Only enable mods from developers you trust.',
+      'mods.confirmBody': 'Mods run inside the dsh-soulmojito plugin process and are not sandboxed. Only enable mods from developers you trust.',
       'mods.confirmCapabilities': 'Declared capabilities',
       'mods.capability.llm': 'Calls the model (LLM)',
       'mods.capability.network': 'Makes network requests',
@@ -2066,7 +2066,7 @@ window.__ModuleLoader__.load({
       'settings.memoryPrecisionAutoPick': '自动 · 识别为 {dtype}',
       'settings.memoryPrecisionNotDetected': '目录中未检出',
       'settings.memoryAutoFilled': '已按模型目录自动填充：{items}',
-      'settings.memoryLocalRuntimeMissing': '本地 ONNX 运行时未安装：在 DSH profile 根目录（node_modules 里包含已安装 dsh-tavern 的那个目录，不是本插件的源码仓库）执行 "pnpm add @huggingface/transformers"，然后重启 DSH。',
+      'settings.memoryLocalRuntimeMissing': '本地 ONNX 运行时未安装：在 DSH profile 根目录（node_modules 里包含已安装 dsh-soulmojito 的那个目录，不是本插件的源码仓库）执行 "pnpm add @huggingface/transformers"，然后重启 DSH。',
       'settings.memoryLocalInstall': '安装运行时',
       'settings.memoryLocalInstalling': '安装中…（原生包较大，可达数分钟）',
       'settings.memoryLocalInstallOk': '运行时已安装——无需重启，点「测试」验证。',
@@ -2417,7 +2417,7 @@ window.__ModuleLoader__.load({
       // Mod 管理面（提案 0015 §3.5 P1）：与 EN 键集逐键镜像。
       'panel.section.mods': 'Mod',
       'mods.empty': '还没有安装 Mod。把带 mod.json 的文件夹放进 {path} 即完成安装。',
-      'mods.unavailable': '宿主已通过 DSH_TAVERN_DISABLE_MODS 环境变量硬关 Mod。',
+      'mods.unavailable': '宿主已通过 DSH_SOULMOJITO_DISABLE_MODS 环境变量硬关 Mod。',
       'mods.globalToggle': '允许加载 Mod',
       'mods.globalHint': '默认关闭。每个 Mod 还需单独开启；两层同时开启后其代码才会运行。',
       'mods.enable': '启用',
@@ -2429,7 +2429,7 @@ window.__ModuleLoader__.load({
       'mods.status.error': '错误',
       'mods.auditCount': '审计事件：{count}',
       'mods.confirmTitle': '启用 {name}？',
-      'mods.confirmBody': 'Mod 在 dsh-tavern 插件进程内运行，没有沙箱。只启用你信任的开发者的 Mod。',
+      'mods.confirmBody': 'Mod 在 dsh-soulmojito 插件进程内运行，没有沙箱。只启用你信任的开发者的 Mod。',
       'mods.confirmCapabilities': '声明的能力',
       'mods.capability.llm': '调用模型（LLM）',
       'mods.capability.network': '发起网络请求',
@@ -2636,7 +2636,7 @@ window.__ModuleLoader__.load({
       useSyncExternalStore(subscribeLocale, getLocaleRevision, getLocaleRevision)
       return translate
     }
-    const STYLE_ID = 'dsh-tavern/native-ui'
+    const STYLE_ID = 'dsh-soulmojito/native-ui'
     const REVISION_CONFLICT = 'CHAT_REVISION_CONFLICT'
     const NOVEL_REVISION_CONFLICT = 'NOVEL_REVISION_CONFLICT'
     const STORE_REVISION_POLL_MS = 3000
@@ -3245,9 +3245,9 @@ window.__ModuleLoader__.load({
     }
 
     function connectTavernWorkspace(ctx, workspaceId) {
-      // uiWorkspace → workspaces 双面回退与形状轨迹记录在 @dsh-tavern/bind 的
+      // uiWorkspace → workspaces 双面回退与形状轨迹记录在 @dsh-soulmojito/bind 的
       // client 探测模块（构建时经 __DSH_BIND_CLIENT_SLOT__ 注入，轨迹同步挂
-      // window.__DSH_TAVERN_BIND__ 供诊断读取）；源文件 client/main.js 由
+      // window.__DSH_SOULMOJITO_BIND__ 供诊断读取）；源文件 client/main.js 由
       // scripts/build-plugin.mjs 拼接为产物 client/index.js。
       return DshBindClient.connectHostWorkspace(ctx, workspaceId, clientShapeTrace)
     }
@@ -3255,7 +3255,7 @@ window.__ModuleLoader__.load({
     function openSessionView(ctx, sessionId) {
       // 0.2.0 宿主把「会话进入主视图」从 sessions.open 挪到 uiWorkspace
       // .openSession（retain mainView + 替换 selection）；双面回退与轨迹记录
-      // 同样集中在 @dsh-tavern/bind 的 client 探测模块。
+      // 同样集中在 @dsh-soulmojito/bind 的 client 探测模块。
       return DshBindClient.openHostSession(ctx, sessionId, clientShapeTrace)
     }
 
@@ -3329,15 +3329,15 @@ window.__ModuleLoader__.load({
 
     // 诊断（0.2.0-rc.2 适配期临时）：侧边栏错误原本只显示 message，定位
     // 「Cannot read properties of undefined (reading 'sessionId')」这类宿主链路
-    // 抛点需要首帧栈位。同时把完整 stack 存 window.__DSH_TAVERN_DIAG__ 供
+    // 抛点需要首帧栈位。同时把完整 stack 存 window.__DSH_SOULMOJITO_DIAG__ 供
     // devtools 取用；问题定位后移除。
     function sidebarErrorDetail(cause) {
       const message = cause instanceof Error ? cause.message : String(cause)
       const stack = cause instanceof Error ? String(cause.stack || '') : ''
       try {
-        window.__DSH_TAVERN_DIAG__ = [...(window.__DSH_TAVERN_DIAG__ || []), { message, stack, at: new Date().toISOString() }].slice(-10)
+        window.__DSH_SOULMOJITO_DIAG__ = [...(window.__DSH_SOULMOJITO_DIAG__ || []), { message, stack, at: new Date().toISOString() }].slice(-10)
       } catch { /* 诊断本身不许抛 */ }
-      console.error('[dsh-tavern] sidebar error:', cause)
+      console.error('[dsh-soulmojito] sidebar error:', cause)
       const frames = stack.split(/\r?\n/).slice(1, 4).map((line) => line.trim()).filter(Boolean)
       return frames.length > 0 ? `${message} ⏎ ${frames.join(' ⏎ ')}` : message
     }
@@ -3386,7 +3386,7 @@ window.__ModuleLoader__.load({
           }))
           const bound = ctx?.sessions?.binding(sessionId)
           if (!bound) throw new Error('session binding unavailable')
-          const result = await bound.session.command(`/dsh-tavern-session ${payload}`)
+          const result = await bound.session.command(`/dsh-soulmojito-session ${payload}`)
           if (!result?.ok || !result.value?.matched) throw new Error('Tavern session bridge rejected')
           reserveTavernSession(ctx, sessionId)
         } catch {
@@ -3416,7 +3416,7 @@ window.__ModuleLoader__.load({
         }))
         const bound = ctx?.sessions?.binding(sessionId)
         if (!bound) throw new Error('session binding unavailable')
-        const result = await bound.session.command(`/dsh-tavern-session ${payload}`)
+        const result = await bound.session.command(`/dsh-soulmojito-session ${payload}`)
         if (!result?.ok || !result.value?.matched) throw new Error('Tavern session bridge rejected')
         reserveTavernSession(ctx, sessionId)
       } catch {
@@ -3470,7 +3470,7 @@ window.__ModuleLoader__.load({
           ...(group ? { group: true } : {}),
           ...activationFields(policy),
         }))
-        const result = await binding.session.command(`/dsh-tavern-session ${commandPayload}`)
+        const result = await binding.session.command(`/dsh-soulmojito-session ${commandPayload}`)
         if (!result.ok || !result.value?.matched) {
           await api('binding', {
             method: 'DELETE',
@@ -3550,7 +3550,7 @@ window.__ModuleLoader__.load({
           const binding = ctx.sessions.binding(sessionId)
           if (!binding) throw new Error(translate('error.noBinding'))
           const commandPayload = base64Url(JSON.stringify({ action: 'novel-open', novelId: novel.novelId }))
-          const result = await binding.session.command(`/dsh-tavern-session ${commandPayload}`)
+          const result = await binding.session.command(`/dsh-soulmojito-session ${commandPayload}`)
           if (!result?.ok || !result.value?.matched) {
             throw new Error(result.error?.message || translate('error.activationFailed'))
           }
@@ -3634,7 +3634,7 @@ window.__ModuleLoader__.load({
           const commandPayload = base64Url(JSON.stringify(source
             ? { action: 'workbench-open', sourceCharacter: source.character, sourceChatId: source.chatId }
             : { action: 'workbench-open' }))
-          const result = await binding.session.command(`/dsh-tavern-session ${commandPayload}`)
+          const result = await binding.session.command(`/dsh-soulmojito-session ${commandPayload}`)
           if (!result?.ok || !result.value?.matched) {
             throw new Error(result.error?.message || translate('error.activationFailed'))
           }
@@ -3856,7 +3856,7 @@ window.__ModuleLoader__.load({
             headers: jsonHeaders(),
             body: JSON.stringify({ sessionId }),
           }).catch(() => {})
-          await binding?.session.command(`/dsh-tavern-session ${closePayload}`).catch(() => {})
+          await binding?.session.command(`/dsh-soulmojito-session ${closePayload}`).catch(() => {})
           await ctx.workspaces.archiveSession(sessionId).catch(() => {})
         } finally {
           heldSession.release()
@@ -3877,11 +3877,12 @@ window.__ModuleLoader__.load({
       for (const key of session.chat.order) {
         const node = session.chat.nodes.get(key)
         if (node?.kind !== 'context') continue
-        // v4 宿主把 plugin source 归并为 producer-owned kind（'plugin:dsh-tavern'，
+        // v4 宿主把 plugin source 归并为 producer-owned kind（'plugin:dsh-soulmojito'，
         // 与宿主 v3→v4 迁移产物一致）；v0-v3 宿主仍是 { kind: 'plugin', plugin }。
+        // 改名兼容（2026-10-16）：旧名 dsh-tavern 的 kind/plugin 值双认（存量会话）。
         const source = node.data?.source
-        const isTavernSource = source?.kind === 'plugin:dsh-tavern'
-          || (source?.kind === 'plugin' && source.plugin === 'dsh-tavern')
+        const isTavernSource = source?.kind === 'plugin:dsh-soulmojito' || source?.kind === 'plugin:dsh-tavern'
+          || (source?.kind === 'plugin' && (source.plugin === 'dsh-soulmojito' || source.plugin === 'dsh-tavern'))
         if (isTavernSource && source.form === 'notice') {
           // 关闭判据双轨：v0 会话的关闭 marker 带 tavernState 成员；disposition
           // 收敛后服务端只写 summary: 'Tavern closed'（见 confirmable-session-writes
@@ -5306,10 +5307,10 @@ window.__ModuleLoader__.load({
         : ''
       // 重管理全部移入 Tavern 管理面板（sidebar footer 按钮 / 本页按钮打开）；
       // 设置页只保留快速切换与面板入口。
-      return h('div', { className: 'dt-settings', 'data-dsh-tavern-settings': '' },
+      return h('div', { className: 'dt-settings', 'data-dsh-soulmojito-settings': '' },
         h('div', { className: 'dt-settings-heading' },
           h('div', null,
-            h('h2', null, 'dsh-tavern'),
+            h('h2', null, 'DSH-SoulMojito'),
             h('p', null, t('settings.subtitle')),
             stamp ? h('p', { className: 'dt-settings-version' }, `${t('settings.version')} ${stamp}`) : null,
             h(UpdateBand, { compact: true })),
@@ -5458,7 +5459,7 @@ window.__ModuleLoader__.load({
       }, [binding?.character, binding?.chatId, sessionId])
       useEffect(() => { endRef.current?.scrollIntoView?.({ block: 'end' }) }, [chat, run.streamText, run.streamReasoning])
       if (!binding) {
-        return h('div', { className: 'dt-view dt-empty', 'data-dsh-tavern-surface': 'view' },
+        return h('div', { className: 'dt-view dt-empty', 'data-dsh-soulmojito-surface': 'view' },
           h(IconUserOutline16, { size: 22 }),
           h('strong', null, t('view.unbound')))
       }
@@ -5466,12 +5467,12 @@ window.__ModuleLoader__.load({
       // only points back at the novels panel (the tab itself stays hidden by
       // useNativeTavernTabFilter in PanelHost).
       if (binding.architecture === 'agent-novel') {
-        return h('div', { className: 'dt-view dt-empty', 'data-dsh-tavern-surface': 'view' },
+        return h('div', { className: 'dt-view dt-empty', 'data-dsh-soulmojito-surface': 'view' },
           h(IconListPenOutline16, { size: 22 }),
           h('strong', null, t('novel.viewNotice')),
           h('button', { type: 'button', className: 'dt-upload', onClick: () => openPanel('novels') }, t('novel.openPanel')))
       }
-      if (!chat) return h('div', { className: 'dt-view dt-empty', 'data-dsh-tavern-surface': 'view' }, t('view.loading'))
+      if (!chat) return h('div', { className: 'dt-view dt-empty', 'data-dsh-soulmojito-surface': 'view' }, t('view.loading'))
       const messages = [...chat.messages]
       // 流式伪楼层：纯思考阶段（正文 delta 未到）也要挂出楼层让思考块可见，
       // reasoning 经 extra 通道走 MessageRow 与保存后消息同一渲染路径。
@@ -5485,7 +5486,7 @@ window.__ModuleLoader__.load({
         })
       }
       const link = chat.header?.chat_metadata?.bookmark_link
-      return h('div', { className: 'dt-view', 'data-dsh-tavern-surface': 'view' },
+      return h('div', { className: 'dt-view', 'data-dsh-soulmojito-surface': 'view' },
         link ? h('div', { className: 'dt-backlink' },
           h('button', {
             type: 'button',
@@ -5832,7 +5833,7 @@ window.__ModuleLoader__.load({
       }
       if (!binding || binding.group === true || bindingArchitecture(binding) !== 'st' || conflicted) return null
       const blocked = busy || disabled === true
-      return h('div', { className: 'dt-candidates', 'data-dsh-tavern-surface': 'candidates' },
+      return h('div', { className: 'dt-candidates', 'data-dsh-soulmojito-surface': 'candidates' },
         h('div', { className: 'dt-candidates-head' },
           h('button', {
             type: 'button',
@@ -6118,12 +6119,12 @@ window.__ModuleLoader__.load({
       // 取会话底色不加卡片底（宿主右栏设计约定：它是页面的一列，不是浮层卡片）。
       if (sidebar) {
         if (!binding || !status || status.available !== true) {
-          return h('div', { className: 'dt-mvu-side', 'data-dsh-tavern-surface': 'mvu-sidebar' },
+          return h('div', { className: 'dt-mvu-side', 'data-dsh-soulmojito-surface': 'mvu-sidebar' },
             h('div', { className: 'dt-mvu-side-empty' }, h(IconDataOutline16), h('span', null, t('mvu.unavailable'))))
         }
         const variables = flattenMvuVariables(status.variables)
         const groups = groupMvuVariables(variables)
-        return h('div', { className: 'dt-mvu-side', 'data-dsh-tavern-surface': 'mvu-sidebar' },
+        return h('div', { className: 'dt-mvu-side', 'data-dsh-soulmojito-surface': 'mvu-sidebar' },
           h('div', { className: 'dt-mvu-side-head' },
             h('span', { className: 'dt-mvu-summary' }, t('mvu.summary', { variables: variables.length, receipts: receipts.length })),
             h('div', { className: 'dt-mvu-side-actions' },
@@ -6172,7 +6173,7 @@ window.__ModuleLoader__.load({
         return embedded ? h('p', { className: 'dt-muted' }, t('mvu.unavailable')) : null
       }
       const variables = flattenMvuVariables(status.variables)
-      return h('div', { className: 'dt-mvu', 'data-dsh-tavern-surface': 'mvu' },
+      return h('div', { className: 'dt-mvu', 'data-dsh-soulmojito-surface': 'mvu' },
         h('div', { className: 'dt-mvu-head' },
           h('button', {
             type: 'button',
@@ -6208,7 +6209,7 @@ window.__ModuleLoader__.load({
 
     // MVU 面板在 DSH 原生右侧栏的 tab 标识：id 是本实现在 tab 系统里的身份
     // （也是 body/title 在 keyed slot 下的派发键），kind 是 openTab 的页面名。
-    const MVU_TAB_ID = 'dsh-tavern/mvu'
+    const MVU_TAB_ID = 'dsh-soulmojito/mvu'
     const MVU_TAB_KIND = 'tavern-mvu'
 
     // MVU 面板的 DSH 原生右侧栏 body（sidebar.right.pane.tab keyed slot，按
@@ -6223,7 +6224,7 @@ window.__ModuleLoader__.load({
     // 对局面的 DSH 原生右侧栏 tab（2026-10-14 修订，MVU tab 同款姿势）：id 是
     // keyed slot 的派发键，kind 是 openTab 的页面名。body 渲染 TavernGameBoard
     // ——tab chip 标题、关闭、分栏由宿主右栏 kit 拥有，本组件只管内容。
-    const GAMES_TAB_ID = 'dsh-tavern/games'
+    const GAMES_TAB_ID = 'dsh-soulmojito/games'
     const GAMES_TAB_KIND = 'tavern-games'
 
     function TavernGamesSidebarTab({ sessionId }) {
@@ -6269,7 +6270,7 @@ window.__ModuleLoader__.load({
       if (!Number.isFinite(total) || total <= 0) return null
       const current = Math.min(Math.max(Number(progress.chunkIndex) || 0, 0), total - 1) + 1
       const percent = Math.round((current / total) * 100)
-      return h('div', { className: 'dt-script-card', 'data-dsh-tavern-surface': 'script-progress' },
+      return h('div', { className: 'dt-script-card', 'data-dsh-soulmojito-surface': 'script-progress' },
         h('div', { className: 'dt-script-card-head' },
           h('span', { className: 'dt-script-card-title' }, t('script.progressTitle')),
           h('span', { className: 'dt-script-card-pos' }, t('script.position', { current, total }))),
@@ -6304,7 +6305,7 @@ window.__ModuleLoader__.load({
       const placeholder = binding
         ? `${binding.group === true ? '☰ ' : ''}${t('composer.writeTo', { name: binding.character })}`
         : t('composer.unavailable')
-      return h('div', { className: 'dt-composer-wrap', 'data-dsh-tavern-surface': 'composer' },
+      return h('div', { className: 'dt-composer-wrap', 'data-dsh-soulmojito-surface': 'composer' },
         binding && bindingArchitecture(binding) === 'st' && binding.group !== true
           ? h(TavernCandidates, {
             sessionId,
@@ -6418,23 +6419,23 @@ window.__ModuleLoader__.load({
     }
 
     function hideNativeAgentPresetLabel(label) {
-      if (!label || label.dataset?.dshTavernAgentPresetHidden !== undefined) return
-      label.dataset.dshTavernAgentPresetHidden = ''
-      label.dataset.dshTavernAgentPresetHiddenAria = label.getAttribute?.('aria-hidden') ?? ''
-      label.dataset.dshTavernAgentPresetHiddenState = label.hidden ? 'hidden' : 'visible'
+      if (!label || label.dataset?.dshSoulMojitoAgentPresetHidden !== undefined) return
+      label.dataset.dshSoulMojitoAgentPresetHidden = ''
+      label.dataset.dshSoulMojitoAgentPresetHiddenAria = label.getAttribute?.('aria-hidden') ?? ''
+      label.dataset.dshSoulMojitoAgentPresetHiddenState = label.hidden ? 'hidden' : 'visible'
       label.setAttribute?.('aria-hidden', 'true')
       label.hidden = true
     }
 
     function restoreNativeAgentPresetLabel(label) {
-      if (!label || label.dataset?.dshTavernAgentPresetHidden === undefined) return
-      const aria = label.dataset.dshTavernAgentPresetHiddenAria || ''
+      if (!label || label.dataset?.dshSoulMojitoAgentPresetHidden === undefined) return
+      const aria = label.dataset.dshSoulMojitoAgentPresetHiddenAria || ''
       if (aria) label.setAttribute('aria-hidden', aria)
       else label.removeAttribute?.('aria-hidden')
-      label.hidden = label.dataset.dshTavernAgentPresetHiddenState === 'hidden'
-      delete label.dataset.dshTavernAgentPresetHidden
-      delete label.dataset.dshTavernAgentPresetHiddenAria
-      delete label.dataset.dshTavernAgentPresetHiddenState
+      label.hidden = label.dataset.dshSoulMojitoAgentPresetHiddenState === 'hidden'
+      delete label.dataset.dshSoulMojitoAgentPresetHidden
+      delete label.dataset.dshSoulMojitoAgentPresetHiddenAria
+      delete label.dataset.dshSoulMojitoAgentPresetHiddenState
     }
 
     function useNativeAgentPresetLabelFilter(active) {
@@ -6624,7 +6625,7 @@ window.__ModuleLoader__.load({
               void fetchNovelDetail(novelId).then((next) => setNovelSummary(next)).catch(() => {})
             })
         }
-        return h('div', { className: 'dt-header-character dt-header-novel', 'data-dsh-tavern-surface': 'header' },
+        return h('div', { className: 'dt-header-character dt-header-novel', 'data-dsh-soulmojito-surface': 'header' },
           h('div', { className: 'dt-header-character-copy' },
             h('span', { className: 'dt-header-character-name', title: novel.title || novelId }, novel.title || novelId),
             h('span', { className: `dt-novel-badge dt-novel-badge-${novelStatus}` },
@@ -6653,7 +6654,7 @@ window.__ModuleLoader__.load({
         setRewriteOpen(false)
         void generateFor(sessionId, binding, 'regenerate', '', { feedback })
       }
-      return h('div', { ref: markerRef, className: 'dt-header-character', 'data-dsh-tavern-surface': 'header' },
+      return h('div', { ref: markerRef, className: 'dt-header-character', 'data-dsh-soulmojito-surface': 'header' },
         h('img', { src: `${API}/avatar/${encodeURIComponent(binding.character)}`, alt: '' }),
         h('div', { className: 'dt-header-character-copy' },
           h('span', { className: 'dt-header-character-name' }, binding.character),
@@ -6742,14 +6743,14 @@ window.__ModuleLoader__.load({
 
     function restoreNativeTavernTabs() {
       for (const tab of nativeTavernTabs()) {
-        if (tab.dataset?.dshTavernTabHidden === undefined) continue
-        const aria = tab.dataset.dshTavernTabHiddenAria || ''
+        if (tab.dataset?.dshSoulMojitoTabHidden === undefined) continue
+        const aria = tab.dataset.dshSoulMojitoTabHiddenAria || ''
         if (aria) tab.setAttribute('aria-hidden', aria)
         else tab.removeAttribute?.('aria-hidden')
-        tab.hidden = tab.dataset.dshTavernTabHiddenState === 'hidden'
-        delete tab.dataset.dshTavernTabHidden
-        delete tab.dataset.dshTavernTabHiddenAria
-        delete tab.dataset.dshTavernTabHiddenState
+        tab.hidden = tab.dataset.dshSoulMojitoTabHiddenState === 'hidden'
+        delete tab.dataset.dshSoulMojitoTabHidden
+        delete tab.dataset.dshSoulMojitoTabHiddenAria
+        delete tab.dataset.dshSoulMojitoTabHiddenState
       }
     }
 
@@ -6765,10 +6766,10 @@ window.__ModuleLoader__.load({
           const fallback = tabs.find((item) => item !== tab && !nativeTavernTabs().includes(item))
           if (fallback instanceof HTMLElement) fallback.click()
         }
-        if (tab.dataset?.dshTavernTabHidden !== undefined) continue
-        tab.dataset.dshTavernTabHidden = ''
-        tab.dataset.dshTavernTabHiddenAria = tab.getAttribute?.('aria-hidden') ?? ''
-        tab.dataset.dshTavernTabHiddenState = tab.hidden ? 'hidden' : 'visible'
+        if (tab.dataset?.dshSoulMojitoTabHidden !== undefined) continue
+        tab.dataset.dshSoulMojitoTabHidden = ''
+        tab.dataset.dshSoulMojitoTabHiddenAria = tab.getAttribute?.('aria-hidden') ?? ''
+        tab.dataset.dshSoulMojitoTabHiddenState = tab.hidden ? 'hidden' : 'visible'
         tab.setAttribute?.('aria-hidden', 'true')
         tab.hidden = true
       }
@@ -6802,14 +6803,14 @@ window.__ModuleLoader__.load({
     function visibleSidebarTree() {
       const candidates = [...document.querySelectorAll('[role="tree"]')]
       const found = candidates.find((tree) => {
-        if (tree.closest('[data-dsh-tavern-sidebar-host]')) return false
+        if (tree.closest('[data-dsh-soulmojito-sidebar-host]')) return false
         const rect = tree.getBoundingClientRect()
-        if (tree.dataset?.dshTavernNativeTree !== undefined) {
+        if (tree.dataset?.dshSoulMojitoNativeTree !== undefined) {
           return rect.width > 0 && rect.left < Math.min(420, window.innerWidth * 0.4)
         }
         return rect.width > 40 && rect.height > 20 && rect.left < Math.min(420, window.innerWidth * 0.4)
       }) || null
-      if (found) found.dataset.dshTavernNativeTree = ''
+      if (found) found.dataset.dshSoulMojitoNativeTree = ''
       return found
     }
 
@@ -6930,26 +6931,26 @@ window.__ModuleLoader__.load({
     }
 
     function markNativeTreeRow(row, kind = 'session') {
-      if (!row || row.dataset?.dshTavernNativeHidden !== undefined) return
-      row.dataset.dshTavernNativeHidden = ''
-      row.dataset.dshTavernNativeHiddenKind = kind
-      row.dataset.dshTavernNativeHiddenAria = row.getAttribute?.('aria-hidden') ?? ''
-      row.dataset.dshTavernNativeHiddenState = row.hidden ? 'hidden' : 'visible'
+      if (!row || row.dataset?.dshSoulMojitoNativeHidden !== undefined) return
+      row.dataset.dshSoulMojitoNativeHidden = ''
+      row.dataset.dshSoulMojitoNativeHiddenKind = kind
+      row.dataset.dshSoulMojitoNativeHiddenAria = row.getAttribute?.('aria-hidden') ?? ''
+      row.dataset.dshSoulMojitoNativeHiddenState = row.hidden ? 'hidden' : 'visible'
       row.setAttribute?.('aria-hidden', 'true')
       row.hidden = true
     }
 
     function unmarkNativeTreeRows(tree) {
-      for (const row of tree.querySelectorAll?.('[data-dsh-tavern-native-hidden]') || []) {
-        const aria = row.dataset?.dshTavernNativeHiddenAria || ''
-        const state = row.dataset?.dshTavernNativeHiddenState
+      for (const row of tree.querySelectorAll?.('[data-dsh-soulmojito-native-hidden]') || []) {
+        const aria = row.dataset?.dshSoulMojitoNativeHiddenAria || ''
+        const state = row.dataset?.dshSoulMojitoNativeHiddenState
         if (aria) row.setAttribute('aria-hidden', aria)
         else row.removeAttribute?.('aria-hidden')
         row.hidden = state === 'hidden'
-        delete row.dataset.dshTavernNativeHidden
-        delete row.dataset.dshTavernNativeHiddenKind
-        delete row.dataset.dshTavernNativeHiddenAria
-        delete row.dataset.dshTavernNativeHiddenState
+        delete row.dataset.dshSoulMojitoNativeHidden
+        delete row.dataset.dshSoulMojitoNativeHiddenKind
+        delete row.dataset.dshSoulMojitoNativeHiddenAria
+        delete row.dataset.dshSoulMojitoNativeHiddenState
       }
     }
 
@@ -6975,7 +6976,7 @@ window.__ModuleLoader__.load({
         if (row && nativeTreeNodeMatches(row, sessionIds, labels)) rows.add(row)
       }
       for (const row of rows) {
-        if (row.parentElement?.closest?.('[data-dsh-tavern-native-hidden]')) continue
+        if (row.parentElement?.closest?.('[data-dsh-soulmojito-native-hidden]')) continue
         markNativeTreeRow(row)
       }
     }
@@ -7030,7 +7031,7 @@ window.__ModuleLoader__.load({
           if (!current || !current.isConnected || current.parentElement !== tree.parentElement) {
             current?.remove()
             current = document.createElement('div')
-            current.dataset.dshTavernSidebarHost = ''
+            current.dataset.dshSoulMojitoSidebarHost = ''
             tree.parentElement.insertBefore(current, tree)
             setHost(current)
           }
@@ -9961,10 +9962,10 @@ window.__ModuleLoader__.load({
       const links = [
         { key: 'website', href: 'https://tavern.lingyesoul.top', text: 'tavern.lingyesoul.top' },
         { key: 'author', href: 'https://space.bilibili.com/298721157', text: '泠夜Soul' },
-        { key: 'repo', href: 'https://github.com/LingyeSoul/dsh-tavern', text: 'github.com/LingyeSoul/dsh-tavern' },
+        { key: 'repo', href: 'https://github.com/LingyeSoul/DSH-SoulMojito', text: 'github.com/LingyeSoul/DSH-SoulMojito' },
       ]
       return h('section', { className: 'dt-settings-band' },
-        h('h3', null, 'dsh-tavern'),
+        h('h3', null, 'dsh-soulmojito'),
         stamp ? h('p', { className: 'dt-update-stamp' }, stamp) : null,
         h('p', { className: 'dt-hint' }, t('panel.about.tagline')),
         h('div', { className: 'dt-about-links' },
@@ -10057,8 +10058,8 @@ window.__ModuleLoader__.load({
       }, [sessionPhase, state.loading, sessionIds.join('\u0000'), bindingIds.join('\u0000')])
       useEffect(() => {
         const toggle = () => update({ panelOpen: !snapshot.panelOpen })
-        window.addEventListener('dsh-tavern:toggle-panel', toggle)
-        return () => window.removeEventListener('dsh-tavern:toggle-panel', toggle)
+        window.addEventListener('dsh-soulmojito:toggle-panel', toggle)
+        return () => window.removeEventListener('dsh-soulmojito:toggle-panel', toggle)
       }, [])
       // 后台写入（写卡 Agent 等）没有推送通道：页面可见期间按 3s 轮询 store
       // 变更水位，水位一变就重取 bootstrap——角色卡/世界书/预设与侧栏自动吸收，
@@ -10117,15 +10118,15 @@ window.__ModuleLoader__.load({
     function installStyle() {
       if (document.querySelector(`style[data-plugin-css="${STYLE_ID}"]`)) return
       const tag = document.createElement('style')
-      tag.dataset.plugin = 'dsh-tavern'
+      tag.dataset.plugin = 'dsh-soulmojito'
       tag.dataset.pluginCss = STYLE_ID
       tag.textContent = `
-         [data-dsh-tavern-native-hidden],[data-dsh-tavern-tab-hidden],[data-dsh-tavern-agent-preset-hidden]{display:none!important}
+         [data-dsh-soulmojito-native-hidden],[data-dsh-soulmojito-tab-hidden],[data-dsh-soulmojito-agent-preset-hidden]{display:none!important}
         .dt-settings{color:var(--dsw-alias-label-primary);display:flex;flex-direction:column;gap:0;min-height:100%;font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}.dt-settings-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:20px 24px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-settings h2{font-size:20px;line-height:28px;margin:0;font-weight:600}.dt-settings-heading p{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px;margin:4px 0 0}.dt-settings-version{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;margin:2px 0 0;user-select:text}.dt-settings-band{padding:20px 24px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-settings-band h3{font-size:14px;line-height:20px;margin:0 0 14px;font-weight:600}.dt-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 20px}.dt-field{display:flex;flex-direction:column;gap:6px}.dt-label{color:var(--dsw-alias-label-secondary);font-size:12px}.dt-field select{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 10px}.dt-toggle,.dt-check-grid label{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary);font-size:13px}.dt-toggle{min-height:36px}.dt-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 20px}.dt-imports{display:flex;gap:8px;flex-wrap:wrap}.dt-upload{position:relative;cursor:pointer;height:34px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;font-size:13px}.dt-upload input{position:absolute;inset:0;opacity:0;cursor:pointer}.dt-upload-error{color:var(--dsw-alias-state-error-primary);margin-left:5px}.dt-error,.dt-run-error,.dt-sidebar-error{color:var(--dsw-alias-state-error-primary)}.dt-muted{color:var(--dsw-alias-label-tertiary)}
          .dt-view{box-sizing:border-box;width:100%;max-width:780px;margin:0 auto;display:flex;flex-direction:column;min-height:100%;padding:8px 16px 28px;color:var(--dsw-alias-label-primary);letter-spacing:0}.dt-empty{min-height:300px;align-items:center;justify-content:center;gap:10px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:13px}.dt-message-actions button,.dt-header-character button,.dt-sidebar button,.dt-footer-action{color:inherit;background:transparent;border:0;cursor:pointer}.dt-message-actions button:hover,.dt-header-character button:hover,.dt-sidebar button:hover,.dt-footer-action:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-view button:disabled,.dt-composer button:disabled,.dt-sidebar button:disabled{cursor:not-allowed;opacity:.45}.dt-transcript{display:flex;flex-direction:column;gap:22px;padding:22px 4px}.dt-message{display:flex;gap:10px;max-width:88%;min-width:0}.dt-message-user{align-self:flex-end}.dt-message-character{align-self:flex-start}.dt-message-avatar{width:30px;height:30px;object-fit:cover;border-radius:6px;flex:none}.dt-message-body{display:flex;flex-direction:column;gap:4px;min-width:0}.dt-message-user .dt-message-body{align-items:flex-end}.dt-message-name{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-message-copy{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.65;padding:9px 11px;border-radius:8px;background:var(--dsw-alias-bg-raised,rgba(127,127,127,.08));border:1px solid var(--dsw-alias-border-l2)}.dt-reasoning{display:flex;flex-direction:column;gap:3px;max-width:100%;min-width:0}.dt-reasoning-toggle{display:inline-flex;align-items:center;gap:4px;color:var(--dsw-alias-label-tertiary);background:transparent;border:0;cursor:pointer;font-size:11px;line-height:16px;padding:2px 4px;border-radius:5px}.dt-reasoning-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-reasoning-toggle svg{transition:transform 120ms ease}.dt-reasoning-toggle.dt-reasoning-open svg{transform:rotate(180deg)}.dt-reasoning-body{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12.5px;line-height:1.6;color:var(--dsw-alias-label-secondary);padding:8px 10px;border-radius:8px;border:1px dashed var(--dsw-alias-border-l2);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 4%,var(--dsw-alias-bg-base));max-height:280px;overflow-y:auto}.dt-message-user .dt-message-copy{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,var(--dsw-alias-bg-base))}.dt-message-frontend{width:min(760px,82vw);max-width:100%;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base)}.dt-frontend-frame{display:block;width:100%;border:0;background:transparent;transition:height 180ms ease}.dt-message-actions{display:flex;align-items:center;gap:4px;min-height:24px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dt-message-actions button{min-width:24px;height:24px;border-radius:5px;display:inline-grid;place-items:center;padding:0 5px}.dt-message-edit{box-sizing:border-box;width:min(620px,70vw);max-width:100%;min-height:100px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:9px;font:inherit;line-height:1.55}.dt-transcript-end{height:1px;flex:none}.dt-message-error{max-width:620px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px}.dt-run-error{padding:7px 12px;font-size:12px}
          .dt-composer-wrap{box-sizing:border-box;width:100%;padding:6px var(--dsh-composer-side-clearance,16px) 14px;pointer-events:auto}.dt-composer{box-sizing:border-box;width:min(var(--dsh-composer-card-max-width,780px),100%);margin:0 auto;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);padding:10px 10px 8px;box-shadow:0 2px 10px rgba(0,0,0,.06)}.dt-composer textarea{box-sizing:border-box;width:100%;min-height:52px;max-height:200px;resize:vertical;border:0;outline:0;color:var(--dsw-alias-label-primary);background:transparent;font:inherit;font-size:14px;line-height:1.5}.dt-composer-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:30px;font-size:11px}.dt-composer-row>span{min-width:0;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dt-composer-actions{display:flex;align-items:center;gap:8px;flex:none}.dt-primary-icon{width:30px;height:30px;border:0;border-radius:7px;display:grid;place-items:center;background:var(--dsw-alias-state-business-primary);color:#fff;cursor:pointer}.dt-header-character{min-width:0;display:flex;align-items:center;gap:7px;padding:2px 4px 2px 5px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;font-size:12px}.dt-header-character>img{width:20px;height:20px;border-radius:4px;object-fit:cover;flex:none}.dt-header-character-copy{display:flex;flex-direction:column;min-width:0;max-width:min(520px,55vw);gap:0}.dt-header-character-name{max-width:100%;text-overflow:ellipsis;white-space:nowrap;overflow:hidden;line-height:16px}.dt-header-stats{display:block;max-width:100%;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.dt-header-character>button{width:24px;height:24px;border-radius:5px;display:grid;place-items:center;flex:none}
         .dt-model-select{min-width:0;position:relative}.dt-model-trigger{min-width:0;max-width:220px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:24px;outline:none;align-items:center;gap:4px;padding:0 4px 0 8px;font-size:13px;font-weight:500;line-height:20px;display:flex}.dt-model-trigger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-model-trigger:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}.dt-model-trigger:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}.dt-model-trigger-label{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.dt-model-trigger-effort{color:var(--dsw-alias-label-caption);flex:none}.dt-model-chevron{color:var(--dsw-alias-label-caption);flex:none;transition:transform .12s}.dt-model-chevron-open{transform:rotate(180deg)}.dt-model-menu{z-index:20;border:1px solid var(--dsw-alias-border-inverted);background:var(--dsw-specific-menu);width:min(240px,100vw - 32px);max-height:min(360px,100vh - 96px);box-shadow:var(--dsw-shadow-lv3);color:var(--dsw-alias-label-primary);border-radius:12px;flex-direction:column;padding:4px;display:flex;position:absolute;bottom:calc(100% + 8px);right:0;overflow:hidden}.dt-model-status,.dt-model-empty{color:var(--dsw-alias-label-tertiary);padding:10px;font-size:13px;line-height:20px}.dt-model-error,.dt-model-warning{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);border-radius:8px;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px;padding:7px 8px;font-size:12px;line-height:18px;display:flex}.dt-model-warning{background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-state-warn-label)}.dt-model-retry{color:inherit;font:inherit;cursor:pointer;background:0 0;border:none;flex:none;padding:0;font-weight:600}.dt-model-groups{min-height:0;overflow-y:auto}.dt-model-group+.dt-model-group{margin-top:4px}.dt-model-group-title{z-index:1;background:var(--dsw-specific-menu);color:var(--dsw-alias-label-tertiary);padding:5px 8px 3px;font-size:12px;font-weight:500;line-height:18px;position:sticky;top:0}.dt-model-option{width:100%;min-height:38px;color:inherit;text-align:left;cursor:pointer;background:0 0;border:none;border-radius:10px;outline:none;align-items:center;gap:8px;padding:6px 8px;display:flex}.dt-model-option:hover:not(:disabled),.dt-model-option:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}.dt-model-option:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}.dt-model-option-copy{flex-direction:column;flex:1;min-width:0;display:flex}.dt-model-name{color:inherit;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:500;line-height:20px;overflow:hidden}.dt-model-description{color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:18px;overflow:hidden}.dt-model-check{color:var(--dsw-alias-label-primary);flex:0 0 18px;place-items:center;display:grid}.dt-model-cell{width:100%;height:40px;color:var(--dsw-alias-label-primary);cursor:pointer;text-align:left;background:0 0;border:none;border-radius:10px;align-items:center;gap:8px;padding:0 10px;font-size:14px;line-height:22px;display:flex}.dt-model-cell:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-model-cell-label{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.dt-model-cell-value{text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--dsw-alias-label-tertiary);flex:0 auto;overflow:hidden}.dt-model-cell-chevron{color:var(--dsw-alias-label-tertiary);flex:none}
-        [data-dsh-tavern-sidebar-host]{flex:none;margin:0 0 6px;padding-right:var(--dsh-session-list-edge-inset,8px)}.dt-sidebar{box-sizing:border-box;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}.dt-sidebar-heading{display:flex;align-items:center;justify-content:space-between;height:30px;padding:0 5px;color:var(--dsw-alias-label-secondary)}.dt-sidebar-heading>span{display:flex;align-items:center;gap:6px;font-size:12px}.dt-sidebar-heading>button{width:26px;height:26px;border-radius:6px}.dt-character-group{margin-top:2px}.dt-character-row{display:flex;align-items:center;gap:2px}.dt-character-toggle{height:32px;min-width:0;flex:1;display:flex;align-items:center;gap:5px;border-radius:6px;padding:0 5px;text-align:left}.dt-character-toggle svg{transform:rotate(-90deg);transition:transform .15s}.dt-character-toggle svg.dt-chevron-open{transform:rotate(0)}.dt-character-toggle img{width:22px;height:22px;border-radius:5px;object-fit:cover}.dt-character-toggle span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.dt-character-row>button:last-child{width:28px;height:28px;display:grid;place-items:center;border-radius:6px;flex:none}.dt-sidebar-chats{display:flex;flex-direction:column;margin:1px 0 4px 28px}.dt-sidebar-chat-row{height:28px;border-radius:6px;display:grid;grid-template-columns:minmax(0,1fr) repeat(3,26px);align-items:center;color:var(--dsw-alias-label-secondary)}.dt-sidebar-chat-open{height:28px;min-width:0;text-align:left;padding:0 7px;color:inherit;font-size:12px}.dt-sidebar-chat-open span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-sidebar-chat-row>button:not(.dt-sidebar-chat-open){width:26px;height:26px;display:grid;place-items:center;border-radius:5px;opacity:0}.dt-sidebar-chat-row:hover>button:not(.dt-sidebar-chat-open),.dt-sidebar-chat-row:focus-within>button:not(.dt-sidebar-chat-open){opacity:1}.dt-sidebar-chat-row.dt-sidebar-chat-active{color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-interactive-bg-hover)}.dt-sidebar-status,.dt-sidebar-error{padding:4px 7px;font-size:11px;line-height:16px}.dt-footer-action{box-sizing:border-box;cursor:pointer;color:var(--dsw-alias-label-primary);background:transparent;border:none;font-family:inherit;display:flex;align-items:center;overflow:hidden}.dt-footer-action-wide{width:calc(100% + 8px);height:34px;flex:none;justify-content:flex-start;gap:8px;margin:4px -4px;padding:6px 2px 6px 10px;border-radius:12px;font-size:14px;line-height:22px}.dt-footer-action-wide:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-footer-action-rail{width:36px;height:36px;flex:none;justify-content:center;gap:0;margin:8px 0 10px;padding:0;border-radius:50%}.dt-footer-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;line-height:22px}.dt-sidebar-heading-toggle{min-width:0;flex:1;width:auto;height:26px;display:flex;align-items:center;gap:6px;border-radius:6px;padding:0 5px;text-align:left;font-size:12px}.dt-sidebar-heading>button.dt-sidebar-heading-toggle{width:auto}.dt-sidebar-chevron{display:flex;align-items:center;flex:none}.dt-sidebar-chevron svg{transform:rotate(-90deg);transition:transform .15s}.dt-sidebar-chevron svg.dt-chevron-open{transform:rotate(0)}.dt-sidebar-heading-label{display:flex;align-items:center;gap:6px;min-width:0}.dt-sidebar-heading-label strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        [data-dsh-soulmojito-sidebar-host]{flex:none;margin:0 0 6px;padding-right:var(--dsh-session-list-edge-inset,8px)}.dt-sidebar{box-sizing:border-box;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}.dt-sidebar-heading{display:flex;align-items:center;justify-content:space-between;height:30px;padding:0 5px;color:var(--dsw-alias-label-secondary)}.dt-sidebar-heading>span{display:flex;align-items:center;gap:6px;font-size:12px}.dt-sidebar-heading>button{width:26px;height:26px;border-radius:6px}.dt-character-group{margin-top:2px}.dt-character-row{display:flex;align-items:center;gap:2px}.dt-character-toggle{height:32px;min-width:0;flex:1;display:flex;align-items:center;gap:5px;border-radius:6px;padding:0 5px;text-align:left}.dt-character-toggle svg{transform:rotate(-90deg);transition:transform .15s}.dt-character-toggle svg.dt-chevron-open{transform:rotate(0)}.dt-character-toggle img{width:22px;height:22px;border-radius:5px;object-fit:cover}.dt-character-toggle span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.dt-character-row>button:last-child{width:28px;height:28px;display:grid;place-items:center;border-radius:6px;flex:none}.dt-sidebar-chats{display:flex;flex-direction:column;margin:1px 0 4px 28px}.dt-sidebar-chat-row{height:28px;border-radius:6px;display:grid;grid-template-columns:minmax(0,1fr) repeat(3,26px);align-items:center;color:var(--dsw-alias-label-secondary)}.dt-sidebar-chat-open{height:28px;min-width:0;text-align:left;padding:0 7px;color:inherit;font-size:12px}.dt-sidebar-chat-open span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-sidebar-chat-row>button:not(.dt-sidebar-chat-open){width:26px;height:26px;display:grid;place-items:center;border-radius:5px;opacity:0}.dt-sidebar-chat-row:hover>button:not(.dt-sidebar-chat-open),.dt-sidebar-chat-row:focus-within>button:not(.dt-sidebar-chat-open){opacity:1}.dt-sidebar-chat-row.dt-sidebar-chat-active{color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-interactive-bg-hover)}.dt-sidebar-status,.dt-sidebar-error{padding:4px 7px;font-size:11px;line-height:16px}.dt-footer-action{box-sizing:border-box;cursor:pointer;color:var(--dsw-alias-label-primary);background:transparent;border:none;font-family:inherit;display:flex;align-items:center;overflow:hidden}.dt-footer-action-wide{width:calc(100% + 8px);height:34px;flex:none;justify-content:flex-start;gap:8px;margin:4px -4px;padding:6px 2px 6px 10px;border-radius:12px;font-size:14px;line-height:22px}.dt-footer-action-wide:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-footer-action-rail{width:36px;height:36px;flex:none;justify-content:center;gap:0;margin:8px 0 10px;padding:0;border-radius:50%}.dt-footer-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;line-height:22px}.dt-sidebar-heading-toggle{min-width:0;flex:1;width:auto;height:26px;display:flex;align-items:center;gap:6px;border-radius:6px;padding:0 5px;text-align:left;font-size:12px}.dt-sidebar-heading>button.dt-sidebar-heading-toggle{width:auto}.dt-sidebar-chevron{display:flex;align-items:center;flex:none}.dt-sidebar-chevron svg{transform:rotate(-90deg);transition:transform .15s}.dt-sidebar-chevron svg.dt-chevron-open{transform:rotate(0)}.dt-sidebar-heading-label{display:flex;align-items:center;gap:6px;min-width:0}.dt-sidebar-heading-label strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
          @media(max-width:700px){[role="dialog"]:has(.dt-settings){flex-direction:column}[role="dialog"]:has(.dt-settings)>nav{box-sizing:border-box;width:100%;height:auto;max-height:190px;flex:none;overflow-y:auto;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}[role="dialog"]:has(.dt-settings)>nav>:last-child{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));height:auto}[role="dialog"]:has(.dt-settings)>nav>:last-child>button{width:100%;min-width:0}[role="dialog"]:has(.dt-settings)>:not(nav){width:100%;min-width:0;flex:1}.dt-settings-heading{padding:16px}.dt-settings-band{padding:16px}.dt-settings-grid,.dt-check-grid{grid-template-columns:1fr}.dt-view{padding-inline:10px}.dt-transcript-end{height:132px}.dt-message{max-width:94%}.dt-header-character-copy{max-width:min(340px,52vw)}.dt-header-stats{max-width:100%}.dt-composer-wrap{padding-inline:8px}.dt-model-trigger{max-width:140px}.dt-message-edit{width:78vw}.dt-sidebar-chat-row>button:not(.dt-sidebar-chat-open){opacity:1}}
         .dt-persona-list{display:flex;flex-direction:column;gap:6px}.dt-persona-row{display:flex;align-items:center;gap:10px;min-height:44px;padding:4px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}.dt-persona-avatar{width:34px;height:34px;border-radius:6px;object-fit:cover;flex:none}.dt-persona-copy{display:flex;flex-direction:column;min-width:0;flex:1;gap:2px}.dt-persona-copy span{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-persona-actions{display:flex;gap:2px}.dt-persona-actions button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-persona-actions button:hover{background:var(--dsw-alias-interactive-bg-hover)}
         .dt-group-create{display:flex;flex-direction:column;gap:8px;margin:10px 0;padding:10px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}.dt-group-list{display:flex;flex-direction:column;gap:12px}.dt-group-manage{display:flex;flex-direction:column;gap:6px}.dt-group-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.dt-group-title>span{color:var(--dsw-alias-label-tertiary);font-size:12px}.dt-group-title select{height:30px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:inherit;background:var(--dsw-alias-bg-base);padding:0 6px}.dt-group-title>button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-group-members{display:flex;flex-wrap:wrap;gap:6px}
@@ -10515,16 +10516,16 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       installStyle()
       PanelHost.context = ctx
-      ctx.effect(() => ctx.locale.register(LOCALE_NS, { zh: MESSAGES_ZH, en: MESSAGES_EN }), 'dsh-tavern: locale dictionaries')
+      ctx.effect(() => ctx.locale.register(LOCALE_NS, { zh: MESSAGES_ZH, en: MESSAGES_EN }), 'dsh-soulmojito: locale dictionaries')
       translate = ctx.locale.bind(LOCALE_NS)
       subscribeLocale = (listener) => ctx.locale.subscribe(listener)
       getLocaleRevision = () => ctx.locale.getSnapshot()
       void refreshBootstrap().catch(() => {})
       ctx.slots.inject('settings.section', () => ctx.slots.register({
         name: 'settings.section',
-        id: 'dsh-tavern',
+        id: 'dsh-soulmojito',
         order: 45,
-        label: () => 'dsh-tavern',
+        label: () => 'dsh-soulmojito',
         inject: () => ({}),
       }, TavernSettings))
       ctx.slots.inject('conversation.view', () => ctx.slots.register({
@@ -10542,19 +10543,19 @@ window.__ModuleLoader__.load({
       }, TavernComposer))
       ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
         name: 'conversation.session.header.actions',
-        id: 'dsh-tavern',
+        id: 'dsh-soulmojito',
         order: -5,
         inject: () => ({}),
       }, TavernHeaderAction))
       ctx.slots.inject('shell.overlay', () => ctx.slots.register({
         name: 'shell.overlay',
-        id: 'dsh-tavern-panel',
+        id: 'dsh-soulmojito-panel',
         order: 20,
         inject: () => ({}),
       }, PanelHost))
       ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
         name: 'sidebar.footer.action',
-        id: 'dsh-tavern-panel',
+        id: 'dsh-soulmojito-panel',
         order: 20,
         inject: () => ({}),
       }, SidebarFooterAction))
@@ -10578,12 +10579,12 @@ window.__ModuleLoader__.load({
               description: () => translate('mvu.guide.description'),
               icon: IconDataOutline16,
             }],
-          }), 'dsh-tavern: sidebar-right mvu tab type')
+          }), 'dsh-soulmojito: sidebar-right mvu tab type')
           scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
             name: 'sidebar.right.pane.tab',
             key: MVU_TAB_ID,
             inject: (sessionId) => ({ sessionId }),
-          }, TavernMvuSidebarTab)), 'dsh-tavern: sidebar-right mvu tab body')
+          }, TavernMvuSidebarTab)), 'dsh-soulmojito: sidebar-right mvu tab body')
           // 对局面 tab（2026-10-14 修订）：与 MVU tab 同位——AgentTavern 的原生
           // 会话没有 TavernView 正文 slot，对局棋盘以右栏 tab 展示；对局开始时
           // 由 TavernHeaderAction 的 watcher 自动展开（openTab），也可从右栏
@@ -10600,17 +10601,17 @@ window.__ModuleLoader__.load({
               description: () => translate('games.guide.description'),
               icon: IconGamepadOutline16,
             }],
-          }), 'dsh-tavern: sidebar-right games tab type')
+          }), 'dsh-soulmojito: sidebar-right games tab type')
           scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
             name: 'sidebar.right.pane.tab',
             key: GAMES_TAB_ID,
             inject: (sessionId) => ({ sessionId }),
-          }, TavernGamesSidebarTab)), 'dsh-tavern: sidebar-right games tab body')
+          }, TavernGamesSidebarTab)), 'dsh-soulmojito: sidebar-right games tab body')
         })
       }
     }
 
-    exports.name = 'dsh-tavern'
+    exports.name = 'dsh-soulmojito'
     exports.inject = ['slots', 'sessions', 'workspaces', 'locale']
     exports.apply = apply
     return module.exports

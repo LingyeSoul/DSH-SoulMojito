@@ -42,7 +42,7 @@ const PLUGIN_MESSAGE = {
   id: 'msg-plugin',
   role: 'user',
   content: [{ type: 'text', text: '<tavern-anchor>reminder</tavern-anchor>' }],
-  source: { kind: 'plugin:dsh-tavern' },
+  source: { kind: 'plugin:dsh-soulmojito' },
 }
 const USER_MESSAGE = {
   id: 'msg-user',
@@ -127,7 +127,7 @@ describe('agent prompt-viewer records (agent/request tail)', () => {
   let warnings: string[]
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-agent-prompt-view-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-agent-prompt-view-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.importCharacter({
@@ -190,7 +190,7 @@ describe('agent prompt-viewer records (agent/request tail)', () => {
       void requestListener({ agent: { id: AGENT } }, async () => structuredClone(base))
       const latest = listPromptViews()[0]
       return latest !== undefined
-        && latest.agent?.sections.some((section) => section.name === 'dsh-tavern:agent-facts')
+        && latest.agent?.sections.some((section) => section.name === 'dsh-soulmojito:agent-facts')
         && latest.params.temperature === 0.7
     })
     // 链尾最终配置：预设温度覆盖生效（记录与返回同一形状——看到即实发）。
@@ -212,9 +212,9 @@ describe('agent prompt-viewer records (agent/request tail)', () => {
     expect(record.agent?.step).toBe(1)
     // guides 未配置 / script 未绑定剧本：空文本段摘除（宿主对空 context 同款语义）。
     expect(record.agent?.sections.map((section) => section.name)).toEqual([
-      'dsh-tavern:agent-kernel', 'dsh-tavern:agent-preset', 'dsh-tavern:agent-facts',
+      'dsh-soulmojito:agent-kernel', 'dsh-soulmojito:agent-preset', 'dsh-soulmojito:agent-facts',
     ])
-    const presetSection = record.agent!.sections.find((section) => section.name === 'dsh-tavern:agent-preset')!
+    const presetSection = record.agent!.sections.find((section) => section.name === 'dsh-soulmojito:agent-preset')!
     expect(presetSection.text).toContain('Agent preset body')
     expect(presetSection.order).toBe(-75)
     // system = 分面文本拼接（供 token 估算与快速浏览）。
@@ -277,19 +277,19 @@ describe('agentPromptSectionsFor coverage lock', () => {
     // 新增内置 section 必须同时改 apply 注册与 agentPromptSectionsFor 读取表：
     // 任一侧漂移都会在这里炸（名字或 order 不齐）。
     const builtin = [
-      { name: 'dsh-tavern:agent-kernel', order: -80, kind: 'section' },
-      { name: 'dsh-tavern:agent-preset', order: -75, kind: 'section' },
-      { name: 'dsh-tavern:agent-facts', order: -70, kind: 'context' },
-      { name: 'dsh-tavern:agent-guides', order: -65, kind: 'context' },
-      { name: 'dsh-tavern:agent-script', order: -64, kind: 'context' },
-      { name: 'dsh-tavern:agent-games', order: -63, kind: 'context' },
+      { name: 'dsh-soulmojito:agent-kernel', order: -80, kind: 'section' },
+      { name: 'dsh-soulmojito:agent-preset', order: -75, kind: 'section' },
+      { name: 'dsh-soulmojito:agent-facts', order: -70, kind: 'context' },
+      { name: 'dsh-soulmojito:agent-guides', order: -65, kind: 'context' },
+      { name: 'dsh-soulmojito:agent-script', order: -64, kind: 'context' },
+      { name: 'dsh-soulmojito:agent-games', order: -63, kind: 'context' },
     ]
     expect(registered).toEqual(builtin)
     // 读面方向：unbound agent 懒装载恒空，只验证「读面不产生注册面之外的段」；
     // 「注册面五段都进记录」的方向由上面的端到端记录测试锁（装载后逐段断言）。
     const allowed = new Set([
       ...builtin.map((section) => section.name),
-      ...modSectionSnapshot().map((entry) => `dsh-tavern:mod:${entry.modId}:${entry.definition.name}`),
+      ...modSectionSnapshot().map((entry) => `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`),
     ])
     for (const name of agentPromptSectionsFor('coverage-agent').map((section) => section.name)) {
       expect(allowed.has(name)).toBe(true)
@@ -300,7 +300,7 @@ describe('agentPromptSectionsFor coverage lock', () => {
     const dispose = registerModSection('mymod', { name: 'flavor', order: -999, text: 'MOD SECTION BODY {{raw}}' }, 0)
     try {
       const sections = agentPromptSectionsFor('coverage-agent')
-      const mod = sections.find((section) => section.name === 'dsh-tavern:mod:mymod:flavor')
+      const mod = sections.find((section) => section.name === 'dsh-soulmojito:mod:mymod:flavor')
       expect(mod).toBeDefined()
       // 越界 order 钳进 mod 专属区间（-50..0），与 agent-mount 挂载面同式。
       expect(mod!.order).toBe(-50)

@@ -6,9 +6,9 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const SERVER = fileURLToPath(new URL('../packages/plugin/index.mjs', import.meta.url))
-const tempRoot = mkdtempSync(join(tmpdir(), 'dsh-tavern-repro-'))
+const tempRoot = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-repro-'))
 process.env.DSH_HOME = join(tempRoot, 'dsh-home')
-process.env.DSH_TAVERN_DISABLE_UPDATE_CHECK = '1'
+process.env.DSH_SOULMOJITO_DISABLE_UPDATE_CHECK = '1'
 
 const routes = []
 let commandHandler = null
@@ -31,7 +31,7 @@ const agent = {
 
 const ctx = {
   logger: { info: () => {}, warn: (...args) => console.log('[warn]', ...args), error: (...args) => console.log('[error]', ...args) },
-  commands: { register: (value) => { if (value.name === 'dsh-tavern-session') commandHandler = value.handler; return () => {} } },
+  commands: { register: (value) => { if (value.name === 'dsh-soulmojito-session') commandHandler = value.handler; return () => {} } },
   systemPrompt: { section: () => () => {}, context: () => () => {} },
   webServer: { register: (value) => { routes.push(value); return () => {} } },
   effect: (callback) => { const dispose = callback(); return typeof dispose === 'function' ? dispose : () => {} },
@@ -57,10 +57,10 @@ mod.apply(ctx)
 await new Promise((resolve) => setTimeout(resolve, 200))
 
 // ---- route driver ----
-const route = routes.find((value) => value.kind === 'prefix' && value.path === '/api/dsh-tavern')
+const route = routes.find((value) => value.kind === 'prefix' && value.path === '/api/dsh-soulmojito')
 if (!route) throw new Error('prefix route missing')
 async function callRoute(method, path, body) {
-  const url = new URL(`http://localhost/api/dsh-tavern/${path}`)
+  const url = new URL(`http://localhost/api/dsh-soulmojito/${path}`)
   const res = {
     writableEnded: false,
     writeHead: (status) => { res.status = status },

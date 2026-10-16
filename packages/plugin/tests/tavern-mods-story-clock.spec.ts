@@ -11,13 +11,13 @@ import { checkModManifest, satisfiesVersionRange } from '../src/mods/manifest.js
 import { emitAssetsSaved } from '../src/mods/events.js'
 import { clearModRegistryForTest, modSectionSnapshot } from '../src/mods/cross-bundle.js'
 
-// 示例 Mod dsh-tavern.story-clock（examples/mods/）的行为锁定：
+// 示例 Mod dsh-soulmojito.story-clock（examples/mods/）的行为锁定：
 // 宏（{{clock}} 读聊天变量）/ STscript（/clock 族写聊天变量 + chatChanged）/
 // hook（user-input 变换位、post-save 观察位）/ prompt.section / llm 门控面 /
 // timers / 事件——与 asset-stats（P1 面）、mood-tracker（P2 三件套）互补，
 // 三个示例合计覆盖 mod-api.md 的全部能力面。
 
-const MOD_ID = 'dsh-tavern.story-clock'
+const MOD_ID = 'dsh-soulmojito.story-clock'
 const repoExampleMod = join(import.meta.dirname, '..', 'examples', 'mods', MOD_ID)
 
 // 宿主版本取本包真实发布版本（index.ts 的 BUILD_INFO.version 同源语义）——
@@ -127,8 +127,8 @@ describe('story-clock example mod', () => {
       // 推导而非硬编码字面量——升次版本时仍与 drift guard
       // （tavern-mods-examples.spec.ts）一起逼着同步示例清单（0.6.0 同步实践：
       // 2026-10-14 游戏桥发布）。
-      expect(check.manifest.engines?.dshTavern).toBe(`^${PLUGIN_VERSION}`)
-      expect(satisfiesVersionRange(PLUGIN_VERSION, check.manifest.engines!.dshTavern!).ok).toBe(true)
+      expect(check.manifest.engines?.dshSoulMojito).toBe(`^${PLUGIN_VERSION}`)
+      expect(satisfiesVersionRange(PLUGIN_VERSION, check.manifest.engines!.dshSoulMojito!).ok).toBe(true)
       expect(check.manifest.surfaces.hooks).toEqual(['user-input', 'post-save'])
       // 声明式按钮（A-1a）：CJK 显示名可声明
       expect(check.manifest.buttons).toEqual(['拨快 1 小时'])
@@ -156,7 +156,7 @@ describe('story-clock example mod', () => {
     expect(stateFile.values.buttonAdvances).toBe(1)
     // 状态路由的计数器披露按钮推进
     const statusRes = fakeRes()
-    await host.handleRoute(makeReq(), statusRes, 'GET', new URL('http://x/api/dsh-tavern/mods/dsh-tavern.story-clock/status'), MOD_ID, 'status')
+    await host.handleRoute(makeReq(), statusRes, 'GET', new URL('http://x/api/dsh-soulmojito/mods/dsh-soulmojito.story-clock/status'), MOD_ID, 'status')
     expect((JSON.parse(statusRes.chunks[0]!) as { counters: Record<string, number> }).counters.buttonAdvances).toBe(1)
     // 无上下文（面板 chips）：回落全局存储位
     await expect(host.dispatchButton(MOD_ID, '拨快 1 小时')).resolves.toBe('handled')
@@ -242,7 +242,7 @@ describe('story-clock example mod', () => {
     const statusRes = fakeRes()
     const handled = await host.handleRoute(
       makeReq(), statusRes, 'GET',
-      new URL('http://x/api/dsh-tavern/mods/dsh-tavern.story-clock/status'),
+      new URL('http://x/api/dsh-soulmojito/mods/dsh-soulmojito.story-clock/status'),
       MOD_ID, 'status',
     )
     expect(handled).toBe(true)
@@ -255,7 +255,7 @@ describe('story-clock example mod', () => {
     await host.handleRoute(
       makeReq(JSON.stringify({ character: 'Seraphina', chatId: 'chat-1', provider: 'test-provider', model: 'test-model' })),
       summarizeRes, 'POST',
-      new URL('http://x/api/dsh-tavern/mods/dsh-tavern.story-clock/summarize'),
+      new URL('http://x/api/dsh-soulmojito/mods/dsh-soulmojito.story-clock/summarize'),
       MOD_ID, 'summarize',
     )
     const summary = JSON.parse(summarizeRes.chunks[0]!) as { ok: boolean; summary: string; usage: unknown }
@@ -269,7 +269,7 @@ describe('story-clock example mod', () => {
     const bad = fakeRes()
     await host.handleRoute(
       makeReq(JSON.stringify({ character: 'Seraphina' })), bad, 'POST',
-      new URL('http://x/api/dsh-tavern/mods/dsh-tavern.story-clock/summarize'),
+      new URL('http://x/api/dsh-soulmojito/mods/dsh-soulmojito.story-clock/summarize'),
       MOD_ID, 'summarize',
     )
     expect(bad.statusCode).toBe(400)

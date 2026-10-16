@@ -61,7 +61,7 @@ import { AGENT_PRESET_BLOCK_HEADER } from '../agent-tavern/preset.js'
 import { mountPresetProjection } from '../preset-mount.js'
 import { mountModExtensions } from '../mods/agent-mount.js'
 
-export const name = 'dsh-tavern/novel'
+export const name = 'dsh-soulmojito/novel'
 export const inject = ['systemPrompt', 'tools']
 
 const KERNEL = [
@@ -96,7 +96,7 @@ let memoryStorePromise: Promise<MemoryStore> | undefined
 // 约束生效；不投影 temperature、不做卡覆盖、无激活预设不回落内置 RP 预设。
 // 小说不绑角色卡，{{char}} 回落占位语义（'the character'）。
 const presetMount = mountPresetProjection({
-  sectionName: 'dsh-tavern:novel-preset',
+  sectionName: 'dsh-soulmojito:novel-preset',
   architecture: 'agent-novel',
   stateFlag: 'agentNovelPresetEnabled',
   header: AGENT_PRESET_BLOCK_HEADER,
@@ -105,7 +105,7 @@ const presetMount = mountPresetProjection({
 
 export function apply(ctx: AgentContextLike): void {
   ctx.systemPrompt?.section?.({
-    name: 'dsh-tavern:novel-kernel',
+    name: 'dsh-soulmojito:novel-kernel',
     order: -80,
     // 守卫：内核为静态文本，但写入 {{...}}（宿主变量语法）会让装配抛错——
     // 过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
@@ -118,7 +118,7 @@ export function apply(ctx: AgentContextLike): void {
   void presetMount.preheat()
   const tools = createTools()
   for (const tool of tools) {
-    if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool), `dsh-tavern:novel:${tool.name}`)
+    if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool), `dsh-soulmojito:novel:${tool.name}`)
     else ctx.tools?.register?.(tool)
   }
   // Mod 扩展面（提案 0015 §3.4「Mod 工具同理进入 AgentTavern/AgentNovel 工具

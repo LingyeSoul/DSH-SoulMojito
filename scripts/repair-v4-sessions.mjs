@@ -1,5 +1,5 @@
 /**
- * Repair DSH session artifacts poisoned by dsh-tavern ≤0.3.9's pre-compat
+ * Repair DSH session artifacts poisoned by dsh-soulmojito ≤0.3.9's pre-compat
  * writers (the 0.2.0-rc.2 admission failures):
  *
  *   A. `assistant/chunk` rows — v0 vocabulary retired at the v1→v2 edge; the v4
@@ -218,15 +218,18 @@ function assertV4Container(buffer, rows) {
 /* -------------------------------- v4 repairs ------------------------------- */
 
 function isTavernPluginSource(source) {
-  return source?.kind === 'plugin:dsh-tavern' || (source?.kind === 'plugin' && source?.plugin === 'dsh-tavern')
+  // 改名兼容（2026-10-16）：存量工件由改名前的插件写入，旧名 dsh-tavern 双认。
+  return source?.kind === 'plugin:dsh-soulmojito' || source?.kind === 'plugin:dsh-tavern'
+    || (source?.kind === 'plugin' && (source?.plugin === 'dsh-soulmojito' || source?.plugin === 'dsh-tavern'))
 }
 
-/** v4 拒绝裸 'plugin' kind（要求 producer-owned）。与宿主 v3→v4 迁移同语义收敛。 */
+/** v4 拒绝裸 'plugin' kind（要求 producer-owned）。与宿主 v3→v4 迁移同语义收敛：
+ * kind 按原 plugin 值派生（`plugin:<name>`），新旧名工件各自保持身份。 */
 function repairSourceKind(source, stats) {
-  if (source?.kind !== 'plugin' || source?.plugin !== 'dsh-tavern') return source
+  if (source?.kind !== 'plugin' || (source?.plugin !== 'dsh-soulmojito' && source?.plugin !== 'dsh-tavern')) return source
   const { kind, plugin, ...members } = source
   stats.sourcesRewritten += 1
-  return { ...members, kind: 'plugin:dsh-tavern' }
+  return { ...members, kind: `plugin:${plugin}` }
 }
 
 /* ----------------------- protected surface head (E) ------------------------ */

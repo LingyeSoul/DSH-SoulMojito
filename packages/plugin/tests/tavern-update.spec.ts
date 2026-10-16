@@ -50,13 +50,13 @@ function fetchStub(handler: (url: string) => ReturnType<typeof jsonResponse> | P
 
 const HOUSING: Array<() => void> = []
 beforeEach(() => {
-  delete process.env.DSH_TAVERN_DSH_CLI
+  delete process.env.DSH_SOULMOJITO_DSH_CLI
   // 单元测试里关掉 curl 兜底，保证每个来源的成败只由注入的 fetch 替身决定。
-  process.env.DSH_TAVERN_DISABLE_CURL = '1'
+  process.env.DSH_SOULMOJITO_DISABLE_CURL = '1'
 })
 afterEach(() => {
-  delete process.env.DSH_TAVERN_DSH_CLI
-  delete process.env.DSH_TAVERN_DISABLE_CURL
+  delete process.env.DSH_SOULMOJITO_DSH_CLI
+  delete process.env.DSH_SOULMOJITO_DISABLE_CURL
   while (HOUSING.length > 0) HOUSING.pop()?.()
 })
 
@@ -144,7 +144,7 @@ describe('GitHub 响应解析', () => {
   it('解析 /commits/{ref}', () => {
     const commit = parseCommitResponse({
       sha: REMOTE_SHA,
-      html_url: 'https://github.com/LingyeSoul/dsh-tavern/commit/a1b2c3d',
+      html_url: 'https://github.com/LingyeSoul/DSH-SoulMojito/commit/a1b2c3d',
       commit: { message: '内置更新：发现新版本\n\nbody', author: { date: '2026-10-05T00:00:00Z' } },
     })
     expect(commit).toEqual({
@@ -152,7 +152,7 @@ describe('GitHub 响应解析', () => {
       short: 'a1b2c3d',
       message: '内置更新：发现新版本',
       date: '2026-10-05T00:00:00Z',
-      url: 'https://github.com/LingyeSoul/dsh-tavern/commit/a1b2c3d',
+      url: 'https://github.com/LingyeSoul/DSH-SoulMojito/commit/a1b2c3d',
     })
     expect(parseCommitResponse({ sha: 'nope' })).toBeNull()
     expect(parseCommitResponse(null)).toBeNull()
@@ -192,15 +192,15 @@ describe('GitHub 响应解析', () => {
 
 describe('pluginInstallSpec', () => {
   it('有 commit 时固定到 commit，否则用分支 ref', () => {
-    expect(pluginInstallSpec('LingyeSoul/dsh-tavern', 'main', REMOTE_SHA))
-      .toBe(`github:LingyeSoul/dsh-tavern#${REMOTE_SHA}&path:/packages/plugin`)
-    expect(pluginInstallSpec('LingyeSoul/dsh-tavern.git', 'main', 'unknown'))
-      .toBe('github:LingyeSoul/dsh-tavern#main&path:/packages/plugin')
+    expect(pluginInstallSpec('LingyeSoul/DSH-SoulMojito', 'main', REMOTE_SHA))
+      .toBe(`github:LingyeSoul/DSH-SoulMojito#${REMOTE_SHA}&path:/packages/plugin`)
+    expect(pluginInstallSpec('LingyeSoul/DSH-SoulMojito.git', 'main', 'unknown'))
+      .toBe('github:LingyeSoul/DSH-SoulMojito#main&path:/packages/plugin')
   })
 })
 
 describe('fetchRemoteBuild', () => {
-  const base = { repository: 'LingyeSoul/dsh-tavern', ref: 'main', localCommit: LOCAL_SHA }
+  const base = { repository: 'LingyeSoul/DSH-SoulMojito', ref: 'main', localCommit: LOCAL_SHA }
 
   it('优先走 api 来源并带上改动文件', async () => {
     const stub = fetchStub((url) => {
@@ -254,7 +254,7 @@ describe('fetchRemoteBuild', () => {
   })
 
   it('fetch 因证书/网络失败时用 curl 兜底（企业 TLS 中间人场景）', async () => {
-    delete process.env.DSH_TAVERN_DISABLE_CURL
+    delete process.env.DSH_SOULMOJITO_DISABLE_CURL
     const stub = fetchStub(() => {
       throw new TypeError('fetch failed', { cause: new Error('unable to verify the first certificate') })
     })
@@ -280,7 +280,7 @@ describe('fetchRemoteBuild', () => {
   })
 
   it('curl 兜底也失败时错误里同时带上 fetch 与 curl 的原因', async () => {
-    delete process.env.DSH_TAVERN_DISABLE_CURL
+    delete process.env.DSH_SOULMOJITO_DISABLE_CURL
     const stub = fetchStub(() => {
       throw new TypeError('fetch failed')
     })
@@ -298,8 +298,8 @@ describe('fetchRemoteBuild', () => {
     expect(result.error).toContain('SSL certificate problem')
   })
 
-  it('DSH_TAVERN_DISABLE_CURL 生效时不调用 curl 兜底', async () => {
-    process.env.DSH_TAVERN_DISABLE_CURL = '1'
+  it('DSH_SOULMOJITO_DISABLE_CURL 生效时不调用 curl 兜底', async () => {
+    process.env.DSH_SOULMOJITO_DISABLE_CURL = '1'
     const stub = fetchStub(() => jsonResponse({}, 502))
     let curlCalls = 0
     const result = await fetchRemoteBuild({
@@ -346,7 +346,7 @@ describe('TavernUpdateService', () => {
     const first = await instance.check()
     expect(first.status).toBe('update-available')
     expect(first.remote?.commit).toBe(REMOTE_SHA)
-    expect(first.spec).toBe(`github:LingyeSoul/dsh-tavern#${REMOTE_SHA}&path:/packages/plugin`)
+    expect(first.spec).toBe(`github:LingyeSoul/DSH-SoulMojito#${REMOTE_SHA}&path:/packages/plugin`)
     expect(updateChangelog(first)).toEqual([`a1b2c3d feat: update`])
     const fetches = stub.calls.length
     expect(fetches).toBeGreaterThan(0)
@@ -389,14 +389,14 @@ describe('TavernUpdateService', () => {
         installBundle: (spec: string, options: { requestId?: string }) => {
           specs.push(spec)
           emitInstallLog?.({ requestId: options?.requestId, text: 'Progress: resolved 1', stream: 'stdout' })
-          return Promise.resolve({ application: 'restart-required', changed: true, bundle: 'dsh-tavern' })
+          return Promise.resolve({ application: 'restart-required', changed: true, bundle: 'dsh-soulmojito' })
         },
       } : undefined),
     }
     const installed = new TavernUpdateService({ home, pluginDir: home, local, ctx, fetchImpl: stubOfRemote() })
     await installed.check({ force: true })
     const snapshot = await installed.install()
-    expect(specs).toEqual([`github:LingyeSoul/dsh-tavern#${REMOTE_SHA}&path:/packages/plugin`])
+    expect(specs).toEqual([`github:LingyeSoul/DSH-SoulMojito#${REMOTE_SHA}&path:/packages/plugin`])
     expect(snapshot.install.phase).toBe('done')
     expect(snapshot.install.strategy).toBe('plugin-manager')
     expect(snapshot.install.restartRequired).toBe(true)
@@ -486,7 +486,7 @@ function stubOfRemote(version = '0.3.9') {
 describe('落地路径选择', () => {
   const request = {
     ctx: {},
-    repository: 'LingyeSoul/dsh-tavern',
+    repository: 'LingyeSoul/DSH-SoulMojito',
     ref: 'main',
     commit: REMOTE_SHA,
     local: { version: '0.3.8', commit: LOCAL_SHA },
@@ -527,7 +527,7 @@ describe('落地路径选择', () => {
     const marker = join(tempDir('tavern-cli-'), 'argv.json')
     const cli = join(tempDir('tavern-cli-'), 'fake-cli.mjs')
     writeFileSync(cli, `import { writeFileSync } from 'node:fs'\nwriteFileSync(${JSON.stringify(marker)}, JSON.stringify(process.argv.slice(2)))\nprocess.exit(0)\n`)
-    process.env.DSH_TAVERN_DSH_CLI = cli
+    process.env.DSH_SOULMOJITO_DSH_CLI = cli
     const lines: string[] = []
     const outcome = await installViaCli({ ...request, log: (line) => lines.push(line), timeoutMs: 60_000 })
     expect(outcome?.ok).toBe(true)
@@ -536,13 +536,13 @@ describe('落地路径选择', () => {
     const argv = JSON.parse(readFileSync(marker, 'utf8')) as string[]
     expect(argv.slice(0, 3)).toEqual(['plugin', '--profile', 'desktop'])
     expect(argv[3]).toBe('add')
-    expect(argv[4]).toBe(`github:LingyeSoul/dsh-tavern#${REMOTE_SHA}&path:/packages/plugin`)
+    expect(argv[4]).toBe(`github:LingyeSoul/DSH-SoulMojito#${REMOTE_SHA}&path:/packages/plugin`)
   })
 
   it('CLI 退出码非 0 时返回 null 交给下一条路径', async () => {
     const cli = join(tempDir('tavern-cli-'), 'fake-cli.mjs')
     writeFileSync(cli, 'process.exit(3)\n')
-    process.env.DSH_TAVERN_DSH_CLI = cli
+    process.env.DSH_SOULMOJITO_DSH_CLI = cli
     const lines: string[] = []
     expect(await installViaCli({ ...request, log: (line) => lines.push(line), timeoutMs: 60_000 })).toBeNull()
     expect(lines.some((line) => line.includes('dsh plugin failed'))).toBe(true)
@@ -589,7 +589,7 @@ describe('落地工具', () => {
 
   it('readInstalledStamp 读 version.json，缺失时退回 package.json 与 spec', () => {
     const dir = tempDir('tavern-stamp-')
-    writeFileSync(join(dir, 'package.json'), '{"name":"dsh-tavern","version":"0.3.9"}')
+    writeFileSync(join(dir, 'package.json'), '{"name":"dsh-soulmojito","version":"0.3.9"}')
     expect(readInstalledStamp(dir)).toEqual({ version: '0.3.9', commit: 'unknown' })
     writeFileSync(join(dir, 'version.json'), '{"version":"0.3.9","commit":"a1b2c3d4e5f6"}')
     expect(readInstalledStamp(dir)).toEqual({ version: '0.3.9', commit: 'a1b2c3d' })
@@ -650,7 +650,7 @@ describe('update flow hardening (0.2.0-rc.2 audit)', () => {
 
   it('stampInstalledBuild 把目标 commit 戳进旁车，陈旧旁车也被覆盖', () => {
     const target = tempDir('stamp-target-')
-    writeFileSync(join(target, 'package.json'), JSON.stringify({ name: 'dsh-tavern', version: '0.5.0' }))
+    writeFileSync(join(target, 'package.json'), JSON.stringify({ name: 'dsh-soulmojito', version: '0.5.0' }))
     // 陈旧旁车（老 checkout 残留 / link: 开发仓库的上次构建）必须被目标 commit 覆盖，
     // 否则 readInstalledStamp 读回旧值、restart-required 永远差一拍。
     writeFileSync(join(target, 'version.json'), JSON.stringify({ version: '0.4.0', commit: 'deadbee' }))
@@ -664,17 +664,17 @@ describe('update flow hardening (0.2.0-rc.2 audit)', () => {
 
   it('installUpdate 成功后统一落戳：version.json 追上安装目标，installed 读回一致', async () => {
     const pluginDir = tempDir('stamp-install-')
-    writeFileSync(join(pluginDir, 'package.json'), JSON.stringify({ name: 'dsh-tavern', version: '0.5.0' }))
+    writeFileSync(join(pluginDir, 'package.json'), JSON.stringify({ name: 'dsh-soulmojito', version: '0.5.0' }))
     const ctx = {
       logger: { info: () => {} },
       on: () => () => {},
       get: (name: string) => (name === 'pluginManager' ? {
-        installBundle: async () => ({ application: 'restart-required', changed: true, bundle: 'dsh-tavern' }),
+        installBundle: async () => ({ application: 'restart-required', changed: true, bundle: 'dsh-soulmojito' }),
       } : undefined),
     }
     const logs: string[] = []
     const outcome = await installUpdate({
-      ctx, repository: 'LingyeSoul/dsh-tavern', ref: 'main', commit: REMOTE_SHA,
+      ctx, repository: 'LingyeSoul/DSH-SoulMojito', ref: 'main', commit: REMOTE_SHA,
       local: { version: '0.4.0', commit: LOCAL_SHA }, pluginDir, log: (line) => logs.push(line),
     })
     expect(outcome.ok).toBe(true)
@@ -758,7 +758,7 @@ describe('restart-required 收敛与幽灵防线（决策 2026-10-12）', () => 
       local,
       remote: null,
       pendingRestart: { version: '0.3.9', commit: 'a1b2c3d' },
-      pendingRestartPluginDir: 'C:\\other\\profile\\node_modules\\dsh-tavern',
+      pendingRestartPluginDir: 'C:\\other\\profile\\node_modules\\dsh-soulmojito',
     })
     const instance = make(home)
     await instance.check({ force: true })

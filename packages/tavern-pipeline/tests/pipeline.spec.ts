@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { assemblePrompt, type AssembleInput, type LlmMessage } from '../src/index.js'
-import { decodeCharacterCard, parsePreset, type CharacterCardIR, type PresetIR, type PromptOrderSet } from '@dsh-tavern/format'
+import { decodeCharacterCard, parsePreset, type CharacterCardIR, type PresetIR, type PromptOrderSet } from '@dsh-soulmojito/format'
 
 const fixturesDir = fileURLToPath(new URL('../../tavern-format/tests/fixtures', import.meta.url))
 const preset: PresetIR = parsePreset(JSON.parse(readFileSync(`${fixturesDir}/preset-Default.json`, 'utf8')))

@@ -13,7 +13,7 @@
 | branch/bookmark | format（bookmark_link 透传） | `chats/` + `chat_metadata.bookmark_link` | 消息级 branch 按钮 + 回链条 + 侧栏 ⑂ 标记 |
 | persona 导入管理 | format（复用卡解码） | `personas/<name>.json` + `personas/avatars/<name>.png` | 设置页管理带（增删改、导入、头像） |
 | 群聊 | format（group IR）+ pipeline（回合变换） | `groups/<name>.json` + `chats/<group>/` | 侧栏群组分区 + composer 成员触发 |
-| STscript / regex | `@dsh-tavern/script`（新包） | `state.json` `regexScripts` / chat 变量 | composer `/` 前缀执行 + 设置页 regex 导入 |
+| STscript / regex | `@dsh-soulmojito/script`（新包） | `state.json` `regexScripts` / chat 变量 | composer `/` 前缀执行 + 设置页 regex 导入 |
 | Text Completion | format（context/instruct/sampler 解析）+ pipeline（story_string 装配） | `presets/`（按形态区分）+ `state.json` `textCompletion` | 设置页管线/端点配置 |
 
 ## 2. branch / bookmark
@@ -44,7 +44,7 @@
 
 ## 5. STscript / regex
 
-- 新包 `@dsh-tavern/script`：
+- 新包 `@dsh-soulmojito/script`：
   - regex：ST `{scriptName, findRegex, replaceString, trimStrings, placement, disabled,
     promptOnly, markdownOnly, runOnEdit, substituteRegex, minDepth, maxDepth}` IR 与执行器。
     placement 位 `USER_INPUT=1 | AI_OUTPUT=2 | SLASH_COMMAND=3 | WORLD_INFO=5 | REASONING=6`。

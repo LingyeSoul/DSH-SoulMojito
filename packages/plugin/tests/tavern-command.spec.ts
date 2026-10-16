@@ -65,7 +65,7 @@ function makeV4SessionAgent(id: string) {
   return { ...agent, session: { ...agent.session, header: { version: 4 } } }
 }
 
-function makeRequest(body: unknown, url = '/api/dsh-tavern/generate', method = 'POST') {
+function makeRequest(body: unknown, url = '/api/dsh-soulmojito/generate', method = 'POST') {
   const listeners = new Map<string, (value?: unknown) => void>()
   return {
     method,
@@ -127,7 +127,7 @@ describe('internal Tavern session bridge occupation', () => {
   let emptyChatId: string
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-occupy-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-occupy-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.importCharacter({
@@ -227,7 +227,7 @@ describe('internal Tavern session bridge occupation', () => {
       effect: (fn) => { fn(); return () => {} },
     } as never)
     expect(definition).toBeDefined()
-    expect((definition as { name?: string }).name).toBe('dsh-tavern-session')
+    expect((definition as { name?: string }).name).toBe('dsh-soulmojito-session')
     handler = definition!.handler
     expect(apiHandler).toBeDefined()
   })
@@ -500,7 +500,7 @@ describe('internal Tavern session bridge occupation', () => {
       message: {
         role: 'assistant',
         content: [{ type: 'text', text: '早上好，旅行者。' }],
-        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' },
+        source: { kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-import' },
       },
     })
     expect(greeting.opts).toEqual({ surfaceOp: 'append' })
@@ -509,7 +509,7 @@ describe('internal Tavern session bridge occupation', () => {
     expect(importedUser.data).toMatchObject({
       role: 'user',
       content: [{ type: 'text', text: '你也是早上好。' }],
-      source: { kind: 'plugin:dsh-tavern' },
+      source: { kind: 'plugin:dsh-soulmojito' },
     })
     expect(importedUser.opts).toEqual({ surfaceOp: 'append' })
     const followUp = agent.session.events[14]!
@@ -518,7 +518,7 @@ describe('internal Tavern session bridge occupation', () => {
       step: 1,
       message: {
         content: [{ type: 'text', text: '今天想去哪里？' }],
-        source: { kind: 'model', provider: 'dsh-tavern', model: 'agent-tavern-import' },
+        source: { kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-import' },
       },
     })
     expect(turnStarts(agent).map((event) => event.data)).toEqual([{ turn: 1 }, { turn: 2 }, { turn: 3 }])
@@ -606,7 +606,7 @@ describe('internal Tavern session bridge occupation', () => {
       chatId: replayedChat,
       architecture: 'agent-tavern',
       contextMode: 'dsh-native',
-    }, '/api/dsh-tavern/binding'), makeResponse())
+    }, '/api/dsh-soulmojito/binding'), makeResponse())
     expect((await store.getState()).sessionBindings[agent.id]).toMatchObject({ initializationPending: true })
     // 投影器重放先于激活命令到达：会话里已有 turn，但没有预设 marker。
     agent.session.append('turn/start', { turn: 1 })
@@ -631,7 +631,7 @@ describe('internal Tavern session bridge occupation', () => {
 
   it('accepts the AgentTavern one-time asset preload setting', async () => {
     const res = makeResponse()
-    await apiHandler(makeRequest({ agentTavernPreloadAssets: true }, '/api/dsh-tavern/state'), res)
+    await apiHandler(makeRequest({ agentTavernPreloadAssets: true }, '/api/dsh-soulmojito/state'), res)
     expect(res.statusCode).toBe(200)
     expect((await store.getState()).agentTavernPreloadAssets).toBe(true)
   })
@@ -656,18 +656,18 @@ describe('internal Tavern session bridge occupation', () => {
       contextMode: 'dsh-native',
     }
     const bindingResponse = makeResponse()
-    await apiHandler(makeRequest(bindingBody, '/api/dsh-tavern/binding'), bindingResponse)
+    await apiHandler(makeRequest(bindingBody, '/api/dsh-soulmojito/binding'), bindingResponse)
     expect(bindingResponse.statusCode).toBe(200)
     expect((await store.getState()).sessionBindings[agent.id]).toMatchObject({ initializationPending: true })
 
     await handler({ agent, rawInput })
-    await apiHandler(makeRequest(bindingBody, '/api/dsh-tavern/binding'), makeResponse())
+    await apiHandler(makeRequest(bindingBody, '/api/dsh-soulmojito/binding'), makeResponse())
     await handler({ agent, rawInput })
 
     expect(agent.injections).toHaveLength(1)
     const message = agent.injections[0] as { role: string; content: Array<{ type: string; text: string }>; source: Record<string, unknown> }
     expect(message.role).toBe('user')
-    expect(message.source).toEqual({ kind: 'plugin', plugin: 'dsh-tavern', form: 'notice', summary: expect.stringContaining('AgentTavern preload') })
+    expect(message.source).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito', form: 'notice', summary: expect.stringContaining('AgentTavern preload') })
     expect(message.content[0]?.text).toContain('A test character')
     expect(message.content[0]?.text).toContain('unfiltered lore')
     expect(message.content[0]?.text).toContain('unfiltered active lore')
@@ -699,7 +699,7 @@ describe('internal Tavern session bridge occupation', () => {
       effect: (fn: () => unknown) => { fn(); return () => {} },
     } as unknown as AgentContextLike)
     const presetTextOf = (agentId: string): string =>
-      (sections.get('dsh-tavern:agent-preset')!.text as (assembly?: { agent?: { id?: string } }) => string)({ agent: { id: agentId } })
+      (sections.get('dsh-soulmojito:agent-preset')!.text as (assembly?: { agent?: { id?: string } }) => string)({ agent: { id: agentId } })
 
     const agent = makeAgent('session-agent-preset')
     const result = await handler({
@@ -715,7 +715,7 @@ describe('internal Tavern session bridge occupation', () => {
 
   it('exposes the read-only AgentTavern projection and state audit', async () => {
     const res = makeResponse()
-    await apiHandler(makeGetRequest('/api/dsh-tavern/agent-tavern/audit?sessionId=session-agent-tavern'), res)
+    await apiHandler(makeGetRequest('/api/dsh-soulmojito/agent-tavern/audit?sessionId=session-agent-tavern'), res)
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.chunks.join(''))).toMatchObject({
       ok: true,
@@ -729,7 +729,7 @@ describe('internal Tavern session bridge occupation', () => {
 
   it('publishes a dedicated path-backed DSH workspace for every Tavern architecture', async () => {
     const res = makeResponse()
-    await apiHandler(makeGetRequest('/api/dsh-tavern/bootstrap'), res)
+    await apiHandler(makeGetRequest('/api/dsh-soulmojito/bootstrap'), res)
     expect(res.statusCode).toBe(200)
     const body = JSON.parse(res.chunks.join(''))
     expect(body.internalWorkspace).toEqual({
@@ -749,7 +749,7 @@ describe('internal Tavern session bridge occupation', () => {
     writeFileSync(corruptPath, 'not json')
     try {
       const res = makeResponse()
-      await apiHandler(makeGetRequest('/api/dsh-tavern/bootstrap'), res)
+      await apiHandler(makeGetRequest('/api/dsh-soulmojito/bootstrap'), res)
       expect(res.statusCode).toBe(200)
       const body = JSON.parse(res.chunks.join(''))
       // 坏书按文件存在进名字列表，但只缺数不断路——bootstrap 不因单本损坏 500，
@@ -771,7 +771,7 @@ describe('internal Tavern session bridge occupation', () => {
     expect((await store.getState()).sessionBindings['session-agent-managed']).toBeUndefined()
     expect(agent.session.events).toHaveLength(0)
     const res = makeResponse()
-    await apiHandler(makeRequest({ defaultContextMode: 'agent-managed' }, '/api/dsh-tavern/state'), res)
+    await apiHandler(makeRequest({ defaultContextMode: 'agent-managed' }, '/api/dsh-soulmojito/state'), res)
     expect(res.statusCode).toBe(409)
     expect(res.chunks.join('')).toContain('TAVERN_ARCHITECTURE_CONFLICT')
     expect((await store.getState()).defaultContextMode).toBe('dsh-native')
@@ -822,7 +822,7 @@ describe('internal Tavern session bridge occupation', () => {
       },
     }
     const res = makeResponse()
-    await apiHandler(makeRequest({ card }, '/api/dsh-tavern/import/character'), res)
+    await apiHandler(makeRequest({ card }, '/api/dsh-soulmojito/import/character'), res)
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.chunks.join(''))).toMatchObject({ ok: true, name: 'Lore Carrier', world: 'Carrier Lore' })
     expect(await store.listWorlds()).toContain('Carrier Lore')
@@ -837,7 +837,7 @@ describe('internal Tavern session bridge occupation', () => {
   // 空白书（worldBookToFile({name, entries: []}) → {entries: {}}）必须合法。
   it('creates a world book via the panel PUT route with a fresh name', async () => {
     const res = makeResponse()
-    await apiHandler(makeRequest({ name: 'Blank Book', data: { entries: {} } }, `/api/dsh-tavern/world/${encodeURIComponent('Blank Book')}`, 'PUT'), res)
+    await apiHandler(makeRequest({ name: 'Blank Book', data: { entries: {} } }, `/api/dsh-soulmojito/world/${encodeURIComponent('Blank Book')}`, 'PUT'), res)
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.chunks.join(''))).toMatchObject({ ok: true, name: 'Blank Book', book: { name: 'Blank Book', entries: [] } })
     expect(await store.listWorlds()).toContain('Blank Book')
@@ -856,7 +856,7 @@ describe('internal Tavern session bridge occupation', () => {
           },
         },
       },
-    }, `/api/dsh-tavern/world/${encodeURIComponent('Manual Book')}`, 'PUT'), res)
+    }, `/api/dsh-soulmojito/world/${encodeURIComponent('Manual Book')}`, 'PUT'), res)
     expect(res.statusCode).toBe(200)
     const book = await store.getWorld('Manual Book')
     expect(book?.entries).toHaveLength(1)
@@ -868,7 +868,7 @@ describe('internal Tavern session bridge occupation', () => {
   // 过 parsePresetOrThrow 校验并按 chat-completion 识别。
   it('creates a blank chat-completion preset via the panel PUT route with a fresh name', async () => {
     const res = makeResponse()
-    await apiHandler(makeRequest({ name: 'Fresh Preset', data: { prompts: [], prompt_order: [] } }, `/api/dsh-tavern/preset/${encodeURIComponent('Fresh Preset')}`, 'PUT'), res)
+    await apiHandler(makeRequest({ name: 'Fresh Preset', data: { prompts: [], prompt_order: [] } }, `/api/dsh-soulmojito/preset/${encodeURIComponent('Fresh Preset')}`, 'PUT'), res)
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.chunks.join(''))).toMatchObject({ ok: true, name: 'Fresh Preset', kind: 'chat-completion' })
     expect(await store.listPresets()).toContain('Fresh Preset')
@@ -891,7 +891,7 @@ describe('internal Tavern session bridge occupation', () => {
       },
     }
     const res = makeResponse()
-    await apiHandler(makeRequest({ card }, '/api/dsh-tavern/import/character'), res)
+    await apiHandler(makeRequest({ card }, '/api/dsh-soulmojito/import/character'), res)
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.chunks.join(''))).toMatchObject({ ok: true, name: 'Regex Carrier', importedRegex: 1 })
     const state = await store.getState()
@@ -900,11 +900,11 @@ describe('internal Tavern session bridge occupation', () => {
 
   it('activates the linked world when a character becomes active', async () => {
     const res = makeResponse()
-    await apiHandler(makeRequest({ activeCharacter: 'Lore Carrier' }, '/api/dsh-tavern/state'), res)
+    await apiHandler(makeRequest({ activeCharacter: 'Lore Carrier' }, '/api/dsh-soulmojito/state'), res)
     expect(res.statusCode).toBe(200)
     expect((await store.getState()).activeWorlds).toContain('Carrier Lore')
     // 切回原角色：手动激活的世界书保持，新角色的链接世界并入
-    await apiHandler(makeRequest({ activeCharacter: CHARACTER }, '/api/dsh-tavern/state'), makeResponse())
+    await apiHandler(makeRequest({ activeCharacter: CHARACTER }, '/api/dsh-soulmojito/state'), makeResponse())
     const state = await store.getState()
     expect(state.activeWorlds).toContain('Carrier Lore')
     expect(state.activeWorlds).toContain('Linked Lore')
@@ -917,7 +917,7 @@ describe('internal Tavern session bridge occupation', () => {
     const res = makeResponse()
     await apiHandler(makeRequest({
       sessionId: 'session-carrier', character: 'Lore Carrier', chatId,
-    }, '/api/dsh-tavern/binding'), res)
+    }, '/api/dsh-soulmojito/binding'), res)
     expect(res.statusCode).toBe(200)
     expect((await store.getState()).activeWorlds).toContain('Carrier Lore')
   })
@@ -927,18 +927,18 @@ describe('internal Tavern session bridge occupation', () => {
     try {
       // 路由白名单可写开关；响应里的 state 反映归一化后的持久值
       const patchRes = makeResponse()
-      await apiHandler(makeRequest({ worldFollowsCharacter: false }, '/api/dsh-tavern/state'), patchRes)
+      await apiHandler(makeRequest({ worldFollowsCharacter: false }, '/api/dsh-soulmojito/state'), patchRes)
       expect(patchRes.statusCode).toBe(200)
       expect(JSON.parse(patchRes.chunks.join('')).state.worldFollowsCharacter).toBe(false)
       await store.patchState({ activeWorlds: [] })
       const res = makeResponse()
-      await apiHandler(makeRequest({ activeCharacter: 'Lore Carrier' }, '/api/dsh-tavern/state'), res)
+      await apiHandler(makeRequest({ activeCharacter: 'Lore Carrier' }, '/api/dsh-soulmojito/state'), res)
       expect(res.statusCode).toBe(200)
       const state = await store.getState()
       expect(state.activeCharacter).toBe('Lore Carrier')
       expect(state.activeWorlds).not.toContain('Carrier Lore')
       // 开关只关自动并入：同请求/单独请求显式给的世界书列表仍然生效
-      await apiHandler(makeRequest({ activeWorlds: ['Carrier Lore'] }, '/api/dsh-tavern/state'), makeResponse())
+      await apiHandler(makeRequest({ activeWorlds: ['Carrier Lore'] }, '/api/dsh-soulmojito/state'), makeResponse())
       expect((await store.getState()).activeWorlds).toContain('Carrier Lore')
     } finally {
       await store.patchState({
@@ -959,7 +959,7 @@ describe('internal Tavern session bridge occupation', () => {
       const res = makeResponse()
       await apiHandler(makeRequest({
         sessionId: 'session-no-follow', character: 'Lore Carrier', chatId,
-      }, '/api/dsh-tavern/binding'), res)
+      }, '/api/dsh-soulmojito/binding'), res)
       expect(res.statusCode).toBe(200)
       const state = await store.getState()
       expect(state.activeCharacter).toBe('Lore Carrier')
@@ -994,7 +994,7 @@ describe('internal Tavern session bridge occupation', () => {
         },
       }
       const res = makeResponse()
-      await apiHandler(makeRequest({ card }, '/api/dsh-tavern/import/character'), res)
+      await apiHandler(makeRequest({ card }, '/api/dsh-soulmojito/import/character'), res)
       expect(res.statusCode).toBe(200)
       const state = await store.getState()
       expect(state.activeCharacter).toBe('No Follow Carrier')
@@ -1149,7 +1149,7 @@ describe('internal Tavern session bridge occupation', () => {
       source: { kind: 'deduce', sessionId: 'session-agent-tavern' },
     })
     const res = makeResponse()
-    await apiHandler(makeGetRequest('/api/dsh-tavern/agent-tavern/audit?sessionId=session-agent-tavern'), res)
+    await apiHandler(makeGetRequest('/api/dsh-soulmojito/agent-tavern/audit?sessionId=session-agent-tavern'), res)
     expect(res.statusCode).toBe(200)
     const memory = JSON.parse(res.chunks.join('')).memories
       .find((candidate: { id?: unknown }) => candidate.id !== undefined)

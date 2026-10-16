@@ -1,6 +1,6 @@
-# 提案 0010：Turn Candidates（行动候选生成）— dsh-tavern 功能复刻
+# 提案 0010：Turn Candidates（行动候选生成）— dsh-soulmojito 功能复刻
 
-> 状态：已实现。日期：2026-10-07。参照物：`flizzywine/dsh-tavern`（AGPL-3.0）的**公开功能文档**
+> 状态：已实现。日期：2026-10-07。参照物：`flizzywine/dsh-soulmojito`（AGPL-3.0）的**公开功能文档**
 > （README「候选项」、`docs/feature-inventory.md` B05/B06：独立生成行动候选与场景变化；点击候选
 > 填入输入框，可修改后发送；可带意见重新生成），按本仓库 clean-room 教义从行为规格重实现，
 > 不复制其源码。实施期间禁止阅读该仓库源码。

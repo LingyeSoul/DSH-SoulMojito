@@ -573,7 +573,7 @@ export interface WriterDelegation {
 /** 双 bundle 防御（§6.1，照抄 novel.ts BOOT_ID 写法）：插件可能被多个 bundle
  *  各自实例化，进程内注册表若不锚定全局会静默失效；Symbol.for 跨副本取同一
  *  symbol，所有 bundle 共享同一底层 Map。条目在 run.dispose() 后由调用方清除。 */
-const WRITER_DELEGATIONS_KEY = Symbol.for('dsh-tavern:novel-writer-delegations')
+const WRITER_DELEGATIONS_KEY = Symbol.for('dsh-soulmojito:novel-writer-delegations')
 type WriterDelegationTable = Map<string, WriterDelegation>
 const writerDelegations: WriterDelegationTable = (globalThis as Record<symbol, WriterDelegationTable | undefined>)[WRITER_DELEGATIONS_KEY] ??= new Map()
 
@@ -824,7 +824,7 @@ export async function draftUnitViaSubagent(deps: {
   let run: SubagentRunLike | undefined
   try {
     run = await deps.runtime.start(WRITER_PROVIDER, {
-      label: `dsh-tavern novel-writer · ${deps.unitId}`,
+      label: `dsh-soulmojito novel-writer · ${deps.unitId}`,
       prompt: [{ type: 'text', text: pack }],
       parent: deps.parent,
       signal,
@@ -914,7 +914,7 @@ export async function runDelegatedWriter(deps: {
   let run: SubagentRunLike | undefined
   try {
     run = await deps.runtime.start(WRITER_PROVIDER, {
-      label: `dsh-tavern novel-writer · ${delegation.unitId}`,
+      label: `dsh-soulmojito novel-writer · ${delegation.unitId}`,
       prompt: [{ type: 'text', text: pack }],
       parent: deps.parent,
       signal,

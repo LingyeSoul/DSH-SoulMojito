@@ -49,6 +49,7 @@ import {
   type WriterMode,
 } from '../../tavern-store/src/index.js'
 import { confirmSessionAppend, describeHostShape, hostPluginMessageSource, hostSessionFormatVersion, landedPlanAppends, readSessionEvents, sessionEvents, type HostSessionLog } from '../../bind/src/index.js'
+import { envCompat } from './env-compat.js'
 import {
   AGENT_TAVERN_PRESET_ID,
   bootstrapAgentTavernCapabilities,
@@ -147,10 +148,10 @@ import { executeCardPlan, executeWorldPlan } from './card-workbench/agent.js'
 declare const __TAVERN_VERSION__: string | undefined
 declare const __TAVERN_COMMIT__: string | undefined
 
-export const name = 'dsh-tavern'
+export const name = 'dsh-soulmojito'
 export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools', 'compaction']
 
-const API = '/api/dsh-tavern'
+const API = '/api/dsh-soulmojito'
 const DEFAULT_USER = 'User'
 const TAVERN_WORKSPACE_TITLE = 'Tavern (internal)'
 // 写卡工作台专用内部工作区：工作台会话按聊天一一对应（提案 0013 排错场景），
@@ -191,7 +192,7 @@ let modHostContext: ModHostContext | undefined
 // 单进程单实例；apply 打开、effect 清理时 dispose 摘句柄。
 let gamesServicePromise: Promise<GamesService> | undefined
 // Prompt Template（提案 0008）总开关：默认开启；profile 行 templateEnabled: false
-// 或 DSH_TAVERN_DISABLE_TEMPLATES=1 关闭。无模板标签时链路直通，无额外开销。
+// 或 DSH_SOULMOJITO_DISABLE_TEMPLATES=1 关闭。无模板标签时链路直通，无额外开销。
 let templatesEnabledFlag = true
 
 class TavernArchitectureConflictError extends Error {
@@ -258,7 +259,7 @@ async function modHostProjection(ctx): Promise<unknown[]> {
       surfaces: mod.surfaces,
     }))
   } catch (cause) {
-    ctx?.logger?.warn?.(`dsh-tavern: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`)
+    ctx?.logger?.warn?.(`dsh-soulmojito: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`)
     return []
   }
 }
@@ -268,8 +269,8 @@ function novelStore(): Promise<NovelStore> {
 }
 
 /**
- * 自更新服务：默认开启自动发现（延迟首查 + 6h 复查），profile 里给 dsh-tavern
- * 行写 `checkForUpdates: false` 或设 `DSH_TAVERN_DISABLE_UPDATE_CHECK=1` 可关闭。
+ * 自更新服务：默认开启自动发现（延迟首查 + 6h 复查），profile 里给 dsh-soulmojito
+ * 行写 `checkForUpdates: false` 或设 `DSH_SOULMOJITO_DISABLE_UPDATE_CHECK=1` 可关闭。
  * 本地 stamp 见 readBuildInfo——模块加载时磁盘上的 version.json 旁车（安装器
  * 成功后统一落戳）优先，构建期 define 只是旁车缺席时的兜底；靠恒滞后一拍的
  * 字面量做身份会让 restart-required 永远解除不了（决策 2026-10-12）。
@@ -291,22 +292,22 @@ function tavernUpdate(ctx): TavernUpdateService {
 }
 
 /**
- * 自动发现的开关：profile 的 dsh-tavern 行 `checkForUpdates: false`
- * 或环境变量 `DSH_TAVERN_DISABLE_UPDATE_CHECK` 非空即关闭。
+ * 自动发现的开关：profile 的 dsh-soulmojito 行 `checkForUpdates: false`
+ * 或环境变量 `DSH_SOULMOJITO_DISABLE_UPDATE_CHECK` 非空即关闭。
  */
 function updateChecksEnabled(config: { checkForUpdates?: unknown } = {}): boolean {
   if (config.checkForUpdates === false) return false
-  const disabled = process.env.DSH_TAVERN_DISABLE_UPDATE_CHECK?.trim()
+  const disabled = envCompat('DISABLE_UPDATE_CHECK')?.trim()
   return !(disabled !== undefined && disabled !== '' && disabled !== '0' && disabled !== 'false')
 }
 
 /**
- * Prompt Template 开关（提案 0008）：profile 的 dsh-tavern 行 `templateEnabled: false`
- * 或环境变量 `DSH_TAVERN_DISABLE_TEMPLATES` 非空即关闭。
+ * Prompt Template 开关（提案 0008）：profile 的 dsh-soulmojito 行 `templateEnabled: false`
+ * 或环境变量 `DSH_SOULMOJITO_DISABLE_TEMPLATES` 非空即关闭。
  */
 function templatesEnabled(config: { templateEnabled?: unknown } = {}): boolean {
   if (config.templateEnabled === false) return false
-  const disabled = process.env.DSH_TAVERN_DISABLE_TEMPLATES?.trim()
+  const disabled = envCompat('DISABLE_TEMPLATES')?.trim()
   return !(disabled !== undefined && disabled !== '' && disabled !== '0' && disabled !== 'false')
 }
 
@@ -320,7 +321,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
   templatesEnabledFlag = templatesEnabled(config)
   const adapter = createDshAgentTavernAdapter(ctx)
   // 宿主形状一次性上报：rc.6 与 0.1.2+ 的绑定路径差异排查从这行日志读起。
-  ctx.logger?.info?.(`dsh-tavern host shape: ${JSON.stringify(describeHostShape(ctx))}`)
+  ctx.logger?.info?.(`dsh-soulmojito host shape: ${JSON.stringify(describeHostShape(ctx))}`)
   agentTavernCapabilitiesPromise = bootstrapAgentTavernCapabilities(adapter, {
     presetId: AGENT_TAVERN_PRESET_ID,
     ensurePreset: () => ensureAgentPresetDeclared(ctx, AGENT_TAVERN_PRESET_ID),
@@ -342,7 +343,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
       try {
         // ctx.effect runs the callback now and calls its return value at
         // unload; returning the disposer keeps that contract intact.
-        ctx.effect?.(() => () => { void driver.dispose() }, 'dsh-tavern:novel-driver-dispose')
+        ctx.effect?.(() => () => { void driver.dispose() }, 'dsh-soulmojito:novel-driver-dispose')
       } catch {
         // A host that rejects a late effect registration only loses unload
         // disposal; scheduling itself is unaffected.
@@ -350,7 +351,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
       return driver
     })
     .catch((error: unknown) => {
-      ctx.logger?.warn?.(`dsh-tavern: AgentNovel driver unavailable: ${error instanceof Error ? error.message : String(error)}`)
+      ctx.logger?.warn?.(`dsh-soulmojito: AgentNovel driver unavailable: ${error instanceof Error ? error.message : String(error)}`)
       return undefined
     })
   ctx.on?.('session/event', (session, event) => {
@@ -396,7 +397,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
   // §12.3 restart recovery runs after apply returns; it never blocks mounting.
   void recoverMountedNovels(ctx)
   ctx.systemPrompt.section({
-    name: 'dsh-tavern:active-character',
+    name: 'dsh-soulmojito:active-character',
     order: 25,
     text: () => activeAgentPrompt,
   })
@@ -404,8 +405,8 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
   ctx.commands.register({
     // Internal bridge for the client binding API. It is intentionally separate
     // from the public slash-command surface.
-    name: 'dsh-tavern-session',
-    description: 'internal dsh-tavern session bridge',
+    name: 'dsh-soulmojito-session',
+    description: 'internal dsh-soulmojito session bridge',
     input: { hint: '<character> <chat-id>' },
     recordInput: false,
     handler: async ({ agent, rawInput }) => {
@@ -439,7 +440,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
             && (event.data?.source as { summary?: unknown } | undefined)?.summary === 'Tavern closed'),
         })
         if (!closed) {
-          throw new Error(`dsh-tavern: the Tavern close marker could not be confirmed in session '${agent.id}' after a rewrite; the host accepted the append but the read-back found no trace`)
+          throw new Error(`dsh-soulmojito: the Tavern close marker could not be confirmed in session '${agent.id}' after a rewrite; the host accepted the append but the read-back found no trace`)
         }
         return { kind: 'success', text: 'Tavern closed' }
       }
@@ -521,7 +522,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
               && event.data?.agentPreset === preset.id),
           })
           if (!selected) {
-            throw new Error(`dsh-tavern: the AgentTavern preset marker could not be confirmed in session '${agent.id}' after a rewrite; the session would silently lose its preset identity on reload`)
+            throw new Error(`dsh-soulmojito: the AgentTavern preset marker could not be confirmed in session '${agent.id}' after a rewrite; the session would silently lose its preset identity on reload`)
           }
         }
       }
@@ -640,7 +641,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
             present: markerPresent,
           })
           if (!activated) {
-            throw new Error(`dsh-tavern: the Tavern activation marker could not be confirmed in session '${agent.id}' after a rewrite; the client composer would never take over an unmarked session`)
+            throw new Error(`dsh-soulmojito: the Tavern activation marker could not be confirmed in session '${agent.id}' after a rewrite; the client composer would never take over an unmarked session`)
           }
         }
       }
@@ -648,7 +649,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
     },
   })
 
-  ctx.effect(() => tavernUpdate(ctx).start(), 'dsh-tavern: update auto-check')
+  ctx.effect(() => tavernUpdate(ctx).start(), 'dsh-soulmojito: update auto-check')
 
   // 游戏桥运行时（提案 0018 P0+P2）：扫描注册表（内置 + installed 目录）并
   // 发布 globalThis 句柄。装载是异步的，不阻塞 apply 返回；坏游戏 broken 入
@@ -683,19 +684,19 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
     },
   })
   gamesServicePromise.catch((error: unknown) => {
-    ctx.logger?.warn?.(`dsh-tavern: games service failed to start: ${error instanceof Error ? error.message : String(error)}`)
+    ctx.logger?.warn?.(`dsh-soulmojito: games service failed to start: ${error instanceof Error ? error.message : String(error)}`)
   })
   try {
     ctx.effect?.(() => () => {
       void gamesServicePromise?.then((service) => service.dispose()).catch(() => {})
       gamesServicePromise = undefined
-    }, 'dsh-tavern: games unload')
+    }, 'dsh-soulmojito: games unload')
   } catch {
     // 拒绝晚注册 effect 的宿主只失去摘句柄兜底；句柄本身不受影响。
   }
 
   // Mod 宿主（提案 0015 P3）：stores 就绪后扫描 <tavern>/mods/ 并按三层
-  // 开关装载（双默认 false + DSH_TAVERN_DISABLE_MODS 硬关）。装载是异步的，
+  // 开关装载（双默认 false + DSH_SOULMOJITO_DISABLE_MODS 硬关）。装载是异步的，
   // 不阻塞 apply 返回；坏 Mod 只记审计与错误位。宿主卸载时统一 dispose。
   // P3 起装载在游戏服务**落定之后**串行开始：api.games.register 在 setup 期
   // 经 globalThis 句柄直调注册表，句柄未发布会 fail-fast 把注册游戏的 Mod 打
@@ -703,10 +704,10 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
   // Mod 装载（catch 后继续；注册游戏的 Mod 会如实报 games runtime 不可用）。
   modHostContext = ctx
   void gamesServicePromise.catch(() => {}).then(() => modHost()).catch((error: unknown) => {
-    ctx.logger?.warn?.(`dsh-tavern: mod host failed to start: ${error instanceof Error ? error.message : String(error)}`)
+    ctx.logger?.warn?.(`dsh-soulmojito: mod host failed to start: ${error instanceof Error ? error.message : String(error)}`)
   })
   try {
-    ctx.effect?.(() => () => { void modHost().then((host) => host.disposeAll()).catch(() => {}) }, 'dsh-tavern: mods unload')
+    ctx.effect?.(() => () => { void modHost().then((host) => host.disposeAll()).catch(() => {}) }, 'dsh-soulmojito: mods unload')
   } catch {
     // 拒绝晚注册 effect 的宿主只失去卸载兜底；装载本身不受影响。
   }
@@ -724,7 +725,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
           // ownership messages carry internal paths and pids.
           const novelFailure = novelHttpFailure(error)
           if (novelFailure !== undefined) {
-            ctx.logger?.warn?.(`dsh-tavern: novel route failed (${novelFailure.code}): ${error instanceof Error ? error.message : String(error)}`, { operation: 'novels-api', errorCode: novelFailure.code })
+            ctx.logger?.warn?.(`dsh-soulmojito: novel route failed (${novelFailure.code}): ${error instanceof Error ? error.message : String(error)}`, { operation: 'novels-api', errorCode: novelFailure.code })
           }
           const message = novelFailure?.sanitized === true
             ? `Novel failure '${novelFailure.code}'; see the server log for details.`
@@ -744,7 +745,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
         }
       }
     },
-  }), 'dsh-tavern: API')
+  }), 'dsh-soulmojito: API')
 }
 
 /** guides 路由的聊天快照读取：store 的 safeChatFileName 对空/畸形 chatId 抛
@@ -1193,7 +1194,7 @@ async function handleApi(ctx, req, res) {
     try {
       await saveOriginalSnapshot(dshHomePath('tavern'), result.card.data.name, result.card)
     } catch (error) {
-      console.warn(`dsh-tavern: original snapshot for '${result.card.data.name}' failed: ${error instanceof Error ? error.message : String(error)}`)
+      console.warn(`dsh-soulmojito: original snapshot for '${result.card.data.name}' failed: ${error instanceof Error ? error.message : String(error)}`)
     }
     const current = await db.getState()
     if (!current.activeCharacter) {
@@ -2909,7 +2910,7 @@ async function recoverMountedNovels(ctx: NovelPluginContext): Promise<void> {
       await indexPendingCommits(ctx, binding.novelId)
     }
   } catch (error) {
-    ctx.logger?.warn?.('dsh-tavern: AgentNovel recovery indexing failed', { operation: 'recover', errorCode: errorCodeText(error) })
+    ctx.logger?.warn?.('dsh-soulmojito: AgentNovel recovery indexing failed', { operation: 'recover', errorCode: errorCodeText(error) })
   }
 }
 
@@ -2930,7 +2931,7 @@ async function handleNovelSessionEvent(ctx: NovelPluginContext, session: unknown
     if (binding === undefined || binding.architecture !== 'agent-novel') return
     novelId = binding.novelId
   } catch (error) {
-    ctx.logger?.warn?.('dsh-tavern: AgentNovel binding read failed', { sessionId, operation: 'novel-event', errorCode: errorCodeText(error) })
+    ctx.logger?.warn?.('dsh-soulmojito: AgentNovel binding read failed', { sessionId, operation: 'novel-event', errorCode: errorCodeText(error) })
     return
   }
   const record = event as { type?: unknown } | null | undefined
@@ -2944,7 +2945,7 @@ async function handleNovelSessionEvent(ctx: NovelPluginContext, session: unknown
     if (isNovelAuthorMessage(event as { type?: string; data?: unknown })) {
       const outcome = await receiveAuthorMessage(await novelStore(), novelId, sessionId, event)
       if (!outcome.accepted && !outcome.duplicate) {
-        ctx.logger?.warn?.('dsh-tavern: AgentNovel receive barrier rejected a message', {
+        ctx.logger?.warn?.('dsh-soulmojito: AgentNovel receive barrier rejected a message', {
           novelId,
           sessionId,
           operation: 'receive-requirement',
@@ -2953,7 +2954,7 @@ async function handleNovelSessionEvent(ctx: NovelPluginContext, session: unknown
       }
     }
   } catch (error) {
-    ctx.logger?.warn?.('dsh-tavern: AgentNovel session event handling failed', { novelId, sessionId, operation: 'novel-event', errorCode: errorCodeText(error) })
+    ctx.logger?.warn?.('dsh-soulmojito: AgentNovel session event handling failed', { novelId, sessionId, operation: 'novel-event', errorCode: errorCodeText(error) })
   }
 }
 
@@ -2976,7 +2977,7 @@ async function indexPendingCommits(ctx: NovelPluginContext, novelId: string): Pr
     try {
       await projector.indexCommit(novelId, commit.commitId)
     } catch (error) {
-      ctx.logger?.warn?.('dsh-tavern: AgentNovel memory index write failed', { novelId, commitId: commit.commitId, operation: 'index-commit', errorCode: errorCodeText(error) })
+      ctx.logger?.warn?.('dsh-soulmojito: AgentNovel memory index write failed', { novelId, commitId: commit.commitId, operation: 'index-commit', errorCode: errorCodeText(error) })
     }
   }
 }
@@ -3156,7 +3157,7 @@ async function ensureAgentPresetDeclared(
     : undefined
   if (!Array.isArray(inventory) || !inventory.some((entry) => entry?.id === presetId)) {
     throw new Error(
-      `preset '${presetId}' is not declared on this host; reinstall the dsh-tavern bundle so its cordis.patch.yml preset rows mount (DSH 0.2.0-rc.2+ preset delivery)`,
+      `preset '${presetId}' is not declared on this host; reinstall the dsh-soulmojito bundle so its cordis.patch.yml preset rows mount (DSH 0.2.0-rc.2+ preset delivery)`,
     )
   }
 }
@@ -3696,7 +3697,7 @@ async function buildGenerationLlmRequest(ctx, db, options: GenerationAssemblyOpt
     // 仅进 ctx.llm.stream 的请求消息，不落会话日志（该调用不带 sessionId），
     // dsh-llm 对 source 不校验；v0 形状在此保留——装配作用域内没有会话对象
     // 可供格式探测。
-    source: m.role === 'assistant' ? { kind: 'model', provider, model } : m.role === 'user' ? { kind: 'user' } : { kind: 'plugin', plugin: 'dsh-tavern' },
+    source: m.role === 'assistant' ? { kind: 'model', provider, model } : m.role === 'user' ? { kind: 'user' } : { kind: 'plugin', plugin: 'dsh-soulmojito' },
   }))
   // 带意见重写（提案 0011）：意见是一次性生成指引，作为 system 段末尾块
   // （guides 块之后）注入，不落任何楼层。
@@ -4707,7 +4708,7 @@ function buildTimeStamp(): { version: string; commit: string } {
 }
 
 function resolveTavernCommit(buildFallback: string): string {
-  const fallback = normalizeCommit(process.env.DSH_TAVERN_COMMIT ?? buildFallback) ?? 'unknown'
+  const fallback = normalizeCommit(envCompat('COMMIT') ?? buildFallback) ?? 'unknown'
   const repositoryRoot = resolve(import.meta.dirname, '..', '..')
   const packagePath = relative(repositoryRoot, import.meta.dirname).replaceAll('\\', '/')
   if (packagePath !== 'packages/plugin') return fallback
@@ -4793,7 +4794,7 @@ function numberOr(value, fallback) {
 }
 
 /**
- * `/api/dsh-tavern/update` 路由族：
+ * `/api/dsh-soulmojito/update` 路由族：
  * - `GET  update`         → 缓存快照（`?refresh=1` 穿透 TTL 重新检查）；
  * - `POST update/check`   → 强制检查远端；
  * - `POST update/install` → 开始安装。默认等安装结束再回；`{ wait: false }`
@@ -4827,7 +4828,7 @@ async function handleUpdateApi(ctx, req, res, url, route, method) {
 }
 
 /**
- * `/api/dsh-tavern/mods` 路由族（提案 0015 §3.2/§3.3 P1）：
+ * `/api/dsh-soulmojito/mods` 路由族（提案 0015 §3.2/§3.3 P1）：
  * - `GET  mods`                → 管理快照（清单/状态/错误位/审计计数 + 两层开关）；
  * - `POST mods/state`          → `{ globalEnabled }` 全局开关（三层第二层）；
  * - `POST mods/<id>/enable`    → 逐 Mod 开关（第三层；启用即装载——两层同开才装）；
@@ -4849,7 +4850,7 @@ async function handleModsApi(ctx, req, res, url, route, method) {
   try {
     host = await modHost()
   } catch (cause) {
-    ctx.logger?.warn?.(`dsh-tavern: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`)
+    ctx.logger?.warn?.(`dsh-soulmojito: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`)
     if (method === 'GET' && route === 'mods') {
       return sendJson(res, 200, { ok: true, available: false, reason: 'mod host unavailable', globalEnabled: false, mods: [] })
     }

@@ -15,10 +15,10 @@
  * - squash_system_messages：相邻 system 合并；
  * - 用户条目绝对位置注入（injection_position=1 @Depth）MVP 支持深度插入。
  *
- * 宏展开与 token 计数经依赖注入（上层接 @dsh-tavern/macros）。
+ * 宏展开与 token 计数经依赖注入（上层接 @dsh-soulmojito/macros）。
  */
 
-import type { ChatMessage, CharacterCardIR, PresetIR, PresetPrompt, PromptOrderSet } from '@dsh-tavern/format'
+import type { ChatMessage, CharacterCardIR, PresetIR, PresetPrompt, PromptOrderSet } from '@dsh-soulmojito/format'
 
 export interface AssembleDeps {
   /** 宏展开（上层接 tavern-macros）。 */

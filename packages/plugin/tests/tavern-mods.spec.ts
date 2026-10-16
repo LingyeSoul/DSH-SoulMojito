@@ -30,12 +30,12 @@ import { TavernStore } from '../../tavern-store/src/index.js'
 // Mod 加载器（提案 0015 §3.2/§3.3 P1）：
 // - 单元：清单校验各失败形态、semver 匹配、storage 配额、http path 白名单、
 //   三层开关矩阵（假 state store）、reload dispose 链、坏 Mod 不断路、审计线。
-// - e2e：真实临时 DSH_HOME + apply() + 示例 Mod（examples/mods/dsh-tavern.asset-stats）走完
+// - e2e：真实临时 DSH_HOME + apply() + 示例 Mod（examples/mods/dsh-soulmojito.asset-stats）走完
 //   扫描 → 双默认关 → 两层启用 → setup 执行 → http 路由可访 → 禁用 404 →
 //   reload；坏 mod.json 跳过且本体路由正常；env 硬关实时生效。
 
-const EXAMPLE_MOD_ID = 'dsh-tavern.asset-stats'
-const repoExampleMod = join(import.meta.dirname, '..', 'examples', 'mods', 'dsh-tavern.asset-stats')
+const EXAMPLE_MOD_ID = 'dsh-soulmojito.asset-stats'
+const repoExampleMod = join(import.meta.dirname, '..', 'examples', 'mods', 'dsh-soulmojito.asset-stats')
 
 function tempHome(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -115,7 +115,7 @@ describe('mod manifest validation', () => {
       expect(check.ok).toBe(true)
     }
     const rich = checkModManifest(
-      validManifest({ capabilities: ['llm', 'storage'], loadingOrder: 5, panel: { title: '心情', icon: 'sparkle' }, engines: { 'dsh-tavern': '>=0.4.0' } }),
+      validManifest({ capabilities: ['llm', 'storage'], loadingOrder: 5, panel: { title: '心情', icon: 'sparkle' }, engines: { 'dsh-soulmojito': '>=0.4.0' } }),
       options,
     )
     expect(rich.ok).toBe(true)
@@ -123,8 +123,12 @@ describe('mod manifest validation', () => {
       expect(rich.manifest.capabilities).toEqual(['llm', 'storage'])
       expect(rich.manifest.loadingOrder).toBe(5)
       expect(rich.manifest.panel).toEqual({ title: '心情', icon: 'sparkle' })
-      expect(rich.manifest.engines?.dshTavern).toBe('>=0.4.0')
+      expect(rich.manifest.engines?.dshSoulMojito).toBe('>=0.4.0')
     }
+    // 改名兼容（2026-10-16）：旧键 engines['dsh-tavern'] 双读，归一进同一内部字段。
+    const legacy = checkModManifest(validManifest({ engines: { 'dsh-tavern': '>=0.4.0' } }), options)
+    expect(legacy.ok).toBe(true)
+    if (legacy.ok) expect(legacy.manifest.engines?.dshSoulMojito).toBe('>=0.4.0')
   })
 
   it('rejects non-object payloads', () => {
@@ -171,7 +175,7 @@ describe('mod manifest validation', () => {
       { panel: { title: 5 } },
       { panel: { title: 't', icon: 7 } },
       { engines: '>=1' },
-      { engines: { 'dsh-tavern': 42 } },
+      { engines: { 'dsh-soulmojito': 42 } },
     ]) {
       expect(checkModManifest(validManifest(overrides), options).ok).toBe(false)
     }
@@ -241,7 +245,7 @@ describe('engines semver matcher', () => {
     ] as const) {
       expect(satisfiesVersionRange(version, range).ok).toBe(false)
     }
-    expect(satisfiesVersionRange('0.4.1', '>=1.0').reason).toContain('requires dsh-tavern')
+    expect(satisfiesVersionRange('0.4.1', '>=1.0').reason).toContain('requires dsh-soulmojito')
     expect(satisfiesVersionRange('0.4.1', 'garbage!').reason).toContain('invalid comparator')
   })
 })
@@ -250,7 +254,7 @@ describe('engines semver matcher', () => {
 
 describe('mod storage quotas', () => {
   let home: string
-  beforeAll(() => { home = tempHome('dsh-tavern-modstore-') })
+  beforeAll(() => { home = tempHome('dsh-soulmojito-modstore-') })
   afterAll(() => { rmSync(home, { recursive: true, force: true }) })
 
   it('round-trips values and persists across instances', async () => {
@@ -392,7 +396,7 @@ describe('mod http path whitelist', () => {
     ]) {
       const injected = renderModHtmlDocument(document, "default-src 'none'")
       expect(injected).toContain('<meta http-equiv="Content-Security-Policy"')
-      expect(injected).toContain("dsh-tavern:mod-log")
+      expect(injected).toContain("dsh-soulmojito:mod-log")
       // token 从 URL 查询段自读，无 token 静默跳过（脚本内的守卫）
       expect(injected).toContain("new URLSearchParams(location.search).get('token')")
       expect(injected).toContain('unhandledrejection')
@@ -439,19 +443,19 @@ export async function setup(api) {
 
   async function route(host: ModHost, path: string, method = 'GET') {
     const res = fakeRes()
-    const url = new URL(`http://localhost/api/dsh-tavern/mods/${path}`)
+    const url = new URL(`http://localhost/api/dsh-soulmojito/mods/${path}`)
     const handled = await host.handleRoute({ on: () => undefined }, res, method, url, path.split('/')[0]!, path.split('/').slice(1).join('/'))
     return { handled, res }
   }
 
   let home: string
   beforeAll(() => {
-    home = tempHome('dsh-tavern-modhost-')
+    home = tempHome('dsh-soulmojito-modhost-')
     writeMod(home, 'sample.mod', validManifest(), ENTRY)
   })
   afterAll(() => { rmSync(home, { recursive: true, force: true }) })
   afterEach(async () => {
-    delete process.env.DSH_TAVERN_DISABLE_MODS
+    delete process.env.DSH_SOULMOJITO_DISABLE_MODS
     // 卸掉本用例打开的宿主：mod 定时器不清理会拖住 vitest worker 的事件循环。
     for (const host of openedHosts.splice(0)) await host.disposeAll()
   })
@@ -479,13 +483,13 @@ export async function setup(api) {
   })
 
   it('env hard-off wins over both state switches and is read live', async () => {
-    process.env.DSH_TAVERN_DISABLE_MODS = '1'
+    process.env.DSH_SOULMOJITO_DISABLE_MODS = '1'
     expect(modsDisabledByEnv()).toBe(true)
     const host = await openHost(home, { modsEnabled: true, enabled: { 'sample.mod': true } })
     expect(host.host.snapshot().available).toBe(false)
     expect(host.host.snapshot().mods).toEqual([])
     expect((await route(host.host, 'sample.mod/ping')).handled).toBe(false)
-    delete process.env.DSH_TAVERN_DISABLE_MODS
+    delete process.env.DSH_SOULMOJITO_DISABLE_MODS
     await host.host.refresh()
     expect(host.host.snapshot().available).toBe(true)
     expect(host.host.snapshot().mods[0]!.status).toBe('loaded')
@@ -504,12 +508,12 @@ export async function setup(api) {
   })
 
   it('skips broken mods and engine mismatches without breaking the rest', async () => {
-    const brokenHome = tempHome('dsh-tavern-modbroken-')
+    const brokenHome = tempHome('dsh-soulmojito-modbroken-')
     try {
       writeMod(brokenHome, 'sample.mod', validManifest(), ENTRY)
       writeMod(brokenHome, 'no-json', '{ not json', ENTRY)
       writeMod(brokenHome, 'bad-id', validManifest({ id: 'other.name' }), ENTRY)
-      writeMod(brokenHome, 'too-new', validManifest({ id: 'too-new', engines: { 'dsh-tavern': '>=99.0.0' } }), ENTRY)
+      writeMod(brokenHome, 'too-new', validManifest({ id: 'too-new', engines: { 'dsh-soulmojito': '>=99.0.0' } }), ENTRY)
       writeMod(brokenHome, 'missing-entry', validManifest({ id: 'missing-entry', main: 'gone.mjs' }), '')
       const { host } = await openHost(brokenHome, { modsEnabled: true, enabled: { 'sample.mod': true, 'no-json': true, 'too-new': true } })
       const snapshot = host.snapshot()
@@ -519,7 +523,7 @@ export async function setup(api) {
       expect(byId.get('no-json')!.error).toContain('mod.json')
       expect(byId.get('bad-id')!.status).toBe('error')
       expect(byId.get('too-new')!.status).toBe('error')
-      expect(byId.get('too-new')!.error).toContain('requires dsh-tavern')
+      expect(byId.get('too-new')!.error).toContain('requires dsh-soulmojito')
       expect(byId.get('missing-entry')!.status).toBe('error')
       expect(byId.get('missing-entry')!.error).toContain('not found')
       expect((await route(host, 'sample.mod/ping')).handled).toBe(true)
@@ -532,7 +536,7 @@ export async function setup(api) {
   })
 
   it('records setup failures as status error while the mod stays inert', async () => {
-    const failHome = tempHome('dsh-tavern-modfail-')
+    const failHome = tempHome('dsh-soulmojito-modfail-')
     try {
       writeMod(failHome, 'throws', validManifest({ id: 'throws' }), 'export async function setup() { throw new Error("setup exploded") }')
       writeMod(failHome, 'no-setup', validManifest({ id: 'no-setup' }), 'export const other = 1')
@@ -549,7 +553,7 @@ export async function setup(api) {
   })
 
   it('disable runs the dispose chain outer-first, clears timers and unregisters routes', async () => {
-    const chainHome = tempHome('dsh-tavern-modchain-')
+    const chainHome = tempHome('dsh-soulmojito-modchain-')
     try {
       writeMod(chainHome, 'sample.mod', validManifest(), ENTRY)
       const { host } = await openHost(chainHome, { modsEnabled: true, enabled: { 'sample.mod': true } })
@@ -572,7 +576,7 @@ export async function setup(api) {
   })
 
   it('reload disposes and re-imports the entry with a cache-busted module instance', async () => {
-    const reloadHome = tempHome('dsh-tavern-modreload-')
+    const reloadHome = tempHome('dsh-soulmojito-modreload-')
     try {
       writeMod(reloadHome, 'sample.mod', validManifest(), `${ENTRY}\nexport const instanceId = Math.random()`)
       const { host } = await openHost(reloadHome, { modsEnabled: true, enabled: { 'sample.mod': true } })
@@ -599,7 +603,7 @@ export async function setup(api) {
   //（`void api.storage.set(...)`）在 dispose 后不得再在飞——unload 的 flush
   // 排空 tail，卸载返回即写已落定，测试 teardown 的 rmSync 安全。
   it('dispose drains pending interval storage writes (flush at unload)', async () => {
-    const drainHome = tempHome('dsh-tavern-moddrain-')
+    const drainHome = tempHome('dsh-soulmojito-moddrain-')
     try {
       const entry = `
         export async function setup(api) {
@@ -621,7 +625,7 @@ export async function setup(api) {
   // timer 回调里的异步拒绝（含 fire-and-forget promise）必须进审计而不是进程级
   // unhandled rejection（vitest 对 unhandled rejection 直接判败，测试本身即证明）。
   it('audits async rejections from timer handlers instead of leaking unhandled rejections', async () => {
-    const timerHome = tempHome('dsh-tavern-modtimer-')
+    const timerHome = tempHome('dsh-soulmojito-modtimer-')
     try {
       const entry = `
         export async function setup(api) {
@@ -643,7 +647,7 @@ export async function setup(api) {
   // api.storage 的观察分支：mod 丢弃 set 的 promise 时，失败进审计/logger，
   // 不变成 unhandled rejection（配额拒绝作为可确定的失败注入）。
   it('observes fire-and-forget storage failures into the audit line', async () => {
-    const quotaHome = tempHome('dsh-tavern-modquota-')
+    const quotaHome = tempHome('dsh-soulmojito-modquota-')
     try {
       const entry = `
         export async function setup(api) {
@@ -684,7 +688,7 @@ describe('mod event bus', () => {
   })
 
   it('bridges the existing guides-changed bus once a host is open', async () => {
-    const home = tempHome('dsh-tavern-modevents-')
+    const home = tempHome('dsh-soulmojito-modevents-')
     try {
       offs.push(modEvents.on('guides-changed', (payload) => { seen.push(`guides:${payload.character}`) }))
       // 打开一个空宿主以建立桥接（host.open 订阅 guides 总线）。
@@ -727,7 +731,7 @@ describe('mod declarative buttons (api.onButton + dispatchButton)', () => {
     validManifest({ id: 'button.mod', buttons: ['拨快 1 小时', '备用'], ...overrides })
 
   beforeAll(() => {
-    home = tempHome('dsh-tavern-modbtn-')
+    home = tempHome('dsh-soulmojito-modbtn-')
     writeMod(home, 'button.mod', buttonManifest(), `
 export async function setup(api) {
   const off = api.onButton('拨快 1 小时', async (click, context) => {
@@ -805,7 +809,7 @@ export async function setup(api) {
     await expect(host.dispatchButton('button.mod', '拨快 1 小时')).resolves.toBe('handled')
     // 手动 off（mood-tracker 路线）：撤后回落 no-handler
     const res = fakeRes()
-    const url = new URL('http://x/api/dsh-tavern/mods/button.mod/off')
+    const url = new URL('http://x/api/dsh-soulmojito/mods/button.mod/off')
     await host.handleRoute({ on: () => undefined }, res, 'GET', url, 'button.mod', 'off')
     await expect(host.dispatchButton('button.mod', '拨快 1 小时')).resolves.toBe('no-handler')
     // 停用（宿主托管回收）：回落 not-found（未装载）
@@ -816,10 +820,10 @@ export async function setup(api) {
   it('returns not-found while any switch layer is off', async () => {
     const globalOff = await open({ enabled: { 'button.mod': true } })
     await expect(globalOff.dispatchButton('button.mod', '拨快 1 小时')).resolves.toBe('not-found')
-    process.env.DSH_TAVERN_DISABLE_MODS = '1'
+    process.env.DSH_SOULMOJITO_DISABLE_MODS = '1'
     const envOff = await open({ modsEnabled: true, enabled: { 'button.mod': true } })
     await expect(envOff.dispatchButton('button.mod', '拨快 1 小时')).resolves.toBe('not-found')
-    delete process.env.DSH_TAVERN_DISABLE_MODS
+    delete process.env.DSH_SOULMOJITO_DISABLE_MODS
   })
 })
 
@@ -871,10 +875,10 @@ describe('mod loader e2e through the real HTTP surface', () => {
     return { status: res.statusCode, body: res.chunks.length > 0 ? JSON.parse(res.chunks.join('')) as Record<string, unknown> : null }
   }
 
-  const statsUrl = () => `/api/dsh-tavern/mods/${EXAMPLE_MOD_ID}/stats`
+  const statsUrl = () => `/api/dsh-soulmojito/mods/${EXAMPLE_MOD_ID}/stats`
 
   beforeAll(async () => {
-    home = tempHome('dsh-tavern-mode2e-')
+    home = tempHome('dsh-soulmojito-mode2e-')
     process.env.DSH_HOME = home
     mkdirSync(join(home, 'tavern', 'mods'), { recursive: true })
     cpSync(repoExampleMod, join(home, 'tavern', 'mods', EXAMPLE_MOD_ID), { recursive: true })
@@ -901,12 +905,12 @@ describe('mod loader e2e through the real HTTP surface', () => {
 
   afterAll(() => {
     delete process.env.DSH_HOME
-    delete process.env.DSH_TAVERN_DISABLE_MODS
+    delete process.env.DSH_SOULMOJITO_DISABLE_MODS
     rmSync(home, { recursive: true, force: true })
   })
 
   it('bootstrap lists installed mods as disabled by default and stays 200 next to a broken mod', async () => {
-    const boot = await call('GET', '/api/dsh-tavern/bootstrap')
+    const boot = await call('GET', '/api/dsh-soulmojito/bootstrap')
     expect(boot.status).toBe(200)
     expect(boot.body!.modsAvailable).toBe(true)
     const mods = boot.body!.mods as Array<Record<string, unknown>>
@@ -916,7 +920,7 @@ describe('mod loader e2e through the real HTTP surface', () => {
   })
 
   it('serves the management snapshot with both switches defaulting off', async () => {
-    const management = await call('GET', '/api/dsh-tavern/mods')
+    const management = await call('GET', '/api/dsh-soulmojito/mods')
     expect(management.status).toBe(200)
     expect(management.body).toMatchObject({ available: true, globalEnabled: false })
     const broken = (management.body!.mods as Array<Record<string, unknown>>).find((mod) => mod.id === 'broken-mod')
@@ -925,9 +929,9 @@ describe('mod loader e2e through the real HTTP surface', () => {
 
   it('answers 404 on the mod route until both switches are on (three-layer matrix)', async () => {
     expect((await call('GET', statsUrl())).status).toBe(404)
-    expect((await call('POST', `/api/dsh-tavern/mods/${EXAMPLE_MOD_ID}/enable`, {})).status).toBe(200)
+    expect((await call('POST', `/api/dsh-soulmojito/mods/${EXAMPLE_MOD_ID}/enable`, {})).status).toBe(200)
     expect((await call('GET', statsUrl())).status).toBe(404)
-    expect((await call('POST', '/api/dsh-tavern/mods/state', { globalEnabled: true })).status).toBe(200)
+    expect((await call('POST', '/api/dsh-soulmojito/mods/state', { globalEnabled: true })).status).toBe(200)
     const loaded = await call('GET', statsUrl())
     expect(loaded.status).toBe(200)
     expect(loaded.body!.counts).toMatchObject({ characters: 0, worlds: 0, chats: {} })
@@ -935,9 +939,9 @@ describe('mod loader e2e through the real HTTP surface', () => {
   })
 
   it('keeps core routes healthy next to mods and rejects traversal subroutes', async () => {
-    expect((await call('GET', '/api/dsh-tavern/store-revision')).status).toBe(200)
-    expect((await call('GET', `/api/dsh-tavern/mods/${EXAMPLE_MOD_ID}/nope`)).status).toBe(404)
-    expect((await call('GET', '/api/dsh-tavern/mods/..%2F..%2Findex.mjs')).status).toBe(404)
+    expect((await call('GET', '/api/dsh-soulmojito/store-revision')).status).toBe(200)
+    expect((await call('GET', `/api/dsh-soulmojito/mods/${EXAMPLE_MOD_ID}/nope`)).status).toBe(404)
+    expect((await call('GET', '/api/dsh-soulmojito/mods/..%2F..%2Findex.mjs')).status).toBe(404)
   })
 
   it('delivers chat-saved to a loaded mod through the host save point', async () => {
@@ -954,7 +958,7 @@ describe('mod loader e2e through the real HTTP surface', () => {
       user_name: 'Alice', character_name: 'E2E Character', chat_metadata: { createdAt: new Date().toISOString() },
     }, [])
     const snapshot = await store.getChatSnapshot('E2E Character', chatId)
-    const saved = await call('PUT', `/api/dsh-tavern/chat/${encodeURIComponent(chatId)}?character=${encodeURIComponent('E2E Character')}`, {
+    const saved = await call('PUT', `/api/dsh-soulmojito/chat/${encodeURIComponent(chatId)}?character=${encodeURIComponent('E2E Character')}`, {
       chat: snapshot!.chat,
       revision: snapshot!.revision,
     })
@@ -965,10 +969,10 @@ describe('mod loader e2e through the real HTTP surface', () => {
   })
 
   it('disables back to 404 and reload re-runs setup while storage persists', async () => {
-    expect((await call('POST', `/api/dsh-tavern/mods/${EXAMPLE_MOD_ID}/disable`, {})).status).toBe(200)
+    expect((await call('POST', `/api/dsh-soulmojito/mods/${EXAMPLE_MOD_ID}/disable`, {})).status).toBe(200)
     expect((await call('GET', statsUrl())).status).toBe(404)
-    expect((await call('POST', `/api/dsh-tavern/mods/${EXAMPLE_MOD_ID}/enable`, {})).status).toBe(200)
-    expect((await call('POST', `/api/dsh-tavern/mods/${EXAMPLE_MOD_ID}/reload`, {})).status).toBe(200)
+    expect((await call('POST', `/api/dsh-soulmojito/mods/${EXAMPLE_MOD_ID}/enable`, {})).status).toBe(200)
+    expect((await call('POST', `/api/dsh-soulmojito/mods/${EXAMPLE_MOD_ID}/reload`, {})).status).toBe(200)
     const stored = JSON.parse(readFileSync(join(home, 'tavern', 'mods', EXAMPLE_MOD_ID, 'data', 'state.json'), 'utf8')).values
     expect(stored.disposed).toBe(true)
     const stats = await call('GET', statsUrl())
@@ -977,14 +981,14 @@ describe('mod loader e2e through the real HTTP surface', () => {
     expect(stats.body!.chatSaves).toBe(1)
   })
 
-  it('hard-disables live via DSH_TAVERN_DISABLE_MODS and recovers when cleared', async () => {
-    process.env.DSH_TAVERN_DISABLE_MODS = '1'
-    expect((await call('POST', '/api/dsh-tavern/mods/state', { globalEnabled: false })).status).toBe(200)
-    const management = await call('GET', '/api/dsh-tavern/mods')
+  it('hard-disables live via DSH_SOULMOJITO_DISABLE_MODS and recovers when cleared', async () => {
+    process.env.DSH_SOULMOJITO_DISABLE_MODS = '1'
+    expect((await call('POST', '/api/dsh-soulmojito/mods/state', { globalEnabled: false })).status).toBe(200)
+    const management = await call('GET', '/api/dsh-soulmojito/mods')
     expect(management.body!.available).toBe(false)
     expect((await call('GET', statsUrl())).status).toBe(404)
-    delete process.env.DSH_TAVERN_DISABLE_MODS
-    expect((await call('POST', '/api/dsh-tavern/mods/state', { globalEnabled: true })).status).toBe(200)
+    delete process.env.DSH_SOULMOJITO_DISABLE_MODS
+    expect((await call('POST', '/api/dsh-soulmojito/mods/state', { globalEnabled: true })).status).toBe(200)
     expect((await call('GET', statsUrl())).status).toBe(200)
   })
 })
@@ -1034,17 +1038,17 @@ describe('mod api capability faces (P2)', () => {
 
   async function route(host: ModHost, path: string, method = 'GET') {
     const res = fakeRes()
-    const url = new URL(`http://localhost/api/dsh-tavern/mods/${path}`)
+    const url = new URL(`http://localhost/api/dsh-soulmojito/mods/${path}`)
     const handled = await host.handleRoute({ on: () => undefined }, res, method, url, path.split('/')[0]!, path.split('/').slice(1).join('/'))
     return { handled, res }
   }
 
   const dispatchCtx = { mode: 'send' as const, character: 'C', chatId: 'c1', group: false }
 
-  beforeAll(() => { home = tempHome('dsh-tavern-modp2-') })
+  beforeAll(() => { home = tempHome('dsh-soulmojito-modp2-') })
   afterAll(() => { rmSync(home, { recursive: true, force: true }) })
   afterEach(async () => {
-    delete process.env.DSH_TAVERN_DISABLE_MODS
+    delete process.env.DSH_SOULMOJITO_DISABLE_MODS
     for (const host of openedHosts.splice(0)) await host.disposeAll()
     clearModRegistryForTest()
     llmShouldFail = false
@@ -1514,7 +1518,7 @@ describe('agent bundle absorption of mod extensions (proposal 0015 §3.6)', () =
       const mount = makeAgentCtx()
       const dispose = mountModExtensions(mount.ctx, { claimTools: [] })
       // 开括号组被中性化为 { {（宿主变量语法不再成立）；order 钳到 0；名字带 mod 域前缀。
-      expect(mount.sections).toEqual([{ name: 'dsh-tavern:mod:m.s:notes', order: 0, text: 'keep { {char}} consistent' }])
+      expect(mount.sections).toEqual([{ name: 'dsh-soulmojito:mod:m.s:notes', order: 0, text: 'keep { {char}} consistent' }])
       dispose()
       expect(mount.sections).toHaveLength(0)
     } finally {
@@ -1579,7 +1583,7 @@ describe('mod git install (proposal 0015 P2)', () => {
   const GOOD_MANIFEST = JSON.stringify({ id: 'installed.mod', name: 'Installed', version: '1.0.0', author: 'a', description: 'd', main: 'index.mjs' })
 
   it('installs into mods/<id> (id from mod.json), excludes .git, and refreshes through the host', async () => {
-    const root = tempHome('dsh-tavern-modgit-')
+    const root = tempHome('dsh-soulmojito-modgit-')
     try {
       const cloneCalls: string[] = []
       const fake = fakeStateStore({})
@@ -1603,7 +1607,7 @@ describe('mod git install (proposal 0015 P2)', () => {
   })
 
   it('rejects already-installed mods without force and replaces with force', async () => {
-    const root = tempHome('dsh-tavern-modgit2-')
+    const root = tempHome('dsh-soulmojito-modgit2-')
     try {
       const fake = fakeStateStore({})
       const host = await ModHost.open({ root, hostVersion: '0.4.1', dbProvider: async () => fake as never })
@@ -1624,7 +1628,7 @@ describe('mod git install (proposal 0015 P2)', () => {
   })
 
   it('audits install-error when the precheck, the clone or the manifest fails', async () => {
-    const root = tempHome('dsh-tavern-modgit3-')
+    const root = tempHome('dsh-soulmojito-modgit3-')
     try {
       const fake = fakeStateStore({})
       const host = await ModHost.open({ root, hostVersion: '0.4.1', dbProvider: async () => fake as never })

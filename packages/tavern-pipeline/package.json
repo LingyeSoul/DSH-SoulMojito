@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-tavern/pipeline",
+  "name": "@dsh-soulmojito/pipeline",
   "version": "0.1.0",
   "description": "Prompt assembly pipeline with SillyTavern chat-completion semantics: prompt_order traversal, marker expansion, card system_prompt/post_history_instructions overrides, context trimming, squash.",
   "license": "GPL-3.0",
@@ -18,6 +18,6 @@
     "test": "vitest run --root ../.."
   },
   "dependencies": {
-    "@dsh-tavern/format": "workspace:*"
+    "@dsh-soulmojito/format": "workspace:*"
   }
 }

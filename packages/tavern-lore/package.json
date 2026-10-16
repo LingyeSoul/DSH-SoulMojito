@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-tavern/lore",
+  "name": "@dsh-soulmojito/lore",
   "version": "0.1.0",
   "description": "World Info (lorebook) activation engine implementing SillyTavern semantics: scan depth, primary/secondary key logic, recursion, budget, timed effects, min activations, inclusion groups, insertion positions.",
   "license": "GPL-3.0",

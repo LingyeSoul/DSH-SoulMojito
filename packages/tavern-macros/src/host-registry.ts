@@ -35,7 +35,7 @@ interface HostMacroStore {
   entries: Map<number, HostMacroRecord>
 }
 
-const HOST_MACRO_REGISTRY_KEY = 'dsh-tavern:host-macros'
+const HOST_MACRO_REGISTRY_KEY = 'dsh-soulmojito:host-macros'
 const registrySymbol = Symbol.for(HOST_MACRO_REGISTRY_KEY)
 
 function store(): HostMacroStore {

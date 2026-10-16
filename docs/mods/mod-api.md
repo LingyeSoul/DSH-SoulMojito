@@ -1,4 +1,4 @@
-# dsh-tavern Mod API（v1）
+# dsh-soulmojito Mod API（v1）
 
 > 面向 Mod 作者的开发者文档。设计文档见[提案 0015](../proposals/0015-mod-extensions.md)；
 > 落地决策见 [2026-10-10-mod-p0-hook-buses](../../decisions/2026-10-10-mod-p0-hook-buses.md)、
@@ -10,7 +10,7 @@
 **Mod = 一个自包含 ESM 文件夹 + `mod.json` 清单，由服务端在进程内加载的受信任第三方代码。**
 把文件夹放进 `$DSH_HOME/tavern/mods/`，在 Tavern 管理面板「Mod」分区启用后：你注册的 Agent
 工具出现在模型工具面、文本变换挂进 ST 生成管线、宏/STscript 命令即刻可用、面板分区以隔离
-iframe 出现、HTTP 路由挂在 `/api/dsh-tavern/mods/<id>/` 下。全程不改 dsh-tavern 一行源码。
+iframe 出现、HTTP 路由挂在 `/api/dsh-soulmojito/mods/<id>/` 下。全程不改 dsh-soulmojito 一行源码。
 
 **信任模型（诚实立场）**：Mod 运行在插件进程内，**没有沙箱**——与 SillyTavern 服务端插件同款
 边界。防线是流程性的：默认全关（三层开关）、启用前知情同意（capabilities + 注册面声明）、
@@ -79,14 +79,14 @@ export async function setup(api) {
 
 - **手动**：把目录拷进 `$DSH_HOME/tavern/mods/<id>/`（目录名必须等于 `id`）。
   **注意**：宿主只在 refresh（启动 / 任一管理写操作 / git 安装）时重扫目录——服务器
-  运行中手动拷入的目录要先触发一次扫描才可见，例如 `POST /api/dsh-tavern/mods/state`
+  运行中手动拷入的目录要先触发一次扫描才可见，例如 `POST /api/dsh-soulmojito/mods/state`
   `{"globalEnabled": true}`（幂等重设全局开关，副作用是 rescan），然后再
   `POST …/mods/<id>/enable`；否则 enable 报 `mod '<id>' is not installed`。
-- **git**：管理面板「Mod」分区填仓库地址，或 `POST /api/dsh-tavern/mods/install`
+- **git**：管理面板「Mod」分区填仓库地址，或 `POST /api/dsh-soulmojito/mods/install`
   `{ "url": "https://github.com/<owner>/<repo>#<ref>" }`（根目录需有 `mod.json`；
   已存在目录需 `force: true` 替换）。
 - **启用（三层开关，全部默认关）**：
-  1. 环境变量 `DSH_TAVERN_DISABLE_MODS` 非空（非 `0`/`false`）→ 硬关整面子系统；
+  1. 环境变量 `DSH_SOULMOJITO_DISABLE_MODS` 非空（非 `0`/`false`）→ 硬关整面子系统；
   2. `state.json` 的 `modsEnabled`（全局开关，面板「Mod」分区顶部）；
   3. `state.json` 的 `mods.enabled.<id>`（逐 Mod 开关，面板列表行内）。
 
@@ -104,7 +104,7 @@ export async function setup(api) {
 | `id` | ✅ | 单段 `[a-z0-9-]`（段首尾不为 `-`）或以 `.` 连接的多段（反域名）；≤100 字符；**必须等于目录名** |
 | `name` / `version` / `author` / `description` | ✅ | 非空字符串，各 ≤2000 字符 |
 | `main` | ✅ | 相对路径、`/` 分隔、不得越出 Mod 目录（拒绝 `..`、绝对路径、反斜杠、以 `.` 开头的段）、必须带扩展名；首尾空白视为非法 |
-| `engines.dsh-tavern` | — | semver 范围串（语法见下）；装载时对宿主版本判定，不满足 → 跳过并在面板报原因 |
+| `engines.dsh-soulmojito` | — | semver 范围串（语法见下）；装载时对宿主版本判定，不满足 → 跳过并在面板报原因（改名兼容：旧键 `engines.dsh-tavern` 同义读取，2026-10-16；新写入用新键） |
 | `loadingOrder` | — | 有限数字，默认 `100`；hook 顺序 / 工具与分区排序的决胜键（升序） |
 | `capabilities` | — | `llm` \| `network` \| `storage` 的子集（去重）；**知情同意标签**，不是隔离——唯一的技术强制是 `llm`：不声明就没有 `api.llm` 这个键 |
 | `panel` | — | `{ title: string, icon?: string }`；声明后面板出现该 Mod 的 iframe 分区（§13） |
@@ -122,12 +122,12 @@ export async function setup(api) {
 - 版本或范围不可解析 → **fail-closed**（不满足，面板展示原因）。
 - **0.x 陷阱**：`^0.4.1` ⇒ `>=0.4.1 <0.5.0`——主版本为 0 时 caret 锁的是**次段**，
   宿主升次版本（0.4.x → 0.5.0）即越界：Mod 在扫描阶段被拦进 blocked，面板报
-  「错误」并展示 `requires dsh-tavern … (host …)` 原因。要跨次版本兼容写 `||`
+  「错误」并展示 `requires dsh-soulmojito … (host …)` 原因。要跨次版本兼容写 `||`
   分支（`^0.4.1 || ^0.5.0`）；只声明实际验证过的版本
   （踩坑实录：[decisions/2026-10-12-story-clock-engines-drift.md](../../decisions/2026-10-12-story-clock-engines-drift.md)）。
 
 ```jsonc
-"engines": { "dsh-tavern": "^0.6.5" }   // 宿主 0.6.x 且 ≥0.6.5
+"engines": { "dsh-soulmojito": "^0.6.5" }   // 宿主 0.6.x 且 ≥0.6.5
 ```
 
 ---
@@ -169,7 +169,7 @@ export async function setup(api) {
 | `api.events.on(kind, handler)` | `chat-saved` / `assets-saved` / `guides-changed` / `stream-delta` | 逐个吞错，失败进审计（`stream-delta` 高频，首错纪律见 §5/§15） |
 | `api.onButton(name, handler)` | 声明式按钮的点击 handler（name 必须在 manifest `buttons` 里声明） | 同名重复注册抛错；返回反注册；宿主托管卸载回收 |
 | `api.timers.{setInterval,clearInterval}` | 定时器 | 宿主绑定生命周期，卸载自动清 |
-| `api.http.route(method, path, handler)` | 挂 `/api/dsh-tavern/mods/<id>/<path>` | path 白名单；`reply.json/html` 两出口 |
+| `api.http.route(method, path, handler)` | 挂 `/api/dsh-soulmojito/mods/<id>/<path>` | path 白名单；`reply.json/html` 两出口 |
 | `api.hooks.on(phase, handler)` | ST 生成管线五相位 | waterfall + 10s 超时降级不中断生成 |
 | `api.tools.register(def)` | Agent 工具（AgentTavern/AgentNovel） | name 强制 `<modId>_` 前缀；三层查重 |
 | `api.macros.register(name, fn)` | 全局宏（四个引擎实例化点全部生效） | 确定性强制（静态筛查 + 运行期降级） |
@@ -190,7 +190,7 @@ export async function setup(api) {
 ### api.logger
 
 ```js
-api.logger.info('...')   // 输出形如 dsh-tavern: [mod:<id>] ...
+api.logger.info('...')   // 输出形如 dsh-soulmojito: [mod:<id>] ...
 api.logger.warn('...')
 api.logger.error('...')
 ```
@@ -248,13 +248,13 @@ handler 抛错：吞掉 + `event-error` 审计，不影响其他监听方与宿�
 - 覆盖范围（v1 如实）：只覆盖 **ST 生成循环**（runGeneration 的 llm.stream 消费点，
   send/regenerate/trigger 三 mode）。AgentTavern 生成走宿主 AgentLoop，本事件**收不到**
   ——流式观察对 AgentTavern 的可达性是 v1 范围外。
-- **不进 §13 的 iframe 下行**（`dsh-tavern:mod-event`）：流式高频广播到浏览器面
+- **不进 §13 的 iframe 下行**（`dsh-soulmojito:mod-event`）：流式高频广播到浏览器面
   弊大于利，iframe UI 需要进度时走自己的 HTTP 子路由拉取。
 
 ### api.onButton（声明式按钮）
 
 manifest `buttons: ["显示名", …]` 声明按钮 → 宿主渲染（Mod 面板分区头 chips +
-ST 聊天视图的紧凑按钮行）→ 用户点击 → `POST /api/dsh-tavern/mods/<id>/button/<name>`
+ST 聊天视图的紧凑按钮行）→ 用户点击 → `POST /api/dsh-soulmojito/mods/<id>/button/<name>`
 → 分发到你注册的 handler：
 
 ```js
@@ -297,7 +297,7 @@ api.onDispose(async () => { await flushSomething() })   // 与 setup 返回的 d
 
 ## 6. HTTP 面：api.http.route
 
-路由挂 `/api/dsh-tavern/mods/<id>/<path>`。**method**：`GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS`。
+路由挂 `/api/dsh-soulmojito/mods/<id>/<path>`。**method**：`GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS`。
 **path**：非空相对路径，段 `[A-Za-z0-9][A-Za-z0-9._-]*` 以 `/` 连接，≤200 字符，拒绝 `\`、
 `%`、`.`/`..` 段（穿越在注册与分发两侧都拒）。同 method+path 重复注册抛错。**保留段**：
 `POST` 的 `enable`/`disable`/`reload` 是宿主管理路由（先于子路由分发被截获），`POST` 的
@@ -464,7 +464,7 @@ api.prompt.section({
 
 - **order 钳制 -50..0**：核心分区占 -80..-64（kernel/preset/facts/guides/script），Mod 分区
   永远冲不掉核心头（前缀缓存生命线）；非法/缺省取下界 -50。
-- 消费名空间化：`dsh-tavern:mod:<modId>:<name>`；文本过 `hostPromptSafe`——**不要写
+- 消费名空间化：`dsh-soulmojito:mod:<modId>:<name>`；文本过 `hostPromptSafe`——**不要写
   `{{...}}`**（残留宏会被宿主当变量渲染，消费侧先中性化）。
 - 新会话必然生效；既有会话经变更通知尽力补齐（同工具语义）。
 
@@ -520,14 +520,14 @@ var token = new URLSearchParams(location.search).get('token') || ''
 
 // ① 取数：发请求 → 父页代理到本 Mod 的 HTTP 子路由 → 回投
 parent.postMessage({
-  type: 'dsh-tavern:mod-request', token, id: 'req-1',
+  type: 'dsh-soulmojito:mod-request', token, id: 'req-1',
   req: { method: 'GET', path: 'stats', body: undefined },   // method ∈ GET/POST/PUT/DELETE/PATCH
 }, '*')
-// 收：{ type: 'dsh-tavern:mod-response', token, id, ok, status, body | error }
+// 收：{ type: 'dsh-soulmojito:mod-response', token, id, ok, status, body | error }
 
 // ② 高度自适应上报：宿主已在所有 reply.html 出口自动注入上报器（见下），手写
 //    仅当你想完全接管高度协议时才需要：
-parent.postMessage({ type: 'dsh-tavern:frontend-height', token, height: document.body.scrollHeight }, '*')
+parent.postMessage({ type: 'dsh-soulmojito:frontend-height', token, height: document.body.scrollHeight }, '*')
 ```
 
 - 桥只到**本 Mod** 的子路由（父页代理时拼 `mods/<id>/<path>`）；method 白名单比注册面窄
@@ -554,14 +554,14 @@ iframe 自身高度——循环依赖，"满屏"布局会塌。宿主对此的�
 - 服务端注入前把 `<style>` 块与内联 `style="…"` 里的 `100vh`/`100dvh`/`100svh`/
   `100lvh` 改写成 `var(--dt-viewport-height, 100vh)`；
 - 注入脚本把宿主**真实可视区高度**挂到 `--dt-viewport-height`（挂载时初始化 + 宿主
-  resize 时经 `dsh-tavern:viewport` 下行消息更新——消息只下行，iframe 不需要监听它）。
+  resize 时经 `dsh-soulmojito:viewport` 下行消息更新——消息只下行，iframe 不需要监听它）。
 
 对 Mod UI 作者的含义：**按"满可视区"意图放心写 `100vh`**（含 `calc(100vh - 24px)`
 这类组合），改写后即真实视口高度；若你的页面确实想要"iframe 内容高度"语义，直接
 用 `100%`（相对父元素，不经改写）。非 100 数值（如 `50vh`）不改写——需要半屏时写
 `calc(var(--dt-viewport-height, 100vh) * 0.5)`，或用 `50%`。
 
-### 下行事件：`dsh-tavern:mod-event`
+### 下行事件：`dsh-soulmojito:mod-event`
 
 宿主把**本客户端发起的**写入推回挂载中的 mod iframe（每个挂载面各自收到带自己
 token 的消息）：
@@ -569,7 +569,7 @@ token 的消息）：
 ```js
 addEventListener('message', (event) => {
   const data = event.data
-  if (!data || data.type !== 'dsh-tavern:mod-event' || data.token !== token) return
+  if (!data || data.type !== 'dsh-soulmojito:mod-event' || data.token !== token) return
   // data.kind ∈ 'chat-saved' | 'assets-saved' | 'guides-changed' | 'button-click'
   // data.payload 与 Node 侧 api.events 的 payload 同形；button-click 是
   // { mod: <modId>, name: <按钮显示名> }
@@ -582,7 +582,7 @@ addEventListener('message', (event) => {
 标签页或服务端侧的写入不推送**：mod UI 应保留拉取/轮询兜底（事件当加速器，不当
 唯一事实源）。mood-tracker 示范「事件到达即刷新 + 初始拉取兜底」这一路。
 
-### 日志上报：console reporter 与 `dsh-tavern:mod-log`
+### 日志上报：console reporter 与 `dsh-soulmojito:mod-log`
 
 服务端在**所有** `reply.html` 出口（不只 `GET ui`）注入一段 console reporter 脚本
 （与 CSP meta 注入同机制）：
@@ -590,7 +590,7 @@ addEventListener('message', (event) => {
 - 从 iframe URL 查询段自读 `token`，**无 token 静默跳过**（直接 curl 该路由不产生消息）；
 - wrap `console.log/warn/error`（原方法照常调用，iframe 控制台里仍可见）+
   `window.onerror` + `unhandledrejection`，经 postMessage 回投
-  `{ type: 'dsh-tavern:mod-log', token, level, text }`；
+  `{ type: 'dsh-soulmojito:mod-log', token, level, text }`；
 - args 逐个序列化（字符串直出、其余 JSON.stringify，失败退 String）拼接，单条截断
   ~2KB（防刷爆）。
 
@@ -604,13 +604,13 @@ addEventListener('message', (event) => {
 
 | 端点 | 语义 |
 |---|---|
-| `GET /api/dsh-tavern/mods` | 管理快照 `{ok, available, reason?, globalEnabled, mods: ModInfo[]}` |
-| `POST /api/dsh-tavern/mods/state` | `{globalEnabled}` 全局开关 |
-| `POST /api/dsh-tavern/mods/install` | `{url, force?}` git 安装（§1） |
-| `POST /api/dsh-tavern/mods/<id>/enable` \| `disable` | 逐 Mod 开关（enable = 装载） |
-| `POST /api/dsh-tavern/mods/<id>/reload` | dispose → cache-bust 重载 |
-| `POST /api/dsh-tavern/mods/<id>/button/<name>` | 声明式按钮点击分发（§5 onButton）；响应 `{ ok, handled }` |
-| `ANY /api/dsh-tavern/mods/<id>/<path>` | Mod http 子路由（§6） |
+| `GET /api/dsh-soulmojito/mods` | 管理快照 `{ok, available, reason?, globalEnabled, mods: ModInfo[]}` |
+| `POST /api/dsh-soulmojito/mods/state` | `{globalEnabled}` 全局开关 |
+| `POST /api/dsh-soulmojito/mods/install` | `{url, force?}` git 安装（§1） |
+| `POST /api/dsh-soulmojito/mods/<id>/enable` \| `disable` | 逐 Mod 开关（enable = 装载） |
+| `POST /api/dsh-soulmojito/mods/<id>/reload` | dispose → cache-bust 重载 |
+| `POST /api/dsh-soulmojito/mods/<id>/button/<name>` | 声明式按钮点击分发（§5 onButton）；响应 `{ ok, handled }` |
+| `ANY /api/dsh-soulmojito/mods/<id>/<path>` | Mod http 子路由（§6） |
 
 `ModInfo`：`{id, name, version, author, description, capabilities, loadingOrder, panel,
 status: 'loaded'|'disabled'|'error', error, auditCount, surfaces: {hooks, tools, http},
@@ -650,10 +650,10 @@ buttons}`。
 
 | 示例 | 演示的能力面 |
 |---|---|
-| `dsh-tavern.asset-stats` | assets 只读快照、http JSON 出口、storage 配额内持久化、chat-saved 事件、setup 返回 dispose |
-| `dsh-tavern.mood-tracker` | post-output hook（改写位+返回契约）、Agent 工具对（`<modId>_` 前缀）、panel 声明 + iframe UI + postMessage 桥 + 高度上报、mod-event 下行订阅（事件到达即刷新，拉取兜底）、console 日志上报（宿主日志查看器）、`reply.html` |
-| `dsh-tavern.story-clock` | 宏（{{clock}} 读聊天变量，确定性模式）、STscript 命令族（位置/命名参数/别名/chatChanged）、声明式按钮（「拨快 1 小时」，onButton 复用 /clock advance 的推进逻辑）、user-input 变换位与 post-save 观察位 hook、prompt.section（order -40）、api.llm（capability 门 + request 收集出口 + 用量审计）、timers、assets-saved/guides-changed 事件、宿主托管卸载（不持 off 句柄） |
-| `dsh-tavern.rps` | 游戏注册（§18）：manifest `games` 声明 + `api.games.register`（进程内引擎对象 + 内联 view 字符串）、三局两胜回合制建模、无自有面板（游戏出现在「游戏」分区） |
+| `dsh-soulmojito.asset-stats` | assets 只读快照、http JSON 出口、storage 配额内持久化、chat-saved 事件、setup 返回 dispose |
+| `dsh-soulmojito.mood-tracker` | post-output hook（改写位+返回契约）、Agent 工具对（`<modId>_` 前缀）、panel 声明 + iframe UI + postMessage 桥 + 高度上报、mod-event 下行订阅（事件到达即刷新，拉取兜底）、console 日志上报（宿主日志查看器）、`reply.html` |
+| `dsh-soulmojito.story-clock` | 宏（{{clock}} 读聊天变量，确定性模式）、STscript 命令族（位置/命名参数/别名/chatChanged）、声明式按钮（「拨快 1 小时」，onButton 复用 /clock advance 的推进逻辑）、user-input 变换位与 post-save 观察位 hook、prompt.section（order -40）、api.llm（capability 门 + request 收集出口 + 用量审计）、timers、assets-saved/guides-changed 事件、宿主托管卸载（不持 off 句柄） |
+| `dsh-soulmojito.rps` | 游戏注册（§18）：manifest `games` 声明 + `api.games.register`（进程内引擎对象 + 内联 view 字符串）、三局两胜回合制建模、无自有面板（游戏出现在「游戏」分区） |
 
 四个示例合计覆盖 v1 全部能力面。新 Mod 建议从最接近的示例拷起。
 
@@ -700,7 +700,7 @@ buttons}`。
 ```js
 // mod.json 先声明：  "games": ["<你的modId>.gesture"]
 api.games.register({
-  id: 'dsh-tavern.rps.gesture',        // 强制 `<modId>.` 前缀 + 必须在 manifest games 名单内
+  id: 'dsh-soulmojito.rps.gesture',        // 强制 `<modId>.` 前缀 + 必须在 manifest games 名单内
   name: '猜拳', version: '1.0.0',
   players: { min: 2, max: 2, roles: ['first', 'second'] },   // v1 会话恒「一人类一 Agent」，max 必须 2
   turnBased: true,
@@ -727,11 +727,11 @@ api.games.register({
   `engine.meta` 逐字段相等，漂移即拒。
 - **view 静态检查**：无外链 script/样式、无 `fetch(`（CSP 在服务期兜底，这里提前给可读报错）；
   桥协议见提案 §3.3——服务端注入 token/高度/视口桥脚本，你的页面只管监听
-  `dsh-tavern:game-state`（带 token 校验）与上行 `dsh-tavern:game-action`。照抄
-  `examples/games/dsh-tavern.gomoku/view.html` 的桥写法即可。
+  `dsh-soulmojito:game-state`（带 token 校验）与上行 `dsh-soulmojito:game-action`。照抄
+  `examples/games/dsh-soulmojito.gomoku/view.html` 的桥写法即可。
 
 生命周期：返回反注册函数（宿主托管）；Mod 卸载/禁用 → 游戏摘册，其活跃会话**孤儿化**（可查看
 不可落子，面板如实展示）；重新装载后孤儿判定按 gameId 动态查表，旧会话自动恢复可玩。反注册带
 引擎实例身份对账——reload 后旧实例的反注册触碰新注册是 no-op（`onButton` 同款纪律）。
 
-最小可抄实现：`examples/mods/dsh-tavern.rps/`（三局两胜猜拳，回合制建模 + 比分板 view）。
+最小可抄实现：`examples/mods/dsh-soulmojito.rps/`（三局两胜猜拳，回合制建模 + 比分板 view）。

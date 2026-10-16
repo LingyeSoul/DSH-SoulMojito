@@ -236,7 +236,7 @@ describe('注册面与种子对账', () => {
 
 describe('假服务注入下的完整对局', () => {
   it('game_start 开局（默认 Agent 执 roles[1]）→ 人类回合 game_move 报错（含轮到谁/owner）', async () => {
-    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-tavern.tic-tac-toe' }, exec)
+    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-soulmojito.tic-tac-toe' }, exec)
     expect(started.players).toEqual([
       { role: 'x', owner: 'human' },
       { role: 'o', owner: 'agent' },
@@ -256,7 +256,7 @@ describe('假服务注入下的完整对局', () => {
   it('人类经服务落子 → game_move（Agent）完整走完到 O 三连胜；game_state 双寻址', async () => {
     // 服务（假）的 humanAction 即人类入口——工具面对「另一个入口落子」无感。
     const service = (await import('../src/games/handle.js')).resolveGamesService()!
-    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-tavern.tic-tac-toe' }, exec)
+    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-soulmojito.tic-tac-toe' }, exec)
     const sessionId = started.sessionId as string
     const script: Array<['human' | 'agent', number, number]> = [
       ['human', 0, 0],
@@ -338,7 +338,7 @@ describe('game_wait 阻塞等待（2026-10-14 修订 / 同日增量修订）', (
 
   it('已轮到 Agent → 立即返回 your-turn（增量语义：等待期无手，newMoves 空；往手经 game_history 读）+ 缺省寻址', async () => {
     const service = (await import('../src/games/handle.js')).resolveGamesService()!
-    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-tavern.tic-tac-toe' }, exec)
+    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-soulmojito.tic-tac-toe' }, exec)
     const sessionId = started.sessionId as string
     await service.humanAction(sessionId, { type: 'place', x: 0, y: 0 })
     const waited = await tools.get('game_wait')!.execute({}, exec) as Record<string, any>
@@ -362,7 +362,7 @@ describe('game_wait 阻塞等待（2026-10-14 修订 / 同日增量修订）', (
 
   it('人类回合 → 阻塞；人类经服务落子（emit 写穿）后唤醒，只返回等待期增量', async () => {
     const service = (await import('../src/games/handle.js')).resolveGamesService()!
-    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-tavern.tic-tac-toe' }, exec)
+    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-soulmojito.tic-tac-toe' }, exec)
     const sessionId = started.sessionId as string
     let settled = false
     const pending = tools.get('game_wait')!.execute({ sessionId, timeoutMs: 5000 }, exec)
@@ -391,7 +391,7 @@ describe('game_wait 阻塞等待（2026-10-14 修订 / 同日增量修订）', (
   })
 
   it('人类回合 → 超时不报错，返回 status timeout 与未变快照头（模型可再 wait）', async () => {
-    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-tavern.tic-tac-toe' }, exec)
+    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-soulmojito.tic-tac-toe' }, exec)
     const sessionId = started.sessionId as string
     const outcome = await tools.get('game_wait')!.execute({ sessionId, timeoutMs: 1000 }, exec) as Record<string, any>
     expect(outcome.status).toBe('timeout')
@@ -407,7 +407,7 @@ describe('game_wait 阻塞等待（2026-10-14 修订 / 同日增量修订）', (
   }, 10000)
 
   it('等待中被中止（用户停止生成）→ 抛 AbortError 语义的拒绝', async () => {
-    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-tavern.tic-tac-toe' }, exec)
+    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-soulmojito.tic-tac-toe' }, exec)
     const sessionId = started.sessionId as string
     const controller = new AbortController()
     const pending = tools.get('game_wait')!.execute(
@@ -425,7 +425,7 @@ describe('game_wait 阻塞等待（2026-10-14 修订 / 同日增量修订）', (
 
   it('等待中人类认输 → 唤醒返回 finished（增量含认输那手，winner/summary 就绪）', async () => {
     const service = (await import('../src/games/handle.js')).resolveGamesService()!
-    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-tavern.tic-tac-toe' }, exec)
+    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-soulmojito.tic-tac-toe' }, exec)
     const sessionId = started.sessionId as string
     const pending = tools.get('game_wait')!.execute({ sessionId, timeoutMs: 5000 }, exec)
     await new Promise((resolve) => setTimeout(resolve, 60))
@@ -448,7 +448,7 @@ describe('game_wait 阻塞等待（2026-10-14 修订 / 同日增量修订）', (
 describe('game_history 动作日志窗口（2026-10-14 增量修订）', () => {
   it('缺省全量尾窗（5 手 < 20）+ from/limit 分页 + from 越界夹到 moveCount', async () => {
     const service = (await import('../src/games/handle.js')).resolveGamesService()!
-    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-tavern.tic-tac-toe' }, exec)
+    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-soulmojito.tic-tac-toe' }, exec)
     const sessionId = started.sessionId as string
     // x(0,0) o(0,1) x(1,1) o(0,2) x(2,0)：五手无一三连，局未完。
     const script: Array<['human' | 'agent', number, number]> = [
@@ -491,7 +491,7 @@ describe('game_history 动作日志窗口（2026-10-14 增量修订）', () => {
   it('无绑定 → 明确报文；非整数 from/limit 静默回落（from=尾窗起点，limit=缺省 20）', async () => {
     await expect(tools.get('game_history')!.execute({}, { agent: { id: 'unbound-agent' } })).rejects.toThrow()
     const service = (await import('../src/games/handle.js')).resolveGamesService()!
-    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-tavern.tic-tac-toe' }, exec)
+    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-soulmojito.tic-tac-toe' }, exec)
     const sessionId = started.sessionId as string
     await service.humanAction(sessionId, { type: 'place', x: 0, y: 0 })
     const weird = await tools.get('game_history')!.execute({ sessionId, from: '1', limit: 'x' }, exec) as Record<string, any>
@@ -505,7 +505,7 @@ describe('order -63 懒提示段（仅活跃会话时注入）', () => {
   it('无活跃会话段摘除 → 开局后段出现（游戏名/sessionId/轮到谁/词汇表/指引）→ 终局后段再摘除', async () => {
     const { emitGamesChanged, resolveGamesService } = await import('../src/games/handle.js')
     const service = resolveGamesService()!
-    const gamesSections = () => agentPromptSectionsFor(AGENT).filter((section) => section.name === 'dsh-tavern:agent-games')
+    const gamesSections = () => agentPromptSectionsFor(AGENT).filter((section) => section.name === 'dsh-soulmojito:agent-games')
 
     // 清场：把此前用例遗留的活跃会话全部认输终结（按当前回合归属走对应入口）。
     const { sessions } = await service.list({ character: CHARACTER, chatId: CHAT })
@@ -522,7 +522,7 @@ describe('order -63 懒提示段（仅活跃会话时注入）', () => {
     expect(gamesSections()).toHaveLength(0)
 
     // 开局（工具内自带写穿）：段即时出现。
-    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-tavern.tic-tac-toe' }, exec)
+    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-soulmojito.tic-tac-toe' }, exec)
     const sessionId = started.sessionId as string
     const sections = gamesSections()
     expect(sections).toHaveLength(1)

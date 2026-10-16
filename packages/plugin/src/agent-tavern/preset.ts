@@ -122,7 +122,7 @@ export type AgentPresetChangedListener = () => void | Promise<void>
 // globalThis 锚定（同学科于 agent-novel/usage.ts）：emit 发生在 index.mjs /
 // card-workbench.mjs，监听在 agent.mjs——分离 bundle 各持一份模块级 Set 会互不
 // 可见，写穿必须共享同一注册表。key 逐字保留存量值。
-const agentPresetChanged = createGlobalListenerRegistry<AgentPresetChangedListener>('dsh-tavern:agent-preset-changed-listeners')
+const agentPresetChanged = createGlobalListenerRegistry<AgentPresetChangedListener>('dsh-soulmojito:agent-preset-changed-listeners')
 
 /**
  * 注册预设变更回调（agent.ts 模块加载时调用：预设内容/激活选择/人设变化后

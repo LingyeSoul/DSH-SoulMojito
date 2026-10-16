@@ -216,7 +216,7 @@ describe('prompt viewer wiring in runGeneration (record after pre-llm rewrites)'
   const offs: Array<() => void> = []
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-prompt-viewer-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-prompt-viewer-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.importCharacter(importBody(CHAR))
@@ -269,7 +269,7 @@ describe('prompt viewer wiring in runGeneration (record after pre-llm rewrites)'
     const res = makeResponse()
     await apiHandler(makeRequest({
       character: CHAR, chatId, message, revision: snapshot!.revision,
-    }, '/api/dsh-tavern/generate'), res)
+    }, '/api/dsh-soulmojito/generate'), res)
     expect(res.chunks.some((chunk) => chunk.includes('"type":"saved"'))).toBe(true)
   }
 
@@ -309,7 +309,7 @@ describe('prompt viewer wiring in runGeneration (record after pre-llm rewrites)'
   it('serves GET prompts with filter/descending order and an empty array when vacant', async () => {
     resetPromptViews()
     const empty = makeResponse()
-    await apiHandler(makeRequest(undefined, '/api/dsh-tavern/prompts', 'GET'), empty)
+    await apiHandler(makeRequest(undefined, '/api/dsh-soulmojito/prompts', 'GET'), empty)
     expect(JSON.parse(empty.chunks.join(''))).toEqual({ ok: true, records: [] })
 
     await generate('route probe a')
@@ -319,7 +319,7 @@ describe('prompt viewer wiring in runGeneration (record after pre-llm rewrites)'
     recordPromptView({ character: CHAR, chatId: otherChat, mode: 'trigger', request: { messages: [], params: {} } })
 
     const all = makeResponse()
-    await apiHandler(makeRequest(undefined, '/api/dsh-tavern/prompts', 'GET'), all)
+    await apiHandler(makeRequest(undefined, '/api/dsh-soulmojito/prompts', 'GET'), all)
     const bodyAll = JSON.parse(all.chunks.join('')) as { ok: boolean; records: Array<{ seq: number; at: string; character: string; chatId: string; mode: string; messages: unknown[]; params: Record<string, unknown> }> }
     expect(bodyAll.ok).toBe(true)
     expect(bodyAll.records).toHaveLength(2)
@@ -331,7 +331,7 @@ describe('prompt viewer wiring in runGeneration (record after pre-llm rewrites)'
     }
 
     const filtered = makeResponse()
-    await apiHandler(makeRequest(undefined, `/api/dsh-tavern/prompts?character=${encodeURIComponent(CHAR)}&chatId=${encodeURIComponent(otherChat)}`, 'GET'), filtered)
+    await apiHandler(makeRequest(undefined, `/api/dsh-soulmojito/prompts?character=${encodeURIComponent(CHAR)}&chatId=${encodeURIComponent(otherChat)}`, 'GET'), filtered)
     const bodyFiltered = JSON.parse(filtered.chunks.join('')) as { records: Array<{ chatId: string }> }
     expect(bodyFiltered.records).toHaveLength(1)
     expect(bodyFiltered.records[0]!.chatId).toBe(otherChat)

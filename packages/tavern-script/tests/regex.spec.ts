@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { RegexPlacement, parseRegexScript } from '@dsh-tavern/format'
+import { RegexPlacement, parseRegexScript } from '@dsh-soulmojito/format'
 import { applyRegexScript, applyRegexScripts, applyRegexScriptsToLines, compileScriptRegex } from '../src/regex.js'
 
 describe('regex script engine', () => {

@@ -28,7 +28,7 @@ function makeAgent(id: string) {
   }
 }
 
-function makeRequest(body: unknown, url = '/api/dsh-tavern/generate') {
+function makeRequest(body: unknown, url = '/api/dsh-soulmojito/generate') {
   const listeners = new Map<string, (value?: unknown) => void>()
   return {
     method: 'POST',
@@ -91,7 +91,7 @@ describe('Conversation Guides (proposal 0009)', () => {
   let nativeChatId: string
 
   const guidesUrl = (targetChat: string, id?: string) =>
-    `/api/dsh-tavern/guides/${encodeURIComponent(CHARACTER)}/${encodeURIComponent(targetChat)}${id === undefined ? '' : `/${encodeURIComponent(id)}`}`
+    `/api/dsh-soulmojito/guides/${encodeURIComponent(CHARACTER)}/${encodeURIComponent(targetChat)}${id === undefined ? '' : `/${encodeURIComponent(id)}`}`
 
   const postGuide = async (targetChat: string, text: unknown) => {
     const res = makeResponse()
@@ -112,14 +112,14 @@ describe('Conversation Guides (proposal 0009)', () => {
   }
 
   function guidesTextOf(agentId: string | undefined): string {
-    const def = agentContexts.get('dsh-tavern:agent-guides') as
+    const def = agentContexts.get('dsh-soulmojito:agent-guides') as
       | { text: (assembly?: { agent?: { id?: string } }) => string }
       | undefined
     return def!.text(agentId === undefined ? undefined : { agent: { id: agentId } })
   }
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-guides-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-guides-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.importCharacter({
@@ -178,7 +178,7 @@ describe('Conversation Guides (proposal 0009)', () => {
       tools: { register: () => {} },
       effect: (fn) => { fn(); return () => {} },
     } as unknown as AgentContextLike)
-    expect(agentContexts.get('dsh-tavern:agent-guides')).toBeDefined()
+    expect(agentContexts.get('dsh-soulmojito:agent-guides')).toBeDefined()
   })
 
   afterAll(() => {
@@ -281,17 +281,17 @@ describe('Conversation Guides (proposal 0009)', () => {
     // 空 id：store 的 safeChatFileName 抛 'invalid chat id' 且以 500 裸透传。
     // HTTP 层统一按「聊天不存在」应答（客户端已同步在该会话形态下禁用指引）。
     const res = makeResponse()
-    await apiHandler(makeGetRequest('/api/dsh-tavern/guides//'), res)
+    await apiHandler(makeGetRequest('/api/dsh-soulmojito/guides//'), res)
     expect(res.statusCode).toBe(404)
     expect(JSON.parse(res.chunks.join('') || '{}')).toMatchObject({ ok: false, message: 'chat not found' })
 
     const post = makeResponse()
-    await apiHandler(makeRequest({ text: '不该被写入' }, '/api/dsh-tavern/guides//'), post)
+    await apiHandler(makeRequest({ text: '不该被写入' }, '/api/dsh-soulmojito/guides//'), post)
     expect(post.statusCode).toBe(404)
     expect(JSON.parse(post.chunks.join('') || '{}')).toMatchObject({ ok: false, message: 'chat not found' })
 
     const del = makeResponse()
-    await apiHandler(makeDeleteRequest('/api/dsh-tavern/guides///g1'), del)
+    await apiHandler(makeDeleteRequest('/api/dsh-soulmojito/guides///g1'), del)
     expect(del.statusCode).toBe(404)
     expect(JSON.parse(del.chunks.join('') || '{}')).toMatchObject({ ok: false, message: 'chat not found' })
   })
@@ -362,10 +362,10 @@ describe('Conversation Guides (proposal 0009)', () => {
   })
 
   it('registers the agent-guides context beside agent-facts and refreshes its cache through the write path', async () => {
-    expect(agentContexts.get('dsh-tavern:agent-guides')?.order).toBe(-65)
+    expect(agentContexts.get('dsh-soulmojito:agent-guides')?.order).toBe(-65)
     // 回归：facts 段仍注册在 guides 之前
-    expect(agentContexts.get('dsh-tavern:agent-facts')?.order).toBe(-70)
-    expect(agentContexts.get('dsh-tavern:agent-kernel')?.order).toBe(-80)
+    expect(agentContexts.get('dsh-soulmojito:agent-facts')?.order).toBe(-70)
+    expect(agentContexts.get('dsh-soulmojito:agent-kernel')?.order).toBe(-80)
 
     // 绑定的 chat 此前无 guide：首次装配返回空串并触发异步装载
     expect(guidesTextOf('native-guides')).toBe('')

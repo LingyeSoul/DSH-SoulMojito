@@ -53,12 +53,12 @@ describe('STscript /regex command (SLASH_COMMAND placement application point)', 
 
   async function runScriptLine(script: string): Promise<{ ok: boolean; output: string; chatChanged: boolean }> {
     const res = makeResponse()
-    await apiHandler(makeRequest({ character: CHARACTER, chatId, script }, '/api/dsh-tavern/script'), res)
+    await apiHandler(makeRequest({ character: CHARACTER, chatId, script }, '/api/dsh-soulmojito/script'), res)
     return JSON.parse(res.chunks.join(''))
   }
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), 'dsh-tavern-stregex-'))
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-stregex-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'tavern'))
     await store.importCharacter({

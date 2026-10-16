@@ -3,8 +3,8 @@
  *
  * `GET games/:gid/view/:sid` 返回游戏包的 view.html，服务端注入：
  * - 游戏桥脚本（本文件 gameBridgeScript）：token 从 location.search 读、
- *   监听下行 `dsh-tavern:game-state`（token 对账）、提供上行
- *   `dsh-tavern:game-action` 的发送面；
+ *   监听下行 `dsh-soulmojito:game-state`（token 对账）、提供上行
+ *   `dsh-soulmojito:game-action` 的发送面；
  * - CSP meta + console reporter + 视口脚本 + vh 改写 + 高度上报——全部复用
  *   mods/http.ts 的 renderModHtmlDocument 管线（不新写第二套）。
  *
@@ -15,16 +15,16 @@
  *
  * 兼容性说明：参照包（五子棋）的 view.html 自行监听 message 事件——注入的
  * 桥脚本与视图自身的监听互不冲突（同一窗口的多个 message 监听器都能收到）；
- * 桥脚本额外暴露 window.dshTavernGame 便捷面（onState/state/send），新视图
+ * 桥脚本额外暴露 window.dshSoulMojitoGame 便捷面（onState/state/send），新视图
  * 二选一。
  */
 
 import { MOD_HTML_DEFAULT_CSP, renderModHtmlDocument } from '../mods/http.js'
 
 /** 下行全量状态投递（§3.3 协议第一条；v1 无增量）。 */
-export const GAME_STATE_MESSAGE = 'dsh-tavern:game-state'
+export const GAME_STATE_MESSAGE = 'dsh-soulmojito:game-state'
 /** 上行人类落子（§3.3 协议第二条；合法性由 Node 侧引擎终审）。 */
-export const GAME_ACTION_MESSAGE = 'dsh-tavern:game-action'
+export const GAME_ACTION_MESSAGE = 'dsh-soulmojito:game-action'
 
 /** 注入的桥脚本：token 自读 + game-state 监听 + game-action 上行便捷面。 */
 export function gameBridgeScript(): string {
@@ -37,7 +37,7 @@ export function gameBridgeScript(): string {
   var notify = function (payload) {
     for (var index = 0; index < subs.length; index += 1) { try { subs[index](payload); } catch (_) {} }
   };
-  window.dshTavernGame = {
+  window.dshSoulMojitoGame = {
     onState: function (callback) {
       subs.push(callback);
       if (latest !== null) { try { callback(latest); } catch (_) {} }
