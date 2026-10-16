@@ -1328,6 +1328,10 @@ const gameWaitOutput = objectOutput(
   ['turn', 'turnOwner', 'winner', 'summary'],
 )
 
+// objectOutput 第二参是 optionalKeys（required = 属性键全集 − 可选表）——view 必须
+// 进可选表：timeout/orphaned 路径有意不带棋盘（token 经济），若被判必填，宿主
+// 的输出 schema 校验会整体拒收（2026-10-16 实弹：600000ms 等满超时路径报
+// missing required property "value.view"）。
 const gameWaitFullOutput = objectOutput(
   {
     status: { type: 'string', description: 'your-turn | finished | orphaned | timeout' },
@@ -1337,9 +1341,9 @@ const gameWaitFullOutput = objectOutput(
     turnOwner: { type: 'string' },
     winner: {},
     summary: { type: 'string' },
-    view: { type: 'object', additionalProperties: true, description: 'Board payload (state + turn + legal + finished + summary, same as game_state) — present when status is your-turn or finished.' },
+    view: { type: 'object', additionalProperties: true, description: 'Board payload (state + turn + legal + finished + summary, same as game_state) — present when status is your-turn or finished; omitted on timeout/orphaned (nothing changed).' },
   },
-  ['turn', 'turnOwner', 'winner', 'summary'],
+  ['turn', 'turnOwner', 'winner', 'summary', 'view'],
 )
 
 function memoryView(record: {

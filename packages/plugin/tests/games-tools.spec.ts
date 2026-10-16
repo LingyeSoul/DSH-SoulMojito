@@ -352,6 +352,7 @@ describe('game_wait 阻塞等待（2026-10-14 修订 / 同日增量修订）', (
     expect(waited.newMoves).toEqual([])
     expect(waited).not.toHaveProperty('view')
     expect(waited).not.toHaveProperty('session')
+    expectConformsToSchema('game_wait', waited)
     expect(waited).not.toHaveProperty('lastMove')
     expect(waited).not.toHaveProperty('moveCount')
     // 人类那一手经 game_history 补齐（读归读、等待归等待）。
@@ -446,6 +447,18 @@ describe('game_wait 阻塞等待（2026-10-14 修订 / 同日增量修订）', (
   })
 })
 
+/** 输出 schema 一致性（2026-10-16 实弹修复的回归锚）：宿主按 output.schema 的
+ * required 数组校验工具返回——本套件此前的断言只查属性面、从不按声明 schema
+ * 验收，漏掉了「view 被判必填而 timeout 路径不返回」的拒收（真机报
+ * missing required property "value.view"）。最小校验器：required 键必须在场。 */
+function expectConformsToSchema(toolName: string, value: unknown): void {
+  const schema = tools.get(toolName)!.output.schema as { required?: string[] }
+  expect(schema.required, `${toolName} declares required`).toBeDefined()
+  for (const key of schema.required ?? []) {
+    expect(value, `${toolName} 缺必填键 ${key}`).toHaveProperty(key)
+  }
+}
+
 describe('game_wait_full 带棋盘视图的等待（2026-10-16 新增）', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 桩服务按真服务形状鸭子访问
   const resignSession = async (service: any, sessionId: string) => {
@@ -474,6 +487,7 @@ describe('game_wait_full 带棋盘视图的等待（2026-10-16 新增）', () =>
     expect(waited.view.legal).toHaveLength(8)
     expect(waited.view.finished).toBe(false)
     expect(waited.view.summary).toContain('A1')
+    expectConformsToSchema('game_wait_full', waited)
     await resignSession(service, sessionId)
   })
 
@@ -494,6 +508,7 @@ describe('game_wait_full 带棋盘视图的等待（2026-10-16 新增）', () =>
     expect(outcome.newMoves[0].describe).toContain('X落于')
     expect(outcome.view.state.board[1][1]).toBe(1)
     expect(outcome.view.legal).toHaveLength(8)
+    expectConformsToSchema('game_wait_full', outcome)
     expect(gameWaiters(sessionId)).toBe(0)
     await resignSession(service, sessionId)
   })
@@ -505,6 +520,8 @@ describe('game_wait_full 带棋盘视图的等待（2026-10-16 新增）', () =>
     const outcome = await tools.get('game_wait_full')!.execute({ sessionId, timeoutMs: 1000 }, exec) as Record<string, any>
     expect(outcome.status).toBe('timeout')
     expect(outcome).not.toHaveProperty('view')
+    // timeout 无 view 但不得被宿主 schema 校验拒收（实弹修复的回归位）。
+    expectConformsToSchema('game_wait_full', outcome)
     expect(gameWaiters(sessionId)).toBe(0)
     await resignSession(service, sessionId)
   }, 10000)
@@ -523,6 +540,7 @@ describe('game_wait_full 带棋盘视图的等待（2026-10-16 新增）', () =>
     expect(outcome.view.finished).toBe(true)
     expect(outcome.view.legal).toEqual([])
     expect(outcome.view.summary).toContain('认输')
+    expectConformsToSchema('game_wait_full', outcome)
   })
 })
 

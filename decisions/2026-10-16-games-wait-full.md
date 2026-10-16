@@ -67,3 +67,18 @@ token 经济对账：full 的 view 是有界载荷（≤64KB 契约上限，实�
   少记一手（该手在下次 history 窗口可见），非一致性破坏；
 - 工具总数 +1 的选择成本由描述互指消化（wait/full 各自描述写明适用面），
   真机上的工具选择准确率待实弹观察（若模型混用，懒段指引可按游戏品类细化）。
+
+
+## 实弹修复（同日）：objectOutput 第二参语义误读——timeout 路径被宿主 schema 校验拒收
+
+真机报错：`tool "game_wait_full" returned invalid output: missing required property
+"value.view"`（timeoutMs 600000 等满超时路径）。根因：`objectOutput(properties,
+optionalKeys)` 的第二参是**可选键表**（required = 属性键全集 − 可选表），首版
+`gameWaitFullOutput` 把 `view` 声明进 schema 却沿用了 wait 的可选表——view 被判
+必填，而 timeout/orphaned 有意不带棋盘（token 经济），宿主按 output.schema
+校验返回即整体拒收。修复：`view` 进可选表（语义不变——超时/孤儿仍不带）。
+
+测试缺口同步补（这是比 bug 本身更值钱的发现）：本套件历来只断言属性面、
+**从不按声明的 output.schema 验收工具返回**，宿主侧校验在 vitest 里不可见。
+新增 `expectConformsToSchema` 最小校验器（required 键必须在场）挂到
+game_wait_full 四路返回面 + game_wait 既有 your-turn 用例——回到坏实现即翻红。

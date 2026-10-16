@@ -55,9 +55,10 @@
  *
  * 视图反馈层（2026-10-16 用户需求「攻击等交互事件应该弹出显眼的提示，在 PC
  * 上支持 WASD 和方向键以及 JKL 绑定操作」）：事件提示栈（dc-toast-stack——
- * 每次局面真变化把该手 summary 弹提示，**常规文档流块**位于棋盘与操作栏之间
- * （同日三次迭代：初版浮层在棋盘上沿、提示多时挡住画面，用户反馈后移位），
- * 遭遇/陷阱/倒下 danger、通关 finale，至多 3 条、到点自清）+ 飘字伤害
+ * 每次局面真变化把该手 summary 弹提示，**地图内浮层、底部锚定**（零布局
+ * 位移——三次迭代：初版顶部浮层挡画面 → 文档流位致操作栏抖动 → 最终底部
+ * 锚定浮层，入口区无遮挡且不抖），遭遇/陷阱/倒下 danger、通关 finale，
+ * 至多 3 条、到点自清）+ 飘字伤害
  * （dc-float-num——英雄受击红/怪物受创橙/治疗绿/击杀 💀，按格位上浮）+
  * PC 键盘（WASD/方向键移动、J/K/L = 攻击/喝药/下楼，与按钮共用同一合法面：
  * 按钮 disabled 即按键不动作，带 Ctrl/Alt/Meta 修饰键不劫持）。纯视图层：
@@ -729,15 +730,16 @@ export const viewHtml = `<!doctype html>
   /* 事件提示栈（2026-10-16 用户需求「攻击等交互事件应弹出显眼提示」）：
      每次局面变化把该手 summary 以浮层提示弹出——遭遇/倒下/陷阱加重为 danger、
      通关/终局为 finale；2.8s 后淡出，栈内至多 3 条。 */
-  /* 事件提示栈（2026-10-16 用户需求「攻击等交互事件应弹出显眼提示」；同日
-     三次迭代移位：初版浮在棋盘上沿，提示多时挡住画面——移到棋盘与操作栏
-     之间的常规文档流块，多条只向下推操作栏、永不遮挡棋盘）：遭遇/倒下/陷阱
-     加重为 danger、通关为 finale；2.8s 后淡出，栈内至多 3 条。 */
-  #dc-toast-stack { width: 100%; max-width: 360px; display: flex; flex-direction: column;
-    align-items: stretch; gap: 4px; margin-top: 8px; pointer-events: none; }
-  .dc-toast { background: rgba(18, 14, 9, 0.93); border: 1px solid #57431a; color: #f0dfae;
-    padding: 6px 10px; border-radius: 8px; font-size: 13px; font-weight: 600; line-height: 1.45;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45); text-align: center;
+  /* 事件提示栈（2026-10-16 用户需求「攻击等交互事件应弹出显眼提示」）：地图内
+     浮层、**底部锚定**（绝对定位零布局位移——文档流位会随提示增删把操作栏推上
+     推下、界面抖动，用户实弹反馈后回位地图内；对照初版顶部锚定挡住入口区，
+     底部锚定让左上入口与早期探索区全程无遮挡，3 条封顶 + 2.8s 淡出控制占地）：
+     遭遇/倒下/陷阱加重为 danger、通关为 finale。 */
+  #dc-toast-stack { position: absolute; bottom: 6px; left: 0; right: 0; display: flex;
+    flex-direction: column; align-items: center; gap: 4px; pointer-events: none; z-index: 5; }
+  .dc-toast { background: rgba(18, 14, 9, 0.88); border: 1px solid #57431a; color: #f0dfae;
+    padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; line-height: 1.4;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45); text-align: center; max-width: 92%;
     animation: dc-toast-in 0.18s ease-out, dc-fade-out 0.5s ease-in 2.8s forwards; }
   .dc-toast.danger { border-color: #c4553d; color: #ffbca8; }
   .dc-toast.finale { border-color: #d4b95e; color: #ffe9a8; box-shadow: 0 0 14px rgba(212, 185, 94, 0.35); }
@@ -774,9 +776,9 @@ export const viewHtml = `<!doctype html>
 </div>
 <div id="banner">等待对局…</div>
 <div id="board-wrap">
+  <div id="dc-toast-stack"></div>
   <div id="board"></div>
 </div>
-<div id="dc-toast-stack"></div>
 <div id="controls">
   <div class="pad">
     <span class="blank"></span><button id="btn-up" disabled>↑</button><span class="blank"></span>

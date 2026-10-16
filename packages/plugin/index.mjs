@@ -19479,15 +19479,16 @@ var viewHtml2 = `<!doctype html>
   /* \u4E8B\u4EF6\u63D0\u793A\u6808\uFF082026-10-16 \u7528\u6237\u9700\u6C42\u300C\u653B\u51FB\u7B49\u4EA4\u4E92\u4E8B\u4EF6\u5E94\u5F39\u51FA\u663E\u773C\u63D0\u793A\u300D\uFF09\uFF1A
      \u6BCF\u6B21\u5C40\u9762\u53D8\u5316\u628A\u8BE5\u624B summary \u4EE5\u6D6E\u5C42\u63D0\u793A\u5F39\u51FA\u2014\u2014\u906D\u9047/\u5012\u4E0B/\u9677\u9631\u52A0\u91CD\u4E3A danger\u3001
      \u901A\u5173/\u7EC8\u5C40\u4E3A finale\uFF1B2.8s \u540E\u6DE1\u51FA\uFF0C\u6808\u5185\u81F3\u591A 3 \u6761\u3002 */
-  /* \u4E8B\u4EF6\u63D0\u793A\u6808\uFF082026-10-16 \u7528\u6237\u9700\u6C42\u300C\u653B\u51FB\u7B49\u4EA4\u4E92\u4E8B\u4EF6\u5E94\u5F39\u51FA\u663E\u773C\u63D0\u793A\u300D\uFF1B\u540C\u65E5
-     \u4E09\u6B21\u8FED\u4EE3\u79FB\u4F4D\uFF1A\u521D\u7248\u6D6E\u5728\u68CB\u76D8\u4E0A\u6CBF\uFF0C\u63D0\u793A\u591A\u65F6\u6321\u4F4F\u753B\u9762\u2014\u2014\u79FB\u5230\u68CB\u76D8\u4E0E\u64CD\u4F5C\u680F
-     \u4E4B\u95F4\u7684\u5E38\u89C4\u6587\u6863\u6D41\u5757\uFF0C\u591A\u6761\u53EA\u5411\u4E0B\u63A8\u64CD\u4F5C\u680F\u3001\u6C38\u4E0D\u906E\u6321\u68CB\u76D8\uFF09\uFF1A\u906D\u9047/\u5012\u4E0B/\u9677\u9631
-     \u52A0\u91CD\u4E3A danger\u3001\u901A\u5173\u4E3A finale\uFF1B2.8s \u540E\u6DE1\u51FA\uFF0C\u6808\u5185\u81F3\u591A 3 \u6761\u3002 */
-  #dc-toast-stack { width: 100%; max-width: 360px; display: flex; flex-direction: column;
-    align-items: stretch; gap: 4px; margin-top: 8px; pointer-events: none; }
-  .dc-toast { background: rgba(18, 14, 9, 0.93); border: 1px solid #57431a; color: #f0dfae;
-    padding: 6px 10px; border-radius: 8px; font-size: 13px; font-weight: 600; line-height: 1.45;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45); text-align: center;
+  /* \u4E8B\u4EF6\u63D0\u793A\u6808\uFF082026-10-16 \u7528\u6237\u9700\u6C42\u300C\u653B\u51FB\u7B49\u4EA4\u4E92\u4E8B\u4EF6\u5E94\u5F39\u51FA\u663E\u773C\u63D0\u793A\u300D\uFF09\uFF1A\u5730\u56FE\u5185
+     \u6D6E\u5C42\u3001**\u5E95\u90E8\u951A\u5B9A**\uFF08\u7EDD\u5BF9\u5B9A\u4F4D\u96F6\u5E03\u5C40\u4F4D\u79FB\u2014\u2014\u6587\u6863\u6D41\u4F4D\u4F1A\u968F\u63D0\u793A\u589E\u5220\u628A\u64CD\u4F5C\u680F\u63A8\u4E0A
+     \u63A8\u4E0B\u3001\u754C\u9762\u6296\u52A8\uFF0C\u7528\u6237\u5B9E\u5F39\u53CD\u9988\u540E\u56DE\u4F4D\u5730\u56FE\u5185\uFF1B\u5BF9\u7167\u521D\u7248\u9876\u90E8\u951A\u5B9A\u6321\u4F4F\u5165\u53E3\u533A\uFF0C
+     \u5E95\u90E8\u951A\u5B9A\u8BA9\u5DE6\u4E0A\u5165\u53E3\u4E0E\u65E9\u671F\u63A2\u7D22\u533A\u5168\u7A0B\u65E0\u906E\u6321\uFF0C3 \u6761\u5C01\u9876 + 2.8s \u6DE1\u51FA\u63A7\u5236\u5360\u5730\uFF09\uFF1A
+     \u906D\u9047/\u5012\u4E0B/\u9677\u9631\u52A0\u91CD\u4E3A danger\u3001\u901A\u5173\u4E3A finale\u3002 */
+  #dc-toast-stack { position: absolute; bottom: 6px; left: 0; right: 0; display: flex;
+    flex-direction: column; align-items: center; gap: 4px; pointer-events: none; z-index: 5; }
+  .dc-toast { background: rgba(18, 14, 9, 0.88); border: 1px solid #57431a; color: #f0dfae;
+    padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; line-height: 1.4;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45); text-align: center; max-width: 92%;
     animation: dc-toast-in 0.18s ease-out, dc-fade-out 0.5s ease-in 2.8s forwards; }
   .dc-toast.danger { border-color: #c4553d; color: #ffbca8; }
   .dc-toast.finale { border-color: #d4b95e; color: #ffe9a8; box-shadow: 0 0 14px rgba(212, 185, 94, 0.35); }
@@ -19524,9 +19525,9 @@ var viewHtml2 = `<!doctype html>
 </div>
 <div id="banner">\u7B49\u5F85\u5BF9\u5C40\u2026</div>
 <div id="board-wrap">
+  <div id="dc-toast-stack"></div>
   <div id="board"></div>
 </div>
-<div id="dc-toast-stack"></div>
 <div id="controls">
   <div class="pad">
     <span class="blank"></span><button id="btn-up" disabled>\u2191</button><span class="blank"></span>
@@ -30717,7 +30718,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.5".trim() : "";
-  const commit = true ? normalizeCommit("5083ea5") : void 0;
+  const commit = true ? normalizeCommit("22be0df") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

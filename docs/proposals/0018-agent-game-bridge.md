@@ -864,7 +864,7 @@ registry 装载数组第八项、gates server-bundle 增 id 字面量标记；ga
 需求源：2026-10-16 用户——「攻击等交互事件应该弹出显眼的提示，在 PC 上支持 WASD
 和方向键以及 JKL 绑定操作」。纯视图层单文件（引擎/桥协议/sessions 零改动，§17 象棋
 将军提示层同款纪律）：①事件提示栈（dc-toast-stack）——每次局面真变化把该手 summary
-弹提示（常规文档流块，位于棋盘与操作栏之间——初版浮在棋盘上沿，提示多时挡住画面，用户反馈后移位），遭遇/陷阱/倒下 danger、通关 finale（通关优先于倒下——胜利 summary 两词兼有）、
+弹提示（地图内浮层、底部锚定——三次位置迭代终态：初版顶部浮层挡画面 → 文档流位致操作栏抖动 → 底部锚定浮层零布局位移且入口区无遮挡），遭遇/陷阱/倒下 danger、通关 finale（通关优先于倒下——胜利 summary 两词兼有）、
 至多 3 条、2.8s 淡出，指纹差分保证 1s 轮询重复下发与首帧不弹；②飘字伤害
 （dc-float-num）——HP 差分驱动，英雄受击红/怪物受创橙/治疗绿/击杀 💀 按格位上浮；
 ③PC 键盘——WASD/方向键移动、J/K/L = 攻击/喝药/下楼，与按钮共用同一合法面（按钮
@@ -891,7 +891,10 @@ state + turn + legal + finished + summary），timeout/orphaned 不带；wait �
 agent-tavern-isolation 工具名标记组、roster/mount 计数测试。games-tools.spec
 +4（四路返回面）；agent bundle 单文件 + 三处联动，sessions/service/index/client
 零改动。决策全文（含「参数式开关被否」的取舍、token 经济对账、view 读取窗口
-边界）见 [decisions/2026-10-16-games-wait-full.md](../../decisions/2026-10-16-games-wait-full.md)。
+边界，及同日实弹修复——objectOutput 第二参是可选键表而非必填表，view 未进
+可选表导致 timeout 路径被宿主 schema 校验拒收，已修并新增 expectConformsToSchema
+按声明 schema 验收工具返回的测试缺口）见
+[decisions/2026-10-16-games-wait-full.md](../../decisions/2026-10-16-games-wait-full.md)。
 
 **地牢 Boss 唯一化（引擎单点修复）**。需求源：用户真机观察到多个炎魔君王
 「Boss 应该只能被生成一次」。根因：revealAround 初版把第 3 层**所有怪物格**
