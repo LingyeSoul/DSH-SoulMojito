@@ -571,6 +571,38 @@ window.__ModuleLoader__.load({
       h('circle', { cx: 12, cy: 8.9, r: 0.7, fill: 'currentColor', stroke: 'none' }))
     }
 
+    // Brand logo (2026-10-16 user request): the delivered DSH-SoulMojito logo,
+    // inlined verbatim from assets/logo.svg -- same viewBox, same primitives,
+    // same palette. The client half is a ModuleLoader IIFE with no file access,
+    // so the geometry lives twice; tavern-panel-layout.spec.ts pins the two
+    // copies to each other so they cannot drift.
+    // Unlike the host icons this mark is a full-colour logo: it carries its own
+    // palette (green glass / mint / ice) instead of currentColor, and its frame
+    // is portrait (180x190), so a square `size` letterboxes it -- the glass
+    // itself is ~84% of the box height. The delivered frame is kept as-is.
+    function SoulMojitoLogo({ size = 16, className }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        className,
+        viewBox: '-90 -100 180 190',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+      },
+      h('g', null,
+        h('path', { d: 'M-58,-78 C-58,-20 -34,10 0,10 C34,10 58,-20 58,-78 Z', fill: '#e8f6ee', fillOpacity: 0.14 }),
+        h('path', { d: 'M-54.3,-52 C-54.3,-21 -32.4,8.1 0,8.1 C32.4,8.1 54.3,-21 54.3,-52 Z', fill: '#2f9e77' }),
+        h('rect', { x: -30, y: -38, width: 18, height: 18, rx: 3, fill: '#dff3e6', opacity: 0.75, transform: 'rotate(18 -21 -29)' }),
+        h('rect', { x: 6, y: -22, width: 15, height: 15, rx: 3, fill: '#dff3e6', opacity: 0.7, transform: 'rotate(-12 13 -14)' }),
+        h('circle', { cx: -12, cy: -58, r: 3.5, fill: '#dff3e6', opacity: 0.9 }),
+        h('circle', { cx: 18, cy: -46, r: 2.5, fill: '#dff3e6', opacity: 0.8 }),
+        h('circle', { cx: 0, cy: -34, r: 2, fill: '#dff3e6', opacity: 0.7 }),
+        h('path', { d: 'M-58,-78 C-58,-20 -34,10 0,10 C34,10 58,-20 58,-78 Z', fill: 'none', stroke: '#8fd14f', strokeWidth: 5 }),
+        h('path', { d: 'M0,10 L0,58 M-22,58 L22,58', fill: 'none', stroke: '#8fd14f', strokeWidth: 5, strokeLinecap: 'round' }),
+        h('g', { transform: 'translate(-14,-66) rotate(-38)' },
+          h('path', { d: 'M0,0 C10,-12 30,-14 42,-4 C32,6 10,8 0,0 Z', fill: '#3EB489' }))))
+    }
+
     // 对局表面（ModSurface 范式）：持久 iframe 指向 GET games/:gid/view/:sid，
     // per-mount token 经 URL 查询段交给视图（桥脚本自读，回投时对账）+ 事件源
     // 必须是本 frame 的 contentWindow，双对账缺一不受理。人类落子经宿主同源
@@ -5141,7 +5173,7 @@ window.__ModuleLoader__.load({
             h('p', null, t('settings.subtitle')),
             stamp ? h('p', { className: 'dt-settings-version' }, `${t('settings.version')} ${stamp}`) : null,
             h(UpdateBand, { compact: true })),
-          h(Button, { variant: 'primary', size: 'sm', icon: h(IconSparkle16), onClick: () => openPanel() }, t('panel.open'))),
+          h(Button, { variant: 'primary', size: 'sm', icon: h(SoulMojitoLogo), onClick: () => openPanel() }, t('panel.open'))),
         h(ActiveSetupBand),
         state.error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, state.error)) : null)
     }
@@ -9777,8 +9809,10 @@ window.__ModuleLoader__.load({
           : null)
     }
 
-    // 关于分区：纯静态信息面——版本 stamp 与面板品牌区同源（bootstrap.version/
-    // commit），官网/作者/源码仓库三行外链。无状态、无 API 调用。
+    // 关于分区：纯静态信息面——头部品牌面是 logo 组件（与面板品牌块同源）加
+    // 正式写法 DSH-SoulMojito（旧的小写 dsh-soulmojito 只是目录名习惯），版本
+    // stamp 与面板品牌区同源（bootstrap.version/commit），官网/作者/源码仓库
+    // 三行外链。无状态、无 API 调用。
     function PanelAbout() {
       const state = useTavernStore()
       const t = useTranslate()
@@ -9792,8 +9826,11 @@ window.__ModuleLoader__.load({
         { key: 'repo', href: 'https://github.com/LingyeSoul/DSH-SoulMojito', text: 'github.com/LingyeSoul/DSH-SoulMojito' },
       ]
       return h('section', { className: 'dt-settings-band' },
-        h('h3', null, 'dsh-soulmojito'),
-        stamp ? h('p', { className: 'dt-update-stamp' }, stamp) : null,
+        h('div', { className: 'dt-about-head' },
+          h(SoulMojitoLogo, { size: 40 }),
+          h('div', { className: 'dt-about-head-copy' },
+            h('h3', null, 'DSH-SoulMojito'),
+            stamp ? h('p', { className: 'dt-update-stamp' }, stamp) : null)),
         h('p', { className: 'dt-hint' }, t('panel.about.tagline')),
         h('div', { className: 'dt-about-links' },
           links.map((link) => h('div', { key: link.key, className: 'dt-about-row' },
@@ -9821,9 +9858,9 @@ window.__ModuleLoader__.load({
         // 溢出时原来整列滚动会把「这是酒馆面板」的标题一起卷走。
         h('nav', { className: 'dt-panel-nav', 'aria-label': t('panel.nav') },
           h('div', { className: 'dt-panel-brand' },
-            h(IconSparkle16),
+            h(SoulMojitoLogo),
             h('div', { className: 'dt-panel-brand-copy' },
-              h('strong', null, 'Tavern'),
+              h('strong', null, 'SoulMojito'),
               stamp ? h('span', null, stamp) : null)),
           h('div', { className: 'dt-panel-navlist' },
             panelSections.map((item) => h('button', {
@@ -9935,10 +9972,13 @@ window.__ModuleLoader__.load({
       const button = h('button', {
         type: 'button',
         className: `dt-footer-action ${wide ? 'dt-footer-action-wide' : 'dt-footer-action-rail'}`,
-        'aria-label': t('panel.open'),
+        // Accessible name repeats the visible label: the wide variant shows the
+        // brand text, and WCAG 2.5.3 (label in name) requires the name to
+        // contain it -- otherwise voice control cannot match what is on screen.
+        'aria-label': `${t('panel.open')} · SoulMojito`,
         title: t('panel.title'),
         onClick: () => openPanel(),
-      }, h(IconSparkle16, { size: wide ? 16 : 18 }), wide ? h('span', { className: 'dt-footer-label' }, t('nav.title')) : null)
+      }, h(SoulMojitoLogo, { size: wide ? 16 : 18 }), wide ? h('span', { className: 'dt-footer-label' }, 'SoulMojito') : null)
       return wide ? button : h(Tooltip, { label: t('panel.open'), side: 'right' }, button)
     }
 
@@ -9996,6 +10036,10 @@ window.__ModuleLoader__.load({
         .dt-panel-close:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
         .dt-panel-body{flex:1;min-height:0;overflow-y:auto}
         .dt-panel-body .dt-sidebar{padding:0 4px}
+        .dt-about-head{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+        .dt-about-head>svg{flex:none}
+        .dt-about-head-copy{display:flex;flex-direction:column;min-width:0}
+        .dt-about-head-copy h3{margin:0}
         .dt-about-links{display:flex;flex-direction:column;gap:10px;margin-top:4px}
         .dt-about-row{display:flex;align-items:baseline;gap:10px;min-width:0;flex-wrap:wrap}
         .dt-about-label{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;min-width:96px;flex:none}

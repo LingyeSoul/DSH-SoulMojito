@@ -657,6 +657,18 @@ function checkFrontendRuntimeText(text) {
     // （display:contents）——留着它，18 个分区按钮会在横向按钮条里竖排堆叠、
     // 把主区挤没（headless Chrome 390×844 实测：nav 667px / 主区 33px）。
     '.dt-panel-navlist{display:contents}',
+    // Brand logo (2026-10-16 user request: the delivered assets/logo.svg replaces
+    // the hand-drawn mark): the inlined SoulMojitoLogo component -- its viewBox
+    // frame plus the palette carried by the asset -- and its four surfaces:
+    // panel brand block (main name also moves from Tavern to SoulMojito),
+    // sidebar footer action (visible label becomes the brand name), settings
+    // panel entry and the about section header (official brand spelling). Any
+    // surface left behind turns red.
+    'function SoulMojitoLogo(',
+    "viewBox: '-90 -100 180 190'",
+    "h('strong', null, 'SoulMojito')",
+    "className: 'dt-footer-label' }, 'SoulMojito'",
+    "h('h3', null, 'DSH-SoulMojito')",
   ]) {
     if (!text.includes(marker)) problems.push(`frontend runtime is missing marker '${marker}'`)
   }
@@ -2162,6 +2174,15 @@ const gates = [
         '.dt-panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}',
         // 移动端横条复位（2026-10-14 移动端实况回归）：媒体查询里清单容器退场。
         '.dt-panel-navlist{display:contents}',
+        // Brand logo (2026-10-16 user request): inlined logo component + frame +
+        // brand name in the panel brand block + brand label on the sidebar footer
+        // action + brand spelling in the about heading — aligned one-to-one with
+        // the checker's required markers.
+        'function SoulMojitoLogo({ size = 16, className }) {}',
+        "viewBox: '-90 -100 180 190'",
+        "h('strong', null, 'SoulMojito')",
+        "className: 'dt-footer-label' }, 'SoulMojito')",
+        "h('h3', null, 'DSH-SoulMojito')",
       ].join('\n')
       const bad = good.replace("sandbox: 'allow-scripts'", "sandbox: 'allow-forms'")
       const badBridge = good.replace('dsh-soulmojito:mod-request', 'dsh-soulmojito:mod-bridge-removed')
@@ -2222,6 +2243,16 @@ const gates = [
       // 移动端横条复位（2026-10-14 移动端实况回归）：清单一层不退了（display:contents
       // 被拆）必须翻红——替换文本 'display:contents-gone' 不含原 marker 的子串。
       const badMobileNavlist = good.replace('.dt-panel-navlist{display:contents}', '.dt-panel-navlist{display:contents-gone}')
+      // Brand logo (2026-10-16 user request) negative samples: renaming the logo
+      // component, breaking the viewBox frame, reverting the brand block copy to
+      // Tavern, reverting the sidebar footer label to the i18n title and putting
+      // a non-brand spelling back into the about heading must each turn red — the
+      // replacement texts contain no substring of the original markers.
+      const badBrandIcon = good.replace('function SoulMojitoLogo(', 'function SoulMojitoLogoGone(')
+      const badBrandFrame = good.replace("viewBox: '-90 -100 180 190'", "viewBox: '-90 -100 180 191'")
+      const badBrandCopy = good.replace("h('strong', null, 'SoulMojito')", "h('strong', null, 'TavernGone')")
+      const badFooterLabel = good.replace("className: 'dt-footer-label' }, 'SoulMojito'", "className: 'dt-footer-label' }, 'TavernGone'")
+      const badAboutTitle = good.replace("h('h3', null, 'DSH-SoulMojito')", "h('h3', null, 'SoulmojitoGone')")
       return checkFrontendRuntimeText(good).length === 0
         && checkFrontendRuntimeText(bad).length > 0
         && checkFrontendRuntimeText(badBridge).length > 0
@@ -2265,6 +2296,11 @@ const gates = [
         && checkFrontendRuntimeText(badNavlistRule).length > 0
         && checkFrontendRuntimeText(badPanelHeaderRule).length > 0
         && checkFrontendRuntimeText(badMobileNavlist).length > 0
+        && checkFrontendRuntimeText(badBrandIcon).length > 0
+        && checkFrontendRuntimeText(badBrandFrame).length > 0
+        && checkFrontendRuntimeText(badBrandCopy).length > 0
+        && checkFrontendRuntimeText(badFooterLabel).length > 0
+        && checkFrontendRuntimeText(badAboutTitle).length > 0
         ? []
         : ['frontend runtime marker self-test did not distinguish an unsafe sample']
     },
