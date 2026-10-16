@@ -8058,7 +8058,7 @@ function parseEpubText(buffer) {
   if (opfBytes === void 0) throw new Error(`not a valid EPUB: package document '${opfPath}' not found in zip`);
   const opfText = strFromU8(opfBytes);
   const opfDir = opfPath.includes("/") ? opfPath.slice(0, opfPath.lastIndexOf("/")) : "";
-  const manifest8 = /* @__PURE__ */ new Map();
+  const manifest9 = /* @__PURE__ */ new Map();
   for (const match of opfText.matchAll(/<item\b[^>]*>/gi)) {
     const tag = match[0];
     const id = /(?:\b|xml:)id\s*=\s*"([^"]*)"/i.exec(tag)?.[1];
@@ -8066,11 +8066,11 @@ function parseEpubText(buffer) {
     if (id === void 0 || id === "" || href === void 0) continue;
     const mediaType = /\bmedia-type\s*=\s*"([^"]*)"/i.exec(tag)?.[1];
     const isXhtml = mediaType === "application/xhtml+xml" || mediaType === "text/html" || mediaType === void 0 && /\.(xhtml|html|htm)$/i.test(href);
-    if (isXhtml) manifest8.set(id, { href, isXhtml: true });
+    if (isXhtml) manifest9.set(id, { href, isXhtml: true });
   }
   const spineBlock = /<spine\b[^>]*>([\s\S]*?)<\/spine>/i.exec(opfText)?.[1] ?? "";
   const idrefs = [...spineBlock.matchAll(/<itemref\b[^>]*>/gi)].map((match) => /\bidref\s*=\s*"([^"]*)"/i.exec(match[0])?.[1]).filter((idref) => idref !== void 0 && idref !== "");
-  const orderedHrefs = (idrefs.length > 0 ? idrefs : [...manifest8.keys()]).map((idref) => manifest8.get(idref)).filter((item) => item !== void 0).map((item) => resolveZipPath(opfDir, item.href));
+  const orderedHrefs = (idrefs.length > 0 ? idrefs : [...manifest9.keys()]).map((idref) => manifest9.get(idref)).filter((item) => item !== void 0).map((item) => resolveZipPath(opfDir, item.href));
   const chapters = [];
   for (const href of orderedHrefs) {
     const doc = files[href];
@@ -15807,9 +15807,9 @@ import { tmpdir } from "node:os";
 import { dirname as dirname8, join as join15 } from "node:path";
 var DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
 function shippedEntries(sourceDir) {
-  const manifest8 = join15(sourceDir, "package.json");
-  if (!existsSync(manifest8)) throw new Error("packages/plugin/package.json is missing from the checkout");
-  const files = JSON.parse(readFileSync2(manifest8, "utf8"))?.files;
+  const manifest9 = join15(sourceDir, "package.json");
+  if (!existsSync(manifest9)) throw new Error("packages/plugin/package.json is missing from the checkout");
+  const files = JSON.parse(readFileSync2(manifest9, "utf8"))?.files;
   if (!Array.isArray(files) || files.length === 0 || !files.every((entry) => typeof entry === "string")) {
     throw new Error("packages/plugin/package.json has no usable 'files' array");
   }
@@ -16189,8 +16189,8 @@ function readInstalledStamp(pluginDir, spec = "") {
   }
   if (version === UNKNOWN_FIELD) {
     try {
-      const manifest8 = JSON.parse(readFileSync2(join15(pluginDir, "package.json"), "utf8"));
-      if (typeof manifest8?.version === "string" && manifest8.version.trim() !== "") version = manifest8.version.trim();
+      const manifest9 = JSON.parse(readFileSync2(join15(pluginDir, "package.json"), "utf8"));
+      if (typeof manifest9?.version === "string" && manifest9.version.trim() !== "") version = manifest9.version.trim();
     } catch {
     }
   }
@@ -16705,8 +16705,9 @@ function clampModSectionOrder(order) {
 }
 var MOD_TOOL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
-  // agent-tavern（agent.ts createTools，24：18 原有 + 游戏桥六件，提案 0018 §4.2；
-  // game_wait 为 2026-10-14 修订新增，game_history 为同日增量修订新增）
+  // agent-tavern（agent.ts createTools，25：18 原有 + 游戏桥七件，提案 0018 §4.2；
+  // game_wait 为 2026-10-14 修订新增，game_history 为同日增量修订新增，
+  // game_wait_full 为 2026-10-16 带棋盘视图的等待变体新增）
   "tavern_character_get",
   "tavern_lore_search",
   "tavern_scene_get",
@@ -16731,6 +16732,7 @@ var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
   "game_history",
   "game_move",
   "game_wait",
+  "game_wait_full",
   // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
   "novel_status_read",
   "novel_requirements_read",
@@ -17210,7 +17212,7 @@ function checkModManifest(raw, options) {
   const panel = record.panel;
   const surfaces = record.surfaces;
   const pickStrings = (value) => Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
-  const manifest8 = {
+  const manifest9 = {
     id: record.id,
     name: record.name,
     version: record.version,
@@ -17225,7 +17227,7 @@ function checkModManifest(raw, options) {
     buttons: Array.isArray(record.buttons) ? [...record.buttons] : [],
     games: Array.isArray(record.games) ? [...record.games] : []
   };
-  return { ok: true, manifest: manifest8 };
+  return { ok: true, manifest: manifest9 };
 }
 function checkMainPath(main) {
   const text = main.trim();
@@ -17549,11 +17551,11 @@ async function installModFromGit(options) {
 
 // packages/plugin/src/mods/host.ts
 var MOD_API_VERSION = 1;
-function declaredSurfacesOf(manifest8) {
+function declaredSurfacesOf(manifest9) {
   return {
-    hooks: [...manifest8.surfaces.hooks],
-    tools: [...manifest8.surfaces.tools],
-    http: [...manifest8.surfaces.http]
+    hooks: [...manifest9.surfaces.hooks],
+    tools: [...manifest9.surfaces.tools],
+    http: [...manifest9.surfaces.http]
   };
 }
 function modsDisabledByEnv() {
@@ -17818,32 +17820,32 @@ var ModHost = class _ModHost {
         await this.audit.record(id, "skip", message);
         continue;
       }
-      const manifest8 = check.manifest;
-      const engineRange = manifest8.engines?.dshSoulMojito;
+      const manifest9 = check.manifest;
+      const engineRange = manifest9.engines?.dshSoulMojito;
       if (engineRange !== void 0) {
         const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange);
         if (!verdict.ok) {
-          nextBlocked.set(id, { manifest: manifest8, reason: verdict.reason });
+          nextBlocked.set(id, { manifest: manifest9, reason: verdict.reason });
           await this.audit.record(id, "skip", verdict.reason);
           continue;
         }
       }
-      const entryPath = resolve3(this.modsRoot, directory, manifest8.main);
+      const entryPath = resolve3(this.modsRoot, directory, manifest9.main);
       const containment = relative(resolve3(this.modsRoot, directory), entryPath);
       if (containment === "" || containment.startsWith("..") || isAbsolute(containment)) {
-        const message = `main entry '${manifest8.main}' escapes the mod directory`;
-        nextBlocked.set(id, { manifest: manifest8, reason: message });
+        const message = `main entry '${manifest9.main}' escapes the mod directory`;
+        nextBlocked.set(id, { manifest: manifest9, reason: message });
         await this.audit.record(id, "skip", message);
         continue;
       }
       const entryStat = await fs14.stat(entryPath).catch(() => void 0);
       if (entryStat?.isFile() !== true) {
-        const message = `main entry '${manifest8.main}' not found`;
-        nextBlocked.set(id, { manifest: manifest8, reason: message });
+        const message = `main entry '${manifest9.main}' not found`;
+        nextBlocked.set(id, { manifest: manifest9, reason: message });
         await this.audit.record(id, "skip", message);
         continue;
       }
-      nextDiscovered.set(id, { manifest: manifest8, directory: join18(this.modsRoot, directory), entryPath });
+      nextDiscovered.set(id, { manifest: manifest9, directory: join18(this.modsRoot, directory), entryPath });
     }
     this.discovered.clear();
     this.broken.clear();
@@ -18087,14 +18089,14 @@ var ModHost = class _ModHost {
           if (!record.manifest.games.includes(gameId)) {
             throw new Error(`game '${gameId}' is not declared in the manifest games [${record.manifest.games.join(", ")}]`);
           }
-          const engine8 = def.engine;
+          const engine9 = def.engine;
           const service = resolveGamesService();
           if (service === void 0) {
             throw new Error("the games runtime is not available in this process (game registration requires the games service)");
           }
           service.registerModGame(def);
           return tracked(() => {
-            service.unregisterModGame(gameId, engine8);
+            service.unregisterModGame(gameId, engine9);
           });
         }
       },
@@ -18121,9 +18123,9 @@ var ModHost = class _ModHost {
             if (entry.name.toLowerCase() === lowered) throw new Error(`macro name '${macroName}' is already registered`);
           }
           let failureAudited = false;
-          const wrapped = (args, engine8) => {
+          const wrapped = (args, engine9) => {
             try {
-              const result = fn(args, engine8);
+              const result = fn(args, engine9);
               if (typeof result === "string" || result === null) return result;
               if (typeof result === "number" || typeof result === "boolean") return String(result);
               return null;
@@ -18189,17 +18191,17 @@ var ModHost = class _ModHost {
     return api;
   }
 };
-function modInfoOf(manifest8) {
+function modInfoOf(manifest9) {
   return {
-    id: manifest8.id,
-    name: manifest8.name,
-    version: manifest8.version,
-    author: manifest8.author,
-    description: manifest8.description,
-    capabilities: manifest8.capabilities,
-    loadingOrder: manifest8.loadingOrder,
-    panel: manifest8.panel ?? null,
-    buttons: [...manifest8.buttons]
+    id: manifest9.id,
+    name: manifest9.name,
+    version: manifest9.version,
+    author: manifest9.author,
+    description: manifest9.description,
+    capabilities: manifest9.capabilities,
+    loadingOrder: manifest9.loadingOrder,
+    panel: manifest9.panel ?? null,
+    buttons: [...manifest9.buttons]
   };
 }
 var GENERATION_HOOK_PHASES = /* @__PURE__ */ new Set(["user-input", "pre-assemble", "pre-llm", "post-output", "post-save"]);
@@ -18999,6 +19001,725 @@ render()
 `;
 var blackjack = { manifest, engine, viewHtml };
 
+// packages/plugin/src/games/builtin/dungeon-crawl.ts
+import { randomInt as randomInt2 } from "node:crypto";
+var MANIFEST2 = {
+  id: "dsh-soulmojito.dungeon-crawl",
+  name: "\u5730\u7262\u722C\u884C",
+  version: "1.0.0",
+  players: { min: 2, max: 2, roles: ["hero", "world"] },
+  turnBased: true,
+  actionVocabulary: "\u63A2\u7D22\u8005\uFF08hero\uFF09\uFF1A\u79FB\u52A8 {type:'move', dir:'up'|'down'|'left'|'right'}\uFF08\u4E0A/\u4E0B/\u5DE6/\u53F3\u8D70\u4E00\u683C\uFF0C\u8E0F\u5165\u602A\u7269\u683C\u5373\u906D\u9047\u6218\uFF09\u3001\u653B\u51FB {type:'attack'}\uFF08\u4E0E\u540C\u683C\u602A\u7269\u640F\u6597\uFF0C\u4F24\u5BB3=\u653B\u51FB\u529B\xB11\uFF09\u3001\u559D\u836F {type:'drink'}\uFF08+12 HP\uFF0C\u6218\u6597\u4E2D\u559D\u836F\u4F1A\u628A\u56DE\u5408\u8BA9\u7ED9\u602A\u7269\uFF09\u3001\u4E0B\u697C {type:'descend'}\uFF08\u7AD9\u5728\u77F3\u9636\u{1FA9C}\u4E0A\u65F6\u4E0B\u63A2\u66F4\u6DF1\u4E00\u5C42\uFF09\uFF1B\u62FE\u53D6/\u9677\u9631/\u6389\u843D\u5728\u79FB\u52A8\u5185\u81EA\u52A8\u7ED3\u7B97\u3002\u5730\u4E0B\u57CE\u4E3B\uFF08world\uFF0CAgent \u626E\u6F14\uFF09\uFF1A\u602A\u7269\u56DE\u5408\u4E09\u9009\u4E00\u2014\u2014{type:'attack'}\uFF08\u653B\u51FB\u82F1\u96C4\uFF0C\u4F24\u5BB3=\u653B\u51FB\u529B\xB11-\u9632\u5FA1\uFF09\u3001{type:'heavy'}\uFF0835% \u843D\u7A7A\u3001\u547D\u4E2D\u53CC\u500D\u4F24\u5BB3\u7684\u731B\u51FB\uFF09\u3001{type:'defend'}\uFF08\u67B6\u52BF\u9632\u5FA1\uFF0C\u82F1\u96C4\u4E0B\u4E00\u51FB\u4F24\u5BB3\u51CF\u534A\uFF09\u3002\u76EE\u6807\uFF1A\u4E0B\u5230\u5730\u4E0B 3 \u5C42\u65A9\u6740\u708E\u9B54\u541B\u738B\u{1F432}\uFF1B\u82F1\u96C4 HP \u5F52\u96F6\u5219\u5730\u4E0B\u57CE\u83B7\u80DC\u3002\u8BA4\u8F93 {type:'resign'} \u7531\u8FD0\u884C\u65F6\u7EDF\u4E00\u5904\u7406"
+};
+var SIZE = 12;
+var INNER_MIN = 1;
+var INNER_MAX = 10;
+var MAX_DEPTH = 3;
+var SIGHT = 2;
+var carveTarget = (depth) => 40 + depth * 4;
+var monsterChance = (depth) => 0.24 + depth * 0.02;
+var ITEM_CHANCE = 0.15;
+var TRAP_CHANCE = 0.1;
+var POTION_HEAL = 15;
+var HEAVY_MISS = 0.35;
+var LOOT_POTION = 0.2;
+function hash01(...parts) {
+  let h = 2166136261;
+  for (const part of parts) {
+    h = Math.imul(h ^ (part | 0), 16777619) >>> 0;
+    h = Math.imul(h ^ h >>> 13, 2246822507) >>> 0;
+  }
+  h ^= h >>> 16;
+  h = Math.imul(h, 625341585) >>> 0;
+  h ^= h >>> 13;
+  return (h >>> 0) / 4294967296;
+}
+function roll01(next, saltA, saltB) {
+  const r = hash01(next.seed, next.rolls, saltA, saltB);
+  next.rolls += 1;
+  return r;
+}
+function roll3(next, saltA, saltB) {
+  const r = roll01(next, saltA, saltB);
+  return r < 1 / 3 ? -1 : r < 2 / 3 ? 0 : 1;
+}
+var DIR_DELTA = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+var DIR_CN = { up: "\u5317", down: "\u5357", left: "\u897F", right: "\u4E1C" };
+var keyOf = (x, y) => `${x},${y}`;
+function carveFloor(seed, depth) {
+  const target = carveTarget(depth);
+  const carved = /* @__PURE__ */ new Set([keyOf(1, 1)]);
+  let x = 1;
+  let y = 1;
+  let stairs = { x: 1, y: 1 };
+  for (let n = 0; carved.size < target; n += 1) {
+    const r = hash01(seed, depth, n, 81);
+    const delta = [[0, -1], [0, 1], [-1, 0], [1, 0]][Math.floor(r * 4)];
+    x = Math.min(INNER_MAX, Math.max(INNER_MIN, x + delta[0]));
+    y = Math.min(INNER_MAX, Math.max(INNER_MIN, y + delta[1]));
+    const key = keyOf(x, y);
+    if (!carved.has(key)) {
+      carved.add(key);
+      stairs = { x, y };
+    }
+  }
+  return { carved, stairs };
+}
+function isCarved(plan, x, y) {
+  return plan.carved.has(keyOf(x, y));
+}
+var MONSTER_NAMES = [
+  ["\u53F2\u83B1\u59C6", "\u5DE8\u578B\u9F20", "\u6D1E\u7A74\u8759\u8760"],
+  ["\u9AB7\u9AC5\u5175", "\u6BD2\u8718\u86DB", "\u5EA7\u72FC"],
+  ["\u77F3\u9B54\u50CF", "\u6697\u5F71", "\u708E\u9B54\u4EC6\u4ECE"]
+];
+var BOSS_NAME = "\u708E\u9B54\u541B\u738B";
+var WEAPON_OF_DEPTH = [
+  { name: "\u94C1\u5251", power: 1 },
+  { name: "\u79D8\u94F6\u5251", power: 2 },
+  { name: "\u79D8\u94F6\u5251", power: 2 }
+];
+var ARMOR_OF_DEPTH = [
+  { name: "\u76AE\u7532", power: 1 },
+  { name: "\u677F\u7532", power: 2 },
+  { name: "\u677F\u7532", power: 2 }
+];
+function contentClassAt(seed, depth, x, y) {
+  const r = hash01(seed, depth, x, y, 17);
+  if (r < monsterChance(depth)) return "monster";
+  if (r < monsterChance(depth) + ITEM_CHANCE) return "item";
+  if (r < monsterChance(depth) + ITEM_CHANCE + TRAP_CHANCE) return "trap";
+  return "none";
+}
+function monsterAt(seed, depth, x, y) {
+  const nameIdx = Math.floor(hash01(seed, depth, x, y, 18) * 3);
+  const name2 = MONSTER_NAMES[depth - 1][nameIdx];
+  const hpBonus = Math.floor(hash01(seed, depth, x, y, 19) * 2);
+  const atkBonus = Math.floor(hash01(seed, depth, x, y, 20) * 2);
+  const hp = 6 + depth * 3 + hpBonus;
+  return { name: name2, hp, maxHp: hp, atk: 1 + depth + atkBonus };
+}
+function bossMonster() {
+  return { name: BOSS_NAME, hp: 32, maxHp: 32, atk: 5, boss: true };
+}
+function itemAt(seed, depth, x, y) {
+  const r = hash01(seed, depth, x, y, 21);
+  if (r < 0.4) return { kind: "potion", name: "\u6CBB\u7597\u836F\u6C34" };
+  if (r < 0.6) {
+    const weapon = WEAPON_OF_DEPTH[depth - 1];
+    return { kind: "weapon", name: weapon.name, power: weapon.power };
+  }
+  if (r < 0.75) {
+    const armor = ARMOR_OF_DEPTH[depth - 1];
+    return { kind: "armor", name: armor.name, power: armor.power };
+  }
+  const amount = 5 + Math.floor(hash01(seed, depth, x, y, 22) * 9);
+  return { kind: "gold", name: "\u91D1\u5E01", amount };
+}
+function trapAt(seed, depth, x, y) {
+  if (contentClassAt(seed, depth, x, y) !== "trap") return false;
+  if (Math.max(Math.abs(x - 1), Math.abs(y - 1)) <= 1) return false;
+  return true;
+}
+function revealAround(state, plan) {
+  const { x: cx, y: cy } = state.hero;
+  for (let y = cy - SIGHT; y <= cy + SIGHT; y += 1) {
+    for (let x = cx - SIGHT; x <= cx + SIGHT; x += 1) {
+      if (x < 0 || x >= SIZE || y < 0 || y >= SIZE) continue;
+      const key = keyOf(x, y);
+      if (state.tiles[key] !== void 0) continue;
+      if (!isCarved(plan, x, y)) {
+        state.tiles[key] = { kind: "wall" };
+        continue;
+      }
+      const isStairs = plan.stairs.x === x && plan.stairs.y === y;
+      const tile = isStairs ? { kind: "stairs" } : { kind: "floor" };
+      if (isStairs && state.depth === MAX_DEPTH) {
+        tile.monster = bossMonster();
+      } else if (!isStairs && !(x === 1 && y === 1)) {
+        const cls = contentClassAt(state.seed, state.depth, x, y);
+        if (cls === "monster") tile.monster = monsterAt(state.seed, state.depth, x, y);
+        else if (cls === "item") tile.item = itemAt(state.seed, state.depth, x, y);
+      }
+      state.tiles[key] = tile;
+    }
+  }
+}
+function engagedMonsterOf(state) {
+  return state.tiles[keyOf(state.hero.x, state.hero.y)]?.monster;
+}
+function settleTurn(next, actor) {
+  if (next.finished) return;
+  const engaged = engagedMonsterOf(next) !== void 0;
+  next.turn = engaged ? actor === "hero" ? "world" : "hero" : "hero";
+}
+function cloneState2(state) {
+  return structuredClone(state);
+}
+function readDir(action) {
+  const dir = action.dir;
+  if (typeof dir !== "string" || !(dir in DIR_DELTA)) {
+    throw new Error(`\u79FB\u52A8\u65B9\u5411\u5FC5\u987B\u662F up/down/left/right\uFF0C\u6536\u5230\u300C${String(dir)}\u300D`);
+  }
+  return dir;
+}
+function heroMove(next, action) {
+  const dir = readDir(action);
+  const [dx, dy] = DIR_DELTA[dir];
+  const tx = next.hero.x + dx;
+  const ty = next.hero.y + dy;
+  if (tx < 0 || tx >= SIZE || ty < 0 || ty >= SIZE) {
+    throw new Error(`\u90A3\u4E00\u6B65\u8D8A\u8FC7\u4E86\u5730\u7262\u8FB9\u754C`);
+  }
+  const plan = carveFloor(next.seed, next.depth);
+  if (!isCarved(plan, tx, ty)) {
+    throw new Error(`\u524D\u65B9\uFF08${tx},${ty}\uFF09\u662F\u672A\u51FF\u5F00\u7684\u5CA9\u58C1`);
+  }
+  next.hero.x = tx;
+  next.hero.y = ty;
+  next.events.push(`\u82F1\u96C4\u5411${DIR_CN[dir]}\u63A2\u7D22`);
+  revealAround(next, plan);
+  const tile = next.tiles[keyOf(tx, ty)];
+  if (tile.monster !== void 0) {
+    const monster = tile.monster;
+    next.events.push(`\u906D\u9047 ${monster.name}\uFF01\u6218\u6597\u5F00\u59CB${monster.boss === true ? "\u2014\u2014\u77F3\u9636\u5C3D\u5934\u7684\u541B\u4E3B\u82CF\u9192\u4E86" : ""}`);
+    return;
+  }
+  if (tile.item !== void 0) {
+    const item = tile.item;
+    if (item.kind === "potion") {
+      next.hero.potions += 1;
+      delete tile.item;
+      next.events.push(`\u62FE\u83B7 \u6CBB\u7597\u836F\u6C34\uFF08\u73B0\u6709 ${next.hero.potions} \u74F6\uFF09`);
+    } else if (item.kind === "gold") {
+      const amount = item.amount ?? 0;
+      next.hero.gold += amount;
+      delete tile.item;
+      next.events.push(`\u62FE\u83B7 ${amount} \u91D1\u5E01`);
+    } else if (item.kind === "weapon") {
+      const power = item.power ?? 0;
+      if (power > next.hero.atk - 4) {
+        next.hero.atk = 4 + power;
+        next.hero.weapon = item.name;
+        delete tile.item;
+        next.events.push(`\u88C5\u5907 ${item.name}\uFF08\u653B\u51FB \u2192 ${next.hero.atk}\uFF09`);
+      } else {
+        next.events.push(`\u4F60\u6382\u4E86\u6382${item.name}\uFF0C\u8FD8\u662F\u7EE7\u7EED\u7528${next.hero.weapon}`);
+      }
+    } else {
+      const power = item.power ?? 0;
+      if (power > next.hero.def) {
+        next.hero.def = power;
+        next.hero.armor = item.name;
+        delete tile.item;
+        next.events.push(`\u88C5\u5907 ${item.name}\uFF08\u9632\u5FA1 \u2192 ${next.hero.def}\uFF09`);
+      } else {
+        next.events.push(`\u4F60\u6478\u4E86\u6478${item.name}\uFF0C\u8FD8\u662F\u7EE7\u7EED\u7A7F${next.hero.armor}`);
+      }
+    }
+  }
+  if (trapAt(next.seed, next.depth, tx, ty) && tile.trapSprung !== true) {
+    tile.trapSprung = true;
+    const dmg = 2 + next.depth;
+    next.hero.hp -= dmg;
+    next.events.push(`\u8E29\u4E2D\u9677\u9631\uFF01\u5C16\u523A\u4ECE\u5730\u9762\u5F39\u51FA\uFF08-${dmg} HP\uFF09\uFF0C\u82F1\u96C4\u5269 ${Math.max(0, next.hero.hp)}/${next.hero.maxHp}`);
+    if (next.hero.hp <= 0) {
+      next.hero.hp = 0;
+      next.finished = true;
+      next.winner = "world";
+      next.events.push("\u82F1\u96C4\u5012\u4E0B\u4E86\u2026\u2026\u5730\u4E0B\u57CE\u541E\u566C\u4E86\u5192\u9669\u8005");
+    }
+  }
+}
+function heroAttack(next) {
+  const monster = engagedMonsterOf(next);
+  if (monster === void 0) {
+    throw new Error("\u82F1\u96C4\u9762\u524D\u6CA1\u6709\u602A\u7269\u2014\u2014\u5148\u79FB\u52A8\u5230\u602A\u7269\u683C\u624D\u80FD\u653B\u51FB");
+  }
+  const raw = next.hero.atk + roll3(next, 161, 90);
+  const dmg = monster.braced === true ? Math.max(1, Math.floor(raw / 2)) : Math.max(1, raw);
+  const wasBraced = monster.braced === true;
+  monster.braced = false;
+  monster.hp -= dmg;
+  if (monster.hp > 0) {
+    next.events.push(`\u82F1\u96C4\u547D\u4E2D ${monster.name}\uFF08-${dmg}${wasBraced ? "\uFF0C\u88AB\u67B6\u52BF\u5316\u89E3\u4E86\u4E00\u534A" : ""}\uFF09\uFF0C${monster.name} \u5269 ${monster.hp} HP`);
+    return;
+  }
+  monster.hp = 0;
+  next.events.push(`\u82F1\u96C4\u547D\u4E2D ${monster.name}\uFF08-${dmg}\uFF09\uFF0C${monster.name} \u5012\u4E0B\u4E86`);
+  const tile = next.tiles[keyOf(next.hero.x, next.hero.y)];
+  delete tile.monster;
+  const gold = 3 + next.depth + Math.floor(roll01(next, 97, 22) * 4);
+  next.hero.gold += gold;
+  next.events.push(`${monster.name} \u6389\u843D ${gold} \u91D1\u5E01`);
+  if (roll01(next, 13, 9) < LOOT_POTION) {
+    next.hero.potions += 1;
+    next.events.push(`${monster.name} \u6389\u843D \u6CBB\u7597\u836F\u6C34\uFF08\u73B0\u6709 ${next.hero.potions} \u74F6\uFF09`);
+  }
+  if (monster.boss === true && next.depth === MAX_DEPTH) {
+    next.finished = true;
+    next.winner = "hero";
+    next.events.push(`\u82F1\u96C4\u65A9\u6740 ${BOSS_NAME}\uFF0C\u643A ${next.hero.gold} \u91D1\u5E01\u51EF\u65CB\u2014\u2014\u5730\u7262\u722C\u884C\u901A\u5173\uFF01`);
+  }
+}
+function heroDrink(next) {
+  if (next.hero.potions <= 0) {
+    throw new Error("\u6CA1\u6709\u6CBB\u7597\u836F\u6C34\u4E86");
+  }
+  if (next.hero.hp >= next.hero.maxHp) {
+    throw new Error(`\u82F1\u96C4\u72B6\u6001\u826F\u597D\uFF08${next.hero.hp}/${next.hero.maxHp}\uFF09\uFF0C\u4E0D\u9700\u8981\u559D\u836F`);
+  }
+  next.hero.potions -= 1;
+  const healed = Math.min(next.hero.maxHp, next.hero.hp + POTION_HEAL) - next.hero.hp;
+  next.hero.hp += healed;
+  next.events.push(`\u82F1\u96C4\u559D\u4E0B\u6CBB\u7597\u836F\u6C34\uFF08+${healed} HP\uFF0C\u5269 ${next.hero.hp}/${next.hero.maxHp}\uFF09`);
+}
+function heroDescend(next) {
+  const tile = next.tiles[keyOf(next.hero.x, next.hero.y)];
+  if (tile?.kind !== "stairs") {
+    throw new Error("\u8FD9\u91CC\u6CA1\u6709\u5411\u4E0B\u7684\u77F3\u9636\u2014\u2014\u627E\u5230 \u{1FA9C} \u624D\u80FD\u4E0B\u697C");
+  }
+  if (next.depth >= MAX_DEPTH) {
+    throw new Error(`\u5730\u4E0B ${MAX_DEPTH} \u5C42\u7684\u77F3\u9636\u5C3D\u5934\u662F${BOSS_NAME}\u7684\u5DE2\u7A74\u2014\u2014\u51FB\u8D25\u5B83\u5373\u662F\u901A\u5173`);
+  }
+  next.depth += 1;
+  next.hero.x = 1;
+  next.hero.y = 1;
+  next.tiles = {};
+  revealAround(next, carveFloor(next.seed, next.depth));
+  next.events.push(`\u82F1\u96C4\u6CBF\u77F3\u9636\u4E0B\u884C\uFF0C\u6765\u5230\u5730\u4E0B ${next.depth} \u5C42\uFF1B\u8EAB\u540E\u7684\u697C\u68AF\u8F70\u7136\u574D\u584C`);
+}
+function worldAct(next, action) {
+  const monster = engagedMonsterOf(next);
+  if (monster === void 0) {
+    throw new Error("\u5F53\u524D\u6CA1\u6709\u4E0E\u82F1\u96C4\u63A5\u6218\u7684\u602A\u7269");
+  }
+  const kind = action.type;
+  if (kind === "attack") {
+    const base = monster.atk + roll3(next, 58, 163) - next.hero.def;
+    const dmg = Math.max(1, base);
+    next.hero.hp -= dmg;
+    next.events.push(`${monster.name} \u51FB\u4E2D\u82F1\u96C4\uFF08-${dmg}\uFF09\uFF0C\u82F1\u96C4\u5269 ${Math.max(0, next.hero.hp)}/${next.hero.maxHp}`);
+  } else if (kind === "heavy") {
+    if (roll01(next, 238, 254) < HEAVY_MISS) {
+      next.events.push(`${monster.name} \u84C4\u529B\u731B\u51FB\uFF0C\u5374\u88AB\u82F1\u96C4\u4FA7\u8EAB\u95EA\u8FC7\uFF01`);
+    } else {
+      const base = monster.atk + roll3(next, 59, 179) - next.hero.def;
+      const dmg = Math.max(2, base * 2);
+      next.hero.hp -= dmg;
+      next.events.push(`${monster.name} \u5168\u529B\u731B\u51FB\u547D\u4E2D\uFF08-${dmg}\uFF09\uFF0C\u82F1\u96C4\u5269 ${Math.max(0, next.hero.hp)}/${next.hero.maxHp}`);
+    }
+  } else if (kind === "defend") {
+    monster.braced = true;
+    next.events.push(`${monster.name} \u6536\u7D27\u8EAB\u5F62\uFF0C\u6446\u51FA\u9632\u5FA1\u67B6\u52BF`);
+    return;
+  } else {
+    throw new Error(`\u4E0D\u652F\u6301\u7684\u52A8\u4F5C\u7C7B\u578B\u300C${String(kind)}\u300D\uFF1Aworld \u53EA\u5B9E\u73B0 attack/heavy/defend\uFF08resign \u7531\u8FD0\u884C\u65F6\u7EDF\u4E00\u5904\u7406\uFF09`);
+  }
+  if (next.hero.hp <= 0) {
+    next.hero.hp = 0;
+    next.finished = true;
+    next.winner = "world";
+    next.events.push("\u82F1\u96C4\u5012\u4E0B\u4E86\u2026\u2026\u5730\u4E0B\u57CE\u541E\u566C\u4E86\u5192\u9669\u8005");
+  }
+}
+function freshHero() {
+  return { x: 1, y: 1, hp: 30, maxHp: 30, atk: 4, def: 0, potions: 3, gold: 0, weapon: "\u6728\u68CD", armor: "\u5E03\u8863" };
+}
+var engine2 = {
+  meta: MANIFEST2,
+  /** 开局：地下 1 层，入口 (1,1) 揭示半径 2；options.seed（正整数）可复现。 */
+  createGame(options) {
+    const seedOption = options?.seed;
+    const seed = typeof seedOption === "number" && Number.isInteger(seedOption) && seedOption > 0 ? seedOption : randomInt2(1, 2147483647);
+    const state = {
+      turn: "hero",
+      seed,
+      rolls: 0,
+      depth: 1,
+      hero: freshHero(),
+      tiles: {},
+      finished: false,
+      winner: null
+    };
+    revealAround(state, carveFloor(seed, 1));
+    return { state };
+  },
+  legalActions(state) {
+    if (state.finished) return [];
+    const plan = carveFloor(state.seed, state.depth);
+    const actions = [];
+    if (state.turn === "hero") {
+      for (const dir of ["up", "down", "left", "right"]) {
+        const [dx, dy] = DIR_DELTA[dir];
+        if (isCarved(plan, state.hero.x + dx, state.hero.y + dy)) {
+          actions.push({ type: "move", dir });
+        }
+      }
+      if (engagedMonsterOf(state) !== void 0) actions.push({ type: "attack" });
+      if (state.hero.potions > 0 && state.hero.hp < state.hero.maxHp) actions.push({ type: "drink" });
+      const tile = state.tiles[keyOf(state.hero.x, state.hero.y)];
+      if (tile?.kind === "stairs" && state.depth < MAX_DEPTH) actions.push({ type: "descend" });
+    } else {
+      if (engagedMonsterOf(state) !== void 0) {
+        actions.push({ type: "attack" }, { type: "heavy" }, { type: "defend" });
+      }
+    }
+    return actions;
+  },
+  applyAction(state, action, actor) {
+    if (action === null || typeof action !== "object" || Array.isArray(action)) {
+      throw new Error("\u52A8\u4F5C\u5FC5\u987B\u662F JSON \u5BF9\u8C61");
+    }
+    const typed = action;
+    if (typeof typed.type !== "string" || typed.type === "") {
+      throw new Error("\u52A8\u4F5C\u7F3A\u5C11 type \u5B57\u6BB5");
+    }
+    if (typed.type === "resign") {
+      throw new Error("resign \u662F\u4FDD\u7559\u52A8\u4F5C\uFF0C\u7531\u8FD0\u884C\u65F6\u7EDF\u4E00\u5904\u7406\uFF08\u5F15\u64CE\u4E0D\u5B9E\u73B0\uFF09");
+    }
+    if (state.finished) {
+      throw new Error(`\u5BF9\u5C40\u5DF2\u7ED3\u675F\uFF08${state.winner === "hero" ? "\u82F1\u96C4\u901A\u5173" : "\u82F1\u96C4\u5012\u4E0B"}\uFF09\uFF0C\u4E0D\u80FD\u518D\u884C\u52A8`);
+    }
+    if (actor !== "hero" && actor !== "world") {
+      throw new Error(`\u672A\u77E5\u89D2\u8272\u300C${String(actor)}\u300D\uFF1A\u672C\u6E38\u620F\u89D2\u8272\u4E3A hero/world`);
+    }
+    if (actor !== state.turn) {
+      throw new Error(actor === "hero" ? "\u73B0\u5728\u8F6E\u5230\u5730\u4E0B\u57CE\u4E3B\uFF08world\uFF09\u884C\u52A8\uFF0C\u82F1\u96C4\u4E0D\u80FD\u79FB\u52A8" : "\u73B0\u5728\u8F6E\u5230\u82F1\u96C4\uFF08hero\uFF09\u884C\u52A8\uFF0C\u602A\u7269\u4E0D\u80FD\u51FA\u624B");
+    }
+    const next = cloneState2(state);
+    next.events = [];
+    if (actor === "hero") {
+      if (typed.type === "move") heroMove(next, typed);
+      else if (typed.type === "attack") heroAttack(next);
+      else if (typed.type === "drink") heroDrink(next);
+      else if (typed.type === "descend") heroDescend(next);
+      else throw new Error(`\u4E0D\u652F\u6301\u7684\u52A8\u4F5C\u7C7B\u578B\u300C${typed.type}\u300D\uFF1Ahero \u53EA\u5B9E\u73B0 move/attack/drink/descend\uFF08resign \u7531\u8FD0\u884C\u65F6\u7EDF\u4E00\u5904\u7406\uFF09`);
+    } else {
+      worldAct(next, typed);
+    }
+    settleTurn(next, actor);
+    const events = next.events;
+    delete next.events;
+    return { state: next, events, finished: next.finished, winner: next.winner, summary: events.join("\uFF0C") };
+  },
+  /** 落子前局面上的可叙述文案（narration 素材，sessions 在 applyAction 之前取）。 */
+  describe(state, actor, action) {
+    if (action !== null && typeof action === "object" && !Array.isArray(action)) {
+      const typed = action;
+      if (typeof typed.type !== "string") return `${String(actor)} \u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
+      if (typed.type === "move") {
+        const dir = typeof typed.dir === "string" && typed.dir in DIR_DELTA ? typed.dir : null;
+        return dir === null ? "\u82F1\u96C4\u8E0F\u51FA\u63A2\u7D22\u7684\u4E00\u6B65" : `\u82F1\u96C4\u5411${DIR_CN[dir]}\u63A2\u7D22`;
+      }
+      if (typed.type === "attack") {
+        const monster = engagedMonsterOf(state);
+        if (actor === "hero") return monster === void 0 ? "\u82F1\u96C4\u6325\u5251\u5288\u7A7A" : `\u82F1\u96C4\u6325\u5251\u65A9\u5411${monster.name}`;
+        return monster === void 0 ? "\u602A\u7269\u6251\u5411\u82F1\u96C4" : `${monster.name}\u5411\u82F1\u96C4\u53D1\u8D77\u653B\u51FB`;
+      }
+      if (typed.type === "heavy") {
+        const monster = engagedMonsterOf(state);
+        return monster === void 0 ? "\u602A\u7269\u84C4\u529B\u731B\u51FB" : `${monster.name}\u84C4\u529B\u731B\u51FB`;
+      }
+      if (typed.type === "defend") {
+        const monster = engagedMonsterOf(state);
+        return monster === void 0 ? "\u602A\u7269\u6446\u51FA\u9632\u5FA1\u67B6\u52BF" : `${monster.name}\u6536\u7D27\u8EAB\u5F62\u9632\u5FA1`;
+      }
+      if (typed.type === "drink") return "\u82F1\u96C4\u6478\u51FA\u6CBB\u7597\u836F\u6C34";
+      if (typed.type === "descend") return "\u82F1\u96C4\u6CBF\u77F3\u9636\u4E0B\u63A2\u66F4\u6DF1\u7684\u9ED1\u6697";
+      return `${String(actor)} \u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
+    }
+    return `${String(actor)} \u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
+  }
+};
+var manifest2 = MANIFEST2;
+function previewPayload() {
+  const { state } = engine2.createGame({ seed: 1 });
+  return { state, turn: "hero", legal: engine2.legalActions(state), finished: false, summary: "\u9759\u6001\u9884\u89C8\uFF08\u65E0 token\uFF09" };
+}
+var PREVIEW_JSON = JSON.stringify(previewPayload());
+var viewHtml2 = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>\u5730\u7262\u722C\u884C \xB7 dsh-soulmojito \u6E38\u620F\u6865</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 12px;
+    background: #14120f; color: #e8e2d4;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  header { width: 100%; max-width: 360px; display: flex; justify-content: space-between; font-size: 14px; padding-bottom: 6px; }
+  .session-id { color: #9a9184; font-size: 11px; font-variant-numeric: tabular-nums; }
+  #stats { width: 100%; max-width: 360px; display: flex; align-items: center; gap: 8px; font-size: 12px;
+    background: #1e1b16; border: 1px solid #3a352b; border-radius: 6px; padding: 6px 8px; }
+  .hp-wrap { flex: 1; min-width: 80px; }
+  .hp-bar { height: 8px; border-radius: 4px; background: #31281f; overflow: hidden; margin-top: 3px; }
+  .hp-fill { height: 100%; background: linear-gradient(90deg, #a23333, #c4553d); width: 100%; }
+  .stat { color: #c9bfa8; white-space: nowrap; }
+  #banner { width: 100%; max-width: 360px; border: 1px solid #3a352b; background: #1e1b16; border-radius: 6px;
+    padding: 6px 10px; font-size: 13px; text-align: center; margin: 8px 0; line-height: 1.5; }
+  #banner.world { color: #e0996a; }
+  #banner.over { color: #d4b95e; }
+  #board-wrap { position: relative; width: 100%; max-width: 360px; }
+  #board { display: grid; grid-template-columns: repeat(12, 1fr); gap: 2px; width: 100%; }
+  .cell {
+    aspect-ratio: 1; min-height: 0; border-radius: 3px; font-size: 13px; line-height: 1;
+    display: flex; align-items: center; justify-content: center; user-select: none;
+    background: #0c0a08; overflow: hidden;
+  }
+  .cell.wall { background: #2e2a22; box-shadow: inset 0 0 0 1px #241f18; }
+  .cell.floor { background: #221e17; box-shadow: inset 0 0 0 1px #2d2820; }
+  .cell.stairs { background: #33290f; box-shadow: inset 0 0 0 1px #57431a; }
+  .cell.hero-at { outline: 2px solid #d4b95e; outline-offset: -2px; z-index: 1; }
+  .cell.engage { outline: 2px solid #c4553d; outline-offset: -2px; }
+  /* \u4E8B\u4EF6\u63D0\u793A\u6808\uFF082026-10-16 \u7528\u6237\u9700\u6C42\u300C\u653B\u51FB\u7B49\u4EA4\u4E92\u4E8B\u4EF6\u5E94\u5F39\u51FA\u663E\u773C\u63D0\u793A\u300D\uFF09\uFF1A
+     \u6BCF\u6B21\u5C40\u9762\u53D8\u5316\u628A\u8BE5\u624B summary \u4EE5\u6D6E\u5C42\u63D0\u793A\u5F39\u51FA\u2014\u2014\u906D\u9047/\u5012\u4E0B/\u9677\u9631\u52A0\u91CD\u4E3A danger\u3001
+     \u901A\u5173/\u7EC8\u5C40\u4E3A finale\uFF1B2.8s \u540E\u6DE1\u51FA\uFF0C\u6808\u5185\u81F3\u591A 3 \u6761\u3002 */
+  /* \u4E8B\u4EF6\u63D0\u793A\u6808\uFF082026-10-16 \u7528\u6237\u9700\u6C42\u300C\u653B\u51FB\u7B49\u4EA4\u4E92\u4E8B\u4EF6\u5E94\u5F39\u51FA\u663E\u773C\u63D0\u793A\u300D\uFF1B\u540C\u65E5
+     \u4E09\u6B21\u8FED\u4EE3\u79FB\u4F4D\uFF1A\u521D\u7248\u6D6E\u5728\u68CB\u76D8\u4E0A\u6CBF\uFF0C\u63D0\u793A\u591A\u65F6\u6321\u4F4F\u753B\u9762\u2014\u2014\u79FB\u5230\u68CB\u76D8\u4E0E\u64CD\u4F5C\u680F
+     \u4E4B\u95F4\u7684\u5E38\u89C4\u6587\u6863\u6D41\u5757\uFF0C\u591A\u6761\u53EA\u5411\u4E0B\u63A8\u64CD\u4F5C\u680F\u3001\u6C38\u4E0D\u906E\u6321\u68CB\u76D8\uFF09\uFF1A\u906D\u9047/\u5012\u4E0B/\u9677\u9631
+     \u52A0\u91CD\u4E3A danger\u3001\u901A\u5173\u4E3A finale\uFF1B2.8s \u540E\u6DE1\u51FA\uFF0C\u6808\u5185\u81F3\u591A 3 \u6761\u3002 */
+  #dc-toast-stack { width: 100%; max-width: 360px; display: flex; flex-direction: column;
+    align-items: stretch; gap: 4px; margin-top: 8px; pointer-events: none; }
+  .dc-toast { background: rgba(18, 14, 9, 0.93); border: 1px solid #57431a; color: #f0dfae;
+    padding: 6px 10px; border-radius: 8px; font-size: 13px; font-weight: 600; line-height: 1.45;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45); text-align: center;
+    animation: dc-toast-in 0.18s ease-out, dc-fade-out 0.5s ease-in 2.8s forwards; }
+  .dc-toast.danger { border-color: #c4553d; color: #ffbca8; }
+  .dc-toast.finale { border-color: #d4b95e; color: #ffe9a8; box-shadow: 0 0 14px rgba(212, 185, 94, 0.35); }
+  /* \u98D8\u5B57\u4F24\u5BB3\u6570\u5B57\uFF1A\u82F1\u96C4\u53D7\u51FB\u7EA2 / \u602A\u7269\u53D7\u521B\u6A59 / \u6CBB\u7597\u7EFF / \u51FB\u6740\u9AB7\u9AC5\uFF0C\u968F\u683C\u4F4D\u4E0A\u6D6E\u6D88\u6563\u3002 */
+  .dc-float-num { position: absolute; z-index: 6; font-weight: 800; font-size: 15px; pointer-events: none;
+    text-shadow: 0 1px 2px #000; animation: dc-rise 1.1s ease-out forwards; }
+  .dc-float-num.hurt { color: #ff5b5b; }
+  .dc-float-num.dmg { color: #ff8f6b; }
+  .dc-float-num.heal { color: #7fe08a; }
+  @keyframes dc-rise { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-26px); } }
+  @keyframes dc-toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes dc-fade-out { to { opacity: 0; } }
+  #controls { width: 100%; max-width: 360px; display: flex; gap: 10px; margin-top: 10px; justify-content: space-between; }
+  .pad { display: grid; grid-template-columns: repeat(3, 40px); grid-template-rows: repeat(2, 34px); gap: 4px; }
+  .pad button, #actions button {
+    border: 1px solid #4a4335; background: #262117; color: #e8e2d4; border-radius: 6px;
+    font-size: 15px; cursor: pointer;
+  }
+  .pad button:disabled, #actions button:disabled { opacity: 0.35; cursor: default; }
+  .pad button:not(:disabled):hover, #actions button:not(:disabled):hover { background: #35301f; }
+  .pad .blank { visibility: hidden; }
+  #actions { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  #actions button { font-size: 13px; padding: 0 8px; text-align: left; }
+  .k { display: inline-block; margin-left: 6px; padding: 0 5px; border: 1px solid #6a5f45; border-radius: 4px;
+    font-size: 10px; color: #b3a888; font-weight: 600; }
+  footer { margin-top: 8px; font-size: 11px; color: #8d857a; text-align: center; width: 100%; max-width: 360px; line-height: 1.6; }
+</style>
+</head>
+<body data-game="dsh-soulmojito.dungeon-crawl">
+<header><span>\u{1F3F0} \u5730\u7262\u722C\u884C</span><span class="session-id" id="session-id"></span></header>
+<div id="stats">
+  <div class="hp-wrap"><span id="hp-text" class="stat"></span><div class="hp-bar"><div class="hp-fill" id="hp-fill"></div></div></div>
+  <span class="stat" id="stat-line"></span>
+</div>
+<div id="banner">\u7B49\u5F85\u5BF9\u5C40\u2026</div>
+<div id="board-wrap">
+  <div id="board"></div>
+</div>
+<div id="dc-toast-stack"></div>
+<div id="controls">
+  <div class="pad">
+    <span class="blank"></span><button id="btn-up" disabled>\u2191</button><span class="blank"></span>
+    <button id="btn-left" disabled>\u2190</button><button id="btn-down" disabled>\u2193</button><button id="btn-right" disabled>\u2192</button>
+  </div>
+  <div id="actions">
+    <button id="btn-attack" disabled>\u2694\uFE0F \u653B\u51FB<span class="k">J</span></button>
+    <button id="btn-drink" disabled>\u{1F9EA} \u559D\u836F<span class="k">K</span></button>
+    <button id="btn-descend" disabled>\u{1FA9C} \u4E0B\u697C<span class="k">L</span></button>
+  </div>
+</div>
+<footer>\u8E0F\u5165\u602A\u7269\u683C\u8FDB\u5165\u906D\u9047\u6218\uFF0C\u5730\u4E0B\u57CE\u4E3B\uFF08AI\uFF09\u9A71\u52A8\u602A\u7269\u56DE\u5408\u3002<br>PC \u952E\u76D8\uFF1AWASD / \u65B9\u5411\u952E\u79FB\u52A8 \xB7 J \u653B\u51FB \xB7 K \u559D\u836F \xB7 L \u4E0B\u697C\u3002<br>\u627E\u5230 \u{1FA9C} \u4E0B\u5230\u5730\u4E0B 3 \u5C42\uFF0C\u65A9\u6740 \u{1F432} \u708E\u9B54\u541B\u738B\u5373\u901A\u5173\u3002</footer>
+<script>
+'use strict'
+/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-soulmojito:game-state\uFF08token \u5BF9\u8D26\uFF09\u3001
+   \u4E0A\u884C dsh-soulmojito:game-action\u3002token \u4ECE location.search \u81EA\u8BFB\uFF1B\u65E0 token
+   \u6E32\u67D3\u9759\u6001\u9884\u89C8\uFF08\u6A21\u5757\u671F\u7531\u5F15\u64CE\u771F\u5B9E\u751F\u6210\u7684\u5F00\u5C40\u6001\uFF09\u3002 */
+var params = new URLSearchParams(window.location.search)
+var TOKEN = params.get('token')
+var PREVIEW = ${PREVIEW_JSON}
+var board = document.getElementById('board')
+var boardWrap = document.getElementById('board-wrap')
+var toastStack = document.getElementById('dc-toast-stack')
+var banner = document.getElementById('banner')
+var EMOJI_ITEM = { potion: '\u{1F9EA}', weapon: '\u2694\uFE0F', armor: '\u{1F6E1}\uFE0F', gold: '\u{1F4B0}' }
+/* \u4E0A\u4E00\u5E27\u6307\u7EB9\u4E0E\u8840\u91CF\u951A\u70B9\uFF1A\u5C40\u9762\u771F\u53D8\u5316\u624D\u5F39\u63D0\u793A/\u98D8\u5B57\uFF08\u8F6E\u8BE2\u91CD\u590D\u4E0B\u53D1\u4E0D\u5F39\uFF09\u3002 */
+var lastSeen = { fp: '', heroHp: -1, monHp: -1 }
+
+function byId(id) { return document.getElementById(id) }
+
+function send(action) {
+  try { window.parent.postMessage({ type: 'dsh-soulmojito:game-action', token: TOKEN, action: action }, '*') } catch (_) {}
+}
+
+function bindDir(id, dir) {
+  byId(id).addEventListener('click', function () { send({ type: 'move', dir: dir }) })
+}
+bindDir('btn-up', 'up'); bindDir('btn-down', 'down'); bindDir('btn-left', 'left'); bindDir('btn-right', 'right')
+byId('btn-attack').addEventListener('click', function () { send({ type: 'attack' }) })
+byId('btn-drink').addEventListener('click', function () { send({ type: 'drink' }) })
+byId('btn-descend').addEventListener('click', function () { send({ type: 'descend' }) })
+
+/* \u4E8B\u4EF6\u63D0\u793A\uFF1A\u8BE5\u624B summary \u5F39\u6D6E\u5C42\uFF08\u5173\u952E\u8BCD\u5206\u7EA7\uFF09\uFF0C\u6808\u5185\u81F3\u591A 3 \u6761\u3001\u5230\u70B9\u81EA\u6E05\u3002 */
+function toastClassOf(text) {
+  if (text.indexOf('\u901A\u5173') >= 0) return 'finale'
+  if (text.indexOf('\u906D\u9047') >= 0 || text.indexOf('\u9677\u9631') >= 0 || text.indexOf('\u5012\u4E0B') >= 0) return 'danger'
+  return ''
+}
+function showToast(text) {
+  var host = document.createElement('div')
+  var cls = toastClassOf(text)
+  host.className = 'dc-toast' + (cls === '' ? '' : ' ' + cls)
+  host.textContent = text
+  toastStack.appendChild(host)
+  while (toastStack.children.length > 3) toastStack.removeChild(toastStack.firstChild)
+  setTimeout(function () { if (host.parentNode === toastStack) toastStack.removeChild(host) }, 3400)
+}
+
+/* \u98D8\u5B57\u4F24\u5BB3\uFF1A\u6309\u683C\u4F4D\u4E0A\u6D6E\uFF08offsetLeft/offsetTop \u76F8\u5BF9\u5B9A\u4F4D\u951A board-wrap\uFF09\uFF0C\u5230\u70B9\u81EA\u6E05\u3002 */
+function floatNumber(x, y, text, cls) {
+  var cell = board.children[y * 12 + x]
+  if (cell === undefined || cell === null) return
+  var host = document.createElement('div')
+  host.className = 'dc-float-num ' + cls
+  host.textContent = text
+  host.style.left = (cell.offsetLeft + (cell.offsetWidth || 0) / 2 - 14) + 'px'
+  host.style.top = (cell.offsetTop - 4) + 'px'
+  boardWrap.appendChild(host)
+  setTimeout(function () { if (host.parentNode === boardWrap) boardWrap.removeChild(host) }, 1200)
+}
+
+/* PC \u952E\u76D8\uFF082026-10-16 \u7528\u6237\u9700\u6C42\uFF09\uFF1AWASD/\u65B9\u5411\u952E\u79FB\u52A8\u3001J/K/L \u4E09\u52A8\u4F5C\u2014\u2014\u4E0E\u6309\u94AE\u5171\u7528
+   \u540C\u4E00\u5408\u6CD5\u9762\uFF08\u6309\u94AE disabled \u5373\u4E0D\u52A8\u4F5C\uFF09\uFF0C\u5E26\u4FEE\u9970\u952E\u7684\u7EC4\u5408\u4E0D\u52AB\u6301\uFF08\u6D4F\u89C8\u5668\u5FEB\u6377\u952E\uFF09\u3002 */
+var KEY_DIRS = { w: 'up', arrowup: 'up', s: 'down', arrowdown: 'down', a: 'left', arrowleft: 'left', d: 'right', arrowright: 'right' }
+var KEY_ACTIONS = { j: ['btn-attack', 'attack'], k: ['btn-drink', 'drink'], l: ['btn-descend', 'descend'] }
+document.addEventListener('keydown', function (event) {
+  if (!TOKEN || event.ctrlKey || event.altKey || event.metaKey) return
+  var key = String(event.key || '').toLowerCase()
+  var dir = KEY_DIRS[key]
+  if (dir !== undefined) {
+    var btnId = dir === 'up' ? 'btn-up' : dir === 'down' ? 'btn-down' : dir === 'left' ? 'btn-left' : 'btn-right'
+    if (!byId(btnId).disabled) {
+      event.preventDefault()
+      send({ type: 'move', dir: dir })
+    }
+    return
+  }
+  var bound = KEY_ACTIONS[key]
+  if (bound !== undefined && !byId(bound[0]).disabled) {
+    event.preventDefault()
+    send({ type: bound[1] })
+  }
+})
+
+function fingerprint(state, view, monsterHere) {
+  return [state.hero.x, state.hero.y, state.hero.hp, state.hero.potions, state.hero.gold,
+    state.hero.atk, state.hero.def, view.turn, view.finished ? 1 : 0, monsterHere ? monsterHere.hp : ''].join('|')
+}
+
+function render(view, session, live) {
+  var state = view.state
+  var hero = state.hero
+  var legal = {}
+  for (var i = 0; i < (view.legal || []).length; i += 1) {
+    var a = view.legal[i]
+    if (a.type === 'move') legal[a.dir] = true
+    else legal[a.type] = true
+  }
+  var monsterHere = state.tiles[hero.x + ',' + hero.y] && state.tiles[hero.x + ',' + hero.y].monster
+
+  /* \u4E8B\u4EF6\u63D0\u793A\u4E0E\u98D8\u5B57\uFF08\u53EA\u5728\u5B9E\u65F6\u4E0B\u884C\u4E14\u5C40\u9762\u771F\u53D8\u5316\u65F6\u2014\u2014\u9884\u89C8/\u91CD\u590D\u8F6E\u8BE2\u4E0D\u5F39\uFF09\uFF1A
+     HP \u5DEE\u5206 \u2192 \u82F1\u96C4\u53D7\u51FB/\u6CBB\u7597\u98D8\u5B57\u3001\u602A\u7269\u53D7\u521B/\u9635\u4EA1\u98D8\u5B57\uFF1Bsummary \u2192 \u63D0\u793A\u6808\u3002 */
+  var fp = fingerprint(state, view, monsterHere)
+  if (live && lastSeen.fp !== '' && fp !== lastSeen.fp) {
+    if (lastSeen.heroHp >= 0 && hero.hp !== lastSeen.heroHp) {
+      floatNumber(hero.x, hero.y, hero.hp < lastSeen.heroHp ? String(lastSeen.heroHp - hero.hp) : '+' + String(hero.hp - lastSeen.heroHp),
+        hero.hp < lastSeen.heroHp ? 'hurt' : 'heal')
+    }
+    if (lastSeen.monHp > 0) {
+      if (monsterHere && monsterHere.hp < lastSeen.monHp) floatNumber(hero.x, hero.y, String(lastSeen.monHp - monsterHere.hp), 'dmg')
+      else if (!monsterHere) floatNumber(hero.x, hero.y, '\u{1F480}', 'dmg')
+    }
+    if (view.summary) showToast(view.summary)
+  }
+  lastSeen = { fp: fp, heroHp: hero.hp, monHp: monsterHere ? monsterHere.hp : -1 }
+
+  byId('session-id').textContent = session ? session.id : ''
+  byId('hp-text').textContent = 'HP ' + hero.hp + '/' + hero.maxHp
+  byId('hp-fill').style.width = Math.max(0, Math.round(hero.hp * 100 / hero.maxHp)) + '%'
+  byId('stat-line').textContent = '\u5730\u4E0B' + state.depth + '/3\u5C42 \u2694\uFE0F' + hero.atk + ' \u{1F6E1}\uFE0F' + hero.def + ' \u{1F9EA}\xD7' + hero.potions + ' \u{1F4B0}' + hero.gold
+
+  if (view.finished) {
+    banner.className = 'over'
+    banner.textContent = view.summary || '\u5BF9\u5C40\u7ED3\u675F'
+  } else if (monsterHere) {
+    banner.className = ''
+    banner.textContent = '\u2694\uFE0F ' + monsterHere.name + ' ' + monsterHere.hp + '/' + monsterHere.maxHp +
+      (view.turn === 'world' ? ' \xB7 \u5730\u4E0B\u57CE\u4E3B\u884C\u52A8\u4E2D\u2026' : ' \xB7 \u4F60\u7684\u56DE\u5408')
+  } else if (view.turn === 'world') {
+    banner.className = 'world'
+    banner.textContent = '\u5730\u4E0B\u57CE\u4E3B\u884C\u52A8\u4E2D\u2026'
+  } else {
+    banner.className = ''
+    banner.textContent = view.summary ? view.summary : '\u4F60\u7684\u56DE\u5408 \xB7 \u63A2\u7D22\u5730\u7262'
+  }
+
+  board.innerHTML = ''
+  for (var y = 0; y < 12; y += 1) {
+    for (var x = 0; x < 12; x += 1) {
+      var cell = document.createElement('div')
+      var tile = state.tiles[x + ',' + y]
+      var text = ''
+      cell.className = 'cell' + (tile ? ' ' + tile.kind : '')
+      if (tile) {
+        if (tile.monster) text += tile.monster.boss ? '\u{1F432}' : '\u{1F479}'
+        if (tile.item) text += EMOJI_ITEM[tile.item.kind] || '\u2728'
+        if (tile.trapSprung) text += '\u{1F573}\uFE0F'
+        if (tile.kind === 'stairs' && !tile.monster) text += '\u{1FA9C}'
+      }
+      if (x === hero.x && y === hero.y) {
+        text = '\u{1F9D9}' + text
+        cell.className += monsterHere ? ' engage' : ' hero-at'
+      }
+      cell.textContent = text
+      board.appendChild(cell)
+    }
+  }
+
+  var myTurn = !view.finished && view.turn === 'hero'
+  byId('btn-up').disabled = !(myTurn && legal.up)
+  byId('btn-down').disabled = !(myTurn && legal.down)
+  byId('btn-left').disabled = !(myTurn && legal.left)
+  byId('btn-right').disabled = !(myTurn && legal.right)
+  byId('btn-attack').disabled = !(myTurn && legal.attack)
+  byId('btn-drink').disabled = !(myTurn && legal.drink)
+  byId('btn-descend').disabled = !(myTurn && legal.descend)
+}
+
+window.addEventListener('message', function (event) {
+  var data = event.data
+  if (!data || data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
+  render(data.view, data.session, true)
+})
+
+if (!TOKEN) {
+  render(PREVIEW, null, false)
+}
+</script>
+</body>
+</html>
+`;
+var dungeonCrawl = { manifest: manifest2, engine: engine2, viewHtml: viewHtml2 };
+
 // packages/plugin/src/games/standard.ts
 var GAME_STATE_MAX_BYTES = 65536;
 var GAME_ACTION_MAX_BYTES = 4096;
@@ -19131,12 +19852,12 @@ function parseBoardCoord(value) {
   const parsed = Number(text);
   return Number.isInteger(parsed) ? parsed : null;
 }
-function smokeTestGameEngine(engine8) {
+function smokeTestGameEngine(engine9) {
   const reasons = [];
-  const roles = engine8.meta.players.roles;
+  const roles = engine9.meta.players.roles;
   let created;
   try {
-    created = engine8.createGame({ seed: 1 });
+    created = engine9.createGame({ seed: 1 });
   } catch (cause) {
     return { ok: false, reasons: [`createGame \u629B\u9519: ${errorMessage2(cause)}`] };
   }
@@ -19155,7 +19876,7 @@ function smokeTestGameEngine(engine8) {
   }
   let suggestions;
   try {
-    suggestions = engine8.legalActions(state);
+    suggestions = engine9.legalActions(state);
   } catch (cause) {
     reasons.push(`legalActions \u629B\u9519: ${errorMessage2(cause)}`);
     return { ok: false, reasons };
@@ -19179,8 +19900,8 @@ function smokeTestGameEngine(engine8) {
   let firstResult;
   let secondResult;
   try {
-    firstResult = engine8.applyAction(state, first, turn);
-    secondResult = engine8.applyAction(state, first, turn);
+    firstResult = engine9.applyAction(state, first, turn);
+    secondResult = engine9.applyAction(state, first, turn);
   } catch (cause) {
     reasons.push(`applyAction \u5BF9\u5EFA\u8BAE\u96C6\u9996\u4E2A\u52A8\u4F5C\u629B\u9519: ${errorMessage2(cause)}`);
     return { ok: false, reasons };
@@ -19198,7 +19919,7 @@ function smokeTestGameEngine(engine8) {
   }
   for (const probe of [{ type: "resign" }, { type: "__dsh_soulmojito_smoke_unknown__" }]) {
     try {
-      engine8.applyAction(state, probe, turn);
+      engine9.applyAction(state, probe, turn);
       reasons.push(`applyAction \u5BF9\u975E\u6CD5\u52A8\u4F5C {type:'${probe.type}'} \u672A\u629B\u9519\uFF08\u5FC5\u987B\u62D2\u7EDD\u800C\u975E\u9759\u9ED8\uFF09`);
     } catch {
     }
@@ -19210,7 +19931,7 @@ function errorMessage2(cause) {
 }
 
 // packages/plugin/src/games/builtin/gomoku.ts
-var SIZE = 15;
+var SIZE2 = 15;
 var EMPTY = 0;
 var BLACK = 1;
 var WHITE = 2;
@@ -19230,7 +19951,7 @@ var CN_NUMERALS = {
   15: "\u5341\u4E94"
 };
 var DIRECTIONS = [[1, 0], [0, 1], [1, 1], [1, -1]];
-var MANIFEST2 = {
+var MANIFEST3 = {
   id: "dsh-soulmojito.gomoku",
   name: "\u4E94\u5B50\u68CB",
   version: "1.0.0",
@@ -19251,9 +19972,9 @@ function other(role) {
   return role === "black" ? "white" : "black";
 }
 function isOnBoard(x, y) {
-  return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && x < SIZE && y >= 0 && y < SIZE;
+  return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && x < SIZE2 && y >= 0 && y < SIZE2;
 }
-function cloneState2(state) {
+function cloneState3(state) {
   return {
     board: state.board.map((row) => row.slice()),
     turn: state.turn,
@@ -19285,13 +20006,13 @@ function findWinLine(board, x, y) {
   }
   return null;
 }
-var engine2 = {
-  meta: MANIFEST2,
+var engine3 = {
+  meta: MANIFEST3,
   /** 开局：空盘黑先。options（含 seed）接受但忽略——五子棋无随机性。 */
   createGame(_options) {
     return {
       state: {
-        board: Array.from({ length: SIZE }, () => Array.from({ length: SIZE }, () => EMPTY)),
+        board: Array.from({ length: SIZE2 }, () => Array.from({ length: SIZE2 }, () => EMPTY)),
         turn: "black",
         ply: 0,
         lastMove: null,
@@ -19311,8 +20032,8 @@ var engine2 = {
     if (state.finished) return [];
     if (state.ply === 0) return [{ type: "place", x: 7, y: 7 }];
     const candidates = [];
-    for (let y = 0; y < SIZE; y += 1) {
-      for (let x = 0; x < SIZE; x += 1) {
+    for (let y = 0; y < SIZE2; y += 1) {
+      for (let x = 0; x < SIZE2; x += 1) {
         if (state.board[y][x] !== EMPTY) continue;
         let score = 0;
         let nearStone = false;
@@ -19321,7 +20042,7 @@ var engine2 = {
             if (dx === 0 && dy === 0) continue;
             const nx = x + dx;
             const ny = y + dy;
-            if (nx < 0 || nx >= SIZE || ny < 0 || ny >= SIZE) continue;
+            if (nx < 0 || nx >= SIZE2 || ny < 0 || ny >= SIZE2) continue;
             if (state.board[ny][nx] === EMPTY) continue;
             nearStone = true;
             score += Math.max(Math.abs(dx), Math.abs(dy)) === 1 ? 2 : 1;
@@ -19361,12 +20082,12 @@ var engine2 = {
     const x = parseBoardCoord(typed.x);
     const y = parseBoardCoord(typed.y);
     if (x === null || y === null || !isOnBoard(x, y)) {
-      throw new Error(`\u843D\u5B50\u5750\u6807\u5FC5\u987B\u662F 0-${SIZE - 1} \u7684\u6574\u6570\uFF0C\u6536\u5230 x=${String(typed.x)}\u3001y=${String(typed.y)}`);
+      throw new Error(`\u843D\u5B50\u5750\u6807\u5FC5\u987B\u662F 0-${SIZE2 - 1} \u7684\u6574\u6570\uFF0C\u6536\u5230 x=${String(typed.x)}\u3001y=${String(typed.y)}`);
     }
     if (state.board[y][x] !== EMPTY) {
       throw new Error(`${coordName(x, y)} \u5DF2\u6709\u68CB\u5B50\uFF0C\u4E0D\u80FD\u843D\u5728\u5DF2\u5360\u70B9\u4E0A`);
     }
-    const next = cloneState2(state);
+    const next = cloneState3(state);
     next.board[y][x] = actor === "black" ? BLACK : WHITE;
     next.ply = state.ply + 1;
     next.lastMove = { x, y };
@@ -19382,7 +20103,7 @@ var engine2 = {
       const ending = `${stoneName(actor)}${CN_NUMERALS[winLine.length] ?? String(winLine.length)}\u8FDE\uFF0C${actor === "black" ? "\u9ED1" : "\u767D"}\u80DC`;
       events.push(ending);
       summary = `${move}\uFF0C${ending}`;
-    } else if (next.ply === SIZE * SIZE) {
+    } else if (next.ply === SIZE2 * SIZE2) {
       next.finished = true;
       next.winner = null;
       next.winLine = null;
@@ -19403,8 +20124,8 @@ var engine2 = {
     return `${stoneName(actor === "white" ? "white" : "black")}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
 };
-var manifest2 = MANIFEST2;
-var viewHtml2 = `<!doctype html>
+var manifest3 = MANIFEST3;
+var viewHtml3 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -19762,13 +20483,13 @@ render()
 </body>
 </html>
 `;
-var gomoku = { manifest: manifest2, engine: engine2, viewHtml: viewHtml2 };
+var gomoku = { manifest: manifest3, engine: engine3, viewHtml: viewHtml3 };
 
 // packages/plugin/src/games/builtin/junqi.ts
 var WIDTH = 5;
 var HEIGHT = 12;
 var MAX_SUGGESTIONS = 64;
-var MANIFEST3 = {
+var MANIFEST4 = {
   id: "dsh-soulmojito.junqi",
   name: "\u519B\u68CB",
   version: "1.0.0",
@@ -20062,8 +20783,8 @@ function readPoint(raw, label) {
   }
   return { x, y };
 }
-var engine3 = {
-  meta: MANIFEST3,
+var engine4 = {
+  meta: MANIFEST4,
   /** 开局：经典固定布阵、红先。options（含 seed）接受但忽略——布阵固定，无随机性。 */
   createGame(_options) {
     return { state: initialState() };
@@ -20185,8 +20906,8 @@ var engine3 = {
     return `${sideName3(actor === "blue" ? "blue" : "red")}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
 };
-var manifest3 = MANIFEST3;
-var viewHtml3 = `<!doctype html>
+var manifest4 = MANIFEST4;
+var viewHtml4 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -20728,10 +21449,10 @@ render()
 </body>
 </html>
 `;
-var junqi = { manifest: manifest3, engine: engine3, viewHtml: viewHtml3 };
+var junqi = { manifest: manifest4, engine: engine4, viewHtml: viewHtml4 };
 
 // packages/plugin/src/games/builtin/memory.ts
-import { randomInt as randomInt2 } from "node:crypto";
+import { randomInt as randomInt3 } from "node:crypto";
 var COLS = 4;
 var ROWS = 4;
 var CARDS = COLS * ROWS;
@@ -20739,7 +21460,7 @@ var FACES = ["\u6708", "\u661F", "\u82B1", "\u96F7", "\u9C7C", "\u8776", "\u5C71
 var PAIRS = FACES.length;
 var MAX_SUGGESTIONS2 = 64;
 var COLUMN_LETTERS = "ABCD";
-var MANIFEST4 = {
+var MANIFEST5 = {
   id: "dsh-soulmojito.memory-match",
   name: "\u8BB0\u5FC6\u7FFB\u724C\u5BF9\u6218",
   version: "1.0.0",
@@ -20759,7 +21480,7 @@ function cardName(index) {
 function isCardIndex(value) {
   return value >= 0 && value < CARDS;
 }
-function cloneState3(state) {
+function cloneState4(state) {
   return {
     turn: state.turn,
     seed: state.seed,
@@ -20810,15 +21531,15 @@ function matchSentence(side, a, b, faceA, faceB, scores) {
 function mismatchSentence(side, a, b, faceA, faceB, next) {
   return `${sideName4(side)}\u7FFB\u5F00 ${cardName(a)}\uFF08${faceA}\uFF09\u4E0E ${cardName(b)}\uFF08${faceB}\uFF09\uFF1A\u4E0D\u662F\u4E00\u5BF9\uFF0C\u7FFB\u56DE\uFF0C\u8F6E\u5230${sideName4(next)}`;
 }
-var engine4 = {
-  meta: MANIFEST4,
+var engine5 = {
+  meta: MANIFEST5,
   /**
    * 开局：读 options.seed（number 则用之；缺省用 node:crypto 随机整数——全文
    * 唯一的随机点）。16 张全背面、比分 0–0、红方先手（roles[0]）。
    */
   createGame(options) {
     const record = options !== null && typeof options === "object" && !Array.isArray(options) ? options : {};
-    const seed = typeof record.seed === "number" && Number.isFinite(record.seed) ? record.seed : randomInt2(0, 2147483648);
+    const seed = typeof record.seed === "number" && Number.isFinite(record.seed) ? record.seed : randomInt3(0, 2147483648);
     return {
       state: {
         turn: "red",
@@ -20896,7 +21617,7 @@ var engine4 = {
     if (state.board[b] !== null) {
       throw new Error(`\u724C\u4F4D ${cardName(b)} \u5DF2\u914D\u5BF9\u7FFB\u5F00\uFF0C\u4E0D\u80FD\u91CD\u590D\u7FFB\u5F00`);
     }
-    const next = cloneState3(state);
+    const next = cloneState4(state);
     const faces = layoutOf(next.seed);
     const faceA = faces[a];
     const faceB = faces[b];
@@ -20950,8 +21671,8 @@ var engine4 = {
     return `${sideName4(side)}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
 };
-var manifest4 = MANIFEST4;
-var viewHtml4 = `<!doctype html>
+var manifest5 = MANIFEST5;
+var viewHtml5 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -21373,11 +22094,11 @@ render()
 </body>
 </html>
 `;
-var memoryMatch = { manifest: manifest4, engine: engine4, viewHtml: viewHtml4 };
+var memoryMatch = { manifest: manifest5, engine: engine5, viewHtml: viewHtml5 };
 
 // packages/plugin/src/games/builtin/monopoly.ts
-import { randomInt as randomInt3 } from "node:crypto";
-var MANIFEST5 = {
+import { randomInt as randomInt4 } from "node:crypto";
+var MANIFEST6 = {
   id: "dsh-soulmojito.monopoly",
   name: "\u5927\u5BCC\u7FC1",
   version: "1.0.0",
@@ -21454,7 +22175,7 @@ function netWorth(state, role) {
   }
   return total;
 }
-function cloneState4(state) {
+function cloneState5(state) {
   return {
     turn: state.turn,
     phase: state.phase,
@@ -21649,8 +22370,8 @@ function pendingLabel(state) {
   if (state.pending === "build") return "\u52A0\u76D6";
   return "\u884C\u52A8";
 }
-var engine5 = {
-  meta: MANIFEST5,
+var engine6 = {
+  meta: MANIFEST6,
   /**
    * 开局：读 options.seed（number 则用之；缺省用 node:crypto 随机整数——
    * 全文唯一的随机点）。红方先行、双方资金 START_CASH、同在起点、地产
@@ -21658,7 +22379,7 @@ var engine5 = {
    */
   createGame(options) {
     const record = options !== null && typeof options === "object" && !Array.isArray(options) ? options : {};
-    const seed = typeof record.seed === "number" && Number.isFinite(record.seed) ? record.seed : randomInt3(0, 2147483648);
+    const seed = typeof record.seed === "number" && Number.isFinite(record.seed) ? record.seed : randomInt4(0, 2147483648);
     const state = {
       turn: "red",
       phase: "roll",
@@ -21763,7 +22484,7 @@ var engine5 = {
         throw new Error(`\u73B0\u91D1\u4E0D\u8DB3\uFF0C\u65E0\u6CD5\u4E3A\u300C${tile.name}\u300D\u52A0\u76D6\uFF08\u9700 ${buildCostOf(index)} \u5143\uFF09`);
       }
     }
-    const next = cloneState4(state);
+    const next = cloneState5(state);
     const events = [];
     if (type === "roll") {
       if (next.jailed[role]) {
@@ -21828,8 +22549,8 @@ var engine5 = {
     return `${sideName5(role)}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
 };
-var manifest5 = MANIFEST5;
-var viewHtml5 = `<!doctype html>
+var manifest6 = MANIFEST6;
+var viewHtml6 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -22335,16 +23056,16 @@ render()
 </body>
 </html>
 `;
-var monopoly = { manifest: manifest5, engine: engine5, viewHtml: viewHtml5 };
+var monopoly = { manifest: manifest6, engine: engine6, viewHtml: viewHtml6 };
 
 // packages/plugin/src/games/builtin/tic-tac-toe.ts
-var SIZE2 = 3;
+var SIZE3 = 3;
 var EMPTY2 = 0;
 var CROSS = 1;
 var NOUGHT = 2;
 var COLUMNS2 = "ABC";
 var DIRECTIONS2 = [[1, 0], [0, 1], [1, 1], [1, -1]];
-var MANIFEST6 = {
+var MANIFEST7 = {
   id: "dsh-soulmojito.tic-tac-toe",
   name: "\u4E95\u5B57\u68CB",
   version: "1.0.0",
@@ -22362,12 +23083,12 @@ function other4(role) {
   return role === "x" ? "o" : "x";
 }
 function isOnBoard3(x, y) {
-  return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && x < SIZE2 && y >= 0 && y < SIZE2;
+  return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && x < SIZE3 && y >= 0 && y < SIZE3;
 }
 function coordName2(x, y) {
   return COLUMNS2[x] + String(y + 1);
 }
-function cloneState5(state) {
+function cloneState6(state) {
   return {
     board: state.board.map((row) => row.slice()),
     turn: state.turn,
@@ -22392,20 +23113,20 @@ function findWinLine2(board, x, y) {
         cy += dy * sign;
       }
     }
-    if (cells.length >= SIZE2) {
+    if (cells.length >= SIZE3) {
       cells.sort((a, b) => a.x - b.x || a.y - b.y);
       return cells;
     }
   }
   return null;
 }
-var engine6 = {
-  meta: MANIFEST6,
+var engine7 = {
+  meta: MANIFEST7,
   /** 开局：空盘 X 先。options（含 seed）接受但忽略——井字棋无随机性。 */
   createGame(_options) {
     return {
       state: {
-        board: Array.from({ length: SIZE2 }, () => Array.from({ length: SIZE2 }, () => EMPTY2)),
+        board: Array.from({ length: SIZE3 }, () => Array.from({ length: SIZE3 }, () => EMPTY2)),
         turn: "x",
         ply: 0,
         lastMove: null,
@@ -22419,8 +23140,8 @@ var engine6 = {
   legalActions(state) {
     if (state.finished) return [];
     const actions = [];
-    for (let y = 0; y < SIZE2; y += 1) {
-      for (let x = 0; x < SIZE2; x += 1) {
+    for (let y = 0; y < SIZE3; y += 1) {
+      for (let x = 0; x < SIZE3; x += 1) {
         if (state.board[y][x] === EMPTY2) actions.push({ type: "place", x, y });
       }
     }
@@ -22450,12 +23171,12 @@ var engine6 = {
     const x = parseBoardCoord(typed.x);
     const y = parseBoardCoord(typed.y);
     if (x === null || y === null || !isOnBoard3(x, y)) {
-      throw new Error(`\u843D\u5B50\u5750\u6807\u5FC5\u987B\u662F 0-${SIZE2 - 1} \u7684\u6574\u6570\uFF0C\u6536\u5230 x=${String(typed.x)}\u3001y=${String(typed.y)}`);
+      throw new Error(`\u843D\u5B50\u5750\u6807\u5FC5\u987B\u662F 0-${SIZE3 - 1} \u7684\u6574\u6570\uFF0C\u6536\u5230 x=${String(typed.x)}\u3001y=${String(typed.y)}`);
     }
     if (state.board[y][x] !== EMPTY2) {
       throw new Error(`${coordName2(x, y)} \u5DF2\u6709\u68CB\u5B50\uFF0C\u4E0D\u80FD\u843D\u5728\u5DF2\u5360\u683C\u4E0A`);
     }
-    const next = cloneState5(state);
+    const next = cloneState6(state);
     next.board[y][x] = actor === "x" ? CROSS : NOUGHT;
     next.ply = state.ply + 1;
     next.lastMove = { x, y };
@@ -22471,7 +23192,7 @@ var engine6 = {
       const ending = `${markName(actor)}\u4E09\u8FDE\uFF0C${actor === "x" ? "X" : "O"}\u80DC`;
       events.push(ending);
       summary = `${move}\uFF0C${ending}`;
-    } else if (next.ply === SIZE2 * SIZE2) {
+    } else if (next.ply === SIZE3 * SIZE3) {
       next.finished = true;
       next.winner = null;
       next.winLine = null;
@@ -22492,8 +23213,8 @@ var engine6 = {
     return `${String(actor)}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
 };
-var manifest6 = MANIFEST6;
-var viewHtml6 = `<!doctype html>
+var manifest7 = MANIFEST7;
+var viewHtml7 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -22588,13 +23309,13 @@ if (!TOKEN) {
 </body>
 </html>
 `;
-var ticTacToe = { manifest: manifest6, engine: engine6, viewHtml: viewHtml6 };
+var ticTacToe = { manifest: manifest7, engine: engine7, viewHtml: viewHtml7 };
 
 // packages/plugin/src/games/builtin/xiangqi.ts
 var WIDTH2 = 9;
 var HEIGHT2 = 10;
 var MAX_SUGGESTIONS3 = 64;
-var MANIFEST7 = {
+var MANIFEST8 = {
   id: "dsh-soulmojito.xiangqi",
   name: "\u4E2D\u56FD\u8C61\u68CB",
   version: "1.0.0",
@@ -22891,8 +23612,8 @@ function readPoint2(raw, label) {
   }
   return { x, y };
 }
-var engine7 = {
-  meta: MANIFEST7,
+var engine8 = {
+  meta: MANIFEST8,
   /** 开局：标准摆子、红先。options（含 seed）接受但忽略——象棋无随机性。 */
   createGame(_options) {
     return { state: initialState2() };
@@ -23002,8 +23723,8 @@ var engine7 = {
     return `${sideName7(actor === "black" ? "black" : "red")}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
 };
-var manifest7 = MANIFEST7;
-var viewHtml7 = `<!doctype html>
+var manifest8 = MANIFEST8;
+var viewHtml8 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -23527,7 +24248,7 @@ render()
 </body>
 </html>
 `;
-var xiangqi = { manifest: manifest7, engine: engine7, viewHtml: viewHtml7 };
+var xiangqi = { manifest: manifest8, engine: engine8, viewHtml: viewHtml8 };
 
 // packages/plugin/src/games/registry.ts
 var GameRegistry = class _GameRegistry {
@@ -23583,7 +24304,7 @@ var GameRegistry = class _GameRegistry {
     await this.scanInstalled();
   }
   loadBuiltins() {
-    for (const builtin of [ticTacToe, gomoku, xiangqi, junqi, blackjack, memoryMatch, monopoly]) {
+    for (const builtin of [ticTacToe, gomoku, xiangqi, junqi, blackjack, memoryMatch, monopoly, dungeonCrawl]) {
       const smoke = smokeTestGameEngine(builtin.engine);
       if (!smoke.ok) {
         this.games.set(builtin.manifest.id, {
@@ -23628,7 +24349,7 @@ var GameRegistry = class _GameRegistry {
   }
   /** 装载一个导入目录：清单校验 → engines 门控 → view 静态检查 → 动态 import → duck 校验 → 烟测。 */
   async loadInstalled(directory) {
-    const broken = (manifest8, reason) => ({ source: "imported", manifest: manifest8, engine: null, viewHtml: null, status: "broken", reason, directory });
+    const broken = (manifest9, reason) => ({ source: "imported", manifest: manifest9, engine: null, viewHtml: null, status: "broken", reason, directory });
     let raw;
     try {
       raw = JSON.parse(await fs15.readFile(join19(directory, "game.json"), "utf8"));
@@ -23643,13 +24364,13 @@ var GameRegistry = class _GameRegistry {
       const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange);
       if (!verdict.ok) return broken(check.manifest, `\u7248\u672C\u4E0D\u6EE1\u8DB3: ${verdict.reason}`);
     }
-    let viewHtml8;
+    let viewHtml9;
     try {
-      viewHtml8 = await fs15.readFile(join19(directory, "view.html"), "utf8");
+      viewHtml9 = await fs15.readFile(join19(directory, "view.html"), "utf8");
     } catch {
       return broken(check.manifest, "view.html \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
     }
-    const viewProblem = staticViewCheck(viewHtml8);
+    const viewProblem = staticViewCheck(viewHtml9);
     if (viewProblem !== void 0) return broken(check.manifest, `view.html ${viewProblem}`);
     const enginePath = join19(directory, "engine.mjs");
     const stat = await fs15.stat(enginePath).catch(() => void 0);
@@ -23669,7 +24390,7 @@ var GameRegistry = class _GameRegistry {
     }
     const smoke = smokeTestGameEngine(engineCheck.engine);
     if (!smoke.ok) return broken(check.manifest, `\u70DF\u6D4B\u5931\u8D25: ${smoke.reasons.join("; ")}`);
-    return { source: "imported", manifest: engineCheck.engine.meta, engine: engineCheck.engine, viewHtml: viewHtml8, status: "ok", reason: "", directory };
+    return { source: "imported", manifest: engineCheck.engine.meta, engine: engineCheck.engine, viewHtml: viewHtml9, status: "ok", reason: "", directory };
   }
   /**
    * 从本地目录安装（POST games/install {path}）：校验源目录 → 拷入
@@ -23735,8 +24456,8 @@ var GameRegistry = class _GameRegistry {
     const record = definition;
     const engineCheck = checkGameEngine(record.engine);
     if (!engineCheck.ok) throw new Error(`\u6E38\u620F\u5F15\u64CE\u6821\u9A8C\u5931\u8D25: ${engineCheck.errors.join("; ")}`);
-    const engine8 = engineCheck.engine;
-    const manifest8 = engine8.meta;
+    const engine9 = engineCheck.engine;
+    const manifest9 = engine9.meta;
     const redundant = [
       ["id", record.id],
       ["name", record.name],
@@ -23746,29 +24467,29 @@ var GameRegistry = class _GameRegistry {
       ["actionVocabulary", record.actionVocabulary]
     ];
     for (const [key, value] of redundant) {
-      if (JSON.stringify(value) !== JSON.stringify(manifest8[key])) {
+      if (JSON.stringify(value) !== JSON.stringify(manifest9[key])) {
         throw new Error(`\u6CE8\u518C\u5B57\u6BB5 ${key} \u4E0E engine.meta.${key} \u4E0D\u4E00\u81F4\uFF08\u8FD0\u884C\u65F6\u4EE5 meta \u4E3A\u51C6\uFF0C\u4E24\u4FA7\u5FC5\u987B\u76F8\u7B49\uFF09`);
       }
     }
-    const smoke = smokeTestGameEngine(engine8);
+    const smoke = smokeTestGameEngine(engine9);
     if (!smoke.ok) throw new Error(`\u5F15\u64CE\u70DF\u6D4B\u5931\u8D25: ${smoke.reasons.join("; ")}`);
     if (typeof record.view !== "string" || record.view.trim() === "") {
       throw new Error("view \u5FC5\u987B\u662F\u975E\u7A7A HTML \u5B57\u7B26\u4E32\uFF08Mod \u6E38\u620F\u89C6\u56FE\u8D70\u5185\u8054\u7EAA\u5F8B\uFF0C\u65E0\u9759\u6001\u6587\u4EF6\u670D\u52A1\uFF09");
     }
     const viewProblem = staticViewCheck(record.view);
     if (viewProblem !== void 0) throw new Error(`view ${viewProblem}`);
-    if (this.get(manifest8.id) !== void 0) {
-      throw new Error(`game '${manifest8.id}' is already registered (builtin, imported or another mod holds this id)`);
+    if (this.get(manifest9.id) !== void 0) {
+      throw new Error(`game '${manifest9.id}' is already registered (builtin, imported or another mod holds this id)`);
     }
-    this.modGames.set(manifest8.id, {
+    this.modGames.set(manifest9.id, {
       source: "mod",
-      manifest: manifest8,
-      engine: engine8,
+      manifest: manifest9,
+      engine: engine9,
       viewHtml: record.view,
       status: "ok",
       reason: ""
     });
-    return this.summaries().find((summary) => summary.id === manifest8.id);
+    return this.summaries().find((summary) => summary.id === manifest9.id);
   }
   /**
    * Mod 游戏反注册（Mod 卸载经宿主 offRegistrations 调用）。engine 传入时做
@@ -23777,10 +24498,10 @@ var GameRegistry = class _GameRegistry {
    * 源不受本方法影响。摘除后其活跃会话由 sessions 的孤儿判定（按 gameId 动态
    * 查注册表）自然接管——可查看不可落子。
    */
-  unregisterModGame(id, engine8) {
+  unregisterModGame(id, engine9) {
     const entry = this.modGames.get(id);
     if (entry === void 0) return false;
-    if (engine8 !== void 0 && entry.engine !== engine8) return false;
+    if (engine9 !== void 0 && entry.engine !== engine9) return false;
     this.modGames.delete(id);
     return true;
   }
@@ -23800,10 +24521,10 @@ function directoryNameOf(directory) {
   const parts = directory.split(/[\\/]/).filter(Boolean);
   return parts.at(-1) ?? directory;
 }
-function staticViewCheck(viewHtml8) {
-  if (/src\s*=\s*["']https?:/i.test(viewHtml8)) return "\u5305\u542B\u5916\u94FE script/\u8D44\u6E90\uFF08\u5FC5\u987B\u81EA\u5305\u542B\uFF09";
-  if (/href\s*=\s*["']https?:/i.test(viewHtml8)) return "\u5305\u542B\u5916\u94FE\u6837\u5F0F/\u94FE\u63A5\uFF08\u5FC5\u987B\u81EA\u5305\u542B\uFF09";
-  if (viewHtml8.includes("fetch(")) return "\u5305\u542B fetch \u7F51\u7EDC\u8C03\u7528\uFF08connect-src 'none' \u7EAA\u5F8B\uFF09";
+function staticViewCheck(viewHtml9) {
+  if (/src\s*=\s*["']https?:/i.test(viewHtml9)) return "\u5305\u542B\u5916\u94FE script/\u8D44\u6E90\uFF08\u5FC5\u987B\u81EA\u5305\u542B\uFF09";
+  if (/href\s*=\s*["']https?:/i.test(viewHtml9)) return "\u5305\u542B\u5916\u94FE\u6837\u5F0F/\u94FE\u63A5\uFF08\u5FC5\u987B\u81EA\u5305\u542B\uFF09";
+  if (viewHtml9.includes("fetch(")) return "\u5305\u542B fetch \u7F51\u7EDC\u8C03\u7528\uFF08connect-src 'none' \u7EAA\u5F8B\uFF09";
   return void 0;
 }
 
@@ -23951,7 +24672,7 @@ var GameSessionStore = class _GameSessionStore {
     if (entry === void 0 || entry.status !== "ok" || entry.engine === null) {
       throw new GameBridgeError("unavailable", `\u4F1A\u8BDD\u7684\u6E38\u620F '${session.gameId}' \u5DF2\u4E0D\u5728\u6CE8\u518C\u8868\uFF08orphaned\uFF09\uFF0C\u5BF9\u5C40\u53EA\u8BFB\u4E0D\u53EF\u843D\u5B50`);
     }
-    const engine8 = entry.engine;
+    const engine9 = entry.engine;
     const roles = entry.manifest.players.roles;
     if (session.finished) {
       throw new GameBridgeError("turn", `\u5BF9\u5C40\u5DF2\u7ED3\u675F\uFF08${session.summary}\uFF09\uFF0C\u4E0D\u80FD\u518D\u843D\u5B50`);
@@ -23996,13 +24717,13 @@ var GameSessionStore = class _GameSessionStore {
       summary = describe;
     } else {
       try {
-        describe = engine8.describe(session.state, actor, action);
+        describe = engine9.describe(session.state, actor, action);
       } catch {
         describe = `${actor} \u7684\u52A8\u4F5C ${action.type}`;
       }
       let result;
       try {
-        result = engine8.applyAction(session.state, action, actor);
+        result = engine9.applyAction(session.state, action, actor);
       } catch (cause) {
         throw new GameBridgeError("illegal", cause instanceof Error ? cause.message : String(cause));
       }
@@ -24145,9 +24866,9 @@ function gameBridgeScript() {
   });
 })();`;
 }
-function renderGameViewDocument(viewHtml8) {
+function renderGameViewDocument(viewHtml9) {
   const bridge = `<script>${gameBridgeScript()}</script>`;
-  const document = String(viewHtml8 ?? "");
+  const document = String(viewHtml9 ?? "");
   const headMatch = /<head(?:\s[^>]*)?>/i.exec(document);
   if (headMatch !== null) {
     const at = headMatch.index + headMatch[0].length;
@@ -24244,8 +24965,8 @@ async function openGamesService(options) {
       emitGamesChanged();
       return { game };
     },
-    unregisterModGame(id, engine8) {
-      const removed = registry.unregisterModGame(id, engine8);
+    unregisterModGame(id, engine9) {
+      const removed = registry.unregisterModGame(id, engine9);
       if (removed) emitGamesChanged();
       return removed;
     },
@@ -29996,7 +30717,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.5".trim() : "";
-  const commit = true ? normalizeCommit("67d9863") : void 0;
+  const commit = true ? normalizeCommit("5083ea5") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

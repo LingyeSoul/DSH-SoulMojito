@@ -951,7 +951,8 @@ function createTools(): ToolDefinition[] {
       return { applied, failed, receipt }
     }),
 
-    // ---- 游戏桥六件（提案 0018 §4.2，P0；2026-10-14 增量修订）----
+    // ---- 游戏桥七件（提案 0018 §4.2，P0；2026-10-14 增量修订；2026-10-16
+    // ---- 增 game_wait_full——带棋盘视图的等待变体）----
     // 服务经 globalThis 句柄逐调用解析（src/games/handle.ts）；句柄缺失（index
     // bundle 未装载游戏运行时）时返回明确错误，不影响其余工具。
     // **token 经济纪律（2026-10-14 用户裁定「尽可能考虑 token 经济性」）**：
@@ -1104,7 +1105,7 @@ function createTools(): ToolDefinition[] {
     // 不是宿主推事件进来，而是 agent 自己挂起等事件。
     // 返回面只给**等待期增量**（newMoves + 轮次/终局态）：棋盘/日志按需经
     // game_state/game_history 读取——旧形态每手回吐全量日志，随对局线性膨胀。
-    tool('game_wait', 'Block until the human player moves in a game session (they play on the on-screen board — no chat message from them is needed), until the game ends, or until the wait times out. Call it immediately whenever it becomes the human turn: right after game_start when the human moves first, and right after each of your own game_move calls. Returns only what changed while waiting: status (your-turn | finished | orphaned | timeout), newMoves (the moves that arrived during the wait — normally the human\'s move, with describe to narrate) and whose turn it is now; when the game ended, winner/summary. Read the position with game_state and the move log with game_history. status "timeout" means they have not moved yet — call game_wait again to keep waiting.', {
+    tool('game_wait', 'Block until the human player moves in a game session (they play on the on-screen board — no chat message from them is needed), until the game ends, or until the wait times out. Call it immediately whenever it becomes the human turn: right after game_start when the human moves first, and right after each of your own game_move calls. Returns only what changed while waiting: status (your-turn | finished | orphaned | timeout), newMoves (the moves that arrived during the wait — normally the human\'s move, with describe to narrate) and whose turn it is now; when the game ended, winner/summary. Read the position with game_state and the move log with game_history. status "timeout" means they have not moved yet — call game_wait again to keep waiting. When you need the board position to decide (complex boards), prefer game_wait_full: same wait, plus the board view in the return.', {
       sessionId: { type: 'string', description: 'Session id; defaults to the most recent active session of this chat.' },
       timeoutMs: { type: 'integer', description: 'Maximum wait in milliseconds, clamped to 1000..900000; default 300000 (5 minutes).' },
     }, gameWaitOutput, async (args, exec) => {
@@ -1115,6 +1116,24 @@ function createTools(): ToolDefinition[] {
         : stringArg(args.sessionId)
       const timeoutMs = clampInt(args.timeoutMs, 1000, 900000, 300000)
       return await waitForHumanMove(service, sessionId, timeoutMs, exec.signal)
+    }),
+
+    // game_wait_full（2026-10-16）：同款阻塞等待 + 棋盘视图。真机会话实证
+    // 「wait 返回后必跟一发 game_state」的双调用模式（重棋局上 describe 不足
+    // 以决策）；轻量局上极简 wait 已是最优（模型不补读）——故不动 game_wait
+    // 契约，按局选工具：需要局面决策的对局（地牢/大富翁/象棋）用本工具，
+    // 等待返回自带 game_state 同款载荷，省一发往返。
+    tool('game_wait_full', 'Same blocking wait as game_wait, plus the board: use it instead of game_wait when you need the current position to decide your move (complex boards — roguelike dungeons, property boards, chess). Blocks until the human player moves on the on-screen board, the game ends, or the wait times out. Returns status (your-turn | finished | orphaned | timeout), newMoves (the moves that arrived while waiting, with describe to narrate), whose turn it is now, and — when it is your turn or the game just ended — view: the current board payload (state + turn + legal suggestions + finished + summary), the same shape game_state returns; decide from it directly, no follow-up game_state call. status "timeout" means they have not moved yet — call game_wait_full again to keep waiting.', {
+      sessionId: { type: 'string', description: 'Session id; defaults to the most recent active session of this chat.' },
+      timeoutMs: { type: 'integer', description: 'Maximum wait in milliseconds, clamped to 1000..900000; default 300000 (5 minutes).' },
+    }, gameWaitFullOutput, async (args, exec) => {
+      const service = requireGamesService()
+      const binding = await bindingFor(exec)
+      const sessionId = args.sessionId === undefined
+        ? await resolveActiveSession(service, binding)
+        : stringArg(args.sessionId)
+      const timeoutMs = clampInt(args.timeoutMs, 1000, 900000, 300000)
+      return await waitForHumanMove(service, sessionId, timeoutMs, exec.signal, { includeView: true })
     }),
   ]
 }
@@ -1240,7 +1259,8 @@ const settleOutput = objectOutput({
   failed: { type: 'array', items: { type: 'object', additionalProperties: true } },
   receipt: { type: 'object', additionalProperties: true },
 })
-// 游戏桥六件的输出面（提案 0018 §4.2；2026-10-14 增量修订的 token 经济裁定）：
+// 游戏桥七件的输出面（提案 0018 §4.2；2026-10-14 增量修订的 token 经济裁定；
+// 2026-10-16 game_wait_full 附带棋盘视图）：
 // 全部扁平、字段最小——身份面只在 game_start/game_list，回合载荷只带下一步
 // 动作与叙述所需；state 对运行时不透明（引擎自定义，schema 不锁字段）。
 const gameListOutput = objectOutput({
@@ -1304,6 +1324,20 @@ const gameWaitOutput = objectOutput(
     turnOwner: { type: 'string' },
     winner: {},
     summary: { type: 'string' },
+  },
+  ['turn', 'turnOwner', 'winner', 'summary'],
+)
+
+const gameWaitFullOutput = objectOutput(
+  {
+    status: { type: 'string', description: 'your-turn | finished | orphaned | timeout' },
+    sessionId: { type: 'string' },
+    newMoves: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Moves that arrived while waiting (normally the human move to narrate); empty on timeout or when it was already your turn.' },
+    turn: { type: 'string' },
+    turnOwner: { type: 'string' },
+    winner: {},
+    summary: { type: 'string' },
+    view: { type: 'object', additionalProperties: true, description: 'Board payload (state + turn + legal + finished + summary, same as game_state) — present when status is your-turn or finished.' },
   },
   ['turn', 'turnOwner', 'winner', 'summary'],
 )
@@ -1523,15 +1557,23 @@ async function waitForHumanMove(
   sessionId: string,
   timeoutMs: number,
   signal: AbortSignal | undefined,
+  options: { includeView: boolean } = { includeView: false },
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs
   let baseline: number | undefined
-  const payload = (status: string, session: GameSessionSummary, newMoves: GameMoveRecord[]): Record<string, unknown> => ({
+  // includeView（game_wait_full，2026-10-16）：your-turn / finished 时附带
+  // game_state 同款棋盘视图（state + legal + 轮次/终局）——真机会话实证
+  // 「wait 后必跟 game_state」的双调用模式，返回面自带视图即省一发往返。
+  // timeout/orphaned 不带（局面未变，无决策可做）。
+  const payload = async (status: string, session: GameSessionSummary, newMoves: GameMoveRecord[]): Promise<Record<string, unknown>> => ({
     status,
     sessionId,
     newMoves: newMoves.map(moveBrief),
     ...turnBrief(session),
     ...terminalBrief(session),
+    ...(options.includeView && (status === 'your-turn' || status === 'finished')
+      ? { view: (await service.state(sessionId)).view }
+      : {}),
   })
   // 等待登记（2026-10-14 自动续弈修订）：index bundle 的人类落子入口据此判定
   // 「该手已由工具内唤醒覆盖」——挂起期间绝不重复 followup 唤起；返回/中止/
@@ -1548,12 +1590,12 @@ async function waitForHumanMove(
       const { session } = snapshot
       const newMoves = baseline === undefined ? [] : snapshot.moves
       if (baseline === undefined) baseline = session.moveCount
-      if (session.finished) return payload('finished', session, newMoves)
-      if (session.orphaned) return payload('orphaned', session, newMoves)
+      if (session.finished) return await payload('finished', session, newMoves)
+      if (session.orphaned) return await payload('orphaned', session, newMoves)
       const turnOwner = session.players.find((player) => player.role === session.turn)?.owner
-      if (turnOwner === 'agent') return payload('your-turn', session, newMoves)
+      if (turnOwner === 'agent') return await payload('your-turn', session, newMoves)
       const remaining = deadline - Date.now()
-      if (remaining <= 0) return payload('timeout', session, newMoves)
+      if (remaining <= 0) return await payload('timeout', session, newMoves)
       await waitForGameSignal(signal, Math.min(GAME_WAIT_TICK_MS, remaining))
     }
   } finally {
@@ -1712,7 +1754,7 @@ const gamesSummaryProjection = createLazyProjection<string>({
     const text = [
       '本聊天有进行中的游戏对局：',
       ...lines,
-      '轮到你时先 game_state 读局面、再用 game_move 落子；落到人类回合立即调用 game_wait 阻塞等待对方在棋盘上落子（对方无需发送聊天消息；wait 只返回等待期增量——该手与轮次），工具返回后自动继续；describe/summary 文案可直接用于对话叙述这一手，往手用 game_history 查询。',
+      '轮到你时先 game_state 读局面、再用 game_move 落子；落到人类回合立即调用 game_wait 阻塞等待对方在棋盘上落子（对方无需发送聊天消息；wait 只返回等待期增量——该手与轮次）。局面复杂、需要看着棋盘决策的对局改用 game_wait_full：同款等待，返回附带棋盘局面（state + legal），无需再跟发 game_state。工具返回后自动继续；describe/summary 文案可直接用于对话叙述这一手，往手用 game_history 查询。',
     ].join('\n')
     // 会话快照里的游戏名/词汇表是用户资产数据，可能含 {{...}}——与 facts/guides
     // 同款宏展开 + 宿主安全化（prompt-safety.ts）。

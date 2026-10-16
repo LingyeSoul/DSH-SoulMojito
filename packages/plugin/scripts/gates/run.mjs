@@ -417,6 +417,20 @@ function checkServerText(text) {
   if (!text.includes('dsh-soulmojito.monopoly')) {
     problems.push('server bundle must ship the builtin monopoly game (dsh-soulmojito.monopoly)')
   }
+  // 内置地牢爬行（2026-10-16）：同款纪律——id 字面量须在 bundle 里（引擎 MANIFEST
+  // 与视图 data-game 标记双处都有）——丢失即判定内置游戏未随包分发。
+  if (!text.includes('dsh-soulmojito.dungeon-crawl')) {
+    problems.push('server bundle must ship the builtin dungeon-crawl game (dsh-soulmojito.dungeon-crawl)')
+  }
+  // 地牢爬行视图反馈层（2026-10-16 用户需求「攻击等交互事件应弹出显眼的提示，
+  // 在 PC 上支持 WASD 和方向键以及 JKL 绑定操作」）：事件提示栈与飘字伤害的
+  // 容器/类名标记丢失即判定反馈层被拆（象棋将军提示层同款纪律）。
+  if (!text.includes('dc-toast-stack')) {
+    problems.push('server bundle must ship the dungeon-crawl event toast stack (dc-toast-stack)')
+  }
+  if (!text.includes('dc-float-num')) {
+    problems.push('server bundle must ship the dungeon-crawl floating damage numbers (dc-float-num)')
+  }
   // 将军提示层（2026-10-14 用户需求「象棋应该提供提示：如将军提示」）：警报
   // 横幅样式与光晕类名丢失即判定提示层未随视图分发（与 id 字面量同款纪律）。
   if (!text.includes('#banner.check')) {
@@ -808,12 +822,13 @@ function checkAgentTavernIsolation(sourceFiles, serverText, agentText) {
   for (const marker of ['agent-tavern/audit', 'assertStGenerationBinding(state, body.sessionId)']) {
     if (!serverText.includes(marker)) problems.push(`server architecture isolation is missing marker '${marker}'`)
   }
-  // 游戏桥六工具 + 懒段（提案 0018 §4.2；game_wait 为 2026-10-14 修订，
-  // game_history 为同日增量修订）：工具名、order -63 段名与句柄解析 seam
+  // 游戏桥七工具 + 懒段（提案 0018 §4.2；game_wait 为 2026-10-14 修订，
+  // game_history 为同日增量修订；game_wait_full 为 2026-10-16 带棋盘视图的
+  // 等待变体）：工具名、order -63 段名与句柄解析 seam
   // 必须在 agent bundle 产物里（agent.mjs 是独立 esbuild 产物，源文件在场
   // 不等于打包在场；中文报文被 esbuild 转义为 \uXXXX，故锚 resolveGamesService）。
   if (agentText !== undefined) {
-    for (const marker of ['game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait', 'dsh-soulmojito:agent-games', 'resolveGamesService']) {
+    for (const marker of ['game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait', 'game_wait_full', 'dsh-soulmojito:agent-games', 'resolveGamesService']) {
       if (!agentText.includes(marker)) problems.push(`agent bundle is missing the games bridge marker '${marker}'`)
     }
   }
@@ -1994,7 +2009,7 @@ const gates = [
       const versionReader = 'readFileSync("version.json", "utf8"); var BUILD_INFO = { version: "0.0.0", commit: "stub" };'
       const commitResolver = 'function resolveCommit() { execFileSync("git", ["rev-parse", "--show-toplevel"]); return "stub"; } var TAVERN_COMMIT = resolveCommit();'
       const localEmbed = '"local-onnx:"\n\'@huggingface/transformers\'\nvar localStatus = { runtimeInstalled: true };\nfunction inferLocalModelSettings() {}\n"memory/embed/local/install"\nfunction detectLocalQuantizations() {}\n"memory/embed/local/quantizations"\nfunction resolveLocalDtype() {}'
-      const gamesBridge = '"dsh-soulmojito:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';\nvar builtinGomoku = "dsh-soulmojito.gomoku";\nvar builtinXiangqi = "dsh-soulmojito.xiangqi";\nvar builtinJunqi = "dsh-soulmojito.junqi";\nvar builtinBlackjack = "dsh-soulmojito.blackjack";\nvar builtinMemory = "dsh-soulmojito.memory-match";\nvar builtinMonopoly = "dsh-soulmojito.monopoly";\nvar xiangqiCheckBanner = "#banner.check";\nvar xiangqiCheckHalo = "check-halo";\nvar waitersKey = "dsh-soulmojito:games-waiters";\nvar noticeId = "game-notice-" + sessionId;\nvar resignKey = "gamesDisableResign";\nfunction assertResignAllowed(action) {}\nfunction turnReachedAgent(session) {}\nfunction agentTurnRunning(agent) {}'
+      const gamesBridge = '"dsh-soulmojito:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';\nvar builtinGomoku = "dsh-soulmojito.gomoku";\nvar builtinXiangqi = "dsh-soulmojito.xiangqi";\nvar builtinJunqi = "dsh-soulmojito.junqi";\nvar builtinBlackjack = "dsh-soulmojito.blackjack";\nvar builtinMemory = "dsh-soulmojito.memory-match";\nvar builtinMonopoly = "dsh-soulmojito.monopoly";\nvar builtinDungeonCrawl = "dsh-soulmojito.dungeon-crawl";\nvar dcToastStack = "dc-toast-stack";\nvar dcFloatNum = "dc-float-num";\nvar xiangqiCheckBanner = "#banner.check";\nvar xiangqiCheckHalo = "check-halo";\nvar waitersKey = "dsh-soulmojito:games-waiters";\nvar noticeId = "game-notice-" + sessionId;\nvar resignKey = "gamesDisableResign";\nfunction assertResignAllowed(action) {}\nfunction turnReachedAgent(session) {}\nfunction agentTurnRunning(agent) {}'
       // 改名兼容（2026-10-16）fixture 段：旧持久化名 / 旧 env 前缀 / 旧游戏
       // 命名空间别名前缀各恰好出现一次（负样本替换唯一命中）。
       const renameCompat = 'var legacyName = "dsh-tavern";\nvar legacyEnvPrefix = "DSH_TAVERN_DISABLE_UPDATE_CHECK";\nvar legacyGamePrefix = "dsh-tavern.";'
@@ -2018,6 +2033,11 @@ const gates = [
       const badGamesBlackjack = good.replace('"dsh-soulmojito.blackjack"', '"blackjack-removed"')
       const badGamesMemory = good.replace('"dsh-soulmojito.memory-match"', '"memory-removed"')
       const badGamesMonopoly = good.replace('"dsh-soulmojito.monopoly"', '"monopoly-removed"')
+      // 内置地牢爬行（2026-10-16）负样本：替换名不含原 marker 子串（同款核对）。
+      const badGamesDungeonCrawl = good.replace('"dsh-soulmojito.dungeon-crawl"', '"dungeon-crawl-removed"')
+      // 地牢爬行视图反馈层（2026-10-16）负样本：替换类名不含原子串。
+      const badDcToastStack = good.replace('"dc-toast-stack"', '"toast-stack-gone"')
+      const badDcFloatNum = good.replace('"dc-float-num"', '"float-num-gone"')
       // 自动续弈与投降门（2026-10-14 用户需求）负样本：替换文本逐一核对过不含
       // 原 marker（前缀/子串救活防护）。
       const badGamesWaiters = good.replace('"dsh-soulmojito:games-waiters"', '"games-waiters-gone"')
@@ -2057,6 +2077,9 @@ const gates = [
         && checkServerText(badGamesBlackjack).length > 0
         && checkServerText(badGamesMemory).length > 0
         && checkServerText(badGamesMonopoly).length > 0
+        && checkServerText(badGamesDungeonCrawl).length > 0
+        && checkServerText(badDcToastStack).length > 0
+        && checkServerText(badDcFloatNum).length > 0
         && checkServerText(badGamesWaiters).length > 0
         && checkServerText(badGameNotice).length > 0
         && checkServerText(badWakeTurnGate).length > 0
@@ -2468,7 +2491,7 @@ const gates = [
   {
     name: 'agent-tavern-isolation',
     selfTest: () => {
-      const goodAgent = "var games = ['game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait']; registerSection('dsh-soulmojito:agent-games'); function resolveGamesService() {}"
+      const goodAgent = "var games = ['game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait', 'game_wait_full']; registerSection('dsh-soulmojito:agent-games'); function resolveGamesService() {}"
       const good = checkAgentTavernIsolation([
         ['runtime.ts', 'export function runAgentLoop() {}'],
         ['tools.ts', 'export function tool() {}'],
@@ -2476,15 +2499,18 @@ const gates = [
       const bad = checkAgentTavernIsolation([
         ['runtime.ts', 'ctx.llm.stream()'],
       ], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent)
-      // games 桥负样本：六工具名/段名/报文任一缺失都必须翻红（game_wait 单独
-      // 摘除 = 2026-10-14 修订的专属回归位；game_history 单独摘除 = 同日增量
-      // 修订的专属回归位）。
+      // games 桥负样本：七工具名/段名/报文任一缺失都必须翻红（game_wait 摘除
+      // = 2026-10-14 修订的专属回归位——marker 是子串匹配，须连 game_wait_full
+      // 一起摘除，否则残留全名仍含 game_wait 子串救活负样本；game_history 单独
+      // 摘除 = 同日增量修订的专属回归位；game_wait_full 单独摘除 = 2026-10-16
+      // 新工具的专属回归位）。
       const badGamesTool = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace("'game_state', 'game_history', 'game_move'", "'game_state', 'game_move'"))
-      const badGamesWait = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace("'game_move', 'game_wait'", "'game_move'"))
+      const badGamesWait = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace("'game_wait', 'game_wait_full'", "'wait-gone'"))
+      const badGamesWaitFull = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace("'game_wait_full'", "'wait-full-gone'"))
       const badGamesSection = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace('dsh-soulmojito:agent-games', 'dsh-soulmojito:gone'))
       const badGamesError = checkAgentTavernIsolation([], 'agent-tavern/audit assertStGenerationBinding(state, body.sessionId)', goodAgent.replace('function resolveGamesService() {}', 'function resolveNothing() {}'))
       return good.length === 0 && bad.length > 0
-        && badGamesTool.length > 0 && badGamesWait.length > 0 && badGamesSection.length > 0 && badGamesError.length > 0
+        && badGamesTool.length > 0 && badGamesWait.length > 0 && badGamesWaitFull.length > 0 && badGamesSection.length > 0 && badGamesError.length > 0
         ? []
         : ['AgentTavern isolation self-test did not reject ST generation calls']
     },
