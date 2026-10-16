@@ -669,6 +669,15 @@ function checkFrontendRuntimeText(text) {
     "h('strong', null, 'SoulMojito')",
     "className: 'dt-footer-label' }, 'SoulMojito'",
     "h('h3', null, 'DSH-SoulMojito')",
+    // 侧栏两分区固定高度 + 独占滚动（2026-10-16 用户反馈：角色卡/会话过多时
+    // 整块侧栏把宿主会话工作区挤到看不见）。三类 marker 逐一锁：酒馆/写卡
+    // 工作台各自的内容容器（.dt-sidebar-scroll + 分区类）、让「固定高度 + 滚动」
+    // 成立的唯一 CSS 规则，以及写卡工作台默认收起的 store 初值。任一回退都会
+    // 让侧栏重新无限增高；容器换成 React.Fragment 是这次反馈的原始形态。
+    "className: 'dt-sidebar-scroll dt-sidebar-tavern'",
+    "className: 'dt-sidebar-scroll dt-sidebar-workbench'",
+    '.dt-sidebar-scroll{display:flex;flex-direction:column;min-height:0;max-height:min(320px,32vh);overflow-y:auto;overflow-x:hidden}',
+    'sidebarCollapsed: { tavern: false, workbench: true }',
   ]) {
     if (!text.includes(marker)) problems.push(`frontend runtime is missing marker '${marker}'`)
   }
@@ -2183,6 +2192,12 @@ const gates = [
         "h('strong', null, 'SoulMojito')",
         "className: 'dt-footer-label' }, 'SoulMojito')",
         "h('h3', null, 'DSH-SoulMojito')",
+        // 侧栏两分区固定高度 + 独占滚动（2026-10-16 用户反馈）——与 checker
+        // 的必需 marker 列表逐条对齐。
+        "className: 'dt-sidebar-scroll dt-sidebar-tavern'",
+        "className: 'dt-sidebar-scroll dt-sidebar-workbench'",
+        '.dt-sidebar-scroll{display:flex;flex-direction:column;min-height:0;max-height:min(320px,32vh);overflow-y:auto;overflow-x:hidden}',
+        'sidebarCollapsed: { tavern: false, workbench: true }',
       ].join('\n')
       const bad = good.replace("sandbox: 'allow-scripts'", "sandbox: 'allow-forms'")
       const badBridge = good.replace('dsh-soulmojito:mod-request', 'dsh-soulmojito:mod-bridge-removed')
@@ -2253,6 +2268,13 @@ const gates = [
       const badBrandCopy = good.replace("h('strong', null, 'SoulMojito')", "h('strong', null, 'TavernGone')")
       const badFooterLabel = good.replace("className: 'dt-footer-label' }, 'SoulMojito'", "className: 'dt-footer-label' }, 'TavernGone'")
       const badAboutTitle = good.replace("h('h3', null, 'DSH-SoulMojito')", "h('h3', null, 'SoulmojitoGone')")
+      // 侧栏两分区滚动契约（2026-10-16 用户反馈）负样本：分区容器还原成无包装 /
+      // 固定高度规则换成不滚动 / 写卡工作台默认展开（回到用户报告的原始形态）。
+      // 替换文本逐一核对不含原 marker 的子串。
+      const badSidebarTavernScroll = good.replace("className: 'dt-sidebar-scroll dt-sidebar-tavern'", "className: 'dt-sidebar-tavern-gone'")
+      const badSidebarWorkbenchScroll = good.replace("className: 'dt-sidebar-scroll dt-sidebar-workbench'", "className: 'dt-sidebar-workbench-gone'")
+      const badSidebarScrollRule = good.replace('.dt-sidebar-scroll{display:flex;flex-direction:column;min-height:0;max-height:min(320px,32vh);overflow-y:auto;overflow-x:hidden}', '.dt-sidebar-scroll{display:flex;flex-direction:column;overflow:visible}')
+      const badSidebarWorkbenchDefault = good.replace('sidebarCollapsed: { tavern: false, workbench: true }', 'sidebarCollapsed: { tavern: false, workbench: false }')
       return checkFrontendRuntimeText(good).length === 0
         && checkFrontendRuntimeText(bad).length > 0
         && checkFrontendRuntimeText(badBridge).length > 0
@@ -2301,6 +2323,10 @@ const gates = [
         && checkFrontendRuntimeText(badBrandCopy).length > 0
         && checkFrontendRuntimeText(badFooterLabel).length > 0
         && checkFrontendRuntimeText(badAboutTitle).length > 0
+        && checkFrontendRuntimeText(badSidebarTavernScroll).length > 0
+        && checkFrontendRuntimeText(badSidebarWorkbenchScroll).length > 0
+        && checkFrontendRuntimeText(badSidebarScrollRule).length > 0
+        && checkFrontendRuntimeText(badSidebarWorkbenchDefault).length > 0
         ? []
         : ['frontend runtime marker self-test did not distinguish an unsafe sample']
     },
