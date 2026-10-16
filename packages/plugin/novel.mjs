@@ -6819,9 +6819,9 @@ var gameWaitFullOutput = objectOutput(
     turnOwner: { type: "string" },
     winner: {},
     summary: { type: "string" },
-    view: { type: "object", additionalProperties: true, description: "Board payload (state + turn + legal + finished + summary, same as game_state) \u2014 present when status is your-turn or finished." }
+    view: { type: "object", additionalProperties: true, description: "Board payload (state + turn + legal + finished + summary, same as game_state) \u2014 present when status is your-turn or finished; omitted on timeout/orphaned (nothing changed)." }
   },
-  ["turn", "turnOwner", "winner", "summary"]
+  ["turn", "turnOwner", "winner", "summary", "view"]
 );
 function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
   return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };

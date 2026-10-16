@@ -804,18 +804,24 @@ describe('视图反馈层：静态标记（提示栈 / 飘字 / 键盘绑定）'
     expect(viewHtml).toContain('<span class="k">L</span>')
   })
 
-  it('提示栈不遮棋盘（2026-10-16 三次迭代）：常规文档流块在棋盘与操作栏之间、非 absolute 浮层', () => {
-    // DOM 顺序：board-wrap 先闭合，toast 栈独立成块，之后才是操作栏。
-    const boardWrapClose = viewHtml.indexOf('<div id="board"></div>\n</div>')
+  it('提示栈零布局抖动（2026-10-16 五次迭代）：地图内浮层（board-wrap 内、absolute 底部锚定）', () => {
+    // 三次迭代终态：初版顶部浮层挡画面 → 文档流位致操作栏抖动（提示增删触发
+    // 布局回流）→ 回位地图内但底部锚定。契约：①toast 栈在 board-wrap **内部**
+    // （渲染进地图）；②CSS 为 absolute（零布局位移——出现/消失不牵动操作栏）；
+    // ③底部锚定（bottom 锚，入口区左上全程无遮挡）。
+    const wrapOpen = viewHtml.indexOf('<div id="board-wrap">')
     const toastAt = viewHtml.indexOf('<div id="dc-toast-stack"></div>')
-    const controlsAt = viewHtml.indexOf('<div id="controls">')
-    expect(boardWrapClose).toBeGreaterThan(-1)
-    expect(toastAt).toBeGreaterThan(boardWrapClose)
-    expect(controlsAt).toBeGreaterThan(toastAt)
-    // CSS：提示栈规则不得回到 absolute 浮层（浮在棋盘上会挡画面）。
+    const boardAt = viewHtml.indexOf('<div id="board"></div>')
+    const wrapClose = viewHtml.indexOf('</div>\n<div id="controls">')
+    expect(wrapOpen).toBeGreaterThan(-1)
+    expect(toastAt).toBeGreaterThan(wrapOpen)
+    expect(boardAt).toBeGreaterThan(toastAt)
+    expect(wrapClose).toBeGreaterThan(boardAt)
     const rule = /#dc-toast-stack \{([\s\S]*?)\}/.exec(viewHtml)
     expect(rule).not.toBeNull()
-    expect(rule![1]).not.toContain('absolute')
+    expect(rule![1]).toContain('absolute')
+    expect(rule![1]).toContain('bottom')
+    expect(rule![1]).not.toContain('margin-top')
   })
 })
 
