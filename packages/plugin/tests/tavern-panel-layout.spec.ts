@@ -18,6 +18,15 @@
  * （display:contents）——它是「品牌块常驻」新增的桌面滚动容器，留着会在横向
  * 按钮条里竖排堆叠分区按钮、把主区挤没（真实量测见
  * decisions/2026-10-14-panel-mobile-navlist-strip-regression.md）。
+ *
+ * 2026-10-16 brand note: the panel brand block, the sidebar footer action, the
+ * settings panel entry and the panel about section header carry the delivered
+ * DSH-SoulMojito logo (assets/logo.svg) inlined as the local SoulMojitoLogo
+ * component (user request: use the supplied logo as the mark, show it in the
+ * README and in the about page). One component, four surfaces; the count lock
+ * turns red when a new surface misses the mark, and the asset-vs-inline case
+ * turns red when the two copies drift apart.
+ * See decisions/2026-10-16-soulmojito-brand-mark.md.
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -90,11 +99,74 @@ describe('tavern panel navigation shell layout', () => {
     expect(mobileLine).not.toContain('.dt-panel-navlist{display:flex;flex-direction:column')
   })
 
+  it('brands the panel shell and the about section with the SoulMojito logo', () => {
+    // Brand logo (2026-10-16 user request): one inlined component, four surfaces
+    // -- panel brand block, sidebar footer action, settings panel entry, about
+    // section header. The count lock (1 definition + 4 usages) turns red when a
+    // new surface is added without the mark.
+    expect(source.split('SoulMojitoLogo').length - 1).toBe(5)
+    expect(source).toContain('function SoulMojitoLogo({ size = 16, className })')
+    // Brand block: mark + brand name (the copy used to read 'Tavern').
+    const brandAt = source.indexOf("h('div', { className: 'dt-panel-brand' },")
+    const brandBlock = source.slice(brandAt, closingParenOf(source, brandAt) + 1)
+    expect(brandBlock).toContain('h(SoulMojitoLogo)')
+    expect(brandBlock).toContain("h('strong', null, 'SoulMojito')")
+    expect(brandBlock).not.toContain("'Tavern'")
+    // Sidebar footer action: mark + brand label. The accessible name repeats
+    // the visible label (WCAG 2.5.3 label-in-name -- voice control matches the
+    // text a user reads), and nav.title keeps labeling both the sidebar section
+    // heading and the host conversation tab: only the footer label moved.
+    const footerAt = source.indexOf('function SidebarFooterAction({ wide }) {')
+    const buttonAt = source.indexOf("h('button', {", footerAt)
+    const button = source.slice(buttonAt, closingParenOf(source, buttonAt) + 1)
+    expect(button).toContain('h(SoulMojitoLogo, { size: wide ? 16 : 18 })')
+    expect(button).toContain("className: 'dt-footer-label' }, 'SoulMojito')")
+    const ariaLabelLine = button.split('\n').find((line) => line.includes("'aria-label'")) ?? ''
+    expect(ariaLabelLine).toContain("t('panel.open')")
+    expect(ariaLabelLine).toContain('SoulMojito')
+    expect(source).not.toContain("className: 'dt-footer-label' }, t('nav.title')")
+    expect(source).toContain("label: () => translate('nav.title')")
+    // Settings panel entry borrows the mark but keeps its own label.
+    expect(source).toContain("icon: h(SoulMojitoLogo), onClick: () => openPanel() }, t('panel.open'))")
+    // About section header: mark + the official brand spelling. The heading used
+    // to be the lower-case directory name, which is not the product name.
+    expect(source).toContain("h('div', { className: 'dt-about-head' },")
+    expect(source).toContain('h(SoulMojitoLogo, { size: 40 })')
+    expect(source).toContain("h('h3', null, 'DSH-SoulMojito')")
+    expect(source).not.toContain("h('h3', null, 'dsh-soulmojito')")
+  })
+
+  it('keeps the inlined logo identical to the delivered assets/logo.svg', () => {
+    // The client half is a ModuleLoader IIFE with no file access, so the logo
+    // geometry is inlined in main.js while the delivered file stays the design
+    // source of truth. Pin every geometry/palette literal of the asset to the
+    // source: dropping a new export into assets/logo.svg without re-inlining it
+    // (or editing one side only) has to turn red instead of shipping two marks.
+    const logo = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../assets/logo.svg'), 'utf8')
+    expect(logo).toContain('viewBox="-90 -100 180 190"')
+    expect(source).toContain("viewBox: '-90 -100 180 190'")
+    const literals = [...logo.matchAll(/(?:d|fill|stroke|stroke-width|fill-opacity|transform)="([^"]+)"/g)].map(
+      (match) => match[1],
+    )
+    // Guards the guard: a re-written asset in another attribute style must not
+    // turn this case into a no-op that passes on an empty literal list.
+    expect(literals.length).toBeGreaterThanOrEqual(15)
+    for (const literal of new Set(literals)) expect(source).toContain(literal)
+  })
+
   it('marker does not match near-miss samples (negative sample)', () => {
     expect('.dt-panel-navlistX{display:flex'.includes('.dt-panel-navlist{display:flex')).toBe(false)
     expect('.dt-panel-navX{display:flex'.includes('.dt-panel-nav{display:flex')).toBe(false)
     expect("h('div', { className: 'dt-panel-navlistX' },".includes("h('div', { className: 'dt-panel-navlist' },")).toBe(false)
     expect('justify-content:space-between;gap:12px;min-height:52px'.includes('justify-content:space-between;gap:12px;flex:none;min-height:52px')).toBe(false)
     expect('.dt-panel-navlist{display:contentsX}'.includes('.dt-panel-navlist{display:contents}')).toBe(false)
+    expect('function SoulMojitoLogoX({ size = 16, className })'.includes('function SoulMojitoLogo({ size = 16, className })')).toBe(false)
+    expect("h('strong', null, 'SoulMojitoX')".includes("h('strong', null, 'SoulMojito')")).toBe(false)
+    expect("className: 'dt-footer-label' }, 'SoulMojitoX'".includes("className: 'dt-footer-label' }, 'SoulMojito'")).toBe(false)
+    expect('h(SoulMojitoLogoX, { size: 40 })'.includes('h(SoulMojitoLogo, { size: 40 })')).toBe(false)
+    expect("h('h3', null, 'DSH-SoulMojitoX')".includes("h('h3', null, 'DSH-SoulMojito')")).toBe(false)
+    // A one-unit geometry drift in the asset is exactly what the sync case is
+    // meant to catch, so the literal compare has to reject it.
+    expect('M-58,-78 C-58,-20 -34,10 0,10 C34,10 58,-20 58,-79 Z'.includes('M-58,-78 C-58,-20 -34,10 0,10 C34,10 58,-20 58,-78 Z')).toBe(false)
   })
 })
