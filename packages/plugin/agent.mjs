@@ -6119,8 +6119,9 @@ function clampModSectionOrder(order) {
   return Math.max(MOD_SECTION_ORDER_MIN, Math.min(MOD_SECTION_ORDER_MAX, value));
 }
 var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
-  // agent-tavern（agent.ts createTools，24：18 原有 + 游戏桥六件，提案 0018 §4.2；
-  // game_wait 为 2026-10-14 修订新增，game_history 为同日增量修订新增）
+  // agent-tavern（agent.ts createTools，25：18 原有 + 游戏桥七件，提案 0018 §4.2；
+  // game_wait 为 2026-10-14 修订新增，game_history 为同日增量修订新增，
+  // game_wait_full 为 2026-10-16 带棋盘视图的等待变体新增）
   "tavern_character_get",
   "tavern_lore_search",
   "tavern_scene_get",
@@ -6145,6 +6146,7 @@ var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
   "game_history",
   "game_move",
   "game_wait",
+  "game_wait_full",
   // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
   "novel_status_read",
   "novel_requirements_read",
@@ -7853,7 +7855,8 @@ function createTools() {
       });
       return { applied, failed, receipt };
     }),
-    // ---- 游戏桥六件（提案 0018 §4.2，P0；2026-10-14 增量修订）----
+    // ---- 游戏桥七件（提案 0018 §4.2，P0；2026-10-14 增量修订；2026-10-16
+    // ---- 增 game_wait_full——带棋盘视图的等待变体）----
     // 服务经 globalThis 句柄逐调用解析（src/games/handle.ts）；句柄缺失（index
     // bundle 未装载游戏运行时）时返回明确错误，不影响其余工具。
     // **token 经济纪律（2026-10-14 用户裁定「尽可能考虑 token 经济性」）**：
@@ -7991,7 +7994,7 @@ function createTools() {
     // 不是宿主推事件进来，而是 agent 自己挂起等事件。
     // 返回面只给**等待期增量**（newMoves + 轮次/终局态）：棋盘/日志按需经
     // game_state/game_history 读取——旧形态每手回吐全量日志，随对局线性膨胀。
-    tool("game_wait", `Block until the human player moves in a game session (they play on the on-screen board \u2014 no chat message from them is needed), until the game ends, or until the wait times out. Call it immediately whenever it becomes the human turn: right after game_start when the human moves first, and right after each of your own game_move calls. Returns only what changed while waiting: status (your-turn | finished | orphaned | timeout), newMoves (the moves that arrived during the wait \u2014 normally the human's move, with describe to narrate) and whose turn it is now; when the game ended, winner/summary. Read the position with game_state and the move log with game_history. status "timeout" means they have not moved yet \u2014 call game_wait again to keep waiting.`, {
+    tool("game_wait", `Block until the human player moves in a game session (they play on the on-screen board \u2014 no chat message from them is needed), until the game ends, or until the wait times out. Call it immediately whenever it becomes the human turn: right after game_start when the human moves first, and right after each of your own game_move calls. Returns only what changed while waiting: status (your-turn | finished | orphaned | timeout), newMoves (the moves that arrived during the wait \u2014 normally the human's move, with describe to narrate) and whose turn it is now; when the game ended, winner/summary. Read the position with game_state and the move log with game_history. status "timeout" means they have not moved yet \u2014 call game_wait again to keep waiting. When you need the board position to decide (complex boards), prefer game_wait_full: same wait, plus the board view in the return.`, {
       sessionId: { type: "string", description: "Session id; defaults to the most recent active session of this chat." },
       timeoutMs: { type: "integer", description: "Maximum wait in milliseconds, clamped to 1000..900000; default 300000 (5 minutes)." }
     }, gameWaitOutput, async (args, exec) => {
@@ -8000,6 +8003,21 @@ function createTools() {
       const sessionId = args.sessionId === void 0 ? await resolveActiveSession(service, binding) : stringArg(args.sessionId);
       const timeoutMs = clampInt(args.timeoutMs, 1e3, 9e5, 3e5);
       return await waitForHumanMove(service, sessionId, timeoutMs, exec.signal);
+    }),
+    // game_wait_full（2026-10-16）：同款阻塞等待 + 棋盘视图。真机会话实证
+    // 「wait 返回后必跟一发 game_state」的双调用模式（重棋局上 describe 不足
+    // 以决策）；轻量局上极简 wait 已是最优（模型不补读）——故不动 game_wait
+    // 契约，按局选工具：需要局面决策的对局（地牢/大富翁/象棋）用本工具，
+    // 等待返回自带 game_state 同款载荷，省一发往返。
+    tool("game_wait_full", 'Same blocking wait as game_wait, plus the board: use it instead of game_wait when you need the current position to decide your move (complex boards \u2014 roguelike dungeons, property boards, chess). Blocks until the human player moves on the on-screen board, the game ends, or the wait times out. Returns status (your-turn | finished | orphaned | timeout), newMoves (the moves that arrived while waiting, with describe to narrate), whose turn it is now, and \u2014 when it is your turn or the game just ended \u2014 view: the current board payload (state + turn + legal suggestions + finished + summary), the same shape game_state returns; decide from it directly, no follow-up game_state call. status "timeout" means they have not moved yet \u2014 call game_wait_full again to keep waiting.', {
+      sessionId: { type: "string", description: "Session id; defaults to the most recent active session of this chat." },
+      timeoutMs: { type: "integer", description: "Maximum wait in milliseconds, clamped to 1000..900000; default 300000 (5 minutes)." }
+    }, gameWaitFullOutput, async (args, exec) => {
+      const service = requireGamesService();
+      const binding = await bindingFor(exec);
+      const sessionId = args.sessionId === void 0 ? await resolveActiveSession(service, binding) : stringArg(args.sessionId);
+      const timeoutMs = clampInt(args.timeoutMs, 1e3, 9e5, 3e5);
+      return await waitForHumanMove(service, sessionId, timeoutMs, exec.signal, { includeView: true });
     })
   ];
 }
@@ -8200,6 +8218,19 @@ var gameWaitOutput = objectOutput(
   },
   ["turn", "turnOwner", "winner", "summary"]
 );
+var gameWaitFullOutput = objectOutput(
+  {
+    status: { type: "string", description: "your-turn | finished | orphaned | timeout" },
+    sessionId: { type: "string" },
+    newMoves: { type: "array", items: { type: "object", additionalProperties: true }, description: "Moves that arrived while waiting (normally the human move to narrate); empty on timeout or when it was already your turn." },
+    turn: { type: "string" },
+    turnOwner: { type: "string" },
+    winner: {},
+    summary: { type: "string" },
+    view: { type: "object", additionalProperties: true, description: "Board payload (state + turn + legal + finished + summary, same as game_state) \u2014 present when status is your-turn or finished." }
+  },
+  ["turn", "turnOwner", "winner", "summary"]
+);
 function memoryView(record) {
   return {
     found: true,
@@ -8331,15 +8362,16 @@ function terminalBrief(session) {
 function moveBrief(move) {
   return { actor: move.actor, action: move.action, describe: move.describe };
 }
-async function waitForHumanMove(service, sessionId, timeoutMs, signal) {
+async function waitForHumanMove(service, sessionId, timeoutMs, signal, options = { includeView: false }) {
   const deadline = Date.now() + timeoutMs;
   let baseline;
-  const payload = (status, session, newMoves) => ({
+  const payload = async (status, session, newMoves) => ({
     status,
     sessionId,
     newMoves: newMoves.map(moveBrief),
     ...turnBrief(session),
-    ...terminalBrief(session)
+    ...terminalBrief(session),
+    ...options.includeView && (status === "your-turn" || status === "finished") ? { view: (await service.state(sessionId)).view } : {}
   });
   const releaseWait = beginGameWait(sessionId);
   try {
@@ -8349,12 +8381,12 @@ async function waitForHumanMove(service, sessionId, timeoutMs, signal) {
       const { session } = snapshot2;
       const newMoves = baseline === void 0 ? [] : snapshot2.moves;
       if (baseline === void 0) baseline = session.moveCount;
-      if (session.finished) return payload("finished", session, newMoves);
-      if (session.orphaned) return payload("orphaned", session, newMoves);
+      if (session.finished) return await payload("finished", session, newMoves);
+      if (session.orphaned) return await payload("orphaned", session, newMoves);
       const turnOwner = session.players.find((player) => player.role === session.turn)?.owner;
-      if (turnOwner === "agent") return payload("your-turn", session, newMoves);
+      if (turnOwner === "agent") return await payload("your-turn", session, newMoves);
       const remaining = deadline - Date.now();
-      if (remaining <= 0) return payload("timeout", session, newMoves);
+      if (remaining <= 0) return await payload("timeout", session, newMoves);
       await waitForGameSignal(signal, Math.min(GAME_WAIT_TICK_MS, remaining));
     }
   } finally {
@@ -8458,7 +8490,7 @@ var gamesSummaryProjection = createLazyProjection({
     const text = [
       "\u672C\u804A\u5929\u6709\u8FDB\u884C\u4E2D\u7684\u6E38\u620F\u5BF9\u5C40\uFF1A",
       ...lines,
-      "\u8F6E\u5230\u4F60\u65F6\u5148 game_state \u8BFB\u5C40\u9762\u3001\u518D\u7528 game_move \u843D\u5B50\uFF1B\u843D\u5230\u4EBA\u7C7B\u56DE\u5408\u7ACB\u5373\u8C03\u7528 game_wait \u963B\u585E\u7B49\u5F85\u5BF9\u65B9\u5728\u68CB\u76D8\u4E0A\u843D\u5B50\uFF08\u5BF9\u65B9\u65E0\u9700\u53D1\u9001\u804A\u5929\u6D88\u606F\uFF1Bwait \u53EA\u8FD4\u56DE\u7B49\u5F85\u671F\u589E\u91CF\u2014\u2014\u8BE5\u624B\u4E0E\u8F6E\u6B21\uFF09\uFF0C\u5DE5\u5177\u8FD4\u56DE\u540E\u81EA\u52A8\u7EE7\u7EED\uFF1Bdescribe/summary \u6587\u6848\u53EF\u76F4\u63A5\u7528\u4E8E\u5BF9\u8BDD\u53D9\u8FF0\u8FD9\u4E00\u624B\uFF0C\u5F80\u624B\u7528 game_history \u67E5\u8BE2\u3002"
+      "\u8F6E\u5230\u4F60\u65F6\u5148 game_state \u8BFB\u5C40\u9762\u3001\u518D\u7528 game_move \u843D\u5B50\uFF1B\u843D\u5230\u4EBA\u7C7B\u56DE\u5408\u7ACB\u5373\u8C03\u7528 game_wait \u963B\u585E\u7B49\u5F85\u5BF9\u65B9\u5728\u68CB\u76D8\u4E0A\u843D\u5B50\uFF08\u5BF9\u65B9\u65E0\u9700\u53D1\u9001\u804A\u5929\u6D88\u606F\uFF1Bwait \u53EA\u8FD4\u56DE\u7B49\u5F85\u671F\u589E\u91CF\u2014\u2014\u8BE5\u624B\u4E0E\u8F6E\u6B21\uFF09\u3002\u5C40\u9762\u590D\u6742\u3001\u9700\u8981\u770B\u7740\u68CB\u76D8\u51B3\u7B56\u7684\u5BF9\u5C40\u6539\u7528 game_wait_full\uFF1A\u540C\u6B3E\u7B49\u5F85\uFF0C\u8FD4\u56DE\u9644\u5E26\u68CB\u76D8\u5C40\u9762\uFF08state + legal\uFF09\uFF0C\u65E0\u9700\u518D\u8DDF\u53D1 game_state\u3002\u5DE5\u5177\u8FD4\u56DE\u540E\u81EA\u52A8\u7EE7\u7EED\uFF1Bdescribe/summary \u6587\u6848\u53EF\u76F4\u63A5\u7528\u4E8E\u5BF9\u8BDD\u53D9\u8FF0\u8FD9\u4E00\u624B\uFF0C\u5F80\u624B\u7528 game_history \u67E5\u8BE2\u3002"
     ].join("\n");
     const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER);
     settle(hostPromptSafe(text, expand));

@@ -822,3 +822,81 @@ turn 不可判定 / 运行中与回 idle / status 缺失与未知不误杀）；
 `function turnReachedAgent(` 与 `function agentTurnRunning(` 两 marker + 各自负样本
 自证。决策全文见
 [decisions/2026-10-15-games-wake-turn-gates.md](../../decisions/2026-10-15-games-wake-turn-gates.md)。
+
+## 22. 2026-10-16 十次补记：内置地牢爬行——品类扩展的第一款（Roguelike / Agent 当地下城主）
+
+需求源：2026-10-16 用户——「游戏服务有没有可能扩展成支持 Roguelike 或者 RPG 的模式，
+当前的小游戏有一些单调」，当日追加「做内置包地牢爬行」。前置是一轮**品类可行性评估**
+（当日对话留档于决策文档首节）：桥契约约束的是形态（回合制、JSON state、确定性纯函数
+引擎）而非品类；评估识别的三条硬边界——①会话恒「一人类一 Agent」（sessions.start 拒
+`players.max !== 2`）、②state 全明无按角色投影通道、③§21 回合闸在 turn 停留人类时不
+投递——本款全部转为设计语言而非核心改动。
+
+**形态（`dsh-soulmojito.dungeon-crawl`，roles `['hero','world']`）**：人类执探索者、
+Agent 执地下城主（DM 真实来打怪物回合：attack/heavy/defend 三择，21 点「AI 做庄」
+同纪律）。12×12 网格 × 3 层醉汉游走凿洞（连通性由构造保证），英雄 4 向探索（切比雪夫
+≤2 揭示）、拾取/陷阱自动结算、踏入活怪格遭遇（怪先手）后逐手交替，站石阶下楼（楼梯
+坍塌、揭示层弃置——state 尺寸纪律的品类化落法，三层满探索实测 <1KB），3 层石阶炎魔
+君王斩杀即通关。
+
+**迷雾 = 延迟决定的三重化**（21 点暗牌与 §19 记忆翻牌「未翻开牌面不进 state」的
+Roguelike 推广）：①岩壁布局由 `carveFloor(seed, depth)` 纯函数随时重算、**永不进
+state**；②armed 陷阱由坐标 hash 判定、踏上才结算落 `trapSprung`（已揭示格无任何
+痕迹）；③怪物/物品在揭示半径扫过时才从纯函数快照进 state——「程序化世界按需显影」，
+Agent 读 game_state 也只能看到英雄走过的世界。
+
+**节奏（引擎即节奏作者，§21 语义的对齐）**：探索动作全在英雄手内结算、turn 恒留
+hero——**纯探索零 Agent 调用**（token 经济）；只有接战才把回合交给 world，§21 回合闸
+恰在遭遇那一手投递真通知。平衡盲测（30 seed × 2 DM 风格）：仁慈 DM（恒 attack）通关
+率 20/30、凶狠 DM（恒 heavy）11/30——贪心直奔脚本约五成，人类带探索与绕行显著更高，
+死亡仍是被叙事的正当结局（seed 1 阵亡路径被端到端锁定）。
+
+落法与验证：`builtin/dungeon-crawl.ts` 单文件（引擎 + 内联视图 + dungeonProbe 测试
+探针；**预览局面由引擎 `createGame({seed:1})` 模块期实时生成注入**，与开局态零漂移）、
+registry 装载数组第八项、gates server-bundle 增 id 字面量标记；games-dungeon-crawl.spec
+39 项 + games-builtin.spec 内置数组/烟测 +1 项；sessions/service/工具面/client 零改动。
+决策全文（八项表/规则裁剪/盲测数据/确定性双流/边界——怪物静态、DM 纯洁性不设防、
+平衡未经人类实测）见
+[decisions/2026-10-16-dungeon-crawl-builtin.md](../../decisions/2026-10-16-dungeon-crawl-builtin.md)。
+
+## 23. 2026-10-16 十一次补记：地牢爬行视图反馈层——事件提示栈、飘字伤害与 PC 键盘
+
+需求源：2026-10-16 用户——「攻击等交互事件应该弹出显眼的提示，在 PC 上支持 WASD
+和方向键以及 JKL 绑定操作」。纯视图层单文件（引擎/桥协议/sessions 零改动，§17 象棋
+将军提示层同款纪律）：①事件提示栈（dc-toast-stack）——每次局面真变化把该手 summary
+弹提示（常规文档流块，位于棋盘与操作栏之间——初版浮在棋盘上沿，提示多时挡住画面，用户反馈后移位），遭遇/陷阱/倒下 danger、通关 finale（通关优先于倒下——胜利 summary 两词兼有）、
+至多 3 条、2.8s 淡出，指纹差分保证 1s 轮询重复下发与首帧不弹；②飘字伤害
+（dc-float-num）——HP 差分驱动，英雄受击红/怪物受创橙/治疗绿/击杀 💀 按格位上浮；
+③PC 键盘——WASD/方向键移动、J/K/L = 攻击/喝药/下楼，与按钮共用同一合法面（按钮
+disabled 即按键静默，键盘不可越过回合闸），修饰键组合不劫持。测试 +6（DOM 垫片真跑
+内联脚本，引擎真实载荷序列断言弹与不弹）；gates server-bundle 增两 marker + 负样本
+自证。实现期自纠两笔（toastClassOf 分级顺序 / 裸 parent.postMessage 垫片不可注入）
+与全文见
+[decisions/2026-10-16-dungeon-crawl-builtin.md](../../decisions/2026-10-16-dungeon-crawl-builtin.md) 补记节。
+
+
+## 24. 2026-10-16 十二次补记：game_wait_full（带棋盘视图的等待变体）与地牢 Boss 唯一化（实弹反馈）
+
+两笔同日实弹反馈修订：
+
+**game_wait_full（工具面第七件）**。需求源：用户观察真机会话（2026-10-14@20h28m）
+「game_wait 后面又接查看状态，工具调用偏多——wait 返回的数据可能不太合理」，
+并裁定方向「game_wait 在更轻量的游戏上表现更好，模型不会调状态，新增个带
+状态返回的」。根因在 §14 契约：wait 只回等待期增量，重棋局上 describe 不足以
+决策、模型必补 game_state（轻量局上极简 wait 已是最优）。落法：**不动
+game_wait**，新增 `game_wait_full`——同款阻塞等待（等待登记/唤醒/超时/中止
+全同），`your-turn`/`finished` 时返回附带 `view`（game_state 同款五字段载荷，
+state + turn + legal + finished + summary），timeout/orphaned 不带；wait 描述与
+懒段指引交叉引导按局选工具。联动：BUILTIN_TOOL_NAMES_SEED 第七名、gates
+agent-tavern-isolation 工具名标记组、roster/mount 计数测试。games-tools.spec
++4（四路返回面）；agent bundle 单文件 + 三处联动，sessions/service/index/client
+零改动。决策全文（含「参数式开关被否」的取舍、token 经济对账、view 读取窗口
+边界）见 [decisions/2026-10-16-games-wait-full.md](../../decisions/2026-10-16-games-wait-full.md)。
+
+**地牢 Boss 唯一化（引擎单点修复）**。需求源：用户真机观察到多个炎魔君王
+「Boss 应该只能被生成一次」。根因：revealAround 初版把第 3 层**所有怪物格**
+放成 Boss（石阶上反而没有）——满层君主且杀任意一只即通关。修复：Boss 放置
+改为 `isStairs && depth === 3` 独立分支——恰一只、只在最深层石阶格；e2e 通关
+用例加强为「走到石阶邻格取证 Boss 唯一性（BFS 路径避开石阶格）再踏入遭遇」
+（原用例为错因通过——杀的是路径上的假 Boss）。见
+[decisions/2026-10-16-dungeon-crawl-builtin.md](../../decisions/2026-10-16-dungeon-crawl-builtin.md) 四次迭代节。

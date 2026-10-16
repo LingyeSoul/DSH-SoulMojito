@@ -6352,8 +6352,9 @@ function clampModSectionOrder(order) {
   return Math.max(MOD_SECTION_ORDER_MIN, Math.min(MOD_SECTION_ORDER_MAX, value));
 }
 var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
-  // agent-tavern（agent.ts createTools，24：18 原有 + 游戏桥六件，提案 0018 §4.2；
-  // game_wait 为 2026-10-14 修订新增，game_history 为同日增量修订新增）
+  // agent-tavern（agent.ts createTools，25：18 原有 + 游戏桥七件，提案 0018 §4.2；
+  // game_wait 为 2026-10-14 修订新增，game_history 为同日增量修订新增，
+  // game_wait_full 为 2026-10-16 带棋盘视图的等待变体新增）
   "tavern_character_get",
   "tavern_lore_search",
   "tavern_scene_get",
@@ -6378,6 +6379,7 @@ var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
   "game_history",
   "game_move",
   "game_wait",
+  "game_wait_full",
   // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
   "novel_status_read",
   "novel_requirements_read",
@@ -6808,6 +6810,19 @@ var gameWaitOutput = objectOutput(
   },
   ["turn", "turnOwner", "winner", "summary"]
 );
+var gameWaitFullOutput = objectOutput(
+  {
+    status: { type: "string", description: "your-turn | finished | orphaned | timeout" },
+    sessionId: { type: "string" },
+    newMoves: { type: "array", items: { type: "object", additionalProperties: true }, description: "Moves that arrived while waiting (normally the human move to narrate); empty on timeout or when it was already your turn." },
+    turn: { type: "string" },
+    turnOwner: { type: "string" },
+    winner: {},
+    summary: { type: "string" },
+    view: { type: "object", additionalProperties: true, description: "Board payload (state + turn + legal + finished + summary, same as game_state) \u2014 present when status is your-turn or finished." }
+  },
+  ["turn", "turnOwner", "winner", "summary"]
+);
 function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
   return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
 }
@@ -6896,7 +6911,7 @@ var gamesSummaryProjection = createLazyProjection({
     const text = [
       "\u672C\u804A\u5929\u6709\u8FDB\u884C\u4E2D\u7684\u6E38\u620F\u5BF9\u5C40\uFF1A",
       ...lines,
-      "\u8F6E\u5230\u4F60\u65F6\u5148 game_state \u8BFB\u5C40\u9762\u3001\u518D\u7528 game_move \u843D\u5B50\uFF1B\u843D\u5230\u4EBA\u7C7B\u56DE\u5408\u7ACB\u5373\u8C03\u7528 game_wait \u963B\u585E\u7B49\u5F85\u5BF9\u65B9\u5728\u68CB\u76D8\u4E0A\u843D\u5B50\uFF08\u5BF9\u65B9\u65E0\u9700\u53D1\u9001\u804A\u5929\u6D88\u606F\uFF1Bwait \u53EA\u8FD4\u56DE\u7B49\u5F85\u671F\u589E\u91CF\u2014\u2014\u8BE5\u624B\u4E0E\u8F6E\u6B21\uFF09\uFF0C\u5DE5\u5177\u8FD4\u56DE\u540E\u81EA\u52A8\u7EE7\u7EED\uFF1Bdescribe/summary \u6587\u6848\u53EF\u76F4\u63A5\u7528\u4E8E\u5BF9\u8BDD\u53D9\u8FF0\u8FD9\u4E00\u624B\uFF0C\u5F80\u624B\u7528 game_history \u67E5\u8BE2\u3002"
+      "\u8F6E\u5230\u4F60\u65F6\u5148 game_state \u8BFB\u5C40\u9762\u3001\u518D\u7528 game_move \u843D\u5B50\uFF1B\u843D\u5230\u4EBA\u7C7B\u56DE\u5408\u7ACB\u5373\u8C03\u7528 game_wait \u963B\u585E\u7B49\u5F85\u5BF9\u65B9\u5728\u68CB\u76D8\u4E0A\u843D\u5B50\uFF08\u5BF9\u65B9\u65E0\u9700\u53D1\u9001\u804A\u5929\u6D88\u606F\uFF1Bwait \u53EA\u8FD4\u56DE\u7B49\u5F85\u671F\u589E\u91CF\u2014\u2014\u8BE5\u624B\u4E0E\u8F6E\u6B21\uFF09\u3002\u5C40\u9762\u590D\u6742\u3001\u9700\u8981\u770B\u7740\u68CB\u76D8\u51B3\u7B56\u7684\u5BF9\u5C40\u6539\u7528 game_wait_full\uFF1A\u540C\u6B3E\u7B49\u5F85\uFF0C\u8FD4\u56DE\u9644\u5E26\u68CB\u76D8\u5C40\u9762\uFF08state + legal\uFF09\uFF0C\u65E0\u9700\u518D\u8DDF\u53D1 game_state\u3002\u5DE5\u5177\u8FD4\u56DE\u540E\u81EA\u52A8\u7EE7\u7EED\uFF1Bdescribe/summary \u6587\u6848\u53EF\u76F4\u63A5\u7528\u4E8E\u5BF9\u8BDD\u53D9\u8FF0\u8FD9\u4E00\u624B\uFF0C\u5F80\u624B\u7528 game_history \u67E5\u8BE2\u3002"
     ].join("\n");
     const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER);
     settle(hostPromptSafe(text, expand));

@@ -115,14 +115,16 @@ describe('AgentTavern native tools', () => {
     'tavern_script_advance',
     'tavern_deduce',
     'tavern_variable_settle',
-    // 游戏桥六件（提案 0018 §4.2，P0；game_wait 为 2026-10-14 修订新增，
-    // game_history 为同日增量修订新增）。
+    // 游戏桥七件（提案 0018 §4.2，P0；game_wait 为 2026-10-14 修订新增，
+    // game_history 为同日增量修订新增，game_wait_full 为 2026-10-16
+    // 带棋盘视图的等待变体新增）。
     'game_list',
     'game_start',
     'game_state',
     'game_history',
     'game_move',
     'game_wait',
+    'game_wait_full',
   ])
     for (const tool of tools.values()) {
       // 游戏桥六件（提案 0018 §4.2）豁免 sessionId 面：其 sessionId 是**会话

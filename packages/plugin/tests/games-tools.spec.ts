@@ -1,6 +1,7 @@
 /**
- * 游戏桥 Agent 工具六件（提案 0018 §4.2，P0；game_wait 为 2026-10-14 修订，
- * 同日 token 经济修订加 game_history 并把全部载荷扁平最小化）：
+ * 游戏桥 Agent 工具七件（提案 0018 §4.2，P0；game_wait 为 2026-10-14 修订，
+ * 同日 token 经济修订加 game_history 并把全部载荷扁平最小化；2026-10-16 增
+ * game_wait_full——同款等待 + your-turn/finished 附带棋盘视图）：
  * createTools 注册面（存在与名字）、假服务注入下的完整对局（服务经同一
  * globalThis 注册表注入——resolveGamesService seam 的可测试性证明）、
  * 非 Agent 回合结构化报错、缺服务明确报文、game_wait 阻塞等待四路
@@ -220,15 +221,15 @@ afterAll(() => {
 })
 
 describe('注册面与种子对账', () => {
-  it('六工具存在且名字正确', () => {
-    for (const name of ['game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait']) {
+  it('七工具存在且名字正确', () => {
+    for (const name of ['game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait', 'game_wait_full']) {
       expect(tools.has(name), name).toBe(true)
     }
   })
 
-  it('BUILTIN_TOOL_NAMES_SEED 静态种子含六名（clearModRegistryForTest 回落种子）', () => {
+  it('BUILTIN_TOOL_NAMES_SEED 静态种子含七名（clearModRegistryForTest 回落种子）', () => {
     clearModRegistryForTest()
-    for (const name of ['game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait']) {
+    for (const name of ['game_list', 'game_start', 'game_state', 'game_history', 'game_move', 'game_wait', 'game_wait_full']) {
       expect(claimedToolNames().has(name), name).toBe(true)
     }
   })
@@ -445,6 +446,86 @@ describe('game_wait 阻塞等待（2026-10-14 修订 / 同日增量修订）', (
   })
 })
 
+describe('game_wait_full 带棋盘视图的等待（2026-10-16 新增）', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 桩服务按真服务形状鸭子访问
+  const resignSession = async (service: any, sessionId: string) => {
+    const { session } = await service.state(sessionId)
+    if (session.finished) return
+    const owner = session.players.find((player: { role: string; owner: string }) => player.role === session.turn)!.owner
+    await (owner === 'human'
+      ? service.humanAction(sessionId, { type: 'resign' })
+      : service.agentMove(sessionId, { type: 'resign' }))
+  }
+
+  it('已轮到 Agent → your-turn 且 view 附带棋盘（state/legal/turn/finished/summary 同 game_state 载荷）', async () => {
+    const service = (await import('../src/games/handle.js')).resolveGamesService()!
+    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-soulmojito.tic-tac-toe' }, exec)
+    const sessionId = started.sessionId as string
+    await service.humanAction(sessionId, { type: 'place', x: 0, y: 0 })
+    const waited = await tools.get('game_wait_full')!.execute({}, exec) as Record<string, any>
+    expect(waited.status).toBe('your-turn')
+    expect(waited.turn).toBe('o')
+    expect(waited.turnOwner).toBe('agent')
+    expect(waited.newMoves).toEqual([])
+    // 视图载荷 = game_state 同款五字段：免跟发 game_state（双调用模式的消除面）。
+    expect(waited.view).toBeDefined()
+    expect(waited.view.state.board[0][0]).toBe(1)
+    expect(waited.view.turn).toBe('o')
+    expect(waited.view.legal).toHaveLength(8)
+    expect(waited.view.finished).toBe(false)
+    expect(waited.view.summary).toContain('A1')
+    await resignSession(service, sessionId)
+  })
+
+  it('人类回合阻塞 → 落子唤醒：view 随等待返回', async () => {
+    const service = (await import('../src/games/handle.js')).resolveGamesService()!
+    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-soulmojito.tic-tac-toe' }, exec)
+    const sessionId = started.sessionId as string
+    let settled = false
+    const pending = tools.get('game_wait_full')!.execute({ sessionId, timeoutMs: 5000 }, exec)
+      .then((outcome) => { settled = true; return outcome as Record<string, any> })
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(settled).toBe(false)
+    expect(gameWaiters(sessionId)).toBe(1)
+    await service.humanAction(sessionId, { type: 'place', x: 1, y: 1 })
+    const outcome = await pending
+    expect(outcome.status).toBe('your-turn')
+    expect(outcome.newMoves).toHaveLength(1)
+    expect(outcome.newMoves[0].describe).toContain('X落于')
+    expect(outcome.view.state.board[1][1]).toBe(1)
+    expect(outcome.view.legal).toHaveLength(8)
+    expect(gameWaiters(sessionId)).toBe(0)
+    await resignSession(service, sessionId)
+  })
+
+  it('timeout 不带 view（局面未变、无决策可做）；等待登记同款释放', async () => {
+    const service = (await import('../src/games/handle.js')).resolveGamesService()!
+    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-soulmojito.tic-tac-toe' }, exec)
+    const sessionId = started.sessionId as string
+    const outcome = await tools.get('game_wait_full')!.execute({ sessionId, timeoutMs: 1000 }, exec) as Record<string, any>
+    expect(outcome.status).toBe('timeout')
+    expect(outcome).not.toHaveProperty('view')
+    expect(gameWaiters(sessionId)).toBe(0)
+    await resignSession(service, sessionId)
+  }, 10000)
+
+  it('等待中人类认输 → finished 带 view（收尾叙述可看终盘）', async () => {
+    const service = (await import('../src/games/handle.js')).resolveGamesService()!
+    const started = await tools.get('game_start')!.execute({ gameId: 'dsh-soulmojito.tic-tac-toe' }, exec)
+    const sessionId = started.sessionId as string
+    const pending = tools.get('game_wait_full')!.execute({ sessionId, timeoutMs: 5000 }, exec)
+      .then((outcome) => outcome as Record<string, any>)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    await service.humanAction(sessionId, { type: 'resign' })
+    const outcome = await pending
+    expect(outcome.status).toBe('finished')
+    expect(outcome.winner).toBe('o')
+    expect(outcome.view.finished).toBe(true)
+    expect(outcome.view.legal).toEqual([])
+    expect(outcome.view.summary).toContain('认输')
+  })
+})
+
 describe('game_history 动作日志窗口（2026-10-14 增量修订）', () => {
   it('缺省全量尾窗（5 手 < 20）+ from/limit 分页 + from 越界夹到 moveCount', async () => {
     const service = (await import('../src/games/handle.js')).resolveGamesService()!
@@ -536,6 +617,8 @@ describe('order -63 懒提示段（仅活跃会话时注入）', () => {
     expect(sections[0]!.text).toContain('game_wait')
     expect(sections[0]!.text).toContain('game_state')
     expect(sections[0]!.text).toContain('game_history')
+    // 2026-10-16 修订：指引补 game_wait_full（局面复杂时用它，返回自带棋盘）。
+    expect(sections[0]!.text).toContain('game_wait_full')
     // token 经济裁定：角色归属由懒段携带（回合载荷不带 players）——「你执 o」。
     expect(sections[0]!.text).toContain('你执 o')
     // 轮到 x（人类）：会话行标注人类玩家。
