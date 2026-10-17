@@ -958,7 +958,6 @@ window.__ModuleLoader__.load({
       }
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
-          h('h3', null, t('panel.section.games')),
           h('p', { className: 'dt-hint' }, t('games.hint')),
           // 禁用投降（2026-10-14 用户需求）：全局开关，服务端在两个动作入口
           // （人类棋盘 / Agent game_move）逐次读取判定——翻转即时生效。
@@ -1102,7 +1101,7 @@ window.__ModuleLoader__.load({
       'settings.groupRemoveMember': 'Remove {member}',
       'settings.regex': 'Regex scripts',
       'settings.regexEmpty': 'No regex scripts yet — import a JSON export or create one',
-      'settings.importRegex': 'Regex scripts',
+      'settings.importRegex': 'Regex JSON',
       'settings.regexCreate': 'New script',
       'settings.regexEdit': 'Edit {name}',
       'settings.regexDelete': 'Delete {name}',
@@ -1825,7 +1824,7 @@ window.__ModuleLoader__.load({
       'settings.groupRemoveMember': '移除{member}',
       'settings.regex': '正则脚本',
       'settings.regexEmpty': '暂无正则脚本——可导入 JSON 导出，或直接新建',
-      'settings.importRegex': '正则脚本',
+      'settings.importRegex': '正则 JSON',
       'settings.regexCreate': '新建脚本',
       'settings.regexEdit': '编辑{name}',
       'settings.regexDelete': '删除{name}',
@@ -4169,12 +4168,14 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('')
       const personas = state.bootstrap.personas || []
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
+      // The panel header already names the section; the band starts with the
+      // action row so the content is not pushed down by a repeated title.
       return h('section', { className: 'dt-settings-band' },
-        h('h3', null, t('settings.personaManage')),
-        h('div', { className: 'dt-imports' },
-          h('button', {
-            type: 'button',
-            className: 'dt-upload',
+        h('div', { className: 'dt-band-actions' },
+          h(Button, {
+            size: 'sm',
+            variant: 'primary',
+            icon: h(IconPlusOutline16),
             onClick: () => {
               const name = window.prompt(t('settings.personaNamePrompt'), '')
               if (name === null || name.trim() === '') return
@@ -4183,33 +4184,38 @@ window.__ModuleLoader__.load({
           }, t('settings.personaNew')),
           h(UploadButton, { kind: 'persona', label: t('settings.personaImport'), accept: '.png,image/png' })),
         personas.length === 0 ? h('p', { className: 'dt-muted' }, t('settings.personaEmpty')) : h('div', { className: 'dt-persona-list' },
-          personas.map((persona) => h('div', { key: persona.name, className: 'dt-persona-row' },
-            h('img', {
-              className: 'dt-persona-avatar',
-              src: `${API}/persona-avatar/${encodeURIComponent(persona.name)}`,
-              alt: '',
-              onError: (event) => { event.currentTarget.style.visibility = 'hidden' },
-            }),
-            h('div', { className: 'dt-persona-copy' },
-              h('strong', null, persona.name),
-              h('span', { title: persona.description }, persona.description.slice(0, 140) || '—')),
-            h('div', { className: 'dt-persona-actions' },
-              h('button', {
-                type: 'button',
-                title: t('settings.personaEdit', { name: persona.name }),
-                onClick: () => {
-                  const next = window.prompt(t('settings.personaDescPrompt'), persona.description)
-                  if (next === null) return
-                  run(savePersona(persona.name, next))
-                },
-              }, h(IconEditOutline16)),
-              h('button', {
-                type: 'button',
-                title: t('settings.personaDelete', { name: persona.name }),
-                onClick: () => {
-                  if (window.confirm(t('settings.personaDeleteConfirm', { name: persona.name }))) run(deletePersona(persona.name))
-                },
-              }, h(IconTrashOutline16)))))),
+          personas.map((persona) => {
+            const description = String(persona.description || '').trim()
+            return h('div', { key: persona.name, className: 'dt-persona-row' },
+              h('img', {
+                className: 'dt-persona-avatar',
+                src: `${API}/persona-avatar/${encodeURIComponent(persona.name)}`,
+                alt: '',
+                onError: (event) => { event.currentTarget.style.visibility = 'hidden' },
+              }),
+              h('div', { className: 'dt-persona-copy' },
+                h('strong', null, persona.name),
+                description === '' ? null : h('span', { title: description }, description.slice(0, 140))),
+              h('div', { className: 'dt-persona-actions' },
+                h('button', {
+                  type: 'button',
+                  title: t('settings.personaEdit', { name: persona.name }),
+                  'aria-label': t('settings.personaEdit', { name: persona.name }),
+                  onClick: () => {
+                    const next = window.prompt(t('settings.personaDescPrompt'), persona.description)
+                    if (next === null) return
+                    run(savePersona(persona.name, next))
+                  },
+                }, h(IconEditOutline16)),
+                h('button', {
+                  type: 'button',
+                  title: t('settings.personaDelete', { name: persona.name }),
+                  'aria-label': t('settings.personaDelete', { name: persona.name }),
+                  onClick: () => {
+                    if (window.confirm(t('settings.personaDeleteConfirm', { name: persona.name }))) run(deletePersona(persona.name))
+                  },
+                }, h(IconTrashOutline16))))
+          })),
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
@@ -4223,7 +4229,6 @@ window.__ModuleLoader__.load({
       const groups = state.bootstrap.groups || []
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
       return h('section', { className: 'dt-settings-band' },
-        h('h3', null, t('settings.groups')),
         h('div', { className: 'dt-imports' },
           h('button', {
             type: 'button',
@@ -4419,10 +4424,9 @@ window.__ModuleLoader__.load({
       }
       const closeEditor = () => setEditing('')
       return h('section', { className: 'dt-settings-band' },
-        h('h3', null, t('settings.regex')),
-        h('div', { className: 'dt-imports' },
-          h(UploadButton, { kind: 'regex', label: t('settings.importRegex'), accept: '.json,application/json' }),
-          h(Button, { size: 'sm', variant: 'outline', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => setEditing('new') }, t('settings.regexCreate'))),
+        h('div', { className: 'dt-band-actions' },
+          h(Button, { size: 'sm', variant: 'primary', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => setEditing('new') }, t('settings.regexCreate')),
+          h(UploadButton, { kind: 'regex', label: t('settings.importRegex'), accept: '.json,application/json' })),
         editing === 'new'
           ? h('div', { key: 'new', className: 'dt-regex-editor-wrap' },
             h(RegexScriptEditor, { script: newRegexScript(), onSave: saveScript, onCancel: closeEditor }))
@@ -4430,28 +4434,37 @@ window.__ModuleLoader__.load({
         scripts.length === 0 && editing !== 'new' ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : h('div', { className: 'dt-regex-list' },
           scripts.map((script) => h('div', { key: script.id, className: 'dt-regex-item' },
             h('div', { className: `dt-regex-row ${script.disabled ? 'dt-regex-off' : ''}` },
-              h('label', { className: 'dt-toggle', title: t('settings.regexToggle', { name: script.scriptName }) },
+              // Checkbox keeps its own control surface; the script name is read
+              // text next to it, so the row can put the pattern on a second line.
+              h('label', { className: 'dt-toggle dt-regex-check', title: t('settings.regexToggle', { name: script.scriptName }) },
                 h('input', {
                   type: 'checkbox',
+                  'aria-label': t('settings.regexToggle', { name: script.scriptName }),
                   checked: !script.disabled,
                   disabled: editing === script.id,
                   onChange: () => run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, disabled: !item.disabled } : item))),
-                }),
-                h('span', null, script.scriptName)),
-              h('span', { className: 'dt-muted', title: t('settings.regexPlacements', { names: script.placement.map((p) => regexPlacementLabel(t, p)).join(', ') }) },
-                script.findRegex.slice(0, 60)),
-              h('button', {
-                type: 'button',
-                title: t('settings.regexEdit', { name: script.scriptName }),
-                disabled: editing !== '' && editing !== script.id,
-                onClick: () => setEditing(editing === script.id ? '' : script.id),
-              }, h(IconEditOutline16)),
-              h('button', {
-                type: 'button',
-                title: t('settings.regexDelete', { name: script.scriptName }),
-                disabled: editing === script.id,
-                onClick: () => run(saveRegexScripts(scripts.filter((item) => item.id !== script.id))),
-              }, h(IconTrashOutline16))),
+                })),
+              h('div', { className: 'dt-regex-main' },
+                h('div', { className: 'dt-regex-head' },
+                  h('span', { className: 'dt-regex-name', title: script.scriptName }, script.scriptName),
+                  h('span', { className: 'dt-regex-placements', title: t('settings.regexPlacements', { names: script.placement.map((p) => regexPlacementLabel(t, p)).join(', ') }) },
+                    script.placement.map((p) => regexPlacementLabel(t, p)).join(' · '))),
+                h('code', { className: 'dt-regex-pattern', title: script.findRegex }, script.findRegex)),
+              h('div', { className: 'dt-regex-actions' },
+                h('button', {
+                  type: 'button',
+                  title: t('settings.regexEdit', { name: script.scriptName }),
+                  'aria-label': t('settings.regexEdit', { name: script.scriptName }),
+                  disabled: editing !== '' && editing !== script.id,
+                  onClick: () => setEditing(editing === script.id ? '' : script.id),
+                }, h(IconEditOutline16)),
+                h('button', {
+                  type: 'button',
+                  title: t('settings.regexDelete', { name: script.scriptName }),
+                  'aria-label': t('settings.regexDelete', { name: script.scriptName }),
+                  disabled: editing === script.id,
+                  onClick: () => run(saveRegexScripts(scripts.filter((item) => item.id !== script.id))),
+                }, h(IconTrashOutline16)))),
             editing === script.id
               ? h('div', { className: 'dt-regex-editor-wrap' },
                 h(RegexScriptEditor, { script, onSave: saveScript, onCancel: closeEditor }))
@@ -4792,26 +4805,26 @@ window.__ModuleLoader__.load({
       const shown = long && !expanded
         ? `${message.content.slice(0, PROMPT_MESSAGE_PREVIEW)}…`
         : message.content
-      return h('div', null,
-        h('div', null,
+      return h('div', { className: 'dt-prompt-message' },
+        h('div', { className: 'dt-prompt-message-head' },
           h('span', { className: 'dt-label' }, message.role),
           long ? h('button', {
             type: 'button',
             className: 'dt-prompt-toggle',
             onClick: () => setExpanded(!expanded),
           }, expanded ? t('settings.promptsCollapse') : t('settings.promptsExpand')) : null),
-        h('pre', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '2px 0 10px', fontSize: '12px' } }, shown))
+        h('pre', { className: 'dt-prompt-pre' }, shown))
     }
 
     function PromptRecordView({ record, t }) {
       const lore = record.loreTrace
-      // Agent 模式记录：分面展示预注入 section（复用 PromptMessageView 的
-      // 长文折叠）；消息面是「本步插件注入」而非完整消息序列；无 loreTrace。
+      // Agent mode records the plugin pre-injection face (sections + messages
+      // injected this step), so long text reuses the same collapse affordance.
       const agent = record.agent
       const stepSuffix = agent && (agent.turn !== undefined || agent.step !== undefined)
         ? ` · T${agent.turn ?? '?'} / S${agent.step ?? '?'}`
         : ''
-      return h('details', { className: 'dt-settings-band' },
+      return h('details', { className: 'dt-prompt-record' },
         h('summary', null,
           `${new Date(record.at).toLocaleString()} · ${record.character} · ${record.chatId} · ${record.mode}${stepSuffix} · ~${record.promptTokens} tok · ${record.messages.length} msg`),
         agent && agent.sections.length > 0
@@ -4823,30 +4836,30 @@ window.__ModuleLoader__.load({
                 t,
               })))
           : record.system !== undefined
-            ? h('details', null,
+            ? h('details', { className: 'dt-prompt-system' },
                 h('summary', null, t('settings.promptsSystem')),
-                h('pre', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '4px 0 10px', fontSize: '12px' } }, record.system))
+                h('pre', { className: 'dt-prompt-pre' }, record.system))
             : h('p', { className: 'dt-hint' }, t('settings.promptsNoSystem')),
         h('p', { className: 'dt-label' }, t(agent ? 'settings.promptsAgentMessages' : 'settings.promptsMessages', { count: record.messages.length })),
         record.messages.map((message, index) => h(PromptMessageView, { key: index, message, t })),
         !agent && (lore && lore.entries.length > 0
-          ? h('div', null,
+          ? h('div', { className: 'dt-prompt-lore' },
               h('p', { className: 'dt-label' }, t('settings.promptsLore', {
                 count: lore.entries.length, rounds: lore.recursionRounds, used: lore.budgetUsed, limit: lore.budgetLimit })),
-              h('table', { style: { borderCollapse: 'collapse', fontSize: '12px', marginBottom: '10px' } },
+              h('table', null,
                 h('thead', null, h('tr', null,
                   ['settings.promptsWorld', 'settings.promptsEntry', 'settings.promptsKeys', 'settings.promptsPosition', 'settings.promptsProbability'].map((key) =>
-                    h('th', { key, style: { border: '1px solid var(--dsh-border, #ccc)', padding: '2px 6px', textAlign: 'left' } }, t(key))))),
+                    h('th', { key }, t(key))))),
                 h('tbody', null, lore.entries.map((entry, index) => h('tr', { key: index },
-                  h('td', { style: { border: '1px solid var(--dsh-border, #ccc)', padding: '2px 6px' } }, entry.world),
-                  h('td', { style: { border: '1px solid var(--dsh-border, #ccc)', padding: '2px 6px' } },
+                  h('td', null, entry.world),
+                  h('td', null,
                     `${entry.name || `#${entry.uid}`}`,
                     entry.constant ? ' · 常驻' : '',
                     entry.viaRecursion ? ' · 递归' : '',
                     ` · ${entry.reason}`),
-                  h('td', { style: { border: '1px solid var(--dsh-border, #ccc)', padding: '2px 6px' } }, entry.matchedKeys.join(', ') || '—'),
-                  h('td', { style: { border: '1px solid var(--dsh-border, #ccc)', padding: '2px 6px' } }, promptPositionLabel(entry)),
-                  h('td', { style: { border: '1px solid var(--dsh-border, #ccc)', padding: '2px 6px' } },
+                  h('td', null, entry.matchedKeys.join(', ') || '—'),
+                  h('td', null, promptPositionLabel(entry)),
+                  h('td', null,
                     entry.probability === undefined ? '—' : `${entry.probability.roll !== undefined ? `${entry.probability.roll.toFixed(1)}/` : ''}${entry.probability.value}%`),
                 )))))
             : h('p', { className: 'dt-hint' }, t('settings.promptsLoreEmpty'))),
@@ -4860,24 +4873,31 @@ window.__ModuleLoader__.load({
       const [loaded, setLoaded] = useState(false)
       const [character, setCharacter] = useState('')
       const [error, setError] = useState('')
+      const characters = state.bootstrap.characters || []
       const refresh = () => api(`prompts${character ? `?character=${encodeURIComponent(character)}` : ''}`)
         .then((result) => { setRecords(result.records || []); setLoaded(true); return result })
         .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
       useEffect(() => { void refresh() }, [character])
       return h('section', { className: 'dt-settings-band' },
-        h('h3', null, t('settings.promptsTitle')),
-        h('p', { className: 'dt-hint' }, t('settings.promptsHint')),
-        h('div', { className: 'dt-editor-actions' },
-          h(SettingSelect, {
-            label: t('settings.character'),
-            value: character,
-            options: state.bootstrap.characters || [],
-            empty: t('settings.promptsAll'),
-            onChange: (value) => setCharacter(value || ''),
-          }),
-          h(Button, { size: 'sm', variant: 'outline', onClick: () => { setError(''); void refresh() } }, t('settings.promptsRefresh'))),
-        loaded && records.length === 0 && !error ? h('p', { className: 'dt-hint' }, t('settings.promptsEmpty')) : null,
-        records.map((record) => h(PromptRecordView, { key: record.seq, record, t })),
+        h('div', { className: 'dt-prompts-intro' },
+          h('h3', null, t('settings.promptsTitle')),
+          h('p', { className: 'dt-prompts-desc' }, t('settings.promptsHint'))),
+        h('div', { className: 'dt-prompts-toolbar' },
+          h('label', { className: 'dt-prompts-filter' },
+            h('span', null, t('settings.character')),
+            h('select', {
+              value: character,
+              onChange: (event) => setCharacter(event.target.value || ''),
+            },
+            h('option', { value: '' }, t('settings.promptsAll')),
+            characters.map((name) => h('option', { key: name, value: name }, name)))),
+          h(Button, { size: 'sm', variant: 'outline', icon: h(IconRefreshOutline16), onClick: () => { setError(''); void refresh() } }, t('settings.promptsRefresh'))),
+        loaded && records.length === 0 && !error
+          ? h('div', { className: 'dt-panel-empty' }, h('p', null, t('settings.promptsEmpty')))
+          : null,
+        records.length > 0
+          ? h('div', { className: 'dt-prompt-records' }, records.map((record) => h(PromptRecordView, { key: record.seq, record, t })))
+          : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
@@ -8180,7 +8200,6 @@ window.__ModuleLoader__.load({
           .finally(() => setBusyId(''))
       }
       return h('section', { className: 'dt-settings-band' },
-        h('h3', null, t('panel.section.guides')),
         h('p', { className: 'dt-hint' }, t('panel.guides.hint')),
         !binding
           ? h('p', { className: 'dt-muted' }, t('panel.variables.chatLocalEmpty'))
@@ -8289,7 +8308,6 @@ window.__ModuleLoader__.load({
       }
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
-          h('h3', null, t('panel.section.scripts')),
           h('p', { className: 'dt-hint' }, t('scripts.hint')),
           h('div', { className: 'dt-imports' },
             h('label', { className: 'dt-upload', title: t('settings.importTitle', { name: t('scripts.importFile') }) },
@@ -9532,7 +9550,6 @@ window.__ModuleLoader__.load({
       }
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
-          h('h3', null, t('panel.section.workbench')),
           h('p', { className: 'dt-hint' }, t('workbench.hint')),
           h('div', { className: 'dt-imports' },
             h(Button, {
@@ -9584,7 +9601,6 @@ window.__ModuleLoader__.load({
       }
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
-          h('h3', null, t('panel.section.novels')),
           h('div', { className: 'dt-imports' },
             h(Button, {
               size: 'sm',
@@ -9704,7 +9720,6 @@ window.__ModuleLoader__.load({
       ]
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
-          h('h3', null, t('panel.section.mods')),
           !available
             ? h('p', { className: 'dt-hint' }, t('mods.unavailable'))
             : h(React.Fragment, null,
@@ -10001,14 +10016,19 @@ window.__ModuleLoader__.load({
         .dt-model-select{min-width:0;position:relative}.dt-model-trigger{min-width:0;max-width:220px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:24px;outline:none;align-items:center;gap:4px;padding:0 4px 0 8px;font-size:13px;font-weight:500;line-height:20px;display:flex}.dt-model-trigger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-model-trigger:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}.dt-model-trigger:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}.dt-model-trigger-label{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.dt-model-trigger-effort{color:var(--dsw-alias-label-caption);flex:none}.dt-model-chevron{color:var(--dsw-alias-label-caption);flex:none;transition:transform .12s}.dt-model-chevron-open{transform:rotate(180deg)}.dt-model-menu{z-index:20;border:1px solid var(--dsw-alias-border-inverted);background:var(--dsw-specific-menu);width:min(240px,100vw - 32px);max-height:min(360px,100vh - 96px);box-shadow:var(--dsw-shadow-lv3);color:var(--dsw-alias-label-primary);border-radius:12px;flex-direction:column;padding:4px;display:flex;position:absolute;bottom:calc(100% + 8px);right:0;overflow:hidden}.dt-model-status,.dt-model-empty{color:var(--dsw-alias-label-tertiary);padding:10px;font-size:13px;line-height:20px}.dt-model-error,.dt-model-warning{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);border-radius:8px;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px;padding:7px 8px;font-size:12px;line-height:18px;display:flex}.dt-model-warning{background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-state-warn-label)}.dt-model-retry{color:inherit;font:inherit;cursor:pointer;background:0 0;border:none;flex:none;padding:0;font-weight:600}.dt-model-groups{min-height:0;overflow-y:auto}.dt-model-group+.dt-model-group{margin-top:4px}.dt-model-group-title{z-index:1;background:var(--dsw-specific-menu);color:var(--dsw-alias-label-tertiary);padding:5px 8px 3px;font-size:12px;font-weight:500;line-height:18px;position:sticky;top:0}.dt-model-option{width:100%;min-height:38px;color:inherit;text-align:left;cursor:pointer;background:0 0;border:none;border-radius:10px;outline:none;align-items:center;gap:8px;padding:6px 8px;display:flex}.dt-model-option:hover:not(:disabled),.dt-model-option:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}.dt-model-option:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}.dt-model-option-copy{flex-direction:column;flex:1;min-width:0;display:flex}.dt-model-name{color:inherit;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:500;line-height:20px;overflow:hidden}.dt-model-description{color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:18px;overflow:hidden}.dt-model-check{color:var(--dsw-alias-label-primary);flex:0 0 18px;place-items:center;display:grid}.dt-model-cell{width:100%;height:40px;color:var(--dsw-alias-label-primary);cursor:pointer;text-align:left;background:0 0;border:none;border-radius:10px;align-items:center;gap:8px;padding:0 10px;font-size:14px;line-height:22px;display:flex}.dt-model-cell:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-model-cell-label{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.dt-model-cell-value{text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--dsw-alias-label-tertiary);flex:0 auto;overflow:hidden}.dt-model-cell-chevron{color:var(--dsw-alias-label-tertiary);flex:none}
         [data-dsh-soulmojito-sidebar-host]{flex:none;margin:0 0 6px;padding-right:var(--dsh-session-list-edge-inset,8px)}.dt-sidebar{box-sizing:border-box;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}.dt-sidebar-scroll{display:flex;flex-direction:column;min-height:0;max-height:min(320px,32vh);overflow-y:auto;overflow-x:hidden}.dt-sidebar-heading{display:flex;align-items:center;justify-content:space-between;height:30px;padding:0 5px;color:var(--dsw-alias-label-secondary)}.dt-sidebar-heading>span{display:flex;align-items:center;gap:6px;font-size:12px}.dt-sidebar-heading>button{width:26px;height:26px;border-radius:6px}.dt-character-group{margin-top:2px}.dt-character-row{display:flex;align-items:center;gap:2px}.dt-character-toggle{height:32px;min-width:0;flex:1;display:flex;align-items:center;gap:5px;border-radius:6px;padding:0 5px;text-align:left}.dt-character-toggle svg{transform:rotate(-90deg);transition:transform .15s}.dt-character-toggle svg.dt-chevron-open{transform:rotate(0)}.dt-character-toggle img{width:22px;height:22px;border-radius:5px;object-fit:cover}.dt-character-toggle span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.dt-character-row>button:last-child{width:28px;height:28px;display:grid;place-items:center;border-radius:6px;flex:none}.dt-sidebar-chats{display:flex;flex-direction:column;margin:1px 0 4px 28px}.dt-sidebar-chat-row{height:28px;border-radius:6px;display:grid;grid-template-columns:minmax(0,1fr) repeat(3,26px);align-items:center;color:var(--dsw-alias-label-secondary)}.dt-sidebar-chat-open{height:28px;min-width:0;text-align:left;padding:0 7px;color:inherit;font-size:12px}.dt-sidebar-chat-open span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-sidebar-chat-row>button:not(.dt-sidebar-chat-open){width:26px;height:26px;display:grid;place-items:center;border-radius:5px;opacity:0}.dt-sidebar-chat-row:hover>button:not(.dt-sidebar-chat-open),.dt-sidebar-chat-row:focus-within>button:not(.dt-sidebar-chat-open){opacity:1}.dt-sidebar-chat-row.dt-sidebar-chat-active{color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-interactive-bg-hover)}.dt-sidebar-status,.dt-sidebar-error{padding:4px 7px;font-size:11px;line-height:16px}.dt-footer-action{box-sizing:border-box;cursor:pointer;color:var(--dsw-alias-label-primary);background:transparent;border:none;font-family:inherit;display:flex;align-items:center;overflow:hidden}.dt-footer-action-wide{width:calc(100% + 8px);height:34px;flex:none;justify-content:flex-start;gap:8px;margin:4px -4px;padding:6px 2px 6px 10px;border-radius:12px;font-size:14px;line-height:22px}.dt-footer-action-wide:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-footer-action-rail{width:36px;height:36px;flex:none;justify-content:center;gap:0;margin:8px 0 10px;padding:0;border-radius:50%}.dt-footer-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;line-height:22px}.dt-sidebar-heading-toggle{min-width:0;flex:1;width:auto;height:26px;display:flex;align-items:center;gap:6px;border-radius:6px;padding:0 5px;text-align:left;font-size:12px}.dt-sidebar-heading>button.dt-sidebar-heading-toggle{width:auto}.dt-sidebar-chevron{display:flex;align-items:center;flex:none}.dt-sidebar-chevron svg{transform:rotate(-90deg);transition:transform .15s}.dt-sidebar-chevron svg.dt-chevron-open{transform:rotate(0)}.dt-sidebar-heading-label{display:flex;align-items:center;gap:6px;min-width:0}.dt-sidebar-heading-label strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
          @media(max-width:700px){[role="dialog"]:has(.dt-settings){flex-direction:column}[role="dialog"]:has(.dt-settings)>nav{box-sizing:border-box;width:100%;height:auto;max-height:190px;flex:none;overflow-y:auto;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}[role="dialog"]:has(.dt-settings)>nav>:last-child{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));height:auto}[role="dialog"]:has(.dt-settings)>nav>:last-child>button{width:100%;min-width:0}[role="dialog"]:has(.dt-settings)>:not(nav){width:100%;min-width:0;flex:1}.dt-settings-heading{padding:16px}.dt-settings-band{padding:16px}.dt-settings-grid,.dt-check-grid{grid-template-columns:1fr}.dt-view{padding-inline:10px}.dt-transcript-end{height:132px}.dt-message{max-width:94%}.dt-header-character-copy{max-width:min(340px,52vw)}.dt-header-stats{max-width:100%}.dt-composer-wrap{padding-inline:8px}.dt-model-trigger{max-width:140px}.dt-message-edit{width:78vw}.dt-sidebar-chat-row>button:not(.dt-sidebar-chat-open){opacity:1}}
-        .dt-persona-list{display:flex;flex-direction:column;gap:6px}.dt-persona-row{display:flex;align-items:center;gap:10px;min-height:44px;padding:4px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}.dt-persona-avatar{width:34px;height:34px;border-radius:6px;object-fit:cover;flex:none}.dt-persona-copy{display:flex;flex-direction:column;min-width:0;flex:1;gap:2px}.dt-persona-copy span{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-persona-actions{display:flex;gap:2px}.dt-persona-actions button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-persona-actions button:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        .dt-persona-list{display:flex;flex-direction:column;gap:6px}.dt-persona-row{display:flex;align-items:center;gap:10px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;transition:background .12s}.dt-persona-row:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-persona-avatar{width:36px;height:36px;border-radius:7px;object-fit:cover;flex:none}.dt-persona-copy{display:flex;flex-direction:column;min-width:0;flex:1;gap:1px}.dt-persona-copy strong{font-size:14px;line-height:20px}.dt-persona-copy span{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-persona-actions{display:flex;gap:2px;flex:none}.dt-persona-actions button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-persona-actions button:hover{background:var(--dsw-alias-interactive-bg-hover)}
         .dt-group-create{display:flex;flex-direction:column;gap:8px;margin:10px 0;padding:10px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}.dt-group-list{display:flex;flex-direction:column;gap:12px}.dt-group-manage{display:flex;flex-direction:column;gap:6px}.dt-group-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.dt-group-title>span{color:var(--dsw-alias-label-tertiary);font-size:12px}.dt-group-title select{height:30px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:inherit;background:var(--dsw-alias-bg-base);padding:0 6px}.dt-group-title>button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-group-members{display:flex;flex-wrap:wrap;gap:6px}
         .dt-member-chip{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 8px 0 3px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:transparent;color:inherit;font-size:12px;cursor:pointer}.dt-member-chip>img{width:22px;height:22px;border-radius:50%;object-fit:cover}.dt-member-chip-off{opacity:.45}.dt-member-chip-off>span{text-decoration:line-through}.dt-member-chip-active{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}.dt-member-chip>button{color:inherit;background:transparent;border:0;cursor:pointer;padding:0 2px;font-size:11px}
-        .dt-regex-list{display:flex;flex-direction:column;gap:6px}.dt-regex-row{display:flex;align-items:center;gap:10px;min-height:36px;padding:2px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}.dt-regex-row.dt-regex-off{opacity:.5}.dt-regex-row>.dt-toggle{flex:1;min-width:0}.dt-regex-row>.dt-muted{font-family:monospace;font-size:11px;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-regex-row>button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-regex-row>button:disabled{opacity:.4;cursor:not-allowed}.dt-regex-item{display:flex;flex-direction:column;gap:4px}.dt-regex-editor-wrap{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:12px}
+        .dt-band-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}.dt-band-actions>.dt-upload{height:32px;font-size:13px}.dt-band-actions>.dt-upload:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-band-actions>button{min-height:32px;font-size:13px}
+        .dt-regex-list{display:flex;flex-direction:column;gap:6px}.dt-regex-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;transition:background .12s}.dt-regex-row:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-row.dt-regex-off{opacity:.55}.dt-regex-check{min-height:0;flex:none}.dt-regex-main{display:flex;flex-direction:column;gap:1px;min-width:0}.dt-regex-head{display:flex;align-items:baseline;gap:8px;min-width:0}.dt-regex-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:18px;color:var(--dsw-alias-label-primary)}.dt-regex-placements{flex:none;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-pattern{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:16px}.dt-regex-actions{display:flex;gap:2px;flex:none}.dt-regex-actions button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-regex-actions button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-actions button:disabled{opacity:.4;cursor:not-allowed}.dt-regex-item{display:flex;flex-direction:column;gap:4px}.dt-regex-editor-wrap{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:12px}
         .dt-field input[type=text],.dt-field input[type=password]{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 10px}.dt-upload:disabled{opacity:.5;cursor:not-allowed}
         .dt-backlink{display:flex;padding:2px 0}.dt-backlink>button{color:var(--dsw-alias-label-tertiary);background:transparent;border:0;cursor:pointer;font-size:12px;padding:4px 2px}.dt-backlink>button:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}
         .dt-member-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}.dt-member-row .dt-member-chip>button{display:none}.dt-script-glyph{font-weight:700;font-size:15px;line-height:1}.dt-sidebar-subheading{margin-top:10px}.dt-branch-btn{font-size:13px}
         .dt-hint{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;margin:0 0 12px}.dt-hint-wide{grid-column:1 / -1;margin:0 0 12px}
+        .dt-prompts-intro{max-width:760px;margin:0 0 14px;padding:12px 14px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}.dt-prompts-intro h3{margin:0 0 4px;font-size:13px;line-height:19px;font-weight:600}.dt-prompts-desc{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:19px}
+        .dt-prompts-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}.dt-prompts-toolbar>button{min-height:32px}.dt-prompts-filter{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary);font-size:12px}.dt-prompts-filter select{box-sizing:border-box;height:32px;min-width:180px;max-width:280px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 8px;font:inherit;font-size:13px}
+        .dt-panel-empty{display:flex;align-items:center;justify-content:center;min-height:88px;padding:18px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:12px;line-height:18px}.dt-panel-empty p{margin:0}
+        .dt-prompt-records{display:flex;flex-direction:column;gap:8px}.dt-prompt-record{padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;font-size:12px}.dt-prompt-record>summary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-prompt-record[open]>summary{margin-bottom:8px;color:var(--dsw-alias-label-primary);white-space:normal}.dt-prompt-record>.dt-label{margin:8px 0 4px}.dt-prompt-record>.dt-hint{margin:4px 0}.dt-prompt-message{margin:0 0 8px}.dt-prompt-message-head{display:flex;align-items:center;gap:2px;min-height:20px}.dt-prompt-pre{margin:2px 0 0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-bg-base));white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}.dt-prompt-system>summary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;margin:2px 0 4px}.dt-prompt-lore{margin:8px 0;overflow-x:auto}.dt-prompt-lore table{width:100%;border-collapse:collapse;font-size:12px}.dt-prompt-lore th,.dt-prompt-lore td{border:1px solid var(--dsw-alias-border-l2);padding:3px 6px;text-align:left;vertical-align:top}.dt-prompt-lore th{color:var(--dsw-alias-label-secondary);font-weight:600;white-space:nowrap}
         .dt-settings-update{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
         .dt-update-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
         .dt-update-stamp{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;user-select:text}
