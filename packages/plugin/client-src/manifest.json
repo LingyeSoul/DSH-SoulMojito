@@ -1,0 +1,33 @@
+{
+  "fragments": [
+    "00-shell-head.js",
+    "10-frontend-frame.js",
+    "20-mods-bridge.js",
+    "21-mods-ui.js",
+    "30-games-ui.js",
+    "40-i18n-en.js",
+    "41-i18n-zh.js",
+    "42-i18n-translate.js",
+    "50-store-core.js",
+    "60-session-workspaces.js",
+    "61-session-binding.js",
+    "62-session-novel-workbench.js",
+    "70-store-assets.js",
+    "80-ui-primitives.js",
+    "81-ui-regex.js",
+    "82-ui-memory.js",
+    "83-ui-prompts.js",
+    "84-ui-chat.js",
+    "85-ui-mvu.js",
+    "86-ui-composer.js",
+    "87-ui-sidebar.js",
+    "90-panels-core.js",
+    "91-panels-data.js",
+    "92-ui-novel.js",
+    "93-ui-workbench.js",
+    "94-panels-tail.js",
+    "95-ui-styles.js",
+    "98-apply.js",
+    "99-shell-tail.js"
+  ]
+}
