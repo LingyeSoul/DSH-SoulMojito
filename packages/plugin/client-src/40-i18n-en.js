@@ -582,6 +582,17 @@
       'games.orphanedHint': 'This game is no longer in the registry (uninstalled or broken); the session is read-only.',
       'games.resign': 'Resign',
       'games.resignConfirm': 'Confirm resign?',
+      // Panel import entry (proposal 0018 §4.5, 2026-10-17): zip upload + git install.
+      'games.import.title': 'Import a game package',
+      'games.import.hint': 'Upload a zip game package shared by a friend (game.json / engine.mjs / view.html), or install from a git repository. Imported games appear in the list above and can be started right away.',
+      'games.import.file': 'Upload zip package',
+      'games.import.placeholder': 'https://github.com/owner/game-repo',
+      'games.import.button': 'Install',
+      'games.import.installing': 'Importing…',
+      'games.import.done': 'Imported {name}',
+      'games.import.failed': 'Import failed: {error}',
+      'games.import.force': 'Replace an already installed game id',
+      'games.import.tooLarge': 'Game package zip is too large (limit {limit})',
       // AgentNovel surface (proposal 0005). zh/en keys must stay mirrored with
       // identical {param} placeholders; the client-vm-mount gate enforces it.
       'panel.section.novels': 'Novels',

@@ -377,6 +377,15 @@ describe('HTTP 路由（handleGamesApi 直打，fakeReq/fakeRes 范式）', () =
     expect(mismatch.status).toBe(404)
   })
 
+  it('POST games/install：缺来源 400（列出来源键）；坏 zipBase64 400——结构化错误不落 500', async () => {
+    const missing = await call('POST', '/api/dsh-soulmojito/games/install', {})
+    expect(missing.status).toBe(400)
+    expect((missing.body as { message: string }).message).toContain('zipBase64')
+    const badZip = await call('POST', '/api/dsh-soulmojito/games/install', { zipBase64: 'AAAAAAAA' })
+    expect(badZip.status).toBe(400)
+    expect((badZip.body as { message: string }).message).toContain('not a valid zip')
+  })
+
   it('未知 games 子路由 404；resolveService 缺失 503「游戏运行时不可用」', async () => {
     const missing = await call('GET', '/api/dsh-soulmojito/games/nope')
     expect(missing.status).toBe(404)

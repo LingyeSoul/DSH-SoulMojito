@@ -6729,6 +6729,21 @@ function decodeCharxAsset2(bytes, path12) {
   return asset;
 }
 
+// packages/tavern-format/src/zip.ts
+var ZipArchiveError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ZipArchiveError";
+  }
+};
+function unzipArchive(bytes) {
+  try {
+    return unzipSync(bytes);
+  } catch (cause) {
+    throw new ZipArchiveError(`not a valid zip: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+}
+
 // packages/tavern-format/src/regex-script.ts
 var RegexPlacement2 = {
   USER_INPUT: 1,
@@ -9319,7 +9334,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.6".trim() : "";
-  const commit = true ? normalizeCommit("042a99b") : void 0;
+  const commit = true ? normalizeCommit("6a538d5") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -9392,9 +9407,9 @@ function gameWaiters(sessionId) {
 
 // packages/plugin/src/games/registry.ts
 import { promises as fs14 } from "node:fs";
-import { cpSync as cpSync2, existsSync as existsSync2, mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "node:fs";
+import { cpSync as cpSync2, existsSync as existsSync2, mkdirSync, mkdtempSync as mkdtempSync2, rmSync as rmSync2, writeFileSync } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join14, resolve as resolve4 } from "node:path";
+import { dirname as dirname6, join as join14, resolve as resolve4 } from "node:path";
 import { pathToFileURL as pathToFileURL2 } from "node:url";
 
 // packages/plugin/src/mods/manifest.ts
@@ -16586,6 +16601,9 @@ render()
 var xiangqi = { manifest: manifest9, engine: engine9, viewHtml: viewHtml9 };
 
 // packages/plugin/src/games/registry.ts
+var GAME_ZIP_MAX_ENTRIES = 64;
+var GAME_ZIP_MAX_FILE_BYTES = 2 * 1024 * 1024;
+var GAME_ZIP_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
 var GameRegistry = class _GameRegistry {
   constructor(options) {
     this.options = options;
@@ -16776,6 +16794,27 @@ var GameRegistry = class _GameRegistry {
       rmSync2(workRoot, { recursive: true, force: true });
     }
   }
+  /**
+   * 从 zip 字节导入（面板导入口，`POST games/install {zipBase64}`，2026-10-17）：
+   * base64 解码 → tavern-format 解包（fflate）→ 路径清洗（穿越/绝对路径拒绝，
+   * 垃圾条目跳过，三道上限见 GAME_ZIP_*）→ 单层包装目录自动下潜 → 落临时目录 →
+   * 复用 installFromPath 的全量校验与落地（installed/<id>/ + 装载 + 返回快照）。
+   * 临时目录 finally 清理；任何校验失败抛可读错误（service 层统一转 400）。
+   */
+  async installFromZip(zipBase64, force = false) {
+    const files = selectGamePackageFiles(unzipArchive(decodeZipBase64(zipBase64)));
+    const workRoot = mkdtempSync2(join14(tmpdir2(), "dsh-soulmojito-gamezip-"));
+    try {
+      for (const [name2, data] of files) {
+        const target = join14(workRoot, ...name2.split("/"));
+        mkdirSync(dirname6(target), { recursive: true });
+        writeFileSync(target, data);
+      }
+      return await this.installFromPath(workRoot, force);
+    } finally {
+      rmSync2(workRoot, { recursive: true, force: true });
+    }
+  }
   /* ------------------------- Mod 源（提案 §4.5 第 3 源，P3） ------------------------- */
   /**
    * Mod 游戏注册（`api.games.register` 的接线终点）：engine 是进程内对象
@@ -16862,6 +16901,53 @@ function staticViewCheck(viewHtml10) {
   if (viewHtml10.includes("fetch(")) return "\u5305\u542B fetch \u7F51\u7EDC\u8C03\u7528\uFF08connect-src 'none' \u7EAA\u5F8B\uFF09";
   return void 0;
 }
+function decodeZipBase64(zipBase64) {
+  const normalized = zipBase64.replace(/\s+/g, "");
+  if (normalized === "" || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) {
+    throw new Error("zipBase64 \u4E0D\u662F\u6709\u6548\u7684 base64\uFF08\u9762\u677F\u4E0A\u4F20\u5E94\u53D1\u9001\u6E38\u620F\u5305 zip \u7684 base64 \u5B57\u8282\uFF09");
+  }
+  return new Uint8Array(Buffer.from(normalized, "base64"));
+}
+function selectGamePackageFiles(archive) {
+  const files = /* @__PURE__ */ new Map();
+  let total = 0;
+  for (const [rawName, data] of Object.entries(archive)) {
+    const name2 = rawName.replaceAll("\\", "/");
+    if (name2.endsWith("/")) continue;
+    const segments = name2.split("/");
+    if (segments[0] === "__MACOSX" || segments.at(-1) === ".DS_Store") continue;
+    if (name2 === "" || name2.startsWith("/") || /^[A-Za-z]:/.test(name2) || segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+      throw new Error(`zip \u542B\u975E\u6CD5\u8DEF\u5F84 '${rawName}'\uFF08\u62D2\u7EDD\u7EDD\u5BF9\u8DEF\u5F84\u4E0E .. \u7A7F\u8D8A\uFF09`);
+    }
+    if (files.size >= GAME_ZIP_MAX_ENTRIES) {
+      throw new Error(`zip \u6761\u76EE\u6570\u8D85\u8FC7\u4E0A\u9650\uFF08${GAME_ZIP_MAX_ENTRIES}\uFF09`);
+    }
+    if (data.length > GAME_ZIP_MAX_FILE_BYTES) {
+      throw new Error(`zip \u5185\u6587\u4EF6 '${name2}' \u8D85\u8FC7 ${GAME_ZIP_MAX_FILE_BYTES} \u5B57\u8282\u4E0A\u9650`);
+    }
+    total += data.length;
+    if (total > GAME_ZIP_MAX_TOTAL_BYTES) {
+      throw new Error(`zip \u89E3\u5305\u603B\u91CF\u8D85\u8FC7 ${GAME_ZIP_MAX_TOTAL_BYTES} \u5B57\u8282\u4E0A\u9650`);
+    }
+    files.set(name2, data);
+  }
+  if (files.size === 0) throw new Error("zip \u4E3A\u7A7A\u6216\u4E0D\u542B\u4EFB\u4F55\u6587\u4EF6");
+  const unwrapped = unwrapSingleRootDirectory(files);
+  if (!unwrapped.has("game.json")) {
+    throw new Error("zip \u5185\u6CA1\u6709 game.json\uFF08\u8BF7\u76F4\u63A5\u538B\u7F29\u5305\u542B game.json / engine.mjs / view.html \u7684\u6E38\u620F\u5305\u76EE\u5F55\uFF09");
+  }
+  return unwrapped;
+}
+function unwrapSingleRootDirectory(files) {
+  if (files.has("game.json")) return files;
+  const roots = new Set([...files.keys()].map((name2) => name2.split("/")[0]));
+  if (roots.size !== 1) return files;
+  const root = [...roots][0];
+  if (root === void 0 || [...files.keys()].some((name2) => !name2.startsWith(`${root}/`))) return files;
+  const unwrapped = /* @__PURE__ */ new Map();
+  for (const [name2, data] of files) unwrapped.set(name2.slice(root.length + 1), data);
+  return unwrapped;
+}
 
 // packages/plugin/src/games/sessions.ts
 import { createHash as createHash8, randomBytes as randomBytes4 } from "node:crypto";
@@ -16870,9 +16956,9 @@ import { join as join16 } from "node:path";
 
 // packages/plugin/src/update/apply.ts
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync as existsSync3, mkdirSync, mkdtempSync as mkdtempSync3, readdirSync, readFileSync as readFileSync3, renameSync, rmSync as rmSync3, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync as existsSync3, mkdirSync as mkdirSync2, mkdtempSync as mkdtempSync3, readdirSync, readFileSync as readFileSync3, renameSync, rmSync as rmSync3, statSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { dirname as dirname6, join as join15 } from "node:path";
+import { dirname as dirname7, join as join15 } from "node:path";
 var DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
 function shippedEntries(sourceDir) {
   const manifest10 = join15(sourceDir, "package.json");
@@ -16910,7 +16996,7 @@ function replaceFileAtomic(source, target) {
 }
 function writeFileAtomic(target, data) {
   const temp = `${target}.dsh-soulmojito-partial`;
-  writeFileSync(temp, data);
+  writeFileSync2(temp, data);
   for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
     try {
       renameSync(temp, target);
@@ -17200,7 +17286,7 @@ function copyShippedFiles(sourceDir, targetDir) {
     for (const file of listFiles(from)) {
       const relative3 = file.slice(from.length + 1);
       const to = join15(targetDir, entry, relative3);
-      mkdirSync(dirname6(to), { recursive: true });
+      mkdirSync2(dirname7(to), { recursive: true });
       writeFileAtomic(to, readFileSync3(file));
       copied.push(`${entry}/${relative3.replaceAll("\\", "/")}`);
     }
@@ -17948,17 +18034,27 @@ async function openGamesService(options) {
       return renderGameViewDocument(entry.viewHtml);
     },
     async install(source, force = false) {
-      if (typeof source.path === "string" && source.path.trim() !== "") {
-        const game = await registry.installFromPath(source.path, force);
-        emitGamesChanged();
-        return { game };
+      try {
+        if (typeof source.path === "string" && source.path.trim() !== "") {
+          const game = await registry.installFromPath(source.path, force);
+          emitGamesChanged();
+          return { game };
+        }
+        if (typeof source.url === "string" && source.url.trim() !== "") {
+          const game = await registry.installFromGit(source.url, force, options.gameInstall ?? {});
+          emitGamesChanged();
+          return { game };
+        }
+        if (typeof source.zipBase64 === "string" && source.zipBase64.trim() !== "") {
+          const game = await registry.installFromZip(source.zipBase64, force);
+          emitGamesChanged();
+          return { game };
+        }
+        throw new GameBridgeError("invalid", "expected { path }, { url } or { zipBase64 }");
+      } catch (cause) {
+        if (cause instanceof GameBridgeError) throw cause;
+        throw new GameBridgeError("invalid", cause instanceof Error ? cause.message : String(cause));
       }
-      if (typeof source.url === "string" && source.url.trim() !== "") {
-        const game = await registry.installFromGit(source.url, force, options.gameInstall ?? {});
-        emitGamesChanged();
-        return { game };
-      }
-      throw new GameBridgeError("invalid", "expected { path } or { url }");
     },
     async reload() {
       const games = await registry.reload();
@@ -18850,7 +18946,7 @@ var generationHooks = createGenerationHookBus();
 
 // packages/plugin/src/mods/audit.ts
 import { appendFile, mkdir } from "node:fs/promises";
-import { dirname as dirname7 } from "node:path";
+import { dirname as dirname8 } from "node:path";
 var ModAuditLog = class {
   constructor(file) {
     this.file = file;
@@ -18870,7 +18966,7 @@ var ModAuditLog = class {
     const written = this.tail.catch(() => {
     }).then(async () => {
       try {
-        await mkdir(dirname7(this.file), { recursive: true });
+        await mkdir(dirname8(this.file), { recursive: true });
         await appendFile(this.file, line, "utf8");
       } catch (cause) {
         this.warn?.(`dsh-soulmojito: mod audit append failed: ${cause instanceof Error ? cause.message : String(cause)}`);
@@ -19078,7 +19174,7 @@ function claimedToolNames() {
 // packages/plugin/src/mods/storage.ts
 import { promises as fs16 } from "node:fs";
 import { mkdir as mkdir2 } from "node:fs/promises";
-import { dirname as dirname8 } from "node:path";
+import { dirname as dirname9 } from "node:path";
 var MOD_STORAGE_VALUE_LIMIT = 256 * 1024;
 var MOD_STORAGE_TOTAL_LIMIT = 1024 * 1024;
 var KEY_PATTERN = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
@@ -19149,7 +19245,7 @@ var ModStorage = class {
       this.options.onQuota?.(message);
       throw new Error(message);
     }
-    await mkdir2(dirname8(this.file), { recursive: true });
+    await mkdir2(dirname9(this.file), { recursive: true });
     await writeAtomicText(this.file, text);
   }
   /** 排空在飞写（宿主卸载/reload 前调用）：返回时**该文件**队列上全部写
@@ -19992,8 +20088,8 @@ function createModAssets(dbProvider) {
 }
 
 // packages/plugin/src/update/service.ts
-import { mkdirSync as mkdirSync2, readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname9, join as join18 } from "node:path";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync4 } from "node:fs";
+import { dirname as dirname10, join as join18 } from "node:path";
 var UPDATE_CACHE_FILE = "update-state.json";
 var UPDATE_CACHE_SCHEMA = 1;
 var UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1e3;
@@ -20269,7 +20365,7 @@ var TavernUpdateService = class {
   persistCache() {
     try {
       const path12 = this.cachePath();
-      mkdirSync2(dirname9(path12), { recursive: true });
+      mkdirSync3(dirname10(path12), { recursive: true });
       const payload = {
         schemaVersion: UPDATE_CACHE_SCHEMA,
         status: this.status,
@@ -21887,6 +21983,7 @@ async function runCandidateGeneration(ctx, db, options) {
 }
 
 // packages/plugin/src/games/http.ts
+var GAMES_INSTALL_BODY_MAX_BYTES = 8 * 1024 * 1024;
 function isGamesRoute(route) {
   return route === "games" || route.startsWith("games/");
 }
@@ -21981,11 +22078,17 @@ async function handleGamesApi(options) {
       return notFound();
     }
     if (method === "POST" && route === "games/install") {
-      const body = await readModRequestBody(req);
+      let body;
+      try {
+        body = await readModRequestBody(req, GAMES_INSTALL_BODY_MAX_BYTES);
+      } catch (cause) {
+        throw new GameBridgeError("invalid", `install \u8BF7\u6C42\u4F53\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0A\u9650 ${GAMES_INSTALL_BODY_MAX_BYTES} \u5B57\u8282\uFF09: ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
       const source = {};
       if (typeof body.path === "string" && body.path.trim() !== "") source.path = body.path;
       else if (typeof body.url === "string" && body.url.trim() !== "") source.url = body.url;
-      else throw new GameBridgeError("invalid", "expected { path }\uFF08\u672C\u5730\u6E38\u620F\u5305\u76EE\u5F55\uFF09\u6216 { url }\uFF08git \u6E90\uFF09");
+      else if (typeof body.zipBase64 === "string" && body.zipBase64.trim() !== "") source.zipBase64 = body.zipBase64;
+      else throw new GameBridgeError("invalid", "expected { path }\uFF08\u672C\u5730\u6E38\u620F\u5305\u76EE\u5F55\uFF09\u3001{ url }\uFF08git \u6E90\uFF09\u6216 { zipBase64 }\uFF08\u6E38\u620F\u5305 zip\uFF09");
       const { game } = await service.install(source, body.force === true);
       return sendJson2(res, 200, { ok: true, game });
     }
@@ -26353,7 +26456,7 @@ import { createHash as createHash10 } from "node:crypto";
 import { spawn as spawn2 } from "node:child_process";
 import { readdirSync as readdirSync2, readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
-import { basename as basename2, dirname as dirname10, join as join19 } from "node:path";
+import { basename as basename2, dirname as dirname11, join as join19 } from "node:path";
 import { fileURLToPath, pathToFileURL as pathToFileURL4 } from "node:url";
 var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
 var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-soulmojito, NOT the dsh-soulmojito source repository), then restart DSH`;
@@ -26574,9 +26677,9 @@ var defaultLocalEmbedRuntime = {
 var LOCAL_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
 var INSTALL_OUTPUT_TAIL = 8e3;
 function localRuntimeProfileRoot(pluginDir) {
-  const parent = dirname10(pluginDir);
+  const parent = dirname11(pluginDir);
   if (basename2(parent) !== "node_modules") return void 0;
-  return dirname10(parent);
+  return dirname11(parent);
 }
 function defaultSpawnRunner(command, args, options) {
   return new Promise((resolve7, reject) => {

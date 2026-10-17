@@ -43,6 +43,16 @@ const GAMES_I18N_KEYS = [
   'games.orphanedHint',
   'games.resign',
   'games.resignConfirm',
+  'games.import.title',
+  'games.import.hint',
+  'games.import.file',
+  'games.import.placeholder',
+  'games.import.button',
+  'games.import.installing',
+  'games.import.done',
+  'games.import.failed',
+  'games.import.force',
+  'games.import.tooLarge',
 ]
 
 describe('client games panel (main.js source check)', () => {
@@ -204,6 +214,32 @@ describe('client games panel (main.js source check)', () => {
     expect('dt-game-act'.includes('dt-game-actions')).toBe(false)
     expect("postActionRef.current({ kind: 'resign' })".includes("postActionRef.current({ type: 'resign' })")).toBe(false)
     expect('witnessedGone[session.id] !== undefined'.includes('witnessed[session.id] !== undefined')).toBe(false)
+  })
+
+  it('exposes the game package import entry: zip upload + git install (2026-10-17)', () => {
+    for (const marker of [
+      'GAMES_ZIP_MAX_BYTES = 5 * 1024 * 1024',
+      'const runGameImport = (source, busyKey) =>',
+      'const importGameZip = (file) =>',
+      'const installGameFromGit = () =>',
+      "accept: '.zip,application/zip'",
+      "'data-dsh-soulmojito-surface': 'games-import'",
+      "api('games/install'",
+      'zipBase64',
+      "t('games.import.tooLarge'",
+    ]) {
+      expect(source).toContain(marker)
+    }
+    // 导入成功后重拉清单（新游戏即时出现在上方列表）。
+    const importAt = source.indexOf('const runGameImport = (source, busyKey) =>')
+    expect(source.indexOf('return loadList()', importAt)).toBeGreaterThan(importAt)
+    // 顺带修复（2026-10-17）：GamesPanel 开局路径引用 loadList，此前解构漏项会在
+    // 点「开局」时抛 ReferenceError（loadList is not defined）——引用与解构同锁。
+    expect(source).toContain('const { hasBinding, games, sessions, sessionStates, listError, loadList, handleOutcome, turnOwner } = useChatGameSessions(character, chatId)')
+    // 近邻负样本：不得以子串形态命中。
+    expect('games/gone-import'.includes('games/install')).toBe(false)
+    expect('zip-gone-base64'.includes('zipBase64')).toBe(false)
+    expect('GAMES_ZIP_MAX_BYTES = 50 * 1024 * 1024'.includes('GAMES_ZIP_MAX_BYTES = 5 * 1024 * 1024')).toBe(false)
   })
 
   it('polls the games revision watermark at the 1s cadence', () => {

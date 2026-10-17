@@ -84,7 +84,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 
 ### 游戏与 Mod 扩展
 
-- **Agent 游戏桥** — 标准游戏引擎契约（`game.json` 清单 + 零依赖纯函数 `engine.mjs` + 自包含 `view.html`），三源注册（内置 / 导入 / Mod）。棋盘自动显示在与 MVU 状态同位处；Agent 在自己回合内用阻塞等待挂起，人类落子跨 bundle 写穿唤醒，**用户无需发送聊天消息触发下一步**。详见 [`docs/proposals/0018-agent-game-bridge.md`](docs/proposals/0018-agent-game-bridge.md)。
+- **Agent 游戏桥** — 标准游戏引擎契约（`game.json` 清单 + 零依赖纯函数 `engine.mjs` + 自包含 `view.html`），三源注册（内置 / 导入 / Mod）。棋盘自动显示在与 MVU 状态同位处；Agent 在自己回合内用阻塞等待挂起，人类落子跨 bundle 写穿唤醒，**用户无需发送聊天消息触发下一步**。游戏包可直接从面板导入（zip 上传 / git 安装），制作指南见 [`docs/games/game-package.md`](docs/games/game-package.md)，设计契约见 [`docs/proposals/0018-agent-game-bridge.md`](docs/proposals/0018-agent-game-bridge.md)。
 - **九款内置游戏** — 井字棋、五子棋、中国象棋、军棋、21 点、记忆翻牌对战、大富翁、地牢爬行、中国跳棋，开箱可玩。
 - **游戏工具 7 件** — `game_list` / `game_start` / `game_state` / `game_history` / `game_move` / `game_wait` / `game_wait_full`，按 token 经济设计：读归读、写归写，wait/move 只回增量。
 - **Mod 扩展接口** — 把带 `mod.json` 的目录放进 `$DSH_HOME/tavern/mods/`（或面板内 git 一键安装）即可被识别，默认禁用。首启弹确认层如实展示声明的能力面（知情同意，含无沙箱告知）。启用后可注册：五相位生成 hook（user-input / pre-assemble / pre-llm / post-output / post-save，顺序 waterfall，抛错/超时/忘 return 统一降级不中断生成）、Agent 工具（强制 `<modId>_` 前缀，与内置工具三层查重，冲突即拒）、宿主宏与 STscript 命令、prompt 分区（order 钳制 -50..0）、配额存储（单值 256KB / 总量 1MB）、HTTP 子路由、沙箱化面板 UI（`sandbox="allow-scripts"`，无 same-origin，CSP `connect-src 'none'`）。坏 Mod 只记审计跳过、不拖垮本体；禁用/卸载全注册面回收，全部装载与调用行为落审计日志；`DSH_SOULMOJITO_DISABLE_MODS` 可硬关整个 Mod 系统。Mod 还可声明按钮（manifest `buttons` → 面板与 ST 聊天视图渲染 chip，点击分发到 `api.onButton`）、接收本客户端写入的下行事件推送（聊天保存/资产保存/guides/按钮点击），Mod UI 的 console 输出自动回投宿主的 per-mod 日志查看器。开发者文档见 [`docs/mods/mod-api.md`](docs/mods/mod-api.md)，官方示例覆盖 v1 全部能力面。
@@ -101,7 +101,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 | 聊天 / 群组 / 人设 / 持续指引 / 正则 / 变量 | 各资产的管理面，从设置页统一归位到这里 |
 | 小说 / 剧本 | AgentNovel 小说库；剧本资产的分块、绑定与进度 |
 | 工作台 | 方案确认入口（逐字段 diff → 批准并应用 / 拒绝）与试写 |
-| 游戏 / Mod | 游戏清单与对局面；Mod 清单、能力声明 Pill、两层开关、git 安装与审计计数 |
+| 游戏 / Mod | 游戏清单与对局面、游戏包导入（zip 上传 / git 安装）；Mod 清单、能力声明 Pill、两层开关、git 安装与审计计数 |
 | 记忆检索 | embed 来源三态（关闭 / 远程 / 本地）与探针 |
 | 提示词 | 实发请求 + 世界书激活轨迹的只读查看器 |
 | 关于 | 版本 stamp 与官网 / 源码外链 |
@@ -297,15 +297,16 @@ GUI 已在桌面与 390x844 移动视口验证，覆盖原生 sidebar、管理�
 | 目录 | 内容 |
 |---|---|
 | [`docs/proposals/`](docs/proposals/) | 18 篇架构级设计契约（提案 0001-0018），实现后在此登记 |
-| [`decisions/`](decisions/) | 88 篇单次落地决策：问题、方案、否决项、与规格的偏差 |
+| [`decisions/`](decisions/) | 89 篇单次落地决策：问题、方案、否决项、与规格的偏差 |
 | [`docs/exploration/`](docs/exploration/) | 调研归档，结论必须带证据坐标（文件:行号） |
-| [`docs/plans/`](docs/plans/) · [`docs/adr/`](docs/adr/) · [`docs/mods/`](docs/mods/) | 施工计划 · 架构决策记录 · Mod 开发者文档 |
+| [`docs/plans/`](docs/plans/) · [`docs/adr/`](docs/adr/) · [`docs/mods/`](docs/mods/) · [`docs/games/`](docs/games/) | 施工计划 · 架构决策记录 · Mod 开发者文档 · 标准游戏包制作指南 |
 
 从这几篇读起：
 
 - [`docs/proposals/0001-tavern-architecture.md`](docs/proposals/0001-tavern-architecture.md) — 当前架构、边界与后备路线。
 - [`docs/proposals/0004-agent-tavern-architecture.md`](docs/proposals/0004-agent-tavern-architecture.md) — AgentTavern 原生 AgentLoop 架构、记忆/变量工具、遗忘策略。
 - [`docs/proposals/0018-agent-game-bridge.md`](docs/proposals/0018-agent-game-bridge.md) — 游戏桥标准与权威状态论证。
+- [`docs/games/game-package.md`](docs/games/game-package.md) — 标准游戏包制作指南（三件套、引擎契约、视图桥、打包导入与排错）。
 - [`CONTEXT.md`](CONTEXT.md) — 项目架构语言的统一词表（AgentTavern / ST 架构 / 上下文 / 记忆 / 遗忘 / 作用域），动手前先读。
 - [`docs/exploration/2026-10-11-jsr-lwb-reference.md`](docs/exploration/2026-10-11-jsr-lwb-reference.md) — 竞品参考与不复刻清单。
 

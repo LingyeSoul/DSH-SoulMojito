@@ -26,11 +26,12 @@
  */
 
 import { promises as fs } from 'node:fs'
-import { cpSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import type { Dirent } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { unzipArchive } from '../../../tavern-format/src/index.js'
 import { satisfiesVersionRange } from '../mods/manifest.js'
 import { gitClone, parseGitSource } from '../mods/install.js'
 import { blackjack } from './builtin/blackjack.js'
@@ -87,6 +88,12 @@ export interface GameRegistryOptions {
 
 /** git 安装实现注入面（测试镜像 mods/install.ts 的 cloneImpl 纪律）。 */
 export type GameCloneImpl = (url: string, directory: string, ref: string | undefined, timeoutMs: number) => Promise<void>
+
+/** zip 上传（面板导入口，2026-10-17）的条目数与体积上限：标准游戏包只含
+ *  三个小文件，这里是防滥用线而不是目标值（错误文案面向游戏包作者）。 */
+export const GAME_ZIP_MAX_ENTRIES = 64
+export const GAME_ZIP_MAX_FILE_BYTES = 2 * 1024 * 1024
+export const GAME_ZIP_MAX_TOTAL_BYTES = 4 * 1024 * 1024
 
 export class GameRegistry {
   private readonly games = new Map<string, GameEntry>()
@@ -306,6 +313,28 @@ export class GameRegistry {
     }
   }
 
+  /**
+   * 从 zip 字节导入（面板导入口，`POST games/install {zipBase64}`，2026-10-17）：
+   * base64 解码 → tavern-format 解包（fflate）→ 路径清洗（穿越/绝对路径拒绝，
+   * 垃圾条目跳过，三道上限见 GAME_ZIP_*）→ 单层包装目录自动下潜 → 落临时目录 →
+   * 复用 installFromPath 的全量校验与落地（installed/<id>/ + 装载 + 返回快照）。
+   * 临时目录 finally 清理；任何校验失败抛可读错误（service 层统一转 400）。
+   */
+  async installFromZip(zipBase64: string, force = false): Promise<GameSummary> {
+    const files = selectGamePackageFiles(unzipArchive(decodeZipBase64(zipBase64)))
+    const workRoot = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-gamezip-'))
+    try {
+      for (const [name, data] of files) {
+        const target = join(workRoot, ...name.split('/'))
+        mkdirSync(dirname(target), { recursive: true })
+        writeFileSync(target, data)
+      }
+      return await this.installFromPath(workRoot, force)
+    } finally {
+      rmSync(workRoot, { recursive: true, force: true })
+    }
+  }
+
   /* ------------------------- Mod 源（提案 §4.5 第 3 源，P3） ------------------------- */
 
   /**
@@ -400,4 +429,68 @@ export function staticViewCheck(viewHtml: string): string | undefined {
   if (/href\s*=\s*["']https?:/i.test(viewHtml)) return '包含外链样式/链接（必须自包含）'
   if (viewHtml.includes('fetch(')) return '包含 fetch 网络调用（connect-src \'none\' 纪律）'
   return undefined
+}
+
+/** zip 上传体解码（base64）：宽容空白；空体或明显非法字符给出可读错误。 */
+function decodeZipBase64(zipBase64: string): Uint8Array {
+  const normalized = zipBase64.replace(/\s+/g, '')
+  if (normalized === '' || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) {
+    throw new Error('zipBase64 不是有效的 base64（面板上传应发送游戏包 zip 的 base64 字节）')
+  }
+  return new Uint8Array(Buffer.from(normalized, 'base64'))
+}
+
+/**
+ * zip 条目 → 游戏包文件集（安全与体积纪律，面板上传路径）：
+ * - 反斜杠归一为正斜杠；目录条目（尾 `/`）与 `__MACOSX/`、`.DS_Store` 垃圾跳过
+ *   （macOS 压缩产物的常见噪声，不该让导入失败）；
+ * - 绝对路径（前导 `/` 或盘符）与含 `.` / `..` / 空段的路径一律拒绝（zip-slip
+ *   防线）；条目数 / 单文件 / 总量三道上限（解包后校验——与 CHARX 的 unzipSync
+ *   同信任级，防的是误用而非密码学级对抗）；
+ * - 全部条目同属一个顶层目录且根无 game.json 时剥掉该层（「压缩文件夹」形态）；
+ * - 最终必须存在 game.json（三件套其余两件由 loadInstalled 校验，缺失入 broken 册）。
+ */
+function selectGamePackageFiles(archive: Record<string, Uint8Array>): Map<string, Uint8Array> {
+  const files = new Map<string, Uint8Array>()
+  let total = 0
+  for (const [rawName, data] of Object.entries(archive)) {
+    const name = rawName.replaceAll('\\', '/')
+    if (name.endsWith('/')) continue
+    const segments = name.split('/')
+    if (segments[0] === '__MACOSX' || segments.at(-1) === '.DS_Store') continue
+    if (name === '' || name.startsWith('/') || /^[A-Za-z]:/.test(name)
+      || segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+      throw new Error(`zip 含非法路径 '${rawName}'（拒绝绝对路径与 .. 穿越）`)
+    }
+    if (files.size >= GAME_ZIP_MAX_ENTRIES) {
+      throw new Error(`zip 条目数超过上限（${GAME_ZIP_MAX_ENTRIES}）`)
+    }
+    if (data.length > GAME_ZIP_MAX_FILE_BYTES) {
+      throw new Error(`zip 内文件 '${name}' 超过 ${GAME_ZIP_MAX_FILE_BYTES} 字节上限`)
+    }
+    total += data.length
+    if (total > GAME_ZIP_MAX_TOTAL_BYTES) {
+      throw new Error(`zip 解包总量超过 ${GAME_ZIP_MAX_TOTAL_BYTES} 字节上限`)
+    }
+    files.set(name, data)
+  }
+  if (files.size === 0) throw new Error('zip 为空或不含任何文件')
+  const unwrapped = unwrapSingleRootDirectory(files)
+  if (!unwrapped.has('game.json')) {
+    throw new Error('zip 内没有 game.json（请直接压缩包含 game.json / engine.mjs / view.html 的游戏包目录）')
+  }
+  return unwrapped
+}
+
+/** 单层包装目录下潜（「压缩文件夹」形态）：根无 game.json、全部条目同属一个
+ *  顶层目录时剥掉该层；存在裸文件（如根级 README）时保持原样。 */
+function unwrapSingleRootDirectory(files: Map<string, Uint8Array>): Map<string, Uint8Array> {
+  if (files.has('game.json')) return files
+  const roots = new Set([...files.keys()].map((name) => name.split('/')[0]))
+  if (roots.size !== 1) return files
+  const root = [...roots][0]
+  if (root === undefined || [...files.keys()].some((name) => !name.startsWith(`${root}/`))) return files
+  const unwrapped = new Map<string, Uint8Array>()
+  for (const [name, data] of files) unwrapped.set(name.slice(root.length + 1), data)
+  return unwrapped
 }

@@ -943,3 +943,35 @@ chineseCheckersProbe 几何探针）；registry 装载数组第九项；gates se
 全文（八项表/几何第一性/规则裁剪/困毙论证/机器人 e2e 家位跟踪两代自纠
 留档/边界）见
 [decisions/2026-10-17-chinese-checkers-builtin.md](../../decisions/2026-10-17-chinese-checkers-builtin.md)。
+
+## 26. 2026-10-17 十四次补记：面板游戏包导入（zip 上传 + git 安装）与制作指南
+
+**需求源**：用户实报——管理面板「游戏」页没有上传按钮，文档也没有如何制作符合标准的
+游戏包。前者是 §4.5 / P2「面板导入入口与失败原因展示」的落地欠账（此前只有服务端
+`POST games/install`，客户端从未接线；2026-10-13 决策与客户端注释均声称存在）；后者是
+面向游戏包作者的文档缺口（§3 是设计契约、mod-api §18 只覆盖 Mod 内联注册）。
+
+**§4.5 修订（传输层，不改标准）**：`POST games/install` 在 `{ path }` / `{ url }` 之外新增
+`{ zipBase64 }`——zip 只是传输形态，解包（tavern-format `unzipArchive`，fflate 既有依赖）
+后落临时目录，立即复用 `installFromPath` 的全量校验与 `installed/<id>/` 落地，因此标准
+三件套、清单/引擎/烟测纪律与 `engine.meta` 权威全部不变。新增纪律（防滥用与 zip-slip）：
+条目 ≤64、单文件 ≤2MB、解包总量 ≤4MB；`__MACOSX/`、`.DS_Store` 跳过；`..`/绝对路径拒绝；
+单层包装目录自动下潜一层；面板 5MB 文件预检 + 服务端 8MB 正文上限。导入失败统一
+`invalid` 400（用户输入类），消息原文透传给面板；导入成功但包 broken 仍按目录导入语义
+「已导入 + broken reason」双面展示。
+
+**面板入口**：「游戏」分区新增导入带——zip 文件上传 + git URL 安装两条路径共用强制覆盖
+勾选与状态行（进度/成功/失败）；成功后重拉清单，新游戏立即出现在开局列表（与既有
+`useChatGameSessions` 数据面同源，无新轮询）。
+
+**文档**：新增 [`docs/games/game-package.md`](../games/game-package.md)（面向作者的三件套
+规范、manifest 字段表、引擎契约与烟测五关、视图桥两条消息 + 最小骨架、四种导入方式、
+zip 上限、broken reason 排错表、参照实现索引）。
+
+**顺带修复**：GamesPanel 的 `loadList` 解构漏项（存量 bug，点「开局」抛
+`loadList is not defined`，对局实际已开但列表不刷新）——纳入解构并由客户端源检查锁定。
+
+**验证**：gates server-bundle +3 markers/3 负样本、frontend-runtime +7 markers/7 负样本；
+`pnpm run check` 107 文件 1795 过 +1 跳（+6 用例），16 gates 全 PASS。决策全文
+（八项表/偏差/边界/测试对账）见
+[decisions/2026-10-17-games-panel-import.md](../../decisions/2026-10-17-games-panel-import.md)。
