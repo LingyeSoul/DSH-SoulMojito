@@ -26,8 +26,7 @@
  * is exercised by the test suite on a real Windows filesystem (§10.2 N1).
  */
 
-import { createHash, randomBytes } from 'node:crypto'
-import { execFile } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 import { writeAtomicText } from './fs-atomic.js'
@@ -74,119 +73,48 @@ import {
   type NovelSummary,
   type NovelUsageSample,
   type OutlineChapter,
-  type OutlineChapterInput,
   type RequirementRecord,
   type RequirementStatus,
   type ResolvedConflict,
   type SceneCompletion,
-  type ValidationError,
   type WorkIntentKind,
   type WorkIntentRecord,
   type WriterMode,
   type WritingUnit,
 } from './novel-model.js'
+import { validateCanonChanges } from './novel-canon.js'
+import {
+  applyHandledRequirements,
+  assertWatermarkAdvanced,
+  materializeOutlineChapters,
+  outlinePayloadErrorMessage,
+} from './novel-outline.js'
+import { USAGE_SAMPLE_LIMIT, validateUsageSample } from './novel-usage.js'
+import {
+  BOOT_ID,
+  elapsedActiveDuration,
+  foldActiveDuration,
+  isLiveDshWriter,
+  parseOwnerFile,
+  type OwnerFile,
+} from './novel-owner.js'
+import {
+  hash16,
+  jsonBytes,
+  readDirectories,
+  replaceHead,
+  sha256hex,
+  textBytes,
+  tryReadText,
+  writeImmutableBytes,
+} from './novel-io.js'
+import { contentRevisionOf, embeddedWorldName } from './novel-projection.js'
 
 const SCHEMA_VERSION = 1
 const REQUIREMENT_SOURCES = new Set(['composer', 'panel', 'internal'])
-const CANON_KINDS = new Set(['event', 'character-state', 'relation', 'foreshadowing', 'variable'])
-const SOURCE_REF_PATTERN = /^(commit-\d+)(?:#(\d+))?$/
+
 /** Paragraph separator for the fixed body-file serialization (§10.4). */
 const PARAGRAPH_SEPARATOR = '\n\n'
-/** Usage sampling ring size (0007 §7 W0): the store keeps only the most
- *  recent samples per novel so run state stays finite and lossless. */
-const USAGE_SAMPLE_LIMIT = 50
-
-/** Process identity shared by every bundled copy of this module: the build
- *  ships tavern-store inside several entry bundles (index.mjs and novel.mjs
- *  both mutate novels), and two NovelStore instances in one process are the
- *  same writer that may re-enter each other's ownership (§10.2). A constant
- *  local to one copy would make the bundles reject each other under the same
- *  pid, so the identity lives on globalThis. */
-const BOOT_ID: string = (globalThis as { __dshSoulMojitoNovelBootId?: string }).__dshSoulMojitoNovelBootId ??= randomBytes(16).toString('hex')
-
-/** Command-line shapes of a live dsh host: the global install path
- *  (`node …@deepseek-ai/dsh/lib/bin.js web`) or a bare `dsh web` invocation.
- *  Deliberately narrow so a path merely containing "dsh" (a checkout of this
- *  repo, the profile dir `~/.dsh`) never reads as a competing writer. */
-const DSH_HOST_COMMAND = /@deepseek-ai[\\/]dsh\b|(?:^|[\\/ \t"'])dsh(?:\.(?:cmd|js|ps1|exe|bat))?["']?[ \t]+web\b/
-
-/** Full command line of a pid, or undefined when the pid is gone and null
- *  when the platform cannot tell. Windows asks CIM (an absent process yields
- *  empty output, a broken shell yields an error); Linux reads /proc; darwin
- *  asks ps. */
-function commandLineOf(pid: number): Promise<string | undefined | null> {
-  if (process.platform === 'win32') {
-    return new Promise((resolve) => {
-      execFile('powershell.exe', ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`], { timeout: 5000, windowsHide: true }, (error, stdout) => {
-        if (error) resolve(null)
-        else resolve(stdout.trim() === '' ? undefined : stdout.trim())
-      })
-    })
-  }
-  if (process.platform === 'linux') {
-    return fs.readFile(`/proc/${pid}/cmdline`, 'utf8').then(
-      (raw) => raw.split('\0').join(' ').trim() || undefined,
-      (cause) => { const code = (cause as NodeJS.ErrnoException).code; return code === 'ENOENT' || code === 'ESRCH' ? undefined : null },
-    )
-  }
-  if (process.platform === 'darwin') {
-    return new Promise((resolve) => {
-      execFile('ps', ['-p', String(pid), '-o', 'command='], { timeout: 5000 }, (error, stdout) => {
-        if (error) resolve(Number((error as NodeJS.ErrnoException).code) === 1 ? undefined : null)
-        else resolve(stdout.trim() === '' ? undefined : stdout.trim())
-      })
-    })
-  }
-  return Promise.resolve(null)
-}
-
-/** Whether the recorded pid still names a writer that could mutate novels
- *  (§10.2: stale ownership is recovered on evidence, never on a timeout).
- *  False proves the writer is gone: the pid is dead, was recycled to a
- *  non-dsh process, or is this very pid under a foreign boot id (every live
- *  module in this process shares BOOT_ID). An undecidable probe stays
- *  conservative and reports a live writer. */
-async function isLiveDshWriter(pid: number): Promise<boolean> {
-  if (pid === process.pid) return false
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  let alive = true
-  try {
-    process.kill(pid, 0)
-  } catch (cause) {
-    alive = (cause as NodeJS.ErrnoException).code === 'EPERM'
-  }
-  if (!alive) return false
-  const command = await commandLineOf(pid)
-  if (command === undefined) return false
-  if (command === null) return true
-  return DSH_HOST_COMMAND.test(command)
-}
-
-interface OwnerFile {
-  pid: number
-  bootId: string
-  acquiredAt: string
-}
-
-/** §13 duration budget: folds the open active window into the cumulative
- * total and closes it. Paused runs and legacy snapshots (created before the
- * window fields existed) have no open window — legacy history is amnestied
- * rather than reconstructed from wall-clock, which would charge host downtime
- * to the writing budget all over again. */
-function foldActiveDuration(run: NovelRunState, nowMs: number): { activeDurationMs: number; activeWindowStart: null } {
-  const open = run.status === 'active' && run.activeWindowStart !== undefined && run.activeWindowStart !== null
-    ? Math.max(0, nowMs - Date.parse(run.activeWindowStart))
-    : 0
-  return { activeDurationMs: (run.activeDurationMs ?? 0) + open, activeWindowStart: null }
-}
-
-/** Elapsed active milliseconds under the §13 duration budget right now. */
-function elapsedActiveDuration(run: NovelRunState, nowMs: number): number {
-  const open = run.status === 'active' && run.activeWindowStart !== undefined && run.activeWindowStart !== null
-    ? Math.max(0, nowMs - Date.parse(run.activeWindowStart))
-    : 0
-  return (run.activeDurationMs ?? 0) + open
-}
 
 interface HeadFile {
   novelId: string
@@ -1731,298 +1659,5 @@ export class NovelStore {
     }
     // Paused for other reasons (user request, stop, budget...): stay paused.
     return run
-  }
-}
-
-/* ------------------------------ pure helpers ------------------------------ */
-
-/**
- * Materializes a payload chapter overlay into the complete stored chapter
- * list: droppedChapterIds and overlay ids remove/replace their previous
- * entries, omitted optional fields are inherited from the previous entry
- * with the same id, every untouched chapter is carried forward verbatim, and
- * the result is ordered by `order`.
- */
-function materializeOutlineChapters(
-  overlay: readonly OutlineChapterInput[],
-  previousById: ReadonlyMap<string, OutlineChapter>,
-  droppedChapterIds?: readonly string[],
-): OutlineChapter[] {
-  const overlayById = new Map(overlay.map((chapter) => [chapter.chapterId, chapter]))
-  const dropped = new Set(droppedChapterIds ?? [])
-  const merged: OutlineChapter[] = []
-  for (const chapter of previousById.values()) {
-    if (dropped.has(chapter.chapterId) || overlayById.has(chapter.chapterId)) continue
-    merged.push(structuredClone(chapter))
-  }
-  for (const chapter of overlay) {
-    const prior = previousById.get(chapter.chapterId)
-    merged.push({
-      chapterId: chapter.chapterId,
-      order: chapter.order,
-      title: chapter.title,
-      purpose: chapter.purpose,
-      keyEvents: [...(chapter.keyEvents ?? prior?.keyEvents ?? [])],
-      plannedCharacters: chapter.plannedCharacters ?? prior?.plannedCharacters ?? null,
-      entryCondition: chapter.entryCondition,
-      exitCondition: chapter.exitCondition,
-    })
-  }
-  return merged.sort((left, right) => left.order - right.order)
-}
-
-/**
- * Field-level summary the model can act on. A bare "invalid outline payload"
- * hides which field failed; in the field the model then retried blind and
- * burned the session.
- */
-function outlinePayloadErrorMessage(errors: readonly ValidationError[]): string {
-  const render = (error: ValidationError): string => {
-    // Several messages already open with the field name; repeating it produced
-    // "characters characters must be an array" in the field, which read as a
-    // parsing glitch rather than a fixable shape error.
-    const text = error.message.startsWith(`${error.field} `) ? error.message.slice(error.field.length + 1) : error.message
-    return `${error.field} ${text}`
-  }
-  return `invalid outline payload: ${errors.map(render).join('; ')}`
-}
-
-function applyHandledRequirements(
-  records: readonly RequirementRecord[],
-  handled: readonly HandledRequirement[],
-  outlineRevision: string,
-): RequirementRecord[] {
-  const byId = new Map(handled.map((item) => [item.requirementId, item]))
-  return records.map((record) => {
-    const item = byId.get(record.requirementId)
-    if (item === undefined) return record
-    if (item.result === 'applied') {
-      return { ...record, status: 'applied' as RequirementStatus, appliedRevision: outlineRevision, effectiveLocation: item.effectiveLocation ?? null, blockedReason: null, supersededBy: null, resolvedConflict: resolvedConflictOf(record, item) }
-    }
-    if (item.result === 'superseded') {
-      return { ...record, status: 'superseded' as RequirementStatus, appliedRevision: outlineRevision, supersededBy: item.supersededBy ?? null, blockedReason: null, resolvedConflict: resolvedConflictOf(record, item) }
-    }
-    return { ...record, status: 'blocked' as RequirementStatus, blockedReason: item.blockedReason ?? 'blocked during outline change', appliedRevision: null, effectiveLocation: null }
-  })
-}
-
-/**
- * §9.1 (line 215): resolving a blocked requirement to applied/superseded must
- * preserve the original conflict record alongside the clarification/
- * withdrawal citation. blockedReason moves into resolvedConflict.reason (the
- * live field reads null — the requirement is no longer blocked — while the
- * ledger keeps the history). validateHandledRequirements has already proved
- * resolvedBy present whenever this transition occurs, so the fallback only
- * guards a blocked -> blocked re-block, which resolves nothing.
- */
-function resolvedConflictOf(record: RequirementRecord, item: HandledRequirement): ResolvedConflict | null {
-  if (record.status !== 'blocked' || item.resolvedBy === undefined) return null
-  return {
-    reason: record.blockedReason ?? 'blocked during outline change',
-    resolvedBy: { kind: item.resolvedBy.kind, messageId: item.resolvedBy.messageId },
-  }
-}
-
-/** Watermark must only advance across a revision (§9.3). */
-function assertWatermarkAdvanced(before: readonly RequirementRecord[], after: readonly RequirementRecord[]): number {
-  const beforeMark = requirementWatermark(before)
-  const afterMark = requirementWatermark(after)
-  if (afterMark < beforeMark) {
-    throw new NovelPreconditionError({ rule: 'watermark-regression', violations: [`${beforeMark} -> ${afterMark}`] })
-  }
-  return afterMark
-}
-
-function validateCanonChanges(changes: readonly CanonChange[], commits: readonly BodyCommit[], upcomingCommitId: string, upcomingParagraphCount: number): void {
-  if (!Array.isArray(changes)) throw new NovelConfigError({ message: 'canonChanges must be an array' })
-  for (const change of changes) {
-    if (typeof change !== 'object' || change === null || !CANON_KINDS.has(change.kind)
-      || typeof change.summary !== 'string' || change.summary.trim() === ''
-      || !Array.isArray(change.sources)) {
-      throw new NovelConfigError({ message: 'invalid canon change entry' })
-    }
-    if (change.detail !== undefined && (typeof change.detail !== 'object' || change.detail === null || Array.isArray(change.detail))) {
-      throw new NovelConfigError({ message: 'canon change detail must be an object' })
-    }
-    for (const source of change.sources) {
-      if (typeof source !== 'string') throw new NovelConfigError({ message: 'canon sources must be strings' })
-      // §8.2: sources must fall into this or previously committed bodies.
-      const match = SOURCE_REF_PATTERN.exec(source)
-      if (match === null) throw new NovelConfigError({ message: `invalid canon source '${source}' (expected <commitId> or <commitId>#<index>)` })
-      const commitId = match[1]
-      const indexRaw = match[2]
-      if (commitId === undefined) throw new NovelConfigError({ message: `invalid canon source '${source}'` })
-      if (commitId === upcomingCommitId) {
-        if (indexRaw !== undefined && Number(indexRaw) >= upcomingParagraphCount) {
-          throw new NovelConfigError({ message: `canon source '${source}' references a paragraph beyond the candidate body` })
-        }
-        continue
-      }
-      const existing = commits.find((commit) => commit.commitId === commitId)
-      if (existing === undefined) throw new NovelConfigError({ message: `canon source '${source}' references an unknown commit` })
-      if (indexRaw !== undefined && Number(indexRaw) >= existing.paragraphCount) {
-        throw new NovelConfigError({ message: `canon source '${source}' references a paragraph beyond commit ${commitId}` })
-      }
-    }
-  }
-}
-
-function parseOwnerFile(novelId: string, ownerPath: string, raw: string): OwnerFile {
-  try {
-    const owner = JSON.parse(raw) as OwnerFile
-    if (typeof owner !== 'object' || owner === null || !Number.isInteger(owner.pid) || typeof owner.bootId !== 'string') {
-      throw new Error('invalid shape')
-    }
-    return owner
-  } catch (cause) {
-    throw new NovelStorageCorruptionError({ novelId, path: ownerPath, detail: `.owner.json is unreadable: ${(cause as Error).message}` })
-  }
-}
-
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0
-}
-
-/**
- * Structural validation of one usage sample (0007 §7): every numeric value
- * must be a non-negative integer so the persisted record stays JSON-lossless
- * (no NaN/Infinity can survive JSON serialization) and audit arithmetic is
- * well-defined. Mirrors validateRunBudgets' field-error style.
- */
-function validateUsageSample(sample: NovelUsageSample): ValidationError[] {
-  const errors: ValidationError[] = []
-  const s = sample as unknown as Record<string, unknown>
-  if (typeof s.recordedAt !== 'string' || s.recordedAt.trim() === '') {
-    errors.push({ field: 'recordedAt', message: 'recordedAt must be a non-empty string' })
-  }
-  if (!isNonNegativeInteger(s.turn)) {
-    errors.push({ field: 'turn', message: 'turn must be a non-negative integer' })
-  }
-  errors.push(...validateSampleCounts(s.toolBytes, 'toolBytes'))
-  if (s.writerOutputChars !== undefined && !isNonNegativeInteger(s.writerOutputChars)) {
-    errors.push({ field: 'writerOutputChars', message: 'writerOutputChars must be a non-negative integer' })
-  }
-  if (s.usage !== undefined) {
-    errors.push(...validateSampleCounts(s.usage, 'usage'))
-  }
-  return errors
-}
-
-/** Shared shape check for the numeric maps of a usage sample. */
-function validateSampleCounts(value: unknown, field: string): ValidationError[] {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return [{ field, message: `${field} must be an object of numbers` }]
-  }
-  const errors: ValidationError[] = []
-  for (const [key, count] of Object.entries(value as Record<string, unknown>)) {
-    if (!isNonNegativeInteger(count)) {
-      errors.push({ field: `${field}.${key}`, message: `${field}.${key} must be a non-negative integer` })
-    }
-  }
-  return errors
-}
-
-/** World name attached to a character card, mirroring store.ts materializeEmbeddedBook naming. */
-function embeddedWorldName(card: CharacterCardIR): string | null {
-  const book = card.data.characterBook
-  if (book === undefined || book === null) return null
-  const linked = card.data.extensions['world']
-  if (typeof linked === 'string' && linked.trim() !== '') return linked.trim()
-  if (typeof book.name === 'string' && book.name.trim() !== '') return book.name.trim()
-  return card.data.name
-}
-
-/** Content projection version (§14.1): body, chapter display info, completions. */
-function contentRevisionOf(snapshot: NovelSnapshot): string {
-  return hash16({
-    chapters: (snapshot.outline?.chapters ?? []).map((chapter) => ({ chapterId: chapter.chapterId, order: chapter.order, title: chapter.title })),
-    completedChapters: snapshot.completedChapters,
-    commits: snapshot.commits.map((commit) => ({ commitId: commit.commitId, bodyHash: commit.bodyHash, effectiveCharacters: commit.effectiveCharacters })),
-  })
-}
-
-function sha256hex(data: string | Uint8Array): string {
-  return createHash('sha256').update(data).digest('hex')
-}
-
-function hash16(value: unknown): string {
-  return sha256hex(stableStringify(value)).slice(0, 16)
-}
-
-function jsonBytes(obj: unknown): Uint8Array {
-  return textBytes(JSON.stringify(obj, null, 2))
-}
-
-function textBytes(text: string): Uint8Array {
-  return new Uint8Array(Buffer.from(text, 'utf8'))
-}
-
-async function tryReadText(file: string): Promise<string | undefined> {
-  try {
-    return await fs.readFile(file, 'utf8')
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-    throw cause
-  }
-}
-
-/**
- * Immutable object write (§10.2 step 2): tmp file + fsync + rename. Existing
- * files are left untouched (content-addressed). Body and asset objects and
- * revision files all use this path; the file handle is synced before closing.
- */
-async function writeImmutableBytes(file: string, bytes: Uint8Array): Promise<void> {
-  try {
-    await fs.access(file)
-    return
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause
-  }
-  const tmp = `${file}.${process.pid}.${Date.now()}.${randomBytes(2).toString('hex')}.tmp`
-  const fh = await fs.open(tmp, 'w')
-  try {
-    await fh.writeFile(bytes)
-    await fh.sync()
-  } finally {
-    await fh.close()
-  }
-  await fs.rename(tmp, file)
-}
-
-/**
- * HEAD replacement (§10.2 step 4): tmp + fsync + rename is the logical commit
- * point. On Windows, Node's fs.rename replaces the existing target
- * (MoveFileExW MOVEFILE_REPLACE_EXISTING), verified by the test suite on a
- * real NTFS filesystem; one retry covers transient EPERM/EBUSY contention.
- */
-async function replaceHead(head: string, bytes: Uint8Array): Promise<void> {
-  const tmp = `${head}.${process.pid}.${Date.now()}.${randomBytes(2).toString('hex')}.tmp`
-  const fh = await fs.open(tmp, 'w')
-  try {
-    await fh.writeFile(bytes)
-    await fh.sync()
-  } finally {
-    await fh.close()
-  }
-  try {
-    await fs.rename(tmp, head)
-  } catch (cause) {
-    const code = (cause as NodeJS.ErrnoException).code
-    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY') {
-      try { await fs.rm(tmp, { force: true }) } catch { /* best effort */ }
-      throw cause
-    }
-    await new Promise((resolve) => setTimeout(resolve, 25))
-    await fs.rename(tmp, head)
-  }
-}
-
-async function readDirectories(root: string): Promise<string[]> {
-  try {
-    const entries = await fs.readdir(root, { withFileTypes: true })
-    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw cause
   }
 }

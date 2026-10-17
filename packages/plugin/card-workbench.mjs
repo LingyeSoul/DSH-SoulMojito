@@ -3331,8 +3331,8 @@ var MAX_CONTENT = 64 * 1024;
 var MAX_VALUE_BYTES = 32 * 1024;
 var MAX_SCOPE_BYTES = 256 * 1024;
 
-// packages/tavern-store/src/novel.ts
-import { createHash as createHash2, randomBytes } from "node:crypto";
+// packages/tavern-store/src/novel-owner.ts
+import { randomBytes } from "node:crypto";
 var BOOT_ID = globalThis.__dshSoulMojitoNovelBootId ??= randomBytes(16).toString("hex");
 
 // packages/tavern-store/src/originals.ts

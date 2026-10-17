@@ -14,7 +14,7 @@ import {
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { basename, delimiter, dirname, join, resolve } from 'node:path'
+import { basename, delimiter, dirname, join, relative, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import vm from 'node:vm'
@@ -32,6 +32,37 @@ const NOVEL_PATH = join(PLUGIN_ROOT, 'novel.mjs')
 const CLIENT_PATH = join(PLUGIN_ROOT, 'client', 'index.js')
 const PLUGIN_NAME = 'dsh-soulmojito'
 const API_PREFIX = '/api/dsh-soulmojito'
+
+// Hand-written source files stay navigable for agents: a file over this budget
+// must either be split or carry an explicit, reasoned allowlist entry.
+const SOURCE_BUDGET_LINES = 800
+const SOURCE_BUDGET_ROOTS = [
+  'packages/bind/src',
+  'packages/plugin/client-src',
+  'packages/plugin/src',
+  'packages/tavern-format/src',
+  'packages/tavern-lore/src',
+  'packages/tavern-macros/src',
+  'packages/tavern-pipeline/src',
+  'packages/tavern-script/src',
+  'packages/tavern-store/src',
+  'packages/tavern-template/src',
+]
+const SOURCE_BUDGET_ALLOWLIST = [
+  { path: 'packages/plugin/client-src/92-ui-novel.js', reason: 'novel panel surface kept in one fragment' },
+  { path: 'packages/plugin/src/agent-novel/writer.ts', reason: 'writer subagent orchestration kept together' },
+  { path: 'packages/plugin/src/agent-novel/driver.ts', reason: 'novel scheduling and recovery state machine kept together' },
+  { path: 'packages/plugin/src/card-workbench/tools-world.ts', reason: 'world-book tool family kept together' },
+  { path: 'packages/plugin/src/generation/pipeline.ts', reason: 'generation request assembly kept as one unit' },
+  { path: 'packages/plugin/src/games/builtin/', prefix: true, reason: 'one built-in game engine per file' },
+  { path: 'packages/plugin/src/http/router.ts', reason: 'single HTTP dispatch surface; split when route groups move' },
+  { path: 'packages/plugin/src/memory-maintenance.ts', reason: 'maintenance run loop and tool surface kept together' },
+  { path: 'packages/plugin/src/mods/host.ts', reason: 'mod host lifecycle and API adapter kept together' },
+  { path: 'packages/plugin/src/mvu.ts', reason: 'MVU settlement service and receipts kept together' },
+  { path: 'packages/tavern-store/src/novel-model.ts', reason: 'novel domain model and validators kept together' },
+  { path: 'packages/tavern-store/src/novel.ts', reason: 'NovelStore orchestration class' },
+  { path: 'packages/tavern-store/src/store.ts', reason: 'TavernStore orchestration class' },
+]
 
 const REQUIRED_SERVER_ROUTES = [
   'bootstrap',
@@ -843,16 +874,26 @@ function checkAgentTavernIsolation(sourceFiles, serverText, agentText) {
 function agentTavernSourceFiles() {
   // Native-execution isolation covers both agent architectures (proposal
   // 0005 §18 host isolation): agent-tavern and agent-novel sources must stay
-  // free of plugin-side LLM loops and ST prompt pipeline calls.
+  // free of plugin-side LLM loops and ST prompt pipeline calls. Subdirectories
+  // (tools/*.ts) are scanned recursively so domain splits stay covered.
   const files = []
+  const collect = (root, label) => {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      const full = join(root, entry.name)
+      const entryLabel = `${label}/${entry.name}`
+      if (entry.isDirectory()) {
+        collect(full, entryLabel)
+        continue
+      }
+      if (entry.isFile() && /\.(?:ts|tsx|js|mjs)$/.test(entry.name)) {
+        files.push([entryLabel, readFileSync(full, 'utf8')])
+      }
+    }
+  }
   for (const dir of ['agent-tavern', 'agent-novel']) {
     const root = join(PLUGIN_ROOT, 'src', dir)
     if (!existsSync(root)) continue
-    for (const entry of readdirSync(root, { withFileTypes: true })) {
-      if (entry.isFile() && /\.(?:ts|tsx|js|mjs)$/.test(entry.name)) {
-        files.push([`${dir}/${entry.name}`, readFileSync(join(root, entry.name), 'utf8')])
-      }
-    }
+    collect(root, dir)
   }
   return files
 }
@@ -1897,6 +1938,45 @@ function runModLoaderProbe(script, extraEnv = {}) {
   }
 }
 
+function isSourceBudgetAllowlisted(relativePath) {
+  return SOURCE_BUDGET_ALLOWLIST.some((entry) => entry.prefix === true
+    ? relativePath.startsWith(entry.path)
+    : relativePath === entry.path)
+}
+
+function sourceBudgetVerdict(relativePath, lines) {
+  if (isSourceBudgetAllowlisted(relativePath)) return undefined
+  return lines > SOURCE_BUDGET_LINES
+    ? `${relativePath} has ${lines} lines (budget ${SOURCE_BUDGET_LINES}); split the file or add a reasoned entry to SOURCE_BUDGET_ALLOWLIST`
+    : undefined
+}
+
+function walkSourceFiles(dir) {
+  const files = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'node_modules' || entry.name === 'lib' || entry.name === 'dist' || entry.name === 'tests') continue
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) files.push(...walkSourceFiles(full))
+    else if (entry.isFile() && /\.(?:ts|tsx|js|mjs)$/.test(entry.name)) files.push(full)
+  }
+  return files
+}
+
+function checkSourceFileBudget() {
+  const problems = []
+  for (const root of SOURCE_BUDGET_ROOTS) {
+    const absolute = join(REPO_ROOT, root)
+    if (!existsSync(absolute)) continue
+    for (const file of walkSourceFiles(absolute)) {
+      const relativePath = relative(REPO_ROOT, file).replaceAll('\\', '/')
+      const lines = readFileSync(file, 'utf8').split(/\r?\n/).length
+      const verdict = sourceBudgetVerdict(relativePath, lines)
+      if (verdict !== undefined) problems.push(verdict)
+    }
+  }
+  return problems
+}
+
 const gates = [
   {
     name: 'update-routes',
@@ -2838,6 +2918,18 @@ const gates = [
       problems.push(...checkModLoaderResult({ ...(result ?? {}), envOff: envResult }))
       return problems
     },
+  },
+  {
+    name: 'source-file-budget',
+    selfTest: () => {
+      const over = sourceBudgetVerdict('packages/plugin/src/fresh.ts', SOURCE_BUDGET_LINES + 1)
+      const atLimit = sourceBudgetVerdict('packages/plugin/src/fresh.ts', SOURCE_BUDGET_LINES)
+      const allowlisted = sourceBudgetVerdict('packages/plugin/src/games/builtin/monopoly.ts', 5000)
+      return typeof over === 'string' && atLimit === undefined && allowlisted === undefined
+        ? []
+        : ['source file budget self-test did not enforce the limit and allowlist']
+    },
+    check: () => checkSourceFileBudget(),
   },
 ]
 

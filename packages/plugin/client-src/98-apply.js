@@ -1,0 +1,98 @@
+    function apply(ctx) {
+      installStyle()
+      PanelHost.context = ctx
+      ctx.effect(() => ctx.locale.register(LOCALE_NS, { zh: MESSAGES_ZH, en: MESSAGES_EN }), 'dsh-soulmojito: locale dictionaries')
+      translate = ctx.locale.bind(LOCALE_NS)
+      subscribeLocale = (listener) => ctx.locale.subscribe(listener)
+      getLocaleRevision = () => ctx.locale.getSnapshot()
+      void refreshBootstrap().catch(() => {})
+      ctx.slots.inject('settings.section', () => ctx.slots.register({
+        name: 'settings.section',
+        id: 'dsh-soulmojito',
+        order: 45,
+        label: () => 'dsh-soulmojito',
+        inject: () => ({}),
+      }, TavernSettings))
+      ctx.slots.inject('conversation.view', () => ctx.slots.register({
+        name: 'conversation.view',
+        id: 'tavern',
+        order: 20,
+        label: () => translate('nav.title'),
+        inject: () => ({}),
+      }, TavernView))
+      ctx.slots.inject('conversation.composer', () => ctx.slots.register({
+        name: 'conversation.composer',
+        priority: -20,
+        select: selectTavernComposer,
+        inject: () => ({}),
+      }, TavernComposer))
+      ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
+        name: 'conversation.session.header.actions',
+        id: 'dsh-soulmojito',
+        order: -5,
+        inject: () => ({}),
+      }, TavernHeaderAction))
+      ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+        name: 'shell.overlay',
+        id: 'dsh-soulmojito-panel',
+        order: 20,
+        inject: () => ({}),
+      }, PanelHost))
+      ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+        name: 'sidebar.footer.action',
+        id: 'dsh-soulmojito-panel',
+        order: 20,
+        inject: () => ({}),
+      }, SidebarFooterAction))
+      // DSH 原生右侧栏（宿主 ≥0.2.0-rc.2 的 ui-sidebar-right）：MVU 面板注册为
+      // 页面型 tab（无 patterns、按 kind 打开），guide 入口让任意会话都能从右栏
+      // 的「+」进入。sidebarRightTabs/sidebarRight 经 ctx.inject 动态等待——服务
+      // 就绪时回调生效、离开时随 scope 整体卸载；刻意不进 exports.inject：旧宿
+      // 主没有这两个服务，硬注入会让插件 apply 永久挂起，回退只剩标题栏弹层，
+      // 行为与侧栏存在前一致。
+      if (typeof ctx.inject === 'function') {
+        ctx.inject(['sidebarRightTabs', 'sidebarRight'], (scope) => {
+          scope.effect(() => scope.sidebarRightTabs.register({
+            id: MVU_TAB_ID,
+            kind: MVU_TAB_KIND,
+            priority: 'extension',
+            title: () => translate('mvu.title'),
+            guide: [{
+              id: 'mvu',
+              order: 40,
+              title: () => translate('mvu.title'),
+              description: () => translate('mvu.guide.description'),
+              icon: IconDataOutline16,
+            }],
+          }), 'dsh-soulmojito: sidebar-right mvu tab type')
+          scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+            name: 'sidebar.right.pane.tab',
+            key: MVU_TAB_ID,
+            inject: (sessionId) => ({ sessionId }),
+          }, TavernMvuSidebarTab)), 'dsh-soulmojito: sidebar-right mvu tab body')
+          // 对局面 tab（2026-10-14 修订）：与 MVU tab 同位——AgentTavern 的原生
+          // 会话没有 TavernView 正文 slot，对局棋盘以右栏 tab 展示；对局开始时
+          // 由 TavernHeaderAction 的 watcher 自动展开（openTab），也可从右栏
+          // 「+」guide 手动进入。
+          scope.effect(() => scope.sidebarRightTabs.register({
+            id: GAMES_TAB_ID,
+            kind: GAMES_TAB_KIND,
+            priority: 'extension',
+            title: () => translate('games.tabTitle'),
+            guide: [{
+              id: 'games',
+              order: 41,
+              title: () => translate('games.tabTitle'),
+              description: () => translate('games.guide.description'),
+              icon: IconGamepadOutline16,
+            }],
+          }), 'dsh-soulmojito: sidebar-right games tab type')
+          scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+            name: 'sidebar.right.pane.tab',
+            key: GAMES_TAB_ID,
+            inject: (sessionId) => ({ sessionId }),
+          }, TavernGamesSidebarTab)), 'dsh-soulmojito: sidebar-right games tab body')
+        })
+      }
+    }
+
