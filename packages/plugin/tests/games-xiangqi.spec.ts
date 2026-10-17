@@ -908,10 +908,10 @@ describe('registry 内置源（§4.1）', () => {
     expect(entry.viewHtml).toContain('data-game="dsh-soulmojito.xiangqi"')
   })
 
-  it('内置同册（按 id 稳定排序；军棋/21 点/记忆翻牌/地牢爬行随后加入同册）', async () => {
+  it('内置同册（按 id 稳定排序；军棋/21 点/记忆翻牌/地牢爬行/中国跳棋随后加入同册）', async () => {
     const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.2' })
     expect(registry.summaries().filter((summary) => summary.source === 'builtin').map((summary) => summary.id))
-      .toEqual(['dsh-soulmojito.blackjack', 'dsh-soulmojito.dungeon-crawl', 'dsh-soulmojito.gomoku', 'dsh-soulmojito.junqi', 'dsh-soulmojito.memory-match', 'dsh-soulmojito.monopoly', 'dsh-soulmojito.tic-tac-toe', 'dsh-soulmojito.xiangqi'])
+      .toEqual(['dsh-soulmojito.blackjack', 'dsh-soulmojito.chinese-checkers', 'dsh-soulmojito.dungeon-crawl', 'dsh-soulmojito.gomoku', 'dsh-soulmojito.junqi', 'dsh-soulmojito.memory-match', 'dsh-soulmojito.monopoly', 'dsh-soulmojito.tic-tac-toe', 'dsh-soulmojito.xiangqi'])
   })
 })
 
