@@ -501,6 +501,19 @@ function checkServerText(text) {
   if (!text.includes('assertResignAllowed')) {
     problems.push('server bundle must gate the resign action (assertResignAllowed)')
   }
+  // 面板 zip 上传导入口（2026-10-17，提案 0018 §4.5 补记）：zip 解包装载函数、
+  // tavern-format 的通用解包入口与 games/install 的 { zipBase64 } 请求键须在
+  // index bundle 里——丢失即判定面板上传路径被拆（本地目录/git 导入走其他键，
+  // 不会被这几条救活）。
+  if (!text.includes('installFromZip')) {
+    problems.push('server bundle must support zip game-package import (installFromZip)')
+  }
+  if (!text.includes('unzipArchive')) {
+    problems.push('server bundle must unpack game-package zips through tavern-format (unzipArchive)')
+  }
+  if (!text.includes('zipBase64')) {
+    problems.push('server bundle must accept { zipBase64 } on games/install')
+  }
   // 改名兼容（2026-10-16 项目改名 dsh-tavern → DSH-SoulMojito；决策
   // decisions/2026-10-16-project-rename-dsh-soulmojito.md）：存量数据的读取
   // 通道必须在产物里——旧持久化名常量、旧 env 前缀、旧游戏命名空间别名前缀
@@ -693,6 +706,16 @@ function checkFrontendRuntimeText(text) {
     'dt-game-resign-armed',
     'gamesDisableResign',
     'witnessed[session.id] !== undefined',
+    // 面板导入游戏包（2026-10-17，提案 0018 §4.5 补记）：zip 上传入口（体积预检 +
+    // 读文件转 base64）、git 安装入口、games/install 调用、文件类型与状态文案键。
+    // 任一缺失即判定导入口被拆（zh/en 双表齐备与占位符一致由 client-vm-mount 兜底）。
+    'GAMES_ZIP_MAX_BYTES = 5 * 1024 * 1024',
+    'const runGameImport = (source, busyKey) => {',
+    'const importGameZip = (file) => {',
+    'const installGameFromGit = () => {',
+    "accept: '.zip,application/zip'",
+    "api('games/install'",
+    "t('games.import.tooLarge'",
 
     "'panel.section.games'",
     // 游戏图标=手柄 + 管理面板导航「标题区固定」（2026-10-14 用户反馈）：自绘手柄
@@ -2094,7 +2117,7 @@ const gates = [
       const versionReader = 'readFileSync("version.json", "utf8"); var BUILD_INFO = { version: "0.0.0", commit: "stub" };'
       const commitResolver = 'function resolveCommit() { execFileSync("git", ["rev-parse", "--show-toplevel"]); return "stub"; } var TAVERN_COMMIT = resolveCommit();'
       const localEmbed = '"local-onnx:"\n\'@huggingface/transformers\'\nvar localStatus = { runtimeInstalled: true };\nfunction inferLocalModelSettings() {}\n"memory/embed/local/install"\nfunction detectLocalQuantizations() {}\n"memory/embed/local/quantizations"\nfunction resolveLocalDtype() {}'
-      const gamesBridge = '"dsh-soulmojito:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';\nvar builtinGomoku = "dsh-soulmojito.gomoku";\nvar builtinXiangqi = "dsh-soulmojito.xiangqi";\nvar builtinJunqi = "dsh-soulmojito.junqi";\nvar builtinBlackjack = "dsh-soulmojito.blackjack";\nvar builtinMemory = "dsh-soulmojito.memory-match";\nvar builtinMonopoly = "dsh-soulmojito.monopoly";\nvar builtinDungeonCrawl = "dsh-soulmojito.dungeon-crawl";\nvar builtinChineseCheckers = "dsh-soulmojito.chinese-checkers";\nvar dcToastStack = "dc-toast-stack";\nvar dcFloatNum = "dc-float-num";\nvar xiangqiCheckBanner = "#banner.check";\nvar xiangqiCheckHalo = "check-halo";\nvar waitersKey = "dsh-soulmojito:games-waiters";\nvar noticeId = "game-notice-" + sessionId;\nvar resignKey = "gamesDisableResign";\nfunction assertResignAllowed(action) {}\nfunction turnReachedAgent(session) {}\nfunction agentTurnRunning(agent) {}'
+      const gamesBridge = '"dsh-soulmojito:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';\nvar builtinGomoku = "dsh-soulmojito.gomoku";\nvar builtinXiangqi = "dsh-soulmojito.xiangqi";\nvar builtinJunqi = "dsh-soulmojito.junqi";\nvar builtinBlackjack = "dsh-soulmojito.blackjack";\nvar builtinMemory = "dsh-soulmojito.memory-match";\nvar builtinMonopoly = "dsh-soulmojito.monopoly";\nvar builtinDungeonCrawl = "dsh-soulmojito.dungeon-crawl";\nvar builtinChineseCheckers = "dsh-soulmojito.chinese-checkers";\nvar dcToastStack = "dc-toast-stack";\nvar dcFloatNum = "dc-float-num";\nvar xiangqiCheckBanner = "#banner.check";\nvar xiangqiCheckHalo = "check-halo";\nvar waitersKey = "dsh-soulmojito:games-waiters";\nvar noticeId = "game-notice-" + sessionId;\nvar resignKey = "gamesDisableResign";\nfunction assertResignAllowed(action) {}\nfunction turnReachedAgent(session) {}\nfunction agentTurnRunning(agent) {}\nfunction installFromZip() {}\nfunction unzipArchive() {}\nvar zipInstallKey = "zipBase64";'
       // 改名兼容（2026-10-16）fixture 段：旧持久化名 / 旧 env 前缀 / 旧游戏
       // 命名空间别名前缀各恰好出现一次（负样本替换唯一命中）。
       const renameCompat = 'var legacyName = "dsh-tavern";\nvar legacyEnvPrefix = "DSH_TAVERN_DISABLE_UPDATE_CHECK";\nvar legacyGamePrefix = "dsh-tavern.";'
@@ -2135,6 +2158,10 @@ const gates = [
       const badWakeRunningGate = good.replace('function agentTurnRunning(agent) {}', 'function runningGateGone(agent) {}')
       const badGamesResignKey = good.replace('"gamesDisableResign"', '"gamesResignGone"')
       const badGamesResignGate = good.replace('function assertResignAllowed(action) {}', 'function assertNothing(action) {}')
+      // 面板 zip 上传（2026-10-17）负样本：替换名逐一核对过不含原 marker 子串。
+      const badGamesZipInstall = good.replace('function installFromZip() {}', 'function zipInstallGone() {}')
+      const badGamesZipUnpack = good.replace('function unzipArchive() {}', 'function unpackGone() {}')
+      const badGamesZipKey = good.replace('"zipBase64"', '"zip-gone"')
       // 将军提示层（2026-10-14 用户需求）负样本：同款核对——替换值 'banner-style-gone'
       // / 'halo-gone' 均不含原 marker 子串。
       const badXiangqiCheckBanner = good.replace('"#banner.check"', '"banner-style-gone"')
@@ -2174,6 +2201,9 @@ const gates = [
         && checkServerText(badWakeRunningGate).length > 0
         && checkServerText(badGamesResignKey).length > 0
         && checkServerText(badGamesResignGate).length > 0
+        && checkServerText(badGamesZipInstall).length > 0
+        && checkServerText(badGamesZipUnpack).length > 0
+        && checkServerText(badGamesZipKey).length > 0
         && checkServerText(badXiangqiCheckBanner).length > 0
         && checkServerText(badXiangqiCheckHalo).length > 0
         && checkServerText(badLegacyName).length > 0
@@ -2280,6 +2310,14 @@ const gates = [
         'dt-game-resign-armed',
         'gamesDisableResign',
         'witnessed[session.id] !== undefined',
+        // 面板导入游戏包（2026-10-17）：与 checker 的必需 marker 列表逐条对齐。
+        'GAMES_ZIP_MAX_BYTES = 5 * 1024 * 1024',
+        'const runGameImport = (source, busyKey) => {}',
+        'const importGameZip = (file) => {}',
+        'const installGameFromGit = () => {}',
+        "accept: '.zip,application/zip'",
+        "api('games/install')",
+        "t('games.import.tooLarge', { limit: '5 MB' })",
 
         "'panel.section.games'",
         // 游戏图标=手柄 + 管理面板导航「标题区固定」（2026-10-14 用户反馈：红框的
@@ -2356,6 +2394,14 @@ const gates = [
       const badGameResignArmed = good.replace('dt-game-resign-armed', 'dt-game-resign-gone')
       const badGameResignKey = good.replace('gamesDisableResign', 'gamesResignGone')
       const badGameWitnessed = good.replace('witnessed[session.id] !== undefined', 'witnessedGone[session.id] !== undefined')
+      // 面板导入游戏包（2026-10-17）负样本：替换文本逐一核对过不含原 marker 子串。
+      const badGameImportRun = good.replace('const runGameImport = (source, busyKey) => {}', 'const gameImportRunGone = (source, busyKey) => {}')
+      const badGameImportZip = good.replace('const importGameZip = (file) => {}', 'const importZipGone = (file) => {}')
+      const badGameImportGit = good.replace('const installGameFromGit = () => {}', 'const installGitGone = () => {}')
+      const badGameImportRoute = good.replace("api('games/install')", "api('games/gone-import')")
+      const badGameImportAccept = good.replace("accept: '.zip,application/zip'", "accept: '.gone'")
+      const badGameImportSize = good.replace('GAMES_ZIP_MAX_BYTES = 5 * 1024 * 1024', 'GAMES_ZIP_MAX_BYTES = 0')
+      const badGameImportTooLarge = good.replace("t('games.import.tooLarge', { limit: '5 MB' })", "t('games.import.tooLargeGone', { limit: '5 MB' })")
 
       const badGamesSectionKey = good.replace("'panel.section.games'", "'panel.section.gone'")
       // 手柄图标 + 导航标题区固定（2026-10-14 用户反馈）负样本：图标组件改名、
@@ -2422,6 +2468,13 @@ const gates = [
         && checkFrontendRuntimeText(badGameResignArmed).length > 0
         && checkFrontendRuntimeText(badGameResignKey).length > 0
         && checkFrontendRuntimeText(badGameWitnessed).length > 0
+        && checkFrontendRuntimeText(badGameImportRun).length > 0
+        && checkFrontendRuntimeText(badGameImportZip).length > 0
+        && checkFrontendRuntimeText(badGameImportGit).length > 0
+        && checkFrontendRuntimeText(badGameImportRoute).length > 0
+        && checkFrontendRuntimeText(badGameImportAccept).length > 0
+        && checkFrontendRuntimeText(badGameImportSize).length > 0
+        && checkFrontendRuntimeText(badGameImportTooLarge).length > 0
         && checkFrontendRuntimeText(badGamesSectionKey).length > 0
         && checkFrontendRuntimeText(badGamepadIcon).length > 0
         && checkFrontendRuntimeText(badNavlistStructure).length > 0

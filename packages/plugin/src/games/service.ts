@@ -63,8 +63,9 @@ export interface GamesService {
   latestActive(character: string, chatId: string): Promise<string | undefined>
   /** 视图文档（CSP + 桥脚本注入后的完整 HTML）。 */
   view(gameId: string, sessionId: string): Promise<string>
-  /** 导入：{path} 本地目录或 {url} git 源（镜像 mods/install.ts）。 */
-  install(source: { path?: string; url?: string }, force?: boolean): Promise<{ game: GameSummary }>
+  /** 导入：{path} 本地目录、{url} git 源或 {zipBase64} zip 字节（面板上传，2026-10-17）。
+   *  用户输入类失败（坏包/坏 zip/已安装）统一转 invalid（HTTP 400，面板透传可读原因）。 */
+  install(source: { path?: string; url?: string; zipBase64?: string }, force?: boolean): Promise<{ game: GameSummary }>
   /** 重扫 installed 目录（mtime 防模块缓存，见 registry.ts 文件头）。 */
   reload(): Promise<{ games: GameSummary[] }>
   /** P3（提案 §4.5 第 3 源）：Mod 游戏注册——引擎 duck 校验 + 烟测 fail-fast，
@@ -155,17 +156,29 @@ export async function openGamesService(options: GamesServiceOptions): Promise<Ga
       return renderGameViewDocument(entry.viewHtml)
     },
     async install(source, force = false) {
-      if (typeof source.path === 'string' && source.path.trim() !== '') {
-        const game = await registry.installFromPath(source.path, force)
-        emitGamesChanged()
-        return { game }
+      try {
+        if (typeof source.path === 'string' && source.path.trim() !== '') {
+          const game = await registry.installFromPath(source.path, force)
+          emitGamesChanged()
+          return { game }
+        }
+        if (typeof source.url === 'string' && source.url.trim() !== '') {
+          const game = await registry.installFromGit(source.url, force, options.gameInstall ?? {})
+          emitGamesChanged()
+          return { game }
+        }
+        if (typeof source.zipBase64 === 'string' && source.zipBase64.trim() !== '') {
+          const game = await registry.installFromZip(source.zipBase64, force)
+          emitGamesChanged()
+          return { game }
+        }
+        throw new GameBridgeError('invalid', 'expected { path }, { url } or { zipBase64 }')
+      } catch (cause) {
+        if (cause instanceof GameBridgeError) throw cause
+        // 导入失败是用户输入问题（坏包/坏 zip/已安装）——映射为 invalid 400，
+        // 面板经 api() 透传可读原因（不落 500 的非结构化兜底）。
+        throw new GameBridgeError('invalid', cause instanceof Error ? cause.message : String(cause))
       }
-      if (typeof source.url === 'string' && source.url.trim() !== '') {
-        const game = await registry.installFromGit(source.url, force, options.gameInstall ?? {})
-        emitGamesChanged()
-        return { game }
-      }
-      throw new GameBridgeError('invalid', 'expected { path } or { url }')
     },
     async reload() {
       const games = await registry.reload()

@@ -7,6 +7,9 @@
     const GAME_STATE_MESSAGE = 'dsh-soulmojito:game-state'
     const GAME_ACTION_MESSAGE = 'dsh-soulmojito:game-action'
     const GAMES_REVISION_POLL_MS = 1000
+    // 游戏包 zip 上传预检（与服务端 games/install 的 8MB JSON 上限对账：base64
+    // 膨胀约 4/3，5MB zip → ~6.7MB 正文，留余量；超限就地报错不发请求）。
+    const GAMES_ZIP_MAX_BYTES = 5 * 1024 * 1024
 
     // 游戏图标=手柄（2026-10-14）：宿主 primitives 0.2.0-rc.2 的图标清单里没有
     // 游戏语义的图形（IconPlay 是「播放」、IconGoal 是「目标」，点开都不是游戏），
@@ -400,7 +403,7 @@
       const binding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
       const character = typeof binding?.character === 'string' ? binding.character : ''
       const chatId = typeof binding?.chatId === 'string' ? binding.chatId : ''
-      const { hasBinding, games, sessions, sessionStates, listError, handleOutcome, turnOwner } = useChatGameSessions(character, chatId)
+      const { hasBinding, games, sessions, sessionStates, listError, loadList, handleOutcome, turnOwner } = useChatGameSessions(character, chatId)
       const [startPending, setStartPending] = useState('')
       const [startError, setStartError] = useState('')
       const start = (game) => {
@@ -419,6 +422,54 @@
           })
           .catch((cause) => { setStartError(cause instanceof Error ? cause.message : String(cause)) })
           .finally(() => setStartPending(''))
+      }
+      // 导入游戏包（提案 0018 §4.5 面板入口，2026-10-17）：zip 上传 + git 安装
+      // 共用同一状态机（importBusy 为 'zip'/'git' 互斥键）；成功后重拉清单，
+      // 新游戏立即出现在上方列表（broken 条目连同 reason 一并可见）。
+      const [importUrl, setImportUrl] = useState('')
+      const [importForce, setImportForce] = useState(false)
+      const [importBusy, setImportBusy] = useState('')
+      const [importStatus, setImportStatus] = useState('')
+      const [importFailed, setImportFailed] = useState(false)
+      const runGameImport = (source, busyKey) => {
+        if (importBusy !== '') return
+        setImportBusy(busyKey)
+        setImportFailed(false)
+        setImportStatus(t('games.import.installing'))
+        void api('games/install', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ ...source, ...(importForce ? { force: true } : {}) }),
+        })
+          .then((result) => {
+            setImportStatus(t('games.import.done', { name: result.game?.name || result.game?.id || '' }))
+            setImportUrl('')
+            return loadList()
+          })
+          .catch((cause) => {
+            setImportFailed(true)
+            setImportStatus(t('games.import.failed', { error: cause instanceof Error ? cause.message : String(cause) }))
+          })
+          .finally(() => setImportBusy(''))
+      }
+      const importGameZip = (file) => {
+        if (file === undefined || importBusy !== '') return
+        if (file.size > GAMES_ZIP_MAX_BYTES) {
+          setImportFailed(true)
+          setImportStatus(t('games.import.tooLarge', { limit: `${GAMES_ZIP_MAX_BYTES / (1024 * 1024)} MB` }))
+          return
+        }
+        void readFile(file, true)
+          .then((buffer) => runGameImport({ zipBase64: bytesToBase64(new Uint8Array(buffer)) }, 'zip'))
+          .catch((cause) => {
+            setImportFailed(true)
+            setImportStatus(t('games.import.failed', { error: cause instanceof Error ? cause.message : String(cause) }))
+          })
+      }
+      const installGameFromGit = () => {
+        const url = importUrl.trim()
+        if (url === '' || importBusy !== '') return
+        runGameImport({ url }, 'git')
       }
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
@@ -464,6 +515,42 @@
                       ? h('p', { className: 'dt-hint' }, game.actionVocabulary)
                       : null))))),
           startError ? h('p', { className: 'dt-error' }, startError) : null),
+        // 导入游戏包（§4.5 面板入口，2026-10-17）：zip 上传（朋友分享的交付形态）
+        // + git 安装两条入口共用强制覆盖勾选与状态行；失败原因就地在状态行透传。
+        h('section', { className: 'dt-settings-band', 'data-dsh-soulmojito-surface': 'games-import' },
+          h('h3', null, t('games.import.title')),
+          h('p', { className: 'dt-hint' }, t('games.import.hint')),
+          h('div', { className: 'dt-mod-install' },
+            h('label', { className: 'dt-upload', title: t('games.import.file') },
+              importBusy === 'zip' ? t('games.import.installing') : t('games.import.file'),
+              h('input', {
+                type: 'file',
+                accept: '.zip,application/zip',
+                disabled: importBusy !== '',
+                onChange: (event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (file) importGameZip(file)
+                },
+              })),
+            h('input', {
+              type: 'text',
+              value: importUrl,
+              placeholder: t('games.import.placeholder'),
+              disabled: importBusy !== '',
+              onChange: (event) => setImportUrl(event.target.value),
+              onKeyDown: (event) => { if (event.key === 'Enter') installGameFromGit() },
+            }),
+            h(Button, { size: 'sm', variant: 'outline', disabled: importBusy !== '' || importUrl.trim() === '', onClick: installGameFromGit },
+              importBusy === 'git' ? t('games.import.installing') : t('games.import.button')),
+            h('label', { className: 'dt-toggle' },
+              h('input', {
+                type: 'checkbox',
+                checked: importForce,
+                onChange: (event) => setImportForce(event.target.checked),
+              }),
+              h('span', null, t('games.import.force')))),
+          importStatus ? h('p', { className: importFailed ? 'dt-error' : 'dt-hint' }, importStatus) : null),
         hasBinding ? h('section', { className: 'dt-settings-band' },
           h('h3', null, t('games.sessionsTitle')),
           sessions.length === 0 ? h('p', { className: 'dt-muted' }, t('games.sessionsEmpty')) : null,

@@ -14,6 +14,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { openGamesService, type GamesService } from '../src/games/service.js'
+import { GameBridgeError } from '../src/games/sessions.js'
+// fflate 是 tavern-format 的依赖（CHARX 解包同款）；它没有被提升到仓库根，插件
+// 测试按相对文件路径借用（zipSync/strToU8 是纯 JS，browser 构建在 node 下可用）。
+import { strToU8, zipSync } from '../../tavern-format/node_modules/fflate/esm/browser.js'
 
 const EXAMPLE_GAME = join(import.meta.dirname, '..', 'examples', 'games', 'dsh-soulmojito.gomoku')
 // 宿主版本取插件真实版本（与宿主 BUILD_INFO.version 同源语义）——示例清单的
@@ -66,6 +70,22 @@ function gomokuVariant(overrides: { manifest?: Record<string, unknown>; manifest
     'engine.mjs': overrides.enginePatch === undefined ? GOMOKU_ENGINE : overrides.enginePatch(GOMOKU_ENGINE),
     'view.html': GOMOKU_VIEW,
   }
+}
+
+/** 以五子棋三件套组一个指定 id 的游戏包（manifest 与 engine.meta 同步改 id）。 */
+function zipPackage(id: string): Record<string, string> {
+  return {
+    'game.json': JSON.stringify({ ...GOMOKU_MANIFEST, id }),
+    'engine.mjs': GOMOKU_ENGINE.replace("id: 'dsh-soulmojito.gomoku'", `id: '${id}'`),
+    'view.html': GOMOKU_VIEW,
+  }
+}
+
+/** 组包并编码为面板上传体的 { zipBase64 } 值。 */
+function buildZip(files: Record<string, string>): string {
+  return Buffer.from(zipSync(Object.fromEntries(
+    Object.entries(files).map(([name, content]) => [name, strToU8(content)]),
+  ))).toString('base64')
 }
 
 describe('path 安装 → status ok → 整局 → revision → 视图', () => {
@@ -234,7 +254,7 @@ describe('reload 拾取手工放入的目录（启动扫描之外的进入路径
 
 describe('install {url}（git 流程镜像 mods/install.ts，如实断言）', () => {
   it('缺 path 与 url → invalid；非法 url → parseGitSource 报错上抛', async () => {
-    await expect(service.install({})).rejects.toThrow('expected { path } or { url }')
+    await expect(service.install({})).rejects.toThrow('expected { path }, { url } or { zipBase64 }')
     await expect(service.install({ url: 'not a url' })).rejects.toThrow('invalid git url')
   })
 
@@ -259,5 +279,48 @@ describe('install {url}（git 流程镜像 mods/install.ts，如实断言）', (
       fakeService.dispose()
       rmSync(urlHome, { recursive: true, force: true })
     }
+  })
+})
+
+describe('install {zipBase64}（面板上传路径，2026-10-17）', () => {
+  it('三件套直接压缩 → status ok + source imported + 落盘；macOS 垃圾条目被跳过', async () => {
+    const { game } = await service.install({
+      zipBase64: buildZip({
+        ...zipPackage('zip.gomoku'),
+        '__MACOSX/._game.json': 'junk',
+        '.DS_Store': 'junk',
+      }),
+    })
+    expect(game.id).toBe('zip.gomoku')
+    expect(game.status).toBe('ok')
+    expect(game.source).toBe('imported')
+    // 落盘核对：zip 解出的包与目录导入同一条落地路径（installed/<id>/）。
+    expect(readFileSync(join(root, 'games', 'installed', 'zip.gomoku', 'game.json'), 'utf8')).toContain('zip.gomoku')
+  })
+
+  it('单层包装目录自动下潜（「压缩文件夹」形态）', async () => {
+    const wrapped = Object.fromEntries(
+      Object.entries(zipPackage('wrapped.gomoku')).map(([name, content]) => [`my-game/${name}`, content]),
+    )
+    const { game } = await service.install({ zipBase64: buildZip(wrapped) })
+    expect(game.id).toBe('wrapped.gomoku')
+    expect(game.status).toBe('ok')
+    expect(game.source).toBe('imported')
+  })
+
+  it('非法 zip / 非 base64 / 缺 game.json / 路径穿越 → 可读拒绝（invalid 400 面）', async () => {
+    await expect(service.install({ zipBase64: Buffer.from('not a zip').toString('base64') })).rejects.toThrow('not a valid zip')
+    const notBase64 = service.install({ zipBase64: '!!!!' })
+    await expect(notBase64).rejects.toThrow('不是有效的 base64')
+    // 用户输入类失败统一映射为 invalid（HTTP 400），不落 500 的非结构化兜底。
+    await expect(notBase64).rejects.toBeInstanceOf(GameBridgeError)
+    await expect(service.install({ zipBase64: buildZip({ 'readme.txt': 'hi' }) })).rejects.toThrow('没有 game.json')
+    await expect(service.install({ zipBase64: buildZip({ '../evil.txt': 'x', ...zipPackage('evil.gomoku') }) })).rejects.toThrow('非法路径')
+  })
+
+  it('条目数超过上限 → 拒绝（防滥用线）', async () => {
+    const files = zipPackage('big.gomoku')
+    for (let index = 0; index < 64; index += 1) files[`extra-${index}.txt`] = 'x'
+    await expect(service.install({ zipBase64: buildZip(files) })).rejects.toThrow('条目数超过上限')
   })
 })

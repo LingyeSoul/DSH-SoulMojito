@@ -138,6 +138,7 @@
 - [`2026-10-15-monopoly-builtin.md`](../decisions/2026-10-15-monopoly-builtin.md) — 内置大富翁（内置序列第七款）
 - [`2026-10-16-dungeon-crawl-builtin.md`](../decisions/2026-10-16-dungeon-crawl-builtin.md) — 内置地牢爬行（内置序列第八款，品类扩展第一款）
 - [`2026-10-17-chinese-checkers-builtin.md`](../decisions/2026-10-17-chinese-checkers-builtin.md) — 内置中国跳棋（内置序列第九款）
+- [`2026-10-17-games-panel-import.md`](../decisions/2026-10-17-games-panel-import.md) — 面板「游戏」导入入口（zip 上传 + git 安装）与标准游戏包制作指南
 - [`2026-10-14-games-autowake.md`](../decisions/2026-10-14-games-autowake.md) — 人类落子自动续弈：Agent 未 wait 时的插件侧唤起（§15）
 - [`2026-10-15-games-wake-turn-gates.md`](../decisions/2026-10-15-games-wake-turn-gates.md) — 自动续弈的回合闸与运行中闸：决定窗提前唤醒与陈旧通知的竞态修复（§21）
 - [`2026-10-14-games-delta-tools.md`](../decisions/2026-10-14-games-delta-tools.md) — 游戏工具面 token 经济修订：wait/move 只回更新，读取面独立
@@ -177,10 +178,14 @@
 - [`plans/2026-08-15-tavern-panel-implementation.md`](plans/2026-08-15-tavern-panel-implementation.md) — Tavern 面板施工计划
 - [`plans/2026-08-16-agent-tavern-implementation.md`](plans/2026-08-16-agent-tavern-implementation.md) — AgentTavern 分阶段施工计划、宿主门禁、迁移规则与验证矩阵
 - [`adr/0001-agenttavern-native-agentloop.md`](adr/0001-agenttavern-native-agentloop.md) — ADR：AgentTavern 复用原生 AgentLoop
+
+## 开发者文档
+
 - [`mods/mod-api.md`](mods/mod-api.md) — Mod 扩展开发者文档（清单、生命周期、全部能力面、面板 UI 表面协议、管理端点与审计）
+- [`games/game-package.md`](games/game-package.md) — 标准游戏包制作指南（三件套、引擎契约、视图桥协议、打包/导入、校验排错）
 
 ## 示例
 
 - [`packages/plugin/examples/mods/`](../packages/plugin/examples/mods/) — 四个官方示例 Mod（asset-stats / mood-tracker / story-clock / rps），覆盖 Mod v1 全部能力面。
-- [`packages/plugin/examples/games/dsh-soulmojito.gomoku/`](../packages/plugin/examples/games/dsh-soulmojito.gomoku/) — 游戏桥标准的参照实现（`game.json` 清单 + 零依赖纯函数 `engine.mjs` + 自包含 `view.html`）。该游戏另有内置实现，本包保留为**导入路径参照**与可分发样本；同 id 导入时以磁盘副本接管槽位。
+- [`packages/plugin/examples/games/dsh-soulmojito.gomoku/`](../packages/plugin/examples/games/dsh-soulmojito.gomoku/) — 游戏桥标准的参照实现（`game.json` 清单 + 零依赖纯函数 `engine.mjs` + 自包含 `view.html`）。该游戏另有内置实现，本包保留为**导入路径参照**与可分发样本；同 id 导入时以磁盘副本接管槽位。如何制作自己的游戏包见 [`games/game-package.md`](games/game-package.md)。
 - [`packages/plugin/README.md`](../packages/plugin/README.md) — 插件包自身的安装与包级说明。

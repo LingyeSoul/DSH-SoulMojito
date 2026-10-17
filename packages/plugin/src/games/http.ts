@@ -12,7 +12,7 @@
  * - GET  games/state/:id             → {ok, session, view}
  * - POST games/action/:id {action}   → {ok, session, view}
  * - GET  games/:gid/view/:sid        → HTML（CSP + 桥脚本注入，见 view.ts）
- * - POST games/install {path|url}    → {ok, game}
+ * - POST games/install {path|url|zipBase64} → {ok, game}
  * - POST games/reload                → {ok, games}
  *
  * 状态码纪律：非人类/非 Agent 回合与终局后落子 409；非法动作 400（引擎中文
@@ -23,6 +23,9 @@
 import { readModRequestBody } from '../mods/http.js'
 import { GameBridgeError } from './sessions.js'
 import type { GamesService } from './service.js'
+
+/** games/install 请求体上限（zip 上传：base64 约放大 4/3；客户端预检 5MB zip）。 */
+const GAMES_INSTALL_BODY_MAX_BYTES = 8 * 1024 * 1024
 
 export interface GamesHttpRequest {
   method?: string
@@ -167,13 +170,23 @@ export async function handleGamesApi(options: GamesHttpOptions): Promise<void> {
       return notFound()
     }
 
-    // ---- POST games/install {path}|{url}：导入 ----
+    // ---- POST games/install {path}|{url}|{zipBase64}：导入 ----
     if (method === 'POST' && route === 'games/install') {
-      const body = await readModRequestBody(req)
-      const source: { path?: string; url?: string } = {}
+      // zip 上传走 base64 JSON 正文（与 import/character 的 pngBase64/charxBase64
+      // 同款纪律）；8MB 上限给 base64 膨胀（约 4/3）与合理包体积留量，客户端
+      // 另有 5MB 的文件预检。读取失败（超限/坏 JSON）是参数问题——转 400 可读
+      // 报错，不落外层 500 兜底。
+      let body: Record<string, unknown>
+      try {
+        body = await readModRequestBody(req, GAMES_INSTALL_BODY_MAX_BYTES)
+      } catch (cause) {
+        throw new GameBridgeError('invalid', `install 请求体读取失败（上限 ${GAMES_INSTALL_BODY_MAX_BYTES} 字节）: ${cause instanceof Error ? cause.message : String(cause)}`)
+      }
+      const source: { path?: string; url?: string; zipBase64?: string } = {}
       if (typeof body.path === 'string' && body.path.trim() !== '') source.path = body.path
       else if (typeof body.url === 'string' && body.url.trim() !== '') source.url = body.url
-      else throw new GameBridgeError('invalid', 'expected { path }（本地游戏包目录）或 { url }（git 源）')
+      else if (typeof body.zipBase64 === 'string' && body.zipBase64.trim() !== '') source.zipBase64 = body.zipBase64
+      else throw new GameBridgeError('invalid', 'expected { path }（本地游戏包目录）、{ url }（git 源）或 { zipBase64 }（游戏包 zip）')
       const { game } = await service.install(source, body.force === true)
       return sendJson(res, 200, { ok: true, game })
     }
