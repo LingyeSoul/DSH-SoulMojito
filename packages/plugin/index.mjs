@@ -8058,7 +8058,7 @@ function parseEpubText(buffer) {
   if (opfBytes === void 0) throw new Error(`not a valid EPUB: package document '${opfPath}' not found in zip`);
   const opfText = strFromU8(opfBytes);
   const opfDir = opfPath.includes("/") ? opfPath.slice(0, opfPath.lastIndexOf("/")) : "";
-  const manifest9 = /* @__PURE__ */ new Map();
+  const manifest10 = /* @__PURE__ */ new Map();
   for (const match of opfText.matchAll(/<item\b[^>]*>/gi)) {
     const tag = match[0];
     const id = /(?:\b|xml:)id\s*=\s*"([^"]*)"/i.exec(tag)?.[1];
@@ -8066,11 +8066,11 @@ function parseEpubText(buffer) {
     if (id === void 0 || id === "" || href === void 0) continue;
     const mediaType = /\bmedia-type\s*=\s*"([^"]*)"/i.exec(tag)?.[1];
     const isXhtml = mediaType === "application/xhtml+xml" || mediaType === "text/html" || mediaType === void 0 && /\.(xhtml|html|htm)$/i.test(href);
-    if (isXhtml) manifest9.set(id, { href, isXhtml: true });
+    if (isXhtml) manifest10.set(id, { href, isXhtml: true });
   }
   const spineBlock = /<spine\b[^>]*>([\s\S]*?)<\/spine>/i.exec(opfText)?.[1] ?? "";
   const idrefs = [...spineBlock.matchAll(/<itemref\b[^>]*>/gi)].map((match) => /\bidref\s*=\s*"([^"]*)"/i.exec(match[0])?.[1]).filter((idref) => idref !== void 0 && idref !== "");
-  const orderedHrefs = (idrefs.length > 0 ? idrefs : [...manifest9.keys()]).map((idref) => manifest9.get(idref)).filter((item) => item !== void 0).map((item) => resolveZipPath(opfDir, item.href));
+  const orderedHrefs = (idrefs.length > 0 ? idrefs : [...manifest10.keys()]).map((idref) => manifest10.get(idref)).filter((item) => item !== void 0).map((item) => resolveZipPath(opfDir, item.href));
   const chapters = [];
   for (const href of orderedHrefs) {
     const doc = files[href];
@@ -15807,9 +15807,9 @@ import { tmpdir } from "node:os";
 import { dirname as dirname8, join as join15 } from "node:path";
 var DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
 function shippedEntries(sourceDir) {
-  const manifest9 = join15(sourceDir, "package.json");
-  if (!existsSync(manifest9)) throw new Error("packages/plugin/package.json is missing from the checkout");
-  const files = JSON.parse(readFileSync2(manifest9, "utf8"))?.files;
+  const manifest10 = join15(sourceDir, "package.json");
+  if (!existsSync(manifest10)) throw new Error("packages/plugin/package.json is missing from the checkout");
+  const files = JSON.parse(readFileSync2(manifest10, "utf8"))?.files;
   if (!Array.isArray(files) || files.length === 0 || !files.every((entry) => typeof entry === "string")) {
     throw new Error("packages/plugin/package.json has no usable 'files' array");
   }
@@ -16189,8 +16189,8 @@ function readInstalledStamp(pluginDir, spec = "") {
   }
   if (version === UNKNOWN_FIELD) {
     try {
-      const manifest9 = JSON.parse(readFileSync2(join15(pluginDir, "package.json"), "utf8"));
-      if (typeof manifest9?.version === "string" && manifest9.version.trim() !== "") version = manifest9.version.trim();
+      const manifest10 = JSON.parse(readFileSync2(join15(pluginDir, "package.json"), "utf8"));
+      if (typeof manifest10?.version === "string" && manifest10.version.trim() !== "") version = manifest10.version.trim();
     } catch {
     }
   }
@@ -17212,7 +17212,7 @@ function checkModManifest(raw, options) {
   const panel = record.panel;
   const surfaces = record.surfaces;
   const pickStrings = (value) => Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
-  const manifest9 = {
+  const manifest10 = {
     id: record.id,
     name: record.name,
     version: record.version,
@@ -17227,7 +17227,7 @@ function checkModManifest(raw, options) {
     buttons: Array.isArray(record.buttons) ? [...record.buttons] : [],
     games: Array.isArray(record.games) ? [...record.games] : []
   };
-  return { ok: true, manifest: manifest9 };
+  return { ok: true, manifest: manifest10 };
 }
 function checkMainPath(main) {
   const text = main.trim();
@@ -17551,11 +17551,11 @@ async function installModFromGit(options) {
 
 // packages/plugin/src/mods/host.ts
 var MOD_API_VERSION = 1;
-function declaredSurfacesOf(manifest9) {
+function declaredSurfacesOf(manifest10) {
   return {
-    hooks: [...manifest9.surfaces.hooks],
-    tools: [...manifest9.surfaces.tools],
-    http: [...manifest9.surfaces.http]
+    hooks: [...manifest10.surfaces.hooks],
+    tools: [...manifest10.surfaces.tools],
+    http: [...manifest10.surfaces.http]
   };
 }
 function modsDisabledByEnv() {
@@ -17820,32 +17820,32 @@ var ModHost = class _ModHost {
         await this.audit.record(id, "skip", message);
         continue;
       }
-      const manifest9 = check.manifest;
-      const engineRange = manifest9.engines?.dshSoulMojito;
+      const manifest10 = check.manifest;
+      const engineRange = manifest10.engines?.dshSoulMojito;
       if (engineRange !== void 0) {
         const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange);
         if (!verdict.ok) {
-          nextBlocked.set(id, { manifest: manifest9, reason: verdict.reason });
+          nextBlocked.set(id, { manifest: manifest10, reason: verdict.reason });
           await this.audit.record(id, "skip", verdict.reason);
           continue;
         }
       }
-      const entryPath = resolve3(this.modsRoot, directory, manifest9.main);
+      const entryPath = resolve3(this.modsRoot, directory, manifest10.main);
       const containment = relative(resolve3(this.modsRoot, directory), entryPath);
       if (containment === "" || containment.startsWith("..") || isAbsolute(containment)) {
-        const message = `main entry '${manifest9.main}' escapes the mod directory`;
-        nextBlocked.set(id, { manifest: manifest9, reason: message });
+        const message = `main entry '${manifest10.main}' escapes the mod directory`;
+        nextBlocked.set(id, { manifest: manifest10, reason: message });
         await this.audit.record(id, "skip", message);
         continue;
       }
       const entryStat = await fs14.stat(entryPath).catch(() => void 0);
       if (entryStat?.isFile() !== true) {
-        const message = `main entry '${manifest9.main}' not found`;
-        nextBlocked.set(id, { manifest: manifest9, reason: message });
+        const message = `main entry '${manifest10.main}' not found`;
+        nextBlocked.set(id, { manifest: manifest10, reason: message });
         await this.audit.record(id, "skip", message);
         continue;
       }
-      nextDiscovered.set(id, { manifest: manifest9, directory: join18(this.modsRoot, directory), entryPath });
+      nextDiscovered.set(id, { manifest: manifest10, directory: join18(this.modsRoot, directory), entryPath });
     }
     this.discovered.clear();
     this.broken.clear();
@@ -18089,14 +18089,14 @@ var ModHost = class _ModHost {
           if (!record.manifest.games.includes(gameId)) {
             throw new Error(`game '${gameId}' is not declared in the manifest games [${record.manifest.games.join(", ")}]`);
           }
-          const engine9 = def.engine;
+          const engine10 = def.engine;
           const service = resolveGamesService();
           if (service === void 0) {
             throw new Error("the games runtime is not available in this process (game registration requires the games service)");
           }
           service.registerModGame(def);
           return tracked(() => {
-            service.unregisterModGame(gameId, engine9);
+            service.unregisterModGame(gameId, engine10);
           });
         }
       },
@@ -18123,9 +18123,9 @@ var ModHost = class _ModHost {
             if (entry.name.toLowerCase() === lowered) throw new Error(`macro name '${macroName}' is already registered`);
           }
           let failureAudited = false;
-          const wrapped = (args, engine9) => {
+          const wrapped = (args, engine10) => {
             try {
-              const result = fn(args, engine9);
+              const result = fn(args, engine10);
               if (typeof result === "string" || result === null) return result;
               if (typeof result === "number" || typeof result === "boolean") return String(result);
               return null;
@@ -18191,17 +18191,17 @@ var ModHost = class _ModHost {
     return api;
   }
 };
-function modInfoOf(manifest9) {
+function modInfoOf(manifest10) {
   return {
-    id: manifest9.id,
-    name: manifest9.name,
-    version: manifest9.version,
-    author: manifest9.author,
-    description: manifest9.description,
-    capabilities: manifest9.capabilities,
-    loadingOrder: manifest9.loadingOrder,
-    panel: manifest9.panel ?? null,
-    buttons: [...manifest9.buttons]
+    id: manifest10.id,
+    name: manifest10.name,
+    version: manifest10.version,
+    author: manifest10.author,
+    description: manifest10.description,
+    capabilities: manifest10.capabilities,
+    loadingOrder: manifest10.loadingOrder,
+    panel: manifest10.panel ?? null,
+    buttons: [...manifest10.buttons]
   };
 }
 var GENERATION_HOOK_PHASES = /* @__PURE__ */ new Set(["user-input", "pre-assemble", "pre-llm", "post-output", "post-save"]);
@@ -19001,9 +19001,785 @@ render()
 `;
 var blackjack = { manifest, engine, viewHtml };
 
+// packages/plugin/src/games/standard.ts
+var GAME_STATE_MAX_BYTES = 65536;
+var GAME_ACTION_MAX_BYTES = 4096;
+var GAME_LEGAL_ACTIONS_MAX = 64;
+var GAME_SESSION_ID_PATTERN = /^g-[0-9a-f]{8}$/;
+function checkGameManifest(raw, options = {}) {
+  const errors = [];
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, errors: ["game.json must be a JSON object"] };
+  }
+  const value = raw;
+  if (typeof value.id !== "string" || value.id === "") errors.push("id must be a non-empty string");
+  else if (!MOD_ID_PATTERN.test(value.id)) errors.push("id must be [a-z0-9-] labels or reverse-domain joined by '.'");
+  else if (options.directory !== void 0 && value.id !== options.directory) {
+    errors.push(`id '${value.id}' must equal the directory name '${options.directory}'`);
+  }
+  if (typeof value.name !== "string" || value.name.trim() === "") errors.push("name must be a non-empty string");
+  if (typeof value.version !== "string" || value.version.trim() === "") errors.push("version must be a non-empty string");
+  if (value.engines !== void 0) {
+    if (value.engines === null || typeof value.engines !== "object" || Array.isArray(value.engines)) {
+      errors.push("engines must be an object");
+    } else {
+      for (const key of ["dsh-soulmojito", "dsh-tavern"]) {
+        const range = value.engines[key];
+        if (range !== void 0 && typeof range !== "string") {
+          errors.push(`engines.${key} must be a version range string`);
+        }
+      }
+    }
+  }
+  const players = value.players;
+  if (players === null || typeof players !== "object" || Array.isArray(players)) {
+    errors.push("players must be an object { min, max, roles }");
+  } else {
+    const spec = players;
+    const min = spec.min;
+    const max2 = spec.max;
+    if (!Number.isInteger(min) || !Number.isInteger(max2) || min < 1 || max2 < min) {
+      errors.push("players.min/max must be integers with 1 <= min <= max");
+    }
+    if (!Array.isArray(spec.roles) || spec.roles.length === 0 || !spec.roles.every((role) => typeof role === "string" && role !== "")) {
+      errors.push("players.roles must be a non-empty array of non-empty strings");
+    } else if (Number.isInteger(max2) && spec.roles.length !== max2) {
+      errors.push(`players.roles length (${spec.roles.length}) must equal players.max (${String(max2)})`);
+    }
+    if (Array.isArray(spec.roles) && new Set(spec.roles.map(String)).size !== spec.roles.length) {
+      errors.push("players.roles must not contain duplicates");
+    }
+  }
+  if (value.turnBased !== true) errors.push("turnBased must be true (real-time games are out of scope for bridge v1)");
+  if (typeof value.actionVocabulary !== "string" || value.actionVocabulary.trim() === "") {
+    errors.push("actionVocabulary must be a non-empty string");
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  return {
+    ok: true,
+    errors,
+    manifest: {
+      id: value.id,
+      name: value.name,
+      version: value.version,
+      ...value.engines === void 0 ? {} : { engines: value.engines },
+      players: { min: players.min, max: players.max, roles: [...players.roles] },
+      turnBased: true,
+      actionVocabulary: value.actionVocabulary
+    }
+  };
+}
+function checkGameEngine(candidate) {
+  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return { ok: false, errors: ["engine.mjs must default-export an object"] };
+  }
+  const value = candidate;
+  const metaCheck = checkGameManifest(value.meta);
+  const errors = [];
+  if (!metaCheck.ok) errors.push(`engine.meta invalid: ${metaCheck.errors.join("; ")}`);
+  for (const member of ["createGame", "legalActions", "applyAction", "describe"]) {
+    if (typeof value[member] !== "function") errors.push(`engine.${member} must be a function`);
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, engine: candidate };
+}
+function isJsonSafe(value) {
+  try {
+    const text = JSON.stringify(value);
+    if (typeof text !== "string") return false;
+    return deepEqual(JSON.parse(text), value);
+  } catch {
+    return false;
+  }
+}
+function deepEqual(left, right) {
+  if (Object.is(left, right)) return true;
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    if (left.length !== right.length) return false;
+    return left.every((item, index) => deepEqual(item, right[index]));
+  }
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  if (leftKeys.length !== rightKeys.length || leftKeys.some((key, index) => key !== rightKeys[index])) return false;
+  return leftKeys.every((key) => deepEqual(left[key], right[key]));
+}
+function jsonSizeOf(value) {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), "utf8");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+function currentRoleOf(state, roles) {
+  if (state === null || typeof state !== "object" || Array.isArray(state)) {
+    throw new Error("\u5F15\u64CE state \u5FC5\u987B\u662F JSON \u5BF9\u8C61\uFF08\u5F53\u524D\u56DE\u5408\u5B57\u6BB5 turn \u65E0\u6CD5\u8BFB\u53D6\uFF09");
+  }
+  const turn = state.turn;
+  if (typeof turn !== "string" || turn === "") {
+    throw new Error("\u5F15\u64CE state \u7F3A\u5C11\u5B57\u7B26\u4E32\u5B57\u6BB5 turn\uFF08\u5F53\u524D\u56DE\u5408\u89D2\u8272\uFF09\uFF0C\u65E0\u6CD5\u63A8\u5BFC\u884C\u68CB\u65B9");
+  }
+  if (roles !== void 0 && !roles.includes(turn)) {
+    throw new Error(`state.turn\u300C${turn}\u300D\u4E0D\u5728\u89D2\u8272\u8868 [${roles.join(", ")}] \u5185`);
+  }
+  return turn;
+}
+function parseBoardCoord(value) {
+  if (typeof value === "number") return Number.isInteger(value) ? value : null;
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!/^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(text)) return null;
+  const parsed = Number(text);
+  return Number.isInteger(parsed) ? parsed : null;
+}
+function smokeTestGameEngine(engine10) {
+  const reasons = [];
+  const roles = engine10.meta.players.roles;
+  let created;
+  try {
+    created = engine10.createGame({ seed: 1 });
+  } catch (cause) {
+    return { ok: false, reasons: [`createGame \u629B\u9519: ${errorMessage2(cause)}`] };
+  }
+  if (created === null || typeof created !== "object" || !("state" in created)) {
+    return { ok: false, reasons: ["createGame \u5FC5\u987B\u8FD4\u56DE { state } \u5F62\u6001"] };
+  }
+  const state = created.state;
+  if (!isJsonSafe(state)) reasons.push("\u521D\u59CB state \u4E0D\u662F deep-JSON-safe");
+  if (jsonSizeOf(state) > GAME_STATE_MAX_BYTES) reasons.push(`\u521D\u59CB state \u5E8F\u5217\u5316\u8D85\u8FC7 ${GAME_STATE_MAX_BYTES} \u5B57\u8282\u4E0A\u9650`);
+  let turn;
+  try {
+    turn = currentRoleOf(state, roles);
+  } catch (cause) {
+    reasons.push(errorMessage2(cause));
+    return { ok: false, reasons };
+  }
+  let suggestions;
+  try {
+    suggestions = engine10.legalActions(state);
+  } catch (cause) {
+    reasons.push(`legalActions \u629B\u9519: ${errorMessage2(cause)}`);
+    return { ok: false, reasons };
+  }
+  if (!Array.isArray(suggestions)) return { ok: false, reasons: ["legalActions \u5FC5\u987B\u8FD4\u56DE\u6570\u7EC4"] };
+  if (suggestions.length > GAME_LEGAL_ACTIONS_MAX) {
+    reasons.push(`legalActions \u5EFA\u8BAE\u96C6\u8D85\u8FC7 ${GAME_LEGAL_ACTIONS_MAX} \u4E0A\u9650\uFF08\u6536\u5230 ${suggestions.length}\uFF09`);
+  }
+  for (const action of suggestions) {
+    if (action === null || typeof action !== "object" || Array.isArray(action) || typeof action.type !== "string" || action.type === "") {
+      reasons.push("legalActions \u4E2D\u5B58\u5728\u7F3A\u5C11 type \u5B57\u7B26\u4E32\u5B57\u6BB5\u7684\u5EFA\u8BAE\u52A8\u4F5C\uFF08\xA73.4\uFF1A\u52A8\u4F5C\u5FC5\u987B\u6709 type\uFF09");
+      break;
+    }
+  }
+  if (suggestions.length === 0) {
+    reasons.push("\u521D\u59CB\u5C40\u9762\u7684\u5EFA\u8BAE\u96C6\u4E3A\u7A7A\uFF0C\u65E0\u6CD5\u8FDB\u884C\u786E\u5B9A\u6027\u70DF\u6D4B\uFF08\u4E5F\u610F\u5473\u7740\u6E38\u620F\u65E0\u6CD5\u5F00\u59CB\uFF09");
+    return { ok: false, reasons };
+  }
+  const first = suggestions[0];
+  const snapshot2 = structuredClone(state);
+  let firstResult;
+  let secondResult;
+  try {
+    firstResult = engine10.applyAction(state, first, turn);
+    secondResult = engine10.applyAction(state, first, turn);
+  } catch (cause) {
+    reasons.push(`applyAction \u5BF9\u5EFA\u8BAE\u96C6\u9996\u4E2A\u52A8\u4F5C\u629B\u9519: ${errorMessage2(cause)}`);
+    return { ok: false, reasons };
+  }
+  if (!deepEqual(firstResult, secondResult)) reasons.push("applyAction \u540C\u8F93\u5165\u4E24\u6B21\u8C03\u7528\u7ED3\u679C\u4E0D\u4E00\u81F4\uFF08\u786E\u5B9A\u6027\u786C\u7EA6\u675F\u4E0D\u8FC7\uFF09");
+  if (!deepEqual(state, snapshot2)) reasons.push("applyAction \u4FEE\u6539\u4E86\u5165\u53C2 state\uFF08\u5FC5\u987B\u6DF1\u62F7\u8D1D\u51FA\u65B0\u6001\uFF09");
+  const shape = firstResult;
+  if (shape.state === void 0 || !Array.isArray(shape.events) || typeof shape.finished !== "boolean") {
+    reasons.push("applyAction \u5FC5\u987B\u8FD4\u56DE { state, events, finished, winner, summary }");
+  } else {
+    if (!isJsonSafe(shape.state)) reasons.push("applyAction \u4EA7\u51FA\u7684\u65B0 state \u4E0D\u662F deep-JSON-safe");
+    if (jsonSizeOf(shape.state) > GAME_STATE_MAX_BYTES) reasons.push(`applyAction \u4EA7\u51FA\u7684 state \u8D85\u8FC7 ${GAME_STATE_MAX_BYTES} \u5B57\u8282\u4E0A\u9650`);
+    if (shape.winner !== null && typeof shape.winner !== "string") reasons.push("applyAction \u7684 winner \u5FC5\u987B\u662F\u89D2\u8272\u5B57\u7B26\u4E32\u6216 null");
+    if (typeof shape.summary !== "string") reasons.push("applyAction \u7684 summary \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
+  }
+  for (const probe of [{ type: "resign" }, { type: "__dsh_soulmojito_smoke_unknown__" }]) {
+    try {
+      engine10.applyAction(state, probe, turn);
+      reasons.push(`applyAction \u5BF9\u975E\u6CD5\u52A8\u4F5C {type:'${probe.type}'} \u672A\u629B\u9519\uFF08\u5FC5\u987B\u62D2\u7EDD\u800C\u975E\u9759\u9ED8\uFF09`);
+    } catch {
+    }
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+function errorMessage2(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+// packages/plugin/src/games/builtin/chinese-checkers.ts
+var CODE_OF = { red: 1, blue: 2 };
+var DIRECTIONS = [
+  [1, 0],
+  [1, -1],
+  [0, -1],
+  [-1, 0],
+  [-1, 1],
+  [0, 1]
+];
+function buildCells() {
+  const cells = [];
+  for (let r = -8; r <= 8; r += 1) {
+    const rowCells = [];
+    for (let q = -8; q <= 8; q += 1) {
+      const s = -q - r;
+      const inStar = q >= -4 && r >= -4 && s >= -4 || q <= 4 && r <= 4 && s <= 4;
+      if (inStar) rowCells.push([q, r]);
+    }
+    rowCells.sort((a, b) => a[0] - b[0]);
+    rowCells.forEach(([q, cellR], col) => {
+      cells.push({ row: r + 8, col, q, r: cellR });
+    });
+  }
+  return cells;
+}
+var CELLS = buildCells();
+var ROW_LENGTHS = Array.from(
+  { length: 17 },
+  (_, row) => CELLS.filter((cell) => cell.row === row).length
+);
+var ROW_OFFSETS = (() => {
+  const offsets = [];
+  let acc = 0;
+  for (const length of ROW_LENGTHS) {
+    offsets.push(acc);
+    acc += length;
+  }
+  return offsets;
+})();
+var HOLE_INDEX = /* @__PURE__ */ new Map();
+CELLS.forEach((cell, hole) => HOLE_INDEX.set(`${cell.q},${cell.r}`, hole));
+var NEIGHBORS = Array.from({ length: CELLS.length }, () => []);
+var HOPS = Array.from({ length: CELLS.length }, () => []);
+CELLS.forEach((cell, hole) => {
+  for (const [dq, dr] of DIRECTIONS) {
+    const over = HOLE_INDEX.get(`${cell.q + dq},${cell.r + dr}`);
+    if (over === void 0) continue;
+    NEIGHBORS[hole].push(over);
+    const to = HOLE_INDEX.get(`${cell.q + dq * 2},${cell.r + dr * 2}`);
+    if (to !== void 0) HOPS[hole].push({ over, to });
+  }
+});
+var CAMP_OF = CELLS.map((cell) => cell.row <= 3 ? "top" : cell.row >= 13 ? "bottom" : null);
+var TOP_CAMP = CELLS.filter((cell) => cell.row <= 3).map((cell) => HOLE_INDEX.get(`${cell.q},${cell.r}`));
+var BOTTOM_CAMP = CELLS.filter((cell) => cell.row >= 13).map((cell) => HOLE_INDEX.get(`${cell.q},${cell.r}`));
+var TARGET_CAMP = { red: BOTTOM_CAMP, blue: TOP_CAMP };
+var MANIFEST2 = {
+  id: "dsh-soulmojito.chinese-checkers",
+  name: "\u4E2D\u56FD\u8DF3\u68CB",
+  version: "1.0.0",
+  players: { min: 2, max: 2, roles: ["red", "blue"] },
+  turnBased: true,
+  actionVocabulary: "\u79FB\u52A8 {type:'move', from:[\u884C,\u5217], to:[\u884C,\u5217]}\uFF1Afrom/to \u4E3A 0 \u57FA [\u884C\u53F7, \u5217\u53F7]\uFF08\u884C 0-16 \u81EA\u4E0A\u800C\u4E0B\u3001\u5217 0-\u8BE5\u884C\u6D1E\u6570-1 \u81EA\u5DE6\u800C\u53F3\uFF1B\u53D9\u8FF0\u7528 1 \u57FA\u300C\u884C-\u5217\u300D\u540D\uFF09\u2014\u2014\u8D70\u5230\u76F8\u90BB\u7A7A\u4F4D\uFF0C\u6216\u8DF3\u8FC7\u7D27\u90BB\u4E00\u9897\u5F39\u73E0\uFF08\u4E0D\u5206\u654C\u6211\uFF09\u843D\u4E8E\u6B63\u540E\u65B9\u7A7A\u4F4D\u3001\u53EF\u8FDE\u8DF3\uFF08\u62D0\u5F2F\u81EA\u7531\u3001\u540C\u4E00\u624B\u4E0D\u91CD\u590D\u843D\u70B9\uFF09\uFF1B\u8BA4\u8F93 {type:'resign'} \u7531\u8FD0\u884C\u65F6\u7EDF\u4E00\u5904\u7406"
+};
+function sideName2(role) {
+  return role === "red" ? "\u7EA2\u65B9" : "\u84DD\u65B9";
+}
+function otherRole(role) {
+  return role === "red" ? "blue" : "red";
+}
+function nameOf(row, col) {
+  return `${row + 1}-${col + 1}`;
+}
+function holeOf(row, col) {
+  if (row < 0 || row >= ROW_LENGTHS.length) return null;
+  if (col < 0 || col >= ROW_LENGTHS[row]) return null;
+  return ROW_OFFSETS[row] + col;
+}
+function cellCode(board, hole) {
+  const cell = CELLS[hole];
+  return board[cell.row][cell.col];
+}
+function cloneState2(state) {
+  return {
+    turn: state.turn,
+    board: state.board.map((row) => row.slice()),
+    ply: state.ply,
+    lastMove: state.lastMove === null ? null : { from: [state.lastMove.from[0], state.lastMove.from[1]], to: [state.lastMove.to[0], state.lastMove.to[1]] },
+    finished: state.finished,
+    winner: state.winner
+  };
+}
+function readCell(raw, field) {
+  if (!Array.isArray(raw) || raw.length !== 2) {
+    throw new Error(`\u52A8\u4F5C ${field} \u5FC5\u987B\u662F [\u884C, \u5217] \u4E24\u5143\u7EC4\uFF080 \u57FA\uFF0C\u884C 0-16\uFF09\uFF0C\u6536\u5230 ${Array.isArray(raw) ? `${raw.length} \u9879\u6570\u7EC4` : typeof raw}`);
+  }
+  const row = parseBoardCoord(raw[0]);
+  const col = parseBoardCoord(raw[1]);
+  if (row === null || col === null) {
+    throw new Error(`\u52A8\u4F5C ${field} \u7684\u884C\u5217\u5FC5\u987B\u662F\u6574\u6570\uFF0C\u6536\u5230 [${String(raw[0])}, ${String(raw[1])}]`);
+  }
+  const hole = holeOf(row, col);
+  if (hole === null) {
+    throw new Error(`\u52A8\u4F5C ${field} [${row}, ${col}] \u4E0D\u5728\u68CB\u76D8\u6D1E\u4F4D\u5185`);
+  }
+  return { row, col, hole };
+}
+function reachableFrom(board, from) {
+  const result = /* @__PURE__ */ new Map();
+  for (const neighbor of NEIGHBORS[from]) {
+    if (cellCode(board, neighbor) === 0) result.set(neighbor, 0);
+  }
+  const visited = /* @__PURE__ */ new Set([from]);
+  const queue = [{ at: from, depth: 0 }];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    for (const hop of HOPS[current.at]) {
+      if (visited.has(hop.to)) continue;
+      if (cellCode(board, hop.over) === 0) continue;
+      if (cellCode(board, hop.to) !== 0) continue;
+      visited.add(hop.to);
+      const depth = current.depth + 1;
+      if (!result.has(hop.to)) result.set(hop.to, depth);
+      queue.push({ at: hop.to, depth });
+    }
+  }
+  return result;
+}
+function hasAnyMove(board, role) {
+  const code = CODE_OF[role];
+  for (let hole = 0; hole < CELLS.length; hole += 1) {
+    if (cellCode(board, hole) !== code) continue;
+    if (reachableFrom(board, hole).size > 0) return true;
+  }
+  return false;
+}
+function moveText(actor, from, to, hops) {
+  const fromName = nameOf(from.row, from.col);
+  const toName = nameOf(to.row, to.col);
+  return hops === 0 ? `${sideName2(actor)} ${fromName} \u8D70\u5230 ${toName}` : `${sideName2(actor)} ${fromName} \u8DF3\u5230 ${toName}\uFF08\u8FDE\u8DF3 ${hops} \u6B65\uFF09`;
+}
+var engine2 = {
+  meta: MANIFEST2,
+  /** 开局：红十子满占顶营、蓝十子满占底营，红先。本款零随机，options 接受但忽略。 */
+  createGame(_options) {
+    return {
+      state: {
+        turn: "red",
+        board: ROW_LENGTHS.map((length, row) => Array.from(
+          { length },
+          () => row <= 3 ? CODE_OF.red : row >= 13 ? CODE_OF.blue : 0
+        )),
+        ply: 0,
+        lastMove: null,
+        finished: false,
+        winner: null
+      }
+    };
+  },
+  /** 建议集（≤64，全量规则见 applyAction——本函数只是有界建议面，§3.2）。 */
+  legalActions(state) {
+    if (state.finished) return [];
+    const actions = [];
+    const code = CODE_OF[state.turn];
+    for (let hole = 0; hole < CELLS.length; hole += 1) {
+      if (cellCode(state.board, hole) !== code) continue;
+      const cell = CELLS[hole];
+      const from = [cell.row, cell.col];
+      for (const to of reachableFrom(state.board, hole).keys()) {
+        if (actions.length >= GAME_LEGAL_ACTIONS_MAX) return actions;
+        const target = CELLS[to];
+        actions.push({ type: "move", from, to: [target.row, target.col] });
+      }
+    }
+    return actions;
+  },
+  /** 落子并推进局面；校验顺序与报错纪律逐条对齐既有各款引擎。 */
+  applyAction(state, action, actor) {
+    if (action === null || typeof action !== "object" || Array.isArray(action)) {
+      throw new Error("\u52A8\u4F5C\u5FC5\u987B\u662F JSON \u5BF9\u8C61");
+    }
+    const typed = action;
+    if (typeof typed.type !== "string" || typed.type === "") {
+      throw new Error("\u52A8\u4F5C\u7F3A\u5C11 type \u5B57\u6BB5");
+    }
+    if (typed.type !== "move") {
+      throw new Error(`\u4E0D\u652F\u6301\u7684\u52A8\u4F5C\u7C7B\u578B\u300C${typed.type}\u300D\uFF1A\u672C\u5F15\u64CE\u53EA\u5B9E\u73B0 move\uFF08resign \u662F\u4FDD\u7559\u52A8\u4F5C\uFF0C\u7531\u8FD0\u884C\u65F6\u7EDF\u4E00\u5904\u7406\uFF09`);
+    }
+    if (state.finished) {
+      throw new Error("\u5BF9\u5C40\u5DF2\u7ED3\u675F\uFF0C\u4E0D\u80FD\u518D\u843D\u5B50");
+    }
+    if (actor !== "red" && actor !== "blue") {
+      throw new Error(`\u672A\u77E5\u89D2\u8272\u300C${String(actor)}\u300D\uFF1A\u672C\u6E38\u620F\u89D2\u8272\u4E3A red/blue`);
+    }
+    if (actor !== state.turn) {
+      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName2(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u843D\u5B50`);
+    }
+    const from = readCell(typed.from, "from");
+    const to = readCell(typed.to, "to");
+    if (from.hole === to.hole) {
+      throw new Error(`\u8D77\u70B9\u4E0E\u7EC8\u70B9\u76F8\u540C\uFF08${nameOf(from.row, from.col)}\uFF09\uFF0C\u4E0D\u80FD\u843D\u5B50`);
+    }
+    if (cellCode(state.board, from.hole) !== CODE_OF[actor]) {
+      throw new Error(`${nameOf(from.row, from.col)} \u6CA1\u6709${sideName2(actor)}\u7684\u5F39\u73E0`);
+    }
+    if (cellCode(state.board, to.hole) !== 0) {
+      throw new Error(`${nameOf(to.row, to.col)} \u5DF2\u6709\u5F39\u73E0\uFF0C\u4E0D\u80FD\u843D\u5B50`);
+    }
+    const hops = reachableFrom(state.board, from.hole).get(to.hole);
+    if (hops === void 0) {
+      throw new Error(`\u4E0D\u80FD\u4ECE ${nameOf(from.row, from.col)} \u5230 ${nameOf(to.row, to.col)}\uFF1A\u8FD9\u4E0D\u662F\u5408\u6CD5\u7684\u4E00\u6B65\u79FB\u52A8\u6216\u8FDE\u8DF3`);
+    }
+    const next = cloneState2(state);
+    next.board[from.row][from.col] = 0;
+    next.board[to.row][to.col] = CODE_OF[actor];
+    next.ply = state.ply + 1;
+    next.lastMove = { from: [from.row, from.col], to: [to.row, to.col] };
+    next.turn = otherRole(actor);
+    const move = moveText(actor, from, to, hops);
+    const events = [move];
+    let summary = move;
+    if (TARGET_CAMP[actor].every((hole) => cellCode(next.board, hole) === CODE_OF[actor])) {
+      next.finished = true;
+      next.winner = actor;
+      const ending = `${sideName2(actor)}\u5341\u9897\u5F39\u73E0\u5168\u90E8\u642C\u8FDB\u5BF9\u65B9\u8425\u76D8\uFF0C${sideName2(actor)}\u80DC`;
+      events.push(ending);
+      summary = `${move}\uFF0C${ending}`;
+    } else if (!hasAnyMove(next.board, next.turn)) {
+      next.finished = true;
+      next.winner = actor;
+      const ending = `${sideName2(next.turn)}\u65E0\u68CB\u53EF\u8D70\uFF0C${sideName2(actor)}\u80DC`;
+      events.push(ending);
+      summary = `${move}\uFF0C${ending}`;
+    }
+    return { state: next, events, finished: next.finished, winner: next.winner, summary };
+  },
+  /** 人类可读的一手棋描述（含 1 基 行-列 名与连跳步数）；任何未识别回落统一文案。 */
+  describe(state, actor, action) {
+    const fallback = `${String(actor)}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
+    if (action === null || typeof action !== "object" || Array.isArray(action)) return fallback;
+    const typed = action;
+    if (typed.type !== "move") return fallback;
+    if (actor !== "red" && actor !== "blue") return fallback;
+    let from;
+    let to;
+    try {
+      from = readCell(typed.from, "from");
+      to = readCell(typed.to, "to");
+    } catch {
+      return fallback;
+    }
+    if (from.hole === to.hole) return fallback;
+    if (cellCode(state.board, from.hole) !== CODE_OF[actor]) return fallback;
+    if (cellCode(state.board, to.hole) !== 0) return fallback;
+    const hops = reachableFrom(state.board, from.hole).get(to.hole);
+    if (hops === void 0) return fallback;
+    return moveText(actor, from, to, hops);
+  }
+};
+var chineseCheckersProbe = {
+  holeCount: CELLS.length,
+  rowLengths: [...ROW_LENGTHS],
+  indexOf(row, col) {
+    if (!Number.isInteger(row) || !Number.isInteger(col)) return null;
+    return holeOf(row, col);
+  },
+  coordOf(hole) {
+    const cell = CELLS[hole];
+    if (cell === void 0) throw new Error(`\u6D1E\u53F7 ${String(hole)} \u4E0D\u5728\u68CB\u76D8\u5185\uFF080-120\uFF09`);
+    return { row: cell.row, col: cell.col };
+  },
+  neighborsOf(hole) {
+    const neighbors = NEIGHBORS[hole];
+    if (neighbors === void 0) throw new Error(`\u6D1E\u53F7 ${String(hole)} \u4E0D\u5728\u68CB\u76D8\u5185\uFF080-120\uFF09`);
+    return [...neighbors];
+  },
+  campOf(hole) {
+    const camp = CAMP_OF[hole];
+    if (camp === void 0) throw new Error(`\u6D1E\u53F7 ${String(hole)} \u4E0D\u5728\u68CB\u76D8\u5185\uFF080-120\uFF09`);
+    return camp;
+  },
+  targetCampOf(role) {
+    if (role !== "red" && role !== "blue") throw new Error(`\u672A\u77E5\u89D2\u8272\u300C${String(role)}\u300D\uFF1A\u672C\u6E38\u620F\u89D2\u8272\u4E3A red/blue`);
+    return role === "red" ? "bottom" : "top";
+  },
+  axialOf(hole) {
+    const cell = CELLS[hole];
+    if (cell === void 0) throw new Error(`\u6D1E\u53F7 ${String(hole)} \u4E0D\u5728\u68CB\u76D8\u5185\uFF080-120\uFF09`);
+    return { q: cell.q, r: cell.r };
+  }
+};
+var LAYOUT = {
+  rows: [...ROW_LENGTHS],
+  cells: CELLS.map((cell) => [cell.q, cell.r])
+};
+var PREVIEW = (() => {
+  let state = engine2.createGame().state;
+  for (let ply = 0; ply < 10; ply += 1) {
+    const suggestions = engine2.legalActions(state);
+    if (suggestions.length === 0) break;
+    const pick = suggestions[(ply * 3 + 1) % suggestions.length];
+    const result = engine2.applyAction(state, pick, state.turn);
+    state = result.state;
+    if (state.finished) break;
+  }
+  return { state, legal: engine2.legalActions(state).slice(0, 8) };
+})();
+var manifest2 = MANIFEST2;
+var viewHtml2 = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>\u4E2D\u56FD\u8DF3\u68CB \xB7 dsh-soulmojito \u6E38\u620F\u6865</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 12px;
+    background: #171a20; color: #e8e4da;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  header { width: 100%; max-width: 480px; display: flex; justify-content: space-between; font-size: 14px; padding-bottom: 8px; }
+  .session-id { color: #9a948a; font-size: 11px; font-variant-numeric: tabular-nums; }
+  #seats { width: 100%; max-width: 480px; display: flex; justify-content: center; gap: 16px; font-size: 12px; color: #b8b2a6; padding-bottom: 6px; }
+  .seat { display: inline-flex; align-items: center; gap: 5px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .dot.red { background: #d9634f; }
+  .dot.blue { background: #5b8fd6; }
+  #banner { width: 100%; max-width: 480px; border: 1px solid #3a3f4a; background: #22262e; border-radius: 6px;
+    padding: 6px 10px; font-size: 13px; text-align: center; margin-bottom: 10px; }
+  #board { position: relative; width: 100%; max-width: 480px; aspect-ratio: 22 / 26; margin: 0 auto; }
+  .hole { position: absolute; border-radius: 50%; background: #20242c; border: 1px solid #333945; }
+  .hole.camp-red { border-color: #7a4a41; background: #241f26; }
+  .hole.camp-blue { border-color: #3f547a; background: #1f232c; }
+  .hole.playable { cursor: pointer; }
+  .hole.reach { cursor: pointer; border-color: #d8b13f; box-shadow: 0 0 0 2px rgba(216, 177, 63, 0.35) inset; }
+  .hole.last-from { border-color: #8a6d2f; }
+  .hole.last-to { border-color: #d8b13f; }
+  .marble { position: absolute; left: 50%; top: 50%; width: 74%; height: 74%; transform: translate(-50%, -50%);
+    border-radius: 50%; pointer-events: none; }
+  .marble.red { background: radial-gradient(circle at 35% 30%, #f2a292, #c9503c 72%); }
+  .marble.blue { background: radial-gradient(circle at 35% 30%, #9cc4f2, #3f74bd 72%); }
+  .marble.sel { box-shadow: 0 0 0 2px #f2d16b, 0 0 8px rgba(242, 209, 107, 0.8); }
+  #hint { width: 100%; max-width: 480px; text-align: center; font-size: 11px; color: #8d887e; margin-top: 8px; min-height: 15px; }
+  footer { margin-top: 6px; font-size: 11px; color: #8d887e; text-align: center; max-width: 480px; }
+</style>
+</head>
+<body>
+<header><span>\u4E2D\u56FD\u8DF3\u68CB</span><span class="session-id" id="session-id"></span></header>
+<div id="seats">
+  <span class="seat"><span class="dot red"></span>\u7EA2\u65B9<span id="owner-red"></span></span>
+  <span class="seat"><span class="dot blue"></span>\u84DD\u65B9<span id="owner-blue"></span></span>
+</div>
+<div id="banner">\u7B49\u5F85\u5BF9\u5C40\u2026</div>
+<div id="board" data-game="dsh-soulmojito.chinese-checkers"></div>
+<div id="hint"></div>
+<footer>\u70B9\u9009\u81EA\u5BB6\u5F39\u73E0 \u2192 \u70B9\u4EAE\u8D77\u7684\u6D1E\u4F4D\u843D\u5B50\uFF1B\u628A\u81EA\u5BB6\u5341\u9897\u5F39\u73E0\u5168\u90E8\u642C\u8FDB\u5BF9\u65B9\u8425\u76D8\u5373\u80DC\u3002</footer>
+<script>
+'use strict'
+/* \u6865\u534F\u8BAE\uFF08\u63D0\u6848 0018 \xA73.3\uFF09\uFF1A\u4E0B\u884C dsh-soulmojito:game-state\uFF08token \u5BF9\u8D26\uFF09\u3001
+   \u4E0A\u884C dsh-soulmojito:game-action\u3002token \u4ECE location.search \u81EA\u8BFB\uFF1B\u65E0 token \u65F6
+   \u6E32\u67D3\u9759\u6001\u9884\u89C8\u3002\u5E03\u5C40\u8868\uFF08CC_LAYOUT\uFF09\u4E0E\u9884\u89C8\u5C40\u9762\uFF08PREVIEW\uFF09\u7531\u5F15\u64CE\u6A21\u5757\u671F\u6CE8\u5165\u2014\u2014
+   \u4E0E\u5F15\u64CE\u51E0\u4F55\u540C\u6E90\uFF0C\u96F6\u6F02\u79FB\u3002 */
+var params = new URLSearchParams(window.location.search)
+var TOKEN = params.get('token')
+var CC_LAYOUT = ${JSON.stringify(LAYOUT)}
+var PREVIEW = ${JSON.stringify(PREVIEW)}
+var board = document.getElementById('board')
+var banner = document.getElementById('banner')
+var hint = document.getElementById('hint')
+var RED = 1
+var BLUE = 2
+var OFFSETS = []
+var COORDS = []
+;(function () {
+  var acc = 0
+  for (var row = 0; row < CC_LAYOUT.rows.length; row += 1) {
+    OFFSETS.push(acc)
+    for (var col = 0; col < CC_LAYOUT.rows[row]; col += 1) {
+      COORDS.push([row, col])
+      acc += 1
+    }
+  }
+})()
+var current = null
+var selected = null
+var sending = false
+var lockTimer = null
+
+function ownerOf(session, role) {
+  if (!session || !Array.isArray(session.players)) return null
+  for (var i = 0; i < session.players.length; i += 1) {
+    if (session.players[i] && session.players[i].role === role) return session.players[i].owner
+  }
+  return null
+}
+function myRole(session) {
+  if (!session || !Array.isArray(session.players)) return null
+  for (var i = 0; i < session.players.length; i += 1) {
+    if (session.players[i] && session.players[i].owner === 'human') return session.players[i].role
+  }
+  return null
+}
+function codeOf(role) { return role === 'red' ? RED : BLUE }
+function sideName(role) { return role === 'red' ? '\u7EA2\u65B9' : '\u84DD\u65B9' }
+function nameAt(index) {
+  var coord = COORDS[index]
+  return (coord[0] + 1) + '-' + (coord[1] + 1)
+}
+function setOwner(id, owner) {
+  var element = document.getElementById(id)
+  if (owner === 'human') element.textContent = '\uFF08\u4F60\uFF09'
+  else if (owner === 'agent') element.textContent = '\uFF08AI\uFF09'
+  else element.textContent = ''
+}
+function interactive() {
+  if (!TOKEN || !current) return false
+  if (current.view.finished) return false
+  var human = myRole(current.session)
+  return human !== null && current.view.turn === human
+}
+function send(action) {
+  if (sending) return
+  sending = true
+  selected = null
+  window.parent.postMessage({ type: 'dsh-soulmojito:game-action', token: TOKEN, action: action }, '*')
+  lockTimer = setTimeout(function () { sending = false }, 4000)
+}
+function onHoleClick(row, col, index, code) {
+  if (!interactive()) return
+  var human = myRole(current.session)
+  if (code === codeOf(human)) {
+    selected = selected === index ? null : index
+    render()
+    return
+  }
+  if (selected === null) return
+  var list = current.view.legal || []
+  var selectedCoord = COORDS[selected]
+  for (var i = 0; i < list.length; i += 1) {
+    var action = list[i]
+    if (!action || action.type !== 'move' || !action.from || !action.to) continue
+    if (action.from[0] === selectedCoord[0] && action.from[1] === selectedCoord[1]
+      && action.to[0] === row && action.to[1] === col) {
+      send({ type: 'move', from: [selectedCoord[0], selectedCoord[1]], to: [row, col] })
+      render()
+      return
+    }
+  }
+  if (code === 0) {
+    selected = null
+    render()
+  }
+}
+function render() {
+  if (!current) return
+  var view = current.view
+  var session = current.session
+  var state = view.state
+  document.getElementById('session-id').textContent = session ? session.id : ''
+  setOwner('owner-red', ownerOf(session, 'red'))
+  setOwner('owner-blue', ownerOf(session, 'blue'))
+  var human = myRole(session)
+  var myTurn = interactive()
+  var selectedCoord = selected === null ? null : COORDS[selected]
+  var reach = {}
+  if (myTurn && selectedCoord !== null) {
+    var list = view.legal || []
+    for (var i = 0; i < list.length; i += 1) {
+      var action = list[i]
+      if (!action || action.type !== 'move' || !action.from || !action.to) continue
+      if (action.from[0] === selectedCoord[0] && action.from[1] === selectedCoord[1]) {
+        reach[action.to[0] + ',' + action.to[1]] = true
+      }
+    }
+  }
+  var lastMove = state.lastMove
+  var lastFrom = lastMove ? lastMove.from[0] + ',' + lastMove.from[1] : null
+  var lastTo = lastMove ? lastMove.to[0] + ',' + lastMove.to[1] : null
+  board.innerHTML = ''
+  for (var row = 0; row < CC_LAYOUT.rows.length; row += 1) {
+    for (var col = 0; col < CC_LAYOUT.rows[row]; col += 1) {
+      var index = OFFSETS[row] + col
+      var cell = CC_LAYOUT.cells[index]
+      var x = Math.sqrt(3) * (cell[0] + cell[1] / 2)
+      var y = 1.5 * cell[1]
+      var w = 0.94 / 22 * 100
+      var h = 0.94 / 26 * 100
+      var code = state.board[row][col]
+      var classes = ['hole']
+      if (row <= 3) classes.push('camp-red')
+      else if (row >= 13) classes.push('camp-blue')
+      if (lastFrom === row + ',' + col) classes.push('last-from')
+      if (lastTo === row + ',' + col) classes.push('last-to')
+      if (myTurn && code === codeOf(human)) classes.push('playable')
+      if (reach[row + ',' + col]) classes.push('reach')
+      var hole = document.createElement('div')
+      hole.className = classes.join(' ')
+      hole.style.left = ((x + 11) / 22 * 100 - w / 2) + '%'
+      hole.style.top = ((y + 13) / 26 * 100 - h / 2) + '%'
+      hole.style.width = w + '%'
+      hole.style.height = h + '%'
+      hole.title = (row + 1) + '-' + (col + 1)
+      hole.setAttribute('data-cell', String(index))
+      if (code !== 0) {
+        var marbleClasses = ['marble', code === RED ? 'red' : 'blue']
+        if (selected === index) marbleClasses.push('sel')
+        var marble = document.createElement('div')
+        marble.className = marbleClasses.join(' ')
+        hole.appendChild(marble)
+      }
+      ;(function (clickRow, clickCol, clickIndex, clickCode, element) {
+        element.addEventListener('click', function () { onHoleClick(clickRow, clickCol, clickIndex, clickCode) })
+      })(row, col, index, code, hole)
+      board.appendChild(hole)
+    }
+  }
+  if (!session) {
+    banner.textContent = view.summary || '\u9759\u6001\u9884\u89C8'
+  } else if (view.finished) {
+    banner.textContent = view.summary || '\u5BF9\u5C40\u7ED3\u675F'
+  } else {
+    banner.textContent = (view.turn === human ? '\u8F6E\u5230\u4F60' : '\u7B49\u5F85 AI \u843D\u5B50\u2026') + (view.summary ? ' \xB7 ' + view.summary : '')
+  }
+  if (selected !== null && selectedCoord !== null) {
+    var count = 0
+    for (var key in reach) { count += 1; void key }
+    hint.textContent = '\u5DF2\u9009 ' + sideName(human) + ' ' + nameAt(selected) + ' \xB7 \u53EF\u843D\u70B9 ' + count + ' \u5904'
+  } else if (myTurn) {
+    hint.textContent = '\u8F6E\u5230\u4F60\uFF1A\u5148\u70B9\u81EA\u5BB6\u5F39\u73E0\uFF0C\u518D\u70B9\u4EAE\u8D77\u7684\u6D1E\u4F4D'
+  } else {
+    hint.textContent = ''
+  }
+}
+
+window.addEventListener('message', function (event) {
+  var data = event.data
+  if (!data || data.type !== 'dsh-soulmojito:game-state' || data.token !== TOKEN) return
+  sending = false
+  if (lockTimer) { clearTimeout(lockTimer); lockTimer = null }
+  selected = null
+  current = { view: data.view, session: data.session || null }
+  render()
+})
+
+if (!TOKEN) {
+  current = {
+    view: {
+      state: PREVIEW.state,
+      turn: PREVIEW.state.turn,
+      legal: PREVIEW.legal,
+      finished: PREVIEW.state.finished,
+      summary: '\u9759\u6001\u9884\u89C8\uFF08\u65E0 token\uFF09',
+    },
+    session: null,
+  }
+  render()
+}
+</script>
+</body>
+</html>
+`;
+var chineseCheckers = { manifest: manifest2, engine: engine2, viewHtml: viewHtml2 };
+
 // packages/plugin/src/games/builtin/dungeon-crawl.ts
 import { randomInt as randomInt2 } from "node:crypto";
-var MANIFEST2 = {
+var MANIFEST3 = {
   id: "dsh-soulmojito.dungeon-crawl",
   name: "\u5730\u7262\u722C\u884C",
   version: "1.0.0",
@@ -19153,7 +19929,7 @@ function settleTurn(next, actor) {
   const engaged = engagedMonsterOf(next) !== void 0;
   next.turn = engaged ? actor === "hero" ? "world" : "hero" : "hero";
 }
-function cloneState2(state) {
+function cloneState3(state) {
   return structuredClone(state);
 }
 function readDir(action) {
@@ -19326,8 +20102,8 @@ function worldAct(next, action) {
 function freshHero() {
   return { x: 1, y: 1, hp: 30, maxHp: 30, atk: 4, def: 0, potions: 3, gold: 0, weapon: "\u6728\u68CD", armor: "\u5E03\u8863" };
 }
-var engine2 = {
-  meta: MANIFEST2,
+var engine3 = {
+  meta: MANIFEST3,
   /** 开局：地下 1 层，入口 (1,1) 揭示半径 2；options.seed（正整数）可复现。 */
   createGame(options) {
     const seedOption = options?.seed;
@@ -19387,7 +20163,7 @@ var engine2 = {
     if (actor !== state.turn) {
       throw new Error(actor === "hero" ? "\u73B0\u5728\u8F6E\u5230\u5730\u4E0B\u57CE\u4E3B\uFF08world\uFF09\u884C\u52A8\uFF0C\u82F1\u96C4\u4E0D\u80FD\u79FB\u52A8" : "\u73B0\u5728\u8F6E\u5230\u82F1\u96C4\uFF08hero\uFF09\u884C\u52A8\uFF0C\u602A\u7269\u4E0D\u80FD\u51FA\u624B");
     }
-    const next = cloneState2(state);
+    const next = cloneState3(state);
     next.events = [];
     if (actor === "hero") {
       if (typed.type === "move") heroMove(next, typed);
@@ -19432,13 +20208,13 @@ var engine2 = {
     return `${String(actor)} \u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
 };
-var manifest2 = MANIFEST2;
+var manifest3 = MANIFEST3;
 function previewPayload() {
-  const { state } = engine2.createGame({ seed: 1 });
-  return { state, turn: "hero", legal: engine2.legalActions(state), finished: false, summary: "\u9759\u6001\u9884\u89C8\uFF08\u65E0 token\uFF09" };
+  const { state } = engine3.createGame({ seed: 1 });
+  return { state, turn: "hero", legal: engine3.legalActions(state), finished: false, summary: "\u9759\u6001\u9884\u89C8\uFF08\u65E0 token\uFF09" };
 }
 var PREVIEW_JSON = JSON.stringify(previewPayload());
-var viewHtml2 = `<!doctype html>
+var viewHtml3 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -19719,217 +20495,7 @@ if (!TOKEN) {
 </body>
 </html>
 `;
-var dungeonCrawl = { manifest: manifest2, engine: engine2, viewHtml: viewHtml2 };
-
-// packages/plugin/src/games/standard.ts
-var GAME_STATE_MAX_BYTES = 65536;
-var GAME_ACTION_MAX_BYTES = 4096;
-var GAME_LEGAL_ACTIONS_MAX = 64;
-var GAME_SESSION_ID_PATTERN = /^g-[0-9a-f]{8}$/;
-function checkGameManifest(raw, options = {}) {
-  const errors = [];
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    return { ok: false, errors: ["game.json must be a JSON object"] };
-  }
-  const value = raw;
-  if (typeof value.id !== "string" || value.id === "") errors.push("id must be a non-empty string");
-  else if (!MOD_ID_PATTERN.test(value.id)) errors.push("id must be [a-z0-9-] labels or reverse-domain joined by '.'");
-  else if (options.directory !== void 0 && value.id !== options.directory) {
-    errors.push(`id '${value.id}' must equal the directory name '${options.directory}'`);
-  }
-  if (typeof value.name !== "string" || value.name.trim() === "") errors.push("name must be a non-empty string");
-  if (typeof value.version !== "string" || value.version.trim() === "") errors.push("version must be a non-empty string");
-  if (value.engines !== void 0) {
-    if (value.engines === null || typeof value.engines !== "object" || Array.isArray(value.engines)) {
-      errors.push("engines must be an object");
-    } else {
-      for (const key of ["dsh-soulmojito", "dsh-tavern"]) {
-        const range = value.engines[key];
-        if (range !== void 0 && typeof range !== "string") {
-          errors.push(`engines.${key} must be a version range string`);
-        }
-      }
-    }
-  }
-  const players = value.players;
-  if (players === null || typeof players !== "object" || Array.isArray(players)) {
-    errors.push("players must be an object { min, max, roles }");
-  } else {
-    const spec = players;
-    const min = spec.min;
-    const max2 = spec.max;
-    if (!Number.isInteger(min) || !Number.isInteger(max2) || min < 1 || max2 < min) {
-      errors.push("players.min/max must be integers with 1 <= min <= max");
-    }
-    if (!Array.isArray(spec.roles) || spec.roles.length === 0 || !spec.roles.every((role) => typeof role === "string" && role !== "")) {
-      errors.push("players.roles must be a non-empty array of non-empty strings");
-    } else if (Number.isInteger(max2) && spec.roles.length !== max2) {
-      errors.push(`players.roles length (${spec.roles.length}) must equal players.max (${String(max2)})`);
-    }
-    if (Array.isArray(spec.roles) && new Set(spec.roles.map(String)).size !== spec.roles.length) {
-      errors.push("players.roles must not contain duplicates");
-    }
-  }
-  if (value.turnBased !== true) errors.push("turnBased must be true (real-time games are out of scope for bridge v1)");
-  if (typeof value.actionVocabulary !== "string" || value.actionVocabulary.trim() === "") {
-    errors.push("actionVocabulary must be a non-empty string");
-  }
-  if (errors.length > 0) return { ok: false, errors };
-  return {
-    ok: true,
-    errors,
-    manifest: {
-      id: value.id,
-      name: value.name,
-      version: value.version,
-      ...value.engines === void 0 ? {} : { engines: value.engines },
-      players: { min: players.min, max: players.max, roles: [...players.roles] },
-      turnBased: true,
-      actionVocabulary: value.actionVocabulary
-    }
-  };
-}
-function checkGameEngine(candidate) {
-  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
-    return { ok: false, errors: ["engine.mjs must default-export an object"] };
-  }
-  const value = candidate;
-  const metaCheck = checkGameManifest(value.meta);
-  const errors = [];
-  if (!metaCheck.ok) errors.push(`engine.meta invalid: ${metaCheck.errors.join("; ")}`);
-  for (const member of ["createGame", "legalActions", "applyAction", "describe"]) {
-    if (typeof value[member] !== "function") errors.push(`engine.${member} must be a function`);
-  }
-  if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, engine: candidate };
-}
-function isJsonSafe(value) {
-  try {
-    const text = JSON.stringify(value);
-    if (typeof text !== "string") return false;
-    return deepEqual(JSON.parse(text), value);
-  } catch {
-    return false;
-  }
-}
-function deepEqual(left, right) {
-  if (Object.is(left, right)) return true;
-  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
-  if (Array.isArray(left) !== Array.isArray(right)) return false;
-  if (Array.isArray(left) && Array.isArray(right)) {
-    if (left.length !== right.length) return false;
-    return left.every((item, index) => deepEqual(item, right[index]));
-  }
-  const leftKeys = Object.keys(left).sort();
-  const rightKeys = Object.keys(right).sort();
-  if (leftKeys.length !== rightKeys.length || leftKeys.some((key, index) => key !== rightKeys[index])) return false;
-  return leftKeys.every((key) => deepEqual(left[key], right[key]));
-}
-function jsonSizeOf(value) {
-  try {
-    return Buffer.byteLength(JSON.stringify(value), "utf8");
-  } catch {
-    return Number.POSITIVE_INFINITY;
-  }
-}
-function currentRoleOf(state, roles) {
-  if (state === null || typeof state !== "object" || Array.isArray(state)) {
-    throw new Error("\u5F15\u64CE state \u5FC5\u987B\u662F JSON \u5BF9\u8C61\uFF08\u5F53\u524D\u56DE\u5408\u5B57\u6BB5 turn \u65E0\u6CD5\u8BFB\u53D6\uFF09");
-  }
-  const turn = state.turn;
-  if (typeof turn !== "string" || turn === "") {
-    throw new Error("\u5F15\u64CE state \u7F3A\u5C11\u5B57\u7B26\u4E32\u5B57\u6BB5 turn\uFF08\u5F53\u524D\u56DE\u5408\u89D2\u8272\uFF09\uFF0C\u65E0\u6CD5\u63A8\u5BFC\u884C\u68CB\u65B9");
-  }
-  if (roles !== void 0 && !roles.includes(turn)) {
-    throw new Error(`state.turn\u300C${turn}\u300D\u4E0D\u5728\u89D2\u8272\u8868 [${roles.join(", ")}] \u5185`);
-  }
-  return turn;
-}
-function parseBoardCoord(value) {
-  if (typeof value === "number") return Number.isInteger(value) ? value : null;
-  if (typeof value !== "string") return null;
-  const text = value.trim();
-  if (!/^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(text)) return null;
-  const parsed = Number(text);
-  return Number.isInteger(parsed) ? parsed : null;
-}
-function smokeTestGameEngine(engine9) {
-  const reasons = [];
-  const roles = engine9.meta.players.roles;
-  let created;
-  try {
-    created = engine9.createGame({ seed: 1 });
-  } catch (cause) {
-    return { ok: false, reasons: [`createGame \u629B\u9519: ${errorMessage2(cause)}`] };
-  }
-  if (created === null || typeof created !== "object" || !("state" in created)) {
-    return { ok: false, reasons: ["createGame \u5FC5\u987B\u8FD4\u56DE { state } \u5F62\u6001"] };
-  }
-  const state = created.state;
-  if (!isJsonSafe(state)) reasons.push("\u521D\u59CB state \u4E0D\u662F deep-JSON-safe");
-  if (jsonSizeOf(state) > GAME_STATE_MAX_BYTES) reasons.push(`\u521D\u59CB state \u5E8F\u5217\u5316\u8D85\u8FC7 ${GAME_STATE_MAX_BYTES} \u5B57\u8282\u4E0A\u9650`);
-  let turn;
-  try {
-    turn = currentRoleOf(state, roles);
-  } catch (cause) {
-    reasons.push(errorMessage2(cause));
-    return { ok: false, reasons };
-  }
-  let suggestions;
-  try {
-    suggestions = engine9.legalActions(state);
-  } catch (cause) {
-    reasons.push(`legalActions \u629B\u9519: ${errorMessage2(cause)}`);
-    return { ok: false, reasons };
-  }
-  if (!Array.isArray(suggestions)) return { ok: false, reasons: ["legalActions \u5FC5\u987B\u8FD4\u56DE\u6570\u7EC4"] };
-  if (suggestions.length > GAME_LEGAL_ACTIONS_MAX) {
-    reasons.push(`legalActions \u5EFA\u8BAE\u96C6\u8D85\u8FC7 ${GAME_LEGAL_ACTIONS_MAX} \u4E0A\u9650\uFF08\u6536\u5230 ${suggestions.length}\uFF09`);
-  }
-  for (const action of suggestions) {
-    if (action === null || typeof action !== "object" || Array.isArray(action) || typeof action.type !== "string" || action.type === "") {
-      reasons.push("legalActions \u4E2D\u5B58\u5728\u7F3A\u5C11 type \u5B57\u7B26\u4E32\u5B57\u6BB5\u7684\u5EFA\u8BAE\u52A8\u4F5C\uFF08\xA73.4\uFF1A\u52A8\u4F5C\u5FC5\u987B\u6709 type\uFF09");
-      break;
-    }
-  }
-  if (suggestions.length === 0) {
-    reasons.push("\u521D\u59CB\u5C40\u9762\u7684\u5EFA\u8BAE\u96C6\u4E3A\u7A7A\uFF0C\u65E0\u6CD5\u8FDB\u884C\u786E\u5B9A\u6027\u70DF\u6D4B\uFF08\u4E5F\u610F\u5473\u7740\u6E38\u620F\u65E0\u6CD5\u5F00\u59CB\uFF09");
-    return { ok: false, reasons };
-  }
-  const first = suggestions[0];
-  const snapshot2 = structuredClone(state);
-  let firstResult;
-  let secondResult;
-  try {
-    firstResult = engine9.applyAction(state, first, turn);
-    secondResult = engine9.applyAction(state, first, turn);
-  } catch (cause) {
-    reasons.push(`applyAction \u5BF9\u5EFA\u8BAE\u96C6\u9996\u4E2A\u52A8\u4F5C\u629B\u9519: ${errorMessage2(cause)}`);
-    return { ok: false, reasons };
-  }
-  if (!deepEqual(firstResult, secondResult)) reasons.push("applyAction \u540C\u8F93\u5165\u4E24\u6B21\u8C03\u7528\u7ED3\u679C\u4E0D\u4E00\u81F4\uFF08\u786E\u5B9A\u6027\u786C\u7EA6\u675F\u4E0D\u8FC7\uFF09");
-  if (!deepEqual(state, snapshot2)) reasons.push("applyAction \u4FEE\u6539\u4E86\u5165\u53C2 state\uFF08\u5FC5\u987B\u6DF1\u62F7\u8D1D\u51FA\u65B0\u6001\uFF09");
-  const shape = firstResult;
-  if (shape.state === void 0 || !Array.isArray(shape.events) || typeof shape.finished !== "boolean") {
-    reasons.push("applyAction \u5FC5\u987B\u8FD4\u56DE { state, events, finished, winner, summary }");
-  } else {
-    if (!isJsonSafe(shape.state)) reasons.push("applyAction \u4EA7\u51FA\u7684\u65B0 state \u4E0D\u662F deep-JSON-safe");
-    if (jsonSizeOf(shape.state) > GAME_STATE_MAX_BYTES) reasons.push(`applyAction \u4EA7\u51FA\u7684 state \u8D85\u8FC7 ${GAME_STATE_MAX_BYTES} \u5B57\u8282\u4E0A\u9650`);
-    if (shape.winner !== null && typeof shape.winner !== "string") reasons.push("applyAction \u7684 winner \u5FC5\u987B\u662F\u89D2\u8272\u5B57\u7B26\u4E32\u6216 null");
-    if (typeof shape.summary !== "string") reasons.push("applyAction \u7684 summary \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
-  }
-  for (const probe of [{ type: "resign" }, { type: "__dsh_soulmojito_smoke_unknown__" }]) {
-    try {
-      engine9.applyAction(state, probe, turn);
-      reasons.push(`applyAction \u5BF9\u975E\u6CD5\u52A8\u4F5C {type:'${probe.type}'} \u672A\u629B\u9519\uFF08\u5FC5\u987B\u62D2\u7EDD\u800C\u975E\u9759\u9ED8\uFF09`);
-    } catch {
-    }
-  }
-  return { ok: reasons.length === 0, reasons };
-}
-function errorMessage2(cause) {
-  return cause instanceof Error ? cause.message : String(cause);
-}
+var dungeonCrawl = { manifest: manifest3, engine: engine3, viewHtml: viewHtml3 };
 
 // packages/plugin/src/games/builtin/gomoku.ts
 var SIZE2 = 15;
@@ -19951,8 +20517,8 @@ var CN_NUMERALS = {
   14: "\u5341\u56DB",
   15: "\u5341\u4E94"
 };
-var DIRECTIONS = [[1, 0], [0, 1], [1, 1], [1, -1]];
-var MANIFEST3 = {
+var DIRECTIONS2 = [[1, 0], [0, 1], [1, 1], [1, -1]];
+var MANIFEST4 = {
   id: "dsh-soulmojito.gomoku",
   name: "\u4E94\u5B50\u68CB",
   version: "1.0.0",
@@ -19966,7 +20532,7 @@ function coordName(x, y) {
 function stoneName(role) {
   return role === "black" ? "\u9ED1\u68CB" : "\u767D\u68CB";
 }
-function sideName2(role) {
+function sideName3(role) {
   return role === "black" ? "\u9ED1\u65B9" : "\u767D\u65B9";
 }
 function other(role) {
@@ -19975,7 +20541,7 @@ function other(role) {
 function isOnBoard(x, y) {
   return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && x < SIZE2 && y >= 0 && y < SIZE2;
 }
-function cloneState3(state) {
+function cloneState4(state) {
   return {
     board: state.board.map((row) => row.slice()),
     turn: state.turn,
@@ -19989,7 +20555,7 @@ function cloneState3(state) {
 function findWinLine(board, x, y) {
   const stone = board[y][x];
   if (stone === EMPTY) return null;
-  for (const [dx, dy] of DIRECTIONS) {
+  for (const [dx, dy] of DIRECTIONS2) {
     const cells = [{ x, y }];
     for (const sign of [1, -1]) {
       let cx = x + dx * sign;
@@ -20007,8 +20573,8 @@ function findWinLine(board, x, y) {
   }
   return null;
 }
-var engine3 = {
-  meta: MANIFEST3,
+var engine4 = {
+  meta: MANIFEST4,
   /** 开局：空盘黑先。options（含 seed）接受但忽略——五子棋无随机性。 */
   createGame(_options) {
     return {
@@ -20078,7 +20644,7 @@ var engine3 = {
       throw new Error(`\u672A\u77E5\u89D2\u8272\u300C${String(actor)}\u300D\uFF1A\u672C\u6E38\u620F\u89D2\u8272\u4E3A black/white`);
     }
     if (actor !== state.turn) {
-      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName2(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u843D\u5B50`);
+      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName3(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u843D\u5B50`);
     }
     const x = parseBoardCoord(typed.x);
     const y = parseBoardCoord(typed.y);
@@ -20088,7 +20654,7 @@ var engine3 = {
     if (state.board[y][x] !== EMPTY) {
       throw new Error(`${coordName(x, y)} \u5DF2\u6709\u68CB\u5B50\uFF0C\u4E0D\u80FD\u843D\u5728\u5DF2\u5360\u70B9\u4E0A`);
     }
-    const next = cloneState3(state);
+    const next = cloneState4(state);
     next.board[y][x] = actor === "black" ? BLACK : WHITE;
     next.ply = state.ply + 1;
     next.lastMove = { x, y };
@@ -20125,8 +20691,8 @@ var engine3 = {
     return `${stoneName(actor === "white" ? "white" : "black")}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
 };
-var manifest3 = MANIFEST3;
-var viewHtml3 = `<!doctype html>
+var manifest4 = MANIFEST4;
+var viewHtml4 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -20484,13 +21050,13 @@ render()
 </body>
 </html>
 `;
-var gomoku = { manifest: manifest3, engine: engine3, viewHtml: viewHtml3 };
+var gomoku = { manifest: manifest4, engine: engine4, viewHtml: viewHtml4 };
 
 // packages/plugin/src/games/builtin/junqi.ts
 var WIDTH = 5;
 var HEIGHT = 12;
 var MAX_SUGGESTIONS = 64;
-var MANIFEST4 = {
+var MANIFEST5 = {
   id: "dsh-soulmojito.junqi",
   name: "\u519B\u68CB",
   version: "1.0.0",
@@ -20522,7 +21088,7 @@ function pieceName(piece) {
 function sideOfPiece(piece) {
   return piece === piece.toUpperCase() ? "red" : "blue";
 }
-function sideName3(side) {
+function sideName4(side) {
   return side === "red" ? "\u7EA2\u65B9" : "\u84DD\u65B9";
 }
 function ownerName(side) {
@@ -20719,7 +21285,7 @@ function resolveCombat(attacker, defender) {
   if (attackerRank < defenderRank) return "attacker-dies";
   return "both";
 }
-function hasAnyMove(board, side) {
+function hasAnyMove2(board, side) {
   for (let y = 0; y < HEIGHT; y += 1) {
     for (let x = 0; x < WIDTH; x += 1) {
       const piece = board[y][x];
@@ -20748,8 +21314,8 @@ function allLegalMoves(board, side) {
   });
   return moves.slice(0, MAX_SUGGESTIONS);
 }
-function moveText(from, to, piece) {
-  const base = `${sideName3(sideOfPiece(piece))} ${pieceName(piece)} ${coordText(from.x, from.y)}\u2192${coordText(to.x, to.y)}`;
+function moveText2(from, to, piece) {
+  const base = `${sideName4(sideOfPiece(piece))} ${pieceName(piece)} ${coordText(from.x, from.y)}\u2192${coordText(to.x, to.y)}`;
   return ROAD_EDGES.has(edgeKey(from.x, from.y, to.x, to.y)) ? base : `${base}\u6CBF\u94C1\u8DEF`;
 }
 function combatText(outcome, defender) {
@@ -20784,8 +21350,8 @@ function readPoint(raw, label) {
   }
   return { x, y };
 }
-var engine4 = {
-  meta: MANIFEST4,
+var engine5 = {
+  meta: MANIFEST5,
   /** 开局：经典固定布阵、红先。options（含 seed）接受但忽略——布阵固定，无随机性。 */
   createGame(_options) {
     return { state: initialState() };
@@ -20823,7 +21389,7 @@ var engine4 = {
       throw new Error(`\u672A\u77E5\u89D2\u8272\u300C${String(actor)}\u300D\uFF1A\u672C\u6E38\u620F\u89D2\u8272\u4E3A red/blue`);
     }
     if (actor !== state.turn) {
-      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName3(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u8D70\u5B50`);
+      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName4(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u8D70\u5B50`);
     }
     const from = readPoint(typed.from, "from");
     const to = readPoint(typed.to, "to");
@@ -20836,7 +21402,7 @@ var engine4 = {
     }
     const pieceSide = sideOfPiece(piece);
     if (pieceSide !== actor) {
-      throw new Error(`\u8D77\u70B9 ${coordText(from.x, from.y)} \u662F${ownerName(pieceSide)}\u65B9\u7684${pieceName(piece)}\uFF0C${sideName3(actor)}\u4E0D\u80FD\u8D70\u5BF9\u65B9\u7684\u68CB\u5B50`);
+      throw new Error(`\u8D77\u70B9 ${coordText(from.x, from.y)} \u662F${ownerName(pieceSide)}\u65B9\u7684${pieceName(piece)}\uFF0C${sideName4(actor)}\u4E0D\u80FD\u8D70\u5BF9\u65B9\u7684\u68CB\u5B50`);
     }
     if (!pseudoTargets(state.board, from.x, from.y).some((target) => target.x === to.x && target.y === to.y)) {
       const frozenReason = HQ_KEYS.has(`${from.x},${from.y}`) ? "\uFF08\u5927\u672C\u8425\u4E2D\u7684\u68CB\u5B50\u4E0D\u80FD\u518D\u79FB\u52A8\uFF09" : piece.toUpperCase() === "L" || piece.toUpperCase() === "F" ? "\uFF08\u5730\u96F7\u4E0E\u519B\u65D7\u4E0D\u80FD\u79FB\u52A8\uFF09" : "";
@@ -20859,24 +21425,24 @@ var engine4 = {
       finished = true;
       winner = actor;
       ending = "flag";
-    } else if (!hasAnyMove(nextBoard, nextTurn)) {
+    } else if (!hasAnyMove2(nextBoard, nextTurn)) {
       finished = true;
       winner = actor;
       ending = "immobilized";
     }
-    const events = [moveText(from, to, piece)];
-    const summaryParts = [moveText(from, to, piece)];
+    const events = [moveText2(from, to, piece)];
+    const summaryParts = [moveText2(from, to, piece)];
     if (captured !== null) {
       const text = combatText(outcome, captured);
       events.push(text);
       summaryParts.push(text);
     }
     if (finished) {
-      const endingText = ending === "flag" ? "\u593A\u65D7\u83B7\u80DC" : `${sideName3(nextTurn)}\u65E0\u68CB\u53EF\u8D70`;
+      const endingText = ending === "flag" ? "\u593A\u65D7\u83B7\u80DC" : `${sideName4(nextTurn)}\u65E0\u68CB\u53EF\u8D70`;
       events.push(endingText);
-      events.push(`${sideName3(actor)}\u80DC`);
+      events.push(`${sideName4(actor)}\u80DC`);
       summaryParts.push(endingText);
-      summaryParts.push(`${sideName3(actor)}\u80DC`);
+      summaryParts.push(`${sideName4(actor)}\u80DC`);
     }
     const next = {
       board: nextBoard,
@@ -20897,18 +21463,18 @@ var engine4 = {
         const to = readPoint(action.to, "to");
         const piece = state.board?.[from.y]?.[from.x] ?? null;
         if (piece !== null) {
-          const text = moveText(from, to, piece);
+          const text = moveText2(from, to, piece);
           const captured = state.board?.[to.y]?.[to.x] ?? null;
           return captured === null ? text : `${text}\uFF0C${combatText(resolveCombat(piece, captured), captured)}`;
         }
       } catch {
       }
     }
-    return `${sideName3(actor === "blue" ? "blue" : "red")}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
+    return `${sideName4(actor === "blue" ? "blue" : "red")}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
 };
-var manifest4 = MANIFEST4;
-var viewHtml4 = `<!doctype html>
+var manifest5 = MANIFEST5;
+var viewHtml5 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -21450,7 +22016,7 @@ render()
 </body>
 </html>
 `;
-var junqi = { manifest: manifest4, engine: engine4, viewHtml: viewHtml4 };
+var junqi = { manifest: manifest5, engine: engine5, viewHtml: viewHtml5 };
 
 // packages/plugin/src/games/builtin/memory.ts
 import { randomInt as randomInt3 } from "node:crypto";
@@ -21461,7 +22027,7 @@ var FACES = ["\u6708", "\u661F", "\u82B1", "\u96F7", "\u9C7C", "\u8776", "\u5C71
 var PAIRS = FACES.length;
 var MAX_SUGGESTIONS2 = 64;
 var COLUMN_LETTERS = "ABCD";
-var MANIFEST5 = {
+var MANIFEST6 = {
   id: "dsh-soulmojito.memory-match",
   name: "\u8BB0\u5FC6\u7FFB\u724C\u5BF9\u6218",
   version: "1.0.0",
@@ -21469,7 +22035,7 @@ var MANIFEST5 = {
   turnBased: true,
   actionVocabulary: "\u7FFB\u724C {type:'flip', a, b}\uFF1Aa/b \u4E3A 0-15 \u7684\u724C\u4F4D\u4E0B\u6807\uFF08\u884C\u4E3B\u5E8F\u2014\u20140-3 \u7B2C\u4E00\u884C\u30014-7 \u7B2C\u4E8C\u884C\u2026\u2026\u5217 A-D\u3001\u884C 1-4\uFF0C\u5982 0=A1\u30015=B2\u300115=D4\uFF09\u3002\u6BCF\u624B\u7FFB\u5F00\u4E24\u5F20\u672A\u7FFB\u5F00\u7684\u724C\uFF1A\u56FE\u6848\u76F8\u540C\u5373\u914D\u5BF9\u6210\u529F\uFF08\u5F97 1 \u5206\u3001\u4E24\u5F20\u4FDD\u6301\u7FFB\u5F00\u3001\u540C\u4E00\u65B9\u7EE7\u7EED\u7FFB\uFF09\uFF1B\u4E0D\u540C\u5219\u4E24\u5F20\u7FFB\u56DE\u3001\u6362\u5BF9\u65B9\u30028 \u5BF9\u5168\u90E8\u914D\u5B8C\u540E\u6BD4\u8F83\u5F97\u5206\u5B9A\u80DC\u8D1F\uFF1B\u8BA4\u8F93 {type:'resign'} \u7531\u8FD0\u884C\u65F6\u7EDF\u4E00\u5904\u7406"
 };
-function sideName4(side) {
+function sideName5(side) {
   return side === "red" ? "\u7EA2\u65B9" : "\u84DD\u65B9";
 }
 function other3(side) {
@@ -21481,7 +22047,7 @@ function cardName(index) {
 function isCardIndex(value) {
   return value >= 0 && value < CARDS;
 }
-function cloneState4(state) {
+function cloneState5(state) {
   return {
     turn: state.turn,
     seed: state.seed,
@@ -21527,13 +22093,13 @@ function matchedCountOf(board) {
   return board.filter((cell) => cell !== null).length;
 }
 function matchSentence(side, a, b, faceA, faceB, scores) {
-  return `${sideName4(side)}\u7FFB\u5F00 ${cardName(a)}\uFF08${faceA}\uFF09\u4E0E ${cardName(b)}\uFF08${faceB}\uFF09\uFF1A\u914D\u5BF9\u6210\u529F\uFF0C\u5F97 1 \u5206\uFF08\u6BD4\u5206 \u7EA2\u65B9 ${scores.red}\u2013\u84DD\u65B9 ${scores.blue}\uFF09`;
+  return `${sideName5(side)}\u7FFB\u5F00 ${cardName(a)}\uFF08${faceA}\uFF09\u4E0E ${cardName(b)}\uFF08${faceB}\uFF09\uFF1A\u914D\u5BF9\u6210\u529F\uFF0C\u5F97 1 \u5206\uFF08\u6BD4\u5206 \u7EA2\u65B9 ${scores.red}\u2013\u84DD\u65B9 ${scores.blue}\uFF09`;
 }
 function mismatchSentence(side, a, b, faceA, faceB, next) {
-  return `${sideName4(side)}\u7FFB\u5F00 ${cardName(a)}\uFF08${faceA}\uFF09\u4E0E ${cardName(b)}\uFF08${faceB}\uFF09\uFF1A\u4E0D\u662F\u4E00\u5BF9\uFF0C\u7FFB\u56DE\uFF0C\u8F6E\u5230${sideName4(next)}`;
+  return `${sideName5(side)}\u7FFB\u5F00 ${cardName(a)}\uFF08${faceA}\uFF09\u4E0E ${cardName(b)}\uFF08${faceB}\uFF09\uFF1A\u4E0D\u662F\u4E00\u5BF9\uFF0C\u7FFB\u56DE\uFF0C\u8F6E\u5230${sideName5(next)}`;
 }
-var engine5 = {
-  meta: MANIFEST5,
+var engine6 = {
+  meta: MANIFEST6,
   /**
    * 开局：读 options.seed（number 则用之；缺省用 node:crypto 随机整数——全文
    * 唯一的随机点）。16 张全背面、比分 0–0、红方先手（roles[0]）。
@@ -21601,7 +22167,7 @@ var engine5 = {
       throw new Error(`\u672A\u77E5\u89D2\u8272\u300C${String(actor)}\u300D\uFF1A\u672C\u6E38\u620F\u89D2\u8272\u4E3A red/blue`);
     }
     if (actor !== state.turn) {
-      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName4(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u7FFB\u724C`);
+      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName5(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u7FFB\u724C`);
     }
     const side = actor;
     const a = parseBoardCoord(typed.a);
@@ -21618,7 +22184,7 @@ var engine5 = {
     if (state.board[b] !== null) {
       throw new Error(`\u724C\u4F4D ${cardName(b)} \u5DF2\u914D\u5BF9\u7FFB\u5F00\uFF0C\u4E0D\u80FD\u91CD\u590D\u7FFB\u5F00`);
     }
-    const next = cloneState4(state);
+    const next = cloneState5(state);
     const faces = layoutOf(next.seed);
     const faceA = faces[a];
     const faceB = faces[b];
@@ -21634,7 +22200,7 @@ var engine5 = {
       if (matchedCountOf(next.board) === CARDS) {
         next.finished = true;
         next.winner = winnerOf(next.scores);
-        const verdict = next.winner === null ? "\u5E73\u5C40" : `${sideName4(next.winner)}\u80DC`;
+        const verdict = next.winner === null ? "\u5E73\u5C40" : `${sideName5(next.winner)}\u80DC`;
         events.push(`\u5BF9\u5C40\u7ED3\u675F\uFF1A\u7EA2\u65B9 ${next.scores.red}\u2013\u84DD\u65B9 ${next.scores.blue}\uFF0C${verdict}`);
       }
     } else {
@@ -21669,11 +22235,11 @@ var engine5 = {
         return mismatchSentence(side, a, b, faceA, faceB, other3(side));
       }
     }
-    return `${sideName4(side)}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
+    return `${sideName5(side)}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
 };
-var manifest5 = MANIFEST5;
-var viewHtml5 = `<!doctype html>
+var manifest6 = MANIFEST6;
+var viewHtml6 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -22095,11 +22661,11 @@ render()
 </body>
 </html>
 `;
-var memoryMatch = { manifest: manifest5, engine: engine5, viewHtml: viewHtml5 };
+var memoryMatch = { manifest: manifest6, engine: engine6, viewHtml: viewHtml6 };
 
 // packages/plugin/src/games/builtin/monopoly.ts
 import { randomInt as randomInt4 } from "node:crypto";
-var MANIFEST6 = {
+var MANIFEST7 = {
   id: "dsh-soulmojito.monopoly",
   name: "\u5927\u5BCC\u7FC1",
   version: "1.0.0",
@@ -22155,10 +22721,10 @@ var CHANCE_CARDS = [
   { text: "\u8D5E\u52A9\u793E\u533A\u6D3B\u52A8\uFF0C\u652F\u51FA 100 \u5143", effect: { kind: "cash", amount: -100 } },
   { text: "\u524D\u8FDB 4 \u683C", effect: { kind: "move", steps: 4 } }
 ];
-function sideName5(role) {
+function sideName6(role) {
   return role === "red" ? "\u7EA2\u65B9" : "\u84DD\u65B9";
 }
-function otherRole(role) {
+function otherRole2(role) {
   return role === "red" ? "blue" : "red";
 }
 function rentOf(index, level) {
@@ -22176,7 +22742,7 @@ function netWorth(state, role) {
   }
   return total;
 }
-function cloneState5(state) {
+function cloneState6(state) {
   return {
     turn: state.turn,
     phase: state.phase,
@@ -22226,12 +22792,12 @@ function shuffledDeck(seed) {
 }
 function payOrBust(next, role, amount, label, events) {
   if (next.cash[role] < amount) {
-    const creditor = otherRole(role);
+    const creditor = otherRole2(role);
     const remaining = next.cash[role];
     next.cash[creditor] += remaining;
     next.cash[role] = 0;
-    events.push(`${sideName5(role)}\u73B0\u91D1\u4E0D\u8DB3\u652F\u4ED8${label}\uFF08\u9700 ${amount} \u5143\uFF0C\u4EC5\u6709 ${remaining} \u5143\uFF09\uFF0C\u7834\u4EA7`);
-    events.push(`\u7834\u4EA7\u6E05\u7B97\uFF1A\u5269\u4F59\u73B0\u91D1 ${remaining} \u5143\u5F52${sideName5(creditor)}`);
+    events.push(`${sideName6(role)}\u73B0\u91D1\u4E0D\u8DB3\u652F\u4ED8${label}\uFF08\u9700 ${amount} \u5143\uFF0C\u4EC5\u6709 ${remaining} \u5143\uFF09\uFF0C\u7834\u4EA7`);
+    events.push(`\u7834\u4EA7\u6E05\u7B97\uFF1A\u5269\u4F59\u73B0\u91D1 ${remaining} \u5143\u5F52${sideName6(creditor)}`);
     next.finished = true;
     next.winner = creditor;
     next.ending = "bankrupt";
@@ -22244,7 +22810,7 @@ function finalizeValuation(next, events) {
   const red = netWorth(next, "red");
   const blue = netWorth(next, "blue");
   const winner = red > blue ? "red" : blue > red ? "blue" : null;
-  events.push(`\u8FBE\u5230 ${TURN_LIMIT} \u56DE\u5408\u4E0A\u9650\uFF0C\u6309\u51C0\u503C\u7ED3\u7B97\uFF1A\u7EA2\u65B9 ${red} \u5143\u3001\u84DD\u65B9 ${blue} \u5143\u2014\u2014${winner === null ? "\u5E73\u5C40" : `${sideName5(winner)}\u80DC`}`);
+  events.push(`\u8FBE\u5230 ${TURN_LIMIT} \u56DE\u5408\u4E0A\u9650\uFF0C\u6309\u51C0\u503C\u7ED3\u7B97\uFF1A\u7EA2\u65B9 ${red} \u5143\u3001\u84DD\u65B9 ${blue} \u5143\u2014\u2014${winner === null ? "\u5E73\u5C40" : `${sideName6(winner)}\u80DC`}`);
   next.finished = true;
   next.winner = winner;
   next.ending = "valuation";
@@ -22258,7 +22824,7 @@ function endTurn(next, events) {
     finalizeValuation(next, events);
     return;
   }
-  next.turn = otherRole(actor);
+  next.turn = otherRole2(actor);
 }
 function applyChance(next, role, card, events) {
   const effect = card.effect;
@@ -22272,57 +22838,57 @@ function applyChance(next, role, card, events) {
   }
   if (effect.kind === "transfer") {
     if (!payOrBust(next, role, effect.amount, "\u673A\u4F1A\u5361\u652F\u4ED8", events)) return;
-    next.cash[otherRole(role)] += effect.amount;
+    next.cash[otherRole2(role)] += effect.amount;
     return;
   }
   if (effect.kind === "goto-start") {
     next.pos[role] = 0;
     next.cash[role] += START_SALARY;
-    events.push(`${sideName5(role)}\u62B5\u8FBE\u8D77\u70B9\uFF0C\u9886\u53D6\u85AA\u6C34 ${START_SALARY} \u5143`);
+    events.push(`${sideName6(role)}\u62B5\u8FBE\u8D77\u70B9\uFF0C\u9886\u53D6\u85AA\u6C34 ${START_SALARY} \u5143`);
     return;
   }
   if (effect.kind === "jail") {
     next.pos[role] = JAIL_INDEX;
     next.jailed[role] = true;
-    events.push(`${sideName5(role)}\u88AB\u5E26\u5F80\u6D3E\u51FA\u6240\uFF0C\u6682\u505C\u4E00\u6B21\u884C\u52A8`);
+    events.push(`${sideName6(role)}\u88AB\u5E26\u5F80\u6D3E\u51FA\u6240\uFF0C\u6682\u505C\u4E00\u6B21\u884C\u52A8`);
     return;
   }
   const from = next.pos[role];
   const target = (from + effect.steps + BOARD.length) % BOARD.length;
   next.pos[role] = target;
-  events.push(`\u673A\u4F1A\u79FB\u52A8\uFF1A${sideName5(role)}\u4ECE\u300C${BOARD[from].name}\u300D${effect.steps > 0 ? "\u524D\u8FDB" : "\u540E\u9000"} ${Math.abs(effect.steps)} \u683C\u5230\u300C${BOARD[target].name}\u300D\uFF08\u4E0D\u53D1\u85AA\u6C34\uFF09`);
+  events.push(`\u673A\u4F1A\u79FB\u52A8\uFF1A${sideName6(role)}\u4ECE\u300C${BOARD[from].name}\u300D${effect.steps > 0 ? "\u524D\u8FDB" : "\u540E\u9000"} ${Math.abs(effect.steps)} \u683C\u5230\u300C${BOARD[target].name}\u300D\uFF08\u4E0D\u53D1\u85AA\u6C34\uFF09`);
   settleLanding(next, role, events, false);
 }
 function settleLanding(next, role, events, allowChance) {
   const index = next.pos[role];
   const tile = BOARD[index];
   if (tile.kind === "start") {
-    events.push(`${sideName5(role)}\u505C\u7559\u5728\u8D77\u70B9`);
+    events.push(`${sideName6(role)}\u505C\u7559\u5728\u8D77\u70B9`);
     return;
   }
   if (tile.kind === "park") {
-    events.push(`${sideName5(role)}\u514D\u8D39\u505C\u8F66\uFF0C\u672C\u56DE\u5408\u65E0\u4E8B\u53D1\u751F`);
+    events.push(`${sideName6(role)}\u514D\u8D39\u505C\u8F66\uFF0C\u672C\u56DE\u5408\u65E0\u4E8B\u53D1\u751F`);
     return;
   }
   if (tile.kind === "bonus") {
     next.cash[role] += tile.amount;
-    events.push(`${sideName5(role)}\u5728${tile.name}\u9886\u53D6 ${tile.amount} \u5143`);
+    events.push(`${sideName6(role)}\u5728${tile.name}\u9886\u53D6 ${tile.amount} \u5143`);
     return;
   }
   if (tile.kind === "tax") {
     if (payOrBust(next, role, tile.amount, `\u300C${tile.name}\u300D${tile.amount} \u5143`, events)) {
-      events.push(`${sideName5(role)}\u7F34\u7EB3\u300C${tile.name}\u300D${tile.amount} \u5143`);
+      events.push(`${sideName6(role)}\u7F34\u7EB3\u300C${tile.name}\u300D${tile.amount} \u5143`);
     }
     return;
   }
   if (tile.kind === "jail") {
     next.jailed[role] = true;
-    events.push(`${sideName5(role)}\u88AB\u8BF7\u8FDB\u6D3E\u51FA\u6240\uFF0C\u6682\u505C\u4E00\u6B21\u884C\u52A8`);
+    events.push(`${sideName6(role)}\u88AB\u8BF7\u8FDB\u6D3E\u51FA\u6240\uFF0C\u6682\u505C\u4E00\u6B21\u884C\u52A8`);
     return;
   }
   if (tile.kind === "chance") {
     if (!allowChance) {
-      events.push(`${sideName5(role)}\u518D\u6B21\u505C\u7559\u5728\u673A\u4F1A\u683C\uFF0C\u672C\u6B21\u4E0D\u518D\u62BD\u5361`);
+      events.push(`${sideName6(role)}\u518D\u6B21\u505C\u7559\u5728\u673A\u4F1A\u683C\uFF0C\u672C\u6B21\u4E0D\u518D\u62BD\u5361`);
       return;
     }
     const cardIndex = next.deck[next.deckIndex % next.deck.length];
@@ -22338,9 +22904,9 @@ function settleLanding(next, role, events, allowChance) {
     if (next.cash[role] >= price) {
       next.phase = "decide";
       next.pending = "buy";
-      events.push(`${sideName5(role)}\u505C\u7559\u300C${tile.name}\u300D\uFF08\u65E0\u4EBA\u62E5\u6709\uFF0C\u552E\u4EF7 ${price} \u5143\uFF09\uFF0C\u53EF\u8D2D\u4E70\u6216\u8DF3\u8FC7`);
+      events.push(`${sideName6(role)}\u505C\u7559\u300C${tile.name}\u300D\uFF08\u65E0\u4EBA\u62E5\u6709\uFF0C\u552E\u4EF7 ${price} \u5143\uFF09\uFF0C\u53EF\u8D2D\u4E70\u6216\u8DF3\u8FC7`);
     } else {
-      events.push(`\u300C${tile.name}\u300D\u65E0\u4EBA\u62E5\u6709\uFF08\u552E\u4EF7 ${price} \u5143\uFF09\uFF0C${sideName5(role)}\u73B0\u91D1\u4E0D\u8DB3\u65E0\u6CD5\u8D2D\u4E70`);
+      events.push(`\u300C${tile.name}\u300D\u65E0\u4EBA\u62E5\u6709\uFF08\u552E\u4EF7 ${price} \u5143\uFF09\uFF0C${sideName6(role)}\u73B0\u91D1\u4E0D\u8DB3\u65E0\u6CD5\u8D2D\u4E70`);
     }
     return;
   }
@@ -22354,9 +22920,9 @@ function settleLanding(next, role, events, allowChance) {
     if (next.cash[role] >= cost) {
       next.phase = "decide";
       next.pending = "build";
-      events.push(`\u300C${tile.name}\u300D\u662F${sideName5(role)}\u7684\u5730\u4EA7\uFF08${level2} \u7EA7\uFF09\uFF0C\u53EF\u82B1\u8D39 ${cost} \u5143\u52A0\u76D6\u6216\u8DF3\u8FC7`);
+      events.push(`\u300C${tile.name}\u300D\u662F${sideName6(role)}\u7684\u5730\u4EA7\uFF08${level2} \u7EA7\uFF09\uFF0C\u53EF\u82B1\u8D39 ${cost} \u5143\u52A0\u76D6\u6216\u8DF3\u8FC7`);
     } else {
-      events.push(`\u300C${tile.name}\u300D\u53EF\u52A0\u76D6\uFF08\u9700 ${cost} \u5143\uFF09\uFF0C${sideName5(role)}\u73B0\u91D1\u4E0D\u8DB3`);
+      events.push(`\u300C${tile.name}\u300D\u53EF\u52A0\u76D6\uFF08\u9700 ${cost} \u5143\uFF09\uFF0C${sideName6(role)}\u73B0\u91D1\u4E0D\u8DB3`);
     }
     return;
   }
@@ -22364,15 +22930,15 @@ function settleLanding(next, role, events, allowChance) {
   const rent = rentOf(index, level);
   if (!payOrBust(next, role, rent, `\u300C${tile.name}\u300D\u79DF\u91D1`, events)) return;
   next.cash[owner] += rent;
-  events.push(`\u300C${tile.name}\u300D\u662F${sideName5(owner)}\u7684\u5730\u4EA7\uFF08${level} \u7EA7\uFF09\uFF0C${sideName5(role)}\u652F\u4ED8\u79DF\u91D1 ${rent} \u5143`);
+  events.push(`\u300C${tile.name}\u300D\u662F${sideName6(owner)}\u7684\u5730\u4EA7\uFF08${level} \u7EA7\uFF09\uFF0C${sideName6(role)}\u652F\u4ED8\u79DF\u91D1 ${rent} \u5143`);
 }
 function pendingLabel(state) {
   if (state.pending === "buy") return "\u8D2D\u4E70";
   if (state.pending === "build") return "\u52A0\u76D6";
   return "\u884C\u52A8";
 }
-var engine6 = {
-  meta: MANIFEST6,
+var engine7 = {
+  meta: MANIFEST7,
   /**
    * 开局：读 options.seed（number 则用之；缺省用 node:crypto 随机整数——
    * 全文唯一的随机点）。红方先行、双方资金 START_CASH、同在起点、地产
@@ -22446,7 +23012,7 @@ var engine6 = {
       throw new Error(`\u672A\u77E5\u89D2\u8272\u300C${String(actor)}\u300D\uFF1A\u672C\u6E38\u620F\u89D2\u8272\u4E3A red/blue`);
     }
     if (actor !== state.turn) {
-      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName5(state.turn)}\uFF0C${sideName5(actor)} \u4E0D\u80FD\u884C\u52A8`);
+      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName6(state.turn)}\uFF0C${sideName6(actor)} \u4E0D\u80FD\u884C\u52A8`);
     }
     const role = actor;
     if (type === "roll" && state.phase !== "roll") {
@@ -22485,12 +23051,12 @@ var engine6 = {
         throw new Error(`\u73B0\u91D1\u4E0D\u8DB3\uFF0C\u65E0\u6CD5\u4E3A\u300C${tile.name}\u300D\u52A0\u76D6\uFF08\u9700 ${buildCostOf(index)} \u5143\uFF09`);
       }
     }
-    const next = cloneState5(state);
+    const next = cloneState6(state);
     const events = [];
     if (type === "roll") {
       if (next.jailed[role]) {
         next.jailed[role] = false;
-        events.push(`${sideName5(role)}\u5728\u6D3E\u51FA\u6240\u6EDE\u7559\uFF0C\u6682\u505C\u4E00\u6B21\u884C\u52A8`);
+        events.push(`${sideName6(role)}\u5728\u6D3E\u51FA\u6240\u6EDE\u7559\uFF0C\u6682\u505C\u4E00\u6B21\u884C\u52A8`);
         endTurn(next, events);
       } else {
         const die = diceAt(next.seed, next.rolls);
@@ -22500,7 +23066,7 @@ var engine6 = {
         const target = from + die;
         const landing = target % BOARD.length;
         next.pos[role] = landing;
-        events.push(`${sideName5(role)}\u63B7\u51FA ${die} \u70B9\uFF1A\u4ECE\u300C${BOARD[from].name}\u300D\u5230\u300C${BOARD[landing].name}\u300D`);
+        events.push(`${sideName6(role)}\u63B7\u51FA ${die} \u70B9\uFF1A\u4ECE\u300C${BOARD[from].name}\u300D\u5230\u300C${BOARD[landing].name}\u300D`);
         if (target >= BOARD.length) {
           next.cash[role] += START_SALARY;
           events.push(`\u7ECF\u8FC7\u8D77\u70B9\uFF0C\u9886\u53D6\u85AA\u6C34 ${START_SALARY} \u5143`);
@@ -22514,7 +23080,7 @@ var engine6 = {
       next.cash[role] -= tile.price;
       next.owner[index] = role;
       next.level[index] = 1;
-      events.push(`${sideName5(role)}\u4E70\u4E0B\u300C${tile.name}\u300D\uFF08${tile.price} \u5143\uFF09\uFF0C\u73B0\u91D1\u5269\u4F59 ${next.cash[role]} \u5143`);
+      events.push(`${sideName6(role)}\u4E70\u4E0B\u300C${tile.name}\u300D\uFF08${tile.price} \u5143\uFF09\uFF0C\u73B0\u91D1\u5269\u4F59 ${next.cash[role]} \u5143`);
       endTurn(next, events);
     } else if (type === "build") {
       const index = next.pos[role];
@@ -22522,13 +23088,13 @@ var engine6 = {
       const cost = buildCostOf(index);
       next.cash[role] -= cost;
       next.level[index] = next.level[index] + 1;
-      events.push(`${sideName5(role)}\u4E3A\u300C${tile.name}\u300D\u52A0\u76D6\u5230 ${next.level[index]} \u7EA7\uFF08\u82B1\u8D39 ${cost} \u5143\uFF09\uFF0C\u73B0\u91D1\u5269\u4F59 ${next.cash[role]} \u5143`);
+      events.push(`${sideName6(role)}\u4E3A\u300C${tile.name}\u300D\u52A0\u76D6\u5230 ${next.level[index]} \u7EA7\uFF08\u82B1\u8D39 ${cost} \u5143\uFF09\uFF0C\u73B0\u91D1\u5269\u4F59 ${next.cash[role]} \u5143`);
       endTurn(next, events);
     } else {
       const tile = BOARD[next.pos[role]];
-      if (state.pending === "buy") events.push(`${sideName5(role)}\u653E\u5F03\u8D2D\u4E70\u300C${tile.name}\u300D`);
-      else if (state.pending === "build") events.push(`${sideName5(role)}\u653E\u5F03\u4E3A\u300C${tile.name}\u300D\u52A0\u76D6`);
-      else events.push(`${sideName5(role)}\u8DF3\u8FC7`);
+      if (state.pending === "buy") events.push(`${sideName6(role)}\u653E\u5F03\u8D2D\u4E70\u300C${tile.name}\u300D`);
+      else if (state.pending === "build") events.push(`${sideName6(role)}\u653E\u5F03\u4E3A\u300C${tile.name}\u300D\u52A0\u76D6`);
+      else events.push(`${sideName6(role)}\u8DF3\u8FC7`);
       endTurn(next, events);
     }
     return { state: next, events, finished: next.finished, winner: next.winner, summary: events.join("\uFF0C") };
@@ -22539,19 +23105,19 @@ var engine6 = {
     const type = action !== null && typeof action === "object" && !Array.isArray(action) ? action.type : void 0;
     const index = state.pos[role];
     const tile = BOARD[index];
-    if (type === "roll") return `${sideName5(role)}\u63B7\u9AB0\u5B50`;
-    if (type === "buy") return `${sideName5(role)}\u8D2D\u4E70\u300C${tile.name}\u300D\uFF08${tile.price} \u5143\uFF09`;
-    if (type === "build") return `${sideName5(role)}\u4E3A\u300C${tile.name}\u300D\u52A0\u76D6\uFF08\u82B1\u8D39 ${buildCostOf(index)} \u5143\uFF09`;
+    if (type === "roll") return `${sideName6(role)}\u63B7\u9AB0\u5B50`;
+    if (type === "buy") return `${sideName6(role)}\u8D2D\u4E70\u300C${tile.name}\u300D\uFF08${tile.price} \u5143\uFF09`;
+    if (type === "build") return `${sideName6(role)}\u4E3A\u300C${tile.name}\u300D\u52A0\u76D6\uFF08\u82B1\u8D39 ${buildCostOf(index)} \u5143\uFF09`;
     if (type === "pass") {
-      if (state.pending === "buy") return `${sideName5(role)}\u653E\u5F03\u8D2D\u4E70\u300C${tile.name}\u300D`;
-      if (state.pending === "build") return `${sideName5(role)}\u653E\u5F03\u52A0\u76D6`;
-      return `${sideName5(role)}\u8DF3\u8FC7`;
+      if (state.pending === "buy") return `${sideName6(role)}\u653E\u5F03\u8D2D\u4E70\u300C${tile.name}\u300D`;
+      if (state.pending === "build") return `${sideName6(role)}\u653E\u5F03\u52A0\u76D6`;
+      return `${sideName6(role)}\u8DF3\u8FC7`;
     }
-    return `${sideName5(role)}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
+    return `${sideName6(role)}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
 };
-var manifest6 = MANIFEST6;
-var viewHtml6 = `<!doctype html>
+var manifest7 = MANIFEST7;
+var viewHtml7 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -23057,7 +23623,7 @@ render()
 </body>
 </html>
 `;
-var monopoly = { manifest: manifest6, engine: engine6, viewHtml: viewHtml6 };
+var monopoly = { manifest: manifest7, engine: engine7, viewHtml: viewHtml7 };
 
 // packages/plugin/src/games/builtin/tic-tac-toe.ts
 var SIZE3 = 3;
@@ -23065,8 +23631,8 @@ var EMPTY2 = 0;
 var CROSS = 1;
 var NOUGHT = 2;
 var COLUMNS2 = "ABC";
-var DIRECTIONS2 = [[1, 0], [0, 1], [1, 1], [1, -1]];
-var MANIFEST7 = {
+var DIRECTIONS3 = [[1, 0], [0, 1], [1, 1], [1, -1]];
+var MANIFEST8 = {
   id: "dsh-soulmojito.tic-tac-toe",
   name: "\u4E95\u5B57\u68CB",
   version: "1.0.0",
@@ -23077,7 +23643,7 @@ var MANIFEST7 = {
 function markName(role) {
   return role === "x" ? "X" : "O";
 }
-function sideName6(role) {
+function sideName7(role) {
   return role === "x" ? "X \u65B9" : "O \u65B9";
 }
 function other4(role) {
@@ -23089,7 +23655,7 @@ function isOnBoard3(x, y) {
 function coordName2(x, y) {
   return COLUMNS2[x] + String(y + 1);
 }
-function cloneState6(state) {
+function cloneState7(state) {
   return {
     board: state.board.map((row) => row.slice()),
     turn: state.turn,
@@ -23103,7 +23669,7 @@ function cloneState6(state) {
 function findWinLine2(board, x, y) {
   const mark = board[y][x];
   if (mark === EMPTY2) return null;
-  for (const [dx, dy] of DIRECTIONS2) {
+  for (const [dx, dy] of DIRECTIONS3) {
     const cells = [{ x, y }];
     for (const sign of [1, -1]) {
       let cx = x + dx * sign;
@@ -23121,8 +23687,8 @@ function findWinLine2(board, x, y) {
   }
   return null;
 }
-var engine7 = {
-  meta: MANIFEST7,
+var engine8 = {
+  meta: MANIFEST8,
   /** 开局：空盘 X 先。options（含 seed）接受但忽略——井字棋无随机性。 */
   createGame(_options) {
     return {
@@ -23167,7 +23733,7 @@ var engine7 = {
       throw new Error(`\u672A\u77E5\u89D2\u8272\u300C${String(actor)}\u300D\uFF1A\u672C\u6E38\u620F\u89D2\u8272\u4E3A x/o`);
     }
     if (actor !== state.turn) {
-      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName6(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u843D\u5B50`);
+      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName7(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u843D\u5B50`);
     }
     const x = parseBoardCoord(typed.x);
     const y = parseBoardCoord(typed.y);
@@ -23177,7 +23743,7 @@ var engine7 = {
     if (state.board[y][x] !== EMPTY2) {
       throw new Error(`${coordName2(x, y)} \u5DF2\u6709\u68CB\u5B50\uFF0C\u4E0D\u80FD\u843D\u5728\u5DF2\u5360\u683C\u4E0A`);
     }
-    const next = cloneState6(state);
+    const next = cloneState7(state);
     next.board[y][x] = actor === "x" ? CROSS : NOUGHT;
     next.ply = state.ply + 1;
     next.lastMove = { x, y };
@@ -23214,8 +23780,8 @@ var engine7 = {
     return `${String(actor)}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
 };
-var manifest7 = MANIFEST7;
-var viewHtml7 = `<!doctype html>
+var manifest8 = MANIFEST8;
+var viewHtml8 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -23310,13 +23876,13 @@ if (!TOKEN) {
 </body>
 </html>
 `;
-var ticTacToe = { manifest: manifest7, engine: engine7, viewHtml: viewHtml7 };
+var ticTacToe = { manifest: manifest8, engine: engine8, viewHtml: viewHtml8 };
 
 // packages/plugin/src/games/builtin/xiangqi.ts
 var WIDTH2 = 9;
 var HEIGHT2 = 10;
 var MAX_SUGGESTIONS3 = 64;
-var MANIFEST8 = {
+var MANIFEST9 = {
   id: "dsh-soulmojito.xiangqi",
   name: "\u4E2D\u56FD\u8C61\u68CB",
   version: "1.0.0",
@@ -23337,7 +23903,7 @@ function pieceName2(piece) {
 function sideOfPiece2(piece) {
   return piece === piece.toUpperCase() ? "red" : "black";
 }
-function sideName7(side) {
+function sideName8(side) {
   return side === "red" ? "\u7EA2\u65B9" : "\u9ED1\u65B9";
 }
 function ownerName2(side) {
@@ -23595,7 +24161,7 @@ function moveNotation(board, from, to, piece) {
     const arg = kind === "H" || kind === "E" || kind === "A" ? digit(side, fileNumber(side, to.x)) : digit(side, Math.abs(to.y - from.y));
     action = `${verb}${arg}`;
   }
-  return `${sideName7(side)} ${head}${action}`;
+  return `${sideName8(side)} ${head}${action}`;
 }
 function readPoint2(raw, label) {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
@@ -23613,8 +24179,8 @@ function readPoint2(raw, label) {
   }
   return { x, y };
 }
-var engine8 = {
-  meta: MANIFEST8,
+var engine9 = {
+  meta: MANIFEST9,
   /** 开局：标准摆子、红先。options（含 seed）接受但忽略——象棋无随机性。 */
   createGame(_options) {
     return { state: initialState2() };
@@ -23652,7 +24218,7 @@ var engine8 = {
       throw new Error(`\u672A\u77E5\u89D2\u8272\u300C${String(actor)}\u300D\uFF1A\u672C\u6E38\u620F\u89D2\u8272\u4E3A red/black`);
     }
     if (actor !== state.turn) {
-      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName7(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u8D70\u5B50`);
+      throw new Error(`\u73B0\u5728\u8F6E\u5230${sideName8(state.turn)}\uFF0C${String(actor)} \u4E0D\u80FD\u8D70\u5B50`);
     }
     const from = readPoint2(typed.from, "from");
     const to = readPoint2(typed.to, "to");
@@ -23665,13 +24231,13 @@ var engine8 = {
     }
     const pieceSide = sideOfPiece2(piece);
     if (pieceSide !== actor) {
-      throw new Error(`\u8D77\u70B9 ${coordText2(from.x, from.y)} \u662F${ownerName2(pieceSide)}\u65B9\u7684${pieceName2(piece)}\uFF0C${sideName7(actor)}\u4E0D\u80FD\u8D70\u5BF9\u65B9\u7684\u68CB\u5B50`);
+      throw new Error(`\u8D77\u70B9 ${coordText2(from.x, from.y)} \u662F${ownerName2(pieceSide)}\u65B9\u7684${pieceName2(piece)}\uFF0C${sideName8(actor)}\u4E0D\u80FD\u8D70\u5BF9\u65B9\u7684\u68CB\u5B50`);
     }
     if (!pseudoMoves(state.board, from.x, from.y).some((move) => move.x === to.x && move.y === to.y)) {
       throw new Error(`${pieceName2(piece)}\u4ECE ${coordText2(from.x, from.y)} \u4E0D\u80FD\u8D70\u5230 ${coordText2(to.x, to.y)}\uFF1A\u4E0D\u7B26\u5408\u8D70\u5B50\u89C4\u5219\uFF08\u8DEF\u5F84\u88AB\u963B\u6321\u3001\u76EE\u6807\u88AB\u5DF1\u65B9\u68CB\u5B50\u5360\u636E\u6216\u76EE\u6807\u70B9\u5728\u754C\u5916\uFF09`);
     }
     if (!moveLeavesOwnKingSafe(state.board, actor, from, to)) {
-      throw new Error(`\u8FD9\u6B65\u68CB\u8BA9${sideName7(actor)}\u88AB\u5C06\u519B\uFF08\u542B\u5C06\u5E05\u7167\u9762\uFF1B\u88AB\u7275\u5236\u7684\u5B50\u4E0D\u80FD\u8D70\u5F00\uFF09\uFF0C\u4E0D\u80FD\u8D70`);
+      throw new Error(`\u8FD9\u6B65\u68CB\u8BA9${sideName8(actor)}\u88AB\u5C06\u519B\uFF08\u542B\u5C06\u5E05\u7167\u9762\uFF1B\u88AB\u7275\u5236\u7684\u5B50\u4E0D\u80FD\u8D70\u5F00\uFF09\uFF0C\u4E0D\u80FD\u8D70`);
     }
     const captured = state.board[to.y]?.[to.x] ?? null;
     const nextBoard = boardAfter(state.board, from, to);
@@ -23691,9 +24257,9 @@ var engine8 = {
     if (finished) {
       const endingText = oppInCheck ? "\u5C06\u6B7B" : "\u56F0\u6BD9";
       events.push(endingText);
-      events.push(`${sideName7(actor)}\u80DC`);
+      events.push(`${sideName8(actor)}\u80DC`);
       summaryParts.push(endingText);
-      summaryParts.push(`${sideName7(actor)}\u80DC`);
+      summaryParts.push(`${sideName8(actor)}\u80DC`);
     } else if (oppInCheck) {
       events.push("\u5C06\u519B\uFF01");
       summaryParts.push("\u5C06\u519B\uFF01");
@@ -23721,11 +24287,11 @@ var engine8 = {
       } catch {
       }
     }
-    return `${sideName7(actor === "black" ? "black" : "red")}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
+    return `${sideName8(actor === "black" ? "black" : "red")}\u7684\u52A8\u4F5C\u672A\u88AB\u672C\u5F15\u64CE\u8BC6\u522B`;
   }
 };
-var manifest8 = MANIFEST8;
-var viewHtml8 = `<!doctype html>
+var manifest9 = MANIFEST9;
+var viewHtml9 = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -24249,7 +24815,7 @@ render()
 </body>
 </html>
 `;
-var xiangqi = { manifest: manifest8, engine: engine8, viewHtml: viewHtml8 };
+var xiangqi = { manifest: manifest9, engine: engine9, viewHtml: viewHtml9 };
 
 // packages/plugin/src/games/registry.ts
 var GameRegistry = class _GameRegistry {
@@ -24305,7 +24871,7 @@ var GameRegistry = class _GameRegistry {
     await this.scanInstalled();
   }
   loadBuiltins() {
-    for (const builtin of [ticTacToe, gomoku, xiangqi, junqi, blackjack, memoryMatch, monopoly, dungeonCrawl]) {
+    for (const builtin of [ticTacToe, gomoku, xiangqi, junqi, blackjack, memoryMatch, monopoly, dungeonCrawl, chineseCheckers]) {
       const smoke = smokeTestGameEngine(builtin.engine);
       if (!smoke.ok) {
         this.games.set(builtin.manifest.id, {
@@ -24350,7 +24916,7 @@ var GameRegistry = class _GameRegistry {
   }
   /** 装载一个导入目录：清单校验 → engines 门控 → view 静态检查 → 动态 import → duck 校验 → 烟测。 */
   async loadInstalled(directory) {
-    const broken = (manifest9, reason) => ({ source: "imported", manifest: manifest9, engine: null, viewHtml: null, status: "broken", reason, directory });
+    const broken = (manifest10, reason) => ({ source: "imported", manifest: manifest10, engine: null, viewHtml: null, status: "broken", reason, directory });
     let raw;
     try {
       raw = JSON.parse(await fs15.readFile(join19(directory, "game.json"), "utf8"));
@@ -24365,13 +24931,13 @@ var GameRegistry = class _GameRegistry {
       const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange);
       if (!verdict.ok) return broken(check.manifest, `\u7248\u672C\u4E0D\u6EE1\u8DB3: ${verdict.reason}`);
     }
-    let viewHtml9;
+    let viewHtml10;
     try {
-      viewHtml9 = await fs15.readFile(join19(directory, "view.html"), "utf8");
+      viewHtml10 = await fs15.readFile(join19(directory, "view.html"), "utf8");
     } catch {
       return broken(check.manifest, "view.html \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
     }
-    const viewProblem = staticViewCheck(viewHtml9);
+    const viewProblem = staticViewCheck(viewHtml10);
     if (viewProblem !== void 0) return broken(check.manifest, `view.html ${viewProblem}`);
     const enginePath = join19(directory, "engine.mjs");
     const stat = await fs15.stat(enginePath).catch(() => void 0);
@@ -24391,7 +24957,7 @@ var GameRegistry = class _GameRegistry {
     }
     const smoke = smokeTestGameEngine(engineCheck.engine);
     if (!smoke.ok) return broken(check.manifest, `\u70DF\u6D4B\u5931\u8D25: ${smoke.reasons.join("; ")}`);
-    return { source: "imported", manifest: engineCheck.engine.meta, engine: engineCheck.engine, viewHtml: viewHtml9, status: "ok", reason: "", directory };
+    return { source: "imported", manifest: engineCheck.engine.meta, engine: engineCheck.engine, viewHtml: viewHtml10, status: "ok", reason: "", directory };
   }
   /**
    * 从本地目录安装（POST games/install {path}）：校验源目录 → 拷入
@@ -24457,8 +25023,8 @@ var GameRegistry = class _GameRegistry {
     const record = definition;
     const engineCheck = checkGameEngine(record.engine);
     if (!engineCheck.ok) throw new Error(`\u6E38\u620F\u5F15\u64CE\u6821\u9A8C\u5931\u8D25: ${engineCheck.errors.join("; ")}`);
-    const engine9 = engineCheck.engine;
-    const manifest9 = engine9.meta;
+    const engine10 = engineCheck.engine;
+    const manifest10 = engine10.meta;
     const redundant = [
       ["id", record.id],
       ["name", record.name],
@@ -24468,29 +25034,29 @@ var GameRegistry = class _GameRegistry {
       ["actionVocabulary", record.actionVocabulary]
     ];
     for (const [key, value] of redundant) {
-      if (JSON.stringify(value) !== JSON.stringify(manifest9[key])) {
+      if (JSON.stringify(value) !== JSON.stringify(manifest10[key])) {
         throw new Error(`\u6CE8\u518C\u5B57\u6BB5 ${key} \u4E0E engine.meta.${key} \u4E0D\u4E00\u81F4\uFF08\u8FD0\u884C\u65F6\u4EE5 meta \u4E3A\u51C6\uFF0C\u4E24\u4FA7\u5FC5\u987B\u76F8\u7B49\uFF09`);
       }
     }
-    const smoke = smokeTestGameEngine(engine9);
+    const smoke = smokeTestGameEngine(engine10);
     if (!smoke.ok) throw new Error(`\u5F15\u64CE\u70DF\u6D4B\u5931\u8D25: ${smoke.reasons.join("; ")}`);
     if (typeof record.view !== "string" || record.view.trim() === "") {
       throw new Error("view \u5FC5\u987B\u662F\u975E\u7A7A HTML \u5B57\u7B26\u4E32\uFF08Mod \u6E38\u620F\u89C6\u56FE\u8D70\u5185\u8054\u7EAA\u5F8B\uFF0C\u65E0\u9759\u6001\u6587\u4EF6\u670D\u52A1\uFF09");
     }
     const viewProblem = staticViewCheck(record.view);
     if (viewProblem !== void 0) throw new Error(`view ${viewProblem}`);
-    if (this.get(manifest9.id) !== void 0) {
-      throw new Error(`game '${manifest9.id}' is already registered (builtin, imported or another mod holds this id)`);
+    if (this.get(manifest10.id) !== void 0) {
+      throw new Error(`game '${manifest10.id}' is already registered (builtin, imported or another mod holds this id)`);
     }
-    this.modGames.set(manifest9.id, {
+    this.modGames.set(manifest10.id, {
       source: "mod",
-      manifest: manifest9,
-      engine: engine9,
+      manifest: manifest10,
+      engine: engine10,
       viewHtml: record.view,
       status: "ok",
       reason: ""
     });
-    return this.summaries().find((summary) => summary.id === manifest9.id);
+    return this.summaries().find((summary) => summary.id === manifest10.id);
   }
   /**
    * Mod 游戏反注册（Mod 卸载经宿主 offRegistrations 调用）。engine 传入时做
@@ -24499,10 +25065,10 @@ var GameRegistry = class _GameRegistry {
    * 源不受本方法影响。摘除后其活跃会话由 sessions 的孤儿判定（按 gameId 动态
    * 查注册表）自然接管——可查看不可落子。
    */
-  unregisterModGame(id, engine9) {
+  unregisterModGame(id, engine10) {
     const entry = this.modGames.get(id);
     if (entry === void 0) return false;
-    if (engine9 !== void 0 && entry.engine !== engine9) return false;
+    if (engine10 !== void 0 && entry.engine !== engine10) return false;
     this.modGames.delete(id);
     return true;
   }
@@ -24522,10 +25088,10 @@ function directoryNameOf(directory) {
   const parts = directory.split(/[\\/]/).filter(Boolean);
   return parts.at(-1) ?? directory;
 }
-function staticViewCheck(viewHtml9) {
-  if (/src\s*=\s*["']https?:/i.test(viewHtml9)) return "\u5305\u542B\u5916\u94FE script/\u8D44\u6E90\uFF08\u5FC5\u987B\u81EA\u5305\u542B\uFF09";
-  if (/href\s*=\s*["']https?:/i.test(viewHtml9)) return "\u5305\u542B\u5916\u94FE\u6837\u5F0F/\u94FE\u63A5\uFF08\u5FC5\u987B\u81EA\u5305\u542B\uFF09";
-  if (viewHtml9.includes("fetch(")) return "\u5305\u542B fetch \u7F51\u7EDC\u8C03\u7528\uFF08connect-src 'none' \u7EAA\u5F8B\uFF09";
+function staticViewCheck(viewHtml10) {
+  if (/src\s*=\s*["']https?:/i.test(viewHtml10)) return "\u5305\u542B\u5916\u94FE script/\u8D44\u6E90\uFF08\u5FC5\u987B\u81EA\u5305\u542B\uFF09";
+  if (/href\s*=\s*["']https?:/i.test(viewHtml10)) return "\u5305\u542B\u5916\u94FE\u6837\u5F0F/\u94FE\u63A5\uFF08\u5FC5\u987B\u81EA\u5305\u542B\uFF09";
+  if (viewHtml10.includes("fetch(")) return "\u5305\u542B fetch \u7F51\u7EDC\u8C03\u7528\uFF08connect-src 'none' \u7EAA\u5F8B\uFF09";
   return void 0;
 }
 
@@ -24673,7 +25239,7 @@ var GameSessionStore = class _GameSessionStore {
     if (entry === void 0 || entry.status !== "ok" || entry.engine === null) {
       throw new GameBridgeError("unavailable", `\u4F1A\u8BDD\u7684\u6E38\u620F '${session.gameId}' \u5DF2\u4E0D\u5728\u6CE8\u518C\u8868\uFF08orphaned\uFF09\uFF0C\u5BF9\u5C40\u53EA\u8BFB\u4E0D\u53EF\u843D\u5B50`);
     }
-    const engine9 = entry.engine;
+    const engine10 = entry.engine;
     const roles = entry.manifest.players.roles;
     if (session.finished) {
       throw new GameBridgeError("turn", `\u5BF9\u5C40\u5DF2\u7ED3\u675F\uFF08${session.summary}\uFF09\uFF0C\u4E0D\u80FD\u518D\u843D\u5B50`);
@@ -24718,13 +25284,13 @@ var GameSessionStore = class _GameSessionStore {
       summary = describe;
     } else {
       try {
-        describe = engine9.describe(session.state, actor, action);
+        describe = engine10.describe(session.state, actor, action);
       } catch {
         describe = `${actor} \u7684\u52A8\u4F5C ${action.type}`;
       }
       let result;
       try {
-        result = engine9.applyAction(session.state, action, actor);
+        result = engine10.applyAction(session.state, action, actor);
       } catch (cause) {
         throw new GameBridgeError("illegal", cause instanceof Error ? cause.message : String(cause));
       }
@@ -24867,9 +25433,9 @@ function gameBridgeScript() {
   });
 })();`;
 }
-function renderGameViewDocument(viewHtml9) {
+function renderGameViewDocument(viewHtml10) {
   const bridge = `<script>${gameBridgeScript()}</script>`;
-  const document = String(viewHtml9 ?? "");
+  const document = String(viewHtml10 ?? "");
   const headMatch = /<head(?:\s[^>]*)?>/i.exec(document);
   if (headMatch !== null) {
     const at = headMatch.index + headMatch[0].length;
@@ -24966,8 +25532,8 @@ async function openGamesService(options) {
       emitGamesChanged();
       return { game };
     },
-    unregisterModGame(id, engine9) {
-      const removed = registry.unregisterModGame(id, engine9);
+    unregisterModGame(id, engine10) {
+      const removed = registry.unregisterModGame(id, engine10);
       if (removed) emitGamesChanged();
       return removed;
     },
@@ -30718,7 +31284,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.5".trim() : "";
-  const commit = true ? normalizeCommit("22be0df") : void 0;
+  const commit = true ? normalizeCommit("69d6a85") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

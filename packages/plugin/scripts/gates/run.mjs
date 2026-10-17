@@ -422,6 +422,11 @@ function checkServerText(text) {
   if (!text.includes('dsh-soulmojito.dungeon-crawl')) {
     problems.push('server bundle must ship the builtin dungeon-crawl game (dsh-soulmojito.dungeon-crawl)')
   }
+  // 内置中国跳棋（2026-10-17）：同款纪律——id 字面量须在 bundle 里（引擎 MANIFEST
+  // 与视图 data-game 标记双处都有）——丢失即判定内置游戏未随包分发。
+  if (!text.includes('dsh-soulmojito.chinese-checkers')) {
+    problems.push('server bundle must ship the builtin chinese-checkers game (dsh-soulmojito.chinese-checkers)')
+  }
   // 地牢爬行视图反馈层（2026-10-16 用户需求「攻击等交互事件应弹出显眼的提示，
   // 在 PC 上支持 WASD 和方向键以及 JKL 绑定操作」）：事件提示栈与飘字伤害的
   // 容器/类名标记丢失即判定反馈层被拆（象棋将军提示层同款纪律）。
@@ -2009,7 +2014,7 @@ const gates = [
       const versionReader = 'readFileSync("version.json", "utf8"); var BUILD_INFO = { version: "0.0.0", commit: "stub" };'
       const commitResolver = 'function resolveCommit() { execFileSync("git", ["rev-parse", "--show-toplevel"]); return "stub"; } var TAVERN_COMMIT = resolveCommit();'
       const localEmbed = '"local-onnx:"\n\'@huggingface/transformers\'\nvar localStatus = { runtimeInstalled: true };\nfunction inferLocalModelSettings() {}\n"memory/embed/local/install"\nfunction detectLocalQuantizations() {}\n"memory/embed/local/quantizations"\nfunction resolveLocalDtype() {}'
-      const gamesBridge = '"dsh-soulmojito:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';\nvar builtinGomoku = "dsh-soulmojito.gomoku";\nvar builtinXiangqi = "dsh-soulmojito.xiangqi";\nvar builtinJunqi = "dsh-soulmojito.junqi";\nvar builtinBlackjack = "dsh-soulmojito.blackjack";\nvar builtinMemory = "dsh-soulmojito.memory-match";\nvar builtinMonopoly = "dsh-soulmojito.monopoly";\nvar builtinDungeonCrawl = "dsh-soulmojito.dungeon-crawl";\nvar dcToastStack = "dc-toast-stack";\nvar dcFloatNum = "dc-float-num";\nvar xiangqiCheckBanner = "#banner.check";\nvar xiangqiCheckHalo = "check-halo";\nvar waitersKey = "dsh-soulmojito:games-waiters";\nvar noticeId = "game-notice-" + sessionId;\nvar resignKey = "gamesDisableResign";\nfunction assertResignAllowed(action) {}\nfunction turnReachedAgent(session) {}\nfunction agentTurnRunning(agent) {}'
+      const gamesBridge = '"dsh-soulmojito:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';\nvar builtinGomoku = "dsh-soulmojito.gomoku";\nvar builtinXiangqi = "dsh-soulmojito.xiangqi";\nvar builtinJunqi = "dsh-soulmojito.junqi";\nvar builtinBlackjack = "dsh-soulmojito.blackjack";\nvar builtinMemory = "dsh-soulmojito.memory-match";\nvar builtinMonopoly = "dsh-soulmojito.monopoly";\nvar builtinDungeonCrawl = "dsh-soulmojito.dungeon-crawl";\nvar builtinChineseCheckers = "dsh-soulmojito.chinese-checkers";\nvar dcToastStack = "dc-toast-stack";\nvar dcFloatNum = "dc-float-num";\nvar xiangqiCheckBanner = "#banner.check";\nvar xiangqiCheckHalo = "check-halo";\nvar waitersKey = "dsh-soulmojito:games-waiters";\nvar noticeId = "game-notice-" + sessionId;\nvar resignKey = "gamesDisableResign";\nfunction assertResignAllowed(action) {}\nfunction turnReachedAgent(session) {}\nfunction agentTurnRunning(agent) {}'
       // 改名兼容（2026-10-16）fixture 段：旧持久化名 / 旧 env 前缀 / 旧游戏
       // 命名空间别名前缀各恰好出现一次（负样本替换唯一命中）。
       const renameCompat = 'var legacyName = "dsh-tavern";\nvar legacyEnvPrefix = "DSH_TAVERN_DISABLE_UPDATE_CHECK";\nvar legacyGamePrefix = "dsh-tavern.";'
@@ -2035,6 +2040,8 @@ const gates = [
       const badGamesMonopoly = good.replace('"dsh-soulmojito.monopoly"', '"monopoly-removed"')
       // 内置地牢爬行（2026-10-16）负样本：替换名不含原 marker 子串（同款核对）。
       const badGamesDungeonCrawl = good.replace('"dsh-soulmojito.dungeon-crawl"', '"dungeon-crawl-removed"')
+      // 内置中国跳棋（2026-10-17）负样本：替换名不含原 marker 子串（同款核对）。
+      const badGamesChineseCheckers = good.replace('"dsh-soulmojito.chinese-checkers"', '"chinese-checkers-removed"')
       // 地牢爬行视图反馈层（2026-10-16）负样本：替换类名不含原子串。
       const badDcToastStack = good.replace('"dc-toast-stack"', '"toast-stack-gone"')
       const badDcFloatNum = good.replace('"dc-float-num"', '"float-num-gone"')
@@ -2078,6 +2085,7 @@ const gates = [
         && checkServerText(badGamesMemory).length > 0
         && checkServerText(badGamesMonopoly).length > 0
         && checkServerText(badGamesDungeonCrawl).length > 0
+        && checkServerText(badGamesChineseCheckers).length > 0
         && checkServerText(badDcToastStack).length > 0
         && checkServerText(badDcFloatNum).length > 0
         && checkServerText(badGamesWaiters).length > 0

@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { gomokuEngine, manifest as gomokuManifest, viewHtml as gomokuViewHtml } from '../src/games/builtin/gomoku.js'
+import { chineseCheckersEngine } from '../src/games/builtin/chinese-checkers.js'
 import { dungeonCrawlEngine } from '../src/games/builtin/dungeon-crawl.js'
 import { junqiEngine } from '../src/games/builtin/junqi.js'
 import { monopolyEngine } from '../src/games/builtin/monopoly.js'
@@ -534,6 +535,12 @@ describe('烟测 smokeTestGameEngine（§4.6）', () => {
     expect(result.reasons).toEqual([])
   })
 
+  it('中国跳棋引擎通过同一套五关（标准面前人人平等）', () => {
+    const result = smokeTestGameEngine(chineseCheckersEngine)
+    expect(result.ok).toBe(true)
+    expect(result.reasons).toEqual([])
+  })
+
   it('非确定引擎（applyAction 用 Math.random）必翻红', () => {
     const broken: GameEngine = {
       ...ticTacToe,
@@ -603,7 +610,7 @@ describe('registry 内置源（§4.1）', () => {
     const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.0' })
     const summaries = registry.summaries()
     expect(summaries.filter((summary) => summary.source === 'builtin').map((summary) => summary.id))
-      .toEqual(['dsh-soulmojito.blackjack', 'dsh-soulmojito.dungeon-crawl', 'dsh-soulmojito.gomoku', 'dsh-soulmojito.junqi', 'dsh-soulmojito.memory-match', 'dsh-soulmojito.monopoly', 'dsh-soulmojito.tic-tac-toe', 'dsh-soulmojito.xiangqi'])
+      .toEqual(['dsh-soulmojito.blackjack', 'dsh-soulmojito.chinese-checkers', 'dsh-soulmojito.dungeon-crawl', 'dsh-soulmojito.gomoku', 'dsh-soulmojito.junqi', 'dsh-soulmojito.memory-match', 'dsh-soulmojito.monopoly', 'dsh-soulmojito.tic-tac-toe', 'dsh-soulmojito.xiangqi'])
     const gomokuSummary = summaries.find((summary) => summary.id === 'dsh-soulmojito.gomoku')!
     expect(gomokuSummary.name).toBe('五子棋')
     expect(gomokuSummary.status).toBe('ok')
