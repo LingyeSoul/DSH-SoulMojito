@@ -55,7 +55,7 @@ _Avoid_: prompt 拼接器
 
 ## 文档纪律
 
-**提案**（`docs/proposals/NNNN-*.md`）：架构级新特性的设计契约，编号递增，实现后 README 文档节挂链接。
+**提案**（`docs/proposals/NNNN-*.md`）：架构级新特性的设计契约，编号递增，实现后在 `docs/README.md` 的提案表登记（根 `README.md` 只保留产品面入口）。
 **决策**（`decisions/YYYY-MM-DD-*.md`）：单次落地决策的记录——问题、方案、否决项、与规格的偏差。
 **探索**（`docs/exploration/YYYY-MM-DD-*.md`）：调研归档，结论必须带证据坐标（文件:行号）。
 
