@@ -29,6 +29,7 @@ const SOURCE_PATH = join(PLUGIN_ROOT, 'src', 'index.ts')
 const SERVER_PATH = join(PLUGIN_ROOT, 'index.mjs')
 const AGENT_PATH = join(PLUGIN_ROOT, 'agent.mjs')
 const NOVEL_PATH = join(PLUGIN_ROOT, 'novel.mjs')
+const REASONING_PATH = join(PLUGIN_ROOT, 'reasoning.mjs')
 const CLIENT_PATH = join(PLUGIN_ROOT, 'client', 'index.js')
 const PLUGIN_NAME = 'dsh-soulmojito'
 const API_PREFIX = '/api/dsh-soulmojito'
@@ -178,13 +179,16 @@ function checkPackageObject(pkg, checkFiles = false) {
   if (pkg.exports?.['./card-workbench'] !== './card-workbench.mjs') {
     problems.push("exports['./card-workbench'] must be './card-workbench.mjs'")
   }
+  if (pkg.exports?.['./reasoning'] !== './reasoning.mjs') {
+    problems.push("exports['./reasoning'] must be './reasoning.mjs'")
+  }
   if (pkg.exports?.['./package.json'] !== './package.json') {
     problems.push("exports['./package.json'] must be './package.json'")
   }
   if (!Array.isArray(pkg.files)) {
     problems.push('files must be an array')
   } else {
-    for (const entry of ['index.mjs', 'agent.mjs', 'compaction.mjs', 'novel.mjs', 'card-workbench.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md']) {
+    for (const entry of ['index.mjs', 'agent.mjs', 'compaction.mjs', 'novel.mjs', 'card-workbench.mjs', 'reasoning.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md']) {
       if (!pkg.files.includes(entry)) problems.push(`files must include '${entry}'`)
     }
   }
@@ -214,6 +218,7 @@ function checkPackageObject(pkg, checkFiles = false) {
       ["exports['./agent']", pkg.exports?.['./agent']],
       ["exports['./compaction']", pkg.exports?.['./compaction']],
       ["exports['./card-workbench']", pkg.exports?.['./card-workbench']],
+      ["exports['./reasoning']", pkg.exports?.['./reasoning']],
       ["exports['./package.json']", pkg.exports?.['./package.json']],
       ['dsh.bundle.patch', pkg.dsh?.bundle?.patch],
     ]) {
@@ -314,7 +319,11 @@ function checkPatchText(text) {
   // 目标包名对、config.id 与 bundle 内常量一致。config.id 是会话日志里的
   // agent-preset/selected 持久值——改 id 会让旧会话的 preset 恢复被宿主拒绝
   // （"rejects a missing definition"），所以这里同时锁定 patch 与产物两侧。
-  for (const [rowId, presetId] of [['preset-agent-tavern', 'agent-tavern'], ['preset-agent-novel', 'agent-novel']]) {
+  for (const [rowId, presetId] of [
+    ['preset-agent-tavern', 'agent-tavern'],
+    ['preset-agent-novel', 'agent-novel'],
+    ['preset-agent-reasoning', 'agent-reasoning'],
+  ]) {
     if (!entries.some((entry) => entry.id === rowId && entry.name === '@deepseek-ai/dsh-agent-preset')) {
       problems.push(`patch must insert preset row '${rowId}' targeting @deepseek-ai/dsh-agent-preset`)
     }
@@ -850,8 +859,11 @@ function checkInternalWorkspaceText(serverText, clientText) {
     'function ensureTavernWorkspace(ctx)',
     'function ensureWorkbenchWorkspace(ctx)',
     'ctx.workspaces.create({ path: config.path })',
-        'function connectTavernWorkspace(ctx, workspaceId)',
-    'uiWorkspace.connectWorkspace(workspaceId)',
+    'function connectTavernWorkspace(ctx, workspaceId, agentPreset)',
+    "connectTavernWorkspace(ctx, workspace.workspaceId, 'agent-tavern')",
+    "connectTavernWorkspace(ctx, workspace.workspaceId, 'agent-novel')",
+    "connectTavernWorkspace(ctx, workspace.workspaceId, 'card-workbench')",
+    'uiWorkspace.connectWorkspace(workspaceId, options)',
     'ctx.workspaces.connectWorkspace(workspaceId)',
     'function pluginWorkspaceSnapshots(ctx)',
     'normalizeWorkspacePath(item?.path) === expectedPath',
@@ -1353,6 +1365,13 @@ const PRIMITIVES_PACKAGE = '@deepseek-ai/dsh-client-ui-primitives'
  * old names destructures undefined and renders React #130 into every slot that
  * mounts the icon, so the client VM gate compares against this table instead of
  * handing out a stub for any name.
+ *
+ * DSH 0.2.1-rc.2 stopped installing @deepseek-ai/dsh-client-ui-primitives as a
+ * resolvable package: the module now ships only inside the web frontend bundle
+ * and reaches client modules through __ModuleLoader__'s built-in module table.
+ * Read the package when it exists (0.2.0 installs, future re-ships), otherwise
+ * decode the same table from the frontend asset that the browser will actually
+ * load — never skip the parity check just because the package moved.
  */
 function hostPrimitiveExports() {
   const root = locateOfficialDependencyRoot()
@@ -1361,15 +1380,51 @@ function hostPrimitiveExports() {
     join(root, PRIMITIVES_PACKAGE, 'lib', 'index.js'),
     join(root, '@deepseek-ai', 'dsh', 'node_modules', PRIMITIVES_PACKAGE, 'lib', 'index.js'),
   ].find((candidate) => existsSync(candidate))
-  if (entry === undefined) return null
+  if (entry !== undefined) {
+    const names = exportNamesOf(readFileSync(entry, 'utf8'))
+    if (names.size > 0) return names
+  }
+  return frontendPrimitiveExports(root)
+}
+
+/** Parse `export { a, b as c }` blocks from a package entry. */
+function exportNamesOf(text) {
   const names = new Set()
-  for (const block of readFileSync(entry, 'utf8').matchAll(/export\s*\{([\s\S]*?)\}/g)) {
+  for (const block of text.matchAll(/export\s*\{([\s\S]*?)\}/g)) {
     for (const part of block[1].split(',')) {
       const name = part.trim().split(/\s+as\s+/).pop()?.trim()
       if (name) names.add(name)
     }
   }
-  return names.size > 0 ? names : null
+  return names
+}
+
+/**
+ * The frontend asset carries the primitive namespace as a frozen object:
+ * `const <id>=Object.freeze(Object.defineProperty({__proto__:null,Button:…,
+ * IconSparkleRegular:…},Symbol.toStringTag,…))`, and its client module table
+ * maps "@deepseek-ai/dsh-client-ui-primitives" to that identifier. Decode the
+ * keys of the mapped object: they are exactly the names a browser `require`
+ * would expose.
+ */
+function frontendPrimitiveExports(root) {
+  const assets = join(root, '@deepseek-ai', 'dsh-web-frontend', 'dist', 'assets')
+  if (!existsSync(assets)) return null
+  for (const file of readdirSync(assets).filter((name) => name.endsWith('.js'))) {
+    const text = readFileSync(join(assets, file), 'utf8')
+    const id = /"@deepseek-ai\/dsh-client-ui-primitives":([A-Za-z_$][\w$]*)/.exec(text)?.[1]
+    if (id === undefined) continue
+    const marker = `const ${id}=Object.freeze(Object.defineProperty({__proto__:null,`
+    const start = text.indexOf(marker)
+    if (start < 0) continue
+    const bodyStart = start + marker.length
+    const end = text.indexOf('},Symbol.toStringTag', bodyStart)
+    if (end < 0) continue
+    const names = new Set()
+    for (const match of text.slice(bodyStart, end).matchAll(/(?:^|,)([A-Za-z_$][\w$]*):/g)) names.add(match[1])
+    if (names.size > 0) return names
+  }
+  return null
 }
 
 const NODE_MOUNT_SCRIPT = String.raw`
@@ -2054,11 +2109,12 @@ const gates = [
           './compaction': './compaction.mjs',
           './novel': './novel.mjs',
           './card-workbench': './card-workbench.mjs',
+          './reasoning': './reasoning.mjs',
           './client': './client/index.js',
           './cordis.patch.yml': './cordis.patch.yml',
           './package.json': './package.json',
         },
-        files: ['index.mjs', 'agent.mjs', 'compaction.mjs', 'novel.mjs', 'card-workbench.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md'],
+        files: ['index.mjs', 'agent.mjs', 'compaction.mjs', 'novel.mjs', 'card-workbench.mjs', 'reasoning.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md'],
         dsh: {
           manifestVersion: 1,
           bundle: { patch: './cordis.patch.yml' },
@@ -2085,9 +2141,12 @@ const gates = [
         + '    - id: dsh-soulmojito\n      name: \'dsh-soulmojito\'\n'
         + '    - id: preset-agent-tavern\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-tavern\n'
         + '    - id: preset-agent-novel\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-novel\n'
+        + '    - id: preset-agent-reasoning\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-reasoning\n'
       const bad = "- insert:\n    - id: other\n      name: 'other'\n"
       const badPresetId = good.replace('id: agent-tavern', 'id: agent-tavern-x')
-      return checkPatchText(good).length === 0 && checkPatchText(bad).length > 0 && checkPatchText(badPresetId).length > 0
+      const badReasoningId = good.replace('id: agent-reasoning', 'id: agent-reasoning-x')
+      return checkPatchText(good).length === 0 && checkPatchText(bad).length > 0
+        && checkPatchText(badPresetId).length > 0 && checkPatchText(badReasoningId).length > 0
         ? []
         : ['patch reference bad samples were not rejected']
     },
@@ -2098,7 +2157,12 @@ const gates = [
         const server = readFileSync(SERVER_PATH, 'utf8')
         if (!server.includes('agent-tavern')) problems.push('built server bundle lost the agent-tavern preset id constant')
       }
-      for (const [path, presetId] of [[AGENT_PATH, 'agent-tavern'], [NOVEL_PATH, 'agent-novel']]) {
+      for (const [path, presetId] of [
+        [AGENT_PATH, 'agent-tavern'],
+        [NOVEL_PATH, 'agent-novel'],
+        [AGENT_PATH, 'agent-reasoning'],
+        [NOVEL_PATH, 'agent-reasoning'],
+      ]) {
         if (!existsSync(path)) {
           problems.push(`generated ${path} does not exist`)
           continue
@@ -2106,6 +2170,9 @@ const gates = [
         if (!readFileSync(path, 'utf8').includes(presetId)) {
           problems.push(`built ${basename(path)} lost the '${presetId}' preset id constant`)
         }
+      }
+      if (!existsSync(REASONING_PATH)) {
+        problems.push(`generated ${REASONING_PATH} does not exist`)
       }
       return problems
     },
@@ -2599,8 +2666,11 @@ const gates = [
         'function ensureTavernWorkspace(ctx)',
         'function ensureWorkbenchWorkspace(ctx)',
         'ctx.workspaces.create({ path: config.path })',
-                'function connectTavernWorkspace(ctx, workspaceId)',
-        'uiWorkspace.connectWorkspace(workspaceId)',
+        'function connectTavernWorkspace(ctx, workspaceId, agentPreset)',
+        "connectTavernWorkspace(ctx, workspace.workspaceId, 'agent-tavern')",
+        "connectTavernWorkspace(ctx, workspace.workspaceId, 'agent-novel')",
+        "connectTavernWorkspace(ctx, workspace.workspaceId, 'card-workbench')",
+        'uiWorkspace.connectWorkspace(workspaceId, options)',
         'ctx.workspaces.connectWorkspace(workspaceId)',
         'function pluginWorkspaceSnapshots(ctx)',
         'normalizeWorkspacePath(item?.path) === expectedPath',
@@ -2613,8 +2683,11 @@ const gates = [
         'function ensureTavernWorkspace(ctx)',
         'function ensureWorkbenchWorkspace(ctx)',
         'ctx.workspaces.create({ path: config.path })',
-                'function connectTavernWorkspace(ctx, workspaceId)',
-        'uiWorkspace.connectWorkspace(workspaceId)',
+        'function connectTavernWorkspace(ctx, workspaceId, agentPreset)',
+        "connectTavernWorkspace(ctx, workspace.workspaceId, 'agent-tavern')",
+        "connectTavernWorkspace(ctx, workspace.workspaceId, 'agent-novel')",
+        "connectTavernWorkspace(ctx, workspace.workspaceId, 'card-workbench')",
+        'uiWorkspace.connectWorkspace(workspaceId, options)',
         'ctx.workspaces.connectWorkspace(workspaceId)',
         "if (node.textContent === 'Tavern (internal)') node.hidden = true",
       ].join('\n')

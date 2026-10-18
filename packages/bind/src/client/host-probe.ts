@@ -64,18 +64,29 @@ export function createClientShapeTrace(): ClientShapeTrace {
   return { connectCalls: 0, openSessionCalls: 0, retainCalls: 0 }
 }
 
+/** 连接工作区时可选的宿主创建参数；DSH 0.2.1 起 connectWorkspace 支持指定 preset。 */
+export interface ConnectHostWorkspaceOptions {
+  agentPreset?: string
+}
+
 export function connectHostWorkspace(
   ctx: ClientWorkspaceContext,
   workspaceId: string,
   trace?: ClientShapeTrace,
+  options?: ConnectHostWorkspaceOptions,
 ): unknown {
-  const uiWorkspace = ctx.get?.('uiWorkspace') as { connectWorkspace?: (id: string) => unknown } | undefined
+  const uiWorkspace = ctx.get?.('uiWorkspace') as {
+    connectWorkspace?: (id: string, options?: ConnectHostWorkspaceOptions) => unknown
+  } | undefined
   if (typeof uiWorkspace?.connectWorkspace === 'function') {
     if (trace) {
       trace.connectPath = 'uiWorkspace'
       trace.connectCalls += 1
     }
-    return uiWorkspace.connectWorkspace(workspaceId)
+    // 0.2.1 起 connectWorkspace 把 agentPreset 直通 sessions.create；会话从
+    // 第一刻就以目标 preset 创建，避免宿主把 blank 会话按默认 preset 复用时
+    // 把已激活的组合改回 standard。旧宿主的 connectWorkspace 忽略第二参。
+    return uiWorkspace.connectWorkspace(workspaceId, options)
   }
   if (typeof ctx.workspaces?.connectWorkspace === 'function') {
     if (trace) {

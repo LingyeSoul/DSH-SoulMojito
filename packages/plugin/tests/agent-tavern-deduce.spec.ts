@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEDUCE_POSITION_LIMIT,
+  REASONING_PRESET_ID,
   deductionSharedBody,
   parseDeductionRequest,
   roleRoundPrompt,
   runDeduction,
+  spawnSubagent,
   subagentRuntimeOf,
   type ContentBlockLike,
   type DeductionRequest,
@@ -250,6 +252,78 @@ describe('tavern_deduce runtime probe', () => {
     })).toBeUndefined()
   })
 })
+
+describe('spawnSubagent host API compatibility', () => {
+  it('maps the DSH 0.2.1 startActivation shape: childId, delivery caller, preset instead of toolFilter', async () => {
+    const calls: Array<Record<string, unknown>> = []
+    const disposed: string[] = []
+    const runtime: SubagentRuntimeLike = {
+      async startActivation(spec) {
+        calls.push(spec as unknown as Record<string, unknown>)
+        return {
+          childId: 'child-42',
+          result: Promise.resolve({ output: [{ type: 'text', text: 'ok' }], stopReason: 'completed' }),
+          async dispose() { disposed.push('child-42') },
+        }
+      },
+    }
+    const run = await spawnSubagent(runtime, {
+      label: 'probe',
+      prompt: [{ type: 'text', text: 'hi' }],
+      parent: { id: 'parent-1' },
+      signal: new AbortController().signal,
+      toolFilter: { allow: [] },
+      agentPreset: REASONING_PRESET_ID,
+    })
+    expect(calls[0]).toMatchObject({
+      provider: 'spawn',
+      label: 'probe',
+      delivery: 'caller',
+      request: { prompt: [{ type: 'text', text: 'hi' }], parent: { id: 'parent-1' }, agentPreset: 'agent-reasoning' },
+    })
+    expect((calls[0]!.request as Record<string, unknown>).toolFilter).toBeUndefined()
+    expect(run.id).toBe('child-42')
+    await expect(run.result).resolves.toMatchObject({ stopReason: 'completed', output: [{ type: 'text', text: 'ok' }] })
+    await run.dispose()
+    expect(disposed).toEqual(['child-42'])
+  })
+
+  it('keeps the DSH 0.2.0 start path and strips the preset-only field', async () => {
+    const calls: Array<{ provider: string; request: Record<string, unknown> }> = []
+    const runtime: SubagentRuntimeLike = {
+      async start(provider, request) {
+        calls.push({ provider, request: request as unknown as Record<string, unknown> })
+        return {
+          id: 'run-7',
+          result: Promise.resolve({ output: [{ type: 'text', text: 'ok' }], stopReason: 'completed' }),
+          async dispose() {},
+        }
+      },
+    }
+    const run = await spawnSubagent(runtime, {
+      label: 'probe',
+      prompt: [{ type: 'text', text: 'hi' }],
+      parent: { id: 'parent-1' },
+      signal: new AbortController().signal,
+      toolFilter: { allow: [] },
+      agentPreset: REASONING_PRESET_ID,
+    })
+    expect(calls[0]!.provider).toBe('spawn')
+    expect(calls[0]!.request).toMatchObject({ toolFilter: { allow: [] } })
+    expect(calls[0]!.request.agentPreset).toBeUndefined()
+    expect(run.id).toBe('run-7')
+  })
+
+  it('fails loudly when the runtime exposes neither API', async () => {
+    await expect(spawnSubagent({}, {
+      label: 'probe',
+      prompt: [],
+      parent: null,
+      signal: new AbortController().signal,
+    })).rejects.toThrow('neither startActivation (DSH 0.2.1+) nor start (DSH 0.2.0)')
+  })
+})
+
 
 describe('tavern_deduce prompt builder', () => {
   it('keeps round 1 free of transcript and tools language positive', () => {

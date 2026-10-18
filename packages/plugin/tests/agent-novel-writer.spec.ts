@@ -1280,7 +1280,7 @@ describe('agent-novel writer tool integration', () => {
     expect(report.p1.status).toBe('pass')
     expect(calls[1]?.toolFilter).toEqual({ allow: [] })
     expect(report.p2.status).toBe('fail')
-    expect(report.p2.detail).toContain('empty allow list')
+    expect(report.p2.detail).toContain('should have no tools')
   })
 
   it('P2 passes observationally when the empty-allow subagent reports the tool unavailable', async () => {

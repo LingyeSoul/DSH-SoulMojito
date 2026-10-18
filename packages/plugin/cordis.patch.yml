@@ -55,6 +55,21 @@
           - id: tool-fs
             name: '@deepseek-ai/dsh-tool-fs'
 
+    # 内部推理组合（DSH 0.2.1+）：spawn 子代理的 per-spawn toolFilter 被宿主
+    # 删除后，无工具隔离改由独立 preset 承担。tavern_deduce 与 AgentNovel 的
+    # W1 纯产稿子代理按 id 选择本组合；preset 内只有 reasoning 模块，它在挂载
+    # 域 restrict 掉全部宿主全局工具。不要在 UI 里把它当普通角色预设使用。
+    - id: preset-agent-reasoning
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: agent-reasoning
+        name: AgentReasoning
+        description: 内部无工具推理子代理（tavern_deduce 与小说纯产稿隔离环境）。
+        order: 13
+        plugins:
+          - id: dsh-soulmojito-reasoning
+            name: 'dsh-soulmojito/reasoning'
+
 # compaction curator：替换 dsh-base 的 compaction 后端（本 bundle 在
 # dsh-base/dsh-web-app 之后加载，patch 后写胜出）。宿主 patch 方言里覆写项
 # 的 `name` 是"条目当前模块名"守卫——不匹配只告警跳过、并不能改模块，所以

@@ -30,6 +30,7 @@ import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } 
 import { isTavernSessionMarker } from '../agent-tavern/projector.js'
 import { getAgentNovelCapabilities, getNovelDriverPromise, getNovelProjectorPromise, memories, novelStore, store } from '../runtime.js'
 import { TavernArchitectureConflictError } from '../session/binding.js'
+import { lastSelectedPresetId } from '../session/preset-marker.js'
 import { occupyHostSession } from '../session/trace.js'
 import { readJson, sendJson } from './io.js'
 
@@ -574,8 +575,10 @@ export async function handleNovelOpenCommand(
   }
   await bindNovelSession(db, agent.id, novelId)
   // Idempotent marker: a repeated novel-open on the same binding neither
-  // stacks markers nor recomposes twice.
-  if (!activationEvents.some((event) => event.type === 'agent-preset/selected' && event.data?.agentPreset === AGENT_NOVEL_PRESET_ID)) {
+  // stacks markers nor recomposes twice. Read the LAST selected preset: 0.2.1
+  // reuseLive can rewrite a blank session to the host default after the first
+  // selection, and a `some(...)` check would miss that clobber.
+  if (lastSelectedPresetId(agent.session) !== AGENT_NOVEL_PRESET_ID) {
     const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_NOVEL_PRESET_ID)
     agent.session.append('agent-preset/selected', { agentPreset: preset.id })
   }
@@ -659,7 +662,8 @@ export async function handleWorkbenchOpenCommand(
     },
   }))
   // 幂等 marker：重复 workbench-open 不叠加 marker 也不重复 recompose。
-  if (!activationEvents.some((event) => event.type === 'agent-preset/selected' && event.data?.agentPreset === CARD_WORKBENCH_PRESET_ID)) {
+  // 0.2.1 的 reuseLive 可能把 blank 会话改回宿主默认 preset，因此只认最后一条。
+  if (lastSelectedPresetId(agent.session) !== CARD_WORKBENCH_PRESET_ID) {
     const preset = await ctx.agentPresets.recompose(agent.ctx, CARD_WORKBENCH_PRESET_ID)
     agent.session.append('agent-preset/selected', { agentPreset: preset.id })
   }

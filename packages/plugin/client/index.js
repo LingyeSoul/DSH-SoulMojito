@@ -96,14 +96,14 @@ window.__ModuleLoader__.load({
       function createClientShapeTrace() {
         return { connectCalls: 0, openSessionCalls: 0, retainCalls: 0 };
       }
-      function connectHostWorkspace(ctx, workspaceId, trace) {
+      function connectHostWorkspace(ctx, workspaceId, trace, options) {
         const uiWorkspace = ctx.get?.("uiWorkspace");
         if (typeof uiWorkspace?.connectWorkspace === "function") {
           if (trace) {
             trace.connectPath = "uiWorkspace";
             trace.connectCalls += 1;
           }
-          return uiWorkspace.connectWorkspace(workspaceId);
+          return uiWorkspace.connectWorkspace(workspaceId, options);
         }
         if (typeof ctx.workspaces?.connectWorkspace === "function") {
           if (trace) {
@@ -3392,12 +3392,17 @@ window.__ModuleLoader__.load({
       return workbenchWorkspacePromise
     }
 
-    function connectTavernWorkspace(ctx, workspaceId) {
+    function connectTavernWorkspace(ctx, workspaceId, agentPreset) {
       // uiWorkspace → workspaces 双面回退与形状轨迹记录在 @dsh-soulmojito/bind 的
       // client 探测模块（构建时经 __DSH_BIND_CLIENT_SLOT__ 注入，轨迹同步挂
-      // window.__DSH_SOULMOJITO_BIND__ 供诊断读取）；源文件 client/main.js 由
-      // scripts/build-plugin.mjs 拼接为产物 client/index.js。
-      return DshBindClient.connectHostWorkspace(ctx, workspaceId, clientShapeTrace)
+      // window.__DSH_SOULMOJITO_BIND__ 供诊断读取）；0.2.1 起 agentPreset 随
+      // connectWorkspace 直通 sessions.create，避免 blank 会话被默认 preset 复用。
+      return DshBindClient.connectHostWorkspace(
+        ctx,
+        workspaceId,
+        clientShapeTrace,
+        agentPreset === undefined ? undefined : { agentPreset },
+      )
     }
 
     function openSessionView(ctx, sessionId) {
@@ -3597,7 +3602,7 @@ window.__ModuleLoader__.load({
       const workspace = await ensureTavernWorkspace(ctx)
 
       update({ navigationStatus: translate('nav.opening', { name: character }) })
-      const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId)
+      const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId, 'agent-tavern')
       // 0.2.0-rc.2 起 connectWorkspace 内部走 sessions.create，不再隐式保留
       // 作用域，未 retain 时 ctx.sessions.binding() 恒为 undefined（宿主契约：
       // retain 后才能借 binding）。先以插件名义显式持有，openSessionView 建立
@@ -3690,7 +3695,7 @@ window.__ModuleLoader__.load({
           return existing[0]
         }
         const workspace = await ensureTavernWorkspace(ctx)
-        const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId)
+        const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId, 'agent-novel')
         // 与 openTavernChat 同因：0.2.0 宿主 connect 不再隐式 retain，先显式
         // 持有再借 binding，openSessionView 接棒 mainView 保留后归还。
         const heldSession = DshBindClient.retainHostSession(ctx, sessionId, clientShapeTrace)
@@ -3772,7 +3777,7 @@ window.__ModuleLoader__.load({
           }
         }
         const workspace = await ensureWorkbenchWorkspace(ctx)
-        const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId)
+        const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId, 'card-workbench')
         // 与 openTavernChat 同因：0.2.0 宿主 connect 不再隐式 retain，先显式
         // 持有再借 binding，openSessionView 接棒 mainView 保留后归还。
         const heldSession = DshBindClient.retainHostSession(ctx, sessionId, clientShapeTrace)
@@ -4045,7 +4050,6 @@ window.__ModuleLoader__.load({
     function selectTavernComposer(owner) {
       return isTavernSession(owner.session)
     }
-
     function readFile(file, binary) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader()

@@ -32,7 +32,7 @@
           return existing[0]
         }
         const workspace = await ensureTavernWorkspace(ctx)
-        const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId)
+        const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId, 'agent-novel')
         // 与 openTavernChat 同因：0.2.0 宿主 connect 不再隐式 retain，先显式
         // 持有再借 binding，openSessionView 接棒 mainView 保留后归还。
         const heldSession = DshBindClient.retainHostSession(ctx, sessionId, clientShapeTrace)
@@ -114,7 +114,7 @@
           }
         }
         const workspace = await ensureWorkbenchWorkspace(ctx)
-        const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId)
+        const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId, 'card-workbench')
         // 与 openTavernChat 同因：0.2.0 宿主 connect 不再隐式 retain，先显式
         // 持有再借 binding，openSessionView 接棒 mainView 保留后归还。
         const heldSession = DshBindClient.retainHostSession(ctx, sessionId, clientShapeTrace)
@@ -387,4 +387,3 @@
     function selectTavernComposer(owner) {
       return isTavernSession(owner.session)
     }
-

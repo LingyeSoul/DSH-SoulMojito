@@ -452,6 +452,47 @@ describe('internal Tavern session bridge occupation', () => {
     expect(agent.injections).toHaveLength(0)
   })
 
+  it('repairs a blank session whose last selected preset was clobbered to the host default', async () => {
+    recomposeCalls.length = 0
+    const agent = makeAgent('session-agent-clobbered')
+    agent.session.events.push(
+      { type: 'agent-preset/selected', data: { agentPreset: 'agent-tavern' } },
+      // DSH 0.2.1 reuseLive：blank 会话被默认 preset 复用后追加的第二条。
+      { type: 'agent-preset/selected', data: { agentPreset: 'standard' } },
+    )
+    const result = await handler({
+      agent,
+      rawInput: base64Url({ character: CHARACTER, chatId: emptyChatId, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+    })
+    expect(result.kind).toBe('success')
+    expect(recomposeCalls).toEqual([{ agent: agent.ctx, presetId: 'agent-tavern' }])
+    expect(agent.session.events
+      .filter((event) => event.type === 'agent-preset/selected')
+      .map((event) => (event.data as { agentPreset: string }).agentPreset))
+      .toEqual(['agent-tavern', 'standard', 'agent-tavern'])
+  })
+
+  it('refuses to re-select a started session whose last preset is explicitly different', async () => {
+    recomposeCalls.length = 0
+    const agent = makeAgent('session-agent-started-other-preset')
+    await store.updateState((state) => ({
+      sessionBindings: {
+        ...state.sessionBindings,
+        [agent.id]: { architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER, chatId: emptyChatId },
+      },
+    }))
+    agent.session.events.push(
+      { type: 'agent-preset/selected', data: { agentPreset: 'standard' } },
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
+    )
+    await expect(handler({
+      agent,
+      rawInput: base64Url({ character: CHARACTER, chatId: emptyChatId, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+    })).rejects.toThrow("already started under preset 'standard'")
+    expect(recomposeCalls).toEqual([])
+  })
+
   it('imports the greeting and existing history into a fresh AgentTavern session', async () => {
     const now = new Date().toISOString()
     const greetingChat = await store.createChat(CHARACTER, {

@@ -179,7 +179,7 @@
       const workspace = await ensureTavernWorkspace(ctx)
 
       update({ navigationStatus: translate('nav.opening', { name: character }) })
-      const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId)
+      const sessionId = await connectTavernWorkspace(ctx, workspace.workspaceId, 'agent-tavern')
       // 0.2.0-rc.2 起 connectWorkspace 内部走 sessions.create，不再隐式保留
       // 作用域，未 retain 时 ctx.sessions.binding() 恒为 undefined（宿主契约：
       // retain 后才能借 binding）。先以插件名义显式持有，openSessionView 建立
@@ -237,4 +237,4 @@
       return openTavernChat(ctx, character, result.id, group, policyOverride)
     }
 
-    function novelSessionLabel(title) {
+    function novelSessionLabel(title) {

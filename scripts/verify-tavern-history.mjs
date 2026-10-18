@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { zstdDecompressSync } from 'node:zlib'
 import vm from 'node:vm'
+import { openHostSessionPersistence } from './lib/host-session-persistence.mjs'
 
 /**
  * Logical region → candidate region names, probed across the available host
@@ -115,23 +116,15 @@ export function createHistoryValidator(dependencyRoot) {
 export function createHostPersistenceValidator(dependencyRoot, sessionRoot) {
   const root = resolve(dependencyRoot, '@deepseek-ai')
   const require = createRequire(resolve(root, 'index.js'))
-  const { Context } = require('@deepseek-ai/cordis')
-  const { SessionStore } = require('@deepseek-ai/dsh-session')
-  // 0.2.0-rc.2 的 jsonl 持久化包只导出 default（ESM default 转 CJS 后具名导出
-  // 不再可见）；老宿主是具名导出。两种形状都接，验证工具不能跟宿主版本锁死。
-  const persistenceModule = require('@deepseek-ai/dsh-session-persistence-jsonl')
-  const JsonlSessionPersistence = persistenceModule.JsonlSessionPersistence ?? persistenceModule.default
 
   return async (sessionId) => {
-    const context = new Context()
-    new SessionStore(context)
-    const persistence = new JsonlSessionPersistence(context, {
+    const persistence = await openHostSessionPersistence(require, {
       root: resolve(sessionRoot),
       compression: 'zstd',
     })
     // 0.2.0-rc.2 的 observe 入口是 open(id, 'read')：构造函数内部跑完
     // v0→…→v4 代际迁移链，"failed to observe session" 类错误（如 v2-to-v3
-    // 拒绝 turn 0）在 open/read 阶段抛出。老宿主的 inspect() 已删除。
+    // 拒绝 turn 0）在 open/read 阶段抛出。0.2.1+ 由插件 apply 建出同一服务。
     const handle = await persistence.open(sessionId, 'read')
     if (handle.id !== sessionId) {
       throw new Error(`Host persistence returned session ${handle.id} for ${sessionId}`)

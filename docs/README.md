@@ -53,6 +53,7 @@
 - [`2026-10-05-v0-session-turn-repair.md`](../decisions/2026-10-05-v0-session-turn-repair.md) — v0 会话工件的 turn 坐标修复（history 加载失败闭环）
 - [`2026-10-08-protected-surface-head.md`](../decisions/2026-10-08-protected-surface-head.md) — v4 受保护 surface 头：导入防写 + 存量修复
 - [`2026-10-11-confirmable-session-writes.md`](../decisions/2026-10-11-confirmable-session-writes.md) — D-2 Confirmable Session Writes：宿主侧「必须成立」写入的读回验证
+- [`2026-10-18-dsh-021-rc2-compat.md`](../decisions/2026-10-18-dsh-021-rc2-compat.md) — DSH 0.2.1-rc.2 深度适配：bind 全 seam 审计、子代理双 API、无工具推理 preset、client 原子表与 JSONL 持久化装载
 
 ### AgentTavern 与预设投影
 

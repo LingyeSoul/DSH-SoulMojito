@@ -62,6 +62,22 @@ describe('connectHostWorkspace', () => {
     expect(trace.connectCalls).toBe(1)
   })
 
+  it('forwards the agent preset to the 0.2.1 uiWorkspace create path', () => {
+    const calls: Array<{ id: string; options: unknown }> = []
+    const ctx = {
+      get: (serviceId: string) => serviceId === 'uiWorkspace'
+        ? {
+            connectWorkspace: (id: string, options?: unknown) => {
+              calls.push({ id, options })
+              return { via: 'uiWorkspace', id }
+            },
+          }
+        : undefined,
+    }
+    connectHostWorkspace(ctx, 'w-preset', undefined, { agentPreset: 'agent-tavern' })
+    expect(calls).toEqual([{ id: 'w-preset', options: { agentPreset: 'agent-tavern' } }])
+  })
+
   it('falls back to the rc.6 workspaces controller face when uiWorkspace is absent', () => {
     const { ctx, calls } = legacyWorkspacesHost()
     const trace = createClientShapeTrace()

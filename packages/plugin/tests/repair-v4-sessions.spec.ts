@@ -19,6 +19,8 @@ const SANDBOX = join(tmpdir(), `dsh-soulmojito-repair-v4-${process.pid}`)
 // 受保护头用例的独立根：两种 surface 形态放同一根，目录模式一次处理。
 const SANDBOX_HEAD = join(tmpdir(), `dsh-soulmojito-repair-v4-head-${process.pid}`)
 const SANDBOX_V0 = join(tmpdir(), `dsh-soulmojito-repair-v0-${process.pid}`)
+// preset 标记修复的独立根：一条已开始 v4 会话，最后 selected 被宿主默认覆盖。
+const SANDBOX_PRESET = join(tmpdir(), `dsh-soulmojito-repair-preset-${process.pid}`)
 
 function run(args: string[]) {
   return execFileSync(process.execPath, [join(REPO_ROOT, 'scripts', 'repair-v4-sessions.mjs'), ...args], {
@@ -41,6 +43,7 @@ afterAll(() => {
   rmSync(SANDBOX, { recursive: true, force: true })
   rmSync(SANDBOX_HEAD, { recursive: true, force: true })
   rmSync(SANDBOX_V0, { recursive: true, force: true })
+  rmSync(SANDBOX_PRESET, { recursive: true, force: true })
 })
 
 describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3-to-v4')))('repair-v4-sessions script', () => {
@@ -302,6 +305,43 @@ describe.skipIf(!existsSync(join(RUNTIME, '@deepseek-ai', 'dsh-session-format-v3
       expect(start).toBe(cursor)
       cursor += width
     }
+  })
+
+  it('appends a target preset marker to a started v4 session and passes host observe', { timeout: 60_000 }, () => {
+    const sessionDir = join(SANDBOX_PRESET, '--root-.dsh-tavern-workspace--', 'session-preset')
+    const artifact = join(sessionDir, 'session.v4.jsonl.zstd')
+    mkdirSync(sessionDir, { recursive: true })
+    writeV4Artifact(artifact, [
+      { type: 'session', version: 4, id: 'session-preset', createdAt: 1700000000000, cwd: '/root/.dsh/tavern/workspace', isSeeded: false, delegationDepth: 0 },
+      { type: 'agent-preset/selected', seq: 0, time: 1700000000001, data: { agentPreset: 'agent-tavern' } },
+      { type: 'agent-preset/selected', seq: 1, time: 1700000000002, data: { agentPreset: 'standard' } },
+      { type: 'turn/start', seq: 2, time: 1700000000003, data: { turn: 1 } },
+      { type: 'step/start', seq: 3, time: 1700000000004, data: { turn: 1, step: 1 } },
+      { type: 'system/message', seq: 4, time: 1700000000005, surfaceOp: 'append', data: { turn: 1, step: 1, message: { id: 's1', role: 'system', content: [], source: { kind: 'system-prompt' } } } },
+      { type: 'user/message', seq: 5, time: 1700000000006, surfaceOp: 'append', data: { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } } },
+      { type: 'assistant/message', seq: 6, time: 1700000000007, surfaceOp: 'append', data: { turn: 1, step: 1, stream: [], message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'ok' }], source: { kind: 'model', provider: 'p', model: 'm' } } } },
+      { type: 'step/end', seq: 7, time: 1700000000008, data: { turn: 1, step: 1 } },
+      { type: 'turn/end', seq: 8, time: 1700000000009, data: { turn: 1, reason: { kind: 'completed' } } },
+    ])
+
+    const dry = run([artifact, '--select-preset', 'agent-tavern', '--runtime', RUNTIME])
+    expect(dry).toContain("last selected 'standard' -> 'agent-tavern'")
+    expect(dry).toContain('re-run with --apply')
+
+    const applied = run([artifact, '--select-preset', 'agent-tavern', '--apply', '--runtime', RUNTIME])
+    expect(applied).toContain('host observe passes')
+    expect(applied).toContain('backup:')
+
+    const repaired = decodeArtifact(artifact)
+    expect(repaired[repaired.length - 1]).toMatchObject({
+      type: 'agent-preset/selected',
+      data: { agentPreset: 'agent-tavern' },
+    })
+    expect(repaired.filter((row) => row.type === 'agent-preset/selected').map((row) => row.data.agentPreset))
+      .toEqual(['agent-tavern', 'standard', 'agent-tavern'])
+
+    const again = run([artifact, '--select-preset', 'agent-tavern', '--runtime', RUNTIME])
+    expect(again).toContain('no-op')
   })
 
   it('leaves a healthy v0 artifact byte-identical (no over-repair)', () => {

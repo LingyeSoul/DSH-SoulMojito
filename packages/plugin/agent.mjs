@@ -6993,6 +6993,7 @@ function appendMvuReceipt(chat, receipt) {
 
 // packages/plugin/src/agent-tavern/deduce.ts
 var DEDUCE_PROVIDER = "spawn";
+var REASONING_PRESET_ID = "agent-reasoning";
 var DEDUCE_MAX_ROLES = 5;
 var DEDUCE_MIN_ROLES = 2;
 var DEDUCE_MAX_ROUNDS = 3;
@@ -7013,7 +7014,34 @@ function subagentRuntimeOf(parent) {
   return void 0;
 }
 function isRuntime(candidate) {
-  return typeof candidate === "object" && candidate !== null && typeof candidate.start === "function";
+  if (typeof candidate !== "object" || candidate === null) return false;
+  const runtime = candidate;
+  return typeof runtime.start === "function" || typeof runtime.startActivation === "function";
+}
+async function spawnSubagent(runtime, request) {
+  if (typeof runtime.startActivation === "function") {
+    const activation = await runtime.startActivation({
+      provider: DEDUCE_PROVIDER,
+      label: request.label,
+      request: {
+        prompt: request.prompt,
+        parent: request.parent,
+        ...request.agentPreset === void 0 ? {} : { agentPreset: request.agentPreset }
+      },
+      signal: request.signal,
+      delivery: "caller"
+    });
+    return {
+      id: activation.childId,
+      result: activation.result,
+      dispose: () => activation.dispose()
+    };
+  }
+  if (typeof runtime.start === "function") {
+    const { agentPreset: _ignored, ...legacy } = request;
+    return runtime.start(DEDUCE_PROVIDER, legacy);
+  }
+  throw new Error("subagent runtime exposes neither startActivation (DSH 0.2.1+) nor start (DSH 0.2.0)");
 }
 function parseDeductionRequest(args) {
   const scenario = boundedText(args.scenario, 2e3, "scenario");
@@ -7049,12 +7077,13 @@ async function runDeduction(deps, request) {
     const settled = await Promise.all(request.roles.map(async (role) => {
       let run;
       try {
-        run = await subagents.start(DEDUCE_PROVIDER, {
+        run = await spawnSubagent(subagents, {
           label: `dsh-soulmojito deduce \xB7 ${role.name}`,
           prompt: [{ type: "text", text: roleRoundPrompt({ role, scenario: request.scenario, round, transcript }) }],
           parent,
           signal,
-          toolFilter: { allow: [] }
+          toolFilter: { allow: [] },
+          agentPreset: REASONING_PRESET_ID
         });
         const result = await run.result;
         return { role, result };

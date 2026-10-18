@@ -19,6 +19,7 @@ import type {
   SubagentRunLike,
   SubagentRuntimeLike,
 } from '../agent-tavern/deduce.js'
+import { REASONING_PRESET_ID, spawnSubagent } from '../agent-tavern/deduce.js'
 import { identitySummaryOf } from '../agent-tavern/agent.js'
 import { allParticipantsOf, narrativeStage, unitTargetRange } from './outline.js'
 import { recordWriterRunUsage } from './usage.js'
@@ -808,9 +809,10 @@ export interface WriterDraftResult {
 }
 
 /**
- * W1 纯产稿编排（§5.1，deduce 同构 seam）：渲染 full pack → toolFilter 清空的
- * spawn → 取文本 → 解析 JSON 候选稿。失败模式（stopReason !== 'completed'、空
- * 输出、JSON 解析失败）抛结构化错误，不静默退化。run 总在 finally 里 dispose。
+ * W1 纯产稿编排（§5.1，deduce 同构 seam）：渲染 full pack → 宿主强制无工具的
+ * 推理组合（0.2.1 preset / 0.2.0 toolFilter）→ 取文本 → 解析 JSON 候选稿。
+ * 失败模式（stopReason !== 'completed'、空输出、JSON 解析失败）抛结构化错误，
+ * 不静默退化。run 总在 finally 里 dispose。
  */
 export async function draftUnitViaSubagent(deps: {
   runtime: SubagentRuntimeLike
@@ -823,12 +825,13 @@ export async function draftUnitViaSubagent(deps: {
   const pack = renderWriterPackFull(input)
   let run: SubagentRunLike | undefined
   try {
-    run = await deps.runtime.start(WRITER_PROVIDER, {
+    run = await spawnSubagent(deps.runtime, {
       label: `dsh-soulmojito novel-writer · ${deps.unitId}`,
       prompt: [{ type: 'text', text: pack }],
       parent: deps.parent,
       signal,
       toolFilter: { allow: [] },
+      agentPreset: REASONING_PRESET_ID,
     })
     const result = await run.result
     noteRunUsageResult(result)
@@ -913,7 +916,11 @@ export async function runDelegatedWriter(deps: {
   const pack = renderWriterPackTrimmed(input)
   let run: SubagentRunLike | undefined
   try {
-    run = await deps.runtime.start(WRITER_PROVIDER, {
+    // W2 保持父组合（不选独立 preset）：写手必须与作者共享同一个
+    // `dsh-soulmojito:novel-writer-delegations` 注册表和 novel 工具面。DSH 0.2.1
+    // 移除了 per-spawn toolFilter，宿主层不再收缩可见工具；工具层的
+    // `authorBindingFor` 反向闸仍是硬边界——白名单之外的工具在委托绑定下必拒。
+    run = await spawnSubagent(deps.runtime, {
       label: `dsh-soulmojito novel-writer · ${delegation.unitId}`,
       prompt: [{ type: 'text', text: pack }],
       parent: deps.parent,

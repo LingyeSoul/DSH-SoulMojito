@@ -5,7 +5,7 @@
   "author": "dsh-soulmojito",
   "description": "Tracks in-fiction time in the chat variable `clock` (minutes since day 1, 08:00). Exposes {{clock}} macros, the /clock STscript command family (show / advance / set), a declared panel button (advance one hour), an AgentTavern prompt section, a post-save observer, a user-input cleanup transform, periodic timers and an optional LLM-backed turn summarizer (requires the llm capability).",
   "main": "index.mjs",
-  "engines": { "dsh-soulmojito": "^0.6.6" },
+  "engines": { "dsh-soulmojito": "^0.6.7" },
   "loadingOrder": 120,
   "capabilities": ["storage", "llm"],
   "buttons": ["拨快 1 小时"],

@@ -5,7 +5,7 @@
 <p align="center">把 DSH（deepseek-harness）扩展成兼容 SillyTavern 生态的原生角色扮演工作区。</p>
 
 <p align="center">
-  <strong>v0.6.6</strong> · 面向 DSH <code>0.2.0-rc.2</code> · GPL-3.0
+  <strong>v0.6.7</strong> · 面向 DSH <code>0.2.1-rc.2</code>（兼容 <code>0.2.0-rc.2</code>） · GPL-3.0
 </p>
 
 ## 这是什么
@@ -257,7 +257,7 @@ dsh plugin --profile web add ./packages/plugin
 
 ### 构建产物
 
-Node half 是五个自包含 bundle：`index.mjs` 主入口，加 `agent` / `compaction` / `novel` / `card-workbench` 四个子代理入口（见 `packages/plugin/package.json` 的 `exports`）。所有 `@dsh-soulmojito/*` 工作区库全部内联，**无运行时依赖**，不需要用户额外安装公共 `@deepseek-ai/*` 运行时依赖；client closure 由 DSH profile 注入。
+Node half 是六个自包含 bundle：`index.mjs` 主入口，加 `agent` / `compaction` / `novel` / `card-workbench` / `reasoning` 五个子代理入口（见 `packages/plugin/package.json` 的 `exports`；`reasoning` 是内部无工具推理组合，DSH 0.2.1+ 的 spawn 子代理隔离面）。所有 `@dsh-soulmojito/*` 工作区库全部内联，**无运行时依赖**，不需要用户额外安装公共 `@deepseek-ai/*` 运行时依赖；client closure 由 DSH profile 注入。
 
 这些产物**有意入库**：仓库不发 release/tag，git spec 安装与自更新 checkout 兜底都以分支头为发布通道，产物不入库即装完即坏。唯一例外是 `version.json`（带本地 commit 戳，每次构建不同，不入库）。
 
@@ -273,13 +273,13 @@ Node half 是五个自包含 bundle：`index.mjs` 主入口，加 `agent` / `com
 pnpm run check
 ```
 
-当前基线（2026-10-17 实测）：
+当前基线（2026-10-18 实测）：
 
 ```
-Test Files  107 passed (107)
-Tests       1789 passed | 1 skipped (1790)
+Test Files  109 passed (109)
+Tests       1811 passed (1811)
 15 gates    全部 PASS
-built       v0.6.6 (1d95bde)
+built       v0.6.7 (2243f56)
 ```
 
 - 1 项跳过是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例。
@@ -297,7 +297,7 @@ GUI 已在桌面与 390x844 移动视口验证，覆盖原生 sidebar、管理�
 | 目录 | 内容 |
 |---|---|
 | [`docs/proposals/`](docs/proposals/) | 18 篇架构级设计契约（提案 0001-0018），实现后在此登记 |
-| [`decisions/`](decisions/) | 89 篇单次落地决策：问题、方案、否决项、与规格的偏差 |
+| [`decisions/`](decisions/) | 90 篇单次落地决策：问题、方案、否决项、与规格的偏差 |
 | [`docs/exploration/`](docs/exploration/) | 调研归档，结论必须带证据坐标（文件:行号） |
 | [`docs/plans/`](docs/plans/) · [`docs/adr/`](docs/adr/) · [`docs/mods/`](docs/mods/) · [`docs/games/`](docs/games/) | 施工计划 · 架构决策记录 · Mod 开发者文档 · 标准游戏包制作指南 |
 

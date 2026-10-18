@@ -17,6 +17,7 @@
  */
 
 import type { SubagentRuntimeLike, SubagentRunLike } from '../agent-tavern/deduce.js'
+import { REASONING_PRESET_ID, spawnSubagent } from '../agent-tavern/deduce.js'
 import { takeProbeAgentId } from './usage.js'
 
 export const AGENT_NOVEL_PRESET_ID = 'agent-novel'
@@ -133,30 +134,35 @@ function outputExcerptOf(output: ReadonlyArray<{ type?: string; text?: string }>
 }
 
 /** One scripted spawn; never throws — failures come back as ok:false. */
-async function probeSpawn(deps: WriterProbeDeps, label: string, prompt: string, allow: readonly string[] | null): Promise<
+async function probeSpawn(deps: WriterProbeDeps, label: string, prompt: string, options: {
+  allow: readonly string[] | null
+  /** 0.2.1+：宿主强制的独立组合（无工具推理 preset）。 */
+  agentPreset?: string
+}): Promise<
   | { ok: true; runId: string; result: { output: Array<{ type?: string; text?: string }>; stopReason: string; diagnostic?: string } }
   | { ok: false; error: string }
 > {
   const runtime = deps.runtime
-  if (runtime === undefined || typeof runtime.start !== 'function') {
+  if (runtime === undefined || (typeof runtime.start !== 'function' && typeof runtime.startActivation !== 'function')) {
     return { ok: false, error: 'subagent runtime is unavailable in this deployment (enable the dsh-subagent bundle with an in-process "spawn" provider, 0007 §5)' }
   }
   const signal = deps.signal ?? new AbortController().signal
   let run: SubagentRunLike | undefined
   try {
-    run = await runtime.start('spawn', {
+    run = await spawnSubagent(runtime, {
       label,
       prompt: [{ type: 'text', text: prompt }],
       parent: deps.parent,
       signal,
-      ...(allow === null ? {} : { toolFilter: { allow } }),
+      ...(options.allow === null ? {} : { toolFilter: { allow: options.allow } }),
+      ...(options.agentPreset === undefined ? {} : { agentPreset: options.agentPreset }),
     })
   } catch (error) {
     return { ok: false, error: `spawn failed: ${messageOf(error)}` }
   }
   try {
     const result = await run.result
-    return { ok: true, runId: run.id, result }
+    return { ok: true, runId: run.id, result: { output: [...result.output], stopReason: result.stopReason, ...(result.diagnostic === undefined ? {} : { diagnostic: result.diagnostic }) } }
   } catch (error) {
     return { ok: false, error: `run result rejected: ${messageOf(error)}` }
   } finally {
@@ -183,7 +189,7 @@ async function probeIdentityCorrelation(deps: WriterProbeDeps): Promise<{ item: 
     deps,
     'dsh-soulmojito writer-probe · p1-identity',
     `Host capability probe. Call the tool ${PROBE_TOOL} exactly once, then reply with exactly: ok. The tool may return an error about a missing novel binding — that is expected and fine; still reply ok after the single call.`,
-    [PROBE_TOOL],
+    { allow: [PROBE_TOOL] },
   )
   if (!spawn.ok) return { item: { status: 'fail', detail: `P1 spawn did not complete: ${spawn.error}` }, spawnOk: false }
   const recorded = takeProbeAgentId()
@@ -201,11 +207,12 @@ async function probeIdentityCorrelation(deps: WriterProbeDeps): Promise<{ item: 
 
 /**
  * P2 (0007 §9): the allow-reachable half is proven by the P1 spawn (the tool
- * executed under allow: [novel_status_read]). The allow-outside-denied half
- * spawns a second subagent with an empty allow list and observes its report:
- * only a tool execution observed under allow: [] is a hard fail (the host
- * toolFilter is not enforced); a model-reported "unavailable" passes
- * observationally; anything else is inconclusive (model compliance is never
+ * executed with novel_status_read reachable). The allow-outside-denied half
+ * spawns a second subagent whose tool surface must be empty:
+ * - DSH 0.2.0: empty allow list through the host toolFilter;
+ * - DSH 0.2.1+: the agent-reasoning preset (host-enforced tool-free composition).
+ * Only a tool execution observed in that child is a hard fail. A model-reported
+ * "unavailable" passes; anything else is inconclusive (model compliance is never
  * guaranteed, 0007 §9 P2 wording).
  */
 async function probeAllowList(deps: WriterProbeDeps, p1: WriterProbeItem, spawnOk: boolean): Promise<WriterProbeItem> {
@@ -213,28 +220,29 @@ async function probeAllowList(deps: WriterProbeDeps, p1: WriterProbeItem, spawnO
   if (p1.status !== 'pass') {
     return { status: 'inconclusive', detail: `allow-reachable half unproven because P1 did not confirm a tool execution inside an allow-listed subagent (${p1.detail})` }
   }
+  const presetHost = typeof deps.runtime?.startActivation === 'function'
   takeProbeAgentId()
   const spawn = await probeSpawn(
     deps,
     'dsh-soulmojito writer-probe · p2-allowlist',
     `Host capability probe. Try calling the tool ${PROBE_TOOL} once. If the tool is available to you, reply with exactly: tool-ran. If the tool is not available to you, reply with exactly: unavailable.`,
-    [],
+    { allow: [], agentPreset: REASONING_PRESET_ID },
   )
   if (!spawn.ok) return { status: 'fail', detail: `P2 spawn did not complete: ${spawn.error}` }
   const recorded = takeProbeAgentId()
   if (recorded !== null) {
-    return { status: 'fail', detail: `${PROBE_TOOL} executed inside a subagent spawned with an empty allow list (exec.agent.id '${recorded}') — the host toolFilter does not enforce allow lists` }
+    return { status: 'fail', detail: `${PROBE_TOOL} executed inside a subagent that should have no tools (exec.agent.id '${recorded}') — ${presetHost ? `the host did not enforce preset '${REASONING_PRESET_ID}'` : 'the host toolFilter does not enforce allow lists'}` }
   }
   const text = spawn.result.output
     .filter((block) => block?.type === 'text' && typeof block.text === 'string')
     .map((block) => (block.text ?? '').trim().toLocaleLowerCase())
     .join('\n')
   if (text.includes('unavailable')) {
-    return { status: 'pass', detail: `allow-reachable proven by the P1 execution; the empty-allow subagent reported the tool unavailable (observational — model-reported, not a host-side denial proof)` }
+    return { status: 'pass', detail: `allow-reachable proven by the P1 execution; the tool-free subagent reported the tool unavailable (${presetHost ? `host-enforced by preset '${REASONING_PRESET_ID}' plus model report` : 'observational — model-reported, not a host-side denial proof'})` }
   }
   return {
     status: 'inconclusive',
-    detail: `allow-reachable proven by the P1 execution; the empty-allow subagent neither executed the tool nor clearly reported it unavailable (stopReason ${spawn.result.stopReason}; ${outputExcerptOf(spawn.result.output)}) — model compliance limits the probe; re-run or verify on a real E2E delegation`,
+    detail: `allow-reachable proven by the P1 execution; the tool-free subagent neither executed the tool nor clearly reported it unavailable (stopReason ${spawn.result.stopReason}; ${outputExcerptOf(spawn.result.output)}) — model compliance limits the probe; re-run or verify on a real E2E delegation`,
   }
 }
 

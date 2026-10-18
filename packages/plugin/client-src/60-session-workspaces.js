@@ -48,12 +48,17 @@
       return workbenchWorkspacePromise
     }
 
-    function connectTavernWorkspace(ctx, workspaceId) {
+    function connectTavernWorkspace(ctx, workspaceId, agentPreset) {
       // uiWorkspace → workspaces 双面回退与形状轨迹记录在 @dsh-soulmojito/bind 的
       // client 探测模块（构建时经 __DSH_BIND_CLIENT_SLOT__ 注入，轨迹同步挂
-      // window.__DSH_SOULMOJITO_BIND__ 供诊断读取）；源文件 client/main.js 由
-      // scripts/build-plugin.mjs 拼接为产物 client/index.js。
-      return DshBindClient.connectHostWorkspace(ctx, workspaceId, clientShapeTrace)
+      // window.__DSH_SOULMOJITO_BIND__ 供诊断读取）；0.2.1 起 agentPreset 随
+      // connectWorkspace 直通 sessions.create，避免 blank 会话被默认 preset 复用。
+      return DshBindClient.connectHostWorkspace(
+        ctx,
+        workspaceId,
+        clientShapeTrace,
+        agentPreset === undefined ? undefined : { agentPreset },
+      )
     }
 
     function openSessionView(ctx, sessionId) {
@@ -71,4 +76,3 @@
       if (binding?.architecture === 'card-workbench') return 'card-workbench'
       return binding?.architecture === 'agent-tavern' ? 'agent-tavern' : 'st'
     }
-

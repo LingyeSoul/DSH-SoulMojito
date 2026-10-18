@@ -9,6 +9,7 @@ import { tavernMacroExpand } from '../prompt-context.js'
 import { store } from '../runtime.js'
 import { assertAgentTavernAvailable, bindSession, TavernArchitectureConflictError } from './binding.js'
 import { advanceHostTurnBase, canAdvanceHostTurnBase, closeImportBracket, lastLoggedTurn, occupyHostSession, parseTavernSessionCommand } from './trace.js'
+import { lastSelectedPresetId } from './preset-marker.js'
 import { buildAgentTavernPreloadSnapshot, collectRegexScripts } from '../tavern-assets.js'
 import { handleNovelOpenCommand, handleWorkbenchOpenCommand } from '../http/novel.js'
 
@@ -117,8 +118,15 @@ export function registerTavernSessionCommand(ctx): void {
           if (!character) throw new Error('Tavern character not found.')
           preloadSnapshot = await buildAgentTavernPreloadSnapshot(db, currentState, parsed.character, character, tavernMacroExpand(currentState, parsed.character, character))
         }
-        // 幂等：重复激活不重复 recompose，也不叠加预设 marker。
-        if (!activationEvents.some((event) => event.type === 'agent-preset/selected' && event.data?.agentPreset === AGENT_TAVERN_PRESET_ID)) {
+        // 幂等：最后一条 selected 已是 agent-tavern 时不重复 recompose/marker。
+        // 0.2.1 的 reuseLive 会把 blank 会话改回请求的 preset（通常是宿主默认
+        // standard），日志尾部出现第二条件 selected；只认「曾经出现过」会让这里
+        // 短路，工具面永久停在 standard。判定必须读最后一条。
+        const lastSelected = lastSelectedPresetId(agent.session)
+        if (lastSelected !== AGENT_TAVERN_PRESET_ID) {
+          if (sessionStarted && lastSelected !== undefined) {
+            throw new TavernArchitectureConflictError(`This host session already started under preset '${lastSelected}'; AgentTavern cannot be re-selected.`)
+          }
           const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_TAVERN_PRESET_ID)
           // D-2 confirmable write：预设 marker 驱动宿主的 agentPreset 投影
           // （dsh-agent-preset-registry：init 于 header、只认日志里的
@@ -129,8 +137,7 @@ export function registerTavernSessionCommand(ctx): void {
             logger: ctx.logger,
             label: `AgentTavern preset marker (${agent.id})`,
             append: () => agent.session.append('agent-preset/selected', { agentPreset: preset.id }),
-            present: (events) => events.some((event) => event.type === 'agent-preset/selected'
-              && event.data?.agentPreset === preset.id),
+            present: () => lastSelectedPresetId(agent.session) === preset.id,
           })
           if (!selected) {
             throw new Error(`dsh-soulmojito: the AgentTavern preset marker could not be confirmed in session '${agent.id}' after a rewrite; the session would silently lose its preset identity on reload`)

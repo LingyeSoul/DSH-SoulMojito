@@ -34,6 +34,7 @@
  *
  * Usage:
  *   node scripts/repair-v4-sessions.mjs <session.jsonl.zstd | sessions-root> [--apply] [--runtime <node_modules>]
+ *   node scripts/repair-v4-sessions.mjs <session.v4.jsonl.zstd> --select-preset <id> [--apply] [--runtime <node_modules>]
  *
  * Default is a dry-run report; --apply rewrites in place after writing a
  * .bak-<timestamp> backup. Every rewrite is verified through the REAL released
@@ -48,15 +49,18 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
+import { openHostSessionPersistence } from './lib/host-session-persistence.mjs'
 
 const args = process.argv.slice(2)
 const apply = args.includes('--apply')
 const runtimeIndex = args.indexOf('--runtime')
 const runtimeArg = runtimeIndex === -1 ? undefined : args[runtimeIndex + 1]
-const positional = args.filter((arg, index) => !arg.startsWith('--') && (runtimeIndex === -1 || (index !== runtimeIndex && index !== runtimeIndex + 1)))
+const presetIndex = args.indexOf('--select-preset')
+const presetTarget = presetIndex === -1 ? undefined : args[presetIndex + 1]
+const positional = args.filter((arg, index) => !arg.startsWith('--') && (runtimeIndex === -1 || (index !== runtimeIndex && index !== runtimeIndex + 1)) && (presetIndex === -1 || (index !== presetIndex && index !== presetIndex + 1)))
 const target = positional[0]
 if (target === undefined) {
-  console.error('usage: node scripts/repair-v4-sessions.mjs <session.jsonl.zstd | sessions-root> [--apply] [--runtime <node_modules>]')
+  console.error('usage: node scripts/repair-v4-sessions.mjs <session.jsonl.zstd | sessions-root> [--apply] [--runtime <node_modules>] [--select-preset <id>]')
   process.exit(2)
 }
 const root = resolve(target)
@@ -65,6 +69,11 @@ if (!existsSync(root)) throw new Error(`target not found: ${root}`)
 /* ---------------------------- zstd frame container ---------------------------- */
 
 const ZSTD_MAGIC = 4247762216
+
+if (presetTarget !== undefined) {
+  await selectPresetMarker(root, presetTarget)
+  process.exit(0)
+}
 
 function scanZstdFrames(buffer) {
   const frames = []
@@ -116,7 +125,7 @@ async function loadAdmission() {
       const v3to4 = await import(pathToFileURL(migration).href)
       const dshSession = await import(pathToFileURL(session).href)
       return {
-        base,
+        base: resolve(base),
         assertRelationships: v3to4.assertReleasedV4Relationships,
         assertRow: v3to4.assertV4RowAdmission,
         known: dshSession.KNOWN_SESSION_EVENT_TYPES,
@@ -147,19 +156,14 @@ async function loadV0Engine() {
 /**
  * v0 工件的硬验证：通过真实宿主持久化栈 open+read 整个工件——这正是
  * "failed to observe session … refuses this format v2 Session" 的原生链路
- * （v0→v1→v2→v3→v4 代际迁移 + 解码）。0.2.0-rc.2 的 jsonl 持久化包只导出
- * default；老宿主是具名导出，两种形状都接。
+ * （v0→v1→v2→v3→v4 代际迁移 + 解码）。DSH 0.2.0 只导出 default 类，
+ * 0.2.1+ 只导出插件 apply；`lib/host-session-persistence.mjs` 两种形状都接，
+ * 验证工具不跟宿主版本锁死。
  */
 async function loadObserveValidator(base) {
   const require2 = createRequire(join(base, '@deepseek-ai', 'dsh-session', 'lib', 'index.js'))
-  const { Context } = require2('@deepseek-ai/cordis')
-  const { SessionStore } = require2('@deepseek-ai/dsh-session')
-  const persistenceModule = require2('@deepseek-ai/dsh-session-persistence-jsonl')
-  const JsonlSessionPersistence = persistenceModule.JsonlSessionPersistence ?? persistenceModule.default
   return async (artifact, sessionId) => {
-    const context = new Context()
-    new SessionStore(context)
-    const persistence = new JsonlSessionPersistence(context, {
+    const persistence = await openHostSessionPersistence(require2, {
       // <sessions-root>/<encoded-workspace>/<session-dir>/session.jsonl.zstd
       root: dirname(dirname(dirname(resolve(artifact)))),
       compression: 'zstd',
@@ -175,6 +179,69 @@ async function loadObserveValidator(base) {
 function logicalHeader(physicalRow) {
   const { type, ...header } = physicalRow
   return header
+}
+
+/**
+ * 修一条已启动会话的 preset 标记：把 `agent-preset/selected` 追加为目标 preset。
+ *
+ * 用途（2026-10-18 DSH 0.2.1 适配）：宿主 `reuseLive` 会把 blank 会话 select 回
+ * 默认 preset，日志尾部出现 `standard`，工具面从此停在标准工具集。会话一旦
+ * 开始轮次，宿主 `select` 拒绝重选（agent-preset/locked），但日志里的最后一条
+ * selected 决定**下次 resume** 挂载的 preset——补一条目标 selected 后重启/重开
+ * 会话即可恢复工具面。运行中的 `dsh web` 会继续用内存里的旧组合，先退出再修。
+ *
+ * 只接受 v4 工件；写回前跑真实 v4 准入，写回后跑宿主 observe，失败自动回滚。
+ */
+async function selectPresetMarker(artifact, presetId) {
+  if (presetId.trim() === '') throw new Error('--select-preset requires a non-empty preset id')
+  if (!statSync(artifact).isFile()) throw new Error(`--select-preset needs one session artifact, got ${artifact}`)
+  const buffer = readFileSync(artifact)
+  const rows = scanZstdFrames(buffer)
+    .map((frame) => zstdDecompressSync(buffer.subarray(frame.start, frame.end)).toString('utf8'))
+    .flatMap((text) => text.split('\n').filter((line) => line.trim() !== ''))
+    .map((line) => JSON.parse(line))
+  const header = rows[0]
+  if (header?.type !== 'session' || header.version !== 4) {
+    throw new Error(`${artifact} is not a v4 session artifact (header version ${header?.version ?? 'missing'})`)
+  }
+  const current = [...rows].reverse().find((row) => row.type === 'agent-preset/selected')?.data?.agentPreset
+  if (current === presetId) {
+    console.log(`no-op ${artifact}: last selected preset is already '${presetId}'`)
+    return
+  }
+  const lastSeq = typeof rows[rows.length - 1]?.seq === 'number' ? rows[rows.length - 1].seq : rows.length - 2
+  const appended = {
+    type: 'agent-preset/selected',
+    seq: lastSeq + 1,
+    time: Date.now(),
+    data: { agentPreset: presetId },
+  }
+  const next = [...rows, appended]
+  const admission = await loadAdmission()
+  verifyAdmission(admission, header, next.slice(1))
+  const encoded = encodeV4Artifact(next)
+  assertV4Container(encoded, next)
+  if (!apply) {
+    console.log(`would append ${artifact}: last selected '${current ?? 'none'}' -> '${presetId}' (seq ${appended.seq}); re-run with --apply`)
+    return
+  }
+  const sessionId = header.id
+  const hostVisible = typeof sessionId === 'string' && basename(dirname(resolve(artifact))) === sessionId
+  const observe = hostVisible ? await loadObserveValidator(admission.base) : undefined
+  const backup = `${artifact}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`
+  copyFileSync(artifact, backup)
+  const temporary = `${artifact}.preset-repair-${process.pid}.tmp`
+  writeFileSync(temporary, encoded)
+  renameSync(temporary, artifact)
+  try {
+    const observed = observe === undefined ? undefined : await observe(artifact, sessionId)
+    console.log(`applied ${artifact}: last selected '${current ?? 'none'}' -> '${presetId}'${observed === undefined ? '' : `; host observe passes (${observed} events)`}`)
+    console.log(`   backup: ${backup}`)
+    console.log('   restart `dsh web` (or re-open the session) so the live Agent remounts the preset')
+  } catch (error) {
+    copyFileSync(backup, artifact)
+    throw new Error(`preset marker verification failed and the original was restored: ${error.message}`)
+  }
 }
 
 function verifyAdmission(admission, headerRow, rows) {

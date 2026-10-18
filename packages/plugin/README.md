@@ -2,7 +2,7 @@
 
 monorepo 中的**可安装单元**：DSH 官方 Web bundle。产品概览、三种会话架构、能力地图与安装流程见仓库根 [`README.md`](../../README.md) 与 [`docs/README.md`](../../docs/README.md)，本文件只写包级内容。
 
-`pnpm run build:plugin` 把八个 `@dsh-soulmojito/*` 工作区库与 Node half 打进五个自包含 bundle（`index.mjs` + `agent` / `compaction` / `novel` / `card-workbench`），client closure 由 DSH profile 注入，不要求用户另行安装公共 `@deepseek-ai/*` 依赖。
+`pnpm run build:plugin` 把八个 `@dsh-soulmojito/*` 工作区库与 Node half 打进六个自包含 bundle（`index.mjs` + `agent` / `compaction` / `novel` / `card-workbench` / `reasoning`），client closure 由 DSH profile 注入，不要求用户另行安装公共 `@deepseek-ai/*` 依赖。
 
 ## 安装
 

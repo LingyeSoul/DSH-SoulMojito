@@ -7887,6 +7887,55 @@ function agentViewerCaptureStep(payload, decision) {
   }
 }
 
+// packages/plugin/src/agent-tavern/deduce.ts
+var DEDUCE_PROVIDER = "spawn";
+var REASONING_PRESET_ID = "agent-reasoning";
+function subagentRuntimeOf(parent) {
+  const ctx = parent?.ctx;
+  if (!ctx) return void 0;
+  try {
+    const looked = ctx.get?.("subagents");
+    if (isRuntime(looked)) return looked;
+  } catch {
+  }
+  try {
+    const direct = ctx.subagents;
+    if (isRuntime(direct)) return direct;
+  } catch {
+  }
+  return void 0;
+}
+function isRuntime(candidate) {
+  if (typeof candidate !== "object" || candidate === null) return false;
+  const runtime = candidate;
+  return typeof runtime.start === "function" || typeof runtime.startActivation === "function";
+}
+async function spawnSubagent(runtime, request) {
+  if (typeof runtime.startActivation === "function") {
+    const activation = await runtime.startActivation({
+      provider: DEDUCE_PROVIDER,
+      label: request.label,
+      request: {
+        prompt: request.prompt,
+        parent: request.parent,
+        ...request.agentPreset === void 0 ? {} : { agentPreset: request.agentPreset }
+      },
+      signal: request.signal,
+      delivery: "caller"
+    });
+    return {
+      id: activation.childId,
+      result: activation.result,
+      dispose: () => activation.dispose()
+    };
+  }
+  if (typeof runtime.start === "function") {
+    const { agentPreset: _ignored, ...legacy } = request;
+    return runtime.start(DEDUCE_PROVIDER, legacy);
+  }
+  throw new Error("subagent runtime exposes neither startActivation (DSH 0.2.1+) nor start (DSH 0.2.0)");
+}
+
 // packages/plugin/src/agent-novel/usage.ts
 var USAGE_SAMPLER_KEY = Symbol.for("dsh-soulmojito:novel-usage-sampler");
 var samplerTable = globalThis[USAGE_SAMPLER_KEY] ??= /* @__PURE__ */ new Map();
@@ -7970,27 +8019,28 @@ function outputExcerptOf(output) {
   const text = output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text ?? "").join("\n").trim();
   return text === "" ? "(no text output)" : `output '${text.slice(0, 120)}'`;
 }
-async function probeSpawn(deps, label, prompt, allow) {
+async function probeSpawn(deps, label, prompt, options) {
   const runtime = deps.runtime;
-  if (runtime === void 0 || typeof runtime.start !== "function") {
+  if (runtime === void 0 || typeof runtime.start !== "function" && typeof runtime.startActivation !== "function") {
     return { ok: false, error: 'subagent runtime is unavailable in this deployment (enable the dsh-subagent bundle with an in-process "spawn" provider, 0007 \xA75)' };
   }
   const signal = deps.signal ?? new AbortController().signal;
   let run;
   try {
-    run = await runtime.start("spawn", {
+    run = await spawnSubagent(runtime, {
       label,
       prompt: [{ type: "text", text: prompt }],
       parent: deps.parent,
       signal,
-      ...allow === null ? {} : { toolFilter: { allow } }
+      ...options.allow === null ? {} : { toolFilter: { allow: options.allow } },
+      ...options.agentPreset === void 0 ? {} : { agentPreset: options.agentPreset }
     });
   } catch (error) {
     return { ok: false, error: `spawn failed: ${messageOf(error)}` };
   }
   try {
     const result = await run.result;
-    return { ok: true, runId: run.id, result };
+    return { ok: true, runId: run.id, result: { output: [...result.output], stopReason: result.stopReason, ...result.diagnostic === void 0 ? {} : { diagnostic: result.diagnostic } } };
   } catch (error) {
     return { ok: false, error: `run result rejected: ${messageOf(error)}` };
   } finally {
@@ -8006,7 +8056,7 @@ async function probeIdentityCorrelation(deps) {
     deps,
     "dsh-soulmojito writer-probe \xB7 p1-identity",
     `Host capability probe. Call the tool ${PROBE_TOOL} exactly once, then reply with exactly: ok. The tool may return an error about a missing novel binding \u2014 that is expected and fine; still reply ok after the single call.`,
-    [PROBE_TOOL]
+    { allow: [PROBE_TOOL] }
   );
   if (!spawn3.ok) return { item: { status: "fail", detail: `P1 spawn did not complete: ${spawn3.error}` }, spawnOk: false };
   const recorded = takeProbeAgentId();
@@ -8024,25 +8074,26 @@ async function probeAllowList(deps, p1, spawnOk) {
   if (p1.status !== "pass") {
     return { status: "inconclusive", detail: `allow-reachable half unproven because P1 did not confirm a tool execution inside an allow-listed subagent (${p1.detail})` };
   }
+  const presetHost = typeof deps.runtime?.startActivation === "function";
   takeProbeAgentId();
   const spawn3 = await probeSpawn(
     deps,
     "dsh-soulmojito writer-probe \xB7 p2-allowlist",
     `Host capability probe. Try calling the tool ${PROBE_TOOL} once. If the tool is available to you, reply with exactly: tool-ran. If the tool is not available to you, reply with exactly: unavailable.`,
-    []
+    { allow: [], agentPreset: REASONING_PRESET_ID }
   );
   if (!spawn3.ok) return { status: "fail", detail: `P2 spawn did not complete: ${spawn3.error}` };
   const recorded = takeProbeAgentId();
   if (recorded !== null) {
-    return { status: "fail", detail: `${PROBE_TOOL} executed inside a subagent spawned with an empty allow list (exec.agent.id '${recorded}') \u2014 the host toolFilter does not enforce allow lists` };
+    return { status: "fail", detail: `${PROBE_TOOL} executed inside a subagent that should have no tools (exec.agent.id '${recorded}') \u2014 ${presetHost ? `the host did not enforce preset '${REASONING_PRESET_ID}'` : "the host toolFilter does not enforce allow lists"}` };
   }
   const text = spawn3.result.output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => (block.text ?? "").trim().toLocaleLowerCase()).join("\n");
   if (text.includes("unavailable")) {
-    return { status: "pass", detail: `allow-reachable proven by the P1 execution; the empty-allow subagent reported the tool unavailable (observational \u2014 model-reported, not a host-side denial proof)` };
+    return { status: "pass", detail: `allow-reachable proven by the P1 execution; the tool-free subagent reported the tool unavailable (${presetHost ? `host-enforced by preset '${REASONING_PRESET_ID}' plus model report` : "observational \u2014 model-reported, not a host-side denial proof"})` };
   }
   return {
     status: "inconclusive",
-    detail: `allow-reachable proven by the P1 execution; the empty-allow subagent neither executed the tool nor clearly reported it unavailable (stopReason ${spawn3.result.stopReason}; ${outputExcerptOf(spawn3.result.output)}) \u2014 model compliance limits the probe; re-run or verify on a real E2E delegation`
+    detail: `allow-reachable proven by the P1 execution; the tool-free subagent neither executed the tool nor clearly reported it unavailable (stopReason ${spawn3.result.stopReason}; ${outputExcerptOf(spawn3.result.output)}) \u2014 model compliance limits the probe; re-run or verify on a real E2E delegation`
   };
 }
 async function inspectWriterSubagentCapabilities(deps = {}) {
@@ -9333,8 +9384,8 @@ function readBuildInfo() {
   return { version, commit };
 }
 function buildTimeStamp() {
-  const version = true ? "0.6.6".trim() : "";
-  const commit = true ? normalizeCommit("6a538d5") : void 0;
+  const version = true ? "0.6.7".trim() : "";
+  const commit = true ? normalizeCommit("2243f56") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -20946,6 +20997,18 @@ function parseTavernSessionCommand(rawInput) {
   }
 }
 
+// packages/plugin/src/session/preset-marker.ts
+function lastSelectedPresetId(session) {
+  const events = sessionEvents(session);
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type !== "agent-preset/selected") continue;
+    const preset = event.data?.agentPreset;
+    if (typeof preset === "string") return preset;
+  }
+  return void 0;
+}
+
 // packages/plugin/src/agent-novel/requirements.ts
 import { createHash as createHash9 } from "node:crypto";
 function stableMessageKey(sessionId, messageKey) {
@@ -20990,26 +21053,6 @@ function extractAuthorMessage(event) {
 function textBlocks(content) {
   if (!Array.isArray(content)) return "";
   return content.filter((block) => typeof block === "object" && block !== null && block.type === "text").map((block) => typeof block.text === "string" ? block.text : "").join("").trim();
-}
-
-// packages/plugin/src/agent-tavern/deduce.ts
-function subagentRuntimeOf(parent) {
-  const ctx = parent?.ctx;
-  if (!ctx) return void 0;
-  try {
-    const looked = ctx.get?.("subagents");
-    if (isRuntime(looked)) return looked;
-  } catch {
-  }
-  try {
-    const direct = ctx.subagents;
-    if (isRuntime(direct)) return direct;
-  } catch {
-  }
-  return void 0;
-}
-function isRuntime(candidate) {
-  return typeof candidate === "object" && candidate !== null && typeof candidate.start === "function";
 }
 
 // packages/plugin/src/http/io.ts
@@ -21423,7 +21466,7 @@ async function handleNovelOpenCommand(ctx, agent, novelId) {
     throw new TavernArchitectureConflictError("The host cannot recompose a blank session with the AgentNovel preset.");
   }
   await bindNovelSession(db, agent.id, novelId);
-  if (!activationEvents.some((event) => event.type === "agent-preset/selected" && event.data?.agentPreset === AGENT_NOVEL_PRESET_ID)) {
+  if (lastSelectedPresetId(agent.session) !== AGENT_NOVEL_PRESET_ID) {
     const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_NOVEL_PRESET_ID);
     agent.session.append("agent-preset/selected", { agentPreset: preset.id });
   }
@@ -21477,7 +21520,7 @@ async function handleWorkbenchOpenCommand(ctx, agent, payload) {
       }
     }
   }));
-  if (!activationEvents.some((event) => event.type === "agent-preset/selected" && event.data?.agentPreset === CARD_WORKBENCH_PRESET_ID)) {
+  if (lastSelectedPresetId(agent.session) !== CARD_WORKBENCH_PRESET_ID) {
     const preset = await ctx.agentPresets.recompose(agent.ctx, CARD_WORKBENCH_PRESET_ID);
     agent.session.append("agent-preset/selected", { agentPreset: preset.id });
   }
@@ -21572,14 +21615,18 @@ function registerTavernSessionCommand(ctx) {
           if (!character) throw new Error("Tavern character not found.");
           preloadSnapshot = await buildAgentTavernPreloadSnapshot(db, currentState, parsed.character, character, tavernMacroExpand(currentState, parsed.character, character));
         }
-        if (!activationEvents.some((event) => event.type === "agent-preset/selected" && event.data?.agentPreset === AGENT_TAVERN_PRESET_ID)) {
+        const lastSelected = lastSelectedPresetId(agent.session);
+        if (lastSelected !== AGENT_TAVERN_PRESET_ID) {
+          if (sessionStarted && lastSelected !== void 0) {
+            throw new TavernArchitectureConflictError(`This host session already started under preset '${lastSelected}'; AgentTavern cannot be re-selected.`);
+          }
           const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_TAVERN_PRESET_ID);
           const selected = confirmSessionAppend({
             session: agent.session,
             logger: ctx.logger,
             label: `AgentTavern preset marker (${agent.id})`,
             append: () => agent.session.append("agent-preset/selected", { agentPreset: preset.id }),
-            present: (events) => events.some((event) => event.type === "agent-preset/selected" && event.data?.agentPreset === preset.id)
+            present: () => lastSelectedPresetId(agent.session) === preset.id
           });
           if (!selected) {
             throw new Error(`dsh-soulmojito: the AgentTavern preset marker could not be confirmed in session '${agent.id}' after a rewrite; the session would silently lose its preset identity on reload`);
