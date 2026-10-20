@@ -1,8 +1,9 @@
 /** AgentNovel status/requirements/outline tool slice (registration order 1-6). */
 
 import {
+  effectiveNovelCharacters,
+  importProgressOf,
   requirementWatermark,
-  totalEffectiveCharacters,
   type HandledRequirement,
   type NovelOutlineChanges,
   type NovelOutlinePayload,
@@ -22,7 +23,7 @@ export function outlineTools(): ToolDefinition[] {
       const novelId = await novelBindingFor(exec)
       const snapshot = await snapshotOf(novelId)
       const budget = snapshot.config.lengthBudget
-      const committed = totalEffectiveCharacters(snapshot.commits)
+      const committed = effectiveNovelCharacters(snapshot)
       const upper = budget.kind === 'target'
         ? budget.hardMaximumCharacters ?? budget.targetCharacters * (1 + budget.toleranceRatio)
         : null
@@ -52,6 +53,16 @@ export function outlineTools(): ToolDefinition[] {
         ...(upper !== null ? { remainingCharacters: Math.max(0, Math.ceil(upper - committed)) } : {}),
         turnsRun: snapshot.run.turnsRun,
         maxTurns: snapshot.config.budgets.maxTurns,
+        ...(snapshot.import !== null && snapshot.import !== undefined
+          ? {
+              import: {
+                sourceName: snapshot.import.sourceName,
+                sourceFormat: snapshot.import.sourceFormat,
+                ...importProgressOf(snapshot.import),
+                bibleRevision: snapshot.import.bibleSummary?.bibleRevision ?? null,
+              },
+            }
+          : {}),
         source: { kind: 'novel-status', id: novelId, revision: snapshot.revision },
         truncated: false,
       }
@@ -345,8 +356,9 @@ const statusOutput = objectOutput({
   chaptersCompleted: { type: 'integer' }, chaptersTotal: { type: 'integer' },
   committedCharacters: { type: 'integer' }, lengthBudget: { type: 'object', additionalProperties: true },
   remainingCharacters: { type: 'integer' }, turnsRun: { type: 'integer' }, maxTurns: { type: 'integer' },
+  import: { type: 'object', additionalProperties: true },
   source: { type: 'object', additionalProperties: true }, truncated: { type: 'boolean' },
-}, ['pauseReason', 'pauseDetail', 'currentUnitId', 'outlineRevision', 'remainingCharacters'])
+}, ['pauseReason', 'pauseDetail', 'currentUnitId', 'outlineRevision', 'remainingCharacters', 'import'])
 const requirementsReadOutput = objectOutput({
   requirements: { type: 'array', items: { type: 'object', additionalProperties: true } },
   nextCursor: { type: 'string' }, sourceCount: { type: 'integer' },

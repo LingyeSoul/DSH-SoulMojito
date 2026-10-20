@@ -163,6 +163,7 @@
         .dt-novel-block{display:flex;flex-direction:column;gap:6px;min-width:0}
         .dt-novel-block h4{margin:0;font-size:12px;line-height:18px;font-weight:600;color:var(--dsw-alias-label-secondary)}
         .dt-novel-note{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+        .dt-novel-import-preview{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
         .dt-novel-toc{display:flex;flex-direction:column;gap:2px}
         .dt-novel-chapter{display:flex;flex-direction:column;gap:1px;align-items:flex-start;text-align:left;border:0;background:transparent;color:inherit;cursor:pointer;font:inherit;padding:5px 6px;border-radius:6px}
         .dt-novel-chapter:hover{background:var(--dsw-alias-interactive-bg-hover)}

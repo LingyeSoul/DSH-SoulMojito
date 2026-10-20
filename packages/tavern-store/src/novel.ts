@@ -44,19 +44,23 @@ import {
   NovelRevisionConflictError,
   NovelStaleUnitError,
   NovelStorageCorruptionError,
+  appliedBodyRevision,
+  bodyRevisionCovers,
   countEffectiveCharacters,
+  effectiveChapterCharacters,
+  effectiveNovelCharacters,
   finishGuardViolations,
   isValidNovelId,
   isWriterMode,
   requirementWatermark,
   stableStringify,
   summarizeNovel,
-  totalEffectiveCharacters,
   validateCreateConfig,
   validateOutlineConsistency,
   validateOutlinePayload,
   validateRunBudgets,
   type BodyCommit,
+  type BodyRevisionRecord,
   type CanonChange,
   type ChapterCompletion,
   type CommitReceipt,
@@ -82,6 +86,27 @@ import {
   type WriterMode,
   type WritingUnit,
 } from './novel-model.js'
+import {
+  IMPORT_MAX_PART_ATTEMPTS,
+  buildImportDigest,
+  normaliseImportBible,
+  normaliseImportExtraction,
+  parseImportedNovelText,
+  validateImportFormat,
+  validateImportSourceName,
+  validatePartTarget,
+  type ImportBiblePayload,
+  type ImportBibleRecord,
+  type ImportBibleSummary,
+  type ImportCharacter,
+  type ImportExtraction,
+  type ImportFormat,
+  type ImportWorldEntry,
+  type ImportedPart,
+  type NovelImportState,
+  type ParsedImport,
+} from './novel-import.js'
+import { excerptAround } from './tokenize.js'
 import { validateCanonChanges } from './novel-canon.js'
 import {
   applyHandledRequirements,
@@ -132,6 +157,22 @@ interface RevisionFile {
   snapshot: NovelSnapshot
 }
 
+/** Input for createImportedNovel: raw text is parsed inside the store. */
+export interface NovelImportSourceInput {
+  name: string
+  format: ImportFormat
+  text: string
+  partTargetCharacters: number
+}
+
+interface ImportedSource {
+  name: string
+  format: ImportFormat
+  importedAt: string
+  partTargetCharacters: number
+  parsed: ParsedImport
+}
+
 export class NovelStore {
   private readonly novelsRoot: string
   private readonly mutationTails = new Map<string, Promise<void>>()
@@ -158,6 +199,53 @@ export class NovelStore {
   async createNovel(
     tavern: Pick<TavernStore, 'getCharacter' | 'getWorld'>,
     config: NovelCreateConfig,
+  ): Promise<{ novelId: string; revision: string; requirementId: string }> {
+    return this.createProject(tavern, config, null)
+  }
+
+  /**
+   * Creates a continuation project from an imported source (proposal 0020 §3).
+   * The source is parsed before any directory exists; parts are written as
+   * immutable imports/parts/<partId>.txt objects, and the run starts in the
+   * `importing` phase so extraction runs before the continuation outline.
+   */
+  async createImportedNovel(
+    tavern: Pick<TavernStore, 'getCharacter' | 'getWorld'>,
+    config: NovelCreateConfig,
+    source: NovelImportSourceInput,
+  ): Promise<{ novelId: string; revision: string; requirementId: string; import: { chapterCount: number; partCount: number; totalCharacters: number } }> {
+    const errors = validateCreateConfig(config)
+    if (errors.length > 0) throw new NovelConfigError({ message: 'invalid novel config', errors })
+    const name = validateImportSourceName(source.name)
+    const format = validateImportFormat(source.format)
+    const partTargetCharacters = validatePartTarget(source.partTargetCharacters)
+    const parsed = parseImportedNovelText({
+      text: source.text,
+      format,
+      titleFallback: config.title,
+      partTargetCharacters,
+    })
+    const created = await this.createProject(tavern, config, {
+      name,
+      format,
+      importedAt: new Date().toISOString(),
+      partTargetCharacters,
+      parsed,
+    })
+    return {
+      ...created,
+      import: {
+        chapterCount: parsed.chapters.length,
+        partCount: parsed.parts.length,
+        totalCharacters: parsed.totalCharacters,
+      },
+    }
+  }
+
+  private async createProject(
+    tavern: Pick<TavernStore, 'getCharacter' | 'getWorld'>,
+    config: NovelCreateConfig,
+    source: ImportedSource | null,
   ): Promise<{ novelId: string; revision: string; requirementId: string }> {
     const errors = validateCreateConfig(config)
     if (errors.length > 0) throw new NovelConfigError({ message: 'invalid novel config', errors })
@@ -190,7 +278,9 @@ export class NovelStore {
     const novelId = `nvl-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`
     return this.mutate(novelId, async () => {
       const dir = this.novelDir(novelId)
-      for (const sub of ['revisions', 'assets', 'bodies', path.join('projections', 'chapters')]) {
+      const directories = ['revisions', 'assets', 'bodies', path.join('projections', 'chapters')]
+      if (source !== null) directories.push(path.join('imports', 'parts'), path.join('imports', 'extractions'), path.join('imports', 'bibles'))
+      for (const sub of directories) {
         await fs.mkdir(path.join(dir, sub), { recursive: true })
       }
       await this.ensureOwnership(novelId, dir)
@@ -215,11 +305,71 @@ export class NovelStore {
       }
 
       const now = new Date().toISOString()
-      // Manual mode waits for outline approval before any writing (§4.3). There
-      // is no outline yet, so awaitingApprovalRevision stays null until the
-      // first createOutline pins it to a real revision.
-      const run: NovelRunState = config.approvalMode === 'manual'
+      const imported: NovelImportState | null = source === null
+        ? null
+        : {
+            sourceName: source.name,
+            sourceFormat: source.format,
+            importedAt: source.importedAt,
+            totalCharacters: source.parsed.totalCharacters,
+            partTargetCharacters: source.partTargetCharacters,
+            chapterSource: source.parsed.chapterSource,
+            chapters: source.parsed.chapters.map((chapter) => ({
+              chapterId: chapter.chapterId,
+              order: chapter.order,
+              title: chapter.title,
+              effectiveCharacters: chapter.effectiveCharacters,
+              partIds: [...chapter.partIds],
+            })),
+            parts: source.parsed.parts.map((part): ImportedPart => ({
+              partId: part.partId,
+              chapterId: part.chapterId,
+              order: part.order,
+              effectiveCharacters: part.effectiveCharacters,
+              contentHash: sha256hex(part.text),
+              status: 'pending',
+              attempts: 0,
+              extractionHash: null,
+              summary: null,
+              error: null,
+            })),
+            bibleHash: null,
+            bibleSummary: null,
+          }
+      if (source !== null) {
+        for (const part of source.parsed.parts) {
+          await writeImmutableBytes(path.join(dir, 'imports', 'parts', `${part.partId}.txt`), textBytes(part.text))
+        }
+      }
+      // Manual mode waits for outline approval before any writing (§4.3). An
+      // imported project still runs extraction first: part extraction is
+      // research, not prose, and the approval gate opens on the continuation
+      // outline (createOutline re-enters awaiting-approval in manual mode).
+      const runActive = source !== null || config.approvalMode === 'automatic'
+      const run: NovelRunState = runActive
         ? {
+            status: 'active',
+            phase: source === null ? 'outlining' : 'importing',
+            pauseReason: null,
+            pauseDetail: null,
+            resumeHint: null,
+            currentUnitId: null,
+            turnsRun: 0,
+            deduceRuns: 0,
+            writerRuns: 0,
+            usageSamples: [],
+            startedAt: now,
+            completedAt: null,
+            lastProgressSignature: null,
+            stalledTurns: 0,
+            consecutiveFailures: 0,
+            lastError: null,
+            inFlightIntent: null,
+            awaitingApprovalRevision: null,
+            activeDurationMs: 0,
+            activeWindowStart: now,
+          }
+        : {
             status: 'paused',
             phase: 'outlining',
             pauseReason: 'awaiting-approval',
@@ -240,28 +390,6 @@ export class NovelStore {
             awaitingApprovalRevision: null,
             activeDurationMs: 0,
             activeWindowStart: null,
-          }
-        : {
-            status: 'active',
-            phase: 'outlining',
-            pauseReason: null,
-            pauseDetail: null,
-            resumeHint: null,
-            currentUnitId: null,
-            turnsRun: 0,
-            deduceRuns: 0,
-            writerRuns: 0,
-            usageSamples: [],
-            startedAt: now,
-            completedAt: null,
-            lastProgressSignature: null,
-            stalledTurns: 0,
-            consecutiveFailures: 0,
-            lastError: null,
-            inFlightIntent: null,
-            awaitingApprovalRevision: null,
-            activeDurationMs: 0,
-            activeWindowStart: now,
           }
       // First requirement: the creation requirement with a stable host message
       // id derived from the project id (§4.1: request retries must not register
@@ -297,12 +425,14 @@ export class NovelStore {
         commits: [],
         completedChapters: [],
         premiseNote: null,
+        import: imported,
+        bodyRevisions: [],
         run,
         contentRevision: '',
         countPolicyVersion: 1,
       }
       snapshot.contentRevision = contentRevisionOf(snapshot)
-      const revision = await this.publish(dir, null, snapshot, 'create-novel')
+      const revision = await this.publish(dir, null, snapshot, source === null ? 'create-novel' : 'create-imported-novel')
       return { novelId, revision, requirementId: 'req-1' }
     })
   }
@@ -386,6 +516,532 @@ export class NovelStore {
       await fs.rm(dir, { recursive: true, force: true })
       return true
     })
+  }
+
+  /* -------------------- imported source (proposal 0020) -------------------- */
+
+  /** Reads one immutable source part with integrity checks (hash + count). */
+  async importSourcePart(novelId: string, partId: string): Promise<{ part: ImportedPart; text: string }> {
+    const current = await this.readSnapshot(novelId)
+    if (current === undefined) throw new NovelNotFoundError({ novelId })
+    const part = current.import?.parts.find((candidate) => candidate.partId === partId)
+    if (part === undefined) throw new NovelPreconditionError({ rule: 'import-part-not-found', violations: [partId] })
+    if (!/^imp-[0-9]+$/.test(part.partId)) {
+      throw new NovelStorageCorruptionError({ novelId, path: this.novelDir(novelId), detail: 'the import state carries an invalid part id' })
+    }
+    const dir = this.novelDir(novelId)
+    const partPath = path.join(dir, 'imports', 'parts', `${part.partId}.txt`)
+    const text = await tryReadText(partPath)
+    if (text === undefined) {
+      throw new NovelStorageCorruptionError({ novelId, path: partPath, detail: 'imported source part is missing' })
+    }
+    if (sha256hex(text) !== part.contentHash || countEffectiveCharacters(text) !== part.effectiveCharacters) {
+      throw new NovelStorageCorruptionError({ novelId, path: partPath, detail: `imported source part '${part.partId}' does not match its snapshot record` })
+    }
+    return { part, text }
+  }
+
+  /**
+   * Counts one extraction attempt before the model runs. A part already
+   * extracted is an idempotent no-op; exhausting the retry budget is a hard
+   * precondition error so the tool can pause with a concrete reason.
+   */
+  async beginImportPartAttempt(novelId: string, partId: string): Promise<{ attempt: number; alreadyExtracted: boolean; revision: string }> {
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId)
+      if (current.run.status !== 'active') throw new NovelPreconditionError({ rule: 'not-active' })
+      const part = current.import?.parts.find((candidate) => candidate.partId === partId)
+      if (part === undefined) throw new NovelPreconditionError({ rule: 'import-part-not-found', violations: [partId] })
+      if (part.status === 'extracted') return { attempt: part.attempts, alreadyExtracted: true, revision: current.revision }
+      if (part.attempts >= IMPORT_MAX_PART_ATTEMPTS) {
+        throw new NovelPreconditionError({
+          rule: 'import-part-exhausted',
+          violations: [`${part.partId}:${part.attempts}`],
+        })
+      }
+      const attempt = part.attempts + 1
+      const next: NovelSnapshot = {
+        ...current,
+        updatedAt: new Date().toISOString(),
+        import: {
+          ...current.import!,
+          parts: current.import!.parts.map((candidate) => candidate.partId === partId
+            ? { ...candidate, attempts: attempt, status: 'pending' as const, error: null }
+            : candidate),
+        },
+      }
+      const revision = await this.publish(dir, current.revision, next, `import-attempt:${partId}:${attempt}`)
+      return { attempt, alreadyExtracted: false, revision }
+    })
+  }
+
+  async recordImportExtraction(
+    novelId: string,
+    input: { partId: string; extraction: ImportExtraction },
+  ): Promise<{ revision: string; duplicate: boolean; extractedParts: number; partCount: number }> {
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId)
+      if (current.run.status !== 'active') throw new NovelPreconditionError({ rule: 'not-active' })
+      const part = current.import?.parts.find((candidate) => candidate.partId === input.partId)
+      if (part === undefined) throw new NovelPreconditionError({ rule: 'import-part-not-found', violations: [input.partId] })
+      const extraction = normaliseImportExtraction(input.extraction, part.partId, part.chapterId)
+      const extractionHash = sha256hex(stableStringify(extraction))
+      if (part.status === 'extracted') {
+        if (part.extractionHash === extractionHash) {
+          return {
+            revision: current.revision,
+            duplicate: true,
+            extractedParts: current.import!.parts.filter((candidate) => candidate.status === 'extracted').length,
+            partCount: current.import!.parts.length,
+          }
+        }
+        throw new NovelPreconditionError({ rule: 'import-part-extracted', violations: [part.partId] })
+      }
+      await writeImmutableBytes(path.join(dir, 'imports', 'extractions', `${extractionHash}.json`), jsonBytes(extraction))
+      const parts = current.import!.parts.map((candidate) => candidate.partId === part.partId
+        ? {
+            ...candidate,
+            status: 'extracted' as const,
+            extractionHash,
+            summary: extraction.summary,
+            error: null,
+          }
+        : candidate)
+      const next: NovelSnapshot = {
+        ...current,
+        updatedAt: new Date().toISOString(),
+        import: { ...current.import!, parts },
+      }
+      const revision = await this.publish(dir, current.revision, next, `import-extraction:${part.partId}`)
+      return {
+        revision,
+        duplicate: false,
+        extractedParts: parts.filter((candidate) => candidate.status === 'extracted').length,
+        partCount: parts.length,
+      }
+    })
+  }
+
+  async failImportPart(
+    novelId: string,
+    input: { partId: string; error: string },
+  ): Promise<{ revision: string; attempts: number; exhausted: boolean; pending: number }> {
+    if (typeof input.error !== 'string' || input.error.trim() === '') throw new NovelConfigError({ message: 'import failure reason must be a non-empty string' })
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId)
+      const part = current.import?.parts.find((candidate) => candidate.partId === input.partId)
+      if (part === undefined) throw new NovelPreconditionError({ rule: 'import-part-not-found', violations: [input.partId] })
+      if (part.status === 'extracted') {
+        return {
+          revision: current.revision,
+          attempts: part.attempts,
+          exhausted: false,
+          pending: current.import!.parts.filter((candidate) => candidate.status !== 'extracted').length,
+        }
+      }
+      const error = input.error.length <= 1200 ? input.error : `${input.error.slice(0, 1200)}…`
+      const parts = current.import!.parts.map((candidate) => candidate.partId === part.partId
+        ? { ...candidate, status: 'failed' as const, error }
+        : candidate)
+      const next: NovelSnapshot = {
+        ...current,
+        updatedAt: new Date().toISOString(),
+        import: { ...current.import!, parts },
+      }
+      const revision = await this.publish(dir, current.revision, next, `import-failure:${part.partId}`)
+      return {
+        revision,
+        attempts: part.attempts,
+        exhausted: part.attempts >= IMPORT_MAX_PART_ATTEMPTS,
+        pending: parts.filter((candidate) => candidate.status !== 'extracted').length,
+      }
+    })
+  }
+
+  async readImportExtraction(novelId: string, partId: string): Promise<ImportExtraction | undefined> {
+    const current = await this.readSnapshot(novelId)
+    if (current === undefined) throw new NovelNotFoundError({ novelId })
+    const part = current.import?.parts.find((candidate) => candidate.partId === partId)
+    if (part === undefined) throw new NovelPreconditionError({ rule: 'import-part-not-found', violations: [partId] })
+    if (part.extractionHash === null) return undefined
+    if (!/^[0-9a-f]{64}$/.test(part.extractionHash)) {
+      throw new NovelStorageCorruptionError({ novelId, path: this.novelDir(novelId), detail: `part '${partId}' carries an invalid extraction hash` })
+    }
+    return this.readImmutableJson<ImportExtraction>(novelId, path.join('imports', 'extractions', `${part.extractionHash}.json`), 'import extraction')
+  }
+
+  async readImportBible(novelId: string): Promise<ImportBibleRecord | undefined> {
+    const current = await this.readSnapshot(novelId)
+    if (current === undefined) throw new NovelNotFoundError({ novelId })
+    const hash = current.import?.bibleHash ?? null
+    if (hash === null) return undefined
+    if (!/^[0-9a-f]{64}$/.test(hash)) {
+      throw new NovelStorageCorruptionError({ novelId, path: this.novelDir(novelId), detail: 'the import state carries an invalid bible hash' })
+    }
+    return this.readImmutableJson<ImportBibleRecord>(novelId, path.join('imports', 'bibles', `${hash}.json`), 'import bible')
+  }
+
+  /**
+   * Fuses extraction results into the project bible and materialises character
+   * and world assets (proposal 0020 §4). All parts must be extracted first;
+   * retries with the same bible replay the existing receipt.
+   */
+  async applyImportMerge(
+    novelId: string,
+    input: { expectedRevision: string; bible: ImportBiblePayload },
+  ): Promise<{ revision: string; bibleRevision: string; assetsAdded: number; summary: ImportBibleSummary; duplicate: boolean }> {
+    const bible = normaliseImportBible(input.bible)
+    const bibleRevision = hash16(bible)
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId)
+      const state = current.import
+      if (state === null || state === undefined) throw new NovelPreconditionError({ rule: 'import-missing' })
+      if (state.bibleHash !== null) {
+        if (!/^[0-9a-f]{64}$/.test(state.bibleHash)) {
+          throw new NovelStorageCorruptionError({ novelId, path: this.novelDir(novelId), detail: 'the import state carries an invalid bible hash' })
+        }
+        const existing = await this.readImmutableJson<ImportBibleRecord>(novelId, path.join('imports', 'bibles', `${state.bibleHash}.json`), 'import bible')
+        if (existing.bibleRevision === bibleRevision) {
+          const summary = state.bibleSummary ?? bibleSummaryOf(existing)
+          return { revision: current.revision, bibleRevision, assetsAdded: 0, summary, duplicate: true }
+        }
+        throw new NovelPreconditionError({ rule: 'import-already-merged', violations: [state.bibleHash] })
+      }
+      if (current.run.status !== 'active') throw new NovelPreconditionError({ rule: 'not-active' })
+      this.assertRevision(current, input.expectedRevision)
+      const pending = state.parts.filter((part) => part.status !== 'extracted')
+      if (pending.length > 0) {
+        throw new NovelPreconditionError({ rule: 'import-parts-pending', violations: pending.slice(0, 20).map((part) => part.partId) })
+      }
+      const mergedAt = new Date().toISOString()
+      const record: ImportBibleRecord = {
+        ...bible,
+        bibleRevision,
+        mergedAt,
+        sourcePartCount: state.parts.length,
+      }
+      const bibleHash = sha256hex(stableStringify(record))
+      await writeImmutableBytes(path.join(dir, 'imports', 'bibles', `${bibleHash}.json`), jsonBytes(record))
+
+      const assets = [...current.assets]
+      const knownHashes = new Set(assets.map((asset) => asset.contentHash))
+      let assetsAdded = 0
+      const characterNames = new Set<string>()
+      for (const character of bible.characters) {
+        const card = importCharacterCard(character)
+        const contentHash = sha256hex(stableStringify(card))
+        if (!knownHashes.has(contentHash)) {
+          await writeImmutableBytes(path.join(dir, 'assets', `${contentHash}.json`), jsonBytes(card))
+          knownHashes.add(contentHash)
+          assetsAdded += 1
+        }
+        let displayName = character.name
+        let suffix = 2
+        while (characterNames.has(displayName)) {
+          displayName = `${character.name} (${suffix})`
+          suffix += 1
+        }
+        characterNames.add(displayName)
+        if (!assets.some((asset) => asset.contentHash === contentHash)) {
+          assets.push({
+            kind: 'character',
+            sourceId: `import:${displayName}`,
+            displayName,
+            contentHash,
+            specVersion: '2.0',
+          })
+        }
+      }
+      if (bible.worldEntries.length > 0) {
+        const world = importWorldBook(current.config.title, bible.worldEntries)
+        const contentHash = sha256hex(stableStringify(world))
+        if (!knownHashes.has(contentHash)) {
+          await writeImmutableBytes(path.join(dir, 'assets', `${contentHash}.json`), jsonBytes(world))
+          knownHashes.add(contentHash)
+          assetsAdded += 1
+        }
+        if (!assets.some((asset) => asset.contentHash === contentHash)) {
+          assets.push({
+            kind: 'world',
+            sourceId: `import:${current.config.title}`,
+            displayName: world.name,
+            contentHash,
+            specVersion: null,
+          })
+        }
+      }
+      const summary = bibleSummaryOf(record)
+      const next: NovelSnapshot = {
+        ...current,
+        updatedAt: mergedAt,
+        assets,
+        import: { ...state, bibleHash, bibleSummary: summary },
+        run: current.run.status === 'active' ? { ...current.run, phase: 'outlining' } : current.run,
+      }
+      const revision = await this.publish(dir, current.revision, next, `import-merge:${bibleRevision}`)
+      return { revision, bibleRevision, assetsAdded, summary, duplicate: false }
+    })
+  }
+
+  /**
+   * Merge digest for the author agent (proposal 0020 §4.2): sampled summaries,
+   * deduped characters/world entries, timeline head+tail and the source tail.
+   * Bounded by design so a 100-part book never overflows the author context.
+   */
+  async readImportDigest(novelId: string): Promise<ReturnType<typeof buildImportDigest> | undefined> {
+    const current = await this.readSnapshot(novelId)
+    if (current === undefined) throw new NovelNotFoundError({ novelId })
+    const state = current.import
+    if (state === null || state === undefined) return undefined
+    const extractions: ImportExtraction[] = []
+    for (const part of state.parts) {
+      if (part.extractionHash === null) continue
+      if (!/^[0-9a-f]{64}$/.test(part.extractionHash)) {
+        throw new NovelStorageCorruptionError({ novelId, path: this.novelDir(novelId), detail: `part '${part.partId}' carries an invalid extraction hash` })
+      }
+      extractions.push(await this.readImmutableJson<ImportExtraction>(novelId, path.join('imports', 'extractions', `${part.extractionHash}.json`), 'import extraction'))
+    }
+    return buildImportDigest({ state, extractions, sourceTail: await this.importSourceTail(novelId, 4000) })
+  }
+
+  /** Tail of the imported source, read from the last parts backwards. */
+  async importSourceTail(novelId: string, maxCharacters: number): Promise<string> {
+    if (!Number.isInteger(maxCharacters) || maxCharacters < 1) throw new NovelConfigError({ message: 'maxCharacters must be a positive integer' })
+    const current = await this.readSnapshot(novelId)
+    if (current === undefined) throw new NovelNotFoundError({ novelId })
+    const state = current.import
+    if (state === null || state === undefined) return ''
+    let tail = ''
+    for (let index = state.parts.length - 1; index >= 0 && tail.length < maxCharacters; index -= 1) {
+      const part = state.parts[index]!
+      const source = await this.importSourcePart(novelId, part.partId)
+      tail = tail === '' ? source.text : `${source.text}\n\n${tail}`
+    }
+    return tail.slice(-maxCharacters)
+  }
+
+  /**
+   * Pages the imported source by chapter or part. Cursors are character
+   * offsets; text is returned verbatim and bounded by `limit`.
+   */
+  async readImportSource(
+    novelId: string,
+    query: { chapterId?: string; partId?: string; cursor?: string; limit?: number },
+  ): Promise<{ text: string; nextCursor: string | null; chapterId: string | null; partId: string | null; title: string | null }> {
+    if (query.limit !== undefined && (!Number.isInteger(query.limit) || query.limit < 1)) throw new NovelConfigError({ message: 'limit must be a positive integer' })
+    const cursor = query.cursor === undefined ? 0 : Number(query.cursor)
+    if (!Number.isInteger(cursor) || cursor < 0) throw new NovelConfigError({ message: 'cursor must be a non-negative integer string' })
+    const current = await this.readSnapshot(novelId)
+    if (current === undefined) throw new NovelNotFoundError({ novelId })
+    const state = current.import
+    if (state === null || state === undefined) throw new NovelPreconditionError({ rule: 'import-missing' })
+    let selected = [...state.parts].sort((left, right) => left.order - right.order)
+    let title: string | null = null
+    if (query.partId !== undefined) {
+      selected = selected.filter((part) => part.partId === query.partId)
+      title = state.chapters.find((chapter) => chapter.chapterId === selected[0]?.chapterId)?.title ?? null
+    } else if (query.chapterId !== undefined) {
+      selected = selected.filter((part) => part.chapterId === query.chapterId)
+      title = state.chapters.find((chapter) => chapter.chapterId === query.chapterId)?.title ?? null
+    }
+    if (selected.length === 0) throw new NovelPreconditionError({ rule: 'import-chapter-not-found', violations: [query.chapterId ?? query.partId ?? ''] })
+    const texts: string[] = []
+    for (const part of selected) {
+      texts.push((await this.importSourcePart(novelId, part.partId)).text)
+    }
+    const full = texts.join('\n\n')
+    const limit = query.limit ?? 12000
+    const text = full.slice(cursor, cursor + limit)
+    return {
+      text,
+      nextCursor: cursor + text.length < full.length ? String(cursor + text.length) : null,
+      chapterId: query.partId !== undefined ? selected[0]!.chapterId : query.chapterId ?? null,
+      partId: query.partId ?? null,
+      title,
+    }
+  }
+
+  /** Ordered scan over imported source parts; returns bounded excerpts. */
+  async searchImportSource(
+    novelId: string,
+    input: { query: string; limit: number },
+  ): Promise<{ hits: Array<{ partId: string; chapterId: string; chapterTitle: string; partOrder: number; excerpt: string }>; scannedParts: number; truncated: boolean }> {
+    if (typeof input.query !== 'string' || input.query.trim() === '') throw new NovelConfigError({ message: 'query must be a non-empty string' })
+    if (!Number.isInteger(input.limit) || input.limit < 1) throw new NovelConfigError({ message: 'limit must be a positive integer' })
+    const current = await this.readSnapshot(novelId)
+    if (current === undefined) throw new NovelNotFoundError({ novelId })
+    const state = current.import
+    if (state === null || state === undefined) throw new NovelPreconditionError({ rule: 'import-missing' })
+    const tokens = [...new Set(input.query.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])]
+    if (tokens.length === 0) throw new NovelConfigError({ message: 'query contains no searchable tokens' })
+    const chapterTitle = new Map(state.chapters.map((chapter) => [chapter.chapterId, chapter.title]))
+    const hits: Array<{ partId: string; chapterId: string; chapterTitle: string; partOrder: number; excerpt: string }> = []
+    let truncated = false
+    let scannedParts = 0
+    for (const part of [...state.parts].sort((left, right) => left.order - right.order)) {
+      scannedParts += 1
+      const text = (await this.importSourcePart(novelId, part.partId)).text
+      const haystack = text.toLocaleLowerCase()
+      if (!tokens.every((token) => haystack.includes(token))) continue
+      if (hits.length >= input.limit) {
+        truncated = true
+        break
+      }
+      hits.push({
+        partId: part.partId,
+        chapterId: part.chapterId,
+        chapterTitle: chapterTitle.get(part.chapterId) ?? part.chapterId,
+        partOrder: part.order,
+        excerpt: excerptAround(text, tokens, 500),
+      })
+    }
+    return { hits, scannedParts, truncated }
+  }
+
+  /* --------------------- body revisions (proposal 0020 §5) --------------------- */
+
+  /** Stages a pending replacement of a chapter's effective body. */
+  async createBodyRevision(
+    novelId: string,
+    input: { chapterId: string; instruction: string; paragraphs: readonly string[]; expectedContentRevision: string },
+  ): Promise<{ revisionId: string; revision: string; bodyHash: string; effectiveCharacters: number }> {
+    if (typeof input.instruction !== 'string' || input.instruction.trim() === '') throw new NovelConfigError({ message: 'revision instruction must be a non-empty string' })
+    if (input.instruction.length > 4000) throw new NovelConfigError({ message: 'revision instruction exceeds 4000 characters' })
+    if (!Array.isArray(input.paragraphs) || input.paragraphs.length === 0) throw new NovelConfigError({ message: 'revision paragraphs must be a non-empty array' })
+    for (const paragraph of input.paragraphs) {
+      if (typeof paragraph !== 'string' || paragraph.trim() === '') throw new NovelConfigError({ message: 'revision paragraphs must be non-empty strings' })
+      if (paragraph.includes(PARAGRAPH_SEPARATOR)) throw new NovelConfigError({ message: `paragraph must not contain the fixed separator '${JSON.stringify(PARAGRAPH_SEPARATOR)}'` })
+    }
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId)
+      if (current.contentRevision !== input.expectedContentRevision) {
+        // The optimizer read an older effective body; committing this revision
+        // would silently drop commits or a newer applied revision.
+        throw new NovelRevisionConflictError({ expected: input.expectedContentRevision, actual: current.contentRevision, detail: 'contentRevision' })
+      }
+      const chapterExists = current.outline?.chapters.some((chapter) => chapter.chapterId === input.chapterId)
+        ?? false
+      if (!chapterExists) throw new NovelPreconditionError({ rule: 'chapter-not-found', violations: [input.chapterId] })
+      if (current.units.some((unit) => unit.chapterId === input.chapterId && unit.state === 'claimed')) {
+        throw new NovelPreconditionError({ rule: 'unit-claimed', violations: [input.chapterId] })
+      }
+      const commits = current.commits.filter((commit) => commit.chapterId === input.chapterId)
+      if (commits.length === 0) throw new NovelPreconditionError({ rule: 'chapter-empty', violations: [input.chapterId] })
+      const paragraphs = [...input.paragraphs]
+      const bodyHash = sha256hex(stableStringify(paragraphs))
+      const effectiveCharacters = paragraphs.reduce((total, paragraph) => total + countEffectiveCharacters(paragraph), 0)
+      if (effectiveCharacters === 0) throw new NovelConfigError({ message: 'revision paragraphs contain no effective characters' })
+      await writeImmutableBytes(path.join(dir, 'bodies', `${bodyHash}.txt`), textBytes(paragraphs.join(PARAGRAPH_SEPARATOR)))
+      const now = new Date().toISOString()
+      const records = (current.bodyRevisions ?? []).map((record) => record.chapterId === input.chapterId && record.status === 'pending'
+        ? { ...record, status: 'discarded' as const }
+        : record)
+      const record: BodyRevisionRecord = {
+        revisionId: `rev-${randomBytes(6).toString('hex')}`,
+        chapterId: input.chapterId,
+        instruction: input.instruction.trim(),
+        bodyHash,
+        paragraphCount: paragraphs.length,
+        effectiveCharacters,
+        coveredCommitIds: commits.map((commit) => commit.commitId),
+        baseContentRevision: input.expectedContentRevision,
+        status: 'pending',
+        createdAt: now,
+        appliedAt: null,
+      }
+      const next: NovelSnapshot = {
+        ...current,
+        updatedAt: now,
+        bodyRevisions: [...records, record],
+      }
+      const revision = await this.publish(dir, current.revision, next, `body-revision:${record.revisionId}`)
+      return { revisionId: record.revisionId, revision, bodyHash, effectiveCharacters }
+    })
+  }
+
+  /** Applies a pending revision; the previous applied revision becomes superseded. */
+  async applyBodyRevision(
+    novelId: string,
+    input: { revisionId: string; expectedRevision: string },
+  ): Promise<{ revision: string; effectiveCharacters: number; totalCharacters: number }> {
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId)
+      this.assertRevision(current, input.expectedRevision)
+      const record = (current.bodyRevisions ?? []).find((candidate) => candidate.revisionId === input.revisionId)
+      if (record === undefined) throw new NovelPreconditionError({ rule: 'body-revision-not-found', violations: [input.revisionId] })
+      if (record.status !== 'pending') throw new NovelPreconditionError({ rule: 'body-revision-not-pending', violations: [`${record.revisionId}:${record.status}`] })
+      if (current.contentRevision !== record.baseContentRevision) {
+        throw new NovelRevisionConflictError({ expected: record.baseContentRevision, actual: current.contentRevision, detail: 'body revision base content' })
+      }
+      if (current.units.some((unit) => unit.chapterId === record.chapterId && unit.state === 'claimed')) {
+        throw new NovelPreconditionError({ rule: 'unit-claimed', violations: [record.chapterId] })
+      }
+      if (!/^[0-9a-f]{64}$/.test(record.bodyHash)) {
+        throw new NovelStorageCorruptionError({ novelId, path: this.novelDir(novelId), detail: `body revision '${record.revisionId}' carries an invalid body hash` })
+      }
+      const revisionParagraphs = await this.readBodyParagraphs(novelId, dir, record.bodyHash, record.paragraphCount)
+      const revisionCharacters = revisionParagraphs.reduce((total, paragraph) => total + countEffectiveCharacters(paragraph), 0)
+      if (revisionCharacters !== record.effectiveCharacters) {
+        throw new NovelStorageCorruptionError({ novelId, path: path.join(dir, 'bodies', `${record.bodyHash}.txt`), detail: `body revision '${record.revisionId}' effective characters do not match its record` })
+      }
+      const chapterBefore = effectiveChapterCharacters(current, record.chapterId)
+      const totalAfter = effectiveNovelCharacters(current) - chapterBefore + record.effectiveCharacters
+      const budget = current.config.lengthBudget
+      if (budget.kind === 'target' && budget.hardMaximumCharacters !== null && totalAfter > budget.hardMaximumCharacters) {
+        throw new NovelLengthLimitError({ current: totalAfter, target: budget.targetCharacters, hardMaximum: budget.hardMaximumCharacters })
+      }
+      const now = new Date().toISOString()
+      const records = (current.bodyRevisions ?? []).map((candidate) => {
+        if (candidate.chapterId !== record.chapterId) return candidate
+        if (candidate.revisionId === record.revisionId) return { ...candidate, status: 'applied' as const, appliedAt: now }
+        if (candidate.status === 'applied') return { ...candidate, status: 'superseded' as const }
+        return candidate
+      })
+      const next: NovelSnapshot = { ...current, updatedAt: now, bodyRevisions: records }
+      next.contentRevision = contentRevisionOf(next)
+      const revision = await this.publish(dir, current.revision, next, `body-revision-apply:${record.revisionId}`)
+      return { revision, effectiveCharacters: record.effectiveCharacters, totalCharacters: totalAfter }
+    })
+  }
+
+  async discardBodyRevision(
+    novelId: string,
+    input: { revisionId: string; expectedRevision: string },
+  ): Promise<{ revision: string }> {
+    return this.mutate(novelId, async () => {
+      const { dir, current } = await this.beginMutation(novelId)
+      this.assertRevision(current, input.expectedRevision)
+      const record = (current.bodyRevisions ?? []).find((candidate) => candidate.revisionId === input.revisionId)
+      if (record === undefined) throw new NovelPreconditionError({ rule: 'body-revision-not-found', violations: [input.revisionId] })
+      if (record.status !== 'pending') throw new NovelPreconditionError({ rule: 'body-revision-not-pending', violations: [`${record.revisionId}:${record.status}`] })
+      const next: NovelSnapshot = {
+        ...current,
+        updatedAt: new Date().toISOString(),
+        bodyRevisions: (current.bodyRevisions ?? []).map((candidate) => candidate.revisionId === record.revisionId
+          ? { ...candidate, status: 'discarded' as const }
+          : candidate),
+      }
+      next.contentRevision = contentRevisionOf(next)
+      const revision = await this.publish(dir, current.revision, next, `body-revision-discard:${record.revisionId}`)
+      return { revision }
+    })
+  }
+
+  async readBodyRevision(novelId: string, revisionId: string): Promise<{ record: BodyRevisionRecord; paragraphs: readonly string[] }> {
+    const current = await this.readSnapshot(novelId)
+    if (current === undefined) throw new NovelNotFoundError({ novelId })
+    const record = (current.bodyRevisions ?? []).find((candidate) => candidate.revisionId === revisionId)
+    if (record === undefined) throw new NovelPreconditionError({ rule: 'body-revision-not-found', violations: [revisionId] })
+    if (!/^[0-9a-f]{64}$/.test(record.bodyHash)) {
+      throw new NovelStorageCorruptionError({ novelId, path: this.novelDir(novelId), detail: `body revision '${revisionId}' carries an invalid body hash` })
+    }
+    const dir = this.novelDir(novelId)
+    const paragraphs = await this.readBodyParagraphs(novelId, dir, record.bodyHash, record.paragraphCount)
+    const counted = paragraphs.reduce((total, paragraph) => total + countEffectiveCharacters(paragraph), 0)
+    if (counted !== record.effectiveCharacters) {
+      throw new NovelStorageCorruptionError({ novelId, path: path.join(dir, 'bodies', `${record.bodyHash}.txt`), detail: `body revision '${revisionId}' effective characters do not match its record` })
+    }
+    return { record, paragraphs }
   }
 
   /* --------------------------- requirements (§9) --------------------------- */
@@ -473,7 +1129,7 @@ export class NovelStore {
       }
       const requirements = applyHandledRequirements(current.requirements, handled, outlineRevision)
       const watermark = assertWatermarkAdvanced(current.requirements, requirements)
-      const run = this.runAfterOutlineChange(current.run, current.config.approvalMode, outlineRevision, requirements)
+      const run = this.runAfterOutlineChange(current.run, current.config.approvalMode, outlineRevision, requirements, true)
       const next: NovelSnapshot = { ...current, updatedAt: new Date().toISOString(), outline: built, requirements, run }
       const revision = await this.publish(dir, current.revision, next, `outline-create:${outlineRevision}`)
       return { outlineRevision, revision, watermark }
@@ -543,7 +1199,7 @@ export class NovelStore {
       }
       const requirements = applyHandledRequirements(current.requirements, handled, outlineRevision)
       const watermark = assertWatermarkAdvanced(current.requirements, requirements)
-      const run = this.runAfterOutlineChange(current.run, current.config.approvalMode, outlineRevision, requirements)
+      const run = this.runAfterOutlineChange(current.run, current.config.approvalMode, outlineRevision, requirements, false)
       const next: NovelSnapshot = { ...current, updatedAt: new Date().toISOString(), outline: built, requirements, run }
       const revision = await this.publish(dir, current.revision, next, `outline-revise:${outlineRevision}`)
       return { outlineRevision, revision, watermark }
@@ -788,18 +1444,13 @@ export class NovelStore {
       const existing = current.commits.find((commit) => commit.unitId === unit.unitId)
       if (existing !== undefined) {
         if (existing.bodyHash !== businessHash) throw new NovelDuplicateCommitError({ unitId: unit.unitId, existingCommitId: existing.commitId })
-        let total = 0
-        for (const commit of current.commits) {
-          total += commit.effectiveCharacters
-          if (commit.commitId === existing.commitId) break
-        }
         return {
           commitId: existing.commitId,
           unitId: unit.unitId,
           bodyHash: existing.bodyHash,
           effectiveCharacters: existing.effectiveCharacters,
           deltaCharacters: existing.effectiveCharacters,
-          totalCharacters: total,
+          totalCharacters: effectiveNovelCharacters(current),
           revision: current.revision,
           duplicate: true,
         }
@@ -817,7 +1468,7 @@ export class NovelStore {
       // 4. Hard maximum is checked before anything is written (§7.2).
       const budget = current.config.lengthBudget
       const delta = input.paragraphs.reduce((sum, paragraph) => sum + countEffectiveCharacters(paragraph), 0)
-      const totalBefore = totalEffectiveCharacters(current.commits)
+      const totalBefore = effectiveNovelCharacters(current)
       const totalAfter = totalBefore + delta
       if (budget.kind === 'target' && budget.hardMaximumCharacters !== null && totalAfter > budget.hardMaximumCharacters) {
         throw new NovelLengthLimitError({ current: totalAfter, target: budget.targetCharacters, hardMaximum: budget.hardMaximumCharacters })
@@ -938,7 +1589,7 @@ export class NovelStore {
         },
       }
       const revision = await this.publish(dir, current.revision, next, 'finish-novel')
-      return { revision, totalCharacters: totalEffectiveCharacters(next.commits) }
+      return { revision, totalCharacters: effectiveNovelCharacters(next) }
     })
   }
 
@@ -1031,10 +1682,25 @@ export class NovelStore {
       }
       const blocked = current.requirements.filter((record) => record.status === 'blocked')
       const pending = current.requirements.filter((record) => record.status === 'pending')
-      const phase = current.outline === null ? 'outlining' : blocked.length > 0 || pending.length > 0 ? 'revising' : 'writing'
+      const importing = current.import !== null && current.import !== undefined && current.import.bibleHash === null
+      const phase = importing
+        ? 'importing'
+        : current.outline === null ? 'outlining' : blocked.length > 0 || pending.length > 0 ? 'revising' : 'writing'
+      // An explicit resume also authorizes a fresh retry budget for unfinished
+      // extraction parts (the failure path pauses after attempts run out).
+      // Extracted parts and their results are never touched.
+      const imported = importing
+        ? {
+            ...current.import!,
+            parts: current.import!.parts.map((part) => part.status === 'extracted'
+              ? part
+              : { ...part, attempts: 0, status: 'pending' as const, error: null }),
+          }
+        : current.import
       const next: NovelSnapshot = {
         ...current,
         updatedAt: new Date().toISOString(),
+        ...(importing ? { import: imported } : {}),
         run: {
           ...current.run,
           status: 'active',
@@ -1267,6 +1933,12 @@ export class NovelStore {
 
   /* -------------------------------- reads -------------------------------- */
 
+  /**
+   * Reads effective body paragraphs in story order. An applied body revision
+   * replaces the commits it covered (proposal 0020 §5); commits committed after
+   * the revision append after it. A unitId filter keeps the raw commit view
+   * because revisions are chapter-scoped.
+   */
   async readBody(
     novelId: string,
     query: { chapterId?: string; unitId?: string; cursor?: string; limit?: number },
@@ -1277,13 +1949,31 @@ export class NovelStore {
     const current = await this.readSnapshot(novelId)
     if (current === undefined) throw new NovelNotFoundError({ novelId })
     const dir = this.novelDir(novelId)
-    const selected = current.commits.filter((commit) =>
-      (query.chapterId === undefined || commit.chapterId === query.chapterId)
-      && (query.unitId === undefined || commit.unitId === query.unitId))
     const flattened: Array<{ commitId: string; paragraphIndex: number; chapterId: string; text: string }> = []
-    for (const commit of selected) {
-      const paragraphs = await this.readBodyParagraphs(novelId, dir, commit.bodyHash, commit.paragraphCount)
-      paragraphs.forEach((text, index) => flattened.push({ commitId: commit.commitId, paragraphIndex: index, chapterId: commit.chapterId, text }))
+    if (query.unitId !== undefined) {
+      const selected = current.commits.filter((commit) =>
+        (query.chapterId === undefined || commit.chapterId === query.chapterId) && commit.unitId === query.unitId)
+      for (const commit of selected) {
+        const paragraphs = await this.readBodyParagraphs(novelId, dir, commit.bodyHash, commit.paragraphCount)
+        paragraphs.forEach((text, index) => flattened.push({ commitId: commit.commitId, paragraphIndex: index, chapterId: commit.chapterId, text }))
+      }
+    } else {
+      const chapterIds = query.chapterId !== undefined
+        ? [query.chapterId]
+        : [...new Set(current.commits.map((commit) => commit.chapterId))]
+      for (const chapterId of chapterIds) {
+        const revision = appliedBodyRevision(current, chapterId)
+        if (revision !== null) {
+          const paragraphs = await this.readBodyParagraphs(novelId, dir, revision.bodyHash, revision.paragraphCount)
+          paragraphs.forEach((text, index) => flattened.push({ commitId: revision.revisionId, paragraphIndex: index, chapterId, text }))
+        }
+        for (const commit of current.commits) {
+          if (commit.chapterId !== chapterId) continue
+          if (revision !== null && bodyRevisionCovers(revision, commit.commitId)) continue
+          const paragraphs = await this.readBodyParagraphs(novelId, dir, commit.bodyHash, commit.paragraphCount)
+          paragraphs.forEach((text, index) => flattened.push({ commitId: commit.commitId, paragraphIndex: index, chapterId, text }))
+        }
+      }
     }
     const limit = query.limit ?? Number.MAX_SAFE_INTEGER
     const page = flattened.slice(cursor, cursor + limit)
@@ -1321,6 +2011,19 @@ export class NovelStore {
       return JSON.parse(raw)
     } catch (cause) {
       throw new NovelStorageCorruptionError({ novelId, path: assetPath, detail: `asset object is not valid JSON: ${(cause as Error).message}` })
+    }
+  }
+
+  private async readImmutableJson<T>(novelId: string, relativePath: string, label: string): Promise<T> {
+    const filePath = path.join(this.novelDir(novelId), relativePath)
+    const raw = await tryReadText(filePath)
+    if (raw === undefined) {
+      throw new NovelStorageCorruptionError({ novelId, path: filePath, detail: `${label} is missing` })
+    }
+    try {
+      return JSON.parse(raw) as T
+    } catch (cause) {
+      throw new NovelStorageCorruptionError({ novelId, path: filePath, detail: `${label} is not valid JSON: ${(cause as Error).message}` })
     }
   }
 
@@ -1438,7 +2141,10 @@ export class NovelStore {
       || snapshot.novelId !== novelId || snapshot.revision !== head.revision
       || typeof snapshot.updatedAt !== 'string' || typeof snapshot.config !== 'object'
       || typeof snapshot.run !== 'object' || !Array.isArray(snapshot.requirements)
-      || !Array.isArray(snapshot.units) || !Array.isArray(snapshot.commits)) {
+      || !Array.isArray(snapshot.units) || !Array.isArray(snapshot.commits)
+      || (snapshot.import !== undefined && snapshot.import !== null
+        && (typeof snapshot.import !== 'object' || !Array.isArray(snapshot.import.parts) || !Array.isArray(snapshot.import.chapters)))
+      || (snapshot.bodyRevisions !== undefined && !Array.isArray(snapshot.bodyRevisions))) {
       throw new NovelStorageCorruptionError({ novelId, path: revisionPath, detail: 'revision file has an invalid shape' })
     }
     return snapshot
@@ -1506,7 +2212,14 @@ export class NovelStore {
       const titleByChapter = new Map<string, string>((snapshot.outline?.chapters ?? []).map((chapter) => [chapter.chapterId, chapter.title]))
       for (const chapterId of new Set(snapshot.commits.map((commit) => commit.chapterId))) {
         const parts: string[] = [`# ${titleByChapter.get(chapterId) ?? chapterId}`, '']
-        for (const commit of snapshot.commits.filter((item) => item.chapterId === chapterId)) {
+        const revision = appliedBodyRevision(snapshot, chapterId)
+        if (revision !== null) {
+          const paragraphs = await this.readBodyParagraphs(snapshot.novelId, dir, revision.bodyHash, revision.paragraphCount)
+          parts.push(paragraphs.join(PARAGRAPH_SEPARATOR), '')
+        }
+        for (const commit of snapshot.commits) {
+          if (commit.chapterId !== chapterId) continue
+          if (revision !== null && bodyRevisionCovers(revision, commit.commitId)) continue
           const paragraphs = await this.readBodyParagraphs(snapshot.novelId, dir, commit.bodyHash, commit.paragraphCount)
           parts.push(paragraphs.join(PARAGRAPH_SEPARATOR), '')
         }
@@ -1637,9 +2350,19 @@ export class NovelStore {
   }
 
   /** Run-state transitions after an outline create/revise (§4.3, §9.4). */
-  private runAfterOutlineChange(run: NovelRunState, approvalMode: 'automatic' | 'manual', outlineRevision: string, requirements: readonly RequirementRecord[]): NovelRunState {
+  private runAfterOutlineChange(
+    run: NovelRunState,
+    approvalMode: 'automatic' | 'manual',
+    outlineRevision: string,
+    requirements: readonly RequirementRecord[],
+    initialOutline: boolean,
+  ): NovelRunState {
     const blocked = requirements.some((record) => record.status === 'blocked')
-    if (run.awaitingApprovalRevision !== null || approvalMode === 'manual' && run.pauseReason === 'awaiting-approval') {
+    // A manual-mode project waits for approval on its first continuation
+    // outline even when it entered the outlining phase from import extraction
+    // (proposal 0020 §3): the initial gate is not tied to creation-time pause.
+    if (run.awaitingApprovalRevision !== null
+      || (approvalMode === 'manual' && (run.pauseReason === 'awaiting-approval' || initialOutline))) {
       // Still inside the initial approval gate: revisions re-enter awaiting (§4.3).
       return {
         ...run,
@@ -1659,5 +2382,94 @@ export class NovelStore {
     }
     // Paused for other reasons (user request, stop, budget...): stay paused.
     return run
+  }
+}
+
+/* --------------------------- import asset builders --------------------------- */
+
+function bibleSummaryOf(record: ImportBibleRecord): ImportBibleSummary {
+  return {
+    bibleRevision: record.bibleRevision,
+    mergedAt: record.mergedAt,
+    sourcePartCount: record.sourcePartCount,
+    premise: record.story.premise,
+    endingDirection: record.story.endingDirection,
+    characterCount: record.characters.length,
+    worldEntryCount: record.worldEntries.length,
+    timelineCount: record.timeline.length,
+  }
+}
+
+/** Minimal V2 card shape consumed by resolveCharacterPage (data.* fields). */
+function importCharacterCard(character: ImportCharacter): Record<string, unknown> {
+  const description = [character.identity, character.appearance, character.stateAtEnd]
+    .filter((part) => part.trim() !== '')
+    .join('\n\n')
+  const data: Record<string, unknown> = {
+    name: character.name,
+    description,
+    personality: character.personality,
+    scenario: character.role,
+    first_mes: '',
+    mes_example: '',
+    creator_notes: 'Extracted from an imported novel (AgentNovel continuation).',
+    system_prompt: '',
+    post_history_instructions: '',
+    alternate_greetings: [],
+    tags: ['imported', 'agent-novel'],
+    creator: 'AgentNovel import',
+    character_version: '',
+    extensions: {
+      importAliases: [...character.aliases],
+      importRelationships: character.relationships.map((relationship) => ({ ...relationship })),
+      importConfidence: character.confidence,
+      importMotivation: character.motivation,
+    },
+  }
+  return {
+    spec: 'chara_card_v2',
+    spec_version: '2.0',
+    data,
+    raw: structuredClone(data),
+  }
+}
+
+/** World book in the raw SillyTavern shape read by novel_lore_search. */
+function importWorldBook(title: string, entries: readonly ImportWorldEntry[]): { name: string; entries: Record<string, unknown>[] } {
+  return {
+    name: `导入原作设定 · ${title}`,
+    entries: entries.map((entry, index) => ({
+      uid: index,
+      key: [...entry.keys],
+      keysecondary: [],
+      comment: entry.title,
+      content: entry.content,
+      constant: false,
+      selective: entry.keys.length > 0,
+      order: 100,
+      position: 0,
+      disable: false,
+      addMemo: false,
+      excludeRecursion: false,
+      preventRecursion: false,
+      delayUntilRecursion: 0,
+      probability: 100,
+      useProbability: false,
+      depth: 4,
+      group: '',
+      groupOverride: false,
+      groupWeight: 100,
+      scanDepth: null,
+      caseSensitive: null,
+      matchWholeWords: null,
+      useGroupScoring: null,
+      automationId: '',
+      role: 0,
+      sticky: null,
+      cooldown: null,
+      delay: null,
+      triggers: [],
+      ...(entry.category !== '' ? { importCategory: entry.category } : {}),
+    })),
   }
 }

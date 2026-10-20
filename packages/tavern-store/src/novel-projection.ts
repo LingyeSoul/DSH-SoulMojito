@@ -21,5 +21,15 @@ export function contentRevisionOf(snapshot: NovelSnapshot): string {
     chapters: (snapshot.outline?.chapters ?? []).map((chapter) => ({ chapterId: chapter.chapterId, order: chapter.order, title: chapter.title })),
     completedChapters: snapshot.completedChapters,
     commits: snapshot.commits.map((commit) => ({ commitId: commit.commitId, bodyHash: commit.bodyHash, effectiveCharacters: commit.effectiveCharacters })),
+    // Pending/discarded revisions never project, so they must not invalidate
+    // content-revision CAS checks (chapter completion, next commit).
+    bodyRevisions: (snapshot.bodyRevisions ?? [])
+      .filter((revision) => revision.status === 'applied' || revision.status === 'superseded')
+      .map((revision) => ({
+        revisionId: revision.revisionId,
+        chapterId: revision.chapterId,
+        bodyHash: revision.bodyHash,
+        status: revision.status,
+      })),
   })
 }

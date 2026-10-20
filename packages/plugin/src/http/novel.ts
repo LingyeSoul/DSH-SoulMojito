@@ -11,10 +11,16 @@ import {
   NovelRevisionConflictError,
   NovelStaleUnitError,
   NovelStorageCorruptionError,
+  effectiveChapterCharacters,
+  importProgressOf,
   isValidNovelId,
+  parseEpubText,
+  parseImportedNovelText,
   summarizeNovel,
-  totalEffectiveCharacters,
   validateCreateConfig,
+  validateImportFormat,
+  validateImportSourceName,
+  validatePartTarget,
   type NovelCreateConfig,
   type NovelRunBudgets,
   type NovelSnapshot,
@@ -22,6 +28,8 @@ import {
   type TavernStore,
   type WriterMode,
 } from '../../../tavern-store/src/index.js'
+import { optimizeChapter } from '../agent-novel/tools/import.js'
+import type { ToolExecution } from '../agent-novel/tools/shared.js'
 import { AGENT_NOVEL_PRESET_ID, inspectAgentNovelCapabilities, inspectWriterSubagentCapabilities } from '../agent-novel/capabilities.js'
 import { recoverNovels, type DriverAgentLike } from '../agent-novel/driver.js'
 import { unitTargetRange } from '../agent-novel/outline.js'
@@ -44,7 +52,22 @@ const CARD_WORKBENCH_PRESET_ID = 'card-workbench'
  * these constants are the only stable place the subpath literals appear in
  * the bundle (see packages/plugin/scripts/gates/run.mjs).
  */
-const NOVEL_SUBPATHS = ['novels/outline', 'novels/body', 'novels/export', 'novels/pause', 'novels/resume', 'novels/stop', 'novels/update-outline', 'novels/approve-outline'] as const
+const NOVEL_SUBPATHS = [
+  'novels/outline',
+  'novels/body',
+  'novels/export',
+  'novels/pause',
+  'novels/resume',
+  'novels/stop',
+  'novels/update-outline',
+  'novels/approve-outline',
+  'novels/import',
+  'novels/import/chapter',
+  'novels/optimize',
+  'novels/optimize/apply',
+  'novels/optimize/discard',
+  'novels/revision',
+] as const
 type NovelSubpath = (typeof NOVEL_SUBPATHS)[number]
 
 export interface NovelApiRequest {
@@ -119,6 +142,34 @@ async function requireNovel(db: NovelStore, novelId: string): Promise<NovelSnaps
   return snapshot
 }
 
+function importDetailOf(snapshot: NovelSnapshot) {
+  const state = snapshot.import
+  if (state === null || state === undefined) return null
+  const progress = importProgressOf(state)
+  return {
+    sourceName: state.sourceName,
+    sourceFormat: state.sourceFormat,
+    importedAt: state.importedAt,
+    totalCharacters: state.totalCharacters,
+    partTargetCharacters: state.partTargetCharacters,
+    chapterSource: state.chapterSource,
+    progress,
+    chapters: state.chapters.map((chapter) => {
+      const parts = state.parts.filter((part) => part.chapterId === chapter.chapterId)
+      return {
+        chapterId: chapter.chapterId,
+        order: chapter.order,
+        title: chapter.title,
+        effectiveCharacters: chapter.effectiveCharacters,
+        partCount: parts.length,
+        extractedParts: parts.filter((part) => part.status === 'extracted').length,
+        failedParts: parts.filter((part) => part.status === 'failed').length,
+      }
+    }),
+    bible: state.bibleSummary,
+  }
+}
+
 /** Detail projection for GET novels/:id (client contract, proposal 0005 §14.3). */
 function novelDetail(snapshot: NovelSnapshot) {
   const summary = summarizeNovel(snapshot)
@@ -135,7 +186,7 @@ function novelDetail(snapshot: NovelSnapshot) {
         state: completed.has(chapter.chapterId)
           ? 'completed' as const
           : chapterCommits.length > 0 ? 'writing' as const : 'planned' as const,
-        committedCharacters: totalEffectiveCharacters(chapterCommits),
+        committedCharacters: effectiveChapterCharacters(snapshot, chapter.chapterId),
       }
     })
   const budget = snapshot.config.lengthBudget
@@ -170,6 +221,19 @@ function novelDetail(snapshot: NovelSnapshot) {
       chapterTitles: outline.chapters.map((chapter) => ({ chapterId: chapter.chapterId, title: chapter.title })),
       foreshadowing: outline.foreshadowing.map((item) => ({ id: item.id, description: item.description, status: item.status, required: item.required })),
     },
+    import: importDetailOf(snapshot),
+    bodyRevisions: (snapshot.bodyRevisions ?? [])
+      .slice(-40)
+      .map((record) => ({
+        revisionId: record.revisionId,
+        chapterId: record.chapterId,
+        instruction: record.instruction,
+        status: record.status,
+        paragraphCount: record.paragraphCount,
+        effectiveCharacters: record.effectiveCharacters,
+        createdAt: record.createdAt,
+        appliedAt: record.appliedAt,
+      })),
     budget: {
       turnsRun: snapshot.run.turnsRun,
       maxTurns: snapshot.config.budgets.maxTurns,
@@ -197,12 +261,13 @@ function novelDetail(snapshot: NovelSnapshot) {
  * (gated services throw or return nothing); callers treat a missing runtime as
  * a failed probe, never as an implicit inline downgrade.
  */
-async function discoverWriterProbeRuntime(ctx: unknown): Promise<{ runtime: SubagentRuntimeLike; parent: unknown; channel: 'bound-agent' | 'plugin-context' } | undefined> {
+async function discoverWriterProbeRuntime(ctx: unknown, novelId: string | null): Promise<{ runtime: SubagentRuntimeLike; parent: unknown; channel: 'bound-agent' | 'plugin-context' } | undefined> {
   try {
     const db: TavernStore = await store()
     const state = await db.getState()
     for (const [sessionId, binding] of Object.entries(state.sessionBindings)) {
       if (binding.architecture !== 'agent-novel') continue
+      if (novelId !== null && binding.novelId !== novelId) continue
       let agent: unknown
       try {
         agent = (ctx as { agents?: { get?: (id: string) => unknown } }).agents?.get?.(sessionId)
@@ -217,6 +282,76 @@ async function discoverWriterProbeRuntime(ctx: unknown): Promise<{ runtime: Suba
   }
   const runtime = subagentRuntimeOf({ ctx } as DeductionExecAgent)
   return runtime === undefined ? undefined : { runtime, parent: ctx, channel: 'plugin-context' }
+}
+
+/**
+ * Shared creation gate for POST novels and POST novels/import: capability
+ * reasons outrank config validation, and writerMode=subagent requires the
+ * 0007 §9 host probe to pass (fail-closed, never a silent inline downgrade).
+ */
+async function novelCreationGate(
+  ctx: { agents?: unknown; agentPresets?: unknown; systemPrompt?: unknown; tools?: unknown; on?: unknown },
+  config: NovelCreateConfig,
+): Promise<{ status: number; body: Record<string, unknown> } | null> {
+  const capabilities = inspectAgentNovelCapabilities(ctx)
+  if (!capabilities.available) {
+    return {
+      status: 503,
+      body: {
+        ok: false,
+        message: `AgentNovel is unavailable on this host: ${capabilities.reasons.join(' ')}`,
+        code: 'NOVEL_CAPABILITY',
+        reasons: [...capabilities.reasons],
+      },
+    }
+  }
+  if (config.writerMode === 'subagent') {
+    const channel = await discoverWriterProbeRuntime(ctx, null)
+    const probe = await inspectWriterSubagentCapabilities(channel)
+    if (!probe.spawnOk || probe.p1.status === 'fail') {
+      return {
+        status: 400,
+        body: {
+          ok: false,
+          message: `writer subagent mode is unavailable on this host (${probe.p1.detail}); create the novel with writerMode 'inline' instead (0007 §9)`,
+          code: 'NOVEL_WRITER_PROBE',
+          probe,
+        },
+      }
+    }
+  }
+  return null
+}
+
+interface ImportSourceRequest {
+  name: string
+  format: ReturnType<typeof validateImportFormat>
+  text: string
+  partTargetCharacters: number
+}
+
+function parseImportSourceRequest(body: Record<string, unknown>): ImportSourceRequest {
+  const source = body.source
+  if (typeof source !== 'object' || source === null || Array.isArray(source)) {
+    throw new NovelConfigError({ message: 'expected { source: { name, format, content }, partTargetCharacters }' })
+  }
+  const record = source as Record<string, unknown>
+  const name = validateImportSourceName(record.name)
+  const format = validateImportFormat(record.format)
+  const partTargetCharacters = validatePartTarget(body.partTargetCharacters)
+  if (typeof record.content !== 'string' || record.content === '') {
+    throw new NovelConfigError({ message: 'source.content must be a non-empty string (base64 for epub)' })
+  }
+  if (format === 'epub') {
+    let text: string
+    try {
+      text = parseEpubText(Buffer.from(record.content, 'base64'))
+    } catch (cause) {
+      throw new NovelConfigError({ message: `invalid EPUB source: ${(cause as Error).message}` })
+    }
+    return { name, format, text, partTargetCharacters }
+  }
+  return { name, format, text: record.content, partTargetCharacters }
 }
 
 export async function handleNovelsApi(
@@ -235,18 +370,9 @@ export async function handleNovelsApi(
 
   if (method === 'POST' && route === 'novels') {
     const body = await readJson(req) as Record<string, unknown>
-    // §16 fail-closed: capability reasons outrank config validation, so a
-    // degraded host reports why instead of a stream of field errors.
-    const capabilities = inspectAgentNovelCapabilities(ctx)
-    if (!capabilities.available) {
-      return sendJson(res, 503, {
-        ok: false,
-        message: `AgentNovel is unavailable on this host: ${capabilities.reasons.join(' ')}`,
-        code: 'NOVEL_CAPABILITY',
-        reasons: [...capabilities.reasons],
-      })
-    }
     const config = body as unknown as NovelCreateConfig
+    const gate = await novelCreationGate(ctx, config)
+    if (gate !== null) return sendJson(res, gate.status, gate.body)
     const violations = validateCreateConfig(config)
     if (violations.length > 0) {
       return sendJson(res, 400, {
@@ -255,23 +381,6 @@ export async function handleNovelsApi(
         code: 'NOVEL_CONFIG',
         violations: violations.map((item) => ({ field: item.field, message: item.message })),
       })
-    }
-    // 0007 §8/§9 fail-closed creation gate: writerMode=subagent (W2) requires
-    // the P1 host contract probe to pass; a failed probe (or an unresolvable
-    // subagent runtime) blocks the creation with the evidence instead of
-    // silently degrading to inline. The probe spawns two one-shot subagents —
-    // only reachable from this explicit request surface, never at startup.
-    if (config.writerMode === 'subagent') {
-      const channel = await discoverWriterProbeRuntime(ctx)
-      const probe = await inspectWriterSubagentCapabilities(channel)
-      if (!probe.spawnOk || probe.p1.status === 'fail') {
-        return sendJson(res, 400, {
-          ok: false,
-          message: `writer subagent mode is unavailable on this host (${probe.p1.detail}); create the novel with writerMode 'inline' instead (0007 §9)`,
-          code: 'NOVEL_WRITER_PROBE',
-          probe,
-        })
-      }
     }
     const created = await novels.createNovel(await store(), config)
     const snapshot = await novels.getNovel(created.novelId)
@@ -288,12 +397,80 @@ export async function handleNovelsApi(
     })
   }
 
+  if (method === 'POST' && route === 'novels/import/preview') {
+    const body = await readJson(req, 24 * 1024 * 1024) as Record<string, unknown>
+    const source = parseImportSourceRequest(body)
+    const parsed = parseImportedNovelText({
+      text: source.text,
+      format: source.format,
+      titleFallback: source.name,
+      partTargetCharacters: source.partTargetCharacters,
+    })
+    return sendJson(res, 200, {
+      ok: true,
+      preview: {
+        sourceName: source.name,
+        format: source.format,
+        chapterSource: parsed.chapterSource,
+        totalCharacters: parsed.totalCharacters,
+        chapterCount: parsed.chapters.length,
+        partCount: parsed.parts.length,
+        partTargetCharacters: source.partTargetCharacters,
+        chapters: parsed.chapters.map((chapter) => ({
+          chapterId: chapter.chapterId,
+          order: chapter.order,
+          title: chapter.title,
+          effectiveCharacters: chapter.effectiveCharacters,
+          partCount: chapter.parts.length,
+        })),
+      },
+    })
+  }
+
+  if (method === 'POST' && route === 'novels/import') {
+    const body = await readJson(req, 24 * 1024 * 1024) as Record<string, unknown>
+    const config = body.config as NovelCreateConfig
+    if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+      return sendJson(res, 400, { ok: false, message: 'expected { config, source, partTargetCharacters }', code: 'NOVEL_CONFIG' })
+    }
+    const gate = await novelCreationGate(ctx, config)
+    if (gate !== null) return sendJson(res, gate.status, gate.body)
+    const violations = validateCreateConfig(config)
+    if (violations.length > 0) {
+      return sendJson(res, 400, {
+        ok: false,
+        message: 'invalid novel config',
+        code: 'NOVEL_CONFIG',
+        violations: violations.map((item) => ({ field: item.field, message: item.message })),
+      })
+    }
+    const source = parseImportSourceRequest(body)
+    const created = await novels.createImportedNovel(await store(), config, {
+      name: source.name,
+      format: source.format,
+      text: source.text,
+      partTargetCharacters: source.partTargetCharacters,
+    })
+    const summary = (await novels.getNovel(created.novelId))?.run
+    return sendJson(res, 200, {
+      ok: true,
+      novel: {
+        novelId: created.novelId,
+        title: config.title,
+        status: summary?.status ?? 'active',
+        phase: summary?.phase ?? 'importing',
+        revision: created.revision,
+      },
+      import: created.import,
+    })
+  }
+
   if (method === 'GET' && route === 'novels/writer-probe') {
     // Debug surface for the writer-subagent probes (0007 §9): panels and CLI
     // can trigger the report without attempting a subagent-mode creation. The
     // literal must be matched before parseNovelRoute, which would otherwise
     // read 'writer-probe' as a novel id.
-    const channel = await discoverWriterProbeRuntime(ctx)
+    const channel = await discoverWriterProbeRuntime(ctx, null)
     const probe = await inspectWriterSubagentCapabilities(channel)
     return sendJson(res, 200, { ok: true, probe, channel: channel?.channel ?? 'none' })
   }
@@ -376,6 +553,102 @@ export async function handleNovelsApi(
     // here explicitly (proposal 0005 §4.3/§12.1).
     ;(await getNovelDriverPromise())?.kick(novelId)
     return sendJson(res, 200, { ok: true, revision: result.revision })
+  }
+
+  if (method === 'GET' && subpath === 'novels/import') {
+    const snapshot = await requireNovel(novels, novelId)
+    return sendJson(res, 200, { ok: true, import: importDetailOf(snapshot) })
+  }
+
+  if (method === 'GET' && subpath === 'novels/import/chapter') {
+    const chapterId = url.searchParams.get('chapterId')
+    const partId = url.searchParams.get('partId')
+    const cursor = url.searchParams.get('cursor')
+    const limitRaw = url.searchParams.get('limit')
+    if ((chapterId === null || chapterId === '') && (partId === null || partId === '')) {
+      return sendJson(res, 400, { ok: false, message: 'chapterId or partId query is required' })
+    }
+    const page = await novels.readImportSource(novelId, {
+      ...(chapterId !== null && chapterId !== '' ? { chapterId } : {}),
+      ...(partId !== null && partId !== '' ? { partId } : {}),
+      ...(cursor !== null && cursor !== '' ? { cursor } : {}),
+      ...(limitRaw !== null && limitRaw !== '' ? { limit: Number(limitRaw) } : {}),
+    })
+    return sendJson(res, 200, { ok: true, source: page })
+  }
+
+  if (method === 'POST' && subpath === 'novels/optimize') {
+    const body = await readJson(req) as Record<string, unknown>
+    if (typeof body.chapterId !== 'string' || body.chapterId.trim() === ''
+      || typeof body.instruction !== 'string' || body.instruction.trim() === '') {
+      return sendJson(res, 400, { ok: false, message: 'expected { chapterId, instruction }', code: 'NOVEL_CONFIG' })
+    }
+    const channel = await discoverWriterProbeRuntime(ctx, novelId)
+    if (channel === undefined) {
+      return sendJson(res, 503, {
+        ok: false,
+        message: 'prose revision requires an in-process subagent runtime; open this novel\'s author session first (proposal 0020 §5)',
+        code: 'NOVEL_CAPABILITY',
+      })
+    }
+    const result = await optimizeChapter(
+      { agent: channel.parent as ToolExecution['agent'], signal: new AbortController().signal },
+      novelId,
+      body.chapterId,
+      body.instruction,
+      channel.runtime,
+    )
+    return sendJson(res, 200, { ok: true, optimization: result })
+  }
+
+  if (method === 'POST' && subpath === 'novels/optimize/apply') {
+    const body = await readJson(req) as Record<string, unknown>
+    if (typeof body.revisionId !== 'string' || body.revisionId.trim() === ''
+      || typeof body.expectedRevision !== 'string' || body.expectedRevision.trim() === '') {
+      return sendJson(res, 400, { ok: false, message: 'expected { revisionId, expectedRevision }', code: 'NOVEL_CONFIG' })
+    }
+    const result = await novels.applyBodyRevision(novelId, {
+      revisionId: body.revisionId,
+      expectedRevision: body.expectedRevision,
+    })
+    return sendJson(res, 200, { ok: true, ...result })
+  }
+
+  if (method === 'POST' && subpath === 'novels/optimize/discard') {
+    const body = await readJson(req) as Record<string, unknown>
+    if (typeof body.revisionId !== 'string' || body.revisionId.trim() === ''
+      || typeof body.expectedRevision !== 'string' || body.expectedRevision.trim() === '') {
+      return sendJson(res, 400, { ok: false, message: 'expected { revisionId, expectedRevision }', code: 'NOVEL_CONFIG' })
+    }
+    const result = await novels.discardBodyRevision(novelId, {
+      revisionId: body.revisionId,
+      expectedRevision: body.expectedRevision,
+    })
+    return sendJson(res, 200, { ok: true, revision: result.revision })
+  }
+
+  if (method === 'GET' && subpath === 'novels/revision') {
+    const revisionId = url.searchParams.get('revisionId')
+    if (revisionId === null || revisionId === '') {
+      return sendJson(res, 400, { ok: false, message: 'revisionId query is required' })
+    }
+    const { record, paragraphs } = await novels.readBodyRevision(novelId, revisionId)
+    const rawCursor = url.searchParams.get('cursor')
+    const cursor = rawCursor === null || rawCursor === '' ? 0 : Number(rawCursor)
+    if (!Number.isInteger(cursor) || cursor < 0) return sendJson(res, 400, { ok: false, message: 'cursor must be a non-negative integer' })
+    const rawLimit = url.searchParams.get('limit')
+    const requestedLimit = rawLimit === null || rawLimit === '' ? 100 : Number(rawLimit)
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1) {
+      return sendJson(res, 400, { ok: false, message: 'limit must be a positive integer' })
+    }
+    const limit = Math.min(200, requestedLimit)
+    const page = paragraphs.slice(cursor, cursor + limit)
+    return sendJson(res, 200, {
+      ok: true,
+      revision: record,
+      paragraphs: page.map((text, index) => ({ paragraphIndex: cursor + index, text })),
+      nextCursor: cursor + page.length < paragraphs.length ? String(cursor + page.length) : null,
+    })
   }
 
   if (method === 'GET' && subpath === 'novels/outline') {

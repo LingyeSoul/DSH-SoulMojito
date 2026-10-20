@@ -74,6 +74,7 @@ function packInputFixture(overrides?: Partial<WriterPackInput>): WriterPackInput
     novelId: 'novel-1',
     unitId: 'unit-1',
     outlineRevision: 'or-1',
+    importContext: null,
     chapterHasCommits: true,
     story: { premise: '灯塔与风暴', theme: '孤独', mainConflict: '人与海', endingDirection: '灯长明', taboos: ['禁用第一人称'], styleNotes: '冷峻克制' },
     chapter: { chapterId: 'ch-1', order: 1, title: '风暴之夜', purpose: '点亮灯塔', entryCondition: '平静', exitCondition: '风暴过去' },
@@ -442,6 +443,33 @@ describe('agent-novel writer pack rendering', () => {
       expect(pack).toContain(present)
     }
   })
+
+  it('renders imported-source continuity after canon and before unit parameters', () => {
+    const pack = renderWriterPackFull(packInputFixture({
+      importContext: {
+        premise: '雾港旧信',
+        endingDirection: '北上寻人',
+        styleNotes: '冷峻潮湿',
+        timeline: [{ order: 1, summary: '林舟读信', characters: ['林舟'], importance: 'major' }],
+        openThreads: ['谁寄的信？'],
+        sourceTail: '那封信在抽屉里放了十年。',
+      },
+    }))
+    expect(pack.indexOf('## Canon')).toBeLessThan(pack.indexOf('## Imported-source continuity'))
+    expect(pack.indexOf('## Imported-source continuity')).toBeLessThan(pack.indexOf('## Unit parameters'))
+    expect(pack).toContain('雾港旧信')
+    expect(pack).toContain('林舟读信')
+    expect(pack).toContain('谁寄的信？')
+    expect(pack).toContain('那封信在抽屉里放了十年。')
+    // The delegated writer pack keeps the continuity block too: it is prior
+    // text, not a privileged author-only page.
+    const delegated = renderWriterPackTrimmed(packInputFixture({
+      importContext: {
+        premise: '雾港旧信', endingDirection: '', styleNotes: '', timeline: [], openThreads: [], sourceTail: '尾。',
+      },
+    }))
+    expect(delegated).toContain('## Imported-source continuity')
+  })
 })
 
 /* ---------------------------- byte stability ---------------------------- */
@@ -597,7 +625,9 @@ describe('agent-novel writer delegation registry', () => {
     expect(MAX_WRITER_DISPATCHES_PER_UNIT).toBe(3)
     expect(WRITER_ALLOW_LIST).toEqual([
       'novel_status_read', 'novel_outline_read', 'novel_character_read', 'novel_lore_search',
-      'novel_body_read', 'novel_body_search', 'novel_facts_read', 'memory_search', 'memory_read', 'novel_body_commit',
+      'novel_body_read', 'novel_body_search', 'novel_facts_read',
+      'novel_source_read', 'novel_source_search',
+      'memory_search', 'memory_read', 'novel_body_commit',
     ])
   })
 })

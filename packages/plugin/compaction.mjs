@@ -2645,6 +2645,16 @@ var MAX_CONTENT = 64 * 1024;
 var MAX_VALUE_BYTES = 32 * 1024;
 var MAX_SCOPE_BYTES = 256 * 1024;
 
+// packages/tavern-store/src/novel-import.ts
+var IMPORT_MAX_EXTRACTION_BYTES = 256 * 1024;
+var IMPORT_MAX_BIBLE_BYTES = 512 * 1024;
+var DIGEST_MAX_BYTES = 48 * 1024;
+var CN_NUMBER = "\u3007\u96F6\u4E00\u4E8C\u4E09\u56DB\u4E94\u516D\u4E03\u516B\u4E5D\u5341\u767E\u5343\u4E07\u4E240-9\uFF10-\uFF19";
+var CHAPTER_HEADING_PATTERNS = [
+  new RegExp(`^\u7B2C\\s*[${CN_NUMBER}]+\\s*[\u7AE0\u8282\u56DE\u5377\u90E8\u7BC7\u96C6]\\s*[^\\n]{0,50}$`),
+  /^(?:序章|楔子|引子|序言|前言|尾声|后记|终章|大结局|番外(?:篇)?(?:\s*[〇零一二三四五六七八九十百千万两0-9]+)?)\s*[^\n]{0,30}$/
+];
+
 // packages/tavern-store/src/novel-owner.ts
 import { randomBytes } from "node:crypto";
 var BOOT_ID = globalThis.__dshSoulMojitoNovelBootId ??= randomBytes(16).toString("hex");

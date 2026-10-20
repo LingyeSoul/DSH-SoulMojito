@@ -69,6 +69,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 ### 内容生产
 
 - **AgentNovel（全自动小说推演）** — 先落盘大纲再分单元写作，正文只经 `novel_body_commit` 原子提交；作者指令走台账 + 修订协议，冲突指令必须引用用户澄清/撤回消息才能解除。写手子代理支持 `inline | subagent` 两种模式（默认 inline）。详见 [`docs/proposals/0005-agent-novel-architecture.md`](docs/proposals/0005-agent-novel-architecture.md)。
+- **原作导入续写 + 正文优化** — 导入 TXT / Markdown / EPUB 原作，服务端识别章节并按目标长度切成部分；每部分交给一次性提取子代理产出时间线、角色卡、世界书与文风，主代理熔炼成续写 bible 后走既有大纲/单元协议继续写。正文优化对已提交章节生成整章改写稿，先作为待应用版本，显式应用后进入阅读投影与导出，提交记录保持不可变。详见 [`docs/proposals/0020-novel-import-continuation-and-revision.md`](docs/proposals/0020-novel-import-continuation-and-revision.md)。
 - **卡片工作台** — `dsh-soulmojito/card-workbench` preset。用对话描述想改什么，Agent 先给方案，经 diff 确认面板确认后才写入（写入工具必须携带已确认方案的 `planId`）。支持修改人物卡/世界书/预设、空白建卡、从素材或剧本提取人物制卡、card-to-mvu 转换，以及把指定聊天连同楼层范围交给工作台排错。导入时写一次原版快照，随时可恢复；写卡 Agent 落盘后写卡工作台面板自动吸收——打开面板即重取最新资产，页面可见期间按 store 变更水位（3s）轮询，写入到列表可见不需手动刷新。详见 [`docs/proposals/0013-card-workbench.md`](docs/proposals/0013-card-workbench.md)。
 - **剧本游玩** — TXT/Markdown/EPUB 导入为剧本资产，自动分块，与人物卡一对一绑定，新开局按剧本推进；只按进度召回附近片段，不整本注入上下文。剧本块是参考不是约束：玩家可偏离，只有正文实际覆盖当前片段关键事件才推进进度。详见 [`docs/proposals/0014-script-play.md`](docs/proposals/0014-script-play.md)。
 

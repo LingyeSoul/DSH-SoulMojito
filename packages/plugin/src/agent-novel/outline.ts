@@ -7,16 +7,17 @@
  */
 
 import {
+  effectiveNovelCharacters,
+  importProgressOf,
   requirementWatermark,
-  totalEffectiveCharacters,
   type NovelCreateConfig,
   type NovelSnapshot,
   type ScenePlan,
 } from '../../../tavern-store/src/index.js'
 
-/** Closed work union (§12.1); each kind only unlocks its matching write tools. */
+/** Closed work union (§12.1; proposal 0020 adds the import phases). */
 export interface NovelWork {
-  kind: 'outline-create' | 'outline-revise' | 'write-unit' | 'chapter-complete' | 'finish'
+  kind: 'import-extract' | 'import-merge' | 'outline-create' | 'outline-revise' | 'write-unit' | 'chapter-complete' | 'finish'
   chapterId: string | null
   sceneId: string | null
   reason: string
@@ -44,6 +45,24 @@ function scenesByOrder(snapshot: NovelSnapshot): ScenePlan[] {
  */
 export function nextWork(snapshot: NovelSnapshot): NovelWork | null {
   if (snapshot.run.status === 'completed') return null
+  const imported = snapshot.import ?? null
+  if (imported !== null && imported.bibleHash === null) {
+    const progress = importProgressOf(imported)
+    if (progress.pending > 0) {
+      return {
+        kind: 'import-extract',
+        chapterId: null,
+        sceneId: null,
+        reason: `imported source: ${progress.pending} of ${progress.partCount} parts still need extraction (${progress.failed} failed) before the continuation can be planned`,
+      }
+    }
+    return {
+      kind: 'import-merge',
+      chapterId: null,
+      sceneId: null,
+      reason: `imported source: all ${progress.partCount} parts extracted; fuse them into the project bible before planning the continuation`,
+    }
+  }
   const outline = snapshot.outline
   if (outline === null) {
     return {
@@ -231,7 +250,7 @@ function pushOutlineDigest(lines: string[], snapshot: NovelSnapshot, chapterId: 
  * (§11: the model must use novel_lore_search).
  */
 export function renderWorkBrief(snapshot: NovelSnapshot, work: NovelWork): string {
-  const committed = totalEffectiveCharacters(snapshot.commits)
+  const committed = effectiveNovelCharacters(snapshot)
   const budget = snapshot.config.lengthBudget
   const stage = narrativeStage(snapshot.config, committed)
   const range = unitTargetRange(snapshot.config, committed)
@@ -240,6 +259,23 @@ export function renderWorkBrief(snapshot: NovelSnapshot, work: NovelWork): strin
     `Work: ${work.kind}${work.chapterId === null ? '' : ` · chapter ${work.chapterId}`}${work.sceneId === null ? '' : ` · scene ${work.sceneId}`}`,
     `Reason: ${work.reason}`,
   ]
+
+  if (work.kind === 'import-extract' || work.kind === 'import-merge') {
+    const imported = snapshot.import
+    if (imported !== null && imported !== undefined) {
+      const progress = importProgressOf(imported)
+      lines.push('', 'Imported source (proposal 0020):')
+      lines.push(`- source: ${imported.sourceName} (${imported.sourceFormat}), ${progress.chapterCount} chapters / ${progress.partCount} parts / ${imported.totalCharacters} effective characters`)
+      lines.push(`- extraction: ${progress.extracted}/${progress.partCount} extracted, ${progress.failed} failed`)
+      lines.push(`- part target: about ${imported.partTargetCharacters} effective characters`)
+      lines.push('- chapters (first 20):')
+      for (const chapter of imported.chapters.slice(0, 20)) {
+        const parts = imported.parts.filter((part) => part.chapterId === chapter.chapterId)
+        lines.push(`  - ${chapter.order}. ${chapter.title} (${parts.length} parts, ${chapter.effectiveCharacters} characters)`)
+      }
+      if (imported.chapters.length > 20) lines.push(`  - … and ${imported.chapters.length - 20} more chapters`)
+    }
+  }
 
   if (work.kind === 'write-unit') {
     pushOutlineDigest(lines, snapshot, work.chapterId)

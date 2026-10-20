@@ -210,6 +210,40 @@ describe('nextWork decision order (§6.3)', () => {
     expect(nextWork(snapshotFixture({ status: 'completed' }))).toBeNull()
   })
 
+  it('schedules extraction, then fusion, before the continuation outline (proposal 0020)', () => {
+    const imported = snapshotFixture({ outline: null, requirements: [requirementFixture(1)] })
+    imported.import = {
+      sourceName: 'Fog.txt',
+      sourceFormat: 'txt',
+      importedAt: '2026-09-16T00:00:00.000Z',
+      totalCharacters: 1200,
+      partTargetCharacters: 2000,
+      chapterSource: 'headings',
+      chapters: [{ chapterId: 'ich-1', order: 1, title: 'Fog', effectiveCharacters: 1200, partIds: ['imp-1', 'imp-2'] }],
+      parts: [
+        {
+          partId: 'imp-1', chapterId: 'ich-1', order: 1, effectiveCharacters: 600, contentHash: 'a'.repeat(64),
+          status: 'pending', attempts: 0, extractionHash: null, summary: null, error: null,
+        },
+        {
+          partId: 'imp-2', chapterId: 'ich-1', order: 2, effectiveCharacters: 600, contentHash: 'b'.repeat(64),
+          status: 'pending', attempts: 0, extractionHash: null, summary: null, error: null,
+        },
+      ],
+      bibleHash: null,
+      bibleSummary: null,
+    }
+    imported.run.phase = 'importing'
+    expect(nextWork(imported)).toMatchObject({ kind: 'import-extract', chapterId: null, sceneId: null })
+    expect(nextWork(imported)!.reason).toContain('2 of 2 parts')
+
+    imported.import.parts = imported.import.parts.map((part) => ({ ...part, status: 'extracted', extractionHash: 'c'.repeat(64) }))
+    expect(nextWork(imported)).toMatchObject({ kind: 'import-merge' })
+
+    imported.import.bibleHash = 'd'.repeat(64)
+    expect(nextWork(imported)).toMatchObject({ kind: 'outline-create' })
+  })
+
   it('plans the initial outline before anything else', () => {
     const work = nextWork(snapshotFixture({ outline: null, requirements: [requirementFixture(1)] }))
     expect(work).toMatchObject({ kind: 'outline-create', chapterId: null, sceneId: null })

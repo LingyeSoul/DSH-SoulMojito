@@ -21,10 +21,13 @@ import {
   NovelNotFoundError,
   NovelPreconditionError,
   NovelStorageCorruptionError,
+  appliedBodyRevision,
+  bodyRevisionCovers,
   countEffectiveCharacters,
   isValidNovelId,
   summarizeNovel,
   type BodyCommit,
+  type BodyRevisionRecord,
   type MemoryStore,
   type MemoryWrite,
   type NovelSnapshot,
@@ -135,7 +138,7 @@ export class NovelProjector {
   async repairProjections(novelId: string): Promise<void> {
     const snapshot = await this.requireSnapshot(novelId)
     // §14.2 consistency first: verify every body object before writing files.
-    const paragraphsByChapter = await this.readAllCommitParagraphs(novelId, snapshot)
+    const paragraphsByChapter = await this.readAllBodyParagraphs(novelId, snapshot)
     const projectionsDir = path.join(this.novelDir(novelId), 'projections')
     await fs.rm(path.join(projectionsDir, 'chapters'), { recursive: true, force: true })
     await fs.mkdir(path.join(projectionsDir, 'chapters'), { recursive: true })
@@ -166,7 +169,7 @@ export class NovelProjector {
     const snapshot = await this.requireSnapshot(novelId)
     // §14.2: verify every required body object exists and hashes out before
     // producing a single export byte; corruption refuses to deliver.
-    const paragraphsByChapter = await this.readAllCommitParagraphs(novelId, snapshot)
+    const paragraphsByChapter = await this.readAllBodyParagraphs(novelId, snapshot)
     const head = renderHead(snapshot)
     const chapters = orderedChapters(snapshot).map((chapter) => ({
       order: chapter.order,
@@ -252,15 +255,47 @@ export class NovelProjector {
     return paragraphs
   }
 
-  private async readAllCommitParagraphs(novelId: string, snapshot: NovelSnapshot): Promise<Map<string, string[][]>> {
+  /**
+   * Effective body projection (proposal 0020 §5): an applied revision replaces
+   * the commits it covered; uncovered commits append after it. Both kinds are
+   * verified before any file is written.
+   */
+  private async readAllBodyParagraphs(novelId: string, snapshot: NovelSnapshot): Promise<Map<string, string[][]>> {
     const byChapter = new Map<string, string[][]>()
-    for (const commit of snapshot.commits) {
-      const paragraphs = await this.readCommitParagraphs(novelId, commit)
-      const list = byChapter.get(commit.chapterId) ?? []
-      list.push(paragraphs)
-      byChapter.set(commit.chapterId, list)
+    for (const chapterId of new Set(snapshot.commits.map((commit) => commit.chapterId))) {
+      const revision = appliedBodyRevision(snapshot, chapterId)
+      const list: string[][] = []
+      if (revision !== null) list.push(await this.readRevisionParagraphs(novelId, revision))
+      for (const commit of snapshot.commits) {
+        if (commit.chapterId !== chapterId) continue
+        if (revision !== null && bodyRevisionCovers(revision, commit.commitId)) continue
+        list.push(await this.readCommitParagraphs(novelId, commit))
+      }
+      byChapter.set(chapterId, list)
     }
     return byChapter
+  }
+
+  private async readRevisionParagraphs(novelId: string, revision: BodyRevisionRecord): Promise<string[]> {
+    const bodyPath = path.join(this.novelDir(novelId), 'bodies', `${revision.bodyHash}.txt`)
+    let raw: string
+    try {
+      raw = await fs.readFile(bodyPath, 'utf8')
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new NovelStorageCorruptionError({ novelId, path: bodyPath, detail: `body revision object of ${revision.revisionId} is missing` })
+      }
+      throw cause
+    }
+    const paragraphs = raw.split(PARAGRAPH_SEPARATOR)
+    if (paragraphs.length !== revision.paragraphCount || countEffectiveCharacters(raw) !== revision.effectiveCharacters) {
+      throw new NovelStorageCorruptionError({
+        novelId,
+        path: bodyPath,
+        detail: `body revision object ${revision.revisionId} does not match its record`,
+      })
+    }
+    return paragraphs
   }
 
   /** Enumerates the raw memory records of the novel namespace (MemoryStore layout). */

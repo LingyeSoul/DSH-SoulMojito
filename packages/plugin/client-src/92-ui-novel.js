@@ -149,12 +149,15 @@
           : null)
     }
 
-    function NovelReaderBlock({ novel, chapterId, paragraphs, nextCursor, loading, error, onLoadMore, t }) {
+    function NovelReaderBlock({ novel, chapterId, paragraphs, nextCursor, loading, error, onLoadMore, onOptimize, t }) {
       const chapter = (novel?.chapters || []).find((item) => item.chapterId === chapterId)
       return h('div', { className: 'dt-novel-block' },
         h('h4', null, t('novel.readerTitle')),
         chapter ? h('p', { className: 'dt-muted' },
           `${chapter.order}. ${chapter.title || chapter.chapterId} · ${novelChapterStateLabel(t, chapter.state)} · ${Number(chapter.committedCharacters || 0).toLocaleString()}`) : null,
+        chapter && Number(chapter.committedCharacters || 0) > 0
+          ? h('button', { type: 'button', className: 'dt-upload', onClick: () => onOptimize(chapter.chapterId) }, t('novel.optimize.open'))
+          : null,
         error ? h('p', { className: 'dt-error' }, error) : null,
         !error && paragraphs.length === 0 && !loading ? h('p', { className: 'dt-muted' }, t('novel.readerEmpty')) : null,
         h('div', { className: 'dt-novel-paragraphs' },
@@ -244,6 +247,62 @@
           : h('p', { className: 'dt-muted' }, t('novel.assetsNone')))
     }
 
+    function NovelImportBlock({ novel, sourceChapterId, sourceText, sourceBusy, sourceError, onSelectSource, t }) {
+      const imported = novel?.import
+      if (!imported) return null
+      const progress = imported.progress || {}
+      return h('div', { className: 'dt-novel-block' },
+        h('h4', null, t('novel.import.title')),
+        h('p', { className: 'dt-novel-note' }, t('novel.import.progress', {
+          source: imported.sourceName,
+          chapters: progress.chapterCount ?? 0,
+          parts: progress.partCount ?? 0,
+          extracted: progress.extracted ?? 0,
+        })),
+        h('div', { className: 'dt-novel-kv' },
+          h('span', null, t('novel.import.sourceChars', { value: Number(imported.totalCharacters || 0).toLocaleString() })),
+          h('span', null, t('novel.import.partTargetValue', { value: Number(imported.partTargetCharacters || 0).toLocaleString() })),
+          h('span', null, imported.bible
+            ? t('novel.import.bibleReady', { characters: imported.bible.characterCount, worlds: imported.bible.worldEntryCount })
+            : (progress.extracted >= progress.partCount ? t('novel.import.awaitingMerge') : t('novel.import.awaitingExtract')))),
+        progress.extracted === 0 && !imported.bible
+          ? h('p', { className: 'dt-hint' }, t('novel.import.openHint'))
+          : null,
+        h('h4', null, t('novel.import.chapters')),
+        h('div', { className: 'dt-novel-toc' }, (imported.chapters || []).map((chapter) => h('button', {
+          key: chapter.chapterId,
+          type: 'button',
+          className: `dt-novel-chapter ${sourceChapterId === chapter.chapterId ? 'dt-novel-chapter-active' : ''}`,
+          onClick: () => onSelectSource(chapter.chapterId),
+        },
+        h('span', { className: 'dt-novel-chapter-title', title: chapter.title }, `${chapter.order}. ${chapter.title}`),
+        h('span', { className: 'dt-novel-chapter-meta' },
+          `${chapter.extractedParts}/${chapter.partCount} · ${Number(chapter.effectiveCharacters || 0).toLocaleString()}`)))),
+        sourceError ? h('p', { className: 'dt-error' }, sourceError) : null,
+        sourceChapterId
+          ? h('pre', { className: 'dt-novel-outline-pre' }, sourceBusy ? t('nav.loading') : sourceText)
+          : null)
+    }
+
+    function NovelRevisionBlock({ novel, busy, onApply, onDiscard, onRead, t }) {
+      const revisions = (novel?.bodyRevisions || []).filter((revision) => revision.status === 'pending')
+      const applied = (novel?.bodyRevisions || []).filter((revision) => revision.status === 'applied').slice(-3)
+      if (revisions.length === 0 && applied.length === 0) return null
+      return h('div', { className: 'dt-novel-block' },
+        h('h4', null, t('novel.optimize.revisions')),
+        revisions.map((revision) => h('div', { key: revision.revisionId, className: 'dt-novel-req' },
+          h('div', { className: 'dt-novel-req-head' },
+            h('span', { className: 'dt-novel-req-status' }, t('novel.optimize.pending')),
+            h('span', { className: 'dt-muted' }, `${revision.chapterId} · ${Number(revision.effectiveCharacters || 0).toLocaleString()}`)),
+          h('p', { className: 'dt-novel-req-text' }, revision.instruction),
+          h('div', { className: 'dt-novel-actions' },
+            h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => onRead(revision) }, t('novel.optimize.view')),
+            h(Button, { size: 'sm', variant: 'primary', disabled: busy, onClick: () => onApply(revision) }, t('novel.optimize.apply')),
+            h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => onDiscard(revision) }, t('novel.optimize.discard'))))),
+        applied.map((revision) => h('p', { key: revision.revisionId, className: 'dt-muted' },
+          t('novel.optimize.applied', { chapter: revision.chapterId, characters: Number(revision.effectiveCharacters || 0).toLocaleString() }))))
+    }
+
     const NOVEL_BODY_PAGE_SIZE = 200
 
     function NovelDetail({ ctx, novelId, onBack, onChanged }) {
@@ -262,6 +321,16 @@
       const [outlineError, setOutlineError] = useState('')
       const [outlineOpen, setOutlineOpen] = useState(false)
       const [approveRevision, setApproveRevision] = useState('')
+      const [sourceChapterId, setSourceChapterId] = useState('')
+      const [sourceText, setSourceText] = useState('')
+      const [sourceBusy, setSourceBusy] = useState(false)
+      const [sourceError, setSourceError] = useState('')
+      const [optimizeOpen, setOptimizeOpen] = useState(false)
+      const [optimizeChapterId, setOptimizeChapterId] = useState('')
+      const [optimizeInstruction, setOptimizeInstruction] = useState('')
+      const [optimizeBusy, setOptimizeBusy] = useState(false)
+      const [optimizeError, setOptimizeError] = useState('')
+      const [optimizeResult, setOptimizeResult] = useState(null)
       const syncedRevisionRef = useRef(null)
       const loadDetail = () => fetchNovelDetail(novelId)
         .then((next) => {
@@ -279,6 +348,20 @@
           return null
         })
       useEffect(() => { void loadDetail() }, [novelId])
+      useEffect(() => {
+        if (novel === null || novel.status !== 'active' || novel.phase !== 'importing') return undefined
+        const timer = window.setInterval(() => { void loadDetail() }, 3000)
+        return () => window.clearInterval(timer)
+      }, [novelId, novel?.status, novel?.phase])
+      useEffect(() => {
+        setSourceChapterId('')
+        setSourceText('')
+        setSourceBusy(false)
+        setSourceError('')
+        setOptimizeOpen(false)
+        setOptimizeResult(null)
+        setOptimizeBusy(false)
+      }, [novelId])
       useEffect(() => {
         if (!novel) return
         const chapters = novel.chapters || []
@@ -349,6 +432,91 @@
         void fetchNovelOutline(novelId)
           .then((result) => setOutline(result))
           .catch((cause) => setOutlineError(cause instanceof Error ? cause.message : String(cause)))
+      }
+      const selectSourceChapter = (nextChapterId) => {
+        setSourceChapterId(nextChapterId)
+        setSourceText('')
+        setSourceError('')
+        setSourceBusy(true)
+        void fetchNovelSource(novelId, nextChapterId, null, 20000)
+          .then((source) => setSourceText(source.text))
+          .catch((cause) => setSourceError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setSourceBusy(false))
+      }
+      const openOptimize = (nextChapterId) => {
+        setOptimizeChapterId(nextChapterId)
+        setOptimizeInstruction('')
+        setOptimizeResult(null)
+        setOptimizeError('')
+        setOptimizeOpen(true)
+      }
+      const runOptimize = () => {
+        const instruction = optimizeInstruction.trim()
+        if (instruction === '') {
+          setOptimizeError(t('novel.optimize.missingInstruction'))
+          return
+        }
+        setOptimizeBusy(true)
+        setOptimizeError('')
+        void optimizeNovelChapter(novelId, optimizeChapterId, instruction)
+          .then(async (optimization) => {
+            try {
+              const full = await fetchNovelRevision(novelId, optimization.revisionId, null, 200)
+              const text = (full.paragraphs || []).map((paragraph) => paragraph.text).join('\n\n')
+              setOptimizeResult(text === ''
+                ? optimization
+                : { ...optimization, preview: text, previewTruncated: full.nextCursor !== null })
+            } catch {
+              // The staged revision is still applyable; fall back to the bounded preview.
+              setOptimizeResult(optimization)
+            }
+            void loadDetail().then(() => onChanged?.())
+          })
+          .catch((cause) => setOptimizeError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setOptimizeBusy(false))
+      }
+      const settleOptimization = (action) => {
+        if (optimizeBusy) return
+        setOptimizeBusy(true)
+        setOptimizeError('')
+        void action()
+          .then(() => {
+            setOptimizeResult(null)
+            setOptimizeOpen(false)
+            setBodyNonce((value) => value + 1)
+            return loadDetail().then(() => onChanged?.())
+          })
+          .catch((cause) => {
+            if (isNovelConflict(cause)) setOptimizeError(t('novel.conflict'))
+            else setOptimizeError(cause instanceof Error ? cause.message : String(cause))
+          })
+          .finally(() => setOptimizeBusy(false))
+      }
+      const applyOptimization = (revisionId, expectedRevision) => settleOptimization(
+        () => applyNovelOptimization(novelId, revisionId, expectedRevision),
+      )
+      const discardOptimization = (revisionId, expectedRevision) => settleOptimization(
+        () => discardNovelOptimization(novelId, revisionId, expectedRevision),
+      )
+      const readRevision = (revision) => {
+        setOptimizeChapterId(revision.chapterId)
+        setOptimizeInstruction(revision.instruction || '')
+        setOptimizeError('')
+        setOptimizeOpen(true)
+        setOptimizeBusy(true)
+        void fetchNovelRevision(novelId, revision.revisionId, null, 200)
+          .then((full) => {
+            const text = (full.paragraphs || []).map((paragraph) => paragraph.text).join('\n\n')
+            setOptimizeResult({
+              ...revision,
+              preview: text,
+              previewTruncated: full.nextCursor !== null,
+              snapshotRevision: novel.revision,
+            })
+            setOptimizeOpen(true)
+          })
+          .catch((cause) => setOptimizeError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setOptimizeBusy(false))
       }
       if (novel === null) {
         return h('section', { className: 'dt-settings-band' },
@@ -435,6 +603,15 @@
           h('div', { className: 'dt-novel-detail' },
             h('div', { className: 'dt-novel-col' },
               h(NovelChapters, { novel, chapterId, onSelect: setChapterId, t }),
+              h(NovelImportBlock, {
+                novel,
+                sourceChapterId,
+                sourceText,
+                sourceBusy,
+                sourceError,
+                onSelectSource: selectSourceChapter,
+                t,
+              }),
               h(NovelOutlineSummaryBlock, { novel, t })),
             h('div', { className: 'dt-novel-col' },
               h(NovelReaderBlock, {
@@ -445,10 +622,19 @@
                 loading: bodyLoading,
                 error: bodyError,
                 onLoadMore: loadMoreBody,
+                onOptimize: openOptimize,
                 t,
               })),
             h('div', { className: 'dt-novel-col' },
-              h(NovelAuthorPanel, { novel, t, onOpenSession: () => runAction(() => openNovelSession(ctx, novel)) })))),
+              h(NovelAuthorPanel, { novel, t, onOpenSession: () => runAction(() => openNovelSession(ctx, novel)) }),
+              h(NovelRevisionBlock, {
+                novel,
+                busy: busy || optimizeBusy,
+                onApply: (revision) => applyOptimization(revision.revisionId, novel.revision),
+                onDiscard: (revision) => discardOptimization(revision.revisionId, novel.revision),
+                onRead: readRevision,
+                t,
+              })))),
         outlineOpen ? h(NovelModalFrame, {
           title: t('novel.outlineTitle'),
           closeLabel: t('panel.close'),
@@ -458,7 +644,48 @@
           ? h('p', { className: 'dt-error' }, outlineError)
           : outline === null
             ? h('p', { className: 'dt-muted' }, t('nav.loading'))
-            : h('pre', { className: 'dt-novel-outline-pre' }, JSON.stringify(outline, null, 2))) : null)
+            : h('pre', { className: 'dt-novel-outline-pre' }, JSON.stringify(outline, null, 2))) : null,
+        optimizeOpen ? h(NovelModalFrame, {
+          title: t('novel.optimize.title'),
+          closeLabel: t('panel.close'),
+          onClose: () => { if (!optimizeBusy) setOptimizeOpen(false) },
+          footer: h(React.Fragment, null,
+            h(Button, { size: 'sm', variant: 'ghost', disabled: optimizeBusy, onClick: () => setOptimizeOpen(false) }, t('panel.cancel')),
+            optimizeResult === null
+              ? h(Button, { size: 'sm', variant: 'primary', disabled: optimizeBusy, onClick: runOptimize },
+                optimizeBusy ? t('nav.loading') : t('novel.optimize.run'))
+              : h(React.Fragment, null,
+                h(Button, {
+                  size: 'sm',
+                  variant: 'ghost',
+                  disabled: optimizeBusy,
+                  onClick: () => discardOptimization(optimizeResult.revisionId, optimizeResult.snapshotRevision),
+                }, t('novel.optimize.discard')),
+                h(Button, {
+                  size: 'sm',
+                  variant: 'primary',
+                  disabled: optimizeBusy,
+                  onClick: () => applyOptimization(optimizeResult.revisionId, optimizeResult.snapshotRevision),
+                }, t('novel.optimize.apply')))),
+        },
+        h('p', { className: 'dt-hint' }, t('novel.optimize.hint')),
+        h('p', { className: 'dt-novel-note' }, t('novel.optimize.chapter', { chapterId: optimizeChapterId })),
+        optimizeResult === null
+          ? h(EditorField, {
+            label: t('novel.optimize.instruction'),
+            value: optimizeInstruction,
+            onChange: setOptimizeInstruction,
+            multiline: true,
+            hint: t('novel.optimize.instructionHint'),
+          })
+          : h(React.Fragment, null,
+            h('p', { className: 'dt-novel-note' }, t('novel.optimize.preview', {
+              paragraphs: optimizeResult.paragraphCount,
+              characters: Number(optimizeResult.effectiveCharacters || 0).toLocaleString(),
+            })),
+            optimizeResult.previewTruncated ? h('p', { className: 'dt-hint' }, t('novel.optimize.previewTruncated')) : null,
+            h('pre', { className: 'dt-novel-outline-pre' }, optimizeResult.preview)),
+        optimizeError ? h('p', { className: 'dt-error' }, optimizeError) : null) : null)
     }
 
     function NovelCard({ ctx, novel, t, onDetail, onEdit, onChanged }) {
@@ -634,6 +861,17 @@
             h('span', null, name)))))
     }
 
+    /** Reads a source file into the import payload shape (EPUB travels as base64). */
+    async function novelSourcePayload(file) {
+      const extension = String(file.name || '').split('.').pop().toLowerCase()
+      const format = extension === 'epub' ? 'epub' : extension === 'md' ? 'md' : 'txt'
+      if (format === 'epub') {
+        const bytes = new Uint8Array(await readFile(file, true))
+        return { name: file.name, format, content: bytesToBase64(bytes) }
+      }
+      return { name: file.name, format, content: String(await readFile(file, false)) }
+    }
+
     function NovelCreateForm({ onClose, onCreated }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -655,7 +893,54 @@
       }))
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
+      const [sourceMode, setSourceMode] = useState('original')
+      const [sourcePayload, setSourcePayload] = useState(null)
+      const [partTargetCharacters, setPartTargetCharacters] = useState('12000')
+      const [importPreview, setImportPreview] = useState(null)
+      const [importPreviewError, setImportPreviewError] = useState('')
+      const [importPreviewBusy, setImportPreviewBusy] = useState(false)
       const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+      const previewPartTarget = () => {
+        const target = parseNovelPositiveInt(partTargetCharacters)
+        if (target === null) {
+          setImportPreview(null)
+          setImportPreviewError(t('novel.import.invalidPartTarget'))
+          return
+        }
+        if (sourcePayload === null) {
+          setImportPreview(null)
+          setImportPreviewError('')
+          return
+        }
+        setImportPreviewBusy(true)
+        setImportPreviewError('')
+        void previewNovelImport(sourcePayload, target)
+          .then((preview) => setImportPreview(preview))
+          .catch((cause) => {
+            setImportPreview(null)
+            setImportPreviewError(cause instanceof Error ? cause.message : String(cause))
+          })
+          .finally(() => setImportPreviewBusy(false))
+      }
+      const chooseSourceFile = (file) => {
+        if (!file) return
+        setImportPreview(null)
+        setImportPreviewError('')
+        setSourcePayload(null)
+        void novelSourcePayload(file)
+          .then((payload) => {
+            setSourcePayload(payload)
+            setForm((current) => ({ ...current, title: current.title.trim() === '' ? fileStem(file.name) : current.title }))
+            const target = parseNovelPositiveInt(partTargetCharacters)
+            if (target === null) return
+            setImportPreviewBusy(true)
+            return previewNovelImport(payload, target)
+              .then((preview) => setImportPreview(preview))
+              .catch((cause) => setImportPreviewError(cause instanceof Error ? cause.message : String(cause)))
+              .finally(() => setImportPreviewBusy(false))
+          })
+          .catch((cause) => setImportPreviewError(cause instanceof Error ? cause.message : String(cause)))
+      }
       const toggleAsset = (key, name, checked) => setForm((current) => ({
         ...current,
         [key]: checked ? [...current[key], name] : current[key].filter((item) => item !== name),
@@ -711,6 +996,24 @@
           worldNames: [...form.worldNames],
           budgets,
         }
+        if (sourceMode === 'import') {
+          if (sourcePayload === null) {
+            setError(t('novel.import.missingSource'))
+            return
+          }
+          const partTarget = parseNovelPositiveInt(partTargetCharacters)
+          if (partTarget === null) {
+            setError(t('novel.import.invalidPartTarget'))
+            return
+          }
+          setBusy(true)
+          setError('')
+          void createNovelFromImport(config, sourcePayload, partTarget)
+            .then((created) => onCreated(created))
+            .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+            .finally(() => setBusy(false))
+          return
+        }
         setBusy(true)
         setError('')
         void createNovel(config)
@@ -724,9 +1027,76 @@
         onClose,
         footer: h(React.Fragment, null,
           h(Button, { size: 'sm', variant: 'ghost', onClick: onClose }, t('panel.cancel')),
-          h(Button, { size: 'sm', variant: 'primary', disabled: busy || !form.title.trim() || !form.requirement.trim(), onClick: submit },
-            busy ? t('novel.creating') : t('novel.form.submit'))),
+          h(Button, {
+            size: 'sm',
+            variant: 'primary',
+            disabled: busy || !form.title.trim() || !form.requirement.trim() || (sourceMode === 'import' && sourcePayload === null),
+            onClick: submit,
+          }, busy ? t('novel.creating') : t('novel.form.submit'))),
       },
+      h('div', { className: 'dt-novel-form-section' },
+        h('h4', null, t('novel.import.mode')),
+        h('div', { className: 'dt-segmented', role: 'group', 'aria-label': t('novel.import.mode') },
+          [
+            { value: 'original', label: 'novel.import.mode.original' },
+            { value: 'import', label: 'novel.import.mode.import' },
+          ].map((option) => h('button', {
+            key: option.value,
+            type: 'button',
+            className: sourceMode === option.value ? 'dt-segmented-active' : '',
+            'aria-pressed': sourceMode === option.value,
+            onClick: () => setSourceMode(option.value),
+          }, t(option.label)))),
+        sourceMode === 'import'
+          ? h(React.Fragment, null,
+            h('p', { className: 'dt-hint' }, t('novel.import.hint')),
+            h('div', { className: 'dt-novel-form-grid' },
+              h('div', { className: 'dt-field' },
+                h('span', { className: 'dt-label' }, t('novel.import.source')),
+                h('label', { className: 'dt-upload' },
+                  sourcePayload === null ? t('novel.import.chooseFile') : sourcePayload.name,
+                  h('input', {
+                    type: 'file',
+                    accept: '.txt,.md,.epub',
+                    onChange: (event) => {
+                      const file = event.target.files?.[0]
+                      event.target.value = ''
+                      chooseSourceFile(file)
+                    },
+                  }))),
+              h(EditorField, {
+                label: t('novel.import.partTarget'),
+                value: partTargetCharacters,
+                type: 'number',
+                min: 2000,
+                max: 50000,
+                onChange: setPartTargetCharacters,
+                hint: t('novel.import.partTargetHint'),
+              })),
+            h('div', { className: 'dt-novel-actions' },
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                disabled: importPreviewBusy || sourcePayload === null,
+                onClick: previewPartTarget,
+              }, importPreviewBusy ? t('nav.loading') : t('novel.import.preview'))),
+            importPreviewError !== '' ? h('p', { className: 'dt-error' }, importPreviewError) : null,
+            importPreview !== null
+              ? h('div', { className: 'dt-novel-import-preview' },
+                h('p', { className: 'dt-novel-note' }, t('novel.import.previewSummary', {
+                  chapters: importPreview.chapterCount,
+                  parts: importPreview.partCount,
+                  characters: Number(importPreview.totalCharacters || 0).toLocaleString(),
+                  source: importPreview.chapterSource === 'headings' ? t('novel.import.headings') : t('novel.import.pseudo'),
+                })),
+                h('div', { className: 'dt-novel-kv' },
+                  importPreview.chapters.slice(0, 8).map((chapter) => h('span', { key: chapter.chapterId },
+                    `${chapter.order}. ${chapter.title} · ${Number(chapter.effectiveCharacters || 0).toLocaleString()} · ${chapter.partCount}p`))),
+                importPreview.chapters.length > 8
+                  ? h('p', { className: 'dt-muted' }, `… +${importPreview.chapters.length - 8}`)
+                  : null)
+              : null)
+          : h('p', { className: 'dt-hint' }, t('novel.import.originalHint'))),
       h('div', { className: 'dt-novel-form-grid' },
         h(EditorField, { label: t('novel.form.title'), value: form.title, onChange: (value) => set('title', value) }),
         h('label', { className: 'dt-editor-field' },

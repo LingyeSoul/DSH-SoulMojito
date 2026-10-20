@@ -222,6 +222,15 @@ describe('AgentNovel author tools', () => {
       'memory_search',
       'memory_read',
       'tavern_deduce',
+      'novel_import_read',
+      'novel_import_extract',
+      'novel_import_merge',
+      'novel_source_read',
+      'novel_source_search',
+      'novel_body_optimize',
+      'novel_body_revision_read',
+      'novel_body_revision_apply',
+      'novel_body_revision_discard',
     ])
     // §15: the novel identity is binding-derived only.
     for (const tool of tools.values()) {

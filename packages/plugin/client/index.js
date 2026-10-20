@@ -1919,6 +1919,7 @@ window.__ModuleLoader__.load({
       'novel.status.active': 'Active',
       'novel.status.paused': 'Paused',
       'novel.status.completed': 'Completed',
+      'novel.phase.importing': 'Importing source',
       'novel.phase.outlining': 'Outlining',
       'novel.phase.revising': 'Revising outline',
       'novel.phase.writing': 'Writing',
@@ -2041,6 +2042,46 @@ window.__ModuleLoader__.load({
       'novel.form.submit': 'Create novel',
       'novel.form.missingRequired': 'Title and creative requirement are required.',
       'novel.form.invalidNumbers': 'Check the numeric fields: target characters must be a positive integer, tolerance ratio within [0,1), and the hard maximum must not be below the target.',
+      'novel.import.mode': 'Starting point',
+      'novel.import.mode.original': 'Original',
+      'novel.import.mode.import': 'Import for continuation',
+      'novel.import.hint': 'Import a TXT / Markdown / EPUB source. It is split into chapters, then into length-bounded parts; extraction subagents summarize each part into timeline, character and world entries, and the author agent fuses them into the continuation bible. The imported text does not count toward the new book length.',
+      'novel.import.source': 'Source file',
+      'novel.import.chooseFile': 'Choose TXT / MD / EPUB',
+      'novel.import.partTarget': 'Characters per part',
+      'novel.import.partTargetHint': '2000–50000; larger parts mean fewer extraction batches and a longer single context.',
+      'novel.import.preview': 'Parse preview',
+      'novel.import.previewSummary': '{chapters} chapters, {parts} parts, {characters} characters ({source})',
+      'novel.import.headings': 'detected from headings',
+      'novel.import.pseudo': 'no headings, split by length',
+      'novel.import.originalHint': 'Write from scratch; importing a source for continuation is optional.',
+      'novel.import.missingSource': 'Choose a source file first.',
+      'novel.import.invalidPartTarget': 'Characters per part must be an integer between 2000 and 50000.',
+      'novel.import.title': 'Imported source',
+      'novel.import.progress': '{source} · {chapters} chapters / {parts} parts · {extracted} extracted',
+      'novel.import.sourceChars': 'Source {value} characters',
+      'novel.import.partTargetValue': 'About {value} characters per part',
+      'novel.import.bibleReady': 'Bible fused: {characters} characters / {worlds} world entries',
+      'novel.import.awaitingMerge': 'All parts extracted; waiting for the author agent to fuse the bible',
+      'novel.import.awaitingExtract': 'Extracting timeline, characters and world entries part by part',
+      'novel.import.chapters': 'Source chapters',
+      'novel.import.openHint': 'Open the author session to let the scheduler start extracting parts.',
+      'novel.optimize.open': 'Optimize this chapter',
+      'novel.optimize.title': 'Prose revision',
+      'novel.optimize.hint': 'A revision subagent keeps characters, canon, point of view and scene order intact and rewrites style, pacing, detail or line-level wording per your instruction. The result is staged as a pending version and never overwrites committed prose directly.',
+      'novel.optimize.chapter': 'Chapter: {chapterId}',
+      'novel.optimize.instruction': 'Revision instruction',
+      'novel.optimize.instructionHint': 'For example: strengthen the storm-night atmosphere, compress repeated interior monologue, make the dialogue more restrained.',
+      'novel.optimize.run': 'Generate revision',
+      'novel.optimize.preview': 'Revised draft: {paragraphs} paragraphs / {characters} characters',
+      'novel.optimize.previewTruncated': 'Preview shows the first 200 paragraphs only; discard and retry, or apply the complete revision.',
+      'novel.optimize.view': 'View revised draft',
+      'novel.optimize.apply': 'Apply revision',
+      'novel.optimize.discard': 'Discard revision',
+      'novel.optimize.pending': 'Pending',
+      'novel.optimize.revisions': 'Body revisions',
+      'novel.optimize.applied': 'Applied: {chapter} ({characters} characters)',
+      'novel.optimize.missingInstruction': 'Enter a revision instruction.',
     }
     const MESSAGES_ZH = {
       'settings.subtitle': '角色卡、世界书与预设管理',
@@ -2645,6 +2686,7 @@ window.__ModuleLoader__.load({
       'novel.status.active': '创作中',
       'novel.status.paused': '已暂停',
       'novel.status.completed': '已完成',
+      'novel.phase.importing': '导入原作',
       'novel.phase.outlining': '构思大纲',
       'novel.phase.revising': '修订大纲',
       'novel.phase.writing': '写作中',
@@ -2767,6 +2809,46 @@ window.__ModuleLoader__.load({
       'novel.form.submit': '创建小说',
       'novel.form.missingRequired': '标题与创作要求为必填项。',
       'novel.form.invalidNumbers': '请检查数值字段：目标字符数须为正整数，浮动比例在 [0,1) 内，硬上限不得低于目标。',
+      'novel.import.mode': '创作起点',
+      'novel.import.mode.original': '原创',
+      'novel.import.mode.import': '导入原作续写',
+      'novel.import.hint': '导入 TXT / Markdown / EPUB 原作：系统按章节拆分，再按目标长度切成多个部分，逐部分交给提取子代理整理时间线、角色卡与世界书，最后熔炼为续写设定。原作不计入新书字数。',
+      'novel.import.source': '原作文件',
+      'novel.import.chooseFile': '选择 TXT / MD / EPUB',
+      'novel.import.partTarget': '每部分目标字符数',
+      'novel.import.partTargetHint': '2000–50000；越大提取批次越少，单次上下文越长。',
+      'novel.import.preview': '解析预览',
+      'novel.import.previewSummary': '共 {chapters} 章、{parts} 个部分、{characters} 字（{source}）',
+      'novel.import.headings': '按章节标题识别',
+      'novel.import.pseudo': '无标题，按篇幅切分',
+      'novel.import.originalHint': '从零开始创作；也可以选择导入原作后续写。',
+      'novel.import.missingSource': '请先选择原作文件。',
+      'novel.import.invalidPartTarget': '每部分目标字符数须为 2000–50000 的整数。',
+      'novel.import.title': '导入原作',
+      'novel.import.progress': '{source} · {chapters} 章 / {parts} 部分 · 已提取 {extracted}',
+      'novel.import.sourceChars': '原作 {value} 字',
+      'novel.import.partTargetValue': '每部分约 {value} 字',
+      'novel.import.bibleReady': '设定已熔炼：{characters} 个角色 / {worlds} 条世界书',
+      'novel.import.awaitingMerge': '全部部分已提取，等待主代理熔炼',
+      'novel.import.awaitingExtract': '正在逐部分提取时间线、角色卡与世界书',
+      'novel.import.chapters': '原作章节',
+      'novel.import.openHint': '打开作者会话后，调度器才会开始逐部分提取。',
+      'novel.optimize.open': '优化本章正文',
+      'novel.optimize.title': '正文优化',
+      'novel.optimize.hint': '优化由修订子代理完成：保留人物、设定、视角与场景顺序，只按你的要求改写文风、节奏、细节或语句。结果先作为待应用版本，不会直接覆盖已提交正文。',
+      'novel.optimize.chapter': '章节：{chapterId}',
+      'novel.optimize.instruction': '优化要求',
+      'novel.optimize.instructionHint': '例如：加强风暴夜的环境描写，压缩重复的心理独白，对话更克制。',
+      'novel.optimize.run': '生成优化稿',
+      'novel.optimize.preview': '优化稿：{paragraphs} 段 / {characters} 字',
+      'novel.optimize.previewTruncated': '预览只显示前 200 段；应用前可先放弃并重试，或直接应用完整版本。',
+      'novel.optimize.view': '查看优化稿',
+      'novel.optimize.apply': '应用优化',
+      'novel.optimize.discard': '放弃优化',
+      'novel.optimize.pending': '待应用',
+      'novel.optimize.revisions': '正文优化版本',
+      'novel.optimize.applied': '已应用：{chapter}（{characters} 字）',
+      'novel.optimize.missingInstruction': '请填写优化要求。',
     }
     // translate follows the host locale service once apply() binds it; the
     // identity fallback mirrors LocaleRuntime.translate (missing key -> key,
@@ -4369,6 +4451,65 @@ window.__ModuleLoader__.load({
         body: JSON.stringify(config),
       })
       return result.novel
+    }
+
+    async function previewNovelImport(source, partTargetCharacters) {
+      const result = await api('novels/import/preview', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ source, partTargetCharacters }),
+      })
+      return result.preview
+    }
+
+    async function createNovelFromImport(config, source, partTargetCharacters) {
+      const result = await api('novels/import', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ config, source, partTargetCharacters }),
+      })
+      return result.novel
+    }
+
+    async function fetchNovelSource(novelId, chapterId, cursor, limit) {
+      const params = new URLSearchParams()
+      if (chapterId) params.set('chapterId', chapterId)
+      if (cursor) params.set('cursor', cursor)
+      if (limit) params.set('limit', String(limit))
+      const result = await api(novelPath(novelId, `/import/chapter?${params.toString()}`))
+      return result.source
+    }
+
+    async function optimizeNovelChapter(novelId, chapterId, instruction) {
+      const result = await api(novelPath(novelId, '/optimize'), {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ chapterId, instruction }),
+      })
+      return result.optimization
+    }
+
+    async function applyNovelOptimization(novelId, revisionId, expectedRevision) {
+      return api(novelPath(novelId, '/optimize/apply'), {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ revisionId, expectedRevision }),
+      })
+    }
+
+    async function discardNovelOptimization(novelId, revisionId, expectedRevision) {
+      return api(novelPath(novelId, '/optimize/discard'), {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ revisionId, expectedRevision }),
+      })
+    }
+
+    async function fetchNovelRevision(novelId, revisionId, cursor, limit) {
+      const params = new URLSearchParams({ revisionId })
+      if (cursor) params.set('cursor', cursor)
+      if (limit) params.set('limit', String(limit))
+      return api(novelPath(novelId, `/revision?${params.toString()}`))
     }
 
     async function runNovelAction(novelId, action, body) {
@@ -8860,12 +9001,15 @@ window.__ModuleLoader__.load({
           : null)
     }
 
-    function NovelReaderBlock({ novel, chapterId, paragraphs, nextCursor, loading, error, onLoadMore, t }) {
+    function NovelReaderBlock({ novel, chapterId, paragraphs, nextCursor, loading, error, onLoadMore, onOptimize, t }) {
       const chapter = (novel?.chapters || []).find((item) => item.chapterId === chapterId)
       return h('div', { className: 'dt-novel-block' },
         h('h4', null, t('novel.readerTitle')),
         chapter ? h('p', { className: 'dt-muted' },
           `${chapter.order}. ${chapter.title || chapter.chapterId} · ${novelChapterStateLabel(t, chapter.state)} · ${Number(chapter.committedCharacters || 0).toLocaleString()}`) : null,
+        chapter && Number(chapter.committedCharacters || 0) > 0
+          ? h('button', { type: 'button', className: 'dt-upload', onClick: () => onOptimize(chapter.chapterId) }, t('novel.optimize.open'))
+          : null,
         error ? h('p', { className: 'dt-error' }, error) : null,
         !error && paragraphs.length === 0 && !loading ? h('p', { className: 'dt-muted' }, t('novel.readerEmpty')) : null,
         h('div', { className: 'dt-novel-paragraphs' },
@@ -8955,6 +9099,62 @@ window.__ModuleLoader__.load({
           : h('p', { className: 'dt-muted' }, t('novel.assetsNone')))
     }
 
+    function NovelImportBlock({ novel, sourceChapterId, sourceText, sourceBusy, sourceError, onSelectSource, t }) {
+      const imported = novel?.import
+      if (!imported) return null
+      const progress = imported.progress || {}
+      return h('div', { className: 'dt-novel-block' },
+        h('h4', null, t('novel.import.title')),
+        h('p', { className: 'dt-novel-note' }, t('novel.import.progress', {
+          source: imported.sourceName,
+          chapters: progress.chapterCount ?? 0,
+          parts: progress.partCount ?? 0,
+          extracted: progress.extracted ?? 0,
+        })),
+        h('div', { className: 'dt-novel-kv' },
+          h('span', null, t('novel.import.sourceChars', { value: Number(imported.totalCharacters || 0).toLocaleString() })),
+          h('span', null, t('novel.import.partTargetValue', { value: Number(imported.partTargetCharacters || 0).toLocaleString() })),
+          h('span', null, imported.bible
+            ? t('novel.import.bibleReady', { characters: imported.bible.characterCount, worlds: imported.bible.worldEntryCount })
+            : (progress.extracted >= progress.partCount ? t('novel.import.awaitingMerge') : t('novel.import.awaitingExtract')))),
+        progress.extracted === 0 && !imported.bible
+          ? h('p', { className: 'dt-hint' }, t('novel.import.openHint'))
+          : null,
+        h('h4', null, t('novel.import.chapters')),
+        h('div', { className: 'dt-novel-toc' }, (imported.chapters || []).map((chapter) => h('button', {
+          key: chapter.chapterId,
+          type: 'button',
+          className: `dt-novel-chapter ${sourceChapterId === chapter.chapterId ? 'dt-novel-chapter-active' : ''}`,
+          onClick: () => onSelectSource(chapter.chapterId),
+        },
+        h('span', { className: 'dt-novel-chapter-title', title: chapter.title }, `${chapter.order}. ${chapter.title}`),
+        h('span', { className: 'dt-novel-chapter-meta' },
+          `${chapter.extractedParts}/${chapter.partCount} · ${Number(chapter.effectiveCharacters || 0).toLocaleString()}`)))),
+        sourceError ? h('p', { className: 'dt-error' }, sourceError) : null,
+        sourceChapterId
+          ? h('pre', { className: 'dt-novel-outline-pre' }, sourceBusy ? t('nav.loading') : sourceText)
+          : null)
+    }
+
+    function NovelRevisionBlock({ novel, busy, onApply, onDiscard, onRead, t }) {
+      const revisions = (novel?.bodyRevisions || []).filter((revision) => revision.status === 'pending')
+      const applied = (novel?.bodyRevisions || []).filter((revision) => revision.status === 'applied').slice(-3)
+      if (revisions.length === 0 && applied.length === 0) return null
+      return h('div', { className: 'dt-novel-block' },
+        h('h4', null, t('novel.optimize.revisions')),
+        revisions.map((revision) => h('div', { key: revision.revisionId, className: 'dt-novel-req' },
+          h('div', { className: 'dt-novel-req-head' },
+            h('span', { className: 'dt-novel-req-status' }, t('novel.optimize.pending')),
+            h('span', { className: 'dt-muted' }, `${revision.chapterId} · ${Number(revision.effectiveCharacters || 0).toLocaleString()}`)),
+          h('p', { className: 'dt-novel-req-text' }, revision.instruction),
+          h('div', { className: 'dt-novel-actions' },
+            h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => onRead(revision) }, t('novel.optimize.view')),
+            h(Button, { size: 'sm', variant: 'primary', disabled: busy, onClick: () => onApply(revision) }, t('novel.optimize.apply')),
+            h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => onDiscard(revision) }, t('novel.optimize.discard'))))),
+        applied.map((revision) => h('p', { key: revision.revisionId, className: 'dt-muted' },
+          t('novel.optimize.applied', { chapter: revision.chapterId, characters: Number(revision.effectiveCharacters || 0).toLocaleString() }))))
+    }
+
     const NOVEL_BODY_PAGE_SIZE = 200
 
     function NovelDetail({ ctx, novelId, onBack, onChanged }) {
@@ -8973,6 +9173,16 @@ window.__ModuleLoader__.load({
       const [outlineError, setOutlineError] = useState('')
       const [outlineOpen, setOutlineOpen] = useState(false)
       const [approveRevision, setApproveRevision] = useState('')
+      const [sourceChapterId, setSourceChapterId] = useState('')
+      const [sourceText, setSourceText] = useState('')
+      const [sourceBusy, setSourceBusy] = useState(false)
+      const [sourceError, setSourceError] = useState('')
+      const [optimizeOpen, setOptimizeOpen] = useState(false)
+      const [optimizeChapterId, setOptimizeChapterId] = useState('')
+      const [optimizeInstruction, setOptimizeInstruction] = useState('')
+      const [optimizeBusy, setOptimizeBusy] = useState(false)
+      const [optimizeError, setOptimizeError] = useState('')
+      const [optimizeResult, setOptimizeResult] = useState(null)
       const syncedRevisionRef = useRef(null)
       const loadDetail = () => fetchNovelDetail(novelId)
         .then((next) => {
@@ -8990,6 +9200,20 @@ window.__ModuleLoader__.load({
           return null
         })
       useEffect(() => { void loadDetail() }, [novelId])
+      useEffect(() => {
+        if (novel === null || novel.status !== 'active' || novel.phase !== 'importing') return undefined
+        const timer = window.setInterval(() => { void loadDetail() }, 3000)
+        return () => window.clearInterval(timer)
+      }, [novelId, novel?.status, novel?.phase])
+      useEffect(() => {
+        setSourceChapterId('')
+        setSourceText('')
+        setSourceBusy(false)
+        setSourceError('')
+        setOptimizeOpen(false)
+        setOptimizeResult(null)
+        setOptimizeBusy(false)
+      }, [novelId])
       useEffect(() => {
         if (!novel) return
         const chapters = novel.chapters || []
@@ -9060,6 +9284,91 @@ window.__ModuleLoader__.load({
         void fetchNovelOutline(novelId)
           .then((result) => setOutline(result))
           .catch((cause) => setOutlineError(cause instanceof Error ? cause.message : String(cause)))
+      }
+      const selectSourceChapter = (nextChapterId) => {
+        setSourceChapterId(nextChapterId)
+        setSourceText('')
+        setSourceError('')
+        setSourceBusy(true)
+        void fetchNovelSource(novelId, nextChapterId, null, 20000)
+          .then((source) => setSourceText(source.text))
+          .catch((cause) => setSourceError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setSourceBusy(false))
+      }
+      const openOptimize = (nextChapterId) => {
+        setOptimizeChapterId(nextChapterId)
+        setOptimizeInstruction('')
+        setOptimizeResult(null)
+        setOptimizeError('')
+        setOptimizeOpen(true)
+      }
+      const runOptimize = () => {
+        const instruction = optimizeInstruction.trim()
+        if (instruction === '') {
+          setOptimizeError(t('novel.optimize.missingInstruction'))
+          return
+        }
+        setOptimizeBusy(true)
+        setOptimizeError('')
+        void optimizeNovelChapter(novelId, optimizeChapterId, instruction)
+          .then(async (optimization) => {
+            try {
+              const full = await fetchNovelRevision(novelId, optimization.revisionId, null, 200)
+              const text = (full.paragraphs || []).map((paragraph) => paragraph.text).join('\n\n')
+              setOptimizeResult(text === ''
+                ? optimization
+                : { ...optimization, preview: text, previewTruncated: full.nextCursor !== null })
+            } catch {
+              // The staged revision is still applyable; fall back to the bounded preview.
+              setOptimizeResult(optimization)
+            }
+            void loadDetail().then(() => onChanged?.())
+          })
+          .catch((cause) => setOptimizeError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setOptimizeBusy(false))
+      }
+      const settleOptimization = (action) => {
+        if (optimizeBusy) return
+        setOptimizeBusy(true)
+        setOptimizeError('')
+        void action()
+          .then(() => {
+            setOptimizeResult(null)
+            setOptimizeOpen(false)
+            setBodyNonce((value) => value + 1)
+            return loadDetail().then(() => onChanged?.())
+          })
+          .catch((cause) => {
+            if (isNovelConflict(cause)) setOptimizeError(t('novel.conflict'))
+            else setOptimizeError(cause instanceof Error ? cause.message : String(cause))
+          })
+          .finally(() => setOptimizeBusy(false))
+      }
+      const applyOptimization = (revisionId, expectedRevision) => settleOptimization(
+        () => applyNovelOptimization(novelId, revisionId, expectedRevision),
+      )
+      const discardOptimization = (revisionId, expectedRevision) => settleOptimization(
+        () => discardNovelOptimization(novelId, revisionId, expectedRevision),
+      )
+      const readRevision = (revision) => {
+        setOptimizeChapterId(revision.chapterId)
+        setOptimizeInstruction(revision.instruction || '')
+        setOptimizeError('')
+        setOptimizeOpen(true)
+        setOptimizeBusy(true)
+        void fetchNovelRevision(novelId, revision.revisionId, null, 200)
+          .then((full) => {
+            const text = (full.paragraphs || []).map((paragraph) => paragraph.text).join('\n\n')
+            setOptimizeResult({
+              ...revision,
+              preview: text,
+              previewTruncated: full.nextCursor !== null,
+              snapshotRevision: novel.revision,
+            })
+            setOptimizeOpen(true)
+          })
+          .catch((cause) => setOptimizeError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setOptimizeBusy(false))
       }
       if (novel === null) {
         return h('section', { className: 'dt-settings-band' },
@@ -9146,6 +9455,15 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dt-novel-detail' },
             h('div', { className: 'dt-novel-col' },
               h(NovelChapters, { novel, chapterId, onSelect: setChapterId, t }),
+              h(NovelImportBlock, {
+                novel,
+                sourceChapterId,
+                sourceText,
+                sourceBusy,
+                sourceError,
+                onSelectSource: selectSourceChapter,
+                t,
+              }),
               h(NovelOutlineSummaryBlock, { novel, t })),
             h('div', { className: 'dt-novel-col' },
               h(NovelReaderBlock, {
@@ -9156,10 +9474,19 @@ window.__ModuleLoader__.load({
                 loading: bodyLoading,
                 error: bodyError,
                 onLoadMore: loadMoreBody,
+                onOptimize: openOptimize,
                 t,
               })),
             h('div', { className: 'dt-novel-col' },
-              h(NovelAuthorPanel, { novel, t, onOpenSession: () => runAction(() => openNovelSession(ctx, novel)) })))),
+              h(NovelAuthorPanel, { novel, t, onOpenSession: () => runAction(() => openNovelSession(ctx, novel)) }),
+              h(NovelRevisionBlock, {
+                novel,
+                busy: busy || optimizeBusy,
+                onApply: (revision) => applyOptimization(revision.revisionId, novel.revision),
+                onDiscard: (revision) => discardOptimization(revision.revisionId, novel.revision),
+                onRead: readRevision,
+                t,
+              })))),
         outlineOpen ? h(NovelModalFrame, {
           title: t('novel.outlineTitle'),
           closeLabel: t('panel.close'),
@@ -9169,7 +9496,48 @@ window.__ModuleLoader__.load({
           ? h('p', { className: 'dt-error' }, outlineError)
           : outline === null
             ? h('p', { className: 'dt-muted' }, t('nav.loading'))
-            : h('pre', { className: 'dt-novel-outline-pre' }, JSON.stringify(outline, null, 2))) : null)
+            : h('pre', { className: 'dt-novel-outline-pre' }, JSON.stringify(outline, null, 2))) : null,
+        optimizeOpen ? h(NovelModalFrame, {
+          title: t('novel.optimize.title'),
+          closeLabel: t('panel.close'),
+          onClose: () => { if (!optimizeBusy) setOptimizeOpen(false) },
+          footer: h(React.Fragment, null,
+            h(Button, { size: 'sm', variant: 'ghost', disabled: optimizeBusy, onClick: () => setOptimizeOpen(false) }, t('panel.cancel')),
+            optimizeResult === null
+              ? h(Button, { size: 'sm', variant: 'primary', disabled: optimizeBusy, onClick: runOptimize },
+                optimizeBusy ? t('nav.loading') : t('novel.optimize.run'))
+              : h(React.Fragment, null,
+                h(Button, {
+                  size: 'sm',
+                  variant: 'ghost',
+                  disabled: optimizeBusy,
+                  onClick: () => discardOptimization(optimizeResult.revisionId, optimizeResult.snapshotRevision),
+                }, t('novel.optimize.discard')),
+                h(Button, {
+                  size: 'sm',
+                  variant: 'primary',
+                  disabled: optimizeBusy,
+                  onClick: () => applyOptimization(optimizeResult.revisionId, optimizeResult.snapshotRevision),
+                }, t('novel.optimize.apply')))),
+        },
+        h('p', { className: 'dt-hint' }, t('novel.optimize.hint')),
+        h('p', { className: 'dt-novel-note' }, t('novel.optimize.chapter', { chapterId: optimizeChapterId })),
+        optimizeResult === null
+          ? h(EditorField, {
+            label: t('novel.optimize.instruction'),
+            value: optimizeInstruction,
+            onChange: setOptimizeInstruction,
+            multiline: true,
+            hint: t('novel.optimize.instructionHint'),
+          })
+          : h(React.Fragment, null,
+            h('p', { className: 'dt-novel-note' }, t('novel.optimize.preview', {
+              paragraphs: optimizeResult.paragraphCount,
+              characters: Number(optimizeResult.effectiveCharacters || 0).toLocaleString(),
+            })),
+            optimizeResult.previewTruncated ? h('p', { className: 'dt-hint' }, t('novel.optimize.previewTruncated')) : null,
+            h('pre', { className: 'dt-novel-outline-pre' }, optimizeResult.preview)),
+        optimizeError ? h('p', { className: 'dt-error' }, optimizeError) : null) : null)
     }
 
     function NovelCard({ ctx, novel, t, onDetail, onEdit, onChanged }) {
@@ -9345,6 +9713,17 @@ window.__ModuleLoader__.load({
             h('span', null, name)))))
     }
 
+    /** Reads a source file into the import payload shape (EPUB travels as base64). */
+    async function novelSourcePayload(file) {
+      const extension = String(file.name || '').split('.').pop().toLowerCase()
+      const format = extension === 'epub' ? 'epub' : extension === 'md' ? 'md' : 'txt'
+      if (format === 'epub') {
+        const bytes = new Uint8Array(await readFile(file, true))
+        return { name: file.name, format, content: bytesToBase64(bytes) }
+      }
+      return { name: file.name, format, content: String(await readFile(file, false)) }
+    }
+
     function NovelCreateForm({ onClose, onCreated }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -9366,7 +9745,54 @@ window.__ModuleLoader__.load({
       }))
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
+      const [sourceMode, setSourceMode] = useState('original')
+      const [sourcePayload, setSourcePayload] = useState(null)
+      const [partTargetCharacters, setPartTargetCharacters] = useState('12000')
+      const [importPreview, setImportPreview] = useState(null)
+      const [importPreviewError, setImportPreviewError] = useState('')
+      const [importPreviewBusy, setImportPreviewBusy] = useState(false)
       const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+      const previewPartTarget = () => {
+        const target = parseNovelPositiveInt(partTargetCharacters)
+        if (target === null) {
+          setImportPreview(null)
+          setImportPreviewError(t('novel.import.invalidPartTarget'))
+          return
+        }
+        if (sourcePayload === null) {
+          setImportPreview(null)
+          setImportPreviewError('')
+          return
+        }
+        setImportPreviewBusy(true)
+        setImportPreviewError('')
+        void previewNovelImport(sourcePayload, target)
+          .then((preview) => setImportPreview(preview))
+          .catch((cause) => {
+            setImportPreview(null)
+            setImportPreviewError(cause instanceof Error ? cause.message : String(cause))
+          })
+          .finally(() => setImportPreviewBusy(false))
+      }
+      const chooseSourceFile = (file) => {
+        if (!file) return
+        setImportPreview(null)
+        setImportPreviewError('')
+        setSourcePayload(null)
+        void novelSourcePayload(file)
+          .then((payload) => {
+            setSourcePayload(payload)
+            setForm((current) => ({ ...current, title: current.title.trim() === '' ? fileStem(file.name) : current.title }))
+            const target = parseNovelPositiveInt(partTargetCharacters)
+            if (target === null) return
+            setImportPreviewBusy(true)
+            return previewNovelImport(payload, target)
+              .then((preview) => setImportPreview(preview))
+              .catch((cause) => setImportPreviewError(cause instanceof Error ? cause.message : String(cause)))
+              .finally(() => setImportPreviewBusy(false))
+          })
+          .catch((cause) => setImportPreviewError(cause instanceof Error ? cause.message : String(cause)))
+      }
       const toggleAsset = (key, name, checked) => setForm((current) => ({
         ...current,
         [key]: checked ? [...current[key], name] : current[key].filter((item) => item !== name),
@@ -9422,6 +9848,24 @@ window.__ModuleLoader__.load({
           worldNames: [...form.worldNames],
           budgets,
         }
+        if (sourceMode === 'import') {
+          if (sourcePayload === null) {
+            setError(t('novel.import.missingSource'))
+            return
+          }
+          const partTarget = parseNovelPositiveInt(partTargetCharacters)
+          if (partTarget === null) {
+            setError(t('novel.import.invalidPartTarget'))
+            return
+          }
+          setBusy(true)
+          setError('')
+          void createNovelFromImport(config, sourcePayload, partTarget)
+            .then((created) => onCreated(created))
+            .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+            .finally(() => setBusy(false))
+          return
+        }
         setBusy(true)
         setError('')
         void createNovel(config)
@@ -9435,9 +9879,76 @@ window.__ModuleLoader__.load({
         onClose,
         footer: h(React.Fragment, null,
           h(Button, { size: 'sm', variant: 'ghost', onClick: onClose }, t('panel.cancel')),
-          h(Button, { size: 'sm', variant: 'primary', disabled: busy || !form.title.trim() || !form.requirement.trim(), onClick: submit },
-            busy ? t('novel.creating') : t('novel.form.submit'))),
+          h(Button, {
+            size: 'sm',
+            variant: 'primary',
+            disabled: busy || !form.title.trim() || !form.requirement.trim() || (sourceMode === 'import' && sourcePayload === null),
+            onClick: submit,
+          }, busy ? t('novel.creating') : t('novel.form.submit'))),
       },
+      h('div', { className: 'dt-novel-form-section' },
+        h('h4', null, t('novel.import.mode')),
+        h('div', { className: 'dt-segmented', role: 'group', 'aria-label': t('novel.import.mode') },
+          [
+            { value: 'original', label: 'novel.import.mode.original' },
+            { value: 'import', label: 'novel.import.mode.import' },
+          ].map((option) => h('button', {
+            key: option.value,
+            type: 'button',
+            className: sourceMode === option.value ? 'dt-segmented-active' : '',
+            'aria-pressed': sourceMode === option.value,
+            onClick: () => setSourceMode(option.value),
+          }, t(option.label)))),
+        sourceMode === 'import'
+          ? h(React.Fragment, null,
+            h('p', { className: 'dt-hint' }, t('novel.import.hint')),
+            h('div', { className: 'dt-novel-form-grid' },
+              h('div', { className: 'dt-field' },
+                h('span', { className: 'dt-label' }, t('novel.import.source')),
+                h('label', { className: 'dt-upload' },
+                  sourcePayload === null ? t('novel.import.chooseFile') : sourcePayload.name,
+                  h('input', {
+                    type: 'file',
+                    accept: '.txt,.md,.epub',
+                    onChange: (event) => {
+                      const file = event.target.files?.[0]
+                      event.target.value = ''
+                      chooseSourceFile(file)
+                    },
+                  }))),
+              h(EditorField, {
+                label: t('novel.import.partTarget'),
+                value: partTargetCharacters,
+                type: 'number',
+                min: 2000,
+                max: 50000,
+                onChange: setPartTargetCharacters,
+                hint: t('novel.import.partTargetHint'),
+              })),
+            h('div', { className: 'dt-novel-actions' },
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                disabled: importPreviewBusy || sourcePayload === null,
+                onClick: previewPartTarget,
+              }, importPreviewBusy ? t('nav.loading') : t('novel.import.preview'))),
+            importPreviewError !== '' ? h('p', { className: 'dt-error' }, importPreviewError) : null,
+            importPreview !== null
+              ? h('div', { className: 'dt-novel-import-preview' },
+                h('p', { className: 'dt-novel-note' }, t('novel.import.previewSummary', {
+                  chapters: importPreview.chapterCount,
+                  parts: importPreview.partCount,
+                  characters: Number(importPreview.totalCharacters || 0).toLocaleString(),
+                  source: importPreview.chapterSource === 'headings' ? t('novel.import.headings') : t('novel.import.pseudo'),
+                })),
+                h('div', { className: 'dt-novel-kv' },
+                  importPreview.chapters.slice(0, 8).map((chapter) => h('span', { key: chapter.chapterId },
+                    `${chapter.order}. ${chapter.title} · ${Number(chapter.effectiveCharacters || 0).toLocaleString()} · ${chapter.partCount}p`))),
+                importPreview.chapters.length > 8
+                  ? h('p', { className: 'dt-muted' }, `… +${importPreview.chapters.length - 8}`)
+                  : null)
+              : null)
+          : h('p', { className: 'dt-hint' }, t('novel.import.originalHint'))),
       h('div', { className: 'dt-novel-form-grid' },
         h(EditorField, { label: t('novel.form.title'), value: form.title, onChange: (value) => set('title', value) }),
         h('label', { className: 'dt-editor-field' },
@@ -10460,6 +10971,7 @@ window.__ModuleLoader__.load({
         .dt-novel-block{display:flex;flex-direction:column;gap:6px;min-width:0}
         .dt-novel-block h4{margin:0;font-size:12px;line-height:18px;font-weight:600;color:var(--dsw-alias-label-secondary)}
         .dt-novel-note{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+        .dt-novel-import-preview{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
         .dt-novel-toc{display:flex;flex-direction:column;gap:2px}
         .dt-novel-chapter{display:flex;flex-direction:column;gap:1px;align-items:flex-start;text-align:left;border:0;background:transparent;color:inherit;cursor:pointer;font:inherit;padding:5px 6px;border-radius:6px}
         .dt-novel-chapter:hover{background:var(--dsw-alias-interactive-bg-hover)}

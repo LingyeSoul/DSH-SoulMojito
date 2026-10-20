@@ -28,6 +28,7 @@
 | [`0016`](proposals/0016-hybrid-memory-retrieval.md) | 混合记忆检索（OpenAI 兼容 embed、向量 sidecar、RRF 融合、熔断/回填/降级矩阵） |
 | [`0017`](proposals/0017-local-onnx-embed.md) | 本地 ONNX embed（provider 判别联合、目录指纹向量身份、dtype FP16 优先链） |
 | [`0018`](proposals/0018-agent-game-bridge.md) | Agent 游戏桥——标准游戏引擎 + 侧边栏对局面 + Mod/导入扩展 |
+| [`0020`](proposals/0020-novel-import-continuation-and-revision.md) | AgentNovel 原作导入续写（章节切分、逐部分提取、bible 熔炼）与正文优化 |
 
 ## 决策（`../decisions/`）
 
@@ -66,6 +67,7 @@
 ### AgentNovel
 
 - [`2026-10-09-novel-claim-release.md`](../decisions/2026-10-09-novel-claim-release.md) — 认领释放路径（`novel_unit_release`）与跨 turn 认领的恢复通知
+- [`2026-10-20-novel-import-revision.md`](../decisions/2026-10-20-novel-import-revision.md) — 原作导入续写（章节切分/逐部分提取/bible 熔炼）与正文优化（待应用版本）落地
 
 ### 记忆与变量
 

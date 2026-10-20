@@ -319,6 +319,65 @@
       return result.novel
     }
 
+    async function previewNovelImport(source, partTargetCharacters) {
+      const result = await api('novels/import/preview', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ source, partTargetCharacters }),
+      })
+      return result.preview
+    }
+
+    async function createNovelFromImport(config, source, partTargetCharacters) {
+      const result = await api('novels/import', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ config, source, partTargetCharacters }),
+      })
+      return result.novel
+    }
+
+    async function fetchNovelSource(novelId, chapterId, cursor, limit) {
+      const params = new URLSearchParams()
+      if (chapterId) params.set('chapterId', chapterId)
+      if (cursor) params.set('cursor', cursor)
+      if (limit) params.set('limit', String(limit))
+      const result = await api(novelPath(novelId, `/import/chapter?${params.toString()}`))
+      return result.source
+    }
+
+    async function optimizeNovelChapter(novelId, chapterId, instruction) {
+      const result = await api(novelPath(novelId, '/optimize'), {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ chapterId, instruction }),
+      })
+      return result.optimization
+    }
+
+    async function applyNovelOptimization(novelId, revisionId, expectedRevision) {
+      return api(novelPath(novelId, '/optimize/apply'), {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ revisionId, expectedRevision }),
+      })
+    }
+
+    async function discardNovelOptimization(novelId, revisionId, expectedRevision) {
+      return api(novelPath(novelId, '/optimize/discard'), {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ revisionId, expectedRevision }),
+      })
+    }
+
+    async function fetchNovelRevision(novelId, revisionId, cursor, limit) {
+      const params = new URLSearchParams({ revisionId })
+      if (cursor) params.set('cursor', cursor)
+      if (limit) params.set('limit', String(limit))
+      return api(novelPath(novelId, `/revision?${params.toString()}`))
+    }
+
     async function runNovelAction(novelId, action, body) {
       return api(novelPath(novelId, `/${action}`), body === undefined
         ? { method: 'POST' }

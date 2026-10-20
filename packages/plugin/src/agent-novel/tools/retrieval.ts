@@ -30,7 +30,7 @@ import { memoryStore, novelStore } from './stores.js'
 
 export function retrievalTools(): ToolDefinition[] {
   return [
-    tool('novel_body_read', 'Read committed body paragraphs page by page, optionally filtered to one chapter (§14.1: committed bodies are the authority).', {
+    tool('novel_body_read', 'Read effective body paragraphs page by page, optionally filtered to one chapter (§14.1: committed bodies are the authority; an applied body revision is a projection layer over the commits it covered, proposal 0020 §5).', {
       chapterId: { type: 'string', description: 'Restrict the read to one chapter.' },
       cursor: { type: 'string', description: 'Opaque pagination cursor from a previous page; omit for the first page.' },
       limit: { type: 'integer', description: 'Page size, capped at 50. Default 20.' },
@@ -53,7 +53,7 @@ export function retrievalTools(): ToolDefinition[] {
         source: { kind: 'novel-body', id: novelId },
       }
     }),
-    tool('novel_body_search', 'Scan committed body paragraphs in order for a query (§11): returns paragraph coordinates (commitId#index, chapter, unit) with an excerpt and one neighbouring paragraph of context.', {
+    tool('novel_body_search', 'Scan effective body paragraphs in order for a query (§11): returns paragraph coordinates (commitId or revision id, chapter, unit) with an excerpt and one neighbouring paragraph of context. Applied body revisions are searched as the chapter projection (proposal 0020 §5).', {
       query: { type: 'string', required: true, description: 'Every word must appear in a paragraph, capped at 2000 characters.' },
       chapterId: { type: 'string', description: 'Restrict the scan to one chapter.' },
       limit: { type: 'integer', description: 'Maximum hits, capped at 20. Default 10.' },

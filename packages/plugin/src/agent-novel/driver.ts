@@ -29,6 +29,7 @@
  */
 
 import {
+  importProgressOf,
   requirementWatermark,
   type NovelSnapshot,
   type NovelStore,
@@ -745,6 +746,12 @@ function failedStopReason(data: unknown): boolean {
  */
 export function progressSignature(snapshot: NovelSnapshot): string {
   switch (snapshot.run.phase) {
+    case 'importing': {
+      const imported = snapshot.import
+      if (imported === null || imported === undefined) return 'import:none'
+      const progress = importProgressOf(imported)
+      return `import:${progress.extracted}/${progress.partCount};bible:${imported.bibleHash === null ? 'none' : imported.bibleHash.slice(0, 8)}`
+    }
     case 'outlining':
       return snapshot.outline === null ? 'outline:none' : `outline:${snapshot.outline.outlineRevision}`
     case 'revising':
@@ -793,6 +800,10 @@ function workInstruction(snapshot: NovelSnapshot, work: NovelWork, unitId: strin
   const outlineRevision = snapshot.outline?.outlineRevision ?? 'none'
   const watermark = requirementWatermark(snapshot.requirements)
   switch (work.kind) {
+    case 'import-extract':
+      return 'Imported-source extraction (proposal 0020 §4.1): call novel_import_extract for the next batch (default 4 parts). Each part runs in a one-shot tool-free extraction subagent; results stay outside this conversation. Do not read the raw source or the extraction files yourself in this phase. If the tool reports failures, end the turn — the scheduler retries pending parts within their retry budget; an exhausted part pauses the novel with the reason. End the turn after the batch.'
+    case 'import-merge':
+      return 'Imported-source fusion (proposal 0020 §4.3): call novel_import_read to obtain the bounded merge digest, then fuse it into one coherent bible and submit it with novel_import_merge (expectedRevision from novel_import_read). Deduplicate characters, resolve contradictions, order the timeline, keep only continuation-relevant world rules, and state the style and open threads. Do not echo the digest unchanged and do not create the outline in this turn.'
     case 'outline-create':
       return 'Kickoff work (§6.3): read the creation directive with novel_requirements_read, then create the initial plan with novel_outline_create (expectedRevision from novel_status_read; handle the pending directive in handledRequirements). End the turn after the outline is saved.'
     case 'outline-revise':

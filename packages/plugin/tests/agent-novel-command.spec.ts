@@ -344,6 +344,45 @@ describe('AgentNovel command bridge and HTTP contract', () => {
     expect(full.requirements[0]).toMatchObject({ requirementId: 'req-1', sequence: 1, status: 'pending', text: '写一个酒馆老板与常客的故事' })
   })
 
+  it('previews and creates an imported continuation project (proposal 0020)', async () => {
+    const source = {
+      name: '雾港.txt',
+      format: 'txt',
+      content: '第一章 雾港\n\n雾从海面压进港口。\n\n第二章 旧信\n\n那封信放了十年。',
+    }
+    const previewRes = makeResponse()
+    await apiHandler(makeRequest({ source, partTargetCharacters: 2000 }, '/api/dsh-soulmojito/novels/import/preview'), previewRes)
+    expect(previewRes.statusCode).toBe(200)
+    const preview = jsonBody(previewRes).preview
+    expect(preview).toMatchObject({ chapterCount: 2, partCount: 2, chapterSource: 'headings' })
+    expect(preview.chapters).toHaveLength(2)
+
+    const createRes = makeResponse()
+    await apiHandler(makeRequest({
+      config: novelConfig({ title: '雾港续章' }),
+      source,
+      partTargetCharacters: 2000,
+    }, '/api/dsh-soulmojito/novels/import'), createRes)
+    expect(createRes.statusCode).toBe(200)
+    const created = jsonBody(createRes)
+    expect(created.novel).toMatchObject({ title: '雾港续章', status: 'active', phase: 'importing' })
+    expect(created.import).toMatchObject({ chapterCount: 2, partCount: 2 })
+
+    const detail = makeResponse()
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${created.novel.novelId}`), detail)
+    const full = jsonBody(detail).novel
+    expect(full.import).toMatchObject({
+      sourceName: '雾港.txt',
+      progress: { chapterCount: 2, partCount: 2, extracted: 0, pending: 2, merged: false },
+    })
+    expect(full.chapters).toEqual([])
+
+    const chapter = makeResponse()
+    await apiHandler(makeGetRequest(`/api/dsh-soulmojito/novels/${created.novel.novelId}/import/chapter?chapterId=ich-1`), chapter)
+    expect(chapter.statusCode).toBe(200)
+    expect(jsonBody(chapter).source.text).toContain('雾从海面压进港口')
+  })
+
   it('returns 404 for an unknown novel detail', async () => {
     const res = makeResponse()
     await apiHandler(makeGetRequest('/api/dsh-soulmojito/novels/missing-one'), res)

@@ -6,10 +6,12 @@
  * proposal sections as §n.
  */
 
+import type { NovelImportState } from './novel-import.js'
+
 /* ------------------------------- status ------------------------------- */
 
 export type NovelStatus = 'active' | 'paused' | 'completed'
-export type NovelPhase = 'outlining' | 'revising' | 'writing' | 'finishing'
+export type NovelPhase = 'importing' | 'outlining' | 'revising' | 'writing' | 'finishing'
 
 /** Structured pause reasons; each must map to an actionable resume path (§12.1, §13). */
 export type NovelPauseReason =
@@ -210,6 +212,74 @@ export function validateCreateConfig(config: NovelCreateConfig): ValidationError
 /** Total committed effective characters (§7.2: recomputed from commit records). */
 export function totalEffectiveCharacters(commits: readonly BodyCommit[]): number {
   return commits.reduce((total, commit) => total + commit.effectiveCharacters, 0)
+}
+
+/* --------------------------- body revisions --------------------------- */
+
+export type BodyRevisionStatus = 'pending' | 'applied' | 'superseded' | 'discarded'
+
+/**
+ * An explicit, versioned replacement of a chapter's committed prose (proposal
+ * 0020 §5). Commits stay immutable; the applied revision is a projection layer
+ * that covers the commits present when it was applied. Later commits append
+ * after the revision, so the reading order is stable.
+ */
+export interface BodyRevisionRecord {
+  revisionId: string
+  chapterId: string
+  instruction: string
+  bodyHash: string
+  paragraphCount: number
+  effectiveCharacters: number
+  coveredCommitIds: readonly string[]
+  /** Effective-body CAS captured at creation; applying requires it unchanged. */
+  baseContentRevision: string
+  status: BodyRevisionStatus
+  createdAt: string
+  appliedAt: string | null
+}
+
+/** Latest applied revision of a chapter; pending/discarded records never project. */
+export function appliedBodyRevision(snapshot: NovelSnapshot, chapterId: string): BodyRevisionRecord | null {
+  const records = snapshot.bodyRevisions ?? []
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index]!
+    if (record.chapterId === chapterId && record.status === 'applied') return record
+  }
+  return null
+}
+
+export function bodyRevisionCovers(revision: BodyRevisionRecord, commitId: string): boolean {
+  return revision.coveredCommitIds.includes(commitId)
+}
+
+/** Effective characters of one chapter: applied revision text + uncovered commits. */
+export function effectiveChapterCharacters(snapshot: NovelSnapshot, chapterId: string): number {
+  const revision = appliedBodyRevision(snapshot, chapterId)
+  let total = 0
+  for (const commit of snapshot.commits) {
+    if (commit.chapterId !== chapterId) continue
+    if (revision !== null && bodyRevisionCovers(revision, commit.commitId)) continue
+    total += commit.effectiveCharacters
+  }
+  if (revision !== null) total += revision.effectiveCharacters
+  return total
+}
+
+/** Effective characters across the novel (§7.1/§7.2), applying body revisions. */
+export function effectiveNovelCharacters(snapshot: NovelSnapshot): number {
+  const revisionByChapter = new Map<string, BodyRevisionRecord>()
+  for (const record of snapshot.bodyRevisions ?? []) {
+    if (record.status === 'applied') revisionByChapter.set(record.chapterId, record)
+  }
+  let total = 0
+  for (const commit of snapshot.commits) {
+    const revision = revisionByChapter.get(commit.chapterId)
+    if (revision !== undefined && bodyRevisionCovers(revision, commit.commitId)) continue
+    total += commit.effectiveCharacters
+  }
+  for (const revision of revisionByChapter.values()) total += revision.effectiveCharacters
+  return total
 }
 
 /**
@@ -685,7 +755,14 @@ export interface ChapterCompletion {
 
 /* --------------------------------- run --------------------------------- */
 
-export type WorkIntentKind = 'outline-create' | 'outline-revise' | 'write-unit' | 'chapter-complete' | 'finish'
+export type WorkIntentKind =
+  | 'import-extract'
+  | 'import-merge'
+  | 'outline-create'
+  | 'outline-revise'
+  | 'write-unit'
+  | 'chapter-complete'
+  | 'finish'
 
 /** Persisted work intent; at most one in flight per novel (§12.1). */
 export interface WorkIntentRecord {
@@ -779,6 +856,10 @@ export interface NovelSnapshot {
   completedChapters: readonly ChapterCompletion[]
   /** Author meta note editable without touching config semantics (§14.3 right panel). */
   premiseNote: string | null
+  /** Imported source for continuation (proposal 0020); null for original projects. */
+  import?: NovelImportState | null
+  /** Explicit body revisions (proposal 0020 §5); absent on legacy snapshots. */
+  bodyRevisions?: readonly BodyRevisionRecord[]
   run: NovelRunState
   /** Content projection version: only body/chapter display info/canon changes bump it (§14.1). */
   contentRevision: string
@@ -810,7 +891,7 @@ export function summarizeNovel(snapshot: NovelSnapshot): NovelSummary {
     pauseReason: snapshot.run.pauseReason,
     chaptersCompleted: snapshot.completedChapters.length,
     chaptersTotal: snapshot.outline?.chapters.length ?? 0,
-    effectiveCharacters: totalEffectiveCharacters(snapshot.commits),
+    effectiveCharacters: effectiveNovelCharacters(snapshot),
     targetCharacters: snapshot.config.lengthBudget.kind === 'target' ? snapshot.config.lengthBudget.targetCharacters : null,
     updatedAt: snapshot.updatedAt,
     lastError: snapshot.run.lastError,
@@ -841,7 +922,7 @@ export function finishGuardViolations(snapshot: NovelSnapshot): readonly string[
   for (const unit of snapshot.units) {
     if (unit.state === 'prepared' || unit.state === 'claimed') violations.push(`unit-in-flight:${unit.unitId}`)
   }
-  const total = totalEffectiveCharacters(snapshot.commits)
+  const total = effectiveNovelCharacters(snapshot)
   if (!lengthWithinBudget(total, snapshot.config.lengthBudget)) violations.push(`length-out-of-budget:${total}`)
   return violations
 }

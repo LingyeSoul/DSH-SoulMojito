@@ -1,6 +1,6 @@
 /** AgentNovel writing-unit claim/release/supersede tool slice (registration order 7-9). */
 
-import { totalEffectiveCharacters } from '../../../../tavern-store/src/index.js'
+import { effectiveNovelCharacters } from '../../../../tavern-store/src/index.js'
 import { stringArg } from '../../tool-args.js'
 import { narrativeStage, unitTargetRange } from '../outline.js'
 import { objectOutput, resolveNovelBinding, snapshotOf, tool, type ToolDefinition } from './shared.js'
@@ -33,7 +33,7 @@ export function unitTools(): ToolDefinition[] {
         hostTurn: null,
       })
       const unit = snapshot.units.find((item) => item.unitId === claim.unitId)
-      const committed = totalEffectiveCharacters(snapshot.commits)
+      const committed = effectiveNovelCharacters(snapshot)
       return {
         unitId: claim.unitId,
         executionToken: claim.executionToken,

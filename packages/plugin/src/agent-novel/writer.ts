@@ -24,10 +24,13 @@ import { identitySummaryOf } from '../agent-tavern/agent.js'
 import { allParticipantsOf, narrativeStage, unitTargetRange } from './outline.js'
 import { recordWriterRunUsage } from './usage.js'
 import { limitText } from '../tool-args.js'
-import type {
-  Foreshadowing,
-  NovelSnapshot,
-  WritingUnit,
+import {
+  effectiveNovelCharacters,
+  type Foreshadowing,
+  type ImportBibleRecord,
+  type ImportTimelineEvent,
+  type NovelSnapshot,
+  type WritingUnit,
 } from '../../../tavern-store/src/index.js'
 
 export const WRITER_PROVIDER = 'spawn'
@@ -66,6 +69,8 @@ export const WRITER_ALLOW_LIST: readonly string[] = [
   'novel_body_read',
   'novel_body_search',
   'novel_facts_read',
+  'novel_source_read',
+  'novel_source_search',
   'memory_search',
   'memory_read',
   'novel_body_commit',
@@ -89,6 +94,9 @@ export const WRITER_LORE_FIELD_LIMIT = 1200
 export const WRITER_BODY_TAIL_LIMIT = 1600
 export const WRITER_FORESHADOWING_MAX = 12
 export const WRITER_CANON_MAX = 12
+export const WRITER_SOURCE_TAIL_LIMIT = 2000
+export const WRITER_IMPORT_TIMELINE_MAX = 8
+export const WRITER_IMPORT_THREADS_MAX = 8
 export const WRITER_TRUNCATION_MARKER = '…[truncated]'
 
 /* ---------------------------- moved pure helpers ---------------------------- */
@@ -276,11 +284,22 @@ export interface WriterUnitParams {
   remainingCharacters: number | null
 }
 
+/** Continuation context distilled from the imported source (proposal 0020). */
+export interface WriterImportContext {
+  premise: string
+  endingDirection: string
+  styleNotes: string
+  timeline: readonly ImportTimelineEvent[]
+  openThreads: readonly string[]
+  sourceTail: string
+}
+
 /** 写手包材料：自带全部输入，渲染是纯函数，不经模型调用。 */
 export interface WriterPackInput {
   novelId: string
   unitId: string
   outlineRevision: string | null
+  importContext: WriterImportContext | null
   /** 当前章是否已有提交（§4.3 ①：有提交而正文尾部为空 → 拒绝）。 */
   chapterHasCommits: boolean
   story: WriterStoryProjection
@@ -463,6 +482,26 @@ function renderCanonPage(facts: readonly WriterCanonFact[]): string {
   return lines.join('\n')
 }
 
+function renderImportContext(context: WriterImportContext): string {
+  const lines = ['## Imported-source continuity (prior text, not this project\'s canon)']
+  if (context.premise.trim() !== '') lines.push(`- original premise: ${clipMarked(context.premise, WRITER_STORY_FIELD_LIMIT)}`)
+  if (context.endingDirection.trim() !== '') lines.push(`- where the source ended: ${clipMarked(context.endingDirection, WRITER_STORY_FIELD_LIMIT)}`)
+  if (context.styleNotes.trim() !== '') lines.push(`- source style: ${clipMarked(context.styleNotes, WRITER_STORY_FIELD_LIMIT)}`)
+  if (context.timeline.length > 0) {
+    lines.push('- recent source events:')
+    for (const event of context.timeline.slice(-WRITER_IMPORT_TIMELINE_MAX)) {
+      lines.push(`  - ${clipMarked(event.summary, WRITER_SCENE_FIELD_LIMIT)}`)
+    }
+  }
+  if (context.openThreads.length > 0) {
+    lines.push(`- open source threads: ${context.openThreads.slice(-WRITER_IMPORT_THREADS_MAX).map((thread) => clipMarked(thread, 200)).join(' | ')}`)
+  }
+  if (context.sourceTail.trim() !== '') {
+    lines.push(`- verbatim source tail: ${context.sourceTail.slice(-WRITER_SOURCE_TAIL_LIMIT)}`)
+  }
+  return lines.join('\n')
+}
+
 function renderUnitParams(params: WriterUnitParams): string {
   const lines = [
     '## Unit parameters',
@@ -490,6 +529,7 @@ function renderBlocks(input: WriterPackInput, mode: WriterPackMode): string[] {
   if (input.bodyTail.trim() !== '') blocks.push(renderBodyTail(input.bodyTail))
   if (mode === 'full' && input.foreshadowing.length > 0) blocks.push(renderForeshadowingPage(input.foreshadowing))
   if (mode === 'full' && input.canon.length > 0) blocks.push(renderCanonPage(input.canon))
+  if (input.importContext !== null && input.importContext !== undefined) blocks.push(renderImportContext(input.importContext))
   blocks.push(renderUnitParams(input.unitParams))
   return blocks
 }
@@ -634,6 +674,8 @@ export interface WriterNovelStoreLike {
   readAsset(novelId: string, contentHash: string): Promise<unknown>
   readBody(novelId: string, query: { chapterId?: string; unitId?: string; cursor?: string; limit?: number }): Promise<{ paragraphs: readonly { commitId: string; paragraphIndex: number; chapterId: string; text: string }[]; nextCursor: string | null }>
   getNovel(novelId: string): Promise<NovelSnapshot | undefined>
+  readImportBible?: (novelId: string) => Promise<ImportBibleRecord | undefined>
+  importSourceTail?: (novelId: string, maxCharacters: number) => Promise<string>
 }
 
 /**
@@ -735,16 +777,35 @@ export async function assembleWriterPackInput(deps: {
     }
   }
 
-  const committed = snapshot.commits.reduce((total, commit) => total + commit.effectiveCharacters, 0)
+  const committed = effectiveNovelCharacters(snapshot)
   const budget = snapshot.config.lengthBudget
   const remainingCharacters = budget.kind === 'unbounded'
     ? null
     : Math.max(0, Math.ceil((budget.hardMaximumCharacters ?? budget.targetCharacters * (1 + budget.toleranceRatio)) - committed))
 
+  // Imported-source continuity (proposal 0020 §4.4): bible + verbatim tail when
+  // the project came from an import. Absent for original projects.
+  let importContext: WriterImportContext | null = null
+  if (snapshot.import !== null && snapshot.import !== undefined && snapshot.import.bibleHash !== null) {
+    const bible = deps.novelStore.readImportBible === undefined ? undefined : await deps.novelStore.readImportBible(novelId)
+    const sourceTail = deps.novelStore.importSourceTail === undefined ? '' : await deps.novelStore.importSourceTail(novelId, WRITER_SOURCE_TAIL_LIMIT)
+    if (bible !== undefined) {
+      importContext = {
+        premise: bible.story.premise,
+        endingDirection: bible.story.endingDirection,
+        styleNotes: bible.styleNotes,
+        timeline: bible.timeline,
+        openThreads: bible.openThreads,
+        sourceTail,
+      }
+    }
+  }
+
   return {
     novelId,
     unitId: unit.unitId,
     outlineRevision: outline.outlineRevision,
+    importContext,
     chapterHasCommits,
     story: {
       premise: outline.story.premise,
