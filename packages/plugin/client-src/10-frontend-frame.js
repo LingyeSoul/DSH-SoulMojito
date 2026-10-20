@@ -142,13 +142,16 @@
       const reset = '<style>html,body{margin:0!important;padding:0;max-width:100%;}*,*::before,*::after{box-sizing:border-box;}</style>'
       // 视口脚本进 head（先于 body 样式首帧解析，避免塌陷闪动），reporter 留 body 末
       const viewport = `<script>${frontendViewportScript()}</script>`
+      // 酒馆助手兼容层（2026-10-20）：库脚本 + TavernHelper shim 进 head，前端
+      // 首帧就能拿到 getVariables/getChatMessages 等同步面；快照由宿主随后投递。
+      const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token)}</script>`
       const reporter = `<script>${frontendHeightReporter(token)}</script>`
       if (/<html(?:\s[^>]*)?>/i.test(source)) {
         let documentText = source
         if (/<head(?:\s[^>]*)?>/i.test(documentText)) {
-          documentText = documentText.replace(/<head(?:\s[^>]*)?>/i, (tag) => `${tag}${csp}${reset}${viewport}`)
+          documentText = documentText.replace(/<head(?:\s[^>]*)?>/i, (tag) => `${tag}${csp}${reset}${viewport}${helper}`)
         } else {
-          documentText = documentText.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${csp}${reset}${viewport}</head>`)
+          documentText = documentText.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${csp}${reset}${viewport}${helper}</head>`)
         }
         if (/<\/body\s*>/i.test(documentText)) {
           return documentText.replace(/<\/body\s*>/i, `${reporter}</body>`)
@@ -162,7 +165,7 @@
       const bodyMatch = /<body(?:\s[^>]*)?>([\s\S]*?)<\/body\s*>/i.exec(source)
       const headContent = headMatch ? headMatch[1] : ''
       const bodyContent = bodyMatch ? bodyMatch[1] : source
-      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${reset}${viewport}${headContent}</head><body>${bodyContent}${reporter}</body></html>`
+      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${reset}${viewport}${helper}${headContent}</head><body>${bodyContent}${reporter}</body></html>`
     }
 
     // 宿主→iframe 视口投递（A-4）：iframe 的 --dt-viewport-height 需要"真实可视区
@@ -182,10 +185,110 @@
       return post
     }
 
-    function FrontendFrame({ html, token }) {
+    // 宿主侧代理（2026-10-20）：iframe 内的 TavernHelper shim 发来的 op 一律
+    // 追加本会话绑定后转 POST /helper。绑定来自面板/transcript 自己的
+    // sessionBindings，iframe 无法自报身份——这是沙箱化 JSR 兼容面的信任边界。
+    // 快照比对负责「宿主侧事件」：楼数增加→MESSAGE_RECEIVED，正文变化→
+    // MESSAGE_EDITED，聊天切换→CHAT_CHANGED。只广播能真实观测到的信号，
+    // 不凭空伪造酒馆事件。
+    function useHelperBridge(frameRef, token, binding, refreshKey) {
+      const bindingRef = useRef(binding)
+      bindingRef.current = binding
+      const previousRef = useRef(null)
+      useEffect(() => {
+        previousRef.current = null
+      }, [token])
+      useEffect(() => {
+        const reply = (payload) => {
+          try {
+            frameRef.current?.contentWindow?.postMessage({ ...payload, token }, '*')
+          } catch {}
+        }
+        const emitEvent = (event, args) => {
+          reply({ type: HELPER_EVENT_MESSAGE, event, args: Array.isArray(args) ? args : [] })
+        }
+        const diff = (previous, next) => {
+          if (!next) return
+          if (previous === null) {
+            emitEvent(HELPER_IFRAME_EVENTS.APP_READY, [])
+            return
+          }
+          if (previous.chatId !== next.chatId) emitEvent(HELPER_TAVERN_EVENTS.CHAT_CHANGED, [next.chatId])
+          const before = Array.isArray(previous.messages) ? previous.messages : []
+          const after = Array.isArray(next.messages) ? next.messages : []
+          const byId = new Map(before.map((message) => [message.message_id, message]))
+          for (const message of after) {
+            const old = byId.get(message.message_id)
+            if (old === undefined) {
+              emitEvent(message.role === 'user' ? HELPER_TAVERN_EVENTS.MESSAGE_SENT : HELPER_TAVERN_EVENTS.MESSAGE_RECEIVED, [message.message_id])
+              continue
+            }
+            if (old.message !== message.message || old.name !== message.name) {
+              emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_EDITED, [message.message_id])
+            }
+          }
+          const removed = before.filter((message) => !after.some((entry) => entry.message_id === message.message_id))
+          if (removed.length > 0) emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_DELETED, [removed[0].message_id])
+        }
+        const postSnapshot = () => {
+          const current = bindingRef.current
+          if (!current) return
+          void api('helper', {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
+          }).then((result) => {
+            const snapshot = result.value
+            reply({ type: HELPER_SNAPSHOT_MESSAGE, snapshot })
+            diff(previousRef.current, snapshot)
+            previousRef.current = snapshot
+          }).catch(() => {})
+        }
+        const onMessage = (event) => {
+          const data = event.data
+          if (!data || data.type !== HELPER_MESSAGE || data.token !== token) return
+          if (event.source !== frameRef.current?.contentWindow) return
+          const current = bindingRef.current
+          const fail = (message) => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: false, message })
+          if (!current) {
+            fail('this frontend is not bound to a Tavern chat')
+            return
+          }
+          void api('helper', {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({
+              op: data.op,
+              character: current.character,
+              chatId: current.chatId,
+              ...(data.payload && typeof data.payload === 'object' ? data.payload : {}),
+            }),
+          }).then((result) => {
+            reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: result.value })
+            // 状态已变：重投快照（并据比对广播事件），让前端后续同步读取拿到新值。
+            if (data.op === 'variables.replace' || String(data.op).startsWith('messages.') || data.op === 'slash') {
+              postSnapshot()
+            }
+          }).catch((cause) => {
+            fail(cause instanceof Error ? cause.message : String(cause))
+          })
+        }
+        addEventListener('message', onMessage)
+        emitEvent(HELPER_IFRAME_EVENTS.MESSAGE_IFRAME_RENDER_STARTED, [token])
+        postSnapshot()
+        return () => {
+          removeEventListener('message', onMessage)
+          emitEvent(HELPER_IFRAME_EVENTS.MESSAGE_IFRAME_RENDER_ENDED, [token])
+        }
+      }, [token, refreshKey])
+      return undefined
+    }
+
+    function FrontendFrame({ html, token, binding, refreshKey }) {
       const frameRef = useRef(null)
       const [height, setHeight] = useState(120)
       const postViewport = useViewportBridge(frameRef)
+      useHelperBridge(frameRef, token, binding, refreshKey)
       useEffect(() => {
         const onMessage = (event) => {
           const data = event.data

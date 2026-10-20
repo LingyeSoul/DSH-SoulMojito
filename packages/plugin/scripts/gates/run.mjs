@@ -87,6 +87,7 @@ const REQUIRED_SERVER_ROUTES = [
   'import/persona',
   'import/regex',
   'regex/sync-cards',
+  'regex/sync-presets',
   'persona',
   'persona-avatar/',
   'groups',
@@ -95,6 +96,7 @@ const REQUIRED_SERVER_ROUTES = [
   'bindings/prune',
   'chats',
   'chat/',
+  'display',
   'branch',
   'agent-tavern/audit',
   'projection',
@@ -138,6 +140,10 @@ const REQUIRED_SERVER_ROUTES = [
   'games/action/',
   'games/install',
   'games/reload',
+  // 美化前端（2026-10-20）：右栏面板取最新一条完整 HTML 楼层；酒馆助手兼容面
+  // 的单入口（POST，op 分派）。
+  'frontend/latest',
+  'helper',
 ]
 
 // DSH client-web's platform module table, mirrored from the host web shell's
@@ -828,6 +834,44 @@ function checkMvuSurfaceText(text) {
   return problems
 }
 
+function checkFrontendSurfaceText(text) {
+  const problems = []
+  for (const marker of [
+    'function TavernFrontendPanel({ sessionId }) {',
+    "const FRONTEND_TAB_ID = 'dsh-soulmojito/frontend'",
+    "const FRONTEND_TAB_KIND = 'tavern-frontend'",
+    "'data-dsh-soulmojito-surface': 'frontend-sidebar'",
+    'frontend/latest${query}',
+    "'frontend.inlineOnly'",
+    "'frontend.refresh'",
+    'key: FRONTEND_TAB_ID',
+    'TavernFrontendSidebarTab',
+    'sidebarRight.openTab(FRONTEND_TAB_KIND)',
+    '.dt-frontend-side{box-sizing:border-box',
+    // 自动展开开关（2026-10-20）：watcher 必须以设置为门（关闭时零轮询），且
+    // 每聊天每楼层只展开一次。
+    'function useFrontendAutoOpen(sessionId, binding, architecture, enabled)',
+    "if (!enabled || !binding || architecture !== 'agent-tavern') return undefined",
+    'autoOpenedRef.current.has(marker)',
+    // 酒馆助手兼容层（2026-10-20）：沙箱内 shim + 宿主侧代理 + 事件白名单。
+    "const HELPER_MESSAGE = 'dsh-soulmojito:helper'",
+    'function frontendHelperScript(token)',
+    'window.getVariables = function',
+    'window.getChatMessages = function',
+    'window.setChatMessages = function',
+    'window.eventOn = function',
+    'function useHelperBridge(frameRef, token, binding, refreshKey)',
+    'this frontend is not bound to a Tavern chat',
+    'const HELPER_TAVERN_EVENTS = {',
+    'window.triggerSlash = function',
+    'window.builtin.renderMarkdown = function',
+    'window.getTavernRegexes = function',
+  ]) {
+    if (!text.includes(marker)) problems.push(`frontend sidebar surface is missing marker '${marker}'`)
+  }
+  return problems
+}
+
 function checkClientArchitectureText(text) {
   const problems = []
   for (const marker of [
@@ -1252,6 +1296,23 @@ async function checkClientExecution(code, options = {}) {
     })
     if (mvuBody === undefined) problems.push("client apply must register the MVU sidebar body under keyed slot 'sidebar.right.pane.tab' (key 'dsh-soulmojito/mvu')")
     else if (typeof mvuBody.options?.inject !== 'function') problems.push('MVU sidebar body must pass sessionId through its keyed inject callback')
+    // 美化前端 tab（2026-10-20）：与 MVU 同一条右栏通道，但承载的是消息内
+    // 完整 HTML——AgentTavern 架构下插件没有正文 slot，这个 tab 是唯一展示面。
+    const frontendType = sidebarRightTabTypes.find((definition) => definition?.kind === 'tavern-frontend')
+    if (frontendType === undefined) {
+      problems.push("client apply must register the sidebar-right frontend tab type (kind 'tavern-frontend')")
+    } else {
+      if (frontendType.id !== 'dsh-soulmojito/frontend') problems.push("frontend sidebar tab type id must be 'dsh-soulmojito/frontend'")
+      if (typeof frontendType.title !== 'function') problems.push('frontend sidebar tab type must thunk its title for locale switches')
+      if (!Array.isArray(frontendType.guide) || frontendType.guide.length === 0) problems.push('frontend sidebar tab type must contribute a guide entry')
+      else if (typeof frontendType.guide[0]?.title !== 'function') problems.push('frontend sidebar guide entry must thunk its title')
+    }
+    const frontendBody = registrations.find((candidate) => {
+      const options = candidate?.options ?? candidate?.opts
+      return options?.name === 'sidebar.right.pane.tab' && options?.key === 'dsh-soulmojito/frontend'
+    })
+    if (frontendBody === undefined) problems.push("client apply must register the frontend sidebar body under keyed slot 'sidebar.right.pane.tab' (key 'dsh-soulmojito/frontend')")
+    else if (typeof frontendBody.options?.inject !== 'function') problems.push('frontend sidebar body must pass sessionId through its keyed inject callback')
   }
   const localeRegistration = localeRegistrations.find((entry) => entry?.ns === PLUGIN_NAME)
   if (localeRegistration === undefined) {
@@ -2635,6 +2696,53 @@ const gates = [
       : ['generated packages/plugin/client/index.js does not exist'],
   },
   {
+    name: 'frontend-surface',
+    selfTest: () => {
+      const good = [
+        'function TavernFrontendPanel({ sessionId }) {',
+        "const FRONTEND_TAB_ID = 'dsh-soulmojito/frontend'",
+        "const FRONTEND_TAB_KIND = 'tavern-frontend'",
+        "'data-dsh-soulmojito-surface': 'frontend-sidebar'",
+        'frontend/latest${query}',
+        "'frontend.inlineOnly'",
+        "'frontend.refresh'",
+        'key: FRONTEND_TAB_ID',
+        'TavernFrontendSidebarTab',
+        'sidebarRight.openTab(FRONTEND_TAB_KIND)',
+        '.dt-frontend-side{box-sizing:border-box',
+        'function useFrontendAutoOpen(sessionId, binding, architecture, enabled)',
+        "if (!enabled || !binding || architecture !== 'agent-tavern') return undefined",
+        'autoOpenedRef.current.has(marker)',
+        "const HELPER_MESSAGE = 'dsh-soulmojito:helper'",
+        'function frontendHelperScript(token)',
+        'window.getVariables = function',
+        'window.getChatMessages = function',
+        'window.setChatMessages = function',
+        'window.eventOn = function',
+        'function useHelperBridge(frameRef, token, binding, refreshKey)',
+        'this frontend is not bound to a Tavern chat',
+        'const HELPER_TAVERN_EVENTS = {',
+        'window.triggerSlash = function',
+        'window.builtin.renderMarkdown = function',
+        'window.getTavernRegexes = function',
+      ].join('\n')
+      const noTabKind = good.replace("const FRONTEND_TAB_KIND = 'tavern-frontend'", "const FRONTEND_TAB_KIND = 'other'")
+      const noInlineNote = good.replace("'frontend.inlineOnly'", '')
+      const ungatedAutoOpen = good.replace("if (!enabled || !binding || architecture !== 'agent-tavern') return undefined", 'void enabled')
+      const noIdentityGuard = good.replace('this frontend is not bound to a Tavern chat', 'ok')
+      return checkFrontendSurfaceText(good).length === 0
+        && checkFrontendSurfaceText(noTabKind).length > 0
+        && checkFrontendSurfaceText(noInlineNote).length > 0
+        && checkFrontendSurfaceText(ungatedAutoOpen).length > 0
+        && checkFrontendSurfaceText(noIdentityGuard).length > 0
+        ? []
+        : ['frontend sidebar surface bad samples were not rejected']
+    },
+    check: () => existsSync(CLIENT_PATH)
+      ? checkFrontendSurfaceText(readFileSync(CLIENT_PATH, 'utf8'))
+      : ['generated packages/plugin/client/index.js does not exist'],
+  },
+  {
     name: 'client-architecture-split',
     selfTest: () => {
       const good = [
@@ -2750,7 +2858,7 @@ const gates = [
     name: 'client-vm-mount',
     selfTest: async () => {
       const localeWiring = "ctx.effect(() => ctx.locale.register('dsh-soulmojito', { zh: { 'nav.title': '酒馆' }, en: { 'nav.title': 'Tavern' } })); ctx.locale.bind('dsh-soulmojito');"
-      const sidebarWiring = "ctx.inject(['sidebarRightTabs', 'sidebarRight'], (scope) => { scope.effect(() => scope.sidebarRightTabs.register({ id: 'dsh-soulmojito/mvu', kind: 'tavern-mvu', priority: 'extension', title: () => 'MVU', guide: [{ id: 'mvu', order: 40, title: () => 'MVU', description: () => 'MVU' }] })); scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({ name: 'sidebar.right.pane.tab', key: 'dsh-soulmojito/mvu', inject: (sessionId) => ({ sessionId }) }, () => null))); });"
+      const sidebarWiring = "ctx.inject(['sidebarRightTabs', 'sidebarRight'], (scope) => { scope.effect(() => scope.sidebarRightTabs.register({ id: 'dsh-soulmojito/mvu', kind: 'tavern-mvu', priority: 'extension', title: () => 'MVU', guide: [{ id: 'mvu', order: 40, title: () => 'MVU', description: () => 'MVU' }] })); scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({ name: 'sidebar.right.pane.tab', key: 'dsh-soulmojito/mvu', inject: (sessionId) => ({ sessionId }) }, () => null))); scope.effect(() => scope.sidebarRightTabs.register({ id: 'dsh-soulmojito/frontend', kind: 'tavern-frontend', priority: 'extension', title: () => 'Frontend', guide: [{ id: 'frontend', order: 42, title: () => 'Frontend', description: () => 'Frontend' }] })); scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({ name: 'sidebar.right.pane.tab', key: 'dsh-soulmojito/frontend', inject: (sessionId) => ({ sessionId }) }, () => null))); });"
       const good = `window.__ModuleLoader__.load({ id: 'dsh-soulmojito', factory: (require) => { var module = { exports: {} }; var exports = module.exports; require('react'); exports.name = 'dsh-soulmojito'; exports.inject = ['slots', 'locale']; exports.apply = (ctx) => { ${localeWiring} ${sidebarWiring} const entries = [['settings.section','dsh-soulmojito'],['conversation.view','tavern'],['conversation.composer',null],['conversation.session.header.actions','dsh-soulmojito'],['shell.overlay','dsh-soulmojito-panel'],['sidebar.footer.action','dsh-soulmojito-panel']]; for (const [name,id] of entries) ctx.slots.inject(name, () => ctx.slots.register({ name, ...(id ? { id } : {}), ...(name === 'conversation.composer' ? { select: (owner) => owner?.session?.chat?.order?.some((key) => owner.session.chat.nodes.get(key)?.data?.source?.form === 'notice') ? {} : null } : {}) }, () => null)); }; return module.exports; } });`
       const badSlot = good.replace("['conversation.view','tavern'],", '')
       const badLocale = good.replace("exports.inject = ['slots', 'locale']", "exports.inject = ['slots']")

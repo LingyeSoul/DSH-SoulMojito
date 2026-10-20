@@ -984,6 +984,62 @@ describe('internal Tavern session bridge occupation', () => {
     }
   })
 
+  it('imports preset-embedded regex scripts into the global script list', async () => {
+    const presetName = 'Regex Preset Carrier'
+    const scriptName = 'preset strip'
+    try {
+      const data = {
+        prompts: [],
+        prompt_order: [],
+        extensions: {
+          regex_scripts: [
+            { scriptName, findRegex: '<aside>|</aside>', replaceString: '', placement: [2], markdownOnly: true },
+          ],
+        },
+      }
+      const res = makeResponse()
+      await apiHandler(makeRequest({ name: presetName, data }, '/api/dsh-soulmojito/import/preset'), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.chunks.join(''))).toMatchObject({ ok: true, name: presetName, importedRegex: 1 })
+      expect((await store.getState()).regexScripts.some((script) => script.scriptName === scriptName)).toBe(true)
+      // 原始预设保留 extensions，导出或再次导入时脚本仍然在。
+      expect(await store.getPreset(presetName)).toEqual(data)
+    } finally {
+      await store.deletePreset(presetName)
+      await store.updateState((state) => ({
+        regexScripts: state.regexScripts.filter((script) => script.scriptName !== scriptName),
+      }))
+    }
+  })
+
+  it('backfills regex scripts from presets imported before import-time materialization', async () => {
+    const presetName = 'Legacy Regex Preset'
+    const scriptName = 'legacy preset auto'
+    try {
+      await store.putPreset(presetName, {
+        prompts: [],
+        prompt_order: [],
+        extensions: {
+          regex_scripts: [{ scriptName, findRegex: '<legacy-preset>', replaceString: '', placement: [2] }],
+        },
+      })
+      const res = makeResponse()
+      await apiHandler(makeRequest({}, '/api/dsh-soulmojito/regex/sync-presets'), res)
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.chunks.join(''))
+      // 共享 store 里还有其他预设，精确计数由 store.spec.ts 锁定；此处验证路由回执与回填效果。
+      expect(body).toMatchObject({ ok: true, invalid: 0 })
+      expect(body.imported).toBeGreaterThanOrEqual(1)
+      expect(body.scanned).toBeGreaterThanOrEqual(1)
+      expect(body.scripts.some((script: { scriptName: string }) => script.scriptName === scriptName)).toBe(true)
+    } finally {
+      await store.deletePreset(presetName)
+      await store.updateState((state) => ({
+        regexScripts: state.regexScripts.filter((script) => script.scriptName !== scriptName),
+      }))
+    }
+  })
+
   it('activates the linked world when a character becomes active', async () => {
     const res = makeResponse()
     await apiHandler(makeRequest({ activeCharacter: 'Lore Carrier' }, '/api/dsh-soulmojito/state'), res)

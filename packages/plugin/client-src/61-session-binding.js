@@ -222,11 +222,13 @@
       }
     }
 
-    async function createTavernChat(ctx, character, group = false, policyOverride) {
+    async function createTavernChat(ctx, character, group = false, policyOverride, greetingIndex) {
       const result = await api('chats', {
         method: 'POST',
         headers: jsonHeaders(),
-        body: JSON.stringify(group ? { group: character } : { character }),
+        body: JSON.stringify(group
+          ? { group: character }
+          : { character, ...(greetingIndex === undefined ? {} : { greetingIndex }) }),
       })
       await loadChatList(character, true)
       const key = chatKey(character, result.id)

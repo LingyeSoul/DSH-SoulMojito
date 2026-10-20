@@ -46,7 +46,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 - **角色卡 V1/V2/V3** — JSON、PNG `chara`/`ccv3`、CHARX `card.json` 与 `embeded://` 资源；导出尽量保留原始容器与内嵌资源；未知字段原样透传。
 - **世界书 / Lorebook** — 递归扫描、副键逻辑、概率、预算、inclusion group、sticky/cooldown/delay 与位置分发。
 - **Chat Completion preset** — `prompts[]` / `prompt_order[]` / marker 与采样参数；context、instruct、textgen 走高级 JSON 编辑全部字段。
-- **正则脚本** — ST regex 扩展形态导入，全局 + 卡级合并，存量卡可在面板一键回填；`USER_INPUT/AI_OUTPUT/WORLD_INFO/REASONING` placement、`minDepth/maxDepth`、`substituteRegex`、`trimStrings`。
+- **正则脚本** — ST regex 扩展形态导入，全局 + 卡级 + 预设内嵌（`extensions.regex_scripts`）合并，存量卡与预设可在面板一键回填；`USER_INPUT/AI_OUTPUT/WORLD_INFO/REASONING` placement、`minDepth/maxDepth`、`substituteRegex`、`trimStrings`。
 - **STscript** — 管道、变量（聊天局部 + 全局）、`/if` 条件、随机/掷骰与聊天动作（`/send`、`/trigger`、`/regenerate`、`/cut`），composer `/` 前缀触发。
 - **Prompt Template（EJS）** — `node:vm` 沙箱执行 `<% %>`；`getvar/setvar` 族作用域变量、`[GENERATE:*]`/`[RENDER:*]` 注入、`@INJECT` 整消息插队、`getwi/getchar/getpreset` 资产读取。详见 [`docs/proposals/0008-prompt-template.md`](docs/proposals/0008-prompt-template.md)。
 - **Persona** — PNG 导入（内嵌描述提取）、头像、增删改、激活选择与 `position/depth/role` 注入。
@@ -138,7 +138,13 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 - HTML 片段：包含 `<head>` 或 `<body>`；缺外壳时运行时自动补齐 `doctype`、viewport 与基础样式。
 - Markdown 代码块：语言标记写 `html`。
 
-每个前端使用 `sandbox="allow-scripts"` 且**不授予 `allow-same-origin`**：脚本不能读写宿主 DOM、Cookie、`window.parent`、`TavernHelper` 或 DSH API（高度回传仅走受校验的 `postMessage`）。CSP 允许内联 CSS/JavaScript 与这些静态源：`cdn.jsdelivr.net`、`testingcf.jsdelivr.net`、`cdn.tailwindcss.com`、`cdnjs.cloudflare.com`、`unpkg.com`、`esm.sh`、`fonts.googleapis.com`、`fonts.gstatic.com`；图片、字体与媒体可用 `https:`、`data:` 或 `blob:`。**不支持**：`fetch`/XHR/WebSocket（`connect-src 'none'`）、嵌套 iframe、`object`/插件、表单提交。高度由 `ResizeObserver` 回传并限制在 80-1200px；TUI/headless 显示原始消息文本，不执行脚本。
+每个前端使用 `sandbox="allow-scripts"` 且**不授予 `allow-same-origin`**：脚本不能读写宿主 DOM、Cookie、`window.parent` 或 DSH API（高度回传与助手兼容层都只走受校验的 `postMessage`）。CSP 允许内联 CSS/JavaScript 与这些静态源：`cdn.jsdelivr.net`、`testingcf.jsdelivr.net`、`cdn.tailwindcss.com`、`cdnjs.cloudflare.com`、`unpkg.com`、`esm.sh`、`fonts.googleapis.com`、`fonts.gstatic.com`；图片、字体与媒体可用 `https:`、`data:` 或 `blob:`。**不支持**：`fetch`/XHR/WebSocket（`connect-src 'none'`）、嵌套 iframe、`object`/插件、表单提交。高度由 `ResizeObserver` 回传并限制在 80-1200px；TUI/headless 显示原始消息文本，不执行脚本。
+
+AgentTavern 架构的对话是宿主原生表面，插件没有消息正文 slot：同一份美化前端改由 DSH **原生右侧栏**的「美化前端」tab 承载——取本聊天**最新一条**带完整 HTML 的楼层（标题行显示楼层号），随聊天 5s 可见性轮询更新；标题栏按钮与右栏「+」guide 都能打开。设置页可开启「美化前端出现时自动打开右侧栏」（默认关闭，每聊天只自动展开一次）。ST 架构仍在消息里内联渲染，侧栏只显示说明空态，不重复执行脚本。[决策](decisions/2026-10-20-frontend-sidebar.md)
+
+**酒馆助手兼容层**：前端里常见的 `getVariables` / `replaceVariables` / `getChatMessages` / `setChatMessages` / `createChatMessages` / `deleteChatMessages` / `eventOn` / `eventEmit` / `tavern_events` / `SillyTavern.getContext()` 都可用（`window` 与 `window.TavernHelper` 双出口），并内置 lodash、jQuery 与 showdown。**沙箱不变**：所有调用经 token 校验的 `postMessage` 交给宿主代理，再由宿主按当前会话绑定访问 store——iframe 拿不到宿主对象，也不能指定别的角色/聊天。变量可写 `global`/`chat`/`message`（`character` 只读）；AgentTavern 会话的 chat 变量同时写入 `chat_metadata.variables` 与 MVU 的 chat 作用域，避免两份状态漂移。**明确不支持**：生成控制（`generate` / `trigger` / `regenerate`）、世界书与角色卡写入、script/preset 变量——调用即报错，不静默跳过。
+
+完整的**可用 / 部分可用 / 不可用**清单（含每个函数的作用域、事件是否真的会触发、常见 JSR 写法的替代方案、报错对照表）见 [`docs/frontend/tavern-helper-compat.md`](docs/frontend/tavern-helper-compat.md)。[决策](decisions/2026-10-20-frontend-helper-compat.md)
 
 ## 快速开始
 
@@ -274,17 +280,17 @@ Node half 是六个自包含 bundle：`index.mjs` 主入口，加 `agent` / `com
 pnpm run check
 ```
 
-当前基线（2026-10-18 实测）：
+当前基线（2026-10-20 实测）：
 
 ```
-Test Files  109 passed (109)
-Tests       1811 passed (1811)
-15 gates    全部 PASS
-built       v0.6.7 (2243f56)
+Test Files  115 passed (115)
+Tests       1852 passed | 1 skipped (1853)
+17 gates    全部 PASS
+built       v0.6.7 (159b5e5)
 ```
 
 - 1 项跳过是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例。
-- 15 个 gates 覆盖 update-routes、package-contract、patch-reference、server-bundle、client-bundle、frontend-runtime、native-header-adapter、mvu-surface、client-architecture-split、internal-workspace、agent-tavern-isolation、client-vm-mount、node-half-mount、v4-session-admission 与 mod-loader。
+- 17 个 gates 覆盖 update-routes、package-contract、patch-reference、server-bundle、client-bundle、frontend-runtime、native-header-adapter、mvu-surface、frontend-surface、client-architecture-split、internal-workspace、agent-tavern-isolation、client-vm-mount、node-half-mount、v4-session-admission、mod-loader 与 source-file-budget。
 - 完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。
 - 会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
 - 示例 Mod 的 engines 与随仓库发布的宿主版本由防漂移守卫锁定（先例：[`decisions/2026-10-12-story-clock-engines-drift.md`](decisions/2026-10-12-story-clock-engines-drift.md)）；面板布局、品牌 logo 与内置游戏规则面同样各有 spec + gate marker 锁定。

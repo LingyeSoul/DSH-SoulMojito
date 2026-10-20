@@ -151,6 +151,13 @@
       return result
     }
 
+    // 存量预设回填：扫描预设 extensions.regex_scripts，只补全局缺失的脚本名。
+    async function syncRegexScriptsFromPresets() {
+      const result = await api('regex/sync-presets', { method: 'POST' })
+      update({ bootstrap: { ...snapshot.bootstrap, state: { ...snapshot.bootstrap.state, regexScripts: result.scripts } } })
+      return result
+    }
+
     function openPanel(section) {
       update({ panelOpen: true, ...(typeof section === 'string' && section !== '' ? { panelSection: section } : {}) })
     }

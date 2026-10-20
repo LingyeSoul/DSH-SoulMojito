@@ -30,6 +30,16 @@
 | [`0018`](proposals/0018-agent-game-bridge.md) | Agent 游戏桥——标准游戏引擎 + 侧边栏对局面 + Mod/导入扩展 |
 | [`0020`](proposals/0020-novel-import-continuation-and-revision.md) | AgentNovel 原作导入续写（章节切分、逐部分提取、bible 熔炼）与正文优化 |
 
+## 开发者文档（`mods/`、`games/`、`frontend/`）
+
+面向扩展作者的接口参考：实现以源码为准，文档只讲契约与边界。
+
+| 文档 | 主题 |
+|---|---|
+| [`mods/mod-api.md`](mods/mod-api.md) | Mod API v1：清单、生命周期、hook、工具、宏、STscript、面板 iframe、审计 |
+| [`games/game-package.md`](games/game-package.md) | 游戏包格式：`game.json` 清单、纯函数引擎、自包含视图 |
+| [`frontend/tavern-helper-compat.md`](frontend/tavern-helper-compat.md) | **美化前端可用的酒馆助手（TavernHelper）兼容面清单：可用 / 部分可用 / 不可用，及替代写法** |
+
 ## 决策（`../decisions/`）
 
 单次落地决策的记录：问题、方案、否决项、与规格的偏差。按主题分组，组内按时间升序。
@@ -104,6 +114,8 @@
 - [`2026-10-11-agent-prompt-viewer.md`](../decisions/2026-10-11-agent-prompt-viewer.md) — 提示词查看器 Agent 模式预注入面
 - [`2026-10-11-st-reasoning-stream.md`](../decisions/2026-10-11-st-reasoning-stream.md) — ST 思考 + 正文双通道流式显示
 - [`2026-10-11-iframe-viewport.md`](../decisions/2026-10-11-iframe-viewport.md) — iframe 视口正确性 + 高度上报健壮性（A-4）
+- [`2026-10-20-frontend-sidebar.md`](../decisions/2026-10-20-frontend-sidebar.md) — AgentTavern 会话的美化前端改由 DSH 原生右侧栏展示（最新一条楼层）
+- [`2026-10-20-frontend-helper-compat.md`](../decisions/2026-10-20-frontend-helper-compat.md) — 美化前端右栏自动展开开关 + 酒馆助手（Tavern-Helper）兼容层（沙箱内 RPC 代理）
 
 ### 面板与视图
 
@@ -114,6 +126,7 @@
 - [`2026-10-09-panel-create-world-preset.md`](../decisions/2026-10-09-panel-create-world-preset.md) — 面板新建世界书与新建预设
 - [`2026-10-09-panel-regex-script-editing.md`](../decisions/2026-10-09-panel-regex-script-editing.md) — 面板正则脚本新建与编辑
 - [`2026-10-20-card-regex-backfill.md`](../decisions/2026-10-20-card-regex-backfill.md) — 存量角色卡正则脚本回填（面板「从角色卡同步」）
+- [`2026-10-20-preset-regex-import.md`](../decisions/2026-10-20-preset-regex-import.md) — 预设内嵌正则脚本的导入期物化与存量回填（面板「从预设同步」）
 - [`2026-10-09-panel-world-entry-counts.md`](../decisions/2026-10-09-panel-world-entry-counts.md) — 面板世界书列表预显条目数
 - [`2026-10-10-sidebar-section-collapse.md`](../decisions/2026-10-10-sidebar-section-collapse.md) — 侧边栏酒馆/写卡工作台分区可折叠
 - [`2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md`](../decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md) — 面板导航列「标题区固定」+ 游戏图标手柄化

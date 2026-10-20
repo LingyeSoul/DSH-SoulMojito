@@ -52,6 +52,7 @@
       // 行为与侧栏存在前一致。
       if (typeof ctx.inject === 'function') {
         ctx.inject(['sidebarRightTabs', 'sidebarRight'], (scope) => {
+          sidebarRightServiceReady = true
           scope.effect(() => scope.sidebarRightTabs.register({
             id: MVU_TAB_ID,
             kind: MVU_TAB_KIND,
@@ -92,6 +93,27 @@
             key: GAMES_TAB_ID,
             inject: (sessionId) => ({ sessionId }),
           }, TavernGamesSidebarTab)), 'dsh-soulmojito: sidebar-right games tab body')
+          // 美化前端 tab（2026-10-20）：AgentTavern 会话的消息内 HTML 没有正文
+          // slot，最新一条带完整 HTML 的楼层改由右栏承载（MVU/游戏同款姿势）。
+          // ST 架构仍在消息里内联渲染，panel 对 ST 只给说明空态，不重复执行。
+          scope.effect(() => scope.sidebarRightTabs.register({
+            id: FRONTEND_TAB_ID,
+            kind: FRONTEND_TAB_KIND,
+            priority: 'extension',
+            title: () => translate('frontend.title'),
+            guide: [{
+              id: 'frontend',
+              order: 42,
+              title: () => translate('frontend.title'),
+              description: () => translate('frontend.guide.description'),
+              icon: IconSparkle16,
+            }],
+          }), 'dsh-soulmojito: sidebar-right frontend tab type')
+          scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+            name: 'sidebar.right.pane.tab',
+            key: FRONTEND_TAB_ID,
+            inject: (sessionId) => ({ sessionId }),
+          }, TavernFrontendSidebarTab)), 'dsh-soulmojito: sidebar-right frontend tab body')
         })
       }
     }

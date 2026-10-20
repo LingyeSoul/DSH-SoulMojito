@@ -22,6 +22,7 @@
       'settings.contextManagedUnavailable': 'Agent memory is unavailable: {reason}',
       'settings.preloadAssets': 'Preload character and constant World Info when a new AgentTavern session starts',
       'settings.allowGlobalWrites': 'Allow AgentTavern tools to write memories and variables in the global scope',
+      'settings.frontendAutoOpen': 'Open the right sidebar when a frontend appears (once per chat)',
       'settings.gamesDisableResign': 'Disable resign in games (hides the resign button; the AI cannot resign either)',
       'settings.worldFollowsCharacter': 'World books follow character card activation',
       'settings.worldsEmpty': 'No world books imported',
@@ -62,6 +63,8 @@
       'settings.regexCreate': 'New script',
       'settings.regexSyncCards': 'Sync from cards',
       'settings.regexSyncDone': 'Scanned {scanned} character cards: {imported} added, {skipped} skipped, {invalid} invalid',
+      'settings.regexSyncPresets': 'Sync from presets',
+      'settings.regexSyncPresetsDone': 'Scanned {scanned} presets: {imported} added, {skipped} skipped, {invalid} invalid',
       'settings.regexEdit': 'Edit {name}',
       'settings.regexDelete': 'Delete {name}',
       'settings.regexToggle': 'Enable or disable {name}',
@@ -476,6 +479,11 @@
       'nav.workbenchChat': 'Open this chat in the Card Workbench',
       'nav.noWorkbench': 'No workbench sessions',
       'nav.newChat': 'New chat with {name}',
+      'nav.greetingTitle': 'Choose a greeting',
+      'nav.greetingHint': 'This card has multiple greetings. Pick the one this chat starts with.',
+      'nav.greetingFirst': 'Default greeting',
+      'nav.greetingAlternate': 'Alternate greeting {index}',
+      'nav.greetingEmpty': '(empty greeting)',
       'nav.newGroupChat': 'New chat in {name}',
       'nav.loading': 'Loading…',
       'nav.noChats': 'No chats',
@@ -595,6 +603,18 @@
       'games.import.failed': 'Import failed: {error}',
       'games.import.force': 'Replace an already installed game id',
       'games.import.tooLarge': 'Game package zip is too large (limit {limit})',
+      // Frontend sidebar (2026-10-20): AgentTavern sessions have no plugin-owned
+      // message slot, so the latest complete HTML document rides the native
+      // right sidebar. zh/en keys must stay mirrored; the VM gate enforces it.
+      'frontend.title': 'Frontend',
+      'frontend.guide.description': 'The latest complete-HTML frontend from this chat; AgentTavern sessions show it in the right sidebar.',
+      'frontend.empty': 'No frontend in this chat yet',
+      'frontend.emptyTitle': 'Tavern frontend',
+      'frontend.emptyHint': 'Once an assistant message contains a complete HTML document (an html code block or a full document), the latest one renders here.',
+      'frontend.floor': 'Message {index}',
+      'frontend.refresh': 'Reload',
+      'frontend.inlineOnly': 'ST style renders message frontends inline, so no sidebar copy is needed.',
+      'frontend.unbound': 'This session is not bound to a Tavern chat.',
       // AgentNovel surface (proposal 0005). zh/en keys must stay mirrored with
       // identical {param} placeholders; the client-vm-mount gate enforces it.
       'panel.section.novels': 'Novels',

@@ -1,4 +1,4 @@
-import { detectPresetKind, parseContextTemplate, parseInstructTemplate, parsePreset, RegexPlacement } from '../../tavern-format/src/index.js'
+import { detectPresetKind, parseContextTemplate, parseInstructTemplate, parsePreset, RegexPlacement, type ChatMessage, type RegexScriptIR } from '../../tavern-format/src/index.js'
 import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { applyRegexScripts } from '../../tavern-script/src/index.js'
 import { collectRegexScripts } from './tavern-assets.js'
@@ -30,16 +30,28 @@ export async function characterLinkedWorlds(db, characterName) {
 }
 
 /**
+ * One message's display text: the stored text already carries the save-layer
+ * AI_OUTPUT transform, so only markdownOnly scripts are applied on top here
+ * (ST semantics: display-only scripts never reach the prompt or the save).
+ */
+export function displayTextForMessage(scripts: RegexScriptIR[], message: ChatMessage, depth: number): string {
+  const displayScripts = scripts.filter((script) => script.markdownOnly && !script.disabled)
+  const text = message.mes ?? ''
+  return displayScripts.length === 0
+    ? text
+    : applyRegexScripts(text, displayScripts, RegexPlacement.AI_OUTPUT, { expand: (value) => value }, { depth })
+}
+
+/**
  * markdownOnly AI_OUTPUT 脚本的展示层文本（ST 语义：仅改显示，不进 prompt、不落盘）。
  * 返回与 messages 平行的数组；无脚本时返回 undefined。
  */
 export async function displayTexts(db, state, characterName, chat) {
   const character = await db.getCharacter(characterName)
   const scripts = collectRegexScripts(state, character)
-    .filter((script) => script.markdownOnly && !script.disabled)
-  if (scripts.length === 0) return undefined
+  if (scripts.every((script) => !script.markdownOnly || script.disabled)) return undefined
   return chat.messages.map((message, index) =>
-    applyRegexScripts(message.mes ?? '', scripts, RegexPlacement.AI_OUTPUT, { expand: (t) => t }, { depth: chat.messages.length - 1 - index }))
+    displayTextForMessage(scripts, message, chat.messages.length - 1 - index))
 }
 
 export async function presetSamplerValue(db, state, key) {

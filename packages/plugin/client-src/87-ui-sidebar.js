@@ -444,13 +444,61 @@
         error ? h('span', { className: 'dt-sidebar-error' }, error) : null)
     }
 
+    // Greeting choice for a newly created chat. AgentTavern imports the opening
+    // message into the host session, where the ST swipe UI never reaches, so the
+    // alternate greetings must be picked before activation.
+    function TavernGreetingPicker({ picker, t, onPick, onClose }) {
+      return h(Modal, {
+        open: true,
+        onClose,
+        title: t('nav.greetingTitle'),
+        closeLabel: t('nav.close'),
+        className: 'dt-greeting-modal',
+      },
+      h('p', { className: 'dt-greeting-hint' }, t('nav.greetingHint')),
+      h('div', { className: 'dt-greeting-list' },
+        picker.options.map((option) => h('button', {
+          key: option.index,
+          type: 'button',
+          className: 'dt-greeting-option',
+          onClick: () => onPick(option.index),
+        },
+        h('span', { className: 'dt-greeting-label' }, option.index === 0
+          ? t('nav.greetingFirst')
+          : t('nav.greetingAlternate', { index: option.index })),
+        h('span', { className: 'dt-greeting-preview' }, option.text === ''
+          ? t('nav.greetingEmpty')
+          : option.text.length > 260 ? `${option.text.slice(0, 259)}…` : option.text)))))
+    }
+
     function TavernSidebar({ ctx, useSessions, floating, onClose }) {
       const state = useTavernStore()
       const t = useTranslate()
       const currentSession = useCurrentSessionId(useSessions)
       const [expanded, setExpanded] = useState(state.bootstrap.state.activeCharacter || state.bootstrap.characters[0] || '')
       const [expandedGroup, setExpandedGroup] = useState('')
+      const [greetingPicker, setGreetingPicker] = useState(null)
       const [error, setError] = useState('')
+      const startCharacterChat = (character) => {
+        setError('')
+        void fetchCharacterCard(character).then((card) => {
+          const first = typeof card?.data?.firstMes === 'string' ? card.data.firstMes : ''
+          const alternates = Array.isArray(card?.data?.alternateGreetings)
+            ? card.data.alternateGreetings.filter((text) => typeof text === 'string')
+            : []
+          const all = [{ text: first, index: 0 }, ...alternates.map((text, index) => ({ text, index: index + 1 }))]
+          const options = all.length > 1 ? all.filter((option) => option.text.trim() !== '') : all
+          if (options.length === 0) options.push({ text: first, index: 0 })
+          if (options.length === 1) {
+            return createTavernChat(ctx, character, false, undefined, options[0].index)
+          }
+          setGreetingPicker({ character, options })
+          return undefined
+        }).catch((cause) => {
+          update({ navigationStatus: '' })
+          setError(sidebarErrorDetail(cause))
+        })
+      }
       const groups = state.bootstrap.groups || []
       // 分区折叠（酒馆 / 写卡工作台）：标题本身是折叠钮，chevron 与
       // dt-character-toggle 同款旋转惯例；折叠只藏内容，标题行常驻。
@@ -486,13 +534,7 @@
                 h('button', {
                   type: 'button',
                   title: t('nav.newChat', { name: character }),
-                  onClick: () => {
-                    setError('')
-                    void createTavernChat(ctx, character).catch((cause) => {
-                      update({ navigationStatus: '' })
-                      setError(sidebarErrorDetail(cause))
-                    })
-                  },
+                  onClick: () => startCharacterChat(character),
                 }, h(IconPlusOutline16))),
               open ? h(ChatList, { ctx, character, currentSession }) : null)
           }),
@@ -536,6 +578,20 @@
         workbenchOpen ? h('div', { className: 'dt-sidebar-scroll dt-sidebar-workbench' },
           h(WorkbenchList, { ctx, useSessions, currentSession })) : null,
         state.navigationStatus ? h('span', { className: 'dt-sidebar-status' }, state.navigationStatus) : null,
-        error ? h('span', { className: 'dt-sidebar-error' }, error) : null)
+        error ? h('span', { className: 'dt-sidebar-error' }, error) : null,
+        greetingPicker ? h(TavernGreetingPicker, {
+          picker: greetingPicker,
+          t,
+          onClose: () => setGreetingPicker(null),
+          onPick: (index) => {
+            const picker = greetingPicker
+            setGreetingPicker(null)
+            setError('')
+            void createTavernChat(ctx, picker.character, false, undefined, index).catch((cause) => {
+              update({ navigationStatus: '' })
+              setError(sidebarErrorDetail(cause))
+            })
+          },
+        }) : null)
     }
 

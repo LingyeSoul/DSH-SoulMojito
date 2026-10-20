@@ -230,13 +230,16 @@ window.__ModuleLoader__.load({
       const reset = '<style>html,body{margin:0!important;padding:0;max-width:100%;}*,*::before,*::after{box-sizing:border-box;}</style>'
       // 视口脚本进 head（先于 body 样式首帧解析，避免塌陷闪动），reporter 留 body 末
       const viewport = `<script>${frontendViewportScript()}</script>`
+      // 酒馆助手兼容层（2026-10-20）：库脚本 + TavernHelper shim 进 head，前端
+      // 首帧就能拿到 getVariables/getChatMessages 等同步面；快照由宿主随后投递。
+      const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token)}</script>`
       const reporter = `<script>${frontendHeightReporter(token)}</script>`
       if (/<html(?:\s[^>]*)?>/i.test(source)) {
         let documentText = source
         if (/<head(?:\s[^>]*)?>/i.test(documentText)) {
-          documentText = documentText.replace(/<head(?:\s[^>]*)?>/i, (tag) => `${tag}${csp}${reset}${viewport}`)
+          documentText = documentText.replace(/<head(?:\s[^>]*)?>/i, (tag) => `${tag}${csp}${reset}${viewport}${helper}`)
         } else {
-          documentText = documentText.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${csp}${reset}${viewport}</head>`)
+          documentText = documentText.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${csp}${reset}${viewport}${helper}</head>`)
         }
         if (/<\/body\s*>/i.test(documentText)) {
           return documentText.replace(/<\/body\s*>/i, `${reporter}</body>`)
@@ -250,7 +253,7 @@ window.__ModuleLoader__.load({
       const bodyMatch = /<body(?:\s[^>]*)?>([\s\S]*?)<\/body\s*>/i.exec(source)
       const headContent = headMatch ? headMatch[1] : ''
       const bodyContent = bodyMatch ? bodyMatch[1] : source
-      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${reset}${viewport}${headContent}</head><body>${bodyContent}${reporter}</body></html>`
+      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${reset}${viewport}${helper}${headContent}</head><body>${bodyContent}${reporter}</body></html>`
     }
 
     // 宿主→iframe 视口投递（A-4）：iframe 的 --dt-viewport-height 需要"真实可视区
@@ -270,10 +273,110 @@ window.__ModuleLoader__.load({
       return post
     }
 
-    function FrontendFrame({ html, token }) {
+    // 宿主侧代理（2026-10-20）：iframe 内的 TavernHelper shim 发来的 op 一律
+    // 追加本会话绑定后转 POST /helper。绑定来自面板/transcript 自己的
+    // sessionBindings，iframe 无法自报身份——这是沙箱化 JSR 兼容面的信任边界。
+    // 快照比对负责「宿主侧事件」：楼数增加→MESSAGE_RECEIVED，正文变化→
+    // MESSAGE_EDITED，聊天切换→CHAT_CHANGED。只广播能真实观测到的信号，
+    // 不凭空伪造酒馆事件。
+    function useHelperBridge(frameRef, token, binding, refreshKey) {
+      const bindingRef = useRef(binding)
+      bindingRef.current = binding
+      const previousRef = useRef(null)
+      useEffect(() => {
+        previousRef.current = null
+      }, [token])
+      useEffect(() => {
+        const reply = (payload) => {
+          try {
+            frameRef.current?.contentWindow?.postMessage({ ...payload, token }, '*')
+          } catch {}
+        }
+        const emitEvent = (event, args) => {
+          reply({ type: HELPER_EVENT_MESSAGE, event, args: Array.isArray(args) ? args : [] })
+        }
+        const diff = (previous, next) => {
+          if (!next) return
+          if (previous === null) {
+            emitEvent(HELPER_IFRAME_EVENTS.APP_READY, [])
+            return
+          }
+          if (previous.chatId !== next.chatId) emitEvent(HELPER_TAVERN_EVENTS.CHAT_CHANGED, [next.chatId])
+          const before = Array.isArray(previous.messages) ? previous.messages : []
+          const after = Array.isArray(next.messages) ? next.messages : []
+          const byId = new Map(before.map((message) => [message.message_id, message]))
+          for (const message of after) {
+            const old = byId.get(message.message_id)
+            if (old === undefined) {
+              emitEvent(message.role === 'user' ? HELPER_TAVERN_EVENTS.MESSAGE_SENT : HELPER_TAVERN_EVENTS.MESSAGE_RECEIVED, [message.message_id])
+              continue
+            }
+            if (old.message !== message.message || old.name !== message.name) {
+              emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_EDITED, [message.message_id])
+            }
+          }
+          const removed = before.filter((message) => !after.some((entry) => entry.message_id === message.message_id))
+          if (removed.length > 0) emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_DELETED, [removed[0].message_id])
+        }
+        const postSnapshot = () => {
+          const current = bindingRef.current
+          if (!current) return
+          void api('helper', {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
+          }).then((result) => {
+            const snapshot = result.value
+            reply({ type: HELPER_SNAPSHOT_MESSAGE, snapshot })
+            diff(previousRef.current, snapshot)
+            previousRef.current = snapshot
+          }).catch(() => {})
+        }
+        const onMessage = (event) => {
+          const data = event.data
+          if (!data || data.type !== HELPER_MESSAGE || data.token !== token) return
+          if (event.source !== frameRef.current?.contentWindow) return
+          const current = bindingRef.current
+          const fail = (message) => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: false, message })
+          if (!current) {
+            fail('this frontend is not bound to a Tavern chat')
+            return
+          }
+          void api('helper', {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({
+              op: data.op,
+              character: current.character,
+              chatId: current.chatId,
+              ...(data.payload && typeof data.payload === 'object' ? data.payload : {}),
+            }),
+          }).then((result) => {
+            reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: result.value })
+            // 状态已变：重投快照（并据比对广播事件），让前端后续同步读取拿到新值。
+            if (data.op === 'variables.replace' || String(data.op).startsWith('messages.') || data.op === 'slash') {
+              postSnapshot()
+            }
+          }).catch((cause) => {
+            fail(cause instanceof Error ? cause.message : String(cause))
+          })
+        }
+        addEventListener('message', onMessage)
+        emitEvent(HELPER_IFRAME_EVENTS.MESSAGE_IFRAME_RENDER_STARTED, [token])
+        postSnapshot()
+        return () => {
+          removeEventListener('message', onMessage)
+          emitEvent(HELPER_IFRAME_EVENTS.MESSAGE_IFRAME_RENDER_ENDED, [token])
+        }
+      }, [token, refreshKey])
+      return undefined
+    }
+
+    function FrontendFrame({ html, token, binding, refreshKey }) {
       const frameRef = useRef(null)
       const [height, setHeight] = useState(120)
       const postViewport = useViewportBridge(frameRef)
+      useHelperBridge(frameRef, token, binding, refreshKey)
       useEffect(() => {
         const onMessage = (event) => {
           const data = event.data
@@ -295,6 +398,457 @@ window.__ModuleLoader__.load({
         onLoad: postViewport,
         style: { height },
       })
+    }
+
+    // ── 酒馆助手兼容层（2026-10-20）────────────────────────────────────────
+    // 用户需求：美化前端要深度兼容酒馆助手的常见行为（浅克隆参考
+    // JS-Slash-Runner 的可观察面）。JSR 用同源 iframe + 直拷 parent API；
+    // 本插件坚持沙箱（allow-scripts、无 same-origin、CSP connect-src 'none'），
+    // 因此把 TavernHelper 的形状在 iframe 内重建，所有读写经 token 校验的
+    // postMessage RPC 交给宿主代理，再到 POST /helper。iframe 永远拿不到
+    // 宿主对象，也拿不到别的聊天：character/chatId 由宿主按会话绑定注入。
+    //
+    // 覆盖范围（诚实清单）：
+    // - 变量：getVariables / replaceVariables / updateVariablesWith /
+    //   insertOrAssignVariables / insertVariables / deleteVariable（global、
+    //   chat、message 可写；character 只读）；
+    // - 楼层：getChatMessages / setChatMessages / createChatMessages /
+    //   deleteChatMessages / getLastMessageId；
+    // - 事件：eventOn / eventOnce / eventEmit / eventRemoveListener /
+    //   eventClearEvent / eventClearListener / eventClearAll（iframe 内广播，
+    //   pagehide 自动注销）；
+    // - SillyTavern.getContext() 的最小只读面；
+    // - lodash / jQuery 由 CSP 白名单里的 jsdelivr 提供（JSR 自带同款库）。
+    // 不支持：生成控制（generate/trigger/regenerate）、世界书写入、角色卡写入、
+    // 脚本/preset 变量——调用即抛明确错误，不静默 no-op。
+    const HELPER_MESSAGE = 'dsh-soulmojito:helper'
+    const HELPER_RESULT_MESSAGE = 'dsh-soulmojito:helper-result'
+    const HELPER_SNAPSHOT_MESSAGE = 'dsh-soulmojito:helper-snapshot'
+    const HELPER_EVENT_MESSAGE = 'dsh-soulmojito:helper-event'
+    const HELPER_LIBRARIES = [
+      'https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js',
+      'https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js',
+      // bundle 版的 showdown 暴露全局 showdown，供 builtin.renderMarkdown 使用。
+      'https://cdn.jsdelivr.net/npm/showdown@2.1.0/dist/showdown.min.js',
+    ]
+    // 酒馆事件名（JSR `tavern_events` 的可观测子集）：宿主侧只桥接得出真实
+    // 信号的那几条——快照比对后发现楼数/内容变化时按这里广播。其余名字保留
+    // 常量（前端 `eventOn(tavern_events.X, …)` 不会因 undefined 抛错），但不会
+    // 有事件到达；不假装触发。
+    const HELPER_TAVERN_EVENTS = {
+      APP_READY: 'app_ready',
+      MESSAGE_SENT: 'message_sent',
+      MESSAGE_RECEIVED: 'message_received',
+      MESSAGE_EDITED: 'message_edited',
+      MESSAGE_DELETED: 'message_deleted',
+      MESSAGE_UPDATED: 'message_updated',
+      MESSAGE_SWIPED: 'message_swiped',
+      CHAT_CHANGED: 'chat_id_changed',
+      GENERATION_STARTED: 'generation_started',
+      GENERATION_ENDED: 'generation_ended',
+    }
+    const HELPER_IFRAME_EVENTS = {
+      MESSAGE_IFRAME_RENDER_STARTED: 'message_iframe_render_started',
+      MESSAGE_IFRAME_RENDER_ENDED: 'message_iframe_render_ended',
+      GENERATION_REQUESTED: 'js_generation_requested',
+      GENERATION_STARTED: 'js_generation_started',
+      STREAM_TOKEN_RECEIVED_FULLY: 'js_stream_token_received_fully',
+      STREAM_TOKEN_RECEIVED_INCREMENTALLY: 'js_stream_token_received_incrementally',
+      GENERATION_ENDED: 'js_generation_ended',
+    }
+
+    function frontendHelperScript(token) {
+      return `(function () {
+  var token = ${JSON.stringify(token)};
+  var requestId = 0;
+  var pending = new Map();
+  var listeners = new Map();
+  var state = {
+    characterName: '', userName: 'User', chatId: '', chatMetadata: {},
+    messages: [], variables: { global: {}, chat: {}, message: {}, character: {} },
+    characterData: null,
+  };
+
+  function call(op, payload) {
+    return new Promise(function (resolve, reject) {
+      var id = 'helper-' + (++requestId);
+      pending.set(id, { resolve: resolve, reject: reject });
+      parent.postMessage({ type: ${JSON.stringify(HELPER_MESSAGE)}, token: token, id: id, op: op, payload: payload || {} }, '*');
+    });
+  }
+
+  function clone(value) {
+    return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+  }
+
+  function getByPath(tree, path) {
+    var segments = String(path).split('.');
+    var cursor = tree;
+    for (var index = 0; index < segments.length; index++) {
+      if (cursor === null || typeof cursor !== 'object') return undefined;
+      cursor = cursor[segments[index]];
+    }
+    return cursor;
+  }
+
+  function setByPath(tree, path, value) {
+    var segments = String(path).split('.');
+    var leaf = segments.pop();
+    var cursor = tree;
+    for (var index = 0; index < segments.length; index++) {
+      if (cursor[segments[index]] === null || typeof cursor[segments[index]] !== 'object') cursor[segments[index]] = {};
+      cursor = cursor[segments[index]];
+    }
+    cursor[leaf] = value;
+  }
+
+  function unsetByPath(tree, path) {
+    var segments = String(path).split('.');
+    var leaf = segments.pop();
+    var cursor = tree;
+    for (var index = 0; index < segments.length; index++) {
+      if (cursor === null || typeof cursor !== 'object') return false;
+      cursor = cursor[segments[index]];
+    }
+    if (cursor === null || typeof cursor !== 'object' || !(leaf in cursor)) return false;
+    delete cursor[leaf];
+    return true;
+  }
+
+  function scopeOf(option) {
+    var type = option && option.type ? option.type : 'chat';
+    if (type === 'global' || type === 'chat' || type === 'message' || type === 'character') return type;
+    throw new Error('DSH-SoulMojito: variable scope "' + type + '" is not supported (global/chat/message/character)');
+  }
+
+  function messageIndex(messageId) {
+    var last = state.messages.length - 1;
+    var index = typeof messageId === 'number' ? messageId : last;
+    if (index < 0) index = last + 1 + index;
+    return index;
+  }
+
+  function variablesFor(option) {
+    var scope = scopeOf(option);
+    if (scope !== 'message') return state.variables[scope] || {};
+    var index = messageIndex(option && option.message_id);
+    var message = state.messages.filter(function (entry) { return entry.message_id === index; })[0];
+    return message && message.data ? message.data : {};
+  }
+
+  function rememberScope(option, next) {
+    var scope = scopeOf(option);
+    if (scope === 'message') return;
+    state.variables[scope] = next;
+  }
+
+  function applySnapshot(snapshot) {
+    state.characterName = snapshot.characterName || state.characterName;
+    state.userName = snapshot.userName || state.userName;
+    state.chatId = snapshot.chatId || state.chatId;
+    state.chatMetadata = snapshot.chatMetadata || {};
+    state.messages = Array.isArray(snapshot.messages) ? snapshot.messages : [];
+    state.variables = snapshot.variables || state.variables;
+    state.characterData = snapshot.characterData || null;
+  }
+
+  function emitLocally(type, args) {
+    var group = listeners.get(type);
+    if (!group) return;
+    Array.from(group).forEach(function (listener) {
+      try { listener.apply(null, args); } catch (error) { console.error('[TavernHelper] listener failed', error); }
+    });
+  }
+
+  addEventListener('message', function (event) {
+    var data = event.data;
+    if (!data || data.token !== token) return;
+    if (data.type === ${JSON.stringify(HELPER_RESULT_MESSAGE)}) {
+      var entry = pending.get(data.id);
+      if (!entry) return;
+      pending.delete(data.id);
+      if (data.ok) entry.resolve(data.value);
+      else entry.reject(new Error(data.message || 'TavernHelper call failed'));
+      return;
+    }
+    if (data.type === ${JSON.stringify(HELPER_SNAPSHOT_MESSAGE)}) applySnapshot(data.snapshot || {});
+    if (data.type === ${JSON.stringify(HELPER_EVENT_MESSAGE)}) emitLocally(data.event, Array.isArray(data.args) ? data.args : []);
+  });
+
+  window.getVariables = function (option) { return clone(variablesFor(option)) || {}; };
+
+  window.replaceVariables = function (variables, option) {
+    var target = option || { type: 'chat' };
+    var next = clone(variables) || {};
+    rememberScope(target, next);
+    return call('variables.replace', {
+      scope: scopeOf(target),
+      messageId: target.type === 'message' ? messageIndex(target.message_id) : undefined,
+      variables: next,
+    }).then(function (value) { rememberScope(target, value); return value; });
+  };
+
+  window.updateVariablesWith = function (updater, option) {
+    var target = option || { type: 'chat' };
+    var current = variablesFor(target);
+    return Promise.resolve(updater(clone(current) || {})).then(function (next) {
+      return window.replaceVariables(next || {}, target);
+    });
+  };
+
+  window.insertOrAssignVariables = function (variables, option) {
+    var target = option || { type: 'chat' };
+    var current = clone(variablesFor(target)) || {};
+    Object.keys(variables || {}).forEach(function (key) { current[key] = clone(variables[key]); });
+    return window.replaceVariables(current, target);
+  };
+
+  window.insertVariables = function (variables, option) {
+    var target = option || { type: 'chat' };
+    var current = clone(variablesFor(target)) || {};
+    Object.keys(variables || {}).forEach(function (key) {
+      if (!(key in current)) current[key] = clone(variables[key]);
+    });
+    return window.replaceVariables(current, target);
+  };
+
+  window.deleteVariable = function (variablePath, option) {
+    var target = option || { type: 'chat' };
+    var current = clone(variablesFor(target)) || {};
+    var deleteOccurred = unsetByPath(current, variablePath);
+    return window.replaceVariables(current, target).then(function () {
+      return { variables: current, delete_occurred: deleteOccurred };
+    });
+  };
+
+  window.getChatMessages = function (range, option) {
+    var settings = option || {};
+    var last = state.messages.length - 1;
+    var first = state.messages.length > 0 ? state.messages[0].message_id : 0;
+    function toIndex(raw) {
+      var value = Number(String(raw).replace(/\\{\\{\\s*lastMessageId\\s*\\}\\}/gi, String(last)));
+      if (isNaN(value)) throw new Error('DSH-SoulMojito: unsupported message range ' + range);
+      return value < 0 ? last + 1 + value : value;
+    }
+    var start;
+    var end;
+    var text = String(range).replace(/\\{\\{\\s*lastMessageId\\s*\\}\\}/gi, String(last)).trim();
+    var rangeMatch = /^(-?\\d+)\\s*-\\s*(-?\\d+)?$/.exec(text);
+    if (rangeMatch) {
+      start = toIndex(rangeMatch[1]);
+      end = rangeMatch[2] === undefined ? start : toIndex(rangeMatch[2]);
+    } else {
+      start = toIndex(text);
+      end = start;
+    }
+    if (start > end) { var swap = start; start = end; end = swap; }
+    start = Math.max(first, start);
+    end = Math.min(last, end);
+    return state.messages.filter(function (message) {
+      if (message.message_id < start || message.message_id > end) return false;
+      if (settings.role && settings.role !== 'all' && settings.role !== message.role) return false;
+      if (settings.hide_state === 'hidden' && !message.is_hidden) return false;
+      if (settings.hide_state === 'unhidden' && message.is_hidden) return false;
+      return true;
+    }).map(function (message) { return clone(message); });
+  };
+
+  window.getLastMessageId = function () { return state.messages.length - 1; };
+
+  function afterMessageMutation(result) {
+    if (!result) return result;
+    if (Array.isArray(result.messages)) state.messages = result.messages;
+    if (result.variables && result.variables.chat) state.variables.chat = result.variables.chat;
+    return result;
+  }
+
+  window.setChatMessages = function (messages, option) {
+    return call('messages.set', { messages: messages, refresh: option && option.refresh }).then(afterMessageMutation).then(function () { return undefined; });
+  };
+
+  window.createChatMessages = function (messages, option) {
+    var insertBefore = option && option.insert_before !== undefined ? option.insert_before : (option && option.insert_at);
+    return call('messages.create', { messages: messages, insertBefore: insertBefore === undefined ? 'end' : insertBefore })
+      .then(afterMessageMutation).then(function () { return undefined; });
+  };
+
+  window.deleteChatMessages = function (messageIds, option) {
+    return call('messages.delete', { messageIds: messageIds, refresh: option && option.refresh })
+      .then(afterMessageMutation).then(function () { return undefined; });
+  };
+
+  window.eventOn = function (type, listener) {
+    if (!listeners.has(type)) listeners.set(type, new Set());
+    listeners.get(type).add(listener);
+    return { stop: function () { window.eventRemoveListener(type, listener); } };
+  };
+  window.eventOnce = function (type, listener) {
+    var wrapper = function () {
+      window.eventRemoveListener(type, wrapper);
+      return listener.apply(null, arguments);
+    };
+    return window.eventOn(type, wrapper);
+  };
+  // eventMakeFirst / eventMakeLast：JSR 用顺序控制插件的执行位次；Set 保序，
+  // 重排即「删了再加」或「整组倒序后重挂」。
+  window.eventMakeLast = function (type, listener) {
+    window.eventRemoveListener(type, listener);
+    return window.eventOn(type, listener);
+  };
+  window.eventMakeFirst = function (type, listener) {
+    var group = listeners.get(type);
+    var rest = group ? Array.from(group).filter(function (entry) { return entry !== listener; }) : [];
+    listeners.set(type, new Set([listener].concat(rest)));
+    return { stop: function () { window.eventRemoveListener(type, listener); } };
+  };
+  window.eventEmit = function (type) {
+    return Promise.resolve(emitLocally(type, Array.prototype.slice.call(arguments, 1)));
+  };
+  window.eventEmitAndWait = function (type) {
+    return emitLocally(type, Array.prototype.slice.call(arguments, 1));
+  };
+  window.eventOnButton = function (type, listener) { return window.eventOn(type, listener); };
+  window.eventRemoveListener = function (type, listener) {
+    var group = listeners.get(type);
+    if (group) { group.delete(listener); if (group.size === 0) listeners.delete(type); }
+  };
+  window.eventClearEvent = function (type) { listeners.delete(type); };
+  window.eventClearListener = function (listener) {
+    listeners.forEach(function (group) { group.delete(listener); });
+  };
+  window.eventClearAll = function () { listeners.clear(); };
+  window.addEventListener('pagehide', function () { listeners.clear(); });
+
+  window.getLorebook = function (name) {
+    return call('lorebook.get', { name: name }).then(function (value) { return value.entries; });
+  };
+  window.getWorldbook = window.getLorebook;
+  window.getLorebookNames = function () {
+    return call('lorebook.list', {}).then(function (value) { return value.names; });
+  };
+  window.getWorldbookNames = window.getLorebookNames;
+  window.getGlobalWorldbookNames = function () {
+    return call('lorebook.list', {}).then(function (value) { return value.active || []; });
+  };
+  window.getCharNames = function () {
+    return call('character.list', {}).then(function (value) { return value.names; });
+  };
+  window.getCharacterNames = window.getCharNames;
+  window.getChatWorldbookNames = window.getGlobalWorldbookNames;
+
+  // triggerSlash：只接不与宿主生成循环冲突的命令子集（变量/分支/发送/裁剪/正则）。
+  // /trigger、/regenerate、/stop 会由服务端解释器明确报错（生成归宿主 AgentLoop）。
+  window.triggerSlash = function (command) {
+    return call('slash', { command: String(command) }).then(function (value) { return value.output; });
+  };
+
+  // TavernHelper 的正则面（只读可观察语义）：getTavernRegexes 列出脚本，
+  // formatAsTavernRegexedString 按 placement 应用。写面（replace/update）走
+  // 面板与 Agent 工具，这里不给前端写口子。
+  window.getTavernRegexes = function (option) {
+    var settings = option || {};
+    return call('regex.get', { scope: settings.scope || 'global' }).then(function (value) {
+      var scripts = value.scripts || [];
+      return settings.enabled_only ? scripts.filter(function (script) { return !script.disabled; }) : scripts;
+    });
+  };
+  window.formatAsTavernRegexedString = function (text, placement, option) {
+    var settings = option || {};
+    var apply = function (scripts) {
+      return call('regex.format', {
+        text: String(text),
+        placement: typeof placement === 'number' ? placement : 2,
+        scripts: Array.isArray(scripts) ? scripts : undefined,
+        depth: settings.depth,
+      }).then(function (value) { return value.text; });
+    };
+    // 显式给脚本时直接应用（JSR 的调用姿势允许传入脚本集）；否则先取启用集。
+    if (Array.isArray(settings.scripts)) return apply(settings.scripts);
+    return window.getTavernRegexes({ enabled_only: true }).then(apply);
+  };
+  // builtin.renderMarkdown：showdown 已随库脚本加载；缺失时降级为纯文本，
+  // 不假装渲染成功。
+  window.builtin = window.builtin || {};
+  window.builtin.renderMarkdown = function (text) {
+    if (window.showdown && typeof window.showdown.Converter === 'function') {
+      return new window.showdown.Converter().makeHtml(String(text));
+    }
+    return String(text);
+  };
+  window.builtin.copyText = function (text) {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      return navigator.clipboard.writeText(String(text));
+    }
+    return Promise.reject(new Error('DSH-SoulMojito: clipboard API is unavailable'));
+  };
+  window.builtin.parseRegexFromString = function (regex) {
+    try { return new RegExp(String(regex)); } catch (_) { return null; }
+  };
+  window.substitudeMacros = function (text) { return String(text); };
+  window.getTavernHelperVersion = function () { return 'dsh-soulmojito'; };
+  window.getTavernVersion = function () { return 'dsh-soulmojito'; };
+
+  window.TavernHelper = {
+    getVariables: window.getVariables,
+    replaceVariables: window.replaceVariables,
+    updateVariablesWith: window.updateVariablesWith,
+    insertOrAssignVariables: window.insertOrAssignVariables,
+    insertVariables: window.insertVariables,
+    deleteVariable: window.deleteVariable,
+    getChatMessages: window.getChatMessages,
+    setChatMessages: window.setChatMessages,
+    createChatMessages: window.createChatMessages,
+    deleteChatMessages: window.deleteChatMessages,
+    eventOn: window.eventOn,
+    eventOnce: window.eventOnce,
+    eventEmit: window.eventEmit,
+    eventRemoveListener: window.eventRemoveListener,
+  };
+  // TavernHelper 命名空间下的同名事件函数（JSR 两种调用姿势并存：window 直连
+  // 与 TavernHelper.*；前端两种都写，所以两个出口都给全）。
+  window.TavernHelper.eventMakeFirst = window.eventMakeFirst;
+  window.TavernHelper.eventMakeLast = window.eventMakeLast;
+  window.TavernHelper.eventEmitAndWait = window.eventEmitAndWait;
+  window.TavernHelper.eventClearEvent = window.eventClearEvent;
+  window.TavernHelper.eventClearListener = window.eventClearListener;
+  window.TavernHelper.eventClearAll = window.eventClearAll;
+  window.TavernHelper.getLorebook = window.getLorebook;
+  window.TavernHelper.getLorebookNames = window.getLorebookNames;
+  window.TavernHelper.getCharNames = window.getCharNames;
+  window.TavernHelper.triggerSlash = window.triggerSlash;
+  window.TavernHelper.getTavernRegexes = window.getTavernRegexes;
+  window.TavernHelper.formatAsTavernRegexedString = window.formatAsTavernRegexedString;
+
+  window.tavern_events = ${JSON.stringify(HELPER_TAVERN_EVENTS)};
+  window.iframe_events = ${JSON.stringify(HELPER_IFRAME_EVENTS)};
+  // TavernHelper 的全局事件函数（JSR 把 eventOn 等挂在 window 直连面）。
+  window.getButtonEvent = function (name) { return 'tavern-helper-button-' + String(name); };
+  window.getScriptId = function () { return 'dsh-soulmojito-frontend'; };
+  window.waitGlobalInitialized = function (name) { return Promise.resolve(window[name]); };
+  window.TavernHelper.addEventListener = window.eventOn;
+  window.TavernHelper.removeEventListener = window.eventRemoveListener;
+
+  window.SillyTavern = {
+    getContext: function () {
+      return {
+        chatId: state.chatId,
+        chat: state.messages,
+        chat_metadata: state.chatMetadata,
+        name1: state.userName,
+        name2: state.characterName,
+        characterId: 0,
+        characters: state.characterData ? [state.characterData] : [],
+        getCharacterCardFields: function () {
+          return { description: '', personality: '', scenario: '', mesExamples: '' };
+        },
+      };
+    },
+  };
+})();`
+    }
+
+    function helperLibraryTags() {
+      return HELPER_LIBRARIES.map((url) => `<script src="${url}" crossorigin="anonymous"></script>`).join('')
     }
 
     // Mod UI 表面（提案 0015 §3.5 P2）：iframe 指向该 Mod 的 `GET mods/<id>/ui`
@@ -1158,6 +1712,7 @@ window.__ModuleLoader__.load({
       'settings.contextManagedUnavailable': 'Agent memory is unavailable: {reason}',
       'settings.preloadAssets': 'Preload character and constant World Info when a new AgentTavern session starts',
       'settings.allowGlobalWrites': 'Allow AgentTavern tools to write memories and variables in the global scope',
+      'settings.frontendAutoOpen': 'Open the right sidebar when a frontend appears (once per chat)',
       'settings.gamesDisableResign': 'Disable resign in games (hides the resign button; the AI cannot resign either)',
       'settings.worldFollowsCharacter': 'World books follow character card activation',
       'settings.worldsEmpty': 'No world books imported',
@@ -1198,6 +1753,8 @@ window.__ModuleLoader__.load({
       'settings.regexCreate': 'New script',
       'settings.regexSyncCards': 'Sync from cards',
       'settings.regexSyncDone': 'Scanned {scanned} character cards: {imported} added, {skipped} skipped, {invalid} invalid',
+      'settings.regexSyncPresets': 'Sync from presets',
+      'settings.regexSyncPresetsDone': 'Scanned {scanned} presets: {imported} added, {skipped} skipped, {invalid} invalid',
       'settings.regexEdit': 'Edit {name}',
       'settings.regexDelete': 'Delete {name}',
       'settings.regexToggle': 'Enable or disable {name}',
@@ -1612,6 +2169,11 @@ window.__ModuleLoader__.load({
       'nav.workbenchChat': 'Open this chat in the Card Workbench',
       'nav.noWorkbench': 'No workbench sessions',
       'nav.newChat': 'New chat with {name}',
+      'nav.greetingTitle': 'Choose a greeting',
+      'nav.greetingHint': 'This card has multiple greetings. Pick the one this chat starts with.',
+      'nav.greetingFirst': 'Default greeting',
+      'nav.greetingAlternate': 'Alternate greeting {index}',
+      'nav.greetingEmpty': '(empty greeting)',
       'nav.newGroupChat': 'New chat in {name}',
       'nav.loading': 'Loading…',
       'nav.noChats': 'No chats',
@@ -1731,6 +2293,18 @@ window.__ModuleLoader__.load({
       'games.import.failed': 'Import failed: {error}',
       'games.import.force': 'Replace an already installed game id',
       'games.import.tooLarge': 'Game package zip is too large (limit {limit})',
+      // Frontend sidebar (2026-10-20): AgentTavern sessions have no plugin-owned
+      // message slot, so the latest complete HTML document rides the native
+      // right sidebar. zh/en keys must stay mirrored; the VM gate enforces it.
+      'frontend.title': 'Frontend',
+      'frontend.guide.description': 'The latest complete-HTML frontend from this chat; AgentTavern sessions show it in the right sidebar.',
+      'frontend.empty': 'No frontend in this chat yet',
+      'frontend.emptyTitle': 'Tavern frontend',
+      'frontend.emptyHint': 'Once an assistant message contains a complete HTML document (an html code block or a full document), the latest one renders here.',
+      'frontend.floor': 'Message {index}',
+      'frontend.refresh': 'Reload',
+      'frontend.inlineOnly': 'ST style renders message frontends inline, so no sidebar copy is needed.',
+      'frontend.unbound': 'This session is not bound to a Tavern chat.',
       // AgentNovel surface (proposal 0005). zh/en keys must stay mirrored with
       // identical {param} placeholders; the client-vm-mount gate enforces it.
       'panel.section.novels': 'Novels',
@@ -1935,6 +2509,7 @@ window.__ModuleLoader__.load({
       'settings.contextManagedUnavailable': 'Agent 记忆不可用：{reason}',
       'settings.preloadAssets': '新 AgentTavern 会话开始时预载角色信息和常驻世界书条目',
       'settings.allowGlobalWrites': '允许 AgentTavern 工具写入 global 作用域的记忆和变量',
+      'settings.frontendAutoOpen': '美化前端出现时自动打开右侧栏（每聊天一次）',
       'settings.gamesDisableResign': '禁用投降（隐藏投降按钮，AI 也不能认输）',
       'settings.worldFollowsCharacter': '世界书跟随角色卡激活',
       'settings.worldsEmpty': '尚未导入世界书',
@@ -1975,6 +2550,8 @@ window.__ModuleLoader__.load({
       'settings.regexCreate': '新建脚本',
       'settings.regexSyncCards': '从角色卡同步',
       'settings.regexSyncDone': '已扫描 {scanned} 张角色卡：新增 {imported} 条，跳过 {skipped} 条，格式非法 {invalid} 条',
+      'settings.regexSyncPresets': '从预设同步',
+      'settings.regexSyncPresetsDone': '已扫描 {scanned} 个预设：新增 {imported} 条，跳过 {skipped} 条，格式非法 {invalid} 条',
       'settings.regexEdit': '编辑{name}',
       'settings.regexDelete': '删除{name}',
       'settings.regexToggle': '启用或停用{name}',
@@ -2388,6 +2965,11 @@ window.__ModuleLoader__.load({
       'nav.workbenchChat': '把该聊天交给写卡工作台',
       'nav.noWorkbench': '暂无写卡工作会话',
       'nav.newChat': '与 {name} 开新聊天',
+      'nav.greetingTitle': '选择开场白',
+      'nav.greetingHint': '这张卡有多个开场白，选择本次聊天使用哪一个。',
+      'nav.greetingFirst': '默认开场白',
+      'nav.greetingAlternate': '备用开场白 {index}',
+      'nav.greetingEmpty': '（空开场白）',
       'nav.newGroupChat': '在 {name} 开新聊天',
       'nav.loading': '加载中…',
       'nav.noChats': '暂无聊天',
@@ -2502,6 +3084,17 @@ window.__ModuleLoader__.load({
       'games.import.failed': '导入失败：{error}',
       'games.import.force': '覆盖已安装的同名游戏',
       'games.import.tooLarge': '游戏包 zip 过大（上限 {limit}）',
+      // 美化前端右栏（2026-10-20）：AgentTavern 的消息内 HTML 没有正文 slot，
+      // 最新一条完整 HTML 由原生右侧栏承载。
+      'frontend.title': '美化前端',
+      'frontend.guide.description': '本聊天最新一条带完整 HTML 的美化前端；AgentTavern 会话在右栏展示。',
+      'frontend.empty': '本聊天还没有美化前端',
+      'frontend.emptyTitle': '美化前端',
+      'frontend.emptyHint': '助手消息里出现完整 HTML 文档（html 代码块或整段 HTML）后，会在这里渲染最新一条。',
+      'frontend.floor': '第 {index} 楼',
+      'frontend.refresh': '重新读取',
+      'frontend.inlineOnly': 'ST 架构的美化前端已直接渲染在消息里，无需右栏。',
+      'frontend.unbound': '当前会话没有绑定酒馆聊天。',
       'panel.section.novels': '小说',
       'view.architectureNovel': 'AgentNovel',
       'novel.empty': '还没有小说，创建一部开始全自动创作。',
@@ -3558,11 +4151,13 @@ window.__ModuleLoader__.load({
       }
     }
 
-    async function createTavernChat(ctx, character, group = false, policyOverride) {
+    async function createTavernChat(ctx, character, group = false, policyOverride, greetingIndex) {
       const result = await api('chats', {
         method: 'POST',
         headers: jsonHeaders(),
-        body: JSON.stringify(group ? { group: character } : { character }),
+        body: JSON.stringify(group
+          ? { group: character }
+          : { character, ...(greetingIndex === undefined ? {} : { greetingIndex }) }),
       })
       await loadChatList(character, true)
       const key = chatKey(character, result.id)
@@ -4112,6 +4707,13 @@ window.__ModuleLoader__.load({
     // 存量卡回填：服务端扫描全部角色卡，只补全局列表缺少的脚本名。
     async function syncRegexScriptsFromCards() {
       const result = await api('regex/sync-cards', { method: 'POST' })
+      update({ bootstrap: { ...snapshot.bootstrap, state: { ...snapshot.bootstrap.state, regexScripts: result.scripts } } })
+      return result
+    }
+
+    // 存量预设回填：扫描预设 extensions.regex_scripts，只补全局缺失的脚本名。
+    async function syncRegexScriptsFromPresets() {
+      const result = await api('regex/sync-presets', { method: 'POST' })
       update({ bootstrap: { ...snapshot.bootstrap, state: { ...snapshot.bootstrap.state, regexScripts: result.scripts } } })
       return result
     }
@@ -4685,7 +5287,7 @@ window.__ModuleLoader__.load({
       const t = useTranslate()
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
-      const [syncing, setSyncing] = useState(false)
+      const [syncing, setSyncing] = useState('')
       const [editing, setEditing] = useState('')
       const scripts = state.bootstrap.state.regexScripts || []
       const run = (promise) => { setError(''); setNotice(''); void promise.catch((cause) => setError(cause.message)) }
@@ -4695,23 +5297,27 @@ window.__ModuleLoader__.load({
           : [...scripts, script]
         return saveRegexScripts(next).then(() => setEditing(''))
       }
-      const syncFromCards = () => {
+      // 两个回填入口共用一份 busy 状态：同一时刻只允许一个扫描在跑，回执不交叉。
+      const sync = (source, request, doneKey) => {
         setError('')
         setNotice('')
-        setSyncing(true)
-        void syncRegexScriptsFromCards()
-          .then((result) => setNotice(t('settings.regexSyncDone', {
+        setSyncing(source)
+        void request()
+          .then((result) => setNotice(t(doneKey, {
             scanned: result.scanned, imported: result.imported, skipped: result.skipped, invalid: result.invalid,
           })))
           .catch((cause) => setError(cause.message))
-          .finally(() => setSyncing(false))
+          .finally(() => setSyncing(''))
       }
+      const syncFromCards = () => sync('cards', syncRegexScriptsFromCards, 'settings.regexSyncDone')
+      const syncFromPresets = () => sync('presets', syncRegexScriptsFromPresets, 'settings.regexSyncPresetsDone')
       const closeEditor = () => setEditing('')
       return h('section', { className: 'dt-settings-band' },
         h('div', { className: 'dt-band-actions' },
           h(Button, { size: 'sm', variant: 'primary', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => setEditing('new') }, t('settings.regexCreate')),
           h(UploadButton, { kind: 'regex', label: t('settings.importRegex'), accept: '.json,application/json' }),
-          h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing, onClick: syncFromCards }, syncing ? t('settings.importing') : t('settings.regexSyncCards'))),
+          h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing !== '', onClick: syncFromCards }, syncing === 'cards' ? t('settings.importing') : t('settings.regexSyncCards')),
+          h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing !== '', onClick: syncFromPresets }, syncing === 'presets' ? t('settings.importing') : t('settings.regexSyncPresets'))),
         editing === 'new'
           ? h('div', { key: 'new', className: 'dt-regex-editor-wrap' },
             h(RegexScriptEditor, { script: newRegexScript(), onSave: saveScript, onCancel: closeEditor }))
@@ -5315,7 +5921,14 @@ window.__ModuleLoader__.load({
                   checked: bootstrap.state.agentTavernAllowGlobalWrites === true,
                   onChange: (event) => applyPatch({ agentTavernAllowGlobalWrites: event.target.checked }),
                 }),
-                h('span', null, t('settings.allowGlobalWrites'))))
+                h('span', null, t('settings.allowGlobalWrites'))),
+              h('label', { className: 'dt-toggle' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: bootstrap.state.frontendAutoOpen === true,
+                  onChange: (event) => applyPatch({ frontendAutoOpen: event.target.checked }),
+                }),
+                h('span', null, t('settings.frontendAutoOpen'))))
             : null),
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
@@ -5590,6 +6203,8 @@ window.__ModuleLoader__.load({
                 key: `${index}-${frontendIndex}`,
                 html,
                 token: `tavern-${sessionId}-${index}-${frontendIndex}`,
+                binding: { character, chatId },
+                refreshKey: `${index}-${(message.mes ?? '').length}`,
               })))
               : message.streaming && renderedText === ''
                 ? null
@@ -6310,7 +6925,12 @@ window.__ModuleLoader__.load({
           busy ? h('p', { className: 'dt-muted' }, t('mvu.retrying')) : null,
           error ? h('p', { className: 'dt-error' }, error) : null,
           status.renderedHtml
-            ? h('div', { className: 'dt-mvu-rendered' }, h(FrontendFrame, { html: status.renderedHtml, token: frameToken }))
+            ? h('div', { className: 'dt-mvu-rendered' }, h(FrontendFrame, {
+              html: status.renderedHtml,
+              token: frameToken,
+              binding: binding ? { character: binding.character, chatId: binding.chatId } : undefined,
+              refreshKey: status.receipts?.length ?? 0,
+            }))
             : null,
           variables.length > 0
             ? h('section', { className: 'dt-mvu-side-section' },
@@ -6358,7 +6978,12 @@ window.__ModuleLoader__.load({
           busy ? h('p', { className: 'dt-muted' }, t('mvu.retrying')) : null,
           error ? h('p', { className: 'dt-error' }, error) : null,
           status.renderedHtml
-            ? h('div', { className: 'dt-mvu-rendered' }, h(FrontendFrame, { html: status.renderedHtml, token: frameToken }))
+            ? h('div', { className: 'dt-mvu-rendered' }, h(FrontendFrame, {
+              html: status.renderedHtml,
+              token: frameToken,
+              binding: binding ? { character: binding.character, chatId: binding.chatId } : undefined,
+              refreshKey: status.receipts?.length ?? 0,
+            }))
             : variables.length > 0
               ? h(React.Fragment, null,
                 h('div', { className: 'dt-mvu-section-title' }, t('mvu.variables')),
@@ -6725,6 +7350,18 @@ window.__ModuleLoader__.load({
         }
         openPanel('games')
       }
+      // 美化前端入口（2026-10-20）：消息内 HTML 在 AgentTavern 架构只能由
+      // 右栏承载——宿主没有可插进 native conversation 的正文 slot。旧宿主
+      // 没有 sidebarRight 服务时按钮不渲染（没有可承载表面的死按钮更糟）。
+      const hasSidebarRight = hasSidebarRightSurface()
+      const openFrontendSurface = () => {
+        const sidebarRight = PanelHost.context?.get?.('sidebarRight')
+        if (typeof sidebarRight?.openTab !== 'function') return
+        try { sidebarRight.openTab(FRONTEND_TAB_KIND) } catch {}
+      }
+      // 自动展开走设置开关 frontendAutoOpen（2026-10-20 用户需求）：默认关闭，
+      // 开启后本聊天首次出现美化前端才打开右栏 tab。
+      useFrontendAutoOpen(sessionId, binding, architecture, state.bootstrap.state.frontendAutoOpen === true)
       // 对局面自动展示（2026-10-14 修订）：AgentTavern 的对局棋盘住在右栏 games
       // tab（MVU tab 同位）；本 watcher 盯 games/revision 水位（stat-only 的便宜
       // 端点，1s 节奏、页面不可见停发），本聊天出现未终局对局即自动展开 tab——
@@ -6894,6 +7531,12 @@ window.__ModuleLoader__.load({
                 'aria-label': t('games.tabTitle'),
                 onClick: openGamesSurface,
               }, h(IconGamepadOutline16)),
+              hasSidebarRight ? h('button', {
+                type: 'button',
+                title: t('frontend.title'),
+                'aria-label': t('frontend.title'),
+                onClick: openFrontendSurface,
+              }, h(IconSparkle16)) : null,
           h('button', {
             type: 'button',
             title: t('view.openGuides'),
@@ -7348,13 +7991,61 @@ window.__ModuleLoader__.load({
         error ? h('span', { className: 'dt-sidebar-error' }, error) : null)
     }
 
+    // Greeting choice for a newly created chat. AgentTavern imports the opening
+    // message into the host session, where the ST swipe UI never reaches, so the
+    // alternate greetings must be picked before activation.
+    function TavernGreetingPicker({ picker, t, onPick, onClose }) {
+      return h(Modal, {
+        open: true,
+        onClose,
+        title: t('nav.greetingTitle'),
+        closeLabel: t('nav.close'),
+        className: 'dt-greeting-modal',
+      },
+      h('p', { className: 'dt-greeting-hint' }, t('nav.greetingHint')),
+      h('div', { className: 'dt-greeting-list' },
+        picker.options.map((option) => h('button', {
+          key: option.index,
+          type: 'button',
+          className: 'dt-greeting-option',
+          onClick: () => onPick(option.index),
+        },
+        h('span', { className: 'dt-greeting-label' }, option.index === 0
+          ? t('nav.greetingFirst')
+          : t('nav.greetingAlternate', { index: option.index })),
+        h('span', { className: 'dt-greeting-preview' }, option.text === ''
+          ? t('nav.greetingEmpty')
+          : option.text.length > 260 ? `${option.text.slice(0, 259)}…` : option.text)))))
+    }
+
     function TavernSidebar({ ctx, useSessions, floating, onClose }) {
       const state = useTavernStore()
       const t = useTranslate()
       const currentSession = useCurrentSessionId(useSessions)
       const [expanded, setExpanded] = useState(state.bootstrap.state.activeCharacter || state.bootstrap.characters[0] || '')
       const [expandedGroup, setExpandedGroup] = useState('')
+      const [greetingPicker, setGreetingPicker] = useState(null)
       const [error, setError] = useState('')
+      const startCharacterChat = (character) => {
+        setError('')
+        void fetchCharacterCard(character).then((card) => {
+          const first = typeof card?.data?.firstMes === 'string' ? card.data.firstMes : ''
+          const alternates = Array.isArray(card?.data?.alternateGreetings)
+            ? card.data.alternateGreetings.filter((text) => typeof text === 'string')
+            : []
+          const all = [{ text: first, index: 0 }, ...alternates.map((text, index) => ({ text, index: index + 1 }))]
+          const options = all.length > 1 ? all.filter((option) => option.text.trim() !== '') : all
+          if (options.length === 0) options.push({ text: first, index: 0 })
+          if (options.length === 1) {
+            return createTavernChat(ctx, character, false, undefined, options[0].index)
+          }
+          setGreetingPicker({ character, options })
+          return undefined
+        }).catch((cause) => {
+          update({ navigationStatus: '' })
+          setError(sidebarErrorDetail(cause))
+        })
+      }
       const groups = state.bootstrap.groups || []
       // 分区折叠（酒馆 / 写卡工作台）：标题本身是折叠钮，chevron 与
       // dt-character-toggle 同款旋转惯例；折叠只藏内容，标题行常驻。
@@ -7390,13 +8081,7 @@ window.__ModuleLoader__.load({
                 h('button', {
                   type: 'button',
                   title: t('nav.newChat', { name: character }),
-                  onClick: () => {
-                    setError('')
-                    void createTavernChat(ctx, character).catch((cause) => {
-                      update({ navigationStatus: '' })
-                      setError(sidebarErrorDetail(cause))
-                    })
-                  },
+                  onClick: () => startCharacterChat(character),
                 }, h(IconPlusOutline16))),
               open ? h(ChatList, { ctx, character, currentSession }) : null)
           }),
@@ -7440,7 +8125,377 @@ window.__ModuleLoader__.load({
         workbenchOpen ? h('div', { className: 'dt-sidebar-scroll dt-sidebar-workbench' },
           h(WorkbenchList, { ctx, useSessions, currentSession })) : null,
         state.navigationStatus ? h('span', { className: 'dt-sidebar-status' }, state.navigationStatus) : null,
-        error ? h('span', { className: 'dt-sidebar-error' }, error) : null)
+        error ? h('span', { className: 'dt-sidebar-error' }, error) : null,
+        greetingPicker ? h(TavernGreetingPicker, {
+          picker: greetingPicker,
+          t,
+          onClose: () => setGreetingPicker(null),
+          onPick: (index) => {
+            const picker = greetingPicker
+            setGreetingPicker(null)
+            setError('')
+            void createTavernChat(ctx, picker.character, false, undefined, index).catch((cause) => {
+              update({ navigationStatus: '' })
+              setError(sidebarErrorDetail(cause))
+            })
+          },
+        }) : null)
+    }
+
+    // 酒馆美化前端（消息内完整 HTML/JS）在 AgentTavern 架构的展示面
+    // （2026-10-20，用户需求）：native conversation 由宿主渲染，插件没有消息
+    // 正文 slot，消息里的 HTML 只能以源码文本出现。这里把「本聊天最新一条带
+    // 完整 HTML 的楼层」挂到 DSH 原生右侧栏 tab（MVU / 游戏对局同款注册）。
+    // 只取最新一条而不是每楼都挂：美化前端通常是随回合重发的状态 HUD，侧栏
+    // 常驻保留最新快照即可；旧楼层不重复执行脚本，也不给用户一堆并行 iframe。
+    // iframe 纪律完整继承内联 FrontendFrame（sandbox 无 same-origin、CSP、
+    // token 校验的高度回传），侧栏只是换了一个宿主容器。
+    const FRONTEND_TAB_ID = 'dsh-soulmojito/frontend'
+    const FRONTEND_TAB_KIND = 'tavern-frontend'
+    // apply 的 ctx.inject 回调在宿主服务就绪时置真：标题栏入口据此决定是否渲染
+    // （服务不在场的旧宿主没有可承载表面，死按钮比没有按钮更糟）。
+    let sidebarRightServiceReady = false
+
+    // 标题栏入口的可见性判据：apply 的 inject 回调标记优先，其次现场查服务
+    // （热重载/晚挂载时 ctx.inject 回调可能尚未触发）。查不到就按不可用处理。
+    function hasSidebarRightSurface() {
+      if (sidebarRightServiceReady === true) return true
+      try {
+        return typeof PanelHost.context?.get?.('sidebarRight')?.openTab === 'function'
+      } catch {
+        return false
+      }
+    }
+
+    function TavernFrontendSidebarTab({ sessionId }) {
+      return h(TavernFrontendPanel, { sessionId, sidebar: true })
+    }
+
+    // 自动展开（2026-10-20 用户需求「自动展开 tab 做成设置开关」）：设置开启时，
+    // 本聊天首次出现可展示的美化前端即打开右栏 tab。每 (sessionId, 楼层) 只自动
+    // 展开一次——用户关掉后不再抢焦点。挂在标题栏（header actions）而不是 tab 体
+    // 上：tab 没打开时 body 不挂载，watcher 自己拉起自己才有意义。
+    // 判定用与面板同一条端点（frontend/latest），随会话绑定变化重扫；1s 节流 +
+    // 页面不可见停发，与游戏自动展开同款纪律。设置关闭时零轮询。
+    const FRONTEND_AUTO_OPEN_POLL_MS = 5000
+
+    function useFrontendAutoOpen(sessionId, binding, architecture, enabled) {
+      const autoOpenedRef = useRef(new Set())
+      useEffect(() => {
+        if (!enabled || !binding || architecture !== 'agent-tavern') return undefined
+        const keyBase = `${sessionId}\u0000${binding.character}\u0000${binding.chatId}`
+        let cancelled = false
+        let inFlight = false
+        const check = () => {
+          if (cancelled || inFlight || document.visibilityState === 'hidden') return
+          const sidebarRight = PanelHost.context?.get?.('sidebarRight')
+          if (typeof sidebarRight?.openTab !== 'function') return
+          inFlight = true
+          const query = `?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`
+          void api(`frontend/latest${query}`)
+            .then((result) => {
+              if (cancelled || !result?.message) return
+              const marker = `${keyBase}\u0000${result.message.index}`
+              if (autoOpenedRef.current.has(marker)) return
+              autoOpenedRef.current.add(marker)
+              try { sidebarRight.openTab(FRONTEND_TAB_KIND) } catch {}
+            })
+            .catch(() => {})
+            .finally(() => { inFlight = false })
+        }
+        check()
+        const timer = setInterval(check, FRONTEND_AUTO_OPEN_POLL_MS)
+        const onVisibility = () => { if (document.visibilityState === 'visible') check() }
+        document.addEventListener('visibilitychange', onVisibility)
+        return () => {
+          cancelled = true
+          clearInterval(timer)
+          document.removeEventListener('visibilitychange', onVisibility)
+        }
+      }, [enabled, sessionId, binding?.character, binding?.chatId, architecture])
+    }
+
+    function TavernFrontendPanel({ sessionId }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const binding = state.bootstrap.state.sessionBindings?.[sessionId]
+      const architecture = bindingArchitecture(binding)
+      const [snapshot, setSnapshot] = useState(null)
+      const [error, setError] = useState('')
+      const load = () => {
+        if (!binding || architecture !== 'agent-tavern') return Promise.resolve()
+        const query = `?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`
+        return api(`frontend/latest${query}`)
+          .then((result) => {
+            setSnapshot(result)
+            setError('')
+          })
+          .catch((cause) => {
+            // 404（聊天删除 / 绑定竞态）回落空态；瞬时错误保留上次快照。
+            if (cause?.status === 404) {
+              setSnapshot(null)
+              return
+            }
+            setError(cause instanceof Error ? cause.message : String(cause))
+          })
+      }
+      const loadRef = useRef(load)
+      useEffect(() => { loadRef.current = load })
+      useEffect(() => {
+        // 切换聊天时先摘掉上一份快照：避免一个渲染帧里显示别的聊天的 HUD。
+        setSnapshot(null)
+        void loadRef.current()
+      }, [binding?.character, binding?.chatId, architecture])
+      // 原生会话的生成走宿主 AgentLoop，插件本地 chats/revisions 收不到信号
+      // （与 MVU 侧栏同一条纪律）：可见期间 5s 重取，隐藏期间停发。
+      useSessionPanelPoll(() => loadRef.current(), [binding?.character, binding?.chatId, architecture])
+      if (!binding) {
+        return h('div', { className: 'dt-frontend-side', 'data-dsh-soulmojito-surface': 'frontend-sidebar' },
+          h('div', { className: 'dt-frontend-side-empty' }, h(IconSparkle16, { size: 22 }), h('span', null, t('frontend.unbound'))))
+      }
+      // ST 架构已经在 TavernView 的消息里内联渲染，再挂一份会重复执行脚本；
+      // 非酒馆会话（小说 / 写卡工作台）没有可读的聊天前端。
+      if (architecture !== 'agent-tavern') {
+        return h('div', { className: 'dt-frontend-side', 'data-dsh-soulmojito-surface': 'frontend-sidebar' },
+          h('div', { className: 'dt-frontend-side-empty' }, h(IconSparkle16, { size: 22 }),
+            h('span', null, architecture === 'st' ? t('frontend.inlineOnly') : t('frontend.unbound'))))
+      }
+      const message = snapshot?.message
+      return h('div', { className: 'dt-frontend-side', 'data-dsh-soulmojito-surface': 'frontend-sidebar' },
+        h('div', { className: 'dt-frontend-side-head' },
+          h('span', { className: 'dt-frontend-side-meta' },
+            message ? t('frontend.floor', { index: message.index + 1 }) : t('frontend.empty')),
+          h('button', {
+            type: 'button',
+            className: 'dt-frontend-side-refresh',
+            title: t('frontend.refresh'),
+            'aria-label': t('frontend.refresh'),
+            onClick: () => void loadRef.current(),
+          }, h(IconRefreshOutline16))),
+        error ? h('p', { className: 'dt-error' }, error) : null,
+        message
+          ? h('div', { className: 'dt-frontend-side-frames' }, message.documents.map((html, index) => h('div', {
+            key: `${message.index}-${index}`,
+            className: 'dt-frontend-side-frame',
+          }, h(FrontendFrame, {
+            html,
+            token: `tavern-frontend-${sessionId}-${message.index}-${index}`,
+            binding: { character: binding.character, chatId: binding.chatId },
+            refreshKey: `${snapshot?.revision ?? ''}:${message.index}`,
+          }))))
+          : h('div', { className: 'dt-frontend-side-empty' },
+            h(IconSparkle16, { size: 22 }),
+            h('strong', null, t('frontend.emptyTitle')),
+            h('p', { className: 'dt-hint' }, t('frontend.emptyHint'))))
+    }
+
+    // AgentTavern runs on the host's native conversation surface: the host owns
+    // assistant rows, so regex scripts applied by the projector to the Tavern
+    // JSONL never reach the visible text. Reuse the host's assistant renderer,
+    // replacing only its text blocks with the display text the server derives
+    // from the projected message (save-layer regex already applied + display-
+    // only markdownOnly scripts). Scoped per messageId so the lookup stays O(1)
+    // and never ships the whole chat.
+    const DISPLAY_TEXT_CACHE_LIMIT = 400
+    const displayTextCache = new Map()
+    const displayTextInflight = new Map()
+    const EMPTY_PRESENTATION_SOURCE = {
+      getSnapshot: () => ({
+        mode: 'standard', foldCompletedTurns: true, stepGrouping: 'collapsed',
+        liveProcessDetail: true, settledReasoningPreview: true, collapseTiming: 'completion',
+      }),
+      subscribe: () => () => {},
+    }
+
+
+    function displayTextCacheKey(binding, messageId, revision) {
+      return `${revision}\u0000${binding.character}\u0000${binding.chatId}\u0000${messageId}`
+    }
+
+    function cacheDisplayText(key, text) {
+      if (displayTextCache.size >= DISPLAY_TEXT_CACHE_LIMIT) {
+        const first = displayTextCache.keys().next().value
+        if (first !== undefined) displayTextCache.delete(first)
+      }
+      displayTextCache.set(key, text)
+    }
+
+    async function loadDisplayText(binding, messageId, revision) {
+      const key = displayTextCacheKey(binding, messageId, revision)
+      if (displayTextCache.has(key)) return displayTextCache.get(key)
+      if (displayTextInflight.has(key)) return displayTextInflight.get(key)
+      const pending = api(`display?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}&messageId=${encodeURIComponent(messageId)}`)
+        .then((result) => {
+          if (typeof result.text === 'string') cacheDisplayText(key, result.text)
+          return typeof result.text === 'string' ? result.text : undefined
+        })
+        .finally(() => displayTextInflight.delete(key))
+      displayTextInflight.set(key, pending)
+      return pending
+    }
+
+    function useTavernDisplayText(binding, messageId) {
+      const state = useTavernStore()
+      const revision = state.bootstrap.storeRevision || ''
+      const [text, setText] = useState(undefined)
+      useEffect(() => {
+        if (!binding || !messageId) {
+          setText(undefined)
+          return undefined
+        }
+        let cancelled = false
+        let attempts = 0
+        let timer
+        const load = () => {
+          void loadDisplayText(binding, messageId, revision).then((value) => {
+            if (cancelled) return
+            if (value !== undefined) {
+              setText(value)
+              return
+            }
+            // The projector writes the chat after the durable event; retry a
+            // few times instead of leaving the raw model text in place.
+            if (attempts < 4) {
+              attempts += 1
+              timer = setTimeout(load, 250 * attempts)
+            }
+          }).catch(() => {
+            if (!cancelled) setText(undefined)
+          })
+        }
+        setText(undefined)
+        load()
+        return () => {
+          cancelled = true
+          if (timer) clearTimeout(timer)
+        }
+      }, [binding?.character, binding?.chatId, messageId, revision])
+      return text
+    }
+
+    function withTavernDisplayText(node, text) {
+      if (typeof text !== 'string') return node
+      let used = false
+      const blocks = []
+      for (const block of node.data.blocks) {
+        if (block?.kind !== 'text') {
+          blocks.push(block)
+          continue
+        }
+        if (used) continue
+        used = true
+        if (text !== '') blocks.push({ ...block, text })
+      }
+      if (!used && text !== '') blocks.push({ kind: 'text', text })
+      return { ...node, data: { ...node.data, blocks } }
+    }
+
+    function TavernAssistantImages({ images, loadImage, align }) {
+      const [urls, setUrls] = useState([])
+      useEffect(() => {
+        let cancelled = false
+        void Promise.all((images || []).map((image) => Promise.resolve()
+          .then(() => loadImage(image.attachment))
+          .catch(() => '')))
+          .then((values) => { if (!cancelled) setUrls(values) })
+        return () => { cancelled = true }
+      }, [images, loadImage])
+      const visible = urls.filter((url) => url !== '')
+      if (visible.length === 0) return null
+      return h('div', {
+        className: `dt-assistant-images${align === 'end' ? ' dt-assistant-images-end' : ''}`,
+      }, visible.map((url, index) => h('img', { key: index, src: url, alt: '' })))
+    }
+
+    function tavernAssistantRenderSlot(name, props) {
+      if (name === 'conversation.chat.reasoning.body') {
+        return h(MarkdownText, { text: props?.text || '' })
+      }
+      if (name === 'conversation.chat.message.images') {
+        return h(TavernAssistantImages, {
+          images: props?.images,
+          loadImage: props?.loadImage,
+          align: props?.align,
+        })
+      }
+      return null
+    }
+
+    function useTavernPresentation(hostEntry) {
+      let source = EMPTY_PRESENTATION_SOURCE
+      try {
+        source = hostEntry?.inject?.()?.hooks?.presentation || EMPTY_PRESENTATION_SOURCE
+      } catch { /* the fallback policy is sufficient for reasoning previews */ }
+      return useCallback((selector) => useSyncExternalStore(
+        source.subscribe,
+        () => selector(source.getSnapshot()),
+        () => selector(source.getSnapshot()),
+      ), [source])
+    }
+
+    function useAssistantSlotVersion() {
+      const ctx = PanelHost.context
+      const slots = ctx?.slots
+      return useSyncExternalStore(
+        (listener) => typeof slots?.subscribe === 'function' ? slots.subscribe('conversation.chat.node', listener) : () => {},
+        () => typeof slots?.getVersion === 'function' ? slots.getVersion('conversation.chat.node') : 0,
+        () => typeof slots?.getVersion === 'function' ? slots.getVersion('conversation.chat.node') : 0,
+      )
+    }
+
+    // Plain text fallback while the host assistant renderer is not registered
+    // yet (or when a host version does not ship one). Regex display still wins
+    // over losing the row entirely.
+    function TavernAssistantFallback({ node }) {
+      return h('div', { className: 'dt-assistant-fallback' },
+        (node?.data?.blocks || [])
+          .filter((block) => block?.kind === 'text' && block.text !== '')
+          .map((block, index) => h('p', { key: index }, block.text)))
+    }
+
+    const TavernAssistantNode = React.memo(function TavernAssistantNode(props) {
+      useAssistantSlotVersion()
+      const state = useTavernStore()
+      const binding = state.bootstrap.state.sessionBindings?.[props.tavernSessionId]
+      const blocks = props.node?.data?.blocks || []
+      // The projector only stores message-less tool steps as nothing; asking
+      // for them would burn retries on a lookup that can never resolve.
+      const messageId = blocks.some((block) => block?.kind === 'tool-call')
+        || !blocks.some((block) => block?.kind === 'text')
+        ? undefined
+        : props.node?.data?.finalNode?.messageId
+      const displayText = useTavernDisplayText(
+        binding && binding.architecture === 'agent-tavern' && binding.group !== true ? binding : undefined,
+        messageId,
+      )
+      const node = withTavernDisplayText(props.node, displayText)
+      const hostEntry = findHostAssistantEntry(PanelHost.context)
+      const usePresentation = useTavernPresentation(hostEntry)
+      if (!hostEntry) return h(TavernAssistantFallback, { node })
+      return h(hostEntry.component, {
+        ...props,
+        node,
+        renderSlot: tavernAssistantRenderSlot,
+        usePresentation,
+      })
+    })
+
+    function findHostAssistantEntry(ctx) {
+      const entries = typeof ctx?.slots?.entries === 'function'
+        ? ctx.slots.entries('conversation.chat.node')
+        : []
+      return entries.find((entry) => entry?.options?.key === 'assistant-step' && entry.component !== TavernAssistantNode)
+    }
+
+    function registerTavernAssistantNode(ctx) {
+      return ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+        name: 'conversation.chat.node',
+        key: 'assistant-step',
+        // Lower priority wins a keyed cell; the host default is priority 0.
+        priority: -1,
+        locale: 'chat',
+        inject: (sessionId) => ({ tavernSessionId: sessionId }),
+      }, TavernAssistantNode))
     }
 
     // 面板分区注册表（提案 0015 §3.5 P0）：{id, icon, label, component}。
@@ -10569,9 +11624,24 @@ window.__ModuleLoader__.load({
       const currentSession = useCurrentSessionId(useSessions)
       const bindingIds = Object.keys(state.bootstrap.state.sessionBindings || {})
       const currentBinding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
+      const agentTavernActive = Boolean(currentBinding && bindingArchitecture(currentBinding) === 'agent-tavern')
       // AgentTavern stays hidden from the native session tree, but its native
       // conversation view must not be forced into the legacy Tavern tab.
       useNativeTavernTabFilter(Boolean(currentBinding && bindingArchitecture(currentBinding) === 'st'))
+      // Regex display for the host-native assistant rows: register the
+      // assistant-step override only while the active session is AgentTavern,
+      // so ordinary DSH chats keep the host renderer untouched.
+      useEffect(() => {
+        if (!agentTavernActive) return undefined
+        let dispose
+        try {
+          dispose = registerTavernAssistantNode(PanelHost.context)
+        } catch (cause) {
+          console.warn('[dsh-soulmojito] assistant display override unavailable:', cause)
+          return undefined
+        }
+        return () => { if (typeof dispose === 'function') dispose() }
+      }, [agentTavernActive])
       useNativeSessionTreeFilter(bindingIds, PanelHost.context, [state.bootstrap.internalWorkspace?.path, state.bootstrap.workbenchWorkspace?.path].filter(Boolean).join('\u0000'))
       const host = useSidebarHost()
       useEffect(() => {
@@ -10853,6 +11923,17 @@ window.__ModuleLoader__.load({
         .dt-novel-modal-head h2{margin:0;font-size:16px;line-height:22px;font-weight:600}
         .dt-novel-modal-body{flex:1;min-height:0;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:12px}
         .dt-novel-modal-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 20px;border-top:1px solid var(--dsw-alias-border-l2)}
+        .dt-greeting-modal{pointer-events:auto;width:min(620px,calc(100vw - 32px));max-height:min(680px,calc(100vh - 64px));background:var(--dsw-alias-bg-base);border-color:var(--dsw-alias-border-l1)}
+        .dt-greeting-hint{margin:0 0 10px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+        .dt-greeting-list{display:flex;flex-direction:column;gap:8px;max-height:min(60vh,520px);overflow-y:auto;padding:2px}
+        .dt-greeting-option{box-sizing:border-box;width:100%;display:flex;flex-direction:column;gap:6px;text-align:left;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;color:var(--dsw-alias-label-primary);background:transparent;cursor:pointer;font:inherit;padding:10px 12px}
+        .dt-greeting-option:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-state-business-primary)}
+        .dt-greeting-label{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;font-weight:600}
+        .dt-greeting-preview{font-size:13px;line-height:20px;white-space:pre-wrap;overflow-wrap:anywhere}
+        .dt-assistant-images{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0}
+        .dt-assistant-images-end{justify-content:flex-end}
+        .dt-assistant-images img{max-width:min(320px,100%);max-height:320px;border-radius:8px;object-fit:contain}
+        .dt-assistant-fallback{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
         .dt-novel-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
         .dt-novel-form-wide{grid-column:1 / -1}
         .dt-novel-form-section{display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l2)}
@@ -11063,6 +12144,16 @@ window.__ModuleLoader__.load({
         .dt-mod-log-warn .dt-mod-log-level{color:var(--dsw-alias-status-warning,#b8860b)}
         .dt-mod-log-error .dt-mod-log-level{color:var(--dsw-alias-status-danger,#c0392b)}
         .dt-mod-log-error .dt-mod-log-text{color:var(--dsw-alias-status-danger,#c0392b)}
+        .dt-frontend-side{box-sizing:border-box;width:100%;height:100%;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:12px;padding:14px 14px 24px;color:var(--dsw-alias-label-primary);font-size:13px;font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}
+        .dt-frontend-side-head{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;flex:none}
+        .dt-frontend-side-meta{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+        .dt-frontend-side-refresh{flex:none;display:inline-grid;place-items:center;width:28px;height:28px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer}
+        .dt-frontend-side-refresh:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .dt-frontend-side-frames{display:flex;flex-direction:column;gap:12px;min-width:0}
+        .dt-frontend-side-frame{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-base)}
+        .dt-frontend-side-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-height:220px;padding:16px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:13px;line-height:20px}
+        .dt-frontend-side-empty>p{margin:0;max-width:300px}
+        .dt-frontend-side-empty svg{color:var(--dsw-alias-label-caption)}
       `
       document.head.appendChild(tag)
     }
@@ -11121,6 +12212,7 @@ window.__ModuleLoader__.load({
       // 行为与侧栏存在前一致。
       if (typeof ctx.inject === 'function') {
         ctx.inject(['sidebarRightTabs', 'sidebarRight'], (scope) => {
+          sidebarRightServiceReady = true
           scope.effect(() => scope.sidebarRightTabs.register({
             id: MVU_TAB_ID,
             kind: MVU_TAB_KIND,
@@ -11161,6 +12253,27 @@ window.__ModuleLoader__.load({
             key: GAMES_TAB_ID,
             inject: (sessionId) => ({ sessionId }),
           }, TavernGamesSidebarTab)), 'dsh-soulmojito: sidebar-right games tab body')
+          // 美化前端 tab（2026-10-20）：AgentTavern 会话的消息内 HTML 没有正文
+          // slot，最新一条带完整 HTML 的楼层改由右栏承载（MVU/游戏同款姿势）。
+          // ST 架构仍在消息里内联渲染，panel 对 ST 只给说明空态，不重复执行。
+          scope.effect(() => scope.sidebarRightTabs.register({
+            id: FRONTEND_TAB_ID,
+            kind: FRONTEND_TAB_KIND,
+            priority: 'extension',
+            title: () => translate('frontend.title'),
+            guide: [{
+              id: 'frontend',
+              order: 42,
+              title: () => translate('frontend.title'),
+              description: () => translate('frontend.guide.description'),
+              icon: IconSparkle16,
+            }],
+          }), 'dsh-soulmojito: sidebar-right frontend tab type')
+          scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+            name: 'sidebar.right.pane.tab',
+            key: FRONTEND_TAB_ID,
+            inject: (sessionId) => ({ sessionId }),
+          }, TavernFrontendSidebarTab)), 'dsh-soulmojito: sidebar-right frontend tab body')
         })
       }
     }

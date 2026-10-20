@@ -325,6 +325,18 @@
         }
         openPanel('games')
       }
+      // 美化前端入口（2026-10-20）：消息内 HTML 在 AgentTavern 架构只能由
+      // 右栏承载——宿主没有可插进 native conversation 的正文 slot。旧宿主
+      // 没有 sidebarRight 服务时按钮不渲染（没有可承载表面的死按钮更糟）。
+      const hasSidebarRight = hasSidebarRightSurface()
+      const openFrontendSurface = () => {
+        const sidebarRight = PanelHost.context?.get?.('sidebarRight')
+        if (typeof sidebarRight?.openTab !== 'function') return
+        try { sidebarRight.openTab(FRONTEND_TAB_KIND) } catch {}
+      }
+      // 自动展开走设置开关 frontendAutoOpen（2026-10-20 用户需求）：默认关闭，
+      // 开启后本聊天首次出现美化前端才打开右栏 tab。
+      useFrontendAutoOpen(sessionId, binding, architecture, state.bootstrap.state.frontendAutoOpen === true)
       // 对局面自动展示（2026-10-14 修订）：AgentTavern 的对局棋盘住在右栏 games
       // tab（MVU tab 同位）；本 watcher 盯 games/revision 水位（stat-only 的便宜
       // 端点，1s 节奏、页面不可见停发），本聊天出现未终局对局即自动展开 tab——
@@ -494,6 +506,12 @@
                 'aria-label': t('games.tabTitle'),
                 onClick: openGamesSurface,
               }, h(IconGamepadOutline16)),
+              hasSidebarRight ? h('button', {
+                type: 'button',
+                title: t('frontend.title'),
+                'aria-label': t('frontend.title'),
+                onClick: openFrontendSurface,
+              }, h(IconSparkle16)) : null,
           h('button', {
             type: 'button',
             title: t('view.openGuides'),

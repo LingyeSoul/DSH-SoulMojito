@@ -2,6 +2,7 @@
   "fragments": [
     "00-shell-head.js",
     "10-frontend-frame.js",
+    "11-helper-bridge.js",
     "20-mods-bridge.js",
     "21-mods-ui.js",
     "30-games-ui.js",
@@ -21,6 +22,8 @@
     "85-ui-mvu.js",
     "86-ui-composer.js",
     "87-ui-sidebar.js",
+    "88-ui-frontend.js",
+    "89-ui-assistant.js",
     "90-panels-core.js",
     "91-panels-data.js",
     "92-ui-novel.js",

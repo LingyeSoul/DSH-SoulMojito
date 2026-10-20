@@ -93,7 +93,7 @@
       const t = useTranslate()
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
-      const [syncing, setSyncing] = useState(false)
+      const [syncing, setSyncing] = useState('')
       const [editing, setEditing] = useState('')
       const scripts = state.bootstrap.state.regexScripts || []
       const run = (promise) => { setError(''); setNotice(''); void promise.catch((cause) => setError(cause.message)) }
@@ -103,23 +103,27 @@
           : [...scripts, script]
         return saveRegexScripts(next).then(() => setEditing(''))
       }
-      const syncFromCards = () => {
+      // 两个回填入口共用一份 busy 状态：同一时刻只允许一个扫描在跑，回执不交叉。
+      const sync = (source, request, doneKey) => {
         setError('')
         setNotice('')
-        setSyncing(true)
-        void syncRegexScriptsFromCards()
-          .then((result) => setNotice(t('settings.regexSyncDone', {
+        setSyncing(source)
+        void request()
+          .then((result) => setNotice(t(doneKey, {
             scanned: result.scanned, imported: result.imported, skipped: result.skipped, invalid: result.invalid,
           })))
           .catch((cause) => setError(cause.message))
-          .finally(() => setSyncing(false))
+          .finally(() => setSyncing(''))
       }
+      const syncFromCards = () => sync('cards', syncRegexScriptsFromCards, 'settings.regexSyncDone')
+      const syncFromPresets = () => sync('presets', syncRegexScriptsFromPresets, 'settings.regexSyncPresetsDone')
       const closeEditor = () => setEditing('')
       return h('section', { className: 'dt-settings-band' },
         h('div', { className: 'dt-band-actions' },
           h(Button, { size: 'sm', variant: 'primary', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => setEditing('new') }, t('settings.regexCreate')),
           h(UploadButton, { kind: 'regex', label: t('settings.importRegex'), accept: '.json,application/json' }),
-          h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing, onClick: syncFromCards }, syncing ? t('settings.importing') : t('settings.regexSyncCards'))),
+          h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing !== '', onClick: syncFromCards }, syncing === 'cards' ? t('settings.importing') : t('settings.regexSyncCards')),
+          h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing !== '', onClick: syncFromPresets }, syncing === 'presets' ? t('settings.importing') : t('settings.regexSyncPresets'))),
         editing === 'new'
           ? h('div', { key: 'new', className: 'dt-regex-editor-wrap' },
             h(RegexScriptEditor, { script: newRegexScript(), onSave: saveScript, onCancel: closeEditor }))

@@ -261,7 +261,12 @@
           busy ? h('p', { className: 'dt-muted' }, t('mvu.retrying')) : null,
           error ? h('p', { className: 'dt-error' }, error) : null,
           status.renderedHtml
-            ? h('div', { className: 'dt-mvu-rendered' }, h(FrontendFrame, { html: status.renderedHtml, token: frameToken }))
+            ? h('div', { className: 'dt-mvu-rendered' }, h(FrontendFrame, {
+              html: status.renderedHtml,
+              token: frameToken,
+              binding: binding ? { character: binding.character, chatId: binding.chatId } : undefined,
+              refreshKey: status.receipts?.length ?? 0,
+            }))
             : null,
           variables.length > 0
             ? h('section', { className: 'dt-mvu-side-section' },
@@ -309,7 +314,12 @@
           busy ? h('p', { className: 'dt-muted' }, t('mvu.retrying')) : null,
           error ? h('p', { className: 'dt-error' }, error) : null,
           status.renderedHtml
-            ? h('div', { className: 'dt-mvu-rendered' }, h(FrontendFrame, { html: status.renderedHtml, token: frameToken }))
+            ? h('div', { className: 'dt-mvu-rendered' }, h(FrontendFrame, {
+              html: status.renderedHtml,
+              token: frameToken,
+              binding: binding ? { character: binding.character, chatId: binding.chatId } : undefined,
+              refreshKey: status.receipts?.length ?? 0,
+            }))
             : variables.length > 0
               ? h(React.Fragment, null,
                 h('div', { className: 'dt-mvu-section-title' }, t('mvu.variables')),

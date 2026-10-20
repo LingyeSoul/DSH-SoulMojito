@@ -2604,6 +2604,7 @@ var DEFAULT_STATE = {
   defaultContextMode: "dsh-native",
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  frontendAutoOpen: false,
   gamesDisableResign: false,
   cardWorkbenchPresetEnabled: false,
   agentNovelPresetEnabled: false,
@@ -2764,6 +2765,16 @@ var TavernStore = class _TavernStore {
   /** 卡内嵌 regex_scripts 物化为全局脚本；脚本格式非法时整体跳过，不阻断角色导入。 */
   async importEmbeddedRegex(card) {
     const embedded = card.data.extensions["regex_scripts"];
+    if (embedded === void 0 || embedded === null) return 0;
+    try {
+      return await this.importRegexScripts(embedded);
+    } catch {
+      return 0;
+    }
+  }
+  /** 预设扩展袋里的 regex_scripts 物化为全局脚本；非法脚本整批跳过，不阻断预设导入。 */
+  async importEmbeddedPresetRegex(preset) {
+    const embedded = presetExtensions(preset)["regex_scripts"];
     if (embedded === void 0 || embedded === null) return 0;
     try {
       return await this.importRegexScripts(embedded);
@@ -2996,6 +3007,15 @@ var TavernStore = class _TavernStore {
   async putPreset(name2, preset) {
     await this.writeAtomic(path.join(this.root, "presets", `${safeFileName(name2)}.json`), jsonBytes(preset));
   }
+  /**
+   * 导入预设：原样落盘后把 `extensions.regex_scripts`（ST preset-scoped regex
+   * 的落盘位置）物化为全局脚本，按 scriptName 合并；脚本格式非法时整批跳过，
+   * 不阻断预设导入（与角色卡内嵌脚本同语义）。
+   */
+  async importPreset(name2, preset) {
+    await this.putPreset(name2, preset);
+    return { importedRegex: await this.importEmbeddedPresetRegex(preset) };
+  }
   async getPreset(name2) {
     const bytes = await this.tryRead(path.join(this.root, "presets", `${safeFileName(name2)}.json`));
     if (bytes === void 0) return void 0;
@@ -3170,9 +3190,8 @@ var TavernStore = class _TavernStore {
   async backfillRegexScriptsFromCharacters() {
     const names = await this.listCharacters();
     const known = new Set((await this.getState()).regexScripts.map((script) => script.scriptName));
+    const counters = { skipped: 0, invalid: 0 };
     const pending = [];
-    let skipped = 0;
-    let invalid = 0;
     for (const name2 of names) {
       let file;
       try {
@@ -3183,30 +3202,38 @@ var TavernStore = class _TavernStore {
       if (file === void 0) continue;
       const embedded = file.card.data.extensions["regex_scripts"];
       if (embedded === void 0 || embedded === null) continue;
-      let entries;
-      try {
-        entries = listRegexScriptEntries(embedded);
-      } catch {
-        invalid += 1;
-        continue;
-      }
-      entries.forEach((entry, index) => {
-        let script;
-        try {
-          script = parseRegexScript(entry, index);
-        } catch {
-          invalid += 1;
-          return;
-        }
-        if (known.has(script.scriptName)) {
-          skipped += 1;
-          return;
-        }
-        known.add(script.scriptName);
-        pending.push(script);
-      });
+      pending.push(...stageRegexBackfillEntries(embedded, known, counters));
     }
-    if (pending.length === 0) return { imported: 0, skipped, invalid, scanned: names.length };
+    return await this.commitRegexBackfill(pending, counters, names.length);
+  }
+  /**
+   * 从已导入预设回填 extensions.regex_scripts（ST preset-scoped regex 的落盘
+   * 位置）：同角色卡回填语义——只补缺、跨预设先到先得、单条容错、一次写盘。
+   */
+  async backfillRegexScriptsFromPresets() {
+    const names = await this.listPresets();
+    const known = new Set((await this.getState()).regexScripts.map((script) => script.scriptName));
+    const counters = { skipped: 0, invalid: 0 };
+    const pending = [];
+    for (const name2 of names) {
+      let preset;
+      try {
+        preset = await this.getPreset(name2);
+      } catch (cause) {
+        throw new Error(`failed to read preset '${name2}' for regex backfill: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+      }
+      if (preset === void 0) continue;
+      const embedded = presetExtensions(preset)["regex_scripts"];
+      if (embedded === void 0 || embedded === null) continue;
+      pending.push(...stageRegexBackfillEntries(embedded, known, counters));
+    }
+    return await this.commitRegexBackfill(pending, counters, names.length);
+  }
+  /** 回填收口：一次写盘，只追加状态里仍缺的 scriptName（并发导入时不重复）。 */
+  async commitRegexBackfill(pending, counters, scanned) {
+    if (pending.length === 0) {
+      return { imported: 0, skipped: counters.skipped, invalid: counters.invalid, scanned };
+    }
     let imported = 0;
     await this.updateState((current) => {
       const existing = new Set(current.regexScripts.map((script) => script.scriptName));
@@ -3218,7 +3245,7 @@ var TavernStore = class _TavernStore {
       imported = additions.length;
       return { regexScripts: [...current.regexScripts, ...additions] };
     });
-    return { imported, skipped: skipped + pending.length - imported, invalid, scanned: names.length };
+    return { imported, skipped: counters.skipped + pending.length - imported, invalid: counters.invalid, scanned };
   }
   /* ------------------------------ 内部 ------------------------------ */
   async readState() {
@@ -3235,6 +3262,7 @@ var TavernStore = class _TavernStore {
       defaultContextMode: parsed.defaultContextMode === "agent-managed" ? "agent-managed" : "dsh-native",
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      frontendAutoOpen: parsed.frontendAutoOpen === true,
       gamesDisableResign: parsed.gamesDisableResign === true,
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
       agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
@@ -3345,6 +3373,36 @@ function normalizeCompactionOverride(value) {
   if (typeof provider !== "string" || typeof model !== "string") return void 0;
   if (provider.trim() === "" || model.trim() === "") return void 0;
   return { curatorProvider: provider, curatorModel: model };
+}
+function presetExtensions(preset) {
+  const extensions = preset["extensions"];
+  return typeof extensions === "object" && extensions !== null && !Array.isArray(extensions) ? extensions : {};
+}
+function stageRegexBackfillEntries(embedded, known, counters) {
+  let entries;
+  try {
+    entries = listRegexScriptEntries(embedded);
+  } catch {
+    counters.invalid += 1;
+    return [];
+  }
+  const staged = [];
+  entries.forEach((entry, index) => {
+    let script;
+    try {
+      script = parseRegexScript(entry, index);
+    } catch {
+      counters.invalid += 1;
+      return;
+    }
+    if (known.has(script.scriptName)) {
+      counters.skipped += 1;
+      return;
+    }
+    known.add(script.scriptName);
+    staged.push(script);
+  });
+  return staged;
 }
 function mergeRegexScripts(current, imported) {
   const merged = [...current];

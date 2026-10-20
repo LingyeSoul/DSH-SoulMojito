@@ -11,14 +11,17 @@ import { serveCharacterAvatar, sendAvatarFallback } from '../assets.js'
 import { BUILD_INFO, TAVERN_COMMIT } from '../build-info.js'
 import { runCandidateGeneration } from '../candidates.js'
 import { dshHomePath } from '../dsh-home.js'
+import { latestFrontendMessage } from '../frontend-documents.js'
 import { handleGamesApi, isGamesRoute } from '../games/http.js'
+import { handleHelperApi } from '../helper.js'
 import { generate, previewGeneration, runTavernScript } from '../generation/pipeline.js'
 import { buildModelCatalog, clampIdentitySummary, publicCard, publicGroup, refreshActivePrompt } from '../model-catalog.js'
 import { emitAssetsSaved, emitChatSaved } from '../mods/events.js'
 import { modsDisabledByEnv } from '../mods/host.js'
-import { characterLinkedWorlds, compactionOverrideOf, displayTexts, parsePresetOrThrow } from '../prompt-context.js'
+import { characterLinkedWorlds, compactionOverrideOf, displayTextForMessage, displayTexts, parsePresetOrThrow } from '../prompt-context.js'
 import { listPromptViews } from '../prompt-viewer.js'
 import { optionalFeedback } from '../rewrite.js'
+import { collectRegexScripts } from '../tavern-assets.js'
 import {
   getAgentNovelCapabilities,
   getAgentTavernCapabilities,
@@ -440,6 +443,11 @@ export async function handleApi(ctx, req, res) {
       ...(typeof body.agentTavernAllowGlobalWrites === 'boolean'
         ? { agentTavernAllowGlobalWrites: body.agentTavernAllowGlobalWrites }
         : {}),
+      // 美化前端右栏 tab 自动展开（2026-10-20 用户需求）：翻转即时生效——
+      // 客户端 watcher 每次扫描都读 bootstrap.state，无需写穿。
+      ...(typeof body.frontendAutoOpen === 'boolean'
+        ? { frontendAutoOpen: body.frontendAutoOpen }
+        : {}),
       // 禁用游戏投降（2026-10-14 用户需求）：翻转即时生效——服务层在两个动作
       // 入口（人类棋盘 / Agent game_move）逐次读取判定，无缓存需写穿。
       ...(typeof body.gamesDisableResign === 'boolean'
@@ -509,11 +517,13 @@ export async function handleApi(ctx, req, res) {
     const body = await readJson(req)
     if (typeof body.name !== 'string' || !body.data || typeof body.data !== 'object') throw new Error('expected { name, data }')
     parsePresetOrThrow(body.data)
-    await db.putPreset(body.name, body.data)
+    // 预设内嵌 extensions.regex_scripts（ST preset-scoped regex）随导入物化为
+    // 全局脚本；非法脚本不阻断预设落盘，只在回执里如实给出导入条数。
+    const result = await db.importPreset(body.name, body.data)
     await emitAssetsSaved('preset', body.name)
     // 同名的激活预设被覆盖时 AgentTavern 投影必须跟着变（写穿，best-effort）。
     await emitAgentPresetChanged()
-    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data) })
+    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data), importedRegex: result.importedRegex })
   }
 
   if (method === 'GET' && route.startsWith('preset/')) {
@@ -768,16 +778,25 @@ export async function handleApi(ctx, req, res) {
         || Object.keys(initial).length === 0) return undefined
       return structuredClone(initial)
     })()
+    const greetings = [found.card.data.firstMes, ...found.card.data.alternateGreetings]
+    // Greeting choice at chat creation: AgentTavern imports the first message
+    // into the host session, so an alternate greeting can never be picked with
+    // the ST swipe UI afterwards. The chosen index (default 0) becomes the
+    // opening message and the initial swipe position.
+    const greetingIndex = body.greetingIndex === undefined ? 0 : body.greetingIndex
+    if (!Number.isSafeInteger(greetingIndex) || greetingIndex < 0 || greetingIndex >= greetings.length) {
+      throw new Error(`greetingIndex must be an integer in [0, ${greetings.length - 1}]`)
+    }
     const id = await db.createChat(character, {
       user_name: 'unused', character_name: 'unused',
       chat_metadata: { character, createdAt: now, timedWorldInfo: {}, ...(seedVariables !== undefined ? { variables: seedVariables } : {}) },
     }, [{
       name: found.card.data.nickname || found.card.data.name,
       is_user: false, is_system: false, send_date: now,
-      mes: found.card.data.firstMes,
-      swipe_id: 0,
-      swipes: [found.card.data.firstMes, ...found.card.data.alternateGreetings],
-      swipe_info: [{ send_date: now }, ...found.card.data.alternateGreetings.map(() => ({ send_date: now }))],
+      mes: greetings[greetingIndex],
+      swipe_id: greetingIndex,
+      swipes: greetings,
+      swipe_info: greetings.map(() => ({ send_date: now })),
     }])
     const snapshot = await db.getChatSnapshot(character, id)
     return sendJson(res, 200, { ok: true, id, chat: snapshot?.chat, revision: snapshot?.revision })
@@ -1022,6 +1041,73 @@ export async function handleApi(ctx, req, res) {
     const result = await db.backfillRegexScriptsFromCharacters()
     const state = await db.getState()
     return sendJson(res, 200, { ok: true, ...result, scripts: state.regexScripts })
+  }
+
+  // 存量预设回填：预设内嵌 regex 的导入期物化同样只覆盖此后导入的预设。
+  if (method === 'POST' && route === 'regex/sync-presets') {
+    const result = await db.backfillRegexScriptsFromPresets()
+    const state = await db.getState()
+    return sendJson(res, 200, { ok: true, ...result, scripts: state.regexScripts })
+  }
+
+  // 酒馆助手兼容面（2026-10-20）：美化前端 iframe 经 token 校验的 postMessage
+  // RPC 转发到这里。沙箱不放宽（无 same-origin、CSP connect-src 'none'），
+  // 能力在宿主侧代理；character/chatId 由客户端按自身会话绑定注入，iframe
+  // 无法寻址别的聊天。
+  if (method === 'POST' && route === 'helper') {
+    return handleHelperApi(req, res, db)
+  }
+
+  // 美化前端（AgentTavern 右栏展示面，2026-10-20）：native conversation 由宿主
+  // 渲染，消息里的完整 HTML 没有插件正文 slot。右栏 tab 只取「最新一条带完整
+  // HTML 的楼层」——面板按 5s 轮询，回传整份聊天在长聊天上会是 MB 级；这里在
+  // 服务端完成抽取，只传文档本身。displayTexts 与内联 transcript 同一展示层
+  // （markdownOnly regex 脚本），不另造一套文本。
+  if (method === 'GET' && route === 'frontend/latest') {
+    const state = await db.getState()
+    const character = url.searchParams.get('character') || state.activeCharacter
+    const chatId = url.searchParams.get('chatId')
+    if (!character) throw new Error('no active character')
+    if (!chatId) throw new Error('chatId query is required')
+    const snapshot = await db.getChatSnapshot(character, chatId)
+    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
+    const displays = await displayTexts(db, state, character, snapshot.chat)
+    const message = latestFrontendMessage(snapshot.chat.messages, (entry, index) => {
+      const display = displays?.[index]
+      return typeof display === 'string' ? display : entry.mes ?? ''
+    })
+    return sendJson(res, 200, {
+      ok: true,
+      revision: snapshot.revision,
+      messageCount: snapshot.chat.messages.length,
+      ...(message === undefined ? {} : { message }),
+    })
+  }
+
+  // One projected message's display text (AgentTavern native conversation
+  // cannot render the plugin transcript). The projector stores the save-layer
+  // text in the JSONL under extra.agentTavern.messageId; this lookup applies
+  // markdownOnly scripts on top so the native assistant row matches the ST
+  // display layer without transferring the whole chat.
+  if (method === 'GET' && route === 'display') {
+    const character = url.searchParams.get('character')
+    const chatId = url.searchParams.get('chatId')
+    const messageId = url.searchParams.get('messageId')
+    if (!character || !chatId || !messageId) throw new Error('character, chatId and messageId are required')
+    const snapshot = await db.getChatSnapshot(character, chatId)
+    if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
+    const index = snapshot.chat.messages.findIndex((message) => {
+      const extra = message.extra?.agentTavern
+      return typeof extra === 'object' && extra !== null && (extra as Record<string, unknown>).messageId === messageId
+    })
+    if (index < 0) return sendJson(res, 200, { ok: true, text: null })
+    const state = await db.getState()
+    const card = await db.getCharacter(character)
+    const scripts = collectRegexScripts(state, card)
+    return sendJson(res, 200, {
+      ok: true,
+      text: displayTextForMessage(scripts, snapshot.chat.messages[index]!, snapshot.chat.messages.length - 1 - index),
+    })
   }
 
   if (route.startsWith('chat/')) {

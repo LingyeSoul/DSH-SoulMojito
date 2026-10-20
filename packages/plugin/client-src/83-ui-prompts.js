@@ -252,7 +252,14 @@
                   checked: bootstrap.state.agentTavernAllowGlobalWrites === true,
                   onChange: (event) => applyPatch({ agentTavernAllowGlobalWrites: event.target.checked }),
                 }),
-                h('span', null, t('settings.allowGlobalWrites'))))
+                h('span', null, t('settings.allowGlobalWrites'))),
+              h('label', { className: 'dt-toggle' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: bootstrap.state.frontendAutoOpen === true,
+                  onChange: (event) => applyPatch({ frontendAutoOpen: event.target.checked }),
+                }),
+                h('span', null, t('settings.frontendAutoOpen'))))
             : null),
         error ? h('p', { className: 'dt-error' }, error) : null)
     }

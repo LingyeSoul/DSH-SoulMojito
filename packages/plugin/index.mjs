@@ -2502,6 +2502,7 @@ var DEFAULT_STATE = {
   defaultContextMode: "dsh-native",
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  frontendAutoOpen: false,
   gamesDisableResign: false,
   cardWorkbenchPresetEnabled: false,
   agentNovelPresetEnabled: false,
@@ -2662,6 +2663,16 @@ var TavernStore = class _TavernStore {
   /** 卡内嵌 regex_scripts 物化为全局脚本；脚本格式非法时整体跳过，不阻断角色导入。 */
   async importEmbeddedRegex(card) {
     const embedded = card.data.extensions["regex_scripts"];
+    if (embedded === void 0 || embedded === null) return 0;
+    try {
+      return await this.importRegexScripts(embedded);
+    } catch {
+      return 0;
+    }
+  }
+  /** 预设扩展袋里的 regex_scripts 物化为全局脚本；非法脚本整批跳过，不阻断预设导入。 */
+  async importEmbeddedPresetRegex(preset) {
+    const embedded = presetExtensions(preset)["regex_scripts"];
     if (embedded === void 0 || embedded === null) return 0;
     try {
       return await this.importRegexScripts(embedded);
@@ -2894,6 +2905,15 @@ var TavernStore = class _TavernStore {
   async putPreset(name2, preset) {
     await this.writeAtomic(path.join(this.root, "presets", `${safeFileName(name2)}.json`), jsonBytes(preset));
   }
+  /**
+   * 导入预设：原样落盘后把 `extensions.regex_scripts`（ST preset-scoped regex
+   * 的落盘位置）物化为全局脚本，按 scriptName 合并；脚本格式非法时整批跳过，
+   * 不阻断预设导入（与角色卡内嵌脚本同语义）。
+   */
+  async importPreset(name2, preset) {
+    await this.putPreset(name2, preset);
+    return { importedRegex: await this.importEmbeddedPresetRegex(preset) };
+  }
   async getPreset(name2) {
     const bytes = await this.tryRead(path.join(this.root, "presets", `${safeFileName(name2)}.json`));
     if (bytes === void 0) return void 0;
@@ -3068,9 +3088,8 @@ var TavernStore = class _TavernStore {
   async backfillRegexScriptsFromCharacters() {
     const names = await this.listCharacters();
     const known = new Set((await this.getState()).regexScripts.map((script) => script.scriptName));
+    const counters = { skipped: 0, invalid: 0 };
     const pending = [];
-    let skipped = 0;
-    let invalid = 0;
     for (const name2 of names) {
       let file;
       try {
@@ -3081,30 +3100,38 @@ var TavernStore = class _TavernStore {
       if (file === void 0) continue;
       const embedded = file.card.data.extensions["regex_scripts"];
       if (embedded === void 0 || embedded === null) continue;
-      let entries;
-      try {
-        entries = listRegexScriptEntries(embedded);
-      } catch {
-        invalid += 1;
-        continue;
-      }
-      entries.forEach((entry, index) => {
-        let script;
-        try {
-          script = parseRegexScript(entry, index);
-        } catch {
-          invalid += 1;
-          return;
-        }
-        if (known.has(script.scriptName)) {
-          skipped += 1;
-          return;
-        }
-        known.add(script.scriptName);
-        pending.push(script);
-      });
+      pending.push(...stageRegexBackfillEntries(embedded, known, counters));
     }
-    if (pending.length === 0) return { imported: 0, skipped, invalid, scanned: names.length };
+    return await this.commitRegexBackfill(pending, counters, names.length);
+  }
+  /**
+   * 从已导入预设回填 extensions.regex_scripts（ST preset-scoped regex 的落盘
+   * 位置）：同角色卡回填语义——只补缺、跨预设先到先得、单条容错、一次写盘。
+   */
+  async backfillRegexScriptsFromPresets() {
+    const names = await this.listPresets();
+    const known = new Set((await this.getState()).regexScripts.map((script) => script.scriptName));
+    const counters = { skipped: 0, invalid: 0 };
+    const pending = [];
+    for (const name2 of names) {
+      let preset;
+      try {
+        preset = await this.getPreset(name2);
+      } catch (cause) {
+        throw new Error(`failed to read preset '${name2}' for regex backfill: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+      }
+      if (preset === void 0) continue;
+      const embedded = presetExtensions(preset)["regex_scripts"];
+      if (embedded === void 0 || embedded === null) continue;
+      pending.push(...stageRegexBackfillEntries(embedded, known, counters));
+    }
+    return await this.commitRegexBackfill(pending, counters, names.length);
+  }
+  /** 回填收口：一次写盘，只追加状态里仍缺的 scriptName（并发导入时不重复）。 */
+  async commitRegexBackfill(pending, counters, scanned) {
+    if (pending.length === 0) {
+      return { imported: 0, skipped: counters.skipped, invalid: counters.invalid, scanned };
+    }
     let imported = 0;
     await this.updateState((current) => {
       const existing = new Set(current.regexScripts.map((script) => script.scriptName));
@@ -3116,7 +3143,7 @@ var TavernStore = class _TavernStore {
       imported = additions.length;
       return { regexScripts: [...current.regexScripts, ...additions] };
     });
-    return { imported, skipped: skipped + pending.length - imported, invalid, scanned: names.length };
+    return { imported, skipped: counters.skipped + pending.length - imported, invalid: counters.invalid, scanned };
   }
   /* ------------------------------ 内部 ------------------------------ */
   async readState() {
@@ -3133,6 +3160,7 @@ var TavernStore = class _TavernStore {
       defaultContextMode: parsed.defaultContextMode === "agent-managed" ? "agent-managed" : "dsh-native",
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      frontendAutoOpen: parsed.frontendAutoOpen === true,
       gamesDisableResign: parsed.gamesDisableResign === true,
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
       agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
@@ -3243,6 +3271,36 @@ function normalizeCompactionOverride(value) {
   if (typeof provider !== "string" || typeof model !== "string") return void 0;
   if (provider.trim() === "" || model.trim() === "") return void 0;
   return { curatorProvider: provider, curatorModel: model };
+}
+function presetExtensions(preset) {
+  const extensions = preset["extensions"];
+  return typeof extensions === "object" && extensions !== null && !Array.isArray(extensions) ? extensions : {};
+}
+function stageRegexBackfillEntries(embedded, known, counters) {
+  let entries;
+  try {
+    entries = listRegexScriptEntries(embedded);
+  } catch {
+    counters.invalid += 1;
+    return [];
+  }
+  const staged = [];
+  entries.forEach((entry, index) => {
+    let script;
+    try {
+      script = parseRegexScript(entry, index);
+    } catch {
+      counters.invalid += 1;
+      return;
+    }
+    if (known.has(script.scriptName)) {
+      counters.skipped += 1;
+      return;
+    }
+    known.add(script.scriptName);
+    staged.push(script);
+  });
+  return staged;
 }
 function mergeRegexScripts(current, imported) {
   const merged = [...current];
@@ -10819,7 +10877,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.7".trim() : "";
-  const commit = true ? normalizeCommit("ae0fb36") : void 0;
+  const commit = true ? normalizeCommit("159b5e5") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -20246,11 +20304,16 @@ async function characterLinkedWorlds(db, characterName) {
   const book = await db.getWorld(world.trim());
   return book ? [book.name] : [];
 }
+function displayTextForMessage(scripts, message, depth) {
+  const displayScripts = scripts.filter((script) => script.markdownOnly && !script.disabled);
+  const text = message.mes ?? "";
+  return displayScripts.length === 0 ? text : applyRegexScripts(text, displayScripts, RegexPlacement2.AI_OUTPUT, { expand: (value) => value }, { depth });
+}
 async function displayTexts(db, state, characterName, chat) {
   const character = await db.getCharacter(characterName);
-  const scripts = collectRegexScripts(state, character).filter((script) => script.markdownOnly && !script.disabled);
-  if (scripts.length === 0) return void 0;
-  return chat.messages.map((message, index) => applyRegexScripts(message.mes ?? "", scripts, RegexPlacement2.AI_OUTPUT, { expand: (t) => t }, { depth: chat.messages.length - 1 - index }));
+  const scripts = collectRegexScripts(state, character);
+  if (scripts.every((script) => !script.markdownOnly || script.disabled)) return void 0;
+  return chat.messages.map((message, index) => displayTextForMessage(scripts, message, chat.messages.length - 1 - index));
 }
 async function presetSamplerValue(db, state, key) {
   const presetName = state.activePreset;
@@ -21537,39 +21600,39 @@ function salvageManifestFields(raw) {
   };
 }
 function createModAssets(dbProvider) {
-  const requireString = (value, label) => {
+  const requireString2 = (value, label) => {
     if (typeof value !== "string" || value === "") throw new Error(`${label} is required`);
     return value;
   };
   return {
     listCharacters: async () => structuredClone(await (await dbProvider()).listCharacters()),
     getCharacter: async (name2) => {
-      const found = await (await dbProvider()).getCharacter(requireString(name2, "character name"));
+      const found = await (await dbProvider()).getCharacter(requireString2(name2, "character name"));
       return found === void 0 ? null : structuredClone({ kind: found.kind, card: { spec: found.card.spec, specVersion: found.card.specVersion, data: found.card.data } });
     },
     listWorlds: async () => structuredClone(await (await dbProvider()).listWorlds()),
     getWorld: async (name2) => {
-      const book = await (await dbProvider()).getWorld(requireString(name2, "world name"));
+      const book = await (await dbProvider()).getWorld(requireString2(name2, "world name"));
       return book === void 0 ? null : structuredClone(book);
     },
     listPresets: async () => structuredClone(await (await dbProvider()).listPresets()),
     getPreset: async (name2) => {
-      const preset = await (await dbProvider()).getPreset(requireString(name2, "preset name"));
+      const preset = await (await dbProvider()).getPreset(requireString2(name2, "preset name"));
       return preset === void 0 ? null : structuredClone(preset);
     },
     listPersonas: async () => structuredClone(await (await dbProvider()).listPersonas()),
     getPersona: async (name2) => {
-      const persona = await (await dbProvider()).getPersona(requireString(name2, "persona name"));
+      const persona = await (await dbProvider()).getPersona(requireString2(name2, "persona name"));
       return persona === void 0 ? null : structuredClone(persona);
     },
     listGroups: async () => structuredClone(await (await dbProvider()).listGroups()),
     getGroup: async (name2) => {
-      const group2 = await (await dbProvider()).getGroup(requireString(name2, "group name"));
+      const group2 = await (await dbProvider()).getGroup(requireString2(name2, "group name"));
       return group2 === void 0 ? null : structuredClone(group2);
     },
-    listChats: async (character) => structuredClone(await (await dbProvider()).listChats(requireString(character, "character name"))),
+    listChats: async (character) => structuredClone(await (await dbProvider()).listChats(requireString2(character, "character name"))),
     getChat: async (character, chatId) => {
-      const chat = await (await dbProvider()).getChat(requireString(character, "character name"), requireString(chatId, "chat id"));
+      const chat = await (await dbProvider()).getChat(requireString2(character, "character name"), requireString2(chatId, "chat id"));
       return chat === void 0 ? null : structuredClone(chat);
     }
   };
@@ -28427,6 +28490,41 @@ async function runCandidateGeneration(ctx, db, options) {
   return { items, generatedAt, revision };
 }
 
+// packages/plugin/src/frontend-documents.ts
+var FENCED_DOCUMENT = /```[^\n]*\n([\s\S]*?)```/gi;
+function isFrontendDocument(value) {
+  const text = typeof value === "string" ? value : "";
+  return /<!doctype\s+html\b/i.test(text) || /<html(?:\s[^>]*)?>/i.test(text) && /<(?:head|body)(?:\s[^>]*)?>/i.test(text) || /<(?:head|body)(?:\s[^>]*)?>/i.test(text);
+}
+function extractFrontendDocuments(value) {
+  const text = typeof value === "string" ? value : "";
+  const documents = [];
+  FENCED_DOCUMENT.lastIndex = 0;
+  let match;
+  while ((match = FENCED_DOCUMENT.exec(text)) !== null) {
+    const candidate = match[1].trim();
+    if (isFrontendDocument(candidate)) documents.push(candidate);
+  }
+  if (documents.length > 0) return documents;
+  const raw = text.trim();
+  return isFrontendDocument(raw) ? [raw] : [];
+}
+function latestFrontendMessage(messages, render) {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message === void 0 || message.is_system === true) continue;
+    const documents = extractFrontendDocuments(render(message, index));
+    if (documents.length === 0) continue;
+    return {
+      index,
+      name: typeof message.name === "string" ? message.name : "",
+      isUser: message.is_user === true,
+      documents
+    };
+  }
+  return void 0;
+}
+
 // packages/plugin/src/games/http.ts
 var GAMES_INSTALL_BODY_MAX_BYTES = 8 * 1024 * 1024;
 function isGamesRoute(route) {
@@ -28544,6 +28642,468 @@ async function handleGamesApi(options) {
     return notFound();
   } catch (cause) {
     sendError(res, cause);
+  }
+}
+
+// packages/plugin/src/helper.ts
+var VARIABLE_NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
+async function handleHelperApi(req, res, db) {
+  const body = await readJson(req, 8 * 1024 * 1024);
+  const op = typeof body?.op === "string" ? body.op : "";
+  const character = requireString(body?.character, "character");
+  const chatId = typeof body?.chatId === "string" ? body.chatId : "";
+  const state = await db.getState();
+  switch (op) {
+    case "snapshot":
+      return sendJson(res, 200, { ok: true, value: await buildSnapshot(db, state, character, chatId) });
+    case "variables.replace":
+      return sendJson(res, 200, {
+        ok: true,
+        value: await replaceVariables(db, state, character, chatId, body)
+      });
+    case "messages.get":
+      return sendJson(res, 200, { ok: true, value: await getMessages(db, character, chatId, body) });
+    case "messages.set":
+      return sendJson(res, 200, {
+        ok: true,
+        value: await mutateMessages(db, character, chatId, "set", body)
+      });
+    case "messages.create":
+      return sendJson(res, 200, {
+        ok: true,
+        value: await mutateMessages(db, character, chatId, "create", body)
+      });
+    case "messages.delete":
+      return sendJson(res, 200, {
+        ok: true,
+        value: await mutateMessages(db, character, chatId, "delete", body)
+      });
+    case "slash":
+      return sendJson(res, 200, {
+        ok: true,
+        value: await runHelperSlash(db, state, character, chatId, requireString(body?.command, "command"))
+      });
+    case "character.list":
+      return sendJson(res, 200, { ok: true, value: { names: await db.listCharacters() } });
+    case "lorebook.list":
+      return sendJson(res, 200, {
+        ok: true,
+        value: { names: await db.listWorlds(), active: state.activeWorlds }
+      });
+    case "lorebook.get": {
+      const name2 = typeof body?.name === "string" && body.name.trim() !== "" ? body.name.trim() : await defaultLorebookName(db, state, character);
+      if (name2 === void 0) throw new Error("no active lorebook");
+      const book = await db.getWorld(name2);
+      if (book === void 0) throw new Error(`lorebook '${name2}' not found`);
+      return sendJson(res, 200, {
+        ok: true,
+        value: { name: name2, entries: book.entries.map((entry) => ({ world: name2, ...entry })) }
+      });
+    }
+    case "regex.get":
+      return sendJson(res, 200, { ok: true, value: { scripts: state.regexScripts } });
+    case "regex.format": {
+      const text = typeof body?.text === "string" ? body.text : "";
+      const placement = typeof body?.placement === "number" ? body.placement : 2;
+      const provided = Array.isArray(body?.scripts) ? parseRegexScripts2(body.scripts) : void 0;
+      const scripts = (provided ?? state.regexScripts).filter((script) => !script.disabled);
+      return sendJson(res, 200, {
+        ok: true,
+        value: {
+          text: applyRegexScripts(text, scripts, placement, { expand: (value) => value }, {
+            ...typeof body?.depth === "number" ? { depth: body.depth } : {}
+          })
+        }
+      });
+    }
+    default:
+      throw new Error(`unsupported helper op '${op}'`);
+  }
+}
+async function buildSnapshot(db, state, character, chatId) {
+  const file = await db.getCharacter(character);
+  if (chatId === "") {
+    return {
+      characterName: character,
+      userName: state.activePersona ?? DEFAULT_USER,
+      personaDescription: "",
+      chatId: "",
+      chatMetadata: {},
+      messages: [],
+      messageCount: 0,
+      lastMessageId: -1,
+      variables: {
+        global: cloneJson(plainObject3(state.scriptGlobals) ?? {}),
+        chat: {},
+        message: {},
+        character: cloneJson(plainObject3(file?.card.data.extensions?.["variables"]) ?? {})
+      },
+      characterData: file?.card.data ?? null,
+      avatar: avatarPath(character)
+    };
+  }
+  const snapshot2 = await db.getChatSnapshot(character, chatId);
+  if (snapshot2 === void 0) throw new Error(`chat '${chatId}' not found`);
+  const chat = snapshot2.chat;
+  const chatVariables2 = await readChatScope(db, chat, chatId);
+  const lastIndex = chat.messages.length - 1;
+  const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
+  return {
+    characterName: character,
+    userName: state.activePersona ?? DEFAULT_USER,
+    personaDescription: persona?.description ?? "",
+    chatId,
+    chatMetadata: chat.header.chat_metadata ?? {},
+    messages: chat.messages.map((message, index) => toJsrMessage(message, index)),
+    messageCount: chat.messages.length,
+    lastMessageId: lastIndex,
+    variables: {
+      global: cloneJson(plainObject3(state.scriptGlobals) ?? {}),
+      chat: cloneJson(chatVariables2),
+      message: lastIndex >= 0 ? cloneJson(readMessageVariables(chat.messages[lastIndex])) : {},
+      character: cloneJson(plainObject3(file?.card.data.extensions?.["variables"]) ?? {})
+    },
+    characterData: file?.card.data ?? null,
+    avatar: avatarPath(character)
+  };
+}
+function avatarPath(character) {
+  return `/api/dsh-soulmojito/avatar/${encodeURIComponent(character)}`;
+}
+async function readChatScope(db, chat, chatId) {
+  const base = readChatVariables(chat);
+  const bound = await isAgentTavernBound(db, chatId);
+  if (!bound) return base;
+  const scoped = await (await variables()).listAll("chat", chatId);
+  return overlayScopedVariables(base, scoped);
+}
+async function replaceVariables(db, state, character, chatId, body) {
+  const scope = requireVariableScope(body?.scope);
+  const tree = requireObject(body?.variables, "variables");
+  if (scope === "global") {
+    await db.updateState(() => ({ scriptGlobals: tree }));
+    return tree;
+  }
+  if (scope === "chat") {
+    const snapshot2 = await requireChat(db, character, chatId);
+    const chat = snapshot2.chat;
+    if (Object.keys(tree).length > 0) chat.header.chat_metadata.variables = tree;
+    else delete chat.header.chat_metadata.variables;
+    await persistChat(db, character, chatId, chat, snapshot2.revision);
+    if (await isAgentTavernBound(db, chatId)) await mirrorChatScope(chatId, tree);
+    return tree;
+  }
+  if (scope === "message") {
+    const snapshot2 = await requireChat(db, character, chatId);
+    const index = resolveMessageId(snapshot2.chat.messages, body?.messageId);
+    const message = snapshot2.chat.messages[index];
+    message.variables = tree;
+    await persistChat(db, character, chatId, snapshot2.chat, snapshot2.revision);
+    return tree;
+  }
+  throw new Error("character variables are read-only in DSH-SoulMojito");
+}
+async function mirrorChatScope(chatId, tree) {
+  const store5 = await variables();
+  const leaves = flattenVariableTree(tree).filter((leaf) => VARIABLE_NAME.test(leaf.name));
+  const nextNames = new Set(leaves.map((leaf) => leaf.name));
+  for (const entry of await store5.listAll("chat", chatId)) {
+    if (nextNames.has(entry.name) || entry.name.startsWith("$")) continue;
+    await store5.delete("chat", chatId, entry.name);
+  }
+  if (leaves.length > 0) {
+    await store5.patch("chat", chatId, leaves.map((leaf) => ({ name: leaf.name, value: leaf.value })));
+  }
+}
+function flattenVariableTree(value, prefix = "", out = []) {
+  for (const [key, entry] of Object.entries(value)) {
+    const name2 = prefix === "" ? key : `${prefix}.${key}`;
+    if (isPlainObject3(entry)) flattenVariableTree(entry, name2, out);
+    else out.push({ name: name2, value: entry });
+  }
+  return out;
+}
+async function isAgentTavernBound(db, chatId) {
+  const state = await db.getState();
+  return Object.values(state.sessionBindings).some((binding) => binding.architecture === "agent-tavern" && binding.chatId === chatId);
+}
+async function defaultLorebookName(db, state, character) {
+  const file = await db.getCharacter(character);
+  const world = file?.card.data.extensions?.["world"];
+  const linked = typeof world === "string" && world.trim() !== "" ? world.trim() : void 0;
+  return linked ?? state.activeWorlds[0];
+}
+async function getMessages(db, character, chatId, body) {
+  const snapshot2 = await requireChat(db, character, chatId);
+  const range = parseRange2(body?.range, snapshot2.chat.messages.length - 1);
+  const role = typeof body?.role === "string" ? body.role : "all";
+  const hideState = typeof body?.hideState === "string" ? body.hideState : "all";
+  const includeSwipes = body?.includeSwipes === true;
+  const messages = [];
+  for (let index = range[0]; index <= range[1]; index++) {
+    const message = snapshot2.chat.messages[index];
+    if (message === void 0) continue;
+    if (role !== "all" && role !== messageRole(message)) continue;
+    if (hideState === "hidden" && !isHidden(message)) continue;
+    if (hideState === "unhidden" && isHidden(message)) continue;
+    messages.push(includeSwipes ? toJsrSwiped(message, index) : toJsrMessage(message, index));
+  }
+  return messages;
+}
+async function mutateMessages(db, character, chatId, action, body) {
+  const snapshot2 = await requireChat(db, character, chatId);
+  const chat = snapshot2.chat;
+  const state = await db.getState();
+  if (action === "set") {
+    const updates = requireArray(body?.messages, "messages");
+    for (const raw of updates) {
+      const update = requireObject(raw, "messages[]");
+      const index = resolveMessageId(chat.messages, update.message_id);
+      applyMessageUpdate(chat.messages[index], update);
+    }
+  } else if (action === "create") {
+    const entries = requireArray(body?.messages, "messages");
+    const at = body?.insertBefore === "end" || body.insertBefore === void 0 ? chat.messages.length : normalizeInsertIndex(chat.messages.length, body.insertBefore);
+    const created = entries.map((raw) => toCreatedMessage(requireObject(raw, "messages[]"), state.activePersona ?? DEFAULT_USER, character));
+    chat.messages.splice(at, 0, ...created);
+  } else {
+    const ids = requireArray(body?.messageIds, "messageIds");
+    const indexes = [...new Set(ids.map((id) => resolveMessageId(chat.messages, id)))].sort((a, b) => b - a);
+    for (const index of indexes) chat.messages.splice(index, 1);
+  }
+  const revision = await persistChat(db, character, chatId, chat, snapshot2.revision);
+  return {
+    revision,
+    messageCount: chat.messages.length,
+    lastMessageId: chat.messages.length - 1,
+    messages: chat.messages.map((message, index) => toJsrMessage(message, index)),
+    variables: { chat: cloneJson(readChatVariables(chat)) }
+  };
+}
+async function persistChat(db, character, chatId, chat, revision) {
+  const next = await db.saveChat(character, chatId, chat, revision);
+  await emitChatSaved(character, chatId, next, chat.messages.length);
+  return next;
+}
+async function requireChat(db, character, chatId) {
+  if (chatId === "") throw new Error("chatId is required");
+  const snapshot2 = await db.getChatSnapshot(character, chatId);
+  if (snapshot2 === void 0) throw new Error(`chat '${chatId}' not found`);
+  return snapshot2;
+}
+function messageRole(message) {
+  if (message.is_system === true) return "system";
+  return message.is_user === true ? "user" : "assistant";
+}
+function isHidden(message) {
+  return message.is_hidden === true || plainObject3(message.extra)?.["is_hidden"] === true;
+}
+function toJsrMessage(message, index) {
+  const extra = plainObject3(message.extra) ?? {};
+  return {
+    message_id: index,
+    name: typeof message.name === "string" ? message.name : "",
+    role: messageRole(message),
+    is_hidden: isHidden(message),
+    message: typeof message.mes === "string" ? message.mes : "",
+    data: cloneJson(plainObject3(message.variables) ?? extra),
+    extra: cloneJson(extra)
+  };
+}
+function toJsrSwiped(message, index) {
+  const swipes = Array.isArray(message.swipes) && message.swipes.length > 0 ? message.swipes.map((swipe) => String(swipe)) : [typeof message.mes === "string" ? message.mes : ""];
+  const swipeInfo = Array.isArray(message.swipe_info) ? message.swipe_info : [];
+  return {
+    ...toJsrMessage(message, index),
+    swipe_id: typeof message.swipe_id === "number" ? message.swipe_id : 0,
+    swipes,
+    swipes_data: swipes.map((_, swipeIndex) => {
+      const info = plainObject3(swipeInfo[swipeIndex]);
+      return cloneJson(plainObject3(info?.["extra"]) ?? {});
+    }),
+    swipes_info: cloneJson(swipeInfo)
+  };
+}
+function readMessageVariables(message) {
+  return plainObject3(message.variables) ?? plainObject3(plainObject3(message.extra)?.["variables"]) ?? {};
+}
+function resolveMessageId(messages, value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("message_id must be a finite number");
+  const index = value < 0 ? messages.length + value : value;
+  if (!Number.isInteger(index) || index < 0 || index >= messages.length) {
+    throw new Error(`message_id ${value} is out of range (chat has ${messages.length} messages)`);
+  }
+  return index;
+}
+function normalizeInsertIndex(length, value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error('insert_before must be a finite number or "end"');
+  const index = value < 0 ? length + value : value;
+  if (!Number.isInteger(index) || index < 0 || index > length) throw new Error(`insert_before ${value} is out of range`);
+  return index;
+}
+function parseRange2(range, lastMessageId) {
+  if (typeof range === "number") {
+    const index = range < 0 ? lastMessageId + 1 + range : range;
+    return [index, index];
+  }
+  if (typeof range !== "string") throw new Error('range must be a number or a string like "0-10"');
+  const resolved = range.replace(/\{\{\s*lastMessageId\s*\}\}/gi, String(lastMessageId)).replace(/\{\{\s*lastMessage\s*\}\}/gi, String(lastMessageId)).trim();
+  const match = /^(-?\d+)\s*(?:-\s*(-?\d+)?)?$/.exec(resolved);
+  if (match === null) throw new Error(`unsupported message range '${range}'`);
+  const toIndex = (raw) => {
+    const value = Number(raw);
+    return value < 0 ? lastMessageId + 1 + value : value;
+  };
+  const start = toIndex(match[1]);
+  const end = match[2] === void 0 ? start : toIndex(match[2]);
+  return [Math.max(0, Math.min(start, end)), Math.min(lastMessageId, Math.max(start, end))];
+}
+function applyMessageUpdate(message, update) {
+  if (typeof update.message === "string") message.mes = update.message;
+  if (typeof update.name === "string") message.name = update.name;
+  if (update.role === "system" || update.role === "assistant" || update.role === "user") {
+    message.is_system = update.role === "system";
+    message.is_user = update.role === "user";
+  }
+  if (typeof update.is_hidden === "boolean") message.is_hidden = update.is_hidden;
+  const data = plainObject3(update.data);
+  const extra = plainObject3(update.extra);
+  if (data !== void 0) message.variables = cloneJson(data);
+  if (extra !== void 0) message.extra = { ...plainObject3(message.extra) ?? {}, ...cloneJson(extra) };
+  if (Array.isArray(update.swipes)) {
+    const swipes = update.swipes.map((swipe) => String(swipe));
+    message.swipes = swipes;
+    const swipeId = typeof update.swipe_id === "number" ? update.swipe_id : typeof message.swipe_id === "number" ? message.swipe_id : 0;
+    const clamped = Math.max(0, Math.min(Math.trunc(swipeId), swipes.length - 1));
+    message.swipe_id = clamped;
+    message.mes = swipes[clamped];
+  } else if (typeof update.swipe_id === "number" && Array.isArray(message.swipes) && message.swipes.length > 0) {
+    const clamped = Math.max(0, Math.min(Math.trunc(update.swipe_id), message.swipes.length - 1));
+    message.swipe_id = clamped;
+    message.mes = String(message.swipes[clamped] ?? message.mes ?? "");
+  }
+  if (Array.isArray(update.swipes_info)) message.swipe_info = cloneJson(update.swipes_info);
+}
+function toCreatedMessage(entry, userName, characterName) {
+  const role = entry.role === "system" || entry.role === "user" ? entry.role : "assistant";
+  const name2 = typeof entry.name === "string" && entry.name !== "" ? entry.name : role === "user" ? userName : role === "system" ? "System" : characterName;
+  const extra = { ...plainObject3(entry.data) ?? {}, ...plainObject3(entry.extra) ?? {} };
+  return {
+    name: name2,
+    is_user: role === "user",
+    is_system: role === "system",
+    send_date: (/* @__PURE__ */ new Date()).toISOString(),
+    mes: typeof entry.message === "string" ? entry.message : "",
+    ...Object.keys(extra).length > 0 ? { extra } : {},
+    ...entry.is_hidden === true ? { is_hidden: true } : {}
+  };
+}
+async function runHelperSlash(db, state, character, chatId, command) {
+  const snapshot2 = await requireChat(db, character, chatId);
+  const chat = snapshot2.chat;
+  let revision = snapshot2.revision;
+  const file = await db.getCharacter(character);
+  const macros = createMacroEngine({
+    char: file?.card.data.nickname || file?.card.data.name || character,
+    user: state.activePersona ?? DEFAULT_USER,
+    persona: state.activePersona ? (await db.getPersona(state.activePersona))?.description : void 0,
+    lastMessage: chat.messages[chat.messages.length - 1]?.mes,
+    lastUserMessage: [...chat.messages].reverse().find((message) => message.is_user)?.mes,
+    lastCharMessage: [...chat.messages].reverse().find((message) => !message.is_user && !message.is_system)?.mes,
+    lastMessageId: chat.messages.length - 1,
+    chatId,
+    local: scalarVariables(readChatVariables(chat)),
+    global: scalarVariables(plainObject3(state.scriptGlobals) ?? {})
+  });
+  let chatChanged = false;
+  const persist = async () => {
+    chatChanged = true;
+    const local2 = macros.snapshotVars().local;
+    if (Object.keys(local2).length > 0) chat.header.chat_metadata.variables = { ...readChatVariables(chat), ...local2 };
+    revision = await persistChat(db, character, chatId, chat, revision);
+  };
+  const result = await runScript(command, {
+    expand: (text) => macros.expand(text),
+    getVar: (name2) => macros.getVar(name2),
+    setVar: (name2, value) => {
+      macros.setVar(name2, value);
+    },
+    deleteVar: (name2) => macros.deleteVar(name2),
+    getGlobalVar: (name2) => macros.getGlobalVar(name2),
+    setGlobalVar: (name2, value) => {
+      macros.setGlobalVar(name2, value);
+    },
+    deleteGlobalVar: (name2) => macros.deleteGlobalVar(name2),
+    send: async (text) => {
+      const trimmed = text.trim();
+      if (trimmed === "") return;
+      chat.messages.push({
+        name: state.activePersona ?? DEFAULT_USER,
+        is_user: true,
+        is_system: false,
+        send_date: (/* @__PURE__ */ new Date()).toISOString(),
+        mes: trimmed
+      });
+      await persist();
+    },
+    cut: async (from, to) => {
+      const total = chat.messages.length;
+      const start = from < 0 ? total + from : from;
+      const end = (to < 0 ? total + to : to) + 1;
+      chat.messages.splice(Math.max(0, start), Math.max(0, end - Math.max(0, start)));
+      await persist();
+    },
+    echo: () => {
+    },
+    applyRegex: (scriptName, text) => {
+      const script = collectRegexScripts(state, file).find((candidate) => candidate.scriptName.toLowerCase() === scriptName.toLowerCase());
+      if (script === void 0) return text;
+      return applyRegexScript(text, script, RegexPlacement2.SLASH_COMMAND, { expand: (t) => macros.expand(t) }) ?? text;
+    }
+  });
+  await db.updateState(() => ({ scriptGlobals: macros.snapshotVars().global }));
+  const local = macros.snapshotVars().local;
+  const currentVariables = readChatVariables(chat);
+  const merged = { ...currentVariables, ...local };
+  const variablesDirty = JSON.stringify(merged) !== JSON.stringify(currentVariables);
+  if (variablesDirty) {
+    chat.header.chat_metadata.variables = merged;
+    revision = await persistChat(db, character, chatId, chat, revision);
+  } else if (chatChanged) {
+    await persistChat(db, character, chatId, chat, revision);
+  }
+  return { output: result.output, chatChanged: result.chatChanged || chatChanged || variablesDirty };
+}
+function scalarVariables(tree) {
+  return Object.fromEntries(Object.entries(tree).filter(([, value]) => typeof value === "string" || typeof value === "number" || typeof value === "boolean"));
+}
+function requireVariableScope(value) {
+  if (value === "global" || value === "chat" || value === "message" || value === "character") return value;
+  throw new Error(`unsupported variable scope '${String(value)}' (supported: global, chat, message, character)`);
+}
+function requireString(value, label) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error(`${label} is required`);
+  return value;
+}
+function requireArray(value, label) {
+  if (!Array.isArray(value) || value.length === 0) throw new Error(`${label} must be a non-empty array`);
+  return value;
+}
+function requireObject(value, label) {
+  if (!isPlainObject3(value)) throw new Error(`${label} must be an object`);
+  return cloneJson(value);
+}
+function isPlainObject3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function plainObject3(value) {
+  return isPlainObject3(value) ? value : void 0;
+}
+function cloneJson(value) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    throw new Error("value is not JSON-serializable");
   }
 }
 
@@ -33399,6 +33959,9 @@ async function handleApi(ctx, req, res) {
       ...body.defaultContextMode === "dsh-native" || body.defaultContextMode === "agent-managed" ? { defaultContextMode: body.defaultContextMode } : {},
       ...typeof body.agentTavernPreloadAssets === "boolean" ? { agentTavernPreloadAssets: body.agentTavernPreloadAssets } : {},
       ...typeof body.agentTavernAllowGlobalWrites === "boolean" ? { agentTavernAllowGlobalWrites: body.agentTavernAllowGlobalWrites } : {},
+      // 美化前端右栏 tab 自动展开（2026-10-20 用户需求）：翻转即时生效——
+      // 客户端 watcher 每次扫描都读 bootstrap.state，无需写穿。
+      ...typeof body.frontendAutoOpen === "boolean" ? { frontendAutoOpen: body.frontendAutoOpen } : {},
       // 禁用游戏投降（2026-10-14 用户需求）：翻转即时生效——服务层在两个动作
       // 入口（人类棋盘 / Agent game_move）逐次读取判定，无缓存需写穿。
       ...typeof body.gamesDisableResign === "boolean" ? { gamesDisableResign: body.gamesDisableResign } : {},
@@ -33450,10 +34013,10 @@ async function handleApi(ctx, req, res) {
     const body = await readJson(req);
     if (typeof body.name !== "string" || !body.data || typeof body.data !== "object") throw new Error("expected { name, data }");
     parsePresetOrThrow(body.data);
-    await db.putPreset(body.name, body.data);
+    const result = await db.importPreset(body.name, body.data);
     await emitAssetsSaved("preset", body.name);
     await emitAgentPresetChanged();
-    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data) });
+    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data), importedRegex: result.importedRegex });
   }
   if (method === "GET" && route.startsWith("preset/")) {
     const name2 = decodeURIComponent(route.slice("preset/".length));
@@ -33654,13 +34217,13 @@ async function handleApi(ctx, req, res) {
       const group2 = await db.getGroup(body.group);
       if (!group2) throw new Error(`group '${body.group}' not found`);
       const enabled = group2.members.filter((member) => !group2.disabledMembers.includes(member));
-      const greetings = [];
+      const greetings2 = [];
       for (const member of enabled) {
         const file = await db.getCharacter(member);
         const only = Array.isArray(file?.card.data.groupOnlyGreetings) ? file.card.data.groupOnlyGreetings : [];
         const text = only[0];
         if (typeof text === "string" && text.trim() !== "") {
-          greetings.push({ name: member, is_user: false, is_system: false, send_date: now, mes: text });
+          greetings2.push({ name: member, is_user: false, is_system: false, send_date: now, mes: text });
         }
       }
       const id2 = await db.createChat(body.group, {
@@ -33671,7 +34234,7 @@ async function handleApi(ctx, req, res) {
           createdAt: now,
           timedWorldInfo: {}
         }
-      }, greetings);
+      }, greetings2);
       const snapshot3 = await db.getChatSnapshot(body.group, id2);
       return sendJson(res, 200, { ok: true, id: id2, group: body.group, chat: snapshot3?.chat, revision: snapshot3?.revision });
     }
@@ -33686,6 +34249,11 @@ async function handleApi(ctx, req, res) {
       if (typeof initial !== "object" || initial === null || Array.isArray(initial) || Object.keys(initial).length === 0) return void 0;
       return structuredClone(initial);
     })();
+    const greetings = [found.card.data.firstMes, ...found.card.data.alternateGreetings];
+    const greetingIndex = body.greetingIndex === void 0 ? 0 : body.greetingIndex;
+    if (!Number.isSafeInteger(greetingIndex) || greetingIndex < 0 || greetingIndex >= greetings.length) {
+      throw new Error(`greetingIndex must be an integer in [0, ${greetings.length - 1}]`);
+    }
     const id = await db.createChat(character, {
       user_name: "unused",
       character_name: "unused",
@@ -33695,10 +34263,10 @@ async function handleApi(ctx, req, res) {
       is_user: false,
       is_system: false,
       send_date: now,
-      mes: found.card.data.firstMes,
-      swipe_id: 0,
-      swipes: [found.card.data.firstMes, ...found.card.data.alternateGreetings],
-      swipe_info: [{ send_date: now }, ...found.card.data.alternateGreetings.map(() => ({ send_date: now }))]
+      mes: greetings[greetingIndex],
+      swipe_id: greetingIndex,
+      swipes: greetings,
+      swipe_info: greetings.map(() => ({ send_date: now }))
     }]);
     const snapshot2 = await db.getChatSnapshot(character, id);
     return sendJson(res, 200, { ok: true, id, chat: snapshot2?.chat, revision: snapshot2?.revision });
@@ -33887,6 +34455,54 @@ async function handleApi(ctx, req, res) {
     const result = await db.backfillRegexScriptsFromCharacters();
     const state = await db.getState();
     return sendJson(res, 200, { ok: true, ...result, scripts: state.regexScripts });
+  }
+  if (method === "POST" && route === "regex/sync-presets") {
+    const result = await db.backfillRegexScriptsFromPresets();
+    const state = await db.getState();
+    return sendJson(res, 200, { ok: true, ...result, scripts: state.regexScripts });
+  }
+  if (method === "POST" && route === "helper") {
+    return handleHelperApi(req, res, db);
+  }
+  if (method === "GET" && route === "frontend/latest") {
+    const state = await db.getState();
+    const character = url.searchParams.get("character") || state.activeCharacter;
+    const chatId = url.searchParams.get("chatId");
+    if (!character) throw new Error("no active character");
+    if (!chatId) throw new Error("chatId query is required");
+    const snapshot2 = await db.getChatSnapshot(character, chatId);
+    if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
+    const displays = await displayTexts(db, state, character, snapshot2.chat);
+    const message = latestFrontendMessage(snapshot2.chat.messages, (entry, index) => {
+      const display = displays?.[index];
+      return typeof display === "string" ? display : entry.mes ?? "";
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      revision: snapshot2.revision,
+      messageCount: snapshot2.chat.messages.length,
+      ...message === void 0 ? {} : { message }
+    });
+  }
+  if (method === "GET" && route === "display") {
+    const character = url.searchParams.get("character");
+    const chatId = url.searchParams.get("chatId");
+    const messageId = url.searchParams.get("messageId");
+    if (!character || !chatId || !messageId) throw new Error("character, chatId and messageId are required");
+    const snapshot2 = await db.getChatSnapshot(character, chatId);
+    if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
+    const index = snapshot2.chat.messages.findIndex((message) => {
+      const extra = message.extra?.agentTavern;
+      return typeof extra === "object" && extra !== null && extra.messageId === messageId;
+    });
+    if (index < 0) return sendJson(res, 200, { ok: true, text: null });
+    const state = await db.getState();
+    const card = await db.getCharacter(character);
+    const scripts = collectRegexScripts(state, card);
+    return sendJson(res, 200, {
+      ok: true,
+      text: displayTextForMessage(scripts, snapshot2.chat.messages[index], snapshot2.chat.messages.length - 1 - index)
+    });
   }
   if (route.startsWith("chat/")) {
     const chatId = decodeURIComponent(route.slice("chat/".length));

@@ -114,6 +114,13 @@ export interface TavernState {
   agentTavernPreloadAssets: boolean
   /** 允许 AgentTavern 工具写入 global 作用域的记忆/变量；默认关闭。 */
   agentTavernAllowGlobalWrites: boolean
+  /**
+   * 美化前端右栏 tab 的自动展开（2026-10-20 用户需求「自动展开 tab 做成设置
+   * 开关」）：开启时本聊天出现完整 HTML 楼层即自动打开 tab（每聊天一次，
+   * 用户关掉后不抢焦点）；关闭时只经标题栏按钮/右栏「+」手动进入。默认关闭，
+   * 与「不打断写作」的默认纪律一致。
+   */
+  frontendAutoOpen: boolean
   /** 禁用游戏投降（2026-10-14 用户需求；面板「游戏」分区开关）：开启后两个
    *  动作入口（人类棋盘/Agent game_move）对 {type:'resign'} 一律拒绝；默认关闭
    *  （投降可用，与既有行为一致）。 */
@@ -274,6 +281,7 @@ const DEFAULT_STATE: TavernState = {
   defaultContextMode: 'dsh-native',
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
+  frontendAutoOpen: false,
   gamesDisableResign: false,
   cardWorkbenchPresetEnabled: false,
   agentNovelPresetEnabled: false,
@@ -470,6 +478,17 @@ export class TavernStore {
   /** 卡内嵌 regex_scripts 物化为全局脚本；脚本格式非法时整体跳过，不阻断角色导入。 */
   private async importEmbeddedRegex(card: CharacterCardIR): Promise<number> {
     const embedded = card.data.extensions['regex_scripts']
+    if (embedded === undefined || embedded === null) return 0
+    try {
+      return await this.importRegexScripts(embedded)
+    } catch {
+      return 0
+    }
+  }
+
+  /** 预设扩展袋里的 regex_scripts 物化为全局脚本；非法脚本整批跳过，不阻断预设导入。 */
+  private async importEmbeddedPresetRegex(preset: Record<string, unknown>): Promise<number> {
+    const embedded = presetExtensions(preset)['regex_scripts']
     if (embedded === undefined || embedded === null) return 0
     try {
       return await this.importRegexScripts(embedded)
@@ -743,6 +762,16 @@ export class TavernStore {
     await this.writeAtomic(path.join(this.root, 'presets', `${safeFileName(name)}.json`), jsonBytes(preset))
   }
 
+  /**
+   * 导入预设：原样落盘后把 `extensions.regex_scripts`（ST preset-scoped regex
+   * 的落盘位置）物化为全局脚本，按 scriptName 合并；脚本格式非法时整批跳过，
+   * 不阻断预设导入（与角色卡内嵌脚本同语义）。
+   */
+  async importPreset(name: string, preset: Record<string, unknown>): Promise<{ importedRegex: number }> {
+    await this.putPreset(name, preset)
+    return { importedRegex: await this.importEmbeddedPresetRegex(preset) }
+  }
+
   async getPreset(name: string): Promise<Record<string, unknown> | undefined> {
     const bytes = await this.tryRead(path.join(this.root, 'presets', `${safeFileName(name)}.json`))
     if (bytes === undefined) return undefined
@@ -950,17 +979,11 @@ export class TavernStore {
    * 只补全局列表缺少的 scriptName，已存在的脚本保持原样；同名跨卡按角色名
    * 排序先到先得；单条非法只跳过该条。返回本次扫描与写入计数。
    */
-  async backfillRegexScriptsFromCharacters(): Promise<{
-    imported: number
-    skipped: number
-    invalid: number
-    scanned: number
-  }> {
+  async backfillRegexScriptsFromCharacters(): Promise<RegexBackfillReceipt> {
     const names = await this.listCharacters()
     const known = new Set((await this.getState()).regexScripts.map((script) => script.scriptName))
+    const counters: RegexBackfillCounters = { skipped: 0, invalid: 0 }
     const pending: RegexScriptIR[] = []
-    let skipped = 0
-    let invalid = 0
     for (const name of names) {
       let file: CharacterFile | undefined
       try {
@@ -971,30 +994,44 @@ export class TavernStore {
       if (file === undefined) continue
       const embedded = file.card.data.extensions['regex_scripts']
       if (embedded === undefined || embedded === null) continue
-      let entries: unknown[]
-      try {
-        entries = listRegexScriptEntries(embedded)
-      } catch {
-        invalid += 1
-        continue
-      }
-      entries.forEach((entry, index) => {
-        let script: RegexScriptIR
-        try {
-          script = parseRegexScript(entry, index)
-        } catch {
-          invalid += 1
-          return
-        }
-        if (known.has(script.scriptName)) {
-          skipped += 1
-          return
-        }
-        known.add(script.scriptName)
-        pending.push(script)
-      })
+      pending.push(...stageRegexBackfillEntries(embedded, known, counters))
     }
-    if (pending.length === 0) return { imported: 0, skipped, invalid, scanned: names.length }
+    return await this.commitRegexBackfill(pending, counters, names.length)
+  }
+
+  /**
+   * 从已导入预设回填 extensions.regex_scripts（ST preset-scoped regex 的落盘
+   * 位置）：同角色卡回填语义——只补缺、跨预设先到先得、单条容错、一次写盘。
+   */
+  async backfillRegexScriptsFromPresets(): Promise<RegexBackfillReceipt> {
+    const names = await this.listPresets()
+    const known = new Set((await this.getState()).regexScripts.map((script) => script.scriptName))
+    const counters: RegexBackfillCounters = { skipped: 0, invalid: 0 }
+    const pending: RegexScriptIR[] = []
+    for (const name of names) {
+      let preset: Record<string, unknown> | undefined
+      try {
+        preset = await this.getPreset(name)
+      } catch (cause) {
+        throw new Error(`failed to read preset '${name}' for regex backfill: ${cause instanceof Error ? cause.message : String(cause)}`, { cause })
+      }
+      if (preset === undefined) continue
+      const embedded = presetExtensions(preset)['regex_scripts']
+      if (embedded === undefined || embedded === null) continue
+      pending.push(...stageRegexBackfillEntries(embedded, known, counters))
+    }
+    return await this.commitRegexBackfill(pending, counters, names.length)
+  }
+
+  /** 回填收口：一次写盘，只追加状态里仍缺的 scriptName（并发导入时不重复）。 */
+  private async commitRegexBackfill(
+    pending: RegexScriptIR[],
+    counters: RegexBackfillCounters,
+    scanned: number,
+  ): Promise<RegexBackfillReceipt> {
+    if (pending.length === 0) {
+      return { imported: 0, skipped: counters.skipped, invalid: counters.invalid, scanned }
+    }
     let imported = 0
     await this.updateState((current) => {
       const existing = new Set(current.regexScripts.map((script) => script.scriptName))
@@ -1006,7 +1043,7 @@ export class TavernStore {
       imported = additions.length
       return { regexScripts: [...current.regexScripts, ...additions] }
     })
-    return { imported, skipped: skipped + pending.length - imported, invalid, scanned: names.length }
+    return { imported, skipped: counters.skipped + pending.length - imported, invalid: counters.invalid, scanned }
   }
 
   /* ------------------------------ 内部 ------------------------------ */
@@ -1030,6 +1067,7 @@ export class TavernStore {
       defaultContextMode: parsed.defaultContextMode === 'agent-managed' ? 'agent-managed' : 'dsh-native',
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
+      frontendAutoOpen: parsed.frontendAutoOpen === true,
       gamesDisableResign: parsed.gamesDisableResign === true,
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
       agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
@@ -1162,7 +1200,63 @@ function normalizeCompactionOverride(value: unknown): TavernCompactionOverride |
   return { curatorProvider: provider, curatorModel: model }
 }
 
-/** 按 scriptName 合并脚本：同名覆盖，其余追加；保持既有顺序。 */
+/** 从 regex 来源回填时的逐条计数（skipped = 已存在/跨来源重名）。 */
+interface RegexBackfillCounters {
+  skipped: number
+  invalid: number
+}
+
+export interface RegexBackfillReceipt {
+  imported: number
+  skipped: number
+  invalid: number
+  scanned: number
+}
+
+/** 预设扩展袋（ST preset extension 的读写位置）；非对象按空袋处理。 */
+function presetExtensions(preset: Record<string, unknown>): Record<string, unknown> {
+  const extensions = preset['extensions']
+  return typeof extensions === 'object' && extensions !== null && !Array.isArray(extensions)
+    ? extensions as Record<string, unknown>
+    : {}
+}
+
+/**
+ * 展开一个来源的内嵌 regex 条目并逐条解析：已存在的 scriptName 计入 skipped，
+ * 非法条目计入 invalid，不中断同源其余条目。
+ */
+function stageRegexBackfillEntries(
+  embedded: unknown,
+  known: Set<string>,
+  counters: RegexBackfillCounters,
+): RegexScriptIR[] {
+  let entries: unknown[]
+  try {
+    entries = listRegexScriptEntries(embedded)
+  } catch {
+    counters.invalid += 1
+    return []
+  }
+  const staged: RegexScriptIR[] = []
+  entries.forEach((entry, index) => {
+    let script: RegexScriptIR
+    try {
+      script = parseRegexScript(entry, index)
+    } catch {
+      counters.invalid += 1
+      return
+    }
+    if (known.has(script.scriptName)) {
+      counters.skipped += 1
+      return
+    }
+    known.add(script.scriptName)
+    staged.push(script)
+  })
+  return staged
+}
+
+/** 按 scriptName 合并脚本；同名覆盖，新名追加（保持既有顺序）。 */
 function mergeRegexScripts(current: RegexScriptIR[], imported: RegexScriptIR[]): RegexScriptIR[] {
   const merged = [...current]
   for (const script of imported) {

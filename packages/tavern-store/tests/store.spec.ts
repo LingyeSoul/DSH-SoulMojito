@@ -290,6 +290,63 @@ describe('TavernStore', () => {
     expect((await store.getState()).regexScripts).toHaveLength(4)
   }))
 
+  it('预设：导入时物化 extensions.regex_scripts，非法脚本不阻断预设落盘', withStore(async (store) => {
+    const preset = {
+      prompts: [],
+      extensions: {
+        regex_scripts: [
+          { scriptName: 'Preset Strip', findRegex: '<bg>[\\s\\S]*?</bg>', replaceString: '', placement: [2] },
+          { scriptName: 'Preset Tame', findRegex: '你', replaceString: '您', placement: [1] },
+        ],
+      },
+    }
+    expect(await store.importPreset('Import Preset', preset)).toEqual({ importedRegex: 2 })
+    const state = await store.getState()
+    expect(state.regexScripts.map((script) => script.scriptName)).toEqual(['Preset Strip', 'Preset Tame'])
+    expect(state.regexScripts[0]?.placement).toEqual([2])
+    // 原始预设保留 extensions（导出时内嵌脚本不丢失）。
+    expect(await store.getPreset('Import Preset')).toEqual(preset)
+
+    // 非法脚本整批跳过，预设本身仍然保存。
+    const broken = { prompts: [], extensions: { regex_scripts: [{ scriptName: 'Bad', findRegex: '' }] } }
+    expect(await store.importPreset('Broken Preset', broken)).toEqual({ importedRegex: 0 })
+    expect(await store.getPreset('Broken Preset')).toEqual(broken)
+    expect((await store.getState()).regexScripts).toHaveLength(2)
+  }))
+
+  it('regex：从存量预设回填缺失脚本，跳过全局已有与跨预设重名，非法条目单条忽略', withStore(async (store) => {
+    const preset = (regexScripts: unknown) => ({ prompts: [], extensions: { regex_scripts: regexScripts } })
+    await store.putPreset('Backfill Preset A', preset([
+      { scriptName: 'Keep Preset Global', findRegex: 'preset version', replaceString: '' },
+      { scriptName: 'Preset Only', findRegex: 'only', replaceString: '' },
+      { scriptName: 'Preset Shared', findRegex: 'from a', replaceString: '' },
+      { scriptName: 'Broken Preset', findRegex: '' },
+    ]))
+    await store.putPreset('Backfill Preset B', preset({
+      scripts: [
+        { scriptName: 'Preset Shared', findRegex: 'from b', replaceString: '' },
+        { scriptName: 'Preset From B', findRegex: 'b', replaceString: '' },
+      ],
+    }))
+    // 模拟旧版本导入的预设：全局表里没有预设脚本，只有一条同名旧脚本。
+    await store.patchState({
+      regexScripts: parseRegexScripts([{ scriptName: 'Keep Preset Global', findRegex: 'global version', replaceString: '' }]),
+    })
+
+    expect(await store.backfillRegexScriptsFromPresets()).toEqual({ imported: 3, skipped: 2, invalid: 1, scanned: 2 })
+    const state = await store.getState()
+    expect(state.regexScripts.map((script) => script.scriptName))
+      .toEqual(['Keep Preset Global', 'Preset Only', 'Preset Shared', 'Preset From B'])
+    // 同名脚本保持全局版本；跨预设重名以预设名排序先到者为准。
+    expect(state.regexScripts.find((script) => script.scriptName === 'Keep Preset Global')?.findRegex).toBe('global version')
+    expect(state.regexScripts.find((script) => script.scriptName === 'Preset Shared')?.findRegex).toBe('from a')
+
+    // 幂等：再同步一次不再写入，全部有效条目都算跳过。
+    expect(await store.backfillRegexScriptsFromPresets())
+      .toEqual({ imported: 0, skipped: 5, invalid: 1, scanned: 2 })
+    expect((await store.getState()).regexScripts).toHaveLength(4)
+  }))
+
   it('状态：importRegexScripts 按 scriptName 合并且保持既有顺序', withStore(async (store) => {
     await store.updateState(() => ({
       regexScripts: [{ id: 'a', scriptName: 'A', findRegex: 'a', replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false, substituteRegex: false, minDepth: null, maxDepth: null }],
@@ -381,6 +438,8 @@ describe('TavernStore', () => {
     expect(await store.getState()).toEqual({
       activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
       agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, worldFollowsCharacter: true,
+      // 美化前端右栏自动展开（2026-10-20 用户需求）：默认关闭。
+      frontendAutoOpen: false,
       cardWorkbenchPresetEnabled: false, agentNovelPresetEnabled: false,
       // 禁用投降（2026-10-14 用户需求；面板「游戏」分区开关）默认关闭。
       gamesDisableResign: false,

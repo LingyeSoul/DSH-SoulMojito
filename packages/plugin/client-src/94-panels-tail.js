@@ -259,9 +259,24 @@
       const currentSession = useCurrentSessionId(useSessions)
       const bindingIds = Object.keys(state.bootstrap.state.sessionBindings || {})
       const currentBinding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
+      const agentTavernActive = Boolean(currentBinding && bindingArchitecture(currentBinding) === 'agent-tavern')
       // AgentTavern stays hidden from the native session tree, but its native
       // conversation view must not be forced into the legacy Tavern tab.
       useNativeTavernTabFilter(Boolean(currentBinding && bindingArchitecture(currentBinding) === 'st'))
+      // Regex display for the host-native assistant rows: register the
+      // assistant-step override only while the active session is AgentTavern,
+      // so ordinary DSH chats keep the host renderer untouched.
+      useEffect(() => {
+        if (!agentTavernActive) return undefined
+        let dispose
+        try {
+          dispose = registerTavernAssistantNode(PanelHost.context)
+        } catch (cause) {
+          console.warn('[dsh-soulmojito] assistant display override unavailable:', cause)
+          return undefined
+        }
+        return () => { if (typeof dispose === 'function') dispose() }
+      }, [agentTavernActive])
       useNativeSessionTreeFilter(bindingIds, PanelHost.context, [state.bootstrap.internalWorkspace?.path, state.bootstrap.workbenchWorkspace?.path].filter(Boolean).join('\u0000'))
       const host = useSidebarHost()
       useEffect(() => {
