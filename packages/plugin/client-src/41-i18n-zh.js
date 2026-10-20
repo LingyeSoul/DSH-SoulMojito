@@ -59,6 +59,8 @@
       'settings.regexEmpty': '暂无正则脚本——可导入 JSON 导出，或直接新建',
       'settings.importRegex': '正则 JSON',
       'settings.regexCreate': '新建脚本',
+      'settings.regexSyncCards': '从角色卡同步',
+      'settings.regexSyncDone': '已扫描 {scanned} 张角色卡：新增 {imported} 条，跳过 {skipped} 条，格式非法 {invalid} 条',
       'settings.regexEdit': '编辑{name}',
       'settings.regexDelete': '删除{name}',
       'settings.regexToggle': '启用或停用{name}',

@@ -60,6 +60,8 @@
       'settings.regexEmpty': 'No regex scripts yet — import a JSON export or create one',
       'settings.importRegex': 'Regex JSON',
       'settings.regexCreate': 'New script',
+      'settings.regexSyncCards': 'Sync from cards',
+      'settings.regexSyncDone': 'Scanned {scanned} character cards: {imported} added, {skipped} skipped, {invalid} invalid',
       'settings.regexEdit': 'Edit {name}',
       'settings.regexDelete': 'Delete {name}',
       'settings.regexToggle': 'Enable or disable {name}',

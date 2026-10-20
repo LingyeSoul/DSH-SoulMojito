@@ -144,6 +144,13 @@
       return result.scripts
     }
 
+    // 存量卡回填：服务端扫描全部角色卡，只补全局列表缺少的脚本名。
+    async function syncRegexScriptsFromCards() {
+      const result = await api('regex/sync-cards', { method: 'POST' })
+      update({ bootstrap: { ...snapshot.bootstrap, state: { ...snapshot.bootstrap.state, regexScripts: result.scripts } } })
+      return result
+    }
+
     function openPanel(section) {
       update({ panelOpen: true, ...(typeof section === 'string' && section !== '' ? { panelSection: section } : {}) })
     }

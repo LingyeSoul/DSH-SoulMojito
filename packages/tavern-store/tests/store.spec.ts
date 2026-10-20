@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MemoryStore, TavernStore, VariableStore, normalizeMemoryEmbedding } from '../src/index.js'
-import { decodeCharacterCard, encodeCharx, encodeCharacterCardPng, stableDeepEqual } from '@dsh-soulmojito/format'
+import { decodeCharacterCard, encodeCharx, encodeCharacterCardPng, parseRegexScripts, stableDeepEqual } from '@dsh-soulmojito/format'
 
 const fixturesDir = fileURLToPath(new URL('../../tavern-format/tests/fixtures', import.meta.url))
 
@@ -251,6 +251,43 @@ describe('TavernStore', () => {
     })
     expect(broken.importedRegex).toBe(0)
     expect((await store.getState()).regexScripts).toHaveLength(2)
+  }))
+
+  it('regex：从存量角色卡回填缺失脚本，跳过已存在与跨卡重名，非法条目单条忽略', withStore(async (store) => {
+    const card = (name: string, regexScripts: unknown) => ({
+      ...sampleCard,
+      data: { ...sampleCard.data, name, extensions: { regex_scripts: regexScripts } },
+    })
+    await store.importCharacter(card('Backfill A', [
+      { scriptName: 'Keep Global', findRegex: 'card version', replaceString: '' },
+      { scriptName: 'Card Only', findRegex: 'only', replaceString: '' },
+      { scriptName: 'Shared Across', findRegex: 'from a', replaceString: '' },
+      { scriptName: 'Broken', findRegex: '' },
+    ]))
+    await store.importCharacter(card('Backfill B', {
+      scripts: [
+        { scriptName: 'Shared Across', findRegex: 'from b', replaceString: '' },
+        { scriptName: 'New From B', findRegex: 'b', replaceString: '' },
+      ],
+    }))
+    // 模拟旧版本导入的卡：全局表里没有卡内脚本，只有一条同名旧脚本。
+    await store.patchState({
+      regexScripts: parseRegexScripts([{ scriptName: 'Keep Global', findRegex: 'global version', replaceString: '' }]),
+    })
+
+    const result = await store.backfillRegexScriptsFromCharacters()
+    expect(result).toEqual({ imported: 3, skipped: 2, invalid: 1, scanned: 2 })
+    const state = await store.getState()
+    expect(state.regexScripts.map((script) => script.scriptName))
+      .toEqual(['Keep Global', 'Card Only', 'Shared Across', 'New From B'])
+    // 同名脚本保持全局版本；跨卡重名以角色名排序先到者为准。
+    expect(state.regexScripts.find((script) => script.scriptName === 'Keep Global')?.findRegex).toBe('global version')
+    expect(state.regexScripts.find((script) => script.scriptName === 'Shared Across')?.findRegex).toBe('from a')
+
+    // 幂等：再同步一次不再写入，全部有效条目都算跳过。
+    expect(await store.backfillRegexScriptsFromCharacters())
+      .toEqual({ imported: 0, skipped: 5, invalid: 1, scanned: 2 })
+    expect((await store.getState()).regexScripts).toHaveLength(4)
   }))
 
   it('状态：importRegexScripts 按 scriptName 合并且保持既有顺序', withStore(async (store) => {

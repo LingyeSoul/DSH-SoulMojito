@@ -46,7 +46,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 - **角色卡 V1/V2/V3** — JSON、PNG `chara`/`ccv3`、CHARX `card.json` 与 `embeded://` 资源；导出尽量保留原始容器与内嵌资源；未知字段原样透传。
 - **世界书 / Lorebook** — 递归扫描、副键逻辑、概率、预算、inclusion group、sticky/cooldown/delay 与位置分发。
 - **Chat Completion preset** — `prompts[]` / `prompt_order[]` / marker 与采样参数；context、instruct、textgen 走高级 JSON 编辑全部字段。
-- **正则脚本** — ST regex 扩展形态导入，全局 + 卡级合并，`USER_INPUT/AI_OUTPUT/WORLD_INFO/REASONING` placement、`minDepth/maxDepth`、`substituteRegex`、`trimStrings`。
+- **正则脚本** — ST regex 扩展形态导入，全局 + 卡级合并，存量卡可在面板一键回填；`USER_INPUT/AI_OUTPUT/WORLD_INFO/REASONING` placement、`minDepth/maxDepth`、`substituteRegex`、`trimStrings`。
 - **STscript** — 管道、变量（聊天局部 + 全局）、`/if` 条件、随机/掷骰与聊天动作（`/send`、`/trigger`、`/regenerate`、`/cut`），composer `/` 前缀触发。
 - **Prompt Template（EJS）** — `node:vm` 沙箱执行 `<% %>`；`getvar/setvar` 族作用域变量、`[GENERATE:*]`/`[RENDER:*]` 注入、`@INJECT` 整消息插队、`getwi/getchar/getpreset` 资产读取。详见 [`docs/proposals/0008-prompt-template.md`](docs/proposals/0008-prompt-template.md)。
 - **Persona** — PNG 导入（内嵌描述提取）、头像、增删改、激活选择与 `position/depth/role` 注入。

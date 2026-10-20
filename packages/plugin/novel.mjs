@@ -2724,22 +2724,21 @@ var KNOWN_FIELDS2 = /* @__PURE__ */ new Set([
   "maxDepth"
 ]);
 var PLACEMENT_VALUES = /* @__PURE__ */ new Set([1, 2, 3, 5, 6]);
-function parseRegexScripts(input) {
-  let list;
+function listRegexScriptEntries(input) {
   if (Array.isArray(input))
-    list = input;
-  else if (typeof input === "object" && input !== null) {
+    return input;
+  if (typeof input === "object" && input !== null) {
     const obj = input;
     if (Array.isArray(obj["scripts"]))
-      list = obj["scripts"];
-    else if (Array.isArray(obj["regex_scripts"]))
-      list = obj["regex_scripts"];
-    else
-      list = [input];
-  } else {
-    throw new RegexScriptFormatError("regex scripts input must be an array or object");
+      return obj["scripts"];
+    if (Array.isArray(obj["regex_scripts"]))
+      return obj["regex_scripts"];
+    return [input];
   }
-  return list.map((item, index) => parseRegexScript(item, index));
+  throw new RegexScriptFormatError("regex scripts input must be an array or object");
+}
+function parseRegexScripts(input) {
+  return listRegexScriptEntries(input).map((item, index) => parseRegexScript(item, index));
 }
 function parseRegexScript(raw, index = 0) {
   if (typeof raw !== "object" || raw === null) {
@@ -3370,6 +3369,64 @@ var TavernStore = class _TavernStore {
       regexScripts: mergeRegexScripts(current.regexScripts, imported)
     }));
     return imported.length;
+  }
+  /**
+   * 从已导入角色卡回填卡内嵌 regex_scripts（导入时自动物化上线前的存量卡）：
+   * 只补全局列表缺少的 scriptName，已存在的脚本保持原样；同名跨卡按角色名
+   * 排序先到先得；单条非法只跳过该条。返回本次扫描与写入计数。
+   */
+  async backfillRegexScriptsFromCharacters() {
+    const names = await this.listCharacters();
+    const known = new Set((await this.getState()).regexScripts.map((script) => script.scriptName));
+    const pending = [];
+    let skipped = 0;
+    let invalid = 0;
+    for (const name2 of names) {
+      let file;
+      try {
+        file = await this.getCharacter(name2);
+      } catch (cause) {
+        throw new Error(`failed to read character '${name2}' for regex backfill: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+      }
+      if (file === void 0) continue;
+      const embedded = file.card.data.extensions["regex_scripts"];
+      if (embedded === void 0 || embedded === null) continue;
+      let entries;
+      try {
+        entries = listRegexScriptEntries(embedded);
+      } catch {
+        invalid += 1;
+        continue;
+      }
+      entries.forEach((entry, index) => {
+        let script;
+        try {
+          script = parseRegexScript(entry, index);
+        } catch {
+          invalid += 1;
+          return;
+        }
+        if (known.has(script.scriptName)) {
+          skipped += 1;
+          return;
+        }
+        known.add(script.scriptName);
+        pending.push(script);
+      });
+    }
+    if (pending.length === 0) return { imported: 0, skipped, invalid, scanned: names.length };
+    let imported = 0;
+    await this.updateState((current) => {
+      const existing = new Set(current.regexScripts.map((script) => script.scriptName));
+      const additions = pending.filter((script) => {
+        if (existing.has(script.scriptName)) return false;
+        existing.add(script.scriptName);
+        return true;
+      });
+      imported = additions.length;
+      return { regexScripts: [...current.regexScripts, ...additions] };
+    });
+    return { imported, skipped: skipped + pending.length - imported, invalid, scanned: names.length };
   }
   /* ------------------------------ 内部 ------------------------------ */
   async readState() {

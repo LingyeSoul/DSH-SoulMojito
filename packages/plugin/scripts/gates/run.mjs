@@ -86,6 +86,7 @@ const REQUIRED_SERVER_ROUTES = [
   'preset/',
   'import/persona',
   'import/regex',
+  'regex/sync-cards',
   'persona',
   'persona-avatar/',
   'groups',

@@ -53,21 +53,24 @@ const KNOWN_FIELDS = new Set([
 const PLACEMENT_VALUES = new Set([1, 2, 3, 5, 6])
 
 /**
- * 解析 ST regex 导出：接受脚本数组、`{scripts:[]}`（旧导出）或 `{regex_scripts:[]}`
- * （卡内嵌形态）。单脚本对象也可（容忍手工导入）。
+ * 展开 ST regex 导出的容器形态：脚本数组、`{scripts:[]}`（旧导出）或
+ * `{regex_scripts:[]}`（卡内嵌形态）。单脚本对象也可（容忍手工导入）。
+ * 回填类调用可据此逐条 `parseRegexScript`，避免一条非法拖垮整批。
  */
-export function parseRegexScripts(input: unknown): RegexScriptIR[] {
-  let list: unknown[]
-  if (Array.isArray(input)) list = input
-  else if (typeof input === 'object' && input !== null) {
+export function listRegexScriptEntries(input: unknown): unknown[] {
+  if (Array.isArray(input)) return input
+  if (typeof input === 'object' && input !== null) {
     const obj = input as Record<string, unknown>
-    if (Array.isArray(obj['scripts'])) list = obj['scripts']
-    else if (Array.isArray(obj['regex_scripts'])) list = obj['regex_scripts']
-    else list = [input]
-  } else {
-    throw new RegexScriptFormatError('regex scripts input must be an array or object')
+    if (Array.isArray(obj['scripts'])) return obj['scripts']
+    if (Array.isArray(obj['regex_scripts'])) return obj['regex_scripts']
+    return [input]
   }
-  return list.map((item, index) => parseRegexScript(item, index))
+  throw new RegexScriptFormatError('regex scripts input must be an array or object')
+}
+
+/** 解析 ST regex 导出；任一条非法即整体抛错（导入路径的原子语义）。 */
+export function parseRegexScripts(input: unknown): RegexScriptIR[] {
+  return listRegexScriptEntries(input).map((item, index) => parseRegexScript(item, index))
 }
 
 export function parseRegexScript(raw: unknown, index = 0): RegexScriptIR {

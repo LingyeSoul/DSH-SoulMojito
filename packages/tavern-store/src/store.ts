@@ -29,9 +29,11 @@ import {
   encodeCharx,
   encodeCharacterCardJson,
   encodeCharacterCardPng,
+  listRegexScriptEntries,
   parseCharacterBook,
   parseChatLog,
   parseGroupFile,
+  parseRegexScript,
   parseRegexScripts,
   parseWorldInfoFile,
   serializeChatLog,
@@ -941,6 +943,70 @@ export class TavernStore {
       regexScripts: mergeRegexScripts(current.regexScripts, imported),
     }))
     return imported.length
+  }
+
+  /**
+   * 从已导入角色卡回填卡内嵌 regex_scripts（导入时自动物化上线前的存量卡）：
+   * 只补全局列表缺少的 scriptName，已存在的脚本保持原样；同名跨卡按角色名
+   * 排序先到先得；单条非法只跳过该条。返回本次扫描与写入计数。
+   */
+  async backfillRegexScriptsFromCharacters(): Promise<{
+    imported: number
+    skipped: number
+    invalid: number
+    scanned: number
+  }> {
+    const names = await this.listCharacters()
+    const known = new Set((await this.getState()).regexScripts.map((script) => script.scriptName))
+    const pending: RegexScriptIR[] = []
+    let skipped = 0
+    let invalid = 0
+    for (const name of names) {
+      let file: CharacterFile | undefined
+      try {
+        file = await this.getCharacter(name)
+      } catch (cause) {
+        throw new Error(`failed to read character '${name}' for regex backfill: ${cause instanceof Error ? cause.message : String(cause)}`, { cause })
+      }
+      if (file === undefined) continue
+      const embedded = file.card.data.extensions['regex_scripts']
+      if (embedded === undefined || embedded === null) continue
+      let entries: unknown[]
+      try {
+        entries = listRegexScriptEntries(embedded)
+      } catch {
+        invalid += 1
+        continue
+      }
+      entries.forEach((entry, index) => {
+        let script: RegexScriptIR
+        try {
+          script = parseRegexScript(entry, index)
+        } catch {
+          invalid += 1
+          return
+        }
+        if (known.has(script.scriptName)) {
+          skipped += 1
+          return
+        }
+        known.add(script.scriptName)
+        pending.push(script)
+      })
+    }
+    if (pending.length === 0) return { imported: 0, skipped, invalid, scanned: names.length }
+    let imported = 0
+    await this.updateState((current) => {
+      const existing = new Set(current.regexScripts.map((script) => script.scriptName))
+      const additions = pending.filter((script) => {
+        if (existing.has(script.scriptName)) return false
+        existing.add(script.scriptName)
+        return true
+      })
+      imported = additions.length
+      return { regexScripts: [...current.regexScripts, ...additions] }
+    })
+    return { imported, skipped: skipped + pending.length - imported, invalid, scanned: names.length }
   }
 
   /* ------------------------------ 内部 ------------------------------ */

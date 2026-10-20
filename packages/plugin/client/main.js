@@ -1196,6 +1196,8 @@ window.__ModuleLoader__.load({
       'settings.regexEmpty': 'No regex scripts yet — import a JSON export or create one',
       'settings.importRegex': 'Regex JSON',
       'settings.regexCreate': 'New script',
+      'settings.regexSyncCards': 'Sync from cards',
+      'settings.regexSyncDone': 'Scanned {scanned} character cards: {imported} added, {skipped} skipped, {invalid} invalid',
       'settings.regexEdit': 'Edit {name}',
       'settings.regexDelete': 'Delete {name}',
       'settings.regexToggle': 'Enable or disable {name}',
@@ -1971,6 +1973,8 @@ window.__ModuleLoader__.load({
       'settings.regexEmpty': '暂无正则脚本——可导入 JSON 导出，或直接新建',
       'settings.importRegex': '正则 JSON',
       'settings.regexCreate': '新建脚本',
+      'settings.regexSyncCards': '从角色卡同步',
+      'settings.regexSyncDone': '已扫描 {scanned} 张角色卡：新增 {imported} 条，跳过 {skipped} 条，格式非法 {invalid} 条',
       'settings.regexEdit': '编辑{name}',
       'settings.regexDelete': '删除{name}',
       'settings.regexToggle': '启用或停用{name}',
@@ -4105,6 +4109,13 @@ window.__ModuleLoader__.load({
       return result.scripts
     }
 
+    // 存量卡回填：服务端扫描全部角色卡，只补全局列表缺少的脚本名。
+    async function syncRegexScriptsFromCards() {
+      const result = await api('regex/sync-cards', { method: 'POST' })
+      update({ bootstrap: { ...snapshot.bootstrap, state: { ...snapshot.bootstrap.state, regexScripts: result.scripts } } })
+      return result
+    }
+
     function openPanel(section) {
       update({ panelOpen: true, ...(typeof section === 'string' && section !== '' ? { panelSection: section } : {}) })
     }
@@ -4673,20 +4684,34 @@ window.__ModuleLoader__.load({
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      const [syncing, setSyncing] = useState(false)
       const [editing, setEditing] = useState('')
       const scripts = state.bootstrap.state.regexScripts || []
-      const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
+      const run = (promise) => { setError(''); setNotice(''); void promise.catch((cause) => setError(cause.message)) }
       const saveScript = (script) => {
         const next = scripts.some((item) => item.id === script.id)
           ? scripts.map((item) => (item.id === script.id ? script : item))
           : [...scripts, script]
         return saveRegexScripts(next).then(() => setEditing(''))
       }
+      const syncFromCards = () => {
+        setError('')
+        setNotice('')
+        setSyncing(true)
+        void syncRegexScriptsFromCards()
+          .then((result) => setNotice(t('settings.regexSyncDone', {
+            scanned: result.scanned, imported: result.imported, skipped: result.skipped, invalid: result.invalid,
+          })))
+          .catch((cause) => setError(cause.message))
+          .finally(() => setSyncing(false))
+      }
       const closeEditor = () => setEditing('')
       return h('section', { className: 'dt-settings-band' },
         h('div', { className: 'dt-band-actions' },
           h(Button, { size: 'sm', variant: 'primary', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => setEditing('new') }, t('settings.regexCreate')),
-          h(UploadButton, { kind: 'regex', label: t('settings.importRegex'), accept: '.json,application/json' })),
+          h(UploadButton, { kind: 'regex', label: t('settings.importRegex'), accept: '.json,application/json' }),
+          h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing, onClick: syncFromCards }, syncing ? t('settings.importing') : t('settings.regexSyncCards'))),
         editing === 'new'
           ? h('div', { key: 'new', className: 'dt-regex-editor-wrap' },
             h(RegexScriptEditor, { script: newRegexScript(), onSave: saveScript, onCancel: closeEditor }))
@@ -4729,6 +4754,7 @@ window.__ModuleLoader__.load({
               ? h('div', { className: 'dt-regex-editor-wrap' },
                 h(RegexScriptEditor, { script, onSave: saveScript, onCancel: closeEditor }))
               : null))),
+        notice ? h('p', { className: 'dt-muted' }, notice) : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 

@@ -1017,6 +1017,13 @@ export async function handleApi(ctx, req, res) {
     return sendJson(res, 200, { ok: true, imported, scripts: state.regexScripts })
   }
 
+  // 存量卡回填：导入时自动物化只覆盖此后导入的卡，旧卡需显式同步一次。
+  if (method === 'POST' && route === 'regex/sync-cards') {
+    const result = await db.backfillRegexScriptsFromCharacters()
+    const state = await db.getState()
+    return sendJson(res, 200, { ok: true, ...result, scripts: state.regexScripts })
+  }
+
   if (route.startsWith('chat/')) {
     const chatId = decodeURIComponent(route.slice('chat/'.length))
     const state = await db.getState()

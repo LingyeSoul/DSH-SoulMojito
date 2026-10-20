@@ -113,6 +113,7 @@
 - [`2026-10-08-store-change-polling.md`](../decisions/2026-10-08-store-change-polling.md) — 面板用 store 变更水位轮询吸收后台写入
 - [`2026-10-09-panel-create-world-preset.md`](../decisions/2026-10-09-panel-create-world-preset.md) — 面板新建世界书与新建预设
 - [`2026-10-09-panel-regex-script-editing.md`](../decisions/2026-10-09-panel-regex-script-editing.md) — 面板正则脚本新建与编辑
+- [`2026-10-20-card-regex-backfill.md`](../decisions/2026-10-20-card-regex-backfill.md) — 存量角色卡正则脚本回填（面板「从角色卡同步」）
 - [`2026-10-09-panel-world-entry-counts.md`](../decisions/2026-10-09-panel-world-entry-counts.md) — 面板世界书列表预显条目数
 - [`2026-10-10-sidebar-section-collapse.md`](../decisions/2026-10-10-sidebar-section-collapse.md) — 侧边栏酒馆/写卡工作台分区可折叠
 - [`2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md`](../decisions/2026-10-14-panel-nav-fixed-brand-and-gamepad-icon.md) — 面板导航列「标题区固定」+ 游戏图标手柄化

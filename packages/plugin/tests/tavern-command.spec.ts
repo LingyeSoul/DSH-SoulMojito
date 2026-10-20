@@ -939,6 +939,51 @@ describe('internal Tavern session bridge occupation', () => {
     expect(state.regexScripts.some((script) => script.scriptName === 'card strip')).toBe(true)
   })
 
+  it('backfills regex scripts from cards imported before import-time materialization', async () => {
+    const cardName = 'Legacy Regex Carrier'
+    try {
+      await store.importCharacter({
+        spec: 'chara_card_v2',
+        spec_version: '2.0',
+        data: {
+          name: cardName, description: 'imported before regex backfill', personality: '', scenario: '', first_mes: 'hi',
+          mes_example: '', creator_notes: '', system_prompt: '', post_history_instructions: '',
+          alternate_greetings: [], tags: [], creator: '', character_version: '',
+          extensions: {
+            regex_scripts: [
+              { scriptName: 'legacy auto', findRegex: '<old>', replaceString: '', placement: [2] },
+              { scriptName: 'legacy kept', findRegex: 'card drifts', replaceString: '' },
+            ],
+          },
+        },
+      })
+      // 抹掉导入期的自动物化结果，还原成旧卡在 state.json 里的形状。
+      await store.updateState((state) => ({
+        regexScripts: [
+          ...state.regexScripts.filter((script) => script.scriptName !== 'legacy auto' && script.scriptName !== 'legacy kept'),
+          ...parseRegexScripts([{ scriptName: 'legacy kept', findRegex: 'global wins', replaceString: '' }]),
+        ],
+      }))
+
+      const res = makeResponse()
+      await apiHandler(makeRequest({}, '/api/dsh-soulmojito/regex/sync-cards'), res)
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.chunks.join(''))
+      // 共享 store 里还有其他卡，精确计数由 store.spec.ts 锁定；此处验证路由回执与回填效果。
+      expect(body).toMatchObject({ ok: true, invalid: 0 })
+      expect(body.imported).toBeGreaterThanOrEqual(1)
+      expect(body.skipped).toBeGreaterThanOrEqual(1)
+      expect(body.scanned).toBeGreaterThanOrEqual(2)
+      expect(body.scripts.some((script: { scriptName: string }) => script.scriptName === 'legacy auto')).toBe(true)
+      expect(body.scripts.find((script: { scriptName: string }) => script.scriptName === 'legacy kept')?.findRegex).toBe('global wins')
+    } finally {
+      await store.deleteCharacter(cardName)
+      await store.updateState((state) => ({
+        regexScripts: state.regexScripts.filter((script) => script.scriptName !== 'legacy auto' && script.scriptName !== 'legacy kept'),
+      }))
+    }
+  })
+
   it('activates the linked world when a character becomes active', async () => {
     const res = makeResponse()
     await apiHandler(makeRequest({ activeCharacter: 'Lore Carrier' }, '/api/dsh-soulmojito/state'), res)
