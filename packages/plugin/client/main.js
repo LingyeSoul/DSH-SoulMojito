@@ -1364,6 +1364,9 @@ window.__ModuleLoader__.load({
         const title = mod.panel.title
         modPanelOffs.push(registerPanelSection({
           id: `mod:${mod.id}`,
+          // 与 Mod 管理分区同组（2026-10-21 导航重做）：Mod 面板渲染进系统组的
+          // 组标签下、随注册序排在 Mod 管理之后；图标沿用 CordisPlugin。
+          group: 'system',
           icon: IconCordisPluginOutline14,
           // mod 自带文案（非宿主 i18n key）——P0 决策的 thunk 形状即为此预留。
           label: () => title,
@@ -1411,6 +1414,91 @@ window.__ModuleLoader__.load({
       h('path', { d: 'M6 6.75v2.5', stroke: 'currentColor' }),
       h('circle', { cx: 10.6, cy: 7.1, r: 0.7, fill: 'currentColor', stroke: 'none' }),
       h('circle', { cx: 12, cy: 8.9, r: 0.7, fill: 'currentColor', stroke: 'none' }))
+    }
+
+    // 面板外壳自绘图标（2026-10-21 导航重做）：宿主 0.2.1 图标清单里没有「信息/
+    // 全屏」语义的图形，照游戏手柄的同款几何纪律自绘——16 网格、fill:none、
+    // stroke=currentColor、1px 描边、size 属性走宿主图标同款协议。Info 给关于
+    // 分区；Expand/Collapse 给面板全屏切换（四角 bracket 外扩 = 全屏，箭头内收 =
+    // 还原，16px 下两形互不混淆）。
+    function IconInfoOutline16({ size = 16, className }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        strokeWidth: 1,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      h('circle', { cx: 8, cy: 8, r: 6.5, stroke: 'currentColor' }),
+      h('path', { d: 'M8 7.3V11.2', stroke: 'currentColor' }),
+      h('circle', { cx: 8, cy: 4.9, r: 0.8, fill: 'currentColor', stroke: 'none' }))
+    }
+
+    function IconExpand16({ size = 16, className }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        strokeWidth: 1,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      h('path', { d: 'M2.5 6V2.5H6', stroke: 'currentColor' }),
+      h('path', { d: 'M10 2.5H13.5V6', stroke: 'currentColor' }),
+      h('path', { d: 'M13.5 10V13.5H10', stroke: 'currentColor' }),
+      h('path', { d: 'M6 13.5H2.5V10', stroke: 'currentColor' }))
+    }
+
+    function IconCollapse16({ size = 16, className }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        strokeWidth: 1,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      h('path', { d: 'M2.5 2.5L6 6', stroke: 'currentColor' }),
+      h('path', { d: 'M4.4 6H6V4.4', stroke: 'currentColor' }),
+      h('path', { d: 'M13.5 2.5L10 6', stroke: 'currentColor' }),
+      h('path', { d: 'M11.6 6H10V4.4', stroke: 'currentColor' }),
+      h('path', { d: 'M13.5 13.5L10 10', stroke: 'currentColor' }),
+      h('path', { d: 'M11.6 10H10V11.6', stroke: 'currentColor' }),
+      h('path', { d: 'M2.5 13.5L6 10', stroke: 'currentColor' }),
+      h('path', { d: 'M4.4 10H6V11.6', stroke: 'currentColor' }))
+    }
+
+    // 剧本分区图标（2026-10-21 用户需求：要书籍感）：宿主图标清单没有书本，
+    // 照同款几何纪律自绘一本翻开的书——16px 下「两页弧面 + 中缝」三个特征
+    // 即可辨读，闭合轮廓 1px 描边与宿主 Regular 档观感一致。
+    function IconBookOutline16({ size = 16, className }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        strokeWidth: 1,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      h('path', { d: 'M8 4.1C6.4 2.9 3.9 2.6 2.3 3.3v9.5c1.6-.7 4.1-.4 5.7.8 1.6-1.2 4.1-1.5 5.7-.8V3.3C12.1 2.6 9.6 2.9 8 4.1Z', stroke: 'currentColor' }),
+      h('path', { d: 'M8 4.1v9.5', stroke: 'currentColor' }))
     }
 
     // Brand logo (2026-10-16 user request): the delivered DSH-SoulMojito logo,
@@ -2061,10 +2149,22 @@ window.__ModuleLoader__.load({
       'settings.regexNameRequired': 'Script name is required.',
       'settings.regexFindRequired': 'Find regex is required.',
       'settings.regexBadPattern': 'Invalid regex: {message}',
+      // Delete confirm (2026-10-21 per-page UX): the row used to delete in one click.
+      'settings.regexDeleteConfirm': 'Delete regex script "{name}"?',
       'panel.title': 'Tavern management',
       'panel.close': 'Close panel',
       'panel.open': 'Open Tavern panel',
       'panel.nav': 'Tavern panel sections',
+      // Section filter and fullscreen toggle (2026-10-21 nav rework). zh/en key
+      // parity is enforced by the gates locale check.
+      'panel.searchPlaceholder': 'Search sections…',
+      'panel.searchEmpty': 'No matching sections',
+      'panel.expand': 'Full screen',
+      'panel.collapse': 'Exit full screen',
+      // Section group labels: assets / per-chat state / configuration & diagnostics.
+      'panel.group.content': 'Content',
+      'panel.group.session': 'Sessions',
+      'panel.group.system': 'System',
       'panel.section.overview': 'Overview',
       'panel.section.characters': 'Characters',
       'panel.section.chats': 'Chats',
@@ -2202,7 +2302,12 @@ window.__ModuleLoader__.load({
       'workbench.hideDiff': 'Hide changes',
       'workbench.appliedAt': 'Applied {time}',
       'workbench.decidedAt': 'Decided {time}',
-      'panel.overview.counts': 'Characters {characters} · Chats {chats} · Worlds {worlds} · Presets {presets} · Personas {personas} · Groups {groups}',
+      // Overview stat cards (2026-10-21 per-page UX): hint line + accessible names.
+      'panel.overview.statsHint': 'Asset overview — click a number to jump to its section.',
+      'panel.overview.statOpen': 'Open the {section} section',
+      // List filters (2026-10-21 per-page UX): shared by characters/presets/scripts/regex/personas.
+      'panel.filterPlaceholder': 'Filter…',
+      'panel.filterEmpty': 'No matching items',
       'panel.characters.empty': 'No character cards imported',
       'panel.characters.viewCard': 'View card',
       'panel.characters.hideCard': 'Hide card',
@@ -2858,10 +2963,22 @@ window.__ModuleLoader__.load({
       'settings.regexNameRequired': '请填写脚本名称。',
       'settings.regexFindRequired': '请填写查找正则。',
       'settings.regexBadPattern': '正则无效：{message}',
+      // 删除确认（2026-10-21 分页 UX）：原一键即删，补与角色/预设/世界书同款的确认。
+      'settings.regexDeleteConfirm': '删除正则脚本「{name}」？',
       'panel.title': '酒馆管理面板',
       'panel.close': '关闭面板',
       'panel.open': '打开酒馆面板',
       'panel.nav': '酒馆面板分区',
+      // 分区过滤与全屏（2026-10-21 导航重做）：搜索框占位/空态与全屏切换钮的
+      // 文案。zh/en 键集镜像由 gates 的 locale 校验兜底。
+      'panel.searchPlaceholder': '搜索分区…',
+      'panel.searchEmpty': '没有匹配的分区',
+      'panel.expand': '全屏',
+      'panel.collapse': '退出全屏',
+      // 分区分组标签：内容（卡/书/剧本等资产）/ 会话（聊天态）/ 系统（配置与诊断）。
+      'panel.group.content': '内容',
+      'panel.group.session': '会话',
+      'panel.group.system': '系统',
       'panel.section.overview': '总览',
       'panel.section.characters': '角色',
       'panel.section.chats': '聊天',
@@ -2998,7 +3115,12 @@ window.__ModuleLoader__.load({
       'workbench.hideDiff': '收起改动',
       'workbench.appliedAt': '应用于 {time}',
       'workbench.decidedAt': '决定于 {time}',
-      'panel.overview.counts': '角色 {characters} · 聊天 {chats} · 世界书 {worlds} · 预设 {presets} · 人设 {personas} · 群组 {groups}',
+      // 总览资产速览（2026-10-21 分页 UX）：数字卡片的引导文案与无障碍名。
+      'panel.overview.statsHint': '资产一览，点击数字直达对应分区。',
+      'panel.overview.statOpen': '打开{section}分区',
+      // 清单过滤（2026-10-21 分页 UX）：角色/预设/剧本/正则/人设五处同款过滤框。
+      'panel.filterPlaceholder': '筛选…',
+      'panel.filterEmpty': '没有匹配项',
       'panel.characters.empty': '尚未导入角色卡',
       'panel.characters.viewCard': '查看卡面',
       'panel.characters.hideCard': '收起卡面',
@@ -3619,6 +3741,10 @@ window.__ModuleLoader__.load({
       models: EMPTY_MODELS,
       panelOpen: false,
       panelSection: 'overview',
+      // 面板全屏态（2026-10-21 导航重做）：true 时模态框吃满视口减 24px 边距；
+      // 纯 UI 状态，进 store 让打开/关闭面板之间保持用户选择（与 panelSection
+      // 同款语义，页面重载回默认 false）。
+      panelExpanded: false,
       navigationStatus: '',
       // 侧边栏分区折叠（酒馆 / 写卡工作台）：进 store 而非组件 state，docked
       // 侧栏门户与面板聊天分区两个挂载点共享同一份折叠态（panelSection 同款
@@ -5318,7 +5444,14 @@ window.__ModuleLoader__.load({
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
+      const [personaFilter, setPersonaFilter] = useState('')
       const personas = state.bootstrap.personas || []
+      // 名称/描述过滤（2026-10-21 分页 UX）：与角色/预设/剧本/正则清单同款模式。
+      const personaQuery = personaFilter.trim().toLowerCase()
+      const visiblePersonas = personaQuery === ''
+        ? personas
+        : personas.filter((persona) => persona.name.toLowerCase().includes(personaQuery)
+          || String(persona.description || '').toLowerCase().includes(personaQuery))
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
       // The panel header already names the section; the band starts with the
       // action row so the content is not pushed down by a repeated title.
@@ -5335,8 +5468,12 @@ window.__ModuleLoader__.load({
             },
           }, t('settings.personaNew')),
           h(UploadButton, { kind: 'persona', label: t('settings.personaImport'), accept: '.png,image/png' })),
-        personas.length === 0 ? h('p', { className: 'dt-muted' }, t('settings.personaEmpty')) : h('div', { className: 'dt-persona-list' },
-          personas.map((persona) => {
+        personas.length > 0 ? h('div', { className: 'dt-filter-row' },
+          h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.filterPlaceholder'), 'aria-label': t('panel.filterPlaceholder'), value: personaFilter, onChange: (event) => setPersonaFilter(event.target.value) })) : null,
+        personas.length === 0 ? h('p', { className: 'dt-muted' }, t('settings.personaEmpty')) : visiblePersonas.length === 0
+          ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
+          : h('div', { className: 'dt-persona-list' },
+            visiblePersonas.map((persona) => {
             const description = String(persona.description || '').trim()
             return h('div', { key: persona.name, className: 'dt-persona-row' },
               h('img', {
@@ -5568,7 +5705,14 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = useState('')
       const [syncing, setSyncing] = useState('')
       const [editing, setEditing] = useState('')
+      const [regexFilter, setRegexFilter] = useState('')
       const scripts = state.bootstrap.state.regexScripts || []
+      // 名称/模式过滤（2026-10-21 分页 UX）：与角色/预设/剧本清单同款模式，
+      // 模式串也参与匹配（正则要的就是按 pattern 找）。
+      const regexQuery = regexFilter.trim().toLowerCase()
+      const visibleScripts = regexQuery === ''
+        ? scripts
+        : scripts.filter((script) => script.scriptName.toLowerCase().includes(regexQuery) || script.findRegex.toLowerCase().includes(regexQuery))
       const run = (promise) => { setError(''); setNotice(''); void promise.catch((cause) => setError(cause.message)) }
       const saveScript = (script) => {
         const next = scripts.some((item) => item.id === script.id)
@@ -5601,8 +5745,12 @@ window.__ModuleLoader__.load({
           ? h('div', { key: 'new', className: 'dt-regex-editor-wrap' },
             h(RegexScriptEditor, { script: newRegexScript(), onSave: saveScript, onCancel: closeEditor }))
           : null,
-        scripts.length === 0 && editing !== 'new' ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : h('div', { className: 'dt-regex-list' },
-          scripts.map((script) => h('div', { key: script.id, className: 'dt-regex-item' },
+        scripts.length > 0 && editing === '' ? h('div', { className: 'dt-filter-row' },
+          h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.filterPlaceholder'), 'aria-label': t('panel.filterPlaceholder'), value: regexFilter, onChange: (event) => setRegexFilter(event.target.value) })) : null,
+        scripts.length === 0 && editing !== 'new' ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : visibleScripts.length === 0
+          ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
+          : h('div', { className: 'dt-regex-list' },
+            visibleScripts.map((script) => h('div', { key: script.id, className: 'dt-regex-item' },
             h('div', { className: `dt-regex-row ${script.disabled ? 'dt-regex-off' : ''}` },
               // Checkbox keeps its own control surface; the script name is read
               // text next to it, so the row can put the pattern on a second line.
@@ -5633,7 +5781,12 @@ window.__ModuleLoader__.load({
                   title: t('settings.regexDelete', { name: script.scriptName }),
                   'aria-label': t('settings.regexDelete', { name: script.scriptName }),
                   disabled: editing === script.id,
-                  onClick: () => run(saveRegexScripts(scripts.filter((item) => item.id !== script.id))),
+                  // 删除确认（2026-10-21 分页 UX）：原实现一键即删、无回滚面，
+                  // 误点 trash 直接丢脚本——与角色/预设/世界书同款确认口径。
+                  onClick: () => {
+                    if (!window.confirm(t('settings.regexDeleteConfirm', { name: script.scriptName }))) return
+                    run(saveRegexScripts(scripts.filter((item) => item.id !== script.id)))
+                  },
                 }, h(IconTrashOutline16)))),
             editing === script.id
               ? h('div', { className: 'dt-regex-editor-wrap' },
@@ -8784,10 +8937,19 @@ window.__ModuleLoader__.load({
     // 面板分区注册表（提案 0015 §3.5 P0）：{id, icon, label, component}。
     // label 是 locale thunk（渲染点传入当前 t，宿主 locale 切换跟随——MVU 侧栏
     // tab 的 title thunk 先例）；component 收 {ctx, useSessions} 统一面板宿主
-    // 参数，各分区自取所需。registerPanelSection 追加在尾部：内置 13 分区的
+    // 参数，各分区自取所需。registerPanelSection 追加在尾部：内置 18 分区的
     // 顺序即注册顺序，行为与常量 + 三元链时代零变化；P1 的 Mod 面板分区
     // （声明式清单 + 通用 ModSurface 渲染器）以同一入口追加。
+    // 分区分组（2026-10-21 导航重做，用户反馈「面板特别难用」）：导航按
+    // content/session/system 渲染组标签；无组分区（overview/about）置顶/置底，
+    // Mod 动态分区在 syncModPanelSections 标 group:'system'。组是呈现层概念，
+    // 声明顺序即渲染顺序。
     const panelSections = []
+    const panelSectionGroups = [
+      { id: 'content', label: (t) => t('panel.group.content') },
+      { id: 'session', label: (t) => t('panel.group.session') },
+      { id: 'system', label: (t) => t('panel.group.system') },
+    ]
 
     function registerPanelSection(definition) {
       panelSections.push(definition)
@@ -8799,33 +8961,33 @@ window.__ModuleLoader__.load({
 
     for (const definition of [
       { id: 'overview', icon: IconSparkle16, label: (t) => t('panel.section.overview'), component: () => h(PanelOverview) },
-      { id: 'characters', icon: IconUserOutline16, label: (t) => t('panel.section.characters'), component: (host) => h(PanelCharacters, { ctx: host.ctx }) },
-      { id: 'chats', icon: IconQueueOutline14, label: (t) => t('panel.section.chats'), component: (host) => h(TavernSidebar, { ctx: host.ctx, useSessions: host.useSessions }) },
-      { id: 'guides', icon: IconListPenOutline16, label: (t) => t('panel.section.guides'), component: (host) => h(PanelGuides, { useSessions: host.useSessions }) },
-      { id: 'novels', icon: IconListPenOutline16, label: (t) => t('panel.section.novels'), component: (host) => h(PanelNovels, { ctx: host.ctx }) },
-      { id: 'groups', icon: IconPersonalizationOutline16, label: (t) => t('panel.section.groups'), component: () => h(GroupBand) },
-      { id: 'personas', icon: IconDataOutline16, label: (t) => t('panel.section.personas'), component: () => h(PersonaBand) },
-      { id: 'worlds', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: () => h(PanelWorlds) },
-      { id: 'presets', icon: IconAgentPresetOutline16, label: (t) => t('panel.section.presets'), component: () => h(PanelPresets) },
-      { id: 'scripts', icon: IconListPenOutline16, label: (t) => t('panel.section.scripts'), component: () => h(PanelScripts) },
-      { id: 'regex', icon: IconListPenOutline16, label: (t) => t('panel.section.regex'), component: () => h(RegexBand) },
-      { id: 'variables', icon: IconCordisPluginOutline14, label: (t) => t('panel.section.variables'), component: (host) => h(PanelVariables, { useSessions: host.useSessions }) },
-      { id: 'workbench', icon: IconListPenOutline16, label: (t) => t('panel.section.workbench'), component: () => h(PanelWorkbench) },
+      { id: 'characters', group: 'content', icon: IconUserOutline16, label: (t) => t('panel.section.characters'), component: (host) => h(PanelCharacters, { ctx: host.ctx }) },
+      { id: 'chats', group: 'session', icon: IconQueueOutline14, label: (t) => t('panel.section.chats'), component: (host) => h(TavernSidebar, { ctx: host.ctx, useSessions: host.useSessions }) },
+      { id: 'guides', group: 'session', icon: IconListPenOutline16, label: (t) => t('panel.section.guides'), component: (host) => h(PanelGuides, { useSessions: host.useSessions }) },
+      { id: 'novels', group: 'content', icon: IconEditOutline16, label: (t) => t('panel.section.novels'), component: (host) => h(PanelNovels, { ctx: host.ctx }) },
+      { id: 'groups', group: 'content', icon: IconPlusOutline16, label: (t) => t('panel.section.groups'), component: () => h(GroupBand) },
+      { id: 'personas', group: 'content', icon: IconPersonalizationOutline16, label: (t) => t('panel.section.personas'), component: () => h(PersonaBand) },
+      { id: 'worlds', group: 'content', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: () => h(PanelWorlds) },
+      { id: 'presets', group: 'system', icon: IconAgentPresetOutline16, label: (t) => t('panel.section.presets'), component: () => h(PanelPresets) },
+      { id: 'scripts', group: 'content', icon: IconBookOutline16, label: (t) => t('panel.section.scripts'), component: () => h(PanelScripts) },
+      { id: 'regex', group: 'system', icon: IconSearchOutline16, label: (t) => t('panel.section.regex'), component: () => h(RegexBand) },
+      { id: 'variables', group: 'session', icon: IconDataOutline16, label: (t) => t('panel.section.variables'), component: (host) => h(PanelVariables, { useSessions: host.useSessions }) },
+      { id: 'workbench', group: 'system', icon: IconCheckOutline16, label: (t) => t('panel.section.workbench'), component: () => h(PanelWorkbench) },
       // 第 14 个分区「游戏」（提案 0018 §4.3，P1）：清单 + 开局 + 本聊天对局面
       // （GameSurface 持久 iframe；games/revision 1s 轮询仅在存在未终局会话时
-      // 进行，页面不可见停发）。图标是手柄（2026-10-14），与总览的 sparkle 区分。
-      { id: 'games', icon: IconGamepadOutline16, label: (t) => t('panel.section.games'), component: (host) => h(GamesPanel, { useSessions: host.useSessions }) },
+      // 进行，页面不可见停发）。自绘手柄图标（2026-10-14），与总览的 sparkle 区分。
+      { id: 'games', group: 'session', icon: IconGamepadOutline16, label: (t) => t('panel.section.games'), component: (host) => h(GamesPanel, { useSessions: host.useSessions }) },
       // 第 15 个分区「Mod」（提案 0015 §3.5 P1）：列表 + 两层开关 + 重载 + 启用
       // 确认弹层（如实展示 capabilities，知情同意）。
-      { id: 'mods', icon: IconCordisPluginOutline14, label: (t) => t('panel.section.mods'), component: () => h(PanelMods) },
+      { id: 'mods', group: 'system', icon: IconCordisPluginOutline14, label: (t) => t('panel.section.mods'), component: () => h(PanelMods) },
       // 第 16 个分区「记忆检索」（提案 0016）：混合检索 embed 端点设置 + 探针。
-      { id: 'memory', icon: IconDataOutline16, label: (t) => t('panel.section.memory'), component: () => h(MemoryRetrievalBand) },
+      { id: 'memory', group: 'system', icon: IconRefreshOutline16, label: (t) => t('panel.section.memory'), component: () => h(MemoryRetrievalBand) },
       // 第 17 个分区「提示词」（A-6，2026-10-11）：ST 循环实发请求 + 世界书激活
       // 追踪的只读查看器（服务端 prompt-viewer.ts 环形缓冲）。
-      { id: 'prompts', icon: IconSearchOutline16, label: (t) => t('panel.section.prompts'), component: () => h(PanelPrompts) },
+      { id: 'prompts', group: 'system', icon: IconDownloadOutline16, label: (t) => t('panel.section.prompts'), component: () => h(PanelPrompts) },
       // 第 18 个分区「关于」（2026-10-12）：插件版本 stamp + 官网/作者/源码
-      // 仓库外链，纯静态信息面。
-      { id: 'about', icon: IconBrowseOutline16, label: (t) => t('panel.section.about'), component: () => h(PanelAbout) },
+      // 仓库外链，纯静态信息面。自绘 info 图标（宿主清单无此语义图形）。
+      { id: 'about', icon: IconInfoOutline16, label: (t) => t('panel.section.about'), component: () => h(PanelAbout) },
     ]) {
       registerPanelSection(definition)
     }
@@ -8842,18 +9004,34 @@ window.__ModuleLoader__.load({
       }, [characterKey, groupKey])
       const chatsTotal = Object.keys(state.chatLists)
         .reduce((sum, character) => sum + (state.chatLists[character]?.length || 0), 0)
+      // 资产速览（2026-10-21 分页 UX）：数字卡片直达分区——总览的价值是「从这
+      // 出发」，一行汇总文案没有动作面。标签复用 panel.section.* 键，随宿主
+      // locale 切换；数量大时卡片自动换行（auto-fit minmax）。
+      const stats = [
+        { section: 'characters', value: bootstrap.characters.length },
+        { section: 'chats', value: chatsTotal },
+        { section: 'worlds', value: bootstrap.worlds.length },
+        { section: 'presets', value: bootstrap.presets.length },
+        { section: 'personas', value: bootstrap.personas.length },
+        { section: 'groups', value: (bootstrap.groups || []).length },
+      ]
+      const sectionLabel = (id) => panelSections.find((item) => item.id === id)?.label(t) ?? id
       return h(React.Fragment, null,
         h(ActiveSetupBand),
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('panel.title')),
-          h('p', { className: 'dt-hint' }, t('panel.overview.counts', {
-            characters: bootstrap.characters.length,
-            chats: chatsTotal,
-            worlds: bootstrap.worlds.length,
-            presets: bootstrap.presets.length,
-            personas: bootstrap.personas.length,
-            groups: (bootstrap.groups || []).length,
-          }))),
+          h('p', { className: 'dt-hint' }, t('panel.overview.statsHint')),
+          h('div', { className: 'dt-stat-grid' },
+            stats.map((stat) => h('button', {
+              key: stat.section,
+              type: 'button',
+              className: 'dt-stat',
+              'aria-label': t('panel.overview.statOpen', { section: sectionLabel(stat.section) }),
+              title: t('panel.overview.statOpen', { section: sectionLabel(stat.section) }),
+              onClick: () => update({ panelSection: stat.section }),
+            },
+            h('span', { className: 'dt-stat-value' }, stat.value),
+            h('span', { className: 'dt-stat-label' }, sectionLabel(stat.section)))))),
         h(UpdateBand, { compact: false }),
         state.error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, state.error)) : null)
     }
@@ -9024,10 +9202,6 @@ window.__ModuleLoader__.load({
     // normalizeEntry 口径补全（与 worldbook.ts 落库归一一致）。
     const BLANK_WORLD_BOOK = { name: '', entries: [] }
 
-    // 手动新建的空白预设模板：空 prompts/prompt_order 即合法 chat-completion
-    // 形态（detectPresetKind 按这两个数组判定），采样字段留空袋由编辑器维护。
-    const BLANK_PRESET = { prompts: [], prompt_order: [] }
-
     function PanelCharacters({ ctx }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -9115,6 +9289,13 @@ window.__ModuleLoader__.load({
           .finally(() => setLaunching(false))
       }
       const characters = state.bootstrap.characters
+      // 名称过滤（2026-10-21 分页 UX）：卡多了以后整屏扫读——过滤框按名匹配，
+      // 创建中的新卡不受过滤影响（避免「正填着被过滤掉」）。
+      const [characterFilter, setCharacterFilter] = useState('')
+      const characterQuery = characterFilter.trim().toLowerCase()
+      const visibleCharacters = characterQuery === ''
+        ? characters
+        : characters.filter((name) => name.toLowerCase().includes(characterQuery))
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('settings.import')),
@@ -9122,9 +9303,13 @@ window.__ModuleLoader__.load({
             h(UploadButton, { kind: 'character', label: t('settings.importCharacter'), accept: '.png,.charx,.json,application/json,image/png,application/zip' }),
             h('button', { type: 'button', className: 'dt-upload', onClick: () => setGuideOpen(true) }, `+ ${t('panel.characters.new')}`))),
         h('section', { className: 'dt-settings-band' },
+          characters.length > 0 ? h('div', { className: 'dt-filter-row' },
+            h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.filterPlaceholder'), 'aria-label': t('panel.filterPlaceholder'), value: characterFilter, onChange: (event) => setCharacterFilter(event.target.value) })) : null,
           characters.length === 0 && !creating
             ? h('p', { className: 'dt-muted' }, t('panel.characters.empty'))
-            : h('div', { className: 'dt-card-grid' },
+            : visibleCharacters.length === 0
+              ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
+              : h('div', { className: 'dt-card-grid' },
               creating
                 ? h('div', { className: 'dt-card dt-card-editing' },
                   h('div', { className: 'dt-card-head' },
@@ -9132,7 +9317,7 @@ window.__ModuleLoader__.load({
                       h('strong', null, t('panel.characters.creating')))),
                   h(CardEditor, { card: BLANK_CHARACTER_CARD, name: '', hint: t('panel.characters.createEditorHint'), onSave: createCharacter, onCancel: () => setCreating(false) }))
                 : null,
-              characters.map((name) => {
+              visibleCharacters.map((name) => {
               const active = state.bootstrap.state.activeCharacter === name
               const card = cards[name]
               return h('div', { key: name, className: `dt-card ${editing === name ? 'dt-card-editing' : ''}` },
@@ -9391,186 +9576,6 @@ window.__ModuleLoader__.load({
                h(WorldBookEditor, { book: BLANK_WORLD_BOOK, onSave: createWorld, onCancel: () => setCreating(false) }))
            : null,
          error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
-    }
-
-    function PresetEditor({ name, data, kind, onSave, onCancel }) {
-      const t = useTranslate()
-      const [draft, setDraft] = useState(() => cloneValue(data) || {})
-      const [presetName, setPresetName] = useState(name)
-      const [advanced, setAdvanced] = useState(() => JSON.stringify(Object.fromEntries(Object.entries(data || {}).filter(([key]) => key !== 'prompts' && key !== 'prompt_order')), null, 2))
-      const [error, setError] = useState('')
-      const [saving, setSaving] = useState(false)
-      const prompts = draft.prompts || []
-      const chatPreset = kind === 'chat-completion' || Array.isArray(data?.prompts)
-      const dirty = presetName !== name || advanced !== JSON.stringify(Object.fromEntries(Object.entries(data || {}).filter(([key]) => key !== 'prompts' && key !== 'prompt_order')), null, 2) || JSON.stringify(draft.prompts) !== JSON.stringify((data || {}).prompts)
-      const setPrompt = (index, key, value) => setDraft((current) => {
-        const previous = current.prompts?.[index]
-        const next = { ...current, prompts: (current.prompts || []).map((prompt, promptIndex) => promptIndex === index ? { ...prompt, [key]: value } : prompt) }
-        if (key === 'identifier' && previous?.identifier !== value) {
-          next.prompt_order = (current.prompt_order || []).map((item) => ({ ...item, order: (item.order || []).map((entry) => entry.identifier === previous?.identifier ? { ...entry, identifier: value } : entry) }))
-        }
-        return next
-      })
-      const addPrompt = () => {
-        const identifier = `customPrompt${prompts.length + 1}`
-        const prompt = { name: 'New prompt', identifier, role: 'system', content: '', system_prompt: true }
-        setDraft((current) => {
-          const order = Array.isArray(current.prompt_order) && current.prompt_order.length > 0 ? current.prompt_order.map((item) => ({ ...item, order: [...(item.order || []), { identifier, enabled: true }] })) : [{ character_id: 100000, order: [{ identifier, enabled: true }] }]
-          return { ...current, prompts: [...(current.prompts || []), prompt], prompt_order: order }
-        })
-      }
-      const removePrompt = (index) => {
-        const identifier = prompts[index]?.identifier
-        setDraft((current) => ({
-          ...current,
-          prompts: (current.prompts || []).filter((_, promptIndex) => promptIndex !== index),
-          prompt_order: (current.prompt_order || []).map((item) => ({ ...item, order: (item.order || []).filter((entry) => entry.identifier !== identifier) })),
-        }))
-      }
-      const save = () => {
-        let sampler
-        try { sampler = advanced.trim() === '' ? {} : JSON.parse(advanced) } catch { setError(t('panel.presets.invalidJson')); return }
-        if (!sampler || typeof sampler !== 'object' || Array.isArray(sampler)) { setError(t('panel.presets.invalidJson')); return }
-        if (chatPreset && prompts.some((prompt) => !String(prompt.identifier || '').trim() || prompts.filter((candidate) => candidate.identifier === prompt.identifier).length > 1)) {
-          setError(t('panel.presets.identifierInvalid'))
-          return
-        }
-        setSaving(true)
-        setError('')
-        const nextData = chatPreset ? { ...sampler, prompts: draft.prompts || [], prompt_order: draft.prompt_order || [] } : sampler
-        void Promise.resolve(onSave(nextData, presetName.trim() || name))
-          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
-          .finally(() => setSaving(false))
-      }
-      const cancel = () => { if (!dirty || window.confirm(`${t('panel.unsaved')}?`)) onCancel() }
-      return h('div', { className: 'dt-editor' },
-        h('div', { className: 'dt-editor-toolbar' },
-          h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
-          h('div', { className: 'dt-editor-actions' },
-            h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
-            h(Button, { size: 'sm', variant: 'primary', disabled: saving || !presetName.trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
-        h('p', { className: 'dt-hint' }, t('panel.presets.editHint')),
-        h('div', { className: 'dt-editor-grid' }, h(EditorField, { label: t('panel.rename'), value: presetName, onChange: setPresetName })),
-        chatPreset ? h('div', { className: 'dt-editor-section-title' },
-          h('strong', null, t('panel.presets.prompts')),
-          h(Button, { size: 'sm', variant: 'outline', icon: h(IconPlusOutline16), onClick: addPrompt }, t('panel.presets.addPrompt'))) : null,
-        chatPreset ? h('div', { className: 'dt-editor-entries' }, prompts.map((prompt, index) => h('section', { key: `${prompt.identifier || 'prompt'}-${index}`, className: 'dt-editor-entry' },
-          h('div', { className: 'dt-editor-entry-head' }, h('strong', null, prompt.name || prompt.identifier || `#${index + 1}`), h(Button, { size: 'sm', variant: 'ghost', icon: h(IconTrashOutline16), 'aria-label': t('panel.presets.removePrompt'), title: t('panel.presets.removePrompt'), onClick: () => removePrompt(index) })),
-          h('div', { className: 'dt-editor-grid' },
-            h(EditorField, { label: t('panel.presets.promptName'), value: prompt.name, onChange: (value) => setPrompt(index, 'name', value) }),
-            h(EditorField, { label: t('panel.presets.identifier'), value: prompt.identifier, onChange: (value) => setPrompt(index, 'identifier', value) }),
-            h('label', { className: 'dt-editor-field' }, h('span', { className: 'dt-label' }, t('panel.presets.role')), h('select', { value: prompt.role || 'system', onChange: (event) => setPrompt(index, 'role', event.target.value) }, h('option', { value: 'system' }, 'system'), h('option', { value: 'user' }, 'user'), h('option', { value: 'assistant' }, 'assistant'))),
-            h(EditorField, { label: t('panel.presets.content'), value: prompt.content, onChange: (value) => setPrompt(index, 'content', value), multiline: true, className: 'dt-editor-wide' }),
-            h('div', { className: 'dt-editor-toggles dt-editor-wide' },
-              h(ToggleField, { label: t('panel.presets.marker'), checked: prompt.marker === true, onChange: (value) => setPrompt(index, 'marker', value) }),
-              h(ToggleField, { label: t('panel.presets.enabled'), checked: prompt.system_prompt !== false, onChange: (value) => setPrompt(index, 'system_prompt', value) })))))) : null,
-        h(EditorField, { label: t('panel.presets.sampler'), value: advanced, onChange: setAdvanced, multiline: true, className: 'dt-editor-wide dt-editor-json' }),
-        error ? h('p', { className: 'dt-error' }, error) : null)
-    }
-
-    function PanelPresets() {
-      const state = useTavernStore()
-      const t = useTranslate()
-      const [error, setError] = useState('')
-      const [editing, setEditing] = useState('')
-      const [creating, setCreating] = useState(false)
-      const [presets, setPresets] = useState({})
-      const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
-      const kinds = state.bootstrap.presetKinds || {}
-      const editPreset = (name) => {
-        setEditing(editing === name ? '' : name)
-        if (!(name in presets)) {
-          setPresets((current) => ({ ...current, [name]: null }))
-          void fetchPreset(name).then((data) => setPresets((current) => ({ ...current, [name]: data })))
-            .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
-        }
-      }
-      const save = (name, data, nextName) => savePreset(name, data, nextName).then((saved) => {
-        const target = nextName || name
-        setPresets((current) => {
-          const next = { ...current, [target]: saved }
-          if (target !== name) delete next[name]
-          return next
-        })
-        setEditing('')
-      })
-      // 手动新建走与编辑同一条 PUT preset 路径（oldName === 新名，putPreset 落盘
-      // 即建预设）；重名覆盖语义与导入一致，面板侧先拦同名（大小写不敏感）。
-      // detectPresetKind 要求 prompts 与 prompt_order 同时为数组才认定为
-      // chat-completion，空白模板两者都带上。
-      const createPreset = (data, name) => {
-        const target = String(name || '').trim()
-        if (target === '') return Promise.reject(new Error(t('panel.rename')))
-        const normalized = target.toLowerCase()
-        if (state.bootstrap.presets.some((existing) => existing.toLowerCase() === normalized)) {
-          return Promise.reject(new Error(t('panel.presets.duplicate', { name: target })))
-        }
-        return savePreset(target, data, target)
-          .then((saved) => {
-            setPresets((current) => ({ ...current, [target]: saved }))
-            setCreating(false)
-            setEditing(target)
-            return saved
-          })
-          .catch((cause) => {
-            throw new Error(t('panel.presets.createFailed', { message: cause instanceof Error ? cause.message : String(cause) }))
-          })
-      }
-      return h(React.Fragment, null,
-        h('section', { className: 'dt-settings-band' },
-          h('h3', null, t('settings.import')),
-          h('div', { className: 'dt-imports' },
-            h(UploadButton, { kind: 'preset', label: t('settings.importPreset'), accept: '.json,application/json' }),
-            h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setCreating(true) } }, `+ ${t('panel.presets.new')}`))),
-        // 预设生效范围（preset-mount.ts）：AgentTavern 恒投影；工作台/小说按
-        // 这两个开关接入（默认关），翻转经 state 路由写穿投影缓存。
-        h('section', { className: 'dt-settings-band' },
-          h('h3', null, t('panel.presets.scope')),
-          h('p', { className: 'dt-hint' }, t('panel.presets.scopeHint')),
-          h('div', { className: 'dt-imports' },
-            h('label', { className: 'dt-toggle' },
-              h('input', {
-                type: 'checkbox',
-                checked: state.bootstrap.state.cardWorkbenchPresetEnabled === true,
-                onChange: (event) => run(patchState({ cardWorkbenchPresetEnabled: event.target.checked })),
-              }),
-              h('span', null, t('panel.presets.workbenchToggle'))),
-            h('label', { className: 'dt-toggle' },
-              h('input', {
-                type: 'checkbox',
-                checked: state.bootstrap.state.agentNovelPresetEnabled === true,
-                onChange: (event) => run(patchState({ agentNovelPresetEnabled: event.target.checked })),
-              }),
-              h('span', null, t('panel.presets.novelToggle'))))),
-        h('section', { className: 'dt-settings-band' },
-          state.bootstrap.presets.length === 0 && !creating
-            ? h('p', { className: 'dt-muted' }, t('panel.presets.empty'))
-            : h('div', { className: 'dt-preset-list' }, state.bootstrap.presets.map((name) => h('div', { key: name, className: 'dt-preset-row' },
-              h('strong', { className: 'dt-preset-name' }, name),
-              h(Pill, null, kinds[name] || 'preset'),
-              h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editPreset(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),
-              h(Button, { size: 'sm', variant: 'ghost', icon: h(IconDownloadOutline16), 'aria-label': t('panel.exportJson'), title: t('panel.exportJson'), onClick: () => downloadAsset(`export/preset/${encodeURIComponent(name)}`, `${name}.json`) }),
-              state.bootstrap.state.activePreset === name
-                ? h(Pill, { active: true }, t('panel.characters.active'))
-                : h(Button, { size: 'sm', variant: 'outline', onClick: () => run(patchState({ activePreset: name })) }, t('panel.presets.setActive')),
-              h(Button, {
-                size: 'sm',
-                variant: 'ghost',
-                icon: h(IconTrashOutline16),
-                'aria-label': t('panel.presets.delete', { name }),
-                title: t('panel.presets.delete', { name }),
-                onClick: () => {
-                  if (window.confirm(t('panel.presets.deleteConfirm', { name }))) run(deletePresetAsset(name))
-                },
-              }),
-            editing === name ? h('div', { className: 'dt-preset-editor-wrap' }, presets[name] ? h(PresetEditor, { name, kind: kinds[name], data: presets[name], onSave: (data, nextName) => save(name, data, nextName), onCancel: () => setEditing('') }) : h('p', { className: 'dt-muted' }, t('nav.loading'))) : null)))),
-        creating
-          ? h('section', { className: 'dt-settings-band' },
-              h('h3', null, t('panel.presets.creating')),
-              h('p', { className: 'dt-hint' }, t('panel.presets.createEditorHint')),
-              h(PresetEditor, { name: '', kind: 'chat-completion', data: BLANK_PRESET, onSave: createPreset, onCancel: () => setCreating(false) }))
-          : null,
-        error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
 
     function AuditMemoryRow({ memory, t }) {
@@ -9886,6 +9891,12 @@ window.__ModuleLoader__.load({
         })
       useEffect(() => { void reload() }, [])
       const scripts = Array.isArray(library?.scripts) ? library.scripts : []
+      // 名称过滤（2026-10-21 分页 UX）：剧本库随导入增长，同款过滤模式。
+      const [scriptFilter, setScriptFilter] = useState('')
+      const scriptQuery = scriptFilter.trim().toLowerCase()
+      const visibleScripts = scriptQuery === ''
+        ? scripts
+        : scripts.filter((script) => script.name.toLowerCase().includes(scriptQuery))
       const bindings = library?.bindings && typeof library.bindings === 'object' && !Array.isArray(library.bindings) ? library.bindings : {}
       const importText = (name, content, format) => {
         const trimmed = name.trim()
@@ -9996,11 +10007,15 @@ window.__ModuleLoader__.load({
               h(Button, { size: 'sm', variant: 'ghost', onClick: () => setPasteOpen(false) }, t('panel.cancel')))) : null,
           characters.length === 0 ? h('p', { className: 'dt-hint' }, t('scripts.noCharacters')) : null),
         h('section', { className: 'dt-settings-band' },
+          scripts.length > 0 ? h('div', { className: 'dt-filter-row' },
+            h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.filterPlaceholder'), 'aria-label': t('panel.filterPlaceholder'), value: scriptFilter, onChange: (event) => setScriptFilter(event.target.value) })) : null,
           library === null
             ? h('p', { className: 'dt-muted' }, t('nav.loading'))
             : scripts.length === 0
               ? h('p', { className: 'dt-muted' }, t('scripts.empty'))
-              : h('div', { className: 'dt-script-list' }, scripts.map((script) => {
+              : visibleScripts.length === 0
+                ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
+                : h('div', { className: 'dt-script-list' }, visibleScripts.map((script) => {
                 const bound = Object.keys(bindings).filter((character) => bindings[character] === script.name)
                 const draft = selection[script.name] || ''
                 return h('div', { key: script.name, className: 'dt-script-row' },
@@ -11859,7 +11874,27 @@ window.__ModuleLoader__.load({
       // 分区跟随 store 的 panelSection（openPanel(section) 可在面板已打开时切换，
       // 例如小说会话头的“打开小说面板”入口）；导航点击同步写回 store。
       const section = state.panelSection || 'overview'
+      const expanded = state.panelExpanded === true
+      // 分区清单过滤（2026-10-21 导航重做）：组件内临时态——过滤词不跨面板打开
+      // 保留（重开面板从完整清单开始，比记住上次的过滤词更符合「打开即全貌」）。
+      const [filter, setFilter] = useState('')
+      const navlistRef = useRef(null)
+      const bodyRef = useRef(null)
+      // 分区滚动位置记忆：切走时记下 scrollTop、切回时还原——长清单（聊天/
+      // 剧本/方案）来回切不再被打回顶部。组件实例随面板开关重建，记忆同样
+      // 不跨打开保留。
+      const scrollMemory = useRef({})
+      const trackedSection = useRef(section)
       useEffect(() => { if (state.loading) void refreshBootstrap().catch(() => {}) }, [])
+      useEffect(() => {
+        const body = bodyRef.current
+        if (body === null) return
+        if (trackedSection.current !== section) {
+          scrollMemory.current[trackedSection.current] = body.scrollTop
+          trackedSection.current = section
+        }
+        body.scrollTop = scrollMemory.current[section] ?? 0
+      }, [section])
       const stamp = state.bootstrap.version || state.bootstrap.commit
         ? `v${state.bootstrap.version || '?'}${state.bootstrap.commit ? ` (${state.bootstrap.commit})` : ''}`
         : ''
@@ -11867,34 +11902,102 @@ window.__ModuleLoader__.load({
       // 注册），与三元链时代 `: h(PanelOverview)` 的兜底等价。
       const activeSection = panelSections.find((item) => item.id === section) ?? panelSections[0]
       const body = activeSection.component({ ctx, useSessions })
+      // 过滤与分组：匹配按分区显示名（当前 locale）小写包含；组内保持注册顺序，
+      // overview/about 无组——注册表里第一个带组分区之前的无组项置顶（overview），
+      // 其余无组项（about 及未来新增）垫在组清单之后。
+      const query = filter.trim().toLowerCase()
+      const visibleSections = query === ''
+        ? panelSections
+        : panelSections.filter((item) => item.label(t).toLowerCase().includes(query))
+      const firstGroupedIndex = panelSections.findIndex((item) => item.group !== undefined)
+      const topIds = new Set(panelSections.slice(0, firstGroupedIndex === -1 ? panelSections.length : firstGroupedIndex).map((item) => item.id))
+      const topUngrouped = visibleSections.filter((item) => topIds.has(item.id))
+      const bottomUngrouped = visibleSections.filter((item) => item.group === undefined && !topIds.has(item.id))
+      const groupedSections = panelSectionGroups
+        .map((group) => ({ group, items: visibleSections.filter((item) => item.group === group.id) }))
+        .filter((entry) => entry.items.length > 0)
+      const visibleIds = visibleSections.map((item) => item.id)
+      const sectionCell = (item) => h('button', {
+        key: item.id,
+        type: 'button',
+        className: `dt-panel-navcell ${section === item.id ? 'dt-panel-navcell-active' : ''}`,
+        'aria-current': section === item.id ? 'page' : undefined,
+        'data-dt-section': item.id,
+        onClick: () => update({ panelSection: item.id }),
+      }, h(item.icon), h('span', null, item.label(t)))
+      // 键盘导航：↑↓ 在可见分区间移动激活（同步聚焦按钮，屏幕阅读器跟随），
+      // Home/End 跳首尾；原生 Tab 序不受影响。
+      const focusSectionButton = (id) => {
+        const buttons = navlistRef.current?.querySelectorAll('[data-dt-section]') ?? []
+        for (const button of buttons) {
+          if (button.getAttribute('data-dt-section') === id) {
+            button.focus()
+            break
+          }
+        }
+      }
+      const activateSection = (id) => {
+        update({ panelSection: id })
+        requestAnimationFrame(() => focusSectionButton(id))
+      }
+      const handleNavKeyDown = (event) => {
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') return
+        if (visibleIds.length === 0) return
+        event.preventDefault()
+        const index = visibleIds.indexOf(section)
+        const next = event.key === 'Home' ? 0
+          : event.key === 'End' ? visibleIds.length - 1
+            : event.key === 'ArrowDown' ? Math.min(index + 1, visibleIds.length - 1)
+              : Math.max(index - 1, 0)
+        if (visibleIds[next] !== undefined && visibleIds[next] !== section) activateSection(visibleIds[next])
+      }
       return h('div', { className: 'dt-panel' },
-        // 导航列分两段（2026-10-14 用户反馈：红框的 Tavern 标题区要钉住）：
-        // 品牌块常驻不滚，只滚分区清单——分区数会随 Mod 面板注册增长，长到
-        // 溢出时原来整列滚动会把「这是酒馆面板」的标题一起卷走。
+        // 导航列分三段（2026-10-21 导航重做）：品牌块与过滤框常驻不滚，只滚
+        // 分组分区清单——分区数会随 Mod 面板注册增长，长到溢出时原来整列滚动
+        // 会把「这是酒馆面板」的标题一起卷走（品牌钉住是 2026-10-14 反馈的
+        // 既有契约，过滤框与其同段）。
         h('nav', { className: 'dt-panel-nav', 'aria-label': t('panel.nav') },
           h('div', { className: 'dt-panel-brand' },
             h(SoulMojitoLogo),
             h('div', { className: 'dt-panel-brand-copy' },
               h('strong', null, 'SoulMojito'),
               stamp ? h('span', null, stamp) : null)),
-          h('div', { className: 'dt-panel-navlist' },
-            panelSections.map((item) => h('button', {
-              key: item.id,
-              type: 'button',
-              className: `dt-panel-navcell ${section === item.id ? 'dt-panel-navcell-active' : ''}`,
-              'aria-current': section === item.id ? 'page' : undefined,
-              onClick: () => update({ panelSection: item.id }),
-            }, h(item.icon), h('span', null, item.label(t)))))),
+          h('input', {
+            type: 'search',
+            className: 'dt-panel-search',
+            value: filter,
+            placeholder: t('panel.searchPlaceholder'),
+            'aria-label': t('panel.searchPlaceholder'),
+            onChange: (event) => setFilter(event.target.value),
+            onKeyDown: (event) => { if (event.key === 'Escape' && filter !== '') setFilter('') },
+          }),
+          h('div', { className: 'dt-panel-navlist', ref: navlistRef, onKeyDown: handleNavKeyDown },
+            topUngrouped.map(sectionCell),
+            groupedSections.map(({ group, items }) => h('div', { key: group.id, className: 'dt-panel-group' },
+              h('div', { className: 'dt-panel-group-label' }, group.label(t)),
+              items.map(sectionCell))),
+            bottomUngrouped.map(sectionCell),
+            visibleSections.length === 0
+              ? h('p', { className: 'dt-panel-search-empty' }, t('panel.searchEmpty'))
+              : null)),
         h('div', { className: 'dt-panel-main' },
           h('header', { className: 'dt-panel-header' },
             h('h2', null, activeSection.label(t)),
-            h('button', {
-              type: 'button',
-              className: 'dt-panel-close',
-              'aria-label': t('panel.close'),
-              onClick: closePanel,
-            }, h(IconCloseOutline16))),
-          h('div', { className: 'dt-panel-body' }, body)))
+            h('div', { className: 'dt-panel-header-actions' },
+              h('button', {
+                type: 'button',
+                className: 'dt-panel-expand',
+                'aria-label': expanded ? t('panel.collapse') : t('panel.expand'),
+                title: expanded ? t('panel.collapse') : t('panel.expand'),
+                onClick: () => update({ panelExpanded: !expanded }),
+              }, h(expanded ? IconCollapse16 : IconExpand16)),
+              h('button', {
+                type: 'button',
+                className: 'dt-panel-close',
+                'aria-label': t('panel.close'),
+                onClick: closePanel,
+              }, h(IconCloseOutline16)))),
+          h('div', { className: 'dt-panel-body', ref: bodyRef }, body)))
     }
 
     // shell.overlay 占用者：常驻挂载，四件事——隐藏原生树中的 Tavern 会话、
@@ -11991,7 +12094,9 @@ window.__ModuleLoader__.load({
           title: t('panel.title'),
           closeLabel: t('panel.close'),
           headless: true,
-          className: 'dt-panel-modal',
+          // 全屏态（2026-10-21 导航重做）：dt-panel-modal-full 吃满视口减 24px；
+          // 与基础宽高的 min() 取法同源，窄屏天然回落。
+          className: `dt-panel-modal${state.panelExpanded === true ? ' dt-panel-modal-full' : ''}`,
         }, h(TavernPanel, { ctx: PanelHost.context, useSessions })))
     }
 
@@ -12071,6 +12176,25 @@ window.__ModuleLoader__.load({
         .dt-panel-close:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
         .dt-panel-body{flex:1;min-height:0;overflow-y:auto}
         .dt-panel-body .dt-sidebar{padding:0 4px}
+        .dt-panel-search{box-sizing:border-box;width:100%;height:30px;margin:0 0 8px;padding:0 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);font:inherit;font-size:12px;flex:none}
+        .dt-panel-search::placeholder{color:var(--dsw-alias-label-tertiary)}
+        .dt-panel-search:focus-visible{outline:none;border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 25%,transparent)}
+        .dt-panel-group{display:flex;flex-direction:column;gap:2px;margin-top:6px}
+        .dt-panel-group:first-of-type{margin-top:2px}
+        .dt-panel-group-label{padding:6px 9px 2px;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));font-size:11px;line-height:15px;font-weight:600;user-select:none}
+        .dt-panel-search-empty{margin:8px 9px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+        .dt-panel-navcell:focus-visible{outline:none;box-shadow:inset 0 0 0 2px var(--dsw-alias-state-business-primary)}
+        .dt-panel-header-actions{display:flex;align-items:center;gap:4px;flex:none}
+        .dt-panel-expand{width:28px;height:28px;display:grid;place-items:center;border:0;border-radius:6px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer}
+        .dt-panel-expand:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .dt-panel-modal-full{width:calc(100vw - 24px)!important;height:calc(100vh - 24px)!important}
+        .dt-stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(116px,1fr));gap:8px;margin:0 0 4px}
+        .dt-stat{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:transparent;color:inherit;cursor:pointer;text-align:left;transition:background .12s,border-color .12s}
+        .dt-stat:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l1,var(--dsw-alias-border-l2))}
+        .dt-stat:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-state-business-primary)}
+        .dt-stat-value{font-size:22px;line-height:28px;font-weight:600;font-variant-numeric:tabular-nums}
+        .dt-stat-label{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+        .dt-filter-row{display:flex;max-width:340px;margin:0 0 12px}
         .dt-about-head{display:flex;align-items:center;gap:12px;margin-bottom:12px}
         .dt-about-head>svg{flex:none}
         .dt-about-head-copy{display:flex;flex-direction:column;min-width:0}
@@ -12157,7 +12281,7 @@ window.__ModuleLoader__.load({
         .dt-audit-row pre{margin:0;max-height:120px;overflow:auto;color:var(--dsw-alias-label-primary);font:11px/16px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
         .dt-tc-state{display:inline-flex;align-items:center;padding:0 4px}
         .dt-header-character{padding:0;border:0;border-radius:0}
-        @media(max-width:700px){.dt-panel{flex-direction:column}.dt-panel-nav{width:100%;flex-direction:row;align-items:center;overflow-x:auto;overflow-y:hidden;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-panel-navlist{display:contents}.dt-panel-brand{padding:4px 8px}.dt-panel-brand-copy{display:none}.dt-panel-navcell{flex:none}.dt-card-grid{grid-template-columns:1fr}.dt-kv-row{grid-template-columns:1fr 1fr 28px}.dt-editor-grid{grid-template-columns:1fr}.dt-editor-wide{grid-column:auto}.dt-editor-toolbar{align-items:flex-start}.dt-preset-row{align-items:flex-start}.dt-preset-name{flex-basis:100%}}
+        @media(max-width:700px){.dt-panel{flex-direction:column}.dt-panel-nav{width:100%;flex-direction:row;align-items:center;overflow-x:auto;overflow-y:hidden;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-panel-navlist{display:contents}.dt-panel-brand{padding:4px 8px}.dt-panel-brand-copy{display:none}.dt-panel-navcell{flex:none}.dt-card-grid{grid-template-columns:1fr}.dt-kv-row{grid-template-columns:1fr 1fr 28px}.dt-editor-grid{grid-template-columns:1fr}.dt-editor-wide{grid-column:auto}.dt-editor-toolbar{align-items:flex-start}.dt-preset-row{align-items:flex-start}.dt-preset-name{flex-basis:100%}.dt-panel-search{display:none}.dt-panel-group-label{display:none}}
         .dt-novel-badge{display:inline-flex;align-items:center;min-height:18px;padding:0 7px;border-radius:9px;font-size:10px;line-height:18px;font-weight:600;white-space:nowrap}
         .dt-novel-badge-active{color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent)}
         .dt-novel-badge-paused{color:var(--dsw-alias-state-warn-label,var(--dsw-alias-label-secondary));background:var(--dsw-alias-interactive-bg-hover)}
@@ -12439,6 +12563,208 @@ window.__ModuleLoader__.load({
         .dt-frontend-side-empty svg{color:var(--dsw-alias-label-caption)}
       `
       document.head.appendChild(tag)
+    }
+
+    // 预设面板族（2026-10-21 从 90-panels-core.js 拆出）：PresetEditor 表单 +
+    // PanelPresets 清单 + 空白模板常量。拆分原因：源文件预算（800 行）——
+    // 面板注册表 + 角色/世界书族继续增长，预设族自成一体（编辑器 + 清单 +
+    // 生效范围开关），是最干净的缝合线。声明跨片段共享（manifest 拼接进同一
+    // ModuleLoader 工厂作用域），此处引用的 EditorField/ToggleField/cloneValue
+    // 等函数声明提升可见，BLANK_PRESET 仅渲染期使用、无 TDZ 风险。
+
+    // 手动新建的空白预设模板：空 prompts/prompt_order 即合法 chat-completion
+    // 形态（detectPresetKind 按这两个数组判定），采样字段留空袋由编辑器维护。
+    const BLANK_PRESET = { prompts: [], prompt_order: [] }
+
+    function PresetEditor({ name, data, kind, onSave, onCancel }) {
+      const t = useTranslate()
+      const [draft, setDraft] = useState(() => cloneValue(data) || {})
+      const [presetName, setPresetName] = useState(name)
+      const [advanced, setAdvanced] = useState(() => JSON.stringify(Object.fromEntries(Object.entries(data || {}).filter(([key]) => key !== 'prompts' && key !== 'prompt_order')), null, 2))
+      const [error, setError] = useState('')
+      const [saving, setSaving] = useState(false)
+      const prompts = draft.prompts || []
+      const chatPreset = kind === 'chat-completion' || Array.isArray(data?.prompts)
+      const dirty = presetName !== name || advanced !== JSON.stringify(Object.fromEntries(Object.entries(data || {}).filter(([key]) => key !== 'prompts' && key !== 'prompt_order')), null, 2) || JSON.stringify(draft.prompts) !== JSON.stringify((data || {}).prompts)
+      const setPrompt = (index, key, value) => setDraft((current) => {
+        const previous = current.prompts?.[index]
+        const next = { ...current, prompts: (current.prompts || []).map((prompt, promptIndex) => promptIndex === index ? { ...prompt, [key]: value } : prompt) }
+        if (key === 'identifier' && previous?.identifier !== value) {
+          next.prompt_order = (current.prompt_order || []).map((item) => ({ ...item, order: (item.order || []).map((entry) => entry.identifier === previous?.identifier ? { ...entry, identifier: value } : entry) }))
+        }
+        return next
+      })
+      const addPrompt = () => {
+        const identifier = `customPrompt${prompts.length + 1}`
+        const prompt = { name: 'New prompt', identifier, role: 'system', content: '', system_prompt: true }
+        setDraft((current) => {
+          const order = Array.isArray(current.prompt_order) && current.prompt_order.length > 0 ? current.prompt_order.map((item) => ({ ...item, order: [...(item.order || []), { identifier, enabled: true }] })) : [{ character_id: 100000, order: [{ identifier, enabled: true }] }]
+          return { ...current, prompts: [...(current.prompts || []), prompt], prompt_order: order }
+        })
+      }
+      const removePrompt = (index) => {
+        const identifier = prompts[index]?.identifier
+        setDraft((current) => ({
+          ...current,
+          prompts: (current.prompts || []).filter((_, promptIndex) => promptIndex !== index),
+          prompt_order: (current.prompt_order || []).map((item) => ({ ...item, order: (item.order || []).filter((entry) => entry.identifier !== identifier) })),
+        }))
+      }
+      const save = () => {
+        let sampler
+        try { sampler = advanced.trim() === '' ? {} : JSON.parse(advanced) } catch { setError(t('panel.presets.invalidJson')); return }
+        if (!sampler || typeof sampler !== 'object' || Array.isArray(sampler)) { setError(t('panel.presets.invalidJson')); return }
+        if (chatPreset && prompts.some((prompt) => !String(prompt.identifier || '').trim() || prompts.filter((candidate) => candidate.identifier === prompt.identifier).length > 1)) {
+          setError(t('panel.presets.identifierInvalid'))
+          return
+        }
+        setSaving(true)
+        setError('')
+        const nextData = chatPreset ? { ...sampler, prompts: draft.prompts || [], prompt_order: draft.prompt_order || [] } : sampler
+        void Promise.resolve(onSave(nextData, presetName.trim() || name))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setSaving(false))
+      }
+      const cancel = () => { if (!dirty || window.confirm(`${t('panel.unsaved')}?`)) onCancel() }
+      return h('div', { className: 'dt-editor' },
+        h('div', { className: 'dt-editor-toolbar' },
+          h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+          h('div', { className: 'dt-editor-actions' },
+            h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+            h(Button, { size: 'sm', variant: 'primary', disabled: saving || !presetName.trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
+        h('p', { className: 'dt-hint' }, t('panel.presets.editHint')),
+        h('div', { className: 'dt-editor-grid' }, h(EditorField, { label: t('panel.rename'), value: presetName, onChange: setPresetName })),
+        chatPreset ? h('div', { className: 'dt-editor-section-title' },
+          h('strong', null, t('panel.presets.prompts')),
+          h(Button, { size: 'sm', variant: 'outline', icon: h(IconPlusOutline16), onClick: addPrompt }, t('panel.presets.addPrompt'))) : null,
+        chatPreset ? h('div', { className: 'dt-editor-entries' }, prompts.map((prompt, index) => h('section', { key: `${prompt.identifier || 'prompt'}-${index}`, className: 'dt-editor-entry' },
+          h('div', { className: 'dt-editor-entry-head' }, h('strong', null, prompt.name || prompt.identifier || `#${index + 1}`), h(Button, { size: 'sm', variant: 'ghost', icon: h(IconTrashOutline16), 'aria-label': t('panel.presets.removePrompt'), title: t('panel.presets.removePrompt'), onClick: () => removePrompt(index) })),
+          h('div', { className: 'dt-editor-grid' },
+            h(EditorField, { label: t('panel.presets.promptName'), value: prompt.name, onChange: (value) => setPrompt(index, 'name', value) }),
+            h(EditorField, { label: t('panel.presets.identifier'), value: prompt.identifier, onChange: (value) => setPrompt(index, 'identifier', value) }),
+            h('label', { className: 'dt-editor-field' }, h('span', { className: 'dt-label' }, t('panel.presets.role')), h('select', { value: prompt.role || 'system', onChange: (event) => setPrompt(index, 'role', event.target.value) }, h('option', { value: 'system' }, 'system'), h('option', { value: 'user' }, 'user'), h('option', { value: 'assistant' }, 'assistant'))),
+            h(EditorField, { label: t('panel.presets.content'), value: prompt.content, onChange: (value) => setPrompt(index, 'content', value), multiline: true, className: 'dt-editor-wide' }),
+            h('div', { className: 'dt-editor-toggles dt-editor-wide' },
+              h(ToggleField, { label: t('panel.presets.marker'), checked: prompt.marker === true, onChange: (value) => setPrompt(index, 'marker', value) }),
+              h(ToggleField, { label: t('panel.presets.enabled'), checked: prompt.system_prompt !== false, onChange: (value) => setPrompt(index, 'system_prompt', value) })))))) : null,
+        h(EditorField, { label: t('panel.presets.sampler'), value: advanced, onChange: setAdvanced, multiline: true, className: 'dt-editor-wide dt-editor-json' }),
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
+    function PanelPresets() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const [error, setError] = useState('')
+      const [editing, setEditing] = useState('')
+      const [creating, setCreating] = useState(false)
+      const [presets, setPresets] = useState({})
+      const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
+      const kinds = state.bootstrap.presetKinds || {}
+      const editPreset = (name) => {
+        setEditing(editing === name ? '' : name)
+        if (!(name in presets)) {
+          setPresets((current) => ({ ...current, [name]: null }))
+          void fetchPreset(name).then((data) => setPresets((current) => ({ ...current, [name]: data })))
+            .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+        }
+      }
+      const save = (name, data, nextName) => savePreset(name, data, nextName).then((saved) => {
+        const target = nextName || name
+        setPresets((current) => {
+          const next = { ...current, [target]: saved }
+          if (target !== name) delete next[name]
+          return next
+        })
+        setEditing('')
+      })
+      // 手动新建走与编辑同一条 PUT preset 路径（oldName === 新名，putPreset 落盘
+      // 即建预设）；重名覆盖语义与导入一致，面板侧先拦同名（大小写不敏感）。
+      // detectPresetKind 要求 prompts 与 prompt_order 同时为数组才认定为
+      // chat-completion，空白模板两者都带上。
+      const createPreset = (data, name) => {
+        const target = String(name || '').trim()
+        if (target === '') return Promise.reject(new Error(t('panel.rename')))
+        const normalized = target.toLowerCase()
+        if (state.bootstrap.presets.some((existing) => existing.toLowerCase() === normalized)) {
+          return Promise.reject(new Error(t('panel.presets.duplicate', { name: target })))
+        }
+        return savePreset(target, data, target)
+          .then((saved) => {
+            setPresets((current) => ({ ...current, [target]: saved }))
+            setCreating(false)
+            setEditing(target)
+            return saved
+          })
+          .catch((cause) => {
+            throw new Error(t('panel.presets.createFailed', { message: cause instanceof Error ? cause.message : String(cause) }))
+          })
+      }
+      // 名称过滤（2026-10-21 分页 UX）：与角色/剧本/正则清单同款过滤模式。
+      const [presetFilter, setPresetFilter] = useState('')
+      const presetQuery = presetFilter.trim().toLowerCase()
+      const presetNames = state.bootstrap.presets
+      const visiblePresets = presetQuery === ''
+        ? presetNames
+        : presetNames.filter((name) => name.toLowerCase().includes(presetQuery))
+      return h(React.Fragment, null,
+        h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('settings.import')),
+          h('div', { className: 'dt-imports' },
+            h(UploadButton, { kind: 'preset', label: t('settings.importPreset'), accept: '.json,application/json' }),
+            h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setCreating(true) } }, `+ ${t('panel.presets.new')}`))),
+        // 预设生效范围（preset-mount.ts）：AgentTavern 恒投影；工作台/小说按
+        // 这两个开关接入（默认关），翻转经 state 路由写穿投影缓存。
+        h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('panel.presets.scope')),
+          h('p', { className: 'dt-hint' }, t('panel.presets.scopeHint')),
+          h('div', { className: 'dt-imports' },
+            h('label', { className: 'dt-toggle' },
+              h('input', {
+                type: 'checkbox',
+                checked: state.bootstrap.state.cardWorkbenchPresetEnabled === true,
+                onChange: (event) => run(patchState({ cardWorkbenchPresetEnabled: event.target.checked })),
+              }),
+              h('span', null, t('panel.presets.workbenchToggle'))),
+            h('label', { className: 'dt-toggle' },
+              h('input', {
+                type: 'checkbox',
+                checked: state.bootstrap.state.agentNovelPresetEnabled === true,
+                onChange: (event) => run(patchState({ agentNovelPresetEnabled: event.target.checked })),
+              }),
+              h('span', null, t('panel.presets.novelToggle'))))),
+        h('section', { className: 'dt-settings-band' },
+          presetNames.length > 0 ? h('div', { className: 'dt-filter-row' },
+            h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.filterPlaceholder'), 'aria-label': t('panel.filterPlaceholder'), value: presetFilter, onChange: (event) => setPresetFilter(event.target.value) })) : null,
+          presetNames.length === 0 && !creating
+            ? h('p', { className: 'dt-muted' }, t('panel.presets.empty'))
+            : visiblePresets.length === 0
+              ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
+              : h('div', { className: 'dt-preset-list' }, visiblePresets.map((name) => h('div', { key: name, className: 'dt-preset-row' },
+                h('strong', { className: 'dt-preset-name' }, name),
+                h(Pill, null, kinds[name] || 'preset'),
+                h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editPreset(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),
+                h(Button, { size: 'sm', variant: 'ghost', icon: h(IconDownloadOutline16), 'aria-label': t('panel.exportJson'), title: t('panel.exportJson'), onClick: () => downloadAsset(`export/preset/${encodeURIComponent(name)}`, `${name}.json`) }),
+                state.bootstrap.state.activePreset === name
+                  ? h(Pill, { active: true }, t('panel.characters.active'))
+                  : h(Button, { size: 'sm', variant: 'outline', onClick: () => run(patchState({ activePreset: name })) }, t('panel.presets.setActive')),
+                h(Button, {
+                  size: 'sm',
+                  variant: 'ghost',
+                  icon: h(IconTrashOutline16),
+                  'aria-label': t('panel.presets.delete', { name }),
+                  title: t('panel.presets.delete', { name }),
+                  onClick: () => {
+                    if (window.confirm(t('panel.presets.deleteConfirm', { name }))) run(deletePresetAsset(name))
+                  },
+                }),
+                editing === name ? h('div', { className: 'dt-preset-editor-wrap' }, presets[name] ? h(PresetEditor, { name, kind: kinds[name], data: presets[name], onSave: (data, nextName) => save(name, data, nextName), onCancel: () => setEditing('') }) : h('p', { className: 'dt-muted' }, t('nav.loading'))) : null)))),
+        creating
+          ? h('section', { className: 'dt-settings-band' },
+              h('h3', null, t('panel.presets.creating')),
+              h('p', { className: 'dt-hint' }, t('panel.presets.createEditorHint')),
+              h(PresetEditor, { name: '', kind: 'chat-completion', data: BLANK_PRESET, onSave: createPreset, onCancel: () => setCreating(false) }))
+          : null,
+        error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
 
     function apply(ctx) {

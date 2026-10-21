@@ -171,7 +171,9 @@ describe('client games panel (main.js source check)', () => {
     expect(source.split('IconGamepadOutline16').length - 1).toBe(5)
     for (const marker of [
       'function IconGamepadOutline16({ size = 16, className })',
-      "{ id: 'games', icon: IconGamepadOutline16,",
+      // 2026-10-21 导航重做：分区注册项新增 group 字段（游戏属会话组），
+      // id 与 icon 不再相邻——按新源序锁定。
+      "{ id: 'games', group: 'session', icon: IconGamepadOutline16,",
       'icon: IconGamepadOutline16,',
       '}, h(IconGamepadOutline16)),',
       "h('div', { className: 'dt-game-board-empty-icon' }, h(IconGamepadOutline16, { size: 22 })),",

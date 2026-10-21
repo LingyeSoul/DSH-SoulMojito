@@ -758,6 +758,25 @@ function checkFrontendRuntimeText(text) {
     // （display:contents）——留着它，18 个分区按钮会在横向按钮条里竖排堆叠、
     // 把主区挤没（headless Chrome 390×844 实测：nav 667px / 主区 33px）。
     '.dt-panel-navlist{display:contents}',
+    // 2026-10-21 导航重做（用户反馈「面板特别难用」）：分组清单 + 过滤框 +
+    // 全屏切换 + 键盘导航 + 分区滚动记忆。逐一锁结构与让它成立的 CSS 规则——
+    // 过滤框钉在清单外（与品牌同段常驻）、组容器/组标签渲染进清单、全屏修饰
+    // 类吃满视口减 24px、移动端横条里过滤框与组标签退场、滚动记忆写读两行、
+    // 自绘 info/expand/collapse 图标在场。任一回退都会让面板退回 18 项平铺。
+    'const panelSectionGroups = [',
+    "className: 'dt-panel-search'",
+    "className: 'dt-panel-group'",
+    "className: 'dt-panel-group-label'",
+    "className: 'dt-panel-search-empty'",
+    "className: 'dt-panel-expand'",
+    "'data-dt-section': item.id",
+    'body.scrollTop = scrollMemory.current[section] ?? 0',
+    '.dt-panel-modal-full{width:calc(100vw - 24px)!important;height:calc(100vh - 24px)!important}',
+    '.dt-panel-search{display:none}',
+    '.dt-panel-group-label{display:none}',
+    'function IconInfoOutline16(',
+    'function IconExpand16(',
+    'function IconCollapse16(',
     // Brand logo (2026-10-16 user request: the delivered assets/logo.svg replaces
     // the hand-drawn mark): the inlined SoulMojitoLogo component -- its viewBox
     // frame plus the palette carried by the asset -- and its four surfaces:
@@ -2641,6 +2660,21 @@ const gates = [
         '.dt-panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}',
         // 移动端横条复位（2026-10-14 移动端实况回归）：媒体查询里清单容器退场。
         '.dt-panel-navlist{display:contents}',
+        // 2026-10-21 导航重做：与 checker 的必需 marker 列表逐条对齐。
+        'const panelSectionGroups = [',
+        "className: 'dt-panel-search'",
+        "className: 'dt-panel-group'",
+        "className: 'dt-panel-group-label'",
+        "className: 'dt-panel-search-empty'",
+        "className: 'dt-panel-expand'",
+        "'data-dt-section': item.id",
+        'body.scrollTop = scrollMemory.current[section] ?? 0',
+        '.dt-panel-modal-full{width:calc(100vw - 24px)!important;height:calc(100vh - 24px)!important}',
+        '.dt-panel-search{display:none}',
+        '.dt-panel-group-label{display:none}',
+        'function IconInfoOutline16({ size = 16, className }) {}',
+        'function IconExpand16({ size = 16, className }) {}',
+        'function IconCollapse16({ size = 16, className }) {}',
         // Brand logo (2026-10-16 user request): inlined logo component + frame +
         // brand name in the panel brand block + brand label on the sidebar footer
         // action + brand spelling in the about heading — aligned one-to-one with

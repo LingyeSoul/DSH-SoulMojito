@@ -92,10 +92,22 @@
       'settings.regexNameRequired': 'Script name is required.',
       'settings.regexFindRequired': 'Find regex is required.',
       'settings.regexBadPattern': 'Invalid regex: {message}',
+      // Delete confirm (2026-10-21 per-page UX): the row used to delete in one click.
+      'settings.regexDeleteConfirm': 'Delete regex script "{name}"?',
       'panel.title': 'Tavern management',
       'panel.close': 'Close panel',
       'panel.open': 'Open Tavern panel',
       'panel.nav': 'Tavern panel sections',
+      // Section filter and fullscreen toggle (2026-10-21 nav rework). zh/en key
+      // parity is enforced by the gates locale check.
+      'panel.searchPlaceholder': 'Search sections…',
+      'panel.searchEmpty': 'No matching sections',
+      'panel.expand': 'Full screen',
+      'panel.collapse': 'Exit full screen',
+      // Section group labels: assets / per-chat state / configuration & diagnostics.
+      'panel.group.content': 'Content',
+      'panel.group.session': 'Sessions',
+      'panel.group.system': 'System',
       'panel.section.overview': 'Overview',
       'panel.section.characters': 'Characters',
       'panel.section.chats': 'Chats',
@@ -233,7 +245,12 @@
       'workbench.hideDiff': 'Hide changes',
       'workbench.appliedAt': 'Applied {time}',
       'workbench.decidedAt': 'Decided {time}',
-      'panel.overview.counts': 'Characters {characters} · Chats {chats} · Worlds {worlds} · Presets {presets} · Personas {personas} · Groups {groups}',
+      // Overview stat cards (2026-10-21 per-page UX): hint line + accessible names.
+      'panel.overview.statsHint': 'Asset overview — click a number to jump to its section.',
+      'panel.overview.statOpen': 'Open the {section} section',
+      // List filters (2026-10-21 per-page UX): shared by characters/presets/scripts/regex/personas.
+      'panel.filterPlaceholder': 'Filter…',
+      'panel.filterEmpty': 'No matching items',
       'panel.characters.empty': 'No character cards imported',
       'panel.characters.viewCard': 'View card',
       'panel.characters.hideCard': 'Hide card',

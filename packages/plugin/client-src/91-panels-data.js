@@ -311,6 +311,12 @@
         })
       useEffect(() => { void reload() }, [])
       const scripts = Array.isArray(library?.scripts) ? library.scripts : []
+      // 名称过滤（2026-10-21 分页 UX）：剧本库随导入增长，同款过滤模式。
+      const [scriptFilter, setScriptFilter] = useState('')
+      const scriptQuery = scriptFilter.trim().toLowerCase()
+      const visibleScripts = scriptQuery === ''
+        ? scripts
+        : scripts.filter((script) => script.name.toLowerCase().includes(scriptQuery))
       const bindings = library?.bindings && typeof library.bindings === 'object' && !Array.isArray(library.bindings) ? library.bindings : {}
       const importText = (name, content, format) => {
         const trimmed = name.trim()
@@ -421,11 +427,15 @@
               h(Button, { size: 'sm', variant: 'ghost', onClick: () => setPasteOpen(false) }, t('panel.cancel')))) : null,
           characters.length === 0 ? h('p', { className: 'dt-hint' }, t('scripts.noCharacters')) : null),
         h('section', { className: 'dt-settings-band' },
+          scripts.length > 0 ? h('div', { className: 'dt-filter-row' },
+            h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.filterPlaceholder'), 'aria-label': t('panel.filterPlaceholder'), value: scriptFilter, onChange: (event) => setScriptFilter(event.target.value) })) : null,
           library === null
             ? h('p', { className: 'dt-muted' }, t('nav.loading'))
             : scripts.length === 0
               ? h('p', { className: 'dt-muted' }, t('scripts.empty'))
-              : h('div', { className: 'dt-script-list' }, scripts.map((script) => {
+              : visibleScripts.length === 0
+                ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
+                : h('div', { className: 'dt-script-list' }, visibleScripts.map((script) => {
                 const bound = Object.keys(bindings).filter((character) => bindings[character] === script.name)
                 const draft = selection[script.name] || ''
                 return h('div', { key: script.name, className: 'dt-script-row' },

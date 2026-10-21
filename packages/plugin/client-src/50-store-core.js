@@ -50,6 +50,10 @@
       models: EMPTY_MODELS,
       panelOpen: false,
       panelSection: 'overview',
+      // 面板全屏态（2026-10-21 导航重做）：true 时模态框吃满视口减 24px 边距；
+      // 纯 UI 状态，进 store 让打开/关闭面板之间保持用户选择（与 panelSection
+      // 同款语义，页面重载回默认 false）。
+      panelExpanded: false,
       navigationStatus: '',
       // 侧边栏分区折叠（酒馆 / 写卡工作台）：进 store 而非组件 state，docked
       // 侧栏门户与面板聊天分区两个挂载点共享同一份折叠态（panelSection 同款

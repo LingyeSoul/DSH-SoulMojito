@@ -91,10 +91,22 @@
       'settings.regexNameRequired': '请填写脚本名称。',
       'settings.regexFindRequired': '请填写查找正则。',
       'settings.regexBadPattern': '正则无效：{message}',
+      // 删除确认（2026-10-21 分页 UX）：原一键即删，补与角色/预设/世界书同款的确认。
+      'settings.regexDeleteConfirm': '删除正则脚本「{name}」？',
       'panel.title': '酒馆管理面板',
       'panel.close': '关闭面板',
       'panel.open': '打开酒馆面板',
       'panel.nav': '酒馆面板分区',
+      // 分区过滤与全屏（2026-10-21 导航重做）：搜索框占位/空态与全屏切换钮的
+      // 文案。zh/en 键集镜像由 gates 的 locale 校验兜底。
+      'panel.searchPlaceholder': '搜索分区…',
+      'panel.searchEmpty': '没有匹配的分区',
+      'panel.expand': '全屏',
+      'panel.collapse': '退出全屏',
+      // 分区分组标签：内容（卡/书/剧本等资产）/ 会话（聊天态）/ 系统（配置与诊断）。
+      'panel.group.content': '内容',
+      'panel.group.session': '会话',
+      'panel.group.system': '系统',
       'panel.section.overview': '总览',
       'panel.section.characters': '角色',
       'panel.section.chats': '聊天',
@@ -231,7 +243,12 @@
       'workbench.hideDiff': '收起改动',
       'workbench.appliedAt': '应用于 {time}',
       'workbench.decidedAt': '决定于 {time}',
-      'panel.overview.counts': '角色 {characters} · 聊天 {chats} · 世界书 {worlds} · 预设 {presets} · 人设 {personas} · 群组 {groups}',
+      // 总览资产速览（2026-10-21 分页 UX）：数字卡片的引导文案与无障碍名。
+      'panel.overview.statsHint': '资产一览，点击数字直达对应分区。',
+      'panel.overview.statOpen': '打开{section}分区',
+      // 清单过滤（2026-10-21 分页 UX）：角色/预设/剧本/正则/人设五处同款过滤框。
+      'panel.filterPlaceholder': '筛选…',
+      'panel.filterEmpty': '没有匹配项',
       'panel.characters.empty': '尚未导入角色卡',
       'panel.characters.viewCard': '查看卡面',
       'panel.characters.hideCard': '收起卡面',

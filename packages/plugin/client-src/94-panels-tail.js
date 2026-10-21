@@ -211,7 +211,27 @@
       // 分区跟随 store 的 panelSection（openPanel(section) 可在面板已打开时切换，
       // 例如小说会话头的“打开小说面板”入口）；导航点击同步写回 store。
       const section = state.panelSection || 'overview'
+      const expanded = state.panelExpanded === true
+      // 分区清单过滤（2026-10-21 导航重做）：组件内临时态——过滤词不跨面板打开
+      // 保留（重开面板从完整清单开始，比记住上次的过滤词更符合「打开即全貌」）。
+      const [filter, setFilter] = useState('')
+      const navlistRef = useRef(null)
+      const bodyRef = useRef(null)
+      // 分区滚动位置记忆：切走时记下 scrollTop、切回时还原——长清单（聊天/
+      // 剧本/方案）来回切不再被打回顶部。组件实例随面板开关重建，记忆同样
+      // 不跨打开保留。
+      const scrollMemory = useRef({})
+      const trackedSection = useRef(section)
       useEffect(() => { if (state.loading) void refreshBootstrap().catch(() => {}) }, [])
+      useEffect(() => {
+        const body = bodyRef.current
+        if (body === null) return
+        if (trackedSection.current !== section) {
+          scrollMemory.current[trackedSection.current] = body.scrollTop
+          trackedSection.current = section
+        }
+        body.scrollTop = scrollMemory.current[section] ?? 0
+      }, [section])
       const stamp = state.bootstrap.version || state.bootstrap.commit
         ? `v${state.bootstrap.version || '?'}${state.bootstrap.commit ? ` (${state.bootstrap.commit})` : ''}`
         : ''
@@ -219,34 +239,102 @@
       // 注册），与三元链时代 `: h(PanelOverview)` 的兜底等价。
       const activeSection = panelSections.find((item) => item.id === section) ?? panelSections[0]
       const body = activeSection.component({ ctx, useSessions })
+      // 过滤与分组：匹配按分区显示名（当前 locale）小写包含；组内保持注册顺序，
+      // overview/about 无组——注册表里第一个带组分区之前的无组项置顶（overview），
+      // 其余无组项（about 及未来新增）垫在组清单之后。
+      const query = filter.trim().toLowerCase()
+      const visibleSections = query === ''
+        ? panelSections
+        : panelSections.filter((item) => item.label(t).toLowerCase().includes(query))
+      const firstGroupedIndex = panelSections.findIndex((item) => item.group !== undefined)
+      const topIds = new Set(panelSections.slice(0, firstGroupedIndex === -1 ? panelSections.length : firstGroupedIndex).map((item) => item.id))
+      const topUngrouped = visibleSections.filter((item) => topIds.has(item.id))
+      const bottomUngrouped = visibleSections.filter((item) => item.group === undefined && !topIds.has(item.id))
+      const groupedSections = panelSectionGroups
+        .map((group) => ({ group, items: visibleSections.filter((item) => item.group === group.id) }))
+        .filter((entry) => entry.items.length > 0)
+      const visibleIds = visibleSections.map((item) => item.id)
+      const sectionCell = (item) => h('button', {
+        key: item.id,
+        type: 'button',
+        className: `dt-panel-navcell ${section === item.id ? 'dt-panel-navcell-active' : ''}`,
+        'aria-current': section === item.id ? 'page' : undefined,
+        'data-dt-section': item.id,
+        onClick: () => update({ panelSection: item.id }),
+      }, h(item.icon), h('span', null, item.label(t)))
+      // 键盘导航：↑↓ 在可见分区间移动激活（同步聚焦按钮，屏幕阅读器跟随），
+      // Home/End 跳首尾；原生 Tab 序不受影响。
+      const focusSectionButton = (id) => {
+        const buttons = navlistRef.current?.querySelectorAll('[data-dt-section]') ?? []
+        for (const button of buttons) {
+          if (button.getAttribute('data-dt-section') === id) {
+            button.focus()
+            break
+          }
+        }
+      }
+      const activateSection = (id) => {
+        update({ panelSection: id })
+        requestAnimationFrame(() => focusSectionButton(id))
+      }
+      const handleNavKeyDown = (event) => {
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') return
+        if (visibleIds.length === 0) return
+        event.preventDefault()
+        const index = visibleIds.indexOf(section)
+        const next = event.key === 'Home' ? 0
+          : event.key === 'End' ? visibleIds.length - 1
+            : event.key === 'ArrowDown' ? Math.min(index + 1, visibleIds.length - 1)
+              : Math.max(index - 1, 0)
+        if (visibleIds[next] !== undefined && visibleIds[next] !== section) activateSection(visibleIds[next])
+      }
       return h('div', { className: 'dt-panel' },
-        // 导航列分两段（2026-10-14 用户反馈：红框的 Tavern 标题区要钉住）：
-        // 品牌块常驻不滚，只滚分区清单——分区数会随 Mod 面板注册增长，长到
-        // 溢出时原来整列滚动会把「这是酒馆面板」的标题一起卷走。
+        // 导航列分三段（2026-10-21 导航重做）：品牌块与过滤框常驻不滚，只滚
+        // 分组分区清单——分区数会随 Mod 面板注册增长，长到溢出时原来整列滚动
+        // 会把「这是酒馆面板」的标题一起卷走（品牌钉住是 2026-10-14 反馈的
+        // 既有契约，过滤框与其同段）。
         h('nav', { className: 'dt-panel-nav', 'aria-label': t('panel.nav') },
           h('div', { className: 'dt-panel-brand' },
             h(SoulMojitoLogo),
             h('div', { className: 'dt-panel-brand-copy' },
               h('strong', null, 'SoulMojito'),
               stamp ? h('span', null, stamp) : null)),
-          h('div', { className: 'dt-panel-navlist' },
-            panelSections.map((item) => h('button', {
-              key: item.id,
-              type: 'button',
-              className: `dt-panel-navcell ${section === item.id ? 'dt-panel-navcell-active' : ''}`,
-              'aria-current': section === item.id ? 'page' : undefined,
-              onClick: () => update({ panelSection: item.id }),
-            }, h(item.icon), h('span', null, item.label(t)))))),
+          h('input', {
+            type: 'search',
+            className: 'dt-panel-search',
+            value: filter,
+            placeholder: t('panel.searchPlaceholder'),
+            'aria-label': t('panel.searchPlaceholder'),
+            onChange: (event) => setFilter(event.target.value),
+            onKeyDown: (event) => { if (event.key === 'Escape' && filter !== '') setFilter('') },
+          }),
+          h('div', { className: 'dt-panel-navlist', ref: navlistRef, onKeyDown: handleNavKeyDown },
+            topUngrouped.map(sectionCell),
+            groupedSections.map(({ group, items }) => h('div', { key: group.id, className: 'dt-panel-group' },
+              h('div', { className: 'dt-panel-group-label' }, group.label(t)),
+              items.map(sectionCell))),
+            bottomUngrouped.map(sectionCell),
+            visibleSections.length === 0
+              ? h('p', { className: 'dt-panel-search-empty' }, t('panel.searchEmpty'))
+              : null)),
         h('div', { className: 'dt-panel-main' },
           h('header', { className: 'dt-panel-header' },
             h('h2', null, activeSection.label(t)),
-            h('button', {
-              type: 'button',
-              className: 'dt-panel-close',
-              'aria-label': t('panel.close'),
-              onClick: closePanel,
-            }, h(IconCloseOutline16))),
-          h('div', { className: 'dt-panel-body' }, body)))
+            h('div', { className: 'dt-panel-header-actions' },
+              h('button', {
+                type: 'button',
+                className: 'dt-panel-expand',
+                'aria-label': expanded ? t('panel.collapse') : t('panel.expand'),
+                title: expanded ? t('panel.collapse') : t('panel.expand'),
+                onClick: () => update({ panelExpanded: !expanded }),
+              }, h(expanded ? IconCollapse16 : IconExpand16)),
+              h('button', {
+                type: 'button',
+                className: 'dt-panel-close',
+                'aria-label': t('panel.close'),
+                onClick: closePanel,
+              }, h(IconCloseOutline16)))),
+          h('div', { className: 'dt-panel-body', ref: bodyRef }, body)))
     }
 
     // shell.overlay 占用者：常驻挂载，四件事——隐藏原生树中的 Tavern 会话、
@@ -343,7 +431,9 @@
           title: t('panel.title'),
           closeLabel: t('panel.close'),
           headless: true,
-          className: 'dt-panel-modal',
+          // 全屏态（2026-10-21 导航重做）：dt-panel-modal-full 吃满视口减 24px；
+          // 与基础宽高的 min() 取法同源，窄屏天然回落。
+          className: `dt-panel-modal${state.panelExpanded === true ? ' dt-panel-modal-full' : ''}`,
         }, h(TavernPanel, { ctx: PanelHost.context, useSessions })))
     }
 

@@ -38,6 +38,91 @@
       h('circle', { cx: 12, cy: 8.9, r: 0.7, fill: 'currentColor', stroke: 'none' }))
     }
 
+    // 面板外壳自绘图标（2026-10-21 导航重做）：宿主 0.2.1 图标清单里没有「信息/
+    // 全屏」语义的图形，照游戏手柄的同款几何纪律自绘——16 网格、fill:none、
+    // stroke=currentColor、1px 描边、size 属性走宿主图标同款协议。Info 给关于
+    // 分区；Expand/Collapse 给面板全屏切换（四角 bracket 外扩 = 全屏，箭头内收 =
+    // 还原，16px 下两形互不混淆）。
+    function IconInfoOutline16({ size = 16, className }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        strokeWidth: 1,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      h('circle', { cx: 8, cy: 8, r: 6.5, stroke: 'currentColor' }),
+      h('path', { d: 'M8 7.3V11.2', stroke: 'currentColor' }),
+      h('circle', { cx: 8, cy: 4.9, r: 0.8, fill: 'currentColor', stroke: 'none' }))
+    }
+
+    function IconExpand16({ size = 16, className }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        strokeWidth: 1,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      h('path', { d: 'M2.5 6V2.5H6', stroke: 'currentColor' }),
+      h('path', { d: 'M10 2.5H13.5V6', stroke: 'currentColor' }),
+      h('path', { d: 'M13.5 10V13.5H10', stroke: 'currentColor' }),
+      h('path', { d: 'M6 13.5H2.5V10', stroke: 'currentColor' }))
+    }
+
+    function IconCollapse16({ size = 16, className }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        strokeWidth: 1,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      h('path', { d: 'M2.5 2.5L6 6', stroke: 'currentColor' }),
+      h('path', { d: 'M4.4 6H6V4.4', stroke: 'currentColor' }),
+      h('path', { d: 'M13.5 2.5L10 6', stroke: 'currentColor' }),
+      h('path', { d: 'M11.6 6H10V4.4', stroke: 'currentColor' }),
+      h('path', { d: 'M13.5 13.5L10 10', stroke: 'currentColor' }),
+      h('path', { d: 'M11.6 10H10V11.6', stroke: 'currentColor' }),
+      h('path', { d: 'M2.5 13.5L6 10', stroke: 'currentColor' }),
+      h('path', { d: 'M4.4 10H6V11.6', stroke: 'currentColor' }))
+    }
+
+    // 剧本分区图标（2026-10-21 用户需求：要书籍感）：宿主图标清单没有书本，
+    // 照同款几何纪律自绘一本翻开的书——16px 下「两页弧面 + 中缝」三个特征
+    // 即可辨读，闭合轮廓 1px 描边与宿主 Regular 档观感一致。
+    function IconBookOutline16({ size = 16, className }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        strokeWidth: 1,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      h('path', { d: 'M8 4.1C6.4 2.9 3.9 2.6 2.3 3.3v9.5c1.6-.7 4.1-.4 5.7.8 1.6-1.2 4.1-1.5 5.7-.8V3.3C12.1 2.6 9.6 2.9 8 4.1Z', stroke: 'currentColor' }),
+      h('path', { d: 'M8 4.1v9.5', stroke: 'currentColor' }))
+    }
+
     // Brand logo (2026-10-16 user request): the delivered DSH-SoulMojito logo,
     // inlined verbatim from assets/logo.svg -- same viewBox, same primitives,
     // same palette. The client half is a ModuleLoader IIFE with no file access,

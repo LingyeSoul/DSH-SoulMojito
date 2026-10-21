@@ -95,7 +95,14 @@
       const [notice, setNotice] = useState('')
       const [syncing, setSyncing] = useState('')
       const [editing, setEditing] = useState('')
+      const [regexFilter, setRegexFilter] = useState('')
       const scripts = state.bootstrap.state.regexScripts || []
+      // 名称/模式过滤（2026-10-21 分页 UX）：与角色/预设/剧本清单同款模式，
+      // 模式串也参与匹配（正则要的就是按 pattern 找）。
+      const regexQuery = regexFilter.trim().toLowerCase()
+      const visibleScripts = regexQuery === ''
+        ? scripts
+        : scripts.filter((script) => script.scriptName.toLowerCase().includes(regexQuery) || script.findRegex.toLowerCase().includes(regexQuery))
       const run = (promise) => { setError(''); setNotice(''); void promise.catch((cause) => setError(cause.message)) }
       const saveScript = (script) => {
         const next = scripts.some((item) => item.id === script.id)
@@ -128,8 +135,12 @@
           ? h('div', { key: 'new', className: 'dt-regex-editor-wrap' },
             h(RegexScriptEditor, { script: newRegexScript(), onSave: saveScript, onCancel: closeEditor }))
           : null,
-        scripts.length === 0 && editing !== 'new' ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : h('div', { className: 'dt-regex-list' },
-          scripts.map((script) => h('div', { key: script.id, className: 'dt-regex-item' },
+        scripts.length > 0 && editing === '' ? h('div', { className: 'dt-filter-row' },
+          h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.filterPlaceholder'), 'aria-label': t('panel.filterPlaceholder'), value: regexFilter, onChange: (event) => setRegexFilter(event.target.value) })) : null,
+        scripts.length === 0 && editing !== 'new' ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : visibleScripts.length === 0
+          ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
+          : h('div', { className: 'dt-regex-list' },
+            visibleScripts.map((script) => h('div', { key: script.id, className: 'dt-regex-item' },
             h('div', { className: `dt-regex-row ${script.disabled ? 'dt-regex-off' : ''}` },
               // Checkbox keeps its own control surface; the script name is read
               // text next to it, so the row can put the pattern on a second line.
@@ -160,7 +171,12 @@
                   title: t('settings.regexDelete', { name: script.scriptName }),
                   'aria-label': t('settings.regexDelete', { name: script.scriptName }),
                   disabled: editing === script.id,
-                  onClick: () => run(saveRegexScripts(scripts.filter((item) => item.id !== script.id))),
+                  // 删除确认（2026-10-21 分页 UX）：原实现一键即删、无回滚面，
+                  // 误点 trash 直接丢脚本——与角色/预设/世界书同款确认口径。
+                  onClick: () => {
+                    if (!window.confirm(t('settings.regexDeleteConfirm', { name: script.scriptName }))) return
+                    run(saveRegexScripts(scripts.filter((item) => item.id !== script.id)))
+                  },
                 }, h(IconTrashOutline16)))),
             editing === script.id
               ? h('div', { className: 'dt-regex-editor-wrap' },

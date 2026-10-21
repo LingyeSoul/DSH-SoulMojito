@@ -36,7 +36,14 @@
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
+      const [personaFilter, setPersonaFilter] = useState('')
       const personas = state.bootstrap.personas || []
+      // 名称/描述过滤（2026-10-21 分页 UX）：与角色/预设/剧本/正则清单同款模式。
+      const personaQuery = personaFilter.trim().toLowerCase()
+      const visiblePersonas = personaQuery === ''
+        ? personas
+        : personas.filter((persona) => persona.name.toLowerCase().includes(personaQuery)
+          || String(persona.description || '').toLowerCase().includes(personaQuery))
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
       // The panel header already names the section; the band starts with the
       // action row so the content is not pushed down by a repeated title.
@@ -53,8 +60,12 @@
             },
           }, t('settings.personaNew')),
           h(UploadButton, { kind: 'persona', label: t('settings.personaImport'), accept: '.png,image/png' })),
-        personas.length === 0 ? h('p', { className: 'dt-muted' }, t('settings.personaEmpty')) : h('div', { className: 'dt-persona-list' },
-          personas.map((persona) => {
+        personas.length > 0 ? h('div', { className: 'dt-filter-row' },
+          h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.filterPlaceholder'), 'aria-label': t('panel.filterPlaceholder'), value: personaFilter, onChange: (event) => setPersonaFilter(event.target.value) })) : null,
+        personas.length === 0 ? h('p', { className: 'dt-muted' }, t('settings.personaEmpty')) : visiblePersonas.length === 0
+          ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
+          : h('div', { className: 'dt-persona-list' },
+            visiblePersonas.map((persona) => {
             const description = String(persona.description || '').trim()
             return h('div', { key: persona.name, className: 'dt-persona-row' },
               h('img', {

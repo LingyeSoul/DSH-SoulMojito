@@ -181,6 +181,9 @@
         const title = mod.panel.title
         modPanelOffs.push(registerPanelSection({
           id: `mod:${mod.id}`,
+          // 与 Mod 管理分区同组（2026-10-21 导航重做）：Mod 面板渲染进系统组的
+          // 组标签下、随注册序排在 Mod 管理之后；图标沿用 CordisPlugin。
+          group: 'system',
           icon: IconCordisPluginOutline14,
           // mod 自带文案（非宿主 i18n key）——P0 决策的 thunk 形状即为此预留。
           label: () => title,

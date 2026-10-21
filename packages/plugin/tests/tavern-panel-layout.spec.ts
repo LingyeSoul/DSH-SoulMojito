@@ -27,6 +27,18 @@
  * turns red when a new surface misses the mark, and the asset-vs-inline case
  * turns red when the two copies drift apart.
  * See decisions/2026-10-16-soulmojito-brand-mark.md.
+ *
+ * 2026-10-21 nav rework note: users reported the panel as hard to use; the flat
+ * 18-item nav grew unreadable (five sections sharing one pen icon, no grouping,
+ * no filter, no fullscreen, scroll position lost on every section switch). The
+ * nav is now: pinned brand + pinned section filter + grouped section list
+ * (content / sessions / system, mod panels land in system), 18 distinct icons,
+ * arrow-key navigation, per-section scroll memory, and a fullscreen toggle.
+ * The section cell render moved out of an inline `panelSections.map(...)` into a
+ * named `sectionCell` rendered per group -- the locks below pin the new
+ * structure with the same string-witness discipline (including negative
+ * samples), and the gates frontend-runtime markers carry the same contract.
+ * See decisions/2026-10-21-panel-navigation-ux-rework.md.
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -50,19 +62,85 @@ function closingParenOf(text: string, callAt: number): number {
 }
 
 describe('tavern panel navigation shell layout', () => {
-  it('keeps the brand block outside the scrollable section list', () => {
+  it('keeps the brand block and the search filter outside the scrollable section list', () => {
     const brandAt = source.indexOf("h('div', { className: 'dt-panel-brand' },")
-    const listAt = source.indexOf("h('div', { className: 'dt-panel-navlist' },")
-    const cellsAt = source.indexOf("panelSections.map((item) => h('button', {", listAt)
+    const searchAt = source.indexOf("className: 'dt-panel-search'")
+    const listAt = source.indexOf("h('div', { className: 'dt-panel-navlist', ")
     const mainAt = source.indexOf("h('div', { className: 'dt-panel-main' },")
+    const cellAt = source.indexOf("const sectionCell = (item) => h('button', {")
     expect(brandAt).toBeGreaterThanOrEqual(0)
-    expect(listAt).toBeGreaterThan(brandAt)
-    expect(cellsAt).toBeGreaterThan(listAt)
-    // 品牌块在清单容器开始前就闭合：它不属于滚动区。
+    expect(searchAt).toBeGreaterThan(brandAt)
+    expect(listAt).toBeGreaterThan(searchAt)
+    expect(cellAt).toBeGreaterThanOrEqual(0)
+    // 品牌块与过滤框都在清单容器开始前闭合：两者常驻不滚，只有分组清单滚动
+    // （2026-10-14 品牌钉住的既有契约 + 2026-10-21 过滤框并入同段）。
     expect(closingParenOf(source, brandAt)).toBeLessThan(listAt)
-    // 清单容器在主区之前闭合：分区按钮挂在清单里，滚动余量不会吃掉主区。
-    expect(closingParenOf(source, listAt)).toBeGreaterThan(cellsAt)
-    expect(closingParenOf(source, listAt)).toBeLessThan(mainAt)
+    expect(closingParenOf(source, searchAt)).toBeLessThan(listAt)
+    // 分区按钮由 sectionCell 产出（data-dt-section 供键盘导航聚焦），三个挂点
+    // 都在清单容器内部：无组前置项（overview）、组内项、无组后置项（about）。
+    const listClose = closingParenOf(source, listAt)
+    expect(listClose).toBeGreaterThan(listAt)
+    expect(listClose).toBeLessThan(mainAt)
+    const listBlock = source.slice(listAt, listClose + 1)
+    expect(listBlock).toContain('topUngrouped.map(sectionCell)')
+    expect(listBlock).toContain('items.map(sectionCell)')
+    expect(listBlock).toContain('bottomUngrouped.map(sectionCell)')
+    // 组容器与组标签在清单内渲染；空过滤结果的空态提示也在清单内。
+    expect(listBlock).toContain("className: 'dt-panel-group'")
+    expect(listBlock).toContain("className: 'dt-panel-group-label'")
+    expect(listBlock).toContain("className: 'dt-panel-search-empty'")
+    // 键盘导航聚焦锚点写进分区按钮本身。
+    expect(source).toContain("'data-dt-section': item.id")
+  })
+
+  it('renders one group container per non-empty section group in declaration order', () => {
+    // 组清单是呈现层常量，顺序即渲染顺序；组标签文案走 locale thunk（i18n
+    // 键 panel.group.* 的 zh/en 对账由 gates locale 校验兜底）。
+    expect(source).toContain('const panelSectionGroups = [')
+    const contentAt = source.indexOf("{ id: 'content', label: (t) => t('panel.group.content') }")
+    const sessionAt = source.indexOf("{ id: 'session', label: (t) => t('panel.group.session') }")
+    const systemAt = source.indexOf("{ id: 'system', label: (t) => t('panel.group.system') }")
+    expect(contentAt).toBeGreaterThanOrEqual(0)
+    expect(sessionAt).toBeGreaterThan(contentAt)
+    expect(systemAt).toBeGreaterThan(sessionAt)
+    // 动态 Mod 面板分区在 syncModPanelSections 标 'system'，与 Mod 管理同组。
+    expect(source).toContain("group: 'system'")
+    // 组内渲染保持注册顺序（注册表顺序即面板文档顺序）。
+    expect(source).toContain('items: visibleSections.filter((item) => item.group === group.id)')
+  })
+
+  it('restores the scroll position per section instead of resetting to the top', () => {
+    // 分区切换把旧分区的 scrollTop 存进 scrollMemory、切回时还原——长清单来回
+    // 切不再被打回顶部。锁写读两行：删任一行这个能力就消失。
+    expect(source).toContain('scrollMemory.current[trackedSection.current] = body.scrollTop')
+    expect(source).toContain('body.scrollTop = scrollMemory.current[section] ?? 0')
+  })
+
+  it('offers a fullscreen toggle and grows the modal to the viewport', () => {
+    // 全屏切换写 store 的 panelExpanded（与 panelSection 同款 UI 状态语义），
+    // 模态框挂 dt-panel-modal-full 修饰类吃满视口减 24px；窄屏回落交给既有
+    // min() 取宽高的基础规则（calc(100vw - 24px) 天然取更小者生效）。
+    expect(source).toContain('update({ panelExpanded: !expanded })')
+    expect(source).toContain("className: `dt-panel-modal${state.panelExpanded === true ? ' dt-panel-modal-full' : ''}`")
+    expect(source).toContain('.dt-panel-modal-full{width:calc(100vw - 24px)!important;height:calc(100vh - 24px)!important}')
+    expect(source).toContain("className: 'dt-panel-expand'")
+  })
+
+  it('filters sections from the pinned search box and announces the empty state', () => {
+    // 过滤按当前 locale 显示名小写包含匹配；匹配不到时清单内出空态文案
+    // （panel.searchEmpty），过滤框 Esc 先清词。
+    expect(source).toContain("const [filter, setFilter] = useState('')")
+    expect(source).toContain('item.label(t).toLowerCase().includes(query)')
+    expect(source).toContain("if (event.key === 'Escape' && filter !== '') setFilter('')")
+    expect(source).toContain("t('panel.searchEmpty')")
+  })
+
+  it('navigates sections with arrow keys inside the section list', () => {
+    // ↑↓/Home/End 在可见分区间移动激活并聚焦对应按钮（data-dt-section 锚点）；
+    // 原生 Tab 序不受影响。
+    expect(source).toContain('const handleNavKeyDown = (event) => {')
+    expect(source).toContain('onKeyDown: handleNavKeyDown')
+    expect(source).toContain('requestAnimationFrame(() => focusSectionButton(id))')
   })
 
   it('scrolls only the section list, never the nav column itself', () => {
@@ -162,6 +240,16 @@ describe('tavern panel navigation shell layout', () => {
     expect('.dt-panel-navlist{display:contentsX}'.includes('.dt-panel-navlist{display:contents}')).toBe(false)
     expect('function SoulMojitoLogoX({ size = 16, className })'.includes('function SoulMojitoLogo({ size = 16, className })')).toBe(false)
     expect("h('strong', null, 'SoulMojitoX')".includes("h('strong', null, 'SoulMojito')")).toBe(false)
+    // 2026-10-21 导航重做的六个新锚点同样要有近 miss 自证（组标签是组容器
+    // 的「前缀 + 后缀」关系，特别容易误匹配，单列两条）。
+    expect("className: 'dt-panel-searchX'".includes("className: 'dt-panel-search'")).toBe(false)
+    expect("className: 'dt-panel-groupX'".includes("className: 'dt-panel-group'")).toBe(false)
+    expect("className: 'dt-panel-group-labelX'".includes("className: 'dt-panel-group-label'")).toBe(false)
+    expect("className: 'dt-panel-search-emptyX'".includes("className: 'dt-panel-search-empty'")).toBe(false)
+    expect('dt-panel-modal-fullX{width'.includes('.dt-panel-modal-full{width')).toBe(false)
+    expect("'data-dt-sectionX': item.id".includes("'data-dt-section': item.id")).toBe(false)
+    expect("className: 'dt-panel-expandX'".includes("className: 'dt-panel-expand'")).toBe(false)
+    expect('body.scrollTop = scrollMemory.current[section] ?? 1'.includes('body.scrollTop = scrollMemory.current[section] ?? 0')).toBe(false)
     expect("className: 'dt-footer-label' }, 'SoulMojitoX'".includes("className: 'dt-footer-label' }, 'SoulMojito'")).toBe(false)
     expect('h(SoulMojitoLogoX, { size: 40 })'.includes('h(SoulMojitoLogo, { size: 40 })')).toBe(false)
     expect("h('h3', null, 'DSH-SoulMojitoX')".includes("h('h3', null, 'DSH-SoulMojito')")).toBe(false)
