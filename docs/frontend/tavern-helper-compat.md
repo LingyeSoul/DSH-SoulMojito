@@ -176,7 +176,7 @@ await setChatMessages([{ message_id: last.message_id, data: last.data }], { refr
 | 函数 | 状态 | 语义 |
 |---|---|---|
 | `Mvu.getMvuData(option?)` | ✅ | 同步返回 `{ stat_data }`。`option.type` 支持 `'message'` / `'chat'`；message 缺 `stat_data` 时回落聊天树 |
-| `Mvu.replaceMvuData(data, option?)` | ✅ | 写穿目标楼层 + 聊天权威变量树（`chat_metadata.variables.stat_data`），并镜像 chat 作用域；返回 `Promise<{ stat_data }>` |
+| `Mvu.replaceMvuData(data, option?)` | ✅ | 写穿目标楼层 + 聊天权威变量树（`chat_metadata.variables.stat_data`），并镜像 chat 作用域；成功后宿主重投快照（其它 iframe 同步看到新值）；失败会在前端弹「变量写入失败」toast |
 | `Mvu.events.VARIABLE_UPDATE_ENDED` | ✅ | 本 iframe 内的 `document` 自定义事件，`detail.stat_data` 是写后快照；GM/状态栏按钮改值后即时重绘 |
 | `Mvu.events.VARIABLE_UPDATE_STARTED` / `VARIABLE_UPDATE_FAILED` | ⚠️ | 常量存在；生成循环由宿主掌握，这两个事件不会由宿主主动触发 |
 | `Mvu.isDuringGenerating()` | ⚠️ | 恒 `false`；前端无法观测宿主 turn 状态 |
@@ -196,10 +196,55 @@ Agent 模式的 MVU 写入由插件完成：投影器解析模型回复末尾的
 `localStorage` / `sessionStorage` 在沙箱里是 iframe 内存实现（页面重载即失）——
 创角表单的自动保存/签名恢复因此不会因 `SecurityError` 中断。
 
-**明确不执行**：卡内 `extensions.tavern_helper.scripts` 的脚本树（JSR 的脚本
-容器 / 按钮 / 常驻悬浮面板）。它们不是消息 HTML，本插件的 iframe 没有跨楼层
-脚本宿主；状态栏/行动台这类**随消息重发的 HTML** 才是兼容面。需要脚本树行为
-的卡请走 ST 架构或等后续脚本宿主能力。
+**脚本树不会自动执行**：卡内 `extensions.tavern_helper.scripts` 的脚本树
+（JSR 的脚本容器 / 按钮 / 常驻悬浮面板）不在消息渲染路径里。插件的 iframe
+只承载「随消息重发的 HTML」；脚本树改由右栏 **「卡脚本」tab** 手动运行：
+
+- 列表只显示启用的脚本（`type === 'script'`、`enabled !== false`、内容非空），
+  默认没有任何自动执行、也没有 JSR 的脚本按钮/快速回复栏（显式开启
+  `cardScriptsAutoRun` 时除外，见下）；
+- 点「运行」后，该脚本被包成完整 HTML 文档，在同一个沙箱 `FrontendFrame` 里执行
+  一次；切换聊天/角色立即停止并清空；
+- 同一时间只运行一份脚本，且默认不打开。
+
+因此需要常驻悬浮面板的卡（例如 16 万字符的 GM 面板）仍需手动点一次「运行」；
+GM 面板自己的 `window.top.document` / `getCharWorldbookNames` /
+`updateWorldbookWith` 已在兼容面内（见 §4）。详见
+[`decisions/2026-10-21-card-scripts-host.md`](../../decisions/2026-10-21-card-scripts-host.md)。
+
+**脚本树会按聊天持久化（2026-10-21 追加）**：`getScriptTrees` /
+`updateScriptTreesWith` 读写的是**会话脚本树副本**
+（`chats/<角色>/<聊天>.jsonl.scripts.json`），不是角色卡文件：
+
+- `updateScriptTreesWith(fn)` 先经 helper `scripts.put` 落盘，成功后才更新内存树并
+  发布 `mg-zod-ready`；落盘失败会拒绝并保留旧树，GM 面板不会把半成品当成功；
+- 刷新页面 / 重开卡脚本 tab 后，`snapshot` 带回副本，`getScriptTrees` 从副本起步；
+- 副本只保存**脚本源码**，不回写角色卡、不影响别的聊天；服务端 MVU **仍不执行
+  Zod schema**（派生值 / enum 拒绝等语义不会因此生效）；
+- 回退入口是卡脚本 tab 的「重置卡脚本」→ `scripts.reset`。
+
+helper RPC（供 iframe 内部使用，不是 `window.*` 公共 API）：
+
+| op | 载荷 | 语义 |
+|---|---|---|
+| `scripts.get` | 无 | 返回 `{ scriptTrees }`；无副本为 `null`；要求 `chatId` |
+| `scripts.put` | `{ scriptTrees }` | 覆盖本聊天副本；校验数组与每项对象；要求 `chatId` |
+| `scripts.reset` | 无 | 删除本聊天副本，返回 `{ reset: true }`；要求 `chatId` |
+
+**自动运行开关（2026-10-21 追加）**：设置页 `cardScriptsAutoRun` **默认关闭**。
+开启后：
+
+- 进入/切入一个酒馆聊天（`agent-tavern` 或 `st`，非群聊）自动展开「卡脚本」
+  tab；每个 `(sessionId, 角色, 聊天)` 只自动打开一次，用户手动关掉后不抢焦点；
+- tab 把卡内**全部启用脚本**按脚本树顺序注入**同一个**沙箱 `FrontendFrame`
+  （每份脚本一个独立的 `<script type="module">` 块，复用现有沙箱/CSP/helper
+  shim）；
+- 这些脚本共享同一 iframe 的 `window` / `document` / 全局变量——不是 JSR 的
+  隔离脚本容器，脚本之间的冲突由卡作者负责；
+- 脚本仍拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限，
+  只对信任的卡开启；
+- tab 内「停止自动运行」只停当前 iframe，不改设置；设置关掉后 tab 停止自动
+  运行并回到手动模式；手动逐个运行始终可用。
 
 ---
 
@@ -278,10 +323,14 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 |---|:--:|---|
 | `SillyTavern.getContext()` | ⚠️ | 只返回最小只读面：`chatId` / `chat` / `chat_metadata` / `name1`（你）/ `name2`（角色）/ `characterId`（恒 0）/ `characters`（当前角色卡）/ `getCharacterCardFields()`（恒空字段）。**没有** `extensionSettings`、`eventSource`、`eventTypes`、`saveSettingsDebounced` 等 |
 | `getCurrentMessageId()` | ✅ | 当前 iframe 所属楼层；侧栏/MVU 模板为 `-1`（最新）。没有楼层绑定时也不要拿它做范围上界，优先 `getLastMessageId()` |
-| `getLorebook(name)` / `getWorldbook(name)` | ✅ | 返回条目数组（含 `world` 字段）。名字缺省取角色卡绑定的世界书，其次全局激活的第一本；都没有则抛错 |
-| `getLorebookNames()` / `getWorldbookNames()` | ✅ | 全部世界书名 |
+| `getLorebook(name)` / `getWorldbook(name)` | ✅ | 返回条目数组（含 `world` 字段）。名字缺省取角色卡绑定的世界书，其次全局激活的第一本，最后卡内嵌书名。**优先读当前聊天的会话副本**，没有副本才读基础 `worlds/` 资产 |
+| `getWorldbookNames()` / `getLorebookNames()` | ✅ | 全部世界书名 |
 | `getGlobalWorldbookNames()` | ✅ | 当前全局激活的世界书名 |
-| `getChatWorldbookNames()` | ⚠️ | 别名到 `getGlobalWorldbookNames`（本插件没有"聊天绑定世界书"这一层） |
+| `getChatWorldbookNames()` | ⚠️ | 别名到 `getGlobalWorldbookNames`（聊天绑定世界书的读面改用会话副本，见 `getCharWorldbookNames`） |
+| `getCharWorldbookNames()` | ✅ | **同步**返回 `{ primary, additional: [] }`；名字取卡内 `extensions.world`，其次内嵌书 `characterBook.name`，都没有为 `null`（JSR 的这个 getter 不返回 Promise，GM 脚本不会 await） |
+| `updateWorldbookWith(name, updater)` | ✅ | 先 `getWorldbook`，在 iframe 内执行 `updater(entries)`，再把结果写入**会话副本**（`lorebook.put`）。基础世界书资产与卡内嵌书永不被写；`name` 省略时回落到角色链接世界书。回退入口是右栏卡脚本 tab 的「重置会话世界书」（`lorebook.reset`） |
+| `getScriptTrees(option?)` | ⚠️ | 返回当前聊天的**会话脚本树副本**（没有副本时为卡内 `extensions.tavern_helper.scripts`）：节点原样保留 `type: 'script' \| 'folder'`、`id`、`name`、`content`、`enabled`、`info`、`button` 与未知字段。不写角色卡 |
+| `updateScriptTreesWith(fn, option?)` | ⚠️ | 在副本上执行 `fn`，先 `scripts.put` **持久化到本聊天副本**，成功后才更新内存并解析 `__mgZodReady__` 探针、派发 `mg-zod-ready`；失败拒绝且保留旧树。刷新/重开 tab 仍可读；Zod schema 本身不会生效，回退入口是「重置卡脚本」 |
 | `getCharNames()` / `getCharacterNames()` | ✅ | 角色名列表 |
 | `getTavernRegexes(option?)` | ✅ | `{enabled_only}` 过滤；条目形状来自本插件的 `RegexScriptIR`，**不是** JSR 的 `TavernRegex` 形状 |
 | `formatAsTavernRegexedString(text, placement, option?)` | ⚠️ | 应用正则并返回 `Promise<string>`。`placement` 用 ST 的数字位（1=用户输入 2=AI 输出 3=斜杠 5=世界书 6=推理）；`option.scripts` 可直接给脚本集；`option.depth` 参与深度型脚本判定 |
@@ -314,21 +363,23 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 
 | 函数 | 结果 |
 |---|---|
-| `createWorldbook` / `createOrReplaceWorldbook` / `deleteWorldbook` / `replaceWorldbook` / `updateWorldbookWith` | ❌ 不存在 |
-| `createWorldbookEntries` / `deleteWorldbookEntries` | ❌ 不存在 |
+| `createWorldbook` / `createOrReplaceWorldbook` / `deleteWorldbook` / `replaceWorldbook` | ❌ 不存在 |
+| `updateWorldbookWith` | ✅ 只写当前聊天的**会话副本**（见 §4）；基础 `worlds/<name>.json` 与卡内嵌书不受影响。删除/新建世界书仍不支持 |
+| `createWorldbookEntries` / `deleteWorldbookEntries` | ❌ 不存在（用 `updateWorldbookWith` 改整表，或走面板/Agent 工具） |
 | `rebindGlobalWorldbooks` / `rebindCharWorldbooks` / `rebindChatWorldbook` / `getOrCreateChatWorldbook` | ❌ 不存在 |
 | `createCharacter` / `createOrReplaceCharacter` / `deleteCharacter` / `replaceCharacter` / `updateCharacterWith` | ❌ 不存在 |
 | 人设（persona）家族 | ❌ 不存在 |
 | 预设（preset）家族 | ❌ 不存在 |
 
-写资产走**管理面板**或**Agent 工具**（`card_put` / `world_put` 等，带确认协议）。
-前端如果能直接改角色卡/世界书，一次误触就能毁掉存档，且没有审计。
+写**基础资产**走管理面板或 Agent 工具（`card_put` / `world_put` 等，带确认协议）。
+前端只被允许改「本聊天的会话世界书副本」：误触最坏只污染这一条聊天，删掉副本
+（或点「重置会话世界书」）即可回到卡原版。
 
 ### 5.3 脚本 / 扩展 / 音频 / 其它
 
 | 家族 | 结果 |
 |---|---|
-| `getScriptTrees` / `replaceScriptTrees` / `updateScriptTreesWith` / `getAllEnabledScriptButtons` | ❌ 不存在（本插件没有 JSR 脚本树） |
+| `replaceScriptTrees` / `getAllEnabledScriptButtons` | ❌ 不存在；`getScriptTrees` / `updateScriptTreesWith` 是 ⚠️ 会话副本读写（见 §4），没有真正的脚本容器与按钮 |
 | `isInstalledExtension` / `installExtension` / `uninstallExtension` / `reinstallExtension` / `updateExtension` / `getExtensionInstallationInfo` / `getExtensionType` / `isAdmin` / `getTavernHelperExtensionId` | ❌ 不存在 |
 | `playAudio` / `pauseAudio` / `getAudioList` / `replaceAudioList` / `appendAudioList` / `getAudioSettings` / `setAudioSettings` / `getCurrentAudio` | ❌ 不存在（用 `<audio>` 标签 + 白名单媒体源自己播） |
 | `retrieveDisplayedMessage` / `formatAsDisplayedMessage` / `refreshOneMessage` | ❌ 不存在（宿主渲染的楼层无法被前端读取/刷新） |
@@ -382,6 +433,8 @@ await fetch  // 🧱 默认不可用（CSP connect-src 'none'）；设置页放�
 | `getVariables({type: 'preset'})` | 用 global 或 chat 作用域替代 |
 | `setChatMessages([...], {refresh: 'all'})` | `refresh` 无效；自己重绘当前 UI |
 | `createWorldbookEntries(...)` | 提示用户去面板操作，或让 Agent 调 `world_*` 工具 |
+| `updateWorldbookWith(name, fn)` | 直接用：写当前聊天的会话副本；要回退就点右栏「卡脚本」→「重置会话世界书」 |
+| `window.top.document` 上的悬浮面板 | `window.top` 已指向宿主 facade，`document` 代理真实 iframe document；挂载点写 `document.body` 即可 |
 
 ---
 
@@ -401,14 +454,20 @@ await fetch  // 🧱 默认不可用（CSP connect-src 'none'）；设置页放�
 | `Mvu.getMvuData()` 返回 `undefined` | 聊天还没有 `stat_data`（新卡首轮尚未投影）或当前卡未被识别为 MVU 卡 | 先发一轮让投影器结算；确认卡内有 `<UpdateVariable>` / `MagVarUpdate` / `StatusPlaceHolderImpl` |
 | 状态栏一直空 | 模型没有输出 `<UpdateVariable>`，或卡内状态栏正则被禁用 | 用提示词查看器看实发请求；确认正则未 disabled；首轮检查 `initialized_lorebooks` 是否已播种 |
 | 表单/快速选项点了没反应 | 宿主页找不到可见 composer，或输入框被面板遮挡 | 看 iframe console 的 `no visible host composer textarea found`；先把输入框滚动到可视区 |
+| 卡里的按钮点了没反应 | 按钮是 `disabled` / `aria-disabled="true"`（例如行动台的「必杀」在净化之力 <100 时），浏览器不派发 click；或 MVU 写入失败被卡自己吞掉 | 现在会弹「该按钮当前不可用」或「变量写入失败: …」toast；先看提示再判断是不是卡逻辑 |
+| 世界书写入后生成/状态栏没变化 | 副本按聊天隔离，且生成读取的是**副本**；基础 `worlds/` 面板不会显示副本内容 | 用 `getWorldbook(name)` 读回确认副本；需要回到原版就点「重置会话世界书」 |
+| 刷新后 GM 面板的 Zod 改动不见了 | 改动只在会话脚本树副本里；写入失败时 `updateScriptTreesWith` 会拒绝而不是假装成功 | 看卡脚本 tab 列表是否显示改后的名称/字符数；确认 `scripts.put` 没报错。切到别的聊天本来就读不到本聊天的副本 |
+| 重置卡脚本后 GM 面板还是旧内容 | 重置会删除副本并停止正在运行的脚本，但已经打开的 GM 面板不会自我改写 | 重新点「运行」；列表此时应回到角色卡原版 |
+| GM 悬浮面板挂载时报 `appendChild of null` | 卡脚本未运行，或运行的是旧构建（`fakeDocument.body` 为 null） | 在右栏「卡脚本」手动运行 GM 面板；确认构建包含 document facade |
 
 ---
 
 ## 9. 安全提醒（给你的，也是给玩家的）
 
 - 你的前端**读不到**宿主的 Cookie、localStorage、其它聊天、API Key；
-- 你的前端**改不了**角色卡、世界书、脚本、设置；
-- 你的前端**能改**当前聊天的正文、楼层变量、聊天变量，以及 global 变量——
-  这些都是真实数据，写之前先读、先确认，别在 `setInterval` 里无脑覆盖。
+- 你的前端**改不了**角色卡、基础世界书资产、脚本、设置；
+- 你的前端**能改**当前聊天的正文、楼层变量、聊天变量、global 变量，以及当前
+  聊天的**会话世界书副本**——这些都是真实数据，写之前先读、先确认，别在
+  `setInterval` 里无脑覆盖。副本可以随时用「重置会话世界书」丢弃。
 - `replaceVariables` 是**整表替换**：忘了展开旧值就等于把所有变量清空。
   不确定时用 `insertOrAssignVariables` 或 `updateVariablesWith`。

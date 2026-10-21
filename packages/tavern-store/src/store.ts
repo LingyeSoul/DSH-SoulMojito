@@ -8,6 +8,8 @@
  * ├── worlds/<name>.json                  # ST 世界书文件形态
  * ├── presets/<name>.json                 # ST preset 形态（chat completion / context / instruct / textgen）
  * ├── chats/<character>/<timestamp>.jsonl # ST 聊天文件形态（character 为角色名或群名）
+ * ├── chats/<character>/<timestamp>.jsonl.worlds.json   # 会话世界书副本（脚本写入的覆盖层）
+ * ├── chats/<character>/<timestamp>.jsonl.scripts.json  # 会话脚本树副本（卡脚本改写，不回写角色卡）
  * ├── personas/<name>.json                # persona 定义
  * ├── personas/avatars/<name>.png         # persona 头像
  * ├── groups/<name>.json                  # ST 群组文件形态（members 为角色名）
@@ -37,6 +39,7 @@ import {
   parseRegexScript,
   parseRegexScripts,
   parseWorldInfoFile,
+  normalizeEntry,
   serializeChatLog,
   serializeGroupFile,
   serializeWorldInfoFile,
@@ -122,6 +125,13 @@ export interface TavernState {
    * 与「不打断写作」的默认纪律一致。
    */
   frontendAutoOpen: boolean
+  /**
+   * 卡脚本自动运行（2026-10-21 用户需求）：开启后进入酒馆聊天时自动展开
+   * 「卡脚本」tab，并把卡内全部启用脚本按顺序注入同一个沙箱 iframe 自动执行。
+   * 默认关闭——脚本共享同一 iframe 的 DOM/全局，拥有当前聊天的变量、消息与
+   * 会话世界书/脚本树副本写权限；只应由用户对信任的卡显式开启。
+   */
+  cardScriptsAutoRun: boolean
   /**
    * 允许美化前端加载外部资源（2026-10-21 用户需求）：开启后 iframe 的 CSP
    * 放行任意 HTTPS 脚本/样式（sourcemap 走 connect-src 也一并放行），并允许
@@ -290,6 +300,7 @@ const DEFAULT_STATE: TavernState = {
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
   frontendAutoOpen: false,
+  cardScriptsAutoRun: false,
   frontendAllowExternalResources: false,
   gamesDisableResign: false,
   cardWorkbenchPresetEnabled: false,
@@ -723,6 +734,10 @@ export class TavernStore {
       if (source === target) return
       if (await this.tryRead(target)) throw new Error(`chat '${nextChatId}' already exists`)
       await fs.rename(source, target)
+      // Session overlays follow the chat file; drop any stale target first because
+      // Windows rename refuses an existing destination.
+      await this.moveChatOverlay(this.chatWorldsFile(characterName, chatId), this.chatWorldsFile(characterName, nextChatId))
+      await this.moveChatOverlay(this.chatScriptsFile(characterName, chatId), this.chatScriptsFile(characterName, nextChatId))
     })
   }
 
@@ -732,12 +747,109 @@ export class TavernStore {
       try {
         await this.assertChatRevision(file, expectedRevision)
         await fs.unlink(file)
-        return true
       } catch (cause) {
         if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return false
         throw cause
       }
+      // Inside the mutation queue so a concurrent put cannot recreate an orphan
+      // overlay after the chat file is gone.
+      await fs.rm(this.chatWorldsFile(characterName, chatId), { force: true })
+      await fs.rm(this.chatScriptsFile(characterName, chatId), { force: true })
+      return true
     })
+  }
+
+  /* ---------------------- 会话级世界书副本 ---------------------- */
+
+  /**
+   * Session world-book overlay (2026-10-21): card scripts write through
+   * `lorebook.put` into a copy owned by one chat. `worlds/<name>.json` and the
+   * card's embedded `character_book` stay read-only. Layout:
+   * `chats/<character>/<chat>.jsonl.worlds.json`; `listChats` only collects
+   * `.jsonl` entries so the copy never shows up as a chat.
+   */
+  async getChatWorld(characterName: string, chatId: string, worldName: string): Promise<WorldBookIR | undefined> {
+    const file = this.chatWorldsFile(characterName, chatId)
+    const bytes = await this.tryRead(file)
+    if (bytes === undefined) return undefined
+    const stored = parseChatWorldsFile(file, bytes).worlds[worldName]
+    return stored === undefined ? undefined : structuredClone(stored)
+  }
+
+  async putChatWorld(characterName: string, chatId: string, book: WorldBookIR): Promise<void> {
+    if (typeof book.name !== 'string' || book.name.trim() === '') {
+      throw new Error('putChatWorld requires a world book name')
+    }
+    await this.mutateChat(async () => {
+      const file = this.chatWorldsFile(characterName, chatId)
+      const current = await this.readChatWorlds(file)
+      current.worlds[book.name] = structuredClone(book)
+      await this.writeAtomic(file, jsonBytes({ version: 1, worlds: current.worlds }))
+    })
+  }
+
+  async deleteChatWorld(characterName: string, chatId: string, worldName: string): Promise<boolean> {
+    return this.mutateChat(async () => {
+      const file = this.chatWorldsFile(characterName, chatId)
+      const bytes = await this.tryRead(file)
+      if (bytes === undefined) return false
+      const current = parseChatWorldsFile(file, bytes)
+      if (!Object.prototype.hasOwnProperty.call(current.worlds, worldName)) return false
+      delete current.worlds[worldName]
+      if (Object.keys(current.worlds).length === 0) await fs.rm(file, { force: true })
+      else await this.writeAtomic(file, jsonBytes({ version: 1, worlds: current.worlds }))
+      return true
+    })
+  }
+
+  async listChatWorlds(characterName: string, chatId: string): Promise<string[]> {
+    const file = this.chatWorldsFile(characterName, chatId)
+    const bytes = await this.tryRead(file)
+    if (bytes === undefined) return []
+    return Object.keys(parseChatWorldsFile(file, bytes).worlds).sort()
+  }
+
+  /* ---------------------- 会话级脚本树副本 ---------------------- */
+
+  /**
+   * Session script-tree overlay (2026-10-21): GM panels persist Zod source edits
+   * through `scripts.put` into a copy owned by one chat. The card's
+   * `extensions.tavern_helper.scripts` and the character card file stay
+   * read-only. Layout: `chats/<character>/<chat>.jsonl.scripts.json`; node
+   * shapes pass through untouched (`type`, `id`, `name`, `content`, `enabled`,
+   * `info`, `button`, unknown fields).
+   */
+  async getChatScripts(characterName: string, chatId: string): Promise<unknown[] | undefined> {
+    const file = this.chatScriptsFile(characterName, chatId)
+    const bytes = await this.tryRead(file)
+    if (bytes === undefined) return undefined
+    return structuredClone(parseChatScriptsFile(file, bytes).scriptTrees)
+  }
+
+  async putChatScripts(characterName: string, chatId: string, scriptTrees: unknown[]): Promise<void> {
+    if (!Array.isArray(scriptTrees)) throw new Error('putChatScripts requires an array of script nodes')
+    scriptTrees.forEach((node, index) => {
+      if (!isPlainRecord(node)) throw new Error(`putChatScripts node ${index} must be an object`)
+    })
+    await this.mutateChat(async () => {
+      await this.writeAtomic(
+        this.chatScriptsFile(characterName, chatId),
+        jsonBytes({ version: 1, scriptTrees: structuredClone(scriptTrees) }),
+      )
+    })
+  }
+
+  async deleteChatScripts(characterName: string, chatId: string): Promise<boolean> {
+    return this.mutateChat(async () => {
+      const file = this.chatScriptsFile(characterName, chatId)
+      if (await this.tryRead(file) === undefined) return false
+      await fs.rm(file, { force: true })
+      return true
+    })
+  }
+
+  async hasChatScripts(characterName: string, chatId: string): Promise<boolean> {
+    return await this.tryRead(this.chatScriptsFile(characterName, chatId)) !== undefined
   }
 
   /* ------------------------------ 群组 ------------------------------ */
@@ -901,6 +1013,8 @@ export class TavernStore {
       }
       const branchLog: ChatLogIR = { header, messages: branchMessages }
       await this.writeAtomic(path.join(dir, nextId), chatBytes(branchLog))
+      await this.copyChatOverlay(this.chatWorldsFile(characterName, chatId), this.chatWorldsFile(characterName, nextId))
+      await this.copyChatOverlay(this.chatScriptsFile(characterName, chatId), this.chatScriptsFile(characterName, nextId))
       return { chatId: nextId, chat: branchLog }
     })
   }
@@ -949,6 +1063,8 @@ export class TavernStore {
       }
       const forkLog: ChatLogIR = { header, messages: [] }
       await this.writeAtomic(path.join(dir, nextId), chatBytes(forkLog))
+      await this.copyChatOverlay(this.chatWorldsFile(characterName, parentChatId), this.chatWorldsFile(characterName, nextId))
+      await this.copyChatOverlay(this.chatScriptsFile(characterName, parentChatId), this.chatScriptsFile(characterName, nextId))
       return { chatId: nextId, chat: forkLog }
     })
   }
@@ -1077,6 +1193,7 @@ export class TavernStore {
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
       frontendAutoOpen: parsed.frontendAutoOpen === true,
+      cardScriptsAutoRun: parsed.cardScriptsAutoRun === true,
       frontendAllowExternalResources: parsed.frontendAllowExternalResources === true,
       gamesDisableResign: parsed.gamesDisableResign === true,
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
@@ -1107,6 +1224,32 @@ export class TavernStore {
     const result = this.chatMutationTail.catch(() => {}).then(operation)
     this.chatMutationTail = result.then(() => {}, () => {})
     return result
+  }
+
+  private chatWorldsFile(characterName: string, chatId: string): string {
+    return path.join(this.root, 'chats', safeFileName(characterName), `${safeChatFileName(chatId)}.worlds.json`)
+  }
+
+  private chatScriptsFile(characterName: string, chatId: string): string {
+    return path.join(this.root, 'chats', safeFileName(characterName), `${safeChatFileName(chatId)}.scripts.json`)
+  }
+
+  private async readChatWorlds(file: string): Promise<ChatWorldsFile> {
+    const bytes = await this.tryRead(file)
+    return bytes === undefined ? { version: 1, worlds: {} } : parseChatWorldsFile(file, bytes)
+  }
+
+  /** Copies a session overlay file to a new chat (branch/fork inheritance). */
+  private async copyChatOverlay(from: string, to: string): Promise<void> {
+    const bytes = await this.tryRead(from)
+    if (bytes === undefined) return
+    await this.writeAtomic(to, bytes)
+  }
+
+  /** Moves a session overlay file with its chat; an existing target is dropped. */
+  private async moveChatOverlay(from: string, to: string): Promise<void> {
+    await fs.rm(to, { force: true })
+    if (await this.tryRead(from) !== undefined) await fs.rename(from, to)
   }
 
   private mutateState<T>(operation: () => Promise<T>): Promise<T> {
@@ -1280,6 +1423,81 @@ function mergeRegexScripts(current: RegexScriptIR[], imported: RegexScriptIR[]):
 export function safeFileName(name: string): string {
   const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim()
   return cleaned.length > 0 ? cleaned.slice(0, 120) : '_unnamed'
+}
+
+/** Session world overlay file: `{ version: 1, worlds: { [worldName]: WorldBookIR } }`. */
+interface ChatWorldsFile {
+  version: 1
+  worlds: Record<string, WorldBookIR>
+}
+
+/**
+ * Parses the per-chat world overlay. A corrupted file must fail loudly with its
+ * path: silently falling back to the base world would make scripts believe their
+ * writes landed while the chat keeps reading different lore.
+ */
+function parseChatWorldsFile(file: string, bytes: Uint8Array): ChatWorldsFile {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString('utf8'))
+  } catch (cause) {
+    throw new Error(`chat world book file is not valid JSON: ${file}`, { cause })
+  }
+  if (!isPlainRecord(parsed) || !isPlainRecord(parsed['worlds'])) {
+    throw new Error(`chat world book file has an invalid shape (expected { version, worlds }): ${file}`)
+  }
+  const worlds: Record<string, WorldBookIR> = {}
+  for (const [name, raw] of Object.entries(parsed['worlds'])) {
+    if (!isPlainRecord(raw) || !Array.isArray(raw['entries'])) {
+      throw new Error(`chat world book '${name}' has an invalid shape (expected { name, entries: [] }): ${file}`)
+    }
+    const entries = raw['entries'].map((entry: unknown, index: number) => {
+      if (!isPlainRecord(entry)) {
+        throw new Error(`chat world book '${name}' entry ${index} must be an object: ${file}`)
+      }
+      return normalizeEntry(entry)
+    })
+    worlds[name] = {
+      name,
+      entries,
+      ...(isPlainRecord(raw['extra']) ? { extra: raw['extra'] } : {}),
+    }
+  }
+  return { version: 1, worlds }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Session script-tree overlay: `{ version: 1, scriptTrees: unknown[] }`. */
+interface ChatScriptsFile {
+  version: 1
+  scriptTrees: unknown[]
+}
+
+/**
+ * Parses the per-chat script-tree overlay. Corrupted JSON or a non-array node
+ * list fails loudly with its path: silently falling back to the card original
+ * would hide the fact that a GM-panel edit was lost.
+ */
+function parseChatScriptsFile(file: string, bytes: Uint8Array): ChatScriptsFile {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString('utf8'))
+  } catch (cause) {
+    throw new Error(`chat script tree file is not valid JSON: ${file}`, { cause })
+  }
+  if (!isPlainRecord(parsed) || !Array.isArray(parsed['scriptTrees'])) {
+    throw new Error(`chat script tree file has an invalid shape (expected { version, scriptTrees: [] }): ${file}`)
+  }
+  const scriptTrees = parsed['scriptTrees'].map((node, index) => {
+    if (!isPlainRecord(node)) {
+      throw new Error(`chat script tree file node ${index} must be an object: ${file}`)
+    }
+    return node
+  })
+  return { version: 1, scriptTrees }
 }
 
 function timestamp(): string {

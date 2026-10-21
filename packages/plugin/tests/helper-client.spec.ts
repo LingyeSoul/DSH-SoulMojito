@@ -40,6 +40,12 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       'getMvuData: function',
       'replaceMvuData: function',
       'window.toastr = {',
+      'window.getCharWorldbookNames = function',
+      'window.updateWorldbookWith = function',
+      'window.getScriptTrees = function',
+      'window.updateScriptTreesWith = function',
+      'publishZodReady',
+      'var documentFacade =',
       'window.__dshTavernHost = host',
       'window.__dshTavernStorage',
       'window.__dshTavernSessionStorage',
@@ -92,6 +98,77 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     expect(source).toContain('await conversation.send(text)')
     expect(source).toContain('[data-composer-input][contenteditable="true"]')
     expect(source).toContain("const composerChainRef = useRef(Promise.resolve())")
+  })
+
+  it('exposes the session world-book and script-tree shims for GM panels', () => {
+    // getCharWorldbookNames 必须同步（GM 脚本不 await），名字回落内嵌书名。
+    expect(source).toContain("window.getCharWorldbookNames = function () { return { primary: characterWorldbookName(), additional: [] }; }")
+    expect(source).toContain("var embedded = data.characterBook && typeof data.characterBook.name === 'string'")
+    // updateWorldbookWith 在 iframe 内跑 updater，只把 entries 发到会话副本。
+    expect(source).toContain("call('lorebook.put', { name: bookName, entries: updated })")
+    expect(source).toContain('window.TavernHelper.updateWorldbookWith = window.updateWorldbookWith')
+    // 脚本树读写会话副本：seed 优先副本，改写先 scripts.put 再发布 mg-zod-ready。
+    expect(source).toContain('var scriptTrees = null')
+    expect(source).toContain('if (Array.isArray(state.scriptTrees)) return clone(state.scriptTrees);')
+    expect(source).toContain("__mgZodReady__")
+    expect(source).toContain("'mg-zod-ready'")
+    expect(source).toContain('window.TavernHelper.updateScriptTreesWith = window.updateScriptTreesWith')
+  })
+
+  it('gives floating panels a real document facade through window.top', () => {
+    // GM 面板用 `hud_win = window.top; hud_doc = hud_win.document`，旧 stub
+    // （body:null、无 getElementById）会在 appendChild 处崩掉。
+    for (const marker of [
+      'var documentFacade =',
+      'getElementById: function (id) { return document.getElementById(id); }',
+      'get head() { return document.head; }',
+      'get body() { return document.body; }',
+      'get documentElement() { return document.documentElement; }',
+      'get activeElement() { return document.activeElement; }',
+      "document: documentFacade",
+      'get innerWidth() { return window.innerWidth; }',
+      'get innerHeight() { return window.innerHeight; }',
+      'get devicePixelRatio() { return window.devicePixelRatio; }',
+      'get visualViewport() { return window.visualViewport; }',
+      'matchMedia: function (query) { return window.matchMedia(query); }',
+      'requestAnimationFrame: function (callback) { return window.requestAnimationFrame(callback); }',
+    ]) {
+      expect(source).toContain(marker)
+    }
+    // 真实 parent.postMessage 通道不变
+    expect(source).toContain('var realParent = window.parent;')
+    expect(source).toContain('postMessage: function () { return realParent.postMessage.apply(realParent, arguments); }')
+  })
+
+  it('reports MVU write failures and re-posts the snapshot after mvu.replace', () => {
+    expect(source).toContain("showToast('error', '变量写入失败: '")
+    expect(source).toContain("data.op === 'slash' || data.op === 'mvu.replace'")
+  })
+
+  it('explains disabled card buttons instead of leaving them silent', () => {
+    // 行动台的必杀在净化之力 <100 时是 disabled，浏览器不派发 click。
+    expect(source).toContain('function noteDisabledControl(event)')
+    expect(source).toContain("target.closest('button, [aria-disabled=\"true\"]')")
+    expect(source).toContain("showToast('info', '该按钮当前不可用')")
+    expect(source).toContain("document.addEventListener('pointerdown', noteDisabledControl, true)")
+  })
+
+  it('persists the session script tree through scripts.put before publishing ready', () => {
+    // state/applySnapshot：宿主 snapshot 带回会话副本
+    expect(source).toContain('scriptTrees: null,')
+    expect(source).toContain('state.scriptTrees = Array.isArray(snapshot.scriptTrees) ? snapshot.scriptTrees : null;')
+    // seed 优先副本，并保留 folder / 未知字段（不再只重建 script 节点）
+    expect(source).toContain('if (Array.isArray(state.scriptTrees)) return clone(state.scriptTrees);')
+    expect(source).toContain('if (!node || typeof node !== \'object\' || Array.isArray(node)) continue;')
+    expect(source).toContain('var scriptTreesLocallyWritten = false;')
+    // 先落盘，成功后才更新内存并发布 mg-zod-ready
+    const updateStart = source.indexOf('window.updateScriptTreesWith = function (updater) {')
+    const putIndex = source.indexOf("call('scripts.put', { scriptTrees: next })", updateStart)
+    const publishIndex = source.indexOf('publishZodReady(scriptTrees);', updateStart)
+    expect(updateStart).toBeGreaterThanOrEqual(0)
+    expect(putIndex).toBeGreaterThan(updateStart)
+    expect(publishIndex).toBeGreaterThan(putIndex)
+    expect(source.slice(putIndex, publishIndex)).toContain('scriptTreesLocallyWritten = true;')
   })
 
   it('keeps the generated iframe shim syntactically valid', () => {
@@ -156,6 +233,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       'getLorebook', 'getWorldbook', 'getLorebookNames', 'getWorldbookNames',
       'getGlobalWorldbookNames', 'getCharNames', 'getCharacterNames',
       'getChatWorldbookNames', 'getTavernRegexes', 'formatAsTavernRegexedString',
+      'getCharWorldbookNames', 'updateWorldbookWith', 'getScriptTrees', 'updateScriptTreesWith',
       'triggerSlash', 'substitudeMacros', 'getTavernHelperVersion', 'getTavernVersion',
       'getButtonEvent', 'getScriptId', 'waitGlobalInitialized',
     ]

@@ -477,7 +477,7 @@ export interface MvuStatusRenderInput {
  */
 export async function renderMvuStatusTemplate(input: MvuStatusRenderInput): Promise<string> {
   const chat = input.chat
-  const books = await collectWorldInfoBooks(input.db, input.state, input.characterName, input.character)
+  const books = await collectWorldInfoBooks(input.db, input.state, input.characterName, input.character, input.chatId)
   const runtime = createMvuRuntime(
     {
       state: input.state,
@@ -564,7 +564,7 @@ export async function retryMvuSettlement(
   metadata.variables = localVars
   const globalsBefore = JSON.stringify(state.scriptGlobals)
 
-  const books = await collectWorldInfoBooks(db, state, characterName, character)
+  const books = await collectWorldInfoBooks(db, state, characterName, character, chatId)
   const runtime = createMvuRuntime(
     { state, characterName, character, chat, chatId, books, onWarning: (message) => { failures.push(message) } },
     {

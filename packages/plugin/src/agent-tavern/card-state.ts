@@ -73,7 +73,7 @@ export async function renderCardStateSections(
 ): Promise<CardStateRender | undefined> {
   const card = character.card
   if (!cardUsesJsrMvu(card)) return undefined
-  const books = await collectWorldInfoBooks(db as never, state, characterName, character)
+  const books = await collectWorldInfoBooks(db as never, state, characterName, character, chatId)
   // 卡内嵌书是这张卡的规则本体；worldFollowsCharacter 关闭或链接书未导入时，
   // 聚合层不会带上它。MVU 卡的规则不能因此静默消失，这里补回内嵌书（按名字去重）。
   const embeddedName = `${characterName}:embedded`

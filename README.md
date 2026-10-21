@@ -123,12 +123,13 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 | `settings.section` | Active setup 快速切换与面板入口 |
 | `shell.overlay` | Tavern 管理面板 Modal，以及侧栏聊天树 adapter 的生命周期承载 |
 | `sidebar.footer.action` | 常驻 Tavern 面板按钮，与原生 Settings 并列 |
+| `sidebar.right.pane.tab` | MVU 状态、游戏对局、美化前端与卡脚本右栏 tab |
 
 - **每聊天一个正式会话** — 每个 Tavern 聊天绑定一个正式 DSH session；view/composer/标题栏只接管带有效 Tavern marker 的会话，普通 DSH 会话保持原生表面。生成循环把 turn/step、流式 chunk、assistant message 与 provider usage 镜像进同一 session，因此标题栏直接复用宿主的 `sessionStats` / `tokenUsage` projection。
 - **Composer 模型选择** — 复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
 - **内部工作区** — ST 与 AgentTavern 新聊天共用数据根下 `workspace/`（新装 `$DSH_HOME/soulmojito/workspace/`，旧装 `$DSH_HOME/tavern/workspace/`）的 `Tavern (internal)` 工作区，插件按 workspace 路径/ID 从原生侧边栏隐藏该分组。宿主 `rc.6` 没有可追加到原生 session tree 的正式 list slot，侧栏因此使用一个集中、版本敏感但**失败关闭**的 DOM adapter（只匹配可见左侧 `[role="tree"]`，解绑或卸载时可逆恢复）；面板入口本身走官方 slot，不依赖 adapter 是否挂载成功。
 - **语言** — 插件 UI 跟随 DSH 的语言设置（zh/en），切换后无需刷新即时生效。
-- **设置页开关** — 「新聊天架构」、「AgentTavern 上下文」、「压缩总结模型」；`worldFollowsCharacter`（世界书跟随角色卡激活）、`preloadAssets`（新 AgentTavern 会话开始时一次性预载角色信息与常驻世界书条目，默认关闭且不追溯已有会话）、`allowGlobalWrites`（允许工具写 global 作用域，默认关闭）、`gamesDisableResign`（禁用投降），以及 `nativePersona`（在标准 DSH Agent 会话中使用当前角色，默认关闭）。设置页标题下显示当前构建的版本与 commit。
+- **设置页开关** — 「新聊天架构」、「AgentTavern 上下文」、「压缩总结模型」；`worldFollowsCharacter`（世界书跟随角色卡激活）、`preloadAssets`（新 AgentTavern 会话开始时一次性预载角色信息与常驻世界书条目，默认关闭且不追溯已有会话）、`allowGlobalWrites`（允许工具写 global 作用域，默认关闭）、`gamesDisableResign`（禁用投降）、`cardScriptsAutoRun`（进入聊天自动运行卡内全部启用脚本，默认关闭），以及 `nativePersona`（在标准 DSH Agent 会话中使用当前角色，默认关闭）。设置页标题下显示当前构建的版本与 commit。
 
 ### 美化前端（消息内 HTML/JS）
 
@@ -142,9 +143,15 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 
 AgentTavern 架构的对话是宿主原生表面，插件没有消息正文 slot：同一份美化前端改由 DSH **原生右侧栏**的「美化前端」tab 承载——取本聊天**最新一条**带完整 HTML 的楼层（标题行显示楼层号），随聊天 5s 可见性轮询更新；标题栏按钮与右栏「+」guide 都能打开。设置页可开启「美化前端出现时自动打开右侧栏」（默认关闭，每聊天只自动展开一次）。ST 架构仍在消息里内联渲染，侧栏只显示说明空态，不重复执行脚本。[决策](decisions/2026-10-20-frontend-sidebar.md)
 
-**酒馆助手兼容层**：前端里常见的 `getVariables` / `replaceVariables` / `getChatMessages` / `setChatMessages` / `createChatMessages` / `deleteChatMessages` / `eventOn` / `eventEmit` / `tavern_events` / `SillyTavern.getContext()` 都可用（`window` 与 `window.TavernHelper` 双出口），并内置 lodash、jQuery 与 showdown。**沙箱不变**：所有调用经 token 校验的 `postMessage` 交给宿主代理，再由宿主按当前会话绑定访问 store——iframe 拿不到宿主对象，也不能指定别的角色/聊天。变量可写 `global`/`chat`/`message`（`character` 只读）；AgentTavern 会话的 chat 变量同时写入 `chat_metadata.variables` 与 MVU 的 chat 作用域，避免两份状态漂移。**明确不支持**：生成控制（`generate` / `trigger` / `regenerate`）、世界书与角色卡写入、script/preset 变量——调用即报错，不静默跳过。
+**卡脚本 tab**：卡内 `extensions.tavern_helper.scripts`（JSR 的常驻脚本树）**默认不自动执行**。右栏「卡脚本」tab 只列出启用的脚本；点「运行」后才把单份脚本包成完整 HTML 文档，在同一个沙箱 `FrontendFrame` 里手动跑一次（切换聊天/角色立即停止，无 JSR 脚本按钮/快速回复栏）。列表来自**当前聊天的会话脚本树副本**，所以运行的是 GM 面板改写过的最新源码。设置页开启 `cardScriptsAutoRun`（默认关闭）后，进入非群聊酒馆聊天会自动展开本 tab，并把卡内全部启用脚本按顺序注入**同一个**沙箱 iframe 自动执行——脚本共享该 iframe 的 DOM 与全局变量，拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限，只对信任的卡开启；tab 内可「停止自动运行」回到手动模式。卡脚本拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限，面板顶部常驻警告。[决策](decisions/2026-10-21-card-scripts-host.md)
 
-**MagVarUpdate / Mvu 兼容（2026-10-21）**：Agent 模式投影器会解析模型回复末尾的 `<UpdateVariable><JSONPatch>`，按宽松 RFC 6902（`replace`/`insert`/`delta`/`remove`，自动补中间对象、`当前/最大` clamp）写入 `chat_metadata.variables.stat_data`，并把每楼快照挂到 `variables.stat_data`；卡内 `StatusPlaceHolderImpl` 自动补齐，展示层正则即可挂载状态栏。前端可直接用 `Mvu.getMvuData` / `Mvu.replaceMvuData` / `Mvu.events.VARIABLE_UPDATE_ENDED`，`toastr` 与 `window.parent` facade（`#send_textarea` / `#send_but`）也已补齐。卡内 `tavern_helper.scripts` 脚本树仍不执行，脚本树型悬浮面板不在兼容面内；详见 [`docs/frontend/tavern-helper-compat.md`](docs/frontend/tavern-helper-compat.md)。Agent 模式每轮还会把卡内 constant EJS 世界书按当前变量渲染成一条插件消息注入（首轮全量，后续只补变化，每 8 轮全量刷新），让 `<UpdateVariable>` 协议、阶段指令与事件处理器真正进入模型上下文。
+**会话世界书副本**：脚本通过 `getWorldbook` / `updateWorldbookWith` 读写的世界书只落在**当前聊天**的覆盖层（`chats/<角色>/<聊天>.jsonl.worlds.json`）；基础 `worlds/<name>.json` 与卡内 `character_book` 保持只读。当前聊天的世界书激活、生成与 MVU 读取优先用副本；副本随聊天生命周期（重命名跟随、分支/分叉复制、删除清理），跨聊天互不影响。「卡脚本」tab 底部的「重置会话世界书」丢弃副本、回到角色卡原版。[决策](decisions/2026-10-21-card-scripts-host.md)
+
+**会话脚本树副本**：GM 面板用 `updateScriptTreesWith` 改写的 Zod 源码按聊天持久化到 `chats/<角色>/<聊天>.jsonl.scripts.json`——先 `scripts.put` 落盘，成功后才更新 iframe 内存并发布 `mg-zod-ready`；刷新页面或重开卡脚本 tab 仍从副本起步，不回写角色卡、不影响别的聊天。持久化的是**脚本源码**，服务端 MVU 仍不执行 Zod；卡脚本 tab 的「重置卡脚本」删除副本并回到卡原版。[决策](decisions/2026-10-21-card-scripts-host.md)
+
+**酒馆助手兼容层**：前端里常见的 `getVariables` / `replaceVariables` / `getChatMessages` / `setChatMessages` / `createChatMessages` / `deleteChatMessages` / `eventOn` / `eventEmit` / `tavern_events` / `SillyTavern.getContext()` 都可用（`window` 与 `window.TavernHelper` 双出口），并内置 lodash、jQuery 与 showdown。**沙箱不变**：所有调用经 token 校验的 `postMessage` 交给宿主代理，再由宿主按当前会话绑定访问 store——iframe 拿不到宿主对象，也不能指定别的角色/聊天。变量可写 `global`/`chat`/`message`（`character` 只读）；AgentTavern 会话的 chat 变量同时写入 `chat_metadata.variables` 与 MVU 的 chat 作用域，避免两份状态漂移。世界书写面 `updateWorldbookWith` 只写会话副本；`getCharWorldbookNames` 同步返回卡链接世界。**明确不支持**：生成控制（`generate` / `trigger` / `regenerate`）、角色卡与基础世界书写入、script/preset 变量——调用即报错，不静默跳过。
+
+**MagVarUpdate / Mvu 兼容（2026-10-21）**：Agent 模式投影器会解析模型回复末尾的 `<UpdateVariable><JSONPatch>`，按宽松 RFC 6902（`replace`/`insert`/`delta`/`remove`，自动补中间对象、`当前/最大` clamp）写入 `chat_metadata.variables.stat_data`，并把每楼快照挂到 `variables.stat_data`；卡内 `StatusPlaceHolderImpl` 自动补齐，展示层正则即可挂载状态栏。前端可直接用 `Mvu.getMvuData` / `Mvu.replaceMvuData` / `Mvu.events.VARIABLE_UPDATE_ENDED`，`toastr` 与 `window.parent` facade（`#send_textarea` / `#send_but`）也已补齐；`mvu.replace` 成功后宿主重投快照，按钮改值会同步到同聊天的状态栏 iframe。`tavern_helper.scripts` 脚本树仍不自动执行，需要时从右栏「卡脚本」tab 手动运行；详见 [`docs/frontend/tavern-helper-compat.md`](docs/frontend/tavern-helper-compat.md)。Agent 模式每轮还会把卡内 constant EJS 世界书按当前变量渲染成一条插件消息注入（首轮全量，后续只补变化，每 8 轮全量刷新），让 `<UpdateVariable>` 协议、阶段指令与事件处理器真正进入模型上下文。
 
 完整的**可用 / 部分可用 / 不可用**清单（含每个函数的作用域、事件是否真的会触发、常见 JSR 写法的替代方案、报错对照表）见 [`docs/frontend/tavern-helper-compat.md`](docs/frontend/tavern-helper-compat.md)。[决策](decisions/2026-10-20-frontend-helper-compat.md)
 

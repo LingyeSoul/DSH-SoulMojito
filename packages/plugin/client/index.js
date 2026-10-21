@@ -533,6 +533,13 @@ window.__ModuleLoader__.load({
       // theme changes; body stays transparent so the card keeps its own canvas.
       // The card's html/body background still wins because the reset comes first.
       const reset = `<style>:root{--dt-host-background:${hostColor};}html{background:var(--dt-host-background)}body{margin:0!important;padding:0;max-width:100%;background:transparent;}*,*::before,*::after{box-sizing:border-box;}</style>`
+      // Late canvas rule (2026-10-21): cards such as the action console ship
+      // `html, body { background: transparent !important; }`. The head reset loses
+      // that cascade fight, so the iframe canvas goes transparent and some
+      // webviews paint the browser white behind it. This rule is appended after
+      // the card's own styles and forces the canvas only (`html`), leaving body
+      // and card surfaces (`.tactics-panel`, status cards) untouched.
+      const canvas = `<style>html{background:var(--dt-host-background)!important;}</style>`
       // 视口脚本进 head（先于 body 样式首帧解析，避免塌陷闪动），reporter 留 body 末
       const viewport = `<script>${frontendViewportScript()}</script>`
       const theme = `<script>${frontendThemeScript()}</script>`
@@ -548,18 +555,18 @@ window.__ModuleLoader__.load({
           documentText = documentText.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${csp}${reset}${viewport}${theme}${helper}</head>`)
         }
         if (/<\/body\s*>/i.test(documentText)) {
-          return documentText.replace(/<\/body\s*>/i, `${reporter}</body>`)
+          return documentText.replace(/<\/body\s*>/i, `${canvas}${reporter}</body>`)
         }
         if (/<\/html\s*>/i.test(documentText)) {
-          return documentText.replace(/<\/html\s*>/i, `${reporter}</html>`)
+          return documentText.replace(/<\/html\s*>/i, `${canvas}${reporter}</html>`)
         }
-        return `${documentText}${reporter}`
+        return `${documentText}${canvas}${reporter}`
       }
       const headMatch = /<head(?:\s[^>]*)?>([\s\S]*?)<\/head\s*>/i.exec(source)
       const bodyMatch = /<body(?:\s[^>]*)?>([\s\S]*?)<\/body\s*>/i.exec(source)
       const headContent = headMatch ? headMatch[1] : ''
       const bodyContent = bodyMatch ? bodyMatch[1] : source
-      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${reset}${viewport}${theme}${helper}${headContent}</head><body>${bodyContent}${reporter}</body></html>`
+      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${reset}${viewport}${theme}${helper}${headContent}</head><body>${bodyContent}${canvas}${reporter}</body></html>`
     }
 
     // 宿主→iframe 视口投递（A-4）：iframe 的 --dt-viewport-height 需要"真实可视区
@@ -767,7 +774,10 @@ window.__ModuleLoader__.load({
       frame.style.removeProperty('display')
       if (wrapper) wrapper.style.removeProperty('display')
       if (typeof prefs.height === 'number' && Number.isFinite(prefs.height) && prefs.height > 0) {
-        frame.style.setProperty('height', `${Math.min(Math.max(Math.ceil(prefs.height), 1), 1200)}px`, 'important')
+        // Visible frames keep at least one control row: the action console reports
+        // its panel height, and a 0/1px clamp would clip the whole console while
+        // leaving the frame in the layout.
+        frame.style.setProperty('height', `${Math.min(Math.max(Math.ceil(prefs.height), 36), 1200)}px`, 'important')
       } else {
         frame.style.removeProperty('height')
       }
@@ -871,7 +881,10 @@ window.__ModuleLoader__.load({
           }).then((result) => {
             reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: result.value })
             // 状态已变：重投快照（并据比对广播事件），让前端后续同步读取拿到新值。
-            if (data.op === 'variables.replace' || String(data.op).startsWith('messages.') || data.op === 'slash') {
+            // mvu.replace 同样写变量：不重投的话，同聊天的状态栏 iframe 收不到
+            // 行动台/按钮刚刚写入的新 stat_data。
+            if (data.op === 'variables.replace' || String(data.op).startsWith('messages.')
+              || data.op === 'slash' || data.op === 'mvu.replace') {
               postSnapshot()
             }
           }).catch((cause) => {
@@ -935,7 +948,7 @@ window.__ModuleLoader__.load({
         title: 'Tavern frontend',
         srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current),
         onLoad: () => { postViewport(); postTheme() },
-        style: { height },
+        style: { height, background: initialBackgroundRef.current },
       })
     }
 
@@ -1009,6 +1022,7 @@ window.__ModuleLoader__.load({
     characterName: '', userName: 'User', chatId: '', chatMetadata: {},
     messages: [], variables: { global: {}, chat: {}, message: {}, character: {} },
     characterData: null,
+    scriptTrees: null,
   };
 
   function call(op, payload) {
@@ -1209,6 +1223,27 @@ window.__ModuleLoader__.load({
     }
   }
 
+  var lastDisabledNoticeAt = 0;
+  // Disabled controls swallow the click event, so a card button such as the action
+  // console's 必杀 (charge < 100) looks dead. Capture-phase pointer events explain
+  // it without editing card HTML; pointerover is the fallback for engines that do
+  // not deliver pointerdown on disabled controls.
+  function noteDisabledControl(event) {
+    var target = event.target;
+    if (!target || typeof target.closest !== 'function') return;
+    var control = target.closest('button, [aria-disabled="true"]');
+    if (!control) return;
+    if (control.disabled !== true && control.getAttribute('aria-disabled') !== 'true') return;
+    var now = Date.now();
+    if (now - lastDisabledNoticeAt < 1500) return;
+    lastDisabledNoticeAt = now;
+    showToast('info', '该按钮当前不可用');
+  }
+  try {
+    document.addEventListener('pointerdown', noteDisabledControl, true);
+    document.addEventListener('pointerover', noteDisabledControl, true);
+  } catch (_) {}
+
   function applySnapshot(snapshot) {
     state.characterName = snapshot.characterName || state.characterName;
     state.userName = snapshot.userName || state.userName;
@@ -1217,6 +1252,10 @@ window.__ModuleLoader__.load({
     state.messages = Array.isArray(snapshot.messages) ? snapshot.messages : [];
     state.variables = snapshot.variables || state.variables;
     state.characterData = snapshot.characterData || null;
+    state.scriptTrees = Array.isArray(snapshot.scriptTrees) ? snapshot.scriptTrees : null;
+    // 快照先于 GM 面板首次 getScriptTrees 到达时，把会话副本装进内存树；本地
+    // 已写过之后不再接受快照覆盖（见 scriptTreesLocallyWritten）。
+    if (!scriptTreesLocallyWritten && Array.isArray(state.scriptTrees)) scriptTrees = clone(state.scriptTrees);
     // 状态栏前端在 DOMContentLoaded 只拉一次；快照是异步到的。这里把最新
     // stat_data 作为一次 VARIABLE_UPDATE_ENDED 广播，面板不会停在空态。
     var last = state.messages.length > 0 ? state.messages[state.messages.length - 1] : undefined;
@@ -1324,6 +1363,7 @@ window.__ModuleLoader__.load({
       var type = mvuScopeOption(target);
       var stat = data && data.stat_data !== undefined ? data.stat_data : data;
       if (!stat || typeof stat !== 'object' || Array.isArray(stat)) {
+        showToast('error', '变量写入失败: DSH-SoulMojito: Mvu.replaceMvuData expects an object');
         return Promise.reject(new Error('DSH-SoulMojito: Mvu.replaceMvuData expects an object'));
       }
       var index = type === 'message' ? messageIndex(target.message_id) : undefined;
@@ -1333,12 +1373,16 @@ window.__ModuleLoader__.load({
       }
       if (state.variables.chat) state.variables.chat.stat_data = clone(stat);
       dispatchMvu(stat);
+      // 卡片按钮的写回失败必须可见：卡自己只 console.error，用户会以为「点了没反应」。
       return call('mvu.replace', { statData: stat, messageId: index }).then(function (value) {
         if (value && value.stat_data !== undefined) {
           if (state.variables.chat) state.variables.chat.stat_data = clone(value.stat_data);
           dispatchMvu(value.stat_data);
         }
         return { stat_data: value && value.stat_data !== undefined ? value.stat_data : clone(stat) };
+      }, function (error) {
+        showToast('error', '变量写入失败: ' + (error && error.message ? error.message : String(error)));
+        throw error;
       });
     }
   };
@@ -1470,6 +1514,102 @@ window.__ModuleLoader__.load({
   window.getCharacterNames = window.getCharNames;
   window.getChatWorldbookNames = window.getGlobalWorldbookNames;
 
+  // 角色链接世界书（2026-10-21 会话副本）：getter 必须同步（GM 脚本不 await）。
+  // 名字取 extensions.world，其次内嵌书 characterBook.name。
+  function characterWorldbookName() {
+    var data = state.characterData || {}, extensions = data.extensions || {};
+    var world = typeof extensions.world === 'string' ? extensions.world.trim() : '';
+    if (world !== '') return world;
+    var embedded = data.characterBook && typeof data.characterBook.name === 'string' ? data.characterBook.name.trim() : '';
+    return embedded !== '' ? embedded : null;
+  }
+  window.getCharWorldbookNames = function () { return { primary: characterWorldbookName(), additional: [] }; };
+  // 世界书写入只落当前聊天的会话副本（服务端 lorebook.put 强制 chatId）；基础
+  // worlds/<name>.json 与卡内 characterBook 永远不动。updater 在 iframe 内执行，
+  // 只把结果 entries 发回宿主（函数不能过 postMessage）。
+  window.updateWorldbookWith = function (name, updater) {
+    if (typeof updater !== 'function') return Promise.reject(new Error('DSH-SoulMojito: updateWorldbookWith(name, updater) requires a function'));
+    var bookName = typeof name === 'string' && name.trim() !== '' ? name.trim() : characterWorldbookName();
+    if (bookName === null) return Promise.reject(new Error('DSH-SoulMojito: updateWorldbookWith requires a world book name (this character links no world)'));
+    return window.getWorldbook(bookName)
+      .then(function (entries) { return Promise.resolve(updater(entries)); })
+      .then(function (updated) { return call('lorebook.put', { name: bookName, entries: updated }); })
+      .then(function (value) { return value.entries; });
+  };
+
+  // 脚本树（2026-10-21，GM 面板阶段 B）：优先会话副本（state.scriptTrees，由
+  // 宿主 snapshot 带回），没有才从卡内 extensions.tavern_helper.scripts 播种。
+  // 节点原样保留（folder / button / 未知字段都透传）；**不回写角色卡、不自动
+  // 执行**。GM 改完树后等 mg-zod-ready 握手——这里从改写后的源码解析探针直接
+  // 派发，让阶段 C 继续；Zod schema 本身不会生效。
+  var scriptTrees = null;
+  // 本地通过 scripts.put 写过之后，后续快照不得覆盖内存树（快照可能是在写入
+  // 之前取的）；重载 iframe 会重置该标记并从会话副本重新播种。
+  var scriptTreesLocallyWritten = false;
+  function seedScriptTrees() {
+    if (Array.isArray(state.scriptTrees)) return clone(state.scriptTrees);
+    var data = state.characterData || {}, helper = (data.extensions || {}).tavern_helper;
+    var nodes = helper && Array.isArray(helper.scripts) ? helper.scripts : [];
+    var trees = [];
+    for (var index = 0; index < nodes.length; index++) {
+      var node = nodes[index];
+      if (!node || typeof node !== 'object' || Array.isArray(node)) continue;
+      trees.push(node);
+    }
+    return clone(trees);
+  }
+  function flattenScriptTrees(trees) {
+    var flat = [];
+    for (var index = 0; index < trees.length; index++) {
+      var entry = trees[index];
+      if (!entry || typeof entry !== 'object') continue;
+      if (entry.type === 'folder' && Array.isArray(entry.scripts)) flat = flat.concat(flattenScriptTrees(entry.scripts));
+      else flat.push(entry);
+    }
+    return flat;
+  }
+  function currentScriptTrees() {
+    if (scriptTrees === null) scriptTrees = seedScriptTrees();
+    return scriptTrees;
+  }
+  function publishZodReady(trees) {
+    var flat = flattenScriptTrees(trees);
+    var found = null;
+    for (var index = 0; index < flat.length; index++) {
+      var entry = flat[index];
+      if (!entry || typeof entry.content !== 'string') continue;
+      var pattern = /__mgZodReady__\\s*=\\s*(\\{[^{}]*\\})/g;
+      var match;
+      // 取最后一次出现：GM 面板是在源码尾部注入新探针，旧探针可能仍在。
+      while ((match = pattern.exec(entry.content)) !== null) found = match[1];
+    }
+    if (found === null) return;
+    var ready;
+    try { ready = JSON.parse(found); } catch (error) { console.error('[TavernHelper] invalid __mgZodReady__ probe', error); return; }
+    host.__mgZodReady__ = ready;
+    window.__mgZodReady__ = ready;
+    try { window.dispatchEvent(new CustomEvent('mg-zod-ready', { detail: ready })); } catch (_) {}
+    try { host.dispatchEvent(new CustomEvent('mg-zod-ready', { detail: ready })); } catch (_) {}
+  }
+  window.getScriptTrees = function () { return clone(currentScriptTrees()); };
+  // 先持久化再发布 ready：GM 面板把 updateScriptTreesWith 的 resolve 当作「已
+  // 保存」。落盘失败必须拒绝并保留旧内存树，不能把半成品当成成功。
+  window.updateScriptTreesWith = function (updater) {
+    if (typeof updater !== 'function') return Promise.reject(new Error('DSH-SoulMojito: updateScriptTreesWith requires a function'));
+    var draft = clone(currentScriptTrees());
+    return Promise.resolve().then(function () {
+      return updater(draft);
+    }).then(function (next) {
+      if (!Array.isArray(next)) throw new Error('DSH-SoulMojito: updateScriptTreesWith updater must return an array of script nodes');
+      return call('scripts.put', { scriptTrees: next }).then(function (value) {
+        scriptTrees = value && Array.isArray(value.scriptTrees) ? value.scriptTrees : next;
+        scriptTreesLocallyWritten = true;
+        publishZodReady(scriptTrees);
+        return clone(scriptTrees);
+      });
+    });
+  };
+
   // triggerSlash：只接不与宿主生成循环冲突的命令子集（变量/分支/发送/裁剪/正则）。
   // /trigger、/regenerate、/stop 会由服务端解释器明确报错（生成归宿主 AgentLoop）。
   window.triggerSlash = function (command) {
@@ -1548,6 +1688,11 @@ window.__ModuleLoader__.load({
   window.TavernHelper.eventClearAll = window.eventClearAll;
   window.TavernHelper.getLorebook = window.getLorebook;
   window.TavernHelper.getLorebookNames = window.getLorebookNames;
+  window.TavernHelper.getWorldbook = window.getWorldbook;
+  window.TavernHelper.getCharWorldbookNames = window.getCharWorldbookNames;
+  window.TavernHelper.updateWorldbookWith = window.updateWorldbookWith;
+  window.TavernHelper.getScriptTrees = window.getScriptTrees;
+  window.TavernHelper.updateScriptTreesWith = window.updateScriptTreesWith;
   window.TavernHelper.getCharNames = window.getCharNames;
   window.TavernHelper.triggerSlash = window.triggerSlash;
   window.TavernHelper.getTavernRegexes = window.getTavernRegexes;
@@ -1610,28 +1755,52 @@ window.__ModuleLoader__.load({
       });
     }
   };
-  var fakeDocument = {
+  // window.top / window.parent are rewritten to this host, and JSR floating
+  // panels do hud_win = window.top; hud_doc = hud_win.document. A stub document
+  // (body: null, getElementById missing) crashes those panels, so the facade
+  // delegates everything to the real iframe document. Only the two host-composer
+  // selectors stay faked: they are the historical parent.document contract.
+  var documentFacade = {
+    getElementById: function (id) { return document.getElementById(id); },
+    createElement: function (tag, options) { return options === undefined ? document.createElement(tag) : document.createElement(tag, options); },
+    createElementNS: function (namespace, tag) { return document.createElementNS(namespace, tag); },
+    createTextNode: function (text) { return document.createTextNode(text); },
     querySelector: function (selector) {
       if (selector === '#send_textarea') return fakeTextarea;
       if (selector === '#send_but') return fakeSendButton;
-      return null;
+      return document.querySelector(selector);
     },
-    querySelectorAll: function () { return []; },
-    body: null,
-    documentElement: null
+    querySelectorAll: function (selector) { return document.querySelectorAll(selector); },
+    addEventListener: function () { return document.addEventListener.apply(document, arguments); },
+    removeEventListener: function () { return document.removeEventListener.apply(document, arguments); },
+    get head() { return document.head; },
+    get body() { return document.body; },
+    get documentElement() { return document.documentElement; },
+    get activeElement() { return document.activeElement; }
   };
   var host = {
     Mvu: window.Mvu,
     toastr: window.toastr,
     SillyTavern: window.SillyTavern,
     TavernHelper: window.TavernHelper,
-    document: fakeDocument,
+    document: documentFacade,
     CustomEvent: window.CustomEvent,
     Event: window.Event,
     postMessage: function () { return realParent.postMessage.apply(realParent, arguments); },
     addEventListener: function () { return window.addEventListener.apply(window, arguments); },
     removeEventListener: function () { return window.removeEventListener.apply(window, arguments); },
     dispatchEvent: function (event) { return window.dispatchEvent(event); },
+    // Viewport metrics for floating panels (positioning / drag / mobile checks).
+    get innerWidth() { return window.innerWidth; },
+    get innerHeight() { return window.innerHeight; },
+    get devicePixelRatio() { return window.devicePixelRatio; },
+    get visualViewport() { return window.visualViewport; },
+    matchMedia: function (query) { return window.matchMedia(query); },
+    getComputedStyle: function (element, pseudo) {
+      return pseudo === undefined ? window.getComputedStyle(element) : window.getComputedStyle(element, pseudo);
+    },
+    requestAnimationFrame: function (callback) { return window.requestAnimationFrame(callback); },
+    cancelAnimationFrame: function (handle) { return window.cancelAnimationFrame(handle); },
     getVariables: window.getVariables,
     replaceVariables: window.replaceVariables,
     getChatMessages: window.getChatMessages,
@@ -1639,6 +1808,10 @@ window.__ModuleLoader__.load({
     getCurrentMessageId: window.getCurrentMessageId,
     getLorebook: window.getLorebook,
     getWorldbook: window.getWorldbook,
+    getCharWorldbookNames: window.getCharWorldbookNames,
+    updateWorldbookWith: window.updateWorldbookWith,
+    getScriptTrees: window.getScriptTrees,
+    updateScriptTreesWith: window.updateScriptTreesWith,
     getCharNames: window.getCharNames,
     triggerSlash: window.triggerSlash,
     _: window._,
@@ -2608,6 +2781,8 @@ window.__ModuleLoader__.load({
       'settings.preloadAssets': 'Preload character and constant World Info when a new AgentTavern session starts',
       'settings.allowGlobalWrites': 'Allow AgentTavern tools to write memories and variables in the global scope',
       'settings.frontendAutoOpen': 'Open the right sidebar when a frontend appears (once per chat)',
+      'settings.cardScriptsAutoRun': 'Run card scripts automatically when entering a chat (off by default)',
+      'settings.cardScriptsAutoRunHint': 'Opening a Tavern chat expands the Card scripts tab and injects every enabled card script into one sandboxed iframe. Scripts share that iframe’s DOM and globals and can write this chat’s variables, messages, session world-book copy and session script-tree copy. Enable only for cards you trust.',
       'settings.frontendAllowExternalResources': 'Allow frontends to load external resources (any HTTPS origin)',
       'settings.frontendAllowExternalResourcesHint': 'Lets the iframe load any HTTPS script or stylesheet, and allows fetch/XHR plus CDN source maps (connect-src https:). External scripts can read the chat content visible to the frontend and send it elsewhere; enable only for cards you trust.',
       'settings.gamesDisableResign': 'Disable resign in games (hides the resign button; the AI cannot resign either)',
@@ -3219,6 +3394,33 @@ window.__ModuleLoader__.load({
       'frontend.refresh': 'Reload',
       'frontend.inlineOnly': 'ST style renders message frontends inline, so no sidebar copy is needed.',
       'frontend.unbound': 'This session is not bound to a Tavern chat.',
+      // Card scripts sidebar (2026-10-21): manual runner for the card's
+      // tavern_helper script tree. zh/en keys must stay mirrored.
+      'cardScripts.title': 'Card scripts',
+      'cardScripts.guide.description': 'Enabled Tavern Helper scripts from this card; run one manually — nothing runs automatically.',
+      'cardScripts.empty': 'This card has no enabled card scripts.',
+      'cardScripts.unbound': 'This session is not bound to a Tavern chat.',
+      'cardScripts.warning': 'Card scripts can write this chat’s variables, messages and session world-book copy. Only run a card you trust.',
+      'cardScripts.run': 'Run',
+      'cardScripts.stop': 'Stop',
+      'cardScripts.running': 'Running',
+      'cardScripts.autoRunning': 'Auto-running ({count} scripts)',
+      'cardScripts.stopAutoRun': 'Stop auto-run',
+      'cardScripts.autoRunStopped': 'Auto-run stopped. Run scripts manually, or turn auto-run back on in settings.',
+      'cardScripts.resetWorldbook': 'Reset session world book',
+      'cardScripts.resetConfirm': 'Resetting discards every world-book change made in this chat and restores the card original. Continue?',
+      'cardScripts.resetDone': 'Restored the card original world book',
+      'cardScripts.loadFailed': 'Failed to load card scripts: {error}',
+      'cardScripts.count': '{count} enabled script(s)',
+      'cardScripts.charCount': '{count} chars',
+      'cardScripts.loading': 'Loading card scripts…',
+      'cardScripts.idle': 'Click Run to start a script in the sandbox; one script at a time.',
+      'cardScripts.world': 'Session world book: {name}',
+      'cardScripts.refresh': 'Reload',
+      'cardScripts.scriptsLabel': 'Session script tree',
+      'cardScripts.resetScripts': 'Reset card scripts',
+      'cardScripts.resetScriptsConfirm': 'Resetting discards every script-tree change in this chat, restores the card original and stops this chat’s running script. Continue?',
+      'cardScripts.resetScriptsDone': 'Restored the card original scripts',
       // AgentNovel surface (proposal 0005). zh/en keys must stay mirrored with
       // identical {param} placeholders; the client-vm-mount gate enforces it.
       'panel.section.novels': 'Novels',
@@ -3424,6 +3626,8 @@ window.__ModuleLoader__.load({
       'settings.preloadAssets': '新 AgentTavern 会话开始时预载角色信息和常驻世界书条目',
       'settings.allowGlobalWrites': '允许 AgentTavern 工具写入 global 作用域的记忆和变量',
       'settings.frontendAutoOpen': '美化前端出现时自动打开右侧栏（每聊天一次）',
+      'settings.cardScriptsAutoRun': '进入聊天时自动运行卡内脚本（默认关闭）',
+      'settings.cardScriptsAutoRunHint': '开启后进入酒馆聊天会自动展开「卡脚本」tab，并把卡内全部启用脚本注入同一个沙箱 iframe 执行。脚本共享同一 iframe 的 DOM 与全局变量，拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限；只对信任的角色卡开启。',
       'settings.frontendAllowExternalResources': '允许美化前端加载外部资源（任意 HTTPS 源）',
       'settings.frontendAllowExternalResourcesHint': '开启后 iframe 可加载任意 HTTPS 脚本/样式，并允许 fetch/XHR 与 CDN sourcemap（connect-src https:）。外部脚本能读取前端可见的聊天内容并发送到外部服务器，请只对信任的角色卡开启。',
       'settings.gamesDisableResign': '禁用投降（隐藏投降按钮，AI 也不能认输）',
@@ -4028,6 +4232,32 @@ window.__ModuleLoader__.load({
       'frontend.refresh': '重新读取',
       'frontend.inlineOnly': 'ST 架构的美化前端已直接渲染在消息里，无需右栏。',
       'frontend.unbound': '当前会话没有绑定酒馆聊天。',
+      // 卡脚本右栏（2026-10-21）：卡内 tavern_helper 脚本树的手动运行入口。
+      'cardScripts.title': '卡脚本',
+      'cardScripts.guide.description': '列出卡内启用的酒馆助手脚本，手动运行其中一份；不会自动执行。',
+      'cardScripts.empty': '这张卡没有启用的卡内脚本。',
+      'cardScripts.unbound': '当前会话没有绑定酒馆聊天。',
+      'cardScripts.warning': '卡脚本拥有当前聊天的变量、消息与会话世界书副本写权限；只运行你信任的卡。',
+      'cardScripts.run': '运行',
+      'cardScripts.stop': '停止',
+      'cardScripts.running': '运行中',
+      'cardScripts.autoRunning': '自动运行中（{count} 个脚本）',
+      'cardScripts.stopAutoRun': '停止自动运行',
+      'cardScripts.autoRunStopped': '已停止自动运行；可手动运行单个脚本，或在设置中重新开启自动运行。',
+      'cardScripts.resetWorldbook': '重置会话世界书',
+      'cardScripts.resetConfirm': '重置后本聊天的世界书改动会全部丢弃，恢复为角色卡原版。继续？',
+      'cardScripts.resetDone': '已重置为角色卡原版世界书',
+      'cardScripts.loadFailed': '读取卡脚本失败：{error}',
+      'cardScripts.count': '共 {count} 个启用脚本',
+      'cardScripts.charCount': '{count} 字符',
+      'cardScripts.loading': '正在读取卡脚本…',
+      'cardScripts.idle': '点「运行」在沙箱里启动脚本；同一时间只运行一份。',
+      'cardScripts.world': '会话世界书：{name}',
+      'cardScripts.refresh': '重新读取',
+      'cardScripts.scriptsLabel': '会话脚本树',
+      'cardScripts.resetScripts': '重置卡脚本',
+      'cardScripts.resetScriptsConfirm': '重置后本聊天的脚本树改动会全部丢弃，恢复为角色卡原版，正在运行的脚本会停止。继续？',
+      'cardScripts.resetScriptsDone': '已重置为角色卡原版脚本',
       'panel.section.novels': '小说',
       'view.architectureNovel': 'AgentNovel',
       'novel.empty': '还没有小说，创建一部开始全自动创作。',
@@ -6903,6 +7133,17 @@ window.__ModuleLoader__.load({
             }),
             h('span', null, t('settings.frontendAllowExternalResources'))),
           h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.frontendAllowExternalResourcesHint'))),
+        // 卡脚本自动运行（2026-10-21 用户需求）：默认关闭，开启后进入聊天自动
+        // 展开「卡脚本」tab 并把全部启用脚本注入同一个沙箱 iframe。
+        h('div', { className: 'dt-frontend-resources' },
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.cardScriptsAutoRun === true,
+              onChange: (event) => applyPatch({ cardScriptsAutoRun: event.target.checked }),
+            }),
+            h('span', null, t('settings.cardScriptsAutoRun'))),
+          h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.cardScriptsAutoRunHint'))),
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
@@ -8342,6 +8583,9 @@ window.__ModuleLoader__.load({
       // 自动展开走设置开关 frontendAutoOpen（2026-10-20 用户需求）：默认关闭，
       // 开启后本聊天首次出现美化前端才打开右栏 tab。
       useFrontendAutoOpen(sessionId, binding, architecture, state.bootstrap.state.frontendAutoOpen === true)
+      // 卡脚本自动运行（2026-10-21 用户需求）：设置显式开启时进入本聊天自动
+      // 展开「卡脚本」tab（每会话/角色/聊天只开一次）；tab 内再自动运行脚本。
+      useCardScriptsAutoOpen(sessionId, binding, architecture, state.bootstrap.state.cardScriptsAutoRun === true)
       // 对局面自动展示（2026-10-14 修订）：AgentTavern 的对局棋盘住在右栏 games
       // tab（MVU tab 同位）；本 watcher 盯 games/revision 水位（stat-only 的便宜
       // 端点，1s 节奏、页面不可见停发），本聊天出现未终局对局即自动展开 tab——
@@ -9269,6 +9513,370 @@ window.__ModuleLoader__.load({
             h(IconSparkle16, { size: 22 }),
             h('strong', null, t('frontend.emptyTitle')),
             h('p', { className: 'dt-hint' }, t('frontend.emptyHint'))))
+    }
+
+    // 卡脚本右栏（2026-10-21，用户需求）：JSR 卡的常驻脚本树
+    // `data.extensions.tavern_helper.scripts` 不随消息重发。默认**不自动执行**：
+    // 列出启用的脚本，用户点「运行」后才把单份脚本包成完整 HTML 文档交给现有
+    // 沙箱 FrontendFrame（allow-scripts、无 same-origin、CSP 不变）。
+    // 设置 `cardScriptsAutoRun` 显式开启后改为自动运行：进入聊天自动展开本 tab，
+    // 全部启用脚本按顺序注入**同一个** iframe（共享 DOM/全局）；关掉开关或点
+    // 「停止自动运行」回到手动模式。切换会话/角色立即停止并清空。
+    const CARD_SCRIPTS_TAB_ID = 'dsh-soulmojito/card-scripts'
+    const CARD_SCRIPTS_TAB_KIND = 'tavern-card-scripts'
+
+    function TavernCardScriptsSidebarTab({ sessionId }) {
+      return h(TavernCardScriptsPanel, { sessionId })
+    }
+
+    // 自动展开（2026-10-21 用户需求）：设置显式开启时，进入/切入一个酒馆聊天
+    // 直接打开「卡脚本」tab。每个 (sessionId, character, chatId) 只自动打开一次：
+    // 用户手动关掉后，后续挂载/绑定变化不再抢焦点。宿主没有 sidebarRight 服务
+    // 或 openTab 不可用时静默跳过，不渲染死按钮。
+    function useCardScriptsAutoOpen(sessionId, binding, architecture, enabled) {
+      const openedRef = useRef(new Set())
+      // Turning the setting off and on again is the user's explicit request to
+      // retry auto-open for this chat even if the tab was closed earlier.
+      const wasEnabledRef = useRef(false)
+      useEffect(() => {
+        if (enabled && !wasEnabledRef.current) openedRef.current.clear()
+        wasEnabledRef.current = enabled
+      }, [enabled])
+      useEffect(() => {
+        if (!enabled || binding === undefined || binding.group === true) return undefined
+        if (architecture !== 'agent-tavern' && architecture !== 'st') return undefined
+        const key = `${sessionId}\u0000${binding.character}\u0000${binding.chatId}`
+        if (openedRef.current.has(key)) return undefined
+        const sidebarRight = PanelHost.context?.get?.('sidebarRight')
+        if (typeof sidebarRight?.openTab !== 'function') return undefined
+        // A global setting must not open an empty tab for every unscripted card:
+        // probe the chat's effective list once, then open only when it has scripts.
+        let cancelled = false
+        const query = `?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`
+        void api(`card/scripts${query}`)
+          .then((result) => {
+            if (cancelled) return
+            const scripts = Array.isArray(result?.scripts) ? result.scripts : []
+            openedRef.current.add(key)
+            if (scripts.length === 0) return
+            try { sidebarRight.openTab(CARD_SCRIPTS_TAB_KIND) } catch {}
+          })
+          .catch(() => {})
+        return () => { cancelled = true }
+      }, [enabled, sessionId, binding?.character, binding?.chatId, binding?.group, architecture])
+    }
+
+    // 卡脚本是裸 JS（JSR 的脚本容器负责窗口环境）；这里包一层最小文档，让
+    // window/globalThis、CSS 与 Font Awesome 与消息前端同构。`</script` 必须
+    // 转义，否则脚本字符串里的闭合标签会提前截断 HTML 解析。
+    function cardScriptDocument(script) {
+      const content = String(script.content || '').replaceAll('</script', '<\\/script')
+      return '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+        + '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        + '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">'
+        + '<style>html,body{margin:0;padding:0;background:transparent;min-height:100%;}</style>'
+        + '</head><body><div style="height:720px"></div>'
+        + `<script type="module">${content}</script></body></html>`
+    }
+
+    // 自动运行：全部启用脚本按脚本树顺序注入**同一个**沙箱 iframe，每份一个
+    // 独立 module 块（共享 window/document/全局——不是 JSR 的隔离容器）。
+    function cardScriptTreeDocument(scripts) {
+      const blocks = scripts.map((script) => {
+        const content = String(script.content || '').replaceAll('</script', '<\\/script')
+        return `<script type="module">${content}</script>`
+      }).join('')
+      return '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+        + '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        + '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">'
+        + '<style>html,body{margin:0;padding:0;background:transparent;min-height:100%;}</style>'
+        + '</head><body><div style="height:720px"></div>' + blocks + '</body></html>'
+    }
+
+    // refreshKey 由聊天 key + 脚本身份/内容长度构成：bundle 重取但内容未变时不
+    // 重载 iframe；切换聊天/角色时（key 变化）强制换新 iframe，不复用旧聊天的
+    // 脚本运行环境。
+    function cardScriptTreeRefreshKey(chatKey, scripts) {
+      return `${chatKey}:${scripts.map((script) => `${script.id}:${script.content.length}`).join('|')}`
+    }
+
+    function TavernCardScriptsPanel({ sessionId }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const binding = state.bootstrap.state.sessionBindings?.[sessionId]
+      const architecture = bindingArchitecture(binding)
+      const supported = binding !== undefined && (architecture === 'agent-tavern' || architecture === 'st')
+      const [bundle, setBundle] = useState(null)
+      const [loading, setLoading] = useState(false)
+      const [error, setError] = useState('')
+      const [runningId, setRunningId] = useState(null)
+      const [resetting, setResetting] = useState(false)
+      const [resetDone, setResetDone] = useState(false)
+      const [resettingScripts, setResettingScripts] = useState(false)
+      const [scriptsResetDone, setScriptsResetDone] = useState(false)
+      const autoRunEnabled = state.bootstrap.state.cardScriptsAutoRun === true
+      const [autoRunning, setAutoRunning] = useState(false)
+      const [autoStopped, setAutoStopped] = useState(false)
+      // 用户手动「停止自动运行」后，bundle 重取/重渲染不得立刻重新启动；切换
+      // 聊天/角色或重新打开 tab（组件重挂载）时重置。
+      const autoRunStoppedRef = useRef(false)
+      const autoRunEnabledRef = useRef(false)
+      // 竞态取消：切换角色/聊天后旧请求的响应直接丢弃，不覆盖新列表。
+      const requestRef = useRef(0)
+      const key = binding === undefined
+        ? ''
+        : `${sessionId}\u0000${binding.character}\u0000${binding.chatId}\u0000${architecture}`
+      // bundle 绑定所属聊天 key：切换聊天后的第一帧不会把上一场聊天的脚本当成
+      // 当前聊天运行（list/auto-run 都只看 currentBundle）。
+      const currentBundle = bundle !== null && bundle.key === key ? bundle : null
+
+      const load = useCallback(() => {
+        if (!supported) return Promise.resolve()
+        const request = requestRef.current + 1
+        requestRef.current = request
+        setLoading(true)
+        return api(`card/scripts?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`)
+          .then((result) => {
+            if (requestRef.current !== request) return
+            setBundle({
+              key,
+              scripts: Array.isArray(result.scripts) ? result.scripts : [],
+              world: typeof result.world === 'string' ? result.world : null,
+            })
+            setError('')
+          })
+          .catch((cause) => {
+            if (requestRef.current !== request) return
+            // 404 是角色被删/绑定竞态：给空态，不把整块面板变成错误页。
+            if (cause?.status === 404) {
+              setBundle({ key, scripts: [], world: null })
+              return
+            }
+            setBundle(null)
+            setError(cause instanceof Error ? cause.message : String(cause))
+          })
+          .finally(() => {
+            if (requestRef.current === request) setLoading(false)
+          })
+      }, [key, supported, binding?.character])
+
+      const loadRef = useRef(load)
+      useEffect(() => { loadRef.current = load })
+
+      useEffect(() => {
+        // 切换聊天/角色：停止当前脚本并清空列表，避免把上一场聊天的 DOM 留在
+        // 新会话里（脚本自己也有聊天身份，但宿主不该替它猜）。
+        setRunningId(null)
+        setBundle(null)
+        setError('')
+        setResetDone(false)
+        setScriptsResetDone(false)
+        autoRunStoppedRef.current = false
+        setAutoRunning(false)
+        setAutoStopped(false)
+        requestRef.current += 1
+        void loadRef.current()
+        return () => { requestRef.current += 1 }
+      }, [key])
+
+      // 设置从关到开时清除「手动停止」标记：重新打开开关即恢复自动运行。
+      useEffect(() => {
+        if (autoRunEnabled && !autoRunEnabledRef.current) {
+          autoRunStoppedRef.current = false
+          setAutoStopped(false)
+        }
+        autoRunEnabledRef.current = autoRunEnabled
+      }, [autoRunEnabled])
+
+      // bundle 就绪且开关开启即启动；开关关闭/无脚本/用户已停止时回到手动模式。
+      useEffect(() => {
+        if (!supported || !autoRunEnabled) {
+          setAutoRunning(false)
+          setAutoStopped(false)
+          return
+        }
+        if (autoRunStoppedRef.current) {
+          setAutoRunning(false)
+          return
+        }
+        if (currentBundle === null || currentBundle.scripts.length === 0) {
+          setAutoRunning(false)
+          return
+        }
+        setRunningId(null)
+        setAutoRunning(true)
+      }, [autoRunEnabled, currentBundle, supported])
+
+      const stopAutoRun = () => {
+        autoRunStoppedRef.current = true
+        setAutoRunning(false)
+        setAutoStopped(true)
+        setRunningId(null)
+      }
+
+      const resetWorldbook = () => {
+        if (!supported || currentBundle === null || currentBundle.world === null) return
+        if (typeof window.confirm === 'function' && !window.confirm(t('cardScripts.resetConfirm'))) return
+        setResetting(true)
+        setResetDone(false)
+        void api('helper', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({
+            op: 'lorebook.reset',
+            character: binding.character,
+            chatId: binding.chatId,
+            name: currentBundle.world,
+          }),
+        }).then(() => {
+          setResetDone(true)
+        }).catch((cause) => {
+          setError(cause instanceof Error ? cause.message : String(cause))
+        }).finally(() => {
+          setResetting(false)
+        })
+      }
+
+      const resetScripts = () => {
+        if (!supported) return
+        if (typeof window.confirm === 'function' && !window.confirm(t('cardScripts.resetScriptsConfirm'))) return
+        setResettingScripts(true)
+        setScriptsResetDone(false)
+        setResetDone(false)
+        void api('helper', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({
+            op: 'scripts.reset',
+            character: binding.character,
+            chatId: binding.chatId,
+          }),
+        }).then(() => {
+          // 副本没了：停止自动运行与手动脚本，列表回卡原版。
+          autoRunStoppedRef.current = true
+          setAutoRunning(false)
+          setAutoStopped(false)
+          setRunningId(null)
+          setScriptsResetDone(true)
+          void loadRef.current()
+        }).catch((cause) => {
+          setError(cause instanceof Error ? cause.message : String(cause))
+        }).finally(() => {
+          setResettingScripts(false)
+        })
+      }
+
+      if (!supported) {
+        return h('div', { className: 'dt-frontend-side', 'data-dsh-soulmojito-surface': 'card-scripts-sidebar' },
+          h('div', { className: 'dt-frontend-side-empty' }, h(IconSparkle16, { size: 22 }),
+            h('span', null, t('cardScripts.unbound'))))
+      }
+
+      const scripts = currentBundle === null ? [] : currentBundle.scripts
+      const running = scripts.find((script) => script.id === runningId)
+      return h('div', { className: 'dt-frontend-side dt-card-scripts', 'data-dsh-soulmojito-surface': 'card-scripts-sidebar' },
+        h('p', { className: 'dt-card-scripts-warning', role: 'note' }, t('cardScripts.warning')),
+        h('div', { className: 'dt-frontend-side-head' },
+          h('span', { className: 'dt-frontend-side-meta' },
+            t('cardScripts.count', { count: scripts.length })),
+          h('button', {
+            type: 'button',
+            className: 'dt-frontend-side-refresh',
+            title: t('cardScripts.refresh'),
+            'aria-label': t('cardScripts.refresh'),
+            onClick: () => { void loadRef.current() },
+          }, h(IconRefreshOutline16))),
+        error !== '' ? h('p', { className: 'dt-error' }, t('cardScripts.loadFailed', { error })) : null,
+        autoRunning
+          ? h('div', { className: 'dt-card-scripts-auto' },
+            h('span', { className: 'dt-card-script-running' },
+              t('cardScripts.autoRunning', { count: scripts.length })),
+            h('button', {
+              type: 'button',
+              className: 'dt-card-script-run dt-card-script-stop',
+              onClick: stopAutoRun,
+            }, t('cardScripts.stopAutoRun')))
+          : null,
+        autoStopped && !autoRunning ? h('p', { className: 'dt-hint' }, t('cardScripts.autoRunStopped')) : null,
+        loading && currentBundle === null
+          ? h('div', { className: 'dt-frontend-side-empty' }, h(IconSparkle16, { size: 22 }),
+            h('span', null, t('cardScripts.loading')))
+          : null,
+        !loading && currentBundle !== null && scripts.length === 0
+          ? h('div', { className: 'dt-frontend-side-empty' }, h(IconSparkle16, { size: 22 }),
+            h('span', null, t('cardScripts.empty')))
+          : null,
+        scripts.length > 0
+          ? h('div', { className: 'dt-card-scripts-list' }, scripts.map((script) => h('div', {
+            key: script.id,
+            className: 'dt-card-script',
+          },
+          h('div', { className: 'dt-card-script-head' },
+            h('strong', null, script.name),
+            !autoRunning && runningId === script.id
+              ? h('span', { className: 'dt-card-script-running' }, t('cardScripts.running'))
+              : null,
+            h('span', { className: 'dt-card-script-meta' },
+              t('cardScripts.charCount', { count: script.content.length }))),
+          script.info !== '' ? h('p', { className: 'dt-hint' }, script.info) : null,
+          h('button', {
+            type: 'button',
+            className: runningId === script.id ? 'dt-card-script-run dt-card-script-stop' : 'dt-card-script-run',
+            disabled: autoRunning,
+            onClick: () => {
+              setResetDone(false)
+              setAutoStopped(false)
+              setRunningId(runningId === script.id ? null : script.id)
+            },
+          }, runningId === script.id ? t('cardScripts.stop') : t('cardScripts.run')))))
+          : null,
+        autoRunning && scripts.length > 0
+          ? h('div', { className: 'dt-frontend-side-frames' },
+            h('div', { className: 'dt-frontend-side-frame' }, h(FrontendFrame, {
+              key: `card-scripts-auto-${sessionId}-${binding.chatId}`,
+              html: cardScriptTreeDocument(scripts),
+              token: `card-scripts-auto-${sessionId}`,
+              messageId: -1,
+              binding: { character: binding.character, chatId: binding.chatId },
+              hostSessionId: sessionId,
+              refreshKey: cardScriptTreeRefreshKey(key, scripts),
+            })))
+          : running !== undefined
+            ? h('div', { className: 'dt-frontend-side-frames' },
+              h('div', { className: 'dt-frontend-side-frame' }, h(FrontendFrame, {
+                key: `card-script-${running.id}`,
+                html: cardScriptDocument(running),
+                token: `card-script-${sessionId}-${running.id}`,
+                messageId: -1,
+                binding: { character: binding.character, chatId: binding.chatId },
+                hostSessionId: sessionId,
+                refreshKey: `${running.id}:${running.content.length}`,
+              })))
+            : h('p', { className: 'dt-hint' }, t('cardScripts.idle')),
+        resetDone ? h('p', { className: 'dt-card-scripts-notice', role: 'status' }, t('cardScripts.resetDone')) : null,
+        scriptsResetDone ? h('p', { className: 'dt-card-scripts-notice', role: 'status' }, t('cardScripts.resetScriptsDone')) : null,
+        currentBundle !== null && (currentBundle.world !== null || scripts.length > 0)
+          ? h('div', { className: 'dt-card-scripts-resets' },
+            currentBundle.world !== null
+              ? h('div', { className: 'dt-card-scripts-world' },
+                h('span', { className: 'dt-frontend-side-meta' },
+                  t('cardScripts.world', { name: currentBundle.world })),
+                h('button', {
+                  type: 'button',
+                  className: 'dt-card-script-reset',
+                  disabled: resetting,
+                  onClick: resetWorldbook,
+                }, t('cardScripts.resetWorldbook')))
+              : null,
+            h('div', { className: 'dt-card-scripts-world' },
+              h('span', { className: 'dt-frontend-side-meta' }, t('cardScripts.scriptsLabel')),
+              h('button', {
+                type: 'button',
+                className: 'dt-card-script-reset',
+                disabled: resettingScripts,
+                onClick: resetScripts,
+              }, t('cardScripts.resetScripts'))))
+          : null)
     }
 
     // AgentTavern runs on the host's native conversation surface: the host owns
@@ -13108,6 +13716,24 @@ window.__ModuleLoader__.load({
         .dt-frontend-side-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-height:220px;padding:16px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:13px;line-height:20px}
         .dt-frontend-side-empty>p{margin:0;max-width:300px}
         .dt-frontend-side-empty svg{color:var(--dsw-alias-label-caption)}
+        .dt-card-scripts-warning{margin:0;padding:9px 11px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-status-warning,#e0af68) 14%,transparent);color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px}
+        .dt-card-scripts-list{display:flex;flex-direction:column;gap:8px;min-width:0}
+        .dt-card-script{display:flex;flex-direction:column;gap:6px;min-width:0;padding:10px 11px;border-radius:9px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
+        .dt-card-script-head{display:flex;align-items:baseline;gap:8px;min-width:0}
+        .dt-card-script-head strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;font-weight:600}
+        .dt-card-script-meta{margin-left:auto;flex:none;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+        .dt-card-script-running{flex:none;color:var(--dsw-alias-status-success,#9ece6a);font-size:11px;line-height:16px}
+        .dt-card-script-run{align-self:flex-start;padding:5px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:transparent;color:var(--dsw-alias-label-primary);font-size:12px;cursor:pointer}
+        .dt-card-script-run:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        .dt-card-script-run:disabled{cursor:not-allowed;opacity:.5}
+        .dt-card-scripts-auto{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;padding:8px 11px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-status-success,#9ece6a) 12%,transparent)}
+        .dt-card-script-stop{border-color:var(--dsw-alias-status-danger,#f7768e);color:var(--dsw-alias-status-danger,#f7768e)}
+        .dt-card-scripts-world{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+        .dt-card-scripts-resets{display:flex;flex-direction:column;gap:8px;min-width:0;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l2)}
+        .dt-card-script-reset{flex:none;padding:5px 11px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer}
+        .dt-card-script-reset:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .dt-card-script-reset:disabled{cursor:not-allowed;opacity:.5}
+        .dt-card-scripts-notice{margin:0;padding:8px 11px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-status-success,#9ece6a) 14%,transparent);font-size:12px;line-height:18px}
       `
       document.head.appendChild(tag)
     }
@@ -13430,6 +14056,26 @@ window.__ModuleLoader__.load({
             key: FRONTEND_TAB_ID,
             inject: (sessionId) => ({ sessionId }),
           }, TavernFrontendSidebarTab)), 'dsh-soulmojito: sidebar-right frontend tab body')
+          // 卡脚本 tab（2026-10-21）：卡内 tavern_helper 脚本树不会自动执行，
+          // 右栏只提供手动运行入口；正文列表与沙箱 iframe 见 88b 片段。
+          scope.effect(() => scope.sidebarRightTabs.register({
+            id: CARD_SCRIPTS_TAB_ID,
+            kind: CARD_SCRIPTS_TAB_KIND,
+            priority: 'extension',
+            title: () => translate('cardScripts.title'),
+            guide: [{
+              id: 'card-scripts',
+              order: 43,
+              title: () => translate('cardScripts.title'),
+              description: () => translate('cardScripts.guide.description'),
+              icon: IconListPenOutline16,
+            }],
+          }), 'dsh-soulmojito: sidebar-right card scripts tab type')
+          scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+            name: 'sidebar.right.pane.tab',
+            key: CARD_SCRIPTS_TAB_ID,
+            inject: (sessionId) => ({ sessionId }),
+          }, TavernCardScriptsSidebarTab)), 'dsh-soulmojito: sidebar-right card scripts tab body')
         })
       }
     }

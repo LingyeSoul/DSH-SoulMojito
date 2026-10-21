@@ -70,6 +70,11 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
       { name: 'User', is_user: true, is_system: false, send_date: '', mes: 'hello' },
       { name: CHARACTER, is_user: false, is_system: false, send_date: '', mes: 'reply', extra: { mood: 'calm' } },
     ])
+    await store.importWorldFile('Helper Lore', {
+      entries: {
+        '0': { uid: 0, key: [], keysecondary: [], comment: 'base', content: 'base lore', constant: true, selective: false, order: 100, position: 0, disable: false },
+      },
+    })
     apply({
       systemPrompt: { section: () => {}, context: () => {} },
       commands: { register: () => {} },
@@ -221,5 +226,106 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     const result = await call({ op: 'generate', character: CHARACTER, chatId })
     expect(result.status).toBe(500)
     expect(String(result.body?.message)).toContain('unsupported helper op')
+  })
+
+  it('lorebook.get 优先会话副本，lorebook.put 只写副本，基础资产不变', async () => {
+    const base = await call({ op: 'lorebook.get', character: CHARACTER, chatId, name: 'Helper Lore' })
+    expect(base.status).toBe(200)
+    const baseValue = base.body?.value as { name: string; entries: Array<Record<string, unknown>> }
+    expect(baseValue.entries[0]).toMatchObject({ world: 'Helper Lore', content: 'base lore' })
+
+    const written = await call({
+      op: 'lorebook.put',
+      character: CHARACTER,
+      chatId,
+      name: 'Helper Lore',
+      entries: [{ uid: 0, key: [], content: 'script lore', world: 'Helper Lore' }],
+    })
+    expect(written.status).toBe(200)
+    const writtenValue = written.body?.value as { name: string; entries: Array<Record<string, unknown>> }
+    expect(writtenValue.name).toBe('Helper Lore')
+    // `world` is stripped before normalization and re-attached for the reader.
+    expect(writtenValue.entries[0]).toMatchObject({ world: 'Helper Lore', content: 'script lore' })
+
+    // 基础世界书资产保持只读
+    expect((await store.getWorld('Helper Lore'))?.entries[0]?.content).toBe('base lore')
+    // 会话副本成为本聊天的读取源
+    const copy = await call({ op: 'lorebook.get', character: CHARACTER, chatId, name: 'Helper Lore' })
+    expect((copy.body?.value as { entries: Array<Record<string, unknown>> }).entries[0]?.content).toBe('script lore')
+    // 其它聊天仍读基础资产
+    const otherChatId = await store.createChat(CHARACTER, HEADER)
+    const other = await call({ op: 'lorebook.get', character: CHARACTER, chatId: otherChatId, name: 'Helper Lore' })
+    expect((other.body?.value as { entries: Array<Record<string, unknown>> }).entries[0]?.content).toBe('base lore')
+  })
+
+  it('lorebook.reset 丢弃会话副本并回到角色卡原版世界书', async () => {
+    const reset = await call({ op: 'lorebook.reset', character: CHARACTER, chatId, name: 'Helper Lore' })
+    expect(reset.status).toBe(200)
+    expect(reset.body?.value).toEqual({ name: 'Helper Lore', reset: true })
+    const readBack = await call({ op: 'lorebook.get', character: CHARACTER, chatId, name: 'Helper Lore' })
+    expect((readBack.body?.value as { entries: Array<Record<string, unknown>> }).entries[0]?.content).toBe('base lore')
+    // 重复重置是幂等的
+    const again = await call({ op: 'lorebook.reset', character: CHARACTER, chatId, name: 'Helper Lore' })
+    expect(again.body?.value).toEqual({ name: 'Helper Lore', reset: true })
+  })
+
+  it('lorebook.put 拒绝缺少会话作用域或形状非法的 entries', async () => {
+    const noChat = await call({ op: 'lorebook.put', character: CHARACTER, chatId: '', name: 'Helper Lore', entries: [] })
+    expect(noChat.status).toBe(500)
+    expect(String(noChat.body?.message)).toContain('chatId is required for lorebook.put')
+
+    const notArray = await call({ op: 'lorebook.put', character: CHARACTER, chatId, name: 'Helper Lore', entries: 'nope' })
+    expect(String(notArray.body?.message)).toContain('entries must be an array')
+
+    const badEntry = await call({ op: 'lorebook.put', character: CHARACTER, chatId, name: 'Helper Lore', entries: [1] })
+    expect(String(badEntry.body?.message)).toContain('entries[0] must be an object')
+
+    const missingBook = await call({ op: 'lorebook.put', character: CHARACTER, chatId, name: 'Ghost Lore', entries: [] })
+    expect(String(missingBook.body?.message)).toContain("lorebook 'Ghost Lore' not found")
+  })
+
+  it('scripts.put/get/reset 按聊天持久化脚本树副本，并随 snapshot 下发', async () => {
+    const empty = await call({ op: 'snapshot', character: CHARACTER, chatId })
+    expect((empty.body?.value as Record<string, unknown>).scriptTrees).toBeNull()
+
+    const trees = [
+      { type: 'folder', id: 'folder-1', name: 'Zod', scripts: [{ type: 'script', id: 'zod', name: 'Zod', content: 'registerMvuSchema()' }] },
+      { type: 'script', id: 'panel', name: 'GM', content: 'window.panel = true', enabled: true, button: { enabled: true } },
+    ]
+    const put = await call({ op: 'scripts.put', character: CHARACTER, chatId, scriptTrees: trees })
+    expect(put.status).toBe(200)
+    expect(put.body?.value).toEqual({ scriptTrees: trees })
+
+    const read = await call({ op: 'scripts.get', character: CHARACTER, chatId })
+    expect(read.body?.value).toEqual({ scriptTrees: trees })
+    // 快照带回副本，刷新/重开 iframe 不再从卡原版起步
+    const snapshot = await call({ op: 'snapshot', character: CHARACTER, chatId })
+    expect((snapshot.body?.value as Record<string, unknown>).scriptTrees).toEqual(trees)
+    // 其他聊天没有副本
+    const otherChatId = await store.createChat(CHARACTER, HEADER)
+    const other = await call({ op: 'scripts.get', character: CHARACTER, chatId: otherChatId })
+    expect(other.body?.value).toEqual({ scriptTrees: null })
+
+    const reset = await call({ op: 'scripts.reset', character: CHARACTER, chatId })
+    expect(reset.body?.value).toEqual({ reset: true })
+    const afterReset = await call({ op: 'scripts.get', character: CHARACTER, chatId })
+    expect(afterReset.body?.value).toEqual({ scriptTrees: null })
+  })
+
+  it('scripts.get/put/reset 拒绝缺少 chatId 或形状非法的脚本树', async () => {
+    const noGet = await call({ op: 'scripts.get', character: CHARACTER, chatId: '' })
+    expect(String(noGet.body?.message)).toContain('chatId is required for scripts.get')
+
+    const noPut = await call({ op: 'scripts.put', character: CHARACTER, chatId: '', scriptTrees: [] })
+    expect(String(noPut.body?.message)).toContain('chatId is required for scripts.put')
+
+    const noReset = await call({ op: 'scripts.reset', character: CHARACTER, chatId: '' })
+    expect(String(noReset.body?.message)).toContain('chatId is required for scripts.reset')
+
+    const notArray = await call({ op: 'scripts.put', character: CHARACTER, chatId, scriptTrees: {} })
+    expect(String(notArray.body?.message)).toContain('scriptTrees must be an array')
+
+    const badNode = await call({ op: 'scripts.put', character: CHARACTER, chatId, scriptTrees: ['x'] })
+    expect(String(badNode.body?.message)).toContain('scriptTrees[0] must be an object')
   })
 })

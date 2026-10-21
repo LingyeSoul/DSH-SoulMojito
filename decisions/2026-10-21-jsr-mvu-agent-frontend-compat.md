@@ -1,6 +1,6 @@
 # JSR / MagVarUpdate 卡的 Agent 模式兼容（MVU-ZOD 兼容卡）
 
-> 日期：2026-10-21。来源：用户导入的 MVU-ZOD 兼容卡（`v3.3.3_Hotfix.png`；卡名与题材
+> 日期：2026-10-21。来源：用户导入的 MVU-ZOD 兼容卡（`示例卡.png`；卡名与题材
 > 不在此记录）后要求「尽可能兼容这个卡的运行，重点考虑 Agent 模式与前端」。
 > 落点：`packages/plugin/src/agent-tavern/mvu-compat.ts`、`card-state.ts`、
 > `projector.ts`、`session/command.ts`、`http/router.ts`、`helper.ts`、

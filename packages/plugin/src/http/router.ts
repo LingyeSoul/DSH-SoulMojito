@@ -10,6 +10,7 @@ import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import { seedJsrMvuVariables } from '../agent-tavern/mvu-compat.js'
 import { serveCharacterAvatar, sendAvatarFallback } from '../assets.js'
 import { BUILD_INFO, TAVERN_COMMIT } from '../build-info.js'
+import { collectCardScriptBundle } from '../card-scripts.js'
 import { runCandidateGeneration } from '../candidates.js'
 import { tavernDataRoot } from '../dsh-home.js'
 import { latestFrontendMessage, stripFrontendDocuments } from '../frontend-documents.js'
@@ -448,6 +449,11 @@ export async function handleApi(ctx, req, res) {
       // 客户端 watcher 每次扫描都读 bootstrap.state，无需写穿。
       ...(typeof body.frontendAutoOpen === 'boolean'
         ? { frontendAutoOpen: body.frontendAutoOpen }
+        : {}),
+      // 卡脚本自动运行（2026-10-21 用户需求）：默认关闭；翻转即时生效——客户端
+      // 自动展开 hook 与 tab 每次渲染都读 bootstrap.state，无缓存需写穿。
+      ...(typeof body.cardScriptsAutoRun === 'boolean'
+        ? { cardScriptsAutoRun: body.cardScriptsAutoRun }
         : {}),
       // 允许美化前端加载外部资源（2026-10-21 用户需求）：翻转即时生效——iframe
       // 每次构建 srcDoc 都从 bootstrap.state 读取，无需写穿缓存。
@@ -1068,6 +1074,21 @@ export async function handleApi(ctx, req, res) {
   // 无法寻址别的聊天。
   if (method === 'POST' && route === 'helper') {
     return handleHelperApi(req, res, db)
+  }
+
+  // 卡脚本右栏（2026-10-21）：JSR 卡的常驻脚本树在
+  // `data.extensions.tavern_helper.scripts`。插件仍不自动执行脚本树；这里只
+  // 供「卡脚本」tab 列出启用的脚本，用户点「运行」后才在沙箱 iframe 里跑一份。
+  // 带 chatId 时优先会话脚本树副本（GM 面板持久化的 Zod 源码）。
+  if (method === 'GET' && route === 'card/scripts') {
+    const character = url.searchParams.get('character')
+    if (!character) throw new Error('character query is required')
+    const chatId = url.searchParams.get('chatId')
+    const file = await db.getCharacter(character)
+    if (!file) return sendJson(res, 404, { ok: false, message: `character '${character}' not found` })
+    const scriptTrees = chatId === null ? undefined : await db.getChatScripts(character, chatId)
+    const { world, scripts } = collectCardScriptBundle(file.card, scriptTrees)
+    return sendJson(res, 200, { ok: true, character, world, scripts })
   }
 
   // 美化前端（AgentTavern 右栏展示面，2026-10-20）：native conversation 由宿主

@@ -3284,6 +3284,7 @@ var DEFAULT_STATE = {
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
   frontendAutoOpen: false,
+  cardScriptsAutoRun: false,
   frontendAllowExternalResources: false,
   gamesDisableResign: false,
   cardWorkbenchPresetEnabled: false,
@@ -3648,6 +3649,8 @@ var TavernStore = class _TavernStore {
       if (source === target) return;
       if (await this.tryRead(target)) throw new Error(`chat '${nextChatId}' already exists`);
       await fs2.rename(source, target);
+      await this.moveChatOverlay(this.chatWorldsFile(characterName, chatId), this.chatWorldsFile(characterName, nextChatId));
+      await this.moveChatOverlay(this.chatScriptsFile(characterName, chatId), this.chatScriptsFile(characterName, nextChatId));
     });
   }
   async deleteChat(characterName, chatId, expectedRevision) {
@@ -3656,12 +3659,97 @@ var TavernStore = class _TavernStore {
       try {
         await this.assertChatRevision(file, expectedRevision);
         await fs2.unlink(file);
-        return true;
       } catch (cause) {
         if (cause.code === "ENOENT") return false;
         throw cause;
       }
+      await fs2.rm(this.chatWorldsFile(characterName, chatId), { force: true });
+      await fs2.rm(this.chatScriptsFile(characterName, chatId), { force: true });
+      return true;
     });
+  }
+  /* ---------------------- 会话级世界书副本 ---------------------- */
+  /**
+   * Session world-book overlay (2026-10-21): card scripts write through
+   * `lorebook.put` into a copy owned by one chat. `worlds/<name>.json` and the
+   * card's embedded `character_book` stay read-only. Layout:
+   * `chats/<character>/<chat>.jsonl.worlds.json`; `listChats` only collects
+   * `.jsonl` entries so the copy never shows up as a chat.
+   */
+  async getChatWorld(characterName, chatId, worldName) {
+    const file = this.chatWorldsFile(characterName, chatId);
+    const bytes = await this.tryRead(file);
+    if (bytes === void 0) return void 0;
+    const stored = parseChatWorldsFile(file, bytes).worlds[worldName];
+    return stored === void 0 ? void 0 : structuredClone(stored);
+  }
+  async putChatWorld(characterName, chatId, book) {
+    if (typeof book.name !== "string" || book.name.trim() === "") {
+      throw new Error("putChatWorld requires a world book name");
+    }
+    await this.mutateChat(async () => {
+      const file = this.chatWorldsFile(characterName, chatId);
+      const current = await this.readChatWorlds(file);
+      current.worlds[book.name] = structuredClone(book);
+      await this.writeAtomic(file, jsonBytes({ version: 1, worlds: current.worlds }));
+    });
+  }
+  async deleteChatWorld(characterName, chatId, worldName) {
+    return this.mutateChat(async () => {
+      const file = this.chatWorldsFile(characterName, chatId);
+      const bytes = await this.tryRead(file);
+      if (bytes === void 0) return false;
+      const current = parseChatWorldsFile(file, bytes);
+      if (!Object.prototype.hasOwnProperty.call(current.worlds, worldName)) return false;
+      delete current.worlds[worldName];
+      if (Object.keys(current.worlds).length === 0) await fs2.rm(file, { force: true });
+      else await this.writeAtomic(file, jsonBytes({ version: 1, worlds: current.worlds }));
+      return true;
+    });
+  }
+  async listChatWorlds(characterName, chatId) {
+    const file = this.chatWorldsFile(characterName, chatId);
+    const bytes = await this.tryRead(file);
+    if (bytes === void 0) return [];
+    return Object.keys(parseChatWorldsFile(file, bytes).worlds).sort();
+  }
+  /* ---------------------- 会话级脚本树副本 ---------------------- */
+  /**
+   * Session script-tree overlay (2026-10-21): GM panels persist Zod source edits
+   * through `scripts.put` into a copy owned by one chat. The card's
+   * `extensions.tavern_helper.scripts` and the character card file stay
+   * read-only. Layout: `chats/<character>/<chat>.jsonl.scripts.json`; node
+   * shapes pass through untouched (`type`, `id`, `name`, `content`, `enabled`,
+   * `info`, `button`, unknown fields).
+   */
+  async getChatScripts(characterName, chatId) {
+    const file = this.chatScriptsFile(characterName, chatId);
+    const bytes = await this.tryRead(file);
+    if (bytes === void 0) return void 0;
+    return structuredClone(parseChatScriptsFile(file, bytes).scriptTrees);
+  }
+  async putChatScripts(characterName, chatId, scriptTrees) {
+    if (!Array.isArray(scriptTrees)) throw new Error("putChatScripts requires an array of script nodes");
+    scriptTrees.forEach((node, index) => {
+      if (!isPlainRecord(node)) throw new Error(`putChatScripts node ${index} must be an object`);
+    });
+    await this.mutateChat(async () => {
+      await this.writeAtomic(
+        this.chatScriptsFile(characterName, chatId),
+        jsonBytes({ version: 1, scriptTrees: structuredClone(scriptTrees) })
+      );
+    });
+  }
+  async deleteChatScripts(characterName, chatId) {
+    return this.mutateChat(async () => {
+      const file = this.chatScriptsFile(characterName, chatId);
+      if (await this.tryRead(file) === void 0) return false;
+      await fs2.rm(file, { force: true });
+      return true;
+    });
+  }
+  async hasChatScripts(characterName, chatId) {
+    return await this.tryRead(this.chatScriptsFile(characterName, chatId)) !== void 0;
   }
   /* ------------------------------ 群组 ------------------------------ */
   async putGroup(group2) {
@@ -3794,6 +3882,8 @@ var TavernStore = class _TavernStore {
       }
       const branchLog = { header, messages: branchMessages };
       await this.writeAtomic(path.join(dir, nextId), chatBytes(branchLog));
+      await this.copyChatOverlay(this.chatWorldsFile(characterName, chatId), this.chatWorldsFile(characterName, nextId));
+      await this.copyChatOverlay(this.chatScriptsFile(characterName, chatId), this.chatScriptsFile(characterName, nextId));
       return { chatId: nextId, chat: branchLog };
     });
   }
@@ -3833,6 +3923,8 @@ var TavernStore = class _TavernStore {
       }
       const forkLog = { header, messages: [] };
       await this.writeAtomic(path.join(dir, nextId), chatBytes(forkLog));
+      await this.copyChatOverlay(this.chatWorldsFile(characterName, parentChatId), this.chatWorldsFile(characterName, nextId));
+      await this.copyChatOverlay(this.chatScriptsFile(characterName, parentChatId), this.chatScriptsFile(characterName, nextId));
       return { chatId: nextId, chat: forkLog };
     });
   }
@@ -3943,6 +4035,7 @@ var TavernStore = class _TavernStore {
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
       frontendAutoOpen: parsed.frontendAutoOpen === true,
+      cardScriptsAutoRun: parsed.cardScriptsAutoRun === true,
       frontendAllowExternalResources: parsed.frontendAllowExternalResources === true,
       gamesDisableResign: parsed.gamesDisableResign === true,
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
@@ -3974,6 +4067,27 @@ var TavernStore = class _TavernStore {
     }, () => {
     });
     return result;
+  }
+  chatWorldsFile(characterName, chatId) {
+    return path.join(this.root, "chats", safeFileName(characterName), `${safeChatFileName(chatId)}.worlds.json`);
+  }
+  chatScriptsFile(characterName, chatId) {
+    return path.join(this.root, "chats", safeFileName(characterName), `${safeChatFileName(chatId)}.scripts.json`);
+  }
+  async readChatWorlds(file) {
+    const bytes = await this.tryRead(file);
+    return bytes === void 0 ? { version: 1, worlds: {} } : parseChatWorldsFile(file, bytes);
+  }
+  /** Copies a session overlay file to a new chat (branch/fork inheritance). */
+  async copyChatOverlay(from, to) {
+    const bytes = await this.tryRead(from);
+    if (bytes === void 0) return;
+    await this.writeAtomic(to, bytes);
+  }
+  /** Moves a session overlay file with its chat; an existing target is dropped. */
+  async moveChatOverlay(from, to) {
+    await fs2.rm(to, { force: true });
+    if (await this.tryRead(from) !== void 0) await fs2.rename(from, to);
   }
   mutateState(operation) {
     const result = this.stateMutationTail.catch(() => {
@@ -4097,6 +4211,56 @@ function mergeRegexScripts(current, imported) {
 function safeFileName(name2) {
   const cleaned = name2.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim();
   return cleaned.length > 0 ? cleaned.slice(0, 120) : "_unnamed";
+}
+function parseChatWorldsFile(file, bytes) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (cause) {
+    throw new Error(`chat world book file is not valid JSON: ${file}`, { cause });
+  }
+  if (!isPlainRecord(parsed) || !isPlainRecord(parsed["worlds"])) {
+    throw new Error(`chat world book file has an invalid shape (expected { version, worlds }): ${file}`);
+  }
+  const worlds = {};
+  for (const [name2, raw] of Object.entries(parsed["worlds"])) {
+    if (!isPlainRecord(raw) || !Array.isArray(raw["entries"])) {
+      throw new Error(`chat world book '${name2}' has an invalid shape (expected { name, entries: [] }): ${file}`);
+    }
+    const entries = raw["entries"].map((entry, index) => {
+      if (!isPlainRecord(entry)) {
+        throw new Error(`chat world book '${name2}' entry ${index} must be an object: ${file}`);
+      }
+      return normalizeEntry2(entry);
+    });
+    worlds[name2] = {
+      name: name2,
+      entries,
+      ...isPlainRecord(raw["extra"]) ? { extra: raw["extra"] } : {}
+    };
+  }
+  return { version: 1, worlds };
+}
+function isPlainRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseChatScriptsFile(file, bytes) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (cause) {
+    throw new Error(`chat script tree file is not valid JSON: ${file}`, { cause });
+  }
+  if (!isPlainRecord(parsed) || !Array.isArray(parsed["scriptTrees"])) {
+    throw new Error(`chat script tree file has an invalid shape (expected { version, scriptTrees: [] }): ${file}`);
+  }
+  const scriptTrees = parsed["scriptTrees"].map((node, index) => {
+    if (!isPlainRecord(node)) {
+      throw new Error(`chat script tree file node ${index} must be an object: ${file}`);
+    }
+    return node;
+  });
+  return { version: 1, scriptTrees };
 }
 function timestamp() {
   const d = /* @__PURE__ */ new Date();
@@ -5664,7 +5828,7 @@ function assembleResult(allActivated, diagnostics, timedState) {
 }
 
 // packages/plugin/src/tavern-assets.ts
-async function collectWorldInfoBooks(db, state, characterName, character) {
+async function collectWorldInfoBooks(db, state, characterName, character, chatId) {
   const worldNames = new Set(state.activeWorlds);
   const follow = state.worldFollowsCharacter !== false;
   const linkedWorld = character.card.data.extensions["world"];
@@ -5672,10 +5836,12 @@ async function collectWorldInfoBooks(db, state, characterName, character) {
   if (linkedName !== void 0) worldNames.add(linkedName);
   const books = [];
   let linkedImported = false;
+  const chatScope = chatId !== void 0 && chatId !== "" ? chatId : void 0;
   for (const worldName of worldNames) {
-    const world = await db.getWorld(worldName);
+    const copy = chatScope !== void 0 && typeof db.getChatWorld === "function" ? await db.getChatWorld(characterName, chatScope, worldName) : void 0;
+    const world = copy === void 0 ? await db.getWorld(worldName) : copy;
     if (world) {
-      books.push({ name: world.name, entries: world.entries });
+      books.push({ name: copy === void 0 ? world.name : worldName, entries: world.entries });
       if (worldName === linkedName) linkedImported = true;
     }
   }
@@ -6429,7 +6595,7 @@ function characterTools() {
         db.getCharacter(binding.character)
       ]);
       if (!found) throw new Error("bound Tavern character not found");
-      const books = await collectWorldInfoBooks(db, state, binding.character, found);
+      const books = await collectWorldInfoBooks(db, state, binding.character, found, binding.chatId);
       exec.signal?.throwIfAborted();
       const activated = activateWorldInfo({
         books,

@@ -49,7 +49,7 @@ export function characterTools(): ToolDefinition[] {
         db.getCharacter(binding.character),
       ])
       if (!found) throw new Error('bound Tavern character not found')
-      const books = await collectWorldInfoBooks(db, state, binding.character, found)
+      const books = await collectWorldInfoBooks(db, state, binding.character, found, binding.chatId)
       exec.signal?.throwIfAborted()
 
       const activated = activateWorldInfo({

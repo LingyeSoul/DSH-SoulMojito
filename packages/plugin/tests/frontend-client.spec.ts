@@ -66,4 +66,13 @@ describe('client frontend sidebar (main.js source check)', () => {
     expect(source).toContain("data-ds-dark-theme")
     expect(source).toContain('function useThemeBridge(frameRef)')
   })
+
+  it('paints the iframe element and forces a late canvas rule against card !important', () => {
+    // 行动台这类卡写 `html,body{background:transparent!important}`：head 里的
+    // reset 输掉 cascade，画布露出浏览器白底。late canvas 规则在卡样式之后，
+    // 只强制 html（body 与卡自己的 .tactics-panel 背景保持）。
+    expect(source).toContain('const canvas = `<style>html{background:var(--dt-host-background)!important;}</style>`')
+    expect(source).toContain('`${canvas}${reporter}</body>`')
+    expect(source).toContain('style: { height, background: initialBackgroundRef.current }')
+  })
 })

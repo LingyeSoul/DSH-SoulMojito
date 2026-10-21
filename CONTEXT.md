@@ -50,6 +50,12 @@ _Avoid_: 全局变量（未说明作用域时）
 **静态资产**：角色卡、世界书、persona、preset 等由用户配置、默认只读的 Tavern 资产。AgentTavern 通过工具按需读取，而不是把全部资产固定注入每一轮。
 _Avoid_: 默认提示词
 
+**会话世界书副本**：某个聊天作用域的世界书覆盖层（`chats/<角色>/<聊天>.jsonl.worlds.json`）。卡脚本的写入只落在副本，基础世界书资产与卡内嵌书保持只读；当前聊天的激活、生成与 MVU 读取优先使用副本，副本随聊天生命周期（重命名跟随、分支/分叉复制、删除清理）。
+_Avoid_: 世界书备份、全局覆盖层
+
+**会话脚本树副本**：某个聊天作用域的卡脚本树覆盖层（`chats/<角色>/<聊天>.jsonl.scripts.json`）。GM 面板通过 `updateScriptTreesWith` 改写的脚本源码只落在副本，角色卡文件与卡内 `tavern_helper.scripts` 保持只读；会话内 `getScriptTrees` 从副本起步，刷新/重开卡脚本 tab 仍可读。副本只保存源码，不执行 Zod schema，也随聊天生命周期（重命名跟随、分支/分叉复制、删除清理）。
+_Avoid_: 脚本备份、全局脚本覆盖
+
 **上下文提供者**：AgentLoop profile 在每次模型请求前，根据会话、预算和检索结果生成上下文投影的模块。当前 DSH 的 `systemPrompt.context()` 负责动态 runtime snapshot；任意历史节点的临时选择需要宿主提供 `agent/context` seam。
 _Avoid_: prompt 拼接器
 

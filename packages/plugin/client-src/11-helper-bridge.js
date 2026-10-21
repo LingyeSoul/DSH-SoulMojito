@@ -68,6 +68,7 @@
     characterName: '', userName: 'User', chatId: '', chatMetadata: {},
     messages: [], variables: { global: {}, chat: {}, message: {}, character: {} },
     characterData: null,
+    scriptTrees: null,
   };
 
   function call(op, payload) {
@@ -268,6 +269,27 @@
     }
   }
 
+  var lastDisabledNoticeAt = 0;
+  // Disabled controls swallow the click event, so a card button such as the action
+  // console's 必杀 (charge < 100) looks dead. Capture-phase pointer events explain
+  // it without editing card HTML; pointerover is the fallback for engines that do
+  // not deliver pointerdown on disabled controls.
+  function noteDisabledControl(event) {
+    var target = event.target;
+    if (!target || typeof target.closest !== 'function') return;
+    var control = target.closest('button, [aria-disabled="true"]');
+    if (!control) return;
+    if (control.disabled !== true && control.getAttribute('aria-disabled') !== 'true') return;
+    var now = Date.now();
+    if (now - lastDisabledNoticeAt < 1500) return;
+    lastDisabledNoticeAt = now;
+    showToast('info', '该按钮当前不可用');
+  }
+  try {
+    document.addEventListener('pointerdown', noteDisabledControl, true);
+    document.addEventListener('pointerover', noteDisabledControl, true);
+  } catch (_) {}
+
   function applySnapshot(snapshot) {
     state.characterName = snapshot.characterName || state.characterName;
     state.userName = snapshot.userName || state.userName;
@@ -276,6 +298,10 @@
     state.messages = Array.isArray(snapshot.messages) ? snapshot.messages : [];
     state.variables = snapshot.variables || state.variables;
     state.characterData = snapshot.characterData || null;
+    state.scriptTrees = Array.isArray(snapshot.scriptTrees) ? snapshot.scriptTrees : null;
+    // 快照先于 GM 面板首次 getScriptTrees 到达时，把会话副本装进内存树；本地
+    // 已写过之后不再接受快照覆盖（见 scriptTreesLocallyWritten）。
+    if (!scriptTreesLocallyWritten && Array.isArray(state.scriptTrees)) scriptTrees = clone(state.scriptTrees);
     // 状态栏前端在 DOMContentLoaded 只拉一次；快照是异步到的。这里把最新
     // stat_data 作为一次 VARIABLE_UPDATE_ENDED 广播，面板不会停在空态。
     var last = state.messages.length > 0 ? state.messages[state.messages.length - 1] : undefined;
@@ -383,6 +409,7 @@
       var type = mvuScopeOption(target);
       var stat = data && data.stat_data !== undefined ? data.stat_data : data;
       if (!stat || typeof stat !== 'object' || Array.isArray(stat)) {
+        showToast('error', '变量写入失败: DSH-SoulMojito: Mvu.replaceMvuData expects an object');
         return Promise.reject(new Error('DSH-SoulMojito: Mvu.replaceMvuData expects an object'));
       }
       var index = type === 'message' ? messageIndex(target.message_id) : undefined;
@@ -392,12 +419,16 @@
       }
       if (state.variables.chat) state.variables.chat.stat_data = clone(stat);
       dispatchMvu(stat);
+      // 卡片按钮的写回失败必须可见：卡自己只 console.error，用户会以为「点了没反应」。
       return call('mvu.replace', { statData: stat, messageId: index }).then(function (value) {
         if (value && value.stat_data !== undefined) {
           if (state.variables.chat) state.variables.chat.stat_data = clone(value.stat_data);
           dispatchMvu(value.stat_data);
         }
         return { stat_data: value && value.stat_data !== undefined ? value.stat_data : clone(stat) };
+      }, function (error) {
+        showToast('error', '变量写入失败: ' + (error && error.message ? error.message : String(error)));
+        throw error;
       });
     }
   };
@@ -529,6 +560,102 @@
   window.getCharacterNames = window.getCharNames;
   window.getChatWorldbookNames = window.getGlobalWorldbookNames;
 
+  // 角色链接世界书（2026-10-21 会话副本）：getter 必须同步（GM 脚本不 await）。
+  // 名字取 extensions.world，其次内嵌书 characterBook.name。
+  function characterWorldbookName() {
+    var data = state.characterData || {}, extensions = data.extensions || {};
+    var world = typeof extensions.world === 'string' ? extensions.world.trim() : '';
+    if (world !== '') return world;
+    var embedded = data.characterBook && typeof data.characterBook.name === 'string' ? data.characterBook.name.trim() : '';
+    return embedded !== '' ? embedded : null;
+  }
+  window.getCharWorldbookNames = function () { return { primary: characterWorldbookName(), additional: [] }; };
+  // 世界书写入只落当前聊天的会话副本（服务端 lorebook.put 强制 chatId）；基础
+  // worlds/<name>.json 与卡内 characterBook 永远不动。updater 在 iframe 内执行，
+  // 只把结果 entries 发回宿主（函数不能过 postMessage）。
+  window.updateWorldbookWith = function (name, updater) {
+    if (typeof updater !== 'function') return Promise.reject(new Error('DSH-SoulMojito: updateWorldbookWith(name, updater) requires a function'));
+    var bookName = typeof name === 'string' && name.trim() !== '' ? name.trim() : characterWorldbookName();
+    if (bookName === null) return Promise.reject(new Error('DSH-SoulMojito: updateWorldbookWith requires a world book name (this character links no world)'));
+    return window.getWorldbook(bookName)
+      .then(function (entries) { return Promise.resolve(updater(entries)); })
+      .then(function (updated) { return call('lorebook.put', { name: bookName, entries: updated }); })
+      .then(function (value) { return value.entries; });
+  };
+
+  // 脚本树（2026-10-21，GM 面板阶段 B）：优先会话副本（state.scriptTrees，由
+  // 宿主 snapshot 带回），没有才从卡内 extensions.tavern_helper.scripts 播种。
+  // 节点原样保留（folder / button / 未知字段都透传）；**不回写角色卡、不自动
+  // 执行**。GM 改完树后等 mg-zod-ready 握手——这里从改写后的源码解析探针直接
+  // 派发，让阶段 C 继续；Zod schema 本身不会生效。
+  var scriptTrees = null;
+  // 本地通过 scripts.put 写过之后，后续快照不得覆盖内存树（快照可能是在写入
+  // 之前取的）；重载 iframe 会重置该标记并从会话副本重新播种。
+  var scriptTreesLocallyWritten = false;
+  function seedScriptTrees() {
+    if (Array.isArray(state.scriptTrees)) return clone(state.scriptTrees);
+    var data = state.characterData || {}, helper = (data.extensions || {}).tavern_helper;
+    var nodes = helper && Array.isArray(helper.scripts) ? helper.scripts : [];
+    var trees = [];
+    for (var index = 0; index < nodes.length; index++) {
+      var node = nodes[index];
+      if (!node || typeof node !== 'object' || Array.isArray(node)) continue;
+      trees.push(node);
+    }
+    return clone(trees);
+  }
+  function flattenScriptTrees(trees) {
+    var flat = [];
+    for (var index = 0; index < trees.length; index++) {
+      var entry = trees[index];
+      if (!entry || typeof entry !== 'object') continue;
+      if (entry.type === 'folder' && Array.isArray(entry.scripts)) flat = flat.concat(flattenScriptTrees(entry.scripts));
+      else flat.push(entry);
+    }
+    return flat;
+  }
+  function currentScriptTrees() {
+    if (scriptTrees === null) scriptTrees = seedScriptTrees();
+    return scriptTrees;
+  }
+  function publishZodReady(trees) {
+    var flat = flattenScriptTrees(trees);
+    var found = null;
+    for (var index = 0; index < flat.length; index++) {
+      var entry = flat[index];
+      if (!entry || typeof entry.content !== 'string') continue;
+      var pattern = /__mgZodReady__\\s*=\\s*(\\{[^{}]*\\})/g;
+      var match;
+      // 取最后一次出现：GM 面板是在源码尾部注入新探针，旧探针可能仍在。
+      while ((match = pattern.exec(entry.content)) !== null) found = match[1];
+    }
+    if (found === null) return;
+    var ready;
+    try { ready = JSON.parse(found); } catch (error) { console.error('[TavernHelper] invalid __mgZodReady__ probe', error); return; }
+    host.__mgZodReady__ = ready;
+    window.__mgZodReady__ = ready;
+    try { window.dispatchEvent(new CustomEvent('mg-zod-ready', { detail: ready })); } catch (_) {}
+    try { host.dispatchEvent(new CustomEvent('mg-zod-ready', { detail: ready })); } catch (_) {}
+  }
+  window.getScriptTrees = function () { return clone(currentScriptTrees()); };
+  // 先持久化再发布 ready：GM 面板把 updateScriptTreesWith 的 resolve 当作「已
+  // 保存」。落盘失败必须拒绝并保留旧内存树，不能把半成品当成成功。
+  window.updateScriptTreesWith = function (updater) {
+    if (typeof updater !== 'function') return Promise.reject(new Error('DSH-SoulMojito: updateScriptTreesWith requires a function'));
+    var draft = clone(currentScriptTrees());
+    return Promise.resolve().then(function () {
+      return updater(draft);
+    }).then(function (next) {
+      if (!Array.isArray(next)) throw new Error('DSH-SoulMojito: updateScriptTreesWith updater must return an array of script nodes');
+      return call('scripts.put', { scriptTrees: next }).then(function (value) {
+        scriptTrees = value && Array.isArray(value.scriptTrees) ? value.scriptTrees : next;
+        scriptTreesLocallyWritten = true;
+        publishZodReady(scriptTrees);
+        return clone(scriptTrees);
+      });
+    });
+  };
+
   // triggerSlash：只接不与宿主生成循环冲突的命令子集（变量/分支/发送/裁剪/正则）。
   // /trigger、/regenerate、/stop 会由服务端解释器明确报错（生成归宿主 AgentLoop）。
   window.triggerSlash = function (command) {
@@ -607,6 +734,11 @@
   window.TavernHelper.eventClearAll = window.eventClearAll;
   window.TavernHelper.getLorebook = window.getLorebook;
   window.TavernHelper.getLorebookNames = window.getLorebookNames;
+  window.TavernHelper.getWorldbook = window.getWorldbook;
+  window.TavernHelper.getCharWorldbookNames = window.getCharWorldbookNames;
+  window.TavernHelper.updateWorldbookWith = window.updateWorldbookWith;
+  window.TavernHelper.getScriptTrees = window.getScriptTrees;
+  window.TavernHelper.updateScriptTreesWith = window.updateScriptTreesWith;
   window.TavernHelper.getCharNames = window.getCharNames;
   window.TavernHelper.triggerSlash = window.triggerSlash;
   window.TavernHelper.getTavernRegexes = window.getTavernRegexes;
@@ -669,28 +801,52 @@
       });
     }
   };
-  var fakeDocument = {
+  // window.top / window.parent are rewritten to this host, and JSR floating
+  // panels do hud_win = window.top; hud_doc = hud_win.document. A stub document
+  // (body: null, getElementById missing) crashes those panels, so the facade
+  // delegates everything to the real iframe document. Only the two host-composer
+  // selectors stay faked: they are the historical parent.document contract.
+  var documentFacade = {
+    getElementById: function (id) { return document.getElementById(id); },
+    createElement: function (tag, options) { return options === undefined ? document.createElement(tag) : document.createElement(tag, options); },
+    createElementNS: function (namespace, tag) { return document.createElementNS(namespace, tag); },
+    createTextNode: function (text) { return document.createTextNode(text); },
     querySelector: function (selector) {
       if (selector === '#send_textarea') return fakeTextarea;
       if (selector === '#send_but') return fakeSendButton;
-      return null;
+      return document.querySelector(selector);
     },
-    querySelectorAll: function () { return []; },
-    body: null,
-    documentElement: null
+    querySelectorAll: function (selector) { return document.querySelectorAll(selector); },
+    addEventListener: function () { return document.addEventListener.apply(document, arguments); },
+    removeEventListener: function () { return document.removeEventListener.apply(document, arguments); },
+    get head() { return document.head; },
+    get body() { return document.body; },
+    get documentElement() { return document.documentElement; },
+    get activeElement() { return document.activeElement; }
   };
   var host = {
     Mvu: window.Mvu,
     toastr: window.toastr,
     SillyTavern: window.SillyTavern,
     TavernHelper: window.TavernHelper,
-    document: fakeDocument,
+    document: documentFacade,
     CustomEvent: window.CustomEvent,
     Event: window.Event,
     postMessage: function () { return realParent.postMessage.apply(realParent, arguments); },
     addEventListener: function () { return window.addEventListener.apply(window, arguments); },
     removeEventListener: function () { return window.removeEventListener.apply(window, arguments); },
     dispatchEvent: function (event) { return window.dispatchEvent(event); },
+    // Viewport metrics for floating panels (positioning / drag / mobile checks).
+    get innerWidth() { return window.innerWidth; },
+    get innerHeight() { return window.innerHeight; },
+    get devicePixelRatio() { return window.devicePixelRatio; },
+    get visualViewport() { return window.visualViewport; },
+    matchMedia: function (query) { return window.matchMedia(query); },
+    getComputedStyle: function (element, pseudo) {
+      return pseudo === undefined ? window.getComputedStyle(element) : window.getComputedStyle(element, pseudo);
+    },
+    requestAnimationFrame: function (callback) { return window.requestAnimationFrame(callback); },
+    cancelAnimationFrame: function (handle) { return window.cancelAnimationFrame(handle); },
     getVariables: window.getVariables,
     replaceVariables: window.replaceVariables,
     getChatMessages: window.getChatMessages,
@@ -698,6 +854,10 @@
     getCurrentMessageId: window.getCurrentMessageId,
     getLorebook: window.getLorebook,
     getWorldbook: window.getWorldbook,
+    getCharWorldbookNames: window.getCharWorldbookNames,
+    updateWorldbookWith: window.updateWorldbookWith,
+    getScriptTrees: window.getScriptTrees,
+    updateScriptTreesWith: window.updateScriptTreesWith,
     getCharNames: window.getCharNames,
     triggerSlash: window.triggerSlash,
     _: window._,

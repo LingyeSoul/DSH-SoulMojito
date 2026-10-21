@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MemoryStore, TavernStore, VariableStore, normalizeMemoryEmbedding } from '../src/index.js'
-import { decodeCharacterCard, encodeCharx, encodeCharacterCardPng, parseRegexScripts, stableDeepEqual } from '@dsh-soulmojito/format'
+import { decodeCharacterCard, encodeCharx, encodeCharacterCardPng, normalizeEntry, parseRegexScripts, stableDeepEqual } from '@dsh-soulmojito/format'
+import type { WorldBookIR } from '@dsh-soulmojito/format'
 
 const fixturesDir = fileURLToPath(new URL('../../tavern-format/tests/fixtures', import.meta.url))
 
@@ -440,6 +441,8 @@ describe('TavernStore', () => {
       agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, worldFollowsCharacter: true,
       // 美化前端右栏自动展开（2026-10-20 用户需求）：默认关闭。
       frontendAutoOpen: false,
+      // 卡脚本自动运行（2026-10-21 用户需求）：默认关闭，显式授权才执行。
+      cardScriptsAutoRun: false,
       // 允许美化前端加载外部资源（2026-10-21 用户需求）：默认关闭，显式授权才放行。
       frontendAllowExternalResources: false,
       cardWorkbenchPresetEnabled: false, agentNovelPresetEnabled: false,
@@ -723,6 +726,133 @@ describe('TavernStore', () => {
     await expect(store.branchChat('Test Char', id, 0, 'stale')).rejects.toThrow()
     // 越界报错
     await expect(store.branchChat('Test Char', id, 99, first?.revision)).rejects.toThrow(/out of range/)
+  }))
+
+  it('会话世界书副本：put/get、rename/branch/fork 继承、delete 清理', withStore(async (store, dir) => {
+    const { existsSync } = await import('node:fs')
+    const header = { user_name: 'unused', character_name: 'unused', chat_metadata: {} }
+    const chatId = await store.createChat('Test Char', header, [
+      { name: 'Test Char', is_user: false, is_system: false, send_date: 'a', mes: 'one' },
+      { name: 'User', is_user: true, is_system: false, send_date: 'b', mes: 'two' },
+    ])
+    const otherChatId = await store.createChat('Test Char', header)
+    const book = (content: string): WorldBookIR => ({
+      name: 'Linked Lore',
+      entries: [normalizeEntry({ uid: 0, key: [], content, comment: 'note' })],
+      extra: { source: 'test' },
+    })
+
+    expect(await store.getChatWorld('Test Char', chatId, 'Linked Lore')).toBeUndefined()
+    await store.putChatWorld('Test Char', chatId, book('session lore'))
+    const stored = await store.getChatWorld('Test Char', chatId, 'Linked Lore')
+    expect(stored?.name).toBe('Linked Lore')
+    expect(stored?.entries[0]?.content).toBe('session lore')
+    expect(stored?.extra).toEqual({ source: 'test' })
+    expect(await store.listChatWorlds('Test Char', chatId)).toEqual(['Linked Lore'])
+    // 副本按聊天隔离：另一个聊天仍然只看到基础资产
+    expect(await store.getChatWorld('Test Char', otherChatId, 'Linked Lore')).toBeUndefined()
+
+    // rename 同步搬走副本
+    const renamedId = 'renamed-worlds.jsonl'
+    const beforeRename = await store.getChatSnapshot('Test Char', chatId)
+    await store.renameChat('Test Char', chatId, renamedId, beforeRename?.revision)
+    expect(await store.getChatWorld('Test Char', chatId, 'Linked Lore')).toBeUndefined()
+    expect((await store.getChatWorld('Test Char', renamedId, 'Linked Lore'))?.entries[0]?.content).toBe('session lore')
+
+    // branch / fork 继承副本
+    const renamed = await store.getChatSnapshot('Test Char', renamedId)
+    const branch = await store.branchChat('Test Char', renamedId, 0, renamed?.revision)
+    expect((await store.getChatWorld('Test Char', branch.chatId, 'Linked Lore'))?.entries[0]?.content).toBe('session lore')
+    const fork = await store.forkChat('Test Char', renamedId, { sessionId: 's-child', parentSessionId: 's-parent' })
+    expect((await store.getChatWorld('Test Char', fork.chatId, 'Linked Lore'))?.entries[0]?.content).toBe('session lore')
+    expect(await store.listChatWorlds('Test Char', fork.chatId)).toEqual(['Linked Lore'])
+
+    // 损坏文件必须带路径显式报错，不静默回落基础世界书
+    const brokenId = 'broken-worlds.jsonl'
+    await store.createChat('Test Char', header)
+    const brokenPath = path.join(dir, 'chats', 'Test Char', `${brokenId}.worlds.json`)
+    await writeFile(brokenPath, '{ not json')
+    await expect(store.getChatWorld('Test Char', brokenId, 'Linked Lore')).rejects.toThrow(/not valid JSON.*broken-worlds\.jsonl\.worlds\.json/)
+
+    // delete 清理副本文件与索引
+    const renamedSnapshot = await store.getChatSnapshot('Test Char', renamedId)
+    expect(await store.deleteChat('Test Char', renamedId, renamedSnapshot?.revision)).toBe(true)
+    expect(await store.listChatWorlds('Test Char', renamedId)).toEqual([])
+    expect(existsSync(path.join(dir, 'chats', 'Test Char', `${renamedId}.worlds.json`))).toBe(false)
+    // 删除不存在的世界书副本返回 false
+    expect(await store.deleteChatWorld('Test Char', otherChatId, 'Linked Lore')).toBe(false)
+  }))
+
+  it('会话脚本树副本：透传 folder/未知字段、rename/branch/fork、deleteChat 清理两份副本', withStore(async (store, dir) => {
+    const { existsSync } = await import('node:fs')
+    const header = { user_name: 'unused', character_name: 'unused', chat_metadata: {} }
+    const chatId = await store.createChat('Test Char', header, [
+      { name: 'Test Char', is_user: false, is_system: false, send_date: 'a', mes: 'one' },
+    ])
+    const otherChatId = await store.createChat('Test Char', header)
+    const trees = [
+      {
+        type: 'folder', id: 'folder-1', name: 'Zod', scripts: [
+          { type: 'script', id: 'zod', name: '示例卡_zod', content: 'registerMvuSchema()', enabled: true, button: { enabled: true } },
+        ],
+      },
+      {
+        type: 'script', id: 'panel', name: 'GM', content: 'window.panel = true', enabled: true,
+        info: 'hud', button: { enabled: false, buttons: [] }, unknownField: { keep: true },
+      },
+    ]
+
+    expect(await store.getChatScripts('Test Char', chatId)).toBeUndefined()
+    expect(await store.hasChatScripts('Test Char', chatId)).toBe(false)
+    await store.putChatScripts('Test Char', chatId, trees)
+    expect(await store.getChatScripts('Test Char', chatId)).toEqual(trees)
+    expect(await store.hasChatScripts('Test Char', chatId)).toBe(true)
+    // 副本按聊天隔离
+    expect(await store.getChatScripts('Test Char', otherChatId)).toBeUndefined()
+
+    // rename 同步搬走
+    const renamedId = 'renamed-scripts.jsonl'
+    const beforeRename = await store.getChatSnapshot('Test Char', chatId)
+    await store.renameChat('Test Char', chatId, renamedId, beforeRename?.revision)
+    expect(await store.getChatScripts('Test Char', chatId)).toBeUndefined()
+    expect(await store.getChatScripts('Test Char', renamedId)).toEqual(trees)
+
+    // branch / fork 继承
+    const renamed = await store.getChatSnapshot('Test Char', renamedId)
+    const branch = await store.branchChat('Test Char', renamedId, 0, renamed?.revision)
+    expect(await store.getChatScripts('Test Char', branch.chatId)).toEqual(trees)
+    const fork = await store.forkChat('Test Char', renamedId, { sessionId: 's-child', parentSessionId: 's-parent' })
+    expect(await store.getChatScripts('Test Char', fork.chatId)).toEqual(trees)
+
+    // 损坏 JSON / 节点形状错误都要带路径显式报错
+    const brokenId = 'broken-scripts.jsonl'
+    await store.createChat('Test Char', header)
+    const brokenPath = path.join(dir, 'chats', 'Test Char', `${brokenId}.scripts.json`)
+    await writeFile(brokenPath, '{ not json')
+    await expect(store.getChatScripts('Test Char', brokenId)).rejects.toThrow(/not valid JSON.*broken-scripts\.jsonl\.scripts\.json/)
+    await writeFile(brokenPath, JSON.stringify({ version: 1, scriptTrees: [1] }))
+    await expect(store.getChatScripts('Test Char', brokenId)).rejects.toThrow(/node 0 must be an object.*broken-scripts\.jsonl\.scripts\.json/)
+    await writeFile(brokenPath, JSON.stringify({ version: 1, scriptTrees: {} }))
+    await expect(store.getChatScripts('Test Char', brokenId)).rejects.toThrow(/invalid shape/)
+
+    // deleteChat 在队列内同时清掉 worlds 与 scripts 副本
+    await store.putChatWorld('Test Char', renamedId, { name: 'Linked Lore', entries: [] })
+    const beforeDelete = await store.getChatSnapshot('Test Char', renamedId)
+    expect(await store.deleteChat('Test Char', renamedId, beforeDelete?.revision)).toBe(true)
+    expect(existsSync(path.join(dir, 'chats', 'Test Char', `${renamedId}.scripts.json`))).toBe(false)
+    expect(existsSync(path.join(dir, 'chats', 'Test Char', `${renamedId}.worlds.json`))).toBe(false)
+    expect(await store.getChatScripts('Test Char', renamedId)).toBeUndefined()
+    // 删除不存在的脚本副本返回 false
+    expect(await store.deleteChatScripts('Test Char', otherChatId)).toBe(false)
+  }))
+
+  it('状态：cardScriptsAutoRun 默认关闭，仅显式 true 生效', withStore(async (store, dir) => {
+    expect((await store.getState()).cardScriptsAutoRun).toBe(false)
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({ cardScriptsAutoRun: true }))
+    expect((await store.getState()).cardScriptsAutoRun).toBe(true)
+    // 非布尔值不升级：安全开关只认显式 true。
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({ cardScriptsAutoRun: 'yes' }))
+    expect((await store.getState()).cardScriptsAutoRun).toBe(false)
   }))
 
   it('状态：regex/脚本变量随旧 state 补默认，已下线管线字段丢弃', withStore(async (store, dir) => {

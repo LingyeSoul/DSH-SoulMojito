@@ -270,6 +270,17 @@
             }),
             h('span', null, t('settings.frontendAllowExternalResources'))),
           h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.frontendAllowExternalResourcesHint'))),
+        // 卡脚本自动运行（2026-10-21 用户需求）：默认关闭，开启后进入聊天自动
+        // 展开「卡脚本」tab 并把全部启用脚本注入同一个沙箱 iframe。
+        h('div', { className: 'dt-frontend-resources' },
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.cardScriptsAutoRun === true,
+              onChange: (event) => applyPatch({ cardScriptsAutoRun: event.target.checked }),
+            }),
+            h('span', null, t('settings.cardScriptsAutoRun'))),
+          h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.cardScriptsAutoRunHint'))),
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 

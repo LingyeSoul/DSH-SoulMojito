@@ -2503,6 +2503,7 @@ var DEFAULT_STATE = {
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
   frontendAutoOpen: false,
+  cardScriptsAutoRun: false,
   frontendAllowExternalResources: false,
   gamesDisableResign: false,
   cardWorkbenchPresetEnabled: false,
@@ -2867,6 +2868,8 @@ var TavernStore = class _TavernStore {
       if (source === target) return;
       if (await this.tryRead(target)) throw new Error(`chat '${nextChatId}' already exists`);
       await fs2.rename(source, target);
+      await this.moveChatOverlay(this.chatWorldsFile(characterName, chatId), this.chatWorldsFile(characterName, nextChatId));
+      await this.moveChatOverlay(this.chatScriptsFile(characterName, chatId), this.chatScriptsFile(characterName, nextChatId));
     });
   }
   async deleteChat(characterName, chatId, expectedRevision) {
@@ -2875,12 +2878,97 @@ var TavernStore = class _TavernStore {
       try {
         await this.assertChatRevision(file, expectedRevision);
         await fs2.unlink(file);
-        return true;
       } catch (cause) {
         if (cause.code === "ENOENT") return false;
         throw cause;
       }
+      await fs2.rm(this.chatWorldsFile(characterName, chatId), { force: true });
+      await fs2.rm(this.chatScriptsFile(characterName, chatId), { force: true });
+      return true;
     });
+  }
+  /* ---------------------- 会话级世界书副本 ---------------------- */
+  /**
+   * Session world-book overlay (2026-10-21): card scripts write through
+   * `lorebook.put` into a copy owned by one chat. `worlds/<name>.json` and the
+   * card's embedded `character_book` stay read-only. Layout:
+   * `chats/<character>/<chat>.jsonl.worlds.json`; `listChats` only collects
+   * `.jsonl` entries so the copy never shows up as a chat.
+   */
+  async getChatWorld(characterName, chatId, worldName) {
+    const file = this.chatWorldsFile(characterName, chatId);
+    const bytes = await this.tryRead(file);
+    if (bytes === void 0) return void 0;
+    const stored = parseChatWorldsFile(file, bytes).worlds[worldName];
+    return stored === void 0 ? void 0 : structuredClone(stored);
+  }
+  async putChatWorld(characterName, chatId, book) {
+    if (typeof book.name !== "string" || book.name.trim() === "") {
+      throw new Error("putChatWorld requires a world book name");
+    }
+    await this.mutateChat(async () => {
+      const file = this.chatWorldsFile(characterName, chatId);
+      const current = await this.readChatWorlds(file);
+      current.worlds[book.name] = structuredClone(book);
+      await this.writeAtomic(file, jsonBytes({ version: 1, worlds: current.worlds }));
+    });
+  }
+  async deleteChatWorld(characterName, chatId, worldName) {
+    return this.mutateChat(async () => {
+      const file = this.chatWorldsFile(characterName, chatId);
+      const bytes = await this.tryRead(file);
+      if (bytes === void 0) return false;
+      const current = parseChatWorldsFile(file, bytes);
+      if (!Object.prototype.hasOwnProperty.call(current.worlds, worldName)) return false;
+      delete current.worlds[worldName];
+      if (Object.keys(current.worlds).length === 0) await fs2.rm(file, { force: true });
+      else await this.writeAtomic(file, jsonBytes({ version: 1, worlds: current.worlds }));
+      return true;
+    });
+  }
+  async listChatWorlds(characterName, chatId) {
+    const file = this.chatWorldsFile(characterName, chatId);
+    const bytes = await this.tryRead(file);
+    if (bytes === void 0) return [];
+    return Object.keys(parseChatWorldsFile(file, bytes).worlds).sort();
+  }
+  /* ---------------------- 会话级脚本树副本 ---------------------- */
+  /**
+   * Session script-tree overlay (2026-10-21): GM panels persist Zod source edits
+   * through `scripts.put` into a copy owned by one chat. The card's
+   * `extensions.tavern_helper.scripts` and the character card file stay
+   * read-only. Layout: `chats/<character>/<chat>.jsonl.scripts.json`; node
+   * shapes pass through untouched (`type`, `id`, `name`, `content`, `enabled`,
+   * `info`, `button`, unknown fields).
+   */
+  async getChatScripts(characterName, chatId) {
+    const file = this.chatScriptsFile(characterName, chatId);
+    const bytes = await this.tryRead(file);
+    if (bytes === void 0) return void 0;
+    return structuredClone(parseChatScriptsFile(file, bytes).scriptTrees);
+  }
+  async putChatScripts(characterName, chatId, scriptTrees) {
+    if (!Array.isArray(scriptTrees)) throw new Error("putChatScripts requires an array of script nodes");
+    scriptTrees.forEach((node, index) => {
+      if (!isPlainRecord(node)) throw new Error(`putChatScripts node ${index} must be an object`);
+    });
+    await this.mutateChat(async () => {
+      await this.writeAtomic(
+        this.chatScriptsFile(characterName, chatId),
+        jsonBytes({ version: 1, scriptTrees: structuredClone(scriptTrees) })
+      );
+    });
+  }
+  async deleteChatScripts(characterName, chatId) {
+    return this.mutateChat(async () => {
+      const file = this.chatScriptsFile(characterName, chatId);
+      if (await this.tryRead(file) === void 0) return false;
+      await fs2.rm(file, { force: true });
+      return true;
+    });
+  }
+  async hasChatScripts(characterName, chatId) {
+    return await this.tryRead(this.chatScriptsFile(characterName, chatId)) !== void 0;
   }
   /* ------------------------------ 群组 ------------------------------ */
   async putGroup(group2) {
@@ -3013,6 +3101,8 @@ var TavernStore = class _TavernStore {
       }
       const branchLog = { header, messages: branchMessages };
       await this.writeAtomic(path.join(dir, nextId), chatBytes(branchLog));
+      await this.copyChatOverlay(this.chatWorldsFile(characterName, chatId), this.chatWorldsFile(characterName, nextId));
+      await this.copyChatOverlay(this.chatScriptsFile(characterName, chatId), this.chatScriptsFile(characterName, nextId));
       return { chatId: nextId, chat: branchLog };
     });
   }
@@ -3052,6 +3142,8 @@ var TavernStore = class _TavernStore {
       }
       const forkLog = { header, messages: [] };
       await this.writeAtomic(path.join(dir, nextId), chatBytes(forkLog));
+      await this.copyChatOverlay(this.chatWorldsFile(characterName, parentChatId), this.chatWorldsFile(characterName, nextId));
+      await this.copyChatOverlay(this.chatScriptsFile(characterName, parentChatId), this.chatScriptsFile(characterName, nextId));
       return { chatId: nextId, chat: forkLog };
     });
   }
@@ -3162,6 +3254,7 @@ var TavernStore = class _TavernStore {
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
       frontendAutoOpen: parsed.frontendAutoOpen === true,
+      cardScriptsAutoRun: parsed.cardScriptsAutoRun === true,
       frontendAllowExternalResources: parsed.frontendAllowExternalResources === true,
       gamesDisableResign: parsed.gamesDisableResign === true,
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
@@ -3193,6 +3286,27 @@ var TavernStore = class _TavernStore {
     }, () => {
     });
     return result;
+  }
+  chatWorldsFile(characterName, chatId) {
+    return path.join(this.root, "chats", safeFileName(characterName), `${safeChatFileName(chatId)}.worlds.json`);
+  }
+  chatScriptsFile(characterName, chatId) {
+    return path.join(this.root, "chats", safeFileName(characterName), `${safeChatFileName(chatId)}.scripts.json`);
+  }
+  async readChatWorlds(file) {
+    const bytes = await this.tryRead(file);
+    return bytes === void 0 ? { version: 1, worlds: {} } : parseChatWorldsFile(file, bytes);
+  }
+  /** Copies a session overlay file to a new chat (branch/fork inheritance). */
+  async copyChatOverlay(from, to) {
+    const bytes = await this.tryRead(from);
+    if (bytes === void 0) return;
+    await this.writeAtomic(to, bytes);
+  }
+  /** Moves a session overlay file with its chat; an existing target is dropped. */
+  async moveChatOverlay(from, to) {
+    await fs2.rm(to, { force: true });
+    if (await this.tryRead(from) !== void 0) await fs2.rename(from, to);
   }
   mutateState(operation) {
     const result = this.stateMutationTail.catch(() => {
@@ -3316,6 +3430,56 @@ function mergeRegexScripts(current, imported) {
 function safeFileName(name2) {
   const cleaned = name2.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim();
   return cleaned.length > 0 ? cleaned.slice(0, 120) : "_unnamed";
+}
+function parseChatWorldsFile(file, bytes) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (cause) {
+    throw new Error(`chat world book file is not valid JSON: ${file}`, { cause });
+  }
+  if (!isPlainRecord(parsed) || !isPlainRecord(parsed["worlds"])) {
+    throw new Error(`chat world book file has an invalid shape (expected { version, worlds }): ${file}`);
+  }
+  const worlds = {};
+  for (const [name2, raw] of Object.entries(parsed["worlds"])) {
+    if (!isPlainRecord(raw) || !Array.isArray(raw["entries"])) {
+      throw new Error(`chat world book '${name2}' has an invalid shape (expected { name, entries: [] }): ${file}`);
+    }
+    const entries = raw["entries"].map((entry, index) => {
+      if (!isPlainRecord(entry)) {
+        throw new Error(`chat world book '${name2}' entry ${index} must be an object: ${file}`);
+      }
+      return normalizeEntry(entry);
+    });
+    worlds[name2] = {
+      name: name2,
+      entries,
+      ...isPlainRecord(raw["extra"]) ? { extra: raw["extra"] } : {}
+    };
+  }
+  return { version: 1, worlds };
+}
+function isPlainRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseChatScriptsFile(file, bytes) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (cause) {
+    throw new Error(`chat script tree file is not valid JSON: ${file}`, { cause });
+  }
+  if (!isPlainRecord(parsed) || !Array.isArray(parsed["scriptTrees"])) {
+    throw new Error(`chat script tree file has an invalid shape (expected { version, scriptTrees: [] }): ${file}`);
+  }
+  const scriptTrees = parsed["scriptTrees"].map((node, index) => {
+    if (!isPlainRecord(node)) {
+      throw new Error(`chat script tree file node ${index} must be an object: ${file}`);
+    }
+    return node;
+  });
+  return { version: 1, scriptTrees };
 }
 function timestamp() {
   const d = /* @__PURE__ */ new Date();
@@ -10714,7 +10878,7 @@ function applyLenientPatch(root, ops) {
 
 // packages/plugin/src/tavern-assets.ts
 var AGENT_TAVERN_PRELOAD_MAX_CHARS = 32e3;
-async function collectWorldInfoBooks(db, state, characterName, character) {
+async function collectWorldInfoBooks(db, state, characterName, character, chatId) {
   const worldNames = new Set(state.activeWorlds);
   const follow = state.worldFollowsCharacter !== false;
   const linkedWorld = character.card.data.extensions["world"];
@@ -10722,10 +10886,12 @@ async function collectWorldInfoBooks(db, state, characterName, character) {
   if (linkedName !== void 0) worldNames.add(linkedName);
   const books = [];
   let linkedImported = false;
+  const chatScope = chatId !== void 0 && chatId !== "" ? chatId : void 0;
   for (const worldName of worldNames) {
-    const world = await db.getWorld(worldName);
+    const copy = chatScope !== void 0 && typeof db.getChatWorld === "function" ? await db.getChatWorld(characterName, chatScope, worldName) : void 0;
+    const world = copy === void 0 ? await db.getWorld(worldName) : copy;
     if (world) {
-      books.push({ name: world.name, entries: world.entries });
+      books.push({ name: copy === void 0 ? world.name : worldName, entries: world.entries });
       if (worldName === linkedName) linkedImported = true;
     }
   }
@@ -12651,7 +12817,7 @@ function statusTemplateOf(card) {
 }
 async function renderMvuStatusTemplate(input) {
   const chat = input.chat;
-  const books = await collectWorldInfoBooks(input.db, input.state, input.characterName, input.character);
+  const books = await collectWorldInfoBooks(input.db, input.state, input.characterName, input.character, input.chatId);
   const runtime = createMvuRuntime(
     {
       state: input.state,
@@ -12699,7 +12865,7 @@ async function retryMvuSettlement(db, options) {
   const localVars = plainObject3(metadata.variables) ?? {};
   metadata.variables = localVars;
   const globalsBefore = JSON.stringify(state.scriptGlobals);
-  const books = await collectWorldInfoBooks(db, state, characterName, character);
+  const books = await collectWorldInfoBooks(db, state, characterName, character, chatId);
   const runtime = createMvuRuntime(
     { state, characterName, character, chat, chatId, books, onWarning: (message) => {
       failures.push(message);
@@ -13202,7 +13368,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.8".trim() : "";
-  const commit = true ? normalizeCommit("ca47a0c") : void 0;
+  const commit = true ? normalizeCommit("556e329") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -16444,7 +16610,7 @@ function cardStateEntryKey(book, entry) {
 async function renderCardStateSections(db, state, characterName, character, chat, chatId) {
   const card = character.card;
   if (!cardUsesJsrMvu(card)) return void 0;
-  const books = await collectWorldInfoBooks(db, state, characterName, character);
+  const books = await collectWorldInfoBooks(db, state, characterName, character, chatId);
   const embeddedName = `${characterName}:embedded`;
   const linkedWorld = card.data.extensions["world"];
   const linkedPresent = typeof linkedWorld === "string" && linkedWorld.trim() !== "" && books.some((book) => book.name === linkedWorld.trim());
@@ -28912,6 +29078,52 @@ function imageContentType(ext) {
   return normalized === "jpg" || normalized === "jpeg" ? "image/jpeg" : normalized === "webp" ? "image/webp" : normalized === "gif" ? "image/gif" : "image/png";
 }
 
+// packages/plugin/src/card-scripts.ts
+function collectCardScriptBundle(card, scriptTrees) {
+  const nodes = Array.isArray(scriptTrees) ? scriptTrees : cardScriptNodes(card);
+  return { world: cardWorldName(card), scripts: collectScriptsFromNodes(nodes) };
+}
+function collectScriptsFromNodes(nodes) {
+  const scripts = [];
+  walkScriptNodes(nodes, scripts);
+  return scripts;
+}
+function walkScriptNodes(nodes, scripts) {
+  for (const node of nodes) {
+    if (!isPlainObject3(node)) continue;
+    if (node["type"] === "folder") {
+      if (Array.isArray(node["scripts"])) walkScriptNodes(node["scripts"], scripts);
+      continue;
+    }
+    if (node["type"] !== "script") continue;
+    if (node["enabled"] === false) continue;
+    const content = node["content"];
+    if (typeof content !== "string" || content.trim() === "") continue;
+    const fallback = `script-${scripts.length}`;
+    const id = nonEmptyString(node["id"]) ?? fallback;
+    const name2 = nonEmptyString(node["name"]) ?? fallback;
+    scripts.push({ id, name: name2, content, info: nonEmptyString(node["info"]) ?? "" });
+  }
+}
+function cardScriptNodes(card) {
+  const helper = plainObject5(card.data.extensions["tavern_helper"]);
+  return Array.isArray(helper?.["scripts"]) ? helper["scripts"] : [];
+}
+function cardWorldName(card) {
+  const linked = nonEmptyString(card.data.extensions["world"]);
+  if (linked !== void 0) return linked;
+  return nonEmptyString(card.data.characterBook?.name) ?? null;
+}
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : void 0;
+}
+function isPlainObject3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function plainObject5(value) {
+  return isPlainObject3(value) ? value : void 0;
+}
+
 // packages/plugin/src/rewrite.ts
 var FEEDBACK_MAX_LENGTH = 1e3;
 function optionalFeedback(value) {
@@ -29384,12 +29596,51 @@ async function handleHelperApi(req, res, db) {
     case "lorebook.get": {
       const name2 = typeof body?.name === "string" && body.name.trim() !== "" ? body.name.trim() : await defaultLorebookName(db, state, character);
       if (name2 === void 0) throw new Error("no active lorebook");
-      const book = await db.getWorld(name2);
-      if (book === void 0) throw new Error(`lorebook '${name2}' not found`);
+      const resolved = await loadLorebook(db, character, chatId, name2);
+      if (resolved === void 0) {
+        throw new Error(`lorebook '${name2}' not found (no session copy, no worlds/ asset and no matching character card book)`);
+      }
       return sendJson(res, 200, {
         ok: true,
-        value: { name: name2, entries: book.entries.map((entry) => ({ world: name2, ...entry })) }
+        value: { name: name2, entries: resolved.entries.map((entry) => ({ world: name2, ...entry })) }
       });
+    }
+    // Session world copy (2026-10-21): scripts write the chat overlay only.
+    // `worlds/<name>.json` and the card's embedded book stay read-only, so a
+    // runaway script can never corrupt the shared asset. `lorebook.reset`
+    // drops the overlay and falls back to the base asset.
+    case "lorebook.put":
+      return sendJson(res, 200, {
+        ok: true,
+        value: await putLorebook(db, character, chatId, body)
+      });
+    case "lorebook.reset": {
+      const name2 = requireString(body?.name, "name");
+      if (chatId === "") throw new Error("chatId is required for lorebook.reset (session scope only)");
+      await serializeSessionWrite(`${character}\0${chatId}\0${name2}`, async () => {
+        await db.deleteChatWorld(character, chatId, name2);
+      });
+      return sendJson(res, 200, { ok: true, value: { name: name2, reset: true } });
+    }
+    // 会话脚本树副本（2026-10-21）：GM 面板改写的 Zod 源码按聊天持久化，刷新
+    // 后仍可读；角色卡文件与基础脚本树保持只读。执行语义不变——只有用户手动
+    // 运行卡脚本时才会跑副本内容，服务端 MVU 不执行 Zod。
+    case "scripts.get": {
+      requireSessionChatId(chatId, "scripts.get");
+      const scriptTrees = await db.getChatScripts(character, chatId);
+      return sendJson(res, 200, { ok: true, value: { scriptTrees: scriptTrees ?? null } });
+    }
+    case "scripts.put":
+      return sendJson(res, 200, {
+        ok: true,
+        value: await putChatScripts(db, character, chatId, body)
+      });
+    case "scripts.reset": {
+      requireSessionChatId(chatId, "scripts.reset");
+      await serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
+        await db.deleteChatScripts(character, chatId);
+      });
+      return sendJson(res, 200, { ok: true, value: { reset: true } });
     }
     case "regex.get":
       return sendJson(res, 200, { ok: true, value: { scripts: state.regexScripts } });
@@ -29424,12 +29675,13 @@ async function buildSnapshot(db, state, character, chatId) {
       messageCount: 0,
       lastMessageId: -1,
       variables: {
-        global: cloneJson(plainObject5(state.scriptGlobals) ?? {}),
+        global: cloneJson(plainObject6(state.scriptGlobals) ?? {}),
         chat: {},
         message: {},
-        character: cloneJson(plainObject5(file?.card.data.extensions?.["variables"]) ?? {})
+        character: cloneJson(plainObject6(file?.card.data.extensions?.["variables"]) ?? {})
       },
       characterData: file?.card.data ?? null,
+      scriptTrees: null,
       avatar: avatarPath(character)
     };
   }
@@ -29437,6 +29689,7 @@ async function buildSnapshot(db, state, character, chatId) {
   if (snapshot2 === void 0) throw new Error(`chat '${chatId}' not found`);
   const chat = snapshot2.chat;
   const chatVariables2 = await readChatScope(db, chat, chatId);
+  const scriptTrees = await db.getChatScripts(character, chatId);
   const lastIndex = chat.messages.length - 1;
   const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
   return {
@@ -29449,12 +29702,13 @@ async function buildSnapshot(db, state, character, chatId) {
     messageCount: chat.messages.length,
     lastMessageId: lastIndex,
     variables: {
-      global: cloneJson(plainObject5(state.scriptGlobals) ?? {}),
+      global: cloneJson(plainObject6(state.scriptGlobals) ?? {}),
       chat: cloneJson(chatVariables2),
       message: lastIndex >= 0 ? cloneJson(readMessageVariables(chat.messages[lastIndex])) : {},
-      character: cloneJson(plainObject5(file?.card.data.extensions?.["variables"]) ?? {})
+      character: cloneJson(plainObject6(file?.card.data.extensions?.["variables"]) ?? {})
     },
     characterData: file?.card.data ?? null,
+    scriptTrees: scriptTrees ?? null,
     avatar: avatarPath(character)
   };
 }
@@ -29512,7 +29766,7 @@ async function replaceMvuData(db, character, chatId, body) {
     messageId = body?.messageId === void 0 ? chat.messages.length - 1 : resolveMessageId(chat.messages, body.messageId);
     const message = chat.messages[messageId];
     message.variables = {
-      ...plainObject5(message.variables) ?? {},
+      ...plainObject6(message.variables) ?? {},
       stat_data: cloneJson(stat)
     };
   }
@@ -29546,11 +29800,11 @@ function variableEntriesForMirror(tree) {
 function collectVariableEntries(tree, prefix, out) {
   for (const [key, entry] of Object.entries(tree)) {
     const name2 = prefix === "" ? key : `${prefix}.${key}`;
-    if (prefix === "" && (key === "stat_data" || key === "previous_stat_data") && isPlainObject3(entry)) {
+    if (prefix === "" && (key === "stat_data" || key === "previous_stat_data") && isPlainObject4(entry)) {
       out.push({ name: name2, value: entry });
       continue;
     }
-    if (isPlainObject3(entry)) collectVariableEntries(entry, name2, out);
+    if (isPlainObject4(entry)) collectVariableEntries(entry, name2, out);
     else if (VARIABLE_NAME.test(name2)) out.push({ name: name2, value: entry });
   }
 }
@@ -29562,7 +29816,105 @@ async function defaultLorebookName(db, state, character) {
   const file = await db.getCharacter(character);
   const world = file?.card.data.extensions?.["world"];
   const linked = typeof world === "string" && world.trim() !== "" ? world.trim() : void 0;
-  return linked ?? state.activeWorlds[0];
+  if (linked !== void 0) return linked;
+  const active = state.activeWorlds[0];
+  if (active !== void 0) return active;
+  const embedded = file?.card.data.characterBook?.name;
+  return typeof embedded === "string" && embedded.trim() !== "" ? embedded.trim() : void 0;
+}
+async function loadLorebook(db, character, chatId, name2) {
+  if (chatId !== "") {
+    const copy = await db.getChatWorld(character, chatId, name2);
+    if (copy !== void 0) return copy;
+  }
+  const world = await db.getWorld(name2);
+  if (world !== void 0) return world;
+  const card = (await db.getCharacter(character))?.card;
+  const book = card?.data.characterBook;
+  if (book === void 0) return void 0;
+  const linked = card.data.extensions["world"];
+  const linkedName = typeof linked === "string" && linked.trim() !== "" ? linked.trim() : void 0;
+  const embeddedName = typeof book.name === "string" && book.name.trim() !== "" ? book.name.trim() : void 0;
+  if (name2 !== linkedName && name2 !== embeddedName) return void 0;
+  return parseCharacterBook2(book);
+}
+var sessionWriteChains = /* @__PURE__ */ new Map();
+async function serializeSessionWrite(key, operation) {
+  const previous = sessionWriteChains.get(key) ?? Promise.resolve();
+  const run = previous.catch(() => {
+  }).then(operation);
+  const settled = run.then(() => {
+  }, () => {
+  });
+  sessionWriteChains.set(key, settled);
+  try {
+    return await run;
+  } finally {
+    if (sessionWriteChains.get(key) === settled) sessionWriteChains.delete(key);
+  }
+}
+async function putLorebook(db, character, chatId, body) {
+  const name2 = requireString(body?.name, "name").trim();
+  if (chatId === "") throw new Error("chatId is required for lorebook.put (scripts write the session copy)");
+  const raw = requireLorebookEntries(body?.entries);
+  return serializeSessionWrite(`${character}\0${chatId}\0${name2}`, async () => {
+    const base = await loadLorebook(db, character, chatId, name2);
+    if (base === void 0) {
+      throw new Error(`lorebook '${name2}' not found: the session copy has nothing to extend (import the world or link it to the card first)`);
+    }
+    const entries = normalizeLorebookEntries(raw);
+    await db.putChatWorld(character, chatId, {
+      name: name2,
+      entries,
+      ...base.extra === void 0 ? {} : { extra: cloneJson(base.extra) }
+    });
+    return { name: name2, entries: entries.map((entry) => ({ world: name2, ...entry })) };
+  });
+}
+function requireLorebookEntries(value) {
+  if (!Array.isArray(value)) throw new Error("entries must be an array of world book entries");
+  return value.map((entry, index) => {
+    if (!isPlainObject4(entry)) throw new Error(`entries[${index}] must be an object (got ${entry === null ? "null" : typeof entry})`);
+    const { world: _world, ...rest } = entry;
+    return cloneJson(rest);
+  });
+}
+function normalizeLorebookEntries(raw) {
+  const seen = /* @__PURE__ */ new Set();
+  let nextUid = raw.reduce((max2, entry) => {
+    const uid = entry["uid"];
+    return typeof uid === "number" && Number.isInteger(uid) && uid > max2 ? uid : max2;
+  }, -1) + 1;
+  return raw.map((entry) => {
+    const normalized = normalizeEntry2(entry);
+    if (!Number.isInteger(normalized.uid) || normalized.uid < 0 || seen.has(normalized.uid)) {
+      while (seen.has(nextUid)) nextUid += 1;
+      normalized.uid = nextUid;
+      nextUid += 1;
+    }
+    seen.add(normalized.uid);
+    return normalized;
+  });
+}
+function requireSessionChatId(chatId, op) {
+  if (chatId === "") throw new Error(`chatId is required for ${op} (session scope only)`);
+}
+async function putChatScripts(db, character, chatId, body) {
+  requireSessionChatId(chatId, "scripts.put");
+  const scriptTrees = requireScriptTrees(body?.scriptTrees);
+  return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
+    await db.putChatScripts(character, chatId, scriptTrees);
+    return { scriptTrees };
+  });
+}
+function requireScriptTrees(value) {
+  if (!Array.isArray(value)) throw new Error("scriptTrees must be an array of card script nodes");
+  return value.map((node, index) => {
+    if (!isPlainObject4(node)) {
+      throw new Error(`scriptTrees[${index}] must be an object (got ${node === null ? "null" : typeof node})`);
+    }
+    return cloneJson(node);
+  });
 }
 async function getMessages(db, character, chatId, body) {
   const snapshot2 = await requireChat(db, character, chatId);
@@ -29627,17 +29979,17 @@ function messageRole(message) {
   return message.is_user === true ? "user" : "assistant";
 }
 function isHidden(message) {
-  return message.is_hidden === true || plainObject5(message.extra)?.["is_hidden"] === true;
+  return message.is_hidden === true || plainObject6(message.extra)?.["is_hidden"] === true;
 }
 function toJsrMessage(message, index) {
-  const extra = plainObject5(message.extra) ?? {};
+  const extra = plainObject6(message.extra) ?? {};
   return {
     message_id: index,
     name: typeof message.name === "string" ? message.name : "",
     role: messageRole(message),
     is_hidden: isHidden(message),
     message: typeof message.mes === "string" ? message.mes : "",
-    data: cloneJson(plainObject5(message.variables) ?? extra),
+    data: cloneJson(plainObject6(message.variables) ?? extra),
     extra: cloneJson(extra)
   };
 }
@@ -29649,14 +30001,14 @@ function toJsrSwiped(message, index) {
     swipe_id: typeof message.swipe_id === "number" ? message.swipe_id : 0,
     swipes,
     swipes_data: swipes.map((_, swipeIndex) => {
-      const info = plainObject5(swipeInfo[swipeIndex]);
-      return cloneJson(plainObject5(info?.["extra"]) ?? {});
+      const info = plainObject6(swipeInfo[swipeIndex]);
+      return cloneJson(plainObject6(info?.["extra"]) ?? {});
     }),
     swipes_info: cloneJson(swipeInfo)
   };
 }
 function readMessageVariables(message) {
-  return plainObject5(message.variables) ?? plainObject5(plainObject5(message.extra)?.["variables"]) ?? {};
+  return plainObject6(message.variables) ?? plainObject6(plainObject6(message.extra)?.["variables"]) ?? {};
 }
 function resolveMessageId(messages, value) {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("message_id must be a finite number");
@@ -29697,10 +30049,10 @@ function applyMessageUpdate(message, update) {
     message.is_user = update.role === "user";
   }
   if (typeof update.is_hidden === "boolean") message.is_hidden = update.is_hidden;
-  const data = plainObject5(update.data);
-  const extra = plainObject5(update.extra);
+  const data = plainObject6(update.data);
+  const extra = plainObject6(update.extra);
   if (data !== void 0) message.variables = cloneJson(data);
-  if (extra !== void 0) message.extra = { ...plainObject5(message.extra) ?? {}, ...cloneJson(extra) };
+  if (extra !== void 0) message.extra = { ...plainObject6(message.extra) ?? {}, ...cloneJson(extra) };
   if (Array.isArray(update.swipes)) {
     const swipes = update.swipes.map((swipe) => String(swipe));
     message.swipes = swipes;
@@ -29718,7 +30070,7 @@ function applyMessageUpdate(message, update) {
 function toCreatedMessage(entry, userName, characterName) {
   const role = entry.role === "system" || entry.role === "user" ? entry.role : "assistant";
   const name2 = typeof entry.name === "string" && entry.name !== "" ? entry.name : role === "user" ? userName : role === "system" ? "System" : characterName;
-  const extra = { ...plainObject5(entry.data) ?? {}, ...plainObject5(entry.extra) ?? {} };
+  const extra = { ...plainObject6(entry.data) ?? {}, ...plainObject6(entry.extra) ?? {} };
   return {
     name: name2,
     is_user: role === "user",
@@ -29744,7 +30096,7 @@ async function runHelperSlash(db, state, character, chatId, command) {
     lastMessageId: chat.messages.length - 1,
     chatId,
     local: scalarVariables(readChatVariables(chat)),
-    global: scalarVariables(plainObject5(state.scriptGlobals) ?? {})
+    global: scalarVariables(plainObject6(state.scriptGlobals) ?? {})
   });
   let chatChanged = false;
   const persist = async () => {
@@ -29821,14 +30173,14 @@ function requireArray(value, label) {
   return value;
 }
 function requireObject(value, label) {
-  if (!isPlainObject3(value)) throw new Error(`${label} must be an object`);
+  if (!isPlainObject4(value)) throw new Error(`${label} must be an object`);
   return cloneJson(value);
 }
-function isPlainObject3(value) {
+function isPlainObject4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function plainObject5(value) {
-  return isPlainObject3(value) ? value : void 0;
+function plainObject6(value) {
+  return isPlainObject4(value) ? value : void 0;
 }
 function cloneJson(value) {
   try {
@@ -30315,7 +30667,7 @@ async function buildGenerationLlmRequest(ctx, db, options) {
   if (!presetObject) presetObject = defaultPreset();
   const preset = parsePreset(presetObject);
   const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
-  const books = await collectWorldInfoBooks(db, state, speakerName, character);
+  const books = await collectWorldInfoBooks(db, state, speakerName, character, chatId);
   const lore = activateWorldInfo({
     books,
     chat: turnMessages.map((m) => ({ name: m.name, content: m.mes, isUser: m.is_user })),
@@ -34693,6 +35045,9 @@ async function handleApi(ctx, req, res) {
       // 美化前端右栏 tab 自动展开（2026-10-20 用户需求）：翻转即时生效——
       // 客户端 watcher 每次扫描都读 bootstrap.state，无需写穿。
       ...typeof body.frontendAutoOpen === "boolean" ? { frontendAutoOpen: body.frontendAutoOpen } : {},
+      // 卡脚本自动运行（2026-10-21 用户需求）：默认关闭；翻转即时生效——客户端
+      // 自动展开 hook 与 tab 每次渲染都读 bootstrap.state，无缓存需写穿。
+      ...typeof body.cardScriptsAutoRun === "boolean" ? { cardScriptsAutoRun: body.cardScriptsAutoRun } : {},
       // 允许美化前端加载外部资源（2026-10-21 用户需求）：翻转即时生效——iframe
       // 每次构建 srcDoc 都从 bootstrap.state 读取，无需写穿缓存。
       ...typeof body.frontendAllowExternalResources === "boolean" ? { frontendAllowExternalResources: body.frontendAllowExternalResources } : {},
@@ -35199,6 +35554,16 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "helper") {
     return handleHelperApi(req, res, db);
+  }
+  if (method === "GET" && route === "card/scripts") {
+    const character = url.searchParams.get("character");
+    if (!character) throw new Error("character query is required");
+    const chatId = url.searchParams.get("chatId");
+    const file = await db.getCharacter(character);
+    if (!file) return sendJson(res, 404, { ok: false, message: `character '${character}' not found` });
+    const scriptTrees = chatId === null ? void 0 : await db.getChatScripts(character, chatId);
+    const { world, scripts } = collectCardScriptBundle(file.card, scriptTrees);
+    return sendJson(res, 200, { ok: true, character, world, scripts });
   }
   if (method === "GET" && route === "frontend/latest") {
     const state = await db.getState();

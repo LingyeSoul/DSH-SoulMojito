@@ -337,6 +337,9 @@
       // 自动展开走设置开关 frontendAutoOpen（2026-10-20 用户需求）：默认关闭，
       // 开启后本聊天首次出现美化前端才打开右栏 tab。
       useFrontendAutoOpen(sessionId, binding, architecture, state.bootstrap.state.frontendAutoOpen === true)
+      // 卡脚本自动运行（2026-10-21 用户需求）：设置显式开启时进入本聊天自动
+      // 展开「卡脚本」tab（每会话/角色/聊天只开一次）；tab 内再自动运行脚本。
+      useCardScriptsAutoOpen(sessionId, binding, architecture, state.bootstrap.state.cardScriptsAutoRun === true)
       // 对局面自动展示（2026-10-14 修订）：AgentTavern 的对局棋盘住在右栏 games
       // tab（MVU tab 同位）；本 watcher 盯 games/revision 水位（stat-only 的便宜
       // 端点，1s 节奏、页面不可见停发），本聊天出现未终局对局即自动展开 tab——

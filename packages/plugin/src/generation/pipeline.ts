@@ -334,7 +334,7 @@ export async function buildGenerationLlmRequest(ctx, db, options: GenerationAsse
   const preset = parsePreset(presetObject)
   const persona = state.activePersona ? await db.getPersona(state.activePersona) : undefined
 
-  const books = await collectWorldInfoBooks(db, state, speakerName, character)
+  const books = await collectWorldInfoBooks(db, state, speakerName, character, chatId)
 
   const lore = activateWorldInfo({
     books,

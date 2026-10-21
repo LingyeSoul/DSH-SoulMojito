@@ -3,6 +3,7 @@ import {
   parseRegexScripts,
   type CharacterCardIR,
   type RegexScriptIR,
+  type WorldBookIR,
 } from '../../tavern-format/src/index.js'
 import type { Lorebook } from '../../tavern-lore/src/index.js'
 import type { TavernState, TavernStore } from '../../tavern-store/src/index.js'
@@ -11,13 +12,23 @@ interface CharacterAsset {
   card: CharacterCardIR
 }
 
+/** Optional reader seam for the per-chat world overlay (older callers omit it). */
+interface ChatWorldSource {
+  getChatWorld?: (
+    characterName: string,
+    chatId: string,
+    worldName: string,
+  ) => Promise<WorldBookIR | undefined>
+}
+
 const AGENT_TAVERN_PRELOAD_MAX_CHARS = 32_000
 
 export async function collectWorldInfoBooks(
-  db: Pick<TavernStore, 'getWorld'>,
+  db: Pick<TavernStore, 'getWorld'> & ChatWorldSource,
   state: Pick<TavernState, 'activeWorlds' | 'worldFollowsCharacter'>,
   characterName: string,
   character: CharacterAsset,
+  chatId?: string,
 ): Promise<Lorebook[]> {
   const worldNames = new Set(state.activeWorlds)
   // 世界书跟随角色卡激活（默认开启）：绑定的世界书随角色注入；关闭后仅生效
@@ -29,10 +40,17 @@ export async function collectWorldInfoBooks(
 
   const books: Lorebook[] = []
   let linkedImported = false
+  const chatScope = chatId !== undefined && chatId !== '' ? chatId : undefined
   for (const worldName of worldNames) {
-    const world = await db.getWorld(worldName)
+    // Session copy first (2026-10-21): card scripts write the chat overlay, so
+    // generation/activation must read it instead of the read-only base asset.
+    const copy = chatScope !== undefined && typeof db.getChatWorld === 'function'
+      ? await db.getChatWorld(characterName, chatScope, worldName)
+      : undefined
+    const world = copy === undefined ? await db.getWorld(worldName) : copy
     if (world) {
-      books.push({ name: world.name, entries: world.entries })
+      // A copy keeps the linked world name so activation identity is stable.
+      books.push({ name: copy === undefined ? world.name : worldName, entries: world.entries })
       if (worldName === linkedName) linkedImported = true
     }
   }

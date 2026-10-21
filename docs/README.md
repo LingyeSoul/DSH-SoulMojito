@@ -124,6 +124,7 @@
 - [`2026-10-20-frontend-helper-compat.md`](../decisions/2026-10-20-frontend-helper-compat.md) — 美化前端右栏自动展开开关 + 酒馆助手（Tavern-Helper）兼容层（沙箱内 RPC 代理）
 - [`2026-10-21-jsr-mvu-agent-frontend-compat.md`](../decisions/2026-10-21-jsr-mvu-agent-frontend-compat.md) — JSR/MagVarUpdate 卡在 Agent 模式的变量闭环、卡内 EJS 注入与前端 facade（含 MVU-ZOD 兼容卡实测）
 - [`2026-10-21-frontend-host-background.md`](../decisions/2026-10-21-frontend-host-background.md) — 美化前端未设置背景时用 DSH 原生背景色填充画布（深色模式无白圈）
+- [`2026-10-21-card-scripts-host.md`](../decisions/2026-10-21-card-scripts-host.md) — 卡脚本右栏（手动运行、不自动执行）、会话世界书副本、GM 面板 document facade 与行动栏画布/按钮修复
 
 ### 面板与视图
 

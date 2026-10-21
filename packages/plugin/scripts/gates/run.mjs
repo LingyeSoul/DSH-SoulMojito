@@ -54,10 +54,12 @@ const SOURCE_BUDGET_ALLOWLIST = [
   { path: 'packages/plugin/client-src/40-i18n-en.js', reason: 'single English message table; novel import/revision strings stay in the existing novel section' },
   { path: 'packages/plugin/client-src/41-i18n-zh.js', reason: 'single Chinese message table; novel import/revision strings stay in the existing novel section' },
   { path: 'packages/plugin/client-src/92-ui-novel.js', reason: 'novel panel surface kept in one fragment' },
+  { path: 'packages/plugin/client-src/11-helper-bridge.js', reason: 'one generated iframe shim template: it must stay a single IIFE string so the syntactically-valid-source test can evaluate it' },
   { path: 'packages/plugin/src/agent-novel/writer.ts', reason: 'writer subagent orchestration kept together' },
   { path: 'packages/plugin/src/agent-novel/driver.ts', reason: 'novel scheduling and recovery state machine kept together' },
   { path: 'packages/plugin/src/card-workbench/tools-world.ts', reason: 'world-book tool family kept together' },
   { path: 'packages/plugin/src/generation/pipeline.ts', reason: 'generation request assembly kept as one unit' },
+  { path: 'packages/plugin/src/helper.ts', reason: 'single TavernHelper RPC surface; snapshot + session world/script copy ops share the same binding and validation seams' },
   { path: 'packages/plugin/src/games/builtin/', prefix: true, reason: 'one built-in game engine per file' },
   { path: 'packages/plugin/src/http/router.ts', reason: 'single HTTP dispatch surface; split when route groups move' },
   { path: 'packages/plugin/src/http/novel.ts', reason: 'single AgentNovel HTTP surface; import/revision routes share the same creation gate and error mapping' },
@@ -663,6 +665,9 @@ function checkFrontendRuntimeText(text) {
     // via postMessage (no white ring in dark mode).
     "'--dt-host-background'",
     'html{background:var(--dt-host-background)}',
+    // Late canvas rule (2026-10-21): cards with
+    // `html,body{background:transparent!important}` must not win the cascade.
+    'html{background:var(--dt-host-background)!important;}',
     'function frontendHostBackgroundColor()',
     'dsh-soulmojito:theme',
     'function useThemeBridge(frameRef)',
@@ -2600,6 +2605,7 @@ const gates = [
         'function buildFrontendDocument() {}',
         "'--dt-host-background'",
         'html{background:var(--dt-host-background)}',
+        'html{background:var(--dt-host-background)!important;}',
         'function frontendHostBackgroundColor() {}',
         'dsh-soulmojito:theme',
         'function useThemeBridge(frameRef) {}',
@@ -2715,6 +2721,7 @@ const gates = [
       // Frontend default canvas (2026-10-21): a missing host background
       // injection or theme channel must turn red.
       const badFrameCanvas = good.replace('html{background:var(--dt-host-background)}', 'html{background:#fff}')
+      const badFrameLateCanvas = good.replace('html{background:var(--dt-host-background)!important;}', 'html{background:transparent}')
       const badFrameTheme = good.replace('dsh-soulmojito:theme', 'dsh-soulmojito:palette')
       const badBridge = good.replace('dsh-soulmojito:mod-request', 'dsh-soulmojito:mod-bridge-removed')
       const badEvent = good.replace('dsh-soulmojito:mod-event', 'dsh-soulmojito:mod-gone')
@@ -2802,6 +2809,7 @@ const gates = [
       return checkFrontendRuntimeText(good).length === 0
         && checkFrontendRuntimeText(bad).length > 0
         && checkFrontendRuntimeText(badFrameCanvas).length > 0
+        && checkFrontendRuntimeText(badFrameLateCanvas).length > 0
         && checkFrontendRuntimeText(badFrameTheme).length > 0
         && checkFrontendRuntimeText(badBridge).length > 0
         && checkFrontendRuntimeText(badEvent).length > 0

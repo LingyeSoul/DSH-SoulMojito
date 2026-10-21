@@ -114,6 +114,26 @@
             key: FRONTEND_TAB_ID,
             inject: (sessionId) => ({ sessionId }),
           }, TavernFrontendSidebarTab)), 'dsh-soulmojito: sidebar-right frontend tab body')
+          // 卡脚本 tab（2026-10-21）：卡内 tavern_helper 脚本树不会自动执行，
+          // 右栏只提供手动运行入口；正文列表与沙箱 iframe 见 88b 片段。
+          scope.effect(() => scope.sidebarRightTabs.register({
+            id: CARD_SCRIPTS_TAB_ID,
+            kind: CARD_SCRIPTS_TAB_KIND,
+            priority: 'extension',
+            title: () => translate('cardScripts.title'),
+            guide: [{
+              id: 'card-scripts',
+              order: 43,
+              title: () => translate('cardScripts.title'),
+              description: () => translate('cardScripts.guide.description'),
+              icon: IconListPenOutline16,
+            }],
+          }), 'dsh-soulmojito: sidebar-right card scripts tab type')
+          scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+            name: 'sidebar.right.pane.tab',
+            key: CARD_SCRIPTS_TAB_ID,
+            inject: (sessionId) => ({ sessionId }),
+          }, TavernCardScriptsSidebarTab)), 'dsh-soulmojito: sidebar-right card scripts tab body')
         })
       }
     }

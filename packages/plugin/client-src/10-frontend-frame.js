@@ -247,6 +247,13 @@
       // theme changes; body stays transparent so the card keeps its own canvas.
       // The card's html/body background still wins because the reset comes first.
       const reset = `<style>:root{--dt-host-background:${hostColor};}html{background:var(--dt-host-background)}body{margin:0!important;padding:0;max-width:100%;background:transparent;}*,*::before,*::after{box-sizing:border-box;}</style>`
+      // Late canvas rule (2026-10-21): cards such as the action console ship
+      // `html, body { background: transparent !important; }`. The head reset loses
+      // that cascade fight, so the iframe canvas goes transparent and some
+      // webviews paint the browser white behind it. This rule is appended after
+      // the card's own styles and forces the canvas only (`html`), leaving body
+      // and card surfaces (`.tactics-panel`, status cards) untouched.
+      const canvas = `<style>html{background:var(--dt-host-background)!important;}</style>`
       // 视口脚本进 head（先于 body 样式首帧解析，避免塌陷闪动），reporter 留 body 末
       const viewport = `<script>${frontendViewportScript()}</script>`
       const theme = `<script>${frontendThemeScript()}</script>`
@@ -262,18 +269,18 @@
           documentText = documentText.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${csp}${reset}${viewport}${theme}${helper}</head>`)
         }
         if (/<\/body\s*>/i.test(documentText)) {
-          return documentText.replace(/<\/body\s*>/i, `${reporter}</body>`)
+          return documentText.replace(/<\/body\s*>/i, `${canvas}${reporter}</body>`)
         }
         if (/<\/html\s*>/i.test(documentText)) {
-          return documentText.replace(/<\/html\s*>/i, `${reporter}</html>`)
+          return documentText.replace(/<\/html\s*>/i, `${canvas}${reporter}</html>`)
         }
-        return `${documentText}${reporter}`
+        return `${documentText}${canvas}${reporter}`
       }
       const headMatch = /<head(?:\s[^>]*)?>([\s\S]*?)<\/head\s*>/i.exec(source)
       const bodyMatch = /<body(?:\s[^>]*)?>([\s\S]*?)<\/body\s*>/i.exec(source)
       const headContent = headMatch ? headMatch[1] : ''
       const bodyContent = bodyMatch ? bodyMatch[1] : source
-      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${reset}${viewport}${theme}${helper}${headContent}</head><body>${bodyContent}${reporter}</body></html>`
+      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${reset}${viewport}${theme}${helper}${headContent}</head><body>${bodyContent}${canvas}${reporter}</body></html>`
     }
 
     // 宿主→iframe 视口投递（A-4）：iframe 的 --dt-viewport-height 需要"真实可视区
@@ -481,7 +488,10 @@
       frame.style.removeProperty('display')
       if (wrapper) wrapper.style.removeProperty('display')
       if (typeof prefs.height === 'number' && Number.isFinite(prefs.height) && prefs.height > 0) {
-        frame.style.setProperty('height', `${Math.min(Math.max(Math.ceil(prefs.height), 1), 1200)}px`, 'important')
+        // Visible frames keep at least one control row: the action console reports
+        // its panel height, and a 0/1px clamp would clip the whole console while
+        // leaving the frame in the layout.
+        frame.style.setProperty('height', `${Math.min(Math.max(Math.ceil(prefs.height), 36), 1200)}px`, 'important')
       } else {
         frame.style.removeProperty('height')
       }
@@ -585,7 +595,10 @@
           }).then((result) => {
             reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: result.value })
             // 状态已变：重投快照（并据比对广播事件），让前端后续同步读取拿到新值。
-            if (data.op === 'variables.replace' || String(data.op).startsWith('messages.') || data.op === 'slash') {
+            // mvu.replace 同样写变量：不重投的话，同聊天的状态栏 iframe 收不到
+            // 行动台/按钮刚刚写入的新 stat_data。
+            if (data.op === 'variables.replace' || String(data.op).startsWith('messages.')
+              || data.op === 'slash' || data.op === 'mvu.replace') {
               postSnapshot()
             }
           }).catch((cause) => {
@@ -649,7 +662,6 @@
         title: 'Tavern frontend',
         srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current),
         onLoad: () => { postViewport(); postTheme() },
-        style: { height },
+        style: { height, background: initialBackgroundRef.current },
       })
     }
-

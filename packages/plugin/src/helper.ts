@@ -14,8 +14,8 @@
  * (get/set/create/delete), character read, lorebook read, slash commands, regex
  * list/replace, plus a snapshot used for synchronous iframe reads.
  */
-import type { ChatLogIR, ChatMessage } from '../../tavern-format/src/index.js'
-import { RegexPlacement, parseRegexScripts } from '../../tavern-format/src/index.js'
+import type { ChatLogIR, ChatMessage, WorldBookIR } from '../../tavern-format/src/index.js'
+import { RegexPlacement, normalizeEntry, parseCharacterBook, parseRegexScripts } from '../../tavern-format/src/index.js'
 import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { applyRegexScript, applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
 import type { TavernState, TavernStore } from '../../tavern-store/src/index.js'
@@ -85,12 +85,51 @@ export async function handleHelperApi(req: unknown, res: unknown, db: TavernStor
         ? body.name.trim()
         : await defaultLorebookName(db, state, character)
       if (name === undefined) throw new Error('no active lorebook')
-      const book = await db.getWorld(name)
-      if (book === undefined) throw new Error(`lorebook '${name}' not found`)
+      const resolved = await loadLorebook(db, character, chatId, name)
+      if (resolved === undefined) {
+        throw new Error(`lorebook '${name}' not found (no session copy, no worlds/ asset and no matching character card book)`)
+      }
       return sendJson(res, 200, {
         ok: true,
-        value: { name, entries: book.entries.map((entry) => ({ world: name, ...entry })) },
+        value: { name, entries: resolved.entries.map((entry) => ({ world: name, ...entry })) },
       })
+    }
+    // Session world copy (2026-10-21): scripts write the chat overlay only.
+    // `worlds/<name>.json` and the card's embedded book stay read-only, so a
+    // runaway script can never corrupt the shared asset. `lorebook.reset`
+    // drops the overlay and falls back to the base asset.
+    case 'lorebook.put':
+      return sendJson(res, 200, {
+        ok: true,
+        value: await putLorebook(db, character, chatId, body),
+      })
+    case 'lorebook.reset': {
+      const name = requireString(body?.name, 'name')
+      if (chatId === '') throw new Error('chatId is required for lorebook.reset (session scope only)')
+      await serializeSessionWrite(`${character}\u0000${chatId}\u0000${name}`, async () => {
+        await db.deleteChatWorld(character, chatId, name)
+      })
+      return sendJson(res, 200, { ok: true, value: { name, reset: true } })
+    }
+    // 会话脚本树副本（2026-10-21）：GM 面板改写的 Zod 源码按聊天持久化，刷新
+    // 后仍可读；角色卡文件与基础脚本树保持只读。执行语义不变——只有用户手动
+    // 运行卡脚本时才会跑副本内容，服务端 MVU 不执行 Zod。
+    case 'scripts.get': {
+      requireSessionChatId(chatId, 'scripts.get')
+      const scriptTrees = await db.getChatScripts(character, chatId)
+      return sendJson(res, 200, { ok: true, value: { scriptTrees: scriptTrees ?? null } })
+    }
+    case 'scripts.put':
+      return sendJson(res, 200, {
+        ok: true,
+        value: await putChatScripts(db, character, chatId, body),
+      })
+    case 'scripts.reset': {
+      requireSessionChatId(chatId, 'scripts.reset')
+      await serializeSessionWrite(`scripts:${character}\u0000${chatId}`, async () => {
+        await db.deleteChatScripts(character, chatId)
+      })
+      return sendJson(res, 200, { ok: true, value: { reset: true } })
     }
     case 'regex.get':
       return sendJson(res, 200, { ok: true, value: { scripts: state.regexScripts } })
@@ -143,6 +182,7 @@ async function buildSnapshot(db: TavernStore, state: TavernState, character: str
         character: cloneJson(plainObject(file?.card.data.extensions?.['variables']) ?? {}),
       },
       characterData: file?.card.data ?? null,
+      scriptTrees: null,
       avatar: avatarPath(character),
     }
   }
@@ -150,6 +190,7 @@ async function buildSnapshot(db: TavernStore, state: TavernState, character: str
   if (snapshot === undefined) throw new Error(`chat '${chatId}' not found`)
   const chat = snapshot.chat
   const chatVariables = await readChatScope(db, chat, chatId)
+  const scriptTrees = await db.getChatScripts(character, chatId)
   const lastIndex = chat.messages.length - 1
   const persona = state.activePersona ? await db.getPersona(state.activePersona) : undefined
   return {
@@ -168,6 +209,7 @@ async function buildSnapshot(db: TavernStore, state: TavernState, character: str
       character: cloneJson(plainObject(file?.card.data.extensions?.['variables']) ?? {}),
     },
     characterData: file?.card.data ?? null,
+    scriptTrees: scriptTrees ?? null,
     avatar: avatarPath(character),
   }
 }
@@ -310,12 +352,154 @@ async function isAgentTavernBound(db: TavernStore, chatId: string): Promise<bool
   return Object.values(state.sessionBindings).some((binding) => binding.architecture === 'agent-tavern' && binding.chatId === chatId)
 }
 
-/** 角色卡绑定的世界书（extensions.world）优先，其次全局激活书。 */
+/** 角色卡绑定的世界书（extensions.world）优先，其次全局激活书，最后卡内嵌书。 */
 async function defaultLorebookName(db: TavernStore, state: TavernState, character: string): Promise<string | undefined> {
   const file = await db.getCharacter(character)
   const world = file?.card.data.extensions?.['world']
   const linked = typeof world === 'string' && world.trim() !== '' ? world.trim() : undefined
-  return linked ?? state.activeWorlds[0]
+  if (linked !== undefined) return linked
+  const active = state.activeWorlds[0]
+  if (active !== undefined) return active
+  const embedded = file?.card.data.characterBook?.name
+  return typeof embedded === 'string' && embedded.trim() !== '' ? embedded.trim() : undefined
+}
+
+/* ------------------------------ world books ------------------------------ */
+
+/**
+ * Resolves a world book by precedence: session copy → imported asset → card
+ * embedded book (only when `name` matches the linked/embedded name).
+ */
+async function loadLorebook(
+  db: TavernStore,
+  character: string,
+  chatId: string,
+  name: string,
+): Promise<WorldBookIR | undefined> {
+  if (chatId !== '') {
+    const copy = await db.getChatWorld(character, chatId, name)
+    if (copy !== undefined) return copy
+  }
+  const world = await db.getWorld(name)
+  if (world !== undefined) return world
+  const card = (await db.getCharacter(character))?.card
+  const book = card?.data.characterBook
+  if (book === undefined) return undefined
+  const linked = card.data.extensions['world']
+  const linkedName = typeof linked === 'string' && linked.trim() !== '' ? linked.trim() : undefined
+  const embeddedName = typeof book.name === 'string' && book.name.trim() !== '' ? book.name.trim() : undefined
+  if (name !== linkedName && name !== embeddedName) return undefined
+  return parseCharacterBook(book)
+}
+
+/**
+ * Read-modify-write serialization per session resource: scripts and the GM
+ * console can fire concurrent world-book or script-tree writes; without a chain
+ * the last writer would silently drop the other's changes.
+ */
+const sessionWriteChains = new Map<string, Promise<void>>()
+
+async function serializeSessionWrite<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = sessionWriteChains.get(key) ?? Promise.resolve()
+  const run = previous.catch(() => {}).then(operation)
+  const settled = run.then(() => {}, () => {})
+  sessionWriteChains.set(key, settled)
+  try {
+    return await run
+  } finally {
+    if (sessionWriteChains.get(key) === settled) sessionWriteChains.delete(key)
+  }
+}
+
+async function putLorebook(
+  db: TavernStore,
+  character: string,
+  chatId: string,
+  body: JsonObject,
+): Promise<{ name: string; entries: JsonObject[] }> {
+  const name = requireString(body?.name, 'name').trim()
+  if (chatId === '') throw new Error('chatId is required for lorebook.put (scripts write the session copy)')
+  const raw = requireLorebookEntries(body?.entries)
+  return serializeSessionWrite(`${character}\u0000${chatId}\u0000${name}`, async () => {
+    const base = await loadLorebook(db, character, chatId, name)
+    if (base === undefined) {
+      throw new Error(`lorebook '${name}' not found: the session copy has nothing to extend (import the world or link it to the card first)`)
+    }
+    const entries = normalizeLorebookEntries(raw)
+    await db.putChatWorld(character, chatId, {
+      name,
+      entries,
+      ...(base.extra === undefined ? {} : { extra: cloneJson(base.extra) }),
+    })
+    return { name, entries: entries.map((entry) => ({ world: name, ...entry })) }
+  })
+}
+
+/**
+ * `entries` must be an array of objects; `world` is a read-side annotation from
+ * `lorebook.get` and is stripped before normalization. Missing/duplicate uids
+ * get a fresh number because the lore engine addresses entries by uid.
+ */
+function requireLorebookEntries(value: unknown): JsonObject[] {
+  if (!Array.isArray(value)) throw new Error('entries must be an array of world book entries')
+  return value.map((entry, index) => {
+    if (!isPlainObject(entry)) throw new Error(`entries[${index}] must be an object (got ${entry === null ? 'null' : typeof entry})`)
+    const { world: _world, ...rest } = entry
+    return cloneJson(rest)
+  })
+}
+
+function normalizeLorebookEntries(raw: JsonObject[]) {
+  const seen = new Set<number>()
+  let nextUid = raw.reduce((max, entry) => {
+    const uid = entry['uid']
+    return typeof uid === 'number' && Number.isInteger(uid) && uid > max ? uid : max
+  }, -1) + 1
+  return raw.map((entry) => {
+    const normalized = normalizeEntry(entry)
+    if (!Number.isInteger(normalized.uid) || normalized.uid < 0 || seen.has(normalized.uid)) {
+      while (seen.has(nextUid)) nextUid += 1
+      normalized.uid = nextUid
+      nextUid += 1
+    }
+    seen.add(normalized.uid)
+    return normalized
+  })
+}
+
+/* ---------------------------- script trees ---------------------------- */
+
+function requireSessionChatId(chatId: string, op: string): void {
+  if (chatId === '') throw new Error(`chatId is required for ${op} (session scope only)`)
+}
+
+async function putChatScripts(
+  db: TavernStore,
+  character: string,
+  chatId: string,
+  body: JsonObject,
+): Promise<{ scriptTrees: JsonObject[] }> {
+  requireSessionChatId(chatId, 'scripts.put')
+  const scriptTrees = requireScriptTrees(body?.scriptTrees)
+  return serializeSessionWrite(`scripts:${character}\u0000${chatId}`, async () => {
+    await db.putChatScripts(character, chatId, scriptTrees)
+    return { scriptTrees }
+  })
+}
+
+/**
+ * `scriptTrees` is the raw JSR node array (script + folder nodes, unknown fields
+ * preserved). Only the container/entry shape is validated here; the script
+ * semantics stay the card's business.
+ */
+function requireScriptTrees(value: unknown): JsonObject[] {
+  if (!Array.isArray(value)) throw new Error('scriptTrees must be an array of card script nodes')
+  return value.map((node, index) => {
+    if (!isPlainObject(node)) {
+      throw new Error(`scriptTrees[${index}] must be an object (got ${node === null ? 'null' : typeof node})`)
+    }
+    return cloneJson(node)
+  })
 }
 
 /* ------------------------------- messages ------------------------------- */
