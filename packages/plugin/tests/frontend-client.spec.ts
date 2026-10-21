@@ -51,4 +51,19 @@ describe('client frontend sidebar (main.js source check)', () => {
       expect(en).toContain(`'${key}'`)
     }
   })
+
+  it('fills the iframe canvas with the DSH native background when the frontend sets none', () => {
+    // Without a card background the browser default white canvas shows through
+    // (a white ring in dark mode). The host resolves --dsw-alias-bg-base to a
+    // concrete color and injects it as --dt-host-background; theme flips update
+    // it via postMessage without rebuilding the srcdoc. Card background rules
+    // still win because the reset comes first in the cascade.
+    expect(source).toContain("const FRONTEND_THEME_MESSAGE = 'dsh-soulmojito:theme'")
+    expect(source).toContain("const FRONTEND_BACKGROUND_CSS_VAR = '--dt-host-background'")
+    expect(source).toContain('html{background:var(--dt-host-background)}')
+    expect(source).toContain('function frontendHostBackgroundColor()')
+    expect(source).toContain("getPropertyValue('--dsw-alias-bg-base')")
+    expect(source).toContain("data-ds-dark-theme")
+    expect(source).toContain('function useThemeBridge(frameRef)')
+  })
 })

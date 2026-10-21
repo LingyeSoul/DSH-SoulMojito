@@ -658,6 +658,14 @@ function checkFrontendRuntimeText(text) {
   for (const marker of [
     'function extractFrontendDocuments',
     'function buildFrontendDocument',
+    // Frontend default canvas (2026-10-21): the host resolves the DSH native
+    // background and injects it as --dt-host-background; theme flips update it
+    // via postMessage (no white ring in dark mode).
+    "'--dt-host-background'",
+    'html{background:var(--dt-host-background)}',
+    'function frontendHostBackgroundColor()',
+    'dsh-soulmojito:theme',
+    'function useThemeBridge(frameRef)',
     'dsh-soulmojito:frontend-height',
     "sandbox: 'allow-scripts allow-modals'",
     "connect-src 'none'",
@@ -2590,6 +2598,11 @@ const gates = [
       const good = [
         'function extractFrontendDocuments() {}',
         'function buildFrontendDocument() {}',
+        "'--dt-host-background'",
+        'html{background:var(--dt-host-background)}',
+        'function frontendHostBackgroundColor() {}',
+        'dsh-soulmojito:theme',
+        'function useThemeBridge(frameRef) {}',
         'dsh-soulmojito:frontend-height',
         "sandbox: 'allow-scripts allow-modals'",
         "connect-src 'none'",
@@ -2699,6 +2712,10 @@ const gates = [
         'sidebarCollapsed: { tavern: false, workbench: true }',
       ].join('\n')
       const bad = good.replace("sandbox: 'allow-scripts allow-modals'", "sandbox: 'allow-forms'")
+      // Frontend default canvas (2026-10-21): a missing host background
+      // injection or theme channel must turn red.
+      const badFrameCanvas = good.replace('html{background:var(--dt-host-background)}', 'html{background:#fff}')
+      const badFrameTheme = good.replace('dsh-soulmojito:theme', 'dsh-soulmojito:palette')
       const badBridge = good.replace('dsh-soulmojito:mod-request', 'dsh-soulmojito:mod-bridge-removed')
       const badEvent = good.replace('dsh-soulmojito:mod-event', 'dsh-soulmojito:mod-gone')
       // 负样本必须真移除 marker：替换文本不得以原 marker 为前缀/子串（含 includes
@@ -2784,6 +2801,8 @@ const gates = [
       const badSidebarWorkbenchDefault = good.replace('sidebarCollapsed: { tavern: false, workbench: true }', 'sidebarCollapsed: { tavern: false, workbench: false }')
       return checkFrontendRuntimeText(good).length === 0
         && checkFrontendRuntimeText(bad).length > 0
+        && checkFrontendRuntimeText(badFrameCanvas).length > 0
+        && checkFrontendRuntimeText(badFrameTheme).length > 0
         && checkFrontendRuntimeText(badBridge).length > 0
         && checkFrontendRuntimeText(badEvent).length > 0
         && checkFrontendRuntimeText(badViewportVar).length > 0

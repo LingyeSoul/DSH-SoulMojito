@@ -56,6 +56,7 @@ window.__ModuleLoader__.load({
 
     const API = '/api/dsh-soulmojito'
     const FRONTEND_HEIGHT_MESSAGE = 'dsh-soulmojito:frontend-height'
+    const FRONTEND_THEME_MESSAGE = 'dsh-soulmojito:theme'
     const FRONTEND_RESOURCE_SOURCES = [
       'https://cdn.jsdelivr.net',
       'https://testingcf.jsdelivr.net',

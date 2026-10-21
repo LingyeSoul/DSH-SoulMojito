@@ -230,6 +230,7 @@ window.__ModuleLoader__.load({
 
     const API = '/api/dsh-soulmojito'
     const FRONTEND_HEIGHT_MESSAGE = 'dsh-soulmojito:frontend-height'
+    const FRONTEND_THEME_MESSAGE = 'dsh-soulmojito:theme'
     const FRONTEND_RESOURCE_SOURCES = [
       'https://cdn.jsdelivr.net',
       'https://testingcf.jsdelivr.net',
@@ -298,6 +299,7 @@ window.__ModuleLoader__.load({
     // 服务端 mod HTML 出口（src/mods/http.ts renderModHtmlDocument）同构同款。
     const VIEWPORT_MESSAGE = 'dsh-soulmojito:viewport'
     const VIEWPORT_CSS_VAR = '--dt-viewport-height'
+    const FRONTEND_BACKGROUND_CSS_VAR = '--dt-host-background'
     const VIEWPORT_UNIT_PATTERN = /(?<![-\w])100(?:d|s|l)?vh(?![\w-])/gi
     const VIEWPORT_VAR_REFERENCE = `var(${VIEWPORT_CSS_VAR}, 100vh)`
 
@@ -421,7 +423,96 @@ window.__ModuleLoader__.load({
 })();`
     }
 
-    function buildFrontendDocument(value, token, messageId, allowExternalResources) {
+    // Default canvas background (2026-10-21 user request): when a card sets no
+    // background, the iframe canvas must be filled with the DSH native background
+    // color instead of the browser's default white (a white ring in dark mode).
+    // Transparent srcdoc/sandbox iframes are not reliable across host webviews
+    // (the same document can still paint white), so this does not rely on
+    // transparency: the host resolves --dsw-alias-bg-base to a concrete color,
+    // injects it with the srcdoc, and updates --dt-host-background on html via
+    // postMessage on theme changes. The card's own html/body background still
+    // wins by cascade because the reset rule comes first.
+    function normalizeFrontendBackground(value) {
+      const color = String(value || '').trim()
+      // Accept only browser-serialized color forms; reject characters that could
+      // escape the declaration.
+      if (!/^[\w#().,%\s/+-]+$/.test(color)) return ''
+      if (/^(?:rgba?|hsla?|oklch|oklab|lab|lch|color)\([^)]*\)$/i.test(color)) return color
+      if (/^#[0-9a-f]{3,8}$/i.test(color)) return color
+      if (/^[a-z]+$/i.test(color)) return color
+      return ''
+    }
+
+    function isUsableFrontendBackground(color) {
+      return color !== '' && color !== 'transparent' && !/^rgba?\(0,\s*0,\s*0,\s*0\)$/i.test(color)
+    }
+
+    function frontendHostBackgroundColor() {
+      try {
+        const body = document.body
+        if (body) {
+          const style = getComputedStyle(body)
+          // Custom properties inherit and resolve var() substitution (Chrome
+          // returns the final color for --alias:var(--x)); read the DSH theme
+          // alias first, then body's computed background. No probe node, so a
+          // render-time call cannot trigger host DOM observers.
+          const alias = normalizeFrontendBackground(style.getPropertyValue('--dsw-alias-bg-base'))
+          if (isUsableFrontendBackground(alias)) return alias
+          const background = normalizeFrontendBackground(style.backgroundColor)
+          if (isUsableFrontendBackground(background)) return background
+        }
+      } catch {}
+      const dark = document.body?.hasAttribute?.('data-ds-dark-theme') === true
+        || (typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches)
+      return dark ? '#151517' : '#ffffff'
+    }
+
+    function frontendThemeScript() {
+      return `(function () {
+  var root = document.documentElement;
+  var apply = function (color) {
+    if (typeof color !== 'string' || color === '') return;
+    try { root.style.setProperty(${JSON.stringify(FRONTEND_BACKGROUND_CSS_VAR)}, color); } catch (_) {}
+  };
+  addEventListener('message', function (event) {
+    var data = event.data;
+    if (!data || data.type !== ${JSON.stringify(FRONTEND_THEME_MESSAGE)}) return;
+    apply(data.background);
+  });
+})();`
+    }
+
+    // Host-to-iframe theme color delivery: same direction as the viewport
+    // message, no token (it can only change the sandbox's own canvas). It also
+    // watches the body/html theme attributes and prefers-color-scheme so a
+    // system-following theme updates without rebuilding the srcdoc.
+    function useThemeBridge(frameRef) {
+      const post = useCallback(() => {
+        try {
+          frameRef.current?.contentWindow?.postMessage({
+            type: FRONTEND_THEME_MESSAGE,
+            background: frontendHostBackgroundColor(),
+          }, '*')
+        } catch {}
+      }, [])
+      useEffect(() => {
+        const observer = typeof MutationObserver === 'function' ? new MutationObserver(post) : null
+        if (observer) {
+          const filter = { attributes: true, attributeFilter: ['class', 'data-ds-dark-theme', 'style'] }
+          if (document.body) observer.observe(document.body, filter)
+          observer.observe(document.documentElement, filter)
+        }
+        const media = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null
+        media?.addEventListener?.('change', post)
+        return () => {
+          observer?.disconnect()
+          media?.removeEventListener?.('change', post)
+        }
+      }, [post])
+      return post
+    }
+
+    function buildFrontendDocument(value, token, messageId, allowExternalResources, hostBackground) {
       // window.parent / window.top 在 sandbox（无 same-origin）里是跨域 WindowProxy，
       // 酒馆卡常见的 `window.parent.document` / `window.parent.Mvu` 会直接抛
       // DOMException。注入前统一改指向 shim 暴露的同页 facade；helper 自身与
@@ -435,9 +526,16 @@ window.__ModuleLoader__.load({
         .replace(/\b(?:window\.)?sessionStorage\b/g, 'window.__dshTavernSessionStorage')
       const source = rewriteViewportUnits(compatible)
       const csp = `<meta http-equiv="Content-Security-Policy" content="${escapeFrontendAttribute(frontendContentSecurityPolicy(allowExternalResources))}">`
-      const reset = '<style>html,body{margin:0!important;padding:0;max-width:100%;}*,*::before,*::after{box-sizing:border-box;}</style>'
+      const hostColor = normalizeFrontendBackground(hostBackground) || frontendHostBackgroundColor()
+      // Default canvas: the concrete DSH native background (not transparent).
+      // Transparent iframes are inconsistent across webviews, so paint over the
+      // white explicitly. html uses a variable updated by frontendThemeScript on
+      // theme changes; body stays transparent so the card keeps its own canvas.
+      // The card's html/body background still wins because the reset comes first.
+      const reset = `<style>:root{--dt-host-background:${hostColor};}html{background:var(--dt-host-background)}body{margin:0!important;padding:0;max-width:100%;background:transparent;}*,*::before,*::after{box-sizing:border-box;}</style>`
       // 视口脚本进 head（先于 body 样式首帧解析，避免塌陷闪动），reporter 留 body 末
       const viewport = `<script>${frontendViewportScript()}</script>`
+      const theme = `<script>${frontendThemeScript()}</script>`
       // 酒馆助手兼容层（2026-10-20）：库脚本 + TavernHelper shim 进 head，前端
       // 首帧就能拿到 getVariables/getChatMessages 等同步面；快照由宿主随后投递。
       const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token, messageId)}</script>`
@@ -445,9 +543,9 @@ window.__ModuleLoader__.load({
       if (/<html(?:\s[^>]*)?>/i.test(source)) {
         let documentText = source
         if (/<head(?:\s[^>]*)?>/i.test(documentText)) {
-          documentText = documentText.replace(/<head(?:\s[^>]*)?>/i, (tag) => `${tag}${csp}${reset}${viewport}${helper}`)
+          documentText = documentText.replace(/<head(?:\s[^>]*)?>/i, (tag) => `${tag}${csp}${reset}${viewport}${theme}${helper}`)
         } else {
-          documentText = documentText.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${csp}${reset}${viewport}${helper}</head>`)
+          documentText = documentText.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${csp}${reset}${viewport}${theme}${helper}</head>`)
         }
         if (/<\/body\s*>/i.test(documentText)) {
           return documentText.replace(/<\/body\s*>/i, `${reporter}</body>`)
@@ -461,7 +559,7 @@ window.__ModuleLoader__.load({
       const bodyMatch = /<body(?:\s[^>]*)?>([\s\S]*?)<\/body\s*>/i.exec(source)
       const headContent = headMatch ? headMatch[1] : ''
       const bodyContent = bodyMatch ? bodyMatch[1] : source
-      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${reset}${viewport}${helper}${headContent}</head><body>${bodyContent}${reporter}</body></html>`
+      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${reset}${viewport}${theme}${helper}${headContent}</head><body>${bodyContent}${reporter}</body></html>`
     }
 
     // 宿主→iframe 视口投递（A-4）：iframe 的 --dt-viewport-height 需要"真实可视区
@@ -806,9 +904,15 @@ window.__ModuleLoader__.load({
 
     function FrontendFrame({ html, token, binding, refreshKey, messageId, hostSessionId }) {
       const frameRef = useRef(null)
+      // Initial canvas color: resolve the DSH native background once on first
+      // render; later theme flips go through postMessage, so the srcdoc is not
+      // rebuilt (a rebuild would lose card state).
+      const initialBackgroundRef = useRef(null)
+      if (initialBackgroundRef.current === null) initialBackgroundRef.current = frontendHostBackgroundColor()
       const allowExternalResources = useFrontendAllowExternalResources()
       const [height, setHeight] = useState(120)
       const postViewport = useViewportBridge(frameRef)
+      const postTheme = useThemeBridge(frameRef)
       useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId)
       useEffect(() => {
         const onMessage = (event) => {
@@ -829,8 +933,8 @@ window.__ModuleLoader__.load({
         sandbox: 'allow-scripts allow-modals',
         referrerPolicy: 'no-referrer',
         title: 'Tavern frontend',
-        srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources),
-        onLoad: postViewport,
+        srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current),
+        onLoad: () => { postViewport(); postTheme() },
         style: { height },
       })
     }
