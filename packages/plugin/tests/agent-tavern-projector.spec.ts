@@ -426,7 +426,7 @@ describe('AgentTavern native event projector', () => {
       ],
     }
     const script = (overrides: Partial<RegexScriptIR>): RegexScriptIR => ({
-      id: 's', scriptName: 's', findRegex: 'word', replaceString: '<$&>', trimStrings: [], placement: [2],
+      id: 's', scriptName: 's', findRegex: 'word', replaceString: '<{{match}}>', trimStrings: [], placement: [2],
       disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false, substituteRegex: false,
       minDepth: null, maxDepth: null, ...overrides,
     })

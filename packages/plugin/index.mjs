@@ -8338,6 +8338,24 @@ function compileScriptRegex(script, deps = {}) {
     return null;
   }
 }
+function expandReplacement(template, match, captures, named, trimStrings) {
+  const trim = (value) => {
+    let next = value;
+    for (const token of trimStrings) {
+      if (token !== "") next = next.split(token).join("");
+    }
+    return next;
+  };
+  return template.replace(/{{match}}/gi, "$0").replace(/\$(\d+)|\$<([^>]+)>/g, (_token, digits, group2) => {
+    if (digits !== void 0) {
+      const index = Number(digits);
+      const value2 = index === 0 ? match : captures[index - 1];
+      return value2 === void 0 ? "" : trim(value2);
+    }
+    const value = named?.[group2 ?? ""];
+    return value === void 0 ? "" : trim(value);
+  });
+}
 function applyRegexScript(text, script, placement, deps = {}, depth = {}) {
   if (script.disabled || !hasPlacement(script, placement)) return null;
   if (depth.depth !== void 0 && depth.depth !== null) {
@@ -8347,7 +8365,12 @@ function applyRegexScript(text, script, placement, deps = {}, depth = {}) {
   const regex = compileScriptRegex(script, deps);
   if (regex === null) return null;
   const replacement = script.substituteRegex && deps.expand ? deps.expand(script.replaceString) : script.replaceString;
-  let result = text.replace(regex, replacement);
+  let result = text.replace(regex, (match, ...rest) => {
+    const tail = rest[rest.length - 1];
+    const named = typeof tail === "object" && tail !== null && !Array.isArray(tail) ? tail : void 0;
+    const captures = rest.slice(0, Math.max(0, rest.length - (named === void 0 ? 2 : 3)));
+    return expandReplacement(replacement, match, captures, named, script.trimStrings);
+  });
   for (const trim of script.trimStrings) {
     if (trim !== "") result = result.split(trim).join("");
   }
@@ -13179,7 +13202,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.8".trim() : "";
-  const commit = true ? normalizeCommit("05f2f74") : void 0;
+  const commit = true ? normalizeCommit("2599776") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

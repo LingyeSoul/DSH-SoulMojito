@@ -51,9 +51,10 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     }
   })
 
-  it('keeps the sandbox and proxies through the host binding', () => {    expect(source).toContain("sandbox: 'allow-scripts'")
+  it('keeps the sandbox and proxies through the host binding', () => {
+    expect(source).toContain("sandbox: 'allow-scripts allow-modals'")
     expect(source).toContain("connect-src 'none'")
-    expect(source).toContain('function useHelperBridge(frameRef, token, binding, refreshKey)')
+    expect(source).toContain('function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId)')
     expect(source).toContain("if (event.source !== frameRef.current?.contentWindow) return")
     expect(source).toContain("data.token !== token")
     expect(source).toContain('this frontend is not bound to a Tavern chat')
@@ -62,6 +63,35 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     expect(source).toContain('composer.send')
     // 绑定只能来自宿主侧 sessionBindings，iframe 报什么都不能改身份
     expect(source).toContain("op: data.op,\n              character: current.character,\n              chatId: current.chatId")
+  })
+
+  it('recovers the first-frame snapshot when the mount push is lost', () => {
+    // iframe shim 在 srcdoc 解析后主动拉一次；宿主在 iframe load 后再推一次。
+    // 两条路径互补：外链 CDN 推迟 shim 执行时，挂载推送会先于监听器而丢失。
+    expect(source).toContain("call('snapshot')")
+    expect(source).toContain('const onFrameLoad = () => postSnapshot()')
+    expect(source).toContain("frame?.addEventListener('load', onFrameLoad)")
+    expect(source).toContain('initial snapshot failed')
+  })
+
+  it('forwards frameElement style writes so cards can collapse themselves', () => {
+    // ST 同源里卡用 window.frameElement.style 隐藏/撑高自己的 iframe；沙箱里
+    // frameElement 是 null，卡隐藏时宿主会留一块 120px 白块。shim 转 frame.prefs。
+    expect(source).toContain("Object.defineProperty(window, 'frameElement'")
+    expect(source).toContain("call('frame.prefs'")
+    expect(source).toContain('function applyFramePrefs(frame, prefs)')
+    expect(source).toContain("if (data.op === 'frame.prefs')")
+  })
+
+  it('routes AgentTavern composer sends through the host conversation service', () => {
+    // 原生 composer 是 Lexical contenteditable，不是 textarea；自动发送走宿主
+    // conversation.send（与插件插入消息同一条 admission），DOM 只做草稿展示。
+    expect(source).toContain('function hostConversation(hostSessionId)')
+    expect(source).toContain('sessions?.scope?.(hostSessionId)')
+    expect(source).toContain("scoped?.get?.('conversation')")
+    expect(source).toContain('await conversation.send(text)')
+    expect(source).toContain('[data-composer-input][contenteditable="true"]')
+    expect(source).toContain("const composerChainRef = useRef(Promise.resolve())")
   })
 
   it('keeps the generated iframe shim syntactically valid', () => {

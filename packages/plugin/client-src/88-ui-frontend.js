@@ -137,6 +137,7 @@
             html,
             token: `tavern-frontend-${sessionId}-${message.index}-${index}`,
             messageId: message.index,
+            hostSessionId: sessionId,
             binding: { character: binding.character, chatId: binding.chatId },
             refreshKey: `${snapshot?.revision ?? ''}:${message.index}`,
           }))))

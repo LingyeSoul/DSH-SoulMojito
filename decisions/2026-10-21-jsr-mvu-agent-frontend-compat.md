@@ -115,3 +115,121 @@
   楼层变量 + snapshot。
 - `packages/plugin/tests/helper-client.spec.ts`：Mvu/toastr/parent facade/composer
   入口与文档同步。
+
+## 补记：创建表单「正在连接状态机核心…」卡死（2026-10-21 二次）
+
+**症状**：导入后创建表单能渲染，但一直停在 `正在连接状态机核心...`，全部按钮
+无响应；状态栏/行动台同样整块失效。
+
+**根因**：`applyRegexScript` 用 `text.replace(regex, replaceString)` 做字符串
+替换。卡的四份美化 HTML（创建表单 71KB、行动台 35KB、手机状态栏 94KB、PC 状态
+栏 154KB）里都含 JS 字面量 `'$__META_EXTENSIBLE__$'`，尾部 **`$'`** 在替换串
+里被解释为「匹配点之后的整段原文」，把消息尾巴插进 `<script>` 的单引号字符串；
+尾巴含换行时整段脚本 `SyntaxError`，`DOMContentLoaded` 回调一行都没执行——
+转圈文案是静态 HTML，按钮监听器全没绑上。
+
+**决议**：对齐 ST `engine.js` 的 `runRegexScript` 语义——替换走函数回调
+（`$&`、`$'`、`` $` ``、`$$` 一律字面量），只展开 `{{match}}`、`$1..$n`、
+`$<name>`，捕获组先过 `trimStrings`（保留既有的整段结果 trim）。投影器测试
+里用 `$&` 包匹配的用例改为 ST 支持的 `{{match}}`。
+
+**验证**：卡内四份 HTML 经 `applyRegexScript` 后逐个 `<script>` 过
+`vm.Script` 语法检查全绿（修前 0/6/9 均报错）；`vitest run` 123 个文件、
+1909 测试通过。
+
+## 补记：前端自动发送改走宿主 conversation（2026-10-21 三次）
+
+**症状**：创建表单能填，但点「签订契约」连续弹两条 toast：
+`自动填入输入框失败: no visible host composer textarea found`、
+`自动发送失败: no visible host composer textarea found`。
+
+**根因**：DSH 0.2.1 的原生输入框是 Lexical contenteditable
+（`[data-composer-input][contenteditable="true"]`），不是 `textarea`；旧实现只
+扫 `document.querySelectorAll('textarea')`，并且把插件自己的 ST composer
+（`[data-dsh-soulmojito-surface="composer"]`）主动排除了，两条路都走不通。
+
+**决议**（用户 2026-10-21：「像已实现的插件插入消息来处理」「游戏桥的自动续弈
+就能由插件直接发送消息」）：
+
+- `composer.fill` / `composer.send` 按到达顺序串行化（链放在 hook ref 上，
+  轮询重渲染不丢顺序）；
+- AgentTavern 走**直投模式**：`composer.fill` 不写原生编辑器（返回
+  `deferred`），`composer.send` 直接取 `ctx.sessions.scope(sessionId)`
+  `.get('conversation')` 调 `send(text)`——与原生 composer 回车、游戏桥
+  followup 同一条宿主 admission。**输入框完全不出现草稿**；发送后只在输入框
+  内容仍是本次文本时清一次，兜住旧失败尝试/作用域晚 materialize 的残留；
+- DOM 路径只作降级面（作用域未 materialize / 旧宿主）：优先插件 ST textarea，
+  其次原生 textarea，最后 Lexical contenteditable（`execCommand('insertText')`
+  触发 beforeinput/input，让 Lexical 编辑模型同步）；提交后显式清一次草稿，
+  因为合成 Enter/click 可能绕过原生 draft 清理；
+- iframe sandbox 增加 `allow-modals`：卡用 `prompt`/`confirm` 做方案命名与
+  删除确认，没有该关键字时 Chromium 直接忽略并返回 null，看起来像按钮坏了。
+
+**验证**：`helper-client.spec.ts` 新增 host-conversation 路由与 Lexical 输入面
+的 source-check；`frontend-surface`/`frontend-runtime` gate 的 sandbox 与
+useHelperBridge marker 同步；全量测试与 18 项 gate 通过。
+
+**边界**：`conversation.send` 需要会话作用域已 materialize（活跃会话成立）；
+取不到作用域时自动回落到 DOM 路径。发送内容是**真实用户 turn**（source
+`user`），与游戏桥的 plugin notice 不同——创角表单属于用户提交，投影器需要
+按 USER_INPUT 语义落库。
+
+## 补记：首帧快照竞态导致状态栏「未检测到主角创建」（2026-10-21 四次）
+
+**症状**：创角已完成，聊天文件的 `chat_metadata.variables.stat_data` 与
+`/helper` 快照都正确（`系统状态.主角创建完毕: true`），右侧「卡前端」状态栏仍
+显示卡内的《未检测到主角创建 / 请检查变量更新是否正常。》，且不会自己恢复。
+
+**根因**：iframe shim 装好 `message` 监听器后并不会主动取状态，快照完全依赖宿主
+`useHelperBridge` 挂载时的一次性 `postSnapshot`。srcdoc 的 head 先解析
+`helperLibraryTags()` 的三个 jsDelivr 外链脚本，shim 的执行被推迟；宿主的挂载
+推送经常早于 shim 的监听器，消息落在无监听阶段被丢弃。卡内 `init()` 在
+`DOMContentLoaded` 用本地 `getChatMessages()` 读空的 `state.messages`，回退
+`Mvu.getMvuData()` 仍为空，于是渲染警告分支；此后没有再推送或拉取，空态固定。
+
+**决议**：
+
+- iframe shim 在监听器就绪后主动 `call('snapshot')` 拉一次，`applySnapshot`
+  照旧广播 `VARIABLE_UPDATE_ENDED`；
+- 宿主 `useHelperBridge` 在 iframe `load` 事件后补推一次快照（cleanup 反注册），
+  与挂载推送同源；
+- 两条路径互补：挂载推送若早于 shim 监听器（push 丢失），shim 的拉取必然到达
+  已就绪的宿主监听器；拉取若早于宿主监听器（pull 丢失），挂载推送必然晚于
+  shim 监听器。两个丢失条件在同一时序里不可能同时成立。
+
+**验证**：用真实聊天（`2026-10-21@08h 41m 46s 299ms.jsonl`）的 display 文档与
+`/helper` 快照在 headless Chromium 里搭最小宿主：修前面板渲染警告（innerText
+121 字符、`title=WARNING`）；修后 `warning=false`、928 字符角色面板。
+`helper-client.spec.ts` 增加两条通道的 source-check；`tsc -b`、全量
+`vitest run`（123 文件 1911 通过）与 18 项 gate 全绿。
+
+## 补记：行动台白块与 `frameElement` 沙箱兜底（2026-10-21 五次）
+
+**症状**：状态栏恢复后，右栏「美化前端」顶部仍有一块 120px 左右的纯白空白；
+下面才是状态栏。空白对应正则 6「行动方式控制台」（35KB 文档）。
+
+**根因**：该文档在 `进程.阶段 = 幕间休息` 且无 H 事件时 `getActiveConfig()`
+返回 null，按卡设计应通过 `window.frameElement.style` 把自己 `display:none`
+并清掉高度。但 sandbox 无 same-origin，`window.frameElement` 恒为 `null`，
+`toggleHostCollapse()` 与 `updateHostHeight()` 全部 no-op：卡以为自己隐藏了，
+宿主 iframe 仍是 `FrontendFrame` 的默认 120px，外框 `bg-base` 透出白底。
+（快照丢失时 `render()` 不执行，连 `toggleHostCollapse(false)` 都不会调用，
+所以这是首个快照 bug 修完后暴露的第二层。）
+
+**决议**：
+
+- shim 内 `Object.defineProperty(window, 'frameElement')` 提供最小元素面
+  （`style.setProperty/removeProperty`），把 `display`/`height` 写入用 0ms
+  合并后发 `frame.prefs`；
+- 宿主 `applyFramePrefs`：`hidden` → iframe 与其独子外框一起 `display:none`；
+  显示时移除；`height` 以 `!important` 写到 iframe 上（卡要求 36~47px），
+  不被 `FrontendFrame` 的默认高度状态与 80px 下限覆盖；
+- 只改真实元素样式，不改 React 状态；卡重复调用（`[100,300,800,1500]`
+  定时器 + ResizeObserver）天然补发，不存在一次性丢失问题。
+
+**验证**：同一最小宿主跑两份快照——`幕间休息`：iframe `display:none`（白块
+消失）；`战斗回合`：`display:''`、`height:47px`、面板文本
+`主动 / 牵制 / 推进 / 危机 / 必杀` 五键齐全。`helper-client.spec.ts` 增加
+frameElement source-check；`tsc -b`、全量 vitest 与 18 项 gate 全绿。
+
+

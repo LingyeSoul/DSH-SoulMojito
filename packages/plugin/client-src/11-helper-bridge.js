@@ -97,6 +97,52 @@
   try { Object.defineProperty(window, 'localStorage', { value: window.__dshTavernStorage, configurable: true }); } catch (_) {}
   try { Object.defineProperty(window, 'sessionStorage', { value: window.__dshTavernSessionStorage, configurable: true }); } catch (_) {}
 
+  // window.frameElement 沙箱兜底（2026-10-21）：酒馆卡的自适应高度/折叠走
+  // 「window.frameElement.style」（ST 同源可直接改 iframe）；sandbox 里该属性是
+  // null，卡把自己隐藏时宿主 iframe 会留一块 120px 空白（白底）。这里给一个
+  // 最小 shim：把 display/height 的写入转成「frame.prefs」，由宿主改真实 iframe。
+  var framePrefs = { hidden: false, height: null };
+  var framePrefsQueued = false;
+  function flushFramePrefs() {
+    framePrefsQueued = false;
+    call('frame.prefs', framePrefs).catch(function (error) {
+      console.error('[TavernHelper] frame prefs failed', error);
+    });
+  }
+  function scheduleFramePrefs() {
+    if (framePrefsQueued) return;
+    framePrefsQueued = true;
+    // 卡会连续 setProperty(display/height/margin/padding)；合并成一次 RPC。
+    framePrefsTimer = setTimeout(flushFramePrefs, 0);
+  }
+  var frameElementShim = {
+    id: '',
+    style: {
+      setProperty: function (name, value) {
+        var property = String(name);
+        if (property === 'display') framePrefs.hidden = String(value) === 'none';
+        else if (property === 'height') {
+          var pixels = parseFloat(String(value));
+          framePrefs.height = isFinite(pixels) ? pixels : null;
+        }
+        scheduleFramePrefs();
+      },
+      removeProperty: function (name) {
+        var property = String(name);
+        if (property === 'display') framePrefs.hidden = false;
+        else if (property === 'height') framePrefs.height = null;
+        scheduleFramePrefs();
+      },
+      getPropertyValue: function () { return ''; }
+    }
+  };
+  try {
+    Object.defineProperty(window, 'frameElement', {
+      configurable: true,
+      get: function () { return frameElementShim; }
+    });
+  } catch (_) {}
+
   function clone(value) {
     return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
   }
@@ -259,6 +305,16 @@
     }
     if (data.type === ${JSON.stringify(HELPER_SNAPSHOT_MESSAGE)}) applySnapshot(data.snapshot || {});
     if (data.type === ${JSON.stringify(HELPER_EVENT_MESSAGE)}) emitLocally(data.event, Array.isArray(data.args) ? data.args : []);
+  });
+
+  // 快照主动拉取（2026-10-21）：宿主 hook 只在挂载时推一次快照；srcdoc 的外链库
+  // 会把本脚本推迟到推送之后才执行，那条消息就丢了，状态栏永远停在「未检测到
+  // 主角创建」。监听器就绪后拉一次；与宿主挂载推送互补——两者时机交叉时至少
+  // 有一条路径能送达，不依赖 host 的挂载顺序。
+  call('snapshot').then(function (snapshot) {
+    if (snapshot && typeof snapshot === 'object') applySnapshot(snapshot);
+  }).catch(function (error) {
+    console.error('[TavernHelper] initial snapshot failed', error);
   });
 
   window.getVariables = function (option) { return clone(variablesFor(option)) || {}; };

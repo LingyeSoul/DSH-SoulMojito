@@ -659,7 +659,7 @@ function checkFrontendRuntimeText(text) {
     'function extractFrontendDocuments',
     'function buildFrontendDocument',
     'dsh-soulmojito:frontend-height',
-    "sandbox: 'allow-scripts'",
+    "sandbox: 'allow-scripts allow-modals'",
     "connect-src 'none'",
     'event.source !== frameRef.current?.contentWindow',
     'message.streaming',
@@ -880,7 +880,7 @@ function checkFrontendSurfaceText(text) {
     'window.getChatMessages = function',
     'window.setChatMessages = function',
     'window.eventOn = function',
-    'function useHelperBridge(frameRef, token, binding, refreshKey)',
+    'function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId)',
     'this frontend is not bound to a Tavern chat',
     'const HELPER_TAVERN_EVENTS = {',
     'window.triggerSlash = function',
@@ -2591,7 +2591,7 @@ const gates = [
         'function extractFrontendDocuments() {}',
         'function buildFrontendDocument() {}',
         'dsh-soulmojito:frontend-height',
-        "sandbox: 'allow-scripts'",
+        "sandbox: 'allow-scripts allow-modals'",
         "connect-src 'none'",
         'event.source !== frameRef.current?.contentWindow',
         'message.streaming',
@@ -2698,7 +2698,7 @@ const gates = [
         '.dt-sidebar-scroll{display:flex;flex-direction:column;min-height:0;max-height:min(320px,32vh);overflow-y:auto;overflow-x:hidden}',
         'sidebarCollapsed: { tavern: false, workbench: true }',
       ].join('\n')
-      const bad = good.replace("sandbox: 'allow-scripts'", "sandbox: 'allow-forms'")
+      const bad = good.replace("sandbox: 'allow-scripts allow-modals'", "sandbox: 'allow-forms'")
       const badBridge = good.replace('dsh-soulmojito:mod-request', 'dsh-soulmojito:mod-bridge-removed')
       const badEvent = good.replace('dsh-soulmojito:mod-event', 'dsh-soulmojito:mod-gone')
       // 负样本必须真移除 marker：替换文本不得以原 marker 为前缀/子串（含 includes
@@ -2929,7 +2929,7 @@ const gates = [
         'window.getChatMessages = function',
         'window.setChatMessages = function',
         'window.eventOn = function',
-        'function useHelperBridge(frameRef, token, binding, refreshKey)',
+        'function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId)',
         'this frontend is not bound to a Tavern chat',
         'const HELPER_TAVERN_EVENTS = {',
         'window.triggerSlash = function',

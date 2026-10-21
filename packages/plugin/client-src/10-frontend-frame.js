@@ -202,12 +202,21 @@
     // 快照比对负责「宿主侧事件」：楼数增加→MESSAGE_RECEIVED，正文变化→
     // MESSAGE_EDITED，聊天切换→CHAT_CHANGED。只广播能真实观测到的信号，
     // 不凭空伪造酒馆事件。
-    // 宿主 composer 写入（2026-10-20 卡兼容）：酒馆卡的表单/快速选项通过
-    // `window.parent.document.querySelector('#send_textarea')` 写入并触发 input。
-    // iframe 没有 same-origin，shim 把这条老路径映射到宿主页里真实可见的
-    // textarea，用原生 value setter + input 事件让 React 受控组件收到变更。
-    // 自动发送只在 `composer.send` 时尽力而为（回车键），失败则保留已填入文本。
-    function hostComposerTextarea() {
+    // 宿主 composer 写入（2026-10-20 卡兼容；2026-10-21 二次修订）：酒馆卡的表单/
+    // 快速选项通过 `window.parent.document.querySelector('#send_textarea')` 写入并
+    // 触发 input。iframe 没有 same-origin，shim 把这条老路径映射到宿主的真实输入面。
+    //
+    // 两种宿主输入面：
+    // - ST 架构用插件自己的 textarea（`[data-dsh-soulmojito-surface="composer"]`）；
+    // - AgentTavern 的原生输入框是 Lexical contenteditable（`[data-composer-input]`），
+    //   没有 textarea。自动发送不再模拟键盘，直接走宿主 conversation service，
+    //   与插件插入消息同一条通道（用户 2026-10-21 要求）。
+    function hostComposerInput() {
+      const pluginComposer = document.querySelector('[data-dsh-soulmojito-surface="composer"] textarea')
+      if (pluginComposer instanceof HTMLTextAreaElement
+        && !pluginComposer.disabled && !pluginComposer.readOnly && isVisibleElement(pluginComposer)) {
+        return pluginComposer
+      }
       const candidates = [...document.querySelectorAll('textarea')]
         .filter((element) => {
           if (!(element instanceof HTMLTextAreaElement)) return false
@@ -217,7 +226,16 @@
           return rect.width > 160 && rect.height > 20 && rect.bottom > 0 && rect.top < window.innerHeight
         })
       candidates.sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top)
-      return candidates[candidates.length - 1] ?? null
+      if (candidates.length > 0) return candidates[candidates.length - 1]
+      const editable = [...document.querySelectorAll('[data-composer-input][contenteditable="true"]')]
+        .find((element) => isVisibleElement(element))
+      return editable instanceof HTMLElement ? editable : null
+    }
+
+    function isVisibleElement(element) {
+      if (!(element instanceof HTMLElement) || element.hidden) return false
+      const rect = element.getBoundingClientRect()
+      return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight
     }
 
     function setHostTextareaValue(element, value) {
@@ -227,18 +245,46 @@
       element.dispatchEvent(new Event('input', { bubbles: true }))
     }
 
-    async function fillHostComposer(text, submit) {
-      const element = hostComposerTextarea()
-      if (!element) throw new Error('no visible host composer textarea found')
-      setHostTextareaValue(element, text)
+    // Lexical 只在可信输入事件里同步编辑模型；execCommand 会触发 beforeinput/
+    // input，比直接改 textContent 更接近真键盘输入。
+    function setHostEditableValue(element, value) {
       element.focus()
-      if (!submit) return { submitted: false }
-      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
+      const selection = window.getSelection()
+      const range = document.createRange()
+      range.selectNodeContents(element)
+      selection.removeAllRanges()
+      selection.addRange(range)
+      if (!document.execCommand('insertText', false, value)) {
+        throw new Error('host composer rejected text insertion')
+      }
+    }
+
+    function clearHostComposer(element) {
+      if (element instanceof HTMLTextAreaElement) {
+        setHostTextareaValue(element, '')
+        return
+      }
+      element.focus()
+      const selection = window.getSelection()
+      const range = document.createRange()
+      range.selectNodeContents(element)
+      selection.removeAllRanges()
+      selection.addRange(range)
+      document.execCommand('delete')
+    }
+
+    function submitHostComposer(element) {
       const form = element.closest('form')
       const submitButton = form?.querySelector('button[type="submit"]')
-      if (submitButton instanceof HTMLElement) {
+      if (submitButton instanceof HTMLElement && !submitButton.disabled) {
         submitButton.click()
-        return { submitted: true }
+        return
+      }
+      const surface = element.closest('[data-dsh-soulmojito-surface="composer"]')
+      const sendButton = surface?.querySelector('button.dt-primary-icon:not(:disabled)')
+      if (sendButton instanceof HTMLElement) {
+        sendButton.click()
+        return
       }
       element.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'Enter',
@@ -248,15 +294,111 @@
         bubbles: true,
         cancelable: true,
       }))
+    }
+
+    // AgentTavern 的原生发送面：`ctx.sessions.scope(id).get('conversation')` 返回
+    // 按会话作用域跟踪的 Conversation 服务（cordis traceable proxy 会把 service.ctx
+    // 切到调用方 scope）。`send(text)` 走宿主 prompt admission，等价于原生 composer
+    // 回车，但不依赖编辑器 DOM。
+    function hostConversation(hostSessionId) {
+      if (typeof hostSessionId !== 'string' || hostSessionId === '') return undefined
+      try {
+        const sessions = PanelHost.context?.get?.('sessions')
+        const scoped = sessions?.scope?.(hostSessionId)
+        const conversation = scoped?.get?.('conversation')
+        return conversation && typeof conversation.send === 'function' ? conversation : undefined
+      } catch {
+        return undefined
+      }
+    }
+
+    function fillComposerElement(element, value) {
+      if (element instanceof HTMLTextAreaElement) setHostTextareaValue(element, value)
+      else setHostEditableValue(element, value)
+    }
+
+    // 判断当前草稿是否就是本次要发送的文本（空白无关 + 前缀指纹）。用于清掉
+    // 旧失败尝试或作用域晚 materialize 时残留在原生输入框里的同一份 YAML；
+    // 不碰用户自己的无关草稿。
+    function composerHolds(element, text) {
+      const current = (element instanceof HTMLTextAreaElement
+        ? element.value
+        : (element.innerText ?? element.textContent ?? '')).replace(/\s+/g, '')
+      const expected = text.replace(/\s+/g, '')
+      const head = expected.slice(0, 64)
+      return head !== '' && current.includes(head)
+    }
+
+    async function fillHostComposer(text, submit, hostSessionId, draft) {
+      const conversation = hostConversation(hostSessionId)
+      // AgentTavern 直投模式（用户 2026-10-21）：不碰原生编辑器——composer.fill
+      // 只确认"发送将由随后的 composer.send 一次完成"，草稿不会出现在输入框里。
+      // 这与游戏桥自动续弈同一条插件直投语义，也避免 Lexical 草稿清理残留。
+      if (conversation !== undefined) {
+        if (submit) {
+          await conversation.send(text)
+          // 旧尝试/晚 materialize 的残留：只清内容仍是本次文本的草稿。
+          const target = draft.text === text
+            ? (draft.element?.isConnected ? draft.element : hostComposerInput())
+            : hostComposerInput()
+          if (target !== null && composerHolds(target, text)) clearHostComposer(target)
+          draft.element = null
+          draft.text = ''
+          return { submitted: true, via: 'conversation' }
+        }
+        return { submitted: false, deferred: true }
+      }
+      const element = hostComposerInput()
+      if (element === null) throw new Error('no visible host composer found')
+      fillComposerElement(element, text)
+      element.focus()
+      if (!submit) {
+        draft.element = element
+        draft.text = text
+        return { submitted: false }
+      }
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
+      submitHostComposer(element)
+      // 合成提交可能绕过原生 draft 清理（Lexical 的受控草稿在 click/Enter
+      // 之后仍可能保留），显式清一次。
+      clearHostComposer(element)
+      draft.element = null
+      draft.text = ''
       return { submitted: true }
     }
 
-    function useHelperBridge(frameRef, token, binding, refreshKey) {
+    // 卡前端的 `window.frameElement.style`（2026-10-21）：ST 同源 iframe 里卡可以
+    // 直接改自己的 iframe（隐藏战术栏 / 按内容设高）；沙箱里只拿到 shim，转成
+    // `frame.prefs` 后由宿主落到真实元素。height 用 !important，避免被
+    // FrontendFrame 的高度状态覆盖；侧栏里 iframe 是独子时连外框一起收起，
+    // 不留空白卡片。
+    function applyFramePrefs(frame, prefs) {
+      const wrapper = frame.parentElement && frame.parentElement.children.length === 1
+        ? frame.parentElement
+        : null
+      if (prefs.hidden === true) {
+        frame.style.setProperty('display', 'none', 'important')
+        if (wrapper) wrapper.style.setProperty('display', 'none', 'important')
+        return
+      }
+      frame.style.removeProperty('display')
+      if (wrapper) wrapper.style.removeProperty('display')
+      if (typeof prefs.height === 'number' && Number.isFinite(prefs.height) && prefs.height > 0) {
+        frame.style.setProperty('height', `${Math.min(Math.max(Math.ceil(prefs.height), 1), 1200)}px`, 'important')
+      } else {
+        frame.style.removeProperty('height')
+      }
+    }
+
+    function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId) {
       const bindingRef = useRef(binding)
       bindingRef.current = binding
       const previousRef = useRef(null)
+      const composerDraftRef = useRef({ element: null, text: '' })
+      const composerChainRef = useRef(Promise.resolve())
       useEffect(() => {
         previousRef.current = null
+        composerDraftRef.current = { element: null, text: '' }
       }, [token])
       useEffect(() => {
         const reply = (payload) => {
@@ -304,6 +446,9 @@
             previousRef.current = snapshot
           }).catch(() => {})
         }
+        // composer.fill 与 composer.send 由卡前端成对调用（同一 tick）。串行化
+        // 保证直投模式 send 在 fill 的确认之后、DOM 降级路径 fill 先落地；链与
+        // 草稿记录都放在 hook ref 上，副作用重跑（轮询刷新）不丢顺序。
         const onMessage = (event) => {
           const data = event.data
           if (!data || data.type !== HELPER_MESSAGE || data.token !== token) return
@@ -316,9 +461,19 @@
           }
           if (data.op === 'composer.fill' || data.op === 'composer.send') {
             const text = typeof data.payload?.text === 'string' ? data.payload.text : ''
-            void fillHostComposer(text, data.op === 'composer.send')
+            composerChainRef.current = composerChainRef.current
+              .catch(() => {})
+              .then(() => fillHostComposer(text, data.op === 'composer.send', hostSessionId, composerDraftRef.current))
               .then((value) => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value }))
               .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
+            return
+          }
+          if (data.op === 'frame.prefs') {
+            const frame = frameRef.current
+            if (frame) {
+              applyFramePrefs(frame, data.payload && typeof data.payload === 'object' ? data.payload : {})
+            }
+            reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { applied: frame !== null } })
             return
           }
           void api('helper', {
@@ -341,13 +496,19 @@
           })
         }
         addEventListener('message', onMessage)
+        // iframe 每次加载完成后再推一次：srcdoc 的 CDN 外链会推迟 shim 的执行，
+        // 挂载时那一次推送可能早于 shim 的监听器而丢失（2026-10-21 状态栏空态）。
+        const frame = frameRef.current
+        const onFrameLoad = () => postSnapshot()
+        frame?.addEventListener('load', onFrameLoad)
         emitEvent(HELPER_IFRAME_EVENTS.MESSAGE_IFRAME_RENDER_STARTED, [token])
         postSnapshot()
         return () => {
+          frame?.removeEventListener('load', onFrameLoad)
           removeEventListener('message', onMessage)
           emitEvent(HELPER_IFRAME_EVENTS.MESSAGE_IFRAME_RENDER_ENDED, [token])
         }
-      }, [token, refreshKey])
+      }, [token, refreshKey, hostSessionId])
       return undefined
     }
 
@@ -358,12 +519,12 @@
       return useSyncExternalStore(subscribe, read, read)
     }
 
-    function FrontendFrame({ html, token, binding, refreshKey, messageId }) {
+    function FrontendFrame({ html, token, binding, refreshKey, messageId, hostSessionId }) {
       const frameRef = useRef(null)
       const allowExternalResources = useFrontendAllowExternalResources()
       const [height, setHeight] = useState(120)
       const postViewport = useViewportBridge(frameRef)
-      useHelperBridge(frameRef, token, binding, refreshKey)
+      useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId)
       useEffect(() => {
         const onMessage = (event) => {
           const data = event.data
@@ -378,7 +539,9 @@
       return h('iframe', {
         ref: frameRef,
         className: 'dt-frontend-frame',
-        sandbox: 'allow-scripts',
+        // 卡前端用 prompt/confirm 做方案命名/删除确认（ST 同款交互）；没有
+        // allow-modals 时 Chromium 直接忽略并返回 null，按钮看起来"没反应"。
+        sandbox: 'allow-scripts allow-modals',
         referrerPolicy: 'no-referrer',
         title: 'Tavern frontend',
         srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources),

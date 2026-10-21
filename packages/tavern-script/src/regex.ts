@@ -33,6 +33,42 @@ export function compileScriptRegex(script: RegexScriptIR, deps: RegexApplyDeps =
   }
 }
 
+/**
+ * ST 替换语义（engine.js `runRegexScript`）：替换走函数回调，`$&`、`$'`、
+ * `` $` ``、`$$` 保持字面量；只有 `{{match}}`、`$1..$n`、`$<name>` 展开，且
+ * 捕获组先过 trimStrings。
+ *
+ * 卡内美化脚本把整份 HTML/JS 塞进 replaceString。JS 里 `'$__META_EXTENSIBLE__$'`
+ * 的尾部 `$'` 在字符串替换里会被解释为“匹配点之后的整段原文”，把消息尾巴
+ * 插进 `<script>` 的单引号字符串（换行即语法错误，整个前端脚本不执行）。
+ */
+function expandReplacement(
+  template: string,
+  match: string,
+  captures: Array<string | undefined>,
+  named: Record<string, string | undefined> | undefined,
+  trimStrings: string[],
+): string {
+  const trim = (value: string): string => {
+    let next = value
+    for (const token of trimStrings) {
+      if (token !== '') next = next.split(token).join('')
+    }
+    return next
+  }
+  return template
+    .replace(/{{match}}/gi, '$0')
+    .replace(/\$(\d+)|\$<([^>]+)>/g, (_token, digits: string | undefined, group: string | undefined) => {
+      if (digits !== undefined) {
+        const index = Number(digits)
+        const value = index === 0 ? match : captures[index - 1]
+        return value === undefined ? '' : trim(value)
+      }
+      const value = named?.[group ?? '']
+      return value === undefined ? '' : trim(value)
+    })
+}
+
 /** 按位应用一个脚本；返回 null 表示脚本被跳过（禁用/placement/深度不符/正则不合法）。 */
 export function applyRegexScript(
   text: string,
@@ -51,7 +87,15 @@ export function applyRegexScript(
   const replacement = script.substituteRegex && deps.expand
     ? deps.expand(script.replaceString)
     : script.replaceString
-  let result = text.replace(regex, replacement)
+  // 函数替换让 `$` 序列保持字面量；展开规则见 expandReplacement。
+  let result = text.replace(regex, (match: string, ...rest: unknown[]) => {
+    const tail = rest[rest.length - 1]
+    const named = typeof tail === 'object' && tail !== null && !Array.isArray(tail)
+      ? tail as Record<string, string | undefined>
+      : undefined
+    const captures = rest.slice(0, Math.max(0, rest.length - (named === undefined ? 2 : 3))) as Array<string | undefined>
+    return expandReplacement(replacement, match, captures, named, script.trimStrings)
+  })
   for (const trim of script.trimStrings) {
     if (trim !== '') result = result.split(trim).join('')
   }

@@ -24,10 +24,12 @@
     // 原样，切换 swipe / 编辑框读原始 mes 都不受影响。
     function expandDisplayMacros(text, user, char) {
       if (typeof text !== 'string' || !text.includes('{')) return text
+      // Function replacements keep `$` in names literal: a persona named `A$&B`
+      // must not be treated as a replacement template.
       return text
-        .replace(/\{\{user\}\}/gi, user)
-        .replace(/\{\{char\}\}/gi, char)
-        .replace(/\{\{bot\}\}/gi, char)
+        .replace(/\{\{user\}\}/gi, () => user)
+        .replace(/\{\{char\}\}/gi, () => char)
+        .replace(/\{\{bot\}\}/gi, () => char)
     }
 
     function MessageRow({ sessionId, character, chatId, chat, message, index, busy, display, persona }) {

@@ -266,6 +266,7 @@
               token: frameToken,
               messageId: -1,
               binding: binding ? { character: binding.character, chatId: binding.chatId } : undefined,
+              hostSessionId: binding?.architecture === 'agent-tavern' ? sessionId : undefined,
               refreshKey: status.receipts?.length ?? 0,
             }))
             : null,
@@ -320,6 +321,7 @@
               token: frameToken,
               messageId: -1,
               binding: binding ? { character: binding.character, chatId: binding.chatId } : undefined,
+              hostSessionId: binding?.architecture === 'agent-tavern' ? sessionId : undefined,
               refreshKey: status.receipts?.length ?? 0,
             }))
             : variables.length > 0

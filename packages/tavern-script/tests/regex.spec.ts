@@ -38,6 +38,19 @@ describe('regex script engine', () => {
     expect(result).toBe('hi found-User')
   })
 
+  it('keeps replacement $ sequences literal (ST function-replacement semantics)', () => {
+    // 卡内美化前端把整份 HTML/JS 塞进 replaceString；`'$__META_EXTENSIBLE__$'`
+    // 尾部的 `$'` 若按字符串替换会插入匹配点后的原文，撕坏注入的 <script>。
+    const body = "const keep = '$__META_EXTENSIBLE__$';\nconst tpl = `${value}`;"
+    const script = parseRegexScript({ findRegex: '\\[FORM\\]', replaceString: body })
+    expect(applyRegexScript('[FORM]tail', script, RegexPlacement.AI_OUTPUT)).toBe(`${body}tail`)
+  })
+
+  it('expands {{match}} and trims captured groups', () => {
+    const script = parseRegexScript({ findRegex: '\\[(.+?)\\]', replaceString: '<$1>{{match}}', trimStrings: ['!'] })
+    expect(applyRegexScript('[a!]', script, RegexPlacement.AI_OUTPUT)).toBe('<a>[a]')
+  })
+
   it('filters by message depth via minDepth/maxDepth', () => {
     const script = parseRegexScript({ findRegex: 'x', replaceString: 'y', minDepth: 0, maxDepth: 2 })
     expect(applyRegexScript('x', script, RegexPlacement.AI_OUTPUT, {}, { depth: 1 })).toBe('y')
