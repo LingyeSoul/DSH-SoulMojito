@@ -101,6 +101,20 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     expect(en).toContain("'settings.frontendAutoOpen'")
   })
 
+  it('gates external frontend resources behind the frontendAllowExternalResources setting', () => {
+    expect(source).toContain('function frontendContentSecurityPolicy(allowExternalResources)')
+    expect(source).toContain("connect-src https:")
+    expect(source).toContain('useFrontendAllowExternalResources()')
+    expect(source).toContain('checked: bootstrap.state.frontendAllowExternalResources === true')
+    expect(store).toContain('frontendAllowExternalResources: boolean')
+    expect(store).toContain('frontendAllowExternalResources: false')
+    expect(store).toContain('frontendAllowExternalResources: parsed.frontendAllowExternalResources === true')
+    expect(zh).toContain("'settings.frontendAllowExternalResources'")
+    expect(en).toContain("'settings.frontendAllowExternalResources'")
+    expect(zh).toContain("'settings.frontendAllowExternalResourcesHint'")
+    expect(en).toContain("'settings.frontendAllowExternalResourcesHint'")
+  })
+
   it('documents every exported helper with an availability verdict', () => {
     // 文档必须覆盖实现的每个出口：加函数不改文档 = 文档立刻过期。
     const exported = [

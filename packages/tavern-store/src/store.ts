@@ -122,6 +122,13 @@ export interface TavernState {
    * 与「不打断写作」的默认纪律一致。
    */
   frontendAutoOpen: boolean
+  /**
+   * 允许美化前端加载外部资源（2026-10-21 用户需求）：开启后 iframe 的 CSP
+   * 放行任意 HTTPS 脚本/样式（sourcemap 走 connect-src 也一并放行），并允许
+   * fetch/XHR。默认关闭——外部脚本能读取前端可见的聊天内容并外发，属于用户
+   * 显式授权的信任扩展，设置页展示风险警告。
+   */
+  frontendAllowExternalResources: boolean
   /** 禁用游戏投降（2026-10-14 用户需求；面板「游戏」分区开关）：开启后两个
    *  动作入口（人类棋盘/Agent game_move）对 {type:'resign'} 一律拒绝；默认关闭
    *  （投降可用，与既有行为一致）。 */
@@ -283,6 +290,7 @@ const DEFAULT_STATE: TavernState = {
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
   frontendAutoOpen: false,
+  frontendAllowExternalResources: false,
   gamesDisableResign: false,
   cardWorkbenchPresetEnabled: false,
   agentNovelPresetEnabled: false,
@@ -1069,6 +1077,7 @@ export class TavernStore {
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
       frontendAutoOpen: parsed.frontendAutoOpen === true,
+      frontendAllowExternalResources: parsed.frontendAllowExternalResources === true,
       gamesDisableResign: parsed.gamesDisableResign === true,
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
       agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,

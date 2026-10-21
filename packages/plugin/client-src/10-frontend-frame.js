@@ -136,7 +136,7 @@
 })();`
     }
 
-    function buildFrontendDocument(value, token, messageId) {
+    function buildFrontendDocument(value, token, messageId, allowExternalResources) {
       // window.parent / window.top 在 sandbox（无 same-origin）里是跨域 WindowProxy，
       // 酒馆卡常见的 `window.parent.document` / `window.parent.Mvu` 会直接抛
       // DOMException。注入前统一改指向 shim 暴露的同页 facade；helper 自身与
@@ -149,7 +149,7 @@
         .replace(/\b(?:window\.)?localStorage\b/g, 'window.__dshTavernStorage')
         .replace(/\b(?:window\.)?sessionStorage\b/g, 'window.__dshTavernSessionStorage')
       const source = rewriteViewportUnits(compatible)
-      const csp = `<meta http-equiv="Content-Security-Policy" content="${escapeFrontendAttribute(FRONTEND_CSP)}">`
+      const csp = `<meta http-equiv="Content-Security-Policy" content="${escapeFrontendAttribute(frontendContentSecurityPolicy(allowExternalResources))}">`
       const reset = '<style>html,body{margin:0!important;padding:0;max-width:100%;}*,*::before,*::after{box-sizing:border-box;}</style>'
       // 视口脚本进 head（先于 body 样式首帧解析，避免塌陷闪动），reporter 留 body 末
       const viewport = `<script>${frontendViewportScript()}</script>`
@@ -351,8 +351,16 @@
       return undefined
     }
 
+    // 外部资源开关（2026-10-21）只订阅一个布尔：FrontendFrame 在消息列表、
+    // MVU 侧栏、右栏多处挂载，订整份 store 会让每次轮询刷新都重算 srcDoc。
+    function useFrontendAllowExternalResources() {
+      const read = () => snapshot.bootstrap.state.frontendAllowExternalResources === true
+      return useSyncExternalStore(subscribe, read, read)
+    }
+
     function FrontendFrame({ html, token, binding, refreshKey, messageId }) {
       const frameRef = useRef(null)
+      const allowExternalResources = useFrontendAllowExternalResources()
       const [height, setHeight] = useState(120)
       const postViewport = useViewportBridge(frameRef)
       useHelperBridge(frameRef, token, binding, refreshKey)
@@ -373,7 +381,7 @@
         sandbox: 'allow-scripts',
         referrerPolicy: 'no-referrer',
         title: 'Tavern frontend',
-        srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1),
+        srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources),
         onLoad: postViewport,
         style: { height },
       })

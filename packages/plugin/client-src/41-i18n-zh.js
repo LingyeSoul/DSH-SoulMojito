@@ -22,6 +22,8 @@
       'settings.preloadAssets': '新 AgentTavern 会话开始时预载角色信息和常驻世界书条目',
       'settings.allowGlobalWrites': '允许 AgentTavern 工具写入 global 作用域的记忆和变量',
       'settings.frontendAutoOpen': '美化前端出现时自动打开右侧栏（每聊天一次）',
+      'settings.frontendAllowExternalResources': '允许美化前端加载外部资源（任意 HTTPS 源）',
+      'settings.frontendAllowExternalResourcesHint': '开启后 iframe 可加载任意 HTTPS 脚本/样式，并允许 fetch/XHR 与 CDN sourcemap（connect-src https:）。外部脚本能读取前端可见的聊天内容并发送到外部服务器，请只对信任的角色卡开启。',
       'settings.gamesDisableResign': '禁用投降（隐藏投降按钮，AI 也不能认输）',
       'settings.worldFollowsCharacter': '世界书跟随角色卡激活',
       'settings.worldsEmpty': '尚未导入世界书',

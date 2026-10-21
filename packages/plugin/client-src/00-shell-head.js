@@ -80,6 +80,30 @@ window.__ModuleLoader__.load({
       "base-uri 'none'",
       "form-action 'none'",
     ].join('; ')
+    // 外部资源开关（2026-10-21 用户需求）：默认仍是固定 CDN 白名单 + connect-src
+    // 'none'；开启后 script/style 追加 https: 通配，connect-src 放宽到 https:。
+    // CDN 脚本的 sourcemap 请求也走 connect-src，因此开这一项即可消除
+    // "Connecting to '…showdown.min.js.map' violates connect-src 'none'"。
+    // 代价：iframe 内脚本可以把前端可见的聊天数据发往任意 HTTPS 源——设置页
+    // 必须同时展示风险警告，不做静默升级。
+    function frontendContentSecurityPolicy(allowExternalResources) {
+      if (allowExternalResources !== true) return FRONTEND_CSP
+      const externalSources = `${FRONTEND_RESOURCE_SOURCES.join(' ')} https:`
+      return [
+        "default-src 'none'",
+        `script-src 'unsafe-inline' 'unsafe-eval' ${externalSources}`,
+        `style-src 'unsafe-inline' ${externalSources}`,
+        "img-src data: blob: https:",
+        "font-src data: https:",
+        "media-src data: blob: https:",
+        "worker-src blob:",
+        "connect-src https:",
+        "frame-src 'none'",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "form-action 'none'",
+      ].join('; ')
+    }
 
     function escapeFrontendAttribute(value) {
       return String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;')

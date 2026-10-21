@@ -261,6 +261,15 @@
                 }),
                 h('span', null, t('settings.frontendAutoOpen'))))
             : null),
+        h('div', { className: 'dt-frontend-resources' },
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.frontendAllowExternalResources === true,
+              onChange: (event) => applyPatch({ frontendAllowExternalResources: event.target.checked }),
+            }),
+            h('span', null, t('settings.frontendAllowExternalResources'))),
+          h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.frontendAllowExternalResourcesHint'))),
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 

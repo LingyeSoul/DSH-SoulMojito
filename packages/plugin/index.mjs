@@ -2503,6 +2503,7 @@ var DEFAULT_STATE = {
   agentTavernPreloadAssets: false,
   agentTavernAllowGlobalWrites: false,
   frontendAutoOpen: false,
+  frontendAllowExternalResources: false,
   gamesDisableResign: false,
   cardWorkbenchPresetEnabled: false,
   agentNovelPresetEnabled: false,
@@ -3161,6 +3162,7 @@ var TavernStore = class _TavernStore {
       agentTavernPreloadAssets: parsed.agentTavernPreloadAssets === true,
       agentTavernAllowGlobalWrites: parsed.agentTavernAllowGlobalWrites === true,
       frontendAutoOpen: parsed.frontendAutoOpen === true,
+      frontendAllowExternalResources: parsed.frontendAllowExternalResources === true,
       gamesDisableResign: parsed.gamesDisableResign === true,
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
       agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
@@ -13177,7 +13179,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.8".trim() : "";
-  const commit = true ? normalizeCommit("a8881ca") : void 0;
+  const commit = true ? normalizeCommit("05f2f74") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -34664,6 +34666,9 @@ async function handleApi(ctx, req, res) {
       // 美化前端右栏 tab 自动展开（2026-10-20 用户需求）：翻转即时生效——
       // 客户端 watcher 每次扫描都读 bootstrap.state，无需写穿。
       ...typeof body.frontendAutoOpen === "boolean" ? { frontendAutoOpen: body.frontendAutoOpen } : {},
+      // 允许美化前端加载外部资源（2026-10-21 用户需求）：翻转即时生效——iframe
+      // 每次构建 srcDoc 都从 bootstrap.state 读取，无需写穿缓存。
+      ...typeof body.frontendAllowExternalResources === "boolean" ? { frontendAllowExternalResources: body.frontendAllowExternalResources } : {},
       // 禁用游戏投降（2026-10-14 用户需求）：翻转即时生效——服务层在两个动作
       // 入口（人类棋盘 / Agent game_move）逐次读取判定，无缓存需写穿。
       ...typeof body.gamesDisableResign === "boolean" ? { gamesDisableResign: body.gamesDisableResign } : {},

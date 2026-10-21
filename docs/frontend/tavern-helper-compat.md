@@ -22,14 +22,18 @@ sandbox="allow-scripts"        // 无 allow-same-origin
 Content-Security-Policy: default-src 'none'; connect-src 'none'; frame-src 'none'
 ```
 
+> 设置页的「允许美化前端加载外部资源」可以显式放开 `script-src` / `style-src`
+> 的 HTTPS 通配与 `connect-src https:`（默认关闭，见 §3.3 与 §6 的标注）。
+
 因此有一条**结构性的分界线**，任何兼容层都无法绕过：
 
 | 你可能会写 | 在本插件里 |
 |---|---|
 | `window.parent.document` / `window.parent.fetch` | 🧱 跨域，直接被浏览器拒绝 |
-| `fetch()` / `XMLHttpRequest` / `WebSocket` | 🧱 CSP `connect-src 'none'` 拦截 |
+| `fetch()` / `XMLHttpRequest` | 🧱 CSP `connect-src 'none'` 拦截（默认；设置页可显式放行 HTTPS） |
+| `WebSocket`（`wss:`） | 🧱 CSP 拦截；放行外部资源也只覆盖 `https:`，不含 `wss:` |
 | 嵌套 `<iframe>` | 🧱 CSP `frame-src 'none'` |
-| `<script src="https://你的服务器/...">` | 🧱 CSP 只放行固定 CDN 白名单 |
+| `<script src="https://你的服务器/...">` | 🧱 CSP 只放行固定 CDN 白名单（设置页可显式放行任意 HTTPS） |
 | `window.parent.SillyTavern` 直读 | 🧱 不存在；用本页的 `SillyTavern.getContext()` |
 
 **所有宿主能力都走一条受校验的通道**：
@@ -262,6 +266,10 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 ```
 
+> 白名单外的 CDN / HTTPS API：在设置页开启「允许美化前端加载外部资源」后，
+> `script-src` / `style-src` / `connect-src` 会额外放行 `https:`。开启后外部脚本
+> 可以把 iframe 里可见的聊天数据发出去，只对信任的卡开启。
+
 ---
 
 ## 4. 可用清单：其它读取面
@@ -339,7 +347,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 
 ```js
 // 走 helper 的 slash op（内部实现同 triggerSlash 的语义子集）
-await fetch  // 🧱 不可用（CSP）；必须通过内置函数
+await fetch  // 🧱 默认不可用（CSP connect-src 'none'）；设置页放开外部资源后可用
 ```
 
 > 目前 `slash` op 只由服务端内部与测试使用，**没有**暴露成 `window.triggerSlash`。

@@ -254,6 +254,30 @@ window.__ModuleLoader__.load({
       "base-uri 'none'",
       "form-action 'none'",
     ].join('; ')
+    // 外部资源开关（2026-10-21 用户需求）：默认仍是固定 CDN 白名单 + connect-src
+    // 'none'；开启后 script/style 追加 https: 通配，connect-src 放宽到 https:。
+    // CDN 脚本的 sourcemap 请求也走 connect-src，因此开这一项即可消除
+    // "Connecting to '…showdown.min.js.map' violates connect-src 'none'"。
+    // 代价：iframe 内脚本可以把前端可见的聊天数据发往任意 HTTPS 源——设置页
+    // 必须同时展示风险警告，不做静默升级。
+    function frontendContentSecurityPolicy(allowExternalResources) {
+      if (allowExternalResources !== true) return FRONTEND_CSP
+      const externalSources = `${FRONTEND_RESOURCE_SOURCES.join(' ')} https:`
+      return [
+        "default-src 'none'",
+        `script-src 'unsafe-inline' 'unsafe-eval' ${externalSources}`,
+        `style-src 'unsafe-inline' ${externalSources}`,
+        "img-src data: blob: https:",
+        "font-src data: https:",
+        "media-src data: blob: https:",
+        "worker-src blob:",
+        "connect-src https:",
+        "frame-src 'none'",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "form-action 'none'",
+      ].join('; ')
+    }
 
     function escapeFrontendAttribute(value) {
       return String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;')
@@ -397,7 +421,7 @@ window.__ModuleLoader__.load({
 })();`
     }
 
-    function buildFrontendDocument(value, token, messageId) {
+    function buildFrontendDocument(value, token, messageId, allowExternalResources) {
       // window.parent / window.top 在 sandbox（无 same-origin）里是跨域 WindowProxy，
       // 酒馆卡常见的 `window.parent.document` / `window.parent.Mvu` 会直接抛
       // DOMException。注入前统一改指向 shim 暴露的同页 facade；helper 自身与
@@ -410,7 +434,7 @@ window.__ModuleLoader__.load({
         .replace(/\b(?:window\.)?localStorage\b/g, 'window.__dshTavernStorage')
         .replace(/\b(?:window\.)?sessionStorage\b/g, 'window.__dshTavernSessionStorage')
       const source = rewriteViewportUnits(compatible)
-      const csp = `<meta http-equiv="Content-Security-Policy" content="${escapeFrontendAttribute(FRONTEND_CSP)}">`
+      const csp = `<meta http-equiv="Content-Security-Policy" content="${escapeFrontendAttribute(frontendContentSecurityPolicy(allowExternalResources))}">`
       const reset = '<style>html,body{margin:0!important;padding:0;max-width:100%;}*,*::before,*::after{box-sizing:border-box;}</style>'
       // 视口脚本进 head（先于 body 样式首帧解析，避免塌陷闪动），reporter 留 body 末
       const viewport = `<script>${frontendViewportScript()}</script>`
@@ -612,8 +636,16 @@ window.__ModuleLoader__.load({
       return undefined
     }
 
+    // 外部资源开关（2026-10-21）只订阅一个布尔：FrontendFrame 在消息列表、
+    // MVU 侧栏、右栏多处挂载，订整份 store 会让每次轮询刷新都重算 srcDoc。
+    function useFrontendAllowExternalResources() {
+      const read = () => snapshot.bootstrap.state.frontendAllowExternalResources === true
+      return useSyncExternalStore(subscribe, read, read)
+    }
+
     function FrontendFrame({ html, token, binding, refreshKey, messageId }) {
       const frameRef = useRef(null)
+      const allowExternalResources = useFrontendAllowExternalResources()
       const [height, setHeight] = useState(120)
       const postViewport = useViewportBridge(frameRef)
       useHelperBridge(frameRef, token, binding, refreshKey)
@@ -634,7 +666,7 @@ window.__ModuleLoader__.load({
         sandbox: 'allow-scripts',
         referrerPolicy: 'no-referrer',
         title: 'Tavern frontend',
-        srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1),
+        srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources),
         onLoad: postViewport,
         style: { height },
       })
@@ -2253,6 +2285,8 @@ window.__ModuleLoader__.load({
       'settings.preloadAssets': 'Preload character and constant World Info when a new AgentTavern session starts',
       'settings.allowGlobalWrites': 'Allow AgentTavern tools to write memories and variables in the global scope',
       'settings.frontendAutoOpen': 'Open the right sidebar when a frontend appears (once per chat)',
+      'settings.frontendAllowExternalResources': 'Allow frontends to load external resources (any HTTPS origin)',
+      'settings.frontendAllowExternalResourcesHint': 'Lets the iframe load any HTTPS script or stylesheet, and allows fetch/XHR plus CDN source maps (connect-src https:). External scripts can read the chat content visible to the frontend and send it elsewhere; enable only for cards you trust.',
       'settings.gamesDisableResign': 'Disable resign in games (hides the resign button; the AI cannot resign either)',
       'settings.worldFollowsCharacter': 'World books follow character card activation',
       'settings.worldsEmpty': 'No world books imported',
@@ -3067,6 +3101,8 @@ window.__ModuleLoader__.load({
       'settings.preloadAssets': '新 AgentTavern 会话开始时预载角色信息和常驻世界书条目',
       'settings.allowGlobalWrites': '允许 AgentTavern 工具写入 global 作用域的记忆和变量',
       'settings.frontendAutoOpen': '美化前端出现时自动打开右侧栏（每聊天一次）',
+      'settings.frontendAllowExternalResources': '允许美化前端加载外部资源（任意 HTTPS 源）',
+      'settings.frontendAllowExternalResourcesHint': '开启后 iframe 可加载任意 HTTPS 脚本/样式，并允许 fetch/XHR 与 CDN sourcemap（connect-src https:）。外部脚本能读取前端可见的聊天内容并发送到外部服务器，请只对信任的角色卡开启。',
       'settings.gamesDisableResign': '禁用投降（隐藏投降按钮，AI 也不能认输）',
       'settings.worldFollowsCharacter': '世界书跟随角色卡激活',
       'settings.worldsEmpty': '尚未导入世界书',
@@ -6535,6 +6571,15 @@ window.__ModuleLoader__.load({
                 }),
                 h('span', null, t('settings.frontendAutoOpen'))))
             : null),
+        h('div', { className: 'dt-frontend-resources' },
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.frontendAllowExternalResources === true,
+              onChange: (event) => applyPatch({ frontendAllowExternalResources: event.target.checked }),
+            }),
+            h('span', null, t('settings.frontendAllowExternalResources'))),
+          h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.frontendAllowExternalResourcesHint'))),
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
@@ -12312,6 +12357,7 @@ window.__ModuleLoader__.load({
         .dt-backlink{display:flex;padding:2px 0}.dt-backlink>button{color:var(--dsw-alias-label-tertiary);background:transparent;border:0;cursor:pointer;font-size:12px;padding:4px 2px}.dt-backlink>button:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}
         .dt-member-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}.dt-member-row .dt-member-chip>button{display:none}.dt-script-glyph{font-weight:700;font-size:15px;line-height:1}.dt-sidebar-subheading{margin-top:10px}.dt-branch-btn{font-size:13px}
         .dt-hint{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;margin:0 0 12px}.dt-hint-wide{grid-column:1 / -1;margin:0 0 12px}
+        .dt-frontend-resources{margin-top:10px;padding:10px 12px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}.dt-frontend-resources .dt-toggle{min-height:0}.dt-frontend-warning{color:var(--dsw-alias-state-warn-label,var(--dsw-alias-state-warning-primary));margin:6px 0 0}
         .dt-prompts-intro{max-width:760px;margin:0 0 14px;padding:12px 14px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}.dt-prompts-intro h3{margin:0 0 4px;font-size:13px;line-height:19px;font-weight:600}.dt-prompts-desc{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:19px}
         .dt-prompts-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}.dt-prompts-toolbar>button{min-height:32px}.dt-prompts-filter{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary);font-size:12px}.dt-prompts-filter select{box-sizing:border-box;height:32px;min-width:180px;max-width:280px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 8px;font:inherit;font-size:13px}
         .dt-panel-empty{display:flex;align-items:center;justify-content:center;min-height:88px;padding:18px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:12px;line-height:18px}.dt-panel-empty p{margin:0}

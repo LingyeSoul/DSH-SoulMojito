@@ -23,6 +23,8 @@
       'settings.preloadAssets': 'Preload character and constant World Info when a new AgentTavern session starts',
       'settings.allowGlobalWrites': 'Allow AgentTavern tools to write memories and variables in the global scope',
       'settings.frontendAutoOpen': 'Open the right sidebar when a frontend appears (once per chat)',
+      'settings.frontendAllowExternalResources': 'Allow frontends to load external resources (any HTTPS origin)',
+      'settings.frontendAllowExternalResourcesHint': 'Lets the iframe load any HTTPS script or stylesheet, and allows fetch/XHR plus CDN source maps (connect-src https:). External scripts can read the chat content visible to the frontend and send it elsewhere; enable only for cards you trust.',
       'settings.gamesDisableResign': 'Disable resign in games (hides the resign button; the AI cannot resign either)',
       'settings.worldFollowsCharacter': 'World books follow character card activation',
       'settings.worldsEmpty': 'No world books imported',

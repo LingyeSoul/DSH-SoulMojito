@@ -449,6 +449,11 @@ export async function handleApi(ctx, req, res) {
       ...(typeof body.frontendAutoOpen === 'boolean'
         ? { frontendAutoOpen: body.frontendAutoOpen }
         : {}),
+      // 允许美化前端加载外部资源（2026-10-21 用户需求）：翻转即时生效——iframe
+      // 每次构建 srcDoc 都从 bootstrap.state 读取，无需写穿缓存。
+      ...(typeof body.frontendAllowExternalResources === 'boolean'
+        ? { frontendAllowExternalResources: body.frontendAllowExternalResources }
+        : {}),
       // 禁用游戏投降（2026-10-14 用户需求）：翻转即时生效——服务层在两个动作
       // 入口（人类棋盘 / Agent game_move）逐次读取判定，无缓存需写穿。
       ...(typeof body.gamesDisableResign === 'boolean'

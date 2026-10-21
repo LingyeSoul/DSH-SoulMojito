@@ -440,6 +440,8 @@ describe('TavernStore', () => {
       agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, worldFollowsCharacter: true,
       // 美化前端右栏自动展开（2026-10-20 用户需求）：默认关闭。
       frontendAutoOpen: false,
+      // 允许美化前端加载外部资源（2026-10-21 用户需求）：默认关闭，显式授权才放行。
+      frontendAllowExternalResources: false,
       cardWorkbenchPresetEnabled: false, agentNovelPresetEnabled: false,
       // 禁用投降（2026-10-14 用户需求；面板「游戏」分区开关）默认关闭。
       gamesDisableResign: false,
@@ -467,6 +469,13 @@ describe('TavernStore', () => {
     // 显式关闭持久化后重开仍保留
     await writeFile(path.join(dir, 'state.json'), JSON.stringify({ worldFollowsCharacter: false }))
     expect((await store.getState()).worldFollowsCharacter).toBe(false)
+  }))
+
+  it('状态：美化前端外部资源开关默认关闭、显式 true 保留', withStore(async (store, dir) => {
+    expect((await store.getState()).frontendAllowExternalResources).toBe(false)
+    // 设置页写盘后重开仍在：CSP 放宽开关属于显式授权，不能被归一化吞掉。
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({ frontendAllowExternalResources: true }))
+    expect((await store.getState()).frontendAllowExternalResources).toBe(true)
   }))
 
   it('状态：模型选择按 session 存取并随旧 state 文件补默认', withStore(async (store) => {
