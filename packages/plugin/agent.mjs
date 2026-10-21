@@ -942,17 +942,20 @@ function mountModExtensions(ctx, options) {
 // packages/plugin/src/prompt-viewer.ts
 var PROMPT_VIEWER_PER_CHAT = 10;
 var PROMPT_VIEWER_TOTAL = 50;
-var records = [];
-var nextSeq = 1;
-var faultInjector;
+var PROMPT_VIEWER_STATE_KEY = Symbol.for("dsh-soulmojito:prompt-viewer");
+function viewerState() {
+  const holder = globalThis;
+  return holder[PROMPT_VIEWER_STATE_KEY] ??= { records: [], nextSeq: 1 };
+}
 function recordPromptView(input, logger) {
   try {
-    faultInjector?.();
+    const state = viewerState();
+    state.faultInjector?.();
     const messages = normalizeMessages(input.request?.messages);
     const system = typeof input.request?.system === "string" ? input.request.system : void 0;
     const record = {
       at: (/* @__PURE__ */ new Date()).toISOString(),
-      seq: nextSeq++,
+      seq: state.nextSeq++,
       character: String(input.character),
       chatId: String(input.chatId),
       mode: String(input.mode),
@@ -965,7 +968,8 @@ function recordPromptView(input, logger) {
       // Agent 模式补充面浅拷贝入缓冲：与调用方后续持有对象隔离（纯防御）。
       agent: input.agent === void 0 ? void 0 : { ...input.agent, sections: input.agent.sections.map((section) => ({ ...section })) }
     };
-    records.push(record);
+    state.records.push(record);
+    const records = state.records;
     let perChat = 0;
     for (let i = records.length - 1; i >= 0; i--) {
       if (records[i].chatId === record.chatId) perChat++;
@@ -974,7 +978,7 @@ function recordPromptView(input, logger) {
         perChat--;
       }
     }
-    if (records.length > PROMPT_VIEWER_TOTAL) records = records.slice(records.length - PROMPT_VIEWER_TOTAL);
+    if (records.length > PROMPT_VIEWER_TOTAL) state.records = records.slice(records.length - PROMPT_VIEWER_TOTAL);
   } catch (error) {
     logger?.warn?.(`dsh-soulmojito: prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -4197,10 +4201,10 @@ var MemoryStore = class _MemoryStore {
   }
   async search(query) {
     const normalized = normalizeQuery(query);
-    const records2 = await this.listRecords(normalized);
+    const records = await this.listRecords(normalized);
     const tokens = tokenizeQuery(normalized.query ?? "");
     const now = Date.now();
-    const hits = records2.map((record) => {
+    const hits = records.map((record) => {
       const haystack = `${record.content}
 ${record.tags.join(" ")}`.toLocaleLowerCase();
       const matched = tokens.filter((token) => haystack.includes(token)).length;
@@ -4248,9 +4252,9 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
    * 排序 createdAt → id（页码偏移在维护编辑（只改 revision/updatedAt）下稳定）。
    */
   async list(scope, scopeId, options = {}) {
-    const records2 = await this.listRecords({ scope, scopeId, includeDeleted: options.includeDeleted === true });
-    records2.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
-    return structuredClone(records2);
+    const records = await this.listRecords({ scope, scopeId, includeDeleted: options.includeDeleted === true });
+    records.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+    return structuredClone(records);
   }
   async put(input, expectedRevision) {
     validateWrite(input);

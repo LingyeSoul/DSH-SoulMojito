@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { apply } from '../src/index.js'
 import { generationHooks } from '../src/generation-hooks.js'
 import {
@@ -361,5 +361,41 @@ describe('client panel section registration marker (main.js source check)', () =
   it('marker does not match a different section id (negative sample)', () => {
     expect("{ id: 'promptsX',".includes(sectionMarker)).toBe(false)
     expect("'panel.section.promptsX':".includes(localeMarker)).toBe(false)
+  })
+})
+
+/* --------------------- 跨 bundle 单实例（index.mjs / agent.mjs） --------------------- */
+
+// prompt-viewer.ts 被两个 bundle 各打包一份：Agent 模式记录写在 agent.mjs 的
+// 那份实例里，查询路由活在 index.mjs 的那份实例里。模块级变量各持一份时面板
+// 永远读不到 Agent 记录（2026-10-21 线上症状：发消息后查看器恒「暂无记录」）。
+// vi.resetModules 后重新 import 即第二个实例，等价于第二个 bundle 的拷贝。
+describe('ring buffer is shared across bundle copies', () => {
+  afterEach(() => resetPromptViews())
+
+  it('a second module instance writes records the first instance can list', async () => {
+    resetPromptViews()
+    vi.resetModules()
+    const secondCopy = await import('../src/prompt-viewer.js')
+    secondCopy.recordPromptView({
+      character: CHAR,
+      chatId: 'agent-chat',
+      mode: 'agent-tavern',
+      request: { messages: [{ role: 'user', content: 'injected' }], params: { temperature: 0.7 } },
+    })
+    const visible = listPromptViews({ chatId: 'agent-chat' })
+    expect(visible).toHaveLength(1)
+    expect(visible[0]!.mode).toBe('agent-tavern')
+    expect(visible[0]!.seq).toBe(1)
+    expect(secondCopy.listPromptViews({ chatId: 'agent-chat' })).toHaveLength(1)
+  })
+
+  it('a second module instance advances the same sequence (React keys stay unique)', async () => {
+    resetPromptViews()
+    vi.resetModules()
+    const secondCopy = await import('../src/prompt-viewer.js')
+    recordPromptView({ character: CHAR, chatId: 'st-chat', mode: 'swipe', request: { messages: [], params: {} } })
+    secondCopy.recordPromptView({ character: CHAR, chatId: 'agent-chat', mode: 'agent-tavern', request: { messages: [], params: {} } })
+    expect(listPromptViews().map((record) => record.seq)).toEqual([2, 1])
   })
 })

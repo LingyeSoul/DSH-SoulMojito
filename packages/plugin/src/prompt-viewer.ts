@@ -10,6 +10,11 @@
  *   （stream-delta / Mod 日志缓冲同款「只观察不反噬」纪律）；
  * - **内存态**：进程内环形缓冲，每聊天保留最近 10 条、总量封顶 50（FIFO 淘汰），
  *   重启即失——与 Mod 日志查看器的客户端环形缓冲同款取舍，不落盘；
+ * - **跨 bundle 单实例**：本模块被 index.mjs（ST 循环记录 + prompts 路由）与
+ *   agent.mjs（Agent 模式记录）各打包一份，模块级变量互不可见——缓冲必须锚定
+ *   globalThis（Symbol.for，同 cross-bundle-events / mods-cross-bundle 纪律），
+ *   否则面板只能读到本 bundle 写入的那一半（Agent 会话记录恒空，2026-10-21
+ *   线上症状：发消息后查看器永远「暂无记录」）；
  * - **范围**：ST 循环记录完整实发请求；Agent 模式（mode='agent-tavern'，
  *   决策 2026-10-11-agent-prompt-viewer）记录**插件预注入面**——LLM 请求由
  *   宿主 AgentLoop 发出，宿主拼装的完整请求（system 头物化 + 历史 projection）
@@ -133,10 +138,24 @@ type HostLogger = { warn?: (message: string) => unknown }
 
 /* ------------------------------ 环形缓冲 ------------------------------ */
 
-let records: PromptViewerRecord[] = []
-let nextSeq = 1
-/** 测试专用故障注入（生产恒 undefined）：让记录路径抛错以验证吞错纪律。 */
-let faultInjector: (() => void) | undefined
+/**
+ * 跨 bundle 共享状态锚点（key 逐字稳定，不得改名）。index.mjs 与 agent.mjs
+ * 各有一份 prompt-viewer.ts 的打包产物；Symbol.for 是同一 realm 内的全局键，
+ * 两份产物因此共读同一份 records / seq / 故障注入槽。
+ */
+const PROMPT_VIEWER_STATE_KEY = Symbol.for('dsh-soulmojito:prompt-viewer')
+
+interface PromptViewerState {
+  records: PromptViewerRecord[]
+  nextSeq: number
+  /** 测试专用故障注入（生产恒 undefined）：让记录路径抛错以验证吞错纪律。 */
+  faultInjector?: () => void
+}
+
+function viewerState(): PromptViewerState {
+  const holder = globalThis as Record<symbol, PromptViewerState | undefined>
+  return (holder[PROMPT_VIEWER_STATE_KEY] ??= { records: [], nextSeq: 1 })
+}
 
 /**
  * 记录一轮实发请求。**永不抛错**：任何失败被吞掉并向宿主日志写一行
@@ -144,12 +163,13 @@ let faultInjector: (() => void) | undefined
  */
 export function recordPromptView(input: PromptViewerInput, logger?: HostLogger): void {
   try {
-    faultInjector?.()
+    const state = viewerState()
+    state.faultInjector?.()
     const messages = normalizeMessages(input.request?.messages)
     const system = typeof input.request?.system === 'string' ? input.request.system : undefined
     const record: PromptViewerRecord = {
       at: new Date().toISOString(),
-      seq: nextSeq++,
+      seq: state.nextSeq++,
       character: String(input.character),
       chatId: String(input.chatId),
       mode: String(input.mode),
@@ -162,8 +182,9 @@ export function recordPromptView(input: PromptViewerInput, logger?: HostLogger):
       // Agent 模式补充面浅拷贝入缓冲：与调用方后续持有对象隔离（纯防御）。
       agent: input.agent === undefined ? undefined : { ...input.agent, sections: input.agent.sections.map((section) => ({ ...section })) },
     }
-    records.push(record)
+    state.records.push(record)
     // 每聊天保留最近 PER_CHAT 条（FIFO：淘汰同 chatId 最旧）。
+    const records = state.records
     let perChat = 0
     for (let i = records.length - 1; i >= 0; i--) {
       if (records[i]!.chatId === record.chatId) perChat++
@@ -173,7 +194,7 @@ export function recordPromptView(input: PromptViewerInput, logger?: HostLogger):
       }
     }
     // 总量封顶 TOTAL（FIFO：淘汰全局最旧）。
-    if (records.length > PROMPT_VIEWER_TOTAL) records = records.slice(records.length - PROMPT_VIEWER_TOTAL)
+    if (records.length > PROMPT_VIEWER_TOTAL) state.records = records.slice(records.length - PROMPT_VIEWER_TOTAL)
   } catch (error) {
     logger?.warn?.(`dsh-soulmojito: prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`)
   }
@@ -181,7 +202,7 @@ export function recordPromptView(input: PromptViewerInput, logger?: HostLogger):
 
 /** 查询记录：可选过滤，按时间倒序（seq 降序——最新在前）。 */
 export function listPromptViews(filter: { character?: string; chatId?: string } = {}): PromptViewerRecord[] {
-  return records
+  return viewerState().records
     .filter((record) =>
       (filter.character === undefined || record.character === filter.character)
       && (filter.chatId === undefined || record.chatId === filter.chatId))
@@ -191,13 +212,14 @@ export function listPromptViews(filter: { character?: string; chatId?: string } 
 
 /** 清空缓冲（测试隔离用）。 */
 export function resetPromptViews(): void {
-  records = []
-  nextSeq = 1
+  const state = viewerState()
+  state.records = []
+  state.nextSeq = 1
 }
 
 /** 测试专用：注入记录路径故障（传 undefined 清除）。 */
 export function setPromptViewerFaultInjector(fn?: () => void): void {
-  faultInjector = fn
+  viewerState().faultInjector = fn
 }
 
 /* --------------------------- loreTrace 提取 --------------------------- */

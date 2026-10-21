@@ -66,6 +66,14 @@ PromptViewerRecord = {
 }
 ```
 
+- **跨 bundle 单实例（2026-10-21 补记）**：本模块被 `index.mjs`（ST 循环记录 +
+  `prompts` 路由）与 `agent.mjs`（Agent 模式记录）各打包一份，模块级变量在
+  两份产物里互不可见。缓冲因此锚定 `globalThis[Symbol.for('dsh-soulmojito:
+  prompt-viewer')]`（与 cross-bundle-events / mods-cross-bundle 同一纪律）：
+  两份产物共读同一份 records / seq / 测试故障注入槽。未锚定时 Agent 模式记录
+  写进 agent.mjs 的私人数组、路由读 index.mjs 的空数组——面板在全部
+  agent-tavern 会话里恒「暂无记录」（2026-10-21 线上症状）。key 逐字稳定，
+  改名等于让已装载的另一份产物失联。
 - **环形缓冲**：每聊天保留最近 `PROMPT_VIEWER_PER_CHAT = 10` 条（淘汰同 chatId
   最旧）、总量封顶 `PROMPT_VIEWER_TOTAL = 50`（FIFO 淘汰全局最旧）。两级上限
   都有测试。
@@ -122,10 +130,13 @@ entryId 落在消息 extra 里，长期事实不丢）。
 
 ## 测试
 
-`packages/plugin/tests/prompt-viewer.spec.ts`（13 项）：
+`packages/plugin/tests/prompt-viewer.spec.ts`（15 项）：
 
 - 环形缓冲：每聊天 10（FIFO 保新）、总量 50（跨聊天全局 FIFO）、脱壳占位与
   params 净化、过滤与倒序；
+- 跨 bundle：`vi.resetModules` 后重新 import 得到第二份模块实例（等价于
+  agent.mjs 的那份打包产物），它写入的记录第一份实例能列出、序号同源递增
+  ——锁定 globalThis 锚点，防止再退回「各 bundle 一份私有数组」；
 - loreTrace：伪造世界书五例（主键 / 副键 AND_ANY / 概率 50 注入 rng / 常驻 /
   delayUntilRecursion 递归）逐字段对齐；默认条目不带概率块；
 - 接线：pre-llm 改写后记录的是改写后形状（system + provider/model）；空总线

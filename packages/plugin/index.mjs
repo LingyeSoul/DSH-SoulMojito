@@ -284,14 +284,14 @@ async function copyChatVariables(variables2, parentChatId, chatId) {
 }
 async function copyChatMemories(deps, parentChatId, chatId) {
   if (deps.memories === void 0) return;
-  let records2;
+  let records;
   try {
-    records2 = await deps.memories.list("chat", parentChatId);
+    records = await deps.memories.list("chat", parentChatId);
   } catch (error) {
     deps.logger?.warn?.(`dsh-soulmojito: fork memory copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`);
     return;
   }
-  for (const record of records2) {
+  for (const record of records) {
     if (await deps.memories.read(record.id, "chat", chatId, true) !== void 0) continue;
     await deps.memories.put({
       id: record.id,
@@ -3420,10 +3420,10 @@ var MemoryStore = class _MemoryStore {
   }
   async search(query) {
     const normalized = normalizeQuery(query);
-    const records2 = await this.listRecords(normalized);
+    const records = await this.listRecords(normalized);
     const tokens = tokenizeQuery(normalized.query ?? "");
     const now = Date.now();
-    const hits = records2.map((record) => {
+    const hits = records.map((record) => {
       const haystack = `${record.content}
 ${record.tags.join(" ")}`.toLocaleLowerCase();
       const matched = tokens.filter((token) => haystack.includes(token)).length;
@@ -3471,9 +3471,9 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
    * 排序 createdAt → id（页码偏移在维护编辑（只改 revision/updatedAt）下稳定）。
    */
   async list(scope, scopeId, options = {}) {
-    const records2 = await this.listRecords({ scope, scopeId, includeDeleted: options.includeDeleted === true });
-    records2.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
-    return structuredClone(records2);
+    const records = await this.listRecords({ scope, scopeId, includeDeleted: options.includeDeleted === true });
+    records.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+    return structuredClone(records);
   }
   async put(input, expectedRevision) {
     validateWrite(input);
@@ -4220,9 +4220,9 @@ function validateCreateConfig(config) {
   return errors;
 }
 function appliedBodyRevision(snapshot2, chapterId) {
-  const records2 = snapshot2.bodyRevisions ?? [];
-  for (let index = records2.length - 1; index >= 0; index -= 1) {
-    const record = records2[index];
+  const records = snapshot2.bodyRevisions ?? [];
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
     if (record.chapterId === chapterId && record.status === "applied") return record;
   }
   return null;
@@ -4428,8 +4428,8 @@ function validateOutlineConsistency(chapters, currentChapterId) {
   }
   return errors;
 }
-function requirementWatermark(records2) {
-  const ordered = [...records2].sort((left, right) => left.sequence - right.sequence);
+function requirementWatermark(records) {
+  const ordered = [...records].sort((left, right) => left.sequence - right.sequence);
   let watermark = 0;
   for (const record of ordered) {
     if (record.status !== "applied" && record.status !== "superseded") break;
@@ -5279,9 +5279,9 @@ function outlinePayloadErrorMessage(errors) {
   };
   return `invalid outline payload: ${errors.map(render).join("; ")}`;
 }
-function applyHandledRequirements(records2, handled, outlineRevision) {
+function applyHandledRequirements(records, handled, outlineRevision) {
   const byId = new Map(handled.map((item) => [item.requirementId, item]));
-  return records2.map((record) => {
+  return records.map((record) => {
     const item = byId.get(record.requirementId);
     if (item === void 0) return record;
     if (item.result === "applied") {
@@ -6189,7 +6189,7 @@ ${tail}`;
       if (effectiveCharacters === 0) throw new NovelConfigError({ message: "revision paragraphs contain no effective characters" });
       await writeImmutableBytes(path6.join(dir, "bodies", `${bodyHash}.txt`), textBytes(paragraphs.join(PARAGRAPH_SEPARATOR)));
       const now = (/* @__PURE__ */ new Date()).toISOString();
-      const records2 = (current.bodyRevisions ?? []).map((record2) => record2.chapterId === input.chapterId && record2.status === "pending" ? { ...record2, status: "discarded" } : record2);
+      const records = (current.bodyRevisions ?? []).map((record2) => record2.chapterId === input.chapterId && record2.status === "pending" ? { ...record2, status: "discarded" } : record2);
       const record = {
         revisionId: `rev-${randomBytes3(6).toString("hex")}`,
         chapterId: input.chapterId,
@@ -6206,7 +6206,7 @@ ${tail}`;
       const next = {
         ...current,
         updatedAt: now,
-        bodyRevisions: [...records2, record]
+        bodyRevisions: [...records, record]
       };
       const revision = await this.publish(dir, current.revision, next, `body-revision:${record.revisionId}`);
       return { revisionId: record.revisionId, revision, bodyHash, effectiveCharacters };
@@ -6241,13 +6241,13 @@ ${tail}`;
         throw new NovelLengthLimitError({ current: totalAfter, target: budget.targetCharacters, hardMaximum: budget.hardMaximumCharacters });
       }
       const now = (/* @__PURE__ */ new Date()).toISOString();
-      const records2 = (current.bodyRevisions ?? []).map((candidate) => {
+      const records = (current.bodyRevisions ?? []).map((candidate) => {
         if (candidate.chapterId !== record.chapterId) return candidate;
         if (candidate.revisionId === record.revisionId) return { ...candidate, status: "applied", appliedAt: now };
         if (candidate.status === "applied") return { ...candidate, status: "superseded" };
         return candidate;
       });
-      const next = { ...current, updatedAt: now, bodyRevisions: records2 };
+      const next = { ...current, updatedAt: now, bodyRevisions: records };
       next.contentRevision = contentRevisionOf(next);
       const revision = await this.publish(dir, current.revision, next, `body-revision-apply:${record.revisionId}`);
       return { revision, effectiveCharacters: record.effectiveCharacters, totalCharacters: totalAfter };
@@ -13202,7 +13202,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.8".trim() : "";
-  const commit = true ? normalizeCommit("2599776") : void 0;
+  const commit = true ? normalizeCommit("0fce85e") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -17763,20 +17763,20 @@ var NovelProjector = class _NovelProjector {
       if (cause.code === "ENOENT") return [];
       throw cause;
     }
-    const records2 = [];
+    const records = [];
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
       const parsed = JSON.parse(await fs15.readFile(path9.join(dir, file), "utf8"));
       if (typeof parsed.id === "string" && typeof parsed.revision === "string") {
-        records2.push({ id: parsed.id, revision: parsed.revision });
+        records.push({ id: parsed.id, revision: parsed.revision });
       }
     }
-    return records2;
+    return records;
   }
 };
 function memoryRecordsFor(novelId, commit, paragraphs) {
   const scopeId = novelScopeId(novelId);
-  const records2 = commit.canonChanges.map((change, index) => ({
+  const records = commit.canonChanges.map((change, index) => ({
     id: `novel-${novelId}-${commit.commitId}-${index}`,
     scope: "chat",
     scopeId,
@@ -17787,7 +17787,7 @@ function memoryRecordsFor(novelId, commit, paragraphs) {
     confidence: 1,
     source: { kind: "novel-commit", novelId, commitId: commit.commitId, unitId: commit.unitId, chapterId: commit.chapterId }
   }));
-  records2.push({
+  records.push({
     id: `novel-${novelId}-${commit.commitId}-${commit.canonChanges.length}`,
     scope: "chat",
     scopeId,
@@ -17798,7 +17798,7 @@ function memoryRecordsFor(novelId, commit, paragraphs) {
     confidence: 1,
     source: { kind: "novel-commit", novelId, commitId: commit.commitId, unitId: commit.unitId, chapterId: commit.chapterId }
   });
-  return records2;
+  return records;
 }
 function orderedChapters(snapshot2) {
   return [...snapshot2.outline?.chapters ?? []].sort((left, right) => left.order - right.order);
@@ -25858,17 +25858,20 @@ function createLazyProjection(options) {
 // packages/plugin/src/prompt-viewer.ts
 var PROMPT_VIEWER_PER_CHAT = 10;
 var PROMPT_VIEWER_TOTAL = 50;
-var records = [];
-var nextSeq = 1;
-var faultInjector;
+var PROMPT_VIEWER_STATE_KEY = Symbol.for("dsh-soulmojito:prompt-viewer");
+function viewerState() {
+  const holder = globalThis;
+  return holder[PROMPT_VIEWER_STATE_KEY] ??= { records: [], nextSeq: 1 };
+}
 function recordPromptView(input, logger) {
   try {
-    faultInjector?.();
+    const state = viewerState();
+    state.faultInjector?.();
     const messages = normalizeMessages(input.request?.messages);
     const system = typeof input.request?.system === "string" ? input.request.system : void 0;
     const record = {
       at: (/* @__PURE__ */ new Date()).toISOString(),
-      seq: nextSeq++,
+      seq: state.nextSeq++,
       character: String(input.character),
       chatId: String(input.chatId),
       mode: String(input.mode),
@@ -25881,7 +25884,8 @@ function recordPromptView(input, logger) {
       // Agent 模式补充面浅拷贝入缓冲：与调用方后续持有对象隔离（纯防御）。
       agent: input.agent === void 0 ? void 0 : { ...input.agent, sections: input.agent.sections.map((section) => ({ ...section })) }
     };
-    records.push(record);
+    state.records.push(record);
+    const records = state.records;
     let perChat = 0;
     for (let i = records.length - 1; i >= 0; i--) {
       if (records[i].chatId === record.chatId) perChat++;
@@ -25890,13 +25894,13 @@ function recordPromptView(input, logger) {
         perChat--;
       }
     }
-    if (records.length > PROMPT_VIEWER_TOTAL) records = records.slice(records.length - PROMPT_VIEWER_TOTAL);
+    if (records.length > PROMPT_VIEWER_TOTAL) state.records = records.slice(records.length - PROMPT_VIEWER_TOTAL);
   } catch (error) {
     logger?.warn?.(`dsh-soulmojito: prompt-viewer record failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 function listPromptViews(filter = {}) {
-  return records.filter((record) => (filter.character === void 0 || record.character === filter.character) && (filter.chatId === void 0 || record.chatId === filter.chatId)).slice().sort((a, b) => b.seq - a.seq);
+  return viewerState().records.filter((record) => (filter.character === void 0 || record.character === filter.character) && (filter.chatId === void 0 || record.chatId === filter.chatId)).slice().sort((a, b) => b.seq - a.seq);
 }
 function buildLoreTrace(lore) {
   const diagnostics = lore.diagnostics?.entries ?? {};
@@ -31024,12 +31028,12 @@ async function executeRun(ctx, deps, scope, active) {
       unresolvedEdits: /* @__PURE__ */ new Set(),
       embedConfig: null
     };
-    const records2 = await deps.memory.list("chat", scope.chatId);
-    let listing = renderMemoryListing(records2, MAINTENANCE_OPENING_MAX_CHARS);
+    const records = await deps.memory.list("chat", scope.chatId);
+    let listing = renderMemoryListing(records, MAINTENANCE_OPENING_MAX_CHARS);
     let opening = buildOpeningMessage(run, listing);
     if (opening.length > MAINTENANCE_OPENING_MAX_CHARS) {
       run.budget = Math.ceil(MAINTENANCE_MAX_LLM_REQUESTS / 2);
-      listing = renderMemoryListing(records2, 2e4);
+      listing = renderMemoryListing(records, 2e4);
       opening = buildOpeningMessage(run, listing);
     }
     const messages = [
@@ -31153,11 +31157,11 @@ function buildOpeningMessage(run, listing) {
     "\u7EF4\u62A4\u6307\u4EE4\uFF1A\u5BF9\u7167\u539F\u6587\uFF08SearchSource \u5173\u952E\u8BCD\u68C0\u7D22\u3001ReadSource \u6309\u697C\u9762\u8303\u56F4\u9605\u8BFB\uFF09\u68C0\u67E5\u4E0A\u8FF0\u8BB0\u5FC6\u2014\u2014\u5408\u5E76\u8DE8\u6279\u6B21\u91CD\u590D\u4E8B\u4EF6\uFF08\u4FDD\u7559\u8F83\u65E9\u8BB0\u5F55 id\uFF09\u3001\u7EA0\u6B63\u4E0E\u539F\u6587\u51B2\u7A81\u7684\u9648\u8FF0\u3001\u5220\u9664\u88AB\u8BC1\u4F2A\u7684\u8BB0\u5F55\uFF1B\u6539\u5199\u5FC5\u987B\u6709\u539F\u6587\u4F9D\u636E\u3002\u5B8C\u6210\u540E CompleteMaintenance \u58F0\u660E\u8986\u76D6\u8303\u56F4\u5E76\u7B80\u77ED\u6C47\u62A5\u3002"
   ].filter((part) => part !== "").join("\n");
 }
-function renderMemoryListing(records2, maxChars) {
+function renderMemoryListing(records, maxChars) {
   const lines = [];
   let used = 0;
   let truncated = false;
-  for (const record of records2) {
+  for (const record of records) {
     const content = record.content.length > 400 ? `${record.content.slice(0, 400)}\u2026` : record.content;
     const line = `- id=${record.id} kind=${record.kind} rev=${record.revision} imp=${record.importance} conf=${record.confidence}${record.tags.length > 0 ? ` tags=${record.tags.join(",")}` : ""} source=${record.source.kind}
   ${content.replace(/\n/g, " ")}`;
@@ -31168,8 +31172,8 @@ function renderMemoryListing(records2, maxChars) {
     used += line.length;
     lines.push(line);
   }
-  if (records2.length === 0) lines.push("\uFF08chat \u4F5C\u7528\u57DF\u5F53\u524D\u6CA1\u6709\u8BB0\u5FC6\u8BB0\u5F55\uFF09");
-  if (truncated) lines.push(`\u2026\uFF08\u6E05\u5355\u8FC7\u957F\u622A\u65AD\uFF0C\u5DF2\u5217 ${lines.length}/${records2.length} \u6761\uFF1B\u7528 ReadMemory \u7FFB\u9875\u8BFB\u53D6\uFF09`);
+  if (records.length === 0) lines.push("\uFF08chat \u4F5C\u7528\u57DF\u5F53\u524D\u6CA1\u6709\u8BB0\u5FC6\u8BB0\u5F55\uFF09");
+  if (truncated) lines.push(`\u2026\uFF08\u6E05\u5355\u8FC7\u957F\u622A\u65AD\uFF0C\u5DF2\u5217 ${lines.length}/${records.length} \u6761\uFF1B\u7528 ReadMemory \u7FFB\u9875\u8BFB\u53D6\uFF09`);
   return lines.join("\n");
 }
 var MAINTENANCE_TOOL_SCHEMAS = [
@@ -31294,12 +31298,12 @@ async function toolReadMemory(run, args) {
   const query = typeof args.query === "string" ? args.query : "";
   const tokens = query === "" ? [] : tokenizeQuery(query);
   if (query !== "" && tokens.length === 0) throw new Error("query produced no searchable tokens");
-  const records2 = (await run.deps.memory.list("chat", run.scope.chatId)).filter((record) => kind === void 0 || record.kind === kind).filter((record) => tokens.length === 0 || matchedTokenCount(`${record.content}
+  const records = (await run.deps.memory.list("chat", run.scope.chatId)).filter((record) => kind === void 0 || record.kind === kind).filter((record) => tokens.length === 0 || matchedTokenCount(`${record.content}
 ${record.tags.join(" ")}`, tokens) >= tokenThreshold(tokens.length));
   const start = page * MAINTENANCE_PAGE_RECORDS;
   const pageRecords = [];
   let used = 0;
-  for (const record of records2.slice(start)) {
+  for (const record of records.slice(start)) {
     if (pageRecords.length >= MAINTENANCE_PAGE_RECORDS) break;
     const view = {
       id: record.id,
@@ -31323,10 +31327,10 @@ ${record.tags.join(" ")}`, tokens) >= tokenThreshold(tokens.length));
   }
   const consumed = start + pageRecords.length;
   return {
-    total: records2.length,
+    total: records.length,
     page,
     pageSize: MAINTENANCE_PAGE_RECORDS,
-    more: consumed < records2.length,
+    more: consumed < records.length,
     records: pageRecords
   };
 }
@@ -31619,9 +31623,9 @@ async function toolCompleteMaintenance(run, args) {
   }
   const sig = floorSignature(run.floors, base, head);
   if (sig === void 0) throw new Error("floor range no longer resolvable against the run snapshot");
-  const records2 = await run.deps.memory.list("chat", run.scope.chatId);
+  const records = await run.deps.memory.list("chat", run.scope.chatId);
   const recordSnapshots = {};
-  for (const record of records2) recordSnapshots[record.id] = record.revision;
+  for (const record of records) recordSnapshots[record.id] = record.revision;
   const stateStore = await MemoryMaintenanceStore.open(run.deps.root);
   const state = await stateStore.read(run.scope.character, run.scope.chatId);
   const receipts = appendReceipt(state.receipts, {
@@ -31634,7 +31638,7 @@ async function toolCompleteMaintenance(run, args) {
   });
   await stateStore.write(run.scope.character, run.scope.chatId, { ...state, receipts });
   run.summary.completion = { baseFloor: base, headFloor: head };
-  return { payload: { ok: true, baseFloor: base, headFloor: head, coveredRecords: records2.length }, isError: false };
+  return { payload: { ok: true, baseFloor: base, headFloor: head, coveredRecords: records.length }, isError: false };
 }
 
 // packages/plugin/src/preset-mount.ts

@@ -7795,6 +7795,9 @@ function onGamesChanged(listener) {
   return gamesChangedListeners.on(listener);
 }
 
+// packages/plugin/src/prompt-viewer.ts
+var PROMPT_VIEWER_STATE_KEY = Symbol.for("dsh-soulmojito:prompt-viewer");
+
 // packages/bind/src/host-session.ts
 var PLUGIN_NAME = "dsh-soulmojito";
 var LEGACY_PLUGIN_NAME = "dsh-tavern";
