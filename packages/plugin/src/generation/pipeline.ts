@@ -6,7 +6,7 @@ import { applyRegexScript, applyRegexScripts, runScript } from '../../../tavern-
 import { ChatRevisionConflictError, boundScriptOf, formatScriptBlock, getScript, normalizeScriptProgress, shouldAdvance } from '../../../tavern-store/src/index.js'
 import { defaultPreset } from '../agent-tavern/preset.js'
 import { isGroupChat } from '../assets.js'
-import { dshHomePath } from '../dsh-home.js'
+import { tavernDataRoot } from '../dsh-home.js'
 import { generationHooks } from '../generation-hooks.js'
 import { formatGuidesBlock } from '../guides.js'
 import { readJson, sendJson } from '../http/io.js'
@@ -518,7 +518,7 @@ export async function buildGenerationLlmRequest(ctx, db, options: GenerationAsse
   // 剧本块是参考不是约束（可偏离）。
   const boundScriptId = boundScriptOf(character.card)
   if (boundScriptId !== undefined) {
-    const scriptRecord = await getScript(dshHomePath('tavern'), boundScriptId)
+    const scriptRecord = await getScript(tavernDataRoot(), boundScriptId)
     if (scriptRecord !== undefined && scriptRecord.chunks.length > 0) {
       const prior = normalizeScriptProgress(chat.header.chat_metadata?.scriptProgress)
       let chunkIndex = prior !== undefined && prior.scriptName === boundScriptId

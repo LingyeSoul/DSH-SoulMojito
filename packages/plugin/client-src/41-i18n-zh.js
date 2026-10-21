@@ -560,7 +560,7 @@
       'mods.confirmHttp': 'HTTP 路由',
       'mods.openPanel': '打开面板',
       'mods.install.title': '从 git 安装',
-      'mods.install.hint': 'GitHub 仓库 URL（或 owner/repo，可带 #ref），根目录需有 mod.json。克隆到 tavern/mods/<id>/；启用仍需两层开关。',
+      'mods.install.hint': 'GitHub 仓库 URL（或 owner/repo，可带 #ref），根目录需有 mod.json。克隆到数据目录的 soulmojito/mods/<id>/（旧安装仍在 tavern/mods/<id>/）；启用仍需两层开关。',
       'mods.install.placeholder': 'https://github.com/owner/mod-repo',
       'mods.install.button': '安装',
       'mods.install.installing': '安装中…',

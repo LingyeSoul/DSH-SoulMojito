@@ -909,7 +909,7 @@ describe('状态尺寸（§3.2：序列化 <64KB）', () => {
 
 describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
   it('开局 → 人类停牌 → Agent 按家规补/停到结算：视图/叙述/终审全链路', async () => {
-    const service = await openGamesService({ root: join(home, 'tavern'), hostVersion: '0.6.4' })
+    const service = await openGamesService({ root: join(home, 'soulmojito'), hostVersion: '0.6.4' })
     try {
       const { session, view } = await service.start({ gameId: 'dsh-soulmojito.blackjack', character: 'ExampleCard', chatId: 'bj-chat' })
       expect(session.gameId).toBe('dsh-soulmojito.blackjack')

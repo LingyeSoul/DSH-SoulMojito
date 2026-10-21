@@ -127,7 +127,7 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'card-workbench-plans-'))
     process.env.DSH_HOME = home
-    tavern = join(home, 'tavern')
+    tavern = join(home, 'soulmojito')
     store = await TavernStore.open(tavern)
 
     await applyPlugin({

@@ -6,7 +6,8 @@
  * - 自动发现默认开启（延迟首查 + 周期复查），但所有网络失败都只写进快照的
  *   `error`，绝不影响插件挂载与页面渲染；TTL 内复用磁盘缓存，避免每次启动
  *   都打 GitHub。
- * - 缓存落在 `$DSH_HOME/tavern/update-state.json`，与 Tavern 数据同根，随
+ * - 缓存落在 `<data root>/update-state.json`（新装 `$DSH_HOME/soulmojito`，
+ *   旧装 `$DSH_HOME/tavern`），与 Tavern 数据同根，随
  *   profile 走；写入失败静默降级为内存态。
  * - 安装只允许一个在飞任务，进度以环形日志暴露给轮询端点。
  * - 包替换必须重启进程（宿主 plugin-manager 的既有语义），因此安装成功后
@@ -79,7 +80,7 @@ export interface TavernUpdateSnapshot {
 
 export interface TavernUpdateServiceOptions {
   ctx?: any
-  /** 缓存目录（`$DSH_HOME/tavern`）。 */
+  /** 缓存目录（数据根：新装 `$DSH_HOME/soulmojito`，旧装 `$DSH_HOME/tavern`）。 */
   home: string
   /** 已安装插件目录（host bundle 的 `import.meta.dirname`）。 */
   pluginDir: string
@@ -376,7 +377,7 @@ export class TavernUpdateService {
       if (typeof cached.checkedAt === 'string') this.checkedAt = cached.checkedAt
       if (typeof cached.source === 'string') this.source = cached.source
       if (cached.remote !== null && typeof cached.remote === 'object') this.remote = cached.remote as TavernRemoteBuild
-      // 过渡态只在「同一个已安装目录」里有效：update-state.json 在 $DSH_HOME/tavern
+      // 过渡态只在「同一个已安装目录」里有效：update-state.json 在数据根
       // 下被多个 profile 共享（desktop/web 同一用户），A profile 装出的
       // pendingRestart 对 B profile 是幽灵——它的插件目录根本没被那次安装写过，
       // stamp 永远追不上，restart-required 就永远解除不了。旧缓存没有来源字段，

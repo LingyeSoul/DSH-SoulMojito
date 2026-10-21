@@ -112,7 +112,7 @@ describe('AgentNovel author tools', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'agent-novel-tools-'))
     process.env.DSH_HOME = home
-    tavern = await TavernStore.open(join(home, 'tavern'))
+    tavern = await TavernStore.open(join(home, 'soulmojito'))
     await tavern.importCharacter({
       spec: 'chara_card_v2',
       spec_version: '2.0',
@@ -150,7 +150,7 @@ describe('AgentNovel author tools', () => {
         },
       },
     })
-    novels = await NovelStore.open(join(home, 'tavern'))
+    novels = await NovelStore.open(join(home, 'soulmojito'))
     const created = await novels.createNovel(tavern, novelConfig())
     novelId = created.novelId
     novelRevision = created.revision
@@ -523,7 +523,7 @@ describe('AgentNovel author tools', () => {
   })
 
   it('memory tools read only the novel:<id> namespace', async () => {
-    const memory = await MemoryStore.open(join(home, 'tavern'))
+    const memory = await MemoryStore.open(join(home, 'soulmojito'))
     const novelScoped = await memory.put({
       scope: 'chat', scopeId: `novel:${novelId}`, kind: 'semantic',
       content: 'The keeper hid the brass key under the well stone.',

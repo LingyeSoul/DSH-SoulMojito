@@ -18,7 +18,7 @@ dsh --profile web
 dsh plugin --profile desktop add github:LingyeSoul/DSH-SoulMojito#path:/packages/plugin
 ```
 
-从旧包名迁移（2026-10-16）时先 `dsh plugin --profile <p> remove dsh-tavern`。数据（`$DSH_HOME/tavern/`）、既有会话与对局的持久化标记、旧环境变量（`DSH_TAVERN_*`）与旧游戏命名空间 id 均被读取端兼容，无需迁移；完整映射见根 README「从旧名迁移」。
+从旧包名迁移（2026-10-16）时先 `dsh plugin --profile <p> remove dsh-tavern`。数据（新装 `$DSH_HOME/soulmojito/`、旧装 `$DSH_HOME/tavern/`）、既有会话与对局的持久化标记、旧环境变量（`DSH_TAVERN_*`）与旧游戏命名空间 id 均被读取端兼容，无需迁移；完整映射见根 README「从旧名迁移」。
 
 ## 包级运行面
 

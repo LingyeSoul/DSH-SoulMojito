@@ -116,8 +116,8 @@ describe('AgentNovel import and revision tools (proposal 0020)', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'agent-novel-import-'))
     process.env.DSH_HOME = home
-    tavern = await TavernStore.open(join(home, 'tavern'))
-    novels = await NovelStore.open(join(home, 'tavern'))
+    tavern = await TavernStore.open(join(home, 'soulmojito'))
+    novels = await NovelStore.open(join(home, 'soulmojito'))
     runtime = scriptedRuntime()
     tools = new Map()
     apply({

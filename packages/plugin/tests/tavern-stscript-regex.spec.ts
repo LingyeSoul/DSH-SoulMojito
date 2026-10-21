@@ -60,7 +60,7 @@ describe('STscript /regex command (SLASH_COMMAND placement application point)', 
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-stregex-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
     await store.importCharacter({
       spec: 'chara_card_v2',
       spec_version: '2.0',

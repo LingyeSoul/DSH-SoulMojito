@@ -102,7 +102,7 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'card-workbench-p3-'))
     process.env.DSH_HOME = home
-    tavern = join(home, 'tavern')
+    tavern = join(home, 'soulmojito')
     store = await TavernStore.open(tavern)
 
     await applyPlugin({
@@ -194,7 +194,7 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
     })
     expect(JSON.parse(JSON.stringify(blank))).toEqual(blank)
     // 出厂快照可恢复:restore 回到创建态（快照在 <home>/tavern 下,不在 home 根）
-    expect((await readOriginalSnapshot(join(home, 'tavern'), 'Blank Slate'))?.data.name).toBe('Blank Slate')
+    expect((await readOriginalSnapshot(join(home, 'soulmojito'), 'Blank Slate'))?.data.name).toBe('Blank Slate')
 
     const populated = await tools.get('card_create')!.execute({
       name: 'Script Hero',

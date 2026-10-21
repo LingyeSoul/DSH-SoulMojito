@@ -3684,11 +3684,28 @@ function applyCardOverride(identifier, content, card) {
 }
 
 // packages/plugin/src/dsh-home.ts
+import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join as join4, resolve } from "node:path";
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
   return join4(resolve(configured || join4(homedir(), ".dsh")), ...segments);
+}
+var TAVERN_DATA_DIR = "soulmojito";
+var LEGACY_TAVERN_DATA_DIR = "tavern";
+function tavernDataRoot(...segments) {
+  const next = dshHomePath(TAVERN_DATA_DIR);
+  if (holdsTavernData(next)) return join4(next, ...segments);
+  const legacy = dshHomePath(LEGACY_TAVERN_DATA_DIR);
+  if (holdsTavernData(legacy)) return join4(legacy, ...segments);
+  return join4(next, ...segments);
+}
+function holdsTavernData(root) {
+  try {
+    return readdirSync(root).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 // packages/plugin/src/lazy-projection.ts
@@ -3748,7 +3765,7 @@ var DEFAULT_USER = "User";
 var CHAR_FALLBACK = "the character";
 var storePromise;
 function store2() {
-  return storePromise ??= TavernStore.open(dshHomePath("tavern"));
+  return storePromise ??= TavernStore.open(tavernDataRoot());
 }
 function mountPresetProjection(options) {
   const freeze = /* @__PURE__ */ new Map();
@@ -4051,7 +4068,7 @@ async function applyPlan(dir, planId) {
 // packages/plugin/src/card-workbench/shared.ts
 var tavernStorePromise;
 function tavernStore() {
-  return tavernStorePromise ??= TavernStore.open(dshHomePath("tavern"));
+  return tavernStorePromise ??= TavernStore.open(tavernDataRoot());
 }
 async function requireCharacter(name2) {
   const found = await (await tavernStore()).getCharacter(name2);
@@ -4226,7 +4243,7 @@ var cardCoreTools = [
     exec?.signal?.throwIfAborted();
     if (args.planId !== void 0) {
       const planId = stringArg(args.planId);
-      const plan = await getPlan(dshHomePath("tavern"), planId);
+      const plan = await getPlan(tavernDataRoot(), planId);
       if (plan === void 0) throw new Error(`plan '${planId}' not found`);
       if (plan.kind !== "card") throw new Error(`plan '${planId}' is a world plan; apply it with world_put (edit) or world_create (create)`);
       if (plan.character !== character) throw new Error(`plan '${planId}' belongs to character '${plan.character}', not '${character}'`);
@@ -4250,7 +4267,7 @@ var cardCoreTools = [
   }, cardSummaryOutput, async (args, exec) => {
     const character = stringArg(args.character);
     exec?.signal?.throwIfAborted();
-    const original = await readOriginalSnapshot(dshHomePath("tavern"), character);
+    const original = await readOriginalSnapshot(tavernDataRoot(), character);
     if (original === void 0) return { found: false, character };
     return { found: true, ...cardSummary(character, original) };
   }),
@@ -4261,7 +4278,7 @@ var cardCoreTools = [
     if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR);
     const character = stringArg(args.character);
     exec?.signal?.throwIfAborted();
-    const restored = await restoreOriginal(dshHomePath("tavern"), character);
+    const restored = await restoreOriginal(tavernDataRoot(), character);
     if (restored === void 0) {
       throw new Error(`no original snapshot for '${character}'; the card was never imported through the Tavern import route`);
     }
@@ -4306,7 +4323,7 @@ var cardCoreTools = [
         return !(record.character === character && record.group !== true);
       }))
     }));
-    const snapshotRemoved = await deleteOriginalSnapshot(dshHomePath("tavern"), character);
+    const snapshotRemoved = await deleteOriginalSnapshot(tavernDataRoot(), character);
     return { deleted: true, character, deletedChats: chats.length, removedFromGroups, snapshotRemoved };
   }),
   tool("card_plan_propose", "Record a pending card modification plan (confirmation protocol): per-field newValue plus an optional note; the CURRENT values are snapshotted from the live working copy so the diff shown to the user is truthful. Text fields take strings; tags and alternateGreetings take the full replacement array. Returns a planId \u2014 the user then approves the plan in the workbench panel, or confirms in conversation and you call card_put with that planId and confirmed: true. Proposing does not write the card.", {
@@ -4333,7 +4350,7 @@ var cardCoreTools = [
     const proposed = parsePlanChanges(args.changes);
     exec?.signal?.throwIfAborted();
     const found = await requireCharacter(character);
-    const plan = await proposeCardPlan(dshHomePath("tavern"), character, {
+    const plan = await proposeCardPlan(tavernDataRoot(), character, {
       title,
       changes: proposed.map(({ field, newValue, note }) => ({
         field,
@@ -4411,7 +4428,7 @@ var cardCreateTool = tool("card_create", "Create a new Tavern character card fro
     extensions: {}
   };
   const { card } = await db.importCharacter({ spec: "chara_card_v2", spec_version: "2.0", data });
-  const snapshotTaken = await saveOriginalSnapshot(dshHomePath("tavern"), card.data.name, card);
+  const snapshotTaken = await saveOriginalSnapshot(tavernDataRoot(), card.data.name, card);
   await nameSessionAfterCreatedCard(exec, card.data.name);
   return {
     created: true,
@@ -4433,7 +4450,7 @@ var cardApplyMvuTool = tool("card_apply_mvu", "Convert a character card to the M
   const template = statusTemplateArg(args.statusTemplate);
   const variables = args.initialVariables === void 0 ? void 0 : initialVariablesArg(args.initialVariables);
   exec?.signal?.throwIfAborted();
-  const root = dshHomePath("tavern");
+  const root = tavernDataRoot();
   const db = await tavernStore();
   const found = await requireCharacter(character);
   let snapshotTaken = false;
@@ -4541,7 +4558,7 @@ async function saveCardValues(character, values, found) {
     data: nextData
   });
   if (saved.card.data.name !== current.card.data.name) {
-    await moveOriginalSnapshot(dshHomePath("tavern"), character, saved.card.data.name);
+    await moveOriginalSnapshot(tavernDataRoot(), character, saved.card.data.name);
   }
   return { found: current, saved };
 }
@@ -4582,7 +4599,7 @@ async function executeCardPlan(plan) {
   }
   const { found: written, saved } = await saveCardValues(plan.character, values, found);
   const formatted = formatWriteResult(written, saved, values);
-  const applied = await applyPlan(dshHomePath("tavern"), plan.id);
+  const applied = await applyPlan(tavernDataRoot(), plan.id);
   return {
     plan: applied,
     character: formatted.character,
@@ -4909,7 +4926,7 @@ var worldTools = [
       }));
       return { uid: edit.uid, action: existing === void 0 ? "create" : "update", fields, ...note !== void 0 ? { note } : {} };
     });
-    const plan = await proposeWorldPlan(dshHomePath("tavern"), world, {
+    const plan = await proposeWorldPlan(tavernDataRoot(), world, {
       op: create ? "create" : "edit",
       title,
       entries
@@ -4993,7 +5010,7 @@ var worldTools = [
     exec?.signal?.throwIfAborted();
     if (args.planId !== void 0) {
       const planId = stringArg(args.planId);
-      const plan = await getPlan(dshHomePath("tavern"), planId);
+      const plan = await getPlan(tavernDataRoot(), planId);
       if (plan === void 0) throw new Error(`plan '${planId}' not found`);
       if (plan.kind !== "world" || plan.op !== "edit") throw new Error(`plan '${planId}' is not a world edit plan; book creations go through world_create and card plans through card_put`);
       if (plan.world !== world) throw new Error(`plan '${planId}' belongs to world '${plan.world}', not '${world}'`);
@@ -5035,7 +5052,7 @@ var worldTools = [
     exec?.signal?.throwIfAborted();
     if (args.planId !== void 0) {
       const planId = stringArg(args.planId);
-      const plan = await getPlan(dshHomePath("tavern"), planId);
+      const plan = await getPlan(tavernDataRoot(), planId);
       if (plan === void 0) throw new Error(`plan '${planId}' not found`);
       if (plan.kind !== "world" || plan.op !== "create") throw new Error(`plan '${planId}' is not a world creation plan; edit plans go through world_put and card plans through card_put`);
       if (plan.world !== name2) throw new Error(`plan '${planId}' belongs to world '${plan.world}', not '${name2}'`);
@@ -5185,7 +5202,7 @@ async function executeWorldPlan(plan) {
     });
     const entries2 = seeds.map((values, uid) => worldEntryFromValues(uid, values));
     await db.putWorld({ name: plan.world, entries: entries2 });
-    const applied2 = await applyPlan(dshHomePath("tavern"), plan.id);
+    const applied2 = await applyPlan(tavernDataRoot(), plan.id);
     return {
       plan: applied2,
       world: plan.world,
@@ -5226,7 +5243,7 @@ async function executeWorldPlan(plan) {
   });
   const { entries, touched } = applyWorldEdits(plan.world, book, edits);
   await db.putWorld({ ...book, entries });
-  const applied = await applyPlan(dshHomePath("tavern"), plan.id);
+  const applied = await applyPlan(tavernDataRoot(), plan.id);
   return {
     plan: applied,
     world: plan.world,
@@ -5706,7 +5723,7 @@ var materialReadOutput = objectOutput({
 var materialTools = [
   tool("material_list", "List the script/material library (proposal 0014): name, format, chunk count and which cards are bound to each script (via extensions.agentTavern.scriptId). Entry point when the user wants a card made from a script or other material.", {}, materialListOutput, async (_args, exec) => {
     exec?.signal?.throwIfAborted();
-    const summaries = await listScripts(dshHomePath("tavern"));
+    const summaries = await listScripts(tavernDataRoot());
     const db = await tavernStore();
     const bindings = /* @__PURE__ */ new Map();
     for (const characterName of await db.listCharacters()) {
@@ -5746,7 +5763,7 @@ var materialTools = [
       requested = args.chunkIndex;
     }
     exec?.signal?.throwIfAborted();
-    const record = await getScript(dshHomePath("tavern"), scriptName);
+    const record = await getScript(tavernDataRoot(), scriptName);
     if (record === void 0 || record.chunks.length === 0) return { found: false, script: scriptName };
     const chunkIndex = Math.min(Math.max(requested, 0), record.chunks.length - 1);
     const text = record.chunks[chunkIndex].text;

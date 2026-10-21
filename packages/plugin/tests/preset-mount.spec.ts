@@ -108,7 +108,7 @@ describe('workbench/novel preset projection mounts', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-preset-mount-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
     await store.putPreset('Mount Preset', structuredClone(PRESET))
     await store.updateState(() => ({
       activePreset: 'Mount Preset',

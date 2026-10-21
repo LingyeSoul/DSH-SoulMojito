@@ -129,7 +129,7 @@ describe('internal Tavern session bridge occupation', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-occupy-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
     await store.importCharacter({
       spec: 'chara_card_v2',
       spec_version: '2.0',
@@ -774,11 +774,11 @@ describe('internal Tavern session bridge occupation', () => {
     expect(res.statusCode).toBe(200)
     const body = JSON.parse(res.chunks.join(''))
     expect(body.internalWorkspace).toEqual({
-      path: join(home, 'tavern', 'workspace'),
+      path: join(home, 'soulmojito', 'workspace'),
       title: 'Tavern (internal)',
     })
     expect(body.workbenchWorkspace).toEqual({
-      path: join(home, 'tavern', 'workbench'),
+      path: join(home, 'soulmojito', 'workbench'),
       title: 'Tavern Workbench (internal)',
     })
     // 条目数投影：面板列表不点开书也显示真实条目数；含禁用条目，与浏览视图口径一致。
@@ -786,7 +786,7 @@ describe('internal Tavern session bridge occupation', () => {
   })
 
   it('keeps bootstrap serving world entry counts when a world file is corrupt', async () => {
-    const corruptPath = join(home, 'tavern', 'worlds', 'Broken Lore.json')
+    const corruptPath = join(home, 'soulmojito', 'worlds', 'Broken Lore.json')
     writeFileSync(corruptPath, 'not json')
     try {
       const res = makeResponse()
@@ -1282,7 +1282,7 @@ describe('internal Tavern session bridge occupation', () => {
 
   // 放在末尾：向共享记忆目录写入记录，会改变前面 audit 测试的 memories 断言。
   it('returns memory records, not search hits, from the AgentTavern audit', async () => {
-    const memories = await MemoryStore.open(join(home, 'tavern'))
+    const memories = await MemoryStore.open(join(home, 'soulmojito'))
     await memories.put({
       scope: 'character',
       scopeId: CHARACTER,

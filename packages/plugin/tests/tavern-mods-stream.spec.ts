@@ -121,7 +121,7 @@ describe('stream-delta wiring in runGeneration (A-3)', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-stream-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
     await store.importCharacter(importBody(CHAR))
     await store.putPreset('stream-preset', {
       prompts: [{ identifier: 'chatHistory', marker: true }],

@@ -53,11 +53,28 @@ function anchorCandidates(anchor) {
 }
 
 // packages/plugin/src/dsh-home.ts
+import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
   return join(resolve(configured || join(homedir(), ".dsh")), ...segments);
+}
+var TAVERN_DATA_DIR = "soulmojito";
+var LEGACY_TAVERN_DATA_DIR = "tavern";
+function tavernDataRoot(...segments) {
+  const next = dshHomePath(TAVERN_DATA_DIR);
+  if (holdsTavernData(next)) return join(next, ...segments);
+  const legacy = dshHomePath(LEGACY_TAVERN_DATA_DIR);
+  if (holdsTavernData(legacy)) return join(legacy, ...segments);
+  return join(next, ...segments);
+}
+function holdsTavernData(root) {
+  try {
+    return readdirSync(root).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 // packages/tavern-store/src/store.ts
@@ -3060,7 +3077,7 @@ function finishError(finish) {
 }
 var tavernStorePromise;
 function tavernStore() {
-  return tavernStorePromise ??= TavernStore.open(dshHomePath("tavern"));
+  return tavernStorePromise ??= TavernStore.open(tavernDataRoot());
 }
 async function isStorySession(sessionId) {
   try {

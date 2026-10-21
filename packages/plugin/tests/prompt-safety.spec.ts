@@ -130,7 +130,7 @@ describe('systemPrompt channels stay host-safe with macro-laden assets (integrat
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-prompt-safety-'))
     process.env.DSH_HOME = home
-    const tavernRoot = join(home, 'tavern')
+    const tavernRoot = join(home, 'soulmojito')
     store = await TavernStore.open(tavernRoot)
     await store.importCharacter({
       spec: 'chara_card_v2',

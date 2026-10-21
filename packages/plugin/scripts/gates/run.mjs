@@ -926,8 +926,14 @@ function checkInternalWorkspaceText(serverText, clientText) {
     'workbenchWorkspace',
     'TAVERN_WORKSPACE_TITLE',
     'TAVERN_WORKBENCH_WORKSPACE_TITLE',
-    'dshHomePath("tavern", "workspace")',
-    'dshHomePath("tavern", "workbench")',
+    'tavernDataRoot("workspace")',
+    'tavernDataRoot("workbench")',
+    // 2026-10-21 数据根从 tavern 迁到 soulmojito：新目录常量、旧目录兼容
+    // 常量与目录探测函数必须同时进服务端 bundle——少任何一个，旧安装会
+    // 静默读到空库或新安装写回旧路径。
+    'TAVERN_DATA_DIR',
+    'LEGACY_TAVERN_DATA_DIR',
+    'holdsTavernData',
   ]) {
     if (!serverText.includes(marker)) problems.push(`server internal workspace is missing marker '${marker}'`)
   }
@@ -2045,7 +2051,8 @@ function runModLoaderProbe(script, extraEnv = {}) {
       symlinkSync(dependencyRoot, join(tempRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
     }
     const dshHome = join(tempRoot, 'dsh-home')
-    const modsRoot = join(dshHome, 'tavern', 'mods')
+    // 2026-10-21 起干净 home 的数据根是 soulmojito/（旧目录兼容只在旧库存在时生效）。
+    const modsRoot = join(dshHome, 'soulmojito', 'mods')
     // 夹具：示例 Mod（仓库交付物）+ 坏 mod.json（坏 Mod 不断路反样本）+ P2 探针
     // （三件套示例 mod + llm 能力键有无的对照双 mod）。
     const exampleDir = join(modsRoot, EXAMPLE_MOD_ID)
@@ -2983,7 +2990,9 @@ const gates = [
       const server = [
         'internalWorkspace workbenchWorkspace',
         'TAVERN_WORKSPACE_TITLE TAVERN_WORKBENCH_WORKSPACE_TITLE',
-        'dshHomePath("tavern", "workspace") dshHomePath("tavern", "workbench")',
+        'tavernDataRoot("workspace") tavernDataRoot("workbench")',
+        'var TAVERN_DATA_DIR = "soulmojito"; var LEGACY_TAVERN_DATA_DIR = "tavern";',
+        'function holdsTavernData(root) {}',
       ].join('\n')
       const client = [
         'function ensureTavernWorkspace(ctx)',
@@ -3014,12 +3023,16 @@ const gates = [
         'ctx.workspaces.connectWorkspace(workspaceId)',
         "if (node.textContent === 'Tavern (internal)') node.hidden = true",
       ].join('\n')
+      const badStorage = server.replace('tavernDataRoot("workspace")', 'dshHomePath("workspace")')
+      const badLegacy = server.replace('function holdsTavernData(root) {}', '')
       return checkInternalWorkspaceText(server, client).length === 0
         && checkInternalWorkspaceText(server, bad).length > 0
         && checkInternalWorkspaceText(server, titleOnly).length > 0
         && checkInternalWorkspaceText('', client).length > 0
+        && checkInternalWorkspaceText(badStorage, client).length > 0
+        && checkInternalWorkspaceText(badLegacy, client).length > 0
         ? []
-        : ['internal workspace self-test did not reject native-workspace routing']
+        : ['internal workspace self-test did not reject native-workspace routing or the storage-root compat markers']
     },
     check: () => existsSync(SERVER_PATH) && existsSync(CLIENT_PATH)
       ? checkInternalWorkspaceText(readFileSync(SERVER_PATH, 'utf8'), readFileSync(CLIENT_PATH, 'utf8'))

@@ -123,7 +123,7 @@ describe('curator summarize wiring (regression: unawaited async target resolutio
   beforeEach(async () => {
     restoreHome = process.env.DSH_HOME
     process.env.DSH_HOME = home
-    const tavern = await TavernStore.open(join(home, 'tavern'))
+    const tavern = await TavernStore.open(join(home, 'soulmojito'))
     await tavern.updateState(() => ({
       sessionBindings: {
         'session-1': { architecture: 'agent-novel', novelId: 'nvl-1' },
@@ -155,7 +155,7 @@ describe('curator summarize wiring (regression: unawaited async target resolutio
   })
 
   it('awaits the panel runtime override written into the tavern store', async () => {
-    const tavern = await TavernStore.open(join(home, 'tavern'))
+    const tavern = await TavernStore.open(join(home, 'soulmojito'))
     await tavern.updateState(() => ({ compaction: { curatorProvider: 'runtime-p', curatorModel: 'runtime-m' } }))
     const curator = new TavernCompactionCurator(freshCtx(), { curatorProvider: 'siliconflow', curatorModel: 'zai-org/GLM-5.2' })
     // resolveCuratorTarget 读存储是 async：漏 await 时该层永远不生效。

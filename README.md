@@ -5,7 +5,7 @@
 <p align="center">把 DSH（deepseek-harness）扩展成兼容 SillyTavern 生态的原生角色扮演工作区。</p>
 
 <p align="center">
-  <strong>v0.6.7</strong> · 面向 DSH <code>0.2.1-rc.2</code>（兼容 <code>0.2.0-rc.2</code>） · GPL-3.0
+  <strong>v0.6.8</strong> · 面向 DSH <code>0.2.1-rc.2</code>（兼容 <code>0.2.0-rc.2</code>） · GPL-3.0
 </p>
 
 ## 这是什么
@@ -88,7 +88,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 - **Agent 游戏桥** — 标准游戏引擎契约（`game.json` 清单 + 零依赖纯函数 `engine.mjs` + 自包含 `view.html`），三源注册（内置 / 导入 / Mod）。棋盘自动显示在与 MVU 状态同位处；Agent 在自己回合内用阻塞等待挂起，人类落子跨 bundle 写穿唤醒，**用户无需发送聊天消息触发下一步**。游戏包可直接从面板导入（zip 上传 / git 安装），制作指南见 [`docs/games/game-package.md`](docs/games/game-package.md)，设计契约见 [`docs/proposals/0018-agent-game-bridge.md`](docs/proposals/0018-agent-game-bridge.md)。
 - **九款内置游戏** — 井字棋、五子棋、中国象棋、军棋、21 点、记忆翻牌对战、大富翁、地牢爬行、中国跳棋，开箱可玩。
 - **游戏工具 7 件** — `game_list` / `game_start` / `game_state` / `game_history` / `game_move` / `game_wait` / `game_wait_full`，按 token 经济设计：读归读、写归写，wait/move 只回增量。
-- **Mod 扩展接口** — 把带 `mod.json` 的目录放进 `$DSH_HOME/tavern/mods/`（或面板内 git 一键安装）即可被识别，默认禁用。首启弹确认层如实展示声明的能力面（知情同意，含无沙箱告知）。启用后可注册：五相位生成 hook（user-input / pre-assemble / pre-llm / post-output / post-save，顺序 waterfall，抛错/超时/忘 return 统一降级不中断生成）、Agent 工具（强制 `<modId>_` 前缀，与内置工具三层查重，冲突即拒）、宿主宏与 STscript 命令、prompt 分区（order 钳制 -50..0）、配额存储（单值 256KB / 总量 1MB）、HTTP 子路由、沙箱化面板 UI（`sandbox="allow-scripts"`，无 same-origin，CSP `connect-src 'none'`）。坏 Mod 只记审计跳过、不拖垮本体；禁用/卸载全注册面回收，全部装载与调用行为落审计日志；`DSH_SOULMOJITO_DISABLE_MODS` 可硬关整个 Mod 系统。Mod 还可声明按钮（manifest `buttons` → 面板与 ST 聊天视图渲染 chip，点击分发到 `api.onButton`）、接收本客户端写入的下行事件推送（聊天保存/资产保存/guides/按钮点击），Mod UI 的 console 输出自动回投宿主的 per-mod 日志查看器。开发者文档见 [`docs/mods/mod-api.md`](docs/mods/mod-api.md)，官方示例覆盖 v1 全部能力面。
+- **Mod 扩展接口** — 把带 `mod.json` 的目录放进 `$DSH_HOME/soulmojito/mods/`（旧安装仍是 `$DSH_HOME/tavern/mods/`；或面板内 git 一键安装）即可被识别，默认禁用。首启弹确认层如实展示声明的能力面（知情同意，含无沙箱告知）。启用后可注册：五相位生成 hook（user-input / pre-assemble / pre-llm / post-output / post-save，顺序 waterfall，抛错/超时/忘 return 统一降级不中断生成）、Agent 工具（强制 `<modId>_` 前缀，与内置工具三层查重，冲突即拒）、宿主宏与 STscript 命令、prompt 分区（order 钳制 -50..0）、配额存储（单值 256KB / 总量 1MB）、HTTP 子路由、沙箱化面板 UI（`sandbox="allow-scripts"`，无 same-origin，CSP `connect-src 'none'`）。坏 Mod 只记审计跳过、不拖垮本体；禁用/卸载全注册面回收，全部装载与调用行为落审计日志；`DSH_SOULMOJITO_DISABLE_MODS` 可硬关整个 Mod 系统。Mod 还可声明按钮（manifest `buttons` → 面板与 ST 聊天视图渲染 chip，点击分发到 `api.onButton`）、接收本客户端写入的下行事件推送（聊天保存/资产保存/guides/按钮点击），Mod UI 的 console 输出自动回投宿主的 per-mod 日志查看器。开发者文档见 [`docs/mods/mod-api.md`](docs/mods/mod-api.md)，官方示例覆盖 v1 全部能力面。
 - **示例 Mod** — 四个官方示例覆盖 v1 全部能力面：[`asset-stats`](packages/plugin/examples/mods/dsh-soulmojito.asset-stats)（资产只读统计）、[`mood-tracker`](packages/plugin/examples/mods/dsh-soulmojito.mood-tracker)（post-output hook + 情绪工具对 + iframe 面板）、[`story-clock`](packages/plugin/examples/mods/dsh-soulmojito.story-clock)（聊天变量 `clock` + `{{clock}}` 宏 + `/clock` 命令族 + `llm` 门控摘要）、[`rps`](packages/plugin/examples/mods/dsh-soulmojito.rps)。
 
 ### Tavern 管理面板
@@ -98,7 +98,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 | 分区 | 内容 |
 |---|---|
 | 总览 | 当前角色 / 预设 / 人设 / 世界书开关与各类资产数量 |
-| 角色卡 / 世界书 / 预设 | 导入（PNG / CHARX / JSON）、编辑、搜索、设为当前、导出、删除；保存经服务端格式校验后写回 `$DSH_HOME/tavern/` |
+| 角色卡 / 世界书 / 预设 | 导入（PNG / CHARX / JSON）、编辑、搜索、设为当前、导出、删除；保存经服务端格式校验后写回 `$DSH_HOME/soulmojito/`（旧安装写回 `tavern/`） |
 | 聊天 / 群组 / 人设 / 持续指引 / 正则 / 变量 | 各资产的管理面，从设置页统一归位到这里 |
 | 小说 / 剧本 | AgentNovel 小说库；剧本资产的分块、绑定与进度 |
 | 工作台 | 方案确认入口（逐字段 diff → 批准并应用 / 拒绝）与试写 |
@@ -126,7 +126,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 
 - **每聊天一个正式会话** — 每个 Tavern 聊天绑定一个正式 DSH session；view/composer/标题栏只接管带有效 Tavern marker 的会话，普通 DSH 会话保持原生表面。生成循环把 turn/step、流式 chunk、assistant message 与 provider usage 镜像进同一 session，因此标题栏直接复用宿主的 `sessionStats` / `tokenUsage` projection。
 - **Composer 模型选择** — 复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
-- **内部工作区** — ST 与 AgentTavern 新聊天共用 `$DSH_HOME/tavern/workspace/` 下的 `Tavern (internal)` 工作区，插件按 workspace 路径/ID 从原生侧边栏隐藏该分组。宿主 `rc.6` 没有可追加到原生 session tree 的正式 list slot，侧栏因此使用一个集中、版本敏感但**失败关闭**的 DOM adapter（只匹配可见左侧 `[role="tree"]`，解绑或卸载时可逆恢复）；面板入口本身走官方 slot，不依赖 adapter 是否挂载成功。
+- **内部工作区** — ST 与 AgentTavern 新聊天共用数据根下 `workspace/`（新装 `$DSH_HOME/soulmojito/workspace/`，旧装 `$DSH_HOME/tavern/workspace/`）的 `Tavern (internal)` 工作区，插件按 workspace 路径/ID 从原生侧边栏隐藏该分组。宿主 `rc.6` 没有可追加到原生 session tree 的正式 list slot，侧栏因此使用一个集中、版本敏感但**失败关闭**的 DOM adapter（只匹配可见左侧 `[role="tree"]`，解绑或卸载时可逆恢复）；面板入口本身走官方 slot，不依赖 adapter 是否挂载成功。
 - **语言** — 插件 UI 跟随 DSH 的语言设置（zh/en），切换后无需刷新即时生效。
 - **设置页开关** — 「新聊天架构」、「AgentTavern 上下文」、「压缩总结模型」；`worldFollowsCharacter`（世界书跟随角色卡激活）、`preloadAssets`（新 AgentTavern 会话开始时一次性预载角色信息与常驻世界书条目，默认关闭且不追溯已有会话）、`allowGlobalWrites`（允许工具写 global 作用域，默认关闭）、`gamesDisableResign`（禁用投降），以及 `nativePersona`（在标准 DSH Agent 会话中使用当前角色，默认关闭）。设置页标题下显示当前构建的版本与 commit。
 
@@ -202,7 +202,7 @@ pnpm run check
 
 插件自带从 GitHub 发现新版本与一键更新，桌面版不必手敲 `dsh plugin`。
 
-- **发现** — 「设置 → DSH-SoulMojito」标题下与管理面板「总览」显示当前构建、GitHub 最新构建、待合入的 commit 列表与上次检查时间。启动后延迟 12s 首查、每 6h 复查，结果缓存在 `$DSH_HOME/tavern/update-state.json`；「检查更新」按钮穿透缓存立即查。
+- **发现** — 「设置 → DSH-SoulMojito」标题下与管理面板「总览」显示当前构建、GitHub 最新构建、待合入的 commit 列表与上次检查时间。启动后延迟 12s 首查、每 6h 复查，结果缓存在数据根的 `update-state.json`（新装 `$DSH_HOME/soulmojito/`，旧装 `$DSH_HOME/tavern/`）；「检查更新」按钮穿透缓存立即查。
 - **判定** — 仓库不发 release/tag，以 main 分支最新 commit + `packages/plugin/package.json` 的 version 为准。
 - **落地** — 「立即更新」按 `dsh plugin` → 宿主 `plugin-manager` 服务 → GitHub checkout 覆写的顺序执行，进度日志实时显示。三条路径都**需要重启 DSH**：包替换要新的 JS module generation，宿主 HMR 不监听 `node_modules`。
 - **来源降级** — `api.github.com` → `raw.githubusercontent.com` + `git ls-remote` → commits atom feed；每个 HTTP 请求在 fetch 失败后自动用系统 `curl` 重试（企业 TLS 中间人会让 node 的证书校验失败）。
@@ -245,8 +245,17 @@ dsh plugin --profile web add ./packages/plugin
 ```
 
 - GitHub 旧地址自动重定向到新仓库，存量安装的自更新链路不断。
-- 数据目录（`$DSH_HOME/tavern/`）与既有资产零迁移；旧写入标记（`dsh-tavern` / `plugin:dsh-tavern`）、旧环境变量（`DSH_TAVERN_*`）、旧游戏命名空间 id（`dsh-tavern.*`）与新名双认——老会话、老对局、老配置行为不断。
+- 数据目录（改名前后都是 `$DSH_HOME/tavern/`；2026-10-21 起新装迁到 `soulmojito/`，旧目录原地兼容，见下节）与既有资产零迁移；旧写入标记（`dsh-tavern` / `plugin:dsh-tavern`）、旧环境变量（`DSH_TAVERN_*`）、旧游戏命名空间 id（`dsh-tavern.*`）与新名双认——老会话、老对局、老配置行为不断。
 - 新写入与新文档一律用新名；旧名只作读取兼容存在。完整映射见 [`decisions/2026-10-16-project-rename-dsh-soulmojito.md`](decisions/2026-10-16-project-rename-dsh-soulmojito.md)。
+
+### 存储目录（2026-10-21）
+
+数据根从 `$DSH_HOME/tavern/` 迁到 **`$DSH_HOME/soulmojito/`**：
+
+- **新装**直接使用 `soulmojito/`。
+- **存量安装**继续读写 `tavern/`——解析在新目录非空时用新目录，否则旧目录非空时用旧目录。不自动搬迁：宿主 workspace 注册表与原生 session 目录都按旧路径登记（`sessions/--…-dsh-tavern-workspace--/`），rename 会让已绑定会话的 cwd 消失、旧工作区变悬空条目。
+- 两个目录都有数据时新目录优先（显式搬迁后的生效路径）；空的 `soulmojito/` 目录不会遮蔽存量库。
+- 完整理由与否决项见 [`decisions/2026-10-21-storage-dir-soulmojito.md`](decisions/2026-10-21-storage-dir-soulmojito.md)。
 
 ## 架构与代码结构
 
@@ -259,7 +268,7 @@ dsh plugin --profile web add ./packages/plugin
 | `@dsh-soulmojito/macros` | 角色、时间、随机、变量等宏引擎 |
 | `@dsh-soulmojito/pipeline` | preset 顺序、lore、persona、历史与 token budget 的 prompt 装配（chat completion + 群聊回合） |
 | `@dsh-soulmojito/script` | ST regex 脚本执行器与 STscript 解释器 |
-| `@dsh-soulmojito/store` | `$DSH_HOME/tavern/` 原子文件存储、revision 与 session binding |
+| `@dsh-soulmojito/store` | `$DSH_HOME/soulmojito/`（旧装 `tavern/`）原子文件存储、revision 与 session binding |
 | `@dsh-soulmojito/template` | EJS Prompt Template 引擎：`node:vm` 沙箱执行、作用域变量与内容注入 |
 | `@dsh-soulmojito/bind` | 跨 DSH 版本的宿主形状兼容层：会话事件探测、宿主包锚解析、client 连接双面回退与宿主形状诊断 |
 | `dsh-soulmojito` | 插件本体（Node half + Web client half + 随附示例 Mod 与游戏） |
@@ -285,10 +294,10 @@ pnpm run check
 当前基线（2026-10-21 实测）：
 
 ```
-Test Files  121 passed (121)
-Tests       1894 passed | 1 skipped (1895)
+Test Files  123 passed (123)
+Tests       1905 passed | 1 skipped (1906)
 18 gates    全部 PASS
-built       v0.6.7 (ab97feb)
+built       v0.6.8 (a8881ca)
 ```
 
 - 1 项跳过是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例。

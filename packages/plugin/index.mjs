@@ -662,7 +662,7 @@ async function renameWithWindowsRetry(from, to, attempts = 5) {
     } catch (cause) {
       const code = cause.code;
       if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
-      await new Promise((resolve7) => setTimeout(resolve7, 10 * attempt));
+      await new Promise((resolve6) => setTimeout(resolve6, 10 * attempt));
     }
   }
 }
@@ -5351,10 +5351,10 @@ var BOOT_ID = globalThis.__dshSoulMojitoNovelBootId ??= randomBytes(16).toString
 var DSH_HOST_COMMAND = /@deepseek-ai[\\/]dsh\b|(?:^|[\\/ \t"'])dsh(?:\.(?:cmd|js|ps1|exe|bat))?["']?[ \t]+web\b/;
 function commandLineOf(pid) {
   if (process.platform === "win32") {
-    return new Promise((resolve7) => {
+    return new Promise((resolve6) => {
       execFile("powershell.exe", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`], { timeout: 5e3, windowsHide: true }, (error, stdout) => {
-        if (error) resolve7(null);
-        else resolve7(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve6(null);
+        else resolve6(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -5368,10 +5368,10 @@ function commandLineOf(pid) {
     );
   }
   if (process.platform === "darwin") {
-    return new Promise((resolve7) => {
+    return new Promise((resolve6) => {
       execFile("ps", ["-p", String(pid), "-o", "command="], { timeout: 5e3 }, (error, stdout) => {
-        if (error) resolve7(Number(error.code) === 1 ? void 0 : null);
-        else resolve7(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve6(Number(error.code) === 1 ? void 0 : null);
+        else resolve6(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -5472,7 +5472,7 @@ async function replaceHead(head, bytes) {
       }
       throw cause;
     }
-    await new Promise((resolve7) => setTimeout(resolve7, 25));
+    await new Promise((resolve6) => setTimeout(resolve6, 25));
     await fs8.rename(tmp, head);
   }
 }
@@ -11122,8 +11122,33 @@ var mvuAuditTail = Promise.resolve();
 
 // packages/plugin/src/agent-tavern/anchor.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
+
+// packages/plugin/src/dsh-home.ts
+import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join as join10, resolve } from "node:path";
+function dshHomePath(...segments) {
+  const configured = process.env.DSH_HOME?.trim();
+  return join10(resolve(configured || join10(homedir(), ".dsh")), ...segments);
+}
+var TAVERN_DATA_DIR = "soulmojito";
+var LEGACY_TAVERN_DATA_DIR = "tavern";
+function tavernDataRoot(...segments) {
+  const next = dshHomePath(TAVERN_DATA_DIR);
+  if (holdsTavernData(next)) return join10(next, ...segments);
+  const legacy = dshHomePath(LEGACY_TAVERN_DATA_DIR);
+  if (holdsTavernData(legacy)) return join10(legacy, ...segments);
+  return join10(next, ...segments);
+}
+function holdsTavernData(root) {
+  try {
+    return readdirSync(root).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// packages/plugin/src/agent-tavern/anchor.ts
 var ANCHOR_EVERY_TURNS_DEFAULT = 5;
 var ANCHOR_TEXT = [
   "<tavern-anchor>",
@@ -11203,11 +11228,7 @@ function resolveAnchorEveryTurns(value) {
 }
 var anchorTavernStorePromise;
 function anchorTavernStore() {
-  return anchorTavernStorePromise ??= TavernStore.open(anchorDshHomePath("tavern"));
-}
-function anchorDshHomePath(...segments) {
-  const configured = process.env.DSH_HOME?.trim();
-  return join10(resolve(configured || join10(homedir(), ".dsh")), ...segments);
+  return anchorTavernStorePromise ??= TavernStore.open(tavernDataRoot());
 }
 async function isAgentTavernSession(sessionId) {
   try {
@@ -13155,8 +13176,8 @@ function readBuildInfo() {
   return { version, commit };
 }
 function buildTimeStamp() {
-  const version = true ? "0.6.7".trim() : "";
-  const commit = true ? normalizeCommit("db37bb5") : void 0;
+  const version = true ? "0.6.8".trim() : "";
+  const commit = true ? normalizeCommit("a8881ca") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -13184,18 +13205,10 @@ function normalizeCommit(value) {
   return /^[0-9a-f]{7,40}$/i.test(commit) ? commit.slice(0, 7).toLowerCase() : void 0;
 }
 
-// packages/plugin/src/dsh-home.ts
-import { homedir as homedir2 } from "node:os";
-import { join as join11, resolve as resolve3 } from "node:path";
-function dshHomePath(...segments) {
-  const configured = process.env.DSH_HOME?.trim();
-  return join11(resolve3(configured || join11(homedir2(), ".dsh")), ...segments);
-}
-
 // packages/plugin/src/mods/host.ts
 import { promises as fs14 } from "node:fs";
 import { mkdir as mkdir3 } from "node:fs/promises";
-import { isAbsolute, join as join13, relative as relative2, resolve as resolve4 } from "node:path";
+import { isAbsolute, join as join12, relative as relative2, resolve as resolve3 } from "node:path";
 import { pathToFileURL as pathToFileURL2 } from "node:url";
 
 // packages/plugin/src/guides.ts
@@ -13290,7 +13303,7 @@ function gameWaiters(sessionId) {
 // packages/plugin/src/generation-hooks.ts
 var GENERATION_HOOK_TIMEOUT_MS = 1e4;
 function withTimeout(promise, ms) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve6, reject) => {
     const timer = setTimeout(() => {
       const timeoutError = new Error(`generation hook timed out after ${ms}ms`);
       timeoutError.hookTimeout = true;
@@ -13299,7 +13312,7 @@ function withTimeout(promise, ms) {
     Promise.resolve(promise).then(
       (value) => {
         clearTimeout(timer);
-        resolve7(value);
+        resolve6(value);
       },
       (error) => {
         clearTimeout(timer);
@@ -13817,7 +13830,7 @@ function renderModHtmlDocument(document, csp) {
   return `<!doctype html><html><head><meta charset="utf-8">${meta}${scripts}</head><body>${rewritten}</body></html>`;
 }
 function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve6, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (chunk) => {
@@ -13831,7 +13844,7 @@ function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
     });
     req.on("end", () => {
       try {
-        resolve7(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve6(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         reject(new Error("invalid JSON body"));
       }
@@ -14228,7 +14241,7 @@ function inspectValue(value) {
 // packages/plugin/src/mods/install.ts
 import { execFile as execFile3 } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readFileSync as readFileSync2, rmSync } from "node:fs";
-import { join as join12 } from "node:path";
+import { join as join11 } from "node:path";
 import { tmpdir } from "node:os";
 
 // packages/plugin/src/update/sources.ts
@@ -14488,7 +14501,7 @@ async function fetchFromAtom(options) {
   };
 }
 function resolveRemoteCommit(repository, ref, timeoutMs) {
-  return new Promise((resolve7) => {
+  return new Promise((resolve6) => {
     const url = /^https?:|^git@/i.test(repository) ? repository : `https://github.com/${repository.replace(/^\//, "")}.git`;
     execFile2("git", ["ls-remote", url, `refs/heads/${ref}`, ref], {
       encoding: "utf8",
@@ -14497,11 +14510,11 @@ function resolveRemoteCommit(repository, ref, timeoutMs) {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
     }, (error, stdout) => {
       if (error) {
-        resolve7("");
+        resolve6("");
         return;
       }
       const first = String(stdout ?? "").split("\n").map((line) => line.trim()).find(Boolean) ?? "";
-      resolve7(first.split(/\s+/)[0] ?? "");
+      resolve6(first.split(/\s+/)[0] ?? "");
     });
   });
 }
@@ -14553,7 +14566,7 @@ function describeError(error) {
 function curlGet(url, accept, timeoutMs, exec = execFile2) {
   const command = envCompat("CURL")?.trim() || (process.platform === "win32" ? "curl.exe" : "curl");
   const seconds = String(Math.max(1, Math.ceil(timeoutMs / 1e3)));
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve6, reject) => {
     exec(command, [
       "--silent",
       "--show-error",
@@ -14577,7 +14590,7 @@ function curlGet(url, accept, timeoutMs, exec = execFile2) {
         reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
         return;
       }
-      resolve7(String(stdout ?? ""));
+      resolve6(String(stdout ?? ""));
     });
   });
 }
@@ -14626,7 +14639,7 @@ function gitClone(url, directory, ref, timeoutMs, exec = execFile3) {
   return runGit(args, exec, timeoutMs).then(() => runGit(["-C", directory, "checkout", "HEAD", "--", "."], exec, timeoutMs));
 }
 function runGit(args, exec, timeoutMs) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve6, reject) => {
     exec("git", args, {
       encoding: "utf8",
       timeout: timeoutMs,
@@ -14639,7 +14652,7 @@ function runGit(args, exec, timeoutMs) {
         reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
         return;
       }
-      resolve7();
+      resolve6();
     });
   });
 }
@@ -14656,13 +14669,13 @@ async function installModFromGit(options) {
       throw new Error(`repository has no readable mod.json at its root (${source.repository}): ${cause instanceof Error ? cause.message : String(cause)}`);
     }
   }
-  const workRoot = mkdtempSync(join12(tmpdir(), "dsh-soulmojito-modinstall-"));
+  const workRoot = mkdtempSync(join11(tmpdir(), "dsh-soulmojito-modinstall-"));
   try {
-    const cloneDir = join12(workRoot, "clone");
+    const cloneDir = join11(workRoot, "clone");
     await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs);
     let manifestRaw;
     try {
-      manifestRaw = JSON.parse(readFileSync2(join12(cloneDir, "mod.json"), "utf8"));
+      manifestRaw = JSON.parse(readFileSync2(join11(cloneDir, "mod.json"), "utf8"));
     } catch (cause) {
       throw new Error(`repository has no readable mod.json at its root: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
@@ -14670,7 +14683,7 @@ async function installModFromGit(options) {
     const check = checkModManifest(manifestRaw, { directory: idField });
     if (!check.ok) throw new Error(`invalid mod.json: ${check.errors.join("; ")}`);
     const modId = check.manifest.id;
-    const target = join12(options.root, "mods", modId);
+    const target = join11(options.root, "mods", modId);
     const replaced = existsSync(target);
     if (replaced && options.force !== true) {
       throw new Error(`mod '${modId}' is already installed (POST again with force to replace it)`);
@@ -14699,8 +14712,8 @@ function modsDisabledByEnv() {
 var ModHost = class _ModHost {
   constructor(options) {
     this.options = options;
-    this.modsRoot = join13(options.root, "mods");
-    this.audit = new ModAuditLog(join13(this.modsRoot, "audit.jsonl"));
+    this.modsRoot = join12(options.root, "mods");
+    this.audit = new ModAuditLog(join12(this.modsRoot, "audit.jsonl"));
     this.logger = options.ctx?.logger;
     this.audit.setLogger((message) => this.logger?.warn?.(message));
   }
@@ -14940,7 +14953,7 @@ var ModHost = class _ModHost {
       const id = directory;
       let raw;
       try {
-        raw = JSON.parse(await fs14.readFile(join13(this.modsRoot, directory, "mod.json"), "utf8"));
+        raw = JSON.parse(await fs14.readFile(join12(this.modsRoot, directory, "mod.json"), "utf8"));
       } catch (cause) {
         const message = `mod.json is missing or unreadable: ${cause instanceof Error ? cause.message : String(cause)}`;
         nextBroken.set(id, { message, ...salvageManifestFields(void 0) });
@@ -14964,8 +14977,8 @@ var ModHost = class _ModHost {
           continue;
         }
       }
-      const entryPath = resolve4(this.modsRoot, directory, manifest10.main);
-      const containment = relative2(resolve4(this.modsRoot, directory), entryPath);
+      const entryPath = resolve3(this.modsRoot, directory, manifest10.main);
+      const containment = relative2(resolve3(this.modsRoot, directory), entryPath);
       if (containment === "" || containment.startsWith("..") || isAbsolute(containment)) {
         const message = `main entry '${manifest10.main}' escapes the mod directory`;
         nextBlocked.set(id, { manifest: manifest10, reason: message });
@@ -14979,7 +14992,7 @@ var ModHost = class _ModHost {
         await this.audit.record(id, "skip", message);
         continue;
       }
-      nextDiscovered.set(id, { manifest: manifest10, directory: join13(this.modsRoot, directory), entryPath });
+      nextDiscovered.set(id, { manifest: manifest10, directory: join12(this.modsRoot, directory), entryPath });
     }
     this.discovered.clear();
     this.broken.clear();
@@ -15003,14 +15016,14 @@ var ModHost = class _ModHost {
       offRegistrations: [],
       surfaces: { hooks: /* @__PURE__ */ new Set(), tools: /* @__PURE__ */ new Set(), http: /* @__PURE__ */ new Set() },
       buttons: /* @__PURE__ */ new Map(),
-      storage: new ModStorage(join13(disc.directory, "data", "state.json"), {
+      storage: new ModStorage(join12(disc.directory, "data", "state.json"), {
         onQuota: (message) => {
           void this.audit.record(id, "storage-quota", message);
         }
       })
     };
     try {
-      await mkdir3(join13(disc.directory, "data"), { recursive: true });
+      await mkdir3(join12(disc.directory, "data"), { recursive: true });
       const url = pathToFileURL2(disc.entryPath).href + (cacheBust ? `?t=${Date.now()}` : "");
       const module = await import(url);
       if (typeof module?.setup !== "function") {
@@ -15487,16 +15500,16 @@ function createModAssets(dbProvider) {
 
 // packages/plugin/src/update/service.ts
 import { mkdirSync as mkdirSync2, readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname9, join as join15 } from "node:path";
+import { dirname as dirname9, join as join14 } from "node:path";
 
 // packages/plugin/src/update/apply.ts
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync as existsSync2, mkdirSync, mkdtempSync as mkdtempSync2, readdirSync, readFileSync as readFileSync3, renameSync, rmSync as rmSync2, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync as existsSync2, mkdirSync, mkdtempSync as mkdtempSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, renameSync, rmSync as rmSync2, statSync, writeFileSync } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { dirname as dirname8, join as join14 } from "node:path";
+import { dirname as dirname8, join as join13 } from "node:path";
 var DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
 function shippedEntries(sourceDir) {
-  const manifest10 = join14(sourceDir, "package.json");
+  const manifest10 = join13(sourceDir, "package.json");
   if (!existsSync2(manifest10)) throw new Error("packages/plugin/package.json is missing from the checkout");
   const files = JSON.parse(readFileSync3(manifest10, "utf8"))?.files;
   if (!Array.isArray(files) || files.length === 0 || !files.every((entry) => typeof entry === "string")) {
@@ -15644,7 +15657,7 @@ function resolveDesktopCli(argv = process.argv, execPath = process.execPath, exi
   }
   const runtimeDir = typeof argv[2] === "string" ? argv[2].trim() : "";
   if (runtimeDir === "") return null;
-  const cli = join14(runtimeDir, "node_modules", "@deepseek-ai", "dsh-desktop-host", "lib", "cli.js");
+  const cli = join13(runtimeDir, "node_modules", "@deepseek-ai", "dsh-desktop-host", "lib", "cli.js");
   if (!exists(cli)) return null;
   return { command: execPath, args: ["--expose-internals", cli], env: { ELECTRON_RUN_AS_NODE: "1" } };
 }
@@ -15759,7 +15772,7 @@ async function installViaCheckout(request) {
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
   const repository = repositorySlug(request.repository);
   const profile = resolveProfileName(request.ctx);
-  const checkout = mkdtempSync2(join14(tmpdir2(), "dsh-soulmojito-checkout-"));
+  const checkout = mkdtempSync2(join13(tmpdir2(), "dsh-soulmojito-checkout-"));
   try {
     request.log(`fallback: git clone --depth 1 https://github.com/${repository}.git`);
     await mustRun("git", ["clone", "--depth", "1", "--branch", request.ref, `https://github.com/${repository}.git`, checkout], request);
@@ -15771,7 +15784,7 @@ async function installViaCheckout(request) {
         await mustRun("git", ["-C", checkout, "checkout", "--quiet", request.commit], request);
       }
     }
-    const source = join14(checkout, "packages", "plugin");
+    const source = join13(checkout, "packages", "plugin");
     if (!existsSync2(source)) throw new Error("packages/plugin is missing from the checkout");
     const copied = copyShippedFiles(source, request.pluginDir);
     request.log(`copied ${copied.length} shipped entries into ${request.pluginDir}`);
@@ -15809,18 +15822,18 @@ async function mustRun(command, args, request) {
 function copyShippedFiles(sourceDir, targetDir) {
   const copied = [];
   for (const entry of shippedEntries(sourceDir)) {
-    const from = join14(sourceDir, entry);
+    const from = join13(sourceDir, entry);
     if (!existsSync2(from)) continue;
     const stat = statSyncSafe(from);
     if (stat === null) continue;
     if (!stat.isDirectory()) {
-      replaceFileAtomic(from, join14(targetDir, entry));
+      replaceFileAtomic(from, join13(targetDir, entry));
       copied.push(entry);
       continue;
     }
     for (const file of listFiles(from)) {
       const relative3 = file.slice(from.length + 1);
-      const to = join14(targetDir, entry, relative3);
+      const to = join13(targetDir, entry, relative3);
       mkdirSync(dirname8(to), { recursive: true });
       writeFileAtomic(to, readFileSync3(file));
       copied.push(`${entry}/${relative3.replaceAll("\\", "/")}`);
@@ -15831,7 +15844,7 @@ function copyShippedFiles(sourceDir, targetDir) {
 function stampInstalledBuild(pluginDir, version, commit) {
   if (!isKnownVersion(version) || !isCommit(commit)) return false;
   try {
-    writeFileAtomic(join14(pluginDir, "version.json"), `${JSON.stringify({ version: version.trim(), commit: shortCommit(commit) }, null, 2)}
+    writeFileAtomic(join13(pluginDir, "version.json"), `${JSON.stringify({ version: version.trim(), commit: shortCommit(commit) }, null, 2)}
 `);
     return true;
   } catch {
@@ -15844,7 +15857,7 @@ function listFiles(root) {
   while (pending.length > 0) {
     const current = pending.pop();
     for (const entry of readdirSyncSafe(current)) {
-      const full = join14(current, entry);
+      const full = join13(current, entry);
       const stat = statSyncSafe(full);
       if (stat === null) continue;
       if (stat.isDirectory()) pending.push(full);
@@ -15855,7 +15868,7 @@ function listFiles(root) {
 }
 function readdirSyncSafe(path12) {
   try {
-    return readdirSync(path12);
+    return readdirSync2(path12);
   } catch {
     return [];
   }
@@ -15871,14 +15884,14 @@ function readInstalledStamp(pluginDir, spec = "") {
   let version = UNKNOWN_FIELD;
   let commit = UNKNOWN_FIELD;
   try {
-    const generated = JSON.parse(readFileSync3(join14(pluginDir, "version.json"), "utf8"));
+    const generated = JSON.parse(readFileSync3(join13(pluginDir, "version.json"), "utf8"));
     if (typeof generated?.version === "string" && generated.version.trim() !== "") version = generated.version.trim();
     if (isCommit(generated?.commit)) commit = shortCommit(generated.commit);
   } catch {
   }
   if (version === UNKNOWN_FIELD) {
     try {
-      const manifest10 = JSON.parse(readFileSync3(join14(pluginDir, "package.json"), "utf8"));
+      const manifest10 = JSON.parse(readFileSync3(join13(pluginDir, "package.json"), "utf8"));
       if (typeof manifest10?.version === "string" && manifest10.version.trim() !== "") version = manifest10.version.trim();
     } catch {
     }
@@ -15890,7 +15903,7 @@ function readInstalledStamp(pluginDir, spec = "") {
   return { version, commit };
 }
 function runCapture(command, args, options = {}) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve6, reject) => {
     const child = spawn(command, args, {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -15919,7 +15932,7 @@ function runCapture(command, args, options = {}) {
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      resolve7({ code: code ?? -1, output });
+      resolve6({ code: code ?? -1, output });
     });
   });
 }
@@ -16165,7 +16178,7 @@ var TavernUpdateService = class {
     }
   }
   cachePath() {
-    return join15(this.options.home, UPDATE_CACHE_FILE);
+    return join14(this.options.home, UPDATE_CACHE_FILE);
   }
   loadCache() {
     try {
@@ -16265,22 +16278,22 @@ var modHostContext;
 var gamesServicePromise;
 var templatesEnabledFlag = true;
 function store3() {
-  return storePromise ??= TavernStore.open(dshHomePath("tavern"));
+  return storePromise ??= TavernStore.open(tavernDataRoot());
 }
 function memories() {
-  return memoryStorePromise ??= MemoryStore.open(dshHomePath("tavern"));
+  return memoryStorePromise ??= MemoryStore.open(tavernDataRoot());
 }
 function variables() {
-  return variableStorePromise ??= VariableStore.open(dshHomePath("tavern"));
+  return variableStorePromise ??= VariableStore.open(tavernDataRoot());
 }
 var memoryVectorStorePromise;
 function memoryVectors() {
-  return memoryVectorStorePromise ??= MemoryVectorStore.open(dshHomePath("tavern"));
+  return memoryVectorStorePromise ??= MemoryVectorStore.open(tavernDataRoot());
 }
 function modHost() {
   return modHostPromise ??= ModHost.open({
     ctx: modHostContext ?? {},
-    root: dshHomePath("tavern"),
+    root: tavernDataRoot(),
     hostVersion: BUILD_INFO.version,
     dbProvider: () => store3()
   });
@@ -16312,13 +16325,13 @@ async function modHostProjection(ctx) {
   }
 }
 function novelStore() {
-  return novelStorePromise ??= NovelStore.open(dshHomePath("tavern"));
+  return novelStorePromise ??= NovelStore.open(tavernDataRoot());
 }
 function tavernUpdate(ctx) {
   if (updateServiceInstance !== void 0 && !updateServiceInstance.isDisposed) return updateServiceInstance;
   updateServiceInstance = new TavernUpdateService({
     ctx,
-    home: dshHomePath("tavern"),
+    home: tavernDataRoot(),
     pluginDir: import.meta.dirname,
     local: { version: BUILD_INFO.version, commit: TAVERN_COMMIT },
     enabled: updateChecksEnabledFlag
@@ -17126,7 +17139,7 @@ var NovelDriver = class _NovelDriver {
       } catch (error) {
         lastError = error;
         this.logWarn("followup-attempt-failed", { novelId, sessionId: agent.session.id, intentId, errorCode: errorCodeOf(error), attempt });
-        if (attempt < retry.maxAttempts) await new Promise((resolve7) => setTimeout(resolve7, retry.backoffMs));
+        if (attempt < retry.maxAttempts) await new Promise((resolve6) => setTimeout(resolve6, retry.backoffMs));
       }
     }
     throw lastError;
@@ -17893,7 +17906,7 @@ function buildStoredZip(entries) {
 import { promises as fs16 } from "node:fs";
 import { cpSync as cpSync2, existsSync as existsSync3, mkdirSync as mkdirSync3, mkdtempSync as mkdtempSync3, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { dirname as dirname10, join as join17, resolve as resolve5 } from "node:path";
+import { dirname as dirname10, join as join16, resolve as resolve4 } from "node:path";
 import { pathToFileURL as pathToFileURL3 } from "node:url";
 
 // packages/plugin/src/games/builtin/blackjack.ts
@@ -24372,7 +24385,7 @@ var GameRegistry = class _GameRegistry {
     return registry;
   }
   get installedRoot() {
-    return join17(this.options.root, "games", "installed");
+    return join16(this.options.root, "games", "installed");
   }
   /** 注册表快照（按 id 稳定排序；三源合一——builtin/imported/mod）。 */
   summaries() {
@@ -24442,9 +24455,9 @@ var GameRegistry = class _GameRegistry {
     });
     const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
     for (const directory of directories) {
-      const entry = await this.loadInstalled(join17(this.installedRoot, directory)).catch((cause) => {
+      const entry = await this.loadInstalled(join16(this.installedRoot, directory)).catch((cause) => {
         const message = cause instanceof Error ? cause.message : String(cause);
-        return { source: "imported", manifest: brokenFallbackManifest(directory), engine: null, viewHtml: null, status: "broken", reason: message, directory: join17(this.installedRoot, directory) };
+        return { source: "imported", manifest: brokenFallbackManifest(directory), engine: null, viewHtml: null, status: "broken", reason: message, directory: join16(this.installedRoot, directory) };
       });
       const shadowed = this.games.get(entry.manifest.id);
       if (shadowed?.source === "builtin") {
@@ -24460,7 +24473,7 @@ var GameRegistry = class _GameRegistry {
     const broken = (manifest10, reason) => ({ source: "imported", manifest: manifest10, engine: null, viewHtml: null, status: "broken", reason, directory });
     let raw;
     try {
-      raw = JSON.parse(await fs16.readFile(join17(directory, "game.json"), "utf8"));
+      raw = JSON.parse(await fs16.readFile(join16(directory, "game.json"), "utf8"));
     } catch (cause) {
       return broken(brokenFallbackManifest(directoryNameOf(directory)), `game.json \u7F3A\u5931\u6216\u4E0D\u53EF\u8BFB: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
@@ -24474,13 +24487,13 @@ var GameRegistry = class _GameRegistry {
     }
     let viewHtml10;
     try {
-      viewHtml10 = await fs16.readFile(join17(directory, "view.html"), "utf8");
+      viewHtml10 = await fs16.readFile(join16(directory, "view.html"), "utf8");
     } catch {
       return broken(check.manifest, "view.html \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
     }
     const viewProblem = staticViewCheck(viewHtml10);
     if (viewProblem !== void 0) return broken(check.manifest, `view.html ${viewProblem}`);
-    const enginePath = join17(directory, "engine.mjs");
+    const enginePath = join16(directory, "engine.mjs");
     const stat = await fs16.stat(enginePath).catch(() => void 0);
     if (stat?.isFile() !== true) return broken(check.manifest, "engine.mjs \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
     let imported;
@@ -24506,20 +24519,20 @@ var GameRegistry = class _GameRegistry {
    * 已存在目录拒绝（force=true 先删后装）——镜像 mods/install.ts 落地纪律。
    */
   async installFromPath(sourcePath, force = false) {
-    const source = resolve5(sourcePath);
+    const source = resolve4(sourcePath);
     if (!existsSync3(source)) throw new Error(`\u6E38\u620F\u5305\u76EE\u5F55\u4E0D\u5B58\u5728: ${sourcePath}`);
     const stat = await fs16.stat(source);
     if (!stat.isDirectory()) throw new Error(`\u6E38\u620F\u5305\u8DEF\u5F84\u5FC5\u987B\u662F\u76EE\u5F55: ${sourcePath}`);
     let raw;
     try {
-      raw = JSON.parse(await fs16.readFile(join17(source, "game.json"), "utf8"));
+      raw = JSON.parse(await fs16.readFile(join16(source, "game.json"), "utf8"));
     } catch (cause) {
       throw new Error(`\u6E90\u76EE\u5F55\u7F3A\u5C11\u53EF\u8BFB\u7684 game.json: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
     const id = typeof raw?.["id"] === "string" ? raw["id"] : "";
     const check = checkGameManifest(raw, { directory: id || void 0 });
     if (!check.ok || !check.manifest) throw new Error(`\u6E38\u620F\u6E05\u5355\u6821\u9A8C\u5931\u8D25: ${check.errors.join("; ")}`);
-    const target = join17(this.installedRoot, check.manifest.id);
+    const target = join16(this.installedRoot, check.manifest.id);
     await fs16.mkdir(this.installedRoot, { recursive: true });
     if (existsSync3(target)) {
       if (force !== true) throw new Error(`\u6E38\u620F '${check.manifest.id}' \u5DF2\u5B89\u88C5\uFF08force=true \u53EF\u8986\u76D6\uFF09`);
@@ -24540,9 +24553,9 @@ var GameRegistry = class _GameRegistry {
   async installFromGit(url, force = false, options = {}) {
     const timeoutMs = options.timeoutMs ?? 6e4;
     const source = parseGitSource(url);
-    const workRoot = mkdtempSync3(join17(tmpdir3(), "dsh-soulmojito-gameinstall-"));
+    const workRoot = mkdtempSync3(join16(tmpdir3(), "dsh-soulmojito-gameinstall-"));
     try {
-      const cloneDir = join17(workRoot, "clone");
+      const cloneDir = join16(workRoot, "clone");
       await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs);
       return await this.installFromPath(cloneDir, force);
     } finally {
@@ -24558,10 +24571,10 @@ var GameRegistry = class _GameRegistry {
    */
   async installFromZip(zipBase64, force = false) {
     const files = selectGamePackageFiles(unzipArchive(decodeZipBase64(zipBase64)));
-    const workRoot = mkdtempSync3(join17(tmpdir3(), "dsh-soulmojito-gamezip-"));
+    const workRoot = mkdtempSync3(join16(tmpdir3(), "dsh-soulmojito-gamezip-"));
     try {
       for (const [name2, data] of files) {
-        const target = join17(workRoot, ...name2.split("/"));
+        const target = join16(workRoot, ...name2.split("/"));
         mkdirSync3(dirname10(target), { recursive: true });
         writeFileSync2(target, data);
       }
@@ -24707,7 +24720,7 @@ function unwrapSingleRootDirectory(files) {
 // packages/plugin/src/games/sessions.ts
 import { createHash as createHash9, randomBytes as randomBytes4 } from "node:crypto";
 import { promises as fs17 } from "node:fs";
-import { join as join18 } from "node:path";
+import { join as join17 } from "node:path";
 var GAME_HISTORY_DEFAULT_LIMIT = 20;
 var GAME_HISTORY_MAX_LIMIT = 200;
 var GameBridgeError = class extends Error {
@@ -24727,11 +24740,11 @@ var GameSessionStore = class _GameSessionStore {
   }
   tail = Promise.resolve();
   static async open(options) {
-    await fs17.mkdir(join18(options.root, "games", "sessions"), { recursive: true });
+    await fs17.mkdir(join17(options.root, "games", "sessions"), { recursive: true });
     return new _GameSessionStore(options);
   }
   get sessionsRoot() {
-    return join18(this.options.root, "games", "sessions");
+    return join17(this.options.root, "games", "sessions");
   }
   /* ------------------------------ 查询面 ------------------------------ */
   /** 会话目录 name+size+mtimeMs 的 sha256（镜像 tavern-store storeRevision 的便宜纪律：只 stat 不读内容）。 */
@@ -24739,7 +24752,7 @@ var GameSessionStore = class _GameSessionStore {
     const hash = createHash9("sha256");
     const names = (await fs17.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
     for (const name2 of names) {
-      const stat = await fs17.stat(join18(this.sessionsRoot, name2)).catch(() => void 0);
+      const stat = await fs17.stat(join17(this.sessionsRoot, name2)).catch(() => void 0);
       hash.update(`${name2}\0${stat === void 0 ? "missing" : `${stat.size}\0${stat.mtimeMs}`}
 `);
     }
@@ -24923,7 +24936,7 @@ var GameSessionStore = class _GameSessionStore {
   /* ------------------------------ 内部 ------------------------------ */
   async persist(session) {
     await fs17.mkdir(this.sessionsRoot, { recursive: true });
-    writeFileAtomic(join18(this.sessionsRoot, `${session.id}.json`), `${JSON.stringify(session, null, 2)}
+    writeFileAtomic(join17(this.sessionsRoot, `${session.id}.json`), `${JSON.stringify(session, null, 2)}
 `);
   }
   async load(sessionId) {
@@ -24932,7 +24945,7 @@ var GameSessionStore = class _GameSessionStore {
     }
     let raw;
     try {
-      raw = await fs17.readFile(join18(this.sessionsRoot, `${sessionId}.json`), "utf8");
+      raw = await fs17.readFile(join17(this.sessionsRoot, `${sessionId}.json`), "utf8");
     } catch {
       throw new GameBridgeError("not-found", `\u4F1A\u8BDD '${sessionId}' \u4E0D\u5B58\u5728`);
     }
@@ -26709,9 +26722,9 @@ import * as path10 from "node:path";
 // packages/plugin/src/memory-embed-local.ts
 import { createHash as createHash10 } from "node:crypto";
 import { spawn as spawn2 } from "node:child_process";
-import { readdirSync as readdirSync2, readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
+import { readdirSync as readdirSync3, readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
-import { basename as basename2, dirname as dirname11, join as join19 } from "node:path";
+import { basename as basename2, dirname as dirname11, join as join18 } from "node:path";
 import { fileURLToPath, pathToFileURL as pathToFileURL4 } from "node:url";
 var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
 var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-soulmojito, NOT the dsh-soulmojito source repository), then restart DSH`;
@@ -26719,14 +26732,14 @@ var SESSION_CACHE_LIMIT = 2;
 function localModelFingerprint(modelDir) {
   try {
     const parts = [];
-    for (const entry of readdirSync2(modelDir).sort()) {
-      const full = join19(modelDir, entry);
+    for (const entry of readdirSync3(modelDir).sort()) {
+      const full = join18(modelDir, entry);
       const info = statSync2(full);
       if (info.isFile()) {
         parts.push(`${entry}:${info.size}:${Math.round(info.mtimeMs)}`);
       } else if (info.isDirectory()) {
-        for (const child of readdirSync2(full).sort()) {
-          const childInfo = statSync2(join19(full, child));
+        for (const child of readdirSync3(full).sort()) {
+          const childInfo = statSync2(join18(full, child));
           if (childInfo.isFile()) parts.push(`${entry}/${child}:${childInfo.size}:${Math.round(childInfo.mtimeMs)}`);
         }
       }
@@ -26757,7 +26770,7 @@ var AUTO_DTYPE_PRIORITY = ["fp16", "q8", "q4", "q4f16", "int8", "uint8", "q2", "
 function detectLocalQuantizations(modelDir) {
   let names;
   try {
-    names = readdirSync2(join19(modelDir, "onnx"));
+    names = readdirSync3(join18(modelDir, "onnx"));
   } catch {
     return [];
   }
@@ -26765,7 +26778,7 @@ function detectLocalQuantizations(modelDir) {
   for (const [dtype, suffix] of DTYPE_FILE_SUFFIXES) {
     const file = `onnx/model${suffix}.onnx`;
     try {
-      const info = statSync2(join19(modelDir, file));
+      const info = statSync2(join18(modelDir, file));
       if (info.isFile()) found.push({ precision: dtype, file, sizeBytes: info.size });
     } catch {
     }
@@ -26785,14 +26798,14 @@ function readJsonFile(file) {
 }
 function inferLocalModelSettings(modelDir) {
   const result = { sources: {} };
-  const config = readJsonFile(join19(modelDir, "config.json"));
+  const config = readJsonFile(join18(modelDir, "config.json"));
   const configRecord = config !== null && typeof config === "object" && !Array.isArray(config) ? config : void 0;
   const hiddenSize = configRecord?.hidden_size;
   if (typeof hiddenSize === "number" && Number.isFinite(hiddenSize)) {
     result.dims = Math.max(1, Math.min(8192, Math.round(hiddenSize)));
     result.sources.dims = "config.json hidden_size";
   }
-  const modules = readJsonFile(join19(modelDir, "modules.json"));
+  const modules = readJsonFile(join18(modelDir, "modules.json"));
   if (Array.isArray(modules)) {
     for (const entry of modules) {
       if (!Array.isArray(entry) || entry[0] !== "sentence-transformers" || entry[1] !== "Pooling") continue;
@@ -26834,13 +26847,13 @@ function validateLocalModelDir(modelDir) {
     return `modelDir '${modelDir}' does not exist`;
   }
   if (!info.isDirectory()) return `modelDir '${modelDir}' is not a directory`;
-  const names = readdirSync2(modelDir);
+  const names = readdirSync3(modelDir);
   if (!names.includes("tokenizer.json")) {
     return `modelDir '${modelDir}' has no tokenizer.json (expected a Hugging Face ONNX layout: tokenizer.json + config.json + onnx/model.onnx)`;
   }
   let onnxNames = [];
   try {
-    onnxNames = statSync2(join19(modelDir, "onnx")).isDirectory() ? readdirSync2(join19(modelDir, "onnx")) : [];
+    onnxNames = statSync2(join18(modelDir, "onnx")).isDirectory() ? readdirSync3(join18(modelDir, "onnx")) : [];
   } catch {
   }
   const hasOnnx = onnxNames.some((name2) => name2.endsWith(".onnx"));
@@ -26937,7 +26950,7 @@ function localRuntimeProfileRoot(pluginDir) {
   return dirname11(parent);
 }
 function defaultSpawnRunner(command, args, options) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve6, reject) => {
     const child = spawn2(command, [...args], {
       cwd: options.cwd,
       shell: process.platform === "win32",
@@ -26963,7 +26976,7 @@ function defaultSpawnRunner(command, args, options) {
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      resolve7({ code: code ?? -1, output });
+      resolve6({ code: code ?? -1, output });
     });
   });
 }
@@ -27271,7 +27284,7 @@ function parseEmbeddings(payload, count, expectedDims2) {
   return vectors;
 }
 function delay(ms) {
-  return new Promise((resolve7) => setTimeout(resolve7, ms));
+  return new Promise((resolve6) => setTimeout(resolve6, ms));
 }
 async function embedProbe(root, config, options = {}) {
   const status2 = await readEmbedStatus(root);
@@ -27324,7 +27337,7 @@ async function embedMemoryRecord(input) {
 // packages/plugin/src/agent-tavern/tools/stores.ts
 var tavernStorePromise;
 function tavernStore() {
-  return tavernStorePromise ??= TavernStore.open(dshHomePath("tavern"));
+  return tavernStorePromise ??= TavernStore.open(tavernDataRoot());
 }
 
 // packages/plugin/src/agent-tavern/tools/shared.ts
@@ -27563,7 +27576,7 @@ async function scriptSummaryForChat(db, character, chatId) {
   const found = await db.getCharacter(character);
   const scriptName = boundScriptOf(found?.card);
   if (scriptName === void 0) return "";
-  const script = await getScript(dshHomePath("tavern"), scriptName);
+  const script = await getScript(tavernDataRoot(), scriptName);
   if (script === void 0 || script.chunks.length === 0) return "";
   const snapshot2 = await db.getChatSnapshot(character, chatId);
   if (!snapshot2) return "";
@@ -27704,7 +27717,7 @@ var writerDelegations = globalThis[WRITER_DELEGATIONS_KEY] ??= /* @__PURE__ */ n
 // packages/plugin/src/agent-novel/tools/stores.ts
 var novelStorePromise2;
 function novelStore2() {
-  return novelStorePromise2 ??= NovelStore.open(dshHomePath("tavern"));
+  return novelStorePromise2 ??= NovelStore.open(tavernDataRoot());
 }
 
 // packages/plugin/src/agent-novel/tools/shared.ts
@@ -27914,7 +27927,7 @@ function sendJson(res, status2, body) {
   res.end(JSON.stringify(body));
 }
 function readJson(req, maxBytes = 2 * 1024 * 1024) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve6, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (chunk) => {
@@ -27926,7 +27939,7 @@ function readJson(req, maxBytes = 2 * 1024 * 1024) {
     });
     req.on("end", () => {
       try {
-        resolve7(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve6(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         reject(new Error("invalid JSON body"));
       }
@@ -30397,7 +30410,7 @@ async function buildGenerationLlmRequest(ctx, db, options) {
   if (tpl) await tpl.prerenderGenerateAfter();
   const boundScriptId = boundScriptOf(character.card);
   if (boundScriptId !== void 0) {
-    const scriptRecord = await getScript(dshHomePath("tavern"), boundScriptId);
+    const scriptRecord = await getScript(tavernDataRoot(), boundScriptId);
     if (scriptRecord !== void 0 && scriptRecord.chunks.length > 0) {
       const prior = normalizeScriptProgress(chat.header.chat_metadata?.scriptProgress);
       let chunkIndex = prior !== void 0 && prior.scriptName === boundScriptId ? Math.min(prior.chunkIndex, scriptRecord.chunks.length - 1) : 0;
@@ -30753,18 +30766,18 @@ import { mkdir as mkdir4 } from "node:fs/promises";
 var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
 var TAVERN_WORKBENCH_WORKSPACE_TITLE = "Tavern Workbench (internal)";
 async function prepareInternalWorkspace() {
-  const path12 = dshHomePath("tavern", "workspace");
+  const path12 = tavernDataRoot("workspace");
   await mkdir4(path12, { recursive: true });
   return { path: path12, title: TAVERN_WORKSPACE_TITLE };
 }
 async function prepareWorkbenchWorkspace() {
-  const path12 = dshHomePath("tavern", "workbench");
+  const path12 = tavernDataRoot("workbench");
   await mkdir4(path12, { recursive: true });
   return { path: path12, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
 }
 
 // packages/plugin/src/http/memory.ts
-import { resolve as resolve6 } from "node:path";
+import { resolve as resolve5 } from "node:path";
 
 // packages/plugin/src/memory-maintenance.ts
 import { randomUUID as randomUUID5 } from "node:crypto";
@@ -31604,7 +31617,7 @@ var DEFAULT_USER5 = "User";
 var CHAR_FALLBACK = "the character";
 var storePromise2;
 function store4() {
-  return storePromise2 ??= TavernStore.open(dshHomePath("tavern"));
+  return storePromise2 ??= TavernStore.open(tavernDataRoot());
 }
 function mountPresetProjection(options) {
   const freeze = /* @__PURE__ */ new Map();
@@ -31927,7 +31940,7 @@ async function applyPlan(dir, planId) {
 // packages/plugin/src/card-workbench/shared.ts
 var tavernStorePromise2;
 function tavernStore3() {
-  return tavernStorePromise2 ??= TavernStore.open(dshHomePath("tavern"));
+  return tavernStorePromise2 ??= TavernStore.open(tavernDataRoot());
 }
 async function requireCharacter(name2) {
   const found = await (await tavernStore3()).getCharacter(name2);
@@ -32102,7 +32115,7 @@ var cardCoreTools = [
     exec?.signal?.throwIfAborted();
     if (args.planId !== void 0) {
       const planId = stringArg(args.planId);
-      const plan = await getPlan(dshHomePath("tavern"), planId);
+      const plan = await getPlan(tavernDataRoot(), planId);
       if (plan === void 0) throw new Error(`plan '${planId}' not found`);
       if (plan.kind !== "card") throw new Error(`plan '${planId}' is a world plan; apply it with world_put (edit) or world_create (create)`);
       if (plan.character !== character) throw new Error(`plan '${planId}' belongs to character '${plan.character}', not '${character}'`);
@@ -32126,7 +32139,7 @@ var cardCoreTools = [
   }, cardSummaryOutput, async (args, exec) => {
     const character = stringArg(args.character);
     exec?.signal?.throwIfAborted();
-    const original = await readOriginalSnapshot(dshHomePath("tavern"), character);
+    const original = await readOriginalSnapshot(tavernDataRoot(), character);
     if (original === void 0) return { found: false, character };
     return { found: true, ...cardSummary(character, original) };
   }),
@@ -32137,7 +32150,7 @@ var cardCoreTools = [
     if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR);
     const character = stringArg(args.character);
     exec?.signal?.throwIfAborted();
-    const restored = await restoreOriginal(dshHomePath("tavern"), character);
+    const restored = await restoreOriginal(tavernDataRoot(), character);
     if (restored === void 0) {
       throw new Error(`no original snapshot for '${character}'; the card was never imported through the Tavern import route`);
     }
@@ -32182,7 +32195,7 @@ var cardCoreTools = [
         return !(record.character === character && record.group !== true);
       }))
     }));
-    const snapshotRemoved = await deleteOriginalSnapshot(dshHomePath("tavern"), character);
+    const snapshotRemoved = await deleteOriginalSnapshot(tavernDataRoot(), character);
     return { deleted: true, character, deletedChats: chats.length, removedFromGroups, snapshotRemoved };
   }),
   tool3("card_plan_propose", "Record a pending card modification plan (confirmation protocol): per-field newValue plus an optional note; the CURRENT values are snapshotted from the live working copy so the diff shown to the user is truthful. Text fields take strings; tags and alternateGreetings take the full replacement array. Returns a planId \u2014 the user then approves the plan in the workbench panel, or confirms in conversation and you call card_put with that planId and confirmed: true. Proposing does not write the card.", {
@@ -32209,7 +32222,7 @@ var cardCoreTools = [
     const proposed = parsePlanChanges(args.changes);
     exec?.signal?.throwIfAborted();
     const found = await requireCharacter(character);
-    const plan = await proposeCardPlan(dshHomePath("tavern"), character, {
+    const plan = await proposeCardPlan(tavernDataRoot(), character, {
       title,
       changes: proposed.map(({ field, newValue, note }) => ({
         field,
@@ -32287,7 +32300,7 @@ var cardCreateTool = tool3("card_create", "Create a new Tavern character card fr
     extensions: {}
   };
   const { card } = await db.importCharacter({ spec: "chara_card_v2", spec_version: "2.0", data });
-  const snapshotTaken = await saveOriginalSnapshot(dshHomePath("tavern"), card.data.name, card);
+  const snapshotTaken = await saveOriginalSnapshot(tavernDataRoot(), card.data.name, card);
   await nameSessionAfterCreatedCard(exec, card.data.name);
   return {
     created: true,
@@ -32309,7 +32322,7 @@ var cardApplyMvuTool = tool3("card_apply_mvu", "Convert a character card to the 
   const template = statusTemplateArg(args.statusTemplate);
   const variables2 = args.initialVariables === void 0 ? void 0 : initialVariablesArg(args.initialVariables);
   exec?.signal?.throwIfAborted();
-  const root = dshHomePath("tavern");
+  const root = tavernDataRoot();
   const db = await tavernStore3();
   const found = await requireCharacter(character);
   let snapshotTaken = false;
@@ -32417,7 +32430,7 @@ async function saveCardValues(character, values, found) {
     data: nextData
   });
   if (saved.card.data.name !== current.card.data.name) {
-    await moveOriginalSnapshot(dshHomePath("tavern"), character, saved.card.data.name);
+    await moveOriginalSnapshot(tavernDataRoot(), character, saved.card.data.name);
   }
   return { found: current, saved };
 }
@@ -32458,7 +32471,7 @@ async function executeCardPlan(plan) {
   }
   const { found: written, saved } = await saveCardValues(plan.character, values, found);
   const formatted = formatWriteResult(written, saved, values);
-  const applied = await applyPlan(dshHomePath("tavern"), plan.id);
+  const applied = await applyPlan(tavernDataRoot(), plan.id);
   return {
     plan: applied,
     character: formatted.character,
@@ -32785,7 +32798,7 @@ var worldTools = [
       }));
       return { uid: edit.uid, action: existing === void 0 ? "create" : "update", fields, ...note !== void 0 ? { note } : {} };
     });
-    const plan = await proposeWorldPlan(dshHomePath("tavern"), world, {
+    const plan = await proposeWorldPlan(tavernDataRoot(), world, {
       op: create ? "create" : "edit",
       title,
       entries
@@ -32869,7 +32882,7 @@ var worldTools = [
     exec?.signal?.throwIfAborted();
     if (args.planId !== void 0) {
       const planId = stringArg(args.planId);
-      const plan = await getPlan(dshHomePath("tavern"), planId);
+      const plan = await getPlan(tavernDataRoot(), planId);
       if (plan === void 0) throw new Error(`plan '${planId}' not found`);
       if (plan.kind !== "world" || plan.op !== "edit") throw new Error(`plan '${planId}' is not a world edit plan; book creations go through world_create and card plans through card_put`);
       if (plan.world !== world) throw new Error(`plan '${planId}' belongs to world '${plan.world}', not '${world}'`);
@@ -32911,7 +32924,7 @@ var worldTools = [
     exec?.signal?.throwIfAborted();
     if (args.planId !== void 0) {
       const planId = stringArg(args.planId);
-      const plan = await getPlan(dshHomePath("tavern"), planId);
+      const plan = await getPlan(tavernDataRoot(), planId);
       if (plan === void 0) throw new Error(`plan '${planId}' not found`);
       if (plan.kind !== "world" || plan.op !== "create") throw new Error(`plan '${planId}' is not a world creation plan; edit plans go through world_put and card plans through card_put`);
       if (plan.world !== name2) throw new Error(`plan '${planId}' belongs to world '${plan.world}', not '${name2}'`);
@@ -33061,7 +33074,7 @@ async function executeWorldPlan(plan) {
     });
     const entries2 = seeds.map((values, uid) => worldEntryFromValues(uid, values));
     await db.putWorld({ name: plan.world, entries: entries2 });
-    const applied2 = await applyPlan(dshHomePath("tavern"), plan.id);
+    const applied2 = await applyPlan(tavernDataRoot(), plan.id);
     return {
       plan: applied2,
       world: plan.world,
@@ -33102,7 +33115,7 @@ async function executeWorldPlan(plan) {
   });
   const { entries, touched } = applyWorldEdits(plan.world, book, edits);
   await db.putWorld({ ...book, entries });
-  const applied = await applyPlan(dshHomePath("tavern"), plan.id);
+  const applied = await applyPlan(tavernDataRoot(), plan.id);
   return {
     plan: applied,
     world: plan.world,
@@ -33582,7 +33595,7 @@ var materialReadOutput = objectOutput3({
 var materialTools = [
   tool3("material_list", "List the script/material library (proposal 0014): name, format, chunk count and which cards are bound to each script (via extensions.agentTavern.scriptId). Entry point when the user wants a card made from a script or other material.", {}, materialListOutput, async (_args, exec) => {
     exec?.signal?.throwIfAborted();
-    const summaries = await listScripts(dshHomePath("tavern"));
+    const summaries = await listScripts(tavernDataRoot());
     const db = await tavernStore3();
     const bindings = /* @__PURE__ */ new Map();
     for (const characterName of await db.listCharacters()) {
@@ -33622,7 +33635,7 @@ var materialTools = [
       requested = args.chunkIndex;
     }
     exec?.signal?.throwIfAborted();
-    const record = await getScript(dshHomePath("tavern"), scriptName);
+    const record = await getScript(tavernDataRoot(), scriptName);
     if (record === void 0 || record.chunks.length === 0) return { found: false, script: scriptName };
     const chunkIndex = Math.min(Math.max(requested, 0), record.chunks.length - 1);
     const text = record.chunks[chunkIndex].text;
@@ -33741,7 +33754,7 @@ async function handleScriptApi(req, res, route, method, db) {
     let imported;
     try {
       imported = await importScript(
-        dshHomePath("tavern"),
+        tavernDataRoot(),
         body.name,
         body.format === "epub" ? Buffer.from(typeof body.content === "string" ? body.content : "", "base64") : body.content,
         body.format
@@ -33761,7 +33774,7 @@ async function handleScriptApi(req, res, route, method, db) {
     });
   }
   if (method === "GET" && route === "scripts") {
-    const scripts = await listScripts(dshHomePath("tavern"));
+    const scripts = await listScripts(tavernDataRoot());
     const bindings = {};
     for (const name2 of await db.listCharacters()) {
       const file = await db.getCharacter(name2);
@@ -33779,7 +33792,7 @@ async function handleScriptApi(req, res, route, method, db) {
     if (!file) return sendJson(res, 404, { ok: false, message: "character not found" });
     const scriptName = boundScriptOf(file.card);
     if (scriptName === void 0) return sendJson(res, 404, { ok: false, message: "no script bound to this character" });
-    const script = await getScript(dshHomePath("tavern"), scriptName);
+    const script = await getScript(tavernDataRoot(), scriptName);
     if (!script) return sendJson(res, 404, { ok: false, message: `script '${scriptName}' not found` });
     const snapshot2 = await db.getChatSnapshot(character, chatId);
     if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
@@ -33799,7 +33812,7 @@ async function handleScriptApi(req, res, route, method, db) {
   if (method === "GET" && route.startsWith("script/")) {
     const name2 = decodeURIComponent(route.slice("script/".length));
     if (name2 === "" || name2.includes("/")) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
-    const script = await getScript(dshHomePath("tavern"), name2);
+    const script = await getScript(tavernDataRoot(), name2);
     if (!script) return sendJson(res, 404, { ok: false, message: `script '${name2}' not found` });
     return sendJson(res, 200, { ok: true, script: { name: script.name, source: script.source, chunks: script.chunks } });
   }
@@ -33812,7 +33825,7 @@ async function handleScriptApi(req, res, route, method, db) {
       throw new Error("scriptName is required");
     }
     if (binding !== void 0) {
-      const script = await getScript(dshHomePath("tavern"), binding);
+      const script = await getScript(tavernDataRoot(), binding);
       if (!script) return sendJson(res, 404, { ok: false, message: `script '${binding}' not found` });
     }
     try {
@@ -33963,7 +33976,7 @@ async function handleWorkbenchApi(req, res, url, route, method, db) {
       return sendJson(res, 400, { ok: false, message: `unknown kind filter '${kindParam}'`, code: "TAVERN_WORKBENCH" });
     }
     const character = url.searchParams.get("character") ?? void 0;
-    const plans = await listPlans(dshHomePath("tavern"), {
+    const plans = await listPlans(tavernDataRoot(), {
       ...kindParam !== null ? { kind: kindParam } : {},
       ...character !== void 0 && character !== "" ? { character } : {},
       status: statusParam
@@ -33976,7 +33989,7 @@ async function handleWorkbenchApi(req, res, url, route, method, db) {
     if (typeof body.approve !== "boolean") {
       return sendJson(res, 400, { ok: false, message: "expected { approve: boolean }", code: "TAVERN_WORKBENCH" });
     }
-    const plan = await getPlan(dshHomePath("tavern"), planId);
+    const plan = await getPlan(tavernDataRoot(), planId);
     if (plan === void 0) return sendJson(res, 404, { ok: false, message: `plan '${planId}' not found`, code: "TAVERN_WORKBENCH" });
     try {
       if (body.approve) {
@@ -33987,7 +34000,7 @@ async function handleWorkbenchApi(req, res, url, route, method, db) {
         const executed = await executeCardPlan(plan);
         return sendJson(res, 200, { ok: true, plan: executed.plan, applied: { character: executed.character, changes: executed.changes, fieldLengths: executed.fieldLengths } });
       }
-      const decided = await decidePlan(dshHomePath("tavern"), planId, false);
+      const decided = await decidePlan(tavernDataRoot(), planId, false);
       return sendJson(res, 200, { ok: true, plan: decided });
     } catch (error) {
       return sendJson(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error), code: "TAVERN_WORKBENCH" });
@@ -33999,7 +34012,7 @@ async function handleWorkbenchApi(req, res, url, route, method, db) {
 // packages/plugin/src/http/memory.ts
 var localRuntimeInstallInFlight;
 async function handleMemoryEmbedApi(req, res, route, method, db) {
-  const root = dshHomePath("tavern");
+  const root = tavernDataRoot();
   if (method === "GET" && route === "memory/embed") {
     const config = normalizeMemoryEmbedding((await db.getState()).memoryEmbedding);
     const status2 = await readEmbedStatus(root);
@@ -34037,7 +34050,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
         await clearEmbedStatus(root);
         return sendJson(res, 200, { ok: true, config: null });
       }
-      const modelDir = resolve6(modelDirRaw);
+      const modelDir = resolve5(modelDirRaw);
       const dirProblem = validateLocalModelDir(modelDir);
       if (dirProblem !== null) {
         return sendJson(res, 400, { ok: false, message: dirProblem });
@@ -34150,7 +34163,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
     if (modelDirRaw === "") {
       return sendJson(res, 400, { ok: false, message: "expected { modelDir }" });
     }
-    const modelDir = resolve6(modelDirRaw);
+    const modelDir = resolve5(modelDirRaw);
     const dirProblem = validateLocalModelDir(modelDir);
     if (dirProblem !== null) {
       return sendJson(res, 400, { ok: false, message: dirProblem });
@@ -34213,7 +34226,7 @@ async function handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db)
 }
 function maintenanceDeps(db) {
   return {
-    root: dshHomePath("tavern"),
+    root: tavernDataRoot(),
     db,
     memory: memories(),
     vectors: memoryVectors()
@@ -34531,7 +34544,7 @@ async function handleApi(ctx, req, res) {
     const nextName = saved.card.data.name;
     await emitAssetsSaved("character", nextName);
     if (nextName !== oldName) {
-      await moveOriginalSnapshot(dshHomePath("tavern"), oldName, nextName);
+      await moveOriginalSnapshot(tavernDataRoot(), oldName, nextName);
     }
     const state = await db.updateState((current) => {
       const activeCharacter = current.activeCharacter === oldName ? nextName : current.activeCharacter;
@@ -34581,7 +34594,7 @@ async function handleApi(ctx, req, res) {
       activeCharacter: current.activeCharacter === name2 ? void 0 : current.activeCharacter,
       sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.character === name2 && binding.group !== true)))
     }));
-    await deleteOriginalSnapshot(dshHomePath("tavern"), name2);
+    await deleteOriginalSnapshot(tavernDataRoot(), name2);
     await refreshActivePrompt();
     return sendJson(res, 200, { ok: true, state });
   }
@@ -34676,7 +34689,7 @@ async function handleApi(ctx, req, res) {
     const result = await db.importCharacter(source);
     await emitAssetsSaved("character", result.card.data.name);
     try {
-      await saveOriginalSnapshot(dshHomePath("tavern"), result.card.data.name, result.card);
+      await saveOriginalSnapshot(tavernDataRoot(), result.card.data.name, result.card);
     } catch (error) {
       console.warn(`dsh-soulmojito: original snapshot for '${result.card.data.name}' failed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -35274,10 +35287,10 @@ function apply(ctx, config = {}) {
   void agentTavernCapabilitiesPromise2.then((value) => {
     setAgentTavernCapabilities(value);
   });
-  const agentTavernProjectorPromise2 = store3().then((db) => AgentTavernProjector.open(dshHomePath("tavern"), db));
+  const agentTavernProjectorPromise2 = store3().then((db) => AgentTavernProjector.open(tavernDataRoot(), db));
   setAgentTavernProjectorPromise(agentTavernProjectorPromise2);
   setAgentNovelCapabilities(inspectAgentNovelCapabilities(ctx));
-  const novelProjectorPromise2 = Promise.all([novelStore(), memories()]).then(([store5, memory]) => NovelProjector.open(dshHomePath("tavern"), store5, memory));
+  const novelProjectorPromise2 = Promise.all([novelStore(), memories()]).then(([store5, memory]) => NovelProjector.open(tavernDataRoot(), store5, memory));
   setNovelProjectorPromise(novelProjectorPromise2);
   const novelDriverPromise2 = Promise.all([novelStore(), store3(), novelProjectorPromise2]).then(([novelDb, tavern, projector]) => {
     const driver = NovelDriver.create(ctx, { store: novelDb, tavern, projector });
@@ -35332,7 +35345,7 @@ function apply(ctx, config = {}) {
   registerTavernSessionCommand(ctx);
   ctx.effect(() => tavernUpdate(ctx).start(), "dsh-soulmojito: update auto-check");
   const gamesServicePromise2 = openGamesService({
-    root: dshHomePath("tavern"),
+    root: tavernDataRoot(),
     hostVersion: BUILD_INFO.version,
     logger: { warn: (message) => ctx.logger?.warn?.(message) },
     // 投降门（2026-10-14 用户需求「禁用投降」）：逐次读 state（TavernStore 的

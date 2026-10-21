@@ -186,7 +186,7 @@ describe('MVU settlement receipts (integration)', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-mvu-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
 
     await store.importCharacter({ spec: 'chara_card_v2', spec_version: '2.0', data: cardData(CHARACTER, { world: 'MVU Lore' }) })
     await store.importWorldFile('MVU Lore', {
@@ -450,7 +450,7 @@ describe('MVU settlement receipts (integration)', () => {
   })
 
   it('reads chat-scope AgentTavern variables for an agent-tavern binding and renders them into the status bar', async () => {
-    const scoped = await VariableStore.open(join(home, 'tavern'))
+    const scoped = await VariableStore.open(join(home, 'soulmojito'))
     await scoped.set('chat', statusChatId, 'mvu.favor', 77)
     await scoped.set('chat', statusChatId, 'scene', '夜')
     await store.updateState((state) => ({
@@ -473,7 +473,7 @@ describe('MVU settlement receipts (integration)', () => {
   })
 
   it('does not read chat-scope variables for ST-bound or unbound chats', async () => {
-    const scoped = await VariableStore.open(join(home, 'tavern'))
+    const scoped = await VariableStore.open(join(home, 'soulmojito'))
     await scoped.set('chat', plainChatId, 'mvu.favor', 5)
     await store.updateState((state) => ({
       sessionBindings: {

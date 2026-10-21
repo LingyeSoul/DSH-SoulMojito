@@ -39,7 +39,7 @@ describe('AgentTavern tavern_variable_settle under the $schema guard (C-1)', () 
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'agent-tavern-mvu-guard-'))
     process.env.DSH_HOME = home
-    const store = await TavernStore.open(join(home, 'tavern'))
+    const store = await TavernStore.open(join(home, 'soulmojito'))
     await store.importCharacter({
       spec: 'chara_card_v2',
       spec_version: '2.0',
@@ -83,9 +83,9 @@ describe('AgentTavern tavern_variable_settle under the $schema guard (C-1)', () 
 
   const settle = (changes: unknown[]) =>
     tools.get('tavern_variable_settle')!.execute({ changes }, { agent: { id: 'native' } })
-  const chatOf = async () => (await (await TavernStore.open(join(home, 'tavern'))).getChat(CHARACTER, chatId))!
+  const chatOf = async () => (await (await TavernStore.open(join(home, 'soulmojito'))).getChat(CHARACTER, chatId))!
   const storedValue = async (name: string) =>
-    (await (await VariableStore.open(join(home, 'tavern'))).get('chat', chatId, name))?.value
+    (await (await VariableStore.open(join(home, 'soulmojito'))).get('chat', chatId, name))?.value
 
   it('clamps an out-of-range settle and records the guard note in receipt and audit', async () => {
     const result = await settle([{ name: 'mvu.favor', value: 150, reason: 'shared a meal' }])
@@ -96,7 +96,7 @@ describe('AgentTavern tavern_variable_settle under the $schema guard (C-1)', () 
       { name: 'mvu.favor', before: 10, after: 100, reason: 'mvu.favor: guard clamp: 150 -> 100' },
     ])
     expect(await storedValue('mvu.favor')).toBe(100)
-    const audit = await readMvuAudit(join(home, 'tavern'))
+    const audit = await readMvuAudit(join(home, 'soulmojito'))
     expect(audit.at(-1)!.changes[0]).toEqual({
       name: 'mvu.favor', reason: 'shared a meal; mvu.favor: guard clamp: 150 -> 100', before: 10, after: 100,
     })
@@ -121,7 +121,7 @@ describe('AgentTavern tavern_variable_settle under the $schema guard (C-1)', () 
     const chat = await chatOf()
     expect(chat.header.chat_metadata.variables).toEqual(SEEDED_VARIABLES)
     // 审计线与请求逐项对齐（失败项只有名字与 reason）
-    const audit = await readMvuAudit(join(home, 'tavern'))
+    const audit = await readMvuAudit(join(home, 'soulmojito'))
     expect(audit.at(-1)!.status).toBe('failed')
     expect(audit.at(-1)!.changes).toEqual([
       { name: 'mvu.mood', reason: 'provoked' },

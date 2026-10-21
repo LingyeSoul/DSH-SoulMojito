@@ -10,7 +10,7 @@ import {
   type MemoryEmbeddingSettings,
   type MemoryRecord,
 } from '../../../../tavern-store/src/index.js'
-import { dshHomePath } from '../../dsh-home.js'
+import { tavernDataRoot } from '../../dsh-home.js'
 import { embedMemoryRecord } from '../../memory-hybrid.js'
 
 let tavernStorePromise: Promise<TavernStore> | undefined
@@ -19,15 +19,15 @@ let memoryVectorStorePromise: Promise<MemoryVectorStore> | undefined
 let variableStorePromise: Promise<VariableStore> | undefined
 
 export function tavernStore(): Promise<TavernStore> {
-  return (tavernStorePromise ??= TavernStore.open(dshHomePath('tavern')))
+  return (tavernStorePromise ??= TavernStore.open(tavernDataRoot()))
 }
 
 export function memoryStore(): Promise<MemoryStore> {
-  return (memoryStorePromise ??= MemoryStore.open(dshHomePath('tavern')))
+  return (memoryStorePromise ??= MemoryStore.open(tavernDataRoot()))
 }
 
 export function memoryVectorStore(): Promise<MemoryVectorStore> {
-  return (memoryVectorStorePromise ??= MemoryVectorStore.open(dshHomePath('tavern')))
+  return (memoryVectorStorePromise ??= MemoryVectorStore.open(tavernDataRoot()))
 }
 
 /** 混合检索配置（提案 0016）：state.memoryEmbedding 经 normalize 后有效才算开启；
@@ -44,10 +44,10 @@ export async function embedWrittenMemory(record: MemoryRecord): Promise<void> {
   try {
     const config = await memoryEmbeddingConfig()
     if (config === undefined) return
-    await embedMemoryRecord({ root: dshHomePath('tavern'), config, vectorStore: await memoryVectorStore(), record })
+    await embedMemoryRecord({ root: tavernDataRoot(), config, vectorStore: await memoryVectorStore(), record })
   } catch { /* 嵌入失败不阻塞记忆写入 */ }
 }
 
 export function variableStore(): Promise<VariableStore> {
-  return (variableStorePromise ??= VariableStore.open(dshHomePath('tavern')))
+  return (variableStorePromise ??= VariableStore.open(tavernDataRoot()))
 }

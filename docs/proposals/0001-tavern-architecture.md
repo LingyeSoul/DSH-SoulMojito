@@ -39,7 +39,7 @@ DSH 的 agentic 工具循环和 SillyTavern 的纯 RP 循环用途不同。第�
 每个 Tavern chat 与一个 DSH session 绑定，映射保存在：
 
 ```text
-$DSH_HOME/tavern/state.json -> sessionBindings
+$DSH_HOME/soulmojito/state.json -> sessionBindings   # 2026-10-21 前的安装仍在 $DSH_HOME/tavern/
 ```
 
 打开新 Tavern chat 时：
@@ -111,7 +111,7 @@ Composer 输入行的模型选择器复刻 DSH 原生 model seat 的形态（pil
 | `tavern-lore` | 递归扫描、副键逻辑、概率、预算、分组、sticky/cooldown/delay、位置分发 |
 | `tavern-macros` | 名称、卡字段、时间、random/pick/roll、变量宏和扩展注册 |
 | `tavern-pipeline` | prompt order、marker、历史、lore、persona、depth injection 和 token budget |
-| `tavern-store` | `$DSH_HOME/tavern/` 原子存储、revision、session binding |
+| `tavern-store` | `$DSH_HOME/soulmojito/`（旧装 `tavern/`）原子存储、revision、session binding |
 
 角色 PNG 原字节保存以保留图片和兼容 chunks。未知规范字段进入 raw/extension 透传袋，避免导入导出丢失社区资产数据。
 

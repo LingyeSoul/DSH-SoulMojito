@@ -1,6 +1,6 @@
 /** AgentTavern deduction and MVU settlement tool slice (registration order 17-18). */
 
-import { dshHomePath } from '../../dsh-home.js'
+import { tavernDataRoot } from '../../dsh-home.js'
 import {
   appendMvuReceipt,
   overlayScopedVariables,
@@ -249,7 +249,7 @@ export function deductionTools(): ToolDefinition[] {
       await db.saveChat(binding.character, binding.chatId, chat, snapshot.revision)
       // 回执的持久投影（提案 0012 P2）：会话事件词汇表对插件封闭（v4 宿主拒载
       // 未知事件类型），审计线落独立文件 <tavern>/mvu/audit.jsonl，见 projector.ts。
-      await appendMvuAudit(dshHomePath('tavern'), {
+      await appendMvuAudit(tavernDataRoot(), {
         at: receipt.at,
         sessionId: binding.agentId,
         character: binding.character,

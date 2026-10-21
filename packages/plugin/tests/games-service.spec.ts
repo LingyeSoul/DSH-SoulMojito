@@ -20,7 +20,7 @@ import { handleGamesApi } from '../src/games/http.js'
 import { GameBridgeError } from '../src/games/sessions.js'
 
 const home = mkdtempSync(join(tmpdir(), 'games-service-'))
-const root = join(home, 'tavern')
+const root = join(home, 'soulmojito')
 const CHARACTER = 'ExampleCard'
 const CHAT = 'chat-1'
 

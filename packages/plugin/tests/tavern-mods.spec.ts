@@ -693,7 +693,7 @@ describe('mod event bus', () => {
       offs.push(modEvents.on('guides-changed', (payload) => { seen.push(`guides:${payload.character}`) }))
       // 打开一个空宿主以建立桥接（host.open 订阅 guides 总线）。
       const fake = fakeStateStore()
-      await ModHost.open({ root: join(home, 'tavern'), hostVersion: '0.4.1', dbProvider: async () => fake as never })
+      await ModHost.open({ root: join(home, 'soulmojito'), hostVersion: '0.4.1', dbProvider: async () => fake as never })
       await emitGuidesChanged('ExampleCard', 'chat1.jsonl')
       expect(seen).toEqual(['guides:ExampleCard'])
     } finally {
@@ -880,11 +880,11 @@ describe('mod loader e2e through the real HTTP surface', () => {
   beforeAll(async () => {
     home = tempHome('dsh-soulmojito-mode2e-')
     process.env.DSH_HOME = home
-    mkdirSync(join(home, 'tavern', 'mods'), { recursive: true })
-    cpSync(repoExampleMod, join(home, 'tavern', 'mods', EXAMPLE_MOD_ID), { recursive: true })
-    mkdirSync(join(home, 'tavern', 'mods', 'broken-mod'), { recursive: true })
-    writeFileSync(join(home, 'tavern', 'mods', 'broken-mod', 'mod.json'), '{ "id": "broken-mod", oops', 'utf8')
-    store = await TavernStore.open(join(home, 'tavern'))
+    mkdirSync(join(home, 'soulmojito', 'mods'), { recursive: true })
+    cpSync(repoExampleMod, join(home, 'soulmojito', 'mods', EXAMPLE_MOD_ID), { recursive: true })
+    mkdirSync(join(home, 'soulmojito', 'mods', 'broken-mod'), { recursive: true })
+    writeFileSync(join(home, 'soulmojito', 'mods', 'broken-mod', 'mod.json'), '{ "id": "broken-mod", oops', 'utf8')
+    store = await TavernStore.open(join(home, 'soulmojito'))
     apply({
       systemPrompt: { section: () => {}, context: () => {} },
       commands: { register: () => {} },
@@ -973,7 +973,7 @@ describe('mod loader e2e through the real HTTP surface', () => {
     expect((await call('GET', statsUrl())).status).toBe(404)
     expect((await call('POST', `/api/dsh-soulmojito/mods/${EXAMPLE_MOD_ID}/enable`, {})).status).toBe(200)
     expect((await call('POST', `/api/dsh-soulmojito/mods/${EXAMPLE_MOD_ID}/reload`, {})).status).toBe(200)
-    const stored = JSON.parse(readFileSync(join(home, 'tavern', 'mods', EXAMPLE_MOD_ID, 'data', 'state.json'), 'utf8')).values
+    const stored = JSON.parse(readFileSync(join(home, 'soulmojito', 'mods', EXAMPLE_MOD_ID, 'data', 'state.json'), 'utf8')).values
     expect(stored.disposed).toBe(true)
     const stats = await call('GET', statsUrl())
     expect(stats.status).toBe(200)

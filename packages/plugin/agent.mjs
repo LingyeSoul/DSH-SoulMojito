@@ -5688,11 +5688,28 @@ async function collectWorldInfoBooks(db, state, characterName, character) {
 }
 
 // packages/plugin/src/dsh-home.ts
+import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join as join6, resolve } from "node:path";
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
   return join6(resolve(configured || join6(homedir(), ".dsh")), ...segments);
+}
+var TAVERN_DATA_DIR = "soulmojito";
+var LEGACY_TAVERN_DATA_DIR = "tavern";
+function tavernDataRoot(...segments) {
+  const next = dshHomePath(TAVERN_DATA_DIR);
+  if (holdsTavernData(next)) return join6(next, ...segments);
+  const legacy = dshHomePath(LEGACY_TAVERN_DATA_DIR);
+  if (holdsTavernData(legacy)) return join6(legacy, ...segments);
+  return join6(next, ...segments);
+}
+function holdsTavernData(root) {
+  try {
+    return readdirSync(root).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 // packages/plugin/src/memory-embed.ts
@@ -5701,7 +5718,7 @@ import * as path6 from "node:path";
 
 // packages/plugin/src/memory-embed-local.ts
 import { createHash as createHash5 } from "node:crypto";
-import { readdirSync, readFileSync, realpathSync as realpathSync2, statSync } from "node:fs";
+import { readdirSync as readdirSync2, readFileSync, realpathSync as realpathSync2, statSync } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
 import { basename as basename2, dirname as dirname4, join as join7 } from "node:path";
 import { fileURLToPath, pathToFileURL as pathToFileURL2 } from "node:url";
@@ -5711,13 +5728,13 @@ var SESSION_CACHE_LIMIT = 2;
 function localModelFingerprint(modelDir) {
   try {
     const parts = [];
-    for (const entry of readdirSync(modelDir).sort()) {
+    for (const entry of readdirSync2(modelDir).sort()) {
       const full = join7(modelDir, entry);
       const info = statSync(full);
       if (info.isFile()) {
         parts.push(`${entry}:${info.size}:${Math.round(info.mtimeMs)}`);
       } else if (info.isDirectory()) {
-        for (const child of readdirSync(full).sort()) {
+        for (const child of readdirSync2(full).sort()) {
           const childInfo = statSync(join7(full, child));
           if (childInfo.isFile()) parts.push(`${entry}/${child}:${childInfo.size}:${Math.round(childInfo.mtimeMs)}`);
         }
@@ -5749,7 +5766,7 @@ var AUTO_DTYPE_PRIORITY = ["fp16", "q8", "q4", "q4f16", "int8", "uint8", "q2", "
 function detectLocalQuantizations(modelDir) {
   let names;
   try {
-    names = readdirSync(join7(modelDir, "onnx"));
+    names = readdirSync2(join7(modelDir, "onnx"));
   } catch {
     return [];
   }
@@ -6268,13 +6285,13 @@ var memoryStorePromise;
 var memoryVectorStorePromise;
 var variableStorePromise;
 function tavernStore() {
-  return tavernStorePromise ??= TavernStore.open(dshHomePath("tavern"));
+  return tavernStorePromise ??= TavernStore.open(tavernDataRoot());
 }
 function memoryStore() {
-  return memoryStorePromise ??= MemoryStore.open(dshHomePath("tavern"));
+  return memoryStorePromise ??= MemoryStore.open(tavernDataRoot());
 }
 function memoryVectorStore() {
-  return memoryVectorStorePromise ??= MemoryVectorStore.open(dshHomePath("tavern"));
+  return memoryVectorStorePromise ??= MemoryVectorStore.open(tavernDataRoot());
 }
 async function memoryEmbeddingConfig() {
   const state = await (await tavernStore()).getState();
@@ -6284,12 +6301,12 @@ async function embedWrittenMemory(record) {
   try {
     const config = await memoryEmbeddingConfig();
     if (config === void 0) return;
-    await embedMemoryRecord({ root: dshHomePath("tavern"), config, vectorStore: await memoryVectorStore(), record });
+    await embedMemoryRecord({ root: tavernDataRoot(), config, vectorStore: await memoryVectorStore(), record });
   } catch {
   }
 }
 function variableStore() {
-  return variableStorePromise ??= VariableStore.open(dshHomePath("tavern"));
+  return variableStorePromise ??= VariableStore.open(tavernDataRoot());
 }
 
 // packages/plugin/src/agent-tavern/tools/shared.ts
@@ -7757,7 +7774,7 @@ function deductionTools() {
       };
       appendMvuReceipt(chat, receipt);
       await db.saveChat(binding.character, binding.chatId, chat, snapshot2.revision);
-      await appendMvuAudit(dshHomePath("tavern"), {
+      await appendMvuAudit(tavernDataRoot(), {
         at: receipt.at,
         sessionId: binding.agentId,
         character: binding.character,
@@ -8192,7 +8209,7 @@ function memoryTools() {
       })))).flat().sort((left, right) => right.score - left.score || left.record.id.localeCompare(right.record.id)).slice(0, limit);
       const config = await memoryEmbeddingConfig();
       const hits = config === void 0 ? await lexicalHits() : await hybridMemorySearch({
-        root: dshHomePath("tavern"),
+        root: tavernDataRoot(),
         config,
         store: store3,
         vectorStore: await memoryVectorStore(),
@@ -8377,7 +8394,7 @@ function scriptTools() {
       const character = await db.getCharacter(binding.character);
       const scriptName = boundScriptOf(character?.card);
       if (scriptName === void 0) return { found: false };
-      const script = await getScript(dshHomePath("tavern"), scriptName);
+      const script = await getScript(tavernDataRoot(), scriptName);
       if (script === void 0 || script.chunks.length === 0) return { found: false };
       const snapshot2 = await db.getChatSnapshot(binding.character, binding.chatId);
       const progress = normalizeScriptProgress(snapshot2?.chat.header.chat_metadata?.scriptProgress);
@@ -8402,7 +8419,7 @@ function scriptTools() {
       const character = await db.getCharacter(binding.character);
       const scriptName = boundScriptOf(character?.card);
       if (scriptName === void 0) return { found: false };
-      const script = await getScript(dshHomePath("tavern"), scriptName);
+      const script = await getScript(tavernDataRoot(), scriptName);
       if (script === void 0 || script.chunks.length === 0) return { found: false };
       const snapshot2 = await db.getChatSnapshot(binding.character, binding.chatId);
       if (!snapshot2) throw new Error("bound Tavern chat not found");
@@ -8479,7 +8496,7 @@ async function scriptSummaryForChat(db, character, chatId) {
   const found = await db.getCharacter(character);
   const scriptName = boundScriptOf(found?.card);
   if (scriptName === void 0) return "";
-  const script = await getScript(dshHomePath("tavern"), scriptName);
+  const script = await getScript(tavernDataRoot(), scriptName);
   if (script === void 0 || script.chunks.length === 0) return "";
   const snapshot2 = await db.getChatSnapshot(character, chatId);
   if (!snapshot2) return "";

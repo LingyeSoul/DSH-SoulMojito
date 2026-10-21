@@ -4,7 +4,7 @@
  * （characters/<name>.*），恢复原版即把快照写回工作版。
  *
  * ```text
- * tavern/
+ * soulmojito/                       # 旧装为 tavern/（tavernDataRoot() 解析）
  * └── characters/
  *     ├── originals/<name>.json   # 导入时一次性快照（原子写，存在即跳过）
  *     └── <name>.png|json|charx   # 工作版（现有文件，不动）

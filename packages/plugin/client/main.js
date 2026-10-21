@@ -2622,7 +2622,7 @@ window.__ModuleLoader__.load({
       'mods.confirmHttp': 'HTTP routes',
       'mods.openPanel': 'Open panel',
       'mods.install.title': 'Install from git',
-      'mods.install.hint': 'GitHub repository URL (or owner/repo, optional #ref) with a mod.json at its root. Cloned into tavern/mods/<id>/; enabling still needs both switches.',
+      'mods.install.hint': 'GitHub repository URL (or owner/repo, optional #ref) with a mod.json at its root. Cloned into soulmojito/mods/<id>/ under the data directory (legacy installs keep tavern/mods/<id>/); enabling still needs both switches.',
       'mods.install.placeholder': 'https://github.com/owner/mod-repo',
       'mods.install.button': 'Install',
       'mods.install.installing': 'Installing…',
@@ -3432,7 +3432,7 @@ window.__ModuleLoader__.load({
       'mods.confirmHttp': 'HTTP 路由',
       'mods.openPanel': '打开面板',
       'mods.install.title': '从 git 安装',
-      'mods.install.hint': 'GitHub 仓库 URL（或 owner/repo，可带 #ref），根目录需有 mod.json。克隆到 tavern/mods/<id>/；启用仍需两层开关。',
+      'mods.install.hint': 'GitHub 仓库 URL（或 owner/repo，可带 #ref），根目录需有 mod.json。克隆到数据目录的 soulmojito/mods/<id>/（旧安装仍在 tavern/mods/<id>/）；启用仍需两层开关。',
       'mods.install.placeholder': 'https://github.com/owner/mod-repo',
       'mods.install.button': '安装',
       'mods.install.installing': '安装中…',
@@ -11766,7 +11766,7 @@ window.__ModuleLoader__.load({
           installStatus ? h('p', { className: 'dt-hint' }, installStatus) : null),
         h('section', { className: 'dt-settings-band' },
           mods.length === 0
-            ? h('p', { className: 'dt-muted' }, t('mods.empty', { path: 'tavern/mods/' }))
+            ? h('p', { className: 'dt-muted' }, t('mods.empty', { path: 'soulmojito/mods/' }))
             : h('div', { className: 'dt-mod-list' }, mods.map((mod) => h('article', { key: mod.id, className: 'dt-mod-row' },
               h('div', { className: 'dt-mod-row-head' },
                 h('strong', null, mod.name),

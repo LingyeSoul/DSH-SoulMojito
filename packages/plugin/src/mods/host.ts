@@ -1,5 +1,5 @@
 /**
- * Mod 宿主（提案 0015 §3.2 P1 加载器）：扫描 `<tavern>/mods/`、清单校验、三层
+ * Mod 宿主（提案 0015 §3.2 P1 加载器）：扫描 `<data root>/mods/`、清单校验、三层
  * 开关裁决、装载 ESM 入口、审计与 HTTP 子路由分派。
  *
  * 纪律：
@@ -110,7 +110,7 @@ export interface ModHostContext {
 
 export interface ModHostOptions {
   ctx?: ModHostContext
-  /** tavern 数据根（`$DSH_HOME/tavern`）。Mod 目录是 `<root>/mods/`。 */
+  /** tavern 数据根（新装 `$DSH_HOME/soulmojito`，旧装 `$DSH_HOME/tavern`）。Mod 目录是 `<root>/mods/`。 */
   root: string
   /** 宿主版本（engines.dsh-soulmojito 范围校验的左值）。 */
   hostVersion: string

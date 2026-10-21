@@ -21,7 +21,7 @@
  * 宿主 basic 的默认 summarizer 同为 ctx.llm.stream 辅助调用。
  */
 import { hostPluginMessageSource, importHostPackage } from '../../../bind/src/index.js'
-import { dshHomePath } from '../dsh-home.js'
+import { tavernDataRoot } from '../dsh-home.js'
 import { TavernStore } from '../../../tavern-store/src/index.js'
 import {
   DEFAULT_USAGE_THRESHOLD_RATIO,
@@ -340,7 +340,7 @@ function finishError(finish: { kind: string; failure?: { message: string; code: 
 let tavernStorePromise: Promise<TavernStore> | undefined
 
 function tavernStore(): Promise<TavernStore> {
-  return (tavernStorePromise ??= TavernStore.open(dshHomePath('tavern')))
+  return (tavernStorePromise ??= TavernStore.open(tavernDataRoot()))
 }
 
 /** 存储缺失、读取失败或绑定不完整时按非剧情会话处理，摘要退回宿主默认行为。 */

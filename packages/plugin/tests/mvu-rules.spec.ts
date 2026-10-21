@@ -236,7 +236,7 @@ describe('MVU $rules settlement (integration)', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-mvu-rules-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
     await store.importCharacter({
       spec: 'chara_card_v2', spec_version: '2.0',
       data: cardData(RULES_CHARACTER, {
@@ -574,11 +574,11 @@ describe('MVU $rules settlement (integration)', () => {
       { name: 'mvu.flags.trusted', after: true, reason: 'rule:favor-unlock' },
       { name: 'mvu.debt', before: 200, after: 100, reason: 'rule:debt-relief' },
     ])
-    const variables = await VariableStore.open(join(home, 'tavern'))
+    const variables = await VariableStore.open(join(home, 'soulmojito'))
     expect(await variables.get('chat', (await store.getState()).sessionBindings.native!.chatId, 'mvu.flags.trusted')).toMatchObject({ value: true })
     expect(await variables.get('chat', (await store.getState()).sessionBindings.native!.chatId, 'mvu.debt')).toMatchObject({ value: 100 })
     // 审计线带规则变更（回执管线同源）
-    const audit = await readMvuAudit(join(home, 'tavern'))
+    const audit = await readMvuAudit(join(home, 'soulmojito'))
     expect(audit.at(-1)!.changes).toEqual([
       { name: 'mvu.favor', reason: 'gift accepted', before: 50, after: 85 },
       { name: 'mvu.flags.trusted', reason: 'rule:favor-unlock', after: true },
@@ -603,7 +603,7 @@ describe('MVU $rules settlement (integration)', () => {
     // 撤销上一条 settle 回执：favor/debt 恢复种子 before 值，规则新增键删除
     const undone = await undoCall(AGENT_RULES_CHARACTER, chatId)
     expect(undone.status).toBe(200)
-    const variables = await VariableStore.open(join(home, 'tavern'))
+    const variables = await VariableStore.open(join(home, 'soulmojito'))
     expect(await variables.get('chat', chatId, 'mvu.flags.trusted')).toBeUndefined()
     expect(await variables.get('chat', chatId, 'mvu.favor')).toMatchObject({ value: 50 })
     expect(await variables.get('chat', chatId, 'mvu.debt')).toMatchObject({ value: 200 })

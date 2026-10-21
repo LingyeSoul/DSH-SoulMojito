@@ -79,7 +79,7 @@ describe('Card Workbench tools and original snapshots', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'card-workbench-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
 
     // 宿主 mock：与 tavern-command.spec 同款最小形状，只为拿到 import/character
     // 路由处理器（快照挂载点在插件 index.ts，不经路由测不到挂钩本身）。
@@ -145,13 +145,13 @@ describe('Card Workbench tools and original snapshots', () => {
     await apiHandler(makeRequest({ card: cardPayload(CHARACTER, ORIGINAL_DESCRIPTION) }, '/api/dsh-soulmojito/import/character'), first)
     expect(first.statusCode).toBe(200)
     expect(JSON.parse(first.chunks[0]!)).toMatchObject({ ok: true, name: CHARACTER })
-    const snapshotFile = join(home, 'tavern', 'characters', 'originals', `${CHARACTER}.json`)
+    const snapshotFile = join(home, 'soulmojito', 'characters', 'originals', `${CHARACTER}.json`)
     expect(existsSync(snapshotFile)).toBe(true)
     // 重复导入（工作版覆盖）不得覆盖既有快照：首个导入胜出。
     const second = makeResponse()
     await apiHandler(makeRequest({ card: cardPayload(CHARACTER, WORKING_DESCRIPTION) }, '/api/dsh-soulmojito/import/character'), second)
     expect(second.statusCode).toBe(200)
-    const snapshot = await readOriginalSnapshot(join(home, 'tavern'), CHARACTER)
+    const snapshot = await readOriginalSnapshot(join(home, 'soulmojito'), CHARACTER)
     expect(snapshot).toBeDefined()
     expect(snapshot!.data.description).toBe(ORIGINAL_DESCRIPTION)
     expect((await store.getCharacter(CHARACTER))!.card.data.description).toBe(WORKING_DESCRIPTION)
@@ -269,11 +269,11 @@ describe('Card Workbench tools and original snapshots', () => {
     expect(working!.card.data.creatorNotes).toBe('Original notes')
     expect(working!.card.data.description).toBe(ORIGINAL_DESCRIPTION)
     // 恢复只动工作版：快照仍是导入时那份。
-    expect((await readOriginalSnapshot(join(home, 'tavern'), CHARACTER))!.data.description).toBe(ORIGINAL_DESCRIPTION)
+    expect((await readOriginalSnapshot(join(home, 'soulmojito'), CHARACTER))!.data.description).toBe(ORIGINAL_DESCRIPTION)
   })
 
   it('saveOriginalSnapshot is idempotent at the store layer and restoreOriginal is undefined without a snapshot', async () => {
-    const root = join(home, 'tavern')
+    const root = join(home, 'soulmojito')
     expect(await restoreOriginal(root, DIRECT_CHARACTER)).toBeUndefined()
     const current = await store.getCharacter(DIRECT_CHARACTER)
     expect(await saveOriginalSnapshot(root, DIRECT_CHARACTER, current!.card)).toBe(true)

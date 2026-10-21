@@ -128,7 +128,7 @@ describe('Script Play EPUB import (proposal 0014 P2)', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-epub-'))
     process.env.DSH_HOME = home
-    tavernRoot = join(home, 'tavern')
+    tavernRoot = join(home, 'soulmojito')
     store = await TavernStore.open(tavernRoot)
     await store.importCharacter({
       spec: 'chara_card_v2',

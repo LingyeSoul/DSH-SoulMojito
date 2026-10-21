@@ -197,7 +197,7 @@ const exec = { agent: { id: AGENT } }
 
 beforeAll(async () => {
   process.env.DSH_HOME = home
-  const store = await TavernStore.open(join(home, 'tavern'))
+  const store = await TavernStore.open(join(home, 'soulmojito'))
   await store.updateState(() => ({
     sessionBindings: {
       [AGENT]: { architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER, chatId: CHAT },

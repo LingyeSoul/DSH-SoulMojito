@@ -7,7 +7,7 @@
  */
 
 import { boundScriptOf, getScript, listScripts } from '../../../tavern-store/src/index.js'
-import { dshHomePath } from '../dsh-home.js'
+import { tavernDataRoot } from '../dsh-home.js'
 import { stringArg } from '../tool-args.js'
 import { objectOutput, tavernStore, tool, type ToolDefinition } from './shared.js'
 
@@ -33,7 +33,7 @@ const materialReadOutput = objectOutput({
 export const materialTools: ToolDefinition[] = [
   tool('material_list', 'List the script/material library (proposal 0014): name, format, chunk count and which cards are bound to each script (via extensions.agentTavern.scriptId). Entry point when the user wants a card made from a script or other material.', {}, materialListOutput, async (_args, exec) => {
     exec?.signal?.throwIfAborted()
-    const summaries = await listScripts(dshHomePath('tavern'))
+    const summaries = await listScripts(tavernDataRoot())
     const db = await tavernStore()
     const bindings = new Map<string, string[]>()
     for (const characterName of await db.listCharacters()) {
@@ -73,7 +73,7 @@ export const materialTools: ToolDefinition[] = [
       requested = args.chunkIndex
     }
     exec?.signal?.throwIfAborted()
-    const record = await getScript(dshHomePath('tavern'), scriptName)
+    const record = await getScript(tavernDataRoot(), scriptName)
     if (record === undefined || record.chunks.length === 0) return { found: false, script: scriptName }
     const chunkIndex = Math.min(Math.max(requested, 0), record.chunks.length - 1)
     const text = record.chunks[chunkIndex]!.text

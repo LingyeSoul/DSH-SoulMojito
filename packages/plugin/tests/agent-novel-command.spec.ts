@@ -191,8 +191,8 @@ describe('AgentNovel command bridge and HTTP contract', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-novel-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
-    novels = await NovelStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
+    novels = await NovelStore.open(join(home, 'soulmojito'))
     await store.importCharacter({
       spec: 'chara_card_v2',
       spec_version: '2.0',

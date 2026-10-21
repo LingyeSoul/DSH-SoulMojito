@@ -75,8 +75,8 @@ describe('mod P2 e2e: generation hooks, panel surface and projections', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-modp2e2e-'))
     process.env.DSH_HOME = home
-    cpSync(join(repoExampleMod, 'dsh-soulmojito.mood-tracker'), join(home, 'tavern', 'mods', MOOD_ID), { recursive: true })
-    const throwingDir = join(home, 'tavern', 'mods', 'throwing-hook')
+    cpSync(join(repoExampleMod, 'dsh-soulmojito.mood-tracker'), join(home, 'soulmojito', 'mods', MOOD_ID), { recursive: true })
+    const throwingDir = join(home, 'soulmojito', 'mods', 'throwing-hook')
     mkdirSync(throwingDir, { recursive: true })
     writeFileSync(join(throwingDir, 'mod.json'), JSON.stringify({
       id: 'throwing-hook', name: 'Throwing Hook', version: '1.0.0', author: 't', description: 'throws on post-output',
@@ -87,7 +87,7 @@ describe('mod P2 e2e: generation hooks, panel surface and projections', () => {
         api.hooks.on('post-output', () => { throw new Error('p2 e2e hook failure') })
       }
     `, 'utf8')
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
     await store.importCharacter({
       spec: 'chara_card_v2',
       spec_version: '2.0',
@@ -175,7 +175,7 @@ describe('mod P2 e2e: generation hooks, panel surface and projections', () => {
     expect(result.chunks.some((chunk) => chunk.includes('"type":"saved"'))).toBe(true)
     const after = (await call('GET', '/api/dsh-soulmojito/mods')).body!.mods as Array<{ id: string; auditCount: number }>
     expect(after.find((mod) => mod.id === 'throwing-hook')!.auditCount).toBeGreaterThan(throwingBefore)
-    const audit = readFileSync(join(home, 'tavern', 'mods', 'audit.jsonl'), 'utf8')
+    const audit = readFileSync(join(home, 'soulmojito', 'mods', 'audit.jsonl'), 'utf8')
     expect(audit).toContain('"event":"hook-degradation"')
     expect(audit).toContain('p2 e2e hook failure')
   })

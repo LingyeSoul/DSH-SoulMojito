@@ -895,7 +895,7 @@ describe('确定性与尺寸（§3.2 硬约束）', () => {
 
 describe('registry 内置源（§4.1）', () => {
   it('列出 builtin 中国象棋：source builtin、status ok、engine/view 可用', async () => {
-    const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.2' })
+    const registry = await GameRegistry.open({ root: join(home, 'soulmojito'), hostVersion: '0.6.2' })
     const summary = registry.summaries().find((candidate) => candidate.id === 'dsh-soulmojito.xiangqi')!
     expect(summary).toBeDefined()
     expect(summary.source).toBe('builtin')
@@ -909,7 +909,7 @@ describe('registry 内置源（§4.1）', () => {
   })
 
   it('内置同册（按 id 稳定排序；军棋/21 点/记忆翻牌/地牢爬行/中国跳棋随后加入同册）', async () => {
-    const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.2' })
+    const registry = await GameRegistry.open({ root: join(home, 'soulmojito'), hostVersion: '0.6.2' })
     expect(registry.summaries().filter((summary) => summary.source === 'builtin').map((summary) => summary.id))
       .toEqual(['dsh-soulmojito.blackjack', 'dsh-soulmojito.chinese-checkers', 'dsh-soulmojito.dungeon-crawl', 'dsh-soulmojito.gomoku', 'dsh-soulmojito.junqi', 'dsh-soulmojito.memory-match', 'dsh-soulmojito.monopoly', 'dsh-soulmojito.tic-tac-toe', 'dsh-soulmojito.xiangqi'])
   })
@@ -917,7 +917,7 @@ describe('registry 内置源（§4.1）', () => {
 
 describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
   it('开局 → 人类炮二平五 → Agent 马8进7：视图/叙述/轮次/终审全链路', async () => {
-    const service = await openGamesService({ root: join(home, 'tavern'), hostVersion: '0.6.2' })
+    const service = await openGamesService({ root: join(home, 'soulmojito'), hostVersion: '0.6.2' })
     try {
       const { session, view } = await service.start({ gameId: 'dsh-soulmojito.xiangqi', character: 'ExampleCard', chatId: 'xq-chat' })
       expect(session.gameId).toBe('dsh-soulmojito.xiangqi')
@@ -950,7 +950,7 @@ describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
   })
 
   it('实弹回归（g-54e612c8 形状）：Agent 桥把坐标写成引号串时照常落子，规则仍全量终审', async () => {
-    const service = await openGamesService({ root: join(home, 'tavern'), hostVersion: '0.6.2' })
+    const service = await openGamesService({ root: join(home, 'soulmojito'), hostVersion: '0.6.2' })
     try {
       const { session } = await service.start({ gameId: 'dsh-soulmojito.xiangqi', character: 'ExampleCard', chatId: 'xq-quoted' })
       await service.humanAction(session.id, mv([6, 6], [6, 5])) // 人类 兵三进一

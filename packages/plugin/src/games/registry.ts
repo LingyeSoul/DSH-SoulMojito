@@ -1,7 +1,7 @@
 /**
  * 游戏注册表（提案 0018 §4.1/§4.5，P0 + P2 导入路径 + P3 Mod 注册）。
  *
- * 三源合一：builtin（静态 import，随插件分发）/ imported（$DSH_HOME/tavern/
+ * 三源合一：builtin（静态 import，随插件分发）/ imported（<data root>/
  * games/installed/<id>/ 目录装载，动态 import）/ mod（§4.5 第 3 源——Mod 经
  * `api.games.register` 在 setup 期注册，进程内引擎对象 + view HTML 字符串）。
  *
@@ -79,7 +79,7 @@ export interface GameEntry {
 }
 
 export interface GameRegistryOptions {
-  /** tavern 数据根（`$DSH_HOME/tavern`）。导入目录是 `<root>/games/installed/`。 */
+  /** tavern 数据根（新装 `$DSH_HOME/soulmojito`，旧装 `$DSH_HOME/tavern`）。导入目录是 `<root>/games/installed/`。 */
   root: string
   /** 宿主版本（engines.dsh-soulmojito 范围校验的左值）。 */
   hostVersion: string

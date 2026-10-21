@@ -121,7 +121,7 @@ describe('Script Play (proposal 0014 P1)', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-script-'))
     process.env.DSH_HOME = home
-    tavernRoot = join(home, 'tavern')
+    tavernRoot = join(home, 'soulmojito')
     store = await TavernStore.open(tavernRoot)
     await store.importCharacter({
       spec: 'chara_card_v2',
@@ -463,7 +463,7 @@ describe('Script Play (proposal 0014 P2)', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-script-p2-'))
     process.env.DSH_HOME = home
-    tavernRoot = join(home, 'tavern')
+    tavernRoot = join(home, 'soulmojito')
     store = await TavernStore.open(tavernRoot)
     for (const name of [P2_CHARACTER, P2_LOOSE]) {
       await store.importCharacter({

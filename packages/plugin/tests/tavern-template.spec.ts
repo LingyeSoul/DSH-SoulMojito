@@ -57,7 +57,7 @@ describe('Prompt Template generation wiring (proposal 0008)', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-template-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
 
     await store.importCharacter({
       spec: 'chara_card_v2',

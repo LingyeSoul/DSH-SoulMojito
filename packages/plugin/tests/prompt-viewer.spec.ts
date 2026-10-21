@@ -218,7 +218,7 @@ describe('prompt viewer wiring in runGeneration (record after pre-llm rewrites)'
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-prompt-viewer-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
     await store.importCharacter(importBody(CHAR))
     await store.putPreset('viewer-preset', {
       prompts: [{ identifier: 'chatHistory', marker: true }],

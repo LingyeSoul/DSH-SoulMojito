@@ -35,7 +35,7 @@ describe('collectWorldInfoBooks', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'tavern-assets-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
     await store.importWorldFile('Linked Lore', {
       entries: {
         '0': { uid: 0, key: [], keysecondary: [], comment: '', content: 'linked lore', constant: true, selective: false, order: 100, position: 0, disable: false },

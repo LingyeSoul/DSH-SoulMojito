@@ -173,7 +173,7 @@ async function runMaintenance(scope: MemoryMaintenanceScope, producers: ChunkPro
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), 'memory-maintenance-'))
   process.env.DSH_HOME = home
-  root = join(home, 'tavern')
+  root = join(home, 'soulmojito')
   db = await TavernStore.open(root)
   await db.importCharacter({
     spec: 'chara_card_v2',

@@ -17,7 +17,7 @@ com.example.my-game/
 
 硬性约束：
 
-- **`id` 即安装目录名**：手工放入 `tavern/games/installed/` 时，目录名必须等于
+- **`id` 即安装目录名**：手工放入数据根的 `games/installed/` 时，目录名必须等于
   `game.json` 的 `id`（扫描期校验，不符即 broken）；面板上传 zip / git 安装由清单
   `id` 决定落盘目录（源目录/包装目录名不参与校验）。建议包目录始终用 `id` 命名，
   避免两种路径的认知混淆。
@@ -164,7 +164,8 @@ export default {
    总量 ≤4MB；含 `..` 穿越或绝对路径的 zip 会被拒绝。
 2. **从 git 安装**：仓库根目录放三件套（`game.json` 在根），面板填 `owner/repo#ref`
    或完整 URL；clone 后走同一条校验路径。
-3. **手工目录**：放进 `$DSH_HOME/tavern/games/installed/<id>/`，重启或调用
+3. **手工目录**：放进 `$DSH_HOME/soulmojito/games/installed/<id>/`（旧安装仍用
+   `$DSH_HOME/tavern/games/installed/<id>/`），重启或调用
    `POST /api/dsh-soulmojito/games/reload`。
 4. **Mod 内联注册**（引擎对象 + view HTML 字符串，作者是 Mod 开发者）：见
    [`docs/mods/mod-api.md` §18](../mods/mod-api.md)。

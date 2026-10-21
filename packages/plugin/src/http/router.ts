@@ -11,7 +11,7 @@ import { seedJsrMvuVariables } from '../agent-tavern/mvu-compat.js'
 import { serveCharacterAvatar, sendAvatarFallback } from '../assets.js'
 import { BUILD_INFO, TAVERN_COMMIT } from '../build-info.js'
 import { runCandidateGeneration } from '../candidates.js'
-import { dshHomePath } from '../dsh-home.js'
+import { tavernDataRoot } from '../dsh-home.js'
 import { latestFrontendMessage, stripFrontendDocuments } from '../frontend-documents.js'
 import { handleGamesApi, isGamesRoute } from '../games/http.js'
 import { handleHelperApi } from '../helper.js'
@@ -300,7 +300,7 @@ export async function handleApi(ctx, req, res) {
     await emitAssetsSaved('character', nextName)
     if (nextName !== oldName) {
       // 原版快照按卡名寻址、跟卡走；不迁移则新名 restore 断链、旧名留幽灵快照。
-      await moveOriginalSnapshot(dshHomePath('tavern'), oldName, nextName)
+      await moveOriginalSnapshot(tavernDataRoot(), oldName, nextName)
     }
     const state = await db.updateState((current) => {
       const activeCharacter = current.activeCharacter === oldName ? nextName : current.activeCharacter
@@ -357,7 +357,7 @@ export async function handleApi(ctx, req, res) {
     }))
     // 删原版快照（对齐 card_delete 工具面）：否则同名卡再导入时「首个胜出」
     // 保住陈旧快照，card_restore_original 会把旧卡写回新卡。
-    await deleteOriginalSnapshot(dshHomePath('tavern'), name)
+    await deleteOriginalSnapshot(tavernDataRoot(), name)
     await refreshActivePrompt()
     return sendJson(res, 200, { ok: true, state })
   }
@@ -489,7 +489,7 @@ export async function handleApi(ctx, req, res) {
     // 原版快照（提案 0013 P1）：导入成功后 best-effort 一次性保留原版；已存在
     // 不覆盖，失败只记警告不阻断导入——导入语义优先，快照是增值保障。
     try {
-      await saveOriginalSnapshot(dshHomePath('tavern'), result.card.data.name, result.card)
+      await saveOriginalSnapshot(tavernDataRoot(), result.card.data.name, result.card)
     } catch (error) {
       console.warn(`dsh-soulmojito: original snapshot for '${result.card.data.name}' failed: ${error instanceof Error ? error.message : String(error)}`)
     }

@@ -9,9 +9,10 @@
  * Usage:
  *   node scripts/repair-novel-outline.mjs [<tavern-root>] <novel-id> <source-revision> [--expect-chapters <n>]
  *
- * <tavern-root> defaults to $DSH_HOME/tavern (then ~/.dsh/tavern); it is the
- * tavern root (~/.dsh/tavern), NOT the dsh home — the wrong layer silently
- * creates an empty novels/ dir. Needs a built packages/tavern-store/lib
+ * <tavern-root> defaults to $DSH_HOME/soulmojito (pre-2026-10-21 installs fall
+ * back to $DSH_HOME/tavern, then ~/.dsh/soulmojito); it is the tavern root
+ * (~/.dsh/soulmojito), NOT the dsh home — the wrong layer silently creates an
+ * empty novels/ dir. Needs a built packages/tavern-store/lib
  * (pnpm build:plugin). Quit `dsh web` first: the §10.2 write lock otherwise
  * rejects the script's writes.
  *
@@ -36,7 +37,18 @@ if (!novelId || !sourceRevision || Number.isNaN(expectedChapters)) {
 }
 const home = rootArg ?? (() => {
   const configured = process.env.DSH_HOME?.trim()
-  return join(resolve(configured || join(homedir(), '.dsh')), 'tavern')
+  const dshHome = resolve(configured || join(homedir(), '.dsh'))
+  const next = join(dshHome, 'soulmojito')
+  const holdsData = (candidate) => {
+    try {
+      return fs.readdirSync(candidate).length > 0
+    } catch {
+      return false
+    }
+  }
+  if (holdsData(next)) return next
+  const legacy = join(dshHome, 'tavern')
+  return holdsData(legacy) ? legacy : next
 })()
 
 const tavern = await TavernStore.open(home)

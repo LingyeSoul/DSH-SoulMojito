@@ -11,7 +11,7 @@ import {
 } from '../../../tavern-store/src/index.js'
 import { executeCardPlan, executeWorldPlan } from '../card-workbench/agent.js'
 import { decidePlan, getPlan, listPlans } from '../card-workbench/plans.js'
-import { dshHomePath } from '../dsh-home.js'
+import { tavernDataRoot } from '../dsh-home.js'
 import { addGuide, emitGuidesChanged, normalizeGuides, removeGuide } from '../guides.js'
 import { emitChatSaved } from '../mods/events.js'
 import {
@@ -125,7 +125,7 @@ export async function handleScriptApi(
       // EPUB（提案 0014 P2）：content 为 base64 编码的 zip 字节，解码后走
       // importScript 的二进制分支（parseEpubText）；8MB 上限对 base64 文本照旧。
       imported = await importScript(
-        dshHomePath('tavern'),
+        tavernDataRoot(),
         body.name,
         body.format === 'epub'
           ? Buffer.from(typeof body.content === 'string' ? body.content : '', 'base64')
@@ -148,7 +148,7 @@ export async function handleScriptApi(
   }
 
   if (method === 'GET' && route === 'scripts') {
-    const scripts = await listScripts(dshHomePath('tavern'))
+    const scripts = await listScripts(tavernDataRoot())
     const bindings: Record<string, string> = {}
     for (const name of await db.listCharacters()) {
       const file = await db.getCharacter(name)
@@ -168,7 +168,7 @@ export async function handleScriptApi(
     if (!file) return sendJson(res, 404, { ok: false, message: 'character not found' })
     const scriptName = boundScriptOf(file.card)
     if (scriptName === undefined) return sendJson(res, 404, { ok: false, message: 'no script bound to this character' })
-    const script = await getScript(dshHomePath('tavern'), scriptName)
+    const script = await getScript(tavernDataRoot(), scriptName)
     if (!script) return sendJson(res, 404, { ok: false, message: `script '${scriptName}' not found` })
     const snapshot = await db.getChatSnapshot(character, chatId)
     if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
@@ -189,7 +189,7 @@ export async function handleScriptApi(
   if (method === 'GET' && route.startsWith('script/')) {
     const name = decodeURIComponent(route.slice('script/'.length))
     if (name === '' || name.includes('/')) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
-    const script = await getScript(dshHomePath('tavern'), name)
+    const script = await getScript(tavernDataRoot(), name)
     if (!script) return sendJson(res, 404, { ok: false, message: `script '${name}' not found` })
     return sendJson(res, 200, { ok: true, script: { name: script.name, source: script.source, chunks: script.chunks } })
   }
@@ -203,7 +203,7 @@ export async function handleScriptApi(
       throw new Error('scriptName is required')
     }
     if (binding !== undefined) {
-      const script = await getScript(dshHomePath('tavern'), binding)
+      const script = await getScript(tavernDataRoot(), binding)
       if (!script) return sendJson(res, 404, { ok: false, message: `script '${binding}' not found` })
     }
     try {
@@ -405,7 +405,7 @@ export async function handleWorkbenchApi(
       return sendJson(res, 400, { ok: false, message: `unknown kind filter '${kindParam}'`, code: 'TAVERN_WORKBENCH' })
     }
     const character = url.searchParams.get('character') ?? undefined
-    const plans = await listPlans(dshHomePath('tavern'), {
+    const plans = await listPlans(tavernDataRoot(), {
       ...(kindParam !== null ? { kind: kindParam } : {}),
       ...(character !== undefined && character !== '' ? { character } : {}),
       status: statusParam,
@@ -419,7 +419,7 @@ export async function handleWorkbenchApi(
     if (typeof body.approve !== 'boolean') {
       return sendJson(res, 400, { ok: false, message: 'expected { approve: boolean }', code: 'TAVERN_WORKBENCH' })
     }
-    const plan = await getPlan(dshHomePath('tavern'), planId)
+    const plan = await getPlan(tavernDataRoot(), planId)
     if (plan === undefined) return sendJson(res, 404, { ok: false, message: `plan '${planId}' not found`, code: 'TAVERN_WORKBENCH' })
     try {
       if (body.approve) {
@@ -431,7 +431,7 @@ export async function handleWorkbenchApi(
         const executed = await executeCardPlan(plan)
         return sendJson(res, 200, { ok: true, plan: executed.plan, applied: { character: executed.character, changes: executed.changes, fieldLengths: executed.fieldLengths } })
       }
-      const decided = await decidePlan(dshHomePath('tavern'), planId, false)
+      const decided = await decidePlan(tavernDataRoot(), planId, false)
       return sendJson(res, 200, { ok: true, plan: decided })
     } catch (error) {
       return sendJson(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error), code: 'TAVERN_WORKBENCH' })

@@ -740,7 +740,7 @@ function writeSession(root: string, session: {
 
 describe('端到端会话（真实 GamesService）', () => {
   it('开局：人类执红先手、建议集 14、回合闸双向把守', async () => {
-    const service = await openGamesService({ root: join(home, 'tavern'), hostVersion: '0.6.5' })
+    const service = await openGamesService({ root: join(home, 'soulmojito'), hostVersion: '0.6.5' })
     try {
       const { session, view } = await service.start({ gameId: 'dsh-soulmojito.chinese-checkers', character: 'ExampleCard', chatId: 'cc-chat' })
       expect(session.gameId).toBe('dsh-soulmojito.chinese-checkers')
@@ -768,7 +768,7 @@ describe('端到端会话（真实 GamesService）', () => {
   })
 
   it('人类收官（构造性会话）：humanAction 走满底营 → 终局红胜、视图终局态', async () => {
-    const root = join(home, 'tavern')
+    const root = join(home, 'soulmojito')
     const service = await openGamesService({ root, hostVersion: '0.6.5' })
     try {
       const state = blank()
@@ -800,7 +800,7 @@ describe('端到端会话（真实 GamesService）', () => {
   })
 
   it('Agent 收官（构造性会话）：agentMove 走满顶营 → 终局蓝胜', async () => {
-    const root = join(home, 'tavern')
+    const root = join(home, 'soulmojito')
     const service = await openGamesService({ root, hostVersion: '0.6.5' })
     try {
       const state = blank()

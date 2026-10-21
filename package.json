@@ -1,6 +1,6 @@
 {
   "name": "dsh-soulmojito",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "private": true,
   "description": "SillyTavern-compatible roleplay layer for DSH (deepseek-harness): character cards, world info, presets.",
   "license": "GPL-3.0",

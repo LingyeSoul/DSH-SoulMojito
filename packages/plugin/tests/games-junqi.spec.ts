@@ -548,7 +548,7 @@ describe('预览局面防漂移（视图内联 vs 引擎真实四手）', () => 
 
 describe('registry 内置源（§4.1）', () => {
   it('列出 builtin 军棋：source builtin、status ok、engine/view 可用', async () => {
-    const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.4' })
+    const registry = await GameRegistry.open({ root: join(home, 'soulmojito'), hostVersion: '0.6.4' })
     const summary = registry.summaries().find((candidate) => candidate.id === 'dsh-soulmojito.junqi')!
     expect(summary).toBeDefined()
     expect(summary.source).toBe('builtin')
@@ -564,7 +564,7 @@ describe('registry 内置源（§4.1）', () => {
 
 describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
   it('开局 → 人类营长进营 → Agent 营长进营：视图/叙述/轮次/终审全链路', async () => {
-    const service = await openGamesService({ root: join(home, 'tavern'), hostVersion: '0.6.4' })
+    const service = await openGamesService({ root: join(home, 'soulmojito'), hostVersion: '0.6.4' })
     try {
       const { session, view } = await service.start({ gameId: 'dsh-soulmojito.junqi', character: 'ExampleCard', chatId: 'jq-chat' })
       expect(session.gameId).toBe('dsh-soulmojito.junqi')

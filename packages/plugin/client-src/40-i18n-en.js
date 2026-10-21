@@ -565,7 +565,7 @@
       'mods.confirmHttp': 'HTTP routes',
       'mods.openPanel': 'Open panel',
       'mods.install.title': 'Install from git',
-      'mods.install.hint': 'GitHub repository URL (or owner/repo, optional #ref) with a mod.json at its root. Cloned into tavern/mods/<id>/; enabling still needs both switches.',
+      'mods.install.hint': 'GitHub repository URL (or owner/repo, optional #ref) with a mod.json at its root. Cloned into soulmojito/mods/<id>/ under the data directory (legacy installs keep tavern/mods/<id>/); enabling still needs both switches.',
       'mods.install.placeholder': 'https://github.com/owner/mod-repo',
       'mods.install.button': 'Install',
       'mods.install.installing': 'Installing…',

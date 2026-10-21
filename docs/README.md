@@ -178,6 +178,7 @@
 - [`2026-10-12-update-restart-required-stuck.md`](../decisions/2026-10-12-update-restart-required-stuck.md) — 「需要重启」永不解除：stamp 自指悖论 + 共享缓存幽灵
 - [`2026-10-14-update-checkout-shipped-files-drift.md`](../decisions/2026-10-14-update-checkout-shipped-files-drift.md) — 自更新 checkout 兜底：发布清单单一事实来源化（SHIPPED 漂移修复）
 - [`2026-10-16-project-rename-dsh-soulmojito.md`](../decisions/2026-10-16-project-rename-dsh-soulmojito.md) — 项目改名：dsh-tavern → DSH-SoulMojito（全仓标识符映射与读取双认兼容层）
+- [`2026-10-21-storage-dir-soulmojito.md`](../decisions/2026-10-21-storage-dir-soulmojito.md) — 存储目录迁移：`$DSH_HOME/tavern` → `soulmojito`（旧目录原地兼容，不自动搬迁）
 
 ### 资产与格式
 

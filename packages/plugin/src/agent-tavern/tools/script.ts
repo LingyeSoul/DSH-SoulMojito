@@ -6,7 +6,7 @@ import {
   normalizeScriptProgress,
   type TavernStore,
 } from '../../../../tavern-store/src/index.js'
-import { dshHomePath } from '../../dsh-home.js'
+import { tavernDataRoot } from '../../dsh-home.js'
 import { createLazyProjection } from '../../lazy-projection.js'
 import { createHostPromptExpander, hostPromptSafe } from '../../prompt-safety.js'
 import { clampInt } from '../../tool-args.js'
@@ -25,7 +25,7 @@ export function scriptTools(): ToolDefinition[] {
       const character = await db.getCharacter(binding.character)
       const scriptName = boundScriptOf(character?.card)
       if (scriptName === undefined) return { found: false }
-      const script = await getScript(dshHomePath('tavern'), scriptName)
+      const script = await getScript(tavernDataRoot(), scriptName)
       if (script === undefined || script.chunks.length === 0) return { found: false }
       const snapshot = await db.getChatSnapshot(binding.character, binding.chatId)
       const progress = normalizeScriptProgress(snapshot?.chat.header.chat_metadata?.scriptProgress)
@@ -52,7 +52,7 @@ export function scriptTools(): ToolDefinition[] {
       const character = await db.getCharacter(binding.character)
       const scriptName = boundScriptOf(character?.card)
       if (scriptName === undefined) return { found: false }
-      const script = await getScript(dshHomePath('tavern'), scriptName)
+      const script = await getScript(tavernDataRoot(), scriptName)
       if (script === undefined || script.chunks.length === 0) return { found: false }
       const snapshot = await db.getChatSnapshot(binding.character, binding.chatId)
       if (!snapshot) throw new Error('bound Tavern chat not found')
@@ -146,7 +146,7 @@ async function scriptSummaryForChat(
   const found = await db.getCharacter(character)
   const scriptName = boundScriptOf(found?.card)
   if (scriptName === undefined) return ''
-  const script = await getScript(dshHomePath('tavern'), scriptName)
+  const script = await getScript(tavernDataRoot(), scriptName)
   if (script === undefined || script.chunks.length === 0) return ''
   const snapshot = await db.getChatSnapshot(character, chatId)
   if (!snapshot) return ''

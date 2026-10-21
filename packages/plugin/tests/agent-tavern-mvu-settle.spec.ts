@@ -23,7 +23,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'agent-tavern-mvu-settle-'))
     process.env.DSH_HOME = home
-    const store = await TavernStore.open(join(home, 'tavern'))
+    const store = await TavernStore.open(join(home, 'soulmojito'))
     await store.importCharacter({
       spec: 'chara_card_v2',
       spec_version: '2.0',
@@ -82,7 +82,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
   const settle = (changes: unknown[]) =>
     tools.get('tavern_variable_settle')!.execute({ changes }, { agent: { id: 'native' } })
   const boundChat = async () => {
-    const store = await TavernStore.open(join(home, 'tavern'))
+    const store = await TavernStore.open(join(home, 'soulmojito'))
     const state = await store.getState()
     const binding = state.sessionBindings.native!
     return { store, chat: (await store.getChat(binding.character, binding.chatId))! }
@@ -130,8 +130,8 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     expect(second.receipt.changes).toEqual([{ name: 'mvu.favor', before: 3, after: 5 }])
 
     // 变量落在 variableStore 的 chat 作用域（variable_get 可见）。
-    const variables = await VariableStore.open(join(home, 'tavern'))
-    const state = await (await TavernStore.open(join(home, 'tavern'))).getState()
+    const variables = await VariableStore.open(join(home, 'soulmojito'))
+    const state = await (await TavernStore.open(join(home, 'soulmojito'))).getState()
     const chatId = state.sessionBindings.native!.chatId
     expect(await variables.get('chat', chatId, 'mvu.favor')).toMatchObject({ name: 'mvu.favor', value: 5 })
 
@@ -142,7 +142,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     expect(receipts[1]).toMatchObject({ status: 'updated', changes: [{ name: 'mvu.favor', before: 3, after: 5 }] })
 
     // 审计投影（选型：v4 会话词汇表封闭，落 <tavern>/mvu/audit.jsonl）。
-    const audit = await readMvuAudit(join(home, 'tavern'))
+    const audit = await readMvuAudit(join(home, 'soulmojito'))
     expect(audit).toHaveLength(2)
     expect(audit[0]).toMatchObject({
       sessionId: 'native',
@@ -184,7 +184,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     expect(receipts[2]).toMatchObject({ status: 'failed' })
 
     // 审计线与请求逐项对齐（含失败项的 reason，不带 after）。
-    const audit = await readMvuAudit(join(home, 'tavern'))
+    const audit = await readMvuAudit(join(home, 'soulmojito'))
     expect(audit).toHaveLength(3)
     expect(audit[2].status).toBe('failed')
     expect(audit[2].changes).toEqual([
@@ -203,7 +203,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     await expect(settle([{ name: '  ', value: 1 }])).rejects.toThrow('non-empty string name')
     // 拒绝后不留回执与审计线。
     expect(readMvuReceipts((await boundChat()).chat)).toHaveLength(3)
-    expect(await readMvuAudit(join(home, 'tavern'))).toHaveLength(3)
+    expect(await readMvuAudit(join(home, 'soulmojito'))).toHaveLength(3)
   })
 
   it('settles non-ASCII (Chinese MVU) variable names instead of rejecting them', async () => {
@@ -224,14 +224,14 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     })
     const { store } = await boundChat()
     const chatId = (await store.getState()).sessionBindings.native!.chatId
-    expect(await (await VariableStore.open(join(home, 'tavern'))).get('chat', chatId, '当前周期'))
+    expect(await (await VariableStore.open(join(home, 'soulmojito'))).get('chat', chatId, '当前周期'))
       .toMatchObject({ value: 2 })
   })
 
   it('propagates chat CAS conflicts for the agent to retry', async () => {
     const { store, chat } = await boundChat()
     const receiptsBefore = readMvuReceipts(chat).length
-    const auditBefore = (await readMvuAudit(join(home, 'tavern'))).length
+    const auditBefore = (await readMvuAudit(join(home, 'soulmojito'))).length
     // 让工具拿到过期 revision：与落盘 revision 永不相等 → saveChat 抛 CAS 冲突。
     const original = TavernStore.prototype.getChatSnapshot
     TavernStore.prototype.getChatSnapshot = async function (this: TavernStore, character: string, id: string) {
@@ -248,16 +248,16 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     // 变量本身已在冲突前写入 chat 作用域——重试会以新 before 重算。
     const after = await boundChat()
     expect(readMvuReceipts(after.chat)).toHaveLength(receiptsBefore)
-    expect(await readMvuAudit(join(home, 'tavern'))).toHaveLength(auditBefore)
+    expect(await readMvuAudit(join(home, 'soulmojito'))).toHaveLength(auditBefore)
     const state = await store.getState()
     const chatId = state.sessionBindings.native!.chatId
-    expect(await (await VariableStore.open(join(home, 'tavern'))).get('chat', chatId, 'mvu.trust'))
+    expect(await (await VariableStore.open(join(home, 'soulmojito'))).get('chat', chatId, 'mvu.trust'))
       .toMatchObject({ value: 1 })
     // 冲突恢复后重试成功：回执与审计线补齐。
     const retried = await settle([{ name: 'mvu.trust', value: 2 }])
     expect(retried.receipt).toMatchObject({ status: 'updated' })
     expect(retried.receipt.changes).toEqual([{ name: 'mvu.trust', before: 1, after: 2 }])
-    expect(await readMvuAudit(join(home, 'tavern'))).toHaveLength(auditBefore + 1)
+    expect(await readMvuAudit(join(home, 'soulmojito'))).toHaveLength(auditBefore + 1)
   })
 
   it('appends and reads the audit jsonl under <tavern>/mvu', async () => {

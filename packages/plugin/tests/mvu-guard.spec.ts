@@ -251,7 +251,7 @@ describe('MVU $schema guard on the ST settlement path (integration)', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-mvu-guard-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
     const cardData = (name: string, extensions: Record<string, unknown> = {}) => ({
       name, description: `${name}的描述。`, personality: '', scenario: '', first_mes: '你好。', mes_example: '',
       creator_notes: '', system_prompt: '', post_history_instructions: '',
@@ -383,7 +383,7 @@ describe('MVU $schema guard on the ST settlement path (integration)', () => {
     expect(payload.renderedHtml).not.toContain('$schema')
 
     // AgentTavern 绑定：chat 作用域变量覆盖回嵌套树后同样不泄漏 $schema
-    const scoped = await VariableStore.open(join(home, 'tavern'))
+    const scoped = await VariableStore.open(join(home, 'soulmojito'))
     await scoped.set('chat', schemaChatId, 'mvu.favor', 77)
     await store.updateState((state) => ({
       sessionBindings: {

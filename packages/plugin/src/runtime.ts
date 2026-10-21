@@ -4,7 +4,7 @@ import type { NovelProjector } from './agent-novel/projector.js'
 import { inspectAgentTavernCapabilities, type AgentTavernCapabilities } from './agent-tavern/capabilities.js'
 import type { AgentTavernProjector } from './agent-tavern/projector.js'
 import { BUILD_INFO, TAVERN_COMMIT } from './build-info.js'
-import { dshHomePath } from './dsh-home.js'
+import { tavernDataRoot } from './dsh-home.js'
 import { envCompat } from './env-compat.js'
 import type { GamesService } from './games/service.js'
 import { ModHost, type ModHostContext, type ModHostSnapshot } from './mods/host.js'
@@ -42,15 +42,15 @@ let gamesServicePromise: Promise<GamesService> | undefined
 let templatesEnabledFlag = true
 
 export function store() {
-  return (storePromise ??= TavernStore.open(dshHomePath('tavern')))
+  return (storePromise ??= TavernStore.open(tavernDataRoot()))
 }
 
 export function memories() {
-  return (memoryStorePromise ??= MemoryStore.open(dshHomePath('tavern')))
+  return (memoryStorePromise ??= MemoryStore.open(tavernDataRoot()))
 }
 
 export function variables() {
-  return (variableStorePromise ??= VariableStore.open(dshHomePath('tavern')))
+  return (variableStorePromise ??= VariableStore.open(tavernDataRoot()))
 }
 
 // 记忆向量缓存（提案 0016）：index.mjs 侧的 memoized 实例（维护 run 重嵌用；
@@ -58,7 +58,7 @@ export function variables() {
 let memoryVectorStorePromise: Promise<MemoryVectorStore> | undefined
 
 export function memoryVectors() {
-  return (memoryVectorStorePromise ??= MemoryVectorStore.open(dshHomePath('tavern')))
+  return (memoryVectorStorePromise ??= MemoryVectorStore.open(tavernDataRoot()))
 }
 
 /**
@@ -68,7 +68,7 @@ export function memoryVectors() {
 export function modHost(): Promise<ModHost> {
   return (modHostPromise ??= ModHost.open({
     ctx: modHostContext ?? {},
-    root: dshHomePath('tavern'),
+    root: tavernDataRoot(),
     hostVersion: BUILD_INFO.version,
     dbProvider: () => store(),
   }))
@@ -103,7 +103,7 @@ export async function modHostProjection(ctx): Promise<unknown[]> {
 }
 
 export function novelStore(): Promise<NovelStore> {
-  return (novelStorePromise ??= NovelStore.open(dshHomePath('tavern')))
+  return (novelStorePromise ??= NovelStore.open(tavernDataRoot()))
 }
 
 /**
@@ -121,7 +121,7 @@ export function tavernUpdate(ctx): TavernUpdateService {
   if (updateServiceInstance !== undefined && !updateServiceInstance.isDisposed) return updateServiceInstance
   updateServiceInstance = new TavernUpdateService({
     ctx,
-    home: dshHomePath('tavern'),
+    home: tavernDataRoot(),
     pluginDir: import.meta.dirname,
     local: { version: BUILD_INFO.version, commit: TAVERN_COMMIT },
     enabled: updateChecksEnabledFlag,

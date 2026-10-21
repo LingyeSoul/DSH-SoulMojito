@@ -618,7 +618,7 @@ describe('状态尺寸（§3.2：序列化 <64KB）', () => {
 
 describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
   it('记忆机器人驱动人机双路径翻完全盘：叙述/记分/终局全链路对账', async () => {
-    const service = await openGamesService({ root: join(home, 'tavern'), hostVersion: '0.6.5' })
+    const service = await openGamesService({ root: join(home, 'soulmojito'), hostVersion: '0.6.5' })
     try {
       const { session, view } = await service.start({ gameId: 'dsh-soulmojito.memory-match', character: 'ExampleCard', chatId: 'mem-chat' })
       expect(session.gameId).toBe('dsh-soulmojito.memory-match')

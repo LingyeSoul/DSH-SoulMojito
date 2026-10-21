@@ -53,7 +53,7 @@ describe('AgentTavern native module mount', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'agent-tavern-mount-'))
     process.env.DSH_HOME = home
-    const store = await TavernStore.open(join(home, 'tavern'))
+    const store = await TavernStore.open(join(home, 'soulmojito'))
     await store.importCharacter({
       spec: 'chara_card_v2',
       spec_version: '2.0',

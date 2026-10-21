@@ -593,7 +593,7 @@ describe('烟测 smokeTestGameEngine（§4.6）', () => {
 
 describe('registry 内置源（§4.1）', () => {
   it('列出 builtin 井字棋：source builtin、status ok、engine 可用', async () => {
-    const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.0' })
+    const registry = await GameRegistry.open({ root: join(home, 'soulmojito'), hostVersion: '0.6.0' })
     const summaries = registry.summaries()
     expect(summaries.map((summary) => summary.id)).toContain('dsh-soulmojito.tic-tac-toe')
     const builtin = summaries.find((summary) => summary.id === 'dsh-soulmojito.tic-tac-toe')!
@@ -607,7 +607,7 @@ describe('registry 内置源（§4.1）', () => {
   })
 
   it('列出 builtin 五子棋：source builtin、status ok、engine/view 可用', async () => {
-    const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.0' })
+    const registry = await GameRegistry.open({ root: join(home, 'soulmojito'), hostVersion: '0.6.0' })
     const summaries = registry.summaries()
     expect(summaries.filter((summary) => summary.source === 'builtin').map((summary) => summary.id))
       .toEqual(['dsh-soulmojito.blackjack', 'dsh-soulmojito.chinese-checkers', 'dsh-soulmojito.dungeon-crawl', 'dsh-soulmojito.gomoku', 'dsh-soulmojito.junqi', 'dsh-soulmojito.memory-match', 'dsh-soulmojito.monopoly', 'dsh-soulmojito.tic-tac-toe', 'dsh-soulmojito.xiangqi'])
@@ -643,10 +643,10 @@ describe('registry 内置源（§4.1）', () => {
 
 describe('内置五子棋：导入同 id 遮蔽内置（registry 单一遮蔽规则）', () => {
   it('导入目录与内置同 id → 以导入副本为准（broken 也遮蔽、可见）+ warning 不静默', async () => {
-    mkdirSync(join(shadowHome, 'tavern', 'games', 'installed', 'dsh-soulmojito.gomoku'), { recursive: true })
+    mkdirSync(join(shadowHome, 'soulmojito', 'games', 'installed', 'dsh-soulmojito.gomoku'), { recursive: true })
     const warnings: string[] = []
     const registry = await GameRegistry.open({
-      root: join(shadowHome, 'tavern'),
+      root: join(shadowHome, 'soulmojito'),
       hostVersion: '0.6.0',
       logger: { warn: (message: string) => { warnings.push(message) } },
     })
@@ -662,7 +662,7 @@ describe('内置五子棋：导入同 id 遮蔽内置（registry 单一遮蔽规
 
 describe('改名兼容：旧命名空间对局（2026-10-16 项目改名 dsh-tavern → dsh-soulmojito）', () => {
   it('registry.get 别名：旧名落空时映射到新名内置，无关旧名 id 不误配', async () => {
-    const registry = await GameRegistry.open({ root: join(legacyHome, 'tavern'), hostVersion: '0.6.0' })
+    const registry = await GameRegistry.open({ root: join(legacyHome, 'soulmojito'), hostVersion: '0.6.0' })
     expect(registry.get('dsh-tavern.gomoku')?.manifest.id).toBe('dsh-soulmojito.gomoku')
     expect(registry.get('dsh-tavern.not-installed')).toBeUndefined()
     // 直接命中路径不受影响（新名条目自身解析不变）。
@@ -670,12 +670,12 @@ describe('改名兼容：旧命名空间对局（2026-10-16 项目改名 dsh-tav
   })
 
   it('存量对局文件 gameId 为旧名时不被判孤儿（可查看、可续弈）', async () => {
-    const registry = await GameRegistry.open({ root: join(legacyHome, 'tavern'), hostVersion: '0.6.0' })
-    const store = await GameSessionStore.open({ root: join(legacyHome, 'tavern'), registry: () => registry })
+    const registry = await GameRegistry.open({ root: join(legacyHome, 'soulmojito'), hostVersion: '0.6.0' })
+    const store = await GameSessionStore.open({ root: join(legacyHome, 'soulmojito'), registry: () => registry })
     const id = 'g-aaaabbbb'
     const now = new Date().toISOString()
-    mkdirSync(join(legacyHome, 'tavern', 'games', 'sessions'), { recursive: true })
-    writeFileSync(join(legacyHome, 'tavern', 'games', 'sessions', `${id}.json`), JSON.stringify({
+    mkdirSync(join(legacyHome, 'soulmojito', 'games', 'sessions'), { recursive: true })
+    writeFileSync(join(legacyHome, 'soulmojito', 'games', 'sessions', `${id}.json`), JSON.stringify({
       id,
       gameId: 'dsh-tavern.gomoku',
       players: [{ role: 'black', owner: 'human' }, { role: 'white', owner: 'agent' }],

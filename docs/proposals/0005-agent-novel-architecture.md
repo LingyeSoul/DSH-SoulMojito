@@ -261,7 +261,7 @@ type LengthBudget =
 首版沿用 Node 文件存储，不引入数据库或通用事件总线。避免把 outline、run、正文分别写入三个可变文件然后声称整体原子：
 
 ```text
-$DSH_HOME/tavern/novels/<novelId>/
+$DSH_HOME/soulmojito/novels/<novelId>/   # 旧装：$DSH_HOME/tavern/novels/
   HEAD.json
   revisions/<revisionId>.json
   assets/<contentHash>.json

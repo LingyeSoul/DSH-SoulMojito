@@ -9,7 +9,7 @@
 
 ## 1. 目标行为（Working Backwards）
 
-**PR**：Mod 开发者把一个带 `mod.json` 的文件夹放进 `$DSH_HOME/tavern/mods/`，在 Tavern 管理面板
+**PR**：Mod 开发者把一个带 `mod.json` 的文件夹放进 `$DSH_HOME/soulmojito/mods/`（旧装 `$DSH_HOME/tavern/mods/`），在 Tavern 管理面板
 「Mod」分区看到它（默认禁用），点启用后：他注册的 Agent 工具出现在模型工具面、他的文本变换挂进
 ST 生成管线、他的宏/STscript 命令即刻可用、他的面板分区以隔离 iframe 形态出现在管理面板里、他的
 HTTP 路由挂在 `/api/dsh-soulmojito/mods/<id>/` 下。全程不改 dsh-soulmojito 一行源码、不需要重新安装插件、
@@ -76,7 +76,7 @@ HTTP 路由挂在 `/api/dsh-soulmojito/mods/<id>/` 下。全程不改 dsh-soulmo
 ### 3.2 目录、清单与加载
 
 ```
-$DSH_HOME/tavern/mods/<mod-id>/
+$DSH_HOME/soulmojito/mods/<mod-id>/   # 旧装：$DSH_HOME/tavern/mods/<mod-id>/
   mod.json          # 清单（加载前可读，不执行任何代码）
   index.mjs         # 入口 ESM（main 字段指定，相对路径）
   data/             # api.storage 私有数据（由宿主创建与管理）

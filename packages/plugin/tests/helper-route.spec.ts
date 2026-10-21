@@ -4,7 +4,7 @@
  * 增删改、事件数据源（快照比对所依赖的 message_id/role 形状）与明确的
  * 不支持错误。独立文件：index.ts 的 apply memoization 绑定首个 DSH_HOME。
  */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -64,7 +64,7 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-helper-e2e-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
     chatId = await store.createChat(CHARACTER, HEADER, [
       { name: CHARACTER, is_user: false, is_system: false, send_date: '', mes: 'greeting' },
       { name: 'User', is_user: true, is_system: false, send_date: '', mes: 'hello' },
@@ -91,6 +91,12 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
   afterAll(() => {
     delete process.env.DSH_HOME
     rmSync(home, { recursive: true, force: true })
+  })
+
+  it('resolves the soulmojito data root on a fresh home', () => {
+    // 2026-10-21 存储目录迁移：干净 home 只有一个 soulmojito/ 库，旧目录不生成。
+    expect(existsSync(join(home, 'soulmojito', 'characters'))).toBe(true)
+    expect(existsSync(join(home, 'tavern'))).toBe(false)
   })
 
   it('snapshots the bound chat in TavernHelper message shape', async () => {

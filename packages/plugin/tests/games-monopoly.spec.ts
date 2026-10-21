@@ -1106,7 +1106,7 @@ describe('视图行为（DOM 垫片：按钮随 legal 收缩 / 棋盘归属渲�
 
 describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
   it('开局 → 人类与 Agent 交替落子到终局：视图/叙述/终审全链路', async () => {
-    const service = await openGamesService({ root: join(home, 'tavern'), hostVersion: '0.6.5' })
+    const service = await openGamesService({ root: join(home, 'soulmojito'), hostVersion: '0.6.5' })
     try {
       const { session, view } = await service.start({ gameId: 'dsh-soulmojito.monopoly', character: 'ExampleCard', chatId: 'mp-chat' })
       expect(session.gameId).toBe('dsh-soulmojito.monopoly')
@@ -1165,7 +1165,7 @@ describe('端到端会话（真实 GamesService，开箱可玩面）', () => {
   })
 
   it('registry 列出 builtin 大富翁：source builtin、status ok、engine/view 可用', async () => {
-    const registry = await GameRegistry.open({ root: join(home, 'tavern'), hostVersion: '0.6.5' })
+    const registry = await GameRegistry.open({ root: join(home, 'soulmojito'), hostVersion: '0.6.5' })
     const summary = registry.summaries().find((candidate) => candidate.id === 'dsh-soulmojito.monopoly')
     expect(summary).toBeDefined()
     expect(summary!.source).toBe('builtin')

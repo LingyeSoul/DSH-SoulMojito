@@ -19,10 +19,9 @@
  * 不会写进 Tavern JSONL 剧情记录。
  */
 import { randomUUID } from 'node:crypto'
-import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
 import { TavernStore } from '../../../tavern-store/src/index.js'
 import { hostPluginMessageSource, sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
+import { tavernDataRoot } from '../dsh-home.js'
 
 /** 宿主会话形状经 host-session 兼容层读取（0.1.2 无 events 数组属性）。 */
 type AnchorSessionLike = HostSessionLog & { id?: string }
@@ -160,12 +159,7 @@ export function resolveAnchorEveryTurns(value: unknown): number {
 let anchorTavernStorePromise: Promise<TavernStore> | undefined
 
 function anchorTavernStore(): Promise<TavernStore> {
-  return (anchorTavernStorePromise ??= TavernStore.open(anchorDshHomePath('tavern')))
-}
-
-function anchorDshHomePath(...segments: string[]): string {
-  const configured = process.env.DSH_HOME?.trim()
-  return join(resolve(configured || join(homedir(), '.dsh')), ...segments)
+  return (anchorTavernStorePromise ??= TavernStore.open(tavernDataRoot()))
 }
 
 /** 存储缺失或读取失败时按非 Tavern 会话处理，不注入。 */

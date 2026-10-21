@@ -22,7 +22,7 @@ import type { GameAction, GameEngine, GameManifest } from './standard.js'
 import { renderGameViewDocument } from './view.js'
 
 export interface GamesServiceOptions {
-  /** tavern 数据根（`$DSH_HOME/tavern`）。 */
+  /** tavern 数据根（新装 `$DSH_HOME/soulmojito`，旧装 `$DSH_HOME/tavern`）。 */
   root: string
   /** 宿主版本（engines.dsh-soulmojito 门控左值）。 */
   hostVersion: string

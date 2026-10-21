@@ -164,7 +164,7 @@ describe('MVU receipt undo (integration)', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-mvu-undo-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
 
     for (const [name, extensions] of [
       [UNDO_CHARACTER, {}],
@@ -436,7 +436,7 @@ describe('MVU receipt undo (integration)', () => {
     const second = await settle([{ name: 'mvu.favor', value: 5, reason: 'gift accepted' }])
     expect(second.receipt.changes).toEqual([{ name: 'mvu.favor', before: 3, after: 5 }])
 
-    const scoped = await VariableStore.open(join(home, 'tavern'))
+    const scoped = await VariableStore.open(join(home, 'soulmojito'))
     // 撤销第二轮：flat 条目 5 → 恢复 before 3（location 不在回执里，不动）
     const undoSecond = await undoCall(AGENT_CHARACTER, chatId)
     expect(undoSecond.status).toBe(200)
@@ -479,7 +479,7 @@ describe('MVU receipt undo (integration)', () => {
 
     const undone = await undoCall(AGENT_CHARACTER, chatId)
     expect(undone.status).toBe(200)
-    const scoped = await VariableStore.open(join(home, 'tavern'))
+    const scoped = await VariableStore.open(join(home, 'soulmojito'))
     expect(await scoped.get('chat', chatId, 'mvu.favor')).toMatchObject({ value: 10 })
     // 播种树（chat_metadata.variables）不被撤销路径改写
     expect(await variablesOf(AGENT_CHARACTER, chatId)).toEqual({ mvu: { favor: 10 } })

@@ -9,7 +9,7 @@
  * （executeCardPlan / executeWorldPlan），成功后回写 applied。
  *
  * ```text
- * tavern/
+ * soulmojito/                      # 旧装为 tavern/（tavernDataRoot() 解析）
  * └── card-workbench/
  *     └── plans/<planId>.json   # 一个方案一个文件（原子写，人可读可 diff）
  * ```

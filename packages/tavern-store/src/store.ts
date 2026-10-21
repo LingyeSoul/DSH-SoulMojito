@@ -1,8 +1,9 @@
 /**
- * Tavern 数据存储：$DSH_HOME/tavern/ 下的目录布局与 CRUD。
+ * Tavern 数据存储：数据根（新装 `$DSH_HOME/soulmojito/`，旧装 `$DSH_HOME/tavern/`，
+ * 由 `dsh-home.ts` 的 tavernDataRoot() 解析）下的目录布局与 CRUD。
  *
  * ```text
- * tavern/
+ * soulmojito/
  * ├── characters/<name>.png|<name>.json   # PNG 原样存（保留图像与双 chunk）
  * ├── worlds/<name>.json                  # ST 世界书文件形态
  * ├── presets/<name>.json                 # ST preset 形态（chat completion / context / instruct / textgen）

@@ -10,7 +10,7 @@
 
 import type { TavernStore } from '../../../tavern-store/src/index.js'
 import { normalizeEntry, type LoreEntry } from '../../../tavern-format/src/index.js'
-import { dshHomePath } from '../dsh-home.js'
+import { tavernDataRoot } from '../dsh-home.js'
 import { limitText, stringArg } from '../tool-args.js'
 import { applyPlan, getPlan, proposeWorldPlan, type WorldPlan, type WorldPlanValue } from './plans.js'
 import {
@@ -214,7 +214,7 @@ export const worldTools: ToolDefinition[] = [
       }))
       return { uid: edit.uid, action: existing === undefined ? 'create' as const : 'update' as const, fields, ...(note !== undefined ? { note } : {}) }
     })
-    const plan = await proposeWorldPlan(dshHomePath('tavern'), world, {
+    const plan = await proposeWorldPlan(tavernDataRoot(), world, {
       op: create ? 'create' : 'edit',
       title,
       entries,
@@ -297,7 +297,7 @@ export const worldTools: ToolDefinition[] = [
     exec?.signal?.throwIfAborted()
     if (args.planId !== undefined) {
       const planId = stringArg(args.planId)
-      const plan = await getPlan(dshHomePath('tavern'), planId)
+      const plan = await getPlan(tavernDataRoot(), planId)
       if (plan === undefined) throw new Error(`plan '${planId}' not found`)
       if (plan.kind !== 'world' || plan.op !== 'edit') throw new Error(`plan '${planId}' is not a world edit plan; book creations go through world_create and card plans through card_put`)
       if (plan.world !== world) throw new Error(`plan '${planId}' belongs to world '${plan.world}', not '${world}'`)
@@ -338,7 +338,7 @@ export const worldTools: ToolDefinition[] = [
     exec?.signal?.throwIfAborted()
     if (args.planId !== undefined) {
       const planId = stringArg(args.planId)
-      const plan = await getPlan(dshHomePath('tavern'), planId)
+      const plan = await getPlan(tavernDataRoot(), planId)
       if (plan === undefined) throw new Error(`plan '${planId}' not found`)
       if (plan.kind !== 'world' || plan.op !== 'create') throw new Error(`plan '${planId}' is not a world creation plan; edit plans go through world_put and card plans through card_put`)
       if (plan.world !== name) throw new Error(`plan '${planId}' belongs to world '${plan.world}', not '${name}'`)
@@ -504,7 +504,7 @@ export async function executeWorldPlan(plan: WorldPlan): Promise<WorldPlanExecut
     })
     const entries = seeds.map((values, uid) => worldEntryFromValues(uid, values))
     await db.putWorld({ name: plan.world, entries })
-    const applied = await applyPlan(dshHomePath('tavern'), plan.id)
+    const applied = await applyPlan(tavernDataRoot(), plan.id)
     return {
       plan: applied as WorldPlan,
       world: plan.world,
@@ -545,7 +545,7 @@ export async function executeWorldPlan(plan: WorldPlan): Promise<WorldPlanExecut
   })
   const { entries, touched } = applyWorldEdits(plan.world, book, edits)
   await db.putWorld({ ...book, entries })
-  const applied = await applyPlan(dshHomePath('tavern'), plan.id)
+  const applied = await applyPlan(tavernDataRoot(), plan.id)
   return {
     plan: applied as WorldPlan,
     world: plan.world,

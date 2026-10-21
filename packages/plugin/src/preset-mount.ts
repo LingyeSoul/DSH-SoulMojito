@@ -32,7 +32,7 @@
 import { parsePreset } from '../../tavern-format/src/index.js'
 import { TavernStore, type TavernSessionBinding, type TavernState } from '../../tavern-store/src/index.js'
 import { onAgentPresetChanged, renderAgentPresetBlock } from './agent-tavern/preset.js'
-import { dshHomePath } from './dsh-home.js'
+import { tavernDataRoot } from './dsh-home.js'
 import { createLazyProjection } from './lazy-projection.js'
 import { createHostPromptExpander, hostPromptSafe, seededRandom } from './prompt-safety.js'
 
@@ -71,7 +71,7 @@ export interface PresetMount {
 let storePromise: Promise<TavernStore> | undefined
 
 function store(): Promise<TavernStore> {
-  return (storePromise ??= TavernStore.open(dshHomePath('tavern')))
+  return (storePromise ??= TavernStore.open(tavernDataRoot()))
 }
 
 /**

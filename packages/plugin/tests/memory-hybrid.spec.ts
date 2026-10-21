@@ -289,7 +289,7 @@ describe('memory_search 混合检索（提案 0016 全链路）', () => {
     home = mkdtempSync(join(tmpdir(), 'memory-hybrid-'))
     process.env.DSH_HOME = home
     process.env.TEST_EMBED_KEY = 'secret-key'
-    root = join(home, 'tavern')
+    root = join(home, 'soulmojito')
     store = await TavernStore.open(root)
     await store.importCharacter({
       spec: 'chara_card_v2',

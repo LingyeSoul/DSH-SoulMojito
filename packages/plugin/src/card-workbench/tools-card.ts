@@ -17,7 +17,7 @@ import {
   type CharacterFile,
 } from '../../../tavern-store/src/index.js'
 import type { CardDataIR, CharacterCardIR } from '../../../tavern-format/src/index.js'
-import { dshHomePath } from '../dsh-home.js'
+import { tavernDataRoot } from '../dsh-home.js'
 import { limitText, stringArg } from '../tool-args.js'
 import { applyPlan, getPlan, proposeCardPlan, type CardPlan, type CardPlanValue } from './plans.js'
 import {
@@ -168,7 +168,7 @@ export const cardCoreTools: ToolDefinition[] = [
     exec?.signal?.throwIfAborted()
     if (args.planId !== undefined) {
       const planId = stringArg(args.planId)
-      const plan = await getPlan(dshHomePath('tavern'), planId)
+      const plan = await getPlan(tavernDataRoot(), planId)
       if (plan === undefined) throw new Error(`plan '${planId}' not found`)
       if (plan.kind !== 'card') throw new Error(`plan '${planId}' is a world plan; apply it with world_put (edit) or world_create (create)`)
       if (plan.character !== character) throw new Error(`plan '${planId}' belongs to character '${plan.character}', not '${character}'`)
@@ -192,7 +192,7 @@ export const cardCoreTools: ToolDefinition[] = [
   }, cardSummaryOutput, async (args, exec) => {
     const character = stringArg(args.character)
     exec?.signal?.throwIfAborted()
-    const original = await readOriginalSnapshot(dshHomePath('tavern'), character)
+    const original = await readOriginalSnapshot(tavernDataRoot(), character)
     if (original === undefined) return { found: false, character }
     return { found: true, ...cardSummary(character, original) }
   }),
@@ -203,7 +203,7 @@ export const cardCoreTools: ToolDefinition[] = [
     if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR)
     const character = stringArg(args.character)
     exec?.signal?.throwIfAborted()
-    const restored = await restoreOriginal(dshHomePath('tavern'), character)
+    const restored = await restoreOriginal(tavernDataRoot(), character)
     if (restored === undefined) {
       throw new Error(`no original snapshot for '${character}'; the card was never imported through the Tavern import route`)
     }
@@ -251,7 +251,7 @@ export const cardCoreTools: ToolDefinition[] = [
           return !(record.character === character && record.group !== true)
         })),
     }))
-    const snapshotRemoved = await deleteOriginalSnapshot(dshHomePath('tavern'), character)
+    const snapshotRemoved = await deleteOriginalSnapshot(tavernDataRoot(), character)
     return { deleted: true, character, deletedChats: chats.length, removedFromGroups, snapshotRemoved }
   }),
   tool('card_plan_propose', 'Record a pending card modification plan (confirmation protocol): per-field newValue plus an optional note; the CURRENT values are snapshotted from the live working copy so the diff shown to the user is truthful. Text fields take strings; tags and alternateGreetings take the full replacement array. Returns a planId — the user then approves the plan in the workbench panel, or confirms in conversation and you call card_put with that planId and confirmed: true. Proposing does not write the card.', {
@@ -277,7 +277,7 @@ export const cardCoreTools: ToolDefinition[] = [
     exec?.signal?.throwIfAborted()
     const found = await requireCharacter(character)
     // currentValue 一律以活卡为准（不信任模型复述），diff 面向用户保真。
-    const plan = await proposeCardPlan(dshHomePath('tavern'), character, {
+    const plan = await proposeCardPlan(tavernDataRoot(), character, {
       title,
       changes: proposed.map(({ field, newValue, note }) => ({
         field,
@@ -357,7 +357,7 @@ export const cardCreateTool: ToolDefinition = tool('card_create', 'Create a new 
   }
   const { card } = await db.importCharacter({ spec: 'chara_card_v2', spec_version: '2.0', data })
   // 出厂即快照：手工建的卡也有 restore 语义（首个胜出，绝不覆盖已有快照）
-  const snapshotTaken = await saveOriginalSnapshot(dshHomePath('tavern'), card.data.name, card)
+  const snapshotTaken = await saveOriginalSnapshot(tavernDataRoot(), card.data.name, card)
   await nameSessionAfterCreatedCard(exec, card.data.name)
   return {
     created: true,
@@ -380,7 +380,7 @@ export const cardApplyMvuTool: ToolDefinition = tool('card_apply_mvu', 'Convert 
   const template = statusTemplateArg(args.statusTemplate)
   const variables = args.initialVariables === undefined ? undefined : initialVariablesArg(args.initialVariables)
   exec?.signal?.throwIfAborted()
-  const root = dshHomePath('tavern')
+  const root = tavernDataRoot()
   const db = await tavernStore()
   const found = await requireCharacter(character)
   // ① 转换前补拍原版快照（P1 导入钩子未覆盖的老卡；已存在则不覆盖——
@@ -539,7 +539,7 @@ async function saveCardValues(
   if (saved.card.data.name !== current.card.data.name) {
     // 改名跟卡迁移原版快照（对齐面板 PUT 路由）：旧名快照不迁移会变幽灵，
     // 污染将来同名卡的「首个胜出」导入快照。
-    await moveOriginalSnapshot(dshHomePath('tavern'), character, saved.card.data.name)
+    await moveOriginalSnapshot(tavernDataRoot(), character, saved.card.data.name)
   }
   return { found: current, saved }
 }
@@ -604,7 +604,7 @@ export async function executeCardPlan(plan: CardPlan): Promise<CardPlanExecution
   }
   const { found: written, saved } = await saveCardValues(plan.character, values, found)
   const formatted = formatWriteResult(written, saved, values)
-  const applied = await applyPlan(dshHomePath('tavern'), plan.id)
+  const applied = await applyPlan(tavernDataRoot(), plan.id)
   return {
     plan: applied as CardPlan,
     character: formatted.character as string,

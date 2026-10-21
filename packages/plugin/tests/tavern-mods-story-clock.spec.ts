@@ -92,9 +92,9 @@ describe('story-clock example mod', () => {
   beforeAll(async () => {
     clearModRegistryForTest()
     home = tempHome('dsh-story-clock-')
-    cpSync(repoExampleMod, join(home, 'tavern', 'mods', MOD_ID), { recursive: true })
+    cpSync(repoExampleMod, join(home, 'soulmojito', 'mods', MOD_ID), { recursive: true })
     host = await ModHost.open({
-      root: join(home, 'tavern'),
+      root: join(home, 'soulmojito'),
       hostVersion: PLUGIN_VERSION,
       dbProvider: (async () => fakeStateStore({ modsEnabled: true, enabled: { [MOD_ID]: true } })) as never,
       ctx: {
@@ -151,7 +151,7 @@ describe('story-clock example mod', () => {
   // 09:00），记入 mod 存储。v1 无聊天写面：把钟真的拨快仍用 /clock advance 1h。
   it('dispatches the declared button with click context into mod storage', async () => {
     await expect(host.dispatchButton(MOD_ID, '拨快 1 小时', { character: 'ExampleCard', chatId: 'chat-1' })).resolves.toBe('handled')
-    const stateFile = JSON.parse(readFileSync(join(home, 'tavern', 'mods', MOD_ID, 'data', 'state.json'), 'utf8')) as { values: Record<string, unknown> }
+    const stateFile = JSON.parse(readFileSync(join(home, 'soulmojito', 'mods', MOD_ID, 'data', 'state.json'), 'utf8')) as { values: Record<string, unknown> }
     expect(stateFile.values['button-ExampleCard-chat-1']).toEqual({ from: 0, to: 60, display: '第1天 09:00' })
     expect(stateFile.values.buttonAdvances).toBe(1)
     // 状态路由的计数器披露按钮推进
@@ -160,7 +160,7 @@ describe('story-clock example mod', () => {
     expect((JSON.parse(statusRes.chunks[0]!) as { counters: Record<string, number> }).counters.buttonAdvances).toBe(1)
     // 无上下文（面板 chips）：回落全局存储位
     await expect(host.dispatchButton(MOD_ID, '拨快 1 小时')).resolves.toBe('handled')
-    const after = JSON.parse(readFileSync(join(home, 'tavern', 'mods', MOD_ID, 'data', 'state.json'), 'utf8')) as { values: Record<string, unknown> }
+    const after = JSON.parse(readFileSync(join(home, 'soulmojito', 'mods', MOD_ID, 'data', 'state.json'), 'utf8')) as { values: Record<string, unknown> }
     expect(after.values['button-global']).toEqual({ from: 0, to: 60, display: '第1天 09:00' })
     expect(after.values.buttonAdvances).toBe(2)
   })
@@ -226,7 +226,7 @@ describe('story-clock example mod', () => {
       { chat: { messages: [] }, revision: 3, speaker: 'ExampleCard', finalText: '…' },
       { mode: 'send', character: 'ExampleCard', chatId: 'chat-1', group: false },
     )
-    const stateFile = JSON.parse(readFileSync(join(home, 'tavern', 'mods', MOD_ID, 'data', 'state.json'), 'utf8')) as { values: Record<string, unknown> }
+    const stateFile = JSON.parse(readFileSync(join(home, 'soulmojito', 'mods', MOD_ID, 'data', 'state.json'), 'utf8')) as { values: Record<string, unknown> }
     expect(stateFile.values['turns-ExampleCard-chat-1']).toBe(1)
   })
 
@@ -279,7 +279,7 @@ describe('story-clock example mod', () => {
     await emitAssetsSaved('world', 'Fallen Realms')
     emitGuidesChanged('ExampleCard', 'chat-1')
     await sleep(50)
-    const stateFile = JSON.parse(readFileSync(join(home, 'tavern', 'mods', MOD_ID, 'data', 'state.json'), 'utf8')) as { values: Record<string, unknown> }
+    const stateFile = JSON.parse(readFileSync(join(home, 'soulmojito', 'mods', MOD_ID, 'data', 'state.json'), 'utf8')) as { values: Record<string, unknown> }
     expect(stateFile.values.assetSaves).toEqual({ count: 1, last: 'world:Fallen Realms' })
     expect(stateFile.values.guideChanges).toEqual({ count: 1, last: 'ExampleCard/chat-1' })
   })
@@ -290,8 +290,8 @@ describe('story-clock example mod', () => {
     expect(createMacroEngine({ char: 'a', user: 'b' }).expand('{{clock}}')).toBe('{{clock}}')
     expect(modSectionSnapshot().filter((entry) => entry.modId === MOD_ID)).toHaveLength(0)
     // setup 返回的 dispose flush 定时器计数。
-    const stateFile = JSON.parse(readFileSync(join(home, 'tavern', 'mods', MOD_ID, 'data', 'state.json'), 'utf8')) as { values: Record<string, unknown> }
+    const stateFile = JSON.parse(readFileSync(join(home, 'soulmojito', 'mods', MOD_ID, 'data', 'state.json'), 'utf8')) as { values: Record<string, unknown> }
     expect(stateFile.values.timerTicks).toBe(0)
-    expect(existsSync(join(home, 'tavern', 'mods', MOD_ID, 'data', 'state.json'))).toBe(true)
+    expect(existsSync(join(home, 'soulmojito', 'mods', MOD_ID, 'data', 'state.json'))).toBe(true)
   })
 })

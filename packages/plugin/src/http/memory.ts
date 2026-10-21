@@ -6,7 +6,7 @@ import {
   normalizeMemoryEmbedding,
   type TavernStore,
 } from '../../../tavern-store/src/index.js'
-import { dshHomePath } from '../dsh-home.js'
+import { tavernDataRoot } from '../dsh-home.js'
 import { clearEmbedStatus, embedBreakerOpen, embedProbe, readEmbedStatus } from '../memory-embed.js'
 import { detectLocalQuantizations, inferLocalModelSettings, installLocalEmbedRuntime, isLocalEmbedRuntimeInstalled, validateLocalModelDir } from '../memory-embed-local.js'
 import { MaintenanceRunConflictError, memoryMaintenanceStatus, startMemoryMaintenance, type MemoryMaintenanceDeps } from '../memory-maintenance.js'
@@ -33,7 +33,7 @@ export async function handleMemoryEmbedApi(
   method: string,
   db: TavernStore,
 ): Promise<void> {
-  const root = dshHomePath('tavern')
+  const root = tavernDataRoot()
 
   if (method === 'GET' && route === 'memory/embed') {
     const config = normalizeMemoryEmbedding((await db.getState()).memoryEmbedding)
@@ -311,7 +311,7 @@ export async function handleMemoryMaintenanceApi(
 /** 维护 run 依赖面：全部走 memoized 实例（单写者纪律）。 */
 function maintenanceDeps(db: TavernStore): MemoryMaintenanceDeps {
   return {
-    root: dshHomePath('tavern'),
+    root: tavernDataRoot(),
     db,
     memory: memories(),
     vectors: memoryVectors(),

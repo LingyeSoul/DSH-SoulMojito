@@ -2,7 +2,8 @@
  * 游戏会话生命周期（提案 0018 §4.1 sessions.ts，P0）。
  *
  * 权威状态在 Node（提案 §1 第一性结论）：引擎无状态纯函数，会话状态 JSON 落盘
- * `$DSH_HOME/tavern/games/sessions/<sessionId>.json`（sessionId 形如
+ * `<data root>/games/sessions/<sessionId>.json`（新装 `$DSH_HOME/soulmojito`，
+ * 旧装 `$DSH_HOME/tavern`；sessionId 形如
  * `g-<8 位随机十六进制>`），写路径用 writeFileAtomic（src/update/apply.ts 同款）。
  * 重启续局 = 重开会话文件重建（引擎纯函数，零损失）。
  *
@@ -137,7 +138,7 @@ export class GameBridgeError extends Error {
 }
 
 export interface GameSessionStoreOptions {
-  /** tavern 数据根（`$DSH_HOME/tavern`）。会话目录是 `<root>/games/sessions/`。 */
+  /** tavern 数据根（新装 `$DSH_HOME/soulmojito`，旧装 `$DSH_HOME/tavern`）。会话目录是 `<root>/games/sessions/`。 */
   root: string
   /** 注册表访问器（孤儿判定与引擎取用；registry 初始化晚于本 store 时用函数面）。 */
   registry: () => GameRegistry

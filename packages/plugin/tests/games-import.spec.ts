@@ -28,7 +28,7 @@ const PLUGIN_VERSION = (JSON.parse(readFileSync(join(import.meta.dirname, '..', 
 const HOST_VERSION = PLUGIN_VERSION
 
 const home = mkdtempSync(join(tmpdir(), 'games-import-'))
-const root = join(home, 'tavern')
+const root = join(home, 'soulmojito')
 const CHARACTER = '维克多'
 const CHAT = 'chat-gomoku'
 
@@ -262,7 +262,7 @@ describe('install {url}（git 流程镜像 mods/install.ts，如实断言）', (
     // 替身把 examples 目录当「克隆产物」写入目标（git 真流程在本仓无远端依赖，不进测试）。
     const urlHome = mkdtempSync(join(tmpdir(), 'games-url-'))
     const fakeService = await openGamesService({
-      root: join(urlHome, 'tavern'),
+      root: join(urlHome, 'soulmojito'),
       hostVersion: HOST_VERSION,
       gameInstall: {
         cloneImpl: async (_url, directory) => {

@@ -7444,11 +7444,28 @@ function safeScriptName(name2) {
 }
 
 // packages/plugin/src/dsh-home.ts
+import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join as join5, resolve } from "node:path";
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
   return join5(resolve(configured || join5(homedir(), ".dsh")), ...segments);
+}
+var TAVERN_DATA_DIR = "soulmojito";
+var LEGACY_TAVERN_DATA_DIR = "tavern";
+function tavernDataRoot(...segments) {
+  const next = dshHomePath(TAVERN_DATA_DIR);
+  if (holdsTavernData(next)) return join5(next, ...segments);
+  const legacy = dshHomePath(LEGACY_TAVERN_DATA_DIR);
+  if (holdsTavernData(legacy)) return join5(legacy, ...segments);
+  return join5(next, ...segments);
+}
+function holdsTavernData(root) {
+  try {
+    return readdirSync(root).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 // packages/plugin/src/lazy-projection.ts
@@ -7508,7 +7525,7 @@ var DEFAULT_USER = "User";
 var CHAR_FALLBACK = "the character";
 var storePromise;
 function store3() {
-  return storePromise ??= TavernStore.open(dshHomePath("tavern"));
+  return storePromise ??= TavernStore.open(tavernDataRoot());
 }
 function mountPresetProjection(options) {
   const freeze = /* @__PURE__ */ new Map();
@@ -7796,7 +7813,7 @@ var LOCAL_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
 // packages/plugin/src/agent-tavern/tools/stores.ts
 var tavernStorePromise;
 function tavernStore() {
-  return tavernStorePromise ??= TavernStore.open(dshHomePath("tavern"));
+  return tavernStorePromise ??= TavernStore.open(tavernDataRoot());
 }
 
 // packages/plugin/src/agent-tavern/tools/shared.ts
@@ -8373,7 +8390,7 @@ async function scriptSummaryForChat(db, character, chatId) {
   const found = await db.getCharacter(character);
   const scriptName = boundScriptOf(found?.card);
   if (scriptName === void 0) return "";
-  const script = await getScript(dshHomePath("tavern"), scriptName);
+  const script = await getScript(tavernDataRoot(), scriptName);
   if (script === void 0 || script.chunks.length === 0) return "";
   const snapshot = await db.getChatSnapshot(character, chatId);
   if (!snapshot) return "";
@@ -9173,13 +9190,13 @@ var tavernStorePromise2;
 var novelStorePromise;
 var memoryStorePromise;
 function tavernStore2() {
-  return tavernStorePromise2 ??= TavernStore.open(dshHomePath("tavern"));
+  return tavernStorePromise2 ??= TavernStore.open(tavernDataRoot());
 }
 function novelStore() {
-  return novelStorePromise ??= NovelStore.open(dshHomePath("tavern"));
+  return novelStorePromise ??= NovelStore.open(tavernDataRoot());
 }
 function memoryStore2() {
-  return memoryStorePromise ??= MemoryStore.open(dshHomePath("tavern"));
+  return memoryStorePromise ??= MemoryStore.open(tavernDataRoot());
 }
 
 // packages/plugin/src/agent-novel/tools/shared.ts

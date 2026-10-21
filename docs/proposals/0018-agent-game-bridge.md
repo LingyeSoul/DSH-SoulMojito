@@ -10,7 +10,7 @@
 | 项 | 回答 |
 |---|---|
 | 所有者 | 新模块 `src/games/`（注册表 + 会话运行时 + HTTP 面），agent-tavern `createTools()` 挂工具，客户端 `registerPanelSection` 挂「游戏」分区，mods host 挂 `api.games.register`——四条链路同属本提案的单一特性 owner |
-| 唯一事实来源 | 对局状态以 `$DSH_HOME/tavern/games/sessions/*.json` 为准（JSON-safe 契约保证）；游戏定义以运行时注册表为准（内置 + `games/installed/` 导入 + Mod 注册三源合一） |
+| 唯一事实来源 | 对局状态以 `<data root>/games/sessions/*.json` 为准（新装 `$DSH_HOME/soulmojito`，旧装 `$DSH_HOME/tavern`；JSON-safe 契约保证）；游戏定义以运行时注册表为准（内置 + `games/installed/` 导入 + Mod 注册三源合一） |
 | 持久态及理由 | 会话 JSON（跨重启续局、可审计重放——动作日志完整保留）；`installed/<id>/` 游戏目录（导入即落盘，镜像 `mods/install.ts` 纪律） |
 | 临时态 | 引擎是无状态纯函数（状态全在会话 JSON，重启重建零损失）；view iframe 的 per-mount token；面板轮询节奏。均可接受 |
 | 外部依赖 | 全部现有 seam：DSH `webServer` 前缀路由、`tools.register`、`systemPrompt.section`；**零新网络面**（视图自包含 HTML，CSP `connect-src 'none'`） |
@@ -226,7 +226,7 @@ GamesPanel、对局面经共用 hook 消费时从未拉取，右栏 tab 恒空�
 ### 4.5 三条游戏来源
 
 1. **内置**：§4.1，随插件分发，卸载插件即消失。
-2. **直接导入（标准游戏包）**：目录放入 `$DSH_HOME/tavern/games/installed/<id>/`，或面板
+2. **直接导入（标准游戏包）**：目录放入 `$DSH_HOME/soulmojito/games/installed/<id>/`（旧装 `$DSH_HOME/tavern/…`），或面板
    `POST games/install {url}`（git 拷贝，镜像 `mods/install.ts`）。校验通过即出现在注册表
    与 `game_list`，面板可见。**信任模型与 Mod 完全同级：导入即执行**（见 §6）。
 3. **Mod 注册**：`api.games.register({id, name, version, players, turnBased, actionVocabulary,

@@ -1,7 +1,7 @@
 /** AgentTavern memory tool slice (registration order 5-9). */
 
 import type { MemoryHit } from '../../../../tavern-store/src/index.js'
-import { dshHomePath } from '../../dsh-home.js'
+import { tavernDataRoot } from '../../dsh-home.js'
 import { hybridMemorySearch } from '../../memory-hybrid.js'
 import { clampInt, limitText, stringArg } from '../../tool-args.js'
 import {
@@ -45,7 +45,7 @@ export function memoryTools(): ToolDefinition[] {
       const config = await memoryEmbeddingConfig()
       const hits = config === undefined ? await lexicalHits()
         : await hybridMemorySearch({
-          root: dshHomePath('tavern'),
+          root: tavernDataRoot(),
           config,
           store,
           vectorStore: await memoryVectorStore(),

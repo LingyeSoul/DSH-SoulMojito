@@ -78,7 +78,7 @@ beforeAll(async () => {
   clearModRegistryForTest()
   clearGamesServiceForTest()
   home = mkdtempSync(join(tmpdir(), 'games-mod-'))
-  const root = join(home, 'tavern')
+  const root = join(home, 'soulmojito')
   service = await openGamesService({ root, hostVersion: '0.6.0' })
   unpublishGames = publishGamesService(service)
   cpSync(RPS_EXAMPLE, join(root, 'mods', 'dsh-soulmojito.rps'), { recursive: true })
@@ -247,7 +247,7 @@ describe('卸载孤儿语义与重装载恢复', () => {
       .rejects.toMatchObject({ code: 'not-found' })
 
     // 重装载（reload 后新引擎实例）：孤儿判定按 gameId 动态查表，旧会话复活。
-    host = await openHostOver(join(home, 'tavern'), ['dsh-soulmojito.rps'])
+    host = await openHostOver(join(home, 'soulmojito'), ['dsh-soulmojito.rps'])
     const revived = await service.state(session.id)
     expect(revived.session.orphaned).toBe(false)
     // 复活时处于第 1 局的 Agent 手（人类已出 rock）；人类回合探针只剩 turn 纪律。

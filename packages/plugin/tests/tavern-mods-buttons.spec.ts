@@ -66,7 +66,7 @@ describe('mod button route e2e through the real HTTP surface', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-modbtn-e2e-'))
     process.env.DSH_HOME = home
-    const directory = join(home, 'tavern', 'mods', MOD_ID)
+    const directory = join(home, 'soulmojito', 'mods', MOD_ID)
     mkdirSync(directory, { recursive: true })
     writeFileSync(join(directory, 'mod.json'), JSON.stringify({
       id: MOD_ID, name: 'E2E Buttons', version: '1.0.0', author: 't', description: 'button route probe',
@@ -79,7 +79,7 @@ describe('mod button route e2e through the real HTTP surface', () => {
         })
       }
     `, 'utf8')
-    await TavernStore.open(join(home, 'tavern'))
+    await TavernStore.open(join(home, 'soulmojito'))
     apply({
       systemPrompt: { section: () => {}, context: () => {} },
       commands: { register: () => {} },
@@ -130,12 +130,12 @@ describe('mod button route e2e through the real HTTP surface', () => {
     const click = await call('POST', buttonUrl(BUTTON_NAME), { character: 'ExampleCard', chatId: 'chat-1' })
     expect(click.status).toBe(200)
     expect(click.body).toEqual({ ok: true, handled: true })
-    const stored = JSON.parse(readFileSync(join(home, 'tavern', 'mods', MOD_ID, 'data', 'state.json'), 'utf8')).values.lastClick
+    const stored = JSON.parse(readFileSync(join(home, 'soulmojito', 'mods', MOD_ID, 'data', 'state.json'), 'utf8')).values.lastClick
     expect(stored).toEqual({ name: BUTTON_NAME, character: 'ExampleCard', chatId: 'chat-1' })
     // 空体（面板 chips 无绑定上下文）：context 字段缺省
     const bare = await call('POST', buttonUrl(BUTTON_NAME), {})
     expect(bare.body).toEqual({ ok: true, handled: true })
-    const bareStored = JSON.parse(readFileSync(join(home, 'tavern', 'mods', MOD_ID, 'data', 'state.json'), 'utf8')).values.lastClick
+    const bareStored = JSON.parse(readFileSync(join(home, 'soulmojito', 'mods', MOD_ID, 'data', 'state.json'), 'utf8')).values.lastClick
     expect(bareStored).toEqual({ name: BUTTON_NAME, character: null, chatId: null })
   })
 
@@ -160,7 +160,7 @@ describe('mod button route e2e through the real HTTP surface', () => {
 
   it('converts throwing handlers into 500 with a button-error audit line', async () => {
     const boomId = 'e2e.boom-button'
-    const directory = join(home, 'tavern', 'mods', boomId)
+    const directory = join(home, 'soulmojito', 'mods', boomId)
     mkdirSync(directory, { recursive: true })
     writeFileSync(join(directory, 'mod.json'), JSON.stringify({
       id: boomId, name: 'Boom', version: '1.0.0', author: 't', description: 'throws on click',
@@ -176,7 +176,7 @@ describe('mod button route e2e through the real HTTP surface', () => {
     expect(failed.status).toBe(500)
     expect(failed.body).toMatchObject({ ok: false })
     expect((failed.body!.message as string)).toContain('e2e button kaboom')
-    const audit = readFileSync(join(home, 'tavern', 'mods', 'audit.jsonl'), 'utf8')
+    const audit = readFileSync(join(home, 'soulmojito', 'mods', 'audit.jsonl'), 'utf8')
     expect(audit).toContain('"event":"button-error"')
     expect(audit).toContain('e2e button kaboom')
   })

@@ -103,7 +103,7 @@
           installStatus ? h('p', { className: 'dt-hint' }, installStatus) : null),
         h('section', { className: 'dt-settings-band' },
           mods.length === 0
-            ? h('p', { className: 'dt-muted' }, t('mods.empty', { path: 'tavern/mods/' }))
+            ? h('p', { className: 'dt-muted' }, t('mods.empty', { path: 'soulmojito/mods/' }))
             : h('div', { className: 'dt-mod-list' }, mods.map((mod) => h('article', { key: mod.id, className: 'dt-mod-row' },
               h('div', { className: 'dt-mod-row-head' },
                 h('strong', null, mod.name),

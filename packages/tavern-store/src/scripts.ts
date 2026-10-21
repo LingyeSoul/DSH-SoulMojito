@@ -3,7 +3,7 @@
  * 聚合成块，供人物卡一对一绑定后分段注入 ST 生成链路。
  *
  * ```text
- * tavern/
+ * soulmojito/                      # 旧装为 tavern/（tavernDataRoot() 解析）
  * └── scripts/<name>/script.json   # { name, source: {format, importedAt}, chunks: [{index, text}] }
  * ```
  *

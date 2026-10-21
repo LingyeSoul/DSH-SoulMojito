@@ -62,7 +62,7 @@ describe('frontend/latest route e2e through the real HTTP surface', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-frontend-e2e-'))
     process.env.DSH_HOME = home
-    store = await TavernStore.open(join(home, 'tavern'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
     const document = '<!doctype html><html><body><div id="hud">HP 12/12</div></body></html>'
     chatId = await store.createChat(CHARACTER, HEADER, [
       { name: CHARACTER, is_user: false, is_system: false, send_date: '', mes: 'old frontend\n<body>old</body>' },

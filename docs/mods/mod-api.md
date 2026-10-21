@@ -8,7 +8,7 @@
 > 本文以 `packages/plugin/src/mods/` 的实现为准；API 版本常量 `api.version === 1`。
 
 **Mod = 一个自包含 ESM 文件夹 + `mod.json` 清单，由服务端在进程内加载的受信任第三方代码。**
-把文件夹放进 `$DSH_HOME/tavern/mods/`，在 Tavern 管理面板「Mod」分区启用后：你注册的 Agent
+把文件夹放进 `$DSH_HOME/soulmojito/mods/`（存量安装仍读 `$DSH_HOME/tavern/mods/`），在 Tavern 管理面板「Mod」分区启用后：你注册的 Agent
 工具出现在模型工具面、文本变换挂进 ST 生成管线、宏/STscript 命令即刻可用、面板分区以隔离
 iframe 出现、HTTP 路由挂在 `/api/dsh-soulmojito/mods/<id>/` 下。全程不改 dsh-soulmojito 一行源码。
 
@@ -46,7 +46,7 @@ iframe 出现、HTTP 路由挂在 `/api/dsh-soulmojito/mods/<id>/` 下。全程�
 ### 目录结构
 
 ```
-$DSH_HOME/tavern/mods/<mod-id>/
+$DSH_HOME/soulmojito/mods/<mod-id>/   # 旧安装：$DSH_HOME/tavern/mods/<mod-id>/
   mod.json          # 清单（加载前只读它，不执行任何代码）
   index.mjs         # 入口 ESM（main 字段指定，相对路径）
   data/             # api.storage 私有数据（宿主创建与管理，别手写）
@@ -77,7 +77,7 @@ export async function setup(api) {
 
 ### 安装与启用
 
-- **手动**：把目录拷进 `$DSH_HOME/tavern/mods/<id>/`（目录名必须等于 `id`）。
+- **手动**：把目录拷进 `$DSH_HOME/soulmojito/mods/<id>/`（旧安装 `$DSH_HOME/tavern/mods/<id>/`；目录名必须等于 `id`）。
   **注意**：宿主只在 refresh（启动 / 任一管理写操作 / git 安装）时重扫目录——服务器
   运行中手动拷入的目录要先触发一次扫描才可见，例如 `POST /api/dsh-soulmojito/mods/state`
   `{"globalEnabled": true}`（幂等重设全局开关，副作用是 rescan），然后再
@@ -127,7 +127,7 @@ export async function setup(api) {
   （踩坑实录：[decisions/2026-10-12-story-clock-engines-drift.md](../../decisions/2026-10-12-story-clock-engines-drift.md)）。
 
 ```jsonc
-"engines": { "dsh-soulmojito": "^0.6.7" }   // 宿主 0.6.x 且 ≥0.6.7
+"engines": { "dsh-soulmojito": "^0.6.8" }   // 宿主 0.6.x 且 ≥0.6.8
 ```
 
 ---
@@ -164,7 +164,7 @@ export async function setup(api) {
 |---|---|---|
 | `api.version` | `1`（`MOD_API_VERSION`）；破坏性变更升 2 | — |
 | `api.logger.{info,warn,error}` | 带 `[mod:<id>]` 前缀的宿主日志 | — |
-| `api.storage.{get,set,delete}` | 私有 JSON kv：`<tavern>/mods/<id>/data/state.json` | 单值 256KB / 总量 1MB；原子写 |
+| `api.storage.{get,set,delete}` | 私有 JSON kv：`<data root>/mods/<id>/data/state.json` | 单值 256KB / 总量 1MB；原子写 |
 | `api.assets.*` | 只读资产快照（12 个方法，deepClone） | 无任何写路径 |
 | `api.events.on(kind, handler)` | `chat-saved` / `assets-saved` / `guides-changed` / `stream-delta` | 逐个吞错，失败进审计（`stream-delta` 高频，首错纪律见 §5/§15） |
 | `api.onButton(name, handler)` | 声明式按钮的点击 handler（name 必须在 manifest `buttons` 里声明） | 同名重复注册抛错；返回反注册；宿主托管卸载回收 |
@@ -622,7 +622,7 @@ buttons}`。
 
 ## 15. 审计事件
 
-`<tavern>/mods/audit.jsonl` 追加式 JSONL，每行 `{ts, mod, event, detail?}`。面板展示**本进程内**
+`<data root>/mods/audit.jsonl` 追加式 JSONL，每行 `{ts, mod, event, detail?}`。面板展示**本进程内**
 计数，完整历史在文件里。
 
 | 事件 | 含义 |

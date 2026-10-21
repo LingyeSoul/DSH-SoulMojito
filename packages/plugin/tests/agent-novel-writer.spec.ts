@@ -871,7 +871,7 @@ describe('agent-novel writer tool integration', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'agent-novel-writer-integration-'))
     process.env.DSH_HOME = home
-    tavern = await TavernStore.open(join(home, 'tavern'))
+    tavern = await TavernStore.open(join(home, 'soulmojito'))
     await tavern.importCharacter({
       spec: 'chara_card_v2',
       spec_version: '2.0',
@@ -894,7 +894,7 @@ describe('agent-novel writer tool integration', () => {
         },
       },
     })
-    novels = await NovelStore.open(join(home, 'tavern'))
+    novels = await NovelStore.open(join(home, 'soulmojito'))
     const created = await novels.createNovel(tavern, {
       title: '灯塔·委托篇',
       requirement: '写一个灯塔看守人的短篇',

@@ -12,7 +12,7 @@ import { NovelProjector } from './agent-novel/projector.js'
 import { describeHostShape } from '../../bind/src/index.js'
 import { ChatRevisionConflictError } from '../../tavern-store/src/index.js'
 import { BUILD_INFO } from './build-info.js'
-import { dshHomePath } from './dsh-home.js'
+import { tavernDataRoot } from './dsh-home.js'
 import { openGamesService } from './games/service.js'
 import { wakeAgentOnHumanMove } from './games/wake.js'
 import { getActiveAgentPrompt, refreshActivePrompt } from './model-catalog.js'
@@ -67,7 +67,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
   })
   setAgentTavernCapabilitiesPromise(agentTavernCapabilitiesPromise)
   void agentTavernCapabilitiesPromise.then((value) => { setAgentTavernCapabilities(value) })
-  const agentTavernProjectorPromise = store().then((db) => AgentTavernProjector.open(dshHomePath('tavern'), db))
+  const agentTavernProjectorPromise = store().then((db) => AgentTavernProjector.open(tavernDataRoot(), db))
   setAgentTavernProjectorPromise(agentTavernProjectorPromise)
   // AgentNovel capability snapshot (proposal 0005 §16): read by the bootstrap
   // route and the novel-open command. Pure shape probing; the bundled preset
@@ -75,7 +75,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
   // ensureAgentPresetDeclared, not forced here.
   setAgentNovelCapabilities(inspectAgentNovelCapabilities(ctx))
   const novelProjectorPromise = Promise.all([novelStore(), memories()])
-    .then(([store, memory]) => NovelProjector.open(dshHomePath('tavern'), store, memory))
+    .then(([store, memory]) => NovelProjector.open(tavernDataRoot(), store, memory))
   setNovelProjectorPromise(novelProjectorPromise)
   const novelDriverPromise = Promise.all([novelStore(), store(), novelProjectorPromise])
     .then(([novelDb, tavern, projector]) => {
@@ -154,7 +154,7 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
   // 册不影响宿主。失败只记日志——工具面与 HTTP 面在句柄缺失时报
   // 「游戏运行时不可用」，插件其余表面照常。
   const gamesServicePromise = openGamesService({
-    root: dshHomePath('tavern'),
+    root: tavernDataRoot(),
     hostVersion: BUILD_INFO.version,
     logger: { warn: (message) => ctx.logger?.warn?.(message) },
     // 投降门（2026-10-14 用户需求「禁用投降」）：逐次读 state（TavernStore 的

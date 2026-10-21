@@ -20,7 +20,7 @@ describe('AgentTavern native tools', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'agent-tavern-tools-'))
     process.env.DSH_HOME = home
-    const store = await TavernStore.open(join(home, 'tavern'))
+    const store = await TavernStore.open(join(home, 'soulmojito'))
     await store.importCharacter({
       spec: 'chara_card_v2',
       spec_version: '2.0',
@@ -311,7 +311,7 @@ describe('AgentTavern native tools', () => {
     await tools.get('variable_set')!.execute({ scope: 'turn', name: 'draft_line', value: 'once upon a time' }, exec)
     expect(await tools.get('variable_get')!.execute({ scope: 'turn', name: 'draft_line' }, exec))
       .toMatchObject({ found: true, value: 'once upon a time' })
-    const variables = await VariableStore.open(join(home, 'tavern'))
+    const variables = await VariableStore.open(join(home, 'soulmojito'))
     await variables.clear('turn', 'native')
     expect(await tools.get('variable_get')!.execute({ scope: 'turn', name: 'draft_line' }, exec))
       .toMatchObject({ found: false })
@@ -319,7 +319,7 @@ describe('AgentTavern native tools', () => {
 
   it('rejects global scope writes until the user enables them', async () => {
     const exec = { agent: { id: 'native' } }
-    const store = await TavernStore.open(join(home, 'tavern'))
+    const store = await TavernStore.open(join(home, 'soulmojito'))
     await store.updateState(() => ({ agentTavernAllowGlobalWrites: false }))
     await expect(tools.get('memory_write')!.execute({
       scope: 'global', kind: 'semantic', content: 'global fact',
@@ -335,7 +335,7 @@ describe('AgentTavern native tools', () => {
     await tools.get('variable_set')!.execute({ scope: 'global', name: 'global_flag', value: true }, exec)
     const search = await tools.get('memory_search')!.execute({ query: 'concise replies', scope: 'global' }, exec)
     expect(search.sourceCount).toBe(1)
-    const memory = await MemoryStore.open(join(home, 'tavern'))
+    const memory = await MemoryStore.open(join(home, 'soulmojito'))
     await memory.forget(written.id, 'global', 'global', written.revision)
     await store.updateState(() => ({ agentTavernAllowGlobalWrites: false }))
   })

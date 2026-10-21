@@ -2,20 +2,20 @@
  *  Single-instance discipline: never open a second copy of these stores. */
 
 import { MemoryStore, NovelStore, TavernStore } from '../../../../tavern-store/src/index.js'
-import { dshHomePath } from '../../dsh-home.js'
+import { tavernDataRoot } from '../../dsh-home.js'
 
 let tavernStorePromise: Promise<TavernStore> | undefined
 let novelStorePromise: Promise<NovelStore> | undefined
 let memoryStorePromise: Promise<MemoryStore> | undefined
 
 export function tavernStore(): Promise<TavernStore> {
-  return (tavernStorePromise ??= TavernStore.open(dshHomePath('tavern')))
+  return (tavernStorePromise ??= TavernStore.open(tavernDataRoot()))
 }
 
 export function novelStore(): Promise<NovelStore> {
-  return (novelStorePromise ??= NovelStore.open(dshHomePath('tavern')))
+  return (novelStorePromise ??= NovelStore.open(tavernDataRoot()))
 }
 
 export function memoryStore(): Promise<MemoryStore> {
-  return (memoryStorePromise ??= MemoryStore.open(dshHomePath('tavern')))
+  return (memoryStorePromise ??= MemoryStore.open(tavernDataRoot()))
 }
