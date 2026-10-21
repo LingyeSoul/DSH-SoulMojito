@@ -82,6 +82,34 @@ describe('EJS 语法子集', () => {
     expect(await rt.renderText('<%- await evalTemplate("1+1") %>')).toBe('{1+1}')
   })
 
+  it('同步回调里的 <%= %> 不再把 await 当未定义标识符', async () => {
+    const { rt } = runtime()
+    const source = '<% [1, 2].forEach((value) => { %><%= value %><% }) %>'
+    await expect(rt.renderText(source)).resolves.toBe('12')
+  })
+
+  it('迷你 lodash 覆盖卡内 EJS 的 random/sample/sampleSize/clamp/uniq/isEqual/unset', async () => {
+    const { rt } = runtime()
+    const rendered = await rt.renderText([
+      '<% const roll = _.random(1, 6); const sample = _.sample(["a", "b"]); const pair = _.sampleSize(["x", "y", "z"], 2); %>',
+      '<%- roll >= 1 && roll <= 6 %>|',
+      '<%- ["a", "b"].includes(sample) %>|',
+      '<%- pair.length === 2 && new Set(pair).size === 2 %>|',
+      '<%- _.clamp(9, 0, 5) %>|',
+      '<%- _.uniq([1, 1, 2]).join(",") %>|',
+      '<%- _.isEqual({ a: 1 }, { a: 1 }) %>|',
+      '<% const tree = { a: { b: 1 } }; const removed = _.unset(tree, "a.b"); %>',
+      '<%- removed && tree.a.b === undefined %>',
+    ].join(''))
+    expect(rendered).toBe('true|true|true|5|1,2|true|true')
+  })
+
+  it('同步回调里的异步表达式给出明确错误而不是静默输出 Promise', async () => {
+    const { rt } = runtime({ host: { renderNested: async (src) => src } })
+    const source = '<% [1].forEach(() => { %><%- evalTemplate("x") %><% }) %>'
+    await expect(rt.renderText(source)).rejects.toThrow(/async template expression used inside a synchronous callback/)
+  })
+
   it('print 多参数空格拼接', async () => {
     const { rt } = runtime()
     expect(await rt.renderText('<% print("a", "b", 3) %>')).toBe('a b 3')

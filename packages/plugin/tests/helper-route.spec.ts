@@ -131,6 +131,28 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     })
   })
 
+  it('writes MVU stat_data through the message and chat authority tree', async () => {
+    const statData = {
+      系统状态: { 主角创建完毕: true },
+      主角: { 个人信息: { '身份&职业': '学生' } },
+      进程: { 阶段: '幕间休息' },
+    }
+    const written = await call({
+      op: 'mvu.replace',
+      character: CHARACTER,
+      chatId,
+      statData,
+      messageId: 2,
+    })
+    expect(written.status).toBe(200)
+    expect(written.body?.value).toMatchObject({ stat_data: statData, messageId: 2 })
+    const snapshot = await store.getChatSnapshot(CHARACTER, chatId)
+    expect(snapshot?.chat.header.chat_metadata.variables).toMatchObject({ stat_data: statData, 商品: [{ 内容: '药水' }] })
+    expect(snapshot?.chat.messages[2]?.variables).toMatchObject({ stat_data: statData })
+    const readBack = await call({ op: 'snapshot', character: CHARACTER, chatId })
+    expect((readBack.body?.value as Record<string, unknown>).variables).toMatchObject({ chat: { stat_data: statData } })
+  })
+
   it('reads and writes message-scoped variables', async () => {
     const written = await call({
       op: 'variables.replace',

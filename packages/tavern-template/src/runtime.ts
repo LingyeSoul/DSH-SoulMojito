@@ -89,6 +89,18 @@ function buildSandboxEnv(env: Record<string, unknown>): Record<string, unknown> 
       out += args.map((a) => (a === null || a === undefined ? '' : String(a))).join(' ')
     },
   })
+  // EJS 的 `<%= %>` 表达式在编译器里统一生成 `await (expr)`，但 ST 卡大量把
+  // 表达式写在同步回调里（`items.forEach(x => { %><%= x %><% })`）。异步函数内
+  // 的嵌套同步回调没有 `await` 关键字，V8 会把它解析成普通标识符；这个隐藏
+  // 助手让那些位置退回同步取值，而不是整条世界书条目 ReferenceError。
+  defineHidden('await', {
+    value: (value: unknown) => {
+      if (value !== null && typeof value === 'object' && typeof (value as { then?: unknown }).then === 'function') {
+        throw new Error('async template expression used inside a synchronous callback is not supported')
+      }
+      return value
+    },
+  })
   return sandboxEnv
 }
 

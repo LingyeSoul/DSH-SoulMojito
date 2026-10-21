@@ -42,6 +42,33 @@ export function extractFrontendDocuments(value: unknown): string[] {
 }
 
 /**
+ * AgentTavern native rows render text as Markdown, not as sandboxed iframes.
+ * The display route must therefore remove complete HTML documents (the right
+ * sidebar owns their render) or a 154KB status panel becomes 154KB of visible
+ * source in the conversation. Fenced docs are the common shape; raw docs are
+ * only removed when they are the whole message. Inline card snippets
+ * (`<details>` variable logs) stay: they are small and part of the prose look.
+ */
+export function stripFrontendDocuments(value: unknown): string {
+  const text = typeof value === 'string' ? value : ''
+  if (text === '') return ''
+  let stripped = text.replace(FENCED_DOCUMENT, (whole, inner: string) =>
+    isFrontendDocument(inner) ? '' : whole)
+  // The MVU variable-update block is hidden from the prompt but its display
+  // beautifier is inline HTML. Remove the leftover block if a card did not
+  // provide a beautifier, and drop the status placeholder markers.
+  stripped = stripped
+    .replace(/<UpdateVariable(?:Variable)?\b[^>]*>[\s\S]*?<\/UpdateVariable(?:Variable)?\s*>/gi, '')
+    .replace(/<\/UpdateVariable(?:Variable)?\s*>/gi, '')
+    .replace(/<StatusPlaceHolder(?:Impl|READY)\s*\/?>/gi, '')
+    .replace(/<div class="matte-black-log"[\s\S]*?<\/details>\s*<\/div>/gi, '')
+    .replace(/<style>\s*\.matte-black-log[\s\S]*?<\/style>/gi, '')
+    .replace(/<!--\s*MVU:OK\s*-->/gi, '')
+  if (isFrontendDocument(stripped.trim())) return ''
+  return stripped.replace(/\n{3,}/g, '\n\n').trim()
+}
+
+/**
  * Latest saved message that carries at least one complete document. `render`
  * receives the display-layer text (markdownOnly regex scripts) so the sidebar
  * sees the same HTML the inline transcript would; the caller owns that

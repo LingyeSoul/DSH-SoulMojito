@@ -160,6 +160,26 @@ export function overlayScopedVariables(
   return tree
 }
 
+/**
+ * 显示树 overlay：`chat_metadata.variables.stat_data` 存在时，它就是 MVU 的
+ * 权威整树，chat 作用域里旧的 `stat_data.*` flat 条目（历史 settle 残留）不能
+ * 再逐叶覆盖它，否则投影器新写入的整树会被旧值遮住。没有整树时保持原有
+ * overlay 语义（flat 变量可以组出 stat_data）。
+ */
+export function overlayChatScopedVariables(
+  base: Record<string, unknown>,
+  entries: ReadonlyArray<{ name: string; value: unknown }>,
+): Record<string, unknown> {
+  const authoritativeStat = plainObject(base['stat_data']) !== undefined
+  const authoritativePrevious = plainObject(base['previous_stat_data']) !== undefined
+  const usable = entries.filter((entry) => {
+    if (authoritativeStat && (entry.name === 'stat_data' || entry.name.startsWith('stat_data.'))) return false
+    if (authoritativePrevious && (entry.name === 'previous_stat_data' || entry.name.startsWith('previous_stat_data.'))) return false
+    return true
+  })
+  return overlayScopedVariables(base, usable)
+}
+
 /* ------------------------------ 回执读写 ------------------------------ */
 
 /** 读 `chat_metadata.mvu.receipts`；形状不合法的条目跳过（手改 jsonl 的容错）。 */
@@ -340,7 +360,7 @@ export function applyMvuSettlementGuard(
 
 /* --------------------------- 模板运行时（共享） --------------------------- */
 
-interface MvuRuntimeInput {
+export interface MvuRuntimeInput {
   state: Pick<TavernState, 'activePersona'>
   characterName: string
   character: { card: CharacterCardIR }
@@ -357,7 +377,7 @@ interface MvuRuntimeInput {
  * 与 createGenerationTemplates 的完整运行时相比，这里不做 lore 激活/预设/
  * GENERATE 分区：结算重跑只需要输出渲染的变量 API 面（setvar/getvar/…）。
  */
-function createMvuRuntime(input: MvuRuntimeInput, stores: Parameters<typeof createTemplateRuntime>[0]['stores']): TemplateRuntime {
+export function createMvuRuntime(input: MvuRuntimeInput, stores: Parameters<typeof createTemplateRuntime>[0]['stores']): TemplateRuntime {
   const { characterName, character, chat, books } = input
   const card = character.card
   const cardName = card.data.nickname || card.data.name || characterName

@@ -40,6 +40,12 @@
 | [`games/game-package.md`](games/game-package.md) | 游戏包格式：`game.json` 清单、纯函数引擎、自包含视图 |
 | [`frontend/tavern-helper-compat.md`](frontend/tavern-helper-compat.md) | **美化前端可用的酒馆助手（TavernHelper）兼容面清单：可用 / 部分可用 / 不可用，及替代写法** |
 
+## 治理（`content-policy.md`）
+
+| 文档 | 主题 |
+|---|---|
+| [`content-policy.md`](content-policy.md) | 内容边界与使用责任（18+、禁止项、数据边界、ST 兼容标识） |
+
 ## 决策（`../decisions/`）
 
 单次落地决策的记录：问题、方案、否决项、与规格的偏差。按主题分组，组内按时间升序。
@@ -116,6 +122,7 @@
 - [`2026-10-11-iframe-viewport.md`](../decisions/2026-10-11-iframe-viewport.md) — iframe 视口正确性 + 高度上报健壮性（A-4）
 - [`2026-10-20-frontend-sidebar.md`](../decisions/2026-10-20-frontend-sidebar.md) — AgentTavern 会话的美化前端改由 DSH 原生右侧栏展示（最新一条楼层）
 - [`2026-10-20-frontend-helper-compat.md`](../decisions/2026-10-20-frontend-helper-compat.md) — 美化前端右栏自动展开开关 + 酒馆助手（Tavern-Helper）兼容层（沙箱内 RPC 代理）
+- [`2026-10-21-jsr-mvu-agent-frontend-compat.md`](../decisions/2026-10-21-jsr-mvu-agent-frontend-compat.md) — JSR/MagVarUpdate 卡在 Agent 模式的变量闭环、卡内 EJS 注入与前端 facade（含 MVU-ZOD 兼容卡实测）
 
 ### 面板与视图
 

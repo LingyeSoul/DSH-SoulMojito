@@ -1,4 +1,5 @@
 import { AGENT_TAVERN_PRESET_ID } from '../agent-tavern/capabilities.js'
+import { ensureChatVariables, seedJsrMvuVariables } from '../agent-tavern/mvu-compat.js'
 import { historyImportAppends, isTavernSessionMarker, lastImportedTurn } from '../agent-tavern/projector.js'
 import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import { confirmSessionAppend, hostPluginMessageSource, landedPlanAppends, sessionEvents } from '../../../bind/src/index.js'
@@ -62,8 +63,9 @@ export function registerTavernSessionCommand(ctx): void {
       if (parsed.action === 'workbench-open') {
         return handleWorkbenchOpenCommand(ctx, agent, parsed)
       }
-      const chat = await db.getChat(parsed.character, parsed.chatId)
-      if (!chat) return { kind: 'error', text: 'Tavern chat not found.' }
+      const chatSnapshot = await db.getChatSnapshot(parsed.character, parsed.chatId)
+      if (!chatSnapshot) return { kind: 'error', text: 'Tavern chat not found.' }
+      const chat = chatSnapshot.chat
       const currentState = await db.getState()
       const previous = currentState.sessionBindings[agent.id]
       const initializeAgentTavern = parsed.architecture === 'agent-tavern'
@@ -101,6 +103,11 @@ export function registerTavernSessionCommand(ctx): void {
         const character = parsed.group !== true && (initializeAgentTavern || shouldPreloadAssets)
           ? await db.getCharacter(parsed.character)
           : undefined
+        if (initializeAgentTavern && character !== undefined
+          && seedJsrMvuVariables(character.card, ensureChatVariables(chat))) {
+          // 激活旧聊天：补 MVU 初始变量。保存必须 CAS，失败如实抛给命令层。
+          await db.saveChat(parsed.character, parsed.chatId, chat, chatSnapshot.revision)
+        }
         if (initializeAgentTavern && parsed.group !== true) {
           // 开场白与既有聊天记录必须先落到原生会话，用户才能在 DSH 会话里看到
           // 角色开口；带插件来源的导入事件由投影器跳过，不会重复写回 JSONL。

@@ -18,6 +18,7 @@ import { basename, delimiter, dirname, join, relative, resolve } from 'node:path
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import vm from 'node:vm'
+import { inflateSync } from 'node:zlib'
 import { build as esbuildBuild } from 'esbuild'
 
 const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -855,7 +856,7 @@ function checkFrontendSurfaceText(text) {
     'autoOpenedRef.current.has(marker)',
     // 酒馆助手兼容层（2026-10-20）：沙箱内 shim + 宿主侧代理 + 事件白名单。
     "const HELPER_MESSAGE = 'dsh-soulmojito:helper'",
-    'function frontendHelperScript(token)',
+    'function frontendHelperScript(token, messageId)',
     'window.getVariables = function',
     'window.getChatMessages = function',
     'window.setChatMessages = function',
@@ -2128,6 +2129,174 @@ function checkSourceFileBudget() {
   return problems
 }
 
+/* --------------------------- content lexicon --------------------------- */
+
+// Concrete explicit-material terms only. Descriptors such as bare `裸`, `成人`
+// or `触手` are intentionally absent because they occur in ordinary prose
+// (`裸消息`, `触手可及`, `翻译成人能读懂`). Policy documents may describe the
+// prohibited categories in neutral language; they are scanned like every other
+// tracked file.
+const CONTENT_LEXICON_ASCII = [
+  'porn', 'pornography', 'pornographic',
+  'hentai',
+  'erotic', 'erotica',
+  'smut', 'smutty',
+  'lewd',
+  'nsfw', 'jailbreak',
+  'rape', 'raped', 'raping', 'rapist',
+  'incest',
+  'loli', 'lolita', 'lolicon',
+  'shota', 'shotacon',
+  'underage',
+  'orgasm', 'orgasms', 'orgasmic',
+  'masturbate', 'masturbation', 'masturbating',
+  'blowjob', 'blowjobs', 'handjob', 'handjobs',
+  'cumshot', 'cumshots', 'creampie', 'deepthroat',
+  'gangbang', 'bukkake', 'futanari', 'yiff',
+  'bestiality', 'necrophilia', 'pedophilia', 'pedophile',
+  'molest', 'molested', 'molestation',
+  'penis', 'penises', 'vagina', 'vaginas', 'vaginal', 'semen',
+  'dick', 'dicks', 'pussy', 'pussies', 'clit', 'clits', 'clitoris',
+  'tits', 'boob', 'boobs', 'nipple', 'nipples', 'areola', 'areolas',
+  'dildo', 'dildos', 'vibrator', 'bondage', 'fetish', 'fetishes',
+  'voyeur', 'voyeurism', 'onlyfans',
+]
+const CONTENT_LEXICON_CJK = [
+  '色情', '情色', '裸体', '全裸', '裸照',
+  '性交', '性爱', '做爱', '口交', '肛交', '群交', '乱交', '兽交',
+  '强奸', '轮奸', '迷奸', '诱奸', '乱伦',
+  '萝莉', '正太', '幼女', '肉棒', '蜜穴', '阴道', '阴茎', '龟头', '精液',
+  '淫秽', '淫荡', '淫乱', '呻吟', '发情', '性癖',
+  '触手play', '触手系', '恶堕', '痴汉', '援交', '卖淫', '嫖娼', '恋童',
+  'エロ', 'おっぱい', 'セックス', 'レイプ', '陵辱', 'ロリ', '痴漢',
+]
+
+// The gate cannot scan its own lexicon literals; every other tracked file and
+// every untracked-but-not-ignored file is in scope, so pre-commit content is
+// caught before it enters history.
+const CONTENT_GATE_SELF = 'packages/plugin/scripts/gates/run.mjs'
+const CONTENT_TEXT_EXTENSIONS = /\.(?:md|txt|json|jsonl|ya?ml|ts|tsx|js|mjs|cjs|html|css|svg|sh|ps1)$/i
+
+/**
+ * SillyTavern prompt slot names are compatibility identifiers, not content.
+ * Strip them before matching so `"identifier": "nsfw"` and `"jailbreak"`
+ * pass while `nsfw porn` still fails on `porn`.
+ */
+function scanContentLexicon(text) {
+  const haystack = text.replace(/\b(?:nsfw|jailbreak)\b/gi, ' ')
+  const hits = []
+  const ascii = new RegExp(`\\b(?:${CONTENT_LEXICON_ASCII.join('|')})\\b`, 'gi')
+  for (const match of haystack.matchAll(ascii)) {
+    hits.push({ term: match[0].toLowerCase(), index: match.index ?? 0 })
+  }
+  const cjk = new RegExp(CONTENT_LEXICON_CJK.join('|'), 'g')
+  for (const match of haystack.matchAll(cjk)) {
+    hits.push({ term: match[0], index: match.index ?? 0 })
+  }
+  return hits.sort((left, right) => left.index - right.index)
+}
+
+function decodePngTextValue(keyword, value) {
+  if (keyword === 'chara' || keyword === 'ccv3') {
+    return Buffer.from(value.toString('latin1'), 'base64').toString('utf8')
+  }
+  return value.toString('utf8')
+}
+
+function pngTextChunks(buffer) {
+  if (buffer.length < 8 || buffer.readUInt32BE(0) !== 0x89504e47) return []
+  const chunks = []
+  let offset = 8
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset)
+    const type = buffer.toString('latin1', offset + 4, offset + 8)
+    const start = offset + 8
+    const end = start + length
+    if (end + 4 > buffer.length) break
+    const data = buffer.subarray(start, end)
+    if (type === 'tEXt') {
+      const zero = data.indexOf(0)
+      if (zero !== -1) {
+        const keyword = data.toString('latin1', 0, zero)
+        chunks.push({ keyword, text: decodePngTextValue(keyword, data.subarray(zero + 1)) })
+      }
+    } else if (type === 'zTXt') {
+      const zero = data.indexOf(0)
+      if (zero !== -1 && data[zero + 1] === 0) {
+        const keyword = data.toString('latin1', 0, zero)
+        try {
+          chunks.push({ keyword, text: inflateSync(data.subarray(zero + 2)).toString('utf8') })
+        } catch (error) {
+          chunks.push({ keyword, text: '', error: `zTXt inflate failed: ${error instanceof Error ? error.message : String(error)}` })
+        }
+      }
+    } else if (type === 'iTXt') {
+      const zero = data.indexOf(0)
+      if (zero !== -1 && data.length > zero + 2) {
+        const keyword = data.toString('latin1', 0, zero)
+        const compressed = data[zero + 1] === 1
+        const languageEnd = data.indexOf(0, zero + 3)
+        const translatedEnd = languageEnd === -1 ? -1 : data.indexOf(0, languageEnd + 1)
+        if (languageEnd !== -1 && translatedEnd !== -1) {
+          const value = data.subarray(translatedEnd + 1)
+          try {
+            chunks.push({ keyword, text: compressed ? inflateSync(value).toString('utf8') : value.toString('utf8') })
+          } catch (error) {
+            chunks.push({ keyword, text: '', error: `iTXt inflate failed: ${error instanceof Error ? error.message : String(error)}` })
+          }
+        }
+      }
+    }
+    offset = end + 4
+    if (type === 'IEND') break
+  }
+  return chunks
+}
+
+function lineOfIndex(text, index) {
+  return text.slice(0, index).split('\n').length
+}
+
+function listContentGateFiles() {
+  const listed = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024,
+  })
+  if (listed.error) throw new Error(`git ls-files failed: ${listed.error.message}`)
+  if (listed.status !== 0) {
+    throw new Error(`git ls-files failed (${listed.status}): ${String(listed.stderr ?? '').trim()}`)
+  }
+  return listed.stdout.split('\0').filter((file) => file.length > 0).sort()
+}
+
+function checkContentLexicon() {
+  const problems = []
+  for (const file of listContentGateFiles()) {
+    if (file === CONTENT_GATE_SELF) continue
+    const absolute = join(REPO_ROOT, file)
+    if (!existsSync(absolute)) continue
+    if (/\.png$/i.test(file)) {
+      for (const chunk of pngTextChunks(readFileSync(absolute))) {
+        if (chunk.error) {
+          problems.push(`${file}: ${chunk.error} (${chunk.keyword})`)
+          continue
+        }
+        for (const hit of scanContentLexicon(chunk.text)) {
+          problems.push(`${file}:${lineOfIndex(chunk.text, hit.index)}: PNG ${chunk.keyword} contains '${hit.term}'`)
+        }
+      }
+      continue
+    }
+    if (!CONTENT_TEXT_EXTENSIONS.test(file)) continue
+    const text = readFileSync(absolute, 'utf8')
+    for (const hit of scanContentLexicon(text)) {
+      problems.push(`${file}:${lineOfIndex(text, hit.index)}: contains '${hit.term}'`)
+    }
+  }
+  return problems
+}
+
 const gates = [
   {
     name: 'update-routes',
@@ -2714,7 +2883,7 @@ const gates = [
         "if (!enabled || !binding || architecture !== 'agent-tavern') return undefined",
         'autoOpenedRef.current.has(marker)',
         "const HELPER_MESSAGE = 'dsh-soulmojito:helper'",
-        'function frontendHelperScript(token)',
+        'function frontendHelperScript(token, messageId)',
         'window.getVariables = function',
         'window.getChatMessages = function',
         'window.setChatMessages = function',
@@ -3176,6 +3345,34 @@ const gates = [
         : ['source file budget self-test did not enforce the limit and allowlist']
     },
     check: () => checkSourceFileBudget(),
+  },
+  {
+    name: 'content-lexicon',
+    selfTest: () => {
+      const problems = []
+      if (scanContentLexicon('The quick brown fox jumps over the lazy dog.').length !== 0) {
+        problems.push('content lexicon flagged neutral prose')
+      }
+      if (scanContentLexicon('"identifier": "nsfw", "identifier": "jailbreak"').length !== 0) {
+        problems.push('content lexicon did not allow ST prompt slot identifiers')
+      }
+      const sample = scanContentLexicon('an explicit porn scene')
+      if (sample.length !== 1 || sample[0].term !== 'porn') {
+        problems.push('content lexicon did not detect an explicit term')
+      }
+      const payload = Buffer.from(`chara\0${Buffer.from(JSON.stringify({ name: 'porn' })).toString('base64')}`, 'latin1')
+      const chunk = Buffer.alloc(12 + payload.length)
+      chunk.writeUInt32BE(payload.length, 0)
+      chunk.write('tEXt', 4, 'latin1')
+      payload.copy(chunk, 8)
+      const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk])
+      const texts = pngTextChunks(png)
+      if (texts.length !== 1 || scanContentLexicon(texts[0].text).length !== 1) {
+        problems.push('content lexicon did not read a PNG chara text chunk')
+      }
+      return problems
+    },
+    check: () => checkContentLexicon(),
   },
 ]
 

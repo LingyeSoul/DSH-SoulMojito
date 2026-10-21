@@ -144,6 +144,8 @@ AgentTavern 架构的对话是宿主原生表面，插件没有消息正文 slot
 
 **酒馆助手兼容层**：前端里常见的 `getVariables` / `replaceVariables` / `getChatMessages` / `setChatMessages` / `createChatMessages` / `deleteChatMessages` / `eventOn` / `eventEmit` / `tavern_events` / `SillyTavern.getContext()` 都可用（`window` 与 `window.TavernHelper` 双出口），并内置 lodash、jQuery 与 showdown。**沙箱不变**：所有调用经 token 校验的 `postMessage` 交给宿主代理，再由宿主按当前会话绑定访问 store——iframe 拿不到宿主对象，也不能指定别的角色/聊天。变量可写 `global`/`chat`/`message`（`character` 只读）；AgentTavern 会话的 chat 变量同时写入 `chat_metadata.variables` 与 MVU 的 chat 作用域，避免两份状态漂移。**明确不支持**：生成控制（`generate` / `trigger` / `regenerate`）、世界书与角色卡写入、script/preset 变量——调用即报错，不静默跳过。
 
+**MagVarUpdate / Mvu 兼容（2026-10-21）**：Agent 模式投影器会解析模型回复末尾的 `<UpdateVariable><JSONPatch>`，按宽松 RFC 6902（`replace`/`insert`/`delta`/`remove`，自动补中间对象、`当前/最大` clamp）写入 `chat_metadata.variables.stat_data`，并把每楼快照挂到 `variables.stat_data`；卡内 `StatusPlaceHolderImpl` 自动补齐，展示层正则即可挂载状态栏。前端可直接用 `Mvu.getMvuData` / `Mvu.replaceMvuData` / `Mvu.events.VARIABLE_UPDATE_ENDED`，`toastr` 与 `window.parent` facade（`#send_textarea` / `#send_but`）也已补齐。卡内 `tavern_helper.scripts` 脚本树仍不执行，脚本树型悬浮面板不在兼容面内；详见 [`docs/frontend/tavern-helper-compat.md`](docs/frontend/tavern-helper-compat.md)。Agent 模式每轮还会把卡内 constant EJS 世界书按当前变量渲染成一条插件消息注入（首轮全量，后续只补变化，每 8 轮全量刷新），让 `<UpdateVariable>` 协议、阶段指令与事件处理器真正进入模型上下文。
+
 完整的**可用 / 部分可用 / 不可用**清单（含每个函数的作用域、事件是否真的会触发、常见 JSR 写法的替代方案、报错对照表）见 [`docs/frontend/tavern-helper-compat.md`](docs/frontend/tavern-helper-compat.md)。[决策](decisions/2026-10-20-frontend-helper-compat.md)
 
 ## 快速开始
@@ -280,17 +282,17 @@ Node half 是六个自包含 bundle：`index.mjs` 主入口，加 `agent` / `com
 pnpm run check
 ```
 
-当前基线（2026-10-20 实测）：
+当前基线（2026-10-21 实测）：
 
 ```
-Test Files  115 passed (115)
-Tests       1852 passed | 1 skipped (1853)
-17 gates    全部 PASS
-built       v0.6.7 (159b5e5)
+Test Files  121 passed (121)
+Tests       1894 passed | 1 skipped (1895)
+18 gates    全部 PASS
+built       v0.6.7 (ab97feb)
 ```
 
 - 1 项跳过是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例。
-- 17 个 gates 覆盖 update-routes、package-contract、patch-reference、server-bundle、client-bundle、frontend-runtime、native-header-adapter、mvu-surface、frontend-surface、client-architecture-split、internal-workspace、agent-tavern-isolation、client-vm-mount、node-half-mount、v4-session-admission、mod-loader 与 source-file-budget。
+- 18 个 gates 覆盖 update-routes、package-contract、patch-reference、server-bundle、client-bundle、frontend-runtime、native-header-adapter、mvu-surface、frontend-surface、client-architecture-split、internal-workspace、agent-tavern-isolation、client-vm-mount、node-half-mount、v4-session-admission、mod-loader、content-lexicon 与 source-file-budget。
 - 完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。
 - 会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
 - 示例 Mod 的 engines 与随仓库发布的宿主版本由防漂移守卫锁定（先例：[`decisions/2026-10-12-story-clock-engines-drift.md`](decisions/2026-10-12-story-clock-engines-drift.md)）；面板布局、品牌 logo 与内置游戏规则面同样各有 spec + gate marker 锁定。
@@ -316,6 +318,10 @@ GUI 已在桌面与 390x844 移动视口验证，覆盖原生 sidebar、管理�
 - [`docs/games/game-package.md`](docs/games/game-package.md) — 标准游戏包制作指南（三件套、引擎契约、视图桥、打包导入与排错）。
 - [`CONTEXT.md`](CONTEXT.md) — 项目架构语言的统一词表（AgentTavern / ST 架构 / 上下文 / 记忆 / 遗忘 / 作用域），动手前先读。
 - [`docs/exploration/2026-10-11-jsr-lwb-reference.md`](docs/exploration/2026-10-11-jsr-lwb-reference.md) — 竞品参考与不复刻清单。
+
+## 内容边界
+
+本工具面向 18 岁及以上用户。禁止涉及未成年人的性内容、非自愿性内容与真实人物性化内容；模型输出与导入资产由使用者负责。完整边界、数据责任与兼容标识说明见 [`docs/content-policy.md`](docs/content-policy.md)。
 
 ## 许可
 

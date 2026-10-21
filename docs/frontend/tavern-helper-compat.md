@@ -139,8 +139,9 @@ type ChatMessageSwiped = ChatMessage & {
 
 | 函数 | 状态 | 语义与差异 |
 |---|:--:|---|
-| `getChatMessages(range, option?)` | ✅ | `range`：`10` / `'10'` / `-1` / `'0-10'` / `'0-{{lastMessageId}}'`。返回按 `message_id` 升序 |
+| `getChatMessages(range, option?)` | ✅ | `range`：`10` / `'10'` / `-1` / `'0-10'` / `'0-{{lastMessageId}}'`。返回按 `message_id` 升序。每条的 `data.stat_data` 是**该楼层**的 MVU 快照（Agent 模式由投影器写入；ST 模式回退聊天变量） |
 | `getLastMessageId()` | ✅ | 同步，最新楼层号；空聊天为 `-1` |
+| `getCurrentMessageId()` | ✅ | 当前 iframe 所属楼层号；侧栏 / MVU 状态模板为 `-1`（最新） |
 | `setChatMessages(list, option?)` | ✅ | 可改 `message` / `name` / `role` / `is_hidden` / `data` / `extra` / `swipes` / `swipe_id` / `swipes_info` |
 | `createChatMessages(list, option?)` | ✅ | `insert_before`（或旧名 `insert_at`）；`'end'` 或数字（支持负数） |
 | `deleteChatMessages(ids, option?)` | ✅ | 支持负数；重复 id 会去重；返回后快照已同步 |
@@ -161,6 +162,40 @@ await setChatMessages([{ message_id: last.message_id, data: last.data }], { refr
 
 **整份写盘的成本**：楼层写走 `saveChat`（CAS + 整文件重写）。楼层变量高频变化时，
 优先用 `replaceVariables({type:'chat'})` 或批量一次 `setChatMessages`，不要每帧写。
+
+### 2.3 MVU / MagVarUpdate 兼容面（2026-10-21）
+
+使用 MagVarUpdate 的卡（世界书里有 `<UpdateVariable>` / `<JSONPatch>`，或卡内
+`extensions.tavern_helper.scripts` 引 `MagVarUpdate` / `registerMvuSchema`）可以
+直接调用 `Mvu.*`：
+
+| 函数 | 状态 | 语义 |
+|---|---|---|
+| `Mvu.getMvuData(option?)` | ✅ | 同步返回 `{ stat_data }`。`option.type` 支持 `'message'` / `'chat'`；message 缺 `stat_data` 时回落聊天树 |
+| `Mvu.replaceMvuData(data, option?)` | ✅ | 写穿目标楼层 + 聊天权威变量树（`chat_metadata.variables.stat_data`），并镜像 chat 作用域；返回 `Promise<{ stat_data }>` |
+| `Mvu.events.VARIABLE_UPDATE_ENDED` | ✅ | 本 iframe 内的 `document` 自定义事件，`detail.stat_data` 是写后快照；GM/状态栏按钮改值后即时重绘 |
+| `Mvu.events.VARIABLE_UPDATE_STARTED` / `VARIABLE_UPDATE_FAILED` | ⚠️ | 常量存在；生成循环由宿主掌握，这两个事件不会由宿主主动触发 |
+| `Mvu.isDuringGenerating()` | ⚠️ | 恒 `false`；前端无法观测宿主 turn 状态 |
+
+Agent 模式的 MVU 写入由插件完成：投影器解析模型回复末尾的 `<UpdateVariable>`，
+应用宽松 JSON Patch（`replace` / `insert` / `delta` / `remove`，自动补中间对象，
+`当前/最大` 条 clamp），把结果写入聊天变量与楼层 `variables.stat_data`。卡内
+`StatusPlaceHolderImpl` 会由投影器补上，展示层正则再把它换成状态栏 HTML。
+**Zod schema 不执行**：派生值 / enum 拒绝 / 卡自定义 clamp 仍以卡内脚本语义为准；
+插件只做通用数值条 clamp 与结构兜底。
+
+`toastr` 也内置了最小实现（`info` / `success` / `warning` / `error` / `clear`），
+卡里的提示不会因为缺少全局而中断。`window.parent` / `window.top` 在注入前被
+改写到同页 facade：`window.parent.document.querySelector('#send_textarea')`
+写入宿主可见输入框，`#send_but` 尽力触发发送（找不到宿主 composer 时显式报错）。
+`window.parent.Mvu`、`.toastr`、`.SillyTavern`、`.TavernHelper` 走同一 facade。
+`localStorage` / `sessionStorage` 在沙箱里是 iframe 内存实现（页面重载即失）——
+创角表单的自动保存/签名恢复因此不会因 `SecurityError` 中断。
+
+**明确不执行**：卡内 `extensions.tavern_helper.scripts` 的脚本树（JSR 的脚本
+容器 / 按钮 / 常驻悬浮面板）。它们不是消息 HTML，本插件的 iframe 没有跨楼层
+脚本宿主；状态栏/行动台这类**随消息重发的 HTML** 才是兼容面。需要脚本树行为
+的卡请走 ST 架构或等后续脚本宿主能力。
 
 ---
 
@@ -217,6 +252,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `_`（lodash） | 4.17.21 | ✅ |
 | `$` / `jQuery` | 3.7.1 | ✅ |
 | `showdown` | 2.1.0 | ✅（`builtin.renderMarkdown` 依赖它） |
+| `toastr` | — | ✅ 最小实现（`info/success/warning/error/clear`，渲染 iframe 内浮层，不引入外部库） |
 | `Vue` / `VueRouter` | — | ❌ 用 CDN 自己按需引入（`esm.sh` / `jsdelivr` 在白名单） |
 | `PIXI` / `toastr` / `YAML` / `z` / `hljs` / `Popper` / Font Awesome | — | ❌ 同上，自己引 |
 
@@ -233,6 +269,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | 函数 | 状态 | 说明 |
 |---|:--:|---|
 | `SillyTavern.getContext()` | ⚠️ | 只返回最小只读面：`chatId` / `chat` / `chat_metadata` / `name1`（你）/ `name2`（角色）/ `characterId`（恒 0）/ `characters`（当前角色卡）/ `getCharacterCardFields()`（恒空字段）。**没有** `extensionSettings`、`eventSource`、`eventTypes`、`saveSettingsDebounced` 等 |
+| `getCurrentMessageId()` | ✅ | 当前 iframe 所属楼层；侧栏/MVU 模板为 `-1`（最新）。没有楼层绑定时也不要拿它做范围上界，优先 `getLastMessageId()` |
 | `getLorebook(name)` / `getWorldbook(name)` | ✅ | 返回条目数组（含 `world` 字段）。名字缺省取角色卡绑定的世界书，其次全局激活的第一本；都没有则抛错 |
 | `getLorebookNames()` / `getWorldbookNames()` | ✅ | 全部世界书名 |
 | `getGlobalWorldbookNames()` | ✅ | 当前全局激活的世界书名 |
@@ -353,6 +390,9 @@ await fetch  // 🧱 不可用（CSP）；必须通过内置函数
 | `Failed to fetch` / 请求被拦 | 用了 `fetch`/XHR/WebSocket | 🧱 结构性限制，改用兼容函数 |
 | 改了 `data` 但界面没变 | `setChatMessages` 的 `refresh` 无效 | 自己重绘 |
 | `renderMarkdown` 输出原文 | showdown 脚本未加载（CDN 被墙/离线） | 自行降级或内联渲染 |
+| `Mvu.getMvuData()` 返回 `undefined` | 聊天还没有 `stat_data`（新卡首轮尚未投影）或当前卡未被识别为 MVU 卡 | 先发一轮让投影器结算；确认卡内有 `<UpdateVariable>` / `MagVarUpdate` / `StatusPlaceHolderImpl` |
+| 状态栏一直空 | 模型没有输出 `<UpdateVariable>`，或卡内状态栏正则被禁用 | 用提示词查看器看实发请求；确认正则未 disabled；首轮检查 `initialized_lorebooks` 是否已播种 |
+| 表单/快速选项点了没反应 | 宿主页找不到可见 composer，或输入框被面板遮挡 | 看 iframe console 的 `no visible host composer textarea found`；先把输入框滚动到可视区 |
 
 ---
 

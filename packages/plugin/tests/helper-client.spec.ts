@@ -22,7 +22,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       "const HELPER_MESSAGE = 'dsh-soulmojito:helper'",
       "const HELPER_RESULT_MESSAGE = 'dsh-soulmojito:helper-result'",
       "const HELPER_SNAPSHOT_MESSAGE = 'dsh-soulmojito:helper-snapshot'",
-      'function frontendHelperScript(token)',
+      'function frontendHelperScript(token, messageId)',
       'window.getVariables = function',
       'window.replaceVariables = function',
       'window.updateVariablesWith = function',
@@ -35,6 +35,17 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       'window.eventOn = function',
       'window.tavern_events =',
       'window.SillyTavern = {',
+      'window.getCurrentMessageId = function',
+      'window.Mvu = {',
+      'getMvuData: function',
+      'replaceMvuData: function',
+      'window.toastr = {',
+      'window.__dshTavernHost = host',
+      'window.__dshTavernStorage',
+      'window.__dshTavernSessionStorage',
+      "call('mvu.replace'",
+      "call('composer.fill'",
+      "call('composer.send'",
     ]) {
       expect(source).toContain(marker)
     }
@@ -46,8 +57,23 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     expect(source).toContain("if (event.source !== frameRef.current?.contentWindow) return")
     expect(source).toContain("data.token !== token")
     expect(source).toContain('this frontend is not bound to a Tavern chat')
+    expect(source).toContain('window.__dshTavernHost')
+    expect(source).toContain('composer.fill')
+    expect(source).toContain('composer.send')
     // 绑定只能来自宿主侧 sessionBindings，iframe 报什么都不能改身份
     expect(source).toContain("op: data.op,\n              character: current.character,\n              chatId: current.chatId")
+  })
+
+  it('keeps the generated iframe shim syntactically valid', () => {
+    const helperStart = source.indexOf('function frontendHelperScript')
+    const start = source.indexOf('return `(function () {', helperStart)
+    const end = source.indexOf('})();`', start)
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(end).toBeGreaterThan(start)
+    const body = source
+      .slice(start + 'return `'.length, end + '})();'.length)
+      .replace(/\$\{JSON\.stringify\([^)]*\)\}/g, '""')
+    expect(() => new Function(body)).not.toThrow()
   })
 
   it('broadcasts only signals the host can actually observe', () => {
@@ -79,7 +105,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     // 文档必须覆盖实现的每个出口：加函数不改文档 = 文档立刻过期。
     const exported = [
       'getVariables', 'replaceVariables', 'updateVariablesWith', 'insertOrAssignVariables',
-      'insertVariables', 'deleteVariable', 'getChatMessages', 'getLastMessageId',
+      'insertVariables', 'deleteVariable', 'getChatMessages', 'getLastMessageId', 'getCurrentMessageId',
       'setChatMessages', 'createChatMessages', 'deleteChatMessages', 'eventOn', 'eventOnce',
       'eventEmit', 'eventEmitAndWait', 'eventMakeFirst', 'eventMakeLast',
       'eventRemoveListener', 'eventClearEvent', 'eventClearListener', 'eventClearAll',

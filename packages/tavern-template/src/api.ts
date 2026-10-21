@@ -3,7 +3,7 @@
  * 适配到 dsh-soulmojito 的资产面；裁剪项见提案 0008 §1）。
  */
 
-import { deepClone, deepMerge, getPath, isObjectLike, setPath, type JsonObject } from './paths.js'
+import { deepClone, deepMerge, getPath, isObjectLike, setPath, unsetPath, type JsonObject } from './paths.js'
 import type { TemplateVariableSystem } from './variables.js'
 
 /** 世界书条目视图（getwi / world_info）。 */
@@ -472,6 +472,13 @@ export function applyJsonPatch(dest: JsonObject, change: unknown[]): JsonObject 
 
 /* ------------------------------ 迷你 lodash ------------------------------ */
 
+function collectionValues(value: unknown): unknown[] {
+  if (Array.isArray(value)) return [...value]
+  if (isObjectLike(value)) return Object.values(value)
+  if (value === null || value === undefined) return []
+  return [value]
+}
+
 /** `_.get/set/merge` 等高频子集（模板生态大量使用 `_.`，完整 lodash 不进依赖）。 */
 const miniLodash = {
   get: (obj: unknown, path: string, defaults?: unknown) => {
@@ -501,6 +508,37 @@ const miniLodash = {
   first: (v: unknown[]) => v[0],
   last: (v: unknown[]) => v[v.length - 1],
   identity: <T>(v: T) => v,
+  random: (lower?: number, upper?: number, floating?: boolean) => {
+    if (lower === undefined) return Math.random()
+    const min = upper === undefined ? 0 : lower
+    const max = upper === undefined ? lower : upper
+    if (floating === true || !Number.isInteger(min) || !Number.isInteger(max)) {
+      return Math.random() * (max - min) + min
+    }
+    return Math.floor(Math.random() * (max - min + 1)) + min
+  },
+  // lodash.sample/sampleSize 同时接受数组与对象；卡内 EJS 用它们做主题池抽取。
+  sample: (collection: unknown) => {
+    const values = collectionValues(collection)
+    return values.length === 0 ? undefined : values[Math.floor(Math.random() * values.length)]
+  },
+  sampleSize: (collection: unknown, size: number) => {
+    const values = collectionValues(collection)
+    const count = Math.max(0, Math.min(Math.trunc(size), values.length))
+    for (let index = values.length - 1; index > 0; index--) {
+      const swap = Math.floor(Math.random() * (index + 1))
+      ;[values[index], values[swap]] = [values[swap]!, values[index]!]
+    }
+    return values.slice(0, count)
+  },
+  clamp: (value: number, lower: number, upper: number) => Math.min(Math.max(value, lower), upper),
+  uniq: (values: unknown[]) => [...new Set(values)],
+  isEqual: (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right),
+  unset: (obj: JsonObject, path: string) => {
+    const existed = getPath(obj, path) !== undefined
+    unsetPath(obj, path)
+    return existed
+  },
   toArray: (v: unknown): unknown[] => {
     if (Array.isArray(v)) return v
     if (v === null || v === undefined) return []

@@ -20,7 +20,8 @@ import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { applyRegexScript, applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
 import type { TavernState, TavernStore } from '../../tavern-store/src/index.js'
 import { readJson, sendJson } from './http/io.js'
-import { overlayScopedVariables, readChatVariables } from './mvu.js'
+import { overlayChatScopedVariables, readChatVariables } from './mvu.js'
+import { ensureChatVariables } from './agent-tavern/mvu-compat.js'
 import { emitChatSaved } from './mods/events.js'
 import { DEFAULT_USER } from './prompt-context.js'
 import { variables } from './runtime.js'
@@ -44,6 +45,11 @@ export async function handleHelperApi(req: unknown, res: unknown, db: TavernStor
       return sendJson(res, 200, {
         ok: true,
         value: await replaceVariables(db, state, character, chatId, body),
+      })
+    case 'mvu.replace':
+      return sendJson(res, 200, {
+        ok: true,
+        value: await replaceMvuData(db, character, chatId, body),
       })
     case 'messages.get':
       return sendJson(res, 200, { ok: true, value: await getMessages(db, character, chatId, body) })
@@ -177,7 +183,7 @@ async function readChatScope(db: TavernStore, chat: ChatLogIR, chatId: string): 
   const bound = await isAgentTavernBound(db, chatId)
   if (!bound) return base
   const scoped = await (await variables()).listAll('chat', chatId)
-  return overlayScopedVariables(base, scoped)
+  return overlayChatScopedVariables(base, scoped)
 }
 
 async function replaceVariables(
@@ -199,7 +205,15 @@ async function replaceVariables(
     if (Object.keys(tree).length > 0) chat.header.chat_metadata.variables = tree
     else delete chat.header.chat_metadata.variables
     await persistChat(db, character, chatId, chat, snapshot.revision)
-    if (await isAgentTavernBound(db, chatId)) await mirrorChatScope(chatId, tree)
+    if (await isAgentTavernBound(db, chatId)) {
+      // stat_data 是单个嵌套树（禁止 flatten：卡里键名含 `&`，flat 名会被
+      // VariableStore 拒绝）；镜像失败不反噬聊天主写入，聊天文件仍是权威。
+      try {
+        await mirrorChatScope(chatId, tree)
+      } catch (error) {
+        console.warn(`dsh-soulmojito: chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
     return tree
   }
   if (scope === 'message') {
@@ -219,26 +233,76 @@ async function replaceVariables(
  * VariableStore consumed by MVU/tools. A helper replace writes both so a
  * TavernHelper HUD and the MVU status bar never drift apart.
  */
+/**
+ * 前端 `Mvu.replaceMvuData` 的写穿：更新目标楼层变量 + 聊天权威变量树，
+ * 并尽量镜像到 chat 作用域。状态栏按钮改完数据后，下一轮投影从同一棵树继续。
+ */
+async function replaceMvuData(
+  db: TavernStore,
+  character: string,
+  chatId: string,
+  body: JsonObject,
+): Promise<JsonObject> {
+  const snapshot = await requireChat(db, character, chatId)
+  const chat = snapshot.chat
+  const stat = requireObject(body?.statData, 'statData')
+  const chatVariables = ensureChatVariables(chat)
+  chatVariables['stat_data'] = stat
+  chatVariables['initialized_lorebooks'] = true
+  let messageId = -1
+  if (chat.messages.length > 0) {
+    messageId = body?.messageId === undefined ? chat.messages.length - 1 : resolveMessageId(chat.messages, body.messageId)
+    const message = chat.messages[messageId]
+    message.variables = {
+      ...(plainObject(message.variables) ?? {}),
+      stat_data: cloneJson(stat),
+    }
+  }
+  const revision = await persistChat(db, character, chatId, chat, snapshot.revision)
+  try {
+    const store = await variables()
+    const existing = await store.get('chat', chatId, 'stat_data')
+    await store.set('chat', chatId, 'stat_data', stat as never, existing?.revision)
+  } catch (error) {    console.warn(`dsh-soulmojito: MVU chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  return { stat_data: cloneJson(stat), messageId, revision }
+}
+
 async function mirrorChatScope(chatId: string, tree: JsonObject): Promise<void> {
   const store = await variables()
-  const leaves = flattenVariableTree(tree).filter((leaf) => VARIABLE_NAME.test(leaf.name))
-  const nextNames = new Set(leaves.map((leaf) => leaf.name))
+  const entries = variableEntriesForMirror(tree)
+  const nextNames = new Set(entries.map((entry) => entry.name))
   for (const entry of await store.listAll('chat', chatId)) {
     if (nextNames.has(entry.name) || entry.name.startsWith('$')) continue
     await store.delete('chat', chatId, entry.name)
   }
-  if (leaves.length > 0) {
-    await store.patch('chat', chatId, leaves.map((leaf) => ({ name: leaf.name, value: leaf.value as never })))
+  if (entries.length > 0) {
+    await store.patch('chat', chatId, entries.map((entry) => ({ name: entry.name, value: entry.value as never })))
   }
 }
 
-function flattenVariableTree(value: JsonObject, prefix = '', out: Array<{ name: string; value: unknown }> = []) {
-  for (const [key, entry] of Object.entries(value)) {
-    const name = prefix === '' ? key : `${prefix}.${key}`
-    if (isPlainObject(entry)) flattenVariableTree(entry, name, out)
-    else out.push({ name, value: entry })
-  }
+/**
+ * Helper/前端写回的变量树 → chat 作用域 flat 条目。`stat_data` 保持整树单值：
+ * MVU 卡的键名包含 `&`（如 `身份&职业`），flat 化会被 VariableStore 的名字
+ * 规则拒绝；整树单值也让前端 `Mvu.getMvuData` 与 EJS 的 `getvar('stat_data')`
+ * 严格同源。
+ */
+function variableEntriesForMirror(tree: JsonObject): Array<{ name: string; value: unknown }> {
+  const out: Array<{ name: string; value: unknown }> = []
+  collectVariableEntries(tree, '', out)
   return out
+}
+
+function collectVariableEntries(tree: JsonObject, prefix: string, out: Array<{ name: string; value: unknown }>): void {
+  for (const [key, entry] of Object.entries(tree)) {
+    const name = prefix === '' ? key : `${prefix}.${key}`
+    if (prefix === '' && (key === 'stat_data' || key === 'previous_stat_data') && isPlainObject(entry)) {
+      out.push({ name, value: entry })
+      continue
+    }
+    if (isPlainObject(entry)) collectVariableEntries(entry, name, out)
+    else if (VARIABLE_NAME.test(name)) out.push({ name, value: entry })
+  }
 }
 
 async function isAgentTavernBound(db: TavernStore, chatId: string): Promise<boolean> {

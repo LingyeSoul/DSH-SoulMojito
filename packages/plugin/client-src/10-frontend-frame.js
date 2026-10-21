@@ -136,15 +136,26 @@
 })();`
     }
 
-    function buildFrontendDocument(value, token) {
-      const source = rewriteViewportUnits(String(value || '').trim())
+    function buildFrontendDocument(value, token, messageId) {
+      // window.parent / window.top 在 sandbox（无 same-origin）里是跨域 WindowProxy，
+      // 酒馆卡常见的 `window.parent.document` / `window.parent.Mvu` 会直接抛
+      // DOMException。注入前统一改指向 shim 暴露的同页 facade；helper 自身与
+      // 高度上报脚本在改写之后注入，仍用真实的 parent.postMessage。
+      const compatible = String(value || '').trim()
+        .replace(/\bwindow\.(?:parent|top)\b/g, 'window.__dshTavernHost')
+        // sandbox（无 allow-same-origin）里 localStorage/sessionStorage 直接抛
+        // SecurityError；卡表单的自动保存/签名读取没有 try/catch，必须先改到
+        // shim 的内存实现，否则整个创角表单初始化中断。
+        .replace(/\b(?:window\.)?localStorage\b/g, 'window.__dshTavernStorage')
+        .replace(/\b(?:window\.)?sessionStorage\b/g, 'window.__dshTavernSessionStorage')
+      const source = rewriteViewportUnits(compatible)
       const csp = `<meta http-equiv="Content-Security-Policy" content="${escapeFrontendAttribute(FRONTEND_CSP)}">`
       const reset = '<style>html,body{margin:0!important;padding:0;max-width:100%;}*,*::before,*::after{box-sizing:border-box;}</style>'
       // 视口脚本进 head（先于 body 样式首帧解析，避免塌陷闪动），reporter 留 body 末
       const viewport = `<script>${frontendViewportScript()}</script>`
       // 酒馆助手兼容层（2026-10-20）：库脚本 + TavernHelper shim 进 head，前端
       // 首帧就能拿到 getVariables/getChatMessages 等同步面；快照由宿主随后投递。
-      const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token)}</script>`
+      const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token, messageId)}</script>`
       const reporter = `<script>${frontendHeightReporter(token)}</script>`
       if (/<html(?:\s[^>]*)?>/i.test(source)) {
         let documentText = source
@@ -191,6 +202,55 @@
     // 快照比对负责「宿主侧事件」：楼数增加→MESSAGE_RECEIVED，正文变化→
     // MESSAGE_EDITED，聊天切换→CHAT_CHANGED。只广播能真实观测到的信号，
     // 不凭空伪造酒馆事件。
+    // 宿主 composer 写入（2026-10-20 卡兼容）：酒馆卡的表单/快速选项通过
+    // `window.parent.document.querySelector('#send_textarea')` 写入并触发 input。
+    // iframe 没有 same-origin，shim 把这条老路径映射到宿主页里真实可见的
+    // textarea，用原生 value setter + input 事件让 React 受控组件收到变更。
+    // 自动发送只在 `composer.send` 时尽力而为（回车键），失败则保留已填入文本。
+    function hostComposerTextarea() {
+      const candidates = [...document.querySelectorAll('textarea')]
+        .filter((element) => {
+          if (!(element instanceof HTMLTextAreaElement)) return false
+          if (element.disabled || element.readOnly) return false
+          if (element.closest('[data-dsh-soulmojito-surface]')) return false
+          const rect = element.getBoundingClientRect()
+          return rect.width > 160 && rect.height > 20 && rect.bottom > 0 && rect.top < window.innerHeight
+        })
+      candidates.sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top)
+      return candidates[candidates.length - 1] ?? null
+    }
+
+    function setHostTextareaValue(element, value) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      if (setter) setter.call(element, value)
+      else element.value = value
+      element.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+
+    async function fillHostComposer(text, submit) {
+      const element = hostComposerTextarea()
+      if (!element) throw new Error('no visible host composer textarea found')
+      setHostTextareaValue(element, text)
+      element.focus()
+      if (!submit) return { submitted: false }
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
+      const form = element.closest('form')
+      const submitButton = form?.querySelector('button[type="submit"]')
+      if (submitButton instanceof HTMLElement) {
+        submitButton.click()
+        return { submitted: true }
+      }
+      element.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true,
+      }))
+      return { submitted: true }
+    }
+
     function useHelperBridge(frameRef, token, binding, refreshKey) {
       const bindingRef = useRef(binding)
       bindingRef.current = binding
@@ -254,6 +314,13 @@
             fail('this frontend is not bound to a Tavern chat')
             return
           }
+          if (data.op === 'composer.fill' || data.op === 'composer.send') {
+            const text = typeof data.payload?.text === 'string' ? data.payload.text : ''
+            void fillHostComposer(text, data.op === 'composer.send')
+              .then((value) => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value }))
+              .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
+            return
+          }
           void api('helper', {
             method: 'POST',
             headers: jsonHeaders(),
@@ -284,7 +351,7 @@
       return undefined
     }
 
-    function FrontendFrame({ html, token, binding, refreshKey }) {
+    function FrontendFrame({ html, token, binding, refreshKey, messageId }) {
       const frameRef = useRef(null)
       const [height, setHeight] = useState(120)
       const postViewport = useViewportBridge(frameRef)
@@ -306,7 +373,7 @@
         sandbox: 'allow-scripts',
         referrerPolicy: 'no-referrer',
         title: 'Tavern frontend',
-        srcDoc: buildFrontendDocument(html, token),
+        srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1),
         onLoad: postViewport,
         style: { height },
       })

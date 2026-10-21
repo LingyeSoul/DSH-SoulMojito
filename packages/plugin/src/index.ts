@@ -4,6 +4,7 @@ import { adoptAgentTavernFork, type ForkAdoptionOutcome } from './agent-tavern/f
 import { emitAgentPresetChanged } from './agent-tavern/preset.js'
 import { AgentTavernProjector } from './agent-tavern/projector.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
+import { registerAgentTavernCardState } from './agent-tavern/card-state.js'
 import { registerAgentTavernPromptCapture } from './agent-tavern/prompt-capture.js'
 import { inspectAgentNovelCapabilities } from './agent-novel/capabilities.js'
 import { NovelDriver } from './agent-novel/driver.js'
@@ -48,6 +49,9 @@ export const name = 'dsh-soulmojito'
 export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools', 'compaction']
 export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates?: unknown, templateEnabled?: unknown } = {}) {
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns })
+  // 卡内 EJS 世界书注入：默认注册（inner），提示词查看器 prepend 在更外层，
+  // 因此捕获面能看到锚定 + 卡内状态两条插件注入。
+  registerAgentTavernCardState(ctx)
   // 提示词查看器（Agent 模式）pre-step 捕获：必须在 anchor **之后** prepend
   // 注册（后 prepend 者更外层），await next() 后才能看到含锚定/开场提醒的
   // 最终进入批次（决策 2026-10-11-agent-prompt-viewer）。

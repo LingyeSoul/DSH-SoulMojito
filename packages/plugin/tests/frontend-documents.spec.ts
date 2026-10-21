@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../../tavern-format/src/index.js'
-import { extractFrontendDocuments, isFrontendDocument, latestFrontendMessage } from '../src/frontend-documents.js'
+import { extractFrontendDocuments, isFrontendDocument, latestFrontendMessage, stripFrontendDocuments } from '../src/frontend-documents.js'
 
 function message(patch: Partial<ChatMessage>): ChatMessage {
   return { name: 'Character', is_user: false, is_system: false, send_date: '', mes: '', ...patch }
@@ -42,6 +42,25 @@ describe('frontend document extraction', () => {
   it('returns no documents for prose or partial streaming output', () => {
     expect(extractFrontendDocuments('The hero draws a blade.')).toEqual([])
     expect(extractFrontendDocuments('<div class="half">')).toEqual([])
+  })
+
+  it('strips complete documents from the native conversation text but keeps prose', () => {
+    const text = [
+      'The hero draws a blade.',
+      '```html',
+      '<!doctype html><html><body><div id="hud">HP</div></body></html>',
+      '```',
+      '```js',
+      'console.log(1)',
+      '```',
+      '</UpdateVariable><StatusPlaceHolderImpl/>',
+    ].join('\n')
+    expect(stripFrontendDocuments(text)).toBe('The hero draws a blade.\n\n```js\nconsole.log(1)\n```')
+  })
+
+  it('returns empty when the whole message is a document and removes MVU blocks', () => {
+    expect(stripFrontendDocuments('<body>only hud</body>')).toBe('')
+    expect(stripFrontendDocuments('prose\n<UpdateVariable><JSONPatch>[]</JSONPatch></UpdateVariable>\n<StatusPlaceHolderREADY/>')).toBe('prose')
   })
 })
 

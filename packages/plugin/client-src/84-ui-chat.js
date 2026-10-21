@@ -124,6 +124,7 @@
                 key: `${index}-${frontendIndex}`,
                 html,
                 token: `tavern-${sessionId}-${index}-${frontendIndex}`,
+                messageId: index,
                 binding: { character, chatId },
                 refreshKey: `${index}-${(message.mes ?? '').length}`,
               })))

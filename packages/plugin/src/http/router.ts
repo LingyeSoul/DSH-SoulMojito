@@ -7,11 +7,12 @@ import {
 } from '../../../tavern-store/src/index.js'
 import { readSessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
 import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
+import { seedJsrMvuVariables } from '../agent-tavern/mvu-compat.js'
 import { serveCharacterAvatar, sendAvatarFallback } from '../assets.js'
 import { BUILD_INFO, TAVERN_COMMIT } from '../build-info.js'
 import { runCandidateGeneration } from '../candidates.js'
 import { dshHomePath } from '../dsh-home.js'
-import { latestFrontendMessage } from '../frontend-documents.js'
+import { latestFrontendMessage, stripFrontendDocuments } from '../frontend-documents.js'
 import { handleGamesApi, isGamesRoute } from '../games/http.js'
 import { handleHelperApi } from '../helper.js'
 import { generate, previewGeneration, runTavernScript } from '../generation/pipeline.js'
@@ -778,6 +779,12 @@ export async function handleApi(ctx, req, res) {
         || Object.keys(initial).length === 0) return undefined
       return structuredClone(initial)
     })()
+    // JSR MVU 卡（MagVarUpdate / <UpdateVariable> / StatusPlaceHolder）需要
+    // `initialized_lorebooks` 与创角前 stat_data；Agent 模式没有酒馆助手脚本
+    // 树替它播种，新聊天在创建时补上。已有 agentTavern.initialVariables 的卡
+    // 保留自己的 stat_data，不覆盖。
+    const variablesSeed = seedVariables ?? {}
+    const mvuSeeded = seedJsrMvuVariables(found.card, variablesSeed)
     const greetings = [found.card.data.firstMes, ...found.card.data.alternateGreetings]
     // Greeting choice at chat creation: AgentTavern imports the first message
     // into the host session, so an alternate greeting can never be picked with
@@ -789,7 +796,7 @@ export async function handleApi(ctx, req, res) {
     }
     const id = await db.createChat(character, {
       user_name: 'unused', character_name: 'unused',
-      chat_metadata: { character, createdAt: now, timedWorldInfo: {}, ...(seedVariables !== undefined ? { variables: seedVariables } : {}) },
+      chat_metadata: { character, createdAt: now, timedWorldInfo: {}, ...(seedVariables !== undefined || mvuSeeded ? { variables: variablesSeed } : {}) },
     }, [{
       name: found.card.data.nickname || found.card.data.name,
       is_user: false, is_system: false, send_date: now,
@@ -1071,11 +1078,11 @@ export async function handleApi(ctx, req, res) {
     if (!chatId) throw new Error('chatId query is required')
     const snapshot = await db.getChatSnapshot(character, chatId)
     if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
-    const displays = await displayTexts(db, state, character, snapshot.chat)
-    const message = latestFrontendMessage(snapshot.chat.messages, (entry, index) => {
-      const display = displays?.[index]
-      return typeof display === 'string' ? display : entry.mes ?? ''
-    })
+    // 只从最新楼层向前渲染到第一条带完整文档的楼层：长篇聊天里对全部楼层
+    // 重跑 markdownOnly 正则会把 5s 轮询变成 CPU 热点。
+    const scripts = collectRegexScripts(state, await db.getCharacter(character))
+    const message = latestFrontendMessage(snapshot.chat.messages, (entry, index) =>
+      displayTextForMessage(scripts, entry, snapshot.chat.messages.length - 1 - index))
     return sendJson(res, 200, {
       ok: true,
       revision: snapshot.revision,
@@ -1106,7 +1113,7 @@ export async function handleApi(ctx, req, res) {
     const scripts = collectRegexScripts(state, card)
     return sendJson(res, 200, {
       ok: true,
-      text: displayTextForMessage(scripts, snapshot.chat.messages[index]!, snapshot.chat.messages.length - 1 - index),
+      text: stripFrontendDocuments(displayTextForMessage(scripts, snapshot.chat.messages[index]!, snapshot.chat.messages.length - 1 - index)),
     })
   }
 

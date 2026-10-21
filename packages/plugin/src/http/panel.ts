@@ -16,7 +16,7 @@ import { addGuide, emitGuidesChanged, normalizeGuides, removeGuide } from '../gu
 import { emitChatSaved } from '../mods/events.js'
 import {
   MvuUndoRefusalError,
-  overlayScopedVariables,
+  overlayChatScopedVariables,
   readChatVariables,
   readMvuReceipts,
   renderMvuStatusTemplate,
@@ -329,7 +329,7 @@ export async function handleMvuApi(
     // 显示树剥离根 $schema（C-1）/$rules（C-2）：守卫/规则契约不是变量，不进
     // 状态栏载荷/渲染。
     const displayVariables = stripMvuControl(scopedVariables.length > 0
-      ? overlayScopedVariables(readChatVariables(chat), scopedVariables)
+      ? overlayChatScopedVariables(readChatVariables(chat), scopedVariables)
       : readChatVariables(chat))
     const character = await db.getCharacter(characterName)
     const statusTemplate = character ? statusTemplateOf(character.card) : undefined

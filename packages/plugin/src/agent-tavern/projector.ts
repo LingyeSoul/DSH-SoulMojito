@@ -5,6 +5,7 @@ import { ChatRevisionConflictError, type TavernSessionBinding, type TavernState 
 import { RegexPlacement, type CharacterCardIR, type ChatLogIR, type ChatMessage, type RegexScriptIR } from '../../../tavern-format/src/index.js'
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
 import { hostPluginMessageSource, hostSessionFormatVersion, isHostPluginMessageSource, sessionEvents, LEGACY_PLUGIN_NAME, PLUGIN_NAME, type HostSessionLog } from '../../../bind/src/index.js'
+import { applyUpdateVariableToChat, ensureChatVariables, messageStatVariables, seedJsrMvuVariables } from './mvu-compat.js'
 import { collectRegexScripts } from '../tavern-assets.js'
 
 export interface NativeSessionEvent {
@@ -90,7 +91,7 @@ export class AgentTavernProjector {
         const character = await this.store.getCharacter(binding.character)
         const scripts = collectRegexScripts(state, character)
         const message = projectMessage(session, event, binding, scripts)
-        if (message !== undefined) await this.appendMessage(binding, session.id, event.seq, message)
+        if (message !== undefined) await this.appendMessage(binding, session.id, event.seq, message, character?.card)
       }
       await this.writeCheckpoint({
         version: 1,
@@ -119,13 +120,30 @@ export class AgentTavernProjector {
     sessionId: string,
     eventSeq: number,
     message: ChatMessage,
+    card?: CharacterCardIR,
   ): Promise<void> {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const snapshot = await this.store.getChatSnapshot(binding.character, binding.chatId)
       if (!snapshot) throw new Error('AgentTavern projection target chat not found')
       if (snapshot.chat.messages.some((candidate) => projectionIdentity(candidate, sessionId, eventSeq))) return
       const next = structuredClone(snapshot.chat)
-      next.messages.push(message.is_user ? { ...message, name: next.header.user_name || 'User' } : message)
+      let projected = message
+      if (card !== undefined) {
+        // JSR MVU 卡在 Agent 模式下没有脚本树可跑：投影时由服务端应用
+        // <UpdateVariable> JSONPatch，并把状态快照挂到楼层变量，前端
+        // getChatMessages().data.stat_data 才能与聊天变量同源。
+        seedJsrMvuVariables(card, ensureChatVariables(next))
+        if (message.is_user !== true) {
+          const applied = applyUpdateVariableToChat(card, next, message.mes)
+          projected = {
+            ...message,
+            mes: applied.text,
+            ...(applied.statData !== undefined ? { variables: { ...(plainObjectRecord(message.variables) ?? {}), stat_data: applied.statData } } : {}),
+          }
+        }
+        projected = messageStatVariables(next, projected)
+      }
+      next.messages.push(projected.is_user ? { ...projected, name: next.header.user_name || 'User' } : projected)
       try {
         await this.store.saveChat(binding.character, binding.chatId, next, snapshot.revision)
         return
@@ -467,6 +485,11 @@ export function lastImportedTurn(appends: readonly SessionImportAppend[]): numbe
     }
   }
   return last
+}
+
+function plainObjectRecord(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  return value as Record<string, unknown>
 }
 
 function messageText(content: unknown): string {

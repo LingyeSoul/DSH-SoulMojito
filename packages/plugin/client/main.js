@@ -224,15 +224,26 @@ window.__ModuleLoader__.load({
 })();`
     }
 
-    function buildFrontendDocument(value, token) {
-      const source = rewriteViewportUnits(String(value || '').trim())
+    function buildFrontendDocument(value, token, messageId) {
+      // window.parent / window.top 在 sandbox（无 same-origin）里是跨域 WindowProxy，
+      // 酒馆卡常见的 `window.parent.document` / `window.parent.Mvu` 会直接抛
+      // DOMException。注入前统一改指向 shim 暴露的同页 facade；helper 自身与
+      // 高度上报脚本在改写之后注入，仍用真实的 parent.postMessage。
+      const compatible = String(value || '').trim()
+        .replace(/\bwindow\.(?:parent|top)\b/g, 'window.__dshTavernHost')
+        // sandbox（无 allow-same-origin）里 localStorage/sessionStorage 直接抛
+        // SecurityError；卡表单的自动保存/签名读取没有 try/catch，必须先改到
+        // shim 的内存实现，否则整个创角表单初始化中断。
+        .replace(/\b(?:window\.)?localStorage\b/g, 'window.__dshTavernStorage')
+        .replace(/\b(?:window\.)?sessionStorage\b/g, 'window.__dshTavernSessionStorage')
+      const source = rewriteViewportUnits(compatible)
       const csp = `<meta http-equiv="Content-Security-Policy" content="${escapeFrontendAttribute(FRONTEND_CSP)}">`
       const reset = '<style>html,body{margin:0!important;padding:0;max-width:100%;}*,*::before,*::after{box-sizing:border-box;}</style>'
       // 视口脚本进 head（先于 body 样式首帧解析，避免塌陷闪动），reporter 留 body 末
       const viewport = `<script>${frontendViewportScript()}</script>`
       // 酒馆助手兼容层（2026-10-20）：库脚本 + TavernHelper shim 进 head，前端
       // 首帧就能拿到 getVariables/getChatMessages 等同步面；快照由宿主随后投递。
-      const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token)}</script>`
+      const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token, messageId)}</script>`
       const reporter = `<script>${frontendHeightReporter(token)}</script>`
       if (/<html(?:\s[^>]*)?>/i.test(source)) {
         let documentText = source
@@ -279,6 +290,55 @@ window.__ModuleLoader__.load({
     // 快照比对负责「宿主侧事件」：楼数增加→MESSAGE_RECEIVED，正文变化→
     // MESSAGE_EDITED，聊天切换→CHAT_CHANGED。只广播能真实观测到的信号，
     // 不凭空伪造酒馆事件。
+    // 宿主 composer 写入（2026-10-20 卡兼容）：酒馆卡的表单/快速选项通过
+    // `window.parent.document.querySelector('#send_textarea')` 写入并触发 input。
+    // iframe 没有 same-origin，shim 把这条老路径映射到宿主页里真实可见的
+    // textarea，用原生 value setter + input 事件让 React 受控组件收到变更。
+    // 自动发送只在 `composer.send` 时尽力而为（回车键），失败则保留已填入文本。
+    function hostComposerTextarea() {
+      const candidates = [...document.querySelectorAll('textarea')]
+        .filter((element) => {
+          if (!(element instanceof HTMLTextAreaElement)) return false
+          if (element.disabled || element.readOnly) return false
+          if (element.closest('[data-dsh-soulmojito-surface]')) return false
+          const rect = element.getBoundingClientRect()
+          return rect.width > 160 && rect.height > 20 && rect.bottom > 0 && rect.top < window.innerHeight
+        })
+      candidates.sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top)
+      return candidates[candidates.length - 1] ?? null
+    }
+
+    function setHostTextareaValue(element, value) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      if (setter) setter.call(element, value)
+      else element.value = value
+      element.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+
+    async function fillHostComposer(text, submit) {
+      const element = hostComposerTextarea()
+      if (!element) throw new Error('no visible host composer textarea found')
+      setHostTextareaValue(element, text)
+      element.focus()
+      if (!submit) return { submitted: false }
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
+      const form = element.closest('form')
+      const submitButton = form?.querySelector('button[type="submit"]')
+      if (submitButton instanceof HTMLElement) {
+        submitButton.click()
+        return { submitted: true }
+      }
+      element.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true,
+      }))
+      return { submitted: true }
+    }
+
     function useHelperBridge(frameRef, token, binding, refreshKey) {
       const bindingRef = useRef(binding)
       bindingRef.current = binding
@@ -342,6 +402,13 @@ window.__ModuleLoader__.load({
             fail('this frontend is not bound to a Tavern chat')
             return
           }
+          if (data.op === 'composer.fill' || data.op === 'composer.send') {
+            const text = typeof data.payload?.text === 'string' ? data.payload.text : ''
+            void fillHostComposer(text, data.op === 'composer.send')
+              .then((value) => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value }))
+              .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
+            return
+          }
           void api('helper', {
             method: 'POST',
             headers: jsonHeaders(),
@@ -372,7 +439,7 @@ window.__ModuleLoader__.load({
       return undefined
     }
 
-    function FrontendFrame({ html, token, binding, refreshKey }) {
+    function FrontendFrame({ html, token, binding, refreshKey, messageId }) {
       const frameRef = useRef(null)
       const [height, setHeight] = useState(120)
       const postViewport = useViewportBridge(frameRef)
@@ -394,7 +461,7 @@ window.__ModuleLoader__.load({
         sandbox: 'allow-scripts',
         referrerPolicy: 'no-referrer',
         title: 'Tavern frontend',
-        srcDoc: buildFrontendDocument(html, token),
+        srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1),
         onLoad: postViewport,
         style: { height },
       })
@@ -457,12 +524,15 @@ window.__ModuleLoader__.load({
       GENERATION_ENDED: 'js_generation_ended',
     }
 
-    function frontendHelperScript(token) {
+    function frontendHelperScript(token, messageId) {
       return `(function () {
   var token = ${JSON.stringify(token)};
+  var currentMessageId = ${JSON.stringify(typeof messageId === 'number' ? messageId : -1)};
+  var realParent = window.parent;
   var requestId = 0;
   var pending = new Map();
   var listeners = new Map();
+  var lastMvuStatJson = '';
   var state = {
     characterName: '', userName: 'User', chatId: '', chatMetadata: {},
     messages: [], variables: { global: {}, chat: {}, message: {}, character: {} },
@@ -476,6 +546,25 @@ window.__ModuleLoader__.load({
       parent.postMessage({ type: ${JSON.stringify(HELPER_MESSAGE)}, token: token, id: id, op: op, payload: payload || {} }, '*');
     });
   }
+
+  // 沙箱无 same-origin：原生 localStorage/sessionStorage 访问即抛 SecurityError。
+  // 卡前端用它们做表单自动保存/签名恢复；给一份 iframe 内存实现，页面重载即失，
+  // 但不会让初始化中断。
+  function createMemoryStorage() {
+    var data = {};
+    return {
+      getItem: function (key) { return Object.prototype.hasOwnProperty.call(data, String(key)) ? data[String(key)] : null; },
+      setItem: function (key, value) { data[String(key)] = String(value); },
+      removeItem: function (key) { delete data[String(key)]; },
+      clear: function () { data = {}; },
+      key: function (index) { return Object.keys(data)[index] || null; },
+      get length() { return Object.keys(data).length; }
+    };
+  }
+  window.__dshTavernStorage = createMemoryStorage();
+  window.__dshTavernSessionStorage = createMemoryStorage();
+  try { Object.defineProperty(window, 'localStorage', { value: window.__dshTavernStorage, configurable: true }); } catch (_) {}
+  try { Object.defineProperty(window, 'sessionStorage', { value: window.__dshTavernSessionStorage, configurable: true }); } catch (_) {}
 
   function clone(value) {
     return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -542,6 +631,66 @@ window.__ModuleLoader__.load({
     state.variables[scope] = next;
   }
 
+  function mvuScopeOption(option) {
+    var type = option && option.type ? option.type : 'chat';
+    if (type === 'message' || type === 'chat') return type;
+    throw new Error('DSH-SoulMojito: Mvu scope "' + type + '" is not supported (chat/message)');
+  }
+
+  function messageAt(messageId) {
+    var index = messageIndex(messageId);
+    return state.messages.filter(function (entry) { return entry.message_id === index; })[0];
+  }
+
+  function mvuStatFor(option) {
+    var type = mvuScopeOption(option);
+    if (type === 'message') {
+      var message = messageAt(option && option.message_id);
+      var inMessage = message && message.data ? message.data.stat_data : undefined;
+      if (inMessage !== undefined) return inMessage;
+      return state.variables.chat ? state.variables.chat.stat_data : undefined;
+    }
+    return state.variables.chat ? state.variables.chat.stat_data : undefined;
+  }
+
+  var MVU_EVENTS = {
+    VARIABLE_UPDATE_STARTED: 'mag_variable_update_started',
+    VARIABLE_UPDATE_ENDED: 'mag_variable_update_ended',
+    VARIABLE_UPDATE_FAILED: 'mag_variable_update_failed'
+  };
+
+  function dispatchMvu(statData) {
+    if (statData === undefined) return;
+    var json = JSON.stringify(statData);
+    if (json === lastMvuStatJson) return;
+    lastMvuStatJson = json;
+    try {
+      document.dispatchEvent(new CustomEvent(MVU_EVENTS.VARIABLE_UPDATE_ENDED, { detail: { stat_data: clone(statData) }, bubbles: true }));
+    } catch (error) {
+      console.error('[Mvu] event dispatch failed', error);
+    }
+  }
+
+  function showToast(kind, message) {
+    try {
+      var host = document.getElementById('dsh-tavern-toasts');
+      if (!host) {
+        host = document.createElement('div');
+        host.id = 'dsh-tavern-toasts';
+        host.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:2147483647;display:flex;flex-direction:column;gap:8px;max-width:min(360px,80vw);pointer-events:none;font:13px/1.45 system-ui,sans-serif';
+        (document.body || document.documentElement).appendChild(host);
+      }
+      var item = document.createElement('div');
+      var color = kind === 'error' ? '#f7768e' : kind === 'warning' ? '#e0af68' : kind === 'success' ? '#9ece6a' : '#7aa2f7';
+      item.style.cssText = 'pointer-events:auto;background:#16161e;color:#c0caf5;border-left:3px solid ' + color + ';padding:8px 12px;border-radius:4px;box-shadow:0 8px 24px rgba(0,0,0,.35);white-space:pre-wrap';
+      item.textContent = String(message);
+      host.appendChild(item);
+      setTimeout(function () { try { item.remove(); } catch (_) {} }, 3600);
+    } catch (error) {
+      console.error('[toastr] ' + String(message), error);
+    }
+  }
+
   function applySnapshot(snapshot) {
     state.characterName = snapshot.characterName || state.characterName;
     state.userName = snapshot.userName || state.userName;
@@ -550,6 +699,12 @@ window.__ModuleLoader__.load({
     state.messages = Array.isArray(snapshot.messages) ? snapshot.messages : [];
     state.variables = snapshot.variables || state.variables;
     state.characterData = snapshot.characterData || null;
+    // 状态栏前端在 DOMContentLoaded 只拉一次；快照是异步到的。这里把最新
+    // stat_data 作为一次 VARIABLE_UPDATE_ENDED 广播，面板不会停在空态。
+    var last = state.messages.length > 0 ? state.messages[state.messages.length - 1] : undefined;
+    var stat = last && last.data ? last.data.stat_data : undefined;
+    if (stat === undefined && state.variables.chat) stat = state.variables.chat.stat_data;
+    if (stat !== undefined) dispatchMvu(stat);
   }
 
   function emitLocally(type, args) {
@@ -619,6 +774,57 @@ window.__ModuleLoader__.load({
     return window.replaceVariables(current, target).then(function () {
       return { variables: current, delete_occurred: deleteOccurred };
     });
+  };
+
+  window.getCurrentMessageId = function () {
+    if (typeof currentMessageId === 'number' && currentMessageId >= 0) return currentMessageId;
+    return state.messages.length - 1;
+  };
+
+  // MagVarUpdate / Mvu 的可观察面（2026-10-20 卡兼容）：卡前端大量使用
+  // Mvu.getMvuData / replaceMvuData / events.VARIABLE_UPDATE_ENDED。
+  // message 作用域的读回退聊天作用域；写穿同时更新目标楼层与聊天权威树。
+  window.Mvu = {
+    events: MVU_EVENTS,
+    isDuringGenerating: function () { return false; },
+    getMvuData: function (option) {
+      var stat = mvuStatFor(option);
+      return stat === undefined ? undefined : { stat_data: clone(stat) };
+    },
+    replaceMvuData: function (data, option) {
+      var target = option || { type: 'message', message_id: -1 };
+      var type = mvuScopeOption(target);
+      var stat = data && data.stat_data !== undefined ? data.stat_data : data;
+      if (!stat || typeof stat !== 'object' || Array.isArray(stat)) {
+        return Promise.reject(new Error('DSH-SoulMojito: Mvu.replaceMvuData expects an object'));
+      }
+      var index = type === 'message' ? messageIndex(target.message_id) : undefined;
+      if (type === 'message') {
+        var message = messageAt(index);
+        if (message) message.data = Object.assign({}, message.data || {}, { stat_data: clone(stat) });
+      }
+      if (state.variables.chat) state.variables.chat.stat_data = clone(stat);
+      dispatchMvu(stat);
+      return call('mvu.replace', { statData: stat, messageId: index }).then(function (value) {
+        if (value && value.stat_data !== undefined) {
+          if (state.variables.chat) state.variables.chat.stat_data = clone(value.stat_data);
+          dispatchMvu(value.stat_data);
+        }
+        return { stat_data: value && value.stat_data !== undefined ? value.stat_data : clone(stat) };
+      });
+    }
+  };
+  window.TavernHelper = window.TavernHelper || {};
+  window.TavernHelper.Mvu = window.Mvu;
+
+  // toastr 最小实现：卡前端只用 info/success/warning/error；不引入外部库。
+  window.toastr = {
+    info: function (message) { showToast('info', message); },
+    success: function (message) { showToast('success', message); },
+    warning: function (message) { showToast('warning', message); },
+    warn: function (message) { showToast('warning', message); },
+    error: function (message) { showToast('error', message); },
+    clear: function () { try { var host = document.getElementById('dsh-tavern-toasts'); if (host) host.textContent = ''; } catch (_) {} }
   };
 
   window.getChatMessages = function (range, option) {
@@ -844,6 +1050,79 @@ window.__ModuleLoader__.load({
       };
     },
   };
+  window.TavernHelper.Mvu = window.Mvu;
+
+  // window.parent / window.top facade（2026-10-20 卡兼容）：JSR 同源模型下卡代码
+  // 直接读 parent.document 的 #send_textarea/#send_but。沙箱里这两个对象不可
+  // 访问，buildFrontendDocument 已把 window.parent 改写到这里；同时兜底
+  // defineProperty，覆盖没被改写的裸访问。真实 parent 先存到 realParent，
+  // postMessage 仍走真实通道。
+  var fakeComposerText = '';
+  var fakeTextarea = {
+    value: '',
+    dispatchEvent: function (event) {
+      if (event && event.type === 'input') {
+        fakeComposerText = String(this.value || '');
+        call('composer.fill', { text: fakeComposerText }).catch(function (error) {
+          console.error('[composer] fill failed', error);
+          showToast('error', '自动填入输入框失败：' + (error && error.message ? error.message : String(error)));
+          try { navigator.clipboard.writeText(fakeComposerText); } catch (_) {}
+        });
+      }
+      return true;
+    }
+  };
+  var fakeSendButton = {
+    click: function () {
+      if (fakeComposerText === '' && fakeTextarea.value) fakeComposerText = String(fakeTextarea.value);
+      call('composer.send', { text: fakeComposerText }).catch(function (error) {
+        console.error('[composer] send failed', error);
+        showToast('error', '自动发送失败：' + (error && error.message ? error.message : String(error)) + '（已尝试复制到剪贴板）');
+        try { navigator.clipboard.writeText(fakeComposerText); } catch (_) {}
+      });
+    }
+  };
+  var fakeDocument = {
+    querySelector: function (selector) {
+      if (selector === '#send_textarea') return fakeTextarea;
+      if (selector === '#send_but') return fakeSendButton;
+      return null;
+    },
+    querySelectorAll: function () { return []; },
+    body: null,
+    documentElement: null
+  };
+  var host = {
+    Mvu: window.Mvu,
+    toastr: window.toastr,
+    SillyTavern: window.SillyTavern,
+    TavernHelper: window.TavernHelper,
+    document: fakeDocument,
+    CustomEvent: window.CustomEvent,
+    Event: window.Event,
+    postMessage: function () { return realParent.postMessage.apply(realParent, arguments); },
+    addEventListener: function () { return window.addEventListener.apply(window, arguments); },
+    removeEventListener: function () { return window.removeEventListener.apply(window, arguments); },
+    dispatchEvent: function (event) { return window.dispatchEvent(event); },
+    getVariables: window.getVariables,
+    replaceVariables: window.replaceVariables,
+    getChatMessages: window.getChatMessages,
+    getLastMessageId: window.getLastMessageId,
+    getCurrentMessageId: window.getCurrentMessageId,
+    getLorebook: window.getLorebook,
+    getWorldbook: window.getWorldbook,
+    getCharNames: window.getCharNames,
+    triggerSlash: window.triggerSlash,
+    _: window._,
+    $: window.$,
+    jQuery: window.jQuery,
+    showdown: window.showdown,
+    localStorage: window.__dshTavernStorage,
+    sessionStorage: window.__dshTavernSessionStorage
+  };
+  window.__dshTavernHost = host;
+  try { Object.defineProperty(window, 'parent', { value: host, configurable: true }); } catch (_) {}
+  try { Object.defineProperty(window, 'top', { value: host, configurable: true }); } catch (_) {}
 })();`
     }
 
@@ -6203,6 +6482,7 @@ window.__ModuleLoader__.load({
                 key: `${index}-${frontendIndex}`,
                 html,
                 token: `tavern-${sessionId}-${index}-${frontendIndex}`,
+                messageId: index,
                 binding: { character, chatId },
                 refreshKey: `${index}-${(message.mes ?? '').length}`,
               })))
@@ -6928,6 +7208,7 @@ window.__ModuleLoader__.load({
             ? h('div', { className: 'dt-mvu-rendered' }, h(FrontendFrame, {
               html: status.renderedHtml,
               token: frameToken,
+              messageId: -1,
               binding: binding ? { character: binding.character, chatId: binding.chatId } : undefined,
               refreshKey: status.receipts?.length ?? 0,
             }))
@@ -6981,6 +7262,7 @@ window.__ModuleLoader__.load({
             ? h('div', { className: 'dt-mvu-rendered' }, h(FrontendFrame, {
               html: status.renderedHtml,
               token: frameToken,
+              messageId: -1,
               binding: binding ? { character: binding.character, chatId: binding.chatId } : undefined,
               refreshKey: status.receipts?.length ?? 0,
             }))
@@ -8280,6 +8562,7 @@ window.__ModuleLoader__.load({
           }, h(FrontendFrame, {
             html,
             token: `tavern-frontend-${sessionId}-${message.index}-${index}`,
+            messageId: message.index,
             binding: { character: binding.character, chatId: binding.chatId },
             refreshKey: `${snapshot?.revision ?? ''}:${message.index}`,
           }))))

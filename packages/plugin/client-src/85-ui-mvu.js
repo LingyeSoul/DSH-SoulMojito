@@ -264,6 +264,7 @@
             ? h('div', { className: 'dt-mvu-rendered' }, h(FrontendFrame, {
               html: status.renderedHtml,
               token: frameToken,
+              messageId: -1,
               binding: binding ? { character: binding.character, chatId: binding.chatId } : undefined,
               refreshKey: status.receipts?.length ?? 0,
             }))
@@ -317,6 +318,7 @@
             ? h('div', { className: 'dt-mvu-rendered' }, h(FrontendFrame, {
               html: status.renderedHtml,
               token: frameToken,
+              messageId: -1,
               binding: binding ? { character: binding.character, chatId: binding.chatId } : undefined,
               refreshKey: status.receipts?.length ?? 0,
             }))

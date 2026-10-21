@@ -8737,6 +8737,1956 @@ async function runScript(script, env) {
   return { output, chatChanged };
 }
 
+// packages/tavern-template/src/paths.ts
+function parsePath(path12) {
+  if (path12 === "") return [];
+  const segments = [];
+  let buf = "";
+  let i = 0;
+  while (i < path12.length) {
+    const ch = path12[i];
+    if (ch === ".") {
+      if (buf !== "") segments.push(buf);
+      buf = "";
+      i++;
+    } else if (ch === "[") {
+      const close = path12.indexOf("]", i);
+      if (close === -1) return [];
+      if (buf !== "") segments.push(buf);
+      const inner = path12.slice(i + 1, close).trim();
+      if (!/^-?\d+$/.test(inner)) return [];
+      segments.push(inner);
+      buf = "";
+      i = close + 1;
+      if (path12[i] === ".") i++;
+    } else {
+      buf += ch;
+      i++;
+    }
+  }
+  if (buf !== "") segments.push(buf);
+  return segments;
+}
+function isObjectLike(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function deepClone(value) {
+  if (Array.isArray(value)) return value.map((item) => deepClone(item));
+  if (isObjectLike(value)) {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) out[key] = deepClone(item);
+    return out;
+  }
+  return value;
+}
+function getPath(root, path12) {
+  const segments = parsePath(path12);
+  let cur = root;
+  for (const seg of segments) {
+    if (cur === null || cur === void 0) return void 0;
+    if (Array.isArray(cur)) {
+      const idx = Number(seg);
+      if (!Number.isInteger(idx)) return void 0;
+      cur = cur[idx < 0 ? cur.length + idx : idx];
+    } else if (isObjectLike(cur)) {
+      cur = Object.prototype.hasOwnProperty.call(cur, seg) ? cur[seg] : void 0;
+    } else {
+      return void 0;
+    }
+  }
+  return cur;
+}
+function setPath(root, path12, value) {
+  const segments = parsePath(path12);
+  if (segments.length === 0) return root;
+  const last = segments[segments.length - 1];
+  let cur = root;
+  for (const seg of segments.slice(0, -1)) {
+    const existing = cur[seg];
+    if (isObjectLike(existing)) {
+      cur = existing;
+    } else if (Array.isArray(existing)) {
+      const wrapper = {};
+      cur[seg] = wrapper;
+      cur = wrapper;
+    } else {
+      const next = {};
+      cur[seg] = next;
+      cur = next;
+    }
+  }
+  if (/^-?\d+$/.test(last) && Array.isArray(cur[last])) {
+    const arr = cur[last];
+    const idx = Number(last) < 0 ? arr.length + Number(last) : Number(last);
+    arr[idx < 0 ? 0 : idx] = value;
+  } else {
+    cur[last] = value;
+  }
+  return root;
+}
+function unsetPath(root, path12, index) {
+  if (index !== void 0) {
+    const target = getPath(root, path12);
+    if (Array.isArray(target)) {
+      const idx = typeof index === "number" ? index : Number(index);
+      if (Number.isInteger(idx) && idx >= 0 && idx < target.length) target.splice(idx, 1);
+    } else if (typeof target === "string") {
+      const idx = typeof index === "number" ? index : Number(index);
+      if (Number.isInteger(idx) && idx >= 0 && idx < target.length) {
+        setPath(root, path12, target.slice(0, idx) + target.slice(idx + 1));
+      }
+    } else if (isObjectLike(target)) {
+      delete target[String(index)];
+    }
+    return;
+  }
+  const segments = parsePath(path12);
+  if (segments.length === 0) return;
+  const last = segments[segments.length - 1];
+  let cur = root;
+  for (const seg of segments.slice(0, -1)) {
+    cur = getPath(cur, seg);
+    if (cur === null || cur === void 0) return;
+  }
+  if (isObjectLike(cur) || Array.isArray(cur)) delete cur[last];
+}
+function insertAtPath(root, path12, value, index) {
+  const target = getPath(root, path12);
+  if (Array.isArray(target)) {
+    const idx = index === void 0 ? target.length : Number(index);
+    if (Number.isInteger(idx) && idx >= 0 && idx <= target.length) target.splice(idx, 0, value);
+  } else if (typeof target === "string") {
+    const idx = index === void 0 ? target.length : Number(index);
+    if (Number.isInteger(idx) && idx >= 0 && idx <= target.length) {
+      setPath(root, path12, target.slice(0, idx) + String(value) + target.slice(idx));
+    }
+  } else if (isObjectLike(target)) {
+    target[index === void 0 ? String(target.length) : String(index)] = value;
+  }
+}
+function deepMerge(target, source) {
+  for (const [key, value] of Object.entries(source)) {
+    if (value === void 0) continue;
+    const dst = target[key];
+    if (isObjectLike(dst) && isObjectLike(value)) {
+      deepMerge(dst, value);
+    } else {
+      target[key] = deepClone(value);
+    }
+  }
+  return target;
+}
+
+// packages/tavern-template/src/api.ts
+var DEFAULT_CHAR_DEFINE = [
+  "<% if (name) { %>",
+  "<<%- name %>>",
+  "<% if (system_prompt) { %>System: <%- system_prompt %><% } %>",
+  "name: <%- name %>",
+  "<% if (personality) { %>personality: <%- personality %><% } %>",
+  "<% if (description) { %>description: <%- description %><% } %>",
+  "<% if (message_example) { %>",
+  "example:",
+  "<%- message_example %>",
+  "<% } %>",
+  "<% if (depth_prompt) { %>System: <%- depth_prompt %><% } %>",
+  "</<%- name %>>",
+  "<% } %>"
+].join("\n");
+var MAX_GETWI_DEPTH = 8;
+function createTemplateEnv(options) {
+  const { vars, host, defines } = options;
+  const depth = options.getwiDepth ?? { current: 0 };
+  const scopedVar = (scope) => ({
+    get: (key, opt2) => vars.getVar(key, { ...optAsRecord(opt2), scope }),
+    set: (key, value, opt2) => vars.setVar(key, value, { ...optAsRecord(opt2), scope }),
+    inc: (key, value = 1, opt2) => vars.incDecVar(key, value, { ...optAsRecord(opt2), outscope: scope }, 1),
+    dec: (key, value = 1, opt2) => vars.incDecVar(key, value, { ...optAsRecord(opt2), outscope: scope }, -1),
+    del: (key, index, opt2) => vars.delVar(key, index, { ...optAsRecord(opt2), scope }),
+    ins: (key, value, index, opt2) => vars.insVar(key, value, index, { ...optAsRecord(opt2), scope })
+  });
+  const local = scopedVar("local");
+  const global = scopedVar("global");
+  const message = scopedVar("message");
+  async function getwi(lorebookOrTitle, titleOrData, maybeData) {
+    let book;
+    let title;
+    let data = {};
+    if (lorebookOrTitle !== null && typeof lorebookOrTitle === "object") {
+      data = lorebookOrTitle;
+      title = titleOrData;
+    } else if (titleOrData !== null && typeof titleOrData === "object") {
+      title = lorebookOrTitle;
+      data = titleOrData;
+    } else if (titleOrData !== void 0) {
+      book = String(lorebookOrTitle);
+      title = titleOrData;
+      if (maybeData !== null && typeof maybeData === "object") data = maybeData;
+    } else {
+      title = lorebookOrTitle;
+    }
+    if (title === void 0 || title === "") return "";
+    if (depth.current >= MAX_GETWI_DEPTH) {
+      host.onWarning?.(`getwi recursion depth exceeded (${MAX_GETWI_DEPTH}) at "${String(title)}"`);
+      return "";
+    }
+    const entries = host.findWorldEntries(title, book);
+    if (entries.length === 0) return "";
+    const entry = entries[0];
+    depth.current++;
+    try {
+      return await host.renderNested(entry.content, {
+        world_info: worldInfoView(entry),
+        getwi_book: entry.book,
+        ...data
+      });
+    } catch (err2) {
+      host.onWarning?.(`getwi render failed for ${entry.book}#${entry.uid}: ${errorMessage(err2)}`);
+      return entry.content;
+    } finally {
+      depth.current--;
+    }
+  }
+  async function getchar(nameOrTemplate, templateArg, dataArg) {
+    let name2;
+    let template = DEFAULT_CHAR_DEFINE;
+    let data = {};
+    if (typeof nameOrTemplate === "string" && nameOrTemplate.includes("<%")) {
+      template = nameOrTemplate;
+      if (templateArg !== void 0 && typeof templateArg === "object") data = templateArg;
+    } else {
+      if (nameOrTemplate !== void 0) name2 = nameOrTemplate;
+      if (typeof templateArg === "string") template = templateArg;
+      else if (templateArg !== void 0) data = templateArg;
+      if (dataArg !== void 0) data = dataArg;
+    }
+    const card = host.getCard(name2);
+    if (!card) return "";
+    const fields = {
+      name: card.name,
+      system_prompt: card.systemPrompt,
+      personality: card.personality,
+      description: card.description,
+      scenario: card.scenario,
+      first_message: card.firstMes,
+      message_example: card.mesExample,
+      creatorcomment: card.creatorNotes,
+      depth_prompt: card.depthPrompt,
+      ...data
+    };
+    return await host.renderNested(template, fields);
+  }
+  async function getpreset(name2, data = {}) {
+    const prompt = host.findPresetPrompt(name2);
+    if (!prompt) return "";
+    return await host.renderNested(prompt.content, { preset_prompt_name: prompt.name, ...data });
+  }
+  function resolveMessageIdx(idx) {
+    const messages = host.messages;
+    return idx < 0 ? messages.length + idx : idx;
+  }
+  function getChatMessage(idx, role) {
+    const resolved = resolveMessageIdx(idx);
+    const msg = host.messages[resolved];
+    if (!msg) return "";
+    if (role !== void 0 && roleOf(msg) !== role) return "";
+    return msg.mes;
+  }
+  function getChatMessages(a, b, c) {
+    let start;
+    let end;
+    let role;
+    if (b === void 0 || b === "user" || b === "assistant" || b === "system") {
+      start = -a;
+      role = b;
+    } else {
+      start = a;
+      end = b;
+      role = c;
+    }
+    const from = resolveMessageIdx(start);
+    const to = end === void 0 ? host.messages.length - 1 : resolveMessageIdx(end);
+    const out = [];
+    for (let i = Math.max(0, from); i <= Math.min(to, host.messages.length - 1); i++) {
+      const msg = host.messages[i];
+      if (msg.mes === "") continue;
+      if (role !== void 0 && roleOf(msg) !== role) continue;
+      out.push(msg.mes);
+    }
+    return out;
+  }
+  function matchChatMessages(pattern, options2 = {}) {
+    const from = resolveMessageIdx(options2.start ?? -2);
+    const to = options2.end === null || options2.end === void 0 ? host.messages.length - 1 : resolveMessageIdx(options2.end);
+    const role = options2.role;
+    const texts = [];
+    for (let i = Math.max(0, from); i <= Math.min(to, host.messages.length - 1); i++) {
+      const msg = host.messages[i];
+      if (role !== void 0 && roleOf(msg) !== role) continue;
+      texts.push(msg.mes);
+    }
+    const patterns = Array.isArray(pattern) ? pattern : [pattern];
+    if (patterns.length === 0) return false;
+    const testOne = (p, text) => typeof p === "string" ? text.includes(p) : p.test(text);
+    if (!Array.isArray(pattern)) return texts.some((text) => testOne(pattern, text));
+    const needAll = options2.and === true;
+    return texts.some((text) => needAll ? patterns.every((p) => testOne(p, text)) : patterns.some((p) => testOne(p, text)));
+  }
+  const env = {
+    /* ---- 变量 API ---- */
+    variables: vars.view(),
+    getvar: (key, options2) => vars.getVar(key, options2),
+    setvar: (key, value, options2) => vars.setVar(key, value, options2),
+    incvar: (key, value = 1, options2) => vars.incDecVar(key, value, options2, 1),
+    decvar: (key, value = 1, options2) => vars.incDecVar(key, value, options2, -1),
+    delvar: (key, index, options2) => vars.delVar(key, index, options2),
+    insvar: (key, value, index, options2) => vars.insVar(key, value, index, options2),
+    getLocalVar: local.get,
+    setLocalVar: local.set,
+    incLocalVar: local.inc,
+    decLocalVar: local.dec,
+    delLocalVar: local.del,
+    insertLocalVar: local.ins,
+    getGlobalVar: global.get,
+    setGlobalVar: global.set,
+    incGlobalVar: global.inc,
+    decGlobalVar: global.dec,
+    delGlobalVar: global.del,
+    insertGlobalVar: global.ins,
+    getMessageVar: message.get,
+    setMessageVar: message.set,
+    incMessageVar: message.inc,
+    decMessageVar: message.dec,
+    delMessageVar: message.del,
+    insertMessageVar: message.ins,
+    patchVariables: (key, change, options2) => {
+      const current = vars.getVar(key, { scope: "local" }) ?? {};
+      const patched = applyJsonPatch(isObjectLike(current) ? deepClone(current) : {}, change);
+      return vars.setVar(key, patched, options2);
+    },
+    define: (name2, value, merge = false) => {
+      const registry = defines;
+      if (merge && isObjectLike(registry[name2]) && isObjectLike(value)) {
+        deepMerge(registry[name2], value);
+      } else {
+        registry[name2] = value;
+      }
+    },
+    /* ---- injectPrompt ---- */
+    injectPrompt: (key, prompt, order = 100, sticky = 0, uid = "") => vars.injectPrompt(key, prompt, order, sticky, uid),
+    getPromptsInjected: (key, postprocess) => vars.getPromptsInjected(key, postprocess),
+    hasPromptsInjected: (key) => vars.hasPromptsInjected(key),
+    /* ---- 资产读取 ---- */
+    getwi,
+    getWorldInfo: getwi,
+    getchar,
+    getChara: getchar,
+    getpreset,
+    getPresetPrompt: getpreset,
+    getCharData: (name2) => {
+      const card = host.getCard(name2);
+      return card ? deepClone(card.data) : null;
+    },
+    getChatMessage,
+    getChatMessages,
+    matchChatMessages,
+    evalTemplate: async (content, data = {}) => host.renderNested(content, data),
+    /* ---- JSON 工具 ---- */
+    parseJSON,
+    jsonPatch: (dest, change) => applyJsonPatch(deepClone(dest), change),
+    /* ---- 常量 ---- */
+    runType: host.runType,
+    userName: host.userName,
+    charName: host.charName,
+    chatId: host.chatId,
+    ...host.characterId !== void 0 ? { characterId: host.characterId } : {},
+    groupId: null,
+    groups: [],
+    charAvatar: host.charAvatar ?? "",
+    userAvatar: host.userAvatar ?? "",
+    lastUserMessageId: host.lastUserMessageId,
+    lastCharMessageId: host.lastCharMessageId,
+    model: host.model ?? "",
+    _: miniLodash
+  };
+  for (const [name2, value] of Object.entries(defines ?? {})) env[name2] = value;
+  return env;
+}
+function roleOf(msg) {
+  if (msg.is_system) return "system";
+  return msg.is_user ? "user" : "assistant";
+}
+function worldInfoView(entry) {
+  return {
+    uid: entry.uid,
+    world: entry.book,
+    comment: entry.comment ?? "",
+    content: entry.content,
+    disable: entry.disable === true,
+    ...entry.order !== void 0 ? { order: entry.order } : {}
+  };
+}
+function optAsRecord(input) {
+  return input !== null && typeof input === "object" ? input : {};
+}
+function errorMessage(err2) {
+  return err2 instanceof Error ? err2.message : String(err2);
+}
+function parseJSON(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+  }
+  let cleaned = text.trim();
+  const fence = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  if (fence) cleaned = fence[1].trim();
+  const firstObj = cleaned.search(/[[{]/);
+  if (firstObj > 0) cleaned = cleaned.slice(firstObj);
+  const lastObj = Math.max(cleaned.lastIndexOf("}"), cleaned.lastIndexOf("]"));
+  if (lastObj >= 0 && lastObj < cleaned.length - 1) cleaned = cleaned.slice(0, lastObj + 1);
+  cleaned = cleaned.replace(/[\u201c\u201d]/g, '"').replace(/[\u2018\u2019]/g, "'").replace(/,\s*([}\]])/g, "$1");
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    if (!cleaned.includes('"')) {
+      try {
+        return JSON.parse(cleaned.replace(/'([^']*)'/g, '"$1"'));
+      } catch {
+      }
+    }
+    throw new Error("parseJSON: not valid JSON even after cleanup");
+  }
+}
+function decodePointer(pointer) {
+  if (pointer === "") throw new Error("jsonPatch: empty JSON pointer");
+  if (!pointer.startsWith("/")) throw new Error(`jsonPatch: invalid JSON pointer "${pointer}"`);
+  return pointer.slice(1).split("/").map((seg) => seg.replace(/~1/g, "/").replace(/~0/g, "~"));
+}
+function applyJsonPatch(dest, change) {
+  const root = deepClone(dest);
+  const wrap = { "": root };
+  const walk = (segments) => {
+    let cur = wrap[""];
+    for (const seg of segments) {
+      if (Array.isArray(cur)) cur = cur[Number(seg)];
+      else if (isObjectLike(cur)) cur = cur[seg];
+      else return void 0;
+    }
+    return cur;
+  };
+  const parentOf = (segments) => {
+    const parent = walk(segments);
+    return isObjectLike(parent) || Array.isArray(parent) ? parent : void 0;
+  };
+  for (const raw of change) {
+    const op = raw;
+    const segs = decodePointer(op.path);
+    const parent = parentOf(segs.slice(0, -1));
+    if (parent === void 0) throw new Error(`jsonPatch: parent path missing for "${op.path}"`);
+    const key = segs[segs.length - 1];
+    if (op.op === "add" || op.op === "replace") {
+      if (Array.isArray(parent) && op.op === "add") {
+        if (key === "-") parent.push(deepClone(op.value));
+        else {
+          const idx = Number(key);
+          if (!Number.isInteger(idx) || idx < 0 || idx > parent.length) throw new Error(`jsonPatch: bad array index "${key}"`);
+          parent.splice(idx, 0, deepClone(op.value));
+        }
+      } else {
+        parent[key] = deepClone(op.value);
+      }
+      continue;
+    }
+    if (op.op === "remove") {
+      if (Array.isArray(parent)) {
+        const idx = Number(key);
+        if (Number.isInteger(idx) && idx >= 0 && idx < parent.length) parent.splice(idx, 1);
+      } else {
+        delete parent[key];
+      }
+      continue;
+    }
+    if (op.op === "move" || op.op === "copy") {
+      const fromSegs = decodePointer(op.from ?? "");
+      const value = walk(fromSegs);
+      if (value === void 0) throw new Error(`jsonPatch: from path missing "${op.from}"`);
+      if (op.op === "move") {
+        const fromParent = parentOf(fromSegs.slice(0, -1));
+        if (fromParent === void 0) throw new Error(`jsonPatch: from parent missing "${op.from}"`);
+        const fromKey = fromSegs[fromSegs.length - 1];
+        if (Array.isArray(fromParent)) {
+          const idx = Number(fromKey);
+          if (Number.isInteger(idx) && idx >= 0 && idx < fromParent.length) fromParent.splice(idx, 1);
+        } else {
+          delete fromParent[fromKey];
+        }
+      }
+      if (Array.isArray(parent)) {
+        if (key === "-") parent.push(deepClone(value));
+        else parent.splice(Number(key), 0, deepClone(value));
+      } else {
+        parent[key] = deepClone(value);
+      }
+      continue;
+    }
+    if (op.op === "test") {
+      const actual = walk(segs);
+      if (JSON.stringify(actual) !== JSON.stringify(op.value)) {
+        throw new Error(`jsonPatch: test failed at "${op.path}"`);
+      }
+      continue;
+    }
+    throw new Error(`jsonPatch: unknown op "${String(raw.op)}"`);
+  }
+  return wrap[""];
+}
+function collectionValues(value) {
+  if (Array.isArray(value)) return [...value];
+  if (isObjectLike(value)) return Object.values(value);
+  if (value === null || value === void 0) return [];
+  return [value];
+}
+var miniLodash = {
+  get: (obj, path12, defaults) => {
+    const value = getPath(obj, path12);
+    return value === void 0 ? defaults : value;
+  },
+  set: (obj, path12, value) => setPath(obj, path12, value),
+  has: (obj, path12) => getPath(obj, path12) !== void 0,
+  merge: (dest, ...sources) => {
+    for (const src of sources) deepMerge(dest, src);
+    return dest;
+  },
+  cloneDeep: deepClone,
+  isArray: (v) => Array.isArray(v),
+  isObject: (v) => typeof v === "object" && v !== null,
+  isPlainObject: isObjectLike,
+  isString: (v) => typeof v === "string",
+  isNumber: (v) => typeof v === "number",
+  isBoolean: (v) => typeof v === "boolean",
+  isNull: (v) => v === null,
+  isUndefined: (v) => v === void 0,
+  isEmpty: (v) => v === null || v === void 0 || v === "" || Array.isArray(v) && v.length === 0 || isObjectLike(v) && Object.keys(v).length === 0,
+  keys: (v) => Object.keys(v),
+  values: (v) => Object.values(v),
+  entries: (v) => Object.entries(v),
+  first: (v) => v[0],
+  last: (v) => v[v.length - 1],
+  identity: (v) => v,
+  random: (lower, upper, floating) => {
+    if (lower === void 0) return Math.random();
+    const min = upper === void 0 ? 0 : lower;
+    const max2 = upper === void 0 ? lower : upper;
+    if (floating === true || !Number.isInteger(min) || !Number.isInteger(max2)) {
+      return Math.random() * (max2 - min) + min;
+    }
+    return Math.floor(Math.random() * (max2 - min + 1)) + min;
+  },
+  // lodash.sample/sampleSize 同时接受数组与对象；卡内 EJS 用它们做主题池抽取。
+  sample: (collection) => {
+    const values = collectionValues(collection);
+    return values.length === 0 ? void 0 : values[Math.floor(Math.random() * values.length)];
+  },
+  sampleSize: (collection, size) => {
+    const values = collectionValues(collection);
+    const count = Math.max(0, Math.min(Math.trunc(size), values.length));
+    for (let index = values.length - 1; index > 0; index--) {
+      const swap = Math.floor(Math.random() * (index + 1));
+      [values[index], values[swap]] = [values[swap], values[index]];
+    }
+    return values.slice(0, count);
+  },
+  clamp: (value, lower, upper) => Math.min(Math.max(value, lower), upper),
+  uniq: (values) => [...new Set(values)],
+  isEqual: (left, right) => JSON.stringify(left) === JSON.stringify(right),
+  unset: (obj, path12) => {
+    const existed = getPath(obj, path12) !== void 0;
+    unsetPath(obj, path12);
+    return existed;
+  },
+  toArray: (v) => {
+    if (Array.isArray(v)) return v;
+    if (v === null || v === void 0) return [];
+    if (typeof v === "string") return v.split("");
+    if (isObjectLike(v)) return Object.values(v);
+    return [v];
+  }
+};
+
+// packages/tavern-template/src/runtime.ts
+import vm from "node:vm";
+
+// packages/tavern-template/src/syntax.ts
+var TemplateSyntaxError = class extends Error {
+  constructor(message, source) {
+    super(`template syntax error: ${message}`);
+    this.source = source;
+    this.name = "TemplateSyntaxError";
+  }
+};
+var OPEN = "<%";
+var CLOSE = "%>";
+function tokenize2(source) {
+  const tokens = [];
+  let buf = "";
+  let i = 0;
+  const flushText = () => {
+    if (buf !== "") {
+      tokens.push({ text: buf });
+      buf = "";
+    }
+  };
+  while (i < source.length) {
+    if (source.startsWith("<%%", i)) {
+      buf += OPEN;
+      i += 3;
+      continue;
+    }
+    if (source.startsWith("%%>", i)) {
+      buf += CLOSE;
+      i += 3;
+      continue;
+    }
+    if (!source.startsWith(OPEN, i)) {
+      buf += source[i];
+      i++;
+      continue;
+    }
+    flushText();
+    const tag = readTag(source, i);
+    if (tag.slurpBefore) {
+      const last = tokens[tokens.length - 1];
+      if (last && "text" in last) last.text = last.text.replace(/\s+$/, "");
+      else buf = "";
+    }
+    tokens.push({ tag });
+    i = tag.end;
+    if (tag.slurpAfter) {
+      while (i < source.length && /\s/.test(source[i])) i++;
+    } else if (tag.trimNewline) {
+      if (source.startsWith("\r\n", i)) i += 2;
+      else if (source[i] === "\n") i += 1;
+    }
+  }
+  flushText();
+  return tokens;
+}
+function readTag(source, start) {
+  let i = start + OPEN.length;
+  let slurpBefore = false;
+  if (source[i] === "_") {
+    slurpBefore = true;
+    i++;
+  }
+  let mode = "script";
+  const modeCh = source[i];
+  if (modeCh === "=") {
+    mode = "escape";
+    i++;
+  } else if (modeCh === "-") {
+    mode = "raw";
+    i++;
+  } else if (modeCh === "#") {
+    mode = "comment";
+    i++;
+  }
+  let code = "";
+  while (i < source.length) {
+    if (source.startsWith("-%>", i)) {
+      return { mode, code, trimNewline: true, slurpAfter: false, slurpBefore, end: i + 3 };
+    }
+    if (source.startsWith("_%>", i)) {
+      return { mode, code, trimNewline: false, slurpAfter: true, slurpBefore, end: i + 3 };
+    }
+    if (source.startsWith(CLOSE, i)) {
+      return { mode, code, trimNewline: false, slurpAfter: false, slurpBefore, end: i + 2 };
+    }
+    code += source[i];
+    i++;
+  }
+  throw new TemplateSyntaxError(`unclosed tag starting at offset ${start} (mode=${mode})`, source);
+}
+function compileTemplate(source) {
+  const tokens = tokenize2(source);
+  const parts = [];
+  for (const token of tokens) {
+    if ("text" in token) {
+      if (token.text !== "") parts.push(`__append(${JSON.stringify(token.text)});`);
+      continue;
+    }
+    const { mode, code } = token.tag;
+    if (mode === "comment") continue;
+    if (mode === "script") {
+      if (code.trim() !== "") parts.push(`${code}
+`);
+      continue;
+    }
+    const expr = code.trim();
+    if (expr === "") continue;
+    if (mode === "escape") parts.push(`__append(__escape(String(await (${expr}))));`);
+    else parts.push(`__append(await (${expr}));`);
+  }
+  parts.push("return __out;");
+  return parts.join("\n");
+}
+
+// packages/tavern-template/src/runtime.ts
+function protectBlocks(source) {
+  return source.replace(/<#escape-ejs>([\s\S]*?)<#\/escape-ejs>/g, (_m, inner) => `<#escape-ejs>${inner.replace(/<%/g, "<%%").replace(/%>/g, "%%>")}<#/escape-ejs>`).replace(/<(thinking|think|reasoning)>([\s\S]*?)<\/\1>/g, (m, tag, inner) => inner.includes("<%") ? `<${tag}>${inner.replace(/<%/g, "<%%").replace(/%>/g, "%%>")}</${tag}>` : m);
+}
+function htmlEscape(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+var compileCache = /* @__PURE__ */ new Map();
+var COMPILE_CACHE_MAX = 256;
+function compile(source) {
+  const cached = compileCache.get(source);
+  if (cached) return cached;
+  const body = compileTemplate(source);
+  const wrapper = `(async function (__env) { with (__env) {
+${body}
+} })`;
+  const script = new vm.Script(wrapper, { filename: "tavern-template.ejs" });
+  if (compileCache.size >= COMPILE_CACHE_MAX) {
+    const oldest = compileCache.keys().next().value;
+    if (oldest !== void 0) compileCache.delete(oldest);
+  }
+  const entry = { script };
+  compileCache.set(source, entry);
+  return entry;
+}
+function hasTemplateTag(source) {
+  return source.includes("<%");
+}
+function buildSandboxEnv(env) {
+  let out = "";
+  const sandboxEnv = /* @__PURE__ */ Object.create(null);
+  Object.assign(sandboxEnv, env);
+  const defineHidden = (key, descriptor) => {
+    Object.defineProperty(sandboxEnv, key, { ...descriptor, enumerable: false, configurable: true });
+  };
+  defineHidden("__out", {
+    get: () => out,
+    set: (value) => {
+      out = String(value ?? "");
+    }
+  });
+  defineHidden("__append", {
+    value: (value) => {
+      out += value === null || value === void 0 ? "" : String(value);
+    }
+  });
+  defineHidden("__escape", { value: htmlEscape });
+  defineHidden("print", {
+    value: (...args) => {
+      out += args.map((a) => a === null || a === void 0 ? "" : String(a)).join(" ");
+    }
+  });
+  defineHidden("await", {
+    value: (value) => {
+      if (value !== null && typeof value === "object" && typeof value.then === "function") {
+        throw new Error("async template expression used inside a synchronous callback is not supported");
+      }
+      return value;
+    }
+  });
+  return sandboxEnv;
+}
+async function renderSandboxed(source, env, options = {}) {
+  try {
+    const protectedSource = protectBlocks(source);
+    const sandboxEnv = buildSandboxEnv(env);
+    const factory = compile(protectedSource).script.runInNewContext(sandboxEnv);
+    return await factory(sandboxEnv);
+  } catch (err2) {
+    const where = options.where ? ` (${options.where})` : "";
+    const message = err2 instanceof Error ? `${err2.name}: ${err2.message}` : String(err2);
+    throw new Error(`template execution failed${where}: ${message}`);
+  }
+}
+async function evalExpressionSandboxed(expression, env) {
+  const wrapper = `(async function (__env) { with (__env) { return await (${expression}); } })`;
+  const script = new vm.Script(wrapper, { filename: "tavern-template-expr.ejs" });
+  const sandboxEnv = /* @__PURE__ */ Object.create(null);
+  Object.assign(sandboxEnv, env);
+  const factory = script.runInNewContext(sandboxEnv);
+  return await factory(sandboxEnv);
+}
+
+// packages/tavern-template/src/yaml.ts
+var YamlSubsetError = class extends Error {
+  constructor(message, line) {
+    super(`yaml subset parse error at line ${line}: ${message}`);
+    this.line = line;
+    this.name = "YamlSubsetError";
+  }
+};
+function parseYamlSubset(source) {
+  const lines = [];
+  for (const [i, raw] of source.split(/\r?\n/).entries()) {
+    const stripped = raw.replace(/\t/g, "  ");
+    const content = stripped.trim();
+    if (content === "" || content.startsWith("#")) continue;
+    const indent = stripped.length - stripped.trimStart().length;
+    lines.push({ indent, text: content, number: i + 1 });
+  }
+  if (lines.length === 0) return {};
+  const [value] = parseBlock(lines, 0, lines[0].indent);
+  return value;
+}
+function parseBlock(lines, pos, indent) {
+  const first = lines[pos];
+  if (first.text.startsWith("- ") || first.text === "-") return parseArray(lines, pos, indent);
+  return parseMap(lines, pos, indent);
+}
+function parseArray(lines, pos, indent) {
+  const out = [];
+  let i = pos;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.indent < indent) break;
+    if (line.indent > indent) throw new YamlSubsetError("unexpected indentation", line.number);
+    if (line.text === "-") {
+      const next = lines[i + 1];
+      if (next && next.indent > indent) {
+        const [value, consumed] = parseBlock(lines, i + 1, next.indent);
+        out.push(value);
+        i = consumed;
+      } else {
+        out.push(null);
+        i++;
+      }
+      continue;
+    }
+    if (!line.text.startsWith("- ")) break;
+    const rest = line.text.slice(2).trim();
+    const inlineKey = matchKey(rest);
+    if (inlineKey !== null) {
+      const itemIndent = indent + 2;
+      const synthetic = [{ indent: itemIndent, text: rest, number: line.number }];
+      let j = i + 1;
+      while (j < lines.length && lines[j].indent >= itemIndent && !lines[j].text.startsWith("- ")) {
+        synthetic.push(lines[j]);
+        j++;
+      }
+      const [value] = parseMap(synthetic, 0, itemIndent);
+      out.push(value);
+      i = j;
+      continue;
+    }
+    out.push(parseScalar(rest, line.number));
+    i++;
+  }
+  return [out, i];
+}
+function parseMap(lines, pos, indent) {
+  const out = {};
+  let i = pos;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.indent < indent) break;
+    if (line.indent > indent) throw new YamlSubsetError("unexpected indentation", line.number);
+    const key = matchKey(line.text);
+    if (key === null) throw new YamlSubsetError(`expected "key:" mapping, got "${line.text}"`, line.number);
+    const rest = line.text.slice(key.length + 1).trim();
+    if (rest !== "") {
+      out[key] = parseScalar(rest, line.number);
+      i++;
+      continue;
+    }
+    const next = lines[i + 1];
+    if (next && next.indent > indent) {
+      const [value, consumed] = parseBlock(lines, i + 1, next.indent);
+      out[key] = value;
+      i = consumed;
+    } else if (next && next.indent === indent && (next.text.startsWith("- ") || next.text === "-")) {
+      const [value, consumed] = parseArray(lines, i + 1, indent);
+      out[key] = value;
+      i = consumed;
+    } else {
+      out[key] = null;
+      i++;
+    }
+  }
+  return [out, i];
+}
+function matchKey(text) {
+  const quoted = text.match(/^"([^"]+)"\s*:(?=\s|$)/) ?? text.match(/^'([^']+)'\s*:(?=\s|$)/);
+  if (quoted) return quoted[1];
+  const plain = text.match(/^([^:\s][^:]*?)\s*:(?=\s|$)/);
+  if (plain) return plain[1];
+  return null;
+}
+function parseScalar(text, line) {
+  const value = text.trim();
+  if (value.startsWith("'") && value.endsWith("'") && value.length >= 2) return value.slice(1, -1);
+  if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) return value.slice(1, -1);
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (value === "null" || value === "~") return null;
+  if (/^-?\d+$/.test(value)) return Number(value);
+  if (/^-?\d+\.\d+$/.test(value)) return Number(value);
+  if (value.startsWith("[") || value.startsWith("{") || value.startsWith("|") || value.startsWith(">")) {
+    throw new YamlSubsetError(`unsupported yaml syntax: "${value}" (use JSON format for flow styles)`, line);
+  }
+  return value;
+}
+
+// packages/tavern-template/src/inject.ts
+function classifyComment(comment) {
+  let m = /^\[GENERATE:BEFORE\]/.exec(comment);
+  if (m) return { kind: "generate-before" };
+  m = /^\[GENERATE:AFTER\]/.exec(comment);
+  if (m) return { kind: "generate-after" };
+  m = /^\[GENERATE:(-?\d+):(BEFORE|AFTER)\]/.exec(comment);
+  if (m) return { kind: m[2] === "BEFORE" ? "generate-idx-before" : "generate-idx-after", arg: m[1] };
+  m = /^\[GENERATE:REGEX:(.*?)\]/.exec(comment);
+  if (m && m[1] !== "") return { kind: "generate-regex", arg: m[1] };
+  m = /^\[RENDER:(BEFORE|AFTER)\]/.exec(comment);
+  if (m) return { kind: m[1] === "BEFORE" ? "render-before" : "render-after" };
+  if (/^\[InitialVariables\]/.test(comment)) return { kind: "initial" };
+  m = /^@INJECT\b(.*)$/.exec(comment);
+  if (m) return { kind: "inject", arg: m[1].trim() };
+  return null;
+}
+function classifyContent(content) {
+  const lines = content.split("\n");
+  let special = null;
+  let ifCondition;
+  let privateBlock = false;
+  let i = 0;
+  for (; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.startsWith("@@")) break;
+    if (line.startsWith("@@@")) {
+      lines.splice(i, 1, line.slice(1));
+      const result2 = { special, content: lines.join("\n"), privateBlock };
+      if (ifCondition !== void 0) result2.ifCondition = ifCondition;
+      return result2;
+    }
+    const [name2, ...rest] = line.split(/\s+/);
+    const arg = rest.join(" ");
+    switch (name2) {
+      case "@@generate_before":
+        special ??= { kind: "generate-before" };
+        break;
+      case "@@generate_after":
+        special ??= { kind: "generate-after" };
+        break;
+      case "@@render_before":
+        special ??= { kind: "render-before" };
+        break;
+      case "@@render_after":
+        special ??= { kind: "render-after" };
+        break;
+      case "@@initial_variables":
+        special ??= { kind: "initial" };
+        break;
+      case "@@private":
+        privateBlock = true;
+        break;
+      case "@@if":
+        if (arg !== "") ifCondition ??= arg;
+        break;
+      default:
+        break;
+    }
+  }
+  const body = lines.slice(i).join("\n");
+  const result = { special, content: privateBlock ? `<% { %>${body}<% } %>` : body, privateBlock };
+  if (ifCondition !== void 0) result.ifCondition = ifCondition;
+  return result;
+}
+function classifySpecialEntry(entry) {
+  const fromComment = entry.comment !== void 0 ? classifyComment(entry.comment.trim()) : null;
+  const classified = classifyContent(entry.content ?? "");
+  const kind = fromComment?.kind ?? classified.special?.kind;
+  if (kind === void 0) return null;
+  const arg = fromComment?.arg ?? classified.special?.arg;
+  const result = {
+    kind,
+    content: classified.content
+  };
+  if (arg !== void 0) result.arg = arg;
+  if (classified.ifCondition !== void 0) result.ifCondition = classified.ifCondition;
+  return result;
+}
+async function applyGenerateInjections(messages, entries, render, env, evaluateCondition, warn) {
+  const out = messages.map((m) => ({ ...m }));
+  const beforeTexts = /* @__PURE__ */ new Map();
+  const afterTexts = /* @__PURE__ */ new Map();
+  const pushText2 = (map, idx, text) => {
+    const list = map.get(idx) ?? [];
+    list.push(text);
+    map.set(idx, list);
+  };
+  const ordered = [...entries].sort((a, b) => a.order - b.order || a.uid - b.uid);
+  for (const entry of ordered) {
+    if (entry.useProbability && entry.probability !== void 0 && Math.random() * 100 >= entry.probability) continue;
+    if (entry.kind === "generate-before") {
+      const text = await renderChecked(entry, render, env, evaluateCondition, warn);
+      if (text !== null) pushText2(beforeTexts, 0, text);
+      continue;
+    }
+    if (entry.kind === "generate-after") {
+      const text = await renderChecked(entry, render, env, evaluateCondition, warn);
+      if (text !== null && out.length > 0) pushText2(afterTexts, out.length - 1, text);
+      else if (text !== null) pushText2(beforeTexts, 0, text);
+      continue;
+    }
+    if (entry.kind === "generate-idx-before" || entry.kind === "generate-idx-after") {
+      const idx = resolveIndex(Number(entry.arg ?? "0"), out.length);
+      if (idx === null) {
+        warn(`[GENERATE:${entry.arg}] index out of range (${entry.book}#${entry.uid})`);
+        continue;
+      }
+      const text = await renderChecked(entry, render, env, evaluateCondition, warn);
+      if (text === null) continue;
+      pushText2(entry.kind === "generate-idx-before" ? beforeTexts : afterTexts, idx, text);
+      continue;
+    }
+    if (entry.kind === "generate-regex") {
+      let re;
+      try {
+        re = new RegExp(entry.arg ?? "", "i");
+      } catch (err2) {
+        warn(`[GENERATE:REGEX] invalid pattern /${entry.arg}/: ${err2 instanceof Error ? err2.message : String(err2)}`);
+        continue;
+      }
+      for (let i = 0; i < out.length; i++) {
+        if (!re.test(out[i].content)) continue;
+        const text = await render(entry.content, {
+          ...env,
+          matched_message: out[i].content,
+          matched_message_index: i,
+          matched_message_role: out[i].role
+        });
+        pushText2(beforeTexts, i, text);
+      }
+    }
+  }
+  for (let i = 0; i < out.length; i++) {
+    const before = beforeTexts.get(i);
+    const after = afterTexts.get(i);
+    if (before === void 0 && after === void 0) continue;
+    const parts = [...before ?? [], out[i].content, ...after ?? []];
+    out[i] = { ...out[i], content: parts.join("\n") };
+  }
+  return out;
+}
+async function renderChecked(entry, render, env, evaluateCondition, warn) {
+  if (entry.ifCondition !== void 0 && !await evaluateCondition(entry.ifCondition)) return null;
+  if (entry.renderedContent !== void 0) return entry.renderedContent;
+  try {
+    return await render(entry.content, { ...env, world_info: { uid: entry.uid, world: entry.book, comment: entry.comment, content: entry.content } });
+  } catch (err2) {
+    warn(`template entry ${entry.book}#${entry.uid} ("${entry.comment}") render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
+    return null;
+  }
+}
+function splitParams(params) {
+  const chunks = [];
+  let buf = "";
+  let quote;
+  for (const ch of params) {
+    if (quote !== void 0) {
+      buf += ch;
+      if (ch === quote) quote = void 0;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      buf += ch;
+      continue;
+    }
+    if (ch === ",") {
+      chunks.push(buf);
+      buf = "";
+      continue;
+    }
+    buf += ch;
+  }
+  chunks.push(buf);
+  const out = [];
+  for (const chunk of chunks) {
+    const eq = chunk.indexOf("=");
+    if (eq <= 0) continue;
+    const key = chunk.slice(0, eq).trim();
+    const raw = chunk.slice(eq + 1).trim();
+    const unquoted = raw.length >= 2 && (raw.startsWith('"') && raw.endsWith('"') || raw.startsWith("'") && raw.endsWith("'")) ? raw.slice(1, -1) : raw;
+    out.push({ key, value: unquoted });
+  }
+  return out;
+}
+function parseInjectParams(params, entry) {
+  const kv = new Map(splitParams(params).map((p) => [p.key, p.value]));
+  const roleRaw = kv.get("role");
+  const role = roleRaw === "user" || roleRaw === "assistant" || roleRaw === "system" ? roleRaw : "system";
+  const base = { role, order: entry.order };
+  const pos = kv.get("pos");
+  if (pos !== void 0 && /^-?\d+$/.test(pos)) return { instruction: { ...base, type: "pos", pos: Number(pos) } };
+  const target = kv.get("target");
+  if (target !== void 0) {
+    const index = kv.get("index");
+    const at = kv.get("at");
+    return {
+      instruction: {
+        ...base,
+        type: "target",
+        target,
+        targetIndex: index !== void 0 && /^-?\d+$/.test(index) ? Number(index) : 1,
+        at: at === "after" ? "after" : "before"
+      }
+    };
+  }
+  const regex = kv.get("regex");
+  if (regex !== void 0) {
+    if (regex === "") return { instruction: { ...base, type: "regex", regex: "" }, warning: "@INJECT empty regex pattern" };
+    const at = kv.get("at");
+    return { instruction: { ...base, type: "regex", regex, at: at === "after" ? "after" : "before" } };
+  }
+  return null;
+}
+async function applyInjectEntries(messages, entries, render, env, evaluateCondition, warn) {
+  const out = messages.map((m) => ({ ...m }));
+  const instructions = [];
+  for (const entry of entries) {
+    if (entry.useProbability && entry.probability !== void 0 && Math.random() * 100 >= entry.probability) continue;
+    if (entry.arg === void 0 || entry.arg === "") {
+      warn(`@INJECT entry ${entry.book}#${entry.uid} ("${entry.comment}") has no parameters`);
+      continue;
+    }
+    const parsed = parseInjectParams(entry.arg, entry);
+    if (!parsed) {
+      warn(`@INJECT entry ${entry.book}#${entry.uid} ("${entry.comment}") has invalid parameters: "${entry.arg}"`);
+      continue;
+    }
+    if (entry.ifCondition !== void 0 && !await evaluateCondition(entry.ifCondition)) continue;
+    let content;
+    try {
+      content = await render(entry.content, { ...env, world_info: { uid: entry.uid, world: entry.book, comment: entry.comment, content: entry.content } });
+    } catch (err2) {
+      warn(`@INJECT entry ${entry.book}#${entry.uid} render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
+      continue;
+    }
+    if (content.trim() === "") continue;
+    if (parsed.warning) warn(parsed.warning);
+    instructions.push({ instruction: { ...parsed.instruction, entry }, content });
+  }
+  if (instructions.length === 0) return out;
+  const roleIndex = (role, occurrence) => {
+    const indices = out.map((m, i) => m.role === role ? i : -1).filter((i) => i >= 0);
+    const n = occurrence < 0 ? indices.length + occurrence + 1 : occurrence;
+    const idx = indices[n - 1];
+    return idx === void 0 ? null : idx;
+  };
+  const positionBased = [];
+  for (const { instruction, content } of instructions) {
+    if (instruction.type === "pos") {
+      const pos = instruction.pos ?? 1;
+      const insertAt = pos === 0 ? 0 : pos > 0 ? pos - 1 : Math.max(0, out.length + pos);
+      positionBased.push({ insertAt, order: instruction.order, typeRank: 0, content, role: instruction.role });
+    } else if (instruction.type === "target") {
+      const idx = roleIndex(instruction.target ?? "user", instruction.targetIndex ?? 1);
+      if (idx === null) {
+        warn(`@INJECT target=${instruction.target}[${instruction.targetIndex}] not found (${instruction.entry.book}#${instruction.entry.uid})`);
+        continue;
+      }
+      const insertAt = instruction.at === "after" ? idx + 1 : idx;
+      positionBased.push({ insertAt, order: instruction.order, typeRank: 1, content, role: instruction.role });
+    }
+  }
+  positionBased.sort((a, b) => b.insertAt - a.insertAt || b.order - a.order || b.typeRank - a.typeRank);
+  for (const item of positionBased) {
+    out.splice(Math.min(item.insertAt, out.length), 0, { role: item.role, content: item.content });
+  }
+  const regexBased = instructions.filter((x) => x.instruction.type === "regex").map((x) => ({ ...x, instruction: x.instruction }));
+  const regexQueue = [];
+  for (const { instruction, content } of regexBased) {
+    let re;
+    try {
+      re = new RegExp(instruction.regex, "i");
+    } catch (err2) {
+      warn(`@INJECT invalid regex /${instruction.regex}/: ${err2 instanceof Error ? err2.message : String(err2)}`);
+      continue;
+    }
+    const matchIdx = out.findIndex((m) => re.test(m.content));
+    if (matchIdx === -1) {
+      warn(`@INJECT regex /${instruction.regex}/ matched no message (${instruction.entry.book}#${instruction.entry.uid})`);
+      continue;
+    }
+    regexQueue.push({
+      insertAt: instruction.at === "after" ? matchIdx + 1 : matchIdx,
+      order: instruction.order,
+      content,
+      role: instruction.role
+    });
+  }
+  regexQueue.sort((a, b) => b.insertAt - a.insertAt || b.order - a.order);
+  for (const item of regexQueue) {
+    out.splice(Math.min(item.insertAt, out.length), 0, { role: item.role, content: item.content });
+  }
+  return out;
+}
+async function applyRenderInjections(text, entries, render, env, evaluateCondition, warn) {
+  const ordered = [...entries].sort((a, b) => a.order - b.order || a.uid - b.uid);
+  let prefix = "";
+  let suffix = "";
+  for (const entry of ordered) {
+    if (entry.useProbability && entry.probability !== void 0 && Math.random() * 100 >= entry.probability) continue;
+    if (entry.kind !== "render-before" && entry.kind !== "render-after") continue;
+    if (entry.ifCondition !== void 0 && !await evaluateCondition(entry.ifCondition)) continue;
+    try {
+      const rendered = await render(entry.content, { ...env, world_info: { uid: entry.uid, world: entry.book, comment: entry.comment, content: entry.content } });
+      if (entry.kind === "render-before") prefix += rendered;
+      else suffix += rendered;
+    } catch (err2) {
+      warn(`[RENDER] entry ${entry.book}#${entry.uid} render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
+    }
+  }
+  return `${prefix}${text}${suffix}`;
+}
+function parseInitialVariables(content, warn) {
+  let data;
+  try {
+    data = JSON.parse(content);
+  } catch {
+    try {
+      data = parseYamlSubset(content);
+    } catch {
+      warn("[InitialVariables] content is neither valid JSON nor supported YAML subset");
+      return null;
+    }
+  }
+  if (!isObjectLike(data)) {
+    warn("[InitialVariables] parsed content is not an object");
+    return null;
+  }
+  return data;
+}
+function resolveIndex(idx, length) {
+  const resolved = idx < 0 ? length + idx : idx;
+  if (resolved < 0 || resolved >= length) return null;
+  return resolved;
+}
+
+// packages/tavern-template/src/variables.ts
+var SCOPES4 = ["global", "local", "message", "cache", "initial"];
+var FLAGS = ["nx", "xx", "n", "nxs", "xxs"];
+var RESULTS = ["old", "new", "fullcache"];
+function normalizeOptions(input, base) {
+  const out = { ...base };
+  const apply2 = (key, _value) => {
+    if (SCOPES4.includes(key)) {
+      out.scope = key;
+      return true;
+    }
+    if (FLAGS.includes(key)) {
+      out.flags = key;
+      return true;
+    }
+    if (RESULTS.includes(key)) {
+      out.results = key;
+      return true;
+    }
+    return false;
+  };
+  if (typeof input === "string") {
+    if (apply2(input, true)) return out;
+    throw new TypeError(`unknown option shorthand: ${input}`);
+  }
+  if (input !== null && typeof input === "object") {
+    const obj = input;
+    for (const [key, value] of Object.entries(obj)) {
+      switch (key) {
+        case "scope":
+          out.scope = value;
+          break;
+        case "inscope":
+          out.inscope = value;
+          break;
+        case "outscope":
+          out.outscope = value;
+          break;
+        case "flags":
+          out.flags = value;
+          break;
+        case "results":
+          out.results = value;
+          break;
+        case "defaults":
+          out.defaults = value;
+          break;
+        case "min":
+          out.min = value;
+          break;
+        case "max":
+          out.max = value;
+          break;
+        case "clone":
+          out.clone = value === true;
+          break;
+        case "dryRun":
+          break;
+        // dsh-soulmojito 单遍计算，无准备期（文档化偏差）
+        case "noCache":
+          break;
+        // 我们的 cache 写穿透，无需该开关
+        case "index":
+          break;
+        // 楼层变量索引，无楼层面
+        case "withMsg":
+          break;
+        case "merge":
+          break;
+        // 深合并是本实现默认行为
+        default:
+          break;
+      }
+    }
+    return out;
+  }
+  return out;
+}
+var TemplateVariableSystem = class {
+  local;
+  global;
+  initial;
+  /** 临时视图：global→initial→local 深合并快照 + 写穿透。 */
+  cache;
+  injected = /* @__PURE__ */ new Map();
+  injectSeq = 0;
+  constructor(stores) {
+    this.local = stores.local;
+    this.global = stores.global;
+    this.initial = stores.initial ?? {};
+    this.cache = {};
+    this.rebuildView();
+  }
+  /** 从 global→initial→local 重建 cache 视图（丢弃已有写穿透叠加）。 */
+  rebuildView() {
+    for (const key of Object.keys(this.cache)) delete this.cache[key];
+    deepMerge(this.cache, this.global);
+    deepMerge(this.cache, this.initial);
+    deepMerge(this.cache, deepClone(this.local));
+  }
+  /**
+   * 重置 initial 作用域并重建视图（ST「每次加载重算覆盖」语义）。
+   * 必须先于任何模板渲染调用（重建会丢弃渲染期写穿透）。
+   */
+  setInitialVariables(data) {
+    for (const key of Object.keys(this.initial)) delete this.initial[key];
+    deepMerge(this.initial, data);
+    this.rebuildView();
+  }
+  /** `variables` 常量（模板内可变视图）。 */
+  view() {
+    return this.cache;
+  }
+  /** 最终 local 值（宿主持久化用；返回原引用）。 */
+  localStore() {
+    return this.local;
+  }
+  scopeStore(scope) {
+    switch (scope) {
+      case "global":
+        return this.global;
+      case "initial":
+        return this.initial;
+      case "local":
+      case "message":
+        return this.local;
+      case "cache":
+        return this.cache;
+    }
+  }
+  /** flags 判定：nx/xx 基于 cache 视图，nxs/xxs 基于目标 scope（对照 ST 语义）。 */
+  flagAllows(flags, key, scope) {
+    switch (flags) {
+      case "nx":
+        return getPath(this.cache, key) === void 0;
+      case "xx":
+        return getPath(this.cache, key) !== void 0;
+      case "nxs":
+        return getPath(this.scopeStore(scope), key) === void 0;
+      case "xxs":
+        return getPath(this.scopeStore(scope), key) !== void 0;
+      case "n":
+        return true;
+    }
+  }
+  writeScope(scope, key, value) {
+    if (key === "") {
+      if (scope === "global" || scope === "cache") {
+        throw new TypeError("cannot replace the entire global/cache variable tree; use local or initial scope");
+      }
+      const store5 = this.scopeStore(scope);
+      for (const k of Object.keys(store5)) delete store5[k];
+      if (isObjectLike(value)) deepMerge(store5, value);
+      return;
+    }
+    if (scope === "global") {
+      if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+        throw new TypeError(
+          `global scope only accepts string|number|boolean in dsh-soulmojito (scriptGlobals constraint); got ${typeof value}. Use local scope for object trees.`
+        );
+      }
+      this.global[key] = value;
+      return;
+    }
+    if (scope === "cache") return;
+    setPath(this.scopeStore(scope), key, deepClone(value));
+  }
+  getVar(key, options = {}) {
+    const opts = normalizeOptions(options, {
+      scope: "cache",
+      inscope: "cache",
+      outscope: "message",
+      flags: "n",
+      results: "new",
+      clone: false
+    });
+    const store5 = key === null ? this.cache : this.scopeStore(opts.scope);
+    const value = key === null ? store5 : getPath(store5, key);
+    if (value === void 0) return opts.defaults;
+    return opts.clone ? deepClone(value) : value;
+  }
+  setVar(key, value, options = {}) {
+    const opts = normalizeOptions(options, {
+      scope: "message",
+      inscope: "cache",
+      outscope: "message",
+      flags: "n",
+      results: "new",
+      clone: false
+    });
+    const path12 = key ?? "";
+    const old = getPath(this.cache, path12);
+    if (!this.flagAllows(opts.flags, path12, opts.scope)) return void 0;
+    this.writeScope(opts.scope, path12, value);
+    if (path12 === "") {
+      if (isObjectLike(value)) {
+        for (const k of Object.keys(this.cache)) delete this.cache[k];
+        deepMerge(this.cache, value);
+      }
+    } else {
+      setPath(this.cache, path12, deepClone(value));
+    }
+    switch (opts.results) {
+      case "old":
+        return old;
+      case "new":
+        return value;
+      case "fullcache":
+        return deepClone(this.cache);
+    }
+  }
+  incDecVar(key, delta, options = {}, sign) {
+    const opts = normalizeOptions(options, {
+      scope: "message",
+      inscope: "cache",
+      outscope: "message",
+      flags: "n",
+      results: "new",
+      clone: false,
+      defaults: 0
+    });
+    const current = getPath(this.scopeStore(opts.inscope), key);
+    const base = typeof current === "number" ? current : opts.defaults;
+    const start = typeof base === "number" ? base : Number(base);
+    if (!Number.isFinite(start)) throw new TypeError(`incvar/decvar target "${key}" is not numeric`);
+    let next = start + sign * delta;
+    if (typeof opts.min === "number") next = Math.max(opts.min, next);
+    if (typeof opts.max === "number") next = Math.min(opts.max, next);
+    return this.setVar(key, next, { ...optionsAsRecord(options), scope: opts.outscope, results: opts.results, defaults: void 0 });
+  }
+  delVar(key, index, options = {}) {
+    const opts = normalizeOptions(options, {
+      scope: "message",
+      inscope: "cache",
+      outscope: "message",
+      flags: "n",
+      results: "new",
+      clone: false
+    });
+    const old = getPath(this.cache, key);
+    if (!this.flagAllows(opts.flags, key, opts.scope)) return void 0;
+    unsetPath(this.scopeStore(opts.scope), key, index);
+    if (opts.scope !== "cache") unsetPath(this.cache, key, index);
+    return opts.results === "old" ? old : opts.results === "fullcache" ? deepClone(this.cache) : true;
+  }
+  insVar(key, value, index, options = {}) {
+    const opts = normalizeOptions(options, {
+      scope: "message",
+      inscope: "cache",
+      outscope: "message",
+      flags: "n",
+      results: "new",
+      clone: false
+    });
+    insertAtPath(this.scopeStore(opts.scope), key, deepClone(value), index);
+    insertAtPath(this.cache, key, deepClone(value), index);
+    return opts.results === "old" ? void 0 : opts.results === "fullcache" ? deepClone(this.cache) : value;
+  }
+  /* ------------------------- injectPrompt 注册表 ------------------------- */
+  injectPrompt(key, prompt, order = 100, _sticky = 0, uid = "") {
+    const list = this.injected.get(key) ?? [];
+    list.push({ prompt, order, uid, seq: this.injectSeq++ });
+    this.injected.set(key, list);
+  }
+  getPromptsInjected(key, postprocess = []) {
+    const list = [...this.injected.get(key) ?? []].sort((a, b) => a.order - b.order || a.seq - b.seq);
+    return list.map((item) => {
+      let text = item.prompt;
+      for (const rule of postprocess) text = text.replace(rule.search, rule.replace);
+      return text;
+    }).join("\n");
+  }
+  hasPromptsInjected(key) {
+    return this.injected.has(key);
+  }
+};
+function optionsAsRecord(input) {
+  return input !== null && typeof input === "object" ? input : {};
+}
+
+// packages/tavern-template/src/index.ts
+function createTemplateRuntime(options) {
+  const { host, stores, onWarning } = options;
+  const warn = onWarning ?? (() => {
+  });
+  const variables2 = new TemplateVariableSystem(stores);
+  const defines = {};
+  const getwiDepth = { current: 0 };
+  host.onWarning = warn;
+  const buildEnv = (extra) => {
+    const env = createTemplateEnv({ vars: variables2, host, defines, getwiDepth });
+    if (extra !== void 0) Object.assign(env, extra);
+    return env;
+  };
+  const renderText = async (text, extraEnv, where) => {
+    if (!hasTemplateTag(text)) return text;
+    return await renderSandboxed(text, buildEnv(extraEnv), { where });
+  };
+  const evaluateCondition = async (condition) => {
+    try {
+      return Boolean(await evalExpressionSandboxed(condition, buildEnv()));
+    } catch (err2) {
+      warn(`@@if condition evaluation failed ("${condition}"): ${err2 instanceof Error ? err2.message : String(err2)}`);
+      return false;
+    }
+  };
+  const evaluate = (condition) => evaluateCondition(condition);
+  const render = (text, extraEnv) => renderText(text, extraEnv);
+  return {
+    variables: variables2,
+    defines,
+    renderText,
+    evaluateCondition,
+    classify: classifySpecialEntry,
+    applyGenerateInjections: (messages, entries) => applyGenerateInjections(messages, entries, render, buildEnv(), evaluate, warn),
+    applyInjectEntries: (messages, entries) => applyInjectEntries(messages, entries, render, buildEnv(), evaluate, warn),
+    applyRenderInjections: (text, entries) => applyRenderInjections(text, entries, render, buildEnv(), evaluate, warn),
+    parseInitialVariables: (content) => parseInitialVariables(content, warn),
+    setInitialVariables: (data) => {
+      variables2.setInitialVariables(data);
+    }
+  };
+}
+
+// packages/plugin/src/agent-tavern/mvu-compat.ts
+var STATUS_PLACEHOLDER = "<StatusPlaceHolderImpl/>";
+var UPDATE_BLOCK = /<UpdateVariable(?:Variable)?\b[^>]*>([\s\S]*?)<\/UpdateVariable(?:Variable)?\s*>/i;
+var JSON_PATCH_BLOCK = /<JSONPatch\b[^>]*>([\s\S]*?)<\/JSONPatch\s*>/i;
+function plainObject(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
+function cardUsesJsrMvu(card) {
+  const helper = plainObject(card.data.extensions["tavern_helper"]);
+  const scripts = Array.isArray(helper?.["scripts"]) ? helper["scripts"] : [];
+  for (const script of scripts) {
+    const content = typeof script?.content === "string" ? String(script.content) : "";
+    if (/MagVarUpdate|registerMvuSchema|mvu_zod/i.test(content)) return true;
+  }
+  const regexScripts = card.data.extensions["regex_scripts"];
+  if (Array.isArray(regexScripts)) {
+    for (const script of regexScripts) {
+      const entry = plainObject(script);
+      const source = `${String(entry?.["findRegex"] ?? "")}
+${String(entry?.["replaceString"] ?? "")}`;
+      if (source.includes("StatusPlaceHolderImpl") || /<UpdateVariable/i.test(source)) return true;
+    }
+  }
+  const entries = card.data.characterBook?.entries ?? [];
+  return entries.some((entry) => typeof entry.content === "string" && (/<UpdateVariable/i.test(entry.content) || /getvar\(['"]stat_data['"]\)/.test(entry.content)));
+}
+function cardUsesStatusPlaceholder(card) {
+  const regexScripts = card.data.extensions["regex_scripts"];
+  if (!Array.isArray(regexScripts)) return false;
+  return regexScripts.some((script) => {
+    const entry = plainObject(script);
+    return `${String(entry?.["findRegex"] ?? "")}
+${String(entry?.["replaceString"] ?? "")}`.includes("StatusPlaceHolderImpl");
+  });
+}
+function ensureChatVariables(chat) {
+  const metadata = chat.header.chat_metadata;
+  const existing = plainObject(metadata.variables);
+  if (existing !== void 0) return existing;
+  const created = {};
+  metadata.variables = created;
+  return created;
+}
+function seedJsrMvuVariables(card, variables2) {
+  if (!cardUsesJsrMvu(card)) return false;
+  let changed = false;
+  if (!Object.prototype.hasOwnProperty.call(variables2, "initialized_lorebooks")) {
+    variables2["initialized_lorebooks"] = true;
+    changed = true;
+  }
+  const stat = plainObject(variables2["stat_data"]);
+  if (stat === void 0) {
+    variables2["stat_data"] = { \u7CFB\u7EDF\u72B6\u6001: { \u4E3B\u89D2\u521B\u5EFA\u5B8C\u6BD5: false } };
+    changed = true;
+  } else if (Object.keys(stat).length === 0) {
+    stat["\u7CFB\u7EDF\u72B6\u6001"] = { \u4E3B\u89D2\u521B\u5EFA\u5B8C\u6BD5: false };
+    variables2["stat_data"] = stat;
+    changed = true;
+  }
+  return changed;
+}
+function readStatData(chat) {
+  return plainObject(plainObject(chat.header.chat_metadata.variables)?.["stat_data"]);
+}
+function applyUpdateVariableToChat(card, chat, text) {
+  if (!cardUsesJsrMvu(card)) return { text, found: false, applied: 0, failures: [] };
+  const variables2 = ensureChatVariables(chat);
+  seedJsrMvuVariables(card, variables2);
+  const block = parseUpdateBlock(text);
+  const failures = [];
+  let applied = 0;
+  let stat = plainObject(variables2["stat_data"]) ?? {};
+  const previousStat = structuredClone(stat);
+  if (block !== void 0) {
+    variables2["previous_stat_data"] = previousStat;
+    if (block.error !== void 0) {
+      failures.push(block.error);
+    } else if (block.ops !== void 0) {
+      const result = applyLenientPatch(stat, block.ops);
+      stat = result.value;
+      applied = result.applied;
+      failures.push(...result.failures);
+    }
+  }
+  variables2["stat_data"] = stat;
+  variables2["initialized_lorebooks"] = true;
+  let nextText = text;
+  if (cardUsesStatusPlaceholder(card) && !nextText.includes(STATUS_PLACEHOLDER)) {
+    nextText = `${nextText.replace(/\s+$/, "")}
+${STATUS_PLACEHOLDER}`;
+  }
+  return {
+    text: nextText,
+    found: block !== void 0,
+    applied,
+    failures,
+    statData: stat
+  };
+}
+function messageStatVariables(chat, message) {
+  const stat = readStatData(chat);
+  if (stat === void 0) return message;
+  return {
+    ...message,
+    variables: {
+      ...plainObject(message.variables) ?? {},
+      stat_data: structuredClone(stat)
+    }
+  };
+}
+function parseUpdateBlock(text) {
+  const block = UPDATE_BLOCK.exec(text);
+  if (block === null) return void 0;
+  const patch = JSON_PATCH_BLOCK.exec(block[1] ?? "");
+  if (patch === null) return { error: "UpdateVariable block has no JSONPatch body" };
+  try {
+    const cleaned = stripJsonComments(patch[1] ?? "");
+    const parsed = parseJSON(cleaned);
+    if (!Array.isArray(parsed)) return { error: "JSONPatch body is not an array" };
+    return { ops: parsed };
+  } catch (cause) {
+    return { error: `JSONPatch parse failed: ${cause instanceof Error ? cause.message : String(cause)}` };
+  }
+}
+function stripJsonComments(source) {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const ch = source[index];
+    const next = source[index + 1];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      while (index < source.length && source[index] !== "\n") index += 1;
+      out += "\n";
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      index += 2;
+      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) index += 1;
+      index += 1;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+function decodePointer2(pointer) {
+  if (typeof pointer !== "string") return void 0;
+  if (pointer === "") return [];
+  if (!pointer.startsWith("/")) return void 0;
+  return pointer.slice(1).split("/").map((segment) => segment.replace(/~1/g, "/").replace(/~0/g, "~"));
+}
+function readPath(root, segments) {
+  let cursor = root;
+  for (const segment of segments) {
+    if (Array.isArray(cursor)) {
+      const index = Number(segment);
+      if (!Number.isInteger(index)) return void 0;
+      cursor = cursor[index];
+    } else if (cursor !== null && typeof cursor === "object") {
+      cursor = cursor[segment];
+    } else {
+      return void 0;
+    }
+  }
+  return cursor;
+}
+function coercePatchValue(next, current) {
+  if (typeof next !== "string" || next.trim() === "") return next;
+  if (typeof current !== "number") return next;
+  const numeric = Number(next);
+  return Number.isFinite(numeric) ? numeric : next;
+}
+function resolveParent(root, segments) {
+  if (segments.length === 0) return void 0;
+  let cursor = root;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    if (Array.isArray(cursor)) {
+      const arrayIndex = Number(segment);
+      if (!Number.isInteger(arrayIndex) || arrayIndex < 0) return void 0;
+      const existing = cursor[arrayIndex];
+      if (existing === null || typeof existing !== "object") return void 0;
+      cursor = existing;
+    } else {
+      const existing = cursor[segment];
+      if (existing === null || typeof existing !== "object") return void 0;
+      cursor = existing;
+    }
+  }
+  return { parent: cursor, key: segments[segments.length - 1] };
+}
+function ensureParent(root, segments) {
+  if (segments.length === 0) return void 0;
+  let cursor = root;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    const next = segments[index + 1];
+    const wantsArray = next === "-" || /^\d+$/.test(next);
+    if (Array.isArray(cursor)) {
+      const arrayIndex = Number(segment);
+      if (!Number.isInteger(arrayIndex) || arrayIndex < 0) return void 0;
+      const existing = cursor[arrayIndex];
+      if (existing === null || typeof existing !== "object") cursor[arrayIndex] = wantsArray ? [] : {};
+      cursor = cursor[arrayIndex];
+    } else {
+      const existing = cursor[segment];
+      if (existing === null || typeof existing !== "object") cursor[segment] = wantsArray ? [] : {};
+      cursor = cursor[segment];
+    }
+  }
+  return { parent: cursor, key: segments[segments.length - 1] };
+}
+function applyLenientPatch(root, ops) {
+  let value = structuredClone(root);
+  let applied = 0;
+  const failures = [];
+  for (const raw of ops) {
+    const op = plainObject(raw);
+    if (op === void 0 || typeof op.op !== "string") {
+      failures.push("patch entry is not an object with an op");
+      continue;
+    }
+    if (op.op === "test") {
+      const segments = decodePointer2(op.path);
+      if (segments === void 0) {
+        failures.push(`test: invalid path ${String(op.path)}`);
+        continue;
+      }
+      if (JSON.stringify(readPath(value, segments)) !== JSON.stringify(op.value)) {
+        failures.push(`test failed at ${String(op.path)}`);
+        continue;
+      }
+      applied += 1;
+      continue;
+    }
+    if (op.op === "remove") {
+      const segments = decodePointer2(op.path);
+      if (segments === void 0) {
+        failures.push(`remove: invalid path ${String(op.path)}`);
+        continue;
+      }
+      const target = resolveParent(value, segments);
+      if (target === void 0) {
+        applied += 1;
+        continue;
+      }
+      if (Array.isArray(target.parent)) {
+        const index = Number(target.key);
+        if (Number.isInteger(index) && index >= 0 && index < target.parent.length) target.parent.splice(index, 1);
+      } else {
+        delete target.parent[target.key];
+      }
+      applied += 1;
+      continue;
+    }
+    if (op.op === "replace" || op.op === "insert" || op.op === "add") {
+      const segments = decodePointer2(op.path);
+      if (segments === void 0) {
+        failures.push(`${op.op}: invalid path ${String(op.path)}`);
+        continue;
+      }
+      if (segments.length === 0) {
+        const replacement = plainObject(op.value);
+        if (replacement === void 0) {
+          failures.push(`${op.op}: root replacement must be an object`);
+          continue;
+        }
+        value = replacement;
+        applied += 1;
+        continue;
+      }
+      const target = ensureParent(value, segments);
+      if (target === void 0) {
+        failures.push(`${op.op}: cannot resolve parent of ${String(op.path)}`);
+        continue;
+      }
+      const currentValue = readPath(value, segments);
+      const nextValue = coercePatchValue(op.value, currentValue);
+      if (Array.isArray(target.parent)) {
+        if (target.key === "-") {
+          target.parent.push(structuredClone(nextValue));
+        } else {
+          const index = Number(target.key);
+          if (!Number.isInteger(index) || index < 0) {
+            failures.push(`${op.op}: invalid array index ${target.key}`);
+            continue;
+          }
+          if (op.op === "replace") target.parent[index] = structuredClone(nextValue);
+          else target.parent.splice(index, 0, structuredClone(nextValue));
+        }
+      } else {
+        target.parent[target.key] = structuredClone(nextValue);
+      }
+      applied += 1;
+      continue;
+    }
+    if (op.op === "delta") {
+      const segments = decodePointer2(op.path);
+      if (segments === void 0) {
+        failures.push(`delta: invalid path ${String(op.path)}`);
+        continue;
+      }
+      const deltaValue = typeof op.value === "number" ? op.value : typeof op.value === "string" && op.value.trim() !== "" && Number.isFinite(Number(op.value)) ? Number(op.value) : void 0;
+      if (deltaValue === void 0) {
+        failures.push(`delta: value at ${String(op.path)} must be a finite number`);
+        continue;
+      }
+      const current = readPath(value, segments);
+      const numericCurrent = typeof current === "number" ? current : typeof current === "string" && current.trim() !== "" && Number.isFinite(Number(current)) ? Number(current) : current;
+      if (numericCurrent !== void 0 && typeof numericCurrent !== "number") {
+        failures.push(`delta: current value at ${String(op.path)} is not a number`);
+        continue;
+      }
+      let next = (numericCurrent ?? 0) + deltaValue;
+      const parent = segments.length > 1 ? readPath(value, segments.slice(0, -1)) : void 0;
+      if (segments[segments.length - 1] === "\u5F53\u524D" && parent !== null && typeof parent === "object") {
+        const max2 = parent["\u6700\u5927"];
+        if (typeof max2 === "number" && Number.isFinite(max2)) next = Math.min(Math.max(next, 0), max2);
+      }
+      const target = ensureParent(value, segments);
+      if (target === void 0) {
+        failures.push(`delta: cannot resolve parent of ${String(op.path)}`);
+        continue;
+      }
+      if (Array.isArray(target.parent)) {
+        const index = Number(target.key);
+        if (!Number.isInteger(index) || index < 0) {
+          failures.push(`delta: invalid array index ${target.key}`);
+          continue;
+        }
+        target.parent[index] = next;
+      } else {
+        target.parent[target.key] = next;
+      }
+      applied += 1;
+      continue;
+    }
+    if (op.op === "copy" || op.op === "move") {
+      const from = decodePointer2(op.from);
+      const to = decodePointer2(op.path);
+      if (from === void 0 || to === void 0) {
+        failures.push(`${op.op}: invalid from/path`);
+        continue;
+      }
+      const sourceValue = readPath(value, from);
+      if (sourceValue === void 0) {
+        failures.push(`${op.op}: source missing ${String(op.from)}`);
+        continue;
+      }
+      if (op.op === "move") {
+        const fromTarget = resolveParent(value, from);
+        if (fromTarget !== void 0) {
+          if (Array.isArray(fromTarget.parent)) {
+            const index = Number(fromTarget.key);
+            if (Number.isInteger(index) && index >= 0 && index < fromTarget.parent.length) fromTarget.parent.splice(index, 1);
+          } else {
+            delete fromTarget.parent[fromTarget.key];
+          }
+        }
+      }
+      const target = ensureParent(value, to);
+      if (target === void 0) {
+        failures.push(`${op.op}: cannot resolve parent of ${String(op.path)}`);
+        continue;
+      }
+      if (Array.isArray(target.parent)) {
+        if (target.key === "-") target.parent.push(structuredClone(sourceValue));
+        else target.parent.splice(Number(target.key), 0, structuredClone(sourceValue));
+      } else {
+        target.parent[target.key] = structuredClone(sourceValue);
+      }
+      applied += 1;
+      continue;
+    }
+    failures.push(`unsupported op ${op.op}`);
+  }
+  return { value, applied, failures };
+}
+
 // packages/plugin/src/tavern-assets.ts
 var AGENT_TAVERN_PRELOAD_MAX_CHARS = 32e3;
 async function collectWorldInfoBooks(db, state, characterName, character) {
@@ -8888,7 +10838,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
         const character = await this.store.getCharacter(binding.character);
         const scripts = collectRegexScripts(state, character);
         const message = projectMessage(session, event, binding, scripts);
-        if (message !== void 0) await this.appendMessage(binding, session.id, event.seq, message);
+        if (message !== void 0) await this.appendMessage(binding, session.id, event.seq, message, character?.card);
       }
       await this.writeCheckpoint({
         version: 1,
@@ -8911,13 +10861,26 @@ var AgentTavernProjector = class _AgentTavernProjector {
       throw error;
     }
   }
-  async appendMessage(binding, sessionId, eventSeq, message) {
+  async appendMessage(binding, sessionId, eventSeq, message, card) {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const snapshot2 = await this.store.getChatSnapshot(binding.character, binding.chatId);
       if (!snapshot2) throw new Error("AgentTavern projection target chat not found");
       if (snapshot2.chat.messages.some((candidate) => projectionIdentity(candidate, sessionId, eventSeq))) return;
       const next = structuredClone(snapshot2.chat);
-      next.messages.push(message.is_user ? { ...message, name: next.header.user_name || "User" } : message);
+      let projected = message;
+      if (card !== void 0) {
+        seedJsrMvuVariables(card, ensureChatVariables(next));
+        if (message.is_user !== true) {
+          const applied = applyUpdateVariableToChat(card, next, message.mes);
+          projected = {
+            ...message,
+            mes: applied.text,
+            ...applied.statData !== void 0 ? { variables: { ...plainObjectRecord(message.variables) ?? {}, stat_data: applied.statData } } : {}
+          };
+        }
+        projected = messageStatVariables(next, projected);
+      }
+      next.messages.push(projected.is_user ? { ...projected, name: next.header.user_name || "User" } : projected);
       try {
         await this.store.saveChat(binding.character, binding.chatId, next, snapshot2.revision);
         return;
@@ -9131,6 +11094,10 @@ function lastImportedTurn(appends) {
   }
   return last;
 }
+function plainObjectRecord(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
 function messageText(content) {
   if (!Array.isArray(content)) return "";
   return content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("").trim();
@@ -9274,34 +11241,1651 @@ function registerAgentTavernAnchor(ctx, options = {}) {
   }, { prepend: true });
 }
 
-// packages/plugin/src/agent-tavern/prompt-capture.ts
-var agentStepCaptures = /* @__PURE__ */ new Map();
-var AGENT_STEP_CAPTURE_LIMIT = 16;
-function registerAgentTavernPromptCapture(ctx) {
-  ctx.on?.("agent/pre-step", async (payload, next) => {
-    const decision = await next();
+// packages/plugin/src/agent-tavern/card-state.ts
+import { createHash as createHash8, randomUUID as randomUUID4 } from "node:crypto";
+
+// packages/tavern-macros/src/host-registry.ts
+var HOST_MACRO_REGISTRY_KEY = "dsh-soulmojito:host-macros";
+var registrySymbol = Symbol.for(HOST_MACRO_REGISTRY_KEY);
+function store() {
+  const holder = globalThis;
+  return holder[registrySymbol] ??= { nextSequence: 1, entries: /* @__PURE__ */ new Map() };
+}
+function registerHostMacro(name2, fn, order = 100) {
+  const shared = store();
+  const sequence = shared.nextSequence++;
+  shared.entries.set(sequence, { name: name2, fn, order, sequence });
+  return () => {
+    shared.entries.delete(sequence);
+  };
+}
+function hostMacroSnapshot() {
+  return [...store().entries.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ name: name2, fn, order }) => ({ name: name2, fn, order }));
+}
+
+// packages/tavern-macros/src/random.ts
+function hash32(input) {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+var ESCAPED_COMMA = "\0";
+function splitMacroList(listString) {
+  if (listString.includes("::")) {
+    return listString.split("::");
+  }
+  return listString.replace(/\\,/g, ESCAPED_COMMA).split(",").map((item) => item.trim().replace(/\u0000/g, ","));
+}
+function parseRoll2(formula) {
+  let f = formula.trim();
+  if (/^\d+$/.test(f)) {
+    f = `1d${f}`;
+  }
+  const m = /^(\d+)d(\d+)([+-]\d+)?$/.exec(f);
+  if (m === null) return null;
+  const count = Number(m[1]);
+  const sides = Number(m[2]);
+  const modifier = m[3] === void 0 ? 0 : Number(m[3]);
+  if (!Number.isInteger(count) || count < 1 || count > 999) return null;
+  if (!Number.isInteger(sides) || sides < 2 || sides > 999) return null;
+  if (!Number.isFinite(modifier)) return null;
+  return { count, sides, modifier };
+}
+function evalRoll(spec, rng) {
+  let total = spec.modifier;
+  for (let i = 0; i < spec.count; i++) {
+    const r = rng();
+    total += Math.floor(r < 0 ? 0 : r >= 1 ? spec.sides - 1 : r * spec.sides) + 1;
+  }
+  return total;
+}
+
+// packages/tavern-macros/src/time.ts
+var MONTHS_FULL = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December"
+];
+var WEEKDAYS_FULL = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday"
+];
+function pad2(n) {
+  return n < 10 ? `0${n}` : String(n);
+}
+function formatTime12(hours24, minutes) {
+  const h12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+  return `${h12}:${pad2(minutes)} ${hours24 < 12 ? "AM" : "PM"}`;
+}
+function formatLocalTime(d) {
+  return formatTime12(d.getHours(), d.getMinutes());
+}
+function formatTimeAtUtcOffset(d, offsetHours) {
+  const shifted = new Date(d.getTime() + offsetHours * 36e5);
+  return formatTime12(shifted.getUTCHours(), shifted.getUTCMinutes());
+}
+function formatLocalDateLong(d) {
+  return `${MONTHS_FULL[d.getMonth()] ?? ""} ${d.getDate()}, ${d.getFullYear()}`;
+}
+function formatWeekday(d) {
+  return WEEKDAYS_FULL[d.getDay()] ?? "";
+}
+function formatLocalIsoTime(d) {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+function formatLocalIsoDate(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+function formatWithTokens(d, fmt) {
+  let out = "";
+  let i = 0;
+  while (i < fmt.length) {
+    const four = fmt.slice(i, i + 4);
+    if (four === "yyyy" || four === "YYYY") {
+      out += String(d.getFullYear()).padStart(4, "0");
+      i += 4;
+      continue;
+    }
+    const two = fmt.slice(i, i + 2);
+    if (two === "MM") {
+      out += pad2(d.getMonth() + 1);
+      i += 2;
+      continue;
+    }
+    if (two === "dd" || two === "DD") {
+      out += pad2(d.getDate());
+      i += 2;
+      continue;
+    }
+    if (two === "HH") {
+      out += pad2(d.getHours());
+      i += 2;
+      continue;
+    }
+    if (two === "mm") {
+      out += pad2(d.getMinutes());
+      i += 2;
+      continue;
+    }
+    if (two === "ss") {
+      out += pad2(d.getSeconds());
+      i += 2;
+      continue;
+    }
+    out += fmt.charAt(i);
+    i += 1;
+  }
+  return out;
+}
+function humanizeDuration(totalSeconds) {
+  const s = totalSeconds < 0 ? 0 : totalSeconds;
+  if (s < 45) return "a few seconds";
+  if (s < 90) return "a minute";
+  const minutes = s / 60;
+  if (minutes < 45) return `${Math.round(minutes)} minutes`;
+  if (minutes < 90) return "an hour";
+  const hours = minutes / 60;
+  if (hours < 22) return `${Math.round(hours)} hours`;
+  if (hours < 36) return "a day";
+  const days = hours / 24;
+  if (days < 26) return `${Math.round(days)} days`;
+  if (days < 45) return "a month";
+  const months = days / 30;
+  if (months < 11) return `${Math.round(months)} months`;
+  if (months < 18) return "a year";
+  return `${Math.round(months / 12)} years`;
+}
+
+// packages/tavern-macros/src/engine.ts
+var TRIM = Symbol("trim");
+var builtinMacroNameSet = /* @__PURE__ */ new Set();
+function builtinMacroNames() {
+  return new Set(builtinMacroNameSet);
+}
+function opt(v) {
+  return v ?? "";
+}
+function coerceRead(v) {
+  if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) {
+    return Number(v);
+  }
+  return v;
+}
+function createMacroEngine(init) {
+  const card = init.card ?? {};
+  const localVars = new Map(Object.entries(init.local ?? {}));
+  const globalVars = new Map(Object.entries(init.global ?? {}));
+  const now = init.now ?? (() => /* @__PURE__ */ new Date());
+  const rng = init.rng ?? Math.random;
+  const groupValue = init.group ?? init.char;
+  const registry = /* @__PURE__ */ new Map();
+  function reg(name2, handler) {
+    registry.set(name2.toLowerCase(), handler);
+  }
+  function regExact(name2, getValue) {
+    reg(name2, (ctx) => ctx.rest === "" ? getValue() : null);
+  }
+  function colonArg(ctx) {
+    return ctx.rest.startsWith("::") ? ctx.rest.slice(2) : null;
+  }
+  function laxArg(ctx) {
+    const m = /^\s?::?/.exec(ctx.rest);
+    return m === null ? null : ctx.rest.slice(m[0].length);
+  }
+  function rollArg(ctx) {
+    const m = /^(?:\s?::?|\s)/.exec(ctx.rest);
+    return m === null ? null : ctx.rest.slice(m[0].length);
+  }
+  function storeOf(scope) {
+    return scope === "local" ? localVars : globalVars;
+  }
+  function readVar(scope, name2) {
+    return coerceRead(storeOf(scope).get(name2));
+  }
+  function addToVar(scope, name2, value) {
+    const store5 = storeOf(scope);
+    const current = (coerceRead(store5.get(name2)) ?? 0) || 0;
+    if (typeof current === "string") {
+      try {
+        const parsed = JSON.parse(current);
+        if (Array.isArray(parsed)) {
+          parsed.push(value);
+          const json = JSON.stringify(parsed);
+          store5.set(name2, json);
+          return json;
+        }
+      } catch {
+      }
+    }
+    const inc = Number(value);
+    const currentNum = Number(current);
+    if (Number.isNaN(inc) || Number.isNaN(currentNum)) {
+      const concatenated = `${String(current || "")}${String(value)}`;
+      store5.set(name2, concatenated);
+      return concatenated;
+    }
+    const next = currentNum + inc;
+    if (Number.isNaN(next)) {
+      return "";
+    }
+    store5.set(name2, next);
+    return String(next);
+  }
+  regExact("char", () => init.char);
+  regExact("user", () => init.user);
+  regExact("group", () => groupValue);
+  regExact("charIfNotGroup", () => groupValue);
+  regExact("groupNotMuted", () => groupValue);
+  regExact("notChar", () => init.user);
+  regExact("persona", () => opt(init.persona));
+  regExact("description", () => opt(card.description));
+  regExact("personality", () => opt(card.personality));
+  regExact("scenario", () => opt(card.scenario));
+  regExact("mesExamples", () => opt(card.mesExample));
+  regExact("mesExamplesRaw", () => opt(card.mesExample));
+  regExact("charPrompt", () => opt(card.systemPrompt));
+  regExact("charInstruction", () => opt(card.postHistoryInstructions));
+  regExact("charJailbreak", () => opt(card.postHistoryInstructions));
+  regExact("charDepthPrompt", () => opt(card.charDepthPrompt));
+  regExact("creatorNotes", () => opt(card.creatorNotes));
+  regExact("charCreatorNotes", () => opt(card.creatorNotes));
+  regExact("systemPrompt", () => opt(init.systemPrompt));
+  regExact("original", () => opt(init.original));
+  regExact("lastMessage", () => opt(init.lastMessage));
+  regExact("lastUserMessage", () => opt(init.lastUserMessage));
+  regExact("lastCharMessage", () => opt(init.lastCharMessage));
+  regExact(
+    "lastMessageId",
+    () => init.lastMessageId === void 0 ? "" : String(init.lastMessageId)
+  );
+  regExact("model", () => opt(init.model));
+  regExact(
+    "maxContextTokens",
+    () => init.maxContextTokens === void 0 ? "" : String(init.maxContextTokens)
+  );
+  regExact("maxPrompt", () => {
+    const n = init.maxPrompt ?? init.maxContextTokens;
+    return n === void 0 ? "" : String(n);
+  });
+  regExact(
+    "maxResponseTokens",
+    () => init.maxResponseTokens === void 0 ? "" : String(init.maxResponseTokens)
+  );
+  regExact("newline", () => "\n");
+  regExact("space", () => " ");
+  regExact("noop", () => "");
+  reg("trim", (ctx) => ctx.rest === "" ? TRIM : null);
+  reg("time", (ctx) => {
+    if (ctx.rest === "") {
+      return formatLocalTime(now());
+    }
+    const arg = laxArg(ctx);
+    if (arg === null) {
+      return null;
+    }
+    const m = /^UTC([+-]\d+)$/i.exec(arg.trim());
+    if (m === null) {
+      return null;
+    }
+    return formatTimeAtUtcOffset(now(), Number(m[1]));
+  });
+  reg("time_utc", (ctx) => {
+    const m = /^([+-]\d+)$/.exec(ctx.rest);
+    if (m === null) {
+      return null;
+    }
+    return formatTimeAtUtcOffset(now(), Number(m[1]));
+  });
+  regExact("date", () => formatLocalDateLong(now()));
+  regExact("weekday", () => formatWeekday(now()));
+  regExact("isotime", () => formatLocalIsoTime(now()));
+  regExact("isodate", () => formatLocalIsoDate(now()));
+  reg("datetimeformat", (ctx) => {
+    const m = /^(?:\s+|::?)/.exec(ctx.rest);
+    if (m === null) {
+      return null;
+    }
+    return formatWithTokens(now(), ctx.rest.slice(m[0].length));
+  });
+  regExact(
+    "idle_duration",
+    () => init.idleDurationSeconds === void 0 ? "just now" : humanizeDuration(init.idleDurationSeconds)
+  );
+  regExact(
+    "idleDuration",
+    () => init.idleDurationSeconds === void 0 ? "just now" : humanizeDuration(init.idleDurationSeconds)
+  );
+  reg("random", (ctx) => {
+    const arg = laxArg(ctx);
+    if (arg === null || arg === "") {
+      return null;
+    }
+    const list = splitMacroList(arg);
+    const idx = Math.floor(rng() * list.length);
+    const safe = idx < 0 ? 0 : idx >= list.length ? list.length - 1 : idx;
+    return list[safe] ?? "";
+  });
+  reg("pick", (ctx) => {
+    const arg = laxArg(ctx);
+    if (arg === null || arg === "") {
+      return null;
+    }
+    const list = splitMacroList(arg);
+    const chatHash = hash32(init.chatId ?? "");
+    const seed = hash32(`${chatHash}|${ctx.rawHash}|${ctx.offset}`);
+    return list[seed % list.length] ?? "";
+  });
+  reg("roll", (ctx) => {
+    const arg = rollArg(ctx);
+    if (arg === null) {
+      return null;
+    }
+    const spec = parseRoll2(arg);
+    if (spec === null) {
+      return "";
+    }
+    return String(evalRoll(spec, rng));
+  });
+  function registerVarMacros(scope, infix) {
+    const store5 = storeOf(scope);
+    reg(`get${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
+      }
+      const v = coerceRead(store5.get(arg.trim()));
+      return v === void 0 ? "" : String(v);
+    });
+    reg(`set${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null) {
+        return null;
+      }
+      const m = /^([^:]+)::([\s\S]*)$/.exec(arg);
+      if (m === null || m[1] === void 0 || m[1] === "") {
+        return null;
+      }
+      store5.set(m[1].trim(), m[2] ?? "");
+      return "";
+    });
+    reg(`add${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null) {
+        return null;
+      }
+      const m = /^([^:]+)::([\s\S]+)$/.exec(arg);
+      if (m === null || m[1] === void 0 || m[1] === "") {
+        return null;
+      }
+      addToVar(scope, m[1].trim(), m[2] ?? "");
+      return "";
+    });
+    reg(`inc${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
+      }
+      const m = /^([^:]+?)(?:::([\s\S]*))?$/.exec(arg);
+      if (m === null || m[1] === void 0 || m[1] === "") {
+        return null;
+      }
+      const delta = m[2] === void 0 ? "1" : m[2];
+      return addToVar(scope, m[1].trim(), delta);
+    });
+    reg(`dec${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
+      }
+      const m = /^([^:]+?)(?:::([\s\S]*))?$/.exec(arg);
+      if (m === null || m[1] === void 0 || m[1] === "") {
+        return null;
+      }
+      const value = m[2] === void 0 ? -1 : Number.isNaN(Number(m[2])) ? `-${m[2]}` : -Number(m[2]);
+      return addToVar(scope, m[1].trim(), value);
+    });
+    reg(`has${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
+      }
+      return store5.has(arg.trim()) ? "true" : "false";
+    });
+    reg(`delete${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
+      }
+      store5.delete(arg.trim());
+      return "";
+    });
+  }
+  registerVarMacros("local", "");
+  registerVarMacros("global", "global");
+  const LEGACY_RE = /<CHARIFNOTGROUP>|<GROUP>|<CHAR>|<BOT>|<USER>|(?<!\{)\{char\}(?!\})|(?<!\{)\{user\}(?!\})/gi;
+  function applyLegacy(text) {
+    if (!text.includes("<") && !text.includes("{")) {
+      return text;
+    }
+    return text.replace(LEGACY_RE, (tag) => {
+      switch (tag.toLowerCase()) {
+        case "<bot>":
+        case "<char>":
+        case "{char}":
+          return init.char;
+        case "%USERNAME%":
+        case "{user}":
+          return init.user;
+        case "<group>":
+        case "<charifnotgroup>":
+          return groupValue;
+        default:
+          return tag;
+      }
+    });
+  }
+  function evalInside(inside, offset, rawHash) {
+    if (inside === "") {
+      return null;
+    }
+    if (inside.startsWith("//")) {
+      return "";
+    }
+    const m = /^([A-Za-z0-9_]+)/.exec(inside);
+    if (m === null) {
+      return null;
+    }
+    const macroName = m[1];
+    const rest = inside.slice(macroName.length);
+    if (rest.includes("}")) {
+      return null;
+    }
+    const handler = registry.get(macroName.toLowerCase());
+    if (handler === void 0) {
+      return null;
+    }
+    return handler({ rest, offset, rawHash });
+  }
+  function expand(rawText) {
+    if (!rawText) {
+      return "";
+    }
+    const text = applyLegacy(rawText);
+    const rawHash = hash32(rawText);
+    let out = "";
+    let pos = 0;
+    let skipNewlines = false;
+    const appendText = (chunk) => {
+      if (chunk === "") {
+        return;
+      }
+      let c = chunk;
+      if (skipNewlines) {
+        c = c.replace(/^(?:\r?\n)+/, "");
+        if (c !== "") {
+          skipNewlines = false;
+        }
+      }
+      out += c;
+    };
+    for (; ; ) {
+      const open = text.indexOf("{{", pos);
+      if (open === -1) {
+        appendText(text.slice(pos));
+        break;
+      }
+      appendText(text.slice(pos, open));
+      const close = text.indexOf("}}", open + 2);
+      if (close === -1) {
+        appendText(text.slice(open));
+        break;
+      }
+      const result = evalInside(text.slice(open + 2, close), open, rawHash);
+      if (result === null) {
+        appendText(text.slice(open, close + 2));
+      } else if (result === TRIM) {
+        out = out.replace(/(?:\r?\n)+$/, "");
+        skipNewlines = true;
+      } else {
+        skipNewlines = false;
+        out += result;
+      }
+      pos = close + 2;
+    }
+    return out;
+  }
+  function registerMacro(name2, fn) {
+    const key = name2.trim();
+    if (key === "") {
+      throw new TypeError("Macro key must not be empty or whitespace only");
+    }
+    if (key.startsWith("{{") || key.endsWith("}}")) {
+      throw new TypeError("Macro key must not include the surrounding braces");
+    }
+    reg(key, (ctx) => {
+      const stripped = ctx.rest.replace(/^(?:\s?::?|\s)/, "");
+      const args = stripped === "" ? [] : stripped.split("::");
+      try {
+        return fn(args, api);
+      } catch {
+        return null;
+      }
+    });
+  }
+  for (const key of registry.keys()) builtinMacroNameSet.add(key);
+  for (const entry of hostMacroSnapshot()) {
     try {
-      if (decision?.kind === "enter") agentViewerCaptureStep(payload, decision);
+      registerMacro(entry.name, entry.fn);
     } catch {
     }
-    return decision;
-  }, { prepend: true });
-}
-function agentViewerCaptureStep(payload, decision) {
-  const agentId = payload.agent?.session?.id;
-  if (typeof agentId !== "string" || agentId.trim() === "") return;
-  const injected = (Array.isArray(decision.messages) ? decision.messages : []).filter((message) => isHostPluginMessageSource(message?.source));
-  agentStepCaptures.delete(agentId);
-  agentStepCaptures.set(agentId, {
-    turn: typeof payload.turn === "number" ? payload.turn : void 0,
-    step: typeof payload.step === "number" ? payload.step : void 0,
-    injected
-  });
-  while (agentStepCaptures.size > AGENT_STEP_CAPTURE_LIMIT) {
-    const oldest = agentStepCaptures.keys().next().value;
-    if (oldest === void 0) break;
-    agentStepCaptures.delete(oldest);
   }
+  const api = {
+    expand,
+    getVar: (name2) => readVar("local", name2),
+    setVar: (name2, value) => {
+      localVars.set(name2, value);
+    },
+    hasVar: (name2) => localVars.has(name2),
+    deleteVar: (name2) => localVars.delete(name2),
+    getGlobalVar: (name2) => readVar("global", name2),
+    setGlobalVar: (name2, value) => {
+      globalVars.set(name2, value);
+    },
+    hasGlobalVar: (name2) => globalVars.has(name2),
+    deleteGlobalVar: (name2) => globalVars.delete(name2),
+    registerMacro,
+    snapshotVars: () => ({
+      local: Object.fromEntries(localVars),
+      global: Object.fromEntries(globalVars)
+    })
+  };
+  return api;
+}
+
+// packages/plugin/src/prompt-safety.ts
+function createHostPromptExpander(char, user, frozen) {
+  const macros = createMacroEngine({
+    char,
+    user,
+    ...frozen?.now === void 0 ? {} : { now: frozen.now },
+    ...frozen?.rng === void 0 ? {} : { rng: frozen.rng }
+  });
+  return (text) => macros.expand(text);
+}
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = state + 1831565813 >>> 0;
+    let t = state;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function hostPromptSafe(text, expand = (value) => value) {
+  return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
+}
+
+// packages/plugin/src/mvu-guard.ts
+var DIRECTIVE_KEYS = ["$range", "$step", "$enum", "$ro", "$type"];
+var TYPE_LOCKS = ["number", "string", "boolean", "object", "array"];
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseRange(raw) {
+  if (!Array.isArray(raw) || raw.length < 2) return void 0;
+  const min = raw[0];
+  const max2 = raw[1];
+  if (typeof min !== "number" || !Number.isFinite(min) || typeof max2 !== "number" || !Number.isFinite(max2)) return void 0;
+  return { min: Math.min(min, max2), max: Math.max(min, max2) };
+}
+function resolveTemplateNode(raw) {
+  if (typeof raw === "number" && Number.isFinite(raw)) return { typeLock: "number" };
+  if (typeof raw === "string") return { typeLock: "string" };
+  if (typeof raw === "boolean") return { typeLock: "boolean" };
+  if (Array.isArray(raw)) {
+    return { typeLock: "array", ...raw.length > 0 ? { item: resolveTemplateNode(raw[0]) } : {} };
+  }
+  if (!isPlainObject(raw)) return void 0;
+  const range = parseRange(raw.$range);
+  const step = typeof raw.$step === "number" && Number.isFinite(raw.$step) && raw.$step > 0 ? raw.$step : void 0;
+  const enumValues = Array.isArray(raw.$enum) && raw.$enum.length > 0 ? raw.$enum : void 0;
+  const ro = raw.$ro === true ? true : void 0;
+  const typeLockDirect = typeof raw.$type === "string" && TYPE_LOCKS.includes(raw.$type) ? raw.$type : void 0;
+  const directives = {
+    ...range !== void 0 ? { min: range.min, max: range.max } : {},
+    ...step !== void 0 ? { step } : {},
+    ...enumValues !== void 0 ? { enumValues } : {},
+    ...ro !== void 0 ? { ro } : {}
+  };
+  const childKeys = Object.keys(raw).filter((key) => !DIRECTIVE_KEYS.includes(key));
+  if (childKeys.length === 0) {
+    const typeLock = typeLockDirect ?? (range !== void 0 || step !== void 0 ? "number" : enumValues !== void 0 ? "string" : void 0);
+    if (typeLock === void 0 && Object.keys(directives).length === 0) {
+      return { typeLock: "object", objectMode: "open" };
+    }
+    if (typeLock === "object") return { typeLock, objectMode: "open", ...directives };
+    if (typeLock === "array") return { typeLock, ...directives };
+    return { ...typeLock !== void 0 ? { typeLock } : {}, ...directives };
+  }
+  const wildcardRaw = childKeys.includes("*") ? raw["*"] : void 0;
+  const namedKeys = childKeys.filter((key) => key !== "*");
+  const children = /* @__PURE__ */ new Map();
+  for (const key of namedKeys) {
+    const child = resolveTemplateNode(raw[key]);
+    if (child !== void 0) children.set(key, child);
+  }
+  const objectMode = wildcardRaw !== void 0 ? "wildcard" : "locked";
+  const wildcard = wildcardRaw !== void 0 ? resolveTemplateNode(wildcardRaw) : void 0;
+  return {
+    typeLock: "object",
+    objectMode,
+    ...children.size > 0 ? { children } : {},
+    ...wildcard !== void 0 ? { wildcard } : {},
+    ...directives
+  };
+}
+var schemaCache = /* @__PURE__ */ new WeakMap();
+function resolveMvuSchema(raw) {
+  if (!isPlainObject(raw)) return void 0;
+  const cached = schemaCache.get(raw);
+  if (cached !== void 0 || schemaCache.has(raw)) return cached;
+  const resolved = resolveTemplateNode(raw);
+  const root = resolved !== void 0 && resolved.objectMode === "locked" ? { ...resolved, objectMode: "open" } : resolved;
+  schemaCache.set(raw, root);
+  return root;
+}
+function stripMvuControl(tree) {
+  if (!("$schema" in tree || "$rules" in tree)) return tree;
+  const out = {};
+  for (const [key, value] of Object.entries(tree)) {
+    if (key === "$schema" && isPlainObject(value)) continue;
+    if (key === "$rules" && Array.isArray(value)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+var INITIAL_VARIABLES_KEY = "initial_variables";
+function cardSchema(card) {
+  const holder = card?.data?.extensions?.["agentTavern"];
+  if (!isPlainObject(holder)) return void 0;
+  const initial = holder.initialVariables;
+  return isPlainObject(initial) ? initial.$schema : void 0;
+}
+function treeSchema(tree) {
+  return isPlainObject(tree) ? tree.$schema : void 0;
+}
+function readMvuSchema(chat, card, variablesOverride) {
+  const candidates = [
+    treeSchema(variablesOverride ?? chat?.header?.chat_metadata?.variables),
+    cardSchema(card),
+    treeSchema(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY])
+  ];
+  for (const candidate of candidates) {
+    if (isPlainObject(candidate) && Object.keys(candidate).length > 0) return candidate;
+  }
+  return void 0;
+}
+function typeName(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+function mvuValuesEqual(left, right) {
+  if (left === right) return true;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((item, index) => mvuValuesEqual(item, right[index]));
+  }
+  if (isPlainObject(left) && isPlainObject(right)) {
+    const keys = /* @__PURE__ */ new Set([...Object.keys(left), ...Object.keys(right)]);
+    for (const key of keys) {
+      if (!mvuValuesEqual(left[key], right[key])) return false;
+    }
+    return true;
+  }
+  return false;
+}
+function clampNumber(value, min, max2) {
+  let out = value;
+  if (min !== void 0 && out < min) out = min;
+  if (max2 !== void 0 && out > max2) out = max2;
+  return out;
+}
+function validateValue2(node, value, current, path12, notes) {
+  if (node.ro === true && !mvuValuesEqual(value, current)) {
+    return { ok: false, kind: "readonly", reason: "read-only field" };
+  }
+  if (Array.isArray(value)) {
+    if (node.typeLock !== void 0 && node.typeLock !== "array") {
+      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got array` };
+    }
+    if (node.item === void 0) return { ok: true, value, notes };
+    const currentItems = Array.isArray(current) ? current : [];
+    const out = [];
+    for (let i = 0; i < value.length; i++) {
+      const result = validateValue2(node.item, value[i], currentItems[i], `${path12}[${i}]`, notes);
+      if (!result.ok) return result;
+      out.push(result.value);
+    }
+    return { ok: true, value: out, notes };
+  }
+  if (isPlainObject(value)) {
+    if (node.typeLock !== void 0 && node.typeLock !== "object") {
+      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got object` };
+    }
+    if (node.objectMode !== "locked" && node.objectMode !== "wildcard") return { ok: true, value, notes };
+    const currentObject = isPlainObject(current) ? current : {};
+    const next = {};
+    for (const key of Object.keys(value)) {
+      const child = node.children?.get(key) ?? node.wildcard;
+      if (child === void 0) {
+        return { ok: false, kind: "structure", reason: `key '${key}' is not in the schema template` };
+      }
+      const result = validateValue2(child, value[key], currentObject[key], path12 === "" ? key : `${path12}.${key}`, notes);
+      if (!result.ok) return result;
+      next[key] = result.value;
+    }
+    if (node.objectMode === "locked") {
+      for (const key of node.children?.keys() ?? []) {
+        if (!(key in value) && key in currentObject) {
+          return { ok: false, kind: "structure", reason: `template field '${key}' would be deleted by this write` };
+        }
+      }
+    }
+    return { ok: true, value: next, notes };
+  }
+  if (node.typeLock !== void 0 && typeName(value) !== node.typeLock) {
+    return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got ${typeName(value)}` };
+  }
+  if (node.enumValues !== void 0 && !node.enumValues.some((allowed) => mvuValuesEqual(allowed, value))) {
+    return { ok: false, kind: "enum-violation", reason: `value ${JSON.stringify(value)} is not one of [${node.enumValues.map((entry) => JSON.stringify(entry)).join(", ")}]` };
+  }
+  if (typeof value === "number" && Number.isFinite(value) && (node.min !== void 0 || node.max !== void 0 || node.step !== void 0)) {
+    let out = value;
+    if (node.step !== void 0 && typeof current === "number" && Number.isFinite(current)) {
+      const delta = out - current;
+      const capped = Math.max(-node.step, Math.min(node.step, delta));
+      if (capped !== delta) {
+        notes.push(`${path12}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
+        out = current + capped;
+      }
+    }
+    const clamped = clampNumber(out, node.min, node.max);
+    if (clamped !== out) {
+      notes.push(`${path12}: guard clamp: ${out} -> ${clamped}`);
+      out = clamped;
+    }
+    return { ok: true, value: out, notes };
+  }
+  return { ok: true, value, notes };
+}
+function guardMvuWrite(schema, path12, value, current) {
+  const segments = path12.split(".").filter((segment) => segment !== "");
+  if (segments.length === 0) return { ok: true, value };
+  if (segments[0] === "$schema") {
+    return { ok: false, kind: "readonly", reason: "the $schema subtree is the declared guard contract and cannot be settled" };
+  }
+  const root = resolveMvuSchema(schema);
+  if (root === void 0) return { ok: true, value };
+  let cursor = root;
+  let parent;
+  let roChain = root.ro === true;
+  let violation;
+  for (let i = 0; i < segments.length && cursor !== void 0; i++) {
+    const segment = segments[i];
+    if (cursor.typeLock === "array") {
+      parent = cursor;
+      if (!/^\d+$/.test(segment)) {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects an array index, not '${segment}'`;
+        cursor = void 0;
+      } else {
+        cursor = cursor.item;
+      }
+    } else if (cursor.objectMode !== void 0) {
+      parent = cursor;
+      const named = cursor.children?.get(segment);
+      if (named !== void 0) cursor = named;
+      else if (cursor.objectMode === "wildcard" && cursor.wildcard !== void 0) cursor = cursor.wildcard;
+      else if (cursor.objectMode === "locked") {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' is not in the schema template`;
+        cursor = void 0;
+      } else cursor = void 0;
+    } else {
+      if (cursor.typeLock !== void 0 && cursor.objectMode === void 0) {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects ${cursor.typeLock}, not a nested path`;
+      }
+      parent = cursor;
+      cursor = void 0;
+    }
+    if (cursor !== void 0 && cursor.ro === true) roChain = true;
+  }
+  if (violation !== void 0) return { ok: false, kind: "structure", reason: violation };
+  const lastSegment = segments[segments.length - 1];
+  if (value === void 0) {
+    if (roChain) return { ok: false, kind: "readonly", reason: "read-only field" };
+    if (parent?.objectMode === "locked" && parent.children?.has(lastSegment)) {
+      return { ok: false, kind: "structure", reason: `template field '${lastSegment}' cannot be deleted` };
+    }
+    return { ok: true, value: void 0 };
+  }
+  if (roChain && !mvuValuesEqual(value, current)) {
+    return { ok: false, kind: "readonly", reason: "read-only field" };
+  }
+  if (cursor === void 0) return { ok: true, value };
+  const result = validateValue2(cursor, value, current, segments.join("."), []);
+  if (!result.ok) return result;
+  return { ok: true, value: result.value, ...result.notes.length > 0 ? { note: result.notes.join("; ") } : {} };
+}
+function getMvuTreePath(tree, path12) {
+  let cursor = tree;
+  for (const segment of path12.split(".")) {
+    if (!isPlainObject(cursor)) return void 0;
+    cursor = cursor[segment];
+  }
+  return cursor;
+}
+
+// packages/plugin/src/mvu-rules.ts
+var MVU_RULE_ROUNDS = 3;
+var MVU_RULES_LIMIT = 32;
+var MVU_RULE_THEN_LIMIT = 16;
+function isPlainObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+var INITIAL_VARIABLES_KEY2 = "initial_variables";
+function cardRules(card) {
+  const holder = card?.data?.extensions?.["agentTavern"];
+  if (!isPlainObject2(holder)) return void 0;
+  return holder.initialVariables?.$rules;
+}
+function treeRules(tree) {
+  return isPlainObject2(tree) ? tree.$rules : void 0;
+}
+function validateMvuRules(raw) {
+  if (!Array.isArray(raw)) throw new Error("$rules must be an array of rule objects");
+  if (raw.length === 0) return [];
+  if (raw.length > MVU_RULES_LIMIT) {
+    throw new Error(`$rules declares ${raw.length} rules, over the cap of ${MVU_RULES_LIMIT}`);
+  }
+  return raw.map((entry, index) => {
+    if (!isPlainObject2(entry)) throw new Error(`rule #${index} is not an object`);
+    const { name: name2, when, then } = entry;
+    if (typeof name2 !== "string" || name2.trim() === "" || name2.length > 64) {
+      throw new Error(`rule #${index} requires a non-empty name of at most 64 characters`);
+    }
+    if (typeof when !== "string" || when.trim() === "") {
+      throw new Error(`rule '${name2}' requires a non-empty when expression`);
+    }
+    if (!isPlainObject2(then) || Object.keys(then).length === 0) {
+      throw new Error(`rule '${name2}' requires a non-empty then map`);
+    }
+    if (Object.keys(then).length > MVU_RULE_THEN_LIMIT) {
+      throw new Error(`rule '${name2}' declares ${Object.keys(then).length} then writes, over the cap of ${MVU_RULE_THEN_LIMIT}`);
+    }
+    for (const [path12, value] of Object.entries(then)) {
+      if (path12.trim() === "") throw new Error(`rule '${name2}' has an empty then path`);
+      if (typeof value === "string") {
+        if (value.trim() === "") throw new Error(`rule '${name2}' has an empty then expression for '${path12}'`);
+      } else if (value === void 0 || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
+        throw new Error(`rule '${name2}' then value for '${path12}' is not a JSON literal`);
+      }
+    }
+    return { name: name2, when, then };
+  });
+}
+function readMvuRules(chat, card, variablesOverride) {
+  const candidates = [
+    treeRules(variablesOverride ?? chat?.header?.chat_metadata?.variables),
+    cardRules(card),
+    treeRules(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY2])
+  ];
+  for (const candidate of candidates) {
+    if (candidate === void 0) continue;
+    try {
+      const rules = validateMvuRules(candidate);
+      if (rules.length === 0) continue;
+      return { rules };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { invalid: `$rules: ${message}; all card rules are disabled for this settlement` };
+    }
+  }
+  return void 0;
+}
+var SAFE_MATH_KEYS = [
+  "E",
+  "LN2",
+  "LN10",
+  "LOG2E",
+  "LOG10E",
+  "PI",
+  "SQRT1_2",
+  "SQRT2",
+  "abs",
+  "acos",
+  "acosh",
+  "asin",
+  "asinh",
+  "atan",
+  "atan2",
+  "atanh",
+  "cbrt",
+  "ceil",
+  "cos",
+  "cosh",
+  "exp",
+  "expm1",
+  "floor",
+  "fround",
+  "hypot",
+  "imul",
+  "log",
+  "log1p",
+  "log2",
+  "log10",
+  "max",
+  "min",
+  "pow",
+  "round",
+  "sign",
+  "sin",
+  "sinh",
+  "sqrt",
+  "tan",
+  "tanh",
+  "trunc"
+];
+var SAFE_MATH = Object.freeze(
+  Object.fromEntries(SAFE_MATH_KEYS.map((key) => [key, Math[key]]))
+);
+var RULE_SANDBOX_SHADES = {
+  Math: SAFE_MATH,
+  Date: void 0,
+  setTimeout: void 0,
+  setInterval: void 0,
+  setImmediate: void 0,
+  queueMicrotask: void 0
+};
+function buildRuleEnv(tree) {
+  const vars = deepClone(stripMvuControl(tree));
+  return {
+    vars,
+    getvar: (path12) => typeof path12 === "string" ? getMvuTreePath(vars, path12) : void 0,
+    ...RULE_SANDBOX_SHADES
+  };
+}
+function errorText(error) {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+function setTreePath(tree, path12, value) {
+  const segments = path12.split(".");
+  const leaf = segments.pop();
+  let cursor = tree;
+  for (const segment of segments) {
+    const next = cursor[segment];
+    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+    cursor = cursor[segment];
+  }
+  cursor[leaf] = value;
+}
+async function runMvuRules(rules, options) {
+  const failures = /* @__PURE__ */ new Set();
+  const writes = [];
+  const noteParts = /* @__PURE__ */ new Map();
+  const tree = options.tree;
+  for (let round = 1; round <= MVU_RULE_ROUNDS; round++) {
+    let progressed = false;
+    for (const rule of rules) {
+      let active = false;
+      try {
+        active = Boolean(await evalExpressionSandboxed(rule.when, buildRuleEnv(tree)));
+      } catch (error) {
+        failures.add(`rule '${rule.name}': when evaluation failed: ${errorText(error)}`);
+        continue;
+      }
+      if (!active) continue;
+      const pending = [];
+      let failed = false;
+      for (const [path12, raw] of Object.entries(rule.then)) {
+        try {
+          const value = typeof raw === "string" ? await evalExpressionSandboxed(raw, buildRuleEnv(tree)) : deepClone(raw);
+          if (value === void 0) throw new Error("the expression evaluated to undefined");
+          pending.push({ path: path12, value });
+        } catch (error) {
+          failures.add(`rule '${rule.name}': then evaluation failed for '${path12}': ${errorText(error)}`);
+          failed = true;
+          break;
+        }
+      }
+      if (failed) continue;
+      for (const { path: path12, value } of pending) {
+        const head = path12.split(".")[0];
+        if (head === "$schema" || head === "$rules") {
+          failures.add(`${path12}: rule '${rule.name}': guard readonly: the ${head} subtree is card-declared and cannot be settled`);
+          continue;
+        }
+        const current = getMvuTreePath(tree, path12);
+        const guarded = options.schema === void 0 ? void 0 : guardMvuWrite(options.schema, path12, value, current);
+        if (guarded !== void 0 && !guarded.ok) {
+          failures.add(`${path12}: rule '${rule.name}': guard ${guarded.kind}: ${guarded.reason}`);
+          continue;
+        }
+        const finalValue = guarded === void 0 ? value : guarded.value;
+        if (mvuValuesEqual(finalValue, current)) continue;
+        setTreePath(tree, path12, deepClone(finalValue));
+        progressed = true;
+        const note = ["rule:" + rule.name, guarded?.note].filter((part) => part !== void 0).join("; ");
+        const parts = noteParts.get(path12) ?? [];
+        if (!parts.includes(note)) parts.push(note);
+        noteParts.set(path12, parts);
+        writes.push({ path: path12, value: deepClone(finalValue), rule: rule.name, ...guarded?.note !== void 0 ? { guardNote: guarded.note } : {} });
+      }
+    }
+    if (!progressed) break;
+    if (round === MVU_RULE_ROUNDS) {
+      failures.add(`$rules: fixed-point iteration hit the ${MVU_RULE_ROUNDS}-round cap; rules were still producing changes in the last round (narrow the when conditions or reorder the rules)`);
+    }
+  }
+  const notes = Object.fromEntries([...noteParts].map(([path12, parts]) => [path12, parts.join("; ")]));
+  return { failures: [...failures], writes, notes };
+}
+function plainObject2(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
+async function applyMvuSettlementRules(chat, card, before) {
+  const metadata = chat.header.chat_metadata;
+  const live = plainObject2(metadata.variables);
+  const source = readMvuRules(chat, card, before);
+  if (source === void 0 && before.$rules === void 0 && live?.$rules === void 0) {
+    return { failures: [], notes: {} };
+  }
+  const variables2 = live ?? {};
+  const failures = [];
+  if (!mvuValuesEqual(variables2.$rules, before.$rules)) {
+    if (before.$rules !== void 0) variables2.$rules = deepClone(before.$rules);
+    else delete variables2.$rules;
+    failures.push("$rules: guard readonly: the rules subtree is card-declared and cannot be settled");
+  }
+  if (source === void 0) {
+    if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
+    return { failures, notes: {} };
+  }
+  if ("invalid" in source) return { failures: [...failures, source.invalid], notes: {} };
+  const schema = readMvuSchema(chat, card, before);
+  const run = await runMvuRules(source.rules, { ...schema !== void 0 ? { schema } : {}, tree: variables2 });
+  if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
+  return { failures: [...failures, ...run.failures], notes: run.notes };
+}
+function mergeMvuRuleNotes(guardNotes, ruleNotes) {
+  const merged = {};
+  for (const [path12, note] of Object.entries(guardNotes)) merged[path12] = note;
+  for (const [path12, note] of Object.entries(ruleNotes)) {
+    merged[path12] = merged[path12] !== void 0 ? `${merged[path12]}; ${note}` : note;
+  }
+  return merged;
+}
+
+// packages/plugin/src/mvu.ts
+var DEFAULT_USER = "User";
+var INITIAL_VARIABLES_KEY3 = "initial_variables";
+var MVU_RECEIPTS_LIMIT = 20;
+function plainObject3(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
+function readChatVariables(chat) {
+  return plainObject3(chat?.header?.chat_metadata?.variables) ?? {};
+}
+function snapshotChatVariables(chat) {
+  return deepClone(readChatVariables(chat));
+}
+function valuesEqual(left, right) {
+  return mvuValuesEqual(left, right);
+}
+function diffVariables(before, after) {
+  const changes = [];
+  const walk = (path12, left, right) => {
+    const leftObject = plainObject3(left);
+    const rightObject = plainObject3(right);
+    const recursible = leftObject !== void 0 && rightObject !== void 0 || left === void 0 && rightObject !== void 0 || right === void 0 && leftObject !== void 0;
+    if (recursible) {
+      const leftNext = leftObject ?? {};
+      const rightNext = rightObject ?? {};
+      for (const key of /* @__PURE__ */ new Set([...Object.keys(leftNext), ...Object.keys(rightNext)])) {
+        walk(path12 === "" ? key : `${path12}.${key}`, leftNext[key], rightNext[key]);
+      }
+      return;
+    }
+    if (!valuesEqual(left, right)) {
+      const change = { name: path12, ...left !== void 0 ? { before: left } : {} };
+      if (right !== void 0) change.after = right;
+      changes.push(change);
+    }
+  };
+  walk("", stripMvuControl(before), stripMvuControl(after));
+  return changes.sort((left, right) => left.name.localeCompare(right.name));
+}
+function overlayScopedVariables(base, entries) {
+  const tree = deepClone(base);
+  for (const entry of entries) {
+    const segments = entry.name.split(".");
+    const leaf = segments.pop();
+    let cursor = tree;
+    for (const segment of segments) {
+      const next = cursor[segment];
+      if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+      cursor = cursor[segment];
+    }
+    cursor[leaf] = entry.value;
+  }
+  return tree;
+}
+function overlayChatScopedVariables(base, entries) {
+  const authoritativeStat = plainObject3(base["stat_data"]) !== void 0;
+  const authoritativePrevious = plainObject3(base["previous_stat_data"]) !== void 0;
+  const usable = entries.filter((entry) => {
+    if (authoritativeStat && (entry.name === "stat_data" || entry.name.startsWith("stat_data."))) return false;
+    if (authoritativePrevious && (entry.name === "previous_stat_data" || entry.name.startsWith("previous_stat_data."))) return false;
+    return true;
+  });
+  return overlayScopedVariables(base, usable);
+}
+function readMvuReceipts(chat) {
+  const raw = plainObject3(chat?.header?.chat_metadata?.mvu)?.receipts;
+  if (!Array.isArray(raw)) return [];
+  const receipts = [];
+  for (const entry of raw) {
+    const record = plainObject3(entry);
+    if (record === void 0) continue;
+    const { at, turnKey, status: status2, changes, failures } = record;
+    if (typeof at !== "string" || typeof turnKey !== "string") continue;
+    if (status2 !== "updated" && status2 !== "unchanged" && status2 !== "failed") continue;
+    receipts.push({
+      at,
+      turnKey,
+      status: status2,
+      changes: Array.isArray(changes) ? changes.flatMap((item) => {
+        const change = plainObject3(item);
+        if (change === void 0 || typeof change.name !== "string") return [];
+        const out = { name: change.name };
+        if ("before" in change) out.before = change.before;
+        if ("after" in change) out.after = change.after;
+        if (typeof change.reason === "string") out.reason = change.reason;
+        return [out];
+      }) : [],
+      failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : [],
+      ...typeof record.undoneAt === "string" ? { undoneAt: record.undoneAt } : {}
+    });
+  }
+  return receipts;
+}
+function appendMvuReceipt(chat, receipt) {
+  const metadata = chat.header.chat_metadata;
+  const receipts = [...readMvuReceipts(chat), receipt].slice(-MVU_RECEIPTS_LIMIT);
+  metadata.mvu = { receipts };
+}
+function recordMvuTurnReceipt(chat, before, options) {
+  const after = readChatVariables(chat);
+  const changes = diffVariables(before, after);
+  for (const change of changes) {
+    const note = options.changeNotes?.[change.name];
+    if (note !== void 0) change.reason = note;
+  }
+  const failures = options.failures ?? [];
+  if (changes.length === 0 && failures.length === 0 && Object.keys(before).length === 0 && Object.keys(after).length === 0) {
+    return void 0;
+  }
+  const status2 = failures.length > 0 ? "failed" : changes.length > 0 ? "updated" : "unchanged";
+  const receipt = {
+    at: options.at ?? (/* @__PURE__ */ new Date()).toISOString(),
+    turnKey: options.turnKey,
+    status: status2,
+    changes,
+    failures
+  };
+  appendMvuReceipt(chat, receipt);
+  return receipt;
+}
+function setMvuTreePath(tree, path12, value) {
+  const segments = path12.split(".");
+  const leaf = segments.pop();
+  let cursor = tree;
+  for (const segment of segments) {
+    const next = cursor[segment];
+    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+    cursor = cursor[segment];
+  }
+  cursor[leaf] = value;
+}
+function revertMvuTreePath(tree, path12, before) {
+  const beforeValue = getMvuTreePath(before, path12);
+  if (beforeValue !== void 0) {
+    setMvuTreePath(tree, path12, beforeValue);
+    return;
+  }
+  const segments = path12.split(".");
+  const leaf = segments.pop();
+  const parent = getMvuTreePath(tree, segments.join("."));
+  if (parent !== null && typeof parent === "object" && !Array.isArray(parent)) {
+    delete parent[leaf];
+  }
+  while (segments.length > 0) {
+    const pathSoFar = segments.join(".");
+    const node = getMvuTreePath(tree, pathSoFar);
+    if (node === null || typeof node !== "object" || Array.isArray(node)) break;
+    if (Object.keys(node).length > 0) break;
+    if (getMvuTreePath(before, pathSoFar) !== void 0) break;
+    const popped = segments.pop();
+    const upper = segments.length > 0 ? getMvuTreePath(tree, segments.join(".")) : tree;
+    if (upper === null || typeof upper !== "object" || Array.isArray(upper)) break;
+    delete upper[popped];
+  }
+}
+function applyMvuSettlementGuard(chat, card, before) {
+  const failures = [];
+  const notes = {};
+  const metadata = chat.header.chat_metadata;
+  const variables2 = plainObject3(metadata.variables);
+  const schema = readMvuSchema(chat, card, before);
+  if (schema === void 0 || variables2 === void 0) return { failures, notes };
+  const schemaBefore = plainObject3(before.$schema);
+  const schemaLive = plainObject3(variables2.$schema);
+  if (!valuesEqual(schemaBefore, schemaLive)) {
+    if (schemaBefore !== void 0) variables2.$schema = deepClone(schemaBefore);
+    else delete variables2.$schema;
+    failures.push(`$schema: guard readonly: the schema subtree is card-declared and cannot be settled`);
+  }
+  for (const change of diffVariables(before, variables2)) {
+    const current = getMvuTreePath(before, change.name);
+    const value = "after" in change ? change.after : void 0;
+    const result = guardMvuWrite(schema, change.name, value, current);
+    if (!result.ok) {
+      revertMvuTreePath(variables2, change.name, before);
+      failures.push(`${change.name}: guard ${result.kind}: ${result.reason}`);
+      continue;
+    }
+    if (result.note !== void 0) notes[change.name] = result.note;
+    if (value !== void 0 && !valuesEqual(result.value, value)) setMvuTreePath(variables2, change.name, result.value);
+  }
+  if (Object.keys(variables2).length === 0 && Object.keys(before).length === 0) delete metadata.variables;
+  return { failures, notes };
+}
+function createMvuRuntime(input, stores) {
+  const { characterName, character, chat, books } = input;
+  const card = character.card;
+  const cardName2 = card.data.nickname || card.data.name || characterName;
+  const lastUserMessageId = (() => {
+    for (let i = chat.messages.length - 1; i >= 0; i--) if (chat.messages[i].is_user) return i;
+    return -1;
+  })();
+  const lastCharMessageId = (() => {
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      if (!chat.messages[i].is_user && !chat.messages[i].is_system) return i;
+    }
+    return -1;
+  })();
+  const host = {
+    runType: "render",
+    userName: input.state.activePersona ?? DEFAULT_USER,
+    charName: cardName2,
+    chatId: input.chatId ?? "",
+    characterId: characterName,
+    messages: chat.messages.map((message) => ({
+      name: message.name,
+      mes: message.mes,
+      is_user: message.is_user,
+      is_system: message.is_system
+    })),
+    lastUserMessageId,
+    lastCharMessageId,
+    findWorldEntries: (title, book) => {
+      const out = [];
+      for (const lorebook of books) {
+        if (book !== void 0 && lorebook.name !== book) continue;
+        for (const entry of lorebook.entries) {
+          const comment = entry.comment ?? "";
+          const matched = typeof title === "number" ? entry.uid === title : comment === title;
+          if (!matched) continue;
+          out.push({
+            uid: entry.uid,
+            book: lorebook.name ?? "",
+            comment,
+            content: entry.content ?? "",
+            ...typeof entry.order === "number" ? { order: entry.order } : {},
+            disable: entry.disable === true
+          });
+        }
+      }
+      return out;
+    },
+    getCard: (name2) => {
+      if (name2 !== void 0 && name2 !== characterName && name2 !== cardName2) return null;
+      return {
+        name: cardName2,
+        systemPrompt: card.data.systemPrompt,
+        personality: card.data.personality,
+        description: card.data.description,
+        scenario: card.data.scenario,
+        firstMes: card.data.firstMes,
+        mesExample: card.data.mesExample,
+        creatorNotes: card.data.creatorNotes,
+        depthPrompt: "",
+        data: card.data
+      };
+    },
+    findPresetPrompt: () => null,
+    renderNested: async () => ""
+  };
+  const runtime = createTemplateRuntime({ host, stores, ...input.onWarning !== void 0 ? { onWarning: input.onWarning } : {} });
+  host.renderNested = (source, extra) => runtime.renderText(source, extra);
+  return runtime;
+}
+function statusTemplateOf(card) {
+  const agentTavern = plainObject3(card?.data?.extensions?.["agentTavern"]);
+  const template = agentTavern?.statusTemplate;
+  return typeof template === "string" && template.trim() !== "" ? template : void 0;
+}
+async function renderMvuStatusTemplate(input) {
+  const chat = input.chat;
+  const books = await collectWorldInfoBooks(input.db, input.state, input.characterName, input.character);
+  const runtime = createMvuRuntime(
+    {
+      state: input.state,
+      characterName: input.characterName,
+      character: input.character,
+      chat,
+      chatId: input.chatId,
+      books
+    },
+    {
+      local: deepClone(stripMvuControl(plainObject3(input.localVariables ?? readChatVariables(chat)) ?? {})),
+      global: { ...input.state.scriptGlobals },
+      initial: deepClone(stripMvuControl(plainObject3(chat.header.chat_metadata[INITIAL_VARIABLES_KEY3]) ?? {}))
+    }
+  );
+  return await runtime.renderText(input.template, void 0, "mvu-status");
+}
+async function retryMvuSettlement(db, options) {
+  const { state, characterName, chatId, snapshot: snapshot2 } = options;
+  if (typeof options.sessionId === "string" && state.sessionBindings?.[options.sessionId]?.architecture === "agent-tavern") {
+    throw new Error("AgentTavern sessions use the DSH native AgentLoop; MVU settlement retry is unavailable.");
+  }
+  if (!options.templatesActive) {
+    throw new Error("MVU retry requires the prompt template runtime (templates are disabled)");
+  }
+  if (options.revision !== snapshot2.revision) {
+    throw new ChatRevisionConflictError(options.revision, snapshot2.revision);
+  }
+  const chat = snapshot2.chat;
+  const metadata = chat.header.chat_metadata;
+  const before = snapshotChatVariables(chat);
+  let floorIndex = -1;
+  for (let i = chat.messages.length - 1; i >= 0; i--) {
+    const message = chat.messages[i];
+    if (!message.is_user && !message.is_system) {
+      floorIndex = i;
+      break;
+    }
+  }
+  if (floorIndex === -1) throw new Error("no assistant floor to settle");
+  const floor = chat.messages[floorIndex];
+  const character = await db.getCharacter(characterName) ?? await db.getCharacter(floor.name);
+  if (!character) throw new Error(`character '${characterName}' not found`);
+  const failures = [];
+  const localVars = plainObject3(metadata.variables) ?? {};
+  metadata.variables = localVars;
+  const globalsBefore = JSON.stringify(state.scriptGlobals);
+  const books = await collectWorldInfoBooks(db, state, characterName, character);
+  const runtime = createMvuRuntime(
+    { state, characterName, character, chat, chatId, books, onWarning: (message) => {
+      failures.push(message);
+    } },
+    {
+      // initial 绑活引用（存在时）；无 initial 树时绑临时对象，initial 作用域写穿
+      // 不持久化——initial 本就由每次生成的 InitialVariables 重算，非用户状态
+      local: localVars,
+      global: state.scriptGlobals,
+      initial: plainObject3(metadata[INITIAL_VARIABLES_KEY3]) ?? {}
+    }
+  );
+  try {
+    await runtime.renderText(floor.mes, void 0, "mvu-retry");
+  } catch (err2) {
+    failures.push(`mvu retry render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
+  }
+  if (Object.keys(localVars).length === 0) delete metadata.variables;
+  if (JSON.stringify(state.scriptGlobals) !== globalsBefore) {
+    await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }));
+  }
+  const guard = applyMvuSettlementGuard(chat, character.card, before);
+  const rulesPass = await applyMvuSettlementRules(chat, character.card, before);
+  const after = readChatVariables(chat);
+  const changes = diffVariables(before, after);
+  const notes = mergeMvuRuleNotes(guard.notes, rulesPass.notes);
+  for (const change of changes) {
+    if (notes[change.name] !== void 0) change.reason = notes[change.name];
+  }
+  const allFailures = [...failures, ...guard.failures, ...rulesPass.failures];
+  const receipt = {
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    turnKey: String(floorIndex),
+    status: changes.length > 0 ? "updated" : "unchanged",
+    changes,
+    failures: allFailures
+  };
+  appendMvuReceipt(chat, receipt);
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
+  return { receipt, revision, variables: stripMvuControl(after) };
+}
+var MvuUndoRefusalError = class extends Error {
+  undoCode;
+  constructor(undoCode, message) {
+    super(message);
+    this.name = "MvuUndoRefusalError";
+    this.undoCode = undoCode;
+  }
+};
+function latestValidMvuReceipt(receipts) {
+  for (let index = receipts.length - 1; index >= 0; index--) {
+    if (receipts[index].undoneAt === void 0) return { index, receipt: receipts[index] };
+  }
+  return void 0;
+}
+function refuseUndo(target, receipts) {
+  if (target !== void 0) return target;
+  if (receipts.length > 0) {
+    throw new MvuUndoRefusalError("ALREADY_UNDONE", `all ${receipts.length} settlement receipts in this chat have been undone; nothing valid is left to undo`);
+  }
+  throw new MvuUndoRefusalError("NO_VALID_RECEIPT", "no MVU settlement receipt in this chat to undo");
+}
+function planMvuUndoRestores(receipt) {
+  if (receipt.status === "updated" && receipt.changes.length === 0) {
+    throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt ${receipt.turnKey} claims status 'updated' but records no change data; the receipt data is incomplete and cannot be undone`);
+  }
+  const restores = [];
+  for (const change of receipt.changes) {
+    if (!("before" in change) && !("after" in change)) {
+      throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt change '${change.name}' records neither a before nor an after value; the receipt data is incomplete and cannot be undone`);
+    }
+    restores.push({ path: change.name, ..."before" in change ? { value: change.before } : {} });
+  }
+  return restores;
+}
+function formatRestoreValue(value) {
+  const text = (() => {
+    try {
+      return JSON.stringify(value) ?? String(value);
+    } catch {
+      return String(value);
+    }
+  })();
+  return text.length > 80 ? `${text.slice(0, 79)}\u2026` : text;
+}
+function screenMvuUndoRestores(schema, restores, currentOf) {
+  const failures = [];
+  for (const restore of restores) {
+    if (restore.path.split(".")[0] === "$schema") {
+      failures.push(`$schema: guard readonly: the schema subtree is the declared guard contract and cannot be undone into`);
+      continue;
+    }
+    if (schema === void 0) continue;
+    const value = "value" in restore ? restore.value : void 0;
+    const result = guardMvuWrite(schema, restore.path, value, currentOf(restore.path));
+    if (!result.ok) {
+      failures.push(`${restore.path}: guard ${result.kind}: ${result.reason}`);
+      continue;
+    }
+    if (!mvuValuesEqual(result.value, value)) {
+      failures.push(`${restore.path}: guard would adjust the restored value ${formatRestoreValue(value)} to ${formatRestoreValue(result.value)} ($schema changed since the settlement); refusing to undo with anything other than the recorded before value`);
+    }
+  }
+  if (failures.length > 0) throw new MvuUndoRefusalError("UNDO_REJECTED", failures.join("; "));
+}
+function applyMvuUndoRestores(tree, restores) {
+  const before = overlayScopedVariables({}, restores.flatMap((restore) => "value" in restore ? [{ name: restore.path, value: deepClone(restore.value) }] : []));
+  for (const restore of restores) revertMvuTreePath(tree, restore.path, before);
+}
+function markMvuReceiptUndone(chat, index, at) {
+  const receipts = readMvuReceipts(chat);
+  const marked = { ...receipts[index], undoneAt: at ?? (/* @__PURE__ */ new Date()).toISOString() };
+  const next = receipts.slice();
+  next[index] = marked;
+  chat.header.chat_metadata.mvu = { receipts: next };
+  return marked;
+}
+async function undoMvuStSettlement(db, options) {
+  const { characterName, chatId, snapshot: snapshot2 } = options;
+  const chat = snapshot2.chat;
+  const receipts = readMvuReceipts(chat);
+  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
+  const restores = planMvuUndoRestores(target.receipt);
+  const metadata = chat.header.chat_metadata;
+  const variables2 = plainObject3(metadata.variables) ?? {};
+  screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables2), restores, (path12) => getMvuTreePath(variables2, path12));
+  applyMvuUndoRestores(variables2, restores);
+  if (Object.keys(variables2).length === 0) delete metadata.variables;
+  else metadata.variables = variables2;
+  const marked = markMvuReceiptUndone(chat, target.index, options.at);
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
+  return { receipt: marked, revision, restores };
+}
+async function undoMvuAgentSettlement(variables2, db, options) {
+  const { characterName, chatId, snapshot: snapshot2 } = options;
+  const chat = snapshot2.chat;
+  const receipts = readMvuReceipts(chat);
+  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
+  const restores = planMvuUndoRestores(target.receipt);
+  const seedTree = readChatVariables(chat);
+  const storeFailures = [];
+  const entries = /* @__PURE__ */ new Map();
+  for (const restore of restores) {
+    try {
+      entries.set(restore.path, await variables2.get("chat", chatId, restore.path));
+    } catch (error) {
+      storeFailures.push(`${restore.path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (storeFailures.length > 0) throw new MvuUndoRefusalError("UNDO_REJECTED", storeFailures.join("; "));
+  screenMvuUndoRestores(
+    readMvuSchema(chat, (await db.getCharacter(characterName))?.card),
+    restores,
+    (path12) => {
+      const entry = entries.get(path12);
+      return entry !== void 0 ? entry.value : getMvuTreePath(seedTree, path12);
+    }
+  );
+  for (const restore of restores) {
+    if ("value" in restore) continue;
+    const entry = entries.get(restore.path);
+    if (entry !== void 0) await variables2.delete("chat", chatId, restore.path, entry.revision);
+  }
+  const updates = [];
+  for (const restore of restores) {
+    if (!("value" in restore)) continue;
+    const entry = entries.get(restore.path);
+    const current = entry !== void 0 ? entry.value : getMvuTreePath(seedTree, restore.path);
+    if (current !== void 0 && mvuValuesEqual(current, restore.value)) continue;
+    updates.push({ name: restore.path, value: deepClone(restore.value), ...entry !== void 0 ? { expectedRevision: entry.revision } : {} });
+  }
+  if (updates.length > 0) await variables2.patch("chat", chatId, updates);
+  const marked = markMvuReceiptUndone(chat, target.index, options.at);
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
+  return { receipt: marked, revision, restores };
+}
+
+// packages/plugin/src/prompt-context.ts
+var DEFAULT_USER2 = "User";
+function tavernMacroExpand(state, characterName, character) {
+  const macros = createMacroEngine({
+    char: character?.card.data.nickname || character?.card.data.name || characterName,
+    user: state.activePersona ?? DEFAULT_USER2
+  });
+  return (text) => macros.expand(text);
+}
+async function characterLinkedWorlds(db, characterName) {
+  const found = await db.getCharacter(characterName);
+  const world = found?.card.data.extensions["world"];
+  if (typeof world !== "string" || world.trim() === "") return [];
+  const book = await db.getWorld(world.trim());
+  return book ? [book.name] : [];
+}
+function displayTextForMessage(scripts, message, depth) {
+  const displayScripts = scripts.filter((script) => script.markdownOnly && !script.disabled);
+  const text = message.mes ?? "";
+  return displayScripts.length === 0 ? text : applyRegexScripts(text, displayScripts, RegexPlacement2.AI_OUTPUT, { expand: (value) => value }, { depth });
+}
+async function displayTexts(db, state, characterName, chat) {
+  const character = await db.getCharacter(characterName);
+  const scripts = collectRegexScripts(state, character);
+  if (scripts.every((script) => !script.markdownOnly || script.disabled)) return void 0;
+  return chat.messages.map((message, index) => displayTextForMessage(scripts, message, chat.messages.length - 1 - index));
+}
+async function presetSamplerValue(db, state, key) {
+  const presetName = state.activePreset;
+  if (!presetName) return void 0;
+  const preset = await db.getPreset(presetName);
+  return preset?.[key];
+}
+function parsePresetOrThrow(data) {
+  const kind = detectPresetKind(data);
+  if (kind === "chat-completion") {
+    parsePreset(data);
+    return;
+  }
+  if (kind === "context") {
+    parseContextTemplate(data);
+    return;
+  }
+  if (kind === "instruct") {
+    parseInstructTemplate(data);
+    return;
+  }
+  if (kind === "textgen-sampler") return;
+  throw new Error("preset format not recognized (expected chat completion prompts, context, instruct, or textgen sampler)");
+}
+function compactionOverrideOf(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  const provider = typeof value.curatorProvider === "string" ? value.curatorProvider.trim() : "";
+  const model = typeof value.curatorModel === "string" ? value.curatorModel.trim() : "";
+  return provider !== "" && model !== "" ? { curatorProvider: provider, curatorModel: model } : void 0;
 }
 
 // packages/plugin/src/agent-tavern/deduce.ts
@@ -9526,6 +13110,3478 @@ async function inspectWriterSubagentCapabilities(deps = {}) {
       reason: "end-to-end delegation (research \u2192 commit \u2192 out-of-scope rejection timing) requires a real-model run; not automatable in-process (0007 \xA79 P3)"
     }
   };
+}
+
+// packages/plugin/src/build-info.ts
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { relative, resolve as resolve2 } from "node:path";
+
+// packages/plugin/src/env-compat.ts
+function envCompat(suffix) {
+  return process.env[`DSH_SOULMOJITO_${suffix}`] ?? process.env[`DSH_TAVERN_${suffix}`];
+}
+
+// packages/plugin/src/build-info.ts
+var BUILD_INFO = readBuildInfo();
+var TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit);
+function readBuildInfo() {
+  let version = "unknown";
+  let commit = "unknown";
+  const stamped = buildTimeStamp();
+  if (stamped.commit !== "") commit = stamped.commit;
+  for (const packagePath of [
+    resolve2(import.meta.dirname, "package.json"),
+    resolve2(import.meta.dirname, "..", "package.json")
+  ]) {
+    try {
+      const packageData = JSON.parse(readFileSync(packagePath, "utf8"));
+      if (typeof packageData?.version === "string" && packageData.version.trim() !== "") {
+        version = packageData.version.trim();
+        break;
+      }
+    } catch {
+    }
+  }
+  try {
+    const generated = JSON.parse(readFileSync(resolve2(import.meta.dirname, "version.json"), "utf8"));
+    if (typeof generated?.version === "string" && generated.version.trim() !== "") {
+      version = generated.version.trim();
+    }
+    const sidecarCommit = typeof generated?.commit === "string" ? normalizeCommit(generated.commit) : void 0;
+    if (sidecarCommit !== void 0) commit = sidecarCommit;
+  } catch {
+  }
+  return { version, commit };
+}
+function buildTimeStamp() {
+  const version = true ? "0.6.7".trim() : "";
+  const commit = true ? normalizeCommit("ab97feb") : void 0;
+  return { version, commit: commit ?? "" };
+}
+function resolveTavernCommit(buildFallback) {
+  const fallback = normalizeCommit(envCompat("COMMIT") ?? buildFallback) ?? "unknown";
+  const repositoryRoot = resolve2(import.meta.dirname, "..", "..");
+  const packagePath = relative(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
+  if (packagePath !== "packages/plugin") return fallback;
+  const git = (args) => execFileSync("git", args, {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 2e3,
+    windowsHide: true
+  }).trim();
+  try {
+    const gitRoot = resolve2(git(["rev-parse", "--show-toplevel"]));
+    if (relative(repositoryRoot, gitRoot) !== "") return fallback;
+    return normalizeCommit(git(["rev-parse", "--short=7", "HEAD"])) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+function normalizeCommit(value) {
+  const commit = value.trim();
+  return /^[0-9a-f]{7,40}$/i.test(commit) ? commit.slice(0, 7).toLowerCase() : void 0;
+}
+
+// packages/plugin/src/dsh-home.ts
+import { homedir as homedir2 } from "node:os";
+import { join as join11, resolve as resolve3 } from "node:path";
+function dshHomePath(...segments) {
+  const configured = process.env.DSH_HOME?.trim();
+  return join11(resolve3(configured || join11(homedir2(), ".dsh")), ...segments);
+}
+
+// packages/plugin/src/mods/host.ts
+import { promises as fs14 } from "node:fs";
+import { mkdir as mkdir3 } from "node:fs/promises";
+import { isAbsolute, join as join13, relative as relative2, resolve as resolve4 } from "node:path";
+import { pathToFileURL as pathToFileURL2 } from "node:url";
+
+// packages/plugin/src/guides.ts
+var GUIDES_MAX_COUNT = 8;
+var GUIDE_MAX_TEXT_LENGTH = 500;
+var GUIDES_BLOCK_HEADER = "Conversation guides (persistent user directives; apply to every reply):";
+function normalizeGuides(value) {
+  if (!Array.isArray(value)) return [];
+  const guides = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const { id, text, createdAt } = entry;
+    if (typeof id !== "string" || id === "") continue;
+    if (typeof text !== "string" || text.trim() === "") continue;
+    if (typeof createdAt !== "string" || createdAt === "") continue;
+    guides.push({ id, text: text.trim(), createdAt });
+  }
+  return guides;
+}
+function addGuide(guides, text) {
+  if (typeof text !== "string" || text.trim() === "") {
+    return { ok: false, error: "guide text is required and must be a non-empty string" };
+  }
+  const trimmed = text.trim();
+  if (trimmed.length > GUIDE_MAX_TEXT_LENGTH) {
+    return { ok: false, error: `guide text must be at most ${GUIDE_MAX_TEXT_LENGTH} characters (got ${trimmed.length})` };
+  }
+  if (guides.length >= GUIDES_MAX_COUNT) {
+    return { ok: false, error: `guide limit reached: at most ${GUIDES_MAX_COUNT} guides per chat` };
+  }
+  const guide = { id: crypto.randomUUID(), text: trimmed, createdAt: (/* @__PURE__ */ new Date()).toISOString() };
+  return { ok: true, guide, guides: [...guides, guide] };
+}
+function removeGuide(guides, id) {
+  const next = guides.filter((guide) => guide.id !== id);
+  return { removed: next.length !== guides.length, guides: next };
+}
+function formatGuidesBlock(guides) {
+  const normalized = normalizeGuides(guides);
+  if (normalized.length === 0) return void 0;
+  return [
+    GUIDES_BLOCK_HEADER,
+    ...[...normalized].sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((guide) => `- ${guide.text}`)
+  ].join("\n");
+}
+var guidesChanged = createGlobalListenerRegistry("dsh-soulmojito:guides-changed-listeners");
+function onGuidesChanged(listener) {
+  return guidesChanged.on(listener);
+}
+function emitGuidesChanged(character, chatId) {
+  return guidesChanged.emit(character, chatId);
+}
+
+// packages/plugin/src/games/handle.ts
+var GAMES_SERVICE_KEY = "dsh-soulmojito:games-service";
+var serviceSymbol = Symbol.for(GAMES_SERVICE_KEY);
+var nextToken = 1;
+function publishGamesService(service) {
+  const holder = globalThis;
+  const token = nextToken++;
+  holder[serviceSymbol] = { service, token };
+  return () => {
+    if (holder[serviceSymbol]?.token === token) delete holder[serviceSymbol];
+  };
+}
+function resolveGamesService() {
+  const holder = globalThis;
+  return holder[serviceSymbol]?.service;
+}
+var gamesChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:games-changed-listeners");
+function onGamesChanged(listener) {
+  return gamesChangedListeners.on(listener);
+}
+function emitGamesChanged() {
+  void gamesChangedListeners.emit();
+}
+var GAMES_WAITERS_KEY = "dsh-soulmojito:games-waiters";
+function waiterRegistry() {
+  const holder = globalThis;
+  const key = Symbol.for(GAMES_WAITERS_KEY);
+  let registry = holder[key];
+  if (registry === void 0) {
+    registry = /* @__PURE__ */ new Map();
+    holder[key] = registry;
+  }
+  return registry;
+}
+function gameWaiters(sessionId) {
+  return waiterRegistry().get(sessionId)?.size ?? 0;
+}
+
+// packages/plugin/src/generation-hooks.ts
+var GENERATION_HOOK_TIMEOUT_MS = 1e4;
+function withTimeout(promise, ms) {
+  return new Promise((resolve7, reject) => {
+    const timer = setTimeout(() => {
+      const timeoutError = new Error(`generation hook timed out after ${ms}ms`);
+      timeoutError.hookTimeout = true;
+      reject(timeoutError);
+    }, ms);
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve7(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+function createGenerationHookBus(options = {}) {
+  const timeoutMs = options.timeoutMs ?? GENERATION_HOOK_TIMEOUT_MS;
+  const table = /* @__PURE__ */ new Map();
+  const degradationListeners = /* @__PURE__ */ new Set();
+  let nextId = 1;
+  let degradations = 0;
+  function register(phase, handler, order = 100, owner) {
+    const id = nextId++;
+    const list = table.get(phase) ?? [];
+    list.push({ id, order, handler, ...owner !== void 0 ? { owner } : {} });
+    list.sort((a, b) => a.order - b.order || a.id - b.id);
+    table.set(phase, list);
+    return () => {
+      const current = table.get(phase);
+      if (current === void 0) return;
+      table.set(phase, current.filter((registration) => registration.id !== id));
+    };
+  }
+  async function dispatch(phase, payload, context) {
+    const list = table.get(phase);
+    if (list === void 0 || list.length === 0) return payload;
+    const fullContext = { ...context, phase };
+    let current = payload;
+    for (const registration of [...list]) {
+      const degrade = (reason, detail) => {
+        degradations += 1;
+        const degradation = {
+          phase,
+          order: registration.order,
+          reason,
+          ...detail !== void 0 ? { detail } : {},
+          ...registration.owner !== void 0 ? { owner: registration.owner } : {}
+        };
+        options.onDegradation?.(degradation);
+        for (const listener of [...degradationListeners]) {
+          try {
+            listener(degradation);
+          } catch {
+          }
+        }
+      };
+      try {
+        const outcome = await withTimeout(
+          Promise.resolve(registration.handler(current, fullContext)),
+          timeoutMs
+        );
+        if (outcome === void 0) {
+          degrade("no-return");
+        } else {
+          current = outcome;
+        }
+      } catch (error) {
+        const timedOut = error instanceof Error && error.hookTimeout === true;
+        degrade(timedOut ? "timeout" : "error", error instanceof Error ? error.message : String(error));
+      }
+    }
+    return current;
+  }
+  return {
+    register,
+    dispatch,
+    degradationCount: () => degradations,
+    onDegradation(listener) {
+      degradationListeners.add(listener);
+      return () => {
+        degradationListeners.delete(listener);
+      };
+    }
+  };
+}
+var generationHooks = createGenerationHookBus();
+
+// packages/plugin/src/mods/audit.ts
+import { appendFile, mkdir } from "node:fs/promises";
+import { dirname as dirname6 } from "node:path";
+var ModAuditLog = class {
+  constructor(file) {
+    this.file = file;
+  }
+  counts = /* @__PURE__ */ new Map();
+  warn;
+  tail = Promise.resolve();
+  /** 宿主 logger 可选注入；没有 logger 时审计写入失败完全静默。 */
+  setLogger(warn) {
+    this.warn = warn;
+  }
+  /** 追加一条审计记录（best-effort）；无论落盘与否都推进内存计数。 */
+  record(mod, event, detail = "") {
+    this.counts.set(mod, (this.counts.get(mod) ?? 0) + 1);
+    const line = `${JSON.stringify({ ts: (/* @__PURE__ */ new Date()).toISOString(), mod, event, ...detail === "" ? {} : { detail } })}
+`;
+    const written = this.tail.catch(() => {
+    }).then(async () => {
+      try {
+        await mkdir(dirname6(this.file), { recursive: true });
+        await appendFile(this.file, line, "utf8");
+      } catch (cause) {
+        this.warn?.(`dsh-soulmojito: mod audit append failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+    });
+    this.tail = written;
+    return written;
+  }
+  /** 本进程内某 Mod 的审计事件计数（面板「审计计数」数据源）。 */
+  count(mod) {
+    return this.counts.get(mod) ?? 0;
+  }
+};
+
+// packages/plugin/src/mods/events.ts
+var MOD_EVENT_KINDS = /* @__PURE__ */ new Set(["chat-saved", "assets-saved", "guides-changed", "stream-delta"]);
+var ModEventBus = class {
+  listeners = /* @__PURE__ */ new Map();
+  isKind(value) {
+    return typeof value === "string" && MOD_EVENT_KINDS.has(value);
+  }
+  hasListeners(kind) {
+    const set = this.listeners.get(kind);
+    return set !== void 0 && set.size > 0;
+  }
+  on(kind, handler) {
+    const set = this.listeners.get(kind) ?? /* @__PURE__ */ new Set();
+    set.add(handler);
+    this.listeners.set(kind, set);
+    return () => {
+      set.delete(handler);
+    };
+  }
+  async emit(kind, payload) {
+    const set = this.listeners.get(kind);
+    if (set === void 0 || set.size === 0) return;
+    for (const handler of [...set]) {
+      try {
+        await handler(payload);
+      } catch {
+      }
+    }
+  }
+};
+var modEvents = new ModEventBus();
+function emitChatSaved(character, chatId, revision, floorCount) {
+  return modEvents.emit("chat-saved", { character, chatId, revision, floorCount });
+}
+function emitAssetsSaved(kind, name2) {
+  return modEvents.emit("assets-saved", { kind, name: name2 });
+}
+var streamEpoch = 0;
+var dispatchEpoch = streamEpoch;
+function currentStreamEpoch() {
+  return dispatchEpoch;
+}
+function beginStreamEpoch() {
+  streamEpoch += 1;
+}
+var streamDeltaTail = Promise.resolve();
+function emitStreamDelta(payload) {
+  if (!modEvents.hasListeners("stream-delta")) return;
+  const epoch = streamEpoch;
+  streamDeltaTail = streamDeltaTail.then(async () => {
+    dispatchEpoch = epoch;
+    try {
+      await modEvents.emit("stream-delta", payload);
+    } finally {
+      dispatchEpoch = streamEpoch;
+    }
+  }).catch(() => {
+  });
+}
+
+// packages/plugin/src/mods/cross-bundle.ts
+var MOD_SECTION_ORDER_MIN = -50;
+var MOD_SECTION_ORDER_MAX = 0;
+function clampModSectionOrder(order) {
+  const value = typeof order === "number" && Number.isFinite(order) ? order : MOD_SECTION_ORDER_MIN;
+  return Math.max(MOD_SECTION_ORDER_MIN, Math.min(MOD_SECTION_ORDER_MAX, value));
+}
+var MOD_TOOL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
+  // agent-tavern（agent.ts createTools，25：18 原有 + 游戏桥七件，提案 0018 §4.2；
+  // game_wait 为 2026-10-14 修订新增，game_history 为同日增量修订新增，
+  // game_wait_full 为 2026-10-16 带棋盘视图的等待变体新增）
+  "tavern_character_get",
+  "tavern_lore_search",
+  "tavern_scene_get",
+  "tavern_history_search",
+  "memory_search",
+  "memory_read",
+  "memory_write",
+  "memory_update",
+  "memory_forget",
+  "variable_get",
+  "variable_set",
+  "variable_patch",
+  "variable_delete",
+  "variable_list",
+  "tavern_script_read",
+  "tavern_script_advance",
+  "tavern_deduce",
+  "tavern_variable_settle",
+  "game_list",
+  "game_start",
+  "game_state",
+  "game_history",
+  "game_move",
+  "game_wait",
+  "game_wait_full",
+  // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
+  "novel_status_read",
+  "novel_requirements_read",
+  "novel_outline_read",
+  "novel_outline_create",
+  "novel_outline_revise",
+  "novel_requirement_block",
+  "novel_facts_read",
+  "novel_lore_search",
+  "novel_character_read",
+  "novel_body_read",
+  "novel_body_search",
+  "novel_body_commit",
+  "novel_chapter_complete",
+  "novel_unit_claim",
+  "novel_unit_release",
+  "novel_unit_supersede",
+  "novel_writer_draft",
+  "novel_writer_delegate",
+  "novel_finish",
+  // card-workbench（card-workbench/tools-*.ts，22）
+  "card_get",
+  "card_put",
+  "card_create",
+  "card_delete",
+  "card_original_get",
+  "card_restore_original",
+  "card_plan_propose",
+  "card_apply_mvu",
+  "chat_log_read",
+  "world_get",
+  "world_put",
+  "world_create",
+  "world_delete",
+  "world_copy",
+  "world_rename",
+  "world_bind",
+  "world_list",
+  "world_plan_propose",
+  "preset_get",
+  "preset_put",
+  "material_list",
+  "material_read"
+]);
+var MOD_REGISTRY_KEY = "dsh-soulmojito:mod-registry";
+var registrySymbol2 = Symbol.for(MOD_REGISTRY_KEY);
+function store2() {
+  const holder = globalThis;
+  return holder[registrySymbol2] ??= {
+    tools: /* @__PURE__ */ new Map(),
+    sections: /* @__PURE__ */ new Map(),
+    builtinNames: new Set(BUILTIN_TOOL_NAMES_SEED),
+    nextSequence: 1
+  };
+}
+var modsChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:mods-changed-listeners");
+function notifyChanged() {
+  void modsChangedListeners.emit();
+}
+function toolKey(modId, name2) {
+  return `${modId}\0${name2}`;
+}
+function registerModTool(modId, definition, order) {
+  const shared = store2();
+  const sequence = shared.nextSequence++;
+  const key = toolKey(modId, definition.name);
+  shared.tools.set(key, { modId, order, sequence, definition });
+  notifyChanged();
+  return () => {
+    if (shared.tools.get(key)?.sequence === sequence) shared.tools.delete(key);
+    notifyChanged();
+  };
+}
+function registerModSection(modId, definition, order) {
+  const shared = store2();
+  const sequence = shared.nextSequence++;
+  const key = `${modId}\0${definition.name}`;
+  shared.sections.set(key, { modId, order, sequence, definition });
+  notifyChanged();
+  return () => {
+    if (shared.sections.get(key)?.sequence === sequence) shared.sections.delete(key);
+    notifyChanged();
+  };
+}
+function modToolSnapshot() {
+  return [...store2().tools.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
+}
+function claimedToolNames() {
+  const names = new Set(store2().builtinNames);
+  for (const entry of store2().tools.values()) names.add(entry.definition.name);
+  return names;
+}
+
+// packages/plugin/src/mods/http.ts
+var MOD_HTTP_METHODS = /* @__PURE__ */ new Set(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]);
+var RESERVED_MOD_SUBROUTE_POST_PATHS = /* @__PURE__ */ new Set(["enable", "disable", "reload"]);
+function isReservedModSubroutePostPath(path12) {
+  return RESERVED_MOD_SUBROUTE_POST_PATHS.has(path12) || path12 === "button" || path12.startsWith("button/");
+}
+var MOD_HTML_DEFAULT_CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline'",
+  "style-src 'unsafe-inline'",
+  "img-src data: blob:",
+  "font-src data:",
+  "media-src data: blob:",
+  "connect-src 'none'",
+  "frame-src 'none'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'"
+].join("; ");
+function createModRouteTable() {
+  const entries = [];
+  return {
+    register(method, path12, handler) {
+      const normalizedMethod = String(method ?? "").toUpperCase();
+      if (!MOD_HTTP_METHODS.has(normalizedMethod)) {
+        throw new Error(`unsupported mod route method '${String(method)}'`);
+      }
+      if (!isValidModHttpPath(path12)) {
+        throw new Error(`invalid mod route path '${String(path12)}'`);
+      }
+      if (normalizedMethod === "POST" && isReservedModSubroutePostPath(path12)) {
+        throw new Error(`mod route POST ${path12} is reserved by host management routes`);
+      }
+      if (typeof handler !== "function") throw new Error("mod route handler must be a function");
+      if (entries.some((entry) => entry.method === normalizedMethod && entry.path === path12)) {
+        throw new Error(`mod route ${normalizedMethod} ${path12} is already registered`);
+      }
+      entries.push({ method: normalizedMethod, path: path12, handler });
+      return () => {
+        const index = entries.findIndex((entry) => entry.method === normalizedMethod && entry.path === path12 && entry.handler === handler);
+        if (index >= 0) entries.splice(index, 1);
+      };
+    },
+    find(method, path12) {
+      const normalizedMethod = String(method ?? "").toUpperCase();
+      return entries.find((entry) => entry.method === normalizedMethod && entry.path === path12)?.handler;
+    },
+    size: () => entries.length
+  };
+}
+var SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+function isValidModHttpPath(path12) {
+  if (typeof path12 !== "string" || path12 === "") return false;
+  if (path12.length > 200) return false;
+  if (path12.includes("\\") || path12.includes("%")) return false;
+  if (path12.startsWith("/") || path12.endsWith("/")) return false;
+  const segments = path12.split("/");
+  if (segments.some((segment) => segment === "." || segment === ".." || !SEGMENT_PATTERN.test(segment))) return false;
+  return true;
+}
+function makeModReply(res) {
+  return {
+    json(body, status2 = 200) {
+      if (res.writableEnded) return;
+      res.statusCode = status2;
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      res.setHeader("cache-control", "no-store");
+      res.end(JSON.stringify(body));
+    },
+    html(document, csp) {
+      if (res.writableEnded) return;
+      res.statusCode = 200;
+      res.setHeader("content-type", "text/html; charset=utf-8");
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("x-content-type-options", "nosniff");
+      res.end(renderModHtmlDocument(String(document ?? ""), csp ?? MOD_HTML_DEFAULT_CSP));
+    }
+  };
+}
+function escapeHtmlAttribute(value) {
+  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+}
+var MOD_LOG_MESSAGE = "dsh-soulmojito:mod-log";
+var MOD_LOG_TEXT_LIMIT = 2048;
+function modConsoleReporterScript() {
+  return `(function () {
+  var token = '';
+  try { token = new URLSearchParams(location.search).get('token') || ''; } catch (_) { return; }
+  if (token === '') return;
+  var send = function (level, text) {
+    try {
+      parent.postMessage({ type: ${JSON.stringify(MOD_LOG_MESSAGE)}, token: token, level: level, text: String(text).slice(0, ${MOD_LOG_TEXT_LIMIT}) }, '*');
+    } catch (_) {}
+  };
+  var format = function (args) {
+    var parts = [];
+    for (var index = 0; index < args.length; index += 1) {
+      var value = args[index];
+      if (typeof value === 'string') parts.push(value);
+      else { try { parts.push(JSON.stringify(value)); } catch (_) { parts.push(String(value)); } }
+    }
+    return parts.join(' ');
+  };
+  ['log', 'warn', 'error'].forEach(function (level) {
+    var original = typeof console[level] === 'function' ? console[level].bind(console) : function () {};
+    console[level] = function () { original.apply(null, arguments); send(level, format(arguments)); };
+  });
+  addEventListener('error', function (event) {
+    var at = event.filename ? ' @ ' + event.filename + ':' + event.lineno : '';
+    send('error', (event.message || 'script error') + at);
+  });
+  addEventListener('unhandledrejection', function (event) {
+    send('error', 'unhandled rejection: ' + format([event.reason]));
+  });
+})();`;
+}
+var MOD_VIEWPORT_MESSAGE = "dsh-soulmojito:viewport";
+var MOD_VIEWPORT_CSS_VAR = "--dt-viewport-height";
+var VIEWPORT_UNIT_PATTERN = /(?<![-\w])100(?:d|s|l)?vh(?![\w-])/gi;
+var VIEWPORT_VAR_REFERENCE = `var(${MOD_VIEWPORT_CSS_VAR}, 100vh)`;
+function rewriteViewportUnitsInCssText(cssText) {
+  const special = /\/\*|["']/g;
+  let out = "";
+  let cursor = 0;
+  let match;
+  while ((match = special.exec(cssText)) !== null) {
+    out += cssText.slice(cursor, match.index).replace(VIEWPORT_UNIT_PATTERN, VIEWPORT_VAR_REFERENCE);
+    const end = match[0] === "/*" ? cssText.indexOf("*/", match.index + 2) : cssText.indexOf(match[0], match.index + 1);
+    cursor = end === -1 ? cssText.length : end + (match[0] === "/*" ? 2 : 1);
+    out += cssText.slice(match.index, cursor);
+    special.lastIndex = cursor;
+  }
+  return out + cssText.slice(cursor).replace(VIEWPORT_UNIT_PATTERN, VIEWPORT_VAR_REFERENCE);
+}
+function rewriteViewportUnits(document) {
+  const scripts = [];
+  const shielded = String(document || "").replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, (whole) => {
+    scripts.push(whole);
+    return `\0dt-vh-script-${scripts.length - 1}\0`;
+  });
+  const rewritten = shielded.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (_whole, open, css, close) => `${open}${rewriteViewportUnitsInCssText(css)}${close}`).replace(/(\bstyle\s*=\s*)(["'])([^"']*)\2/gi, (_whole, prefix, quote, css) => `${prefix}${quote}${rewriteViewportUnitsInCssText(css)}${quote}`);
+  return rewritten.replace(/\u0000dt-vh-script-(\d+)\u0000/g, (_whole, index) => scripts[Number(index)]);
+}
+function modViewportScript() {
+  return `(function () {
+  var root = document.documentElement;
+  var apply = function (height) {
+    if (typeof height !== 'number' || !isFinite(height) || height <= 0) return;
+    try { root.style.setProperty(${JSON.stringify(MOD_VIEWPORT_CSS_VAR)}, height + 'px'); } catch (_) {}
+  };
+  apply(window.innerHeight);
+  addEventListener('message', function (event) {
+    var data = event.data;
+    if (!data || data.type !== ${JSON.stringify(MOD_VIEWPORT_MESSAGE)}) return;
+    apply(data.height);
+  });
+})();`;
+}
+function modHeightReporterScript() {
+  return `(function () {
+  var token = '';
+  try { token = new URLSearchParams(location.search).get('token') || ''; } catch (_) { return; }
+  if (token === '') return;
+  var last = -1;
+  var queued = false;
+  var measure = function () {
+    if (queued) return;
+    queued = true;
+    var flush = function () {
+      queued = false;
+      var root = document.documentElement;
+      var body = document.body;
+      var height = Math.max(root ? root.scrollHeight : 0, body ? body.scrollHeight : 0);
+      if (height <= 0 || height === last) return;
+      last = height;
+      try {
+        parent.postMessage({ type: 'dsh-soulmojito:frontend-height', token: token, height: height }, '*');
+      } catch (_) {}
+      setTimeout(measure, 500);
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush); else setTimeout(flush, 0);
+  };
+  var wire = function () {
+    if (typeof ResizeObserver !== 'function') return;
+    var observer = new ResizeObserver(measure);
+    if (document.documentElement) observer.observe(document.documentElement);
+    if (document.body) observer.observe(document.body);
+  };
+  wire();
+  addEventListener('DOMContentLoaded', wire);
+  addEventListener('load', measure);
+  addEventListener('resize', measure);
+  setTimeout(measure, 0);
+})();`;
+}
+function renderModHtmlDocument(document, csp) {
+  const rewritten = rewriteViewportUnits(String(document ?? ""));
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${escapeHtmlAttribute(csp)}">`;
+  const scripts = `<script>${modConsoleReporterScript()}</script><script>${modViewportScript()}</script><script>${modHeightReporterScript()}</script>`;
+  const headMatch = /<head(?:\s[^>]*)?>/i.exec(rewritten);
+  if (headMatch !== null) {
+    const at = headMatch.index + headMatch[0].length;
+    return `${rewritten.slice(0, at)}${meta}${scripts}${rewritten.slice(at)}`;
+  }
+  if (/<html(?:\s[^>]*)?>/i.test(rewritten)) {
+    return rewritten.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${meta}${scripts}</head>`);
+  }
+  return `<!doctype html><html><head><meta charset="utf-8">${meta}${scripts}</head><body>${rewritten}</body></html>`;
+}
+function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
+  return new Promise((resolve7, reject) => {
+    let bytes = 0;
+    const chunks = [];
+    req.on("data", (chunk) => {
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        reject(new Error(`request exceeds ${maxBytes} bytes`));
+        req.destroy?.();
+      } else {
+        chunks.push(chunk);
+      }
+    });
+    req.on("end", () => {
+      try {
+        resolve7(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      } catch {
+        reject(new Error("invalid JSON body"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+// packages/plugin/src/mods/manifest.ts
+var MOD_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/;
+var MOD_ID_MAX_LENGTH = 100;
+var MOD_CAPABILITIES = ["llm", "network", "storage"];
+var MOD_BUTTONS_MAX_COUNT = 8;
+var MOD_BUTTON_NAME_MAX_LENGTH = 40;
+var MOD_GAMES_MAX_COUNT = 8;
+var MOD_GAME_ID_MAX_LENGTH = 80;
+function modButtonNameError(name2) {
+  if (typeof name2 !== "string") return "button names must be strings";
+  const text = name2.trim();
+  if (text === "") return "button names must be non-empty strings";
+  if (text !== name2) return "button names must not have surrounding whitespace";
+  if (text.length > MOD_BUTTON_NAME_MAX_LENGTH) {
+    return `button names must be at most ${MOD_BUTTON_NAME_MAX_LENGTH} characters`;
+  }
+  return void 0;
+}
+function checkModManifest(raw, options) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ok: false, errors: ["mod.json must be a JSON object"] };
+  }
+  const record = raw;
+  const errors = [];
+  const id = record.id;
+  if (typeof id !== "string" || id === "") errors.push("id is required");
+  else if (id.length > MOD_ID_MAX_LENGTH) errors.push(`id must be at most ${MOD_ID_MAX_LENGTH} characters`);
+  else if (!MOD_ID_PATTERN.test(id)) errors.push("id must be [a-z0-9-] labels or reverse-domain joined by '.'");
+  else if (id !== options.directory) errors.push(`id '${id}' must match the directory name '${options.directory}'`);
+  for (const field of ["name", "version", "author", "description", "main"]) {
+    const value = record[field];
+    if (typeof value !== "string" || value.trim() === "") errors.push(`${field} is required and must be a non-empty string`);
+    else if (value.length > 2e3) errors.push(`${field} must be at most 2000 characters`);
+  }
+  if (typeof record.main === "string") {
+    const mainError = checkMainPath(record.main);
+    if (mainError !== void 0) errors.push(mainError);
+  }
+  if (record.engines !== void 0) {
+    if (typeof record.engines !== "object" || record.engines === null || Array.isArray(record.engines)) {
+      errors.push("engines must be an object");
+    } else {
+      for (const key of ["dsh-soulmojito", "dsh-tavern"]) {
+        const range = record.engines[key];
+        if (range !== void 0 && (typeof range !== "string" || range.trim() === "")) {
+          errors.push(`engines['${key}'] must be a non-empty semver range string`);
+        }
+      }
+    }
+  }
+  if (record.loadingOrder !== void 0) {
+    if (typeof record.loadingOrder !== "number" || !Number.isFinite(record.loadingOrder)) {
+      errors.push("loadingOrder must be a finite number");
+    }
+  }
+  if (record.capabilities !== void 0) {
+    if (!Array.isArray(record.capabilities)) {
+      errors.push("capabilities must be an array");
+    } else {
+      const known = new Set(MOD_CAPABILITIES);
+      for (const capability of record.capabilities) {
+        if (typeof capability !== "string" || !known.has(capability)) {
+          errors.push(`capabilities entries must be one of ${MOD_CAPABILITIES.join("|")}`);
+          break;
+        }
+      }
+    }
+  }
+  if (record.panel !== void 0 && record.panel !== null) {
+    if (typeof record.panel !== "object" || Array.isArray(record.panel)) {
+      errors.push("panel must be an object");
+    } else {
+      const panel2 = record.panel;
+      if (typeof panel2.title !== "string" || panel2.title.trim() === "") {
+        errors.push("panel.title is required when panel is declared");
+      }
+      if (panel2.icon !== void 0 && (typeof panel2.icon !== "string" || panel2.icon.trim() === "")) {
+        errors.push("panel.icon must be a non-empty string");
+      }
+    }
+  }
+  if (record.surfaces !== void 0 && record.surfaces !== null) {
+    if (typeof record.surfaces !== "object" || Array.isArray(record.surfaces)) {
+      errors.push("surfaces must be an object");
+    } else {
+      const surfaces2 = record.surfaces;
+      for (const field of ["hooks", "tools", "http"]) {
+        if (surfaces2[field] === void 0) continue;
+        const value = surfaces2[field];
+        if (!Array.isArray(value) || value.length > 32 || value.some((entry) => typeof entry !== "string" || entry === "" || entry.length > 200)) {
+          errors.push(`surfaces.${field} must be an array of non-empty strings (at most 32)`);
+          break;
+        }
+      }
+    }
+  }
+  if (record.buttons !== void 0) {
+    if (!Array.isArray(record.buttons)) {
+      errors.push("buttons must be an array of button names");
+    } else {
+      if (record.buttons.length > MOD_BUTTONS_MAX_COUNT) {
+        errors.push(`buttons must declare at most ${MOD_BUTTONS_MAX_COUNT} entries`);
+      }
+      const seen = /* @__PURE__ */ new Set();
+      for (const name2 of record.buttons) {
+        const nameError = modButtonNameError(name2);
+        if (nameError !== void 0) {
+          errors.push(nameError);
+          break;
+        }
+        if (seen.has(name2)) {
+          errors.push(`button '${name2}' is declared more than once`);
+          break;
+        }
+        seen.add(name2);
+      }
+    }
+  }
+  if (record.games !== void 0) {
+    if (!Array.isArray(record.games)) {
+      errors.push("games must be an array of game ids");
+    } else {
+      if (record.games.length > MOD_GAMES_MAX_COUNT) {
+        errors.push(`games must declare at most ${MOD_GAMES_MAX_COUNT} entries`);
+      }
+      const seenGames = /* @__PURE__ */ new Set();
+      for (const gameId of record.games) {
+        if (typeof gameId !== "string" || gameId.trim() === "") {
+          errors.push("games entries must be non-empty strings");
+          break;
+        }
+        if (gameId.length > MOD_GAME_ID_MAX_LENGTH) {
+          errors.push(`game id '${gameId}' must be at most ${MOD_GAME_ID_MAX_LENGTH} characters`);
+          break;
+        }
+        if (!MOD_ID_PATTERN.test(gameId)) {
+          errors.push(`game id '${gameId}' must be [a-z0-9-] labels or reverse-domain joined by '.'`);
+          break;
+        }
+        if (seenGames.has(gameId)) {
+          errors.push(`game '${gameId}' is declared more than once`);
+          break;
+        }
+        seenGames.add(gameId);
+      }
+    }
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  const engines = record.engines;
+  const engineRange = engines?.["dsh-soulmojito"] ?? engines?.["dsh-tavern"];
+  const panel = record.panel;
+  const surfaces = record.surfaces;
+  const pickStrings = (value) => Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
+  const manifest10 = {
+    id: record.id,
+    name: record.name,
+    version: record.version,
+    author: record.author,
+    description: record.description,
+    main: record.main.trim(),
+    ...engineRange !== void 0 ? { engines: { dshSoulMojito: engineRange } } : {},
+    loadingOrder: typeof record.loadingOrder === "number" ? record.loadingOrder : 100,
+    capabilities: Array.isArray(record.capabilities) ? [...new Set(record.capabilities)] : [],
+    ...panel !== void 0 && typeof panel.title === "string" ? { panel: { title: panel.title, ...typeof panel.icon === "string" ? { icon: panel.icon } : {} } } : {},
+    surfaces: surfaces === void 0 || surfaces === null ? { hooks: [], tools: [], http: [] } : { hooks: pickStrings(surfaces.hooks), tools: pickStrings(surfaces.tools), http: pickStrings(surfaces.http) },
+    buttons: Array.isArray(record.buttons) ? [...record.buttons] : [],
+    games: Array.isArray(record.games) ? [...record.games] : []
+  };
+  return { ok: true, manifest: manifest10 };
+}
+function checkMainPath(main) {
+  const text = main.trim();
+  if (text === "") return "main is required and must be a non-empty string";
+  if (text !== main) return "main must not have surrounding whitespace";
+  if (text.includes("\\")) return "main must use / path separators and stay inside the mod directory";
+  const segments = text.split("/");
+  if (segments.some((segment) => segment === "" || segment === "." || segment === ".." || segment.startsWith("."))) {
+    return "main must be a relative path inside the mod directory (no .. or absolute paths)";
+  }
+  if (!/\.[a-z0-9]+$/i.test(text)) return "main must point at an entry file (with extension)";
+  return void 0;
+}
+function parseSemver(input) {
+  const text = input.trim();
+  if (!/^\d+(?:\.\d+)?(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?$/.test(text)) return void 0;
+  const core = text.split(/[-+]/, 1)[0] ?? "";
+  const [major = "0", minor = "0", patch = "0"] = core.split(".");
+  return { major: Number(major), minor: Number(minor), patch: Number(patch) };
+}
+function compareSemver(left, right) {
+  if (left.major !== right.major) return left.major - right.major;
+  if (left.minor !== right.minor) return left.minor - right.minor;
+  return left.patch - right.patch;
+}
+function satisfiesVersionRange(version, range) {
+  const parsedVersion = parseSemver(version);
+  if (parsedVersion === void 0) {
+    return { ok: false, reason: `host version '${version}' is not a parseable semver` };
+  }
+  const alternatives = range.split("||");
+  const invalid = [];
+  let matched = false;
+  for (const alternative of alternatives) {
+    if (alternative.trim() === "") continue;
+    const comparators = alternative.trim().split(/\s+/).filter((item) => item !== "" && item !== "*");
+    if (comparators.length === 0) {
+      matched = true;
+      continue;
+    }
+    let satisfied = true;
+    for (const comparator of comparators) {
+      const verdict = satisfiesComparator(parsedVersion, comparator);
+      if (verdict === "invalid") {
+        invalid.push(comparator);
+        satisfied = false;
+        break;
+      }
+      if (!verdict) {
+        satisfied = false;
+        break;
+      }
+    }
+    if (satisfied && invalid.length === 0) matched = true;
+  }
+  if (invalid.length > 0) {
+    return { ok: false, reason: `range '${range}' has an invalid comparator '${invalid[0]}'` };
+  }
+  return matched ? { ok: true, reason: "" } : { ok: false, reason: `requires dsh-soulmojito ${range} (host ${version})` };
+}
+function satisfiesComparator(version, comparator) {
+  const match = /^(>=|<=|>|<|=|\^|~)?\s*(.+)$/.exec(comparator);
+  if (match === null) return "invalid";
+  const operator = match[1] ?? "=";
+  const literal = match[2].trim();
+  if (literal === "*") return true;
+  const parsed = parseSemver(literal);
+  if (parsed === void 0) return "invalid";
+  const specified = countSpecifiedSegments(literal);
+  switch (operator) {
+    case "=": {
+      return compareSemver(version, parsed) === 0;
+    }
+    case ">":
+      return compareSemver(version, parsed) > 0;
+    case "<":
+      return compareSemver(version, parsed) < 0;
+    case ">=":
+      return compareSemver(version, parsed) >= 0;
+    case "<=":
+      return compareSemver(version, parsed) <= 0;
+    case "^": {
+      const upper = caretUpperBound(parsed);
+      return compareSemver(version, parsed) >= 0 && compareSemver(version, upper) < 0;
+    }
+    case "~": {
+      const upper = specified >= 2 ? { major: parsed.major, minor: parsed.minor + 1, patch: 0 } : { major: parsed.major + 1, minor: 0, patch: 0 };
+      return compareSemver(version, parsed) >= 0 && compareSemver(version, upper) < 0;
+    }
+    default:
+      return "invalid";
+  }
+}
+function caretUpperBound(parsed) {
+  if (parsed.major > 0) return { major: parsed.major + 1, minor: 0, patch: 0 };
+  if (parsed.minor > 0) return { major: 0, minor: parsed.minor + 1, patch: 0 };
+  return { major: 0, minor: 0, patch: parsed.patch + 1 };
+}
+function countSpecifiedSegments(literal) {
+  return (literal.split(/[-+]/, 1)[0] ?? "").split(".").filter((part) => part !== "").length;
+}
+
+// packages/plugin/src/mods/storage.ts
+import { promises as fs13 } from "node:fs";
+import { mkdir as mkdir2 } from "node:fs/promises";
+import { dirname as dirname7 } from "node:path";
+var MOD_STORAGE_VALUE_LIMIT = 256 * 1024;
+var MOD_STORAGE_TOTAL_LIMIT = 1024 * 1024;
+var KEY_PATTERN = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
+var fileTails = /* @__PURE__ */ new Map();
+var ModStorage = class {
+  constructor(file, options = {}) {
+    this.file = file;
+    this.options = options;
+  }
+  async get(key) {
+    validateKey(key);
+    const file = await this.readFile();
+    if (file === void 0 || !Object.prototype.hasOwnProperty.call(file.values, key)) return void 0;
+    return structuredClone(file.values[key]);
+  }
+  async set(key, value) {
+    validateKey(key);
+    const valueProblem = inspectValue(value);
+    if (valueProblem !== void 0) {
+      if (valueProblem.quota) this.options.onQuota?.(valueProblem.message);
+      throw new Error(valueProblem.message);
+    }
+    return this.mutate(async () => {
+      const file = await this.readFile() ?? { version: 1, values: {}, updatedAt: (/* @__PURE__ */ new Date(0)).toISOString() };
+      const next = {
+        version: 1,
+        values: { ...file.values, [key]: structuredClone(value) },
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      await this.writeFile(next);
+    });
+  }
+  async delete(key) {
+    validateKey(key);
+    return this.mutate(async () => {
+      const file = await this.readFile();
+      if (file === void 0 || !Object.prototype.hasOwnProperty.call(file.values, key)) return false;
+      const next = {
+        version: 1,
+        values: { ...file.values },
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      delete next.values[key];
+      await this.writeFile(next);
+      return true;
+    });
+  }
+  async readFile() {
+    let text;
+    try {
+      text = await fs13.readFile(this.file, "utf8");
+    } catch (cause) {
+      if (cause.code === "ENOENT") return void 0;
+      throw cause;
+    }
+    const parsed = JSON.parse(text);
+    if (parsed.version !== 1 || typeof parsed.values !== "object" || parsed.values === null || Array.isArray(parsed.values)) {
+      throw new Error("mod storage file is corrupt (delete data/state.json to reset)");
+    }
+    return parsed;
+  }
+  async writeFile(file) {
+    const text = `${JSON.stringify(file)}
+`;
+    const total = Buffer.byteLength(text, "utf8");
+    if (total > MOD_STORAGE_TOTAL_LIMIT) {
+      const message = "mod storage exceeds the total size limit (1MB)";
+      this.options.onQuota?.(message);
+      throw new Error(message);
+    }
+    await mkdir2(dirname7(this.file), { recursive: true });
+    await writeAtomicText(this.file, text);
+  }
+  /** 排空在飞写（宿主卸载/reload 前调用）：返回时**该文件**队列上全部写
+   * （含其他实例入队的）已落定——卸载后新实例装载与外部 teardown 都安全。 */
+  flush() {
+    return (fileTails.get(this.file) ?? Promise.resolve()).catch(() => {
+    });
+  }
+  mutate(operation) {
+    const tail = fileTails.get(this.file) ?? Promise.resolve();
+    const result = tail.catch(() => {
+    }).then(operation);
+    fileTails.set(this.file, result.then(() => {
+    }, () => {
+    }));
+    return result;
+  }
+};
+function validateKey(key) {
+  if (typeof key !== "string" || !KEY_PATTERN.test(key)) {
+    throw new Error(`invalid mod storage key '${String(key)}'`);
+  }
+}
+function inspectValue(value) {
+  if (value === void 0 || value === null) return void 0;
+  if (typeof value === "function" || typeof value === "symbol") {
+    return { message: "invalid mod storage value", quota: false };
+  }
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    return { message: "mod storage numbers must be finite", quota: false };
+  }
+  const text = JSON.stringify(value);
+  if (text === void 0) return { message: "invalid mod storage value", quota: false };
+  if (Buffer.byteLength(text, "utf8") > MOD_STORAGE_VALUE_LIMIT) {
+    return { message: "mod storage value exceeds the size limit (256KB)", quota: true };
+  }
+  return void 0;
+}
+
+// packages/plugin/src/mods/install.ts
+import { execFile as execFile3 } from "node:child_process";
+import { cpSync, existsSync, mkdtempSync, readFileSync as readFileSync2, rmSync } from "node:fs";
+import { join as join12 } from "node:path";
+import { tmpdir } from "node:os";
+
+// packages/plugin/src/update/sources.ts
+import { execFile as execFile2 } from "node:child_process";
+
+// packages/plugin/src/update/github.ts
+var UPDATE_REPOSITORY = "LingyeSoul/DSH-SoulMojito";
+var UPDATE_REF = "main";
+var UPDATE_PLUGIN_PATH = "/packages/plugin";
+var UNKNOWN_FIELD = "unknown";
+function isCommit(value) {
+  return typeof value === "string" && /^[0-9a-f]{7,40}$/i.test(value.trim());
+}
+function shortCommit(value) {
+  return isCommit(value) ? value.trim().slice(0, 7).toLowerCase() : UNKNOWN_FIELD;
+}
+function repositorySlug(repository) {
+  return repository.trim().replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
+}
+function commitsApiUrl(repository, ref) {
+  return `https://api.github.com/repos/${repositorySlug(repository)}/commits/${encodeURIComponent(ref)}`;
+}
+function compareApiUrl(repository, base, head) {
+  return `https://api.github.com/repos/${repositorySlug(repository)}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
+}
+function packageJsonUrl(repository, ref) {
+  return `https://raw.githubusercontent.com/${repositorySlug(repository)}/${encodeURIComponent(ref)}/packages/plugin/package.json`;
+}
+function commitsAtomUrl(repository, ref) {
+  return `https://github.com/${repositorySlug(repository)}/commits/${encodeURIComponent(ref)}.atom`;
+}
+function commitWebUrl(repository, sha) {
+  return `https://github.com/${repositorySlug(repository)}/commit/${sha}`;
+}
+function compareTavernVersions(left, right) {
+  const parsedLeft = parseVersion(left);
+  const parsedRight = parseVersion(right);
+  for (let index = 0; index < 3; index += 1) {
+    const a = parsedLeft.numbers[index] ?? 0;
+    const b = parsedRight.numbers[index] ?? 0;
+    if (a !== b) return a < b ? -1 : 1;
+  }
+  if (parsedLeft.prerelease === parsedRight.prerelease) return 0;
+  if (parsedLeft.prerelease === "") return 1;
+  if (parsedRight.prerelease === "") return -1;
+  return parsedLeft.prerelease < parsedRight.prerelease ? -1 : 1;
+}
+function parseVersion(value) {
+  const text = typeof value === "string" ? value.trim().replace(/^v/i, "") : "";
+  const [core = "", prerelease = ""] = text.split("-", 2);
+  const numbers = core.split(".").slice(0, 3).map((part) => {
+    const parsed = Number.parseInt(part, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  });
+  return { numbers, prerelease };
+}
+function pluginFilesIn(files) {
+  return files.filter((file) => {
+    const normalized = String(file).replace(/^\/+/, "");
+    return normalized === "packages/plugin" || normalized.startsWith("packages/plugin/");
+  });
+}
+function compareBuilds(input) {
+  const localCommit = isCommit(input.local.commit) ? input.local.commit.trim().toLowerCase().slice(0, 7) : UNKNOWN_FIELD;
+  const remoteCommit = isCommit(input.remote.commit) ? input.remote.commit.trim().toLowerCase() : UNKNOWN_FIELD;
+  if (localCommit !== UNKNOWN_FIELD && remoteCommit !== UNKNOWN_FIELD && remoteCommit.startsWith(localCommit)) {
+    return { status: "up-to-date", reason: `already at ${remoteCommit.slice(0, 7)}` };
+  }
+  const remoteVersionKnown = isKnownVersion(input.remote.version);
+  const localVersionKnown = isKnownVersion(input.local.version);
+  if (remoteVersionKnown && localVersionKnown) {
+    const order = compareTavernVersions(input.remote.version, input.local.version);
+    if (order > 0) return { status: "update-available", reason: `version ${input.remote.version} > ${input.local.version}` };
+    if (order < 0) return { status: "local-ahead", reason: `local version ${input.local.version} > ${input.remote.version}` };
+    const filesKnown = input.remote.filesKnown ?? input.remote.changedPluginFiles.length > 0;
+    if (filesKnown) {
+      if (pluginFilesIn(input.remote.changedPluginFiles).length > 0) {
+        return { status: "update-available", reason: `plugin files changed at ${remoteCommit.slice(0, 7)}` };
+      }
+      return { status: "up-to-date", reason: `same version ${input.local.version} and no plugin file changed` };
+    }
+    if (localCommit !== UNKNOWN_FIELD && remoteCommit !== UNKNOWN_FIELD) {
+      return {
+        status: "update-available",
+        reason: `remote commit ${remoteCommit.slice(0, 7)} differs from ${localCommit}; changed files are unavailable on this source`
+      };
+    }
+    return { status: "up-to-date", reason: `same version ${input.local.version}` };
+  }
+  if (localCommit !== UNKNOWN_FIELD && remoteCommit !== UNKNOWN_FIELD) {
+    return {
+      status: "update-available",
+      reason: `remote commit ${remoteCommit.slice(0, 7)} differs from ${localCommit} (remote version unavailable)`
+    };
+  }
+  return {
+    status: "unknown",
+    reason: remoteVersionKnown || localVersionKnown ? "the local build has no commit stamp, so only the version could be compared" : "neither the remote version nor a comparable commit could be read"
+  };
+}
+function isKnownVersion(value) {
+  return typeof value === "string" && value.trim() !== "" && value.trim().toLowerCase() !== UNKNOWN_FIELD;
+}
+function commitFromApi(value) {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value;
+  const sha = typeof record.sha === "string" ? record.sha : "";
+  if (!isCommit(sha)) return null;
+  const commit = record.commit ?? {};
+  return {
+    sha,
+    short: sha.slice(0, 7),
+    message: firstLine(commit.message),
+    date: typeof commit.author?.date === "string" ? commit.author.date : typeof commit.committer?.date === "string" ? commit.committer.date : "",
+    url: typeof record.html_url === "string" ? record.html_url : commitWebUrl(UPDATE_REPOSITORY, sha)
+  };
+}
+function parseCommitResponse(value) {
+  return commitFromApi(value);
+}
+function parseCompareResponse(value) {
+  const record = typeof value === "object" && value !== null ? value : {};
+  const filesKnown = Array.isArray(record.files);
+  const commits = Array.isArray(record.commits) ? record.commits.map(commitFromApi).filter((item) => item !== null) : [];
+  const files = filesKnown ? record.files.map((file) => typeof file?.filename === "string" ? file.filename : "").filter(Boolean) : [];
+  return { commits: commits.reverse(), files, filesKnown };
+}
+function parsePackageVersion(value) {
+  const record = typeof value === "object" && value !== null ? value : {};
+  return typeof record.version === "string" && record.version.trim() !== "" ? record.version.trim() : UNKNOWN_FIELD;
+}
+function parseAtomFeed(xml) {
+  const entries = String(xml ?? "").split(/<entry>/i).slice(1);
+  const commits = [];
+  for (const entry of entries) {
+    const sha = /<id>[^<]*?(?:commit\/|\/commit\/)([0-9a-f]{7,40})<\/id>/i.exec(entry)?.[1] ?? /commit\/([0-9a-f]{7,40})/i.exec(entry)?.[1];
+    if (!isCommit(sha)) continue;
+    commits.push({
+      sha,
+      short: sha.slice(0, 7),
+      message: decodeXml(/<title>([\s\S]*?)<\/title>/i.exec(entry)?.[1] ?? ""),
+      date: /<updated>([^<]*)<\/updated>/i.exec(entry)?.[1] ?? "",
+      url: commitWebUrl(UPDATE_REPOSITORY, sha)
+    });
+  }
+  return commits;
+}
+function decodeXml(value) {
+  return value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+}
+function firstLine(value) {
+  const text = typeof value === "string" ? value.replace(/\r\n?/g, "\n").trim() : "";
+  return text.split("\n")[0]?.trim() ?? "";
+}
+function pluginInstallSpec(repository, ref, commit) {
+  const target = isCommit(commit) ? commit.trim() : ref;
+  return `github:${repositorySlug(repository)}#${target}&path:${UPDATE_PLUGIN_PATH}`;
+}
+
+// packages/plugin/src/update/sources.ts
+var DEFAULT_TIMEOUT_MS = 8e3;
+var DEFAULT_MAX_COMMITS = 12;
+async function fetchRemoteBuild(options) {
+  const failures = [];
+  for (const source of ["api", "raw-git", "atom"]) {
+    try {
+      const build = source === "api" ? await fetchFromApi(options) : source === "raw-git" ? await fetchFromRawAndGit(options) : await fetchFromAtom(options);
+      if (build !== null) return { build, error: "" };
+      failures.push(`${source}: no commit found`);
+    } catch (error) {
+      failures.push(`${source}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return { build: null, error: failures.join("; ") };
+}
+async function fetchFromApi(options) {
+  const { repository, ref, localCommit = UNKNOWN_FIELD } = options;
+  const now = options.now ?? (() => /* @__PURE__ */ new Date());
+  const latest = parseCommitResponse(await getJson(options, commitsApiUrl(repository, ref)));
+  if (latest === null) return null;
+  let version = UNKNOWN_FIELD;
+  try {
+    version = parsePackageVersion(await getJson(options, packageJsonUrl(repository, latest.sha)));
+  } catch {
+  }
+  let commits = [latest];
+  let changedPluginFiles = [];
+  let filesKnown = false;
+  if (isCommit(localCommit) && !latest.sha.startsWith(localCommit.trim().slice(0, 7))) {
+    try {
+      const compared = parseCompareResponse(await getJson(options, compareApiUrl(repository, localCommit, latest.sha)));
+      if (compared.commits.length > 0) commits = compared.commits;
+      changedPluginFiles = compared.files;
+      filesKnown = compared.filesKnown;
+    } catch {
+    }
+  } else if (isCommit(localCommit)) {
+    filesKnown = true;
+  }
+  return {
+    ref,
+    version,
+    commit: latest.sha,
+    source: "api",
+    commits: commits.slice(0, options.maxCommits ?? DEFAULT_MAX_COMMITS),
+    changedPluginFiles,
+    filesKnown,
+    checkedAt: now().toISOString()
+  };
+}
+async function fetchFromRawAndGit(options) {
+  const { repository, ref } = options;
+  const now = options.now ?? (() => /* @__PURE__ */ new Date());
+  const [version, commit] = await Promise.all([
+    getJson(options, packageJsonUrl(repository, ref)).then(parsePackageVersion).catch(() => UNKNOWN_FIELD),
+    (options.resolveCommitImpl ?? resolveRemoteCommit)(repository, ref, options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  ]);
+  if (!isCommit(commit)) return null;
+  return {
+    ref,
+    version,
+    commit: commit.toLowerCase(),
+    source: "raw-git",
+    commits: [{
+      sha: commit.toLowerCase(),
+      short: shortCommit(commit),
+      message: "",
+      date: "",
+      url: `https://github.com/${repository.replace(/\.git$/i, "")}/commit/${commit.toLowerCase()}`
+    }],
+    changedPluginFiles: [],
+    filesKnown: false,
+    checkedAt: now().toISOString()
+  };
+}
+async function fetchFromAtom(options) {
+  const { repository, ref } = options;
+  const now = options.now ?? (() => /* @__PURE__ */ new Date());
+  const xml = await getText(options, commitsAtomUrl(repository, ref), "application/atom+xml, text/xml, */*");
+  const commits = parseAtomFeed(xml);
+  const latest = commits[0];
+  if (latest === void 0) return null;
+  let version = UNKNOWN_FIELD;
+  try {
+    version = parsePackageVersion(await getJson(options, packageJsonUrl(repository, latest.sha)));
+  } catch {
+  }
+  return {
+    ref,
+    version,
+    commit: latest.sha,
+    source: "atom",
+    commits: commits.slice(0, options.maxCommits ?? DEFAULT_MAX_COMMITS),
+    changedPluginFiles: [],
+    filesKnown: false,
+    checkedAt: now().toISOString()
+  };
+}
+function resolveRemoteCommit(repository, ref, timeoutMs) {
+  return new Promise((resolve7) => {
+    const url = /^https?:|^git@/i.test(repository) ? repository : `https://github.com/${repository.replace(/^\//, "")}.git`;
+    execFile2("git", ["ls-remote", url, `refs/heads/${ref}`, ref], {
+      encoding: "utf8",
+      timeout: timeoutMs,
+      windowsHide: true,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
+    }, (error, stdout) => {
+      if (error) {
+        resolve7("");
+        return;
+      }
+      const first = String(stdout ?? "").split("\n").map((line) => line.trim()).find(Boolean) ?? "";
+      resolve7(first.split(/\s+/)[0] ?? "");
+    });
+  });
+}
+async function getJson(options, url) {
+  return JSON.parse(await getText(options, url, "application/vnd.github+json"));
+}
+async function getText(options, url, accept) {
+  return httpGet(options, url, accept);
+}
+async function httpGet(options, url, accept) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const failures = [];
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  if (typeof fetchImpl === "function") {
+    try {
+      const token = options.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? "";
+      const response = await fetchImpl(url, {
+        headers: {
+          accept,
+          "user-agent": "dsh-soulmojito-update-check",
+          ...token ? { authorization: `Bearer ${token}` } : {}
+        },
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.text();
+    } catch (error) {
+      failures.push(`fetch: ${describeError(error)}`);
+    }
+  }
+  const curlDisabled = (envCompat("DISABLE_CURL") ?? "").trim() !== "";
+  if (!curlDisabled) {
+    try {
+      return await (options.curlImpl ?? curlGet)(url, accept, timeoutMs);
+    } catch (error) {
+      failures.push(`curl: ${describeError(error)}`);
+    }
+  }
+  throw new Error(failures.join(" | "));
+}
+function describeError(error) {
+  if (error instanceof Error) {
+    const cause = error.cause;
+    const detail = cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "";
+    return detail === "" ? error.message : `${error.message} (${detail})`;
+  }
+  return String(error);
+}
+function curlGet(url, accept, timeoutMs, exec = execFile2) {
+  const command = envCompat("CURL")?.trim() || (process.platform === "win32" ? "curl.exe" : "curl");
+  const seconds = String(Math.max(1, Math.ceil(timeoutMs / 1e3)));
+  return new Promise((resolve7, reject) => {
+    exec(command, [
+      "--silent",
+      "--show-error",
+      "--fail",
+      "--location",
+      "--max-time",
+      seconds,
+      "-H",
+      `accept: ${accept}`,
+      "-H",
+      "user-agent: dsh-soulmojito-update-check",
+      url
+    ], {
+      encoding: "utf8",
+      timeout: timeoutMs + 5e3,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024
+    }, (error, stdout) => {
+      if (error) {
+        const detail = String(stdout ?? "").trim();
+        reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
+        return;
+      }
+      resolve7(String(stdout ?? ""));
+    });
+  });
+}
+
+// packages/plugin/src/mods/install.ts
+function parseGitSource(input) {
+  const text = typeof input === "string" ? input.trim() : "";
+  if (text === "" || text.length > 500 || /[\s"']/.test(text)) throw new Error("invalid git url");
+  const hashAt = text.indexOf("#");
+  const urlPart = hashAt >= 0 ? text.slice(0, hashAt) : text;
+  const ref = hashAt >= 0 ? text.slice(hashAt + 1) : void 0;
+  if (ref !== void 0 && !/^[A-Za-z0-9._-]+$/.test(ref)) throw new Error(`invalid ref '${ref}'`);
+  const github = /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?$/i.exec(urlPart) ?? /^github:([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?$/i.exec(urlPart);
+  if (github !== null) {
+    const repository = `${github[1]}/${github[2]}`.replace(/\.git$/i, "");
+    return {
+      kind: "github",
+      repository,
+      ...ref !== void 0 ? { ref } : {},
+      rawModJsonUrl: `https://raw.githubusercontent.com/${repository}/${ref ?? "HEAD"}/mod.json`,
+      cloneUrl: `https://github.com/${repository}.git`
+    };
+  }
+  if (/^https:\/\/github\.com\/(?:[A-Za-z0-9._-]+)?\/?$/i.test(urlPart)) {
+    throw new Error(`unsupported git url '${urlPart}' (expected https://github.com/<owner>/<repo> or a git URL)`);
+  }
+  if (/^https?:\/\/|^git@|^ssh:\/\//i.test(urlPart)) {
+    return { kind: "git", repository: urlPart, ...ref !== void 0 ? { ref } : {}, rawModJsonUrl: null, cloneUrl: urlPart };
+  }
+  if (/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(urlPart)) {
+    const repository = urlPart.replace(/\.git$/i, "");
+    return {
+      kind: "github",
+      repository,
+      ...ref !== void 0 ? { ref } : {},
+      rawModJsonUrl: `https://raw.githubusercontent.com/${repository}/${ref ?? "HEAD"}/mod.json`,
+      cloneUrl: `https://github.com/${repository}.git`
+    };
+  }
+  throw new Error(`unsupported git url '${urlPart}' (expected https://github.com/<owner>/<repo> or a git URL)`);
+}
+function gitClone(url, directory, ref, timeoutMs, exec = execFile3) {
+  const args = ["clone", "--depth", "1", "--filter=blob:none", "--no-checkout"];
+  if (ref !== void 0) args.push("--branch", ref);
+  args.push(url, directory);
+  return runGit(args, exec, timeoutMs).then(() => runGit(["-C", directory, "checkout", "HEAD", "--", "."], exec, timeoutMs));
+}
+function runGit(args, exec, timeoutMs) {
+  return new Promise((resolve7, reject) => {
+    exec("git", args, {
+      encoding: "utf8",
+      timeout: timeoutMs,
+      windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
+    }, (error, _stdout, stderr) => {
+      if (error) {
+        const detail = String(stderr ?? "").trim().split(/\r?\n/).filter(Boolean).at(-1) ?? "";
+        reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
+        return;
+      }
+      resolve7();
+    });
+  });
+}
+async function installModFromGit(options) {
+  const timeoutMs = options.timeoutMs ?? 6e4;
+  const source = parseGitSource(options.url);
+  const fetchText = options.fetchText ?? ((url, accept, ms) => httpGet({ repository: source.repository, ref: source.ref ?? "HEAD", timeoutMs: ms }, url, accept));
+  if (source.rawModJsonUrl !== null) {
+    try {
+      const raw = await fetchText(source.rawModJsonUrl, "application/json", Math.min(timeoutMs, 15e3));
+      const parsed = JSON.parse(raw);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("mod.json must be a JSON object");
+    } catch (cause) {
+      throw new Error(`repository has no readable mod.json at its root (${source.repository}): ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  }
+  const workRoot = mkdtempSync(join12(tmpdir(), "dsh-soulmojito-modinstall-"));
+  try {
+    const cloneDir = join12(workRoot, "clone");
+    await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs);
+    let manifestRaw;
+    try {
+      manifestRaw = JSON.parse(readFileSync2(join12(cloneDir, "mod.json"), "utf8"));
+    } catch (cause) {
+      throw new Error(`repository has no readable mod.json at its root: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+    const idField = typeof manifestRaw?.["id"] === "string" ? manifestRaw["id"] : "";
+    const check = checkModManifest(manifestRaw, { directory: idField });
+    if (!check.ok) throw new Error(`invalid mod.json: ${check.errors.join("; ")}`);
+    const modId = check.manifest.id;
+    const target = join12(options.root, "mods", modId);
+    const replaced = existsSync(target);
+    if (replaced && options.force !== true) {
+      throw new Error(`mod '${modId}' is already installed (POST again with force to replace it)`);
+    }
+    rmSync(target, { recursive: true, force: true });
+    cpSync(cloneDir, target, { recursive: true, filter: (src) => !src.endsWith(".git") });
+    return { modId, replaced, directory: target };
+  } finally {
+    rmSync(workRoot, { recursive: true, force: true });
+  }
+}
+
+// packages/plugin/src/mods/host.ts
+var MOD_API_VERSION = 1;
+function declaredSurfacesOf(manifest10) {
+  return {
+    hooks: [...manifest10.surfaces.hooks],
+    tools: [...manifest10.surfaces.tools],
+    http: [...manifest10.surfaces.http]
+  };
+}
+function modsDisabledByEnv() {
+  const disabled = envCompat("DISABLE_MODS")?.trim();
+  return disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false";
+}
+var ModHost = class _ModHost {
+  constructor(options) {
+    this.options = options;
+    this.modsRoot = join13(options.root, "mods");
+    this.audit = new ModAuditLog(join13(this.modsRoot, "audit.jsonl"));
+    this.logger = options.ctx?.logger;
+    this.audit.setLogger((message) => this.logger?.warn?.(message));
+  }
+  modsRoot;
+  audit;
+  logger;
+  discovered = /* @__PURE__ */ new Map();
+  broken = /* @__PURE__ */ new Map();
+  blocked = /* @__PURE__ */ new Map();
+  loaded = /* @__PURE__ */ new Map();
+  loadErrors = /* @__PURE__ */ new Map();
+  globalEnabled = false;
+  refreshTail = Promise.resolve();
+  offGuides;
+  offHookDegrations;
+  static async open(options) {
+    const host = new _ModHost(options);
+    await mkdir3(host.modsRoot, { recursive: true });
+    host.offGuides = onGuidesChanged((character, chatId) => modEvents.emit("guides-changed", { character, chatId }));
+    host.offHookDegrations = generationHooks.onDegradation((degradation) => {
+      const detail = `${degradation.phase} ${degradation.reason}${degradation.detail ? `: ${degradation.detail}` : ""}`;
+      host.logger?.warn?.(`dsh-soulmojito: generation hook degraded (${detail})`);
+      if (typeof degradation.owner === "string") {
+        void host.audit.record(degradation.owner, "hook-degradation", detail);
+      }
+    });
+    try {
+      options.ctx?.effect?.(() => () => {
+        host.clearAllTimers();
+      }, "dsh-soulmojito: mod timers");
+    } catch {
+    }
+    await host.refresh();
+    return host;
+  }
+  /** 重新扫描 + 按三层开关对账（该装载的装载、该卸载的卸载）。串行化执行。 */
+  refresh() {
+    const run = this.refreshTail.catch(() => {
+    }).then(() => this.refreshInternal());
+    this.refreshTail = run.then(() => {
+    }, () => {
+    });
+    return run;
+  }
+  async setGlobalEnabled(enabled) {
+    const db = await this.options.dbProvider();
+    await db.updateState(() => ({ modsEnabled: enabled === true }));
+    await this.audit.record("*", enabled ? "enable" : "disable", "global");
+    await this.refresh();
+  }
+  async setModEnabled(id, enabled) {
+    if (!MOD_ID_PATTERN.test(id)) throw new Error(`invalid mod id '${id}'`);
+    const known = this.discovered.has(id) || this.broken.has(id) || this.blocked.has(id);
+    if (!known) throw new Error(`mod '${id}' is not installed`);
+    const db = await this.options.dbProvider();
+    await db.updateState((state) => ({
+      mods: {
+        ...state.mods ?? {},
+        enabled: { ...state.mods?.enabled ?? {}, [id]: enabled === true }
+      }
+    }));
+    await this.audit.record(id, enabled ? "enable" : "disable");
+    await this.refresh();
+  }
+  /** 调旧 dispose 链（及 onDispose 合并队列）→ `?t=` cache-bust 重新 import。 */
+  async reload(id) {
+    if (!MOD_ID_PATTERN.test(id)) throw new Error(`invalid mod id '${id}'`);
+    const disc = this.discovered.get(id);
+    if (disc === void 0 || !this.loaded.has(id)) throw new Error(`mod '${id}' is not loaded`);
+    await this.unload(id, "reload");
+    const ok = await this.load(disc, true);
+    if (!ok) throw new Error(`mod '${id}' failed to reload: ${this.loadErrors.get(id) ?? "unknown error"}`);
+  }
+  /**
+   * 从 git URL 安装（提案 0015 §4 P2）：GitHub 源降级链预读 + `git clone --depth 1`
+   * + 本地清单校验 + 拷入 `mods/<id>/`；成功/失败都进审计线；落地后 refresh()
+   * 让扫描吸收新目录（装上不等于启用——三层开关语义不变）。impl 供测试注入
+   * （缺省真实 installModFromGit）。
+   */
+  async installFromGit(url, force, impl = installModFromGit) {
+    try {
+      const result = await impl({ url, root: this.options.root, force });
+      await this.audit.record(result.modId, "install", `${url}${result.replaced ? " (replaced)" : ""}`);
+      await this.refresh();
+      return result;
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      this.logger?.warn?.(`dsh-soulmojito: mod install from '${url}' failed: ${message}`);
+      await this.audit.record("*", "install-error", message);
+      throw cause;
+    }
+  }
+  snapshot() {
+    const available = !modsDisabledByEnv();
+    const mods = [];
+    for (const [id, info] of this.broken) {
+      mods.push({
+        id,
+        name: info.name ?? id,
+        version: info.version ?? "",
+        author: info.author ?? "",
+        description: info.description ?? "",
+        capabilities: info.capabilities ?? [],
+        loadingOrder: 100,
+        panel: null,
+        status: "error",
+        error: info.message,
+        auditCount: this.audit.count(id),
+        surfaces: { hooks: [], tools: [], http: [] },
+        buttons: []
+      });
+    }
+    for (const [id, item] of this.blocked) {
+      mods.push({ ...modInfoOf(item.manifest), status: "error", error: item.reason, auditCount: this.audit.count(id), surfaces: declaredSurfacesOf(item.manifest) });
+    }
+    for (const [id, disc] of this.discovered) {
+      const loadError = this.loadErrors.get(id);
+      const loaded = this.loaded.get(id);
+      mods.push({
+        ...modInfoOf(disc.manifest),
+        status: loadError !== void 0 ? "error" : loaded !== void 0 ? "loaded" : "disabled",
+        error: loadError ?? "",
+        auditCount: this.audit.count(id),
+        surfaces: loaded !== void 0 ? liveSurfacesOf(loaded) : declaredSurfacesOf(disc.manifest)
+      });
+    }
+    mods.sort((a, b) => a.loadingOrder - b.loadingOrder || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return { available, reason: available ? "" : "DSH_SOULMOJITO_DISABLE_MODS is set", globalEnabled: this.globalEnabled, mods };
+  }
+  /**
+   * 分派 mod 子路由（`mods/<id>/<path>`）。返回 false = 不归我管（或任何一层
+   * 开关关闭 / 未装载 / 无此路由）——调用方一律按 404 兜底，与未知路由不可区分。
+   */
+  async handleRoute(req, res, method, url, id, subpath) {
+    if (modsDisabledByEnv() || !this.globalEnabled) return false;
+    if (!MOD_ID_PATTERN.test(id)) return false;
+    const record = this.loaded.get(id);
+    if (record === void 0) return false;
+    if (!isValidModHttpPath(subpath)) return false;
+    const handler = record.routeTable.find(method, subpath);
+    if (handler === void 0) return false;
+    const request = {
+      method,
+      path: subpath,
+      query: url.searchParams,
+      json: () => readModRequestBody(req)
+    };
+    const reply = makeModReply(res);
+    try {
+      await handler(request, reply);
+      if (!res.writableEnded) {
+        throw new Error("mod handler did not send a response");
+      }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      await this.audit.record(id, "http-error", message);
+      this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] http route ${method} ${subpath} failed: ${message}`);
+      if (!res.writableEnded) {
+        res.statusCode = 500;
+        res.setHeader("content-type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({ ok: false, message: `mod route failed: ${message}` }));
+      }
+    }
+    return true;
+  }
+  /**
+   * 声明式按钮的点击分发（`POST mods/<id>/button/<name>`，A-1）：
+   * - 未装载 / 未知按钮 / 任一层开关关闭 → `not-found`（调用方按 404 兜底，与
+   *   未知路由不可区分——§6 纪律）；
+   * - 已声明但无 handler（mod 未注册 onButton）→ `no-handler`（200 + handled:false，
+   *   面板按钮的可选消费语义）；
+   * - handler 抛错：`button-error` 审计后原样上抛（HTTP 层兜 500）；
+   *   正常点击不审计（高频路径，对齐 event-error 纪律）。
+   */
+  async dispatchButton(id, name2, context = {}) {
+    if (modsDisabledByEnv() || !this.globalEnabled) return "not-found";
+    if (!MOD_ID_PATTERN.test(id)) return "not-found";
+    if (modButtonNameError(name2) !== void 0) return "not-found";
+    const record = this.loaded.get(id);
+    if (record === void 0) return "not-found";
+    if (!record.manifest.buttons.includes(name2)) return "not-found";
+    const handler = record.buttons.get(name2);
+    if (handler === void 0) return "no-handler";
+    try {
+      await handler({ name: name2 }, context);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] button '${name2}' handler failed: ${message}`);
+      await this.audit.record(id, "button-error", `${name2}: ${message}`);
+      throw cause;
+    }
+    return "handled";
+  }
+  /** 宿主卸载：卸下全部已装载 Mod（逆序 disposer + 定时器 + 事件反注册）。 */
+  async disposeAll() {
+    for (const id of [...this.loaded.keys()]) await this.unload(id, "disable");
+    this.offGuides?.();
+    this.offGuides = void 0;
+    this.offHookDegrations?.();
+    this.offHookDegrations = void 0;
+  }
+  /* ------------------------------ 内部 ------------------------------ */
+  async refreshInternal() {
+    if (modsDisabledByEnv()) {
+      for (const id of [...this.loaded.keys()]) await this.unload(id, "disable");
+      this.discovered.clear();
+      this.broken.clear();
+      this.blocked.clear();
+      this.loadErrors.clear();
+      this.globalEnabled = false;
+      return;
+    }
+    await this.scan();
+    const state = await (await this.options.dbProvider()).getState();
+    this.globalEnabled = state.modsEnabled === true;
+    const enabled = state.mods?.enabled ?? {};
+    for (const [id, disc] of this.discovered) {
+      const want = this.globalEnabled && enabled[id] === true;
+      if (want && !this.loaded.has(id)) await this.load(disc, false);
+      else if (!want && this.loaded.has(id)) await this.unload(id, "disable");
+    }
+    for (const id of [...this.loaded.keys()]) {
+      if (!this.discovered.has(id)) await this.unload(id, "remove");
+    }
+  }
+  /** 扫描 mods/ 直接子目录：只读 mod.json、过校验，不执行任何 Mod 代码。 */
+  async scan() {
+    const entries = await fs14.readdir(this.modsRoot, { withFileTypes: true }).catch((cause) => {
+      if (cause.code === "ENOENT") return [];
+      throw cause;
+    });
+    const nextDiscovered = /* @__PURE__ */ new Map();
+    const nextBroken = /* @__PURE__ */ new Map();
+    const nextBlocked = /* @__PURE__ */ new Map();
+    const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+    for (const directory of directories) {
+      const id = directory;
+      let raw;
+      try {
+        raw = JSON.parse(await fs14.readFile(join13(this.modsRoot, directory, "mod.json"), "utf8"));
+      } catch (cause) {
+        const message = `mod.json is missing or unreadable: ${cause instanceof Error ? cause.message : String(cause)}`;
+        nextBroken.set(id, { message, ...salvageManifestFields(void 0) });
+        await this.audit.record(id, "skip", message);
+        continue;
+      }
+      const check = checkModManifest(raw, { directory });
+      if (!check.ok) {
+        const message = check.errors.join("; ");
+        nextBroken.set(id, { message, ...salvageManifestFields(raw) });
+        await this.audit.record(id, "skip", message);
+        continue;
+      }
+      const manifest10 = check.manifest;
+      const engineRange = manifest10.engines?.dshSoulMojito;
+      if (engineRange !== void 0) {
+        const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange);
+        if (!verdict.ok) {
+          nextBlocked.set(id, { manifest: manifest10, reason: verdict.reason });
+          await this.audit.record(id, "skip", verdict.reason);
+          continue;
+        }
+      }
+      const entryPath = resolve4(this.modsRoot, directory, manifest10.main);
+      const containment = relative2(resolve4(this.modsRoot, directory), entryPath);
+      if (containment === "" || containment.startsWith("..") || isAbsolute(containment)) {
+        const message = `main entry '${manifest10.main}' escapes the mod directory`;
+        nextBlocked.set(id, { manifest: manifest10, reason: message });
+        await this.audit.record(id, "skip", message);
+        continue;
+      }
+      const entryStat = await fs14.stat(entryPath).catch(() => void 0);
+      if (entryStat?.isFile() !== true) {
+        const message = `main entry '${manifest10.main}' not found`;
+        nextBlocked.set(id, { manifest: manifest10, reason: message });
+        await this.audit.record(id, "skip", message);
+        continue;
+      }
+      nextDiscovered.set(id, { manifest: manifest10, directory: join13(this.modsRoot, directory), entryPath });
+    }
+    this.discovered.clear();
+    this.broken.clear();
+    this.blocked.clear();
+    for (const [id, disc] of nextDiscovered) this.discovered.set(id, disc);
+    for (const [id, broken] of nextBroken) this.broken.set(id, broken);
+    for (const [id, blocked] of nextBlocked) this.blocked.set(id, blocked);
+    for (const id of [...this.loadErrors.keys()]) {
+      if (!this.discovered.has(id)) this.loadErrors.delete(id);
+    }
+  }
+  async load(disc, cacheBust) {
+    const id = disc.manifest.id;
+    const record = {
+      manifest: disc.manifest,
+      directory: disc.directory,
+      routeTable: createModRouteTable(),
+      disposers: [],
+      timers: /* @__PURE__ */ new Set(),
+      offEvents: [],
+      offRegistrations: [],
+      surfaces: { hooks: /* @__PURE__ */ new Set(), tools: /* @__PURE__ */ new Set(), http: /* @__PURE__ */ new Set() },
+      buttons: /* @__PURE__ */ new Map(),
+      storage: new ModStorage(join13(disc.directory, "data", "state.json"), {
+        onQuota: (message) => {
+          void this.audit.record(id, "storage-quota", message);
+        }
+      })
+    };
+    try {
+      await mkdir3(join13(disc.directory, "data"), { recursive: true });
+      const url = pathToFileURL2(disc.entryPath).href + (cacheBust ? `?t=${Date.now()}` : "");
+      const module = await import(url);
+      if (typeof module?.setup !== "function") {
+        throw new Error("mod entry must export an async setup(api) function");
+      }
+      const returned = await module.setup(this.createApi(record));
+      if (typeof returned === "function") record.disposers.push(returned);
+      this.loaded.set(id, record);
+      this.loadErrors.delete(id);
+      await this.audit.record(id, "load");
+      return true;
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      await this.runDisposers(id, record);
+      this.loadErrors.set(id, message);
+      this.logger?.warn?.(`dsh-soulmojito: mod '${id}' failed to ${cacheBust ? "reload" : "load"}: ${message}`);
+      await this.audit.record(id, "load-error", message);
+      return false;
+    }
+  }
+  async unload(id, event) {
+    const record = this.loaded.get(id);
+    if (record === void 0) return;
+    this.loaded.delete(id);
+    await this.runDisposers(id, record);
+    await this.audit.record(id, event);
+  }
+  /** 逆序执行 disposer（后注册先清）、清定时器、反注册事件、反注册 P2 能力面、
+   * 排空在飞存储写；单项失败只记审计。末尾的 flush 是 reload/teardown 竞态的
+   * 修复点：unload 返回后该实例不再有任何在飞写，新实例装载与宿主外部的目录
+   * 删除都安全。 */
+  async runDisposers(id, record) {
+    for (const dispose of [...record.disposers].reverse()) {
+      try {
+        await dispose();
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] dispose failed: ${message}`);
+        await this.audit.record(id, "dispose-error", message);
+      }
+    }
+    for (const timer of record.timers) clearInterval(timer);
+    record.timers.clear();
+    for (const off of record.offEvents.splice(0)) off();
+    for (const off of record.offRegistrations.splice(0)) {
+      try {
+        off();
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] capability unregister failed: ${message}`);
+        await this.audit.record(id, "dispose-error", message);
+      }
+    }
+    await record.storage.flush();
+  }
+  clearAllTimers() {
+    for (const record of this.loaded.values()) {
+      for (const timer of record.timers) clearInterval(timer);
+      record.timers.clear();
+    }
+  }
+  /** P1+P2 适配层（提案 §3.3）：白名单对象，不透传 cordis ctx。
+   * P2 面：hooks（五相位总线）/tools（跨 bundle 注册表）/macros（宿主宏注册表）/
+   * stscript（命令表）/llm（能力键强制）/prompt（AgentTavern section）。
+   * P3 面：games（提案 0018 §4.5——游戏桥注册，id 前缀 + manifest 声明双纪律）。 */
+  createApi(record) {
+    const id = record.manifest.id;
+    const logger = {
+      info: (...args) => this.logger?.info?.(`dsh-soulmojito: [mod:${id}]`, ...args),
+      warn: (...args) => this.logger?.warn?.(`dsh-soulmojito: [mod:${id}]`, ...args),
+      error: (...args) => this.logger?.error?.(`dsh-soulmojito: [mod:${id}]`, ...args)
+    };
+    const storage = record.storage;
+    const observed = (operation, label, event) => {
+      operation.catch((cause) => {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] ${label} failed: ${message}`);
+        void this.audit.record(id, event, message);
+      });
+      return operation;
+    };
+    const tracked = (off) => {
+      record.offRegistrations.push(off);
+      return off;
+    };
+    const api = {
+      version: MOD_API_VERSION,
+      logger,
+      storage: {
+        get: (key) => observed(storage.get(key), "storage get", "storage-error"),
+        set: (key, value) => observed(storage.set(key, value), "storage set", "storage-error"),
+        delete: (key) => observed(storage.delete(key), "storage delete", "storage-error")
+      },
+      assets: createModAssets(this.options.dbProvider),
+      events: {
+        on: (kind, handler) => {
+          if (!modEvents.isKind(kind)) throw new Error(`unknown mod event kind '${String(kind)}' (expected chat-saved | assets-saved | guides-changed | stream-delta)`);
+          if (typeof handler !== "function") throw new Error("mod event handler must be a function");
+          let auditedStreamEpoch;
+          const off = modEvents.on(kind, async (payload) => {
+            const epoch = currentStreamEpoch();
+            try {
+              await handler(payload);
+            } catch (cause) {
+              const message = cause instanceof Error ? cause.message : String(cause);
+              if (kind === "stream-delta" && auditedStreamEpoch === epoch) return;
+              if (kind === "stream-delta") {
+                auditedStreamEpoch = epoch;
+                this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] stream-delta handler failed: ${message} (further errors for this generation are silenced)`);
+                await this.audit.record(id, "event-error", `stream-delta: ${message} (further stream-delta errors for this generation are silenced)`);
+                return;
+              }
+              this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] ${kind} handler failed: ${message}`);
+              await this.audit.record(id, "event-error", message);
+            }
+          });
+          record.offEvents.push(off);
+          return off;
+        }
+      },
+      onButton: (name2, handler) => {
+        if (typeof name2 !== "string" || !record.manifest.buttons.includes(name2)) {
+          throw new Error(`button '${String(name2)}' is not declared in the manifest buttons [${record.manifest.buttons.join(", ")}]`);
+        }
+        if (typeof handler !== "function") throw new Error("button handler must be a function");
+        if (record.buttons.has(name2)) throw new Error(`button '${name2}' already has a handler`);
+        record.buttons.set(name2, handler);
+        return () => {
+          if (record.buttons.get(name2) === handler) record.buttons.delete(name2);
+        };
+      },
+      timers: {
+        setInterval: (handler, ms) => {
+          if (typeof handler !== "function") throw new Error("timer handler must be a function");
+          const interval = typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? Math.floor(ms) : 1;
+          const timer = setInterval(() => {
+            void (async () => {
+              try {
+                await handler();
+              } catch (cause) {
+                const message = cause instanceof Error ? cause.message : String(cause);
+                this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] timer handler failed: ${message}`);
+                void this.audit.record(id, "timer-error", message);
+              }
+            })();
+          }, interval);
+          record.timers.add(timer);
+          return timer;
+        },
+        clearInterval: (timer) => {
+          clearInterval(timer);
+          record.timers.delete(timer);
+        }
+      },
+      http: {
+        route: (method, path12, handler) => {
+          const off = record.routeTable.register(method, path12, handler);
+          record.surfaces.http.add(`${String(method ?? "").toUpperCase()} ${String(path12 ?? "")}`);
+          return tracked(off);
+        }
+      },
+      hooks: {
+        // 提案 §3.4 五相位：接 P0 总线；顺序按 loadingOrder；owner 归因让降级
+        // 审计落到本 mod；失败/超时/忘 return 的降级不中断生成由总线保证。
+        on: (phase, handler) => {
+          if (typeof phase !== "string" || !GENERATION_HOOK_PHASES.has(phase)) {
+            throw new Error(`unknown generation hook phase '${String(phase)}' (expected ${[...GENERATION_HOOK_PHASES].join(" | ")})`);
+          }
+          if (typeof handler !== "function") throw new Error("generation hook handler must be a function");
+          record.surfaces.hooks.add(phase);
+          return tracked(generationHooks.register(phase, handler, record.manifest.loadingOrder, id));
+        }
+      },
+      tools: {
+        // 提案 §3.3：形状对齐 tool() 工厂；name 强制 <modId>_ 前缀；与内置及
+        // 其他 mod 工具查重，冲突即拒（setup 期抛错 → 状态错误位，不静默）。
+        register: (def) => {
+          const definition = checkModToolDefinition(def, id);
+          if (modToolSnapshot().some((entry) => entry.modId === id && entry.definition.name === definition.name)) {
+            throw new Error(`tool '${definition.name}' is already registered by this mod`);
+          }
+          const claimed = claimedToolNames();
+          if (claimed.has(definition.name)) {
+            throw new Error(`tool name '${definition.name}' is already taken by a builtin tool or another mod`);
+          }
+          record.surfaces.tools.add(definition.name);
+          return tracked(registerModTool(id, definition, record.manifest.loadingOrder));
+        }
+      },
+      games: {
+        // 提案 0018 §4.5 第 3 源（P3）：把游戏注册进游戏桥运行时。id 纪律 =
+        // onButton 的「未声明即拒」+ 工具注册的前缀律：id 必须以 `<modId>.` 开头
+        // 且在 manifest games 名单内。引擎 duck 校验/烟测/view 静态检查/跨源查重
+        // 都在 games service（fail-fast，抛错 = 本 Mod setup 失败进错误位，镜像
+        // 工具注册）。mods host 与 games service 同在 index bundle，经既有
+        // globalThis 句柄直调（handle.ts，无新跨 bundle 面）；反注册入
+        // offRegistrations（卸载自动摘除，其活跃会话由 sessions 孤儿判定接管）。
+        register: (def) => {
+          if (typeof def !== "object" || def === null || Array.isArray(def)) {
+            throw new Error("game registration must be an object");
+          }
+          const gameId = def.id;
+          if (typeof gameId !== "string" || gameId === "") {
+            throw new Error(`game registration requires a non-empty id string (got '${String(gameId)}')`);
+          }
+          const prefix = `${id}.`;
+          if (!gameId.startsWith(prefix)) {
+            throw new Error(`game id must start with the mod id prefix '${prefix}' (got '${gameId}')`);
+          }
+          if (!record.manifest.games.includes(gameId)) {
+            throw new Error(`game '${gameId}' is not declared in the manifest games [${record.manifest.games.join(", ")}]`);
+          }
+          const engine10 = def.engine;
+          const service = resolveGamesService();
+          if (service === void 0) {
+            throw new Error("the games runtime is not available in this process (game registration requires the games service)");
+          }
+          service.registerModGame(def);
+          return tracked(() => {
+            service.unregisterModGame(gameId, engine10);
+          });
+        }
+      },
+      macros: {
+        // 提案 §3.3/P0 决策注记：mod 宏进入 prompt-safety 冻结求值上下文的展开
+        // 面——必须确定性（无随机/时间）。注册期静态筛查 best-effort；运行期
+        // 抛错/非同步返回由包装降级保原文（引擎侧 catch 亦保原文，双保险）。
+        register: (name2, fn) => {
+          const macroName = typeof name2 === "string" ? name2.trim() : "";
+          if (macroName === "" || macroName.length > 64) throw new Error("macro name must be a non-empty string of at most 64 characters");
+          if (macroName.includes("{{") || macroName.includes("}}") || /\s/.test(macroName)) {
+            throw new Error("macro name must not include braces or whitespace");
+          }
+          if (typeof fn !== "function") throw new Error("macro handler must be a function");
+          const banned = screenMacroDeterminism(fn);
+          if (banned !== void 0) {
+            throw new Error(`macro handlers must be deterministic (no random or time sources); found '${banned}' in the handler source`);
+          }
+          const lowered = macroName.toLowerCase();
+          if (builtinMacroNames().has(lowered)) {
+            throw new Error(`macro name '${macroName}' collides with a builtin macro`);
+          }
+          for (const entry of hostMacroSnapshot()) {
+            if (entry.name.toLowerCase() === lowered) throw new Error(`macro name '${macroName}' is already registered`);
+          }
+          let failureAudited = false;
+          const wrapped = (args, engine10) => {
+            try {
+              const result = fn(args, engine10);
+              if (typeof result === "string" || result === null) return result;
+              if (typeof result === "number" || typeof result === "boolean") return String(result);
+              return null;
+            } catch (cause) {
+              if (!failureAudited) {
+                failureAudited = true;
+                const message = cause instanceof Error ? cause.message : String(cause);
+                this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] macro '${macroName}' failed: ${message}`);
+                void this.audit.record(id, "macro-error", `${macroName}: ${message}`);
+              }
+              return null;
+            }
+          };
+          return tracked(registerHostMacro(macroName, wrapped, record.manifest.loadingOrder));
+        }
+      },
+      stscript: {
+        // 提案 §3.3：命令名字符集校验（对齐内置命名律 [a-z0-9_]+）；禁覆盖内置
+        // 命令（冲突即拒）；disposer 反注册。
+        registerCommand: (name2, spec) => {
+          const commandName = typeof name2 === "string" ? name2.trim().toLowerCase() : "";
+          if (!/^[a-z0-9_]+$/.test(commandName) || commandName.length > 40) {
+            throw new Error(`stscript command name must match [a-z0-9_]+ (got '${String(name2)}')`);
+          }
+          if (typeof spec !== "object" || spec === null || Array.isArray(spec)) throw new Error("stscript command spec must be an object");
+          const handler = spec["run"];
+          if (typeof handler !== "function") throw new Error("stscript command spec.run must be a function");
+          if (stscriptCommandNames().includes(commandName)) {
+            throw new Error(`stscript command '/${commandName}' is already registered (builtin command names cannot be overridden)`);
+          }
+          const aliases = spec["aliases"];
+          if (aliases !== void 0 && (!Array.isArray(aliases) || aliases.some((alias) => typeof alias !== "string" || !/^[a-z0-9_]+$/.test(alias)))) {
+            throw new Error("stscript command aliases must be [a-z0-9_]+ strings");
+          }
+          const fullSpec = { ...spec, name: commandName };
+          const off = registerStscriptCommand(fullSpec);
+          return tracked(off);
+        }
+      },
+      prompt: {
+        // 提案 §3.4：AgentTavern 侧 prompt 分区。order 宿主钳制 -50..0（核心占
+        // -80..-64）；ST 循环 hook 与此面的不对称是刻意的（文档标注）。
+        section: (section) => {
+          if (typeof section !== "object" || section === null || Array.isArray(section)) throw new Error("prompt section must be an object");
+          const { name: name2, text, order } = section;
+          if (typeof name2 !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name2)) {
+            throw new Error(`prompt section name must match [A-Za-z0-9][A-Za-z0-9._-]* (got '${String(name2)}')`);
+          }
+          if (typeof text !== "string" || text === "") throw new Error("prompt section text must be a non-empty string");
+          if (text.length > 65536) throw new Error("prompt section text exceeds the 64KB limit");
+          const clampedOrder = clampModSectionOrder(order);
+          return tracked(registerModSection(id, { name: name2, text, order: clampedOrder }, record.manifest.loadingOrder));
+        }
+      },
+      onDispose: (fn) => {
+        if (typeof fn !== "function") throw new Error("onDispose expects a function");
+        record.disposers.push(fn);
+      }
+    };
+    if (record.manifest.capabilities.includes("llm")) {
+      api.llm = createModLlmFace(this.options.ctx?.llm, id, this.audit, this.logger, observed);
+    }
+    return api;
+  }
+};
+function modInfoOf(manifest10) {
+  return {
+    id: manifest10.id,
+    name: manifest10.name,
+    version: manifest10.version,
+    author: manifest10.author,
+    description: manifest10.description,
+    capabilities: manifest10.capabilities,
+    loadingOrder: manifest10.loadingOrder,
+    panel: manifest10.panel ?? null,
+    buttons: [...manifest10.buttons]
+  };
+}
+var GENERATION_HOOK_PHASES = /* @__PURE__ */ new Set(["user-input", "pre-assemble", "pre-llm", "post-output", "post-save"]);
+function liveSurfacesOf(record) {
+  return {
+    hooks: [...record.surfaces.hooks],
+    tools: [...record.surfaces.tools],
+    http: [...record.surfaces.http]
+  };
+}
+function checkModToolDefinition(def, modId) {
+  if (typeof def !== "object" || def === null || Array.isArray(def)) throw new Error("tool definition must be an object");
+  const record = def;
+  const name2 = record.name;
+  if (typeof name2 !== "string" || !MOD_TOOL_NAME_PATTERN.test(name2) || name2.length > 64) {
+    throw new Error(`tool name must match [A-Za-z0-9][A-Za-z0-9._-]* and be at most 64 characters (got '${String(name2)}')`);
+  }
+  const prefix = `${modId}_`;
+  if (!name2.startsWith(prefix)) {
+    throw new Error(`tool name must start with the mod id prefix '${prefix}' (got '${name2}')`);
+  }
+  const description = record.description;
+  if (typeof description !== "string" || description.trim() === "" || description.length > 4e3) {
+    throw new Error("tool description must be a non-empty string of at most 4000 characters");
+  }
+  if (typeof record.parameters !== "object" || record.parameters === null || Array.isArray(record.parameters)) {
+    throw new Error("tool parameters must be an object (JSON schema)");
+  }
+  const output = record.output;
+  if (typeof output !== "object" || output === null || Array.isArray(output) || typeof output["schema"] !== "object" || output["schema"] === null || typeof output["render"] !== "function") {
+    throw new Error("tool output must be { schema, render }");
+  }
+  if (typeof record.execute !== "function") throw new Error("tool execute must be a function");
+  return def;
+}
+var MACRO_NONDETERMINISM_PATTERN = /Math\.random|Date\.now|new\s+Date\b|performance\.now|hrtime|crypto\.|setTimeout|setInterval|process\.env/;
+function screenMacroDeterminism(fn) {
+  try {
+    const match = MACRO_NONDETERMINISM_PATTERN.exec(fn.toString());
+    return match === null ? void 0 : match[0];
+  } catch {
+    return "unserializable handler source";
+  }
+}
+function createModLlmFace(hostLlm, id, audit, logger, observed) {
+  const requireStream = () => {
+    const stream = hostLlm?.stream;
+    if (typeof stream !== "function") throw new Error("the host LLM service is unavailable on this deployment");
+    return stream;
+  };
+  const auditCall = (request, usage, error) => {
+    const model = `${String(request?.provider ?? "")}/${String(request?.model ?? "")}`;
+    const tokens = usage !== void 0 && typeof usage === "object" && usage !== null ? ` tokens=${JSON.stringify(usage)}` : "";
+    if (error !== void 0) {
+      void audit.record(id, "llm-error", `${model}${tokens ? ` ${tokens.trim()}` : ""}: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    void audit.record(id, "llm-call", `${model}${tokens}`);
+  };
+  async function* streamChunks(request) {
+    const chunks = requireStream()(request);
+    let usage;
+    try {
+      for await (const chunk of chunks) {
+        if (chunk !== null && typeof chunk === "object" && chunk["type"] === "usage") usage = chunk["usage"];
+        yield chunk;
+      }
+      auditCall(request, usage);
+    } catch (cause) {
+      auditCall(request, usage, cause);
+      throw cause;
+    }
+  }
+  return {
+    stream: (request) => {
+      if (typeof request !== "object" || request === null || Array.isArray(request)) throw new Error("llm request must be an object");
+      return streamChunks(request);
+    },
+    request: (request) => {
+      if (typeof request !== "object" || request === null || Array.isArray(request)) throw new Error("llm request must be an object");
+      const collected = (async () => {
+        let text = "";
+        let reasoning = "";
+        let usage;
+        let finish;
+        for await (const chunk of streamChunks(request)) {
+          if (chunk === null || typeof chunk !== "object") continue;
+          const kind = chunk["type"];
+          if (kind === "text-delta" && typeof chunk["text"] === "string") text += chunk["text"];
+          else if (kind === "reasoning-delta" && typeof chunk["text"] === "string") reasoning += chunk["text"];
+          else if (kind === "usage") usage = chunk["usage"];
+          else if (kind === "finish") finish = typeof chunk["reason"]?.["kind"] === "string" ? chunk["reason"]["kind"] : void 0;
+        }
+        return { text, reasoning, usage, finish };
+      })();
+      return observed(collected, "llm request", "llm-error");
+    }
+  };
+}
+function salvageManifestFields(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const record = raw;
+  const pick = (key) => typeof record[key] === "string" && record[key].trim() !== "" ? record[key] : void 0;
+  return {
+    name: pick("name"),
+    version: pick("version"),
+    author: pick("author"),
+    description: pick("description")
+  };
+}
+function createModAssets(dbProvider) {
+  const requireString2 = (value, label) => {
+    if (typeof value !== "string" || value === "") throw new Error(`${label} is required`);
+    return value;
+  };
+  return {
+    listCharacters: async () => structuredClone(await (await dbProvider()).listCharacters()),
+    getCharacter: async (name2) => {
+      const found = await (await dbProvider()).getCharacter(requireString2(name2, "character name"));
+      return found === void 0 ? null : structuredClone({ kind: found.kind, card: { spec: found.card.spec, specVersion: found.card.specVersion, data: found.card.data } });
+    },
+    listWorlds: async () => structuredClone(await (await dbProvider()).listWorlds()),
+    getWorld: async (name2) => {
+      const book = await (await dbProvider()).getWorld(requireString2(name2, "world name"));
+      return book === void 0 ? null : structuredClone(book);
+    },
+    listPresets: async () => structuredClone(await (await dbProvider()).listPresets()),
+    getPreset: async (name2) => {
+      const preset = await (await dbProvider()).getPreset(requireString2(name2, "preset name"));
+      return preset === void 0 ? null : structuredClone(preset);
+    },
+    listPersonas: async () => structuredClone(await (await dbProvider()).listPersonas()),
+    getPersona: async (name2) => {
+      const persona = await (await dbProvider()).getPersona(requireString2(name2, "persona name"));
+      return persona === void 0 ? null : structuredClone(persona);
+    },
+    listGroups: async () => structuredClone(await (await dbProvider()).listGroups()),
+    getGroup: async (name2) => {
+      const group2 = await (await dbProvider()).getGroup(requireString2(name2, "group name"));
+      return group2 === void 0 ? null : structuredClone(group2);
+    },
+    listChats: async (character) => structuredClone(await (await dbProvider()).listChats(requireString2(character, "character name"))),
+    getChat: async (character, chatId) => {
+      const chat = await (await dbProvider()).getChat(requireString2(character, "character name"), requireString2(chatId, "chat id"));
+      return chat === void 0 ? null : structuredClone(chat);
+    }
+  };
+}
+
+// packages/plugin/src/update/service.ts
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync4 } from "node:fs";
+import { dirname as dirname9, join as join15 } from "node:path";
+
+// packages/plugin/src/update/apply.ts
+import { spawn } from "node:child_process";
+import { copyFileSync, existsSync as existsSync2, mkdirSync, mkdtempSync as mkdtempSync2, readdirSync, readFileSync as readFileSync3, renameSync, rmSync as rmSync2, statSync, writeFileSync } from "node:fs";
+import { tmpdir as tmpdir2 } from "node:os";
+import { dirname as dirname8, join as join14 } from "node:path";
+var DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
+function shippedEntries(sourceDir) {
+  const manifest10 = join14(sourceDir, "package.json");
+  if (!existsSync2(manifest10)) throw new Error("packages/plugin/package.json is missing from the checkout");
+  const files = JSON.parse(readFileSync3(manifest10, "utf8"))?.files;
+  if (!Array.isArray(files) || files.length === 0 || !files.every((entry) => typeof entry === "string")) {
+    throw new Error("packages/plugin/package.json has no usable 'files' array");
+  }
+  return [.../* @__PURE__ */ new Set(["package.json", ...files.map((entry) => entry.replace(/^\.\//, ""))])];
+}
+var FILE_LOCK_RETRY_DELAYS_MS = [20, 50, 100, 200];
+function isTransientLockError(error) {
+  const code = error?.code;
+  return code === "EBUSY" || code === "EPERM" || code === "EACCES";
+}
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function replaceFileAtomic(source, target) {
+  const temp = `${target}.dsh-soulmojito-partial`;
+  copyFileSync(source, temp);
+  for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
+    try {
+      renameSync(temp, target);
+      return;
+    } catch (error) {
+      if (attempt > 0 && isTransientLockError(error)) {
+        sleepSync(FILE_LOCK_RETRY_DELAYS_MS[FILE_LOCK_RETRY_DELAYS_MS.length - attempt] ?? 50);
+        continue;
+      }
+      rmSync2(temp, { force: true });
+      throw error;
+    }
+  }
+}
+function writeFileAtomic(target, data) {
+  const temp = `${target}.dsh-soulmojito-partial`;
+  writeFileSync(temp, data);
+  for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
+    try {
+      renameSync(temp, target);
+      return;
+    } catch (error) {
+      if (attempt > 0 && isTransientLockError(error)) {
+        sleepSync(FILE_LOCK_RETRY_DELAYS_MS[FILE_LOCK_RETRY_DELAYS_MS.length - attempt] ?? 50);
+        continue;
+      }
+      rmSync2(temp, { force: true });
+      throw error;
+    }
+  }
+}
+async function installUpdate(request) {
+  let pluginManager = request.pluginManager ?? null;
+  const outcome = await runInstallChain(request, [
+    { name: "cli", run: () => installViaCli(request) },
+    {
+      name: "plugin-manager",
+      run: () => {
+        pluginManager ??= resolvePluginManager(request.ctx);
+        return pluginManager === null || pluginManager === void 0 ? Promise.resolve(null) : installViaPluginManager(request, pluginManager);
+      }
+    },
+    { name: "checkout", run: () => installViaCheckout(request) }
+  ]);
+  if (outcome.ok && isCommit(request.commit) && stampInstalledBuild(request.pluginDir, outcome.installed.version, request.commit)) {
+    request.log(`stamped version.json (${outcome.installed.version} ${shortCommit(request.commit)})`);
+    outcome.installed = readInstalledStamp(request.pluginDir);
+  }
+  return outcome;
+}
+async function runInstallChain(request, entries) {
+  const attempts = [];
+  let last = null;
+  for (const entry of entries) {
+    const outcome = await entry.run();
+    if (outcome === null) {
+      attempts.push(`${entry.name}: unavailable`);
+      continue;
+    }
+    if (outcome.ok) return outcome;
+    attempts.push(`${entry.name}: ${outcome.message}`);
+    last = outcome;
+  }
+  if (last !== null) {
+    request.log(`all package-manager paths failed (${attempts.join("; ")})`);
+    return last;
+  }
+  const failed = {
+    ok: false,
+    strategy: entries.at(-1)?.name ?? "checkout",
+    application: "failed",
+    message: `no update path is available in this host (${attempts.join("; ")})`,
+    restartRequired: false,
+    installed: readInstalledStamp(request.pluginDir)
+  };
+  return failed;
+}
+function resolvePluginManager(ctx) {
+  for (const read of [
+    () => ctx?.pluginManager,
+    () => ctx?.get?.("pluginManager")
+  ]) {
+    try {
+      const service = read();
+      if (service !== void 0 && service !== null && typeof service.installBundle === "function") return service;
+    } catch {
+    }
+  }
+  return null;
+}
+function watchPluginManager(ctx, onReady) {
+  if (typeof ctx?.inject !== "function") return () => {
+  };
+  try {
+    const returned = ctx.inject(["pluginManager"], (serviceCtx) => {
+      try {
+        if (serviceCtx?.pluginManager !== void 0) onReady(serviceCtx.pluginManager);
+      } catch {
+      }
+    });
+    return () => {
+      try {
+        if (typeof returned?.dispose === "function") returned.dispose();
+        else if (typeof returned === "function") returned();
+      } catch {
+      }
+    };
+  } catch {
+    return () => {
+    };
+  }
+}
+function resolveProfileName(ctx) {
+  for (const read of [() => ctx?.profileContext?.name, () => process.env.DSH_PROFILE]) {
+    try {
+      const value = read();
+      if (typeof value === "string" && value.trim() !== "") return value.trim();
+    } catch {
+    }
+  }
+  return "desktop";
+}
+function resolveDesktopCli(argv = process.argv, execPath = process.execPath, exists = existsSync2) {
+  const configured = envCompat("DSH_CLI")?.trim();
+  if (configured !== void 0 && configured !== "") {
+    return { command: execPath, args: ["--expose-internals", configured], env: { ELECTRON_RUN_AS_NODE: "1" } };
+  }
+  const runtimeDir = typeof argv[2] === "string" ? argv[2].trim() : "";
+  if (runtimeDir === "") return null;
+  const cli = join14(runtimeDir, "node_modules", "@deepseek-ai", "dsh-desktop-host", "lib", "cli.js");
+  if (!exists(cli)) return null;
+  return { command: execPath, args: ["--expose-internals", cli], env: { ELECTRON_RUN_AS_NODE: "1" } };
+}
+async function installViaCli(request) {
+  const cli = resolveDesktopCli();
+  if (cli === null) return null;
+  const profile = resolveProfileName(request.ctx);
+  const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
+  const args = [...cli.args, "plugin", "--profile", profile, "add", spec];
+  request.log(`dsh plugin --profile ${profile} add ${spec}`);
+  try {
+    const result = await runCapture(cli.command, args, {
+      env: { ...cli.env },
+      timeoutMs: request.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS,
+      onLine: request.log
+    });
+    if (result.code !== 0) throw new Error(`exit ${result.code}`);
+    return {
+      ok: true,
+      strategy: "cli",
+      application: "restart-required",
+      message: "installed through `dsh plugin`; restart DSH to load the new module generation",
+      restartRequired: true,
+      installed: readInstalledStamp(request.pluginDir, spec)
+    };
+  } catch (error) {
+    request.log(`dsh plugin failed: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+async function installViaPluginManager(request, pluginManager) {
+  const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
+  const requestId = `dsh-soulmojito-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  request.log(`plugin-manager: installBundle ${spec}`);
+  const dispose = subscribeInstallEvents(request, requestId);
+  try {
+    const result = await pluginManager.installBundle(spec, { requestId, enabled: true });
+    const application = normalizeApplication(result?.application, result);
+    const failed = application === "failed" || application === "cancelled";
+    const detail = failed ? describeFailure(result) : "";
+    const ambiguous = detail.includes("ambiguous-install");
+    return {
+      ok: !failed,
+      strategy: "plugin-manager",
+      application,
+      message: failed ? `plugin-manager install failed: ${detail || "see the profile .plugin-manager logs"}${ambiguous ? " (git dependency target is ambiguous: the manifest specifier never changes, so `dsh plugin` is the path that works)" : ""}` : application === "restart-required" ? "installed through the DSH plugin manager; restart DSH to load the new module generation" : 'installed through the DSH plugin manager; restart DSH to load the new module generation (the host reported "applied" under HMR, but package replacements still need a fresh module generation)',
+      // 宿主 HMR 下回报 'applied'，但包替换必须重启进程才加载新 JS generation
+      // （dsh-plugin-manager 自述语义）——两种回报都按需重启处理；service 层
+      // 再以「磁盘 stamp 是否被内存 stamp 追上」决定过渡态怎么解除。
+      restartRequired: !failed,
+      installed: readInstalledStamp(request.pluginDir, spec)
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    request.log(`plugin-manager: ${message}`);
+    return {
+      ok: false,
+      strategy: "plugin-manager",
+      application: "failed",
+      message: `plugin-manager install threw: ${message}`,
+      restartRequired: false,
+      installed: readInstalledStamp(request.pluginDir, spec)
+    };
+  } finally {
+    dispose();
+  }
+}
+function subscribeInstallEvents(request, requestId) {
+  const handlers = [];
+  const on = (event, handler) => {
+    try {
+      const dispose = request.ctx?.on?.(event, handler);
+      if (typeof dispose === "function") handlers.push(dispose);
+    } catch {
+    }
+  };
+  on("plugin-manager/install-log", (chunk) => {
+    if (chunk?.requestId !== requestId) return;
+    const text = typeof chunk?.text === "string" ? chunk.text.trimEnd() : "";
+    if (text !== "") request.log(`pnpm ${chunk?.stream ?? "out"}: ${text}`);
+    if (typeof chunk?.exitCode === "number") request.log(`pnpm exited with ${chunk.exitCode}`);
+  });
+  on("plugin-manager/install-state", (state) => {
+    if (state?.requestId !== requestId) return;
+    const attempt = state?.attempt;
+    request.log(`plugin-manager: ${state?.phase ?? "working"}${attempt?.registry === void 0 ? "" : ` (${attempt.registry} ${attempt.index}/${attempt.total})`}`);
+  });
+  return () => {
+    for (const dispose of handlers.splice(0)) {
+      try {
+        dispose();
+      } catch {
+      }
+    }
+  };
+}
+function normalizeApplication(application, result) {
+  if (application === "applied" || application === "restart-required" || application === "cancelled" || application === "failed") {
+    return application;
+  }
+  if (result?.error !== void 0) return "failed";
+  return "unknown";
+}
+function describeFailure(result) {
+  const error = result?.error;
+  const code = typeof error?.code === "string" ? error.code : "";
+  const message = typeof error?.message === "string" ? error.message : "";
+  const output = typeof result?.packageResult?.output === "string" ? result.packageResult.output.trim() : "";
+  return [code, message, output.split("\n").slice(-4).join(" ")].filter((item) => item !== "").join(" | ");
+}
+async function installViaCheckout(request) {
+  const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
+  const repository = repositorySlug(request.repository);
+  const profile = resolveProfileName(request.ctx);
+  const checkout = mkdtempSync2(join14(tmpdir2(), "dsh-soulmojito-checkout-"));
+  try {
+    request.log(`fallback: git clone --depth 1 https://github.com/${repository}.git`);
+    await mustRun("git", ["clone", "--depth", "1", "--branch", request.ref, `https://github.com/${repository}.git`, checkout], request);
+    if (isCommit(request.commit)) {
+      const head = (await mustRun("git", ["-C", checkout, "rev-parse", "HEAD"], request)).trim();
+      if (!head.startsWith(shortCommit(request.commit))) {
+        request.log(`checkout ${shortCommit(request.commit)}`);
+        await mustRun("git", ["-C", checkout, "fetch", "--depth", "1", "origin", request.commit], request);
+        await mustRun("git", ["-C", checkout, "checkout", "--quiet", request.commit], request);
+      }
+    }
+    const source = join14(checkout, "packages", "plugin");
+    if (!existsSync2(source)) throw new Error("packages/plugin is missing from the checkout");
+    const copied = copyShippedFiles(source, request.pluginDir);
+    request.log(`copied ${copied.length} shipped entries into ${request.pluginDir}`);
+    return {
+      ok: true,
+      strategy: "checkout",
+      application: "restart-required",
+      message: `files replaced from a fresh GitHub checkout; the profile lockfile still pins the previous commit, so run \`dsh plugin --profile ${profile} add ${spec}\` to make it durable, then restart DSH`,
+      restartRequired: true,
+      installed: readInstalledStamp(request.pluginDir, spec)
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    request.log(`checkout fallback failed: ${message}`);
+    return {
+      ok: false,
+      strategy: "checkout",
+      application: "failed",
+      message: `update failed: ${message}. Manual fallback: dsh plugin --profile ${profile} add ${spec}`,
+      restartRequired: false,
+      installed: readInstalledStamp(request.pluginDir, spec)
+    };
+  } finally {
+    rmSync2(checkout, { recursive: true, force: true });
+  }
+}
+async function mustRun(command, args, request) {
+  const result = await runCapture(command, args, {
+    timeoutMs: request.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS,
+    onLine: request.log
+  });
+  if (result.code !== 0) throw new Error(`${command} ${args.slice(0, 2).join(" ")} exited ${result.code}`);
+  return result.output;
+}
+function copyShippedFiles(sourceDir, targetDir) {
+  const copied = [];
+  for (const entry of shippedEntries(sourceDir)) {
+    const from = join14(sourceDir, entry);
+    if (!existsSync2(from)) continue;
+    const stat = statSyncSafe(from);
+    if (stat === null) continue;
+    if (!stat.isDirectory()) {
+      replaceFileAtomic(from, join14(targetDir, entry));
+      copied.push(entry);
+      continue;
+    }
+    for (const file of listFiles(from)) {
+      const relative3 = file.slice(from.length + 1);
+      const to = join14(targetDir, entry, relative3);
+      mkdirSync(dirname8(to), { recursive: true });
+      writeFileAtomic(to, readFileSync3(file));
+      copied.push(`${entry}/${relative3.replaceAll("\\", "/")}`);
+    }
+  }
+  return copied;
+}
+function stampInstalledBuild(pluginDir, version, commit) {
+  if (!isKnownVersion(version) || !isCommit(commit)) return false;
+  try {
+    writeFileAtomic(join14(pluginDir, "version.json"), `${JSON.stringify({ version: version.trim(), commit: shortCommit(commit) }, null, 2)}
+`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function listFiles(root) {
+  const found = [];
+  const pending = [root];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    for (const entry of readdirSyncSafe(current)) {
+      const full = join14(current, entry);
+      const stat = statSyncSafe(full);
+      if (stat === null) continue;
+      if (stat.isDirectory()) pending.push(full);
+      else found.push(full);
+    }
+  }
+  return found;
+}
+function readdirSyncSafe(path12) {
+  try {
+    return readdirSync(path12);
+  } catch {
+    return [];
+  }
+}
+function statSyncSafe(path12) {
+  try {
+    return statSync(path12);
+  } catch {
+    return null;
+  }
+}
+function readInstalledStamp(pluginDir, spec = "") {
+  let version = UNKNOWN_FIELD;
+  let commit = UNKNOWN_FIELD;
+  try {
+    const generated = JSON.parse(readFileSync3(join14(pluginDir, "version.json"), "utf8"));
+    if (typeof generated?.version === "string" && generated.version.trim() !== "") version = generated.version.trim();
+    if (isCommit(generated?.commit)) commit = shortCommit(generated.commit);
+  } catch {
+  }
+  if (version === UNKNOWN_FIELD) {
+    try {
+      const manifest10 = JSON.parse(readFileSync3(join14(pluginDir, "package.json"), "utf8"));
+      if (typeof manifest10?.version === "string" && manifest10.version.trim() !== "") version = manifest10.version.trim();
+    } catch {
+    }
+  }
+  if (commit === UNKNOWN_FIELD) {
+    const pinned = /#([0-9a-f]{7,40})(?:&|$)/.exec(spec)?.[1];
+    if (isCommit(pinned)) commit = shortCommit(pinned);
+  }
+  return { version, commit };
+}
+function runCapture(command, args, options = {}) {
+  return new Promise((resolve7, reject) => {
+    const child = spawn(command, args, {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ...options.env ?? {} }
+    });
+    let output = "";
+    const feed = (chunk) => {
+      const text = chunk.toString("utf8");
+      output += text;
+      if (options.onLine !== void 0) {
+        for (const line of text.split("\n")) {
+          if (line.trim() !== "") options.onLine(line.trim());
+        }
+      }
+    };
+    child.stdout?.on("data", feed);
+    child.stderr?.on("data", feed);
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`${command} timed out after ${options.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS}ms`));
+    }, options.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS);
+    timer.unref?.();
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      resolve7({ code: code ?? -1, output });
+    });
+  });
+}
+
+// packages/plugin/src/update/service.ts
+var UPDATE_CACHE_FILE = "update-state.json";
+var UPDATE_CACHE_SCHEMA = 1;
+var UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1e3;
+var UPDATE_FIRST_CHECK_DELAY_MS = 12 * 1e3;
+var INSTALL_LOG_LIMIT = 60;
+var TavernUpdateService = class {
+  options;
+  remote = null;
+  status = "unknown";
+  reason = "";
+  checkedAt = null;
+  error = "";
+  source = "none";
+  installState = emptyInstallState();
+  pendingRestart = null;
+  timer;
+  disposed = false;
+  started = false;
+  pluginManager = null;
+  disposePluginManagerWatch;
+  constructor(options) {
+    this.options = options;
+    this.loadCache();
+  }
+  /** 已 dispose 的实例定时器与监听都已拆除；持有方据此决定重建（HMR 重挂）。 */
+  get isDisposed() {
+    return this.disposed;
+  }
+  get repository() {
+    return this.options.repository ?? UPDATE_REPOSITORY;
+  }
+  get ref() {
+    return this.options.ref ?? UPDATE_REF;
+  }
+  get local() {
+    return this.options.local;
+  }
+  snapshot() {
+    return {
+      schemaVersion: UPDATE_CACHE_SCHEMA,
+      status: this.status,
+      reason: this.reason,
+      checkedAt: this.checkedAt,
+      nextCheckAt: this.checkedAt === null ? null : new Date(Date.parse(this.checkedAt) + this.ttl()).toISOString(),
+      error: this.error,
+      source: this.source,
+      repository: this.repository,
+      ref: this.ref,
+      local: this.local,
+      remote: this.remote,
+      spec: pluginInstallSpec(this.repository, this.ref, this.remote?.commit),
+      install: { ...this.installState, log: [...this.installState.log] }
+    };
+  }
+  /**
+   * 检查一次。`force` 穿透 TTL；`restart-required` 过渡态下不复查（远端已经
+   * 装到磁盘，运行中的构建要等重启才会变），只在本地 stamp 追上安装结果时
+   * 解除该状态。任何失败都只写快照，不抛错。
+   */
+  async check(input = {}) {
+    if (this.options.enabled === false) {
+      this.status = "unknown";
+      this.reason = "update checks are disabled";
+      return this.snapshot();
+    }
+    if (this.pendingRestart !== null) {
+      if (sameCommit(this.local.commit, this.pendingRestart.commit)) {
+        this.pendingRestart = null;
+        this.status = "unknown";
+        this.reason = "the running build has caught up with the installed update";
+        this.checkedAt = null;
+      } else {
+        this.status = "restart-required";
+        this.reason = `installed ${this.pendingRestart.version} (${this.pendingRestart.commit}); restart DSH to load it`;
+        return this.snapshot();
+      }
+    }
+    if (input.force !== true && this.checkedAt !== null && Date.now() - Date.parse(this.checkedAt) < this.ttl()) {
+      return this.snapshot();
+    }
+    const result = await fetchRemoteBuild({
+      repository: this.repository,
+      ref: this.ref,
+      localCommit: this.local.commit,
+      ...this.options.fetchImpl === void 0 ? {} : { fetchImpl: this.options.fetchImpl },
+      ...this.options.timeoutMs === void 0 ? {} : { timeoutMs: this.options.timeoutMs },
+      ...this.options.now === void 0 ? {} : { now: this.options.now },
+      ...this.options.resolveCommitImpl === void 0 ? {} : { resolveCommitImpl: this.options.resolveCommitImpl },
+      ...this.options.curlImpl === void 0 ? {} : { curlImpl: this.options.curlImpl }
+    });
+    this.error = result.error;
+    if (result.build === null) {
+      this.status = "unknown";
+      this.reason = "remote build could not be read";
+      this.source = "none";
+    } else {
+      this.remote = result.build;
+      this.source = result.build.source;
+      const comparison = compareBuilds({ local: this.local, remote: result.build });
+      const filesUnavailable = result.build.source !== "api" && result.build.changedPluginFiles.length === 0;
+      this.status = comparison.status;
+      this.reason = comparison.status === "up-to-date" && filesUnavailable && !result.build.commit.startsWith(shortCommit(this.local.commit)) ? `${comparison.reason}; changed files unknown on source '${result.build.source}'` : comparison.reason;
+    }
+    this.checkedAt = this.nowIso();
+    this.persistCache();
+    this.options.onDiscover?.(this.snapshot());
+    return this.snapshot();
+  }
+  /**
+   * 一键更新。默认只在发现新版本时执行；`force` 允许把当前 ref 重装一遍
+   * （例如本地构建 stamp 损坏、或过渡态本身出了岔子时手工修复——force 可以
+   * 穿透 pendingRestart 短路，否则死循环的过渡态会让更新按钮永久失效）。
+   */
+  async install(input = {}) {
+    if (this.installState.running) return this.snapshot();
+    if (this.pendingRestart !== null && input.force !== true) {
+      this.installState = {
+        ...emptyInstallState(),
+        phase: "done",
+        message: "already installed; restart DSH to load it",
+        restartRequired: true,
+        installed: this.pendingRestart
+      };
+      return this.snapshot();
+    }
+    if (this.status !== "update-available" && input.force !== true) {
+      this.installState = { ...emptyInstallState(), message: `no update available (status: ${this.status})` };
+      return this.snapshot();
+    }
+    const target = this.remote;
+    this.installState = {
+      running: true,
+      phase: "installing",
+      strategy: null,
+      startedAt: this.nowIso(),
+      finishedAt: null,
+      message: "",
+      restartRequired: false,
+      installed: null,
+      log: []
+    };
+    try {
+      const outcome = await (this.options.installerImpl ?? installUpdate)({
+        ctx: this.options.ctx ?? {},
+        repository: this.repository,
+        ref: target?.ref ?? this.ref,
+        commit: target?.commit ?? "",
+        local: this.local,
+        pluginDir: this.options.pluginDir,
+        log: (line) => this.appendLog(line),
+        ...this.options.timeoutMs === void 0 ? {} : { timeoutMs: this.options.timeoutMs },
+        ...this.pluginManager === null ? {} : { pluginManager: this.pluginManager }
+      });
+      this.applyOutcome(outcome);
+    } catch (error) {
+      this.installState = {
+        ...this.installState,
+        running: false,
+        phase: "failed",
+        finishedAt: this.nowIso(),
+        message: error instanceof Error ? error.message : String(error)
+      };
+    }
+    this.persistCache();
+    return this.snapshot();
+  }
+  /**
+   * 启动自动发现：延迟首查（避免和宿主启动抢资源）+ 周期复查。返回 disposer，
+   * 交给 `ctx.effect` 管理生命周期。
+   */
+  start() {
+    if (this.options.enabled === false || this.disposed) return () => {
+    };
+    if (this.started) return () => this.dispose();
+    this.started = true;
+    this.disposePluginManagerWatch = watchPluginManager(this.options.ctx, (service) => {
+      this.pluginManager = service;
+    });
+    const schedule = (delayMs) => {
+      this.timer = setTimeout(() => {
+        void this.check().catch(() => {
+        }).finally(() => {
+          if (!this.disposed) schedule(this.ttl());
+        });
+      }, delayMs);
+      this.timer?.unref?.();
+    };
+    schedule(this.options.firstCheckDelayMs ?? UPDATE_FIRST_CHECK_DELAY_MS);
+    return () => this.dispose();
+  }
+  dispose() {
+    this.disposed = true;
+    if (this.timer !== void 0) clearTimeout(this.timer);
+    this.timer = void 0;
+    this.disposePluginManagerWatch?.();
+    this.disposePluginManagerWatch = void 0;
+  }
+  ttl() {
+    return this.options.checkTtlMs ?? UPDATE_CHECK_TTL_MS;
+  }
+  nowIso() {
+    return (this.options.now ?? (() => /* @__PURE__ */ new Date()))().toISOString();
+  }
+  appendLog(line) {
+    const stamped = `${this.nowIso().slice(11, 19)} ${line}`;
+    this.installState.log = [...this.installState.log, stamped].slice(-INSTALL_LOG_LIMIT);
+    try {
+      this.options.ctx?.logger?.info?.(`dsh-soulmojito update: ${line}`);
+    } catch {
+    }
+  }
+  applyOutcome(outcome) {
+    this.installState = {
+      ...this.installState,
+      running: false,
+      phase: outcome.ok ? "done" : "failed",
+      strategy: outcome.strategy,
+      finishedAt: this.nowIso(),
+      message: outcome.message,
+      restartRequired: outcome.restartRequired,
+      installed: outcome.installed
+    };
+    if (!outcome.ok) return;
+    this.checkedAt = this.nowIso();
+    const target = outcome.installed.commit;
+    if (isCommitText(target) && (outcome.restartRequired || !sameCommit(this.local.commit, target))) {
+      this.pendingRestart = outcome.installed;
+      this.status = "restart-required";
+      this.reason = `installed ${outcome.installed.version} (${target}); restart DSH to load it`;
+    } else if (sameCommit(this.local.commit, target)) {
+      this.pendingRestart = null;
+      this.status = "up-to-date";
+      this.reason = `installed ${outcome.installed.version} (${target}) via ${outcome.strategy}`;
+    } else {
+      this.pendingRestart = null;
+      this.status = "unknown";
+      this.reason = `installed ${outcome.installed.version} via ${outcome.strategy}; restart DSH to make sure \u2014 the installed commit could not be verified`;
+    }
+  }
+  cachePath() {
+    return join15(this.options.home, UPDATE_CACHE_FILE);
+  }
+  loadCache() {
+    try {
+      const cached = JSON.parse(readFileSync4(this.cachePath(), "utf8"));
+      if (cached?.schemaVersion !== UPDATE_CACHE_SCHEMA) return;
+      if (typeof cached.status === "string") this.status = cached.status;
+      if (typeof cached.reason === "string") this.reason = cached.reason;
+      if (typeof cached.checkedAt === "string") this.checkedAt = cached.checkedAt;
+      if (typeof cached.source === "string") this.source = cached.source;
+      if (cached.remote !== null && typeof cached.remote === "object") this.remote = cached.remote;
+      const pendingOrigin = typeof cached.pendingRestartPluginDir === "string" ? cached.pendingRestartPluginDir : "";
+      if (pendingOrigin === this.options.pluginDir && cached.pendingRestart !== null && typeof cached.pendingRestart === "object" && typeof cached.pendingRestart?.version === "string") {
+        this.pendingRestart = {
+          version: cached.pendingRestart.version,
+          commit: isCommitText(cached.pendingRestart.commit) ? shortCommit(cached.pendingRestart.commit) : UNKNOWN_FIELD
+        };
+      }
+      if (this.pendingRestart === null && this.status === "restart-required") {
+        this.status = "unknown";
+        this.reason = "the cached restart transition does not apply to this install directory";
+      }
+      if (cached.local !== void 0 && !sameLocal(cached.local, this.local)) {
+        this.remote = null;
+        this.checkedAt = null;
+        this.pendingRestart = null;
+        this.status = "unknown";
+        this.reason = "local build changed since the cached check";
+      }
+    } catch {
+    }
+  }
+  persistCache() {
+    try {
+      const path12 = this.cachePath();
+      mkdirSync2(dirname9(path12), { recursive: true });
+      const payload = {
+        schemaVersion: UPDATE_CACHE_SCHEMA,
+        status: this.status,
+        reason: this.reason,
+        checkedAt: this.checkedAt,
+        source: this.source,
+        local: this.local,
+        remote: this.remote,
+        pendingRestart: this.pendingRestart,
+        // 过渡态来源（loadCache 的幽灵防线读它）；null = 无过渡态。
+        pendingRestartPluginDir: this.pendingRestart === null ? null : this.options.pluginDir
+      };
+      writeFileAtomic(path12, `${JSON.stringify(payload, null, 2)}
+`);
+    } catch {
+    }
+  }
+};
+function emptyInstallState() {
+  return {
+    running: false,
+    phase: "idle",
+    strategy: null,
+    startedAt: null,
+    finishedAt: null,
+    message: "",
+    restartRequired: false,
+    installed: null,
+    log: []
+  };
+}
+function sameLocal(left, right) {
+  return typeof left?.version === "string" && typeof left?.commit === "string" && left.version === right.version && left.commit === right.commit;
+}
+function isCommitText(value) {
+  return typeof value === "string" && /^[0-9a-f]{7,40}$/i.test(value.trim());
+}
+function sameCommit(left, right) {
+  if (!isCommitText(left) || !isCommitText(right)) return false;
+  return shortCommit(left) === shortCommit(right);
+}
+function updateChangelog(snapshot2, limit = 8) {
+  const commits = snapshot2.remote?.commits ?? [];
+  return commits.slice(0, limit).map((commit) => commit.message === "" ? commit.short : `${commit.short} ${commit.message}`);
+}
+
+// packages/plugin/src/runtime.ts
+var storePromise;
+var memoryStorePromise;
+var variableStorePromise;
+var agentTavernCapabilities = inspectAgentTavernCapabilities({});
+var agentTavernCapabilitiesPromise;
+var agentTavernProjectorPromise;
+var agentNovelCapabilities = inspectAgentNovelCapabilities({});
+var novelStorePromise;
+var novelProjectorPromise;
+var novelDriverPromise;
+var updateServiceInstance;
+var updateChecksEnabledFlag = true;
+var modHostPromise;
+var modHostContext;
+var gamesServicePromise;
+var templatesEnabledFlag = true;
+function store3() {
+  return storePromise ??= TavernStore.open(dshHomePath("tavern"));
+}
+function memories() {
+  return memoryStorePromise ??= MemoryStore.open(dshHomePath("tavern"));
+}
+function variables() {
+  return variableStorePromise ??= VariableStore.open(dshHomePath("tavern"));
+}
+var memoryVectorStorePromise;
+function memoryVectors() {
+  return memoryVectorStorePromise ??= MemoryVectorStore.open(dshHomePath("tavern"));
+}
+function modHost() {
+  return modHostPromise ??= ModHost.open({
+    ctx: modHostContext ?? {},
+    root: dshHomePath("tavern"),
+    hostVersion: BUILD_INFO.version,
+    dbProvider: () => store3()
+  });
+}
+async function modHostProjection(ctx) {
+  try {
+    const snapshot2 = await modHost().then((host) => host.snapshot());
+    return snapshot2.mods.map((mod) => ({
+      id: mod.id,
+      name: mod.name,
+      version: mod.version,
+      author: mod.author,
+      description: mod.description,
+      capabilities: mod.capabilities,
+      panel: mod.panel,
+      status: mod.status,
+      enabled: mod.status === "loaded",
+      error: mod.error,
+      auditCount: mod.auditCount,
+      // 声明式按钮（A-1）：清单声明面，客户端据此渲染面板 chips 与聊天按钮行。
+      buttons: mod.buttons,
+      // P2（§3.5 启用确认弹层）：注册面——loaded 是实际注册名单，未装载回落
+      // manifest 声明（作者自查面）。
+      surfaces: mod.surfaces
+    }));
+  } catch (cause) {
+    ctx?.logger?.warn?.(`dsh-soulmojito: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
+    return [];
+  }
+}
+function novelStore() {
+  return novelStorePromise ??= NovelStore.open(dshHomePath("tavern"));
+}
+function tavernUpdate(ctx) {
+  if (updateServiceInstance !== void 0 && !updateServiceInstance.isDisposed) return updateServiceInstance;
+  updateServiceInstance = new TavernUpdateService({
+    ctx,
+    home: dshHomePath("tavern"),
+    pluginDir: import.meta.dirname,
+    local: { version: BUILD_INFO.version, commit: TAVERN_COMMIT },
+    enabled: updateChecksEnabledFlag
+  });
+  return updateServiceInstance;
+}
+function updateChecksEnabled(config = {}) {
+  if (config.checkForUpdates === false) return false;
+  const disabled = envCompat("DISABLE_UPDATE_CHECK")?.trim();
+  return !(disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false");
+}
+function templatesEnabled(config = {}) {
+  if (config.templateEnabled === false) return false;
+  const disabled = envCompat("DISABLE_TEMPLATES")?.trim();
+  return !(disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false");
+}
+function setUpdateChecksEnabledFlag(value) {
+  updateChecksEnabledFlag = value;
+}
+function templatesEnabledFlagValue() {
+  return templatesEnabledFlag;
+}
+function setTemplatesEnabledFlag(value) {
+  templatesEnabledFlag = value;
+}
+function getAgentTavernCapabilities() {
+  return agentTavernCapabilities;
+}
+function setAgentTavernCapabilities(value) {
+  agentTavernCapabilities = value;
+}
+function getAgentTavernCapabilitiesPromise() {
+  return agentTavernCapabilitiesPromise;
+}
+function setAgentTavernCapabilitiesPromise(value) {
+  agentTavernCapabilitiesPromise = value;
+}
+function getAgentTavernProjectorPromise() {
+  return agentTavernProjectorPromise;
+}
+function setAgentTavernProjectorPromise(value) {
+  agentTavernProjectorPromise = value;
+}
+function getAgentNovelCapabilities() {
+  return agentNovelCapabilities;
+}
+function setAgentNovelCapabilities(value) {
+  agentNovelCapabilities = value;
+}
+function getNovelProjectorPromise() {
+  return novelProjectorPromise;
+}
+function setNovelProjectorPromise(value) {
+  novelProjectorPromise = value;
+}
+function getNovelDriverPromise() {
+  return novelDriverPromise;
+}
+function setNovelDriverPromise(value) {
+  novelDriverPromise = value;
+}
+function setModHostContext(value) {
+  modHostContext = value;
+}
+function getGamesServicePromise() {
+  return gamesServicePromise;
+}
+function setGamesServicePromise(value) {
+  gamesServicePromise = value;
+}
+
+// packages/plugin/src/agent-tavern/card-state.ts
+var CARD_STATE_MAX_CHARS = 12e4;
+var CARD_STATE_FULL_REFRESH_TURNS = 8;
+function plainObject4(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
+function sectionHash(text) {
+  return createHash8("sha256").update(text).digest("hex").slice(0, 16);
+}
+function cardStateEntryKey(book, entry) {
+  return `${book}#${entry.uid}`;
+}
+async function renderCardStateSections(db, state, characterName, character, chat, chatId) {
+  const card = character.card;
+  if (!cardUsesJsrMvu(card)) return void 0;
+  const books = await collectWorldInfoBooks(db, state, characterName, character);
+  const embeddedName = `${characterName}:embedded`;
+  const linkedWorld = card.data.extensions["world"];
+  const linkedPresent = typeof linkedWorld === "string" && linkedWorld.trim() !== "" && books.some((book) => book.name === linkedWorld.trim());
+  if (card.data.characterBook !== void 0 && !linkedPresent && !books.some((book) => book.name === embeddedName)) {
+    const embedded = parseCharacterBook2(card.data.characterBook);
+    books.unshift({
+      name: embeddedName,
+      entries: embedded.entries,
+      scanDepth: card.data.characterBook.scan_depth,
+      tokenBudget: card.data.characterBook.token_budget,
+      recursiveScanning: card.data.characterBook.recursive_scanning
+    });
+  }
+  const entries = [];
+  for (const book of books) {
+    for (const entry of book.entries) {
+      if (entry.disable === true || entry.constant !== true) continue;
+      if (typeof entry.content !== "string" || entry.content.trim() === "") continue;
+      entries.push({ book: book.name ?? "", entry });
+    }
+  }
+  if (!entries.some(({ entry }) => entry.content.includes("<%"))) return void 0;
+  entries.sort((left, right) => {
+    const order = (left.entry.order ?? 100) - (right.entry.order ?? 100);
+    if (order !== 0) return order;
+    return left.entry.uid - right.entry.uid;
+  });
+  const local = structuredClone(readChatVariables(chat));
+  const scoped = await (await variables()).listAll("chat", chatId);
+  const tree = overlayChatScopedVariables(local, scoped.map((entry) => ({ name: entry.name, value: entry.value })));
+  seedJsrMvuVariables(card, tree);
+  const warnings = [];
+  const runtime = createMvuRuntime(
+    {
+      state,
+      characterName,
+      character,
+      chat,
+      chatId,
+      books,
+      onWarning: (message) => warnings.push(message)
+    },
+    {
+      local: tree,
+      global: { ...state.scriptGlobals },
+      initial: structuredClone(plainObject4(chat.header.chat_metadata["initial_variables"]) ?? {})
+    }
+  );
+  const expand = createHostPromptExpander(
+    card.data.nickname || card.data.name || characterName,
+    state.activePersona ?? DEFAULT_USER2
+  );
+  let used = 0;
+  const sections = [];
+  let truncated = false;
+  for (const { book, entry } of entries) {
+    let rendered = entry.content;
+    if (entry.content.includes("<%")) {
+      try {
+        rendered = await runtime.renderText(entry.content, void 0, `card-state:${book}#${entry.uid}`);
+      } catch (cause) {
+        warnings.push(`${book}#${entry.uid}: ${cause instanceof Error ? cause.message : String(cause)}`);
+        continue;
+      }
+    }
+    const text = hostPromptSafe(rendered.trim(), expand);
+    if (text === "") continue;
+    if (used + text.length > CARD_STATE_MAX_CHARS) {
+      truncated = true;
+      break;
+    }
+    used += text.length;
+    sections.push({
+      key: cardStateEntryKey(book, entry),
+      comment: entry.comment || `world-info ${entry.uid}`,
+      text,
+      hash: sectionHash(text)
+    });
+  }
+  return { sections, truncated, warnings };
+}
+function formatCardStateMessage(sections, note) {
+  const lines = [
+    "<tavern-card-state>",
+    "Dynamically rendered card world-info for this turn (reference data, not user speech). Apply these rules to the scene; do not quote or narrate this block.",
+    "If this card declares an UpdateVariable/JSONPatch output protocol, settle its state by emitting that block in the reply; do not mirror stat_data through tavern_variable_settle."
+  ];
+  if (note !== void 0 && note !== "") lines.push(note);
+  for (const section of sections) {
+    lines.push("", `### ${section.comment}`, section.text);
+  }
+  lines.push("</tavern-card-state>");
+  return lines.join("\n");
+}
+function registerAgentTavernCardState(ctx, options = {}) {
+  const cache = /* @__PURE__ */ new Map();
+  const openStore = options.openStore ?? (async () => await store3());
+  ctx.on?.("agent/pre-step", async (payload, next) => {
+    const decision = await next();
+    try {
+      if (decision?.kind !== "enter" || payload.signal?.aborted === true || payload.step !== 1) return decision;
+      const sessionId = payload.agent?.session?.id;
+      if (typeof sessionId !== "string" || sessionId === "") return decision;
+      const db = await openStore();
+      const state = await db.getState();
+      const binding = state.sessionBindings[sessionId];
+      if (binding === void 0 || binding.architecture !== "agent-tavern" || binding.group === true) return decision;
+      const character = await db.getCharacter(binding.character);
+      const snapshot2 = await db.getChatSnapshot(binding.character, binding.chatId);
+      if (character === void 0 || snapshot2 === void 0) return decision;
+      const rendered = await renderCardStateSections(db, state, binding.character, character, snapshot2.chat, binding.chatId);
+      if (rendered === void 0 || rendered.sections.length === 0) return decision;
+      if (rendered.warnings.length > 0) {
+        ctx.logger?.warn?.(`dsh-soulmojito: card state render warnings: ${rendered.warnings.slice(0, 4).join(" | ")}`);
+      }
+      const cacheKey = `${sessionId}\0${binding.character}\0${binding.chatId}`;
+      const previous = cache.get(cacheKey);
+      const turn = typeof payload.turn === "number" && Number.isSafeInteger(payload.turn) ? payload.turn : 0;
+      const full = previous === void 0 || turn === 0 || turn - previous.fullTurn >= CARD_STATE_FULL_REFRESH_TURNS;
+      const changed = rendered.sections.filter((section) => previous?.hashes.get(section.key) !== section.hash);
+      if (!full && changed.length === 0) return decision;
+      const sections = full ? rendered.sections : changed;
+      const note = full ? rendered.truncated ? `Card world-info truncated at ${CARD_STATE_MAX_CHARS} characters.` : void 0 : "Only sections that changed since the previous card-state block are repeated; earlier unchanged rules remain in effect.";
+      const message = {
+        id: randomUUID4(),
+        role: "user",
+        content: [{ type: "text", text: formatCardStateMessage(sections, note) }],
+        source: hostPluginMessageSource(payload.agent?.session)
+      };
+      cache.delete(cacheKey);
+      cache.set(cacheKey, {
+        hashes: new Map(rendered.sections.map((section) => [section.key, section.hash])),
+        fullTurn: full ? turn : previous?.fullTurn ?? turn
+      });
+      while (cache.size > 16) {
+        const oldest = cache.keys().next().value;
+        if (oldest === void 0) break;
+        cache.delete(oldest);
+      }
+      return { ...decision, messages: [...decision.messages ?? [], message] };
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito: card state injection failed: ${error instanceof Error ? error.message : String(error)}`);
+      return decision;
+    }
+  });
+}
+
+// packages/plugin/src/agent-tavern/prompt-capture.ts
+var agentStepCaptures = /* @__PURE__ */ new Map();
+var AGENT_STEP_CAPTURE_LIMIT = 16;
+function registerAgentTavernPromptCapture(ctx) {
+  ctx.on?.("agent/pre-step", async (payload, next) => {
+    const decision = await next();
+    try {
+      if (decision?.kind === "enter") agentViewerCaptureStep(payload, decision);
+    } catch {
+    }
+    return decision;
+  }, { prepend: true });
+}
+function agentViewerCaptureStep(payload, decision) {
+  const agentId = payload.agent?.session?.id;
+  if (typeof agentId !== "string" || agentId.trim() === "") return;
+  const injected = (Array.isArray(decision.messages) ? decision.messages : []).filter((message) => isHostPluginMessageSource(message?.source));
+  agentStepCaptures.delete(agentId);
+  agentStepCaptures.set(agentId, {
+    turn: typeof payload.turn === "number" ? payload.turn : void 0,
+    step: typeof payload.step === "number" ? payload.step : void 0,
+    injected
+  });
+  while (agentStepCaptures.size > AGENT_STEP_CAPTURE_LIMIT) {
+    const oldest = agentStepCaptures.keys().next().value;
+    if (oldest === void 0) break;
+    agentStepCaptures.delete(oldest);
+  }
 }
 
 // packages/plugin/src/agent-novel/outline.ts
@@ -10423,7 +17479,7 @@ function errorCodeOf(error) {
 }
 
 // packages/plugin/src/agent-novel/projector.ts
-import { promises as fs13 } from "node:fs";
+import { promises as fs15 } from "node:fs";
 import { crc32 as crc322 } from "node:zlib";
 import * as path9 from "node:path";
 
@@ -10493,7 +17549,7 @@ var NovelProjector = class _NovelProjector {
     const statusPath = path9.join(this.novelDir(novelId), "projections", "status.json");
     let raw;
     try {
-      raw = await fs13.readFile(statusPath, "utf8");
+      raw = await fs15.readFile(statusPath, "utf8");
     } catch (cause) {
       if (cause.code === "ENOENT") return false;
       throw cause;
@@ -10510,8 +17566,8 @@ var NovelProjector = class _NovelProjector {
     const snapshot2 = await this.requireSnapshot(novelId);
     const paragraphsByChapter = await this.readAllBodyParagraphs(novelId, snapshot2);
     const projectionsDir = path9.join(this.novelDir(novelId), "projections");
-    await fs13.rm(path9.join(projectionsDir, "chapters"), { recursive: true, force: true });
-    await fs13.mkdir(path9.join(projectionsDir, "chapters"), { recursive: true });
+    await fs15.rm(path9.join(projectionsDir, "chapters"), { recursive: true, force: true });
+    await fs15.mkdir(path9.join(projectionsDir, "chapters"), { recursive: true });
     const titleByChapter = new Map((snapshot2.outline?.chapters ?? []).map((chapter) => [chapter.chapterId, chapter.title]));
     for (const [chapterId, commitGroups] of paragraphsByChapter) {
       const parts = [`# ${titleByChapter.get(chapterId) ?? chapterId}`, ""];
@@ -10594,7 +17650,7 @@ var NovelProjector = class _NovelProjector {
     const bodyPath = path9.join(this.novelDir(novelId), "bodies", `${commit.bodyHash}.txt`);
     let raw;
     try {
-      raw = await fs13.readFile(bodyPath, "utf8");
+      raw = await fs15.readFile(bodyPath, "utf8");
     } catch (cause) {
       if (cause.code === "ENOENT") {
         throw new NovelStorageCorruptionError({ novelId, path: bodyPath, detail: `committed body object of ${commit.commitId} is missing` });
@@ -10642,7 +17698,7 @@ var NovelProjector = class _NovelProjector {
     const bodyPath = path9.join(this.novelDir(novelId), "bodies", `${revision.bodyHash}.txt`);
     let raw;
     try {
-      raw = await fs13.readFile(bodyPath, "utf8");
+      raw = await fs15.readFile(bodyPath, "utf8");
     } catch (cause) {
       if (cause.code === "ENOENT") {
         throw new NovelStorageCorruptionError({ novelId, path: bodyPath, detail: `body revision object of ${revision.revisionId} is missing` });
@@ -10664,7 +17720,7 @@ var NovelProjector = class _NovelProjector {
     const dir = path9.join(this.tavernRoot, "memories", "chat", encodeURIComponent(novelScopeId(novelId)));
     let files;
     try {
-      files = await fs13.readdir(dir);
+      files = await fs15.readdir(dir);
     } catch (cause) {
       if (cause.code === "ENOENT") return [];
       throw cause;
@@ -10672,7 +17728,7 @@ var NovelProjector = class _NovelProjector {
     const records2 = [];
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
-      const parsed = JSON.parse(await fs13.readFile(path9.join(dir, file), "utf8"));
+      const parsed = JSON.parse(await fs15.readFile(path9.join(dir, file), "utf8"));
       if (typeof parsed.id === "string" && typeof parsed.revision === "string") {
         records2.push({ id: parsed.id, revision: parsed.revision });
       }
@@ -10759,8 +17815,8 @@ function textBytes2(text) {
 }
 async function writeAtomicText2(file, text) {
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await fs13.writeFile(tmp, text, "utf8");
-  await fs13.rename(tmp, file);
+  await fs15.writeFile(tmp, text, "utf8");
+  await fs15.rename(tmp, file);
 }
 var ZIP_UTF8_FLAG = 2048;
 var DOS_TIME = 0;
@@ -10833,859 +17889,12 @@ function buildStoredZip(entries) {
   return out;
 }
 
-// packages/plugin/src/build-info.ts
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { relative, resolve as resolve2 } from "node:path";
-
-// packages/plugin/src/env-compat.ts
-function envCompat(suffix) {
-  return process.env[`DSH_SOULMOJITO_${suffix}`] ?? process.env[`DSH_TAVERN_${suffix}`];
-}
-
-// packages/plugin/src/build-info.ts
-var BUILD_INFO = readBuildInfo();
-var TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit);
-function readBuildInfo() {
-  let version = "unknown";
-  let commit = "unknown";
-  const stamped = buildTimeStamp();
-  if (stamped.commit !== "") commit = stamped.commit;
-  for (const packagePath of [
-    resolve2(import.meta.dirname, "package.json"),
-    resolve2(import.meta.dirname, "..", "package.json")
-  ]) {
-    try {
-      const packageData = JSON.parse(readFileSync(packagePath, "utf8"));
-      if (typeof packageData?.version === "string" && packageData.version.trim() !== "") {
-        version = packageData.version.trim();
-        break;
-      }
-    } catch {
-    }
-  }
-  try {
-    const generated = JSON.parse(readFileSync(resolve2(import.meta.dirname, "version.json"), "utf8"));
-    if (typeof generated?.version === "string" && generated.version.trim() !== "") {
-      version = generated.version.trim();
-    }
-    const sidecarCommit = typeof generated?.commit === "string" ? normalizeCommit(generated.commit) : void 0;
-    if (sidecarCommit !== void 0) commit = sidecarCommit;
-  } catch {
-  }
-  return { version, commit };
-}
-function buildTimeStamp() {
-  const version = true ? "0.6.7".trim() : "";
-  const commit = true ? normalizeCommit("159b5e5") : void 0;
-  return { version, commit: commit ?? "" };
-}
-function resolveTavernCommit(buildFallback) {
-  const fallback = normalizeCommit(envCompat("COMMIT") ?? buildFallback) ?? "unknown";
-  const repositoryRoot = resolve2(import.meta.dirname, "..", "..");
-  const packagePath = relative(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
-  if (packagePath !== "packages/plugin") return fallback;
-  const git = (args) => execFileSync("git", args, {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 2e3,
-    windowsHide: true
-  }).trim();
-  try {
-    const gitRoot = resolve2(git(["rev-parse", "--show-toplevel"]));
-    if (relative(repositoryRoot, gitRoot) !== "") return fallback;
-    return normalizeCommit(git(["rev-parse", "--short=7", "HEAD"])) ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-function normalizeCommit(value) {
-  const commit = value.trim();
-  return /^[0-9a-f]{7,40}$/i.test(commit) ? commit.slice(0, 7).toLowerCase() : void 0;
-}
-
-// packages/plugin/src/dsh-home.ts
-import { homedir as homedir2 } from "node:os";
-import { join as join12, resolve as resolve3 } from "node:path";
-function dshHomePath(...segments) {
-  const configured = process.env.DSH_HOME?.trim();
-  return join12(resolve3(configured || join12(homedir2(), ".dsh")), ...segments);
-}
-
-// packages/plugin/src/games/handle.ts
-var GAMES_SERVICE_KEY = "dsh-soulmojito:games-service";
-var serviceSymbol = Symbol.for(GAMES_SERVICE_KEY);
-var nextToken = 1;
-function publishGamesService(service) {
-  const holder = globalThis;
-  const token = nextToken++;
-  holder[serviceSymbol] = { service, token };
-  return () => {
-    if (holder[serviceSymbol]?.token === token) delete holder[serviceSymbol];
-  };
-}
-function resolveGamesService() {
-  const holder = globalThis;
-  return holder[serviceSymbol]?.service;
-}
-var gamesChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:games-changed-listeners");
-function onGamesChanged(listener) {
-  return gamesChangedListeners.on(listener);
-}
-function emitGamesChanged() {
-  void gamesChangedListeners.emit();
-}
-var GAMES_WAITERS_KEY = "dsh-soulmojito:games-waiters";
-function waiterRegistry() {
-  const holder = globalThis;
-  const key = Symbol.for(GAMES_WAITERS_KEY);
-  let registry = holder[key];
-  if (registry === void 0) {
-    registry = /* @__PURE__ */ new Map();
-    holder[key] = registry;
-  }
-  return registry;
-}
-function gameWaiters(sessionId) {
-  return waiterRegistry().get(sessionId)?.size ?? 0;
-}
-
 // packages/plugin/src/games/registry.ts
-import { promises as fs14 } from "node:fs";
-import { cpSync as cpSync2, existsSync as existsSync2, mkdirSync, mkdtempSync as mkdtempSync2, rmSync as rmSync2, writeFileSync } from "node:fs";
-import { tmpdir as tmpdir2 } from "node:os";
-import { dirname as dirname6, join as join14, resolve as resolve4 } from "node:path";
-import { pathToFileURL as pathToFileURL2 } from "node:url";
-
-// packages/plugin/src/mods/manifest.ts
-var MOD_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/;
-var MOD_ID_MAX_LENGTH = 100;
-var MOD_CAPABILITIES = ["llm", "network", "storage"];
-var MOD_BUTTONS_MAX_COUNT = 8;
-var MOD_BUTTON_NAME_MAX_LENGTH = 40;
-var MOD_GAMES_MAX_COUNT = 8;
-var MOD_GAME_ID_MAX_LENGTH = 80;
-function modButtonNameError(name2) {
-  if (typeof name2 !== "string") return "button names must be strings";
-  const text = name2.trim();
-  if (text === "") return "button names must be non-empty strings";
-  if (text !== name2) return "button names must not have surrounding whitespace";
-  if (text.length > MOD_BUTTON_NAME_MAX_LENGTH) {
-    return `button names must be at most ${MOD_BUTTON_NAME_MAX_LENGTH} characters`;
-  }
-  return void 0;
-}
-function checkModManifest(raw, options) {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    return { ok: false, errors: ["mod.json must be a JSON object"] };
-  }
-  const record = raw;
-  const errors = [];
-  const id = record.id;
-  if (typeof id !== "string" || id === "") errors.push("id is required");
-  else if (id.length > MOD_ID_MAX_LENGTH) errors.push(`id must be at most ${MOD_ID_MAX_LENGTH} characters`);
-  else if (!MOD_ID_PATTERN.test(id)) errors.push("id must be [a-z0-9-] labels or reverse-domain joined by '.'");
-  else if (id !== options.directory) errors.push(`id '${id}' must match the directory name '${options.directory}'`);
-  for (const field of ["name", "version", "author", "description", "main"]) {
-    const value = record[field];
-    if (typeof value !== "string" || value.trim() === "") errors.push(`${field} is required and must be a non-empty string`);
-    else if (value.length > 2e3) errors.push(`${field} must be at most 2000 characters`);
-  }
-  if (typeof record.main === "string") {
-    const mainError = checkMainPath(record.main);
-    if (mainError !== void 0) errors.push(mainError);
-  }
-  if (record.engines !== void 0) {
-    if (typeof record.engines !== "object" || record.engines === null || Array.isArray(record.engines)) {
-      errors.push("engines must be an object");
-    } else {
-      for (const key of ["dsh-soulmojito", "dsh-tavern"]) {
-        const range = record.engines[key];
-        if (range !== void 0 && (typeof range !== "string" || range.trim() === "")) {
-          errors.push(`engines['${key}'] must be a non-empty semver range string`);
-        }
-      }
-    }
-  }
-  if (record.loadingOrder !== void 0) {
-    if (typeof record.loadingOrder !== "number" || !Number.isFinite(record.loadingOrder)) {
-      errors.push("loadingOrder must be a finite number");
-    }
-  }
-  if (record.capabilities !== void 0) {
-    if (!Array.isArray(record.capabilities)) {
-      errors.push("capabilities must be an array");
-    } else {
-      const known = new Set(MOD_CAPABILITIES);
-      for (const capability of record.capabilities) {
-        if (typeof capability !== "string" || !known.has(capability)) {
-          errors.push(`capabilities entries must be one of ${MOD_CAPABILITIES.join("|")}`);
-          break;
-        }
-      }
-    }
-  }
-  if (record.panel !== void 0 && record.panel !== null) {
-    if (typeof record.panel !== "object" || Array.isArray(record.panel)) {
-      errors.push("panel must be an object");
-    } else {
-      const panel2 = record.panel;
-      if (typeof panel2.title !== "string" || panel2.title.trim() === "") {
-        errors.push("panel.title is required when panel is declared");
-      }
-      if (panel2.icon !== void 0 && (typeof panel2.icon !== "string" || panel2.icon.trim() === "")) {
-        errors.push("panel.icon must be a non-empty string");
-      }
-    }
-  }
-  if (record.surfaces !== void 0 && record.surfaces !== null) {
-    if (typeof record.surfaces !== "object" || Array.isArray(record.surfaces)) {
-      errors.push("surfaces must be an object");
-    } else {
-      const surfaces2 = record.surfaces;
-      for (const field of ["hooks", "tools", "http"]) {
-        if (surfaces2[field] === void 0) continue;
-        const value = surfaces2[field];
-        if (!Array.isArray(value) || value.length > 32 || value.some((entry) => typeof entry !== "string" || entry === "" || entry.length > 200)) {
-          errors.push(`surfaces.${field} must be an array of non-empty strings (at most 32)`);
-          break;
-        }
-      }
-    }
-  }
-  if (record.buttons !== void 0) {
-    if (!Array.isArray(record.buttons)) {
-      errors.push("buttons must be an array of button names");
-    } else {
-      if (record.buttons.length > MOD_BUTTONS_MAX_COUNT) {
-        errors.push(`buttons must declare at most ${MOD_BUTTONS_MAX_COUNT} entries`);
-      }
-      const seen = /* @__PURE__ */ new Set();
-      for (const name2 of record.buttons) {
-        const nameError = modButtonNameError(name2);
-        if (nameError !== void 0) {
-          errors.push(nameError);
-          break;
-        }
-        if (seen.has(name2)) {
-          errors.push(`button '${name2}' is declared more than once`);
-          break;
-        }
-        seen.add(name2);
-      }
-    }
-  }
-  if (record.games !== void 0) {
-    if (!Array.isArray(record.games)) {
-      errors.push("games must be an array of game ids");
-    } else {
-      if (record.games.length > MOD_GAMES_MAX_COUNT) {
-        errors.push(`games must declare at most ${MOD_GAMES_MAX_COUNT} entries`);
-      }
-      const seenGames = /* @__PURE__ */ new Set();
-      for (const gameId of record.games) {
-        if (typeof gameId !== "string" || gameId.trim() === "") {
-          errors.push("games entries must be non-empty strings");
-          break;
-        }
-        if (gameId.length > MOD_GAME_ID_MAX_LENGTH) {
-          errors.push(`game id '${gameId}' must be at most ${MOD_GAME_ID_MAX_LENGTH} characters`);
-          break;
-        }
-        if (!MOD_ID_PATTERN.test(gameId)) {
-          errors.push(`game id '${gameId}' must be [a-z0-9-] labels or reverse-domain joined by '.'`);
-          break;
-        }
-        if (seenGames.has(gameId)) {
-          errors.push(`game '${gameId}' is declared more than once`);
-          break;
-        }
-        seenGames.add(gameId);
-      }
-    }
-  }
-  if (errors.length > 0) return { ok: false, errors };
-  const engines = record.engines;
-  const engineRange = engines?.["dsh-soulmojito"] ?? engines?.["dsh-tavern"];
-  const panel = record.panel;
-  const surfaces = record.surfaces;
-  const pickStrings = (value) => Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
-  const manifest10 = {
-    id: record.id,
-    name: record.name,
-    version: record.version,
-    author: record.author,
-    description: record.description,
-    main: record.main.trim(),
-    ...engineRange !== void 0 ? { engines: { dshSoulMojito: engineRange } } : {},
-    loadingOrder: typeof record.loadingOrder === "number" ? record.loadingOrder : 100,
-    capabilities: Array.isArray(record.capabilities) ? [...new Set(record.capabilities)] : [],
-    ...panel !== void 0 && typeof panel.title === "string" ? { panel: { title: panel.title, ...typeof panel.icon === "string" ? { icon: panel.icon } : {} } } : {},
-    surfaces: surfaces === void 0 || surfaces === null ? { hooks: [], tools: [], http: [] } : { hooks: pickStrings(surfaces.hooks), tools: pickStrings(surfaces.tools), http: pickStrings(surfaces.http) },
-    buttons: Array.isArray(record.buttons) ? [...record.buttons] : [],
-    games: Array.isArray(record.games) ? [...record.games] : []
-  };
-  return { ok: true, manifest: manifest10 };
-}
-function checkMainPath(main) {
-  const text = main.trim();
-  if (text === "") return "main is required and must be a non-empty string";
-  if (text !== main) return "main must not have surrounding whitespace";
-  if (text.includes("\\")) return "main must use / path separators and stay inside the mod directory";
-  const segments = text.split("/");
-  if (segments.some((segment) => segment === "" || segment === "." || segment === ".." || segment.startsWith("."))) {
-    return "main must be a relative path inside the mod directory (no .. or absolute paths)";
-  }
-  if (!/\.[a-z0-9]+$/i.test(text)) return "main must point at an entry file (with extension)";
-  return void 0;
-}
-function parseSemver(input) {
-  const text = input.trim();
-  if (!/^\d+(?:\.\d+)?(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?$/.test(text)) return void 0;
-  const core = text.split(/[-+]/, 1)[0] ?? "";
-  const [major = "0", minor = "0", patch = "0"] = core.split(".");
-  return { major: Number(major), minor: Number(minor), patch: Number(patch) };
-}
-function compareSemver(left, right) {
-  if (left.major !== right.major) return left.major - right.major;
-  if (left.minor !== right.minor) return left.minor - right.minor;
-  return left.patch - right.patch;
-}
-function satisfiesVersionRange(version, range) {
-  const parsedVersion = parseSemver(version);
-  if (parsedVersion === void 0) {
-    return { ok: false, reason: `host version '${version}' is not a parseable semver` };
-  }
-  const alternatives = range.split("||");
-  const invalid = [];
-  let matched = false;
-  for (const alternative of alternatives) {
-    if (alternative.trim() === "") continue;
-    const comparators = alternative.trim().split(/\s+/).filter((item) => item !== "" && item !== "*");
-    if (comparators.length === 0) {
-      matched = true;
-      continue;
-    }
-    let satisfied = true;
-    for (const comparator of comparators) {
-      const verdict = satisfiesComparator(parsedVersion, comparator);
-      if (verdict === "invalid") {
-        invalid.push(comparator);
-        satisfied = false;
-        break;
-      }
-      if (!verdict) {
-        satisfied = false;
-        break;
-      }
-    }
-    if (satisfied && invalid.length === 0) matched = true;
-  }
-  if (invalid.length > 0) {
-    return { ok: false, reason: `range '${range}' has an invalid comparator '${invalid[0]}'` };
-  }
-  return matched ? { ok: true, reason: "" } : { ok: false, reason: `requires dsh-soulmojito ${range} (host ${version})` };
-}
-function satisfiesComparator(version, comparator) {
-  const match = /^(>=|<=|>|<|=|\^|~)?\s*(.+)$/.exec(comparator);
-  if (match === null) return "invalid";
-  const operator = match[1] ?? "=";
-  const literal = match[2].trim();
-  if (literal === "*") return true;
-  const parsed = parseSemver(literal);
-  if (parsed === void 0) return "invalid";
-  const specified = countSpecifiedSegments(literal);
-  switch (operator) {
-    case "=": {
-      return compareSemver(version, parsed) === 0;
-    }
-    case ">":
-      return compareSemver(version, parsed) > 0;
-    case "<":
-      return compareSemver(version, parsed) < 0;
-    case ">=":
-      return compareSemver(version, parsed) >= 0;
-    case "<=":
-      return compareSemver(version, parsed) <= 0;
-    case "^": {
-      const upper = caretUpperBound(parsed);
-      return compareSemver(version, parsed) >= 0 && compareSemver(version, upper) < 0;
-    }
-    case "~": {
-      const upper = specified >= 2 ? { major: parsed.major, minor: parsed.minor + 1, patch: 0 } : { major: parsed.major + 1, minor: 0, patch: 0 };
-      return compareSemver(version, parsed) >= 0 && compareSemver(version, upper) < 0;
-    }
-    default:
-      return "invalid";
-  }
-}
-function caretUpperBound(parsed) {
-  if (parsed.major > 0) return { major: parsed.major + 1, minor: 0, patch: 0 };
-  if (parsed.minor > 0) return { major: 0, minor: parsed.minor + 1, patch: 0 };
-  return { major: 0, minor: 0, patch: parsed.patch + 1 };
-}
-function countSpecifiedSegments(literal) {
-  return (literal.split(/[-+]/, 1)[0] ?? "").split(".").filter((part) => part !== "").length;
-}
-
-// packages/plugin/src/mods/install.ts
-import { execFile as execFile3 } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync as readFileSync2, rmSync } from "node:fs";
-import { join as join13 } from "node:path";
-import { tmpdir } from "node:os";
-
-// packages/plugin/src/update/sources.ts
-import { execFile as execFile2 } from "node:child_process";
-
-// packages/plugin/src/update/github.ts
-var UPDATE_REPOSITORY = "LingyeSoul/DSH-SoulMojito";
-var UPDATE_REF = "main";
-var UPDATE_PLUGIN_PATH = "/packages/plugin";
-var UNKNOWN_FIELD = "unknown";
-function isCommit(value) {
-  return typeof value === "string" && /^[0-9a-f]{7,40}$/i.test(value.trim());
-}
-function shortCommit(value) {
-  return isCommit(value) ? value.trim().slice(0, 7).toLowerCase() : UNKNOWN_FIELD;
-}
-function repositorySlug(repository) {
-  return repository.trim().replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
-}
-function commitsApiUrl(repository, ref) {
-  return `https://api.github.com/repos/${repositorySlug(repository)}/commits/${encodeURIComponent(ref)}`;
-}
-function compareApiUrl(repository, base, head) {
-  return `https://api.github.com/repos/${repositorySlug(repository)}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
-}
-function packageJsonUrl(repository, ref) {
-  return `https://raw.githubusercontent.com/${repositorySlug(repository)}/${encodeURIComponent(ref)}/packages/plugin/package.json`;
-}
-function commitsAtomUrl(repository, ref) {
-  return `https://github.com/${repositorySlug(repository)}/commits/${encodeURIComponent(ref)}.atom`;
-}
-function commitWebUrl(repository, sha) {
-  return `https://github.com/${repositorySlug(repository)}/commit/${sha}`;
-}
-function compareTavernVersions(left, right) {
-  const parsedLeft = parseVersion(left);
-  const parsedRight = parseVersion(right);
-  for (let index = 0; index < 3; index += 1) {
-    const a = parsedLeft.numbers[index] ?? 0;
-    const b = parsedRight.numbers[index] ?? 0;
-    if (a !== b) return a < b ? -1 : 1;
-  }
-  if (parsedLeft.prerelease === parsedRight.prerelease) return 0;
-  if (parsedLeft.prerelease === "") return 1;
-  if (parsedRight.prerelease === "") return -1;
-  return parsedLeft.prerelease < parsedRight.prerelease ? -1 : 1;
-}
-function parseVersion(value) {
-  const text = typeof value === "string" ? value.trim().replace(/^v/i, "") : "";
-  const [core = "", prerelease = ""] = text.split("-", 2);
-  const numbers = core.split(".").slice(0, 3).map((part) => {
-    const parsed = Number.parseInt(part, 10);
-    return Number.isFinite(parsed) ? parsed : 0;
-  });
-  return { numbers, prerelease };
-}
-function pluginFilesIn(files) {
-  return files.filter((file) => {
-    const normalized = String(file).replace(/^\/+/, "");
-    return normalized === "packages/plugin" || normalized.startsWith("packages/plugin/");
-  });
-}
-function compareBuilds(input) {
-  const localCommit = isCommit(input.local.commit) ? input.local.commit.trim().toLowerCase().slice(0, 7) : UNKNOWN_FIELD;
-  const remoteCommit = isCommit(input.remote.commit) ? input.remote.commit.trim().toLowerCase() : UNKNOWN_FIELD;
-  if (localCommit !== UNKNOWN_FIELD && remoteCommit !== UNKNOWN_FIELD && remoteCommit.startsWith(localCommit)) {
-    return { status: "up-to-date", reason: `already at ${remoteCommit.slice(0, 7)}` };
-  }
-  const remoteVersionKnown = isKnownVersion(input.remote.version);
-  const localVersionKnown = isKnownVersion(input.local.version);
-  if (remoteVersionKnown && localVersionKnown) {
-    const order = compareTavernVersions(input.remote.version, input.local.version);
-    if (order > 0) return { status: "update-available", reason: `version ${input.remote.version} > ${input.local.version}` };
-    if (order < 0) return { status: "local-ahead", reason: `local version ${input.local.version} > ${input.remote.version}` };
-    const filesKnown = input.remote.filesKnown ?? input.remote.changedPluginFiles.length > 0;
-    if (filesKnown) {
-      if (pluginFilesIn(input.remote.changedPluginFiles).length > 0) {
-        return { status: "update-available", reason: `plugin files changed at ${remoteCommit.slice(0, 7)}` };
-      }
-      return { status: "up-to-date", reason: `same version ${input.local.version} and no plugin file changed` };
-    }
-    if (localCommit !== UNKNOWN_FIELD && remoteCommit !== UNKNOWN_FIELD) {
-      return {
-        status: "update-available",
-        reason: `remote commit ${remoteCommit.slice(0, 7)} differs from ${localCommit}; changed files are unavailable on this source`
-      };
-    }
-    return { status: "up-to-date", reason: `same version ${input.local.version}` };
-  }
-  if (localCommit !== UNKNOWN_FIELD && remoteCommit !== UNKNOWN_FIELD) {
-    return {
-      status: "update-available",
-      reason: `remote commit ${remoteCommit.slice(0, 7)} differs from ${localCommit} (remote version unavailable)`
-    };
-  }
-  return {
-    status: "unknown",
-    reason: remoteVersionKnown || localVersionKnown ? "the local build has no commit stamp, so only the version could be compared" : "neither the remote version nor a comparable commit could be read"
-  };
-}
-function isKnownVersion(value) {
-  return typeof value === "string" && value.trim() !== "" && value.trim().toLowerCase() !== UNKNOWN_FIELD;
-}
-function commitFromApi(value) {
-  if (typeof value !== "object" || value === null) return null;
-  const record = value;
-  const sha = typeof record.sha === "string" ? record.sha : "";
-  if (!isCommit(sha)) return null;
-  const commit = record.commit ?? {};
-  return {
-    sha,
-    short: sha.slice(0, 7),
-    message: firstLine(commit.message),
-    date: typeof commit.author?.date === "string" ? commit.author.date : typeof commit.committer?.date === "string" ? commit.committer.date : "",
-    url: typeof record.html_url === "string" ? record.html_url : commitWebUrl(UPDATE_REPOSITORY, sha)
-  };
-}
-function parseCommitResponse(value) {
-  return commitFromApi(value);
-}
-function parseCompareResponse(value) {
-  const record = typeof value === "object" && value !== null ? value : {};
-  const filesKnown = Array.isArray(record.files);
-  const commits = Array.isArray(record.commits) ? record.commits.map(commitFromApi).filter((item) => item !== null) : [];
-  const files = filesKnown ? record.files.map((file) => typeof file?.filename === "string" ? file.filename : "").filter(Boolean) : [];
-  return { commits: commits.reverse(), files, filesKnown };
-}
-function parsePackageVersion(value) {
-  const record = typeof value === "object" && value !== null ? value : {};
-  return typeof record.version === "string" && record.version.trim() !== "" ? record.version.trim() : UNKNOWN_FIELD;
-}
-function parseAtomFeed(xml) {
-  const entries = String(xml ?? "").split(/<entry>/i).slice(1);
-  const commits = [];
-  for (const entry of entries) {
-    const sha = /<id>[^<]*?(?:commit\/|\/commit\/)([0-9a-f]{7,40})<\/id>/i.exec(entry)?.[1] ?? /commit\/([0-9a-f]{7,40})/i.exec(entry)?.[1];
-    if (!isCommit(sha)) continue;
-    commits.push({
-      sha,
-      short: sha.slice(0, 7),
-      message: decodeXml(/<title>([\s\S]*?)<\/title>/i.exec(entry)?.[1] ?? ""),
-      date: /<updated>([^<]*)<\/updated>/i.exec(entry)?.[1] ?? "",
-      url: commitWebUrl(UPDATE_REPOSITORY, sha)
-    });
-  }
-  return commits;
-}
-function decodeXml(value) {
-  return value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
-}
-function firstLine(value) {
-  const text = typeof value === "string" ? value.replace(/\r\n?/g, "\n").trim() : "";
-  return text.split("\n")[0]?.trim() ?? "";
-}
-function pluginInstallSpec(repository, ref, commit) {
-  const target = isCommit(commit) ? commit.trim() : ref;
-  return `github:${repositorySlug(repository)}#${target}&path:${UPDATE_PLUGIN_PATH}`;
-}
-
-// packages/plugin/src/update/sources.ts
-var DEFAULT_TIMEOUT_MS = 8e3;
-var DEFAULT_MAX_COMMITS = 12;
-async function fetchRemoteBuild(options) {
-  const failures = [];
-  for (const source of ["api", "raw-git", "atom"]) {
-    try {
-      const build = source === "api" ? await fetchFromApi(options) : source === "raw-git" ? await fetchFromRawAndGit(options) : await fetchFromAtom(options);
-      if (build !== null) return { build, error: "" };
-      failures.push(`${source}: no commit found`);
-    } catch (error) {
-      failures.push(`${source}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  return { build: null, error: failures.join("; ") };
-}
-async function fetchFromApi(options) {
-  const { repository, ref, localCommit = UNKNOWN_FIELD } = options;
-  const now = options.now ?? (() => /* @__PURE__ */ new Date());
-  const latest = parseCommitResponse(await getJson(options, commitsApiUrl(repository, ref)));
-  if (latest === null) return null;
-  let version = UNKNOWN_FIELD;
-  try {
-    version = parsePackageVersion(await getJson(options, packageJsonUrl(repository, latest.sha)));
-  } catch {
-  }
-  let commits = [latest];
-  let changedPluginFiles = [];
-  let filesKnown = false;
-  if (isCommit(localCommit) && !latest.sha.startsWith(localCommit.trim().slice(0, 7))) {
-    try {
-      const compared = parseCompareResponse(await getJson(options, compareApiUrl(repository, localCommit, latest.sha)));
-      if (compared.commits.length > 0) commits = compared.commits;
-      changedPluginFiles = compared.files;
-      filesKnown = compared.filesKnown;
-    } catch {
-    }
-  } else if (isCommit(localCommit)) {
-    filesKnown = true;
-  }
-  return {
-    ref,
-    version,
-    commit: latest.sha,
-    source: "api",
-    commits: commits.slice(0, options.maxCommits ?? DEFAULT_MAX_COMMITS),
-    changedPluginFiles,
-    filesKnown,
-    checkedAt: now().toISOString()
-  };
-}
-async function fetchFromRawAndGit(options) {
-  const { repository, ref } = options;
-  const now = options.now ?? (() => /* @__PURE__ */ new Date());
-  const [version, commit] = await Promise.all([
-    getJson(options, packageJsonUrl(repository, ref)).then(parsePackageVersion).catch(() => UNKNOWN_FIELD),
-    (options.resolveCommitImpl ?? resolveRemoteCommit)(repository, ref, options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
-  ]);
-  if (!isCommit(commit)) return null;
-  return {
-    ref,
-    version,
-    commit: commit.toLowerCase(),
-    source: "raw-git",
-    commits: [{
-      sha: commit.toLowerCase(),
-      short: shortCommit(commit),
-      message: "",
-      date: "",
-      url: `https://github.com/${repository.replace(/\.git$/i, "")}/commit/${commit.toLowerCase()}`
-    }],
-    changedPluginFiles: [],
-    filesKnown: false,
-    checkedAt: now().toISOString()
-  };
-}
-async function fetchFromAtom(options) {
-  const { repository, ref } = options;
-  const now = options.now ?? (() => /* @__PURE__ */ new Date());
-  const xml = await getText(options, commitsAtomUrl(repository, ref), "application/atom+xml, text/xml, */*");
-  const commits = parseAtomFeed(xml);
-  const latest = commits[0];
-  if (latest === void 0) return null;
-  let version = UNKNOWN_FIELD;
-  try {
-    version = parsePackageVersion(await getJson(options, packageJsonUrl(repository, latest.sha)));
-  } catch {
-  }
-  return {
-    ref,
-    version,
-    commit: latest.sha,
-    source: "atom",
-    commits: commits.slice(0, options.maxCommits ?? DEFAULT_MAX_COMMITS),
-    changedPluginFiles: [],
-    filesKnown: false,
-    checkedAt: now().toISOString()
-  };
-}
-function resolveRemoteCommit(repository, ref, timeoutMs) {
-  return new Promise((resolve7) => {
-    const url = /^https?:|^git@/i.test(repository) ? repository : `https://github.com/${repository.replace(/^\//, "")}.git`;
-    execFile2("git", ["ls-remote", url, `refs/heads/${ref}`, ref], {
-      encoding: "utf8",
-      timeout: timeoutMs,
-      windowsHide: true,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
-    }, (error, stdout) => {
-      if (error) {
-        resolve7("");
-        return;
-      }
-      const first = String(stdout ?? "").split("\n").map((line) => line.trim()).find(Boolean) ?? "";
-      resolve7(first.split(/\s+/)[0] ?? "");
-    });
-  });
-}
-async function getJson(options, url) {
-  return JSON.parse(await getText(options, url, "application/vnd.github+json"));
-}
-async function getText(options, url, accept) {
-  return httpGet(options, url, accept);
-}
-async function httpGet(options, url, accept) {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const failures = [];
-  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
-  if (typeof fetchImpl === "function") {
-    try {
-      const token = options.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? "";
-      const response = await fetchImpl(url, {
-        headers: {
-          accept,
-          "user-agent": "dsh-soulmojito-update-check",
-          ...token ? { authorization: `Bearer ${token}` } : {}
-        },
-        signal: AbortSignal.timeout(timeoutMs)
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return await response.text();
-    } catch (error) {
-      failures.push(`fetch: ${describeError(error)}`);
-    }
-  }
-  const curlDisabled = (envCompat("DISABLE_CURL") ?? "").trim() !== "";
-  if (!curlDisabled) {
-    try {
-      return await (options.curlImpl ?? curlGet)(url, accept, timeoutMs);
-    } catch (error) {
-      failures.push(`curl: ${describeError(error)}`);
-    }
-  }
-  throw new Error(failures.join(" | "));
-}
-function describeError(error) {
-  if (error instanceof Error) {
-    const cause = error.cause;
-    const detail = cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "";
-    return detail === "" ? error.message : `${error.message} (${detail})`;
-  }
-  return String(error);
-}
-function curlGet(url, accept, timeoutMs, exec = execFile2) {
-  const command = envCompat("CURL")?.trim() || (process.platform === "win32" ? "curl.exe" : "curl");
-  const seconds = String(Math.max(1, Math.ceil(timeoutMs / 1e3)));
-  return new Promise((resolve7, reject) => {
-    exec(command, [
-      "--silent",
-      "--show-error",
-      "--fail",
-      "--location",
-      "--max-time",
-      seconds,
-      "-H",
-      `accept: ${accept}`,
-      "-H",
-      "user-agent: dsh-soulmojito-update-check",
-      url
-    ], {
-      encoding: "utf8",
-      timeout: timeoutMs + 5e3,
-      windowsHide: true,
-      maxBuffer: 8 * 1024 * 1024
-    }, (error, stdout) => {
-      if (error) {
-        const detail = String(stdout ?? "").trim();
-        reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
-        return;
-      }
-      resolve7(String(stdout ?? ""));
-    });
-  });
-}
-
-// packages/plugin/src/mods/install.ts
-function parseGitSource(input) {
-  const text = typeof input === "string" ? input.trim() : "";
-  if (text === "" || text.length > 500 || /[\s"']/.test(text)) throw new Error("invalid git url");
-  const hashAt = text.indexOf("#");
-  const urlPart = hashAt >= 0 ? text.slice(0, hashAt) : text;
-  const ref = hashAt >= 0 ? text.slice(hashAt + 1) : void 0;
-  if (ref !== void 0 && !/^[A-Za-z0-9._-]+$/.test(ref)) throw new Error(`invalid ref '${ref}'`);
-  const github = /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?$/i.exec(urlPart) ?? /^github:([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?$/i.exec(urlPart);
-  if (github !== null) {
-    const repository = `${github[1]}/${github[2]}`.replace(/\.git$/i, "");
-    return {
-      kind: "github",
-      repository,
-      ...ref !== void 0 ? { ref } : {},
-      rawModJsonUrl: `https://raw.githubusercontent.com/${repository}/${ref ?? "HEAD"}/mod.json`,
-      cloneUrl: `https://github.com/${repository}.git`
-    };
-  }
-  if (/^https:\/\/github\.com\/(?:[A-Za-z0-9._-]+)?\/?$/i.test(urlPart)) {
-    throw new Error(`unsupported git url '${urlPart}' (expected https://github.com/<owner>/<repo> or a git URL)`);
-  }
-  if (/^https?:\/\/|^git@|^ssh:\/\//i.test(urlPart)) {
-    return { kind: "git", repository: urlPart, ...ref !== void 0 ? { ref } : {}, rawModJsonUrl: null, cloneUrl: urlPart };
-  }
-  if (/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(urlPart)) {
-    const repository = urlPart.replace(/\.git$/i, "");
-    return {
-      kind: "github",
-      repository,
-      ...ref !== void 0 ? { ref } : {},
-      rawModJsonUrl: `https://raw.githubusercontent.com/${repository}/${ref ?? "HEAD"}/mod.json`,
-      cloneUrl: `https://github.com/${repository}.git`
-    };
-  }
-  throw new Error(`unsupported git url '${urlPart}' (expected https://github.com/<owner>/<repo> or a git URL)`);
-}
-function gitClone(url, directory, ref, timeoutMs, exec = execFile3) {
-  const args = ["clone", "--depth", "1", "--filter=blob:none", "--no-checkout"];
-  if (ref !== void 0) args.push("--branch", ref);
-  args.push(url, directory);
-  return runGit(args, exec, timeoutMs).then(() => runGit(["-C", directory, "checkout", "HEAD", "--", "."], exec, timeoutMs));
-}
-function runGit(args, exec, timeoutMs) {
-  return new Promise((resolve7, reject) => {
-    exec("git", args, {
-      encoding: "utf8",
-      timeout: timeoutMs,
-      windowsHide: true,
-      maxBuffer: 4 * 1024 * 1024,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
-    }, (error, _stdout, stderr) => {
-      if (error) {
-        const detail = String(stderr ?? "").trim().split(/\r?\n/).filter(Boolean).at(-1) ?? "";
-        reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
-        return;
-      }
-      resolve7();
-    });
-  });
-}
-async function installModFromGit(options) {
-  const timeoutMs = options.timeoutMs ?? 6e4;
-  const source = parseGitSource(options.url);
-  const fetchText = options.fetchText ?? ((url, accept, ms) => httpGet({ repository: source.repository, ref: source.ref ?? "HEAD", timeoutMs: ms }, url, accept));
-  if (source.rawModJsonUrl !== null) {
-    try {
-      const raw = await fetchText(source.rawModJsonUrl, "application/json", Math.min(timeoutMs, 15e3));
-      const parsed = JSON.parse(raw);
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("mod.json must be a JSON object");
-    } catch (cause) {
-      throw new Error(`repository has no readable mod.json at its root (${source.repository}): ${cause instanceof Error ? cause.message : String(cause)}`);
-    }
-  }
-  const workRoot = mkdtempSync(join13(tmpdir(), "dsh-soulmojito-modinstall-"));
-  try {
-    const cloneDir = join13(workRoot, "clone");
-    await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs);
-    let manifestRaw;
-    try {
-      manifestRaw = JSON.parse(readFileSync2(join13(cloneDir, "mod.json"), "utf8"));
-    } catch (cause) {
-      throw new Error(`repository has no readable mod.json at its root: ${cause instanceof Error ? cause.message : String(cause)}`);
-    }
-    const idField = typeof manifestRaw?.["id"] === "string" ? manifestRaw["id"] : "";
-    const check = checkModManifest(manifestRaw, { directory: idField });
-    if (!check.ok) throw new Error(`invalid mod.json: ${check.errors.join("; ")}`);
-    const modId = check.manifest.id;
-    const target = join13(options.root, "mods", modId);
-    const replaced = existsSync(target);
-    if (replaced && options.force !== true) {
-      throw new Error(`mod '${modId}' is already installed (POST again with force to replace it)`);
-    }
-    rmSync(target, { recursive: true, force: true });
-    cpSync(cloneDir, target, { recursive: true, filter: (src) => !src.endsWith(".git") });
-    return { modId, replaced, directory: target };
-  } finally {
-    rmSync(workRoot, { recursive: true, force: true });
-  }
-}
+import { promises as fs16 } from "node:fs";
+import { cpSync as cpSync2, existsSync as existsSync3, mkdirSync as mkdirSync3, mkdtempSync as mkdtempSync3, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { tmpdir as tmpdir3 } from "node:os";
+import { dirname as dirname10, join as join17, resolve as resolve5 } from "node:path";
+import { pathToFileURL as pathToFileURL3 } from "node:url";
 
 // packages/plugin/src/games/builtin/blackjack.ts
 import { randomInt } from "node:crypto";
@@ -12469,7 +18678,7 @@ function smokeTestGameEngine(engine10) {
   try {
     created = engine10.createGame({ seed: 1 });
   } catch (cause) {
-    return { ok: false, reasons: [`createGame \u629B\u9519: ${errorMessage(cause)}`] };
+    return { ok: false, reasons: [`createGame \u629B\u9519: ${errorMessage2(cause)}`] };
   }
   if (created === null || typeof created !== "object" || !("state" in created)) {
     return { ok: false, reasons: ["createGame \u5FC5\u987B\u8FD4\u56DE { state } \u5F62\u6001"] };
@@ -12481,14 +18690,14 @@ function smokeTestGameEngine(engine10) {
   try {
     turn = currentRoleOf(state, roles);
   } catch (cause) {
-    reasons.push(errorMessage(cause));
+    reasons.push(errorMessage2(cause));
     return { ok: false, reasons };
   }
   let suggestions;
   try {
     suggestions = engine10.legalActions(state);
   } catch (cause) {
-    reasons.push(`legalActions \u629B\u9519: ${errorMessage(cause)}`);
+    reasons.push(`legalActions \u629B\u9519: ${errorMessage2(cause)}`);
     return { ok: false, reasons };
   }
   if (!Array.isArray(suggestions)) return { ok: false, reasons: ["legalActions \u5FC5\u987B\u8FD4\u56DE\u6570\u7EC4"] };
@@ -12513,7 +18722,7 @@ function smokeTestGameEngine(engine10) {
     firstResult = engine10.applyAction(state, first, turn);
     secondResult = engine10.applyAction(state, first, turn);
   } catch (cause) {
-    reasons.push(`applyAction \u5BF9\u5EFA\u8BAE\u96C6\u9996\u4E2A\u52A8\u4F5C\u629B\u9519: ${errorMessage(cause)}`);
+    reasons.push(`applyAction \u5BF9\u5EFA\u8BAE\u96C6\u9996\u4E2A\u52A8\u4F5C\u629B\u9519: ${errorMessage2(cause)}`);
     return { ok: false, reasons };
   }
   if (!deepEqual(firstResult, secondResult)) reasons.push("applyAction \u540C\u8F93\u5165\u4E24\u6B21\u8C03\u7528\u7ED3\u679C\u4E0D\u4E00\u81F4\uFF08\u786E\u5B9A\u6027\u786C\u7EA6\u675F\u4E0D\u8FC7\uFF09");
@@ -12536,7 +18745,7 @@ function smokeTestGameEngine(engine10) {
   }
   return { ok: reasons.length === 0, reasons };
 }
-function errorMessage(cause) {
+function errorMessage2(cause) {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
@@ -18163,7 +24372,7 @@ var GameRegistry = class _GameRegistry {
     return registry;
   }
   get installedRoot() {
-    return join14(this.options.root, "games", "installed");
+    return join17(this.options.root, "games", "installed");
   }
   /** 注册表快照（按 id 稳定排序；三源合一——builtin/imported/mod）。 */
   summaries() {
@@ -18227,15 +24436,15 @@ var GameRegistry = class _GameRegistry {
     }
   }
   async scanInstalled() {
-    const entries = await fs14.readdir(this.installedRoot, { withFileTypes: true }).catch((cause) => {
+    const entries = await fs16.readdir(this.installedRoot, { withFileTypes: true }).catch((cause) => {
       if (cause.code === "ENOENT") return [];
       throw cause;
     });
     const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
     for (const directory of directories) {
-      const entry = await this.loadInstalled(join14(this.installedRoot, directory)).catch((cause) => {
+      const entry = await this.loadInstalled(join17(this.installedRoot, directory)).catch((cause) => {
         const message = cause instanceof Error ? cause.message : String(cause);
-        return { source: "imported", manifest: brokenFallbackManifest(directory), engine: null, viewHtml: null, status: "broken", reason: message, directory: join14(this.installedRoot, directory) };
+        return { source: "imported", manifest: brokenFallbackManifest(directory), engine: null, viewHtml: null, status: "broken", reason: message, directory: join17(this.installedRoot, directory) };
       });
       const shadowed = this.games.get(entry.manifest.id);
       if (shadowed?.source === "builtin") {
@@ -18251,7 +24460,7 @@ var GameRegistry = class _GameRegistry {
     const broken = (manifest10, reason) => ({ source: "imported", manifest: manifest10, engine: null, viewHtml: null, status: "broken", reason, directory });
     let raw;
     try {
-      raw = JSON.parse(await fs14.readFile(join14(directory, "game.json"), "utf8"));
+      raw = JSON.parse(await fs16.readFile(join17(directory, "game.json"), "utf8"));
     } catch (cause) {
       return broken(brokenFallbackManifest(directoryNameOf(directory)), `game.json \u7F3A\u5931\u6216\u4E0D\u53EF\u8BFB: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
@@ -18265,18 +24474,18 @@ var GameRegistry = class _GameRegistry {
     }
     let viewHtml10;
     try {
-      viewHtml10 = await fs14.readFile(join14(directory, "view.html"), "utf8");
+      viewHtml10 = await fs16.readFile(join17(directory, "view.html"), "utf8");
     } catch {
       return broken(check.manifest, "view.html \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
     }
     const viewProblem = staticViewCheck(viewHtml10);
     if (viewProblem !== void 0) return broken(check.manifest, `view.html ${viewProblem}`);
-    const enginePath = join14(directory, "engine.mjs");
-    const stat = await fs14.stat(enginePath).catch(() => void 0);
+    const enginePath = join17(directory, "engine.mjs");
+    const stat = await fs16.stat(enginePath).catch(() => void 0);
     if (stat?.isFile() !== true) return broken(check.manifest, "engine.mjs \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
     let imported;
     try {
-      imported = await import(`${pathToFileURL2(enginePath).href}?v=${stat.mtimeMs}`);
+      imported = await import(`${pathToFileURL3(enginePath).href}?v=${stat.mtimeMs}`);
     } catch (cause) {
       return broken(check.manifest, `engine.mjs \u5BFC\u5165\u5931\u8D25: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
@@ -18297,24 +24506,24 @@ var GameRegistry = class _GameRegistry {
    * 已存在目录拒绝（force=true 先删后装）——镜像 mods/install.ts 落地纪律。
    */
   async installFromPath(sourcePath, force = false) {
-    const source = resolve4(sourcePath);
-    if (!existsSync2(source)) throw new Error(`\u6E38\u620F\u5305\u76EE\u5F55\u4E0D\u5B58\u5728: ${sourcePath}`);
-    const stat = await fs14.stat(source);
+    const source = resolve5(sourcePath);
+    if (!existsSync3(source)) throw new Error(`\u6E38\u620F\u5305\u76EE\u5F55\u4E0D\u5B58\u5728: ${sourcePath}`);
+    const stat = await fs16.stat(source);
     if (!stat.isDirectory()) throw new Error(`\u6E38\u620F\u5305\u8DEF\u5F84\u5FC5\u987B\u662F\u76EE\u5F55: ${sourcePath}`);
     let raw;
     try {
-      raw = JSON.parse(await fs14.readFile(join14(source, "game.json"), "utf8"));
+      raw = JSON.parse(await fs16.readFile(join17(source, "game.json"), "utf8"));
     } catch (cause) {
       throw new Error(`\u6E90\u76EE\u5F55\u7F3A\u5C11\u53EF\u8BFB\u7684 game.json: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
     const id = typeof raw?.["id"] === "string" ? raw["id"] : "";
     const check = checkGameManifest(raw, { directory: id || void 0 });
     if (!check.ok || !check.manifest) throw new Error(`\u6E38\u620F\u6E05\u5355\u6821\u9A8C\u5931\u8D25: ${check.errors.join("; ")}`);
-    const target = join14(this.installedRoot, check.manifest.id);
-    await fs14.mkdir(this.installedRoot, { recursive: true });
-    if (existsSync2(target)) {
+    const target = join17(this.installedRoot, check.manifest.id);
+    await fs16.mkdir(this.installedRoot, { recursive: true });
+    if (existsSync3(target)) {
       if (force !== true) throw new Error(`\u6E38\u620F '${check.manifest.id}' \u5DF2\u5B89\u88C5\uFF08force=true \u53EF\u8986\u76D6\uFF09`);
-      rmSync2(target, { recursive: true, force: true });
+      rmSync3(target, { recursive: true, force: true });
     }
     cpSync2(source, target, { recursive: true, filter: (src) => !src.endsWith(".git") });
     const entry = await this.loadInstalled(target);
@@ -18331,13 +24540,13 @@ var GameRegistry = class _GameRegistry {
   async installFromGit(url, force = false, options = {}) {
     const timeoutMs = options.timeoutMs ?? 6e4;
     const source = parseGitSource(url);
-    const workRoot = mkdtempSync2(join14(tmpdir2(), "dsh-soulmojito-gameinstall-"));
+    const workRoot = mkdtempSync3(join17(tmpdir3(), "dsh-soulmojito-gameinstall-"));
     try {
-      const cloneDir = join14(workRoot, "clone");
+      const cloneDir = join17(workRoot, "clone");
       await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs);
       return await this.installFromPath(cloneDir, force);
     } finally {
-      rmSync2(workRoot, { recursive: true, force: true });
+      rmSync3(workRoot, { recursive: true, force: true });
     }
   }
   /**
@@ -18349,16 +24558,16 @@ var GameRegistry = class _GameRegistry {
    */
   async installFromZip(zipBase64, force = false) {
     const files = selectGamePackageFiles(unzipArchive(decodeZipBase64(zipBase64)));
-    const workRoot = mkdtempSync2(join14(tmpdir2(), "dsh-soulmojito-gamezip-"));
+    const workRoot = mkdtempSync3(join17(tmpdir3(), "dsh-soulmojito-gamezip-"));
     try {
       for (const [name2, data] of files) {
-        const target = join14(workRoot, ...name2.split("/"));
-        mkdirSync(dirname6(target), { recursive: true });
-        writeFileSync(target, data);
+        const target = join17(workRoot, ...name2.split("/"));
+        mkdirSync3(dirname10(target), { recursive: true });
+        writeFileSync2(target, data);
       }
       return await this.installFromPath(workRoot, force);
     } finally {
-      rmSync2(workRoot, { recursive: true, force: true });
+      rmSync3(workRoot, { recursive: true, force: true });
     }
   }
   /* ------------------------- Mod 源（提案 §4.5 第 3 源，P3） ------------------------- */
@@ -18496,446 +24705,9 @@ function unwrapSingleRootDirectory(files) {
 }
 
 // packages/plugin/src/games/sessions.ts
-import { createHash as createHash8, randomBytes as randomBytes4 } from "node:crypto";
-import { promises as fs15 } from "node:fs";
-import { join as join16 } from "node:path";
-
-// packages/plugin/src/update/apply.ts
-import { spawn } from "node:child_process";
-import { copyFileSync, existsSync as existsSync3, mkdirSync as mkdirSync2, mkdtempSync as mkdtempSync3, readdirSync, readFileSync as readFileSync3, renameSync, rmSync as rmSync3, statSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { tmpdir as tmpdir3 } from "node:os";
-import { dirname as dirname7, join as join15 } from "node:path";
-var DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
-function shippedEntries(sourceDir) {
-  const manifest10 = join15(sourceDir, "package.json");
-  if (!existsSync3(manifest10)) throw new Error("packages/plugin/package.json is missing from the checkout");
-  const files = JSON.parse(readFileSync3(manifest10, "utf8"))?.files;
-  if (!Array.isArray(files) || files.length === 0 || !files.every((entry) => typeof entry === "string")) {
-    throw new Error("packages/plugin/package.json has no usable 'files' array");
-  }
-  return [.../* @__PURE__ */ new Set(["package.json", ...files.map((entry) => entry.replace(/^\.\//, ""))])];
-}
-var FILE_LOCK_RETRY_DELAYS_MS = [20, 50, 100, 200];
-function isTransientLockError(error) {
-  const code = error?.code;
-  return code === "EBUSY" || code === "EPERM" || code === "EACCES";
-}
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-function replaceFileAtomic(source, target) {
-  const temp = `${target}.dsh-soulmojito-partial`;
-  copyFileSync(source, temp);
-  for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
-    try {
-      renameSync(temp, target);
-      return;
-    } catch (error) {
-      if (attempt > 0 && isTransientLockError(error)) {
-        sleepSync(FILE_LOCK_RETRY_DELAYS_MS[FILE_LOCK_RETRY_DELAYS_MS.length - attempt] ?? 50);
-        continue;
-      }
-      rmSync3(temp, { force: true });
-      throw error;
-    }
-  }
-}
-function writeFileAtomic(target, data) {
-  const temp = `${target}.dsh-soulmojito-partial`;
-  writeFileSync2(temp, data);
-  for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
-    try {
-      renameSync(temp, target);
-      return;
-    } catch (error) {
-      if (attempt > 0 && isTransientLockError(error)) {
-        sleepSync(FILE_LOCK_RETRY_DELAYS_MS[FILE_LOCK_RETRY_DELAYS_MS.length - attempt] ?? 50);
-        continue;
-      }
-      rmSync3(temp, { force: true });
-      throw error;
-    }
-  }
-}
-async function installUpdate(request) {
-  let pluginManager = request.pluginManager ?? null;
-  const outcome = await runInstallChain(request, [
-    { name: "cli", run: () => installViaCli(request) },
-    {
-      name: "plugin-manager",
-      run: () => {
-        pluginManager ??= resolvePluginManager(request.ctx);
-        return pluginManager === null || pluginManager === void 0 ? Promise.resolve(null) : installViaPluginManager(request, pluginManager);
-      }
-    },
-    { name: "checkout", run: () => installViaCheckout(request) }
-  ]);
-  if (outcome.ok && isCommit(request.commit) && stampInstalledBuild(request.pluginDir, outcome.installed.version, request.commit)) {
-    request.log(`stamped version.json (${outcome.installed.version} ${shortCommit(request.commit)})`);
-    outcome.installed = readInstalledStamp(request.pluginDir);
-  }
-  return outcome;
-}
-async function runInstallChain(request, entries) {
-  const attempts = [];
-  let last = null;
-  for (const entry of entries) {
-    const outcome = await entry.run();
-    if (outcome === null) {
-      attempts.push(`${entry.name}: unavailable`);
-      continue;
-    }
-    if (outcome.ok) return outcome;
-    attempts.push(`${entry.name}: ${outcome.message}`);
-    last = outcome;
-  }
-  if (last !== null) {
-    request.log(`all package-manager paths failed (${attempts.join("; ")})`);
-    return last;
-  }
-  const failed = {
-    ok: false,
-    strategy: entries.at(-1)?.name ?? "checkout",
-    application: "failed",
-    message: `no update path is available in this host (${attempts.join("; ")})`,
-    restartRequired: false,
-    installed: readInstalledStamp(request.pluginDir)
-  };
-  return failed;
-}
-function resolvePluginManager(ctx) {
-  for (const read of [
-    () => ctx?.pluginManager,
-    () => ctx?.get?.("pluginManager")
-  ]) {
-    try {
-      const service = read();
-      if (service !== void 0 && service !== null && typeof service.installBundle === "function") return service;
-    } catch {
-    }
-  }
-  return null;
-}
-function watchPluginManager(ctx, onReady) {
-  if (typeof ctx?.inject !== "function") return () => {
-  };
-  try {
-    const returned = ctx.inject(["pluginManager"], (serviceCtx) => {
-      try {
-        if (serviceCtx?.pluginManager !== void 0) onReady(serviceCtx.pluginManager);
-      } catch {
-      }
-    });
-    return () => {
-      try {
-        if (typeof returned?.dispose === "function") returned.dispose();
-        else if (typeof returned === "function") returned();
-      } catch {
-      }
-    };
-  } catch {
-    return () => {
-    };
-  }
-}
-function resolveProfileName(ctx) {
-  for (const read of [() => ctx?.profileContext?.name, () => process.env.DSH_PROFILE]) {
-    try {
-      const value = read();
-      if (typeof value === "string" && value.trim() !== "") return value.trim();
-    } catch {
-    }
-  }
-  return "desktop";
-}
-function resolveDesktopCli(argv = process.argv, execPath = process.execPath, exists = existsSync3) {
-  const configured = envCompat("DSH_CLI")?.trim();
-  if (configured !== void 0 && configured !== "") {
-    return { command: execPath, args: ["--expose-internals", configured], env: { ELECTRON_RUN_AS_NODE: "1" } };
-  }
-  const runtimeDir = typeof argv[2] === "string" ? argv[2].trim() : "";
-  if (runtimeDir === "") return null;
-  const cli = join15(runtimeDir, "node_modules", "@deepseek-ai", "dsh-desktop-host", "lib", "cli.js");
-  if (!exists(cli)) return null;
-  return { command: execPath, args: ["--expose-internals", cli], env: { ELECTRON_RUN_AS_NODE: "1" } };
-}
-async function installViaCli(request) {
-  const cli = resolveDesktopCli();
-  if (cli === null) return null;
-  const profile = resolveProfileName(request.ctx);
-  const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
-  const args = [...cli.args, "plugin", "--profile", profile, "add", spec];
-  request.log(`dsh plugin --profile ${profile} add ${spec}`);
-  try {
-    const result = await runCapture(cli.command, args, {
-      env: { ...cli.env },
-      timeoutMs: request.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS,
-      onLine: request.log
-    });
-    if (result.code !== 0) throw new Error(`exit ${result.code}`);
-    return {
-      ok: true,
-      strategy: "cli",
-      application: "restart-required",
-      message: "installed through `dsh plugin`; restart DSH to load the new module generation",
-      restartRequired: true,
-      installed: readInstalledStamp(request.pluginDir, spec)
-    };
-  } catch (error) {
-    request.log(`dsh plugin failed: ${error instanceof Error ? error.message : String(error)}`);
-    return null;
-  }
-}
-async function installViaPluginManager(request, pluginManager) {
-  const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
-  const requestId = `dsh-soulmojito-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  request.log(`plugin-manager: installBundle ${spec}`);
-  const dispose = subscribeInstallEvents(request, requestId);
-  try {
-    const result = await pluginManager.installBundle(spec, { requestId, enabled: true });
-    const application = normalizeApplication(result?.application, result);
-    const failed = application === "failed" || application === "cancelled";
-    const detail = failed ? describeFailure(result) : "";
-    const ambiguous = detail.includes("ambiguous-install");
-    return {
-      ok: !failed,
-      strategy: "plugin-manager",
-      application,
-      message: failed ? `plugin-manager install failed: ${detail || "see the profile .plugin-manager logs"}${ambiguous ? " (git dependency target is ambiguous: the manifest specifier never changes, so `dsh plugin` is the path that works)" : ""}` : application === "restart-required" ? "installed through the DSH plugin manager; restart DSH to load the new module generation" : 'installed through the DSH plugin manager; restart DSH to load the new module generation (the host reported "applied" under HMR, but package replacements still need a fresh module generation)',
-      // 宿主 HMR 下回报 'applied'，但包替换必须重启进程才加载新 JS generation
-      // （dsh-plugin-manager 自述语义）——两种回报都按需重启处理；service 层
-      // 再以「磁盘 stamp 是否被内存 stamp 追上」决定过渡态怎么解除。
-      restartRequired: !failed,
-      installed: readInstalledStamp(request.pluginDir, spec)
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    request.log(`plugin-manager: ${message}`);
-    return {
-      ok: false,
-      strategy: "plugin-manager",
-      application: "failed",
-      message: `plugin-manager install threw: ${message}`,
-      restartRequired: false,
-      installed: readInstalledStamp(request.pluginDir, spec)
-    };
-  } finally {
-    dispose();
-  }
-}
-function subscribeInstallEvents(request, requestId) {
-  const handlers = [];
-  const on = (event, handler) => {
-    try {
-      const dispose = request.ctx?.on?.(event, handler);
-      if (typeof dispose === "function") handlers.push(dispose);
-    } catch {
-    }
-  };
-  on("plugin-manager/install-log", (chunk) => {
-    if (chunk?.requestId !== requestId) return;
-    const text = typeof chunk?.text === "string" ? chunk.text.trimEnd() : "";
-    if (text !== "") request.log(`pnpm ${chunk?.stream ?? "out"}: ${text}`);
-    if (typeof chunk?.exitCode === "number") request.log(`pnpm exited with ${chunk.exitCode}`);
-  });
-  on("plugin-manager/install-state", (state) => {
-    if (state?.requestId !== requestId) return;
-    const attempt = state?.attempt;
-    request.log(`plugin-manager: ${state?.phase ?? "working"}${attempt?.registry === void 0 ? "" : ` (${attempt.registry} ${attempt.index}/${attempt.total})`}`);
-  });
-  return () => {
-    for (const dispose of handlers.splice(0)) {
-      try {
-        dispose();
-      } catch {
-      }
-    }
-  };
-}
-function normalizeApplication(application, result) {
-  if (application === "applied" || application === "restart-required" || application === "cancelled" || application === "failed") {
-    return application;
-  }
-  if (result?.error !== void 0) return "failed";
-  return "unknown";
-}
-function describeFailure(result) {
-  const error = result?.error;
-  const code = typeof error?.code === "string" ? error.code : "";
-  const message = typeof error?.message === "string" ? error.message : "";
-  const output = typeof result?.packageResult?.output === "string" ? result.packageResult.output.trim() : "";
-  return [code, message, output.split("\n").slice(-4).join(" ")].filter((item) => item !== "").join(" | ");
-}
-async function installViaCheckout(request) {
-  const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
-  const repository = repositorySlug(request.repository);
-  const profile = resolveProfileName(request.ctx);
-  const checkout = mkdtempSync3(join15(tmpdir3(), "dsh-soulmojito-checkout-"));
-  try {
-    request.log(`fallback: git clone --depth 1 https://github.com/${repository}.git`);
-    await mustRun("git", ["clone", "--depth", "1", "--branch", request.ref, `https://github.com/${repository}.git`, checkout], request);
-    if (isCommit(request.commit)) {
-      const head = (await mustRun("git", ["-C", checkout, "rev-parse", "HEAD"], request)).trim();
-      if (!head.startsWith(shortCommit(request.commit))) {
-        request.log(`checkout ${shortCommit(request.commit)}`);
-        await mustRun("git", ["-C", checkout, "fetch", "--depth", "1", "origin", request.commit], request);
-        await mustRun("git", ["-C", checkout, "checkout", "--quiet", request.commit], request);
-      }
-    }
-    const source = join15(checkout, "packages", "plugin");
-    if (!existsSync3(source)) throw new Error("packages/plugin is missing from the checkout");
-    const copied = copyShippedFiles(source, request.pluginDir);
-    request.log(`copied ${copied.length} shipped entries into ${request.pluginDir}`);
-    return {
-      ok: true,
-      strategy: "checkout",
-      application: "restart-required",
-      message: `files replaced from a fresh GitHub checkout; the profile lockfile still pins the previous commit, so run \`dsh plugin --profile ${profile} add ${spec}\` to make it durable, then restart DSH`,
-      restartRequired: true,
-      installed: readInstalledStamp(request.pluginDir, spec)
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    request.log(`checkout fallback failed: ${message}`);
-    return {
-      ok: false,
-      strategy: "checkout",
-      application: "failed",
-      message: `update failed: ${message}. Manual fallback: dsh plugin --profile ${profile} add ${spec}`,
-      restartRequired: false,
-      installed: readInstalledStamp(request.pluginDir, spec)
-    };
-  } finally {
-    rmSync3(checkout, { recursive: true, force: true });
-  }
-}
-async function mustRun(command, args, request) {
-  const result = await runCapture(command, args, {
-    timeoutMs: request.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS,
-    onLine: request.log
-  });
-  if (result.code !== 0) throw new Error(`${command} ${args.slice(0, 2).join(" ")} exited ${result.code}`);
-  return result.output;
-}
-function copyShippedFiles(sourceDir, targetDir) {
-  const copied = [];
-  for (const entry of shippedEntries(sourceDir)) {
-    const from = join15(sourceDir, entry);
-    if (!existsSync3(from)) continue;
-    const stat = statSyncSafe(from);
-    if (stat === null) continue;
-    if (!stat.isDirectory()) {
-      replaceFileAtomic(from, join15(targetDir, entry));
-      copied.push(entry);
-      continue;
-    }
-    for (const file of listFiles(from)) {
-      const relative3 = file.slice(from.length + 1);
-      const to = join15(targetDir, entry, relative3);
-      mkdirSync2(dirname7(to), { recursive: true });
-      writeFileAtomic(to, readFileSync3(file));
-      copied.push(`${entry}/${relative3.replaceAll("\\", "/")}`);
-    }
-  }
-  return copied;
-}
-function stampInstalledBuild(pluginDir, version, commit) {
-  if (!isKnownVersion(version) || !isCommit(commit)) return false;
-  try {
-    writeFileAtomic(join15(pluginDir, "version.json"), `${JSON.stringify({ version: version.trim(), commit: shortCommit(commit) }, null, 2)}
-`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function listFiles(root) {
-  const found = [];
-  const pending = [root];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    for (const entry of readdirSyncSafe(current)) {
-      const full = join15(current, entry);
-      const stat = statSyncSafe(full);
-      if (stat === null) continue;
-      if (stat.isDirectory()) pending.push(full);
-      else found.push(full);
-    }
-  }
-  return found;
-}
-function readdirSyncSafe(path12) {
-  try {
-    return readdirSync(path12);
-  } catch {
-    return [];
-  }
-}
-function statSyncSafe(path12) {
-  try {
-    return statSync(path12);
-  } catch {
-    return null;
-  }
-}
-function readInstalledStamp(pluginDir, spec = "") {
-  let version = UNKNOWN_FIELD;
-  let commit = UNKNOWN_FIELD;
-  try {
-    const generated = JSON.parse(readFileSync3(join15(pluginDir, "version.json"), "utf8"));
-    if (typeof generated?.version === "string" && generated.version.trim() !== "") version = generated.version.trim();
-    if (isCommit(generated?.commit)) commit = shortCommit(generated.commit);
-  } catch {
-  }
-  if (version === UNKNOWN_FIELD) {
-    try {
-      const manifest10 = JSON.parse(readFileSync3(join15(pluginDir, "package.json"), "utf8"));
-      if (typeof manifest10?.version === "string" && manifest10.version.trim() !== "") version = manifest10.version.trim();
-    } catch {
-    }
-  }
-  if (commit === UNKNOWN_FIELD) {
-    const pinned = /#([0-9a-f]{7,40})(?:&|$)/.exec(spec)?.[1];
-    if (isCommit(pinned)) commit = shortCommit(pinned);
-  }
-  return { version, commit };
-}
-function runCapture(command, args, options = {}) {
-  return new Promise((resolve7, reject) => {
-    const child = spawn(command, args, {
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ...options.env ?? {} }
-    });
-    let output = "";
-    const feed = (chunk) => {
-      const text = chunk.toString("utf8");
-      output += text;
-      if (options.onLine !== void 0) {
-        for (const line of text.split("\n")) {
-          if (line.trim() !== "") options.onLine(line.trim());
-        }
-      }
-    };
-    child.stdout?.on("data", feed);
-    child.stderr?.on("data", feed);
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`${command} timed out after ${options.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS}ms`));
-    }, options.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS);
-    timer.unref?.();
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      resolve7({ code: code ?? -1, output });
-    });
-  });
-}
-
-// packages/plugin/src/games/sessions.ts
+import { createHash as createHash9, randomBytes as randomBytes4 } from "node:crypto";
+import { promises as fs17 } from "node:fs";
+import { join as join18 } from "node:path";
 var GAME_HISTORY_DEFAULT_LIMIT = 20;
 var GAME_HISTORY_MAX_LIMIT = 200;
 var GameBridgeError = class extends Error {
@@ -18955,19 +24727,19 @@ var GameSessionStore = class _GameSessionStore {
   }
   tail = Promise.resolve();
   static async open(options) {
-    await fs15.mkdir(join16(options.root, "games", "sessions"), { recursive: true });
+    await fs17.mkdir(join18(options.root, "games", "sessions"), { recursive: true });
     return new _GameSessionStore(options);
   }
   get sessionsRoot() {
-    return join16(this.options.root, "games", "sessions");
+    return join18(this.options.root, "games", "sessions");
   }
   /* ------------------------------ 查询面 ------------------------------ */
   /** 会话目录 name+size+mtimeMs 的 sha256（镜像 tavern-store storeRevision 的便宜纪律：只 stat 不读内容）。 */
   async revision() {
-    const hash = createHash8("sha256");
-    const names = (await fs15.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
+    const hash = createHash9("sha256");
+    const names = (await fs17.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
     for (const name2 of names) {
-      const stat = await fs15.stat(join16(this.sessionsRoot, name2)).catch(() => void 0);
+      const stat = await fs17.stat(join18(this.sessionsRoot, name2)).catch(() => void 0);
       hash.update(`${name2}\0${stat === void 0 ? "missing" : `${stat.size}\0${stat.mtimeMs}`}
 `);
     }
@@ -19150,8 +24922,8 @@ var GameSessionStore = class _GameSessionStore {
   }
   /* ------------------------------ 内部 ------------------------------ */
   async persist(session) {
-    await fs15.mkdir(this.sessionsRoot, { recursive: true });
-    writeFileAtomic(join16(this.sessionsRoot, `${session.id}.json`), `${JSON.stringify(session, null, 2)}
+    await fs17.mkdir(this.sessionsRoot, { recursive: true });
+    writeFileAtomic(join18(this.sessionsRoot, `${session.id}.json`), `${JSON.stringify(session, null, 2)}
 `);
   }
   async load(sessionId) {
@@ -19160,7 +24932,7 @@ var GameSessionStore = class _GameSessionStore {
     }
     let raw;
     try {
-      raw = await fs15.readFile(join16(this.sessionsRoot, `${sessionId}.json`), "utf8");
+      raw = await fs17.readFile(join18(this.sessionsRoot, `${sessionId}.json`), "utf8");
     } catch {
       throw new GameBridgeError("not-found", `\u4F1A\u8BDD '${sessionId}' \u4E0D\u5B58\u5728`);
     }
@@ -19175,7 +24947,7 @@ var GameSessionStore = class _GameSessionStore {
     }
   }
   async loadAll() {
-    const names = (await fs15.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
+    const names = (await fs17.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
     const sessions = [];
     for (const name2 of names) {
       try {
@@ -19234,239 +25006,6 @@ var GameSessionStore = class _GameSessionStore {
     return { state: session.state, turn, legal, finished: session.finished, summary: session.summary };
   }
 };
-
-// packages/plugin/src/mods/http.ts
-var MOD_HTTP_METHODS = /* @__PURE__ */ new Set(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]);
-var RESERVED_MOD_SUBROUTE_POST_PATHS = /* @__PURE__ */ new Set(["enable", "disable", "reload"]);
-function isReservedModSubroutePostPath(path12) {
-  return RESERVED_MOD_SUBROUTE_POST_PATHS.has(path12) || path12 === "button" || path12.startsWith("button/");
-}
-var MOD_HTML_DEFAULT_CSP = [
-  "default-src 'none'",
-  "script-src 'unsafe-inline'",
-  "style-src 'unsafe-inline'",
-  "img-src data: blob:",
-  "font-src data:",
-  "media-src data: blob:",
-  "connect-src 'none'",
-  "frame-src 'none'",
-  "object-src 'none'",
-  "base-uri 'none'",
-  "form-action 'none'"
-].join("; ");
-function createModRouteTable() {
-  const entries = [];
-  return {
-    register(method, path12, handler) {
-      const normalizedMethod = String(method ?? "").toUpperCase();
-      if (!MOD_HTTP_METHODS.has(normalizedMethod)) {
-        throw new Error(`unsupported mod route method '${String(method)}'`);
-      }
-      if (!isValidModHttpPath(path12)) {
-        throw new Error(`invalid mod route path '${String(path12)}'`);
-      }
-      if (normalizedMethod === "POST" && isReservedModSubroutePostPath(path12)) {
-        throw new Error(`mod route POST ${path12} is reserved by host management routes`);
-      }
-      if (typeof handler !== "function") throw new Error("mod route handler must be a function");
-      if (entries.some((entry) => entry.method === normalizedMethod && entry.path === path12)) {
-        throw new Error(`mod route ${normalizedMethod} ${path12} is already registered`);
-      }
-      entries.push({ method: normalizedMethod, path: path12, handler });
-      return () => {
-        const index = entries.findIndex((entry) => entry.method === normalizedMethod && entry.path === path12 && entry.handler === handler);
-        if (index >= 0) entries.splice(index, 1);
-      };
-    },
-    find(method, path12) {
-      const normalizedMethod = String(method ?? "").toUpperCase();
-      return entries.find((entry) => entry.method === normalizedMethod && entry.path === path12)?.handler;
-    },
-    size: () => entries.length
-  };
-}
-var SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-function isValidModHttpPath(path12) {
-  if (typeof path12 !== "string" || path12 === "") return false;
-  if (path12.length > 200) return false;
-  if (path12.includes("\\") || path12.includes("%")) return false;
-  if (path12.startsWith("/") || path12.endsWith("/")) return false;
-  const segments = path12.split("/");
-  if (segments.some((segment) => segment === "." || segment === ".." || !SEGMENT_PATTERN.test(segment))) return false;
-  return true;
-}
-function makeModReply(res) {
-  return {
-    json(body, status2 = 200) {
-      if (res.writableEnded) return;
-      res.statusCode = status2;
-      res.setHeader("content-type", "application/json; charset=utf-8");
-      res.setHeader("cache-control", "no-store");
-      res.end(JSON.stringify(body));
-    },
-    html(document, csp) {
-      if (res.writableEnded) return;
-      res.statusCode = 200;
-      res.setHeader("content-type", "text/html; charset=utf-8");
-      res.setHeader("cache-control", "no-store");
-      res.setHeader("x-content-type-options", "nosniff");
-      res.end(renderModHtmlDocument(String(document ?? ""), csp ?? MOD_HTML_DEFAULT_CSP));
-    }
-  };
-}
-function escapeHtmlAttribute(value) {
-  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
-}
-var MOD_LOG_MESSAGE = "dsh-soulmojito:mod-log";
-var MOD_LOG_TEXT_LIMIT = 2048;
-function modConsoleReporterScript() {
-  return `(function () {
-  var token = '';
-  try { token = new URLSearchParams(location.search).get('token') || ''; } catch (_) { return; }
-  if (token === '') return;
-  var send = function (level, text) {
-    try {
-      parent.postMessage({ type: ${JSON.stringify(MOD_LOG_MESSAGE)}, token: token, level: level, text: String(text).slice(0, ${MOD_LOG_TEXT_LIMIT}) }, '*');
-    } catch (_) {}
-  };
-  var format = function (args) {
-    var parts = [];
-    for (var index = 0; index < args.length; index += 1) {
-      var value = args[index];
-      if (typeof value === 'string') parts.push(value);
-      else { try { parts.push(JSON.stringify(value)); } catch (_) { parts.push(String(value)); } }
-    }
-    return parts.join(' ');
-  };
-  ['log', 'warn', 'error'].forEach(function (level) {
-    var original = typeof console[level] === 'function' ? console[level].bind(console) : function () {};
-    console[level] = function () { original.apply(null, arguments); send(level, format(arguments)); };
-  });
-  addEventListener('error', function (event) {
-    var at = event.filename ? ' @ ' + event.filename + ':' + event.lineno : '';
-    send('error', (event.message || 'script error') + at);
-  });
-  addEventListener('unhandledrejection', function (event) {
-    send('error', 'unhandled rejection: ' + format([event.reason]));
-  });
-})();`;
-}
-var MOD_VIEWPORT_MESSAGE = "dsh-soulmojito:viewport";
-var MOD_VIEWPORT_CSS_VAR = "--dt-viewport-height";
-var VIEWPORT_UNIT_PATTERN = /(?<![-\w])100(?:d|s|l)?vh(?![\w-])/gi;
-var VIEWPORT_VAR_REFERENCE = `var(${MOD_VIEWPORT_CSS_VAR}, 100vh)`;
-function rewriteViewportUnitsInCssText(cssText) {
-  const special = /\/\*|["']/g;
-  let out = "";
-  let cursor = 0;
-  let match;
-  while ((match = special.exec(cssText)) !== null) {
-    out += cssText.slice(cursor, match.index).replace(VIEWPORT_UNIT_PATTERN, VIEWPORT_VAR_REFERENCE);
-    const end = match[0] === "/*" ? cssText.indexOf("*/", match.index + 2) : cssText.indexOf(match[0], match.index + 1);
-    cursor = end === -1 ? cssText.length : end + (match[0] === "/*" ? 2 : 1);
-    out += cssText.slice(match.index, cursor);
-    special.lastIndex = cursor;
-  }
-  return out + cssText.slice(cursor).replace(VIEWPORT_UNIT_PATTERN, VIEWPORT_VAR_REFERENCE);
-}
-function rewriteViewportUnits(document) {
-  const scripts = [];
-  const shielded = String(document || "").replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, (whole) => {
-    scripts.push(whole);
-    return `\0dt-vh-script-${scripts.length - 1}\0`;
-  });
-  const rewritten = shielded.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (_whole, open, css, close) => `${open}${rewriteViewportUnitsInCssText(css)}${close}`).replace(/(\bstyle\s*=\s*)(["'])([^"']*)\2/gi, (_whole, prefix, quote, css) => `${prefix}${quote}${rewriteViewportUnitsInCssText(css)}${quote}`);
-  return rewritten.replace(/\u0000dt-vh-script-(\d+)\u0000/g, (_whole, index) => scripts[Number(index)]);
-}
-function modViewportScript() {
-  return `(function () {
-  var root = document.documentElement;
-  var apply = function (height) {
-    if (typeof height !== 'number' || !isFinite(height) || height <= 0) return;
-    try { root.style.setProperty(${JSON.stringify(MOD_VIEWPORT_CSS_VAR)}, height + 'px'); } catch (_) {}
-  };
-  apply(window.innerHeight);
-  addEventListener('message', function (event) {
-    var data = event.data;
-    if (!data || data.type !== ${JSON.stringify(MOD_VIEWPORT_MESSAGE)}) return;
-    apply(data.height);
-  });
-})();`;
-}
-function modHeightReporterScript() {
-  return `(function () {
-  var token = '';
-  try { token = new URLSearchParams(location.search).get('token') || ''; } catch (_) { return; }
-  if (token === '') return;
-  var last = -1;
-  var queued = false;
-  var measure = function () {
-    if (queued) return;
-    queued = true;
-    var flush = function () {
-      queued = false;
-      var root = document.documentElement;
-      var body = document.body;
-      var height = Math.max(root ? root.scrollHeight : 0, body ? body.scrollHeight : 0);
-      if (height <= 0 || height === last) return;
-      last = height;
-      try {
-        parent.postMessage({ type: 'dsh-soulmojito:frontend-height', token: token, height: height }, '*');
-      } catch (_) {}
-      setTimeout(measure, 500);
-    };
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush); else setTimeout(flush, 0);
-  };
-  var wire = function () {
-    if (typeof ResizeObserver !== 'function') return;
-    var observer = new ResizeObserver(measure);
-    if (document.documentElement) observer.observe(document.documentElement);
-    if (document.body) observer.observe(document.body);
-  };
-  wire();
-  addEventListener('DOMContentLoaded', wire);
-  addEventListener('load', measure);
-  addEventListener('resize', measure);
-  setTimeout(measure, 0);
-})();`;
-}
-function renderModHtmlDocument(document, csp) {
-  const rewritten = rewriteViewportUnits(String(document ?? ""));
-  const meta = `<meta http-equiv="Content-Security-Policy" content="${escapeHtmlAttribute(csp)}">`;
-  const scripts = `<script>${modConsoleReporterScript()}</script><script>${modViewportScript()}</script><script>${modHeightReporterScript()}</script>`;
-  const headMatch = /<head(?:\s[^>]*)?>/i.exec(rewritten);
-  if (headMatch !== null) {
-    const at = headMatch.index + headMatch[0].length;
-    return `${rewritten.slice(0, at)}${meta}${scripts}${rewritten.slice(at)}`;
-  }
-  if (/<html(?:\s[^>]*)?>/i.test(rewritten)) {
-    return rewritten.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${meta}${scripts}</head>`);
-  }
-  return `<!doctype html><html><head><meta charset="utf-8">${meta}${scripts}</head><body>${rewritten}</body></html>`;
-}
-function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
-  return new Promise((resolve7, reject) => {
-    let bytes = 0;
-    const chunks = [];
-    req.on("data", (chunk) => {
-      bytes += chunk.length;
-      if (bytes > maxBytes) {
-        reject(new Error(`request exceeds ${maxBytes} bytes`));
-        req.destroy?.();
-      } else {
-        chunks.push(chunk);
-      }
-    });
-    req.on("end", () => {
-      try {
-        resolve7(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
-      } catch {
-        reject(new Error("invalid JSON body"));
-      }
-    });
-    req.on("error", reject);
-  });
-}
 
 // packages/plugin/src/games/view.ts
 var GAME_STATE_MESSAGE = "dsh-soulmojito:game-state";
@@ -19687,2423 +25226,6 @@ async function wakeAgentOnHumanMove(host, session) {
     warn(`dsh-soulmojito: game wake followup failed (${messageOf3(error)})`);
     return false;
   }
-}
-
-// packages/tavern-macros/src/host-registry.ts
-var HOST_MACRO_REGISTRY_KEY = "dsh-soulmojito:host-macros";
-var registrySymbol = Symbol.for(HOST_MACRO_REGISTRY_KEY);
-function store() {
-  const holder = globalThis;
-  return holder[registrySymbol] ??= { nextSequence: 1, entries: /* @__PURE__ */ new Map() };
-}
-function registerHostMacro(name2, fn, order = 100) {
-  const shared = store();
-  const sequence = shared.nextSequence++;
-  shared.entries.set(sequence, { name: name2, fn, order, sequence });
-  return () => {
-    shared.entries.delete(sequence);
-  };
-}
-function hostMacroSnapshot() {
-  return [...store().entries.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ name: name2, fn, order }) => ({ name: name2, fn, order }));
-}
-
-// packages/tavern-macros/src/random.ts
-function hash32(input) {
-  let h = 2166136261;
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-var ESCAPED_COMMA = "\0";
-function splitMacroList(listString) {
-  if (listString.includes("::")) {
-    return listString.split("::");
-  }
-  return listString.replace(/\\,/g, ESCAPED_COMMA).split(",").map((item) => item.trim().replace(/\u0000/g, ","));
-}
-function parseRoll2(formula) {
-  let f = formula.trim();
-  if (/^\d+$/.test(f)) {
-    f = `1d${f}`;
-  }
-  const m = /^(\d+)d(\d+)([+-]\d+)?$/.exec(f);
-  if (m === null) return null;
-  const count = Number(m[1]);
-  const sides = Number(m[2]);
-  const modifier = m[3] === void 0 ? 0 : Number(m[3]);
-  if (!Number.isInteger(count) || count < 1 || count > 999) return null;
-  if (!Number.isInteger(sides) || sides < 2 || sides > 999) return null;
-  if (!Number.isFinite(modifier)) return null;
-  return { count, sides, modifier };
-}
-function evalRoll(spec, rng) {
-  let total = spec.modifier;
-  for (let i = 0; i < spec.count; i++) {
-    const r = rng();
-    total += Math.floor(r < 0 ? 0 : r >= 1 ? spec.sides - 1 : r * spec.sides) + 1;
-  }
-  return total;
-}
-
-// packages/tavern-macros/src/time.ts
-var MONTHS_FULL = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December"
-];
-var WEEKDAYS_FULL = [
-  "Sunday",
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday"
-];
-function pad2(n) {
-  return n < 10 ? `0${n}` : String(n);
-}
-function formatTime12(hours24, minutes) {
-  const h12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
-  return `${h12}:${pad2(minutes)} ${hours24 < 12 ? "AM" : "PM"}`;
-}
-function formatLocalTime(d) {
-  return formatTime12(d.getHours(), d.getMinutes());
-}
-function formatTimeAtUtcOffset(d, offsetHours) {
-  const shifted = new Date(d.getTime() + offsetHours * 36e5);
-  return formatTime12(shifted.getUTCHours(), shifted.getUTCMinutes());
-}
-function formatLocalDateLong(d) {
-  return `${MONTHS_FULL[d.getMonth()] ?? ""} ${d.getDate()}, ${d.getFullYear()}`;
-}
-function formatWeekday(d) {
-  return WEEKDAYS_FULL[d.getDay()] ?? "";
-}
-function formatLocalIsoTime(d) {
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
-function formatLocalIsoDate(d) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
-function formatWithTokens(d, fmt) {
-  let out = "";
-  let i = 0;
-  while (i < fmt.length) {
-    const four = fmt.slice(i, i + 4);
-    if (four === "yyyy" || four === "YYYY") {
-      out += String(d.getFullYear()).padStart(4, "0");
-      i += 4;
-      continue;
-    }
-    const two = fmt.slice(i, i + 2);
-    if (two === "MM") {
-      out += pad2(d.getMonth() + 1);
-      i += 2;
-      continue;
-    }
-    if (two === "dd" || two === "DD") {
-      out += pad2(d.getDate());
-      i += 2;
-      continue;
-    }
-    if (two === "HH") {
-      out += pad2(d.getHours());
-      i += 2;
-      continue;
-    }
-    if (two === "mm") {
-      out += pad2(d.getMinutes());
-      i += 2;
-      continue;
-    }
-    if (two === "ss") {
-      out += pad2(d.getSeconds());
-      i += 2;
-      continue;
-    }
-    out += fmt.charAt(i);
-    i += 1;
-  }
-  return out;
-}
-function humanizeDuration(totalSeconds) {
-  const s = totalSeconds < 0 ? 0 : totalSeconds;
-  if (s < 45) return "a few seconds";
-  if (s < 90) return "a minute";
-  const minutes = s / 60;
-  if (minutes < 45) return `${Math.round(minutes)} minutes`;
-  if (minutes < 90) return "an hour";
-  const hours = minutes / 60;
-  if (hours < 22) return `${Math.round(hours)} hours`;
-  if (hours < 36) return "a day";
-  const days = hours / 24;
-  if (days < 26) return `${Math.round(days)} days`;
-  if (days < 45) return "a month";
-  const months = days / 30;
-  if (months < 11) return `${Math.round(months)} months`;
-  if (months < 18) return "a year";
-  return `${Math.round(months / 12)} years`;
-}
-
-// packages/tavern-macros/src/engine.ts
-var TRIM = Symbol("trim");
-var builtinMacroNameSet = /* @__PURE__ */ new Set();
-function builtinMacroNames() {
-  return new Set(builtinMacroNameSet);
-}
-function opt(v) {
-  return v ?? "";
-}
-function coerceRead(v) {
-  if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) {
-    return Number(v);
-  }
-  return v;
-}
-function createMacroEngine(init) {
-  const card = init.card ?? {};
-  const localVars = new Map(Object.entries(init.local ?? {}));
-  const globalVars = new Map(Object.entries(init.global ?? {}));
-  const now = init.now ?? (() => /* @__PURE__ */ new Date());
-  const rng = init.rng ?? Math.random;
-  const groupValue = init.group ?? init.char;
-  const registry = /* @__PURE__ */ new Map();
-  function reg(name2, handler) {
-    registry.set(name2.toLowerCase(), handler);
-  }
-  function regExact(name2, getValue) {
-    reg(name2, (ctx) => ctx.rest === "" ? getValue() : null);
-  }
-  function colonArg(ctx) {
-    return ctx.rest.startsWith("::") ? ctx.rest.slice(2) : null;
-  }
-  function laxArg(ctx) {
-    const m = /^\s?::?/.exec(ctx.rest);
-    return m === null ? null : ctx.rest.slice(m[0].length);
-  }
-  function rollArg(ctx) {
-    const m = /^(?:\s?::?|\s)/.exec(ctx.rest);
-    return m === null ? null : ctx.rest.slice(m[0].length);
-  }
-  function storeOf(scope) {
-    return scope === "local" ? localVars : globalVars;
-  }
-  function readVar(scope, name2) {
-    return coerceRead(storeOf(scope).get(name2));
-  }
-  function addToVar(scope, name2, value) {
-    const store5 = storeOf(scope);
-    const current = (coerceRead(store5.get(name2)) ?? 0) || 0;
-    if (typeof current === "string") {
-      try {
-        const parsed = JSON.parse(current);
-        if (Array.isArray(parsed)) {
-          parsed.push(value);
-          const json = JSON.stringify(parsed);
-          store5.set(name2, json);
-          return json;
-        }
-      } catch {
-      }
-    }
-    const inc = Number(value);
-    const currentNum = Number(current);
-    if (Number.isNaN(inc) || Number.isNaN(currentNum)) {
-      const concatenated = `${String(current || "")}${String(value)}`;
-      store5.set(name2, concatenated);
-      return concatenated;
-    }
-    const next = currentNum + inc;
-    if (Number.isNaN(next)) {
-      return "";
-    }
-    store5.set(name2, next);
-    return String(next);
-  }
-  regExact("char", () => init.char);
-  regExact("user", () => init.user);
-  regExact("group", () => groupValue);
-  regExact("charIfNotGroup", () => groupValue);
-  regExact("groupNotMuted", () => groupValue);
-  regExact("notChar", () => init.user);
-  regExact("persona", () => opt(init.persona));
-  regExact("description", () => opt(card.description));
-  regExact("personality", () => opt(card.personality));
-  regExact("scenario", () => opt(card.scenario));
-  regExact("mesExamples", () => opt(card.mesExample));
-  regExact("mesExamplesRaw", () => opt(card.mesExample));
-  regExact("charPrompt", () => opt(card.systemPrompt));
-  regExact("charInstruction", () => opt(card.postHistoryInstructions));
-  regExact("charJailbreak", () => opt(card.postHistoryInstructions));
-  regExact("charDepthPrompt", () => opt(card.charDepthPrompt));
-  regExact("creatorNotes", () => opt(card.creatorNotes));
-  regExact("charCreatorNotes", () => opt(card.creatorNotes));
-  regExact("systemPrompt", () => opt(init.systemPrompt));
-  regExact("original", () => opt(init.original));
-  regExact("lastMessage", () => opt(init.lastMessage));
-  regExact("lastUserMessage", () => opt(init.lastUserMessage));
-  regExact("lastCharMessage", () => opt(init.lastCharMessage));
-  regExact(
-    "lastMessageId",
-    () => init.lastMessageId === void 0 ? "" : String(init.lastMessageId)
-  );
-  regExact("model", () => opt(init.model));
-  regExact(
-    "maxContextTokens",
-    () => init.maxContextTokens === void 0 ? "" : String(init.maxContextTokens)
-  );
-  regExact("maxPrompt", () => {
-    const n = init.maxPrompt ?? init.maxContextTokens;
-    return n === void 0 ? "" : String(n);
-  });
-  regExact(
-    "maxResponseTokens",
-    () => init.maxResponseTokens === void 0 ? "" : String(init.maxResponseTokens)
-  );
-  regExact("newline", () => "\n");
-  regExact("space", () => " ");
-  regExact("noop", () => "");
-  reg("trim", (ctx) => ctx.rest === "" ? TRIM : null);
-  reg("time", (ctx) => {
-    if (ctx.rest === "") {
-      return formatLocalTime(now());
-    }
-    const arg = laxArg(ctx);
-    if (arg === null) {
-      return null;
-    }
-    const m = /^UTC([+-]\d+)$/i.exec(arg.trim());
-    if (m === null) {
-      return null;
-    }
-    return formatTimeAtUtcOffset(now(), Number(m[1]));
-  });
-  reg("time_utc", (ctx) => {
-    const m = /^([+-]\d+)$/.exec(ctx.rest);
-    if (m === null) {
-      return null;
-    }
-    return formatTimeAtUtcOffset(now(), Number(m[1]));
-  });
-  regExact("date", () => formatLocalDateLong(now()));
-  regExact("weekday", () => formatWeekday(now()));
-  regExact("isotime", () => formatLocalIsoTime(now()));
-  regExact("isodate", () => formatLocalIsoDate(now()));
-  reg("datetimeformat", (ctx) => {
-    const m = /^(?:\s+|::?)/.exec(ctx.rest);
-    if (m === null) {
-      return null;
-    }
-    return formatWithTokens(now(), ctx.rest.slice(m[0].length));
-  });
-  regExact(
-    "idle_duration",
-    () => init.idleDurationSeconds === void 0 ? "just now" : humanizeDuration(init.idleDurationSeconds)
-  );
-  regExact(
-    "idleDuration",
-    () => init.idleDurationSeconds === void 0 ? "just now" : humanizeDuration(init.idleDurationSeconds)
-  );
-  reg("random", (ctx) => {
-    const arg = laxArg(ctx);
-    if (arg === null || arg === "") {
-      return null;
-    }
-    const list = splitMacroList(arg);
-    const idx = Math.floor(rng() * list.length);
-    const safe = idx < 0 ? 0 : idx >= list.length ? list.length - 1 : idx;
-    return list[safe] ?? "";
-  });
-  reg("pick", (ctx) => {
-    const arg = laxArg(ctx);
-    if (arg === null || arg === "") {
-      return null;
-    }
-    const list = splitMacroList(arg);
-    const chatHash = hash32(init.chatId ?? "");
-    const seed = hash32(`${chatHash}|${ctx.rawHash}|${ctx.offset}`);
-    return list[seed % list.length] ?? "";
-  });
-  reg("roll", (ctx) => {
-    const arg = rollArg(ctx);
-    if (arg === null) {
-      return null;
-    }
-    const spec = parseRoll2(arg);
-    if (spec === null) {
-      return "";
-    }
-    return String(evalRoll(spec, rng));
-  });
-  function registerVarMacros(scope, infix) {
-    const store5 = storeOf(scope);
-    reg(`get${infix}var`, (ctx) => {
-      const arg = colonArg(ctx);
-      if (arg === null || arg === "") {
-        return null;
-      }
-      const v = coerceRead(store5.get(arg.trim()));
-      return v === void 0 ? "" : String(v);
-    });
-    reg(`set${infix}var`, (ctx) => {
-      const arg = colonArg(ctx);
-      if (arg === null) {
-        return null;
-      }
-      const m = /^([^:]+)::([\s\S]*)$/.exec(arg);
-      if (m === null || m[1] === void 0 || m[1] === "") {
-        return null;
-      }
-      store5.set(m[1].trim(), m[2] ?? "");
-      return "";
-    });
-    reg(`add${infix}var`, (ctx) => {
-      const arg = colonArg(ctx);
-      if (arg === null) {
-        return null;
-      }
-      const m = /^([^:]+)::([\s\S]+)$/.exec(arg);
-      if (m === null || m[1] === void 0 || m[1] === "") {
-        return null;
-      }
-      addToVar(scope, m[1].trim(), m[2] ?? "");
-      return "";
-    });
-    reg(`inc${infix}var`, (ctx) => {
-      const arg = colonArg(ctx);
-      if (arg === null || arg === "") {
-        return null;
-      }
-      const m = /^([^:]+?)(?:::([\s\S]*))?$/.exec(arg);
-      if (m === null || m[1] === void 0 || m[1] === "") {
-        return null;
-      }
-      const delta = m[2] === void 0 ? "1" : m[2];
-      return addToVar(scope, m[1].trim(), delta);
-    });
-    reg(`dec${infix}var`, (ctx) => {
-      const arg = colonArg(ctx);
-      if (arg === null || arg === "") {
-        return null;
-      }
-      const m = /^([^:]+?)(?:::([\s\S]*))?$/.exec(arg);
-      if (m === null || m[1] === void 0 || m[1] === "") {
-        return null;
-      }
-      const value = m[2] === void 0 ? -1 : Number.isNaN(Number(m[2])) ? `-${m[2]}` : -Number(m[2]);
-      return addToVar(scope, m[1].trim(), value);
-    });
-    reg(`has${infix}var`, (ctx) => {
-      const arg = colonArg(ctx);
-      if (arg === null || arg === "") {
-        return null;
-      }
-      return store5.has(arg.trim()) ? "true" : "false";
-    });
-    reg(`delete${infix}var`, (ctx) => {
-      const arg = colonArg(ctx);
-      if (arg === null || arg === "") {
-        return null;
-      }
-      store5.delete(arg.trim());
-      return "";
-    });
-  }
-  registerVarMacros("local", "");
-  registerVarMacros("global", "global");
-  const LEGACY_RE = /<CHARIFNOTGROUP>|<GROUP>|<CHAR>|<BOT>|<USER>|(?<!\{)\{char\}(?!\})|(?<!\{)\{user\}(?!\})/gi;
-  function applyLegacy(text) {
-    if (!text.includes("<") && !text.includes("{")) {
-      return text;
-    }
-    return text.replace(LEGACY_RE, (tag) => {
-      switch (tag.toLowerCase()) {
-        case "<bot>":
-        case "<char>":
-        case "{char}":
-          return init.char;
-        case "%USERNAME%":
-        case "{user}":
-          return init.user;
-        case "<group>":
-        case "<charifnotgroup>":
-          return groupValue;
-        default:
-          return tag;
-      }
-    });
-  }
-  function evalInside(inside, offset, rawHash) {
-    if (inside === "") {
-      return null;
-    }
-    if (inside.startsWith("//")) {
-      return "";
-    }
-    const m = /^([A-Za-z0-9_]+)/.exec(inside);
-    if (m === null) {
-      return null;
-    }
-    const macroName = m[1];
-    const rest = inside.slice(macroName.length);
-    if (rest.includes("}")) {
-      return null;
-    }
-    const handler = registry.get(macroName.toLowerCase());
-    if (handler === void 0) {
-      return null;
-    }
-    return handler({ rest, offset, rawHash });
-  }
-  function expand(rawText) {
-    if (!rawText) {
-      return "";
-    }
-    const text = applyLegacy(rawText);
-    const rawHash = hash32(rawText);
-    let out = "";
-    let pos = 0;
-    let skipNewlines = false;
-    const appendText = (chunk) => {
-      if (chunk === "") {
-        return;
-      }
-      let c = chunk;
-      if (skipNewlines) {
-        c = c.replace(/^(?:\r?\n)+/, "");
-        if (c !== "") {
-          skipNewlines = false;
-        }
-      }
-      out += c;
-    };
-    for (; ; ) {
-      const open = text.indexOf("{{", pos);
-      if (open === -1) {
-        appendText(text.slice(pos));
-        break;
-      }
-      appendText(text.slice(pos, open));
-      const close = text.indexOf("}}", open + 2);
-      if (close === -1) {
-        appendText(text.slice(open));
-        break;
-      }
-      const result = evalInside(text.slice(open + 2, close), open, rawHash);
-      if (result === null) {
-        appendText(text.slice(open, close + 2));
-      } else if (result === TRIM) {
-        out = out.replace(/(?:\r?\n)+$/, "");
-        skipNewlines = true;
-      } else {
-        skipNewlines = false;
-        out += result;
-      }
-      pos = close + 2;
-    }
-    return out;
-  }
-  function registerMacro(name2, fn) {
-    const key = name2.trim();
-    if (key === "") {
-      throw new TypeError("Macro key must not be empty or whitespace only");
-    }
-    if (key.startsWith("{{") || key.endsWith("}}")) {
-      throw new TypeError("Macro key must not include the surrounding braces");
-    }
-    reg(key, (ctx) => {
-      const stripped = ctx.rest.replace(/^(?:\s?::?|\s)/, "");
-      const args = stripped === "" ? [] : stripped.split("::");
-      try {
-        return fn(args, api);
-      } catch {
-        return null;
-      }
-    });
-  }
-  for (const key of registry.keys()) builtinMacroNameSet.add(key);
-  for (const entry of hostMacroSnapshot()) {
-    try {
-      registerMacro(entry.name, entry.fn);
-    } catch {
-    }
-  }
-  const api = {
-    expand,
-    getVar: (name2) => readVar("local", name2),
-    setVar: (name2, value) => {
-      localVars.set(name2, value);
-    },
-    hasVar: (name2) => localVars.has(name2),
-    deleteVar: (name2) => localVars.delete(name2),
-    getGlobalVar: (name2) => readVar("global", name2),
-    setGlobalVar: (name2, value) => {
-      globalVars.set(name2, value);
-    },
-    hasGlobalVar: (name2) => globalVars.has(name2),
-    deleteGlobalVar: (name2) => globalVars.delete(name2),
-    registerMacro,
-    snapshotVars: () => ({
-      local: Object.fromEntries(localVars),
-      global: Object.fromEntries(globalVars)
-    })
-  };
-  return api;
-}
-
-// packages/plugin/src/prompt-safety.ts
-function createHostPromptExpander(char, user, frozen) {
-  const macros = createMacroEngine({
-    char,
-    user,
-    ...frozen?.now === void 0 ? {} : { now: frozen.now },
-    ...frozen?.rng === void 0 ? {} : { rng: frozen.rng }
-  });
-  return (text) => macros.expand(text);
-}
-function seededRandom(seed) {
-  let state = seed >>> 0;
-  return () => {
-    state = state + 1831565813 >>> 0;
-    let t = state;
-    t = Math.imul(t ^ t >>> 15, t | 1);
-    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
-}
-function hostPromptSafe(text, expand = (value) => value) {
-  return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
-}
-
-// packages/plugin/src/prompt-context.ts
-var DEFAULT_USER = "User";
-function tavernMacroExpand(state, characterName, character) {
-  const macros = createMacroEngine({
-    char: character?.card.data.nickname || character?.card.data.name || characterName,
-    user: state.activePersona ?? DEFAULT_USER
-  });
-  return (text) => macros.expand(text);
-}
-async function characterLinkedWorlds(db, characterName) {
-  const found = await db.getCharacter(characterName);
-  const world = found?.card.data.extensions["world"];
-  if (typeof world !== "string" || world.trim() === "") return [];
-  const book = await db.getWorld(world.trim());
-  return book ? [book.name] : [];
-}
-function displayTextForMessage(scripts, message, depth) {
-  const displayScripts = scripts.filter((script) => script.markdownOnly && !script.disabled);
-  const text = message.mes ?? "";
-  return displayScripts.length === 0 ? text : applyRegexScripts(text, displayScripts, RegexPlacement2.AI_OUTPUT, { expand: (value) => value }, { depth });
-}
-async function displayTexts(db, state, characterName, chat) {
-  const character = await db.getCharacter(characterName);
-  const scripts = collectRegexScripts(state, character);
-  if (scripts.every((script) => !script.markdownOnly || script.disabled)) return void 0;
-  return chat.messages.map((message, index) => displayTextForMessage(scripts, message, chat.messages.length - 1 - index));
-}
-async function presetSamplerValue(db, state, key) {
-  const presetName = state.activePreset;
-  if (!presetName) return void 0;
-  const preset = await db.getPreset(presetName);
-  return preset?.[key];
-}
-function parsePresetOrThrow(data) {
-  const kind = detectPresetKind(data);
-  if (kind === "chat-completion") {
-    parsePreset(data);
-    return;
-  }
-  if (kind === "context") {
-    parseContextTemplate(data);
-    return;
-  }
-  if (kind === "instruct") {
-    parseInstructTemplate(data);
-    return;
-  }
-  if (kind === "textgen-sampler") return;
-  throw new Error("preset format not recognized (expected chat completion prompts, context, instruct, or textgen sampler)");
-}
-function compactionOverrideOf(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
-  const provider = typeof value.curatorProvider === "string" ? value.curatorProvider.trim() : "";
-  const model = typeof value.curatorModel === "string" ? value.curatorModel.trim() : "";
-  return provider !== "" && model !== "" ? { curatorProvider: provider, curatorModel: model } : void 0;
-}
-
-// packages/plugin/src/mods/host.ts
-import { promises as fs17 } from "node:fs";
-import { mkdir as mkdir3 } from "node:fs/promises";
-import { isAbsolute, join as join17, relative as relative2, resolve as resolve5 } from "node:path";
-import { pathToFileURL as pathToFileURL3 } from "node:url";
-
-// packages/plugin/src/guides.ts
-var GUIDES_MAX_COUNT = 8;
-var GUIDE_MAX_TEXT_LENGTH = 500;
-var GUIDES_BLOCK_HEADER = "Conversation guides (persistent user directives; apply to every reply):";
-function normalizeGuides(value) {
-  if (!Array.isArray(value)) return [];
-  const guides = [];
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
-    const { id, text, createdAt } = entry;
-    if (typeof id !== "string" || id === "") continue;
-    if (typeof text !== "string" || text.trim() === "") continue;
-    if (typeof createdAt !== "string" || createdAt === "") continue;
-    guides.push({ id, text: text.trim(), createdAt });
-  }
-  return guides;
-}
-function addGuide(guides, text) {
-  if (typeof text !== "string" || text.trim() === "") {
-    return { ok: false, error: "guide text is required and must be a non-empty string" };
-  }
-  const trimmed = text.trim();
-  if (trimmed.length > GUIDE_MAX_TEXT_LENGTH) {
-    return { ok: false, error: `guide text must be at most ${GUIDE_MAX_TEXT_LENGTH} characters (got ${trimmed.length})` };
-  }
-  if (guides.length >= GUIDES_MAX_COUNT) {
-    return { ok: false, error: `guide limit reached: at most ${GUIDES_MAX_COUNT} guides per chat` };
-  }
-  const guide = { id: crypto.randomUUID(), text: trimmed, createdAt: (/* @__PURE__ */ new Date()).toISOString() };
-  return { ok: true, guide, guides: [...guides, guide] };
-}
-function removeGuide(guides, id) {
-  const next = guides.filter((guide) => guide.id !== id);
-  return { removed: next.length !== guides.length, guides: next };
-}
-function formatGuidesBlock(guides) {
-  const normalized = normalizeGuides(guides);
-  if (normalized.length === 0) return void 0;
-  return [
-    GUIDES_BLOCK_HEADER,
-    ...[...normalized].sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((guide) => `- ${guide.text}`)
-  ].join("\n");
-}
-var guidesChanged = createGlobalListenerRegistry("dsh-soulmojito:guides-changed-listeners");
-function onGuidesChanged(listener) {
-  return guidesChanged.on(listener);
-}
-function emitGuidesChanged(character, chatId) {
-  return guidesChanged.emit(character, chatId);
-}
-
-// packages/plugin/src/generation-hooks.ts
-var GENERATION_HOOK_TIMEOUT_MS = 1e4;
-function withTimeout(promise, ms) {
-  return new Promise((resolve7, reject) => {
-    const timer = setTimeout(() => {
-      const timeoutError = new Error(`generation hook timed out after ${ms}ms`);
-      timeoutError.hookTimeout = true;
-      reject(timeoutError);
-    }, ms);
-    Promise.resolve(promise).then(
-      (value) => {
-        clearTimeout(timer);
-        resolve7(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      }
-    );
-  });
-}
-function createGenerationHookBus(options = {}) {
-  const timeoutMs = options.timeoutMs ?? GENERATION_HOOK_TIMEOUT_MS;
-  const table = /* @__PURE__ */ new Map();
-  const degradationListeners = /* @__PURE__ */ new Set();
-  let nextId = 1;
-  let degradations = 0;
-  function register(phase, handler, order = 100, owner) {
-    const id = nextId++;
-    const list = table.get(phase) ?? [];
-    list.push({ id, order, handler, ...owner !== void 0 ? { owner } : {} });
-    list.sort((a, b) => a.order - b.order || a.id - b.id);
-    table.set(phase, list);
-    return () => {
-      const current = table.get(phase);
-      if (current === void 0) return;
-      table.set(phase, current.filter((registration) => registration.id !== id));
-    };
-  }
-  async function dispatch(phase, payload, context) {
-    const list = table.get(phase);
-    if (list === void 0 || list.length === 0) return payload;
-    const fullContext = { ...context, phase };
-    let current = payload;
-    for (const registration of [...list]) {
-      const degrade = (reason, detail) => {
-        degradations += 1;
-        const degradation = {
-          phase,
-          order: registration.order,
-          reason,
-          ...detail !== void 0 ? { detail } : {},
-          ...registration.owner !== void 0 ? { owner: registration.owner } : {}
-        };
-        options.onDegradation?.(degradation);
-        for (const listener of [...degradationListeners]) {
-          try {
-            listener(degradation);
-          } catch {
-          }
-        }
-      };
-      try {
-        const outcome = await withTimeout(
-          Promise.resolve(registration.handler(current, fullContext)),
-          timeoutMs
-        );
-        if (outcome === void 0) {
-          degrade("no-return");
-        } else {
-          current = outcome;
-        }
-      } catch (error) {
-        const timedOut = error instanceof Error && error.hookTimeout === true;
-        degrade(timedOut ? "timeout" : "error", error instanceof Error ? error.message : String(error));
-      }
-    }
-    return current;
-  }
-  return {
-    register,
-    dispatch,
-    degradationCount: () => degradations,
-    onDegradation(listener) {
-      degradationListeners.add(listener);
-      return () => {
-        degradationListeners.delete(listener);
-      };
-    }
-  };
-}
-var generationHooks = createGenerationHookBus();
-
-// packages/plugin/src/mods/audit.ts
-import { appendFile, mkdir } from "node:fs/promises";
-import { dirname as dirname8 } from "node:path";
-var ModAuditLog = class {
-  constructor(file) {
-    this.file = file;
-  }
-  counts = /* @__PURE__ */ new Map();
-  warn;
-  tail = Promise.resolve();
-  /** 宿主 logger 可选注入；没有 logger 时审计写入失败完全静默。 */
-  setLogger(warn) {
-    this.warn = warn;
-  }
-  /** 追加一条审计记录（best-effort）；无论落盘与否都推进内存计数。 */
-  record(mod, event, detail = "") {
-    this.counts.set(mod, (this.counts.get(mod) ?? 0) + 1);
-    const line = `${JSON.stringify({ ts: (/* @__PURE__ */ new Date()).toISOString(), mod, event, ...detail === "" ? {} : { detail } })}
-`;
-    const written = this.tail.catch(() => {
-    }).then(async () => {
-      try {
-        await mkdir(dirname8(this.file), { recursive: true });
-        await appendFile(this.file, line, "utf8");
-      } catch (cause) {
-        this.warn?.(`dsh-soulmojito: mod audit append failed: ${cause instanceof Error ? cause.message : String(cause)}`);
-      }
-    });
-    this.tail = written;
-    return written;
-  }
-  /** 本进程内某 Mod 的审计事件计数（面板「审计计数」数据源）。 */
-  count(mod) {
-    return this.counts.get(mod) ?? 0;
-  }
-};
-
-// packages/plugin/src/mods/events.ts
-var MOD_EVENT_KINDS = /* @__PURE__ */ new Set(["chat-saved", "assets-saved", "guides-changed", "stream-delta"]);
-var ModEventBus = class {
-  listeners = /* @__PURE__ */ new Map();
-  isKind(value) {
-    return typeof value === "string" && MOD_EVENT_KINDS.has(value);
-  }
-  hasListeners(kind) {
-    const set = this.listeners.get(kind);
-    return set !== void 0 && set.size > 0;
-  }
-  on(kind, handler) {
-    const set = this.listeners.get(kind) ?? /* @__PURE__ */ new Set();
-    set.add(handler);
-    this.listeners.set(kind, set);
-    return () => {
-      set.delete(handler);
-    };
-  }
-  async emit(kind, payload) {
-    const set = this.listeners.get(kind);
-    if (set === void 0 || set.size === 0) return;
-    for (const handler of [...set]) {
-      try {
-        await handler(payload);
-      } catch {
-      }
-    }
-  }
-};
-var modEvents = new ModEventBus();
-function emitChatSaved(character, chatId, revision, floorCount) {
-  return modEvents.emit("chat-saved", { character, chatId, revision, floorCount });
-}
-function emitAssetsSaved(kind, name2) {
-  return modEvents.emit("assets-saved", { kind, name: name2 });
-}
-var streamEpoch = 0;
-var dispatchEpoch = streamEpoch;
-function currentStreamEpoch() {
-  return dispatchEpoch;
-}
-function beginStreamEpoch() {
-  streamEpoch += 1;
-}
-var streamDeltaTail = Promise.resolve();
-function emitStreamDelta(payload) {
-  if (!modEvents.hasListeners("stream-delta")) return;
-  const epoch = streamEpoch;
-  streamDeltaTail = streamDeltaTail.then(async () => {
-    dispatchEpoch = epoch;
-    try {
-      await modEvents.emit("stream-delta", payload);
-    } finally {
-      dispatchEpoch = streamEpoch;
-    }
-  }).catch(() => {
-  });
-}
-
-// packages/plugin/src/mods/cross-bundle.ts
-var MOD_SECTION_ORDER_MIN = -50;
-var MOD_SECTION_ORDER_MAX = 0;
-function clampModSectionOrder(order) {
-  const value = typeof order === "number" && Number.isFinite(order) ? order : MOD_SECTION_ORDER_MIN;
-  return Math.max(MOD_SECTION_ORDER_MIN, Math.min(MOD_SECTION_ORDER_MAX, value));
-}
-var MOD_TOOL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-var BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
-  // agent-tavern（agent.ts createTools，25：18 原有 + 游戏桥七件，提案 0018 §4.2；
-  // game_wait 为 2026-10-14 修订新增，game_history 为同日增量修订新增，
-  // game_wait_full 为 2026-10-16 带棋盘视图的等待变体新增）
-  "tavern_character_get",
-  "tavern_lore_search",
-  "tavern_scene_get",
-  "tavern_history_search",
-  "memory_search",
-  "memory_read",
-  "memory_write",
-  "memory_update",
-  "memory_forget",
-  "variable_get",
-  "variable_set",
-  "variable_patch",
-  "variable_delete",
-  "variable_list",
-  "tavern_script_read",
-  "tavern_script_advance",
-  "tavern_deduce",
-  "tavern_variable_settle",
-  "game_list",
-  "game_start",
-  "game_state",
-  "game_history",
-  "game_move",
-  "game_wait",
-  "game_wait_full",
-  // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
-  "novel_status_read",
-  "novel_requirements_read",
-  "novel_outline_read",
-  "novel_outline_create",
-  "novel_outline_revise",
-  "novel_requirement_block",
-  "novel_facts_read",
-  "novel_lore_search",
-  "novel_character_read",
-  "novel_body_read",
-  "novel_body_search",
-  "novel_body_commit",
-  "novel_chapter_complete",
-  "novel_unit_claim",
-  "novel_unit_release",
-  "novel_unit_supersede",
-  "novel_writer_draft",
-  "novel_writer_delegate",
-  "novel_finish",
-  // card-workbench（card-workbench/tools-*.ts，22）
-  "card_get",
-  "card_put",
-  "card_create",
-  "card_delete",
-  "card_original_get",
-  "card_restore_original",
-  "card_plan_propose",
-  "card_apply_mvu",
-  "chat_log_read",
-  "world_get",
-  "world_put",
-  "world_create",
-  "world_delete",
-  "world_copy",
-  "world_rename",
-  "world_bind",
-  "world_list",
-  "world_plan_propose",
-  "preset_get",
-  "preset_put",
-  "material_list",
-  "material_read"
-]);
-var MOD_REGISTRY_KEY = "dsh-soulmojito:mod-registry";
-var registrySymbol2 = Symbol.for(MOD_REGISTRY_KEY);
-function store2() {
-  const holder = globalThis;
-  return holder[registrySymbol2] ??= {
-    tools: /* @__PURE__ */ new Map(),
-    sections: /* @__PURE__ */ new Map(),
-    builtinNames: new Set(BUILTIN_TOOL_NAMES_SEED),
-    nextSequence: 1
-  };
-}
-var modsChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:mods-changed-listeners");
-function notifyChanged() {
-  void modsChangedListeners.emit();
-}
-function toolKey(modId, name2) {
-  return `${modId}\0${name2}`;
-}
-function registerModTool(modId, definition, order) {
-  const shared = store2();
-  const sequence = shared.nextSequence++;
-  const key = toolKey(modId, definition.name);
-  shared.tools.set(key, { modId, order, sequence, definition });
-  notifyChanged();
-  return () => {
-    if (shared.tools.get(key)?.sequence === sequence) shared.tools.delete(key);
-    notifyChanged();
-  };
-}
-function registerModSection(modId, definition, order) {
-  const shared = store2();
-  const sequence = shared.nextSequence++;
-  const key = `${modId}\0${definition.name}`;
-  shared.sections.set(key, { modId, order, sequence, definition });
-  notifyChanged();
-  return () => {
-    if (shared.sections.get(key)?.sequence === sequence) shared.sections.delete(key);
-    notifyChanged();
-  };
-}
-function modToolSnapshot() {
-  return [...store2().tools.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
-}
-function claimedToolNames() {
-  const names = new Set(store2().builtinNames);
-  for (const entry of store2().tools.values()) names.add(entry.definition.name);
-  return names;
-}
-
-// packages/plugin/src/mods/storage.ts
-import { promises as fs16 } from "node:fs";
-import { mkdir as mkdir2 } from "node:fs/promises";
-import { dirname as dirname9 } from "node:path";
-var MOD_STORAGE_VALUE_LIMIT = 256 * 1024;
-var MOD_STORAGE_TOTAL_LIMIT = 1024 * 1024;
-var KEY_PATTERN = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
-var fileTails = /* @__PURE__ */ new Map();
-var ModStorage = class {
-  constructor(file, options = {}) {
-    this.file = file;
-    this.options = options;
-  }
-  async get(key) {
-    validateKey(key);
-    const file = await this.readFile();
-    if (file === void 0 || !Object.prototype.hasOwnProperty.call(file.values, key)) return void 0;
-    return structuredClone(file.values[key]);
-  }
-  async set(key, value) {
-    validateKey(key);
-    const valueProblem = inspectValue(value);
-    if (valueProblem !== void 0) {
-      if (valueProblem.quota) this.options.onQuota?.(valueProblem.message);
-      throw new Error(valueProblem.message);
-    }
-    return this.mutate(async () => {
-      const file = await this.readFile() ?? { version: 1, values: {}, updatedAt: (/* @__PURE__ */ new Date(0)).toISOString() };
-      const next = {
-        version: 1,
-        values: { ...file.values, [key]: structuredClone(value) },
-        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-      };
-      await this.writeFile(next);
-    });
-  }
-  async delete(key) {
-    validateKey(key);
-    return this.mutate(async () => {
-      const file = await this.readFile();
-      if (file === void 0 || !Object.prototype.hasOwnProperty.call(file.values, key)) return false;
-      const next = {
-        version: 1,
-        values: { ...file.values },
-        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-      };
-      delete next.values[key];
-      await this.writeFile(next);
-      return true;
-    });
-  }
-  async readFile() {
-    let text;
-    try {
-      text = await fs16.readFile(this.file, "utf8");
-    } catch (cause) {
-      if (cause.code === "ENOENT") return void 0;
-      throw cause;
-    }
-    const parsed = JSON.parse(text);
-    if (parsed.version !== 1 || typeof parsed.values !== "object" || parsed.values === null || Array.isArray(parsed.values)) {
-      throw new Error("mod storage file is corrupt (delete data/state.json to reset)");
-    }
-    return parsed;
-  }
-  async writeFile(file) {
-    const text = `${JSON.stringify(file)}
-`;
-    const total = Buffer.byteLength(text, "utf8");
-    if (total > MOD_STORAGE_TOTAL_LIMIT) {
-      const message = "mod storage exceeds the total size limit (1MB)";
-      this.options.onQuota?.(message);
-      throw new Error(message);
-    }
-    await mkdir2(dirname9(this.file), { recursive: true });
-    await writeAtomicText(this.file, text);
-  }
-  /** 排空在飞写（宿主卸载/reload 前调用）：返回时**该文件**队列上全部写
-   * （含其他实例入队的）已落定——卸载后新实例装载与外部 teardown 都安全。 */
-  flush() {
-    return (fileTails.get(this.file) ?? Promise.resolve()).catch(() => {
-    });
-  }
-  mutate(operation) {
-    const tail = fileTails.get(this.file) ?? Promise.resolve();
-    const result = tail.catch(() => {
-    }).then(operation);
-    fileTails.set(this.file, result.then(() => {
-    }, () => {
-    }));
-    return result;
-  }
-};
-function validateKey(key) {
-  if (typeof key !== "string" || !KEY_PATTERN.test(key)) {
-    throw new Error(`invalid mod storage key '${String(key)}'`);
-  }
-}
-function inspectValue(value) {
-  if (value === void 0 || value === null) return void 0;
-  if (typeof value === "function" || typeof value === "symbol") {
-    return { message: "invalid mod storage value", quota: false };
-  }
-  if (typeof value === "number" && !Number.isFinite(value)) {
-    return { message: "mod storage numbers must be finite", quota: false };
-  }
-  const text = JSON.stringify(value);
-  if (text === void 0) return { message: "invalid mod storage value", quota: false };
-  if (Buffer.byteLength(text, "utf8") > MOD_STORAGE_VALUE_LIMIT) {
-    return { message: "mod storage value exceeds the size limit (256KB)", quota: true };
-  }
-  return void 0;
-}
-
-// packages/plugin/src/mods/host.ts
-var MOD_API_VERSION = 1;
-function declaredSurfacesOf(manifest10) {
-  return {
-    hooks: [...manifest10.surfaces.hooks],
-    tools: [...manifest10.surfaces.tools],
-    http: [...manifest10.surfaces.http]
-  };
-}
-function modsDisabledByEnv() {
-  const disabled = envCompat("DISABLE_MODS")?.trim();
-  return disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false";
-}
-var ModHost = class _ModHost {
-  constructor(options) {
-    this.options = options;
-    this.modsRoot = join17(options.root, "mods");
-    this.audit = new ModAuditLog(join17(this.modsRoot, "audit.jsonl"));
-    this.logger = options.ctx?.logger;
-    this.audit.setLogger((message) => this.logger?.warn?.(message));
-  }
-  modsRoot;
-  audit;
-  logger;
-  discovered = /* @__PURE__ */ new Map();
-  broken = /* @__PURE__ */ new Map();
-  blocked = /* @__PURE__ */ new Map();
-  loaded = /* @__PURE__ */ new Map();
-  loadErrors = /* @__PURE__ */ new Map();
-  globalEnabled = false;
-  refreshTail = Promise.resolve();
-  offGuides;
-  offHookDegrations;
-  static async open(options) {
-    const host = new _ModHost(options);
-    await mkdir3(host.modsRoot, { recursive: true });
-    host.offGuides = onGuidesChanged((character, chatId) => modEvents.emit("guides-changed", { character, chatId }));
-    host.offHookDegrations = generationHooks.onDegradation((degradation) => {
-      const detail = `${degradation.phase} ${degradation.reason}${degradation.detail ? `: ${degradation.detail}` : ""}`;
-      host.logger?.warn?.(`dsh-soulmojito: generation hook degraded (${detail})`);
-      if (typeof degradation.owner === "string") {
-        void host.audit.record(degradation.owner, "hook-degradation", detail);
-      }
-    });
-    try {
-      options.ctx?.effect?.(() => () => {
-        host.clearAllTimers();
-      }, "dsh-soulmojito: mod timers");
-    } catch {
-    }
-    await host.refresh();
-    return host;
-  }
-  /** 重新扫描 + 按三层开关对账（该装载的装载、该卸载的卸载）。串行化执行。 */
-  refresh() {
-    const run = this.refreshTail.catch(() => {
-    }).then(() => this.refreshInternal());
-    this.refreshTail = run.then(() => {
-    }, () => {
-    });
-    return run;
-  }
-  async setGlobalEnabled(enabled) {
-    const db = await this.options.dbProvider();
-    await db.updateState(() => ({ modsEnabled: enabled === true }));
-    await this.audit.record("*", enabled ? "enable" : "disable", "global");
-    await this.refresh();
-  }
-  async setModEnabled(id, enabled) {
-    if (!MOD_ID_PATTERN.test(id)) throw new Error(`invalid mod id '${id}'`);
-    const known = this.discovered.has(id) || this.broken.has(id) || this.blocked.has(id);
-    if (!known) throw new Error(`mod '${id}' is not installed`);
-    const db = await this.options.dbProvider();
-    await db.updateState((state) => ({
-      mods: {
-        ...state.mods ?? {},
-        enabled: { ...state.mods?.enabled ?? {}, [id]: enabled === true }
-      }
-    }));
-    await this.audit.record(id, enabled ? "enable" : "disable");
-    await this.refresh();
-  }
-  /** 调旧 dispose 链（及 onDispose 合并队列）→ `?t=` cache-bust 重新 import。 */
-  async reload(id) {
-    if (!MOD_ID_PATTERN.test(id)) throw new Error(`invalid mod id '${id}'`);
-    const disc = this.discovered.get(id);
-    if (disc === void 0 || !this.loaded.has(id)) throw new Error(`mod '${id}' is not loaded`);
-    await this.unload(id, "reload");
-    const ok = await this.load(disc, true);
-    if (!ok) throw new Error(`mod '${id}' failed to reload: ${this.loadErrors.get(id) ?? "unknown error"}`);
-  }
-  /**
-   * 从 git URL 安装（提案 0015 §4 P2）：GitHub 源降级链预读 + `git clone --depth 1`
-   * + 本地清单校验 + 拷入 `mods/<id>/`；成功/失败都进审计线；落地后 refresh()
-   * 让扫描吸收新目录（装上不等于启用——三层开关语义不变）。impl 供测试注入
-   * （缺省真实 installModFromGit）。
-   */
-  async installFromGit(url, force, impl = installModFromGit) {
-    try {
-      const result = await impl({ url, root: this.options.root, force });
-      await this.audit.record(result.modId, "install", `${url}${result.replaced ? " (replaced)" : ""}`);
-      await this.refresh();
-      return result;
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      this.logger?.warn?.(`dsh-soulmojito: mod install from '${url}' failed: ${message}`);
-      await this.audit.record("*", "install-error", message);
-      throw cause;
-    }
-  }
-  snapshot() {
-    const available = !modsDisabledByEnv();
-    const mods = [];
-    for (const [id, info] of this.broken) {
-      mods.push({
-        id,
-        name: info.name ?? id,
-        version: info.version ?? "",
-        author: info.author ?? "",
-        description: info.description ?? "",
-        capabilities: info.capabilities ?? [],
-        loadingOrder: 100,
-        panel: null,
-        status: "error",
-        error: info.message,
-        auditCount: this.audit.count(id),
-        surfaces: { hooks: [], tools: [], http: [] },
-        buttons: []
-      });
-    }
-    for (const [id, item] of this.blocked) {
-      mods.push({ ...modInfoOf(item.manifest), status: "error", error: item.reason, auditCount: this.audit.count(id), surfaces: declaredSurfacesOf(item.manifest) });
-    }
-    for (const [id, disc] of this.discovered) {
-      const loadError = this.loadErrors.get(id);
-      const loaded = this.loaded.get(id);
-      mods.push({
-        ...modInfoOf(disc.manifest),
-        status: loadError !== void 0 ? "error" : loaded !== void 0 ? "loaded" : "disabled",
-        error: loadError ?? "",
-        auditCount: this.audit.count(id),
-        surfaces: loaded !== void 0 ? liveSurfacesOf(loaded) : declaredSurfacesOf(disc.manifest)
-      });
-    }
-    mods.sort((a, b) => a.loadingOrder - b.loadingOrder || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-    return { available, reason: available ? "" : "DSH_SOULMOJITO_DISABLE_MODS is set", globalEnabled: this.globalEnabled, mods };
-  }
-  /**
-   * 分派 mod 子路由（`mods/<id>/<path>`）。返回 false = 不归我管（或任何一层
-   * 开关关闭 / 未装载 / 无此路由）——调用方一律按 404 兜底，与未知路由不可区分。
-   */
-  async handleRoute(req, res, method, url, id, subpath) {
-    if (modsDisabledByEnv() || !this.globalEnabled) return false;
-    if (!MOD_ID_PATTERN.test(id)) return false;
-    const record = this.loaded.get(id);
-    if (record === void 0) return false;
-    if (!isValidModHttpPath(subpath)) return false;
-    const handler = record.routeTable.find(method, subpath);
-    if (handler === void 0) return false;
-    const request = {
-      method,
-      path: subpath,
-      query: url.searchParams,
-      json: () => readModRequestBody(req)
-    };
-    const reply = makeModReply(res);
-    try {
-      await handler(request, reply);
-      if (!res.writableEnded) {
-        throw new Error("mod handler did not send a response");
-      }
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      await this.audit.record(id, "http-error", message);
-      this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] http route ${method} ${subpath} failed: ${message}`);
-      if (!res.writableEnded) {
-        res.statusCode = 500;
-        res.setHeader("content-type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: false, message: `mod route failed: ${message}` }));
-      }
-    }
-    return true;
-  }
-  /**
-   * 声明式按钮的点击分发（`POST mods/<id>/button/<name>`，A-1）：
-   * - 未装载 / 未知按钮 / 任一层开关关闭 → `not-found`（调用方按 404 兜底，与
-   *   未知路由不可区分——§6 纪律）；
-   * - 已声明但无 handler（mod 未注册 onButton）→ `no-handler`（200 + handled:false，
-   *   面板按钮的可选消费语义）；
-   * - handler 抛错：`button-error` 审计后原样上抛（HTTP 层兜 500）；
-   *   正常点击不审计（高频路径，对齐 event-error 纪律）。
-   */
-  async dispatchButton(id, name2, context = {}) {
-    if (modsDisabledByEnv() || !this.globalEnabled) return "not-found";
-    if (!MOD_ID_PATTERN.test(id)) return "not-found";
-    if (modButtonNameError(name2) !== void 0) return "not-found";
-    const record = this.loaded.get(id);
-    if (record === void 0) return "not-found";
-    if (!record.manifest.buttons.includes(name2)) return "not-found";
-    const handler = record.buttons.get(name2);
-    if (handler === void 0) return "no-handler";
-    try {
-      await handler({ name: name2 }, context);
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] button '${name2}' handler failed: ${message}`);
-      await this.audit.record(id, "button-error", `${name2}: ${message}`);
-      throw cause;
-    }
-    return "handled";
-  }
-  /** 宿主卸载：卸下全部已装载 Mod（逆序 disposer + 定时器 + 事件反注册）。 */
-  async disposeAll() {
-    for (const id of [...this.loaded.keys()]) await this.unload(id, "disable");
-    this.offGuides?.();
-    this.offGuides = void 0;
-    this.offHookDegrations?.();
-    this.offHookDegrations = void 0;
-  }
-  /* ------------------------------ 内部 ------------------------------ */
-  async refreshInternal() {
-    if (modsDisabledByEnv()) {
-      for (const id of [...this.loaded.keys()]) await this.unload(id, "disable");
-      this.discovered.clear();
-      this.broken.clear();
-      this.blocked.clear();
-      this.loadErrors.clear();
-      this.globalEnabled = false;
-      return;
-    }
-    await this.scan();
-    const state = await (await this.options.dbProvider()).getState();
-    this.globalEnabled = state.modsEnabled === true;
-    const enabled = state.mods?.enabled ?? {};
-    for (const [id, disc] of this.discovered) {
-      const want = this.globalEnabled && enabled[id] === true;
-      if (want && !this.loaded.has(id)) await this.load(disc, false);
-      else if (!want && this.loaded.has(id)) await this.unload(id, "disable");
-    }
-    for (const id of [...this.loaded.keys()]) {
-      if (!this.discovered.has(id)) await this.unload(id, "remove");
-    }
-  }
-  /** 扫描 mods/ 直接子目录：只读 mod.json、过校验，不执行任何 Mod 代码。 */
-  async scan() {
-    const entries = await fs17.readdir(this.modsRoot, { withFileTypes: true }).catch((cause) => {
-      if (cause.code === "ENOENT") return [];
-      throw cause;
-    });
-    const nextDiscovered = /* @__PURE__ */ new Map();
-    const nextBroken = /* @__PURE__ */ new Map();
-    const nextBlocked = /* @__PURE__ */ new Map();
-    const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
-    for (const directory of directories) {
-      const id = directory;
-      let raw;
-      try {
-        raw = JSON.parse(await fs17.readFile(join17(this.modsRoot, directory, "mod.json"), "utf8"));
-      } catch (cause) {
-        const message = `mod.json is missing or unreadable: ${cause instanceof Error ? cause.message : String(cause)}`;
-        nextBroken.set(id, { message, ...salvageManifestFields(void 0) });
-        await this.audit.record(id, "skip", message);
-        continue;
-      }
-      const check = checkModManifest(raw, { directory });
-      if (!check.ok) {
-        const message = check.errors.join("; ");
-        nextBroken.set(id, { message, ...salvageManifestFields(raw) });
-        await this.audit.record(id, "skip", message);
-        continue;
-      }
-      const manifest10 = check.manifest;
-      const engineRange = manifest10.engines?.dshSoulMojito;
-      if (engineRange !== void 0) {
-        const verdict = satisfiesVersionRange(this.options.hostVersion, engineRange);
-        if (!verdict.ok) {
-          nextBlocked.set(id, { manifest: manifest10, reason: verdict.reason });
-          await this.audit.record(id, "skip", verdict.reason);
-          continue;
-        }
-      }
-      const entryPath = resolve5(this.modsRoot, directory, manifest10.main);
-      const containment = relative2(resolve5(this.modsRoot, directory), entryPath);
-      if (containment === "" || containment.startsWith("..") || isAbsolute(containment)) {
-        const message = `main entry '${manifest10.main}' escapes the mod directory`;
-        nextBlocked.set(id, { manifest: manifest10, reason: message });
-        await this.audit.record(id, "skip", message);
-        continue;
-      }
-      const entryStat = await fs17.stat(entryPath).catch(() => void 0);
-      if (entryStat?.isFile() !== true) {
-        const message = `main entry '${manifest10.main}' not found`;
-        nextBlocked.set(id, { manifest: manifest10, reason: message });
-        await this.audit.record(id, "skip", message);
-        continue;
-      }
-      nextDiscovered.set(id, { manifest: manifest10, directory: join17(this.modsRoot, directory), entryPath });
-    }
-    this.discovered.clear();
-    this.broken.clear();
-    this.blocked.clear();
-    for (const [id, disc] of nextDiscovered) this.discovered.set(id, disc);
-    for (const [id, broken] of nextBroken) this.broken.set(id, broken);
-    for (const [id, blocked] of nextBlocked) this.blocked.set(id, blocked);
-    for (const id of [...this.loadErrors.keys()]) {
-      if (!this.discovered.has(id)) this.loadErrors.delete(id);
-    }
-  }
-  async load(disc, cacheBust) {
-    const id = disc.manifest.id;
-    const record = {
-      manifest: disc.manifest,
-      directory: disc.directory,
-      routeTable: createModRouteTable(),
-      disposers: [],
-      timers: /* @__PURE__ */ new Set(),
-      offEvents: [],
-      offRegistrations: [],
-      surfaces: { hooks: /* @__PURE__ */ new Set(), tools: /* @__PURE__ */ new Set(), http: /* @__PURE__ */ new Set() },
-      buttons: /* @__PURE__ */ new Map(),
-      storage: new ModStorage(join17(disc.directory, "data", "state.json"), {
-        onQuota: (message) => {
-          void this.audit.record(id, "storage-quota", message);
-        }
-      })
-    };
-    try {
-      await mkdir3(join17(disc.directory, "data"), { recursive: true });
-      const url = pathToFileURL3(disc.entryPath).href + (cacheBust ? `?t=${Date.now()}` : "");
-      const module = await import(url);
-      if (typeof module?.setup !== "function") {
-        throw new Error("mod entry must export an async setup(api) function");
-      }
-      const returned = await module.setup(this.createApi(record));
-      if (typeof returned === "function") record.disposers.push(returned);
-      this.loaded.set(id, record);
-      this.loadErrors.delete(id);
-      await this.audit.record(id, "load");
-      return true;
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      await this.runDisposers(id, record);
-      this.loadErrors.set(id, message);
-      this.logger?.warn?.(`dsh-soulmojito: mod '${id}' failed to ${cacheBust ? "reload" : "load"}: ${message}`);
-      await this.audit.record(id, "load-error", message);
-      return false;
-    }
-  }
-  async unload(id, event) {
-    const record = this.loaded.get(id);
-    if (record === void 0) return;
-    this.loaded.delete(id);
-    await this.runDisposers(id, record);
-    await this.audit.record(id, event);
-  }
-  /** 逆序执行 disposer（后注册先清）、清定时器、反注册事件、反注册 P2 能力面、
-   * 排空在飞存储写；单项失败只记审计。末尾的 flush 是 reload/teardown 竞态的
-   * 修复点：unload 返回后该实例不再有任何在飞写，新实例装载与宿主外部的目录
-   * 删除都安全。 */
-  async runDisposers(id, record) {
-    for (const dispose of [...record.disposers].reverse()) {
-      try {
-        await dispose();
-      } catch (cause) {
-        const message = cause instanceof Error ? cause.message : String(cause);
-        this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] dispose failed: ${message}`);
-        await this.audit.record(id, "dispose-error", message);
-      }
-    }
-    for (const timer of record.timers) clearInterval(timer);
-    record.timers.clear();
-    for (const off of record.offEvents.splice(0)) off();
-    for (const off of record.offRegistrations.splice(0)) {
-      try {
-        off();
-      } catch (cause) {
-        const message = cause instanceof Error ? cause.message : String(cause);
-        this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] capability unregister failed: ${message}`);
-        await this.audit.record(id, "dispose-error", message);
-      }
-    }
-    await record.storage.flush();
-  }
-  clearAllTimers() {
-    for (const record of this.loaded.values()) {
-      for (const timer of record.timers) clearInterval(timer);
-      record.timers.clear();
-    }
-  }
-  /** P1+P2 适配层（提案 §3.3）：白名单对象，不透传 cordis ctx。
-   * P2 面：hooks（五相位总线）/tools（跨 bundle 注册表）/macros（宿主宏注册表）/
-   * stscript（命令表）/llm（能力键强制）/prompt（AgentTavern section）。
-   * P3 面：games（提案 0018 §4.5——游戏桥注册，id 前缀 + manifest 声明双纪律）。 */
-  createApi(record) {
-    const id = record.manifest.id;
-    const logger = {
-      info: (...args) => this.logger?.info?.(`dsh-soulmojito: [mod:${id}]`, ...args),
-      warn: (...args) => this.logger?.warn?.(`dsh-soulmojito: [mod:${id}]`, ...args),
-      error: (...args) => this.logger?.error?.(`dsh-soulmojito: [mod:${id}]`, ...args)
-    };
-    const storage = record.storage;
-    const observed = (operation, label, event) => {
-      operation.catch((cause) => {
-        const message = cause instanceof Error ? cause.message : String(cause);
-        this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] ${label} failed: ${message}`);
-        void this.audit.record(id, event, message);
-      });
-      return operation;
-    };
-    const tracked = (off) => {
-      record.offRegistrations.push(off);
-      return off;
-    };
-    const api = {
-      version: MOD_API_VERSION,
-      logger,
-      storage: {
-        get: (key) => observed(storage.get(key), "storage get", "storage-error"),
-        set: (key, value) => observed(storage.set(key, value), "storage set", "storage-error"),
-        delete: (key) => observed(storage.delete(key), "storage delete", "storage-error")
-      },
-      assets: createModAssets(this.options.dbProvider),
-      events: {
-        on: (kind, handler) => {
-          if (!modEvents.isKind(kind)) throw new Error(`unknown mod event kind '${String(kind)}' (expected chat-saved | assets-saved | guides-changed | stream-delta)`);
-          if (typeof handler !== "function") throw new Error("mod event handler must be a function");
-          let auditedStreamEpoch;
-          const off = modEvents.on(kind, async (payload) => {
-            const epoch = currentStreamEpoch();
-            try {
-              await handler(payload);
-            } catch (cause) {
-              const message = cause instanceof Error ? cause.message : String(cause);
-              if (kind === "stream-delta" && auditedStreamEpoch === epoch) return;
-              if (kind === "stream-delta") {
-                auditedStreamEpoch = epoch;
-                this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] stream-delta handler failed: ${message} (further errors for this generation are silenced)`);
-                await this.audit.record(id, "event-error", `stream-delta: ${message} (further stream-delta errors for this generation are silenced)`);
-                return;
-              }
-              this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] ${kind} handler failed: ${message}`);
-              await this.audit.record(id, "event-error", message);
-            }
-          });
-          record.offEvents.push(off);
-          return off;
-        }
-      },
-      onButton: (name2, handler) => {
-        if (typeof name2 !== "string" || !record.manifest.buttons.includes(name2)) {
-          throw new Error(`button '${String(name2)}' is not declared in the manifest buttons [${record.manifest.buttons.join(", ")}]`);
-        }
-        if (typeof handler !== "function") throw new Error("button handler must be a function");
-        if (record.buttons.has(name2)) throw new Error(`button '${name2}' already has a handler`);
-        record.buttons.set(name2, handler);
-        return () => {
-          if (record.buttons.get(name2) === handler) record.buttons.delete(name2);
-        };
-      },
-      timers: {
-        setInterval: (handler, ms) => {
-          if (typeof handler !== "function") throw new Error("timer handler must be a function");
-          const interval = typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? Math.floor(ms) : 1;
-          const timer = setInterval(() => {
-            void (async () => {
-              try {
-                await handler();
-              } catch (cause) {
-                const message = cause instanceof Error ? cause.message : String(cause);
-                this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] timer handler failed: ${message}`);
-                void this.audit.record(id, "timer-error", message);
-              }
-            })();
-          }, interval);
-          record.timers.add(timer);
-          return timer;
-        },
-        clearInterval: (timer) => {
-          clearInterval(timer);
-          record.timers.delete(timer);
-        }
-      },
-      http: {
-        route: (method, path12, handler) => {
-          const off = record.routeTable.register(method, path12, handler);
-          record.surfaces.http.add(`${String(method ?? "").toUpperCase()} ${String(path12 ?? "")}`);
-          return tracked(off);
-        }
-      },
-      hooks: {
-        // 提案 §3.4 五相位：接 P0 总线；顺序按 loadingOrder；owner 归因让降级
-        // 审计落到本 mod；失败/超时/忘 return 的降级不中断生成由总线保证。
-        on: (phase, handler) => {
-          if (typeof phase !== "string" || !GENERATION_HOOK_PHASES.has(phase)) {
-            throw new Error(`unknown generation hook phase '${String(phase)}' (expected ${[...GENERATION_HOOK_PHASES].join(" | ")})`);
-          }
-          if (typeof handler !== "function") throw new Error("generation hook handler must be a function");
-          record.surfaces.hooks.add(phase);
-          return tracked(generationHooks.register(phase, handler, record.manifest.loadingOrder, id));
-        }
-      },
-      tools: {
-        // 提案 §3.3：形状对齐 tool() 工厂；name 强制 <modId>_ 前缀；与内置及
-        // 其他 mod 工具查重，冲突即拒（setup 期抛错 → 状态错误位，不静默）。
-        register: (def) => {
-          const definition = checkModToolDefinition(def, id);
-          if (modToolSnapshot().some((entry) => entry.modId === id && entry.definition.name === definition.name)) {
-            throw new Error(`tool '${definition.name}' is already registered by this mod`);
-          }
-          const claimed = claimedToolNames();
-          if (claimed.has(definition.name)) {
-            throw new Error(`tool name '${definition.name}' is already taken by a builtin tool or another mod`);
-          }
-          record.surfaces.tools.add(definition.name);
-          return tracked(registerModTool(id, definition, record.manifest.loadingOrder));
-        }
-      },
-      games: {
-        // 提案 0018 §4.5 第 3 源（P3）：把游戏注册进游戏桥运行时。id 纪律 =
-        // onButton 的「未声明即拒」+ 工具注册的前缀律：id 必须以 `<modId>.` 开头
-        // 且在 manifest games 名单内。引擎 duck 校验/烟测/view 静态检查/跨源查重
-        // 都在 games service（fail-fast，抛错 = 本 Mod setup 失败进错误位，镜像
-        // 工具注册）。mods host 与 games service 同在 index bundle，经既有
-        // globalThis 句柄直调（handle.ts，无新跨 bundle 面）；反注册入
-        // offRegistrations（卸载自动摘除，其活跃会话由 sessions 孤儿判定接管）。
-        register: (def) => {
-          if (typeof def !== "object" || def === null || Array.isArray(def)) {
-            throw new Error("game registration must be an object");
-          }
-          const gameId = def.id;
-          if (typeof gameId !== "string" || gameId === "") {
-            throw new Error(`game registration requires a non-empty id string (got '${String(gameId)}')`);
-          }
-          const prefix = `${id}.`;
-          if (!gameId.startsWith(prefix)) {
-            throw new Error(`game id must start with the mod id prefix '${prefix}' (got '${gameId}')`);
-          }
-          if (!record.manifest.games.includes(gameId)) {
-            throw new Error(`game '${gameId}' is not declared in the manifest games [${record.manifest.games.join(", ")}]`);
-          }
-          const engine10 = def.engine;
-          const service = resolveGamesService();
-          if (service === void 0) {
-            throw new Error("the games runtime is not available in this process (game registration requires the games service)");
-          }
-          service.registerModGame(def);
-          return tracked(() => {
-            service.unregisterModGame(gameId, engine10);
-          });
-        }
-      },
-      macros: {
-        // 提案 §3.3/P0 决策注记：mod 宏进入 prompt-safety 冻结求值上下文的展开
-        // 面——必须确定性（无随机/时间）。注册期静态筛查 best-effort；运行期
-        // 抛错/非同步返回由包装降级保原文（引擎侧 catch 亦保原文，双保险）。
-        register: (name2, fn) => {
-          const macroName = typeof name2 === "string" ? name2.trim() : "";
-          if (macroName === "" || macroName.length > 64) throw new Error("macro name must be a non-empty string of at most 64 characters");
-          if (macroName.includes("{{") || macroName.includes("}}") || /\s/.test(macroName)) {
-            throw new Error("macro name must not include braces or whitespace");
-          }
-          if (typeof fn !== "function") throw new Error("macro handler must be a function");
-          const banned = screenMacroDeterminism(fn);
-          if (banned !== void 0) {
-            throw new Error(`macro handlers must be deterministic (no random or time sources); found '${banned}' in the handler source`);
-          }
-          const lowered = macroName.toLowerCase();
-          if (builtinMacroNames().has(lowered)) {
-            throw new Error(`macro name '${macroName}' collides with a builtin macro`);
-          }
-          for (const entry of hostMacroSnapshot()) {
-            if (entry.name.toLowerCase() === lowered) throw new Error(`macro name '${macroName}' is already registered`);
-          }
-          let failureAudited = false;
-          const wrapped = (args, engine10) => {
-            try {
-              const result = fn(args, engine10);
-              if (typeof result === "string" || result === null) return result;
-              if (typeof result === "number" || typeof result === "boolean") return String(result);
-              return null;
-            } catch (cause) {
-              if (!failureAudited) {
-                failureAudited = true;
-                const message = cause instanceof Error ? cause.message : String(cause);
-                this.logger?.warn?.(`dsh-soulmojito: [mod:${id}] macro '${macroName}' failed: ${message}`);
-                void this.audit.record(id, "macro-error", `${macroName}: ${message}`);
-              }
-              return null;
-            }
-          };
-          return tracked(registerHostMacro(macroName, wrapped, record.manifest.loadingOrder));
-        }
-      },
-      stscript: {
-        // 提案 §3.3：命令名字符集校验（对齐内置命名律 [a-z0-9_]+）；禁覆盖内置
-        // 命令（冲突即拒）；disposer 反注册。
-        registerCommand: (name2, spec) => {
-          const commandName = typeof name2 === "string" ? name2.trim().toLowerCase() : "";
-          if (!/^[a-z0-9_]+$/.test(commandName) || commandName.length > 40) {
-            throw new Error(`stscript command name must match [a-z0-9_]+ (got '${String(name2)}')`);
-          }
-          if (typeof spec !== "object" || spec === null || Array.isArray(spec)) throw new Error("stscript command spec must be an object");
-          const handler = spec["run"];
-          if (typeof handler !== "function") throw new Error("stscript command spec.run must be a function");
-          if (stscriptCommandNames().includes(commandName)) {
-            throw new Error(`stscript command '/${commandName}' is already registered (builtin command names cannot be overridden)`);
-          }
-          const aliases = spec["aliases"];
-          if (aliases !== void 0 && (!Array.isArray(aliases) || aliases.some((alias) => typeof alias !== "string" || !/^[a-z0-9_]+$/.test(alias)))) {
-            throw new Error("stscript command aliases must be [a-z0-9_]+ strings");
-          }
-          const fullSpec = { ...spec, name: commandName };
-          const off = registerStscriptCommand(fullSpec);
-          return tracked(off);
-        }
-      },
-      prompt: {
-        // 提案 §3.4：AgentTavern 侧 prompt 分区。order 宿主钳制 -50..0（核心占
-        // -80..-64）；ST 循环 hook 与此面的不对称是刻意的（文档标注）。
-        section: (section) => {
-          if (typeof section !== "object" || section === null || Array.isArray(section)) throw new Error("prompt section must be an object");
-          const { name: name2, text, order } = section;
-          if (typeof name2 !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name2)) {
-            throw new Error(`prompt section name must match [A-Za-z0-9][A-Za-z0-9._-]* (got '${String(name2)}')`);
-          }
-          if (typeof text !== "string" || text === "") throw new Error("prompt section text must be a non-empty string");
-          if (text.length > 65536) throw new Error("prompt section text exceeds the 64KB limit");
-          const clampedOrder = clampModSectionOrder(order);
-          return tracked(registerModSection(id, { name: name2, text, order: clampedOrder }, record.manifest.loadingOrder));
-        }
-      },
-      onDispose: (fn) => {
-        if (typeof fn !== "function") throw new Error("onDispose expects a function");
-        record.disposers.push(fn);
-      }
-    };
-    if (record.manifest.capabilities.includes("llm")) {
-      api.llm = createModLlmFace(this.options.ctx?.llm, id, this.audit, this.logger, observed);
-    }
-    return api;
-  }
-};
-function modInfoOf(manifest10) {
-  return {
-    id: manifest10.id,
-    name: manifest10.name,
-    version: manifest10.version,
-    author: manifest10.author,
-    description: manifest10.description,
-    capabilities: manifest10.capabilities,
-    loadingOrder: manifest10.loadingOrder,
-    panel: manifest10.panel ?? null,
-    buttons: [...manifest10.buttons]
-  };
-}
-var GENERATION_HOOK_PHASES = /* @__PURE__ */ new Set(["user-input", "pre-assemble", "pre-llm", "post-output", "post-save"]);
-function liveSurfacesOf(record) {
-  return {
-    hooks: [...record.surfaces.hooks],
-    tools: [...record.surfaces.tools],
-    http: [...record.surfaces.http]
-  };
-}
-function checkModToolDefinition(def, modId) {
-  if (typeof def !== "object" || def === null || Array.isArray(def)) throw new Error("tool definition must be an object");
-  const record = def;
-  const name2 = record.name;
-  if (typeof name2 !== "string" || !MOD_TOOL_NAME_PATTERN.test(name2) || name2.length > 64) {
-    throw new Error(`tool name must match [A-Za-z0-9][A-Za-z0-9._-]* and be at most 64 characters (got '${String(name2)}')`);
-  }
-  const prefix = `${modId}_`;
-  if (!name2.startsWith(prefix)) {
-    throw new Error(`tool name must start with the mod id prefix '${prefix}' (got '${name2}')`);
-  }
-  const description = record.description;
-  if (typeof description !== "string" || description.trim() === "" || description.length > 4e3) {
-    throw new Error("tool description must be a non-empty string of at most 4000 characters");
-  }
-  if (typeof record.parameters !== "object" || record.parameters === null || Array.isArray(record.parameters)) {
-    throw new Error("tool parameters must be an object (JSON schema)");
-  }
-  const output = record.output;
-  if (typeof output !== "object" || output === null || Array.isArray(output) || typeof output["schema"] !== "object" || output["schema"] === null || typeof output["render"] !== "function") {
-    throw new Error("tool output must be { schema, render }");
-  }
-  if (typeof record.execute !== "function") throw new Error("tool execute must be a function");
-  return def;
-}
-var MACRO_NONDETERMINISM_PATTERN = /Math\.random|Date\.now|new\s+Date\b|performance\.now|hrtime|crypto\.|setTimeout|setInterval|process\.env/;
-function screenMacroDeterminism(fn) {
-  try {
-    const match = MACRO_NONDETERMINISM_PATTERN.exec(fn.toString());
-    return match === null ? void 0 : match[0];
-  } catch {
-    return "unserializable handler source";
-  }
-}
-function createModLlmFace(hostLlm, id, audit, logger, observed) {
-  const requireStream = () => {
-    const stream = hostLlm?.stream;
-    if (typeof stream !== "function") throw new Error("the host LLM service is unavailable on this deployment");
-    return stream;
-  };
-  const auditCall = (request, usage, error) => {
-    const model = `${String(request?.provider ?? "")}/${String(request?.model ?? "")}`;
-    const tokens = usage !== void 0 && typeof usage === "object" && usage !== null ? ` tokens=${JSON.stringify(usage)}` : "";
-    if (error !== void 0) {
-      void audit.record(id, "llm-error", `${model}${tokens ? ` ${tokens.trim()}` : ""}: ${error instanceof Error ? error.message : String(error)}`);
-      return;
-    }
-    void audit.record(id, "llm-call", `${model}${tokens}`);
-  };
-  async function* streamChunks(request) {
-    const chunks = requireStream()(request);
-    let usage;
-    try {
-      for await (const chunk of chunks) {
-        if (chunk !== null && typeof chunk === "object" && chunk["type"] === "usage") usage = chunk["usage"];
-        yield chunk;
-      }
-      auditCall(request, usage);
-    } catch (cause) {
-      auditCall(request, usage, cause);
-      throw cause;
-    }
-  }
-  return {
-    stream: (request) => {
-      if (typeof request !== "object" || request === null || Array.isArray(request)) throw new Error("llm request must be an object");
-      return streamChunks(request);
-    },
-    request: (request) => {
-      if (typeof request !== "object" || request === null || Array.isArray(request)) throw new Error("llm request must be an object");
-      const collected = (async () => {
-        let text = "";
-        let reasoning = "";
-        let usage;
-        let finish;
-        for await (const chunk of streamChunks(request)) {
-          if (chunk === null || typeof chunk !== "object") continue;
-          const kind = chunk["type"];
-          if (kind === "text-delta" && typeof chunk["text"] === "string") text += chunk["text"];
-          else if (kind === "reasoning-delta" && typeof chunk["text"] === "string") reasoning += chunk["text"];
-          else if (kind === "usage") usage = chunk["usage"];
-          else if (kind === "finish") finish = typeof chunk["reason"]?.["kind"] === "string" ? chunk["reason"]["kind"] : void 0;
-        }
-        return { text, reasoning, usage, finish };
-      })();
-      return observed(collected, "llm request", "llm-error");
-    }
-  };
-}
-function salvageManifestFields(raw) {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
-  const record = raw;
-  const pick = (key) => typeof record[key] === "string" && record[key].trim() !== "" ? record[key] : void 0;
-  return {
-    name: pick("name"),
-    version: pick("version"),
-    author: pick("author"),
-    description: pick("description")
-  };
-}
-function createModAssets(dbProvider) {
-  const requireString2 = (value, label) => {
-    if (typeof value !== "string" || value === "") throw new Error(`${label} is required`);
-    return value;
-  };
-  return {
-    listCharacters: async () => structuredClone(await (await dbProvider()).listCharacters()),
-    getCharacter: async (name2) => {
-      const found = await (await dbProvider()).getCharacter(requireString2(name2, "character name"));
-      return found === void 0 ? null : structuredClone({ kind: found.kind, card: { spec: found.card.spec, specVersion: found.card.specVersion, data: found.card.data } });
-    },
-    listWorlds: async () => structuredClone(await (await dbProvider()).listWorlds()),
-    getWorld: async (name2) => {
-      const book = await (await dbProvider()).getWorld(requireString2(name2, "world name"));
-      return book === void 0 ? null : structuredClone(book);
-    },
-    listPresets: async () => structuredClone(await (await dbProvider()).listPresets()),
-    getPreset: async (name2) => {
-      const preset = await (await dbProvider()).getPreset(requireString2(name2, "preset name"));
-      return preset === void 0 ? null : structuredClone(preset);
-    },
-    listPersonas: async () => structuredClone(await (await dbProvider()).listPersonas()),
-    getPersona: async (name2) => {
-      const persona = await (await dbProvider()).getPersona(requireString2(name2, "persona name"));
-      return persona === void 0 ? null : structuredClone(persona);
-    },
-    listGroups: async () => structuredClone(await (await dbProvider()).listGroups()),
-    getGroup: async (name2) => {
-      const group2 = await (await dbProvider()).getGroup(requireString2(name2, "group name"));
-      return group2 === void 0 ? null : structuredClone(group2);
-    },
-    listChats: async (character) => structuredClone(await (await dbProvider()).listChats(requireString2(character, "character name"))),
-    getChat: async (character, chatId) => {
-      const chat = await (await dbProvider()).getChat(requireString2(character, "character name"), requireString2(chatId, "chat id"));
-      return chat === void 0 ? null : structuredClone(chat);
-    }
-  };
-}
-
-// packages/plugin/src/update/service.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname10, join as join18 } from "node:path";
-var UPDATE_CACHE_FILE = "update-state.json";
-var UPDATE_CACHE_SCHEMA = 1;
-var UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1e3;
-var UPDATE_FIRST_CHECK_DELAY_MS = 12 * 1e3;
-var INSTALL_LOG_LIMIT = 60;
-var TavernUpdateService = class {
-  options;
-  remote = null;
-  status = "unknown";
-  reason = "";
-  checkedAt = null;
-  error = "";
-  source = "none";
-  installState = emptyInstallState();
-  pendingRestart = null;
-  timer;
-  disposed = false;
-  started = false;
-  pluginManager = null;
-  disposePluginManagerWatch;
-  constructor(options) {
-    this.options = options;
-    this.loadCache();
-  }
-  /** 已 dispose 的实例定时器与监听都已拆除；持有方据此决定重建（HMR 重挂）。 */
-  get isDisposed() {
-    return this.disposed;
-  }
-  get repository() {
-    return this.options.repository ?? UPDATE_REPOSITORY;
-  }
-  get ref() {
-    return this.options.ref ?? UPDATE_REF;
-  }
-  get local() {
-    return this.options.local;
-  }
-  snapshot() {
-    return {
-      schemaVersion: UPDATE_CACHE_SCHEMA,
-      status: this.status,
-      reason: this.reason,
-      checkedAt: this.checkedAt,
-      nextCheckAt: this.checkedAt === null ? null : new Date(Date.parse(this.checkedAt) + this.ttl()).toISOString(),
-      error: this.error,
-      source: this.source,
-      repository: this.repository,
-      ref: this.ref,
-      local: this.local,
-      remote: this.remote,
-      spec: pluginInstallSpec(this.repository, this.ref, this.remote?.commit),
-      install: { ...this.installState, log: [...this.installState.log] }
-    };
-  }
-  /**
-   * 检查一次。`force` 穿透 TTL；`restart-required` 过渡态下不复查（远端已经
-   * 装到磁盘，运行中的构建要等重启才会变），只在本地 stamp 追上安装结果时
-   * 解除该状态。任何失败都只写快照，不抛错。
-   */
-  async check(input = {}) {
-    if (this.options.enabled === false) {
-      this.status = "unknown";
-      this.reason = "update checks are disabled";
-      return this.snapshot();
-    }
-    if (this.pendingRestart !== null) {
-      if (sameCommit(this.local.commit, this.pendingRestart.commit)) {
-        this.pendingRestart = null;
-        this.status = "unknown";
-        this.reason = "the running build has caught up with the installed update";
-        this.checkedAt = null;
-      } else {
-        this.status = "restart-required";
-        this.reason = `installed ${this.pendingRestart.version} (${this.pendingRestart.commit}); restart DSH to load it`;
-        return this.snapshot();
-      }
-    }
-    if (input.force !== true && this.checkedAt !== null && Date.now() - Date.parse(this.checkedAt) < this.ttl()) {
-      return this.snapshot();
-    }
-    const result = await fetchRemoteBuild({
-      repository: this.repository,
-      ref: this.ref,
-      localCommit: this.local.commit,
-      ...this.options.fetchImpl === void 0 ? {} : { fetchImpl: this.options.fetchImpl },
-      ...this.options.timeoutMs === void 0 ? {} : { timeoutMs: this.options.timeoutMs },
-      ...this.options.now === void 0 ? {} : { now: this.options.now },
-      ...this.options.resolveCommitImpl === void 0 ? {} : { resolveCommitImpl: this.options.resolveCommitImpl },
-      ...this.options.curlImpl === void 0 ? {} : { curlImpl: this.options.curlImpl }
-    });
-    this.error = result.error;
-    if (result.build === null) {
-      this.status = "unknown";
-      this.reason = "remote build could not be read";
-      this.source = "none";
-    } else {
-      this.remote = result.build;
-      this.source = result.build.source;
-      const comparison = compareBuilds({ local: this.local, remote: result.build });
-      const filesUnavailable = result.build.source !== "api" && result.build.changedPluginFiles.length === 0;
-      this.status = comparison.status;
-      this.reason = comparison.status === "up-to-date" && filesUnavailable && !result.build.commit.startsWith(shortCommit(this.local.commit)) ? `${comparison.reason}; changed files unknown on source '${result.build.source}'` : comparison.reason;
-    }
-    this.checkedAt = this.nowIso();
-    this.persistCache();
-    this.options.onDiscover?.(this.snapshot());
-    return this.snapshot();
-  }
-  /**
-   * 一键更新。默认只在发现新版本时执行；`force` 允许把当前 ref 重装一遍
-   * （例如本地构建 stamp 损坏、或过渡态本身出了岔子时手工修复——force 可以
-   * 穿透 pendingRestart 短路，否则死循环的过渡态会让更新按钮永久失效）。
-   */
-  async install(input = {}) {
-    if (this.installState.running) return this.snapshot();
-    if (this.pendingRestart !== null && input.force !== true) {
-      this.installState = {
-        ...emptyInstallState(),
-        phase: "done",
-        message: "already installed; restart DSH to load it",
-        restartRequired: true,
-        installed: this.pendingRestart
-      };
-      return this.snapshot();
-    }
-    if (this.status !== "update-available" && input.force !== true) {
-      this.installState = { ...emptyInstallState(), message: `no update available (status: ${this.status})` };
-      return this.snapshot();
-    }
-    const target = this.remote;
-    this.installState = {
-      running: true,
-      phase: "installing",
-      strategy: null,
-      startedAt: this.nowIso(),
-      finishedAt: null,
-      message: "",
-      restartRequired: false,
-      installed: null,
-      log: []
-    };
-    try {
-      const outcome = await (this.options.installerImpl ?? installUpdate)({
-        ctx: this.options.ctx ?? {},
-        repository: this.repository,
-        ref: target?.ref ?? this.ref,
-        commit: target?.commit ?? "",
-        local: this.local,
-        pluginDir: this.options.pluginDir,
-        log: (line) => this.appendLog(line),
-        ...this.options.timeoutMs === void 0 ? {} : { timeoutMs: this.options.timeoutMs },
-        ...this.pluginManager === null ? {} : { pluginManager: this.pluginManager }
-      });
-      this.applyOutcome(outcome);
-    } catch (error) {
-      this.installState = {
-        ...this.installState,
-        running: false,
-        phase: "failed",
-        finishedAt: this.nowIso(),
-        message: error instanceof Error ? error.message : String(error)
-      };
-    }
-    this.persistCache();
-    return this.snapshot();
-  }
-  /**
-   * 启动自动发现：延迟首查（避免和宿主启动抢资源）+ 周期复查。返回 disposer，
-   * 交给 `ctx.effect` 管理生命周期。
-   */
-  start() {
-    if (this.options.enabled === false || this.disposed) return () => {
-    };
-    if (this.started) return () => this.dispose();
-    this.started = true;
-    this.disposePluginManagerWatch = watchPluginManager(this.options.ctx, (service) => {
-      this.pluginManager = service;
-    });
-    const schedule = (delayMs) => {
-      this.timer = setTimeout(() => {
-        void this.check().catch(() => {
-        }).finally(() => {
-          if (!this.disposed) schedule(this.ttl());
-        });
-      }, delayMs);
-      this.timer?.unref?.();
-    };
-    schedule(this.options.firstCheckDelayMs ?? UPDATE_FIRST_CHECK_DELAY_MS);
-    return () => this.dispose();
-  }
-  dispose() {
-    this.disposed = true;
-    if (this.timer !== void 0) clearTimeout(this.timer);
-    this.timer = void 0;
-    this.disposePluginManagerWatch?.();
-    this.disposePluginManagerWatch = void 0;
-  }
-  ttl() {
-    return this.options.checkTtlMs ?? UPDATE_CHECK_TTL_MS;
-  }
-  nowIso() {
-    return (this.options.now ?? (() => /* @__PURE__ */ new Date()))().toISOString();
-  }
-  appendLog(line) {
-    const stamped = `${this.nowIso().slice(11, 19)} ${line}`;
-    this.installState.log = [...this.installState.log, stamped].slice(-INSTALL_LOG_LIMIT);
-    try {
-      this.options.ctx?.logger?.info?.(`dsh-soulmojito update: ${line}`);
-    } catch {
-    }
-  }
-  applyOutcome(outcome) {
-    this.installState = {
-      ...this.installState,
-      running: false,
-      phase: outcome.ok ? "done" : "failed",
-      strategy: outcome.strategy,
-      finishedAt: this.nowIso(),
-      message: outcome.message,
-      restartRequired: outcome.restartRequired,
-      installed: outcome.installed
-    };
-    if (!outcome.ok) return;
-    this.checkedAt = this.nowIso();
-    const target = outcome.installed.commit;
-    if (isCommitText(target) && (outcome.restartRequired || !sameCommit(this.local.commit, target))) {
-      this.pendingRestart = outcome.installed;
-      this.status = "restart-required";
-      this.reason = `installed ${outcome.installed.version} (${target}); restart DSH to load it`;
-    } else if (sameCommit(this.local.commit, target)) {
-      this.pendingRestart = null;
-      this.status = "up-to-date";
-      this.reason = `installed ${outcome.installed.version} (${target}) via ${outcome.strategy}`;
-    } else {
-      this.pendingRestart = null;
-      this.status = "unknown";
-      this.reason = `installed ${outcome.installed.version} via ${outcome.strategy}; restart DSH to make sure \u2014 the installed commit could not be verified`;
-    }
-  }
-  cachePath() {
-    return join18(this.options.home, UPDATE_CACHE_FILE);
-  }
-  loadCache() {
-    try {
-      const cached = JSON.parse(readFileSync4(this.cachePath(), "utf8"));
-      if (cached?.schemaVersion !== UPDATE_CACHE_SCHEMA) return;
-      if (typeof cached.status === "string") this.status = cached.status;
-      if (typeof cached.reason === "string") this.reason = cached.reason;
-      if (typeof cached.checkedAt === "string") this.checkedAt = cached.checkedAt;
-      if (typeof cached.source === "string") this.source = cached.source;
-      if (cached.remote !== null && typeof cached.remote === "object") this.remote = cached.remote;
-      const pendingOrigin = typeof cached.pendingRestartPluginDir === "string" ? cached.pendingRestartPluginDir : "";
-      if (pendingOrigin === this.options.pluginDir && cached.pendingRestart !== null && typeof cached.pendingRestart === "object" && typeof cached.pendingRestart?.version === "string") {
-        this.pendingRestart = {
-          version: cached.pendingRestart.version,
-          commit: isCommitText(cached.pendingRestart.commit) ? shortCommit(cached.pendingRestart.commit) : UNKNOWN_FIELD
-        };
-      }
-      if (this.pendingRestart === null && this.status === "restart-required") {
-        this.status = "unknown";
-        this.reason = "the cached restart transition does not apply to this install directory";
-      }
-      if (cached.local !== void 0 && !sameLocal(cached.local, this.local)) {
-        this.remote = null;
-        this.checkedAt = null;
-        this.pendingRestart = null;
-        this.status = "unknown";
-        this.reason = "local build changed since the cached check";
-      }
-    } catch {
-    }
-  }
-  persistCache() {
-    try {
-      const path12 = this.cachePath();
-      mkdirSync3(dirname10(path12), { recursive: true });
-      const payload = {
-        schemaVersion: UPDATE_CACHE_SCHEMA,
-        status: this.status,
-        reason: this.reason,
-        checkedAt: this.checkedAt,
-        source: this.source,
-        local: this.local,
-        remote: this.remote,
-        pendingRestart: this.pendingRestart,
-        // 过渡态来源（loadCache 的幽灵防线读它）；null = 无过渡态。
-        pendingRestartPluginDir: this.pendingRestart === null ? null : this.options.pluginDir
-      };
-      writeFileAtomic(path12, `${JSON.stringify(payload, null, 2)}
-`);
-    } catch {
-    }
-  }
-};
-function emptyInstallState() {
-  return {
-    running: false,
-    phase: "idle",
-    strategy: null,
-    startedAt: null,
-    finishedAt: null,
-    message: "",
-    restartRequired: false,
-    installed: null,
-    log: []
-  };
-}
-function sameLocal(left, right) {
-  return typeof left?.version === "string" && typeof left?.commit === "string" && left.version === right.version && left.commit === right.commit;
-}
-function isCommitText(value) {
-  return typeof value === "string" && /^[0-9a-f]{7,40}$/i.test(value.trim());
-}
-function sameCommit(left, right) {
-  if (!isCommitText(left) || !isCommitText(right)) return false;
-  return shortCommit(left) === shortCommit(right);
-}
-function updateChangelog(snapshot2, limit = 8) {
-  const commits = snapshot2.remote?.commits ?? [];
-  return commits.slice(0, limit).map((commit) => commit.message === "" ? commit.short : `${commit.short} ${commit.message}`);
-}
-
-// packages/plugin/src/runtime.ts
-var storePromise;
-var memoryStorePromise;
-var variableStorePromise;
-var agentTavernCapabilities = inspectAgentTavernCapabilities({});
-var agentTavernCapabilitiesPromise;
-var agentTavernProjectorPromise;
-var agentNovelCapabilities = inspectAgentNovelCapabilities({});
-var novelStorePromise;
-var novelProjectorPromise;
-var novelDriverPromise;
-var updateServiceInstance;
-var updateChecksEnabledFlag = true;
-var modHostPromise;
-var modHostContext;
-var gamesServicePromise;
-var templatesEnabledFlag = true;
-function store3() {
-  return storePromise ??= TavernStore.open(dshHomePath("tavern"));
-}
-function memories() {
-  return memoryStorePromise ??= MemoryStore.open(dshHomePath("tavern"));
-}
-function variables() {
-  return variableStorePromise ??= VariableStore.open(dshHomePath("tavern"));
-}
-var memoryVectorStorePromise;
-function memoryVectors() {
-  return memoryVectorStorePromise ??= MemoryVectorStore.open(dshHomePath("tavern"));
-}
-function modHost() {
-  return modHostPromise ??= ModHost.open({
-    ctx: modHostContext ?? {},
-    root: dshHomePath("tavern"),
-    hostVersion: BUILD_INFO.version,
-    dbProvider: () => store3()
-  });
-}
-async function modHostProjection(ctx) {
-  try {
-    const snapshot2 = await modHost().then((host) => host.snapshot());
-    return snapshot2.mods.map((mod) => ({
-      id: mod.id,
-      name: mod.name,
-      version: mod.version,
-      author: mod.author,
-      description: mod.description,
-      capabilities: mod.capabilities,
-      panel: mod.panel,
-      status: mod.status,
-      enabled: mod.status === "loaded",
-      error: mod.error,
-      auditCount: mod.auditCount,
-      // 声明式按钮（A-1）：清单声明面，客户端据此渲染面板 chips 与聊天按钮行。
-      buttons: mod.buttons,
-      // P2（§3.5 启用确认弹层）：注册面——loaded 是实际注册名单，未装载回落
-      // manifest 声明（作者自查面）。
-      surfaces: mod.surfaces
-    }));
-  } catch (cause) {
-    ctx?.logger?.warn?.(`dsh-soulmojito: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
-    return [];
-  }
-}
-function novelStore() {
-  return novelStorePromise ??= NovelStore.open(dshHomePath("tavern"));
-}
-function tavernUpdate(ctx) {
-  if (updateServiceInstance !== void 0 && !updateServiceInstance.isDisposed) return updateServiceInstance;
-  updateServiceInstance = new TavernUpdateService({
-    ctx,
-    home: dshHomePath("tavern"),
-    pluginDir: import.meta.dirname,
-    local: { version: BUILD_INFO.version, commit: TAVERN_COMMIT },
-    enabled: updateChecksEnabledFlag
-  });
-  return updateServiceInstance;
-}
-function updateChecksEnabled(config = {}) {
-  if (config.checkForUpdates === false) return false;
-  const disabled = envCompat("DISABLE_UPDATE_CHECK")?.trim();
-  return !(disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false");
-}
-function templatesEnabled(config = {}) {
-  if (config.templateEnabled === false) return false;
-  const disabled = envCompat("DISABLE_TEMPLATES")?.trim();
-  return !(disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false");
-}
-function setUpdateChecksEnabledFlag(value) {
-  updateChecksEnabledFlag = value;
-}
-function templatesEnabledFlagValue() {
-  return templatesEnabledFlag;
-}
-function setTemplatesEnabledFlag(value) {
-  templatesEnabledFlag = value;
-}
-function getAgentTavernCapabilities() {
-  return agentTavernCapabilities;
-}
-function setAgentTavernCapabilities(value) {
-  agentTavernCapabilities = value;
-}
-function getAgentTavernCapabilitiesPromise() {
-  return agentTavernCapabilitiesPromise;
-}
-function setAgentTavernCapabilitiesPromise(value) {
-  agentTavernCapabilitiesPromise = value;
-}
-function getAgentTavernProjectorPromise() {
-  return agentTavernProjectorPromise;
-}
-function setAgentTavernProjectorPromise(value) {
-  agentTavernProjectorPromise = value;
-}
-function getAgentNovelCapabilities() {
-  return agentNovelCapabilities;
-}
-function setAgentNovelCapabilities(value) {
-  agentNovelCapabilities = value;
-}
-function getNovelProjectorPromise() {
-  return novelProjectorPromise;
-}
-function setNovelProjectorPromise(value) {
-  novelProjectorPromise = value;
-}
-function getNovelDriverPromise() {
-  return novelDriverPromise;
-}
-function setNovelDriverPromise(value) {
-  novelDriverPromise = value;
-}
-function setModHostContext(value) {
-  modHostContext = value;
-}
-function getGamesServicePromise() {
-  return gamesServicePromise;
-}
-function setGamesServicePromise(value) {
-  gamesServicePromise = value;
 }
 
 // packages/plugin/src/model-catalog.ts
@@ -23585,7 +26707,7 @@ import { promises as fs18 } from "node:fs";
 import * as path10 from "node:path";
 
 // packages/plugin/src/memory-embed-local.ts
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 import { spawn as spawn2 } from "node:child_process";
 import { readdirSync as readdirSync2, readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
@@ -23610,7 +26732,7 @@ function localModelFingerprint(modelDir) {
       }
     }
     if (parts.length === 0) return "unreadable";
-    return createHash9("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
+    return createHash10("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
   } catch {
     return "unreadable";
   }
@@ -24206,7 +27328,7 @@ function tavernStore() {
 }
 
 // packages/plugin/src/agent-tavern/tools/shared.ts
-var DEFAULT_USER2 = "User";
+var DEFAULT_USER3 = "User";
 function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
   return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
 }
@@ -24247,2496 +27369,6 @@ var historySearchOutput = objectOutput({
   sourceCount: { type: "integer" },
   truncated: { type: "boolean" }
 });
-
-// packages/tavern-template/src/paths.ts
-function parsePath(path12) {
-  if (path12 === "") return [];
-  const segments = [];
-  let buf = "";
-  let i = 0;
-  while (i < path12.length) {
-    const ch = path12[i];
-    if (ch === ".") {
-      if (buf !== "") segments.push(buf);
-      buf = "";
-      i++;
-    } else if (ch === "[") {
-      const close = path12.indexOf("]", i);
-      if (close === -1) return [];
-      if (buf !== "") segments.push(buf);
-      const inner = path12.slice(i + 1, close).trim();
-      if (!/^-?\d+$/.test(inner)) return [];
-      segments.push(inner);
-      buf = "";
-      i = close + 1;
-      if (path12[i] === ".") i++;
-    } else {
-      buf += ch;
-      i++;
-    }
-  }
-  if (buf !== "") segments.push(buf);
-  return segments;
-}
-function isObjectLike(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function deepClone(value) {
-  if (Array.isArray(value)) return value.map((item) => deepClone(item));
-  if (isObjectLike(value)) {
-    const out = {};
-    for (const [key, item] of Object.entries(value)) out[key] = deepClone(item);
-    return out;
-  }
-  return value;
-}
-function getPath(root, path12) {
-  const segments = parsePath(path12);
-  let cur = root;
-  for (const seg of segments) {
-    if (cur === null || cur === void 0) return void 0;
-    if (Array.isArray(cur)) {
-      const idx = Number(seg);
-      if (!Number.isInteger(idx)) return void 0;
-      cur = cur[idx < 0 ? cur.length + idx : idx];
-    } else if (isObjectLike(cur)) {
-      cur = Object.prototype.hasOwnProperty.call(cur, seg) ? cur[seg] : void 0;
-    } else {
-      return void 0;
-    }
-  }
-  return cur;
-}
-function setPath(root, path12, value) {
-  const segments = parsePath(path12);
-  if (segments.length === 0) return root;
-  const last = segments[segments.length - 1];
-  let cur = root;
-  for (const seg of segments.slice(0, -1)) {
-    const existing = cur[seg];
-    if (isObjectLike(existing)) {
-      cur = existing;
-    } else if (Array.isArray(existing)) {
-      const wrapper = {};
-      cur[seg] = wrapper;
-      cur = wrapper;
-    } else {
-      const next = {};
-      cur[seg] = next;
-      cur = next;
-    }
-  }
-  if (/^-?\d+$/.test(last) && Array.isArray(cur[last])) {
-    const arr = cur[last];
-    const idx = Number(last) < 0 ? arr.length + Number(last) : Number(last);
-    arr[idx < 0 ? 0 : idx] = value;
-  } else {
-    cur[last] = value;
-  }
-  return root;
-}
-function unsetPath(root, path12, index) {
-  if (index !== void 0) {
-    const target = getPath(root, path12);
-    if (Array.isArray(target)) {
-      const idx = typeof index === "number" ? index : Number(index);
-      if (Number.isInteger(idx) && idx >= 0 && idx < target.length) target.splice(idx, 1);
-    } else if (typeof target === "string") {
-      const idx = typeof index === "number" ? index : Number(index);
-      if (Number.isInteger(idx) && idx >= 0 && idx < target.length) {
-        setPath(root, path12, target.slice(0, idx) + target.slice(idx + 1));
-      }
-    } else if (isObjectLike(target)) {
-      delete target[String(index)];
-    }
-    return;
-  }
-  const segments = parsePath(path12);
-  if (segments.length === 0) return;
-  const last = segments[segments.length - 1];
-  let cur = root;
-  for (const seg of segments.slice(0, -1)) {
-    cur = getPath(cur, seg);
-    if (cur === null || cur === void 0) return;
-  }
-  if (isObjectLike(cur) || Array.isArray(cur)) delete cur[last];
-}
-function insertAtPath(root, path12, value, index) {
-  const target = getPath(root, path12);
-  if (Array.isArray(target)) {
-    const idx = index === void 0 ? target.length : Number(index);
-    if (Number.isInteger(idx) && idx >= 0 && idx <= target.length) target.splice(idx, 0, value);
-  } else if (typeof target === "string") {
-    const idx = index === void 0 ? target.length : Number(index);
-    if (Number.isInteger(idx) && idx >= 0 && idx <= target.length) {
-      setPath(root, path12, target.slice(0, idx) + String(value) + target.slice(idx));
-    }
-  } else if (isObjectLike(target)) {
-    target[index === void 0 ? String(target.length) : String(index)] = value;
-  }
-}
-function deepMerge(target, source) {
-  for (const [key, value] of Object.entries(source)) {
-    if (value === void 0) continue;
-    const dst = target[key];
-    if (isObjectLike(dst) && isObjectLike(value)) {
-      deepMerge(dst, value);
-    } else {
-      target[key] = deepClone(value);
-    }
-  }
-  return target;
-}
-
-// packages/tavern-template/src/api.ts
-var DEFAULT_CHAR_DEFINE = [
-  "<% if (name) { %>",
-  "<<%- name %>>",
-  "<% if (system_prompt) { %>System: <%- system_prompt %><% } %>",
-  "name: <%- name %>",
-  "<% if (personality) { %>personality: <%- personality %><% } %>",
-  "<% if (description) { %>description: <%- description %><% } %>",
-  "<% if (message_example) { %>",
-  "example:",
-  "<%- message_example %>",
-  "<% } %>",
-  "<% if (depth_prompt) { %>System: <%- depth_prompt %><% } %>",
-  "</<%- name %>>",
-  "<% } %>"
-].join("\n");
-var MAX_GETWI_DEPTH = 8;
-function createTemplateEnv(options) {
-  const { vars, host, defines } = options;
-  const depth = options.getwiDepth ?? { current: 0 };
-  const scopedVar = (scope) => ({
-    get: (key, opt2) => vars.getVar(key, { ...optAsRecord(opt2), scope }),
-    set: (key, value, opt2) => vars.setVar(key, value, { ...optAsRecord(opt2), scope }),
-    inc: (key, value = 1, opt2) => vars.incDecVar(key, value, { ...optAsRecord(opt2), outscope: scope }, 1),
-    dec: (key, value = 1, opt2) => vars.incDecVar(key, value, { ...optAsRecord(opt2), outscope: scope }, -1),
-    del: (key, index, opt2) => vars.delVar(key, index, { ...optAsRecord(opt2), scope }),
-    ins: (key, value, index, opt2) => vars.insVar(key, value, index, { ...optAsRecord(opt2), scope })
-  });
-  const local = scopedVar("local");
-  const global = scopedVar("global");
-  const message = scopedVar("message");
-  async function getwi(lorebookOrTitle, titleOrData, maybeData) {
-    let book;
-    let title;
-    let data = {};
-    if (lorebookOrTitle !== null && typeof lorebookOrTitle === "object") {
-      data = lorebookOrTitle;
-      title = titleOrData;
-    } else if (titleOrData !== null && typeof titleOrData === "object") {
-      title = lorebookOrTitle;
-      data = titleOrData;
-    } else if (titleOrData !== void 0) {
-      book = String(lorebookOrTitle);
-      title = titleOrData;
-      if (maybeData !== null && typeof maybeData === "object") data = maybeData;
-    } else {
-      title = lorebookOrTitle;
-    }
-    if (title === void 0 || title === "") return "";
-    if (depth.current >= MAX_GETWI_DEPTH) {
-      host.onWarning?.(`getwi recursion depth exceeded (${MAX_GETWI_DEPTH}) at "${String(title)}"`);
-      return "";
-    }
-    const entries = host.findWorldEntries(title, book);
-    if (entries.length === 0) return "";
-    const entry = entries[0];
-    depth.current++;
-    try {
-      return await host.renderNested(entry.content, {
-        world_info: worldInfoView(entry),
-        getwi_book: entry.book,
-        ...data
-      });
-    } catch (err2) {
-      host.onWarning?.(`getwi render failed for ${entry.book}#${entry.uid}: ${errorMessage2(err2)}`);
-      return entry.content;
-    } finally {
-      depth.current--;
-    }
-  }
-  async function getchar(nameOrTemplate, templateArg, dataArg) {
-    let name2;
-    let template = DEFAULT_CHAR_DEFINE;
-    let data = {};
-    if (typeof nameOrTemplate === "string" && nameOrTemplate.includes("<%")) {
-      template = nameOrTemplate;
-      if (templateArg !== void 0 && typeof templateArg === "object") data = templateArg;
-    } else {
-      if (nameOrTemplate !== void 0) name2 = nameOrTemplate;
-      if (typeof templateArg === "string") template = templateArg;
-      else if (templateArg !== void 0) data = templateArg;
-      if (dataArg !== void 0) data = dataArg;
-    }
-    const card = host.getCard(name2);
-    if (!card) return "";
-    const fields = {
-      name: card.name,
-      system_prompt: card.systemPrompt,
-      personality: card.personality,
-      description: card.description,
-      scenario: card.scenario,
-      first_message: card.firstMes,
-      message_example: card.mesExample,
-      creatorcomment: card.creatorNotes,
-      depth_prompt: card.depthPrompt,
-      ...data
-    };
-    return await host.renderNested(template, fields);
-  }
-  async function getpreset(name2, data = {}) {
-    const prompt = host.findPresetPrompt(name2);
-    if (!prompt) return "";
-    return await host.renderNested(prompt.content, { preset_prompt_name: prompt.name, ...data });
-  }
-  function resolveMessageIdx(idx) {
-    const messages = host.messages;
-    return idx < 0 ? messages.length + idx : idx;
-  }
-  function getChatMessage(idx, role) {
-    const resolved = resolveMessageIdx(idx);
-    const msg = host.messages[resolved];
-    if (!msg) return "";
-    if (role !== void 0 && roleOf(msg) !== role) return "";
-    return msg.mes;
-  }
-  function getChatMessages(a, b, c) {
-    let start;
-    let end;
-    let role;
-    if (b === void 0 || b === "user" || b === "assistant" || b === "system") {
-      start = -a;
-      role = b;
-    } else {
-      start = a;
-      end = b;
-      role = c;
-    }
-    const from = resolveMessageIdx(start);
-    const to = end === void 0 ? host.messages.length - 1 : resolveMessageIdx(end);
-    const out = [];
-    for (let i = Math.max(0, from); i <= Math.min(to, host.messages.length - 1); i++) {
-      const msg = host.messages[i];
-      if (msg.mes === "") continue;
-      if (role !== void 0 && roleOf(msg) !== role) continue;
-      out.push(msg.mes);
-    }
-    return out;
-  }
-  function matchChatMessages(pattern, options2 = {}) {
-    const from = resolveMessageIdx(options2.start ?? -2);
-    const to = options2.end === null || options2.end === void 0 ? host.messages.length - 1 : resolveMessageIdx(options2.end);
-    const role = options2.role;
-    const texts = [];
-    for (let i = Math.max(0, from); i <= Math.min(to, host.messages.length - 1); i++) {
-      const msg = host.messages[i];
-      if (role !== void 0 && roleOf(msg) !== role) continue;
-      texts.push(msg.mes);
-    }
-    const patterns = Array.isArray(pattern) ? pattern : [pattern];
-    if (patterns.length === 0) return false;
-    const testOne = (p, text) => typeof p === "string" ? text.includes(p) : p.test(text);
-    if (!Array.isArray(pattern)) return texts.some((text) => testOne(pattern, text));
-    const needAll = options2.and === true;
-    return texts.some((text) => needAll ? patterns.every((p) => testOne(p, text)) : patterns.some((p) => testOne(p, text)));
-  }
-  const env = {
-    /* ---- 变量 API ---- */
-    variables: vars.view(),
-    getvar: (key, options2) => vars.getVar(key, options2),
-    setvar: (key, value, options2) => vars.setVar(key, value, options2),
-    incvar: (key, value = 1, options2) => vars.incDecVar(key, value, options2, 1),
-    decvar: (key, value = 1, options2) => vars.incDecVar(key, value, options2, -1),
-    delvar: (key, index, options2) => vars.delVar(key, index, options2),
-    insvar: (key, value, index, options2) => vars.insVar(key, value, index, options2),
-    getLocalVar: local.get,
-    setLocalVar: local.set,
-    incLocalVar: local.inc,
-    decLocalVar: local.dec,
-    delLocalVar: local.del,
-    insertLocalVar: local.ins,
-    getGlobalVar: global.get,
-    setGlobalVar: global.set,
-    incGlobalVar: global.inc,
-    decGlobalVar: global.dec,
-    delGlobalVar: global.del,
-    insertGlobalVar: global.ins,
-    getMessageVar: message.get,
-    setMessageVar: message.set,
-    incMessageVar: message.inc,
-    decMessageVar: message.dec,
-    delMessageVar: message.del,
-    insertMessageVar: message.ins,
-    patchVariables: (key, change, options2) => {
-      const current = vars.getVar(key, { scope: "local" }) ?? {};
-      const patched = applyJsonPatch(isObjectLike(current) ? deepClone(current) : {}, change);
-      return vars.setVar(key, patched, options2);
-    },
-    define: (name2, value, merge = false) => {
-      const registry = defines;
-      if (merge && isObjectLike(registry[name2]) && isObjectLike(value)) {
-        deepMerge(registry[name2], value);
-      } else {
-        registry[name2] = value;
-      }
-    },
-    /* ---- injectPrompt ---- */
-    injectPrompt: (key, prompt, order = 100, sticky = 0, uid = "") => vars.injectPrompt(key, prompt, order, sticky, uid),
-    getPromptsInjected: (key, postprocess) => vars.getPromptsInjected(key, postprocess),
-    hasPromptsInjected: (key) => vars.hasPromptsInjected(key),
-    /* ---- 资产读取 ---- */
-    getwi,
-    getWorldInfo: getwi,
-    getchar,
-    getChara: getchar,
-    getpreset,
-    getPresetPrompt: getpreset,
-    getCharData: (name2) => {
-      const card = host.getCard(name2);
-      return card ? deepClone(card.data) : null;
-    },
-    getChatMessage,
-    getChatMessages,
-    matchChatMessages,
-    evalTemplate: async (content, data = {}) => host.renderNested(content, data),
-    /* ---- JSON 工具 ---- */
-    parseJSON,
-    jsonPatch: (dest, change) => applyJsonPatch(deepClone(dest), change),
-    /* ---- 常量 ---- */
-    runType: host.runType,
-    userName: host.userName,
-    charName: host.charName,
-    chatId: host.chatId,
-    ...host.characterId !== void 0 ? { characterId: host.characterId } : {},
-    groupId: null,
-    groups: [],
-    charAvatar: host.charAvatar ?? "",
-    userAvatar: host.userAvatar ?? "",
-    lastUserMessageId: host.lastUserMessageId,
-    lastCharMessageId: host.lastCharMessageId,
-    model: host.model ?? "",
-    _: miniLodash
-  };
-  for (const [name2, value] of Object.entries(defines ?? {})) env[name2] = value;
-  return env;
-}
-function roleOf(msg) {
-  if (msg.is_system) return "system";
-  return msg.is_user ? "user" : "assistant";
-}
-function worldInfoView(entry) {
-  return {
-    uid: entry.uid,
-    world: entry.book,
-    comment: entry.comment ?? "",
-    content: entry.content,
-    disable: entry.disable === true,
-    ...entry.order !== void 0 ? { order: entry.order } : {}
-  };
-}
-function optAsRecord(input) {
-  return input !== null && typeof input === "object" ? input : {};
-}
-function errorMessage2(err2) {
-  return err2 instanceof Error ? err2.message : String(err2);
-}
-function parseJSON(text) {
-  try {
-    return JSON.parse(text);
-  } catch {
-  }
-  let cleaned = text.trim();
-  const fence = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
-  if (fence) cleaned = fence[1].trim();
-  const firstObj = cleaned.search(/[[{]/);
-  if (firstObj > 0) cleaned = cleaned.slice(firstObj);
-  const lastObj = Math.max(cleaned.lastIndexOf("}"), cleaned.lastIndexOf("]"));
-  if (lastObj >= 0 && lastObj < cleaned.length - 1) cleaned = cleaned.slice(0, lastObj + 1);
-  cleaned = cleaned.replace(/[\u201c\u201d]/g, '"').replace(/[\u2018\u2019]/g, "'").replace(/,\s*([}\]])/g, "$1");
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    if (!cleaned.includes('"')) {
-      try {
-        return JSON.parse(cleaned.replace(/'([^']*)'/g, '"$1"'));
-      } catch {
-      }
-    }
-    throw new Error("parseJSON: not valid JSON even after cleanup");
-  }
-}
-function decodePointer(pointer) {
-  if (pointer === "") throw new Error("jsonPatch: empty JSON pointer");
-  if (!pointer.startsWith("/")) throw new Error(`jsonPatch: invalid JSON pointer "${pointer}"`);
-  return pointer.slice(1).split("/").map((seg) => seg.replace(/~1/g, "/").replace(/~0/g, "~"));
-}
-function applyJsonPatch(dest, change) {
-  const root = deepClone(dest);
-  const wrap = { "": root };
-  const walk = (segments) => {
-    let cur = wrap[""];
-    for (const seg of segments) {
-      if (Array.isArray(cur)) cur = cur[Number(seg)];
-      else if (isObjectLike(cur)) cur = cur[seg];
-      else return void 0;
-    }
-    return cur;
-  };
-  const parentOf = (segments) => {
-    const parent = walk(segments);
-    return isObjectLike(parent) || Array.isArray(parent) ? parent : void 0;
-  };
-  for (const raw of change) {
-    const op = raw;
-    const segs = decodePointer(op.path);
-    const parent = parentOf(segs.slice(0, -1));
-    if (parent === void 0) throw new Error(`jsonPatch: parent path missing for "${op.path}"`);
-    const key = segs[segs.length - 1];
-    if (op.op === "add" || op.op === "replace") {
-      if (Array.isArray(parent) && op.op === "add") {
-        if (key === "-") parent.push(deepClone(op.value));
-        else {
-          const idx = Number(key);
-          if (!Number.isInteger(idx) || idx < 0 || idx > parent.length) throw new Error(`jsonPatch: bad array index "${key}"`);
-          parent.splice(idx, 0, deepClone(op.value));
-        }
-      } else {
-        parent[key] = deepClone(op.value);
-      }
-      continue;
-    }
-    if (op.op === "remove") {
-      if (Array.isArray(parent)) {
-        const idx = Number(key);
-        if (Number.isInteger(idx) && idx >= 0 && idx < parent.length) parent.splice(idx, 1);
-      } else {
-        delete parent[key];
-      }
-      continue;
-    }
-    if (op.op === "move" || op.op === "copy") {
-      const fromSegs = decodePointer(op.from ?? "");
-      const value = walk(fromSegs);
-      if (value === void 0) throw new Error(`jsonPatch: from path missing "${op.from}"`);
-      if (op.op === "move") {
-        const fromParent = parentOf(fromSegs.slice(0, -1));
-        if (fromParent === void 0) throw new Error(`jsonPatch: from parent missing "${op.from}"`);
-        const fromKey = fromSegs[fromSegs.length - 1];
-        if (Array.isArray(fromParent)) {
-          const idx = Number(fromKey);
-          if (Number.isInteger(idx) && idx >= 0 && idx < fromParent.length) fromParent.splice(idx, 1);
-        } else {
-          delete fromParent[fromKey];
-        }
-      }
-      if (Array.isArray(parent)) {
-        if (key === "-") parent.push(deepClone(value));
-        else parent.splice(Number(key), 0, deepClone(value));
-      } else {
-        parent[key] = deepClone(value);
-      }
-      continue;
-    }
-    if (op.op === "test") {
-      const actual = walk(segs);
-      if (JSON.stringify(actual) !== JSON.stringify(op.value)) {
-        throw new Error(`jsonPatch: test failed at "${op.path}"`);
-      }
-      continue;
-    }
-    throw new Error(`jsonPatch: unknown op "${String(raw.op)}"`);
-  }
-  return wrap[""];
-}
-var miniLodash = {
-  get: (obj, path12, defaults) => {
-    const value = getPath(obj, path12);
-    return value === void 0 ? defaults : value;
-  },
-  set: (obj, path12, value) => setPath(obj, path12, value),
-  has: (obj, path12) => getPath(obj, path12) !== void 0,
-  merge: (dest, ...sources) => {
-    for (const src of sources) deepMerge(dest, src);
-    return dest;
-  },
-  cloneDeep: deepClone,
-  isArray: (v) => Array.isArray(v),
-  isObject: (v) => typeof v === "object" && v !== null,
-  isPlainObject: isObjectLike,
-  isString: (v) => typeof v === "string",
-  isNumber: (v) => typeof v === "number",
-  isBoolean: (v) => typeof v === "boolean",
-  isNull: (v) => v === null,
-  isUndefined: (v) => v === void 0,
-  isEmpty: (v) => v === null || v === void 0 || v === "" || Array.isArray(v) && v.length === 0 || isObjectLike(v) && Object.keys(v).length === 0,
-  keys: (v) => Object.keys(v),
-  values: (v) => Object.values(v),
-  entries: (v) => Object.entries(v),
-  first: (v) => v[0],
-  last: (v) => v[v.length - 1],
-  identity: (v) => v,
-  toArray: (v) => {
-    if (Array.isArray(v)) return v;
-    if (v === null || v === void 0) return [];
-    if (typeof v === "string") return v.split("");
-    if (isObjectLike(v)) return Object.values(v);
-    return [v];
-  }
-};
-
-// packages/tavern-template/src/runtime.ts
-import vm from "node:vm";
-
-// packages/tavern-template/src/syntax.ts
-var TemplateSyntaxError = class extends Error {
-  constructor(message, source) {
-    super(`template syntax error: ${message}`);
-    this.source = source;
-    this.name = "TemplateSyntaxError";
-  }
-};
-var OPEN = "<%";
-var CLOSE = "%>";
-function tokenize2(source) {
-  const tokens = [];
-  let buf = "";
-  let i = 0;
-  const flushText = () => {
-    if (buf !== "") {
-      tokens.push({ text: buf });
-      buf = "";
-    }
-  };
-  while (i < source.length) {
-    if (source.startsWith("<%%", i)) {
-      buf += OPEN;
-      i += 3;
-      continue;
-    }
-    if (source.startsWith("%%>", i)) {
-      buf += CLOSE;
-      i += 3;
-      continue;
-    }
-    if (!source.startsWith(OPEN, i)) {
-      buf += source[i];
-      i++;
-      continue;
-    }
-    flushText();
-    const tag = readTag(source, i);
-    if (tag.slurpBefore) {
-      const last = tokens[tokens.length - 1];
-      if (last && "text" in last) last.text = last.text.replace(/\s+$/, "");
-      else buf = "";
-    }
-    tokens.push({ tag });
-    i = tag.end;
-    if (tag.slurpAfter) {
-      while (i < source.length && /\s/.test(source[i])) i++;
-    } else if (tag.trimNewline) {
-      if (source.startsWith("\r\n", i)) i += 2;
-      else if (source[i] === "\n") i += 1;
-    }
-  }
-  flushText();
-  return tokens;
-}
-function readTag(source, start) {
-  let i = start + OPEN.length;
-  let slurpBefore = false;
-  if (source[i] === "_") {
-    slurpBefore = true;
-    i++;
-  }
-  let mode = "script";
-  const modeCh = source[i];
-  if (modeCh === "=") {
-    mode = "escape";
-    i++;
-  } else if (modeCh === "-") {
-    mode = "raw";
-    i++;
-  } else if (modeCh === "#") {
-    mode = "comment";
-    i++;
-  }
-  let code = "";
-  while (i < source.length) {
-    if (source.startsWith("-%>", i)) {
-      return { mode, code, trimNewline: true, slurpAfter: false, slurpBefore, end: i + 3 };
-    }
-    if (source.startsWith("_%>", i)) {
-      return { mode, code, trimNewline: false, slurpAfter: true, slurpBefore, end: i + 3 };
-    }
-    if (source.startsWith(CLOSE, i)) {
-      return { mode, code, trimNewline: false, slurpAfter: false, slurpBefore, end: i + 2 };
-    }
-    code += source[i];
-    i++;
-  }
-  throw new TemplateSyntaxError(`unclosed tag starting at offset ${start} (mode=${mode})`, source);
-}
-function compileTemplate(source) {
-  const tokens = tokenize2(source);
-  const parts = [];
-  for (const token of tokens) {
-    if ("text" in token) {
-      if (token.text !== "") parts.push(`__append(${JSON.stringify(token.text)});`);
-      continue;
-    }
-    const { mode, code } = token.tag;
-    if (mode === "comment") continue;
-    if (mode === "script") {
-      if (code.trim() !== "") parts.push(`${code}
-`);
-      continue;
-    }
-    const expr = code.trim();
-    if (expr === "") continue;
-    if (mode === "escape") parts.push(`__append(__escape(String(await (${expr}))));`);
-    else parts.push(`__append(await (${expr}));`);
-  }
-  parts.push("return __out;");
-  return parts.join("\n");
-}
-
-// packages/tavern-template/src/runtime.ts
-function protectBlocks(source) {
-  return source.replace(/<#escape-ejs>([\s\S]*?)<#\/escape-ejs>/g, (_m, inner) => `<#escape-ejs>${inner.replace(/<%/g, "<%%").replace(/%>/g, "%%>")}<#/escape-ejs>`).replace(/<(thinking|think|reasoning)>([\s\S]*?)<\/\1>/g, (m, tag, inner) => inner.includes("<%") ? `<${tag}>${inner.replace(/<%/g, "<%%").replace(/%>/g, "%%>")}</${tag}>` : m);
-}
-function htmlEscape(text) {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-}
-var compileCache = /* @__PURE__ */ new Map();
-var COMPILE_CACHE_MAX = 256;
-function compile(source) {
-  const cached = compileCache.get(source);
-  if (cached) return cached;
-  const body = compileTemplate(source);
-  const wrapper = `(async function (__env) { with (__env) {
-${body}
-} })`;
-  const script = new vm.Script(wrapper, { filename: "tavern-template.ejs" });
-  if (compileCache.size >= COMPILE_CACHE_MAX) {
-    const oldest = compileCache.keys().next().value;
-    if (oldest !== void 0) compileCache.delete(oldest);
-  }
-  const entry = { script };
-  compileCache.set(source, entry);
-  return entry;
-}
-function hasTemplateTag(source) {
-  return source.includes("<%");
-}
-function buildSandboxEnv(env) {
-  let out = "";
-  const sandboxEnv = /* @__PURE__ */ Object.create(null);
-  Object.assign(sandboxEnv, env);
-  const defineHidden = (key, descriptor) => {
-    Object.defineProperty(sandboxEnv, key, { ...descriptor, enumerable: false, configurable: true });
-  };
-  defineHidden("__out", {
-    get: () => out,
-    set: (value) => {
-      out = String(value ?? "");
-    }
-  });
-  defineHidden("__append", {
-    value: (value) => {
-      out += value === null || value === void 0 ? "" : String(value);
-    }
-  });
-  defineHidden("__escape", { value: htmlEscape });
-  defineHidden("print", {
-    value: (...args) => {
-      out += args.map((a) => a === null || a === void 0 ? "" : String(a)).join(" ");
-    }
-  });
-  return sandboxEnv;
-}
-async function renderSandboxed(source, env, options = {}) {
-  try {
-    const protectedSource = protectBlocks(source);
-    const sandboxEnv = buildSandboxEnv(env);
-    const factory = compile(protectedSource).script.runInNewContext(sandboxEnv);
-    return await factory(sandboxEnv);
-  } catch (err2) {
-    const where = options.where ? ` (${options.where})` : "";
-    const message = err2 instanceof Error ? `${err2.name}: ${err2.message}` : String(err2);
-    throw new Error(`template execution failed${where}: ${message}`);
-  }
-}
-async function evalExpressionSandboxed(expression, env) {
-  const wrapper = `(async function (__env) { with (__env) { return await (${expression}); } })`;
-  const script = new vm.Script(wrapper, { filename: "tavern-template-expr.ejs" });
-  const sandboxEnv = /* @__PURE__ */ Object.create(null);
-  Object.assign(sandboxEnv, env);
-  const factory = script.runInNewContext(sandboxEnv);
-  return await factory(sandboxEnv);
-}
-
-// packages/tavern-template/src/yaml.ts
-var YamlSubsetError = class extends Error {
-  constructor(message, line) {
-    super(`yaml subset parse error at line ${line}: ${message}`);
-    this.line = line;
-    this.name = "YamlSubsetError";
-  }
-};
-function parseYamlSubset(source) {
-  const lines = [];
-  for (const [i, raw] of source.split(/\r?\n/).entries()) {
-    const stripped = raw.replace(/\t/g, "  ");
-    const content = stripped.trim();
-    if (content === "" || content.startsWith("#")) continue;
-    const indent = stripped.length - stripped.trimStart().length;
-    lines.push({ indent, text: content, number: i + 1 });
-  }
-  if (lines.length === 0) return {};
-  const [value] = parseBlock(lines, 0, lines[0].indent);
-  return value;
-}
-function parseBlock(lines, pos, indent) {
-  const first = lines[pos];
-  if (first.text.startsWith("- ") || first.text === "-") return parseArray(lines, pos, indent);
-  return parseMap(lines, pos, indent);
-}
-function parseArray(lines, pos, indent) {
-  const out = [];
-  let i = pos;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (line.indent < indent) break;
-    if (line.indent > indent) throw new YamlSubsetError("unexpected indentation", line.number);
-    if (line.text === "-") {
-      const next = lines[i + 1];
-      if (next && next.indent > indent) {
-        const [value, consumed] = parseBlock(lines, i + 1, next.indent);
-        out.push(value);
-        i = consumed;
-      } else {
-        out.push(null);
-        i++;
-      }
-      continue;
-    }
-    if (!line.text.startsWith("- ")) break;
-    const rest = line.text.slice(2).trim();
-    const inlineKey = matchKey(rest);
-    if (inlineKey !== null) {
-      const itemIndent = indent + 2;
-      const synthetic = [{ indent: itemIndent, text: rest, number: line.number }];
-      let j = i + 1;
-      while (j < lines.length && lines[j].indent >= itemIndent && !lines[j].text.startsWith("- ")) {
-        synthetic.push(lines[j]);
-        j++;
-      }
-      const [value] = parseMap(synthetic, 0, itemIndent);
-      out.push(value);
-      i = j;
-      continue;
-    }
-    out.push(parseScalar(rest, line.number));
-    i++;
-  }
-  return [out, i];
-}
-function parseMap(lines, pos, indent) {
-  const out = {};
-  let i = pos;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (line.indent < indent) break;
-    if (line.indent > indent) throw new YamlSubsetError("unexpected indentation", line.number);
-    const key = matchKey(line.text);
-    if (key === null) throw new YamlSubsetError(`expected "key:" mapping, got "${line.text}"`, line.number);
-    const rest = line.text.slice(key.length + 1).trim();
-    if (rest !== "") {
-      out[key] = parseScalar(rest, line.number);
-      i++;
-      continue;
-    }
-    const next = lines[i + 1];
-    if (next && next.indent > indent) {
-      const [value, consumed] = parseBlock(lines, i + 1, next.indent);
-      out[key] = value;
-      i = consumed;
-    } else if (next && next.indent === indent && (next.text.startsWith("- ") || next.text === "-")) {
-      const [value, consumed] = parseArray(lines, i + 1, indent);
-      out[key] = value;
-      i = consumed;
-    } else {
-      out[key] = null;
-      i++;
-    }
-  }
-  return [out, i];
-}
-function matchKey(text) {
-  const quoted = text.match(/^"([^"]+)"\s*:(?=\s|$)/) ?? text.match(/^'([^']+)'\s*:(?=\s|$)/);
-  if (quoted) return quoted[1];
-  const plain = text.match(/^([^:\s][^:]*?)\s*:(?=\s|$)/);
-  if (plain) return plain[1];
-  return null;
-}
-function parseScalar(text, line) {
-  const value = text.trim();
-  if (value.startsWith("'") && value.endsWith("'") && value.length >= 2) return value.slice(1, -1);
-  if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) return value.slice(1, -1);
-  if (value === "true") return true;
-  if (value === "false") return false;
-  if (value === "null" || value === "~") return null;
-  if (/^-?\d+$/.test(value)) return Number(value);
-  if (/^-?\d+\.\d+$/.test(value)) return Number(value);
-  if (value.startsWith("[") || value.startsWith("{") || value.startsWith("|") || value.startsWith(">")) {
-    throw new YamlSubsetError(`unsupported yaml syntax: "${value}" (use JSON format for flow styles)`, line);
-  }
-  return value;
-}
-
-// packages/tavern-template/src/inject.ts
-function classifyComment(comment) {
-  let m = /^\[GENERATE:BEFORE\]/.exec(comment);
-  if (m) return { kind: "generate-before" };
-  m = /^\[GENERATE:AFTER\]/.exec(comment);
-  if (m) return { kind: "generate-after" };
-  m = /^\[GENERATE:(-?\d+):(BEFORE|AFTER)\]/.exec(comment);
-  if (m) return { kind: m[2] === "BEFORE" ? "generate-idx-before" : "generate-idx-after", arg: m[1] };
-  m = /^\[GENERATE:REGEX:(.*?)\]/.exec(comment);
-  if (m && m[1] !== "") return { kind: "generate-regex", arg: m[1] };
-  m = /^\[RENDER:(BEFORE|AFTER)\]/.exec(comment);
-  if (m) return { kind: m[1] === "BEFORE" ? "render-before" : "render-after" };
-  if (/^\[InitialVariables\]/.test(comment)) return { kind: "initial" };
-  m = /^@INJECT\b(.*)$/.exec(comment);
-  if (m) return { kind: "inject", arg: m[1].trim() };
-  return null;
-}
-function classifyContent(content) {
-  const lines = content.split("\n");
-  let special = null;
-  let ifCondition;
-  let privateBlock = false;
-  let i = 0;
-  for (; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line.startsWith("@@")) break;
-    if (line.startsWith("@@@")) {
-      lines.splice(i, 1, line.slice(1));
-      const result2 = { special, content: lines.join("\n"), privateBlock };
-      if (ifCondition !== void 0) result2.ifCondition = ifCondition;
-      return result2;
-    }
-    const [name2, ...rest] = line.split(/\s+/);
-    const arg = rest.join(" ");
-    switch (name2) {
-      case "@@generate_before":
-        special ??= { kind: "generate-before" };
-        break;
-      case "@@generate_after":
-        special ??= { kind: "generate-after" };
-        break;
-      case "@@render_before":
-        special ??= { kind: "render-before" };
-        break;
-      case "@@render_after":
-        special ??= { kind: "render-after" };
-        break;
-      case "@@initial_variables":
-        special ??= { kind: "initial" };
-        break;
-      case "@@private":
-        privateBlock = true;
-        break;
-      case "@@if":
-        if (arg !== "") ifCondition ??= arg;
-        break;
-      default:
-        break;
-    }
-  }
-  const body = lines.slice(i).join("\n");
-  const result = { special, content: privateBlock ? `<% { %>${body}<% } %>` : body, privateBlock };
-  if (ifCondition !== void 0) result.ifCondition = ifCondition;
-  return result;
-}
-function classifySpecialEntry(entry) {
-  const fromComment = entry.comment !== void 0 ? classifyComment(entry.comment.trim()) : null;
-  const classified = classifyContent(entry.content ?? "");
-  const kind = fromComment?.kind ?? classified.special?.kind;
-  if (kind === void 0) return null;
-  const arg = fromComment?.arg ?? classified.special?.arg;
-  const result = {
-    kind,
-    content: classified.content
-  };
-  if (arg !== void 0) result.arg = arg;
-  if (classified.ifCondition !== void 0) result.ifCondition = classified.ifCondition;
-  return result;
-}
-async function applyGenerateInjections(messages, entries, render, env, evaluateCondition, warn) {
-  const out = messages.map((m) => ({ ...m }));
-  const beforeTexts = /* @__PURE__ */ new Map();
-  const afterTexts = /* @__PURE__ */ new Map();
-  const pushText2 = (map, idx, text) => {
-    const list = map.get(idx) ?? [];
-    list.push(text);
-    map.set(idx, list);
-  };
-  const ordered = [...entries].sort((a, b) => a.order - b.order || a.uid - b.uid);
-  for (const entry of ordered) {
-    if (entry.useProbability && entry.probability !== void 0 && Math.random() * 100 >= entry.probability) continue;
-    if (entry.kind === "generate-before") {
-      const text = await renderChecked(entry, render, env, evaluateCondition, warn);
-      if (text !== null) pushText2(beforeTexts, 0, text);
-      continue;
-    }
-    if (entry.kind === "generate-after") {
-      const text = await renderChecked(entry, render, env, evaluateCondition, warn);
-      if (text !== null && out.length > 0) pushText2(afterTexts, out.length - 1, text);
-      else if (text !== null) pushText2(beforeTexts, 0, text);
-      continue;
-    }
-    if (entry.kind === "generate-idx-before" || entry.kind === "generate-idx-after") {
-      const idx = resolveIndex(Number(entry.arg ?? "0"), out.length);
-      if (idx === null) {
-        warn(`[GENERATE:${entry.arg}] index out of range (${entry.book}#${entry.uid})`);
-        continue;
-      }
-      const text = await renderChecked(entry, render, env, evaluateCondition, warn);
-      if (text === null) continue;
-      pushText2(entry.kind === "generate-idx-before" ? beforeTexts : afterTexts, idx, text);
-      continue;
-    }
-    if (entry.kind === "generate-regex") {
-      let re;
-      try {
-        re = new RegExp(entry.arg ?? "", "i");
-      } catch (err2) {
-        warn(`[GENERATE:REGEX] invalid pattern /${entry.arg}/: ${err2 instanceof Error ? err2.message : String(err2)}`);
-        continue;
-      }
-      for (let i = 0; i < out.length; i++) {
-        if (!re.test(out[i].content)) continue;
-        const text = await render(entry.content, {
-          ...env,
-          matched_message: out[i].content,
-          matched_message_index: i,
-          matched_message_role: out[i].role
-        });
-        pushText2(beforeTexts, i, text);
-      }
-    }
-  }
-  for (let i = 0; i < out.length; i++) {
-    const before = beforeTexts.get(i);
-    const after = afterTexts.get(i);
-    if (before === void 0 && after === void 0) continue;
-    const parts = [...before ?? [], out[i].content, ...after ?? []];
-    out[i] = { ...out[i], content: parts.join("\n") };
-  }
-  return out;
-}
-async function renderChecked(entry, render, env, evaluateCondition, warn) {
-  if (entry.ifCondition !== void 0 && !await evaluateCondition(entry.ifCondition)) return null;
-  if (entry.renderedContent !== void 0) return entry.renderedContent;
-  try {
-    return await render(entry.content, { ...env, world_info: { uid: entry.uid, world: entry.book, comment: entry.comment, content: entry.content } });
-  } catch (err2) {
-    warn(`template entry ${entry.book}#${entry.uid} ("${entry.comment}") render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
-    return null;
-  }
-}
-function splitParams(params) {
-  const chunks = [];
-  let buf = "";
-  let quote;
-  for (const ch of params) {
-    if (quote !== void 0) {
-      buf += ch;
-      if (ch === quote) quote = void 0;
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      buf += ch;
-      continue;
-    }
-    if (ch === ",") {
-      chunks.push(buf);
-      buf = "";
-      continue;
-    }
-    buf += ch;
-  }
-  chunks.push(buf);
-  const out = [];
-  for (const chunk of chunks) {
-    const eq = chunk.indexOf("=");
-    if (eq <= 0) continue;
-    const key = chunk.slice(0, eq).trim();
-    const raw = chunk.slice(eq + 1).trim();
-    const unquoted = raw.length >= 2 && (raw.startsWith('"') && raw.endsWith('"') || raw.startsWith("'") && raw.endsWith("'")) ? raw.slice(1, -1) : raw;
-    out.push({ key, value: unquoted });
-  }
-  return out;
-}
-function parseInjectParams(params, entry) {
-  const kv = new Map(splitParams(params).map((p) => [p.key, p.value]));
-  const roleRaw = kv.get("role");
-  const role = roleRaw === "user" || roleRaw === "assistant" || roleRaw === "system" ? roleRaw : "system";
-  const base = { role, order: entry.order };
-  const pos = kv.get("pos");
-  if (pos !== void 0 && /^-?\d+$/.test(pos)) return { instruction: { ...base, type: "pos", pos: Number(pos) } };
-  const target = kv.get("target");
-  if (target !== void 0) {
-    const index = kv.get("index");
-    const at = kv.get("at");
-    return {
-      instruction: {
-        ...base,
-        type: "target",
-        target,
-        targetIndex: index !== void 0 && /^-?\d+$/.test(index) ? Number(index) : 1,
-        at: at === "after" ? "after" : "before"
-      }
-    };
-  }
-  const regex = kv.get("regex");
-  if (regex !== void 0) {
-    if (regex === "") return { instruction: { ...base, type: "regex", regex: "" }, warning: "@INJECT empty regex pattern" };
-    const at = kv.get("at");
-    return { instruction: { ...base, type: "regex", regex, at: at === "after" ? "after" : "before" } };
-  }
-  return null;
-}
-async function applyInjectEntries(messages, entries, render, env, evaluateCondition, warn) {
-  const out = messages.map((m) => ({ ...m }));
-  const instructions = [];
-  for (const entry of entries) {
-    if (entry.useProbability && entry.probability !== void 0 && Math.random() * 100 >= entry.probability) continue;
-    if (entry.arg === void 0 || entry.arg === "") {
-      warn(`@INJECT entry ${entry.book}#${entry.uid} ("${entry.comment}") has no parameters`);
-      continue;
-    }
-    const parsed = parseInjectParams(entry.arg, entry);
-    if (!parsed) {
-      warn(`@INJECT entry ${entry.book}#${entry.uid} ("${entry.comment}") has invalid parameters: "${entry.arg}"`);
-      continue;
-    }
-    if (entry.ifCondition !== void 0 && !await evaluateCondition(entry.ifCondition)) continue;
-    let content;
-    try {
-      content = await render(entry.content, { ...env, world_info: { uid: entry.uid, world: entry.book, comment: entry.comment, content: entry.content } });
-    } catch (err2) {
-      warn(`@INJECT entry ${entry.book}#${entry.uid} render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
-      continue;
-    }
-    if (content.trim() === "") continue;
-    if (parsed.warning) warn(parsed.warning);
-    instructions.push({ instruction: { ...parsed.instruction, entry }, content });
-  }
-  if (instructions.length === 0) return out;
-  const roleIndex = (role, occurrence) => {
-    const indices = out.map((m, i) => m.role === role ? i : -1).filter((i) => i >= 0);
-    const n = occurrence < 0 ? indices.length + occurrence + 1 : occurrence;
-    const idx = indices[n - 1];
-    return idx === void 0 ? null : idx;
-  };
-  const positionBased = [];
-  for (const { instruction, content } of instructions) {
-    if (instruction.type === "pos") {
-      const pos = instruction.pos ?? 1;
-      const insertAt = pos === 0 ? 0 : pos > 0 ? pos - 1 : Math.max(0, out.length + pos);
-      positionBased.push({ insertAt, order: instruction.order, typeRank: 0, content, role: instruction.role });
-    } else if (instruction.type === "target") {
-      const idx = roleIndex(instruction.target ?? "user", instruction.targetIndex ?? 1);
-      if (idx === null) {
-        warn(`@INJECT target=${instruction.target}[${instruction.targetIndex}] not found (${instruction.entry.book}#${instruction.entry.uid})`);
-        continue;
-      }
-      const insertAt = instruction.at === "after" ? idx + 1 : idx;
-      positionBased.push({ insertAt, order: instruction.order, typeRank: 1, content, role: instruction.role });
-    }
-  }
-  positionBased.sort((a, b) => b.insertAt - a.insertAt || b.order - a.order || b.typeRank - a.typeRank);
-  for (const item of positionBased) {
-    out.splice(Math.min(item.insertAt, out.length), 0, { role: item.role, content: item.content });
-  }
-  const regexBased = instructions.filter((x) => x.instruction.type === "regex").map((x) => ({ ...x, instruction: x.instruction }));
-  const regexQueue = [];
-  for (const { instruction, content } of regexBased) {
-    let re;
-    try {
-      re = new RegExp(instruction.regex, "i");
-    } catch (err2) {
-      warn(`@INJECT invalid regex /${instruction.regex}/: ${err2 instanceof Error ? err2.message : String(err2)}`);
-      continue;
-    }
-    const matchIdx = out.findIndex((m) => re.test(m.content));
-    if (matchIdx === -1) {
-      warn(`@INJECT regex /${instruction.regex}/ matched no message (${instruction.entry.book}#${instruction.entry.uid})`);
-      continue;
-    }
-    regexQueue.push({
-      insertAt: instruction.at === "after" ? matchIdx + 1 : matchIdx,
-      order: instruction.order,
-      content,
-      role: instruction.role
-    });
-  }
-  regexQueue.sort((a, b) => b.insertAt - a.insertAt || b.order - a.order);
-  for (const item of regexQueue) {
-    out.splice(Math.min(item.insertAt, out.length), 0, { role: item.role, content: item.content });
-  }
-  return out;
-}
-async function applyRenderInjections(text, entries, render, env, evaluateCondition, warn) {
-  const ordered = [...entries].sort((a, b) => a.order - b.order || a.uid - b.uid);
-  let prefix = "";
-  let suffix = "";
-  for (const entry of ordered) {
-    if (entry.useProbability && entry.probability !== void 0 && Math.random() * 100 >= entry.probability) continue;
-    if (entry.kind !== "render-before" && entry.kind !== "render-after") continue;
-    if (entry.ifCondition !== void 0 && !await evaluateCondition(entry.ifCondition)) continue;
-    try {
-      const rendered = await render(entry.content, { ...env, world_info: { uid: entry.uid, world: entry.book, comment: entry.comment, content: entry.content } });
-      if (entry.kind === "render-before") prefix += rendered;
-      else suffix += rendered;
-    } catch (err2) {
-      warn(`[RENDER] entry ${entry.book}#${entry.uid} render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
-    }
-  }
-  return `${prefix}${text}${suffix}`;
-}
-function parseInitialVariables(content, warn) {
-  let data;
-  try {
-    data = JSON.parse(content);
-  } catch {
-    try {
-      data = parseYamlSubset(content);
-    } catch {
-      warn("[InitialVariables] content is neither valid JSON nor supported YAML subset");
-      return null;
-    }
-  }
-  if (!isObjectLike(data)) {
-    warn("[InitialVariables] parsed content is not an object");
-    return null;
-  }
-  return data;
-}
-function resolveIndex(idx, length) {
-  const resolved = idx < 0 ? length + idx : idx;
-  if (resolved < 0 || resolved >= length) return null;
-  return resolved;
-}
-
-// packages/tavern-template/src/variables.ts
-var SCOPES4 = ["global", "local", "message", "cache", "initial"];
-var FLAGS = ["nx", "xx", "n", "nxs", "xxs"];
-var RESULTS = ["old", "new", "fullcache"];
-function normalizeOptions(input, base) {
-  const out = { ...base };
-  const apply2 = (key, _value) => {
-    if (SCOPES4.includes(key)) {
-      out.scope = key;
-      return true;
-    }
-    if (FLAGS.includes(key)) {
-      out.flags = key;
-      return true;
-    }
-    if (RESULTS.includes(key)) {
-      out.results = key;
-      return true;
-    }
-    return false;
-  };
-  if (typeof input === "string") {
-    if (apply2(input, true)) return out;
-    throw new TypeError(`unknown option shorthand: ${input}`);
-  }
-  if (input !== null && typeof input === "object") {
-    const obj = input;
-    for (const [key, value] of Object.entries(obj)) {
-      switch (key) {
-        case "scope":
-          out.scope = value;
-          break;
-        case "inscope":
-          out.inscope = value;
-          break;
-        case "outscope":
-          out.outscope = value;
-          break;
-        case "flags":
-          out.flags = value;
-          break;
-        case "results":
-          out.results = value;
-          break;
-        case "defaults":
-          out.defaults = value;
-          break;
-        case "min":
-          out.min = value;
-          break;
-        case "max":
-          out.max = value;
-          break;
-        case "clone":
-          out.clone = value === true;
-          break;
-        case "dryRun":
-          break;
-        // dsh-soulmojito 单遍计算，无准备期（文档化偏差）
-        case "noCache":
-          break;
-        // 我们的 cache 写穿透，无需该开关
-        case "index":
-          break;
-        // 楼层变量索引，无楼层面
-        case "withMsg":
-          break;
-        case "merge":
-          break;
-        // 深合并是本实现默认行为
-        default:
-          break;
-      }
-    }
-    return out;
-  }
-  return out;
-}
-var TemplateVariableSystem = class {
-  local;
-  global;
-  initial;
-  /** 临时视图：global→initial→local 深合并快照 + 写穿透。 */
-  cache;
-  injected = /* @__PURE__ */ new Map();
-  injectSeq = 0;
-  constructor(stores) {
-    this.local = stores.local;
-    this.global = stores.global;
-    this.initial = stores.initial ?? {};
-    this.cache = {};
-    this.rebuildView();
-  }
-  /** 从 global→initial→local 重建 cache 视图（丢弃已有写穿透叠加）。 */
-  rebuildView() {
-    for (const key of Object.keys(this.cache)) delete this.cache[key];
-    deepMerge(this.cache, this.global);
-    deepMerge(this.cache, this.initial);
-    deepMerge(this.cache, deepClone(this.local));
-  }
-  /**
-   * 重置 initial 作用域并重建视图（ST「每次加载重算覆盖」语义）。
-   * 必须先于任何模板渲染调用（重建会丢弃渲染期写穿透）。
-   */
-  setInitialVariables(data) {
-    for (const key of Object.keys(this.initial)) delete this.initial[key];
-    deepMerge(this.initial, data);
-    this.rebuildView();
-  }
-  /** `variables` 常量（模板内可变视图）。 */
-  view() {
-    return this.cache;
-  }
-  /** 最终 local 值（宿主持久化用；返回原引用）。 */
-  localStore() {
-    return this.local;
-  }
-  scopeStore(scope) {
-    switch (scope) {
-      case "global":
-        return this.global;
-      case "initial":
-        return this.initial;
-      case "local":
-      case "message":
-        return this.local;
-      case "cache":
-        return this.cache;
-    }
-  }
-  /** flags 判定：nx/xx 基于 cache 视图，nxs/xxs 基于目标 scope（对照 ST 语义）。 */
-  flagAllows(flags, key, scope) {
-    switch (flags) {
-      case "nx":
-        return getPath(this.cache, key) === void 0;
-      case "xx":
-        return getPath(this.cache, key) !== void 0;
-      case "nxs":
-        return getPath(this.scopeStore(scope), key) === void 0;
-      case "xxs":
-        return getPath(this.scopeStore(scope), key) !== void 0;
-      case "n":
-        return true;
-    }
-  }
-  writeScope(scope, key, value) {
-    if (key === "") {
-      if (scope === "global" || scope === "cache") {
-        throw new TypeError("cannot replace the entire global/cache variable tree; use local or initial scope");
-      }
-      const store5 = this.scopeStore(scope);
-      for (const k of Object.keys(store5)) delete store5[k];
-      if (isObjectLike(value)) deepMerge(store5, value);
-      return;
-    }
-    if (scope === "global") {
-      if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
-        throw new TypeError(
-          `global scope only accepts string|number|boolean in dsh-soulmojito (scriptGlobals constraint); got ${typeof value}. Use local scope for object trees.`
-        );
-      }
-      this.global[key] = value;
-      return;
-    }
-    if (scope === "cache") return;
-    setPath(this.scopeStore(scope), key, deepClone(value));
-  }
-  getVar(key, options = {}) {
-    const opts = normalizeOptions(options, {
-      scope: "cache",
-      inscope: "cache",
-      outscope: "message",
-      flags: "n",
-      results: "new",
-      clone: false
-    });
-    const store5 = key === null ? this.cache : this.scopeStore(opts.scope);
-    const value = key === null ? store5 : getPath(store5, key);
-    if (value === void 0) return opts.defaults;
-    return opts.clone ? deepClone(value) : value;
-  }
-  setVar(key, value, options = {}) {
-    const opts = normalizeOptions(options, {
-      scope: "message",
-      inscope: "cache",
-      outscope: "message",
-      flags: "n",
-      results: "new",
-      clone: false
-    });
-    const path12 = key ?? "";
-    const old = getPath(this.cache, path12);
-    if (!this.flagAllows(opts.flags, path12, opts.scope)) return void 0;
-    this.writeScope(opts.scope, path12, value);
-    if (path12 === "") {
-      if (isObjectLike(value)) {
-        for (const k of Object.keys(this.cache)) delete this.cache[k];
-        deepMerge(this.cache, value);
-      }
-    } else {
-      setPath(this.cache, path12, deepClone(value));
-    }
-    switch (opts.results) {
-      case "old":
-        return old;
-      case "new":
-        return value;
-      case "fullcache":
-        return deepClone(this.cache);
-    }
-  }
-  incDecVar(key, delta, options = {}, sign) {
-    const opts = normalizeOptions(options, {
-      scope: "message",
-      inscope: "cache",
-      outscope: "message",
-      flags: "n",
-      results: "new",
-      clone: false,
-      defaults: 0
-    });
-    const current = getPath(this.scopeStore(opts.inscope), key);
-    const base = typeof current === "number" ? current : opts.defaults;
-    const start = typeof base === "number" ? base : Number(base);
-    if (!Number.isFinite(start)) throw new TypeError(`incvar/decvar target "${key}" is not numeric`);
-    let next = start + sign * delta;
-    if (typeof opts.min === "number") next = Math.max(opts.min, next);
-    if (typeof opts.max === "number") next = Math.min(opts.max, next);
-    return this.setVar(key, next, { ...optionsAsRecord(options), scope: opts.outscope, results: opts.results, defaults: void 0 });
-  }
-  delVar(key, index, options = {}) {
-    const opts = normalizeOptions(options, {
-      scope: "message",
-      inscope: "cache",
-      outscope: "message",
-      flags: "n",
-      results: "new",
-      clone: false
-    });
-    const old = getPath(this.cache, key);
-    if (!this.flagAllows(opts.flags, key, opts.scope)) return void 0;
-    unsetPath(this.scopeStore(opts.scope), key, index);
-    if (opts.scope !== "cache") unsetPath(this.cache, key, index);
-    return opts.results === "old" ? old : opts.results === "fullcache" ? deepClone(this.cache) : true;
-  }
-  insVar(key, value, index, options = {}) {
-    const opts = normalizeOptions(options, {
-      scope: "message",
-      inscope: "cache",
-      outscope: "message",
-      flags: "n",
-      results: "new",
-      clone: false
-    });
-    insertAtPath(this.scopeStore(opts.scope), key, deepClone(value), index);
-    insertAtPath(this.cache, key, deepClone(value), index);
-    return opts.results === "old" ? void 0 : opts.results === "fullcache" ? deepClone(this.cache) : value;
-  }
-  /* ------------------------- injectPrompt 注册表 ------------------------- */
-  injectPrompt(key, prompt, order = 100, _sticky = 0, uid = "") {
-    const list = this.injected.get(key) ?? [];
-    list.push({ prompt, order, uid, seq: this.injectSeq++ });
-    this.injected.set(key, list);
-  }
-  getPromptsInjected(key, postprocess = []) {
-    const list = [...this.injected.get(key) ?? []].sort((a, b) => a.order - b.order || a.seq - b.seq);
-    return list.map((item) => {
-      let text = item.prompt;
-      for (const rule of postprocess) text = text.replace(rule.search, rule.replace);
-      return text;
-    }).join("\n");
-  }
-  hasPromptsInjected(key) {
-    return this.injected.has(key);
-  }
-};
-function optionsAsRecord(input) {
-  return input !== null && typeof input === "object" ? input : {};
-}
-
-// packages/tavern-template/src/index.ts
-function createTemplateRuntime(options) {
-  const { host, stores, onWarning } = options;
-  const warn = onWarning ?? (() => {
-  });
-  const variables2 = new TemplateVariableSystem(stores);
-  const defines = {};
-  const getwiDepth = { current: 0 };
-  host.onWarning = warn;
-  const buildEnv = (extra) => {
-    const env = createTemplateEnv({ vars: variables2, host, defines, getwiDepth });
-    if (extra !== void 0) Object.assign(env, extra);
-    return env;
-  };
-  const renderText = async (text, extraEnv, where) => {
-    if (!hasTemplateTag(text)) return text;
-    return await renderSandboxed(text, buildEnv(extraEnv), { where });
-  };
-  const evaluateCondition = async (condition) => {
-    try {
-      return Boolean(await evalExpressionSandboxed(condition, buildEnv()));
-    } catch (err2) {
-      warn(`@@if condition evaluation failed ("${condition}"): ${err2 instanceof Error ? err2.message : String(err2)}`);
-      return false;
-    }
-  };
-  const evaluate = (condition) => evaluateCondition(condition);
-  const render = (text, extraEnv) => renderText(text, extraEnv);
-  return {
-    variables: variables2,
-    defines,
-    renderText,
-    evaluateCondition,
-    classify: classifySpecialEntry,
-    applyGenerateInjections: (messages, entries) => applyGenerateInjections(messages, entries, render, buildEnv(), evaluate, warn),
-    applyInjectEntries: (messages, entries) => applyInjectEntries(messages, entries, render, buildEnv(), evaluate, warn),
-    applyRenderInjections: (text, entries) => applyRenderInjections(text, entries, render, buildEnv(), evaluate, warn),
-    parseInitialVariables: (content) => parseInitialVariables(content, warn),
-    setInitialVariables: (data) => {
-      variables2.setInitialVariables(data);
-    }
-  };
-}
-
-// packages/plugin/src/mvu-guard.ts
-var DIRECTIVE_KEYS = ["$range", "$step", "$enum", "$ro", "$type"];
-var TYPE_LOCKS = ["number", "string", "boolean", "object", "array"];
-function isPlainObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function parseRange(raw) {
-  if (!Array.isArray(raw) || raw.length < 2) return void 0;
-  const min = raw[0];
-  const max2 = raw[1];
-  if (typeof min !== "number" || !Number.isFinite(min) || typeof max2 !== "number" || !Number.isFinite(max2)) return void 0;
-  return { min: Math.min(min, max2), max: Math.max(min, max2) };
-}
-function resolveTemplateNode(raw) {
-  if (typeof raw === "number" && Number.isFinite(raw)) return { typeLock: "number" };
-  if (typeof raw === "string") return { typeLock: "string" };
-  if (typeof raw === "boolean") return { typeLock: "boolean" };
-  if (Array.isArray(raw)) {
-    return { typeLock: "array", ...raw.length > 0 ? { item: resolveTemplateNode(raw[0]) } : {} };
-  }
-  if (!isPlainObject(raw)) return void 0;
-  const range = parseRange(raw.$range);
-  const step = typeof raw.$step === "number" && Number.isFinite(raw.$step) && raw.$step > 0 ? raw.$step : void 0;
-  const enumValues = Array.isArray(raw.$enum) && raw.$enum.length > 0 ? raw.$enum : void 0;
-  const ro = raw.$ro === true ? true : void 0;
-  const typeLockDirect = typeof raw.$type === "string" && TYPE_LOCKS.includes(raw.$type) ? raw.$type : void 0;
-  const directives = {
-    ...range !== void 0 ? { min: range.min, max: range.max } : {},
-    ...step !== void 0 ? { step } : {},
-    ...enumValues !== void 0 ? { enumValues } : {},
-    ...ro !== void 0 ? { ro } : {}
-  };
-  const childKeys = Object.keys(raw).filter((key) => !DIRECTIVE_KEYS.includes(key));
-  if (childKeys.length === 0) {
-    const typeLock = typeLockDirect ?? (range !== void 0 || step !== void 0 ? "number" : enumValues !== void 0 ? "string" : void 0);
-    if (typeLock === void 0 && Object.keys(directives).length === 0) {
-      return { typeLock: "object", objectMode: "open" };
-    }
-    if (typeLock === "object") return { typeLock, objectMode: "open", ...directives };
-    if (typeLock === "array") return { typeLock, ...directives };
-    return { ...typeLock !== void 0 ? { typeLock } : {}, ...directives };
-  }
-  const wildcardRaw = childKeys.includes("*") ? raw["*"] : void 0;
-  const namedKeys = childKeys.filter((key) => key !== "*");
-  const children = /* @__PURE__ */ new Map();
-  for (const key of namedKeys) {
-    const child = resolveTemplateNode(raw[key]);
-    if (child !== void 0) children.set(key, child);
-  }
-  const objectMode = wildcardRaw !== void 0 ? "wildcard" : "locked";
-  const wildcard = wildcardRaw !== void 0 ? resolveTemplateNode(wildcardRaw) : void 0;
-  return {
-    typeLock: "object",
-    objectMode,
-    ...children.size > 0 ? { children } : {},
-    ...wildcard !== void 0 ? { wildcard } : {},
-    ...directives
-  };
-}
-var schemaCache = /* @__PURE__ */ new WeakMap();
-function resolveMvuSchema(raw) {
-  if (!isPlainObject(raw)) return void 0;
-  const cached = schemaCache.get(raw);
-  if (cached !== void 0 || schemaCache.has(raw)) return cached;
-  const resolved = resolveTemplateNode(raw);
-  const root = resolved !== void 0 && resolved.objectMode === "locked" ? { ...resolved, objectMode: "open" } : resolved;
-  schemaCache.set(raw, root);
-  return root;
-}
-function stripMvuControl(tree) {
-  if (!("$schema" in tree || "$rules" in tree)) return tree;
-  const out = {};
-  for (const [key, value] of Object.entries(tree)) {
-    if (key === "$schema" && isPlainObject(value)) continue;
-    if (key === "$rules" && Array.isArray(value)) continue;
-    out[key] = value;
-  }
-  return out;
-}
-var INITIAL_VARIABLES_KEY = "initial_variables";
-function cardSchema(card) {
-  const holder = card?.data?.extensions?.["agentTavern"];
-  if (!isPlainObject(holder)) return void 0;
-  const initial = holder.initialVariables;
-  return isPlainObject(initial) ? initial.$schema : void 0;
-}
-function treeSchema(tree) {
-  return isPlainObject(tree) ? tree.$schema : void 0;
-}
-function readMvuSchema(chat, card, variablesOverride) {
-  const candidates = [
-    treeSchema(variablesOverride ?? chat?.header?.chat_metadata?.variables),
-    cardSchema(card),
-    treeSchema(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY])
-  ];
-  for (const candidate of candidates) {
-    if (isPlainObject(candidate) && Object.keys(candidate).length > 0) return candidate;
-  }
-  return void 0;
-}
-function typeName(value) {
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "array";
-  return typeof value;
-}
-function mvuValuesEqual(left, right) {
-  if (left === right) return true;
-  if (Array.isArray(left) && Array.isArray(right)) {
-    return left.length === right.length && left.every((item, index) => mvuValuesEqual(item, right[index]));
-  }
-  if (isPlainObject(left) && isPlainObject(right)) {
-    const keys = /* @__PURE__ */ new Set([...Object.keys(left), ...Object.keys(right)]);
-    for (const key of keys) {
-      if (!mvuValuesEqual(left[key], right[key])) return false;
-    }
-    return true;
-  }
-  return false;
-}
-function clampNumber(value, min, max2) {
-  let out = value;
-  if (min !== void 0 && out < min) out = min;
-  if (max2 !== void 0 && out > max2) out = max2;
-  return out;
-}
-function validateValue2(node, value, current, path12, notes) {
-  if (node.ro === true && !mvuValuesEqual(value, current)) {
-    return { ok: false, kind: "readonly", reason: "read-only field" };
-  }
-  if (Array.isArray(value)) {
-    if (node.typeLock !== void 0 && node.typeLock !== "array") {
-      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got array` };
-    }
-    if (node.item === void 0) return { ok: true, value, notes };
-    const currentItems = Array.isArray(current) ? current : [];
-    const out = [];
-    for (let i = 0; i < value.length; i++) {
-      const result = validateValue2(node.item, value[i], currentItems[i], `${path12}[${i}]`, notes);
-      if (!result.ok) return result;
-      out.push(result.value);
-    }
-    return { ok: true, value: out, notes };
-  }
-  if (isPlainObject(value)) {
-    if (node.typeLock !== void 0 && node.typeLock !== "object") {
-      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got object` };
-    }
-    if (node.objectMode !== "locked" && node.objectMode !== "wildcard") return { ok: true, value, notes };
-    const currentObject = isPlainObject(current) ? current : {};
-    const next = {};
-    for (const key of Object.keys(value)) {
-      const child = node.children?.get(key) ?? node.wildcard;
-      if (child === void 0) {
-        return { ok: false, kind: "structure", reason: `key '${key}' is not in the schema template` };
-      }
-      const result = validateValue2(child, value[key], currentObject[key], path12 === "" ? key : `${path12}.${key}`, notes);
-      if (!result.ok) return result;
-      next[key] = result.value;
-    }
-    if (node.objectMode === "locked") {
-      for (const key of node.children?.keys() ?? []) {
-        if (!(key in value) && key in currentObject) {
-          return { ok: false, kind: "structure", reason: `template field '${key}' would be deleted by this write` };
-        }
-      }
-    }
-    return { ok: true, value: next, notes };
-  }
-  if (node.typeLock !== void 0 && typeName(value) !== node.typeLock) {
-    return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got ${typeName(value)}` };
-  }
-  if (node.enumValues !== void 0 && !node.enumValues.some((allowed) => mvuValuesEqual(allowed, value))) {
-    return { ok: false, kind: "enum-violation", reason: `value ${JSON.stringify(value)} is not one of [${node.enumValues.map((entry) => JSON.stringify(entry)).join(", ")}]` };
-  }
-  if (typeof value === "number" && Number.isFinite(value) && (node.min !== void 0 || node.max !== void 0 || node.step !== void 0)) {
-    let out = value;
-    if (node.step !== void 0 && typeof current === "number" && Number.isFinite(current)) {
-      const delta = out - current;
-      const capped = Math.max(-node.step, Math.min(node.step, delta));
-      if (capped !== delta) {
-        notes.push(`${path12}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
-        out = current + capped;
-      }
-    }
-    const clamped = clampNumber(out, node.min, node.max);
-    if (clamped !== out) {
-      notes.push(`${path12}: guard clamp: ${out} -> ${clamped}`);
-      out = clamped;
-    }
-    return { ok: true, value: out, notes };
-  }
-  return { ok: true, value, notes };
-}
-function guardMvuWrite(schema, path12, value, current) {
-  const segments = path12.split(".").filter((segment) => segment !== "");
-  if (segments.length === 0) return { ok: true, value };
-  if (segments[0] === "$schema") {
-    return { ok: false, kind: "readonly", reason: "the $schema subtree is the declared guard contract and cannot be settled" };
-  }
-  const root = resolveMvuSchema(schema);
-  if (root === void 0) return { ok: true, value };
-  let cursor = root;
-  let parent;
-  let roChain = root.ro === true;
-  let violation;
-  for (let i = 0; i < segments.length && cursor !== void 0; i++) {
-    const segment = segments[i];
-    if (cursor.typeLock === "array") {
-      parent = cursor;
-      if (!/^\d+$/.test(segment)) {
-        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects an array index, not '${segment}'`;
-        cursor = void 0;
-      } else {
-        cursor = cursor.item;
-      }
-    } else if (cursor.objectMode !== void 0) {
-      parent = cursor;
-      const named = cursor.children?.get(segment);
-      if (named !== void 0) cursor = named;
-      else if (cursor.objectMode === "wildcard" && cursor.wildcard !== void 0) cursor = cursor.wildcard;
-      else if (cursor.objectMode === "locked") {
-        violation ??= `'${segments.slice(0, i + 1).join(".")}' is not in the schema template`;
-        cursor = void 0;
-      } else cursor = void 0;
-    } else {
-      if (cursor.typeLock !== void 0 && cursor.objectMode === void 0) {
-        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects ${cursor.typeLock}, not a nested path`;
-      }
-      parent = cursor;
-      cursor = void 0;
-    }
-    if (cursor !== void 0 && cursor.ro === true) roChain = true;
-  }
-  if (violation !== void 0) return { ok: false, kind: "structure", reason: violation };
-  const lastSegment = segments[segments.length - 1];
-  if (value === void 0) {
-    if (roChain) return { ok: false, kind: "readonly", reason: "read-only field" };
-    if (parent?.objectMode === "locked" && parent.children?.has(lastSegment)) {
-      return { ok: false, kind: "structure", reason: `template field '${lastSegment}' cannot be deleted` };
-    }
-    return { ok: true, value: void 0 };
-  }
-  if (roChain && !mvuValuesEqual(value, current)) {
-    return { ok: false, kind: "readonly", reason: "read-only field" };
-  }
-  if (cursor === void 0) return { ok: true, value };
-  const result = validateValue2(cursor, value, current, segments.join("."), []);
-  if (!result.ok) return result;
-  return { ok: true, value: result.value, ...result.notes.length > 0 ? { note: result.notes.join("; ") } : {} };
-}
-function getMvuTreePath(tree, path12) {
-  let cursor = tree;
-  for (const segment of path12.split(".")) {
-    if (!isPlainObject(cursor)) return void 0;
-    cursor = cursor[segment];
-  }
-  return cursor;
-}
-
-// packages/plugin/src/mvu-rules.ts
-var MVU_RULE_ROUNDS = 3;
-var MVU_RULES_LIMIT = 32;
-var MVU_RULE_THEN_LIMIT = 16;
-function isPlainObject2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-var INITIAL_VARIABLES_KEY2 = "initial_variables";
-function cardRules(card) {
-  const holder = card?.data?.extensions?.["agentTavern"];
-  if (!isPlainObject2(holder)) return void 0;
-  return holder.initialVariables?.$rules;
-}
-function treeRules(tree) {
-  return isPlainObject2(tree) ? tree.$rules : void 0;
-}
-function validateMvuRules(raw) {
-  if (!Array.isArray(raw)) throw new Error("$rules must be an array of rule objects");
-  if (raw.length === 0) return [];
-  if (raw.length > MVU_RULES_LIMIT) {
-    throw new Error(`$rules declares ${raw.length} rules, over the cap of ${MVU_RULES_LIMIT}`);
-  }
-  return raw.map((entry, index) => {
-    if (!isPlainObject2(entry)) throw new Error(`rule #${index} is not an object`);
-    const { name: name2, when, then } = entry;
-    if (typeof name2 !== "string" || name2.trim() === "" || name2.length > 64) {
-      throw new Error(`rule #${index} requires a non-empty name of at most 64 characters`);
-    }
-    if (typeof when !== "string" || when.trim() === "") {
-      throw new Error(`rule '${name2}' requires a non-empty when expression`);
-    }
-    if (!isPlainObject2(then) || Object.keys(then).length === 0) {
-      throw new Error(`rule '${name2}' requires a non-empty then map`);
-    }
-    if (Object.keys(then).length > MVU_RULE_THEN_LIMIT) {
-      throw new Error(`rule '${name2}' declares ${Object.keys(then).length} then writes, over the cap of ${MVU_RULE_THEN_LIMIT}`);
-    }
-    for (const [path12, value] of Object.entries(then)) {
-      if (path12.trim() === "") throw new Error(`rule '${name2}' has an empty then path`);
-      if (typeof value === "string") {
-        if (value.trim() === "") throw new Error(`rule '${name2}' has an empty then expression for '${path12}'`);
-      } else if (value === void 0 || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
-        throw new Error(`rule '${name2}' then value for '${path12}' is not a JSON literal`);
-      }
-    }
-    return { name: name2, when, then };
-  });
-}
-function readMvuRules(chat, card, variablesOverride) {
-  const candidates = [
-    treeRules(variablesOverride ?? chat?.header?.chat_metadata?.variables),
-    cardRules(card),
-    treeRules(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY2])
-  ];
-  for (const candidate of candidates) {
-    if (candidate === void 0) continue;
-    try {
-      const rules = validateMvuRules(candidate);
-      if (rules.length === 0) continue;
-      return { rules };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { invalid: `$rules: ${message}; all card rules are disabled for this settlement` };
-    }
-  }
-  return void 0;
-}
-var SAFE_MATH_KEYS = [
-  "E",
-  "LN2",
-  "LN10",
-  "LOG2E",
-  "LOG10E",
-  "PI",
-  "SQRT1_2",
-  "SQRT2",
-  "abs",
-  "acos",
-  "acosh",
-  "asin",
-  "asinh",
-  "atan",
-  "atan2",
-  "atanh",
-  "cbrt",
-  "ceil",
-  "cos",
-  "cosh",
-  "exp",
-  "expm1",
-  "floor",
-  "fround",
-  "hypot",
-  "imul",
-  "log",
-  "log1p",
-  "log2",
-  "log10",
-  "max",
-  "min",
-  "pow",
-  "round",
-  "sign",
-  "sin",
-  "sinh",
-  "sqrt",
-  "tan",
-  "tanh",
-  "trunc"
-];
-var SAFE_MATH = Object.freeze(
-  Object.fromEntries(SAFE_MATH_KEYS.map((key) => [key, Math[key]]))
-);
-var RULE_SANDBOX_SHADES = {
-  Math: SAFE_MATH,
-  Date: void 0,
-  setTimeout: void 0,
-  setInterval: void 0,
-  setImmediate: void 0,
-  queueMicrotask: void 0
-};
-function buildRuleEnv(tree) {
-  const vars = deepClone(stripMvuControl(tree));
-  return {
-    vars,
-    getvar: (path12) => typeof path12 === "string" ? getMvuTreePath(vars, path12) : void 0,
-    ...RULE_SANDBOX_SHADES
-  };
-}
-function errorText(error) {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-}
-function setTreePath(tree, path12, value) {
-  const segments = path12.split(".");
-  const leaf = segments.pop();
-  let cursor = tree;
-  for (const segment of segments) {
-    const next = cursor[segment];
-    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
-    cursor = cursor[segment];
-  }
-  cursor[leaf] = value;
-}
-async function runMvuRules(rules, options) {
-  const failures = /* @__PURE__ */ new Set();
-  const writes = [];
-  const noteParts = /* @__PURE__ */ new Map();
-  const tree = options.tree;
-  for (let round = 1; round <= MVU_RULE_ROUNDS; round++) {
-    let progressed = false;
-    for (const rule of rules) {
-      let active = false;
-      try {
-        active = Boolean(await evalExpressionSandboxed(rule.when, buildRuleEnv(tree)));
-      } catch (error) {
-        failures.add(`rule '${rule.name}': when evaluation failed: ${errorText(error)}`);
-        continue;
-      }
-      if (!active) continue;
-      const pending = [];
-      let failed = false;
-      for (const [path12, raw] of Object.entries(rule.then)) {
-        try {
-          const value = typeof raw === "string" ? await evalExpressionSandboxed(raw, buildRuleEnv(tree)) : deepClone(raw);
-          if (value === void 0) throw new Error("the expression evaluated to undefined");
-          pending.push({ path: path12, value });
-        } catch (error) {
-          failures.add(`rule '${rule.name}': then evaluation failed for '${path12}': ${errorText(error)}`);
-          failed = true;
-          break;
-        }
-      }
-      if (failed) continue;
-      for (const { path: path12, value } of pending) {
-        const head = path12.split(".")[0];
-        if (head === "$schema" || head === "$rules") {
-          failures.add(`${path12}: rule '${rule.name}': guard readonly: the ${head} subtree is card-declared and cannot be settled`);
-          continue;
-        }
-        const current = getMvuTreePath(tree, path12);
-        const guarded = options.schema === void 0 ? void 0 : guardMvuWrite(options.schema, path12, value, current);
-        if (guarded !== void 0 && !guarded.ok) {
-          failures.add(`${path12}: rule '${rule.name}': guard ${guarded.kind}: ${guarded.reason}`);
-          continue;
-        }
-        const finalValue = guarded === void 0 ? value : guarded.value;
-        if (mvuValuesEqual(finalValue, current)) continue;
-        setTreePath(tree, path12, deepClone(finalValue));
-        progressed = true;
-        const note = ["rule:" + rule.name, guarded?.note].filter((part) => part !== void 0).join("; ");
-        const parts = noteParts.get(path12) ?? [];
-        if (!parts.includes(note)) parts.push(note);
-        noteParts.set(path12, parts);
-        writes.push({ path: path12, value: deepClone(finalValue), rule: rule.name, ...guarded?.note !== void 0 ? { guardNote: guarded.note } : {} });
-      }
-    }
-    if (!progressed) break;
-    if (round === MVU_RULE_ROUNDS) {
-      failures.add(`$rules: fixed-point iteration hit the ${MVU_RULE_ROUNDS}-round cap; rules were still producing changes in the last round (narrow the when conditions or reorder the rules)`);
-    }
-  }
-  const notes = Object.fromEntries([...noteParts].map(([path12, parts]) => [path12, parts.join("; ")]));
-  return { failures: [...failures], writes, notes };
-}
-function plainObject(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
-  return value;
-}
-async function applyMvuSettlementRules(chat, card, before) {
-  const metadata = chat.header.chat_metadata;
-  const live = plainObject(metadata.variables);
-  const source = readMvuRules(chat, card, before);
-  if (source === void 0 && before.$rules === void 0 && live?.$rules === void 0) {
-    return { failures: [], notes: {} };
-  }
-  const variables2 = live ?? {};
-  const failures = [];
-  if (!mvuValuesEqual(variables2.$rules, before.$rules)) {
-    if (before.$rules !== void 0) variables2.$rules = deepClone(before.$rules);
-    else delete variables2.$rules;
-    failures.push("$rules: guard readonly: the rules subtree is card-declared and cannot be settled");
-  }
-  if (source === void 0) {
-    if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
-    return { failures, notes: {} };
-  }
-  if ("invalid" in source) return { failures: [...failures, source.invalid], notes: {} };
-  const schema = readMvuSchema(chat, card, before);
-  const run = await runMvuRules(source.rules, { ...schema !== void 0 ? { schema } : {}, tree: variables2 });
-  if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
-  return { failures: [...failures, ...run.failures], notes: run.notes };
-}
-function mergeMvuRuleNotes(guardNotes, ruleNotes) {
-  const merged = {};
-  for (const [path12, note] of Object.entries(guardNotes)) merged[path12] = note;
-  for (const [path12, note] of Object.entries(ruleNotes)) {
-    merged[path12] = merged[path12] !== void 0 ? `${merged[path12]}; ${note}` : note;
-  }
-  return merged;
-}
-
-// packages/plugin/src/mvu.ts
-var DEFAULT_USER3 = "User";
-var INITIAL_VARIABLES_KEY3 = "initial_variables";
-var MVU_RECEIPTS_LIMIT = 20;
-function plainObject2(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
-  return value;
-}
-function readChatVariables(chat) {
-  return plainObject2(chat?.header?.chat_metadata?.variables) ?? {};
-}
-function snapshotChatVariables(chat) {
-  return deepClone(readChatVariables(chat));
-}
-function valuesEqual(left, right) {
-  return mvuValuesEqual(left, right);
-}
-function diffVariables(before, after) {
-  const changes = [];
-  const walk = (path12, left, right) => {
-    const leftObject = plainObject2(left);
-    const rightObject = plainObject2(right);
-    const recursible = leftObject !== void 0 && rightObject !== void 0 || left === void 0 && rightObject !== void 0 || right === void 0 && leftObject !== void 0;
-    if (recursible) {
-      const leftNext = leftObject ?? {};
-      const rightNext = rightObject ?? {};
-      for (const key of /* @__PURE__ */ new Set([...Object.keys(leftNext), ...Object.keys(rightNext)])) {
-        walk(path12 === "" ? key : `${path12}.${key}`, leftNext[key], rightNext[key]);
-      }
-      return;
-    }
-    if (!valuesEqual(left, right)) {
-      const change = { name: path12, ...left !== void 0 ? { before: left } : {} };
-      if (right !== void 0) change.after = right;
-      changes.push(change);
-    }
-  };
-  walk("", stripMvuControl(before), stripMvuControl(after));
-  return changes.sort((left, right) => left.name.localeCompare(right.name));
-}
-function overlayScopedVariables(base, entries) {
-  const tree = deepClone(base);
-  for (const entry of entries) {
-    const segments = entry.name.split(".");
-    const leaf = segments.pop();
-    let cursor = tree;
-    for (const segment of segments) {
-      const next = cursor[segment];
-      if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
-      cursor = cursor[segment];
-    }
-    cursor[leaf] = entry.value;
-  }
-  return tree;
-}
-function readMvuReceipts(chat) {
-  const raw = plainObject2(chat?.header?.chat_metadata?.mvu)?.receipts;
-  if (!Array.isArray(raw)) return [];
-  const receipts = [];
-  for (const entry of raw) {
-    const record = plainObject2(entry);
-    if (record === void 0) continue;
-    const { at, turnKey, status: status2, changes, failures } = record;
-    if (typeof at !== "string" || typeof turnKey !== "string") continue;
-    if (status2 !== "updated" && status2 !== "unchanged" && status2 !== "failed") continue;
-    receipts.push({
-      at,
-      turnKey,
-      status: status2,
-      changes: Array.isArray(changes) ? changes.flatMap((item) => {
-        const change = plainObject2(item);
-        if (change === void 0 || typeof change.name !== "string") return [];
-        const out = { name: change.name };
-        if ("before" in change) out.before = change.before;
-        if ("after" in change) out.after = change.after;
-        if (typeof change.reason === "string") out.reason = change.reason;
-        return [out];
-      }) : [],
-      failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : [],
-      ...typeof record.undoneAt === "string" ? { undoneAt: record.undoneAt } : {}
-    });
-  }
-  return receipts;
-}
-function appendMvuReceipt(chat, receipt) {
-  const metadata = chat.header.chat_metadata;
-  const receipts = [...readMvuReceipts(chat), receipt].slice(-MVU_RECEIPTS_LIMIT);
-  metadata.mvu = { receipts };
-}
-function recordMvuTurnReceipt(chat, before, options) {
-  const after = readChatVariables(chat);
-  const changes = diffVariables(before, after);
-  for (const change of changes) {
-    const note = options.changeNotes?.[change.name];
-    if (note !== void 0) change.reason = note;
-  }
-  const failures = options.failures ?? [];
-  if (changes.length === 0 && failures.length === 0 && Object.keys(before).length === 0 && Object.keys(after).length === 0) {
-    return void 0;
-  }
-  const status2 = failures.length > 0 ? "failed" : changes.length > 0 ? "updated" : "unchanged";
-  const receipt = {
-    at: options.at ?? (/* @__PURE__ */ new Date()).toISOString(),
-    turnKey: options.turnKey,
-    status: status2,
-    changes,
-    failures
-  };
-  appendMvuReceipt(chat, receipt);
-  return receipt;
-}
-function setMvuTreePath(tree, path12, value) {
-  const segments = path12.split(".");
-  const leaf = segments.pop();
-  let cursor = tree;
-  for (const segment of segments) {
-    const next = cursor[segment];
-    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
-    cursor = cursor[segment];
-  }
-  cursor[leaf] = value;
-}
-function revertMvuTreePath(tree, path12, before) {
-  const beforeValue = getMvuTreePath(before, path12);
-  if (beforeValue !== void 0) {
-    setMvuTreePath(tree, path12, beforeValue);
-    return;
-  }
-  const segments = path12.split(".");
-  const leaf = segments.pop();
-  const parent = getMvuTreePath(tree, segments.join("."));
-  if (parent !== null && typeof parent === "object" && !Array.isArray(parent)) {
-    delete parent[leaf];
-  }
-  while (segments.length > 0) {
-    const pathSoFar = segments.join(".");
-    const node = getMvuTreePath(tree, pathSoFar);
-    if (node === null || typeof node !== "object" || Array.isArray(node)) break;
-    if (Object.keys(node).length > 0) break;
-    if (getMvuTreePath(before, pathSoFar) !== void 0) break;
-    const popped = segments.pop();
-    const upper = segments.length > 0 ? getMvuTreePath(tree, segments.join(".")) : tree;
-    if (upper === null || typeof upper !== "object" || Array.isArray(upper)) break;
-    delete upper[popped];
-  }
-}
-function applyMvuSettlementGuard(chat, card, before) {
-  const failures = [];
-  const notes = {};
-  const metadata = chat.header.chat_metadata;
-  const variables2 = plainObject2(metadata.variables);
-  const schema = readMvuSchema(chat, card, before);
-  if (schema === void 0 || variables2 === void 0) return { failures, notes };
-  const schemaBefore = plainObject2(before.$schema);
-  const schemaLive = plainObject2(variables2.$schema);
-  if (!valuesEqual(schemaBefore, schemaLive)) {
-    if (schemaBefore !== void 0) variables2.$schema = deepClone(schemaBefore);
-    else delete variables2.$schema;
-    failures.push(`$schema: guard readonly: the schema subtree is card-declared and cannot be settled`);
-  }
-  for (const change of diffVariables(before, variables2)) {
-    const current = getMvuTreePath(before, change.name);
-    const value = "after" in change ? change.after : void 0;
-    const result = guardMvuWrite(schema, change.name, value, current);
-    if (!result.ok) {
-      revertMvuTreePath(variables2, change.name, before);
-      failures.push(`${change.name}: guard ${result.kind}: ${result.reason}`);
-      continue;
-    }
-    if (result.note !== void 0) notes[change.name] = result.note;
-    if (value !== void 0 && !valuesEqual(result.value, value)) setMvuTreePath(variables2, change.name, result.value);
-  }
-  if (Object.keys(variables2).length === 0 && Object.keys(before).length === 0) delete metadata.variables;
-  return { failures, notes };
-}
-function createMvuRuntime(input, stores) {
-  const { characterName, character, chat, books } = input;
-  const card = character.card;
-  const cardName2 = card.data.nickname || card.data.name || characterName;
-  const lastUserMessageId = (() => {
-    for (let i = chat.messages.length - 1; i >= 0; i--) if (chat.messages[i].is_user) return i;
-    return -1;
-  })();
-  const lastCharMessageId = (() => {
-    for (let i = chat.messages.length - 1; i >= 0; i--) {
-      if (!chat.messages[i].is_user && !chat.messages[i].is_system) return i;
-    }
-    return -1;
-  })();
-  const host = {
-    runType: "render",
-    userName: input.state.activePersona ?? DEFAULT_USER3,
-    charName: cardName2,
-    chatId: input.chatId ?? "",
-    characterId: characterName,
-    messages: chat.messages.map((message) => ({
-      name: message.name,
-      mes: message.mes,
-      is_user: message.is_user,
-      is_system: message.is_system
-    })),
-    lastUserMessageId,
-    lastCharMessageId,
-    findWorldEntries: (title, book) => {
-      const out = [];
-      for (const lorebook of books) {
-        if (book !== void 0 && lorebook.name !== book) continue;
-        for (const entry of lorebook.entries) {
-          const comment = entry.comment ?? "";
-          const matched = typeof title === "number" ? entry.uid === title : comment === title;
-          if (!matched) continue;
-          out.push({
-            uid: entry.uid,
-            book: lorebook.name ?? "",
-            comment,
-            content: entry.content ?? "",
-            ...typeof entry.order === "number" ? { order: entry.order } : {},
-            disable: entry.disable === true
-          });
-        }
-      }
-      return out;
-    },
-    getCard: (name2) => {
-      if (name2 !== void 0 && name2 !== characterName && name2 !== cardName2) return null;
-      return {
-        name: cardName2,
-        systemPrompt: card.data.systemPrompt,
-        personality: card.data.personality,
-        description: card.data.description,
-        scenario: card.data.scenario,
-        firstMes: card.data.firstMes,
-        mesExample: card.data.mesExample,
-        creatorNotes: card.data.creatorNotes,
-        depthPrompt: "",
-        data: card.data
-      };
-    },
-    findPresetPrompt: () => null,
-    renderNested: async () => ""
-  };
-  const runtime = createTemplateRuntime({ host, stores, ...input.onWarning !== void 0 ? { onWarning: input.onWarning } : {} });
-  host.renderNested = (source, extra) => runtime.renderText(source, extra);
-  return runtime;
-}
-function statusTemplateOf(card) {
-  const agentTavern = plainObject2(card?.data?.extensions?.["agentTavern"]);
-  const template = agentTavern?.statusTemplate;
-  return typeof template === "string" && template.trim() !== "" ? template : void 0;
-}
-async function renderMvuStatusTemplate(input) {
-  const chat = input.chat;
-  const books = await collectWorldInfoBooks(input.db, input.state, input.characterName, input.character);
-  const runtime = createMvuRuntime(
-    {
-      state: input.state,
-      characterName: input.characterName,
-      character: input.character,
-      chat,
-      chatId: input.chatId,
-      books
-    },
-    {
-      local: deepClone(stripMvuControl(plainObject2(input.localVariables ?? readChatVariables(chat)) ?? {})),
-      global: { ...input.state.scriptGlobals },
-      initial: deepClone(stripMvuControl(plainObject2(chat.header.chat_metadata[INITIAL_VARIABLES_KEY3]) ?? {}))
-    }
-  );
-  return await runtime.renderText(input.template, void 0, "mvu-status");
-}
-async function retryMvuSettlement(db, options) {
-  const { state, characterName, chatId, snapshot: snapshot2 } = options;
-  if (typeof options.sessionId === "string" && state.sessionBindings?.[options.sessionId]?.architecture === "agent-tavern") {
-    throw new Error("AgentTavern sessions use the DSH native AgentLoop; MVU settlement retry is unavailable.");
-  }
-  if (!options.templatesActive) {
-    throw new Error("MVU retry requires the prompt template runtime (templates are disabled)");
-  }
-  if (options.revision !== snapshot2.revision) {
-    throw new ChatRevisionConflictError(options.revision, snapshot2.revision);
-  }
-  const chat = snapshot2.chat;
-  const metadata = chat.header.chat_metadata;
-  const before = snapshotChatVariables(chat);
-  let floorIndex = -1;
-  for (let i = chat.messages.length - 1; i >= 0; i--) {
-    const message = chat.messages[i];
-    if (!message.is_user && !message.is_system) {
-      floorIndex = i;
-      break;
-    }
-  }
-  if (floorIndex === -1) throw new Error("no assistant floor to settle");
-  const floor = chat.messages[floorIndex];
-  const character = await db.getCharacter(characterName) ?? await db.getCharacter(floor.name);
-  if (!character) throw new Error(`character '${characterName}' not found`);
-  const failures = [];
-  const localVars = plainObject2(metadata.variables) ?? {};
-  metadata.variables = localVars;
-  const globalsBefore = JSON.stringify(state.scriptGlobals);
-  const books = await collectWorldInfoBooks(db, state, characterName, character);
-  const runtime = createMvuRuntime(
-    { state, characterName, character, chat, chatId, books, onWarning: (message) => {
-      failures.push(message);
-    } },
-    {
-      // initial 绑活引用（存在时）；无 initial 树时绑临时对象，initial 作用域写穿
-      // 不持久化——initial 本就由每次生成的 InitialVariables 重算，非用户状态
-      local: localVars,
-      global: state.scriptGlobals,
-      initial: plainObject2(metadata[INITIAL_VARIABLES_KEY3]) ?? {}
-    }
-  );
-  try {
-    await runtime.renderText(floor.mes, void 0, "mvu-retry");
-  } catch (err2) {
-    failures.push(`mvu retry render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
-  }
-  if (Object.keys(localVars).length === 0) delete metadata.variables;
-  if (JSON.stringify(state.scriptGlobals) !== globalsBefore) {
-    await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }));
-  }
-  const guard = applyMvuSettlementGuard(chat, character.card, before);
-  const rulesPass = await applyMvuSettlementRules(chat, character.card, before);
-  const after = readChatVariables(chat);
-  const changes = diffVariables(before, after);
-  const notes = mergeMvuRuleNotes(guard.notes, rulesPass.notes);
-  for (const change of changes) {
-    if (notes[change.name] !== void 0) change.reason = notes[change.name];
-  }
-  const allFailures = [...failures, ...guard.failures, ...rulesPass.failures];
-  const receipt = {
-    at: (/* @__PURE__ */ new Date()).toISOString(),
-    turnKey: String(floorIndex),
-    status: changes.length > 0 ? "updated" : "unchanged",
-    changes,
-    failures: allFailures
-  };
-  appendMvuReceipt(chat, receipt);
-  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
-  return { receipt, revision, variables: stripMvuControl(after) };
-}
-var MvuUndoRefusalError = class extends Error {
-  undoCode;
-  constructor(undoCode, message) {
-    super(message);
-    this.name = "MvuUndoRefusalError";
-    this.undoCode = undoCode;
-  }
-};
-function latestValidMvuReceipt(receipts) {
-  for (let index = receipts.length - 1; index >= 0; index--) {
-    if (receipts[index].undoneAt === void 0) return { index, receipt: receipts[index] };
-  }
-  return void 0;
-}
-function refuseUndo(target, receipts) {
-  if (target !== void 0) return target;
-  if (receipts.length > 0) {
-    throw new MvuUndoRefusalError("ALREADY_UNDONE", `all ${receipts.length} settlement receipts in this chat have been undone; nothing valid is left to undo`);
-  }
-  throw new MvuUndoRefusalError("NO_VALID_RECEIPT", "no MVU settlement receipt in this chat to undo");
-}
-function planMvuUndoRestores(receipt) {
-  if (receipt.status === "updated" && receipt.changes.length === 0) {
-    throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt ${receipt.turnKey} claims status 'updated' but records no change data; the receipt data is incomplete and cannot be undone`);
-  }
-  const restores = [];
-  for (const change of receipt.changes) {
-    if (!("before" in change) && !("after" in change)) {
-      throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt change '${change.name}' records neither a before nor an after value; the receipt data is incomplete and cannot be undone`);
-    }
-    restores.push({ path: change.name, ..."before" in change ? { value: change.before } : {} });
-  }
-  return restores;
-}
-function formatRestoreValue(value) {
-  const text = (() => {
-    try {
-      return JSON.stringify(value) ?? String(value);
-    } catch {
-      return String(value);
-    }
-  })();
-  return text.length > 80 ? `${text.slice(0, 79)}\u2026` : text;
-}
-function screenMvuUndoRestores(schema, restores, currentOf) {
-  const failures = [];
-  for (const restore of restores) {
-    if (restore.path.split(".")[0] === "$schema") {
-      failures.push(`$schema: guard readonly: the schema subtree is the declared guard contract and cannot be undone into`);
-      continue;
-    }
-    if (schema === void 0) continue;
-    const value = "value" in restore ? restore.value : void 0;
-    const result = guardMvuWrite(schema, restore.path, value, currentOf(restore.path));
-    if (!result.ok) {
-      failures.push(`${restore.path}: guard ${result.kind}: ${result.reason}`);
-      continue;
-    }
-    if (!mvuValuesEqual(result.value, value)) {
-      failures.push(`${restore.path}: guard would adjust the restored value ${formatRestoreValue(value)} to ${formatRestoreValue(result.value)} ($schema changed since the settlement); refusing to undo with anything other than the recorded before value`);
-    }
-  }
-  if (failures.length > 0) throw new MvuUndoRefusalError("UNDO_REJECTED", failures.join("; "));
-}
-function applyMvuUndoRestores(tree, restores) {
-  const before = overlayScopedVariables({}, restores.flatMap((restore) => "value" in restore ? [{ name: restore.path, value: deepClone(restore.value) }] : []));
-  for (const restore of restores) revertMvuTreePath(tree, restore.path, before);
-}
-function markMvuReceiptUndone(chat, index, at) {
-  const receipts = readMvuReceipts(chat);
-  const marked = { ...receipts[index], undoneAt: at ?? (/* @__PURE__ */ new Date()).toISOString() };
-  const next = receipts.slice();
-  next[index] = marked;
-  chat.header.chat_metadata.mvu = { receipts: next };
-  return marked;
-}
-async function undoMvuStSettlement(db, options) {
-  const { characterName, chatId, snapshot: snapshot2 } = options;
-  const chat = snapshot2.chat;
-  const receipts = readMvuReceipts(chat);
-  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
-  const restores = planMvuUndoRestores(target.receipt);
-  const metadata = chat.header.chat_metadata;
-  const variables2 = plainObject2(metadata.variables) ?? {};
-  screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables2), restores, (path12) => getMvuTreePath(variables2, path12));
-  applyMvuUndoRestores(variables2, restores);
-  if (Object.keys(variables2).length === 0) delete metadata.variables;
-  else metadata.variables = variables2;
-  const marked = markMvuReceiptUndone(chat, target.index, options.at);
-  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
-  return { receipt: marked, revision, restores };
-}
-async function undoMvuAgentSettlement(variables2, db, options) {
-  const { characterName, chatId, snapshot: snapshot2 } = options;
-  const chat = snapshot2.chat;
-  const receipts = readMvuReceipts(chat);
-  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
-  const restores = planMvuUndoRestores(target.receipt);
-  const seedTree = readChatVariables(chat);
-  const storeFailures = [];
-  const entries = /* @__PURE__ */ new Map();
-  for (const restore of restores) {
-    try {
-      entries.set(restore.path, await variables2.get("chat", chatId, restore.path));
-    } catch (error) {
-      storeFailures.push(`${restore.path}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  if (storeFailures.length > 0) throw new MvuUndoRefusalError("UNDO_REJECTED", storeFailures.join("; "));
-  screenMvuUndoRestores(
-    readMvuSchema(chat, (await db.getCharacter(characterName))?.card),
-    restores,
-    (path12) => {
-      const entry = entries.get(path12);
-      return entry !== void 0 ? entry.value : getMvuTreePath(seedTree, path12);
-    }
-  );
-  for (const restore of restores) {
-    if ("value" in restore) continue;
-    const entry = entries.get(restore.path);
-    if (entry !== void 0) await variables2.delete("chat", chatId, restore.path, entry.revision);
-  }
-  const updates = [];
-  for (const restore of restores) {
-    if (!("value" in restore)) continue;
-    const entry = entries.get(restore.path);
-    const current = entry !== void 0 ? entry.value : getMvuTreePath(seedTree, restore.path);
-    if (current !== void 0 && mvuValuesEqual(current, restore.value)) continue;
-    updates.push({ name: restore.path, value: deepClone(restore.value), ...entry !== void 0 ? { expectedRevision: entry.revision } : {} });
-  }
-  if (updates.length > 0) await variables2.patch("chat", chatId, updates);
-  const marked = markMvuReceiptUndone(chat, target.index, options.at);
-  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
-  return { receipt: marked, revision, restores };
-}
 
 // packages/plugin/src/agent-tavern/tools/deduction.ts
 var deductionOutput = objectOutput({
@@ -26857,7 +27489,7 @@ var gamesSummaryProjection = createLazyProjection({
       ...lines,
       "\u8F6E\u5230\u4F60\u65F6\u5148 game_state \u8BFB\u5C40\u9762\u3001\u518D\u7528 game_move \u843D\u5B50\uFF1B\u843D\u5230\u4EBA\u7C7B\u56DE\u5408\u7ACB\u5373\u8C03\u7528 game_wait \u963B\u585E\u7B49\u5F85\u5BF9\u65B9\u5728\u68CB\u76D8\u4E0A\u843D\u5B50\uFF08\u5BF9\u65B9\u65E0\u9700\u53D1\u9001\u804A\u5929\u6D88\u606F\uFF1Bwait \u53EA\u8FD4\u56DE\u7B49\u5F85\u671F\u589E\u91CF\u2014\u2014\u8BE5\u624B\u4E0E\u8F6E\u6B21\uFF09\u3002\u5C40\u9762\u590D\u6742\u3001\u9700\u8981\u770B\u7740\u68CB\u76D8\u51B3\u7B56\u7684\u5BF9\u5C40\u6539\u7528 game_wait_full\uFF1A\u540C\u6B3E\u7B49\u5F85\uFF0C\u8FD4\u56DE\u9644\u5E26\u68CB\u76D8\u5C40\u9762\uFF08state + legal\uFF09\uFF0C\u65E0\u9700\u518D\u8DDF\u53D1 game_state\u3002\u5DE5\u5177\u8FD4\u56DE\u540E\u81EA\u52A8\u7EE7\u7EED\uFF1Bdescribe/summary \u6587\u6848\u53EF\u76F4\u63A5\u7528\u4E8E\u5BF9\u8BDD\u53D9\u8FF0\u8FD9\u4E00\u624B\uFF0C\u5F80\u624B\u7528 game_history \u67E5\u8BE2\u3002"
     ].join("\n");
-    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER2);
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER3);
     settle(hostPromptSafe(text, expand));
   }
 });
@@ -26923,7 +27555,7 @@ var scriptSummaryProjection = createLazyProjection({
     const binding = state.sessionBindings[agentId];
     if (!binding || binding.architecture !== "agent-tavern") return;
     const text = await scriptSummaryForChat(db, binding.character, binding.chatId);
-    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER2);
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER3);
     settle(hostPromptSafe(text, expand));
   }
 });
@@ -26990,7 +27622,7 @@ var factsProjection = createLazyProjection({
     if (!found) return;
     const data = found.card.data;
     const storedSummary = identitySummaryOf(found.card.data);
-    const expand = createHostPromptExpander(data.nickname || data.name, state.activePersona ?? DEFAULT_USER2);
+    const expand = createHostPromptExpander(data.nickname || data.name, state.activePersona ?? DEFAULT_USER3);
     settle(hostPromptSafe([
       `Current Tavern character: ${data.nickname || data.name}`,
       // The editable identity summary wins; without one only a very short
@@ -27009,7 +27641,7 @@ var guidesProjection = createLazyProjection({
     const binding = state.sessionBindings[agentId];
     if (!binding || binding.architecture !== "agent-tavern") return;
     const chat = await db.getChat(binding.character, binding.chatId);
-    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER2);
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER3);
     settle(hostPromptSafe(formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? "", expand));
   }
 });
@@ -27033,7 +27665,7 @@ var presetProjection = createLazyProjection({
     presetFreeze.set(agentId, freeze);
     const expand = createHostPromptExpander(
       character?.card.data.nickname || character?.card.data.name || binding.character,
-      state.activePersona ?? DEFAULT_USER2,
+      state.activePersona ?? DEFAULT_USER3,
       { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) }
     );
     const temperature = presetTemperature(preset);
@@ -27230,9 +27862,9 @@ var revisionDiscardOutput = objectOutput2({
 });
 
 // packages/plugin/src/agent-novel/requirements.ts
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 function stableMessageKey(sessionId, messageKey) {
-  return createHash10("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
+  return createHash11("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
 }
 function isNovelAuthorMessage(event) {
   return extractAuthorMessage(event) !== null;
@@ -28041,8 +28673,9 @@ function registerTavernSessionCommand(ctx) {
       if (parsed.action === "workbench-open") {
         return handleWorkbenchOpenCommand(ctx, agent, parsed);
       }
-      const chat = await db.getChat(parsed.character, parsed.chatId);
-      if (!chat) return { kind: "error", text: "Tavern chat not found." };
+      const chatSnapshot = await db.getChatSnapshot(parsed.character, parsed.chatId);
+      if (!chatSnapshot) return { kind: "error", text: "Tavern chat not found." };
+      const chat = chatSnapshot.chat;
       const currentState = await db.getState();
       const previous = currentState.sessionBindings[agent.id];
       const initializeAgentTavern = parsed.architecture === "agent-tavern" && (previous?.architecture !== "agent-tavern" || previous.initializationPending === true);
@@ -28066,6 +28699,9 @@ function registerTavernSessionCommand(ctx) {
           throw new TavernArchitectureConflictError("The host cannot recompose a blank session with the AgentTavern preset.");
         }
         const character = parsed.group !== true && (initializeAgentTavern || shouldPreloadAssets) ? await db.getCharacter(parsed.character) : void 0;
+        if (initializeAgentTavern && character !== void 0 && seedJsrMvuVariables(character.card, ensureChatVariables(chat))) {
+          await db.saveChat(parsed.character, parsed.chatId, chat, chatSnapshot.revision);
+        }
         if (initializeAgentTavern && parsed.group !== true) {
           historyImport = sessionStarted || historyImported ? void 0 : historyImportAppends(chat, agent.id, character ? collectRegexScripts(currentState, character) : [], tavernMacroExpand(currentState, parsed.character, character), agent.session);
         }
@@ -28509,6 +29145,14 @@ function extractFrontendDocuments(value) {
   const raw = text.trim();
   return isFrontendDocument(raw) ? [raw] : [];
 }
+function stripFrontendDocuments(value) {
+  const text = typeof value === "string" ? value : "";
+  if (text === "") return "";
+  let stripped = text.replace(FENCED_DOCUMENT, (whole, inner) => isFrontendDocument(inner) ? "" : whole);
+  stripped = stripped.replace(/<UpdateVariable(?:Variable)?\b[^>]*>[\s\S]*?<\/UpdateVariable(?:Variable)?\s*>/gi, "").replace(/<\/UpdateVariable(?:Variable)?\s*>/gi, "").replace(/<StatusPlaceHolder(?:Impl|READY)\s*\/?>/gi, "").replace(/<div class="matte-black-log"[\s\S]*?<\/details>\s*<\/div>/gi, "").replace(/<style>\s*\.matte-black-log[\s\S]*?<\/style>/gi, "").replace(/<!--\s*MVU:OK\s*-->/gi, "");
+  if (isFrontendDocument(stripped.trim())) return "";
+  return stripped.replace(/\n{3,}/g, "\n\n").trim();
+}
 function latestFrontendMessage(messages, render) {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
@@ -28661,6 +29305,11 @@ async function handleHelperApi(req, res, db) {
         ok: true,
         value: await replaceVariables(db, state, character, chatId, body)
       });
+    case "mvu.replace":
+      return sendJson(res, 200, {
+        ok: true,
+        value: await replaceMvuData(db, character, chatId, body)
+      });
     case "messages.get":
       return sendJson(res, 200, { ok: true, value: await getMessages(db, character, chatId, body) });
     case "messages.set":
@@ -28725,7 +29374,7 @@ async function buildSnapshot(db, state, character, chatId) {
   if (chatId === "") {
     return {
       characterName: character,
-      userName: state.activePersona ?? DEFAULT_USER,
+      userName: state.activePersona ?? DEFAULT_USER2,
       personaDescription: "",
       chatId: "",
       chatMetadata: {},
@@ -28733,10 +29382,10 @@ async function buildSnapshot(db, state, character, chatId) {
       messageCount: 0,
       lastMessageId: -1,
       variables: {
-        global: cloneJson(plainObject3(state.scriptGlobals) ?? {}),
+        global: cloneJson(plainObject5(state.scriptGlobals) ?? {}),
         chat: {},
         message: {},
-        character: cloneJson(plainObject3(file?.card.data.extensions?.["variables"]) ?? {})
+        character: cloneJson(plainObject5(file?.card.data.extensions?.["variables"]) ?? {})
       },
       characterData: file?.card.data ?? null,
       avatar: avatarPath(character)
@@ -28750,7 +29399,7 @@ async function buildSnapshot(db, state, character, chatId) {
   const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
   return {
     characterName: character,
-    userName: state.activePersona ?? DEFAULT_USER,
+    userName: state.activePersona ?? DEFAULT_USER2,
     personaDescription: persona?.description ?? "",
     chatId,
     chatMetadata: chat.header.chat_metadata ?? {},
@@ -28758,10 +29407,10 @@ async function buildSnapshot(db, state, character, chatId) {
     messageCount: chat.messages.length,
     lastMessageId: lastIndex,
     variables: {
-      global: cloneJson(plainObject3(state.scriptGlobals) ?? {}),
+      global: cloneJson(plainObject5(state.scriptGlobals) ?? {}),
       chat: cloneJson(chatVariables2),
       message: lastIndex >= 0 ? cloneJson(readMessageVariables(chat.messages[lastIndex])) : {},
-      character: cloneJson(plainObject3(file?.card.data.extensions?.["variables"]) ?? {})
+      character: cloneJson(plainObject5(file?.card.data.extensions?.["variables"]) ?? {})
     },
     characterData: file?.card.data ?? null,
     avatar: avatarPath(character)
@@ -28775,7 +29424,7 @@ async function readChatScope(db, chat, chatId) {
   const bound = await isAgentTavernBound(db, chatId);
   if (!bound) return base;
   const scoped = await (await variables()).listAll("chat", chatId);
-  return overlayScopedVariables(base, scoped);
+  return overlayChatScopedVariables(base, scoped);
 }
 async function replaceVariables(db, state, character, chatId, body) {
   const scope = requireVariableScope(body?.scope);
@@ -28790,7 +29439,13 @@ async function replaceVariables(db, state, character, chatId, body) {
     if (Object.keys(tree).length > 0) chat.header.chat_metadata.variables = tree;
     else delete chat.header.chat_metadata.variables;
     await persistChat(db, character, chatId, chat, snapshot2.revision);
-    if (await isAgentTavernBound(db, chatId)) await mirrorChatScope(chatId, tree);
+    if (await isAgentTavernBound(db, chatId)) {
+      try {
+        await mirrorChatScope(chatId, tree);
+      } catch (error) {
+        console.warn(`dsh-soulmojito: chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     return tree;
   }
   if (scope === "message") {
@@ -28803,25 +29458,59 @@ async function replaceVariables(db, state, character, chatId, body) {
   }
   throw new Error("character variables are read-only in DSH-SoulMojito");
 }
+async function replaceMvuData(db, character, chatId, body) {
+  const snapshot2 = await requireChat(db, character, chatId);
+  const chat = snapshot2.chat;
+  const stat = requireObject(body?.statData, "statData");
+  const chatVariables2 = ensureChatVariables(chat);
+  chatVariables2["stat_data"] = stat;
+  chatVariables2["initialized_lorebooks"] = true;
+  let messageId = -1;
+  if (chat.messages.length > 0) {
+    messageId = body?.messageId === void 0 ? chat.messages.length - 1 : resolveMessageId(chat.messages, body.messageId);
+    const message = chat.messages[messageId];
+    message.variables = {
+      ...plainObject5(message.variables) ?? {},
+      stat_data: cloneJson(stat)
+    };
+  }
+  const revision = await persistChat(db, character, chatId, chat, snapshot2.revision);
+  try {
+    const store5 = await variables();
+    const existing = await store5.get("chat", chatId, "stat_data");
+    await store5.set("chat", chatId, "stat_data", stat, existing?.revision);
+  } catch (error) {
+    console.warn(`dsh-soulmojito: MVU chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return { stat_data: cloneJson(stat), messageId, revision };
+}
 async function mirrorChatScope(chatId, tree) {
   const store5 = await variables();
-  const leaves = flattenVariableTree(tree).filter((leaf) => VARIABLE_NAME.test(leaf.name));
-  const nextNames = new Set(leaves.map((leaf) => leaf.name));
+  const entries = variableEntriesForMirror(tree);
+  const nextNames = new Set(entries.map((entry) => entry.name));
   for (const entry of await store5.listAll("chat", chatId)) {
     if (nextNames.has(entry.name) || entry.name.startsWith("$")) continue;
     await store5.delete("chat", chatId, entry.name);
   }
-  if (leaves.length > 0) {
-    await store5.patch("chat", chatId, leaves.map((leaf) => ({ name: leaf.name, value: leaf.value })));
+  if (entries.length > 0) {
+    await store5.patch("chat", chatId, entries.map((entry) => ({ name: entry.name, value: entry.value })));
   }
 }
-function flattenVariableTree(value, prefix = "", out = []) {
-  for (const [key, entry] of Object.entries(value)) {
-    const name2 = prefix === "" ? key : `${prefix}.${key}`;
-    if (isPlainObject3(entry)) flattenVariableTree(entry, name2, out);
-    else out.push({ name: name2, value: entry });
-  }
+function variableEntriesForMirror(tree) {
+  const out = [];
+  collectVariableEntries(tree, "", out);
   return out;
+}
+function collectVariableEntries(tree, prefix, out) {
+  for (const [key, entry] of Object.entries(tree)) {
+    const name2 = prefix === "" ? key : `${prefix}.${key}`;
+    if (prefix === "" && (key === "stat_data" || key === "previous_stat_data") && isPlainObject3(entry)) {
+      out.push({ name: name2, value: entry });
+      continue;
+    }
+    if (isPlainObject3(entry)) collectVariableEntries(entry, name2, out);
+    else if (VARIABLE_NAME.test(name2)) out.push({ name: name2, value: entry });
+  }
 }
 async function isAgentTavernBound(db, chatId) {
   const state = await db.getState();
@@ -28864,7 +29553,7 @@ async function mutateMessages(db, character, chatId, action, body) {
   } else if (action === "create") {
     const entries = requireArray(body?.messages, "messages");
     const at = body?.insertBefore === "end" || body.insertBefore === void 0 ? chat.messages.length : normalizeInsertIndex(chat.messages.length, body.insertBefore);
-    const created = entries.map((raw) => toCreatedMessage(requireObject(raw, "messages[]"), state.activePersona ?? DEFAULT_USER, character));
+    const created = entries.map((raw) => toCreatedMessage(requireObject(raw, "messages[]"), state.activePersona ?? DEFAULT_USER2, character));
     chat.messages.splice(at, 0, ...created);
   } else {
     const ids = requireArray(body?.messageIds, "messageIds");
@@ -28896,17 +29585,17 @@ function messageRole(message) {
   return message.is_user === true ? "user" : "assistant";
 }
 function isHidden(message) {
-  return message.is_hidden === true || plainObject3(message.extra)?.["is_hidden"] === true;
+  return message.is_hidden === true || plainObject5(message.extra)?.["is_hidden"] === true;
 }
 function toJsrMessage(message, index) {
-  const extra = plainObject3(message.extra) ?? {};
+  const extra = plainObject5(message.extra) ?? {};
   return {
     message_id: index,
     name: typeof message.name === "string" ? message.name : "",
     role: messageRole(message),
     is_hidden: isHidden(message),
     message: typeof message.mes === "string" ? message.mes : "",
-    data: cloneJson(plainObject3(message.variables) ?? extra),
+    data: cloneJson(plainObject5(message.variables) ?? extra),
     extra: cloneJson(extra)
   };
 }
@@ -28918,14 +29607,14 @@ function toJsrSwiped(message, index) {
     swipe_id: typeof message.swipe_id === "number" ? message.swipe_id : 0,
     swipes,
     swipes_data: swipes.map((_, swipeIndex) => {
-      const info = plainObject3(swipeInfo[swipeIndex]);
-      return cloneJson(plainObject3(info?.["extra"]) ?? {});
+      const info = plainObject5(swipeInfo[swipeIndex]);
+      return cloneJson(plainObject5(info?.["extra"]) ?? {});
     }),
     swipes_info: cloneJson(swipeInfo)
   };
 }
 function readMessageVariables(message) {
-  return plainObject3(message.variables) ?? plainObject3(plainObject3(message.extra)?.["variables"]) ?? {};
+  return plainObject5(message.variables) ?? plainObject5(plainObject5(message.extra)?.["variables"]) ?? {};
 }
 function resolveMessageId(messages, value) {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("message_id must be a finite number");
@@ -28966,10 +29655,10 @@ function applyMessageUpdate(message, update) {
     message.is_user = update.role === "user";
   }
   if (typeof update.is_hidden === "boolean") message.is_hidden = update.is_hidden;
-  const data = plainObject3(update.data);
-  const extra = plainObject3(update.extra);
+  const data = plainObject5(update.data);
+  const extra = plainObject5(update.extra);
   if (data !== void 0) message.variables = cloneJson(data);
-  if (extra !== void 0) message.extra = { ...plainObject3(message.extra) ?? {}, ...cloneJson(extra) };
+  if (extra !== void 0) message.extra = { ...plainObject5(message.extra) ?? {}, ...cloneJson(extra) };
   if (Array.isArray(update.swipes)) {
     const swipes = update.swipes.map((swipe) => String(swipe));
     message.swipes = swipes;
@@ -28987,7 +29676,7 @@ function applyMessageUpdate(message, update) {
 function toCreatedMessage(entry, userName, characterName) {
   const role = entry.role === "system" || entry.role === "user" ? entry.role : "assistant";
   const name2 = typeof entry.name === "string" && entry.name !== "" ? entry.name : role === "user" ? userName : role === "system" ? "System" : characterName;
-  const extra = { ...plainObject3(entry.data) ?? {}, ...plainObject3(entry.extra) ?? {} };
+  const extra = { ...plainObject5(entry.data) ?? {}, ...plainObject5(entry.extra) ?? {} };
   return {
     name: name2,
     is_user: role === "user",
@@ -29005,7 +29694,7 @@ async function runHelperSlash(db, state, character, chatId, command) {
   const file = await db.getCharacter(character);
   const macros = createMacroEngine({
     char: file?.card.data.nickname || file?.card.data.name || character,
-    user: state.activePersona ?? DEFAULT_USER,
+    user: state.activePersona ?? DEFAULT_USER2,
     persona: state.activePersona ? (await db.getPersona(state.activePersona))?.description : void 0,
     lastMessage: chat.messages[chat.messages.length - 1]?.mes,
     lastUserMessage: [...chat.messages].reverse().find((message) => message.is_user)?.mes,
@@ -29013,7 +29702,7 @@ async function runHelperSlash(db, state, character, chatId, command) {
     lastMessageId: chat.messages.length - 1,
     chatId,
     local: scalarVariables(readChatVariables(chat)),
-    global: scalarVariables(plainObject3(state.scriptGlobals) ?? {})
+    global: scalarVariables(plainObject5(state.scriptGlobals) ?? {})
   });
   let chatChanged = false;
   const persist = async () => {
@@ -29038,7 +29727,7 @@ async function runHelperSlash(db, state, character, chatId, command) {
       const trimmed = text.trim();
       if (trimmed === "") return;
       chat.messages.push({
-        name: state.activePersona ?? DEFAULT_USER,
+        name: state.activePersona ?? DEFAULT_USER2,
         is_user: true,
         is_system: false,
         send_date: (/* @__PURE__ */ new Date()).toISOString(),
@@ -29096,7 +29785,7 @@ function requireObject(value, label) {
 function isPlainObject3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function plainObject3(value) {
+function plainObject5(value) {
   return isPlainObject3(value) ? value : void 0;
 }
 function cloneJson(value) {
@@ -29465,7 +30154,7 @@ async function previewGeneration(ctx, req, res, db) {
     if (!res.writableEnded) ac.abort();
   });
   const chat = structuredClone(snapshot2.chat);
-  const userName = state.activePersona ?? DEFAULT_USER;
+  const userName = state.activePersona ?? DEFAULT_USER2;
   const { speakerName, groupDef, nudge, turnMessages: initialTurnMessages } = await resolveGenerationSpeaker(db, state, {
     characterName,
     chat,
@@ -29563,7 +30252,7 @@ async function resolveGenerationSpeaker(db, state, options) {
   const turn = buildGroupTurn({
     speaker: speakerName,
     members,
-    userName: state.activePersona ?? DEFAULT_USER,
+    userName: state.activePersona ?? DEFAULT_USER2,
     messages: chat.messages,
     ...typeof rawNudge === "string" && rawNudge.trim() !== "" ? { groupNudgePrompt: rawNudge } : {}
   });
@@ -29776,7 +30465,7 @@ async function runGeneration(ctx, db, options) {
   const mvuVariablesBefore = snapshotChatVariables(chat);
   let revision = snapshot2.revision;
   let hostTrace;
-  const userName = state.activePersona ?? DEFAULT_USER;
+  const userName = state.activePersona ?? DEFAULT_USER2;
   try {
     const { speakerName, groupDef, nudge, turnMessages: initialTurnMessages } = await resolveGenerationSpeaker(db, state, {
       characterName,
@@ -29949,7 +30638,7 @@ async function runTavernScript(ctx, req, res, db) {
   const character = await db.getCharacter(characterName);
   const macros = createMacroEngine({
     char: character?.card.data.nickname || character?.card.data.name || characterName,
-    user: state.activePersona ?? DEFAULT_USER,
+    user: state.activePersona ?? DEFAULT_USER2,
     persona: state.activePersona ? (await db.getPersona(state.activePersona))?.description : void 0,
     lastMessage: chat.messages[chat.messages.length - 1]?.mes,
     lastUserMessage: [...chat.messages].reverse().find((m) => m.is_user)?.mes,
@@ -30000,7 +30689,7 @@ async function runTavernScript(ctx, req, res, db) {
     send: async (text) => {
       const trimmed = text.trim();
       if (trimmed === "") return;
-      chat.messages.push({ name: state.activePersona ?? DEFAULT_USER, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: trimmed });
+      chat.messages.push({ name: state.activePersona ?? DEFAULT_USER2, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: trimmed });
       await persist();
     },
     trigger: async (member) => {
@@ -30078,7 +30767,7 @@ async function prepareWorkbenchWorkspace() {
 import { resolve as resolve6 } from "node:path";
 
 // packages/plugin/src/memory-maintenance.ts
-import { randomUUID as randomUUID4 } from "node:crypto";
+import { randomUUID as randomUUID5 } from "node:crypto";
 var MAINTENANCE_MAX_LLM_REQUESTS = 24;
 var MAINTENANCE_OPENING_MAX_CHARS = 1e5;
 var MAINTENANCE_PAGE_RECORDS = 32;
@@ -30106,7 +30795,7 @@ async function startMemoryMaintenance(ctx, deps, scope) {
   const existing = activeRuns.get(key);
   if (existing !== void 0) throw new MaintenanceRunConflictError(scope.character, scope.chatId, existing.runId);
   const active = {
-    runId: randomUUID4(),
+    runId: randomUUID5(),
     character: scope.character,
     chatId: scope.chatId,
     startedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -30306,7 +30995,7 @@ async function executeRun(ctx, deps, scope, active) {
       opening = buildOpeningMessage(run, listing);
     }
     const messages = [
-      { role: "user", id: randomUUID4(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
+      { role: "user", id: randomUUID5(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
     ];
     let outcome = "completed";
     let errorMessage3;
@@ -30363,7 +31052,7 @@ async function executeRun(ctx, deps, scope, active) {
         blocks.push({ type: "text", text: textBuffer });
       }
       const toolCalls = blocks.filter((block) => block.type === "tool-call");
-      messages.push({ role: "assistant", id: randomUUID4(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
+      messages.push({ role: "assistant", id: randomUUID5(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
       if (toolCalls.length === 0) {
         report = textBuffer !== "" ? textBuffer : blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("");
         break;
@@ -30377,7 +31066,7 @@ async function executeRun(ctx, deps, scope, active) {
         const result = await executeToolCall(run, call);
         messages.push({
           role: "tool",
-          id: randomUUID4(),
+          id: randomUUID5(),
           content: [{ type: "text", text: safeJson(result.payload) }],
           source: { kind: "tool", callId: call.id },
           toolCallId: call.id,
@@ -33212,7 +33901,7 @@ async function handleMvuApi(req, res, route, method, db) {
     const receipts = readMvuReceipts(chat);
     const agentTavernBound = Object.values(state.sessionBindings).some((binding) => binding.architecture === "agent-tavern" && binding.chatId === chatId && binding.character === characterName);
     const scopedVariables = agentTavernBound ? await (await variables()).listAll("chat", chatId) : [];
-    const displayVariables = stripMvuControl(scopedVariables.length > 0 ? overlayScopedVariables(readChatVariables(chat), scopedVariables) : readChatVariables(chat));
+    const displayVariables = stripMvuControl(scopedVariables.length > 0 ? overlayChatScopedVariables(readChatVariables(chat), scopedVariables) : readChatVariables(chat));
     const character = await db.getCharacter(characterName);
     const statusTemplate = character ? statusTemplateOf(character.card) : void 0;
     let renderedHtml;
@@ -34249,6 +34938,8 @@ async function handleApi(ctx, req, res) {
       if (typeof initial !== "object" || initial === null || Array.isArray(initial) || Object.keys(initial).length === 0) return void 0;
       return structuredClone(initial);
     })();
+    const variablesSeed = seedVariables ?? {};
+    const mvuSeeded = seedJsrMvuVariables(found.card, variablesSeed);
     const greetings = [found.card.data.firstMes, ...found.card.data.alternateGreetings];
     const greetingIndex = body.greetingIndex === void 0 ? 0 : body.greetingIndex;
     if (!Number.isSafeInteger(greetingIndex) || greetingIndex < 0 || greetingIndex >= greetings.length) {
@@ -34257,7 +34948,7 @@ async function handleApi(ctx, req, res) {
     const id = await db.createChat(character, {
       user_name: "unused",
       character_name: "unused",
-      chat_metadata: { character, createdAt: now, timedWorldInfo: {}, ...seedVariables !== void 0 ? { variables: seedVariables } : {} }
+      chat_metadata: { character, createdAt: now, timedWorldInfo: {}, ...seedVariables !== void 0 || mvuSeeded ? { variables: variablesSeed } : {} }
     }, [{
       name: found.card.data.nickname || found.card.data.name,
       is_user: false,
@@ -34472,11 +35163,8 @@ async function handleApi(ctx, req, res) {
     if (!chatId) throw new Error("chatId query is required");
     const snapshot2 = await db.getChatSnapshot(character, chatId);
     if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
-    const displays = await displayTexts(db, state, character, snapshot2.chat);
-    const message = latestFrontendMessage(snapshot2.chat.messages, (entry, index) => {
-      const display = displays?.[index];
-      return typeof display === "string" ? display : entry.mes ?? "";
-    });
+    const scripts = collectRegexScripts(state, await db.getCharacter(character));
+    const message = latestFrontendMessage(snapshot2.chat.messages, (entry, index) => displayTextForMessage(scripts, entry, snapshot2.chat.messages.length - 1 - index));
     return sendJson(res, 200, {
       ok: true,
       revision: snapshot2.revision,
@@ -34501,7 +35189,7 @@ async function handleApi(ctx, req, res) {
     const scripts = collectRegexScripts(state, card);
     return sendJson(res, 200, {
       ok: true,
-      text: displayTextForMessage(scripts, snapshot2.chat.messages[index], snapshot2.chat.messages.length - 1 - index)
+      text: stripFrontendDocuments(displayTextForMessage(scripts, snapshot2.chat.messages[index], snapshot2.chat.messages.length - 1 - index))
     });
   }
   if (route.startsWith("chat/")) {
@@ -34572,6 +35260,7 @@ var name = "dsh-soulmojito";
 var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents", "agentPresets", "tools", "compaction"];
 function apply(ctx, config = {}) {
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns });
+  registerAgentTavernCardState(ctx);
   registerAgentTavernPromptCapture(ctx);
   setUpdateChecksEnabledFlag(updateChecksEnabled(config));
   setTemplatesEnabledFlag(templatesEnabled(config));
