@@ -20,6 +20,7 @@ import { RegexPlacement, cardDataToRaw, normalizeEntry, parseCharacterBook, pars
 import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { applyRegexScript, applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
 import type { TavernState, TavernStore } from '../../tavern-store/src/index.js'
+import { ChatRevisionConflictError } from '../../tavern-store/src/index.js'
 import {
   clearIdbStore,
   createIdbStore,
@@ -343,40 +344,45 @@ async function replaceVariables(
     await db.updateState(() => ({ scriptGlobals: tree }))
     return tree
   }
-  if (scope === 'chat') {
-    const snapshot = await requireChat(db, character, chatId)
-    const chat = snapshot.chat
-    if (Object.keys(tree).length > 0) chat.header.chat_metadata.variables = tree
-    else delete chat.header.chat_metadata.variables
-    await persistChat(db, character, chatId, chat, snapshot.revision)
-    if (await isAgentTavernBound(db, chatId)) {
-      // stat_data 是单个嵌套树（禁止 flatten：卡里键名含 `&`，flat 名会被
-      // VariableStore 拒绝）；镜像失败不反噬聊天主写入，聊天文件仍是权威。
-      try {
-        await mirrorChatScope(chatId, tree)
-      } catch (error) {
-        console.warn(`dsh-soulmojito: chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
+  // Character scope writes an overlay in state.json; the card file and its
+  // `extensions.variables` stay read-only (same trust boundary as lorebooks).
+  if (scope === 'character') {
+    await db.updateState((current) => ({
+      characterVariables: {
+        ...(current.characterVariables ?? {}),
+        [character]: cloneJson(tree),
+      },
+    }))
     return tree
   }
-  if (scope === 'message') {
+  // Multiple card scripts start together (MVU + status panel + front-end) and
+  // write the same chat at once. Serializing helper writes prevents avoidable
+  // CAS 500s during that startup burst; the store CAS still guards host writes.
+  return serializeSessionWrite(`${character}\u0000${chatId}\u0000chat`, () => retryChatWrite(async () => {
+    if (scope === 'chat') {
+      const snapshot = await requireChat(db, character, chatId)
+      const chat = snapshot.chat
+      if (Object.keys(tree).length > 0) chat.header.chat_metadata.variables = tree
+      else delete chat.header.chat_metadata.variables
+      await persistChat(db, character, chatId, chat, snapshot.revision)
+      if (await isAgentTavernBound(db, chatId)) {
+        // stat_data 是单个嵌套树（禁止 flatten：卡里键名含 `&`，flat 名会被
+        // VariableStore 拒绝）；镜像失败不反噬聊天主写入，聊天文件仍是权威。
+        try {
+          await mirrorChatScope(chatId, tree)
+        } catch (error) {
+          console.warn(`dsh-soulmojito: chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+      return tree
+    }
     const snapshot = await requireChat(db, character, chatId)
     const index = resolveMessageId(snapshot.chat.messages, body?.messageId)
     const message = snapshot.chat.messages[index]
     message.variables = tree
     await persistChat(db, character, chatId, snapshot.chat, snapshot.revision)
     return tree
-  }
-  // Character scope writes an overlay in state.json; the card file and its
-  // `extensions.variables` stay read-only (same trust boundary as lorebooks).
-  await db.updateState((current) => ({
-    characterVariables: {
-      ...(current.characterVariables ?? {}),
-      [character]: cloneJson(tree),
-    },
   }))
-  return tree
 }
 
 /**
@@ -395,29 +401,32 @@ async function replaceMvuData(
   chatId: string,
   body: JsonObject,
 ): Promise<JsonObject> {
-  const snapshot = await requireChat(db, character, chatId)
-  const chat = snapshot.chat
-  const stat = requireObject(body?.statData, 'statData')
-  const chatVariables = ensureChatVariables(chat)
-  chatVariables['stat_data'] = stat
-  chatVariables['initialized_lorebooks'] = true
-  let messageId = -1
-  if (chat.messages.length > 0) {
-    messageId = body?.messageId === undefined ? chat.messages.length - 1 : resolveMessageId(chat.messages, body.messageId)
-    const message = chat.messages[messageId]
-    message.variables = {
-      ...(plainObject(message.variables) ?? {}),
-      stat_data: cloneJson(stat),
+  return serializeSessionWrite(`${character}\u0000${chatId}\u0000chat`, () => retryChatWrite(async () => {
+    const snapshot = await requireChat(db, character, chatId)
+    const chat = snapshot.chat
+    const stat = requireObject(body?.statData, 'statData')
+    const chatVariables = ensureChatVariables(chat)
+    chatVariables['stat_data'] = stat
+    chatVariables['initialized_lorebooks'] = true
+    let messageId = -1
+    if (chat.messages.length > 0) {
+      messageId = body?.messageId === undefined ? chat.messages.length - 1 : resolveMessageId(chat.messages, body.messageId)
+      const message = chat.messages[messageId]
+      message.variables = {
+        ...(plainObject(message.variables) ?? {}),
+        stat_data: cloneJson(stat),
+      }
     }
-  }
-  const revision = await persistChat(db, character, chatId, chat, snapshot.revision)
-  try {
-    const store = await variables()
-    const existing = await store.get('chat', chatId, 'stat_data')
-    await store.set('chat', chatId, 'stat_data', stat as never, existing?.revision)
-  } catch (error) {    console.warn(`dsh-soulmojito: MVU chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`)
-  }
-  return { stat_data: cloneJson(stat), messageId, revision }
+    const revision = await persistChat(db, character, chatId, chat, snapshot.revision)
+    try {
+      const store = await variables()
+      const existing = await store.get('chat', chatId, 'stat_data')
+      await store.set('chat', chatId, 'stat_data', stat as never, existing?.revision)
+    } catch (error) {
+      console.warn(`dsh-soulmojito: MVU chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return { stat_data: cloneJson(stat), messageId, revision }
+  }))
 }
 
 async function mirrorChatScope(chatId: string, tree: JsonObject): Promise<void> {
@@ -519,6 +528,25 @@ async function serializeSessionWrite<T>(key: string, operation: () => Promise<T>
   } finally {
     if (sessionWriteChains.get(key) === settled) sessionWriteChains.delete(key)
   }
+}
+
+/**
+ * Host generation and helper writes can still race outside the serialization
+ * chain. A CAS failure is retryable because every operation here re-reads the
+ * latest chat before applying its whole-tree update; never retry a blind write.
+ */
+async function retryChatWrite<T>(operation: () => Promise<T>): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await operation()
+    } catch (error) {
+      if (!(error instanceof ChatRevisionConflictError)) throw error
+      lastError = error
+      await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)))
+    }
+  }
+  throw lastError
 }
 
 async function putLorebook(
@@ -639,37 +667,39 @@ async function mutateMessages(
   action: 'set' | 'create' | 'delete',
   body: JsonObject,
 ): Promise<JsonObject> {
-  const snapshot = await requireChat(db, character, chatId)
-  const chat = snapshot.chat
-  const state = await db.getState()
-  if (action === 'set') {
-    const updates = requireArray(body?.messages, 'messages')
-    for (const raw of updates) {
-      const update = requireObject(raw, 'messages[]')
-      const index = resolveMessageId(chat.messages, update.message_id)
-      applyMessageUpdate(chat.messages[index], update)
+  return serializeSessionWrite(`${character}\u0000${chatId}\u0000chat`, () => retryChatWrite(async () => {
+    const snapshot = await requireChat(db, character, chatId)
+    const chat = snapshot.chat
+    const state = await db.getState()
+    if (action === 'set') {
+      const updates = requireArray(body?.messages, 'messages')
+      for (const raw of updates) {
+        const update = requireObject(raw, 'messages[]')
+        const index = resolveMessageId(chat.messages, update.message_id)
+        applyMessageUpdate(chat.messages[index], update)
+      }
+    } else if (action === 'create') {
+      const entries = requireArray(body?.messages, 'messages')
+      const at = body?.insertBefore === 'end' || body.insertBefore === undefined
+        ? chat.messages.length
+        : normalizeInsertIndex(chat.messages.length, body.insertBefore)
+      const created = entries.map((raw) =>
+        toCreatedMessage(requireObject(raw, 'messages[]'), state.activePersona ?? DEFAULT_USER, character))
+      chat.messages.splice(at, 0, ...created)
+    } else {
+      const ids = requireArray(body?.messageIds, 'messageIds')
+      const indexes = [...new Set(ids.map((id) => resolveMessageId(chat.messages, id)))].sort((a, b) => b - a)
+      for (const index of indexes) chat.messages.splice(index, 1)
     }
-  } else if (action === 'create') {
-    const entries = requireArray(body?.messages, 'messages')
-    const at = body?.insertBefore === 'end' || body.insertBefore === undefined
-      ? chat.messages.length
-      : normalizeInsertIndex(chat.messages.length, body.insertBefore)
-    const created = entries.map((raw) =>
-      toCreatedMessage(requireObject(raw, 'messages[]'), state.activePersona ?? DEFAULT_USER, character))
-    chat.messages.splice(at, 0, ...created)
-  } else {
-    const ids = requireArray(body?.messageIds, 'messageIds')
-    const indexes = [...new Set(ids.map((id) => resolveMessageId(chat.messages, id)))].sort((a, b) => b - a)
-    for (const index of indexes) chat.messages.splice(index, 1)
-  }
-  const revision = await persistChat(db, character, chatId, chat, snapshot.revision)
-  return {
-    revision,
-    messageCount: chat.messages.length,
-    lastMessageId: chat.messages.length - 1,
-    messages: chat.messages.map((message, index) => toJsrMessage(message, index)),
-    variables: { chat: cloneJson(readChatVariables(chat)) },
-  }
+    const revision = await persistChat(db, character, chatId, chat, snapshot.revision)
+    return {
+      revision,
+      messageCount: chat.messages.length,
+      lastMessageId: chat.messages.length - 1,
+      messages: chat.messages.map((message, index) => toJsrMessage(message, index)),
+      variables: { chat: cloneJson(readChatVariables(chat)) },
+    }
+  }))
 }
 
 async function persistChat(db: TavernStore, character: string, chatId: string, chat: ChatLogIR, revision: string): Promise<string> {

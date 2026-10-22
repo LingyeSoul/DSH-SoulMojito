@@ -82,6 +82,26 @@ export function buildIframeScript(
   window.__VUE_PROD_DEVTOOLS__ = true;
   window.__VUE_OPTIONS_API__ = true;
   window.__VUE_PROD_HYDRATION_MISMATCH_DETAILS__ = false;
+  // MagVarUpdate (beta) reads a global 'YAML' at module load and calls
+  // YAML.parse / YAML.stringify / YAML.parseDocument(...).toJS(). yamljs is
+  // loaded as a classic script in HELPER_LIBRARIES; add the missing
+  // parseDocument shape. When the CDN failed, keep a JSON fallback so the
+  // framework can initialise instead of dying with a bare ReferenceError.
+  if (!window.YAML) {
+    window.YAML = {
+      parse: function (text) {
+        try { return JSON.parse(String(text)); }
+        catch (_) { throw new Error('YAML library unavailable: only JSON input can be parsed in this iframe'); }
+      },
+      stringify: function (value) { return JSON.stringify(value, null, 2); }
+    };
+  }
+  if (typeof window.YAML.parseDocument !== 'function') {
+    window.YAML.parseDocument = function (text) {
+      var value = window.YAML.parse(String(text));
+      return { toJS: function () { return value; } };
+    };
+  }
   var state = {
     characterName: '', userName: 'User', chatId: '', chatMetadata: {},
     messages: [], variables: { global: {}, chat: {}, message: {}, character: {} },
@@ -1149,12 +1169,12 @@ export function buildIframeScript(
   window.TavernHelper.getCharData = window.getCharData;
 
   window.SillyTavern = {
-    chat: state.messages,
-    chatMetadata: state.chatMetadata,
-    characters: window.getCharData('current') ? [window.getCharData('current')] : [],
-    characterId: 0,
-    name1: state.userName,
-    name2: state.characterName,
+    get chat() { return state.messages; },
+    get chatMetadata() { return state.chatMetadata; },
+    get characters() { return window.getCharData('current') ? [window.getCharData('current')] : []; },
+    get characterId() { return 0; },
+    get name1() { return state.userName; },
+    get name2() { return state.characterName; },
     // MagVarUpdate's settings store and MVU panel read these objects directly.
     // They are iframe-local; the plugin's own settings live in state.json.
     extensionSettings: {},
@@ -1178,6 +1198,19 @@ export function buildIframeScript(
     unregisterFunctionTool: function () {},
     ToolManager: {
       isToolCallingSupported: function () { return false; },
+    },
+    // MagVarUpdate's character-settings override reads the card's world book
+    // through SillyTavern.loadWorldInfo(name) and expects { entries: { uid: entry } }.
+    // Read-only: the session copy/base asset is resolved by getWorldbook.
+    loadWorldInfo: function (name) {
+      return window.getWorldbook(name).then(function (entries) {
+        var mapped = {};
+        (Array.isArray(entries) ? entries : []).forEach(function (entry, index) {
+          var uid = entry && entry.uid !== undefined ? entry.uid : index;
+          mapped[String(uid)] = entry;
+        });
+        return { entries: mapped };
+      });
     },
     getContext: function () {
       return {

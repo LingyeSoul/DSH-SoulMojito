@@ -81,6 +81,52 @@ describe('TavernHelper runtime source', () => {
     expect(posted[0]).toMatchObject({ type: 'dsh-soulmojito:helper', token: 'probe-token', op: 'snapshot' })
   })
 
+  it('installs MVU merged variables, a debounce-safe SillyTavern and the host facade', () => {
+    const posted: PostedMessage[] = []
+    const script = buildIframeScript('probe-token', -1, '{}', iframeSources())
+    const sandbox = makeSandbox(posted)
+    ;(sandbox.window as Record<string, unknown>).Function = Function
+    vm.runInNewContext(script, sandbox)
+    const window = sandbox.window as Record<string, unknown> & {
+      getAllVariables(): Record<string, unknown>
+      Mvu: { getAllVariables(): Record<string, unknown> }
+      SillyTavern: Record<string, unknown>
+      top: { Function: unknown; URL: unknown }
+    }
+    expect(typeof window.getAllVariables).toBe('function')
+    expect(typeof window.Mvu.getAllVariables).toBe('function')
+    expect(typeof window.SillyTavern.saveChat).toBe('function')
+    expect(typeof window.SillyTavern.saveSettingsDebounced).toBe('function')
+    expect(typeof window.SillyTavern.extensionSettings).toBe('object')
+    expect(typeof window.SillyTavern.loadWorldInfo).toBe('function')
+    expect(typeof (window.SillyTavern.saveChat() as Promise<unknown>).then).toBe('function')
+    expect(typeof window.top.Function).toBe('function')
+  })
+
+  it('installs the YAML compatibility surface for MVU module load', () => {
+    const posted: PostedMessage[] = []
+    const script = buildIframeScript('probe-token', -1, '{}', iframeSources())
+    const sandbox = makeSandbox(posted)
+    ;(sandbox.window as Record<string, unknown>).YAML = {
+      parse: (text: string) => JSON.parse(text),
+      stringify: (value: unknown) => JSON.stringify(value),
+    }
+    vm.runInNewContext(script, sandbox)
+    const window = sandbox.window as Record<string, unknown> & {
+      YAML: { parseDocument(text: string): { toJS(): unknown } }
+    }
+    expect(typeof window.YAML.parseDocument).toBe('function')
+    expect(window.YAML.parseDocument('{"a":1}').toJS()).toEqual({ a: 1 })
+
+    const fallbackSandbox = makeSandbox([])
+    vm.runInNewContext(script, fallbackSandbox)
+    const fallback = fallbackSandbox.window as Record<string, unknown> & {
+      YAML: { parse(text: string): unknown; parseDocument(text: string): { toJS(): unknown } }
+    }
+    expect(typeof fallback.YAML.parseDocument).toBe('function')
+    expect(fallback.YAML.parse('{"b":2}')).toEqual({ b: 2 })
+  })
+
   it('runs window.generate without leaking module-scope event names', () => {
     const posted: PostedMessage[] = []
     const script = buildIframeScript('probe-token', -1, '{}', iframeSources())

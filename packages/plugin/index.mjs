@@ -13434,7 +13434,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.9".trim() : "";
-  const commit = true ? normalizeCommit("936feaf") : void 0;
+  const commit = true ? normalizeCommit("caa14e5") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -30416,62 +30416,66 @@ async function replaceVariables(db, state, character, chatId, body) {
     await db.updateState(() => ({ scriptGlobals: tree }));
     return tree;
   }
-  if (scope === "chat") {
-    const snapshot2 = await requireChat(db, character, chatId);
-    const chat = snapshot2.chat;
-    if (Object.keys(tree).length > 0) chat.header.chat_metadata.variables = tree;
-    else delete chat.header.chat_metadata.variables;
-    await persistChat(db, character, chatId, chat, snapshot2.revision);
-    if (await isAgentTavernBound(db, chatId)) {
-      try {
-        await mirrorChatScope(chatId, tree);
-      } catch (error) {
-        console.warn(`dsh-soulmojito: chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`);
+  if (scope === "character") {
+    await db.updateState((current) => ({
+      characterVariables: {
+        ...current.characterVariables ?? {},
+        [character]: cloneJson(tree)
       }
-    }
+    }));
     return tree;
   }
-  if (scope === "message") {
+  return serializeSessionWrite(`${character}\0${chatId}\0chat`, () => retryChatWrite(async () => {
+    if (scope === "chat") {
+      const snapshot3 = await requireChat(db, character, chatId);
+      const chat = snapshot3.chat;
+      if (Object.keys(tree).length > 0) chat.header.chat_metadata.variables = tree;
+      else delete chat.header.chat_metadata.variables;
+      await persistChat(db, character, chatId, chat, snapshot3.revision);
+      if (await isAgentTavernBound(db, chatId)) {
+        try {
+          await mirrorChatScope(chatId, tree);
+        } catch (error) {
+          console.warn(`dsh-soulmojito: chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      return tree;
+    }
     const snapshot2 = await requireChat(db, character, chatId);
     const index = resolveMessageId(snapshot2.chat.messages, body?.messageId);
     const message = snapshot2.chat.messages[index];
     message.variables = tree;
     await persistChat(db, character, chatId, snapshot2.chat, snapshot2.revision);
     return tree;
-  }
-  await db.updateState((current) => ({
-    characterVariables: {
-      ...current.characterVariables ?? {},
-      [character]: cloneJson(tree)
-    }
   }));
-  return tree;
 }
 async function replaceMvuData(db, character, chatId, body) {
-  const snapshot2 = await requireChat(db, character, chatId);
-  const chat = snapshot2.chat;
-  const stat2 = requireObject(body?.statData, "statData");
-  const chatVariables2 = ensureChatVariables(chat);
-  chatVariables2["stat_data"] = stat2;
-  chatVariables2["initialized_lorebooks"] = true;
-  let messageId = -1;
-  if (chat.messages.length > 0) {
-    messageId = body?.messageId === void 0 ? chat.messages.length - 1 : resolveMessageId(chat.messages, body.messageId);
-    const message = chat.messages[messageId];
-    message.variables = {
-      ...plainObject6(message.variables) ?? {},
-      stat_data: cloneJson(stat2)
-    };
-  }
-  const revision = await persistChat(db, character, chatId, chat, snapshot2.revision);
-  try {
-    const store5 = await variables();
-    const existing = await store5.get("chat", chatId, "stat_data");
-    await store5.set("chat", chatId, "stat_data", stat2, existing?.revision);
-  } catch (error) {
-    console.warn(`dsh-soulmojito: MVU chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  return { stat_data: cloneJson(stat2), messageId, revision };
+  return serializeSessionWrite(`${character}\0${chatId}\0chat`, () => retryChatWrite(async () => {
+    const snapshot2 = await requireChat(db, character, chatId);
+    const chat = snapshot2.chat;
+    const stat2 = requireObject(body?.statData, "statData");
+    const chatVariables2 = ensureChatVariables(chat);
+    chatVariables2["stat_data"] = stat2;
+    chatVariables2["initialized_lorebooks"] = true;
+    let messageId = -1;
+    if (chat.messages.length > 0) {
+      messageId = body?.messageId === void 0 ? chat.messages.length - 1 : resolveMessageId(chat.messages, body.messageId);
+      const message = chat.messages[messageId];
+      message.variables = {
+        ...plainObject6(message.variables) ?? {},
+        stat_data: cloneJson(stat2)
+      };
+    }
+    const revision = await persistChat(db, character, chatId, chat, snapshot2.revision);
+    try {
+      const store5 = await variables();
+      const existing = await store5.get("chat", chatId, "stat_data");
+      await store5.set("chat", chatId, "stat_data", stat2, existing?.revision);
+    } catch (error) {
+      console.warn(`dsh-soulmojito: MVU chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return { stat_data: cloneJson(stat2), messageId, revision };
+  }));
 }
 async function mirrorChatScope(chatId, tree) {
   const store5 = await variables();
@@ -30545,6 +30549,19 @@ async function serializeSessionWrite(key, operation) {
   } finally {
     if (sessionWriteChains.get(key) === settled) sessionWriteChains.delete(key);
   }
+}
+async function retryChatWrite(operation) {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!(error instanceof ChatRevisionConflictError)) throw error;
+      lastError = error;
+      await new Promise((resolve6) => setTimeout(resolve6, 10 * (attempt + 1)));
+    }
+  }
+  throw lastError;
 }
 async function putLorebook(db, character, chatId, body) {
   const name2 = requireString(body?.name, "name").trim();
@@ -30627,34 +30644,36 @@ async function getMessages(db, character, chatId, body) {
   return messages;
 }
 async function mutateMessages(db, character, chatId, action, body) {
-  const snapshot2 = await requireChat(db, character, chatId);
-  const chat = snapshot2.chat;
-  const state = await db.getState();
-  if (action === "set") {
-    const updates = requireArray(body?.messages, "messages");
-    for (const raw of updates) {
-      const update = requireObject(raw, "messages[]");
-      const index = resolveMessageId(chat.messages, update.message_id);
-      applyMessageUpdate(chat.messages[index], update);
+  return serializeSessionWrite(`${character}\0${chatId}\0chat`, () => retryChatWrite(async () => {
+    const snapshot2 = await requireChat(db, character, chatId);
+    const chat = snapshot2.chat;
+    const state = await db.getState();
+    if (action === "set") {
+      const updates = requireArray(body?.messages, "messages");
+      for (const raw of updates) {
+        const update = requireObject(raw, "messages[]");
+        const index = resolveMessageId(chat.messages, update.message_id);
+        applyMessageUpdate(chat.messages[index], update);
+      }
+    } else if (action === "create") {
+      const entries = requireArray(body?.messages, "messages");
+      const at = body?.insertBefore === "end" || body.insertBefore === void 0 ? chat.messages.length : normalizeInsertIndex(chat.messages.length, body.insertBefore);
+      const created = entries.map((raw) => toCreatedMessage(requireObject(raw, "messages[]"), state.activePersona ?? DEFAULT_USER2, character));
+      chat.messages.splice(at, 0, ...created);
+    } else {
+      const ids = requireArray(body?.messageIds, "messageIds");
+      const indexes = [...new Set(ids.map((id) => resolveMessageId(chat.messages, id)))].sort((a, b) => b - a);
+      for (const index of indexes) chat.messages.splice(index, 1);
     }
-  } else if (action === "create") {
-    const entries = requireArray(body?.messages, "messages");
-    const at = body?.insertBefore === "end" || body.insertBefore === void 0 ? chat.messages.length : normalizeInsertIndex(chat.messages.length, body.insertBefore);
-    const created = entries.map((raw) => toCreatedMessage(requireObject(raw, "messages[]"), state.activePersona ?? DEFAULT_USER2, character));
-    chat.messages.splice(at, 0, ...created);
-  } else {
-    const ids = requireArray(body?.messageIds, "messageIds");
-    const indexes = [...new Set(ids.map((id) => resolveMessageId(chat.messages, id)))].sort((a, b) => b - a);
-    for (const index of indexes) chat.messages.splice(index, 1);
-  }
-  const revision = await persistChat(db, character, chatId, chat, snapshot2.revision);
-  return {
-    revision,
-    messageCount: chat.messages.length,
-    lastMessageId: chat.messages.length - 1,
-    messages: chat.messages.map((message, index) => toJsrMessage(message, index)),
-    variables: { chat: cloneJson(readChatVariables(chat)) }
-  };
+    const revision = await persistChat(db, character, chatId, chat, snapshot2.revision);
+    return {
+      revision,
+      messageCount: chat.messages.length,
+      lastMessageId: chat.messages.length - 1,
+      messages: chat.messages.map((message, index) => toJsrMessage(message, index)),
+      variables: { chat: cloneJson(readChatVariables(chat)) }
+    };
+  }));
 }
 async function persistChat(db, character, chatId, chat, revision) {
   const next = await db.saveChat(character, chatId, chat, revision);

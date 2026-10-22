@@ -54,6 +54,8 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       'ToolManager: {',
       'Function: window.Function',
       'get: function (target, property) {',
+      'loadWorldInfo: function (name) {',
+      'window.YAML.parseDocument',
       'window.getCurrentMessageId = function',
       'window.Mvu = {',
       'getMvuData: function',
@@ -86,6 +88,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     expect(source).toContain("https://cdn.jsdelivr.net/npm/vue@3.5.40/dist/vue.runtime.global.prod.min.js")
     expect(source).toContain("https://cdn.jsdelivr.net/npm/vue-router@4.6.4/dist/vue-router.global.prod.min.js")
     expect(source).toContain("https://cdn.jsdelivr.net/npm/zod@4.4.3/+esm")
+    expect(source).toContain("https://cdn.jsdelivr.net/npm/yamljs@0.3.0/dist/yaml.min.js")
     expect(source).toContain('window.z = z')
     // 示例卡3's runtime connector hard-gates on TavernHelper.generate; the shim
     // proxies the card-owned API through the host (never the other way around).

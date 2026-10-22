@@ -37,6 +37,10 @@ export const HELPER_LIBRARIES = [
   'https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js',
   // The bundled showdown build exposes the global used by builtin.renderMarkdown.
   'https://cdn.jsdelivr.net/npm/showdown@2.1.0/dist/showdown.min.js',
+  // MagVarUpdate's filter language reads a global `YAML` (parse / stringify /
+  // parseDocument); yamljs is the classic-script build that exposes it before
+  // card modules execute. The shim adds the parseDocument().toJS() shape.
+  'https://cdn.jsdelivr.net/npm/yamljs@0.3.0/dist/yaml.min.js',
   'https://cdn.jsdelivr.net/npm/vue@3.5.40/dist/vue.runtime.global.prod.min.js',
   'https://cdn.jsdelivr.net/npm/vue-router@4.6.4/dist/vue-router.global.prod.min.js',
 ]

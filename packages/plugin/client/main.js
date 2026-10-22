@@ -783,9 +783,6 @@ window.__ModuleLoader__.load({
               pendingTriggerRef.current = null
               const run = async () => {
                 const conversation = hostConversation(hostSessionId)
-                if (conversation === undefined) {
-                  throw new Error('/trigger is not available in this context (no AgentTavern session)')
-                }
                 const snapshot = await api('helper', {
                   method: 'POST',
                   headers: jsonHeaders(),
@@ -804,6 +801,18 @@ window.__ModuleLoader__.load({
                       messageIds: [last.message_id],
                     }),
                   })
+                  // Keep the next diff from reporting the replaced floor as a
+                  // deletion; the host send below will surface as the new user
+                  // message instead.
+                  const afterDelete = await api('helper', {
+                    method: 'POST',
+                    headers: jsonHeaders(),
+                    body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
+                  })
+                  if (afterDelete?.value !== undefined) previousRef.current = afterDelete.value
+                }
+                if (conversation === undefined) {
+                  throw new Error('/trigger is not available in this context (no AgentTavern session)')
                 }
                 await conversation.send(pending.text)
                 return { output: '' }

@@ -626,6 +626,10 @@ window.__ModuleLoader__.load({
         "https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js",
         // The bundled showdown build exposes the global used by builtin.renderMarkdown.
         "https://cdn.jsdelivr.net/npm/showdown@2.1.0/dist/showdown.min.js",
+        // MagVarUpdate's filter language reads a global `YAML` (parse / stringify /
+        // parseDocument); yamljs is the classic-script build that exposes it before
+        // card modules execute. The shim adds the parseDocument().toJS() shape.
+        "https://cdn.jsdelivr.net/npm/yamljs@0.3.0/dist/yaml.min.js",
         "https://cdn.jsdelivr.net/npm/vue@3.5.40/dist/vue.runtime.global.prod.min.js",
         "https://cdn.jsdelivr.net/npm/vue-router@4.6.4/dist/vue-router.global.prod.min.js"
       ];
@@ -687,6 +691,26 @@ window.__ModuleLoader__.load({
       window.__VUE_PROD_DEVTOOLS__ = true;
       window.__VUE_OPTIONS_API__ = true;
       window.__VUE_PROD_HYDRATION_MISMATCH_DETAILS__ = false;
+      // MagVarUpdate (beta) reads a global 'YAML' at module load and calls
+      // YAML.parse / YAML.stringify / YAML.parseDocument(...).toJS(). yamljs is
+      // loaded as a classic script in HELPER_LIBRARIES; add the missing
+      // parseDocument shape. When the CDN failed, keep a JSON fallback so the
+      // framework can initialise instead of dying with a bare ReferenceError.
+      if (!window.YAML) {
+        window.YAML = {
+          parse: function (text) {
+            try { return JSON.parse(String(text)); }
+            catch (_) { throw new Error('YAML library unavailable: only JSON input can be parsed in this iframe'); }
+          },
+          stringify: function (value) { return JSON.stringify(value, null, 2); }
+        };
+      }
+      if (typeof window.YAML.parseDocument !== 'function') {
+        window.YAML.parseDocument = function (text) {
+          var value = window.YAML.parse(String(text));
+          return { toJS: function () { return value; } };
+        };
+      }
       var state = {
         characterName: '', userName: 'User', chatId: '', chatMetadata: {},
         messages: [], variables: { global: {}, chat: {}, message: {}, character: {} },
@@ -1754,12 +1778,12 @@ window.__ModuleLoader__.load({
       window.TavernHelper.getCharData = window.getCharData;
 
       window.SillyTavern = {
-        chat: state.messages,
-        chatMetadata: state.chatMetadata,
-        characters: window.getCharData('current') ? [window.getCharData('current')] : [],
-        characterId: 0,
-        name1: state.userName,
-        name2: state.characterName,
+        get chat() { return state.messages; },
+        get chatMetadata() { return state.chatMetadata; },
+        get characters() { return window.getCharData('current') ? [window.getCharData('current')] : []; },
+        get characterId() { return 0; },
+        get name1() { return state.userName; },
+        get name2() { return state.characterName; },
         // MagVarUpdate's settings store and MVU panel read these objects directly.
         // They are iframe-local; the plugin's own settings live in state.json.
         extensionSettings: {},
@@ -1783,6 +1807,19 @@ window.__ModuleLoader__.load({
         unregisterFunctionTool: function () {},
         ToolManager: {
           isToolCallingSupported: function () { return false; },
+        },
+        // MagVarUpdate's character-settings override reads the card's world book
+        // through SillyTavern.loadWorldInfo(name) and expects { entries: { uid: entry } }.
+        // Read-only: the session copy/base asset is resolved by getWorldbook.
+        loadWorldInfo: function (name) {
+          return window.getWorldbook(name).then(function (entries) {
+            var mapped = {};
+            (Array.isArray(entries) ? entries : []).forEach(function (entry, index) {
+              var uid = entry && entry.uid !== undefined ? entry.uid : index;
+              mapped[String(uid)] = entry;
+            });
+            return { entries: mapped };
+          });
         },
         getContext: function () {
           return {
@@ -2787,9 +2824,6 @@ window.__ModuleLoader__.load({
               pendingTriggerRef.current = null
               const run = async () => {
                 const conversation = hostConversation(hostSessionId)
-                if (conversation === undefined) {
-                  throw new Error('/trigger is not available in this context (no AgentTavern session)')
-                }
                 const snapshot = await api('helper', {
                   method: 'POST',
                   headers: jsonHeaders(),
@@ -2808,6 +2842,18 @@ window.__ModuleLoader__.load({
                       messageIds: [last.message_id],
                     }),
                   })
+                  // Keep the next diff from reporting the replaced floor as a
+                  // deletion; the host send below will surface as the new user
+                  // message instead.
+                  const afterDelete = await api('helper', {
+                    method: 'POST',
+                    headers: jsonHeaders(),
+                    body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
+                  })
+                  if (afterDelete?.value !== undefined) previousRef.current = afterDelete.value
+                }
+                if (conversation === undefined) {
+                  throw new Error('/trigger is not available in this context (no AgentTavern session)')
                 }
                 await conversation.send(pending.text)
                 return { output: '' }

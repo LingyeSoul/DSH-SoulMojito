@@ -29,10 +29,10 @@ Content-Security-Policy: default-src 'none'; connect-src 'none'; frame-src 'none
 
 | 你可能会写 | 在本插件里 |
 |---|---|
-| `window.parent.document` / `window.parent.fetch` | 🧱 跨域，直接被浏览器拒绝 |
+| `window.parent.document` 的宿主 DOM | 🧱 跨域；facade 只把 `document` 代理到本 iframe 自己的文档，读不到宿主 DOM |
 | `fetch()` / `XMLHttpRequest` | 🧱 CSP `connect-src 'none'` 拦截（默认；设置页可显式放行 HTTPS） |
 | `WebSocket`（`wss:`） | 🧱 CSP 拦截；放行外部资源也只覆盖 `https:`，不含 `wss:` |
-| 嵌套 `<iframe>` | 🧱 CSP `frame-src 'none'` |
+| 嵌套 `<iframe src="https://…">` | 🧱 CSP `frame-src 'none'`；同文档 `<iframe srcdoc>` 可用（卡内棋盘/开局界面走这条） |
 | `<script src="https://你的服务器/...">` | 🧱 CSP 只放行固定 CDN 白名单（设置页可显式放行任意 HTTPS） |
 | `window.parent.SillyTavern` 直读 | 🧱 不存在；用本页的 `SillyTavern.getContext()` |
 
@@ -368,8 +368,9 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `Vue` | 3.5.40（runtime global prod） | ✅（JSR 消息 iframe 同款；Vue SFC bundle 的 `module.exports = Vue` 直接可用） |
 | `VueRouter` | 4.6.4（global prod） | ✅ |
 | `z`（Zod） | 4.4.3（模块命名空间） | ✅（同时支持 `z.object` 与 `mvu_zod.js` 的 `z.z`） |
+| `YAML` | yamljs 0.3.0 | ✅ `parse` / `stringify`；`parseDocument(...).toJS()` 由 shim 补齐。不是 eemeli/yaml 的完整 Document API |
 | `toastr` | — | ✅ 最小实现（`info/success/warning/error/clear`，渲染 iframe 内浮层，不引入外部库） |
-| `PIXI` / `YAML` / `hljs` / `Popper` / Font Awesome | — | ❌ 用 CDN 自己按需引入（白名单 CDN 可用） |
+| `PIXI` / `hljs` / `Popper` / Font Awesome | — | ❌ 用 CDN 自己按需引入（白名单 CDN 可用） |
 
 ```html
 <!-- 这些 CDN 在白名单里，可以直接用 -->
@@ -394,6 +395,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | 函数 | 状态 | 说明 |
 |---|:--:|---|
 | `SillyTavern.getContext()` | ⚠️ | 只返回最小只读面：`chatId` / `chat` / `chat_metadata` / `name1`（你）/ `name2`（角色）/ `characterId`（恒 0）/ `characters`（当前角色卡）/ `getCharacterCardFields()`（恒空字段）。`getContext()` 里仍没有 `extensionSettings`、`eventSource`、`eventTypes`；这些兼容字段直接挂在 `SillyTavern.*`（`extensionSettings` / `chatCompletionSettings` 为 iframe 内存，`saveChat` / `saveSettingsDebounced` 为 Promise/空操作——变量与楼层已由 helper RPC 落盘，不会写宿主设置） |
+| `SillyTavern.loadWorldInfo(name)` | ✅ | 读当前聊天的世界书并返回 ST 形状 `{ entries: { [uid]: entry } }`；优先会话副本，其次基础资产/卡内嵌书。只读，写回仍走 `updateWorldbookWith` 的会话副本 |
 | `getCurrentMessageId()` | ✅ | 当前 iframe 所属楼层；侧栏/MVU 模板为 `-1`（最新）。没有楼层绑定时也不要拿它做范围上界，优先 `getLastMessageId()` |
 | `getLorebook(name)` / `getWorldbook(name)` | ✅ | 返回条目数组（含 `world` 字段）。名字缺省取角色卡绑定的世界书，其次全局激活的第一本，最后卡内嵌书名。**优先读当前聊天的会话副本**，没有副本才读基础 `worlds/` 资产 |
 | `getWorldbookNames()` / `getLorebookNames()` | ✅ | 全部世界书名 |
@@ -534,12 +536,16 @@ await fetch  // 🧱 默认不可用（CSP connect-src 'none'）；设置页放�
 | 事件监听写了但永远不触发 | 监听的是 §3.2 之外的"不触发"事件 | 改为轮询，见 §3.2 建议 |
 | `xxx is not a function` | 调用了 §5 的不可用函数 | 查表替换 |
 | `Failed to fetch` / 请求被拦 | 用了 `fetch`/XHR/WebSocket | 🧱 结构性限制，改用兼容函数 |
+| 控制台反复出现 `Tracking Prevention blocked access to storage for <URL>`（cdnjs / 字体 CSS） | Edge/Chrome 的跟踪防护阻止第三方 CDN 使用 Cookie/localStorage；样式与脚本本身仍会加载 | 不是插件 CSP，也不是卡错误；介意日志可在浏览器允许该 CDN，或忽略 |
+| `Connecting to 'http://127.0.0.1:3080/version' violates ... connect-src https: blob:` | 卡的前端把 `/version` 探测发到宿主机 HTTP 端点；沙箱 CSP 默认/外部资源模式都只放行 `https:`，不开放宿主 HTTP | 这是刻意的隔离边界；该探测在 MagVarUpdate 内被 catch 后回落版本号，不影响 MVU。不要为它放开 `connect-src http:` |
+| 卡报 `SillyTavern.loadWorldInfo is not a function` | MagVarUpdate 的角色设置覆盖会读 `SillyTavern.loadWorldInfo` | 更新构建：返回 `{ entries: { [uid]: entry } }`，只读当前聊天世界书（会话副本优先） |
 | 改了 `data` 但界面没变 | `setChatMessages` 的 `refresh` 无效 | 自己重绘 |
 | `renderMarkdown` 输出原文 | showdown 脚本未加载（CDN 被墙/离线） | 自行降级或内联渲染 |
 | `Mvu.getMvuData()` 返回 `undefined` | 聊天还没有 `stat_data`（新卡首轮尚未投影）或当前卡未被识别为 MVU 卡 | 先发一轮让投影器结算；确认卡内有 `<UpdateVariable>` / `MagVarUpdate` / `StatusPlaceHolderImpl` |
 | 启动时报 `lodash.min.js: Expected a function`，调用栈指向 `util.ts` | 卡脚本在模块求值阶段执行 `_.debounce(SillyTavern.saveChat, …)`，旧 shim 上没有 `SillyTavern.saveChat` | 更新构建：`SillyTavern.saveChat` 返回已解决的 Promise（变量/楼层写盘仍走 helper RPC），`saveSettingsDebounced`、`extensionSettings`、`chatCompletionSettings` 同步补齐 |
+| 启动时报 `external var "YAML":1 Uncaught ReferenceError: YAML is not defined` | MagVarUpdate 在模块求值时读取全局 `YAML` 的 `parse` / `stringify` / `parseDocument` | 更新构建：iframe 预注入 yamljs（经典脚本，`window.YAML`），并补 `parseDocument(...).toJS()`；CDN 失败时用 JSON 兜底避免直接 ReferenceError |
 | 卡报 `getAllVariables is not defined`，或 `Mvu.getAllVariables is not a function` | 卡用合并变量表读当前 MVU 树 | 更新构建：`window.getAllVariables()` 与 `Mvu.getAllVariables()` 返回 `global ← character ← chat ← 最新楼层` 的合并表，`stat_data` 在顶层 |
-| 控制台反复 500 且卡报 `character variables are read-only` | 卡把 `{type:'character'}` 当可写表（立绘偏好、镜像快照） | 更新构建：角色作用域写入 `state.json` 的 `characterVariables[角色名]` 覆盖层，角色卡文件保持只读；删除该键即重置 |
+| 控制台反复 500 且卡报 `character variables are read-only` | 卡把 `{type:'character'}` 当可写表（UI 偏好、镜像快照） | 更新构建：角色作用域写入 `state.json` 的 `characterVariables[角色名]` 覆盖层，角色卡文件保持只读；删除该键即重置 |
 | 首次挂载报 `棋盘宿主通信初始化失败：页面安全策略阻止了本地消息桥` | 卡通过 `window.top.Function` 在“宿主 realm”构造 `postMessage` 函数，旧 facade 没有转发 `Function` | 更新构建：`window.top` / `window.parent` facade 暴露 `Function` 与浏览器全局兜底；函数仍在沙箱 iframe 内执行 |
 | 卡点击发送后提示 `/trigger is not available` 并回退到 DOM 派发 | 卡用 `createChatMessages` 建用户楼层后要求前端触发宿主生成 | 更新构建：该 iframe 刚创建的末条用户楼层会被替换成一次宿主 composer 发送；其它 `/trigger` 调用仍明确报错，避免双驱动或重复楼层 |
 | 卡前端里的 `iframe` / `srcdoc` 画面空白 | 嵌套 `srcdoc` 本身不受 `frame-src 'none'` 拦截；常见原因是父 facade 缺少 `Function`、`document.createElement` 或浏览器全局 | 先用 iframe console 确认初始化错误；更新构建中的 facade 兜底 |
@@ -565,9 +571,9 @@ await fetch  // 🧱 默认不可用（CSP connect-src 'none'）；设置页放�
 
 - 你的前端**读不到**宿主的 Cookie、localStorage、其它聊天、API Key；
 - 你的前端**改不了**角色卡、基础世界书资产、脚本、设置；
-- 你的前端**能改**当前聊天的正文、楼层变量、聊天变量、global 变量，以及当前
+- 你的前端**能改**当前聊天的正文、楼层变量、聊天变量、global 变量、角色作用域覆盖层，以及当前
   聊天的**会话世界书副本**——这些都是真实数据，写之前先读、先确认，别在
-  `setInterval` 里无脑覆盖。副本可以随时用「重置会话世界书」丢弃。
+  `setInterval` 里无脑覆盖。角色覆盖层只落 `state.json` 的 `characterVariables`，角色卡文件本身仍是只读；副本可以随时用「重置会话世界书」丢弃，角色覆盖层删除对应角色键即可重置。
 - 你的前端 `localStorage` 会按角色写回 `state.json` 的 `frontendStorage`
   （上限 512KB/角色）；`sessionStorage` 只在 iframe 内。
 - `TavernHelper.generate` 的 `custom_api.key` 只随单次 RPC 进入宿主 Node 进程，
