@@ -521,12 +521,32 @@
       const [books, setBooks] = useState({})
       const [filter, setFilter] = useState('')
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
-      // 世界书跟随角色卡是会话级行为：勾选仍只代表手动列表；当前角色卡绑定的
-      // 那本在它的会话里自动生效，用「自动」徽标说明，不伪造手动勾选。
-      const linkedWorld = state.bootstrap.state.worldFollowsCharacter !== false
-        ? state.bootstrap.activeCard?.data?.extensions?.world
-        : undefined
+      // 世界书跟随角色卡是会话级行为（2026-10-22 决策）：链接书由生成面自动并入，
+// 不写手动 activeWorlds。面板按钮显示的是「实际生效」状态（2026-10-23 用户
+// 反馈）：链接书自动勾选；取消勾选记入 disabledAutoWorlds，才能真正停用它。
+      const follow = state.bootstrap.state.worldFollowsCharacter !== false
+      const linkedWorld = follow ? state.bootstrap.activeCard?.data?.extensions?.world : undefined
       const autoWorld = typeof linkedWorld === 'string' && linkedWorld.trim() !== '' ? linkedWorld.trim() : ''
+      const disabledAutoWorlds = Array.isArray(state.bootstrap.state.disabledAutoWorlds)
+        ? state.bootstrap.state.disabledAutoWorlds
+        : []
+      const toggleWorld = (name, checked) => {
+        const manual = new Set(state.bootstrap.state.activeWorlds)
+        if (autoWorld === name) {
+          const suppressed = new Set(disabledAutoWorlds)
+          if (checked) {
+            suppressed.delete(name)
+          } else {
+            suppressed.add(name)
+            manual.delete(name)
+          }
+          run(patchState({ activeWorlds: [...manual], disabledAutoWorlds: [...suppressed] }))
+          return
+        }
+        if (checked) manual.add(name)
+        else manual.delete(name)
+        run(patchState({ activeWorlds: [...manual] }))
+      }
       const toggleBrowse = (name) => {
         if (browse === name) { setBrowse(''); return }
         setBrowse(name)
@@ -596,21 +616,28 @@
           worlds.length === 0 && !creating
             ? h('p', { className: 'dt-muted' }, t('settings.worldsEmpty'))
             : h('div', { className: 'dt-world-list' }, worlds.map((name) => h('div', { key: name, className: 'dt-world-row' },
-              h('label', { className: 'dt-toggle' },
-                h('input', {
-                  type: 'checkbox',
-                  checked: state.bootstrap.state.activeWorlds.includes(name),
-                  onChange: (event) => {
-                    const next = new Set(state.bootstrap.state.activeWorlds)
-                    if (event.target.checked) next.add(name)
-                    else next.delete(name)
-                    run(patchState({ activeWorlds: [...next] }))
-                  },
-                }),
-                h('span', null, name)),
-              autoWorld === name && !state.bootstrap.state.activeWorlds.includes(name)
-                ? h('span', { className: 'dt-world-follow', title: t('panel.worlds.autoFollowHint') }, t('panel.worlds.autoFollow'))
-                : null,
+              (() => {
+                const manual = state.bootstrap.state.activeWorlds.includes(name)
+                const auto = autoWorld === name
+                const autoActive = auto && !disabledAutoWorlds.includes(name)
+                return [
+                  h('label', { key: 'toggle', className: 'dt-toggle' },
+                    h('input', {
+                      type: 'checkbox',
+                      'aria-label': name,
+                      checked: manual || autoActive,
+                      onChange: (event) => toggleWorld(name, event.target.checked),
+                    }),
+                    h('span', null, name)),
+                  auto
+                    ? h('span', {
+                        key: 'auto',
+                        className: `dt-world-follow ${autoActive ? '' : 'dt-world-follow-off'}`,
+                        title: t('panel.worlds.autoFollowHint'),
+                      }, t(autoActive ? 'panel.worlds.autoFollow' : 'panel.worlds.autoFollowOff'))
+                    : null,
+                ]
+              })(),
               h(Button, { size: 'sm', variant: 'ghost', onClick: () => toggleBrowse(name) },
                 browse === name ? t('panel.characters.hideCard') : t('panel.worlds.entries', { count: books[name]?.entries?.length ?? state.bootstrap.worldEntryCounts?.[name] ?? 0 })),
               h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editBook(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),

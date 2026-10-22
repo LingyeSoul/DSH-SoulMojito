@@ -170,11 +170,28 @@ describe('tavern panel navigation shell layout', () => {
     expect(mobileAt).toBeGreaterThan(baseListAt)
     // 该媒体查询在源文件里是独立一行（逐条规则一行排布），整行取出来锁。
     const mobileLine = source.slice(mobileAt, source.indexOf('\n', mobileAt))
-    expect(mobileLine).toContain('.dt-panel-nav{width:100%;flex-direction:row;align-items:center;overflow-x:auto;overflow-y:hidden;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}')
+    expect(mobileLine).toContain('.dt-panel-nav{box-sizing:border-box;width:100%;flex-direction:row;align-items:center;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}')
     expect(mobileLine).toContain('.dt-panel-navlist{display:contents}')
+    // 分组容器同样退场（2026-10-23）：它是 2026-10-21 导航重做新加的列向
+    // 容器，与 navlist 同款漏进横条会把组内按钮竖排成多列、把标题区挤在一起。
+    expect(mobileLine).toContain('.dt-panel-group{display:contents}')
     expect(mobileLine).toContain('.dt-panel-navcell{flex:none}')
-    // 回归形态：横条里再现清单的桌面列向规则（带或不带后续属性）就是这次移动端回归。
+    // 回归形态：横条里再现清单/分组容器的桌面列向规则（带或不带后续属性）
+    // 就是移动端横条回归。
     expect(mobileLine).not.toContain('.dt-panel-navlist{display:flex;flex-direction:column')
+    expect(mobileLine).not.toContain('.dt-panel-group{display:flex;flex-direction:column')
+  })
+
+  it('reveals the active section chip inside the mobile strip', () => {
+    // 程序化切区（总览数字卡片、会话头入口）不会经过横条点击，活动分区可能
+    // 停在可视区外；切区后把 chip 居中滚进横条。桌面导航无横向溢出，guard
+    // 让该 effect 成为 no-op。
+    expect(source).toContain('const navRef = useRef(null)')
+    expect(source).toContain("h('nav', { className: 'dt-panel-nav', 'aria-label': t('panel.nav'), ref: navRef },")
+    expect(source).toContain('if (!state.panelOpen) return')
+    expect(source).toContain('if (nav === null || nav.scrollWidth <= nav.clientWidth) return')
+    expect(source).toContain('const left = nav.scrollLeft + chipRect.left - navRect.left - (navRect.width - chipRect.width) / 2')
+    expect(source).toContain('nav.scrollLeft = Math.max(0, left)')
   })
 
   it('brands the panel shell and the about section with the SoulMojito logo', () => {
@@ -238,6 +255,9 @@ describe('tavern panel navigation shell layout', () => {
     expect("h('div', { className: 'dt-panel-navlistX' },".includes("h('div', { className: 'dt-panel-navlist' },")).toBe(false)
     expect('justify-content:space-between;gap:12px;min-height:52px'.includes('justify-content:space-between;gap:12px;flex:none;min-height:52px')).toBe(false)
     expect('.dt-panel-navlist{display:contentsX}'.includes('.dt-panel-navlist{display:contents}')).toBe(false)
+    expect('.dt-panel-group{display:contentsX}'.includes('.dt-panel-group{display:contents}')).toBe(false)
+    expect('const navRef = useRef(nullX)'.includes('const navRef = useRef(null)')).toBe(false)
+    expect('nav.scrollLeft = Math.max(1, left)'.includes('nav.scrollLeft = Math.max(0, left)')).toBe(false)
     expect('function SoulMojitoLogoX({ size = 16, className })'.includes('function SoulMojitoLogo({ size = 16, className })')).toBe(false)
     expect("h('strong', null, 'SoulMojitoX')".includes("h('strong', null, 'SoulMojito')")).toBe(false)
     // 2026-10-21 导航重做的六个新锚点同样要有近 miss 自证（组标签是组容器

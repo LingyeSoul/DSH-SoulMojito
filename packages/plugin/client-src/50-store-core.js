@@ -6,7 +6,7 @@
       storeRevision: '',
       state: {
         activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
-        agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, worldFollowsCharacter: true, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
+        agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, worldFollowsCharacter: true, disabledAutoWorlds: [], modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
       },
       characters: [],
       worlds: [],

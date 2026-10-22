@@ -98,6 +98,26 @@ describe('collectWorldInfoBooks', () => {
     expect(books).toEqual([])
   })
 
+  it('disabledAutoWorlds 停用链接书时不回落内嵌书（停用要真的生效）', async () => {
+    const books = await collectWorldInfoBooks(
+      store,
+      { activeWorlds: [], disabledAutoWorlds: ['Linked Lore'] },
+      CHARACTER,
+      { card: characterCard({ world: 'Linked Lore' }) },
+    )
+    expect(books).toEqual([])
+  })
+
+  it('手动 activeWorlds 优先于 disabledAutoWorlds', async () => {
+    const books = await collectWorldInfoBooks(
+      store,
+      { activeWorlds: ['Linked Lore'], disabledAutoWorlds: ['Linked Lore'] },
+      CHARACTER,
+      { card: characterCard({ world: 'Linked Lore' }) },
+    )
+    expect(books.map((book) => book.name)).toEqual(['Linked Lore'])
+  })
+
   it('带 chatId 时会话副本优先于基础世界书（并视为已导入，不叠加内嵌书）', async () => {
     await store.putChatWorld(CHARACTER, chatId, {
       name: 'Linked Lore',
@@ -177,6 +197,19 @@ describe('collectRegexScripts', () => {
     expect(inA.map((item) => item.scriptName)).toEqual(['Global', 'Owned A'])
     const inB = collectRegexScripts(state, characterWithRegex([], 'Card B'))
     expect(inB.map((item) => item.scriptName)).toEqual(['Global', 'Owned B'])
+  })
+
+  it('同名脚本分属两张卡时各取自己那条（识别修复）', () => {
+    const state = {
+      regexScripts: [
+        script('Shared Status', { id: 'a', findRegex: 'from a' }),
+        script('Shared Status', { id: 'b', findRegex: 'from b' }),
+      ],
+      regexScriptOwners: { a: 'Card A', b: 'Card B' },
+    }
+    expect(collectRegexScripts(state, characterWithRegex([], 'Card A')).map((item) => item.findRegex)).toEqual(['from a'])
+    expect(collectRegexScripts(state, characterWithRegex([], 'Card B')).map((item) => item.findRegex)).toEqual(['from b'])
+    expect(collectRegexScripts(state, characterWithRegex([], 'Card C'))).toEqual([])
   })
 
   it('预设级脚本只在所属预设激活时生效', () => {

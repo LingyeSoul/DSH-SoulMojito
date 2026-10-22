@@ -282,18 +282,20 @@ describe('TavernStore', () => {
     })
 
     const result = await store.backfillRegexScriptsFromCharacters()
-    expect(result).toEqual({ imported: 3, skipped: 2, invalid: 1, scanned: 2 })
+    expect(result).toEqual({ imported: 4, skipped: 1, invalid: 1, scanned: 2 })
     const state = await store.getState()
     expect(state.regexScripts.map((script) => script.scriptName))
-      .toEqual(['Keep Global', 'Card Only', 'Shared Across', 'New From B'])
-    // 同名脚本保持全局版本；跨卡重名以角色名排序先到者为准。
+      .toEqual(['Keep Global', 'Card Only', 'Shared Across', 'Shared Across', 'New From B'])
+    // 同名脚本保持全局版本；跨卡重名各持一条实体，不再互相顶掉（识别修复）。
     expect(state.regexScripts.find((script) => script.scriptName === 'Keep Global')?.findRegex).toBe('global version')
-    expect(state.regexScripts.find((script) => script.scriptName === 'Shared Across')?.findRegex).toBe('from a')
+    const shared = state.regexScripts.filter((script) => script.scriptName === 'Shared Across')
+    expect(shared.map((script) => script.findRegex).sort()).toEqual(['from a', 'from b'])
+    expect(new Set(shared.map((script) => state.regexScriptOwners?.[script.id]))).toEqual(new Set(['Backfill A', 'Backfill B']))
 
     // 幂等：再同步一次不再写入，全部有效条目都算跳过。
     expect(await store.backfillRegexScriptsFromCharacters())
       .toEqual({ imported: 0, skipped: 5, invalid: 1, scanned: 2 })
-    expect((await store.getState()).regexScripts).toHaveLength(4)
+    expect((await store.getState()).regexScripts).toHaveLength(5)
   }))
 
   it('预设：导入时物化 extensions.regex_scripts，非法脚本不阻断预设落盘', withStore(async (store) => {
@@ -342,23 +344,24 @@ describe('TavernStore', () => {
       regexScripts: parseRegexScripts([{ scriptName: 'Keep Preset Global', findRegex: 'global version', replaceString: '' }]),
     })
 
-    expect(await store.backfillRegexScriptsFromPresets()).toEqual({ imported: 3, skipped: 2, invalid: 1, scanned: 2 })
+    expect(await store.backfillRegexScriptsFromPresets()).toEqual({ imported: 4, skipped: 1, invalid: 1, scanned: 2 })
     const state = await store.getState()
     expect(state.regexScripts.map((script) => script.scriptName))
-      .toEqual(['Keep Preset Global', 'Preset Only', 'Preset Shared', 'Preset From B'])
-    // 同名脚本保持全局版本；跨预设重名以预设名排序先到者为准。
+      .toEqual(['Keep Preset Global', 'Preset Only', 'Preset Shared', 'Preset Shared', 'Preset From B'])
+    // 同名脚本保持全局版本；跨预设重名各持一条实体（识别修复）。
     expect(state.regexScripts.find((script) => script.scriptName === 'Keep Preset Global')?.findRegex).toBe('global version')
-    expect(state.regexScripts.find((script) => script.scriptName === 'Preset Shared')?.findRegex).toBe('from a')
-    // 回填的预设脚本登记预设归属（同名跨预设仍以先到者为准）。
+    const shared = state.regexScripts.filter((script) => script.scriptName === 'Preset Shared')
+    expect(shared.map((script) => script.findRegex).sort()).toEqual(['from a', 'from b'])
+    // 回填的预设脚本登记预设归属，同名跨预设各自归属。
     expect(state.regexScriptPresetOwners?.[state.regexScripts.find((script) => script.scriptName === 'Preset Only')!.id])
       .toBe('Backfill Preset A')
-    expect(state.regexScriptPresetOwners?.[state.regexScripts.find((script) => script.scriptName === 'Preset Shared')!.id])
-      .toBe('Backfill Preset A')
+    expect(new Set(shared.map((script) => state.regexScriptPresetOwners?.[script.id])))
+      .toEqual(new Set(['Backfill Preset A', 'Backfill Preset B']))
 
     // 幂等：再同步一次不再写入，全部有效条目都算跳过。
     expect(await store.backfillRegexScriptsFromPresets())
       .toEqual({ imported: 0, skipped: 5, invalid: 1, scanned: 2 })
-    expect((await store.getState()).regexScripts).toHaveLength(4)
+    expect((await store.getState()).regexScripts).toHaveLength(5)
   }))
 
   it('状态：importRegexScripts 按 scriptName 合并且保持既有顺序', withStore(async (store) => {
@@ -431,6 +434,64 @@ describe('TavernStore', () => {
     })
     await store.ensureRegexScriptOwners()
     expect((await store.getState()).regexScriptOwners?.[legacyId!]).toBeUndefined()
+  }))
+
+  it('regex：同名脚本跨卡各持一条，归属与内容互不覆盖', withStore(async (store) => {
+    const card = (name: string, findRegex: string) => ({
+      ...sampleCard,
+      data: {
+        ...sampleCard.data,
+        name,
+        extensions: { regex_scripts: [{ id: 'shared-id', scriptName: 'Shared Status', findRegex, replaceString: '' }] },
+      },
+    })
+    await store.importCharacter(card('Collide A', 'from a'))
+    await store.importCharacter(card('Collide B', 'from b'))
+    let state = await store.getState()
+    const shared = state.regexScripts.filter((script) => script.scriptName === 'Shared Status')
+    expect(shared).toHaveLength(2)
+    expect(shared.map((script) => script.findRegex).sort()).toEqual(['from a', 'from b'])
+    expect(new Set(shared.map((script) => state.regexScriptOwners?.[script.id])))
+      .toEqual(new Set(['Collide A', 'Collide B']))
+
+    // 重导入 A 只更新 A 自己那条，B 的实体保持不变。
+    await store.importCharacter(card('Collide A', 'from a v2'))
+    state = await store.getState()
+    const updated = state.regexScripts.filter((script) => script.scriptName === 'Shared Status')
+    expect(updated).toHaveLength(2)
+    expect(updated.find((script) => state.regexScriptOwners?.[script.id] === 'Collide A')?.findRegex).toBe('from a v2')
+    expect(updated.find((script) => state.regexScriptOwners?.[script.id] === 'Collide B')?.findRegex).toBe('from b')
+  }))
+
+  it('regex：旧 state 的同名单归属被迁移拆成每个来源一条', withStore(async (store) => {
+    const card = (name: string, findRegex: string) => ({
+      ...sampleCard,
+      data: {
+        ...sampleCard.data,
+        name,
+        extensions: { regex_scripts: [{ id: 'collapsed-id', scriptName: 'Collapsed', findRegex, replaceString: '' }] },
+      },
+    })
+    await store.importCharacter(card('Migrate A', 'from a'))
+    await store.importCharacter(card('Migrate B', 'from b'))
+    // 模拟旧版本：只剩 A 的实体与归属（B 的同名脚本被顶掉）。
+    const before = await store.getState()
+    const surviving = before.regexScripts.find((script) => before.regexScriptOwners?.[script.id] === 'Migrate A')!
+    await store.updateState(() => ({
+      regexScripts: [surviving],
+      regexScriptOwners: { [surviving.id]: 'Migrate A' },
+      regexScriptPresetOwners: {},
+      regexOwnershipVersion: 1,
+    }))
+
+    await store.ensureRegexScriptOwners()
+    const state = await store.getState()
+    const collapsed = state.regexScripts.filter((script) => script.scriptName === 'Collapsed')
+    expect(collapsed).toHaveLength(2)
+    expect(collapsed.map((script) => script.findRegex).sort()).toEqual(['from a', 'from b'])
+    expect(new Set(collapsed.map((script) => state.regexScriptOwners?.[script.id])))
+      .toEqual(new Set(['Migrate A', 'Migrate B']))
+    expect(state.regexOwnershipVersion).toBe(2)
   }))
 
   it('regex：角色卡改名后脚本归属跟着新卡名', withStore(async (store) => {
@@ -556,6 +617,8 @@ describe('TavernStore', () => {
     expect(await store.getState()).toEqual({
       activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
       agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, worldFollowsCharacter: true,
+      // 链接世界书的用户停用表（2026-10-23）：默认空表。
+      disabledAutoWorlds: [],
       // 美化前端右栏自动展开（2026-10-20 用户需求）：默认关闭。
       frontendAutoOpen: false,
       // 卡脚本自动运行（2026-10-21 用户需求）：默认关闭，显式授权才执行。

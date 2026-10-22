@@ -774,6 +774,13 @@ function checkFrontendRuntimeText(text) {
     // （display:contents）——留着它，18 个分区按钮会在横向按钮条里竖排堆叠、
     // 把主区挤没（headless Chrome 390×844 实测：nav 667px / 主区 33px）。
     '.dt-panel-navlist{display:contents}',
+    // 2026-10-23 移动端标题区实况：2026-10-21 的分组容器是新的列向盒，移动端
+    // 必须与 navlist 同款退场（display:contents），否则组内按钮在横条里竖排成
+    // 多列、把标题区挤成一团（headless Chrome 390×844 实测 nav 277px）。
+    '.dt-panel-group{display:contents}',
+    // 程序化切区分区（总览卡片/会话头入口）把活动 chip 滚进移动端横条。
+    'const navRef = useRef(null)',
+    'nav.scrollLeft = Math.max(0, left)',
     // 2026-10-21 导航重做（用户反馈「面板特别难用」）：分组清单 + 过滤框 +
     // 全屏切换 + 键盘导航 + 分区滚动记忆。逐一锁结构与让它成立的 CSS 规则——
     // 过滤框钉在清单外（与品牌同段常驻）、组容器/组标签渲染进清单、全屏修饰
@@ -2695,6 +2702,10 @@ const gates = [
         '.dt-panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}',
         // 移动端横条复位（2026-10-14 移动端实况回归）：媒体查询里清单容器退场。
         '.dt-panel-navlist{display:contents}',
+        // 2026-10-23：分组容器同样退场 + 活动 chip 滚进横条——与 checker 对齐。
+        '.dt-panel-group{display:contents}',
+        'const navRef = useRef(null)',
+        'nav.scrollLeft = Math.max(0, left)',
         // 2026-10-21 导航重做：与 checker 的必需 marker 列表逐条对齐。
         'const panelSectionGroups = [',
         "className: 'dt-panel-search'",
@@ -2798,6 +2809,11 @@ const gates = [
       // 移动端横条复位（2026-10-14 移动端实况回归）：清单一层不退了（display:contents
       // 被拆）必须翻红——替换文本 'display:contents-gone' 不含原 marker 的子串。
       const badMobileNavlist = good.replace('.dt-panel-navlist{display:contents}', '.dt-panel-navlist{display:contents-gone}')
+      // 2026-10-23 移动端标题区：分组容器复位成列向盒、活动 chip 不再滚进
+      // 可视区，各自都必须翻红——替换文本不含原 marker 子串。
+      const badMobileGroup = good.replace('.dt-panel-group{display:contents}', '.dt-panel-group{display:contents-gone}')
+      const badNavRef = good.replace('const navRef = useRef(null)', 'const navRefGone = useRef(null)')
+      const badChipReveal = good.replace('nav.scrollLeft = Math.max(0, left)', 'nav.scrollLeft = Math.max(1, left)')
       // Brand logo (2026-10-16 user request) negative samples: renaming the logo
       // component, breaking the viewBox frame, reverting the brand block copy to
       // Tavern, reverting the sidebar footer label to the i18n title and putting
@@ -2868,6 +2884,9 @@ const gates = [
         && checkFrontendRuntimeText(badNavlistRule).length > 0
         && checkFrontendRuntimeText(badPanelHeaderRule).length > 0
         && checkFrontendRuntimeText(badMobileNavlist).length > 0
+        && checkFrontendRuntimeText(badMobileGroup).length > 0
+        && checkFrontendRuntimeText(badNavRef).length > 0
+        && checkFrontendRuntimeText(badChipReveal).length > 0
         && checkFrontendRuntimeText(badBrandIcon).length > 0
         && checkFrontendRuntimeText(badBrandFrame).length > 0
         && checkFrontendRuntimeText(badBrandCopy).length > 0

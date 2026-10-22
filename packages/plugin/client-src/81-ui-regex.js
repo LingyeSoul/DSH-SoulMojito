@@ -103,14 +103,18 @@
       const presetOwners = state.bootstrap.state.regexScriptPresetOwners || {}
       const activeCharacter = state.bootstrap.state.activeCharacter || ''
       const activePreset = state.bootstrap.state.activePreset || ''
+      // 角色卡名与文件名 stem 可能因非法字符被 safeFileName 改写（服务端同名规则），
+      // 面板比较两边都归一化，避免「明明是本卡却判成别的卡」的识别失败。
+      const normalizeName = (value) => String(value || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 120)
+      const sameCharacter = (owner) => owner !== undefined
+        && (owner === activeCharacter || normalizeName(owner) === normalizeName(activeCharacter))
       const cardOwnerOf = (script) => cardOwners[script.id]
       const presetOwnerOf = (script) => presetOwners[script.id]
       const autoInactive = (script) => {
         const cardOwner = cardOwnerOf(script)
         const presetOwner = presetOwnerOf(script)
         if (cardOwner === undefined && presetOwner === undefined) return false
-        return !((cardOwner !== undefined && cardOwner === activeCharacter)
-          || (presetOwner !== undefined && presetOwner === activePreset))
+        return !(sameCharacter(cardOwner) || (presetOwner !== undefined && presetOwner === activePreset))
       }
       // 名称/模式过滤（2026-10-21 分页 UX）：与角色/预设/剧本清单同款模式，
       // 模式串也参与匹配（正则要的就是按 pattern 找）。
@@ -124,6 +128,27 @@
           ? scripts.map((item) => (item.id === script.id ? script : item))
           : [...scripts, script]
         return saveRegexScripts(next).then(() => setEditing(''))
+      }
+      // 归属别的来源时开关仍可切换，但当前会话不生效；给一条回执解释，避免
+      // 用户以为点击没反应（2026-10-23 用户反馈）。
+      const toggleScript = (script) => {
+        const inactive = autoInactive(script)
+        const owner = cardOwnerOf(script) ?? presetOwnerOf(script) ?? ''
+        const noticeKey = cardOwnerOf(script) !== undefined
+          ? 'settings.regexCardInactiveNotice'
+          : 'settings.regexPresetInactiveNotice'
+        const next = scripts.map((item) => (item.id === script.id ? { ...item, disabled: !item.disabled } : item))
+        run(saveRegexScripts(next).then(() => {
+          if (inactive) setNotice(t(noticeKey, { name: script.scriptName, owner }))
+        }))
+      }
+      // 解除归属：换一个脚本 id 后旧归属会被服务端剪掉，脚本从此全局生效。
+      const releaseOwnership = (script) => {
+        const owner = cardOwnerOf(script) ?? presetOwnerOf(script) ?? ''
+        if (!window.confirm(t('settings.regexReleaseConfirm', { name: script.scriptName, owner }))) return
+        const id = `${script.id}-global-${Date.now().toString(36)}`
+        run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, id } : item))
+          .then(() => setNotice(t('settings.regexReleased', { name: script.scriptName }))))
       }
       // 两个回填入口共用一份 busy 状态：同一时刻只允许一个扫描在跑，回执不交叉。
       const sync = (source, request, doneKey) => {
@@ -159,6 +184,9 @@
             h('div', { className: `dt-regex-row ${script.disabled || autoInactive(script) ? 'dt-regex-off' : ''}` },
               // Checkbox keeps its own control surface; the script name is read
               // text next to it, so the row can put the pattern on a second line.
+              // 归属别的角色卡/预设的脚本：置灰提示当前不生效，但仍允许切换——开关
+// 写的是脚本自身的 disabled，等对应来源激活时生效；也在本行提供「转为全局」
+// 解除归属，避免点击被禁用后毫无反应（2026-10-23 用户反馈）。
               h('label', {
                 className: 'dt-toggle dt-regex-check',
                 title: autoInactive(script) ? t('settings.regexAutoInactive') : t('settings.regexToggle', { name: script.scriptName }),
@@ -166,9 +194,9 @@
                 h('input', {
                   type: 'checkbox',
                   'aria-label': autoInactive(script) ? t('settings.regexAutoInactive') : t('settings.regexToggle', { name: script.scriptName }),
-                  checked: !script.disabled && !autoInactive(script),
-                  disabled: editing === script.id || autoInactive(script),
-                  onChange: () => run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, disabled: !item.disabled } : item))),
+                  checked: !script.disabled,
+                  disabled: editing === script.id,
+                  onChange: () => toggleScript(script),
                 })),
               h('div', { className: 'dt-regex-main' },
                 h('div', { className: 'dt-regex-head' },
@@ -176,7 +204,7 @@
                   cardOwnerOf(script) !== undefined
                     ? h('span', {
                         className: 'dt-regex-owner',
-                        title: t(cardOwnerOf(script) === activeCharacter ? 'settings.regexOwnerActive' : 'settings.regexOwnerInactive', { name: cardOwnerOf(script) }),
+                        title: t(sameCharacter(cardOwnerOf(script)) ? 'settings.regexOwnerActive' : 'settings.regexOwnerInactive', { name: cardOwnerOf(script) }),
                       }, t('settings.regexOwner', { name: cardOwnerOf(script) }))
                     : null,
                   presetOwnerOf(script) !== undefined
@@ -189,6 +217,16 @@
                     script.placement.map((p) => regexPlacementLabel(t, p)).join(' · '))),
                 h('code', { className: 'dt-regex-pattern', title: script.findRegex }, script.findRegex)),
               h('div', { className: 'dt-regex-actions' },
+                cardOwnerOf(script) !== undefined || presetOwnerOf(script) !== undefined
+                  ? h('button', {
+                      type: 'button',
+                      className: 'dt-regex-release',
+                      title: t('settings.regexRelease', { name: script.scriptName }),
+                      'aria-label': t('settings.regexRelease', { name: script.scriptName }),
+                      disabled: editing !== '',
+                      onClick: () => releaseOwnership(script),
+                    }, t('settings.regexReleaseShort'))
+                  : null,
                 h('button', {
                   type: 'button',
                   title: t('settings.regexEdit', { name: script.scriptName }),

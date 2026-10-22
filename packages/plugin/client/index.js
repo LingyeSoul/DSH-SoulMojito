@@ -4214,6 +4214,13 @@ window.__ModuleLoader__.load({
       'settings.regexPresetOwnerActive': 'Auto-enabled while preset {name} is active',
       'settings.regexPresetOwnerInactive': 'Auto-disabled here: this script belongs to preset {name}',
       'settings.regexAutoInactive': 'Auto-disabled: neither its character card nor its preset is active here',
+      // Ownership feedback and release (2026-10-23: toggles used to do nothing).
+      'settings.regexCardInactiveNotice': '"{name}" belongs to card "{owner}". Its switch was saved, but it only applies in {owner}\'s sessions.',
+      'settings.regexPresetInactiveNotice': '"{name}" belongs to preset "{owner}". Its switch was saved, but it only applies while preset {owner} is active.',
+      'settings.regexRelease': 'Remove "{name}" from "{owner}" and make it global',
+      'settings.regexReleaseShort': 'global',
+      'settings.regexReleaseConfirm': 'Remove "{name}" from "{owner}" and make it a global script? It will then run in every session.',
+      'settings.regexReleased': '"{name}" is now a global script.',
       'panel.title': 'Tavern management',
       'panel.close': 'Close panel',
       'panel.open': 'Open Tavern panel',
@@ -4422,9 +4429,11 @@ window.__ModuleLoader__.load({
       'panel.characters.duplicate': 'Character "{name}" already exists; creating it again would overwrite that card. Pick another name or delete the existing card first.',
       'panel.characters.createFailed': 'Failed to create card: {message}',
       'panel.worlds.entries': '{count} entries',
-      // Card scoped world activation (2026-10-22): the checkbox is the manual list.
+      // Card scoped world activation (2026-10-22; 2026-10-23 shows the effective state):
+      // the linked book is checked automatically and unchecking records a suppression.
       'panel.worlds.autoFollow': 'auto',
-      'panel.worlds.autoFollowHint': 'World books linked to the current character card activate only in that card\'s sessions. The checkbox is your manual global selection and is never changed by the plugin.',
+      'panel.worlds.autoFollowOff': 'off',
+      'panel.worlds.autoFollowHint': 'The world book linked to the current character card is auto-enabled in that card\'s sessions and shows as checked. Unchecking disables it (shown as off); checking it manually enables it globally.',
       'panel.worlds.search': 'Search entries',
       'panel.worlds.noEntries': 'No entries match the search.',
       'panel.worlds.delete': 'Delete {name}',
@@ -5090,6 +5099,13 @@ window.__ModuleLoader__.load({
       'settings.regexPresetOwnerActive': '预设「{name}」激活时自动启用',
       'settings.regexPresetOwnerInactive': '当前预设未激活，自动停用：此脚本属于预设「{name}」',
       'settings.regexAutoInactive': '自动停用：所属角色卡或预设当前未启用',
+      // 归属识别回执与解除归属（2026-10-23 用户反馈：开关点了没反应）。
+      'settings.regexCardInactiveNotice': '「{name}」属于角色卡「{owner}」，已保存开关状态；它只在「{owner}」的会话里生效。',
+      'settings.regexPresetInactiveNotice': '「{name}」属于预设「{owner}」，已保存开关状态；它只在预设「{owner}」激活时生效。',
+      'settings.regexRelease': '把「{name}」从「{owner}」移出，改为全局脚本',
+      'settings.regexReleaseShort': '全局',
+      'settings.regexReleaseConfirm': '将「{name}」从「{owner}」移出并改为全局脚本？此后它在所有会话都生效。',
+      'settings.regexReleased': '「{name}」已改为全局脚本。',
       'panel.title': '酒馆管理面板',
       'panel.close': '关闭面板',
       'panel.open': '打开酒馆面板',
@@ -5296,9 +5312,11 @@ window.__ModuleLoader__.load({
       'panel.characters.duplicate': '已存在同名角色「{name}」，再次创建会覆盖原卡。请换个名字，或先删除已有角色。',
       'panel.characters.createFailed': '新建角色卡失败：{message}',
       'panel.worlds.entries': '{count} 条目',
-      // 世界书跟随角色卡（2026-10-22 用户需求）：勾选仍是手动列表，插件不代改。
+      // 世界书跟随角色卡（2026-10-22 用户需求；2026-10-23 改为显示实际生效状态）：
+      // 链接书自动勾选，取消勾选记入停用表，不会伪造手动选择。
       'panel.worlds.autoFollow': '自动',
-      'panel.worlds.autoFollowHint': '绑定到当前角色卡的世界书只在它的会话里自动启用；下方勾选是你的手动全局选择，插件不会替你改动。',
+      'panel.worlds.autoFollowOff': '已停用',
+      'panel.worlds.autoFollowHint': '绑定到当前角色卡的世界书会随该卡的会话自动启用并显示为勾选；取消勾选会停用它（标记「已停用」），手动勾选则作为全局启用。',
       'panel.worlds.search': '搜索条目',
       'panel.worlds.noEntries': '没有匹配的条目。',
       'panel.worlds.delete': '删除 {name}',
@@ -5864,7 +5882,7 @@ window.__ModuleLoader__.load({
       storeRevision: '',
       state: {
         activeWorlds: [], sessionBindings: {}, defaultArchitecture: 'agent-tavern', defaultContextMode: 'dsh-native',
-        agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, worldFollowsCharacter: true, modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
+        agentTavernPreloadAssets: false, agentTavernAllowGlobalWrites: false, worldFollowsCharacter: true, disabledAutoWorlds: [], modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
       },
       characters: [],
       worlds: [],
@@ -7895,14 +7913,18 @@ window.__ModuleLoader__.load({
       const presetOwners = state.bootstrap.state.regexScriptPresetOwners || {}
       const activeCharacter = state.bootstrap.state.activeCharacter || ''
       const activePreset = state.bootstrap.state.activePreset || ''
+      // 角色卡名与文件名 stem 可能因非法字符被 safeFileName 改写（服务端同名规则），
+      // 面板比较两边都归一化，避免「明明是本卡却判成别的卡」的识别失败。
+      const normalizeName = (value) => String(value || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 120)
+      const sameCharacter = (owner) => owner !== undefined
+        && (owner === activeCharacter || normalizeName(owner) === normalizeName(activeCharacter))
       const cardOwnerOf = (script) => cardOwners[script.id]
       const presetOwnerOf = (script) => presetOwners[script.id]
       const autoInactive = (script) => {
         const cardOwner = cardOwnerOf(script)
         const presetOwner = presetOwnerOf(script)
         if (cardOwner === undefined && presetOwner === undefined) return false
-        return !((cardOwner !== undefined && cardOwner === activeCharacter)
-          || (presetOwner !== undefined && presetOwner === activePreset))
+        return !(sameCharacter(cardOwner) || (presetOwner !== undefined && presetOwner === activePreset))
       }
       // 名称/模式过滤（2026-10-21 分页 UX）：与角色/预设/剧本清单同款模式，
       // 模式串也参与匹配（正则要的就是按 pattern 找）。
@@ -7916,6 +7938,27 @@ window.__ModuleLoader__.load({
           ? scripts.map((item) => (item.id === script.id ? script : item))
           : [...scripts, script]
         return saveRegexScripts(next).then(() => setEditing(''))
+      }
+      // 归属别的来源时开关仍可切换，但当前会话不生效；给一条回执解释，避免
+      // 用户以为点击没反应（2026-10-23 用户反馈）。
+      const toggleScript = (script) => {
+        const inactive = autoInactive(script)
+        const owner = cardOwnerOf(script) ?? presetOwnerOf(script) ?? ''
+        const noticeKey = cardOwnerOf(script) !== undefined
+          ? 'settings.regexCardInactiveNotice'
+          : 'settings.regexPresetInactiveNotice'
+        const next = scripts.map((item) => (item.id === script.id ? { ...item, disabled: !item.disabled } : item))
+        run(saveRegexScripts(next).then(() => {
+          if (inactive) setNotice(t(noticeKey, { name: script.scriptName, owner }))
+        }))
+      }
+      // 解除归属：换一个脚本 id 后旧归属会被服务端剪掉，脚本从此全局生效。
+      const releaseOwnership = (script) => {
+        const owner = cardOwnerOf(script) ?? presetOwnerOf(script) ?? ''
+        if (!window.confirm(t('settings.regexReleaseConfirm', { name: script.scriptName, owner }))) return
+        const id = `${script.id}-global-${Date.now().toString(36)}`
+        run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, id } : item))
+          .then(() => setNotice(t('settings.regexReleased', { name: script.scriptName }))))
       }
       // 两个回填入口共用一份 busy 状态：同一时刻只允许一个扫描在跑，回执不交叉。
       const sync = (source, request, doneKey) => {
@@ -7951,6 +7994,9 @@ window.__ModuleLoader__.load({
             h('div', { className: `dt-regex-row ${script.disabled || autoInactive(script) ? 'dt-regex-off' : ''}` },
               // Checkbox keeps its own control surface; the script name is read
               // text next to it, so the row can put the pattern on a second line.
+              // 归属别的角色卡/预设的脚本：置灰提示当前不生效，但仍允许切换——开关
+// 写的是脚本自身的 disabled，等对应来源激活时生效；也在本行提供「转为全局」
+// 解除归属，避免点击被禁用后毫无反应（2026-10-23 用户反馈）。
               h('label', {
                 className: 'dt-toggle dt-regex-check',
                 title: autoInactive(script) ? t('settings.regexAutoInactive') : t('settings.regexToggle', { name: script.scriptName }),
@@ -7958,9 +8004,9 @@ window.__ModuleLoader__.load({
                 h('input', {
                   type: 'checkbox',
                   'aria-label': autoInactive(script) ? t('settings.regexAutoInactive') : t('settings.regexToggle', { name: script.scriptName }),
-                  checked: !script.disabled && !autoInactive(script),
-                  disabled: editing === script.id || autoInactive(script),
-                  onChange: () => run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, disabled: !item.disabled } : item))),
+                  checked: !script.disabled,
+                  disabled: editing === script.id,
+                  onChange: () => toggleScript(script),
                 })),
               h('div', { className: 'dt-regex-main' },
                 h('div', { className: 'dt-regex-head' },
@@ -7968,7 +8014,7 @@ window.__ModuleLoader__.load({
                   cardOwnerOf(script) !== undefined
                     ? h('span', {
                         className: 'dt-regex-owner',
-                        title: t(cardOwnerOf(script) === activeCharacter ? 'settings.regexOwnerActive' : 'settings.regexOwnerInactive', { name: cardOwnerOf(script) }),
+                        title: t(sameCharacter(cardOwnerOf(script)) ? 'settings.regexOwnerActive' : 'settings.regexOwnerInactive', { name: cardOwnerOf(script) }),
                       }, t('settings.regexOwner', { name: cardOwnerOf(script) }))
                     : null,
                   presetOwnerOf(script) !== undefined
@@ -7981,6 +8027,16 @@ window.__ModuleLoader__.load({
                     script.placement.map((p) => regexPlacementLabel(t, p)).join(' · '))),
                 h('code', { className: 'dt-regex-pattern', title: script.findRegex }, script.findRegex)),
               h('div', { className: 'dt-regex-actions' },
+                cardOwnerOf(script) !== undefined || presetOwnerOf(script) !== undefined
+                  ? h('button', {
+                      type: 'button',
+                      className: 'dt-regex-release',
+                      title: t('settings.regexRelease', { name: script.scriptName }),
+                      'aria-label': t('settings.regexRelease', { name: script.scriptName }),
+                      disabled: editing !== '',
+                      onClick: () => releaseOwnership(script),
+                    }, t('settings.regexReleaseShort'))
+                  : null,
                 h('button', {
                   type: 'button',
                   title: t('settings.regexEdit', { name: script.scriptName }),
@@ -12378,12 +12434,32 @@ window.__ModuleLoader__.load({
       const [books, setBooks] = useState({})
       const [filter, setFilter] = useState('')
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
-      // 世界书跟随角色卡是会话级行为：勾选仍只代表手动列表；当前角色卡绑定的
-      // 那本在它的会话里自动生效，用「自动」徽标说明，不伪造手动勾选。
-      const linkedWorld = state.bootstrap.state.worldFollowsCharacter !== false
-        ? state.bootstrap.activeCard?.data?.extensions?.world
-        : undefined
+      // 世界书跟随角色卡是会话级行为（2026-10-22 决策）：链接书由生成面自动并入，
+// 不写手动 activeWorlds。面板按钮显示的是「实际生效」状态（2026-10-23 用户
+// 反馈）：链接书自动勾选；取消勾选记入 disabledAutoWorlds，才能真正停用它。
+      const follow = state.bootstrap.state.worldFollowsCharacter !== false
+      const linkedWorld = follow ? state.bootstrap.activeCard?.data?.extensions?.world : undefined
       const autoWorld = typeof linkedWorld === 'string' && linkedWorld.trim() !== '' ? linkedWorld.trim() : ''
+      const disabledAutoWorlds = Array.isArray(state.bootstrap.state.disabledAutoWorlds)
+        ? state.bootstrap.state.disabledAutoWorlds
+        : []
+      const toggleWorld = (name, checked) => {
+        const manual = new Set(state.bootstrap.state.activeWorlds)
+        if (autoWorld === name) {
+          const suppressed = new Set(disabledAutoWorlds)
+          if (checked) {
+            suppressed.delete(name)
+          } else {
+            suppressed.add(name)
+            manual.delete(name)
+          }
+          run(patchState({ activeWorlds: [...manual], disabledAutoWorlds: [...suppressed] }))
+          return
+        }
+        if (checked) manual.add(name)
+        else manual.delete(name)
+        run(patchState({ activeWorlds: [...manual] }))
+      }
       const toggleBrowse = (name) => {
         if (browse === name) { setBrowse(''); return }
         setBrowse(name)
@@ -12453,21 +12529,28 @@ window.__ModuleLoader__.load({
           worlds.length === 0 && !creating
             ? h('p', { className: 'dt-muted' }, t('settings.worldsEmpty'))
             : h('div', { className: 'dt-world-list' }, worlds.map((name) => h('div', { key: name, className: 'dt-world-row' },
-              h('label', { className: 'dt-toggle' },
-                h('input', {
-                  type: 'checkbox',
-                  checked: state.bootstrap.state.activeWorlds.includes(name),
-                  onChange: (event) => {
-                    const next = new Set(state.bootstrap.state.activeWorlds)
-                    if (event.target.checked) next.add(name)
-                    else next.delete(name)
-                    run(patchState({ activeWorlds: [...next] }))
-                  },
-                }),
-                h('span', null, name)),
-              autoWorld === name && !state.bootstrap.state.activeWorlds.includes(name)
-                ? h('span', { className: 'dt-world-follow', title: t('panel.worlds.autoFollowHint') }, t('panel.worlds.autoFollow'))
-                : null,
+              (() => {
+                const manual = state.bootstrap.state.activeWorlds.includes(name)
+                const auto = autoWorld === name
+                const autoActive = auto && !disabledAutoWorlds.includes(name)
+                return [
+                  h('label', { key: 'toggle', className: 'dt-toggle' },
+                    h('input', {
+                      type: 'checkbox',
+                      'aria-label': name,
+                      checked: manual || autoActive,
+                      onChange: (event) => toggleWorld(name, event.target.checked),
+                    }),
+                    h('span', null, name)),
+                  auto
+                    ? h('span', {
+                        key: 'auto',
+                        className: `dt-world-follow ${autoActive ? '' : 'dt-world-follow-off'}`,
+                        title: t('panel.worlds.autoFollowHint'),
+                      }, t(autoActive ? 'panel.worlds.autoFollow' : 'panel.worlds.autoFollowOff'))
+                    : null,
+                ]
+              })(),
               h(Button, { size: 'sm', variant: 'ghost', onClick: () => toggleBrowse(name) },
                 browse === name ? t('panel.characters.hideCard') : t('panel.worlds.entries', { count: books[name]?.entries?.length ?? state.bootstrap.worldEntryCounts?.[name] ?? 0 })),
               h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editBook(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),
@@ -14807,6 +14890,7 @@ window.__ModuleLoader__.load({
       // 分区清单过滤（2026-10-21 导航重做）：组件内临时态——过滤词不跨面板打开
       // 保留（重开面板从完整清单开始，比记住上次的过滤词更符合「打开即全貌」）。
       const [filter, setFilter] = useState('')
+      const navRef = useRef(null)
       const navlistRef = useRef(null)
       const bodyRef = useRef(null)
       // 分区滚动位置记忆：切走时记下 scrollTop、切回时还原——长清单（聊天/
@@ -14824,6 +14908,21 @@ window.__ModuleLoader__.load({
         }
         body.scrollTop = scrollMemory.current[section] ?? 0
       }, [section])
+      // Mobile section strip: reveal the active chip when the section changes
+      // outside the strip (overview stat cards, session header entries). The
+      // desktop nav is a fixed-width column, so the overflow guard is a no-op.
+      useEffect(() => {
+        if (!state.panelOpen) return
+        const nav = navRef.current
+        if (nav === null || nav.scrollWidth <= nav.clientWidth) return
+        const chip = Array.from(nav.querySelectorAll('[data-dt-section]'))
+          .find((button) => button.getAttribute('data-dt-section') === section)
+        if (chip === undefined) return
+        const navRect = nav.getBoundingClientRect()
+        const chipRect = chip.getBoundingClientRect()
+        const left = nav.scrollLeft + chipRect.left - navRect.left - (navRect.width - chipRect.width) / 2
+        nav.scrollLeft = Math.max(0, left)
+      }, [section, state.panelOpen])
       const stamp = state.bootstrap.version || state.bootstrap.commit
         ? `v${state.bootstrap.version || '?'}${state.bootstrap.commit ? ` (${state.bootstrap.commit})` : ''}`
         : ''
@@ -14885,7 +14984,7 @@ window.__ModuleLoader__.load({
         // 分组分区清单——分区数会随 Mod 面板注册增长，长到溢出时原来整列滚动
         // 会把「这是酒馆面板」的标题一起卷走（品牌钉住是 2026-10-14 反馈的
         // 既有契约，过滤框与其同段）。
-        h('nav', { className: 'dt-panel-nav', 'aria-label': t('panel.nav') },
+        h('nav', { className: 'dt-panel-nav', 'aria-label': t('panel.nav'), ref: navRef },
           h('div', { className: 'dt-panel-brand' },
             h(SoulMojitoLogo),
             h('div', { className: 'dt-panel-brand-copy' },
@@ -15063,7 +15162,8 @@ window.__ModuleLoader__.load({
         .dt-group-create{display:flex;flex-direction:column;gap:8px;margin:10px 0;padding:10px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}.dt-group-list{display:flex;flex-direction:column;gap:12px}.dt-group-manage{display:flex;flex-direction:column;gap:6px}.dt-group-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.dt-group-title>span{color:var(--dsw-alias-label-tertiary);font-size:12px}.dt-group-title select{height:30px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:inherit;background:var(--dsw-alias-bg-base);padding:0 6px}.dt-group-title>button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-group-members{display:flex;flex-wrap:wrap;gap:6px}
         .dt-member-chip{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 8px 0 3px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:transparent;color:inherit;font-size:12px;cursor:pointer}.dt-member-chip>img{width:22px;height:22px;border-radius:50%;object-fit:cover}.dt-member-chip-off{opacity:.45}.dt-member-chip-off>span{text-decoration:line-through}.dt-member-chip-active{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}.dt-member-chip>button{color:inherit;background:transparent;border:0;cursor:pointer;padding:0 2px;font-size:11px}
         .dt-band-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}.dt-band-actions>.dt-upload{height:32px;font-size:13px}.dt-band-actions>.dt-upload:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-band-actions>button{min-height:32px;font-size:13px}
-        .dt-regex-list{display:flex;flex-direction:column;gap:6px}.dt-regex-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;transition:background .12s}.dt-regex-row:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-row.dt-regex-off{opacity:.55}.dt-regex-check{min-height:0;flex:none}.dt-regex-main{display:flex;flex-direction:column;gap:1px;min-width:0}.dt-regex-head{display:flex;align-items:baseline;gap:8px;min-width:0}.dt-regex-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:18px;color:var(--dsw-alias-label-primary)}.dt-regex-owner{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-placements{flex:none;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-pattern{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:16px}.dt-regex-actions{display:flex;gap:2px;flex:none}.dt-regex-actions button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-regex-actions button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-actions button:disabled{opacity:.4;cursor:not-allowed}.dt-regex-item{display:flex;flex-direction:column;gap:4px}.dt-regex-editor-wrap{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:12px}
+        .dt-regex-list{display:flex;flex-direction:column;gap:6px}.dt-regex-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;transition:background .12s}.dt-regex-row:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-row.dt-regex-off{opacity:.55}.dt-regex-check{min-height:0;flex:none}.dt-regex-main{display:flex;flex-direction:column;gap:1px;min-width:0}.dt-regex-head{display:flex;align-items:baseline;gap:8px;min-width:0}.dt-regex-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:18px;color:var(--dsw-alias-label-primary)}.dt-regex-owner{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-placements{flex:none;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-pattern{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:16px}.dt-regex-actions{display:flex;gap:2px;flex:none}.dt-regex-actions button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}
+.dt-regex-actions button.dt-regex-release{width:auto;padding:0 7px;font-size:11px;line-height:16px;white-space:nowrap}.dt-regex-actions button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-actions button:disabled{opacity:.4;cursor:not-allowed}.dt-regex-item{display:flex;flex-direction:column;gap:4px}.dt-regex-editor-wrap{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:12px}
         .dt-field input[type=text],.dt-field input[type=password]{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 10px}.dt-upload:disabled{opacity:.5;cursor:not-allowed}
         .dt-backlink{display:flex;padding:2px 0}.dt-backlink>button{color:var(--dsw-alias-label-tertiary);background:transparent;border:0;cursor:pointer;font-size:12px;padding:4px 2px}.dt-backlink>button:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}
         .dt-member-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}.dt-member-row .dt-member-chip>button{display:none}.dt-script-glyph{font-weight:700;font-size:15px;line-height:1}.dt-sidebar-subheading{margin-top:10px}.dt-branch-btn{font-size:13px}
@@ -15157,6 +15257,7 @@ window.__ModuleLoader__.load({
         .dt-world-list{display:flex;flex-direction:column;gap:6px}
         .dt-world-row{display:flex;align-items:center;gap:8px;min-height:36px;padding:2px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
         .dt-world-follow{flex:none;padding:0 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+.dt-world-follow-off{opacity:.6;text-decoration:line-through}
         .dt-world-row>.dt-toggle{flex:1;min-width:0}
         .dt-entry-list{display:flex;flex-direction:column;gap:6px}
         .dt-entry{display:flex;flex-direction:column;gap:4px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:8px 10px;font-size:13px}
@@ -15216,7 +15317,7 @@ window.__ModuleLoader__.load({
         .dt-audit-row pre{margin:0;max-height:120px;overflow:auto;color:var(--dsw-alias-label-primary);font:11px/16px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
         .dt-tc-state{display:inline-flex;align-items:center;padding:0 4px}
         .dt-header-character{padding:0;border:0;border-radius:0}
-        @media(max-width:700px){.dt-panel{flex-direction:column}.dt-panel-nav{width:100%;flex-direction:row;align-items:center;overflow-x:auto;overflow-y:hidden;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-panel-navlist{display:contents}.dt-panel-brand{padding:4px 8px}.dt-panel-brand-copy{display:none}.dt-panel-navcell{flex:none}.dt-card-grid{grid-template-columns:1fr}.dt-kv-row{grid-template-columns:1fr 1fr 28px}.dt-editor-grid{grid-template-columns:1fr}.dt-editor-wide{grid-column:auto}.dt-editor-toolbar{align-items:flex-start}.dt-preset-row{align-items:flex-start}.dt-preset-name{flex-basis:100%}.dt-panel-search{display:none}.dt-panel-group-label{display:none}}
+        @media(max-width:700px){.dt-panel{flex-direction:column}.dt-panel-nav{box-sizing:border-box;width:100%;flex-direction:row;align-items:center;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-panel-navlist{display:contents}.dt-panel-group{display:contents}.dt-panel-brand{padding:4px 8px}.dt-panel-brand-copy{display:none}.dt-panel-navcell{flex:none}.dt-card-grid{grid-template-columns:1fr}.dt-kv-row{grid-template-columns:1fr 1fr 28px}.dt-editor-grid{grid-template-columns:1fr}.dt-editor-wide{grid-column:auto}.dt-editor-toolbar{align-items:flex-start}.dt-preset-row{align-items:flex-start}.dt-preset-name{flex-basis:100%}.dt-panel-search{display:none}.dt-panel-group-label{display:none}}
         .dt-novel-badge{display:inline-flex;align-items:center;min-height:18px;padding:0 7px;border-radius:9px;font-size:10px;line-height:18px;font-weight:600;white-space:nowrap}
         .dt-novel-badge-active{color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent)}
         .dt-novel-badge-paused{color:var(--dsw-alias-state-warn-label,var(--dsw-alias-label-secondary));background:var(--dsw-alias-interactive-bg-hover)}

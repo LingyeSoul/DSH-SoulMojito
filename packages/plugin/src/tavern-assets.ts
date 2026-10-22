@@ -25,18 +25,20 @@ const AGENT_TAVERN_PRELOAD_MAX_CHARS = 32_000
 
 export async function collectWorldInfoBooks(
   db: Pick<TavernStore, 'getWorld'> & ChatWorldSource,
-  state: Pick<TavernState, 'activeWorlds' | 'worldFollowsCharacter'>,
+  state: Pick<TavernState, 'activeWorlds' | 'worldFollowsCharacter' | 'disabledAutoWorlds'>,
   characterName: string,
   character: CharacterAsset,
   chatId?: string,
 ): Promise<Lorebook[]> {
   const worldNames = new Set(state.activeWorlds)
   // 世界书跟随角色卡激活（默认开启）：绑定的世界书随角色注入；关闭后仅生效
-  // activeWorlds 显式激活的世界书，卡内嵌书兜底一并关闭。
+  // activeWorlds 显式激活的世界书，卡内嵌书兜底一并关闭。用户在面板取消勾选
+  // 链接书时记在 disabledAutoWorlds，生成面据此跳过（手动 activeWorlds 优先）。
   const follow = state.worldFollowsCharacter !== false
   const linkedWorld = character.card.data.extensions['world']
   const linkedName = follow && typeof linkedWorld === 'string' && linkedWorld.trim() !== '' ? linkedWorld.trim() : undefined
-  if (linkedName !== undefined) worldNames.add(linkedName)
+  const disabledAuto = new Set(state.disabledAutoWorlds ?? [])
+  if (linkedName !== undefined && !disabledAuto.has(linkedName)) worldNames.add(linkedName)
 
   const books: Lorebook[] = []
   let linkedImported = false
@@ -55,9 +57,11 @@ export async function collectWorldInfoBooks(
     }
   }
 
-  // 卡内嵌书只在链接世界缺失（未导入/未物化）时兜底，避免与已导入的世界书重复激活。
+  // 卡内嵌书只在链接世界缺失（未导入/未物化）时兜底，避免与已导入的世界书重复激活；
+  // 用户停用链接书时同样不回落到内嵌书，否则停用会被兜底内容抵消。
   const characterBook = follow ? character.card.data.characterBook : undefined
-  if (characterBook && !linkedImported) {
+  const linkedSuppressed = linkedName !== undefined && disabledAuto.has(linkedName)
+  if (characterBook && !linkedImported && !linkedSuppressed) {
     const embedded = parseCharacterBook(characterBook)
     books.unshift({
       name: `${characterName}:embedded`,
@@ -87,23 +91,28 @@ export function collectRegexScripts(
     const presetMatches = presetOwner !== undefined && presetOwner === activePreset
     return cardMatches || presetMatches
   })
+  // 2026-10-23 识别修复后，同名脚本可能在不同来源各持一条；同一轮生效集里同名
+  // 只应用一次（全局脚本排在最前，保持「全局优先」的既有语义）。
+  const byName = new Map<string, RegexScriptIR>()
+  for (const script of scripts) if (!byName.has(script.scriptName)) byName.set(script.scriptName, script)
+  const effective = [...byName.values()]
   // 运行期再并入当前角色卡的卡内脚本；按 scriptName 去重，全局（可编辑、
   // 已导入）优先，避免同一脚本被应用两次。
-  const names = new Set(scripts.map((script) => script.scriptName))
+  const names = new Set(effective.map((script) => script.scriptName))
   const cardScripts = character?.card.data.extensions['regex_scripts']
   if (cardScripts !== undefined && cardScripts !== null) {
     try {
       for (const script of parseRegexScripts(cardScripts)) {
         if (!names.has(script.scriptName)) {
           names.add(script.scriptName)
-          scripts.push(script)
+          effective.push(script)
         }
       }
     } catch {
       // A malformed card extension must not disable valid global scripts.
     }
   }
-  return scripts
+  return effective
 }
 
 /** Build the one-time, model-facing AgentTavern initialization context. */

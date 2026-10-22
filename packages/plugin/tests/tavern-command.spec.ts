@@ -1100,6 +1100,39 @@ describe('internal Tavern session bridge occupation', () => {
     }
   })
 
+  it('clears the previous card linked world left in activeWorlds by older versions when switching', async () => {
+    const before = await store.getState()
+    try {
+      await store.patchState({ activeCharacter: 'Lore Carrier', activeWorlds: ['Carrier Lore'] })
+      const res = makeResponse()
+      await apiHandler(makeRequest({ activeCharacter: CHARACTER }, '/api/dsh-soulmojito/state'), res)
+      expect(res.statusCode).toBe(200)
+      const state = await store.getState()
+      expect(state.activeCharacter).toBe(CHARACTER)
+      // 上一张卡的链接书是旧版本自动写入的残留：切卡时清掉，面板才不会继续显示启用。
+      expect(state.activeWorlds).not.toContain('Carrier Lore')
+      // 新卡的链接书仍由生成面自动并入，不写手动列表。
+      expect(state.activeWorlds).not.toContain('Linked Lore')
+    } finally {
+      await store.patchState({
+        activeCharacter: before.activeCharacter,
+        activeWorlds: before.activeWorlds,
+      })
+    }
+  })
+
+  it('honors disabledAutoWorlds from the world panel', async () => {
+    const before = await store.getState()
+    try {
+      const res = makeResponse()
+      await apiHandler(makeRequest({ disabledAutoWorlds: ['Linked Lore'] }, '/api/dsh-soulmojito/state'), res)
+      expect(res.statusCode).toBe(200)
+      expect((await store.getState()).disabledAutoWorlds).toEqual(['Linked Lore'])
+    } finally {
+      await store.patchState({ disabledAutoWorlds: before.disabledAutoWorlds ?? [] })
+    }
+  })
+
   it('does not copy a linked world into activeWorlds when a session binds the character', async () => {
     const before = await store.getState()
     try {

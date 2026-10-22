@@ -176,6 +176,18 @@ export interface TavernState {
    * 该预设处于 `activePreset` 时生效；非当前预设的脚本自动停用。
    */
   regexScriptPresetOwners?: Record<string, string>
+  /**
+   * 正则归属表结构版本（2026-10-23）：1/缺省 = 按 scriptName 合并、单归属；
+   * 2 = 每个来源（角色卡/预设）各持一条独立脚本，同名跨来源不再共用实体。
+   * 升级时由 `ensureRegexScriptOwners` 扫描一次来源并拆分旧数据。
+   */
+  regexOwnershipVersion?: number
+  /**
+   * 世界书跟随角色卡时被用户手动停用的链接书（2026-10-23）：面板把链接书显示为
+   * 自动启用；用户取消勾选时记在这里，生成面跳过该书。手动启用（activeWorlds）
+   * 优先于停用记录。
+   */
+  disabledAutoWorlds?: string[]
   /** STscript 全局变量。 */
   scriptGlobals: Record<string, string | number | boolean>
   /**
@@ -335,6 +347,7 @@ const DEFAULT_STATE: TavernState = {
   cardWorkbenchPresetEnabled: false,
   agentNovelPresetEnabled: false,
   worldFollowsCharacter: true,
+  disabledAutoWorlds: [],
   modelSelections: {},
   chats: {},
   regexScripts: [],
@@ -557,6 +570,7 @@ export class TavernStore {
   /**
    * 卡内嵌 regex_scripts 物化为全局脚本并登记归属；脚本格式非法时整体跳过，
    * 不阻断角色导入。归属让同一份全局脚本只在所属角色卡的会话里生效。
+   * 同名脚本若已归属另一张卡/预设，则为本卡另建一条（不顶掉别人的脚本）。
    */
   private async importEmbeddedRegex(card: CharacterCardIR): Promise<number> {
     const embedded = card.data.extensions['regex_scripts']
@@ -565,17 +579,20 @@ export class TavernStore {
       const imported = parseRegexScripts(embedded)
       if (imported.length === 0) return 0
       await this.updateState((current) => {
-        const merged = mergeRegexScripts(current.regexScripts, imported)
-        const owners = pruneRegexScriptOwners(current.regexScriptOwners, merged) ?? {}
-        const presetOwners = pruneRegexScriptOwners(current.regexScriptPresetOwners, merged)
-        for (const script of imported) {
-          owners[script.id] = card.data.name
-          if (presetOwners !== undefined) delete presetOwners[script.id]
-        }
+        const result = applySourceRegexScripts(
+          current.regexScripts,
+          current.regexScriptOwners,
+          current.regexScriptPresetOwners,
+          { kind: 'character', name: card.data.name },
+          imported,
+          { claimUnownedByName: false, replaceExisting: true },
+        )
         return {
-          regexScripts: merged,
-          regexScriptOwners: owners,
-          ...(presetOwners !== undefined ? { regexScriptPresetOwners: presetOwners } : {}),
+          regexScripts: result.scripts,
+          regexScriptOwners: pruneRegexScriptOwners(result.cardOwners, result.scripts) ?? {},
+          ...(result.presetOwners !== undefined
+            ? { regexScriptPresetOwners: pruneRegexScriptOwners(result.presetOwners, result.scripts) }
+            : {}),
         }
       })
       return imported.length
@@ -584,7 +601,10 @@ export class TavernStore {
     }
   }
 
-  /** 预设扩展袋里的 regex_scripts 物化为全局脚本并登记预设归属；非法脚本整批跳过。 */
+  /**
+   * 预设扩展袋里的 regex_scripts 物化为全局脚本并登记预设归属；非法脚本整批跳过。
+   * 同名跨来源同样各持一条，避免与角色卡脚本互相占用同一个开关。
+   */
   private async importEmbeddedPresetRegex(preset: Record<string, unknown>, presetName: string): Promise<number> {
     const embedded = presetExtensions(preset)['regex_scripts']
     if (embedded === undefined || embedded === null) return 0
@@ -592,17 +612,22 @@ export class TavernStore {
       const imported = parseRegexScripts(embedded)
       if (imported.length === 0) return 0
       await this.updateState((current) => {
-        const merged = mergeRegexScripts(current.regexScripts, imported)
-        const cardOwners = pruneRegexScriptOwners(current.regexScriptOwners, merged)
-        const presetOwners = pruneRegexScriptOwners(current.regexScriptPresetOwners, merged) ?? {}
-        for (const script of imported) {
-          if (cardOwners !== undefined) delete cardOwners[script.id]
-          presetOwners[script.id] = presetName
-        }
+        const result = applySourceRegexScripts(
+          current.regexScripts,
+          current.regexScriptOwners,
+          current.regexScriptPresetOwners,
+          { kind: 'preset', name: presetName },
+          imported,
+          { claimUnownedByName: false, replaceExisting: true },
+        )
         return {
-          regexScripts: merged,
-          ...(cardOwners !== undefined ? { regexScriptOwners: cardOwners } : {}),
-          regexScriptPresetOwners: presetOwners,
+          regexScripts: result.scripts,
+          ...(result.presetOwners !== undefined
+            ? { regexScriptPresetOwners: pruneRegexScriptOwners(result.presetOwners, result.scripts) }
+            : {}),
+          ...(current.regexScriptOwners !== undefined || Object.keys(result.cardOwners).length > 0
+            ? { regexScriptOwners: pruneRegexScriptOwners(result.cardOwners, result.scripts) ?? {} }
+            : {}),
         }
       })
       return imported.length
@@ -1232,12 +1257,12 @@ export class TavernStore {
 
   /**
    * 从已导入角色卡回填卡内嵌 regex_scripts（导入时自动物化上线前的存量卡）：
-   * 只补全局列表缺少的 scriptName，已存在的脚本保持原样；同名跨卡按角色名
-   * 排序先到先得；单条非法只跳过该条。返回本次扫描与写入计数。
+   * 只为「没有全局同名脚本、且本卡还没有自己的同名实体」的来源补条目；同名
+   * 跨卡各持一条（2026-10-23 识别修复）；单条非法只跳过该条。
    */
   async backfillRegexScriptsFromCharacters(): Promise<RegexBackfillReceipt> {
     const names = await this.listCharacters()
-    const known = new Set((await this.getState()).regexScripts.map((script) => script.scriptName))
+    const existing = await this.getState()
     const counters: RegexBackfillCounters = { skipped: 0, invalid: 0 }
     const pending: StagedRegexScript[] = []
     for (const name of names) {
@@ -1250,18 +1275,18 @@ export class TavernStore {
       if (file === undefined) continue
       const embedded = file.card.data.extensions['regex_scripts']
       if (embedded === undefined || embedded === null) continue
-      pending.push(...stageRegexBackfillEntries(embedded, known, counters, { kind: 'character', name: file.card.data.name }))
+      pending.push(...stageRegexBackfillEntries(embedded, existing, counters, { kind: 'character', name: file.card.data.name }))
     }
     return await this.commitRegexBackfill(pending, counters, names.length)
   }
 
   /**
    * 从已导入预设回填 extensions.regex_scripts（ST preset-scoped regex 的落盘
-   * 位置）：同角色卡回填语义——只补缺、跨预设先到先得、单条容错、一次写盘。
+   * 位置）：同角色卡回填语义——只补缺、同名跨来源各持一条、单条容错、一次写盘。
    */
   async backfillRegexScriptsFromPresets(): Promise<RegexBackfillReceipt> {
     const names = await this.listPresets()
-    const known = new Set((await this.getState()).regexScripts.map((script) => script.scriptName))
+    const existing = await this.getState()
     const counters: RegexBackfillCounters = { skipped: 0, invalid: 0 }
     const pending: StagedRegexScript[] = []
     for (const name of names) {
@@ -1274,12 +1299,12 @@ export class TavernStore {
       if (preset === undefined) continue
       const embedded = presetExtensions(preset)['regex_scripts']
       if (embedded === undefined || embedded === null) continue
-      pending.push(...stageRegexBackfillEntries(embedded, known, counters, { kind: 'preset', name }))
+      pending.push(...stageRegexBackfillEntries(embedded, existing, counters, { kind: 'preset', name }))
     }
     return await this.commitRegexBackfill(pending, counters, names.length)
   }
 
-  /** 回填收口：一次写盘，只追加状态里仍缺的 scriptName（并发导入时不重复）。 */
+  /** 回填收口：一次写盘，按 (来源, scriptName) 复用/追加（并发导入时不重复）。 */
   private async commitRegexBackfill(
     pending: StagedRegexScript[],
     counters: RegexBackfillCounters,
@@ -1290,109 +1315,100 @@ export class TavernStore {
     }
     let imported = 0
     await this.updateState((current) => {
-      const existing = new Set(current.regexScripts.map((script) => script.scriptName))
-      const additions = pending.filter(({ script }) => {
-        if (existing.has(script.scriptName)) return false
-        existing.add(script.scriptName)
-        return true
-      })
-      imported = additions.length
-      const regexScripts = [...current.regexScripts, ...additions.map(({ script }) => script)]
-      const withOwner = additions.filter(({ owner }) => owner !== undefined)
-      const cardOwnerAdds = withOwner.filter(({ owner }) => owner?.kind === 'character')
-      const presetOwnerAdds = withOwner.filter(({ owner }) => owner?.kind === 'preset')
-      const cardOwners = pruneRegexScriptOwners(current.regexScriptOwners, regexScripts)
-        ?? (cardOwnerAdds.length > 0 ? {} : undefined)
-      const presetOwners = pruneRegexScriptOwners(current.regexScriptPresetOwners, regexScripts)
-        ?? (presetOwnerAdds.length > 0 ? {} : undefined)
-      for (const { script, owner } of cardOwnerAdds) {
-        if (owner === undefined) continue
-        cardOwners![script.id] = owner.name
-        if (presetOwners !== undefined) delete presetOwners[script.id]
+      let scripts = current.regexScripts
+      let cardOwners = current.regexScriptOwners
+      let presetOwners = current.regexScriptPresetOwners
+      // 保持首次出现顺序；同一来源的多条一次性并发入。
+      const groups = new Map<string, { source: RegexScriptSource; scripts: RegexScriptIR[] }>()
+      for (const { script, owner } of pending) {
+        if (owner === undefined) {
+          // 无来源的暂存项按旧语义并入全局（当前两条回填路由都不会产生）。
+          scripts = mergeRegexScripts(scripts, [script])
+          continue
+        }
+        const key = `${owner.kind}\u0000${owner.name}`
+        const group = groups.get(key)
+        if (group === undefined) groups.set(key, { source: owner, scripts: [script] })
+        else group.scripts.push(script)
       }
-      for (const { script, owner } of presetOwnerAdds) {
-        if (owner === undefined) continue
-        presetOwners![script.id] = owner.name
-        if (cardOwners !== undefined) delete cardOwners[script.id]
+      for (const { source, scripts: incoming } of groups.values()) {
+        const result = applySourceRegexScripts(scripts, cardOwners, presetOwners, source, incoming, {
+          claimUnownedByName: true,
+          replaceExisting: false,
+        })
+        scripts = result.scripts
+        cardOwners = result.cardOwners
+        presetOwners = result.presetOwners
+        imported += result.added
       }
       return {
-        regexScripts,
-        ...(cardOwners !== undefined ? { regexScriptOwners: cardOwners } : {}),
-        ...(presetOwners !== undefined ? { regexScriptPresetOwners: presetOwners } : {}),
+        regexScripts: scripts,
+        regexScriptOwners: pruneRegexScriptOwners(cardOwners ?? {}, scripts) ?? {},
+        regexScriptPresetOwners: pruneRegexScriptOwners(presetOwners ?? {}, scripts) ?? {},
       }
     })
     return { imported, skipped: counters.skipped + pending.length - imported, invalid: counters.invalid, scanned }
   }
 
   /**
-   * 存量迁移：旧 state 缺少归属表时，扫描全部角色卡/预设，把全局列表里与内嵌
-   * `regex_scripts` 同名的条目登记到对应来源。两张表各自只迁移一次（写盘后字段
-   * 存在即跳过）；来源文件不可读/条目非法时跳过该来源，不阻断面板加载。
+   * 归属表迁移（版本 2，2026-10-23）：扫描全部角色卡/预设，确保每个来源的
+   * 每条内嵌脚本都有自己的实体与归属；同名跨来源拆分，修复「别的卡同名脚本
+   * 把本卡脚本占掉后开关失灵」的识别问题。只跑一次（写盘版本号后跳过）；
+   * 来源文件不可读/条目非法时跳过该来源，不阻断面板加载。
    */
   async ensureRegexScriptOwners(): Promise<void> {
     const current = await this.getState()
-    const needCardOwners = current.regexScriptOwners === undefined
-    const needPresetOwners = current.regexScriptPresetOwners === undefined
-    if (!needCardOwners && !needPresetOwners) return
-    const known = new Set(current.regexScripts.map((script) => script.scriptName))
-    const cardByName = new Map<string, string>()
-    const presetByName = new Map<string, string>()
+    const needsMigration = current.regexScriptOwners === undefined
+      || current.regexScriptPresetOwners === undefined
+      || (current.regexOwnershipVersion ?? 1) < 2
+    if (!needsMigration) return
 
-    if (needCardOwners) {
-      for (const name of (await this.listCharacters()).sort()) {
-        let file: CharacterFile | undefined
-        try {
-          file = await this.getCharacter(name)
-        } catch {
-          continue
-        }
-        if (file === undefined) continue
-        const embedded = file.card.data.extensions['regex_scripts']
-        if (embedded === undefined || embedded === null) continue
-        for (const script of parseBackfillEntries(embedded)) {
-          if (!known.has(script.scriptName) || cardByName.has(script.scriptName)) continue
-          cardByName.set(script.scriptName, file.card.data.name)
-        }
+    const sources: Array<{ source: RegexScriptSource; scripts: RegexScriptIR[] }> = []
+    for (const name of (await this.listCharacters()).sort()) {
+      let file: CharacterFile | undefined
+      try {
+        file = await this.getCharacter(name)
+      } catch {
+        continue
       }
+      if (file === undefined) continue
+      const embedded = file.card.data.extensions['regex_scripts']
+      if (embedded === undefined || embedded === null) continue
+      sources.push({ source: { kind: 'character', name: file.card.data.name }, scripts: parseBackfillEntries(embedded) })
+    }
+    for (const name of (await this.listPresets()).sort()) {
+      let preset: Record<string, unknown> | undefined
+      try {
+        preset = await this.getPreset(name)
+      } catch {
+        continue
+      }
+      if (preset === undefined) continue
+      const embedded = presetExtensions(preset)['regex_scripts']
+      if (embedded === undefined || embedded === null) continue
+      sources.push({ source: { kind: 'preset', name }, scripts: parseBackfillEntries(embedded) })
     }
 
-    if (needPresetOwners) {
-      for (const name of (await this.listPresets()).sort()) {
-        let preset: Record<string, unknown> | undefined
-        try {
-          preset = await this.getPreset(name)
-        } catch {
-          continue
-        }
-        if (preset === undefined) continue
-        const embedded = presetExtensions(preset)['regex_scripts']
-        if (embedded === undefined || embedded === null) continue
-        for (const script of parseBackfillEntries(embedded)) {
-          if (!known.has(script.scriptName) || presetByName.has(script.scriptName)) continue
-          presetByName.set(script.scriptName, name)
-        }
+    await this.updateState((state) => {
+      let scripts = state.regexScripts
+      let cardOwners = state.regexScriptOwners
+      let presetOwners = state.regexScriptPresetOwners
+      for (const { source, scripts: incoming } of sources) {
+        const result = applySourceRegexScripts(scripts, cardOwners, presetOwners, source, incoming, {
+          claimUnownedByName: true,
+          replaceExisting: false,
+        })
+        scripts = result.scripts
+        cardOwners = result.cardOwners
+        presetOwners = result.presetOwners
       }
-    }
-
-    const cardOwners: Record<string, string> = {}
-    const presetOwners: Record<string, string> = {}
-    for (const script of current.regexScripts) {
-      const existingCardOwner = current.regexScriptOwners?.[script.id]
-      const existingPresetOwner = current.regexScriptPresetOwners?.[script.id]
-      const cardOwner = cardByName.get(script.scriptName)
-      const presetOwner = presetByName.get(script.scriptName)
-      // 同名同时出现在卡与预设时，已有归属表优先；两张表都缺省时卡归属优先，
-      // 避免迁移凭空造出双重归属把脚本带到不属于它的会话。
-      if (cardOwner !== undefined && needCardOwners && existingPresetOwner === undefined) {
-        cardOwners[script.id] = cardOwner
-      } else if (presetOwner !== undefined && needPresetOwners && existingCardOwner === undefined) {
-        presetOwners[script.id] = presetOwner
+      return {
+        regexScripts: scripts,
+        regexScriptOwners: pruneRegexScriptOwners(cardOwners ?? {}, scripts) ?? {},
+        regexScriptPresetOwners: pruneRegexScriptOwners(presetOwners ?? {}, scripts) ?? {},
+        regexOwnershipVersion: 2,
       }
-    }
-    await this.updateState((state) => ({
-      ...(state.regexScriptOwners === undefined && needCardOwners ? { regexScriptOwners: cardOwners } : {}),
-      ...(state.regexScriptPresetOwners === undefined && needPresetOwners ? { regexScriptPresetOwners: presetOwners } : {}),
-    }))
+    })
   }
 
   /* ------------------------------ 内部 ------------------------------ */
@@ -1425,6 +1441,10 @@ export class TavernStore {
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
       agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
       worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
+      disabledAutoWorlds: normalizeStringList(parsed.disabledAutoWorlds),
+      ...(typeof parsed.regexOwnershipVersion === 'number' && Number.isFinite(parsed.regexOwnershipVersion)
+        ? { regexOwnershipVersion: parsed.regexOwnershipVersion }
+        : {}),
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
@@ -1606,6 +1626,21 @@ interface StagedRegexScript {
   owner?: { kind: 'character' | 'preset'; name: string }
 }
 
+/** 字符串列表容错：去空白、去重；非法形状按空表。 */
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const trimmed = item.trim()
+    if (trimmed === '' || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    result.push(trimmed)
+  }
+  return result
+}
+
 /**
  * 归属表读取容错：字段缺省保持 undefined（触发存量迁移），非法形状按空表，
  * 非字符串/空白归属丢弃。
@@ -1665,11 +1700,19 @@ function parseBackfillEntries(embedded: unknown): RegexScriptIR[] {
   return scripts
 }
 
+/**
+ * 单个来源的内嵌脚本逐条解析并筛掉不需要回填的条目：本来源已有同名实体、或
+ * 已存在同名全局脚本（无归属）时计入 skipped；非法条目计入 invalid。
+ */
 function stageRegexBackfillEntries(
   embedded: unknown,
-  known: Set<string>,
+  existing: {
+    regexScripts: RegexScriptIR[]
+    regexScriptOwners?: Record<string, string>
+    regexScriptPresetOwners?: Record<string, string>
+  },
   counters: RegexBackfillCounters,
-  owner?: { kind: 'character' | 'preset'; name: string },
+  owner: { kind: 'character' | 'preset'; name: string },
 ): StagedRegexScript[] {
   let entries: unknown[]
   try {
@@ -1678,6 +1721,15 @@ function stageRegexBackfillEntries(
     counters.invalid += 1
     return []
   }
+  const ownedNames = new Set(existing.regexScripts
+    .filter((script) => owner.kind === 'character'
+      ? existing.regexScriptOwners?.[script.id] === owner.name
+      : existing.regexScriptPresetOwners?.[script.id] === owner.name)
+    .map((script) => script.scriptName))
+  const globalNames = new Set(existing.regexScripts
+    .filter((script) => existing.regexScriptOwners?.[script.id] === undefined
+      && existing.regexScriptPresetOwners?.[script.id] === undefined)
+    .map((script) => script.scriptName))
   const staged: StagedRegexScript[] = []
   entries.forEach((entry, index) => {
     let script: RegexScriptIR
@@ -1687,14 +1739,92 @@ function stageRegexBackfillEntries(
       counters.invalid += 1
       return
     }
-    if (known.has(script.scriptName)) {
+    if (ownedNames.has(script.scriptName) || globalNames.has(script.scriptName)) {
       counters.skipped += 1
       return
     }
-    known.add(script.scriptName)
-    staged.push(owner === undefined ? { script } : { script, owner })
+    staged.push({ script, owner })
   })
   return staged
+}
+
+/** Regex 来源标识（角色卡/预设）；同名脚本在跨来源时各持一条独立实体。 */
+export interface RegexScriptSource {
+  kind: 'character' | 'preset'
+  name: string
+}
+
+interface SourceRegexReconcile {
+  scripts: RegexScriptIR[]
+  cardOwners: Record<string, string>
+  presetOwners?: Record<string, string>
+  added: number
+}
+
+/**
+ * 把某个来源的内嵌脚本并入全局列表（2026-10-23 识别修复）：按
+ * (scriptName, 来源) 复用实体，跨来源同名脚本各建一条，避免一张卡的脚本被
+ * 另一张卡同名脚本「顶掉」后既不可见也不可切换。仅当同名条目无归属（全局
+ * 脚本）且调用方允许时按旧语义认领，保持回填期的「全局优先」。
+ */
+function applySourceRegexScripts(
+  current: RegexScriptIR[],
+  cardOwners: Record<string, string> | undefined,
+  presetOwners: Record<string, string> | undefined,
+  source: RegexScriptSource,
+  incoming: RegexScriptIR[],
+  options: { claimUnownedByName: boolean; replaceExisting: boolean },
+): SourceRegexReconcile {
+  const scripts = [...current]
+  const owners: Record<string, string> = { ...(cardOwners ?? {}) }
+  let preset = presetOwners === undefined ? undefined : { ...presetOwners }
+  const ownerName = (id: string): string | undefined => owners[id] ?? preset?.[id]
+  const ownedBySource = (entry: RegexScriptIR): boolean => source.kind === 'character'
+    ? owners[entry.id] === source.name
+    : preset?.[entry.id] === source.name
+  const assign = (id: string): void => {
+    if (source.kind === 'character') {
+      owners[id] = source.name
+      if (preset !== undefined) delete preset[id]
+      return
+    }
+    preset = preset ?? {}
+    preset[id] = source.name
+    delete owners[id]
+  }
+  let added = 0
+  for (const script of incoming) {
+    let index = scripts.findIndex((entry) => entry.scriptName === script.scriptName && ownedBySource(entry))
+    if (index < 0) {
+      // 同一来源重导/回填时 id 通常稳定；同 id + 同名且尚无人认领时直接接管。
+      index = scripts.findIndex((entry) => entry.id === script.id
+        && entry.scriptName === script.scriptName
+        && ownerName(entry.id) === undefined)
+    }
+    if (index < 0 && options.claimUnownedByName) {
+      index = scripts.findIndex((entry) => entry.scriptName === script.scriptName && ownerName(entry.id) === undefined)
+    }
+    if (index >= 0) {
+      const id = scripts[index]!.id
+      if (options.replaceExisting) scripts[index] = { ...script, id }
+      assign(id)
+      continue
+    }
+    const id = uniqueRegexScriptId(script.id, scripts)
+    scripts.push({ ...script, id })
+    assign(id)
+    added += 1
+  }
+  return { scripts, cardOwners: owners, ...(preset !== undefined ? { presetOwners: preset } : {}), added }
+}
+
+function uniqueRegexScriptId(base: string, scripts: RegexScriptIR[]): string {
+  const used = new Set(scripts.map((script) => script.id))
+  const seed = base.trim() !== '' ? base : 'regex'
+  if (!used.has(seed)) return seed
+  let counter = 2
+  while (used.has(`${seed}#${counter}`)) counter += 1
+  return `${seed}#${counter}`
 }
 
 /** 按 scriptName 合并脚本；同名覆盖，新名追加（保持既有顺序）。 */

@@ -44,9 +44,9 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 ### 资产与 SillyTavern 兼容
 
 - **角色卡 V1/V2/V3** — JSON、PNG `chara`/`ccv3`、CHARX `card.json` 与 `embeded://` 资源；导出尽量保留原始容器与内嵌资源；未知字段原样透传。
-- **世界书 / Lorebook** — 递归扫描、副键逻辑、概率、预算、inclusion group、sticky/cooldown/delay 与位置分发。卡绑定的世界书（`extensions.world`）只在**该角色卡的会话**里自动并入；手动 `activeWorlds` 勾选保持用户自己的全局选择，插件不代改。
+- **世界书 / Lorebook** — 递归扫描、副键逻辑、概率、预算、inclusion group、sticky/cooldown/delay 与位置分发。卡绑定的世界书（`extensions.world`）只在**该角色卡的会话**里自动并入，面板按实际生效状态显示勾选（「自动」徽标）；取消勾选会停用该书。手动 `activeWorlds` 仍代表用户的全局选择，插件不把链接书写进去；切换角色卡会清理旧版本残留的手动条目。
 - **Chat Completion preset** — `prompts[]` / `prompt_order[]` / marker 与采样参数；context、instruct、textgen 走高级 JSON 编辑全部字段。
-- **正则脚本** — ST regex 扩展形态导入，全局 + 卡级 + 预设内嵌（`extensions.regex_scripts`）合并，存量卡与预设可在面板一键回填；卡级脚本跟随角色卡，只在所属卡的会话里自动启用，别的会话自动停用；预设级脚本跟随 `activePreset`，只在所属预设激活时生效；`USER_INPUT/AI_OUTPUT/WORLD_INFO/REASONING` placement、`minDepth/maxDepth`、`substituteRegex`、`trimStrings`。
+- **正则脚本** — ST regex 扩展形态导入，全局 + 卡级 + 预设内嵌（`extensions.regex_scripts`）合并，存量卡与预设可在面板一键回填；卡级脚本跟随角色卡、预设级脚本跟随 `activePreset`。同名脚本在不同来源各持一条实体（互不顶掉），面板开关可切换并提示当前是否生效，也可一键「转为全局」；`USER_INPUT/AI_OUTPUT/WORLD_INFO/REASONING` placement、`minDepth/maxDepth`、`substituteRegex`、`trimStrings`。
 - **STscript** — 管道、变量（聊天局部 + 全局）、`/if` 条件、随机/掷骰与聊天动作（`/send`、`/trigger`、`/regenerate`、`/cut`），composer `/` 前缀触发。
 - **Prompt Template（EJS）** — `node:vm` 沙箱执行 `<% %>`；`getvar/setvar` 族作用域变量、`[GENERATE:*]`/`[RENDER:*]` 注入、`@INJECT` 整消息插队、`getwi/getchar/getpreset` 资产读取。详见 [`docs/proposals/0008-prompt-template.md`](docs/proposals/0008-prompt-template.md)。
 - **Persona** — PNG 导入（内嵌描述提取）、头像、增删改、激活选择与 `position/depth/role` 注入。

@@ -50,6 +50,7 @@ import {
   requestedContextMode,
   TavernArchitectureConflictError,
 } from '../session/binding.js'
+import { activeCharacterPatch } from '../session/active-character.js'
 import { normalizeChatId } from '../session/trace.js'
 import { prepareInternalWorkspace, prepareWorkbenchWorkspace } from '../workspace.js'
 import { readJson, sendJson } from './io.js'
@@ -425,11 +426,25 @@ export async function handleApi(ctx, req, res) {
     }
     // 世界书跟随角色卡是**会话级**行为（2026-10-22 用户需求）：绑定的世界书只在
     // 该角色卡的会话里由 collectWorldInfoBooks 自动并入；这里不再写 activeWorlds。
-    // activeWorlds 只代表用户的手动选择，插件不替用户增删。
+    // 例外（2026-10-23 识别修复）：切换角色时清掉上一张卡链接书残留的手动条目，
+    // 否则换卡后面板仍把旧书显示成启用（旧版本自动写入的污染）。
+    const switchingActiveCharacter = typeof body.activeCharacter === 'string' || body.activeCharacter === null
+    const requestedActiveCharacter = typeof body.activeCharacter === 'string'
+      ? (body.activeCharacter || undefined)
+      : undefined
+    let requestedActiveWorlds = Array.isArray(body.activeWorlds)
+      ? body.activeWorlds.filter((x) => typeof x === 'string')
+      : undefined
+    if (switchingActiveCharacter && requestedActiveWorlds === undefined) {
+      const current = await db.getState()
+      const switched = await activeCharacterPatch(db, current, requestedActiveCharacter)
+      requestedActiveWorlds = switched.activeWorlds
+    }
     const patch = {
-      ...(typeof body.activeCharacter === 'string' || body.activeCharacter === null ? { activeCharacter: body.activeCharacter || undefined } : {}),
-      ...(Array.isArray(body.activeWorlds)
-        ? { activeWorlds: body.activeWorlds.filter((x) => typeof x === 'string') }
+      ...(switchingActiveCharacter ? { activeCharacter: requestedActiveCharacter } : {}),
+      ...(requestedActiveWorlds !== undefined ? { activeWorlds: requestedActiveWorlds } : {}),
+      ...(Array.isArray(body.disabledAutoWorlds)
+        ? { disabledAutoWorlds: body.disabledAutoWorlds.filter((x) => typeof x === 'string') }
         : {}),
       ...(typeof body.activePreset === 'string' || body.activePreset === null ? { activePreset: body.activePreset || undefined } : {}),
       ...(typeof body.activePersona === 'string' || body.activePersona === null ? { activePersona: body.activePersona || undefined } : {}),

@@ -1,4 +1,5 @@
 import { getAgentTavernCapabilities, getAgentTavernCapabilitiesPromise } from '../runtime.js'
+import { activeCharacterPatch } from './active-character.js'
 
 export class TavernArchitectureConflictError extends Error {
   readonly code = 'TAVERN_ARCHITECTURE_CONFLICT'
@@ -21,7 +22,10 @@ export async function bindSession(
   // 后为纯读），保证本会话第一次生成就按角色卡过滤。
   await db.ensureRegexScriptOwners()
   // 世界书跟随角色卡是会话级行为：绑定的世界书由 collectWorldInfoBooks 按当前
-  // 会话角色自动并入，不写 activeWorlds（手动激活列表归用户所有）。
+  // 会话角色自动并入，不写 activeWorlds（手动激活列表归用户所有）。切换角色时
+  // 只清掉上一张卡链接书残留的手动条目（2026-10-23 识别修复），不新增条目。
+  const current = group ? undefined : await db.getState()
+  const switched = current === undefined ? undefined : await activeCharacterPatch(db, current, character)
   return db.updateState((state) => {
     const existing = state.sessionBindings[sessionId]
     const sameAgentBinding = existing?.architecture === 'agent-tavern'
@@ -37,6 +41,7 @@ export async function bindSession(
       : { architecture: 'st', character, chatId, ...(group ? { group: true } : {}) }
     return {
       activeCharacter: group ? state.activeCharacter : character,
+      ...(switched?.activeWorlds !== undefined ? { activeWorlds: switched.activeWorlds } : {}),
       sessionBindings: {
         ...state.sessionBindings,
         [sessionId]: binding,

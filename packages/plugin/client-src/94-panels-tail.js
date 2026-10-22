@@ -215,6 +215,7 @@
       // 分区清单过滤（2026-10-21 导航重做）：组件内临时态——过滤词不跨面板打开
       // 保留（重开面板从完整清单开始，比记住上次的过滤词更符合「打开即全貌」）。
       const [filter, setFilter] = useState('')
+      const navRef = useRef(null)
       const navlistRef = useRef(null)
       const bodyRef = useRef(null)
       // 分区滚动位置记忆：切走时记下 scrollTop、切回时还原——长清单（聊天/
@@ -232,6 +233,21 @@
         }
         body.scrollTop = scrollMemory.current[section] ?? 0
       }, [section])
+      // Mobile section strip: reveal the active chip when the section changes
+      // outside the strip (overview stat cards, session header entries). The
+      // desktop nav is a fixed-width column, so the overflow guard is a no-op.
+      useEffect(() => {
+        if (!state.panelOpen) return
+        const nav = navRef.current
+        if (nav === null || nav.scrollWidth <= nav.clientWidth) return
+        const chip = Array.from(nav.querySelectorAll('[data-dt-section]'))
+          .find((button) => button.getAttribute('data-dt-section') === section)
+        if (chip === undefined) return
+        const navRect = nav.getBoundingClientRect()
+        const chipRect = chip.getBoundingClientRect()
+        const left = nav.scrollLeft + chipRect.left - navRect.left - (navRect.width - chipRect.width) / 2
+        nav.scrollLeft = Math.max(0, left)
+      }, [section, state.panelOpen])
       const stamp = state.bootstrap.version || state.bootstrap.commit
         ? `v${state.bootstrap.version || '?'}${state.bootstrap.commit ? ` (${state.bootstrap.commit})` : ''}`
         : ''
@@ -293,7 +309,7 @@
         // 分组分区清单——分区数会随 Mod 面板注册增长，长到溢出时原来整列滚动
         // 会把「这是酒馆面板」的标题一起卷走（品牌钉住是 2026-10-14 反馈的
         // 既有契约，过滤框与其同段）。
-        h('nav', { className: 'dt-panel-nav', 'aria-label': t('panel.nav') },
+        h('nav', { className: 'dt-panel-nav', 'aria-label': t('panel.nav'), ref: navRef },
           h('div', { className: 'dt-panel-brand' },
             h(SoulMojitoLogo),
             h('div', { className: 'dt-panel-brand-copy' },

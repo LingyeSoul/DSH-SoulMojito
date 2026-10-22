@@ -112,6 +112,13 @@
       'settings.regexPresetOwnerActive': 'Auto-enabled while preset {name} is active',
       'settings.regexPresetOwnerInactive': 'Auto-disabled here: this script belongs to preset {name}',
       'settings.regexAutoInactive': 'Auto-disabled: neither its character card nor its preset is active here',
+      // Ownership feedback and release (2026-10-23: toggles used to do nothing).
+      'settings.regexCardInactiveNotice': '"{name}" belongs to card "{owner}". Its switch was saved, but it only applies in {owner}\'s sessions.',
+      'settings.regexPresetInactiveNotice': '"{name}" belongs to preset "{owner}". Its switch was saved, but it only applies while preset {owner} is active.',
+      'settings.regexRelease': 'Remove "{name}" from "{owner}" and make it global',
+      'settings.regexReleaseShort': 'global',
+      'settings.regexReleaseConfirm': 'Remove "{name}" from "{owner}" and make it a global script? It will then run in every session.',
+      'settings.regexReleased': '"{name}" is now a global script.',
       'panel.title': 'Tavern management',
       'panel.close': 'Close panel',
       'panel.open': 'Open Tavern panel',
@@ -320,9 +327,11 @@
       'panel.characters.duplicate': 'Character "{name}" already exists; creating it again would overwrite that card. Pick another name or delete the existing card first.',
       'panel.characters.createFailed': 'Failed to create card: {message}',
       'panel.worlds.entries': '{count} entries',
-      // Card scoped world activation (2026-10-22): the checkbox is the manual list.
+      // Card scoped world activation (2026-10-22; 2026-10-23 shows the effective state):
+      // the linked book is checked automatically and unchecking records a suppression.
       'panel.worlds.autoFollow': 'auto',
-      'panel.worlds.autoFollowHint': 'World books linked to the current character card activate only in that card\'s sessions. The checkbox is your manual global selection and is never changed by the plugin.',
+      'panel.worlds.autoFollowOff': 'off',
+      'panel.worlds.autoFollowHint': 'The world book linked to the current character card is auto-enabled in that card\'s sessions and shows as checked. Unchecking disables it (shown as off); checking it manually enables it globally.',
       'panel.worlds.search': 'Search entries',
       'panel.worlds.noEntries': 'No entries match the search.',
       'panel.worlds.delete': 'Delete {name}',
