@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import {
-  encodeChunk,
-  encodeTextChunk,
   extractCardJson,
   isPng,
   parsePngChunks,
@@ -12,24 +8,7 @@ import {
   utf8ToBase64,
   writeTextChunks,
 } from '../src/index.js'
-import { deflateSync } from 'node:zlib'
-
-const fixturesDir = fileURLToPath(new URL('./fixtures', import.meta.url))
-
-/** 构造 1x1 灰度最小合法 PNG（chunk/CRC 用本库自举生成）。 */
-function minimalPng(): Uint8Array {
-  const signature = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
-  const ihdr = new Uint8Array([0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0])
-  const idat = deflateSync(Uint8Array.from([0, 0x42]))
-  const total = signature.length + ihdr.length + 12 + idat.length + 12 + 12
-  const out = new Uint8Array(total)
-  let at = 0
-  out.set(signature, at); at += signature.length
-  const ihdrChunk = encodeChunk('IHDR', ihdr); out.set(ihdrChunk, at); at += ihdrChunk.length
-  const idatChunk = encodeChunk('IDAT', new Uint8Array(idat)); out.set(idatChunk, at); at += idatChunk.length
-  const iendChunk = encodeChunk('IEND', new Uint8Array(0)); out.set(iendChunk, at)
-  return out
-}
+import { minimalPng, syntheticCardPng } from './helpers/synthetic.js'
 
 describe('png chunk 解析', () => {
   it('最小 PNG 可解析出 IHDR/IDAT/IEND', () => {
@@ -77,12 +56,12 @@ describe('tEXt chunk 读写', () => {
 })
 
 describe('角色卡数据提取', () => {
-  it('真实 ExampleCard.png 含可提取卡 JSON', () => {
-    const png = new Uint8Array(readFileSync(`${fixturesDir}/ExampleCard.png`))
+  it('合成卡 PNG 含可提取卡 JSON', () => {
+    const png = syntheticCardPng()
     const json = extractCardJson(png)
     expect(json).toBeTruthy()
     const card = JSON.parse(json!)
-    expect(typeof card).toBe('object')
+    expect(card.name).toBe('ExampleCard')
   })
 
   it('无 chara/ccv3 的 PNG 返回 null', () => {

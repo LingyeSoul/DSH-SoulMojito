@@ -1,6 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import {
   normalizeEntry,
   parseCharacterBook,
@@ -9,20 +7,18 @@ import {
   stableDeepEqual,
   toCharacterBook,
 } from '../src/index.js'
+import { syntheticWorldRaw } from './helpers/synthetic.js'
 
-const fixturesDir = fileURLToPath(new URL('./fixtures', import.meta.url))
-const eldoriaRaw = () => JSON.parse(readFileSync(`${fixturesDir}/ExampleWorld.json`, 'utf8')) as Record<string, unknown>
-
-describe('真实世界书：ExampleWorld.json', () => {
+describe('合成世界书：ExampleWorld', () => {
   it('解析得到升序 uid 条目', () => {
-    const ir = parseWorldInfoFile('ExampleWorld', eldoriaRaw())
+    const ir = parseWorldInfoFile('ExampleWorld', syntheticWorldRaw())
     expect(ir.entries.length).toBeGreaterThan(3)
     expect(ir.entries[0]!.uid).toBe(0)
     expect(ir.entries.map((e) => e.uid)).toEqual([...ir.entries.map((e) => e.uid)].sort((a, b) => a - b))
   })
 
   it('值保真：原对象字段值逐一保留', () => {
-    const raw = eldoriaRaw()
+    const raw = syntheticWorldRaw()
     const ir = parseWorldInfoFile('ExampleWorld', raw)
     for (const [uid, rawEntry] of Object.entries(raw['entries'] as Record<string, Record<string, unknown>>)) {
       const entry = ir.entries.find((e) => e.uid === Number(uid))!
@@ -36,13 +32,13 @@ describe('真实世界书：ExampleWorld.json', () => {
   })
 
   it('序列化幂等：parse(serialize(parse(x))) ≡ parse(x)', () => {
-    const once = parseWorldInfoFile('ExampleWorld', eldoriaRaw())
+    const once = parseWorldInfoFile('ExampleWorld', syntheticWorldRaw())
     const twice = parseWorldInfoFile('ExampleWorld', serializeWorldInfoFile(once))
     expect(stableDeepEqual(once, twice)).toBe(true)
   })
 
   it('序列化输出是合法 ST 文件形态（entries 为 map）', () => {
-    const out = serializeWorldInfoFile(parseWorldInfoFile('ExampleWorld', eldoriaRaw()))
+    const out = serializeWorldInfoFile(parseWorldInfoFile('ExampleWorld', syntheticWorldRaw()))
     expect(typeof out['entries']).toBe('object')
     expect(Array.isArray(out['entries'])).toBe(false)
   })

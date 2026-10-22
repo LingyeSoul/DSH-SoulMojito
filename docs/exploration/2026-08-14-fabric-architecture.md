@@ -1,6 +1,6 @@
 # Fabric 架构调研（浅克隆 github.com/omdsh-dev/fabric @ 87d31bc）
 
-> 调研日期：2026-08-14。所有文件引用基于浅克隆根 `E:\WorkProject\fabric\`。
+> 调研日期：2026-08-14。所有文件引用基于浅克隆根 `<local clone>\fabric\`。
 > 用途：评估 Cordis Fabric 作为「dsh 酒馆化」深度改造层的可行性，盘点全部可挂载扩展点。
 
 ## 0. 定位

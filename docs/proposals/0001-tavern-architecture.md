@@ -131,7 +131,7 @@ dsh plugin --profile web add ./packages/plugin
 ## 8. 已验证范围
 
 - 10 个测试文件、77 项测试。
-- 真实 ExampleCard PNG、ExampleWorld World Info、Default Chat Completion preset。
+- 合成卡 PNG 夹具（`ExampleCard`）、合成世界书夹具（`ExampleWorld`）、Default Chat Completion preset。
 - 默认 DSH provider/model 的真实流式生成。
 - send、Stop、edit、swipe、regenerate、rename、delete、session archive。
 - 跨标签页 revision 冲突。

@@ -36,7 +36,7 @@
    `hostVersion: '0.4.1'`——用一个不存在的旧宿主模拟装载，示例对真实宿主已经
    blocked 的事实被绿灯掩盖。`tavern-mods*.spec.ts` 里共 9 处同样硬编码（其余
    测的是合成 Mod 的通用宿主行为，版本左值无意义，不在本修范围）。
-6. **用户现场**：`C:\Users\%USERNAME%\.dsh\tavern\mods\dsh-tavern.story-clock\` 是
+6. **用户现场**：`%USERPROFILE%\.dsh\tavern\mods\dsh-tavern.story-clock\` 是
    0.4.1 时代的旧拷贝（无 `buttons` 字段、index.mjs 无 onButton），与仓库 HEAD
    版本不同源——两边要分别处理。
 

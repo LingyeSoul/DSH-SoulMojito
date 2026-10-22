@@ -1,10 +1,10 @@
 # 决策：角色卡 IR 的 raw 袋必须存整个顶层对象（含 V1 兼容字段）
 
-日期：2026-08-14 · 状态：已实施（tavern-format）
+日期：2026-08-14 · 状态：已实施（tavern-format）。2026-10-22 起夹具改为合成卡（`ExampleCard`），按真实卡三层结构复刻；真实卡素材不再入库。
 
 ## 背景
 
-用 ST 官方示例卡 `default_ExampleCard.png`（同时含 `chara` 与 `ccv3` tEXt chunk）做
+用 ST 官方示例卡（下称「示例卡」，真实文件名与卡名从略；同时含 `chara` 与 `ccv3` tEXt chunk）做
 roundtrip 测试时发现：**ST 导出的真实卡 JSON 是三层并存形态**——
 
 ```text

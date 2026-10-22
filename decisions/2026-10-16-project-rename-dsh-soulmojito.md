@@ -55,7 +55,7 @@
 
 ## 边界与交接
 
-- 本地目录 `e:\WorkProject\dsh-tavern` 不改名（用户手动；IDE/宿主锁与当前会话 cwd 均在占用）。GitHub 仓库改名由用户执行（GitHub 自动重定向旧 URL；改名前本仓库代码已指向新 slug，改名前后自更新链路都成立——改名后新 slug 解析，改名前旧 slug 由重定向兜底）。
+- 本地目录 `<local checkout>\dsh-tavern` 不改名（用户手动；IDE/宿主锁与当前会话 cwd 均在占用）。GitHub 仓库改名由用户执行（GitHub 自动重定向旧 URL；改名前本仓库代码已指向新 slug，改名前后自更新链路都成立——改名后新 slug 解析，改名前旧 slug 由重定向兜底）。
 - 存量安装迁移 = 一次 `remove dsh-tavern` + 重装（见 README「从旧名迁移」）；数据零迁移。
 - 宿主侧对 v4 producer-owned kind（`plugin:dsh-tavern`）在旧会话工件里的校验**不在插件控制面**（预期按不透明字符串处理，与宿主迁移产物同款），如实标注为外部依赖；如未来宿主收紧生产者名单校验，退化面是旧会话 marker 识别，兜底通道为插件侧读双认不变。
 - 版本 0.6.5 不升版：改名非特性增量，分支头即发布通道；`dist` 随 `pnpm check` 重建入库。

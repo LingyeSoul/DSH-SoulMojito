@@ -1,6 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import {
   decodeCharacterCard,
   encodeCharacterCardJson,
@@ -9,29 +7,27 @@ import {
   readTextChunks,
   stableDeepEqual,
 } from '../src/index.js'
+import { minimalPng, syntheticCardPng, syntheticCardRaw } from './helpers/synthetic.js'
 
-const fixturesDir = fileURLToPath(new URL('./fixtures', import.meta.url))
-const seraphinaPng = () => new Uint8Array(readFileSync(`${fixturesDir}/ExampleCard.png`))
-
-describe('真实卡解析：ExampleCard.png', () => {
+describe('合成卡解析：ExampleCard', () => {
   it('decode 得到合法卡', () => {
-    const ir = decodeCharacterCard(seraphinaPng())
+    const ir = decodeCharacterCard(syntheticCardPng())
     expect(ir.data.name).toBe('ExampleCard')
     expect(['chara_card_v2', 'chara_card_v3']).toContain(ir.spec)
     expect(ir.data.firstMes.length).toBeGreaterThan(0)
   })
 
   it('PNG roundtrip：encode → decode 与首次 decode 语义一致', () => {
-    const first = decodeCharacterCard(seraphinaPng())
-    const encoded = encodeCharacterCardPng(first, seraphinaPng())
+    const first = decodeCharacterCard(syntheticCardPng())
+    const encoded = encodeCharacterCardPng(first, syntheticCardPng())
     const second = decodeCharacterCard(encoded)
     expect(stableDeepEqual(first, second)).toBe(true)
   })
 
   it('encode 产出的 JSON 与原卡 chunk JSON 语义等价（未知字段零丢失）', () => {
-    const original = JSON.parse(extractCardJson(seraphinaPng())!)
-    const ir = decodeCharacterCard(seraphinaPng())
-    const produced = JSON.parse(extractCardJson(encodeCharacterCardPng(ir, seraphinaPng()))!)
+    const original = syntheticCardRaw()
+    const ir = decodeCharacterCard(syntheticCardPng())
+    const produced = JSON.parse(extractCardJson(encodeCharacterCardPng(ir, syntheticCardPng()))!)
     expect(stableDeepEqual(original, produced)).toBe(true)
   })
 })
@@ -99,7 +95,7 @@ describe('V3 PNG 双 chunk 行为（对齐 ST 导出）', () => {
       data: { name: 'V3C', description: '', personality: '', scenario: '', first_mes: '', mes_example: '', creator_notes: '', system_prompt: '', post_history_instructions: '', alternate_greetings: [], tags: [], creator: '', character_version: '', extensions: {}, group_only_greetings: [] },
     }
     const ir = decodeCharacterCard(v3)
-    const png = encodeCharacterCardPng(ir, new Uint8Array(readFileSync(`${fixturesDir}/ExampleCard.png`)))
+    const png = encodeCharacterCardPng(ir, minimalPng())
     const keywords = readTextChunks(png).map((t) => t.keyword)
     expect(keywords).toContain('chara')
     expect(keywords).toContain('ccv3')

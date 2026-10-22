@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { MemoryStore, TavernStore, VariableStore, normalizeMemoryEmbedding } from '../src/index.js'
 import { decodeCharacterCard, encodeCharx, encodeCharacterCardPng, normalizeEntry, parseRegexScripts, stableDeepEqual } from '@dsh-soulmojito/format'
 import type { WorldBookIR } from '@dsh-soulmojito/format'
+import { syntheticCardPng, syntheticWorldRaw } from '../../tavern-format/tests/helpers/synthetic.js'
 
 const fixturesDir = fileURLToPath(new URL('../../tavern-format/tests/fixtures', import.meta.url))
 
@@ -101,17 +102,17 @@ describe('TavernStore', () => {
     expect(await store.deleteCharacter('Ghost')).toBe(false)
   }))
 
-  it('角色：PNG 原样导入（真实 ExampleCard），导出保留图像与卡数据', withStore(async (store) => {
-    const png = new Uint8Array(readFileSync(`${fixturesDir}/ExampleCard.png`))
+  it('角色：PNG 原样导入（合成 ExampleCard），导出保留图像与卡数据', withStore(async (store) => {
+    const png = syntheticCardPng()
     const { card } = await store.importCharacter(png)
     expect(card.data.name).toBe('ExampleCard')
     const out = await store.exportCharacter('ExampleCard')
-    expect(out.length).toBeGreaterThan(100_000) // 图像仍在
+    expect(Array.from(out.subarray(0, 8))).toEqual(Array.from(png.subarray(0, 8))) // 图像容器仍在
     expect((await store.getCharacter('ExampleCard'))?.card.data.name).toBe('ExampleCard')
   }))
 
   it('角色：按面板 IR 保存并保留原始 PNG 容器', withStore(async (store) => {
-    const png = new Uint8Array(readFileSync(`${fixturesDir}/ExampleCard.png`))
+    const png = syntheticCardPng()
     const imported = await store.importCharacter(png)
     const saved = await store.updateCharacter('ExampleCard', {
       spec: imported.card.spec,
@@ -121,7 +122,7 @@ describe('TavernStore', () => {
     expect(saved.kind).toBe('png')
     expect(saved.card.data.description).toBe('Edited from panel')
     const exported = await store.exportCharacter('ExampleCard')
-    expect(exported.length).toBeGreaterThan(100_000)
+    expect(Array.from(exported.subarray(0, 8))).toEqual(Array.from(png.subarray(0, 8)))
     expect(decodeCharacterCard(exported).data.description).toBe('Edited from panel')
   }))
 
@@ -191,7 +192,7 @@ describe('TavernStore', () => {
   }))
 
   it('角色：PNG 内嵌书物化后图像保留、链接写回 chunk', withStore(async (store) => {
-    const png = new Uint8Array(readFileSync(`${fixturesDir}/ExampleCard.png`))
+    const png = syntheticCardPng()
     const base = decodeCharacterCard(png)
     const withBook = {
       ...base,
@@ -208,7 +209,7 @@ describe('TavernStore', () => {
     expect(importedWorld).toBe('PNG Lore')
     expect(await store.listWorlds()).toContain('PNG Lore')
     const exported = await store.exportCharacter('ExampleCard')
-    expect(exported.length).toBeGreaterThan(100_000)
+    expect(Array.from(exported.subarray(0, 8))).toEqual(Array.from(png.subarray(0, 8)))
     expect(decodeCharacterCard(exported).data.extensions['world']).toBe('PNG Lore')
     expect(decodeCharacterCard(exported).data.characterBook?.entries).toHaveLength(1)
   }))
@@ -362,7 +363,7 @@ describe('TavernStore', () => {
   }))
 
   it('世界书：导入 → 读取 roundtrip → 删除', withStore(async (store) => {
-    const raw = JSON.parse(readFileSync(`${fixturesDir}/ExampleWorld.json`, 'utf8'))
+    const raw = syntheticWorldRaw()
     const ir = await store.importWorldFile('ExampleWorld', raw)
     expect(ir.entries.length).toBeGreaterThan(3)
     const back = await store.getWorld('ExampleWorld')
@@ -373,7 +374,7 @@ describe('TavernStore', () => {
   }))
 
   it('世界书/预设：导出返回原生 JSON', withStore(async (store) => {
-    const raw = JSON.parse(readFileSync(`${fixturesDir}/ExampleWorld.json`, 'utf8'))
+    const raw = syntheticWorldRaw()
     await store.importWorldFile('ExampleWorld', raw)
     expect(JSON.parse(Buffer.from(await store.exportWorld('ExampleWorld')).toString('utf8')).entries).toBeTruthy()
     const preset = JSON.parse(readFileSync(`${fixturesDir}/preset-Default.json`, 'utf8'))
@@ -668,7 +669,7 @@ describe('TavernStore', () => {
   }))
 
   it('persona：导入 PNG 提取内嵌描述并保存头像', withStore(async (store) => {
-    const png = new Uint8Array(readFileSync(path.join(fixturesDir, 'ExampleCard.png')))
+    const png = syntheticCardPng()
     const persona = await store.importPersonaPng(png, 'ExampleCard')
     expect(persona.name).toBe('ExampleCard')
     expect(persona.description.length).toBeGreaterThan(0)

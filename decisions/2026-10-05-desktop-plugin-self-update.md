@@ -4,10 +4,10 @@
 
 ## 背景
 
-桌面版（`D:\Tools\DeepSeekHarness`，DSH `0.2.0-rc.2` 运行时）的 profile 用 git spec 安装本插件：
+桌面版（`<DSH_INSTALL>`，DSH `0.2.0-rc.2` 运行时）的 profile 用 git spec 安装本插件：
 
 ```jsonc
-// C:\Users\%USERNAME%\.dsh\profiles\desktop\package.json
+// %USERPROFILE%\.dsh\profiles\desktop\package.json
 "dependencies": { "dsh-tavern": "git+https://github.com/LingyeSoul/dsh-tavern.git" },
 // pnpm-lock.yaml 把 spec 解析成 <commit>&path:/packages/plugin
 ```
