@@ -1,0 +1,24 @@
+{
+  "name": "@dsh-soulmojito/jsr",
+  "version": "0.1.0",
+  "description": "JS-Slash-Runner (TavernHelper) compatibility layer for sandboxed card frontends: iframe runtime source, event vocabulary, library globals and the token-checked postMessage protocol. Host domain ops stay in the plugin adapter.",
+  "license": "GPL-3.0",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/client.d.ts",
+      "default": "./lib/client.js"
+    }
+  },
+  "files": ["lib"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  }
+}

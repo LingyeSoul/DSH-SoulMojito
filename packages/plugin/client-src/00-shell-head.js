@@ -7,6 +7,8 @@ window.__ModuleLoader__.load({
   id: 'dsh-soulmojito',
   factory: (require) => {
     // __DSH_BIND_CLIENT_SLOT__
+    // __DSH_FRONTEND_STORAGE_CLIENT_SLOT__
+    // __DSH_JSR_CLIENT_SLOT__
     var module = { exports: {} }
     var exports = module.exports
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })

@@ -279,6 +279,8 @@ dsh plugin --profile web add ./packages/plugin
 | `@dsh-soulmojito/store` | `$DSH_HOME/soulmojito/`（旧装 `tavern/`）原子文件存储、revision 与 session binding |
 | `@dsh-soulmojito/template` | EJS Prompt Template 引擎：`node:vm` 沙箱执行、作用域变量与内容注入 |
 | `@dsh-soulmojito/bind` | 跨 DSH 版本的宿主形状兼容层：会话事件探测、宿主包锚解析、client 连接双面回退与宿主形状诊断 |
+| `@dsh-soulmojito/jsr` | 酒馆助手（JS-Slash-Runner）兼容运行时：iframe shim 源文本、事件词汇表、库全局与 postMessage 协议；宿主域操作仍由插件适配 |
+| `@dsh-soulmojito/frontend-storage` | 沙箱美化前端存储：虚拟 localStorage/sessionStorage/IndexedDB shim、二进制传输、宿主侧记录存储与按角色持久化规则 |
 | `dsh-soulmojito` | 插件本体（Node half + Web client half + 随附示例 Mod 与游戏） |
 
 ### 构建产物
@@ -289,7 +291,7 @@ Node half 是六个自包含 bundle：`index.mjs` 主入口，加 `agent` / `com
 
 ### 适配新宿主版本时
 
-跨版本兼容层集中在 `packages/bind`，更新版本适配**先改这里**。client half 的源文件是 `packages/plugin/client/main.js`；`client/index.js` 是 `build:plugin` 的拼接产物（把 bind 的 client 探测模块注入 `__DSH_BIND_CLIENT_SLOT__` 标记处），不要手改，改了会被下次构建覆盖。
+跨版本兼容层集中在 `packages/bind`，更新版本适配**先改这里**。client half 的源文件是 `packages/plugin/client-src/` 的分片（按 `manifest.json` 拼接为 `client/main.js`）；`client/index.js` 是 `build:plugin` 的产物，把 bind 探测模块、JSR 运行时与沙箱存储库分别注入 `__DSH_BIND_CLIENT_SLOT__`、`__DSH_JSR_CLIENT_SLOT__`、`__DSH_FRONTEND_STORAGE_CLIENT_SLOT__` 标记处。生成物不要手改，改了会被下次构建覆盖。
 
 插件激活时输出一行 `dsh-soulmojito host shape: {...}` 日志，报告命中的宿主形状绑定路径——排查宿主版本差异从它读起。
 

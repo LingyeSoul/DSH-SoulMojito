@@ -31,6 +31,14 @@ importers:
         specifier: ^0.8.0
         version: 0.8.3
 
+  packages/tavern-frontend-storage:
+    dependencies:
+      '@dsh-soulmojito/store':
+        specifier: workspace:*
+        version: link:../tavern-store
+
+  packages/tavern-jsr: {}
+
   packages/tavern-lore: {}
 
   packages/tavern-macros: {}

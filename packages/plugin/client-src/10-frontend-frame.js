@@ -600,48 +600,13 @@
             reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { applied: frame !== null } })
             return
           }
-          if (data.op === 'idb.get') {
+          if (DshFrontendStorage.isIdbBridgeOp(data.op)) {
             const payload = data.payload && typeof data.payload === 'object' ? data.payload : {}
-            void fetch(`${API}/frontend/idb/get?${idbQuery(current.character, payload)}`, { cache: 'no-store' })
-              .then(async (response) => {
-                if (!response.ok) {
-                  const body = await response.json().catch(() => ({}))
-                  throw new Error(body.message || `HTTP ${response.status}`)
-                }
-                const bytes = await response.arrayBuffer()
-                const meta = readIdbMetaHeader(response)
-                reply({
-                  type: HELPER_RESULT_MESSAGE,
-                  id: data.id,
-                  ok: true,
-                  value: { record: { key: payload.key, bytes, ...meta } },
-                }, [bytes])
-              })
-              .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
-            return
-          }
-          if (data.op === 'idb.put') {
-            const payload = data.payload && typeof data.payload === 'object' ? data.payload : {}
-            const bytes = payload.bytes
-            if (!(bytes instanceof ArrayBuffer)) {
-              fail('idb.put requires an ArrayBuffer payload')
-              return
-            }
-            const meta = payload.meta && typeof payload.meta === 'object' && !Array.isArray(payload.meta) ? payload.meta : {}
-            const headers = {
-              'content-type': 'application/octet-stream',
-              'x-dsh-idb-meta': encodeBase64Url(JSON.stringify(meta)),
-            }
-            void fetch(`${API}/frontend/idb/put?${idbQuery(current.character, payload)}`, {
-              method: 'POST',
-              headers,
-              body: bytes,
-            })
-              .then(async (response) => {
-                const body = await response.json().catch(() => ({}))
-                if (!response.ok || body.ok === false) throw new Error(body.message || `HTTP ${response.status}`)
-                reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: body.value ?? {} })
-              })
+            void DshFrontendStorage.handleIdbBridge(data.op, payload, current.character, API, fetch)
+              .then((result) => reply(
+                { type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: result.value },
+                result.transfer,
+              ))
               .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
             return
           }

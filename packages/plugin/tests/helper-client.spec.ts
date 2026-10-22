@@ -8,9 +8,14 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { buildIframeScript } from '../../tavern-jsr/src/client.js'
+import { iframeSources } from '../../tavern-frontend-storage/src/client.js'
+import { HELPER_CHANNELS, IFRAME_EVENTS, TAVERN_EVENTS } from '../../tavern-jsr/src/index.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const source = readFileSync(join(here, '../client/main.js'), 'utf8')
+// The runtime and virtual storage now live in workspace packages that the build
+// inlines into client/index.js; main.js only carries the fragments and slots.
+const source = readFileSync(join(here, '../client/index.js'), 'utf8')
 const zh = readFileSync(join(here, '../client-src/41-i18n-zh.js'), 'utf8')
 const en = readFileSync(join(here, '../client-src/40-i18n-en.js'), 'utf8')
 const store = readFileSync(join(here, '../../tavern-store/src/store.ts'), 'utf8')
@@ -18,10 +23,16 @@ const compatDoc = readFileSync(join(here, '../../../docs/frontend/tavern-helper-
 
 describe('TavernHelper compatibility layer (main.js source check)', () => {
   it('defines the iframe-side TavernHelper surface', () => {
+    expect(HELPER_CHANNELS).toEqual({
+      message: 'dsh-soulmojito:helper',
+      result: 'dsh-soulmojito:helper-result',
+      snapshot: 'dsh-soulmojito:helper-snapshot',
+      event: 'dsh-soulmojito:helper-event',
+    })
     for (const marker of [
-      "const HELPER_MESSAGE = 'dsh-soulmojito:helper'",
-      "const HELPER_RESULT_MESSAGE = 'dsh-soulmojito:helper-result'",
-      "const HELPER_SNAPSHOT_MESSAGE = 'dsh-soulmojito:helper-snapshot'",
+      'const HELPER_MESSAGE = DshJsrRuntime.HELPER_MESSAGE',
+      'const HELPER_RESULT_MESSAGE = DshJsrRuntime.HELPER_RESULT_MESSAGE',
+      'const HELPER_SNAPSHOT_MESSAGE = DshJsrRuntime.HELPER_SNAPSHOT_MESSAGE',
       'function frontendHelperScript(token, messageId, storage)',
       'window.getVariables = function',
       'window.replaceVariables = function',
@@ -96,14 +107,10 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     ]) {
       expect(source).toContain(marker)
     }
-    // The shim currently runs inside a template literal: unescaped backticks in
-    // comments would terminate it (and break the whole client bundle).
-    const helperStart = source.indexOf('function frontendHelperScript')
-    const templateStart = source.indexOf('return `', helperStart)
-    const templateEnd = source.indexOf('})();`', templateStart)
-    expect(templateStart).toBeGreaterThanOrEqual(0)
-    expect(templateEnd).toBeGreaterThan(templateStart)
-    expect(source.slice(templateStart + 8, templateEnd)).not.toContain('`')
+    // The runtime source lives in the JSR package; the fragment only assembles
+    // the per-iframe arguments and the storage seed.
+    expect(source).toContain('DshJsrRuntime.buildIframeScript(')
+    expect(source).toContain('DshFrontendStorage.serializeFrontendStorageSeed(storage)')
   })
 
   it('seeds and persists the sandbox localStorage through the host', () => {
@@ -127,8 +134,8 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       "call('idb.put', { db: tx.db.name, store: this.name, key: key, meta: meta, bytes: bytes }, [bytes])",
       "call('idb.get', { db: tx.db.name, store: this.name, key: key })",
       "Object.defineProperty(window, 'indexedDB'",
-      "if (data.op === 'idb.get')",
-      "if (data.op === 'idb.put')",
+      'DshFrontendStorage.isIdbBridgeOp(data.op)',
+      'DshFrontendStorage.handleIdbBridge(data.op, payload, current.character, API, fetch)',
       'frontend/idb/get',
       'frontend/idb/put',
     ]) {
@@ -267,26 +274,20 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
   })
 
   it('keeps the generated iframe shim syntactically valid', () => {
-    const helperStart = source.indexOf('function frontendHelperScript')
-    const start = source.indexOf('return `(function () {', helperStart)
-    const end = source.indexOf('})();`', start)
-    expect(start).toBeGreaterThanOrEqual(0)
-    expect(end).toBeGreaterThan(start)
-    const body = source
-      .slice(start + 'return `'.length, end + '})();'.length)
-      .replace(/\$\{JSON\.stringify\([^)]*\)\}/g, '""')
-      .replace(/\$\{serializeFrontendStorageSeed\(storage\)\}/g, '{}')
+    const body = buildIframeScript('probe-token', 1, JSON.stringify({ theme: 'dark' }), iframeSources())
     expect(() => new Function(body)).not.toThrow()
   })
 
   it('broadcasts only signals the host can actually observe', () => {
-    expect(source).toContain('const HELPER_TAVERN_EVENTS = {')
-    expect(source).toContain('const HELPER_IFRAME_EVENTS = {')
+    expect(source).toContain('const HELPER_TAVERN_EVENTS = DshJsrRuntime.TAVERN_EVENTS')
+    expect(source).toContain('const HELPER_IFRAME_EVENTS = DshJsrRuntime.IFRAME_EVENTS')
     expect(source).toContain('HELPER_TAVERN_EVENTS.MESSAGE_RECEIVED')
     expect(source).toContain('HELPER_TAVERN_EVENTS.MESSAGE_EDITED')
     expect(source).toContain('HELPER_TAVERN_EVENTS.CHAT_CHANGED')
     expect(source).toContain('HELPER_IFRAME_EVENTS.MESSAGE_IFRAME_RENDER_STARTED')
-    expect(source).toContain("const HELPER_EVENT_MESSAGE = 'dsh-soulmojito:helper-event'")
+    expect(source).toContain('const HELPER_EVENT_MESSAGE = DshJsrRuntime.HELPER_EVENT_MESSAGE')
+    expect(TAVERN_EVENTS.CHAT_CHANGED).toBe('chat_id_changed')
+    expect(IFRAME_EVENTS.GENERATION_ENDED).toBe('js_generation_ended')
   })
 
   it('gates auto-open behind the frontendAutoOpen setting', () => {

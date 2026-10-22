@@ -135,6 +135,35 @@ const bindClientBundle = await build({
   write: false,
 })
 const bindClientIife = indentCode(bindClientBundle.outputFiles[0].text.trimEnd(), 4)
+
+// Shared client libraries follow the same inline-IIFE rule as bind: the client
+// half runs inside the host ModuleLoader factory, so it cannot import local
+// modules at runtime. Each package is bundled here and injected at its slot.
+const frontendStorageClientBundle = await build({
+  entryPoints: [resolve(root, 'packages/tavern-frontend-storage/src/client.ts')],
+  bundle: true,
+  format: 'iife',
+  globalName: 'DshFrontendStorage',
+  platform: 'browser',
+  target: 'es2022',
+  charset: 'utf8',
+  sourcemap: false,
+  write: false,
+})
+const frontendStorageClientIife = indentCode(frontendStorageClientBundle.outputFiles[0].text.trimEnd(), 4)
+
+const jsrClientBundle = await build({
+  entryPoints: [resolve(root, 'packages/tavern-jsr/src/client.ts')],
+  bundle: true,
+  format: 'iife',
+  globalName: 'DshJsrRuntime',
+  platform: 'browser',
+  target: 'es2022',
+  charset: 'utf8',
+  sourcemap: false,
+  write: false,
+})
+const jsrClientIife = indentCode(jsrClientBundle.outputFiles[0].text.trimEnd(), 4)
 // The client half is a single ModuleLoader factory with one shared scope. Its
 // source lives in ordered fragments under client-src/ and is concatenated
 // verbatim here: this keeps gate-visible source markers byte-stable while
@@ -144,13 +173,24 @@ const bindClientIife = indentCode(bindClientBundle.outputFiles[0].text.trimEnd()
 const clientMainSource = assembleClientSource(root).replaceAll('\r\n', '\n')
 writeFileSync(resolve(root, 'packages/plugin/client/main.js'), clientMainSource, 'utf8')
 const bindSlot = '    // __DSH_BIND_CLIENT_SLOT__'
-if (!clientMainSource.includes(bindSlot)) {
-  throw new Error('client/main.js is missing the __DSH_BIND_CLIENT_SLOT__ injection marker')
+const frontendStorageSlot = '    // __DSH_FRONTEND_STORAGE_CLIENT_SLOT__'
+const jsrSlot = '    // __DSH_JSR_CLIENT_SLOT__'
+for (const [name, slot] of [
+  ['__DSH_BIND_CLIENT_SLOT__', bindSlot],
+  ['__DSH_FRONTEND_STORAGE_CLIENT_SLOT__', frontendStorageSlot],
+  ['__DSH_JSR_CLIENT_SLOT__', jsrSlot],
+]) {
+  if (!clientMainSource.includes(slot)) {
+    throw new Error(`client/main.js is missing the ${name} injection marker`)
+  }
 }
-const clientBundleSource = clientMainSource.replace(
-  bindSlot,
-  `${bindClientIife}\n    const clientShapeTrace = DshBindClient.createClientShapeTrace()\n    window.__DSH_SOULMOJITO_BIND__ = clientShapeTrace`,
-)
+const clientBundleSource = clientMainSource
+  .replace(frontendStorageSlot, frontendStorageClientIife)
+  .replace(jsrSlot, jsrClientIife)
+  .replace(
+    bindSlot,
+    `${bindClientIife}\n    const clientShapeTrace = DshBindClient.createClientShapeTrace()\n    window.__DSH_SOULMOJITO_BIND__ = clientShapeTrace`,
+  )
 writeFileSync(resolve(root, 'packages/plugin/client/index.js'), clientBundleSource, 'utf8')
 
 writeFileSync(versionPath, `${JSON.stringify({ version, commit }, null, 2)}\n`, 'utf8')

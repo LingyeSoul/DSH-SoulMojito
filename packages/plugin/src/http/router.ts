@@ -11,6 +11,7 @@ import {
   type TavernModelSelection,
 } from '../../../tavern-store/src/index.js'
 import { readSessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
+import { getIdbRecord, IDB_MAX_RECORD_BYTES, putIdbRecordFromFile } from '../../../tavern-frontend-storage/src/index.js'
 import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import { seedJsrMvuVariables } from '../agent-tavern/mvu-compat.js'
 import { serveCharacterAvatar, sendAvatarFallback } from '../assets.js'
@@ -19,7 +20,6 @@ import { collectCardScriptBundle } from '../card-scripts.js'
 import { runCandidateGeneration } from '../candidates.js'
 import { tavernDataRoot } from '../dsh-home.js'
 import { latestFrontendMessage, stripFrontendDocuments } from '../frontend-documents.js'
-import { getIdbRecord, IDB_MAX_RECORD_BYTES, putIdbRecordFromFile } from '../frontend-idb.js'
 import { handleGamesApi, isGamesRoute } from '../games/http.js'
 import { handleHelperApi } from '../helper.js'
 import { generate, previewGeneration, runTavernScript } from '../generation/pipeline.js'
@@ -1103,6 +1103,7 @@ export async function handleApi(ctx, req, res) {
     const character = url.searchParams.get('character')
     if (!character) throw new Error('character query is required')
     const record = await getIdbRecord(
+      tavernDataRoot(),
       character,
       url.searchParams.get('db'),
       url.searchParams.get('store'),
@@ -1146,7 +1147,7 @@ export async function handleApi(ctx, req, res) {
           throw new Error(`x-dsh-idb-meta is not valid base64url JSON: ${error instanceof Error ? error.message : String(error)}`)
         }
       }
-      const result = await putIdbRecordFromFile(character, dbName, storeName, key, temporaryPath, meta)
+      const result = await putIdbRecordFromFile(tavernDataRoot(), character, dbName, storeName, key, temporaryPath, meta)
       return sendJson(res, 200, { ok: true, value: result })
     } finally {
       await rm(temporaryDir, { recursive: true, force: true })

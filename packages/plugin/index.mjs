@@ -13383,7 +13383,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.8".trim() : "";
-  const commit = true ? normalizeCommit("108a378") : void 0;
+  const commit = true ? normalizeCommit("56af9e3") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -29055,6 +29055,285 @@ import { tmpdir as tmpdir4 } from "node:os";
 import { join as join22 } from "node:path";
 import { pipeline } from "node:stream/promises";
 
+// packages/tavern-frontend-storage/src/idb-store.ts
+import { createHash as createHash12 } from "node:crypto";
+import { mkdir as mkdir4, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname as dirname13, join as join20 } from "node:path";
+var IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024;
+var IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
+var databaseLocks = /* @__PURE__ */ new Map();
+function sha256(value) {
+  return createHash12("sha256").update(value).digest("hex");
+}
+function databaseDir(root, character, name2) {
+  return join20(root, "frontend-idb", sha256(character), sha256(name2));
+}
+function recordKeyHash(store5, key) {
+  return sha256(`${store5}\0${key}`);
+}
+function recordPath(root, character, name2, store5, key) {
+  return join20(databaseDir(root, character, name2), "records", `${recordKeyHash(store5, key)}.bin`);
+}
+function metaPath(dir) {
+  return join20(dir, "meta.json");
+}
+function emptyDatabase(name2) {
+  return { name: name2, version: 0, stores: {}, records: {}, updatedAt: 0 };
+}
+function asRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+function normalizeDatabase(value, name2) {
+  const record = asRecord(value);
+  if (record === void 0) return emptyDatabase(name2);
+  const stores = {};
+  const rawStores = asRecord(record.stores);
+  if (rawStores !== void 0) {
+    for (const [storeName, descriptor] of Object.entries(rawStores)) {
+      const entry = asRecord(descriptor);
+      if (entry === void 0) continue;
+      stores[storeName] = { keyPath: typeof entry.keyPath === "string" ? entry.keyPath : "" };
+    }
+  }
+  const records = {};
+  const rawRecords = asRecord(record.records);
+  if (rawRecords !== void 0) {
+    for (const [keyHash, descriptor] of Object.entries(rawRecords)) {
+      const entry = asRecord(descriptor);
+      if (entry === void 0) continue;
+      if (typeof entry.key !== "string" || typeof entry.size !== "number" || !Number.isFinite(entry.size) || entry.size < 0) continue;
+      records[keyHash] = {
+        store: typeof entry.store === "string" ? entry.store : "",
+        key: entry.key,
+        size: entry.size,
+        updatedAt: typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0,
+        meta: asRecord(entry.meta) ?? {}
+      };
+    }
+  }
+  return {
+    name: name2,
+    version: typeof record.version === "number" && Number.isInteger(record.version) && record.version >= 0 ? record.version : 0,
+    stores,
+    records,
+    updatedAt: typeof record.updatedAt === "number" && Number.isFinite(record.updatedAt) ? record.updatedAt : 0
+  };
+}
+async function readDatabase(root, character, name2) {
+  const dir = databaseDir(root, character, name2);
+  try {
+    const text = await readFile(metaPath(dir), "utf8");
+    return normalizeDatabase(JSON.parse(text), name2);
+  } catch (error) {
+    if (error.code === "ENOENT") return emptyDatabase(name2);
+    throw new Error(`idb metadata for '${name2}' is unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+async function writeDatabase(root, character, database) {
+  const dir = databaseDir(root, character, database.name);
+  await mkdir4(dir, { recursive: true });
+  const target = metaPath(dir);
+  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(database)}`, "utf8");
+  await rm(target, { force: true });
+  await rename(temporary, target);
+}
+function withDatabaseLock(root, character, name2, operation) {
+  const key = `${root}\0${character}\0${name2}`;
+  const previous = databaseLocks.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => void 0).then(operation);
+  databaseLocks.set(key, next);
+  return next.finally(() => {
+    if (databaseLocks.get(key) === next) databaseLocks.delete(key);
+  });
+}
+function requireDatabaseName(value) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error("idb database name must be a non-empty string");
+  if (value.length > 256) throw new Error("idb database name is too long (max 256)");
+  return value;
+}
+function requireStoreName(value) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error("idb store name must be a non-empty string");
+  if (value.length > 256) throw new Error("idb store name is too long (max 256)");
+  return value;
+}
+function requireKey(value) {
+  if (typeof value !== "string" && typeof value !== "number") throw new Error("idb record key must be a string or number");
+  const key = String(value);
+  if (key.length === 0) throw new Error("idb record key must not be empty");
+  if (key.length > 1024) throw new Error("idb record key is too long (max 1024)");
+  return key;
+}
+function normalizeRecordMeta(value) {
+  const record = asRecord(value) ?? {};
+  const text = JSON.stringify(record);
+  if (text.length > 64 * 1024) throw new Error("idb record metadata is too large (max 64KB)");
+  return record;
+}
+function recordTotal(database, excludingKeyHash) {
+  return Object.entries(database.records).filter(([keyHash]) => keyHash !== excludingKeyHash).reduce((sum, [, record]) => sum + record.size, 0);
+}
+async function openIdbDatabase(root, character, value, versionValue) {
+  const name2 = requireDatabaseName(value);
+  const requested = typeof versionValue === "number" && Number.isInteger(versionValue) && versionValue > 0 ? versionValue : 1;
+  return withDatabaseLock(root, character, name2, async () => {
+    const database = await readDatabase(root, character, name2);
+    const previousVersion = database.version;
+    if (database.version === 0) database.version = requested;
+    else if (requested > database.version) database.version = requested;
+    database.updatedAt = Date.now();
+    await writeDatabase(root, character, database);
+    return { version: database.version, previousVersion, stores: Object.keys(database.stores) };
+  });
+}
+async function createIdbStore(root, character, nameValue, storeValue, keyPathValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  const keyPath = typeof keyPathValue === "string" ? keyPathValue : "";
+  return withDatabaseLock(root, character, name2, async () => {
+    const database = await readDatabase(root, character, name2);
+    database.stores[store5] = { keyPath };
+    database.updatedAt = Date.now();
+    await writeDatabase(root, character, database);
+    return { stores: Object.keys(database.stores) };
+  });
+}
+async function putIdbRecordFromFile(root, character, nameValue, storeValue, keyValue, temporaryPath, metaValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  const key = requireKey(keyValue);
+  const meta = normalizeRecordMeta(metaValue);
+  const keyHash = recordKeyHash(store5, key);
+  const destination = recordPath(root, character, name2, store5, key);
+  return withDatabaseLock(root, character, name2, async () => {
+    const database = await readDatabase(root, character, name2);
+    if (database.stores[store5] === void 0) throw new Error(`idb store '${store5}' does not exist in database '${name2}'`);
+    const size = (await stat(temporaryPath)).size;
+    if (size > IDB_MAX_RECORD_BYTES) {
+      throw new Error(`idb record is too large (${size} > ${IDB_MAX_RECORD_BYTES} bytes)`);
+    }
+    const total = recordTotal(database, keyHash) + size;
+    if (total > IDB_MAX_TOTAL_BYTES) {
+      throw new Error(`idb storage for '${character}' exceeds ${IDB_MAX_TOTAL_BYTES} bytes`);
+    }
+    await mkdir4(dirname13(destination), { recursive: true });
+    await rm(destination, { force: true });
+    await rename(temporaryPath, destination);
+    database.records[keyHash] = { store: store5, key, size, updatedAt: Date.now(), meta };
+    database.updatedAt = Date.now();
+    try {
+      await writeDatabase(root, character, database);
+    } catch (error) {
+      await rm(destination, { force: true });
+      throw error;
+    }
+    return { key, size };
+  });
+}
+async function getIdbRecord(root, character, nameValue, storeValue, keyValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  const key = requireKey(keyValue);
+  const database = await readDatabase(root, character, name2);
+  if (database.stores[store5] === void 0) return void 0;
+  const record = database.records[recordKeyHash(store5, key)];
+  if (record === void 0 || record.store !== store5) return void 0;
+  const path12 = recordPath(root, character, name2, store5, key);
+  try {
+    const info = await stat(path12);
+    if (!info.isFile()) return void 0;
+    return { path: path12, size: info.size, meta: record.meta };
+  } catch (error) {
+    if (error.code === "ENOENT") return void 0;
+    throw error;
+  }
+}
+async function deleteIdbRecord(root, character, nameValue, storeValue, keyValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  const key = requireKey(keyValue);
+  const keyHash = recordKeyHash(store5, key);
+  return withDatabaseLock(root, character, name2, async () => {
+    const database = await readDatabase(root, character, name2);
+    if (database.stores[store5] === void 0) return { deleted: false };
+    const record = database.records[keyHash];
+    const existed = record !== void 0 && record.store === store5;
+    delete database.records[keyHash];
+    database.updatedAt = Date.now();
+    await writeDatabase(root, character, database);
+    await rm(recordPath(root, character, name2, store5, key), { force: true });
+    return { deleted: existed };
+  });
+}
+async function clearIdbStore(root, character, nameValue, storeValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  return withDatabaseLock(root, character, name2, async () => {
+    const database = await readDatabase(root, character, name2);
+    if (database.stores[store5] === void 0) return { cleared: 0 };
+    const entries = Object.entries(database.records).filter(([, record]) => record.store === store5);
+    for (const [keyHash] of entries) delete database.records[keyHash];
+    database.updatedAt = Date.now();
+    await writeDatabase(root, character, database);
+    await Promise.all(entries.map(([, record]) => rm(recordPath(root, character, name2, store5, record.key), { force: true })));
+    return { cleared: entries.length };
+  });
+}
+async function deleteIdbDatabase(root, character, nameValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const directory = databaseDir(root, character, name2);
+  let existed = false;
+  try {
+    existed = (await stat(directory)).isDirectory();
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  await rm(directory, { recursive: true, force: true });
+  return { deleted: existed };
+}
+
+// packages/tavern-frontend-storage/src/persistence.ts
+var FRONTEND_STORAGE_TOTAL_LIMIT = 512 * 1024;
+var FRONTEND_STORAGE_KEY_LIMIT = 512;
+function frontendStorageFor(state, character) {
+  const storage = state.frontendStorage?.[character];
+  return storage === void 0 ? {} : { ...storage };
+}
+function parseFrontendStorageValue(character, value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("storage must be an object of string values");
+  }
+  const storage = {};
+  let total = 0;
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "string") throw new Error(`storage["${key}"] must be a string`);
+    if (key === "" || key.length > FRONTEND_STORAGE_KEY_LIMIT) {
+      throw new Error(`storage keys must be 1-${FRONTEND_STORAGE_KEY_LIMIT} characters (got ${key.length})`);
+    }
+    total += key.length + entry.length;
+    if (total > FRONTEND_STORAGE_TOTAL_LIMIT) {
+      throw new Error(`frontend storage for '${character}' exceeds ${FRONTEND_STORAGE_TOTAL_LIMIT} characters`);
+    }
+    storage[key] = entry;
+  }
+  return storage;
+}
+async function putFrontendStorage(db, character, value) {
+  const storage = parseFrontendStorageValue(character, value);
+  const next = await db.updateState((state) => ({
+    frontendStorage: { ...state.frontendStorage ?? {}, [character]: storage }
+  }));
+  return { storage: frontendStorageFor(next, character) };
+}
+async function resetFrontendStorage(db, character) {
+  const next = await db.updateState((state) => {
+    const all = { ...state.frontendStorage ?? {} };
+    delete all[character];
+    return { frontendStorage: all };
+  });
+  return { storage: frontendStorageFor(next, character), reset: true };
+}
+
 // packages/plugin/src/assets.ts
 async function serveCharacterAvatar(res, db, name2, found) {
   let bytes;
@@ -29443,243 +29722,6 @@ function latestFrontendMessage(messages, render) {
     };
   }
   return void 0;
-}
-
-// packages/plugin/src/frontend-idb.ts
-import { createHash as createHash12 } from "node:crypto";
-import { mkdir as mkdir4, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname as dirname13, join as join20 } from "node:path";
-var IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024;
-var IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
-var databaseLocks = /* @__PURE__ */ new Map();
-function sha256(value) {
-  return createHash12("sha256").update(value).digest("hex");
-}
-function databaseDir(character, name2) {
-  return join20(tavernDataRoot(), "frontend-idb", sha256(character), sha256(name2));
-}
-function recordKeyHash(store5, key) {
-  return sha256(`${store5}\0${key}`);
-}
-function recordPath(character, name2, store5, key) {
-  return join20(databaseDir(character, name2), "records", `${recordKeyHash(store5, key)}.bin`);
-}
-function metaPath(dir) {
-  return join20(dir, "meta.json");
-}
-function emptyDatabase(name2) {
-  return { name: name2, version: 0, stores: {}, records: {}, updatedAt: 0 };
-}
-function asRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
-}
-function normalizeDatabase(value, name2) {
-  const record = asRecord(value);
-  if (record === void 0) return emptyDatabase(name2);
-  const stores = {};
-  const rawStores = asRecord(record.stores);
-  if (rawStores !== void 0) {
-    for (const [storeName, descriptor] of Object.entries(rawStores)) {
-      const entry = asRecord(descriptor);
-      if (entry === void 0) continue;
-      stores[storeName] = { keyPath: typeof entry.keyPath === "string" ? entry.keyPath : "" };
-    }
-  }
-  const records = {};
-  const rawRecords = asRecord(record.records);
-  if (rawRecords !== void 0) {
-    for (const [keyHash, descriptor] of Object.entries(rawRecords)) {
-      const entry = asRecord(descriptor);
-      if (entry === void 0) continue;
-      if (typeof entry.key !== "string" || typeof entry.size !== "number" || !Number.isFinite(entry.size) || entry.size < 0) continue;
-      records[keyHash] = {
-        store: typeof entry.store === "string" ? entry.store : "",
-        key: entry.key,
-        size: entry.size,
-        updatedAt: typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0,
-        meta: asRecord(entry.meta) ?? {}
-      };
-    }
-  }
-  return {
-    name: name2,
-    version: typeof record.version === "number" && Number.isInteger(record.version) && record.version >= 0 ? record.version : 0,
-    stores,
-    records,
-    updatedAt: typeof record.updatedAt === "number" && Number.isFinite(record.updatedAt) ? record.updatedAt : 0
-  };
-}
-async function readDatabase(character, name2) {
-  const dir = databaseDir(character, name2);
-  try {
-    const text = await readFile(metaPath(dir), "utf8");
-    return normalizeDatabase(JSON.parse(text), name2);
-  } catch (error) {
-    if (error.code === "ENOENT") return emptyDatabase(name2);
-    throw new Error(`idb metadata for '${name2}' is unreadable: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-async function writeDatabase(character, database) {
-  const dir = databaseDir(character, database.name);
-  await mkdir4(dir, { recursive: true });
-  const target = metaPath(dir);
-  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(database)}`, "utf8");
-  await rm(target, { force: true });
-  await rename(temporary, target);
-}
-function withDatabaseLock(character, name2, operation) {
-  const key = `${character}\0${name2}`;
-  const previous = databaseLocks.get(key) ?? Promise.resolve();
-  const next = previous.catch(() => void 0).then(operation);
-  databaseLocks.set(key, next);
-  return next.finally(() => {
-    if (databaseLocks.get(key) === next) databaseLocks.delete(key);
-  });
-}
-function requireDatabaseName(value) {
-  if (typeof value !== "string" || value.trim() === "") throw new Error("idb database name must be a non-empty string");
-  if (value.length > 256) throw new Error("idb database name is too long (max 256)");
-  return value;
-}
-function requireStoreName(value) {
-  if (typeof value !== "string" || value.trim() === "") throw new Error("idb store name must be a non-empty string");
-  if (value.length > 256) throw new Error("idb store name is too long (max 256)");
-  return value;
-}
-function requireKey(value) {
-  if (typeof value !== "string" && typeof value !== "number") throw new Error("idb record key must be a string or number");
-  const key = String(value);
-  if (key.length === 0) throw new Error("idb record key must not be empty");
-  if (key.length > 1024) throw new Error("idb record key is too long (max 1024)");
-  return key;
-}
-function normalizeRecordMeta(value) {
-  const record = asRecord(value) ?? {};
-  const text = JSON.stringify(record);
-  if (text.length > 64 * 1024) throw new Error("idb record metadata is too large (max 64KB)");
-  return record;
-}
-function recordTotal(database, excludingKeyHash) {
-  return Object.entries(database.records).filter(([keyHash]) => keyHash !== excludingKeyHash).reduce((sum, [, record]) => sum + record.size, 0);
-}
-async function openIdbDatabase(character, value, versionValue) {
-  const name2 = requireDatabaseName(value);
-  const requested = typeof versionValue === "number" && Number.isInteger(versionValue) && versionValue > 0 ? versionValue : 1;
-  return withDatabaseLock(character, name2, async () => {
-    const database = await readDatabase(character, name2);
-    const previousVersion = database.version;
-    if (database.version === 0) database.version = requested;
-    else if (requested > database.version) database.version = requested;
-    database.updatedAt = Date.now();
-    await writeDatabase(character, database);
-    return { version: database.version, previousVersion, stores: Object.keys(database.stores) };
-  });
-}
-async function createIdbStore(character, nameValue, storeValue, keyPathValue) {
-  const name2 = requireDatabaseName(nameValue);
-  const store5 = requireStoreName(storeValue);
-  const keyPath = typeof keyPathValue === "string" ? keyPathValue : "";
-  return withDatabaseLock(character, name2, async () => {
-    const database = await readDatabase(character, name2);
-    database.stores[store5] = { keyPath };
-    database.updatedAt = Date.now();
-    await writeDatabase(character, database);
-    return { stores: Object.keys(database.stores) };
-  });
-}
-async function putIdbRecordFromFile(character, nameValue, storeValue, keyValue, temporaryPath, metaValue) {
-  const name2 = requireDatabaseName(nameValue);
-  const store5 = requireStoreName(storeValue);
-  const key = requireKey(keyValue);
-  const meta = normalizeRecordMeta(metaValue);
-  const keyHash = recordKeyHash(store5, key);
-  const destination = recordPath(character, name2, store5, key);
-  return withDatabaseLock(character, name2, async () => {
-    const database = await readDatabase(character, name2);
-    if (database.stores[store5] === void 0) throw new Error(`idb store '${store5}' does not exist in database '${name2}'`);
-    const size = (await stat(temporaryPath)).size;
-    if (size > IDB_MAX_RECORD_BYTES) {
-      throw new Error(`idb record is too large (${size} > ${IDB_MAX_RECORD_BYTES} bytes)`);
-    }
-    const total = recordTotal(database, keyHash) + size;
-    if (total > IDB_MAX_TOTAL_BYTES) {
-      throw new Error(`idb storage for '${character}' exceeds ${IDB_MAX_TOTAL_BYTES} bytes`);
-    }
-    await mkdir4(dirname13(destination), { recursive: true });
-    await rm(destination, { force: true });
-    await rename(temporaryPath, destination);
-    database.records[keyHash] = { store: store5, key, size, updatedAt: Date.now(), meta };
-    database.updatedAt = Date.now();
-    try {
-      await writeDatabase(character, database);
-    } catch (error) {
-      await rm(destination, { force: true });
-      throw error;
-    }
-    return { key, size };
-  });
-}
-async function getIdbRecord(character, nameValue, storeValue, keyValue) {
-  const name2 = requireDatabaseName(nameValue);
-  const store5 = requireStoreName(storeValue);
-  const key = requireKey(keyValue);
-  const database = await readDatabase(character, name2);
-  if (database.stores[store5] === void 0) return void 0;
-  const record = database.records[recordKeyHash(store5, key)];
-  if (record === void 0 || record.store !== store5) return void 0;
-  const path12 = recordPath(character, name2, store5, key);
-  try {
-    const info = await stat(path12);
-    if (!info.isFile()) return void 0;
-    return { path: path12, size: info.size, meta: record.meta };
-  } catch (error) {
-    if (error.code === "ENOENT") return void 0;
-    throw error;
-  }
-}
-async function deleteIdbRecord(character, nameValue, storeValue, keyValue) {
-  const name2 = requireDatabaseName(nameValue);
-  const store5 = requireStoreName(storeValue);
-  const key = requireKey(keyValue);
-  const keyHash = recordKeyHash(store5, key);
-  return withDatabaseLock(character, name2, async () => {
-    const database = await readDatabase(character, name2);
-    if (database.stores[store5] === void 0) return { deleted: false };
-    const record = database.records[keyHash];
-    const existed = record !== void 0 && record.store === store5;
-    delete database.records[keyHash];
-    database.updatedAt = Date.now();
-    await writeDatabase(character, database);
-    await rm(recordPath(character, name2, store5, key), { force: true });
-    return { deleted: existed };
-  });
-}
-async function clearIdbStore(character, nameValue, storeValue) {
-  const name2 = requireDatabaseName(nameValue);
-  const store5 = requireStoreName(storeValue);
-  return withDatabaseLock(character, name2, async () => {
-    const database = await readDatabase(character, name2);
-    if (database.stores[store5] === void 0) return { cleared: 0 };
-    const entries = Object.entries(database.records).filter(([, record]) => record.store === store5);
-    for (const [keyHash] of entries) delete database.records[keyHash];
-    database.updatedAt = Date.now();
-    await writeDatabase(character, database);
-    await Promise.all(entries.map(([, record]) => rm(recordPath(character, name2, store5, record.key), { force: true })));
-    return { cleared: entries.length };
-  });
-}
-async function deleteIdbDatabase(character, nameValue) {
-  const name2 = requireDatabaseName(nameValue);
-  const directory = databaseDir(character, name2);
-  let existed = false;
-  try {
-    existed = (await stat(directory)).isDirectory();
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-  await rm(directory, { recursive: true, force: true });
-  return { deleted: existed };
 }
 
 // packages/plugin/src/games/http.ts
@@ -30094,35 +30136,35 @@ async function handleHelperApi(req, res, db) {
       requireSessionChatId(chatId, "idb.open");
       return sendJson(res, 200, {
         ok: true,
-        value: await openIdbDatabase(character, body?.name, body?.version)
+        value: await openIdbDatabase(tavernDataRoot(), character, body?.name, body?.version)
       });
     }
     case "idb.store.create": {
       requireSessionChatId(chatId, "idb.store.create");
       return sendJson(res, 200, {
         ok: true,
-        value: await createIdbStore(character, body?.db, body?.store, body?.keyPath)
+        value: await createIdbStore(tavernDataRoot(), character, body?.db, body?.store, body?.keyPath)
       });
     }
     case "idb.delete": {
       requireSessionChatId(chatId, "idb.delete");
       return sendJson(res, 200, {
         ok: true,
-        value: await deleteIdbRecord(character, body?.db, body?.store, body?.key)
+        value: await deleteIdbRecord(tavernDataRoot(), character, body?.db, body?.store, body?.key)
       });
     }
     case "idb.clear": {
       requireSessionChatId(chatId, "idb.clear");
       return sendJson(res, 200, {
         ok: true,
-        value: await clearIdbStore(character, body?.db, body?.store)
+        value: await clearIdbStore(tavernDataRoot(), character, body?.db, body?.store)
       });
     }
     case "idb.delete-db": {
       requireSessionChatId(chatId, "idb.delete-db");
       return sendJson(res, 200, {
         ok: true,
-        value: await deleteIdbDatabase(character, body?.db)
+        value: await deleteIdbDatabase(tavernDataRoot(), character, body?.db)
       });
     }
     case "messages.get":
@@ -30456,46 +30498,6 @@ function normalizeLorebookEntries(raw) {
     seen.add(normalized.uid);
     return normalized;
   });
-}
-var FRONTEND_STORAGE_TOTAL_LIMIT = 512 * 1024;
-var FRONTEND_STORAGE_KEY_LIMIT = 512;
-function frontendStorageFor(state, character) {
-  const storage = state.frontendStorage?.[character];
-  return storage === void 0 ? {} : cloneJson(storage);
-}
-function parseFrontendStorageValue(character, value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("storage must be an object of string values");
-  }
-  const storage = {};
-  let total = 0;
-  for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== "string") throw new Error(`storage["${key}"] must be a string`);
-    if (key === "" || key.length > FRONTEND_STORAGE_KEY_LIMIT) {
-      throw new Error(`storage keys must be 1-${FRONTEND_STORAGE_KEY_LIMIT} characters (got ${key.length})`);
-    }
-    total += key.length + entry.length;
-    if (total > FRONTEND_STORAGE_TOTAL_LIMIT) {
-      throw new Error(`frontend storage for '${character}' exceeds ${FRONTEND_STORAGE_TOTAL_LIMIT} characters`);
-    }
-    storage[key] = entry;
-  }
-  return storage;
-}
-async function putFrontendStorage(db, character, value) {
-  const storage = parseFrontendStorageValue(character, value);
-  const next = await db.updateState((state) => ({
-    frontendStorage: { ...state.frontendStorage ?? {}, [character]: storage }
-  }));
-  return { storage: frontendStorageFor(next, character) };
-}
-async function resetFrontendStorage(db, character) {
-  const next = await db.updateState((state) => {
-    const all = { ...state.frontendStorage ?? {} };
-    delete all[character];
-    return { frontendStorage: all };
-  });
-  return { storage: frontendStorageFor(next, character), reset: true };
 }
 function requireSessionChatId(chatId, op) {
   if (chatId === "") throw new Error(`chatId is required for ${op} (session scope only)`);
@@ -36170,6 +36172,7 @@ async function handleApi(ctx, req, res) {
     const character = url.searchParams.get("character");
     if (!character) throw new Error("character query is required");
     const record = await getIdbRecord(
+      tavernDataRoot(),
       character,
       url.searchParams.get("db"),
       url.searchParams.get("store"),
@@ -36212,7 +36215,7 @@ async function handleApi(ctx, req, res) {
           throw new Error(`x-dsh-idb-meta is not valid base64url JSON: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
-      const result = await putIdbRecordFromFile(character, dbName, storeName, key, temporaryPath, meta);
+      const result = await putIdbRecordFromFile(tavernDataRoot(), character, dbName, storeName, key, temporaryPath, meta);
       return sendJson(res, 200, { ok: true, value: result });
     } finally {
       await rm2(temporaryDir, { recursive: true, force: true });

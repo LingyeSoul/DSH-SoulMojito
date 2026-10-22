@@ -3,7 +3,7 @@
 > 面向**写美化前端的人**（人写，或让 AI 写）。本文是 `window.*` / `window.TavernHelper.*`
 > 兼容面的**权威清单**：哪些能用、用到什么程度、哪些一定不能用、用了会怎样。
 >
-> - 实现：`packages/plugin/src/helper.ts`（服务端能力）+ `packages/plugin/client-src/11-helper-bridge.js`（iframe shim）
+> - 实现：`packages/plugin/src/helper.ts`（服务端域操作）+ `packages/tavern-jsr`（iframe shim、事件词汇表、库全局）+ `packages/tavern-frontend-storage`（沙箱 localStorage/sessionStorage/IndexedDB）
 > - 决策：[`decisions/2026-10-20-frontend-helper-compat.md`](../../decisions/2026-10-20-frontend-helper-compat.md)
 > - 参考对象：JS-Slash-Runner（Tavern-Helper v4.x，PolyForm NonCommercial）。
 >   本文只对齐**可观察行为**；本插件不复刻它的同源无沙箱模型，也没有任何 JSR 源码拷贝。

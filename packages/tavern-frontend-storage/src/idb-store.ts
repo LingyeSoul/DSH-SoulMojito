@@ -3,10 +3,10 @@
  *
  * Sandboxed card frontends have an opaque origin, so the browser's IndexedDB is
  * unavailable (and enabling allow-same-origin would expose the host DOM/cookies).
- * This module stores the small IndexedDB surface the bridge exposes under the
- * plugin data root instead:
+ * This module stores the small IndexedDB surface the bridge exposes under a
+ * caller-supplied data root (the plugin passes its tavern root):
  *
- *   <tavern root>/frontend-idb/<sha256(character)>/<sha256(database)>/
+ *   <root>/frontend-idb/<sha256(character)>/<sha256(database)>/
  *     meta.json                  version + stores + record descriptors
  *     records/<sha256(key)>.bin  raw ArrayBuffer payload
  *
@@ -17,7 +17,6 @@
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { tavernDataRoot } from './dsh-home.js'
 
 export const IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024
 export const IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
@@ -60,16 +59,16 @@ function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
-function databaseDir(character: string, name: string): string {
-  return join(tavernDataRoot(), 'frontend-idb', sha256(character), sha256(name))
+function databaseDir(root: string, character: string, name: string): string {
+  return join(root, 'frontend-idb', sha256(character), sha256(name))
 }
 
 function recordKeyHash(store: string, key: string): string {
   return sha256(`${store}\u0000${key}`)
 }
 
-function recordPath(character: string, name: string, store: string, key: string): string {
-  return join(databaseDir(character, name), 'records', `${recordKeyHash(store, key)}.bin`)
+function recordPath(root: string, character: string, name: string, store: string, key: string): string {
+  return join(databaseDir(root, character, name), 'records', `${recordKeyHash(store, key)}.bin`)
 }
 
 function metaPath(dir: string): string {
@@ -123,8 +122,8 @@ function normalizeDatabase(value: unknown, name: string): IdbDatabaseDescriptor 
   }
 }
 
-async function readDatabase(character: string, name: string): Promise<IdbDatabaseDescriptor> {
-  const dir = databaseDir(character, name)
+async function readDatabase(root: string, character: string, name: string): Promise<IdbDatabaseDescriptor> {
+  const dir = databaseDir(root, character, name)
   try {
     const text = await readFile(metaPath(dir), 'utf8')
     return normalizeDatabase(JSON.parse(text) as unknown, name)
@@ -134,8 +133,8 @@ async function readDatabase(character: string, name: string): Promise<IdbDatabas
   }
 }
 
-async function writeDatabase(character: string, database: IdbDatabaseDescriptor): Promise<void> {
-  const dir = databaseDir(character, database.name)
+async function writeDatabase(root: string, character: string, database: IdbDatabaseDescriptor): Promise<void> {
+  const dir = databaseDir(root, character, database.name)
   await mkdir(dir, { recursive: true })
   const target = metaPath(dir)
   const temporary = `${target}.${process.pid}.${Date.now()}.tmp`
@@ -144,8 +143,8 @@ async function writeDatabase(character: string, database: IdbDatabaseDescriptor)
   await rename(temporary, target)
 }
 
-function withDatabaseLock<T>(character: string, name: string, operation: () => Promise<T>): Promise<T> {
-  const key = `${character}\u0000${name}`
+function withDatabaseLock<T>(root: string, character: string, name: string, operation: () => Promise<T>): Promise<T> {
+  const key = `${root}\u0000${character}\u0000${name}`
   const previous = databaseLocks.get(key) ?? Promise.resolve()
   const next = previous.catch(() => undefined).then(operation)
   databaseLocks.set(key, next)
@@ -189,6 +188,7 @@ function recordTotal(database: IdbDatabaseDescriptor, excludingKeyHash?: string)
 
 /** Open (or create) a database. Returns the version before/after the request. */
 export async function openIdbDatabase(
+  root: string,
   character: string,
   value: unknown,
   versionValue: unknown,
@@ -197,19 +197,20 @@ export async function openIdbDatabase(
   const requested = typeof versionValue === 'number' && Number.isInteger(versionValue) && versionValue > 0
     ? versionValue
     : 1
-  return withDatabaseLock(character, name, async () => {
-    const database = await readDatabase(character, name)
+  return withDatabaseLock(root, character, name, async () => {
+    const database = await readDatabase(root, character, name)
     const previousVersion = database.version
     if (database.version === 0) database.version = requested
     else if (requested > database.version) database.version = requested
     database.updatedAt = Date.now()
-    await writeDatabase(character, database)
+    await writeDatabase(root, character, database)
     return { version: database.version, previousVersion, stores: Object.keys(database.stores) }
   })
 }
 
 /** Create an object store descriptor (idempotent for the same name). */
 export async function createIdbStore(
+  root: string,
   character: string,
   nameValue: unknown,
   storeValue: unknown,
@@ -218,17 +219,18 @@ export async function createIdbStore(
   const name = requireDatabaseName(nameValue)
   const store = requireStoreName(storeValue)
   const keyPath = typeof keyPathValue === 'string' ? keyPathValue : ''
-  return withDatabaseLock(character, name, async () => {
-    const database = await readDatabase(character, name)
+  return withDatabaseLock(root, character, name, async () => {
+    const database = await readDatabase(root, character, name)
     database.stores[store] = { keyPath }
     database.updatedAt = Date.now()
-    await writeDatabase(character, database)
+    await writeDatabase(root, character, database)
     return { stores: Object.keys(database.stores) }
   })
 }
 
 /** Move a temp upload into the record slot and update metadata. */
 export async function putIdbRecordFromFile(
+  root: string,
   character: string,
   nameValue: unknown,
   storeValue: unknown,
@@ -241,9 +243,9 @@ export async function putIdbRecordFromFile(
   const key = requireKey(keyValue)
   const meta = normalizeRecordMeta(metaValue)
   const keyHash = recordKeyHash(store, key)
-  const destination = recordPath(character, name, store, key)
-  return withDatabaseLock(character, name, async () => {
-    const database = await readDatabase(character, name)
+  const destination = recordPath(root, character, name, store, key)
+  return withDatabaseLock(root, character, name, async () => {
+    const database = await readDatabase(root, character, name)
     if (database.stores[store] === undefined) throw new Error(`idb store '${store}' does not exist in database '${name}'`)
     const size = (await stat(temporaryPath)).size
     if (size > IDB_MAX_RECORD_BYTES) {
@@ -259,7 +261,7 @@ export async function putIdbRecordFromFile(
     database.records[keyHash] = { store, key, size, updatedAt: Date.now(), meta }
     database.updatedAt = Date.now()
     try {
-      await writeDatabase(character, database)
+      await writeDatabase(root, character, database)
     } catch (error) {
       await rm(destination, { force: true })
       throw error
@@ -270,6 +272,7 @@ export async function putIdbRecordFromFile(
 
 /** Resolve a record file for the binary GET route. */
 export async function getIdbRecord(
+  root: string,
   character: string,
   nameValue: unknown,
   storeValue: unknown,
@@ -278,11 +281,11 @@ export async function getIdbRecord(
   const name = requireDatabaseName(nameValue)
   const store = requireStoreName(storeValue)
   const key = requireKey(keyValue)
-  const database = await readDatabase(character, name)
+  const database = await readDatabase(root, character, name)
   if (database.stores[store] === undefined) return undefined
   const record = database.records[recordKeyHash(store, key)]
   if (record === undefined || record.store !== store) return undefined
-  const path = recordPath(character, name, store, key)
+  const path = recordPath(root, character, name, store, key)
   try {
     const info = await stat(path)
     if (!info.isFile()) return undefined
@@ -294,6 +297,7 @@ export async function getIdbRecord(
 }
 
 export async function deleteIdbRecord(
+  root: string,
   character: string,
   nameValue: unknown,
   storeValue: unknown,
@@ -303,41 +307,42 @@ export async function deleteIdbRecord(
   const store = requireStoreName(storeValue)
   const key = requireKey(keyValue)
   const keyHash = recordKeyHash(store, key)
-  return withDatabaseLock(character, name, async () => {
-    const database = await readDatabase(character, name)
+  return withDatabaseLock(root, character, name, async () => {
+    const database = await readDatabase(root, character, name)
     if (database.stores[store] === undefined) return { deleted: false }
     const record = database.records[keyHash]
     const existed = record !== undefined && record.store === store
     delete database.records[keyHash]
     database.updatedAt = Date.now()
-    await writeDatabase(character, database)
-    await rm(recordPath(character, name, store, key), { force: true })
+    await writeDatabase(root, character, database)
+    await rm(recordPath(root, character, name, store, key), { force: true })
     return { deleted: existed }
   })
 }
 
 export async function clearIdbStore(
+  root: string,
   character: string,
   nameValue: unknown,
   storeValue: unknown,
 ): Promise<{ cleared: number }> {
   const name = requireDatabaseName(nameValue)
   const store = requireStoreName(storeValue)
-  return withDatabaseLock(character, name, async () => {
-    const database = await readDatabase(character, name)
+  return withDatabaseLock(root, character, name, async () => {
+    const database = await readDatabase(root, character, name)
     if (database.stores[store] === undefined) return { cleared: 0 }
     const entries = Object.entries(database.records).filter(([, record]) => record.store === store)
     for (const [keyHash] of entries) delete database.records[keyHash]
     database.updatedAt = Date.now()
-    await writeDatabase(character, database)
-    await Promise.all(entries.map(([, record]) => rm(recordPath(character, name, store, record.key), { force: true })))
+    await writeDatabase(root, character, database)
+    await Promise.all(entries.map(([, record]) => rm(recordPath(root, character, name, store, record.key), { force: true })))
     return { cleared: entries.length }
   })
 }
 
-export async function deleteIdbDatabase(character: string, nameValue: unknown): Promise<{ deleted: boolean }> {
+export async function deleteIdbDatabase(root: string, character: string, nameValue: unknown): Promise<{ deleted: boolean }> {
   const name = requireDatabaseName(nameValue)
-  const directory = databaseDir(character, name)
+  const directory = databaseDir(root, character, name)
   let existed = false
   try {
     existed = (await stat(directory)).isDirectory()

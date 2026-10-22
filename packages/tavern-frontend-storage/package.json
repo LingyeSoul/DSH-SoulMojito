@@ -1,0 +1,27 @@
+{
+  "name": "@dsh-soulmojito/frontend-storage",
+  "version": "0.1.0",
+  "description": "Sandboxed card-frontend storage: virtual localStorage/sessionStorage and IndexedDB shims, binary IndexedDB transport, plus the host-backed record store and per-character persistence rules.",
+  "license": "GPL-3.0",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/client.d.ts",
+      "default": "./lib/client.js"
+    }
+  },
+  "files": ["lib"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "@dsh-soulmojito/store": "workspace:*"
+  }
+}
