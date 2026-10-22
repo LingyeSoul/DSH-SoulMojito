@@ -143,6 +143,7 @@
             ...snapshot.bootstrap.state,
             regexScripts: result.scripts,
             ...(result.regexScriptOwners !== undefined ? { regexScriptOwners: result.regexScriptOwners } : {}),
+            ...(result.regexScriptPresetOwners !== undefined ? { regexScriptPresetOwners: result.regexScriptPresetOwners } : {}),
           },
         },
       })

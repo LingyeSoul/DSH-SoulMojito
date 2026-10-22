@@ -555,6 +555,12 @@ export async function handleApi(ctx, req, res) {
     if (body.name !== oldName) await db.deletePreset(oldName)
     const state = await db.updateState((current) => ({
       activePreset: current.activePreset === oldName ? body.name : current.activePreset,
+      ...(body.name !== oldName && current.regexScriptPresetOwners !== undefined
+        ? {
+            regexScriptPresetOwners: Object.fromEntries(Object.entries(current.regexScriptPresetOwners)
+              .map(([id, owner]) => [id, owner === oldName ? body.name : owner])),
+          }
+        : {}),
     }))
     // 内容或名字变化都要写穿 AgentTavern 投影缓存（激活预设可能是这个）。
     await emitAgentPresetChanged()
@@ -1034,7 +1040,12 @@ export async function handleApi(ctx, req, res) {
   if (method === 'GET' && route === 'regex') {
     await db.ensureRegexScriptOwners()
     const state = await db.getState()
-    return sendJson(res, 200, { ok: true, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} })
+    return sendJson(res, 200, {
+      ok: true,
+      scripts: state.regexScripts,
+      regexScriptOwners: state.regexScriptOwners ?? {},
+      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {},
+    })
   }
 
   if (method === 'PUT' && route === 'regex') {
@@ -1043,7 +1054,12 @@ export async function handleApi(ctx, req, res) {
     const scripts = Array.isArray(body.scripts) ? parseRegexScripts(body.scripts) : undefined
     if (scripts === undefined) throw new Error('expected { scripts }')
     const state = await db.replaceRegexScripts(scripts)
-    return sendJson(res, 200, { ok: true, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} })
+    return sendJson(res, 200, {
+      ok: true,
+      scripts: state.regexScripts,
+      regexScriptOwners: state.regexScriptOwners ?? {},
+      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {},
+    })
   }
 
   if (method === 'POST' && route === 'import/regex') {
@@ -1052,7 +1068,13 @@ export async function handleApi(ctx, req, res) {
     if (!Array.isArray(body.data) && typeof body.data !== 'object') throw new Error('expected { data }')
     const imported = await db.importRegexScripts(body.data)
     const state = await db.getState()
-    return sendJson(res, 200, { ok: true, imported, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} })
+    return sendJson(res, 200, {
+      ok: true,
+      imported,
+      scripts: state.regexScripts,
+      regexScriptOwners: state.regexScriptOwners ?? {},
+      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {},
+    })
   }
 
   // 存量卡回填：导入时自动物化只覆盖此后导入的卡，旧卡需显式同步一次。
@@ -1060,7 +1082,13 @@ export async function handleApi(ctx, req, res) {
     await db.ensureRegexScriptOwners()
     const result = await db.backfillRegexScriptsFromCharacters()
     const state = await db.getState()
-    return sendJson(res, 200, { ok: true, ...result, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} })
+    return sendJson(res, 200, {
+      ok: true,
+      ...result,
+      scripts: state.regexScripts,
+      regexScriptOwners: state.regexScriptOwners ?? {},
+      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {},
+    })
   }
 
   // 存量预设回填：预设内嵌 regex 的导入期物化同样只覆盖此后导入的预设。
@@ -1068,7 +1096,13 @@ export async function handleApi(ctx, req, res) {
     await db.ensureRegexScriptOwners()
     const result = await db.backfillRegexScriptsFromPresets()
     const state = await db.getState()
-    return sendJson(res, 200, { ok: true, ...result, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} })
+    return sendJson(res, 200, {
+      ok: true,
+      ...result,
+      scripts: state.regexScripts,
+      regexScriptOwners: state.regexScriptOwners ?? {},
+      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {},
+    })
   }
 
   // 酒馆助手兼容面（2026-10-20）：美化前端 iframe 经 token 校验的 postMessage

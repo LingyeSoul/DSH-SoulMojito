@@ -2701,20 +2701,44 @@ var TavernStore = class _TavernStore {
       await this.updateState((current) => {
         const merged = mergeRegexScripts(current.regexScripts, imported);
         const owners = pruneRegexScriptOwners(current.regexScriptOwners, merged) ?? {};
-        for (const script of imported) owners[script.id] = card.data.name;
-        return { regexScripts: merged, regexScriptOwners: owners };
+        const presetOwners = pruneRegexScriptOwners(current.regexScriptPresetOwners, merged);
+        for (const script of imported) {
+          owners[script.id] = card.data.name;
+          if (presetOwners !== void 0) delete presetOwners[script.id];
+        }
+        return {
+          regexScripts: merged,
+          regexScriptOwners: owners,
+          ...presetOwners !== void 0 ? { regexScriptPresetOwners: presetOwners } : {}
+        };
       });
       return imported.length;
     } catch {
       return 0;
     }
   }
-  /** 预设扩展袋里的 regex_scripts 物化为全局脚本；非法脚本整批跳过，不阻断预设导入。 */
-  async importEmbeddedPresetRegex(preset) {
+  /** 预设扩展袋里的 regex_scripts 物化为全局脚本并登记预设归属；非法脚本整批跳过。 */
+  async importEmbeddedPresetRegex(preset, presetName) {
     const embedded = presetExtensions(preset)["regex_scripts"];
     if (embedded === void 0 || embedded === null) return 0;
     try {
-      return await this.importRegexScripts(embedded);
+      const imported = parseRegexScripts(embedded);
+      if (imported.length === 0) return 0;
+      await this.updateState((current) => {
+        const merged = mergeRegexScripts(current.regexScripts, imported);
+        const cardOwners = pruneRegexScriptOwners(current.regexScriptOwners, merged);
+        const presetOwners = pruneRegexScriptOwners(current.regexScriptPresetOwners, merged) ?? {};
+        for (const script of imported) {
+          if (cardOwners !== void 0) delete cardOwners[script.id];
+          presetOwners[script.id] = presetName;
+        }
+        return {
+          regexScripts: merged,
+          ...cardOwners !== void 0 ? { regexScriptOwners: cardOwners } : {},
+          regexScriptPresetOwners: presetOwners
+        };
+      });
+      return imported.length;
     } catch {
       return 0;
     }
@@ -3046,7 +3070,7 @@ var TavernStore = class _TavernStore {
    */
   async importPreset(name2, preset) {
     await this.putPreset(name2, preset);
-    return { importedRegex: await this.importEmbeddedPresetRegex(preset) };
+    return { importedRegex: await this.importEmbeddedPresetRegex(preset, name2) };
   }
   async getPreset(name2) {
     const bytes = await this.tryRead(path.join(this.root, "presets", `${safeFileName(name2)}.json`));
@@ -3219,9 +3243,16 @@ var TavernStore = class _TavernStore {
     await this.updateState((current) => {
       const merged = mergeRegexScripts(current.regexScripts, imported);
       const owners = pruneRegexScriptOwners(current.regexScriptOwners, merged);
-      if (owners === void 0) return { regexScripts: merged };
-      for (const script of imported) delete owners[script.id];
-      return { regexScripts: merged, regexScriptOwners: owners };
+      const presetOwners = pruneRegexScriptOwners(current.regexScriptPresetOwners, merged);
+      for (const script of imported) {
+        if (owners !== void 0) delete owners[script.id];
+        if (presetOwners !== void 0) delete presetOwners[script.id];
+      }
+      return {
+        regexScripts: merged,
+        ...owners !== void 0 ? { regexScriptOwners: owners } : {},
+        ...presetOwners !== void 0 ? { regexScriptPresetOwners: presetOwners } : {}
+      };
     });
     return imported.length;
   }
@@ -3229,7 +3260,12 @@ var TavernStore = class _TavernStore {
   async replaceRegexScripts(scripts) {
     return this.updateState((current) => {
       const owners = pruneRegexScriptOwners(current.regexScriptOwners, scripts);
-      return owners === void 0 ? { regexScripts: scripts } : { regexScripts: scripts, regexScriptOwners: owners };
+      const presetOwners = pruneRegexScriptOwners(current.regexScriptPresetOwners, scripts);
+      return {
+        regexScripts: scripts,
+        ...owners !== void 0 ? { regexScriptOwners: owners } : {},
+        ...presetOwners !== void 0 ? { regexScriptPresetOwners: presetOwners } : {}
+      };
     });
   }
   /**
@@ -3252,7 +3288,7 @@ var TavernStore = class _TavernStore {
       if (file === void 0) continue;
       const embedded = file.card.data.extensions["regex_scripts"];
       if (embedded === void 0 || embedded === null) continue;
-      pending.push(...stageRegexBackfillEntries(embedded, known, counters, file.card.data.name));
+      pending.push(...stageRegexBackfillEntries(embedded, known, counters, { kind: "character", name: file.card.data.name }));
     }
     return await this.commitRegexBackfill(pending, counters, names.length);
   }
@@ -3275,7 +3311,7 @@ var TavernStore = class _TavernStore {
       if (preset === void 0) continue;
       const embedded = presetExtensions(preset)["regex_scripts"];
       if (embedded === void 0 || embedded === null) continue;
-      pending.push(...stageRegexBackfillEntries(embedded, known, counters));
+      pending.push(...stageRegexBackfillEntries(embedded, known, counters, { kind: "preset", name: name2 }));
     }
     return await this.commitRegexBackfill(pending, counters, names.length);
   }
@@ -3294,61 +3330,93 @@ var TavernStore = class _TavernStore {
       });
       imported = additions.length;
       const regexScripts = [...current.regexScripts, ...additions.map(({ script }) => script)];
-      const pruned = pruneRegexScriptOwners(current.regexScriptOwners, regexScripts);
       const withOwner = additions.filter(({ owner }) => owner !== void 0);
-      const owners = pruned !== void 0 ? { ...pruned } : withOwner.length > 0 ? {} : void 0;
-      if (owners !== void 0) {
-        for (const { script, owner } of withOwner) {
-          if (owner !== void 0) owners[script.id] = owner;
-        }
+      const cardOwnerAdds = withOwner.filter(({ owner }) => owner?.kind === "character");
+      const presetOwnerAdds = withOwner.filter(({ owner }) => owner?.kind === "preset");
+      const cardOwners = pruneRegexScriptOwners(current.regexScriptOwners, regexScripts) ?? (cardOwnerAdds.length > 0 ? {} : void 0);
+      const presetOwners = pruneRegexScriptOwners(current.regexScriptPresetOwners, regexScripts) ?? (presetOwnerAdds.length > 0 ? {} : void 0);
+      for (const { script, owner } of cardOwnerAdds) {
+        if (owner === void 0) continue;
+        cardOwners[script.id] = owner.name;
+        if (presetOwners !== void 0) delete presetOwners[script.id];
       }
-      return owners === void 0 ? { regexScripts } : { regexScripts, regexScriptOwners: owners };
+      for (const { script, owner } of presetOwnerAdds) {
+        if (owner === void 0) continue;
+        presetOwners[script.id] = owner.name;
+        if (cardOwners !== void 0) delete cardOwners[script.id];
+      }
+      return {
+        regexScripts,
+        ...cardOwners !== void 0 ? { regexScriptOwners: cardOwners } : {},
+        ...presetOwners !== void 0 ? { regexScriptPresetOwners: presetOwners } : {}
+      };
     });
     return { imported, skipped: counters.skipped + pending.length - imported, invalid: counters.invalid, scanned };
   }
   /**
-   * 存量迁移：旧 state 没有 regexScriptOwners 时，扫描全部角色卡，把全局列表里
-   * 与卡内嵌脚本同名的条目登记为该卡的脚本。只执行一次（写盘后字段存在即返回）；
-   * 卡文件不可读/条目非法时跳过该来源，不阻断面板加载。
+   * 存量迁移：旧 state 缺少归属表时，扫描全部角色卡/预设，把全局列表里与内嵌
+   * `regex_scripts` 同名的条目登记到对应来源。两张表各自只迁移一次（写盘后字段
+   * 存在即跳过）；来源文件不可读/条目非法时跳过该来源，不阻断面板加载。
    */
   async ensureRegexScriptOwners() {
     const current = await this.getState();
-    if (current.regexScriptOwners !== void 0) return;
+    const needCardOwners = current.regexScriptOwners === void 0;
+    const needPresetOwners = current.regexScriptPresetOwners === void 0;
+    if (!needCardOwners && !needPresetOwners) return;
     const known = new Set(current.regexScripts.map((script) => script.scriptName));
-    const byName = /* @__PURE__ */ new Map();
-    for (const name2 of (await this.listCharacters()).sort()) {
-      let file;
-      try {
-        file = await this.getCharacter(name2);
-      } catch {
-        continue;
-      }
-      if (file === void 0) continue;
-      const embedded = file.card.data.extensions["regex_scripts"];
-      if (embedded === void 0 || embedded === null) continue;
-      let entries;
-      try {
-        entries = listRegexScriptEntries(embedded);
-      } catch {
-        continue;
-      }
-      for (const entry of entries) {
-        let script;
+    const cardByName = /* @__PURE__ */ new Map();
+    const presetByName = /* @__PURE__ */ new Map();
+    if (needCardOwners) {
+      for (const name2 of (await this.listCharacters()).sort()) {
+        let file;
         try {
-          script = parseRegexScript(entry);
+          file = await this.getCharacter(name2);
         } catch {
           continue;
         }
-        if (!known.has(script.scriptName) || byName.has(script.scriptName)) continue;
-        byName.set(script.scriptName, file.card.data.name);
+        if (file === void 0) continue;
+        const embedded = file.card.data.extensions["regex_scripts"];
+        if (embedded === void 0 || embedded === null) continue;
+        for (const script of parseBackfillEntries(embedded)) {
+          if (!known.has(script.scriptName) || cardByName.has(script.scriptName)) continue;
+          cardByName.set(script.scriptName, file.card.data.name);
+        }
       }
     }
-    const owners = {};
-    for (const script of current.regexScripts) {
-      const owner = byName.get(script.scriptName);
-      if (owner !== void 0) owners[script.id] = owner;
+    if (needPresetOwners) {
+      for (const name2 of (await this.listPresets()).sort()) {
+        let preset;
+        try {
+          preset = await this.getPreset(name2);
+        } catch {
+          continue;
+        }
+        if (preset === void 0) continue;
+        const embedded = presetExtensions(preset)["regex_scripts"];
+        if (embedded === void 0 || embedded === null) continue;
+        for (const script of parseBackfillEntries(embedded)) {
+          if (!known.has(script.scriptName) || presetByName.has(script.scriptName)) continue;
+          presetByName.set(script.scriptName, name2);
+        }
+      }
     }
-    await this.updateState((state) => state.regexScriptOwners === void 0 ? { regexScriptOwners: owners } : {});
+    const cardOwners = {};
+    const presetOwners = {};
+    for (const script of current.regexScripts) {
+      const existingCardOwner = current.regexScriptOwners?.[script.id];
+      const existingPresetOwner = current.regexScriptPresetOwners?.[script.id];
+      const cardOwner = cardByName.get(script.scriptName);
+      const presetOwner = presetByName.get(script.scriptName);
+      if (cardOwner !== void 0 && needCardOwners && existingPresetOwner === void 0) {
+        cardOwners[script.id] = cardOwner;
+      } else if (presetOwner !== void 0 && needPresetOwners && existingCardOwner === void 0) {
+        presetOwners[script.id] = presetOwner;
+      }
+    }
+    await this.updateState((state) => ({
+      ...state.regexScriptOwners === void 0 && needCardOwners ? { regexScriptOwners: cardOwners } : {},
+      ...state.regexScriptPresetOwners === void 0 && needPresetOwners ? { regexScriptPresetOwners: presetOwners } : {}
+    }));
   }
   /* ------------------------------ 内部 ------------------------------ */
   async readState() {
@@ -3357,6 +3425,7 @@ var TavernStore = class _TavernStore {
     const parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
     const { pipelineMode: _legacyPipelineMode, textCompletion: _legacyTextCompletion, ...rest } = parsed;
     const regexScriptOwners = normalizeRegexScriptOwners(parsed.regexScriptOwners);
+    const regexScriptPresetOwners = normalizeRegexScriptOwners(parsed.regexScriptPresetOwners);
     return {
       ...structuredClone(DEFAULT_STATE),
       ...rest,
@@ -3377,6 +3446,7 @@ var TavernStore = class _TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       ...regexScriptOwners !== void 0 ? { regexScriptOwners: pruneRegexScriptOwners(regexScriptOwners, parsed.regexScripts ?? []) } : {},
+      ...regexScriptPresetOwners !== void 0 ? { regexScriptPresetOwners: pruneRegexScriptOwners(regexScriptPresetOwners, parsed.regexScripts ?? []) } : {},
       scriptGlobals: parsed.scriptGlobals ?? {},
       characterVariables: normalizeCharacterVariables(parsed.characterVariables),
       frontendStorage: normalizeFrontendStorage(parsed.frontendStorage),
@@ -3525,6 +3595,22 @@ function pruneRegexScriptOwners(owners, scripts) {
 function presetExtensions(preset) {
   const extensions = preset["extensions"];
   return typeof extensions === "object" && extensions !== null && !Array.isArray(extensions) ? extensions : {};
+}
+function parseBackfillEntries(embedded) {
+  let entries;
+  try {
+    entries = listRegexScriptEntries(embedded);
+  } catch {
+    return [];
+  }
+  const scripts = [];
+  for (const entry of entries) {
+    try {
+      scripts.push(parseRegexScript(entry));
+    } catch {
+    }
+  }
+  return scripts;
 }
 function stageRegexBackfillEntries(embedded, known, counters, owner) {
   let entries;
@@ -11082,9 +11168,14 @@ async function collectWorldInfoBooks(db, state, characterName, character, chatId
 }
 function collectRegexScripts(state, character) {
   const currentName = character?.card.data.name;
-  const scripts = state.regexScriptOwners === void 0 ? [...state.regexScripts] : state.regexScripts.filter((script) => {
-    const owner = state.regexScriptOwners?.[script.id];
-    return owner === void 0 || owner === currentName;
+  const activePreset = state.activePreset;
+  const scripts = state.regexScripts.filter((script) => {
+    const cardOwner = state.regexScriptOwners?.[script.id];
+    const presetOwner = state.regexScriptPresetOwners?.[script.id];
+    if (cardOwner === void 0 && presetOwner === void 0) return true;
+    const cardMatches = cardOwner !== void 0 && cardOwner === currentName;
+    const presetMatches = presetOwner !== void 0 && presetOwner === activePreset;
+    return cardMatches || presetMatches;
   });
   const names = new Set(scripts.map((script) => script.scriptName));
   const cardScripts = character?.card.data.extensions["regex_scripts"];
@@ -13537,7 +13628,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.9".trim() : "";
-  const commit = true ? normalizeCommit("055d88a") : void 0;
+  const commit = true ? normalizeCommit("1b1e994") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -35929,7 +36020,10 @@ async function handleApi(ctx, req, res) {
     await emitAssetsSaved("preset", body.name);
     if (body.name !== oldName) await db.deletePreset(oldName);
     const state = await db.updateState((current) => ({
-      activePreset: current.activePreset === oldName ? body.name : current.activePreset
+      activePreset: current.activePreset === oldName ? body.name : current.activePreset,
+      ...body.name !== oldName && current.regexScriptPresetOwners !== void 0 ? {
+        regexScriptPresetOwners: Object.fromEntries(Object.entries(current.regexScriptPresetOwners).map(([id, owner]) => [id, owner === oldName ? body.name : owner]))
+      } : {}
     }));
     await emitAgentPresetChanged();
     await refreshActivePrompt();
@@ -36332,7 +36426,12 @@ async function handleApi(ctx, req, res) {
   if (method === "GET" && route === "regex") {
     await db.ensureRegexScriptOwners();
     const state = await db.getState();
-    return sendJson(res, 200, { ok: true, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} });
+    return sendJson(res, 200, {
+      ok: true,
+      scripts: state.regexScripts,
+      regexScriptOwners: state.regexScriptOwners ?? {},
+      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
+    });
   }
   if (method === "PUT" && route === "regex") {
     await db.ensureRegexScriptOwners();
@@ -36340,7 +36439,12 @@ async function handleApi(ctx, req, res) {
     const scripts = Array.isArray(body.scripts) ? parseRegexScripts2(body.scripts) : void 0;
     if (scripts === void 0) throw new Error("expected { scripts }");
     const state = await db.replaceRegexScripts(scripts);
-    return sendJson(res, 200, { ok: true, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} });
+    return sendJson(res, 200, {
+      ok: true,
+      scripts: state.regexScripts,
+      regexScriptOwners: state.regexScriptOwners ?? {},
+      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
+    });
   }
   if (method === "POST" && route === "import/regex") {
     await db.ensureRegexScriptOwners();
@@ -36348,19 +36452,37 @@ async function handleApi(ctx, req, res) {
     if (!Array.isArray(body.data) && typeof body.data !== "object") throw new Error("expected { data }");
     const imported = await db.importRegexScripts(body.data);
     const state = await db.getState();
-    return sendJson(res, 200, { ok: true, imported, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} });
+    return sendJson(res, 200, {
+      ok: true,
+      imported,
+      scripts: state.regexScripts,
+      regexScriptOwners: state.regexScriptOwners ?? {},
+      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
+    });
   }
   if (method === "POST" && route === "regex/sync-cards") {
     await db.ensureRegexScriptOwners();
     const result = await db.backfillRegexScriptsFromCharacters();
     const state = await db.getState();
-    return sendJson(res, 200, { ok: true, ...result, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} });
+    return sendJson(res, 200, {
+      ok: true,
+      ...result,
+      scripts: state.regexScripts,
+      regexScriptOwners: state.regexScriptOwners ?? {},
+      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
+    });
   }
   if (method === "POST" && route === "regex/sync-presets") {
     await db.ensureRegexScriptOwners();
     const result = await db.backfillRegexScriptsFromPresets();
     const state = await db.getState();
-    return sendJson(res, 200, { ok: true, ...result, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} });
+    return sendJson(res, 200, {
+      ok: true,
+      ...result,
+      scripts: state.regexScripts,
+      regexScriptOwners: state.regexScriptOwners ?? {},
+      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
+    });
   }
   if (method === "POST" && route === "helper") {
     return handleHelperApi(req, res, db);

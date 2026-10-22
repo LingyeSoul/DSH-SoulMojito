@@ -97,14 +97,20 @@
       const [editing, setEditing] = useState('')
       const [regexFilter, setRegexFilter] = useState('')
       const scripts = state.bootstrap.state.regexScripts || []
-      // 卡级脚本跟随角色卡（2026-10-22 用户需求）：只有归属当前角色卡（或手动）
-      // 的脚本在本会话生效；其余置灰并锁定开关，编辑面仍保留。
-      const owners = state.bootstrap.state.regexScriptOwners || {}
+      // 卡级/预设级脚本跟随各自来源（2026-10-22 用户需求）：只有归属当前角色卡、
+      // 或所属预设正在激活的脚本在本会话生效；其余置灰并锁定开关，编辑面仍保留。
+      const cardOwners = state.bootstrap.state.regexScriptOwners || {}
+      const presetOwners = state.bootstrap.state.regexScriptPresetOwners || {}
       const activeCharacter = state.bootstrap.state.activeCharacter || ''
-      const ownerOf = (script) => owners[script.id]
+      const activePreset = state.bootstrap.state.activePreset || ''
+      const cardOwnerOf = (script) => cardOwners[script.id]
+      const presetOwnerOf = (script) => presetOwners[script.id]
       const autoInactive = (script) => {
-        const owner = ownerOf(script)
-        return owner !== undefined && owner !== activeCharacter
+        const cardOwner = cardOwnerOf(script)
+        const presetOwner = presetOwnerOf(script)
+        if (cardOwner === undefined && presetOwner === undefined) return false
+        return !((cardOwner !== undefined && cardOwner === activeCharacter)
+          || (presetOwner !== undefined && presetOwner === activePreset))
       }
       // 名称/模式过滤（2026-10-21 分页 UX）：与角色/预设/剧本清单同款模式，
       // 模式串也参与匹配（正则要的就是按 pattern 找）。
@@ -155,11 +161,11 @@
               // text next to it, so the row can put the pattern on a second line.
               h('label', {
                 className: 'dt-toggle dt-regex-check',
-                title: t(autoInactive(script) ? 'settings.regexOwnerInactive' : 'settings.regexToggle', { name: autoInactive(script) ? ownerOf(script) : script.scriptName }),
+                title: autoInactive(script) ? t('settings.regexAutoInactive') : t('settings.regexToggle', { name: script.scriptName }),
               },
                 h('input', {
                   type: 'checkbox',
-                  'aria-label': t(autoInactive(script) ? 'settings.regexOwnerInactive' : 'settings.regexToggle', { name: autoInactive(script) ? ownerOf(script) : script.scriptName }),
+                  'aria-label': autoInactive(script) ? t('settings.regexAutoInactive') : t('settings.regexToggle', { name: script.scriptName }),
                   checked: !script.disabled && !autoInactive(script),
                   disabled: editing === script.id || autoInactive(script),
                   onChange: () => run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, disabled: !item.disabled } : item))),
@@ -167,11 +173,17 @@
               h('div', { className: 'dt-regex-main' },
                 h('div', { className: 'dt-regex-head' },
                   h('span', { className: 'dt-regex-name', title: script.scriptName }, script.scriptName),
-                  ownerOf(script) !== undefined
+                  cardOwnerOf(script) !== undefined
                     ? h('span', {
                         className: 'dt-regex-owner',
-                        title: t(autoInactive(script) ? 'settings.regexOwnerInactive' : 'settings.regexOwnerActive', { name: ownerOf(script) }),
-                      }, t('settings.regexOwner', { name: ownerOf(script) }))
+                        title: t(cardOwnerOf(script) === activeCharacter ? 'settings.regexOwnerActive' : 'settings.regexOwnerInactive', { name: cardOwnerOf(script) }),
+                      }, t('settings.regexOwner', { name: cardOwnerOf(script) }))
+                    : null,
+                  presetOwnerOf(script) !== undefined
+                    ? h('span', {
+                        className: 'dt-regex-owner',
+                        title: t(presetOwnerOf(script) === activePreset ? 'settings.regexPresetOwnerActive' : 'settings.regexPresetOwnerInactive', { name: presetOwnerOf(script) }),
+                      }, t('settings.regexPresetOwner', { name: presetOwnerOf(script) }))
                     : null,
                   h('span', { className: 'dt-regex-placements', title: t('settings.regexPlacements', { names: script.placement.map((p) => regexPlacementLabel(t, p)).join(', ') }) },
                     script.placement.map((p) => regexPlacementLabel(t, p)).join(' · '))),

@@ -126,7 +126,7 @@
 - [`2026-10-21-frontend-host-background.md`](../decisions/2026-10-21-frontend-host-background.md) — 美化前端未设置背景时用 DSH 原生背景色填充画布（深色模式无白圈）
 - [`2026-10-21-card-scripts-host.md`](../decisions/2026-10-21-card-scripts-host.md) — 卡脚本右栏（手动运行、不自动执行）、会话世界书副本、GM 面板 document facade 与行动栏画布/按钮修复
 - [`2026-10-22-jsr-storage-packages.md`](../decisions/2026-10-22-jsr-storage-packages.md) — JSR 兼容运行时与沙箱虚拟存储拆分为独立库包（`tavern-jsr` / `tavern-frontend-storage`）
-- [`2026-10-22-card-scoped-regex-and-worlds.md`](../decisions/2026-10-22-card-scoped-regex-and-worlds.md) — 卡级正则与世界书跟随角色卡会话自动启用/停用（手动勾选不被插件改写）
+- [`2026-10-22-card-scoped-regex-and-worlds.md`](../decisions/2026-10-22-card-scoped-regex-and-worlds.md) — 卡级/预设级正则与世界书跟随来源自动启用/停用（手动勾选不被插件改写）
 
 ### 面板与视图
 

@@ -1003,11 +1003,45 @@ describe('internal Tavern session bridge occupation', () => {
       await apiHandler(makeRequest({ name: presetName, data }, '/api/dsh-soulmojito/import/preset'), res)
       expect(res.statusCode).toBe(200)
       expect(JSON.parse(res.chunks.join(''))).toMatchObject({ ok: true, name: presetName, importedRegex: 1 })
-      expect((await store.getState()).regexScripts.some((script) => script.scriptName === scriptName)).toBe(true)
+      const importedState = await store.getState()
+      const importedScript = importedState.regexScripts.find((script) => script.scriptName === scriptName)
+      expect(importedScript).toBeDefined()
+      expect(importedState.regexScriptPresetOwners?.[importedScript!.id]).toBe(presetName)
       // 原始预设保留 extensions，导出或再次导入时脚本仍然在。
       expect(await store.getPreset(presetName)).toEqual(data)
     } finally {
       await store.deletePreset(presetName)
+      await store.updateState((state) => ({
+        regexScripts: state.regexScripts.filter((script) => script.scriptName !== scriptName),
+      }))
+    }
+  })
+
+  it('keeps preset regex ownership when the preset is renamed', async () => {
+    const presetName = 'Regex Rename Old'
+    const nextName = 'Regex Rename New'
+    const scriptName = 'preset rename script'
+    try {
+      await store.importPreset(presetName, {
+        prompts: [],
+        extensions: { regex_scripts: [{ scriptName, findRegex: 'rename', replaceString: '' }] },
+      })
+      const before = await store.getState()
+      const script = before.regexScripts.find((item) => item.scriptName === scriptName)
+      expect(script).toBeDefined()
+      const res = makeResponse()
+      await apiHandler(makeRequest({
+        name: nextName,
+        data: {
+          prompts: [{ name: 'Main', identifier: 'main', role: 'system', content: 'renamed' }],
+          prompt_order: [{ character_id: 100000, order: [{ identifier: 'main', enabled: true }] }],
+        },
+      }, `/api/dsh-soulmojito/preset/${encodeURIComponent(presetName)}`, 'PUT'), res)
+      expect(res.statusCode).toBe(200)
+      expect((await store.getState()).regexScriptPresetOwners?.[script!.id]).toBe(nextName)
+    } finally {
+      await store.deletePreset(presetName)
+      await store.deletePreset(nextName)
       await store.updateState((state) => ({
         regexScripts: state.regexScripts.filter((script) => script.scriptName !== scriptName),
       }))
@@ -1033,7 +1067,9 @@ describe('internal Tavern session bridge occupation', () => {
       expect(body).toMatchObject({ ok: true, invalid: 0 })
       expect(body.imported).toBeGreaterThanOrEqual(1)
       expect(body.scanned).toBeGreaterThanOrEqual(1)
-      expect(body.scripts.some((script: { scriptName: string }) => script.scriptName === scriptName)).toBe(true)
+      const backfilled = body.scripts.find((script: { scriptName: string }) => script.scriptName === scriptName)
+      expect(backfilled).toBeDefined()
+      expect(body.regexScriptPresetOwners[backfilled.id]).toBe(presetName)
     } finally {
       await store.deletePreset(presetName)
       await store.updateState((state) => ({

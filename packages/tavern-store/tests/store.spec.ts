@@ -310,6 +310,9 @@ describe('TavernStore', () => {
     const state = await store.getState()
     expect(state.regexScripts.map((script) => script.scriptName)).toEqual(['Preset Strip', 'Preset Tame'])
     expect(state.regexScripts[0]?.placement).toEqual([2])
+    for (const script of state.regexScripts) {
+      expect(state.regexScriptPresetOwners?.[script.id]).toBe('Import Preset')
+    }
     // 原始预设保留 extensions（导出时内嵌脚本不丢失）。
     expect(await store.getPreset('Import Preset')).toEqual(preset)
 
@@ -346,6 +349,11 @@ describe('TavernStore', () => {
     // 同名脚本保持全局版本；跨预设重名以预设名排序先到者为准。
     expect(state.regexScripts.find((script) => script.scriptName === 'Keep Preset Global')?.findRegex).toBe('global version')
     expect(state.regexScripts.find((script) => script.scriptName === 'Preset Shared')?.findRegex).toBe('from a')
+    // 回填的预设脚本登记预设归属（同名跨预设仍以先到者为准）。
+    expect(state.regexScriptPresetOwners?.[state.regexScripts.find((script) => script.scriptName === 'Preset Only')!.id])
+      .toBe('Backfill Preset A')
+    expect(state.regexScriptPresetOwners?.[state.regexScripts.find((script) => script.scriptName === 'Preset Shared')!.id])
+      .toBe('Backfill Preset A')
 
     // 幂等：再同步一次不再写入，全部有效条目都算跳过。
     expect(await store.backfillRegexScriptsFromPresets())
@@ -366,7 +374,20 @@ describe('TavernStore', () => {
     expect(state.regexScripts.map((script) => [script.scriptName, script.findRegex])).toEqual([['A', 'a2'], ['B', 'b']])
   }))
 
-  it('regex：旧 state 缺归属表时从角色卡推断一次，之后不再重复扫描', withStore(async (store) => {
+  it('regex：手动导入同名脚本会解除卡级与预设级归属', withStore(async (store) => {
+    await store.updateState(() => ({
+      regexScripts: parseRegexScripts([{ id: 'manual-override', scriptName: 'Owned Script', findRegex: 'owned', replaceString: '' }]),
+      regexScriptOwners: { 'manual-override': 'Owner Card' },
+      regexScriptPresetOwners: { 'manual-override': 'Owner Preset' },
+    }))
+    await store.importRegexScripts([{ id: 'manual-override', scriptName: 'Owned Script', findRegex: 'manual', replaceString: '' }])
+    const state = await store.getState()
+    expect(state.regexScripts.find((script) => script.id === 'manual-override')?.findRegex).toBe('manual')
+    expect(state.regexScriptOwners?.['manual-override']).toBeUndefined()
+    expect(state.regexScriptPresetOwners?.['manual-override']).toBeUndefined()
+  }))
+
+  it('regex：旧 state 缺归属表时从角色卡/预设各推断一次，之后不再重复扫描', withStore(async (store) => {
     await store.importCharacter({
       ...sampleCard,
       data: {
@@ -379,15 +400,29 @@ describe('TavernStore', () => {
         },
       },
     })
+    await store.putPreset('Legacy Preset', {
+      prompts: [],
+      extensions: { regex_scripts: [{ scriptName: 'Legacy Preset Script', findRegex: 'preset', replaceString: '' }] },
+    })
     const imported = await store.getState()
     const legacyId = imported.regexScripts[0]?.id
     expect(legacyId).toBeDefined()
-    // 模拟旧版本 state.json：脚本已物化，但没有归属字段。
-    await store.updateState(() => ({ regexScriptOwners: undefined }))
+    // 模拟旧版本 state.json：卡/预设脚本已物化，但两张归属表都没有。
+    await store.updateState((state) => ({
+      regexScripts: [
+        ...state.regexScripts,
+        ...parseRegexScripts([{ id: 'legacy-preset-script', scriptName: 'Legacy Preset Script', findRegex: 'preset', replaceString: '' }]),
+      ],
+      regexScriptOwners: undefined,
+      regexScriptPresetOwners: undefined,
+    }))
     expect((await store.getState()).regexScriptOwners).toBeUndefined()
+    expect((await store.getState()).regexScriptPresetOwners).toBeUndefined()
 
     await store.ensureRegexScriptOwners()
-    expect((await store.getState()).regexScriptOwners?.[legacyId!]).toBe('Legacy Owner')
+    const migrated = await store.getState()
+    expect(migrated.regexScriptOwners?.[legacyId!]).toBe('Legacy Owner')
+    expect(migrated.regexScriptPresetOwners?.['legacy-preset-script']).toBe('Legacy Preset')
     // 字段存在后不再扫描：手动删掉归属不会被下一次 ensure 重新补回。
     await store.updateState((state) => {
       const owners = { ...(state.regexScriptOwners ?? {}) }
@@ -431,12 +466,16 @@ describe('TavernStore', () => {
         },
       },
     })
+    await store.updateState(() => ({
+      regexScriptPresetOwners: { 'keep-script': 'Keep Preset', 'drop-script': 'Drop Preset' },
+    }))
     const before = await store.getState()
     expect(before.regexScriptOwners).toMatchObject({ 'keep-script': 'Prune Owner', 'drop-script': 'Prune Owner' })
     const kept = before.regexScripts.filter((script) => script.id === 'keep-script')
     const next = await store.replaceRegexScripts(kept)
     expect(next.regexScripts.map((script) => script.id)).toEqual(['keep-script'])
     expect(next.regexScriptOwners).toEqual({ 'keep-script': 'Prune Owner' })
+    expect(next.regexScriptPresetOwners).toEqual({ 'keep-script': 'Keep Preset' })
   }))
 
   it('世界书：导入 → 读取 roundtrip → 删除', withStore(async (store) => {

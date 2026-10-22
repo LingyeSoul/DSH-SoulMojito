@@ -71,18 +71,22 @@ export async function collectWorldInfoBooks(
 }
 
 export function collectRegexScripts(
-  state: Pick<TavernState, 'regexScripts' | 'regexScriptOwners'>,
+  state: Pick<TavernState, 'regexScripts' | 'regexScriptOwners' | 'regexScriptPresetOwners' | 'activePreset'>,
   character?: CharacterAsset,
 ): RegexScriptIR[] {
-  // 卡级脚本跟随角色卡（2026-10-22 用户需求）：导入时物化的全局副本只在其
-  // 归属角色卡的会话里生效，其他会话自动停用；无归属的手动脚本保持全局。
+  // 卡级/预设级脚本跟随各自来源（2026-10-22 用户需求）：卡脚本只在归属角色卡
+  // 的会话里生效，预设脚本只在所属预设激活时生效；无归属的手动脚本保持全局。
+  // 同名脚本同时被两边登记时按并集处理（任一来源命中即生效）。
   const currentName = character?.card.data.name
-  const scripts = state.regexScriptOwners === undefined
-    ? [...state.regexScripts]
-    : state.regexScripts.filter((script) => {
-        const owner = state.regexScriptOwners?.[script.id]
-        return owner === undefined || owner === currentName
-      })
+  const activePreset = state.activePreset
+  const scripts = state.regexScripts.filter((script) => {
+    const cardOwner = state.regexScriptOwners?.[script.id]
+    const presetOwner = state.regexScriptPresetOwners?.[script.id]
+    if (cardOwner === undefined && presetOwner === undefined) return true
+    const cardMatches = cardOwner !== undefined && cardOwner === currentName
+    const presetMatches = presetOwner !== undefined && presetOwner === activePreset
+    return cardMatches || presetMatches
+  })
   // 运行期再并入当前角色卡的卡内脚本；按 scriptName 去重，全局（可编辑、
   // 已导入）优先，避免同一脚本被应用两次。
   const names = new Set(scripts.map((script) => script.scriptName))

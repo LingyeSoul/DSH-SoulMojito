@@ -179,6 +179,35 @@ describe('collectRegexScripts', () => {
     expect(inB.map((item) => item.scriptName)).toEqual(['Global', 'Owned B'])
   })
 
+  it('预设级脚本只在所属预设激活时生效', () => {
+    const state = {
+      regexScripts: [script('Global', { id: 'g' }), script('Preset Owned', { id: 'p' })],
+      regexScriptPresetOwners: { p: 'Preset A' },
+      activePreset: 'Preset A',
+    }
+    expect(collectRegexScripts(state, characterWithRegex([])).map((item) => item.scriptName))
+      .toEqual(['Global', 'Preset Owned'])
+    expect(collectRegexScripts({ ...state, activePreset: 'Preset B' }, characterWithRegex([])).map((item) => item.scriptName))
+      .toEqual(['Global'])
+    expect(collectRegexScripts({ ...state, activePreset: undefined }, characterWithRegex([])).map((item) => item.scriptName))
+      .toEqual(['Global'])
+  })
+
+  it('卡与预设同时登记同一脚本时任一来源命中即生效', () => {
+    const state = {
+      regexScripts: [script('Shared', { id: 's' })],
+      regexScriptOwners: { s: 'Card A' },
+      regexScriptPresetOwners: { s: 'Preset A' },
+      activePreset: 'Preset A',
+    }
+    expect(collectRegexScripts(state, characterWithRegex([], 'Card B')).map((item) => item.scriptName))
+      .toEqual(['Shared'])
+    expect(collectRegexScripts({ ...state, activePreset: 'Preset B' }, characterWithRegex([], 'Card A')).map((item) => item.scriptName))
+      .toEqual(['Shared'])
+    expect(collectRegexScripts({ ...state, activePreset: 'Preset B' }, characterWithRegex([], 'Card B')).map((item) => item.scriptName))
+      .toEqual([])
+  })
+
   it('别的卡占用的全局同名脚本被过滤后，当前卡的卡内版本仍会并入', () => {
     const state = {
       regexScripts: [script('Shared', { id: 'shared', findRegex: 'owned by b' })],
