@@ -2513,9 +2513,23 @@ var DEFAULT_STATE = {
   chats: {},
   regexScripts: [],
   scriptGlobals: {},
+  frontendStorage: {},
   modsEnabled: false,
   mods: { enabled: {} }
 };
+function normalizeFrontendStorage(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [character, entries] of Object.entries(value)) {
+    if (typeof entries !== "object" || entries === null || Array.isArray(entries)) continue;
+    const storage = {};
+    for (const [key, entry] of Object.entries(entries)) {
+      if (typeof entry === "string") storage[key] = entry;
+    }
+    if (Object.keys(storage).length > 0) result[character] = storage;
+  }
+  return result;
+}
 function normalizeModEnables(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
   const enabled = value.enabled;
@@ -2597,8 +2611,8 @@ var TavernStore = class _TavernStore {
       hash.update(`${dir}
 `);
       for (const name2 of (await this.listDir(dir)).sort()) {
-        const stat = await fs2.stat(path.join(this.root, dir, name2)).catch(() => void 0);
-        hash.update(`${name2}\0${stat === void 0 ? "missing" : `${stat.size}\0${stat.mtimeMs}`}
+        const stat2 = await fs2.stat(path.join(this.root, dir, name2)).catch(() => void 0);
+        hash.update(`${name2}\0${stat2 === void 0 ? "missing" : `${stat2.size}\0${stat2.mtimeMs}`}
 `);
       }
     }
@@ -3264,6 +3278,7 @@ var TavernStore = class _TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
+      frontendStorage: normalizeFrontendStorage(parsed.frontendStorage),
       compaction: normalizeCompactionOverride(parsed.compaction),
       // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false，只有显式 true 才开。
       modsEnabled: parsed.modsEnabled === true,
@@ -10534,13 +10549,13 @@ function seedJsrMvuVariables(card, variables2) {
     variables2["initialized_lorebooks"] = true;
     changed = true;
   }
-  const stat = plainObject(variables2["stat_data"]);
-  if (stat === void 0) {
+  const stat2 = plainObject(variables2["stat_data"]);
+  if (stat2 === void 0) {
     variables2["stat_data"] = { \u7CFB\u7EDF\u72B6\u6001: { \u4E3B\u89D2\u521B\u5EFA\u5B8C\u6BD5: false } };
     changed = true;
-  } else if (Object.keys(stat).length === 0) {
-    stat["\u7CFB\u7EDF\u72B6\u6001"] = { \u4E3B\u89D2\u521B\u5EFA\u5B8C\u6BD5: false };
-    variables2["stat_data"] = stat;
+  } else if (Object.keys(stat2).length === 0) {
+    stat2["\u7CFB\u7EDF\u72B6\u6001"] = { \u4E3B\u89D2\u521B\u5EFA\u5B8C\u6BD5: false };
+    variables2["stat_data"] = stat2;
     changed = true;
   }
   return changed;
@@ -10555,20 +10570,20 @@ function applyUpdateVariableToChat(card, chat, text) {
   const block = parseUpdateBlock(text);
   const failures = [];
   let applied = 0;
-  let stat = plainObject(variables2["stat_data"]) ?? {};
-  const previousStat = structuredClone(stat);
+  let stat2 = plainObject(variables2["stat_data"]) ?? {};
+  const previousStat = structuredClone(stat2);
   if (block !== void 0) {
     variables2["previous_stat_data"] = previousStat;
     if (block.error !== void 0) {
       failures.push(block.error);
     } else if (block.ops !== void 0) {
-      const result = applyLenientPatch(stat, block.ops);
-      stat = result.value;
+      const result = applyLenientPatch(stat2, block.ops);
+      stat2 = result.value;
       applied = result.applied;
       failures.push(...result.failures);
     }
   }
-  variables2["stat_data"] = stat;
+  variables2["stat_data"] = stat2;
   variables2["initialized_lorebooks"] = true;
   let nextText = text;
   if (cardUsesStatusPlaceholder(card) && !nextText.includes(STATUS_PLACEHOLDER)) {
@@ -10580,17 +10595,17 @@ ${STATUS_PLACEHOLDER}`;
     found: block !== void 0,
     applied,
     failures,
-    statData: stat
+    statData: stat2
   };
 }
 function messageStatVariables(chat, message) {
-  const stat = readStatData(chat);
-  if (stat === void 0) return message;
+  const stat2 = readStatData(chat);
+  if (stat2 === void 0) return message;
   return {
     ...message,
     variables: {
       ...plainObject(message.variables) ?? {},
-      stat_data: structuredClone(stat)
+      stat_data: structuredClone(stat2)
     }
   };
 }
@@ -13368,7 +13383,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.8".trim() : "";
-  const commit = true ? normalizeCommit("8ff77f3") : void 0;
+  const commit = true ? normalizeCommit("108a378") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -16015,9 +16030,9 @@ function copyShippedFiles(sourceDir, targetDir) {
   for (const entry of shippedEntries(sourceDir)) {
     const from = join13(sourceDir, entry);
     if (!existsSync2(from)) continue;
-    const stat = statSyncSafe(from);
-    if (stat === null) continue;
-    if (!stat.isDirectory()) {
+    const stat2 = statSyncSafe(from);
+    if (stat2 === null) continue;
+    if (!stat2.isDirectory()) {
       replaceFileAtomic(from, join13(targetDir, entry));
       copied.push(entry);
       continue;
@@ -16049,9 +16064,9 @@ function listFiles(root) {
     const current = pending.pop();
     for (const entry of readdirSyncSafe(current)) {
       const full = join13(current, entry);
-      const stat = statSyncSafe(full);
-      if (stat === null) continue;
-      if (stat.isDirectory()) pending.push(full);
+      const stat2 = statSyncSafe(full);
+      if (stat2 === null) continue;
+      if (stat2.isDirectory()) pending.push(full);
       else found.push(full);
     }
   }
@@ -24685,11 +24700,11 @@ var GameRegistry = class _GameRegistry {
     const viewProblem = staticViewCheck(viewHtml10);
     if (viewProblem !== void 0) return broken(check.manifest, `view.html ${viewProblem}`);
     const enginePath = join16(directory, "engine.mjs");
-    const stat = await fs16.stat(enginePath).catch(() => void 0);
-    if (stat?.isFile() !== true) return broken(check.manifest, "engine.mjs \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
+    const stat2 = await fs16.stat(enginePath).catch(() => void 0);
+    if (stat2?.isFile() !== true) return broken(check.manifest, "engine.mjs \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
     let imported;
     try {
-      imported = await import(`${pathToFileURL3(enginePath).href}?v=${stat.mtimeMs}`);
+      imported = await import(`${pathToFileURL3(enginePath).href}?v=${stat2.mtimeMs}`);
     } catch (cause) {
       return broken(check.manifest, `engine.mjs \u5BFC\u5165\u5931\u8D25: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
@@ -24712,8 +24727,8 @@ var GameRegistry = class _GameRegistry {
   async installFromPath(sourcePath, force = false) {
     const source = resolve4(sourcePath);
     if (!existsSync3(source)) throw new Error(`\u6E38\u620F\u5305\u76EE\u5F55\u4E0D\u5B58\u5728: ${sourcePath}`);
-    const stat = await fs16.stat(source);
-    if (!stat.isDirectory()) throw new Error(`\u6E38\u620F\u5305\u8DEF\u5F84\u5FC5\u987B\u662F\u76EE\u5F55: ${sourcePath}`);
+    const stat2 = await fs16.stat(source);
+    if (!stat2.isDirectory()) throw new Error(`\u6E38\u620F\u5305\u8DEF\u5F84\u5FC5\u987B\u662F\u76EE\u5F55: ${sourcePath}`);
     let raw;
     try {
       raw = JSON.parse(await fs16.readFile(join16(source, "game.json"), "utf8"));
@@ -24943,8 +24958,8 @@ var GameSessionStore = class _GameSessionStore {
     const hash = createHash9("sha256");
     const names = (await fs17.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
     for (const name2 of names) {
-      const stat = await fs17.stat(join17(this.sessionsRoot, name2)).catch(() => void 0);
-      hash.update(`${name2}\0${stat === void 0 ? "missing" : `${stat.size}\0${stat.mtimeMs}`}
+      const stat2 = await fs17.stat(join17(this.sessionsRoot, name2)).catch(() => void 0);
+      hash.update(`${name2}\0${stat2 === void 0 ? "missing" : `${stat2.size}\0${stat2.mtimeMs}`}
 `);
     }
     return hash.digest("base64url");
@@ -27108,27 +27123,27 @@ var defaultLocalEmbedRuntime = {
     }
     transformers.env.allowRemoteModels = false;
     transformers.env.allowLocalModels = true;
-    let pipeline;
+    let pipeline2;
     if (options.dtype !== void 0) {
-      pipeline = await transformers.pipeline("feature-extraction", modelDir, { dtype: options.dtype });
+      pipeline2 = await transformers.pipeline("feature-extraction", modelDir, { dtype: options.dtype });
     } else {
       const chain = ["fp16", "q8", "fp32"];
       let lastError;
       for (const dtype of chain) {
         try {
-          pipeline = await transformers.pipeline("feature-extraction", modelDir, { dtype });
+          pipeline2 = await transformers.pipeline("feature-extraction", modelDir, { dtype });
           break;
         } catch (cause) {
           lastError = cause;
         }
       }
-      if (pipeline === void 0) {
+      if (pipeline2 === void 0) {
         throw lastError instanceof Error ? lastError : new Error(String(lastError));
       }
     }
     return {
       async embed(texts) {
-        const output = await pipeline([...texts], {
+        const output = await pipeline2([...texts], {
           pooling: options.pooling ?? "cls",
           normalize: true
         });
@@ -29033,6 +29048,13 @@ function registerTavernSessionCommand(ctx) {
   });
 }
 
+// packages/plugin/src/http/router.ts
+import { createReadStream, createWriteStream } from "node:fs";
+import { mkdtemp, rm as rm2 } from "node:fs/promises";
+import { tmpdir as tmpdir4 } from "node:os";
+import { join as join22 } from "node:path";
+import { pipeline } from "node:stream/promises";
+
 // packages/plugin/src/assets.ts
 async function serveCharacterAvatar(res, db, name2, found) {
   let bytes;
@@ -29423,6 +29445,243 @@ function latestFrontendMessage(messages, render) {
   return void 0;
 }
 
+// packages/plugin/src/frontend-idb.ts
+import { createHash as createHash12 } from "node:crypto";
+import { mkdir as mkdir4, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname as dirname13, join as join20 } from "node:path";
+var IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024;
+var IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
+var databaseLocks = /* @__PURE__ */ new Map();
+function sha256(value) {
+  return createHash12("sha256").update(value).digest("hex");
+}
+function databaseDir(character, name2) {
+  return join20(tavernDataRoot(), "frontend-idb", sha256(character), sha256(name2));
+}
+function recordKeyHash(store5, key) {
+  return sha256(`${store5}\0${key}`);
+}
+function recordPath(character, name2, store5, key) {
+  return join20(databaseDir(character, name2), "records", `${recordKeyHash(store5, key)}.bin`);
+}
+function metaPath(dir) {
+  return join20(dir, "meta.json");
+}
+function emptyDatabase(name2) {
+  return { name: name2, version: 0, stores: {}, records: {}, updatedAt: 0 };
+}
+function asRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+function normalizeDatabase(value, name2) {
+  const record = asRecord(value);
+  if (record === void 0) return emptyDatabase(name2);
+  const stores = {};
+  const rawStores = asRecord(record.stores);
+  if (rawStores !== void 0) {
+    for (const [storeName, descriptor] of Object.entries(rawStores)) {
+      const entry = asRecord(descriptor);
+      if (entry === void 0) continue;
+      stores[storeName] = { keyPath: typeof entry.keyPath === "string" ? entry.keyPath : "" };
+    }
+  }
+  const records = {};
+  const rawRecords = asRecord(record.records);
+  if (rawRecords !== void 0) {
+    for (const [keyHash, descriptor] of Object.entries(rawRecords)) {
+      const entry = asRecord(descriptor);
+      if (entry === void 0) continue;
+      if (typeof entry.key !== "string" || typeof entry.size !== "number" || !Number.isFinite(entry.size) || entry.size < 0) continue;
+      records[keyHash] = {
+        store: typeof entry.store === "string" ? entry.store : "",
+        key: entry.key,
+        size: entry.size,
+        updatedAt: typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0,
+        meta: asRecord(entry.meta) ?? {}
+      };
+    }
+  }
+  return {
+    name: name2,
+    version: typeof record.version === "number" && Number.isInteger(record.version) && record.version >= 0 ? record.version : 0,
+    stores,
+    records,
+    updatedAt: typeof record.updatedAt === "number" && Number.isFinite(record.updatedAt) ? record.updatedAt : 0
+  };
+}
+async function readDatabase(character, name2) {
+  const dir = databaseDir(character, name2);
+  try {
+    const text = await readFile(metaPath(dir), "utf8");
+    return normalizeDatabase(JSON.parse(text), name2);
+  } catch (error) {
+    if (error.code === "ENOENT") return emptyDatabase(name2);
+    throw new Error(`idb metadata for '${name2}' is unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+async function writeDatabase(character, database) {
+  const dir = databaseDir(character, database.name);
+  await mkdir4(dir, { recursive: true });
+  const target = metaPath(dir);
+  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(database)}`, "utf8");
+  await rm(target, { force: true });
+  await rename(temporary, target);
+}
+function withDatabaseLock(character, name2, operation) {
+  const key = `${character}\0${name2}`;
+  const previous = databaseLocks.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => void 0).then(operation);
+  databaseLocks.set(key, next);
+  return next.finally(() => {
+    if (databaseLocks.get(key) === next) databaseLocks.delete(key);
+  });
+}
+function requireDatabaseName(value) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error("idb database name must be a non-empty string");
+  if (value.length > 256) throw new Error("idb database name is too long (max 256)");
+  return value;
+}
+function requireStoreName(value) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error("idb store name must be a non-empty string");
+  if (value.length > 256) throw new Error("idb store name is too long (max 256)");
+  return value;
+}
+function requireKey(value) {
+  if (typeof value !== "string" && typeof value !== "number") throw new Error("idb record key must be a string or number");
+  const key = String(value);
+  if (key.length === 0) throw new Error("idb record key must not be empty");
+  if (key.length > 1024) throw new Error("idb record key is too long (max 1024)");
+  return key;
+}
+function normalizeRecordMeta(value) {
+  const record = asRecord(value) ?? {};
+  const text = JSON.stringify(record);
+  if (text.length > 64 * 1024) throw new Error("idb record metadata is too large (max 64KB)");
+  return record;
+}
+function recordTotal(database, excludingKeyHash) {
+  return Object.entries(database.records).filter(([keyHash]) => keyHash !== excludingKeyHash).reduce((sum, [, record]) => sum + record.size, 0);
+}
+async function openIdbDatabase(character, value, versionValue) {
+  const name2 = requireDatabaseName(value);
+  const requested = typeof versionValue === "number" && Number.isInteger(versionValue) && versionValue > 0 ? versionValue : 1;
+  return withDatabaseLock(character, name2, async () => {
+    const database = await readDatabase(character, name2);
+    const previousVersion = database.version;
+    if (database.version === 0) database.version = requested;
+    else if (requested > database.version) database.version = requested;
+    database.updatedAt = Date.now();
+    await writeDatabase(character, database);
+    return { version: database.version, previousVersion, stores: Object.keys(database.stores) };
+  });
+}
+async function createIdbStore(character, nameValue, storeValue, keyPathValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  const keyPath = typeof keyPathValue === "string" ? keyPathValue : "";
+  return withDatabaseLock(character, name2, async () => {
+    const database = await readDatabase(character, name2);
+    database.stores[store5] = { keyPath };
+    database.updatedAt = Date.now();
+    await writeDatabase(character, database);
+    return { stores: Object.keys(database.stores) };
+  });
+}
+async function putIdbRecordFromFile(character, nameValue, storeValue, keyValue, temporaryPath, metaValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  const key = requireKey(keyValue);
+  const meta = normalizeRecordMeta(metaValue);
+  const keyHash = recordKeyHash(store5, key);
+  const destination = recordPath(character, name2, store5, key);
+  return withDatabaseLock(character, name2, async () => {
+    const database = await readDatabase(character, name2);
+    if (database.stores[store5] === void 0) throw new Error(`idb store '${store5}' does not exist in database '${name2}'`);
+    const size = (await stat(temporaryPath)).size;
+    if (size > IDB_MAX_RECORD_BYTES) {
+      throw new Error(`idb record is too large (${size} > ${IDB_MAX_RECORD_BYTES} bytes)`);
+    }
+    const total = recordTotal(database, keyHash) + size;
+    if (total > IDB_MAX_TOTAL_BYTES) {
+      throw new Error(`idb storage for '${character}' exceeds ${IDB_MAX_TOTAL_BYTES} bytes`);
+    }
+    await mkdir4(dirname13(destination), { recursive: true });
+    await rm(destination, { force: true });
+    await rename(temporaryPath, destination);
+    database.records[keyHash] = { store: store5, key, size, updatedAt: Date.now(), meta };
+    database.updatedAt = Date.now();
+    try {
+      await writeDatabase(character, database);
+    } catch (error) {
+      await rm(destination, { force: true });
+      throw error;
+    }
+    return { key, size };
+  });
+}
+async function getIdbRecord(character, nameValue, storeValue, keyValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  const key = requireKey(keyValue);
+  const database = await readDatabase(character, name2);
+  if (database.stores[store5] === void 0) return void 0;
+  const record = database.records[recordKeyHash(store5, key)];
+  if (record === void 0 || record.store !== store5) return void 0;
+  const path12 = recordPath(character, name2, store5, key);
+  try {
+    const info = await stat(path12);
+    if (!info.isFile()) return void 0;
+    return { path: path12, size: info.size, meta: record.meta };
+  } catch (error) {
+    if (error.code === "ENOENT") return void 0;
+    throw error;
+  }
+}
+async function deleteIdbRecord(character, nameValue, storeValue, keyValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  const key = requireKey(keyValue);
+  const keyHash = recordKeyHash(store5, key);
+  return withDatabaseLock(character, name2, async () => {
+    const database = await readDatabase(character, name2);
+    if (database.stores[store5] === void 0) return { deleted: false };
+    const record = database.records[keyHash];
+    const existed = record !== void 0 && record.store === store5;
+    delete database.records[keyHash];
+    database.updatedAt = Date.now();
+    await writeDatabase(character, database);
+    await rm(recordPath(character, name2, store5, key), { force: true });
+    return { deleted: existed };
+  });
+}
+async function clearIdbStore(character, nameValue, storeValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  return withDatabaseLock(character, name2, async () => {
+    const database = await readDatabase(character, name2);
+    if (database.stores[store5] === void 0) return { cleared: 0 };
+    const entries = Object.entries(database.records).filter(([, record]) => record.store === store5);
+    for (const [keyHash] of entries) delete database.records[keyHash];
+    database.updatedAt = Date.now();
+    await writeDatabase(character, database);
+    await Promise.all(entries.map(([, record]) => rm(recordPath(character, name2, store5, record.key), { force: true })));
+    return { cleared: entries.length };
+  });
+}
+async function deleteIdbDatabase(character, nameValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const directory = databaseDir(character, name2);
+  let existed = false;
+  try {
+    existed = (await stat(directory)).isDirectory();
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  await rm(directory, { recursive: true, force: true });
+  return { deleted: existed };
+}
+
 // packages/plugin/src/games/http.ts
 var GAMES_INSTALL_BODY_MAX_BYTES = 8 * 1024 * 1024;
 function isGamesRoute(route) {
@@ -29543,6 +29802,230 @@ async function handleGamesApi(options) {
   }
 }
 
+// packages/plugin/src/frontend-generation.ts
+var REQUEST_TIMEOUT_MS = 18e4;
+var MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+var MAX_PROMPT_CHARS = 2e6;
+var MAX_MESSAGES = 256;
+var MAX_API_KEY_CHARS = 8192;
+var FrontendGenerationError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "FrontendGenerationError";
+  }
+};
+function asRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+function requireText(value, field, maxChars) {
+  if (typeof value !== "string") throw new FrontendGenerationError(`${field} must be a string`);
+  const text = value.trim();
+  if (text === "") throw new FrontendGenerationError(`${field} must not be empty`);
+  if (text.length > maxChars) throw new FrontendGenerationError(`${field} is too long (${text.length} > ${maxChars})`);
+  return text;
+}
+function isLoopbackHostname(hostname) {
+  const name2 = hostname.toLowerCase();
+  return name2 === "localhost" || name2 === "127.0.0.1" || name2 === "[::1]" || name2 === "::1";
+}
+function normalizeBaseUrl(url) {
+  if (url.search !== "" || url.hash !== "") {
+    throw new FrontendGenerationError("custom_api.apiurl must be a base URL without query or hash parameters");
+  }
+  let base = url.toString().replace(/\/+$/, "");
+  base = base.replace(/\/chat\/completions$/i, "");
+  base = base.replace(/\/models$/i, "");
+  if (base === "") throw new FrontendGenerationError("custom_api.apiurl must include a host");
+  return base;
+}
+function parseApiTarget(value, requireModel) {
+  const record = asRecord2(value);
+  if (record === void 0) throw new FrontendGenerationError("custom_api must be an object");
+  const rawUrl = requireText(record.apiurl, "custom_api.apiurl", 2048);
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new FrontendGenerationError(`custom_api.apiurl is not a valid URL: ${rawUrl}`);
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new FrontendGenerationError("custom_api.apiurl must use https:// (http:// is allowed only for loopback proxies)");
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw new FrontendGenerationError("custom_api.apiurl must not contain credentials; put the key in the API key field");
+  }
+  if (url.protocol === "http:" && !isLoopbackHostname(url.hostname)) {
+    throw new FrontendGenerationError("custom_api.apiurl must use https:// for non-loopback hosts");
+  }
+  if (record.key !== void 0 && typeof record.key !== "string") {
+    throw new FrontendGenerationError("custom_api.key must be a string when present");
+  }
+  const key = typeof record.key === "string" ? record.key : "";
+  if (key.length > MAX_API_KEY_CHARS) {
+    throw new FrontendGenerationError(`custom_api.key is too long (${key.length} > ${MAX_API_KEY_CHARS})`);
+  }
+  if (/[\r\n\u0000]/.test(key)) {
+    throw new FrontendGenerationError("custom_api.key must not contain line breaks or NUL characters");
+  }
+  const model = requireModel ? requireText(record.model, "custom_api.model", 256) : typeof record.model === "string" ? record.model.trim() : "";
+  return { baseUrl: normalizeBaseUrl(url), key, model };
+}
+function authHeaders(target) {
+  const headers = { "content-type": "application/json" };
+  if (target.key !== "") headers.authorization = `Bearer ${target.key}`;
+  return headers;
+}
+function redactSecret(value, secret) {
+  return secret === "" ? value : value.split(secret).join("[redacted]");
+}
+function bodySnippet(value, secret) {
+  const text = redactSecret(value, secret).replace(/\s+/g, " ").trim();
+  return text.length > 500 ? `${text.slice(0, 500)}\u2026` : text;
+}
+async function requestJson(endpoint, init, label, secret) {
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      ...init,
+      redirect: "error",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+    });
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new FrontendGenerationError(`custom API ${label} request failed: ${redactSecret(reason, secret)}`);
+  }
+  const declaredLength = Number(response.headers.get("content-length") ?? "");
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+    if (response.body !== null) await response.body.cancel().catch(() => void 0);
+    throw new FrontendGenerationError(`custom API ${label} response is too large (${declaredLength} bytes)`);
+  }
+  const text = await response.text();
+  if (text.length > MAX_RESPONSE_BYTES) {
+    throw new FrontendGenerationError(`custom API ${label} response is too large (${text.length} characters)`);
+  }
+  if (!response.ok) {
+    throw new FrontendGenerationError(
+      `custom API ${label} failed: HTTP ${response.status} ${response.statusText}: ${bodySnippet(text, secret)}`
+    );
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new FrontendGenerationError(`custom API ${label} returned invalid JSON: ${bodySnippet(text, secret)}`);
+  }
+}
+function modelIds(payload) {
+  const record = asRecord2(payload);
+  const list = record === void 0 ? [] : Array.isArray(record.data) ? record.data : Array.isArray(record.models) ? record.models : [];
+  const ids = [];
+  for (const entry of list) {
+    if (typeof entry === "string") {
+      const id2 = entry.trim();
+      if (id2 !== "") ids.push(id2);
+      continue;
+    }
+    const item = asRecord2(entry);
+    if (item === void 0) continue;
+    const id = typeof item.id === "string" ? item.id.trim() : typeof item.name === "string" ? item.name.trim() : "";
+    if (id !== "") ids.push(id);
+  }
+  return [...new Set(ids)].sort();
+}
+async function listCustomApiModels(value) {
+  const target = parseApiTarget(value, false);
+  const payload = await requestJson(
+    `${target.baseUrl}/models`,
+    { method: "GET", headers: authHeaders(target) },
+    "models",
+    target.key
+  );
+  const models = modelIds(payload);
+  if (models.length === 0) {
+    throw new FrontendGenerationError("custom API /models returned no model ids; check the API URL and key");
+  }
+  return models.slice(0, 500);
+}
+function parseRole(value, fallback) {
+  return value === "system" || value === "user" || value === "assistant" ? value : fallback;
+}
+function buildMessages(config) {
+  const messages = [];
+  const injects = Array.isArray(config.injects) ? config.injects : [];
+  for (const entry of injects) {
+    const inject2 = asRecord2(entry);
+    if (inject2 === void 0) continue;
+    if (inject2.position === "none") continue;
+    if (typeof inject2.content !== "string" || inject2.content.trim() === "") continue;
+    messages.push({ role: parseRole(inject2.role, "system"), content: inject2.content });
+  }
+  const overrides = asRecord2(config.overrides);
+  const history = asRecord2(overrides?.chat_history);
+  const prompts = history !== void 0 && Array.isArray(history.prompts) ? history.prompts : [];
+  for (const entry of prompts) {
+    const prompt = asRecord2(entry);
+    if (prompt === void 0) continue;
+    if (typeof prompt.content !== "string") {
+      throw new FrontendGenerationError("overrides.chat_history.prompts[].content must be a string");
+    }
+    messages.push({ role: parseRole(prompt.role, "user"), content: prompt.content });
+  }
+  const userInput = typeof config.user_input === "string" ? config.user_input : "";
+  if (userInput.trim() !== "") messages.push({ role: "user", content: userInput });
+  if (messages.length === 0) {
+    throw new FrontendGenerationError("TavernHelper.generate needs user_input or chat history prompts");
+  }
+  if (messages.length > MAX_MESSAGES) {
+    throw new FrontendGenerationError(`too many prompt messages (${messages.length} > ${MAX_MESSAGES})`);
+  }
+  const totalChars = messages.reduce((sum, message) => sum + message.content.length, 0);
+  if (totalChars > MAX_PROMPT_CHARS) {
+    throw new FrontendGenerationError(`prompt is too large (${totalChars} > ${MAX_PROMPT_CHARS} characters)`);
+  }
+  return messages;
+}
+function completionText(payload) {
+  const record = asRecord2(payload);
+  const choices = record !== void 0 && Array.isArray(record.choices) ? record.choices : [];
+  const first = choices.length > 0 ? asRecord2(choices[0]) : void 0;
+  if (first === void 0) {
+    throw new FrontendGenerationError("custom API /chat/completions returned no choices");
+  }
+  const message = asRecord2(first.message);
+  const content = message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => {
+      if (typeof part === "string") return part;
+      const item = asRecord2(part);
+      return item !== void 0 && typeof item.text === "string" ? item.text : "";
+    }).join("");
+  }
+  if (typeof first.text === "string") return first.text;
+  const finishReason = typeof first.finish_reason === "string" ? first.finish_reason : "unknown";
+  throw new FrontendGenerationError(`custom API /chat/completions returned no text (finish_reason=${finishReason})`);
+}
+async function generateWithCustomApi(value) {
+  const config = asRecord2(value);
+  if (config === void 0) throw new FrontendGenerationError("generate config must be an object");
+  const target = parseApiTarget(config.custom_api, true);
+  const messages = buildMessages(config);
+  const payload = await requestJson(
+    `${target.baseUrl}/chat/completions`,
+    {
+      method: "POST",
+      headers: authHeaders(target),
+      body: JSON.stringify({ model: target.model, messages, stream: false })
+    },
+    "chat/completions",
+    target.key
+  );
+  const text = completionText(payload);
+  if (text.trim() === "") {
+    throw new FrontendGenerationError("custom API /chat/completions returned an empty response");
+  }
+  return text;
+}
+
 // packages/plugin/src/helper.ts
 var VARIABLE_NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
 async function handleHelperApi(req, res, db) {
@@ -29564,6 +30047,84 @@ async function handleHelperApi(req, res, db) {
         ok: true,
         value: await replaceMvuData(db, character, chatId, body)
       });
+    // JSR 生成桥（2026-10-22）：卡前端自带 OpenAI 兼容 API 源。服务端代发
+    // /models 与 /chat/completions，API Key 只进 outbound header，不回传、不落盘。
+    // chatId 必须存在：只有真正绑定到聊天的 iframe 才能发起生成。
+    case "models": {
+      requireSessionChatId(chatId, "models");
+      return sendJson(res, 200, {
+        ok: true,
+        value: { models: await listCustomApiModels({ apiurl: body?.apiurl, key: body?.key }) }
+      });
+    }
+    case "generate": {
+      requireSessionChatId(chatId, "generate");
+      return sendJson(res, 200, {
+        ok: true,
+        value: { text: await generateWithCustomApi(body?.config) }
+      });
+    }
+    // 沙箱 localStorage 持久层（2026-10-22）：按角色保存小型设置，供下一次
+    // srcdoc 同步播种。存储上限 512KB/角色；写走 updateState 的串行队列。
+    case "storage.get": {
+      requireSessionChatId(chatId, "storage.get");
+      return sendJson(res, 200, {
+        ok: true,
+        value: { storage: frontendStorageFor(state, character) }
+      });
+    }
+    case "storage.set": {
+      requireSessionChatId(chatId, "storage.set");
+      return sendJson(res, 200, {
+        ok: true,
+        value: await putFrontendStorage(db, character, body?.storage)
+      });
+    }
+    case "storage.reset": {
+      requireSessionChatId(chatId, "storage.reset");
+      return sendJson(res, 200, {
+        ok: true,
+        value: await resetFrontendStorage(db, character)
+      });
+    }
+    // 虚拟 IndexedDB 的控制面（2026-10-22）：数据本身走 frontend/idb/put|get
+    // 二进制路由，这里只处理 open / create-store / delete 等小 JSON 操作。
+    // 所有名字由服务端 hash 后落盘，iframe 无法寻址别的角色或目录。
+    case "idb.open": {
+      requireSessionChatId(chatId, "idb.open");
+      return sendJson(res, 200, {
+        ok: true,
+        value: await openIdbDatabase(character, body?.name, body?.version)
+      });
+    }
+    case "idb.store.create": {
+      requireSessionChatId(chatId, "idb.store.create");
+      return sendJson(res, 200, {
+        ok: true,
+        value: await createIdbStore(character, body?.db, body?.store, body?.keyPath)
+      });
+    }
+    case "idb.delete": {
+      requireSessionChatId(chatId, "idb.delete");
+      return sendJson(res, 200, {
+        ok: true,
+        value: await deleteIdbRecord(character, body?.db, body?.store, body?.key)
+      });
+    }
+    case "idb.clear": {
+      requireSessionChatId(chatId, "idb.clear");
+      return sendJson(res, 200, {
+        ok: true,
+        value: await clearIdbStore(character, body?.db, body?.store)
+      });
+    }
+    case "idb.delete-db": {
+      requireSessionChatId(chatId, "idb.delete-db");
+      return sendJson(res, 200, {
+        ok: true,
+        value: await deleteIdbDatabase(character, body?.db)
+      });
+    }
     case "messages.get":
       return sendJson(res, 200, { ok: true, value: await getMessages(db, character, chatId, body) });
     case "messages.set":
@@ -29757,9 +30318,9 @@ async function replaceVariables(db, state, character, chatId, body) {
 async function replaceMvuData(db, character, chatId, body) {
   const snapshot2 = await requireChat(db, character, chatId);
   const chat = snapshot2.chat;
-  const stat = requireObject(body?.statData, "statData");
+  const stat2 = requireObject(body?.statData, "statData");
   const chatVariables2 = ensureChatVariables(chat);
-  chatVariables2["stat_data"] = stat;
+  chatVariables2["stat_data"] = stat2;
   chatVariables2["initialized_lorebooks"] = true;
   let messageId = -1;
   if (chat.messages.length > 0) {
@@ -29767,18 +30328,18 @@ async function replaceMvuData(db, character, chatId, body) {
     const message = chat.messages[messageId];
     message.variables = {
       ...plainObject6(message.variables) ?? {},
-      stat_data: cloneJson(stat)
+      stat_data: cloneJson(stat2)
     };
   }
   const revision = await persistChat(db, character, chatId, chat, snapshot2.revision);
   try {
     const store5 = await variables();
     const existing = await store5.get("chat", chatId, "stat_data");
-    await store5.set("chat", chatId, "stat_data", stat, existing?.revision);
+    await store5.set("chat", chatId, "stat_data", stat2, existing?.revision);
   } catch (error) {
     console.warn(`dsh-soulmojito: MVU chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return { stat_data: cloneJson(stat), messageId, revision };
+  return { stat_data: cloneJson(stat2), messageId, revision };
 }
 async function mirrorChatScope(chatId, tree) {
   const store5 = await variables();
@@ -29895,6 +30456,46 @@ function normalizeLorebookEntries(raw) {
     seen.add(normalized.uid);
     return normalized;
   });
+}
+var FRONTEND_STORAGE_TOTAL_LIMIT = 512 * 1024;
+var FRONTEND_STORAGE_KEY_LIMIT = 512;
+function frontendStorageFor(state, character) {
+  const storage = state.frontendStorage?.[character];
+  return storage === void 0 ? {} : cloneJson(storage);
+}
+function parseFrontendStorageValue(character, value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("storage must be an object of string values");
+  }
+  const storage = {};
+  let total = 0;
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "string") throw new Error(`storage["${key}"] must be a string`);
+    if (key === "" || key.length > FRONTEND_STORAGE_KEY_LIMIT) {
+      throw new Error(`storage keys must be 1-${FRONTEND_STORAGE_KEY_LIMIT} characters (got ${key.length})`);
+    }
+    total += key.length + entry.length;
+    if (total > FRONTEND_STORAGE_TOTAL_LIMIT) {
+      throw new Error(`frontend storage for '${character}' exceeds ${FRONTEND_STORAGE_TOTAL_LIMIT} characters`);
+    }
+    storage[key] = entry;
+  }
+  return storage;
+}
+async function putFrontendStorage(db, character, value) {
+  const storage = parseFrontendStorageValue(character, value);
+  const next = await db.updateState((state) => ({
+    frontendStorage: { ...state.frontendStorage ?? {}, [character]: storage }
+  }));
+  return { storage: frontendStorageFor(next, character) };
+}
+async function resetFrontendStorage(db, character) {
+  const next = await db.updateState((state) => {
+    const all = { ...state.frontendStorage ?? {} };
+    delete all[character];
+    return { frontendStorage: all };
+  });
+  return { storage: frontendStorageFor(next, character), reset: true };
 }
 function requireSessionChatId(chatId, op) {
   if (chatId === "") throw new Error(`chatId is required for ${op} (session scope only)`);
@@ -31143,17 +31744,17 @@ function numberOr(value, fallback) {
 }
 
 // packages/plugin/src/workspace.ts
-import { mkdir as mkdir4 } from "node:fs/promises";
+import { mkdir as mkdir5 } from "node:fs/promises";
 var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
 var TAVERN_WORKBENCH_WORKSPACE_TITLE = "Tavern Workbench (internal)";
 async function prepareInternalWorkspace() {
   const path12 = tavernDataRoot("workspace");
-  await mkdir4(path12, { recursive: true });
+  await mkdir5(path12, { recursive: true });
   return { path: path12, title: TAVERN_WORKSPACE_TITLE };
 }
 async function prepareWorkbenchWorkspace() {
   const path12 = tavernDataRoot("workbench");
-  await mkdir4(path12, { recursive: true });
+  await mkdir5(path12, { recursive: true });
   return { path: path12, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
 }
 
@@ -35564,6 +36165,67 @@ async function handleApi(ctx, req, res) {
     const scriptTrees = chatId === null ? void 0 : await db.getChatScripts(character, chatId);
     const { world, scripts } = collectCardScriptBundle(file.card, scriptTrees);
     return sendJson(res, 200, { ok: true, character, world, scripts });
+  }
+  if (method === "GET" && route === "frontend/idb/get") {
+    const character = url.searchParams.get("character");
+    if (!character) throw new Error("character query is required");
+    const record = await getIdbRecord(
+      character,
+      url.searchParams.get("db"),
+      url.searchParams.get("store"),
+      url.searchParams.get("key")
+    );
+    if (record === void 0) return sendJson(res, 404, { ok: false, message: "idb record not found" });
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/octet-stream");
+    res.setHeader("content-length", String(record.size));
+    res.setHeader("x-dsh-idb-meta", Buffer.from(JSON.stringify(record.meta), "utf8").toString("base64url"));
+    await pipeline(createReadStream(record.path), res);
+    return;
+  }
+  if (method === "POST" && route === "frontend/idb/put") {
+    const character = url.searchParams.get("character");
+    if (!character) throw new Error("character query is required");
+    const dbName = url.searchParams.get("db");
+    const storeName = url.searchParams.get("store");
+    const key = url.searchParams.get("key");
+    if (dbName === null || storeName === null || key === null) {
+      throw new Error("db, store and key queries are required");
+    }
+    const declared = Number(req.headers?.["content-length"] ?? "");
+    if (Number.isFinite(declared) && declared > IDB_MAX_RECORD_BYTES) {
+      req.destroy?.();
+      throw new Error(`idb record is too large (${declared} > ${IDB_MAX_RECORD_BYTES} bytes)`);
+    }
+    const temporaryDir = await mkdtemp(join22(tmpdir4(), "dsh-soulmojito-idb-"));
+    const temporaryPath = join22(temporaryDir, "record.bin");
+    try {
+      await pipeline(req, createWriteStream(temporaryPath));
+      const metaHeader = typeof req.headers?.["x-dsh-idb-meta"] === "string" ? req.headers["x-dsh-idb-meta"] : "";
+      let meta = {};
+      if (metaHeader !== "") {
+        try {
+          const parsed = JSON.parse(Buffer.from(metaHeader, "base64url").toString("utf8"));
+          if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) meta = parsed;
+          else throw new Error("meta must be an object");
+        } catch (error) {
+          throw new Error(`x-dsh-idb-meta is not valid base64url JSON: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      const result = await putIdbRecordFromFile(character, dbName, storeName, key, temporaryPath, meta);
+      return sendJson(res, 200, { ok: true, value: result });
+    } finally {
+      await rm2(temporaryDir, { recursive: true, force: true });
+    }
+  }
+  if (method === "GET" && route === "frontend/storage") {
+    const character = url.searchParams.get("character");
+    if (!character) throw new Error("character query is required");
+    const state = await db.getState();
+    return sendJson(res, 200, {
+      ok: true,
+      storage: state.frontendStorage?.[character] ?? {}
+    });
   }
   if (method === "GET" && route === "frontend/latest") {
     const state = await db.getState();

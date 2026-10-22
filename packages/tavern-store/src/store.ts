@@ -166,6 +166,13 @@ export interface TavernState {
   /** STscript 全局变量。 */
   scriptGlobals: Record<string, string | number | boolean>
   /**
+   * 美化前端 localStorage 的持久层（2026-10-22）：按角色隔离的键值表。
+   * 沙箱 iframe 没有同源存储，卡前端（示例卡3）把 API 源/UI 设置写 localStorage；
+   * 插件把小型设置写回宿主状态，重启/刷新后由 srcdoc 同步播种。大资源包仍由卡
+   * 自己的 IndexedDB 处理，不进入 state.json。
+   */
+  frontendStorage?: Record<string, Record<string, string>>
+  /**
    * 压缩总结模型的运行时覆盖（提案 0006 §4.3）：剧情会话（AgentTavern 非分组、
    * AgentNovel）压缩检查点的摘要目标。解析顺序：本覆盖 > 部署层 curator 行配置
    * （profile patch）> 会话路由。undefined 表示未覆盖。
@@ -310,8 +317,24 @@ const DEFAULT_STATE: TavernState = {
   chats: {},
   regexScripts: [],
   scriptGlobals: {},
+  frontendStorage: {},
   modsEnabled: false,
   mods: { enabled: {} },
+}
+
+/** frontendStorage 只保留字符→字符串的表；手改 state.json 的容错。 */
+function normalizeFrontendStorage(value: unknown): Record<string, Record<string, string>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const result: Record<string, Record<string, string>> = {}
+  for (const [character, entries] of Object.entries(value)) {
+    if (typeof entries !== 'object' || entries === null || Array.isArray(entries)) continue
+    const storage: Record<string, string> = {}
+    for (const [key, entry] of Object.entries(entries)) {
+      if (typeof entry === 'string') storage[key] = entry
+    }
+    if (Object.keys(storage).length > 0) result[character] = storage
+  }
+  return result
 }
 
 /** mods.enabled 只保留显式 true 的项（手改 state.json 的容错）。 */
@@ -1203,6 +1226,7 @@ export class TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
+      frontendStorage: normalizeFrontendStorage(parsed.frontendStorage),
       compaction: normalizeCompactionOverride(parsed.compaction),
       // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false，只有显式 true 才开。
       modsEnabled: parsed.modsEnabled === true,

@@ -20,6 +20,8 @@ import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { applyRegexScript, applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
 import type { TavernState, TavernStore } from '../../tavern-store/src/index.js'
 import { readJson, sendJson } from './http/io.js'
+import { generateWithCustomApi, listCustomApiModels } from './frontend-generation.js'
+import { clearIdbStore, createIdbStore, deleteIdbDatabase, deleteIdbRecord, openIdbDatabase } from './frontend-idb.js'
 import { overlayChatScopedVariables, readChatVariables } from './mvu.js'
 import { ensureChatVariables } from './agent-tavern/mvu-compat.js'
 import { emitChatSaved } from './mods/events.js'
@@ -51,6 +53,84 @@ export async function handleHelperApi(req: unknown, res: unknown, db: TavernStor
         ok: true,
         value: await replaceMvuData(db, character, chatId, body),
       })
+    // JSR 生成桥（2026-10-22）：卡前端自带 OpenAI 兼容 API 源。服务端代发
+    // /models 与 /chat/completions，API Key 只进 outbound header，不回传、不落盘。
+    // chatId 必须存在：只有真正绑定到聊天的 iframe 才能发起生成。
+    case 'models': {
+      requireSessionChatId(chatId, 'models')
+      return sendJson(res, 200, {
+        ok: true,
+        value: { models: await listCustomApiModels({ apiurl: body?.apiurl, key: body?.key }) },
+      })
+    }
+    case 'generate': {
+      requireSessionChatId(chatId, 'generate')
+      return sendJson(res, 200, {
+        ok: true,
+        value: { text: await generateWithCustomApi(body?.config) },
+      })
+    }
+    // 沙箱 localStorage 持久层（2026-10-22）：按角色保存小型设置，供下一次
+    // srcdoc 同步播种。存储上限 512KB/角色；写走 updateState 的串行队列。
+    case 'storage.get': {
+      requireSessionChatId(chatId, 'storage.get')
+      return sendJson(res, 200, {
+        ok: true,
+        value: { storage: frontendStorageFor(state, character) },
+      })
+    }
+    case 'storage.set': {
+      requireSessionChatId(chatId, 'storage.set')
+      return sendJson(res, 200, {
+        ok: true,
+        value: await putFrontendStorage(db, character, body?.storage),
+      })
+    }
+    case 'storage.reset': {
+      requireSessionChatId(chatId, 'storage.reset')
+      return sendJson(res, 200, {
+        ok: true,
+        value: await resetFrontendStorage(db, character),
+      })
+    }
+    // 虚拟 IndexedDB 的控制面（2026-10-22）：数据本身走 frontend/idb/put|get
+    // 二进制路由，这里只处理 open / create-store / delete 等小 JSON 操作。
+    // 所有名字由服务端 hash 后落盘，iframe 无法寻址别的角色或目录。
+    case 'idb.open': {
+      requireSessionChatId(chatId, 'idb.open')
+      return sendJson(res, 200, {
+        ok: true,
+        value: await openIdbDatabase(character, body?.name, body?.version),
+      })
+    }
+    case 'idb.store.create': {
+      requireSessionChatId(chatId, 'idb.store.create')
+      return sendJson(res, 200, {
+        ok: true,
+        value: await createIdbStore(character, body?.db, body?.store, body?.keyPath),
+      })
+    }
+    case 'idb.delete': {
+      requireSessionChatId(chatId, 'idb.delete')
+      return sendJson(res, 200, {
+        ok: true,
+        value: await deleteIdbRecord(character, body?.db, body?.store, body?.key),
+      })
+    }
+    case 'idb.clear': {
+      requireSessionChatId(chatId, 'idb.clear')
+      return sendJson(res, 200, {
+        ok: true,
+        value: await clearIdbStore(character, body?.db, body?.store),
+      })
+    }
+    case 'idb.delete-db': {
+      requireSessionChatId(chatId, 'idb.delete-db')
+      return sendJson(res, 200, {
+        ok: true,
+        value: await deleteIdbDatabase(character, body?.db),
+      })
+    }
     case 'messages.get':
       return sendJson(res, 200, { ok: true, value: await getMessages(db, character, chatId, body) })
     case 'messages.set':
@@ -465,6 +545,60 @@ function normalizeLorebookEntries(raw: JsonObject[]) {
     seen.add(normalized.uid)
     return normalized
   })
+}
+
+/* ------------------------ frontend localStorage ------------------------ */
+
+const FRONTEND_STORAGE_TOTAL_LIMIT = 512 * 1024
+const FRONTEND_STORAGE_KEY_LIMIT = 512
+
+function frontendStorageFor(state: TavernState, character: string): Record<string, string> {
+  const storage = state.frontendStorage?.[character]
+  return storage === undefined ? {} : cloneJson(storage)
+}
+
+function parseFrontendStorageValue(character: string, value: unknown): Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('storage must be an object of string values')
+  }
+  const storage: Record<string, string> = {}
+  let total = 0
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== 'string') throw new Error(`storage["${key}"] must be a string`)
+    if (key === '' || key.length > FRONTEND_STORAGE_KEY_LIMIT) {
+      throw new Error(`storage keys must be 1-${FRONTEND_STORAGE_KEY_LIMIT} characters (got ${key.length})`)
+    }
+    total += key.length + entry.length
+    if (total > FRONTEND_STORAGE_TOTAL_LIMIT) {
+      throw new Error(`frontend storage for '${character}' exceeds ${FRONTEND_STORAGE_TOTAL_LIMIT} characters`)
+    }
+    storage[key] = entry
+  }
+  return storage
+}
+
+async function putFrontendStorage(
+  db: TavernStore,
+  character: string,
+  value: unknown,
+): Promise<{ storage: Record<string, string> }> {
+  const storage = parseFrontendStorageValue(character, value)
+  const next = await db.updateState((state) => ({
+    frontendStorage: { ...(state.frontendStorage ?? {}), [character]: storage },
+  }))
+  return { storage: frontendStorageFor(next, character) }
+}
+
+async function resetFrontendStorage(
+  db: TavernStore,
+  character: string,
+): Promise<{ storage: Record<string, string>; reset: true }> {
+  const next = await db.updateState((state) => {
+    const all = { ...(state.frontendStorage ?? {}) }
+    delete all[character]
+    return { frontendStorage: all }
+  })
+  return { storage: frontendStorageFor(next, character), reset: true }
 }
 
 /* ---------------------------- script trees ---------------------------- */

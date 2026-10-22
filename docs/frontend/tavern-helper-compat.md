@@ -60,7 +60,7 @@ Content-Security-Policy: default-src 'none'; connect-src 'none'; frame-src 'none
 |---|:--:|:--:|---|---|
 | `'global'` | ✅ | ✅ | Tavern 状态 `scriptGlobals` | 所有聊天共享；随插件状态持久化 |
 | `'chat'` | ✅ | ✅ | 聊天文件 `chat_metadata.variables` | AgentTavern 会话**同时**写 chat 作用域变量存储（见 §1.3） |
-| `'message'` | ✅ | ✅ | 楼层的 `variables` 字段 | `message_id` 支持负数深度；越界会报错 |
+| `'message'` | ✅ | ✅ | 楼层的 `variables` 字段 | `message_id` 支持负数深度；越界会报错。读面在楼层没有 `stat_data` 时回退聊天作用域的 `stat_data`（MVU 卡首屏 `getVariables({type:'message'})` 的常见判据），第一次回写会把它物化到该楼层 |
 | `'character'` | ✅ | ❌ | 角色卡 `extensions.variables` | 写入抛 `character variables are read-only in DSH-SoulMojito` |
 | `'preset'` | ❌ | ❌ | — | 抛 `unsupported variable scope 'preset'` |
 | `'script'` | ❌ | ❌ | — | 同上 |
@@ -255,6 +255,52 @@ helper RPC（供 iframe 内部使用，不是 `window.*` 公共 API）：
 - 「重置卡脚本」会同时停止 AgentTavern 的自动运行（跨 tab 窗口事件），避免
   iframe 继续跑已经被重置的旧源码。
 
+### 2.4 生成桥：`TavernHelper.generate` / `getModelList`（2026-10-22）
+
+JSR 卡可以带自己的 OpenAI 兼容 API 源（URL + Key + 模型），并在前端调用
+`TavernHelper.generate`。本插件由 **Node 宿主侧**代发请求，iframe 只拿最终文本：
+
+| 函数 | 状态 | 语义 |
+|---|---|---|
+| `getModelList({apiurl, key})` | ✅ | 宿主 `GET <apiurl>/models`，返回去重排序后的模型 id 数组。API Key 只进 outbound `Authorization`，不回传、不落盘、不写日志 |
+| `generate(config)` | ✅ | 非流式 `POST <apiurl>/chat/completions`，返回字符串正文。支持 `custom_api` / `user_input` / `injects` / `overrides.chat_history.prompts`；`should_stream` 被接受但按最终文本一次返回 |
+| `generateRaw(config)` | ⚠️ | `generate` 的别名；没有 JSR 的 raw 注入细节 |
+| `stopGenerationById` / `stopAllGeneration` | ⚠️ | 返回 `false`：非流式请求没有可取消的句柄 |
+| `getModelList` 的 URL 规则 | — | 必须是无 query/hash 的 base URL；`https://`，或仅 loopback（`localhost` / `127.0.0.1` / `::1`）允许 `http://`；URL 内不能带账号密码 |
+| 请求上限 | — | 180s 超时、8MB 响应、2M 字符提示词、256 条消息；错误信息会 redact API Key |
+
+生成成功后 shim 还会在 iframe 内派发 `iframe_events.GENERATION_ENDED`
+（参数 `(text, generationId)`）与 `tavern_events.CHAT_COMPLETION_SETTINGS_READY`，
+卡前端用它记录请求/响应；`tavern_events.GENERATION_ENDED` 不会伪造（没有真实楼层
+写入时发它只会让卡去读一个不存在的楼层）。
+
+> 卡内的 API Key 存在卡自己的 localStorage 里（通常是 WebCrypto 密文）。插件只
+> 在这一次 RPC 中把它转发给宿主，宿主用完即弃；不会进入 snapshot、state.json、
+> 管理面板或错误消息。
+
+### 2.5 沙箱存储：localStorage 与虚拟 IndexedDB（2026-10-22）
+
+沙箱 iframe 没有同源存储，原生 `localStorage` / `indexedDB` 会抛
+`SecurityError`。shim 提供两条 **插件宿主侧** 的持久化通道：
+
+- `localStorage`：**按角色持久**。`FrontendFrame` 构建 srcdoc 前从
+  `GET /api/dsh-soulmojito/frontend/storage?character=…` 取回键值表并同步播种；
+  `setItem/removeItem/clear` 200ms 合并后经 helper `storage.set` 写回
+  `state.json` 的 `frontendStorage`（上限 512KB/角色）。刷新页面/重开聊天后设置
+  仍在。
+- `sessionStorage`：iframe 内存实现，页面重载即失（与 JSR 的 per-tab 语义近似，
+  但不跨文档）。
+- `indexedDB`：**虚拟 IndexedDB**。`indexedDB.open` / `createObjectStore` /
+  `transaction` / `objectStore().get/put/delete/clear` / `deleteDatabase` 由 shim
+  经宿主 RPC 转发，记录体走 `frontend/idb/put|get` 二进制路由，按角色落在
+  `$DSH_HOME/soulmojito/frontend-idb/`（名字与 key 均 SHA-256 后落盘）。单条上限
+  1GB、单角色上限 2GB；写入先写临时文件再原子 rename。卡把数百 MB 级资源包缓存到
+  IndexedDB 后，刷新/重开聊天不会重新下载。
+  支持范围：单 object store 的 keyPath、get/put/delete/clear/deleteDatabase；
+  **不支持** index、cursor、多 store 复合事务、`IDBKeyRange`——调用这些缺口会
+  显式抛错，不会静默返回空。`localStorage` 的内容也不会进入真实浏览器存储，
+  卡无法借此读取宿主 Cookie 或别的角色数据。
+
 ---
 
 ## 3. 可用清单：事件
@@ -289,9 +335,15 @@ helper RPC（供 iframe 内部使用，不是 `window.*` 公共 API）：
 | `tavern_events.CHAT_CHANGED` | `chat_id_changed` | 绑定的聊天切换 | `(chatId)` |
 | `iframe_events.MESSAGE_IFRAME_RENDER_STARTED` | `message_iframe_render_started` | 本 iframe 挂载 | `(token)` |
 | `iframe_events.MESSAGE_IFRAME_RENDER_ENDED` | `message_iframe_render_ended` | 本 iframe 卸载 | `(token)` |
+| `iframe_events.GENERATION_ENDED` | `js_generation_ended` | `TavernHelper.generate` 成功返回后 | `(text, generationId)` |
+| `tavern_events.STREAM_TOKEN_RECEIVED` | `stream_token_received` | 快照比对发现**新/改**的非用户楼层 | `(最终正文, 楼层 id)`；只发一次最终文本，不是增量 token |
+| `tavern_events.CHARACTER_MESSAGE_RENDERED` | `character_message_rendered` | 同上 | `(楼层 id, 'normal')` |
+| `tavern_events.USER_MESSAGE_RENDERED` | `user_message_rendered` | 新/改用户楼层 | `(楼层 id)` |
+| `tavern_events.CHAT_COMPLETION_SETTINGS_READY` | `chat_completion_settings_ready` | `TavernHelper.generate` 发起前 | `({ model, messages, stream:false })`；供卡记录请求，不是宿主生成循环 |
 
-**其余常量**（`MESSAGE_SWIPED` / `MESSAGE_UPDATED` / `GENERATION_*` / `STREAM_TOKEN_*`
-/ `WORLD_INFO_ACTIVATED` / `CHARACTER_*` / `PRESET_*` …）：
+**其余常量**（`MESSAGE_SWIPED` / `MESSAGE_UPDATED` / `GENERATION_STARTED` /
+`GENERATION_STOPPED` / `STREAM_REASONING_DONE` / `WORLD_INFO_ACTIVATED` /
+`CHARACTER_*` / `PRESET_*` …）：
 
 - **名字存在**（`tavern_events.MESSAGE_SWIPED` 是字符串，`eventOn` 不会因 `undefined` 炸）；
 - **但永远不会被触发**。这是刻意的：宿主没有该信号的观测面，凭空发事件等于给你的
@@ -310,15 +362,23 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `_`（lodash） | 4.17.21 | ✅ |
 | `$` / `jQuery` | 3.7.1 | ✅ |
 | `showdown` | 2.1.0 | ✅（`builtin.renderMarkdown` 依赖它） |
+| `Vue` | 3.5.40（runtime global prod） | ✅（JSR 消息 iframe 同款；Vue SFC bundle 的 `module.exports = Vue` 直接可用） |
+| `VueRouter` | 4.6.4（global prod） | ✅ |
+| `z`（Zod） | 4.4.3（模块命名空间） | ✅（同时支持 `z.object` 与 `mvu_zod.js` 的 `z.z`） |
 | `toastr` | — | ✅ 最小实现（`info/success/warning/error/clear`，渲染 iframe 内浮层，不引入外部库） |
-| `Vue` / `VueRouter` | — | ❌ 用 CDN 自己按需引入（`esm.sh` / `jsdelivr` 在白名单） |
-| `PIXI` / `toastr` / `YAML` / `z` / `hljs` / `Popper` / Font Awesome | — | ❌ 同上，自己引 |
+| `PIXI` / `YAML` / `hljs` / `Popper` / Font Awesome | — | ❌ 用 CDN 自己按需引入（白名单 CDN 可用） |
 
 ```html
 <!-- 这些 CDN 在白名单里，可以直接用 -->
 <script type="module" src="https://esm.sh/vue@3"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 ```
+
+> Vue 3.5.40 / vue-router 4.6.4 / Zod 4.4.3 固定版本；Vue 与 Vue Router 用
+> `cdn.jsdelivr.net`，Zod 通过 `+esm` 模块设置 `window.z`。三者都在 CSP 的
+> `script-src` 白名单内，不需要打开「允许外部资源」。
+> CSP `font-src` 同时放行 `data:`、`blob:` 与 `https:`——卡把字体解密到 blob URL
+> 后再 `@font-face` 是常见做法。
 
 > 白名单外的 CDN / HTTPS API：在设置页开启「允许美化前端加载外部资源」后，
 > `script-src` / `style-src` / `connect-src` 会额外放行 `https:`。开启后外部脚本
@@ -340,6 +400,18 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `updateWorldbookWith(name, updater)` | ✅ | 先 `getWorldbook`，在 iframe 内执行 `updater(entries)`，再把结果写入**会话副本**（`lorebook.put`）。基础世界书资产与卡内嵌书永不被写；`name` 省略时回落到角色链接世界书。回退入口是右栏卡脚本 tab 的「重置会话世界书」（`lorebook.reset`） |
 | `getScriptTrees(option?)` | ⚠️ | 返回当前聊天的**会话脚本树副本**（没有副本时为卡内 `extensions.tavern_helper.scripts`）：节点原样保留 `type: 'script' \| 'folder'`、`id`、`name`、`content`、`enabled`、`info`、`button` 与未知字段。不写角色卡 |
 | `updateScriptTreesWith(fn, option?)` | ⚠️ | 在副本上执行 `fn`，先 `scripts.put` **持久化到本聊天副本**，成功后才更新内存并解析 `__mgZodReady__` 探针、派发 `mg-zod-ready`；失败拒绝且保留旧树。刷新/重开 tab 仍可读；Zod schema 本身不会生效，回退入口是「重置卡脚本」 |
+| `generate(config)` / `generateRaw(config)` | ✅ / ⚠️ | 见 §2.4：宿主代理卡内 OpenAI 兼容 API，非流式返回文本 |
+| `getModelList({apiurl, key})` | ✅ | 见 §2.4：返回模型 id 数组；Key 不回传 |
+| `stopGenerationById` / `stopAllGeneration` | ⚠️ | 返回 `false`（非流式无可取消句柄） |
+| `getCharData(name?)` | ✅ | 返回 JSR 形状的 `v1CharData`：顶层字段 + `.data`（V2 payload）。`'current'` 取当前角色；未知名字返回 `null`。卡的资源包密钥常从 `.data.creator/character_version/creator_notes` 派生 |
+| `getPreset(name?)` / `replacePreset(name, preset)` | ⚠️ | iframe 内存覆盖，不写基础 preset 资产；`getPreset('in_use')` 返回 `{name, prompts: []}` 起步。用于启动诊断/格式提示，不会真正改预设 |
+| `getPresetNames()` / `getLoadedPresetName()` | ⚠️ | 最小集合：未写过时 `['in_use']` / `'in_use'` |
+| `getScriptButtons()` / `replaceScriptButtons()` / `updateScriptButtonsWith()` / `appendInexistentScriptButtons()` | ⚠️ | iframe 内存列表；没有快速回复栏，按钮不会渲染到宿主，但常驻脚本的启动调用不会中断 |
+| `errorCatched(fn)` | ✅ | 同步/Promise 错误弹 error toast 后继续抛出；JSR 卡 `defineStore(..., errorCatched(...))` 直接可用 |
+| `playAudio(type, {url, title?})` / `pauseAudio(type)` | ✅ | iframe 内 `<audio>`，`bgm` / `ambient` 两通道；自动播放被浏览器拦截时只打 warning，不向卡抛错 |
+| `getAudioList` / `replaceAudioList` / `appendAudioList` / `getAudioSettings` / `setAudioSettings` / `getCurrentAudio` | ⚠️ | 进程内音频状态，语义对齐 JSR 的可观察字段；不持久化、不跨 iframe |
+| `localStorage` | ✅ | 按角色持久，见 §2.5（上限 512KB/角色）；`sessionStorage` 仍为 iframe 内存 |
+| `indexedDB` | ⚠️ | 虚拟 IndexedDB，见 §2.5：单 store 的 open/create/transaction/get/put/delete/clear/deleteDatabase；不支持 index/cursor/多 store 事务 |
 | `getCharNames()` / `getCharacterNames()` | ✅ | 角色名列表 |
 | `getTavernRegexes(option?)` | ✅ | `{enabled_only}` 过滤；条目形状来自本插件的 `RegexScriptIR`，**不是** JSR 的 `TavernRegex` 形状 |
 | `formatAsTavernRegexedString(text, placement, option?)` | ⚠️ | 应用正则并返回 `Promise<string>`。`placement` 用 ST 的数字位（1=用户输入 2=AI 输出 3=斜杠 5=世界书 6=推理）；`option.scripts` 可直接给脚本集；`option.depth` 参与深度型脚本判定 |
@@ -390,7 +462,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 |---|---|
 | `replaceScriptTrees` / `getAllEnabledScriptButtons` | ❌ 不存在；`getScriptTrees` / `updateScriptTreesWith` 是 ⚠️ 会话副本读写（见 §4），没有真正的脚本容器与按钮 |
 | `isInstalledExtension` / `installExtension` / `uninstallExtension` / `reinstallExtension` / `updateExtension` / `getExtensionInstallationInfo` / `getExtensionType` / `isAdmin` / `getTavernHelperExtensionId` | ❌ 不存在 |
-| `playAudio` / `pauseAudio` / `getAudioList` / `replaceAudioList` / `appendAudioList` / `getAudioSettings` / `setAudioSettings` / `getCurrentAudio` | ❌ 不存在（用 `<audio>` 标签 + 白名单媒体源自己播） |
+| `playAudio` / `pauseAudio` / `getAudioList` / `replaceAudioList` / `appendAudioList` / `getAudioSettings` / `setAudioSettings` / `getCurrentAudio` | ⚠️ **可用**（见 §4 / §2.4）：iframe 内 `<audio>`，只影响本前端，不写宿主播放器 |
 | `retrieveDisplayedMessage` / `formatAsDisplayedMessage` / `refreshOneMessage` | ❌ 不存在（宿主渲染的楼层无法被前端读取/刷新） |
 | `errorCatched` / `getMessageId` | ❌ 不存在 |
 | `registerVariableSchema` | ❌ 不存在（见 §1.2） |
@@ -434,11 +506,12 @@ await fetch  // 🧱 默认不可用（CSP connect-src 'none'）；设置页放�
 |---|---|
 | `window.parent.SillyTavern.getContext()` | `SillyTavern.getContext()` |
 | `await triggerSlash('/setvar x 1')` | `await replaceVariables({...getVariables(), x: 1})` |
-| `eventOn(tavern_events.GENERATION_ENDED, refresh)` | `setInterval(refresh, 1500)` + `eventOn(tavern_events.MESSAGE_RECEIVED, refresh)` |
-| `toastr.error('…')` | 自己画 DOM，或 `console.error`（控制台可见） |
+| `eventOn(tavern_events.GENERATION_ENDED, refresh)` | `setInterval(refresh, 1500)` + `eventOn(tavern_events.MESSAGE_RECEIVED, refresh)`；`TavernHelper.generate` 成功时另有 `iframe_events.GENERATION_ENDED` |
+| `toastr.error('…')` | 直接用：`toastr` 已内置最小实现 |
 | `$('#chat').append(...)`（改宿主 DOM） | 只能改自己 iframe 内的 DOM |
 | `fetch('/api/backends/…')` | 🧱 不可用；需要的数据请走本页的 `get*` 函数 |
-| `Vue.createApp(...)` | 先引入 Vue：`<script src="https://esm.sh/vue@3">`（白名单 CDN） |
+| `Vue.createApp(...)` | 直接用：`Vue` / `VueRouter` 已注入 |
+| `generate({user_input, custom_api, …})` | 直接用：插件服务器代理卡内 OpenAI 兼容 API（见 §2.4），不要自己 `fetch` |
 | `getVariables({type: 'preset'})` | 用 global 或 chat 作用域替代 |
 | `setChatMessages([...], {refresh: 'all'})` | `refresh` 无效；自己重绘当前 UI |
 | `createWorldbookEntries(...)` | 提示用户去面板操作，或让 Agent 调 `world_*` 工具 |
@@ -468,6 +541,10 @@ await fetch  // 🧱 默认不可用（CSP connect-src 'none'）；设置页放�
 | 刷新后 GM 面板的 Zod 改动不见了 | 改动只在会话脚本树副本里；写入失败时 `updateScriptTreesWith` 会拒绝而不是假装成功 | 看卡脚本 tab 列表是否显示改后的名称/字符数；确认 `scripts.put` 没报错。切到别的聊天本来就读不到本聊天的副本 |
 | 重置卡脚本后 GM 面板还是旧内容 | 重置会删除副本并停止正在运行的脚本，但已经打开的 GM 面板不会自我改写 | 重新点「运行」；列表此时应回到角色卡原版 |
 | GM 悬浮面板挂载时报 `appendChild of null` | 卡脚本未运行，或运行的是旧构建（`fakeDocument.body` 为 null） | 开启 `cardScriptsAutoRun` 让 AgentTavern 在「美化前端」里自动运行；关闭设置时可在右栏「卡脚本」手动运行 GM 面板；确认构建包含 document facade |
+| 启动诊断报 `TypeError: t[e(...)] is not a function` | 卡调用了 `getLoadedPresetName` / `getPreset` / `getCharData` 等旧构建缺失的 JSR 函数 | 更新到包含 §2.4 / §4 新兼容面的构建；本插件现在提供这些函数 |
+| 资源包下载完成却报「资源包已损坏」 | 资源包密钥由卡的 `creator` / `character_version` / `creator_notes` 派生；`getCharData` 缺失时卡会退回默认密钥 | 更新构建（`getCharData('current').data` 必须返回 V2 字段）；仍失败时检查下载是否被代理/断流截断 |
+| `Invalid or unexpected token` 出现在插件 client bundle | 加载了包含模板字面量注释的旧/中间构建 | 重新构建并重启 DSH；`client/index.js` 必须通过 `node --check` |
+| 字体报 `font-src ... blocked` | 旧 CSP 只允许 `data: https:`，卡用 blob URL 字体 | 更新构建：`font-src data: blob: https:` |
 
 ---
 
@@ -478,5 +555,10 @@ await fetch  // 🧱 默认不可用（CSP connect-src 'none'）；设置页放�
 - 你的前端**能改**当前聊天的正文、楼层变量、聊天变量、global 变量，以及当前
   聊天的**会话世界书副本**——这些都是真实数据，写之前先读、先确认，别在
   `setInterval` 里无脑覆盖。副本可以随时用「重置会话世界书」丢弃。
+- 你的前端 `localStorage` 会按角色写回 `state.json` 的 `frontendStorage`
+  （上限 512KB/角色）；`sessionStorage` 只在 iframe 内。
+- `TavernHelper.generate` 的 `custom_api.key` 只随单次 RPC 进入宿主 Node 进程，
+  用于 outbound `Authorization`；不写 snapshot/state.json/日志，错误消息会 redact。
+  只对信任的卡配置 API 源。
 - `replaceVariables` 是**整表替换**：忘了展开旧值就等于把所有变量清空。
   不确定时用 `insertOrAssignVariables` 或 `updateVariablesWith`。

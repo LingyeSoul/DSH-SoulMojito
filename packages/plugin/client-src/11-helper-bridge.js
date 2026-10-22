@@ -28,7 +28,19 @@
       'https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js',
       // bundle 版的 showdown 暴露全局 showdown，供 builtin.renderMarkdown 使用。
       'https://cdn.jsdelivr.net/npm/showdown@2.1.0/dist/showdown.min.js',
+      // JSR 的消息 iframe 在卡代码之前固定加载 Vue 运行时与 Vue Router；Vue 单文件
+      // 组件 bundle 常把 `vue` 标成 externals 后读全局 `Vue`（示例卡2 的 Vue 前端
+      // 就是这种构建）。版本对齐卡构建的 3.5.x，避免 runtime 与编译器产物错位。
+      'https://cdn.jsdelivr.net/npm/vue@3.5.40/dist/vue.runtime.global.prod.min.js',
+      'https://cdn.jsdelivr.net/npm/vue-router@4.6.4/dist/vue-router.global.prod.min.js',
     ]
+    // Zod 4 没有 UMD 构建；与 JSR 一样提供模块命名空间全局 `z`（既支持 `z.object`，
+    // 也支持 mvu_zod.js 依赖的 `z.z`）。用远端 ESM 而不是把 330KB 内联进每个
+    // srcdoc；CDN 已在 CSP 白名单内。
+    const HELPER_ZOD_MODULE = '<script type="module">'
+      + "import * as z from 'https://cdn.jsdelivr.net/npm/zod@4.4.3/+esm';"
+      + 'window.z = z;'
+      + '</script>'
     // 酒馆事件名（JSR `tavern_events` 的可观测子集）：宿主侧只桥接得出真实
     // 信号的那几条——快照比对后发现楼数/内容变化时按这里广播。其余名字保留
     // 常量（前端 `eventOn(tavern_events.X, …)` 不会因 undefined 抛错），但不会
@@ -44,6 +56,13 @@
       CHAT_CHANGED: 'chat_id_changed',
       GENERATION_STARTED: 'generation_started',
       GENERATION_ENDED: 'generation_ended',
+      // JSR 常见的「正文变化后重绘」信号。本插件没有真实 token 流，只在快照比对
+      // 观测到新楼层/正文变化时用最终文本补发一次；名字保留，避免卡里的
+      // `eventOn(tavern_events.STREAM_TOKEN_RECEIVED, …)` 注册成 undefined。
+      STREAM_TOKEN_RECEIVED: 'stream_token_received',
+      CHARACTER_MESSAGE_RENDERED: 'character_message_rendered',
+      USER_MESSAGE_RENDERED: 'user_message_rendered',
+      CHAT_COMPLETION_SETTINGS_READY: 'chat_completion_settings_ready',
     }
     const HELPER_IFRAME_EVENTS = {
       MESSAGE_IFRAME_RENDER_STARTED: 'message_iframe_render_started',
@@ -55,15 +74,31 @@
       GENERATION_ENDED: 'js_generation_ended',
     }
 
-    function frontendHelperScript(token, messageId) {
+    function serializeFrontendStorageSeed(storage) {
+      const value = storage && typeof storage === 'object' && !Array.isArray(storage) ? storage : {}
+      return JSON.stringify(value)
+        .replace(/</g, '\\u003c')
+        .replace(/\u2028/g, '\\u2028')
+        .replace(/\u2029/g, '\\u2029')
+    }
+
+    function frontendHelperScript(token, messageId, storage) {
       return `(function () {
   var token = ${JSON.stringify(token)};
   var currentMessageId = ${JSON.stringify(typeof messageId === 'number' ? messageId : -1)};
+  var initialStorage = ${serializeFrontendStorageSeed(storage)};
   var realParent = window.parent;
   var requestId = 0;
   var pending = new Map();
   var listeners = new Map();
   var lastMvuStatJson = '';
+  // JSR predefine.js sets these before card modules; Vue 3.5 runtime + Pinia read
+  // them while mounting. The global production build normally hard-codes them,
+  // but keeping the same observable window flags avoids version-specific warnings
+  // and matches what card authors test against.
+  window.__VUE_PROD_DEVTOOLS__ = true;
+  window.__VUE_OPTIONS_API__ = true;
+  window.__VUE_PROD_HYDRATION_MISMATCH_DETAILS__ = false;
   var state = {
     characterName: '', userName: 'User', chatId: '', chatMetadata: {},
     messages: [], variables: { global: {}, chat: {}, message: {}, character: {} },
@@ -71,30 +106,56 @@
     scriptTrees: null,
   };
 
-  function call(op, payload) {
+  function call(op, payload, transfer) {
     return new Promise(function (resolve, reject) {
       var id = 'helper-' + (++requestId);
       pending.set(id, { resolve: resolve, reject: reject });
-      parent.postMessage({ type: ${JSON.stringify(HELPER_MESSAGE)}, token: token, id: id, op: op, payload: payload || {} }, '*');
+      parent.postMessage({ type: ${JSON.stringify(HELPER_MESSAGE)}, token: token, id: id, op: op, payload: payload || {} }, '*', Array.isArray(transfer) ? transfer : []);
     });
   }
 
   // 沙箱无 same-origin：原生 localStorage/sessionStorage 访问即抛 SecurityError。
-  // 卡前端用它们做表单自动保存/签名恢复；给一份 iframe 内存实现，页面重载即失，
-  // 但不会让初始化中断。
-  function createMemoryStorage() {
+  // localStorage 以宿主持久表播种（FrontendFrame 构建 srcdoc 前取回），写入
+  // 200ms 合并后经 storage.set 写回；sessionStorage 保持 iframe 内存语义。
+  function createMemoryStorage(seed, persistent) {
     var data = {};
+    if (seed && typeof seed === 'object') {
+      Object.keys(seed).forEach(function (key) {
+        if (typeof seed[key] === 'string') data[key] = seed[key];
+      });
+    }
+    var persistTimer = null;
+    var persistFailed = false;
+    function persist() {
+      persistTimer = null;
+      if (persistent !== true) return;
+      call('storage.set', { storage: Object.assign({}, data) }).catch(function (error) {
+        if (persistFailed) return;
+        persistFailed = true;
+        console.error('[TavernHelper] localStorage persist failed', error);
+        showToast('error', 'localStorage 持久化失败：' + (error && error.message ? error.message : String(error)));
+      });
+    }
+    function schedulePersist() {
+      if (persistent !== true || persistTimer !== null) return;
+      persistTimer = setTimeout(persist, 200);
+    }
+    addEventListener('pagehide', function () {
+      if (persistTimer === null) return;
+      clearTimeout(persistTimer);
+      persist();
+    });
     return {
       getItem: function (key) { return Object.prototype.hasOwnProperty.call(data, String(key)) ? data[String(key)] : null; },
-      setItem: function (key, value) { data[String(key)] = String(value); },
-      removeItem: function (key) { delete data[String(key)]; },
-      clear: function () { data = {}; },
+      setItem: function (key, value) { data[String(key)] = String(value); schedulePersist(); },
+      removeItem: function (key) { delete data[String(key)]; schedulePersist(); },
+      clear: function () { data = {}; schedulePersist(); },
       key: function (index) { return Object.keys(data)[index] || null; },
       get length() { return Object.keys(data).length; }
     };
   }
-  window.__dshTavernStorage = createMemoryStorage();
-  window.__dshTavernSessionStorage = createMemoryStorage();
+  window.__dshTavernStorage = createMemoryStorage(initialStorage, true);
+  window.__dshTavernSessionStorage = createMemoryStorage({}, false);
   try { Object.defineProperty(window, 'localStorage', { value: window.__dshTavernStorage, configurable: true }); } catch (_) {}
   try { Object.defineProperty(window, 'sessionStorage', { value: window.__dshTavernSessionStorage, configurable: true }); } catch (_) {}
 
@@ -118,6 +179,8 @@
   }
   var frameElementShim = {
     id: '',
+    tagName: 'IFRAME',
+    nodeName: 'IFRAME',
     style: {
       setProperty: function (name, value) {
         var property = String(name);
@@ -135,7 +198,20 @@
         scheduleFramePrefs();
       },
       getPropertyValue: function () { return ''; }
-    }
+    },
+    // 卡前端在首屏用 window.frameElement.getBoundingClientRect().width 做响应式
+    // 测量（示例卡3 的 React 缩放 hook）。沙箱里 frameElement 原本是 null，只补
+    // style 会在 useState 初始化时抛 TypeError。iframe 自己的视口就是宿主分配给
+    // 它的矩形，返回这份本地几何即可，不需要异步 RPC。
+    getBoundingClientRect: function () {
+      var width = typeof window.innerWidth === 'number' ? window.innerWidth : 0;
+      var height = typeof window.innerHeight === 'number' ? window.innerHeight : 0;
+      return { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width: width, height: height };
+    },
+    get clientWidth() { return typeof window.innerWidth === 'number' ? window.innerWidth : 0; },
+    get clientHeight() { return typeof window.innerHeight === 'number' ? window.innerHeight : 0; },
+    get offsetWidth() { return typeof window.innerWidth === 'number' ? window.innerWidth : 0; },
+    get offsetHeight() { return typeof window.innerHeight === 'number' ? window.innerHeight : 0; }
   };
   try {
     Object.defineProperty(window, 'frameElement', {
@@ -200,7 +276,16 @@
     if (scope !== 'message') return state.variables[scope] || {};
     var index = messageIndex(option && option.message_id);
     var message = state.messages.filter(function (entry) { return entry.message_id === index; })[0];
-    return message && message.data ? message.data : {};
+    var data = message && message.data ? message.data : {};
+    // MVU 卡首屏常先读 getVariables({ type: 'message' }) 判断 stat_data 是否
+    // 就绪（示例卡2 的 index.ts 就卡在这一步）。新聊天的开场白楼层通常没有逐楼
+    // 变量，而权威 stat_data 在 chat 作用域；读面按 Mvu.getMvuData 的同款语义
+    // 回退，写面仍只写 message，第一次回写会自然把 stat_data 物化到该楼层。
+    if (data && typeof data === 'object' && !Array.isArray(data) && data.stat_data === undefined) {
+      var chatStat = state.variables.chat ? state.variables.chat.stat_data : undefined;
+      if (chatStat !== undefined) return Object.assign({}, data, { stat_data: clone(chatStat) });
+    }
+    return data;
   }
 
   function rememberScope(option, next) {
@@ -268,6 +353,144 @@
       console.error('[toastr] ' + String(message), error);
     }
   }
+
+  // JSR 的 errorCatched 是卡前端常用包装器（示例卡2 的 defineMvuDataStore 直接用它
+  // 包住 defineStore 初始化）。缺了它，前端会在模块求值阶段抛 ReferenceError。
+  // 语义保持：同步抛错与 Promise 拒绝都会弹一条 error toast，然后继续抛出。
+  window.errorCatched = function (fn) {
+    if (typeof fn !== 'function') throw new Error('DSH-SoulMojito: errorCatched expects a function');
+    var report = function (error) {
+      var message = error && error.stack ? error.stack : (error && error.message ? error.message : String(error));
+      showToast('error', message);
+      throw error;
+    };
+    return function () {
+      try {
+        var result = fn.apply(this, arguments);
+        if (result && typeof result.then === 'function') {
+          return result.then(undefined, report);
+        }
+        return result;
+      } catch (error) {
+        return report(error);
+      }
+    };
+  };
+
+  // 音频兼容面（2026-10-22）：JSR 卡把 playAudio('bgm', { url }) 当作同步调用，
+  // 不 await、不 try。缺函数会让整段解析/状态更新中断（示例卡2 的开场 BGM 就在
+  // 首屏 manageSprites 里调用）。这里按 bgm/ambient 两个通道落到 iframe 内
+  // <audio>，自动播放被浏览器拦截时只记 warning，不向卡抛错。
+  var audioChannels = {};
+  function audioChannel(type) {
+    if (type !== 'bgm' && type !== 'ambient') {
+      throw new Error('DSH-SoulMojito: audio type "' + String(type) + '" is not supported (bgm/ambient)');
+    }
+    if (!audioChannels[type]) {
+      audioChannels[type] = {
+        element: null,
+        list: [],
+        current: null,
+        settings: { enabled: true, mode: 'repeat_all', muted: false, volume: 100 },
+      };
+    }
+    return audioChannels[type];
+  }
+  function audioTitle(audio) {
+    if (audio && typeof audio.title === 'string' && audio.title !== '') return audio.title;
+    var url = audio && typeof audio.url === 'string' ? audio.url : '';
+    var name = url.split('/').pop() || '';
+    try { name = decodeURIComponent(name); } catch (_) {}
+    return name;
+  }
+  function audioEntry(audio) {
+    return { title: audioTitle(audio), url: String(audio.url) };
+  }
+  function ensureAudioElement(channel) {
+    if (channel.element) return channel.element;
+    var element = document.createElement('audio');
+    element.preload = 'auto';
+    element.style.display = 'none';
+    (document.body || document.documentElement).appendChild(element);
+    channel.element = element;
+    return element;
+  }
+  function applyAudioSettings(channel) {
+    if (!channel.element) return;
+    channel.element.volume = Math.max(0, Math.min(1, channel.settings.volume / 100));
+    channel.element.muted = channel.settings.muted === true;
+    channel.element.loop = channel.settings.mode !== 'play_one_and_stop';
+  }
+  window.playAudio = function (type, audio) {
+    var channel = audioChannel(type);
+    if (!audio || typeof audio.url !== 'string' || audio.url === '') {
+      throw new Error('DSH-SoulMojito: playAudio(type, { url }) requires an audio URL');
+    }
+    var entry = audioEntry(audio);
+    channel.current = entry;
+    if (!channel.list.some(function (existing) { return existing.url === entry.url || existing.title === entry.title; })) {
+      channel.list.push(entry);
+    }
+    var element = ensureAudioElement(channel);
+    element.src = entry.url;
+    applyAudioSettings(channel);
+    if (channel.settings.enabled !== true) return;
+    var playing = element.play();
+    if (playing && typeof playing.catch === 'function') {
+      playing.catch(function (error) {
+        console.warn('[audio] playback blocked or failed', error);
+      });
+    }
+  };
+  window.pauseAudio = function (type) {
+    var channel = audioChannel(type);
+    if (channel.element) channel.element.pause();
+  };
+  window.getAudioList = function (type) {
+    return clone(audioChannel(type).list);
+  };
+  window.replaceAudioList = function (type, audioList) {
+    var channel = audioChannel(type);
+    channel.list = (Array.isArray(audioList) ? audioList : [])
+      .filter(function (audio) { return audio && typeof audio.url === 'string' && audio.url !== ''; })
+      .map(audioEntry);
+  };
+  window.appendAudioList = function (type, audioList) {
+    var channel = audioChannel(type);
+    (Array.isArray(audioList) ? audioList : []).forEach(function (audio) {
+      if (!audio || typeof audio.url !== 'string' || audio.url === '') return;
+      var entry = audioEntry(audio);
+      if (channel.list.some(function (existing) { return existing.url === entry.url || existing.title === entry.title; })) return;
+      channel.list.push(entry);
+    });
+  };
+  window.getAudioSettings = function (type) {
+    return Object.assign({}, audioChannel(type).settings);
+  };
+  window.setAudioSettings = function (type, settings) {
+    var channel = audioChannel(type);
+    var next = settings && typeof settings === 'object' ? settings : {};
+    if (typeof next.enabled === 'boolean') channel.settings.enabled = next.enabled;
+    if (next.mode === 'repeat_one' || next.mode === 'repeat_all' || next.mode === 'shuffle' || next.mode === 'play_one_and_stop') {
+      channel.settings.mode = next.mode;
+    }
+    if (typeof next.muted === 'boolean') channel.settings.muted = next.muted;
+    if (typeof next.volume === 'number' && isFinite(next.volume)) {
+      channel.settings.volume = Math.max(0, Math.min(100, Math.round(next.volume)));
+    }
+    applyAudioSettings(channel);
+  };
+  window.getCurrentAudio = function (type) {
+    var channel = audioChannel(type);
+    var element = channel.element;
+    var duration = element && isFinite(element.duration) && element.duration > 0 ? element.duration : 0;
+    return {
+      src: channel.current ? channel.current.url : '',
+      title: channel.current ? channel.current.title : '',
+      playing: element ? !element.paused && !element.ended : false,
+      progress: element && duration > 0 ? Math.max(0, Math.min(100, (element.currentTime / duration) * 100)) : 0,
+    };
+  };
 
   var lastDisabledNoticeAt = 0;
   // Disabled controls swallow the click event, so a card button such as the action
@@ -662,6 +885,65 @@
     return call('slash', { command: String(command) }).then(function (value) { return value.output; });
   };
 
+  // JSR 生成桥（2026-10-22）：示例卡3 的 React 游戏前端启动时把
+  // TavernHelper.generate 当作运行时连接器的硬门槛，缺失会直接 throw
+  // [silly] TavernHelper is unavailable in production runtime.。生成由插件
+  // Node 侧代理卡内配置的 OpenAI 兼容 API（custom_api），iframe 只拿到最终文本；
+  // API Key 不写入快照、不回传、不落日志。
+  function generationIdOf(config) {
+    if (config && typeof config.generation_id === 'string' && config.generation_id !== '') return config.generation_id;
+    return 'dsh-soulmojito-' + Date.now() + '-' + Math.floor(Math.random() * 1e9);
+  }
+  function generationPromptMessages(config) {
+    var messages = [];
+    var injects = config && Array.isArray(config.injects) ? config.injects : [];
+    injects.forEach(function (inject) {
+      if (!inject || typeof inject.content !== 'string' || inject.content === '') return;
+      if (inject.position === 'none') return;
+      messages.push({ role: typeof inject.role === 'string' ? inject.role : 'system', content: inject.content });
+    });
+    var prompts = config && config.overrides && config.overrides.chat_history
+      && Array.isArray(config.overrides.chat_history.prompts)
+      ? config.overrides.chat_history.prompts
+      : [];
+    prompts.forEach(function (prompt) {
+      if (!prompt || typeof prompt.content !== 'string') return;
+      messages.push({ role: typeof prompt.role === 'string' ? prompt.role : 'user', content: prompt.content });
+    });
+    if (config && typeof config.user_input === 'string' && config.user_input !== '') {
+      messages.push({ role: 'user', content: config.user_input });
+    }
+    return messages;
+  }
+  window.getModelList = function (customApi) {
+    var config = customApi && typeof customApi === 'object' ? customApi : {};
+    return call('models', { apiurl: config.apiurl, key: config.key }).then(function (value) {
+      return value && Array.isArray(value.models) ? value.models : [];
+    });
+  };
+  window.generate = function (config) {
+    var request = config && typeof config === 'object' ? config : {};
+    var customApi = request.custom_api && typeof request.custom_api === 'object' ? request.custom_api : null;
+    if (customApi === null || typeof customApi.apiurl !== 'string' || customApi.apiurl.trim() === '') {
+      return Promise.reject(new Error('DSH-SoulMojito: TavernHelper.generate requires custom_api { apiurl, model }; configure an API source in the card first'));
+    }
+    var generationId = generationIdOf(request);
+    if (request.generation_id === undefined) request.generation_id = generationId;
+    emitLocally(HELPER_TAVERN_EVENTS.CHAT_COMPLETION_SETTINGS_READY, [{
+      model: typeof customApi.model === 'string' ? customApi.model : '',
+      messages: generationPromptMessages(request),
+      stream: false,
+    }]);
+    return call('generate', { config: request }).then(function (value) {
+      var text = value && typeof value.text === 'string' ? value.text : '';
+      emitLocally(HELPER_IFRAME_EVENTS.GENERATION_ENDED, [text, generationId]);
+      return text;
+    });
+  };
+  window.generateRaw = function (config) { return window.generate(config); };
+  window.stopGenerationById = function () { return false; };
+  window.stopAllGeneration = function () { return false; };
+
   // TavernHelper 的正则面（只读可观察语义）：getTavernRegexes 列出脚本，
   // formatAsTavernRegexedString 按 placement 应用。写面（replace/update）走
   // 面板与 Agent 工具，这里不给前端写口子。
@@ -705,7 +987,11 @@
     try { return new RegExp(String(regex)); } catch (_) { return null; }
   };
   window.substitudeMacros = function (text) { return String(text); };
-  window.getTavernHelperVersion = function () { return 'dsh-soulmojito'; };
+  // JSR 4.8.2 is the compatibility level this shim targets. Cards such as
+  // 示例卡3 gate their diagnostics on getTavernHelperVersion() >= 4.8.2; the
+  // function is a capability probe, not the plugin version (the plugin version is
+  // shown in the management panel). Unsupported JSR functions still throw.
+  window.getTavernHelperVersion = function () { return '4.8.2'; };
   window.getTavernVersion = function () { return 'dsh-soulmojito'; };
 
   window.TavernHelper = {
@@ -723,6 +1009,23 @@
     eventOnce: window.eventOnce,
     eventEmit: window.eventEmit,
     eventRemoveListener: window.eventRemoveListener,
+    generate: window.generate,
+    generateRaw: window.generateRaw,
+    getModelList: window.getModelList,
+    stopGenerationById: window.stopGenerationById,
+    stopAllGeneration: window.stopAllGeneration,
+    getScriptButtons: window.getScriptButtons,
+    replaceScriptButtons: window.replaceScriptButtons,
+    updateScriptButtonsWith: window.updateScriptButtonsWith,
+    appendInexistentScriptButtons: window.appendInexistentScriptButtons,
+    getButtonEvent: window.getButtonEvent,
+    getPreset: window.getPreset,
+    replacePreset: window.replacePreset,
+    getPresetNames: window.getPresetNames,
+    getLoadedPresetName: window.getLoadedPresetName,
+    getCharData: window.getCharData,
+    getTavernHelperVersion: window.getTavernHelperVersion,
+    getTavernVersion: window.getTavernVersion,
   };
   // TavernHelper 命名空间下的同名事件函数（JSR 两种调用姿势并存：window 直连
   // 与 TavernHelper.*；前端两种都写，所以两个出口都给全）。
@@ -747,11 +1050,102 @@
   window.tavern_events = ${JSON.stringify(HELPER_TAVERN_EVENTS)};
   window.iframe_events = ${JSON.stringify(HELPER_IFRAME_EVENTS)};
   // TavernHelper 的全局事件函数（JSR 把 eventOn 等挂在 window 直连面）。
+  // 脚本按钮（JSR 快速回复栏的可观察面）：本插件没有按钮栏，但 MVU 等常驻脚本
+  // 会在启动时 get/replace/append 按钮。维持一份 iframe 内存列表，调用不中断；
+  // 按钮不会渲染到宿主，读取结果仍是一致的。
+  var scriptButtons = [];
+  function normalizeScriptButtons(value) {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter(function (button) { return button && typeof button === 'object' && typeof button.name === 'string' && button.name !== ''; })
+      .map(function (button) {
+        return Object.assign({}, button, { visible: button.visible !== false });
+      });
+  }
+  window.getScriptButtons = function () { return clone(scriptButtons); };
+  window.replaceScriptButtons = function (buttons) { scriptButtons = normalizeScriptButtons(buttons); };
+  window.updateScriptButtonsWith = function (updater) {
+    if (typeof updater !== 'function') throw new Error('DSH-SoulMojito: updateScriptButtonsWith requires a function');
+    var next = updater(clone(scriptButtons));
+    scriptButtons = normalizeScriptButtons(next);
+    return clone(scriptButtons);
+  };
+  window.appendInexistentScriptButtons = function (buttons) {
+    var existing = new Set(scriptButtons.map(function (button) { return button.name; }));
+    normalizeScriptButtons(buttons).forEach(function (button) {
+      if (!existing.has(button.name)) {
+        existing.add(button.name);
+        scriptButtons.push(button);
+      }
+    });
+  };
   window.getButtonEvent = function (name) { return 'tavern-helper-button-' + String(name); };
+
+  // 预设 / 角色卡只读兼容面（2026-10-22）：示例卡3 的启动诊断会调用
+  // getPreset('in_use') / getPreset('openai') 与 getCharData('current')。
+  // JSR 的 getPreset 是同步的；预设写入在本插件属于受保护资产，前端只得到
+  // iframe 内存覆盖，不写基础 preset 文件（诊断的「注入格式提示」因此只影响
+  // 本次 iframe，不会污染资产）。
+  var presetMemory = {};
+  function presetKey(name) {
+    return typeof name === 'string' && name.trim() !== '' ? name.trim() : 'in_use';
+  }
+  window.getPreset = function (name) {
+    var key = presetKey(name);
+    return clone(presetMemory[key] || { name: key, prompts: [] });
+  };
+  window.replacePreset = function (name, preset) {
+    var key = presetKey(name);
+    presetMemory[key] = clone(preset && typeof preset === 'object' ? preset : { name: key, prompts: [] });
+    return clone(presetMemory[key]);
+  };
+  window.getPresetNames = function () {
+    var names = Object.keys(presetMemory);
+    return names.length > 0 ? names : ['in_use'];
+  };
+  window.getLoadedPresetName = function () { return 'in_use'; };
+  window.getCharData = function (name) {
+    var data = state.characterData;
+    if (!data) return null;
+    if (name !== undefined && name !== 'current' && name !== state.characterName) return null;
+    // JSR returns a v1CharData object: the V2 payload lives under .data, while
+    // the top-level fields mirror it. Cards read getCharData('current').data.creator
+    // / character_version / creator_notes (示例卡3 derives its asset-pack key there).
+    return {
+      name: typeof data.name === 'string' ? data.name : state.characterName,
+      description: typeof data.description === 'string' ? data.description : '',
+      personality: typeof data.personality === 'string' ? data.personality : '',
+      scenario: typeof data.scenario === 'string' ? data.scenario : '',
+      first_mes: typeof data.first_mes === 'string' ? data.first_mes : '',
+      mes_example: typeof data.mes_example === 'string' ? data.mes_example : '',
+      creatorcomment: typeof data.creator_notes === 'string' ? data.creator_notes : '',
+      avatar: '',
+      talkativeness: '0.5',
+      fav: false,
+      tags: Array.isArray(data.tags) ? clone(data.tags) : [],
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: clone(data),
+    };
+  };
   window.getScriptId = function () { return 'dsh-soulmojito-frontend'; };
   window.waitGlobalInitialized = function (name) { return Promise.resolve(window[name]); };
   window.TavernHelper.addEventListener = window.eventOn;
   window.TavernHelper.removeEventListener = window.eventRemoveListener;
+  // These helpers are defined after the TavernHelper literal (script buttons /
+  // presets / character data); publish them again so the namespace object is not
+  // left with undefined properties. Card code reads TavernHelper.getPreset etc.
+  // synchronously during startup diagnostics.
+  window.TavernHelper.getScriptButtons = window.getScriptButtons;
+  window.TavernHelper.replaceScriptButtons = window.replaceScriptButtons;
+  window.TavernHelper.updateScriptButtonsWith = window.updateScriptButtonsWith;
+  window.TavernHelper.appendInexistentScriptButtons = window.appendInexistentScriptButtons;
+  window.TavernHelper.getButtonEvent = window.getButtonEvent;
+  window.TavernHelper.getPreset = window.getPreset;
+  window.TavernHelper.replacePreset = window.replacePreset;
+  window.TavernHelper.getPresetNames = window.getPresetNames;
+  window.TavernHelper.getLoadedPresetName = window.getLoadedPresetName;
+  window.TavernHelper.getCharData = window.getCharData;
 
   window.SillyTavern = {
     getContext: function () {
@@ -762,11 +1156,35 @@
         name1: state.userName,
         name2: state.characterName,
         characterId: 0,
-        characters: state.characterData ? [state.characterData] : [],
+        characters: window.getCharData('current') ? [window.getCharData('current')] : [],
+        getCurrentChatId: function () { return state.chatId; },
         getCharacterCardFields: function () {
-          return { description: '', personality: '', scenario: '', mesExamples: '' };
+          var data = state.characterData || {};
+          return {
+            description: typeof data.description === 'string' ? data.description : '',
+            personality: typeof data.personality === 'string' ? data.personality : '',
+            scenario: typeof data.scenario === 'string' ? data.scenario : '',
+            mesExamples: typeof data.mes_example === 'string'
+              ? data.mes_example
+              : (typeof data.mesExamples === 'string' ? data.mesExamples : ''),
+          };
         },
       };
+    },
+    getCurrentChatId: function () { return state.chatId; },
+    POPUP_TYPE: { CONFIRM: 'confirm', INPUT: 'input', DISPLAY: 'display', TEXT: 'text' },
+    POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 0, CANCELLED: 0 },
+    callGenericPopup: function (text, type, defaultValue, options) {
+      var message = String(text == null ? '' : text);
+      if (type === 'confirm') {
+        return window.confirm(message) ? window.SillyTavern.POPUP_RESULT.AFFIRMATIVE : window.SillyTavern.POPUP_RESULT.CANCELLED;
+      }
+      if (type === 'input') {
+        var result = window.prompt(message, defaultValue == null ? '' : String(defaultValue));
+        return result === null ? window.SillyTavern.POPUP_RESULT.CANCELLED : result;
+      }
+      window.alert(message);
+      return window.SillyTavern.POPUP_RESULT.AFFIRMATIVE;
     },
   };
   window.TavernHelper.Mvu = window.Mvu;
@@ -779,6 +1197,15 @@
   var fakeComposerText = '';
   var fakeTextarea = {
     value: '',
+    disabled: false,
+    readOnly: false,
+    style: {},
+    focus: function () {},
+    blur: function () {},
+    select: function () {},
+    setSelectionRange: function () {},
+    getAttribute: function () { return null; },
+    setAttribute: function () {},
     dispatchEvent: function (event) {
       if (event && event.type === 'input') {
         fakeComposerText = String(this.value || '');
@@ -792,6 +1219,10 @@
     }
   };
   var fakeSendButton = {
+    disabled: false,
+    style: {},
+    getAttribute: function () { return null; },
+    setAttribute: function () {},
     click: function () {
       if (fakeComposerText === '' && fakeTextarea.value) fakeComposerText = String(fakeTextarea.value);
       call('composer.send', { text: fakeComposerText }).catch(function (error) {
@@ -807,7 +1238,14 @@
   // delegates everything to the real iframe document. Only the two host-composer
   // selectors stay faked: they are the historical parent.document contract.
   var documentFacade = {
-    getElementById: function (id) { return document.getElementById(id); },
+    // 卡前端同时存在两条老路径：querySelector('#send_textarea') 和
+    // getElementById('send_textarea')（示例卡2 的前端 store 用后者）。
+    // 两条都必须落到宿主输入面 shim，否则选项/发送按钮会报「找不到输入框」。
+    getElementById: function (id) {
+      if (id === 'send_textarea') return fakeTextarea;
+      if (id === 'send_but') return fakeSendButton;
+      return document.getElementById(id);
+    },
     createElement: function (tag, options) { return options === undefined ? document.createElement(tag) : document.createElement(tag, options); },
     createElementNS: function (namespace, tag) { return document.createElementNS(namespace, tag); },
     createTextNode: function (text) { return document.createTextNode(text); },
@@ -824,6 +1262,223 @@
     get documentElement() { return document.documentElement; },
     get activeElement() { return document.activeElement; }
   };
+  // 虚拟 IndexedDB（2026-10-22）：沙箱 opaque origin 拿不到真实 IndexedDB。
+  // 这个垫片只实现卡常用的 open / createObjectStore / transaction / get / put /
+  // delete / clear / deleteDatabase；记录体经宿主二进制路由按角色落盘，iframe
+  // 不接触宿主 Origin、Cookie 或真实浏览器配额。
+  function idbRequest() {
+    return {
+      result: undefined,
+      error: null,
+      onsuccess: null,
+      onerror: null,
+      onupgradeneeded: null,
+      onblocked: null,
+    };
+  }
+  function idbFire(request, result) {
+    request.result = result;
+    try { if (request.onsuccess) request.onsuccess({ target: request }); } catch (error) { console.error('[idb] onsuccess failed', error); }
+  }
+  function idbFail(request, error) {
+    request.error = error;
+    try { if (request.onerror) request.onerror({ target: request, error: error }); } catch (cause) { console.error('[idb] onerror failed', cause); }
+  }
+  function IdbDatabase(name) {
+    var self = this;
+    self.name = name;
+    self.version = 0;
+    self._stores = {};
+    self._pending = [];
+    self.objectStoreNames = {
+      contains: function (storeName) { return Object.prototype.hasOwnProperty.call(self._stores, String(storeName)); },
+      item: function (index) { return Object.keys(self._stores)[index] || null; },
+      get length() { return Object.keys(self._stores).length; },
+    };
+  }
+  IdbDatabase.prototype.createObjectStore = function (storeName, options) {
+    var name = String(storeName);
+    var keyPath = options && typeof options.keyPath === 'string' ? options.keyPath : '';
+    this._stores[name] = { keyPath: keyPath };
+    var dbName = this.name;
+    var pending = call('idb.store.create', { db: dbName, store: name, keyPath: keyPath });
+    this._pending.push(pending);
+    return { name: name, keyPath: keyPath };
+  };
+  IdbDatabase.prototype.transaction = function (storeNames, mode) {
+    return new IdbTransaction(this, storeNames, mode);
+  };
+  IdbDatabase.prototype.close = function () {};
+  function IdbTransaction(db, storeNames, mode) {
+    var self = this;
+    self.db = db;
+    self.mode = mode === 'readwrite' ? 'readwrite' : 'readonly';
+    self.oncomplete = null;
+    self.onerror = null;
+    self.onabort = null;
+    self.error = null;
+    self._pending = [];
+    self._settled = false;
+    self._drainQueued = false;
+    self._storeNames = Array.isArray(storeNames) ? storeNames.map(String) : [String(storeNames)];
+    self._schedule();
+  }
+  IdbTransaction.prototype._schedule = function () {
+    var self = this;
+    if (self._drainQueued || self._settled) return;
+    self._drainQueued = true;
+    // A macrotask gives the synchronous transaction body (objectStore().get/put
+    // in a row, or get().onsuccess -> put()) time to register requests. The
+    // drain loop re-checks after each batch, so follow-up puts are awaited too.
+    setTimeout(function () {
+      self._drainQueued = false;
+      self._drain();
+    }, 0);
+  };
+  IdbTransaction.prototype._drain = function () {
+    var self = this;
+    if (self._settled) return;
+    if (self._pending.length === 0) {
+      self._complete();
+      return;
+    }
+    var batch = self._pending;
+    self._pending = [];
+    Promise.allSettled(batch).then(function (results) {
+      if (self._settled) return;
+      var failure = results.filter(function (result) { return result.status === 'rejected'; })[0];
+      if (failure !== undefined) {
+        self.error = failure.reason;
+        self._settled = true;
+        try { if (self.onerror) self.onerror({ target: self, error: self.error }); } catch (error) { console.error('[idb] tx onerror failed', error); }
+        try { if (self.onabort) self.onabort({ target: self }); } catch (error) { console.error('[idb] tx onabort failed', error); }
+        return;
+      }
+      self._drain();
+    });
+  };
+  IdbTransaction.prototype._complete = function () {
+    if (this._settled) return;
+    this._settled = true;
+    try { if (this.oncomplete) this.oncomplete({ target: this }); } catch (error) { console.error('[idb] tx oncomplete failed', error); }
+  };
+  IdbTransaction.prototype._track = function (promise) {
+    this._pending.push(promise);
+    this._schedule();
+  };
+  IdbTransaction.prototype.objectStore = function (storeName) {
+    return new IdbObjectStore(this, String(storeName));
+  };
+  function IdbObjectStore(transaction, name) {
+    this.transaction = transaction;
+    this.name = name;
+    var descriptor = transaction.db._stores[name];
+    this.keyPath = descriptor && typeof descriptor.keyPath === 'string' ? descriptor.keyPath : '';
+  }
+  IdbObjectStore.prototype.get = function (key) {
+    var request = idbRequest();
+    var tx = this.transaction;
+    var promise = call('idb.get', { db: tx.db.name, store: this.name, key: key }).then(function (value) {
+      var record = value && value.record !== undefined ? value.record : undefined;
+      idbFire(request, record);
+      return record;
+    }, function (error) {
+      idbFail(request, error);
+      throw error;
+    });
+    tx._track(promise);
+    return request;
+  };
+  IdbObjectStore.prototype.put = function (value) {
+    var request = idbRequest();
+    var tx = this.transaction;
+    var record = value && typeof value === 'object' ? value : null;
+    var bytes = record !== null ? record.bytes : null;
+    if (ArrayBuffer.isView(bytes)) bytes = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    if (!(bytes instanceof ArrayBuffer)) {
+      var error = new Error('idb.put requires a record with an ArrayBuffer bytes field');
+      idbFail(request, error);
+      tx._track(Promise.reject(error));
+      return request;
+    }
+    var key = record !== null ? record.key : undefined;
+    var meta = {};
+    if (record !== null) {
+      Object.keys(record).forEach(function (name) {
+        if (name !== 'bytes') meta[name] = clone(record[name]);
+      });
+    }
+    var promise = call('idb.put', { db: tx.db.name, store: this.name, key: key, meta: meta, bytes: bytes }, [bytes]).then(function (result) {
+      idbFire(request, key);
+      return result;
+    }, function (cause) {
+      idbFail(request, cause);
+      throw cause;
+    });
+    tx._track(promise);
+    return request;
+  };
+  IdbObjectStore.prototype.delete = function (key) {
+    var request = idbRequest();
+    var tx = this.transaction;
+    var promise = call('idb.delete', { db: tx.db.name, store: this.name, key: key }).then(function (result) {
+      idbFire(request, undefined);
+      return result;
+    }, function (error) {
+      idbFail(request, error);
+      throw error;
+    });
+    tx._track(promise);
+    return request;
+  };
+  IdbObjectStore.prototype.clear = function () {
+    var request = idbRequest();
+    var tx = this.transaction;
+    var promise = call('idb.clear', { db: tx.db.name, store: this.name }).then(function (result) {
+      idbFire(request, undefined);
+      return result;
+    }, function (error) {
+      idbFail(request, error);
+      throw error;
+    });
+    tx._track(promise);
+    return request;
+  };
+  var idbShim = {
+    open: function (name, version) {
+      var request = idbRequest();
+      var db = new IdbDatabase(String(name));
+      call('idb.open', { name: String(name), version: version }).then(function (value) {
+        db.version = value && typeof value.version === 'number' ? value.version : 0;
+        var stores = value && Array.isArray(value.stores) ? value.stores : [];
+        stores.forEach(function (storeName) { db._stores[String(storeName)] = { keyPath: '' }; });
+        var previousVersion = value && typeof value.previousVersion === 'number' ? value.previousVersion : 0;
+        var requested = typeof version === 'number' && version > 0 ? version : 1;
+        request.result = db;
+        if (requested > previousVersion && request.onupgradeneeded) {
+          try {
+            request.onupgradeneeded({ target: request, oldVersion: previousVersion, newVersion: requested });
+          } catch (error) {
+            idbFail(request, error);
+            return;
+          }
+        }
+        Promise.all(db._pending).then(function () { idbFire(request, db); }, function (error) { idbFail(request, error); });
+      }, function (error) { idbFail(request, error); });
+      return request;
+    },
+    deleteDatabase: function (name) {
+      var request = idbRequest();
+      call('idb.delete-db', { db: String(name) }).then(function () { idbFire(request, undefined); }, function (error) { idbFail(request, error); });
+      return request;
+    },
+  };
+  try {
+    Object.defineProperty(window, 'indexedDB', { value: idbShim, configurable: true });
+  } catch (_) {
+    try { window.indexedDB = idbShim; } catch (_) {}
+  }
+
   var host = {
     Mvu: window.Mvu,
     toastr: window.toastr,
@@ -849,9 +1504,20 @@
     cancelAnimationFrame: function (handle) { return window.cancelAnimationFrame(handle); },
     getVariables: window.getVariables,
     replaceVariables: window.replaceVariables,
+    updateVariablesWith: window.updateVariablesWith,
+    insertOrAssignVariables: window.insertOrAssignVariables,
+    insertVariables: window.insertVariables,
+    deleteVariable: window.deleteVariable,
     getChatMessages: window.getChatMessages,
+    setChatMessages: window.setChatMessages,
+    createChatMessages: window.createChatMessages,
+    deleteChatMessages: window.deleteChatMessages,
     getLastMessageId: window.getLastMessageId,
     getCurrentMessageId: window.getCurrentMessageId,
+    eventOn: window.eventOn,
+    eventOnce: window.eventOnce,
+    eventEmit: window.eventEmit,
+    eventRemoveListener: window.eventRemoveListener,
     getLorebook: window.getLorebook,
     getWorldbook: window.getWorldbook,
     getCharWorldbookNames: window.getCharWorldbookNames,
@@ -860,10 +1526,39 @@
     updateScriptTreesWith: window.updateScriptTreesWith,
     getCharNames: window.getCharNames,
     triggerSlash: window.triggerSlash,
+    getScriptButtons: window.getScriptButtons,
+    replaceScriptButtons: window.replaceScriptButtons,
+    updateScriptButtonsWith: window.updateScriptButtonsWith,
+    appendInexistentScriptButtons: window.appendInexistentScriptButtons,
+    getButtonEvent: window.getButtonEvent,
+    getPreset: window.getPreset,
+    replacePreset: window.replacePreset,
+    getPresetNames: window.getPresetNames,
+    getLoadedPresetName: window.getLoadedPresetName,
+    getCharData: window.getCharData,
+    generate: window.generate,
+    generateRaw: window.generateRaw,
+    getModelList: window.getModelList,
+    stopGenerationById: window.stopGenerationById,
+    stopAllGeneration: window.stopAllGeneration,
+    getTavernHelperVersion: window.getTavernHelperVersion,
+    getTavernVersion: window.getTavernVersion,
+    errorCatched: window.errorCatched,
+    playAudio: window.playAudio,
+    pauseAudio: window.pauseAudio,
+    getAudioList: window.getAudioList,
+    replaceAudioList: window.replaceAudioList,
+    appendAudioList: window.appendAudioList,
+    getAudioSettings: window.getAudioSettings,
+    setAudioSettings: window.setAudioSettings,
+    getCurrentAudio: window.getCurrentAudio,
     _: window._,
     $: window.$,
     jQuery: window.jQuery,
     showdown: window.showdown,
+    get z() { return window.z; },
+    get Vue() { return window.Vue; },
+    get YAML() { return window.YAML; },
     localStorage: window.__dshTavernStorage,
     sessionStorage: window.__dshTavernSessionStorage
   };
@@ -875,4 +1570,5 @@
 
     function helperLibraryTags() {
       return HELPER_LIBRARIES.map((url) => `<script src="${url}" crossorigin="anonymous"></script>`).join('')
+        + HELPER_ZOD_MODULE
     }

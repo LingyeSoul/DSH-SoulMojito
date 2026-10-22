@@ -223,9 +223,37 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
   })
 
   it('fails explicitly on unsupported ops instead of pretending success', async () => {
-    const result = await call({ op: 'generate', character: CHARACTER, chatId })
+    const result = await call({ op: 'not-a-helper-op', character: CHARACTER, chatId })
     expect(result.status).toBe(500)
     expect(String(result.body?.message)).toContain('unsupported helper op')
+  })
+
+  it('persists frontend localStorage per character', async () => {
+    const storage = { 'card:setting': '{"theme":"dark"}', 'card:api': 'ciphertext' }
+    const set = await call({ op: 'storage.set', character: CHARACTER, chatId, storage })
+    expect(set.status).toBe(200)
+    expect(set.body?.value).toMatchObject({ storage })
+    const get = await call({ op: 'storage.get', character: CHARACTER, chatId })
+    expect(get.body?.value).toMatchObject({ storage })
+    expect((await store.getState()).frontendStorage?.[CHARACTER]).toEqual(storage)
+    // Non-string values and missing chat scope are rejected explicitly.
+    const bad = await call({ op: 'storage.set', character: CHARACTER, chatId, storage: { x: 1 } })
+    expect(bad.status).toBe(500)
+    expect(String(bad.body?.message)).toContain('must be a string')
+    const unscoped = await call({ op: 'storage.set', character: CHARACTER, chatId: '', storage })
+    expect(unscoped.status).toBe(500)
+  })
+
+  it('opens, creates and deletes virtual IndexedDB through helper control ops', async () => {
+    const open = await call({ op: 'idb.open', character: CHARACTER, chatId, name: 'probe-db', version: 1 })
+    expect(open.status).toBe(200)
+    expect(open.body?.value).toMatchObject({ version: 1, previousVersion: 0, stores: [] })
+    const store = await call({ op: 'idb.store.create', character: CHARACTER, chatId, db: 'probe-db', store: 'records', keyPath: 'key' })
+    expect(store.body?.value).toMatchObject({ stores: ['records'] })
+    const reopened = await call({ op: 'idb.open', character: CHARACTER, chatId, name: 'probe-db', version: 1 })
+    expect(reopened.body?.value).toMatchObject({ version: 1, previousVersion: 1, stores: ['records'] })
+    const deleted = await call({ op: 'idb.delete-db', character: CHARACTER, chatId, db: 'probe-db' })
+    expect(deleted.body?.value).toMatchObject({ deleted: true })
   })
 
   it('lorebook.get 优先会话副本，lorebook.put 只写副本，基础资产不变', async () => {

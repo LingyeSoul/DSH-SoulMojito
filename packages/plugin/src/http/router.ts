@@ -1,4 +1,9 @@
 import { detectPresetKind, parseRegexScripts } from '../../../tavern-format/src/index.js'
+import { createReadStream, createWriteStream } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import {
   deleteOriginalSnapshot,
   moveOriginalSnapshot,
@@ -14,6 +19,7 @@ import { collectCardScriptBundle } from '../card-scripts.js'
 import { runCandidateGeneration } from '../candidates.js'
 import { tavernDataRoot } from '../dsh-home.js'
 import { latestFrontendMessage, stripFrontendDocuments } from '../frontend-documents.js'
+import { getIdbRecord, IDB_MAX_RECORD_BYTES, putIdbRecordFromFile } from '../frontend-idb.js'
 import { handleGamesApi, isGamesRoute } from '../games/http.js'
 import { handleHelperApi } from '../helper.js'
 import { generate, previewGeneration, runTavernScript } from '../generation/pipeline.js'
@@ -1089,6 +1095,75 @@ export async function handleApi(ctx, req, res) {
     const scriptTrees = chatId === null ? undefined : await db.getChatScripts(character, chatId)
     const { world, scripts } = collectCardScriptBundle(file.card, scriptTrees)
     return sendJson(res, 200, { ok: true, character, world, scripts })
+  }
+
+  // 虚拟 IndexedDB 的二进制数据面（2026-10-22）：控制面走 helper JSON，
+  // 记录体走这里。只由宿主页（已绑定会话）调用；iframe 不能直接访问该路由。
+  if (method === 'GET' && route === 'frontend/idb/get') {
+    const character = url.searchParams.get('character')
+    if (!character) throw new Error('character query is required')
+    const record = await getIdbRecord(
+      character,
+      url.searchParams.get('db'),
+      url.searchParams.get('store'),
+      url.searchParams.get('key'),
+    )
+    if (record === undefined) return sendJson(res, 404, { ok: false, message: 'idb record not found' })
+    res.statusCode = 200
+    res.setHeader('content-type', 'application/octet-stream')
+    res.setHeader('content-length', String(record.size))
+    res.setHeader('x-dsh-idb-meta', Buffer.from(JSON.stringify(record.meta), 'utf8').toString('base64url'))
+    await pipeline(createReadStream(record.path), res)
+    return
+  }
+
+  if (method === 'POST' && route === 'frontend/idb/put') {
+    const character = url.searchParams.get('character')
+    if (!character) throw new Error('character query is required')
+    const dbName = url.searchParams.get('db')
+    const storeName = url.searchParams.get('store')
+    const key = url.searchParams.get('key')
+    if (dbName === null || storeName === null || key === null) {
+      throw new Error('db, store and key queries are required')
+    }
+    const declared = Number(req.headers?.['content-length'] ?? '')
+    if (Number.isFinite(declared) && declared > IDB_MAX_RECORD_BYTES) {
+      req.destroy?.()
+      throw new Error(`idb record is too large (${declared} > ${IDB_MAX_RECORD_BYTES} bytes)`)
+    }
+    const temporaryDir = await mkdtemp(join(tmpdir(), 'dsh-soulmojito-idb-'))
+    const temporaryPath = join(temporaryDir, 'record.bin')
+    try {
+      await pipeline(req, createWriteStream(temporaryPath))
+      const metaHeader = typeof req.headers?.['x-dsh-idb-meta'] === 'string' ? req.headers['x-dsh-idb-meta'] : ''
+      let meta: Record<string, unknown> = {}
+      if (metaHeader !== '') {
+        try {
+          const parsed = JSON.parse(Buffer.from(metaHeader, 'base64url').toString('utf8')) as unknown
+          if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) meta = parsed as Record<string, unknown>
+          else throw new Error('meta must be an object')
+        } catch (error) {
+          throw new Error(`x-dsh-idb-meta is not valid base64url JSON: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+      const result = await putIdbRecordFromFile(character, dbName, storeName, key, temporaryPath, meta)
+      return sendJson(res, 200, { ok: true, value: result })
+    } finally {
+      await rm(temporaryDir, { recursive: true, force: true })
+    }
+  }
+
+  // 美化前端 localStorage 的初始播种（2026-10-22）：沙箱 iframe 的 localStorage
+  // 是内存实现，FrontendFrame 在构建 srcdoc 之前先取本角色的持久表，同步注入
+  // 到 shim；写入仍走 helper 的 storage.set。只读、按角色隔离。
+  if (method === 'GET' && route === 'frontend/storage') {
+    const character = url.searchParams.get('character')
+    if (!character) throw new Error('character query is required')
+    const state = await db.getState()
+    return sendJson(res, 200, {
+      ok: true,
+      storage: state.frontendStorage?.[character] ?? {},
+    })
   }
 
   // 美化前端（AgentTavern 右栏展示面，2026-10-20）：native conversation 由宿主

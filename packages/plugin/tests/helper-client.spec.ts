@@ -22,7 +22,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       "const HELPER_MESSAGE = 'dsh-soulmojito:helper'",
       "const HELPER_RESULT_MESSAGE = 'dsh-soulmojito:helper-result'",
       "const HELPER_SNAPSHOT_MESSAGE = 'dsh-soulmojito:helper-snapshot'",
-      'function frontendHelperScript(token, messageId)',
+      'function frontendHelperScript(token, messageId, storage)',
       'window.getVariables = function',
       'window.replaceVariables = function',
       'window.updateVariablesWith = function',
@@ -54,6 +54,100 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       "call('composer.send'",
     ]) {
       expect(source).toContain(marker)
+    }
+  })
+
+  it('ships the JSR library globals and generation bridge', () => {
+    // JSR card frontends expect Vue/Vue Router/Zod globals before their bundle
+    // runs. 示例卡2 is a Vue SFC bundle with `module.exports = Vue`; 示例卡3's
+    // mvu_zod.js reads `z.z` and `z.object`.
+    expect(source).toContain("https://cdn.jsdelivr.net/npm/vue@3.5.40/dist/vue.runtime.global.prod.min.js")
+    expect(source).toContain("https://cdn.jsdelivr.net/npm/vue-router@4.6.4/dist/vue-router.global.prod.min.js")
+    expect(source).toContain("https://cdn.jsdelivr.net/npm/zod@4.4.3/+esm")
+    expect(source).toContain('window.z = z')
+    // 示例卡3's runtime connector hard-gates on TavernHelper.generate; the shim
+    // proxies the card-owned API through the host (never the other way around).
+    for (const marker of [
+      'window.generate = function (config)',
+      "call('generate', { config: request })",
+      'window.getModelList = function (customApi)',
+      "call('models', { apiurl: config.apiurl, key: config.key })",
+      'generate: window.generate,',
+      'getModelList: window.getModelList,',
+      'window.getCharData = function (name)',
+      "data: clone(data)",
+      'window.getPreset = function (name)',
+      'window.getLoadedPresetName = function () { return \'in_use\'; }',
+    ]) {
+      expect(source).toContain(marker)
+    }
+  })
+
+  it('restores the card-facing audio / error / input surface', () => {
+    for (const marker of [
+      'window.errorCatched = function (fn)',
+      'window.playAudio = function (type, audio)',
+      'window.pauseAudio = function (type)',
+      'window.getCurrentAudio = function (type)',
+      "element.play()",
+      "getBoundingClientRect: function ()",
+      "if (id === 'send_textarea') return fakeTextarea;",
+      "if (id === 'send_but') return fakeSendButton;",
+    ]) {
+      expect(source).toContain(marker)
+    }
+    // The shim currently runs inside a template literal: unescaped backticks in
+    // comments would terminate it (and break the whole client bundle).
+    const helperStart = source.indexOf('function frontendHelperScript')
+    const templateStart = source.indexOf('return `', helperStart)
+    const templateEnd = source.indexOf('})();`', templateStart)
+    expect(templateStart).toBeGreaterThanOrEqual(0)
+    expect(templateEnd).toBeGreaterThan(templateStart)
+    expect(source.slice(templateStart + 8, templateEnd)).not.toContain('`')
+  })
+
+  it('seeds and persists the sandbox localStorage through the host', () => {
+    expect(source).toContain('function serializeFrontendStorageSeed(storage)')
+    expect(source).toContain('function loadFrontendStorage(character)')
+    expect(source).toContain("api(`frontend/storage?character=${encodeURIComponent(character)}`)")
+    expect(source).toContain('createMemoryStorage(initialStorage, true)')
+    expect(source).toContain("call('storage.set', { storage: Object.assign({}, data) })")
+    expect(source).toContain("if (data.op === 'storage.set') frontendStorageCache.delete(current.character)")
+    expect(source).toContain('storageSeed === null')
+    expect(source).toContain('font-src data: blob: https:')
+  })
+
+  it('ships the virtual IndexedDB bridge and binary routes', () => {
+    for (const marker of [
+      'function IdbDatabase(name)',
+      'IdbDatabase.prototype.createObjectStore',
+      'IdbDatabase.prototype.transaction',
+      'IdbObjectStore.prototype.get = function (key)',
+      'IdbObjectStore.prototype.put = function (value)',
+      "call('idb.put', { db: tx.db.name, store: this.name, key: key, meta: meta, bytes: bytes }, [bytes])",
+      "call('idb.get', { db: tx.db.name, store: this.name, key: key })",
+      "Object.defineProperty(window, 'indexedDB'",
+      "if (data.op === 'idb.get')",
+      "if (data.op === 'idb.put')",
+      'frontend/idb/get',
+      'frontend/idb/put',
+    ]) {
+      expect(source).toContain(marker)
+    }
+    expect(compatDoc).toContain('虚拟 IndexedDB')
+    expect(compatDoc).toContain('frontend/idb/put|get')
+  })
+
+  it('documents the new JSR compatibility surface', () => {
+    for (const name of [
+      'generate', 'getModelList', 'getCharData', 'getPreset', 'getLoadedPresetName',
+      'errorCatched', 'playAudio', 'pauseAudio', 'getAudioSettings', 'setAudioSettings',
+      'getScriptButtons', 'replaceScriptButtons',
+    ]) {
+      expect(compatDoc).toContain(`\`${name}`)
+    }
+    for (const marker of ['Vue 3.5.40', 'vue-router 4.6.4', 'Zod 4.4.3', 'frontend/storage']) {
+      expect(compatDoc).toContain(marker)
     }
   })
 
@@ -120,7 +214,8 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     // （body:null、无 getElementById）会在 appendChild 处崩掉。
     for (const marker of [
       'var documentFacade =',
-      'getElementById: function (id) { return document.getElementById(id); }',
+      "if (id === 'send_textarea') return fakeTextarea;",
+      "if (id === 'send_but') return fakeSendButton;",
       'get head() { return document.head; }',
       'get body() { return document.body; }',
       'get documentElement() { return document.documentElement; }',
@@ -180,6 +275,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     const body = source
       .slice(start + 'return `'.length, end + '})();'.length)
       .replace(/\$\{JSON\.stringify\([^)]*\)\}/g, '""')
+      .replace(/\$\{serializeFrontendStorageSeed\(storage\)\}/g, '{}')
     expect(() => new Function(body)).not.toThrow()
   })
 
@@ -236,6 +332,11 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       'getCharWorldbookNames', 'updateWorldbookWith', 'getScriptTrees', 'updateScriptTreesWith',
       'triggerSlash', 'substitudeMacros', 'getTavernHelperVersion', 'getTavernVersion',
       'getButtonEvent', 'getScriptId', 'waitGlobalInitialized',
+      'generate', 'generateRaw', 'getModelList', 'stopGenerationById', 'stopAllGeneration',
+      'getCharData', 'getPreset', 'replacePreset', 'getPresetNames', 'getLoadedPresetName',
+      'getScriptButtons', 'replaceScriptButtons', 'updateScriptButtonsWith', 'appendInexistentScriptButtons',
+      'errorCatched', 'playAudio', 'pauseAudio', 'getAudioList', 'replaceAudioList',
+      'appendAudioList', 'getAudioSettings', 'setAudioSettings', 'getCurrentAudio',
     ]
     for (const name of exported) {
       expect(source).toContain(`window.${name}`)

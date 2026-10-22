@@ -226,7 +226,7 @@
       return post
     }
 
-    function buildFrontendDocument(value, token, messageId, allowExternalResources, hostBackground) {
+    function buildFrontendDocument(value, token, messageId, allowExternalResources, hostBackground, storage) {
       // window.parent / window.top 在 sandbox（无 same-origin）里是跨域 WindowProxy，
       // 酒馆卡常见的 `window.parent.document` / `window.parent.Mvu` 会直接抛
       // DOMException。注入前统一改指向 shim 暴露的同页 facade；helper 自身与
@@ -259,7 +259,7 @@
       const theme = `<script>${frontendThemeScript()}</script>`
       // 酒馆助手兼容层（2026-10-20）：库脚本 + TavernHelper shim 进 head，前端
       // 首帧就能拿到 getVariables/getChatMessages 等同步面；快照由宿主随后投递。
-      const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token, messageId)}</script>`
+      const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token, messageId, storage)}</script>`
       const reporter = `<script>${frontendHeightReporter(token)}</script>`
       if (/<html(?:\s[^>]*)?>/i.test(source)) {
         let documentText = source
@@ -508,9 +508,9 @@
         composerDraftRef.current = { element: null, text: '' }
       }, [token])
       useEffect(() => {
-        const reply = (payload) => {
+        const reply = (payload, transfer) => {
           try {
-            frameRef.current?.contentWindow?.postMessage({ ...payload, token }, '*')
+            frameRef.current?.contentWindow?.postMessage({ ...payload, token }, '*', Array.isArray(transfer) ? transfer : [])
           } catch {}
         }
         const emitEvent = (event, args) => {
@@ -529,11 +529,28 @@
           for (const message of after) {
             const old = byId.get(message.message_id)
             if (old === undefined) {
-              emitEvent(message.role === 'user' ? HELPER_TAVERN_EVENTS.MESSAGE_SENT : HELPER_TAVERN_EVENTS.MESSAGE_RECEIVED, [message.message_id])
+              if (message.role === 'user') {
+                emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_SENT, [message.message_id])
+                emitEvent(HELPER_TAVERN_EVENTS.USER_MESSAGE_RENDERED, [message.message_id])
+              } else {
+                emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_RECEIVED, [message.message_id])
+                emitEvent(HELPER_TAVERN_EVENTS.CHARACTER_MESSAGE_RENDERED, [message.message_id, 'normal'])
+                // No token stream exists in the native surface: publish the final
+                // text once so cards that repaint from STREAM_TOKEN_RECEIVED do not
+                // stay on their empty state. The second argument is JSR's
+                // generation id; the floor id is stable and sufficient here.
+                emitEvent(HELPER_TAVERN_EVENTS.STREAM_TOKEN_RECEIVED, [String(message.message ?? ''), String(message.message_id)])
+              }
               continue
             }
             if (old.message !== message.message || old.name !== message.name) {
               emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_EDITED, [message.message_id])
+              if (message.role === 'user') {
+                emitEvent(HELPER_TAVERN_EVENTS.USER_MESSAGE_RENDERED, [message.message_id])
+              } else {
+                emitEvent(HELPER_TAVERN_EVENTS.CHARACTER_MESSAGE_RENDERED, [message.message_id, 'normal'])
+                emitEvent(HELPER_TAVERN_EVENTS.STREAM_TOKEN_RECEIVED, [String(message.message ?? ''), String(message.message_id)])
+              }
             }
           }
           const removed = before.filter((message) => !after.some((entry) => entry.message_id === message.message_id))
@@ -583,6 +600,51 @@
             reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { applied: frame !== null } })
             return
           }
+          if (data.op === 'idb.get') {
+            const payload = data.payload && typeof data.payload === 'object' ? data.payload : {}
+            void fetch(`${API}/frontend/idb/get?${idbQuery(current.character, payload)}`, { cache: 'no-store' })
+              .then(async (response) => {
+                if (!response.ok) {
+                  const body = await response.json().catch(() => ({}))
+                  throw new Error(body.message || `HTTP ${response.status}`)
+                }
+                const bytes = await response.arrayBuffer()
+                const meta = readIdbMetaHeader(response)
+                reply({
+                  type: HELPER_RESULT_MESSAGE,
+                  id: data.id,
+                  ok: true,
+                  value: { record: { key: payload.key, bytes, ...meta } },
+                }, [bytes])
+              })
+              .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
+            return
+          }
+          if (data.op === 'idb.put') {
+            const payload = data.payload && typeof data.payload === 'object' ? data.payload : {}
+            const bytes = payload.bytes
+            if (!(bytes instanceof ArrayBuffer)) {
+              fail('idb.put requires an ArrayBuffer payload')
+              return
+            }
+            const meta = payload.meta && typeof payload.meta === 'object' && !Array.isArray(payload.meta) ? payload.meta : {}
+            const headers = {
+              'content-type': 'application/octet-stream',
+              'x-dsh-idb-meta': encodeBase64Url(JSON.stringify(meta)),
+            }
+            void fetch(`${API}/frontend/idb/put?${idbQuery(current.character, payload)}`, {
+              method: 'POST',
+              headers,
+              body: bytes,
+            })
+              .then(async (response) => {
+                const body = await response.json().catch(() => ({}))
+                if (!response.ok || body.ok === false) throw new Error(body.message || `HTTP ${response.status}`)
+                reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: body.value ?? {} })
+              })
+              .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
+            return
+          }
           void api('helper', {
             method: 'POST',
             headers: jsonHeaders(),
@@ -594,6 +656,7 @@
             }),
           }).then((result) => {
             reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: result.value })
+            if (data.op === 'storage.set') frontendStorageCache.delete(current.character)
             // 状态已变：重投快照（并据比对广播事件），让前端后续同步读取拿到新值。
             // mvu.replace 同样写变量：不重投的话，同聊天的状态栏 iframe 收不到
             // 行动台/按钮刚刚写入的新 stat_data。
@@ -638,9 +701,22 @@
       if (initialBackgroundRef.current === null) initialBackgroundRef.current = frontendHostBackgroundColor()
       const allowExternalResources = useFrontendAllowExternalResources()
       const [height, setHeight] = useState(120)
+      const [storageSeed, setStorageSeed] = useState(null)
       const postViewport = useViewportBridge(frameRef)
       const postTheme = useThemeBridge(frameRef)
-      useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId)
+      useHelperBridge(frameRef, token, binding, `${refreshKey}:${storageSeed === null ? 'seed' : 'ready'}`, hostSessionId)
+      useEffect(() => {
+        let cancelled = false
+        const character = binding?.character
+        if (typeof character !== 'string' || character === '') {
+          setStorageSeed({})
+          return () => { cancelled = true }
+        }
+        void loadFrontendStorage(character).then((value) => {
+          if (!cancelled) setStorageSeed(value)
+        })
+        return () => { cancelled = true }
+      }, [binding?.character])
       useEffect(() => {
         const onMessage = (event) => {
           const data = event.data
@@ -652,6 +728,12 @@
         addEventListener('message', onMessage)
         return () => removeEventListener('message', onMessage)
       }, [token])
+      if (storageSeed === null) {
+        return h('div', {
+          className: 'dt-frontend-frame dt-frontend-frame-seeding',
+          style: { height: 120, background: initialBackgroundRef.current },
+        })
+      }
       return h('iframe', {
         ref: frameRef,
         className: 'dt-frontend-frame',
@@ -660,7 +742,7 @@
         sandbox: 'allow-scripts allow-modals',
         referrerPolicy: 'no-referrer',
         title: 'Tavern frontend',
-        srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current),
+        srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current, storageSeed),
         onLoad: () => { postViewport(); postTheme() },
         style: { height, background: initialBackgroundRef.current },
       })

@@ -894,7 +894,7 @@ function checkFrontendSurfaceText(text) {
     "const autoRunHosted = cardScriptsAutoRun && architecture === 'agent-tavern'",
     // 酒馆助手兼容层（2026-10-20）：沙箱内 shim + 宿主侧代理 + 事件白名单。
     "const HELPER_MESSAGE = 'dsh-soulmojito:helper'",
-    'function frontendHelperScript(token, messageId)',
+    'function frontendHelperScript(token, messageId, storage)',
     'window.getVariables = function',
     'window.getChatMessages = function',
     'window.setChatMessages = function',
@@ -2961,7 +2961,7 @@ const gates = [
         "const CARD_SCRIPTS_RESET_EVENT = 'dsh-soulmojito:card-scripts-reset'",
         "const autoRunHosted = cardScriptsAutoRun && architecture === 'agent-tavern'",
         "const HELPER_MESSAGE = 'dsh-soulmojito:helper'",
-        'function frontendHelperScript(token, messageId)',
+        'function frontendHelperScript(token, messageId, storage)',
         'window.getVariables = function',
         'window.getChatMessages = function',
         'window.setChatMessages = function',

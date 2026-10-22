@@ -5,6 +5,7 @@
  * memoization 把 apply 绑定首个 DSH_HOME（与 tavern-mods-buttons.spec.ts 同款理由）。
  */
 import { mkdtempSync, rmSync } from 'node:fs'
+import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -20,6 +21,8 @@ describe('frontend/latest route e2e through the real HTTP surface', () => {
   let apiHandler: (req: unknown, res: unknown) => Promise<void>
   let chatId: string
   let emptyChatId: string
+  let httpServer: Server
+  let baseUrl = ''
 
   function makeRequest(url: string, method = 'GET') {
     const listeners = new Map<string, (value?: unknown) => void>()
@@ -89,9 +92,17 @@ describe('frontend/latest route e2e through the real HTTP surface', () => {
       effect: (fn) => { fn(); return () => {} },
     } as never)
     expect(apiHandler).toBeDefined()
+    httpServer = createServer((req, res) => { void apiHandler(req, res) })
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+    const address = httpServer.address()
+    if (address === null || typeof address === 'string') throw new Error('frontend route test server has no port')
+    baseUrl = `http://127.0.0.1:${address.port}/api/dsh-soulmojito`
   })
 
-  afterAll(() => {
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) => {
+      httpServer.close((error) => (error === undefined ? resolve() : reject(error)))
+    })
     delete process.env.DSH_HOME
     rmSync(home, { recursive: true, force: true })
   })
@@ -128,5 +139,45 @@ describe('frontend/latest route e2e through the real HTTP surface', () => {
     const result = await call(`/api/dsh-soulmojito/frontend/latest?character=${encodeURIComponent(CHARACTER)}`)
     expect(result.status).toBe(500)
     expect(result.body).toMatchObject({ ok: false, message: 'chatId query is required' })
+  })
+
+  it('streams virtual IndexedDB record bytes through the real HTTP routes', async () => {
+    const headers = { 'content-type': 'application/json' }
+    const open = await fetch(`${baseUrl}/helper`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ op: 'idb.open', character: CHARACTER, chatId, name: 'idb-http', version: 1 }),
+    })
+    expect(open.status).toBe(200)
+    const store = await fetch(`${baseUrl}/helper`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ op: 'idb.store.create', character: CHARACTER, chatId, db: 'idb-http', store: 'records', keyPath: 'key' }),
+    })
+    expect(store.status).toBe(200)
+
+    const query = new URLSearchParams({ character: CHARACTER, db: 'idb-http', store: 'records', key: 'k' }).toString()
+    const meta = Buffer.from(JSON.stringify({ note: 'meta' }), 'utf8').toString('base64url')
+    const put = await fetch(`${baseUrl}/frontend/idb/put?${query}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream', 'x-dsh-idb-meta': meta },
+      body: Buffer.from('hello'),
+    })
+    expect(put.status).toBe(200)
+    expect(await put.json()).toMatchObject({ ok: true, value: { key: 'k', size: 5 } })
+
+    const get = await fetch(`${baseUrl}/frontend/idb/get?${query}`)
+    expect(get.status).toBe(200)
+    expect(await get.text()).toBe('hello')
+    expect(get.headers.get('x-dsh-idb-meta')).toBe(meta)
+
+    const remove = await fetch(`${baseUrl}/helper`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ op: 'idb.delete', character: CHARACTER, chatId, db: 'idb-http', store: 'records', key: 'k' }),
+    })
+    expect(remove.status).toBe(200)
+    const missing = await fetch(`${baseUrl}/frontend/idb/get?${query}`)
+    expect(missing.status).toBe(404)
   })
 })
