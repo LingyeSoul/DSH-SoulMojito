@@ -231,6 +231,37 @@ function buildMessages(config: Record<string, unknown>): ChatMessage[] {
   return messages
 }
 
+/**
+ * Some OpenAI-compatible providers answer a structured-output prompt with a
+ * tool call and `content: null` (finish_reason=tool_calls). JSR cards expect the
+ * generated text, so the call arguments are the usable payload; returning them
+ * keeps the bridge compatible instead of failing the whole decree plan.
+ */
+function toolCallArgumentsText(message: Record<string, unknown> | undefined): string {
+  if (message === undefined) return ''
+  const parts: string[] = []
+  const collect = (value: unknown): void => {
+    const call = asRecord(value)
+    if (call === undefined) return
+    const fn = asRecord(call.function)
+    const raw = fn?.arguments ?? call.arguments
+    if (typeof raw === 'string') {
+      if (raw.trim() !== '') parts.push(raw)
+      return
+    }
+    if (raw !== undefined && raw !== null) {
+      try {
+        const text = JSON.stringify(raw)
+        if (text !== undefined) parts.push(text)
+      } catch {}
+    }
+  }
+  const calls = Array.isArray(message.tool_calls) ? message.tool_calls : []
+  for (const call of calls) collect(call)
+  collect(message.function_call)
+  return parts.join('\n')
+}
+
 function completionText(payload: unknown): string {
   const record = asRecord(payload)
   const choices = record !== undefined && Array.isArray(record.choices) ? record.choices : []
@@ -240,17 +271,20 @@ function completionText(payload: unknown): string {
   }
   const message = asRecord(first.message)
   const content = message?.content
-  if (typeof content === 'string') return content
+  if (typeof content === 'string' && content.trim() !== '') return content
   if (Array.isArray(content)) {
-    return content.map((part) => {
+    const joined = content.map((part) => {
       if (typeof part === 'string') return part
       const item = asRecord(part)
       return item !== undefined && typeof item.text === 'string' ? item.text : ''
     }).join('')
+    if (joined.trim() !== '') return joined
   }
-  if (typeof first.text === 'string') return first.text
+  if (typeof first.text === 'string' && first.text.trim() !== '') return first.text
+  const toolText = toolCallArgumentsText(message)
+  if (toolText.trim() !== '') return toolText
   const finishReason = typeof first.finish_reason === 'string' ? first.finish_reason : 'unknown'
-  throw new FrontendGenerationError(`custom API /chat/completions returned no text (finish_reason=${finishReason})`)
+  throw new FrontendGenerationError(`custom API /chat/completions returned no text or tool arguments (finish_reason=${finishReason})`)
 }
 
 /**

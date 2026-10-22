@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import {
   decodeBase64Url,
   encodeBase64Url,
+  handleIdbBridge,
   indexedDbIframeSource,
   localStorageIframeSource,
   serializeFrontendStorageSeed,
@@ -72,6 +73,23 @@ describe('sandbox storage shim sources', () => {
     expect(calls).toEqual(['idb.open'])
     expect(opened).toBe(true)
     expect(request.result?.name).toBe('card-cache')
+  })
+
+  it('maps a 204 idb/get response to an undefined record instead of an error', async () => {
+    const urls: string[] = []
+    const result = await handleIdbBridge('idb.get', { db: 'db', store: 'store', key: 'k' }, 'character', '/api', async (url) => {
+      urls.push(url)
+      return {
+        ok: true,
+        status: 204,
+        headers: { get: () => null },
+        arrayBuffer: async () => new ArrayBuffer(0),
+        json: async () => undefined,
+      }
+    })
+    expect(result.transfer).toEqual([])
+    expect((result.value as { record?: unknown }).record).toBeUndefined()
+    expect(urls[0]).toContain('/api/frontend/idb/get?')
   })
 
   it('round-trips binary metadata through the base64url channel helpers', () => {

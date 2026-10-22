@@ -1109,7 +1109,14 @@ export async function handleApi(ctx, req, res) {
       url.searchParams.get('store'),
       url.searchParams.get('key'),
     )
-    if (record === undefined) return sendJson(res, 404, { ok: false, message: 'idb record not found' })
+    // A miss is not an error: IndexedDB's get() fires onsuccess with result
+    // undefined. A 404 here becomes an exception in the shim, which cards that
+    // treat any IndexedDB failure as a corrupt cache surface to the user.
+    if (record === undefined) {
+      res.statusCode = 204
+      res.end()
+      return
+    }
     res.statusCode = 200
     res.setHeader('content-type', 'application/octet-stream')
     res.setHeader('content-length', String(record.size))

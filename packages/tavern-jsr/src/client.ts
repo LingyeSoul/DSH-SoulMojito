@@ -69,6 +69,12 @@ export function buildIframeScript(
   var pending = new Map();
   var listeners = new Map();
   var lastMvuStatJson = '';
+  // The emitted program runs inside the iframe, so module-scope constants are
+  // not in reach. Embed both event tables before any card code can call
+  // window.generate() (the generation bridge emits CHAT_COMPLETION_SETTINGS_READY
+  // synchronously, before the later window.tavern_events assignment).
+  var HELPER_TAVERN_EVENTS = ${JSON.stringify(HELPER_TAVERN_EVENTS)};
+  var HELPER_IFRAME_EVENTS = ${JSON.stringify(HELPER_IFRAME_EVENTS)};
   // JSR predefine.js sets these before card modules; Vue 3.5 runtime + Pinia read
   // them while mounting. The global production build normally hard-codes them,
   // but keeping the same observable window flags avoids version-specific warnings
@@ -268,24 +274,79 @@ export function buildIframeScript(
     }
   }
 
+  function toastHost() {
+    var host = document.getElementById('dsh-tavern-toasts');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'dsh-tavern-toasts';
+      host.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:2147483647;display:flex;flex-direction:column;gap:8px;max-width:min(360px,80vw);pointer-events:none;font:13px/1.45 system-ui,sans-serif';
+      (document.body || document.documentElement).appendChild(host);
+    }
+    return host;
+  }
+
+  function toastColor(kind) {
+    return kind === 'error' ? '#f7768e' : kind === 'warning' ? '#e0af68' : kind === 'success' ? '#9ece6a' : '#7aa2f7';
+  }
+
   function showToast(kind, message) {
     try {
-      var host = document.getElementById('dsh-tavern-toasts');
-      if (!host) {
-        host = document.createElement('div');
-        host.id = 'dsh-tavern-toasts';
-        host.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:2147483647;display:flex;flex-direction:column;gap:8px;max-width:min(360px,80vw);pointer-events:none;font:13px/1.45 system-ui,sans-serif';
-        (document.body || document.documentElement).appendChild(host);
-      }
       var item = document.createElement('div');
-      var color = kind === 'error' ? '#f7768e' : kind === 'warning' ? '#e0af68' : kind === 'success' ? '#9ece6a' : '#7aa2f7';
-      item.style.cssText = 'pointer-events:auto;background:#16161e;color:#c0caf5;border-left:3px solid ' + color + ';padding:8px 12px;border-radius:4px;box-shadow:0 8px 24px rgba(0,0,0,.35);white-space:pre-wrap';
+      item.style.cssText = 'pointer-events:auto;background:#16161e;color:#c0caf5;border-left:3px solid ' + toastColor(kind) + ';padding:8px 12px;border-radius:4px;box-shadow:0 8px 24px rgba(0,0,0,.35);white-space:pre-wrap';
       item.textContent = String(message);
-      host.appendChild(item);
+      toastHost().appendChild(item);
       setTimeout(function () { try { item.remove(); } catch (_) {} }, 3600);
     } catch (error) {
       console.error('[toastr] ' + String(message), error);
     }
+  }
+
+  // Generation can take minutes, so the request notice stays until the call
+  // settles. It carries the model and prompt size so the player knows which
+  // card request is running and why the frontend is waiting.
+  function generationModel(config) {
+    var custom = config && config.custom_api && typeof config.custom_api === 'object' ? config.custom_api : null;
+    var model = custom && typeof custom.model === 'string' ? custom.model.trim() : '';
+    return model === '' ? '自定义 API' : model;
+  }
+
+  function generationPromptChars(config) {
+    var total = typeof config.user_input === 'string' ? config.user_input.length : 0;
+    var injects = config && Array.isArray(config.injects) ? config.injects : [];
+    for (var index = 0; index < injects.length; index++) {
+      var inject = injects[index];
+      if (inject && inject.position !== 'none' && typeof inject.content === 'string') total += inject.content.length;
+    }
+    var overrides = config && config.overrides && typeof config.overrides === 'object' ? config.overrides : null;
+    var history = overrides && overrides.chat_history && typeof overrides.chat_history === 'object' ? overrides.chat_history : null;
+    var prompts = history && Array.isArray(history.prompts) ? history.prompts : [];
+    for (var promptIndex = 0; promptIndex < prompts.length; promptIndex++) {
+      var prompt = prompts[promptIndex];
+      if (prompt && typeof prompt.content === 'string') total += prompt.content.length;
+    }
+    return total;
+  }
+
+  function showGenerationStarted(config) {
+    try {
+      var item = document.createElement('div');
+      item.style.cssText = 'pointer-events:auto;background:#16161e;color:#c0caf5;border-left:3px solid #7aa2f7;padding:8px 12px;border-radius:4px;box-shadow:0 8px 24px rgba(0,0,0,.35);white-space:pre-wrap';
+      item.textContent = 'SoulMojito正在处理生成请求…\\n模型: ' + generationModel(config) + ' · 输入: ' + generationPromptChars(config) + ' 字符';
+      toastHost().appendChild(item);
+      return item;
+    } catch (error) {
+      console.error('[SoulMojito] generation notice failed', error);
+      return null;
+    }
+  }
+
+  function finishGenerationNotice(item, kind, message) {
+    if (!item) return;
+    try {
+      item.style.borderLeftColor = toastColor(kind);
+      item.textContent = message;
+      setTimeout(function () { try { item.remove(); } catch (_) {} }, 5200);
+    } catch (_) {}
   }
 
   // JSR 的 errorCatched 是卡前端常用包装器（示例卡2 的 defineMvuDataStore 直接用它
@@ -425,27 +486,6 @@ export function buildIframeScript(
       progress: element && duration > 0 ? Math.max(0, Math.min(100, (element.currentTime / duration) * 100)) : 0,
     };
   };
-
-  var lastDisabledNoticeAt = 0;
-  // Disabled controls swallow the click event, so a card button such as the action
-  // console's 必杀 (charge < 100) looks dead. Capture-phase pointer events explain
-  // it without editing card HTML; pointerover is the fallback for engines that do
-  // not deliver pointerdown on disabled controls.
-  function noteDisabledControl(event) {
-    var target = event.target;
-    if (!target || typeof target.closest !== 'function') return;
-    var control = target.closest('button, [aria-disabled="true"]');
-    if (!control) return;
-    if (control.disabled !== true && control.getAttribute('aria-disabled') !== 'true') return;
-    var now = Date.now();
-    if (now - lastDisabledNoticeAt < 1500) return;
-    lastDisabledNoticeAt = now;
-    showToast('info', '该按钮当前不可用');
-  }
-  try {
-    document.addEventListener('pointerdown', noteDisabledControl, true);
-    document.addEventListener('pointerover', noteDisabledControl, true);
-  } catch (_) {}
 
   function applySnapshot(snapshot) {
     state.characterName = snapshot.characterName || state.characterName;
@@ -863,6 +903,9 @@ export function buildIframeScript(
     }
     var generationId = generationIdOf(request);
     if (request.generation_id === undefined) request.generation_id = generationId;
+    var startedAt = Date.now();
+    var model = generationModel(request);
+    var notice = showGenerationStarted(request);
     emitLocally(HELPER_TAVERN_EVENTS.CHAT_COMPLETION_SETTINGS_READY, [{
       model: typeof customApi.model === 'string' ? customApi.model : '',
       messages: generationPromptMessages(request),
@@ -871,7 +914,12 @@ export function buildIframeScript(
     return call('generate', { config: request }).then(function (value) {
       var text = value && typeof value.text === 'string' ? value.text : '';
       emitLocally(HELPER_IFRAME_EVENTS.GENERATION_ENDED, [text, generationId]);
+      finishGenerationNotice(notice, 'success', 'SoulMojito 生成完成 · ' + model + ' · ' + ((Date.now() - startedAt) / 1000).toFixed(1) + 's');
       return text;
+    }, function (error) {
+      var message = error && error.message ? error.message : String(error);
+      finishGenerationNotice(notice, 'error', 'SoulMojito 生成失败 · ' + model + ' · ' + ((Date.now() - startedAt) / 1000).toFixed(1) + 's\\n' + message);
+      throw error;
     });
   };
   window.generateRaw = function (config) { return window.generate(config); };

@@ -23,7 +23,7 @@ Content-Security-Policy: default-src 'none'; connect-src 'none'; frame-src 'none
 ```
 
 > 设置页的「允许美化前端加载外部资源」可以显式放开 `script-src` / `style-src`
-> 的 HTTPS 通配与 `connect-src https:`（默认关闭，见 §3.3 与 §6 的标注）。
+> 的 HTTPS 通配与 `connect-src https: blob:`（默认关闭，见 §3.3 与 §6 的标注）。
 
 因此有一条**结构性的分界线**，任何兼容层都无法绕过：
 
@@ -260,6 +260,8 @@ helper RPC（供 iframe 内部使用，不是 `window.*` 公共 API）：
 JSR 卡可以带自己的 OpenAI 兼容 API 源（URL + Key + 模型），并在前端调用
 `TavernHelper.generate`。本插件由 **Node 宿主侧**代发请求，iframe 只拿最终文本：
 
+> 调用期间 iframe 右下角常驻「SoulMojito正在处理生成请求…」，第二行显示模型与输入字符数；请求结束会更新为成功/失败、耗时和错误信息。卡不需要自己实现等待提示。
+
 | 函数 | 状态 | 语义 |
 |---|---|---|
 | `getModelList({apiurl, key})` | ✅ | 宿主 `GET <apiurl>/models`，返回去重排序后的模型 id 数组。API Key 只进 outbound `Authorization`，不回传、不落盘、不写日志 |
@@ -381,7 +383,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 > 后再 `@font-face` 是常见做法。
 
 > 白名单外的 CDN / HTTPS API：在设置页开启「允许美化前端加载外部资源」后，
-> `script-src` / `style-src` / `connect-src` 会额外放行 `https:`。开启后外部脚本
+> `script-src` / `style-src` / `connect-src` 会额外放行 `https:`（`connect-src` 同时保留 `blob:`，卡生成的 blob URL 可被 `fetch` 读取）。开启后外部脚本
 > 可以把 iframe 里可见的聊天数据发出去，只对信任的卡开启。
 
 ---
@@ -536,13 +538,17 @@ await fetch  // 🧱 默认不可用（CSP connect-src 'none'）；设置页放�
 | `Mvu.getMvuData()` 返回 `undefined` | 聊天还没有 `stat_data`（新卡首轮尚未投影）或当前卡未被识别为 MVU 卡 | 先发一轮让投影器结算；确认卡内有 `<UpdateVariable>` / `MagVarUpdate` / `StatusPlaceHolderImpl` |
 | 状态栏一直空 | 模型没有输出 `<UpdateVariable>`，或卡内状态栏正则被禁用 | 用提示词查看器看实发请求；确认正则未 disabled；首轮检查 `initialized_lorebooks` 是否已播种 |
 | 表单/快速选项点了没反应 | 宿主页找不到可见 composer，或输入框被面板遮挡 | 看 iframe console 的 `no visible host composer textarea found`；先把输入框滚动到可视区 |
-| 卡里的按钮点了没反应 | 按钮是 `disabled` / `aria-disabled="true"`（例如行动台的「必杀」在净化之力 <100 时），浏览器不派发 click；或 MVU 写入失败被卡自己吞掉 | 现在会弹「该按钮当前不可用」或「变量写入失败: …」toast；先看提示再判断是不是卡逻辑 |
+| 卡里的按钮点了没反应 | 按钮是 `disabled` / `aria-disabled="true"`（例如行动台的「必杀」在净化之力 <100 时），浏览器不派发 click；或 MVU 写入失败被卡自己吞掉 | 宿主不再为 disabled 控件额外弹提示（以卡自己的禁用态为准）；变量写入失败仍会弹「变量写入失败: …」toast |
 | 世界书写入后生成/状态栏没变化 | 副本按聊天隔离，且生成读取的是**副本**；基础 `worlds/` 面板不会显示副本内容 | 用 `getWorldbook(name)` 读回确认副本；需要回到原版就点「重置会话世界书」 |
 | 刷新后 GM 面板的 Zod 改动不见了 | 改动只在会话脚本树副本里；写入失败时 `updateScriptTreesWith` 会拒绝而不是假装成功 | 看卡脚本 tab 列表是否显示改后的名称/字符数；确认 `scripts.put` 没报错。切到别的聊天本来就读不到本聊天的副本 |
 | 重置卡脚本后 GM 面板还是旧内容 | 重置会删除副本并停止正在运行的脚本，但已经打开的 GM 面板不会自我改写 | 重新点「运行」；列表此时应回到角色卡原版 |
 | GM 悬浮面板挂载时报 `appendChild of null` | 卡脚本未运行，或运行的是旧构建（`fakeDocument.body` 为 null） | 开启 `cardScriptsAutoRun` 让 AgentTavern 在「美化前端」里自动运行；关闭设置时可在右栏「卡脚本」手动运行 GM 面板；确认构建包含 document facade |
 | 启动诊断报 `TypeError: t[e(...)] is not a function` | 卡调用了 `getLoadedPresetName` / `getPreset` / `getCharData` 等旧构建缺失的 JSR 函数 | 更新到包含 §2.4 / §4 新兼容面的构建；本插件现在提供这些函数 |
-| 资源包下载完成却报「资源包已损坏」 | 资源包密钥由卡的 `creator` / `character_version` / `creator_notes` 派生；`getCharData` 缺失时卡会退回默认密钥 | 更新构建（`getCharData('current').data` 必须返回 V2 字段）；仍失败时检查下载是否被代理/断流截断 |
+| 资源包下载完成却报「资源包已损坏」 | 资源包密钥由卡的 `creator` / `character_version` / `creator_notes` 派生；`getCharData('current').data` 必须是 V2 原始字段（snake_case），宿主内部的 IR（`characterVersion` / `creatorNotes`）不能直接暴露给卡 | 更新构建并让 iframe 重新渲染；仍失败时检查下载是否被代理/断流截断 |
+| 资源包首次加载时控制台报 `frontend/idb/get` 404 | 虚拟 IndexedDB 的缓存未命中被当作错误返回；原生 `get()` 未命中应是 `onsuccess(undefined)`，部分卡把任何 IndexedDB 失败都当成缓存损坏 | 更新构建：未命中返回 204，shim 以成功结果回填 `undefined` |
+| 结构化生成报 `returned no text (finish_reason=tool_calls)` | 供应商把结果放进 `message.tool_calls`，`content` 为 null；旧桥只读 content | 更新构建：`generate` 代理在 content 为空时返回 `tool_calls[].function.arguments` / 旧式 `function_call.arguments` 的文本 |
+| 卡报 `Connecting to 'blob:null/…' violates ... connect-src https:` / `Fetch API cannot load blob:` | 资源包或 WASM 加载器把本地数据包成 blob URL 再 `fetch`；旧 CSP 只放行 `https:` | 更新构建：开启「允许美化前端加载外部资源」后 `connect-src` 为 `https: blob:`；blob 不增加外网可达面 |
+| 控制台反复出现 `[Violation] Permissions policy violation: unload is not allowed in this document` | Chromium 默认禁止跨源 iframe 注册 `unload`；沙箱 `srcdoc` 没有响应头，`allow="unload"` 也无法把它打开 | 宿主注入垫片，把 iframe 内 `window` / `document` 的 `unload` 监听转成 `pagehide`；卡代码无需改 |
 | `Invalid or unexpected token` 出现在插件 client bundle | 加载了包含模板字面量注释的旧/中间构建 | 重新构建并重启 DSH；`client/index.js` 必须通过 `node --check` |
 | 字体报 `font-src ... blocked` | 旧 CSP 只允许 `data: https:`，卡用 blob URL 字体 | 更新构建：`font-src data: blob: https:` |
 

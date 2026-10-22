@@ -15,7 +15,7 @@
  * list/replace, plus a snapshot used for synchronous iframe reads.
  */
 import type { ChatLogIR, ChatMessage, WorldBookIR } from '../../tavern-format/src/index.js'
-import { RegexPlacement, normalizeEntry, parseCharacterBook, parseRegexScripts } from '../../tavern-format/src/index.js'
+import { RegexPlacement, cardDataToRaw, normalizeEntry, parseCharacterBook, parseRegexScripts } from '../../tavern-format/src/index.js'
 import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { applyRegexScript, applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
 import type { TavernState, TavernStore } from '../../tavern-store/src/index.js'
@@ -271,7 +271,7 @@ async function buildSnapshot(db: TavernStore, state: TavernState, character: str
         message: {},
         character: cloneJson(plainObject(file?.card.data.extensions?.['variables']) ?? {}),
       },
-      characterData: file?.card.data ?? null,
+      characterData: file === undefined ? null : cardDataToRaw(file.card),
       scriptTrees: null,
       avatar: avatarPath(character),
     }
@@ -298,7 +298,7 @@ async function buildSnapshot(db: TavernStore, state: TavernState, character: str
       message: lastIndex >= 0 ? cloneJson(readMessageVariables(chat.messages[lastIndex])) : {},
       character: cloneJson(plainObject(file?.card.data.extensions?.['variables']) ?? {}),
     },
-    characterData: file?.card.data ?? null,
+    characterData: file === undefined ? null : cardDataToRaw(file.card),
     scriptTrees: scriptTrees ?? null,
     avatar: avatarPath(character),
   }

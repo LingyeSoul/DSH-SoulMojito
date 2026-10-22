@@ -26,6 +26,7 @@ function makeSandbox(posted: PostedMessage[]): Record<string, unknown> {
   }
   const document = {
     addEventListener: () => undefined,
+    getElementById: () => null,
     createElement: () => ({ style: {}, appendChild: () => undefined, remove: () => undefined }),
   }
   const window: Record<string, unknown> = { parent, document, addEventListener: () => undefined }
@@ -78,6 +79,23 @@ describe('TavernHelper runtime source', () => {
     expect(window.localStorage.getItem('theme')).toBe('dark')
     expect(typeof window.indexedDB.open).toBe('function')
     expect(posted[0]).toMatchObject({ type: 'dsh-soulmojito:helper', token: 'probe-token', op: 'snapshot' })
+  })
+
+  it('runs window.generate without leaking module-scope event names', () => {
+    const posted: PostedMessage[] = []
+    const script = buildIframeScript('probe-token', -1, '{}', iframeSources())
+    const sandbox = makeSandbox(posted)
+    vm.runInNewContext(script, sandbox)
+    const window = sandbox.window as Record<string, unknown> & {
+      generate(config: unknown): Promise<string>
+    }
+    expect(() => {
+      void window.generate({
+        custom_api: { apiurl: 'https://example.test/v1', model: 'probe' },
+        user_input: 'ping',
+      })
+    }).not.toThrow()
+    expect(posted.some((message) => message.op === 'generate')).toBe(true)
   })
 
   it('keeps the JSR globals and generation bridge in the emitted source', () => {

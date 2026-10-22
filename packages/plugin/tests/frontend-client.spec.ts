@@ -21,6 +21,9 @@ const FRONTEND_I18N_KEYS = [
   'frontend.emptyHint',
   'frontend.floor',
   'frontend.refresh',
+  'frontend.resizeHint',
+  'frontend.expand',
+  'frontend.collapse',
   'frontend.inlineOnly',
   'frontend.unbound',
   'frontend.cardScriptsAutoRunning',
@@ -78,7 +81,43 @@ describe('client frontend sidebar (main.js source check)', () => {
     // 只强制 html（body 与卡自己的 .tactics-panel 背景保持）。
     expect(source).toContain('const canvas = `<style>html{background:var(--dt-host-background)!important;}</style>`')
     expect(source).toContain('`${canvas}${reporter}</body>`')
-    expect(source).toContain('style: { height, background: initialBackgroundRef.current }')
+    expect(source).toContain('style: { height: effectiveHeight, background: initialBackgroundRef.current }')
+  })
+
+  it('translates sandboxed unload listeners to pagehide before card scripts run', () => {
+    // Chromium disables unload in cross-origin frames, and a sandboxed srcdoc
+    // cannot opt in with an allow attribute (no headers of its own). The shim
+    // must be injected before the helper libraries and card markup.
+    expect(source).toContain('function frontendUnloadCompatScript()')
+    expect(source).toContain('target === window || target === document')
+    expect(source).toContain("type.toLowerCase() === 'unload'")
+    expect(source).toContain("Object.defineProperty(window, 'onunload'")
+    expect(source).toContain('${csp}${unloadCompat}${reset}${viewport}${theme}${helper}')
+  })
+
+  it('lets the user drag the frontend height and keeps it across card frame prefs', () => {
+    expect(source).toContain("const FRONTEND_MANUAL_MAX_HEIGHT = 4000")
+    expect(source).toContain('const [manualHeight, setManualHeight] = useState(null)')
+    expect(source).toContain('className: \'dt-frontend-resize-handle\'')
+    expect(source).toContain('setPointerCapture(event.pointerId)')
+    expect(source).toContain('frame.style.setProperty(\'height\', `${manualHeight}px`, \'important\')')
+    expect(source).toContain('manualHeightRef.current !== null')
+  })
+
+  it('reloads the iframe on manual refresh and expands the sidebar panel', () => {
+    // srcDoc is a string prop: re-fetching identical HTML does not reload the
+    // browsing context. The nonce must reach the React key so refresh remounts.
+    expect(source).toContain('const [reloadNonce, setReloadNonce] = useState(0)')
+    expect(source).toContain('setReloadNonce((value) => value + 1)')
+    expect(source).toContain('key: `${message.index}-${index}-${reloadNonce}`')
+    expect(source).toContain('key: `card-scripts-${reloadNonce}`')
+    // Expansion must keep the same DOM node: a portal/reparent destroys the
+    // iframe browsing context and cards reload data, so use Fullscreen API/CSS.
+    expect(source).not.toContain('createPortal(panel')
+    expect(source).toContain('requestFullscreen()')
+    expect(source).toContain('ref: panelRef')
+    expect(source).toContain('dt-frontend-side-expanded')
+    expect(source).toContain("t(expanded ? 'frontend.collapse' : 'frontend.expand')")
   })
 
   it('injects auto-run card scripts into the same latest-frontend iframe', () => {

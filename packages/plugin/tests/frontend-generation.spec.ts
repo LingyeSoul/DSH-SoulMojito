@@ -19,6 +19,7 @@ const API_KEY = 'test-key-6b0f'
 let server: Server
 let baseUrl = ''
 let lastChatRequest: unknown = null
+let chatResponse: unknown = { choices: [{ message: { content: 'generated text' } }] }
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -51,7 +52,7 @@ beforeAll(async () => {
         return
       }
       lastChatRequest = JSON.parse(await readBody(req)) as unknown
-      sendJson(res, 200, { choices: [{ message: { content: 'generated text' } }] })
+      sendJson(res, 200, chatResponse)
       return
     }
     sendJson(res, 404, { error: { message: 'not found' } })
@@ -96,6 +97,31 @@ describe('frontend generation bridge', () => {
         { role: 'user', content: 'main instruction' },
       ],
     })
+  })
+
+  it('returns tool-call arguments when the provider sends content: null', async () => {
+    const previous = chatResponse
+    chatResponse = {
+      choices: [{
+        finish_reason: 'tool_calls',
+        message: {
+          content: null,
+          tool_calls: [{
+            type: 'function',
+            function: { name: 'decree_signing', arguments: '{"directions":[]}' },
+          }],
+        },
+      }],
+    }
+    try {
+      const text = await generateWithCustomApi({
+        custom_api: { apiurl: baseUrl, key: API_KEY, model: 'model-a' },
+        user_input: 'plan the decree',
+      })
+      expect(text).toBe('{"directions":[]}')
+    } finally {
+      chatResponse = previous
+    }
   })
 
   it('redacts the API key from upstream error bodies', async () => {

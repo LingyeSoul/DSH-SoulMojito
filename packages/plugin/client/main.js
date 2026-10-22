@@ -101,7 +101,9 @@ window.__ModuleLoader__.load({
         "font-src data: blob: https:",
         "media-src data: blob: https:",
         "worker-src blob:",
-        "connect-src https:",
+        // blob: keeps card-generated local URLs (asset-pack workers, WASM
+        // loaders) readable without granting any external network origin.
+        "connect-src https: blob:",
         "frame-src 'none'",
         "object-src 'none'",
         "base-uri 'none'",
@@ -311,6 +313,44 @@ window.__ModuleLoader__.load({
 })();`
     }
 
+    // Chromium disables the unload event in cross-origin frames by default
+    // (Permissions-Policy unload=()), and a sandboxed srcdoc document cannot
+    // opt back in: it has an opaque origin and no response headers of its own.
+    // Card bundles still register unload for cleanup, which floods the console
+    // with "[Violation] Permissions policy violation: unload is not allowed".
+    // Map window/document unload listeners to pagehide, the lifecycle event
+    // Chromium recommends and the one the localStorage shim already uses.
+    function frontendUnloadCompatScript() {
+      return `(function () {
+  if (typeof EventTarget !== 'function') return;
+  var nativeAdd = EventTarget.prototype.addEventListener;
+  var nativeRemove = EventTarget.prototype.removeEventListener;
+  var translate = function (target, type) {
+    return (target === window || target === document) && typeof type === 'string' && type.toLowerCase() === 'unload'
+      ? 'pagehide'
+      : type;
+  };
+  EventTarget.prototype.addEventListener = function (type, listener, options) {
+    return nativeAdd.call(this, translate(this, type), listener, options);
+  };
+  EventTarget.prototype.removeEventListener = function (type, listener, options) {
+    return nativeRemove.call(this, translate(this, type), listener, options);
+  };
+  try {
+    var handler = null;
+    Object.defineProperty(window, 'onunload', {
+      configurable: true,
+      get: function () { return handler; },
+      set: function (value) {
+        if (handler !== null) nativeRemove.call(window, 'pagehide', handler);
+        handler = typeof value === 'function' ? value : null;
+        if (handler !== null) nativeAdd.call(window, 'pagehide', handler);
+      }
+    });
+  } catch (_) {}
+})();`
+    }
+
     // Host-to-iframe theme color delivery: same direction as the viewport
     // message, no token (it can only change the sandbox's own canvas). It also
     // watches the body/html theme attributes and prefers-color-scheme so a
@@ -370,6 +410,7 @@ window.__ModuleLoader__.load({
       // and card surfaces (`.tactics-panel`, status cards) untouched.
       const canvas = `<style>html{background:var(--dt-host-background)!important;}</style>`
       // 视口脚本进 head（先于 body 样式首帧解析，避免塌陷闪动），reporter 留 body 末
+      const unloadCompat = `<script>${frontendUnloadCompatScript()}</script>`
       const viewport = `<script>${frontendViewportScript()}</script>`
       const theme = `<script>${frontendThemeScript()}</script>`
       // 酒馆助手兼容层（2026-10-20）：库脚本 + TavernHelper shim 进 head，前端
@@ -379,9 +420,9 @@ window.__ModuleLoader__.load({
       if (/<html(?:\s[^>]*)?>/i.test(source)) {
         let documentText = source
         if (/<head(?:\s[^>]*)?>/i.test(documentText)) {
-          documentText = documentText.replace(/<head(?:\s[^>]*)?>/i, (tag) => `${tag}${csp}${reset}${viewport}${theme}${helper}`)
+          documentText = documentText.replace(/<head(?:\s[^>]*)?>/i, (tag) => `${tag}${csp}${unloadCompat}${reset}${viewport}${theme}${helper}`)
         } else {
-          documentText = documentText.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${csp}${reset}${viewport}${theme}${helper}</head>`)
+          documentText = documentText.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${csp}${unloadCompat}${reset}${viewport}${theme}${helper}</head>`)
         }
         if (/<\/body\s*>/i.test(documentText)) {
           return documentText.replace(/<\/body\s*>/i, `${canvas}${reporter}</body>`)
@@ -395,7 +436,7 @@ window.__ModuleLoader__.load({
       const bodyMatch = /<body(?:\s[^>]*)?>([\s\S]*?)<\/body\s*>/i.exec(source)
       const headContent = headMatch ? headMatch[1] : ''
       const bodyContent = bodyMatch ? bodyMatch[1] : source
-      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${reset}${viewport}${theme}${helper}${headContent}</head><body>${bodyContent}${canvas}${reporter}</body></html>`
+      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${unloadCompat}${reset}${viewport}${theme}${helper}${headContent}</head><body>${bodyContent}${canvas}${reporter}</body></html>`
     }
 
     // 宿主→iframe 视口投递（A-4）：iframe 的 --dt-viewport-height 需要"真实可视区
@@ -591,10 +632,10 @@ window.__ModuleLoader__.load({
     // `frame.prefs` 后由宿主落到真实元素。height 用 !important，避免被
     // FrontendFrame 的高度状态覆盖；侧栏里 iframe 是独子时连外框一起收起，
     // 不留空白卡片。
-    function applyFramePrefs(frame, prefs) {
-      const wrapper = frame.parentElement && frame.parentElement.children.length === 1
-        ? frame.parentElement
-        : null
+    function applyFramePrefs(frame, prefs, manualHeight) {
+      // The resize handle lives beside the iframe, so the old "only child"
+      // wrapper test no longer finds the frame container.
+      const wrapper = frame.closest('.dt-frontend-resizable')
       if (prefs.hidden === true) {
         frame.style.setProperty('display', 'none', 'important')
         if (wrapper) wrapper.style.setProperty('display', 'none', 'important')
@@ -602,6 +643,9 @@ window.__ModuleLoader__.load({
       }
       frame.style.removeProperty('display')
       if (wrapper) wrapper.style.removeProperty('display')
+      // A height the user dragged is an explicit override; card frame.prefs
+      // must not snap it back on the next helper message.
+      if (manualHeight === true) return
       if (typeof prefs.height === 'number' && Number.isFinite(prefs.height) && prefs.height > 0) {
         // Visible frames keep at least one control row: the action console reports
         // its panel height, and a 0/1px clamp would clip the whole console while
@@ -612,7 +656,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId) {
+    function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef) {
       const bindingRef = useRef(binding)
       bindingRef.current = binding
       const previousRef = useRef(null)
@@ -710,7 +754,7 @@ window.__ModuleLoader__.load({
           if (data.op === 'frame.prefs') {
             const frame = frameRef.current
             if (frame) {
-              applyFramePrefs(frame, data.payload && typeof data.payload === 'object' ? data.payload : {})
+              applyFramePrefs(frame, data.payload && typeof data.payload === 'object' ? data.payload : {}, manualHeightRef.current !== null)
             }
             reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { applied: frame !== null } })
             return
@@ -772,7 +816,11 @@ window.__ModuleLoader__.load({
       return useSyncExternalStore(subscribe, read, read)
     }
 
+    const FRONTEND_AUTO_MIN_HEIGHT = 80
+    const FRONTEND_AUTO_MAX_HEIGHT = 1200
+
     function FrontendFrame({ html, token, binding, refreshKey, messageId, hostSessionId }) {
+      const t = useTranslate()
       const frameRef = useRef(null)
       // Initial canvas color: resolve the DSH native background once on first
       // render; later theme flips go through postMessage, so the srcdoc is not
@@ -782,9 +830,20 @@ window.__ModuleLoader__.load({
       const allowExternalResources = useFrontendAllowExternalResources()
       const [height, setHeight] = useState(120)
       const [storageSeed, setStorageSeed] = useState(null)
+      const {
+        dragging,
+        effectiveHeight,
+        manualHeight,
+        manualHeightRef,
+        startResize,
+        moveResize,
+        endResize,
+        resetManualHeight,
+        keyResize,
+      } = useFrontendResize(frameRef, height, storageSeed !== null)
       const postViewport = useViewportBridge(frameRef)
       const postTheme = useThemeBridge(frameRef)
-      useHelperBridge(frameRef, token, binding, `${refreshKey}:${storageSeed === null ? 'seed' : 'ready'}`, hostSessionId)
+      useHelperBridge(frameRef, token, binding, `${refreshKey}:${storageSeed === null ? 'seed' : 'ready'}`, hostSessionId, manualHeightRef)
       useEffect(() => {
         let cancelled = false
         const character = binding?.character
@@ -803,7 +862,7 @@ window.__ModuleLoader__.load({
           if (!data || data.type !== FRONTEND_HEIGHT_MESSAGE || data.token !== token) return
           if (event.source !== frameRef.current?.contentWindow) return
           if (typeof data.height !== 'number' || !Number.isFinite(data.height)) return
-          setHeight(Math.max(80, Math.min(Math.ceil(data.height), 1200)))
+          setHeight(Math.max(FRONTEND_AUTO_MIN_HEIGHT, Math.min(Math.ceil(data.height), FRONTEND_AUTO_MAX_HEIGHT)))
         }
         addEventListener('message', onMessage)
         return () => removeEventListener('message', onMessage)
@@ -814,18 +873,120 @@ window.__ModuleLoader__.load({
           style: { height: 120, background: initialBackgroundRef.current },
         })
       }
-      return h('iframe', {
-        ref: frameRef,
-        className: 'dt-frontend-frame',
-        // 卡前端用 prompt/confirm 做方案命名/删除确认（ST 同款交互）；没有
-        // allow-modals 时 Chromium 直接忽略并返回 null，按钮看起来"没反应"。
-        sandbox: 'allow-scripts allow-modals',
-        referrerPolicy: 'no-referrer',
-        title: 'Tavern frontend',
-        srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current, storageSeed),
-        onLoad: () => { postViewport(); postTheme() },
-        style: { height, background: initialBackgroundRef.current },
-      })
+      return h('div', { className: `dt-frontend-resizable${dragging ? ' dt-frontend-resizable-dragging' : ''}` },
+        h('iframe', {
+          ref: frameRef,
+          className: 'dt-frontend-frame',
+          // 卡前端用 prompt/confirm 做方案命名/删除确认（ST 同款交互）；没有
+          // allow-modals 时 Chromium 直接忽略并返回 null，按钮看起来"没反应"。
+          sandbox: 'allow-scripts allow-modals',
+          referrerPolicy: 'no-referrer',
+          title: 'Tavern frontend',
+          srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current, storageSeed),
+          onLoad: () => { postViewport(); postTheme() },
+          style: { height: effectiveHeight, background: initialBackgroundRef.current },
+        }),
+        h('div', {
+          className: 'dt-frontend-resize-handle',
+          role: 'separator',
+          tabIndex: 0,
+          'aria-orientation': 'horizontal',
+          'aria-label': t('frontend.resizeHint'),
+          'aria-valuemin': FRONTEND_MANUAL_MIN_HEIGHT,
+          'aria-valuemax': FRONTEND_MANUAL_MAX_HEIGHT,
+          'aria-valuenow': Math.round(effectiveHeight),
+          'data-manual': manualHeight === null ? 'false' : 'true',
+          title: t('frontend.resizeHint'),
+          onPointerDown: startResize,
+          onPointerMove: moveResize,
+          onPointerUp: endResize,
+          onPointerCancel: endResize,
+          onDoubleClick: resetManualHeight,
+          onKeyDown: keyResize,
+        }, h('span', { className: 'dt-frontend-resize-grip' })))
+    }
+
+    // Manual frontend height (2026-10-22): cards such as the galgame frontend
+    // lay out against their own 100vh, so the reported content height never
+    // grows past the initial iframe and the panel stays clipped. The handle
+    // lets the user own the height; null means "follow the card's report".
+    const FRONTEND_MANUAL_MIN_HEIGHT = 120
+    const FRONTEND_MANUAL_MAX_HEIGHT = 4000
+    const FRONTEND_MANUAL_STEP = 40
+
+    function useFrontendResize(frameRef, autoHeight, ready) {
+      const [manualHeight, setManualHeight] = useState(null)
+      const [dragging, setDragging] = useState(false)
+      const manualHeightRef = useRef(null)
+      const dragRef = useRef(null)
+      // Card frame.prefs set height with !important; the manual override must
+      // win and survive auto-height reports while the user is dragging.
+      useLayoutEffect(() => {
+        const frame = frameRef.current
+        if (frame === null || manualHeight === null) return
+        frame.style.setProperty('height', `${manualHeight}px`, 'important')
+      }, [manualHeight, autoHeight, ready])
+      const commit = (value) => {
+        manualHeightRef.current = value
+        setManualHeight(value)
+      }
+      const reset = () => {
+        manualHeightRef.current = null
+        setManualHeight(null)
+        frameRef.current?.style.removeProperty('height')
+      }
+      const startResize = (event) => {
+        if (event.button !== 0) return
+        dragRef.current = {
+          pointerId: event.pointerId,
+          startY: event.clientY,
+          startHeight: manualHeightRef.current ?? autoHeight,
+        }
+        try { event.currentTarget.setPointerCapture(event.pointerId) } catch {}
+        setDragging(true)
+        event.preventDefault()
+      }
+      const moveResize = (event) => {
+        const drag = dragRef.current
+        if (drag === null || drag.pointerId !== event.pointerId) return
+        const next = Math.max(
+          FRONTEND_MANUAL_MIN_HEIGHT,
+          Math.min(FRONTEND_MANUAL_MAX_HEIGHT, Math.round(drag.startHeight + event.clientY - drag.startY)),
+        )
+        commit(next)
+      }
+      const endResize = (event) => {
+        if (dragRef.current === null) return
+        dragRef.current = null
+        setDragging(false)
+        try { event.currentTarget.releasePointerCapture(event.pointerId) } catch {}
+      }
+      const keyResize = (event) => {
+        if (event.key === 'Home') {
+          event.preventDefault()
+          reset()
+          return
+        }
+        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+        event.preventDefault()
+        const current = manualHeightRef.current ?? autoHeight
+        const delta = event.key === 'ArrowDown' ? FRONTEND_MANUAL_STEP : -FRONTEND_MANUAL_STEP
+        commit(Math.max(
+          FRONTEND_MANUAL_MIN_HEIGHT,
+          Math.min(FRONTEND_MANUAL_MAX_HEIGHT, current + delta),
+        ))
+      }
+      return {
+        manualHeight,
+        dragging,
+        effectiveHeight: manualHeight === null ? autoHeight : manualHeight,
+        manualHeightRef,
+        startResize,
+        moveResize,
+        endResize,
+        resetManualHeight: reset,
+        keyResize,
+      }
     }
 
     // ── 酒馆助手兼容层（2026-10-20）────────────────────────────────────────
@@ -1862,7 +2023,7 @@ window.__ModuleLoader__.load({
       'settings.cardScriptsAutoRun': 'Run card scripts automatically when entering a chat (off by default)',
       'settings.cardScriptsAutoRunHint': 'Opening a Tavern chat opens the tab that hosts auto-run: Frontend for AgentTavern, Card scripts for ST. Every enabled card script is injected into that frontend’s sandboxed document. Scripts share its DOM and globals and can write this chat’s variables, messages, session world-book copy and session script-tree copy. Enable only for cards you trust.',
       'settings.frontendAllowExternalResources': 'Allow frontends to load external resources (any HTTPS origin)',
-      'settings.frontendAllowExternalResourcesHint': 'Lets the iframe load any HTTPS script or stylesheet, and allows fetch/XHR plus CDN source maps (connect-src https:). External scripts can read the chat content visible to the frontend and send it elsewhere; enable only for cards you trust.',
+      'settings.frontendAllowExternalResourcesHint': 'Lets the iframe load any HTTPS script or stylesheet, and allows fetch/XHR plus CDN source maps (connect-src https: blob:). External scripts can read the chat content visible to the frontend and send it elsewhere; enable only for cards you trust.',
       'settings.gamesDisableResign': 'Disable resign in games (hides the resign button; the AI cannot resign either)',
       'settings.worldFollowsCharacter': 'World books follow character card activation',
       'settings.behaviorHint': 'Controls how the plugin behaves across sessions. All switches take effect immediately.',
@@ -2479,6 +2640,9 @@ window.__ModuleLoader__.load({
       'frontend.emptyHint': 'Once an assistant message contains a complete HTML document (an html code block or a full document), the latest one renders here.',
       'frontend.floor': 'Message {index}',
       'frontend.refresh': 'Reload',
+      'frontend.resizeHint': 'Drag to resize; double-click or press Home to fit content',
+      'frontend.expand': 'Expand frontend',
+      'frontend.collapse': 'Exit expanded frontend',
       'frontend.inlineOnly': 'ST style renders message frontends inline, so no sidebar copy is needed.',
       'frontend.unbound': 'This session is not bound to a Tavern chat.',
       'frontend.cardScriptsAutoRunning': 'Auto-running ({count} card scripts)',
@@ -2723,7 +2887,7 @@ window.__ModuleLoader__.load({
       'settings.cardScriptsAutoRun': '进入聊天时自动运行卡内脚本（默认关闭）',
       'settings.cardScriptsAutoRunHint': '开启后进入酒馆聊天会自动打开承载自动运行的右栏 tab：AgentTavern 用「美化前端」，ST 用「卡脚本」。卡内全部启用脚本会注入该前端所在的同一个沙箱文档，脚本共享 DOM 与全局变量，拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限；只对信任的角色卡开启。',
       'settings.frontendAllowExternalResources': '允许美化前端加载外部资源（任意 HTTPS 源）',
-      'settings.frontendAllowExternalResourcesHint': '开启后 iframe 可加载任意 HTTPS 脚本/样式，并允许 fetch/XHR 与 CDN sourcemap（connect-src https:）。外部脚本能读取前端可见的聊天内容并发送到外部服务器，请只对信任的角色卡开启。',
+      'settings.frontendAllowExternalResourcesHint': '开启后 iframe 可加载任意 HTTPS 脚本/样式，并允许 fetch/XHR 与 CDN sourcemap（connect-src https: blob:）。外部脚本能读取前端可见的聊天内容并发送到外部服务器，请只对信任的角色卡开启。',
       'settings.gamesDisableResign': '禁用投降（隐藏投降按钮，AI 也不能认输）',
       'settings.worldFollowsCharacter': '世界书跟随角色卡激活',
       'settings.behaviorHint': '控制系统在各会话中的行为，全部即时生效。',
@@ -3332,6 +3496,9 @@ window.__ModuleLoader__.load({
       'frontend.emptyHint': '助手消息里出现完整 HTML 文档（html 代码块或整段 HTML）后，会在这里渲染最新一条。',
       'frontend.floor': '第 {index} 楼',
       'frontend.refresh': '重新读取',
+      'frontend.resizeHint': '拖动调整高度；双击或按 Home 恢复自动高度',
+      'frontend.expand': '展开美化前端',
+      'frontend.collapse': '退出展开',
       'frontend.inlineOnly': 'ST 架构的美化前端已直接渲染在消息里，无需右栏。',
       'frontend.unbound': '当前会话没有绑定酒馆聊天。',
       'frontend.cardScriptsAutoRunning': '自动运行中（{count} 个卡脚本）',
@@ -8663,6 +8830,13 @@ window.__ModuleLoader__.load({
       const [scriptBundle, setScriptBundle] = useState(null)
       const [scriptError, setScriptError] = useState('')
       const [autoStopped, setAutoStopped] = useState(false)
+      // Fullscreen fallback: a fixed overlay covering the viewport. The native
+      // right sidebar keeps the panel mounted, but this node is portalled to
+      // document.body so no ancestor overflow/transform can clip it.
+      const [expanded, setExpanded] = useState(false)
+      const [reloadNonce, setReloadNonce] = useState(0)
+      const [refreshing, setRefreshing] = useState(false)
+      const panelRef = useRef(null)
       const scriptRequestRef = useRef(0)
       const key = binding === undefined
         ? ''
@@ -8687,6 +8861,57 @@ window.__ModuleLoader__.load({
       }
       const loadRef = useRef(load)
       useEffect(() => { loadRef.current = load })
+      // A manual refresh must remount the iframe: re-fetching the same HTML into
+      // an identical srcDoc does not reload the browsing context, so cards keep
+      // their old state and the button looked dead.
+      const refresh = () => {
+        if (refreshing) return
+        setRefreshing(true)
+        void loadRef.current().finally(() => {
+          setReloadNonce((value) => value + 1)
+          setRefreshing(false)
+        })
+      }
+      // Expanding must not move the panel node: reparenting the iframe destroys
+      // its browsing context and cards reload their data. Prefer the Fullscreen
+      // API on the existing element; the CSS overlay is only the fallback.
+      const toggleExpanded = () => {
+        if (expanded) {
+          if (document.fullscreenElement !== null && typeof document.exitFullscreen === 'function') {
+            void document.exitFullscreen().catch(() => {})
+          }
+          setExpanded(false)
+          return
+        }
+        const element = panelRef.current
+        if (element !== null && typeof element.requestFullscreen === 'function') {
+          try {
+            void element.requestFullscreen().then(() => setExpanded(true), () => setExpanded(true))
+            return
+          } catch {}
+        }
+        setExpanded(true)
+      }
+      useEffect(() => {
+        const onFullscreenChange = () => {
+          if (document.fullscreenElement === null) setExpanded(false)
+        }
+        document.addEventListener('fullscreenchange', onFullscreenChange)
+        return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
+      }, [])
+      useEffect(() => {
+        if (!expanded) return undefined
+        const onKeyDown = (event) => {
+          if (event.key !== 'Escape') return
+          if (document.fullscreenElement !== null && typeof document.exitFullscreen === 'function') {
+            void document.exitFullscreen().catch(() => {})
+            return
+          }
+          setExpanded(false)
+        }
+        addEventListener('keydown', onKeyDown)
+        return () => removeEventListener('keydown', onKeyDown)
+      }, [expanded])
       useEffect(() => {
         // 切换聊天时先摘掉上一份快照：避免一个渲染帧里显示别的聊天的 HUD。
         setSnapshot(null)
@@ -8725,7 +8950,7 @@ window.__ModuleLoader__.load({
             }
           })
         return () => { scriptRequestRef.current += 1 }
-      }, [key, architecture, cardScriptsAutoRun, binding?.character])
+      }, [key, architecture, cardScriptsAutoRun, binding?.character, reloadNonce])
       // 卡脚本 tab 的「重置卡脚本」删除的是同一份会话副本：通知本 tab 立即停止
       // 自动运行，避免 iframe 继续跑已经被重置的旧源码。
       useEffect(() => {
@@ -8754,14 +8979,14 @@ window.__ModuleLoader__.load({
       const scriptHostIndex = autoRunning && message !== undefined
         ? frontendCardScriptHostIndex(message.documents)
         : -1
-      const frameKey = `${message?.index ?? 'none'}:`
+      const frameKey = `${message?.index ?? 'none'}:${reloadNonce}:`
         + (autoRunning ? scripts.map((script) => `${script.id}:${script.content.length}`).join('|') : '')
       const frames = []
       if (message !== undefined) {
         message.documents.forEach((html, index) => {
           const composed = index === scriptHostIndex ? frontendWithCardScripts(html, scripts) : html
           frames.push(h('div', {
-            key: `${message.index}-${index}`,
+            key: `${message.index}-${index}-${reloadNonce}`,
             className: 'dt-frontend-side-frame',
           }, h(FrontendFrame, {
             html: composed,
@@ -8774,7 +8999,7 @@ window.__ModuleLoader__.load({
         })
       } else if (autoRunning) {
         frames.push(h('div', {
-          key: 'card-scripts',
+          key: `card-scripts-${reloadNonce}`,
           className: 'dt-frontend-side-frame',
         }, h(FrontendFrame, {
           html: frontendWithCardScripts('', scripts),
@@ -8785,19 +9010,35 @@ window.__ModuleLoader__.load({
           refreshKey: frameKey,
         })))
       }
-      return h('div', { className: 'dt-frontend-side', 'data-dsh-soulmojito-surface': 'frontend-sidebar' },
+      const panel = h('div', {
+        ref: panelRef,
+        className: `dt-frontend-side${expanded ? ' dt-frontend-side-expanded' : ''}`,
+        'data-dsh-soulmojito-surface': 'frontend-sidebar',
+        ...(expanded ? { role: 'dialog', 'aria-modal': 'true', 'aria-label': t('frontend.title') } : {}),
+      },
         h('div', { className: 'dt-frontend-side-head' },
           h('span', { className: 'dt-frontend-side-meta' },
             message
               ? t('frontend.floor', { index: message.index + 1 })
               : autoRunning ? t('frontend.cardScriptsOnly', { count: scripts.length }) : t('frontend.empty')),
-          h('button', {
-            type: 'button',
-            className: 'dt-frontend-side-refresh',
-            title: t('frontend.refresh'),
-            'aria-label': t('frontend.refresh'),
-            onClick: () => void loadRef.current(),
-          }, h(IconRefreshOutline16))),
+          h('div', { className: 'dt-frontend-side-actions' },
+            h('button', {
+              type: 'button',
+              className: 'dt-frontend-side-refresh',
+              title: t(expanded ? 'frontend.collapse' : 'frontend.expand'),
+              'aria-label': t(expanded ? 'frontend.collapse' : 'frontend.expand'),
+              'aria-pressed': expanded ? 'true' : 'false',
+              onClick: toggleExpanded,
+            }, h(expanded ? IconCollapse16 : IconExpand16)),
+            h('button', {
+              type: 'button',
+              className: 'dt-frontend-side-refresh',
+              title: t('frontend.refresh'),
+              'aria-label': t('frontend.refresh'),
+              'data-busy': refreshing ? 'true' : 'false',
+              disabled: refreshing,
+              onClick: refresh,
+            }, h(IconRefreshOutline16)))),
         error ? h('p', { className: 'dt-error' }, error) : null,
         scriptError ? h('p', { className: 'dt-error' }, t('frontend.cardScriptsError', { error: scriptError })) : null,
         autoRunning
@@ -8823,6 +9064,7 @@ window.__ModuleLoader__.load({
               h(IconSparkle16, { size: 22 }),
               h('strong', null, t('frontend.emptyTitle')),
               h('p', { className: 'dt-hint' }, t('frontend.emptyHint'))))
+      return panel
     }
 
     // 卡脚本右栏（2026-10-21，用户需求）：JSR 卡的常驻脚本树
@@ -12625,7 +12867,7 @@ window.__ModuleLoader__.load({
       tag.textContent = `
          [data-dsh-soulmojito-native-hidden],[data-dsh-soulmojito-tab-hidden],[data-dsh-soulmojito-agent-preset-hidden]{display:none!important}
         .dt-settings{color:var(--dsw-alias-label-primary);display:flex;flex-direction:column;gap:0;min-height:100%;font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}.dt-settings-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:20px 24px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-settings h2{font-size:20px;line-height:28px;margin:0;font-weight:600}.dt-settings-heading p{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px;margin:4px 0 0}.dt-settings-version{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;margin:2px 0 0;user-select:text}.dt-settings-band{padding:20px 24px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dt-settings-band h3{font-size:14px;line-height:20px;margin:0 0 14px;font-weight:600}.dt-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 20px}.dt-field{display:flex;flex-direction:column;gap:6px}.dt-label{color:var(--dsw-alias-label-secondary);font-size:12px}.dt-field select{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 10px}.dt-toggle,.dt-check-grid label{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary);font-size:13px}.dt-toggle{min-height:36px}.dt-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 20px}.dt-imports{display:flex;gap:8px;flex-wrap:wrap}.dt-upload{position:relative;cursor:pointer;height:34px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;font-size:13px}.dt-upload input{position:absolute;inset:0;opacity:0;cursor:pointer}.dt-upload-error{color:var(--dsw-alias-state-error-primary);margin-left:5px}.dt-error,.dt-run-error,.dt-sidebar-error{color:var(--dsw-alias-state-error-primary)}.dt-muted{color:var(--dsw-alias-label-tertiary)}
-         .dt-view{box-sizing:border-box;width:100%;max-width:780px;margin:0 auto;display:flex;flex-direction:column;min-height:100%;padding:8px 16px 28px;color:var(--dsw-alias-label-primary);letter-spacing:0}.dt-empty{min-height:300px;align-items:center;justify-content:center;gap:10px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:13px}.dt-message-actions button,.dt-header-character button,.dt-sidebar button,.dt-footer-action{color:inherit;background:transparent;border:0;cursor:pointer}.dt-message-actions button:hover,.dt-header-character button:hover,.dt-sidebar button:hover,.dt-footer-action:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-view button:disabled,.dt-composer button:disabled,.dt-sidebar button:disabled{cursor:not-allowed;opacity:.45}.dt-transcript{display:flex;flex-direction:column;gap:22px;padding:22px 4px}.dt-message{display:flex;gap:10px;max-width:88%;min-width:0}.dt-message-user{align-self:flex-end}.dt-message-character{align-self:flex-start}.dt-message-avatar{width:30px;height:30px;object-fit:cover;border-radius:6px;flex:none}.dt-message-body{display:flex;flex-direction:column;gap:4px;min-width:0}.dt-message-user .dt-message-body{align-items:flex-end}.dt-message-name{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-message-copy{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.65;padding:9px 11px;border-radius:8px;background:var(--dsw-alias-bg-raised,rgba(127,127,127,.08));border:1px solid var(--dsw-alias-border-l2)}.dt-reasoning{display:flex;flex-direction:column;gap:3px;max-width:100%;min-width:0}.dt-reasoning-toggle{display:inline-flex;align-items:center;gap:4px;color:var(--dsw-alias-label-tertiary);background:transparent;border:0;cursor:pointer;font-size:11px;line-height:16px;padding:2px 4px;border-radius:5px}.dt-reasoning-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-reasoning-toggle svg{transition:transform 120ms ease}.dt-reasoning-toggle.dt-reasoning-open svg{transform:rotate(180deg)}.dt-reasoning-body{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12.5px;line-height:1.6;color:var(--dsw-alias-label-secondary);padding:8px 10px;border-radius:8px;border:1px dashed var(--dsw-alias-border-l2);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 4%,var(--dsw-alias-bg-base));max-height:280px;overflow-y:auto}.dt-message-user .dt-message-copy{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,var(--dsw-alias-bg-base))}.dt-message-frontend{width:min(760px,82vw);max-width:100%;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base)}.dt-frontend-frame{display:block;width:100%;border:0;background:transparent;transition:height 180ms ease}.dt-message-actions{display:flex;align-items:center;gap:4px;min-height:24px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dt-message-actions button{min-width:24px;height:24px;border-radius:5px;display:inline-grid;place-items:center;padding:0 5px}.dt-message-edit{box-sizing:border-box;width:min(620px,70vw);max-width:100%;min-height:100px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:9px;font:inherit;line-height:1.55}.dt-transcript-end{height:1px;flex:none}.dt-message-error{max-width:620px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px}.dt-run-error{padding:7px 12px;font-size:12px}
+         .dt-view{box-sizing:border-box;width:100%;max-width:780px;margin:0 auto;display:flex;flex-direction:column;min-height:100%;padding:8px 16px 28px;color:var(--dsw-alias-label-primary);letter-spacing:0}.dt-empty{min-height:300px;align-items:center;justify-content:center;gap:10px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:13px}.dt-message-actions button,.dt-header-character button,.dt-sidebar button,.dt-footer-action{color:inherit;background:transparent;border:0;cursor:pointer}.dt-message-actions button:hover,.dt-header-character button:hover,.dt-sidebar button:hover,.dt-footer-action:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-view button:disabled,.dt-composer button:disabled,.dt-sidebar button:disabled{cursor:not-allowed;opacity:.45}.dt-transcript{display:flex;flex-direction:column;gap:22px;padding:22px 4px}.dt-message{display:flex;gap:10px;max-width:88%;min-width:0}.dt-message-user{align-self:flex-end}.dt-message-character{align-self:flex-start}.dt-message-avatar{width:30px;height:30px;object-fit:cover;border-radius:6px;flex:none}.dt-message-body{display:flex;flex-direction:column;gap:4px;min-width:0}.dt-message-user .dt-message-body{align-items:flex-end}.dt-message-name{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-message-copy{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.65;padding:9px 11px;border-radius:8px;background:var(--dsw-alias-bg-raised,rgba(127,127,127,.08));border:1px solid var(--dsw-alias-border-l2)}.dt-reasoning{display:flex;flex-direction:column;gap:3px;max-width:100%;min-width:0}.dt-reasoning-toggle{display:inline-flex;align-items:center;gap:4px;color:var(--dsw-alias-label-tertiary);background:transparent;border:0;cursor:pointer;font-size:11px;line-height:16px;padding:2px 4px;border-radius:5px}.dt-reasoning-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-reasoning-toggle svg{transition:transform 120ms ease}.dt-reasoning-toggle.dt-reasoning-open svg{transform:rotate(180deg)}.dt-reasoning-body{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12.5px;line-height:1.6;color:var(--dsw-alias-label-secondary);padding:8px 10px;border-radius:8px;border:1px dashed var(--dsw-alias-border-l2);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 4%,var(--dsw-alias-bg-base));max-height:280px;overflow-y:auto}.dt-message-user .dt-message-copy{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,var(--dsw-alias-bg-base))}.dt-message-frontend{width:min(760px,82vw);max-width:100%;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base)}.dt-frontend-frame{display:block;width:100%;border:0;background:transparent;transition:height 180ms ease}.dt-frontend-resizable{display:flex;flex-direction:column;width:100%;min-width:0}.dt-frontend-resizable-dragging .dt-frontend-frame{transition:none}.dt-frontend-resize-handle{display:flex;align-items:center;justify-content:center;height:16px;flex:none;cursor:ns-resize;touch-action:none;user-select:none;-webkit-user-select:none;color:var(--dsw-alias-label-tertiary);outline:none}.dt-frontend-resize-handle:focus-visible{border-radius:4px;box-shadow:inset 0 0 0 2px var(--dsw-alias-state-business-primary)}.dt-frontend-resize-grip{display:block;width:40px;height:4px;border-radius:2px;background:currentColor;opacity:.35;transition:opacity 120ms ease}.dt-frontend-resize-handle:hover .dt-frontend-resize-grip,.dt-frontend-resize-handle:focus-visible .dt-frontend-resize-grip{opacity:.75}.dt-frontend-resize-handle[data-manual="true"] .dt-frontend-resize-grip{background:var(--dsw-alias-state-business-primary);opacity:.85}.dt-message-actions{display:flex;align-items:center;gap:4px;min-height:24px;color:var(--dsw-alias-label-tertiary);font-size:11px}.dt-message-actions button{min-width:24px;height:24px;border-radius:5px;display:inline-grid;place-items:center;padding:0 5px}.dt-message-edit{box-sizing:border-box;width:min(620px,70vw);max-width:100%;min-height:100px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:9px;font:inherit;line-height:1.55}.dt-transcript-end{height:1px;flex:none}.dt-message-error{max-width:620px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px}.dt-run-error{padding:7px 12px;font-size:12px}
          .dt-composer-wrap{box-sizing:border-box;width:100%;padding:6px var(--dsh-composer-side-clearance,16px) 14px;pointer-events:auto}.dt-composer{box-sizing:border-box;width:min(var(--dsh-composer-card-max-width,780px),100%);margin:0 auto;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);padding:10px 10px 8px;box-shadow:0 2px 10px rgba(0,0,0,.06)}.dt-composer textarea{box-sizing:border-box;width:100%;min-height:52px;max-height:200px;resize:vertical;border:0;outline:0;color:var(--dsw-alias-label-primary);background:transparent;font:inherit;font-size:14px;line-height:1.5}.dt-composer-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:30px;font-size:11px}.dt-composer-row>span{min-width:0;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.dt-composer-actions{display:flex;align-items:center;gap:8px;flex:none}.dt-primary-icon{width:30px;height:30px;border:0;border-radius:7px;display:grid;place-items:center;background:var(--dsw-alias-state-business-primary);color:#fff;cursor:pointer}.dt-header-character{min-width:0;display:flex;align-items:center;gap:7px;padding:2px 4px 2px 5px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;font-size:12px}.dt-header-character>img{width:20px;height:20px;border-radius:4px;object-fit:cover;flex:none}.dt-header-character-copy{display:flex;flex-direction:column;min-width:0;max-width:min(520px,55vw);gap:0}.dt-header-character-name{max-width:100%;text-overflow:ellipsis;white-space:nowrap;overflow:hidden;line-height:16px}.dt-header-stats{display:block;max-width:100%;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.dt-header-character>button{width:24px;height:24px;border-radius:5px;display:grid;place-items:center;flex:none}
         .dt-model-select{min-width:0;position:relative}.dt-model-trigger{min-width:0;max-width:220px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:24px;outline:none;align-items:center;gap:4px;padding:0 4px 0 8px;font-size:13px;font-weight:500;line-height:20px;display:flex}.dt-model-trigger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-model-trigger:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}.dt-model-trigger:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}.dt-model-trigger-label{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.dt-model-trigger-effort{color:var(--dsw-alias-label-caption);flex:none}.dt-model-chevron{color:var(--dsw-alias-label-caption);flex:none;transition:transform .12s}.dt-model-chevron-open{transform:rotate(180deg)}.dt-model-menu{z-index:20;border:1px solid var(--dsw-alias-border-inverted);background:var(--dsw-specific-menu);width:min(240px,100vw - 32px);max-height:min(360px,100vh - 96px);box-shadow:var(--dsw-shadow-lv3);color:var(--dsw-alias-label-primary);border-radius:12px;flex-direction:column;padding:4px;display:flex;position:absolute;bottom:calc(100% + 8px);right:0;overflow:hidden}.dt-model-status,.dt-model-empty{color:var(--dsw-alias-label-tertiary);padding:10px;font-size:13px;line-height:20px}.dt-model-error,.dt-model-warning{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);border-radius:8px;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px;padding:7px 8px;font-size:12px;line-height:18px;display:flex}.dt-model-warning{background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-state-warn-label)}.dt-model-retry{color:inherit;font:inherit;cursor:pointer;background:0 0;border:none;flex:none;padding:0;font-weight:600}.dt-model-groups{min-height:0;overflow-y:auto}.dt-model-group+.dt-model-group{margin-top:4px}.dt-model-group-title{z-index:1;background:var(--dsw-specific-menu);color:var(--dsw-alias-label-tertiary);padding:5px 8px 3px;font-size:12px;font-weight:500;line-height:18px;position:sticky;top:0}.dt-model-option{width:100%;min-height:38px;color:inherit;text-align:left;cursor:pointer;background:0 0;border:none;border-radius:10px;outline:none;align-items:center;gap:8px;padding:6px 8px;display:flex}.dt-model-option:hover:not(:disabled),.dt-model-option:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}.dt-model-option:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}.dt-model-option-copy{flex-direction:column;flex:1;min-width:0;display:flex}.dt-model-name{color:inherit;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:500;line-height:20px;overflow:hidden}.dt-model-description{color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:18px;overflow:hidden}.dt-model-check{color:var(--dsw-alias-label-primary);flex:0 0 18px;place-items:center;display:grid}.dt-model-cell{width:100%;height:40px;color:var(--dsw-alias-label-primary);cursor:pointer;text-align:left;background:0 0;border:none;border-radius:10px;align-items:center;gap:8px;padding:0 10px;font-size:14px;line-height:22px;display:flex}.dt-model-cell:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-model-cell-label{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.dt-model-cell-value{text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--dsw-alias-label-tertiary);flex:0 auto;overflow:hidden}.dt-model-cell-chevron{color:var(--dsw-alias-label-tertiary);flex:none}
         [data-dsh-soulmojito-sidebar-host]{flex:none;margin:0 0 6px;padding-right:var(--dsh-session-list-edge-inset,8px)}.dt-sidebar{box-sizing:border-box;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family,Inter,system-ui,sans-serif);letter-spacing:0}.dt-sidebar-scroll{display:flex;flex-direction:column;min-height:0;max-height:min(320px,32vh);overflow-y:auto;overflow-x:hidden}.dt-sidebar-heading{display:flex;align-items:center;justify-content:space-between;height:30px;padding:0 5px;color:var(--dsw-alias-label-secondary)}.dt-sidebar-heading>span{display:flex;align-items:center;gap:6px;font-size:12px}.dt-sidebar-heading>button{width:26px;height:26px;border-radius:6px}.dt-character-group{margin-top:2px}.dt-character-row{display:flex;align-items:center;gap:2px}.dt-character-toggle{height:32px;min-width:0;flex:1;display:flex;align-items:center;gap:5px;border-radius:6px;padding:0 5px;text-align:left}.dt-character-toggle svg{transform:rotate(-90deg);transition:transform .15s}.dt-character-toggle svg.dt-chevron-open{transform:rotate(0)}.dt-character-toggle img{width:22px;height:22px;border-radius:5px;object-fit:cover}.dt-character-toggle span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.dt-character-row>button:last-child{width:28px;height:28px;display:grid;place-items:center;border-radius:6px;flex:none}.dt-sidebar-chats{display:flex;flex-direction:column;margin:1px 0 4px 28px}.dt-sidebar-chat-row{height:28px;border-radius:6px;display:grid;grid-template-columns:minmax(0,1fr) repeat(3,26px);align-items:center;color:var(--dsw-alias-label-secondary)}.dt-sidebar-chat-open{height:28px;min-width:0;text-align:left;padding:0 7px;color:inherit;font-size:12px}.dt-sidebar-chat-open span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dt-sidebar-chat-row>button:not(.dt-sidebar-chat-open){width:26px;height:26px;display:grid;place-items:center;border-radius:5px;opacity:0}.dt-sidebar-chat-row:hover>button:not(.dt-sidebar-chat-open),.dt-sidebar-chat-row:focus-within>button:not(.dt-sidebar-chat-open){opacity:1}.dt-sidebar-chat-row.dt-sidebar-chat-active{color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-interactive-bg-hover)}.dt-sidebar-status,.dt-sidebar-error{padding:4px 7px;font-size:11px;line-height:16px}.dt-footer-action{box-sizing:border-box;cursor:pointer;color:var(--dsw-alias-label-primary);background:transparent;border:none;font-family:inherit;display:flex;align-items:center;overflow:hidden}.dt-footer-action-wide{width:calc(100% + 8px);height:34px;flex:none;justify-content:flex-start;gap:8px;margin:4px -4px;padding:6px 2px 6px 10px;border-radius:12px;font-size:14px;line-height:22px}.dt-footer-action-wide:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-footer-action-rail{width:36px;height:36px;flex:none;justify-content:center;gap:0;margin:8px 0 10px;padding:0;border-radius:50%}.dt-footer-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;line-height:22px}.dt-sidebar-heading-toggle{min-width:0;flex:1;width:auto;height:26px;display:flex;align-items:center;gap:6px;border-radius:6px;padding:0 5px;text-align:left;font-size:12px}.dt-sidebar-heading>button.dt-sidebar-heading-toggle{width:auto}.dt-sidebar-chevron{display:flex;align-items:center;flex:none}.dt-sidebar-chevron svg{transform:rotate(-90deg);transition:transform .15s}.dt-sidebar-chevron svg.dt-chevron-open{transform:rotate(0)}.dt-sidebar-heading-label{display:flex;align-items:center;gap:6px;min-width:0}.dt-sidebar-heading-label strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -13061,6 +13303,11 @@ window.__ModuleLoader__.load({
         .dt-frontend-side-meta{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
         .dt-frontend-side-refresh{flex:none;display:inline-grid;place-items:center;width:28px;height:28px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer}
         .dt-frontend-side-refresh:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .dt-frontend-side-refresh:disabled{cursor:default;opacity:.5}
+        .dt-frontend-side-refresh[data-busy="true"] svg{animation:dt-frontend-spin .8s linear infinite}
+        .dt-frontend-side-actions{display:flex;align-items:center;gap:6px;flex:none}
+        .dt-frontend-side-expanded{position:fixed;inset:12px;z-index:80;width:auto;height:auto;max-height:none;padding:14px 16px 24px;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-base);box-shadow:var(--dsw-shadow-lv3)}
+        @keyframes dt-frontend-spin{to{transform:rotate(360deg)}}
         .dt-frontend-side-frames{display:flex;flex-direction:column;gap:12px;min-width:0}
         .dt-frontend-side-frame{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-base)}
         .dt-frontend-side-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-height:220px;padding:16px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:13px;line-height:20px}

@@ -177,7 +177,46 @@ describe('frontend/latest route e2e through the real HTTP surface', () => {
       body: JSON.stringify({ op: 'idb.delete', character: CHARACTER, chatId, db: 'idb-http', store: 'records', key: 'k' }),
     })
     expect(remove.status).toBe(200)
-    const missing = await fetch(`${baseUrl}/frontend/idb/get?${query}`)
-    expect(missing.status).toBe(404)
+    const miss = await fetch(`${baseUrl}/frontend/idb/get?${query}`)
+    // IndexedDB's get() miss is a successful undefined result, so the bridge
+    // must not turn it into an error (cards report "cache corrupted" on that).
+    expect(miss.status).toBe(204)
+    expect(await miss.text()).toBe('')
+  })
+
+  it('exposes raw V2 card fields to JSR getCharData consumers', async () => {
+    await store.importCharacter({
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: CHARACTER,
+        description: '',
+        personality: '',
+        scenario: '',
+        first_mes: '',
+        mes_example: '',
+        creator_notes: 'Power By Probe',
+        system_prompt: '',
+        post_history_instructions: '',
+        tags: [],
+        creator: 'probe-creator',
+        character_version: 'v9.9',
+        alternate_greetings: [],
+        extensions: {},
+      },
+    })
+    const response = await fetch(`${baseUrl}/helper`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ op: 'snapshot', character: CHARACTER, chatId }),
+    })
+    expect(response.status).toBe(200)
+    const body = await response.json() as { value?: { characterData?: Record<string, unknown> } }
+    expect(body.value?.characterData).toMatchObject({
+      creator: 'probe-creator',
+      character_version: 'v9.9',
+      creator_notes: 'Power By Probe',
+    })
+    expect(body.value?.characterData?.creatorNotes).toBeUndefined()
   })
 })

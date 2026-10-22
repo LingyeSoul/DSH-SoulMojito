@@ -100,7 +100,9 @@ window.__ModuleLoader__.load({
         "font-src data: blob: https:",
         "media-src data: blob: https:",
         "worker-src blob:",
-        "connect-src https:",
+        // blob: keeps card-generated local URLs (asset-pack workers, WASM
+        // loaders) readable without granting any external network origin.
+        "connect-src https: blob:",
         "frame-src 'none'",
         "object-src 'none'",
         "base-uri 'none'",

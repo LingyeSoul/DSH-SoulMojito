@@ -413,6 +413,9 @@ export async function handleIdbBridge(
 ): Promise<IdbBridgeResult> {
   if (op === 'idb.get') {
     const response = await fetchImpl(`${apiUrl}/frontend/idb/get?${idbQuery(character, payload)}`, { cache: 'no-store' })
+    // 204 is a cache miss and must reach IndexedDB as onsuccess(undefined), not
+    // as a transaction error. Card runtimes legitimately miss before download.
+    if (response.status === 204) return { value: { record: undefined }, transfer: [] }
     if (!response.ok) {
       throw new Error(failureMessage(response, await responseBody(response)))
     }

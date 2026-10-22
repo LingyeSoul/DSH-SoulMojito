@@ -161,7 +161,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
   it('keeps the sandbox and proxies through the host binding', () => {
     expect(source).toContain("sandbox: 'allow-scripts allow-modals'")
     expect(source).toContain("connect-src 'none'")
-    expect(source).toContain('function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId)')
+    expect(source).toContain('function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef)')
     expect(source).toContain("if (event.source !== frameRef.current?.contentWindow) return")
     expect(source).toContain("data.token !== token")
     expect(source).toContain('this frontend is not bound to a Tavern chat')
@@ -186,7 +186,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     // frameElement 是 null，卡隐藏时宿主会留一块 120px 白块。shim 转 frame.prefs。
     expect(source).toContain("Object.defineProperty(window, 'frameElement'")
     expect(source).toContain("call('frame.prefs'")
-    expect(source).toContain('function applyFramePrefs(frame, prefs)')
+    expect(source).toContain('function applyFramePrefs(frame, prefs, manualHeight)')
     expect(source).toContain("if (data.op === 'frame.prefs')")
   })
 
@@ -247,12 +247,15 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     expect(source).toContain("data.op === 'slash' || data.op === 'mvu.replace'")
   })
 
-  it('explains disabled card buttons instead of leaving them silent', () => {
-    // 行动台的必杀在净化之力 <100 时是 disabled，浏览器不派发 click。
-    expect(source).toContain('function noteDisabledControl(event)')
-    expect(source).toContain("target.closest('button, [aria-disabled=\"true\"]')")
-    expect(source).toContain("showToast('info', '该按钮当前不可用')")
-    expect(source).toContain("document.addEventListener('pointerdown', noteDisabledControl, true)")
+  it('shows a generation status notice and no disabled-button toast', () => {
+    // The disabled-button hint was noise: cards already render their own
+    // unavailable state. Generate requests get a persistent, informative notice.
+    expect(source).not.toContain('该按钮当前不可用')
+    expect(source).not.toContain('noteDisabledControl')
+    expect(source).toContain('SoulMojito正在处理生成请求')
+    expect(source).toContain("模型: ' + generationModel(config)")
+    expect(source).toContain('SoulMojito 生成完成')
+    expect(source).toContain('SoulMojito 生成失败')
   })
 
   it('persists the session script tree through scripts.put before publishing ready', () => {
@@ -307,7 +310,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
 
   it('gates external frontend resources behind the frontendAllowExternalResources setting', () => {
     expect(source).toContain('function frontendContentSecurityPolicy(allowExternalResources)')
-    expect(source).toContain("connect-src https:")
+    expect(source).toContain("connect-src https: blob:")
     expect(source).toContain('useFrontendAllowExternalResources()')
     expect(source).toContain('checked: bootstrap.state.frontendAllowExternalResources === true')
     expect(store).toContain('frontendAllowExternalResources: boolean')

@@ -196,6 +196,44 @@
 })();`
     }
 
+    // Chromium disables the unload event in cross-origin frames by default
+    // (Permissions-Policy unload=()), and a sandboxed srcdoc document cannot
+    // opt back in: it has an opaque origin and no response headers of its own.
+    // Card bundles still register unload for cleanup, which floods the console
+    // with "[Violation] Permissions policy violation: unload is not allowed".
+    // Map window/document unload listeners to pagehide, the lifecycle event
+    // Chromium recommends and the one the localStorage shim already uses.
+    function frontendUnloadCompatScript() {
+      return `(function () {
+  if (typeof EventTarget !== 'function') return;
+  var nativeAdd = EventTarget.prototype.addEventListener;
+  var nativeRemove = EventTarget.prototype.removeEventListener;
+  var translate = function (target, type) {
+    return (target === window || target === document) && typeof type === 'string' && type.toLowerCase() === 'unload'
+      ? 'pagehide'
+      : type;
+  };
+  EventTarget.prototype.addEventListener = function (type, listener, options) {
+    return nativeAdd.call(this, translate(this, type), listener, options);
+  };
+  EventTarget.prototype.removeEventListener = function (type, listener, options) {
+    return nativeRemove.call(this, translate(this, type), listener, options);
+  };
+  try {
+    var handler = null;
+    Object.defineProperty(window, 'onunload', {
+      configurable: true,
+      get: function () { return handler; },
+      set: function (value) {
+        if (handler !== null) nativeRemove.call(window, 'pagehide', handler);
+        handler = typeof value === 'function' ? value : null;
+        if (handler !== null) nativeAdd.call(window, 'pagehide', handler);
+      }
+    });
+  } catch (_) {}
+})();`
+    }
+
     // Host-to-iframe theme color delivery: same direction as the viewport
     // message, no token (it can only change the sandbox's own canvas). It also
     // watches the body/html theme attributes and prefers-color-scheme so a
@@ -255,6 +293,7 @@
       // and card surfaces (`.tactics-panel`, status cards) untouched.
       const canvas = `<style>html{background:var(--dt-host-background)!important;}</style>`
       // 视口脚本进 head（先于 body 样式首帧解析，避免塌陷闪动），reporter 留 body 末
+      const unloadCompat = `<script>${frontendUnloadCompatScript()}</script>`
       const viewport = `<script>${frontendViewportScript()}</script>`
       const theme = `<script>${frontendThemeScript()}</script>`
       // 酒馆助手兼容层（2026-10-20）：库脚本 + TavernHelper shim 进 head，前端
@@ -264,9 +303,9 @@
       if (/<html(?:\s[^>]*)?>/i.test(source)) {
         let documentText = source
         if (/<head(?:\s[^>]*)?>/i.test(documentText)) {
-          documentText = documentText.replace(/<head(?:\s[^>]*)?>/i, (tag) => `${tag}${csp}${reset}${viewport}${theme}${helper}`)
+          documentText = documentText.replace(/<head(?:\s[^>]*)?>/i, (tag) => `${tag}${csp}${unloadCompat}${reset}${viewport}${theme}${helper}`)
         } else {
-          documentText = documentText.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${csp}${reset}${viewport}${theme}${helper}</head>`)
+          documentText = documentText.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${csp}${unloadCompat}${reset}${viewport}${theme}${helper}</head>`)
         }
         if (/<\/body\s*>/i.test(documentText)) {
           return documentText.replace(/<\/body\s*>/i, `${canvas}${reporter}</body>`)
@@ -280,7 +319,7 @@
       const bodyMatch = /<body(?:\s[^>]*)?>([\s\S]*?)<\/body\s*>/i.exec(source)
       const headContent = headMatch ? headMatch[1] : ''
       const bodyContent = bodyMatch ? bodyMatch[1] : source
-      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${reset}${viewport}${theme}${helper}${headContent}</head><body>${bodyContent}${canvas}${reporter}</body></html>`
+      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${unloadCompat}${reset}${viewport}${theme}${helper}${headContent}</head><body>${bodyContent}${canvas}${reporter}</body></html>`
     }
 
     // 宿主→iframe 视口投递（A-4）：iframe 的 --dt-viewport-height 需要"真实可视区
@@ -476,10 +515,10 @@
     // `frame.prefs` 后由宿主落到真实元素。height 用 !important，避免被
     // FrontendFrame 的高度状态覆盖；侧栏里 iframe 是独子时连外框一起收起，
     // 不留空白卡片。
-    function applyFramePrefs(frame, prefs) {
-      const wrapper = frame.parentElement && frame.parentElement.children.length === 1
-        ? frame.parentElement
-        : null
+    function applyFramePrefs(frame, prefs, manualHeight) {
+      // The resize handle lives beside the iframe, so the old "only child"
+      // wrapper test no longer finds the frame container.
+      const wrapper = frame.closest('.dt-frontend-resizable')
       if (prefs.hidden === true) {
         frame.style.setProperty('display', 'none', 'important')
         if (wrapper) wrapper.style.setProperty('display', 'none', 'important')
@@ -487,6 +526,9 @@
       }
       frame.style.removeProperty('display')
       if (wrapper) wrapper.style.removeProperty('display')
+      // A height the user dragged is an explicit override; card frame.prefs
+      // must not snap it back on the next helper message.
+      if (manualHeight === true) return
       if (typeof prefs.height === 'number' && Number.isFinite(prefs.height) && prefs.height > 0) {
         // Visible frames keep at least one control row: the action console reports
         // its panel height, and a 0/1px clamp would clip the whole console while
@@ -497,7 +539,7 @@
       }
     }
 
-    function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId) {
+    function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef) {
       const bindingRef = useRef(binding)
       bindingRef.current = binding
       const previousRef = useRef(null)
@@ -595,7 +637,7 @@
           if (data.op === 'frame.prefs') {
             const frame = frameRef.current
             if (frame) {
-              applyFramePrefs(frame, data.payload && typeof data.payload === 'object' ? data.payload : {})
+              applyFramePrefs(frame, data.payload && typeof data.payload === 'object' ? data.payload : {}, manualHeightRef.current !== null)
             }
             reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { applied: frame !== null } })
             return
@@ -657,7 +699,11 @@
       return useSyncExternalStore(subscribe, read, read)
     }
 
+    const FRONTEND_AUTO_MIN_HEIGHT = 80
+    const FRONTEND_AUTO_MAX_HEIGHT = 1200
+
     function FrontendFrame({ html, token, binding, refreshKey, messageId, hostSessionId }) {
+      const t = useTranslate()
       const frameRef = useRef(null)
       // Initial canvas color: resolve the DSH native background once on first
       // render; later theme flips go through postMessage, so the srcdoc is not
@@ -667,9 +713,20 @@
       const allowExternalResources = useFrontendAllowExternalResources()
       const [height, setHeight] = useState(120)
       const [storageSeed, setStorageSeed] = useState(null)
+      const {
+        dragging,
+        effectiveHeight,
+        manualHeight,
+        manualHeightRef,
+        startResize,
+        moveResize,
+        endResize,
+        resetManualHeight,
+        keyResize,
+      } = useFrontendResize(frameRef, height, storageSeed !== null)
       const postViewport = useViewportBridge(frameRef)
       const postTheme = useThemeBridge(frameRef)
-      useHelperBridge(frameRef, token, binding, `${refreshKey}:${storageSeed === null ? 'seed' : 'ready'}`, hostSessionId)
+      useHelperBridge(frameRef, token, binding, `${refreshKey}:${storageSeed === null ? 'seed' : 'ready'}`, hostSessionId, manualHeightRef)
       useEffect(() => {
         let cancelled = false
         const character = binding?.character
@@ -688,7 +745,7 @@
           if (!data || data.type !== FRONTEND_HEIGHT_MESSAGE || data.token !== token) return
           if (event.source !== frameRef.current?.contentWindow) return
           if (typeof data.height !== 'number' || !Number.isFinite(data.height)) return
-          setHeight(Math.max(80, Math.min(Math.ceil(data.height), 1200)))
+          setHeight(Math.max(FRONTEND_AUTO_MIN_HEIGHT, Math.min(Math.ceil(data.height), FRONTEND_AUTO_MAX_HEIGHT)))
         }
         addEventListener('message', onMessage)
         return () => removeEventListener('message', onMessage)
@@ -699,16 +756,35 @@
           style: { height: 120, background: initialBackgroundRef.current },
         })
       }
-      return h('iframe', {
-        ref: frameRef,
-        className: 'dt-frontend-frame',
-        // 卡前端用 prompt/confirm 做方案命名/删除确认（ST 同款交互）；没有
-        // allow-modals 时 Chromium 直接忽略并返回 null，按钮看起来"没反应"。
-        sandbox: 'allow-scripts allow-modals',
-        referrerPolicy: 'no-referrer',
-        title: 'Tavern frontend',
-        srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current, storageSeed),
-        onLoad: () => { postViewport(); postTheme() },
-        style: { height, background: initialBackgroundRef.current },
-      })
+      return h('div', { className: `dt-frontend-resizable${dragging ? ' dt-frontend-resizable-dragging' : ''}` },
+        h('iframe', {
+          ref: frameRef,
+          className: 'dt-frontend-frame',
+          // 卡前端用 prompt/confirm 做方案命名/删除确认（ST 同款交互）；没有
+          // allow-modals 时 Chromium 直接忽略并返回 null，按钮看起来"没反应"。
+          sandbox: 'allow-scripts allow-modals',
+          referrerPolicy: 'no-referrer',
+          title: 'Tavern frontend',
+          srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current, storageSeed),
+          onLoad: () => { postViewport(); postTheme() },
+          style: { height: effectiveHeight, background: initialBackgroundRef.current },
+        }),
+        h('div', {
+          className: 'dt-frontend-resize-handle',
+          role: 'separator',
+          tabIndex: 0,
+          'aria-orientation': 'horizontal',
+          'aria-label': t('frontend.resizeHint'),
+          'aria-valuemin': FRONTEND_MANUAL_MIN_HEIGHT,
+          'aria-valuemax': FRONTEND_MANUAL_MAX_HEIGHT,
+          'aria-valuenow': Math.round(effectiveHeight),
+          'data-manual': manualHeight === null ? 'false' : 'true',
+          title: t('frontend.resizeHint'),
+          onPointerDown: startResize,
+          onPointerMove: moveResize,
+          onPointerUp: endResize,
+          onPointerCancel: endResize,
+          onDoubleClick: resetManualHeight,
+          onKeyDown: keyResize,
+        }, h('span', { className: 'dt-frontend-resize-grip' })))
     }

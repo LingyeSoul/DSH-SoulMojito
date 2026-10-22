@@ -2,6 +2,7 @@
   "fragments": [
     "00-shell-head.js",
     "10-frontend-frame.js",
+    "10b-frontend-resize.js",
     "11-helper-bridge.js",
     "12-frontend-storage.js",
     "20-mods-bridge.js",

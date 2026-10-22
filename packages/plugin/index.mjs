@@ -8108,6 +8108,44 @@ var CRC_TABLE2 = (() => {
   return table;
 })();
 
+// packages/tavern-format/src/card.ts
+function cardDataToRaw2(ir) {
+  const rawBase = typeof ir.raw["data"] === "object" && ir.raw["data"] !== null ? structuredClone(ir.raw["data"]) : {};
+  const data = { ...rawBase };
+  const d = ir.data;
+  data["name"] = d.name;
+  data["description"] = d.description;
+  data["personality"] = d.personality;
+  data["scenario"] = d.scenario;
+  data["first_mes"] = d.firstMes;
+  data["mes_example"] = d.mesExample;
+  data["creator_notes"] = d.creatorNotes;
+  data["system_prompt"] = d.systemPrompt;
+  data["post_history_instructions"] = d.postHistoryInstructions;
+  data["alternate_greetings"] = d.alternateGreetings;
+  data["tags"] = d.tags;
+  data["creator"] = d.creator;
+  data["character_version"] = d.characterVersion;
+  data["extensions"] = d.extensions;
+  if (d.characterBook === void 0) delete data["character_book"];
+  else data["character_book"] = d.characterBook;
+  for (const [irKey, jsonKey] of V3_FIELDS2) {
+    const value = d[irKey];
+    if (value === void 0) delete data[jsonKey];
+    else data[jsonKey] = value;
+  }
+  return data;
+}
+var V3_FIELDS2 = [
+  ["assets", "assets"],
+  ["nickname", "nickname"],
+  ["creatorNotesMultilingual", "creator_notes_multilingual"],
+  ["source", "source"],
+  ["groupOnlyGreetings", "group_only_greetings"],
+  ["creationDate", "creation_date"],
+  ["modificationDate", "modification_date"]
+];
+
 // packages/tavern-format/src/worldbook.ts
 var KNOWN_FIELDS3 = /* @__PURE__ */ new Set([
   "uid",
@@ -13383,7 +13421,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.9".trim() : "";
-  const commit = true ? normalizeCommit("5453f72") : void 0;
+  const commit = true ? normalizeCommit("e298f72") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -30025,6 +30063,31 @@ function buildMessages(config) {
   }
   return messages;
 }
+function toolCallArgumentsText(message) {
+  if (message === void 0) return "";
+  const parts = [];
+  const collect = (value) => {
+    const call = asRecord2(value);
+    if (call === void 0) return;
+    const fn = asRecord2(call.function);
+    const raw = fn?.arguments ?? call.arguments;
+    if (typeof raw === "string") {
+      if (raw.trim() !== "") parts.push(raw);
+      return;
+    }
+    if (raw !== void 0 && raw !== null) {
+      try {
+        const text = JSON.stringify(raw);
+        if (text !== void 0) parts.push(text);
+      } catch {
+      }
+    }
+  };
+  const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  for (const call of calls) collect(call);
+  collect(message.function_call);
+  return parts.join("\n");
+}
 function completionText(payload) {
   const record = asRecord2(payload);
   const choices = record !== void 0 && Array.isArray(record.choices) ? record.choices : [];
@@ -30034,17 +30097,20 @@ function completionText(payload) {
   }
   const message = asRecord2(first.message);
   const content = message?.content;
-  if (typeof content === "string") return content;
+  if (typeof content === "string" && content.trim() !== "") return content;
   if (Array.isArray(content)) {
-    return content.map((part) => {
+    const joined = content.map((part) => {
       if (typeof part === "string") return part;
       const item = asRecord2(part);
       return item !== void 0 && typeof item.text === "string" ? item.text : "";
     }).join("");
+    if (joined.trim() !== "") return joined;
   }
-  if (typeof first.text === "string") return first.text;
+  if (typeof first.text === "string" && first.text.trim() !== "") return first.text;
+  const toolText = toolCallArgumentsText(message);
+  if (toolText.trim() !== "") return toolText;
   const finishReason = typeof first.finish_reason === "string" ? first.finish_reason : "unknown";
-  throw new FrontendGenerationError(`custom API /chat/completions returned no text (finish_reason=${finishReason})`);
+  throw new FrontendGenerationError(`custom API /chat/completions returned no text or tool arguments (finish_reason=${finishReason})`);
 }
 async function generateWithCustomApi(value) {
   const config = asRecord2(value);
@@ -30283,7 +30349,7 @@ async function buildSnapshot(db, state, character, chatId) {
         message: {},
         character: cloneJson(plainObject6(file?.card.data.extensions?.["variables"]) ?? {})
       },
-      characterData: file?.card.data ?? null,
+      characterData: file === void 0 ? null : cardDataToRaw2(file.card),
       scriptTrees: null,
       avatar: avatarPath(character)
     };
@@ -30310,7 +30376,7 @@ async function buildSnapshot(db, state, character, chatId) {
       message: lastIndex >= 0 ? cloneJson(readMessageVariables(chat.messages[lastIndex])) : {},
       character: cloneJson(plainObject6(file?.card.data.extensions?.["variables"]) ?? {})
     },
-    characterData: file?.card.data ?? null,
+    characterData: file === void 0 ? null : cardDataToRaw2(file.card),
     scriptTrees: scriptTrees ?? null,
     avatar: avatarPath(character)
   };
@@ -36178,7 +36244,11 @@ async function handleApi(ctx, req, res) {
       url.searchParams.get("store"),
       url.searchParams.get("key")
     );
-    if (record === void 0) return sendJson(res, 404, { ok: false, message: "idb record not found" });
+    if (record === void 0) {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
     res.statusCode = 200;
     res.setHeader("content-type", "application/octet-stream");
     res.setHeader("content-length", String(record.size));

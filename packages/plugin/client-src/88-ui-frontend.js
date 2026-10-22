@@ -141,6 +141,13 @@
       const [scriptBundle, setScriptBundle] = useState(null)
       const [scriptError, setScriptError] = useState('')
       const [autoStopped, setAutoStopped] = useState(false)
+      // Fullscreen fallback: a fixed overlay covering the viewport. The native
+      // right sidebar keeps the panel mounted, but this node is portalled to
+      // document.body so no ancestor overflow/transform can clip it.
+      const [expanded, setExpanded] = useState(false)
+      const [reloadNonce, setReloadNonce] = useState(0)
+      const [refreshing, setRefreshing] = useState(false)
+      const panelRef = useRef(null)
       const scriptRequestRef = useRef(0)
       const key = binding === undefined
         ? ''
@@ -165,6 +172,57 @@
       }
       const loadRef = useRef(load)
       useEffect(() => { loadRef.current = load })
+      // A manual refresh must remount the iframe: re-fetching the same HTML into
+      // an identical srcDoc does not reload the browsing context, so cards keep
+      // their old state and the button looked dead.
+      const refresh = () => {
+        if (refreshing) return
+        setRefreshing(true)
+        void loadRef.current().finally(() => {
+          setReloadNonce((value) => value + 1)
+          setRefreshing(false)
+        })
+      }
+      // Expanding must not move the panel node: reparenting the iframe destroys
+      // its browsing context and cards reload their data. Prefer the Fullscreen
+      // API on the existing element; the CSS overlay is only the fallback.
+      const toggleExpanded = () => {
+        if (expanded) {
+          if (document.fullscreenElement !== null && typeof document.exitFullscreen === 'function') {
+            void document.exitFullscreen().catch(() => {})
+          }
+          setExpanded(false)
+          return
+        }
+        const element = panelRef.current
+        if (element !== null && typeof element.requestFullscreen === 'function') {
+          try {
+            void element.requestFullscreen().then(() => setExpanded(true), () => setExpanded(true))
+            return
+          } catch {}
+        }
+        setExpanded(true)
+      }
+      useEffect(() => {
+        const onFullscreenChange = () => {
+          if (document.fullscreenElement === null) setExpanded(false)
+        }
+        document.addEventListener('fullscreenchange', onFullscreenChange)
+        return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
+      }, [])
+      useEffect(() => {
+        if (!expanded) return undefined
+        const onKeyDown = (event) => {
+          if (event.key !== 'Escape') return
+          if (document.fullscreenElement !== null && typeof document.exitFullscreen === 'function') {
+            void document.exitFullscreen().catch(() => {})
+            return
+          }
+          setExpanded(false)
+        }
+        addEventListener('keydown', onKeyDown)
+        return () => removeEventListener('keydown', onKeyDown)
+      }, [expanded])
       useEffect(() => {
         // 切换聊天时先摘掉上一份快照：避免一个渲染帧里显示别的聊天的 HUD。
         setSnapshot(null)
@@ -203,7 +261,7 @@
             }
           })
         return () => { scriptRequestRef.current += 1 }
-      }, [key, architecture, cardScriptsAutoRun, binding?.character])
+      }, [key, architecture, cardScriptsAutoRun, binding?.character, reloadNonce])
       // 卡脚本 tab 的「重置卡脚本」删除的是同一份会话副本：通知本 tab 立即停止
       // 自动运行，避免 iframe 继续跑已经被重置的旧源码。
       useEffect(() => {
@@ -232,14 +290,14 @@
       const scriptHostIndex = autoRunning && message !== undefined
         ? frontendCardScriptHostIndex(message.documents)
         : -1
-      const frameKey = `${message?.index ?? 'none'}:`
+      const frameKey = `${message?.index ?? 'none'}:${reloadNonce}:`
         + (autoRunning ? scripts.map((script) => `${script.id}:${script.content.length}`).join('|') : '')
       const frames = []
       if (message !== undefined) {
         message.documents.forEach((html, index) => {
           const composed = index === scriptHostIndex ? frontendWithCardScripts(html, scripts) : html
           frames.push(h('div', {
-            key: `${message.index}-${index}`,
+            key: `${message.index}-${index}-${reloadNonce}`,
             className: 'dt-frontend-side-frame',
           }, h(FrontendFrame, {
             html: composed,
@@ -252,7 +310,7 @@
         })
       } else if (autoRunning) {
         frames.push(h('div', {
-          key: 'card-scripts',
+          key: `card-scripts-${reloadNonce}`,
           className: 'dt-frontend-side-frame',
         }, h(FrontendFrame, {
           html: frontendWithCardScripts('', scripts),
@@ -263,19 +321,35 @@
           refreshKey: frameKey,
         })))
       }
-      return h('div', { className: 'dt-frontend-side', 'data-dsh-soulmojito-surface': 'frontend-sidebar' },
+      const panel = h('div', {
+        ref: panelRef,
+        className: `dt-frontend-side${expanded ? ' dt-frontend-side-expanded' : ''}`,
+        'data-dsh-soulmojito-surface': 'frontend-sidebar',
+        ...(expanded ? { role: 'dialog', 'aria-modal': 'true', 'aria-label': t('frontend.title') } : {}),
+      },
         h('div', { className: 'dt-frontend-side-head' },
           h('span', { className: 'dt-frontend-side-meta' },
             message
               ? t('frontend.floor', { index: message.index + 1 })
               : autoRunning ? t('frontend.cardScriptsOnly', { count: scripts.length }) : t('frontend.empty')),
-          h('button', {
-            type: 'button',
-            className: 'dt-frontend-side-refresh',
-            title: t('frontend.refresh'),
-            'aria-label': t('frontend.refresh'),
-            onClick: () => void loadRef.current(),
-          }, h(IconRefreshOutline16))),
+          h('div', { className: 'dt-frontend-side-actions' },
+            h('button', {
+              type: 'button',
+              className: 'dt-frontend-side-refresh',
+              title: t(expanded ? 'frontend.collapse' : 'frontend.expand'),
+              'aria-label': t(expanded ? 'frontend.collapse' : 'frontend.expand'),
+              'aria-pressed': expanded ? 'true' : 'false',
+              onClick: toggleExpanded,
+            }, h(expanded ? IconCollapse16 : IconExpand16)),
+            h('button', {
+              type: 'button',
+              className: 'dt-frontend-side-refresh',
+              title: t('frontend.refresh'),
+              'aria-label': t('frontend.refresh'),
+              'data-busy': refreshing ? 'true' : 'false',
+              disabled: refreshing,
+              onClick: refresh,
+            }, h(IconRefreshOutline16)))),
         error ? h('p', { className: 'dt-error' }, error) : null,
         scriptError ? h('p', { className: 'dt-error' }, t('frontend.cardScriptsError', { error: scriptError })) : null,
         autoRunning
@@ -301,4 +375,5 @@
               h(IconSparkle16, { size: 22 }),
               h('strong', null, t('frontend.emptyTitle')),
               h('p', { className: 'dt-hint' }, t('frontend.emptyHint'))))
+      return panel
     }
