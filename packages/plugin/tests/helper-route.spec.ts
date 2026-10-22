@@ -171,17 +171,27 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
       chatId,
       scope: 'message',
       messageId: 2,
-      variables: { 阶段: 'climax' },
+      variables: { stage: 'rising' },
     })
-    expect(written.body?.value).toEqual({ 阶段: 'climax' })
+    expect(written.body?.value).toEqual({ stage: 'rising' })
     const snapshot = await call({ op: 'snapshot', character: CHARACTER, chatId })
-    expect((snapshot.body?.value as Record<string, unknown>).variables).toMatchObject({ message: { 阶段: 'climax' } })
+    expect((snapshot.body?.value as Record<string, unknown>).variables).toMatchObject({ message: { stage: 'rising' } })
   })
 
-  it('rejects character writes and unknown scopes with explicit errors', async () => {
-    const character = await call({ op: 'variables.replace', character: CHARACTER, chatId, scope: 'character', variables: {} })
-    expect(character.status).toBe(500)
-    expect(String(character.body?.message)).toContain('read-only')
+  it('writes character scope as an overlay and keeps unknown scopes explicit', async () => {
+    const character = await call({
+      op: 'variables.replace',
+      character: CHARACTER,
+      chatId,
+      scope: 'character',
+      variables: { avatar: 'A', affinity: { snapshot: 1 } },
+    })
+    expect(character.status).toBe(200)
+    const snapshot = await call({ op: 'snapshot', character: CHARACTER, chatId })
+    expect((snapshot.body?.value as Record<string, unknown>).variables).toMatchObject({
+      character: { avatar: 'A', affinity: { snapshot: 1 } },
+    })
+    expect((await store.getState()).characterVariables?.[CHARACTER]).toEqual({ avatar: 'A', affinity: { snapshot: 1 } })
     const bogus = await call({ op: 'variables.replace', character: CHARACTER, chatId, scope: 'script', variables: {} })
     expect(String(bogus.body?.message)).toContain('unsupported variable scope')
   })

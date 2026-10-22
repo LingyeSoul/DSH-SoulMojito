@@ -2615,10 +2615,22 @@ var DEFAULT_STATE = {
   chats: {},
   regexScripts: [],
   scriptGlobals: {},
+  characterVariables: {},
   frontendStorage: {},
   modsEnabled: false,
   mods: { enabled: {} }
 };
+function normalizeCharacterVariables(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [character, tree] of Object.entries(value)) {
+    if (typeof tree !== "object" || tree === null || Array.isArray(tree)) continue;
+    const entries = {};
+    for (const [key, entry] of Object.entries(tree)) entries[key] = entry;
+    if (Object.keys(entries).length > 0) result[character] = entries;
+  }
+  return result;
+}
 function normalizeFrontendStorage(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
   const result = {};
@@ -3380,6 +3392,7 @@ var TavernStore = class _TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
+      characterVariables: normalizeCharacterVariables(parsed.characterVariables),
       frontendStorage: normalizeFrontendStorage(parsed.frontendStorage),
       compaction: normalizeCompactionOverride(parsed.compaction),
       // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false，只有显式 true 才开。

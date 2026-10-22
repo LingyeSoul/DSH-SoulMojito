@@ -234,6 +234,23 @@ export function buildIframeScript(
     state.variables[scope] = next;
   }
 
+  // MagVarUpdate and status panels call 'getAllVariables()' / 'Mvu.getAllVariables()'
+  // to read the currently effective MVU tree without knowing which scope holds it.
+  // Message variables win over chat, character and global.
+  function allVariables() {
+    var message = state.messages.length > 0
+      ? variablesFor({ type: 'message', message_id: state.messages.length - 1 })
+      : {};
+    return Object.assign(
+      {},
+      state.variables.global || {},
+      state.variables.character || {},
+      state.variables.chat || {},
+      message || {},
+    );
+  }
+  window.getAllVariables = function () { return clone(allVariables()) || {}; };
+
   function mvuScopeOption(option) {
     var type = option && option.type ? option.type : 'chat';
     if (type === 'message' || type === 'chat') return type;
@@ -629,6 +646,7 @@ export function buildIframeScript(
       });
     }
   };
+  window.Mvu.getAllVariables = window.getAllVariables;
   window.TavernHelper = window.TavernHelper || {};
   window.TavernHelper.Mvu = window.Mvu;
 
@@ -978,6 +996,7 @@ export function buildIframeScript(
 
   window.TavernHelper = {
     getVariables: window.getVariables,
+    getAllVariables: window.getAllVariables,
     replaceVariables: window.replaceVariables,
     updateVariablesWith: window.updateVariablesWith,
     insertOrAssignVariables: window.insertOrAssignVariables,
@@ -1130,6 +1149,36 @@ export function buildIframeScript(
   window.TavernHelper.getCharData = window.getCharData;
 
   window.SillyTavern = {
+    chat: state.messages,
+    chatMetadata: state.chatMetadata,
+    characters: window.getCharData('current') ? [window.getCharData('current')] : [],
+    characterId: 0,
+    name1: state.userName,
+    name2: state.characterName,
+    // MagVarUpdate's settings store and MVU panel read these objects directly.
+    // They are iframe-local; the plugin's own settings live in state.json.
+    extensionSettings: {},
+    chatCompletionSettings: {},
+    // MagVarUpdate constructs '_.debounce(SillyTavern.saveChat, 1000)' at module
+    // load. The helper RPC already persists variables/messages, so this is a
+    // promise-shaped no-op rather than a missing function (which would throw
+    // "Expected a function" before MVU can initialize).
+    saveChat: function () { return Promise.resolve(); },
+    saveSettingsDebounced: function () {},
+    getRequestHeaders: function () { return {}; },
+    getCurrentLocale: function () {
+      return typeof navigator !== 'undefined' && typeof navigator.language === 'string'
+        ? navigator.language
+        : 'en';
+    },
+    getChatCompletionModel: function () { return ''; },
+    registerMacro: function () {},
+    unregisterMacro: function () {},
+    registerFunctionTool: function () {},
+    unregisterFunctionTool: function () {},
+    ToolManager: {
+      isToolCallingSupported: function () { return false; },
+    },
     getContext: function () {
       return {
         chatId: state.chatId,
@@ -1270,6 +1319,7 @@ export function buildIframeScript(
     requestAnimationFrame: function (callback) { return window.requestAnimationFrame(callback); },
     cancelAnimationFrame: function (handle) { return window.cancelAnimationFrame(handle); },
     getVariables: window.getVariables,
+    getAllVariables: window.getAllVariables,
     replaceVariables: window.replaceVariables,
     updateVariablesWith: window.updateVariablesWith,
     insertOrAssignVariables: window.insertOrAssignVariables,
@@ -1327,8 +1377,31 @@ export function buildIframeScript(
     get Vue() { return window.Vue; },
     get YAML() { return window.YAML; },
     localStorage: window.__dshTavernStorage,
-    sessionStorage: window.__dshTavernSessionStorage
+    sessionStorage: window.__dshTavernSessionStorage,
+    // Host-realm bootstrap used by card scripts that create a postMessage
+    // function through 'window.top.Function'. CSP allows
+    // eval, and the function still runs inside this sandbox, not the host page.
+    Function: window.Function,
+    get window() { return host; },
+    get parent() { return host; },
+    get top() { return host; }
   };
+  // Fallback for browser globals a card reachable through 'window.top' expects
+  // (URL, Blob, MutationObserver, setTimeout, ...). Unknown members resolve to
+  // this iframe's own window, never to the real host page.
+  if (typeof Proxy === 'function') {
+    host = new Proxy(host, {
+      get: function (target, property) {
+        if (property in target) return target[property];
+        var value = window[property];
+        if (typeof value === 'function' && property !== 'Function' && property !== 'eval') return value.bind(window);
+        return value;
+      },
+      has: function (target, property) {
+        return property in target || property in window;
+      }
+    });
+  }
   window.__dshTavernHost = host;
   try { Object.defineProperty(window, 'parent', { value: host, configurable: true }); } catch (_) {}
   try { Object.defineProperty(window, 'top', { value: host, configurable: true }); } catch (_) {}

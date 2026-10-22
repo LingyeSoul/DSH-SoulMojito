@@ -2513,10 +2513,22 @@ var DEFAULT_STATE = {
   chats: {},
   regexScripts: [],
   scriptGlobals: {},
+  characterVariables: {},
   frontendStorage: {},
   modsEnabled: false,
   mods: { enabled: {} }
 };
+function normalizeCharacterVariables(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [character, tree] of Object.entries(value)) {
+    if (typeof tree !== "object" || tree === null || Array.isArray(tree)) continue;
+    const entries = {};
+    for (const [key, entry] of Object.entries(tree)) entries[key] = entry;
+    if (Object.keys(entries).length > 0) result[character] = entries;
+  }
+  return result;
+}
 function normalizeFrontendStorage(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
   const result = {};
@@ -3278,6 +3290,7 @@ var TavernStore = class _TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
+      characterVariables: normalizeCharacterVariables(parsed.characterVariables),
       frontendStorage: normalizeFrontendStorage(parsed.frontendStorage),
       compaction: normalizeCompactionOverride(parsed.compaction),
       // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false，只有显式 true 才开。
@@ -13421,7 +13434,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.9".trim() : "";
-  const commit = true ? normalizeCommit("e298f72") : void 0;
+  const commit = true ? normalizeCommit("c9b3bcc") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -30347,7 +30360,7 @@ async function buildSnapshot(db, state, character, chatId) {
         global: cloneJson(plainObject6(state.scriptGlobals) ?? {}),
         chat: {},
         message: {},
-        character: cloneJson(plainObject6(file?.card.data.extensions?.["variables"]) ?? {})
+        character: characterVariablesFor(state, character, file?.card.data.extensions?.["variables"])
       },
       characterData: file === void 0 ? null : cardDataToRaw2(file.card),
       scriptTrees: null,
@@ -30374,12 +30387,17 @@ async function buildSnapshot(db, state, character, chatId) {
       global: cloneJson(plainObject6(state.scriptGlobals) ?? {}),
       chat: cloneJson(chatVariables2),
       message: lastIndex >= 0 ? cloneJson(readMessageVariables(chat.messages[lastIndex])) : {},
-      character: cloneJson(plainObject6(file?.card.data.extensions?.["variables"]) ?? {})
+      character: characterVariablesFor(state, character, file?.card.data.extensions?.["variables"])
     },
     characterData: file === void 0 ? null : cardDataToRaw2(file.card),
     scriptTrees: scriptTrees ?? null,
     avatar: avatarPath(character)
   };
+}
+function characterVariablesFor(state, character, cardVariables) {
+  const overlay = plainObject6(state.characterVariables?.[character]);
+  if (overlay !== void 0) return cloneJson(overlay);
+  return cloneJson(plainObject6(cardVariables) ?? {});
 }
 function avatarPath(character) {
   return `/api/dsh-soulmojito/avatar/${encodeURIComponent(character)}`;
@@ -30421,7 +30439,13 @@ async function replaceVariables(db, state, character, chatId, body) {
     await persistChat(db, character, chatId, snapshot2.chat, snapshot2.revision);
     return tree;
   }
-  throw new Error("character variables are read-only in DSH-SoulMojito");
+  await db.updateState((current) => ({
+    characterVariables: {
+      ...current.characterVariables ?? {},
+      [character]: cloneJson(tree)
+    }
+  }));
+  return tree;
 }
 async function replaceMvuData(db, character, chatId, body) {
   const snapshot2 = await requireChat(db, character, chatId);

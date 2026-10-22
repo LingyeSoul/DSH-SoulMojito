@@ -61,7 +61,7 @@ Content-Security-Policy: default-src 'none'; connect-src 'none'; frame-src 'none
 | `'global'` | ✅ | ✅ | Tavern 状态 `scriptGlobals` | 所有聊天共享；随插件状态持久化 |
 | `'chat'` | ✅ | ✅ | 聊天文件 `chat_metadata.variables` | AgentTavern 会话**同时**写 chat 作用域变量存储（见 §1.3） |
 | `'message'` | ✅ | ✅ | 楼层的 `variables` 字段 | `message_id` 支持负数深度；越界会报错。读面在楼层没有 `stat_data` 时回退聊天作用域的 `stat_data`（MVU 卡首屏 `getVariables({type:'message'})` 的常见判据），第一次回写会把它物化到该楼层 |
-| `'character'` | ✅ | ❌ | 角色卡 `extensions.variables` | 写入抛 `character variables are read-only in DSH-SoulMojito` |
+| `'character'` | ✅ | ✅ | 角色变量覆盖层 `state.json` 的 `characterVariables` | 读面优先覆盖层，其次角色卡 `extensions.variables`；写面只落覆盖层，角色卡文件保持只读。删除 `characterVariables[角色名]` 即回到卡原版 |
 | `'preset'` | ❌ | ❌ | — | 抛 `unsupported variable scope 'preset'` |
 | `'script'` | ❌ | ❌ | — | 同上 |
 | `'extension'` | ❌ | ❌ | — | 同上 |
@@ -73,6 +73,7 @@ Content-Security-Policy: default-src 'none'; connect-src 'none'; frame-src 'none
 | 函数 | 状态 | 语义与差异 |
 |---|:--:|---|
 | `getVariables(option)` | ✅ | 同步返回**快照副本**（你随便改不会影响宿主）。缺省 `{type:'chat'}` |
+| `getAllVariables()` | ✅ | 同步返回当前生效的合并变量表：`global` ← `character` ← `chat` ← 最新楼层，后者覆盖前者；`stat_data` 可直接在顶层读到。`Mvu.getAllVariables()` 同义 |
 | `replaceVariables(vars, option?)` | ✅ | 整表替换，返回 `Promise<变量表>`。缺省 `{type:'chat'}` |
 | `updateVariablesWith(fn, option?)` | ✅ | `fn` 可以是同步或 async；收到的是副本，返回新表 |
 | `insertOrAssignVariables(vars, option?)` | ✅ | 顶层键合并（浅合并，与 JSR 一致） |
@@ -392,7 +393,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 
 | 函数 | 状态 | 说明 |
 |---|:--:|---|
-| `SillyTavern.getContext()` | ⚠️ | 只返回最小只读面：`chatId` / `chat` / `chat_metadata` / `name1`（你）/ `name2`（角色）/ `characterId`（恒 0）/ `characters`（当前角色卡）/ `getCharacterCardFields()`（恒空字段）。**没有** `extensionSettings`、`eventSource`、`eventTypes`、`saveSettingsDebounced` 等 |
+| `SillyTavern.getContext()` | ⚠️ | 只返回最小只读面：`chatId` / `chat` / `chat_metadata` / `name1`（你）/ `name2`（角色）/ `characterId`（恒 0）/ `characters`（当前角色卡）/ `getCharacterCardFields()`（恒空字段）。`getContext()` 里仍没有 `extensionSettings`、`eventSource`、`eventTypes`；这些兼容字段直接挂在 `SillyTavern.*`（`extensionSettings` / `chatCompletionSettings` 为 iframe 内存，`saveChat` / `saveSettingsDebounced` 为 Promise/空操作——变量与楼层已由 helper RPC 落盘，不会写宿主设置） |
 | `getCurrentMessageId()` | ✅ | 当前 iframe 所属楼层；侧栏/MVU 模板为 `-1`（最新）。没有楼层绑定时也不要拿它做范围上界，优先 `getLastMessageId()` |
 | `getLorebook(name)` / `getWorldbook(name)` | ✅ | 返回条目数组（含 `world` 字段）。名字缺省取角色卡绑定的世界书，其次全局激活的第一本，最后卡内嵌书名。**优先读当前聊天的会话副本**，没有副本才读基础 `worlds/` 资产 |
 | `getWorldbookNames()` / `getLorebookNames()` | ✅ | 全部世界书名 |
@@ -435,12 +436,12 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 
 | 函数 | 结果 |
 |---|---|
-| `generate()` / `generateRaw()` | ❌ 不存在 |
-| `stopGenerationById()` / `stopAllGeneration()` | ❌ 不存在 |
-| `triggerSlash('/trigger')` / `'/regenerate'` / `'/stop'` | ⚠️ 命令存在但**没有接驱动**：`/trigger`、`/regenerate`、`/stop` 会抛 `trigger is not available in this environment` 一类错误 |
+| `generate()` / `generateRaw()` | ✅ / ⚠️ 见 §2.4：卡内 OpenAI 兼容源由宿主代理，非流式返回文本 |
+| `stopGenerationById()` / `stopAllGeneration()` | ⚠️ 返回 `false`（非流式无可取消句柄） |
+| `triggerSlash('/trigger')` | ⚠️ **仅**支持「本 iframe 刚用 `createChatMessages` 创建了用户楼层」这一种姿势：桥接层把该楼层替换成一次宿主 composer 发送，随后由 AgentLoop 生成；没有待发送楼层时仍抛 `trigger is not available in this context` |
+| `triggerSlash('/regenerate')` / `'/stop'` | ❌ 没有接驱动，会抛 `trigger is not available in this environment` 一类错误 |
 
-生成由宿主 AgentLoop 驱动。让前端触发生成会与宿主的 turn 管理冲突（双重驱动、
-重复结算），这是架构边界，不是"还没做"。
+生成由宿主 AgentLoop 驱动。卡前端只能通过上述受控路径把**自己刚创建的那一条用户楼层**交给宿主；不能让前端任意改写已有历史或重复结算，这是架构边界，不是"还没做"。
 
 ### 5.2 世界书 / 角色卡写入
 
@@ -536,6 +537,12 @@ await fetch  // 🧱 默认不可用（CSP connect-src 'none'）；设置页放�
 | 改了 `data` 但界面没变 | `setChatMessages` 的 `refresh` 无效 | 自己重绘 |
 | `renderMarkdown` 输出原文 | showdown 脚本未加载（CDN 被墙/离线） | 自行降级或内联渲染 |
 | `Mvu.getMvuData()` 返回 `undefined` | 聊天还没有 `stat_data`（新卡首轮尚未投影）或当前卡未被识别为 MVU 卡 | 先发一轮让投影器结算；确认卡内有 `<UpdateVariable>` / `MagVarUpdate` / `StatusPlaceHolderImpl` |
+| 启动时报 `lodash.min.js: Expected a function`，调用栈指向 `util.ts` | 卡脚本在模块求值阶段执行 `_.debounce(SillyTavern.saveChat, …)`，旧 shim 上没有 `SillyTavern.saveChat` | 更新构建：`SillyTavern.saveChat` 返回已解决的 Promise（变量/楼层写盘仍走 helper RPC），`saveSettingsDebounced`、`extensionSettings`、`chatCompletionSettings` 同步补齐 |
+| 卡报 `getAllVariables is not defined`，或 `Mvu.getAllVariables is not a function` | 卡用合并变量表读当前 MVU 树 | 更新构建：`window.getAllVariables()` 与 `Mvu.getAllVariables()` 返回 `global ← character ← chat ← 最新楼层` 的合并表，`stat_data` 在顶层 |
+| 控制台反复 500 且卡报 `character variables are read-only` | 卡把 `{type:'character'}` 当可写表（立绘偏好、镜像快照） | 更新构建：角色作用域写入 `state.json` 的 `characterVariables[角色名]` 覆盖层，角色卡文件保持只读；删除该键即重置 |
+| 首次挂载报 `棋盘宿主通信初始化失败：页面安全策略阻止了本地消息桥` | 卡通过 `window.top.Function` 在“宿主 realm”构造 `postMessage` 函数，旧 facade 没有转发 `Function` | 更新构建：`window.top` / `window.parent` facade 暴露 `Function` 与浏览器全局兜底；函数仍在沙箱 iframe 内执行 |
+| 卡点击发送后提示 `/trigger is not available` 并回退到 DOM 派发 | 卡用 `createChatMessages` 建用户楼层后要求前端触发宿主生成 | 更新构建：该 iframe 刚创建的末条用户楼层会被替换成一次宿主 composer 发送；其它 `/trigger` 调用仍明确报错，避免双驱动或重复楼层 |
+| 卡前端里的 `iframe` / `srcdoc` 画面空白 | 嵌套 `srcdoc` 本身不受 `frame-src 'none'` 拦截；常见原因是父 facade 缺少 `Function`、`document.createElement` 或浏览器全局 | 先用 iframe console 确认初始化错误；更新构建中的 facade 兜底 |
 | 状态栏一直空 | 模型没有输出 `<UpdateVariable>`，或卡内状态栏正则被禁用 | 用提示词查看器看实发请求；确认正则未 disabled；首轮检查 `initialized_lorebooks` 是否已播种 |
 | 表单/快速选项点了没反应 | 宿主页找不到可见 composer，或输入框被面板遮挡 | 看 iframe console 的 `no visible host composer textarea found`；先把输入框滚动到可视区 |
 | 卡里的按钮点了没反应 | 按钮是 `disabled` / `aria-disabled="true"`（例如行动台的「必杀」在净化之力 <100 时），浏览器不派发 click；或 MVU 写入失败被卡自己吞掉 | 宿主不再为 disabled 控件额外弹提示（以卡自己的禁用态为准）；变量写入失败仍会弹「变量写入失败: …」toast |

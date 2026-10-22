@@ -545,9 +545,15 @@
       const previousRef = useRef(null)
       const composerDraftRef = useRef({ element: null, text: '' })
       const composerChainRef = useRef(Promise.resolve())
+      // A card's createChatMessages + /trigger pair is common. A Tavern floor cannot start a DSH turn by itself, so the
+      // bridge remembers the text created by this iframe and, on /trigger,
+      // replaces that floor with one host composer send. Without this the card
+      // falls back to DOM dispatch and duplicates the user message.
+      const pendingTriggerRef = useRef(null)
       useEffect(() => {
         previousRef.current = null
         composerDraftRef.current = { element: null, text: '' }
+        pendingTriggerRef.current = null
       }, [token])
       useEffect(() => {
         const reply = (payload, transfer) => {
@@ -652,6 +658,45 @@
               .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
             return
           }
+          if (data.op === 'slash' && String(data.payload?.command ?? '') === '/trigger') {
+            const pending = pendingTriggerRef.current
+            // Only a user floor created by this iframe can be replaced. Other
+            // /trigger callers keep the explicit boundary error below.
+            if (pending !== null && typeof hostSessionId === 'string' && hostSessionId !== '') {
+              pendingTriggerRef.current = null
+              const run = async () => {
+                const conversation = hostConversation(hostSessionId)
+                if (conversation === undefined) {
+                  throw new Error('/trigger is not available in this context (no AgentTavern session)')
+                }
+                const snapshot = await api('helper', {
+                  method: 'POST',
+                  headers: jsonHeaders(),
+                  body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
+                })
+                const messages = Array.isArray(snapshot?.value?.messages) ? snapshot.value.messages : []
+                const last = messages[messages.length - 1]
+                if (last !== undefined && last.role === 'user' && last.message === pending.text) {
+                  await api('helper', {
+                    method: 'POST',
+                    headers: jsonHeaders(),
+                    body: JSON.stringify({
+                      op: 'messages.delete',
+                      character: current.character,
+                      chatId: current.chatId,
+                      messageIds: [last.message_id],
+                    }),
+                  })
+                }
+                await conversation.send(pending.text)
+                return { output: '' }
+              }
+              run()
+                .then((value) => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value }))
+                .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
+              return
+            }
+          }
           void api('helper', {
             method: 'POST',
             headers: jsonHeaders(),
@@ -664,6 +709,16 @@
           }).then((result) => {
             reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: result.value })
             if (data.op === 'storage.set') frontendStorageCache.delete(current.character)
+            if (data.op === 'messages.create') {
+              const created = Array.isArray(data.payload?.messages) ? data.payload.messages : []
+              const user = created.find((message) => message
+                && (message.role === 'user' || message.is_user === true)
+                && typeof message.message === 'string'
+                && message.message !== '')
+              pendingTriggerRef.current = user === undefined ? null : { text: user.message }
+            } else if (data.op === 'messages.set' || data.op === 'messages.delete') {
+              pendingTriggerRef.current = null
+            }
             // 状态已变：重投快照（并据比对广播事件），让前端后续同步读取拿到新值。
             // mvu.replace 同样写变量：不重投的话，同聊天的状态栏 iframe 收不到
             // 行动台/按钮刚刚写入的新 stat_data。

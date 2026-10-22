@@ -35,6 +35,8 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       'const HELPER_SNAPSHOT_MESSAGE = DshJsrRuntime.HELPER_SNAPSHOT_MESSAGE',
       'function frontendHelperScript(token, messageId, storage)',
       'window.getVariables = function',
+      'window.getAllVariables = function',
+      'window.Mvu.getAllVariables = window.getAllVariables',
       'window.replaceVariables = function',
       'window.updateVariablesWith = function',
       'window.insertOrAssignVariables = function',
@@ -46,6 +48,12 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       'window.eventOn = function',
       'window.tavern_events =',
       'window.SillyTavern = {',
+      'saveChat: function () { return Promise.resolve(); }',
+      'saveSettingsDebounced: function () {}',
+      'extensionSettings: {},',
+      'ToolManager: {',
+      'Function: window.Function',
+      'get: function (target, property) {',
       'window.getCurrentMessageId = function',
       'window.Mvu = {',
       'getMvuData: function',
@@ -63,6 +71,9 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       "call('mvu.replace'",
       "call('composer.fill'",
       "call('composer.send'",
+      'pendingTriggerRef',
+      "String(data.payload?.command ?? '') === '/trigger'",
+      'conversation.send(pending.text)',
     ]) {
       expect(source).toContain(marker)
     }

@@ -450,6 +450,8 @@ describe('TavernStore', () => {
       // 禁用投降（2026-10-14 用户需求；面板「游戏」分区开关）默认关闭。
       gamesDisableResign: false,
       modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
+      // Frontend character-scope overlay (2026-10-22): empty by default.
+      characterVariables: {},
       // 美化前端 localStorage 持久层（2026-10-22）：默认空表。
       frontendStorage: {},
       // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false。

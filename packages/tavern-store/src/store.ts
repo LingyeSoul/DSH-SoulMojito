@@ -166,6 +166,15 @@ export interface TavernState {
   /** STscript 全局变量。 */
   scriptGlobals: Record<string, string | number | boolean>
   /**
+   * Frontend-written character-scope variable overlay (2026-10-22).
+   *
+   * JSR cards treat `{ type: 'character' }` as a writable table (portrait
+   * preferences, mirror snapshots). The card file stays read-only; writes land
+   * here and are merged ahead of the card's `extensions.variables` on read.
+   * Delete the key for one character to reset that overlay.
+   */
+  characterVariables?: Record<string, Record<string, unknown>>
+  /**
    * 美化前端 localStorage 的持久层（2026-10-22）：按角色隔离的键值表。
    * 沙箱 iframe 没有同源存储，卡前端（示例卡3）把 API 源/UI 设置写 localStorage；
    * 插件把小型设置写回宿主状态，重启/刷新后由 srcdoc 同步播种。大资源包仍由卡
@@ -317,9 +326,23 @@ const DEFAULT_STATE: TavernState = {
   chats: {},
   regexScripts: [],
   scriptGlobals: {},
+  characterVariables: {},
   frontendStorage: {},
   modsEnabled: false,
   mods: { enabled: {} },
+}
+
+/** characterVariables keeps only per-character plain objects; hand edits are tolerant. */
+function normalizeCharacterVariables(value: unknown): Record<string, Record<string, unknown>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const result: Record<string, Record<string, unknown>> = {}
+  for (const [character, tree] of Object.entries(value)) {
+    if (typeof tree !== 'object' || tree === null || Array.isArray(tree)) continue
+    const entries: Record<string, unknown> = {}
+    for (const [key, entry] of Object.entries(tree)) entries[key] = entry
+    if (Object.keys(entries).length > 0) result[character] = entries
+  }
+  return result
 }
 
 /** frontendStorage 只保留字符→字符串的表；手改 state.json 的容错。 */
@@ -1226,6 +1249,7 @@ export class TavernStore {
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       scriptGlobals: parsed.scriptGlobals ?? {},
+      characterVariables: normalizeCharacterVariables(parsed.characterVariables),
       frontendStorage: normalizeFrontendStorage(parsed.frontendStorage),
       compaction: normalizeCompactionOverride(parsed.compaction),
       // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false，只有显式 true 才开。

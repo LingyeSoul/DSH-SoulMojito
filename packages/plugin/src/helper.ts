@@ -10,7 +10,8 @@
  *
  * The client always names the binding (character/chatId) from its own session
  * binding — the iframe can never address another chat. Supported families:
- * variables (global/chat/message read+write, character read-only), chat messages
+ * variables (global/chat/message/character read+write; character writes are an
+ * overlay in state.json, never the card file), chat messages
  * (get/set/create/delete), character read, lorebook read, slash commands, regex
  * list/replace, plus a snapshot used for synchronous iframe reads.
  */
@@ -269,7 +270,7 @@ async function buildSnapshot(db: TavernStore, state: TavernState, character: str
         global: cloneJson(plainObject(state.scriptGlobals) ?? {}),
         chat: {},
         message: {},
-        character: cloneJson(plainObject(file?.card.data.extensions?.['variables']) ?? {}),
+        character: characterVariablesFor(state, character, file?.card.data.extensions?.['variables']),
       },
       characterData: file === undefined ? null : cardDataToRaw(file.card),
       scriptTrees: null,
@@ -296,12 +297,23 @@ async function buildSnapshot(db: TavernStore, state: TavernState, character: str
       global: cloneJson(plainObject(state.scriptGlobals) ?? {}),
       chat: cloneJson(chatVariables),
       message: lastIndex >= 0 ? cloneJson(readMessageVariables(chat.messages[lastIndex])) : {},
-      character: cloneJson(plainObject(file?.card.data.extensions?.['variables']) ?? {}),
+      character: characterVariablesFor(state, character, file?.card.data.extensions?.['variables']),
     },
     characterData: file === undefined ? null : cardDataToRaw(file.card),
     scriptTrees: scriptTrees ?? null,
     avatar: avatarPath(character),
   }
+}
+
+/**
+ * Character scope read: a frontend overlay wins over the card's read-only
+ * `extensions.variables`. Cards use `updateVariablesWith` on this scope, so the
+ * overlay is normally a complete table (not a partial patch).
+ */
+function characterVariablesFor(state: TavernState, character: string, cardVariables: unknown): JsonObject {
+  const overlay = plainObject(state.characterVariables?.[character])
+  if (overlay !== undefined) return cloneJson(overlay)
+  return cloneJson(plainObject(cardVariables) ?? {})
 }
 
 function avatarPath(character: string): string {
@@ -356,7 +368,15 @@ async function replaceVariables(
     await persistChat(db, character, chatId, snapshot.chat, snapshot.revision)
     return tree
   }
-  throw new Error('character variables are read-only in DSH-SoulMojito')
+  // Character scope writes an overlay in state.json; the card file and its
+  // `extensions.variables` stay read-only (same trust boundary as lorebooks).
+  await db.updateState((current) => ({
+    characterVariables: {
+      ...(current.characterVariables ?? {}),
+      [character]: cloneJson(tree),
+    },
+  }))
+  return tree
 }
 
 /**
