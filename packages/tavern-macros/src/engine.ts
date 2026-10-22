@@ -404,7 +404,7 @@ export function createMacroEngine(init: MacroEngineInit): MacroEngine {
         case '<char>':
         case '{char}':
           return init.char;
-        case '%USERNAME%':
+        case '<user>':
         case '{user}':
           return init.user;
         case '<group>':

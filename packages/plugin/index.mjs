@@ -11968,7 +11968,7 @@ function createMacroEngine(init) {
         case "<char>":
         case "{char}":
           return init.char;
-        case "%USERNAME%":
+        case "<user>":
         case "{user}":
           return init.user;
         case "<group>":
@@ -13434,7 +13434,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.9".trim() : "";
-  const commit = true ? normalizeCommit("901c9c7") : void 0;
+  const commit = true ? normalizeCommit("936feaf") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
