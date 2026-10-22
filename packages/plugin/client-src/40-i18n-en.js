@@ -653,6 +653,7 @@
       'frontend.cardScriptsStopped': 'Auto-run stopped. Toggle the setting or reopen this tab to resume.',
       'frontend.cardScriptsError': 'Failed to load card scripts: {error}',
       'frontend.cardScriptsOnly': 'Card script overlays ({count})',
+      'frontend.cardScriptsOnlyHint': 'This chat has no complete-HTML message, so card scripts run on a blank canvas. If the card builds its UI from a regex (for example an opening regex), enable that script under Regex, then use Refresh above.',
       // Card scripts sidebar (2026-10-21): manual runner for the card's
       // tavern_helper script tree. zh/en keys must stay mirrored.
       'cardScripts.title': 'Card scripts',

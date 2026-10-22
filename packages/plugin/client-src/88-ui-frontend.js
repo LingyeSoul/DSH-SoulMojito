@@ -366,6 +366,9 @@
           ? h('p', { className: 'dt-hint' }, t('frontend.cardScriptsStopped'))
           : null,
         autoRunning ? h('p', { className: 'dt-card-scripts-warning', role: 'note' }, t('cardScripts.warning')) : null,
+        autoRunning && !message
+          ? h('p', { className: 'dt-hint' }, t('frontend.cardScriptsOnlyHint'))
+          : null,
         scriptsPending
           ? h('div', { className: 'dt-frontend-side-empty' }, h(IconSparkle16, { size: 22 }),
             h('span', null, t('cardScripts.loading')))

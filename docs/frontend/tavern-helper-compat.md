@@ -549,6 +549,7 @@ await fetch  // 🧱 默认不可用（CSP connect-src 'none'）；设置页放�
 | 首次挂载报 `棋盘宿主通信初始化失败：页面安全策略阻止了本地消息桥` | 卡通过 `window.top.Function` 在“宿主 realm”构造 `postMessage` 函数，旧 facade 没有转发 `Function` | 更新构建：`window.top` / `window.parent` facade 暴露 `Function` 与浏览器全局兜底；函数仍在沙箱 iframe 内执行 |
 | 卡点击发送后提示 `/trigger is not available` 并回退到 DOM 派发 | 卡用 `createChatMessages` 建用户楼层后要求前端触发宿主生成 | 更新构建：该 iframe 刚创建的末条用户楼层会被替换成一次宿主 composer 发送；其它 `/trigger` 调用仍明确报错，避免双驱动或重复楼层 |
 | 卡前端里的 `iframe` / `srcdoc` 画面空白 | 嵌套 `srcdoc` 本身不受 `frame-src 'none'` 拦截；常见原因是父 facade 缺少 `Function`、`document.createElement` 或浏览器全局 | 先用 iframe console 确认初始化错误；更新构建中的 facade 兜底 |
+| 「美化前端」显示空白画布，但「自动运行中（N 个卡脚本）」 | 当前聊天没有完整 HTML 楼层；自动运行的卡脚本只是浮层，不是主界面。很多卡的开局界面由**正则**生成（例如「开局正则」匹配首楼并替换成完整 HTML），该正则被 `disabled: true` 跳过 | 在「正则脚本」分区「从角色卡同步」，启用匹配首楼的 HTML 正则（必要时同步启用状态栏正则），回「美化前端」点刷新；首楼已保存时重渲染即可，必要时新建聊天/重生成首楼 |
 | 状态栏一直空 | 模型没有输出 `<UpdateVariable>`，或卡内状态栏正则被禁用 | 用提示词查看器看实发请求；确认正则未 disabled；首轮检查 `initialized_lorebooks` 是否已播种 |
 | 表单/快速选项点了没反应 | 宿主页找不到可见 composer，或输入框被面板遮挡 | 看 iframe console 的 `no visible host composer textarea found`；先把输入框滚动到可视区 |
 | 卡里的按钮点了没反应 | 按钮是 `disabled` / `aria-disabled="true"`（例如行动台的「必杀」在净化之力 <100 时），浏览器不派发 click；或 MVU 写入失败被卡自己吞掉 | 宿主不再为 disabled 控件额外弹提示（以卡自己的禁用态为准）；变量写入失败仍会弹「变量写入失败: …」toast |

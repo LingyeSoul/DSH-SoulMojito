@@ -2714,6 +2714,7 @@ window.__ModuleLoader__.load({
       'frontend.cardScriptsStopped': 'Auto-run stopped. Toggle the setting or reopen this tab to resume.',
       'frontend.cardScriptsError': 'Failed to load card scripts: {error}',
       'frontend.cardScriptsOnly': 'Card script overlays ({count})',
+      'frontend.cardScriptsOnlyHint': 'This chat has no complete-HTML message, so card scripts run on a blank canvas. If the card builds its UI from a regex (for example an opening regex), enable that script under Regex, then use Refresh above.',
       // Card scripts sidebar (2026-10-21): manual runner for the card's
       // tavern_helper script tree. zh/en keys must stay mirrored.
       'cardScripts.title': 'Card scripts',
@@ -3570,6 +3571,7 @@ window.__ModuleLoader__.load({
       'frontend.cardScriptsStopped': '已停止自动运行；重新开关设置或重新打开本 tab 可恢复。',
       'frontend.cardScriptsError': '读取卡脚本失败：{error}',
       'frontend.cardScriptsOnly': '卡脚本浮动界面（{count} 个）',
+      'frontend.cardScriptsOnlyHint': '当前聊天没有完整 HTML 楼层，卡脚本只在空白画布上运行。如果卡的界面来自正则（例如「开局正则」），请在「正则脚本」分区启用它，然后点上方的刷新。',
       // 卡脚本右栏（2026-10-21）：卡内 tavern_helper 脚本树的手动运行入口。
       'cardScripts.title': '卡脚本',
       'cardScripts.guide.description': '列出卡内启用的酒馆助手脚本；自动运行开启时由「美化前端」承载（ST 仍在本 tab）。',
@@ -9119,6 +9121,9 @@ window.__ModuleLoader__.load({
           ? h('p', { className: 'dt-hint' }, t('frontend.cardScriptsStopped'))
           : null,
         autoRunning ? h('p', { className: 'dt-card-scripts-warning', role: 'note' }, t('cardScripts.warning')) : null,
+        autoRunning && !message
+          ? h('p', { className: 'dt-hint' }, t('frontend.cardScriptsOnlyHint'))
+          : null,
         scriptsPending
           ? h('div', { className: 'dt-frontend-side-empty' }, h(IconSparkle16, { size: 22 }),
             h('span', null, t('cardScripts.loading')))
