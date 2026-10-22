@@ -44,9 +44,9 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 ### 资产与 SillyTavern 兼容
 
 - **角色卡 V1/V2/V3** — JSON、PNG `chara`/`ccv3`、CHARX `card.json` 与 `embeded://` 资源；导出尽量保留原始容器与内嵌资源；未知字段原样透传。
-- **世界书 / Lorebook** — 递归扫描、副键逻辑、概率、预算、inclusion group、sticky/cooldown/delay 与位置分发。
+- **世界书 / Lorebook** — 递归扫描、副键逻辑、概率、预算、inclusion group、sticky/cooldown/delay 与位置分发。卡绑定的世界书（`extensions.world`）只在**该角色卡的会话**里自动并入；手动 `activeWorlds` 勾选保持用户自己的全局选择，插件不代改。
 - **Chat Completion preset** — `prompts[]` / `prompt_order[]` / marker 与采样参数；context、instruct、textgen 走高级 JSON 编辑全部字段。
-- **正则脚本** — ST regex 扩展形态导入，全局 + 卡级 + 预设内嵌（`extensions.regex_scripts`）合并，存量卡与预设可在面板一键回填；`USER_INPUT/AI_OUTPUT/WORLD_INFO/REASONING` placement、`minDepth/maxDepth`、`substituteRegex`、`trimStrings`。
+- **正则脚本** — ST regex 扩展形态导入，全局 + 卡级 + 预设内嵌（`extensions.regex_scripts`）合并，存量卡与预设可在面板一键回填；卡级脚本跟随角色卡，只在所属卡的会话里自动启用，别的会话自动停用；`USER_INPUT/AI_OUTPUT/WORLD_INFO/REASONING` placement、`minDepth/maxDepth`、`substituteRegex`、`trimStrings`。
 - **STscript** — 管道、变量（聊天局部 + 全局）、`/if` 条件、随机/掷骰与聊天动作（`/send`、`/trigger`、`/regenerate`、`/cut`），composer `/` 前缀触发。
 - **Prompt Template（EJS）** — `node:vm` 沙箱执行 `<% %>`；`getvar/setvar` 族作用域变量、`[GENERATE:*]`/`[RENDER:*]` 注入、`@INJECT` 整消息插队、`getwi/getchar/getpreset` 资产读取。详见 [`docs/proposals/0008-prompt-template.md`](docs/proposals/0008-prompt-template.md)。
 - **Persona** — PNG 导入（内嵌描述提取）、头像、增删改、激活选择与 `position/depth/role` 注入。
@@ -130,7 +130,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 - **Composer 模型选择** — 复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
 - **内部工作区** — ST 与 AgentTavern 新聊天共用数据根下 `workspace/`（新装 `$DSH_HOME/soulmojito/workspace/`，旧装 `$DSH_HOME/tavern/workspace/`）的 `Tavern (internal)` 工作区，插件按 workspace 路径/ID 从原生侧边栏隐藏该分组。宿主 `rc.6` 没有可追加到原生 session tree 的正式 list slot，侧栏因此使用一个集中、版本敏感但**失败关闭**的 DOM adapter（只匹配可见左侧 `[role="tree"]`，解绑或卸载时可逆恢复）；面板入口本身走官方 slot，不依赖 adapter 是否挂载成功。
 - **语言** — 插件 UI 跟随 DSH 的语言设置（zh/en），切换后无需刷新即时生效。
-- **当前配置与行为设置** — 「当前配置」只留角色 / 预设 / 人设 / 压缩总结模型的快速切换；全部行为开关收进面板「行为设置」分区（system 组置顶，原生设置页同步展示同一个 band），按行为对应关系分组：会话行为（`defaultArchitecture` 新聊天架构、`defaultContextMode` AgentTavern 上下文、`preloadAssets` 新 AgentTavern 会话开始时一次性预载角色信息与常驻世界书条目（默认关闭且不追溯已有会话）、`nativePersona` 在标准 DSH Agent 会话中使用当前角色（默认关闭））、世界书行为（`worldFollowsCharacter` 世界书跟随角色卡激活）、工具写入（`allowGlobalWrites` 允许工具写 global 作用域，默认关闭）、前端与卡脚本（`frontendAutoOpen` 美化前端出现时自动打开右侧栏（默认关闭，每聊天一次）、`frontendAllowExternalResources` 允许美化前端加载外部资源（默认关闭）、`cardScriptsAutoRun` 进入聊天自动运行卡内全部启用脚本（默认关闭））、游戏行为（`gamesDisableResign` 禁用投降）。全部开关服务端逐次读取、即时生效。设置页标题下显示当前构建的版本与 commit。
+- **当前配置与行为设置** — 「当前配置」只留角色 / 预设 / 人设 / 压缩总结模型的快速切换；全部行为开关收进面板「行为设置」分区（system 组置顶，原生设置页同步展示同一个 band），按行为对应关系分组：会话行为（`defaultArchitecture` 新聊天架构、`defaultContextMode` AgentTavern 上下文、`preloadAssets` 新 AgentTavern 会话开始时一次性预载角色信息与常驻世界书条目（默认关闭且不追溯已有会话）、`nativePersona` 在标准 DSH Agent 会话中使用当前角色（默认关闭））、世界书行为（`worldFollowsCharacter` 世界书跟随角色卡激活——绑定的书只在所属角色卡的会话里自动生效，不写入手动 `activeWorlds`）、工具写入（`allowGlobalWrites` 允许工具写 global 作用域，默认关闭）、前端与卡脚本（`frontendAutoOpen` 美化前端出现时自动打开右侧栏（默认关闭，每聊天一次）、`frontendAllowExternalResources` 允许美化前端加载外部资源（默认关闭）、`cardScriptsAutoRun` 进入聊天自动运行卡内全部启用脚本（默认关闭））、游戏行为（`gamesDisableResign` 禁用投降）。全部开关服务端逐次读取、即时生效。设置页标题下显示当前构建的版本与 commit。
 
 ### 美化前端（消息内 HTML/JS）
 
@@ -339,7 +339,7 @@ GUI 已在桌面与 390x844 移动视口验证，覆盖原生 sidebar、管理�
 | 目录 | 内容 |
 |---|---|
 | [`docs/proposals/`](docs/proposals/) | 18 篇架构级设计契约（提案 0001-0018），实现后在此登记 |
-| [`decisions/`](decisions/) | 90 篇单次落地决策：问题、方案、否决项、与规格的偏差 |
+| [`decisions/`](decisions/) | 107 篇单次落地决策：问题、方案、否决项、与规格的偏差 |
 | [`docs/exploration/`](docs/exploration/) | 调研归档，结论必须带证据坐标（文件:行号） |
 | [`docs/plans/`](docs/plans/) · [`docs/adr/`](docs/adr/) · [`docs/mods/`](docs/mods/) · [`docs/games/`](docs/games/) | 施工计划 · 架构决策记录 · Mod 开发者文档 · 标准游戏包制作指南 |
 

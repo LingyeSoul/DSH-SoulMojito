@@ -134,11 +134,11 @@ describe('collectRegexScripts', () => {
     disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false, substituteRegex: false,
     minDepth: null, maxDepth: null, ...overrides,
   })
-  const characterWithRegex = (cardScripts: unknown) => ({
+  const characterWithRegex = (cardScripts: unknown, name = CHARACTER) => ({
     card: decodeCharacterCard({
       spec: 'chara_card_v2', spec_version: '2.0',
       data: {
-        name: CHARACTER, description: '', personality: '', scenario: '', first_mes: '',
+        name, description: '', personality: '', scenario: '', first_mes: '',
         mes_example: '', creator_notes: '', system_prompt: '', post_history_instructions: '',
         alternate_greetings: [], tags: [], creator: '', character_version: '',
         extensions: { regex_scripts: cardScripts },
@@ -162,6 +162,33 @@ describe('collectRegexScripts', () => {
     const state = { regexScripts: [script('Global')] }
     const scripts = collectRegexScripts(state, characterWithRegex([{ scriptName: 'Broken' }]))
     expect(scripts.map((item) => item.scriptName)).toEqual(['Global'])
+  })
+
+  it('卡级脚本只在归属角色卡的会话里生效，无归属脚本保持全局', () => {
+    const state = {
+      regexScripts: [
+        script('Global', { id: 'g' }),
+        script('Owned A', { id: 'a' }),
+        script('Owned B', { id: 'b' }),
+      ],
+      regexScriptOwners: { a: 'Card A', b: 'Card B' },
+    }
+    const inA = collectRegexScripts(state, characterWithRegex([], 'Card A'))
+    expect(inA.map((item) => item.scriptName)).toEqual(['Global', 'Owned A'])
+    const inB = collectRegexScripts(state, characterWithRegex([], 'Card B'))
+    expect(inB.map((item) => item.scriptName)).toEqual(['Global', 'Owned B'])
+  })
+
+  it('别的卡占用的全局同名脚本被过滤后，当前卡的卡内版本仍会并入', () => {
+    const state = {
+      regexScripts: [script('Shared', { id: 'shared', findRegex: 'owned by b' })],
+      regexScriptOwners: { shared: 'Card B' },
+    }
+    const scripts = collectRegexScripts(
+      state,
+      characterWithRegex([script('Shared', { findRegex: 'from card a' })], 'Card A'),
+    )
+    expect(scripts.map((item) => [item.scriptName, item.findRegex])).toEqual([['Shared', 'from card a']])
   })
 })
 

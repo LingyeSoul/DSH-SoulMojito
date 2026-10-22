@@ -233,6 +233,10 @@ describe('TavernStore', () => {
     expect(state.regexScripts.map((script) => script.scriptName)).toEqual(['Strip Thoughts', 'Tame Input'])
     expect(state.regexScripts[0]?.placement).toEqual([2])
     expect(state.regexScripts[0]?.markdownOnly).toBe(true)
+    // 卡内脚本登记归属：只在「Test Char」的会话里生效。
+    for (const script of state.regexScripts) {
+      expect(state.regexScriptOwners?.[script.id]).toBe('Test Char')
+    }
 
     // 重导入同名脚本覆盖，不产生重复
     await store.importCharacter({
@@ -360,6 +364,79 @@ describe('TavernStore', () => {
     expect(imported).toBe(2)
     const state = await store.getState()
     expect(state.regexScripts.map((script) => [script.scriptName, script.findRegex])).toEqual([['A', 'a2'], ['B', 'b']])
+  }))
+
+  it('regex：旧 state 缺归属表时从角色卡推断一次，之后不再重复扫描', withStore(async (store) => {
+    await store.importCharacter({
+      ...sampleCard,
+      data: {
+        ...sampleCard.data,
+        name: 'Legacy Owner',
+        extensions: {
+          regex_scripts: [
+            { scriptName: 'Legacy Card Script', findRegex: 'legacy', replaceString: '' },
+          ],
+        },
+      },
+    })
+    const imported = await store.getState()
+    const legacyId = imported.regexScripts[0]?.id
+    expect(legacyId).toBeDefined()
+    // 模拟旧版本 state.json：脚本已物化，但没有归属字段。
+    await store.updateState(() => ({ regexScriptOwners: undefined }))
+    expect((await store.getState()).regexScriptOwners).toBeUndefined()
+
+    await store.ensureRegexScriptOwners()
+    expect((await store.getState()).regexScriptOwners?.[legacyId!]).toBe('Legacy Owner')
+    // 字段存在后不再扫描：手动删掉归属不会被下一次 ensure 重新补回。
+    await store.updateState((state) => {
+      const owners = { ...(state.regexScriptOwners ?? {}) }
+      delete owners[legacyId!]
+      return { regexScriptOwners: owners }
+    })
+    await store.ensureRegexScriptOwners()
+    expect((await store.getState()).regexScriptOwners?.[legacyId!]).toBeUndefined()
+  }))
+
+  it('regex：角色卡改名后脚本归属跟着新卡名', withStore(async (store) => {
+    await store.importCharacter({
+      ...sampleCard,
+      data: {
+        ...sampleCard.data,
+        name: 'Old Owner',
+        extensions: {
+          regex_scripts: [{ id: 'rename-script', scriptName: 'Rename Script', findRegex: 'x', replaceString: '' }],
+        },
+      },
+    })
+    await store.updateCharacter('Old Owner', {
+      spec: 'chara_card_v2',
+      specVersion: '2.0',
+      data: { ...sampleCard.data, name: 'New Owner', extensions: {} },
+    })
+    expect((await store.getState()).regexScriptOwners?.['rename-script']).toBe('New Owner')
+  }))
+
+  it('regex：面板全量替换会剪掉已删除脚本的归属', withStore(async (store) => {
+    await store.importCharacter({
+      ...sampleCard,
+      data: {
+        ...sampleCard.data,
+        name: 'Prune Owner',
+        extensions: {
+          regex_scripts: [
+            { id: 'keep-script', scriptName: 'Keep Script', findRegex: 'keep', replaceString: '' },
+            { id: 'drop-script', scriptName: 'Drop Script', findRegex: 'drop', replaceString: '' },
+          ],
+        },
+      },
+    })
+    const before = await store.getState()
+    expect(before.regexScriptOwners).toMatchObject({ 'keep-script': 'Prune Owner', 'drop-script': 'Prune Owner' })
+    const kept = before.regexScripts.filter((script) => script.id === 'keep-script')
+    const next = await store.replaceRegexScripts(kept)
+    expect(next.regexScripts.map((script) => script.id)).toEqual(['keep-script'])
+    expect(next.regexScriptOwners).toEqual({ 'keep-script': 'Prune Owner' })
   }))
 
   it('世界书：导入 → 读取 roundtrip → 删除', withStore(async (store) => {

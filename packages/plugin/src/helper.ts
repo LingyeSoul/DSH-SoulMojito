@@ -223,16 +223,21 @@ export async function handleHelperApi(req: unknown, res: unknown, db: TavernStor
       })
       return sendJson(res, 200, { ok: true, value: { reset: true } })
     }
-    case 'regex.get':
-      return sendJson(res, 200, { ok: true, value: { scripts: state.regexScripts } })
+    case 'regex.get': {
+      // 卡级脚本跟随会话角色卡：返回当前角色可见的全局 + 卡内合并集，而不是
+      // 直接吐全局表（否则别的卡的脚本会泄漏到 JSR 读取面）。
+      const scripts = collectRegexScripts(state, await db.getCharacter(character))
+      return sendJson(res, 200, { ok: true, value: { scripts } })
+    }
     case 'regex.format': {
       const text = typeof body?.text === 'string' ? body.text : ''
       const placement = typeof body?.placement === 'number' ? body.placement : 2
       // TavernHelper 的 formatAsTavernRegexedString 语义：应用给定脚本（通常是
-      // getTavernRegexes 的结果）；未给时用当前全局启用脚本。正则只做文本变换，
-      // 不回写任何状态。
+      // getTavernRegexes 的结果）；未给时用当前会话角色可见的启用脚本。正则只做
+      // 文本变换，不回写任何状态。
       const provided = Array.isArray(body?.scripts) ? parseRegexScripts(body.scripts) : undefined
-      const scripts = (provided ?? state.regexScripts).filter((script) => !script.disabled)
+      const scripts = (provided ?? collectRegexScripts(state, await db.getCharacter(character)))
+        .filter((script) => !script.disabled)
       return sendJson(res, 200, {
         ok: true,
         value: {

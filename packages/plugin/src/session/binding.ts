@@ -1,4 +1,3 @@
-import { characterLinkedWorlds } from '../prompt-context.js'
 import { getAgentTavernCapabilities, getAgentTavernCapabilitiesPromise } from '../runtime.js'
 
 export class TavernArchitectureConflictError extends Error {
@@ -18,10 +17,11 @@ export async function bindSession(
   contextMode = 'dsh-native',
   initializationPending = false,
 ) {
-  // 使用角色（会话绑定）时自动激活其绑定的世界书；群聊无单一角色，不并入。
-  // worldFollowsCharacter 关闭时不并入，绑定世界书完全由 activeWorlds 显式控制。
-  const follow = group ? false : (await db.getState()).worldFollowsCharacter !== false
-  const linkedWorlds = follow ? await characterLinkedWorlds(db, character) : []
+  // 绑定即进入某张卡的会话：先把旧 state 的卡级 regex 归属补齐一次（字段存在
+  // 后为纯读），保证本会话第一次生成就按角色卡过滤。
+  await db.ensureRegexScriptOwners()
+  // 世界书跟随角色卡是会话级行为：绑定的世界书由 collectWorldInfoBooks 按当前
+  // 会话角色自动并入，不写 activeWorlds（手动激活列表归用户所有）。
   return db.updateState((state) => {
     const existing = state.sessionBindings[sessionId]
     const sameAgentBinding = existing?.architecture === 'agent-tavern'
@@ -37,9 +37,6 @@ export async function bindSession(
       : { architecture: 'st', character, chatId, ...(group ? { group: true } : {}) }
     return {
       activeCharacter: group ? state.activeCharacter : character,
-      ...(group || linkedWorlds.length === 0
-        ? {}
-        : { activeWorlds: [...new Set([...state.activeWorlds, ...linkedWorlds])] }),
       sessionBindings: {
         ...state.sessionBindings,
         [sessionId]: binding,

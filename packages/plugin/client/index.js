@@ -4206,6 +4206,10 @@ window.__ModuleLoader__.load({
       'settings.regexBadPattern': 'Invalid regex: {message}',
       // Delete confirm (2026-10-21 per-page UX): the row used to delete in one click.
       'settings.regexDeleteConfirm': 'Delete regex script "{name}"?',
+      // Card scoped regex (2026-10-22): card-imported scripts only run in that card's sessions.
+      'settings.regexOwner': 'card: {name}',
+      'settings.regexOwnerActive': 'Auto-enabled in {name}\'s sessions',
+      'settings.regexOwnerInactive': 'Auto-disabled here: this script belongs to card {name}',
       'panel.title': 'Tavern management',
       'panel.close': 'Close panel',
       'panel.open': 'Open Tavern panel',
@@ -4414,6 +4418,9 @@ window.__ModuleLoader__.load({
       'panel.characters.duplicate': 'Character "{name}" already exists; creating it again would overwrite that card. Pick another name or delete the existing card first.',
       'panel.characters.createFailed': 'Failed to create card: {message}',
       'panel.worlds.entries': '{count} entries',
+      // Card scoped world activation (2026-10-22): the checkbox is the manual list.
+      'panel.worlds.autoFollow': 'auto',
+      'panel.worlds.autoFollowHint': 'World books linked to the current character card activate only in that card\'s sessions. The checkbox is your manual global selection and is never changed by the plugin.',
       'panel.worlds.search': 'Search entries',
       'panel.worlds.noEntries': 'No entries match the search.',
       'panel.worlds.delete': 'Delete {name}',
@@ -5071,6 +5078,10 @@ window.__ModuleLoader__.load({
       'settings.regexBadPattern': '正则无效：{message}',
       // 删除确认（2026-10-21 分页 UX）：原一键即删，补与角色/预设/世界书同款的确认。
       'settings.regexDeleteConfirm': '删除正则脚本「{name}」？',
+      // 卡级正则（2026-10-22 用户需求）：卡内导入的脚本只在所属角色卡的会话里自动启用。
+      'settings.regexOwner': '角色卡：{name}',
+      'settings.regexOwnerActive': '在「{name}」的会话里自动启用',
+      'settings.regexOwnerInactive': '当前会话自动停用：此脚本属于角色卡「{name}」',
       'panel.title': '酒馆管理面板',
       'panel.close': '关闭面板',
       'panel.open': '打开酒馆面板',
@@ -5277,6 +5288,9 @@ window.__ModuleLoader__.load({
       'panel.characters.duplicate': '已存在同名角色「{name}」，再次创建会覆盖原卡。请换个名字，或先删除已有角色。',
       'panel.characters.createFailed': '新建角色卡失败：{message}',
       'panel.worlds.entries': '{count} 条目',
+      // 世界书跟随角色卡（2026-10-22 用户需求）：勾选仍是手动列表，插件不代改。
+      'panel.worlds.autoFollow': '自动',
+      'panel.worlds.autoFollowHint': '绑定到当前角色卡的世界书只在它的会话里自动启用；下方勾选是你的手动全局选择，插件不会替你改动。',
       'panel.worlds.search': '搜索条目',
       'panel.worlds.noEntries': '没有匹配的条目。',
       'panel.worlds.delete': '删除 {name}',
@@ -7244,27 +7258,41 @@ window.__ModuleLoader__.load({
       await refreshBootstrap()
     }
 
+    // regex 写回同时更新归属表：卡级脚本的「自动」标记不用等下一次 bootstrap。
+    function applyRegexResult(result) {
+      update({
+        bootstrap: {
+          ...snapshot.bootstrap,
+          state: {
+            ...snapshot.bootstrap.state,
+            regexScripts: result.scripts,
+            ...(result.regexScriptOwners !== undefined ? { regexScriptOwners: result.regexScriptOwners } : {}),
+          },
+        },
+      })
+    }
+
     async function saveRegexScripts(scripts) {
       const result = await api('regex', {
         method: 'PUT',
         headers: jsonHeaders(),
         body: JSON.stringify({ scripts }),
       })
-      update({ bootstrap: { ...snapshot.bootstrap, state: { ...snapshot.bootstrap.state, regexScripts: result.scripts } } })
+      applyRegexResult(result)
       return result.scripts
     }
 
     // 存量卡回填：服务端扫描全部角色卡，只补全局列表缺少的脚本名。
     async function syncRegexScriptsFromCards() {
       const result = await api('regex/sync-cards', { method: 'POST' })
-      update({ bootstrap: { ...snapshot.bootstrap, state: { ...snapshot.bootstrap.state, regexScripts: result.scripts } } })
+      applyRegexResult(result)
       return result
     }
 
     // 存量预设回填：扫描预设 extensions.regex_scripts，只补全局缺失的脚本名。
     async function syncRegexScriptsFromPresets() {
       const result = await api('regex/sync-presets', { method: 'POST' })
-      update({ bootstrap: { ...snapshot.bootstrap, state: { ...snapshot.bootstrap.state, regexScripts: result.scripts } } })
+      applyRegexResult(result)
       return result
     }
 
@@ -7852,6 +7880,15 @@ window.__ModuleLoader__.load({
       const [editing, setEditing] = useState('')
       const [regexFilter, setRegexFilter] = useState('')
       const scripts = state.bootstrap.state.regexScripts || []
+      // 卡级脚本跟随角色卡（2026-10-22 用户需求）：只有归属当前角色卡（或手动）
+      // 的脚本在本会话生效；其余置灰并锁定开关，编辑面仍保留。
+      const owners = state.bootstrap.state.regexScriptOwners || {}
+      const activeCharacter = state.bootstrap.state.activeCharacter || ''
+      const ownerOf = (script) => owners[script.id]
+      const autoInactive = (script) => {
+        const owner = ownerOf(script)
+        return owner !== undefined && owner !== activeCharacter
+      }
       // 名称/模式过滤（2026-10-21 分页 UX）：与角色/预设/剧本清单同款模式，
       // 模式串也参与匹配（正则要的就是按 pattern 找）。
       const regexQuery = regexFilter.trim().toLowerCase()
@@ -7896,20 +7933,29 @@ window.__ModuleLoader__.load({
           ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
           : h('div', { className: 'dt-regex-list' },
             visibleScripts.map((script) => h('div', { key: script.id, className: 'dt-regex-item' },
-            h('div', { className: `dt-regex-row ${script.disabled ? 'dt-regex-off' : ''}` },
+            h('div', { className: `dt-regex-row ${script.disabled || autoInactive(script) ? 'dt-regex-off' : ''}` },
               // Checkbox keeps its own control surface; the script name is read
               // text next to it, so the row can put the pattern on a second line.
-              h('label', { className: 'dt-toggle dt-regex-check', title: t('settings.regexToggle', { name: script.scriptName }) },
+              h('label', {
+                className: 'dt-toggle dt-regex-check',
+                title: t(autoInactive(script) ? 'settings.regexOwnerInactive' : 'settings.regexToggle', { name: autoInactive(script) ? ownerOf(script) : script.scriptName }),
+              },
                 h('input', {
                   type: 'checkbox',
-                  'aria-label': t('settings.regexToggle', { name: script.scriptName }),
-                  checked: !script.disabled,
-                  disabled: editing === script.id,
+                  'aria-label': t(autoInactive(script) ? 'settings.regexOwnerInactive' : 'settings.regexToggle', { name: autoInactive(script) ? ownerOf(script) : script.scriptName }),
+                  checked: !script.disabled && !autoInactive(script),
+                  disabled: editing === script.id || autoInactive(script),
                   onChange: () => run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, disabled: !item.disabled } : item))),
                 })),
               h('div', { className: 'dt-regex-main' },
                 h('div', { className: 'dt-regex-head' },
                   h('span', { className: 'dt-regex-name', title: script.scriptName }, script.scriptName),
+                  ownerOf(script) !== undefined
+                    ? h('span', {
+                        className: 'dt-regex-owner',
+                        title: t(autoInactive(script) ? 'settings.regexOwnerInactive' : 'settings.regexOwnerActive', { name: ownerOf(script) }),
+                      }, t('settings.regexOwner', { name: ownerOf(script) }))
+                    : null,
                   h('span', { className: 'dt-regex-placements', title: t('settings.regexPlacements', { names: script.placement.map((p) => regexPlacementLabel(t, p)).join(', ') }) },
                     script.placement.map((p) => regexPlacementLabel(t, p)).join(' · '))),
                 h('code', { className: 'dt-regex-pattern', title: script.findRegex }, script.findRegex)),
@@ -12311,6 +12357,12 @@ window.__ModuleLoader__.load({
       const [books, setBooks] = useState({})
       const [filter, setFilter] = useState('')
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
+      // 世界书跟随角色卡是会话级行为：勾选仍只代表手动列表；当前角色卡绑定的
+      // 那本在它的会话里自动生效，用「自动」徽标说明，不伪造手动勾选。
+      const linkedWorld = state.bootstrap.state.worldFollowsCharacter !== false
+        ? state.bootstrap.activeCard?.data?.extensions?.world
+        : undefined
+      const autoWorld = typeof linkedWorld === 'string' && linkedWorld.trim() !== '' ? linkedWorld.trim() : ''
       const toggleBrowse = (name) => {
         if (browse === name) { setBrowse(''); return }
         setBrowse(name)
@@ -12376,6 +12428,7 @@ window.__ModuleLoader__.load({
             h(UploadButton, { kind: 'world', label: t('settings.importWorld'), accept: '.json,application/json' }),
             h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setBrowse(''); setCreating(true) } }, `+ ${t('panel.worlds.new')}`))),
         h('section', { className: 'dt-settings-band' },
+          h('p', { className: 'dt-hint' }, t('panel.worlds.autoFollowHint')),
           worlds.length === 0 && !creating
             ? h('p', { className: 'dt-muted' }, t('settings.worldsEmpty'))
             : h('div', { className: 'dt-world-list' }, worlds.map((name) => h('div', { key: name, className: 'dt-world-row' },
@@ -12391,6 +12444,9 @@ window.__ModuleLoader__.load({
                   },
                 }),
                 h('span', null, name)),
+              autoWorld === name && !state.bootstrap.state.activeWorlds.includes(name)
+                ? h('span', { className: 'dt-world-follow', title: t('panel.worlds.autoFollowHint') }, t('panel.worlds.autoFollow'))
+                : null,
               h(Button, { size: 'sm', variant: 'ghost', onClick: () => toggleBrowse(name) },
                 browse === name ? t('panel.characters.hideCard') : t('panel.worlds.entries', { count: books[name]?.entries?.length ?? state.bootstrap.worldEntryCounts?.[name] ?? 0 })),
               h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editBook(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),
@@ -14986,7 +15042,7 @@ window.__ModuleLoader__.load({
         .dt-group-create{display:flex;flex-direction:column;gap:8px;margin:10px 0;padding:10px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}.dt-group-list{display:flex;flex-direction:column;gap:12px}.dt-group-manage{display:flex;flex-direction:column;gap:6px}.dt-group-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.dt-group-title>span{color:var(--dsw-alias-label-tertiary);font-size:12px}.dt-group-title select{height:30px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:inherit;background:var(--dsw-alias-bg-base);padding:0 6px}.dt-group-title>button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-group-members{display:flex;flex-wrap:wrap;gap:6px}
         .dt-member-chip{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 8px 0 3px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:transparent;color:inherit;font-size:12px;cursor:pointer}.dt-member-chip>img{width:22px;height:22px;border-radius:50%;object-fit:cover}.dt-member-chip-off{opacity:.45}.dt-member-chip-off>span{text-decoration:line-through}.dt-member-chip-active{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}.dt-member-chip>button{color:inherit;background:transparent;border:0;cursor:pointer;padding:0 2px;font-size:11px}
         .dt-band-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}.dt-band-actions>.dt-upload{height:32px;font-size:13px}.dt-band-actions>.dt-upload:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-band-actions>button{min-height:32px;font-size:13px}
-        .dt-regex-list{display:flex;flex-direction:column;gap:6px}.dt-regex-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;transition:background .12s}.dt-regex-row:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-row.dt-regex-off{opacity:.55}.dt-regex-check{min-height:0;flex:none}.dt-regex-main{display:flex;flex-direction:column;gap:1px;min-width:0}.dt-regex-head{display:flex;align-items:baseline;gap:8px;min-width:0}.dt-regex-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:18px;color:var(--dsw-alias-label-primary)}.dt-regex-placements{flex:none;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-pattern{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:16px}.dt-regex-actions{display:flex;gap:2px;flex:none}.dt-regex-actions button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-regex-actions button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-actions button:disabled{opacity:.4;cursor:not-allowed}.dt-regex-item{display:flex;flex-direction:column;gap:4px}.dt-regex-editor-wrap{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:12px}
+        .dt-regex-list{display:flex;flex-direction:column;gap:6px}.dt-regex-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;transition:background .12s}.dt-regex-row:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-row.dt-regex-off{opacity:.55}.dt-regex-check{min-height:0;flex:none}.dt-regex-main{display:flex;flex-direction:column;gap:1px;min-width:0}.dt-regex-head{display:flex;align-items:baseline;gap:8px;min-width:0}.dt-regex-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:18px;color:var(--dsw-alias-label-primary)}.dt-regex-owner{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-placements{flex:none;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-pattern{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:16px}.dt-regex-actions{display:flex;gap:2px;flex:none}.dt-regex-actions button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}.dt-regex-actions button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-actions button:disabled{opacity:.4;cursor:not-allowed}.dt-regex-item{display:flex;flex-direction:column;gap:4px}.dt-regex-editor-wrap{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:12px}
         .dt-field input[type=text],.dt-field input[type=password]{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 10px}.dt-upload:disabled{opacity:.5;cursor:not-allowed}
         .dt-backlink{display:flex;padding:2px 0}.dt-backlink>button{color:var(--dsw-alias-label-tertiary);background:transparent;border:0;cursor:pointer;font-size:12px;padding:4px 2px}.dt-backlink>button:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}
         .dt-member-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}.dt-member-row .dt-member-chip>button{display:none}.dt-script-glyph{font-weight:700;font-size:15px;line-height:1}.dt-sidebar-subheading{margin-top:10px}.dt-branch-btn{font-size:13px}
@@ -15079,6 +15135,7 @@ window.__ModuleLoader__.load({
         .dt-card-copy{max-height:220px;overflow-y:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.6;padding:2px 2px 8px;border-radius:6px}
         .dt-world-list{display:flex;flex-direction:column;gap:6px}
         .dt-world-row{display:flex;align-items:center;gap:8px;min-height:36px;padding:2px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-world-follow{flex:none;padding:0 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
         .dt-world-row>.dt-toggle{flex:1;min-width:0}
         .dt-entry-list{display:flex;flex-direction:column;gap:6px}
         .dt-entry{display:flex;flex-direction:column;gap:4px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:8px 10px;font-size:13px}

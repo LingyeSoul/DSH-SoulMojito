@@ -97,6 +97,15 @@
       const [editing, setEditing] = useState('')
       const [regexFilter, setRegexFilter] = useState('')
       const scripts = state.bootstrap.state.regexScripts || []
+      // 卡级脚本跟随角色卡（2026-10-22 用户需求）：只有归属当前角色卡（或手动）
+      // 的脚本在本会话生效；其余置灰并锁定开关，编辑面仍保留。
+      const owners = state.bootstrap.state.regexScriptOwners || {}
+      const activeCharacter = state.bootstrap.state.activeCharacter || ''
+      const ownerOf = (script) => owners[script.id]
+      const autoInactive = (script) => {
+        const owner = ownerOf(script)
+        return owner !== undefined && owner !== activeCharacter
+      }
       // 名称/模式过滤（2026-10-21 分页 UX）：与角色/预设/剧本清单同款模式，
       // 模式串也参与匹配（正则要的就是按 pattern 找）。
       const regexQuery = regexFilter.trim().toLowerCase()
@@ -141,20 +150,29 @@
           ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
           : h('div', { className: 'dt-regex-list' },
             visibleScripts.map((script) => h('div', { key: script.id, className: 'dt-regex-item' },
-            h('div', { className: `dt-regex-row ${script.disabled ? 'dt-regex-off' : ''}` },
+            h('div', { className: `dt-regex-row ${script.disabled || autoInactive(script) ? 'dt-regex-off' : ''}` },
               // Checkbox keeps its own control surface; the script name is read
               // text next to it, so the row can put the pattern on a second line.
-              h('label', { className: 'dt-toggle dt-regex-check', title: t('settings.regexToggle', { name: script.scriptName }) },
+              h('label', {
+                className: 'dt-toggle dt-regex-check',
+                title: t(autoInactive(script) ? 'settings.regexOwnerInactive' : 'settings.regexToggle', { name: autoInactive(script) ? ownerOf(script) : script.scriptName }),
+              },
                 h('input', {
                   type: 'checkbox',
-                  'aria-label': t('settings.regexToggle', { name: script.scriptName }),
-                  checked: !script.disabled,
-                  disabled: editing === script.id,
+                  'aria-label': t(autoInactive(script) ? 'settings.regexOwnerInactive' : 'settings.regexToggle', { name: autoInactive(script) ? ownerOf(script) : script.scriptName }),
+                  checked: !script.disabled && !autoInactive(script),
+                  disabled: editing === script.id || autoInactive(script),
                   onChange: () => run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, disabled: !item.disabled } : item))),
                 })),
               h('div', { className: 'dt-regex-main' },
                 h('div', { className: 'dt-regex-head' },
                   h('span', { className: 'dt-regex-name', title: script.scriptName }, script.scriptName),
+                  ownerOf(script) !== undefined
+                    ? h('span', {
+                        className: 'dt-regex-owner',
+                        title: t(autoInactive(script) ? 'settings.regexOwnerInactive' : 'settings.regexOwnerActive', { name: ownerOf(script) }),
+                      }, t('settings.regexOwner', { name: ownerOf(script) }))
+                    : null,
                   h('span', { className: 'dt-regex-placements', title: t('settings.regexPlacements', { names: script.placement.map((p) => regexPlacementLabel(t, p)).join(', ') }) },
                     script.placement.map((p) => regexPlacementLabel(t, p)).join(' · '))),
                 h('code', { className: 'dt-regex-pattern', title: script.findRegex }, script.findRegex)),

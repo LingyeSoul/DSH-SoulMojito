@@ -134,27 +134,41 @@
       await refreshBootstrap()
     }
 
+    // regex 写回同时更新归属表：卡级脚本的「自动」标记不用等下一次 bootstrap。
+    function applyRegexResult(result) {
+      update({
+        bootstrap: {
+          ...snapshot.bootstrap,
+          state: {
+            ...snapshot.bootstrap.state,
+            regexScripts: result.scripts,
+            ...(result.regexScriptOwners !== undefined ? { regexScriptOwners: result.regexScriptOwners } : {}),
+          },
+        },
+      })
+    }
+
     async function saveRegexScripts(scripts) {
       const result = await api('regex', {
         method: 'PUT',
         headers: jsonHeaders(),
         body: JSON.stringify({ scripts }),
       })
-      update({ bootstrap: { ...snapshot.bootstrap, state: { ...snapshot.bootstrap.state, regexScripts: result.scripts } } })
+      applyRegexResult(result)
       return result.scripts
     }
 
     // 存量卡回填：服务端扫描全部角色卡，只补全局列表缺少的脚本名。
     async function syncRegexScriptsFromCards() {
       const result = await api('regex/sync-cards', { method: 'POST' })
-      update({ bootstrap: { ...snapshot.bootstrap, state: { ...snapshot.bootstrap.state, regexScripts: result.scripts } } })
+      applyRegexResult(result)
       return result
     }
 
     // 存量预设回填：扫描预设 extensions.regex_scripts，只补全局缺失的脚本名。
     async function syncRegexScriptsFromPresets() {
       const result = await api('regex/sync-presets', { method: 'POST' })
-      update({ bootstrap: { ...snapshot.bootstrap, state: { ...snapshot.bootstrap.state, regexScripts: result.scripts } } })
+      applyRegexResult(result)
       return result
     }
 

@@ -18,18 +18,6 @@ export function tavernMacroExpand(state, characterName, character) {
 }
 
 /**
- * 角色卡 extensions.world 绑定且已存在的世界书名（自动激活目标）。
- * 世界书文件不存在（外部引用未导入）时返回空，不产生悬空激活。
- */
-export async function characterLinkedWorlds(db, characterName) {
-  const found = await db.getCharacter(characterName)
-  const world = found?.card.data.extensions['world']
-  if (typeof world !== 'string' || world.trim() === '') return []
-  const book = await db.getWorld(world.trim())
-  return book ? [book.name] : []
-}
-
-/**
  * One message's display text: the stored text already carries the save-layer
  * AI_OUTPUT transform, so only markdownOnly scripts are applied on top here
  * (ST semantics: display-only scripts never reach the prompt or the save).

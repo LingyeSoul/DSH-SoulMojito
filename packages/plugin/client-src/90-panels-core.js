@@ -521,6 +521,12 @@
       const [books, setBooks] = useState({})
       const [filter, setFilter] = useState('')
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
+      // 世界书跟随角色卡是会话级行为：勾选仍只代表手动列表；当前角色卡绑定的
+      // 那本在它的会话里自动生效，用「自动」徽标说明，不伪造手动勾选。
+      const linkedWorld = state.bootstrap.state.worldFollowsCharacter !== false
+        ? state.bootstrap.activeCard?.data?.extensions?.world
+        : undefined
+      const autoWorld = typeof linkedWorld === 'string' && linkedWorld.trim() !== '' ? linkedWorld.trim() : ''
       const toggleBrowse = (name) => {
         if (browse === name) { setBrowse(''); return }
         setBrowse(name)
@@ -586,6 +592,7 @@
             h(UploadButton, { kind: 'world', label: t('settings.importWorld'), accept: '.json,application/json' }),
             h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setBrowse(''); setCreating(true) } }, `+ ${t('panel.worlds.new')}`))),
         h('section', { className: 'dt-settings-band' },
+          h('p', { className: 'dt-hint' }, t('panel.worlds.autoFollowHint')),
           worlds.length === 0 && !creating
             ? h('p', { className: 'dt-muted' }, t('settings.worldsEmpty'))
             : h('div', { className: 'dt-world-list' }, worlds.map((name) => h('div', { key: name, className: 'dt-world-row' },
@@ -601,6 +608,9 @@
                   },
                 }),
                 h('span', null, name)),
+              autoWorld === name && !state.bootstrap.state.activeWorlds.includes(name)
+                ? h('span', { className: 'dt-world-follow', title: t('panel.worlds.autoFollowHint') }, t('panel.worlds.autoFollow'))
+                : null,
               h(Button, { size: 'sm', variant: 'ghost', onClick: () => toggleBrowse(name) },
                 browse === name ? t('panel.characters.hideCard') : t('panel.worlds.entries', { count: books[name]?.entries?.length ?? state.bootstrap.worldEntryCounts?.[name] ?? 0 })),
               h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editBook(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),

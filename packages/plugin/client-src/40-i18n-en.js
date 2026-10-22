@@ -104,6 +104,10 @@
       'settings.regexBadPattern': 'Invalid regex: {message}',
       // Delete confirm (2026-10-21 per-page UX): the row used to delete in one click.
       'settings.regexDeleteConfirm': 'Delete regex script "{name}"?',
+      // Card scoped regex (2026-10-22): card-imported scripts only run in that card's sessions.
+      'settings.regexOwner': 'card: {name}',
+      'settings.regexOwnerActive': 'Auto-enabled in {name}\'s sessions',
+      'settings.regexOwnerInactive': 'Auto-disabled here: this script belongs to card {name}',
       'panel.title': 'Tavern management',
       'panel.close': 'Close panel',
       'panel.open': 'Open Tavern panel',
@@ -312,6 +316,9 @@
       'panel.characters.duplicate': 'Character "{name}" already exists; creating it again would overwrite that card. Pick another name or delete the existing card first.',
       'panel.characters.createFailed': 'Failed to create card: {message}',
       'panel.worlds.entries': '{count} entries',
+      // Card scoped world activation (2026-10-22): the checkbox is the manual list.
+      'panel.worlds.autoFollow': 'auto',
+      'panel.worlds.autoFollowHint': 'World books linked to the current character card activate only in that card\'s sessions. The checkbox is your manual global selection and is never changed by the plugin.',
       'panel.worlds.search': 'Search entries',
       'panel.worlds.noEntries': 'No entries match the search.',
       'panel.worlds.delete': 'Delete {name}',

@@ -103,6 +103,10 @@
       'settings.regexBadPattern': '正则无效：{message}',
       // 删除确认（2026-10-21 分页 UX）：原一键即删，补与角色/预设/世界书同款的确认。
       'settings.regexDeleteConfirm': '删除正则脚本「{name}」？',
+      // 卡级正则（2026-10-22 用户需求）：卡内导入的脚本只在所属角色卡的会话里自动启用。
+      'settings.regexOwner': '角色卡：{name}',
+      'settings.regexOwnerActive': '在「{name}」的会话里自动启用',
+      'settings.regexOwnerInactive': '当前会话自动停用：此脚本属于角色卡「{name}」',
       'panel.title': '酒馆管理面板',
       'panel.close': '关闭面板',
       'panel.open': '打开酒馆面板',
@@ -309,6 +313,9 @@
       'panel.characters.duplicate': '已存在同名角色「{name}」，再次创建会覆盖原卡。请换个名字，或先删除已有角色。',
       'panel.characters.createFailed': '新建角色卡失败：{message}',
       'panel.worlds.entries': '{count} 条目',
+      // 世界书跟随角色卡（2026-10-22 用户需求）：勾选仍是手动列表，插件不代改。
+      'panel.worlds.autoFollow': '自动',
+      'panel.worlds.autoFollowHint': '绑定到当前角色卡的世界书只在它的会话里自动启用；下方勾选是你的手动全局选择，插件不会替你改动。',
       'panel.worlds.search': '搜索条目',
       'panel.worlds.noEntries': '没有匹配的条目。',
       'panel.worlds.delete': '删除 {name}',

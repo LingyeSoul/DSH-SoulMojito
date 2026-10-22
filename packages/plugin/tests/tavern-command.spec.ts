@@ -976,6 +976,8 @@ describe('internal Tavern session bridge occupation', () => {
       expect(body.scanned).toBeGreaterThanOrEqual(2)
       expect(body.scripts.some((script: { scriptName: string }) => script.scriptName === 'legacy auto')).toBe(true)
       expect(body.scripts.find((script: { scriptName: string }) => script.scriptName === 'legacy kept')?.findRegex).toBe('global wins')
+      const backfilled = body.scripts.find((script: { scriptName: string }) => script.scriptName === 'legacy auto')
+      expect(body.regexScriptOwners[backfilled.id]).toBe(cardName)
     } finally {
       await store.deleteCharacter(cardName)
       await store.updateState((state) => ({
@@ -1040,28 +1042,47 @@ describe('internal Tavern session bridge occupation', () => {
     }
   })
 
-  it('activates the linked world when a character becomes active', async () => {
-    const res = makeResponse()
-    await apiHandler(makeRequest({ activeCharacter: 'Lore Carrier' }, '/api/dsh-soulmojito/state'), res)
-    expect(res.statusCode).toBe(200)
-    expect((await store.getState()).activeWorlds).toContain('Carrier Lore')
-    // 切回原角色：手动激活的世界书保持，新角色的链接世界并入
-    await apiHandler(makeRequest({ activeCharacter: CHARACTER }, '/api/dsh-soulmojito/state'), makeResponse())
-    const state = await store.getState()
-    expect(state.activeWorlds).toContain('Carrier Lore')
-    expect(state.activeWorlds).toContain('Linked Lore')
+  it('does not copy a linked world into the manual activeWorlds list when a character becomes active', async () => {
+    const before = await store.getState()
+    try {
+      await store.patchState({ activeWorlds: [] })
+      const res = makeResponse()
+      await apiHandler(makeRequest({ activeCharacter: 'Lore Carrier' }, '/api/dsh-soulmojito/state'), res)
+      expect(res.statusCode).toBe(200)
+      const state = await store.getState()
+      expect(state.activeCharacter).toBe('Lore Carrier')
+      // 绑定世界书是会话级自动行为，不写用户的手动列表。
+      expect(state.activeWorlds).not.toContain('Carrier Lore')
+      // 切到另一张卡同样不写入对方的链接世界。
+      await apiHandler(makeRequest({ activeCharacter: CHARACTER }, '/api/dsh-soulmojito/state'), makeResponse())
+      expect((await store.getState()).activeWorlds).not.toContain('Linked Lore')
+    } finally {
+      await store.patchState({
+        activeCharacter: before.activeCharacter,
+        activeWorlds: before.activeWorlds,
+      })
+    }
   })
 
-  it('activates the linked world when a session binds the character', async () => {
-    const chatId = await store.createChat('Lore Carrier', {
-      user_name: 'unused', character_name: 'unused', chat_metadata: { timedWorldInfo: {} },
-    }, [])
-    const res = makeResponse()
-    await apiHandler(makeRequest({
-      sessionId: 'session-carrier', character: 'Lore Carrier', chatId,
-    }, '/api/dsh-soulmojito/binding'), res)
-    expect(res.statusCode).toBe(200)
-    expect((await store.getState()).activeWorlds).toContain('Carrier Lore')
+  it('does not copy a linked world into activeWorlds when a session binds the character', async () => {
+    const before = await store.getState()
+    try {
+      await store.patchState({ activeWorlds: [] })
+      const chatId = await store.createChat('Lore Carrier', {
+        user_name: 'unused', character_name: 'unused', chat_metadata: { timedWorldInfo: {} },
+      }, [])
+      const res = makeResponse()
+      await apiHandler(makeRequest({
+        sessionId: 'session-carrier', character: 'Lore Carrier', chatId,
+      }, '/api/dsh-soulmojito/binding'), res)
+      expect(res.statusCode).toBe(200)
+      expect((await store.getState()).activeWorlds).not.toContain('Carrier Lore')
+    } finally {
+      await store.patchState({
+        activeCharacter: before.activeCharacter,
+        activeWorlds: before.activeWorlds,
+      })
+    }
   })
 
   it('世界书跟随角色卡激活关闭时切换角色不并入绑定世界书', async () => {
@@ -1144,6 +1165,40 @@ describe('internal Tavern session bridge occupation', () => {
     } finally {
       await store.patchState({
         worldFollowsCharacter: before.worldFollowsCharacter ?? true,
+        activeCharacter: before.activeCharacter,
+        activeWorlds: before.activeWorlds,
+      })
+    }
+  })
+
+  it('首个导入的角色不把绑定世界书写进手动 activeWorlds（会话级自动）', async () => {
+    const before = await store.getState()
+    try {
+      await store.patchState({ activeCharacter: undefined, activeWorlds: [] })
+      const card = {
+        spec: 'chara_card_v2',
+        spec_version: '2.0',
+        data: {
+          name: 'Session Scoped Carrier', description: '', personality: '', scenario: '', first_mes: 'hi',
+          mes_example: '', creator_notes: '', system_prompt: '', post_history_instructions: '',
+          alternate_greetings: [], tags: [], creator: '', character_version: '',
+          character_book: {
+            name: 'Session Scoped Lore',
+            entries: [
+              { id: 0, keys: [], content: 'session scoped lore', enabled: true, insertion_order: 100, constant: true },
+            ],
+          },
+          extensions: {},
+        },
+      }
+      const res = makeResponse()
+      await apiHandler(makeRequest({ card }, '/api/dsh-soulmojito/import/character'), res)
+      expect(res.statusCode).toBe(200)
+      const state = await store.getState()
+      expect(state.activeCharacter).toBe('Session Scoped Carrier')
+      expect(state.activeWorlds).not.toContain('Session Scoped Lore')
+    } finally {
+      await store.patchState({
         activeCharacter: before.activeCharacter,
         activeWorlds: before.activeWorlds,
       })

@@ -781,7 +781,7 @@ function parseWorldUids(value: unknown): number[] {
   }))]
 }
 
-/** 反查链接到某世界书的卡（extensions.world 单链接语义，读法对齐服务端 characterLinkedWorlds）。 */
+/** 反查链接到某世界书的卡（extensions.world 单链接语义）。 */
 async function worldLinkedCards(db: TavernStore, world: string): Promise<string[]> {
   const linked: string[] = []
   for (const characterName of await db.listCharacters()) {

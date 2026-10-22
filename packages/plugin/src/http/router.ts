@@ -26,7 +26,7 @@ import { generate, previewGeneration, runTavernScript } from '../generation/pipe
 import { buildModelCatalog, clampIdentitySummary, publicCard, publicGroup, refreshActivePrompt } from '../model-catalog.js'
 import { emitAssetsSaved, emitChatSaved } from '../mods/events.js'
 import { modsDisabledByEnv } from '../mods/host.js'
-import { characterLinkedWorlds, compactionOverrideOf, displayTextForMessage, displayTexts, parsePresetOrThrow } from '../prompt-context.js'
+import { compactionOverrideOf, displayTextForMessage, displayTexts, parsePresetOrThrow } from '../prompt-context.js'
 import { listPromptViews } from '../prompt-viewer.js'
 import { optionalFeedback } from '../rewrite.js'
 import { collectRegexScripts } from '../tavern-assets.js'
@@ -93,6 +93,9 @@ export async function handleApi(ctx, req, res) {
     // store 变更水位先于资产列表读取：客户端以它做轮询水位线，先取水位后读
     // 列表，最坏情况（读列表期间又有写入）只是下一轮多刷一次，不会漏刷新。
     const storeRevision = await db.storeRevision()
+    // Regex 归属的存量迁移：旧 state 没有 regexScriptOwners 时扫描一次角色卡，
+    // 让已物化的卡级脚本在面板/生成面都跟随角色卡；写盘后不再扫描。
+    await db.ensureRegexScriptOwners()
     const state = await db.getState()
     const active = state.activeCharacter ? await db.getCharacter(state.activeCharacter) : undefined
     const groups = []
@@ -420,21 +423,13 @@ export async function handleApi(ctx, req, res) {
         body.defaultContextMode === 'dsh-native' ? 'dsh-native' : current.defaultContextMode,
       )
     }
-    // 使用角色时自动激活其绑定的世界书：并入本次 activeWorlds（用户同请求显式给的列表优先保留）。
-    // worldFollowsCharacter 关闭时不并入，绑定世界书完全由 activeWorlds 显式控制。
-    const current = await db.getState()
-    const activateWorlds = current.worldFollowsCharacter !== false && typeof body.activeCharacter === 'string' && body.activeCharacter !== ''
-      ? await characterLinkedWorlds(db, body.activeCharacter)
-      : []
+    // 世界书跟随角色卡是**会话级**行为（2026-10-22 用户需求）：绑定的世界书只在
+    // 该角色卡的会话里由 collectWorldInfoBooks 自动并入；这里不再写 activeWorlds。
+    // activeWorlds 只代表用户的手动选择，插件不替用户增删。
     const patch = {
       ...(typeof body.activeCharacter === 'string' || body.activeCharacter === null ? { activeCharacter: body.activeCharacter || undefined } : {}),
-      ...(Array.isArray(body.activeWorlds) || activateWorlds.length > 0
-        ? {
-            activeWorlds: [...new Set([
-              ...(Array.isArray(body.activeWorlds) ? body.activeWorlds.filter((x) => typeof x === 'string') : current.activeWorlds),
-              ...activateWorlds,
-            ])],
-          }
+      ...(Array.isArray(body.activeWorlds)
+        ? { activeWorlds: body.activeWorlds.filter((x) => typeof x === 'string') }
         : {}),
       ...(typeof body.activePreset === 'string' || body.activePreset === null ? { activePreset: body.activePreset || undefined } : {}),
       ...(typeof body.activePersona === 'string' || body.activePersona === null ? { activePersona: body.activePersona || undefined } : {}),
@@ -512,12 +507,9 @@ export async function handleApi(ctx, req, res) {
     }
     const current = await db.getState()
     if (!current.activeCharacter) {
-      // 首个导入的角色成为活跃角色，并自动激活其绑定的世界书（worldFollowsCharacter 关闭时不并入）
-      const linked = current.worldFollowsCharacter !== false ? await characterLinkedWorlds(db, result.card.data.name) : []
-      await db.patchState({
-        activeCharacter: result.card.data.name,
-        ...(linked.length > 0 ? { activeWorlds: [...new Set([...current.activeWorlds, ...linked])] } : {}),
-      })
+      // 首个导入的角色成为活跃角色。绑定世界书不写 activeWorlds：它跟随角色卡
+      // 的会话自动生效，手动激活列表保持用户自己的选择。
+      await db.patchState({ activeCharacter: result.card.data.name })
     }
     await refreshActivePrompt()
     return sendJson(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card), world: result.importedWorld ?? null, importedRegex: result.importedRegex })
@@ -1040,38 +1032,43 @@ export async function handleApi(ctx, req, res) {
   }
 
   if (method === 'GET' && route === 'regex') {
+    await db.ensureRegexScriptOwners()
     const state = await db.getState()
-    return sendJson(res, 200, { ok: true, scripts: state.regexScripts })
+    return sendJson(res, 200, { ok: true, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} })
   }
 
   if (method === 'PUT' && route === 'regex') {
+    await db.ensureRegexScriptOwners()
     const body = await readJson(req)
     const scripts = Array.isArray(body.scripts) ? parseRegexScripts(body.scripts) : undefined
     if (scripts === undefined) throw new Error('expected { scripts }')
-    const state = await db.patchState({ regexScripts: scripts })
-    return sendJson(res, 200, { ok: true, scripts: state.regexScripts })
+    const state = await db.replaceRegexScripts(scripts)
+    return sendJson(res, 200, { ok: true, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} })
   }
 
   if (method === 'POST' && route === 'import/regex') {
+    await db.ensureRegexScriptOwners()
     const body = await readJson(req)
     if (!Array.isArray(body.data) && typeof body.data !== 'object') throw new Error('expected { data }')
     const imported = await db.importRegexScripts(body.data)
     const state = await db.getState()
-    return sendJson(res, 200, { ok: true, imported, scripts: state.regexScripts })
+    return sendJson(res, 200, { ok: true, imported, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} })
   }
 
   // 存量卡回填：导入时自动物化只覆盖此后导入的卡，旧卡需显式同步一次。
   if (method === 'POST' && route === 'regex/sync-cards') {
+    await db.ensureRegexScriptOwners()
     const result = await db.backfillRegexScriptsFromCharacters()
     const state = await db.getState()
-    return sendJson(res, 200, { ok: true, ...result, scripts: state.regexScripts })
+    return sendJson(res, 200, { ok: true, ...result, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} })
   }
 
   // 存量预设回填：预设内嵌 regex 的导入期物化同样只覆盖此后导入的预设。
   if (method === 'POST' && route === 'regex/sync-presets') {
+    await db.ensureRegexScriptOwners()
     const result = await db.backfillRegexScriptsFromPresets()
     const state = await db.getState()
-    return sendJson(res, 200, { ok: true, ...result, scripts: state.regexScripts })
+    return sendJson(res, 200, { ok: true, ...result, scripts: state.regexScripts, regexScriptOwners: state.regexScriptOwners ?? {} })
   }
 
   // 酒馆助手兼容面（2026-10-20）：美化前端 iframe 经 token 校验的 postMessage

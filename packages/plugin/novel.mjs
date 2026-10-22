@@ -2998,12 +2998,23 @@ var TavernStore = class _TavernStore {
     }
     return bookName;
   }
-  /** 卡内嵌 regex_scripts 物化为全局脚本；脚本格式非法时整体跳过，不阻断角色导入。 */
+  /**
+   * 卡内嵌 regex_scripts 物化为全局脚本并登记归属；脚本格式非法时整体跳过，
+   * 不阻断角色导入。归属让同一份全局脚本只在所属角色卡的会话里生效。
+   */
   async importEmbeddedRegex(card) {
     const embedded = card.data.extensions["regex_scripts"];
     if (embedded === void 0 || embedded === null) return 0;
     try {
-      return await this.importRegexScripts(embedded);
+      const imported = parseRegexScripts(embedded);
+      if (imported.length === 0) return 0;
+      await this.updateState((current) => {
+        const merged = mergeRegexScripts(current.regexScripts, imported);
+        const owners = pruneRegexScriptOwners(current.regexScriptOwners, merged) ?? {};
+        for (const script of imported) owners[script.id] = card.data.name;
+        return { regexScripts: merged, regexScriptOwners: owners };
+      });
+      return imported.length;
     } catch {
       return 0;
     }
@@ -3089,6 +3100,14 @@ var TavernStore = class _TavernStore {
     }
     const saved = await this.getCharacter(card.data.name);
     if (saved === void 0) throw new Error(`character '${card.data.name}' could not be reloaded`);
+    if (card.data.name !== name2) {
+      await this.updateState((state) => {
+        if (state.regexScriptOwners === void 0) return {};
+        return {
+          regexScriptOwners: Object.fromEntries(Object.entries(state.regexScriptOwners).map(([id, owner]) => [id, owner === name2 ? card.data.name : owner]))
+        };
+      });
+    }
     return saved;
   }
   async listCharacters() {
@@ -3500,14 +3519,28 @@ var TavernStore = class _TavernStore {
       return next;
     });
   }
-  /** 解析 regex 脚本并合并进全局状态（scriptName 相同即覆盖）；返回导入的脚本数。 */
+  /**
+   * 解析 regex 脚本并合并进全局状态（scriptName 相同即覆盖）；返回导入的脚本数。
+   * 手动导入的脚本是全局脚本：同名覆盖会解除旧的卡级归属。
+   */
   async importRegexScripts(input) {
     const imported = parseRegexScripts(input);
     if (imported.length === 0) return 0;
-    await this.updateState((current) => ({
-      regexScripts: mergeRegexScripts(current.regexScripts, imported)
-    }));
+    await this.updateState((current) => {
+      const merged = mergeRegexScripts(current.regexScripts, imported);
+      const owners = pruneRegexScriptOwners(current.regexScriptOwners, merged);
+      if (owners === void 0) return { regexScripts: merged };
+      for (const script of imported) delete owners[script.id];
+      return { regexScripts: merged, regexScriptOwners: owners };
+    });
     return imported.length;
+  }
+  /** 面板全量替换脚本列表；同时剪掉已删除脚本的归属记录。 */
+  async replaceRegexScripts(scripts) {
+    return this.updateState((current) => {
+      const owners = pruneRegexScriptOwners(current.regexScriptOwners, scripts);
+      return owners === void 0 ? { regexScripts: scripts } : { regexScripts: scripts, regexScriptOwners: owners };
+    });
   }
   /**
    * 从已导入角色卡回填卡内嵌 regex_scripts（导入时自动物化上线前的存量卡）：
@@ -3529,7 +3562,7 @@ var TavernStore = class _TavernStore {
       if (file === void 0) continue;
       const embedded = file.card.data.extensions["regex_scripts"];
       if (embedded === void 0 || embedded === null) continue;
-      pending.push(...stageRegexBackfillEntries(embedded, known, counters));
+      pending.push(...stageRegexBackfillEntries(embedded, known, counters, file.card.data.name));
     }
     return await this.commitRegexBackfill(pending, counters, names.length);
   }
@@ -3564,15 +3597,68 @@ var TavernStore = class _TavernStore {
     let imported = 0;
     await this.updateState((current) => {
       const existing = new Set(current.regexScripts.map((script) => script.scriptName));
-      const additions = pending.filter((script) => {
+      const additions = pending.filter(({ script }) => {
         if (existing.has(script.scriptName)) return false;
         existing.add(script.scriptName);
         return true;
       });
       imported = additions.length;
-      return { regexScripts: [...current.regexScripts, ...additions] };
+      const regexScripts = [...current.regexScripts, ...additions.map(({ script }) => script)];
+      const pruned = pruneRegexScriptOwners(current.regexScriptOwners, regexScripts);
+      const withOwner = additions.filter(({ owner }) => owner !== void 0);
+      const owners = pruned !== void 0 ? { ...pruned } : withOwner.length > 0 ? {} : void 0;
+      if (owners !== void 0) {
+        for (const { script, owner } of withOwner) {
+          if (owner !== void 0) owners[script.id] = owner;
+        }
+      }
+      return owners === void 0 ? { regexScripts } : { regexScripts, regexScriptOwners: owners };
     });
     return { imported, skipped: counters.skipped + pending.length - imported, invalid: counters.invalid, scanned };
+  }
+  /**
+   * 存量迁移：旧 state 没有 regexScriptOwners 时，扫描全部角色卡，把全局列表里
+   * 与卡内嵌脚本同名的条目登记为该卡的脚本。只执行一次（写盘后字段存在即返回）；
+   * 卡文件不可读/条目非法时跳过该来源，不阻断面板加载。
+   */
+  async ensureRegexScriptOwners() {
+    const current = await this.getState();
+    if (current.regexScriptOwners !== void 0) return;
+    const known = new Set(current.regexScripts.map((script) => script.scriptName));
+    const byName = /* @__PURE__ */ new Map();
+    for (const name2 of (await this.listCharacters()).sort()) {
+      let file;
+      try {
+        file = await this.getCharacter(name2);
+      } catch {
+        continue;
+      }
+      if (file === void 0) continue;
+      const embedded = file.card.data.extensions["regex_scripts"];
+      if (embedded === void 0 || embedded === null) continue;
+      let entries;
+      try {
+        entries = listRegexScriptEntries(embedded);
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        let script;
+        try {
+          script = parseRegexScript(entry);
+        } catch {
+          continue;
+        }
+        if (!known.has(script.scriptName) || byName.has(script.scriptName)) continue;
+        byName.set(script.scriptName, file.card.data.name);
+      }
+    }
+    const owners = {};
+    for (const script of current.regexScripts) {
+      const owner = byName.get(script.scriptName);
+      if (owner !== void 0) owners[script.id] = owner;
+    }
+    await this.updateState((state) => state.regexScriptOwners === void 0 ? { regexScriptOwners: owners } : {});
   }
   /* ------------------------------ 内部 ------------------------------ */
   async readState() {
@@ -3580,6 +3666,7 @@ var TavernStore = class _TavernStore {
     if (bytes === void 0) return structuredClone(DEFAULT_STATE);
     const parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
     const { pipelineMode: _legacyPipelineMode, textCompletion: _legacyTextCompletion, ...rest } = parsed;
+    const regexScriptOwners = normalizeRegexScriptOwners(parsed.regexScriptOwners);
     return {
       ...structuredClone(DEFAULT_STATE),
       ...rest,
@@ -3599,6 +3686,7 @@ var TavernStore = class _TavernStore {
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
+      ...regexScriptOwners !== void 0 ? { regexScriptOwners: pruneRegexScriptOwners(regexScriptOwners, parsed.regexScripts ?? []) } : {},
       scriptGlobals: parsed.scriptGlobals ?? {},
       characterVariables: normalizeCharacterVariables(parsed.characterVariables),
       frontendStorage: normalizeFrontendStorage(parsed.frontendStorage),
@@ -3726,11 +3814,29 @@ function normalizeCompactionOverride(value) {
   if (provider.trim() === "" || model.trim() === "") return void 0;
   return { curatorProvider: provider, curatorModel: model };
 }
+function normalizeRegexScriptOwners(value) {
+  if (value === void 0) return void 0;
+  if (!isPlainRecord(value)) return {};
+  const owners = {};
+  for (const [id, owner] of Object.entries(value)) {
+    if (typeof owner === "string" && owner.trim() !== "") owners[id] = owner.trim();
+  }
+  return owners;
+}
+function pruneRegexScriptOwners(owners, scripts) {
+  if (owners === void 0) return void 0;
+  const ids = new Set(scripts.map((script) => script.id));
+  const pruned = {};
+  for (const [id, owner] of Object.entries(owners)) {
+    if (ids.has(id)) pruned[id] = owner;
+  }
+  return pruned;
+}
 function presetExtensions(preset) {
   const extensions = preset["extensions"];
   return typeof extensions === "object" && extensions !== null && !Array.isArray(extensions) ? extensions : {};
 }
-function stageRegexBackfillEntries(embedded, known, counters) {
+function stageRegexBackfillEntries(embedded, known, counters, owner) {
   let entries;
   try {
     entries = listRegexScriptEntries(embedded);
@@ -3752,7 +3858,7 @@ function stageRegexBackfillEntries(embedded, known, counters) {
       return;
     }
     known.add(script.scriptName);
-    staged.push(script);
+    staged.push(owner === void 0 ? { script } : { script, owner });
   });
   return staged;
 }
