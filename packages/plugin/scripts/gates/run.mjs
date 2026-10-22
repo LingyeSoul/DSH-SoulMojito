@@ -55,6 +55,7 @@ const SOURCE_BUDGET_ROOTS = [
 const SOURCE_BUDGET_ALLOWLIST = [
   { path: 'packages/plugin/client-src/40-i18n-en.js', reason: 'single English message table; novel import/revision strings stay in the existing novel section' },
   { path: 'packages/plugin/client-src/41-i18n-zh.js', reason: 'single Chinese message table; novel import/revision strings stay in the existing novel section' },
+  { path: 'packages/plugin/client-src/10-frontend-frame.js', reason: 'single frontend frame bridge: helper RPC, composer handoff and iframe lifecycle share one React ref graph; the /trigger handoff must stay in the same effect' },
   { path: 'packages/plugin/client-src/92-ui-novel.js', reason: 'novel panel surface kept in one fragment' },
   { path: 'packages/tavern-jsr/src/client.ts', reason: 'one emitted iframe prelude: the runtime must stay a single source template so the srcdoc program is self-contained' },
   { path: 'packages/plugin/src/agent-novel/writer.ts', reason: 'writer subagent orchestration kept together' },
