@@ -206,6 +206,20 @@ pnpm run check
 
 ## 更新
 
+### 仓库重建（2026-10-22）
+
+2026-10-22 仓库做过一次历史重写并重建：旧历史中的第三方卡夹具（角色卡 PNG 与世界书 JSON）已从全部提交移除，所有受影响的 commit SHA 都已变化。旧仓库已删除，旧的 issue、PR 与提交链接不再有效。
+
+- **旧克隆**：不要 `git pull`，也不要把旧分支合并回来——旧历史仍带已移除素材，推送会把它们带回远端。请重新 `git clone`；必须保留本地改动时，先导出补丁，再在新克隆上重放。
+- **已安装插件**：自更新按 main 最新 commit 判定，重建后重新检查更新即可。若 profile 仍指向失效的旧 checkout，移除后按当前仓库地址重装：
+
+```sh
+dsh plugin --profile web remove dsh-soulmojito
+dsh plugin --profile web add github:LingyeSoul/DSH-SoulMojito#path:/packages/plugin
+```
+
+桌面版把 `--profile web` 换成 `--profile desktop`。数据目录与既有资产不受影响；`version.json` 的 commit stamp 以重建后的提交为准。完整处置记录见 [`decisions/2026-10-22-history-rewrite-and-repo-rebuild.md`](decisions/2026-10-22-history-rewrite-and-repo-rebuild.md)。
+
 ### 内置自更新
 
 插件自带从 GitHub 发现新版本与一键更新，桌面版不必手敲 `dsh plugin`。
