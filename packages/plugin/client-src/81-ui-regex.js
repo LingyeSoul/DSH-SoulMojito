@@ -88,7 +88,7 @@
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
-    function RegexBand() {
+    function RegexBand({ useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
@@ -101,13 +101,13 @@
       // 或所属预设正在激活的脚本在本会话生效；其余置灰并锁定开关，编辑面仍保留。
       const cardOwners = state.bootstrap.state.regexScriptOwners || {}
       const presetOwners = state.bootstrap.state.regexScriptPresetOwners || {}
-      const activeCharacter = state.bootstrap.state.activeCharacter || ''
+      // 当前卡以当前宿主会话的 Tavern 绑定为准（切回旧会话不会重写全局指针）。
+      const activeCharacter = useActiveTavernCharacter(useSessions)
       const activePreset = state.bootstrap.state.activePreset || ''
       // 角色卡名与文件名 stem 可能因非法字符被 safeFileName 改写（服务端同名规则），
       // 面板比较两边都归一化，避免「明明是本卡却判成别的卡」的识别失败。
-      const normalizeName = (value) => String(value || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 120)
       const sameCharacter = (owner) => owner !== undefined
-        && (owner === activeCharacter || normalizeName(owner) === normalizeName(activeCharacter))
+        && (owner === activeCharacter || normalizeTavernName(owner) === normalizeTavernName(activeCharacter))
       const cardOwnerOf = (script) => cardOwners[script.id]
       const presetOwnerOf = (script) => presetOwners[script.id]
       const autoInactive = (script) => {
@@ -119,9 +119,40 @@
       // 名称/模式过滤（2026-10-21 分页 UX）：与角色/预设/剧本清单同款模式，
       // 模式串也参与匹配（正则要的就是按 pattern 找）。
       const regexQuery = regexFilter.trim().toLowerCase()
-      const visibleScripts = regexQuery === ''
-        ? scripts
-        : scripts.filter((script) => script.scriptName.toLowerCase().includes(regexQuery) || script.findRegex.toLowerCase().includes(regexQuery))
+      // 按来源分区（2026-10-23 用户需求）：全局、每张角色卡、每个预设各成一段。
+      // 分区按「全局 → 角色卡 → 预设」、组内名称排序，避免每次写盘后顺序漂移。
+      const regexGroups = () => {
+        const groups = new Map()
+        for (const script of scripts) {
+          const cardOwner = cardOwnerOf(script)
+          const presetOwner = presetOwnerOf(script)
+          const kind = cardOwner !== undefined ? 'character' : presetOwner !== undefined ? 'preset' : 'global'
+          const name = cardOwner ?? presetOwner ?? ''
+          const key = `${kind}:${name}`
+          const group = groups.get(key) ?? { key, kind, name, scripts: [] }
+          group.scripts.push(script)
+          groups.set(key, group)
+        }
+        const rank = { global: 0, character: 1, preset: 2 }
+        return [...groups.values()].sort((left, right) => rank[left.kind] - rank[right.kind] || left.name.localeCompare(right.name))
+      }
+      const groupLabel = (group) => group.kind === 'global'
+        ? t('settings.regexGroupGlobal')
+        : t(group.kind === 'character' ? 'settings.regexGroupCharacter' : 'settings.regexGroupPreset', { name: group.name })
+      const groupActive = (group) => group.kind === 'character'
+        ? sameCharacter(group.name)
+        : group.kind === 'preset' && group.name === activePreset
+      // 过滤只影响分段内可见条目，分区数字与「清空分区」始终指向该来源的全部
+      // 脚本——否则过滤状态下删分区会留下看不见的残留。
+      const visibleGroups = regexGroups()
+        .map((group) => ({
+          group,
+          visible: group.scripts.filter((script) => regexQuery === ''
+            || script.scriptName.toLowerCase().includes(regexQuery)
+            || script.findRegex.toLowerCase().includes(regexQuery)),
+        }))
+        .filter((entry) => entry.visible.length > 0)
+      const visibleCount = visibleGroups.reduce((sum, entry) => sum + entry.visible.length, 0)
       const run = (promise) => { setError(''); setNotice(''); void promise.catch((cause) => setError(cause.message)) }
       const saveScript = (script) => {
         const next = scripts.some((item) => item.id === script.id)
@@ -150,6 +181,18 @@
         run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, id } : item))
           .then(() => setNotice(t('settings.regexReleased', { name: script.scriptName }))))
       }
+      // 清空分区（2026-10-23 用户需求）：一次移除该角色卡/预设/全局的全部脚本。
+      // 服务端 replaceRegexScripts 会同步剪掉这些 id 的两张归属表，无需另行清理。
+      const deleteGroup = (group) => {
+        const scope = groupLabel(group)
+        const count = group.scripts.length
+        if (!window.confirm(t('settings.regexDeleteGroupConfirm', { scope, count }))) return
+        const removed = new Set(group.scripts.map((script) => script.id))
+        run(saveRegexScripts(scripts.filter((script) => !removed.has(script.id))).then(() => {
+          setEditing((current) => (removed.has(current) ? '' : current))
+          setNotice(t('settings.regexDeleteGroupDone', { scope, count: removed.size }))
+        }))
+      }
       // 两个回填入口共用一份 busy 状态：同一时刻只允许一个扫描在跑，回执不交叉。
       const sync = (source, request, doneKey) => {
         setError('')
@@ -165,6 +208,76 @@
       const syncFromCards = () => sync('cards', syncRegexScriptsFromCards, 'settings.regexSyncDone')
       const syncFromPresets = () => sync('presets', syncRegexScriptsFromPresets, 'settings.regexSyncPresetsDone')
       const closeEditor = () => setEditing('')
+      const scriptItem = (script) => h('div', { key: script.id, className: 'dt-regex-item' },
+        h('div', { className: `dt-regex-row ${script.disabled || autoInactive(script) ? 'dt-regex-off' : ''}` },
+          // Checkbox keeps its own control surface; the script name is read
+          // text next to it, so the row can put the pattern on a second line.
+          // 归属别的角色卡/预设的脚本：置灰提示当前不生效，但仍允许切换——开关
+          // 写的是脚本自身的 disabled，等对应来源激活时生效；也在本行提供「转为全局」
+          // 解除归属，避免点击被禁用后毫无反应（2026-10-23 用户反馈）。
+          h('label', {
+            className: 'dt-toggle dt-regex-check',
+            title: autoInactive(script) ? t('settings.regexAutoInactive') : t('settings.regexToggle', { name: script.scriptName }),
+          },
+            h('input', {
+              type: 'checkbox',
+              'aria-label': autoInactive(script) ? t('settings.regexAutoInactive') : t('settings.regexToggle', { name: script.scriptName }),
+              checked: !script.disabled,
+              disabled: editing === script.id,
+              onChange: () => toggleScript(script),
+            })),
+          h('div', { className: 'dt-regex-main' },
+            h('div', { className: 'dt-regex-head' },
+              h('span', { className: 'dt-regex-name', title: script.scriptName }, script.scriptName),
+              cardOwnerOf(script) !== undefined
+                ? h('span', {
+                    className: 'dt-regex-owner',
+                    title: t(sameCharacter(cardOwnerOf(script)) ? 'settings.regexOwnerActive' : 'settings.regexOwnerInactive', { name: cardOwnerOf(script) }),
+                  }, t('settings.regexOwner', { name: cardOwnerOf(script) }))
+                : null,
+              presetOwnerOf(script) !== undefined
+                ? h('span', {
+                    className: 'dt-regex-owner',
+                    title: t(presetOwnerOf(script) === activePreset ? 'settings.regexPresetOwnerActive' : 'settings.regexPresetOwnerInactive', { name: presetOwnerOf(script) }),
+                  }, t('settings.regexPresetOwner', { name: presetOwnerOf(script) }))
+                : null,
+              h('span', { className: 'dt-regex-placements', title: t('settings.regexPlacements', { names: script.placement.map((p) => regexPlacementLabel(t, p)).join(', ') }) },
+                script.placement.map((p) => regexPlacementLabel(t, p)).join(' · '))),
+            h('code', { className: 'dt-regex-pattern', title: script.findRegex }, script.findRegex)),
+          h('div', { className: 'dt-regex-actions' },
+            cardOwnerOf(script) !== undefined || presetOwnerOf(script) !== undefined
+              ? h('button', {
+                  type: 'button',
+                  className: 'dt-regex-release',
+                  title: t('settings.regexRelease', { name: script.scriptName }),
+                  'aria-label': t('settings.regexRelease', { name: script.scriptName }),
+                  disabled: editing !== '',
+                  onClick: () => releaseOwnership(script),
+                }, t('settings.regexReleaseShort'))
+              : null,
+            h('button', {
+              type: 'button',
+              title: t('settings.regexEdit', { name: script.scriptName }),
+              'aria-label': t('settings.regexEdit', { name: script.scriptName }),
+              disabled: editing !== '' && editing !== script.id,
+              onClick: () => setEditing(editing === script.id ? '' : script.id),
+            }, h(IconEditOutline16)),
+            h('button', {
+              type: 'button',
+              title: t('settings.regexDelete', { name: script.scriptName }),
+              'aria-label': t('settings.regexDelete', { name: script.scriptName }),
+              disabled: editing === script.id,
+              // 删除确认（2026-10-21 分页 UX）：原实现一键即删、无回滚面，
+              // 误点 trash 直接丢脚本——与角色/预设/世界书同款确认口径。
+              onClick: () => {
+                if (!window.confirm(t('settings.regexDeleteConfirm', { name: script.scriptName }))) return
+                run(saveRegexScripts(scripts.filter((item) => item.id !== script.id)))
+              },
+            }, h(IconTrashOutline16)))),
+        editing === script.id
+          ? h('div', { className: 'dt-regex-editor-wrap' },
+            h(RegexScriptEditor, { script, onSave: saveScript, onCancel: closeEditor }))
+          : null)
       return h('section', { className: 'dt-settings-band' },
         h('div', { className: 'dt-band-actions' },
           h(Button, { size: 'sm', variant: 'primary', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => setEditing('new') }, t('settings.regexCreate')),
@@ -177,79 +290,31 @@
           : null,
         scripts.length > 0 && editing === '' ? h('div', { className: 'dt-filter-row' },
           h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.filterPlaceholder'), 'aria-label': t('panel.filterPlaceholder'), value: regexFilter, onChange: (event) => setRegexFilter(event.target.value) })) : null,
-        scripts.length === 0 && editing !== 'new' ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : visibleScripts.length === 0
+        scripts.length === 0 && editing !== 'new' ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : visibleCount === 0
           ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
-          : h('div', { className: 'dt-regex-list' },
-            visibleScripts.map((script) => h('div', { key: script.id, className: 'dt-regex-item' },
-            h('div', { className: `dt-regex-row ${script.disabled || autoInactive(script) ? 'dt-regex-off' : ''}` },
-              // Checkbox keeps its own control surface; the script name is read
-              // text next to it, so the row can put the pattern on a second line.
-              // 归属别的角色卡/预设的脚本：置灰提示当前不生效，但仍允许切换——开关
-// 写的是脚本自身的 disabled，等对应来源激活时生效；也在本行提供「转为全局」
-// 解除归属，避免点击被禁用后毫无反应（2026-10-23 用户反馈）。
-              h('label', {
-                className: 'dt-toggle dt-regex-check',
-                title: autoInactive(script) ? t('settings.regexAutoInactive') : t('settings.regexToggle', { name: script.scriptName }),
-              },
-                h('input', {
-                  type: 'checkbox',
-                  'aria-label': autoInactive(script) ? t('settings.regexAutoInactive') : t('settings.regexToggle', { name: script.scriptName }),
-                  checked: !script.disabled,
-                  disabled: editing === script.id,
-                  onChange: () => toggleScript(script),
-                })),
-              h('div', { className: 'dt-regex-main' },
-                h('div', { className: 'dt-regex-head' },
-                  h('span', { className: 'dt-regex-name', title: script.scriptName }, script.scriptName),
-                  cardOwnerOf(script) !== undefined
-                    ? h('span', {
-                        className: 'dt-regex-owner',
-                        title: t(sameCharacter(cardOwnerOf(script)) ? 'settings.regexOwnerActive' : 'settings.regexOwnerInactive', { name: cardOwnerOf(script) }),
-                      }, t('settings.regexOwner', { name: cardOwnerOf(script) }))
-                    : null,
-                  presetOwnerOf(script) !== undefined
-                    ? h('span', {
-                        className: 'dt-regex-owner',
-                        title: t(presetOwnerOf(script) === activePreset ? 'settings.regexPresetOwnerActive' : 'settings.regexPresetOwnerInactive', { name: presetOwnerOf(script) }),
-                      }, t('settings.regexPresetOwner', { name: presetOwnerOf(script) }))
-                    : null,
-                  h('span', { className: 'dt-regex-placements', title: t('settings.regexPlacements', { names: script.placement.map((p) => regexPlacementLabel(t, p)).join(', ') }) },
-                    script.placement.map((p) => regexPlacementLabel(t, p)).join(' · '))),
-                h('code', { className: 'dt-regex-pattern', title: script.findRegex }, script.findRegex)),
-              h('div', { className: 'dt-regex-actions' },
-                cardOwnerOf(script) !== undefined || presetOwnerOf(script) !== undefined
-                  ? h('button', {
-                      type: 'button',
-                      className: 'dt-regex-release',
-                      title: t('settings.regexRelease', { name: script.scriptName }),
-                      'aria-label': t('settings.regexRelease', { name: script.scriptName }),
-                      disabled: editing !== '',
-                      onClick: () => releaseOwnership(script),
-                    }, t('settings.regexReleaseShort'))
-                  : null,
+          // 分区头固定展示该来源的全部条数（不是过滤后的条数），「清空分区」
+          // 也按全部删除；过滤只收窄组内可见行。
+          : h('div', { className: 'dt-regex-groups' },
+            visibleGroups.map(({ group, visible }) => h('div', {
+              key: group.key,
+              className: 'dt-regex-group',
+              role: 'group',
+              'aria-label': groupLabel(group),
+            },
+              h('div', { className: 'dt-regex-group-head' },
+                h('div', { className: 'dt-regex-group-title' },
+                  h('span', { className: 'dt-regex-group-name', title: groupLabel(group) }, groupLabel(group)),
+                  groupActive(group) ? h('span', { className: 'dt-regex-group-active' }, t('settings.regexGroupActive')) : null,
+                  h('span', { className: 'dt-regex-group-count' }, t('settings.regexGroupCount', { count: group.scripts.length }))),
                 h('button', {
                   type: 'button',
-                  title: t('settings.regexEdit', { name: script.scriptName }),
-                  'aria-label': t('settings.regexEdit', { name: script.scriptName }),
-                  disabled: editing !== '' && editing !== script.id,
-                  onClick: () => setEditing(editing === script.id ? '' : script.id),
-                }, h(IconEditOutline16)),
-                h('button', {
-                  type: 'button',
-                  title: t('settings.regexDelete', { name: script.scriptName }),
-                  'aria-label': t('settings.regexDelete', { name: script.scriptName }),
-                  disabled: editing === script.id,
-                  // 删除确认（2026-10-21 分页 UX）：原实现一键即删、无回滚面，
-                  // 误点 trash 直接丢脚本——与角色/预设/世界书同款确认口径。
-                  onClick: () => {
-                    if (!window.confirm(t('settings.regexDeleteConfirm', { name: script.scriptName }))) return
-                    run(saveRegexScripts(scripts.filter((item) => item.id !== script.id)))
-                  },
-                }, h(IconTrashOutline16)))),
-            editing === script.id
-              ? h('div', { className: 'dt-regex-editor-wrap' },
-                h(RegexScriptEditor, { script, onSave: saveScript, onCancel: closeEditor }))
-              : null))),
+                  className: 'dt-regex-group-delete',
+                  title: t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
+                  'aria-label': t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
+                  disabled: editing !== '',
+                  onClick: () => deleteGroup(group),
+                }, h(IconTrashOutline16), h('span', null, t('settings.regexDeleteGroupShort')))),
+              h('div', { className: 'dt-regex-list' }, visible.map(scriptItem))))),
         notice ? h('p', { className: 'dt-muted' }, notice) : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }

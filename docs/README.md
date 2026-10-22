@@ -128,6 +128,7 @@
 - [`2026-10-22-jsr-storage-packages.md`](../decisions/2026-10-22-jsr-storage-packages.md) — JSR 兼容运行时与沙箱虚拟存储拆分为独立库包（`tavern-jsr` / `tavern-frontend-storage`）
 - [`2026-10-22-card-scoped-regex-and-worlds.md`](../decisions/2026-10-22-card-scoped-regex-and-worlds.md) — 卡级/预设级正则与世界书跟随来源自动启用/停用（手动勾选不被插件改写）
 - [`2026-10-23-scoped-regex-identity-and-world-toggle.md`](../decisions/2026-10-23-scoped-regex-identity-and-world-toggle.md) — 同名正则按来源拆分实体（识别修复）、面板开关可切换并可转全局、链接世界书显示实际启停
+- [`2026-10-23-regex-source-groups-and-bulk-delete.md`](../decisions/2026-10-23-regex-source-groups-and-bulk-delete.md) — 正则列表按全局/角色卡/预设分区，并在分区头提供整段清空
 
 ### 面板与视图
 

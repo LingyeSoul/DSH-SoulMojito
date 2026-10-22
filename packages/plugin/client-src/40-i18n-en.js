@@ -119,6 +119,18 @@
       'settings.regexReleaseShort': 'global',
       'settings.regexReleaseConfirm': 'Remove "{name}" from "{owner}" and make it a global script? It will then run in every session.',
       'settings.regexReleased': '"{name}" is now a global script.',
+      // Source groups and bulk delete (2026-10-23 user request): global scripts,
+      // each character card and each preset form one group; a group header can
+      // clear everything that source imported in one action.
+      'settings.regexGroupGlobal': 'Global scripts',
+      'settings.regexGroupCharacter': 'Card "{name}"',
+      'settings.regexGroupPreset': 'Preset "{name}"',
+      'settings.regexGroupActive': 'current',
+      'settings.regexGroupCount': '{count} scripts',
+      'settings.regexDeleteGroup': 'Delete all {count} scripts in {scope}',
+      'settings.regexDeleteGroupShort': 'Clear group',
+      'settings.regexDeleteGroupConfirm': 'Delete all {count} regex scripts in {scope}? This cannot be undone.',
+      'settings.regexDeleteGroupDone': 'Deleted {count} regex scripts from {scope}.',
       'panel.title': 'Tavern management',
       'panel.close': 'Close panel',
       'panel.open': 'Open Tavern panel',

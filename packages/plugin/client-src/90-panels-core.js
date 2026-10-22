@@ -25,13 +25,13 @@
 
     for (const definition of [
       { id: 'overview', icon: IconSparkle16, label: (t) => t('panel.section.overview'), component: () => h(PanelOverview) },
-      { id: 'characters', group: 'content', icon: IconUserOutline16, label: (t) => t('panel.section.characters'), component: (host) => h(PanelCharacters, { ctx: host.ctx }) },
+      { id: 'characters', group: 'content', icon: IconUserOutline16, label: (t) => t('panel.section.characters'), component: (host) => h(PanelCharacters, { ctx: host.ctx, useSessions: host.useSessions }) },
       { id: 'chats', group: 'session', icon: IconQueueOutline14, label: (t) => t('panel.section.chats'), component: (host) => h(TavernSidebar, { ctx: host.ctx, useSessions: host.useSessions }) },
       { id: 'guides', group: 'session', icon: IconListPenOutline16, label: (t) => t('panel.section.guides'), component: (host) => h(PanelGuides, { useSessions: host.useSessions }) },
       { id: 'novels', group: 'content', icon: IconEditOutline16, label: (t) => t('panel.section.novels'), component: (host) => h(PanelNovels, { ctx: host.ctx }) },
       { id: 'groups', group: 'content', icon: IconPlusOutline16, label: (t) => t('panel.section.groups'), component: () => h(GroupBand) },
       { id: 'personas', group: 'content', icon: IconPersonalizationOutline16, label: (t) => t('panel.section.personas'), component: () => h(PersonaBand) },
-      { id: 'worlds', group: 'content', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: () => h(PanelWorlds) },
+      { id: 'worlds', group: 'content', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: (host) => h(PanelWorlds, { useSessions: host.useSessions }) },
       // 第 19 个分区「行为设置」（2026-10-21 用户需求「改进管理面板交互」）：
       // 散养在「当前配置」架构分支、世界书清单顶与游戏清单顶的行为开关全部收编
       // 到这里，按行为对应关系分组（会话 / 世界书 / 工具写入 / 前端与卡脚本 / 游戏）。
@@ -39,7 +39,7 @@
       { id: 'behavior', group: 'system', icon: IconSlidersOutline16, label: (t) => t('panel.section.behavior'), component: () => h(BehaviorSettingsBand) },
       { id: 'presets', group: 'system', icon: IconAgentPresetOutline16, label: (t) => t('panel.section.presets'), component: () => h(PanelPresets) },
       { id: 'scripts', group: 'content', icon: IconBookOutline16, label: (t) => t('panel.section.scripts'), component: () => h(PanelScripts) },
-      { id: 'regex', group: 'system', icon: IconSearchOutline16, label: (t) => t('panel.section.regex'), component: () => h(RegexBand) },
+      { id: 'regex', group: 'system', icon: IconSearchOutline16, label: (t) => t('panel.section.regex'), component: (host) => h(RegexBand, { useSessions: host.useSessions }) },
       { id: 'variables', group: 'session', icon: IconDataOutline16, label: (t) => t('panel.section.variables'), component: (host) => h(PanelVariables, { useSessions: host.useSessions }) },
       { id: 'workbench', group: 'system', icon: IconCheckOutline16, label: (t) => t('panel.section.workbench'), component: () => h(PanelWorkbench) },
       // 第 14 个分区「游戏」（提案 0018 §4.3，P1）：清单 + 开局 + 本聊天对局面
@@ -271,9 +271,11 @@
     // normalizeEntry 口径补全（与 worldbook.ts 落库归一一致）。
     const BLANK_WORLD_BOOK = { name: '', entries: [] }
 
-    function PanelCharacters({ ctx }) {
+    function PanelCharacters({ ctx, useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
+      // 当前卡跟随当前会话绑定；全局 activeCharacter 只是最后一次激活的指针。
+      const activeCharacter = useActiveTavernCharacter(useSessions)
       const [error, setError] = useState('')
       const [viewing, setViewing] = useState('')
       const [editing, setEditing] = useState('')
@@ -387,7 +389,8 @@
                   h(CardEditor, { card: BLANK_CHARACTER_CARD, name: '', hint: t('panel.characters.createEditorHint'), onSave: createCharacter, onCancel: () => setCreating(false) }))
                 : null,
               visibleCharacters.map((name) => {
-              const active = state.bootstrap.state.activeCharacter === name
+              const active = activeCharacter === name
+                || (activeCharacter !== '' && normalizeTavernName(activeCharacter) === normalizeTavernName(name))
               const card = cards[name]
               return h('div', { key: name, className: `dt-card ${editing === name ? 'dt-card-editing' : ''}` },
                 h('div', { className: 'dt-card-head' },
@@ -511,7 +514,7 @@
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
-    function PanelWorlds() {
+    function PanelWorlds({ useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
@@ -520,12 +523,16 @@
       const [creating, setCreating] = useState(false)
       const [books, setBooks] = useState({})
       const [filter, setFilter] = useState('')
+      // 当前卡以当前宿主会话的 Tavern 绑定为准；bootstrap.activeCard 只对应全局
+      // activeCharacter，切回旧会话时可能仍是上一张卡，按需拉取当前卡的对象。
+      const activeCharacter = useActiveTavernCharacter(useSessions)
+      const activeCard = useTavernCharacterCard(useSessions, activeCharacter)
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
       // 世界书跟随角色卡是会话级行为（2026-10-22 决策）：链接书由生成面自动并入，
 // 不写手动 activeWorlds。面板按钮显示的是「实际生效」状态（2026-10-23 用户
 // 反馈）：链接书自动勾选；取消勾选记入 disabledAutoWorlds，才能真正停用它。
       const follow = state.bootstrap.state.worldFollowsCharacter !== false
-      const linkedWorld = follow ? state.bootstrap.activeCard?.data?.extensions?.world : undefined
+      const linkedWorld = follow ? activeCard?.data?.extensions?.world : undefined
       const autoWorld = typeof linkedWorld === 'string' && linkedWorld.trim() !== '' ? linkedWorld.trim() : ''
       const disabledAutoWorlds = Array.isArray(state.bootstrap.state.disabledAutoWorlds)
         ? state.bootstrap.state.disabledAutoWorlds

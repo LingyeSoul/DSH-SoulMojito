@@ -118,6 +118,17 @@
       'settings.regexReleaseShort': '全局',
       'settings.regexReleaseConfirm': '将「{name}」从「{owner}」移出并改为全局脚本？此后它在所有会话都生效。',
       'settings.regexReleased': '「{name}」已改为全局脚本。',
+      // 按来源分区与整段删除（2026-10-23 用户需求）：全局、每张角色卡、每个预设
+      // 各成一段，段头可一次清空该来源导入的全部脚本。
+      'settings.regexGroupGlobal': '全局脚本',
+      'settings.regexGroupCharacter': '角色卡“{name}”',
+      'settings.regexGroupPreset': '预设“{name}”',
+      'settings.regexGroupActive': '当前',
+      'settings.regexGroupCount': '{count} 条',
+      'settings.regexDeleteGroup': '删除{scope}分区的全部 {count} 个脚本',
+      'settings.regexDeleteGroupShort': '清空分区',
+      'settings.regexDeleteGroupConfirm': '删除{scope}分区的全部 {count} 个正则脚本？此操作不可撤销。',
+      'settings.regexDeleteGroupDone': '已删除{scope}分区的 {count} 个正则脚本。',
       'panel.title': '酒馆管理面板',
       'panel.close': '关闭面板',
       'panel.open': '打开酒馆面板',

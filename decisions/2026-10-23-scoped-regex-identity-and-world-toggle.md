@@ -7,6 +7,7 @@
 1. **正则实体按 `scriptName` 全局合并、单归属**：两张卡都内嵌同名脚本（如「状态栏美化」）时，后导入的卡要么顶掉前一张卡的实体，要么被旧归属挡住；全局列表里最终只有一条实体，只记得一个 owner。另一张卡的脚本在面板里不可见/被锁死，点开关时 `disabled` 命中不了它，看起来就是「没反应」。运行期 `collectRegexScripts` 还能靠卡内脚本兜底，但面板与开关状态已经失真。
 2. **面板把非当前来源的脚本 `disabled` 锁死**：即使识别正确，归属其他卡的脚本开关也是 disabled，点击没有任何回执。
 3. **世界书勾选只渲染手动 `activeWorlds`**：链接书由生成面自动并入，从不写手动列表。旧版本切卡时曾把链接书写进 `activeWorlds`，于是换卡后旧书残留勾选、新卡链接书永远不勾选。
+4. **面板的「当前角色」只读全局 `activeCharacter`**：`openTavernChat` 命中已有绑定会话时直接打开视图，不再调用 `/binding`；切回旧会话（如 FX 战士）不会重写全局指针，面板就继续按上一张卡解析链接书。宿主会话切换本身也不经过 Tavern 绑定写入。
 
 ## 决策
 
@@ -15,6 +16,7 @@
 - **面板开关不再锁死**：归属其他来源的脚本仍置灰，但可以切换（保存脚本自身 `disabled`），并在切换时给「只在某卡/某预设会话生效」的回执。每行新增「全局」按钮：换一个新 id 保存，服务端剪掉旧归属，脚本转为全局。
 - **世界书显示实际生效状态**：链接到当前角色卡的世界书自动勾选并带「自动」徽标；取消勾选写入 `TavernState.disabledAutoWorlds`，生成面跳过该书且不回落到卡内嵌书。手动 `activeWorlds` 仍优先，且插件仍不把链接书写入手动列表。
 - **切卡清理残留**：`activeCharacterPatch` 在切换活跃角色卡（面板或会话绑定）时，把上一张卡链接书在 `activeWorlds` 里的残留条目移除，避免旧版本污染继续显示。
+- **面板当前卡跟随会话绑定**：新增 `useActiveTavernCharacter` / `useTavernCharacterCard`，角色/世界书/正则分区优先读当前宿主会话的 `sessionBindings[<当前会话>].character`，无绑定才回落全局 `activeCharacter`；会话绑定的卡与 bootstrap 的 `activeCard` 不同时按需拉取卡对象。`openTavernChat` 命中已有绑定时同步一次全局 `activeCharacter`，保证两侧一致。
 
 ## 边界
 
@@ -28,4 +30,5 @@
 - `packages/tavern-store/tests/store.spec.ts`：同名跨卡导入各持一条；重导入只更新本卡；旧 state 单归属迁移拆分；幂等。
 - `packages/plugin/tests/tavern-assets.spec.ts`：同名跨卡生效集各取自己那条；`disabledAutoWorlds` 停用链接书且不回落内嵌书；手动 `activeWorlds` 优先。
 - `packages/plugin/tests/tavern-command.spec.ts`：切卡清掉旧卡链接书残留；`disabledAutoWorlds` 路由可写。
-- `pnpm run check`：2014 项测试 + 18 项 gates PASS。
+- `packages/plugin/tests/panel-active-session.spec.ts`：面板当前卡优先当前会话绑定、三分区收到宿主会话 hook、重开旧会话同步全局指针、卡名 stem 归一化。
+- `pnpm run check`：2022 项测试通过（1 项环境跳过）+ 18 项 gates PASS。

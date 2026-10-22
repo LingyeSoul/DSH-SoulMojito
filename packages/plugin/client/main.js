@@ -2180,6 +2180,18 @@ window.__ModuleLoader__.load({
       'settings.regexReleaseShort': 'global',
       'settings.regexReleaseConfirm': 'Remove "{name}" from "{owner}" and make it a global script? It will then run in every session.',
       'settings.regexReleased': '"{name}" is now a global script.',
+      // Source groups and bulk delete (2026-10-23 user request): global scripts,
+      // each character card and each preset form one group; a group header can
+      // clear everything that source imported in one action.
+      'settings.regexGroupGlobal': 'Global scripts',
+      'settings.regexGroupCharacter': 'Card "{name}"',
+      'settings.regexGroupPreset': 'Preset "{name}"',
+      'settings.regexGroupActive': 'current',
+      'settings.regexGroupCount': '{count} scripts',
+      'settings.regexDeleteGroup': 'Delete all {count} scripts in {scope}',
+      'settings.regexDeleteGroupShort': 'Clear group',
+      'settings.regexDeleteGroupConfirm': 'Delete all {count} regex scripts in {scope}? This cannot be undone.',
+      'settings.regexDeleteGroupDone': 'Deleted {count} regex scripts from {scope}.',
       'panel.title': 'Tavern management',
       'panel.close': 'Close panel',
       'panel.open': 'Open Tavern panel',
@@ -3065,6 +3077,17 @@ window.__ModuleLoader__.load({
       'settings.regexReleaseShort': '全局',
       'settings.regexReleaseConfirm': '将「{name}」从「{owner}」移出并改为全局脚本？此后它在所有会话都生效。',
       'settings.regexReleased': '「{name}」已改为全局脚本。',
+      // 按来源分区与整段删除（2026-10-23 用户需求）：全局、每张角色卡、每个预设
+      // 各成一段，段头可一次清空该来源导入的全部脚本。
+      'settings.regexGroupGlobal': '全局脚本',
+      'settings.regexGroupCharacter': '角色卡“{name}”',
+      'settings.regexGroupPreset': '预设“{name}”',
+      'settings.regexGroupActive': '当前',
+      'settings.regexGroupCount': '{count} 条',
+      'settings.regexDeleteGroup': '删除{scope}分区的全部 {count} 个脚本',
+      'settings.regexDeleteGroupShort': '清空分区',
+      'settings.regexDeleteGroupConfirm': '删除{scope}分区的全部 {count} 个正则脚本？此操作不可撤销。',
+      'settings.regexDeleteGroupDone': '已删除{scope}分区的 {count} 个正则脚本。',
       'panel.title': '酒馆管理面板',
       'panel.close': '关闭面板',
       'panel.open': '打开酒馆面板',
@@ -4492,6 +4515,48 @@ window.__ModuleLoader__.load({
       })
     }
 
+    // 面板/生成共用的角色名归一化（与服务端 safeFileName 同规则）：角色卡显示名
+    // 与文件名 stem 可能只差非法字符的替换。
+    function normalizeTavernName(value) {
+      return String(value || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 120)
+    }
+
+    // 管理面板的「当前角色」：优先当前宿主会话的 Tavern 绑定。openTavernChat
+    // 命中已有绑定时直接打开视图、不重写全局 activeCharacter，所以只读全局指针
+    // 会在切回旧会话后仍显示上一次激活的卡（2026-10-23 用户反馈：切到 FX 后
+    // 世界书面板还在看上一张卡）。
+    function useActiveTavernCharacter(useSessions) {
+      const state = useTavernStore()
+      const currentSession = useSessions ? useCurrentSessionId(useSessions) : undefined
+      const binding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : undefined
+      const bound = binding && binding.group !== true && typeof binding.character === 'string'
+        ? binding.character
+        : ''
+      return bound !== '' ? bound : state.bootstrap.state.activeCharacter || ''
+    }
+
+    // 当前角色对应的卡对象：bootstrap.activeCard 只对全局 activeCharacter 有效，
+    // 会话绑定的卡不同时按需拉取；storeRevision 变化（后台写卡/编辑）会重取。
+    function useTavernCharacterCard(useSessions, character) {
+      const state = useTavernStore()
+      const bootstrapCard = state.bootstrap.activeCard
+      const bootstrapCharacter = state.bootstrap.state.activeCharacter || ''
+      const [card, setCard] = useState(null)
+      useEffect(() => {
+        if (character === '') { setCard(null); return undefined }
+        const sameAsBootstrap = bootstrapCharacter === character
+          || (bootstrapCard?.data?.name !== undefined
+            && normalizeTavernName(bootstrapCard.data.name) === normalizeTavernName(character))
+        if (sameAsBootstrap) { setCard(bootstrapCard); return undefined }
+        let cancelled = false
+        void fetchCharacterCard(character)
+          .then((next) => { if (!cancelled) setCard(next) })
+          .catch(() => { if (!cancelled) setCard(null) })
+        return () => { cancelled = true }
+      }, [character, bootstrapCharacter, bootstrapCard, state.bootstrap.storeRevision])
+      return card
+    }
+
     function architectureLabel(architecture) {
       if (architecture === 'agent-novel') return translate('view.architectureNovel')
       if (architecture === 'card-workbench') return translate('workbench.sessionLabel')
@@ -4646,6 +4711,11 @@ window.__ModuleLoader__.load({
         // 服务端借此补占位 turn 对，解除原生「新建会话」的复用劫持（幂等）。
         if (bindingArchitecture(existing[1]) === 'st' || existing[1].initializationPending === true) {
           void repairBinding(ctx, existing[0], existing[1])
+        }
+        // 切回旧会话时同步全局 activeCharacter（服务端顺带清掉上一张卡链接书的
+        // 手动残留）；面板本身以会话绑定为准，这里保持其他全局指针一致。
+        if (!group && snapshot.bootstrap.state.activeCharacter !== character) {
+          void patchState({ activeCharacter: character }).catch(() => {})
         }
         reserveTavernSession(ctx, existing[0])
         openSessionView(ctx, existing[0])
@@ -5857,7 +5927,7 @@ window.__ModuleLoader__.load({
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
-    function RegexBand() {
+    function RegexBand({ useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
@@ -5870,13 +5940,13 @@ window.__ModuleLoader__.load({
       // 或所属预设正在激活的脚本在本会话生效；其余置灰并锁定开关，编辑面仍保留。
       const cardOwners = state.bootstrap.state.regexScriptOwners || {}
       const presetOwners = state.bootstrap.state.regexScriptPresetOwners || {}
-      const activeCharacter = state.bootstrap.state.activeCharacter || ''
+      // 当前卡以当前宿主会话的 Tavern 绑定为准（切回旧会话不会重写全局指针）。
+      const activeCharacter = useActiveTavernCharacter(useSessions)
       const activePreset = state.bootstrap.state.activePreset || ''
       // 角色卡名与文件名 stem 可能因非法字符被 safeFileName 改写（服务端同名规则），
       // 面板比较两边都归一化，避免「明明是本卡却判成别的卡」的识别失败。
-      const normalizeName = (value) => String(value || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 120)
       const sameCharacter = (owner) => owner !== undefined
-        && (owner === activeCharacter || normalizeName(owner) === normalizeName(activeCharacter))
+        && (owner === activeCharacter || normalizeTavernName(owner) === normalizeTavernName(activeCharacter))
       const cardOwnerOf = (script) => cardOwners[script.id]
       const presetOwnerOf = (script) => presetOwners[script.id]
       const autoInactive = (script) => {
@@ -5888,9 +5958,40 @@ window.__ModuleLoader__.load({
       // 名称/模式过滤（2026-10-21 分页 UX）：与角色/预设/剧本清单同款模式，
       // 模式串也参与匹配（正则要的就是按 pattern 找）。
       const regexQuery = regexFilter.trim().toLowerCase()
-      const visibleScripts = regexQuery === ''
-        ? scripts
-        : scripts.filter((script) => script.scriptName.toLowerCase().includes(regexQuery) || script.findRegex.toLowerCase().includes(regexQuery))
+      // 按来源分区（2026-10-23 用户需求）：全局、每张角色卡、每个预设各成一段。
+      // 分区按「全局 → 角色卡 → 预设」、组内名称排序，避免每次写盘后顺序漂移。
+      const regexGroups = () => {
+        const groups = new Map()
+        for (const script of scripts) {
+          const cardOwner = cardOwnerOf(script)
+          const presetOwner = presetOwnerOf(script)
+          const kind = cardOwner !== undefined ? 'character' : presetOwner !== undefined ? 'preset' : 'global'
+          const name = cardOwner ?? presetOwner ?? ''
+          const key = `${kind}:${name}`
+          const group = groups.get(key) ?? { key, kind, name, scripts: [] }
+          group.scripts.push(script)
+          groups.set(key, group)
+        }
+        const rank = { global: 0, character: 1, preset: 2 }
+        return [...groups.values()].sort((left, right) => rank[left.kind] - rank[right.kind] || left.name.localeCompare(right.name))
+      }
+      const groupLabel = (group) => group.kind === 'global'
+        ? t('settings.regexGroupGlobal')
+        : t(group.kind === 'character' ? 'settings.regexGroupCharacter' : 'settings.regexGroupPreset', { name: group.name })
+      const groupActive = (group) => group.kind === 'character'
+        ? sameCharacter(group.name)
+        : group.kind === 'preset' && group.name === activePreset
+      // 过滤只影响分段内可见条目，分区数字与「清空分区」始终指向该来源的全部
+      // 脚本——否则过滤状态下删分区会留下看不见的残留。
+      const visibleGroups = regexGroups()
+        .map((group) => ({
+          group,
+          visible: group.scripts.filter((script) => regexQuery === ''
+            || script.scriptName.toLowerCase().includes(regexQuery)
+            || script.findRegex.toLowerCase().includes(regexQuery)),
+        }))
+        .filter((entry) => entry.visible.length > 0)
+      const visibleCount = visibleGroups.reduce((sum, entry) => sum + entry.visible.length, 0)
       const run = (promise) => { setError(''); setNotice(''); void promise.catch((cause) => setError(cause.message)) }
       const saveScript = (script) => {
         const next = scripts.some((item) => item.id === script.id)
@@ -5919,6 +6020,18 @@ window.__ModuleLoader__.load({
         run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, id } : item))
           .then(() => setNotice(t('settings.regexReleased', { name: script.scriptName }))))
       }
+      // 清空分区（2026-10-23 用户需求）：一次移除该角色卡/预设/全局的全部脚本。
+      // 服务端 replaceRegexScripts 会同步剪掉这些 id 的两张归属表，无需另行清理。
+      const deleteGroup = (group) => {
+        const scope = groupLabel(group)
+        const count = group.scripts.length
+        if (!window.confirm(t('settings.regexDeleteGroupConfirm', { scope, count }))) return
+        const removed = new Set(group.scripts.map((script) => script.id))
+        run(saveRegexScripts(scripts.filter((script) => !removed.has(script.id))).then(() => {
+          setEditing((current) => (removed.has(current) ? '' : current))
+          setNotice(t('settings.regexDeleteGroupDone', { scope, count: removed.size }))
+        }))
+      }
       // 两个回填入口共用一份 busy 状态：同一时刻只允许一个扫描在跑，回执不交叉。
       const sync = (source, request, doneKey) => {
         setError('')
@@ -5934,6 +6047,76 @@ window.__ModuleLoader__.load({
       const syncFromCards = () => sync('cards', syncRegexScriptsFromCards, 'settings.regexSyncDone')
       const syncFromPresets = () => sync('presets', syncRegexScriptsFromPresets, 'settings.regexSyncPresetsDone')
       const closeEditor = () => setEditing('')
+      const scriptItem = (script) => h('div', { key: script.id, className: 'dt-regex-item' },
+        h('div', { className: `dt-regex-row ${script.disabled || autoInactive(script) ? 'dt-regex-off' : ''}` },
+          // Checkbox keeps its own control surface; the script name is read
+          // text next to it, so the row can put the pattern on a second line.
+          // 归属别的角色卡/预设的脚本：置灰提示当前不生效，但仍允许切换——开关
+          // 写的是脚本自身的 disabled，等对应来源激活时生效；也在本行提供「转为全局」
+          // 解除归属，避免点击被禁用后毫无反应（2026-10-23 用户反馈）。
+          h('label', {
+            className: 'dt-toggle dt-regex-check',
+            title: autoInactive(script) ? t('settings.regexAutoInactive') : t('settings.regexToggle', { name: script.scriptName }),
+          },
+            h('input', {
+              type: 'checkbox',
+              'aria-label': autoInactive(script) ? t('settings.regexAutoInactive') : t('settings.regexToggle', { name: script.scriptName }),
+              checked: !script.disabled,
+              disabled: editing === script.id,
+              onChange: () => toggleScript(script),
+            })),
+          h('div', { className: 'dt-regex-main' },
+            h('div', { className: 'dt-regex-head' },
+              h('span', { className: 'dt-regex-name', title: script.scriptName }, script.scriptName),
+              cardOwnerOf(script) !== undefined
+                ? h('span', {
+                    className: 'dt-regex-owner',
+                    title: t(sameCharacter(cardOwnerOf(script)) ? 'settings.regexOwnerActive' : 'settings.regexOwnerInactive', { name: cardOwnerOf(script) }),
+                  }, t('settings.regexOwner', { name: cardOwnerOf(script) }))
+                : null,
+              presetOwnerOf(script) !== undefined
+                ? h('span', {
+                    className: 'dt-regex-owner',
+                    title: t(presetOwnerOf(script) === activePreset ? 'settings.regexPresetOwnerActive' : 'settings.regexPresetOwnerInactive', { name: presetOwnerOf(script) }),
+                  }, t('settings.regexPresetOwner', { name: presetOwnerOf(script) }))
+                : null,
+              h('span', { className: 'dt-regex-placements', title: t('settings.regexPlacements', { names: script.placement.map((p) => regexPlacementLabel(t, p)).join(', ') }) },
+                script.placement.map((p) => regexPlacementLabel(t, p)).join(' · '))),
+            h('code', { className: 'dt-regex-pattern', title: script.findRegex }, script.findRegex)),
+          h('div', { className: 'dt-regex-actions' },
+            cardOwnerOf(script) !== undefined || presetOwnerOf(script) !== undefined
+              ? h('button', {
+                  type: 'button',
+                  className: 'dt-regex-release',
+                  title: t('settings.regexRelease', { name: script.scriptName }),
+                  'aria-label': t('settings.regexRelease', { name: script.scriptName }),
+                  disabled: editing !== '',
+                  onClick: () => releaseOwnership(script),
+                }, t('settings.regexReleaseShort'))
+              : null,
+            h('button', {
+              type: 'button',
+              title: t('settings.regexEdit', { name: script.scriptName }),
+              'aria-label': t('settings.regexEdit', { name: script.scriptName }),
+              disabled: editing !== '' && editing !== script.id,
+              onClick: () => setEditing(editing === script.id ? '' : script.id),
+            }, h(IconEditOutline16)),
+            h('button', {
+              type: 'button',
+              title: t('settings.regexDelete', { name: script.scriptName }),
+              'aria-label': t('settings.regexDelete', { name: script.scriptName }),
+              disabled: editing === script.id,
+              // 删除确认（2026-10-21 分页 UX）：原实现一键即删、无回滚面，
+              // 误点 trash 直接丢脚本——与角色/预设/世界书同款确认口径。
+              onClick: () => {
+                if (!window.confirm(t('settings.regexDeleteConfirm', { name: script.scriptName }))) return
+                run(saveRegexScripts(scripts.filter((item) => item.id !== script.id)))
+              },
+            }, h(IconTrashOutline16)))),
+        editing === script.id
+          ? h('div', { className: 'dt-regex-editor-wrap' },
+            h(RegexScriptEditor, { script, onSave: saveScript, onCancel: closeEditor }))
+          : null)
       return h('section', { className: 'dt-settings-band' },
         h('div', { className: 'dt-band-actions' },
           h(Button, { size: 'sm', variant: 'primary', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => setEditing('new') }, t('settings.regexCreate')),
@@ -5946,79 +6129,31 @@ window.__ModuleLoader__.load({
           : null,
         scripts.length > 0 && editing === '' ? h('div', { className: 'dt-filter-row' },
           h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.filterPlaceholder'), 'aria-label': t('panel.filterPlaceholder'), value: regexFilter, onChange: (event) => setRegexFilter(event.target.value) })) : null,
-        scripts.length === 0 && editing !== 'new' ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : visibleScripts.length === 0
+        scripts.length === 0 && editing !== 'new' ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : visibleCount === 0
           ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
-          : h('div', { className: 'dt-regex-list' },
-            visibleScripts.map((script) => h('div', { key: script.id, className: 'dt-regex-item' },
-            h('div', { className: `dt-regex-row ${script.disabled || autoInactive(script) ? 'dt-regex-off' : ''}` },
-              // Checkbox keeps its own control surface; the script name is read
-              // text next to it, so the row can put the pattern on a second line.
-              // 归属别的角色卡/预设的脚本：置灰提示当前不生效，但仍允许切换——开关
-// 写的是脚本自身的 disabled，等对应来源激活时生效；也在本行提供「转为全局」
-// 解除归属，避免点击被禁用后毫无反应（2026-10-23 用户反馈）。
-              h('label', {
-                className: 'dt-toggle dt-regex-check',
-                title: autoInactive(script) ? t('settings.regexAutoInactive') : t('settings.regexToggle', { name: script.scriptName }),
-              },
-                h('input', {
-                  type: 'checkbox',
-                  'aria-label': autoInactive(script) ? t('settings.regexAutoInactive') : t('settings.regexToggle', { name: script.scriptName }),
-                  checked: !script.disabled,
-                  disabled: editing === script.id,
-                  onChange: () => toggleScript(script),
-                })),
-              h('div', { className: 'dt-regex-main' },
-                h('div', { className: 'dt-regex-head' },
-                  h('span', { className: 'dt-regex-name', title: script.scriptName }, script.scriptName),
-                  cardOwnerOf(script) !== undefined
-                    ? h('span', {
-                        className: 'dt-regex-owner',
-                        title: t(sameCharacter(cardOwnerOf(script)) ? 'settings.regexOwnerActive' : 'settings.regexOwnerInactive', { name: cardOwnerOf(script) }),
-                      }, t('settings.regexOwner', { name: cardOwnerOf(script) }))
-                    : null,
-                  presetOwnerOf(script) !== undefined
-                    ? h('span', {
-                        className: 'dt-regex-owner',
-                        title: t(presetOwnerOf(script) === activePreset ? 'settings.regexPresetOwnerActive' : 'settings.regexPresetOwnerInactive', { name: presetOwnerOf(script) }),
-                      }, t('settings.regexPresetOwner', { name: presetOwnerOf(script) }))
-                    : null,
-                  h('span', { className: 'dt-regex-placements', title: t('settings.regexPlacements', { names: script.placement.map((p) => regexPlacementLabel(t, p)).join(', ') }) },
-                    script.placement.map((p) => regexPlacementLabel(t, p)).join(' · '))),
-                h('code', { className: 'dt-regex-pattern', title: script.findRegex }, script.findRegex)),
-              h('div', { className: 'dt-regex-actions' },
-                cardOwnerOf(script) !== undefined || presetOwnerOf(script) !== undefined
-                  ? h('button', {
-                      type: 'button',
-                      className: 'dt-regex-release',
-                      title: t('settings.regexRelease', { name: script.scriptName }),
-                      'aria-label': t('settings.regexRelease', { name: script.scriptName }),
-                      disabled: editing !== '',
-                      onClick: () => releaseOwnership(script),
-                    }, t('settings.regexReleaseShort'))
-                  : null,
+          // 分区头固定展示该来源的全部条数（不是过滤后的条数），「清空分区」
+          // 也按全部删除；过滤只收窄组内可见行。
+          : h('div', { className: 'dt-regex-groups' },
+            visibleGroups.map(({ group, visible }) => h('div', {
+              key: group.key,
+              className: 'dt-regex-group',
+              role: 'group',
+              'aria-label': groupLabel(group),
+            },
+              h('div', { className: 'dt-regex-group-head' },
+                h('div', { className: 'dt-regex-group-title' },
+                  h('span', { className: 'dt-regex-group-name', title: groupLabel(group) }, groupLabel(group)),
+                  groupActive(group) ? h('span', { className: 'dt-regex-group-active' }, t('settings.regexGroupActive')) : null,
+                  h('span', { className: 'dt-regex-group-count' }, t('settings.regexGroupCount', { count: group.scripts.length }))),
                 h('button', {
                   type: 'button',
-                  title: t('settings.regexEdit', { name: script.scriptName }),
-                  'aria-label': t('settings.regexEdit', { name: script.scriptName }),
-                  disabled: editing !== '' && editing !== script.id,
-                  onClick: () => setEditing(editing === script.id ? '' : script.id),
-                }, h(IconEditOutline16)),
-                h('button', {
-                  type: 'button',
-                  title: t('settings.regexDelete', { name: script.scriptName }),
-                  'aria-label': t('settings.regexDelete', { name: script.scriptName }),
-                  disabled: editing === script.id,
-                  // 删除确认（2026-10-21 分页 UX）：原实现一键即删、无回滚面，
-                  // 误点 trash 直接丢脚本——与角色/预设/世界书同款确认口径。
-                  onClick: () => {
-                    if (!window.confirm(t('settings.regexDeleteConfirm', { name: script.scriptName }))) return
-                    run(saveRegexScripts(scripts.filter((item) => item.id !== script.id)))
-                  },
-                }, h(IconTrashOutline16)))),
-            editing === script.id
-              ? h('div', { className: 'dt-regex-editor-wrap' },
-                h(RegexScriptEditor, { script, onSave: saveScript, onCancel: closeEditor }))
-              : null))),
+                  className: 'dt-regex-group-delete',
+                  title: t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
+                  'aria-label': t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
+                  disabled: editing !== '',
+                  onClick: () => deleteGroup(group),
+                }, h(IconTrashOutline16), h('span', null, t('settings.regexDeleteGroupShort')))),
+              h('div', { className: 'dt-regex-list' }, visible.map(scriptItem))))),
         notice ? h('p', { className: 'dt-muted' }, notice) : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
@@ -9897,13 +10032,13 @@ window.__ModuleLoader__.load({
 
     for (const definition of [
       { id: 'overview', icon: IconSparkle16, label: (t) => t('panel.section.overview'), component: () => h(PanelOverview) },
-      { id: 'characters', group: 'content', icon: IconUserOutline16, label: (t) => t('panel.section.characters'), component: (host) => h(PanelCharacters, { ctx: host.ctx }) },
+      { id: 'characters', group: 'content', icon: IconUserOutline16, label: (t) => t('panel.section.characters'), component: (host) => h(PanelCharacters, { ctx: host.ctx, useSessions: host.useSessions }) },
       { id: 'chats', group: 'session', icon: IconQueueOutline14, label: (t) => t('panel.section.chats'), component: (host) => h(TavernSidebar, { ctx: host.ctx, useSessions: host.useSessions }) },
       { id: 'guides', group: 'session', icon: IconListPenOutline16, label: (t) => t('panel.section.guides'), component: (host) => h(PanelGuides, { useSessions: host.useSessions }) },
       { id: 'novels', group: 'content', icon: IconEditOutline16, label: (t) => t('panel.section.novels'), component: (host) => h(PanelNovels, { ctx: host.ctx }) },
       { id: 'groups', group: 'content', icon: IconPlusOutline16, label: (t) => t('panel.section.groups'), component: () => h(GroupBand) },
       { id: 'personas', group: 'content', icon: IconPersonalizationOutline16, label: (t) => t('panel.section.personas'), component: () => h(PersonaBand) },
-      { id: 'worlds', group: 'content', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: () => h(PanelWorlds) },
+      { id: 'worlds', group: 'content', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: (host) => h(PanelWorlds, { useSessions: host.useSessions }) },
       // 第 19 个分区「行为设置」（2026-10-21 用户需求「改进管理面板交互」）：
       // 散养在「当前配置」架构分支、世界书清单顶与游戏清单顶的行为开关全部收编
       // 到这里，按行为对应关系分组（会话 / 世界书 / 工具写入 / 前端与卡脚本 / 游戏）。
@@ -9911,7 +10046,7 @@ window.__ModuleLoader__.load({
       { id: 'behavior', group: 'system', icon: IconSlidersOutline16, label: (t) => t('panel.section.behavior'), component: () => h(BehaviorSettingsBand) },
       { id: 'presets', group: 'system', icon: IconAgentPresetOutline16, label: (t) => t('panel.section.presets'), component: () => h(PanelPresets) },
       { id: 'scripts', group: 'content', icon: IconBookOutline16, label: (t) => t('panel.section.scripts'), component: () => h(PanelScripts) },
-      { id: 'regex', group: 'system', icon: IconSearchOutline16, label: (t) => t('panel.section.regex'), component: () => h(RegexBand) },
+      { id: 'regex', group: 'system', icon: IconSearchOutline16, label: (t) => t('panel.section.regex'), component: (host) => h(RegexBand, { useSessions: host.useSessions }) },
       { id: 'variables', group: 'session', icon: IconDataOutline16, label: (t) => t('panel.section.variables'), component: (host) => h(PanelVariables, { useSessions: host.useSessions }) },
       { id: 'workbench', group: 'system', icon: IconCheckOutline16, label: (t) => t('panel.section.workbench'), component: () => h(PanelWorkbench) },
       // 第 14 个分区「游戏」（提案 0018 §4.3，P1）：清单 + 开局 + 本聊天对局面
@@ -10143,9 +10278,11 @@ window.__ModuleLoader__.load({
     // normalizeEntry 口径补全（与 worldbook.ts 落库归一一致）。
     const BLANK_WORLD_BOOK = { name: '', entries: [] }
 
-    function PanelCharacters({ ctx }) {
+    function PanelCharacters({ ctx, useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
+      // 当前卡跟随当前会话绑定；全局 activeCharacter 只是最后一次激活的指针。
+      const activeCharacter = useActiveTavernCharacter(useSessions)
       const [error, setError] = useState('')
       const [viewing, setViewing] = useState('')
       const [editing, setEditing] = useState('')
@@ -10259,7 +10396,8 @@ window.__ModuleLoader__.load({
                   h(CardEditor, { card: BLANK_CHARACTER_CARD, name: '', hint: t('panel.characters.createEditorHint'), onSave: createCharacter, onCancel: () => setCreating(false) }))
                 : null,
               visibleCharacters.map((name) => {
-              const active = state.bootstrap.state.activeCharacter === name
+              const active = activeCharacter === name
+                || (activeCharacter !== '' && normalizeTavernName(activeCharacter) === normalizeTavernName(name))
               const card = cards[name]
               return h('div', { key: name, className: `dt-card ${editing === name ? 'dt-card-editing' : ''}` },
                 h('div', { className: 'dt-card-head' },
@@ -10383,7 +10521,7 @@ window.__ModuleLoader__.load({
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
-    function PanelWorlds() {
+    function PanelWorlds({ useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
@@ -10392,12 +10530,16 @@ window.__ModuleLoader__.load({
       const [creating, setCreating] = useState(false)
       const [books, setBooks] = useState({})
       const [filter, setFilter] = useState('')
+      // 当前卡以当前宿主会话的 Tavern 绑定为准；bootstrap.activeCard 只对应全局
+      // activeCharacter，切回旧会话时可能仍是上一张卡，按需拉取当前卡的对象。
+      const activeCharacter = useActiveTavernCharacter(useSessions)
+      const activeCard = useTavernCharacterCard(useSessions, activeCharacter)
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
       // 世界书跟随角色卡是会话级行为（2026-10-22 决策）：链接书由生成面自动并入，
 // 不写手动 activeWorlds。面板按钮显示的是「实际生效」状态（2026-10-23 用户
 // 反馈）：链接书自动勾选；取消勾选记入 disabledAutoWorlds，才能真正停用它。
       const follow = state.bootstrap.state.worldFollowsCharacter !== false
-      const linkedWorld = follow ? state.bootstrap.activeCard?.data?.extensions?.world : undefined
+      const linkedWorld = follow ? activeCard?.data?.extensions?.world : undefined
       const autoWorld = typeof linkedWorld === 'string' && linkedWorld.trim() !== '' ? linkedWorld.trim() : ''
       const disabledAutoWorlds = Array.isArray(state.bootstrap.state.disabledAutoWorlds)
         ? state.bootstrap.state.disabledAutoWorlds
@@ -13123,6 +13265,9 @@ window.__ModuleLoader__.load({
         .dt-band-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}.dt-band-actions>.dt-upload{height:32px;font-size:13px}.dt-band-actions>.dt-upload:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-band-actions>button{min-height:32px;font-size:13px}
         .dt-regex-list{display:flex;flex-direction:column;gap:6px}.dt-regex-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;transition:background .12s}.dt-regex-row:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-row.dt-regex-off{opacity:.55}.dt-regex-check{min-height:0;flex:none}.dt-regex-main{display:flex;flex-direction:column;gap:1px;min-width:0}.dt-regex-head{display:flex;align-items:baseline;gap:8px;min-width:0}.dt-regex-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:18px;color:var(--dsw-alias-label-primary)}.dt-regex-owner{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-placements{flex:none;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-pattern{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:16px}.dt-regex-actions{display:flex;gap:2px;flex:none}.dt-regex-actions button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}
 .dt-regex-actions button.dt-regex-release{width:auto;padding:0 7px;font-size:11px;line-height:16px;white-space:nowrap}.dt-regex-actions button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-actions button:disabled{opacity:.4;cursor:not-allowed}.dt-regex-item{display:flex;flex-direction:column;gap:4px}.dt-regex-editor-wrap{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:12px}
+        /* 正则按来源分区（2026-10-23 用户需求）：段头一行放来源名、当前标记、
+           条数与清空按钮；窄屏允许换行，名字独占剩余宽度并省略。 */
+        .dt-regex-groups{display:flex;flex-direction:column;gap:14px}.dt-regex-group{display:flex;flex-direction:column;gap:6px}.dt-regex-group-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dt-regex-group-title{display:flex;align-items:center;gap:6px;flex:1;min-width:0;flex-wrap:wrap}.dt-regex-group-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-weight:600}.dt-regex-group-active{padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 14%,transparent);color:var(--dsw-alias-state-business-primary);font-size:11px;line-height:16px}.dt-regex-group-count{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-group-delete{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 7px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-tertiary);background:transparent;font-size:11px;line-height:16px;cursor:pointer}.dt-regex-group-delete:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}.dt-regex-group-delete:disabled{opacity:.4;cursor:not-allowed}
         .dt-field input[type=text],.dt-field input[type=password]{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 10px}.dt-upload:disabled{opacity:.5;cursor:not-allowed}
         .dt-backlink{display:flex;padding:2px 0}.dt-backlink>button{color:var(--dsw-alias-label-tertiary);background:transparent;border:0;cursor:pointer;font-size:12px;padding:4px 2px}.dt-backlink>button:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}
         .dt-member-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}.dt-member-row .dt-member-chip>button{display:none}.dt-script-glyph{font-weight:700;font-size:15px;line-height:1}.dt-sidebar-subheading{margin-top:10px}.dt-branch-btn{font-size:13px}

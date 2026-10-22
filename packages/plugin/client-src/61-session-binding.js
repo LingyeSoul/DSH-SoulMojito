@@ -14,6 +14,48 @@
       })
     }
 
+    // 面板/生成共用的角色名归一化（与服务端 safeFileName 同规则）：角色卡显示名
+    // 与文件名 stem 可能只差非法字符的替换。
+    function normalizeTavernName(value) {
+      return String(value || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 120)
+    }
+
+    // 管理面板的「当前角色」：优先当前宿主会话的 Tavern 绑定。openTavernChat
+    // 命中已有绑定时直接打开视图、不重写全局 activeCharacter，所以只读全局指针
+    // 会在切回旧会话后仍显示上一次激活的卡（2026-10-23 用户反馈：切到 FX 后
+    // 世界书面板还在看上一张卡）。
+    function useActiveTavernCharacter(useSessions) {
+      const state = useTavernStore()
+      const currentSession = useSessions ? useCurrentSessionId(useSessions) : undefined
+      const binding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : undefined
+      const bound = binding && binding.group !== true && typeof binding.character === 'string'
+        ? binding.character
+        : ''
+      return bound !== '' ? bound : state.bootstrap.state.activeCharacter || ''
+    }
+
+    // 当前角色对应的卡对象：bootstrap.activeCard 只对全局 activeCharacter 有效，
+    // 会话绑定的卡不同时按需拉取；storeRevision 变化（后台写卡/编辑）会重取。
+    function useTavernCharacterCard(useSessions, character) {
+      const state = useTavernStore()
+      const bootstrapCard = state.bootstrap.activeCard
+      const bootstrapCharacter = state.bootstrap.state.activeCharacter || ''
+      const [card, setCard] = useState(null)
+      useEffect(() => {
+        if (character === '') { setCard(null); return undefined }
+        const sameAsBootstrap = bootstrapCharacter === character
+          || (bootstrapCard?.data?.name !== undefined
+            && normalizeTavernName(bootstrapCard.data.name) === normalizeTavernName(character))
+        if (sameAsBootstrap) { setCard(bootstrapCard); return undefined }
+        let cancelled = false
+        void fetchCharacterCard(character)
+          .then((next) => { if (!cancelled) setCard(next) })
+          .catch(() => { if (!cancelled) setCard(null) })
+        return () => { cancelled = true }
+      }, [character, bootstrapCharacter, bootstrapCard, state.bootstrap.storeRevision])
+      return card
+    }
+
     function architectureLabel(architecture) {
       if (architecture === 'agent-novel') return translate('view.architectureNovel')
       if (architecture === 'card-workbench') return translate('workbench.sessionLabel')
@@ -168,6 +210,11 @@
         // 服务端借此补占位 turn 对，解除原生「新建会话」的复用劫持（幂等）。
         if (bindingArchitecture(existing[1]) === 'st' || existing[1].initializationPending === true) {
           void repairBinding(ctx, existing[0], existing[1])
+        }
+        // 切回旧会话时同步全局 activeCharacter（服务端顺带清掉上一张卡链接书的
+        // 手动残留）；面板本身以会话绑定为准，这里保持其他全局指针一致。
+        if (!group && snapshot.bootstrap.state.activeCharacter !== character) {
+          void patchState({ activeCharacter: character }).catch(() => {})
         }
         reserveTavernSession(ctx, existing[0])
         openSessionView(ctx, existing[0])
