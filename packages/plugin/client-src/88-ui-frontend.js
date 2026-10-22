@@ -6,6 +6,10 @@
     // 常驻保留最新快照即可；旧楼层不重复执行脚本，也不给用户一堆并行 iframe。
     // iframe 纪律完整继承内联 FrontendFrame（sandbox 无 same-origin、CSP、
     // token 校验的高度回传），侧栏只是换了一个宿主容器。
+    // 卡脚本自动运行（2026-10-21 第二次修订）：显式开启 cardScriptsAutoRun 后，
+    // 本 tab 同时承载卡内全部启用脚本——脚本块注入**同一个**沙箱文档，卡脚本的
+    // 悬浮面板/浮球 append 到 window.top.document.body 时直接落在美化前端里。
+    // ST 架构仍在「卡脚本」tab 自动运行（消息内联，右栏没有第二份前端）。
     const FRONTEND_TAB_ID = 'dsh-soulmojito/frontend'
     const FRONTEND_TAB_KIND = 'tavern-frontend'
     // apply 的 ctx.inject 回调在宿主服务就绪时置真：标题栏入口据此决定是否渲染
@@ -71,13 +75,77 @@
       }, [enabled, sessionId, binding?.character, binding?.chatId, architecture])
     }
 
+    // 卡脚本自动运行（2026-10-21 第二次修订）：设置显式开启后，卡脚本不再单独
+    // 占一个空白 iframe，而是注入「美化前端」最新楼层的同一个沙箱文档——脚本
+    // append 到 window.top.document.body 的悬浮面板直接叠在美化前端上。ST 仍在
+    // 「卡脚本」tab 内运行（消息正文内联，右栏没有第二份前端）。
+    const CARD_SCRIPTS_RESET_EVENT = 'dsh-soulmojito:card-scripts-reset'
+    const CARD_SCRIPTS_FONT_AWESOME = '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">'
+
+    // `</script` 必须转义，否则脚本字符串里的闭合标签会提前截断 HTML 解析。
+    // 每份脚本一个独立 module 块，共享同一文档的 window/document/全局变量。
+    function frontendCardScriptBlocks(scripts) {
+      return scripts.map((script) => {
+        const content = String(script.content || '').replace(/<\/script/gi, () => '<\\/script')
+        return `<script type="module">${content}</script>`
+      }).join('')
+    }
+
+    // 有最新美化楼层时把脚本块插到 `</body>` 之前（与 buildFrontendDocument 的
+    // 注入点同一套朴素规则）；没有美化楼层时给脚本一个 720px 画布，否则固定
+    // 定位的悬浮球/面板没有可视高度。Font Awesome 只补一次，卡自己带就不重复。
+    function frontendWithCardScripts(html, scripts) {
+      const blocks = frontendCardScriptBlocks(scripts)
+      const source = String(html || '').trim()
+      const fontAwesome = /font-awesome/i.test(source) ? '' : CARD_SCRIPTS_FONT_AWESOME
+      if (source === '') {
+        return '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+          + '<meta name="viewport" content="width=device-width, initial-scale=1">'
+          + `${fontAwesome}<style>html,body{margin:0;padding:0;background:transparent;min-height:100%;}</style>`
+          + `</head><body><div style="height:720px"></div>${blocks}</body></html>`
+      }
+      // 必须用 replacer 函数：脚本源码里的 `$'` / `$&` 是合法 JS，但作为
+      // String.replace 的字符串替换值会被当成替换模式，直接改写脚本并让
+      // srcdoc 抛 "Invalid or unexpected token"（实测 GM 面板有 29 处 `$'`）。
+      const withScripts = /<\/body\s*>/i.test(source)
+        ? source.replace(/<\/body\s*>/i, () => `${blocks}</body>`)
+        : `${source}${blocks}`
+      if (fontAwesome === '') return withScripts
+      return /<head(?:\s[^>]*)?>/i.test(withScripts)
+        ? withScripts.replace(/<head(?:\s[^>]*)?>/i, (tag) => `${tag}${fontAwesome}`)
+        : `${fontAwesome}${withScripts}`
+    }
+
+    // 一个楼层可能同时带多个完整文档（这张卡就是行动栏 35KB + 状态总览 154KB）。
+    // 自动运行的脚本必须落在玩家看的主前端，而不是第一个小框：取文档长度最大
+    // 者，同长度取最后一个。只注入这一个文档，别的 iframe 不重复执行脚本。
+    function frontendCardScriptHostIndex(documents) {
+      let host = 0
+      for (let index = 1; index < documents.length; index++) {
+        if (String(documents[index] || '').length >= String(documents[host] || '').length) host = index
+      }
+      return host
+    }
+
     function TavernFrontendPanel({ sessionId }) {
       const state = useTavernStore()
       const t = useTranslate()
       const binding = state.bootstrap.state.sessionBindings?.[sessionId]
       const architecture = bindingArchitecture(binding)
+      const cardScriptsAutoRun = state.bootstrap.state.cardScriptsAutoRun === true
       const [snapshot, setSnapshot] = useState(null)
       const [error, setError] = useState('')
+      // 卡脚本 bundle 只在聊天/设置变化时取一次：脚本源码可能很大（GM 面板
+      // 16 万字符），不能跟着 5s 前端轮询重取；运行中的脚本自己持有内存状态，
+      // 不因美化楼层刷新而重启。
+      const [scriptBundle, setScriptBundle] = useState(null)
+      const [scriptError, setScriptError] = useState('')
+      const [autoStopped, setAutoStopped] = useState(false)
+      const scriptRequestRef = useRef(0)
+      const key = binding === undefined
+        ? ''
+        : `${sessionId}\u0000${binding.character}\u0000${binding.chatId}`
+      const autoRunHosted = cardScriptsAutoRun && architecture === 'agent-tavern'
       const load = () => {
         if (!binding || architecture !== 'agent-tavern') return Promise.resolve()
         const query = `?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`
@@ -105,6 +173,44 @@
       // 原生会话的生成走宿主 AgentLoop，插件本地 chats/revisions 收不到信号
       // （与 MVU 侧栏同一条纪律）：可见期间 5s 重取，隐藏期间停发。
       useSessionPanelPoll(() => loadRef.current(), [binding?.character, binding?.chatId, architecture])
+      // 自动运行的脚本列表：只在 AgentTavern + 设置显式开启时取。竞态取消保证
+      // 切聊天后旧响应不会把上一场的脚本注入新聊天。
+      useEffect(() => {
+        if (binding === undefined || architecture !== 'agent-tavern' || !cardScriptsAutoRun) {
+          scriptRequestRef.current += 1
+          setScriptBundle(null)
+          setScriptError('')
+          setAutoStopped(false)
+          return undefined
+        }
+        const request = scriptRequestRef.current + 1
+        scriptRequestRef.current = request
+        setScriptBundle(null)
+        setScriptError('')
+        setAutoStopped(false)
+        const query = `?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`
+        void api(`card/scripts${query}`)
+          .then((result) => {
+            if (scriptRequestRef.current !== request) return
+            setScriptBundle({ key, scripts: Array.isArray(result?.scripts) ? result.scripts : [] })
+          })
+          .catch((cause) => {
+            if (scriptRequestRef.current !== request) return
+            // 404 是角色被删/绑定竞态：按无脚本处理，美化前端本体仍可展示。
+            setScriptBundle({ key, scripts: [] })
+            if (cause?.status !== 404) {
+              setScriptError(cause instanceof Error ? cause.message : String(cause))
+            }
+          })
+        return () => { scriptRequestRef.current += 1 }
+      }, [key, architecture, cardScriptsAutoRun, binding?.character])
+      // 卡脚本 tab 的「重置卡脚本」删除的是同一份会话副本：通知本 tab 立即停止
+      // 自动运行，避免 iframe 继续跑已经被重置的旧源码。
+      useEffect(() => {
+        const onReset = () => setAutoStopped(true)
+        addEventListener(CARD_SCRIPTS_RESET_EVENT, onReset)
+        return () => removeEventListener(CARD_SCRIPTS_RESET_EVENT, onReset)
+      }, [])
       if (!binding) {
         return h('div', { className: 'dt-frontend-side', 'data-dsh-soulmojito-surface': 'frontend-sidebar' },
           h('div', { className: 'dt-frontend-side-empty' }, h(IconSparkle16, { size: 22 }), h('span', null, t('frontend.unbound'))))
@@ -117,10 +223,52 @@
             h('span', null, architecture === 'st' ? t('frontend.inlineOnly') : t('frontend.unbound'))))
       }
       const message = snapshot?.message
+      const currentScripts = scriptBundle !== null && scriptBundle.key === key ? scriptBundle.scripts : []
+      const scripts = autoRunHosted && !autoStopped ? currentScripts : []
+      const autoRunning = scripts.length > 0
+      const scriptsPending = autoRunHosted && scriptBundle === null
+      // 只把卡脚本注入主前端（文档长度最大者）：最新楼层可能同时带行动栏小框
+      // 和状态总览大框，注入第一个会把 GM 面板塞进小框。
+      const scriptHostIndex = autoRunning && message !== undefined
+        ? frontendCardScriptHostIndex(message.documents)
+        : -1
+      const frameKey = `${message?.index ?? 'none'}:`
+        + (autoRunning ? scripts.map((script) => `${script.id}:${script.content.length}`).join('|') : '')
+      const frames = []
+      if (message !== undefined) {
+        message.documents.forEach((html, index) => {
+          const composed = index === scriptHostIndex ? frontendWithCardScripts(html, scripts) : html
+          frames.push(h('div', {
+            key: `${message.index}-${index}`,
+            className: 'dt-frontend-side-frame',
+          }, h(FrontendFrame, {
+            html: composed,
+            token: `tavern-frontend-${sessionId}-${message.index}-${index}`,
+            messageId: message.index,
+            hostSessionId: sessionId,
+            binding: { character: binding.character, chatId: binding.chatId },
+            refreshKey: frameKey,
+          })))
+        })
+      } else if (autoRunning) {
+        frames.push(h('div', {
+          key: 'card-scripts',
+          className: 'dt-frontend-side-frame',
+        }, h(FrontendFrame, {
+          html: frontendWithCardScripts('', scripts),
+          token: `tavern-frontend-${sessionId}-${binding.character}-${binding.chatId}-card-scripts`,
+          messageId: -1,
+          hostSessionId: sessionId,
+          binding: { character: binding.character, chatId: binding.chatId },
+          refreshKey: frameKey,
+        })))
+      }
       return h('div', { className: 'dt-frontend-side', 'data-dsh-soulmojito-surface': 'frontend-sidebar' },
         h('div', { className: 'dt-frontend-side-head' },
           h('span', { className: 'dt-frontend-side-meta' },
-            message ? t('frontend.floor', { index: message.index + 1 }) : t('frontend.empty')),
+            message
+              ? t('frontend.floor', { index: message.index + 1 })
+              : autoRunning ? t('frontend.cardScriptsOnly', { count: scripts.length }) : t('frontend.empty')),
           h('button', {
             type: 'button',
             className: 'dt-frontend-side-refresh',
@@ -129,20 +277,28 @@
             onClick: () => void loadRef.current(),
           }, h(IconRefreshOutline16))),
         error ? h('p', { className: 'dt-error' }, error) : null,
-        message
-          ? h('div', { className: 'dt-frontend-side-frames' }, message.documents.map((html, index) => h('div', {
-            key: `${message.index}-${index}`,
-            className: 'dt-frontend-side-frame',
-          }, h(FrontendFrame, {
-            html,
-            token: `tavern-frontend-${sessionId}-${message.index}-${index}`,
-            messageId: message.index,
-            hostSessionId: sessionId,
-            binding: { character: binding.character, chatId: binding.chatId },
-            refreshKey: `${snapshot?.revision ?? ''}:${message.index}`,
-          }))))
-          : h('div', { className: 'dt-frontend-side-empty' },
-            h(IconSparkle16, { size: 22 }),
-            h('strong', null, t('frontend.emptyTitle')),
-            h('p', { className: 'dt-hint' }, t('frontend.emptyHint'))))
+        scriptError ? h('p', { className: 'dt-error' }, t('frontend.cardScriptsError', { error: scriptError })) : null,
+        autoRunning
+          ? h('div', { className: 'dt-card-scripts-auto' },
+            h('span', { className: 'dt-card-script-running' },
+              t('frontend.cardScriptsAutoRunning', { count: scripts.length })),
+            h('button', {
+              type: 'button',
+              className: 'dt-card-script-run dt-card-script-stop',
+              onClick: () => setAutoStopped(true),
+            }, t('frontend.stopCardScripts')))
+          : null,
+        autoRunHosted && autoStopped && currentScripts.length > 0
+          ? h('p', { className: 'dt-hint' }, t('frontend.cardScriptsStopped'))
+          : null,
+        autoRunning ? h('p', { className: 'dt-card-scripts-warning', role: 'note' }, t('cardScripts.warning')) : null,
+        scriptsPending
+          ? h('div', { className: 'dt-frontend-side-empty' }, h(IconSparkle16, { size: 22 }),
+            h('span', null, t('cardScripts.loading')))
+          : frames.length > 0
+            ? h('div', { className: 'dt-frontend-side-frames' }, frames)
+            : h('div', { className: 'dt-frontend-side-empty' },
+              h(IconSparkle16, { size: 22 }),
+              h('strong', null, t('frontend.emptyTitle')),
+              h('p', { className: 'dt-hint' }, t('frontend.emptyHint'))))
     }

@@ -207,9 +207,10 @@ Agent 模式的 MVU 写入由插件完成：投影器解析模型回复末尾的
   一次；切换聊天/角色立即停止并清空；
 - 同一时间只运行一份脚本，且默认不打开。
 
-因此需要常驻悬浮面板的卡（例如 16 万字符的 GM 面板）仍需手动点一次「运行」；
-GM 面板自己的 `window.top.document` / `getCharWorldbookNames` /
-`updateWorldbookWith` 已在兼容面内（见 §4）。详见
+因此需要常驻悬浮面板的卡（例如 16 万字符的 GM 面板）默认仍需手动点一次「运行」；
+开启 `cardScriptsAutoRun` 后 AgentTavern 会把脚本自动注入「美化前端」的同一个
+iframe（ST 仍注入「卡脚本」tab），GM 面板的 `window.top.document` /
+`getCharWorldbookNames` / `updateWorldbookWith` 都在兼容面内（见 §4）。详见
 [`decisions/2026-10-21-card-scripts-host.md`](../../decisions/2026-10-21-card-scripts-host.md)。
 
 **脚本树会按聊天持久化（2026-10-21 追加）**：`getScriptTrees` /
@@ -231,20 +232,28 @@ helper RPC（供 iframe 内部使用，不是 `window.*` 公共 API）：
 | `scripts.put` | `{ scriptTrees }` | 覆盖本聊天副本；校验数组与每项对象；要求 `chatId` |
 | `scripts.reset` | 无 | 删除本聊天副本，返回 `{ reset: true }`；要求 `chatId` |
 
-**自动运行开关（2026-10-21 追加）**：设置页 `cardScriptsAutoRun` **默认关闭**。
-开启后：
+**自动运行开关（2026-10-21 追加，同日第二次修订）**：设置页 `cardScriptsAutoRun`
+**默认关闭**。开启后：
 
-- 进入/切入一个酒馆聊天（`agent-tavern` 或 `st`，非群聊）自动展开「卡脚本」
-  tab；每个 `(sessionId, 角色, 聊天)` 只自动打开一次，用户手动关掉后不抢焦点；
-- tab 把卡内**全部启用脚本**按脚本树顺序注入**同一个**沙箱 `FrontendFrame`
-  （每份脚本一个独立的 `<script type="module">` 块，复用现有沙箱/CSP/helper
-  shim）；
-- 这些脚本共享同一 iframe 的 `window` / `document` / 全局变量——不是 JSR 的
-  隔离脚本容器，脚本之间的冲突由卡作者负责；
+- **AgentTavern**：进入/切入酒馆聊天自动打开「美化前端」tab（不是「卡脚本」），
+  把卡内全部启用脚本按脚本树顺序注入**最新一条美化楼层里文档长度最大的完整
+  HTML**（同长度取最后一个；行动栏小框不抢宿主）所在的同一个沙箱文档
+  （每份脚本一个独立的 `<script type="module">` 块）。脚本的
+  `window.top.document.body` 就是这份美化前端文档——悬浮球 / GM 面板直接叠在
+  美化前端上，与前端共享 DOM、主题与 helper 通道；该楼层没有 HTML 时给脚本一个
+  独立画布（720px 起步）。
+- **ST**：消息正文内联渲染，右栏没有第二份前端；自动运行仍在「卡脚本」tab，
+  全部启用脚本注入同一个沙箱 iframe。
+- 脚本共享同一 iframe 的 `window` / `document` / 全局变量——不是 JSR 的隔离
+  脚本容器，脚本之间的冲突由卡作者负责；
 - 脚本仍拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限，
   只对信任的卡开启；
-- tab 内「停止自动运行」只停当前 iframe，不改设置；设置关掉后 tab 停止自动
-  运行并回到手动模式；手动逐个运行始终可用。
+- AgentTavern 下「卡脚本」tab 不再重复自动运行，只保留列表、重置与手动入口
+  （自动运行开启时手动运行禁用），并提供「打开美化前端」入口；
+- 「美化前端」tab 内可「停止自动运行」（只停当前 iframe，不改设置）；出现新的
+  美化楼层时整份文档重建，脚本随之重启。ST 的「停止自动运行」仍在卡脚本 tab；
+- 「重置卡脚本」会同时停止 AgentTavern 的自动运行（跨 tab 窗口事件），避免
+  iframe 继续跑已经被重置的旧源码。
 
 ---
 
@@ -458,7 +467,7 @@ await fetch  // 🧱 默认不可用（CSP connect-src 'none'）；设置页放�
 | 世界书写入后生成/状态栏没变化 | 副本按聊天隔离，且生成读取的是**副本**；基础 `worlds/` 面板不会显示副本内容 | 用 `getWorldbook(name)` 读回确认副本；需要回到原版就点「重置会话世界书」 |
 | 刷新后 GM 面板的 Zod 改动不见了 | 改动只在会话脚本树副本里；写入失败时 `updateScriptTreesWith` 会拒绝而不是假装成功 | 看卡脚本 tab 列表是否显示改后的名称/字符数；确认 `scripts.put` 没报错。切到别的聊天本来就读不到本聊天的副本 |
 | 重置卡脚本后 GM 面板还是旧内容 | 重置会删除副本并停止正在运行的脚本，但已经打开的 GM 面板不会自我改写 | 重新点「运行」；列表此时应回到角色卡原版 |
-| GM 悬浮面板挂载时报 `appendChild of null` | 卡脚本未运行，或运行的是旧构建（`fakeDocument.body` 为 null） | 在右栏「卡脚本」手动运行 GM 面板；确认构建包含 document facade |
+| GM 悬浮面板挂载时报 `appendChild of null` | 卡脚本未运行，或运行的是旧构建（`fakeDocument.body` 为 null） | 开启 `cardScriptsAutoRun` 让 AgentTavern 在「美化前端」里自动运行；关闭设置时可在右栏「卡脚本」手动运行 GM 面板；确认构建包含 document facade |
 
 ---
 

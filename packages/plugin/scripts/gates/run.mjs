@@ -886,6 +886,12 @@ function checkFrontendSurfaceText(text) {
     'function useFrontendAutoOpen(sessionId, binding, architecture, enabled)',
     "if (!enabled || !binding || architecture !== 'agent-tavern') return undefined",
     'autoOpenedRef.current.has(marker)',
+    // 卡脚本自动运行（2026-10-21 第二次修订）：脚本注入最新美化前端文档，不再
+    // 另起空白 iframe；重置事件跨 React 树停止自动运行。
+    'function frontendWithCardScripts(html, scripts)',
+    'function frontendCardScriptHostIndex(documents)',
+    "const CARD_SCRIPTS_RESET_EVENT = 'dsh-soulmojito:card-scripts-reset'",
+    "const autoRunHosted = cardScriptsAutoRun && architecture === 'agent-tavern'",
     // 酒馆助手兼容层（2026-10-20）：沙箱内 shim + 宿主侧代理 + 事件白名单。
     "const HELPER_MESSAGE = 'dsh-soulmojito:helper'",
     'function frontendHelperScript(token, messageId)',
@@ -2950,6 +2956,10 @@ const gates = [
         'function useFrontendAutoOpen(sessionId, binding, architecture, enabled)',
         "if (!enabled || !binding || architecture !== 'agent-tavern') return undefined",
         'autoOpenedRef.current.has(marker)',
+        'function frontendWithCardScripts(html, scripts)',
+        'function frontendCardScriptHostIndex(documents)',
+        "const CARD_SCRIPTS_RESET_EVENT = 'dsh-soulmojito:card-scripts-reset'",
+        "const autoRunHosted = cardScriptsAutoRun && architecture === 'agent-tavern'",
         "const HELPER_MESSAGE = 'dsh-soulmojito:helper'",
         'function frontendHelperScript(token, messageId)',
         'window.getVariables = function',

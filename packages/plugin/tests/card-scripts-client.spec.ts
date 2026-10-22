@@ -32,6 +32,8 @@ const CARD_SCRIPTS_I18N_KEYS = [
   'cardScripts.autoRunning',
   'cardScripts.stopAutoRun',
   'cardScripts.autoRunStopped',
+  'cardScripts.autoHostedInFrontend',
+  'cardScripts.openFrontend',
   'cardScripts.loadFailed',
 ]
 
@@ -97,12 +99,14 @@ describe('client card scripts sidebar (main.js source check)', () => {
     }
   })
 
-  it('gates and opens the tab automatically when cardScriptsAutoRun is on', () => {
+  it('gates and opens the auto-run host tab when cardScriptsAutoRun is on', () => {
     expect(source).toContain('function useCardScriptsAutoOpen(sessionId, binding, architecture, enabled)')
     expect(source).toContain('if (!enabled || binding === undefined || binding.group === true) return')
     expect(source).toContain("useCardScriptsAutoOpen(sessionId, binding, architecture, state.bootstrap.state.cardScriptsAutoRun === true)")
     expect(source).toContain('openedRef.current.has(key)')
-    expect(source).toContain('sidebarRight.openTab(CARD_SCRIPTS_TAB_KIND)')
+    // AgentTavern 的自动运行宿主是「美化前端」；ST 仍是「卡脚本」。
+    expect(source).toContain("const targetKind = architecture === 'agent-tavern' ? FRONTEND_TAB_KIND : CARD_SCRIPTS_TAB_KIND")
+    expect(source).toContain('sidebarRight.openTab(targetKind)')
     // 设置页开关与安全警告
     expect(source).toContain("applyPatch({ cardScriptsAutoRun: event.target.checked })")
     expect(source).toContain("t('settings.cardScriptsAutoRunHint')")
@@ -113,12 +117,21 @@ describe('client card scripts sidebar (main.js source check)', () => {
     expect(store).toContain('cardScriptsAutoRun: parsed.cardScriptsAutoRun === true')
   })
 
+  it('hands AgentTavern auto-run to the frontend tab and stops manual duplicates', () => {
+    expect(source).toContain("const autoRunHostedInFrontend = autoRunSetting && architecture === 'agent-tavern'")
+    expect(source).toContain("const autoRunEnabled = autoRunSetting && architecture === 'st'")
+    expect(source).toContain('disabled: autoRunning || autoRunHostedInFrontend')
+    expect(source).toContain("t('cardScripts.autoHostedInFrontend')")
+    expect(source).toContain("t('cardScripts.openFrontend')")
+    expect(source).toContain('window.dispatchEvent(new Event(CARD_SCRIPTS_RESET_EVENT))')
+  })
+
   it('auto-runs every enabled script in one sandboxed iframe and can stop', () => {
     expect(source).toContain('function cardScriptTreeDocument(scripts)')
     expect(source).toContain("return `<script type=\"module\">${content}</script>`")
     expect(source).toContain("token: `card-scripts-auto-${sessionId}`")
     expect(source).toContain('key: `card-scripts-auto-${sessionId}-${binding.chatId}`')
-    expect(source).toContain('const autoRunEnabled = state.bootstrap.state.cardScriptsAutoRun === true')
+    expect(source).toContain("const autoRunEnabled = autoRunSetting && architecture === 'st'")
     expect(source).toContain('const [autoRunning, setAutoRunning] = useState(false)')
     expect(source).toContain('const autoRunStoppedRef = useRef(false)')
     expect(source).toContain('bundle.key === key')
@@ -128,7 +141,7 @@ describe('client card scripts sidebar (main.js source check)', () => {
     const autoGate = source.indexOf('if (!supported || !autoRunEnabled) {')
     expect(autoGate).toBeGreaterThanOrEqual(0)
     expect(autoStart).toBeGreaterThan(autoGate)
-    expect(source).toContain('disabled: autoRunning')
+    expect(source).toContain('disabled: autoRunning || autoRunHostedInFrontend')
     expect(source).toContain('function cardScriptTreeRefreshKey(chatKey, scripts)')
     expect(source).toContain("t('cardScripts.autoRunning', { count: scripts.length })")
     expect(source).toContain("t('cardScripts.stopAutoRun')")

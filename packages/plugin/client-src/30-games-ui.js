@@ -123,6 +123,31 @@
       h('path', { d: 'M8 4.1v9.5', stroke: 'currentColor' }))
     }
 
+    // 「行为设置」分区图标（2026-10-21 开关收编）：宿主清单没有「调节/行为」语义
+    // 图形，照同款几何纪律自绘三条横轨 + 滑块（lucide sliders-horizontal 的 16px
+    // 比缩编）——16px 下「三轨三钮」三个特征立得住，闭合轮廓 1px 描边与宿主
+    // Regular 档观感一致。
+    function IconSlidersOutline16({ size = 16, className }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        strokeWidth: 1,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      h('path', { d: 'M2.5 4.5h11', stroke: 'currentColor' }),
+      h('circle', { cx: 10.5, cy: 4.5, r: 1.6, stroke: 'currentColor' }),
+      h('path', { d: 'M2.5 8h11', stroke: 'currentColor' }),
+      h('circle', { cx: 5.5, cy: 8, r: 1.6, stroke: 'currentColor' }),
+      h('path', { d: 'M2.5 11.5h11', stroke: 'currentColor' }),
+      h('circle', { cx: 12, cy: 11.5, r: 1.6, stroke: 'currentColor' }))
+    }
+
     // Brand logo (2026-10-16 user request): the delivered DSH-SoulMojito logo,
     // inlined verbatim from assets/logo.svg -- same viewBox, same primitives,
     // same palette. The client half is a ModuleLoader IIFE with no file access,
@@ -559,19 +584,8 @@
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
           h('p', { className: 'dt-hint' }, t('games.hint')),
-          // 禁用投降（2026-10-14 用户需求）：全局开关，服务端在两个动作入口
-          // （人类棋盘 / Agent game_move）逐次读取判定——翻转即时生效。
-          h('label', { className: 'dt-toggle' },
-            h('input', {
-              type: 'checkbox',
-              checked: state.bootstrap.state.gamesDisableResign === true,
-              onChange: (event) => {
-                // 失败进既有错误行（与开局错误同一位），不静默吞掉。
-                void patchState({ gamesDisableResign: event.target.checked })
-                  .catch((cause) => { setStartError(cause instanceof Error ? cause.message : String(cause)) })
-              },
-            }),
-            h('span', null, t('settings.gamesDisableResign'))),
+          // 禁用投降开关已迁至「行为设置」分区（2026-10-21 行为开关收编），
+          // 此处只留游戏清单；服务端仍在两个动作入口逐次读取判定。
           !hasBinding ? h('p', { className: 'dt-muted' }, t('games.needBinding')) : null,
           games === null
             ? h('p', { className: 'dt-muted' }, t('nav.loading'))

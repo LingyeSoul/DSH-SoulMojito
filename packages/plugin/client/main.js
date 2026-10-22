@@ -2029,6 +2029,31 @@ window.__ModuleLoader__.load({
       h('path', { d: 'M8 4.1v9.5', stroke: 'currentColor' }))
     }
 
+    // 「行为设置」分区图标（2026-10-21 开关收编）：宿主清单没有「调节/行为」语义
+    // 图形，照同款几何纪律自绘三条横轨 + 滑块（lucide sliders-horizontal 的 16px
+    // 比缩编）——16px 下「三轨三钮」三个特征立得住，闭合轮廓 1px 描边与宿主
+    // Regular 档观感一致。
+    function IconSlidersOutline16({ size = 16, className }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        strokeWidth: 1,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      h('path', { d: 'M2.5 4.5h11', stroke: 'currentColor' }),
+      h('circle', { cx: 10.5, cy: 4.5, r: 1.6, stroke: 'currentColor' }),
+      h('path', { d: 'M2.5 8h11', stroke: 'currentColor' }),
+      h('circle', { cx: 5.5, cy: 8, r: 1.6, stroke: 'currentColor' }),
+      h('path', { d: 'M2.5 11.5h11', stroke: 'currentColor' }),
+      h('circle', { cx: 12, cy: 11.5, r: 1.6, stroke: 'currentColor' }))
+    }
+
     // Brand logo (2026-10-16 user request): the delivered DSH-SoulMojito logo,
     // inlined verbatim from assets/logo.svg -- same viewBox, same primitives,
     // same palette. The client half is a ModuleLoader IIFE with no file access,
@@ -2465,19 +2490,8 @@ window.__ModuleLoader__.load({
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
           h('p', { className: 'dt-hint' }, t('games.hint')),
-          // 禁用投降（2026-10-14 用户需求）：全局开关，服务端在两个动作入口
-          // （人类棋盘 / Agent game_move）逐次读取判定——翻转即时生效。
-          h('label', { className: 'dt-toggle' },
-            h('input', {
-              type: 'checkbox',
-              checked: state.bootstrap.state.gamesDisableResign === true,
-              onChange: (event) => {
-                // 失败进既有错误行（与开局错误同一位），不静默吞掉。
-                void patchState({ gamesDisableResign: event.target.checked })
-                  .catch((cause) => { setStartError(cause instanceof Error ? cause.message : String(cause)) })
-              },
-            }),
-            h('span', null, t('settings.gamesDisableResign'))),
+          // 禁用投降开关已迁至「行为设置」分区（2026-10-21 行为开关收编），
+          // 此处只留游戏清单；服务端仍在两个动作入口逐次读取判定。
           !hasBinding ? h('p', { className: 'dt-muted' }, t('games.needBinding')) : null,
           games === null
             ? h('p', { className: 'dt-muted' }, t('nav.loading'))
@@ -2609,11 +2623,17 @@ window.__ModuleLoader__.load({
       'settings.allowGlobalWrites': 'Allow AgentTavern tools to write memories and variables in the global scope',
       'settings.frontendAutoOpen': 'Open the right sidebar when a frontend appears (once per chat)',
       'settings.cardScriptsAutoRun': 'Run card scripts automatically when entering a chat (off by default)',
-      'settings.cardScriptsAutoRunHint': 'Opening a Tavern chat expands the Card scripts tab and injects every enabled card script into one sandboxed iframe. Scripts share that iframe’s DOM and globals and can write this chat’s variables, messages, session world-book copy and session script-tree copy. Enable only for cards you trust.',
+      'settings.cardScriptsAutoRunHint': 'Opening a Tavern chat opens the tab that hosts auto-run: Frontend for AgentTavern, Card scripts for ST. Every enabled card script is injected into that frontend’s sandboxed document. Scripts share its DOM and globals and can write this chat’s variables, messages, session world-book copy and session script-tree copy. Enable only for cards you trust.',
       'settings.frontendAllowExternalResources': 'Allow frontends to load external resources (any HTTPS origin)',
       'settings.frontendAllowExternalResourcesHint': 'Lets the iframe load any HTTPS script or stylesheet, and allows fetch/XHR plus CDN source maps (connect-src https:). External scripts can read the chat content visible to the frontend and send it elsewhere; enable only for cards you trust.',
       'settings.gamesDisableResign': 'Disable resign in games (hides the resign button; the AI cannot resign either)',
       'settings.worldFollowsCharacter': 'World books follow character card activation',
+      'settings.behaviorHint': 'Controls how the plugin behaves across sessions. All switches take effect immediately.',
+      'settings.behavior.session': 'Sessions',
+      'settings.behavior.worldInfo': 'World Info',
+      'settings.behavior.toolWrites': 'Tool writes',
+      'settings.behavior.frontend': 'Frontend & card scripts',
+      'settings.behavior.games': 'Games',
       'settings.worldsEmpty': 'No world books imported',
       'settings.import': 'Import',
       'settings.importCharacter': 'Character card',
@@ -2704,6 +2724,9 @@ window.__ModuleLoader__.load({
       'panel.section.groups': 'Groups',
       'panel.section.personas': 'Personas',
       'panel.section.worlds': 'World Info',
+      // Behavior section (2026-10-21 switch consolidation): system-level home of
+      // every behavior toggle that used to be scattered across other surfaces.
+      'panel.section.behavior': 'Behavior',
       'panel.section.presets': 'Presets',
       'panel.section.scripts': 'Scripts',
       'panel.section.regex': 'Regex scripts',
@@ -3213,7 +3236,7 @@ window.__ModuleLoader__.load({
       // message slot, so the latest complete HTML document rides the native
       // right sidebar. zh/en keys must stay mirrored; the VM gate enforces it.
       'frontend.title': 'Frontend',
-      'frontend.guide.description': 'The latest complete-HTML frontend from this chat; AgentTavern sessions show it in the right sidebar.',
+      'frontend.guide.description': 'The latest complete-HTML frontend from this chat; AgentTavern sessions show it in the right sidebar, and auto-run card scripts join the same iframe.',
       'frontend.empty': 'No frontend in this chat yet',
       'frontend.emptyTitle': 'Tavern frontend',
       'frontend.emptyHint': 'Once an assistant message contains a complete HTML document (an html code block or a full document), the latest one renders here.',
@@ -3221,10 +3244,15 @@ window.__ModuleLoader__.load({
       'frontend.refresh': 'Reload',
       'frontend.inlineOnly': 'ST style renders message frontends inline, so no sidebar copy is needed.',
       'frontend.unbound': 'This session is not bound to a Tavern chat.',
+      'frontend.cardScriptsAutoRunning': 'Auto-running ({count} card scripts)',
+      'frontend.stopCardScripts': 'Stop auto-run',
+      'frontend.cardScriptsStopped': 'Auto-run stopped. Toggle the setting or reopen this tab to resume.',
+      'frontend.cardScriptsError': 'Failed to load card scripts: {error}',
+      'frontend.cardScriptsOnly': 'Card script overlays ({count})',
       // Card scripts sidebar (2026-10-21): manual runner for the card's
       // tavern_helper script tree. zh/en keys must stay mirrored.
       'cardScripts.title': 'Card scripts',
-      'cardScripts.guide.description': 'Enabled Tavern Helper scripts from this card; run one manually — nothing runs automatically.',
+      'cardScripts.guide.description': 'Enabled Tavern Helper scripts from this card; auto-run lives in Frontend for AgentTavern (ST stays in this tab).',
       'cardScripts.empty': 'This card has no enabled card scripts.',
       'cardScripts.unbound': 'This session is not bound to a Tavern chat.',
       'cardScripts.warning': 'Card scripts can write this chat’s variables, messages and session world-book copy. Only run a card you trust.',
@@ -3234,6 +3262,8 @@ window.__ModuleLoader__.load({
       'cardScripts.autoRunning': 'Auto-running ({count} scripts)',
       'cardScripts.stopAutoRun': 'Stop auto-run',
       'cardScripts.autoRunStopped': 'Auto-run stopped. Run scripts manually, or turn auto-run back on in settings.',
+      'cardScripts.autoHostedInFrontend': 'Auto-run is hosted by Frontend; this tab keeps the list and reset entries, and manual Run is disabled while auto-run is on.',
+      'cardScripts.openFrontend': 'Open Frontend',
       'cardScripts.resetWorldbook': 'Reset session world book',
       'cardScripts.resetConfirm': 'Resetting discards every world-book change made in this chat and restores the card original. Continue?',
       'cardScripts.resetDone': 'Restored the card original world book',
@@ -3454,11 +3484,17 @@ window.__ModuleLoader__.load({
       'settings.allowGlobalWrites': '允许 AgentTavern 工具写入 global 作用域的记忆和变量',
       'settings.frontendAutoOpen': '美化前端出现时自动打开右侧栏（每聊天一次）',
       'settings.cardScriptsAutoRun': '进入聊天时自动运行卡内脚本（默认关闭）',
-      'settings.cardScriptsAutoRunHint': '开启后进入酒馆聊天会自动展开「卡脚本」tab，并把卡内全部启用脚本注入同一个沙箱 iframe 执行。脚本共享同一 iframe 的 DOM 与全局变量，拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限；只对信任的角色卡开启。',
+      'settings.cardScriptsAutoRunHint': '开启后进入酒馆聊天会自动打开承载自动运行的右栏 tab：AgentTavern 用「美化前端」，ST 用「卡脚本」。卡内全部启用脚本会注入该前端所在的同一个沙箱文档，脚本共享 DOM 与全局变量，拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限；只对信任的角色卡开启。',
       'settings.frontendAllowExternalResources': '允许美化前端加载外部资源（任意 HTTPS 源）',
       'settings.frontendAllowExternalResourcesHint': '开启后 iframe 可加载任意 HTTPS 脚本/样式，并允许 fetch/XHR 与 CDN sourcemap（connect-src https:）。外部脚本能读取前端可见的聊天内容并发送到外部服务器，请只对信任的角色卡开启。',
       'settings.gamesDisableResign': '禁用投降（隐藏投降按钮，AI 也不能认输）',
       'settings.worldFollowsCharacter': '世界书跟随角色卡激活',
+      'settings.behaviorHint': '控制系统在各会话中的行为，全部即时生效。',
+      'settings.behavior.session': '会话行为',
+      'settings.behavior.worldInfo': '世界书行为',
+      'settings.behavior.toolWrites': '工具写入',
+      'settings.behavior.frontend': '前端与卡脚本',
+      'settings.behavior.games': '游戏行为',
       'settings.worldsEmpty': '尚未导入世界书',
       'settings.import': '导入',
       'settings.importCharacter': '角色卡',
@@ -3549,6 +3585,8 @@ window.__ModuleLoader__.load({
       'panel.section.groups': '群组',
       'panel.section.personas': '用户人设',
       'panel.section.worlds': '世界书',
+      // 行为设置分区（2026-10-21 开关收编）：散养行为开关的系统级归置点。
+      'panel.section.behavior': '行为设置',
       'panel.section.presets': '预设',
       'panel.section.scripts': '剧本',
       'panel.section.regex': '正则脚本',
@@ -4051,7 +4089,7 @@ window.__ModuleLoader__.load({
       // 美化前端右栏（2026-10-20）：AgentTavern 的消息内 HTML 没有正文 slot，
       // 最新一条完整 HTML 由原生右侧栏承载。
       'frontend.title': '美化前端',
-      'frontend.guide.description': '本聊天最新一条带完整 HTML 的美化前端；AgentTavern 会话在右栏展示。',
+      'frontend.guide.description': '本聊天最新一条带完整 HTML 的美化前端；AgentTavern 会话在右栏展示，开启卡脚本自动运行时脚本也注入同一个 iframe。',
       'frontend.empty': '本聊天还没有美化前端',
       'frontend.emptyTitle': '美化前端',
       'frontend.emptyHint': '助手消息里出现完整 HTML 文档（html 代码块或整段 HTML）后，会在这里渲染最新一条。',
@@ -4059,9 +4097,14 @@ window.__ModuleLoader__.load({
       'frontend.refresh': '重新读取',
       'frontend.inlineOnly': 'ST 架构的美化前端已直接渲染在消息里，无需右栏。',
       'frontend.unbound': '当前会话没有绑定酒馆聊天。',
+      'frontend.cardScriptsAutoRunning': '自动运行中（{count} 个卡脚本）',
+      'frontend.stopCardScripts': '停止自动运行',
+      'frontend.cardScriptsStopped': '已停止自动运行；重新开关设置或重新打开本 tab 可恢复。',
+      'frontend.cardScriptsError': '读取卡脚本失败：{error}',
+      'frontend.cardScriptsOnly': '卡脚本浮动界面（{count} 个）',
       // 卡脚本右栏（2026-10-21）：卡内 tavern_helper 脚本树的手动运行入口。
       'cardScripts.title': '卡脚本',
-      'cardScripts.guide.description': '列出卡内启用的酒馆助手脚本，手动运行其中一份；不会自动执行。',
+      'cardScripts.guide.description': '列出卡内启用的酒馆助手脚本；自动运行开启时由「美化前端」承载（ST 仍在本 tab）。',
       'cardScripts.empty': '这张卡没有启用的卡内脚本。',
       'cardScripts.unbound': '当前会话没有绑定酒馆聊天。',
       'cardScripts.warning': '卡脚本拥有当前聊天的变量、消息与会话世界书副本写权限；只运行你信任的卡。',
@@ -4071,6 +4114,8 @@ window.__ModuleLoader__.load({
       'cardScripts.autoRunning': '自动运行中（{count} 个脚本）',
       'cardScripts.stopAutoRun': '停止自动运行',
       'cardScripts.autoRunStopped': '已停止自动运行；可手动运行单个脚本，或在设置中重新开启自动运行。',
+      'cardScripts.autoHostedInFrontend': '自动运行已由「美化前端」承载；本 tab 保留列表与重置入口，开启自动运行时手动运行禁用。',
+      'cardScripts.openFrontend': '打开美化前端',
       'cardScripts.resetWorldbook': '重置会话世界书',
       'cardScripts.resetConfirm': '重置后本聊天的世界书改动会全部丢弃，恢复为角色卡原版。继续？',
       'cardScripts.resetDone': '已重置为角色卡原版世界书',
@@ -6880,15 +6925,33 @@ window.__ModuleLoader__.load({
               onChange: (event) => changeCompaction(event.target.value),
             },
               h('option', { key: '', value: '' }, t('settings.compactionModelFollow')),
-              compactionOptions.map((option) => h('option', { key: option.value, value: option.value }, option.label)))),
-          h('label', { className: 'dt-toggle' },
-            h('input', {
-              type: 'checkbox',
-              checked: bootstrap.state.nativeAgentPersona === true,
-              onChange: (event) => applyPatch({ nativeAgentPersona: event.target.checked }),
-            }),
-            h('span', null, t('settings.nativePersona')))),
-        h('div', { className: 'dt-architecture-settings' },
+              compactionOptions.map((option) => h('option', { key: option.value, value: option.value }, option.label))))),
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
+    // 行为设置（2026-10-21 用户需求「改进管理面板交互」）：此前散养在各处的行为
+    // 开关全部收编进这一个 band，按行为对应关系分五组——会话（新聊天架构、
+    // AgentTavern 上下文、AgentTavern 预载、原生会话人设）、世界书（跟随角色卡
+    // 激活）、工具写入（global 作用域）、前端与卡脚本（自动展开、外部资源、自动
+    // 运行）、游戏（禁用投降）。同一个 band 双挂在面板「行为设置」分区与原生设置
+    // 页（ActiveSetupBand 的双挂点先例），设置页不丢任何此前可达的开关；服务端
+    // 逐次读取这些键，全部即时生效。
+    function BehaviorSettingsBand() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const bootstrap = state.bootstrap
+      const [error, setError] = useState('')
+      const applyPatch = (patch) => {
+        setError('')
+        void patchState(patch).catch((cause) => setError(cause.message))
+      }
+      const behaviorGroup = (titleKey, children) => h('div', { className: 'dt-behavior-group' },
+        h('h4', null, t(titleKey)),
+        ...children)
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('panel.section.behavior')),
+        h('p', { className: 'dt-hint' }, t('settings.behaviorHint')),
+        behaviorGroup('settings.behavior.session', [
           h('div', { className: 'dt-field' },
             h('span', { className: 'dt-label' }, t('settings.defaultArchitecture')),
             h('div', { className: 'dt-segmented', role: 'group', 'aria-label': t('settings.defaultArchitecture') },
@@ -6928,30 +6991,49 @@ window.__ModuleLoader__.load({
                   ? h('p', { className: 'dt-hint' }, t('settings.contextManagedUnavailable', {
                     reason: bootstrap.agentTavern?.managed?.reasons?.join(' ') || 'host capability check failed',
                   }))
-                  : null),
-              h('label', { className: 'dt-toggle' },
-                h('input', {
-                  type: 'checkbox',
-                  checked: bootstrap.state.agentTavernPreloadAssets === true,
-                  onChange: (event) => applyPatch({ agentTavernPreloadAssets: event.target.checked }),
-                }),
-                h('span', null, t('settings.preloadAssets'))),
-              h('label', { className: 'dt-toggle' },
-                h('input', {
-                  type: 'checkbox',
-                  checked: bootstrap.state.agentTavernAllowGlobalWrites === true,
-                  onChange: (event) => applyPatch({ agentTavernAllowGlobalWrites: event.target.checked }),
-                }),
-                h('span', null, t('settings.allowGlobalWrites'))),
-              h('label', { className: 'dt-toggle' },
-                h('input', {
-                  type: 'checkbox',
-                  checked: bootstrap.state.frontendAutoOpen === true,
-                  onChange: (event) => applyPatch({ frontendAutoOpen: event.target.checked }),
-                }),
-                h('span', null, t('settings.frontendAutoOpen'))))
-            : null),
-        h('div', { className: 'dt-frontend-resources' },
+                  : null))
+            : null,
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.agentTavernPreloadAssets === true,
+              onChange: (event) => applyPatch({ agentTavernPreloadAssets: event.target.checked }),
+            }),
+            h('span', null, t('settings.preloadAssets'))),
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.nativeAgentPersona === true,
+              onChange: (event) => applyPatch({ nativeAgentPersona: event.target.checked }),
+            }),
+            h('span', null, t('settings.nativePersona'))),
+        ]),
+        behaviorGroup('settings.behavior.worldInfo', [
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.worldFollowsCharacter !== false,
+              onChange: (event) => applyPatch({ worldFollowsCharacter: event.target.checked }),
+            }),
+            h('span', null, t('settings.worldFollowsCharacter'))),
+        ]),
+        behaviorGroup('settings.behavior.toolWrites', [
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.agentTavernAllowGlobalWrites === true,
+              onChange: (event) => applyPatch({ agentTavernAllowGlobalWrites: event.target.checked }),
+            }),
+            h('span', null, t('settings.allowGlobalWrites'))),
+        ]),
+        behaviorGroup('settings.behavior.frontend', [
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.frontendAutoOpen === true,
+              onChange: (event) => applyPatch({ frontendAutoOpen: event.target.checked }),
+            }),
+            h('span', null, t('settings.frontendAutoOpen'))),
           h('label', { className: 'dt-toggle' },
             h('input', {
               type: 'checkbox',
@@ -6959,10 +7041,7 @@ window.__ModuleLoader__.load({
               onChange: (event) => applyPatch({ frontendAllowExternalResources: event.target.checked }),
             }),
             h('span', null, t('settings.frontendAllowExternalResources'))),
-          h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.frontendAllowExternalResourcesHint'))),
-        // 卡脚本自动运行（2026-10-21 用户需求）：默认关闭，开启后进入聊天自动
-        // 展开「卡脚本」tab 并把全部启用脚本注入同一个沙箱 iframe。
-        h('div', { className: 'dt-frontend-resources' },
+          h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.frontendAllowExternalResourcesHint')),
           h('label', { className: 'dt-toggle' },
             h('input', {
               type: 'checkbox',
@@ -6970,7 +7049,17 @@ window.__ModuleLoader__.load({
               onChange: (event) => applyPatch({ cardScriptsAutoRun: event.target.checked }),
             }),
             h('span', null, t('settings.cardScriptsAutoRun'))),
-          h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.cardScriptsAutoRunHint'))),
+          h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.cardScriptsAutoRunHint')),
+        ]),
+        behaviorGroup('settings.behavior.games', [
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.gamesDisableResign === true,
+              onChange: (event) => applyPatch({ gamesDisableResign: event.target.checked }),
+            }),
+            h('span', null, t('settings.gamesDisableResign'))),
+        ]),
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
@@ -7137,6 +7226,7 @@ window.__ModuleLoader__.load({
             h(UpdateBand, { compact: true })),
           h(Button, { variant: 'primary', size: 'sm', icon: h(SoulMojitoLogo), onClick: () => openPanel() }, t('panel.open'))),
         h(ActiveSetupBand),
+        h(BehaviorSettingsBand),
         state.error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, state.error)) : null)
     }
 
@@ -9201,6 +9291,10 @@ window.__ModuleLoader__.load({
     // 常驻保留最新快照即可；旧楼层不重复执行脚本，也不给用户一堆并行 iframe。
     // iframe 纪律完整继承内联 FrontendFrame（sandbox 无 same-origin、CSP、
     // token 校验的高度回传），侧栏只是换了一个宿主容器。
+    // 卡脚本自动运行（2026-10-21 第二次修订）：显式开启 cardScriptsAutoRun 后，
+    // 本 tab 同时承载卡内全部启用脚本——脚本块注入**同一个**沙箱文档，卡脚本的
+    // 悬浮面板/浮球 append 到 window.top.document.body 时直接落在美化前端里。
+    // ST 架构仍在「卡脚本」tab 自动运行（消息内联，右栏没有第二份前端）。
     const FRONTEND_TAB_ID = 'dsh-soulmojito/frontend'
     const FRONTEND_TAB_KIND = 'tavern-frontend'
     // apply 的 ctx.inject 回调在宿主服务就绪时置真：标题栏入口据此决定是否渲染
@@ -9266,13 +9360,77 @@ window.__ModuleLoader__.load({
       }, [enabled, sessionId, binding?.character, binding?.chatId, architecture])
     }
 
+    // 卡脚本自动运行（2026-10-21 第二次修订）：设置显式开启后，卡脚本不再单独
+    // 占一个空白 iframe，而是注入「美化前端」最新楼层的同一个沙箱文档——脚本
+    // append 到 window.top.document.body 的悬浮面板直接叠在美化前端上。ST 仍在
+    // 「卡脚本」tab 内运行（消息正文内联，右栏没有第二份前端）。
+    const CARD_SCRIPTS_RESET_EVENT = 'dsh-soulmojito:card-scripts-reset'
+    const CARD_SCRIPTS_FONT_AWESOME = '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">'
+
+    // `</script` 必须转义，否则脚本字符串里的闭合标签会提前截断 HTML 解析。
+    // 每份脚本一个独立 module 块，共享同一文档的 window/document/全局变量。
+    function frontendCardScriptBlocks(scripts) {
+      return scripts.map((script) => {
+        const content = String(script.content || '').replace(/<\/script/gi, () => '<\\/script')
+        return `<script type="module">${content}</script>`
+      }).join('')
+    }
+
+    // 有最新美化楼层时把脚本块插到 `</body>` 之前（与 buildFrontendDocument 的
+    // 注入点同一套朴素规则）；没有美化楼层时给脚本一个 720px 画布，否则固定
+    // 定位的悬浮球/面板没有可视高度。Font Awesome 只补一次，卡自己带就不重复。
+    function frontendWithCardScripts(html, scripts) {
+      const blocks = frontendCardScriptBlocks(scripts)
+      const source = String(html || '').trim()
+      const fontAwesome = /font-awesome/i.test(source) ? '' : CARD_SCRIPTS_FONT_AWESOME
+      if (source === '') {
+        return '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+          + '<meta name="viewport" content="width=device-width, initial-scale=1">'
+          + `${fontAwesome}<style>html,body{margin:0;padding:0;background:transparent;min-height:100%;}</style>`
+          + `</head><body><div style="height:720px"></div>${blocks}</body></html>`
+      }
+      // 必须用 replacer 函数：脚本源码里的 `$'` / `$&` 是合法 JS，但作为
+      // String.replace 的字符串替换值会被当成替换模式，直接改写脚本并让
+      // srcdoc 抛 "Invalid or unexpected token"（实测 GM 面板有 29 处 `$'`）。
+      const withScripts = /<\/body\s*>/i.test(source)
+        ? source.replace(/<\/body\s*>/i, () => `${blocks}</body>`)
+        : `${source}${blocks}`
+      if (fontAwesome === '') return withScripts
+      return /<head(?:\s[^>]*)?>/i.test(withScripts)
+        ? withScripts.replace(/<head(?:\s[^>]*)?>/i, (tag) => `${tag}${fontAwesome}`)
+        : `${fontAwesome}${withScripts}`
+    }
+
+    // 一个楼层可能同时带多个完整文档（这张卡就是行动栏 35KB + 状态总览 154KB）。
+    // 自动运行的脚本必须落在玩家看的主前端，而不是第一个小框：取文档长度最大
+    // 者，同长度取最后一个。只注入这一个文档，别的 iframe 不重复执行脚本。
+    function frontendCardScriptHostIndex(documents) {
+      let host = 0
+      for (let index = 1; index < documents.length; index++) {
+        if (String(documents[index] || '').length >= String(documents[host] || '').length) host = index
+      }
+      return host
+    }
+
     function TavernFrontendPanel({ sessionId }) {
       const state = useTavernStore()
       const t = useTranslate()
       const binding = state.bootstrap.state.sessionBindings?.[sessionId]
       const architecture = bindingArchitecture(binding)
+      const cardScriptsAutoRun = state.bootstrap.state.cardScriptsAutoRun === true
       const [snapshot, setSnapshot] = useState(null)
       const [error, setError] = useState('')
+      // 卡脚本 bundle 只在聊天/设置变化时取一次：脚本源码可能很大（GM 面板
+      // 16 万字符），不能跟着 5s 前端轮询重取；运行中的脚本自己持有内存状态，
+      // 不因美化楼层刷新而重启。
+      const [scriptBundle, setScriptBundle] = useState(null)
+      const [scriptError, setScriptError] = useState('')
+      const [autoStopped, setAutoStopped] = useState(false)
+      const scriptRequestRef = useRef(0)
+      const key = binding === undefined
+        ? ''
+        : `${sessionId}\u0000${binding.character}\u0000${binding.chatId}`
+      const autoRunHosted = cardScriptsAutoRun && architecture === 'agent-tavern'
       const load = () => {
         if (!binding || architecture !== 'agent-tavern') return Promise.resolve()
         const query = `?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`
@@ -9300,6 +9458,44 @@ window.__ModuleLoader__.load({
       // 原生会话的生成走宿主 AgentLoop，插件本地 chats/revisions 收不到信号
       // （与 MVU 侧栏同一条纪律）：可见期间 5s 重取，隐藏期间停发。
       useSessionPanelPoll(() => loadRef.current(), [binding?.character, binding?.chatId, architecture])
+      // 自动运行的脚本列表：只在 AgentTavern + 设置显式开启时取。竞态取消保证
+      // 切聊天后旧响应不会把上一场的脚本注入新聊天。
+      useEffect(() => {
+        if (binding === undefined || architecture !== 'agent-tavern' || !cardScriptsAutoRun) {
+          scriptRequestRef.current += 1
+          setScriptBundle(null)
+          setScriptError('')
+          setAutoStopped(false)
+          return undefined
+        }
+        const request = scriptRequestRef.current + 1
+        scriptRequestRef.current = request
+        setScriptBundle(null)
+        setScriptError('')
+        setAutoStopped(false)
+        const query = `?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`
+        void api(`card/scripts${query}`)
+          .then((result) => {
+            if (scriptRequestRef.current !== request) return
+            setScriptBundle({ key, scripts: Array.isArray(result?.scripts) ? result.scripts : [] })
+          })
+          .catch((cause) => {
+            if (scriptRequestRef.current !== request) return
+            // 404 是角色被删/绑定竞态：按无脚本处理，美化前端本体仍可展示。
+            setScriptBundle({ key, scripts: [] })
+            if (cause?.status !== 404) {
+              setScriptError(cause instanceof Error ? cause.message : String(cause))
+            }
+          })
+        return () => { scriptRequestRef.current += 1 }
+      }, [key, architecture, cardScriptsAutoRun, binding?.character])
+      // 卡脚本 tab 的「重置卡脚本」删除的是同一份会话副本：通知本 tab 立即停止
+      // 自动运行，避免 iframe 继续跑已经被重置的旧源码。
+      useEffect(() => {
+        const onReset = () => setAutoStopped(true)
+        addEventListener(CARD_SCRIPTS_RESET_EVENT, onReset)
+        return () => removeEventListener(CARD_SCRIPTS_RESET_EVENT, onReset)
+      }, [])
       if (!binding) {
         return h('div', { className: 'dt-frontend-side', 'data-dsh-soulmojito-surface': 'frontend-sidebar' },
           h('div', { className: 'dt-frontend-side-empty' }, h(IconSparkle16, { size: 22 }), h('span', null, t('frontend.unbound'))))
@@ -9312,10 +9508,52 @@ window.__ModuleLoader__.load({
             h('span', null, architecture === 'st' ? t('frontend.inlineOnly') : t('frontend.unbound'))))
       }
       const message = snapshot?.message
+      const currentScripts = scriptBundle !== null && scriptBundle.key === key ? scriptBundle.scripts : []
+      const scripts = autoRunHosted && !autoStopped ? currentScripts : []
+      const autoRunning = scripts.length > 0
+      const scriptsPending = autoRunHosted && scriptBundle === null
+      // 只把卡脚本注入主前端（文档长度最大者）：最新楼层可能同时带行动栏小框
+      // 和状态总览大框，注入第一个会把 GM 面板塞进小框。
+      const scriptHostIndex = autoRunning && message !== undefined
+        ? frontendCardScriptHostIndex(message.documents)
+        : -1
+      const frameKey = `${message?.index ?? 'none'}:`
+        + (autoRunning ? scripts.map((script) => `${script.id}:${script.content.length}`).join('|') : '')
+      const frames = []
+      if (message !== undefined) {
+        message.documents.forEach((html, index) => {
+          const composed = index === scriptHostIndex ? frontendWithCardScripts(html, scripts) : html
+          frames.push(h('div', {
+            key: `${message.index}-${index}`,
+            className: 'dt-frontend-side-frame',
+          }, h(FrontendFrame, {
+            html: composed,
+            token: `tavern-frontend-${sessionId}-${message.index}-${index}`,
+            messageId: message.index,
+            hostSessionId: sessionId,
+            binding: { character: binding.character, chatId: binding.chatId },
+            refreshKey: frameKey,
+          })))
+        })
+      } else if (autoRunning) {
+        frames.push(h('div', {
+          key: 'card-scripts',
+          className: 'dt-frontend-side-frame',
+        }, h(FrontendFrame, {
+          html: frontendWithCardScripts('', scripts),
+          token: `tavern-frontend-${sessionId}-${binding.character}-${binding.chatId}-card-scripts`,
+          messageId: -1,
+          hostSessionId: sessionId,
+          binding: { character: binding.character, chatId: binding.chatId },
+          refreshKey: frameKey,
+        })))
+      }
       return h('div', { className: 'dt-frontend-side', 'data-dsh-soulmojito-surface': 'frontend-sidebar' },
         h('div', { className: 'dt-frontend-side-head' },
           h('span', { className: 'dt-frontend-side-meta' },
-            message ? t('frontend.floor', { index: message.index + 1 }) : t('frontend.empty')),
+            message
+              ? t('frontend.floor', { index: message.index + 1 })
+              : autoRunning ? t('frontend.cardScriptsOnly', { count: scripts.length }) : t('frontend.empty')),
           h('button', {
             type: 'button',
             className: 'dt-frontend-side-refresh',
@@ -9324,31 +9562,40 @@ window.__ModuleLoader__.load({
             onClick: () => void loadRef.current(),
           }, h(IconRefreshOutline16))),
         error ? h('p', { className: 'dt-error' }, error) : null,
-        message
-          ? h('div', { className: 'dt-frontend-side-frames' }, message.documents.map((html, index) => h('div', {
-            key: `${message.index}-${index}`,
-            className: 'dt-frontend-side-frame',
-          }, h(FrontendFrame, {
-            html,
-            token: `tavern-frontend-${sessionId}-${message.index}-${index}`,
-            messageId: message.index,
-            hostSessionId: sessionId,
-            binding: { character: binding.character, chatId: binding.chatId },
-            refreshKey: `${snapshot?.revision ?? ''}:${message.index}`,
-          }))))
-          : h('div', { className: 'dt-frontend-side-empty' },
-            h(IconSparkle16, { size: 22 }),
-            h('strong', null, t('frontend.emptyTitle')),
-            h('p', { className: 'dt-hint' }, t('frontend.emptyHint'))))
+        scriptError ? h('p', { className: 'dt-error' }, t('frontend.cardScriptsError', { error: scriptError })) : null,
+        autoRunning
+          ? h('div', { className: 'dt-card-scripts-auto' },
+            h('span', { className: 'dt-card-script-running' },
+              t('frontend.cardScriptsAutoRunning', { count: scripts.length })),
+            h('button', {
+              type: 'button',
+              className: 'dt-card-script-run dt-card-script-stop',
+              onClick: () => setAutoStopped(true),
+            }, t('frontend.stopCardScripts')))
+          : null,
+        autoRunHosted && autoStopped && currentScripts.length > 0
+          ? h('p', { className: 'dt-hint' }, t('frontend.cardScriptsStopped'))
+          : null,
+        autoRunning ? h('p', { className: 'dt-card-scripts-warning', role: 'note' }, t('cardScripts.warning')) : null,
+        scriptsPending
+          ? h('div', { className: 'dt-frontend-side-empty' }, h(IconSparkle16, { size: 22 }),
+            h('span', null, t('cardScripts.loading')))
+          : frames.length > 0
+            ? h('div', { className: 'dt-frontend-side-frames' }, frames)
+            : h('div', { className: 'dt-frontend-side-empty' },
+              h(IconSparkle16, { size: 22 }),
+              h('strong', null, t('frontend.emptyTitle')),
+              h('p', { className: 'dt-hint' }, t('frontend.emptyHint'))))
     }
 
     // 卡脚本右栏（2026-10-21，用户需求）：JSR 卡的常驻脚本树
     // `data.extensions.tavern_helper.scripts` 不随消息重发。默认**不自动执行**：
     // 列出启用的脚本，用户点「运行」后才把单份脚本包成完整 HTML 文档交给现有
     // 沙箱 FrontendFrame（allow-scripts、无 same-origin、CSP 不变）。
-    // 设置 `cardScriptsAutoRun` 显式开启后改为自动运行：进入聊天自动展开本 tab，
-    // 全部启用脚本按顺序注入**同一个** iframe（共享 DOM/全局）；关掉开关或点
-    // 「停止自动运行」回到手动模式。切换会话/角色立即停止并清空。
+    // 设置 `cardScriptsAutoRun` 显式开启后：AgentTavern 的自动运行由「美化前端」
+    // tab 承载（脚本与最新楼层 HTML 同一个 iframe，见 88 片段）；ST 架构没有
+    // 右栏前端的第二份展示面，仍在**本 tab** 自动运行全部启用脚本（同一 iframe、
+    // 共享 DOM/全局）。本 tab 在 AgentTavern 下只保留列表、重置与手动入口。
     const CARD_SCRIPTS_TAB_ID = 'dsh-soulmojito/card-scripts'
     const CARD_SCRIPTS_TAB_KIND = 'tavern-card-scripts'
 
@@ -9356,10 +9603,11 @@ window.__ModuleLoader__.load({
       return h(TavernCardScriptsPanel, { sessionId })
     }
 
-    // 自动展开（2026-10-21 用户需求）：设置显式开启时，进入/切入一个酒馆聊天
-    // 直接打开「卡脚本」tab。每个 (sessionId, character, chatId) 只自动打开一次：
-    // 用户手动关掉后，后续挂载/绑定变化不再抢焦点。宿主没有 sidebarRight 服务
-    // 或 openTab 不可用时静默跳过，不渲染死按钮。
+    // 自动展开（2026-10-21 用户需求，第二次修订）：设置显式开启时，进入/切入
+    // 一个酒馆聊天直接打开承载自动运行的 tab——AgentTavern 是「美化前端」，ST 是
+    // 「卡脚本」。每个 (sessionId, character, chatId) 只自动打开一次：用户手动
+    // 关掉后，后续挂载/绑定变化不再抢焦点。宿主没有 sidebarRight 服务或 openTab
+    // 不可用时静默跳过，不渲染死按钮。
     function useCardScriptsAutoOpen(sessionId, binding, architecture, enabled) {
       const openedRef = useRef(new Set())
       // Turning the setting off and on again is the user's explicit request to
@@ -9372,6 +9620,7 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (!enabled || binding === undefined || binding.group === true) return undefined
         if (architecture !== 'agent-tavern' && architecture !== 'st') return undefined
+        const targetKind = architecture === 'agent-tavern' ? FRONTEND_TAB_KIND : CARD_SCRIPTS_TAB_KIND
         const key = `${sessionId}\u0000${binding.character}\u0000${binding.chatId}`
         if (openedRef.current.has(key)) return undefined
         const sidebarRight = PanelHost.context?.get?.('sidebarRight')
@@ -9386,7 +9635,7 @@ window.__ModuleLoader__.load({
             const scripts = Array.isArray(result?.scripts) ? result.scripts : []
             openedRef.current.add(key)
             if (scripts.length === 0) return
-            try { sidebarRight.openTab(CARD_SCRIPTS_TAB_KIND) } catch {}
+            try { sidebarRight.openTab(targetKind) } catch {}
           })
           .catch(() => {})
         return () => { cancelled = true }
@@ -9441,7 +9690,12 @@ window.__ModuleLoader__.load({
       const [resetDone, setResetDone] = useState(false)
       const [resettingScripts, setResettingScripts] = useState(false)
       const [scriptsResetDone, setScriptsResetDone] = useState(false)
-      const autoRunEnabled = state.bootstrap.state.cardScriptsAutoRun === true
+      const autoRunSetting = state.bootstrap.state.cardScriptsAutoRun === true
+      // AgentTavern 的自动运行住在「美化前端」tab（脚本与最新楼层 HTML 同一个
+      // iframe）；本 tab 只对 ST 自动运行——ST 的消息正文内联，右栏没有第二份
+      // 前端承载脚本。
+      const autoRunHostedInFrontend = autoRunSetting && architecture === 'agent-tavern'
+      const autoRunEnabled = autoRunSetting && architecture === 'st'
       const [autoRunning, setAutoRunning] = useState(false)
       const [autoStopped, setAutoStopped] = useState(false)
       // 用户手动「停止自动运行」后，bundle 重取/重渲染不得立刻重新启动；切换
@@ -9515,6 +9769,15 @@ window.__ModuleLoader__.load({
         autoRunEnabledRef.current = autoRunEnabled
       }, [autoRunEnabled])
 
+      // AgentTavern 的自动运行改由「美化前端」承载后，本 tab 不再保留手动脚本
+      // iframe：同一时间只允许一个自动运行宿主，避免两份 iframe 各跑一份卡脚本。
+      useEffect(() => {
+        if (!autoRunHostedInFrontend) return
+        setRunningId(null)
+        setAutoRunning(false)
+        setAutoStopped(false)
+      }, [autoRunHostedInFrontend])
+
       // bundle 就绪且开关开启即启动；开关关闭/无脚本/用户已停止时回到手动模式。
       useEffect(() => {
         if (!supported || !autoRunEnabled) {
@@ -9539,6 +9802,12 @@ window.__ModuleLoader__.load({
         setAutoRunning(false)
         setAutoStopped(true)
         setRunningId(null)
+      }
+
+      const openAutoRunHost = () => {
+        const sidebarRight = PanelHost.context?.get?.('sidebarRight')
+        if (typeof sidebarRight?.openTab !== 'function') return
+        try { sidebarRight.openTab(FRONTEND_TAB_KIND) } catch {}
       }
 
       const resetWorldbook = () => {
@@ -9579,12 +9848,14 @@ window.__ModuleLoader__.load({
             chatId: binding.chatId,
           }),
         }).then(() => {
-          // 副本没了：停止自动运行与手动脚本，列表回卡原版。
+          // 副本没了：停止自动运行与手动脚本，列表回卡原版。AgentTavern 的自动
+          // 运行宿主在「美化前端」另一个 React 树里，用窗口事件同步停止它。
           autoRunStoppedRef.current = true
           setAutoRunning(false)
           setAutoStopped(false)
           setRunningId(null)
           setScriptsResetDone(true)
+          try { window.dispatchEvent(new Event(CARD_SCRIPTS_RESET_EVENT)) } catch {}
           void loadRef.current()
         }).catch((cause) => {
           setError(cause instanceof Error ? cause.message : String(cause))
@@ -9603,6 +9874,17 @@ window.__ModuleLoader__.load({
       const running = scripts.find((script) => script.id === runningId)
       return h('div', { className: 'dt-frontend-side dt-card-scripts', 'data-dsh-soulmojito-surface': 'card-scripts-sidebar' },
         h('p', { className: 'dt-card-scripts-warning', role: 'note' }, t('cardScripts.warning')),
+        autoRunHostedInFrontend
+          ? h('div', { className: 'dt-card-scripts-auto' },
+            h('span', null, t('cardScripts.autoHostedInFrontend')),
+            hasSidebarRightSurface()
+              ? h('button', {
+                type: 'button',
+                className: 'dt-card-script-run',
+                onClick: openAutoRunHost,
+              }, t('cardScripts.openFrontend'))
+              : null)
+          : null,
         h('div', { className: 'dt-frontend-side-head' },
           h('span', { className: 'dt-frontend-side-meta' },
             t('cardScripts.count', { count: scripts.length })),
@@ -9649,7 +9931,7 @@ window.__ModuleLoader__.load({
           h('button', {
             type: 'button',
             className: runningId === script.id ? 'dt-card-script-run dt-card-script-stop' : 'dt-card-script-run',
-            disabled: autoRunning,
+            disabled: autoRunning || autoRunHostedInFrontend,
             onClick: () => {
               setResetDone(false)
               setAutoStopped(false)
@@ -9679,7 +9961,9 @@ window.__ModuleLoader__.load({
                 hostSessionId: sessionId,
                 refreshKey: `${running.id}:${running.content.length}`,
               })))
-            : h('p', { className: 'dt-hint' }, t('cardScripts.idle')),
+            : autoRunHostedInFrontend
+              ? null
+              : h('p', { className: 'dt-hint' }, t('cardScripts.idle')),
         resetDone ? h('p', { className: 'dt-card-scripts-notice', role: 'status' }, t('cardScripts.resetDone')) : null,
         scriptsResetDone ? h('p', { className: 'dt-card-scripts-notice', role: 'status' }, t('cardScripts.resetScriptsDone')) : null,
         currentBundle !== null && (currentBundle.world !== null || scripts.length > 0)
@@ -9949,6 +10233,11 @@ window.__ModuleLoader__.load({
       { id: 'groups', group: 'content', icon: IconPlusOutline16, label: (t) => t('panel.section.groups'), component: () => h(GroupBand) },
       { id: 'personas', group: 'content', icon: IconPersonalizationOutline16, label: (t) => t('panel.section.personas'), component: () => h(PersonaBand) },
       { id: 'worlds', group: 'content', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: () => h(PanelWorlds) },
+      // 第 19 个分区「行为设置」（2026-10-21 用户需求「改进管理面板交互」）：
+      // 散养在「当前配置」架构分支、世界书清单顶与游戏清单顶的行为开关全部收编
+      // 到这里，按行为对应关系分组（会话 / 世界书 / 工具写入 / 前端与卡脚本 / 游戏）。
+      // system 组置顶——它决定插件怎么行为，是系统级配置而非资产管理。
+      { id: 'behavior', group: 'system', icon: IconSlidersOutline16, label: (t) => t('panel.section.behavior'), component: () => h(BehaviorSettingsBand) },
       { id: 'presets', group: 'system', icon: IconAgentPresetOutline16, label: (t) => t('panel.section.presets'), component: () => h(PanelPresets) },
       { id: 'scripts', group: 'content', icon: IconBookOutline16, label: (t) => t('panel.section.scripts'), component: () => h(PanelScripts) },
       { id: 'regex', group: 'system', icon: IconSearchOutline16, label: (t) => t('panel.section.regex'), component: () => h(RegexBand) },
@@ -9966,7 +10255,7 @@ window.__ModuleLoader__.load({
       // 第 17 个分区「提示词」（A-6，2026-10-11）：ST 循环实发请求 + 世界书激活
       // 追踪的只读查看器（服务端 prompt-viewer.ts 环形缓冲）。
       { id: 'prompts', group: 'system', icon: IconDownloadOutline16, label: (t) => t('panel.section.prompts'), component: () => h(PanelPrompts) },
-      // 第 18 个分区「关于」（2026-10-12）：插件版本 stamp + 官网/作者/源码
+      // 第 19 个分区「关于」（2026-10-12）：插件版本 stamp + 官网/作者/源码
       // 仓库外链，纯静态信息面。自绘 info 图标（宿主清单无此语义图形）。
       { id: 'about', icon: IconInfoOutline16, label: (t) => t('panel.section.about'), component: () => h(PanelAbout) },
     ]) {
@@ -10498,13 +10787,6 @@ window.__ModuleLoader__.load({
             h(UploadButton, { kind: 'world', label: t('settings.importWorld'), accept: '.json,application/json' }),
             h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setBrowse(''); setCreating(true) } }, `+ ${t('panel.worlds.new')}`))),
         h('section', { className: 'dt-settings-band' },
-          h('label', { className: 'dt-toggle' },
-            h('input', {
-              type: 'checkbox',
-              checked: state.bootstrap.state.worldFollowsCharacter !== false,
-              onChange: (event) => run(patchState({ worldFollowsCharacter: event.target.checked })),
-            }),
-            h('span', null, t('settings.worldFollowsCharacter'))),
           worlds.length === 0 && !creating
             ? h('p', { className: 'dt-muted' }, t('settings.worldsEmpty'))
             : h('div', { className: 'dt-world-list' }, worlds.map((name) => h('div', { key: name, className: 'dt-world-row' },
@@ -13121,6 +13403,11 @@ window.__ModuleLoader__.load({
         .dt-member-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}.dt-member-row .dt-member-chip>button{display:none}.dt-script-glyph{font-weight:700;font-size:15px;line-height:1}.dt-sidebar-subheading{margin-top:10px}.dt-branch-btn{font-size:13px}
         .dt-hint{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;margin:0 0 12px}.dt-hint-wide{grid-column:1 / -1;margin:0 0 12px}
         .dt-frontend-resources{margin-top:10px;padding:10px 12px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}.dt-frontend-resources .dt-toggle{min-height:0}.dt-frontend-warning{color:var(--dsw-alias-state-warn-label,var(--dsw-alias-state-warning-primary));margin:6px 0 0}
+        /* 行为设置分组（2026-10-21 开关收编）：每组上边框分隔 + 12px 组标题的
+           分隔语汇；组内开关去掉 36px 最小高，紧凑平铺。 */
+        .dt-behavior-group{display:flex;flex-direction:column;gap:6px;margin-top:14px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l2)}
+        .dt-behavior-group h4{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-weight:600}
+        .dt-behavior-group .dt-toggle{min-height:0}
         .dt-prompts-intro{max-width:760px;margin:0 0 14px;padding:12px 14px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}.dt-prompts-intro h3{margin:0 0 4px;font-size:13px;line-height:19px;font-weight:600}.dt-prompts-desc{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:19px}
         .dt-prompts-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}.dt-prompts-toolbar>button{min-height:32px}.dt-prompts-filter{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary);font-size:12px}.dt-prompts-filter select{box-sizing:border-box;height:32px;min-width:180px;max-width:280px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 8px;font:inherit;font-size:13px}
         .dt-panel-empty{display:flex;align-items:center;justify-content:center;min-height:88px;padding:18px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:12px;line-height:18px}.dt-panel-empty p{margin:0}
@@ -13237,7 +13524,6 @@ window.__ModuleLoader__.load({
         .dt-kv-readonly>span{font-size:13px;line-height:18px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .dt-kv-key{color:var(--dsw-alias-label-secondary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
         .dt-kv-value{color:var(--dsw-alias-label-primary)}
-        .dt-architecture-settings{display:flex;flex-direction:column;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l2)}
         .dt-segmented{display:inline-flex;align-items:stretch;align-self:flex-start;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;overflow:hidden}
         .dt-segmented button{min-height:32px;padding:0 12px;border:0;border-right:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-base);cursor:pointer;font:inherit;font-size:12px}
         .dt-segmented button:last-child{border-right:0}

@@ -2,9 +2,10 @@
     // `data.extensions.tavern_helper.scripts` 不随消息重发。默认**不自动执行**：
     // 列出启用的脚本，用户点「运行」后才把单份脚本包成完整 HTML 文档交给现有
     // 沙箱 FrontendFrame（allow-scripts、无 same-origin、CSP 不变）。
-    // 设置 `cardScriptsAutoRun` 显式开启后改为自动运行：进入聊天自动展开本 tab，
-    // 全部启用脚本按顺序注入**同一个** iframe（共享 DOM/全局）；关掉开关或点
-    // 「停止自动运行」回到手动模式。切换会话/角色立即停止并清空。
+    // 设置 `cardScriptsAutoRun` 显式开启后：AgentTavern 的自动运行由「美化前端」
+    // tab 承载（脚本与最新楼层 HTML 同一个 iframe，见 88 片段）；ST 架构没有
+    // 右栏前端的第二份展示面，仍在**本 tab** 自动运行全部启用脚本（同一 iframe、
+    // 共享 DOM/全局）。本 tab 在 AgentTavern 下只保留列表、重置与手动入口。
     const CARD_SCRIPTS_TAB_ID = 'dsh-soulmojito/card-scripts'
     const CARD_SCRIPTS_TAB_KIND = 'tavern-card-scripts'
 
@@ -12,10 +13,11 @@
       return h(TavernCardScriptsPanel, { sessionId })
     }
 
-    // 自动展开（2026-10-21 用户需求）：设置显式开启时，进入/切入一个酒馆聊天
-    // 直接打开「卡脚本」tab。每个 (sessionId, character, chatId) 只自动打开一次：
-    // 用户手动关掉后，后续挂载/绑定变化不再抢焦点。宿主没有 sidebarRight 服务
-    // 或 openTab 不可用时静默跳过，不渲染死按钮。
+    // 自动展开（2026-10-21 用户需求，第二次修订）：设置显式开启时，进入/切入
+    // 一个酒馆聊天直接打开承载自动运行的 tab——AgentTavern 是「美化前端」，ST 是
+    // 「卡脚本」。每个 (sessionId, character, chatId) 只自动打开一次：用户手动
+    // 关掉后，后续挂载/绑定变化不再抢焦点。宿主没有 sidebarRight 服务或 openTab
+    // 不可用时静默跳过，不渲染死按钮。
     function useCardScriptsAutoOpen(sessionId, binding, architecture, enabled) {
       const openedRef = useRef(new Set())
       // Turning the setting off and on again is the user's explicit request to
@@ -28,6 +30,7 @@
       useEffect(() => {
         if (!enabled || binding === undefined || binding.group === true) return undefined
         if (architecture !== 'agent-tavern' && architecture !== 'st') return undefined
+        const targetKind = architecture === 'agent-tavern' ? FRONTEND_TAB_KIND : CARD_SCRIPTS_TAB_KIND
         const key = `${sessionId}\u0000${binding.character}\u0000${binding.chatId}`
         if (openedRef.current.has(key)) return undefined
         const sidebarRight = PanelHost.context?.get?.('sidebarRight')
@@ -42,7 +45,7 @@
             const scripts = Array.isArray(result?.scripts) ? result.scripts : []
             openedRef.current.add(key)
             if (scripts.length === 0) return
-            try { sidebarRight.openTab(CARD_SCRIPTS_TAB_KIND) } catch {}
+            try { sidebarRight.openTab(targetKind) } catch {}
           })
           .catch(() => {})
         return () => { cancelled = true }
@@ -97,7 +100,12 @@
       const [resetDone, setResetDone] = useState(false)
       const [resettingScripts, setResettingScripts] = useState(false)
       const [scriptsResetDone, setScriptsResetDone] = useState(false)
-      const autoRunEnabled = state.bootstrap.state.cardScriptsAutoRun === true
+      const autoRunSetting = state.bootstrap.state.cardScriptsAutoRun === true
+      // AgentTavern 的自动运行住在「美化前端」tab（脚本与最新楼层 HTML 同一个
+      // iframe）；本 tab 只对 ST 自动运行——ST 的消息正文内联，右栏没有第二份
+      // 前端承载脚本。
+      const autoRunHostedInFrontend = autoRunSetting && architecture === 'agent-tavern'
+      const autoRunEnabled = autoRunSetting && architecture === 'st'
       const [autoRunning, setAutoRunning] = useState(false)
       const [autoStopped, setAutoStopped] = useState(false)
       // 用户手动「停止自动运行」后，bundle 重取/重渲染不得立刻重新启动；切换
@@ -171,6 +179,15 @@
         autoRunEnabledRef.current = autoRunEnabled
       }, [autoRunEnabled])
 
+      // AgentTavern 的自动运行改由「美化前端」承载后，本 tab 不再保留手动脚本
+      // iframe：同一时间只允许一个自动运行宿主，避免两份 iframe 各跑一份卡脚本。
+      useEffect(() => {
+        if (!autoRunHostedInFrontend) return
+        setRunningId(null)
+        setAutoRunning(false)
+        setAutoStopped(false)
+      }, [autoRunHostedInFrontend])
+
       // bundle 就绪且开关开启即启动；开关关闭/无脚本/用户已停止时回到手动模式。
       useEffect(() => {
         if (!supported || !autoRunEnabled) {
@@ -195,6 +212,12 @@
         setAutoRunning(false)
         setAutoStopped(true)
         setRunningId(null)
+      }
+
+      const openAutoRunHost = () => {
+        const sidebarRight = PanelHost.context?.get?.('sidebarRight')
+        if (typeof sidebarRight?.openTab !== 'function') return
+        try { sidebarRight.openTab(FRONTEND_TAB_KIND) } catch {}
       }
 
       const resetWorldbook = () => {
@@ -235,12 +258,14 @@
             chatId: binding.chatId,
           }),
         }).then(() => {
-          // 副本没了：停止自动运行与手动脚本，列表回卡原版。
+          // 副本没了：停止自动运行与手动脚本，列表回卡原版。AgentTavern 的自动
+          // 运行宿主在「美化前端」另一个 React 树里，用窗口事件同步停止它。
           autoRunStoppedRef.current = true
           setAutoRunning(false)
           setAutoStopped(false)
           setRunningId(null)
           setScriptsResetDone(true)
+          try { window.dispatchEvent(new Event(CARD_SCRIPTS_RESET_EVENT)) } catch {}
           void loadRef.current()
         }).catch((cause) => {
           setError(cause instanceof Error ? cause.message : String(cause))
@@ -259,6 +284,17 @@
       const running = scripts.find((script) => script.id === runningId)
       return h('div', { className: 'dt-frontend-side dt-card-scripts', 'data-dsh-soulmojito-surface': 'card-scripts-sidebar' },
         h('p', { className: 'dt-card-scripts-warning', role: 'note' }, t('cardScripts.warning')),
+        autoRunHostedInFrontend
+          ? h('div', { className: 'dt-card-scripts-auto' },
+            h('span', null, t('cardScripts.autoHostedInFrontend')),
+            hasSidebarRightSurface()
+              ? h('button', {
+                type: 'button',
+                className: 'dt-card-script-run',
+                onClick: openAutoRunHost,
+              }, t('cardScripts.openFrontend'))
+              : null)
+          : null,
         h('div', { className: 'dt-frontend-side-head' },
           h('span', { className: 'dt-frontend-side-meta' },
             t('cardScripts.count', { count: scripts.length })),
@@ -305,7 +341,7 @@
           h('button', {
             type: 'button',
             className: runningId === script.id ? 'dt-card-script-run dt-card-script-stop' : 'dt-card-script-run',
-            disabled: autoRunning,
+            disabled: autoRunning || autoRunHostedInFrontend,
             onClick: () => {
               setResetDone(false)
               setAutoStopped(false)
@@ -335,7 +371,9 @@
                 hostSessionId: sessionId,
                 refreshKey: `${running.id}:${running.content.length}`,
               })))
-            : h('p', { className: 'dt-hint' }, t('cardScripts.idle')),
+            : autoRunHostedInFrontend
+              ? null
+              : h('p', { className: 'dt-hint' }, t('cardScripts.idle')),
         resetDone ? h('p', { className: 'dt-card-scripts-notice', role: 'status' }, t('cardScripts.resetDone')) : null,
         scriptsResetDone ? h('p', { className: 'dt-card-scripts-notice', role: 'status' }, t('cardScripts.resetScriptsDone')) : null,
         currentBundle !== null && (currentBundle.world !== null || scripts.length > 0)

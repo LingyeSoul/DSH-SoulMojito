@@ -23,6 +23,11 @@ const FRONTEND_I18N_KEYS = [
   'frontend.refresh',
   'frontend.inlineOnly',
   'frontend.unbound',
+  'frontend.cardScriptsAutoRunning',
+  'frontend.stopCardScripts',
+  'frontend.cardScriptsStopped',
+  'frontend.cardScriptsError',
+  'frontend.cardScriptsOnly',
 ]
 
 describe('client frontend sidebar (main.js source check)', () => {
@@ -74,5 +79,24 @@ describe('client frontend sidebar (main.js source check)', () => {
     expect(source).toContain('const canvas = `<style>html{background:var(--dt-host-background)!important;}</style>`')
     expect(source).toContain('`${canvas}${reporter}</body>`')
     expect(source).toContain('style: { height, background: initialBackgroundRef.current }')
+  })
+
+  it('injects auto-run card scripts into the same latest-frontend iframe', () => {
+    // 2026-10-21 第二次修订：脚本不再另起空白 iframe，而是拼进最新美化前端文档，
+    // 让 window.top.document.body 上的悬浮面板直接落在美化前端里。
+    expect(source).toContain('function frontendCardScriptBlocks(scripts)')
+    expect(source).toContain('function frontendWithCardScripts(html, scripts)')
+    expect(source).toContain('function frontendCardScriptHostIndex(documents)')
+    expect(source).toContain("const CARD_SCRIPTS_RESET_EVENT = 'dsh-soulmojito:card-scripts-reset'")
+    expect(source).toContain('api(`card/scripts${query}`)')
+    expect(source).toContain("const autoRunHosted = cardScriptsAutoRun && architecture === 'agent-tavern'")
+    expect(source).toContain('const scriptsPending = autoRunHosted && scriptBundle === null')
+    expect(source).toContain('index === scriptHostIndex ? frontendWithCardScripts(html, scripts) : html')
+    expect(source).toContain("html: frontendWithCardScripts('', scripts)")
+    expect(source).toContain("t('frontend.cardScriptsAutoRunning', { count: scripts.length })")
+    expect(source).toContain("t('frontend.stopCardScripts')")
+    expect(source).toContain("t('frontend.cardScriptsStopped')")
+    expect(source).toContain('setAutoStopped(true)')
+    expect(source).toContain('addEventListener(CARD_SCRIPTS_RESET_EVENT, onReset)')
   })
 })

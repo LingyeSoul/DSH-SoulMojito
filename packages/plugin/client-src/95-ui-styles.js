@@ -21,6 +21,11 @@
         .dt-member-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}.dt-member-row .dt-member-chip>button{display:none}.dt-script-glyph{font-weight:700;font-size:15px;line-height:1}.dt-sidebar-subheading{margin-top:10px}.dt-branch-btn{font-size:13px}
         .dt-hint{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;margin:0 0 12px}.dt-hint-wide{grid-column:1 / -1;margin:0 0 12px}
         .dt-frontend-resources{margin-top:10px;padding:10px 12px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}.dt-frontend-resources .dt-toggle{min-height:0}.dt-frontend-warning{color:var(--dsw-alias-state-warn-label,var(--dsw-alias-state-warning-primary));margin:6px 0 0}
+        /* 行为设置分组（2026-10-21 开关收编）：每组上边框分隔 + 12px 组标题的
+           分隔语汇；组内开关去掉 36px 最小高，紧凑平铺。 */
+        .dt-behavior-group{display:flex;flex-direction:column;gap:6px;margin-top:14px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l2)}
+        .dt-behavior-group h4{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-weight:600}
+        .dt-behavior-group .dt-toggle{min-height:0}
         .dt-prompts-intro{max-width:760px;margin:0 0 14px;padding:12px 14px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}.dt-prompts-intro h3{margin:0 0 4px;font-size:13px;line-height:19px;font-weight:600}.dt-prompts-desc{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:19px}
         .dt-prompts-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}.dt-prompts-toolbar>button{min-height:32px}.dt-prompts-filter{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary);font-size:12px}.dt-prompts-filter select{box-sizing:border-box;height:32px;min-width:180px;max-width:280px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 8px;font:inherit;font-size:13px}
         .dt-panel-empty{display:flex;align-items:center;justify-content:center;min-height:88px;padding:18px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px;color:var(--dsw-alias-label-tertiary);text-align:center;font-size:12px;line-height:18px}.dt-panel-empty p{margin:0}
@@ -137,7 +142,6 @@
         .dt-kv-readonly>span{font-size:13px;line-height:18px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .dt-kv-key{color:var(--dsw-alias-label-secondary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
         .dt-kv-value{color:var(--dsw-alias-label-primary)}
-        .dt-architecture-settings{display:flex;flex-direction:column;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l2)}
         .dt-segmented{display:inline-flex;align-items:stretch;align-self:flex-start;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;overflow:hidden}
         .dt-segmented button{min-height:32px;padding:0 12px;border:0;border-right:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-base);cursor:pointer;font:inherit;font-size:12px}
         .dt-segmented button:last-child{border-right:0}

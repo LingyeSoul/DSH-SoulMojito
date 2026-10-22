@@ -93,7 +93,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 
 ### Tavern 管理面板
 
-两栏布局（左侧导航 + 右侧内容），窄屏折叠为横向滚动栏；导航品牌块常驻不滚，分区清单独占滚动。18 个分区：
+两栏布局（左侧导航 + 右侧内容），窄屏折叠为横向滚动栏；导航品牌块常驻不滚，分区清单独占滚动。19 个分区：
 
 | 分区 | 内容 |
 |---|---|
@@ -102,6 +102,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 | 聊天 / 群组 / 人设 / 持续指引 / 正则 / 变量 | 各资产的管理面，从设置页统一归位到这里 |
 | 小说 / 剧本 | AgentNovel 小说库；剧本资产的分块、绑定与进度 |
 | 工作台 | 方案确认入口（逐字段 diff → 批准并应用 / 拒绝）与试写 |
+| 行为设置 | 全部系统行为开关，按行为对应关系分组（会话 / 世界书 / 工具写入 / 前端与卡脚本 / 游戏）；设置页同步展示同一面 |
 | 游戏 / Mod | 游戏清单与对局面、游戏包导入（zip 上传 / git 安装）；Mod 清单、能力声明 Pill、两层开关、git 安装与审计计数 |
 | 记忆检索 | embed 来源三态（关闭 / 远程 / 本地）与探针 |
 | 提示词 | 实发请求 + 世界书激活轨迹的只读查看器 |
@@ -129,7 +130,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 - **Composer 模型选择** — 复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
 - **内部工作区** — ST 与 AgentTavern 新聊天共用数据根下 `workspace/`（新装 `$DSH_HOME/soulmojito/workspace/`，旧装 `$DSH_HOME/tavern/workspace/`）的 `Tavern (internal)` 工作区，插件按 workspace 路径/ID 从原生侧边栏隐藏该分组。宿主 `rc.6` 没有可追加到原生 session tree 的正式 list slot，侧栏因此使用一个集中、版本敏感但**失败关闭**的 DOM adapter（只匹配可见左侧 `[role="tree"]`，解绑或卸载时可逆恢复）；面板入口本身走官方 slot，不依赖 adapter 是否挂载成功。
 - **语言** — 插件 UI 跟随 DSH 的语言设置（zh/en），切换后无需刷新即时生效。
-- **设置页开关** — 「新聊天架构」、「AgentTavern 上下文」、「压缩总结模型」；`worldFollowsCharacter`（世界书跟随角色卡激活）、`preloadAssets`（新 AgentTavern 会话开始时一次性预载角色信息与常驻世界书条目，默认关闭且不追溯已有会话）、`allowGlobalWrites`（允许工具写 global 作用域，默认关闭）、`gamesDisableResign`（禁用投降）、`cardScriptsAutoRun`（进入聊天自动运行卡内全部启用脚本，默认关闭），以及 `nativePersona`（在标准 DSH Agent 会话中使用当前角色，默认关闭）。设置页标题下显示当前构建的版本与 commit。
+- **当前配置与行为设置** — 「当前配置」只留角色 / 预设 / 人设 / 压缩总结模型的快速切换；全部行为开关收进面板「行为设置」分区（system 组置顶，原生设置页同步展示同一个 band），按行为对应关系分组：会话行为（`defaultArchitecture` 新聊天架构、`defaultContextMode` AgentTavern 上下文、`preloadAssets` 新 AgentTavern 会话开始时一次性预载角色信息与常驻世界书条目（默认关闭且不追溯已有会话）、`nativePersona` 在标准 DSH Agent 会话中使用当前角色（默认关闭））、世界书行为（`worldFollowsCharacter` 世界书跟随角色卡激活）、工具写入（`allowGlobalWrites` 允许工具写 global 作用域，默认关闭）、前端与卡脚本（`frontendAutoOpen` 美化前端出现时自动打开右侧栏（默认关闭，每聊天一次）、`frontendAllowExternalResources` 允许美化前端加载外部资源（默认关闭）、`cardScriptsAutoRun` 进入聊天自动运行卡内全部启用脚本（默认关闭））、游戏行为（`gamesDisableResign` 禁用投降）。全部开关服务端逐次读取、即时生效。设置页标题下显示当前构建的版本与 commit。
 
 ### 美化前端（消息内 HTML/JS）
 
@@ -141,9 +142,9 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 
 每个前端使用 `sandbox="allow-scripts"` 且**不授予 `allow-same-origin`**：脚本不能读写宿主 DOM、Cookie、`window.parent` 或 DSH API（高度回传与助手兼容层都只走受校验的 `postMessage`）。CSP 允许内联 CSS/JavaScript 与这些静态源：`cdn.jsdelivr.net`、`testingcf.jsdelivr.net`、`cdn.tailwindcss.com`、`cdnjs.cloudflare.com`、`unpkg.com`、`esm.sh`、`fonts.googleapis.com`、`fonts.gstatic.com`；图片、字体与媒体可用 `https:`、`data:` 或 `blob:`。设置页「允许美化前端加载外部资源」默认关闭；开启后 iframe 额外放行任意 HTTPS 脚本/样式，并把 `connect-src` 放宽到 `https:`（`fetch`/XHR 与 CDN sourcemap 可用）——外部脚本因此能读取前端可见的聊天内容并外发，只对信任的卡开启。卡没有设置背景时，iframe 画布用 DSH 原生背景色（`--dsw-alias-bg-base` 的解析值）填充，并在主题切换时即时更新——深色模式不会出现一圈白边；卡内自己的 `html`/`body` `background` 仍然按 cascade 覆盖。**不支持**：嵌套 iframe、`object`/插件、表单提交。高度由 `ResizeObserver` 回传并限制在 80-1200px；TUI/headless 显示原始消息文本，不执行脚本。
 
-AgentTavern 架构的对话是宿主原生表面，插件没有消息正文 slot：同一份美化前端改由 DSH **原生右侧栏**的「美化前端」tab 承载——取本聊天**最新一条**带完整 HTML 的楼层（标题行显示楼层号），随聊天 5s 可见性轮询更新；标题栏按钮与右栏「+」guide 都能打开。设置页可开启「美化前端出现时自动打开右侧栏」（默认关闭，每聊天只自动展开一次）。ST 架构仍在消息里内联渲染，侧栏只显示说明空态，不重复执行脚本。[决策](decisions/2026-10-20-frontend-sidebar.md)
+AgentTavern 架构的对话是宿主原生表面，插件没有消息正文 slot：同一份美化前端改由 DSH **原生右侧栏**的「美化前端」tab 承载——取本聊天**最新一条**带完整 HTML 的楼层（标题行显示楼层号），随聊天 5s 可见性轮询更新；标题栏按钮与右栏「+」guide 都能打开。设置页可开启「美化前端出现时自动打开右侧栏」（默认关闭，每聊天只自动展开一次）。ST 架构仍在消息里内联渲染，侧栏只显示说明空态，不重复执行脚本。开启 `cardScriptsAutoRun` 后，AgentTavern 的卡脚本自动运行也落在这一份 iframe 里：全部启用脚本按脚本树顺序注入最新楼层里**文档长度最大的**那个完整 HTML（同长度取最后一个；行动栏这类小框不抢脚本宿主；该楼层没有 HTML 时给脚本一个独立画布），悬浮按钮 / GM 面板直接叠在美化前端上，并与前端共享 DOM、主题和 helper 通道；出现新的美化楼层时整份文档重建，脚本随之重启。[决策](decisions/2026-10-20-frontend-sidebar.md)
 
-**卡脚本 tab**：卡内 `extensions.tavern_helper.scripts`（JSR 的常驻脚本树）**默认不自动执行**。右栏「卡脚本」tab 只列出启用的脚本；点「运行」后才把单份脚本包成完整 HTML 文档，在同一个沙箱 `FrontendFrame` 里手动跑一次（切换聊天/角色立即停止，无 JSR 脚本按钮/快速回复栏）。列表来自**当前聊天的会话脚本树副本**，所以运行的是 GM 面板改写过的最新源码。设置页开启 `cardScriptsAutoRun`（默认关闭）后，进入非群聊酒馆聊天会自动展开本 tab，并把卡内全部启用脚本按顺序注入**同一个**沙箱 iframe 自动执行——脚本共享该 iframe 的 DOM 与全局变量，拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限，只对信任的卡开启；tab 内可「停止自动运行」回到手动模式。卡脚本拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限，面板顶部常驻警告。[决策](decisions/2026-10-21-card-scripts-host.md)
+**卡脚本 tab**：卡内 `extensions.tavern_helper.scripts`（JSR 的常驻脚本树）**默认不自动执行**。右栏「卡脚本」tab 只列出启用的脚本；点「运行」后才把单份脚本包成完整 HTML 文档，在同一个沙箱 `FrontendFrame` 里手动跑一次（切换聊天/角色立即停止，无 JSR 脚本按钮/快速回复栏）。列表来自**当前聊天的会话脚本树副本**，所以运行的是 GM 面板改写过的最新源码。设置页开启 `cardScriptsAutoRun`（默认关闭）后：**AgentTavern** 聊天不再自动展开本 tab，自动运行改由「美化前端」承载（脚本注入最新楼层 HTML 的同一个沙箱 iframe，与前端共享 DOM/主题与全局变量；没有 HTML 楼层时给脚本一个独立画布），本 tab 只保留列表、重置与手动入口，自动运行开启时手动运行禁用；**ST** 聊天仍自动展开本 tab，并把卡内全部启用脚本按脚本树顺序注入**同一个**沙箱 iframe 自动执行。无论哪种架构，脚本都拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限，只对信任的卡开启；tab 内可「停止自动运行」（ST）或回到手动模式。卡脚本拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限，面板顶部常驻警告。[决策](decisions/2026-10-21-card-scripts-host.md)
 
 **会话世界书副本**：脚本通过 `getWorldbook` / `updateWorldbookWith` 读写的世界书只落在**当前聊天**的覆盖层（`chats/<角色>/<聊天>.jsonl.worlds.json`）；基础 `worlds/<name>.json` 与卡内 `character_book` 保持只读。当前聊天的世界书激活、生成与 MVU 读取优先用副本；副本随聊天生命周期（重命名跟随、分支/分叉复制、删除清理），跨聊天互不影响。「卡脚本」tab 底部的「重置会话世界书」丢弃副本、回到角色卡原版。[决策](decisions/2026-10-21-card-scripts-host.md)
 

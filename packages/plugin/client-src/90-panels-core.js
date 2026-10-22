@@ -32,6 +32,11 @@
       { id: 'groups', group: 'content', icon: IconPlusOutline16, label: (t) => t('panel.section.groups'), component: () => h(GroupBand) },
       { id: 'personas', group: 'content', icon: IconPersonalizationOutline16, label: (t) => t('panel.section.personas'), component: () => h(PersonaBand) },
       { id: 'worlds', group: 'content', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: () => h(PanelWorlds) },
+      // 第 19 个分区「行为设置」（2026-10-21 用户需求「改进管理面板交互」）：
+      // 散养在「当前配置」架构分支、世界书清单顶与游戏清单顶的行为开关全部收编
+      // 到这里，按行为对应关系分组（会话 / 世界书 / 工具写入 / 前端与卡脚本 / 游戏）。
+      // system 组置顶——它决定插件怎么行为，是系统级配置而非资产管理。
+      { id: 'behavior', group: 'system', icon: IconSlidersOutline16, label: (t) => t('panel.section.behavior'), component: () => h(BehaviorSettingsBand) },
       { id: 'presets', group: 'system', icon: IconAgentPresetOutline16, label: (t) => t('panel.section.presets'), component: () => h(PanelPresets) },
       { id: 'scripts', group: 'content', icon: IconBookOutline16, label: (t) => t('panel.section.scripts'), component: () => h(PanelScripts) },
       { id: 'regex', group: 'system', icon: IconSearchOutline16, label: (t) => t('panel.section.regex'), component: () => h(RegexBand) },
@@ -49,7 +54,7 @@
       // 第 17 个分区「提示词」（A-6，2026-10-11）：ST 循环实发请求 + 世界书激活
       // 追踪的只读查看器（服务端 prompt-viewer.ts 环形缓冲）。
       { id: 'prompts', group: 'system', icon: IconDownloadOutline16, label: (t) => t('panel.section.prompts'), component: () => h(PanelPrompts) },
-      // 第 18 个分区「关于」（2026-10-12）：插件版本 stamp + 官网/作者/源码
+      // 第 19 个分区「关于」（2026-10-12）：插件版本 stamp + 官网/作者/源码
       // 仓库外链，纯静态信息面。自绘 info 图标（宿主清单无此语义图形）。
       { id: 'about', icon: IconInfoOutline16, label: (t) => t('panel.section.about'), component: () => h(PanelAbout) },
     ]) {
@@ -581,13 +586,6 @@
             h(UploadButton, { kind: 'world', label: t('settings.importWorld'), accept: '.json,application/json' }),
             h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setBrowse(''); setCreating(true) } }, `+ ${t('panel.worlds.new')}`))),
         h('section', { className: 'dt-settings-band' },
-          h('label', { className: 'dt-toggle' },
-            h('input', {
-              type: 'checkbox',
-              checked: state.bootstrap.state.worldFollowsCharacter !== false,
-              onChange: (event) => run(patchState({ worldFollowsCharacter: event.target.checked })),
-            }),
-            h('span', null, t('settings.worldFollowsCharacter'))),
           worlds.length === 0 && !creating
             ? h('p', { className: 'dt-muted' }, t('settings.worldsEmpty'))
             : h('div', { className: 'dt-world-list' }, worlds.map((name) => h('div', { key: name, className: 'dt-world-row' },

@@ -201,8 +201,9 @@ describe('client games panel (main.js source check)', () => {
       "t('games.resignConfirm')",
       "t('games.resign')",
       'store.bootstrap.state.gamesDisableResign !== true',
-      // 面板「游戏」分区开关（补丁路由即时生效）。
-      'patchState({ gamesDisableResign: event.target.checked })',
+      // 「禁用投降」开关已迁至「行为设置」分区（2026-10-21 开关收编），
+      // 走该分区统一的 applyPatch 错误行（补丁路由即时生效）。
+      'applyPatch({ gamesDisableResign: event.target.checked })',
       // 终局保留盘面：见证集判据（本挂载见证过的已终局会话也补拉快照）。
       'witnessed[session.id] !== undefined',
     ]) {

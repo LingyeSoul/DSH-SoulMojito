@@ -17,6 +17,7 @@
             h(UpdateBand, { compact: true })),
           h(Button, { variant: 'primary', size: 'sm', icon: h(SoulMojitoLogo), onClick: () => openPanel() }, t('panel.open'))),
         h(ActiveSetupBand),
+        h(BehaviorSettingsBand),
         state.error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, state.error)) : null)
     }
 

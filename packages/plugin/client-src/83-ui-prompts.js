@@ -190,15 +190,33 @@
               onChange: (event) => changeCompaction(event.target.value),
             },
               h('option', { key: '', value: '' }, t('settings.compactionModelFollow')),
-              compactionOptions.map((option) => h('option', { key: option.value, value: option.value }, option.label)))),
-          h('label', { className: 'dt-toggle' },
-            h('input', {
-              type: 'checkbox',
-              checked: bootstrap.state.nativeAgentPersona === true,
-              onChange: (event) => applyPatch({ nativeAgentPersona: event.target.checked }),
-            }),
-            h('span', null, t('settings.nativePersona')))),
-        h('div', { className: 'dt-architecture-settings' },
+              compactionOptions.map((option) => h('option', { key: option.value, value: option.value }, option.label))))),
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
+    // 行为设置（2026-10-21 用户需求「改进管理面板交互」）：此前散养在各处的行为
+    // 开关全部收编进这一个 band，按行为对应关系分五组——会话（新聊天架构、
+    // AgentTavern 上下文、AgentTavern 预载、原生会话人设）、世界书（跟随角色卡
+    // 激活）、工具写入（global 作用域）、前端与卡脚本（自动展开、外部资源、自动
+    // 运行）、游戏（禁用投降）。同一个 band 双挂在面板「行为设置」分区与原生设置
+    // 页（ActiveSetupBand 的双挂点先例），设置页不丢任何此前可达的开关；服务端
+    // 逐次读取这些键，全部即时生效。
+    function BehaviorSettingsBand() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const bootstrap = state.bootstrap
+      const [error, setError] = useState('')
+      const applyPatch = (patch) => {
+        setError('')
+        void patchState(patch).catch((cause) => setError(cause.message))
+      }
+      const behaviorGroup = (titleKey, children) => h('div', { className: 'dt-behavior-group' },
+        h('h4', null, t(titleKey)),
+        ...children)
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('panel.section.behavior')),
+        h('p', { className: 'dt-hint' }, t('settings.behaviorHint')),
+        behaviorGroup('settings.behavior.session', [
           h('div', { className: 'dt-field' },
             h('span', { className: 'dt-label' }, t('settings.defaultArchitecture')),
             h('div', { className: 'dt-segmented', role: 'group', 'aria-label': t('settings.defaultArchitecture') },
@@ -238,30 +256,49 @@
                   ? h('p', { className: 'dt-hint' }, t('settings.contextManagedUnavailable', {
                     reason: bootstrap.agentTavern?.managed?.reasons?.join(' ') || 'host capability check failed',
                   }))
-                  : null),
-              h('label', { className: 'dt-toggle' },
-                h('input', {
-                  type: 'checkbox',
-                  checked: bootstrap.state.agentTavernPreloadAssets === true,
-                  onChange: (event) => applyPatch({ agentTavernPreloadAssets: event.target.checked }),
-                }),
-                h('span', null, t('settings.preloadAssets'))),
-              h('label', { className: 'dt-toggle' },
-                h('input', {
-                  type: 'checkbox',
-                  checked: bootstrap.state.agentTavernAllowGlobalWrites === true,
-                  onChange: (event) => applyPatch({ agentTavernAllowGlobalWrites: event.target.checked }),
-                }),
-                h('span', null, t('settings.allowGlobalWrites'))),
-              h('label', { className: 'dt-toggle' },
-                h('input', {
-                  type: 'checkbox',
-                  checked: bootstrap.state.frontendAutoOpen === true,
-                  onChange: (event) => applyPatch({ frontendAutoOpen: event.target.checked }),
-                }),
-                h('span', null, t('settings.frontendAutoOpen'))))
-            : null),
-        h('div', { className: 'dt-frontend-resources' },
+                  : null))
+            : null,
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.agentTavernPreloadAssets === true,
+              onChange: (event) => applyPatch({ agentTavernPreloadAssets: event.target.checked }),
+            }),
+            h('span', null, t('settings.preloadAssets'))),
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.nativeAgentPersona === true,
+              onChange: (event) => applyPatch({ nativeAgentPersona: event.target.checked }),
+            }),
+            h('span', null, t('settings.nativePersona'))),
+        ]),
+        behaviorGroup('settings.behavior.worldInfo', [
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.worldFollowsCharacter !== false,
+              onChange: (event) => applyPatch({ worldFollowsCharacter: event.target.checked }),
+            }),
+            h('span', null, t('settings.worldFollowsCharacter'))),
+        ]),
+        behaviorGroup('settings.behavior.toolWrites', [
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.agentTavernAllowGlobalWrites === true,
+              onChange: (event) => applyPatch({ agentTavernAllowGlobalWrites: event.target.checked }),
+            }),
+            h('span', null, t('settings.allowGlobalWrites'))),
+        ]),
+        behaviorGroup('settings.behavior.frontend', [
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.frontendAutoOpen === true,
+              onChange: (event) => applyPatch({ frontendAutoOpen: event.target.checked }),
+            }),
+            h('span', null, t('settings.frontendAutoOpen'))),
           h('label', { className: 'dt-toggle' },
             h('input', {
               type: 'checkbox',
@@ -269,10 +306,7 @@
               onChange: (event) => applyPatch({ frontendAllowExternalResources: event.target.checked }),
             }),
             h('span', null, t('settings.frontendAllowExternalResources'))),
-          h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.frontendAllowExternalResourcesHint'))),
-        // 卡脚本自动运行（2026-10-21 用户需求）：默认关闭，开启后进入聊天自动
-        // 展开「卡脚本」tab 并把全部启用脚本注入同一个沙箱 iframe。
-        h('div', { className: 'dt-frontend-resources' },
+          h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.frontendAllowExternalResourcesHint')),
           h('label', { className: 'dt-toggle' },
             h('input', {
               type: 'checkbox',
@@ -280,7 +314,17 @@
               onChange: (event) => applyPatch({ cardScriptsAutoRun: event.target.checked }),
             }),
             h('span', null, t('settings.cardScriptsAutoRun'))),
-          h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.cardScriptsAutoRunHint'))),
+          h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.cardScriptsAutoRunHint')),
+        ]),
+        behaviorGroup('settings.behavior.games', [
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.gamesDisableResign === true,
+              onChange: (event) => applyPatch({ gamesDisableResign: event.target.checked }),
+            }),
+            h('span', null, t('settings.gamesDisableResign'))),
+        ]),
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 

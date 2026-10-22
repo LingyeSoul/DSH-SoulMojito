@@ -102,6 +102,55 @@ Zod，刷新后 GM 面板读到的是改过的源码而不是「已生效的规�
 总线，拆开反而与 JSR 行为不一致）；不做每聊天的「自动运行白名单」（设置是全局
 知情同意，会话副本已按聊天隔离写入）。
 
+## 自动运行改由「美化前端」承载（2026-10-21 第二次修订）
+
+问题：上一版把自动运行放在「卡脚本」tab 的独立 iframe。卡脚本的悬浮面板 / GM
+面板 `appendChild` 到 `window.top.document.body`，但那个 body 是空白脚本 iframe，
+不是玩家正在看的美化前端；结果脚本 UI 与消息 HUD 分居两个 tab / 两份 iframe，
+切换 tab 或打开美化前端时脚本状态与可见面脱节。
+
+决议：
+
+- `cardScriptsAutoRun` 开启时，AgentTavern 的自动运行宿主改为「美化前端」tab：
+  `frontend/latest` 的最新楼层 HTML 与全部启用脚本拼成**同一个**沙箱文档（脚本块
+  插在 `</body>` 前；没有 HTML 楼层时给 720px 画布），只挂一个 `FrontendFrame`；
+- 一个楼层可能同时带多个完整文档（真实卡：行动栏 35KB + 状态总览 154KB）。脚本
+  只注入**文档长度最大**的那个主前端（同长度取最后一个），行动栏小框不抢宿主；
+- 脚本的 `window.top.document` facade 指向这份文档，悬浮球 / GM 面板直接叠在美化
+  前端上；Font Awesome 只在卡未自带时补一次；
+- 自动展开切到「美化前端」tab；ST（消息内联，右栏没有第二份前端）仍在「卡脚本」
+  tab 自动运行；
+- 「卡脚本」tab 在 AgentTavern 下不再自动 / 手动重复启动（自动运行开启时手动运行
+  禁用），显示「自动运行由美化前端承载」与「打开美化前端」；重置脚本树通过窗口
+  事件让美化前端停止自动运行；
+- 美化前端 tab 提供「停止自动运行」；脚本源码只在聊天 / 设置变化时取一次，不跟
+  5s 轮询重取；iframe 只在美化楼层 HTML 变化（或启停脚本）时重建。
+
+边界：
+
+- 同一 iframe 意味着消息 HTML 与卡脚本共享 DOM / 全局变量，冲突由卡作者负责；
+- 一个楼层有多个完整文档时只把脚本注入**文档长度最大**的主前端（同长度取最后
+  一个）；行动栏 / 状态栏小框不执行脚本，也不重复注入；
+- 出现新的美化楼层时整份文档重建，脚本从头启动（用户已在二选一中确认该代价）；
+- 停止自动运行只停当前 iframe，不改设置；重新开关设置或重开 tab 可恢复；
+- ST 行为保持不变：消息正文内联渲染，自动运行仍在卡脚本 tab。
+
+验证证据：
+
+- `packages/plugin/tests/frontend-client.spec.ts`：同一 iframe 拼接、脚本 bundle
+  端点、启停 / 重置事件与 zh/en 键镜像；
+- `packages/plugin/tests/card-scripts-client.spec.ts`：自动展开目标 tab
+  （AgentTavern → 美化前端、ST → 卡脚本）、手动运行禁用、重置事件派发；
+- `frontend-surface` gate 锁定 `frontendWithCardScripts`、重置事件与宿主判定
+  marker；构建后 gates 全绿；
+- 真实卡实测（2026-10-22）：`示例卡…` 的 4 个启用脚本含 53 处 `$'`；旧版
+  `String.replace` 字符串拼接在 esbuild 校验下 3 个脚本报 `Unterminated string
+  literal`（srcdoc 的 `Invalid or unexpected token`），replacer 版本 4 个脚本
+  全部通过；
+- 真实楼层实测（2026-10-22）：`frontend/latest` 返回 `[35122, 154052]` 两份
+  文档，`frontendCardScriptHostIndex` 选中 1（`状态总览`，154KB），行动栏文档
+  保持 0 个 module 块，4 个脚本全部解析通过。
+
 ## 否决项
 
 - **默认不自动执行脚本树**：自动运行必须由 `cardScriptsAutoRun` 显式开启
