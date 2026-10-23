@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 import { writeAtomicText } from './fs-atomic.js'
+import { MutationTail } from './mutation-tail.js'
 import type { MemoryScope } from './memory.js'
 
 export interface MemoryVectorEntry {
@@ -91,7 +92,7 @@ export function cosineSimilarity(left: readonly number[], right: readonly number
 const SCOPES = new Set<MemoryScope>(['turn', 'chat', 'character', 'agent', 'global'])
 
 export class MemoryVectorStore {
-  private mutationTail: Promise<void> = Promise.resolve()
+  private readonly mutationTail = new MutationTail()
 
   private constructor(private readonly root: string) {}
 
@@ -203,9 +204,7 @@ export class MemoryVectorStore {
   }
 
   private mutate<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.mutationTail.catch(() => {}).then(operation)
-    this.mutationTail = result.then(() => {}, () => {})
-    return result
+    return this.mutationTail.enqueue(operation)
   }
 }
 

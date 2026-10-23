@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
-import { ChatRevisionConflictError, type TavernSessionBinding, type TavernState } from '../../../tavern-store/src/index.js'
+import { ChatRevisionConflictError, KeyedMutationTails, MutationTail, type TavernSessionBinding, type TavernState } from '../../../tavern-store/src/index.js'
 import { RegexPlacement, type CharacterCardIR, type ChatLogIR, type ChatMessage, type RegexScriptIR } from '../../../tavern-format/src/index.js'
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
 import { hostPluginMessageSource, hostSessionFormatVersion, isHostPluginMessageSource, sessionEvents, LEGACY_PLUGIN_NAME, PLUGIN_NAME, type HostSessionLog } from '../../../bind/src/index.js'
@@ -47,7 +47,7 @@ export interface ProjectionCheckpoint {
 }
 
 export class AgentTavernProjector {
-  private readonly tails = new Map<string, Promise<void>>()
+  private readonly tails = new KeyedMutationTails<string>(true)
   private readonly checkpoints = new Map<string, ProjectionCheckpoint>()
 
   private constructor(
@@ -62,12 +62,7 @@ export class AgentTavernProjector {
   }
 
   project(session: NativeSession, event: NativeSessionEvent): Promise<void> {
-    const previous = this.tails.get(session.id) ?? Promise.resolve()
-    const current = previous.catch(() => {}).then(() => this.projectOne(session, event))
-    this.tails.set(session.id, current)
-    return current.finally(() => {
-      if (this.tails.get(session.id) === current) this.tails.delete(session.id)
-    })
+    return this.tails.enqueue(session.id, () => this.projectOne(session, event))
   }
 
   async replay(session: NativeSession): Promise<void> {
@@ -557,8 +552,8 @@ export interface MvuAuditRecord {
   failures: string[]
 }
 
-/** 结算审计的串行尾巴：与 VariableStore.mutationTail 同款，保证追加顺序。 */
-let mvuAuditTail: Promise<void> = Promise.resolve()
+/** 结算审计的串行尾巴（MutationTail）：保证追加顺序。 */
+const mvuAuditTail = new MutationTail()
 
 export function mvuAuditPath(tavernRoot: string): string {
   return join(tavernRoot, 'mvu', 'audit.jsonl')
@@ -566,12 +561,10 @@ export function mvuAuditPath(tavernRoot: string): string {
 
 /** 追加一条结算审计线（<tavern>/mvu/audit.jsonl）。 */
 export async function appendMvuAudit(tavernRoot: string, record: MvuAuditRecord): Promise<void> {
-  const write = mvuAuditTail.catch(() => {}).then(async () => {
+  await mvuAuditTail.enqueue(async () => {
     await fs.mkdir(join(tavernRoot, 'mvu'), { recursive: true })
     await fs.appendFile(mvuAuditPath(tavernRoot), `${JSON.stringify(record)}\n`, 'utf8')
   })
-  mvuAuditTail = write.then(() => {}, () => {})
-  await write
 }
 
 /** 读回审计线（测试与排查面）；文件不存在视为空。 */

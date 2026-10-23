@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 import { writeAtomicText } from './fs-atomic.js'
+import { MutationTail } from './mutation-tail.js'
 
 export type VariableScope = 'turn' | 'chat' | 'character' | 'agent' | 'global'
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
@@ -48,7 +49,7 @@ interface VariableFile {
 }
 
 export class VariableStore {
-  private mutationTail: Promise<void> = Promise.resolve()
+  private readonly mutationTail = new MutationTail()
 
   private constructor(private readonly root: string) {}
 
@@ -175,9 +176,7 @@ export class VariableStore {
   }
 
   private mutate<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.mutationTail.catch(() => {}).then(operation)
-    this.mutationTail = result.then(() => {}, () => {})
-    return result
+    return this.mutationTail.enqueue(operation)
   }
 }
 

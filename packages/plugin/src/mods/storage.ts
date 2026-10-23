@@ -14,6 +14,7 @@ import { promises as fs } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { writeAtomicText } from '../../../tavern-store/src/fs-atomic.js'
+import { KeyedMutationTails } from '../../../tavern-store/src/mutation-tail.js'
 
 /** 单值上限（JSON 序列化字节数）。 */
 export const MOD_STORAGE_VALUE_LIMIT = 256 * 1024
@@ -50,7 +51,7 @@ interface ValueProblem {
  * 验收打回的第三形态，并发回归网锁定）。条目数 = 已打开的 state.json 数
  * （每个已装载 Mod 一个），有界。
  */
-const fileTails = new Map<string, Promise<void>>()
+const fileTails = new KeyedMutationTails<string>()
 
 export class ModStorage {
   constructor(
@@ -129,14 +130,11 @@ export class ModStorage {
   /** 排空在飞写（宿主卸载/reload 前调用）：返回时**该文件**队列上全部写
    * （含其他实例入队的）已落定——卸载后新实例装载与外部 teardown 都安全。 */
   flush(): Promise<void> {
-    return (fileTails.get(this.file) ?? Promise.resolve()).catch(() => {})
+    return fileTails.drain(this.file)
   }
 
   private mutate<T>(operation: () => Promise<T>): Promise<T> {
-    const tail = fileTails.get(this.file) ?? Promise.resolve()
-    const result = tail.catch(() => {}).then(operation)
-    fileTails.set(this.file, result.then(() => {}, () => {}))
-    return result
+    return fileTails.enqueue(this.file, operation)
   }
 }
 

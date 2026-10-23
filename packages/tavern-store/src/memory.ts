@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 import { writeAtomicText } from './fs-atomic.js'
+import { MutationTail } from './mutation-tail.js'
 import { tokenizeQuery } from './tokenize.js'
 
 export type MemoryScope = 'turn' | 'chat' | 'character' | 'agent' | 'global'
@@ -79,7 +80,7 @@ const MAX_RESULTS = 50
 const DEFAULT_RESULTS = 10
 
 export class MemoryStore {
-  private mutationTail: Promise<void> = Promise.resolve()
+  private readonly mutationTail = new MutationTail()
 
   private constructor(private readonly root: string) {}
 
@@ -260,9 +261,7 @@ export class MemoryStore {
   }
 
   private mutate<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.mutationTail.catch(() => {}).then(operation)
-    this.mutationTail = result.then(() => {}, () => {})
-    return result
+    return this.mutationTail.enqueue(operation)
   }
 }
 

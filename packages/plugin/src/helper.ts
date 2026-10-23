@@ -21,7 +21,7 @@ import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { renderSandboxed } from '../../tavern-template/src/index.js'
 import { applyRegexScript, applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
 import type { TavernState, TavernStore } from '../../tavern-store/src/index.js'
-import { ChatRevisionConflictError } from '../../tavern-store/src/index.js'
+import { ChatRevisionConflictError, KeyedMutationTails } from '../../tavern-store/src/index.js'
 import {
   clearIdbStore,
   createIdbStore,
@@ -537,7 +537,7 @@ async function replaceVariables(
   // Multiple card scripts start together (MVU + status panel + front-end) and
   // write the same chat at once. Serializing helper writes prevents avoidable
   // CAS 500s during that startup burst; the store CAS still guards host writes.
-  return serializeSessionWrite(`${character}\u0000${chatId}\u0000chat`, () => retryChatWrite(async () => {
+  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
     if (scope === 'chat') {
       const snapshot = await requireChat(db, character, chatId)
       const chat = snapshot.chat
@@ -580,7 +580,7 @@ async function replaceMvuData(
   chatId: string,
   body: JsonObject,
 ): Promise<JsonObject> {
-  return serializeSessionWrite(`${character}\u0000${chatId}\u0000chat`, () => retryChatWrite(async () => {
+  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
     const snapshot = await requireChat(db, character, chatId)
     const chat = snapshot.chat
     const stat = requireObject(body?.statData, 'statData')
@@ -742,18 +742,15 @@ async function loadLorebook(
  * console can fire concurrent world-book or script-tree writes; without a chain
  * the last writer would silently drop the other's changes.
  */
-const sessionWriteChains = new Map<string, Promise<void>>()
+const sessionWriteChains = new KeyedMutationTails<string>(true)
 
-async function serializeSessionWrite<T>(key: string, operation: () => Promise<T>): Promise<T> {
-  const previous = sessionWriteChains.get(key) ?? Promise.resolve()
-  const run = previous.catch(() => {}).then(operation)
-  const settled = run.then(() => {}, () => {})
-  sessionWriteChains.set(key, settled)
-  try {
-    return await run
-  } finally {
-    if (sessionWriteChains.get(key) === settled) sessionWriteChains.delete(key)
-  }
+/** 会话 chat 正文的串行写入键（区别于 scripts: 与世界书键的命名空间）。 */
+function chatWriteKey(character: string, chatId: string): string {
+  return `${character}\u0000${chatId}\u0000chat`
+}
+
+function serializeSessionWrite<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  return sessionWriteChains.enqueue(key, operation)
 }
 
 /**
@@ -919,7 +916,7 @@ async function setChatWorld(
   requireSessionChatId(chatId, 'chat.world.set')
   const raw = body?.name
   const name = raw === null || raw === undefined || raw === '' ? null : requireString(raw, 'name').trim()
-  return serializeSessionWrite(`${character}\u0000${chatId}\u0000chat`, () => retryChatWrite(async () => {
+  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
     const snapshot = await requireChat(db, character, chatId)
     const chat = snapshot.chat
     chat.header.chat_metadata = chat.header.chat_metadata ?? {}
@@ -1098,7 +1095,7 @@ async function rotateMessages(
   chatId: string,
   body: JsonObject,
 ): Promise<{ revision: string; messageCount: number; lastMessageId: number }> {
-  return serializeSessionWrite(`${character}\u0000${chatId}\u0000chat`, () => retryChatWrite(async () => {
+  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
     const snapshot = await requireChat(db, character, chatId)
     const chat = snapshot.chat
     const total = chat.messages.length
@@ -1374,7 +1371,7 @@ async function mutateMessages(
   action: 'set' | 'create' | 'delete',
   body: JsonObject,
 ): Promise<JsonObject> {
-  return serializeSessionWrite(`${character}\u0000${chatId}\u0000chat`, () => retryChatWrite(async () => {
+  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
     const snapshot = await requireChat(db, character, chatId)
     const chat = snapshot.chat
     const state = await db.getState()

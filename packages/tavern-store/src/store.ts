@@ -25,6 +25,7 @@ import * as path from 'node:path'
 // 原子写统一实现（fs-atomic.ts）：唯一 tmp 名 + Windows 瞬态 rename 重试
 // （2290eb0 的重试逻辑原样迁入，全包自建 writeAtomic 的收敛点）。
 import { writeAtomicBytes } from './fs-atomic.js'
+import { MutationTail } from './mutation-tail.js'
 import {
   decodeCharacterCard,
   decodeCharx,
@@ -465,8 +466,8 @@ function clampOptionalInt(value: unknown, min: number, max: number): number | un
 }
 
 export class TavernStore {
-  private chatMutationTail: Promise<void> = Promise.resolve()
-  private stateMutationTail: Promise<void> = Promise.resolve()
+  private readonly chatMutationTail = new MutationTail()
+  private readonly stateMutationTail = new MutationTail()
 
   private constructor(private readonly root: string) {}
 
@@ -1233,7 +1234,7 @@ export class TavernStore {
   /* ------------------------------ 状态 ------------------------------ */
 
   async getState(): Promise<TavernState> {
-    await this.stateMutationTail.catch(() => {})
+    await this.stateMutationTail.drain()
     return this.readState()
   }
 
@@ -1509,9 +1510,7 @@ export class TavernStore {
   }
 
   private mutateChat<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.chatMutationTail.catch(() => {}).then(operation)
-    this.chatMutationTail = result.then(() => {}, () => {})
-    return result
+    return this.chatMutationTail.enqueue(operation)
   }
 
   private chatWorldsFile(characterName: string, chatId: string): string {
@@ -1541,9 +1540,7 @@ export class TavernStore {
   }
 
   private mutateState<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.stateMutationTail.catch(() => {}).then(operation)
-    this.stateMutationTail = result.then(() => {}, () => {})
-    return result
+    return this.stateMutationTail.enqueue(operation)
   }
 
   private async listDir(dir: string): Promise<string[]> {

@@ -30,6 +30,7 @@ import { builtinMacroNames } from '../../../tavern-macros/src/index.js'
 import { hostMacroSnapshot, registerHostMacro } from '../../../tavern-macros/src/index.js'
 import { registerStscriptCommand, stscriptCommandNames } from '../../../tavern-script/src/index.js'
 import type { TavernStore } from '../../../tavern-store/src/index.js'
+import { MutationTail } from '../../../tavern-store/src/index.js'
 import { ModAuditLog, type ModAuditEvent } from './audit.js'
 import { currentStreamEpoch, modEvents } from './events.js'
 import {
@@ -190,7 +191,7 @@ export class ModHost {
   private readonly loaded = new Map<string, LoadedMod>()
   private readonly loadErrors = new Map<string, string>()
   private globalEnabled = false
-  private refreshTail: Promise<void> = Promise.resolve()
+  private readonly refreshTail = new MutationTail()
   private offGuides: (() => void) | undefined
   private offHookDegrations: (() => void) | undefined
 
@@ -228,9 +229,7 @@ export class ModHost {
 
   /** 重新扫描 + 按三层开关对账（该装载的装载、该卸载的卸载）。串行化执行。 */
   refresh(): Promise<void> {
-    const run = this.refreshTail.catch(() => {}).then(() => this.refreshInternal())
-    this.refreshTail = run.then(() => {}, () => {})
-    return run
+    return this.refreshTail.enqueue(() => this.refreshInternal())
   }
 
   async setGlobalEnabled(enabled: boolean): Promise<void> {

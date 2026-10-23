@@ -28,6 +28,7 @@
 
 import { randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
+import { KeyedMutationTails } from './mutation-tail.js'
 import * as path from 'node:path'
 import { writeAtomicText } from './fs-atomic.js'
 import type { TavernStore } from './store.js'
@@ -175,9 +176,9 @@ interface ImportedSource {
 
 export class NovelStore {
   private readonly novelsRoot: string
-  private readonly mutationTails = new Map<string, Promise<void>>()
+  private readonly mutationTails = new KeyedMutationTails<string>()
   /** Serialized async projection updates per novel; deleteNovel drains them. */
-  private readonly projectionTails = new Map<string, Promise<void>>()
+  private readonly projectionTails = new KeyedMutationTails<string>()
 
   private constructor(root: string) {
     this.novelsRoot = path.join(root, 'novels')
@@ -512,7 +513,7 @@ export class NovelStore {
       if (current === undefined) return false
       await this.ensureOwnership(novelId, dir)
       // Drain in-flight projection writes so they cannot recreate the directory.
-      await this.projectionTails.get(novelId)?.catch(() => {})
+      await this.projectionTails.drain(novelId)
       await fs.rm(dir, { recursive: true, force: true })
       return true
     })
@@ -2036,10 +2037,7 @@ export class NovelStore {
 
   private mutate<T>(novelId: string, operation: () => Promise<T>): Promise<T> {
     // In-process serialization per novel, mirroring store.ts stateMutationTail.
-    const tail = this.mutationTails.get(novelId) ?? Promise.resolve()
-    const result = tail.catch(() => {}).then(operation)
-    this.mutationTails.set(novelId, result.then(() => {}, () => {}))
-    return result
+    return this.mutationTails.enqueue(novelId, operation)
   }
 
   /** Re-reads HEAD inside the mutation entry and verifies write ownership. */
@@ -2185,10 +2183,7 @@ export class NovelStore {
     // §10.2 step 5: projections are asynchronous; failure marks
     // projection-pending without rolling back committed state. Updates are
     // serialized per novel and drained by deleteNovel.
-    const tail = this.projectionTails.get(snapshot.novelId) ?? Promise.resolve()
-    const projected = tail.catch(() => {}).then(() => this.updateProjections(dir, withRevision))
-    this.projectionTails.set(snapshot.novelId, projected.then(() => {}, () => {}))
-    projected.catch(() => {})
+    void this.projectionTails.enqueue(snapshot.novelId, () => this.updateProjections(dir, withRevision)).catch(() => {})
     return revision
   }
 
