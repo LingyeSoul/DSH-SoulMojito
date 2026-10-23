@@ -13053,7 +13053,7 @@ window.__ModuleLoader__.load({
         'aria-current': section === item.id ? 'page' : undefined,
         'data-dt-section': item.id,
         onClick: () => update({ panelSection: item.id }),
-      }, h(item.icon), h('span', null, item.label(t)))
+      }, h(item.icon), h('span', { className: 'dt-panel-navcell-label' }, item.label(t)), h('span', { className: 'dt-panel-navcell-index', 'aria-hidden': 'true' }, String(panelSections.indexOf(item) + 1).padStart(2, '0')))
       // 键盘导航：↑↓ 在可见分区间移动激活（同步聚焦按钮，屏幕阅读器跟随），
       // Home/End 跳首尾；原生 Tab 序不受影响。
       const focusSectionButton = (id) => {
@@ -13087,10 +13087,10 @@ window.__ModuleLoader__.load({
         // 既有契约，过滤框与其同段）。
         h('nav', { className: 'dt-panel-nav', 'aria-label': t('panel.nav'), ref: navRef },
           h('div', { className: 'dt-panel-brand' },
-            h(SoulMojitoLogo),
+            h('span', { className: 'dt-panel-brand-mark' }, h(SoulMojitoLogo)),
             h('div', { className: 'dt-panel-brand-copy' },
               h('strong', null, 'SoulMojito'),
-              stamp ? h('span', null, stamp) : null)),
+              stamp ? h('span', { className: 'dt-panel-brand-version' }, stamp) : null)),
           h('input', {
             type: 'search',
             className: 'dt-panel-search',
@@ -13111,7 +13111,9 @@ window.__ModuleLoader__.load({
               : null)),
         h('div', { className: 'dt-panel-main' },
           h('header', { className: 'dt-panel-header' },
-            h('h2', null, activeSection.label(t)),
+            h('div', { className: 'dt-panel-heading' },
+              h('span', { className: 'dt-panel-heading-index', 'aria-hidden': 'true' }, `${String(panelSections.indexOf(activeSection) + 1).padStart(2, '0')} / ${String(panelSections.length).padStart(2, '0')}`),
+              h('h2', null, activeSection.label(t))),
             h('div', { className: 'dt-panel-header-actions' },
               h('button', {
                 type: 'button',
@@ -13724,6 +13726,65 @@ window.__ModuleLoader__.load({
         .dt-card-script-reset:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
         .dt-card-script-reset:disabled{cursor:not-allowed;opacity:.5}
         .dt-card-scripts-notice{margin:0;padding:8px 11px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-status-success,#9ece6a) 14%,transparent);font-size:12px;line-height:18px}
+        /* ── 图纸视觉层（2026-10-23 深度美化）：宿主 token 之上叠加工程图纸语汇——
+           1px 发丝线、等宽数字纪律、150ms 功能动效。全部经既有 token 推导，深/浅
+           主题自适应；布局锁定行保持原样，新规则一律后置叠加，移动端断点另起
+           独立行，不触碰 700px 契约行。 */
+        .dt-panel-modal{border-radius:14px;box-shadow:var(--dsw-shadow-lv3,0 24px 64px rgba(0,0,0,.28))}
+        .dt-panel{background:linear-gradient(180deg,color-mix(in srgb,var(--dsw-alias-label-primary) 2%,var(--dsw-alias-bg-base)),var(--dsw-alias-bg-base) 240px)}
+        .dt-panel ::selection{background:var(--dsw-alias-state-business-primary);color:#fff}
+        .dt-panel-body,.dt-panel-navlist{scrollbar-width:thin;scrollbar-color:var(--dsw-alias-border-l2) transparent}
+        /* 品牌块：绿玻璃徽标落座瓷釉瓦片（色号取自 logo 自身调色板，双主题通用）。 */
+        .dt-panel-brand-mark{display:grid;place-items:center;width:34px;height:34px;flex:none;border-radius:9px;background:color-mix(in srgb,#2f9e77 10%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,#2f9e77 26%,transparent)}
+        .dt-panel-brand-copy strong{letter-spacing:.01em}
+        .dt-panel-brand-version{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;line-height:14px;font-variant-numeric:tabular-nums;user-select:text}
+        .dt-panel-search{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px}
+        /* 分组：眉题字距 + 发丝线分栏（中文无大小写形态，字距呈现眉题感）。 */
+        .dt-panel-group{margin-top:10px;padding-top:8px;border-top:1px solid color-mix(in srgb,var(--dsw-alias-border-l2) 55%,transparent)}
+        .dt-panel-group:first-of-type{margin-top:8px;padding-top:0;border-top:0}
+        .dt-panel-group-label{padding:2px 9px 6px;font-size:10px;line-height:14px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary))}
+        /* 分区格：左侧 3px 荧光签条 + 尾部图纸序号（悬停显影），150ms 功能动效。 */
+        .dt-panel-navcell{position:relative;gap:8px;min-height:36px;padding:0 9px;border-radius:8px;transition:background .15s ease,color .15s ease}
+        .dt-panel-navcell>svg{flex:none;opacity:.85}
+        .dt-panel-navcell-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .dt-panel-navcell-index{flex:none;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;line-height:14px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));opacity:0;transition:opacity .15s ease}
+        .dt-panel-navcell:hover .dt-panel-navcell-index,.dt-panel-navcell-active .dt-panel-navcell-index{opacity:.7}
+        .dt-panel-navcell::before{content:"";position:absolute;left:-8px;top:50%;width:3px;height:18px;border-radius:2px;background:var(--dsw-alias-brand-primary,var(--dsw-alias-state-business-primary));transform:translateY(-50%) scaleY(0);transition:transform .18s cubic-bezier(.2,.8,.2,1)}
+        .dt-panel-navcell-active{background:color-mix(in srgb,var(--dsw-alias-brand-primary,var(--dsw-alias-state-business-primary)) 8%,transparent)}
+        .dt-panel-navcell-active::before{transform:translateY(-50%) scaleY(1)}
+        /* 标题栏：图纸序号章（01 / 19）。 */
+        .dt-panel-heading{display:flex;align-items:center;gap:10px;min-width:0}
+        .dt-panel-heading h2{letter-spacing:.01em}
+        .dt-panel-heading-index{flex:none;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:16px;font-variant-numeric:tabular-nums;letter-spacing:.06em;color:var(--dsw-alias-brand-primary,var(--dsw-alias-state-business-primary));padding:2px 7px;border-radius:6px;background:color-mix(in srgb,var(--dsw-alias-brand-primary,var(--dsw-alias-state-business-primary)) 8%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--dsw-alias-brand-primary,var(--dsw-alias-state-business-primary)) 22%,transparent)}
+        /* 内容带：眉题前置 3px 签条，全分区统一图纸语汇。 */
+        .dt-settings-band>h3{display:flex;align-items:center;gap:8px}
+        .dt-settings-band>h3::before{content:"";flex:none;width:3px;height:12px;border-radius:2px;background:var(--dsw-alias-brand-primary,var(--dsw-alias-state-business-primary))}
+        /* 资产卡：发丝环统一悬浮反馈。 */
+        .dt-card,.dt-persona-row,.dt-world-row,.dt-entry,.dt-regex-row,.dt-novel-card,.dt-mod-row,.dt-preset-row,.dt-script-row,.dt-guide-row,.dt-workbench-plan,.dt-stat{transition:border-color .15s ease,background .15s ease,transform .15s ease}
+        .dt-card:hover,.dt-world-row:hover,.dt-entry:hover,.dt-preset-row:hover,.dt-script-row:hover,.dt-workbench-plan:hover{border-color:var(--dsw-alias-border-l1,var(--dsw-alias-border-l2))}
+        /* 总览统计：26px 等宽大数字 + 悬浮起 1px + 荧光环 + 按压回弹。 */
+        .dt-stat{gap:4px;padding:14px;border-radius:10px}
+        .dt-stat:hover{transform:translateY(-1px);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary,var(--dsw-alias-state-business-primary)) 45%,var(--dsw-alias-border-l2));background:color-mix(in srgb,var(--dsw-alias-brand-primary,var(--dsw-alias-state-business-primary)) 5%,transparent)}
+        .dt-stat:active{transform:translateY(0) scale(.98)}
+        .dt-stat-value{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:26px;line-height:30px;letter-spacing:-.02em}
+        .dt-stat-label{font-size:11px}
+        /* 分区切换：内容带错峰浮入（纯 CSS 关键帧，零运行时依赖，GSAP 与无依赖
+           bundle 纪律冲突——按 The Algorithm 删除该需求）。 */
+        @keyframes dt-sheet-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+        .dt-panel-body>*{animation:dt-sheet-in .2s cubic-bezier(.2,.8,.2,1) both}
+        .dt-panel-body>*:nth-child(2){animation-delay:.03s}
+        .dt-panel-body>*:nth-child(3){animation-delay:.06s}
+        .dt-panel-body>*:nth-child(4){animation-delay:.09s}
+        .dt-panel-body>*:nth-child(5){animation-delay:.12s}
+        /* 移动端横条：图纸序号与签条退场（独立断点后置于锁定行，不触碰契约行）。 */
+        @media(max-width:700px){.dt-panel-navcell-index{display:none}.dt-panel-navcell::before{display:none}.dt-panel-heading-index{display:none}.dt-panel-group{margin-top:0;padding-top:0;border-top:0}.dt-kv-row{grid-template-columns:1fr 1fr 28px}}
+        @media(prefers-reduced-motion:reduce){.dt-panel-body>*,.dt-stat,.dt-panel-navcell,.dt-panel-navcell::before{animation:none!important;transition:none!important}}
+        /* 变量键值对（2026-10-23 用户反馈「都挤一块了」）：键/值输入走等宽字体，
+           键列加宽到 220px，操作按钮行与清单之间留 12px 呼吸位，行间 8px。 */
+        .dt-kv-list{gap:8px;max-width:720px}
+        .dt-kv-row{grid-template-columns:minmax(140px,220px) minmax(0,1fr) 28px}
+        .dt-kv-list+.dt-imports{margin-top:12px}
+        .dt-kv-row input{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
       `
       document.head.appendChild(tag)
     }

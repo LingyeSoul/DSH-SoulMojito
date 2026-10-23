@@ -277,7 +277,7 @@
         'aria-current': section === item.id ? 'page' : undefined,
         'data-dt-section': item.id,
         onClick: () => update({ panelSection: item.id }),
-      }, h(item.icon), h('span', null, item.label(t)))
+      }, h(item.icon), h('span', { className: 'dt-panel-navcell-label' }, item.label(t)), h('span', { className: 'dt-panel-navcell-index', 'aria-hidden': 'true' }, String(panelSections.indexOf(item) + 1).padStart(2, '0')))
       // 键盘导航：↑↓ 在可见分区间移动激活（同步聚焦按钮，屏幕阅读器跟随），
       // Home/End 跳首尾；原生 Tab 序不受影响。
       const focusSectionButton = (id) => {
@@ -311,10 +311,10 @@
         // 既有契约，过滤框与其同段）。
         h('nav', { className: 'dt-panel-nav', 'aria-label': t('panel.nav'), ref: navRef },
           h('div', { className: 'dt-panel-brand' },
-            h(SoulMojitoLogo),
+            h('span', { className: 'dt-panel-brand-mark' }, h(SoulMojitoLogo)),
             h('div', { className: 'dt-panel-brand-copy' },
               h('strong', null, 'SoulMojito'),
-              stamp ? h('span', null, stamp) : null)),
+              stamp ? h('span', { className: 'dt-panel-brand-version' }, stamp) : null)),
           h('input', {
             type: 'search',
             className: 'dt-panel-search',
@@ -335,7 +335,9 @@
               : null)),
         h('div', { className: 'dt-panel-main' },
           h('header', { className: 'dt-panel-header' },
-            h('h2', null, activeSection.label(t)),
+            h('div', { className: 'dt-panel-heading' },
+              h('span', { className: 'dt-panel-heading-index', 'aria-hidden': 'true' }, `${String(panelSections.indexOf(activeSection) + 1).padStart(2, '0')} / ${String(panelSections.length).padStart(2, '0')}`),
+              h('h2', null, activeSection.label(t))),
             h('div', { className: 'dt-panel-header-actions' },
               h('button', {
                 type: 'button',
