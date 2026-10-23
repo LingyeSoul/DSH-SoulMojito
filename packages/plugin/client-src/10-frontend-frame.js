@@ -251,6 +251,32 @@
 })();`
     }
 
+    // Native forms are allowed only inside the plugin document. The sandbox
+    // now carries `allow-forms`, and the CSP restricts form-action to
+    // `'self' about: blob:`; this late window-level guard is defense in depth
+    // for explicit external `action`/`formaction` values. It runs after
+    // form/document handlers, so card logic still runs first.
+    function frontendFormCompatScript() {
+      return `window.addEventListener('submit', function (event) {
+  var form = event.target;
+  if (!form || typeof form.getAttribute !== 'function') return;
+  var action = (form.getAttribute('action') || '').trim();
+  var submitter = event.submitter;
+  if (submitter && typeof submitter.getAttribute === 'function') {
+    var override = (submitter.getAttribute('formaction') || '').trim();
+    if (override !== '') action = override;
+  }
+  if (action === '') return;
+  var target;
+  try { target = new URL(action, document.baseURI); } catch (_) { event.preventDefault(); return; }
+  if (target.protocol === 'about:' || target.protocol === 'blob:') return;
+  var base = null;
+  try { base = new URL(document.baseURI).origin; } catch (_) {}
+  if (base !== null && target.origin === base) return;
+  event.preventDefault();
+});`
+    }
+
     // Host-to-iframe theme color delivery: same direction as the viewport
     // message, no token (it can only change the sandbox's own canvas). It also
     // watches the body/html theme attributes and prefers-color-scheme so a
@@ -311,6 +337,7 @@
       const canvas = `<style>html{background:var(--dt-host-background)!important;}</style>`
       // 视口脚本进 head（先于 body 样式首帧解析，避免塌陷闪动），reporter 留 body 末
       const unloadCompat = `<script>${frontendUnloadCompatScript()}</script>`
+      const formCompat = `<script>${frontendFormCompatScript()}</script>`
       const viewport = `<script>${frontendViewportScript()}</script>`
       const theme = `<script>${frontendThemeScript()}</script>`
       // 酒馆助手兼容层（2026-10-20）：库脚本 + TavernHelper shim 进 head，前端
@@ -320,9 +347,9 @@
       if (/<html(?:\s[^>]*)?>/i.test(source)) {
         let documentText = source
         if (/<head(?:\s[^>]*)?>/i.test(documentText)) {
-          documentText = documentText.replace(/<head(?:\s[^>]*)?>/i, (tag) => `${tag}${csp}${unloadCompat}${reset}${viewport}${theme}${helper}`)
+          documentText = documentText.replace(/<head(?:\s[^>]*)?>/i, (tag) => `${tag}${csp}${unloadCompat}${formCompat}${reset}${viewport}${theme}${helper}`)
         } else {
-          documentText = documentText.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${csp}${unloadCompat}${reset}${viewport}${theme}${helper}</head>`)
+          documentText = documentText.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}<head>${csp}${unloadCompat}${formCompat}${reset}${viewport}${theme}${helper}</head>`)
         }
         if (/<\/body\s*>/i.test(documentText)) {
           return documentText.replace(/<\/body\s*>/i, `${canvas}${reporter}</body>`)
@@ -336,7 +363,7 @@
       const bodyMatch = /<body(?:\s[^>]*)?>([\s\S]*?)<\/body\s*>/i.exec(source)
       const headContent = headMatch ? headMatch[1] : ''
       const bodyContent = bodyMatch ? bodyMatch[1] : source
-      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${unloadCompat}${reset}${viewport}${theme}${helper}${headContent}</head><body>${bodyContent}${canvas}${reporter}</body></html>`
+      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${csp}${unloadCompat}${formCompat}${reset}${viewport}${theme}${helper}${headContent}</head><body>${bodyContent}${canvas}${reporter}</body></html>`
     }
 
     // 宿主→iframe 视口投递（A-4）：iframe 的 --dt-viewport-height 需要"真实可视区
@@ -873,7 +900,9 @@
           className: 'dt-frontend-frame',
           // 卡前端用 prompt/confirm 做方案命名/删除确认（ST 同款交互）；没有
           // allow-modals 时 Chromium 直接忽略并返回 null，按钮看起来"没反应"。
-          sandbox: 'allow-scripts allow-modals',
+          // allow-forms 只放开导航级表单；CSP `form-action 'self' about: blob:`
+          // 仍把外部 action 拦死，见 00-shell-head.js。
+          sandbox: 'allow-scripts allow-modals allow-forms',
           referrerPolicy: 'no-referrer',
           title: 'Tavern frontend',
           'data-token': token,

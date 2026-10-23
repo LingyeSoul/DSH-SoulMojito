@@ -92,7 +92,22 @@ describe('client frontend sidebar (main.js source check)', () => {
     expect(source).toContain('target === window || target === document')
     expect(source).toContain("type.toLowerCase() === 'unload'")
     expect(source).toContain("Object.defineProperty(window, 'onunload'")
-    expect(source).toContain('${csp}${unloadCompat}${reset}${viewport}${theme}${helper}')
+    expect(source).toContain('${csp}${unloadCompat}${formCompat}${reset}${viewport}${theme}${helper}')
+  })
+
+  it('allows local native form actions and blocks external ones', () => {
+    // The iframe carries allow-forms; CSP restricts form-action to the plugin
+    // document (`'self' about: blob:`), and the late window-level guard is
+    // defense in depth for external action/formaction values.
+    expect(source).toContain('function frontendFormCompatScript()')
+    expect(source).toContain("window.addEventListener('submit'")
+    expect(source).toContain("form.getAttribute('action')")
+    expect(source).toContain("submitter.getAttribute('formaction')")
+    expect(source).toContain('target.origin === base')
+    expect(source).toContain('event.preventDefault()')
+    expect(source).toContain("form-action 'self' about: blob:")
+    expect(source).toContain("sandbox: 'allow-scripts allow-modals allow-forms'")
+    expect(source).toContain('${csp}${unloadCompat}${formCompat}${reset}${viewport}${theme}${helper}')
   })
 
   it('lets the user drag the frontend height and keeps it across card frame prefs', () => {

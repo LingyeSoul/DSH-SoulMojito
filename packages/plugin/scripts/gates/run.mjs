@@ -675,8 +675,9 @@ function checkFrontendRuntimeText(text) {
     'dsh-soulmojito:theme',
     'function useThemeBridge(frameRef)',
     'dsh-soulmojito:frontend-height',
-    "sandbox: 'allow-scripts allow-modals'",
-    "connect-src 'none'",
+    "sandbox: 'allow-scripts allow-modals allow-forms'",
+    "form-action 'self' about: blob:",
+    "connect-src blob:",
     'event.source !== frameRef.current?.contentWindow',
     'message.streaming',
     // Mod UI 表面（提案 0015 §3.5 P2）：postMessage 数据桥 + 桥路径预校验 +
@@ -2626,8 +2627,9 @@ const gates = [
         'dsh-soulmojito:theme',
         'function useThemeBridge(frameRef) {}',
         'dsh-soulmojito:frontend-height',
-        "sandbox: 'allow-scripts allow-modals'",
-        "connect-src 'none'",
+        "sandbox: 'allow-scripts allow-modals allow-forms'",
+        "form-action 'self' about: blob:",
+        "connect-src blob:",
         'event.source !== frameRef.current?.contentWindow',
         'message.streaming',
         'dsh-soulmojito:mod-request',
@@ -2737,7 +2739,7 @@ const gates = [
         '.dt-sidebar-scroll{display:flex;flex-direction:column;min-height:0;max-height:min(320px,32vh);overflow-y:auto;overflow-x:hidden}',
         'sidebarCollapsed: { tavern: false, workbench: true }',
       ].join('\n')
-      const bad = good.replace("sandbox: 'allow-scripts allow-modals'", "sandbox: 'allow-forms'")
+      const bad = good.replace("sandbox: 'allow-scripts allow-modals allow-forms'", "sandbox: 'allow-scripts allow-modals'")
       // Frontend default canvas (2026-10-21): a missing host background
       // injection or theme channel must turn red.
       const badFrameCanvas = good.replace('html{background:var(--dt-host-background)}', 'html{background:#fff}')

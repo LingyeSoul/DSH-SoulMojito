@@ -34,9 +34,11 @@ JSR 的美化前端跑在**同源、无 sandbox、无 CSP** 的 iframe 里，`wi
 上的约 200 个 API 被直接拷进 iframe。本插件的 iframe 是：
 
 ```
-sandbox="allow-scripts"        // 无 allow-same-origin
-Content-Security-Policy: default-src 'none'; connect-src 'none'; frame-src 'none'
+sandbox="allow-scripts allow-modals allow-forms"   // 无 allow-same-origin
+Content-Security-Policy: default-src 'none'; connect-src blob:; frame-src 'none'; form-action 'self' about: blob:
 ```
+
+> 原生表单只允许落在插件文档内：`form-action` 放行 `'self'` / `about:` / `blob:`，外部 HTTPS `action`/`formaction` 仍在 CSP 与前端 submit guard 两层被拦。
 
 > 设置页的「允许美化前端加载外部资源」可以显式放开 `script-src` / `style-src`
 > 的 HTTPS 通配与 `connect-src https: blob:`（默认关闭，见 §3.3 与 §6 的标注）。
@@ -46,7 +48,7 @@ Content-Security-Policy: default-src 'none'; connect-src 'none'; frame-src 'none
 | 你可能会写 | 在本插件里 |
 |---|---|
 | `window.parent.document` 的宿主 DOM | 🧱 跨域；facade 只把 `document` 代理到本 iframe 自己的文档，读不到宿主 DOM |
-| `fetch()` / `XMLHttpRequest` | 🧱 CSP `connect-src 'none'` 拦截（默认；设置页可显式放行 HTTPS） |
+| `fetch()` / `XMLHttpRequest` | 🧱 CSP 默认只放行 `blob:`（卡内素材包生成的本地 URL）；外部网络仍拦截，设置页可显式放行 HTTPS |
 | `WebSocket`（`wss:`） | 🧱 CSP 拦截；放行外部资源也只覆盖 `https:`，不含 `wss:` |
 | 嵌套 `<iframe src="https://…">` | 🧱 CSP `frame-src 'none'`；同文档 `<iframe srcdoc>` 可用（卡内棋盘/开局界面走这条） |
 | `<script src="https://你的服务器/...">` | 🧱 CSP 只放行固定 CDN 白名单（设置页可显式放行任意 HTTPS） |

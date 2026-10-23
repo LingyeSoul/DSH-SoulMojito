@@ -77,11 +77,16 @@ window.__ModuleLoader__.load({
       "font-src data: blob: https:",
       "media-src data: blob: https:",
       "worker-src blob:",
-      "connect-src 'none'",
+      // Blob URLs are card-local pack assets; allowing them keeps
+      // RiiPack-style cards working without opening any network origin.
+      "connect-src blob:",
       "frame-src 'none'",
       "object-src 'none'",
       "base-uri 'none'",
-      "form-action 'none'",
+      // Local documents may still use native forms; external form posts stay
+      // blocked. `about:` covers the srcdoc document itself, `blob:` covers
+      // card-generated local URLs.
+      "form-action 'self' about: blob:",
     ].join('; ')
     // 外部资源开关（2026-10-21 用户需求）：默认仍是固定 CDN 白名单 + connect-src
     // 'none'；开启后 script/style 追加 https: 通配，connect-src 放宽到 https:。
@@ -106,7 +111,9 @@ window.__ModuleLoader__.load({
         "frame-src 'none'",
         "object-src 'none'",
         "base-uri 'none'",
-        "form-action 'none'",
+        // Keep the same local-only form policy when external resources are
+        // enabled: form posts never follow the `https:` wildcard.
+        "form-action 'self' about: blob:",
       ].join('; ')
     }
 

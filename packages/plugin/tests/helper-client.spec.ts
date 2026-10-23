@@ -176,8 +176,9 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
   })
 
   it('keeps the sandbox and proxies through the host binding', () => {
-    expect(source).toContain("sandbox: 'allow-scripts allow-modals'")
-    expect(source).toContain("connect-src 'none'")
+    expect(source).toContain("sandbox: 'allow-scripts allow-modals allow-forms'")
+    expect(source).toContain("connect-src blob:")
+    expect(source).toContain("form-action 'self' about: blob:")
     expect(source).toContain('function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef, onScriptButtons)')
     expect(source).toContain("if (event.source !== frameRef.current?.contentWindow) return")
     expect(source).toContain("data.token !== token")
