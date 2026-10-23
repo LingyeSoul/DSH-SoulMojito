@@ -178,8 +178,9 @@ export interface TavernState {
   regexScriptPresetOwners?: Record<string, string>
   /**
    * 正则归属表结构版本（2026-10-23）：1/缺省 = 按 scriptName 合并、单归属；
-   * 2 = 每个来源（角色卡/预设）各持一条独立脚本，同名跨来源不再共用实体。
-   * 升级时由 `ensureRegexScriptOwners` 扫描一次来源并拆分旧数据。
+   * 2 = 每个来源（角色卡/预设）各持一条独立脚本，同名跨来源不再共用实体；
+   * 3 = 修复 v2 按名认领造成的「归属 A、内容 B」错位（内容与本来源内嵌脚本
+   * 对齐，用户开关保留）。升级时由 `ensureRegexScriptOwners` 扫描一次来源。
    */
   regexOwnershipVersion?: number
   /**
@@ -1382,16 +1383,17 @@ export class TavernStore {
   }
 
   /**
-   * 归属表迁移（版本 2，2026-10-23）：扫描全部角色卡/预设，确保每个来源的
+   * 归属表迁移（版本 3，2026-10-23）：扫描全部角色卡/预设，确保每个来源的
    * 每条内嵌脚本都有自己的实体与归属；同名跨来源拆分，修复「别的卡同名脚本
-   * 把本卡脚本占掉后开关失灵」的识别问题。只跑一次（写盘版本号后跳过）；
-   * 来源文件不可读/条目非法时跳过该来源，不阻断面板加载。
+   * 把本卡脚本占掉后开关失灵」的识别问题。v3 额外修复 v2 按名认领造成的
+   * 「归属是 A、内容却是 B」错位（见 repairForeignRegexContent）。只跑一次
+   * （写盘版本号后跳过）；来源文件不可读/条目非法时跳过该来源，不阻断面板加载。
    */
   async ensureRegexScriptOwners(): Promise<void> {
     const current = await this.getState()
     const needsMigration = current.regexScriptOwners === undefined
       || current.regexScriptPresetOwners === undefined
-      || (current.regexOwnershipVersion ?? 1) < 2
+      || (current.regexOwnershipVersion ?? 1) < 3
     if (!needsMigration) return
 
     const sources: Array<{ source: RegexScriptSource; scripts: RegexScriptIR[] }> = []
@@ -1433,11 +1435,12 @@ export class TavernStore {
         cardOwners = result.cardOwners
         presetOwners = result.presetOwners
       }
+      scripts = repairForeignRegexContent(scripts, sources, cardOwners, presetOwners)
       return {
         regexScripts: scripts,
         regexScriptOwners: pruneRegexScriptOwners(cardOwners ?? {}, scripts) ?? {},
         regexScriptPresetOwners: pruneRegexScriptOwners(presetOwners ?? {}, scripts) ?? {},
-        regexOwnershipVersion: 2,
+        regexOwnershipVersion: 3,
       }
     })
   }
@@ -1793,6 +1796,17 @@ interface SourceRegexReconcile {
 }
 
 /**
+ * Import/backfill copies an embedded script verbatim; an edited panel copy no
+ * longer matches its source. Used to tell "same script, stale id" from "same
+ * name, different card".
+ */
+function sameRegexContent(left: RegexScriptIR, right: RegexScriptIR): boolean {
+  return left.findRegex === right.findRegex
+    && left.replaceString === right.replaceString
+    && JSON.stringify(left.trimStrings ?? []) === JSON.stringify(right.trimStrings ?? [])
+}
+
+/**
  * 把某个来源的内嵌脚本并入全局列表（2026-10-23 识别修复）：按
  * (scriptName, 来源) 复用实体，跨来源同名脚本各建一条，避免一张卡的脚本被
  * 另一张卡同名脚本「顶掉」后既不可见也不可切换。仅当同名条目无归属（全局
@@ -1833,7 +1847,15 @@ function applySourceRegexScripts(
         && ownerName(entry.id) === undefined)
     }
     if (index < 0 && options.claimUnownedByName) {
-      index = scripts.findIndex((entry) => entry.scriptName === script.scriptName && ownerName(entry.id) === undefined)
+      // Claim a legacy global entry only when its content is byte-identical.
+      // The pre-ownership table merged by scriptName, so a same-name unowned
+      // entry usually carries ANOTHER card's body; claiming it by name would
+      // attach this source to foreign content (status panels rendering the
+      // wrong card). Different content means "same name, different script":
+      // keep the unowned entry for its real source and append a new one.
+      index = scripts.findIndex((entry) => entry.scriptName === script.scriptName
+        && ownerName(entry.id) === undefined
+        && sameRegexContent(entry, script))
     }
     if (index >= 0) {
       const id = scripts[index]!.id
@@ -1856,6 +1878,47 @@ function uniqueRegexScriptId(base: string, scripts: RegexScriptIR[]): string {
   let counter = 2
   while (used.has(`${seed}#${counter}`)) counter += 1
   return `${seed}#${counter}`
+}
+
+/**
+ * v2 → v3 content repair (2026-10-23): the v2 ownership migration claimed an
+ * unowned same-name entry by name, so a source could end up owning a body that
+ * belonged to another card (old imports merged by scriptName, last writer won).
+ * Repair only the unambiguous case: the stored body is byte-identical to
+ * ANOTHER source's same-name embedded script and differs from its own source's.
+ * A panel-edited copy matches neither and is left alone; id, owner and the
+ * user's switches (disabled / placement / depth) are preserved.
+ */
+function repairForeignRegexContent(
+  scripts: RegexScriptIR[],
+  sources: Array<{ source: RegexScriptSource; scripts: RegexScriptIR[] }>,
+  cardOwners: Record<string, string> | undefined,
+  presetOwners: Record<string, string> | undefined,
+): RegexScriptIR[] {
+  const bySource = new Map(sources.map((entry) => [
+    `${entry.source.kind}\u0000${entry.source.name}`,
+    entry.scripts,
+  ]))
+  return scripts.map((script) => {
+    const cardOwner = cardOwners?.[script.id]
+    const presetOwner = presetOwners?.[script.id]
+    const ownerKey = cardOwner !== undefined
+      ? `character\u0000${cardOwner}`
+      : presetOwner !== undefined ? `preset\u0000${presetOwner}` : undefined
+    if (ownerKey === undefined) return script
+    const ownScripts = bySource.get(ownerKey)
+    const own = ownScripts?.find((candidate) => candidate.scriptName === script.scriptName)
+    if (own === undefined || sameRegexContent(script, own)) return script
+    const foreign = [...bySource.entries()].some(([key, candidates]) => key !== ownerKey
+      && candidates.some((candidate) => candidate.scriptName === script.scriptName && sameRegexContent(script, candidate)))
+    if (!foreign) return script
+    return {
+      ...script,
+      findRegex: own.findRegex,
+      replaceString: own.replaceString,
+      trimStrings: [...(own.trimStrings ?? [])],
+    }
+  })
 }
 
 /** 按 scriptName 合并脚本；同名覆盖，新名追加（保持既有顺序）。 */

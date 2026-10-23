@@ -75,7 +75,10 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       "call('composer.send'",
       'pendingTriggerRef',
       "String(data.payload?.command ?? '') === '/trigger'",
-      'conversation.send(pending.text)',
+      'const handOffUserFloor = async (text) =>',
+      'handOffTriggeredSlash(result.value)',
+      "value.triggerRequested !== true",
+      'await conversation.send(text)',
     ]) {
       expect(source).toContain(marker)
     }

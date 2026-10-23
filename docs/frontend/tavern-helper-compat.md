@@ -486,10 +486,10 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 |---|---|
 | `generate()` / `generateRaw()` | ✅ / ⚠️ 见 §2.4：卡内 OpenAI 兼容源由宿主代理，非流式返回文本 |
 | `stopGenerationById()` / `stopAllGeneration()` | ⚠️ 返回 `false`（非流式无可取消句柄） |
-| `triggerSlash('/trigger')` | ⚠️ **仅**支持「本 iframe 刚用 `createChatMessages` 创建了用户楼层」这一种姿势：桥接层把该楼层替换成一次宿主 composer 发送，随后由 AgentLoop 生成；没有待发送楼层时仍抛 `trigger is not available in this context` |
-| `triggerSlash('/regenerate')` / `'/stop'` | ❌ 没有接驱动，会抛 `trigger is not available in this environment` 一类错误 |
+| `triggerSlash('/trigger')` | ✅（受控）**两种姿势**：① 同一次调用里 `/send 文本\|/trigger`（卡最常见的开局/行动写法）；② 本 iframe 先用 `createChatMessages` 建用户楼层，再单独 `/trigger`。桥接层把这次写入的**用户楼层**替换成一次宿主 composer 发送，随后由 AgentLoop 生成；两条都不成立时抛 `trigger is not available in this context` |
+| `triggerSlash('/regenerate')` / `'/stop'` | ❌ 没有接驱动，会抛 `/regenerate is not available in this context` 一类错误 |
 
-生成由宿主 AgentLoop 驱动。卡前端只能通过上述受控路径把**自己刚创建的那一条用户楼层**交给宿主；不能让前端任意改写已有历史或重复结算，这是架构边界，不是"还没做"。
+生成由宿主 AgentLoop 驱动。卡前端只能通过上述受控路径把**自己刚写入的那一条用户楼层**交给宿主；不能让前端任意改写已有历史或重复结算，这是架构边界，不是"还没做"。
 
 ### 5.2 世界书 / 角色卡写入
 
@@ -535,7 +535,8 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 await triggerSlash('/setvar mood calm')
 ```
 
-生成控制（`/trigger`、`/regenerate`、`/stop`）仍然受限：见 §5.1。
+生成控制里只有 `/trigger` 接通了受控路径（见 §5.1）：它把本次写入的用户楼层交给宿主
+composer，由 AgentLoop 生成一次；`/regenerate` / `/stop` 仍显式报错。
 
 服务端可用命令（`POST /helper` 的 `slash` op）：
 
@@ -545,7 +546,8 @@ await triggerSlash('/setvar mood calm')
 | 分支/随机 | `/if` `/random` `/roll` `/pick` | ✅ |
 | 聊天 | `/send` `/cut` | ✅ |
 | 正则 | `/regex name=x` | ✅ |
-| 生成 | `/trigger` `/regenerate` `/stop` | ❌ 抛错（见 §5.1） |
+| 生成 | `/trigger`（含 `/send 文本\|/trigger` 管道） | ✅ 受控：本次写入的用户楼层交给宿主 composer（见 §5.1） |
+| 生成 | `/regenerate` `/stop` | ❌ 抛错（见 §5.1） |
 | 其它 ST 命令（`/echo` 之外的显示类、`/sys`、`/impersonate`…） | ❌ 解析失败 |
 
 `/echo` 被接受但丢弃输出（没有宿主输入框可放）。
@@ -594,7 +596,8 @@ await triggerSlash('/setvar mood calm')
 | 卡报 `getAllVariables is not defined`，或 `Mvu.getAllVariables is not a function` | 卡用合并变量表读当前 MVU 树 | 更新构建：`window.getAllVariables()` 与 `Mvu.getAllVariables()` 返回 `global ← character ← chat ← 最新楼层` 的合并表，`stat_data` 在顶层 |
 | 控制台反复 500 且卡报 `character variables are read-only` | 卡把 `{type:'character'}` 当可写表（UI 偏好、镜像快照） | 更新构建：角色作用域写入 `state.json` 的 `characterVariables[角色名]` 覆盖层，角色卡文件保持只读；删除该键即重置 |
 | 首次挂载报 `棋盘宿主通信初始化失败：页面安全策略阻止了本地消息桥` | 卡通过 `window.top.Function` 在“宿主 realm”构造 `postMessage` 函数，旧 facade 没有转发 `Function` | 更新构建：`window.top` / `window.parent` facade 暴露 `Function` 与浏览器全局兜底；函数仍在沙箱 iframe 内执行 |
-| 卡点击发送后提示 `/trigger is not available` 并回退到 DOM 派发 | 卡用 `createChatMessages` 建用户楼层后要求前端触发宿主生成 | 更新构建：该 iframe 刚创建的末条用户楼层会被替换成一次宿主 composer 发送；其它 `/trigger` 调用仍明确报错，避免双驱动或重复楼层 |
+| 卡点击发送后提示 `/trigger is not available` 并回退到 DOM 派发 | 卡用 `createChatMessages` 建用户楼层后要求前端触发宿主生成，或直接用 `/send …|/trigger` 一条管道发送 | 更新构建：本次调用写入的用户楼层会被替换成一次宿主 composer 发送（两种姿势都支持）；没有可归属楼层时仍明确报错，避免双驱动或重复楼层 |
+| 控制台出现 `POST …/helper 500`，紧接着 `Uncaught (in promise) Error: /trigger is not available in this context` | 卡把 `/send 文本\|/trigger` 当一条 STscript 发送；旧构建让 `/send` 落盘后由 `/trigger` 抛错，于是用户楼层留下了、生成却没启动（刷新会再叠一条） | 更新构建：`/trigger` 在管道里作为宿主生成请求返回（HTTP 200），由桥接层接手；不再产生 500 与未捕获异常 |
 | 卡前端里的 `iframe` / `srcdoc` 画面空白 | 嵌套 `srcdoc` 本身不受 `frame-src 'none'` 拦截；常见原因是父 facade 缺少 `Function`、`document.createElement` 或浏览器全局 | 先用 iframe console 确认初始化错误；更新构建中的 facade 兜底 |
 | 「美化前端」显示空白画布，但「自动运行中（N 个卡脚本）」 | 当前聊天没有完整 HTML 楼层；自动运行的卡脚本只是浮层，不是主界面。很多卡的开局界面由**正则**生成（例如「开局正则」匹配首楼并替换成完整 HTML），该正则被 `disabled: true` 跳过 | 在「正则脚本」分区「从角色卡同步」，启用匹配首楼的 HTML 正则（必要时同步启用状态栏正则），回「美化前端」点刷新；首楼已保存时重渲染即可，必要时新建聊天/重生成首楼 |
 | 状态栏一直空 | 模型没有输出 `<UpdateVariable>`，或卡内状态栏正则被禁用 | 用提示词查看器看实发请求；确认正则未 disabled；首轮检查 `initialized_lorebooks` 是否已播种 |

@@ -128,7 +128,9 @@
 - [`2026-10-22-jsr-storage-packages.md`](../decisions/2026-10-22-jsr-storage-packages.md) — JSR 兼容运行时与沙箱虚拟存储拆分为独立库包（`tavern-jsr` / `tavern-frontend-storage`）
 - [`2026-10-22-card-scoped-regex-and-worlds.md`](../decisions/2026-10-22-card-scoped-regex-and-worlds.md) — 卡级/预设级正则与世界书跟随来源自动启用/停用（手动勾选不被插件改写）
 - [`2026-10-23-scoped-regex-identity-and-world-toggle.md`](../decisions/2026-10-23-scoped-regex-identity-and-world-toggle.md) — 同名正则按来源拆分实体（识别修复）、面板开关可切换并可转全局、链接世界书显示实际启停
+- [`2026-10-23-scoped-regex-content-repair.md`](../decisions/2026-10-23-scoped-regex-content-repair.md) — 同名正则内容归属错位：按名认领要求内容一致 + v3 迁移修复已错位实体
 - [`2026-10-23-regex-source-groups-and-bulk-delete.md`](../decisions/2026-10-23-regex-source-groups-and-bulk-delete.md) — 正则列表按全局/角色卡/预设分区，并在分区头提供整段清空
+- [`2026-10-23-regex-group-master-toggle.md`](../decisions/2026-10-23-regex-group-master-toggle.md) — 正则分区头三态总开关：一键启停该来源的全部脚本
 - [`2026-10-23-jsr-surface-parity.md`](../decisions/2026-10-23-jsr-surface-parity.md) — JSR 4.11 兼容面补齐：179 个公共名、同步变量/正则契约、脚本容器、预设/人设/世界书条目会话级覆盖
 
 ### 面板与视图

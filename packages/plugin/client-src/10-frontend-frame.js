@@ -685,49 +685,68 @@
               .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
             return
           }
+          // `/trigger` (alone or inside a pipeline such as `/send text|/trigger`)
+          // asks for host generation. The bridge never starts a second loop: it
+          // takes the user floor this iframe just wrote, drops it, and hands the
+          // same text to the host composer so the AgentLoop owns the turn.
+          const handOffUserFloor = async (text) => {
+            const conversation = hostConversation(hostSessionId)
+            if (conversation === undefined) {
+              throw new Error('/trigger is not available in this context (no AgentTavern session)')
+            }
+            const snapshot = await api('helper', {
+              method: 'POST',
+              headers: jsonHeaders(),
+              body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
+            })
+            const messages = Array.isArray(snapshot?.value?.messages) ? snapshot.value.messages : []
+            const last = messages[messages.length - 1]
+            if (last !== undefined && last.role === 'user' && last.message === text) {
+              await api('helper', {
+                method: 'POST',
+                headers: jsonHeaders(),
+                body: JSON.stringify({
+                  op: 'messages.delete',
+                  character: current.character,
+                  chatId: current.chatId,
+                  messageIds: [last.message_id],
+                }),
+              })
+              // Keep the next diff from reporting the replaced floor as a
+              // deletion; the host send below will surface as the new user
+              // message instead.
+              const afterDelete = await api('helper', {
+                method: 'POST',
+                headers: jsonHeaders(),
+                body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
+              })
+              if (afterDelete?.value !== undefined) previousRef.current = afterDelete.value
+            }
+            await conversation.send(text)
+            return { output: '' }
+          }
+          // Helper `slash` reports `triggerRequested` for a pipeline that ran
+          // `/trigger`; `sentText` is the floor it wrote in the same call.
+          const handOffTriggeredSlash = async (value) => {
+            if (value === null || typeof value !== 'object' || value.triggerRequested !== true) return value
+            const pending = pendingTriggerRef.current
+            pendingTriggerRef.current = null
+            const sent = typeof value.sentText === 'string' && value.sentText !== '' ? value.sentText : null
+            const text = sent ?? (pending === null ? null : pending.text)
+            if (text === null) {
+              throw new Error('/trigger needs a user floor: run /send in the same command, or call createChatMessages from this frontend first')
+            }
+            await handOffUserFloor(text)
+            return { output: '', chatChanged: value.chatChanged === true }
+          }
           if (data.op === 'slash' && String(data.payload?.command ?? '') === '/trigger') {
             const pending = pendingTriggerRef.current
             // Only a user floor created by this iframe can be replaced. Other
-            // /trigger callers keep the explicit boundary error below.
+            // /trigger callers go through the generic path below, which reports
+            // the same boundary error when no floor is attributable.
             if (pending !== null && typeof hostSessionId === 'string' && hostSessionId !== '') {
               pendingTriggerRef.current = null
-              const run = async () => {
-                const conversation = hostConversation(hostSessionId)
-                const snapshot = await api('helper', {
-                  method: 'POST',
-                  headers: jsonHeaders(),
-                  body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
-                })
-                const messages = Array.isArray(snapshot?.value?.messages) ? snapshot.value.messages : []
-                const last = messages[messages.length - 1]
-                if (last !== undefined && last.role === 'user' && last.message === pending.text) {
-                  await api('helper', {
-                    method: 'POST',
-                    headers: jsonHeaders(),
-                    body: JSON.stringify({
-                      op: 'messages.delete',
-                      character: current.character,
-                      chatId: current.chatId,
-                      messageIds: [last.message_id],
-                    }),
-                  })
-                  // Keep the next diff from reporting the replaced floor as a
-                  // deletion; the host send below will surface as the new user
-                  // message instead.
-                  const afterDelete = await api('helper', {
-                    method: 'POST',
-                    headers: jsonHeaders(),
-                    body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
-                  })
-                  if (afterDelete?.value !== undefined) previousRef.current = afterDelete.value
-                }
-                if (conversation === undefined) {
-                  throw new Error('/trigger is not available in this context (no AgentTavern session)')
-                }
-                await conversation.send(pending.text)
-                return { output: '' }
-              }
-              run()
+              handOffUserFloor(pending.text)
                 .then((value) => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value }))
                 .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
               return
@@ -742,8 +761,9 @@
               chatId: current.chatId,
               ...(data.payload && typeof data.payload === 'object' ? data.payload : {}),
             }),
-          }).then((result) => {
-            reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: result.value })
+          }).then(async (result) => {
+            const value = data.op === 'slash' ? await handOffTriggeredSlash(result.value) : result.value
+            reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value })
             if (data.op === 'storage.set') frontendStorageCache.delete(current.character)
             if (data.op === 'messages.create') {
               const created = Array.isArray(data.payload?.messages) ? data.payload.messages : []

@@ -1504,11 +1504,25 @@ function toCreatedMessage(entry: JsonObject, userName: string, characterName: st
 
 /* -------------------------------- slash -------------------------------- */
 
+interface HelperSlashResult {
+  output: string
+  chatChanged: boolean
+  /**
+   * `/trigger` inside an STscript pipeline is a *request* for host generation,
+   * never a frontend-owned generation loop. The client bridge hands the user
+   * floor written by this call to the host composer once the writes land.
+   */
+  triggerRequested: boolean
+  /** Text of the last `/send` floor in this call, i.e. the floor the bridge replaces. */
+  sentText: string | null
+}
+
 /**
  * STscript through the plugin's own interpreter (variables, send/cut, regex,
- * echo). Generation control (`/trigger`, `/regenerate`, `/stop`) stays
- * unwired on purpose: AgentTavern generation belongs to the host loop, and a
- * frontend must not become a second driver.
+ * echo). Generation control (`/regenerate`, `/stop`) stays unwired on purpose:
+ * AgentTavern generation belongs to the host loop, and a frontend must not
+ * become a second driver. `/trigger` is reported back as a request instead of
+ * running generation here.
  */
 async function runHelperSlash(
   db: TavernStore,
@@ -1516,7 +1530,7 @@ async function runHelperSlash(
   character: string,
   chatId: string,
   command: string,
-): Promise<{ output: string; chatChanged: boolean }> {
+): Promise<HelperSlashResult> {
   const snapshot = await requireChat(db, character, chatId)
   const chat = snapshot.chat
   let revision = snapshot.revision
@@ -1534,6 +1548,8 @@ async function runHelperSlash(
     global: scalarVariables(plainObject(state.scriptGlobals) ?? {}),
   })
   let chatChanged = false
+  let triggerRequested = false
+  let sentText: string | null = null
   const persist = async () => {
     chatChanged = true
     const local = macros.snapshotVars().local
@@ -1558,7 +1574,15 @@ async function runHelperSlash(
         send_date: new Date().toISOString(),
         mes: trimmed,
       })
+      sentText = trimmed
       await persist()
+    },
+    // `/trigger` only records the request: the bridge replaces this call's last
+    // user floor with one host composer send, so the AgentLoop stays the single
+    // driver. A bare `/trigger` with no `/send` here falls back to the floor a
+    // preceding `createChatMessages` created in the same iframe.
+    trigger: () => {
+      triggerRequested = true
     },
     cut: async (from, to) => {
       const total = chat.messages.length
@@ -1588,7 +1612,12 @@ async function runHelperSlash(
   } else if (chatChanged) {
     await persistChat(db, character, chatId, chat, revision)
   }
-  return { output: result.output, chatChanged: result.chatChanged || chatChanged || variablesDirty }
+  return {
+    output: result.output,
+    chatChanged: result.chatChanged || chatChanged || variablesDirty,
+    triggerRequested,
+    sentText: triggerRequested ? sentText : null,
+  }
 }
 
 /** STscript variables are scalars; nested trees stay out of the macro engine. */

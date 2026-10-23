@@ -232,6 +232,27 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     expect(snapshot?.chat.header.chat_metadata.variables).toMatchObject({ 心情: '平静' })
   })
 
+  it('reports /trigger in a slash pipeline as a host generation request', async () => {
+    // Cards send with `/send …|/trigger` in one STscript call. Generation stays
+    // with the host loop: the helper keeps the floor and reports the request,
+    // the client bridge hands that floor to the composer.
+    const triggerChatId = await store.createChat(CHARACTER, HEADER)
+    const result = await call({
+      op: 'slash',
+      character: CHARACTER,
+      chatId: triggerChatId,
+      command: '/send 开局的地板|/trigger',
+    })
+    expect(result.status).toBe(200)
+    expect(result.body?.value).toMatchObject({ triggerRequested: true, sentText: '开局的地板' })
+    const snapshot = await call({ op: 'snapshot', character: CHARACTER, chatId: triggerChatId })
+    const messages = (snapshot.body?.value as Record<string, unknown>).messages as Array<Record<string, unknown>>
+    expect(messages[messages.length - 1]).toMatchObject({ role: 'user', message: '开局的地板' })
+
+    const plain = await call({ op: 'slash', character: CHARACTER, chatId: triggerChatId, command: '/send 普通一句' })
+    expect(plain.body?.value).toMatchObject({ triggerRequested: false, sentText: null })
+  })
+
   it('fails explicitly on unsupported ops instead of pretending success', async () => {
     const result = await call({ op: 'not-a-helper-op', character: CHARACTER, chatId })
     expect(result.status).toBe(500)

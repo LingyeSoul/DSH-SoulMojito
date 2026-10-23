@@ -802,49 +802,68 @@ window.__ModuleLoader__.load({
               .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
             return
           }
+          // `/trigger` (alone or inside a pipeline such as `/send text|/trigger`)
+          // asks for host generation. The bridge never starts a second loop: it
+          // takes the user floor this iframe just wrote, drops it, and hands the
+          // same text to the host composer so the AgentLoop owns the turn.
+          const handOffUserFloor = async (text) => {
+            const conversation = hostConversation(hostSessionId)
+            if (conversation === undefined) {
+              throw new Error('/trigger is not available in this context (no AgentTavern session)')
+            }
+            const snapshot = await api('helper', {
+              method: 'POST',
+              headers: jsonHeaders(),
+              body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
+            })
+            const messages = Array.isArray(snapshot?.value?.messages) ? snapshot.value.messages : []
+            const last = messages[messages.length - 1]
+            if (last !== undefined && last.role === 'user' && last.message === text) {
+              await api('helper', {
+                method: 'POST',
+                headers: jsonHeaders(),
+                body: JSON.stringify({
+                  op: 'messages.delete',
+                  character: current.character,
+                  chatId: current.chatId,
+                  messageIds: [last.message_id],
+                }),
+              })
+              // Keep the next diff from reporting the replaced floor as a
+              // deletion; the host send below will surface as the new user
+              // message instead.
+              const afterDelete = await api('helper', {
+                method: 'POST',
+                headers: jsonHeaders(),
+                body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
+              })
+              if (afterDelete?.value !== undefined) previousRef.current = afterDelete.value
+            }
+            await conversation.send(text)
+            return { output: '' }
+          }
+          // Helper `slash` reports `triggerRequested` for a pipeline that ran
+          // `/trigger`; `sentText` is the floor it wrote in the same call.
+          const handOffTriggeredSlash = async (value) => {
+            if (value === null || typeof value !== 'object' || value.triggerRequested !== true) return value
+            const pending = pendingTriggerRef.current
+            pendingTriggerRef.current = null
+            const sent = typeof value.sentText === 'string' && value.sentText !== '' ? value.sentText : null
+            const text = sent ?? (pending === null ? null : pending.text)
+            if (text === null) {
+              throw new Error('/trigger needs a user floor: run /send in the same command, or call createChatMessages from this frontend first')
+            }
+            await handOffUserFloor(text)
+            return { output: '', chatChanged: value.chatChanged === true }
+          }
           if (data.op === 'slash' && String(data.payload?.command ?? '') === '/trigger') {
             const pending = pendingTriggerRef.current
             // Only a user floor created by this iframe can be replaced. Other
-            // /trigger callers keep the explicit boundary error below.
+            // /trigger callers go through the generic path below, which reports
+            // the same boundary error when no floor is attributable.
             if (pending !== null && typeof hostSessionId === 'string' && hostSessionId !== '') {
               pendingTriggerRef.current = null
-              const run = async () => {
-                const conversation = hostConversation(hostSessionId)
-                const snapshot = await api('helper', {
-                  method: 'POST',
-                  headers: jsonHeaders(),
-                  body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
-                })
-                const messages = Array.isArray(snapshot?.value?.messages) ? snapshot.value.messages : []
-                const last = messages[messages.length - 1]
-                if (last !== undefined && last.role === 'user' && last.message === pending.text) {
-                  await api('helper', {
-                    method: 'POST',
-                    headers: jsonHeaders(),
-                    body: JSON.stringify({
-                      op: 'messages.delete',
-                      character: current.character,
-                      chatId: current.chatId,
-                      messageIds: [last.message_id],
-                    }),
-                  })
-                  // Keep the next diff from reporting the replaced floor as a
-                  // deletion; the host send below will surface as the new user
-                  // message instead.
-                  const afterDelete = await api('helper', {
-                    method: 'POST',
-                    headers: jsonHeaders(),
-                    body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
-                  })
-                  if (afterDelete?.value !== undefined) previousRef.current = afterDelete.value
-                }
-                if (conversation === undefined) {
-                  throw new Error('/trigger is not available in this context (no AgentTavern session)')
-                }
-                await conversation.send(pending.text)
-                return { output: '' }
-              }
-              run()
+              handOffUserFloor(pending.text)
                 .then((value) => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value }))
                 .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
               return
@@ -859,8 +878,9 @@ window.__ModuleLoader__.load({
               chatId: current.chatId,
               ...(data.payload && typeof data.payload === 'object' ? data.payload : {}),
             }),
-          }).then((result) => {
-            reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: result.value })
+          }).then(async (result) => {
+            const value = data.op === 'slash' ? await handOffTriggeredSlash(result.value) : result.value
+            reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value })
             if (data.op === 'storage.set') frontendStorageCache.delete(current.character)
             if (data.op === 'messages.create') {
               const created = Array.isArray(data.payload?.messages) ? data.payload.messages : []
@@ -2217,7 +2237,14 @@ window.__ModuleLoader__.load({
       'settings.regexGroupCharacter': 'Card "{name}"',
       'settings.regexGroupPreset': 'Preset "{name}"',
       'settings.regexGroupActive': 'current',
+      'settings.regexGroupInactive': 'inactive',
       'settings.regexGroupCount': '{count} scripts',
+      'settings.regexGroupEnableAll': 'Enable all {count} scripts in {scope}',
+      'settings.regexGroupDisableAll': 'Disable all {count} scripts in {scope}',
+      'settings.regexGroupToggleOn': 'enabled',
+      'settings.regexGroupToggleOff': 'disabled',
+      'settings.regexGroupToggleDone': 'All {count} regex scripts in {scope} were {action}.',
+      'settings.regexGroupToggleInactive': 'All {count} regex scripts in {scope} were {action}; this source is not active here, so they apply once it is.',
       'settings.regexDeleteGroup': 'Delete all {count} scripts in {scope}',
       'settings.regexDeleteGroupShort': 'Clear group',
       'settings.regexDeleteGroupConfirm': 'Delete all {count} regex scripts in {scope}? This cannot be undone.',
@@ -3114,7 +3141,14 @@ window.__ModuleLoader__.load({
       'settings.regexGroupCharacter': '角色卡“{name}”',
       'settings.regexGroupPreset': '预设“{name}”',
       'settings.regexGroupActive': '当前',
+      'settings.regexGroupInactive': '未激活',
       'settings.regexGroupCount': '{count} 条',
+      'settings.regexGroupEnableAll': '启用{scope}分区的全部 {count} 个脚本',
+      'settings.regexGroupDisableAll': '停用{scope}分区的全部 {count} 个脚本',
+      'settings.regexGroupToggleOn': '启用',
+      'settings.regexGroupToggleOff': '停用',
+      'settings.regexGroupToggleDone': '已{action}{scope}分区的 {count} 个正则脚本。',
+      'settings.regexGroupToggleInactive': '已{action}{scope}分区的 {count} 个正则脚本；该分区当前未激活，脚本会在它激活后生效。',
       'settings.regexDeleteGroup': '删除{scope}分区的全部 {count} 个脚本',
       'settings.regexDeleteGroupShort': '清空分区',
       'settings.regexDeleteGroupConfirm': '删除{scope}分区的全部 {count} 个正则脚本？此操作不可撤销。',
@@ -5891,6 +5925,25 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // Group master switch: a group is "on" only when every script in it is on.
+    // Mixed state renders the native indeterminate dash, so one glance tells the
+    // user the section is partially enabled.
+    function RegexGroupToggle({ label, checked, mixed, disabled, onChange }) {
+      const ref = useRef(null)
+      useEffect(() => {
+        if (ref.current !== null) ref.current.indeterminate = mixed
+      }, [mixed])
+      return h('label', { className: 'dt-toggle dt-regex-group-toggle', title: label },
+        h('input', {
+          ref,
+          type: 'checkbox',
+          'aria-label': label,
+          checked,
+          disabled,
+          onChange,
+        }))
+    }
+
     function RegexScriptEditor({ script, onSave, onCancel }) {
       const t = useTranslate()
       const [draft, setDraft] = useState(() => cloneValue(script))
@@ -6064,6 +6117,24 @@ window.__ModuleLoader__.load({
           setNotice(t('settings.regexDeleteGroupDone', { scope, count: removed.size }))
         }))
       }
+      // 分区一键启停（2026-10-23 用户需求）：与「清空分区」同口径，作用域是
+      // 该来源的全部脚本（含被过滤隐藏的行）。全部启用时点击全停，其余状态
+      // （全停/部分启用）点击全开——部分启用一键补齐，不用逐行找漏网的。
+      const groupEnabledCount = (group) => group.scripts.filter((script) => !script.disabled).length
+      const toggleGroup = (group) => {
+        const total = group.scripts.length
+        const nextDisabled = groupEnabledCount(group) === total
+        const scope = groupLabel(group)
+        const action = t(nextDisabled ? 'settings.regexGroupToggleOff' : 'settings.regexGroupToggleOn')
+        const ids = new Set(group.scripts.map((script) => script.id))
+        const next = scripts.map((script) => (ids.has(script.id) ? { ...script, disabled: nextDisabled } : script))
+        run(saveRegexScripts(next).then(() => {
+          const done = { scope, count: total, action }
+          setNotice(t(groupActive(group) || group.kind === 'global'
+            ? 'settings.regexGroupToggleDone'
+            : 'settings.regexGroupToggleInactive', done))
+        }))
+      }
       // 两个回填入口共用一份 busy 状态：同一时刻只允许一个扫描在跑，回执不交叉。
       const sync = (source, request, doneKey) => {
         setError('')
@@ -6166,26 +6237,40 @@ window.__ModuleLoader__.load({
           // 分区头固定展示该来源的全部条数（不是过滤后的条数），「清空分区」
           // 也按全部删除；过滤只收窄组内可见行。
           : h('div', { className: 'dt-regex-groups' },
-            visibleGroups.map(({ group, visible }) => h('div', {
-              key: group.key,
-              className: 'dt-regex-group',
-              role: 'group',
-              'aria-label': groupLabel(group),
-            },
-              h('div', { className: 'dt-regex-group-head' },
-                h('div', { className: 'dt-regex-group-title' },
-                  h('span', { className: 'dt-regex-group-name', title: groupLabel(group) }, groupLabel(group)),
-                  groupActive(group) ? h('span', { className: 'dt-regex-group-active' }, t('settings.regexGroupActive')) : null,
-                  h('span', { className: 'dt-regex-group-count' }, t('settings.regexGroupCount', { count: group.scripts.length }))),
-                h('button', {
-                  type: 'button',
-                  className: 'dt-regex-group-delete',
-                  title: t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
-                  'aria-label': t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
-                  disabled: editing !== '',
-                  onClick: () => deleteGroup(group),
-                }, h(IconTrashOutline16), h('span', null, t('settings.regexDeleteGroupShort')))),
-              h('div', { className: 'dt-regex-list' }, visible.map(scriptItem))))),
+            visibleGroups.map(({ group, visible }) => {
+              const enabled = groupEnabledCount(group)
+              const total = group.scripts.length
+              return h('div', {
+                key: group.key,
+                className: 'dt-regex-group',
+                role: 'group',
+                'aria-label': groupLabel(group),
+              },
+                h('div', { className: 'dt-regex-group-head' },
+                  h('div', { className: 'dt-regex-group-title' },
+                    h(RegexGroupToggle, {
+                      label: t(enabled === total ? 'settings.regexGroupDisableAll' : 'settings.regexGroupEnableAll', { scope: groupLabel(group), count: total }),
+                      checked: total > 0 && enabled === total,
+                      mixed: enabled > 0 && enabled < total,
+                      disabled: editing !== '',
+                      onChange: () => toggleGroup(group),
+                    }),
+                    h('span', { className: 'dt-regex-group-name', title: groupLabel(group) }, groupLabel(group)),
+                    groupActive(group) ? h('span', { className: 'dt-regex-group-active' }, t('settings.regexGroupActive')) : null,
+                    group.kind !== 'global' && !groupActive(group)
+                      ? h('span', { className: 'dt-regex-group-inactive' }, t('settings.regexGroupInactive'))
+                      : null,
+                    h('span', { className: 'dt-regex-group-count' }, t('settings.regexGroupCount', { count: group.scripts.length }))),
+                  h('button', {
+                    type: 'button',
+                    className: 'dt-regex-group-delete',
+                    title: t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
+                    'aria-label': t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
+                    disabled: editing !== '',
+                    onClick: () => deleteGroup(group),
+                  }, h(IconTrashOutline16), h('span', null, t('settings.regexDeleteGroupShort')))),
+                h('div', { className: 'dt-regex-list' }, visible.map(scriptItem)))
+            })),
         notice ? h('p', { className: 'dt-muted' }, notice) : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
@@ -13339,7 +13424,7 @@ window.__ModuleLoader__.load({
 .dt-regex-actions button.dt-regex-release{width:auto;padding:0 7px;font-size:11px;line-height:16px;white-space:nowrap}.dt-regex-actions button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-actions button:disabled{opacity:.4;cursor:not-allowed}.dt-regex-item{display:flex;flex-direction:column;gap:4px}.dt-regex-editor-wrap{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:12px}
         /* 正则按来源分区（2026-10-23 用户需求）：段头一行放来源名、当前标记、
            条数与清空按钮；窄屏允许换行，名字独占剩余宽度并省略。 */
-        .dt-regex-groups{display:flex;flex-direction:column;gap:14px}.dt-regex-group{display:flex;flex-direction:column;gap:6px}.dt-regex-group-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dt-regex-group-title{display:flex;align-items:center;gap:6px;flex:1;min-width:0;flex-wrap:wrap}.dt-regex-group-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-weight:600}.dt-regex-group-active{padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 14%,transparent);color:var(--dsw-alias-state-business-primary);font-size:11px;line-height:16px}.dt-regex-group-count{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-group-delete{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 7px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-tertiary);background:transparent;font-size:11px;line-height:16px;cursor:pointer}.dt-regex-group-delete:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}.dt-regex-group-delete:disabled{opacity:.4;cursor:not-allowed}
+        .dt-regex-groups{display:flex;flex-direction:column;gap:14px}.dt-regex-group{display:flex;flex-direction:column;gap:6px}.dt-regex-group-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dt-regex-group-title{display:flex;align-items:center;gap:6px;flex:1;min-width:0;flex-wrap:wrap}.dt-regex-group-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-weight:600}.dt-regex-group-active{padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 14%,transparent);color:var(--dsw-alias-state-business-primary);font-size:11px;line-height:16px}.dt-regex-group-inactive{padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-label-tertiary) 14%,transparent);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-group-count{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-group-delete{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 7px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-tertiary);background:transparent;font-size:11px;line-height:16px;cursor:pointer}.dt-regex-group-delete:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}.dt-regex-group-delete:disabled{opacity:.4;cursor:not-allowed}.dt-regex-group-toggle{min-height:0;gap:0}.dt-regex-group-toggle input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-state-business-primary);cursor:pointer}.dt-regex-group-toggle input:disabled{cursor:not-allowed;opacity:.4}
         .dt-field input[type=text],.dt-field input[type=password]{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 10px}.dt-upload:disabled{opacity:.5;cursor:not-allowed}
         .dt-backlink{display:flex;padding:2px 0}.dt-backlink>button{color:var(--dsw-alias-label-tertiary);background:transparent;border:0;cursor:pointer;font-size:12px;padding:4px 2px}.dt-backlink>button:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}
         .dt-member-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}.dt-member-row .dt-member-chip>button{display:none}.dt-script-glyph{font-weight:700;font-size:15px;line-height:1}.dt-sidebar-subheading{margin-top:10px}.dt-branch-btn{font-size:13px}

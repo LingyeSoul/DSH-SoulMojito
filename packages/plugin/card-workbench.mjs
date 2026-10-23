@@ -3489,14 +3489,15 @@ var TavernStore = class _TavernStore {
     return { imported, skipped: counters.skipped + pending.length - imported, invalid: counters.invalid, scanned };
   }
   /**
-   * 归属表迁移（版本 2，2026-10-23）：扫描全部角色卡/预设，确保每个来源的
+   * 归属表迁移（版本 3，2026-10-23）：扫描全部角色卡/预设，确保每个来源的
    * 每条内嵌脚本都有自己的实体与归属；同名跨来源拆分，修复「别的卡同名脚本
-   * 把本卡脚本占掉后开关失灵」的识别问题。只跑一次（写盘版本号后跳过）；
-   * 来源文件不可读/条目非法时跳过该来源，不阻断面板加载。
+   * 把本卡脚本占掉后开关失灵」的识别问题。v3 额外修复 v2 按名认领造成的
+   * 「归属是 A、内容却是 B」错位（见 repairForeignRegexContent）。只跑一次
+   * （写盘版本号后跳过）；来源文件不可读/条目非法时跳过该来源，不阻断面板加载。
    */
   async ensureRegexScriptOwners() {
     const current = await this.getState();
-    const needsMigration = current.regexScriptOwners === void 0 || current.regexScriptPresetOwners === void 0 || (current.regexOwnershipVersion ?? 1) < 2;
+    const needsMigration = current.regexScriptOwners === void 0 || current.regexScriptPresetOwners === void 0 || (current.regexOwnershipVersion ?? 1) < 3;
     if (!needsMigration) return;
     const sources = [];
     for (const name2 of (await this.listCharacters()).sort()) {
@@ -3536,11 +3537,12 @@ var TavernStore = class _TavernStore {
         cardOwners = result.cardOwners;
         presetOwners = result.presetOwners;
       }
+      scripts = repairForeignRegexContent(scripts, sources, cardOwners, presetOwners);
       return {
         regexScripts: scripts,
         regexScriptOwners: pruneRegexScriptOwners(cardOwners ?? {}, scripts) ?? {},
         regexScriptPresetOwners: pruneRegexScriptOwners(presetOwners ?? {}, scripts) ?? {},
-        regexOwnershipVersion: 2
+        regexOwnershipVersion: 3
       };
     });
   }
@@ -3780,6 +3782,9 @@ function stageRegexBackfillEntries(embedded, existing, counters, owner) {
   });
   return staged;
 }
+function sameRegexContent(left, right) {
+  return left.findRegex === right.findRegex && left.replaceString === right.replaceString && JSON.stringify(left.trimStrings ?? []) === JSON.stringify(right.trimStrings ?? []);
+}
 function applySourceRegexScripts(current, cardOwners, presetOwners, source, incoming, options) {
   const scripts = [...current];
   const owners = { ...cardOwners ?? {} };
@@ -3803,7 +3808,7 @@ function applySourceRegexScripts(current, cardOwners, presetOwners, source, inco
       index = scripts.findIndex((entry) => entry.id === script.id && entry.scriptName === script.scriptName && ownerName(entry.id) === void 0);
     }
     if (index < 0 && options.claimUnownedByName) {
-      index = scripts.findIndex((entry) => entry.scriptName === script.scriptName && ownerName(entry.id) === void 0);
+      index = scripts.findIndex((entry) => entry.scriptName === script.scriptName && ownerName(entry.id) === void 0 && sameRegexContent(entry, script));
     }
     if (index >= 0) {
       const id2 = scripts[index].id;
@@ -3825,6 +3830,29 @@ function uniqueRegexScriptId(base, scripts) {
   let counter = 2;
   while (used.has(`${seed}#${counter}`)) counter += 1;
   return `${seed}#${counter}`;
+}
+function repairForeignRegexContent(scripts, sources, cardOwners, presetOwners) {
+  const bySource = new Map(sources.map((entry) => [
+    `${entry.source.kind}\0${entry.source.name}`,
+    entry.scripts
+  ]));
+  return scripts.map((script) => {
+    const cardOwner = cardOwners?.[script.id];
+    const presetOwner = presetOwners?.[script.id];
+    const ownerKey = cardOwner !== void 0 ? `character\0${cardOwner}` : presetOwner !== void 0 ? `preset\0${presetOwner}` : void 0;
+    if (ownerKey === void 0) return script;
+    const ownScripts = bySource.get(ownerKey);
+    const own = ownScripts?.find((candidate) => candidate.scriptName === script.scriptName);
+    if (own === void 0 || sameRegexContent(script, own)) return script;
+    const foreign = [...bySource.entries()].some(([key, candidates]) => key !== ownerKey && candidates.some((candidate) => candidate.scriptName === script.scriptName && sameRegexContent(script, candidate)));
+    if (!foreign) return script;
+    return {
+      ...script,
+      findRegex: own.findRegex,
+      replaceString: own.replaceString,
+      trimStrings: [...own.trimStrings ?? []]
+    };
+  });
 }
 function mergeRegexScripts(current, imported) {
   const merged = [...current];

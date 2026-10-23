@@ -20,6 +20,25 @@
       }
     }
 
+    // Group master switch: a group is "on" only when every script in it is on.
+    // Mixed state renders the native indeterminate dash, so one glance tells the
+    // user the section is partially enabled.
+    function RegexGroupToggle({ label, checked, mixed, disabled, onChange }) {
+      const ref = useRef(null)
+      useEffect(() => {
+        if (ref.current !== null) ref.current.indeterminate = mixed
+      }, [mixed])
+      return h('label', { className: 'dt-toggle dt-regex-group-toggle', title: label },
+        h('input', {
+          ref,
+          type: 'checkbox',
+          'aria-label': label,
+          checked,
+          disabled,
+          onChange,
+        }))
+    }
+
     function RegexScriptEditor({ script, onSave, onCancel }) {
       const t = useTranslate()
       const [draft, setDraft] = useState(() => cloneValue(script))
@@ -193,6 +212,24 @@
           setNotice(t('settings.regexDeleteGroupDone', { scope, count: removed.size }))
         }))
       }
+      // 分区一键启停（2026-10-23 用户需求）：与「清空分区」同口径，作用域是
+      // 该来源的全部脚本（含被过滤隐藏的行）。全部启用时点击全停，其余状态
+      // （全停/部分启用）点击全开——部分启用一键补齐，不用逐行找漏网的。
+      const groupEnabledCount = (group) => group.scripts.filter((script) => !script.disabled).length
+      const toggleGroup = (group) => {
+        const total = group.scripts.length
+        const nextDisabled = groupEnabledCount(group) === total
+        const scope = groupLabel(group)
+        const action = t(nextDisabled ? 'settings.regexGroupToggleOff' : 'settings.regexGroupToggleOn')
+        const ids = new Set(group.scripts.map((script) => script.id))
+        const next = scripts.map((script) => (ids.has(script.id) ? { ...script, disabled: nextDisabled } : script))
+        run(saveRegexScripts(next).then(() => {
+          const done = { scope, count: total, action }
+          setNotice(t(groupActive(group) || group.kind === 'global'
+            ? 'settings.regexGroupToggleDone'
+            : 'settings.regexGroupToggleInactive', done))
+        }))
+      }
       // 两个回填入口共用一份 busy 状态：同一时刻只允许一个扫描在跑，回执不交叉。
       const sync = (source, request, doneKey) => {
         setError('')
@@ -295,26 +332,40 @@
           // 分区头固定展示该来源的全部条数（不是过滤后的条数），「清空分区」
           // 也按全部删除；过滤只收窄组内可见行。
           : h('div', { className: 'dt-regex-groups' },
-            visibleGroups.map(({ group, visible }) => h('div', {
-              key: group.key,
-              className: 'dt-regex-group',
-              role: 'group',
-              'aria-label': groupLabel(group),
-            },
-              h('div', { className: 'dt-regex-group-head' },
-                h('div', { className: 'dt-regex-group-title' },
-                  h('span', { className: 'dt-regex-group-name', title: groupLabel(group) }, groupLabel(group)),
-                  groupActive(group) ? h('span', { className: 'dt-regex-group-active' }, t('settings.regexGroupActive')) : null,
-                  h('span', { className: 'dt-regex-group-count' }, t('settings.regexGroupCount', { count: group.scripts.length }))),
-                h('button', {
-                  type: 'button',
-                  className: 'dt-regex-group-delete',
-                  title: t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
-                  'aria-label': t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
-                  disabled: editing !== '',
-                  onClick: () => deleteGroup(group),
-                }, h(IconTrashOutline16), h('span', null, t('settings.regexDeleteGroupShort')))),
-              h('div', { className: 'dt-regex-list' }, visible.map(scriptItem))))),
+            visibleGroups.map(({ group, visible }) => {
+              const enabled = groupEnabledCount(group)
+              const total = group.scripts.length
+              return h('div', {
+                key: group.key,
+                className: 'dt-regex-group',
+                role: 'group',
+                'aria-label': groupLabel(group),
+              },
+                h('div', { className: 'dt-regex-group-head' },
+                  h('div', { className: 'dt-regex-group-title' },
+                    h(RegexGroupToggle, {
+                      label: t(enabled === total ? 'settings.regexGroupDisableAll' : 'settings.regexGroupEnableAll', { scope: groupLabel(group), count: total }),
+                      checked: total > 0 && enabled === total,
+                      mixed: enabled > 0 && enabled < total,
+                      disabled: editing !== '',
+                      onChange: () => toggleGroup(group),
+                    }),
+                    h('span', { className: 'dt-regex-group-name', title: groupLabel(group) }, groupLabel(group)),
+                    groupActive(group) ? h('span', { className: 'dt-regex-group-active' }, t('settings.regexGroupActive')) : null,
+                    group.kind !== 'global' && !groupActive(group)
+                      ? h('span', { className: 'dt-regex-group-inactive' }, t('settings.regexGroupInactive'))
+                      : null,
+                    h('span', { className: 'dt-regex-group-count' }, t('settings.regexGroupCount', { count: group.scripts.length }))),
+                  h('button', {
+                    type: 'button',
+                    className: 'dt-regex-group-delete',
+                    title: t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
+                    'aria-label': t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
+                    disabled: editing !== '',
+                    onClick: () => deleteGroup(group),
+                  }, h(IconTrashOutline16), h('span', null, t('settings.regexDeleteGroupShort')))),
+                h('div', { className: 'dt-regex-list' }, visible.map(scriptItem)))
+            })),
         notice ? h('p', { className: 'dt-muted' }, notice) : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }

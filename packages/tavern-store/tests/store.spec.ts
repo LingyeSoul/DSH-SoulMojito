@@ -491,7 +491,71 @@ describe('TavernStore', () => {
     expect(collapsed.map((script) => script.findRegex).sort()).toEqual(['from a', 'from b'])
     expect(new Set(collapsed.map((script) => state.regexScriptOwners?.[script.id])))
       .toEqual(new Set(['Migrate A', 'Migrate B']))
-    expect(state.regexOwnershipVersion).toBe(2)
+    expect(state.regexOwnershipVersion).toBe(3)
+  }))
+
+  it('regex：v1 同名旧实体内容不同则不按名认领，各来源仍拿到自己的正文', withStore(async (store) => {
+    const card = (name: string, id: string, body: string) => ({
+      ...sampleCard,
+      data: {
+        ...sampleCard.data,
+        name,
+        extensions: { regex_scripts: [{ id, scriptName: 'Shared Panel', findRegex: '<Status>', replaceString: body }] },
+      },
+    })
+    await store.importCharacter(card('Claim A', 'panel-a', 'body a'))
+    await store.importCharacter(card('Claim B', 'panel-b', 'body b'))
+    const imported = await store.getState()
+    const lastBody = imported.regexScripts.find((script) => script.scriptName === 'Shared Panel'
+      && imported.regexScriptOwners?.[script.id] === 'Claim B')!
+    // 旧表按 scriptName 合并：只剩一条无归属实体，正文是最后导入的 B。
+    await store.updateState(() => ({
+      regexScripts: [{ ...lastBody, id: 'panel-b' }],
+      regexScriptOwners: {},
+      regexScriptPresetOwners: {},
+      regexOwnershipVersion: 1,
+    }))
+    await store.ensureRegexScriptOwners()
+    const state = await store.getState()
+    const panels = state.regexScripts.filter((script) => script.scriptName === 'Shared Panel')
+    expect(panels).toHaveLength(2)
+    const byOwner = new Map(panels.map((script) => [state.regexScriptOwners?.[script.id], script.replaceString]))
+    expect(byOwner.get('Claim A')).toBe('body a')
+    expect(byOwner.get('Claim B')).toBe('body b')
+  }))
+
+  it('regex：v2 误认领的异来源正文在 v3 修复回本来源版本', withStore(async (store) => {
+    const card = (name: string, id: string, body: string) => ({
+      ...sampleCard,
+      data: {
+        ...sampleCard.data,
+        name,
+        extensions: { regex_scripts: [{ id, scriptName: 'Status Panel', findRegex: '<Status>', replaceString: body }] },
+      },
+    })
+    await store.importCharacter(card('Repair A', 'status-a', 'body a'))
+    await store.importCharacter(card('Repair B', 'status-b', 'body b'))
+    const imported = await store.getState()
+    const entryA = imported.regexScripts.find((script) => imported.regexScriptOwners?.[script.id] === 'Repair A')!
+    const entryB = imported.regexScripts.find((script) => imported.regexScriptOwners?.[script.id] === 'Repair B')!
+    // 模拟 v2 的按名认领：A 的实体内容变成 B 的正文，B 另有一条同内容实体。
+    await store.updateState(() => ({
+      regexScripts: imported.regexScripts.map((script) => script.id === entryA.id ? { ...script, replaceString: 'body b' } : script),
+      regexOwnershipVersion: 2,
+    }))
+    await store.ensureRegexScriptOwners()
+    const state = await store.getState()
+    expect(state.regexOwnershipVersion).toBe(3)
+    expect(state.regexScripts.find((script) => script.id === entryA.id)?.replaceString).toBe('body a')
+    expect(state.regexScripts.find((script) => script.id === entryB.id)?.replaceString).toBe('body b')
+
+    // 手改过的副本既不等于本来源也不等于别的来源：v3 不覆盖。
+    await store.updateState((current) => ({
+      regexScripts: current.regexScripts.map((script) => script.id === entryA.id ? { ...script, replaceString: 'hand edited' } : script),
+      regexOwnershipVersion: 2,
+    }))
+    await store.ensureRegexScriptOwners()
+    expect((await store.getState()).regexScripts.find((script) => script.id === entryA.id)?.replaceString).toBe('hand edited')
   }))
 
   it('regex：角色卡改名后脚本归属跟着新卡名', withStore(async (store) => {

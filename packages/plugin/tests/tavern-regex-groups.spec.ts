@@ -35,9 +35,30 @@ describe('regex script source groups', () => {
     expect(source).toContain("className: 'dt-regex-groups'")
     expect(source).toContain("className: 'dt-regex-group-head'")
     expect(source).toContain("t('settings.regexGroupActive')")
+    expect(source).toContain("t('settings.regexGroupInactive')")
+    expect(source).toContain('.dt-regex-group-inactive{')
     expect(source).toContain("t('settings.regexDeleteGroupConfirm', { scope, count })")
     expect(source).toContain("t('settings.regexDeleteGroupDone', { scope, count: removed.size })")
     expect(source).toContain('.dt-regex-group-delete:hover:not(:disabled)')
+    expect(source).toContain("className: 'dt-toggle dt-regex-group-toggle'")
+    expect(source).toContain('.dt-regex-group-toggle input:disabled')
+  })
+
+  it('toggles a whole group from the header with an indeterminate mixed state', () => {
+    // 三态：全开勾选、全停空、部分启用 indeterminate；点击全开→全停，其余→全开。
+    expect(source).toContain('function RegexGroupToggle({ label, checked, mixed, disabled, onChange })')
+    expect(source).toContain('ref.current.indeterminate = mixed')
+    expect(source).toContain("const groupEnabledCount = (group) => group.scripts.filter((script) => !script.disabled).length")
+    expect(source).toContain('const toggleGroup = (group) => {')
+    expect(source).toContain('const nextDisabled = groupEnabledCount(group) === total')
+    // 写入范围是该分区全部脚本（含过滤隐藏行），与「清空分区」同口径。
+    expect(source).toContain('const ids = new Set(group.scripts.map((script) => script.id))')
+    expect(source).toContain('const next = scripts.map((script) => (ids.has(script.id) ? { ...script, disabled: nextDisabled } : script))')
+    expect(source).toContain("'settings.regexGroupEnableAll'")
+    expect(source).toContain("'settings.regexGroupDisableAll'")
+    expect(source).toContain("'settings.regexGroupToggleDone'")
+    expect(source).toContain("'settings.regexGroupToggleInactive'")
+    expect(source).toContain('mixed: enabled > 0 && enabled < total')
   })
 
   it('marker does not match near-miss samples (negative sample)', () => {
