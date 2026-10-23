@@ -667,6 +667,56 @@ async function renameWithWindowsRetry(from, to, attempts = 5) {
   }
 }
 
+// packages/tavern-store/src/mutation-tail.ts
+var MutationTail = class {
+  constructor(onIdle) {
+    this.onIdle = onIdle;
+  }
+  tail = Promise.resolve();
+  pending = 0;
+  /** 入队一个变更并返回其结果；后续变更在该变更落定后才执行。 */
+  enqueue(operation) {
+    const run = this.tail.catch(() => {
+    }).then(operation);
+    this.tail = run.then(() => {
+    }, () => {
+    });
+    this.pending++;
+    void this.tail.then(() => {
+      this.pending--;
+      if (this.pending === 0) this.onIdle?.();
+    });
+    return run;
+  }
+  /** 排空在飞变更：返回时已入队的全部变更均已落定（失败被吞掉不外抛）。 */
+  drain() {
+    return this.tail.catch(() => {
+    });
+  }
+};
+var KeyedMutationTails = class {
+  constructor(deleteWhenIdle = false) {
+    this.deleteWhenIdle = deleteWhenIdle;
+  }
+  tails = /* @__PURE__ */ new Map();
+  enqueue(key, operation) {
+    return this.tailFor(key).enqueue(operation);
+  }
+  /** 排空指定键的在飞变更；键不存在时立即落定。 */
+  drain(key) {
+    return this.tails.get(key)?.drain() ?? Promise.resolve();
+  }
+  tailFor(key) {
+    const existing = this.tails.get(key);
+    if (existing !== void 0) return existing;
+    const tail = new MutationTail(() => {
+      if (this.deleteWhenIdle) this.tails.delete(key);
+    });
+    this.tails.set(key, tail);
+    return tail;
+  }
+};
+
 // packages/tavern-format/lib/png.js
 var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
 var PngFormatError = class extends Error {
@@ -2602,8 +2652,8 @@ var TavernStore = class _TavernStore {
   constructor(root) {
     this.root = root;
   }
-  chatMutationTail = Promise.resolve();
-  stateMutationTail = Promise.resolve();
+  chatMutationTail = new MutationTail();
+  stateMutationTail = new MutationTail();
   static async open(root) {
     for (const dir of ["characters", "worlds", "presets", "chats", "personas", "groups", "personas/avatars"]) {
       await fs2.mkdir(path.join(root, dir), { recursive: true });
@@ -3250,8 +3300,7 @@ var TavernStore = class _TavernStore {
   }
   /* ------------------------------ 状态 ------------------------------ */
   async getState() {
-    await this.stateMutationTail.catch(() => {
-    });
+    await this.stateMutationTail.drain();
     return this.readState();
   }
   async patchState(patch) {
@@ -3494,12 +3543,7 @@ var TavernStore = class _TavernStore {
     }
   }
   mutateChat(operation) {
-    const result = this.chatMutationTail.catch(() => {
-    }).then(operation);
-    this.chatMutationTail = result.then(() => {
-    }, () => {
-    });
-    return result;
+    return this.chatMutationTail.enqueue(operation);
   }
   chatWorldsFile(characterName, chatId) {
     return path.join(this.root, "chats", safeFileName(characterName), `${safeChatFileName(chatId)}.worlds.json`);
@@ -3523,12 +3567,7 @@ var TavernStore = class _TavernStore {
     if (await this.tryRead(from) !== void 0) await fs2.rename(from, to);
   }
   mutateState(operation) {
-    const result = this.stateMutationTail.catch(() => {
-    }).then(operation);
-    this.stateMutationTail = result.then(() => {
-    }, () => {
-    });
-    return result;
+    return this.stateMutationTail.enqueue(operation);
   }
   async listDir(dir) {
     try {
@@ -3949,7 +3988,7 @@ var MemoryStore = class _MemoryStore {
   constructor(root) {
     this.root = root;
   }
-  mutationTail = Promise.resolve();
+  mutationTail = new MutationTail();
   static async open(root) {
     await fs3.mkdir(path2.join(root, "memories"), { recursive: true });
     await fs3.mkdir(path2.join(root, "memory-audit"), { recursive: true });
@@ -4113,12 +4152,7 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
 `, "utf8");
   }
   mutate(operation) {
-    const result = this.mutationTail.catch(() => {
-    }).then(operation);
-    this.mutationTail = result.then(() => {
-    }, () => {
-    });
-    return result;
+    return this.mutationTail.enqueue(operation);
   }
 };
 function normalizeQuery(query) {
@@ -4319,7 +4353,7 @@ var MemoryVectorStore = class _MemoryVectorStore {
   constructor(root) {
     this.root = root;
   }
-  mutationTail = Promise.resolve();
+  mutationTail = new MutationTail();
   static async open(root) {
     await fs5.mkdir(path4.join(root, "memory-vectors"), { recursive: true });
     return new _MemoryVectorStore(root);
@@ -4416,12 +4450,7 @@ var MemoryVectorStore = class _MemoryVectorStore {
     return path4.join(this.root, "memory-vectors", scope, `${safeSegment3(scopeId)}.json`);
   }
   mutate(operation) {
-    const result = this.mutationTail.catch(() => {
-    }).then(operation);
-    this.mutationTail = result.then(() => {
-    }, () => {
-    });
-    return result;
+    return this.mutationTail.enqueue(operation);
   }
 };
 function vectorPathKey(scope, scopeId) {
@@ -4482,7 +4511,7 @@ var VariableStore = class _VariableStore {
   constructor(root) {
     this.root = root;
   }
-  mutationTail = Promise.resolve();
+  mutationTail = new MutationTail();
   static async open(root) {
     await fs6.mkdir(path5.join(root, "variables"), { recursive: true });
     return new _VariableStore(root);
@@ -4595,12 +4624,7 @@ var VariableStore = class _VariableStore {
     return path5.join(this.root, "variables", scope, `${safeSegment4(scopeId)}.json`);
   }
   mutate(operation) {
-    const result = this.mutationTail.catch(() => {
-    }).then(operation);
-    this.mutationTail = result.then(() => {
-    }, () => {
-    });
-    return result;
+    return this.mutationTail.enqueue(operation);
   }
 };
 function emptyFile2(scope, scopeId) {
@@ -6056,9 +6080,9 @@ var REQUIREMENT_SOURCES = /* @__PURE__ */ new Set(["composer", "panel", "interna
 var PARAGRAPH_SEPARATOR = "\n\n";
 var NovelStore = class _NovelStore {
   novelsRoot;
-  mutationTails = /* @__PURE__ */ new Map();
+  mutationTails = new KeyedMutationTails();
   /** Serialized async projection updates per novel; deleteNovel drains them. */
-  projectionTails = /* @__PURE__ */ new Map();
+  projectionTails = new KeyedMutationTails();
   constructor(root) {
     this.novelsRoot = path6.join(root, "novels");
   }
@@ -6344,8 +6368,7 @@ var NovelStore = class _NovelStore {
       const current = await this.readSnapshot(novelId);
       if (current === void 0) return false;
       await this.ensureOwnership(novelId, dir);
-      await this.projectionTails.get(novelId)?.catch(() => {
-      });
+      await this.projectionTails.drain(novelId);
       await fs9.rm(dir, { recursive: true, force: true });
       return true;
     });
@@ -7703,13 +7726,7 @@ ${tail}`;
     return path6.join(this.novelsRoot, novelId);
   }
   mutate(novelId, operation) {
-    const tail = this.mutationTails.get(novelId) ?? Promise.resolve();
-    const result = tail.catch(() => {
-    }).then(operation);
-    this.mutationTails.set(novelId, result.then(() => {
-    }, () => {
-    }));
-    return result;
+    return this.mutationTails.enqueue(novelId, operation);
   }
   /** Re-reads HEAD inside the mutation entry and verifies write ownership. */
   async beginMutation(novelId) {
@@ -7834,13 +7851,7 @@ ${tail}`;
     await writeImmutableBytes(path6.join(dir, "revisions", `${revision}.json`), jsonBytes2(file));
     const head = { novelId: snapshot2.novelId, revision, schemaVersion: SCHEMA_VERSION, updatedAt: snapshot2.updatedAt };
     await replaceHead(path6.join(dir, "HEAD.json"), jsonBytes2(head));
-    const tail = this.projectionTails.get(snapshot2.novelId) ?? Promise.resolve();
-    const projected = tail.catch(() => {
-    }).then(() => this.updateProjections(dir, withRevision2));
-    this.projectionTails.set(snapshot2.novelId, projected.then(() => {
-    }, () => {
-    }));
-    projected.catch(() => {
+    void this.projectionTails.enqueue(snapshot2.novelId, () => this.updateProjections(dir, withRevision2)).catch(() => {
     });
     return revision;
   }
@@ -11442,7 +11453,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
     this.root = root;
     this.store = store5;
   }
-  tails = /* @__PURE__ */ new Map();
+  tails = new KeyedMutationTails(true);
   checkpoints = /* @__PURE__ */ new Map();
   static async open(tavernRoot, store5) {
     const root = join9(tavernRoot, "projections");
@@ -11450,13 +11461,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
     return new _AgentTavernProjector(root, store5);
   }
   project(session, event) {
-    const previous = this.tails.get(session.id) ?? Promise.resolve();
-    const current = previous.catch(() => {
-    }).then(() => this.projectOne(session, event));
-    this.tails.set(session.id, current);
-    return current.finally(() => {
-      if (this.tails.get(session.id) === current) this.tails.delete(session.id);
-    });
+    return this.tails.enqueue(session.id, () => this.projectOne(session, event));
   }
   async replay(session) {
     const events = [...sessionEvents(session)].sort((left, right) => left.seq - right.seq);
@@ -11756,7 +11761,7 @@ function validateCheckpoint(value, sessionId) {
     throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`);
   }
 }
-var mvuAuditTail = Promise.resolve();
+var mvuAuditTail = new MutationTail();
 
 // packages/plugin/src/agent-tavern/anchor.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
@@ -13808,7 +13813,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.9".trim() : "";
-  const commit = true ? normalizeCommit("cca9a65") : void 0;
+  const commit = true ? normalizeCommit("b9ce158") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -14762,7 +14767,7 @@ import { dirname as dirname7 } from "node:path";
 var MOD_STORAGE_VALUE_LIMIT = 256 * 1024;
 var MOD_STORAGE_TOTAL_LIMIT = 1024 * 1024;
 var KEY_PATTERN = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
-var fileTails = /* @__PURE__ */ new Map();
+var fileTails = new KeyedMutationTails();
 var ModStorage = class {
   constructor(file, options = {}) {
     this.file = file;
@@ -14835,17 +14840,10 @@ var ModStorage = class {
   /** 排空在飞写（宿主卸载/reload 前调用）：返回时**该文件**队列上全部写
    * （含其他实例入队的）已落定——卸载后新实例装载与外部 teardown 都安全。 */
   flush() {
-    return (fileTails.get(this.file) ?? Promise.resolve()).catch(() => {
-    });
+    return fileTails.drain(this.file);
   }
   mutate(operation) {
-    const tail = fileTails.get(this.file) ?? Promise.resolve();
-    const result = tail.catch(() => {
-    }).then(operation);
-    fileTails.set(this.file, result.then(() => {
-    }, () => {
-    }));
-    return result;
+    return fileTails.enqueue(this.file, operation);
   }
 };
 function validateKey(key) {
@@ -15357,7 +15355,7 @@ var ModHost = class _ModHost {
   loaded = /* @__PURE__ */ new Map();
   loadErrors = /* @__PURE__ */ new Map();
   globalEnabled = false;
-  refreshTail = Promise.resolve();
+  refreshTail = new MutationTail();
   offGuides;
   offHookDegrations;
   static async open(options) {
@@ -15382,12 +15380,7 @@ var ModHost = class _ModHost {
   }
   /** 重新扫描 + 按三层开关对账（该装载的装载、该卸载的卸载）。串行化执行。 */
   refresh() {
-    const run = this.refreshTail.catch(() => {
-    }).then(() => this.refreshInternal());
-    this.refreshTail = run.then(() => {
-    }, () => {
-    });
-    return run;
+    return this.refreshTail.enqueue(() => this.refreshInternal());
   }
   async setGlobalEnabled(enabled) {
     const db = await this.options.dbProvider();
@@ -31042,7 +31035,7 @@ async function replaceVariables(db, state, character, chatId, body) {
     }));
     return tree;
   }
-  return serializeSessionWrite(`${character}\0${chatId}\0chat`, () => retryChatWrite(async () => {
+  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
     if (scope === "chat") {
       const snapshot3 = await requireChat(db, character, chatId);
       const chat = snapshot3.chat;
@@ -31067,7 +31060,7 @@ async function replaceVariables(db, state, character, chatId, body) {
   }));
 }
 async function replaceMvuData(db, character, chatId, body) {
-  return serializeSessionWrite(`${character}\0${chatId}\0chat`, () => retryChatWrite(async () => {
+  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
     const snapshot2 = await requireChat(db, character, chatId);
     const chat = snapshot2.chat;
     const stat2 = requireObject(body?.statData, "statData");
@@ -31191,20 +31184,12 @@ async function loadLorebook(db, character, chatId, name2) {
   if (name2 !== linkedName && name2 !== embeddedName) return void 0;
   return parseCharacterBook2(book);
 }
-var sessionWriteChains = /* @__PURE__ */ new Map();
-async function serializeSessionWrite(key, operation) {
-  const previous = sessionWriteChains.get(key) ?? Promise.resolve();
-  const run = previous.catch(() => {
-  }).then(operation);
-  const settled = run.then(() => {
-  }, () => {
-  });
-  sessionWriteChains.set(key, settled);
-  try {
-    return await run;
-  } finally {
-    if (sessionWriteChains.get(key) === settled) sessionWriteChains.delete(key);
-  }
+var sessionWriteChains = new KeyedMutationTails(true);
+function chatWriteKey(character, chatId) {
+  return `${character}\0${chatId}\0chat`;
+}
+function serializeSessionWrite(key, operation) {
+  return sessionWriteChains.enqueue(key, operation);
 }
 async function retryChatWrite(operation) {
   let lastError;
@@ -31316,7 +31301,7 @@ async function setChatWorld(db, character, chatId, body) {
   requireSessionChatId(chatId, "chat.world.set");
   const raw = body?.name;
   const name2 = raw === null || raw === void 0 || raw === "" ? null : requireString(raw, "name").trim();
-  return serializeSessionWrite(`${character}\0${chatId}\0chat`, () => retryChatWrite(async () => {
+  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
     const snapshot2 = await requireChat(db, character, chatId);
     const chat = snapshot2.chat;
     chat.header.chat_metadata = chat.header.chat_metadata ?? {};
@@ -31459,7 +31444,7 @@ function writeTreePath(tree, path12, value) {
   cursor[leaf] = cloneJson(value);
 }
 async function rotateMessages(db, character, chatId, body) {
-  return serializeSessionWrite(`${character}\0${chatId}\0chat`, () => retryChatWrite(async () => {
+  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
     const snapshot2 = await requireChat(db, character, chatId);
     const chat = snapshot2.chat;
     const total = chat.messages.length;
@@ -31655,7 +31640,7 @@ async function getMessages(db, character, chatId, body) {
   return messages;
 }
 async function mutateMessages(db, character, chatId, action, body) {
-  return serializeSessionWrite(`${character}\0${chatId}\0chat`, () => retryChatWrite(async () => {
+  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
     const snapshot2 = await requireChat(db, character, chatId);
     const chat = snapshot2.chat;
     const state = await db.getState();

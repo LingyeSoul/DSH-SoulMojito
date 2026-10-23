@@ -1758,6 +1758,34 @@ async function renameWithWindowsRetry(from, to, attempts = 5) {
   }
 }
 
+// packages/tavern-store/src/mutation-tail.ts
+var MutationTail = class {
+  constructor(onIdle) {
+    this.onIdle = onIdle;
+  }
+  tail = Promise.resolve();
+  pending = 0;
+  /** 入队一个变更并返回其结果；后续变更在该变更落定后才执行。 */
+  enqueue(operation) {
+    const run = this.tail.catch(() => {
+    }).then(operation);
+    this.tail = run.then(() => {
+    }, () => {
+    });
+    this.pending++;
+    void this.tail.then(() => {
+      this.pending--;
+      if (this.pending === 0) this.onIdle?.();
+    });
+    return run;
+  }
+  /** 排空在飞变更：返回时已入队的全部变更均已落定（失败被吞掉不外抛）。 */
+  drain() {
+    return this.tail.catch(() => {
+    });
+  }
+};
+
 // packages/tavern-format/lib/png.js
 var PNG_SIGNATURE2 = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
 var PngFormatError = class extends Error {
@@ -2704,8 +2732,8 @@ var TavernStore = class _TavernStore {
   constructor(root) {
     this.root = root;
   }
-  chatMutationTail = Promise.resolve();
-  stateMutationTail = Promise.resolve();
+  chatMutationTail = new MutationTail();
+  stateMutationTail = new MutationTail();
   static async open(root) {
     for (const dir of ["characters", "worlds", "presets", "chats", "personas", "groups", "personas/avatars"]) {
       await fs2.mkdir(path.join(root, dir), { recursive: true });
@@ -3352,8 +3380,7 @@ var TavernStore = class _TavernStore {
   }
   /* ------------------------------ 状态 ------------------------------ */
   async getState() {
-    await this.stateMutationTail.catch(() => {
-    });
+    await this.stateMutationTail.drain();
     return this.readState();
   }
   async patchState(patch) {
@@ -3596,12 +3623,7 @@ var TavernStore = class _TavernStore {
     }
   }
   mutateChat(operation) {
-    const result = this.chatMutationTail.catch(() => {
-    }).then(operation);
-    this.chatMutationTail = result.then(() => {
-    }, () => {
-    });
-    return result;
+    return this.chatMutationTail.enqueue(operation);
   }
   chatWorldsFile(characterName, chatId) {
     return path.join(this.root, "chats", safeFileName(characterName), `${safeChatFileName(chatId)}.worlds.json`);
@@ -3625,12 +3647,7 @@ var TavernStore = class _TavernStore {
     if (await this.tryRead(from) !== void 0) await fs2.rename(from, to);
   }
   mutateState(operation) {
-    const result = this.stateMutationTail.catch(() => {
-    }).then(operation);
-    this.stateMutationTail = result.then(() => {
-    }, () => {
-    });
-    return result;
+    return this.stateMutationTail.enqueue(operation);
   }
   async listDir(dir) {
     try {

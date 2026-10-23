@@ -1966,6 +1966,56 @@ async function renameWithWindowsRetry(from, to, attempts = 5) {
   }
 }
 
+// packages/tavern-store/src/mutation-tail.ts
+var MutationTail = class {
+  constructor(onIdle) {
+    this.onIdle = onIdle;
+  }
+  tail = Promise.resolve();
+  pending = 0;
+  /** 入队一个变更并返回其结果；后续变更在该变更落定后才执行。 */
+  enqueue(operation) {
+    const run = this.tail.catch(() => {
+    }).then(operation);
+    this.tail = run.then(() => {
+    }, () => {
+    });
+    this.pending++;
+    void this.tail.then(() => {
+      this.pending--;
+      if (this.pending === 0) this.onIdle?.();
+    });
+    return run;
+  }
+  /** 排空在飞变更：返回时已入队的全部变更均已落定（失败被吞掉不外抛）。 */
+  drain() {
+    return this.tail.catch(() => {
+    });
+  }
+};
+var KeyedMutationTails = class {
+  constructor(deleteWhenIdle = false) {
+    this.deleteWhenIdle = deleteWhenIdle;
+  }
+  tails = /* @__PURE__ */ new Map();
+  enqueue(key, operation) {
+    return this.tailFor(key).enqueue(operation);
+  }
+  /** 排空指定键的在飞变更；键不存在时立即落定。 */
+  drain(key) {
+    return this.tails.get(key)?.drain() ?? Promise.resolve();
+  }
+  tailFor(key) {
+    const existing = this.tails.get(key);
+    if (existing !== void 0) return existing;
+    const tail = new MutationTail(() => {
+      if (this.deleteWhenIdle) this.tails.delete(key);
+    });
+    this.tails.set(key, tail);
+    return tail;
+  }
+};
+
 // packages/tavern-format/lib/png.js
 var PNG_SIGNATURE2 = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
 var PngFormatError = class extends Error {
@@ -2912,8 +2962,8 @@ var TavernStore = class _TavernStore {
   constructor(root) {
     this.root = root;
   }
-  chatMutationTail = Promise.resolve();
-  stateMutationTail = Promise.resolve();
+  chatMutationTail = new MutationTail();
+  stateMutationTail = new MutationTail();
   static async open(root) {
     for (const dir of ["characters", "worlds", "presets", "chats", "personas", "groups", "personas/avatars"]) {
       await fs2.mkdir(path.join(root, dir), { recursive: true });
@@ -3560,8 +3610,7 @@ var TavernStore = class _TavernStore {
   }
   /* ------------------------------ 状态 ------------------------------ */
   async getState() {
-    await this.stateMutationTail.catch(() => {
-    });
+    await this.stateMutationTail.drain();
     return this.readState();
   }
   async patchState(patch) {
@@ -3804,12 +3853,7 @@ var TavernStore = class _TavernStore {
     }
   }
   mutateChat(operation) {
-    const result = this.chatMutationTail.catch(() => {
-    }).then(operation);
-    this.chatMutationTail = result.then(() => {
-    }, () => {
-    });
-    return result;
+    return this.chatMutationTail.enqueue(operation);
   }
   chatWorldsFile(characterName, chatId) {
     return path.join(this.root, "chats", safeFileName(characterName), `${safeChatFileName(chatId)}.worlds.json`);
@@ -3833,12 +3877,7 @@ var TavernStore = class _TavernStore {
     if (await this.tryRead(from) !== void 0) await fs2.rename(from, to);
   }
   mutateState(operation) {
-    const result = this.stateMutationTail.catch(() => {
-    }).then(operation);
-    this.stateMutationTail = result.then(() => {
-    }, () => {
-    });
-    return result;
+    return this.stateMutationTail.enqueue(operation);
   }
   async listDir(dir) {
     try {
@@ -4246,7 +4285,7 @@ var MemoryStore = class _MemoryStore {
   constructor(root) {
     this.root = root;
   }
-  mutationTail = Promise.resolve();
+  mutationTail = new MutationTail();
   static async open(root) {
     await fs3.mkdir(path2.join(root, "memories"), { recursive: true });
     await fs3.mkdir(path2.join(root, "memory-audit"), { recursive: true });
@@ -4410,12 +4449,7 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
 `, "utf8");
   }
   mutate(operation) {
-    const result = this.mutationTail.catch(() => {
-    }).then(operation);
-    this.mutationTail = result.then(() => {
-    }, () => {
-    });
-    return result;
+    return this.mutationTail.enqueue(operation);
   }
 };
 function normalizeQuery(query) {
@@ -5900,9 +5934,9 @@ var REQUIREMENT_SOURCES = /* @__PURE__ */ new Set(["composer", "panel", "interna
 var PARAGRAPH_SEPARATOR = "\n\n";
 var NovelStore = class _NovelStore {
   novelsRoot;
-  mutationTails = /* @__PURE__ */ new Map();
+  mutationTails = new KeyedMutationTails();
   /** Serialized async projection updates per novel; deleteNovel drains them. */
-  projectionTails = /* @__PURE__ */ new Map();
+  projectionTails = new KeyedMutationTails();
   constructor(root) {
     this.novelsRoot = path3.join(root, "novels");
   }
@@ -6188,8 +6222,7 @@ var NovelStore = class _NovelStore {
       const current = await this.readSnapshot(novelId);
       if (current === void 0) return false;
       await this.ensureOwnership(novelId, dir);
-      await this.projectionTails.get(novelId)?.catch(() => {
-      });
+      await this.projectionTails.drain(novelId);
       await fs6.rm(dir, { recursive: true, force: true });
       return true;
     });
@@ -7547,13 +7580,7 @@ ${tail}`;
     return path3.join(this.novelsRoot, novelId);
   }
   mutate(novelId, operation) {
-    const tail = this.mutationTails.get(novelId) ?? Promise.resolve();
-    const result = tail.catch(() => {
-    }).then(operation);
-    this.mutationTails.set(novelId, result.then(() => {
-    }, () => {
-    }));
-    return result;
+    return this.mutationTails.enqueue(novelId, operation);
   }
   /** Re-reads HEAD inside the mutation entry and verifies write ownership. */
   async beginMutation(novelId) {
@@ -7678,13 +7705,7 @@ ${tail}`;
     await writeImmutableBytes(path3.join(dir, "revisions", `${revision}.json`), jsonBytes2(file));
     const head = { novelId: snapshot.novelId, revision, schemaVersion: SCHEMA_VERSION, updatedAt: snapshot.updatedAt };
     await replaceHead(path3.join(dir, "HEAD.json"), jsonBytes2(head));
-    const tail = this.projectionTails.get(snapshot.novelId) ?? Promise.resolve();
-    const projected = tail.catch(() => {
-    }).then(() => this.updateProjections(dir, withRevision2));
-    this.projectionTails.set(snapshot.novelId, projected.then(() => {
-    }, () => {
-    }));
-    projected.catch(() => {
+    void this.projectionTails.enqueue(snapshot.novelId, () => this.updateProjections(dir, withRevision2)).catch(() => {
     });
     return revision;
   }
@@ -8737,7 +8758,7 @@ for (const spec of [
 }
 
 // packages/plugin/src/agent-tavern/projector.ts
-var mvuAuditTail = Promise.resolve();
+var mvuAuditTail = new MutationTail();
 
 // packages/plugin/src/agent-tavern/tools/deduction.ts
 var deductionOutput = objectOutput({
