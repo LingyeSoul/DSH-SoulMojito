@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { collectRegexScripts, collectWorldInfoBooks } from '../src/tavern-assets.js'
-import { decodeCharacterCard, normalizeEntry } from '../../tavern-format/src/index.js'
+import { decodeCharacterCard, normalizeEntry, RegexPlacement } from '../../tavern-format/src/index.js'
+import { applyRegexScripts } from '../../tavern-script/src/index.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
 
 const CHARACTER = 'Carrier'
@@ -170,6 +171,57 @@ describe('collectRegexScripts', () => {
     const state = { regexScripts: [script('Global', { findRegex: 'g' })] }
     const scripts = collectRegexScripts(state, characterWithRegex([script('Card', { findRegex: 'c' })]))
     expect(scripts.map((item) => [item.scriptName, item.findRegex])).toEqual([['Global', 'g'], ['Card', 'c']])
+  })
+
+  it('卡内脚本按卡内数组顺序恢复链式顺序（导入顺序被打乱也不影响）', () => {
+    // 真实回归：state 里警告脚本先于「变量更新校验-放行」，警告先吃掉
+    // <StatusPlaceHolderImpl/>，状态栏永远显示「AI 遗漏变量更新」。
+    const state = {
+      regexScripts: [
+        script('Warning', { id: 'w', findRegex: 'impl' }),
+        script('Global', { id: 'g', findRegex: 'g' }),
+        script('Pass', { id: 'p', findRegex: 'impl' }),
+        script('Status', { id: 's', findRegex: 'ready' }),
+      ],
+      regexScriptOwners: { w: CHARACTER, p: CHARACTER, s: CHARACTER },
+    }
+    const card = characterWithRegex([
+      script('Pass', { findRegex: 'impl' }),
+      script('Status', { findRegex: 'ready' }),
+      script('Warning', { findRegex: 'impl' }),
+    ])
+    expect(collectRegexScripts(state, card).map((item) => item.scriptName))
+      .toEqual(['Global', 'Pass', 'Status', 'Warning'])
+  })
+
+  it('变量更新校验先放行占位符，警告脚本不再抢跑', () => {
+    const pass = script('[MVU] 变量更新校验-放行', {
+      id: 'pass',
+      markdownOnly: true,
+      findRegex: '/(<\\/UpdateVariable>[\\s\\S]*?)<StatusPlaceHolderImpl\\/>/g',
+      replaceString: '$1<StatusPlaceHolderREADY/>',
+    })
+    const warning = script('[变量]变量未更新警告', {
+      id: 'warning',
+      markdownOnly: true,
+      findRegex: '<StatusPlaceHolderImpl\\/>',
+      replaceString: 'WARNING',
+    })
+    const state = {
+      regexScripts: [warning, pass],
+      regexScriptOwners: { warning: CHARACTER, pass: CHARACTER },
+    }
+    const card = characterWithRegex([pass, warning])
+    const scripts = collectRegexScripts(state, card)
+    const rendered = applyRegexScripts(
+      'prose\n</UpdateVariable>\n<StatusPlaceHolderImpl/>',
+      scripts,
+      RegexPlacement.AI_OUTPUT,
+      { expand: (value) => value },
+      { depth: 0 },
+    )
+    expect(rendered).toContain('<StatusPlaceHolderREADY/>')
+    expect(rendered).not.toContain('WARNING')
   })
 
   it('同名脚本以已导入的全局版本为准，不重复应用', () => {

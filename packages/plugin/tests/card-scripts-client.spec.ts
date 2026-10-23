@@ -34,6 +34,8 @@ const CARD_SCRIPTS_I18N_KEYS = [
   'cardScripts.autoRunStopped',
   'cardScripts.autoHostedInFrontend',
   'cardScripts.openFrontend',
+  'cardScripts.sharedHost',
+  'cardScripts.buttons',
   'cardScripts.loadFailed',
 ]
 

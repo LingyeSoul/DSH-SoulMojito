@@ -20,7 +20,7 @@
 - **同步契约**：`replaceVariables` / `updateVariablesWith` / `insertOrAssignVariables` / `insertVariables` / `deleteVariable` 按 JSR 4.11 同步返回；落盘在后台队列里按序执行，失败弹 error toast。
 - **宏**：`substitudeMacros` 变成真正的本地展开（`{{char}}` / `{{user}}` / `{{getvar::}}` / `{{setvar::}}` / `{{random}}` / `{{roll}}` / 时间类 + `registerMacroLike`）；未知宏原样保留。
 - **正则**：`getTavernRegexes(option)` 同步返回 ST 形状；`formatAsTavernRegexedString(text, source, destination, option)` 按 JSR 签名同步返回字符串（旧 `(text, placement, option)` 姿势仍兼容）。
-- **脚本容器**：右栏「卡脚本」tab 升级为真正的容器——每个脚本一个独立沙箱 iframe，带 `scriptId`/`scriptName`/`scriptInfo`；`getScriptInfo`/`replaceScriptInfo`/`getAllEnabledScriptButtons`/`replaceScriptTrees` 可用，脚本按钮条渲染在容器里并回投给对应 iframe。
+- **脚本容器**：右栏「卡脚本」tab 升级为真正的容器——每个脚本一个独立沙箱 iframe，带 `scriptId`/`scriptName`/`scriptInfo`；`getScriptInfo`/`replaceScriptInfo`/`getAllEnabledScriptButtons`/`replaceScriptTrees` 可用，脚本按钮条渲染在容器里并回投给对应 iframe。AgentTavern 的自动运行仍共享「美化前端」文档（不逐脚本隔离），但每段脚本有 per-script scope，身份与按钮归属正确。
 - **会话级覆盖**：世界书条目族、`createWorldbook`/`deleteWorldbook`、`replaceWorldbook`、预设与人设写面、脚本树三来源（character/preset/global）全部落在 `chats/<角色>/<聊天>.jsonl.scripts.json` 覆盖层，基础资产只读。
 - **只读面补全**：真实预设/人设/角色列表与 `getPreset`、`getPersona`、`getCharData`、`getCharAvatarPath`、`getChatHistoryBrief/Detail`、`RawCharacter`。
 - **框架面**：`SillyTavern.getContext().chat` 改为 ST 形状（`mes`/`is_user`/`is_system`/`swipes`）并带 `eventSource`/`eventTypes`；新增 `EjsTemplate`（宿主 `template.render`）。
@@ -220,7 +220,9 @@ Agent 模式的 MVU 写入由插件完成：投影器解析模型回复末尾的
 - 列表显示全部脚本（含卡内禁用的，禁用项标注且不可运行）；默认没有任何自动执行；
 - 点「运行」后，该脚本被包成完整 HTML 文档，**在自己的沙箱 `FrontendFrame` 里执行**
   （一个脚本一个 iframe），带 `scriptId`/`scriptName`/`scriptInfo`；切换聊天/角色立即停止并清空；
-- 手动模式一次运行一份；开启 `cardScriptsAutoRun` 后按脚本逐个 iframe 自动运行；
+- 手动模式一次运行一份；ST 的 `cardScriptsAutoRun` 按脚本逐个 iframe 自动运行；
+  AgentTavern 的自动运行仍注入「美化前端」同一个文档，每段脚本带 per-script
+  scope（身份/按钮），**不提供逐脚本隔离**；
 - 脚本通过 `replaceScriptButtons` 上报的按钮会渲染在容器里的按钮条，点击按
   `getButtonEvent(name)` 的 id 回投给对应 iframe（`eventOnButton` 可接）；
 - 脚本的 `getScriptInfo`/`replaceScriptInfo` 与按钮列表回写到会话脚本树副本。
@@ -259,11 +261,18 @@ helper RPC（供 iframe 内部使用，不是 `window.*` 公共 API）：
   （每份脚本一个独立的 `<script type="module">` 块）。脚本的
   `window.top.document.body` 就是这份美化前端文档——悬浮球 / GM 面板直接叠在
   美化前端上，与前端共享 DOM、主题与 helper 通道；该楼层没有 HTML 时给脚本一个
-  独立画布（720px 起步）。
+  独立画布（720px 起步）。每段脚本在模块顶部绑定 `window.__dshTavernScriptScope`
+  返回的 per-script scope：裸调用 `getScriptId` / `getScriptName` /
+  `getScriptInfo` / `replaceScriptInfo`、按钮 API 与 `{ type: 'script' }` 变量
+  读写都落到自己的脚本节点；脚本按钮由「美化前端」tab 渲染并回投。显式
+  `window.*` / `TavernHelper.*` 调用仍是共享面，`window.getScriptId()` 返回
+  共享占位 id。
 - **ST**：消息正文内联渲染，右栏没有第二份前端；自动运行仍在「卡脚本」tab，
-  全部启用脚本注入同一个沙箱 iframe。
-- 脚本共享同一 iframe 的 `window` / `document` / 全局变量——不是 JSR 的隔离
-  脚本容器，脚本之间的冲突由卡作者负责；
+  按脚本逐个沙箱 iframe 自动执行；按钮条在该 tab 内。
+- **AgentTavern 自动运行是共享模式**：脚本共享同一 iframe 的 `window` /
+  `document` / 全局变量与事件总线——不是 JSR 的隔离脚本容器，脚本之间的冲突
+  由卡作者负责；容器 tab 的逐脚本隔离只用于手动运行与 ST 自动运行；
+
 - 脚本仍拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限，
   只对信任的卡开启；
 - AgentTavern 下「卡脚本」tab 不再重复自动运行，只保留列表、重置与手动入口
@@ -283,7 +292,7 @@ JSR 卡可以带自己的 OpenAI 兼容 API 源（URL + Key + 模型），并在
 | 函数 | 状态 | 语义 |
 |---|---|---|
 | `getModelList({apiurl, key})` | ✅ | 宿主 `GET <apiurl>/models`，返回去重排序后的模型 id 数组。API Key 只进 outbound `Authorization`，不回传、不落盘、不写日志 |
-| `generate(config)` | ✅ | 非流式 `POST <apiurl>/chat/completions`，返回字符串正文。支持 `custom_api` / `user_input` / `injects` / `overrides.chat_history.prompts`；`should_stream` 被接受但按最终文本一次返回 |
+| `generate(config)` | ✅ | 非流式 `POST <apiurl>/chat/completions`，返回字符串正文。支持 `custom_api` / `user_input` / `injects` / `overrides.chat_history.prompts`；`should_scan:true` 的 scan-only inject（`position:"none"`）会先按当前聊天世界书（会话副本优先）扫描并注入命中条目；`should_stream` 被接受但按最终文本一次返回 |
 | `generateRaw(config)` | ⚠️ | `generate` 的别名；没有 JSR 的 raw 注入细节 |
 | `stopGenerationById` / `stopAllGeneration` | ⚠️ | 返回 `false`：非流式请求没有可取消的句柄 |
 | `getModelList` 的 URL 规则 | — | 必须是无 query/hash 的 base URL；`https://`，或仅 loopback（`localhost` / `127.0.0.1` / `::1`）允许 `http://`；URL 内不能带账号密码 |
@@ -412,7 +421,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `SillyTavern.getContext()` | ⚠️ | 只返回最小只读面：`chatId` / `chat` / `chat_metadata` / `name1`（你）/ `name2`（角色）/ `characterId`（恒 0）/ `characters`（当前角色卡）/ `getCharacterCardFields()`（恒空字段）。`getContext()` 里仍没有 `extensionSettings`、`eventSource`、`eventTypes`；这些兼容字段直接挂在 `SillyTavern.*`（`extensionSettings` / `chatCompletionSettings` 为 iframe 内存，`saveChat` / `saveSettingsDebounced` 为 Promise/空操作——变量与楼层已由 helper RPC 落盘，不会写宿主设置） |
 | `SillyTavern.loadWorldInfo(name)` | ✅ | 读当前聊天的世界书并返回 ST 形状 `{ entries: { [uid]: entry } }`；优先会话副本，其次基础资产/卡内嵌书。只读，写回仍走 `updateWorldbookWith` 的会话副本 |
 | `getCurrentMessageId()` | ✅ | 当前 iframe 所属楼层；侧栏/MVU 模板为 `-1`（最新）。没有楼层绑定时也不要拿它做范围上界，优先 `getLastMessageId()` |
-| `getLorebook(name)` / `getWorldbook(name)` | ✅ | 返回条目数组（含 `world` 字段）。名字缺省取角色卡绑定的世界书，其次全局激活的第一本，最后卡内嵌书名。**优先读当前聊天的会话副本**，没有副本才读基础 `worlds/` 资产 |
+| `getLorebook(name)` / `getWorldbook(name)` | ✅ | 返回条目数组，含 `world` 字段、ST 原字段和 JSR 别名（`name` / `enabled` / `strategy.keys`）。名字缺省取角色卡绑定的世界书，其次全局激活的第一本，最后卡内嵌书名。**优先读当前聊天的会话副本**，没有副本才读基础 `worlds/` 资产；写回时 JSR 别名转回 ST 字段，且只写会话副本 |
 | `getLorebooks()` / `getWorldbookNames()` / `getLorebookNames()` | ✅ | 当前聊天可见的全部世界书名（基础资产 + 会话新建 - 会话删除） |
 | `getGlobalWorldbookNames()` | ✅ | 当前全局激活的世界书名 |
 | `getCharWorldbookNames()` / `getCharLorebooks()` | ✅ | **同步**返回 `{ primary, additional: [] }`；名字取卡内 `extensions.world`，其次内嵌书 `characterBook.name`，都没有为 `null` |
@@ -421,7 +430,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `getChatWorldbookNames()` | ⚠️ | 只返回当前聊天的会话绑定（没有为 `[]`），不是全局激活列表 |
 | `setChatLorebook(name)` | ✅ | 写 `chat_metadata.world`（会话级，随聊天文件走） |
 | `getOrCreateChatLorebook()` / `getOrCreateChatWorldbook()` | ✅ | 没有会话绑定就创建一本会话世界书并绑定 |
-| `updateWorldbookWith(name, updater)` | ✅ | 先 `getWorldbook`，在 iframe 内执行 `updater(entries)`，再把结果写入**会话副本**（`lorebook.put`）。基础世界书资产与卡内嵌书永不被写 |
+| `updateWorldbookWith(name, updater)` | ✅ | 先 `getWorldbook`，在 iframe 内执行 `updater(entries)`，再把结果写入**会话副本**（`lorebook.put`）。updater 可返回 ST 或 JSR 形状；JSR 别名在落库前转回 ST 字段。基础世界书资产与卡内嵌书永不被写 |
 | `replaceWorldbook` / `createOrReplaceWorldbook` | ✅ | 写当前聊天的会话副本（整表） |
 | `createWorldbook` / `createLorebook` | ⚠️ | **会话级新建**：写进本聊天的覆盖层；同名基础资产存在时抛错（基础资产不归前端写） |
 | `deleteWorldbook` / `deleteLorebook` | ⚠️ | 会话级删除：只存在于会话的书直接移除；基础资产用空墓碑覆盖本聊天，`worlds/<name>.json` 不动 |

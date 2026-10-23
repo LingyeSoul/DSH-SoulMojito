@@ -291,7 +291,7 @@ export function buildIframeScript(
 
   function variablesFor(option) {
     var scope = scopeOf(option, false);
-    if (scope === 'script') return clone(scriptVariablesFor()) || {};
+    if (scope === 'script') return clone(scriptVariablesFor(option)) || {};
     if (scope === 'preset') return presetVariableTree();
     if (scope !== 'message') return state.variables[scope] || {};
     var index = messageIndex(option && option.message_id);
@@ -307,11 +307,16 @@ export function buildIframeScript(
     return data;
   }
 
+  function variableOwner(option) {
+    return option && typeof option.__scriptId === 'string' && option.__scriptId !== '' ? option.__scriptId : scriptId;
+  }
+
   function rememberScope(option, next) {
     var scope = scopeOf(option, true);
     if (scope === 'message') return;
     if (scope === 'script') {
-      if (scriptId !== '') state.scriptVariables[scriptId] = next;
+      var owner = variableOwner(option);
+      if (owner !== '') state.scriptVariables[owner] = next;
       return;
     }
     if (scope === 'preset') return;
@@ -322,12 +327,12 @@ export function buildIframeScript(
   // to read the currently effective MVU tree without knowing which scope holds it.
   // JSR merges global + character + script + chat, then (message iframes only)
   // accumulates every message's variables up to the current floor.
-  function allVariables() {
+  function allVariables(option) {
     var merged = Object.assign(
       {},
       state.variables.global || {},
       state.variables.character || {},
-      scriptVariablesFor() || {},
+      scriptVariablesFor(option) || {},
       state.variables.chat || {},
     );
     if (currentMessageId >= 0) {
@@ -339,11 +344,12 @@ export function buildIframeScript(
     }
     return merged;
   }
-  window.getAllVariables = function () { return clone(allVariables()) || {}; };
+  window.getAllVariables = function (option) { return clone(allVariables(option)) || {}; };
 
-  function scriptVariablesFor() {
-    if (scriptId === '') return {};
-    var table = state.scriptVariables && state.scriptVariables[scriptId];
+  function scriptVariablesFor(option) {
+    var owner = variableOwner(option);
+    if (owner === '') return {};
+    var table = state.scriptVariables && state.scriptVariables[owner];
     return table && typeof table === 'object' ? table : {};
   }
 
@@ -696,10 +702,11 @@ export function buildIframeScript(
     var scope = scopeOf(target, true);
     var messageId = scope === 'message' ? messageIndex(target.message_id) : undefined;
     var op = scope === 'script' ? 'script.variables.replace' : 'variables.replace';
+    var owner = scope === 'script' ? variableOwner(target) : scriptId;
     var payload = scope === 'script'
-      ? { scriptId: scriptId, variables: next }
+      ? { scriptId: owner, variables: next }
       : { scope: scope, messageId: messageId, variables: next };
-    if (scope === 'script' && scriptId === '') {
+    if (scope === 'script' && owner === '') {
       throw new Error('DSH-SoulMojito: script-scope variables require a script-container iframe');
     }
     variableWriteChain = variableWriteChain
@@ -1295,7 +1302,10 @@ export function buildIframeScript(
   window.getCharacterIds = function () { return clone((state.characters && state.characters.ids) || []); };
   window.getCharWorldbookNames = function () {
     var links = (state.worlds && state.worlds.char) || {};
-    return { primary: links.primary === undefined ? null : links.primary, additional: clone(links.additional || []) };
+    // Linked world first, then the card-embedded book (same order as the
+    // generator and getCurrentCharPrimaryLorebook).
+    var primary = links.primary === undefined || links.primary === null ? links.embedded : links.primary;
+    return { primary: primary === undefined ? null : primary, additional: clone(links.additional || []) };
   };
   window.getCharLorebooks = window.getCharWorldbookNames;
   window.getCurrentCharPrimaryLorebook = function () {
@@ -1488,6 +1498,17 @@ export function buildIframeScript(
     if (type === 'global') return clone(byType.global || []) || [];
     return clone(byType.character === null || byType.character === undefined ? currentScriptTrees() : byType.character) || [];
   }
+  // 脚本容器的节点补丁（info/buttons）要落到**可变**的内存树上：scriptTreesOf
+  // 返回 clone，改 clone 不会让 getAllEnabledScriptButtons / getScriptTrees 看到。
+  function mutableScriptTree(type) {
+    if (!state.scriptTreesByType) state.scriptTreesByType = { character: null, preset: null, global: null };
+    if (type === 'preset') return state.scriptTreesByType.preset;
+    if (type === 'global') return state.scriptTreesByType.global;
+    if (state.scriptTreesByType.character === null || state.scriptTreesByType.character === undefined) {
+      state.scriptTreesByType.character = currentScriptTrees();
+    }
+    return state.scriptTreesByType.character;
+  }
   function setScriptTreesLocal(type, trees) {
     if (!state.scriptTreesByType) state.scriptTreesByType = { character: null, preset: null, global: null };
     if (type === 'preset') state.scriptTreesByType.preset = clone(trees);
@@ -1567,11 +1588,14 @@ export function buildIframeScript(
   function ownScriptNode() {
     return findScriptNodeById(scriptTreesOf('character'), scriptId);
   }
-  function persistOwnScriptPatch(patch) {
-    if (scriptId === '') return;
-    call('scripts.patch', Object.assign({ scriptId: scriptId }, patch)).catch(function (error) {
+  function persistScriptPatch(id, patch) {
+    if (typeof id !== 'string' || id === '') return;
+    call('scripts.patch', Object.assign({ scriptId: id }, patch)).catch(function (error) {
       showToast('error', '脚本信息保存失败: ' + (error && error.message ? error.message : String(error)));
     });
+  }
+  function persistOwnScriptPatch(patch) {
+    persistScriptPatch(scriptId, patch);
   }
   function buttonHash(text) {
     var hash = 0;
@@ -1597,8 +1621,7 @@ export function buildIframeScript(
   };
   window.replaceScriptInfo = function (info) {
     scriptInfo = String(info === undefined || info === null ? '' : info);
-    var node = ownScriptNode();
-    if (node) node.info = scriptInfo;
+    syncNodeInfo(scriptId, scriptInfo);
     persistOwnScriptPatch({ info: scriptInfo });
   };
   window.getButtonEvent = function (name) { return buttonEventId(window.getScriptId(), name); };
@@ -1647,25 +1670,38 @@ export function buildIframeScript(
         return Object.assign({}, button, { visible: button.visible !== false });
       });
   }
-  function syncOwnNodeButtons() {
-    var node = ownScriptNode();
+  function syncNodeButtons(id, buttons) {
+    var node = findScriptNodeById(mutableScriptTree('character'), id);
+    if (node === null) node = findScriptNodeById(currentScriptTrees(), id);
     if (node === null) return;
-    node.button = { enabled: true, buttons: clone(scriptButtons) };
+    node.button = { enabled: true, buttons: clone(buttons) };
   }
-  window.getScriptButtons = function () { return clone(scriptButtons); };
-  function broadcastScriptButtons() {
+  function syncNodeInfo(id, info) {
+    var node = findScriptNodeById(mutableScriptTree('character'), id);
+    if (node === null) node = findScriptNodeById(currentScriptTrees(), id);
+    if (node === null) return;
+    node.info = info;
+  }
+  function syncOwnNodeButtons() {
+    syncNodeButtons(scriptId, scriptButtons);
+  }
+  function broadcastScriptButtonsFor(id, buttons) {
     try {
       realParent.postMessage({
         type: HELPER_BUTTONS_MESSAGE,
         token: token,
-        scriptId: window.getScriptId(),
-        buttons: scriptButtons.map(function (button) {
-          return { name: button.name, visible: button.visible !== false, event: buttonEventId(window.getScriptId(), button.name) };
+        scriptId: id,
+        buttons: buttons.map(function (button) {
+          return { name: button.name, visible: button.visible !== false, event: buttonEventId(id, button.name) };
         }),
       }, '*');
     } catch (error) {
       console.warn('[TavernHelper] script button broadcast failed', error);
     }
+  }
+  window.getScriptButtons = function () { return clone(scriptButtons); };
+  function broadcastScriptButtons() {
+    broadcastScriptButtonsFor(window.getScriptId(), scriptButtons);
   }
   window.replaceScriptButtons = function (buttons) {
     scriptButtons = normalizeScriptButtons(buttons);
@@ -2657,6 +2693,100 @@ export function buildIframeScript(
       }
     });
   }
+  // 共享前端模式（2026-10-23）：自动运行把多段脚本放进同一个美化前端文档，
+  // 但 JSR 的脚本容器按脚本归属信息/按钮。每段脚本在模块顶部绑定这里返回的
+  // scope，裸调用 getScriptId/getScriptInfo/getScriptButtons 即可拿到自己的
+  // 节点；事件仍走同一个 window 的总线，保持脚本间通信。
+  function createScriptScope(identity) {
+    var id = identity !== null && typeof identity === 'object' ? String(identity.scriptId || '') : '';
+    var scopedName = identity !== null && typeof identity === 'object' ? String(identity.scriptName || '') : '';
+    var scopedInfo = identity !== null && typeof identity === 'object' ? String(identity.scriptInfo || '') : '';
+    var buttons = [];
+    var buttonsTouched = false;
+    var infoTouched = false;
+    function ownNode() { return findScriptNodeById(scriptTreesOf('character'), id); }
+    function withScriptScope(option) {
+      if (option && typeof option === 'object' && option.type === 'script') {
+        return Object.assign({}, option, { __scriptId: id });
+      }
+      return option;
+    }
+    function hydrateButtons() {
+      if (buttonsTouched) return;
+      var node = ownNode();
+      if (node !== null && node.button && Array.isArray(node.button.buttons)) {
+        buttons = normalizeScriptButtons(node.button.buttons);
+      }
+    }
+    function replaceButtons(list) {
+      buttons = normalizeScriptButtons(list);
+      buttonsTouched = true;
+      broadcastScriptButtonsFor(id, buttons);
+      syncNodeButtons(id, buttons);
+      persistScriptPatch(id, { buttons: buttons });
+    }
+    var scope = {
+      getScriptId: function () { return id; },
+      getScriptName: function () {
+        var node = ownNode();
+        if (node !== null && typeof node.name === 'string' && node.name !== '') return node.name;
+        return scopedName;
+      },
+      getScriptInfo: function () {
+        if (infoTouched) return scopedInfo;
+        var node = ownNode();
+        if (node !== null && typeof node.info === 'string' && node.info !== '') return node.info;
+        return scopedInfo;
+      },
+      replaceScriptInfo: function (info) {
+        scopedInfo = String(info === undefined || info === null ? '' : info);
+        infoTouched = true;
+        syncNodeInfo(id, scopedInfo);
+        persistScriptPatch(id, { info: scopedInfo });
+      },
+      getIframeName: function () {
+        return id === '' ? 'TH-message-' + currentMessageId : 'TH-script-' + id;
+      },
+      getMessageId: function (iframeName) {
+        if (iframeName === scope.getIframeName()) return currentMessageId;
+        throw new Error('DSH-SoulMojito: iframe "' + String(iframeName) + '" is not registered in this document');
+      },
+      getButtonEvent: function (name) { return buttonEventId(id, name); },
+      eventOnButton: function (name, listener) { return window.eventOn(buttonEventId(id, name), listener); },
+      // Script-scope variables are per script in JSR; the shared document needs
+      // the explicit owner id so two scripts do not read/write one bucket.
+      getVariables: function (option) { return window.getVariables(withScriptScope(option)); },
+      getAllVariables: function () { return window.getAllVariables({ type: 'script', __scriptId: id }); },
+      replaceVariables: function (variables, option) { return window.replaceVariables(variables, withScriptScope(option)); },
+      updateVariablesWith: function (updater, option) { return window.updateVariablesWith(updater, withScriptScope(option)); },
+      insertOrAssignVariables: function (variables, option) { return window.insertOrAssignVariables(variables, withScriptScope(option)); },
+      insertVariables: function (variables, option) { return window.insertVariables(variables, withScriptScope(option)); },
+      deleteVariable: function (variablePath, option) { return window.deleteVariable(variablePath, withScriptScope(option)); },
+      getScriptButtons: function () { hydrateButtons(); return clone(buttons); },
+      replaceScriptButtons: replaceButtons,
+      updateScriptButtonsWith: function (updater) {
+        if (typeof updater !== 'function') throw new Error('DSH-SoulMojito: updateScriptButtonsWith requires a function');
+        hydrateButtons();
+        var next = updater(clone(buttons));
+        replaceButtons(next);
+        return clone(buttons);
+      },
+      appendInexistentScriptButtons: function (list) {
+        hydrateButtons();
+        var existing = new Set(buttons.map(function (button) { return button.name; }));
+        var next = clone(buttons);
+        normalizeScriptButtons(list).forEach(function (button) {
+          if (!existing.has(button.name)) {
+            existing.add(button.name);
+            next.push(button);
+          }
+        });
+        replaceButtons(next);
+      }
+    };
+    return scope;
+  }
+  window.__dshTavernScriptScope = createScriptScope;
   window.__dshTavernHost = host;
   try { Object.defineProperty(window, 'parent', { value: host, configurable: true }); } catch (_) {}
   try { Object.defineProperty(window, 'top', { value: host, configurable: true }); } catch (_) {}

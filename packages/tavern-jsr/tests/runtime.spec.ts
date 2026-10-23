@@ -18,6 +18,10 @@ interface PostedMessage {
   token: string
   id: string
   op: string
+  scriptId?: string
+  event?: string
+  payload?: Record<string, unknown>
+  buttons?: Array<{ name: string; visible: boolean; event: string }>
 }
 
 interface SandboxWindow extends Record<string, unknown> {
@@ -287,6 +291,20 @@ describe('TavernHelper runtime source', () => {
     }
   })
 
+  it('falls back to the card-embedded book name when no world link is set', () => {
+    const { window } = boot(null, baseSnapshot({
+      worlds: {
+        names: [],
+        active: [],
+        char: { primary: null, additional: [], embedded: 'Embedded Book' },
+        chat: null,
+      },
+    }))
+    expect((window as Record<string, unknown>).getCharWorldbookNames).toBeTypeOf('function')
+    const links = (window as { getCharWorldbookNames(): { primary: string | null; additional: string[] } }).getCharWorldbookNames()
+    expect(links).toEqual({ primary: 'Embedded Book', additional: [] })
+  })
+
   it('returns variable writes synchronously with the JSR shapes', () => {
     const { window } = boot(null, baseSnapshot({ variables: { global: {}, chat: { a: 1 }, message: {}, character: {} } }))
     expect(window.replaceVariables({ b: 2 }, { type: 'chat' })).toBeUndefined()
@@ -363,5 +381,76 @@ describe('TavernHelper runtime source', () => {
     window.replaceScriptInfo('{"y":2}')
     expect(window.getScriptInfo()).toBe('{"y":2}')
     expect(posted.some((message) => message.op === 'scripts.patch')).toBe(true)
+  })
+
+  it('scopes identity and buttons per script inside one shared frontend document', () => {
+    const tree = [
+      { type: 'script', id: 'panel', name: 'GM', content: 'void 0', enabled: true, info: '{"x":1}', button: { enabled: true, buttons: [{ name: '打开', visible: true }] } },
+      { type: 'script', id: 'monitor', name: 'Monitor', content: 'void 0', enabled: true, info: '', button: { enabled: false, buttons: [] } },
+    ]
+    const { window, posted } = boot(
+      null,
+      baseSnapshot({ scriptTreesByType: { character: tree, preset: null, global: null }, scriptTrees: tree }),
+    )
+    const createScope = (window as unknown as Record<string, (identity: unknown) => Record<string, any>>).__dshTavernScriptScope
+    expect(typeof createScope).toBe('function')
+    const panel = createScope({ scriptId: 'panel', scriptName: 'GM', scriptInfo: '{"x":1}' })
+    const monitor = createScope({ scriptId: 'monitor', scriptName: 'Monitor', scriptInfo: '' })
+    expect(panel.getScriptId()).toBe('panel')
+    expect(monitor.getScriptId()).toBe('monitor')
+    expect(panel.getScriptName()).toBe('GM')
+    expect(panel.getScriptInfo()).toBe('{"x":1}')
+    expect(panel.getScriptButtons()).toEqual([{ name: '打开', visible: true }])
+    expect(panel.getButtonEvent('打开')).not.toBe(monitor.getButtonEvent('打开'))
+    let opened = 0
+    panel.eventOnButton('打开', () => { opened += 1 })
+    window.dispatch({
+      type: 'message',
+      data: {
+        type: 'dsh-soulmojito:helper-event',
+        token: 'probe-token',
+        event: panel.getButtonEvent('打开'),
+        args: [],
+      },
+    })
+    expect(opened).toBe(1)
+    panel.replaceScriptInfo('{"y":2}')
+    expect(panel.getScriptInfo()).toBe('{"y":2}')
+    expect(posted.some((message) => message.op === 'scripts.patch'
+      && message.payload?.scriptId === 'panel'
+      && message.payload?.info === '{"y":2}')).toBe(true)
+    panel.replaceScriptButtons([{ name: '打开', visible: true }, { name: '隐藏', visible: false }])
+    const broadcast = posted.find((message) => message.type === 'dsh-soulmojito:script-buttons' && message.scriptId === 'panel')
+    expect(broadcast?.buttons).toEqual([
+      { name: '打开', visible: true, event: panel.getButtonEvent('打开') },
+      { name: '隐藏', visible: false, event: panel.getButtonEvent('隐藏') },
+    ])
+    expect(window.getAllEnabledScriptButtons().panel).toEqual([
+      { button_id: panel.getButtonEvent('打开'), button_name: '打开' },
+    ])
+  })
+
+  it('scopes script variables per script inside one shared frontend document', async () => {
+    const { window, posted } = boot(
+      null,
+      baseSnapshot({
+        scriptVariables: { panel: { a: 1 }, monitor: { a: 2 } },
+        scriptTreesByType: { character: [], preset: null, global: null },
+        scriptTrees: [],
+      }),
+    )
+    const createScope = (window as unknown as Record<string, (identity: unknown) => Record<string, any>>).__dshTavernScriptScope
+    const panel = createScope({ scriptId: 'panel', scriptName: 'GM', scriptInfo: '' })
+    const monitor = createScope({ scriptId: 'monitor', scriptName: 'Monitor', scriptInfo: '' })
+    expect(panel.getVariables({ type: 'script' })).toEqual({ a: 1 })
+    panel.replaceVariables({ a: 3 }, { type: 'script' })
+    expect(panel.getVariables({ type: 'script' })).toEqual({ a: 3 })
+    expect(monitor.getVariables({ type: 'script' })).toEqual({ a: 2 })
+    expect(panel.getAllVariables().a).toBe(3)
+    expect(monitor.getAllVariables().a).toBe(2)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(posted.some((message) => message.op === 'script.variables.replace'
+      && message.payload?.scriptId === 'panel'
+      && (message.payload?.variables as Record<string, number> | undefined)?.a === 3)).toBe(true)
   })
 })

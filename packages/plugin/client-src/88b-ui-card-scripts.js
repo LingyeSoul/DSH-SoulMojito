@@ -375,9 +375,11 @@
           },
           h('div', { className: 'dt-card-script-head' },
             h('strong', null, script.name),
-            !autoRunning && runningId === script.id
-              ? h('span', { className: 'dt-card-script-running' }, t('cardScripts.running'))
-              : null,
+            autoRunHostedInFrontend && script.enabled !== false
+              ? h('span', { className: 'dt-card-script-running' }, t('cardScripts.sharedHost'))
+              : !autoRunning && runningId === script.id
+                ? h('span', { className: 'dt-card-script-running' }, t('cardScripts.running'))
+                : null,
             h('span', { className: 'dt-card-script-meta' },
               t('cardScripts.charCount', { count: script.content.length }))),
           script.info !== '' ? h('p', { className: 'dt-hint' }, script.info) : null,

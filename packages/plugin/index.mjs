@@ -11335,20 +11335,42 @@ function collectRegexScripts(state, character) {
   const byName = /* @__PURE__ */ new Map();
   for (const script of scripts) if (!byName.has(script.scriptName)) byName.set(script.scriptName, script);
   const effective = [...byName.values()];
-  const names = new Set(effective.map((script) => script.scriptName));
   const cardScripts = character?.card.data.extensions["regex_scripts"];
+  const cardParsed = [];
   if (cardScripts !== void 0 && cardScripts !== null) {
     try {
-      for (const script of parseRegexScripts2(cardScripts)) {
-        if (!names.has(script.scriptName)) {
-          names.add(script.scriptName);
-          effective.push(script);
-        }
-      }
+      cardParsed.push(...parseRegexScripts2(cardScripts));
     } catch {
     }
   }
-  return effective;
+  const cardOrder = /* @__PURE__ */ new Map();
+  cardParsed.forEach((script, index) => {
+    if (!cardOrder.has(script.scriptName)) cardOrder.set(script.scriptName, index);
+  });
+  const cardOwned = (script) => currentName !== void 0 && state.regexScriptOwners?.[script.id] === currentName;
+  const ordered = effective.map((script, index) => ({ script, index })).sort((left, right) => {
+    const leftCard = cardOwned(left.script);
+    const rightCard = cardOwned(right.script);
+    if (leftCard !== rightCard) return leftCard ? 1 : -1;
+    if (leftCard) {
+      const leftOrder = cardOrder.get(left.script.scriptName);
+      const rightOrder = cardOrder.get(right.script.scriptName);
+      if (leftOrder !== void 0 && rightOrder !== void 0 && leftOrder !== rightOrder) {
+        return leftOrder - rightOrder;
+      }
+      if (leftOrder !== void 0 && rightOrder === void 0) return -1;
+      if (leftOrder === void 0 && rightOrder !== void 0) return 1;
+    }
+    return left.index - right.index;
+  }).map((entry) => entry.script);
+  const names = new Set(ordered.map((script) => script.scriptName));
+  for (const script of cardParsed) {
+    if (!names.has(script.scriptName)) {
+      names.add(script.scriptName);
+      ordered.push(script);
+    }
+  }
+  return ordered;
 }
 async function buildAgentTavernPreloadSnapshot(db, state, characterName, character, expand = (text) => text) {
   const books = await collectWorldInfoBooks(db, state, characterName, character);
@@ -13786,7 +13808,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.9".trim() : "";
-  const commit = true ? normalizeCommit("ee723c3") : void 0;
+  const commit = true ? normalizeCommit("e26a793") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -30514,6 +30536,79 @@ async function generateWithCustomApi(value) {
   return text;
 }
 
+// packages/plugin/src/frontend-generation-context.ts
+function asObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+function stringsOf(value) {
+  if (typeof value === "string") return [value];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => typeof item === "string");
+}
+function scanTextOf(config) {
+  const parts = stringsOf(config["scanKeywords"]);
+  const injects = Array.isArray(config["injects"]) ? config["injects"] : [];
+  for (const raw of injects) {
+    const inject2 = asObject(raw);
+    if (inject2 === void 0 || inject2["should_scan"] !== true) continue;
+    const content = inject2["content"];
+    if (typeof content === "string" && content.trim() !== "") parts.push(content);
+  }
+  return [...new Set(parts.map((part) => part.trim()).filter((part) => part !== ""))].join("\n");
+}
+function isScanOnlyInject(value) {
+  const inject2 = asObject(value);
+  return inject2 !== void 0 && inject2["should_scan"] === true && inject2["position"] === "none";
+}
+function activatedContent(lore) {
+  const seen = /* @__PURE__ */ new Set();
+  const parts = [];
+  for (const entry of lore.allActivated) {
+    if (entry.position === WI_POSITION2.OUTLET) continue;
+    const text = entry.content.trim();
+    if (text === "" || seen.has(text)) continue;
+    seen.add(text);
+    parts.push(text);
+  }
+  return parts;
+}
+async function applyFrontendWorldbookScan(db, state, character, chatId, config) {
+  const record = asObject(config);
+  if (record === void 0) return config;
+  const scanText = scanTextOf(record);
+  if (scanText === "" || chatId === "") return config;
+  const file = await db.getCharacter(character);
+  if (file === void 0) return config;
+  const books = await collectWorldInfoBooks(db, state, character, file, chatId);
+  if (books.length === 0) return config;
+  const persona = state.activePersona === void 0 ? void 0 : await db.getPersona(state.activePersona);
+  const lore = activateWorldInfo({
+    books,
+    chat: [{ name: "user", content: scanText, isUser: true }],
+    contextSize: 4096,
+    trigger: "normal",
+    scanSources: {
+      personaDescription: typeof persona?.["description"] === "string" ? persona["description"] : void 0,
+      characterDescription: file.card.data.description,
+      characterPersonality: file.card.data.personality,
+      scenario: file.card.data.scenario,
+      creatorNotes: file.card.data.creatorNotes
+    },
+    settings: { recursive: true, scanDepth: 2, budgetPercent: 25 },
+    messageCount: 1
+  });
+  const content = activatedContent(lore).join("\n\n");
+  if (content === "") return config;
+  const injects = Array.isArray(record["injects"]) ? record["injects"] : [];
+  return {
+    ...record,
+    injects: [
+      { role: "system", content, position: "in_chat", depth: 0 },
+      ...injects.filter((inject2) => !isScanOnlyInject(inject2))
+    ]
+  };
+}
+
 // packages/plugin/src/helper.ts
 var VARIABLE_NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
 async function handleHelperApi(req, res, db) {
@@ -30547,9 +30642,10 @@ async function handleHelperApi(req, res, db) {
     }
     case "generate": {
       requireSessionChatId(chatId, "generate");
+      const config = await applyFrontendWorldbookScan(db, state, character, chatId, body?.config);
       return sendJson(res, 200, {
         ok: true,
-        value: { text: await generateWithCustomApi(body?.config) }
+        value: { text: await generateWithCustomApi(config) }
       });
     }
     // 沙箱 localStorage 持久层（2026-10-22）：按角色保存小型设置，供下一次
@@ -30663,7 +30759,7 @@ async function handleHelperApi(req, res, db) {
       }
       return sendJson(res, 200, {
         ok: true,
-        value: { name: name2, entries: resolved.entries.map((entry) => ({ world: name2, ...entry })) }
+        value: { name: name2, entries: resolved.entries.map((entry) => worldbookReaderEntry(entry, name2)) }
       });
     }
     // Session world copy (2026-10-21): scripts write the chat overlay only.
@@ -31030,6 +31126,45 @@ async function isAgentTavernBound(db, chatId) {
   const state = await db.getState();
   return Object.values(state.sessionBindings).some((binding) => binding.architecture === "agent-tavern" && binding.chatId === chatId);
 }
+function worldbookReaderEntry(entry, world) {
+  return {
+    ...cloneJson(entry),
+    world,
+    name: entry.comment,
+    enabled: entry.disable !== true,
+    strategy: {
+      type: entry.constant === true ? "constant" : entry.vectorized === true ? "vectorized" : "selective",
+      keys: cloneJson(entry.key),
+      keys_secondary: cloneJson(entry.keysecondary)
+    }
+  };
+}
+function worldbookWriterEntry(entry) {
+  const next = cloneJson(entry);
+  delete next["world"];
+  const strategy = isPlainObject4(next["strategy"]) ? next["strategy"] : void 0;
+  if (strategy !== void 0) {
+    if (Array.isArray(strategy["keys"])) {
+      next["key"] = strategy["keys"].filter((key) => typeof key === "string");
+    }
+    const secondary = strategy["keys_secondary"] ?? strategy["secondary_keys"];
+    if (Array.isArray(secondary)) {
+      next["keysecondary"] = secondary.filter((key) => typeof key === "string");
+    }
+    if (strategy["type"] === "constant") next["constant"] = true;
+    if (strategy["type"] === "vectorized") next["vectorized"] = true;
+    delete next["strategy"];
+  }
+  if (typeof next["enabled"] === "boolean") {
+    next["disable"] = next["enabled"] !== true;
+    delete next["enabled"];
+  }
+  if (typeof next["name"] === "string") {
+    next["comment"] = next["name"];
+    delete next["name"];
+  }
+  return next;
+}
 async function defaultLorebookName(db, state, character) {
   const file = await db.getCharacter(character);
   const world = file?.card.data.extensions?.["world"];
@@ -31099,15 +31234,14 @@ async function putLorebook(db, character, chatId, body) {
       entries,
       ...base.extra === void 0 ? {} : { extra: cloneJson(base.extra) }
     });
-    return { name: name2, entries: entries.map((entry) => ({ world: name2, ...entry })) };
+    return { name: name2, entries: entries.map((entry) => worldbookReaderEntry(entry, name2)) };
   });
 }
 function requireLorebookEntries(value) {
   if (!Array.isArray(value)) throw new Error("entries must be an array of world book entries");
   return value.map((entry, index) => {
     if (!isPlainObject4(entry)) throw new Error(`entries[${index}] must be an object (got ${entry === null ? "null" : typeof entry})`);
-    const { world: _world, ...rest } = entry;
-    return cloneJson(rest);
+    return worldbookWriterEntry(entry);
   });
 }
 function normalizeLorebookEntries(raw) {
@@ -31156,7 +31290,7 @@ async function createLorebook(db, character, chatId, body) {
       throw new Error(`world book '${name2}' already exists in this chat`);
     }
     await db.putChatWorld(character, chatId, { name: name2, entries, extra: { __jsrSession: true } });
-    return { name: name2, entries: entries.map((entry) => ({ world: name2, ...entry })) };
+    return { name: name2, entries: entries.map((entry) => worldbookReaderEntry(entry, name2)) };
   });
 }
 async function deleteLorebookSession(db, character, chatId, body) {

@@ -17,6 +17,9 @@ const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, '../client/main.js'), 'utf8')
 
 interface CardScript {
+  id?: string
+  name?: string
+  info?: string
   content: string
 }
 
@@ -56,7 +59,47 @@ describe('frontend + card script composition', () => {
     )
     expect(html).toContain(content)
     expect(html).toContain('<div id="hud">HP</div>')
-    expect(html.endsWith(`<script type="module">${content}</script></body></html>`)).toBe(true)
+    expect(html).toContain('window.__dshTavernScriptScope')
+    expect(html.endsWith('</script></body></html>')).toBe(true)
+  })
+
+  it('gives every shared-document script its own container scope', () => {
+    const { frontendCardScriptBlocks } = loadComposer()
+    const blocks = frontendCardScriptBlocks([
+      { id: 'panel', name: 'GM', info: '{"x":1}', content: 'window.__ran = true' },
+      { id: 'monitor', name: 'Monitor', info: '', content: 'window.__monitor = true' },
+    ])
+    expect(blocks).toContain('window.__dshTavernScriptScope({ scriptId: "panel", scriptName: "GM", scriptInfo: "{\\"x\\":1}" })')
+    expect(blocks).toContain('window.__dshTavernScriptScope({ scriptId: "monitor", scriptName: "Monitor", scriptInfo: "" })')
+    expect(blocks).toContain('const getScriptId = __dshTavernScope.getScriptId;')
+    expect(blocks).toContain('const replaceScriptButtons = __dshTavernScope.replaceScriptButtons;')
+    expect(blocks).toContain('window.__ran = true')
+    expect(blocks).toContain('window.__monitor = true')
+  })
+
+  it('produces a syntactically valid module block with the injected scope', () => {
+    const { frontendCardScriptBlocks } = loadComposer()
+    const block = frontendCardScriptBlocks([
+      { id: 'panel', name: 'GM', info: '', content: '(function () { window.__ran = getScriptId() === "panel" })()' },
+    ])
+    const code = block.slice(block.indexOf('>') + 1, block.lastIndexOf('</script>'))
+    const scope = new Proxy({}, { get: () => () => 'panel' })
+    const fakeWindow: Record<string, unknown> = { __dshTavernScriptScope: () => scope, __ran: false }
+    // Top-level `const` bindings are module scope; Function is the closest
+    // dependency-free way to catch a missing semicolon or bad identifier here.
+    const factory = new Function('window', code)
+    factory(fakeWindow)
+    expect(fakeWindow.__ran).toBe(true)
+  })
+
+  it('keeps a script helper when the script declares the same name', () => {
+    const { frontendCardScriptBlocks } = loadComposer()
+    const blocks = frontendCardScriptBlocks([
+      { id: 'own', name: 'Own', info: '', content: 'function getScriptId() { return "own" }\nwindow.__own = getScriptId()' },
+    ])
+    expect(blocks).not.toContain('const getScriptId = __dshTavernScope.getScriptId;')
+    expect(blocks).toContain('const getScriptName = __dshTavernScope.getScriptName;')
+    expect(blocks).toContain('function getScriptId() { return "own" }')
   })
 
   it('escapes closing script tags case-insensitively and leaves one wrapper tag', () => {
@@ -68,9 +111,10 @@ describe('frontend + card script composition', () => {
 
   it('gives scripts a standalone canvas when the chat has no frontend document', () => {
     const { frontendWithCardScripts } = loadComposer()
-    const html = frontendWithCardScripts('', [{ content: 'window.__ran = true' }])
+    const html = frontendWithCardScripts('', [{ id: 'probe', name: 'Probe', info: '', content: 'window.__ran = true' }])
     expect(html).toContain('<div style="height:720px"></div>')
-    expect(html).toContain('<script type="module">window.__ran = true</script>')
+    expect(html).toContain('window.__ran = true')
+    expect(html).toContain('window.__dshTavernScriptScope')
     expect(html).toContain('font-awesome')
   })
 

@@ -96,23 +96,52 @@ export function collectRegexScripts(
   const byName = new Map<string, RegexScriptIR>()
   for (const script of scripts) if (!byName.has(script.scriptName)) byName.set(script.scriptName, script)
   const effective = [...byName.values()]
-  // 运行期再并入当前角色卡的卡内脚本；按 scriptName 去重，全局（可编辑、
-  // 已导入）优先，避免同一脚本被应用两次。
-  const names = new Set(effective.map((script) => script.scriptName))
+  // 卡内脚本的链式顺序是作者写死的（先放行占位符，再渲染状态栏/警告）。导入后
+  // state.regexScripts 的顺序可能被同步/重导打乱，按卡内数组顺序恢复，否则
+  // catch-all 警告会先吃掉 `<StatusPlaceHolderImpl/>`，状态栏永远显示「未更新」。
   const cardScripts = character?.card.data.extensions['regex_scripts']
+  const cardParsed: RegexScriptIR[] = []
   if (cardScripts !== undefined && cardScripts !== null) {
     try {
-      for (const script of parseRegexScripts(cardScripts)) {
-        if (!names.has(script.scriptName)) {
-          names.add(script.scriptName)
-          effective.push(script)
-        }
-      }
+      cardParsed.push(...parseRegexScripts(cardScripts))
     } catch {
       // A malformed card extension must not disable valid global scripts.
     }
   }
-  return effective
+  const cardOrder = new Map<string, number>()
+  cardParsed.forEach((script, index) => {
+    if (!cardOrder.has(script.scriptName)) cardOrder.set(script.scriptName, index)
+  })
+  const cardOwned = (script: RegexScriptIR): boolean =>
+    currentName !== undefined && state.regexScriptOwners?.[script.id] === currentName
+  const ordered = effective
+    .map((script, index) => ({ script, index }))
+    .sort((left, right) => {
+      const leftCard = cardOwned(left.script)
+      const rightCard = cardOwned(right.script)
+      if (leftCard !== rightCard) return leftCard ? 1 : -1
+      if (leftCard) {
+        const leftOrder = cardOrder.get(left.script.scriptName)
+        const rightOrder = cardOrder.get(right.script.scriptName)
+        if (leftOrder !== undefined && rightOrder !== undefined && leftOrder !== rightOrder) {
+          return leftOrder - rightOrder
+        }
+        if (leftOrder !== undefined && rightOrder === undefined) return -1
+        if (leftOrder === undefined && rightOrder !== undefined) return 1
+      }
+      return left.index - right.index
+    })
+    .map((entry) => entry.script)
+  // 运行期再并入当前角色卡的卡内脚本；按 scriptName 去重，全局（可编辑、
+  // 已导入）优先，避免同一脚本被应用两次。
+  const names = new Set(ordered.map((script) => script.scriptName))
+  for (const script of cardParsed) {
+    if (!names.has(script.scriptName)) {
+      names.add(script.scriptName)
+      ordered.push(script)
+    }
+  }
+  return ordered
 }
 
 /** Build the one-time, model-facing AgentTavern initialization context. */

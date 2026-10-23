@@ -68,8 +68,18 @@ JSR 4.11 的变量写 API、正则读/格式化 API、脚本树读 API 都是同
 `scriptId`/`scriptName`/`scriptInfo`、`getScriptInfo`/`replaceScriptInfo`、
 `getScriptTrees(type)`/`replaceScriptTrees`、`getAllEnabledScriptButtons`；
 脚本上报的按钮渲染为容器按钮条，点击按 `getButtonEvent(name)` 回投事件。
-AgentTavern 的 `cardScriptsAutoRun` 保持既有语义（注入「美化前端」同一文档），
-容器 tab 负责隔离运行与手动管理。
+AgentTavern 的 `cardScriptsAutoRun` 仍是共享前端模式（注入「美化前端」同一文档，
+GM 面板要叠在前端上）：每段脚本注入 per-script scope，`getScriptId` /
+`getScriptName` / `getScriptInfo` / `replaceScriptInfo`、按钮 API 以及
+`{ type: 'script' }` 变量读写按所属脚本归属，按钮条渲染在「美化前端」tab 并回投；
+脚本之间共享 DOM/事件总线，不做逐脚本隔离。容器 tab 负责手动运行与 ST 自动运行
+的逐脚本隔离；共享模式里的显式 `window.*` / `TavernHelper.*` 调用仍是共享面，
+`window.getScriptId()` 返回前端占位 id。
+
+未采用「自动运行也逐脚本 iframe」：GM 面板的悬浮球/面板要叠在美化前端上，
+而 `eventEmit` 是 iframe 本地的、`getScriptTrees` 在每个 iframe 各有一份副本，
+拆开还需要跨 iframe 事件总线和脚本树广播；这条路的收益（隔离）与 2026-10-21
+已确认的叠层需求直接冲突，留待以后有独立 overlay 宿主时再评估。
 
 ### 5. 框架面
 
@@ -95,11 +105,14 @@ AgentTavern 的 `cardScriptsAutoRun` 保持既有语义（注入「美化前端�
   `refreshOneMessage`：显式抛错。
 - 消息正文与完整 HTML 文档同楼时，正文保留在 iframe 上方；JSR 的「逐 `<pre>` 原地替换」
   不逐字复刻。
+- AgentTavern 自动运行没有逐脚本隔离：脚本共享前端文档的 DOM 与事件总线；
+  per-script scope 只覆盖裸调用，显式 `window.getScriptId()` 仍是共享占位 id。
 
 ## 测试
 
 - `packages/tavern-jsr/tests/runtime.spec.ts`：179 个公共名 golden、同步变量写、宏展开、
-  正则签名/目的地过滤、ST 形状 chat/eventSource、脚本容器身份/按钮聚合。
+  正则签名/目的地过滤、ST 形状 chat/eventSource、脚本容器身份/按钮聚合、共享文档
+  per-script 身份/按钮/脚本变量隔离。
 - `packages/plugin/tests/helper-route.spec.ts`：脚本树三来源与 info/buttons 回写、
   会话世界书新建/墓碑删除、聊天世界书绑定、预设/人设会话副本、楼层旋转、EJS 渲染。
 - `packages/plugin/tests/helper-client.spec.ts`、`card-scripts*.spec.ts`：客户端标记与容器行为。

@@ -328,6 +328,59 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     expect(again.body?.value).toEqual({ name: 'Helper Lore', reset: true })
   })
 
+  it('lorebook.get 以 JSR 形状读回，lorebook.put 接受 JSR 形状且只写会话副本', async () => {
+    const base = await call({ op: 'lorebook.get', character: CHARACTER, chatId, name: 'Helper Lore' })
+    const baseEntry = (base.body?.value as { entries: Array<Record<string, unknown>> }).entries[0]
+    expect(baseEntry).toMatchObject({
+      world: 'Helper Lore',
+      name: 'base',
+      enabled: true,
+      strategy: { keys: [] },
+    })
+
+    const written = await call({
+      op: 'lorebook.put',
+      character: CHARACTER,
+      chatId,
+      name: 'Helper Lore',
+      entries: [{
+        uid: 0,
+        name: 'session entry',
+        enabled: false,
+        strategy: { type: 'selective', keys: ['[TAG:EXAMPLE]'], keys_secondary: [] },
+        content: 'session lore',
+      }],
+    })
+    const writtenEntry = (written.body?.value as { entries: Array<Record<string, unknown>> }).entries[0]
+    expect(writtenEntry).toMatchObject({
+      world: 'Helper Lore',
+      name: 'session entry',
+      enabled: false,
+      strategy: { keys: ['[TAG:EXAMPLE]'] },
+      content: 'session lore',
+    })
+
+    const copy = await call({ op: 'lorebook.get', character: CHARACTER, chatId, name: 'Helper Lore' })
+    expect((copy.body?.value as { entries: Array<Record<string, unknown>> }).entries[0]).toMatchObject({
+      name: 'session entry',
+      enabled: false,
+      strategy: { keys: ['[TAG:EXAMPLE]'] },
+      content: 'session lore',
+    })
+
+    // Shared asset stays untouched: JSR aliases are converted before the write.
+    const baseAsset = await store.getWorld('Helper Lore')
+    expect(baseAsset?.entries[0]).toMatchObject({ comment: 'base', content: 'base lore', key: [], disable: false })
+    const storedCopy = await store.getChatWorld(CHARACTER, chatId, 'Helper Lore')
+    expect(storedCopy?.entries[0]).toMatchObject({
+      comment: 'session entry',
+      content: 'session lore',
+      key: ['[TAG:EXAMPLE]'],
+      disable: true,
+    })
+    expect(storedCopy?.entries[0]).not.toHaveProperty('strategy')
+  })
+
   it('lorebook.put 拒绝缺少会话作用域或形状非法的 entries', async () => {
     const noChat = await call({ op: 'lorebook.put', character: CHARACTER, chatId: '', name: 'Helper Lore', entries: [] })
     expect(noChat.status).toBe(500)

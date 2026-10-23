@@ -15,7 +15,7 @@
  * (get/set/create/delete), character read, lorebook read, slash commands, regex
  * list/replace, plus a snapshot used for synchronous iframe reads.
  */
-import type { ChatLogIR, ChatMessage, WorldBookIR } from '../../tavern-format/src/index.js'
+import type { ChatLogIR, ChatMessage, LoreEntry, WorldBookIR } from '../../tavern-format/src/index.js'
 import { RegexPlacement, cardDataToRaw, normalizeEntry, parseCharacterBook, parseRegexScripts } from '../../tavern-format/src/index.js'
 import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { renderSandboxed } from '../../tavern-template/src/index.js'
@@ -34,6 +34,7 @@ import {
 } from '../../tavern-frontend-storage/src/index.js'
 import { readJson, sendJson } from './http/io.js'
 import { generateWithCustomApi, listCustomApiModels } from './frontend-generation.js'
+import { applyFrontendWorldbookScan } from './frontend-generation-context.js'
 import { tavernDataRoot } from './dsh-home.js'
 import { overlayChatScopedVariables, readChatVariables } from './mvu.js'
 import { ensureChatVariables } from './agent-tavern/mvu-compat.js'
@@ -78,9 +79,10 @@ export async function handleHelperApi(req: unknown, res: unknown, db: TavernStor
     }
     case 'generate': {
       requireSessionChatId(chatId, 'generate')
+      const config = await applyFrontendWorldbookScan(db, state, character, chatId, body?.config)
       return sendJson(res, 200, {
         ok: true,
-        value: { text: await generateWithCustomApi(body?.config) },
+        value: { text: await generateWithCustomApi(config) },
       })
     }
     // 沙箱 localStorage 持久层（2026-10-22）：按角色保存小型设置，供下一次
@@ -198,7 +200,7 @@ export async function handleHelperApi(req: unknown, res: unknown, db: TavernStor
       }
       return sendJson(res, 200, {
         ok: true,
-        value: { name, entries: resolved.entries.map((entry) => ({ world: name, ...entry })) },
+        value: { name, entries: resolved.entries.map((entry) => worldbookReaderEntry(entry, name)) },
       })
     }
     // Session world copy (2026-10-21): scripts write the chat overlay only.
@@ -648,6 +650,53 @@ async function isAgentTavernBound(db: TavernStore, chatId: string): Promise<bool
   return Object.values(state.sessionBindings).some((binding) => binding.architecture === 'agent-tavern' && binding.chatId === chatId)
 }
 
+/**
+ * Reader shape for frontend scripts: ST fields stay intact, JSR aliases are
+ * added (`name`/`enabled`/`strategy.keys`). Aliases are stripped back to ST
+ * fields before a session copy is written.
+ */
+function worldbookReaderEntry(entry: LoreEntry, world: string): JsonObject {
+  return {
+    ...cloneJson(entry),
+    world,
+    name: entry.comment,
+    enabled: entry.disable !== true,
+    strategy: {
+      type: entry.constant === true ? 'constant' : entry.vectorized === true ? 'vectorized' : 'selective',
+      keys: cloneJson(entry.key),
+      keys_secondary: cloneJson(entry.keysecondary),
+    },
+  }
+}
+
+/** JSR entry aliases → ST fields; `world` is a read-side annotation. */
+function worldbookWriterEntry(entry: JsonObject): JsonObject {
+  const next = cloneJson(entry)
+  delete next['world']
+  const strategy = isPlainObject(next['strategy']) ? next['strategy'] : undefined
+  if (strategy !== undefined) {
+    if (Array.isArray(strategy['keys'])) {
+      next['key'] = strategy['keys'].filter((key): key is string => typeof key === 'string')
+    }
+    const secondary = strategy['keys_secondary'] ?? strategy['secondary_keys']
+    if (Array.isArray(secondary)) {
+      next['keysecondary'] = secondary.filter((key): key is string => typeof key === 'string')
+    }
+    if (strategy['type'] === 'constant') next['constant'] = true
+    if (strategy['type'] === 'vectorized') next['vectorized'] = true
+    delete next['strategy']
+  }
+  if (typeof next['enabled'] === 'boolean') {
+    next['disable'] = next['enabled'] !== true
+    delete next['enabled']
+  }
+  if (typeof next['name'] === 'string') {
+    next['comment'] = next['name']
+    delete next['name']
+  }
+  return next
+}
+
 /** 角色卡绑定的世界书（extensions.world）优先，其次全局激活书，最后卡内嵌书。 */
 async function defaultLorebookName(db: TavernStore, state: TavernState, character: string): Promise<string | undefined> {
   const file = await db.getCharacter(character)
@@ -746,21 +795,21 @@ async function putLorebook(
       entries,
       ...(base.extra === undefined ? {} : { extra: cloneJson(base.extra) }),
     })
-    return { name, entries: entries.map((entry) => ({ world: name, ...entry })) }
+    return { name, entries: entries.map((entry) => worldbookReaderEntry(entry, name)) }
   })
 }
 
 /**
  * `entries` must be an array of objects; `world` is a read-side annotation from
- * `lorebook.get` and is stripped before normalization. Missing/duplicate uids
- * get a fresh number because the lore engine addresses entries by uid.
+ * `lorebook.get` and JSR aliases (`name`/`enabled`/`strategy`) are converted
+ * back to ST fields before normalization. Missing/duplicate uids get a fresh
+ * number because the lore engine addresses entries by uid.
  */
 function requireLorebookEntries(value: unknown): JsonObject[] {
   if (!Array.isArray(value)) throw new Error('entries must be an array of world book entries')
   return value.map((entry, index) => {
     if (!isPlainObject(entry)) throw new Error(`entries[${index}] must be an object (got ${entry === null ? 'null' : typeof entry})`)
-    const { world: _world, ...rest } = entry
-    return cloneJson(rest)
+    return worldbookWriterEntry(entry)
   })
 }
 
@@ -826,7 +875,7 @@ async function createLorebook(
       throw new Error(`world book '${name}' already exists in this chat`)
     }
     await db.putChatWorld(character, chatId, { name, entries, extra: { __jsrSession: true } })
-    return { name, entries: entries.map((entry) => ({ world: name, ...entry })) }
+    return { name, entries: entries.map((entry) => worldbookReaderEntry(entry, name)) }
   })
 }
 

@@ -2135,7 +2135,7 @@ window.__ModuleLoader__.load({
       'settings.allowGlobalWrites': 'Allow AgentTavern tools to write memories and variables in the global scope',
       'settings.frontendAutoOpen': 'Open the right sidebar when a frontend appears (once per chat)',
       'settings.cardScriptsAutoRun': 'Run card scripts automatically when entering a chat (off by default)',
-      'settings.cardScriptsAutoRunHint': 'Opening a Tavern chat opens the tab that hosts auto-run: Frontend for AgentTavern, Card scripts for ST. Every enabled card script is injected into that frontend’s sandboxed document. Scripts share its DOM and globals and can write this chat’s variables, messages, session world-book copy and session script-tree copy. Enable only for cards you trust.',
+      'settings.cardScriptsAutoRunHint': 'Opening a Tavern chat opens the tab that hosts auto-run: Frontend for AgentTavern, Card scripts for ST. Every enabled card script is injected into that frontend’s sandboxed document. Scripts share its DOM and globals and can write this chat’s variables, messages, session world-book copy and session script-tree copy. In AgentTavern their buttons appear inside Frontend, and shared mode has no per-script isolation. Enable only for cards you trust.',
       'settings.frontendAllowExternalResources': 'Allow frontends to load external resources (any HTTPS origin)',
       'settings.frontendAllowExternalResourcesHint': 'Lets the iframe load any HTTPS script or stylesheet, and allows fetch/XHR plus CDN source maps (connect-src https: blob:). External scripts can read the chat content visible to the frontend and send it elsewhere; enable only for cards you trust.',
       'settings.gamesDisableResign': 'Disable resign in games (hides the resign button; the AI cannot resign either)',
@@ -2821,7 +2821,9 @@ window.__ModuleLoader__.load({
       'cardScripts.autoRunning': 'Auto-running ({count} scripts)',
       'cardScripts.stopAutoRun': 'Stop auto-run',
       'cardScripts.autoRunStopped': 'Auto-run stopped. Run scripts manually, or turn auto-run back on in settings.',
-      'cardScripts.autoHostedInFrontend': 'Auto-run is hosted by Frontend; this tab keeps the list and reset entries, and manual Run is disabled while auto-run is on.',
+      'cardScripts.autoHostedInFrontend': 'Auto-run is hosted by Frontend: scripts share that document and their buttons appear inside Frontend. This tab keeps the list and reset entries; manual Run is disabled while auto-run is on.',
+      'cardScripts.sharedHost': 'Hosted by Frontend',
+      'cardScripts.buttons': 'Script buttons',
       'cardScripts.openFrontend': 'Open Frontend',
       'cardScripts.resetWorldbook': 'Reset session world book',
       'cardScripts.resetConfirm': 'Resetting discards every world-book change made in this chat and restores the card original. Continue?',
@@ -3044,7 +3046,7 @@ window.__ModuleLoader__.load({
       'settings.allowGlobalWrites': '允许 AgentTavern 工具写入 global 作用域的记忆和变量',
       'settings.frontendAutoOpen': '美化前端出现时自动打开右侧栏（每聊天一次）',
       'settings.cardScriptsAutoRun': '进入聊天时自动运行卡内脚本（默认关闭）',
-      'settings.cardScriptsAutoRunHint': '开启后进入酒馆聊天会自动打开承载自动运行的右栏 tab：AgentTavern 用「美化前端」，ST 用「卡脚本」。卡内全部启用脚本会注入该前端所在的同一个沙箱文档，脚本共享 DOM 与全局变量，拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限；只对信任的角色卡开启。',
+      'settings.cardScriptsAutoRunHint': '开启后进入酒馆聊天会自动打开承载自动运行的右栏 tab：AgentTavern 用「美化前端」，ST 用「卡脚本」。卡内全部启用脚本会注入该前端所在的同一个沙箱文档，脚本共享 DOM 与全局变量，拥有当前聊天的变量、消息、会话世界书副本与会话脚本树副本写权限；AgentTavern 的脚本按钮显示在美化前端里，共享模式不做逐脚本隔离。只对信任的角色卡开启。',
       'settings.frontendAllowExternalResources': '允许美化前端加载外部资源（任意 HTTPS 源）',
       'settings.frontendAllowExternalResourcesHint': '开启后 iframe 可加载任意 HTTPS 脚本/样式，并允许 fetch/XHR 与 CDN sourcemap（connect-src https: blob:）。外部脚本能读取前端可见的聊天内容并发送到外部服务器，请只对信任的角色卡开启。',
       'settings.gamesDisableResign': '禁用投降（隐藏投降按钮，AI 也不能认输）',
@@ -3720,7 +3722,9 @@ window.__ModuleLoader__.load({
       'cardScripts.autoRunning': '自动运行中（{count} 个脚本）',
       'cardScripts.stopAutoRun': '停止自动运行',
       'cardScripts.autoRunStopped': '已停止自动运行；可手动运行单个脚本，或在设置中重新开启自动运行。',
-      'cardScripts.autoHostedInFrontend': '自动运行已由「美化前端」承载；本 tab 保留列表与重置入口，开启自动运行时手动运行禁用。',
+      'cardScripts.autoHostedInFrontend': '自动运行已由「美化前端」承载：脚本与前端共享同一个文档，脚本按钮显示在美化前端里；本 tab 保留列表与重置入口，开启自动运行时手动运行禁用。',
+      'cardScripts.sharedHost': '由美化前端承载',
+      'cardScripts.buttons': '脚本按钮',
       'cardScripts.openFrontend': '打开美化前端',
       'cardScripts.resetWorldbook': '重置会话世界书',
       'cardScripts.resetConfirm': '重置后本聊天的世界书改动会全部丢弃，恢复为角色卡原版。继续？',
@@ -9268,10 +9272,41 @@ window.__ModuleLoader__.load({
 
     // `</script` 必须转义，否则脚本字符串里的闭合标签会提前截断 HTML 解析。
     // 每份脚本一个独立 module 块，共享同一文档的 window/document/全局变量。
+    // 2026-10-23：自动运行仍在同一个文档（GM 面板要叠在美化前端上），但脚本
+    // 容器承诺的 scriptId/name/info 与按钮需要按脚本归属——每段脚本注入一个
+    // per-script scope，裸调用 getScriptId/getScriptButtons 等即落到自己的节点。
+    const CARD_SCRIPT_SCOPE_APIS = [
+      'getScriptId', 'getScriptName', 'getScriptInfo', 'replaceScriptInfo',
+      'getIframeName', 'getMessageId', 'getButtonEvent', 'eventOnButton',
+      'getScriptButtons', 'replaceScriptButtons', 'updateScriptButtonsWith',
+      'appendInexistentScriptButtons',
+      'getVariables', 'getAllVariables', 'replaceVariables', 'updateVariablesWith',
+      'insertOrAssignVariables', 'insertVariables', 'deleteVariable',
+    ]
+
+    function cardScriptDeclaresApi(content, name) {
+      return new RegExp(`(^|[\\n;{}])\\s*(?:export\\s+)?(?:const|let|var|function|class)\\s+${name}\\b`).test(content)
+    }
+
+    function frontendCardScriptBindings(script, content) {
+      const id = JSON.stringify(String(script.id || ''))
+      const name = JSON.stringify(String(script.name || ''))
+      const info = JSON.stringify(String(script.info || ''))
+      const lines = [`const __dshTavernScope = window.__dshTavernScriptScope({ scriptId: ${id}, scriptName: ${name}, scriptInfo: ${info} });`]
+      for (const api of CARD_SCRIPT_SCOPE_APIS) {
+        // A script that declares its own helper must keep it; injecting a second
+        // lexical binding would be a SyntaxError in the same module scope.
+        if (cardScriptDeclaresApi(content, api)) continue
+        lines.push(`const ${api} = __dshTavernScope.${api};`)
+      }
+      return lines.join('\n')
+    }
+
     function frontendCardScriptBlocks(scripts) {
       return scripts.map((script) => {
-        const content = String(script.content || '').replace(/<\/script/gi, () => '<\\/script')
-        return `<script type="module">${content}</script>`
+        const content = String(script.content || '')
+        const block = `${frontendCardScriptBindings(script, content)}\n${content}`
+        return `<script type="module">${block.replace(/<\/script/gi, () => '<\\/script')}</script>`
       }).join('')
     }
 
@@ -9325,6 +9360,29 @@ window.__ModuleLoader__.load({
       const [scriptBundle, setScriptBundle] = useState(null)
       const [scriptError, setScriptError] = useState('')
       const [autoStopped, setAutoStopped] = useState(false)
+      // 共享前端模式：每段脚本的按钮通过注入 scope 上报，按钮条渲染在本 tab，
+      // 点击按 getButtonEvent(name) 的 id 回投给承载脚本的 iframe。
+      const [scriptButtons, setScriptButtons] = useState({})
+      const handleScriptButtons = useCallback((scriptId, list) => {
+        setScriptButtons((current) => {
+          const previous = current[scriptId] || []
+          const same = previous.length === list.length && previous.every((item, index) =>
+            item.event === list[index].event && item.name === list[index].name && item.visible === list[index].visible)
+          if (same) return current
+          return { ...current, [scriptId]: list }
+        })
+      }, [])
+      const dispatchScriptButton = (entry) => {
+        const surface = document.querySelector('.dt-frontend-side')
+        const frames = surface ? surface.querySelectorAll('iframe[data-token]') : []
+        for (const frame of frames) {
+          const token = frame.getAttribute('data-token')
+          if (token === null) continue
+          try {
+            frame.contentWindow?.postMessage({ type: HELPER_EVENT_MESSAGE, token, event: entry.event, args: [] }, '*')
+          } catch {}
+        }
+      }
       // Fullscreen fallback: a fixed overlay covering the viewport. The native
       // right sidebar keeps the panel mounted, but this node is portalled to
       // document.body so no ancestor overflow/transform can clip it.
@@ -9337,6 +9395,14 @@ window.__ModuleLoader__.load({
         ? ''
         : `${sessionId}\u0000${binding.character}\u0000${binding.chatId}`
       const autoRunHosted = cardScriptsAutoRun && architecture === 'agent-tavern'
+      // 脚本集合、楼层或手动刷新变化，以及用户停止自动运行时，旧按钮条不能
+      // 继续留在界面上：它们指向已经销毁的 iframe 作用域。
+      const bundleScripts = scriptBundle !== null && scriptBundle.key === key ? scriptBundle.scripts : []
+      const bundleScriptsKey = bundleScripts.map((script) => `${script.id}:${script.content.length}`).join('|')
+      const frameIdentity = `${snapshot?.message?.index ?? 'none'}:${reloadNonce}:${bundleScriptsKey}`
+      useEffect(() => {
+        setScriptButtons({})
+      }, [frameIdentity, autoStopped])
       const load = () => {
         if (!binding || architecture !== 'agent-tavern') return Promise.resolve()
         const query = `?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`
@@ -9410,6 +9476,7 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         // 切换聊天时先摘掉上一份快照：避免一个渲染帧里显示别的聊天的 HUD。
         setSnapshot(null)
+        setScriptButtons({})
         void loadRef.current()
       }, [binding?.character, binding?.chatId, architecture])
       // 原生会话的生成走宿主 AgentLoop，插件本地 chats/revisions 收不到信号
@@ -9423,6 +9490,7 @@ window.__ModuleLoader__.load({
           setScriptBundle(null)
           setScriptError('')
           setAutoStopped(false)
+          setScriptButtons({})
           return undefined
         }
         const request = scriptRequestRef.current + 1
@@ -9430,6 +9498,7 @@ window.__ModuleLoader__.load({
         setScriptBundle(null)
         setScriptError('')
         setAutoStopped(false)
+        setScriptButtons({})
         const query = `?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`
         void api(`card/scripts${query}`)
           .then((result) => {
@@ -9449,7 +9518,10 @@ window.__ModuleLoader__.load({
       // 卡脚本 tab 的「重置卡脚本」删除的是同一份会话副本：通知本 tab 立即停止
       // 自动运行，避免 iframe 继续跑已经被重置的旧源码。
       useEffect(() => {
-        const onReset = () => setAutoStopped(true)
+        const onReset = () => {
+          setAutoStopped(true)
+          setScriptButtons({})
+        }
         addEventListener(CARD_SCRIPTS_RESET_EVENT, onReset)
         return () => removeEventListener(CARD_SCRIPTS_RESET_EVENT, onReset)
       }, [])
@@ -9465,7 +9537,7 @@ window.__ModuleLoader__.load({
             h('span', null, architecture === 'st' ? t('frontend.inlineOnly') : t('frontend.unbound'))))
       }
       const message = snapshot?.message
-      const currentScripts = scriptBundle !== null && scriptBundle.key === key ? scriptBundle.scripts : []
+      const currentScripts = bundleScripts
       const scripts = autoRunHosted && !autoStopped ? currentScripts : []
       const autoRunning = scripts.length > 0
       const scriptsPending = autoRunHosted && scriptBundle === null
@@ -9490,6 +9562,7 @@ window.__ModuleLoader__.load({
             hostSessionId: sessionId,
             binding: { character: binding.character, chatId: binding.chatId },
             refreshKey: frameKey,
+            ...(index === scriptHostIndex ? { onScriptButtons: handleScriptButtons } : {}),
           })))
         })
       } else if (autoRunning) {
@@ -9503,8 +9576,12 @@ window.__ModuleLoader__.load({
           hostSessionId: sessionId,
           binding: { character: binding.character, chatId: binding.chatId },
           refreshKey: frameKey,
+          onScriptButtons: handleScriptButtons,
         })))
       }
+      const buttonList = Object.values(scriptButtons)
+        .flat()
+        .filter((entry) => entry && entry.visible !== false && typeof entry.event === 'string')
       const panel = h('div', {
         ref: panelRef,
         className: `dt-frontend-side${expanded ? ' dt-frontend-side-expanded' : ''}`,
@@ -9543,13 +9620,25 @@ window.__ModuleLoader__.load({
             h('button', {
               type: 'button',
               className: 'dt-card-script-run dt-card-script-stop',
-              onClick: () => setAutoStopped(true),
+              onClick: () => {
+                setAutoStopped(true)
+                setScriptButtons({})
+              },
             }, t('frontend.stopCardScripts')))
           : null,
         autoRunHosted && autoStopped && currentScripts.length > 0
           ? h('p', { className: 'dt-hint' }, t('frontend.cardScriptsStopped'))
           : null,
         autoRunning ? h('p', { className: 'dt-card-scripts-warning', role: 'note' }, t('cardScripts.warning')) : null,
+        buttonList.length > 0
+          ? h('div', { className: 'dt-card-script-buttons', role: 'toolbar', 'aria-label': t('cardScripts.buttons') },
+            buttonList.map((entry) => h('button', {
+              key: entry.event,
+              type: 'button',
+              className: 'dt-card-script-run dt-card-script-button',
+              onClick: () => dispatchScriptButton(entry),
+            }, entry.name)))
+          : null,
         autoRunning && !message
           ? h('p', { className: 'dt-hint' }, t('frontend.cardScriptsOnlyHint'))
           : null,
@@ -9942,9 +10031,11 @@ window.__ModuleLoader__.load({
           },
           h('div', { className: 'dt-card-script-head' },
             h('strong', null, script.name),
-            !autoRunning && runningId === script.id
-              ? h('span', { className: 'dt-card-script-running' }, t('cardScripts.running'))
-              : null,
+            autoRunHostedInFrontend && script.enabled !== false
+              ? h('span', { className: 'dt-card-script-running' }, t('cardScripts.sharedHost'))
+              : !autoRunning && runningId === script.id
+                ? h('span', { className: 'dt-card-script-running' }, t('cardScripts.running'))
+                : null,
             h('span', { className: 'dt-card-script-meta' },
               t('cardScripts.charCount', { count: script.content.length }))),
           script.info !== '' ? h('p', { className: 'dt-hint' }, script.info) : null,
@@ -13924,6 +14015,7 @@ window.__ModuleLoader__.load({
         .dt-card-script-run{align-self:flex-start;padding:5px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:transparent;color:var(--dsw-alias-label-primary);font-size:12px;cursor:pointer}
         .dt-card-script-run:hover{background:var(--dsw-alias-interactive-bg-hover)}
         .dt-card-script-run:disabled{cursor:not-allowed;opacity:.5}
+        .dt-card-script-buttons{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
         .dt-card-scripts-auto{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;padding:8px 11px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-status-success,#9ece6a) 12%,transparent)}
         .dt-card-script-stop{border-color:var(--dsw-alias-status-danger,#f7768e);color:var(--dsw-alias-status-danger,#f7768e)}
         .dt-card-scripts-world{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
