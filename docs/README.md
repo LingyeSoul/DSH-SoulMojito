@@ -131,6 +131,7 @@
 - [`2026-10-23-scoped-regex-content-repair.md`](../decisions/2026-10-23-scoped-regex-content-repair.md) — 同名正则内容归属错位：按名认领要求内容一致 + v3 迁移修复已错位实体
 - [`2026-10-23-regex-source-groups-and-bulk-delete.md`](../decisions/2026-10-23-regex-source-groups-and-bulk-delete.md) — 正则列表按全局/角色卡/预设分区，并在分区头提供整段清空
 - [`2026-10-23-regex-group-master-toggle.md`](../decisions/2026-10-23-regex-group-master-toggle.md) — 正则分区头三态总开关：一键启停该来源的全部脚本
+- [`2026-10-23-regex-group-folding.md`](../decisions/2026-10-23-regex-group-folding.md) — 正则分区按段折叠：默认收起，段头保留启停/条数/清空，过滤与编辑态强制展开
 - [`2026-10-23-jsr-surface-parity.md`](../decisions/2026-10-23-jsr-surface-parity.md) — JSR 4.11 兼容面补齐：179 个公共名、同步变量/正则契约、脚本容器、预设/人设/世界书条目会话级覆盖
 
 ### 面板与视图

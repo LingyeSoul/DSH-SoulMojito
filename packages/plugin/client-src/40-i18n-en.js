@@ -138,6 +138,10 @@
       'settings.regexDeleteGroupShort': 'Clear group',
       'settings.regexDeleteGroupConfirm': 'Delete all {count} regex scripts in {scope}? This cannot be undone.',
       'settings.regexDeleteGroupDone': 'Deleted {count} regex scripts from {scope}.',
+      // Group folding (2026-10-23 user request): sections start collapsed; the
+      // header keeps the group toggle and clear action reachable.
+      'settings.regexGroupFold': 'Collapse {scope}',
+      'settings.regexGroupUnfold': 'Expand {scope}',
       'panel.title': 'Tavern management',
       'panel.close': 'Close panel',
       'panel.open': 'Open Tavern panel',

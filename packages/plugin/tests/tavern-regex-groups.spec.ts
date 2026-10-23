@@ -7,6 +7,7 @@
  * 2. 段头条数用该来源的全部脚本，不是过滤后的可见脚本；
  * 3. 「清空分区」把该段全部 id 从脚本列表剔除后整表保存，服务端
  *    `replaceRegexScripts` 会同步剪掉归属表。
+ * 4. 分区默认折叠，段头一行保留启停/清空；过滤或编辑中的分区强制展开。
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -59,6 +60,30 @@ describe('regex script source groups', () => {
     expect(source).toContain("'settings.regexGroupToggleDone'")
     expect(source).toContain("'settings.regexGroupToggleInactive'")
     expect(source).toContain('mixed: enabled > 0 && enabled < total')
+  })
+
+  it('folds source groups by default while keeping the header actions reachable', () => {
+    // 初始展开表为空 = 全部收起；段头仍是独立按钮，启停与清空不受折叠影响。
+    expect(source).toContain('const [expandedGroups, setExpandedGroups] = useState({})')
+    expect(source).toContain("const groupOpen = (group) => expandedGroups[group.key] === true || regexQuery !== '' || groupEditing(group)")
+    expect(source).toContain("const groupFoldLocked = (group) => regexQuery !== '' || groupEditing(group)")
+    expect(source).toContain('const toggleGroupOpen = (group) => setExpandedGroups((current) => ({ ...current, [group.key]: current[group.key] !== true }))')
+    expect(source).toContain("'aria-expanded': open")
+    expect(source).toContain("'aria-controls': listId")
+    expect(source).toContain("t(open ? 'settings.regexGroupFold' : 'settings.regexGroupUnfold', { scope })")
+    // 收起时列表整体不挂载，避免隐藏行仍占布局与可访问树。
+    expect(source).toContain("open ? h('div', { id: listId, className: 'dt-regex-list' }, visible.map(scriptItem)) : null")
+    expect(source).toContain('className: \'dt-regex-group-fold dt-regex-group-fold-static\'')
+    expect(source).toContain('.dt-regex-group-fold svg.dt-chevron-open{transform:rotate(0)}')
+    expect(source).toContain('.dt-regex-group-fold-static:hover{background:transparent}')
+  })
+
+  it('reveals the saved or released script group so it cannot vanish into a fold', () => {
+    expect(source).toContain('const revealGroup = (key) => setExpandedGroups((current) => (current[key] === true ? current : { ...current, [key]: true }))')
+    expect(source).toContain('const revealScript = (script) => {')
+    expect(source).toContain('revealScript(script)')
+    // 解除归属后脚本改落全局分区，服务端会剪掉旧归属。
+    expect(source).toContain("revealGroup('global:')")
   })
 
   it('marker does not match near-miss samples (negative sample)', () => {

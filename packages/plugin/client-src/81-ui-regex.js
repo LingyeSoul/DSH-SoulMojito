@@ -115,6 +115,9 @@
       const [syncing, setSyncing] = useState('')
       const [editing, setEditing] = useState('')
       const [regexFilter, setRegexFilter] = useState('')
+      // 分区折叠（2026-10-23 用户需求）：默认全部收起，只留段头一行；
+      // 展开状态按分区键记忆，过滤或编辑中的分区强制展开（见 groupOpen）。
+      const [expandedGroups, setExpandedGroups] = useState({})
       const scripts = state.bootstrap.state.regexScripts || []
       // 卡级/预设级脚本跟随各自来源（2026-10-22 用户需求）：只有归属当前角色卡、
       // 或所属预设正在激活的脚本在本会话生效；其余置灰并锁定开关，编辑面仍保留。
@@ -161,6 +164,24 @@
       const groupActive = (group) => group.kind === 'character'
         ? sameCharacter(group.name)
         : group.kind === 'preset' && group.name === activePreset
+      // 折叠只影响条目可见性，段头的启停/清空/条数始终按该来源的全部脚本。
+      // 过滤时所有匹配分区直接展开：否则搜索结果藏在收起的分区里，用户会
+      // 以为过滤没生效；编辑中的分区同样保持展开，避免草稿被折叠层藏住。
+      const groupEditing = (group) => editing !== '' && group.scripts.some((script) => script.id === editing)
+      const groupOpen = (group) => expandedGroups[group.key] === true || regexQuery !== '' || groupEditing(group)
+      const groupFoldLocked = (group) => regexQuery !== '' || groupEditing(group)
+      const toggleGroupOpen = (group) => setExpandedGroups((current) => ({ ...current, [group.key]: current[group.key] !== true }))
+      const groupListId = (group) => `dt-regex-group-list-${encodeURIComponent(group.key)}`
+      // 段头文字与徽标同属折叠按钮（静态态复用同一份内容），保证整行可点。
+      const groupTitle = (group, open) => [
+        h(IconChevronDownOutline14, { key: 'chevron', className: open ? 'dt-chevron-open' : '' }),
+        h('span', { key: 'name', className: 'dt-regex-group-name', title: groupLabel(group) }, groupLabel(group)),
+        groupActive(group) ? h('span', { key: 'active', className: 'dt-regex-group-active' }, t('settings.regexGroupActive')) : null,
+        group.kind !== 'global' && !groupActive(group)
+          ? h('span', { key: 'inactive', className: 'dt-regex-group-inactive' }, t('settings.regexGroupInactive'))
+          : null,
+        h('span', { key: 'count', className: 'dt-regex-group-count' }, t('settings.regexGroupCount', { count: group.scripts.length })),
+      ]
       // 过滤只影响分段内可见条目，分区数字与「清空分区」始终指向该来源的全部
       // 脚本——否则过滤状态下删分区会留下看不见的残留。
       const visibleGroups = regexGroups()
@@ -172,12 +193,22 @@
         }))
         .filter((entry) => entry.visible.length > 0)
       const visibleCount = visibleGroups.reduce((sum, entry) => sum + entry.visible.length, 0)
+      // 保存/转全局后展开目标分区：默认全收起时，刚保存的脚本若落回收起
+      // 分区，用户会以为保存失败；新建脚本没有归属，落点是全局分区。
+      const revealGroup = (key) => setExpandedGroups((current) => (current[key] === true ? current : { ...current, [key]: true }))
+      const revealScript = (script) => {
+        const group = regexGroups().find((entry) => entry.scripts.some((item) => item.id === script.id))
+        revealGroup(group ? group.key : 'global:')
+      }
       const run = (promise) => { setError(''); setNotice(''); void promise.catch((cause) => setError(cause.message)) }
       const saveScript = (script) => {
         const next = scripts.some((item) => item.id === script.id)
           ? scripts.map((item) => (item.id === script.id ? script : item))
           : [...scripts, script]
-        return saveRegexScripts(next).then(() => setEditing(''))
+        return saveRegexScripts(next).then(() => {
+          revealScript(script)
+          setEditing('')
+        })
       }
       // 归属别的来源时开关仍可切换，但当前会话不生效；给一条回执解释，避免
       // 用户以为点击没反应（2026-10-23 用户反馈）。
@@ -198,7 +229,11 @@
         if (!window.confirm(t('settings.regexReleaseConfirm', { name: script.scriptName, owner }))) return
         const id = `${script.id}-global-${Date.now().toString(36)}`
         run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, id } : item))
-          .then(() => setNotice(t('settings.regexReleased', { name: script.scriptName }))))
+          .then(() => {
+            // 归属表由服务端剪掉，脚本改落全局分区；展开它，别让迁移结果消失。
+            revealGroup('global:')
+            setNotice(t('settings.regexReleased', { name: script.scriptName }))
+          }))
       }
       // 清空分区（2026-10-23 用户需求）：一次移除该角色卡/预设/全局的全部脚本。
       // 服务端 replaceRegexScripts 会同步剪掉这些 id 的两张归属表，无需另行清理。
@@ -335,36 +370,44 @@
             visibleGroups.map(({ group, visible }) => {
               const enabled = groupEnabledCount(group)
               const total = group.scripts.length
+              const open = groupOpen(group)
+              const locked = groupFoldLocked(group)
+              const scope = groupLabel(group)
+              const listId = groupListId(group)
               return h('div', {
                 key: group.key,
                 className: 'dt-regex-group',
                 role: 'group',
-                'aria-label': groupLabel(group),
+                'aria-label': scope,
               },
                 h('div', { className: 'dt-regex-group-head' },
-                  h('div', { className: 'dt-regex-group-title' },
-                    h(RegexGroupToggle, {
-                      label: t(enabled === total ? 'settings.regexGroupDisableAll' : 'settings.regexGroupEnableAll', { scope: groupLabel(group), count: total }),
-                      checked: total > 0 && enabled === total,
-                      mixed: enabled > 0 && enabled < total,
-                      disabled: editing !== '',
-                      onChange: () => toggleGroup(group),
-                    }),
-                    h('span', { className: 'dt-regex-group-name', title: groupLabel(group) }, groupLabel(group)),
-                    groupActive(group) ? h('span', { className: 'dt-regex-group-active' }, t('settings.regexGroupActive')) : null,
-                    group.kind !== 'global' && !groupActive(group)
-                      ? h('span', { className: 'dt-regex-group-inactive' }, t('settings.regexGroupInactive'))
-                      : null,
-                    h('span', { className: 'dt-regex-group-count' }, t('settings.regexGroupCount', { count: group.scripts.length }))),
+                  h(RegexGroupToggle, {
+                    label: t(enabled === total ? 'settings.regexGroupDisableAll' : 'settings.regexGroupEnableAll', { scope, count: total }),
+                    checked: total > 0 && enabled === total,
+                    mixed: enabled > 0 && enabled < total,
+                    disabled: editing !== '',
+                    onChange: () => toggleGroup(group),
+                  }),
+                  // 过滤/编辑态用静态段头（不可折叠），避免点击后毫无变化的死控件。
+                  locked
+                    ? h('div', { className: 'dt-regex-group-fold dt-regex-group-fold-static' }, groupTitle(group, open))
+                    : h('button', {
+                        type: 'button',
+                        className: 'dt-regex-group-fold',
+                        'aria-expanded': open,
+                        'aria-controls': listId,
+                        title: t(open ? 'settings.regexGroupFold' : 'settings.regexGroupUnfold', { scope }),
+                        onClick: () => toggleGroupOpen(group),
+                      }, groupTitle(group, open)),
                   h('button', {
                     type: 'button',
                     className: 'dt-regex-group-delete',
-                    title: t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
-                    'aria-label': t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
+                    title: t('settings.regexDeleteGroup', { scope, count: group.scripts.length }),
+                    'aria-label': t('settings.regexDeleteGroup', { scope, count: group.scripts.length }),
                     disabled: editing !== '',
                     onClick: () => deleteGroup(group),
                   }, h(IconTrashOutline16), h('span', null, t('settings.regexDeleteGroupShort')))),
-                h('div', { className: 'dt-regex-list' }, visible.map(scriptItem)))
+                open ? h('div', { id: listId, className: 'dt-regex-list' }, visible.map(scriptItem)) : null)
             })),
         notice ? h('p', { className: 'dt-muted' }, notice) : null,
         error ? h('p', { className: 'dt-error' }, error) : null)

@@ -136,6 +136,10 @@
       'settings.regexDeleteGroupShort': '清空分区',
       'settings.regexDeleteGroupConfirm': '删除{scope}分区的全部 {count} 个正则脚本？此操作不可撤销。',
       'settings.regexDeleteGroupDone': '已删除{scope}分区的 {count} 个正则脚本。',
+      // 分区折叠（2026-10-23 用户需求）：默认全部收起，段头的轮换开关与
+      // 清空按钮保持可点。
+      'settings.regexGroupFold': '折叠{scope}分区',
+      'settings.regexGroupUnfold': '展开{scope}分区',
       'panel.title': '酒馆管理面板',
       'panel.close': '关闭面板',
       'panel.open': '打开酒馆面板',

@@ -2249,6 +2249,10 @@ window.__ModuleLoader__.load({
       'settings.regexDeleteGroupShort': 'Clear group',
       'settings.regexDeleteGroupConfirm': 'Delete all {count} regex scripts in {scope}? This cannot be undone.',
       'settings.regexDeleteGroupDone': 'Deleted {count} regex scripts from {scope}.',
+      // Group folding (2026-10-23 user request): sections start collapsed; the
+      // header keeps the group toggle and clear action reachable.
+      'settings.regexGroupFold': 'Collapse {scope}',
+      'settings.regexGroupUnfold': 'Expand {scope}',
       'panel.title': 'Tavern management',
       'panel.close': 'Close panel',
       'panel.open': 'Open Tavern panel',
@@ -3153,6 +3157,10 @@ window.__ModuleLoader__.load({
       'settings.regexDeleteGroupShort': '清空分区',
       'settings.regexDeleteGroupConfirm': '删除{scope}分区的全部 {count} 个正则脚本？此操作不可撤销。',
       'settings.regexDeleteGroupDone': '已删除{scope}分区的 {count} 个正则脚本。',
+      // 分区折叠（2026-10-23 用户需求）：默认全部收起，段头的轮换开关与
+      // 清空按钮保持可点。
+      'settings.regexGroupFold': '折叠{scope}分区',
+      'settings.regexGroupUnfold': '展开{scope}分区',
       'panel.title': '酒馆管理面板',
       'panel.close': '关闭面板',
       'panel.open': '打开酒馆面板',
@@ -6020,6 +6028,9 @@ window.__ModuleLoader__.load({
       const [syncing, setSyncing] = useState('')
       const [editing, setEditing] = useState('')
       const [regexFilter, setRegexFilter] = useState('')
+      // 分区折叠（2026-10-23 用户需求）：默认全部收起，只留段头一行；
+      // 展开状态按分区键记忆，过滤或编辑中的分区强制展开（见 groupOpen）。
+      const [expandedGroups, setExpandedGroups] = useState({})
       const scripts = state.bootstrap.state.regexScripts || []
       // 卡级/预设级脚本跟随各自来源（2026-10-22 用户需求）：只有归属当前角色卡、
       // 或所属预设正在激活的脚本在本会话生效；其余置灰并锁定开关，编辑面仍保留。
@@ -6066,6 +6077,24 @@ window.__ModuleLoader__.load({
       const groupActive = (group) => group.kind === 'character'
         ? sameCharacter(group.name)
         : group.kind === 'preset' && group.name === activePreset
+      // 折叠只影响条目可见性，段头的启停/清空/条数始终按该来源的全部脚本。
+      // 过滤时所有匹配分区直接展开：否则搜索结果藏在收起的分区里，用户会
+      // 以为过滤没生效；编辑中的分区同样保持展开，避免草稿被折叠层藏住。
+      const groupEditing = (group) => editing !== '' && group.scripts.some((script) => script.id === editing)
+      const groupOpen = (group) => expandedGroups[group.key] === true || regexQuery !== '' || groupEditing(group)
+      const groupFoldLocked = (group) => regexQuery !== '' || groupEditing(group)
+      const toggleGroupOpen = (group) => setExpandedGroups((current) => ({ ...current, [group.key]: current[group.key] !== true }))
+      const groupListId = (group) => `dt-regex-group-list-${encodeURIComponent(group.key)}`
+      // 段头文字与徽标同属折叠按钮（静态态复用同一份内容），保证整行可点。
+      const groupTitle = (group, open) => [
+        h(IconChevronDownOutline14, { key: 'chevron', className: open ? 'dt-chevron-open' : '' }),
+        h('span', { key: 'name', className: 'dt-regex-group-name', title: groupLabel(group) }, groupLabel(group)),
+        groupActive(group) ? h('span', { key: 'active', className: 'dt-regex-group-active' }, t('settings.regexGroupActive')) : null,
+        group.kind !== 'global' && !groupActive(group)
+          ? h('span', { key: 'inactive', className: 'dt-regex-group-inactive' }, t('settings.regexGroupInactive'))
+          : null,
+        h('span', { key: 'count', className: 'dt-regex-group-count' }, t('settings.regexGroupCount', { count: group.scripts.length })),
+      ]
       // 过滤只影响分段内可见条目，分区数字与「清空分区」始终指向该来源的全部
       // 脚本——否则过滤状态下删分区会留下看不见的残留。
       const visibleGroups = regexGroups()
@@ -6077,12 +6106,22 @@ window.__ModuleLoader__.load({
         }))
         .filter((entry) => entry.visible.length > 0)
       const visibleCount = visibleGroups.reduce((sum, entry) => sum + entry.visible.length, 0)
+      // 保存/转全局后展开目标分区：默认全收起时，刚保存的脚本若落回收起
+      // 分区，用户会以为保存失败；新建脚本没有归属，落点是全局分区。
+      const revealGroup = (key) => setExpandedGroups((current) => (current[key] === true ? current : { ...current, [key]: true }))
+      const revealScript = (script) => {
+        const group = regexGroups().find((entry) => entry.scripts.some((item) => item.id === script.id))
+        revealGroup(group ? group.key : 'global:')
+      }
       const run = (promise) => { setError(''); setNotice(''); void promise.catch((cause) => setError(cause.message)) }
       const saveScript = (script) => {
         const next = scripts.some((item) => item.id === script.id)
           ? scripts.map((item) => (item.id === script.id ? script : item))
           : [...scripts, script]
-        return saveRegexScripts(next).then(() => setEditing(''))
+        return saveRegexScripts(next).then(() => {
+          revealScript(script)
+          setEditing('')
+        })
       }
       // 归属别的来源时开关仍可切换，但当前会话不生效；给一条回执解释，避免
       // 用户以为点击没反应（2026-10-23 用户反馈）。
@@ -6103,7 +6142,11 @@ window.__ModuleLoader__.load({
         if (!window.confirm(t('settings.regexReleaseConfirm', { name: script.scriptName, owner }))) return
         const id = `${script.id}-global-${Date.now().toString(36)}`
         run(saveRegexScripts(scripts.map((item) => item.id === script.id ? { ...item, id } : item))
-          .then(() => setNotice(t('settings.regexReleased', { name: script.scriptName }))))
+          .then(() => {
+            // 归属表由服务端剪掉，脚本改落全局分区；展开它，别让迁移结果消失。
+            revealGroup('global:')
+            setNotice(t('settings.regexReleased', { name: script.scriptName }))
+          }))
       }
       // 清空分区（2026-10-23 用户需求）：一次移除该角色卡/预设/全局的全部脚本。
       // 服务端 replaceRegexScripts 会同步剪掉这些 id 的两张归属表，无需另行清理。
@@ -6240,36 +6283,44 @@ window.__ModuleLoader__.load({
             visibleGroups.map(({ group, visible }) => {
               const enabled = groupEnabledCount(group)
               const total = group.scripts.length
+              const open = groupOpen(group)
+              const locked = groupFoldLocked(group)
+              const scope = groupLabel(group)
+              const listId = groupListId(group)
               return h('div', {
                 key: group.key,
                 className: 'dt-regex-group',
                 role: 'group',
-                'aria-label': groupLabel(group),
+                'aria-label': scope,
               },
                 h('div', { className: 'dt-regex-group-head' },
-                  h('div', { className: 'dt-regex-group-title' },
-                    h(RegexGroupToggle, {
-                      label: t(enabled === total ? 'settings.regexGroupDisableAll' : 'settings.regexGroupEnableAll', { scope: groupLabel(group), count: total }),
-                      checked: total > 0 && enabled === total,
-                      mixed: enabled > 0 && enabled < total,
-                      disabled: editing !== '',
-                      onChange: () => toggleGroup(group),
-                    }),
-                    h('span', { className: 'dt-regex-group-name', title: groupLabel(group) }, groupLabel(group)),
-                    groupActive(group) ? h('span', { className: 'dt-regex-group-active' }, t('settings.regexGroupActive')) : null,
-                    group.kind !== 'global' && !groupActive(group)
-                      ? h('span', { className: 'dt-regex-group-inactive' }, t('settings.regexGroupInactive'))
-                      : null,
-                    h('span', { className: 'dt-regex-group-count' }, t('settings.regexGroupCount', { count: group.scripts.length }))),
+                  h(RegexGroupToggle, {
+                    label: t(enabled === total ? 'settings.regexGroupDisableAll' : 'settings.regexGroupEnableAll', { scope, count: total }),
+                    checked: total > 0 && enabled === total,
+                    mixed: enabled > 0 && enabled < total,
+                    disabled: editing !== '',
+                    onChange: () => toggleGroup(group),
+                  }),
+                  // 过滤/编辑态用静态段头（不可折叠），避免点击后毫无变化的死控件。
+                  locked
+                    ? h('div', { className: 'dt-regex-group-fold dt-regex-group-fold-static' }, groupTitle(group, open))
+                    : h('button', {
+                        type: 'button',
+                        className: 'dt-regex-group-fold',
+                        'aria-expanded': open,
+                        'aria-controls': listId,
+                        title: t(open ? 'settings.regexGroupFold' : 'settings.regexGroupUnfold', { scope }),
+                        onClick: () => toggleGroupOpen(group),
+                      }, groupTitle(group, open)),
                   h('button', {
                     type: 'button',
                     className: 'dt-regex-group-delete',
-                    title: t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
-                    'aria-label': t('settings.regexDeleteGroup', { scope: groupLabel(group), count: group.scripts.length }),
+                    title: t('settings.regexDeleteGroup', { scope, count: group.scripts.length }),
+                    'aria-label': t('settings.regexDeleteGroup', { scope, count: group.scripts.length }),
                     disabled: editing !== '',
                     onClick: () => deleteGroup(group),
                   }, h(IconTrashOutline16), h('span', null, t('settings.regexDeleteGroupShort')))),
-                h('div', { className: 'dt-regex-list' }, visible.map(scriptItem)))
+                open ? h('div', { id: listId, className: 'dt-regex-list' }, visible.map(scriptItem)) : null)
             })),
         notice ? h('p', { className: 'dt-muted' }, notice) : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
@@ -13424,7 +13475,7 @@ window.__ModuleLoader__.load({
 .dt-regex-actions button.dt-regex-release{width:auto;padding:0 7px;font-size:11px;line-height:16px;white-space:nowrap}.dt-regex-actions button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-actions button:disabled{opacity:.4;cursor:not-allowed}.dt-regex-item{display:flex;flex-direction:column;gap:4px}.dt-regex-editor-wrap{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:12px}
         /* 正则按来源分区（2026-10-23 用户需求）：段头一行放来源名、当前标记、
            条数与清空按钮；窄屏允许换行，名字独占剩余宽度并省略。 */
-        .dt-regex-groups{display:flex;flex-direction:column;gap:14px}.dt-regex-group{display:flex;flex-direction:column;gap:6px}.dt-regex-group-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dt-regex-group-title{display:flex;align-items:center;gap:6px;flex:1;min-width:0;flex-wrap:wrap}.dt-regex-group-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-weight:600}.dt-regex-group-active{padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 14%,transparent);color:var(--dsw-alias-state-business-primary);font-size:11px;line-height:16px}.dt-regex-group-inactive{padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-label-tertiary) 14%,transparent);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-group-count{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-group-delete{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 7px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-tertiary);background:transparent;font-size:11px;line-height:16px;cursor:pointer}.dt-regex-group-delete:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}.dt-regex-group-delete:disabled{opacity:.4;cursor:not-allowed}.dt-regex-group-toggle{min-height:0;gap:0}.dt-regex-group-toggle input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-state-business-primary);cursor:pointer}.dt-regex-group-toggle input:disabled{cursor:not-allowed;opacity:.4}
+        .dt-regex-groups{display:flex;flex-direction:column;gap:14px}.dt-regex-group{display:flex;flex-direction:column;gap:6px}.dt-regex-group-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dt-regex-group-fold{display:flex;align-items:center;gap:6px;flex:1;min-width:0;flex-wrap:wrap;margin:0;padding:2px 4px;border:0;border-radius:6px;color:inherit;background:transparent;cursor:pointer;font:inherit;text-align:left}.dt-regex-group-fold:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-group-fold:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}.dt-regex-group-fold svg{flex:none;color:var(--dsw-alias-label-tertiary);transform:rotate(-90deg);transition:transform .15s}.dt-regex-group-fold svg.dt-chevron-open{transform:rotate(0)}.dt-regex-group-fold-static{cursor:default}.dt-regex-group-fold-static:hover{background:transparent}.dt-regex-group-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-weight:600}.dt-regex-group-active{padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 14%,transparent);color:var(--dsw-alias-state-business-primary);font-size:11px;line-height:16px}.dt-regex-group-inactive{padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-label-tertiary) 14%,transparent);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-group-count{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-group-delete{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 7px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-tertiary);background:transparent;font-size:11px;line-height:16px;cursor:pointer}.dt-regex-group-delete:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}.dt-regex-group-delete:disabled{opacity:.4;cursor:not-allowed}.dt-regex-group-toggle{min-height:0;gap:0}.dt-regex-group-toggle input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-state-business-primary);cursor:pointer}.dt-regex-group-toggle input:disabled{cursor:not-allowed;opacity:.4}
         .dt-field input[type=text],.dt-field input[type=password]{box-sizing:border-box;width:100%;height:36px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 10px}.dt-upload:disabled{opacity:.5;cursor:not-allowed}
         .dt-backlink{display:flex;padding:2px 0}.dt-backlink>button{color:var(--dsw-alias-label-tertiary);background:transparent;border:0;cursor:pointer;font-size:12px;padding:4px 2px}.dt-backlink>button:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}
         .dt-member-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}.dt-member-row .dt-member-chip>button{display:none}.dt-script-glyph{font-weight:700;font-size:15px;line-height:1}.dt-sidebar-subheading{margin-top:10px}.dt-branch-btn{font-size:13px}
