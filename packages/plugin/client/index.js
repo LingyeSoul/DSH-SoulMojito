@@ -606,12 +606,17 @@ window.__ModuleLoader__.load({
       // packages/tavern-jsr/src/client.ts
       var client_exports = {};
       __export(client_exports, {
+        HELPER_BUTTONS_MESSAGE: () => HELPER_BUTTONS_MESSAGE,
         HELPER_EVENT_MESSAGE: () => HELPER_EVENT_MESSAGE,
+        HELPER_EXTENSION_ID: () => HELPER_EXTENSION_ID,
         HELPER_MESSAGE: () => HELPER_MESSAGE,
         HELPER_RESULT_MESSAGE: () => HELPER_RESULT_MESSAGE,
         HELPER_SNAPSHOT_MESSAGE: () => HELPER_SNAPSHOT_MESSAGE,
+        HELPER_VERSION: () => HELPER_VERSION,
         IFRAME_EVENTS: () => IFRAME_EVENTS,
         TAVERN_EVENTS: () => TAVERN_EVENTS,
+        TAVERN_HELPER_SURFACE: () => TAVERN_HELPER_SURFACE,
+        TAVERN_VERSION: () => TAVERN_VERSION,
         buildIframeScript: () => buildIframeScript,
         helperLibraryTags: () => helperLibraryTags
       });
@@ -621,6 +626,10 @@ window.__ModuleLoader__.load({
       var HELPER_RESULT_MESSAGE = "dsh-soulmojito:helper-result";
       var HELPER_SNAPSHOT_MESSAGE = "dsh-soulmojito:helper-snapshot";
       var HELPER_EVENT_MESSAGE = "dsh-soulmojito:helper-event";
+      var HELPER_BUTTONS_MESSAGE = "dsh-soulmojito:script-buttons";
+      var HELPER_VERSION = "4.11.3";
+      var TAVERN_VERSION = "0.0.0";
+      var HELPER_EXTENSION_ID = "JS-Slash-Runner";
       var HELPER_LIBRARIES = [
         "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js",
         "https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js",
@@ -636,21 +645,87 @@ window.__ModuleLoader__.load({
       var HELPER_ZOD_MODULE = `<script type="module">import * as z from 'https://cdn.jsdelivr.net/npm/zod@4.4.3/+esm';window.z = z;<\/script>`;
       var TAVERN_EVENTS = {
         APP_READY: "app_ready",
+        EXTRAS_CONNECTED: "extras_connected",
+        MESSAGE_SWIPED: "message_swiped",
         MESSAGE_SENT: "message_sent",
         MESSAGE_RECEIVED: "message_received",
         MESSAGE_EDITED: "message_edited",
         MESSAGE_DELETED: "message_deleted",
         MESSAGE_UPDATED: "message_updated",
-        MESSAGE_SWIPED: "message_swiped",
+        MESSAGE_FILE_EMBEDDED: "message_file_embedded",
+        MESSAGE_REASONING_EDITED: "message_reasoning_edited",
+        MESSAGE_REASONING_DELETED: "message_reasoning_deleted",
+        MESSAGE_SWIPE_DELETED: "message_swipe_deleted",
+        MORE_MESSAGES_LOADED: "more_messages_loaded",
+        IMPERSONATE_READY: "impersonate_ready",
         CHAT_CHANGED: "chat_id_changed",
+        GENERATION_AFTER_COMMANDS: "GENERATION_AFTER_COMMANDS",
         GENERATION_STARTED: "generation_started",
+        GENERATION_STOPPED: "generation_stopped",
         GENERATION_ENDED: "generation_ended",
-        // No real token stream exists; the host sends the final text once, but keeps
-        // the name so `eventOn(tavern_events.STREAM_TOKEN_RECEIVED, …)` never throws.
-        STREAM_TOKEN_RECEIVED: "stream_token_received",
-        CHARACTER_MESSAGE_RENDERED: "character_message_rendered",
+        SD_PROMPT_PROCESSING: "sd_prompt_processing",
+        EXTENSIONS_FIRST_LOAD: "extensions_first_load",
+        EXTENSION_SETTINGS_LOADED: "extension_settings_loaded",
+        SETTINGS_LOADED: "settings_loaded",
+        SETTINGS_UPDATED: "settings_updated",
+        MOVABLE_PANELS_RESET: "movable_panels_reset",
+        SETTINGS_LOADED_BEFORE: "settings_loaded_before",
+        SETTINGS_LOADED_AFTER: "settings_loaded_after",
+        CHATCOMPLETION_SOURCE_CHANGED: "chatcompletion_source_changed",
+        CHATCOMPLETION_MODEL_CHANGED: "chatcompletion_model_changed",
+        OAI_PRESET_CHANGED_BEFORE: "oai_preset_changed_before",
+        OAI_PRESET_CHANGED_AFTER: "oai_preset_changed_after",
+        OAI_PRESET_EXPORT_READY: "oai_preset_export_ready",
+        OAI_PRESET_IMPORT_READY: "oai_preset_import_ready",
+        WORLDINFO_SETTINGS_UPDATED: "worldinfo_settings_updated",
+        WORLDINFO_UPDATED: "worldinfo_updated",
+        CHARACTER_EDITOR_OPENED: "character_editor_opened",
+        CHARACTER_EDITED: "character_edited",
+        CHARACTER_PAGE_LOADED: "character_page_loaded",
         USER_MESSAGE_RENDERED: "user_message_rendered",
-        CHAT_COMPLETION_SETTINGS_READY: "chat_completion_settings_ready"
+        CHARACTER_MESSAGE_RENDERED: "character_message_rendered",
+        FORCE_SET_BACKGROUND: "force_set_background",
+        CHAT_DELETED: "chat_deleted",
+        CHAT_CREATED: "chat_created",
+        GENERATE_BEFORE_COMBINE_PROMPTS: "generate_before_combine_prompts",
+        GENERATE_AFTER_COMBINE_PROMPTS: "generate_after_combine_prompts",
+        GENERATE_AFTER_DATA: "generate_after_data",
+        WORLD_INFO_ACTIVATED: "world_info_activated",
+        TEXT_COMPLETION_SETTINGS_READY: "text_completion_settings_ready",
+        CHAT_COMPLETION_SETTINGS_READY: "chat_completion_settings_ready",
+        CHAT_COMPLETION_PROMPT_READY: "chat_completion_prompt_ready",
+        CHARACTER_FIRST_MESSAGE_SELECTED: "character_first_message_selected",
+        CHARACTER_DELETED: "characterDeleted",
+        CHARACTER_DUPLICATED: "character_duplicated",
+        CHARACTER_RENAMED: "character_renamed",
+        CHARACTER_RENAMED_IN_PAST_CHAT: "character_renamed_in_past_chat",
+        SMOOTH_STREAM_TOKEN_RECEIVED: "stream_token_received",
+        STREAM_TOKEN_RECEIVED: "stream_token_received",
+        STREAM_REASONING_DONE: "stream_reasoning_done",
+        FILE_ATTACHMENT_DELETED: "file_attachment_deleted",
+        WORLDINFO_FORCE_ACTIVATE: "worldinfo_force_activate",
+        OPEN_CHARACTER_LIBRARY: "open_character_library",
+        ONLINE_STATUS_CHANGED: "online_status_changed",
+        IMAGE_SWIPED: "image_swiped",
+        CONNECTION_PROFILE_LOADED: "connection_profile_loaded",
+        CONNECTION_PROFILE_CREATED: "connection_profile_created",
+        CONNECTION_PROFILE_DELETED: "connection_profile_deleted",
+        CONNECTION_PROFILE_UPDATED: "connection_profile_updated",
+        TOOL_CALLS_PERFORMED: "tool_calls_performed",
+        TOOL_CALLS_RENDERED: "tool_calls_rendered",
+        CHARACTER_MANAGEMENT_DROPDOWN: "charManagementDropdown",
+        SECRET_WRITTEN: "secret_written",
+        SECRET_DELETED: "secret_deleted",
+        SECRET_ROTATED: "secret_rotated",
+        SECRET_EDITED: "secret_edited",
+        PRESET_CHANGED: "preset_changed",
+        PRESET_DELETED: "preset_deleted",
+        PRESET_RENAMED: "preset_renamed",
+        PRESET_RENAMED_BEFORE: "preset_renamed_before",
+        MAIN_API_CHANGED: "main_api_changed",
+        WORLDINFO_ENTRIES_LOADED: "worldinfo_entries_loaded",
+        WORLDINFO_SCAN_DONE: "worldinfo_scan_done",
+        MEDIA_ATTACHMENT_DELETED: "media_attachment_deleted"
       };
       var IFRAME_EVENTS = {
         MESSAGE_IFRAME_RENDER_STARTED: "message_iframe_render_started",
@@ -659,8 +734,191 @@ window.__ModuleLoader__.load({
         GENERATION_STARTED: "js_generation_started",
         STREAM_TOKEN_RECEIVED_FULLY: "js_stream_token_received_fully",
         STREAM_TOKEN_RECEIVED_INCREMENTALLY: "js_stream_token_received_incrementally",
+        REASONING_TOKEN_RECEIVED_FULLY: "js_reasoning_token_received_fully",
+        REASONING_TOKEN_RECEIVED_INCREMENTALLY: "js_reasoning_token_received_incrementally",
         GENERATION_ENDED: "js_generation_ended"
       };
+      var TAVERN_HELPER_SURFACE = [
+        "appendAudioList",
+        "appendInexistentScriptButtons",
+        "audioEnable",
+        "audioImport",
+        "audioMode",
+        "audioPlay",
+        "audioSelect",
+        "builtin",
+        "builtin_prompt_default_order",
+        "createCharacter",
+        "createChatMessages",
+        "createLorebook",
+        "createLorebookEntries",
+        "createLorebookEntry",
+        "createOrReplaceCharacter",
+        "createOrReplacePersona",
+        "createOrReplacePreset",
+        "createOrReplaceWorldbook",
+        "createPersona",
+        "createPreset",
+        "createWorldbook",
+        "createWorldbookEntries",
+        "default_preset",
+        "deleteCharacter",
+        "deleteChatMessages",
+        "deleteLorebook",
+        "deleteLorebookEntries",
+        "deleteLorebookEntry",
+        "deletePersona",
+        "deletePreset",
+        "deleteVariable",
+        "deleteWorldbook",
+        "deleteWorldbookEntries",
+        "errorCatched",
+        "eventClearAll",
+        "eventClearEvent",
+        "eventClearListener",
+        "eventEmit",
+        "eventEmitAndWait",
+        "eventMakeFirst",
+        "eventMakeLast",
+        "eventOn",
+        "eventOnButton",
+        "eventOnce",
+        "eventRemoveListener",
+        "formatAsDisplayedMessage",
+        "formatAsTavernRegexedString",
+        "generate",
+        "generateRaw",
+        "getAllEnabledScriptButtons",
+        "getAllVariables",
+        "getAudioList",
+        "getAudioSettings",
+        "getButtonEvent",
+        "getCharacter",
+        "getCharacterIds",
+        "getCharacterNames",
+        "getCharAvatarPath",
+        "getCharData",
+        "getCharLorebooks",
+        "getCharWorldbookNames",
+        "getChatHistoryBrief",
+        "getChatHistoryDetail",
+        "getChatLorebook",
+        "getChatMessages",
+        "getChatWorldbookName",
+        "getCurrentAudio",
+        "getCurrentCharacterId",
+        "getCurrentCharacterName",
+        "getCurrentCharPrimaryLorebook",
+        "getCurrentMessageId",
+        "getCurrentPersonaId",
+        "getCurrentPersonaName",
+        "getExtensionStatus",
+        "getExtensionType",
+        "getFrontendVersion",
+        "getGlobalWorldbookNames",
+        "getIframeName",
+        "getLastMessageId",
+        "getLoadedPresetName",
+        "getLorebookEntries",
+        "getLorebooks",
+        "getLorebookSettings",
+        "getMessageId",
+        "getModelList",
+        "getOrCreateChatLorebook",
+        "getOrCreateChatWorldbook",
+        "getPersona",
+        "getPersonaAvatarPath",
+        "getPersonaIds",
+        "getPersonaNames",
+        "getPreset",
+        "getPresetNames",
+        "getProxyPresetNames",
+        "getScriptButtons",
+        "getScriptId",
+        "getScriptInfo",
+        "getScriptName",
+        "getScriptTrees",
+        "getTavernHelperExtensionId",
+        "getTavernHelperVersion",
+        "getTavernRegexes",
+        "getTavernVersion",
+        "getVariables",
+        "getWorldbook",
+        "getWorldbookNames",
+        "iframe_events",
+        "importRawCharacter",
+        "importRawChat",
+        "importRawPreset",
+        "importRawTavernRegex",
+        "importRawWorldbook",
+        "initializeGlobal",
+        "injectPrompts",
+        "insertOrAssignVariables",
+        "insertVariables",
+        "installExtension",
+        "isAdmin",
+        "isCharacterTavernRegexesEnabled",
+        "isInstalledExtension",
+        "isPresetNormalPrompt",
+        "isPresetPlaceholderPrompt",
+        "isPresetSystemPrompt",
+        "loadPreset",
+        "pauseAudio",
+        "playAudio",
+        "RawCharacter",
+        "rebindCharWorldbooks",
+        "rebindChatWorldbook",
+        "rebindGlobalWorldbooks",
+        "refreshOneMessage",
+        "registerMacroLike",
+        "registerVariableSchema",
+        "reinstallExtension",
+        "reloadIframe",
+        "renamePreset",
+        "replaceAudioList",
+        "replaceCharacter",
+        "replaceLorebookEntries",
+        "replacePersona",
+        "replacePreset",
+        "replaceScriptButtons",
+        "replaceScriptInfo",
+        "replaceScriptTrees",
+        "replaceTavernRegexes",
+        "replaceVariables",
+        "replaceWorldbook",
+        "retrieveDisplayedMessage",
+        "rotateChatMessages",
+        "setAudioSettings",
+        "setChatLorebook",
+        "setChatMessage",
+        "setChatMessages",
+        "setCurrentCharLorebooks",
+        "setLorebookEntries",
+        "setLorebookSettings",
+        "setPreset",
+        "stopAllGeneration",
+        "stopGenerationById",
+        "substitudeMacros",
+        "tavern_events",
+        "triggerSlash",
+        "triggerSlashWithResult",
+        "uninjectPrompts",
+        "uninstallExtension",
+        "unregisterMacroLike",
+        "updateCharacterWith",
+        "updateExtension",
+        "updateFrontendVersion",
+        "updateLorebookEntriesWith",
+        "updatePersonaWith",
+        "updatePresetWith",
+        "updateScriptButtonsWith",
+        "updateScriptTreesWith",
+        "updateTavernHelper",
+        "updateTavernRegexesWith",
+        "updateVariablesWith",
+        "updateWorldbookWith",
+        "waitGlobalInitialized"
+      ];
 
       // packages/tavern-jsr/src/client.ts
       var HELPER_TAVERN_EVENTS = TAVERN_EVENTS;
@@ -668,16 +926,25 @@ window.__ModuleLoader__.load({
       function helperLibraryTags() {
         return HELPER_LIBRARIES.map((url) => `<script src="${url}" crossorigin="anonymous"><\/script>`).join("") + HELPER_ZOD_MODULE;
       }
-      function buildIframeScript(token, messageId, storageSeedJson, storageSources) {
+      function buildIframeScript(token, messageId, storageSeedJson, storageSources, identity) {
         return `(function () {
       var token = ${JSON.stringify(token)};
       var currentMessageId = ${JSON.stringify(typeof messageId === "number" ? messageId : -1)};
       var initialStorage = ${storageSeedJson};
+      var scriptIdentity = ${JSON.stringify(identity)};
+      var scriptId = scriptIdentity !== null && typeof scriptIdentity === 'object' ? String(scriptIdentity.scriptId || '') : '';
+      var scriptName = scriptIdentity !== null && typeof scriptIdentity === 'object' ? String(scriptIdentity.scriptName || '') : '';
+      var scriptInfo = scriptIdentity !== null && typeof scriptIdentity === 'object' ? String(scriptIdentity.scriptInfo || '') : '';
       var realParent = window.parent;
       var requestId = 0;
       var pending = new Map();
       var listeners = new Map();
       var lastMvuStatJson = '';
+      var HELPER_VERSION = ${JSON.stringify(HELPER_VERSION)};
+      var TAVERN_VERSION = ${JSON.stringify(TAVERN_VERSION)};
+      var HELPER_EXTENSION_ID = ${JSON.stringify(HELPER_EXTENSION_ID)};
+      var HELPER_SURFACE = ${JSON.stringify(TAVERN_HELPER_SURFACE)};
+      var HELPER_BUTTONS_MESSAGE = ${JSON.stringify(HELPER_BUTTONS_MESSAGE)};
       // The emitted program runs inside the iframe, so module-scope constants are
       // not in reach. Embed both event tables before any card code can call
       // window.generate() (the generation bridge emits CHAT_COMPLETION_SETTINGS_READY
@@ -716,6 +983,19 @@ window.__ModuleLoader__.load({
         messages: [], variables: { global: {}, chat: {}, message: {}, character: {} },
         characterData: null,
         scriptTrees: null,
+        // Extended snapshot (compat level 4.11): script-container trees per source,
+        // observable preset/persona/character/regex/world metadata. Every field has
+        // an empty default so an older host snapshot never leaves a getter throwing.
+        scriptTreesByType: { character: null, preset: null, global: null },
+        presets: { names: [], active: null, values: {} },
+        personas: { names: [], ids: [], active: null, values: {} },
+        characters: { names: [], ids: [] },
+        regexScripts: { global: [], character: [], preset: [] },
+        scriptVariables: {},
+        worlds: { names: [], active: [], char: { primary: null, additional: [] }, chat: null },
+        personaDescription: '',
+        avatar: '',
+        characterId: 0,
       };
 
       function call(op, payload, transfer) {
@@ -827,10 +1107,12 @@ window.__ModuleLoader__.load({
         return true;
       }
 
-      function scopeOf(option) {
+      function scopeOf(option, forWrite) {
         var type = option && option.type ? option.type : 'chat';
-        if (type === 'global' || type === 'chat' || type === 'message' || type === 'character') return type;
-        throw new Error('DSH-SoulMojito: variable scope "' + type + '" is not supported (global/chat/message/character)');
+        if (type === 'global' || type === 'chat' || type === 'message' || type === 'character' || type === 'script') return type;
+        if (type === 'preset' && forWrite !== true) return 'preset';
+        throw new Error('DSH-SoulMojito: variable scope "' + type + '" is not supported'
+          + (type === 'preset' ? ' for writes (preset assets are read-only in the sandbox)' : ' (global/chat/message/character/script)'));
       }
 
       function messageIndex(messageId) {
@@ -840,16 +1122,28 @@ window.__ModuleLoader__.load({
         return index;
       }
 
+      function presetVariableTree() {
+        var active = state.presets ? state.presets.active : null;
+        if (active === null || active === undefined) return {};
+        var values = state.presets.values || {};
+        var preset = values[active] || values['in_use'];
+        var extensions = preset && typeof preset === 'object' ? preset.extensions : null;
+        var helper = extensions && typeof extensions === 'object' ? extensions.tavern_helper : null;
+        var tree = helper && typeof helper === 'object' ? helper.variables : null;
+        return tree && typeof tree === 'object' && !Array.isArray(tree) ? clone(tree) : {};
+      }
+
       function variablesFor(option) {
-        var scope = scopeOf(option);
+        var scope = scopeOf(option, false);
+        if (scope === 'script') return clone(scriptVariablesFor()) || {};
+        if (scope === 'preset') return presetVariableTree();
         if (scope !== 'message') return state.variables[scope] || {};
         var index = messageIndex(option && option.message_id);
         var message = state.messages.filter(function (entry) { return entry.message_id === index; })[0];
         var data = message && message.data ? message.data : {};
-        // MVU 卡首屏常先读 getVariables({ type: 'message' }) 判断 stat_data 是否
-        // 就绪（示例卡2 的 index.ts 就卡在这一步）。新聊天的开场白楼层通常没有逐楼
-        // 变量，而权威 stat_data 在 chat 作用域；读面按 Mvu.getMvuData 的同款语义
-        // 回退，写面仍只写 message，第一次回写会自然把 stat_data 物化到该楼层。
+        // MVU cards probe getVariables({ type: 'message' }) before the first floor
+        // has its own stat_data; fall back to the chat tree on read (writes still
+        // target the message), mirroring Mvu.getMvuData.
         if (data && typeof data === 'object' && !Array.isArray(data) && data.stat_data === undefined) {
           var chatStat = state.variables.chat ? state.variables.chat.stat_data : undefined;
           if (chatStat !== undefined) return Object.assign({}, data, { stat_data: clone(chatStat) });
@@ -858,27 +1152,44 @@ window.__ModuleLoader__.load({
       }
 
       function rememberScope(option, next) {
-        var scope = scopeOf(option);
+        var scope = scopeOf(option, true);
         if (scope === 'message') return;
+        if (scope === 'script') {
+          if (scriptId !== '') state.scriptVariables[scriptId] = next;
+          return;
+        }
+        if (scope === 'preset') return;
         state.variables[scope] = next;
       }
 
       // MagVarUpdate and status panels call 'getAllVariables()' / 'Mvu.getAllVariables()'
       // to read the currently effective MVU tree without knowing which scope holds it.
-      // Message variables win over chat, character and global.
+      // JSR merges global + character + script + chat, then (message iframes only)
+      // accumulates every message's variables up to the current floor.
       function allVariables() {
-        var message = state.messages.length > 0
-          ? variablesFor({ type: 'message', message_id: state.messages.length - 1 })
-          : {};
-        return Object.assign(
+        var merged = Object.assign(
           {},
           state.variables.global || {},
           state.variables.character || {},
+          scriptVariablesFor() || {},
           state.variables.chat || {},
-          message || {},
         );
+        if (currentMessageId >= 0) {
+          for (var index = 0; index <= currentMessageId && index < state.messages.length; index++) {
+            var entry = state.messages[index];
+            var data = entry && entry.data;
+            if (data && typeof data === 'object' && !Array.isArray(data)) Object.assign(merged, clone(data));
+          }
+        }
+        return merged;
       }
       window.getAllVariables = function () { return clone(allVariables()) || {}; };
+
+      function scriptVariablesFor() {
+        if (scriptId === '') return {};
+        var table = state.scriptVariables && state.scriptVariables[scriptId];
+        return table && typeof table === 'object' ? table : {};
+      }
 
       function mvuScopeOption(option) {
         var type = option && option.type ? option.type : 'chat';
@@ -1142,6 +1453,40 @@ window.__ModuleLoader__.load({
         state.variables = snapshot.variables || state.variables;
         state.characterData = snapshot.characterData || null;
         state.scriptTrees = Array.isArray(snapshot.scriptTrees) ? snapshot.scriptTrees : null;
+        state.scriptTreesByType = snapshot.scriptTreesByType && typeof snapshot.scriptTreesByType === 'object'
+          ? snapshot.scriptTreesByType
+          : { character: state.scriptTrees, preset: null, global: null };
+        state.presets = snapshot.presets && typeof snapshot.presets === 'object'
+          ? snapshot.presets
+          : { names: [], active: null, values: {} };
+        state.personas = snapshot.personas && typeof snapshot.personas === 'object'
+          ? snapshot.personas
+          : { names: [], ids: [], active: null, values: {} };
+        state.characters = snapshot.characters && typeof snapshot.characters === 'object'
+          ? snapshot.characters
+          : { names: [], ids: [] };
+        state.regexScripts = snapshot.regexScripts && typeof snapshot.regexScripts === 'object'
+          ? snapshot.regexScripts
+          : { global: [], character: [], preset: [] };
+        state.scriptVariables = snapshot.scriptVariables && typeof snapshot.scriptVariables === 'object'
+          ? snapshot.scriptVariables
+          : {};
+        state.worlds = snapshot.worlds && typeof snapshot.worlds === 'object'
+          ? snapshot.worlds
+          : { names: [], active: [], char: { primary: null, additional: [] }, chat: null };
+        state.personaDescription = typeof snapshot.personaDescription === 'string' ? snapshot.personaDescription : '';
+        state.avatar = typeof snapshot.avatar === 'string' ? snapshot.avatar : '';
+        state.characterId = typeof snapshot.characterId === 'number' ? snapshot.characterId : 0;
+        // Script-container iframes adopt the persisted node info after a reload so
+        // getScriptInfo()/replaceScriptInfo() observe the session copy.
+        if (scriptId !== '') {
+          var ownNode = findScriptNodeById(state.scriptTreesByType.character, scriptId);
+          if (ownNode !== null && typeof ownNode.info === 'string') scriptInfo = ownNode.info;
+          if (ownNode !== null && typeof ownNode.name === 'string' && ownNode.name !== '') scriptName = ownNode.name;
+          if (ownNode !== null && ownNode.button && Array.isArray(ownNode.button.buttons)) {
+            scriptButtons = normalizeScriptButtons(ownNode.button.buttons);
+          }
+        }
         // 快照先于 GM 面板首次 getScriptTrees 到达时，把会话副本装进内存树；本地
         // 已写过之后不再接受快照覆盖（见 scriptTreesLocallyWritten）。
         if (!scriptTreesLocallyWritten && Array.isArray(state.scriptTrees)) scriptTrees = clone(state.scriptTrees);
@@ -1186,32 +1531,69 @@ window.__ModuleLoader__.load({
         console.error('[TavernHelper] initial snapshot failed', error);
       });
 
+      // Variable writes are synchronous on the JSR surface (4.9+): the iframe mutates
+      // its local snapshot and returns immediately, while persistence is queued in
+      // order behind the previous write. Failures surface as an error toast and the
+      // optimistic value is replaced by the next snapshot push.
+      var variableWriteChain = Promise.resolve();
+      function persistVariables(target, next) {
+        var scope = scopeOf(target, true);
+        var messageId = scope === 'message' ? messageIndex(target.message_id) : undefined;
+        var op = scope === 'script' ? 'script.variables.replace' : 'variables.replace';
+        var payload = scope === 'script'
+          ? { scriptId: scriptId, variables: next }
+          : { scope: scope, messageId: messageId, variables: next };
+        if (scope === 'script' && scriptId === '') {
+          throw new Error('DSH-SoulMojito: script-scope variables require a script-container iframe');
+        }
+        variableWriteChain = variableWriteChain
+          .catch(function () {})
+          .then(function () { return call(op, payload); })
+          .then(function (value) {
+            var stored = value && typeof value === 'object' ? value.variables : undefined;
+            if (stored && typeof stored === 'object') rememberScope(target, clone(stored));
+          }, function (error) {
+            showToast('error', '变量写入失败: ' + (error && error.message ? error.message : String(error)));
+          });
+      }
+
+      function rememberMessage(target, next) {
+        var message = messageAt(target && target.message_id);
+        if (message) message.data = clone(next);
+      }
+
       window.getVariables = function (option) { return clone(variablesFor(option)) || {}; };
 
       window.replaceVariables = function (variables, option) {
         var target = option || { type: 'chat' };
+        var scope = scopeOf(target, true);
         var next = clone(variables) || {};
+        if (scope === 'message') rememberMessage(target, next);
         rememberScope(target, next);
-        return call('variables.replace', {
-          scope: scopeOf(target),
-          messageId: target.type === 'message' ? messageIndex(target.message_id) : undefined,
-          variables: next,
-        }).then(function (value) { rememberScope(target, value); return value; });
+        persistVariables(target, next);
       };
 
       window.updateVariablesWith = function (updater, option) {
         var target = option || { type: 'chat' };
-        var current = variablesFor(target);
-        return Promise.resolve(updater(clone(current) || {})).then(function (next) {
-          return window.replaceVariables(next || {}, target);
-        });
+        if (typeof updater !== 'function') throw new Error('DSH-SoulMojito: updateVariablesWith expects an updater function');
+        var current = clone(variablesFor(target)) || {};
+        var result = updater(current);
+        if (result && typeof result.then === 'function') {
+          return result.then(function (next) {
+            window.replaceVariables(next || {}, target);
+            return next;
+          });
+        }
+        window.replaceVariables(result || {}, target);
+        return result;
       };
 
       window.insertOrAssignVariables = function (variables, option) {
         var target = option || { type: 'chat' };
         var current = clone(variablesFor(target)) || {};
         Object.keys(variables || {}).forEach(function (key) { current[key] = clone(variables[key]); });
-        return window.replaceVariables(current, target);
+        window.replaceVariables(current, target);
+        return current;
       };
 
       window.insertVariables = function (variables, option) {
@@ -1220,17 +1602,326 @@ window.__ModuleLoader__.load({
         Object.keys(variables || {}).forEach(function (key) {
           if (!(key in current)) current[key] = clone(variables[key]);
         });
-        return window.replaceVariables(current, target);
+        window.replaceVariables(current, target);
+        return current;
       };
 
       window.deleteVariable = function (variablePath, option) {
         var target = option || { type: 'chat' };
         var current = clone(variablesFor(target)) || {};
         var deleteOccurred = unsetByPath(current, variablePath);
-        return window.replaceVariables(current, target).then(function () {
-          return { variables: current, delete_occurred: deleteOccurred };
-        });
+        window.replaceVariables(current, target);
+        return { variables: current, delete_occurred: deleteOccurred };
       };
+
+      // JSR only uses registered schemas for its variable-manager UI; the server-side
+      // MVU guard owns real validation. Keep the registration observable.
+      var variableSchemas = {};
+      window.registerVariableSchema = function (schema, option) {
+        var type = option && option.type ? String(option.type) : 'chat';
+        variableSchemas[type] = schema;
+      };
+      window.getVariablesSchemas = function () { return variableSchemas; };
+
+      /* ------------------------------ macros ------------------------------ */
+
+      // Synchronous ST macro subset. JSR's substitudeMacros is sync, so the shim
+      // expands from its own snapshot instead of calling the host macro engine.
+      // Unknown macros stay verbatim, matching ST's substituteParams behavior.
+      var macroLikes = new Map();
+      function cardField(name) {
+        var data = state.characterData || {};
+        return typeof data[name] === 'string' ? data[name] : '';
+      }
+      function macroString(value) {
+        if (value === undefined || value === null) return '';
+        if (typeof value === 'object') {
+          try { return JSON.stringify(value); } catch (_) { return ''; }
+        }
+        return String(value);
+      }
+      function macroTree(scope) {
+        return scope === 'global' ? (state.variables.global || {}) : (state.variables.chat || {});
+      }
+      function macroRead(scope, path) { return getByPath(macroTree(scope), path); }
+      function macroWrite(scope, path, value) {
+        var tree = macroTree(scope);
+        setByPath(tree, path, value);
+        persistVariables(scope === 'global' ? { type: 'global' } : { type: 'chat' }, clone(tree));
+      }
+      function messageOf(role) {
+        for (var index = state.messages.length - 1; index >= 0; index--) {
+          var message = state.messages[index];
+          if (!message) continue;
+          if (role === 'user' && message.role === 'user') return message;
+          if (role === 'char' && message.role === 'assistant') return message;
+        }
+        return null;
+      }
+      function splitMacroArgs(raw) {
+        var parts = [];
+        var current = '';
+        var quoted = false;
+        for (var index = 0; index < raw.length; index++) {
+          var character = raw[index];
+          if (character === '"') { quoted = !quoted; continue; }
+          if (character === ',' && !quoted) { parts.push(current); current = ''; continue; }
+          current += character;
+        }
+        if (current !== '') parts.push(current);
+        return parts.map(function (part) { return part.trim(); }).filter(function (part) { return part !== ''; });
+      }
+      function randomPick(list) {
+        if (list.length === 0) return '';
+        return list[Math.floor(Math.random() * list.length)] || '';
+      }
+      function rollDice(spec) {
+        var match = /^(\\d*)d(\\d+)([+-]\\d+)?$/i.exec(String(spec).trim());
+        if (match === null) return '';
+        var count = match[1] === '' ? 1 : parseInt(match[1], 10);
+        var sides = parseInt(match[2], 10);
+        var modifier = match[3] === undefined ? 0 : parseInt(match[3], 10);
+        var total = modifier;
+        for (var index = 0; index < count; index++) total += 1 + Math.floor(Math.random() * sides);
+        return String(total);
+      }
+      function formatClock(kind) {
+        var now = new Date();
+        var pad = function (value) { return String(value).padStart(2, '0'); };
+        if (kind === 'time') return pad(now.getHours()) + ':' + pad(now.getMinutes());
+        if (kind === 'date') return now.getFullYear() + '/' + pad(now.getMonth() + 1) + '/' + pad(now.getDate());
+        if (kind === 'datetime') return formatClock('date') + ' ' + formatClock('time');
+        if (kind === 'isotime') return pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+        return now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()) + 'T'
+          + pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+      }
+      function expandMacros(text) {
+        if (typeof text !== 'string' || text.indexOf('{{') === -1) return String(text);
+        return text.replace(/\\{\\{([\\s\\S]*?)\\}\\}/g, function (whole, body) {
+          var expression = String(body).trim();
+          if (expression.indexOf('//') === 0) return '';
+          var separator = expression.indexOf('::');
+          var name = (separator === -1 ? expression : expression.slice(0, separator)).trim().toLowerCase();
+          var argument = separator === -1 ? '' : expression.slice(separator + 2);
+          if (macroLikes.has(name)) {
+            try {
+              var handler = macroLikes.get(name);
+              return String(handler.apply(null, argument === '' ? [] : [argument]));
+            } catch (error) {
+              console.error('[TavernHelper] macro-like "' + name + '" failed', error);
+              return whole;
+            }
+          }
+          switch (name) {
+            case 'char':
+            case 'bot':
+            case 'charifnotgroup':
+              return state.characterName;
+            case 'user':
+              return state.userName;
+            case 'persona':
+              return state.personaDescription || '';
+            case 'description':
+              return cardField('description');
+            case 'personality':
+              return cardField('personality');
+            case 'scenario':
+              return cardField('scenario');
+            case 'mesexamples':
+              return cardField('mes_example');
+            case 'lastmessage': {
+              var last = state.messages.length > 0 ? state.messages[state.messages.length - 1] : null;
+              return last && typeof last.message === 'string' ? last.message : '';
+            }
+            case 'lastusermessage': {
+              var user = messageOf('user');
+              return user && typeof user.message === 'string' ? user.message : '';
+            }
+            case 'lastcharmessage': {
+              var character = messageOf('char');
+              return character && typeof character.message === 'string' ? character.message : '';
+            }
+            case 'lastmessageid':
+              return String(state.messages.length - 1);
+            case 'chatid':
+              return state.chatId;
+            case 'group':
+              return state.characterName;
+            case 'input':
+            case 'original':
+            case 'model':
+              return '';
+            case 'newline':
+              return '\\n';
+            case 'getvar':
+              return macroString(macroRead('chat', String(argument).trim()));
+            case 'getglobalvar':
+              return macroString(macroRead('global', String(argument).trim()));
+            case 'setvar': {
+              var localPair = splitAssignment(argument);
+              macroWrite('chat', localPair.path, localPair.value);
+              return '';
+            }
+            case 'setglobalvar': {
+              var globalPair = splitAssignment(argument);
+              macroWrite('global', globalPair.path, globalPair.value);
+              return '';
+            }
+            case 'addvar':
+            case 'incvar': {
+              var incPair = splitAssignment(argument);
+              var incValue = Number(macroRead('chat', incPair.path));
+              macroWrite('chat', incPair.path, (isFinite(incValue) ? incValue : 0) + (incPair.value === '' ? 1 : Number(incPair.value)));
+              return '';
+            }
+            case 'decvar': {
+              var decPair = splitAssignment(argument);
+              var decValue = Number(macroRead('chat', decPair.path));
+              macroWrite('chat', decPair.path, (isFinite(decValue) ? decValue : 0) - (decPair.value === '' ? 1 : Number(decPair.value)));
+              return '';
+            }
+            case 'random':
+            case 'pick':
+              return randomPick(splitMacroArgs(argument));
+            case 'roll':
+              return rollDice(argument === '' ? '1d100' : argument);
+            case 'time':
+            case 'date':
+            case 'datetime':
+            case 'isotime':
+            case 'isodate':
+              return formatClock(name);
+            default:
+              return whole;
+          }
+        });
+      }
+      function splitAssignment(raw) {
+        var text = String(raw);
+        var separator = text.indexOf('::');
+        var path = (separator === -1 ? text : text.slice(0, separator)).trim();
+        var value = separator === -1 ? '' : text.slice(separator + 2);
+        return { path: path, value: value };
+      }
+      window.substitudeMacros = function (text) { return expandMacros(String(text)); };
+      window.registerMacroLike = function (name, handler) {
+        if (typeof name !== 'string' || name.trim() === '') throw new Error('DSH-SoulMojito: registerMacroLike requires a macro name');
+        if (typeof handler !== 'function') throw new Error('DSH-SoulMojito: registerMacroLike requires a handler function');
+        var key = name.trim().toLowerCase();
+        macroLikes.set(key, handler);
+        return { unregister: function () { macroLikes.delete(key); } };
+      };
+      window.unregisterMacroLike = function (name) {
+        macroLikes.delete(String(name).trim().toLowerCase());
+      };
+
+      /* ------------------------------ regex ------------------------------ */
+
+      function regexListForScope(scope) {
+        var table = state.regexScripts || {};
+        if (scope === 'character' || scope === 'preset' || scope === 'global') return table[scope] || [];
+        return [].concat(table.global || [], table.character || [], table.preset || []);
+      }
+      function placementOfSource(source) {
+        if (source === 'user_input') return 1;
+        if (source === 'ai_output') return 2;
+        if (source === 'slash_command') return 3;
+        if (source === 'world_info') return 5;
+        if (source === 'reasoning') return 6;
+        return 2;
+      }
+      function hasRegexPlacement(script, placement) {
+        var placements = script && Array.isArray(script.placement) ? script.placement : [];
+        return placements.length === 0 || placements.indexOf(placement) !== -1;
+      }
+      function compileScriptRegex(script) {
+        var raw = script && script.substituteRegex === true
+          ? expandMacros(String(script.findRegex || ''))
+          : String((script && script.findRegex) || '');
+        var literal = /^\\/([\\s\\S]*)\\/([a-z]*)$/.exec(raw);
+        try {
+          if (literal !== null) {
+            var flags = literal[2].indexOf('g') === -1 ? literal[2] + 'g' : literal[2];
+            return new RegExp(literal[1], flags);
+          }
+          return new RegExp(raw, 'g');
+        } catch (error) {
+          console.warn('[TavernHelper] invalid regex skipped', script && script.id, error);
+          return null;
+        }
+      }
+      function regexReplacement(template, match, captures, trimStrings) {
+        var trim = function (value) {
+          var next = value;
+          for (var index = 0; index < trimStrings.length; index++) {
+            if (trimStrings[index] !== '') next = next.split(trimStrings[index]).join('');
+          }
+          return next;
+        };
+        return String(template)
+          .replace(/\\{\\{match\\}\\}/gi, '$0')
+          .replace(/\\$(\\d+)|\\$<([^>]+)>/g, function (token, digits, group) {
+            if (digits !== undefined) {
+              var index = Number(digits);
+              var value = index === 0 ? match : captures[index - 1];
+              return value === undefined ? '' : trim(value);
+            }
+            return '';
+          });
+      }
+      function applyRegexScriptLocal(text, script, placement, destination, depth) {
+        if (!script || script.disabled === true || !hasRegexPlacement(script, placement)) return null;
+        if (destination === 'display' && script.promptOnly === true) return null;
+        if (destination === 'prompt' && script.markdownOnly === true) return null;
+        if (typeof depth === 'number' && isFinite(depth)) {
+          if (typeof script.minDepth === 'number' && depth < script.minDepth) return null;
+          if (typeof script.maxDepth === 'number' && depth > script.maxDepth) return null;
+        }
+        var regex = compileScriptRegex(script);
+        if (regex === null) return null;
+        var replacement = script.substituteRegex === true ? expandMacros(String(script.replaceString || '')) : String(script.replaceString || '');
+        var trimStrings = Array.isArray(script.trimStrings) ? script.trimStrings.map(String) : [];
+        var result = String(text).replace(regex, function (match) {
+          var captures = Array.prototype.slice.call(arguments, 1, -2);
+          return regexReplacement(replacement, match, captures, trimStrings);
+        });
+        for (var index = 0; index < trimStrings.length; index++) {
+          if (trimStrings[index] !== '') result = result.split(trimStrings[index]).join('');
+        }
+        return result;
+      }
+      function applyRegexScriptsLocal(text, scripts, placement, destination, depth) {
+        var current = String(text);
+        for (var index = 0; index < scripts.length; index++) {
+          var next = applyRegexScriptLocal(current, scripts[index], placement, destination, depth);
+          if (next !== null) current = next;
+        }
+        return current;
+      }
+      function toTavernRegex(script) {
+        return {
+          id: script.id,
+          script_name: script.scriptName,
+          enabled: script.disabled !== true,
+          find_regex: script.findRegex,
+          replace_string: script.replaceString,
+          trim_strings: Array.isArray(script.trimStrings) ? clone(script.trimStrings) : [],
+          source: {
+            user_input: hasRegexPlacement(script, 1),
+            ai_output: hasRegexPlacement(script, 2),
+            slash_command: hasRegexPlacement(script, 3),
+            world_info: hasRegexPlacement(script, 5),
+            reasoning: hasRegexPlacement(script, 6),
+          },
+          destination: {
+            display: script.promptOnly !== true,
+            prompt: script.markdownOnly !== true,
+          },
+          run_on_edit: script.runOnEdit === true,
+          min_depth: typeof script.minDepth === 'number' ? script.minDepth : null,
+          max_depth: typeof script.maxDepth === 'number' ? script.maxDepth : null,
+        };
+      }
 
       window.getCurrentMessageId = function () {
         if (typeof currentMessageId === 'number' && currentMessageId >= 0) return currentMessageId;
@@ -1345,6 +2036,15 @@ window.__ModuleLoader__.load({
           .then(afterMessageMutation).then(function () { return undefined; });
       };
 
+      window.setChatMessage = function (message, option) {
+        return window.setChatMessages([message], option);
+      };
+
+      window.rotateChatMessages = function (begin, middle, end, option) {
+        return call('messages.rotate', { begin: begin, middle: middle, end: end })
+          .then(afterMessageMutation).then(function () { return undefined; });
+      };
+
       window.eventOn = function (type, listener) {
         if (!listeners.has(type)) listeners.set(type, new Set());
         listeners.get(type).add(listener);
@@ -1369,13 +2069,31 @@ window.__ModuleLoader__.load({
         listeners.set(type, new Set([listener].concat(rest)));
         return { stop: function () { window.eventRemoveListener(type, listener); } };
       };
+      function emitLocallyAsync(type, args) {
+        var group = listeners.get(type);
+        if (!group) return Promise.resolve();
+        var results = [];
+        Array.from(group).forEach(function (listener) {
+          try {
+            results.push(Promise.resolve(listener.apply(null, args)));
+          } catch (error) {
+            console.error('[TavernHelper] listener failed', error);
+          }
+        });
+        return Promise.all(results).then(function () { return undefined; });
+      }
+
       window.eventEmit = function (type) {
-        return Promise.resolve(emitLocally(type, Array.prototype.slice.call(arguments, 1)));
+        return emitLocallyAsync(type, Array.prototype.slice.call(arguments, 1));
       };
       window.eventEmitAndWait = function (type) {
-        return emitLocally(type, Array.prototype.slice.call(arguments, 1));
+        // JSR's emitAndWait is synchronous from the caller's point of view; async
+        // listeners still run, and failures are logged instead of escaping.
+        void emitLocallyAsync(type, Array.prototype.slice.call(arguments, 1)).catch(function (error) {
+          console.error('[TavernHelper] eventEmitAndWait listener failed', error);
+        });
       };
-      window.eventOnButton = function (type, listener) { return window.eventOn(type, listener); };
+      window.eventOnButton = function (type, listener) { return window.eventOn(window.getButtonEvent(type), listener); };
       window.eventRemoveListener = function (type, listener) {
         var group = listeners.get(type);
         if (group) { group.delete(listener); if (group.size === 0) listeners.delete(type); }
@@ -1387,23 +2105,6 @@ window.__ModuleLoader__.load({
       window.eventClearAll = function () { listeners.clear(); };
       window.addEventListener('pagehide', function () { listeners.clear(); });
 
-      window.getLorebook = function (name) {
-        return call('lorebook.get', { name: name }).then(function (value) { return value.entries; });
-      };
-      window.getWorldbook = window.getLorebook;
-      window.getLorebookNames = function () {
-        return call('lorebook.list', {}).then(function (value) { return value.names; });
-      };
-      window.getWorldbookNames = window.getLorebookNames;
-      window.getGlobalWorldbookNames = function () {
-        return call('lorebook.list', {}).then(function (value) { return value.active || []; });
-      };
-      window.getCharNames = function () {
-        return call('character.list', {}).then(function (value) { return value.names; });
-      };
-      window.getCharacterNames = window.getCharNames;
-      window.getChatWorldbookNames = window.getGlobalWorldbookNames;
-
       // 角色链接世界书（2026-10-21 会话副本）：getter 必须同步（GM 脚本不 await）。
       // 名字取 extensions.world，其次内嵌书 characterBook.name。
       function characterWorldbookName() {
@@ -1413,18 +2114,174 @@ window.__ModuleLoader__.load({
         var embedded = data.characterBook && typeof data.characterBook.name === 'string' ? data.characterBook.name.trim() : '';
         return embedded !== '' ? embedded : null;
       }
-      window.getCharWorldbookNames = function () { return { primary: characterWorldbookName(), additional: [] }; };
-      // 世界书写入只落当前聊天的会话副本（服务端 lorebook.put 强制 chatId）；基础
-      // worlds/<name>.json 与卡内 characterBook 永远不动。updater 在 iframe 内执行，
-      // 只把结果 entries 发回宿主（函数不能过 postMessage）。
+
+      function worldNames() { return clone((state.worlds && state.worlds.names) || []) || []; }
+      function worldEntries(value) { return Array.isArray(value) ? clone(value) : []; }
+      function putWorldEntries(name, entries) {
+        return call('lorebook.put', { name: name, entries: entries }).then(function (value) { return worldEntries(value && value.entries); });
+      }
+      function rememberWorldName(name) {
+        if (!state.worlds) state.worlds = { names: [], active: [], char: { primary: null, additional: [] }, chat: null };
+        if (state.worlds.names.indexOf(name) === -1) state.worlds.names.push(name);
+      }
+
+      window.getLorebook = function (name) {
+        var request = typeof name === 'string' && name.trim() !== '' ? { name: name.trim() } : {};
+        return call('lorebook.get', request).then(function (value) { return value.entries; });
+      };
+      window.getWorldbook = window.getLorebook;
+      window.getLorebooks = function () { return worldNames(); };
+      window.getLorebookNames = function () { return worldNames(); };
+      window.getWorldbookNames = function () { return worldNames(); };
+      window.getGlobalWorldbookNames = function () { return clone((state.worlds && state.worlds.active) || []); };
+      window.getCharNames = function () { return clone((state.characters && state.characters.names) || []); };
+      window.getCharacterNames = window.getCharNames;
+      window.getCharacterIds = function () { return clone((state.characters && state.characters.ids) || []); };
+      window.getCharWorldbookNames = function () {
+        var links = (state.worlds && state.worlds.char) || {};
+        return { primary: links.primary === undefined ? null : links.primary, additional: clone(links.additional || []) };
+      };
+      window.getCharLorebooks = window.getCharWorldbookNames;
+      window.getCurrentCharPrimaryLorebook = function () {
+        var links = (state.worlds && state.worlds.char) || {};
+        return links.primary || links.embedded || null;
+      };
+      window.getChatWorldbookName = function () { return (state.worlds && state.worlds.chat) || null; };
+      window.getChatLorebook = window.getChatWorldbookName;
+      window.getChatWorldbookNames = function () {
+        var chat = window.getChatWorldbookName();
+        return chat === null ? [] : [chat];
+      };
+
+      // World-book writes land in this chat's session copy only (base assets and
+      // card-embedded books stay read-only). The updater runs inside the iframe;
+      // only the resulting entries cross the bridge.
       window.updateWorldbookWith = function (name, updater) {
         if (typeof updater !== 'function') return Promise.reject(new Error('DSH-SoulMojito: updateWorldbookWith(name, updater) requires a function'));
         var bookName = typeof name === 'string' && name.trim() !== '' ? name.trim() : characterWorldbookName();
         if (bookName === null) return Promise.reject(new Error('DSH-SoulMojito: updateWorldbookWith requires a world book name (this character links no world)'));
         return window.getWorldbook(bookName)
-          .then(function (entries) { return Promise.resolve(updater(entries)); })
-          .then(function (updated) { return call('lorebook.put', { name: bookName, entries: updated }); })
-          .then(function (value) { return value.entries; });
+          .then(function (entries) { return Promise.resolve(updater(clone(entries) || [])); })
+          .then(function (updated) { return putWorldEntries(bookName, updated); });
+      };
+      window.replaceWorldbook = function (name, entries) {
+        var bookName = typeof name === 'string' && name.trim() !== '' ? name.trim() : characterWorldbookName();
+        if (bookName === null) return Promise.reject(new Error('DSH-SoulMojito: replaceWorldbook requires a world book name'));
+        return putWorldEntries(bookName, worldEntries(entries));
+      };
+      window.createOrReplaceWorldbook = window.replaceWorldbook;
+      window.createWorldbook = function (name) {
+        var bookName = typeof name === 'string' ? name.trim() : '';
+        if (bookName === '') return Promise.reject(new Error('DSH-SoulMojito: createWorldbook requires a name'));
+        return call('lorebook.create', { name: bookName, entries: [] }).then(function () {
+          rememberWorldName(bookName);
+          return true;
+        });
+      };
+      window.createLorebook = window.createWorldbook;
+      window.deleteWorldbook = function (name) {
+        var bookName = typeof name === 'string' ? name.trim() : '';
+        if (bookName === '') return Promise.reject(new Error('DSH-SoulMojito: deleteWorldbook requires a name'));
+        return call('lorebook.delete', { name: bookName }).then(function (value) {
+          if (state.worlds && Array.isArray(state.worlds.names)) {
+            state.worlds.names = state.worlds.names.filter(function (entry) { return entry !== bookName; });
+          }
+          return value && value.deleted === true;
+        });
+      };
+      window.deleteLorebook = window.deleteWorldbook;
+      window.setChatLorebook = function (name) {
+        var bookName = typeof name === 'string' && name.trim() !== '' ? name.trim() : null;
+        return call('chat.world.set', { name: bookName }).then(function () {
+          if (!state.worlds) state.worlds = { names: [], active: [], char: { primary: null, additional: [] }, chat: null };
+          state.worlds.chat = bookName;
+          if (bookName !== null) rememberWorldName(bookName);
+          return undefined;
+        });
+      };
+      window.getOrCreateChatLorebook = function () {
+        var existing = window.getChatWorldbookName();
+        if (existing !== null) return Promise.resolve(existing);
+        var created = 'Chat Worldbook - ' + (state.chatId || 'new');
+        return window.createWorldbook(created)
+          .then(function () { return window.setChatLorebook(created); })
+          .then(function () { return created; });
+      };
+      window.getOrCreateChatWorldbook = window.getOrCreateChatLorebook;
+
+      window.getLorebookEntries = function (name) { return window.getWorldbook(name); };
+      window.replaceLorebookEntries = function (name, entries) { return window.replaceWorldbook(name, entries); };
+      window.updateLorebookEntriesWith = function (name, updater) {
+        if (typeof updater !== 'function') return Promise.reject(new Error('DSH-SoulMojito: updateLorebookEntriesWith(name, updater) requires a function'));
+        return window.getWorldbook(name).then(function (entries) {
+          return Promise.resolve(updater(clone(entries) || [])).then(function (next) {
+            return window.replaceWorldbook(name, next);
+          });
+        });
+      };
+      window.setLorebookEntries = function (name, patches) {
+        return window.getWorldbook(name).then(function (entries) {
+          var byUid = {};
+          worldEntries(entries).forEach(function (entry) { byUid[String(entry.uid)] = entry; });
+          var next = worldEntries(entries).map(function (entry) {
+            var patch = (Array.isArray(patches) ? patches : []).filter(function (item) { return String(item.uid) === String(entry.uid); })[0];
+            return patch === undefined ? entry : Object.assign({}, entry, patch);
+          });
+          return window.replaceWorldbook(name, next);
+        });
+      };
+      window.createLorebookEntries = function (name, entries) {
+        return window.getWorldbook(name).then(function (current) {
+          var list = worldEntries(current);
+          var nextUid = list.reduce(function (max, entry) { return typeof entry.uid === 'number' && entry.uid > max ? entry.uid : max; }, -1) + 1;
+          var created = (Array.isArray(entries) ? entries : []).map(function (entry) {
+            return Object.assign({}, entry, { uid: nextUid++ });
+          });
+          return window.replaceWorldbook(name, list.concat(created)).then(function (all) {
+            return { entries: all, new_uids: created.map(function (entry) { return entry.uid; }) };
+          });
+        });
+      };
+      window.createLorebookEntry = function (name, entry) {
+        return window.createLorebookEntries(name, [entry]).then(function (result) {
+          return result.entries[result.entries.length - 1];
+        });
+      };
+      window.deleteLorebookEntries = function (name, uids) {
+        return window.getWorldbook(name).then(function (current) {
+          var list = worldEntries(current);
+          var wanted = (Array.isArray(uids) ? uids : []).map(String);
+          var kept = list.filter(function (entry) { return wanted.indexOf(String(entry.uid)) === -1; });
+          var occurred = kept.length !== list.length;
+          return window.replaceWorldbook(name, kept).then(function (all) {
+            return { entries: all, delete_occurred: occurred };
+          });
+        });
+      };
+      window.deleteLorebookEntry = function (name, uid) {
+        return window.deleteLorebookEntries(name, [uid]).then(function (result) { return result.delete_occurred; });
+      };
+      window.createWorldbookEntries = window.createLorebookEntries;
+      window.deleteWorldbookEntries = window.deleteLorebookEntries;
+
+      // Lorebook scan settings are host-level; the sandbox keeps a session-local
+      // mirror so read-back is consistent. Generation uses the host settings.
+      var lorebookSettings = {
+        scan_depth: 2,
+        context_percentage: 25,
+        budget_cap: 0,
+        min_activations: 0,
+        max_depth: 0,
+        recursive: false,
+        case_sensitive: null,
+        match_whole_words: null,
+        use_group_scoring: false,
+        overflow_alert: false,
+      };
+      window.getLorebookSettings = function () { return clone(lorebookSettings); };
+      window.setLorebookSettings = function (settings) {
+        if (settings && typeof settings === 'object') Object.assign(lorebookSettings, clone(settings));
+        console.warn('[TavernHelper] setLorebookSettings is a session-local mirror; generation uses the host lorebook settings');
       };
 
       // 脚本树（2026-10-21，GM 面板阶段 B）：优先会话副本（state.scriptTrees，由
@@ -1462,6 +2319,38 @@ window.__ModuleLoader__.load({
         if (scriptTrees === null) scriptTrees = seedScriptTrees();
         return scriptTrees;
       }
+      function scriptTreeType(option) {
+        var type = option && option.type ? String(option.type) : 'character';
+        if (type !== 'character' && type !== 'preset' && type !== 'global') {
+          throw new Error('DSH-SoulMojito: script tree type must be character, preset or global (got ' + type + ')');
+        }
+        return type;
+      }
+      function scriptTreesOf(type) {
+        var byType = state.scriptTreesByType || {};
+        if (type === 'preset') return clone(byType.preset || []) || [];
+        if (type === 'global') return clone(byType.global || []) || [];
+        return clone(byType.character === null || byType.character === undefined ? currentScriptTrees() : byType.character) || [];
+      }
+      function setScriptTreesLocal(type, trees) {
+        if (!state.scriptTreesByType) state.scriptTreesByType = { character: null, preset: null, global: null };
+        if (type === 'preset') state.scriptTreesByType.preset = clone(trees);
+        else if (type === 'global') state.scriptTreesByType.global = clone(trees);
+        else {
+          state.scriptTreesByType.character = clone(trees);
+          scriptTrees = clone(trees);
+          state.scriptTrees = clone(trees);
+        }
+      }
+      function persistScriptTrees(type, trees) {
+        return call('scripts.put', { type: type, scriptTrees: trees }).then(function (value) {
+          var stored = value && Array.isArray(value.scriptTrees) ? value.scriptTrees : trees;
+          setScriptTreesLocal(type, stored);
+          if (type === 'character') scriptTreesLocallyWritten = true;
+          publishZodReady(stored);
+          return clone(stored);
+        });
+      }
       function publishZodReady(trees) {
         var flat = flattenScriptTrees(trees);
         var found = null;
@@ -1470,7 +2359,6 @@ window.__ModuleLoader__.load({
           if (!entry || typeof entry.content !== 'string') continue;
           var pattern = /__mgZodReady__\\s*=\\s*(\\{[^{}]*\\})/g;
           var match;
-          // 取最后一次出现：GM 面板是在源码尾部注入新探针，旧探针可能仍在。
           while ((match = pattern.exec(entry.content)) !== null) found = match[1];
         }
         if (found === null) return;
@@ -1481,23 +2369,170 @@ window.__ModuleLoader__.load({
         try { window.dispatchEvent(new CustomEvent('mg-zod-ready', { detail: ready })); } catch (_) {}
         try { host.dispatchEvent(new CustomEvent('mg-zod-ready', { detail: ready })); } catch (_) {}
       }
-      window.getScriptTrees = function () { return clone(currentScriptTrees()); };
+      window.getScriptTrees = function (option) {
+        return scriptTreesOf(scriptTreeType(option));
+      };
+      window.replaceScriptTrees = function (trees, option) {
+        var type = scriptTreeType(option);
+        if (!Array.isArray(trees)) throw new Error('DSH-SoulMojito: replaceScriptTrees requires an array of script nodes');
+        setScriptTreesLocal(type, clone(trees));
+        void persistScriptTrees(type, clone(trees)).catch(function (error) {
+          showToast('error', '脚本树保存失败: ' + (error && error.message ? error.message : String(error)));
+        });
+      };
       // 先持久化再发布 ready：GM 面板把 updateScriptTreesWith 的 resolve 当作「已
       // 保存」。落盘失败必须拒绝并保留旧内存树，不能把半成品当成成功。
-      window.updateScriptTreesWith = function (updater) {
+      window.updateScriptTreesWith = function (updater, option) {
         if (typeof updater !== 'function') return Promise.reject(new Error('DSH-SoulMojito: updateScriptTreesWith requires a function'));
-        var draft = clone(currentScriptTrees());
+        var type = scriptTreeType(option);
+        var draft = scriptTreesOf(type);
         return Promise.resolve().then(function () {
           return updater(draft);
         }).then(function (next) {
           if (!Array.isArray(next)) throw new Error('DSH-SoulMojito: updateScriptTreesWith updater must return an array of script nodes');
-          return call('scripts.put', { scriptTrees: next }).then(function (value) {
-            scriptTrees = value && Array.isArray(value.scriptTrees) ? value.scriptTrees : next;
-            scriptTreesLocallyWritten = true;
-            publishZodReady(scriptTrees);
-            return clone(scriptTrees);
+          return persistScriptTrees(type, next);
+        });
+      };
+
+      function findScriptNodeById(nodes, id) {
+        if (!Array.isArray(nodes) || id === '') return null;
+        for (var index = 0; index < nodes.length; index++) {
+          var node = nodes[index];
+          if (!node || typeof node !== 'object') continue;
+          if (node.type === 'folder' && Array.isArray(node.scripts)) {
+            var nested = findScriptNodeById(node.scripts, id);
+            if (nested !== null) return nested;
+            continue;
+          }
+          if (node.id === id) return node;
+        }
+        return null;
+      }
+      function ownScriptNode() {
+        return findScriptNodeById(scriptTreesOf('character'), scriptId);
+      }
+      function persistOwnScriptPatch(patch) {
+        if (scriptId === '') return;
+        call('scripts.patch', Object.assign({ scriptId: scriptId }, patch)).catch(function (error) {
+          showToast('error', '脚本信息保存失败: ' + (error && error.message ? error.message : String(error)));
+        });
+      }
+      function buttonHash(text) {
+        var hash = 0;
+        var value = String(text);
+        for (var index = 0; index < value.length; index++) {
+          hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
+        }
+        return Math.abs(hash).toString(36);
+      }
+      function buttonEventId(ownerId, name) {
+        return String(ownerId) + '_' + buttonHash(name);
+      }
+      window.getScriptId = function () { return scriptId === '' ? 'dsh-soulmojito-frontend' : scriptId; };
+      window.getScriptName = function () {
+        if (scriptName !== '') return scriptName;
+        var node = ownScriptNode();
+        return node && typeof node.name === 'string' ? node.name : '';
+      };
+      window.getScriptInfo = function () {
+        if (scriptInfo !== '') return scriptInfo;
+        var node = ownScriptNode();
+        return node && typeof node.info === 'string' ? node.info : '';
+      };
+      window.replaceScriptInfo = function (info) {
+        scriptInfo = String(info === undefined || info === null ? '' : info);
+        var node = ownScriptNode();
+        if (node) node.info = scriptInfo;
+        persistOwnScriptPatch({ info: scriptInfo });
+      };
+      window.getButtonEvent = function (name) { return buttonEventId(window.getScriptId(), name); };
+      window.getIframeName = function () {
+        return scriptId === '' ? 'TH-message-' + currentMessageId : 'TH-script-' + scriptId;
+      };
+      window.getMessageId = function (iframeName) {
+        if (iframeName === window.getIframeName()) return currentMessageId;
+        throw new Error('DSH-SoulMojito: iframe "' + String(iframeName) + '" is not registered in this document');
+      };
+      window.reloadIframe = function () {
+        try {
+          window.location.reload();
+          return Promise.resolve();
+        } catch (error) {
+          return Promise.reject(new Error('DSH-SoulMojito: reloadIframe failed: ' + (error && error.message ? error.message : String(error))));
+        }
+      };
+
+      window.getAllEnabledScriptButtons = function () {
+        var result = {};
+        ['character', 'preset', 'global'].forEach(function (type) {
+          flattenScriptTrees(scriptTreesOf(type)).forEach(function (node) {
+            if (!node || node.enabled === false) return;
+            if (typeof node.id !== 'string' || typeof node.content !== 'string' || node.content.trim() === '') return;
+            var button = node.button && typeof node.button === 'object' ? node.button : null;
+            if (button === null || button.enabled === false || !Array.isArray(button.buttons)) return;
+            var visible = button.buttons.filter(function (entry) { return entry && typeof entry.name === 'string' && entry.visible !== false; });
+            if (visible.length === 0) return;
+            result[node.id] = visible.map(function (entry) {
+              return { button_id: buttonEventId(node.id, entry.name), button_name: entry.name };
+            });
           });
         });
+        return result;
+      };
+
+      // 脚本按钮（JSR 快速回复栏的可观察面）：容器 iframe 上报按钮列表，宿主渲染
+      // 在「卡脚本」tab；没有容器时仍维持一份 iframe 内存列表，读取结果一致。
+      var scriptButtons = [];
+      function normalizeScriptButtons(value) {
+        if (!Array.isArray(value)) return [];
+        return value
+          .filter(function (button) { return button && typeof button === 'object' && typeof button.name === 'string' && button.name !== ''; })
+          .map(function (button) {
+            return Object.assign({}, button, { visible: button.visible !== false });
+          });
+      }
+      function syncOwnNodeButtons() {
+        var node = ownScriptNode();
+        if (node === null) return;
+        node.button = { enabled: true, buttons: clone(scriptButtons) };
+      }
+      window.getScriptButtons = function () { return clone(scriptButtons); };
+      function broadcastScriptButtons() {
+        try {
+          realParent.postMessage({
+            type: HELPER_BUTTONS_MESSAGE,
+            token: token,
+            scriptId: window.getScriptId(),
+            buttons: scriptButtons.map(function (button) {
+              return { name: button.name, visible: button.visible !== false, event: buttonEventId(window.getScriptId(), button.name) };
+            }),
+          }, '*');
+        } catch (error) {
+          console.warn('[TavernHelper] script button broadcast failed', error);
+        }
+      }
+      window.replaceScriptButtons = function (buttons) {
+        scriptButtons = normalizeScriptButtons(buttons);
+        broadcastScriptButtons();
+        syncOwnNodeButtons();
+        persistOwnScriptPatch({ buttons: scriptButtons });
+      };
+      window.updateScriptButtonsWith = function (updater) {
+        if (typeof updater !== 'function') throw new Error('DSH-SoulMojito: updateScriptButtonsWith requires a function');
+        var next = updater(clone(scriptButtons));
+        window.replaceScriptButtons(next);
+        return clone(scriptButtons);
+      };
+      window.appendInexistentScriptButtons = function (buttons) {
+        var existing = new Set(scriptButtons.map(function (button) { return button.name; }));
+        var next = clone(scriptButtons);
+        normalizeScriptButtons(buttons).forEach(function (button) {
+          if (!existing.has(button.name)) {
+            existing.add(button.name);
+            next.push(button);
+          }
+        });
+        window.replaceScriptButtons(next);
       };
 
       // triggerSlash：只接不与宿主生成循环冲突的命令子集（变量/分支/发送/裁剪/正则）。
@@ -1505,6 +2540,7 @@ window.__ModuleLoader__.load({
       window.triggerSlash = function (command) {
         return call('slash', { command: String(command) }).then(function (value) { return value.output; });
       };
+      window.triggerSlashWithResult = window.triggerSlash;
 
       // JSR 生成桥（2026-10-22）：示例卡3 的 React 游戏前端启动时把
       // TavernHelper.generate 当作运行时连接器的硬门槛，缺失会直接 throw
@@ -1517,6 +2553,12 @@ window.__ModuleLoader__.load({
       }
       function generationPromptMessages(config) {
         var messages = [];
+        // injectPrompts() entries join every generation call from this iframe.
+        (injectedPrompts || []).forEach(function (inject) {
+          if (!inject || typeof inject.content !== 'string' || inject.content === '') return;
+          if (inject.position === 'none') return;
+          messages.push({ role: typeof inject.role === 'string' ? inject.role : 'system', content: inject.content });
+        });
         var injects = config && Array.isArray(config.injects) ? config.injects : [];
         injects.forEach(function (inject) {
           if (!inject || typeof inject.content !== 'string' || inject.content === '') return;
@@ -1573,32 +2615,39 @@ window.__ModuleLoader__.load({
       window.stopGenerationById = function () { return false; };
       window.stopAllGeneration = function () { return false; };
 
-      // TavernHelper 的正则面（只读可观察语义）：getTavernRegexes 列出脚本，
-      // formatAsTavernRegexedString 按 placement 应用。写面（replace/update）走
-      // 面板与 Agent 工具，这里不给前端写口子。
+      // Regex compatibility (JSR signature): getTavernRegexes(option) returns the
+      // ST-shaped entries synchronously; formatAsTavernRegexedString(text, source,
+      // destination, option) applies matches locally. Regex writes stay panel-owned.
       window.getTavernRegexes = function (option) {
-        var settings = option || {};
-        return call('regex.get', { scope: settings.scope || 'global' }).then(function (value) {
-          var scripts = value.scripts || [];
-          return settings.enabled_only ? scripts.filter(function (script) { return !script.disabled; }) : scripts;
-        });
+        var type = option && option.type && option.type !== 'in_use' ? option.type : 'global';
+        return regexListForScope(type).map(toTavernRegex);
       };
-      window.formatAsTavernRegexedString = function (text, placement, option) {
-        var settings = option || {};
-        var apply = function (scripts) {
-          return call('regex.format', {
-            text: String(text),
-            placement: typeof placement === 'number' ? placement : 2,
-            scripts: Array.isArray(scripts) ? scripts : undefined,
-            depth: settings.depth,
-          }).then(function (value) { return value.text; });
-        };
-        // 显式给脚本时直接应用（JSR 的调用姿势允许传入脚本集）；否则先取启用集。
-        if (Array.isArray(settings.scripts)) return apply(settings.scripts);
-        return window.getTavernRegexes({ enabled_only: true }).then(apply);
+      window.formatAsTavernRegexedString = function (text, source, destination, option) {
+        var placement;
+        var target;
+        var settings;
+        if (typeof source === 'number') {
+          // Legacy two-argument form: (text, placementNumber, optionObject).
+          placement = source;
+          target = 'display';
+          settings = destination && typeof destination === 'object' ? destination : (option && typeof option === 'object' ? option : {});
+        } else {
+          placement = placementOfSource(source);
+          target = typeof destination === 'string' && destination !== '' ? destination : 'display';
+          settings = option && typeof option === 'object' ? option : {};
+        }
+        var scripts = Array.isArray(settings.scripts) ? settings.scripts : regexListForScope(settings.scope);
+        return applyRegexScriptsLocal(String(text), scripts, placement, target, settings.depth);
       };
-      // builtin.renderMarkdown：showdown 已随库脚本加载；缺失时降级为纯文本，
-      // 不假装渲染成功。
+      window.isCharacterTavernRegexesEnabled = function () { return true; };
+      window.replaceTavernRegexes = function () {
+        return Promise.reject(new Error('DSH-SoulMojito: regex writes are panel-owned; a sandboxed frontend cannot replace shared regex assets'));
+      };
+      window.updateTavernRegexesWith = function () {
+        return Promise.reject(new Error('DSH-SoulMojito: regex writes are panel-owned; a sandboxed frontend cannot update shared regex assets'));
+      };
+
+      // builtin: host-free helpers only; DOM-bound members fail explicitly.
       window.builtin = window.builtin || {};
       window.builtin.renderMarkdown = function (text) {
         if (window.showdown && typeof window.showdown.Converter === 'function') {
@@ -1615,13 +2664,52 @@ window.__ModuleLoader__.load({
       window.builtin.parseRegexFromString = function (regex) {
         try { return new RegExp(String(regex)); } catch (_) { return null; }
       };
-      window.substitudeMacros = function (text) { return String(text); };
-      // JSR 4.8.2 is the compatibility level this shim targets. Cards such as
-      // 示例卡3 gate their diagnostics on getTavernHelperVersion() >= 4.8.2; the
-      // function is a capability probe, not the plugin version (the plugin version is
-      // shown in the management panel). Unsupported JSR functions still throw.
-      window.getTavernHelperVersion = function () { return '4.8.2'; };
-      window.getTavernVersion = function () { return 'dsh-soulmojito'; };
+      window.builtin.uuidv4 = function () {
+        if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (character) {
+          var random = Math.floor(Math.random() * 16);
+          var value = character === 'x' ? random : (random & 0x3) | 0x8;
+          return value.toString(16);
+        });
+      };
+      window.builtin.duringGenerating = function () { return false; };
+      window.builtin.saveSettings = function () { return Promise.resolve(); };
+      window.builtin.reloadChatWithoutEvents = function () { return call('snapshot').then(function () { return undefined; }); };
+      window.builtin.reloadAndRenderChatWithoutEvents = window.builtin.reloadChatWithoutEvents;
+      window.builtin.addOneMessage = function (message, options) {
+        var entry = message && typeof message === 'object' ? message : {};
+        var role = typeof entry.role === 'string' ? entry.role : (entry.is_user === true ? 'user' : 'assistant');
+        var text = typeof entry.message === 'string' ? entry.message : (typeof entry.mes === 'string' ? entry.mes : '');
+        var insertBefore = options && typeof options.insertBefore === 'number' ? options.insertBefore : 'end';
+        return window.createChatMessages([{
+          role: role,
+          name: typeof entry.name === 'string' ? entry.name : undefined,
+          message: text,
+          is_hidden: entry.is_hidden === true,
+          data: entry.data && typeof entry.data === 'object' ? entry.data : undefined,
+          extra: entry.extra && typeof entry.extra === 'object' ? entry.extra : undefined,
+        }], { insert_before: insertBefore });
+      };
+      function unavailableBuiltin(name) {
+        window.builtin[name] = function () {
+          throw new Error('TavernHelper.builtin.' + name + ' is not available in the DSH-SoulMojito sandbox (host DOM/pipeline access)');
+        };
+      }
+      ['reloadEditor', 'reloadEditorDebounced', 'renderPromptManager', 'renderPromptManagerDebounced', 'getImageTokenCost', 'getVideoTokenCost'].forEach(unavailableBuiltin);
+      window.builtin.promptManager = new Proxy({}, {
+        get: function () {
+          throw new Error('TavernHelper.builtin.promptManager is not available in the DSH-SoulMojito sandbox (host prompt manager)');
+        }
+      });
+
+      // Version probes: the helper level tracks the implemented API generation; the
+      // ST probe stays semver-shaped but low so host-feature gates stay off.
+      window.getTavernHelperVersion = function () { return HELPER_VERSION; };
+      window.getTavernVersion = function () { return TAVERN_VERSION; };
+      window.getFrontendVersion = window.getTavernHelperVersion;
+      window.updateFrontendVersion = function () { return Promise.resolve(false); };
+      window.updateTavernHelper = function () { return Promise.resolve(false); };
+      window.getTavernHelperExtensionId = function () { return HELPER_EXTENSION_ID; };
 
       window.TavernHelper = {
         getVariables: window.getVariables,
@@ -1679,68 +2767,146 @@ window.__ModuleLoader__.load({
 
       window.tavern_events = ${JSON.stringify(HELPER_TAVERN_EVENTS)};
       window.iframe_events = ${JSON.stringify(HELPER_IFRAME_EVENTS)};
-      // TavernHelper 的全局事件函数（JSR 把 eventOn 等挂在 window 直连面）。
-      // 脚本按钮（JSR 快速回复栏的可观察面）：本插件没有按钮栏，但 MVU 等常驻脚本
-      // 会在启动时 get/replace/append 按钮。维持一份 iframe 内存列表，调用不中断；
-      // 按钮不会渲染到宿主，读取结果仍是一致的。
-      var scriptButtons = [];
-      function normalizeScriptButtons(value) {
-        if (!Array.isArray(value)) return [];
-        return value
-          .filter(function (button) { return button && typeof button === 'object' && typeof button.name === 'string' && button.name !== ''; })
-          .map(function (button) {
-            return Object.assign({}, button, { visible: button.visible !== false });
-          });
-      }
-      window.getScriptButtons = function () { return clone(scriptButtons); };
-      window.replaceScriptButtons = function (buttons) { scriptButtons = normalizeScriptButtons(buttons); };
-      window.updateScriptButtonsWith = function (updater) {
-        if (typeof updater !== 'function') throw new Error('DSH-SoulMojito: updateScriptButtonsWith requires a function');
-        var next = updater(clone(scriptButtons));
-        scriptButtons = normalizeScriptButtons(next);
-        return clone(scriptButtons);
+      window.eventTypes = window.tavern_events;
+      // ST-shaped event bus facade: cards that subscribe through
+      // SillyTavern.getContext().eventSource reach the same local listener set.
+      window.eventSource = {
+        on: function (type, listener) { return window.eventOn(type, listener); },
+        once: function (type, listener) { return window.eventOnce(type, listener); },
+        removeListener: function (type, listener) { return window.eventRemoveListener(type, listener); },
+        emit: function (type) { return window.eventEmit.apply(null, arguments); },
+        emitAndWait: function (type) { return window.eventEmitAndWait.apply(null, arguments); },
+        makeFirst: function (type, listener) { return window.eventMakeFirst(type, listener); },
+        makeLast: function (type, listener) { return window.eventMakeLast(type, listener); },
+        removeAllListeners: function (type) {
+          if (type === undefined) window.eventClearAll();
+          else window.eventClearEvent(type);
+        },
       };
-      window.appendInexistentScriptButtons = function (buttons) {
-        var existing = new Set(scriptButtons.map(function (button) { return button.name; }));
-        normalizeScriptButtons(buttons).forEach(function (button) {
-          if (!existing.has(button.name)) {
-            existing.add(button.name);
-            scriptButtons.push(button);
-          }
+
+      /* ------------------------------ presets ------------------------------ */
+
+      function presetValues() { return state.presets && state.presets.values ? state.presets.values : {}; }
+      function activePresetName() { return state.presets && state.presets.active ? state.presets.active : 'in_use'; }
+      function presetValue(name) {
+        var key = typeof name === 'string' && name.trim() !== '' ? name.trim() : 'in_use';
+        var values = presetValues();
+        if (values[key] !== undefined) return clone(values[key]);
+        if (key === 'in_use' || key === activePresetName()) {
+          var active = activePresetName();
+          if (values[active] !== undefined) return clone(values[active]);
+        }
+        return null;
+      }
+      function presetPromptKind(prompt) {
+        if (!prompt || typeof prompt !== 'object') return 'normal';
+        if (prompt.marker === true) return 'placeholder';
+        if (prompt.system_prompt === true) return 'system';
+        return 'normal';
+      }
+      window.getPresetNames = function () { return clone((state.presets && state.presets.names) || []); };
+      window.getProxyPresetNames = function () { return clone((state.presets && state.presets.names) || []); };
+      window.getLoadedPresetName = function () { return activePresetName(); };
+      window.getPreset = function (name) { return presetValue(name); };
+      window.isPresetNormalPrompt = function (prompt) { return presetPromptKind(prompt) === 'normal'; };
+      window.isPresetSystemPrompt = function (prompt) { return presetPromptKind(prompt) === 'system'; };
+      window.isPresetPlaceholderPrompt = function (prompt) { return presetPromptKind(prompt) === 'placeholder'; };
+      window.default_preset = { name: 'Default', prompts: [], prompt_order: [] };
+      window.builtin_prompt_default_order = [
+        'world_info_before', 'persona_description', 'char_description', 'char_personality',
+        'scenario', 'world_info_after', 'dialogue_examples', 'chat_history', 'user_input',
+      ];
+      window.replacePreset = function (name, preset, options) {
+        var key = typeof name === 'string' && name.trim() !== '' ? name.trim() : 'in_use';
+        var target = key === 'in_use' ? activePresetName() : key;
+        var value = clone(preset && typeof preset === 'object' ? preset : {});
+        return call('presets.put', { name: target, preset: value }).then(function () {
+          if (!state.presets) state.presets = { names: [], active: null, values: {} };
+          state.presets.values[target] = clone(value);
+          if (state.presets.names.indexOf(target) === -1) state.presets.names.push(target);
+          return undefined;
         });
       };
-      window.getButtonEvent = function (name) { return 'tavern-helper-button-' + String(name); };
+      window.updatePresetWith = function (name, updater, options) {
+        if (typeof updater !== 'function') return Promise.reject(new Error('DSH-SoulMojito: updatePresetWith(name, updater) requires a function'));
+        var key = typeof name === 'string' && name.trim() !== '' ? name.trim() : 'in_use';
+        var current = presetValue(key);
+        if (current === null) return Promise.reject(new Error('DSH-SoulMojito: preset "' + key + '" is not loaded in this sandbox'));
+        return Promise.resolve(updater(current)).then(function (next) {
+          return window.replacePreset(key, next, options).then(function () { return next; });
+        });
+      };
+      window.createPreset = function (name, preset) {
+        var key = typeof name === 'string' ? name.trim() : '';
+        if (key === '') return Promise.reject(new Error('DSH-SoulMojito: createPreset requires a name'));
+        if (presetValue(key) !== null) return Promise.resolve(false);
+        return window.replacePreset(key, preset).then(function () { return true; });
+      };
+      window.createOrReplacePreset = function (name, preset, options) {
+        var key = typeof name === 'string' ? name.trim() : '';
+        if (key === '') return Promise.reject(new Error('DSH-SoulMojito: createOrReplacePreset requires a name'));
+        var existed = presetValue(key) !== null;
+        return window.replacePreset(key, preset, options).then(function () { return !existed; });
+      };
 
-      // 预设 / 角色卡只读兼容面（2026-10-22）：示例卡3 的启动诊断会调用
-      // getPreset('in_use') / getPreset('openai') 与 getCharData('current')。
-      // JSR 的 getPreset 是同步的；预设写入在本插件属于受保护资产，前端只得到
-      // iframe 内存覆盖，不写基础 preset 文件（诊断的「注入格式提示」因此只影响
-      // 本次 iframe，不会污染资产）。
-      var presetMemory = {};
-      function presetKey(name) {
-        return typeof name === 'string' && name.trim() !== '' ? name.trim() : 'in_use';
+      /* ------------------------------ personas ------------------------------ */
+
+      function personaValues() { return state.personas && state.personas.values ? state.personas.values : {}; }
+      function personaValue(id) {
+        var key = id === undefined || id === 'current' ? ((state.personas && state.personas.active) || '') : String(id);
+        var values = personaValues();
+        return values[key] === undefined ? null : clone(values[key]);
       }
-      window.getPreset = function (name) {
-        var key = presetKey(name);
-        return clone(presetMemory[key] || { name: key, prompts: [] });
+      window.getPersonaNames = function () { return clone((state.personas && state.personas.names) || []); };
+      window.getPersonaIds = function () { return clone((state.personas && state.personas.ids) || []); };
+      window.getCurrentPersonaName = function () { return state.personas && state.personas.active ? state.personas.active : null; };
+      window.getCurrentPersonaId = window.getCurrentPersonaName;
+      window.getPersona = function (id) { return personaValue(id); };
+      window.getPersonaAvatarPath = function (id) {
+        var persona = personaValue(id);
+        if (persona === null) return null;
+        return typeof persona.avatar === 'string' && persona.avatar !== '' ? persona.avatar : null;
       };
-      window.replacePreset = function (name, preset) {
-        var key = presetKey(name);
-        presetMemory[key] = clone(preset && typeof preset === 'object' ? preset : { name: key, prompts: [] });
-        return clone(presetMemory[key]);
+      window.replacePersona = function (id, persona, options) {
+        var key = id === undefined || id === 'current' ? window.getCurrentPersonaName() : String(id);
+        if (key === null || key === '') return Promise.reject(new Error('DSH-SoulMojito: replacePersona requires a persona id or an active persona'));
+        var value = clone(persona && typeof persona === 'object' ? persona : {});
+        return call('personas.put', { name: key, persona: value }).then(function () {
+          if (!state.personas) state.personas = { names: [], ids: [], active: null, values: {} };
+          state.personas.values[key] = clone(value);
+          if (state.personas.names.indexOf(key) === -1) {
+            state.personas.names.push(key);
+            state.personas.ids.push(key);
+          }
+          return undefined;
+        });
       };
-      window.getPresetNames = function () {
-        var names = Object.keys(presetMemory);
-        return names.length > 0 ? names : ['in_use'];
+      window.updatePersonaWith = function (id, updater, options) {
+        if (typeof updater !== 'function') return Promise.reject(new Error('DSH-SoulMojito: updatePersonaWith(id, updater) requires a function'));
+        var current = personaValue(id);
+        if (current === null) return Promise.reject(new Error('DSH-SoulMojito: persona "' + String(id) + '" is not loaded in this sandbox'));
+        return Promise.resolve(updater(current)).then(function (next) {
+          return window.replacePersona(id, next, options).then(function () { return next; });
+        });
       };
-      window.getLoadedPresetName = function () { return 'in_use'; };
-      window.getCharData = function (name) {
+      window.createPersona = function (name, persona, options) {
+        var key = typeof name === 'string' ? name.trim() : '';
+        if (key === '') return Promise.reject(new Error('DSH-SoulMojito: createPersona requires a name'));
+        if (personaValue(key) !== null) return Promise.resolve(false);
+        return window.replacePersona(key, Object.assign({ name: key }, persona || {}), options).then(function () { return true; });
+      };
+      window.createOrReplacePersona = function (name, persona, options) {
+        var key = typeof name === 'string' ? name.trim() : '';
+        if (key === '') return Promise.reject(new Error('DSH-SoulMojito: createOrReplacePersona requires a name'));
+        var existed = personaValue(key) !== null;
+        return window.replacePersona(key, Object.assign({ name: key }, persona || {}), options).then(function () { return !existed; });
+      };
+
+      /* ---------------------------- characters ---------------------------- */
+
+      function characterRawData() {
         var data = state.characterData;
-        if (!data) return null;
-        if (name !== undefined && name !== 'current' && name !== state.characterName) return null;
-        // JSR returns a v1CharData object: the V2 payload lives under .data, while
-        // the top-level fields mirror it. Cards read getCharData('current').data.creator
-        // / character_version / creator_notes (示例卡3 derives its asset-pack key there).
+        if (!data || typeof data !== 'object') return null;
         return {
           name: typeof data.name === 'string' ? data.name : state.characterName,
           description: typeof data.description === 'string' ? data.description : '',
@@ -1749,51 +2915,332 @@ window.__ModuleLoader__.load({
           first_mes: typeof data.first_mes === 'string' ? data.first_mes : '',
           mes_example: typeof data.mes_example === 'string' ? data.mes_example : '',
           creatorcomment: typeof data.creator_notes === 'string' ? data.creator_notes : '',
-          avatar: '',
-          talkativeness: '0.5',
-          fav: false,
+          creator_notes: typeof data.creator_notes === 'string' ? data.creator_notes : '',
+          creator: typeof data.creator === 'string' ? data.creator : '',
+          character_version: typeof data.character_version === 'string' ? data.character_version : '',
+          avatar: state.avatar || '',
+          talkativeness: typeof data.talkativeness === 'string' ? data.talkativeness : '0.5',
+          fav: data.fav === true,
           tags: Array.isArray(data.tags) ? clone(data.tags) : [],
           spec: 'chara_card_v2',
           spec_version: '2.0',
           data: clone(data),
+          json_data: clone(data),
+        };
+      }
+      window.getCharData = function (name) {
+        var requested = name === undefined || name === 'current' ? state.characterName : String(name);
+        if (requested !== state.characterName) return null;
+        return characterRawData();
+      };
+      window.getCharacter = function (name) {
+        var requested = name === undefined ? 'current' : String(name);
+        return call('character.get', { name: requested }).then(function (value) {
+          return value && value.character !== undefined ? value.character : null;
+        });
+      };
+      window.getCurrentCharacterName = function () { return state.characterName === '' ? null : state.characterName; };
+      window.getCurrentCharacterId = function () {
+        if (!state.characters || !Array.isArray(state.characters.ids)) return null;
+        return state.characterId === undefined ? null : String(state.characterId);
+      };
+      window.getCharAvatarPath = function (name) {
+        var requested = name === undefined || name === 'current' ? state.characterName : String(name);
+        if (requested !== state.characterName) return null;
+        return state.avatar === '' ? null : state.avatar;
+      };
+      window.getChatHistoryBrief = function () {
+        var messages = state.messages.map(function (message) {
+          return {
+            is_user: message.role === 'user',
+            name: message.name,
+            mes: message.message,
+            extra: clone(message.extra),
+          };
+        });
+        return Promise.resolve(messages);
+      };
+      window.getChatHistoryDetail = function () {
+        return Promise.resolve({
+          chat_metadata: clone(state.chatMetadata),
+          messages: clone(state.messages),
+        });
+      };
+      function RawCharacter(characterData) {
+        this.character_data = characterData;
+      }
+      RawCharacter.find = function (query) {
+        var name = query && typeof query === 'object' && query.name !== undefined ? query.name : 'current';
+        return window.getCharData(name);
+      };
+      RawCharacter.findIndex = function (name) {
+        var requested = name === undefined || name === 'current' ? state.characterName : String(name);
+        var names = (state.characters && state.characters.names) || [];
+        return names.indexOf(requested);
+      };
+      RawCharacter.prototype.getCardData = function () { return this.character_data; };
+      RawCharacter.prototype.getAvatarId = function () {
+        return this.character_data && typeof this.character_data.avatar === 'string' ? this.character_data.avatar : '';
+      };
+      RawCharacter.prototype.getRegexScripts = function () {
+        return ((state.regexScripts && state.regexScripts.character) || []).map(toTavernRegex);
+      };
+      RawCharacter.prototype.getWorldbookNames = function () { return window.getCharWorldbookNames(); };
+      window.RawCharacter = RawCharacter;
+
+      /* --------------------------- EjsTemplate --------------------------- */
+
+      window.EjsTemplate = {
+        evalTemplate: function (code, context, options) {
+          return call('template.render', {
+            code: String(code),
+            context: context && typeof context === 'object' ? context : {},
+          }).then(function (value) { return value && typeof value.text === 'string' ? value.text : ''; });
+        },
+        prepareContext: function (context) {
+          var env = Object.assign({}, context && typeof context === 'object' ? context : {});
+          env.getvar = function (key) { return macroRead('chat', String(key)); };
+          env.setvar = function (key, value) { macroWrite('chat', String(key), value); return value; };
+          env.getglobalvar = function (key) { return macroRead('global', String(key)); };
+          env.setglobalvar = function (key, value) { macroWrite('global', String(key), value); return value; };
+          env.getwi = function (title, book) {
+            var request = typeof book === 'string' && book.trim() !== '' ? { name: book.trim() } : {};
+            return call('lorebook.get', request).then(function (value) {
+              var entries = Array.isArray(value && value.entries) ? value.entries : [];
+              var found = entries.filter(function (entry) {
+                return (typeof title === 'number' && entry.uid === title)
+                  || (entry && typeof entry.comment === 'string' && entry.comment === String(title));
+              })[0];
+              return found && typeof found.content === 'string' ? found.content : '';
+            });
+          };
+          env.getchar = function (name) { return window.getCharData(name); };
+          env.getpreset = function (name) {
+            var preset = presetValue('in_use');
+            var prompts = preset && Array.isArray(preset.prompts) ? preset.prompts : [];
+            var found = prompts.filter(function (prompt) { return prompt && prompt.name === name; })[0];
+            return found ? { name: name, content: String(found.content || '') } : null;
+          };
+          return env;
+        },
+        getFeatures: function () {
+          return {
+            enabled: true,
+            generate_enabled: false,
+            generate_loader_enabled: false,
+            inject_loader_enabled: false,
+            render_enabled: false,
+            render_loader_enabled: false,
+            code_blocks_enabled: false,
+            raw_message_evaluation_enabled: false,
+            filter_message_enabled: false,
+            depth_limit: 0,
+            autosave_enabled: false,
+            preload_worldinfo_enabled: false,
+            with_context_disabled: true,
+            debug_enabled: false,
+            invert_enabled: false,
+            compile_workers: false,
+            sandbox: true,
+          };
+        },
+      };
+
+      /* ---------------------- extension management ---------------------- */
+
+      window.isAdmin = function () { return false; };
+      window.getExtensionType = function (extensionId) {
+        return String(extensionId) === HELPER_EXTENSION_ID ? 'local' : null;
+      };
+      window.isInstalledExtension = function (extensionId) {
+        return String(extensionId) === HELPER_EXTENSION_ID;
+      };
+      window.getExtensionStatus = function (extensionId) {
+        if (String(extensionId) !== HELPER_EXTENSION_ID) return Promise.resolve(null);
+        return Promise.resolve({
+          current_branch_name: '',
+          current_commit_hash: '',
+          is_up_to_date: true,
+          remote_url: '',
+        });
+      };
+
+      /* ------------------------- globals / prompts ------------------------- */
+
+      window.initializeGlobal = function (name, value) {
+        if (typeof name !== 'string' || name === '') throw new Error('DSH-SoulMojito: initializeGlobal requires a name');
+        if (name in window && window[name] !== undefined) return;
+        Object.defineProperty(window, name, { value: value, writable: true, configurable: true });
+      };
+      window.waitGlobalInitialized = function (name) {
+        var key = String(name);
+        return new Promise(function (resolve, reject) {
+          var attempts = 0;
+          var check = function () {
+            if (key in window && window[key] !== undefined) {
+              resolve(window[key]);
+              return;
+            }
+            attempts += 1;
+            if (attempts > 150) {
+              reject(new Error('DSH-SoulMojito: global "' + key + '" was not initialized within 15s'));
+              return;
+            }
+            setTimeout(check, 100);
+          };
+          check();
+        });
+      };
+      var injectedPrompts = [];
+      window.injectPrompts = function (prompts) {
+        var list = Array.isArray(prompts) ? prompts : [prompts];
+        var ids = list.map(function (prompt) {
+          var entry = Object.assign({}, prompt && typeof prompt === 'object' ? prompt : {});
+          entry.id = typeof entry.id === 'string' && entry.id !== '' ? entry.id : 'inject-' + Math.random().toString(36).slice(2);
+          injectedPrompts.push(entry);
+          return entry.id;
+        });
+        return {
+          uninject: function () {
+            injectedPrompts = injectedPrompts.filter(function (entry) { return ids.indexOf(entry.id) === -1; });
+          },
         };
       };
-      window.getScriptId = function () { return 'dsh-soulmojito-frontend'; };
-      window.waitGlobalInitialized = function (name) { return Promise.resolve(window[name]); };
+      window.uninjectPrompts = function (ids) {
+        var wanted = (Array.isArray(ids) ? ids : [ids]).map(String);
+        injectedPrompts = injectedPrompts.filter(function (entry) { return wanted.indexOf(String(entry.id)) === -1; });
+      };
+
+      // Formatting for display: macros → display regex → markdown. Host DOM access
+      // (retrieveDisplayedMessage / refreshOneMessage) is outside the sandbox.
+      window.formatAsDisplayedMessage = function (text, option) {
+        var depth = option && typeof option.depth === 'number' ? option.depth : 0;
+        var expanded = expandMacros(String(text));
+        var regexed = applyRegexScriptsLocal(expanded, regexListForScope(), 2, 'display', depth);
+        return window.builtin.renderMarkdown(regexed);
+      };
+
+      // Audio slash commands (the JSR audioEnable family) map onto the audio channels.
+      window.audioEnable = function (enabled, type) {
+        window.setAudioSettings(type || 'bgm', { enabled: enabled !== false });
+      };
+      window.audioImport = function (urls, type) {
+        var list = (Array.isArray(urls) ? urls : [urls]).map(function (url) {
+          return typeof url === 'string' ? { url: url } : url;
+        }).filter(function (entry) { return entry && typeof entry.url === 'string' && entry.url !== ''; });
+        window.appendAudioList(type || 'bgm', list);
+      };
+      window.audioMode = function (mode, type) {
+        window.setAudioSettings(type || 'bgm', { mode: mode });
+      };
+      window.audioPlay = function (url, type) {
+        var channel = type || 'bgm';
+        if (typeof url === 'string' && url !== '') {
+          window.playAudio(channel, { url: url });
+          return;
+        }
+        var list = window.getAudioList(channel);
+        if (list.length > 0) window.playAudio(channel, list[0]);
+      };
+      window.audioSelect = function (title, type) {
+        var channel = type || 'bgm';
+        var found = window.getAudioList(channel).filter(function (entry) { return entry.title === String(title); })[0];
+        if (found) window.playAudio(channel, found);
+      };
+
+      function unavailableSurface(name, reason) {
+        window[name] = function () {
+          throw new Error('TavernHelper.' + name + ' is not available in the DSH-SoulMojito sandbox: ' + reason);
+        };
+      }
+      unavailableSurface('createCharacter', 'character-card assets are panel/Agent-owned');
+      unavailableSurface('createOrReplaceCharacter', 'character-card assets are panel/Agent-owned');
+      unavailableSurface('deleteCharacter', 'character-card assets are panel/Agent-owned');
+      unavailableSurface('replaceCharacter', 'character-card assets are panel/Agent-owned');
+      unavailableSurface('updateCharacterWith', 'character-card assets are panel/Agent-owned');
+      unavailableSurface('deletePersona', 'persona assets are panel-owned');
+      unavailableSurface('deletePreset', 'preset assets are panel-owned');
+      unavailableSurface('renamePreset', 'preset assets are panel-owned');
+      unavailableSurface('loadPreset', 'preset activation is panel-owned');
+      unavailableSurface('setPreset', 'preset activation is panel-owned');
+      unavailableSurface('installExtension', 'extensions cannot be installed from a sandboxed frontend');
+      unavailableSurface('uninstallExtension', 'extensions cannot be uninstalled from a sandboxed frontend');
+      unavailableSurface('reinstallExtension', 'extensions cannot be reinstalled from a sandboxed frontend');
+      unavailableSurface('updateExtension', 'extensions cannot be updated from a sandboxed frontend');
+      unavailableSurface('importRawCharacter', 'character-card assets are panel/Agent-owned');
+      unavailableSurface('importRawChat', 'chat files are host-owned');
+      unavailableSurface('importRawPreset', 'preset assets are panel-owned');
+      unavailableSurface('importRawTavernRegex', 'regex assets are panel-owned');
+      unavailableSurface('importRawWorldbook', 'world-book assets are panel/Agent-owned; use createWorldbook for a session copy');
+      unavailableSurface('rebindGlobalWorldbooks', 'world-book bindings are panel-owned');
+      unavailableSurface('rebindCharWorldbooks', 'world-book bindings are panel-owned');
+      unavailableSurface('rebindChatWorldbook', 'world-book bindings are panel-owned; use setChatLorebook for the chat copy');
+      unavailableSurface('setCurrentCharLorebooks', 'world-book bindings are panel-owned');
+      unavailableSurface('retrieveDisplayedMessage', 'host message DOM is outside the sandbox');
+      unavailableSurface('refreshOneMessage', 'host message DOM is outside the sandbox');
+
+      // Publish the full JSR surface on both outlets. window[name] stays the source
+      // of truth so card code that feature-detects on window and TavernHelper
+      // observes the same function object.
+      window.TavernHelper = window.TavernHelper || {};
+      for (var surfaceIndex = 0; surfaceIndex < HELPER_SURFACE.length; surfaceIndex++) {
+        var surfaceName = HELPER_SURFACE[surfaceIndex];
+        if (window[surfaceName] !== undefined) window.TavernHelper[surfaceName] = window[surfaceName];
+      }
+      window.TavernHelper.Mvu = window.Mvu;
+      window.TavernHelper.toastr = window.toastr;
+      window.TavernHelper.eventSource = window.eventSource;
+      window.TavernHelper.EjsTemplate = window.EjsTemplate;
       window.TavernHelper.addEventListener = window.eventOn;
       window.TavernHelper.removeEventListener = window.eventRemoveListener;
-      // These helpers are defined after the TavernHelper literal (script buttons /
-      // presets / character data); publish them again so the namespace object is not
-      // left with undefined properties. Card code reads TavernHelper.getPreset etc.
-      // synchronously during startup diagnostics.
-      window.TavernHelper.getScriptButtons = window.getScriptButtons;
-      window.TavernHelper.replaceScriptButtons = window.replaceScriptButtons;
-      window.TavernHelper.updateScriptButtonsWith = window.updateScriptButtonsWith;
-      window.TavernHelper.appendInexistentScriptButtons = window.appendInexistentScriptButtons;
-      window.TavernHelper.getButtonEvent = window.getButtonEvent;
-      window.TavernHelper.getPreset = window.getPreset;
-      window.TavernHelper.replacePreset = window.replacePreset;
-      window.TavernHelper.getPresetNames = window.getPresetNames;
-      window.TavernHelper.getLoadedPresetName = window.getLoadedPresetName;
-      window.TavernHelper.getCharData = window.getCharData;
+
+
+      // iframe-local settings objects MagVarUpdate reads directly.
+      window.__dshTavernExtensionSettings = window.__dshTavernExtensionSettings || {};
+      window.__dshTavernChatCompletionSettings = window.__dshTavernChatCompletionSettings || {};
+
+      // ST-shaped chat view for cards that read SillyTavern.getContext().chat
+      // (mes / is_user / is_system / swipes) instead of TavernHelper messages.
+      function stChatMessage(message, index) {
+        var data = message && message.data && typeof message.data === 'object' ? message.data : {};
+        var text = message && typeof message.message === 'string' ? message.message : '';
+        return {
+          name: message && typeof message.name === 'string' ? message.name : '',
+          is_user: message && message.role === 'user',
+          is_system: message && (message.role === 'system' || message.is_hidden === true),
+          send_date: '',
+          mes: text,
+          message: text,
+          data: clone(data),
+          variables: clone(data),
+          extra: clone(message && message.extra && typeof message.extra === 'object' ? message.extra : {}),
+          swipe_id: message && typeof message.swipe_id === 'number' ? message.swipe_id : 0,
+          swipes: message && Array.isArray(message.swipes) && message.swipes.length > 0 ? clone(message.swipes) : [text],
+          mesid: index,
+        };
+      }
+      function stChat() { return state.messages.map(stChatMessage); }
 
       window.SillyTavern = {
-        get chat() { return state.messages; },
+        get chat() { return stChat(); },
         get chatMetadata() { return state.chatMetadata; },
-        get characters() { return window.getCharData('current') ? [window.getCharData('current')] : []; },
-        get characterId() { return 0; },
+        get characters() { var current = window.getCharData('current'); return current ? [current] : []; },
+        get characterId() { return String(state.characterId === undefined ? 0 : state.characterId); },
         get name1() { return state.userName; },
         get name2() { return state.characterName; },
+        get eventSource() { return window.eventSource; },
+        get eventTypes() { return window.tavern_events; },
+        get extensionSettings() { return window.__dshTavernExtensionSettings; },
+        get chatCompletionSettings() { return window.__dshTavernChatCompletionSettings; },
         // MagVarUpdate's settings store and MVU panel read these objects directly.
         // They are iframe-local; the plugin's own settings live in state.json.
-        extensionSettings: {},
-        chatCompletionSettings: {},
         // MagVarUpdate constructs '_.debounce(SillyTavern.saveChat, 1000)' at module
         // load. The helper RPC already persists variables/messages, so this is a
         // promise-shaped no-op rather than a missing function (which would throw
         // "Expected a function" before MVU can initialize).
         saveChat: function () { return Promise.resolve(); },
         saveSettingsDebounced: function () {},
+        saveMetadata: function () { return Promise.resolve(); },
         getRequestHeaders: function () { return {}; },
         getCurrentLocale: function () {
           return typeof navigator !== 'undefined' && typeof navigator.language === 'string'
@@ -1801,8 +3248,8 @@ window.__ModuleLoader__.load({
             : 'en';
         },
         getChatCompletionModel: function () { return ''; },
-        registerMacro: function () {},
-        unregisterMacro: function () {},
+        registerMacro: window.registerMacroLike || function () {},
+        unregisterMacro: window.unregisterMacroLike || function () {},
         registerFunctionTool: function () {},
         unregisterFunctionTool: function () {},
         ToolManager: {
@@ -1824,12 +3271,21 @@ window.__ModuleLoader__.load({
         getContext: function () {
           return {
             chatId: state.chatId,
-            chat: state.messages,
+            chat: stChat(),
             chat_metadata: state.chatMetadata,
             name1: state.userName,
             name2: state.characterName,
-            characterId: 0,
-            characters: window.getCharData('current') ? [window.getCharData('current')] : [],
+            characterId: String(state.characterId === undefined ? 0 : state.characterId),
+            characters: window.SillyTavern.characters,
+            eventSource: window.eventSource,
+            eventTypes: window.tavern_events,
+            extensionSettings: window.SillyTavern.extensionSettings,
+            chatCompletionSettings: window.SillyTavern.chatCompletionSettings,
+            maxContext: 0,
+            getRequestHeaders: window.SillyTavern.getRequestHeaders,
+            saveChat: window.SillyTavern.saveChat,
+            saveMetadata: window.SillyTavern.saveMetadata,
+            saveSettingsDebounced: window.SillyTavern.saveSettingsDebounced,
             getCurrentChatId: function () { return state.chatId; },
             getCharacterCardFields: function () {
               var data = state.characterData || {};
@@ -1860,6 +3316,7 @@ window.__ModuleLoader__.load({
           return window.SillyTavern.POPUP_RESULT.AFFIRMATIVE;
         },
       };
+      window.TavernHelper.SillyTavern = window.SillyTavern;
       window.TavernHelper.Mvu = window.Mvu;
 
       // window.parent / window.top facade（2026-10-20 卡兼容）：JSR 同源模型下卡代码
@@ -2228,6 +3685,23 @@ window.__ModuleLoader__.load({
       return isFrontendDocument(raw) ? [raw] : []
     }
 
+    // Prose that shares a message with a complete HTML document stays visible
+    // above the sandbox frame (JSR keeps the text around its replaced code
+    // block). Mirrors `stripFrontendDocuments` in src/frontend-documents.ts.
+    function stripFrontendDocuments(value) {
+      const text = String(value || '')
+      if (text === '') return ''
+      const fenced = /```[^\n]*\n([\s\S]*?)```/gi
+      let stripped = text.replace(fenced, (whole, inner) => (isFrontendDocument(inner) ? '' : whole))
+      stripped = stripped
+        .replace(/<UpdateVariable(?:Variable)?\b[^>]*>[\s\S]*?<\/UpdateVariable(?:Variable)?\s*>/gi, '')
+        .replace(/<\/UpdateVariable(?:Variable)?\s*>/gi, '')
+        .replace(/<StatusPlaceHolder(?:Impl|READY)\s*\/?>/gi, '')
+        .replace(/<!--\s*MVU:OK\s*-->/gi, '')
+      if (isFrontendDocument(stripped.trim())) return ''
+      return stripped.replace(/\n{3,}/g, '\n\n').trim()
+    }
+
     // 高度上报（A-4 升级，JSR §2.1 adjust_iframe_height 的语义复刻）：
     // - rAF 单帧合并：同一帧内 ResizeObserver 连发只测一次发一次；
     // - 高度去重：数值未变化零消息（宿主 setHeight 幂等，但少发少渲染）；
@@ -2422,7 +3896,7 @@ window.__ModuleLoader__.load({
       return post
     }
 
-    function buildFrontendDocument(value, token, messageId, allowExternalResources, hostBackground, storage) {
+    function buildFrontendDocument(value, token, messageId, allowExternalResources, hostBackground, storage, identity) {
       // window.parent / window.top 在 sandbox（无 same-origin）里是跨域 WindowProxy，
       // 酒馆卡常见的 `window.parent.document` / `window.parent.Mvu` 会直接抛
       // DOMException。注入前统一改指向 shim 暴露的同页 facade；helper 自身与
@@ -2456,7 +3930,7 @@ window.__ModuleLoader__.load({
       const theme = `<script>${frontendThemeScript()}</script>`
       // 酒馆助手兼容层（2026-10-20）：库脚本 + TavernHelper shim 进 head，前端
       // 首帧就能拿到 getVariables/getChatMessages 等同步面；快照由宿主随后投递。
-      const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token, messageId, storage)}</script>`
+      const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token, messageId, storage, identity === undefined ? null : identity)}</script>`
       const reporter = `<script>${frontendHeightReporter(token)}</script>`
       if (/<html(?:\s[^>]*)?>/i.test(source)) {
         let documentText = source
@@ -2697,12 +4171,14 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef) {
+    function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef, onScriptButtons) {
       const bindingRef = useRef(binding)
       bindingRef.current = binding
       const previousRef = useRef(null)
       const composerDraftRef = useRef({ element: null, text: '' })
       const composerChainRef = useRef(Promise.resolve())
+      const onScriptButtonsRef = useRef(onScriptButtons)
+      onScriptButtonsRef.current = onScriptButtons
       // A card's createChatMessages + /trigger pair is common. A Tavern floor cannot start a DSH turn by itself, so the
       // bridge remembers the text created by this iframe and, on /trigger,
       // replaces that floor with one host composer send. Without this the card
@@ -2781,7 +4257,15 @@ window.__ModuleLoader__.load({
         // 草稿记录都放在 hook ref 上，副作用重跑（轮询刷新）不丢顺序。
         const onMessage = (event) => {
           const data = event.data
-          if (!data || data.type !== HELPER_MESSAGE || data.token !== token) return
+          if (!data) return
+          if (data.type === HELPER_BUTTONS_MESSAGE && data.token === token) {
+            if (event.source !== frameRef.current?.contentWindow) return
+            if (typeof onScriptButtonsRef.current === 'function') {
+              onScriptButtonsRef.current(data.scriptId, Array.isArray(data.buttons) ? data.buttons : [])
+            }
+            return
+          }
+          if (data.type !== HELPER_MESSAGE || data.token !== token) return
           if (event.source !== frameRef.current?.contentWindow) return
           const current = bindingRef.current
           const fail = (message) => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: false, message })
@@ -2924,7 +4408,7 @@ window.__ModuleLoader__.load({
     const FRONTEND_AUTO_MIN_HEIGHT = 80
     const FRONTEND_AUTO_MAX_HEIGHT = 1200
 
-    function FrontendFrame({ html, token, binding, refreshKey, messageId, hostSessionId }) {
+    function FrontendFrame({ html, token, binding, refreshKey, messageId, hostSessionId, identity, onScriptButtons }) {
       const t = useTranslate()
       const frameRef = useRef(null)
       // Initial canvas color: resolve the DSH native background once on first
@@ -2948,7 +4432,7 @@ window.__ModuleLoader__.load({
       } = useFrontendResize(frameRef, height, storageSeed !== null)
       const postViewport = useViewportBridge(frameRef)
       const postTheme = useThemeBridge(frameRef)
-      useHelperBridge(frameRef, token, binding, `${refreshKey}:${storageSeed === null ? 'seed' : 'ready'}`, hostSessionId, manualHeightRef)
+      useHelperBridge(frameRef, token, binding, `${refreshKey}:${storageSeed === null ? 'seed' : 'ready'}`, hostSessionId, manualHeightRef, onScriptButtons)
       useEffect(() => {
         let cancelled = false
         const character = binding?.character
@@ -2987,7 +4471,8 @@ window.__ModuleLoader__.load({
           sandbox: 'allow-scripts allow-modals',
           referrerPolicy: 'no-referrer',
           title: 'Tavern frontend',
-          srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current, storageSeed),
+          'data-token': token,
+          srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current, storageSeed, identity === undefined ? null : identity),
           onLoad: () => { postViewport(); postTheme() },
           style: { height: effectiveHeight, background: initialBackgroundRef.current },
         }),
@@ -3109,16 +4594,18 @@ window.__ModuleLoader__.load({
     const HELPER_RESULT_MESSAGE = DshJsrRuntime.HELPER_RESULT_MESSAGE
     const HELPER_SNAPSHOT_MESSAGE = DshJsrRuntime.HELPER_SNAPSHOT_MESSAGE
     const HELPER_EVENT_MESSAGE = DshJsrRuntime.HELPER_EVENT_MESSAGE
+    const HELPER_BUTTONS_MESSAGE = DshJsrRuntime.HELPER_BUTTONS_MESSAGE
     const HELPER_TAVERN_EVENTS = DshJsrRuntime.TAVERN_EVENTS
     const HELPER_IFRAME_EVENTS = DshJsrRuntime.IFRAME_EVENTS
     const FRONTEND_STORAGE_SOURCES = DshFrontendStorage.iframeSources()
 
-    function frontendHelperScript(token, messageId, storage) {
+    function frontendHelperScript(token, messageId, storage, identity) {
       return DshJsrRuntime.buildIframeScript(
         token,
         messageId,
         DshFrontendStorage.serializeFrontendStorageSeed(storage),
         FRONTEND_STORAGE_SOURCES,
+        identity === undefined ? null : identity,
       )
     }
 
@@ -4809,6 +6296,7 @@ window.__ModuleLoader__.load({
       'cardScripts.loadFailed': 'Failed to load card scripts: {error}',
       'cardScripts.count': '{count} enabled script(s)',
       'cardScripts.charCount': '{count} chars',
+      'cardScripts.disabled': 'Disabled in the card (never auto-runs)',
       'cardScripts.loading': 'Loading card scripts…',
       'cardScripts.idle': 'Click Run to start a script in the sandbox; one script at a time.',
       'cardScripts.world': 'Session world book: {name}',
@@ -5696,6 +7184,7 @@ window.__ModuleLoader__.load({
       'cardScripts.loadFailed': '读取卡脚本失败：{error}',
       'cardScripts.count': '共 {count} 个启用脚本',
       'cardScripts.charCount': '{count} 字符',
+      'cardScripts.disabled': '已在卡内禁用（不会自动运行）',
       'cardScripts.loading': '正在读取卡脚本…',
       'cardScripts.idle': '点「运行」在沙箱里启动脚本；同一时间只运行一份。',
       'cardScripts.world': '会话世界书：{name}',
@@ -9044,6 +10533,7 @@ window.__ModuleLoader__.load({
       // documents are rendered in isolated frames while ordinary prose remains
       // text, matching Tavern Helper's frontend code-block behavior.
       const frontendDocuments = editing || message.streaming ? [] : extractFrontendDocuments(renderedText)
+      const frontendProse = frontendDocuments.length > 0 ? stripFrontendDocuments(renderedText) : ''
       const persist = async (nextMessage) => {
         setError('')
         const nextChat = { ...chat, messages: chat.messages.map((item, itemIndex) => itemIndex === index ? nextMessage : item) }
@@ -9101,7 +10591,9 @@ window.__ModuleLoader__.load({
           editing
             ? h('textarea', { className: 'dt-message-edit', value: draft, disabled: busy, onChange: (event) => setDraft(event.target.value) })
             : frontendDocuments.length > 0
-              ? h('div', { className: 'dt-message-frontend' }, frontendDocuments.map((html, frontendIndex) => h(FrontendFrame, {
+              ? h('div', { className: 'dt-message-frontend' },
+                frontendProse !== '' ? h('div', { className: 'dt-message-copy' }, frontendProse) : null,
+                frontendDocuments.map((html, frontendIndex) => h(FrontendFrame, {
                 key: `${index}-${frontendIndex}`,
                 html,
                 token: `tavern-${sessionId}-${index}-${frontendIndex}`,
@@ -11545,6 +13037,29 @@ window.__ModuleLoader__.load({
       const autoRunEnabled = autoRunSetting && architecture === 'st'
       const [autoRunning, setAutoRunning] = useState(false)
       const [autoStopped, setAutoStopped] = useState(false)
+      // Script-container buttons: each container iframe reports its own list; the
+      // panel renders a bar and re-dispatches clicks to that iframe.
+      const [scriptButtons, setScriptButtons] = useState({})
+      const handleScriptButtons = useCallback((scriptId, list) => {
+        setScriptButtons((current) => {
+          const previous = current[scriptId] || []
+          const same = previous.length === list.length && previous.every((item, index) =>
+            item.event === list[index].event && item.name === list[index].name && item.visible === list[index].visible)
+          if (same) return current
+          return { ...current, [scriptId]: list }
+        })
+      }, [])
+      const dispatchScriptButton = (entry) => {
+        const surface = document.querySelector('.dt-card-scripts')
+        const frames = surface ? surface.querySelectorAll('iframe[data-token]') : []
+        for (const frame of frames) {
+          const token = frame.getAttribute('data-token')
+          if (token === null) continue
+          try {
+            frame.contentWindow?.postMessage({ type: HELPER_EVENT_MESSAGE, token, event: entry.event, args: [] }, '*')
+          } catch {}
+        }
+      }
       // 用户手动「停止自动运行」后，bundle 重取/重渲染不得立刻重新启动；切换
       // 聊天/角色或重新打开 tab（组件重挂载）时重置。
       const autoRunStoppedRef = useRef(false)
@@ -11563,7 +13078,7 @@ window.__ModuleLoader__.load({
         const request = requestRef.current + 1
         requestRef.current = request
         setLoading(true)
-        return api(`card/scripts?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`)
+        return api(`card/scripts?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}&includeDisabled=1`)
           .then((result) => {
             if (requestRef.current !== request) return
             setBundle({
@@ -11597,6 +13112,7 @@ window.__ModuleLoader__.load({
         setRunningId(null)
         setBundle(null)
         setError('')
+        setScriptButtons({})
         setResetDone(false)
         setScriptsResetDone(false)
         autoRunStoppedRef.current = false
@@ -11636,7 +13152,7 @@ window.__ModuleLoader__.load({
           setAutoRunning(false)
           return
         }
-        if (currentBundle === null || currentBundle.scripts.length === 0) {
+        if (currentBundle === null || currentBundle.scripts.filter((script) => script.enabled !== false).length === 0) {
           setAutoRunning(false)
           return
         }
@@ -11711,6 +13227,24 @@ window.__ModuleLoader__.load({
         })
       }
 
+      const buttonList = Object.values(scriptButtons)
+        .flat()
+        .filter((entry) => entry && entry.visible !== false && typeof entry.event === 'string')
+      // One sandbox per script: JSR isolates script containers, and a shared
+      // window lets two scripts clobber each other's globals. Each frame gets its
+      // own identity so getScriptId/getScriptInfo observe the node.
+      const renderScriptFrame = (script) => h('div', { className: 'dt-frontend-side-frame', key: `script-${script.id}` },
+        h(FrontendFrame, {
+          html: cardScriptDocument(script),
+          token: `card-script-${sessionId}-${script.id}`,
+          messageId: -1,
+          binding: { character: binding.character, chatId: binding.chatId },
+          hostSessionId: sessionId,
+          refreshKey: `${script.id}:${script.content.length}`,
+          identity: { scriptId: script.id, scriptName: script.name, scriptInfo: script.info },
+          onScriptButtons: handleScriptButtons,
+        }))
+
       if (!supported) {
         return h('div', { className: 'dt-frontend-side', 'data-dsh-soulmojito-surface': 'card-scripts-sidebar' },
           h('div', { className: 'dt-frontend-side-empty' }, h(IconSparkle16, { size: 22 }),
@@ -11718,6 +13252,7 @@ window.__ModuleLoader__.load({
       }
 
       const scripts = currentBundle === null ? [] : currentBundle.scripts
+      const runnable = scripts.filter((script) => script.enabled !== false)
       const running = scripts.find((script) => script.id === runningId)
       return h('div', { className: 'dt-frontend-side dt-card-scripts', 'data-dsh-soulmojito-surface': 'card-scripts-sidebar' },
         h('p', { className: 'dt-card-scripts-warning', role: 'note' }, t('cardScripts.warning')),
@@ -11734,7 +13269,7 @@ window.__ModuleLoader__.load({
           : null,
         h('div', { className: 'dt-frontend-side-head' },
           h('span', { className: 'dt-frontend-side-meta' },
-            t('cardScripts.count', { count: scripts.length })),
+            t('cardScripts.count', { count: runnable.length })),
           h('button', {
             type: 'button',
             className: 'dt-frontend-side-refresh',
@@ -11775,10 +13310,11 @@ window.__ModuleLoader__.load({
             h('span', { className: 'dt-card-script-meta' },
               t('cardScripts.charCount', { count: script.content.length }))),
           script.info !== '' ? h('p', { className: 'dt-hint' }, script.info) : null,
+          script.enabled === false ? h('p', { className: 'dt-hint' }, t('cardScripts.disabled')) : null,
           h('button', {
             type: 'button',
             className: runningId === script.id ? 'dt-card-script-run dt-card-script-stop' : 'dt-card-script-run',
-            disabled: autoRunning || autoRunHostedInFrontend,
+            disabled: autoRunning || autoRunHostedInFrontend || script.enabled === false,
             onClick: () => {
               setResetDone(false)
               setAutoStopped(false)
@@ -11786,31 +13322,22 @@ window.__ModuleLoader__.load({
             },
           }, runningId === script.id ? t('cardScripts.stop') : t('cardScripts.run')))))
           : null,
-        autoRunning && scripts.length > 0
-          ? h('div', { className: 'dt-frontend-side-frames' },
-            h('div', { className: 'dt-frontend-side-frame' }, h(FrontendFrame, {
-              key: `card-scripts-auto-${sessionId}-${binding.chatId}`,
-              html: cardScriptTreeDocument(scripts),
-              token: `card-scripts-auto-${sessionId}`,
-              messageId: -1,
-              binding: { character: binding.character, chatId: binding.chatId },
-              hostSessionId: sessionId,
-              refreshKey: cardScriptTreeRefreshKey(key, scripts),
-            })))
+        autoRunning && runnable.length > 0
+          ? h('div', { className: 'dt-frontend-side-frames' }, runnable.map(renderScriptFrame))
           : running !== undefined
-            ? h('div', { className: 'dt-frontend-side-frames' },
-              h('div', { className: 'dt-frontend-side-frame' }, h(FrontendFrame, {
-                key: `card-script-${running.id}`,
-                html: cardScriptDocument(running),
-                token: `card-script-${sessionId}-${running.id}`,
-                messageId: -1,
-                binding: { character: binding.character, chatId: binding.chatId },
-                hostSessionId: sessionId,
-                refreshKey: `${running.id}:${running.content.length}`,
-              })))
+            ? h('div', { className: 'dt-frontend-side-frames' }, renderScriptFrame(running))
             : autoRunHostedInFrontend
               ? null
               : h('p', { className: 'dt-hint' }, t('cardScripts.idle')),
+        buttonList.length > 0
+          ? h('div', { className: 'dt-card-script-buttons', role: 'toolbar' },
+            buttonList.map((entry) => h('button', {
+              key: entry.event,
+              type: 'button',
+              className: 'dt-card-script-run dt-card-script-button',
+              onClick: () => dispatchScriptButton(entry),
+            }, entry.name)))
+          : null,
         resetDone ? h('p', { className: 'dt-card-scripts-notice', role: 'status' }, t('cardScripts.resetDone')) : null,
         scriptsResetDone ? h('p', { className: 'dt-card-scripts-notice', role: 'status' }, t('cardScripts.resetScriptsDone')) : null,
         currentBundle !== null && (currentBundle.world !== null || scripts.length > 0)

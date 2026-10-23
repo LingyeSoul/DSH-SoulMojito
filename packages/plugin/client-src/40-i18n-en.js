@@ -707,6 +707,7 @@
       'cardScripts.loadFailed': 'Failed to load card scripts: {error}',
       'cardScripts.count': '{count} enabled script(s)',
       'cardScripts.charCount': '{count} chars',
+      'cardScripts.disabled': 'Disabled in the card (never auto-runs)',
       'cardScripts.loading': 'Loading card scripts…',
       'cardScripts.idle': 'Click Run to start a script in the sandbox; one script at a time.',
       'cardScripts.world': 'Session world book: {name}',

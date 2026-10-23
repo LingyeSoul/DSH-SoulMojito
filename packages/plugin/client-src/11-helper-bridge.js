@@ -13,16 +13,18 @@
     const HELPER_RESULT_MESSAGE = DshJsrRuntime.HELPER_RESULT_MESSAGE
     const HELPER_SNAPSHOT_MESSAGE = DshJsrRuntime.HELPER_SNAPSHOT_MESSAGE
     const HELPER_EVENT_MESSAGE = DshJsrRuntime.HELPER_EVENT_MESSAGE
+    const HELPER_BUTTONS_MESSAGE = DshJsrRuntime.HELPER_BUTTONS_MESSAGE
     const HELPER_TAVERN_EVENTS = DshJsrRuntime.TAVERN_EVENTS
     const HELPER_IFRAME_EVENTS = DshJsrRuntime.IFRAME_EVENTS
     const FRONTEND_STORAGE_SOURCES = DshFrontendStorage.iframeSources()
 
-    function frontendHelperScript(token, messageId, storage) {
+    function frontendHelperScript(token, messageId, storage, identity) {
       return DshJsrRuntime.buildIframeScript(
         token,
         messageId,
         DshFrontendStorage.serializeFrontendStorageSeed(storage),
         FRONTEND_STORAGE_SOURCES,
+        identity === undefined ? null : identity,
       )
     }
 

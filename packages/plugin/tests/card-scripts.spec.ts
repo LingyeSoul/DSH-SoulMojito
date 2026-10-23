@@ -44,7 +44,7 @@ describe('collectCardScripts', () => {
     const bundle = collectCardScripts(card)
     expect(bundle.world).toBe('Linked World')
     expect(bundle.scripts.map((script) => script.name)).toEqual(['Alpha', 'Empty info'])
-    expect(bundle.scripts[0]).toEqual({ id: 'a', name: 'Alpha', content: 'console.log(1)', info: 'first' })
+    expect(bundle.scripts[0]).toEqual({ id: 'a', name: 'Alpha', content: 'console.log(1)', info: 'first', enabled: true })
     expect(bundle.scripts[1]?.info).toBe('')
   })
 
@@ -163,7 +163,7 @@ describe('card/scripts route e2e', () => {
       ok: true,
       character: 'Script Carrier',
       world: 'Linked World',
-      scripts: [{ id: 'panel', name: 'Floating GM Panel', content: 'window.panel = true', info: 'hud' }],
+      scripts: [{ id: 'panel', name: 'Floating GM Panel', content: 'window.panel = true', info: 'hud', enabled: true }],
     })
   })
 
@@ -192,8 +192,8 @@ describe('card/scripts route e2e', () => {
       character: 'Script Carrier',
       world: 'Linked World',
       scripts: [
-        { id: 'zod', name: '示例卡_zod', content: 'registerMvuSchema({ v: 2 })', info: '' },
-        { id: 'panel', name: 'Floating GM Panel (edited)', content: 'window.panel = 2', info: 'session copy' },
+        { id: 'zod', name: '示例卡_zod', content: 'registerMvuSchema({ v: 2 })', info: '', enabled: true },
+        { id: 'panel', name: 'Floating GM Panel (edited)', content: 'window.panel = 2', info: 'session copy', enabled: true },
       ],
     })
 
@@ -204,7 +204,7 @@ describe('card/scripts route e2e', () => {
     // 无 chatId 时行为完全不变（仍读卡内脚本）
     const cardOnly = await call(`/api/dsh-soulmojito/card/scripts?character=${encodeURIComponent('Script Carrier')}`)
     expect(cardOnly.body?.scripts).toEqual([
-      { id: 'panel', name: 'Floating GM Panel', content: 'window.panel = true', info: 'hud' },
+      { id: 'panel', name: 'Floating GM Panel', content: 'window.panel = true', info: 'hud', enabled: true },
     ])
   })
 

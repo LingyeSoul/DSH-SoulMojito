@@ -1139,7 +1139,8 @@ export async function handleApi(ctx, req, res) {
     const file = await db.getCharacter(character)
     if (!file) return sendJson(res, 404, { ok: false, message: `character '${character}' not found` })
     const scriptTrees = chatId === null ? undefined : await db.getChatScripts(character, chatId)
-    const { world, scripts } = collectCardScriptBundle(file.card, scriptTrees)
+    const includeDisabled = url.searchParams.get('includeDisabled') === '1'
+    const { world, scripts } = collectCardScriptBundle(file.card, scriptTrees, includeDisabled)
     return sendJson(res, 200, { ok: true, character, world, scripts })
   }
 

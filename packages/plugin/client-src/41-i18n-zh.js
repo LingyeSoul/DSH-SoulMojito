@@ -696,6 +696,7 @@
       'cardScripts.loadFailed': '读取卡脚本失败：{error}',
       'cardScripts.count': '共 {count} 个启用脚本',
       'cardScripts.charCount': '{count} 字符',
+      'cardScripts.disabled': '已在卡内禁用（不会自动运行）',
       'cardScripts.loading': '正在读取卡脚本…',
       'cardScripts.idle': '点「运行」在沙箱里启动脚本；同一时间只运行一份。',
       'cardScripts.world': '会话世界书：{name}',

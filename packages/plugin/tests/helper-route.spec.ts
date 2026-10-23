@@ -332,22 +332,22 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     ]
     const put = await call({ op: 'scripts.put', character: CHARACTER, chatId, scriptTrees: trees })
     expect(put.status).toBe(200)
-    expect(put.body?.value).toEqual({ scriptTrees: trees })
+    expect(put.body?.value).toEqual({ type: 'character', scriptTrees: trees })
 
     const read = await call({ op: 'scripts.get', character: CHARACTER, chatId })
-    expect(read.body?.value).toEqual({ scriptTrees: trees })
+    expect(read.body?.value).toEqual({ type: 'character', preset: null, scriptTrees: trees })
     // 快照带回副本，刷新/重开 iframe 不再从卡原版起步
     const snapshot = await call({ op: 'snapshot', character: CHARACTER, chatId })
     expect((snapshot.body?.value as Record<string, unknown>).scriptTrees).toEqual(trees)
     // 其他聊天没有副本
     const otherChatId = await store.createChat(CHARACTER, HEADER)
     const other = await call({ op: 'scripts.get', character: CHARACTER, chatId: otherChatId })
-    expect(other.body?.value).toEqual({ scriptTrees: null })
+    expect(other.body?.value).toEqual({ type: 'character', preset: null, scriptTrees: null })
 
     const reset = await call({ op: 'scripts.reset', character: CHARACTER, chatId })
     expect(reset.body?.value).toEqual({ reset: true })
     const afterReset = await call({ op: 'scripts.get', character: CHARACTER, chatId })
-    expect(afterReset.body?.value).toEqual({ scriptTrees: null })
+    expect(afterReset.body?.value).toEqual({ type: 'character', preset: null, scriptTrees: null })
   })
 
   it('scripts.get/put/reset 拒绝缺少 chatId 或形状非法的脚本树', async () => {
@@ -365,5 +365,128 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
 
     const badNode = await call({ op: 'scripts.put', character: CHARACTER, chatId, scriptTrees: ['x'] })
     expect(String(badNode.body?.message)).toContain('scriptTrees[0] must be an object')
+  })
+
+  it('keeps script trees per source and patches script info/buttons in the session copy', async () => {
+    const globalTrees = [{ type: 'script', id: 'global-1', name: 'Global', content: 'void 0' }]
+    const putGlobal = await call({ op: 'scripts.put', character: CHARACTER, chatId, type: 'global', scriptTrees: globalTrees })
+    expect(putGlobal.body?.value).toEqual({ type: 'global', scriptTrees: globalTrees })
+    const readGlobal = await call({ op: 'scripts.get', character: CHARACTER, chatId, type: 'global' })
+    expect(readGlobal.body?.value).toEqual({ type: 'global', preset: null, scriptTrees: globalTrees })
+
+    const localTrees = [{ type: 'script', id: 'panel', name: 'GM', content: 'void 0', info: '{"x":1}', button: { enabled: true, buttons: [] } }]
+    await call({ op: 'scripts.put', character: CHARACTER, chatId, scriptTrees: localTrees })
+    const patched = await call({
+      op: 'scripts.patch',
+      character: CHARACTER,
+      chatId,
+      scriptId: 'panel',
+      info: '{"y":2}',
+      buttons: [{ name: '打开', visible: true }],
+    })
+    expect(patched.status).toBe(200)
+    expect(patched.body?.value).toMatchObject({
+      scriptId: 'panel',
+      node: { info: '{"y":2}', button: { enabled: true, buttons: [{ name: '打开', visible: true }] } },
+    })
+    const readLocal = await call({ op: 'scripts.get', character: CHARACTER, chatId })
+    const nodes = (readLocal.body?.value as Record<string, unknown>).scriptTrees as Array<Record<string, unknown>>
+    expect(nodes[0].info).toBe('{"y":2}')
+  })
+
+  it('creates and deletes session-scoped world books without touching shared assets', async () => {
+    const sessionChatId = await store.createChat(CHARACTER, HEADER)
+    const created = await call({
+      op: 'lorebook.create',
+      character: CHARACTER,
+      chatId: sessionChatId,
+      name: 'Session Book',
+      entries: [{ uid: 0, comment: 'one', content: 'hello', key: [] }],
+    })
+    expect(created.status).toBe(200)
+    expect(created.body?.value).toMatchObject({ name: 'Session Book' })
+    const read = await call({ op: 'lorebook.get', character: CHARACTER, chatId: sessionChatId, name: 'Session Book' })
+    expect((read.body?.value as Record<string, unknown>).entries).toHaveLength(1)
+    const names = await call({ op: 'lorebook.list', character: CHARACTER, chatId: sessionChatId })
+    expect((names.body?.value as Record<string, unknown>).names).toContain('Session Book')
+    // A shared asset name cannot be re-created by a frontend.
+    const duplicate = await call({ op: 'lorebook.create', character: CHARACTER, chatId: sessionChatId, name: 'Helper Lore', entries: [] })
+    expect(String(duplicate.body?.message)).toContain('shared asset')
+
+    const deleted = await call({ op: 'lorebook.delete', character: CHARACTER, chatId: sessionChatId, name: 'Session Book' })
+    expect(deleted.body?.value).toEqual({ name: 'Session Book', deleted: true })
+    const gone = await call({ op: 'lorebook.get', character: CHARACTER, chatId: sessionChatId, name: 'Session Book' })
+    expect(gone.status).toBe(500)
+    // The base asset is still readable in a chat without an overlay.
+    const otherChatId = await store.createChat(CHARACTER, HEADER)
+    const base = await call({ op: 'lorebook.get', character: CHARACTER, chatId: otherChatId, name: 'Helper Lore' })
+    expect((base.body?.value as Record<string, unknown>).entries).toHaveLength(1)
+  })
+
+  it('binds a chat world book and reports it in the snapshot', async () => {
+    const set = await call({ op: 'chat.world.set', character: CHARACTER, chatId, name: 'Helper Lore' })
+    expect(set.body?.value).toEqual({ name: 'Helper Lore' })
+    const snapshot = await call({ op: 'snapshot', character: CHARACTER, chatId })
+    expect((snapshot.body?.value as Record<string, unknown>).worlds).toMatchObject({ chat: 'Helper Lore' })
+    await call({ op: 'chat.world.set', character: CHARACTER, chatId, name: null })
+  })
+
+  it('stores session preset/persona copies and merges them into the snapshot', async () => {
+    const presetPut = await call({
+      op: 'presets.put',
+      character: CHARACTER,
+      chatId,
+      name: 'Session Preset',
+      preset: { name: 'Session Preset', prompts: [{ name: 'p', content: 'c' }], prompt_order: [] },
+    })
+    expect(presetPut.status).toBe(200)
+    const personaPut = await call({
+      op: 'personas.put',
+      character: CHARACTER,
+      chatId,
+      name: 'Session Persona',
+      persona: { name: 'Session Persona', description: 'd' },
+    })
+    expect(personaPut.status).toBe(200)
+    const snapshot = await call({ op: 'snapshot', character: CHARACTER, chatId })
+    const value = snapshot.body?.value as Record<string, any>
+    expect(value.presets.names).toContain('Session Preset')
+    expect(value.presets.values['Session Preset'].prompts[0].content).toBe('c')
+    expect(value.personas.names).toContain('Session Persona')
+    expect(value.personas.values['Session Persona'].description).toBe('d')
+  })
+
+  it('rotates message floors in the session chat', async () => {
+    const rotateChatId = await store.createChat(CHARACTER, HEADER, [
+      { name: CHARACTER, is_user: false, is_system: false, send_date: '', mes: 'a' },
+      { name: CHARACTER, is_user: false, is_system: false, send_date: '', mes: 'b' },
+      { name: CHARACTER, is_user: false, is_system: false, send_date: '', mes: 'c' },
+      { name: CHARACTER, is_user: false, is_system: false, send_date: '', mes: 'd' },
+    ])
+    const rotated = await call({ op: 'messages.rotate', character: CHARACTER, chatId: rotateChatId, begin: 0, middle: 2, end: 4 })
+    expect(rotated.status).toBe(200)
+    const read = await call({ op: 'messages.get', character: CHARACTER, chatId: rotateChatId, range: '0-3' })
+    const messages = read.body?.value as Array<Record<string, unknown>>
+    expect(messages.map((message) => message.message)).toEqual(['c', 'd', 'a', 'b'])
+  })
+
+  it('renders card-authored EJS with the chat variable scope', async () => {
+    const evalChatId = await store.createChat(CHARACTER, HEADER)
+    await call({
+      op: 'variables.replace',
+      character: CHARACTER,
+      chatId: evalChatId,
+      scope: 'chat',
+      variables: { affection: 7 },
+    })
+    const rendered = await call({
+      op: 'template.render',
+      character: CHARACTER,
+      chatId: evalChatId,
+      code: '<%= getvar("affection") %>-<%= getUserName() %>',
+      context: {},
+    })
+    expect(rendered.status).toBe(200)
+    expect((rendered.body?.value as Record<string, unknown>).text).toBe(`7-${HEADER.user_name}`)
   })
 })

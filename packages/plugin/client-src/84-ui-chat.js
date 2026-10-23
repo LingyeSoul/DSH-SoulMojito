@@ -66,6 +66,7 @@
       // documents are rendered in isolated frames while ordinary prose remains
       // text, matching Tavern Helper's frontend code-block behavior.
       const frontendDocuments = editing || message.streaming ? [] : extractFrontendDocuments(renderedText)
+      const frontendProse = frontendDocuments.length > 0 ? stripFrontendDocuments(renderedText) : ''
       const persist = async (nextMessage) => {
         setError('')
         const nextChat = { ...chat, messages: chat.messages.map((item, itemIndex) => itemIndex === index ? nextMessage : item) }
@@ -123,7 +124,9 @@
           editing
             ? h('textarea', { className: 'dt-message-edit', value: draft, disabled: busy, onChange: (event) => setDraft(event.target.value) })
             : frontendDocuments.length > 0
-              ? h('div', { className: 'dt-message-frontend' }, frontendDocuments.map((html, frontendIndex) => h(FrontendFrame, {
+              ? h('div', { className: 'dt-message-frontend' },
+                frontendProse !== '' ? h('div', { className: 'dt-message-copy' }, frontendProse) : null,
+                frontendDocuments.map((html, frontendIndex) => h(FrontendFrame, {
                 key: `${index}-${frontendIndex}`,
                 html,
                 token: `tavern-${sessionId}-${index}-${frontendIndex}`,

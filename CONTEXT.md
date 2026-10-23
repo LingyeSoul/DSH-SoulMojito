@@ -53,7 +53,7 @@ _Avoid_: 默认提示词
 **会话世界书副本**：某个聊天作用域的世界书覆盖层（`chats/<角色>/<聊天>.jsonl.worlds.json`）。卡脚本的写入只落在副本，基础世界书资产与卡内嵌书保持只读；当前聊天的激活、生成与 MVU 读取优先使用副本，副本随聊天生命周期（重命名跟随、分支/分叉复制、删除清理）。
 _Avoid_: 世界书备份、全局覆盖层
 
-**会话脚本树副本**：某个聊天作用域的卡脚本树覆盖层（`chats/<角色>/<聊天>.jsonl.scripts.json`）。GM 面板通过 `updateScriptTreesWith` 改写的脚本源码只落在副本，角色卡文件与卡内 `tavern_helper.scripts` 保持只读；会话内 `getScriptTrees` 从副本起步，刷新/重开卡脚本 tab 仍可读。副本只保存源码，不执行 Zod schema，也随聊天生命周期（重命名跟随、分支/分叉复制、删除清理）。
+**会话脚本树副本**：某个聊天作用域的 JSR 覆盖层（`chats/<角色>/<聊天>.jsonl.scripts.json`）。GM 面板通过 `updateScriptTreesWith` 改写的脚本源码、脚本 `info`/按钮、脚本容器变量，以及 JSR 的预设/人设会话副本都落在这个文件里；角色卡文件与卡内 `tavern_helper` 保持只读；会话内 `getScriptTrees(type)` 从对应来源起步，刷新/重开卡脚本 tab 仍可读。副本不执行 Zod schema，也随聊天生命周期（重命名跟随、分支/分叉复制、删除清理）。
 _Avoid_: 脚本备份、全局脚本覆盖
 
 **上下文提供者**：AgentLoop profile 在每次模型请求前，根据会话、预算和检索结果生成上下文投影的模块。当前 DSH 的 `systemPrompt.context()` 负责动态 runtime snapshot；任意历史节点的临时选择需要宿主提供 `agent/context` seam。

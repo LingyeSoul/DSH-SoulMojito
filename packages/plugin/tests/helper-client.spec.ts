@@ -33,7 +33,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       'const HELPER_MESSAGE = DshJsrRuntime.HELPER_MESSAGE',
       'const HELPER_RESULT_MESSAGE = DshJsrRuntime.HELPER_RESULT_MESSAGE',
       'const HELPER_SNAPSHOT_MESSAGE = DshJsrRuntime.HELPER_SNAPSHOT_MESSAGE',
-      'function frontendHelperScript(token, messageId, storage)',
+      'function frontendHelperScript(token, messageId, storage, identity)',
       'window.getVariables = function',
       'window.getAllVariables = function',
       'window.Mvu.getAllVariables = window.getAllVariables',
@@ -50,7 +50,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       'window.SillyTavern = {',
       'saveChat: function () { return Promise.resolve(); }',
       'saveSettingsDebounced: function () {}',
-      'extensionSettings: {},',
+      'get extensionSettings() { return window.__dshTavernExtensionSettings; }',
       'ToolManager: {',
       'Function: window.Function',
       'get: function (target, property) {',
@@ -102,7 +102,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       'window.getCharData = function (name)',
       "data: clone(data)",
       'window.getPreset = function (name)',
-      'window.getLoadedPresetName = function () { return \'in_use\'; }',
+      'window.getLoadedPresetName = function () { return activePresetName(); };',
     ]) {
       expect(source).toContain(marker)
     }
@@ -175,7 +175,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
   it('keeps the sandbox and proxies through the host binding', () => {
     expect(source).toContain("sandbox: 'allow-scripts allow-modals'")
     expect(source).toContain("connect-src 'none'")
-    expect(source).toContain('function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef)')
+    expect(source).toContain('function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef, onScriptButtons)')
     expect(source).toContain("if (event.source !== frameRef.current?.contentWindow) return")
     expect(source).toContain("data.token !== token")
     expect(source).toContain('this frontend is not bound to a Tavern chat')
@@ -217,17 +217,17 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
 
   it('exposes the session world-book and script-tree shims for GM panels', () => {
     // getCharWorldbookNames 必须同步（GM 脚本不 await），名字回落内嵌书名。
-    expect(source).toContain("window.getCharWorldbookNames = function () { return { primary: characterWorldbookName(), additional: [] }; }")
+    expect(source).toContain("window.getCharWorldbookNames = function () {")
     expect(source).toContain("var embedded = data.characterBook && typeof data.characterBook.name === 'string'")
     // updateWorldbookWith 在 iframe 内跑 updater，只把 entries 发到会话副本。
-    expect(source).toContain("call('lorebook.put', { name: bookName, entries: updated })")
-    expect(source).toContain('window.TavernHelper.updateWorldbookWith = window.updateWorldbookWith')
+    expect(source).toContain("call('lorebook.put', { name: name, entries: entries })")
+    expect(source).toContain("window.TavernHelper[surfaceName] = window[surfaceName]")
     // 脚本树读写会话副本：seed 优先副本，改写先 scripts.put 再发布 mg-zod-ready。
     expect(source).toContain('var scriptTrees = null')
     expect(source).toContain('if (Array.isArray(state.scriptTrees)) return clone(state.scriptTrees);')
     expect(source).toContain("__mgZodReady__")
     expect(source).toContain("'mg-zod-ready'")
-    expect(source).toContain('window.TavernHelper.updateScriptTreesWith = window.updateScriptTreesWith')
+    expect(source).toContain('HELPER_SURFACE.length')
   })
 
   it('gives floating panels a real document facade through window.top', () => {
@@ -281,17 +281,19 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     expect(source).toContain('if (!node || typeof node !== \'object\' || Array.isArray(node)) continue;')
     expect(source).toContain('var scriptTreesLocallyWritten = false;')
     // 先落盘，成功后才更新内存并发布 mg-zod-ready
-    const updateStart = source.indexOf('window.updateScriptTreesWith = function (updater) {')
-    const putIndex = source.indexOf("call('scripts.put', { scriptTrees: next })", updateStart)
-    const publishIndex = source.indexOf('publishZodReady(scriptTrees);', updateStart)
+    const updateStart = source.indexOf('window.updateScriptTreesWith = function (updater, option) {')
+    const persistStart = source.indexOf('function persistScriptTrees(type, trees) {')
+    const putIndex = source.indexOf("call('scripts.put', { type: type, scriptTrees: trees })", persistStart)
+    const publishIndex = source.indexOf('publishZodReady(stored);', putIndex)
     expect(updateStart).toBeGreaterThanOrEqual(0)
-    expect(putIndex).toBeGreaterThan(updateStart)
+    expect(persistStart).toBeGreaterThanOrEqual(0)
+    expect(putIndex).toBeGreaterThan(persistStart)
     expect(publishIndex).toBeGreaterThan(putIndex)
-    expect(source.slice(putIndex, publishIndex)).toContain('scriptTreesLocallyWritten = true;')
+    expect(source.slice(putIndex, publishIndex)).toContain("scriptTreesLocallyWritten = true;")
   })
 
   it('keeps the generated iframe shim syntactically valid', () => {
-    const body = buildIframeScript('probe-token', 1, JSON.stringify({ theme: 'dark' }), iframeSources())
+    const body = buildIframeScript('probe-token', 1, JSON.stringify({ theme: 'dark' }), iframeSources(), null)
     expect(() => new Function(body)).not.toThrow()
   })
 
@@ -374,6 +376,6 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     ]) {
       expect(compatDoc).toContain(event)
     }
-    expect(compatDoc).toContain('永远不会被触发')
+    expect(compatDoc).toContain('只有上表列出的会被触发')
   })
 })

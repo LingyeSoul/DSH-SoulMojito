@@ -949,10 +949,9 @@ export class TavernStore {
    * `info`, `button`, unknown fields).
    */
   async getChatScripts(characterName: string, chatId: string): Promise<unknown[] | undefined> {
-    const file = this.chatScriptsFile(characterName, chatId)
-    const bytes = await this.tryRead(file)
-    if (bytes === undefined) return undefined
-    return structuredClone(parseChatScriptsFile(file, bytes).scriptTrees)
+    const overlay = await this.getChatJsrOverlay(characterName, chatId)
+    if (overlay === undefined) return undefined
+    return structuredClone(overlay.trees?.character ?? overlay.scriptTrees)
   }
 
   async putChatScripts(characterName: string, chatId: string, scriptTrees: unknown[]): Promise<void> {
@@ -960,11 +959,43 @@ export class TavernStore {
     scriptTrees.forEach((node, index) => {
       if (!isPlainRecord(node)) throw new Error(`putChatScripts node ${index} must be an object`)
     })
-    await this.mutateChat(async () => {
-      await this.writeAtomic(
-        this.chatScriptsFile(characterName, chatId),
-        jsonBytes({ version: 1, scriptTrees: structuredClone(scriptTrees) }),
-      )
+    await this.putChatJsrOverlay(characterName, chatId, (current) => ({
+      version: 1,
+      scriptTrees: structuredClone(scriptTrees),
+      trees: { ...(current?.trees ?? {}), character: structuredClone(scriptTrees) },
+      ...(current?.scriptVariables === undefined ? {} : { scriptVariables: current.scriptVariables }),
+      ...(current?.presets === undefined ? {} : { presets: current.presets }),
+      ...(current?.personas === undefined ? {} : { personas: current.personas }),
+    }))
+  }
+
+  /**
+   * Session JSR overlay (2026-10-23): one per-chat file owns every JSR write
+   * that must not touch base assets — the character/preset/global script trees,
+   * script-container variables, and session-scoped preset/persona copies. The
+   * legacy `scriptTrees` key stays the character tree so older builds keep
+   * reading the same file.
+   */
+  async getChatJsrOverlay(characterName: string, chatId: string): Promise<ChatScriptsFile | undefined> {
+    const file = this.chatScriptsFile(characterName, chatId)
+    const bytes = await this.tryRead(file)
+    if (bytes === undefined) return undefined
+    return structuredClone(parseChatScriptsFile(file, bytes))
+  }
+
+  async putChatJsrOverlay(
+    characterName: string,
+    chatId: string,
+    update: (current: ChatScriptsFile | undefined) => ChatScriptsFile,
+  ): Promise<ChatScriptsFile> {
+    return this.mutateChat(async () => {
+      const file = this.chatScriptsFile(characterName, chatId)
+      const bytes = await this.tryRead(file)
+      const current = bytes === undefined ? undefined : parseChatScriptsFile(file, bytes)
+      const next = update(current)
+      validateJsrOverlay(next, file)
+      await this.writeAtomic(file, jsonBytes(next))
+      return structuredClone(next)
     })
   }
 
@@ -1889,9 +1920,40 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Session script-tree overlay: `{ version: 1, scriptTrees: unknown[] }`. */
-interface ChatScriptsFile {
+export interface ChatScriptsFile {
   version: 1
   scriptTrees: unknown[]
+  /** v2: per-source trees (global / preset / character) plus script-container state. */
+  trees?: {
+    character?: unknown[]
+    preset?: Record<string, unknown[]>
+    global?: unknown[]
+  }
+  scriptVariables?: Record<string, Record<string, unknown>>
+  presets?: Record<string, Record<string, unknown>>
+  personas?: Record<string, Record<string, unknown>>
+}
+
+/** Rejects malformed overlay payloads before they reach the chat directory. */
+function validateJsrOverlay(overlay: ChatScriptsFile, file: string): void {
+  const checkTrees = (nodes: unknown[], label: string): void => {
+    if (!Array.isArray(nodes)) throw new Error(`${label} must be an array of script nodes: ${file}`)
+    nodes.forEach((node, index) => {
+      if (!isPlainRecord(node)) throw new Error(`${label}[${index}] must be an object: ${file}`)
+    })
+  }
+  checkTrees(overlay.scriptTrees, 'scriptTrees')
+  if (overlay.trees?.character !== undefined) checkTrees(overlay.trees.character, 'trees.character')
+  if (overlay.trees?.global !== undefined) checkTrees(overlay.trees.global, 'trees.global')
+  if (overlay.trees?.preset !== undefined) {
+    for (const [name, nodes] of Object.entries(overlay.trees.preset)) checkTrees(nodes, `trees.preset.${name}`)
+  }
+  for (const [key, table] of [['scriptVariables', overlay.scriptVariables], ['presets', overlay.presets], ['personas', overlay.personas]] as const) {
+    if (table === undefined) continue
+    for (const [name, value] of Object.entries(table)) {
+      if (!isPlainRecord(value)) throw new Error(`${key}.${name} must be an object: ${file}`)
+    }
+  }
 }
 
 /**
@@ -1915,7 +1977,26 @@ function parseChatScriptsFile(file: string, bytes: Uint8Array): ChatScriptsFile 
     }
     return node
   })
-  return { version: 1, scriptTrees }
+  const trees = isPlainRecord(parsed['trees']) ? parsed['trees'] : undefined
+  if (trees !== undefined) {
+    if (trees['character'] !== undefined && !Array.isArray(trees['character'])) {
+      throw new Error(`chat script tree file trees.character must be an array: ${file}`)
+    }
+    if (trees['global'] !== undefined && !Array.isArray(trees['global'])) {
+      throw new Error(`chat script tree file trees.global must be an array: ${file}`)
+    }
+    if (trees['preset'] !== undefined && !isPlainRecord(trees['preset'])) {
+      throw new Error(`chat script tree file trees.preset must be an object: ${file}`)
+    }
+  }
+  return {
+    version: 1,
+    scriptTrees,
+    ...(trees === undefined ? {} : { trees: trees as ChatScriptsFile['trees'] }),
+    ...(isPlainRecord(parsed['scriptVariables']) ? { scriptVariables: parsed['scriptVariables'] as ChatScriptsFile['scriptVariables'] } : {}),
+    ...(isPlainRecord(parsed['presets']) ? { presets: parsed['presets'] as ChatScriptsFile['presets'] } : {}),
+    ...(isPlainRecord(parsed['personas']) ? { personas: parsed['personas'] as ChatScriptsFile['personas'] } : {}),
+  }
 }
 
 function timestamp(): string {

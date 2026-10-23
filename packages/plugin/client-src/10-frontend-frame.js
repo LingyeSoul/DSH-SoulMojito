@@ -70,6 +70,23 @@
       return isFrontendDocument(raw) ? [raw] : []
     }
 
+    // Prose that shares a message with a complete HTML document stays visible
+    // above the sandbox frame (JSR keeps the text around its replaced code
+    // block). Mirrors `stripFrontendDocuments` in src/frontend-documents.ts.
+    function stripFrontendDocuments(value) {
+      const text = String(value || '')
+      if (text === '') return ''
+      const fenced = /```[^\n]*\n([\s\S]*?)```/gi
+      let stripped = text.replace(fenced, (whole, inner) => (isFrontendDocument(inner) ? '' : whole))
+      stripped = stripped
+        .replace(/<UpdateVariable(?:Variable)?\b[^>]*>[\s\S]*?<\/UpdateVariable(?:Variable)?\s*>/gi, '')
+        .replace(/<\/UpdateVariable(?:Variable)?\s*>/gi, '')
+        .replace(/<StatusPlaceHolder(?:Impl|READY)\s*\/?>/gi, '')
+        .replace(/<!--\s*MVU:OK\s*-->/gi, '')
+      if (isFrontendDocument(stripped.trim())) return ''
+      return stripped.replace(/\n{3,}/g, '\n\n').trim()
+    }
+
     // 高度上报（A-4 升级，JSR §2.1 adjust_iframe_height 的语义复刻）：
     // - rAF 单帧合并：同一帧内 ResizeObserver 连发只测一次发一次；
     // - 高度去重：数值未变化零消息（宿主 setHeight 幂等，但少发少渲染）；
@@ -264,7 +281,7 @@
       return post
     }
 
-    function buildFrontendDocument(value, token, messageId, allowExternalResources, hostBackground, storage) {
+    function buildFrontendDocument(value, token, messageId, allowExternalResources, hostBackground, storage, identity) {
       // window.parent / window.top 在 sandbox（无 same-origin）里是跨域 WindowProxy，
       // 酒馆卡常见的 `window.parent.document` / `window.parent.Mvu` 会直接抛
       // DOMException。注入前统一改指向 shim 暴露的同页 facade；helper 自身与
@@ -298,7 +315,7 @@
       const theme = `<script>${frontendThemeScript()}</script>`
       // 酒馆助手兼容层（2026-10-20）：库脚本 + TavernHelper shim 进 head，前端
       // 首帧就能拿到 getVariables/getChatMessages 等同步面；快照由宿主随后投递。
-      const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token, messageId, storage)}</script>`
+      const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token, messageId, storage, identity === undefined ? null : identity)}</script>`
       const reporter = `<script>${frontendHeightReporter(token)}</script>`
       if (/<html(?:\s[^>]*)?>/i.test(source)) {
         let documentText = source
@@ -539,12 +556,14 @@
       }
     }
 
-    function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef) {
+    function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef, onScriptButtons) {
       const bindingRef = useRef(binding)
       bindingRef.current = binding
       const previousRef = useRef(null)
       const composerDraftRef = useRef({ element: null, text: '' })
       const composerChainRef = useRef(Promise.resolve())
+      const onScriptButtonsRef = useRef(onScriptButtons)
+      onScriptButtonsRef.current = onScriptButtons
       // A card's createChatMessages + /trigger pair is common. A Tavern floor cannot start a DSH turn by itself, so the
       // bridge remembers the text created by this iframe and, on /trigger,
       // replaces that floor with one host composer send. Without this the card
@@ -623,7 +642,15 @@
         // 草稿记录都放在 hook ref 上，副作用重跑（轮询刷新）不丢顺序。
         const onMessage = (event) => {
           const data = event.data
-          if (!data || data.type !== HELPER_MESSAGE || data.token !== token) return
+          if (!data) return
+          if (data.type === HELPER_BUTTONS_MESSAGE && data.token === token) {
+            if (event.source !== frameRef.current?.contentWindow) return
+            if (typeof onScriptButtonsRef.current === 'function') {
+              onScriptButtonsRef.current(data.scriptId, Array.isArray(data.buttons) ? data.buttons : [])
+            }
+            return
+          }
+          if (data.type !== HELPER_MESSAGE || data.token !== token) return
           if (event.source !== frameRef.current?.contentWindow) return
           const current = bindingRef.current
           const fail = (message) => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: false, message })
@@ -766,7 +793,7 @@
     const FRONTEND_AUTO_MIN_HEIGHT = 80
     const FRONTEND_AUTO_MAX_HEIGHT = 1200
 
-    function FrontendFrame({ html, token, binding, refreshKey, messageId, hostSessionId }) {
+    function FrontendFrame({ html, token, binding, refreshKey, messageId, hostSessionId, identity, onScriptButtons }) {
       const t = useTranslate()
       const frameRef = useRef(null)
       // Initial canvas color: resolve the DSH native background once on first
@@ -790,7 +817,7 @@
       } = useFrontendResize(frameRef, height, storageSeed !== null)
       const postViewport = useViewportBridge(frameRef)
       const postTheme = useThemeBridge(frameRef)
-      useHelperBridge(frameRef, token, binding, `${refreshKey}:${storageSeed === null ? 'seed' : 'ready'}`, hostSessionId, manualHeightRef)
+      useHelperBridge(frameRef, token, binding, `${refreshKey}:${storageSeed === null ? 'seed' : 'ready'}`, hostSessionId, manualHeightRef, onScriptButtons)
       useEffect(() => {
         let cancelled = false
         const character = binding?.character
@@ -829,7 +856,8 @@
           sandbox: 'allow-scripts allow-modals',
           referrerPolicy: 'no-referrer',
           title: 'Tavern frontend',
-          srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current, storageSeed),
+          'data-token': token,
+          srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current, storageSeed, identity === undefined ? null : identity),
           onLoad: () => { postViewport(); postTheme() },
           style: { height: effectiveHeight, background: initialBackgroundRef.current },
         }),

@@ -49,7 +49,7 @@ describe('client card scripts sidebar (main.js source check)', () => {
   })
 
   it('loads the card script list from the dedicated endpoint with race cancellation', () => {
-    expect(source).toContain('api(`card/scripts?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`)')
+    expect(source).toContain('api(`card/scripts?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}&includeDisabled=1`)')
     expect(source).toContain('const requestRef = useRef(0)')
     expect(source).toContain('if (requestRef.current !== request) return')
   })
@@ -67,7 +67,7 @@ describe('client card scripts sidebar (main.js source check)', () => {
     expect(source).toContain('function cardScriptDocument(script)')
     expect(source).toContain("replaceAll('</script', '<\\\\/script')")
     expect(source).toContain('<script type="module">')
-    expect(source).toContain("token: `card-script-${sessionId}-${running.id}`")
+    expect(source).toContain('token: `card-script-${sessionId}-${script.id}`')
     expect(source).toContain('messageId: -1')
   })
 
@@ -126,17 +126,23 @@ describe('client card scripts sidebar (main.js source check)', () => {
     expect(source).toContain('window.dispatchEvent(new Event(CARD_SCRIPTS_RESET_EVENT))')
   })
 
-  it('auto-runs every enabled script in one sandboxed iframe and can stop', () => {
+  it('auto-runs every enabled script in isolated sandboxed iframes and can stop', () => {
+    // Script container (2026-10-23): one iframe per script, each with its own
+    // identity so getScriptId/getScriptInfo observe the node. The legacy
+    // single-document helpers stay for the AgentTavern auto-run host.
     expect(source).toContain('function cardScriptTreeDocument(scripts)')
     expect(source).toContain("return `<script type=\"module\">${content}</script>`")
-    expect(source).toContain("token: `card-scripts-auto-${sessionId}`")
-    expect(source).toContain('key: `card-scripts-auto-${sessionId}-${binding.chatId}`')
+    expect(source).toContain('const renderScriptFrame = (script) =>')
+    expect(source).toContain('identity: { scriptId: script.id, scriptName: script.name, scriptInfo: script.info }')
+    expect(source).toContain('onScriptButtons: handleScriptButtons')
+    expect(source).toContain('const [scriptButtons, setScriptButtons] = useState({})')
+    expect(source).toContain('dispatchScriptButton')
     expect(source).toContain("const autoRunEnabled = autoRunSetting && architecture === 'st'")
     expect(source).toContain('const [autoRunning, setAutoRunning] = useState(false)')
     expect(source).toContain('const autoRunStoppedRef = useRef(false)')
     expect(source).toContain('bundle.key === key')
     expect(source).toContain('if (!supported || !autoRunEnabled) {')
-    expect(source).toContain('if (currentBundle === null || currentBundle.scripts.length === 0) {')
+    expect(source).toContain('if (currentBundle === null || currentBundle.scripts.filter((script) => script.enabled !== false).length === 0) {')
     const autoStart = source.indexOf('setAutoRunning(true)')
     const autoGate = source.indexOf('if (!supported || !autoRunEnabled) {')
     expect(autoGate).toBeGreaterThanOrEqual(0)

@@ -187,6 +187,23 @@ window.__ModuleLoader__.load({
       return isFrontendDocument(raw) ? [raw] : []
     }
 
+    // Prose that shares a message with a complete HTML document stays visible
+    // above the sandbox frame (JSR keeps the text around its replaced code
+    // block). Mirrors `stripFrontendDocuments` in src/frontend-documents.ts.
+    function stripFrontendDocuments(value) {
+      const text = String(value || '')
+      if (text === '') return ''
+      const fenced = /```[^\n]*\n([\s\S]*?)```/gi
+      let stripped = text.replace(fenced, (whole, inner) => (isFrontendDocument(inner) ? '' : whole))
+      stripped = stripped
+        .replace(/<UpdateVariable(?:Variable)?\b[^>]*>[\s\S]*?<\/UpdateVariable(?:Variable)?\s*>/gi, '')
+        .replace(/<\/UpdateVariable(?:Variable)?\s*>/gi, '')
+        .replace(/<StatusPlaceHolder(?:Impl|READY)\s*\/?>/gi, '')
+        .replace(/<!--\s*MVU:OK\s*-->/gi, '')
+      if (isFrontendDocument(stripped.trim())) return ''
+      return stripped.replace(/\n{3,}/g, '\n\n').trim()
+    }
+
     // 高度上报（A-4 升级，JSR §2.1 adjust_iframe_height 的语义复刻）：
     // - rAF 单帧合并：同一帧内 ResizeObserver 连发只测一次发一次；
     // - 高度去重：数值未变化零消息（宿主 setHeight 幂等，但少发少渲染）；
@@ -381,7 +398,7 @@ window.__ModuleLoader__.load({
       return post
     }
 
-    function buildFrontendDocument(value, token, messageId, allowExternalResources, hostBackground, storage) {
+    function buildFrontendDocument(value, token, messageId, allowExternalResources, hostBackground, storage, identity) {
       // window.parent / window.top 在 sandbox（无 same-origin）里是跨域 WindowProxy，
       // 酒馆卡常见的 `window.parent.document` / `window.parent.Mvu` 会直接抛
       // DOMException。注入前统一改指向 shim 暴露的同页 facade；helper 自身与
@@ -415,7 +432,7 @@ window.__ModuleLoader__.load({
       const theme = `<script>${frontendThemeScript()}</script>`
       // 酒馆助手兼容层（2026-10-20）：库脚本 + TavernHelper shim 进 head，前端
       // 首帧就能拿到 getVariables/getChatMessages 等同步面；快照由宿主随后投递。
-      const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token, messageId, storage)}</script>`
+      const helper = `${helperLibraryTags()}<script>${frontendHelperScript(token, messageId, storage, identity === undefined ? null : identity)}</script>`
       const reporter = `<script>${frontendHeightReporter(token)}</script>`
       if (/<html(?:\s[^>]*)?>/i.test(source)) {
         let documentText = source
@@ -656,12 +673,14 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef) {
+    function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef, onScriptButtons) {
       const bindingRef = useRef(binding)
       bindingRef.current = binding
       const previousRef = useRef(null)
       const composerDraftRef = useRef({ element: null, text: '' })
       const composerChainRef = useRef(Promise.resolve())
+      const onScriptButtonsRef = useRef(onScriptButtons)
+      onScriptButtonsRef.current = onScriptButtons
       // A card's createChatMessages + /trigger pair is common. A Tavern floor cannot start a DSH turn by itself, so the
       // bridge remembers the text created by this iframe and, on /trigger,
       // replaces that floor with one host composer send. Without this the card
@@ -740,7 +759,15 @@ window.__ModuleLoader__.load({
         // 草稿记录都放在 hook ref 上，副作用重跑（轮询刷新）不丢顺序。
         const onMessage = (event) => {
           const data = event.data
-          if (!data || data.type !== HELPER_MESSAGE || data.token !== token) return
+          if (!data) return
+          if (data.type === HELPER_BUTTONS_MESSAGE && data.token === token) {
+            if (event.source !== frameRef.current?.contentWindow) return
+            if (typeof onScriptButtonsRef.current === 'function') {
+              onScriptButtonsRef.current(data.scriptId, Array.isArray(data.buttons) ? data.buttons : [])
+            }
+            return
+          }
+          if (data.type !== HELPER_MESSAGE || data.token !== token) return
           if (event.source !== frameRef.current?.contentWindow) return
           const current = bindingRef.current
           const fail = (message) => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: false, message })
@@ -883,7 +910,7 @@ window.__ModuleLoader__.load({
     const FRONTEND_AUTO_MIN_HEIGHT = 80
     const FRONTEND_AUTO_MAX_HEIGHT = 1200
 
-    function FrontendFrame({ html, token, binding, refreshKey, messageId, hostSessionId }) {
+    function FrontendFrame({ html, token, binding, refreshKey, messageId, hostSessionId, identity, onScriptButtons }) {
       const t = useTranslate()
       const frameRef = useRef(null)
       // Initial canvas color: resolve the DSH native background once on first
@@ -907,7 +934,7 @@ window.__ModuleLoader__.load({
       } = useFrontendResize(frameRef, height, storageSeed !== null)
       const postViewport = useViewportBridge(frameRef)
       const postTheme = useThemeBridge(frameRef)
-      useHelperBridge(frameRef, token, binding, `${refreshKey}:${storageSeed === null ? 'seed' : 'ready'}`, hostSessionId, manualHeightRef)
+      useHelperBridge(frameRef, token, binding, `${refreshKey}:${storageSeed === null ? 'seed' : 'ready'}`, hostSessionId, manualHeightRef, onScriptButtons)
       useEffect(() => {
         let cancelled = false
         const character = binding?.character
@@ -946,7 +973,8 @@ window.__ModuleLoader__.load({
           sandbox: 'allow-scripts allow-modals',
           referrerPolicy: 'no-referrer',
           title: 'Tavern frontend',
-          srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current, storageSeed),
+          'data-token': token,
+          srcDoc: buildFrontendDocument(html, token, typeof messageId === 'number' ? messageId : -1, allowExternalResources, initialBackgroundRef.current, storageSeed, identity === undefined ? null : identity),
           onLoad: () => { postViewport(); postTheme() },
           style: { height: effectiveHeight, background: initialBackgroundRef.current },
         }),
@@ -1068,16 +1096,18 @@ window.__ModuleLoader__.load({
     const HELPER_RESULT_MESSAGE = DshJsrRuntime.HELPER_RESULT_MESSAGE
     const HELPER_SNAPSHOT_MESSAGE = DshJsrRuntime.HELPER_SNAPSHOT_MESSAGE
     const HELPER_EVENT_MESSAGE = DshJsrRuntime.HELPER_EVENT_MESSAGE
+    const HELPER_BUTTONS_MESSAGE = DshJsrRuntime.HELPER_BUTTONS_MESSAGE
     const HELPER_TAVERN_EVENTS = DshJsrRuntime.TAVERN_EVENTS
     const HELPER_IFRAME_EVENTS = DshJsrRuntime.IFRAME_EVENTS
     const FRONTEND_STORAGE_SOURCES = DshFrontendStorage.iframeSources()
 
-    function frontendHelperScript(token, messageId, storage) {
+    function frontendHelperScript(token, messageId, storage, identity) {
       return DshJsrRuntime.buildIframeScript(
         token,
         messageId,
         DshFrontendStorage.serializeFrontendStorageSeed(storage),
         FRONTEND_STORAGE_SOURCES,
+        identity === undefined ? null : identity,
       )
     }
 
@@ -2768,6 +2798,7 @@ window.__ModuleLoader__.load({
       'cardScripts.loadFailed': 'Failed to load card scripts: {error}',
       'cardScripts.count': '{count} enabled script(s)',
       'cardScripts.charCount': '{count} chars',
+      'cardScripts.disabled': 'Disabled in the card (never auto-runs)',
       'cardScripts.loading': 'Loading card scripts…',
       'cardScripts.idle': 'Click Run to start a script in the sandbox; one script at a time.',
       'cardScripts.world': 'Session world book: {name}',
@@ -3655,6 +3686,7 @@ window.__ModuleLoader__.load({
       'cardScripts.loadFailed': '读取卡脚本失败：{error}',
       'cardScripts.count': '共 {count} 个启用脚本',
       'cardScripts.charCount': '{count} 字符',
+      'cardScripts.disabled': '已在卡内禁用（不会自动运行）',
       'cardScripts.loading': '正在读取卡脚本…',
       'cardScripts.idle': '点「运行」在沙箱里启动脚本；同一时间只运行一份。',
       'cardScripts.world': '会话世界书：{name}',
@@ -7003,6 +7035,7 @@ window.__ModuleLoader__.load({
       // documents are rendered in isolated frames while ordinary prose remains
       // text, matching Tavern Helper's frontend code-block behavior.
       const frontendDocuments = editing || message.streaming ? [] : extractFrontendDocuments(renderedText)
+      const frontendProse = frontendDocuments.length > 0 ? stripFrontendDocuments(renderedText) : ''
       const persist = async (nextMessage) => {
         setError('')
         const nextChat = { ...chat, messages: chat.messages.map((item, itemIndex) => itemIndex === index ? nextMessage : item) }
@@ -7060,7 +7093,9 @@ window.__ModuleLoader__.load({
           editing
             ? h('textarea', { className: 'dt-message-edit', value: draft, disabled: busy, onChange: (event) => setDraft(event.target.value) })
             : frontendDocuments.length > 0
-              ? h('div', { className: 'dt-message-frontend' }, frontendDocuments.map((html, frontendIndex) => h(FrontendFrame, {
+              ? h('div', { className: 'dt-message-frontend' },
+                frontendProse !== '' ? h('div', { className: 'dt-message-copy' }, frontendProse) : null,
+                frontendDocuments.map((html, frontendIndex) => h(FrontendFrame, {
                 key: `${index}-${frontendIndex}`,
                 html,
                 token: `tavern-${sessionId}-${index}-${frontendIndex}`,
@@ -9504,6 +9539,29 @@ window.__ModuleLoader__.load({
       const autoRunEnabled = autoRunSetting && architecture === 'st'
       const [autoRunning, setAutoRunning] = useState(false)
       const [autoStopped, setAutoStopped] = useState(false)
+      // Script-container buttons: each container iframe reports its own list; the
+      // panel renders a bar and re-dispatches clicks to that iframe.
+      const [scriptButtons, setScriptButtons] = useState({})
+      const handleScriptButtons = useCallback((scriptId, list) => {
+        setScriptButtons((current) => {
+          const previous = current[scriptId] || []
+          const same = previous.length === list.length && previous.every((item, index) =>
+            item.event === list[index].event && item.name === list[index].name && item.visible === list[index].visible)
+          if (same) return current
+          return { ...current, [scriptId]: list }
+        })
+      }, [])
+      const dispatchScriptButton = (entry) => {
+        const surface = document.querySelector('.dt-card-scripts')
+        const frames = surface ? surface.querySelectorAll('iframe[data-token]') : []
+        for (const frame of frames) {
+          const token = frame.getAttribute('data-token')
+          if (token === null) continue
+          try {
+            frame.contentWindow?.postMessage({ type: HELPER_EVENT_MESSAGE, token, event: entry.event, args: [] }, '*')
+          } catch {}
+        }
+      }
       // 用户手动「停止自动运行」后，bundle 重取/重渲染不得立刻重新启动；切换
       // 聊天/角色或重新打开 tab（组件重挂载）时重置。
       const autoRunStoppedRef = useRef(false)
@@ -9522,7 +9580,7 @@ window.__ModuleLoader__.load({
         const request = requestRef.current + 1
         requestRef.current = request
         setLoading(true)
-        return api(`card/scripts?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`)
+        return api(`card/scripts?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}&includeDisabled=1`)
           .then((result) => {
             if (requestRef.current !== request) return
             setBundle({
@@ -9556,6 +9614,7 @@ window.__ModuleLoader__.load({
         setRunningId(null)
         setBundle(null)
         setError('')
+        setScriptButtons({})
         setResetDone(false)
         setScriptsResetDone(false)
         autoRunStoppedRef.current = false
@@ -9595,7 +9654,7 @@ window.__ModuleLoader__.load({
           setAutoRunning(false)
           return
         }
-        if (currentBundle === null || currentBundle.scripts.length === 0) {
+        if (currentBundle === null || currentBundle.scripts.filter((script) => script.enabled !== false).length === 0) {
           setAutoRunning(false)
           return
         }
@@ -9670,6 +9729,24 @@ window.__ModuleLoader__.load({
         })
       }
 
+      const buttonList = Object.values(scriptButtons)
+        .flat()
+        .filter((entry) => entry && entry.visible !== false && typeof entry.event === 'string')
+      // One sandbox per script: JSR isolates script containers, and a shared
+      // window lets two scripts clobber each other's globals. Each frame gets its
+      // own identity so getScriptId/getScriptInfo observe the node.
+      const renderScriptFrame = (script) => h('div', { className: 'dt-frontend-side-frame', key: `script-${script.id}` },
+        h(FrontendFrame, {
+          html: cardScriptDocument(script),
+          token: `card-script-${sessionId}-${script.id}`,
+          messageId: -1,
+          binding: { character: binding.character, chatId: binding.chatId },
+          hostSessionId: sessionId,
+          refreshKey: `${script.id}:${script.content.length}`,
+          identity: { scriptId: script.id, scriptName: script.name, scriptInfo: script.info },
+          onScriptButtons: handleScriptButtons,
+        }))
+
       if (!supported) {
         return h('div', { className: 'dt-frontend-side', 'data-dsh-soulmojito-surface': 'card-scripts-sidebar' },
           h('div', { className: 'dt-frontend-side-empty' }, h(IconSparkle16, { size: 22 }),
@@ -9677,6 +9754,7 @@ window.__ModuleLoader__.load({
       }
 
       const scripts = currentBundle === null ? [] : currentBundle.scripts
+      const runnable = scripts.filter((script) => script.enabled !== false)
       const running = scripts.find((script) => script.id === runningId)
       return h('div', { className: 'dt-frontend-side dt-card-scripts', 'data-dsh-soulmojito-surface': 'card-scripts-sidebar' },
         h('p', { className: 'dt-card-scripts-warning', role: 'note' }, t('cardScripts.warning')),
@@ -9693,7 +9771,7 @@ window.__ModuleLoader__.load({
           : null,
         h('div', { className: 'dt-frontend-side-head' },
           h('span', { className: 'dt-frontend-side-meta' },
-            t('cardScripts.count', { count: scripts.length })),
+            t('cardScripts.count', { count: runnable.length })),
           h('button', {
             type: 'button',
             className: 'dt-frontend-side-refresh',
@@ -9734,10 +9812,11 @@ window.__ModuleLoader__.load({
             h('span', { className: 'dt-card-script-meta' },
               t('cardScripts.charCount', { count: script.content.length }))),
           script.info !== '' ? h('p', { className: 'dt-hint' }, script.info) : null,
+          script.enabled === false ? h('p', { className: 'dt-hint' }, t('cardScripts.disabled')) : null,
           h('button', {
             type: 'button',
             className: runningId === script.id ? 'dt-card-script-run dt-card-script-stop' : 'dt-card-script-run',
-            disabled: autoRunning || autoRunHostedInFrontend,
+            disabled: autoRunning || autoRunHostedInFrontend || script.enabled === false,
             onClick: () => {
               setResetDone(false)
               setAutoStopped(false)
@@ -9745,31 +9824,22 @@ window.__ModuleLoader__.load({
             },
           }, runningId === script.id ? t('cardScripts.stop') : t('cardScripts.run')))))
           : null,
-        autoRunning && scripts.length > 0
-          ? h('div', { className: 'dt-frontend-side-frames' },
-            h('div', { className: 'dt-frontend-side-frame' }, h(FrontendFrame, {
-              key: `card-scripts-auto-${sessionId}-${binding.chatId}`,
-              html: cardScriptTreeDocument(scripts),
-              token: `card-scripts-auto-${sessionId}`,
-              messageId: -1,
-              binding: { character: binding.character, chatId: binding.chatId },
-              hostSessionId: sessionId,
-              refreshKey: cardScriptTreeRefreshKey(key, scripts),
-            })))
+        autoRunning && runnable.length > 0
+          ? h('div', { className: 'dt-frontend-side-frames' }, runnable.map(renderScriptFrame))
           : running !== undefined
-            ? h('div', { className: 'dt-frontend-side-frames' },
-              h('div', { className: 'dt-frontend-side-frame' }, h(FrontendFrame, {
-                key: `card-script-${running.id}`,
-                html: cardScriptDocument(running),
-                token: `card-script-${sessionId}-${running.id}`,
-                messageId: -1,
-                binding: { character: binding.character, chatId: binding.chatId },
-                hostSessionId: sessionId,
-                refreshKey: `${running.id}:${running.content.length}`,
-              })))
+            ? h('div', { className: 'dt-frontend-side-frames' }, renderScriptFrame(running))
             : autoRunHostedInFrontend
               ? null
               : h('p', { className: 'dt-hint' }, t('cardScripts.idle')),
+        buttonList.length > 0
+          ? h('div', { className: 'dt-card-script-buttons', role: 'toolbar' },
+            buttonList.map((entry) => h('button', {
+              key: entry.event,
+              type: 'button',
+              className: 'dt-card-script-run dt-card-script-button',
+              onClick: () => dispatchScriptButton(entry),
+            }, entry.name)))
+          : null,
         resetDone ? h('p', { className: 'dt-card-scripts-notice', role: 'status' }, t('cardScripts.resetDone')) : null,
         scriptsResetDone ? h('p', { className: 'dt-card-scripts-notice', role: 'status' }, t('cardScripts.resetScriptsDone')) : null,
         currentBundle !== null && (currentBundle.world !== null || scripts.length > 0)

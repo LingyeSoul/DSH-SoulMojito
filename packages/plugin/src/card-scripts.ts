@@ -19,6 +19,8 @@ export interface CardScript {
   name: string
   content: string
   info: string
+  /** Session copy / card node flag; the container lists disabled scripts too. */
+  enabled: boolean
 }
 
 export interface CardScriptBundle {
@@ -34,37 +36,40 @@ export function collectCardScripts(card: CharacterCardIR): CardScriptBundle {
 /**
  * `scriptTrees` wins over the card when it is an array (session copy). Folders
  * are walked so scripts nested by the GM panel are still listed; an `undefined`
- * tree keeps the card-only behavior of this endpoint.
+ * tree keeps the card-only behavior of this endpoint. Disabled nodes are only
+ * returned when `includeDisabled` is asked for (the script container lists
+ * them; auto-run and the public endpoint keep the enabled-only list).
  */
-export function collectCardScriptBundle(card: CharacterCardIR, scriptTrees?: unknown[]): CardScriptBundle {
+export function collectCardScriptBundle(card: CharacterCardIR, scriptTrees?: unknown[], includeDisabled = false): CardScriptBundle {
   const nodes = Array.isArray(scriptTrees) ? scriptTrees : cardScriptNodes(card)
-  return { world: cardWorldName(card), scripts: collectScriptsFromNodes(nodes) }
+  return { world: cardWorldName(card), scripts: collectScriptsFromNodes(nodes, includeDisabled) }
 }
 
 /** Extracts runnable scripts from raw JSR nodes, flattening folders. */
-export function collectScriptsFromNodes(nodes: unknown[]): CardScript[] {
+export function collectScriptsFromNodes(nodes: unknown[], includeDisabled = false): CardScript[] {
   const scripts: CardScript[] = []
-  walkScriptNodes(nodes, scripts)
+  walkScriptNodes(nodes, scripts, includeDisabled)
   return scripts
 }
 
-function walkScriptNodes(nodes: unknown[], scripts: CardScript[]): void {
+function walkScriptNodes(nodes: unknown[], scripts: CardScript[], includeDisabled: boolean): void {
   for (const node of nodes) {
     if (!isPlainObject(node)) continue
     if (node['type'] === 'folder') {
-      if (Array.isArray(node['scripts'])) walkScriptNodes(node['scripts'], scripts)
+      if (Array.isArray(node['scripts'])) walkScriptNodes(node['scripts'], scripts, includeDisabled)
       continue
     }
     // Folders carry no content; only runnable scripts are listed.
     if (node['type'] !== 'script') continue
-    if (node['enabled'] === false) continue
+    const enabled = node['enabled'] !== false
+    if (!enabled && !includeDisabled) continue
     const content = node['content']
     if (typeof content !== 'string' || content.trim() === '') continue
     // Stable fallback id: encounter order survives reloads even without an id.
     const fallback = `script-${scripts.length}`
     const id = nonEmptyString(node['id']) ?? fallback
     const name = nonEmptyString(node['name']) ?? fallback
-    scripts.push({ id, name, content, info: nonEmptyString(node['info']) ?? '' })
+    scripts.push({ id, name, content, info: nonEmptyString(node['info']) ?? '', enabled })
   }
 }
 

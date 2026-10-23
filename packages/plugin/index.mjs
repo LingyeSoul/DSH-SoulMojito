@@ -3018,21 +3018,46 @@ var TavernStore = class _TavernStore {
    * `info`, `button`, unknown fields).
    */
   async getChatScripts(characterName, chatId) {
-    const file = this.chatScriptsFile(characterName, chatId);
-    const bytes = await this.tryRead(file);
-    if (bytes === void 0) return void 0;
-    return structuredClone(parseChatScriptsFile(file, bytes).scriptTrees);
+    const overlay = await this.getChatJsrOverlay(characterName, chatId);
+    if (overlay === void 0) return void 0;
+    return structuredClone(overlay.trees?.character ?? overlay.scriptTrees);
   }
   async putChatScripts(characterName, chatId, scriptTrees) {
     if (!Array.isArray(scriptTrees)) throw new Error("putChatScripts requires an array of script nodes");
     scriptTrees.forEach((node, index) => {
       if (!isPlainRecord(node)) throw new Error(`putChatScripts node ${index} must be an object`);
     });
-    await this.mutateChat(async () => {
-      await this.writeAtomic(
-        this.chatScriptsFile(characterName, chatId),
-        jsonBytes({ version: 1, scriptTrees: structuredClone(scriptTrees) })
-      );
+    await this.putChatJsrOverlay(characterName, chatId, (current) => ({
+      version: 1,
+      scriptTrees: structuredClone(scriptTrees),
+      trees: { ...current?.trees ?? {}, character: structuredClone(scriptTrees) },
+      ...current?.scriptVariables === void 0 ? {} : { scriptVariables: current.scriptVariables },
+      ...current?.presets === void 0 ? {} : { presets: current.presets },
+      ...current?.personas === void 0 ? {} : { personas: current.personas }
+    }));
+  }
+  /**
+   * Session JSR overlay (2026-10-23): one per-chat file owns every JSR write
+   * that must not touch base assets — the character/preset/global script trees,
+   * script-container variables, and session-scoped preset/persona copies. The
+   * legacy `scriptTrees` key stays the character tree so older builds keep
+   * reading the same file.
+   */
+  async getChatJsrOverlay(characterName, chatId) {
+    const file = this.chatScriptsFile(characterName, chatId);
+    const bytes = await this.tryRead(file);
+    if (bytes === void 0) return void 0;
+    return structuredClone(parseChatScriptsFile(file, bytes));
+  }
+  async putChatJsrOverlay(characterName, chatId, update) {
+    return this.mutateChat(async () => {
+      const file = this.chatScriptsFile(characterName, chatId);
+      const bytes = await this.tryRead(file);
+      const current = bytes === void 0 ? void 0 : parseChatScriptsFile(file, bytes);
+      const next = update(current);
+      validateJsrOverlay(next, file);
+      await this.writeAtomic(file, jsonBytes(next));
+      return structuredClone(next);
     });
   }
   async deleteChatScripts(characterName, chatId) {
@@ -3744,6 +3769,26 @@ function parseChatWorldsFile(file, bytes) {
 function isPlainRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+function validateJsrOverlay(overlay, file) {
+  const checkTrees = (nodes, label) => {
+    if (!Array.isArray(nodes)) throw new Error(`${label} must be an array of script nodes: ${file}`);
+    nodes.forEach((node, index) => {
+      if (!isPlainRecord(node)) throw new Error(`${label}[${index}] must be an object: ${file}`);
+    });
+  };
+  checkTrees(overlay.scriptTrees, "scriptTrees");
+  if (overlay.trees?.character !== void 0) checkTrees(overlay.trees.character, "trees.character");
+  if (overlay.trees?.global !== void 0) checkTrees(overlay.trees.global, "trees.global");
+  if (overlay.trees?.preset !== void 0) {
+    for (const [name2, nodes] of Object.entries(overlay.trees.preset)) checkTrees(nodes, `trees.preset.${name2}`);
+  }
+  for (const [key, table] of [["scriptVariables", overlay.scriptVariables], ["presets", overlay.presets], ["personas", overlay.personas]]) {
+    if (table === void 0) continue;
+    for (const [name2, value] of Object.entries(table)) {
+      if (!isPlainRecord(value)) throw new Error(`${key}.${name2} must be an object: ${file}`);
+    }
+  }
+}
 function parseChatScriptsFile(file, bytes) {
   let parsed;
   try {
@@ -3760,7 +3805,26 @@ function parseChatScriptsFile(file, bytes) {
     }
     return node;
   });
-  return { version: 1, scriptTrees };
+  const trees = isPlainRecord(parsed["trees"]) ? parsed["trees"] : void 0;
+  if (trees !== void 0) {
+    if (trees["character"] !== void 0 && !Array.isArray(trees["character"])) {
+      throw new Error(`chat script tree file trees.character must be an array: ${file}`);
+    }
+    if (trees["global"] !== void 0 && !Array.isArray(trees["global"])) {
+      throw new Error(`chat script tree file trees.global must be an array: ${file}`);
+    }
+    if (trees["preset"] !== void 0 && !isPlainRecord(trees["preset"])) {
+      throw new Error(`chat script tree file trees.preset must be an object: ${file}`);
+    }
+  }
+  return {
+    version: 1,
+    scriptTrees,
+    ...trees === void 0 ? {} : { trees },
+    ...isPlainRecord(parsed["scriptVariables"]) ? { scriptVariables: parsed["scriptVariables"] } : {},
+    ...isPlainRecord(parsed["presets"]) ? { presets: parsed["presets"] } : {},
+    ...isPlainRecord(parsed["personas"]) ? { personas: parsed["personas"] } : {}
+  };
 }
 function timestamp() {
   const d = /* @__PURE__ */ new Date();
@@ -13694,7 +13758,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.9".trim() : "";
-  const commit = true ? normalizeCommit("3f73c68") : void 0;
+  const commit = true ? normalizeCommit("028b435") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -29705,30 +29769,31 @@ function imageContentType(ext) {
 }
 
 // packages/plugin/src/card-scripts.ts
-function collectCardScriptBundle(card, scriptTrees) {
+function collectCardScriptBundle(card, scriptTrees, includeDisabled = false) {
   const nodes = Array.isArray(scriptTrees) ? scriptTrees : cardScriptNodes(card);
-  return { world: cardWorldName(card), scripts: collectScriptsFromNodes(nodes) };
+  return { world: cardWorldName(card), scripts: collectScriptsFromNodes(nodes, includeDisabled) };
 }
-function collectScriptsFromNodes(nodes) {
+function collectScriptsFromNodes(nodes, includeDisabled = false) {
   const scripts = [];
-  walkScriptNodes(nodes, scripts);
+  walkScriptNodes(nodes, scripts, includeDisabled);
   return scripts;
 }
-function walkScriptNodes(nodes, scripts) {
+function walkScriptNodes(nodes, scripts, includeDisabled) {
   for (const node of nodes) {
     if (!isPlainObject3(node)) continue;
     if (node["type"] === "folder") {
-      if (Array.isArray(node["scripts"])) walkScriptNodes(node["scripts"], scripts);
+      if (Array.isArray(node["scripts"])) walkScriptNodes(node["scripts"], scripts, includeDisabled);
       continue;
     }
     if (node["type"] !== "script") continue;
-    if (node["enabled"] === false) continue;
+    const enabled = node["enabled"] !== false;
+    if (!enabled && !includeDisabled) continue;
     const content = node["content"];
     if (typeof content !== "string" || content.trim() === "") continue;
     const fallback = `script-${scripts.length}`;
     const id = nonEmptyString(node["id"]) ?? fallback;
     const name2 = nonEmptyString(node["name"]) ?? fallback;
-    scripts.push({ id, name: name2, content, info: nonEmptyString(node["info"]) ?? "" });
+    scripts.push({ id, name: name2, content, info: nonEmptyString(node["info"]) ?? "", enabled });
   }
 }
 function cardScriptNodes(card) {
@@ -30537,6 +30602,11 @@ async function handleHelperApi(req, res, db) {
         ok: true,
         value: await mutateMessages(db, character, chatId, "delete", body)
       });
+    case "messages.rotate":
+      return sendJson(res, 200, {
+        ok: true,
+        value: await rotateMessages(db, character, chatId, body)
+      });
     case "slash":
       return sendJson(res, 200, {
         ok: true,
@@ -30544,16 +30614,23 @@ async function handleHelperApi(req, res, db) {
       });
     case "character.list":
       return sendJson(res, 200, { ok: true, value: { names: await db.listCharacters() } });
-    case "lorebook.list":
+    case "character.get": {
+      const requested = typeof body?.name === "string" && body.name !== "" && body.name !== "current" ? body.name : character;
+      const file = await db.getCharacter(requested);
       return sendJson(res, 200, {
         ok: true,
-        value: { names: await db.listWorlds(), active: state.activeWorlds }
+        value: { character: file === void 0 ? null : cardDataToRaw2(file.card) }
       });
+    }
+    case "lorebook.list": {
+      const names = await visibleWorldNames(db, character, chatId);
+      return sendJson(res, 200, { ok: true, value: { names, active: state.activeWorlds } });
+    }
     case "lorebook.get": {
       const name2 = typeof body?.name === "string" && body.name.trim() !== "" ? body.name.trim() : await defaultLorebookName(db, state, character);
       if (name2 === void 0) throw new Error("no active lorebook");
       const resolved = await loadLorebook(db, character, chatId, name2);
-      if (resolved === void 0) {
+      if (resolved === void 0 || resolved.extra?.["__jsrDeleted"] === true) {
         throw new Error(`lorebook '${name2}' not found (no session copy, no worlds/ asset and no matching character card book)`);
       }
       return sendJson(res, 200, {
@@ -30570,6 +30647,16 @@ async function handleHelperApi(req, res, db) {
         ok: true,
         value: await putLorebook(db, character, chatId, body)
       });
+    case "lorebook.create":
+      return sendJson(res, 200, {
+        ok: true,
+        value: await createLorebook(db, character, chatId, body)
+      });
+    case "lorebook.delete":
+      return sendJson(res, 200, {
+        ok: true,
+        value: await deleteLorebookSession(db, character, chatId, body)
+      });
     case "lorebook.reset": {
       const name2 = requireString(body?.name, "name");
       if (chatId === "") throw new Error("chatId is required for lorebook.reset (session scope only)");
@@ -30578,23 +30665,58 @@ async function handleHelperApi(req, res, db) {
       });
       return sendJson(res, 200, { ok: true, value: { name: name2, reset: true } });
     }
+    case "chat.world.set":
+      return sendJson(res, 200, {
+        ok: true,
+        value: await setChatWorld(db, character, chatId, body)
+      });
+    case "presets.put":
+      return sendJson(res, 200, {
+        ok: true,
+        value: await putSessionPreset(db, character, chatId, body)
+      });
+    case "personas.put":
+      return sendJson(res, 200, {
+        ok: true,
+        value: await putSessionPersona(db, character, chatId, body)
+      });
+    case "template.render":
+      return sendJson(res, 200, {
+        ok: true,
+        value: { text: await renderFrontendTemplate(db, state, character, chatId, body) }
+      });
     // 会话脚本树副本（2026-10-21）：GM 面板改写的 Zod 源码按聊天持久化，刷新
     // 后仍可读；角色卡文件与基础脚本树保持只读。执行语义不变——只有用户手动
     // 运行卡脚本时才会跑副本内容，服务端 MVU 不执行 Zod。
     case "scripts.get": {
       requireSessionChatId(chatId, "scripts.get");
-      const scriptTrees = await db.getChatScripts(character, chatId);
-      return sendJson(res, 200, { ok: true, value: { scriptTrees: scriptTrees ?? null } });
+      const type = requireScriptTreeType(body?.type);
+      return sendJson(res, 200, { ok: true, value: await readScriptTrees(db, state, character, chatId, type) });
     }
     case "scripts.put":
       return sendJson(res, 200, {
         ok: true,
-        value: await putChatScripts(db, character, chatId, body)
+        value: await putChatScripts(db, state, character, chatId, body)
       });
+    case "scripts.patch": {
+      requireSessionChatId(chatId, "scripts.patch");
+      return sendJson(res, 200, {
+        ok: true,
+        value: await patchScriptNode(db, character, chatId, body)
+      });
+    }
+    case "script.variables.replace": {
+      requireSessionChatId(chatId, "script.variables.replace");
+      return sendJson(res, 200, {
+        ok: true,
+        value: await replaceScriptVariables(db, character, chatId, body)
+      });
+    }
     case "scripts.reset": {
       requireSessionChatId(chatId, "scripts.reset");
+      const type = requireScriptTreeType(body?.type);
       await serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
-        await db.deleteChatScripts(character, chatId);
+        await resetScriptTrees(db, character, chatId, type);
       });
       return sendJson(res, 200, { ok: true, value: { reset: true } });
     }
@@ -30622,11 +30744,40 @@ async function handleHelperApi(req, res, db) {
 }
 async function buildSnapshot(db, state, character, chatId) {
   const file = await db.getCharacter(character);
+  const characterNames = await db.listCharacters();
+  const characterId = characterNames.indexOf(character);
+  const personas = await db.listPersonas();
+  const personaValues = {};
+  for (const name2 of personas) {
+    const persona2 = await db.getPersona(name2);
+    if (persona2 !== void 0) personaValues[name2] = cloneJson(persona2);
+  }
+  const presets = await db.listPresets();
+  const presetValues = {};
+  for (const name2 of presets) {
+    const preset = await db.getPreset(name2);
+    if (preset !== void 0) presetValues[name2] = cloneJson(preset);
+  }
+  const characterData = file === void 0 ? null : cardDataToRaw2(file.card);
+  const shared = {
+    characterName: character,
+    characterId: characterId < 0 ? 0 : characterId,
+    userName: state.activePersona ?? DEFAULT_USER2,
+    personaDescription: "",
+    avatar: avatarPath(character),
+    characterData,
+    characters: { names: characterNames, ids: characterNames.map((_, index) => String(index)) },
+    personas: {
+      names: personas,
+      ids: personas.map((name2) => name2),
+      active: state.activePersona ?? null,
+      values: personaValues
+    },
+    presets: { names: presets, active: state.activePreset ?? null, values: presetValues }
+  };
   if (chatId === "") {
     return {
-      characterName: character,
-      userName: state.activePersona ?? DEFAULT_USER2,
-      personaDescription: "",
+      ...shared,
       chatId: "",
       chatMetadata: {},
       messages: [],
@@ -30638,24 +30789,40 @@ async function buildSnapshot(db, state, character, chatId) {
         message: {},
         character: characterVariablesFor(state, character, file?.card.data.extensions?.["variables"])
       },
-      characterData: file === void 0 ? null : cardDataToRaw2(file.card),
       scriptTrees: null,
-      avatar: avatarPath(character)
+      scriptTreesByType: { character: null, preset: null, global: null },
+      scriptVariables: {},
+      regexScripts: splitRegexScripts(state, file),
+      worlds: {
+        names: await visibleWorldNames(db, character, chatId),
+        active: state.activeWorlds,
+        char: characterWorldLinks(file),
+        chat: null
+      }
     };
   }
   const snapshot2 = await db.getChatSnapshot(character, chatId);
   if (snapshot2 === void 0) throw new Error(`chat '${chatId}' not found`);
   const chat = snapshot2.chat;
   const chatVariables2 = await readChatScope(db, chat, chatId);
-  const scriptTrees = await db.getChatScripts(character, chatId);
+  const overlay = await db.getChatJsrOverlay(character, chatId);
+  if (overlay?.presets !== void 0) {
+    for (const [name2, preset] of Object.entries(overlay.presets)) presetValues[name2] = cloneJson(preset);
+    shared.presets.names = [.../* @__PURE__ */ new Set([...presets, ...Object.keys(overlay.presets)])].sort();
+  }
+  if (overlay?.personas !== void 0) {
+    for (const [name2, persona2] of Object.entries(overlay.personas)) personaValues[name2] = cloneJson(persona2);
+    shared.personas.names = [.../* @__PURE__ */ new Set([...personas, ...Object.keys(overlay.personas)])].sort();
+    shared.personas.ids = shared.personas.names.map((name2) => name2);
+  }
   const lastIndex = chat.messages.length - 1;
   const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
+  const presetTrees = state.activePreset === void 0 ? null : await activePresetScriptTrees(db, state.activePreset);
   return {
-    characterName: character,
-    userName: state.activePersona ?? DEFAULT_USER2,
+    ...shared,
     personaDescription: persona?.description ?? "",
     chatId,
-    chatMetadata: chat.header.chat_metadata ?? {},
+    chatMetadata: cloneJson(chat.header.chat_metadata ?? {}),
     messages: chat.messages.map((message, index) => toJsrMessage(message, index)),
     messageCount: chat.messages.length,
     lastMessageId: lastIndex,
@@ -30665,10 +30832,60 @@ async function buildSnapshot(db, state, character, chatId) {
       message: lastIndex >= 0 ? cloneJson(readMessageVariables(chat.messages[lastIndex])) : {},
       character: characterVariablesFor(state, character, file?.card.data.extensions?.["variables"])
     },
-    characterData: file === void 0 ? null : cardDataToRaw2(file.card),
-    scriptTrees: scriptTrees ?? null,
-    avatar: avatarPath(character)
+    scriptTrees: overlay === void 0 ? null : cloneJson(overlay.trees?.character ?? overlay.scriptTrees),
+    scriptTreesByType: {
+      character: overlay === void 0 ? null : cloneJson(overlay.trees?.character ?? overlay.scriptTrees),
+      preset: presetTrees,
+      global: overlay?.trees?.global === void 0 ? null : cloneJson(overlay.trees.global)
+    },
+    scriptVariables: cloneJson(overlay?.scriptVariables ?? {}),
+    regexScripts: splitRegexScripts(state, file),
+    worlds: {
+      names: await visibleWorldNames(db, character, chatId),
+      active: state.activeWorlds,
+      char: characterWorldLinks(file),
+      chat: chatWorldName(chat)
+    }
   };
+}
+function characterWorldLinks(file) {
+  const linked = file?.card.data.extensions["world"];
+  const primary = typeof linked === "string" && linked.trim() !== "" ? linked.trim() : null;
+  const embedded = file?.card.data.characterBook?.name;
+  return {
+    primary,
+    additional: [],
+    embedded: typeof embedded === "string" && embedded.trim() !== "" ? embedded.trim() : null
+  };
+}
+function chatWorldName(chat) {
+  const world = plainObject6(chat.header.chat_metadata)?.["world"];
+  return typeof world === "string" && world.trim() !== "" ? world.trim() : null;
+}
+async function activePresetScriptTrees(db, presetName) {
+  const preset = await db.getPreset(presetName);
+  const extensions = plainObject6(preset?.["extensions"]);
+  const helper = plainObject6(extensions?.["tavern_helper"]);
+  const scripts = helper?.["scripts"];
+  return Array.isArray(scripts) ? cloneJson(scripts) : null;
+}
+function splitRegexScripts(state, file) {
+  const cardName2 = file?.card.data.name;
+  const global = [];
+  const character = [];
+  const preset = [];
+  for (const script of state.regexScripts) {
+    const cardOwner = state.regexScriptOwners?.[script.id];
+    const presetOwner = state.regexScriptPresetOwners?.[script.id];
+    if (cardOwner !== void 0 && cardOwner === cardName2) character.push(cloneJson(script));
+    else if (presetOwner !== void 0 && presetOwner === state.activePreset) preset.push(cloneJson(script));
+    else if (cardOwner === void 0 && presetOwner === void 0) global.push(cloneJson(script));
+  }
+  const embedded = file?.card.data.extensions["regex_scripts"];
+  if (embedded !== void 0 && embedded !== null) {
+    for (const script of parseRegexScripts2(embedded)) character.push(cloneJson(script));
+  }
+  return { global, character, preset };
 }
 function characterVariablesFor(state, character, cardVariables) {
   const overlay = plainObject6(state.characterVariables?.[character]);
@@ -30882,16 +31099,231 @@ function normalizeLorebookEntries(raw) {
     return normalized;
   });
 }
+async function visibleWorldNames(db, character, chatId) {
+  const base = await db.listWorlds();
+  const session = chatId === "" ? [] : await db.listChatWorlds(character, chatId);
+  const names = [.../* @__PURE__ */ new Set([...base, ...session])].sort();
+  const visible = [];
+  for (const name2 of names) {
+    if (chatId === "") {
+      visible.push(name2);
+      continue;
+    }
+    const copy = await db.getChatWorld(character, chatId, name2);
+    if (copy?.extra?.["__jsrDeleted"] === true) continue;
+    visible.push(name2);
+  }
+  return visible;
+}
+async function createLorebook(db, character, chatId, body) {
+  requireSessionChatId(chatId, "lorebook.create");
+  const name2 = requireString(body?.name, "name").trim();
+  const raw = body?.entries === void 0 ? [] : requireLorebookEntries(body.entries);
+  const entries = normalizeLorebookEntries(raw);
+  return serializeSessionWrite(`${character}\0${chatId}\0${name2}`, async () => {
+    if (await db.getWorld(name2) !== void 0) {
+      throw new Error(`world book '${name2}' is a shared asset; a sandboxed frontend can only create session copies (choose another name or edit it through the panel)`);
+    }
+    if (await db.getChatWorld(character, chatId, name2) !== void 0) {
+      throw new Error(`world book '${name2}' already exists in this chat`);
+    }
+    await db.putChatWorld(character, chatId, { name: name2, entries, extra: { __jsrSession: true } });
+    return { name: name2, entries: entries.map((entry) => ({ world: name2, ...entry })) };
+  });
+}
+async function deleteLorebookSession(db, character, chatId, body) {
+  requireSessionChatId(chatId, "lorebook.delete");
+  const name2 = requireString(body?.name, "name").trim();
+  return serializeSessionWrite(`${character}\0${chatId}\0${name2}`, async () => {
+    const base = await db.getWorld(name2);
+    const copy = await db.getChatWorld(character, chatId, name2);
+    if (base === void 0 && copy === void 0) throw new Error(`world book '${name2}' not found`);
+    if (base === void 0) {
+      await db.deleteChatWorld(character, chatId, name2);
+      return { name: name2, deleted: true };
+    }
+    await db.putChatWorld(character, chatId, {
+      name: name2,
+      entries: [],
+      extra: { ...copy?.extra === void 0 ? {} : copy.extra, __jsrDeleted: true }
+    });
+    return { name: name2, deleted: true };
+  });
+}
+async function setChatWorld(db, character, chatId, body) {
+  requireSessionChatId(chatId, "chat.world.set");
+  const raw = body?.name;
+  const name2 = raw === null || raw === void 0 || raw === "" ? null : requireString(raw, "name").trim();
+  return serializeSessionWrite(`${character}\0${chatId}\0chat`, () => retryChatWrite(async () => {
+    const snapshot2 = await requireChat(db, character, chatId);
+    const chat = snapshot2.chat;
+    chat.header.chat_metadata = chat.header.chat_metadata ?? {};
+    if (name2 === null) delete chat.header.chat_metadata["world"];
+    else chat.header.chat_metadata["world"] = name2;
+    await persistChat(db, character, chatId, chat, snapshot2.revision);
+    return { name: name2 };
+  }));
+}
+async function putSessionPreset(db, character, chatId, body) {
+  requireSessionChatId(chatId, "presets.put");
+  const name2 = requireString(body?.name, "name").trim();
+  const preset = requireObject(body?.preset, "preset");
+  return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
+    await db.putChatJsrOverlay(character, chatId, (current) => {
+      const base = current ?? { version: 1, scriptTrees: [] };
+      return { ...base, presets: { ...base.presets ?? {}, [name2]: preset } };
+    });
+    return { name: name2, preset };
+  });
+}
+async function putSessionPersona(db, character, chatId, body) {
+  requireSessionChatId(chatId, "personas.put");
+  const name2 = requireString(body?.name, "name").trim();
+  const persona = requireObject(body?.persona, "persona");
+  return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
+    await db.putChatJsrOverlay(character, chatId, (current) => {
+      const base = current ?? { version: 1, scriptTrees: [] };
+      return { ...base, personas: { ...base.personas ?? {}, [name2]: persona } };
+    });
+    return { name: name2, persona };
+  });
+}
+async function renderFrontendTemplate(db, state, character, chatId, body) {
+  const code = requireString(body?.code, "code");
+  const context = isPlainObject4(body?.context) ? cloneJson(body.context) : {};
+  const file = await db.getCharacter(character);
+  const chat = chatId === "" ? void 0 : (await requireChat(db, character, chatId)).chat;
+  const messages = chat?.messages ?? [];
+  const chatVariables2 = chat === void 0 ? {} : readChatVariables(chat);
+  const globalVariables = plainObject6(state.scriptGlobals) ?? {};
+  let variablesDirty = false;
+  const readVar = (scope, path12) => {
+    const tree = scope === "chat" ? chatVariables2 : globalVariables;
+    return readTreePath(tree, path12);
+  };
+  const writeVar = (scope, path12, value) => {
+    const tree = scope === "chat" ? chatVariables2 : globalVariables;
+    writeTreePath(tree, path12, value);
+    variablesDirty = true;
+  };
+  const env = {
+    ...context,
+    getvar: (key) => readVar("chat", key),
+    setvar: (key, value) => {
+      writeVar("chat", key, value);
+      return value;
+    },
+    getglobalvar: (key) => readVar("global", key),
+    setglobalvar: (key, value) => {
+      writeVar("global", key, value);
+      return value;
+    },
+    getwi: async (title, book) => {
+      const name2 = typeof book === "string" && book.trim() !== "" ? book.trim() : await defaultLorebookName(db, state, character);
+      if (name2 === void 0) return "";
+      const resolved = await loadLorebook(db, character, chatId, name2);
+      if (resolved === void 0) return "";
+      const entry = resolved.entries.find((candidate) => typeof title === "number" && candidate.uid === title || typeof candidate.comment === "string" && candidate.comment === String(title));
+      return entry === void 0 ? "" : String(entry.content ?? "");
+    },
+    getchar: (name2) => {
+      const data = file?.card.data;
+      if (data === void 0) return null;
+      if (name2 !== void 0 && name2 !== character && name2 !== "current") return null;
+      return {
+        name: data.name,
+        description: data.description,
+        personality: data.personality,
+        scenario: data.scenario,
+        first_message: data.first_mes,
+        message_example: data.mes_example,
+        creator_notes: data.creator_notes
+      };
+    },
+    getpreset: async (name2) => {
+      if (state.activePreset === void 0) return null;
+      const preset = await db.getPreset(state.activePreset);
+      const prompts = Array.isArray(preset?.["prompts"]) ? preset["prompts"] : [];
+      const prompt = prompts.find((candidate) => candidate["name"] === name2);
+      return prompt === void 0 ? null : { name: name2, content: String(prompt["content"] ?? "") };
+    },
+    getMessage: (index) => {
+      const resolved = index < 0 ? messages.length + index : index;
+      return messages[resolved]?.mes ?? "";
+    },
+    getMessages: () => messages.map((message) => message.mes),
+    getChatId: () => chatId,
+    getCharName: () => character,
+    getUserName: () => state.activePersona ?? DEFAULT_USER2,
+    lastMessageId: messages.length - 1,
+    chat: messages.map((message) => ({ name: message.name, mes: message.mes, is_user: message.is_user === true }))
+  };
+  const text = await renderSandboxed(code, env, { where: "frontend EjsTemplate" });
+  if (variablesDirty && chat !== void 0) {
+    chat.header.chat_metadata = chat.header.chat_metadata ?? {};
+    chat.header.chat_metadata.variables = chatVariables2;
+    const snapshot2 = await db.getChatSnapshot(character, chatId);
+    if (snapshot2 !== void 0) {
+      await persistChat(db, character, chatId, chat, snapshot2.revision);
+    }
+  }
+  if (variablesDirty) await db.updateState(() => ({ scriptGlobals: globalVariables }));
+  return text;
+}
+function readTreePath(tree, path12) {
+  const segments = path12.split(".");
+  let cursor = tree;
+  for (const segment of segments) {
+    if (!isPlainObject4(cursor)) return void 0;
+    cursor = cursor[segment];
+  }
+  return cursor;
+}
+function writeTreePath(tree, path12, value) {
+  const segments = path12.split(".");
+  const leaf = segments.pop();
+  if (leaf === void 0 || leaf === "") throw new Error("variable path is empty");
+  let cursor = tree;
+  for (const segment of segments) {
+    const next = cursor[segment];
+    if (!isPlainObject4(next)) {
+      const created = {};
+      cursor[segment] = created;
+      cursor = created;
+      continue;
+    }
+    cursor = next;
+  }
+  cursor[leaf] = cloneJson(value);
+}
+async function rotateMessages(db, character, chatId, body) {
+  return serializeSessionWrite(`${character}\0${chatId}\0chat`, () => retryChatWrite(async () => {
+    const snapshot2 = await requireChat(db, character, chatId);
+    const chat = snapshot2.chat;
+    const total = chat.messages.length;
+    const begin = requireIndex(body?.begin, "begin", total);
+    const middle = requireIndex(body?.middle, "middle", total);
+    const end = requireIndex(body?.end, "end", total);
+    if (!(begin <= middle && middle <= end)) {
+      throw new Error(`rotateChatMessages requires begin <= middle <= end (got ${begin}, ${middle}, ${end})`);
+    }
+    const head = chat.messages.slice(0, begin);
+    const first = chat.messages.slice(begin, middle);
+    const second = chat.messages.slice(middle, end);
+    const tail = chat.messages.slice(end);
+    chat.messages = [...head, ...second, ...first, ...tail];
+    const revision = await persistChat(db, character, chatId, chat, snapshot2.revision);
+    return { revision, messageCount: chat.messages.length, lastMessageId: chat.messages.length - 1 };
+  }));
+}
+function requireIndex(value, label, total) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > total) {
+    throw new Error(`${label} must be an integer in [0, ${total}] (got ${String(value)})`);
+  }
+  return value;
+}
 function requireSessionChatId(chatId, op) {
   if (chatId === "") throw new Error(`chatId is required for ${op} (session scope only)`);
-}
-async function putChatScripts(db, character, chatId, body) {
-  requireSessionChatId(chatId, "scripts.put");
-  const scriptTrees = requireScriptTrees(body?.scriptTrees);
-  return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
-    await db.putChatScripts(character, chatId, scriptTrees);
-    return { scriptTrees };
-  });
 }
 function requireScriptTrees(value) {
   if (!Array.isArray(value)) throw new Error("scriptTrees must be an array of card script nodes");
@@ -30901,6 +31333,147 @@ function requireScriptTrees(value) {
     }
     return cloneJson(node);
   });
+}
+function requireScriptTreeType(value) {
+  if (value === void 0 || value === "character") return "character";
+  if (value === "preset" || value === "global") return value;
+  throw new Error(`unsupported script tree type '${String(value)}' (supported: character, preset, global)`);
+}
+async function readScriptTrees(db, state, character, chatId, type) {
+  const overlay = await db.getChatJsrOverlay(character, chatId);
+  const characterTree = overlay === void 0 ? null : overlay.trees !== void 0 ? overlay.trees.character ?? null : overlay.scriptTrees;
+  if (type === "character") {
+    return { type, preset: null, scriptTrees: characterTree === null ? null : cloneJson(characterTree) };
+  }
+  if (type === "global") {
+    const trees = overlay?.trees?.global;
+    return { type, preset: null, scriptTrees: trees === void 0 ? null : cloneJson(trees) };
+  }
+  const presetName = state.activePreset ?? null;
+  if (presetName === null) return { type, preset: null, scriptTrees: null };
+  const own = overlay?.trees?.preset?.[presetName];
+  if (own !== void 0) return { type, preset: presetName, scriptTrees: cloneJson(own) };
+  return { type, preset: presetName, scriptTrees: await activePresetScriptTrees(db, presetName) };
+}
+async function putChatScripts(db, state, character, chatId, body) {
+  requireSessionChatId(chatId, "scripts.put");
+  const type = requireScriptTreeType(body?.type);
+  const scriptTrees = requireScriptTrees(body?.scriptTrees);
+  return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
+    await db.putChatJsrOverlay(character, chatId, (current) => {
+      const base = current ?? { version: 1, scriptTrees: [] };
+      const trees = { ...base.trees ?? {} };
+      if (type === "character") {
+        trees.character = scriptTrees;
+        base.scriptTrees = scriptTrees;
+      } else if (type === "global") {
+        trees.global = scriptTrees;
+      } else {
+        const presetName = state.activePreset;
+        if (presetName === void 0) throw new Error("scripts.put type=preset requires an active preset");
+        trees.preset = { ...trees.preset ?? {}, [presetName]: scriptTrees };
+      }
+      return { ...base, trees };
+    });
+    return { type, scriptTrees };
+  });
+}
+async function patchScriptNode(db, character, chatId, body) {
+  requireSessionChatId(chatId, "scripts.patch");
+  const scriptId = requireString(body?.scriptId, "scriptId");
+  const info = body?.info === void 0 ? void 0 : String(body.info);
+  const buttons = body?.buttons === void 0 ? void 0 : requireScriptButtons(body.buttons);
+  return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
+    const overlay = await db.getChatJsrOverlay(character, chatId);
+    const current = overlay?.trees !== void 0 ? overlay.trees.character ?? [] : overlay?.scriptTrees ?? [];
+    const patched = patchNodeById(current, scriptId, (node) => {
+      if (info !== void 0) node["info"] = info;
+      if (buttons !== void 0) {
+        node["button"] = { ...plainObject6(node["button"]) ?? {}, enabled: true, buttons };
+      }
+    });
+    if (patched.node === null) throw new Error(`script node '${scriptId}' not found in this chat's script tree`);
+    await db.putChatJsrOverlay(character, chatId, (existing) => {
+      const base = existing ?? { version: 1, scriptTrees: [] };
+      return {
+        ...base,
+        scriptTrees: patched.nodes,
+        trees: { ...base.trees ?? {}, character: patched.nodes }
+      };
+    });
+    return { scriptId, node: patched.node };
+  });
+}
+function requireScriptButtons(value) {
+  if (!Array.isArray(value)) throw new Error("buttons must be an array");
+  return value.map((button, index) => {
+    if (!isPlainObject4(button)) throw new Error(`buttons[${index}] must be an object`);
+    const name2 = requireString(button["name"], `buttons[${index}].name`);
+    return { name: name2, visible: button["visible"] !== false };
+  });
+}
+function patchNodeById(nodes, scriptId, mutate) {
+  const copy = cloneJson(nodes);
+  let found = null;
+  const walk = (list) => {
+    for (const node of list) {
+      if (node["type"] === "folder" && Array.isArray(node["scripts"])) {
+        walk(node["scripts"]);
+        continue;
+      }
+      if (node["id"] !== scriptId) continue;
+      mutate(node);
+      found = node;
+    }
+  };
+  walk(copy);
+  return { nodes: copy, node: found };
+}
+async function replaceScriptVariables(db, character, chatId, body) {
+  const scriptId = requireString(body?.scriptId, "scriptId");
+  const variables2 = requireObject(body?.variables, "variables");
+  return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
+    await db.putChatJsrOverlay(character, chatId, (current) => {
+      const base = current ?? { version: 1, scriptTrees: [] };
+      return {
+        ...base,
+        scriptVariables: { ...base.scriptVariables ?? {}, [scriptId]: variables2 }
+      };
+    });
+    return { scriptId, variables: variables2 };
+  });
+}
+async function resetScriptTrees(db, character, chatId, type) {
+  const overlay = await db.getChatJsrOverlay(character, chatId);
+  if (overlay === void 0) return;
+  const state = await db.getState();
+  const trees = { ...overlay.trees ?? {} };
+  if (type === "character") {
+    delete trees.character;
+    overlay.scriptTrees = [];
+  } else if (type === "global") {
+    delete trees.global;
+  } else {
+    const presetName = state.activePreset;
+    if (presetName === void 0 || trees.preset === void 0) return;
+    const presetTrees = { ...trees.preset };
+    delete presetTrees[presetName];
+    if (Object.keys(presetTrees).length === 0) delete trees.preset;
+    else trees.preset = presetTrees;
+  }
+  const hasTrees = Object.keys(trees).length > 0;
+  const hasVariables = Object.keys(overlay.scriptVariables ?? {}).length > 0;
+  const hasPresets = Object.keys(overlay.presets ?? {}).length > 0;
+  const hasPersonas = Object.keys(overlay.personas ?? {}).length > 0;
+  if (!hasTrees && !hasVariables && !hasPresets && !hasPersonas) {
+    await db.deleteChatScripts(character, chatId);
+    return;
+  }
+  await db.putChatJsrOverlay(character, chatId, () => ({
+    ...overlay,
+    scriptTrees: overlay.scriptTrees,
+    ...hasTrees ? { trees } : { trees: void 0 }
+  }));
 }
 async function getMessages(db, character, chatId, body) {
   const snapshot2 = await requireChat(db, character, chatId);
@@ -30971,6 +31544,7 @@ function isHidden(message) {
 }
 function toJsrMessage(message, index) {
   const extra = plainObject6(message.extra) ?? {};
+  const swipes = Array.isArray(message.swipes) && message.swipes.length > 0 ? message.swipes.map((swipe) => String(swipe)) : [typeof message.mes === "string" ? message.mes : ""];
   return {
     message_id: index,
     name: typeof message.name === "string" ? message.name : "",
@@ -30978,7 +31552,9 @@ function toJsrMessage(message, index) {
     is_hidden: isHidden(message),
     message: typeof message.mes === "string" ? message.mes : "",
     data: cloneJson(plainObject6(message.variables) ?? extra),
-    extra: cloneJson(extra)
+    extra: cloneJson(extra),
+    swipe_id: typeof message.swipe_id === "number" ? message.swipe_id : 0,
+    swipes
   };
 }
 function toJsrSwiped(message, index) {
@@ -36585,7 +37161,8 @@ async function handleApi(ctx, req, res) {
     const file = await db.getCharacter(character);
     if (!file) return sendJson(res, 404, { ok: false, message: `character '${character}' not found` });
     const scriptTrees = chatId === null ? void 0 : await db.getChatScripts(character, chatId);
-    const { world, scripts } = collectCardScriptBundle(file.card, scriptTrees);
+    const includeDisabled = url.searchParams.get("includeDisabled") === "1";
+    const { world, scripts } = collectCardScriptBundle(file.card, scriptTrees, includeDisabled);
     return sendJson(res, 200, { ok: true, character, world, scripts });
   }
   if (method === "GET" && route === "frontend/idb/get") {

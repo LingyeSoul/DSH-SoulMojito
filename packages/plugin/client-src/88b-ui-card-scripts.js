@@ -108,6 +108,29 @@
       const autoRunEnabled = autoRunSetting && architecture === 'st'
       const [autoRunning, setAutoRunning] = useState(false)
       const [autoStopped, setAutoStopped] = useState(false)
+      // Script-container buttons: each container iframe reports its own list; the
+      // panel renders a bar and re-dispatches clicks to that iframe.
+      const [scriptButtons, setScriptButtons] = useState({})
+      const handleScriptButtons = useCallback((scriptId, list) => {
+        setScriptButtons((current) => {
+          const previous = current[scriptId] || []
+          const same = previous.length === list.length && previous.every((item, index) =>
+            item.event === list[index].event && item.name === list[index].name && item.visible === list[index].visible)
+          if (same) return current
+          return { ...current, [scriptId]: list }
+        })
+      }, [])
+      const dispatchScriptButton = (entry) => {
+        const surface = document.querySelector('.dt-card-scripts')
+        const frames = surface ? surface.querySelectorAll('iframe[data-token]') : []
+        for (const frame of frames) {
+          const token = frame.getAttribute('data-token')
+          if (token === null) continue
+          try {
+            frame.contentWindow?.postMessage({ type: HELPER_EVENT_MESSAGE, token, event: entry.event, args: [] }, '*')
+          } catch {}
+        }
+      }
       // 用户手动「停止自动运行」后，bundle 重取/重渲染不得立刻重新启动；切换
       // 聊天/角色或重新打开 tab（组件重挂载）时重置。
       const autoRunStoppedRef = useRef(false)
@@ -126,7 +149,7 @@
         const request = requestRef.current + 1
         requestRef.current = request
         setLoading(true)
-        return api(`card/scripts?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}`)
+        return api(`card/scripts?character=${encodeURIComponent(binding.character)}&chatId=${encodeURIComponent(binding.chatId)}&includeDisabled=1`)
           .then((result) => {
             if (requestRef.current !== request) return
             setBundle({
@@ -160,6 +183,7 @@
         setRunningId(null)
         setBundle(null)
         setError('')
+        setScriptButtons({})
         setResetDone(false)
         setScriptsResetDone(false)
         autoRunStoppedRef.current = false
@@ -199,7 +223,7 @@
           setAutoRunning(false)
           return
         }
-        if (currentBundle === null || currentBundle.scripts.length === 0) {
+        if (currentBundle === null || currentBundle.scripts.filter((script) => script.enabled !== false).length === 0) {
           setAutoRunning(false)
           return
         }
@@ -274,6 +298,24 @@
         })
       }
 
+      const buttonList = Object.values(scriptButtons)
+        .flat()
+        .filter((entry) => entry && entry.visible !== false && typeof entry.event === 'string')
+      // One sandbox per script: JSR isolates script containers, and a shared
+      // window lets two scripts clobber each other's globals. Each frame gets its
+      // own identity so getScriptId/getScriptInfo observe the node.
+      const renderScriptFrame = (script) => h('div', { className: 'dt-frontend-side-frame', key: `script-${script.id}` },
+        h(FrontendFrame, {
+          html: cardScriptDocument(script),
+          token: `card-script-${sessionId}-${script.id}`,
+          messageId: -1,
+          binding: { character: binding.character, chatId: binding.chatId },
+          hostSessionId: sessionId,
+          refreshKey: `${script.id}:${script.content.length}`,
+          identity: { scriptId: script.id, scriptName: script.name, scriptInfo: script.info },
+          onScriptButtons: handleScriptButtons,
+        }))
+
       if (!supported) {
         return h('div', { className: 'dt-frontend-side', 'data-dsh-soulmojito-surface': 'card-scripts-sidebar' },
           h('div', { className: 'dt-frontend-side-empty' }, h(IconSparkle16, { size: 22 }),
@@ -281,6 +323,7 @@
       }
 
       const scripts = currentBundle === null ? [] : currentBundle.scripts
+      const runnable = scripts.filter((script) => script.enabled !== false)
       const running = scripts.find((script) => script.id === runningId)
       return h('div', { className: 'dt-frontend-side dt-card-scripts', 'data-dsh-soulmojito-surface': 'card-scripts-sidebar' },
         h('p', { className: 'dt-card-scripts-warning', role: 'note' }, t('cardScripts.warning')),
@@ -297,7 +340,7 @@
           : null,
         h('div', { className: 'dt-frontend-side-head' },
           h('span', { className: 'dt-frontend-side-meta' },
-            t('cardScripts.count', { count: scripts.length })),
+            t('cardScripts.count', { count: runnable.length })),
           h('button', {
             type: 'button',
             className: 'dt-frontend-side-refresh',
@@ -338,10 +381,11 @@
             h('span', { className: 'dt-card-script-meta' },
               t('cardScripts.charCount', { count: script.content.length }))),
           script.info !== '' ? h('p', { className: 'dt-hint' }, script.info) : null,
+          script.enabled === false ? h('p', { className: 'dt-hint' }, t('cardScripts.disabled')) : null,
           h('button', {
             type: 'button',
             className: runningId === script.id ? 'dt-card-script-run dt-card-script-stop' : 'dt-card-script-run',
-            disabled: autoRunning || autoRunHostedInFrontend,
+            disabled: autoRunning || autoRunHostedInFrontend || script.enabled === false,
             onClick: () => {
               setResetDone(false)
               setAutoStopped(false)
@@ -349,31 +393,22 @@
             },
           }, runningId === script.id ? t('cardScripts.stop') : t('cardScripts.run')))))
           : null,
-        autoRunning && scripts.length > 0
-          ? h('div', { className: 'dt-frontend-side-frames' },
-            h('div', { className: 'dt-frontend-side-frame' }, h(FrontendFrame, {
-              key: `card-scripts-auto-${sessionId}-${binding.chatId}`,
-              html: cardScriptTreeDocument(scripts),
-              token: `card-scripts-auto-${sessionId}`,
-              messageId: -1,
-              binding: { character: binding.character, chatId: binding.chatId },
-              hostSessionId: sessionId,
-              refreshKey: cardScriptTreeRefreshKey(key, scripts),
-            })))
+        autoRunning && runnable.length > 0
+          ? h('div', { className: 'dt-frontend-side-frames' }, runnable.map(renderScriptFrame))
           : running !== undefined
-            ? h('div', { className: 'dt-frontend-side-frames' },
-              h('div', { className: 'dt-frontend-side-frame' }, h(FrontendFrame, {
-                key: `card-script-${running.id}`,
-                html: cardScriptDocument(running),
-                token: `card-script-${sessionId}-${running.id}`,
-                messageId: -1,
-                binding: { character: binding.character, chatId: binding.chatId },
-                hostSessionId: sessionId,
-                refreshKey: `${running.id}:${running.content.length}`,
-              })))
+            ? h('div', { className: 'dt-frontend-side-frames' }, renderScriptFrame(running))
             : autoRunHostedInFrontend
               ? null
               : h('p', { className: 'dt-hint' }, t('cardScripts.idle')),
+        buttonList.length > 0
+          ? h('div', { className: 'dt-card-script-buttons', role: 'toolbar' },
+            buttonList.map((entry) => h('button', {
+              key: entry.event,
+              type: 'button',
+              className: 'dt-card-script-run dt-card-script-button',
+              onClick: () => dispatchScriptButton(entry),
+            }, entry.name)))
+          : null,
         resetDone ? h('p', { className: 'dt-card-scripts-notice', role: 'status' }, t('cardScripts.resetDone')) : null,
         scriptsResetDone ? h('p', { className: 'dt-card-scripts-notice', role: 'status' }, t('cardScripts.resetScriptsDone')) : null,
         currentBundle !== null && (currentBundle.world !== null || scripts.length > 0)

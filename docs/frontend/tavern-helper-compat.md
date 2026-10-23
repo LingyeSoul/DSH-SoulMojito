@@ -12,6 +12,22 @@
 
 ---
 
+## 0. 0. 2026-10-23 兼容层升级摘要
+
+这一轮把「名字能对上」推进到「契约能对上」：
+
+- **表面补齐**：`window` 与 `window.TavernHelper` 都安装 JSR 4.11.3 的 179 个公共名（同一函数对象，`getTavernHelperVersion()` 返回 `4.11.3`）；`getTavernVersion()` 返回 `0.0.0`（semver 形状，宿主特性门保持关闭）。
+- **同步契约**：`replaceVariables` / `updateVariablesWith` / `insertOrAssignVariables` / `insertVariables` / `deleteVariable` 按 JSR 4.11 同步返回；落盘在后台队列里按序执行，失败弹 error toast。
+- **宏**：`substitudeMacros` 变成真正的本地展开（`{{char}}` / `{{user}}` / `{{getvar::}}` / `{{setvar::}}` / `{{random}}` / `{{roll}}` / 时间类 + `registerMacroLike`）；未知宏原样保留。
+- **正则**：`getTavernRegexes(option)` 同步返回 ST 形状；`formatAsTavernRegexedString(text, source, destination, option)` 按 JSR 签名同步返回字符串（旧 `(text, placement, option)` 姿势仍兼容）。
+- **脚本容器**：右栏「卡脚本」tab 升级为真正的容器——每个脚本一个独立沙箱 iframe，带 `scriptId`/`scriptName`/`scriptInfo`；`getScriptInfo`/`replaceScriptInfo`/`getAllEnabledScriptButtons`/`replaceScriptTrees` 可用，脚本按钮条渲染在容器里并回投给对应 iframe。
+- **会话级覆盖**：世界书条目族、`createWorldbook`/`deleteWorldbook`、`replaceWorldbook`、预设与人设写面、脚本树三来源（character/preset/global）全部落在 `chats/<角色>/<聊天>.jsonl.scripts.json` 覆盖层，基础资产只读。
+- **只读面补全**：真实预设/人设/角色列表与 `getPreset`、`getPersona`、`getCharData`、`getCharAvatarPath`、`getChatHistoryBrief/Detail`、`RawCharacter`。
+- **框架面**：`SillyTavern.getContext().chat` 改为 ST 形状（`mes`/`is_user`/`is_system`/`swipes`）并带 `eventSource`/`eventTypes`；新增 `EjsTemplate`（宿主 `template.render`）。
+- **仍然显式失败**：角色卡/基础世界书/预设激活/扩展安装/导入原始资产/host DOM（`retrieveDisplayedMessage`、`refreshOneMessage`）——调用即抛出带原因的 error，不做静默 no-op。
+
+---
+
 ## 0. 先读这一段：为什么不能"照抄 JSR 的写法"
 
 JSR 的美化前端跑在**同源、无 sandbox、无 CSP** 的 iframe 里，`window.parent`
@@ -62,9 +78,9 @@ Content-Security-Policy: default-src 'none'; connect-src 'none'; frame-src 'none
 | `'chat'` | ✅ | ✅ | 聊天文件 `chat_metadata.variables` | AgentTavern 会话**同时**写 chat 作用域变量存储（见 §1.3） |
 | `'message'` | ✅ | ✅ | 楼层的 `variables` 字段 | `message_id` 支持负数深度；越界会报错。读面在楼层没有 `stat_data` 时回退聊天作用域的 `stat_data`（MVU 卡首屏 `getVariables({type:'message'})` 的常见判据），第一次回写会把它物化到该楼层 |
 | `'character'` | ✅ | ✅ | 角色变量覆盖层 `state.json` 的 `characterVariables` | 读面优先覆盖层，其次角色卡 `extensions.variables`；写面只落覆盖层，角色卡文件保持只读。删除 `characterVariables[角色名]` 即回到卡原版 |
-| `'preset'` | ❌ | ❌ | — | 抛 `unsupported variable scope 'preset'` |
-| `'script'` | ❌ | ❌ | — | 同上 |
-| `'extension'` | ❌ | ❌ | — | 同上 |
+| `'preset'` | ⚠️ | ❌ | 当前预设的 `extensions.tavern_helper.variables`（只读） | 写面抛错：预设是面板资产；读面返回当前激活预设的变量树 |
+| `'script'` | ✅ | ✅ | 会话脚本树覆盖层的 `scriptVariables[scriptId]` | 只有脚本容器 iframe 有 `scriptId`；消息 iframe 调用会同步抛错。写面按聊天持久化 |
+| `'extension'` | ❌ | ❌ | — | 抛 `unsupported variable scope 'extension'` |
 
 不支持的作用域**同步抛错**，不是静默返回 `{}`——这样你在控制台能立刻看见。
 
@@ -73,13 +89,13 @@ Content-Security-Policy: default-src 'none'; connect-src 'none'; frame-src 'none
 | 函数 | 状态 | 语义与差异 |
 |---|:--:|---|
 | `getVariables(option)` | ✅ | 同步返回**快照副本**（你随便改不会影响宿主）。缺省 `{type:'chat'}` |
-| `getAllVariables()` | ✅ | 同步返回当前生效的合并变量表：`global` ← `character` ← `chat` ← 最新楼层，后者覆盖前者；`stat_data` 可直接在顶层读到。`Mvu.getAllVariables()` 同义 |
-| `replaceVariables(vars, option?)` | ✅ | 整表替换，返回 `Promise<变量表>`。缺省 `{type:'chat'}` |
-| `updateVariablesWith(fn, option?)` | ✅ | `fn` 可以是同步或 async；收到的是副本，返回新表 |
-| `insertOrAssignVariables(vars, option?)` | ✅ | 顶层键合并（浅合并，与 JSR 一致） |
-| `insertVariables(vars, option?)` | ✅ | 只补缺失的顶层键 |
-| `deleteVariable(path, option?)` | ✅ | 点分路径删除，返回 `{variables, delete_occurred}` |
-| `registerVariableSchema` | ❌ | 本插件的变量结构守卫是 MVU 的 `$schema`（服务端确定性执行），不接受前端注册 |
+| `getAllVariables()` | ✅ | 同步返回当前生效的合并变量表：`global` ← `character` ← `script` ← `chat` ←（消息 iframe 才有的）逐楼变量；`stat_data` 可直接在顶层读到。`Mvu.getAllVariables()` 同义 |
+| `replaceVariables(vars, option?)` | ✅ | 整表替换，**同步返回 `void`**（JSR 4.11 契约）。落盘在后台按序执行，失败弹 error toast。缺省 `{type:'chat'}` |
+| `updateVariablesWith(fn, option?)` | ✅ | `fn` 同步时**同步返回新表**；`fn` 返回 Promise 时返回 Promise。收到的是副本 |
+| `insertOrAssignVariables(vars, option?)` | ✅ | 顶层键合并（浅合并，与 JSR 一致），同步返回新表 |
+| `insertVariables(vars, option?)` | ✅ | 只补缺失的顶层键，同步返回新表 |
+| `deleteVariable(path, option?)` | ✅ | 点分路径删除，**同步返回** `{variables, delete_occurred}` |
+| `registerVariableSchema` | ⚠️ | 接受并保存 schema，仅供本 iframe 的变量管理器读取；真正的结构守卫仍是服务端 MVU `$schema` |
 
 ```js
 // 聊天变量
@@ -197,16 +213,17 @@ Agent 模式的 MVU 写入由插件完成：投影器解析模型回复末尾的
 `localStorage` / `sessionStorage` 在沙箱里是 iframe 内存实现（页面重载即失）——
 创角表单的自动保存/签名恢复因此不会因 `SecurityError` 中断。
 
-**脚本树不会自动执行**：卡内 `extensions.tavern_helper.scripts` 的脚本树
+**脚本容器（2026-10-23 升级）**：卡内 `extensions.tavern_helper.scripts` 的脚本树
 （JSR 的脚本容器 / 按钮 / 常驻悬浮面板）不在消息渲染路径里。插件的 iframe
-只承载「随消息重发的 HTML」；脚本树改由右栏 **「卡脚本」tab** 手动运行：
+只承载「随消息重发的 HTML」；脚本树由右栏 **「卡脚本」tab** 管理：
 
-- 列表只显示启用的脚本（`type === 'script'`、`enabled !== false`、内容非空），
-  默认没有任何自动执行、也没有 JSR 的脚本按钮/快速回复栏（显式开启
-  `cardScriptsAutoRun` 时除外，见下）；
-- 点「运行」后，该脚本被包成完整 HTML 文档，在同一个沙箱 `FrontendFrame` 里执行
-  一次；切换聊天/角色立即停止并清空；
-- 同一时间只运行一份脚本，且默认不打开。
+- 列表显示全部脚本（含卡内禁用的，禁用项标注且不可运行）；默认没有任何自动执行；
+- 点「运行」后，该脚本被包成完整 HTML 文档，**在自己的沙箱 `FrontendFrame` 里执行**
+  （一个脚本一个 iframe），带 `scriptId`/`scriptName`/`scriptInfo`；切换聊天/角色立即停止并清空；
+- 手动模式一次运行一份；开启 `cardScriptsAutoRun` 后按脚本逐个 iframe 自动运行；
+- 脚本通过 `replaceScriptButtons` 上报的按钮会渲染在容器里的按钮条，点击按
+  `getButtonEvent(name)` 的 id 回投给对应 iframe（`eventOnButton` 可接）；
+- 脚本的 `getScriptInfo`/`replaceScriptInfo` 与按钮列表回写到会话脚本树副本。
 
 因此需要常驻悬浮面板的卡（例如 16 万字符的 GM 面板）默认仍需手动点一次「运行」；
 开启 `cardScriptsAutoRun` 后 AgentTavern 会把脚本自动注入「美化前端」的同一个
@@ -344,12 +361,10 @@ JSR 卡可以带自己的 OpenAI 兼容 API 源（URL + Key + 模型），并在
 | `tavern_events.USER_MESSAGE_RENDERED` | `user_message_rendered` | 新/改用户楼层 | `(楼层 id)` |
 | `tavern_events.CHAT_COMPLETION_SETTINGS_READY` | `chat_completion_settings_ready` | `TavernHelper.generate` 发起前 | `({ model, messages, stream:false })`；供卡记录请求，不是宿主生成循环 |
 
-**其余常量**（`MESSAGE_SWIPED` / `MESSAGE_UPDATED` / `GENERATION_STARTED` /
-`GENERATION_STOPPED` / `STREAM_REASONING_DONE` / `WORLD_INFO_ACTIVATED` /
-`CHARACTER_*` / `PRESET_*` …）：
+**其余常量**（`tavern_events` 共 82 个名字，`iframe_events` 共 9 个）：
 
-- **名字存在**（`tavern_events.MESSAGE_SWIPED` 是字符串，`eventOn` 不会因 `undefined` 炸）；
-- **但永远不会被触发**。这是刻意的：宿主没有该信号的观测面，凭空发事件等于给你的
+- **名字全部存在**（`tavern_events.MESSAGE_SWIPED`、`WORLD_INFO_ACTIVATED`、`PRESET_CHANGED` 都是字符串，`eventOn` 不会因 `undefined` 炸）；2026-10-23 起按 JSR 4.11.3 的完整词汇表安装。
+- **但只有上表列出的会被触发**。这是刻意的：宿主没有该信号的观测面，凭空发事件等于给你的
   前端假数据，会让「等事件再渲染」的逻辑永久卡住。
 
 > 实践建议：**要刷新就轮询自己的数据**（`getVariables` / `getChatMessages` + `setInterval`，
@@ -398,37 +413,68 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `SillyTavern.loadWorldInfo(name)` | ✅ | 读当前聊天的世界书并返回 ST 形状 `{ entries: { [uid]: entry } }`；优先会话副本，其次基础资产/卡内嵌书。只读，写回仍走 `updateWorldbookWith` 的会话副本 |
 | `getCurrentMessageId()` | ✅ | 当前 iframe 所属楼层；侧栏/MVU 模板为 `-1`（最新）。没有楼层绑定时也不要拿它做范围上界，优先 `getLastMessageId()` |
 | `getLorebook(name)` / `getWorldbook(name)` | ✅ | 返回条目数组（含 `world` 字段）。名字缺省取角色卡绑定的世界书，其次全局激活的第一本，最后卡内嵌书名。**优先读当前聊天的会话副本**，没有副本才读基础 `worlds/` 资产 |
-| `getWorldbookNames()` / `getLorebookNames()` | ✅ | 全部世界书名 |
+| `getLorebooks()` / `getWorldbookNames()` / `getLorebookNames()` | ✅ | 当前聊天可见的全部世界书名（基础资产 + 会话新建 - 会话删除） |
 | `getGlobalWorldbookNames()` | ✅ | 当前全局激活的世界书名 |
-| `getChatWorldbookNames()` | ⚠️ | 别名到 `getGlobalWorldbookNames`（聊天绑定世界书的读面改用会话副本，见 `getCharWorldbookNames`） |
-| `getCharWorldbookNames()` | ✅ | **同步**返回 `{ primary, additional: [] }`；名字取卡内 `extensions.world`，其次内嵌书 `characterBook.name`，都没有为 `null`（JSR 的这个 getter 不返回 Promise，GM 脚本不会 await） |
-| `updateWorldbookWith(name, updater)` | ✅ | 先 `getWorldbook`，在 iframe 内执行 `updater(entries)`，再把结果写入**会话副本**（`lorebook.put`）。基础世界书资产与卡内嵌书永不被写；`name` 省略时回落到角色链接世界书。回退入口是右栏卡脚本 tab 的「重置会话世界书」（`lorebook.reset`） |
-| `getScriptTrees(option?)` | ⚠️ | 返回当前聊天的**会话脚本树副本**（没有副本时为卡内 `extensions.tavern_helper.scripts`）：节点原样保留 `type: 'script' \| 'folder'`、`id`、`name`、`content`、`enabled`、`info`、`button` 与未知字段。不写角色卡 |
-| `updateScriptTreesWith(fn, option?)` | ⚠️ | 在副本上执行 `fn`，先 `scripts.put` **持久化到本聊天副本**，成功后才更新内存并解析 `__mgZodReady__` 探针、派发 `mg-zod-ready`；失败拒绝且保留旧树。刷新/重开 tab 仍可读；Zod schema 本身不会生效，回退入口是「重置卡脚本」 |
-| `generate(config)` / `generateRaw(config)` | ✅ / ⚠️ | 见 §2.4：宿主代理卡内 OpenAI 兼容 API，非流式返回文本 |
+| `getCharWorldbookNames()` / `getCharLorebooks()` | ✅ | **同步**返回 `{ primary, additional: [] }`；名字取卡内 `extensions.world`，其次内嵌书 `characterBook.name`，都没有为 `null` |
+| `getCurrentCharPrimaryLorebook()` | ✅ | 同步返回主链接书名（或内嵌书名），没有为 `null` |
+| `getChatWorldbookName()` / `getChatLorebook()` | ✅ | 同步返回 `chat_metadata.world`（当前聊天的会话绑定），没有为 `null` |
+| `getChatWorldbookNames()` | ⚠️ | 只返回当前聊天的会话绑定（没有为 `[]`），不是全局激活列表 |
+| `setChatLorebook(name)` | ✅ | 写 `chat_metadata.world`（会话级，随聊天文件走） |
+| `getOrCreateChatLorebook()` / `getOrCreateChatWorldbook()` | ✅ | 没有会话绑定就创建一本会话世界书并绑定 |
+| `updateWorldbookWith(name, updater)` | ✅ | 先 `getWorldbook`，在 iframe 内执行 `updater(entries)`，再把结果写入**会话副本**（`lorebook.put`）。基础世界书资产与卡内嵌书永不被写 |
+| `replaceWorldbook` / `createOrReplaceWorldbook` | ✅ | 写当前聊天的会话副本（整表） |
+| `createWorldbook` / `createLorebook` | ⚠️ | **会话级新建**：写进本聊天的覆盖层；同名基础资产存在时抛错（基础资产不归前端写） |
+| `deleteWorldbook` / `deleteLorebook` | ⚠️ | 会话级删除：只存在于会话的书直接移除；基础资产用空墓碑覆盖本聊天，`worlds/<name>.json` 不动 |
+| `getLorebookEntries` / `replaceLorebookEntries` / `setLorebookEntries` / `updateLorebookEntriesWith` / `createLorebookEntries` / `createLorebookEntry` / `deleteLorebookEntries` / `deleteLorebookEntry` / `createWorldbookEntries` / `deleteWorldbookEntries` | ✅ | 全部走会话世界书副本；uid 自动补齐，返回 JSR 形状 |
+| `getLorebookSettings()` / `setLorebookSettings()` | ⚠️ | iframe 内镜像；生成仍用宿主世界书设置，`set` 会 console.warn |
+| `getScriptTrees(option)` | ✅ | 按 `type` 读 `character` / `preset` / `global`；character 默认会话副本，preset 回落到激活预设内嵌树，global 读会话覆盖层 |
+| `replaceScriptTrees(trees, option)` / `updateScriptTreesWith(fn, option)` | ✅ | 三种来源都写当前聊天的会话覆盖层；`updateScriptTreesWith` 仍先落盘再发布 `mg-zod-ready`（GM 面板依赖 resolve=已保存） |
+| `getScriptInfo()` / `replaceScriptInfo()` / `getScriptName()` | ✅ | 脚本容器 iframe 读自己的节点；`replaceScriptInfo` 回写会话脚本树 |
+| `getScriptButtons()` / `replaceScriptButtons()` / `updateScriptButtonsWith()` / `appendInexistentScriptButtons()` | ✅ | 容器 iframe 的按钮列表；右栏「卡脚本」渲染按钮条，点击回投事件；列表同时回写节点 `button` |
+| `getAllEnabledScriptButtons()` | ✅ | 聚合三种来源里启用脚本的可见按钮（`{ [scriptId]: [{ button_id, button_name }] }`） |
+| `getButtonEvent(name)` / `eventOnButton(name, fn)` | ✅ | 事件 id 为 `<scriptId>_<hash>`；容器按钮条按同一 id 派发 |
+| `getIframeName()` / `getMessageId(name)` / `reloadIframe()` | ✅ | 消息 iframe 为 `TH-message-<id>`，脚本容器为 `TH-script-<id>`；未知名字抛错 |
+| `generate(config)` / `generateRaw(config)` | ⚠️ | 见 §2.4：宿主代理卡内 OpenAI 兼容 API，非流式返回文本；仍需 `custom_api` |
 | `getModelList({apiurl, key})` | ✅ | 见 §2.4：返回模型 id 数组；Key 不回传 |
 | `stopGenerationById` / `stopAllGeneration` | ⚠️ | 返回 `false`（非流式无可取消句柄） |
-| `getCharData(name?)` | ✅ | 返回 JSR 形状的 `v1CharData`：顶层字段 + `.data`（V2 payload）。`'current'` 取当前角色；未知名字返回 `null`。卡的资源包密钥常从 `.data.creator/character_version/creator_notes` 派生 |
-| `getPreset(name?)` / `replacePreset(name, preset)` | ⚠️ | iframe 内存覆盖，不写基础 preset 资产；`getPreset('in_use')` 返回 `{name, prompts: []}` 起步。用于启动诊断/格式提示，不会真正改预设 |
-| `getPresetNames()` / `getLoadedPresetName()` | ⚠️ | 最小集合：未写过时 `['in_use']` / `'in_use'` |
-| `getScriptButtons()` / `replaceScriptButtons()` / `updateScriptButtonsWith()` / `appendInexistentScriptButtons()` | ⚠️ | iframe 内存列表；没有快速回复栏，按钮不会渲染到宿主，但常驻脚本的启动调用不会中断 |
-| `errorCatched(fn)` | ✅ | 同步/Promise 错误弹 error toast 后继续抛出；JSR 卡 `defineStore(..., errorCatched(...))` 直接可用 |
-| `playAudio(type, {url, title?})` / `pauseAudio(type)` | ✅ | iframe 内 `<audio>`，`bgm` / `ambient` 两通道；自动播放被浏览器拦截时只打 warning，不向卡抛错 |
+| `getCharData(name?)` | ✅ | JSR 形状 `v1CharData`（顶层 + `.data`），带真实头像 URL；非当前角色返回 `null`（同步面只装载当前卡） |
+| `getCharacter(name)` | ✅ | 异步读角色卡原始数据（`character.get`），未知名字返回 `null` |
+| `getCharacterNames()` / `getCharacterIds()` / `getCurrentCharacterName()` / `getCurrentCharacterId()` | ✅ | 快照同步面 |
+| `getCharAvatarPath(name?)` | ⚠️ | 只对当前角色返回头像 URL，其它名字 `null` |
+| `getChatHistoryBrief()` / `getChatHistoryDetail()` | ✅ | 从快照消息派生（`mes`/`is_user`/`extra`） |
+| `RawCharacter` | ⚠️ | 只读类：`find`/`findIndex`/`getCardData`/`getAvatarId`/`getRegexScripts`/`getWorldbookNames`；写方法不存在 |
+| `getPreset(name?)` / `getPresetNames()` / `getLoadedPresetName()` / `getProxyPresetNames()` | ✅ | **真实预设**从快照读取（`in_use` 等于激活预设）；未知名字返回 `null` |
+| `replacePreset` / `updatePresetWith` / `createPreset` / `createOrReplacePreset` | ✅ | 会话级预设副本（不写 `presets/*.json`） |
+| `deletePreset` / `renamePreset` / `loadPreset` / `setPreset` | ❌ | 显式抛错：预设删除/改名/激活是面板资产操作 |
+| `getPersonaNames()` / `getPersonaIds()` / `getCurrentPersonaName()` / `getCurrentPersonaId()` / `getPersona()` | ✅ | 快照同步面；`getPersona` 返回会话副本优先的完整对象 |
+| `getPersonaAvatarPath()` | ⚠️ | 快照里只有头像串时返回它，否则 `null` |
+| `replacePersona` / `updatePersonaWith` / `createPersona` / `createOrReplacePersona` | ✅ | 会话级人设副本 |
+| `deletePersona` | ❌ | 显式抛错：人设删除是面板资产操作 |
+| `getTavernRegexes(option)` | ✅ | **同步**返回 ST `TavernRegex` 形状，按 `type`（global/character/preset）过滤 |
+| `formatAsTavernRegexedString(text, source, destination, option?)` | ✅ | 同步返回 `string`；`source` 为 `user_input`/`ai_output`/`slash_command`/`world_info`/`reasoning`，`destination` 为 `display`/`prompt`；旧的 `(text, placement, option)` 姿势仍兼容 |
+| `isCharacterTavernRegexesEnabled()` | ✅ | 恒 `true`（卡级正则跟随角色卡启用） |
+| `replaceTavernRegexes` / `updateTavernRegexesWith` | ❌ | 显式抛错：正则资产归面板 |
+| `substitudeMacros(text)` | ✅ | 本地同步宏展开（角色/用户/描述/人设/楼层/变量/random/roll/时间 + `registerMacroLike`）；未知宏原样保留 |
+| `registerMacroLike(name, fn)` / `unregisterMacroLike(name)` | ✅ | 只影响本 iframe 的宏展开 |
+| `initializeGlobal(name, value)` / `waitGlobalInitialized(name)` | ✅ | 本地全局注册 + 15s 轮询等待 |
+| `injectPrompts(prompts)` / `uninjectPrompts(ids)` | ⚠️ | iframe 本地注入列表，只进入 `TavernHelper.generate` 的请求；不进入宿主 AgentLoop 生成 |
+| `getTavernHelperVersion()` | ✅ | `'4.11.3'`（本轮实现的 API 代际） |
+| `getTavernVersion()` | ⚠️ | `'0.0.0'`：semver 形状，避免 `compare-versions` 抛错，同时让 ST 特性门保持关闭 |
+| `getScriptId()` | ⚠️ | 脚本容器 iframe 返回节点 id；消息 iframe 返回 `'dsh-soulmojito-frontend'` |
+| `EjsTemplate.evalTemplate(code, context)` | ✅ | 宿主 `template.render`（同一 `node:vm` 沙箱）；`prepareContext` 提供变量/世界书/角色/预设读取 |
+| `EjsTemplate.getFeatures()` | ⚠️ | 返回 `enabled: true` + 生成/渲染 loader 全关（本插件不跑 EJS 注入管线） |
+| `isAdmin()` / `getExtensionType()` / `isInstalledExtension()` / `getExtensionStatus()` / `getTavernHelperExtensionId()` | ⚠️ | 只认 JSR 扩展自身（`'JS-Slash-Runner'`）；不枚举 ST 扩展目录 |
+| `installExtension` / `uninstallExtension` / `reinstallExtension` / `updateExtension` | ❌ | 显式抛错：扩展管理不属于沙箱前端 |
+| `formatAsDisplayedMessage(text, option)` | ✅ | 宏 → display 正则 → showdown，同步返回 HTML |
+| `retrieveDisplayedMessage` / `refreshOneMessage` | ❌ | 宿主消息 DOM 在沙箱外，显式抛错 |
+| `errorCatched(fn)` | ✅ | 同步/Promise 错误弹 error toast 后继续抛出 |
+| `playAudio(type, {url, title?})` / `pauseAudio(type)` / `audioEnable` / `audioImport` / `audioMode` / `audioPlay` / `audioSelect` | ✅ | iframe 内 `<audio>`，`bgm` / `ambient` 两通道 |
 | `getAudioList` / `replaceAudioList` / `appendAudioList` / `getAudioSettings` / `setAudioSettings` / `getCurrentAudio` | ⚠️ | 进程内音频状态，语义对齐 JSR 的可观察字段；不持久化、不跨 iframe |
 | `localStorage` | ✅ | 按角色持久，见 §2.5（上限 512KB/角色）；`sessionStorage` 仍为 iframe 内存 |
 | `indexedDB` | ⚠️ | 虚拟 IndexedDB，见 §2.5：单 store 的 open/create/transaction/get/put/delete/clear/deleteDatabase；不支持 index/cursor/多 store 事务 |
 | `getCharNames()` / `getCharacterNames()` | ✅ | 角色名列表 |
-| `getTavernRegexes(option?)` | ✅ | `{enabled_only}` 过滤；条目形状来自本插件的 `RegexScriptIR`，**不是** JSR 的 `TavernRegex` 形状 |
-| `formatAsTavernRegexedString(text, placement, option?)` | ⚠️ | 应用正则并返回 `Promise<string>`。`placement` 用 ST 的数字位（1=用户输入 2=AI 输出 3=斜杠 5=世界书 6=推理）；`option.scripts` 可直接给脚本集；`option.depth` 参与深度型脚本判定 |
-| `substitudeMacros(text)` | ⚠️ | 存在但**原样返回**：宏展开在服务端生成管线里做，前端拿不到宏引擎 |
-| `getTavernHelperVersion()` / `getTavernVersion()` | ⚠️ | 返回 `'dsh-soulmojito'`（不是版本号）。**不要**用它做版本分支判断 |
-| `getScriptId()` | ⚠️ | 恒返回 `'dsh-soulmojito-frontend'`：本插件没有 JSR 的脚本容器概念 |
-| `waitGlobalInitialized(name)` | ⚠️ | `Promise.resolve(window[name])`；不会等待真实初始化 |
-| `getButtonEvent(name)` | ⚠️ | 返回一个字符串；对应的按钮事件永远不会被触发 |
-| `builtin.renderMarkdown(text)` | ✅ | 用内嵌 showdown；showdown 未加载时降级为原文 |
-| `builtin.copyText(text)` | ✅ | Clipboard API；不可用时 reject |
-| `builtin.parseRegexFromString(regex)` | ✅ | 解析失败返回 `null` |
-| `builtin.addOneMessage` / `duringGenerating` / `promptManager` / `getImageTokenCost` … | ❌ | 触及宿主 DOM 或生成管线，不在兼容面内 |
+| `builtin.renderMarkdown` / `copyText` / `parseRegexFromString` / `uuidv4` / `saveSettings` / `addOneMessage` | ✅ | 宿主无关的子集；`addOneMessage` 映射到 `createChatMessages`（会真实落盘） |
+| `builtin.reloadEditor` / `renderPromptManager` / `promptManager` / `getImageTokenCost` / `getVideoTokenCost` | ❌ | 触及宿主 DOM/生成管线，显式抛错 |
 
 ---
 
@@ -449,13 +495,13 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 
 | 函数 | 结果 |
 |---|---|
-| `createWorldbook` / `createOrReplaceWorldbook` / `deleteWorldbook` / `replaceWorldbook` | ❌ 不存在 |
-| `updateWorldbookWith` | ✅ 只写当前聊天的**会话副本**（见 §4）；基础 `worlds/<name>.json` 与卡内嵌书不受影响。删除/新建世界书仍不支持 |
-| `createWorldbookEntries` / `deleteWorldbookEntries` | ❌ 不存在（用 `updateWorldbookWith` 改整表，或走面板/Agent 工具） |
-| `rebindGlobalWorldbooks` / `rebindCharWorldbooks` / `rebindChatWorldbook` / `getOrCreateChatWorldbook` | ❌ 不存在 |
-| `createCharacter` / `createOrReplaceCharacter` / `deleteCharacter` / `replaceCharacter` / `updateCharacterWith` | ❌ 不存在 |
-| 人设（persona）家族 | ❌ 不存在 |
-| 预设（preset）家族 | ❌ 不存在 |
+| `createWorldbook` / `createOrReplaceWorldbook` / `deleteWorldbook` / `replaceWorldbook` | ⚠️ 会话级：新建/整表写进本聊天副本；删除基础资产时写空墓碑，`worlds/<name>.json` 不动 |
+| `updateWorldbookWith` | ✅ 只写当前聊天的**会话副本**（见 §4）；基础 `worlds/<name>.json` 与卡内嵌书不受影响 |
+| `createWorldbookEntries` / `deleteWorldbookEntries` / 条目 CRUD | ✅ 全部落在会话世界书副本 |
+| `rebindGlobalWorldbooks` / `rebindCharWorldbooks` / `rebindChatWorldbook` / `setCurrentCharLorebooks` | ❌ 显式抛错：绑定属于面板资产；聊天内绑定用 `setChatLorebook` |
+| `createCharacter` / `createOrReplaceCharacter` / `deleteCharacter` / `replaceCharacter` / `updateCharacterWith` | ❌ 显式抛错：角色卡文件归面板/Agent 工具 |
+| 人设（persona）家族 | ⚠️ 读取 ✅；`replacePersona`/`updatePersonaWith`/`createPersona`/`createOrReplacePersona` 写会话副本；`deletePersona` 显式抛错 |
+| 预设（preset）家族 | ⚠️ 读取 ✅（真实预设）；`replacePreset`/`updatePresetWith`/`createPreset`/`createOrReplacePreset` 写会话副本；删除/改名/激活显式抛错 |
 
 写**基础资产**走管理面板或 Agent 工具（`card_put` / `world_put` 等，带确认协议）。
 前端只被允许改「本聊天的会话世界书副本」：误触最坏只污染这一条聊天，删掉副本
@@ -465,32 +511,33 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 
 | 家族 | 结果 |
 |---|---|
-| `replaceScriptTrees` / `getAllEnabledScriptButtons` | ❌ 不存在；`getScriptTrees` / `updateScriptTreesWith` 是 ⚠️ 会话副本读写（见 §4），没有真正的脚本容器与按钮 |
-| `isInstalledExtension` / `installExtension` / `uninstallExtension` / `reinstallExtension` / `updateExtension` / `getExtensionInstallationInfo` / `getExtensionType` / `isAdmin` / `getTavernHelperExtensionId` | ❌ 不存在 |
-| `playAudio` / `pauseAudio` / `getAudioList` / `replaceAudioList` / `appendAudioList` / `getAudioSettings` / `setAudioSettings` / `getCurrentAudio` | ⚠️ **可用**（见 §4 / §2.4）：iframe 内 `<audio>`，只影响本前端，不写宿主播放器 |
-| `retrieveDisplayedMessage` / `formatAsDisplayedMessage` / `refreshOneMessage` | ❌ 不存在（宿主渲染的楼层无法被前端读取/刷新） |
-| `errorCatched` / `getMessageId` | ❌ 不存在 |
-| `registerVariableSchema` | ❌ 不存在（见 §1.2） |
-| `TavernHelper.iframe` 家族（跨 iframe 通信） | ❌ 不存在（本插件没有 iframe 注册表） |
+| 脚本容器 | ✅ 右栏「卡脚本」tab：每个脚本独立沙箱 iframe；`getScriptId/Name/Info`、`replaceScriptInfo`、`getScriptTrees(type)`、`replaceScriptTrees`、`getAllEnabledScriptButtons` 可用；按钮条渲染在容器内并回投事件 |
+| 扩展安装/卸载/更新 | ❌ 显式抛错；`isAdmin`/`getExtensionType`/`isInstalledExtension`/`getExtensionStatus`/`getTavernHelperExtensionId` 只认 JSR 扩展自身 |
+| `playAudio` / `pauseAudio` / `getAudioList` / `replaceAudioList` / `appendAudioList` / `getAudioSettings` / `setAudioSettings` / `getCurrentAudio` / `audioEnable` / `audioImport` / `audioMode` / `audioPlay` / `audioSelect` | ✅ iframe 内 `<audio>`，只影响本前端，不写宿主播放器 |
+| `formatAsDisplayedMessage` | ✅ 宏 → display 正则 → showdown |
+| `retrieveDisplayedMessage` / `refreshOneMessage` | ❌ 宿主消息 DOM 在沙箱外，显式抛错 |
+| `errorCatched` / `getMessageId` | ✅ 均已提供 |
+| `registerVariableSchema` | ⚠️ 保存 schema 供 iframe 内变量管理器读取，不参与服务端校验 |
+| `injectPrompts` / `uninjectPrompts` | ⚠️ 只影响本 iframe 的 `TavernHelper.generate`，不进入宿主 AgentLoop |
+| `TavernHelper.iframe` 家族（跨 iframe 通信） | ❌ 不存在（本插件没有跨 iframe 注册表） |
 
-**调用不存在的函数会抛 `TypeError: xxx is not a function`**——这是特性：
+**调用不存在或明确不支持的函数会抛带原因的 error**——这是特性：
 它让"照抄的代码"在第一时间显式失败，而不是悄悄什么都不做。
 
 ---
 
-## 6. STscript（`triggerSlash` 等价物）
+## 6. STscript（`triggerSlash`）
 
-前端**没有** `triggerSlash`，但可以用同一个兼容通道执行一段 STscript：
+`window.triggerSlash(command)` / `triggerSlashWithResult(command)` 已暴露，返回 `Promise<string>`；
+内部走同一个 `slash` op。
 
 ```js
-// 走 helper 的 slash op（内部实现同 triggerSlash 的语义子集）
-await fetch  // 🧱 默认不可用（CSP connect-src 'none'）；设置页放开外部资源后可用
+await triggerSlash('/setvar mood calm')
 ```
 
-> 目前 `slash` op 只由服务端内部与测试使用，**没有**暴露成 `window.triggerSlash`。
-> 需要在前端执行变量类 STscript 时，直接用 `replaceVariables` ——它更明确，也少一层解析。
+生成控制（`/trigger`、`/regenerate`、`/stop`）仍然受限：见 §5.1。
 
-服务端可用命令（`POST /helper` 的 `slash` op，供脚本/测试使用）：
+服务端可用命令（`POST /helper` 的 `slash` op）：
 
 | 类别 | 命令 | 状态 |
 |---|---|---|
