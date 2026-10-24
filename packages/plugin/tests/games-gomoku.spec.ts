@@ -25,6 +25,9 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const GAME_DIR = join(import.meta.dirname, '..', 'examples', 'games', 'dsh-soulmojito.gomoku')
+// 示例包的 engines 必须覆盖随仓库发布的宿主（0.x 的 caret 锁次段）：从插件
+// package.json 取版本，升版时这里随同逼出清单同步，避免硬编码旧版本掩盖漂移。
+const PLUGIN_VERSION = (JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')) as { version: string }).version
 const manifest = JSON.parse(readFileSync(join(GAME_DIR, 'game.json'), 'utf8')) as Record<string, unknown>
 const viewHtml = readFileSync(join(GAME_DIR, 'view.html'), 'utf8')
 const engineSource = readFileSync(join(GAME_DIR, 'engine.mjs'), 'utf8')
@@ -152,7 +155,7 @@ describe('清单 game.json（提案 0018 §3.1）', () => {
   it('必填字段齐全且形状正确', () => {
     expect(manifest.name).toBe('五子棋')
     expect(manifest.version).toBe('1.0.0')
-    expect(manifest.engines).toEqual({ 'dsh-soulmojito': '^0.6.0' })
+    expect(manifest.engines).toEqual({ 'dsh-soulmojito': `^${PLUGIN_VERSION}` })
     expect(typeof manifest.actionVocabulary).toBe('string')
     expect((manifest.actionVocabulary as string).length).toBeGreaterThan(0)
     expect((manifest.actionVocabulary as string)).toContain('place')

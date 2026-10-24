@@ -5,7 +5,7 @@
 <p align="center">把 DSH（deepseek-harness）扩展成兼容 SillyTavern 生态的原生角色扮演工作区。</p>
 
 <p align="center">
-  <strong>v0.6.9</strong> · 面向 DSH <code>0.2.1-rc.2</code>（兼容 <code>0.2.0-rc.2</code>） · GPL-3.0
+  <strong>v0.7.0</strong> · 面向 DSH <code>0.2.1-rc.2</code>（兼容 <code>0.2.0-rc.2</code>） · GPL-3.0
 </p>
 
 ## 这是什么
@@ -315,13 +315,13 @@ Node half 是六个自包含 bundle：`index.mjs` 主入口，加 `agent` / `com
 pnpm run check
 ```
 
-当前基线（2026-10-21 实测）：
+当前基线（2026-10-24 实测）：
 
 ```
-Test Files  132 passed (132)
-Tests       1987 passed | 1 skipped (1988)
+Test Files  136 passed (136)
+Tests       2062 passed | 1 skipped (2063)
 18 gates    全部 PASS
-built       v0.6.9 (5453f72)
+built       v0.7.0 (d128066)
 ```
 
 - 1 项跳过是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例。

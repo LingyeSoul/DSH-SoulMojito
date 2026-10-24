@@ -21,9 +21,9 @@ import { strToU8, zipSync } from '../../tavern-format/node_modules/fflate/esm/br
 
 const EXAMPLE_GAME = join(import.meta.dirname, '..', 'examples', 'games', 'dsh-soulmojito.gomoku')
 // 宿主版本取插件真实版本（与宿主 BUILD_INFO.version 同源语义）——示例清单的
-// engines（^0.6.0 ⇒ 0.6.x 全系）必须覆盖当前宿主，漂移在这里翻红（镜像
-// tavern-mods-examples.spec 的守卫；0.6.1 升版即由本行发现示例仍声明 ^0.6.0
-// 且依然成立，0.7.0 起将逼同步示例清单）。
+// engines（`^<插件版本>` ⇒ 当前次段全系）必须覆盖当前宿主，漂移在这里翻红（镜像
+// tavern-mods-examples.spec 的守卫；0.6.1 升版即由本行发现示例仍声明 ^0.6.0；
+// 0.7.0 起示例随版本同步为 ^0.7.0，此后每次升版同理）。
 const PLUGIN_VERSION = (JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')) as { version: string }).version
 const HOST_VERSION = PLUGIN_VERSION
 
@@ -206,7 +206,7 @@ describe('负样本：坏包 broken 入册不崩（§4.6 烟测 + 清单/engines
 
   it('改名兼容（2026-10-16）：旧键 engines[\'dsh-tavern\'] 双读——范围满足即装载 ok', async () => {
     placeGameDir('legacy.engines', {
-      'game.json': JSON.stringify({ ...GOMOKU_MANIFEST, id: 'legacy.engines', engines: { 'dsh-tavern': '^0.6.0' } }),
+      'game.json': JSON.stringify({ ...GOMOKU_MANIFEST, id: 'legacy.engines', engines: { 'dsh-tavern': `^${PLUGIN_VERSION}` } }),
       // meta id 与目录名对齐（registry 成功路径以 meta 为权威）。
       'engine.mjs': GOMOKU_ENGINE.replace("id: 'dsh-soulmojito.gomoku'", "id: 'legacy.engines'"),
       'view.html': GOMOKU_VIEW,
