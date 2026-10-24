@@ -979,6 +979,11 @@ function checkInternalWorkspaceText(serverText, clientText) {
     'ctx.workspaces.connectWorkspace(workspaceId)',
     'function pluginWorkspaceSnapshots(ctx)',
     'normalizeWorkspacePath(item?.path) === expectedPath',
+    // 2026-10-24：内部工作区要在每条工作台入口都能被（重）创建——缓存视图
+    // 先对宿主 list 复核，既有会话打开路径也走注册核。
+    'function pluginWorkspaceRegistered(ctx, workspace)',
+    'function pluginWorkspaceConfig(kind)',
+    'openWorkbenchSessionView(ctx, sessionId)',
     'function nativeTreeNodeMatchesWorkspace(node, workspace, titleFallback)',
     "items.filter((item) => item?.title === workspace.title).length === 1",
     "markNativeTreeRow(nativeTreeWorkspaceGroup(header, tree), 'internal-workspace')",
@@ -3067,6 +3072,9 @@ const gates = [
         'ctx.workspaces.connectWorkspace(workspaceId)',
         'function pluginWorkspaceSnapshots(ctx)',
         'normalizeWorkspacePath(item?.path) === expectedPath',
+        'function pluginWorkspaceRegistered(ctx, workspace)',
+        'function pluginWorkspaceConfig(kind)',
+        'openWorkbenchSessionView(ctx, sessionId)',
         'function nativeTreeNodeMatchesWorkspace(node, workspace, titleFallback)',
         "items.filter((item) => item?.title === workspace.title).length === 1",
         "markNativeTreeRow(nativeTreeWorkspaceGroup(header, tree), 'internal-workspace')",

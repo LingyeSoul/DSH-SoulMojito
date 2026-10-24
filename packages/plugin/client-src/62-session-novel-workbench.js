@@ -97,6 +97,17 @@
         : ordinal > 1 ? `${translate('workbench.sessionLabel')} ${ordinal}` : translate('workbench.sessionLabel')
     }
 
+    // 打开既有工作台会话（侧栏列表行、聊天侧「交给工作台」的复用分支）同样要
+    // 保证内部工作区仍然登记：这两条路径此前只 openSessionView，从不经过
+    // ensureWorkbenchWorkspace，宿主工作区登记被删/被重置、或会话创建于专用
+    // 工作区之前时，内部对应工作区就再也不会被创建。按路径重建的 workspace
+    // 会把旧会话按 cwd 重新归组；best-effort，绝不阻断导航。
+    function openWorkbenchSessionView(ctx, sessionId) {
+      reserveTavernSession(ctx, sessionId)
+      openSessionView(ctx, sessionId)
+      void ensureWorkbenchWorkspace(ctx).catch(() => {})
+    }
+
     async function openWorkbenchSession(ctx, source = null, { fresh = false } = {}) {
       update({ navigationStatus: translate('workbench.opening') })
       try {
@@ -108,8 +119,7 @@
           const existing = Object.entries(snapshot.bootstrap.state.sessionBindings || {})
             .find(([sessionId, binding]) => workbenchBindingMatches(binding, source) && sessions.byId[sessionId])
           if (existing) {
-            reserveTavernSession(ctx, existing[0])
-            openSessionView(ctx, existing[0])
+            openWorkbenchSessionView(ctx, existing[0])
             return existing[0]
           }
         }

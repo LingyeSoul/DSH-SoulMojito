@@ -418,10 +418,7 @@
             className: 'dt-sidebar-chat-open',
             title: label,
             disabled: busySession === sessionId,
-            onClick: () => {
-              reserveTavernSession(ctx, sessionId)
-              openSessionView(ctx, sessionId)
-            },
+            onClick: () => openWorkbenchSessionView(ctx, sessionId),
           }, h('span', null, '✎ ', label)),
           h('button', {
             type: 'button',

@@ -26,11 +26,38 @@
       return workspace
     }
 
+    // 宿主侧的工作区登记可能在插件生命周期内消失（用户在原生工作区管理里删除、
+    // 宿主 registry 重建）：缓存的工作区视图不能当存在性依据——直接复用它会让
+    // connectWorkspace 抛 unknown workspace，内部工作区就再也不会按路径重建
+    // （决策 2026-08-17 §Consequences 的「下次使用按同一路径重新创建」承诺）。
+    // 旧宿主没有 list 面时保持原缓存语义（rc.6 的 controller 只暴露 create/
+    // rename/connectWorkspace）。
+    function pluginWorkspaceRegistered(ctx, workspace) {
+      if (!workspace?.workspaceId) return false
+      const items = ctx?.workspaces?.list?.getSnapshot?.()?.items
+      if (!Array.isArray(items)) return true
+      return items.some((item) => item?.workspaceId === workspace.workspaceId)
+    }
+
+    // 冷启动竞态：apply 的 bootstrap 是 fire-and-forget，侧栏「+」能在
+    // bootstrap 的 workspace 字段到达前被点击；直接报 error.noWorkspace 是假
+    // 失败。按需补等一次 bootstrap 再判定（服务端 bootstrap 先建目录再下发）。
+    async function pluginWorkspaceConfig(kind) {
+      const read = () => kind === 'workbench'
+        ? snapshot.bootstrap.workbenchWorkspace
+        : snapshot.bootstrap.internalWorkspace
+      const current = read()
+      if (current?.path) return current
+      await refreshBootstrap()
+      return read()
+    }
+
     async function ensureTavernWorkspace(ctx) {
-      const config = snapshot.bootstrap.internalWorkspace
+      const config = await pluginWorkspaceConfig('tavern')
       if (!config?.path) throw new Error(translate('error.noWorkspace'))
-      if (internalWorkspace?.path === config.path) return internalWorkspace
+      if (internalWorkspace?.path === config.path && pluginWorkspaceRegistered(ctx, internalWorkspace)) return internalWorkspace
       if (internalWorkspacePromise) return internalWorkspacePromise
+      internalWorkspace = undefined
       internalWorkspacePromise = registerPluginWorkspace(ctx, config)
         .then((workspace) => { internalWorkspace = workspace; return workspace })
         .finally(() => { internalWorkspacePromise = undefined })
@@ -38,10 +65,11 @@
     }
 
     async function ensureWorkbenchWorkspace(ctx) {
-      const config = snapshot.bootstrap.workbenchWorkspace
+      const config = await pluginWorkspaceConfig('workbench')
       if (!config?.path) throw new Error(translate('error.noWorkspace'))
-      if (workbenchWorkspace?.path === config.path) return workbenchWorkspace
+      if (workbenchWorkspace?.path === config.path && pluginWorkspaceRegistered(ctx, workbenchWorkspace)) return workbenchWorkspace
       if (workbenchWorkspacePromise) return workbenchWorkspacePromise
+      workbenchWorkspace = undefined
       workbenchWorkspacePromise = registerPluginWorkspace(ctx, config)
         .then((workspace) => { workbenchWorkspace = workspace; return workspace })
         .finally(() => { workbenchWorkspacePromise = undefined })

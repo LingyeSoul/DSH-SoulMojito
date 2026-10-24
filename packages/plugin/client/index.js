@@ -9112,11 +9112,38 @@ window.__ModuleLoader__.load({
       return workspace
     }
 
+    // 宿主侧的工作区登记可能在插件生命周期内消失（用户在原生工作区管理里删除、
+    // 宿主 registry 重建）：缓存的工作区视图不能当存在性依据——直接复用它会让
+    // connectWorkspace 抛 unknown workspace，内部工作区就再也不会按路径重建
+    // （决策 2026-08-17 §Consequences 的「下次使用按同一路径重新创建」承诺）。
+    // 旧宿主没有 list 面时保持原缓存语义（rc.6 的 controller 只暴露 create/
+    // rename/connectWorkspace）。
+    function pluginWorkspaceRegistered(ctx, workspace) {
+      if (!workspace?.workspaceId) return false
+      const items = ctx?.workspaces?.list?.getSnapshot?.()?.items
+      if (!Array.isArray(items)) return true
+      return items.some((item) => item?.workspaceId === workspace.workspaceId)
+    }
+
+    // 冷启动竞态：apply 的 bootstrap 是 fire-and-forget，侧栏「+」能在
+    // bootstrap 的 workspace 字段到达前被点击；直接报 error.noWorkspace 是假
+    // 失败。按需补等一次 bootstrap 再判定（服务端 bootstrap 先建目录再下发）。
+    async function pluginWorkspaceConfig(kind) {
+      const read = () => kind === 'workbench'
+        ? snapshot.bootstrap.workbenchWorkspace
+        : snapshot.bootstrap.internalWorkspace
+      const current = read()
+      if (current?.path) return current
+      await refreshBootstrap()
+      return read()
+    }
+
     async function ensureTavernWorkspace(ctx) {
-      const config = snapshot.bootstrap.internalWorkspace
+      const config = await pluginWorkspaceConfig('tavern')
       if (!config?.path) throw new Error(translate('error.noWorkspace'))
-      if (internalWorkspace?.path === config.path) return internalWorkspace
+      if (internalWorkspace?.path === config.path && pluginWorkspaceRegistered(ctx, internalWorkspace)) return internalWorkspace
       if (internalWorkspacePromise) return internalWorkspacePromise
+      internalWorkspace = undefined
       internalWorkspacePromise = registerPluginWorkspace(ctx, config)
         .then((workspace) => { internalWorkspace = workspace; return workspace })
         .finally(() => { internalWorkspacePromise = undefined })
@@ -9124,10 +9151,11 @@ window.__ModuleLoader__.load({
     }
 
     async function ensureWorkbenchWorkspace(ctx) {
-      const config = snapshot.bootstrap.workbenchWorkspace
+      const config = await pluginWorkspaceConfig('workbench')
       if (!config?.path) throw new Error(translate('error.noWorkspace'))
-      if (workbenchWorkspace?.path === config.path) return workbenchWorkspace
+      if (workbenchWorkspace?.path === config.path && pluginWorkspaceRegistered(ctx, workbenchWorkspace)) return workbenchWorkspace
       if (workbenchWorkspacePromise) return workbenchWorkspacePromise
+      workbenchWorkspace = undefined
       workbenchWorkspacePromise = registerPluginWorkspace(ctx, config)
         .then((workspace) => { workbenchWorkspace = workspace; return workspace })
         .finally(() => { workbenchWorkspacePromise = undefined })
@@ -9551,6 +9579,17 @@ window.__ModuleLoader__.load({
         : ordinal > 1 ? `${translate('workbench.sessionLabel')} ${ordinal}` : translate('workbench.sessionLabel')
     }
 
+    // 打开既有工作台会话（侧栏列表行、聊天侧「交给工作台」的复用分支）同样要
+    // 保证内部工作区仍然登记：这两条路径此前只 openSessionView，从不经过
+    // ensureWorkbenchWorkspace，宿主工作区登记被删/被重置、或会话创建于专用
+    // 工作区之前时，内部对应工作区就再也不会被创建。按路径重建的 workspace
+    // 会把旧会话按 cwd 重新归组；best-effort，绝不阻断导航。
+    function openWorkbenchSessionView(ctx, sessionId) {
+      reserveTavernSession(ctx, sessionId)
+      openSessionView(ctx, sessionId)
+      void ensureWorkbenchWorkspace(ctx).catch(() => {})
+    }
+
     async function openWorkbenchSession(ctx, source = null, { fresh = false } = {}) {
       update({ navigationStatus: translate('workbench.opening') })
       try {
@@ -9562,8 +9601,7 @@ window.__ModuleLoader__.load({
           const existing = Object.entries(snapshot.bootstrap.state.sessionBindings || {})
             .find(([sessionId, binding]) => workbenchBindingMatches(binding, source) && sessions.byId[sessionId])
           if (existing) {
-            reserveTavernSession(ctx, existing[0])
-            openSessionView(ctx, existing[0])
+            openWorkbenchSessionView(ctx, existing[0])
             return existing[0]
           }
         }
@@ -13595,10 +13633,7 @@ window.__ModuleLoader__.load({
             className: 'dt-sidebar-chat-open',
             title: label,
             disabled: busySession === sessionId,
-            onClick: () => {
-              reserveTavernSession(ctx, sessionId)
-              openSessionView(ctx, sessionId)
-            },
+            onClick: () => openWorkbenchSessionView(ctx, sessionId),
           }, h('span', null, '✎ ', label)),
           h('button', {
             type: 'button',
