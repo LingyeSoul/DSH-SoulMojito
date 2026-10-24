@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { ScriptError, registerStscriptCommand, runScript, stscriptCommandNames, type ScriptEnv } from '../src/stscript.js'
 
-function makeEnv(overrides: Partial<ScriptEnv> = {}): ScriptEnv & { sent: string[]; triggered: (string | undefined)[]; cutCalls: [number, number][] } {
+function makeEnv(overrides: Partial<ScriptEnv> = {}): ScriptEnv & { sent: string[]; systemed: string[]; triggered: (string | undefined)[]; cutCalls: [number, number][] } {
   const local = new Map<string, string | number | boolean>()
   const global = new Map<string, string | number | boolean>()
-  const state = { sent: [] as string[], triggered: [] as (string | undefined)[], cutCalls: [] as [number, number][] }
+  const state = { sent: [] as string[], systemed: [] as string[], triggered: [] as (string | undefined)[], cutCalls: [] as [number, number][] }
   return {
     ...state,
     expand: (text) => text,
@@ -16,6 +16,7 @@ function makeEnv(overrides: Partial<ScriptEnv> = {}): ScriptEnv & { sent: string
     deleteGlobalVar: (name) => global.delete(name),
     rng: () => 0.42,
     send: (text) => { state.sent.push(text) },
+    system: (text) => { state.systemed.push(text) },
     trigger: (member) => { state.triggered.push(member) },
     regenerate: () => { state.triggered.push('__regen__') },
     stop: () => {},
@@ -109,9 +110,17 @@ describe('STscript interpreter', () => {
     expect(result.chatChanged).toBe(true)
   })
 
+  it('posts a system message with /sys', async () => {
+    const env = makeEnv()
+    const result = await runScript('/sys state synced', env)
+    expect(env.systemed).toEqual(['state synced'])
+    expect(result).toMatchObject({ output: '', chatChanged: true })
+  })
+
   it('rejects chat actions when the environment lacks them', async () => {
-    const env = makeEnv({ send: undefined, trigger: undefined, cut: undefined })
+    const env = makeEnv({ send: undefined, system: undefined, trigger: undefined, cut: undefined })
     await expect(runScript('/send hi', env)).rejects.toThrow('/send')
+    await expect(runScript('/sys hi', env)).rejects.toThrow('/sys')
     await expect(runScript('/trigger', env)).rejects.toThrow('/trigger')
     await expect(runScript('/cut 0', env)).rejects.toThrow('/cut')
   })
@@ -187,6 +196,7 @@ describe('STscript command registry (proposal 0015 P0)', () => {
       'roll',
       'pick',
       'send',
+      'sys',
       'trigger',
       'regenerate',
       'stop',

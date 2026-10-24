@@ -6,7 +6,7 @@
  *
  * 命令集：echo / comment / setvar / getvar / setglobalvar / getglobalvar /
  * addvar / incvar / decvar / hasvar / hasglobalvar / delvar / delglobalvar /
- * if(left/right/op/then/else) / random / roll / pick / send / trigger /
+ * if(left/right/op/then/else) / random / roll / pick / send / sys / trigger /
  * regenerate / stop / cut / regex(name=…)。
  *
  * 命令以注册表承载（提案 0015 P0）：内置命令经 registerStscriptCommand 进表，
@@ -28,6 +28,8 @@ export interface ScriptEnv {
   rng?: () => number
   /* ---- 聊天动作（缺省为不支持，命令报错） ---- */
   send?: (text: string) => void | Promise<void>
+  /** /sys：插入一条系统消息（ST 的 sendSystemMessage 语义）。 */
+  system?: (text: string) => void | Promise<void>
   trigger?: (member?: string) => void | Promise<void>
   regenerate?: () => void | Promise<void>
   stop?: () => void
@@ -43,7 +45,7 @@ export interface ScriptEnv {
 export interface ScriptResult {
   /** 最后一条命令的输出。 */
   output: string
-  /** 是否触发了改变聊天的动作（send/trigger/regenerate/cut）。 */
+  /** 是否触发了改变聊天的动作（send/sys/trigger/regenerate/cut）。 */
   chatChanged: boolean
 }
 
@@ -400,6 +402,15 @@ const sendCommand: StscriptCommandSpec = {
   },
 }
 
+const sysCommand: StscriptCommandSpec = {
+  name: 'sys',
+  run: async (cmd, env) => {
+    const action = await requireAction(env.system, 'sys')
+    await action(cmd.raw)
+    return changedResult()
+  },
+}
+
 const triggerCommand: StscriptCommandSpec = {
   name: 'trigger',
   run: async (cmd, env) => {
@@ -466,6 +477,7 @@ for (const spec of [
   rollCommand,
   pickCommand,
   sendCommand,
+  sysCommand,
   triggerCommand,
   regenerateCommand,
   stopCommand,

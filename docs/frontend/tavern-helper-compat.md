@@ -574,14 +574,17 @@ composer，由 AgentLoop 生成一次；`/regenerate` / `/stop` 仍显式报错�
 |---|---|---|
 | 变量 | `/setvar` `/getvar` `/addvar` `/incvar` `/decvar` `/delvar` `/setglobalvar` `/getglobalvar` `/delglobalvar` `/hasvar` `/hasglobalvar` | ✅ |
 | 分支/随机 | `/if` `/random` `/roll` `/pick` | ✅ |
-| 聊天 | `/send` `/cut` | ✅ |
+| 聊天 | `/send` `/sys` `/cut` | ✅ |
 | 正则 | `/regex name=x` | ✅ |
 | 生成 | `/trigger`（含 `/send 文本\|/trigger` 管道） | ✅ 受控：本次写入的用户楼层交给宿主 composer（见 §5.1） |
 | 生成 | `/regenerate` `/stop` | ❌ 抛错（见 §5.1） |
 | iframe 本地注册命令（`SlashCommandParser.addCommandObject`） | ✅ 在 iframe 内执行回调，不经宿主 |
-| 其它 ST 命令（`/echo` 之外的显示类、`/sys`、`/impersonate`…） | ❌ 解析失败 |
+| 其它 ST 命令（`/echo` 之外的显示类、`/impersonate`…） | ❌ 解析失败 |
 
-`/echo` 被接受但丢弃输出（没有宿主输入框可放）。
+`/echo` 被接受但丢弃输出（没有宿主输入框可放）。`/sys` 插入一条系统楼层
+（`role: 'system'`、`name: 'System'`、`extra.type = 'system'`），与酒馆的
+`sendSystemMessage` 同形；按本仓库既有 `is_system` 约定，它只作为聊天内系统提示
+展示并可被 `getChatMessages` 读回，不会进入模型上下文。
 
 ---
 
@@ -629,6 +632,7 @@ composer，由 AgentLoop 生成一次；`/regenerate` / `/stop` 仍显式报错�
 | 首次挂载报 `棋盘宿主通信初始化失败：页面安全策略阻止了本地消息桥` | 卡通过 `window.top.Function` 在“宿主 realm”构造 `postMessage` 函数，旧 facade 没有转发 `Function` | 更新构建：`window.top` / `window.parent` facade 暴露 `Function` 与浏览器全局兜底；函数仍在沙箱 iframe 内执行 |
 | 卡点击发送后提示 `/trigger is not available` 并回退到 DOM 派发 | 卡用 `createChatMessages` 建用户楼层后要求前端触发宿主生成，或直接用 `/send …|/trigger` 一条管道发送 | 更新构建：本次调用写入的用户楼层会被替换成一次宿主 composer 发送（两种姿势都支持）；没有可归属楼层时仍明确报错，避免双驱动或重复楼层 |
 | 控制台出现 `POST …/helper 500`，紧接着 `Uncaught (in promise) Error: /trigger is not available in this context` | 卡把 `/send 文本\|/trigger` 当一条 STscript 发送；旧构建让 `/send` 落盘后由 `/trigger` 抛错，于是用户楼层留下了、生成却没启动（刷新会再叠一条） | 更新构建：`/trigger` 在管道里作为宿主生成请求返回（HTTP 200），由桥接层接手；不再产生 500 与未捕获异常 |
+| 控制台报 `Uncaught (in promise) Error: unknown command: /sys` | 卡的脚本用酒馆内置 `/sys` 写系统提示；旧构建的 STscript 只有变量/发送/裁剪，`/sys` 落到未知命令 | 更新构建：`/sys` 插入一条系统楼层（`role: 'system'`、`extra.type = 'system'`）并返回空输出；需要模型可见的内容仍走 `/send` 或卡内生成 |
 | 卡前端里的 `iframe` / `srcdoc` 画面空白 | 嵌套 `srcdoc` 本身不受 `frame-src 'none'` 拦截；常见原因是父 facade 缺少 `Function`、`document.createElement` 或浏览器全局 | 先用 iframe console 确认初始化错误；更新构建中的 facade 兜底 |
 | 「美化前端」显示空白画布，但「自动运行中（N 个卡脚本）」 | 当前聊天没有完整 HTML 楼层；自动运行的卡脚本只是浮层，不是主界面。很多卡的开局界面由**正则**生成（例如「开局正则」匹配首楼并替换成完整 HTML），该正则被 `disabled: true` 跳过 | 在「正则脚本」分区「从角色卡同步」，启用匹配首楼的 HTML 正则（必要时同步启用状态栏正则），回「美化前端」点刷新；首楼已保存时重渲染即可，必要时新建聊天/重生成首楼 |
 | 状态栏一直空 | 模型没有输出 `<UpdateVariable>`，或卡内状态栏正则被禁用 | 用提示词查看器看实发请求；确认正则未 disabled；首轮检查 `initialized_lorebooks` 是否已播种 |

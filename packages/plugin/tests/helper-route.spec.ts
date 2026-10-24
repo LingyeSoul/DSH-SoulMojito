@@ -281,6 +281,21 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     expect(plain.body?.value).toMatchObject({ triggerRequested: false, sentText: null })
   })
 
+  it('inserts a system floor through /sys', async () => {
+    const sysChatId = await store.createChat(CHARACTER, HEADER)
+    const result = await call({ op: 'slash', character: CHARACTER, chatId: sysChatId, command: '/sys 状态已同步' })
+    expect(result.status).toBe(200)
+    expect(result.body?.value).toMatchObject({ output: '', chatChanged: true })
+    const snapshot = await call({ op: 'snapshot', character: CHARACTER, chatId: sysChatId })
+    const messages = (snapshot.body?.value as Record<string, unknown>).messages as Array<Record<string, unknown>>
+    expect(messages[messages.length - 1]).toMatchObject({
+      role: 'system',
+      name: 'System',
+      message: '状态已同步',
+      extra: { type: 'system' },
+    })
+  })
+
   it('fails explicitly on unsupported ops instead of pretending success', async () => {
     const result = await call({ op: 'not-a-helper-op', character: CHARACTER, chatId })
     expect(result.status).toBe(500)

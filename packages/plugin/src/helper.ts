@@ -1581,7 +1581,7 @@ interface HelperSlashResult {
 }
 
 /**
- * STscript through the plugin's own interpreter (variables, send/cut, regex,
+ * STscript through the plugin's own interpreter (variables, send/sys/cut, regex,
  * echo). Generation control (`/regenerate`, `/stop`) stays unwired on purpose:
  * AgentTavern generation belongs to the host loop, and a frontend must not
  * become a second driver. `/trigger` is reported back as a request instead of
@@ -1638,6 +1638,21 @@ async function runHelperSlash(
         mes: trimmed,
       })
       sentText = trimmed
+      await persist()
+    },
+    // /sys is ST's system-message command: the floor stays in the chat and is
+    // read as a system turn, unlike /comment (dropped) or /send (user turn).
+    system: async (text) => {
+      const trimmed = text.trim()
+      if (trimmed === '') return
+      chat.messages.push({
+        name: 'System',
+        is_user: false,
+        is_system: true,
+        send_date: new Date().toISOString(),
+        mes: trimmed,
+        extra: { type: 'system' },
+      })
       await persist()
     },
     // `/trigger` only records the request: the bridge replaces this call's last
