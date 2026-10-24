@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { collectRegexScripts, collectWorldInfoBooks } from '../src/tavern-assets.js'
+import { collectSessionRegexScripts } from '../src/regex-session.js'
 import { decodeCharacterCard, normalizeEntry, RegexPlacement } from '../../tavern-format/src/index.js'
 import { applyRegexScripts } from '../../tavern-script/src/index.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
@@ -322,5 +323,69 @@ describe('buildAgentTavernPreloadSnapshot', () => {
       (text) => text.replaceAll('{{char}}', 'Carrier').replaceAll('{{user}}', 'Alice'))
     expect(snapshot).toContain('[character.description]\nCarrier meets Alice.')
     expect(snapshot).toContain('[character.first_message]\nHi Alice!')
+  })
+})
+
+describe('collectSessionRegexScripts', () => {
+  let home: string
+  let store: TavernStore
+  let chatId: string
+  const card = decodeCharacterCard({
+    spec: 'chara_card_v2', spec_version: '2.0',
+    data: {
+      name: 'Session Carrier', description: '', personality: '', scenario: '', first_mes: '',
+      mes_example: '', creator_notes: '', system_prompt: '', post_history_instructions: '',
+      alternate_greetings: [], tags: [], creator: '', character_version: '', extensions: {},
+    },
+  })
+
+  beforeAll(async () => {
+    home = mkdtempSync(join(tmpdir(), 'tavern-session-regex-'))
+    process.env.DSH_HOME = home
+    store = await TavernStore.open(join(home, 'soulmojito'))
+    chatId = await store.createChat('Session Carrier', { user_name: 'User', character_name: 'Session Carrier', chat_metadata: {} })
+  })
+
+  afterAll(() => {
+    delete process.env.DSH_HOME
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  it('merges session overrides by scriptName and appends session-only scripts', async () => {
+    const baseScript = (id: string, name: string, findRegex: string, replaceString: string) => ({
+      id, scriptName: name, findRegex, replaceString, trimStrings: [], placement: [2], disabled: false,
+      markdownOnly: false, promptOnly: false, runOnEdit: false, substituteRegex: false, minDepth: null, maxDepth: null,
+    })
+    await store.patchState({
+      regexScripts: [
+        baseScript('shared', 'Shared', 'shared', 'BASE'),
+        baseScript('base-only', 'Base Only', 'base', 'BASE ONCE'),
+      ],
+    })
+    await store.putChatJsrOverlay('Session Carrier', chatId, (current) => ({
+      version: 1,
+      scriptTrees: current?.scriptTrees ?? [],
+      regexScripts: {
+        global: [
+          baseScript('session-shared', 'Shared', 'shared', 'SESSION'),
+          baseScript('session-only', 'Session Only', 'session', 'SESSION ONCE'),
+        ],
+      },
+    }))
+    const scripts = await collectSessionRegexScripts(store, await store.getState(), 'Session Carrier', chatId, { card })
+    expect(scripts.map((script) => [script.scriptName, script.replaceString])).toEqual([
+      ['Shared', 'SESSION'],
+      ['Base Only', 'BASE ONCE'],
+      ['Session Only', 'SESSION ONCE'],
+    ])
+    // Other chats are not affected by this chat's overlay.
+    const otherChat = await store.createChat('Session Carrier', { user_name: 'User', character_name: 'Session Carrier', chat_metadata: {} })
+    const otherScripts = await collectSessionRegexScripts(store, await store.getState(), 'Session Carrier', otherChat, { card })
+    expect(otherScripts.map((script) => script.replaceString)).toEqual(['BASE', 'BASE ONCE'])
+  })
+
+  it('keeps the base list when no chat overlay exists', async () => {
+    const scripts = await collectSessionRegexScripts(store, await store.getState(), 'Session Carrier', '', { card })
+    expect(scripts.map((script) => script.scriptName)).toEqual(['Shared', 'Base Only'])
   })
 })

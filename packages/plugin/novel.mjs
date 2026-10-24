@@ -3393,7 +3393,8 @@ var TavernStore = class _TavernStore {
       trees: { ...current?.trees ?? {}, character: structuredClone(scriptTrees) },
       ...current?.scriptVariables === void 0 ? {} : { scriptVariables: current.scriptVariables },
       ...current?.presets === void 0 ? {} : { presets: current.presets },
-      ...current?.personas === void 0 ? {} : { personas: current.personas }
+      ...current?.personas === void 0 ? {} : { personas: current.personas },
+      ...current?.regexScripts === void 0 ? {} : { regexScripts: current.regexScripts }
     }));
   }
   /**
@@ -4146,6 +4147,30 @@ function parseChatWorldsFile(file, bytes) {
 function isPlainRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+function parseChatRegexScripts(file, raw) {
+  if (raw === void 0) return void 0;
+  if (!isPlainRecord(raw)) {
+    throw new Error(`chat script tree file regexScripts must be an object: ${file}`);
+  }
+  const scripts = {};
+  for (const [scope, list] of Object.entries(raw)) {
+    if (scope !== "global" && scope !== "character" && scope !== "preset") {
+      throw new Error(`chat script tree file regexScripts has an unsupported scope '${scope}' (expected global, character, preset): ${file}`);
+    }
+    if (!Array.isArray(list)) {
+      throw new Error(`chat script tree file regexScripts.${scope} must be an array: ${file}`);
+    }
+    list.forEach((script, index) => {
+      if (!isPlainRecord(script)) {
+        throw new Error(`chat script tree file regexScripts.${scope}[${index}] must be an object: ${file}`);
+      }
+    });
+    if (scope === "global") scripts.global = list;
+    else if (scope === "character") scripts.character = list;
+    else scripts.preset = list;
+  }
+  return scripts;
+}
 function validateJsrOverlay(overlay, file) {
   const checkTrees = (nodes, label) => {
     if (!Array.isArray(nodes)) throw new Error(`${label} must be an array of script nodes: ${file}`);
@@ -4165,6 +4190,7 @@ function validateJsrOverlay(overlay, file) {
       if (!isPlainRecord(value)) throw new Error(`${key}.${name2} must be an object: ${file}`);
     }
   }
+  parseChatRegexScripts(file, overlay.regexScripts);
 }
 function parseChatScriptsFile(file, bytes) {
   let parsed;
@@ -4194,13 +4220,15 @@ function parseChatScriptsFile(file, bytes) {
       throw new Error(`chat script tree file trees.preset must be an object: ${file}`);
     }
   }
+  const regexScripts = parseChatRegexScripts(file, parsed["regexScripts"]);
   return {
     version: 1,
     scriptTrees,
     ...trees === void 0 ? {} : { trees },
     ...isPlainRecord(parsed["scriptVariables"]) ? { scriptVariables: parsed["scriptVariables"] } : {},
     ...isPlainRecord(parsed["presets"]) ? { presets: parsed["presets"] } : {},
-    ...isPlainRecord(parsed["personas"]) ? { personas: parsed["personas"] } : {}
+    ...isPlainRecord(parsed["personas"]) ? { personas: parsed["personas"] } : {},
+    ...regexScripts === void 0 ? {} : { regexScripts }
   };
 }
 function timestamp() {

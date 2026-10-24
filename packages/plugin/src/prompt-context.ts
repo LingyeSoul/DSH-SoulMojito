@@ -1,7 +1,7 @@
 import { detectPresetKind, parseContextTemplate, parseInstructTemplate, parsePreset, RegexPlacement, type ChatMessage, type RegexScriptIR } from '../../tavern-format/src/index.js'
 import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { applyRegexScripts } from '../../tavern-script/src/index.js'
-import { collectRegexScripts } from './tavern-assets.js'
+import { collectSessionRegexScripts } from './regex-session.js'
 
 export const DEFAULT_USER = 'User'
 
@@ -32,11 +32,12 @@ export function displayTextForMessage(scripts: RegexScriptIR[], message: ChatMes
 
 /**
  * markdownOnly AI_OUTPUT 脚本的展示层文本（ST 语义：仅改显示，不进 prompt、不落盘）。
- * 返回与 messages 平行的数组；无脚本时返回 undefined。
+ * 返回与 messages 平行的数组；无脚本时返回 undefined。会话正则覆盖层与生成
+ * 管线读同一份集合，聊天级改写会立即反映到浏览器展示。
  */
-export async function displayTexts(db, state, characterName, chat) {
+export async function displayTexts(db, state, characterName, chatId, chat) {
   const character = await db.getCharacter(characterName)
-  const scripts = collectRegexScripts(state, character)
+  const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, character)
   if (scripts.every((script) => !script.markdownOnly || script.disabled)) return undefined
   return chat.messages.map((message, index) =>
     displayTextForMessage(scripts, message, chat.messages.length - 1 - index))

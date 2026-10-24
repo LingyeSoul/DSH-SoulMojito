@@ -257,6 +257,32 @@ describe('preview generation (D-4)', () => {
     expect(listPromptViews({ chatId })).toHaveLength(0)
   })
 
+  it('applies the chat regex overlay to preview USER_INPUT', async () => {
+    await store.putChatJsrOverlay(CHARACTER, chatId, (current) => ({
+      version: 1,
+      scriptTrees: current?.scriptTrees ?? [],
+      regexScripts: {
+        global: [{
+          id: 'preview-session-input', scriptName: 'Preview Session Input', findRegex: '原始输入',
+          replaceString: '改写后的输入', trimStrings: [], placement: [1], disabled: false,
+          markdownOnly: false, promptOnly: false, runOnEdit: false, substituteRegex: false,
+          minDepth: null, maxDepth: null,
+        }],
+      },
+    }))
+    try {
+      const { res, body } = await preview('原始输入')
+      expect(res.statusCode).toBe(200)
+      expect(body.ok).toBe(true)
+      const messages = llmRequests.at(-1)!.messages as Array<{ role: string; content: Array<{ type: string; text: string }> }>
+      const last = messages.at(-1)!
+      expect(last.role).toBe('user')
+      expect(last.content[0]!.text).toBe('改写后的输入')
+    } finally {
+      await store.deleteChatScripts(CHARACTER, chatId)
+    }
+  })
+
   it('prefers the ST session model selection bound to this chat; agent-tavern bindings do not participate', async () => {
     await store.updateState(() => ({
       sessionBindings: {

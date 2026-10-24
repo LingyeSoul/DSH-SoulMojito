@@ -161,6 +161,7 @@ describe('AgentTavern native event projector', () => {
       getState: () => store.getState(),
       getCharacter: (name) => store.getCharacter(name),
       getChatSnapshot: (character, id) => store.getChatSnapshot(character, id),
+      getChatJsrOverlay: (character, id) => store.getChatJsrOverlay(character, id),
       saveChat: async (character, id, chat, revision) => {
         if (conflict) {
           conflict = false
@@ -237,6 +238,48 @@ describe('AgentTavern native event projector', () => {
     await projector.replay(native)
     const snapshot = await store.getChatSnapshot('Projector Character', chatId)
     // USER_INPUT 落库变换；AI_OUTPUT 只应用非 promptOnly、非 markdownOnly 脚本。
+    expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual([
+      'Open the gate.',
+      'The door opens.',
+    ])
+  })
+
+  it('applies the chat regex overlay when projecting live messages', async () => {
+    const { root, store, chatId, sessionId } = await fixture('regex-overlay-session')
+    await store.putChatJsrOverlay('Projector Character', chatId, (current) => ({
+      version: 1,
+      scriptTrees: current?.scriptTrees ?? [],
+      regexScripts: {
+        global: [
+          { id: 'session-input', scriptName: 'Session Input', findRegex: 'door', replaceString: 'gate', trimStrings: [], placement: [1], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false, substituteRegex: false, minDepth: null, maxDepth: null },
+          { id: 'session-trim', scriptName: 'Session Trim', findRegex: '"([^"]*)"', replaceString: '$1', trimStrings: [], placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false, substituteRegex: false, minDepth: null, maxDepth: null },
+        ],
+      },
+    }))
+    const native: NativeSession = {
+      id: sessionId,
+      events: [
+        { type: 'turn/start', seq: 0, time: 1000, data: { turn: 1 } },
+        {
+          type: 'user/message', seq: 1, time: 1100,
+          data: { id: 'user-1', role: 'user', content: [{ type: 'text', text: 'Open the door.' }], source: { kind: 'user' } },
+        },
+        {
+          type: 'assistant/message', seq: 2, time: 1200,
+          data: {
+            turn: 1, step: 1,
+            message: {
+              id: 'assistant-1', role: 'assistant',
+              content: [{ type: 'text', text: 'The door "opens".' }],
+              source: { kind: 'model', provider: 'test', model: 'test' },
+            },
+          },
+        },
+      ],
+    }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
     expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual([
       'Open the gate.',
       'The door opens.',

@@ -494,6 +494,104 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     expect(String(badNode.body?.message)).toContain('scriptTrees[0] must be an object')
   })
 
+  it('regex.put-session/get/format/reset 按聊天覆盖，生成与快照读同一份', async () => {
+    await store.patchState({
+      regexScripts: [
+        {
+          id: 'base-shared', scriptName: 'Shared Strip', findRegex: 'shared', replaceString: 'BASE',
+          trimStrings: [], placement: [2], disabled: false, markdownOnly: false, promptOnly: false,
+          runOnEdit: false, substituteRegex: false, minDepth: null, maxDepth: null,
+        },
+        {
+          id: 'base-keep', scriptName: 'Base Keep', findRegex: 'keep', replaceString: 'KEPT',
+          trimStrings: [], placement: [2], disabled: false, markdownOnly: false, promptOnly: false,
+          runOnEdit: false, substituteRegex: false, minDepth: null, maxDepth: null,
+        },
+      ],
+    })
+    const put = await call({
+      op: 'regex.put-session',
+      character: CHARACTER,
+      chatId,
+      type: 'global',
+      scripts: [
+        {
+          id: 'session-shared', script_name: 'Shared Strip', find_regex: 'shared', replace_string: 'SESSION',
+          trim_strings: [], placement: [2], enabled: true, run_on_edit: false,
+          source: { user_input: false, ai_output: true, slash_command: false, world_info: false, reasoning: false },
+          destination: { display: true, prompt: true }, min_depth: null, max_depth: null,
+        },
+        {
+          id: 'session-add', script_name: 'Session Add', find_regex: 'extra', replace_string: 'EXTRA',
+          trim_strings: [], placement: [2], enabled: true, run_on_edit: false,
+          source: { user_input: false, ai_output: true, slash_command: false, world_info: false, reasoning: false },
+          destination: { display: true, prompt: true }, min_depth: null, max_depth: null,
+        },
+      ],
+    })
+    expect(put.status).toBe(200)
+    expect(put.body?.value).toMatchObject({ type: 'global' })
+    expect((put.body?.value as Record<string, any>).scripts).toHaveLength(2)
+
+    const read = await call({ op: 'regex.get', character: CHARACTER, chatId })
+    const scripts = (read.body?.value as Record<string, any>).scripts as Array<Record<string, any>>
+    const byName = new Map(scripts.map((script) => [script.script_name, script]))
+    expect(byName.get('Shared Strip')?.replace_string).toBe('SESSION')
+    expect(byName.get('Session Add')?.replace_string).toBe('EXTRA')
+    expect(byName.get('Base Keep')?.replace_string).toBe('KEPT')
+
+    const formatted = await call({
+      op: 'regex.format',
+      character: CHARACTER,
+      chatId,
+      text: 'shared keep extra',
+      placement: 2,
+    })
+    expect((formatted.body?.value as Record<string, unknown>).text).toBe('SESSION KEPT EXTRA')
+
+    const snapshot = await call({ op: 'snapshot', character: CHARACTER, chatId })
+    const snapshotValue = snapshot.body?.value as Record<string, any>
+    expect((snapshotValue.regexScripts.global as Array<Record<string, any>>)
+      .find((script) => script.scriptName === 'Shared Strip')?.replaceString).toBe('BASE')
+    expect((snapshotValue.sessionRegexScripts.global as Array<Record<string, any>>)
+      .map((script) => script.scriptName)).toEqual(['Shared Strip', 'Session Add'])
+    // The base asset itself is untouched: only the chat overlay changed.
+    const baseState = await store.getState()
+    expect(baseState.regexScripts.find((script) => script.scriptName === 'Shared Strip')?.replaceString).toBe('BASE')
+
+    const reset = await call({ op: 'regex.reset-session', character: CHARACTER, chatId, type: 'global' })
+    expect(reset.body?.value).toEqual({ reset: true })
+    const afterReset = await call({ op: 'regex.get', character: CHARACTER, chatId })
+    const resetScripts = (afterReset.body?.value as Record<string, any>).scripts as Array<Record<string, any>>
+    expect(resetScripts.some((script) => script.script_name === 'Session Add')).toBe(false)
+    expect(resetScripts.find((script) => script.script_name === 'Shared Strip')?.replace_string).toBe('BASE')
+
+    const formattedAfterReset = await call({
+      op: 'regex.format', character: CHARACTER, chatId, text: 'shared', placement: 2,
+    })
+    expect((formattedAfterReset.body?.value as Record<string, unknown>).text).toBe('BASE')
+  })
+
+  it('regex.put-session/reset-session 拒绝缺少会话作用域或非法负载', async () => {
+    const noChat = await call({ op: 'regex.put-session', character: CHARACTER, chatId: '', type: 'global', scripts: [] })
+    expect(String(noChat.body?.message)).toContain('chatId is required for regex.put-session')
+
+    const badType = await call({ op: 'regex.put-session', character: CHARACTER, chatId, type: 'bogus', scripts: [] })
+    expect(String(badType.body?.message)).toContain("unsupported regex type 'bogus'")
+
+    const notArray = await call({ op: 'regex.put-session', character: CHARACTER, chatId, type: 'global', scripts: {} })
+    expect(String(notArray.body?.message)).toContain('scripts must be an array')
+
+    const badEntry = await call({
+      op: 'regex.put-session', character: CHARACTER, chatId, type: 'global',
+      scripts: [{ script_name: 'Broken', find_regex: '', replace_string: 'x' }],
+    })
+    expect(String(badEntry.body?.message)).toContain('scripts[0] has an empty find_regex')
+
+    const noResetChat = await call({ op: 'regex.reset-session', character: CHARACTER, chatId: '' })
+    expect(String(noResetChat.body?.message)).toContain('chatId is required for regex.reset-session')
+  })
+
   it('keeps script trees per source and patches script info/buttons in the session copy', async () => {
     const globalTrees = [{ type: 'script', id: 'global-1', name: 'Global', content: 'void 0' }]
     const putGlobal = await call({ op: 'scripts.put', character: CHARACTER, chatId, type: 'global', scriptTrees: globalTrees })

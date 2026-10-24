@@ -4,7 +4,7 @@
 > 兼容面的**权威清单**：哪些能用、用到什么程度、哪些一定不能用、用了会怎样。
 >
 > - 实现：`packages/plugin/src/helper.ts`（服务端域操作）+ `packages/tavern-jsr`（iframe shim、事件词汇表、库全局）+ `packages/tavern-frontend-storage`（沙箱 localStorage/sessionStorage/IndexedDB）
-> - 决策：[`decisions/2026-10-20-frontend-helper-compat.md`](../../decisions/2026-10-20-frontend-helper-compat.md)
+> - 决策：[`decisions/2026-10-20-frontend-helper-compat.md`](../../decisions/2026-10-20-frontend-helper-compat.md) · 正则会话写面：[`decisions/2026-10-24-jsr-session-regex-writes.md`](../../decisions/2026-10-24-jsr-session-regex-writes.md)
 > - 参考对象：JS-Slash-Runner（Tavern-Helper v4.x，PolyForm NonCommercial）。
 >   本文只对齐**可观察行为**；本插件不复刻它的同源无沙箱模型，也没有任何 JSR 源码拷贝。
 >
@@ -17,6 +17,7 @@
 这一轮把「能调用」推进到「生成、控制、跨帧和存储真正闭环」：
 
 - **生成**：`TavernHelper.generate` 支持 `should_stream:true`，宿主把 SSE/JSON 增量转成 iframe 事件，最终 Promise 仍返回完整文本；`stopGenerationById` / `stopAllGeneration` 通过宿主 `AbortController` 真正中止。
+- **正则写面**：`replaceTavernRegexes` / `updateTavernRegexesWith` 改为**会话级覆盖**，落在 `chats/<角色>/<聊天>.jsonl.scripts.json` 的 `regexScripts`；`getTavernRegexes` / `formatAsTavernRegexedString`、生成/重写/预览、浏览器展示与 AgentTavern 投影读同一份合并集合。
 - **事件**：新增 `MESSAGE_SWIPED`、`PRESET_CHANGED`、`GENERATION_STARTED`、`GENERATION_STOPPED`，以及 `STREAM_TOKEN_RECEIVED_INCREMENTALLY/FULLY` 两个 iframe 事件。
 - **命令**：`/stop` 现在同时中止 ST 主生成与卡内生成桥；`/regenerate` 在 ST 架构且宿主空闲时走 `generateFor`（AgentTavern 仍显式报错）。
 - **跨帧**：新增 `TavernHelper.iframe.self/list/broadcast/emitTo`，宿主按 token 注册表转发事件；`eventEmit` 仍保持 iframe 本地语义。
@@ -32,7 +33,7 @@
 - **宏**：`substitudeMacros` 变成真正的本地展开（`{{char}}` / `{{user}}` / `{{getvar::}}` / `{{setvar::}}` / `{{random}}` / `{{roll}}` / 时间类 + `registerMacroLike`）；未知宏原样保留。
 - **正则**：`getTavernRegexes(option)` 同步返回 ST 形状；`formatAsTavernRegexedString(text, source, destination, option)` 按 JSR 签名同步返回字符串（旧 `(text, placement, option)` 姿势仍兼容）。
 - **脚本容器**：右栏「卡脚本」tab 升级为真正的容器——每个脚本一个独立沙箱 iframe，带 `scriptId`/`scriptName`/`scriptInfo`；`getScriptInfo`/`replaceScriptInfo`/`getAllEnabledScriptButtons`/`replaceScriptTrees` 可用，脚本按钮条渲染在容器里并回投给对应 iframe。AgentTavern 的自动运行仍共享「美化前端」文档（不逐脚本隔离），但每段脚本有 per-script scope，身份与按钮归属正确。
-- **会话级覆盖**：世界书条目族、`createWorldbook`/`deleteWorldbook`、`replaceWorldbook`、预设与人设写面、脚本树三来源（character/preset/global）全部落在 `chats/<角色>/<聊天>.jsonl.scripts.json` 覆盖层，基础资产只读。
+- **会话级覆盖**：世界书条目族、`createWorldbook`/`deleteWorldbook`、`replaceWorldbook`、预设与人设写面、脚本树三来源（character/preset/global）、三来源正则脚本全部落在 `chats/<角色>/<聊天>.jsonl.scripts.json` 覆盖层，基础资产只读。
 - **只读面补全**：真实预设/人设/角色列表与 `getPreset`、`getPersona`、`getCharData`、`getCharAvatarPath`、`getChatHistoryBrief/Detail`、`RawCharacter`。
 - **框架面**：`SillyTavern.getContext().chat` 改为 ST 形状（`mes`/`is_user`/`is_system`/`swipes`）并带 `eventSource`/`eventTypes`；新增 `EjsTemplate`（宿主 `template.render`）。
 - **仍然显式失败**：角色卡/基础世界书/预设激活/扩展安装/导入原始资产/host DOM（`retrieveDisplayedMessage`、`refreshOneMessage`）——调用即抛出带原因的 error，不做静默 no-op。
@@ -495,10 +496,10 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `getPersonaAvatarPath()` | ⚠️ | 快照里只有头像串时返回它，否则 `null` |
 | `replacePersona` / `updatePersonaWith` / `createPersona` / `createOrReplacePersona` | ✅ | 会话级人设副本 |
 | `deletePersona` | ❌ | 显式抛错：人设删除是面板资产操作 |
-| `getTavernRegexes(option)` | ✅ | **同步**返回 ST `TavernRegex` 形状，按 `type`（global/character/preset）过滤 |
-| `formatAsTavernRegexedString(text, source, destination, option?)` | ✅ | 同步返回 `string`；`source` 为 `user_input`/`ai_output`/`slash_command`/`world_info`/`reasoning`，`destination` 为 `display`/`prompt`；旧的 `(text, placement, option)` 姿势仍兼容 |
+| `getTavernRegexes(option)` | ✅ | **同步**返回 ST `TavernRegex` 形状，按 `type`（global/character/preset）过滤；`in_use` 返回三来源合并后的生效集；基础集合与当前聊天的会话覆盖按 `scriptName` 合并（会话优先） |
+| `formatAsTavernRegexedString(text, source, destination, option?)` | ✅ | 同步返回 `string`；`source` 为 `user_input`/`ai_output`/`slash_command`/`world_info`/`reasoning`，`destination` 为 `display`/`prompt`；未显式给 `scripts` 时应用会话覆盖后的集合，`option.scope` / `option.type`（含 `in_use`）选择来源；旧的 `(text, placement, option)` 姿势仍兼容 |
 | `isCharacterTavernRegexesEnabled()` | ✅ | 恒 `true`（卡级正则跟随角色卡启用） |
-| `replaceTavernRegexes` / `updateTavernRegexesWith` | ❌ | 显式抛错：正则资产归面板 |
+| `replaceTavernRegexes(regexes, {type})` / `updateTavernRegexesWith(updater, {type})` | ✅ | **会话级覆盖**：只写本聊天的 `regexScripts[type]`，不写全局/角色卡/预设基础资产；`updateTavernRegexesWith` 返回更新后的 ST `TavernRegex[]`（Promise）；清除覆盖用宿主 `regex.reset-session`，脚本侧没有公开的 reset 名 |
 | `substitudeMacros(text)` | ✅ | 本地同步宏展开（角色/用户/描述/人设/楼层/变量/random/roll/时间 + `registerMacroLike`）；未知宏原样保留 |
 | `registerMacroLike(name, fn)` / `unregisterMacroLike(name)` | ✅ | 只影响本 iframe 的宏展开 |
 | `initializeGlobal(name, value)` / `waitGlobalInitialized(name)` | ✅ | 本地全局注册 + 15s 轮询等待 |
@@ -520,6 +521,29 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `getCharNames()` / `getCharacterNames()` | ✅ | 角色名列表 |
 | `builtin.renderMarkdown` / `copyText` / `parseRegexFromString` / `uuidv4` / `saveSettings` / `addOneMessage` | ✅ | 宿主无关的子集；`addOneMessage` 映射到 `createChatMessages`（会真实落盘） |
 | `builtin.reloadEditor` / `renderPromptManager` / `promptManager` / `getImageTokenCost` / `getVideoTokenCost` | ❌ | 触及宿主 DOM/生成管线，显式抛错 |
+
+### 4.1 正则写面：会话覆盖（2026-10-24）
+
+`replaceTavernRegexes(regexes, { type })` / `updateTavernRegexesWith(updater, { type })`
+只接受 `type: 'global' | 'character' | 'preset'`，把结果写进当前聊天的
+`chats/<角色>/<聊天>.jsonl.scripts.json` 的 `regexScripts[type]`。基础正则资产
+（`state.regexScripts`、角色卡 `extensions.regex_scripts`、预设内嵌脚本）保持只读。
+
+合并规则：
+
+- 会话覆盖与基础集合按 `scriptName` 合并，**同名会话脚本替换基础脚本**；会话新增的名字追加。
+- 某次 `replace` 传入的列表会替换该 `type` 的会话覆盖表；但基础资产里没有出现在覆盖表中的**其他名字仍然生效**（覆盖层不是删除面）。要移除一条基础脚本，请写同名 `enabled:false` 条目把它停用，或用宿主 `regex.reset-session` 丢弃整个覆盖回到基础集合。
+- `type:'preset'` 是聊天内预设来源的覆盖副本，切换激活预设后仍属于这条聊天的覆盖层，直到 reset。
+
+读面：`getTavernRegexes` / `formatAsTavernRegexedString`（本地同步面）、
+宿主 `regex.get` / `regex.format`、`snapshot.regexScripts + snapshot.sessionRegexScripts`、
+ST 的 `generate` / `preview` / `/regex`、`display` 与 `frontend/latest`、
+`chat/<id>` 的 `displays`，以及 AgentTavern 投影器与历史导入都读合并后的集合。
+面板的正则列表/编辑器仍只编辑基础资产，不显示某个聊天的覆盖层。
+
+**边界**：没有 `chatId` 的读取面（未绑定聊天的 iframe、面板正则编辑器、
+`buildSnapshot` 的无聊天分支）只能看到基础集合；会话覆盖属于某条聊天，不会
+被这些入口伪造或泄漏。
 
 ---
 
@@ -565,6 +589,14 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `registerVariableSchema` | ⚠️ 保存 schema 供 iframe 内变量管理器读取，不参与服务端校验 |
 | `injectPrompts` / `uninjectPrompts` | ⚠️ 只影响本 iframe 的 `TavernHelper.generate`，不进入宿主 AgentLoop |
 | `TavernHelper.iframe` 家族（跨 iframe 通信） | ✅ `self` / `list` / `broadcast` / `emitTo`；token 注册表由宿主维护，发送者不自收 |
+
+### 5.4 正则资产写入
+
+| 家族 | 结果 |
+|---|---|
+| `replaceTavernRegexes` / `updateTavernRegexesWith` | ✅ 会话级覆盖（见 §4.1），不是不可用 |
+| 写入基础全局 / 角色卡 / 预设正则文件 | ❌ 面板 / Agent 资产；前端只能写本聊天的覆盖层 |
+| `importRawTavernRegex` | ❌ 显式抛错：原始正则资产导入仍归面板 |
 
 **调用不存在或明确不支持的函数会抛带原因的 error**——这是特性：
 它让"照抄的代码"在第一时间显式失败，而不是悄悄什么都不做。

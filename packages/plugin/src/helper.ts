@@ -16,13 +16,20 @@
  * list/replace, plus a snapshot used for synchronous iframe reads.
  */
 import { randomUUID } from 'node:crypto'
-import type { ChatLogIR, ChatMessage, LoreEntry, WorldBookIR } from '../../tavern-format/src/index.js'
+import type { ChatLogIR, ChatMessage, LoreEntry, RegexScriptIR, WorldBookIR } from '../../tavern-format/src/index.js'
 import { RegexPlacement, cardDataToRaw, normalizeEntry, parseCharacterBook, parseRegexScripts } from '../../tavern-format/src/index.js'
 import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { renderSandboxed } from '../../tavern-template/src/index.js'
 import { applyRegexScript, applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
-import type { TavernState, TavernStore } from '../../tavern-store/src/index.js'
+import type { ChatScriptsFile, TavernState, TavernStore } from '../../tavern-store/src/index.js'
 import { ChatRevisionConflictError, KeyedMutationTails } from '../../tavern-store/src/index.js'
+import {
+  collectSessionRegexScripts,
+  parseSessionRegexList,
+  parseSessionRegexScripts,
+  toTavernRegexEntry,
+  type RegexScope,
+} from './regex-session.js'
 import {
   clearIdbStore,
   createIdbStore,
@@ -52,7 +59,6 @@ import { ensureChatVariables } from './agent-tavern/mvu-compat.js'
 import { emitChatSaved } from './mods/events.js'
 import { DEFAULT_USER } from './prompt-context.js'
 import { variables } from './runtime.js'
-import { collectRegexScripts } from './tavern-assets.js'
 
 type JsonObject = Record<string, unknown>
 
@@ -334,18 +340,38 @@ export async function handleHelperApi(req: unknown, res: unknown, db: TavernStor
     }
     case 'regex.get': {
       // 卡级脚本跟随会话角色卡：返回当前角色可见的全局 + 卡内合并集，而不是
-      // 直接吐全局表（否则别的卡的脚本会泄漏到 JSR 读取面）。
-      const scripts = collectRegexScripts(state, await db.getCharacter(character))
-      return sendJson(res, 200, { ok: true, value: { scripts } })
+      // 直接吐全局表（否则别的卡的脚本会泄漏到 JSR 读取面）。会话正则覆盖层
+      // 与基础集合同名替换后一起返回，形状换成 JSR 的 TavernRegex。
+      const file = await db.getCharacter(character)
+      const scripts = await collectSessionRegexScripts(db, state, character, chatId, file)
+      return sendJson(res, 200, { ok: true, value: { scripts: scripts.map(toTavernRegexEntry) } })
+    }
+    case 'regex.put-session': {
+      requireSessionChatId(chatId, 'regex.put-session')
+      const type = requireRegexScope(body?.type)
+      const scripts = parseSessionRegexList(body?.scripts, 'scripts')
+      return sendJson(res, 200, {
+        ok: true,
+        value: await putSessionRegexScripts(db, character, chatId, type, scripts),
+      })
+    }
+    case 'regex.reset-session': {
+      requireSessionChatId(chatId, 'regex.reset-session')
+      const type = body?.type === undefined ? undefined : requireRegexScope(body.type)
+      await resetSessionRegexScripts(db, character, chatId, type)
+      return sendJson(res, 200, { ok: true, value: { reset: true } })
     }
     case 'regex.format': {
       const text = typeof body?.text === 'string' ? body.text : ''
       const placement = typeof body?.placement === 'number' ? body.placement : 2
       // TavernHelper 的 formatAsTavernRegexedString 语义：应用给定脚本（通常是
       // getTavernRegexes 的结果）；未给时用当前会话角色可见的启用脚本。正则只做
-      // 文本变换，不回写任何状态。
-      const provided = Array.isArray(body?.scripts) ? parseRegexScripts(body.scripts) : undefined
-      const scripts = (provided ?? collectRegexScripts(state, await db.getCharacter(character)))
+      // 文本变换，不回写任何状态。会话覆盖层参与默认集合，保证写面与生成/展示一致。
+      const provided = Array.isArray(body?.scripts)
+        ? parseSessionRegexList(body.scripts, 'scripts')
+        : undefined
+      const file = await db.getCharacter(character)
+      const scripts = (provided ?? await collectSessionRegexScripts(db, state, character, chatId, file))
         .filter((script) => !script.disabled)
       return sendJson(res, 200, {
         ok: true,
@@ -472,6 +498,7 @@ async function buildSnapshot(db: TavernStore, state: TavernState, character: str
       scriptTreesByType: { character: null, preset: null, global: null },
       scriptVariables: {},
       regexScripts: splitRegexScripts(state, file),
+      sessionRegexScripts: { global: [], character: [], preset: [] },
       worlds: {
         names: await visibleWorldNames(db, character, chatId),
         active: state.activeWorlds,
@@ -499,6 +526,7 @@ async function buildSnapshot(db: TavernStore, state: TavernState, character: str
   const presetTrees = state.activePreset === undefined
     ? null
     : await activePresetScriptTrees(db, state.activePreset)
+  const sessionRegex = parseSessionRegexScripts(overlay?.regexScripts)
   return {
     ...shared,
     personaDescription: persona?.description ?? '',
@@ -521,6 +549,7 @@ async function buildSnapshot(db: TavernStore, state: TavernState, character: str
     },
     scriptVariables: cloneJson(overlay?.scriptVariables ?? {}),
     regexScripts: splitRegexScripts(state, file),
+    sessionRegexScripts: cloneJson(sessionRegex ?? {}),
     worlds: {
       names: await visibleWorldNames(db, character, chatId),
       active: state.activeWorlds,
@@ -558,9 +587,10 @@ async function activePresetScriptTrees(db: TavernStore, presetName: string): Pro
 }
 
 /**
- * Regex scripts split by JSR scope. Session writes are not supported for regex
- * assets yet, so every entry comes from the state-level tables plus the card's
- * embedded `extensions.regex_scripts`.
+ * Base regex scripts split by JSR scope. Every entry comes from the state-level
+ * tables plus the card's embedded `extensions.regex_scripts`; per-chat session
+ * overrides travel separately as `sessionRegexScripts` so base assets stay
+ * read-only.
  */
 function splitRegexScripts(
   state: TavernState,
@@ -1228,6 +1258,66 @@ function requireSessionChatId(chatId: string, op: string): void {
   if (chatId === '') throw new Error(`chatId is required for ${op} (session scope only)`)
 }
 
+function requireRegexScope(value: unknown): RegexScope {
+  if (value === 'global' || value === 'character' || value === 'preset') return value
+  throw new Error(`unsupported regex type '${String(value)}' (supported: global, character, preset)`)
+}
+
+/** Case-sensitive script names mirror the overlay merge rule (`scriptName`). */
+async function putSessionRegexScripts(
+  db: TavernStore,
+  character: string,
+  chatId: string,
+  type: RegexScope,
+  scripts: RegexScriptIR[],
+): Promise<{ type: RegexScope; scripts: RegexScriptIR[] }> {
+  return serializeSessionWrite(`scripts:${character}\u0000${chatId}`, async () => {
+    await db.putChatJsrOverlay(character, chatId, (current) => {
+      const base = current ?? { version: 1, scriptTrees: [] }
+      return {
+        ...base,
+        regexScripts: { ...(base.regexScripts ?? {}), [type]: scripts },
+      }
+    })
+    return { type, scripts }
+  })
+}
+
+function isEmptyJsrOverlay(overlay: ChatScriptsFile): boolean {
+  return overlay.scriptTrees.length === 0
+    && Object.keys(overlay.trees ?? {}).length === 0
+    && Object.keys(overlay.scriptVariables ?? {}).length === 0
+    && Object.keys(overlay.presets ?? {}).length === 0
+    && Object.keys(overlay.personas ?? {}).length === 0
+    && Object.keys(overlay.regexScripts ?? {}).length === 0
+}
+
+async function resetSessionRegexScripts(
+  db: TavernStore,
+  character: string,
+  chatId: string,
+  type: RegexScope | undefined,
+): Promise<void> {
+  await serializeSessionWrite(`scripts:${character}\u0000${chatId}`, async () => {
+    const overlay = await db.getChatJsrOverlay(character, chatId)
+    if (overlay?.regexScripts === undefined) return
+    const next: ChatScriptsFile = { ...overlay }
+    if (type === undefined) {
+      delete next.regexScripts
+    } else {
+      const table = { ...overlay.regexScripts }
+      delete table[type]
+      if (Object.keys(table).length === 0) delete next.regexScripts
+      else next.regexScripts = table
+    }
+    if (isEmptyJsrOverlay(next)) {
+      await db.deleteChatScripts(character, chatId)
+      return
+    }
+    await db.putChatJsrOverlay(character, chatId, () => next)
+  })
+}
+
 function generationIdOf(config: unknown): string {
   const record = isPlainObject(config) ? config : {}
   const value = record['generation_id']
@@ -1438,7 +1528,8 @@ async function resetScriptTrees(
   const hasVariables = Object.keys(overlay.scriptVariables ?? {}).length > 0
   const hasPresets = Object.keys(overlay.presets ?? {}).length > 0
   const hasPersonas = Object.keys(overlay.personas ?? {}).length > 0
-  if (!hasTrees && !hasVariables && !hasPresets && !hasPersonas) {
+  const hasRegexScripts = Object.keys(overlay.regexScripts ?? {}).length > 0
+  if (!hasTrees && !hasVariables && !hasPresets && !hasPersonas && !hasRegexScripts) {
     await db.deleteChatScripts(character, chatId)
     return
   }
@@ -1695,6 +1786,9 @@ async function runHelperSlash(
   const chat = snapshot.chat
   let revision = snapshot.revision
   const file = await db.getCharacter(character)
+  // /regex is the SLASH_COMMAND application point; read the same session-aware
+  // list the generation pipeline uses so a chat-local regex write applies here.
+  const regexScripts = await collectSessionRegexScripts(db, state, character, chatId, file)
   const macros = createMacroEngine({
     char: file?.card.data.nickname || file?.card.data.name || character,
     user: state.activePersona ?? DEFAULT_USER,
@@ -1768,7 +1862,7 @@ async function runHelperSlash(
     },
     echo: () => {},
     applyRegex: (scriptName, text) => {
-      const script = collectRegexScripts(state, file)
+      const script = regexScripts
         .find((candidate) => candidate.scriptName.toLowerCase() === scriptName.toLowerCase())
       if (script === undefined) return text
       return applyRegexScript(text, script, RegexPlacement.SLASH_COMMAND, { expand: (t) => macros.expand(t) }) ?? text

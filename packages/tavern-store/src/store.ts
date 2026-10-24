@@ -9,7 +9,7 @@
  * ├── presets/<name>.json                 # ST preset 形态（chat completion / context / instruct / textgen）
  * ├── chats/<character>/<timestamp>.jsonl # ST 聊天文件形态（character 为角色名或群名）
  * ├── chats/<character>/<timestamp>.jsonl.worlds.json   # 会话世界书副本（脚本写入的覆盖层）
- * ├── chats/<character>/<timestamp>.jsonl.scripts.json  # 会话脚本树副本（卡脚本改写，不回写角色卡）
+ * ├── chats/<character>/<timestamp>.jsonl.scripts.json  # 会话脚本树 / 正则覆盖（不回写基础资产）
  * ├── personas/<name>.json                # persona 定义
  * ├── personas/avatars/<name>.png         # persona 头像
  * ├── groups/<name>.json                  # ST 群组文件形态（members 为角色名）
@@ -968,6 +968,7 @@ export class TavernStore {
       ...(current?.scriptVariables === undefined ? {} : { scriptVariables: current.scriptVariables }),
       ...(current?.presets === undefined ? {} : { presets: current.presets }),
       ...(current?.personas === undefined ? {} : { personas: current.personas }),
+      ...(current?.regexScripts === undefined ? {} : { regexScripts: current.regexScripts }),
     }))
   }
 
@@ -1979,6 +1980,13 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/** Session regex overlay: one script array per JSR source scope. */
+export interface ChatRegexScriptsFile {
+  global?: unknown[]
+  character?: unknown[]
+  preset?: unknown[]
+}
+
 /** Session script-tree overlay: `{ version: 1, scriptTrees: unknown[] }`. */
 export interface ChatScriptsFile {
   version: 1
@@ -1992,6 +2000,41 @@ export interface ChatScriptsFile {
   scriptVariables?: Record<string, Record<string, unknown>>
   presets?: Record<string, Record<string, unknown>>
   personas?: Record<string, Record<string, unknown>>
+  /**
+   * v3: per-chat regex overlay. A present scope shadows that source's base
+   * scripts for this chat only; the base regex assets stay read-only.
+   */
+  regexScripts?: ChatRegexScriptsFile
+}
+
+/**
+ * Validates the per-chat regex overlay. Every present scope must be an array of
+ * script objects; an unknown scope fails loudly so a typo cannot silently drop
+ * a session write on the next read.
+ */
+function parseChatRegexScripts(file: string, raw: unknown): ChatRegexScriptsFile | undefined {
+  if (raw === undefined) return undefined
+  if (!isPlainRecord(raw)) {
+    throw new Error(`chat script tree file regexScripts must be an object: ${file}`)
+  }
+  const scripts: ChatRegexScriptsFile = {}
+  for (const [scope, list] of Object.entries(raw)) {
+    if (scope !== 'global' && scope !== 'character' && scope !== 'preset') {
+      throw new Error(`chat script tree file regexScripts has an unsupported scope '${scope}' (expected global, character, preset): ${file}`)
+    }
+    if (!Array.isArray(list)) {
+      throw new Error(`chat script tree file regexScripts.${scope} must be an array: ${file}`)
+    }
+    list.forEach((script, index) => {
+      if (!isPlainRecord(script)) {
+        throw new Error(`chat script tree file regexScripts.${scope}[${index}] must be an object: ${file}`)
+      }
+    })
+    if (scope === 'global') scripts.global = list
+    else if (scope === 'character') scripts.character = list
+    else scripts.preset = list
+  }
+  return scripts
 }
 
 /** Rejects malformed overlay payloads before they reach the chat directory. */
@@ -2014,6 +2057,7 @@ function validateJsrOverlay(overlay: ChatScriptsFile, file: string): void {
       if (!isPlainRecord(value)) throw new Error(`${key}.${name} must be an object: ${file}`)
     }
   }
+  parseChatRegexScripts(file, overlay.regexScripts)
 }
 
 /**
@@ -2049,6 +2093,7 @@ function parseChatScriptsFile(file: string, bytes: Uint8Array): ChatScriptsFile 
       throw new Error(`chat script tree file trees.preset must be an object: ${file}`)
     }
   }
+  const regexScripts = parseChatRegexScripts(file, parsed['regexScripts'])
   return {
     version: 1,
     scriptTrees,
@@ -2056,6 +2101,7 @@ function parseChatScriptsFile(file: string, bytes: Uint8Array): ChatScriptsFile 
     ...(isPlainRecord(parsed['scriptVariables']) ? { scriptVariables: parsed['scriptVariables'] as ChatScriptsFile['scriptVariables'] } : {}),
     ...(isPlainRecord(parsed['presets']) ? { presets: parsed['presets'] as ChatScriptsFile['presets'] } : {}),
     ...(isPlainRecord(parsed['personas']) ? { personas: parsed['personas'] as ChatScriptsFile['personas'] } : {}),
+    ...(regexScripts === undefined ? {} : { regexScripts }),
   }
 }
 

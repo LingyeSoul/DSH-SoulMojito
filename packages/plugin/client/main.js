@@ -1091,7 +1091,8 @@ window.__ModuleLoader__.load({
             // mvu.replace 同样写变量：不重投的话，同聊天的状态栏 iframe 收不到
             // 行动台/按钮刚刚写入的新 stat_data。
             if (data.op === 'variables.replace' || String(data.op).startsWith('messages.')
-              || data.op === 'slash' || data.op === 'mvu.replace') {
+              || data.op === 'slash' || data.op === 'mvu.replace'
+              || data.op === 'regex.put-session' || data.op === 'regex.reset-session') {
               postSnapshot()
             }
           }).catch((cause) => {

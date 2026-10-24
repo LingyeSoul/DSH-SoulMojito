@@ -106,6 +106,13 @@ function feedSnapshot(window: SandboxWindow, token: string, snapshot: Record<str
   })
 }
 
+function feedResult(window: SandboxWindow, message: PostedMessage, value: unknown): void {
+  window.dispatch({
+    type: 'message',
+    data: { type: 'dsh-soulmojito:helper-result', token: 'probe-token', id: message.id, ok: true, value },
+  })
+}
+
 function baseSnapshot(overrides: Record<string, unknown>): Record<string, unknown> {
   return {
     characterName: 'ExampleChar',
@@ -275,6 +282,8 @@ describe('TavernHelper runtime source', () => {
       updateVariablesWith(updater: (variables: Record<string, unknown>) => Record<string, unknown>, option?: unknown): unknown
       deleteVariable(path: string, option?: unknown): { variables: Record<string, unknown>; delete_occurred: boolean }
       getTavernRegexes(option: unknown): Array<Record<string, unknown>>
+      replaceTavernRegexes(regexes: unknown, option?: unknown): Promise<void>
+      updateTavernRegexesWith(updater: (regexes: Array<Record<string, unknown>>) => unknown, option?: unknown): Promise<Array<Record<string, unknown>>>
       formatAsTavernRegexedString(text: string, source: unknown, destination?: unknown, option?: unknown): string
       SillyTavern: { getContext(): Record<string, any> }
       getAllEnabledScriptButtons(): Record<string, Array<{ button_id: string; button_name: string }>>
@@ -351,6 +360,136 @@ describe('TavernHelper runtime source', () => {
     expect(window.formatAsTavernRegexedString('bad text', 'ai_output', 'display')).toBe('good text')
     expect(window.formatAsTavernRegexedString('bad text', 'ai_output', 'prompt')).toBe('PROMPT text')
     expect(window.formatAsTavernRegexedString('bad text', 2)).toBe('good text')
+  })
+
+  it('merges session regex scripts from the snapshot into the sync getters', () => {
+    const base = {
+      id: 'base', scriptName: 'Base', findRegex: 'base', replaceString: 'BASE', trimStrings: [],
+      placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false,
+      substituteRegex: false, minDepth: null, maxDepth: null,
+    }
+    const session = {
+      id: 'session', scriptName: 'Session', findRegex: 'session', replaceString: 'SESSION', trimStrings: [],
+      placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false,
+      substituteRegex: false, minDepth: null, maxDepth: null,
+    }
+    const { window } = boot(null, baseSnapshot({
+      regexScripts: { global: [base], character: [], preset: [] },
+      sessionRegexScripts: { global: [session] },
+    }))
+    const regexes = window.getTavernRegexes({ type: 'global' })
+    expect(regexes.map((regex) => regex.script_name)).toEqual(['Base', 'Session'])
+    expect(window.formatAsTavernRegexedString('base session', 'ai_output', 'display')).toBe('BASE SESSION')
+  })
+
+  it('lets a session character override replace a same-named base global script in all-scope reads', () => {
+    const base = {
+      id: 'base', scriptName: 'Shared', findRegex: 'shared', replaceString: 'BASE', trimStrings: [],
+      placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false,
+      substituteRegex: false, minDepth: null, maxDepth: null,
+    }
+    const session = {
+      id: 'session', scriptName: 'Shared', findRegex: 'shared', replaceString: 'SESSION', trimStrings: [],
+      placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false,
+      substituteRegex: false, minDepth: null, maxDepth: null,
+    }
+    const { window } = boot(null, baseSnapshot({
+      regexScripts: { global: [base], character: [], preset: [] },
+      sessionRegexScripts: { character: [session] },
+    }))
+    expect(window.getTavernRegexes({ type: 'character' }).map((regex) => regex.script_name)).toEqual(['Shared'])
+    expect(window.getTavernRegexes({ type: 'in_use' }).map((regex) => regex.replace_string)).toEqual(['SESSION'])
+    expect(window.formatAsTavernRegexedString('shared', 'ai_output', 'display')).toBe('SESSION')
+    expect(window.formatAsTavernRegexedString('shared', 'ai_output', 'display', { type: 'global' })).toBe('BASE')
+    expect(window.formatAsTavernRegexedString('shared', 'ai_output', 'display', { type: 'character' })).toBe('SESSION')
+  })
+
+  it('persists session regex writes through regex.put-session and reads back locally', async () => {
+    const base = {
+      id: 'base', scriptName: 'Base', findRegex: 'base', replaceString: 'BASE', trimStrings: [],
+      placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false,
+      substituteRegex: false, minDepth: null, maxDepth: null,
+    }
+    const { window, posted } = boot(null, baseSnapshot({
+      regexScripts: { global: [base], character: [], preset: [] },
+    }))
+    const write = window.replaceTavernRegexes([{
+      id: 'session',
+      script_name: 'Session',
+      enabled: true,
+      find_regex: 'session',
+      replace_string: 'SESSION',
+      trim_strings: [],
+      source: { user_input: false, ai_output: true, slash_command: false, world_info: false, reasoning: false },
+      destination: { display: true, prompt: true },
+      run_on_edit: false,
+      min_depth: null,
+      max_depth: null,
+    }], { type: 'global' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const put = posted.find((message) => message.op === 'regex.put-session')
+    expect(put?.payload?.type).toBe('global')
+    expect((put?.payload?.scripts as Array<Record<string, unknown>>)[0]).toMatchObject({
+      scriptName: 'Session', findRegex: 'session', replaceString: 'SESSION',
+    })
+    feedResult(window, put!, {
+      type: 'global',
+      scripts: [{
+        id: 'session', scriptName: 'Session', findRegex: 'session', replaceString: 'SESSION', trimStrings: [],
+        placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false,
+        substituteRegex: false, minDepth: null, maxDepth: null,
+      }],
+    })
+    await write
+    const regexes = window.getTavernRegexes({ type: 'global' })
+    expect(regexes.map((regex) => regex.script_name)).toEqual(['Base', 'Session'])
+    expect(window.formatAsTavernRegexedString('base session', 'ai_output', 'display')).toBe('BASE SESSION')
+
+    const update = window.updateTavernRegexesWith((entries) => entries
+      .map((entry) => entry.script_name === 'Session' ? { ...entry, replace_string: 'UPDATED' } : entry), { type: 'global' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const second = posted.filter((message) => message.op === 'regex.put-session').at(-1)!
+    expect((second.payload?.scripts as Array<Record<string, unknown>>)
+      .find((script) => script.scriptName === 'Session')?.replaceString).toBe('UPDATED')
+    feedResult(window, second, {
+      type: 'global',
+      scripts: [
+        {
+          id: 'base', scriptName: 'Base', findRegex: 'base', replaceString: 'BASE', trimStrings: [],
+          placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false,
+          substituteRegex: false, minDepth: null, maxDepth: null,
+        },
+        {
+          id: 'session', scriptName: 'Session', findRegex: 'session', replaceString: 'UPDATED', trimStrings: [],
+          placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false,
+          substituteRegex: false, minDepth: null, maxDepth: null,
+        },
+      ],
+    })
+    const updated = await update
+    expect(updated.find((entry) => entry.script_name === 'Session')?.replace_string).toBe('UPDATED')
+  })
+
+  it('accepts the (type, regexes) shorthand and rejects a non-array updater result', async () => {
+    const { window, posted } = boot(null, baseSnapshot({ regexScripts: { global: [], character: [], preset: [] } }))
+    const write = window.replaceTavernRegexes('preset', [])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const put = posted.find((message) => message.op === 'regex.put-session')!
+    expect(put.payload?.type).toBe('preset')
+    feedResult(window, put, { type: 'preset', scripts: [] })
+    await write
+
+    await expect(window.updateTavernRegexesWith(() => ({}), { type: 'global' }))
+      .rejects.toThrow(/must return an array/)
+    expect(posted.filter((message) => message.op === 'regex.put-session')).toHaveLength(1)
+  })
+
+  it('rejects invalid regex write arguments without posting a helper op', async () => {
+    const { window, posted } = boot(null, baseSnapshot({ regexScripts: { global: [], character: [], preset: [] } }))
+    await expect(window.replaceTavernRegexes([], { type: 'bogus' })).rejects.toThrow(/regex type must be/)
+    await expect(window.replaceTavernRegexes('global', {})).rejects.toThrow(/replaceTavernRegexes requires an array/)
+    await expect(window.replaceTavernRegexes([{}], { type: 'global' })).rejects.toThrow(/script_name/)
+    expect(posted.some((message) => message.op === 'regex.put-session')).toBe(false)
   })
 
   it('exposes an ST-shaped chat and eventSource through SillyTavern', async () => {

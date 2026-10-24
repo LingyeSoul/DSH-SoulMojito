@@ -20,7 +20,8 @@ import { formatRewriteBlock, optionalFeedback } from '../rewrite.js'
 import { templatesEnabled, templatesEnabledFlagValue } from '../runtime.js'
 import { assertStGenerationBinding } from '../session/binding.js'
 import { beginTavernSessionTurn, finishTavernSessionTrace, recordTavernSessionAssistant, startTavernSessionStep } from '../session/trace.js'
-import { collectRegexScripts, collectWorldInfoBooks } from '../tavern-assets.js'
+import { collectWorldInfoBooks } from '../tavern-assets.js'
+import { collectSessionRegexScripts } from '../regex-session.js'
 import { createGenerationTemplates, mergeTemplateLocalVars, type GenerationTemplates } from '../template.js'
 
 // ST generation has no client handle to the in-flight LLM stream. The composer
@@ -153,7 +154,7 @@ export async function previewGeneration(ctx, req, res, db) {
   if (!character) throw new Error(`character '${speakerName}' not found`)
   // 临时用户楼层：USER_INPUT regex 是装配的一部分（确定性本地变换）照走；user-input
   // hook 是 mod 副作用面，跳过（与 runGeneration 的差异项，见决策文档）。
-  const scripts = collectRegexScripts(state, character)
+  const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, character)
   const transformed = applyRegexScripts(userText, scripts, RegexPlacement.USER_INPUT, { expand: (t) => t })
   chat.messages.push({ name: userName, is_user: true, is_system: false, send_date: new Date().toISOString(), mes: transformed })
   const turnMessages = group ? rebuildGroupTurn(groupDef, speakerName, userName, chat.messages) : initialTurnMessages
@@ -648,7 +649,7 @@ export async function runGeneration(ctx, db, options: GenerationOptions) {
   // ---- 发送模式：先落用户消息（regex USER_INPUT），regenerate 弹出旧回复 ----
   let regenerated
   let hostUserText = ''
-  const scripts = collectRegexScripts(state, character)
+  const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, character)
   if (mode === 'send') {
     // user-input 相位（提案 0015 §3.4）：regex 之前——mod 看到的是用户敲入的原文。
     // 空总线恒等，行为不变。
@@ -855,6 +856,8 @@ export async function runTavernScript(ctx, req, res, db) {
   const chat = snapshot.chat
   let revision = snapshot.revision
   const character = await db.getCharacter(characterName)
+  // /regex below reads the same session-aware list as generation.
+  const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, character)
   const scriptController = new AbortController()
   activeStGeneration.set(stGenerationKey(characterName, chatId), scriptController)
 
@@ -944,7 +947,7 @@ export async function runTavernScript(ctx, req, res, db) {
       // ST runRegexCallback 语义：脚本名大小写不敏感；未找到/禁用原样返回输入、
       // 不中断脚本。差异（决策 2026-10-10-group-nudge-and-regex-slash）：仅
       // SLASH_COMMAND placement 位命中的脚本生效——placement=3 的唯一应用点。
-      const script = collectRegexScripts(state, character)
+      const script = scripts
         .find((candidate) => candidate.scriptName.toLowerCase() === scriptName.toLowerCase())
       if (!script) return text
       return applyRegexScript(text, script, RegexPlacement.SLASH_COMMAND, { expand: (t) => macros.expand(t) }) ?? text

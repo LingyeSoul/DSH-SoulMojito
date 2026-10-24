@@ -3083,7 +3083,8 @@ var TavernStore = class _TavernStore {
       trees: { ...current?.trees ?? {}, character: structuredClone(scriptTrees) },
       ...current?.scriptVariables === void 0 ? {} : { scriptVariables: current.scriptVariables },
       ...current?.presets === void 0 ? {} : { presets: current.presets },
-      ...current?.personas === void 0 ? {} : { personas: current.personas }
+      ...current?.personas === void 0 ? {} : { personas: current.personas },
+      ...current?.regexScripts === void 0 ? {} : { regexScripts: current.regexScripts }
     }));
   }
   /**
@@ -3836,6 +3837,30 @@ function parseChatWorldsFile(file, bytes) {
 function isPlainRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+function parseChatRegexScripts(file, raw) {
+  if (raw === void 0) return void 0;
+  if (!isPlainRecord(raw)) {
+    throw new Error(`chat script tree file regexScripts must be an object: ${file}`);
+  }
+  const scripts = {};
+  for (const [scope, list] of Object.entries(raw)) {
+    if (scope !== "global" && scope !== "character" && scope !== "preset") {
+      throw new Error(`chat script tree file regexScripts has an unsupported scope '${scope}' (expected global, character, preset): ${file}`);
+    }
+    if (!Array.isArray(list)) {
+      throw new Error(`chat script tree file regexScripts.${scope} must be an array: ${file}`);
+    }
+    list.forEach((script, index) => {
+      if (!isPlainRecord(script)) {
+        throw new Error(`chat script tree file regexScripts.${scope}[${index}] must be an object: ${file}`);
+      }
+    });
+    if (scope === "global") scripts.global = list;
+    else if (scope === "character") scripts.character = list;
+    else scripts.preset = list;
+  }
+  return scripts;
+}
 function validateJsrOverlay(overlay, file) {
   const checkTrees = (nodes, label) => {
     if (!Array.isArray(nodes)) throw new Error(`${label} must be an array of script nodes: ${file}`);
@@ -3855,6 +3880,7 @@ function validateJsrOverlay(overlay, file) {
       if (!isPlainRecord(value)) throw new Error(`${key}.${name2} must be an object: ${file}`);
     }
   }
+  parseChatRegexScripts(file, overlay.regexScripts);
 }
 function parseChatScriptsFile(file, bytes) {
   let parsed;
@@ -3884,13 +3910,15 @@ function parseChatScriptsFile(file, bytes) {
       throw new Error(`chat script tree file trees.preset must be an object: ${file}`);
     }
   }
+  const regexScripts = parseChatRegexScripts(file, parsed["regexScripts"]);
   return {
     version: 1,
     scriptTrees,
     ...trees === void 0 ? {} : { trees },
     ...isPlainRecord(parsed["scriptVariables"]) ? { scriptVariables: parsed["scriptVariables"] } : {},
     ...isPlainRecord(parsed["presets"]) ? { presets: parsed["presets"] } : {},
-    ...isPlainRecord(parsed["personas"]) ? { personas: parsed["personas"] } : {}
+    ...isPlainRecord(parsed["personas"]) ? { personas: parsed["personas"] } : {},
+    ...regexScripts === void 0 ? {} : { regexScripts }
   };
 }
 function timestamp() {
@@ -11477,6 +11505,145 @@ ${bounded}`);
   }
 };
 
+// packages/plugin/src/regex-session.ts
+var REGEX_SCOPES = ["global", "character", "preset"];
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function stringField(value) {
+  return typeof value === "string" ? value : "";
+}
+function optionalDepth(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function trimStringsOf(value) {
+  if (Array.isArray(value)) return value.filter((entry) => typeof entry === "string");
+  if (typeof value === "string" && value !== "") return [value];
+  return [];
+}
+function parseSessionRegexEntry(raw, label) {
+  if (!isRecord(raw)) throw new Error(`${label} must be a regex script object`);
+  const looksLikeTavernRegex = "find_regex" in raw || "script_name" in raw || "source" in raw || "destination" in raw;
+  if (!looksLikeTavernRegex) {
+    try {
+      return parseRegexScript2(raw);
+    } catch (cause) {
+      throw new Error(`${label} is not a valid regex script: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    }
+  }
+  const findRegex = stringField(raw["find_regex"]) || stringField(raw["findRegex"]);
+  if (findRegex === "") throw new Error(`${label} has an empty find_regex`);
+  const source = isRecord(raw["source"]) ? raw["source"] : void 0;
+  let placement = [];
+  if (source !== void 0) {
+    const bits2 = [
+      ["user_input", 1],
+      ["ai_output", 2],
+      ["slash_command", 3],
+      ["world_info", 5],
+      ["reasoning", 6]
+    ];
+    for (const [key, bit] of bits2) if (source[key] === true) placement.push(bit);
+  } else if (Array.isArray(raw["placement"])) {
+    placement = raw["placement"].filter((entry) => typeof entry === "number" && Number.isFinite(entry));
+  }
+  if (placement.length === 0) placement = [2];
+  const destination = isRecord(raw["destination"]) ? raw["destination"] : void 0;
+  try {
+    return parseRegexScript2({
+      id: stringField(raw["id"]),
+      scriptName: stringField(raw["script_name"]) || stringField(raw["scriptName"]) || `Script ${label}`,
+      findRegex,
+      replaceString: stringField(raw["replace_string"]) || stringField(raw["replaceString"]),
+      trimStrings: trimStringsOf(raw["trim_strings"] ?? raw["trimStrings"]),
+      placement,
+      disabled: raw["enabled"] === false || raw["disabled"] === true,
+      markdownOnly: destination === void 0 ? raw["markdownOnly"] === true : destination["display"] === false,
+      promptOnly: destination === void 0 ? raw["promptOnly"] === true : destination["prompt"] === false,
+      runOnEdit: raw["run_on_edit"] === true || raw["runOnEdit"] === true,
+      substituteRegex: raw["substitute_regex"] === true || raw["substituteRegex"] === true,
+      minDepth: optionalDepth(raw["min_depth"] ?? raw["minDepth"]),
+      maxDepth: optionalDepth(raw["max_depth"] ?? raw["maxDepth"])
+    });
+  } catch (cause) {
+    throw new Error(`${label} is not a valid regex script: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+  }
+}
+function parseSessionRegexList(value, label) {
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array of regex scripts`);
+  return value.map((entry, index) => parseSessionRegexEntry(entry, `${label}[${index}]`));
+}
+function parseSessionRegexScripts(raw) {
+  if (raw === void 0) return void 0;
+  if (!isRecord(raw)) throw new Error("chat regex overlay must be an object");
+  const parsed = {};
+  for (const [scope, list] of Object.entries(raw)) {
+    if (scope !== "global" && scope !== "character" && scope !== "preset") {
+      throw new Error(`chat regex overlay has an unsupported scope '${scope}' (expected global, character, preset)`);
+    }
+    if (!Array.isArray(list)) throw new Error(`chat regex overlay.${scope} must be an array of regex scripts`);
+    const scripts = list.map((entry, index) => parseSessionRegexEntry(entry, `chat regex overlay.${scope}[${index}]`));
+    if (scope === "global") parsed.global = scripts;
+    else if (scope === "character") parsed.character = scripts;
+    else parsed.preset = scripts;
+  }
+  return parsed;
+}
+function mergeRegexScriptsByName(base, overlay) {
+  const merged = [...base];
+  for (const script of overlay) {
+    const index = merged.findIndex((candidate) => candidate.scriptName === script.scriptName);
+    if (index >= 0) merged[index] = script;
+    else merged.push(script);
+  }
+  return merged;
+}
+function mergeSessionRegexScripts(base, overlay) {
+  if (overlay === void 0) return [...base];
+  let merged = [...base];
+  for (const scope of REGEX_SCOPES) {
+    const scripts = overlay[scope];
+    if (scripts !== void 0) merged = mergeRegexScriptsByName(merged, scripts);
+  }
+  return merged;
+}
+async function readSessionRegexScripts(db, characterName, chatId) {
+  if (chatId === "") return void 0;
+  const overlay = await db.getChatJsrOverlay(characterName, chatId);
+  return parseSessionRegexScripts(overlay?.regexScripts);
+}
+async function collectSessionRegexScripts(db, state, characterName, chatId, character) {
+  const base = collectRegexScripts(state, character);
+  const overlay = await readSessionRegexScripts(db, characterName, chatId);
+  return mergeSessionRegexScripts(base, overlay);
+}
+function toTavernRegexEntry(script) {
+  const has = (placement) => script.placement.length === 0 || script.placement.includes(placement);
+  return {
+    id: script.id,
+    script_name: script.scriptName,
+    enabled: !script.disabled,
+    run_on_edit: script.runOnEdit,
+    find_regex: script.findRegex,
+    replace_string: script.replaceString,
+    trim_strings: [...script.trimStrings],
+    source: {
+      user_input: has(1),
+      ai_output: has(2),
+      slash_command: has(3),
+      world_info: has(5),
+      reasoning: has(6)
+    },
+    destination: {
+      display: !script.promptOnly,
+      prompt: !script.markdownOnly
+    },
+    min_depth: script.minDepth,
+    max_depth: script.maxDepth,
+    substitute_regex: script.substituteRegex
+  };
+}
+
 // packages/plugin/src/agent-tavern/projector.ts
 var AgentTavernProjector = class _AgentTavernProjector {
   constructor(root, store5) {
@@ -11509,7 +11676,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
       const binding = state.sessionBindings[session.id];
       if (binding?.architecture === "agent-tavern" && binding.group !== true) {
         const character = await this.store.getCharacter(binding.character);
-        const scripts = collectRegexScripts(state, character);
+        const scripts = await collectSessionRegexScripts(this.store, state, binding.character, binding.chatId, character);
         const message = projectMessage(session, event, binding, scripts);
         if (message !== void 0) await this.appendMessage(binding, session.id, event.seq, message, character?.card);
       }
@@ -13539,9 +13706,9 @@ function displayTextForMessage(scripts, message, depth) {
   const text = message.mes ?? "";
   return displayScripts.length === 0 ? text : applyRegexScripts(text, displayScripts, RegexPlacement2.AI_OUTPUT, { expand: (value) => value }, { depth });
 }
-async function displayTexts(db, state, characterName, chat) {
+async function displayTexts(db, state, characterName, chatId, chat) {
   const character = await db.getCharacter(characterName);
-  const scripts = collectRegexScripts(state, character);
+  const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, character);
   if (scripts.every((script) => !script.markdownOnly || script.disabled)) return void 0;
   return chat.messages.map((message, index) => displayTextForMessage(scripts, message, chat.messages.length - 1 - index));
 }
@@ -13843,7 +14010,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("2a85bbf") : void 0;
+  const commit = true ? normalizeCommit("6d44440") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -29388,7 +29555,7 @@ function registerTavernSessionCommand(ctx) {
           await db.saveChat(parsed.character, parsed.chatId, chat, chatSnapshot.revision);
         }
         if (initializeAgentTavern && parsed.group !== true) {
-          historyImport = sessionStarted || historyImported ? void 0 : historyImportAppends(chat, agent.id, character ? collectRegexScripts(currentState, character) : [], tavernMacroExpand(currentState, parsed.character, character), agent.session);
+          historyImport = sessionStarted || historyImported ? void 0 : historyImportAppends(chat, agent.id, character ? await collectSessionRegexScripts(db, currentState, parsed.character, parsed.chatId, character) : [], tavernMacroExpand(currentState, parsed.character, character), agent.session);
         }
         if (shouldPreloadAssets) {
           if (typeof agent.inject !== "function") {
@@ -31211,7 +31378,7 @@ async function previewGeneration(ctx, req, res, db) {
   });
   const character = await db.getCharacter(speakerName);
   if (!character) throw new Error(`character '${speakerName}' not found`);
-  const scripts = collectRegexScripts(state, character);
+  const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, character);
   const transformed = applyRegexScripts(userText, scripts, RegexPlacement2.USER_INPUT, { expand: (t) => t });
   chat.messages.push({ name: userName, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: transformed });
   const turnMessages = group2 ? rebuildGroupTurn(groupDef, speakerName, userName, chat.messages) : initialTurnMessages;
@@ -31527,7 +31694,7 @@ async function runGeneration(ctx, db, options) {
     if (!character) throw new Error(`character '${speakerName}' not found`);
     let regenerated;
     let hostUserText = "";
-    const scripts = collectRegexScripts(state, character);
+    const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, character);
     if (mode === "send") {
       const hookedUserText = await generationHooks.dispatch("user-input", options.userText, { mode, character: speakerName, chatId, group: group2 });
       const transformed = applyRegexScripts(hookedUserText, scripts, RegexPlacement2.USER_INPUT, { expand: (t) => t });
@@ -31684,6 +31851,7 @@ async function runTavernScript(ctx, req, res, db) {
   const chat = snapshot2.chat;
   let revision = snapshot2.revision;
   const character = await db.getCharacter(characterName);
+  const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, character);
   const scriptController = new AbortController();
   activeStGeneration.set(stGenerationKey(characterName, chatId), scriptController);
   const macros = createMacroEngine({
@@ -31776,7 +31944,7 @@ async function runTavernScript(ctx, req, res, db) {
     echo: () => {
     },
     applyRegex: (scriptName, text) => {
-      const script = collectRegexScripts(state, character).find((candidate) => candidate.scriptName.toLowerCase() === scriptName.toLowerCase());
+      const script = scripts.find((candidate) => candidate.scriptName.toLowerCase() === scriptName.toLowerCase());
       if (!script) return text;
       return applyRegexScript(text, script, RegexPlacement2.SLASH_COMMAND, { expand: (t) => macros.expand(t) }) ?? text;
     }
@@ -32074,14 +32242,31 @@ async function handleHelperApi(req, res, db) {
       return sendJson(res, 200, { ok: true, value: { reset: true } });
     }
     case "regex.get": {
-      const scripts = collectRegexScripts(state, await db.getCharacter(character));
-      return sendJson(res, 200, { ok: true, value: { scripts } });
+      const file = await db.getCharacter(character);
+      const scripts = await collectSessionRegexScripts(db, state, character, chatId, file);
+      return sendJson(res, 200, { ok: true, value: { scripts: scripts.map(toTavernRegexEntry) } });
+    }
+    case "regex.put-session": {
+      requireSessionChatId(chatId, "regex.put-session");
+      const type = requireRegexScope(body?.type);
+      const scripts = parseSessionRegexList(body?.scripts, "scripts");
+      return sendJson(res, 200, {
+        ok: true,
+        value: await putSessionRegexScripts(db, character, chatId, type, scripts)
+      });
+    }
+    case "regex.reset-session": {
+      requireSessionChatId(chatId, "regex.reset-session");
+      const type = body?.type === void 0 ? void 0 : requireRegexScope(body.type);
+      await resetSessionRegexScripts(db, character, chatId, type);
+      return sendJson(res, 200, { ok: true, value: { reset: true } });
     }
     case "regex.format": {
       const text = typeof body?.text === "string" ? body.text : "";
       const placement = typeof body?.placement === "number" ? body.placement : 2;
-      const provided = Array.isArray(body?.scripts) ? parseRegexScripts2(body.scripts) : void 0;
-      const scripts = (provided ?? collectRegexScripts(state, await db.getCharacter(character))).filter((script) => !script.disabled);
+      const provided = Array.isArray(body?.scripts) ? parseSessionRegexList(body.scripts, "scripts") : void 0;
+      const file = await db.getCharacter(character);
+      const scripts = (provided ?? await collectSessionRegexScripts(db, state, character, chatId, file)).filter((script) => !script.disabled);
       return sendJson(res, 200, {
         ok: true,
         value: {
@@ -32189,6 +32374,7 @@ async function buildSnapshot(db, state, character, chatId) {
       scriptTreesByType: { character: null, preset: null, global: null },
       scriptVariables: {},
       regexScripts: splitRegexScripts(state, file),
+      sessionRegexScripts: { global: [], character: [], preset: [] },
       worlds: {
         names: await visibleWorldNames(db, character, chatId),
         active: state.activeWorlds,
@@ -32214,6 +32400,7 @@ async function buildSnapshot(db, state, character, chatId) {
   const lastIndex = chat.messages.length - 1;
   const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
   const presetTrees = state.activePreset === void 0 ? null : await activePresetScriptTrees(db, state.activePreset);
+  const sessionRegex = parseSessionRegexScripts(overlay?.regexScripts);
   return {
     ...shared,
     personaDescription: persona?.description ?? "",
@@ -32236,6 +32423,7 @@ async function buildSnapshot(db, state, character, chatId) {
     },
     scriptVariables: cloneJson(overlay?.scriptVariables ?? {}),
     regexScripts: splitRegexScripts(state, file),
+    sessionRegexScripts: cloneJson(sessionRegex ?? {}),
     worlds: {
       names: await visibleWorldNames(db, character, chatId),
       active: state.activeWorlds,
@@ -32751,6 +32939,45 @@ function requireIndex(value, label, total) {
 function requireSessionChatId(chatId, op) {
   if (chatId === "") throw new Error(`chatId is required for ${op} (session scope only)`);
 }
+function requireRegexScope(value) {
+  if (value === "global" || value === "character" || value === "preset") return value;
+  throw new Error(`unsupported regex type '${String(value)}' (supported: global, character, preset)`);
+}
+async function putSessionRegexScripts(db, character, chatId, type, scripts) {
+  return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
+    await db.putChatJsrOverlay(character, chatId, (current) => {
+      const base = current ?? { version: 1, scriptTrees: [] };
+      return {
+        ...base,
+        regexScripts: { ...base.regexScripts ?? {}, [type]: scripts }
+      };
+    });
+    return { type, scripts };
+  });
+}
+function isEmptyJsrOverlay(overlay) {
+  return overlay.scriptTrees.length === 0 && Object.keys(overlay.trees ?? {}).length === 0 && Object.keys(overlay.scriptVariables ?? {}).length === 0 && Object.keys(overlay.presets ?? {}).length === 0 && Object.keys(overlay.personas ?? {}).length === 0 && Object.keys(overlay.regexScripts ?? {}).length === 0;
+}
+async function resetSessionRegexScripts(db, character, chatId, type) {
+  await serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
+    const overlay = await db.getChatJsrOverlay(character, chatId);
+    if (overlay?.regexScripts === void 0) return;
+    const next = { ...overlay };
+    if (type === void 0) {
+      delete next.regexScripts;
+    } else {
+      const table = { ...overlay.regexScripts };
+      delete table[type];
+      if (Object.keys(table).length === 0) delete next.regexScripts;
+      else next.regexScripts = table;
+    }
+    if (isEmptyJsrOverlay(next)) {
+      await db.deleteChatScripts(character, chatId);
+      return;
+    }
+    await db.putChatJsrOverlay(character, chatId, () => next);
+  });
+}
 function generationIdOf(config) {
   const record = isPlainObject4(config) ? config : {};
   const value = record["generation_id"];
@@ -32896,7 +33123,8 @@ async function resetScriptTrees(db, character, chatId, type) {
   const hasVariables = Object.keys(overlay.scriptVariables ?? {}).length > 0;
   const hasPresets = Object.keys(overlay.presets ?? {}).length > 0;
   const hasPersonas = Object.keys(overlay.personas ?? {}).length > 0;
-  if (!hasTrees && !hasVariables && !hasPresets && !hasPersonas) {
+  const hasRegexScripts = Object.keys(overlay.regexScripts ?? {}).length > 0;
+  if (!hasTrees && !hasVariables && !hasPresets && !hasPersonas && !hasRegexScripts) {
     await db.deleteChatScripts(character, chatId);
     return;
   }
@@ -33087,6 +33315,7 @@ async function runHelperSlash(db, state, character, chatId, command) {
   const chat = snapshot2.chat;
   let revision = snapshot2.revision;
   const file = await db.getCharacter(character);
+  const regexScripts = await collectSessionRegexScripts(db, state, character, chatId, file);
   const macros = createMacroEngine({
     char: file?.card.data.nickname || file?.card.data.name || character,
     user: state.activePersona ?? DEFAULT_USER2,
@@ -33165,7 +33394,7 @@ async function runHelperSlash(db, state, character, chatId, command) {
     echo: () => {
     },
     applyRegex: (scriptName, text) => {
-      const script = collectRegexScripts(state, file).find((candidate) => candidate.scriptName.toLowerCase() === scriptName.toLowerCase());
+      const script = regexScripts.find((candidate) => candidate.scriptName.toLowerCase() === scriptName.toLowerCase());
       if (script === void 0) return text;
       return applyRegexScript(text, script, RegexPlacement2.SLASH_COMMAND, { expand: (t) => macros.expand(t) }) ?? text;
     }
@@ -37617,7 +37846,7 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "PUT" && route === "regex") {
     await db.ensureRegexScriptOwners();
-    const body = await readJson(req);
+    const body = await readJson(req, 25 * 1024 * 1024);
     const scripts = Array.isArray(body.scripts) ? parseRegexScripts2(body.scripts) : void 0;
     if (scripts === void 0) throw new Error("expected { scripts }");
     const state = await db.replaceRegexScripts(scripts);
@@ -37630,7 +37859,7 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "import/regex") {
     await db.ensureRegexScriptOwners();
-    const body = await readJson(req);
+    const body = await readJson(req, 25 * 1024 * 1024);
     if (!Array.isArray(body.data) && typeof body.data !== "object") throw new Error("expected { data }");
     const imported = await db.importRegexScripts(body.data);
     const state = await db.getState();
@@ -37757,7 +37986,8 @@ async function handleApi(ctx, req, res) {
     if (!chatId) throw new Error("chatId query is required");
     const snapshot2 = await db.getChatSnapshot(character, chatId);
     if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
-    const scripts = collectRegexScripts(state, await db.getCharacter(character));
+    const card = await db.getCharacter(character);
+    const scripts = await collectSessionRegexScripts(db, state, character, chatId, card);
     const message = latestFrontendMessage(snapshot2.chat.messages, (entry, index) => displayTextForMessage(scripts, entry, snapshot2.chat.messages.length - 1 - index));
     return sendJson(res, 200, {
       ok: true,
@@ -37780,7 +38010,7 @@ async function handleApi(ctx, req, res) {
     if (index < 0) return sendJson(res, 200, { ok: true, text: null });
     const state = await db.getState();
     const card = await db.getCharacter(character);
-    const scripts = collectRegexScripts(state, card);
+    const scripts = await collectSessionRegexScripts(db, state, character, chatId, card);
     return sendJson(res, 200, {
       ok: true,
       text: stripFrontendDocuments(displayTextForMessage(scripts, snapshot2.chat.messages[index], snapshot2.chat.messages.length - 1 - index))
@@ -37793,7 +38023,7 @@ async function handleApi(ctx, req, res) {
     if (!character) throw new Error("no active character");
     if (method === "GET") {
       const snapshot2 = await db.getChatSnapshot(character, chatId);
-      return snapshot2 ? sendJson(res, 200, { ok: true, chat: snapshot2.chat, revision: snapshot2.revision, displays: await displayTexts(db, state, character, snapshot2.chat) }) : sendJson(res, 404, { ok: false, message: "chat not found" });
+      return snapshot2 ? sendJson(res, 200, { ok: true, chat: snapshot2.chat, revision: snapshot2.revision, displays: await displayTexts(db, state, character, chatId, snapshot2.chat) }) : sendJson(res, 404, { ok: false, message: "chat not found" });
     }
     if (method === "PUT") {
       const body = await readJson(req);

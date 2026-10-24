@@ -11,7 +11,8 @@ import { store } from '../runtime.js'
 import { assertAgentTavernAvailable, bindSession, TavernArchitectureConflictError } from './binding.js'
 import { advanceHostTurnBase, canAdvanceHostTurnBase, closeImportBracket, lastLoggedTurn, occupyHostSession, parseTavernSessionCommand } from './trace.js'
 import { lastSelectedPresetId } from './preset-marker.js'
-import { buildAgentTavernPreloadSnapshot, collectRegexScripts } from '../tavern-assets.js'
+import { buildAgentTavernPreloadSnapshot } from '../tavern-assets.js'
+import { collectSessionRegexScripts } from '../regex-session.js'
 import { handleNovelOpenCommand, handleWorkbenchOpenCommand } from '../http/novel.js'
 
 export function registerTavernSessionCommand(ctx): void {
@@ -116,7 +117,7 @@ export function registerTavernSessionCommand(ctx): void {
           // 激活完成）时历史已在场，跳过导入防重复。
           historyImport = sessionStarted || historyImported
             ? undefined
-            : historyImportAppends(chat, agent.id, character ? collectRegexScripts(currentState, character) : [], tavernMacroExpand(currentState, parsed.character, character), agent.session)
+            : historyImportAppends(chat, agent.id, character ? await collectSessionRegexScripts(db, currentState, parsed.character, parsed.chatId, character) : [], tavernMacroExpand(currentState, parsed.character, character), agent.session)
         }
         if (shouldPreloadAssets) {
           if (typeof agent.inject !== 'function') {

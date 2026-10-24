@@ -129,6 +129,27 @@ describe('display route e2e through the real HTTP surface', () => {
     expect(result.body?.text).toBe('The gate unlocks.')
   })
 
+  it('applies markdownOnly scripts from the chat session regex overlay', async () => {
+    const sessionChatId = await store.createChat(CHARACTER, HEADER, [{
+      name: CHARACTER, is_user: false, is_system: false, send_date: '', mes: 'The latch releases.',
+      extra: { agentTavern: { messageId: 'assistant-session-1' } },
+    }])
+    await store.putChatJsrOverlay(CHARACTER, sessionChatId, (current) => ({
+      version: 1,
+      scriptTrees: current?.scriptTrees ?? [],
+      regexScripts: {
+        global: [{
+          id: 'session-display', scriptName: 'Session display', findRegex: 'latch', replaceString: 'hatch',
+          trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: false,
+          runOnEdit: false, substituteRegex: false, minDepth: null, maxDepth: null,
+        }],
+      },
+    }))
+    const result = await call(`/api/dsh-soulmojito/display?character=${encodeURIComponent(CHARACTER)}&chatId=${encodeURIComponent(sessionChatId)}&messageId=assistant-session-1`)
+    expect(result.status).toBe(200)
+    expect(result.body).toEqual({ ok: true, text: 'The hatch releases.' })
+  })
+
   it('answers text null for an unknown message id instead of failing the row', async () => {
     const result = await call(`/api/dsh-soulmojito/display?character=${encodeURIComponent(CHARACTER)}&chatId=${encodeURIComponent(chatId)}&messageId=missing`)
     expect(result.status).toBe(200)

@@ -1094,6 +1094,57 @@ describe('TavernStore', () => {
     expect(await store.deleteChatScripts('Test Char', otherChatId)).toBe(false)
   }))
 
+  it('会话正则覆盖层：读写、旧文件兼容、非法 scope/形状拒绝', withStore(async (store, dir) => {
+    const header = { user_name: 'unused', character_name: 'unused', chat_metadata: {} }
+    const chatId = await store.createChat('Regex Overlay', header)
+    const scripts = {
+      id: 'session-1', scriptName: 'Session Strip', findRegex: 'bad', replaceString: 'good', trimStrings: [],
+      placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false,
+      substituteRegex: false, minDepth: null, maxDepth: null,
+    }
+    const regexScripts = { global: [scripts], character: [] }
+    const saved = await store.putChatJsrOverlay('Regex Overlay', chatId, (current) => ({
+      version: 1,
+      scriptTrees: current?.scriptTrees ?? [],
+      regexScripts,
+    }))
+    expect(saved.regexScripts).toEqual(regexScripts)
+    expect((await store.getChatJsrOverlay('Regex Overlay', chatId))?.regexScripts).toEqual(regexScripts)
+
+    // Script-tree writes must not drop the regex overlay in the same file.
+    await store.putChatScripts('Regex Overlay', chatId, [])
+    expect((await store.getChatJsrOverlay('Regex Overlay', chatId))?.regexScripts).toEqual(regexScripts)
+
+    // Files written before the overlay existed stay readable.
+    const legacyId = 'legacy-regex.jsonl'
+    await store.createChat('Regex Overlay', header)
+    const legacyPath = path.join(dir, 'chats', 'Regex Overlay', `${legacyId}.scripts.json`)
+    await writeFile(legacyPath, JSON.stringify({ version: 1, scriptTrees: [] }))
+    expect((await store.getChatJsrOverlay('Regex Overlay', legacyId))?.regexScripts).toBeUndefined()
+
+    // Unknown scopes and non-object entries fail loudly with the file path.
+    await expect(store.putChatJsrOverlay('Regex Overlay', chatId, () => ({
+      version: 1,
+      scriptTrees: [],
+      regexScripts: { bogus: [] },
+    } as unknown as import('../src/index.js').ChatScriptsFile))).rejects.toThrow(/unsupported scope 'bogus'/)
+    await expect(store.putChatJsrOverlay('Regex Overlay', chatId, () => ({
+      version: 1,
+      scriptTrees: [],
+      regexScripts: { global: 'nope' },
+    } as unknown as import('../src/index.js').ChatScriptsFile))).rejects.toThrow(/regexScripts\.global must be an array/)
+    await expect(store.putChatJsrOverlay('Regex Overlay', chatId, () => ({
+      version: 1,
+      scriptTrees: [],
+      regexScripts: { global: [1] },
+    } as unknown as import('../src/index.js').ChatScriptsFile))).rejects.toThrow(/regexScripts\.global\[0\] must be an object/)
+    const brokenId = 'broken-regex.jsonl'
+    await store.createChat('Regex Overlay', header)
+    const brokenPath = path.join(dir, 'chats', 'Regex Overlay', `${brokenId}.scripts.json`)
+    await writeFile(brokenPath, JSON.stringify({ version: 1, scriptTrees: [], regexScripts: { global: {} } }))
+    await expect(store.getChatJsrOverlay('Regex Overlay', brokenId)).rejects.toThrow(/regexScripts\.global must be an array.*broken-regex\.jsonl\.scripts\.json/)
+  }))
+
   it('状态：cardScriptsAutoRun 默认关闭，仅显式 true 生效', withStore(async (store, dir) => {
     expect((await store.getState()).cardScriptsAutoRun).toBe(false)
     await writeFile(path.join(dir, 'state.json'), JSON.stringify({ cardScriptsAutoRun: true }))

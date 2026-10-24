@@ -140,4 +140,23 @@ describe('STscript /regex command (SLASH_COMMAND placement application point)', 
     const result = await runScriptLine('/regex Shout hello there')
     expect(result.output).toBe('HELLO there')
   })
+
+  it('applies a SLASH_COMMAND script written to the chat regex overlay', async () => {
+    await store.putChatJsrOverlay(CHARACTER, chatId, (current) => ({
+      version: 1,
+      scriptTrees: current?.scriptTrees ?? [],
+      regexScripts: {
+        global: [{
+          id: 'session-shout', scriptName: 'SessionShout', findRegex: 'hello', replaceString: 'SESSION',
+          trimStrings: [], placement: [3], disabled: false, markdownOnly: false, promptOnly: false,
+          runOnEdit: false, substituteRegex: false, minDepth: null, maxDepth: null,
+        }],
+      },
+    }))
+    try {
+      expect((await runScriptLine('/regex name=SessionShout hello')).output).toBe('SESSION')
+    } finally {
+      await store.deleteChatScripts(CHARACTER, chatId)
+    }
+  })
 })

@@ -147,6 +147,7 @@ export function buildIframeScript(
     personas: { names: [], ids: [], active: null, values: {} },
     characters: { names: [], ids: [] },
     regexScripts: { global: [], character: [], preset: [] },
+    sessionRegexScripts: { global: [], character: [], preset: [] },
     scriptVariables: {},
     worlds: { names: [], active: [], char: { primary: null, additional: [] }, chat: null },
     personaDescription: '',
@@ -669,9 +670,8 @@ export function buildIframeScript(
     state.characters = snapshot.characters && typeof snapshot.characters === 'object'
       ? snapshot.characters
       : { names: [], ids: [] };
-    state.regexScripts = snapshot.regexScripts && typeof snapshot.regexScripts === 'object'
-      ? snapshot.regexScripts
-      : { global: [], character: [], preset: [] };
+    state.regexScripts = regexTableOf(snapshot.regexScripts)
+    state.sessionRegexScripts = regexTableOf(snapshot.sessionRegexScripts);
     state.scriptVariables = snapshot.scriptVariables && typeof snapshot.scriptVariables === 'object'
       ? snapshot.scriptVariables
       : {};
@@ -1022,10 +1022,61 @@ export function buildIframeScript(
 
   /* ------------------------------ regex ------------------------------ */
 
+  function regexTableOf(value) {
+    var source = value && typeof value === 'object' ? value : {};
+    return {
+      global: Array.isArray(source.global) ? source.global : [],
+      character: Array.isArray(source.character) ? source.character : [],
+      preset: Array.isArray(source.preset) ? source.preset : []
+    };
+  }
+  function mergeRegexList(base, overlay) {
+    var merged = Array.isArray(base) ? base.slice() : [];
+    var extra = Array.isArray(overlay) ? overlay : [];
+    for (var index = 0; index < extra.length; index++) {
+      var script = extra[index];
+      if (!script || typeof script !== 'object') continue;
+      var name = typeof script.scriptName === 'string' ? script.scriptName : '';
+      if (name === '') { merged.push(script); continue; }
+      var position = -1;
+      for (var cursor = 0; cursor < merged.length; cursor++) {
+        if (merged[cursor] && merged[cursor].scriptName === name) { position = cursor; break; }
+      }
+      if (position >= 0) merged[position] = script;
+      else merged.push(script);
+    }
+    return merged;
+  }
+  function mergedRegexScope(scope) {
+    var base = regexTableOf(state.regexScripts);
+    var session = regexTableOf(state.sessionRegexScripts);
+    return mergeRegexList(base[scope], session[scope]);
+  }
+  function allRegexScripts() {
+    var base = regexTableOf(state.regexScripts);
+    var session = regexTableOf(state.sessionRegexScripts);
+    // Host collectRegexScripts first dedupes the base list by scriptName
+    // (global, then character, then preset), then mergeSessionRegexScripts
+    // lets session entries replace the same name in place. Deduping the
+    // already-merged scopes instead would let a base global script shadow a
+    // session character/preset override with the same name.
+    var combined = [].concat(base.global, base.character, base.preset);
+    var seen = Object.create(null);
+    var unique = [];
+    for (var index = 0; index < combined.length; index++) {
+      var script = combined[index];
+      var name = script && typeof script.scriptName === 'string' ? script.scriptName : '';
+      if (name !== '' && seen[name] === true) continue;
+      if (name !== '') seen[name] = true;
+      unique.push(script);
+    }
+    var merged = mergeRegexList(unique, session.global);
+    merged = mergeRegexList(merged, session.character);
+    return mergeRegexList(merged, session.preset);
+  }
   function regexListForScope(scope) {
-    var table = state.regexScripts || {};
-    if (scope === 'character' || scope === 'preset' || scope === 'global') return table[scope] || [];
-    return [].concat(table.global || [], table.character || [], table.preset || []);
+    if (scope === 'character' || scope === 'preset' || scope === 'global') return mergedRegexScope(scope);
+    return allRegexScripts();
   }
   function placementOfSource(source) {
     if (source === 'user_input') return 1;
@@ -1125,7 +1176,84 @@ export function buildIframeScript(
       run_on_edit: script.runOnEdit === true,
       min_depth: typeof script.minDepth === 'number' ? script.minDepth : null,
       max_depth: typeof script.maxDepth === 'number' ? script.maxDepth : null,
+      substitute_regex: script.substituteRegex === true,
     };
+  }
+  function newRegexId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+    return 'session-regex-' + Math.random().toString(36).slice(2);
+  }
+  // JSR cards read/write TavernRegex (snake_case source/destination flags); the
+  // snapshot and local executor use the host's RegexScriptIR. Keep the two shapes
+  // at this boundary so a write is immediately readable through the sync getters.
+  function fromTavernRegex(regex) {
+    if (!regex || typeof regex !== 'object') throw new Error('DSH-SoulMojito: regex entries must be TavernRegex objects');
+    var name = typeof regex.script_name === 'string' ? regex.script_name : (typeof regex.scriptName === 'string' ? regex.scriptName : '');
+    if (name === '') throw new Error('DSH-SoulMojito: every regex entry requires a non-empty script_name');
+    var findRegex = typeof regex.find_regex === 'string' ? regex.find_regex : (typeof regex.findRegex === 'string' ? regex.findRegex : '');
+    if (findRegex === '') throw new Error('DSH-SoulMojito: regex "' + name + '" has an empty find_regex');
+    var source = regex.source && typeof regex.source === 'object' ? regex.source : null;
+    var placement = [];
+    if (source !== null) {
+      if (source.user_input === true) placement.push(1);
+      if (source.ai_output === true) placement.push(2);
+      if (source.slash_command === true) placement.push(3);
+      if (source.world_info === true) placement.push(5);
+      if (source.reasoning === true) placement.push(6);
+    } else if (Array.isArray(regex.placement)) {
+      placement = regex.placement.filter(function (value) {
+        return typeof value === 'number' && isFinite(value) && [1, 2, 3, 5, 6].indexOf(value) !== -1;
+      });
+    }
+    if (placement.length === 0) placement = [2];
+    var destination = regex.destination && typeof regex.destination === 'object' ? regex.destination : null;
+    var trimStrings = Array.isArray(regex.trim_strings)
+      ? regex.trim_strings.filter(function (value) { return typeof value === 'string'; })
+      : Array.isArray(regex.trimStrings) ? regex.trimStrings.filter(function (value) { return typeof value === 'string'; }) : [];
+    return {
+      id: typeof regex.id === 'string' && regex.id !== '' ? regex.id : newRegexId(),
+      scriptName: name,
+      findRegex: findRegex,
+      replaceString: typeof regex.replace_string === 'string' ? regex.replace_string : (typeof regex.replaceString === 'string' ? regex.replaceString : ''),
+      trimStrings: trimStrings,
+      placement: placement,
+      disabled: regex.enabled === false || regex.disabled === true,
+      markdownOnly: destination !== null ? destination.prompt === false : regex.markdownOnly === true,
+      promptOnly: destination !== null ? destination.display === false : regex.promptOnly === true,
+      runOnEdit: regex.run_on_edit === true || regex.runOnEdit === true,
+      substituteRegex: regex.substitute_regex === true || regex.substituteRegex === true,
+      minDepth: typeof regex.min_depth === 'number' ? regex.min_depth : (typeof regex.minDepth === 'number' ? regex.minDepth : null),
+      maxDepth: typeof regex.max_depth === 'number' ? regex.max_depth : (typeof regex.maxDepth === 'number' ? regex.maxDepth : null),
+    };
+  }
+  function regexWriteType(option) {
+    var type = typeof option === 'string'
+      ? option
+      : option && typeof option === 'object' && typeof option.type === 'string'
+        ? option.type
+        : option && typeof option === 'object' && (option.scope === 'global' || option.scope === 'character')
+          ? option.scope
+          : undefined;
+    if (type === undefined) {
+      throw new Error("DSH-SoulMojito: regex writes require option { type: 'global' | 'character' | 'preset' }");
+    }
+    if (type !== 'global' && type !== 'character' && type !== 'preset') {
+      throw new Error("DSH-SoulMojito: regex type must be 'global', 'character' or 'preset' (got '" + String(type) + "')");
+    }
+    if (option && typeof option === 'object' && typeof option.name === 'string'
+      && option.name !== '' && option.name !== 'current' && option.name !== 'in_use') {
+      throw new Error("DSH-SoulMojito: regex writes target this chat only; option.name may be omitted, 'current' or 'in_use'");
+    }
+    return type;
+  }
+  function regexWriteArgs(regexes, option) {
+    // JSR signature is (regexes, option). Accept (type, regexes) as well because
+    // the helper op and some card snippets describe the target first.
+    if (typeof regexes === 'string' && Array.isArray(option)) {
+      return { type: regexWriteType(regexes), scripts: option };
+    }
+    if (!Array.isArray(regexes)) throw new Error('DSH-SoulMojito: replaceTavernRegexes requires an array of TavernRegex entries');
+    return { type: regexWriteType(option), scripts: regexes };
   }
 
   window.getCurrentMessageId = function () {
@@ -1964,10 +2092,15 @@ export function buildIframeScript(
 
   // Regex compatibility (JSR signature): getTavernRegexes(option) returns the
   // ST-shaped entries synchronously; formatAsTavernRegexedString(text, source,
-  // destination, option) applies matches locally. Regex writes stay panel-owned.
+  // destination, option) applies matches locally. Writes target this chat's
+  // overlay (the base regex assets stay read-only).
   window.getTavernRegexes = function (option) {
-    var type = option && option.type && option.type !== 'in_use' ? option.type : 'global';
-    return regexListForScope(type).map(toTavernRegex);
+    var requested = option && typeof option.type === 'string' ? option.type : 'global';
+    if (requested === 'in_use') return allRegexScripts().map(toTavernRegex);
+    if (requested !== 'global' && requested !== 'character' && requested !== 'preset') {
+      throw new Error("DSH-SoulMojito: getTavernRegexes type must be 'global', 'character', 'preset' or 'in_use' (got '" + String(requested) + "')");
+    }
+    return regexListForScope(requested).map(toTavernRegex);
   };
   window.formatAsTavernRegexedString = function (text, source, destination, option) {
     var placement;
@@ -1983,15 +2116,59 @@ export function buildIframeScript(
       target = typeof destination === 'string' && destination !== '' ? destination : 'display';
       settings = option && typeof option === 'object' ? option : {};
     }
-    var scripts = Array.isArray(settings.scripts) ? settings.scripts : regexListForScope(settings.scope);
+    // JSR callers use either scope or type to select the regex source; an
+    // omitted/unknown selector keeps the effective all-source list.
+    var scope = typeof settings.scope === 'string' ? settings.scope : settings.type;
+    var scripts = Array.isArray(settings.scripts)
+      ? settings.scripts.map(fromTavernRegex)
+      : regexListForScope(scope);
     return applyRegexScriptsLocal(String(text), scripts, placement, target, settings.depth);
   };
   window.isCharacterTavernRegexesEnabled = function () { return true; };
-  window.replaceTavernRegexes = function () {
-    return Promise.reject(new Error('DSH-SoulMojito: regex writes are panel-owned; a sandboxed frontend cannot replace shared regex assets'));
+  window.replaceTavernRegexes = function (regexes, option) {
+    var args;
+    try {
+      args = regexWriteArgs(regexes, option);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    var scripts;
+    try {
+      scripts = args.scripts.map(fromTavernRegex);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return call('regex.put-session', { type: args.type, scripts: scripts }).then(function (value) {
+      if (!value || !Array.isArray(value.scripts)) {
+        throw new Error('DSH-SoulMojito: regex.put-session returned no session scripts');
+      }
+      var table = regexTableOf(state.sessionRegexScripts);
+      table[args.type] = clone(value.scripts);
+      state.sessionRegexScripts = table;
+      return undefined;
+    });
   };
-  window.updateTavernRegexesWith = function () {
-    return Promise.reject(new Error('DSH-SoulMojito: regex writes are panel-owned; a sandboxed frontend cannot update shared regex assets'));
+  window.updateTavernRegexesWith = function (updater, option) {
+    if (typeof updater !== 'function') {
+      return Promise.reject(new Error('DSH-SoulMojito: updateTavernRegexesWith requires a function'));
+    }
+    var type;
+    try {
+      type = regexWriteType(option);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    var draft = regexListForScope(type).map(toTavernRegex);
+    return Promise.resolve().then(function () {
+      return updater(draft);
+    }).then(function (next) {
+      if (!Array.isArray(next)) {
+        throw new Error('DSH-SoulMojito: updateTavernRegexesWith updater must return an array of TavernRegex entries');
+      }
+      return window.replaceTavernRegexes(next, { type: type }).then(function () {
+        return regexListForScope(type).map(toTavernRegex);
+      });
+    });
   };
 
   // builtin: host-free helpers only; DOM-bound members fail explicitly.
@@ -2330,7 +2507,7 @@ export function buildIframeScript(
     return this.character_data && typeof this.character_data.avatar === 'string' ? this.character_data.avatar : '';
   };
   RawCharacter.prototype.getRegexScripts = function () {
-    return ((state.regexScripts && state.regexScripts.character) || []).map(toTavernRegex);
+    return regexListForScope('character').map(toTavernRegex);
   };
   RawCharacter.prototype.getWorldbookNames = function () { return window.getCharWorldbookNames(); };
   window.RawCharacter = RawCharacter;

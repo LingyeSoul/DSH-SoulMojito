@@ -29,7 +29,7 @@ import { modsDisabledByEnv } from '../mods/host.js'
 import { compactionOverrideOf, displayTextForMessage, displayTexts, parsePresetOrThrow } from '../prompt-context.js'
 import { listPromptViews } from '../prompt-viewer.js'
 import { optionalFeedback } from '../rewrite.js'
-import { collectRegexScripts } from '../tavern-assets.js'
+import { collectSessionRegexScripts } from '../regex-session.js'
 import {
   getAgentNovelCapabilities,
   getAgentTavernCapabilities,
@@ -1065,7 +1065,10 @@ export async function handleApi(ctx, req, res) {
 
   if (method === 'PUT' && route === 'regex') {
     await db.ensureRegexScriptOwners()
-    const body = await readJson(req)
+    // Card frontends may keep large HTML/state regex replacements (multi-MB).
+    // The default 2 MiB body cap rejected the panel's full-list save with a
+    // connection reset while the request was still streaming.
+    const body = await readJson(req, 25 * 1024 * 1024)
     const scripts = Array.isArray(body.scripts) ? parseRegexScripts(body.scripts) : undefined
     if (scripts === undefined) throw new Error('expected { scripts }')
     const state = await db.replaceRegexScripts(scripts)
@@ -1079,7 +1082,7 @@ export async function handleApi(ctx, req, res) {
 
   if (method === 'POST' && route === 'import/regex') {
     await db.ensureRegexScriptOwners()
-    const body = await readJson(req)
+    const body = await readJson(req, 25 * 1024 * 1024)
     if (!Array.isArray(body.data) && typeof body.data !== 'object') throw new Error('expected { data }')
     const imported = await db.importRegexScripts(body.data)
     const state = await db.getState()
@@ -1239,8 +1242,10 @@ export async function handleApi(ctx, req, res) {
     const snapshot = await db.getChatSnapshot(character, chatId)
     if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
     // 只从最新楼层向前渲染到第一条带完整文档的楼层：长篇聊天里对全部楼层
-    // 重跑 markdownOnly 正则会把 5s 轮询变成 CPU 热点。
-    const scripts = collectRegexScripts(state, await db.getCharacter(character))
+    // 重跑 markdownOnly 正则会把 5s 轮询变成 CPU 热点。会话正则覆盖层与生成
+    // 读同一份集合，卡前端写入的展示脚本无需等下一次刷新。
+    const card = await db.getCharacter(character)
+    const scripts = await collectSessionRegexScripts(db, state, character, chatId, card)
     const message = latestFrontendMessage(snapshot.chat.messages, (entry, index) =>
       displayTextForMessage(scripts, entry, snapshot.chat.messages.length - 1 - index))
     return sendJson(res, 200, {
@@ -1270,7 +1275,7 @@ export async function handleApi(ctx, req, res) {
     if (index < 0) return sendJson(res, 200, { ok: true, text: null })
     const state = await db.getState()
     const card = await db.getCharacter(character)
-    const scripts = collectRegexScripts(state, card)
+    const scripts = await collectSessionRegexScripts(db, state, character, chatId, card)
     return sendJson(res, 200, {
       ok: true,
       text: stripFrontendDocuments(displayTextForMessage(scripts, snapshot.chat.messages[index]!, snapshot.chat.messages.length - 1 - index)),
@@ -1285,7 +1290,7 @@ export async function handleApi(ctx, req, res) {
     if (method === 'GET') {
       const snapshot = await db.getChatSnapshot(character, chatId)
       return snapshot
-        ? sendJson(res, 200, { ok: true, chat: snapshot.chat, revision: snapshot.revision, displays: await displayTexts(db, state, character, snapshot.chat) })
+        ? sendJson(res, 200, { ok: true, chat: snapshot.chat, revision: snapshot.revision, displays: await displayTexts(db, state, character, chatId, snapshot.chat) })
         : sendJson(res, 404, { ok: false, message: 'chat not found' })
     }
     if (method === 'PUT') {
