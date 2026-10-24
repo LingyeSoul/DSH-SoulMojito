@@ -9240,6 +9240,14 @@ var sendCommand = {
     return changedResult();
   }
 };
+var sysCommand = {
+  name: "sys",
+  run: async (cmd, env) => {
+    const action = await requireAction(env.system, "sys");
+    await action(cmd.raw);
+    return changedResult();
+  }
+};
 var triggerCommand = {
   name: "trigger",
   run: async (cmd, env) => {
@@ -9299,6 +9307,7 @@ for (const spec of [
   rollCommand,
   pickCommand,
   sendCommand,
+  sysCommand,
   triggerCommand,
   regenerateCommand,
   stopCommand,
@@ -9328,14 +9337,35 @@ async function runNested(commandText, env) {
   const command = parseCommand(commandText, env.expand);
   return runCommand(command, env, null);
 }
+function splitScriptCommands(script) {
+  const commands = [];
+  let current = null;
+  for (const line of script.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("//")) continue;
+    if (trimmed === "") {
+      if (current !== null) current.push(line);
+      continue;
+    }
+    if (trimmed.startsWith("/")) {
+      if (current !== null) commands.push(current.join("\n"));
+      current = [line];
+      continue;
+    }
+    if (current === null) current = [line];
+    else current.push(line);
+  }
+  if (current !== null) commands.push(current.join("\n"));
+  return commands;
+}
 async function runScript(script, env) {
-  const lines = script.split(/\r?\n/).filter((line) => line.trim() !== "" && !line.trim().startsWith("//"));
+  const commands = splitScriptCommands(script);
   let output = "";
   let chatChanged = false;
   let executed = false;
-  for (const line of lines) {
+  for (const commandText of commands) {
     let piped = null;
-    for (const part of splitPipeline(line)) {
+    for (const part of splitPipeline(commandText)) {
       const command = parseCommand(part, env.expand);
       const result = await runCommand(command, env, piped);
       output = result.output;
@@ -13813,7 +13843,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("d128066") : void 0;
+  const commit = true ? normalizeCommit("ef10fa3") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -31868,6 +31898,21 @@ async function runHelperSlash(db, state, character, chatId, command) {
         mes: trimmed
       });
       sentText = trimmed;
+      await persist();
+    },
+    // /sys is ST's system-message command: the floor stays in the chat and is
+    // read as a system turn, unlike /comment (dropped) or /send (user turn).
+    system: async (text) => {
+      const trimmed = text.trim();
+      if (trimmed === "") return;
+      chat.messages.push({
+        name: "System",
+        is_user: false,
+        is_system: true,
+        send_date: (/* @__PURE__ */ new Date()).toISOString(),
+        mes: trimmed,
+        extra: { type: "system" }
+      });
       await persist();
     },
     // `/trigger` only records the request: the bridge replaces this call's last

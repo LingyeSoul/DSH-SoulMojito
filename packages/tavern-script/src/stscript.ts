@@ -511,15 +511,40 @@ async function runNested(commandText: string, env: ScriptEnv): Promise<StscriptC
   return runCommand(command, env, null)
 }
 
-/** 执行整段脚本（一行或多行；换行视为脚本边界，各自独立执行）。 */
+/** 顶层命令边界：`|` 交给 splitPipeline；换行只在下一行以 `/` 开头时开启新命令。
+ *  `/sys` `/send` 的参数允许多行正文（卡常把角色卡摘要逐行塞进 `/sys`），
+ *  一律按换行切脚本会把第一行之后的正文当成非法命令。行首 `//` 仍是注释。 */
+function splitScriptCommands(script: string): string[] {
+  const commands: string[] = []
+  let current: string[] | null = null
+  for (const line of script.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith('//')) continue
+    if (trimmed === '') {
+      if (current !== null) current.push(line)
+      continue
+    }
+    if (trimmed.startsWith('/')) {
+      if (current !== null) commands.push(current.join('\n'))
+      current = [line]
+      continue
+    }
+    if (current === null) current = [line]
+    else current.push(line)
+  }
+  if (current !== null) commands.push(current.join('\n'))
+  return commands
+}
+
+/** 执行整段脚本（`|` 管道；换行只在下一行以 `/` 开头时开启新命令）。 */
 export async function runScript(script: string, env: ScriptEnv): Promise<ScriptResult> {
-  const lines = script.split(/\r?\n/).filter((line) => line.trim() !== '' && !line.trim().startsWith('//'))
+  const commands = splitScriptCommands(script)
   let output = ''
   let chatChanged = false
   let executed = false
-  for (const line of lines) {
+  for (const commandText of commands) {
     let piped: string | null = null
-    for (const part of splitPipeline(line)) {
+    for (const part of splitPipeline(commandText)) {
       const command = parseCommand(part, env.expand)
       const result = await runCommand(command, env, piped)
       output = result.output

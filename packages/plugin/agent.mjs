@@ -8050,6 +8050,14 @@ var sendCommand = {
     return changedResult();
   }
 };
+var sysCommand = {
+  name: "sys",
+  run: async (cmd, env) => {
+    const action = await requireAction(env.system, "sys");
+    await action(cmd.raw);
+    return changedResult();
+  }
+};
 var triggerCommand = {
   name: "trigger",
   run: async (cmd, env) => {
@@ -8109,6 +8117,7 @@ for (const spec of [
   rollCommand,
   pickCommand,
   sendCommand,
+  sysCommand,
   triggerCommand,
   regenerateCommand,
   stopCommand,

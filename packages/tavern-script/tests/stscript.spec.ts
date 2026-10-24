@@ -117,6 +117,26 @@ describe('STscript interpreter', () => {
     expect(result).toMatchObject({ output: '', chatChanged: true })
   })
 
+  it('keeps newlines inside command arguments instead of splitting scripts', async () => {
+    const env = makeEnv()
+    const sheet = '**name**: ExampleChar\n**gender**: example'
+    await runScript(`/sys first line\n${sheet}`, env)
+    expect(env.systemed).toEqual([`first line\n${sheet}`])
+
+    const sendEnv = makeEnv()
+    await runScript('/send line one\nline two | /trigger', sendEnv)
+    expect(sendEnv.sent).toEqual(['line one\nline two'])
+    expect(sendEnv.triggered).toEqual([undefined])
+  })
+
+  it('starts a new command only for lines that begin with a slash', async () => {
+    const env = makeEnv()
+    const result = await runScript('/setvar first 1\n/setvar second 2\n/getvar second', env)
+    expect(result.output).toBe('2')
+    expect(env.getVar('first')).toBe('1')
+    expect(env.getVar('second')).toBe('2')
+  })
+
   it('rejects chat actions when the environment lacks them', async () => {
     const env = makeEnv({ send: undefined, system: undefined, trigger: undefined, cut: undefined })
     await expect(runScript('/send hi', env)).rejects.toThrow('/send')
